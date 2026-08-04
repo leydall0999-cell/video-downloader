@@ -1,0 +1,20 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 下载产物（运行时生成，体积大，不入库）
+downloads/*
+!downloads/.gitkeep
+
+# 环境/密钥
+.env
+*.local
+
+# 系统/编辑器
+.DS_Store
+.idea/
+.vscode/

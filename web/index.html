@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="description" content="粘贴链接即可下载 YouTube、哔哩哔哩等主流平台的视频" />
+<meta name="theme-color" content="#4f46e5" />
+<title>视频下载站 · 粘贴链接即可保存</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⬇️</text></svg>" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M4 20h16" />
+        </svg>
+      </span>
+      <div class="brand-text">
+        <strong>视频下载站</strong>
+        <span>Paste &amp; Download</span>
+      </div>
+    </div>
+    <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 15+ 平台</button>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+
+  <section class="hero">
+    <h1>粘贴链接，直接保存视频</h1>
+    <p>支持 YouTube、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
+  </section>
+
+  <!-- 输入区 -->
+  <section class="panel input-panel" aria-labelledby="inputTitle">
+    <h2 id="inputTitle" class="sr-only">输入视频链接</h2>
+    <form id="resolveForm" class="input-row" autocomplete="off">
+      <label class="sr-only" for="urlInput">视频链接</label>
+      <div class="input-shell">
+        <svg class="input-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+          <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+        </svg>
+        <input id="urlInput" name="url" type="text" inputmode="url" spellcheck="false"
+               placeholder="粘贴视频链接，例如 https://www.bilibili.com/video/BV1..." />
+        <button type="button" id="clearBtn" class="icon-btn" title="清空" aria-label="清空输入" hidden>✕</button>
+      </div>
+      <button type="submit" id="resolveBtn" class="btn btn-primary">
+        <span class="btn-label">解析链接</span>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
+    </form>
+
+    <div class="chips" id="platformChips" aria-label="支持的平台"></div>
+
+    <div class="alert" id="alertBox" role="alert" hidden>
+      <span class="alert-icon" aria-hidden="true">!</span>
+      <div class="alert-body">
+        <strong id="alertTitle"></strong>
+        <span id="alertHint"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 解析结果 -->
+  <section class="panel result-panel" id="resultPanel" hidden aria-live="polite">
+    <div class="video-card">
+      <div class="thumb-box">
+        <img id="videoThumb" alt="" loading="lazy" />
+        <span class="thumb-fallback" aria-hidden="true">🎬</span>
+        <span class="duration-tag" id="videoDuration" hidden></span>
+      </div>
+      <div class="video-meta">
+        <h3 id="videoTitle"></h3>
+        <p class="meta-line">
+          <span class="pill" id="videoPlatform"></span>
+          <span id="videoUploader"></span>
+        </p>
+      </div>
+    </div>
+
+    <div class="quality-block">
+      <div class="block-title">选择清晰度</div>
+      <div class="quality-grid" id="qualityGrid" role="radiogroup" aria-label="选择清晰度"></div>
+    </div>
+
+    <button type="button" id="downloadBtn" class="btn btn-primary btn-block">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M4 20h16" />
+      </svg>
+      开始下载
+    </button>
+  </section>
+
+  <!-- 任务列表 -->
+  <section class="panel tasks-panel" id="tasksPanel" hidden aria-live="polite">
+    <div class="block-title">下载任务</div>
+    <ul class="task-list" id="taskList"></ul>
+  </section>
+
+  <!-- 下载说明 -->
+  <section class="panel guide" aria-labelledby="guideTitle">
+    <h2 id="guideTitle" class="guide-title">下载说明</h2>
+    <div class="guide-grid">
+      <div class="guide-col">
+        <h3>使用方法</h3>
+        <ol class="guide-steps">
+          <li>把视频<b>播放页链接</b>粘贴到上方输入框（首页 / 列表页不行）。</li>
+          <li>点「解析链接」，自动识别标题、时长与可选清晰度。</li>
+          <li>选好画质后点「开始下载」，进度条与速度实时更新。</li>
+          <li>完成后点任务卡片上的「保存文件」即可取回本地。</li>
+        </ol>
+      </div>
+      <div class="guide-col">
+        <h3>已知限制</h3>
+        <ul class="guide-list">
+          <li><b>会员 / 付费视频</b>：如腾讯部分分集，受版权保护无法解析，约 20 秒内会明确提示。</li>
+          <li><b>爱奇艺</b>等部分平台受上游提取器限制，可能解析失败。</li>
+          <li><b>直播</b>内容暂不支持下载；非视频站点（如搜索引擎）会被直接拦截。</li>
+        </ul>
+      </div>
+    </div>
+    <p class="guide-note">
+      支持 YouTube、哔哩哔哩、抖音、腾讯、优酷等 50+ 平台；不在列表内的合法视频链接也会尝试解析。
+      仅供个人学习与备份，请遵守各平台服务条款及著作权法。
+    </p>
+  </section>
+
+  <p class="coming-soon">🚧 支持更多平台，加急开发中</p>
+
+  <p class="notice">
+    仅供个人学习与备份使用。请遵守各平台服务条款及著作权法，勿下载或传播未获授权的内容。
+  </p>
+</main>
+
+<!-- 支持平台全量列表弹窗 -->
+<dialog id="platformModal" class="modal" aria-labelledby="platformModalTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="platformModalTitle">支持的平台</h2>
+      <button type="button" class="modal-close" id="platformModalClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub">不在列表内的合法视频链接也会尝试解析下载。</p>
+    <div class="modal-grid" id="platformModalGrid"></div>
+  </div>
+</dialog>
+
+<!-- 任务卡片模板 -->
+<template id="taskTemplate">
+  <li class="task" data-task>
+    <div class="task-head">
+      <div class="task-title-box">
+        <span class="task-title" data-title>准备中…</span>
+        <span class="task-sub"><span data-platform></span> · <span data-quality></span></span>
+      </div>
+      <span class="status" data-status>排队中</span>
+    </div>
+    <div class="bar"><div class="bar-fill" data-bar></div></div>
+    <div class="task-foot">
+      <span class="task-stats" data-stats>等待开始…</span>
+      <span class="task-actions">
+        <button type="button" class="btn btn-ghost btn-sm" data-cancel>取消</button>
+        <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
+      </span>
+    </div>
+    <p class="task-error" data-error hidden></p>
+  </li>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
