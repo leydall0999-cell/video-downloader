@@ -17,13 +17,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY server/ ./server/
 COPY web/ ./web/
 COPY run.sh .
-COPY start.sh .
-RUN chmod +x start.sh
+COPY start.py .
 
 ENV HOST=0.0.0.0
 EXPOSE 8080
 
 # 部署平台（Railway/Render/Fly 等）通过环境变量 PORT 注入端口。
-# 用 start.sh 脚本启动：平台把 PORT 作为真实环境变量注入容器，
-# 脚本运行时读取，绕开 CMD 字符串层面的 $PORT 变量替换坑。
-CMD ["./start.sh"]
+# 用 start.py 直接启动 uvicorn：Python 运行时读取真实 PORT 环境变量，
+# 完全避免 shell 变量替换、权限、CMD 解析等坑。
+CMD ["python", "start.py"]
