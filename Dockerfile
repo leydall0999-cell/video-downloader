@@ -17,10 +17,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY server/ ./server/
 COPY web/ ./web/
 COPY run.sh .
+COPY start.sh .
+RUN chmod +x start.sh
 
 ENV HOST=0.0.0.0
 EXPOSE 8080
 
-# 部署平台（Railway/Render/Fly 等）通过环境变量 PORT 注入端口；
-# 用 ${PORT:-8080}：有注入则用注入值，无则用 8080 fallback
-CMD ["sh", "-c", "echo \"▶ starting uvicorn on host=${HOST:-0.0.0.0} port=${PORT:-8080}\"; uvicorn app:app --app-dir server --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]
+# 部署平台（Railway/Render/Fly 等）通过环境变量 PORT 注入端口。
+# 用 start.sh 脚本启动：平台把 PORT 作为真实环境变量注入容器，
+# 脚本运行时读取，绕开 CMD 字符串层面的 $PORT 变量替换坑。
+CMD ["./start.sh"]
