@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server/ ./server/
 COPY web/ ./web/
+COPY yt_dlp_plugins/ ./yt_dlp_plugins/
 COPY run.sh .
 COPY start.py .
 

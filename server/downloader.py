@@ -10,6 +10,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# 在 import yt_dlp 之前加载本地自定义提取器插件（如 chrqj.com）。
+# yt-dlp 会在自身导入时扫描 sys.path 上的 yt_dlp_plugins 包并自动注册其中的 IE。
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+try:
+    import yt_dlp_plugins  # noqa: F401  (触发插件自动注册)
+except ImportError:
+    pass
+
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError, GeoRestrictedError, UnsupportedError
 
