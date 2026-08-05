@@ -17,17 +17,21 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from urllib.parse import urlparse
 
 import downloader
-from platforms import LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
+from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -39,11 +43,58 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 
 MAX_CONCURRENT_DOWNLOADS = 3
 MAX_CONCURRENT_PROBES = 8
+
+# ---- 双节点分流：国内节点直连国内站，海外节点直连海外站，前端按链接域名自动选 ---- #
+# VDL_REGION: 本节点所在区域，"cn"=国内 / "global"=海外（默认海外）
+# VDL_PEER_ENDPOINT: 对端节点的完整地址，如 https://cn.example.com（留空=单节点模式）
+# VDL_ALLOW_ORIGINS: 允许跨域访问本节点 API 的来源，逗号分隔；"*" 表示全部
+NODE_REGION = (os.environ.get("VDL_REGION", "global").strip().lower() or "global")
+PEER_ENDPOINT = os.environ.get("VDL_PEER_ENDPOINT", "").strip().rstrip("/")
+_allow_raw = os.environ.get("VDL_ALLOW_ORIGINS", "").strip()
+ALLOW_ORIGINS = [o.strip().rstrip("/") for o in _allow_raw.split(",") if o.strip()] or ([PEER_ENDPOINT] if PEER_ENDPOINT else [])
 RESOLVE_TIMEOUT_SECONDS = 40          # 海外站（走代理），留出代理延迟余量
 RESOLVE_TIMEOUT_DOMESTIC = 20         # 国内站（腾讯/优酷/B站等直连，本就很快；受限视频也能更快判定）
 SSE_INTERVAL_SECONDS = 0.5
 SSE_MAX_SECONDS = 60 * 30
 CLEANUP_INTERVAL_SECONDS = 600
+
+# ---- 公开部署护栏：防止实例被当免费下载器薅爆带宽 ---- #
+# 设为 0 表示不限制（自托管、内部使用时可关掉）
+RATE_LIMIT_PER_HOUR = int(os.environ.get("VDL_RATE_LIMIT_PER_HOUR", "0") or 0)
+RATE_LIMIT_WINDOW = 3600
+_rate_log: dict[str, list[float]] = {}
+_rate_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    """取真实客户端 IP：优先 X-Forwarded-For 首段（Cloudflare / Railway 等反代场景）。"""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(request: Request) -> None:
+    """滑动窗口限流。超限抛 429，并告知还要等多久。"""
+    if RATE_LIMIT_PER_HOUR <= 0:
+        return
+    ip = _client_ip(request)
+    now = time.time()
+    with _rate_lock:
+        hits = [t for t in _rate_log.get(ip, []) if now - t < RATE_LIMIT_WINDOW]
+        if len(hits) >= RATE_LIMIT_PER_HOUR:
+            wait = int((RATE_LIMIT_WINDOW - (now - hits[0])) / 60) + 1
+            _rate_log[ip] = hits
+            raise HTTPException(
+                status_code=429,
+                detail=f"下载太频繁了，本实例每小时限 {RATE_LIMIT_PER_HOUR} 次，请 {wait} 分钟后再试；"
+                       "需要更高额度可以自己部署一份（见项目 README）",
+            )
+        hits.append(now)
+        _rate_log[ip] = hits
+        if len(_rate_log) > 10000:        # 兜底清理，避免长期运行内存堆积
+            for key in [k for k, v in _rate_log.items() if not v or now - v[-1] > RATE_LIMIT_WINDOW]:
+                _rate_log.pop(key, None)
 
 
 def _host_of(url: str) -> str:
@@ -80,6 +131,17 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="视频下载站", version="1.0.0", lifespan=lifespan)
+
+# 双节点部署时，另一个节点的前端需要跨域调本节点 API（含 SSE 进度流与文件下载）
+if ALLOW_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOW_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
+    logger.info("CORS 已开启，允许来源：%s", ", ".join(ALLOW_ORIGINS))
 
 
 # --------------------------------------------------------------------------- #
@@ -127,6 +189,20 @@ def list_platforms() -> dict:
     return {"platforms": platform_catalog()}
 
 
+@app.get("/api/nodes")
+def node_info() -> dict:
+    """告诉前端：本节点在哪个区、对端节点在哪、哪些域名算国内站。
+
+    前端据此在粘贴链接时自动把请求发到「离目标站点更近」的节点：
+    国内站 → cn 节点，海外站 → global 节点。对端为空则退化为单节点模式。
+    """
+    return {
+        "region": NODE_REGION,
+        "peer": PEER_ENDPOINT,
+        "china_domains": list(CHINA_DOMAINS),
+    }
+
+
 @app.post("/api/resolve")
 async def resolve(payload: ResolveRequest) -> dict:
     url, platform = parse_source(payload.url)
@@ -156,7 +232,8 @@ async def resolve(payload: ResolveRequest) -> dict:
 
 
 @app.post("/api/download")
-def create_download(payload: DownloadRequest) -> dict:
+def create_download(payload: DownloadRequest, request: Request) -> dict:
+    _check_rate_limit(request)
     url, platform = parse_source(payload.url)
     if not downloader.is_valid_quality(payload.quality):
         raise HTTPException(status_code=400, detail="不支持的清晰度选项")

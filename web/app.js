@@ -42,18 +42,61 @@
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
     proxyInput: $('proxyInput'),
+    nodeBar: $('nodeBar'),
+    nodeDot: $('nodeDot'),
+    nodeText: $('nodeText'),
+    nodeSwitch: $('nodeSwitch'),
   };
 
-  /** 当前解析结果：{ url, platform, video, qualities } */
+  /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
   let selectedQuality = 'best';
   let allPlatforms = [];
   const trackers = new Map();
 
+  // -------------------------------------------------------------- 节点分流
+  // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
+  // 免去跨境回源。单节点部署（peer 为空）时全部走本节点，行为与以前一致。
+
+  const node = { region: 'global', peer: '', chinaDomains: [] };
+  /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
+  let forcedRegion = null;
+
+  const hostOf = (raw) => {
+    try {
+      return new URL(String(raw).trim()).hostname.toLowerCase().replace(/^(www|m)\./, '');
+    } catch {
+      return '';
+    }
+  };
+
+  const isChinaHost = (host) => {
+    if (!host) return false;
+    if (host.endsWith('.cn') || host.includes('.com.cn')) return true;
+    return node.chinaDomains.some((d) => host === d || host.endsWith(`.${d}`));
+  };
+
+  /** 这条链接该由哪个区处理 */
+  const regionFor = (raw) => forcedRegion || (isChinaHost(hostOf(raw)) ? 'cn' : 'global');
+
+  /** 目标区对应的 API 前缀：本节点用相对路径（空串），对端用其完整地址 */
+  const baseFor = (raw) => (!node.peer || regionFor(raw) === node.region ? '' : node.peer);
+
+  const REGION_LABEL = { cn: '国内线路', global: '海外线路' };
+
+  const paintNodeBar = () => {
+    if (!node.peer) return;                        // 单节点部署不展示该条
+    el.nodeBar.hidden = false;
+    const region = regionFor(el.input.value);
+    el.nodeDot.className = `node-dot is-${region}`;
+    el.nodeText.textContent = `线路：${REGION_LABEL[region]}（${forcedRegion ? '已手动指定' : '自动'}）`;
+    el.nodeSwitch.textContent = forcedRegion ? '恢复自动' : '切换线路';
+  };
+
   // ------------------------------------------------------------------ 工具
 
-  const request = async (url, options = {}) => {
-    const response = await fetch(url, {
+  const request = async (path, options = {}, base = '') => {
+    const response = await fetch(base + path, {
       headers: { 'Content-Type': 'application/json' },
       ...options,
     });
@@ -227,7 +270,7 @@
       save: node.querySelector('[data-save]'),
       error: node.querySelector('[data-error]'),
     };
-    refs.cancel.addEventListener('click', () => cancelTask(taskId));
+    refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.title.textContent = meta.title;
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
@@ -255,13 +298,14 @@
 
     if (task.status !== 'completed') return;
     refs.save.hidden = false;
-    refs.save.href = `/api/tasks/${task.task_id}/file`;
+    // 任务在哪个节点跑，文件就从哪个节点取
+    refs.save.href = `${refs.base || ''}/api/tasks/${task.task_id}/file`;
     refs.save.setAttribute('download', task.filename || '');
     if (autoSave) refs.save.click();
   };
 
   /** 用 SSE 跟踪进度，浏览器不支持或连接断开时回退到轮询。 */
-  const trackTask = (taskId, refs) => {
+  const trackTask = (taskId, refs, base = '') => {
     let finished = false;
 
     const finish = (task) => {
@@ -282,13 +326,13 @@
     const poll = setInterval(async () => {
       if (finished) return;
       try {
-        handle(await request(`/api/tasks/${taskId}`));
+        handle(await request(`/api/tasks/${taskId}`, {}, base));
       } catch {
         /* 静默重试，SSE 或下一轮轮询会补上 */
       }
     }, POLL_FALLBACK_MS);
 
-    const source = new EventSource(`/api/tasks/${taskId}/events`);
+    const source = new EventSource(`${base}/api/tasks/${taskId}/events`);
     source.onmessage = (event) => handle(JSON.parse(event.data));
     source.onerror = () => source.close();
 
@@ -309,10 +353,12 @@
     clearError();
     setLoading(true);
     el.resultPanel.hidden = true;
+    const base = baseFor(url);
     try {
-      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) });
+      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
       resolved.cookie = cookie;
       resolved.proxy = proxy;
+      resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
     } catch (error) {
       resolved = null;
@@ -327,6 +373,7 @@
     clearError();
     el.downloadBtn.disabled = true;
     try {
+      const base = resolved.base || '';
       const { task_id: taskId } = await request('/api/download', {
         method: 'POST',
         body: JSON.stringify({
@@ -335,12 +382,13 @@
           cookie: resolved.cookie || '',
           proxy: resolved.proxy || '',
         }),
-      });
+      }, base);
       const refs = createTaskCard(taskId, {
         title: resolved.video.title,
         platform: resolved.platform.name,
       });
-      trackTask(taskId, refs);
+      refs.base = base;
+      trackTask(taskId, refs, base);
     } catch (error) {
       showError(error.message || '创建下载任务失败', error.hint);
     } finally {
@@ -348,9 +396,9 @@
     }
   };
 
-  const cancelTask = async (taskId) => {
+  const cancelTask = async (taskId, base = '') => {
     try {
-      await request(`/api/tasks/${taskId}`, { method: 'DELETE' });
+      await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, base);
     } catch (error) {
       showError(error.message || '取消失败', error.hint);
     }
@@ -362,15 +410,21 @@
 
   el.form.addEventListener('submit', handleResolve);
   el.downloadBtn.addEventListener('click', handleDownload);
-  el.input.addEventListener('input', toggleClearButton);
+  el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
   el.clearBtn.addEventListener('click', () => {
     el.input.value = '';
     el.cookieInput.value = '';
     el.proxyInput.value = '';
     toggleClearButton();
+    paintNodeBar();
     clearError();
     el.resultPanel.hidden = true;
     el.input.focus();
+  });
+  // 自动判断不准时手动掰：先固定到另一条线路，再点一次恢复自动
+  el.nodeSwitch.addEventListener('click', () => {
+    forcedRegion = forcedRegion ? null : (regionFor(el.input.value) === 'cn' ? 'global' : 'cn');
+    paintNodeBar();
   });
   el.modalClose.addEventListener('click', () => el.modal.close());
   el.modal.addEventListener('click', (event) => {
@@ -381,4 +435,13 @@
   request('/api/platforms')
     .then(({ platforms }) => renderPlatforms(platforms))
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
+
+  request('/api/nodes')
+    .then(({ region, peer, china_domains: domains }) => {
+      node.region = region || 'global';
+      node.peer = peer || '';
+      node.chinaDomains = domains || [];
+      paintNodeBar();
+    })
+    .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
 })();
