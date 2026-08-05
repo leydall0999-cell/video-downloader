@@ -125,7 +125,7 @@ class DownloadCanceled(Exception):
 # 信息解析
 # --------------------------------------------------------------------------- #
 
-def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "") -> dict[str, Any]:
+def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     options: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
@@ -136,11 +136,17 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "") -> dict[str, 
         "extractor_retries": retries,
         "ignoreerrors": False,
     }
-    # 访问海外站点时通过代理：VDL_PROXY 显式指定，国内站直连，否则自动读取 macOS 系统代理 / 标准环境变量
-    proxy = _resolve_proxy(host)
-    if proxy:
-        options["proxy"] = proxy
-    # 部分站点（如 B 站高码率、小红书）需要登录态，可指定浏览器 Cookie 来源
+    # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
+    effective_proxy = proxy or _resolve_proxy(host)
+    if effective_proxy:
+        options["proxy"] = effective_proxy
+    # Cookie：用户粘贴的会话 Cookie（字符串）优先注入请求头，覆盖环境变量级的浏览器 Cookie
+    cookie_text = cookie.strip()
+    if cookie_text.lower().startswith("cookie:"):
+        cookie_text = cookie_text[7:].strip()
+    if cookie_text:
+        options.setdefault("http_headers", {})["Cookie"] = cookie_text
+    # 兜底：环境变量指定的浏览器 Cookie 来源（服务器级配置）
     browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
     if browser:
         options["cookiesfrombrowser"] = (browser,)
@@ -190,10 +196,10 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
     return False
 
 
-def probe(url: str) -> dict[str, Any]:
+def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     try:
-        with YoutubeDL(_base_options(PROBE_RETRIES, _host_of(url))) as ydl:
+        with YoutubeDL(_base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)) as ydl:
             info = ydl.extract_info(url, download=False)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
         raise _friendly_error(exc) from exc
@@ -344,8 +350,8 @@ class _ProgressReporter:
             self._store.update(self._task.id, status="merging", progress=98.0)
 
 
-def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter) -> dict:
-    options = _base_options(DOWNLOAD_RETRIES, _host_of(task.url)) | {
+def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "") -> dict:
+    options = _base_options(DOWNLOAD_RETRIES, _host_of(task.url), cookie=cookie, proxy=proxy) | {
         "format": _format_selector(quality_key),
         "outtmpl": {"default": f"%(title).{MAX_TITLE_CHARS}s.%(ext)s"},
         "paths": {"home": str(task.workdir)},
@@ -376,11 +382,11 @@ def _locate_output(info: dict[str, Any], workdir: Path) -> Path:
     return max(candidates, key=lambda p: p.stat().st_size)
 
 
-def run_download(task: DownloadTask, store: TaskStore, quality_key: str) -> None:
+def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
     """在后台线程中执行，全部异常都写回任务状态，不向外抛。"""
     reporter = _ProgressReporter(task, store)
     try:
-        with YoutubeDL(_download_options(task, quality_key, reporter)) as ydl:
+        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
             info = ydl.extract_info(task.url, download=True) or {}
         if info.get("title"):
             store.update(task.id, title=info["title"])

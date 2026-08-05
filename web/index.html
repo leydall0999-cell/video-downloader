@@ -54,6 +54,19 @@
         <span class="btn-label">解析链接</span>
         <span class="spinner" aria-hidden="true"></span>
       </button>
+
+      <details class="adv" id="advToggle">
+        <summary class="adv-summary">高级选项（Cookie / 代理，按需填写）</summary>
+        <div class="adv-body">
+          <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
+          <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
+            placeholder="仅用于需要登录态的平台（如抖音）。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
+          <label class="adv-label" for="proxyInput">代理地址（可选）</label>
+          <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
+            placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
+          <p class="adv-note">Cookie 仅用于本次解析/下载，服务端不留存；代理留空时按平台自动选择。</p>
+        </div>
+      </details>
     </form>
 
     <div class="chips" id="platformChips" aria-label="支持的平台"></div>

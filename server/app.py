@@ -88,11 +88,15 @@ app = FastAPI(title="视频下载站", version="1.0.0", lifespan=lifespan)
 
 class ResolveRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+    cookie: str = Field(default="", max_length=8192)
+    proxy: str = Field(default="", max_length=256)
 
 
 class DownloadRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     quality: str = Field(default=downloader.BEST_KEY, max_length=16)
+    cookie: str = Field(default="", max_length=8192)
+    proxy: str = Field(default="", max_length=256)
 
 
 @app.exception_handler(LinkError)
@@ -132,7 +136,7 @@ async def resolve(payload: ResolveRequest) -> dict:
     loop = asyncio.get_running_loop()
     try:
         info = await asyncio.wait_for(
-            loop.run_in_executor(prober, downloader.probe, url),
+            loop.run_in_executor(prober, downloader.probe, url, payload.cookie, payload.proxy),
             timeout=timeout,
         )
     except asyncio.TimeoutError:
@@ -163,7 +167,7 @@ def create_download(payload: DownloadRequest) -> dict:
         platform=platform.name,
         quality=downloader.quality_label(payload.quality),
     )
-    executor.submit(downloader.run_download, task, store, payload.quality)
+    executor.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy)
     return {"task_id": task.id, "status": task.status}
 
 

@@ -40,6 +40,8 @@
     modalGrid: $('platformModalGrid'),
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
+    cookieInput: $('cookieInput'),
+    proxyInput: $('proxyInput'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities } */
@@ -298,6 +300,8 @@
   const handleResolve = async (event) => {
     event.preventDefault();
     const url = el.input.value.trim();
+    const cookie = el.cookieInput.value.trim();
+    const proxy = el.proxyInput.value.trim();
     if (!url) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
       return;
@@ -306,7 +310,9 @@
     setLoading(true);
     el.resultPanel.hidden = true;
     try {
-      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url }) });
+      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) });
+      resolved.cookie = cookie;
+      resolved.proxy = proxy;
       renderVideo(resolved);
     } catch (error) {
       resolved = null;
@@ -323,7 +329,12 @@
     try {
       const { task_id: taskId } = await request('/api/download', {
         method: 'POST',
-        body: JSON.stringify({ url: resolved.url, quality: selectedQuality }),
+        body: JSON.stringify({
+          url: resolved.url,
+          quality: selectedQuality,
+          cookie: resolved.cookie || '',
+          proxy: resolved.proxy || '',
+        }),
       });
       const refs = createTaskCard(taskId, {
         title: resolved.video.title,
@@ -354,6 +365,8 @@
   el.input.addEventListener('input', toggleClearButton);
   el.clearBtn.addEventListener('click', () => {
     el.input.value = '';
+    el.cookieInput.value = '';
+    el.proxyInput.value = '';
     toggleClearButton();
     clearError();
     el.resultPanel.hidden = true;

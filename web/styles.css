@@ -160,6 +160,23 @@ img { max-width: 100%; display: block; }
 .btn.loading .btn-label { opacity: .8; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------------- advanced options ---------------- */
+.adv { margin-top: .9rem; border: 1px dashed var(--line); border-radius: var(--radius-md); padding: .5rem .8rem; background: #fbfbfe; }
+.adv-summary { cursor: pointer; font-size: .84rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
+.adv-summary::-webkit-details-marker { display: none; }
+.adv-summary::before { content: "\25B8  "; }
+.adv[open] .adv-summary::before { content: "\25BE  "; }
+.adv-body { margin-top: .7rem; display: flex; flex-direction: column; gap: .5rem; }
+.adv-label { font-size: .78rem; color: var(--text-mute); font-weight: 600; }
+.adv-textarea, .adv-input {
+  width: 100%; border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+  padding: .55rem .7rem; font-size: 13px; font-family: inherit; color: var(--text);
+  background: #fff; resize: vertical; outline: none; transition: border-color .18s, box-shadow .18s;
+}
+.adv-textarea:focus, .adv-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79, 70, 229, .12); }
+.adv-textarea { line-height: 1.5; }
+.adv-note { font-size: .76rem; color: #94a0b4; line-height: 1.5; }
+
 /* ---------------- chips ---------------- */
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .9rem; }
 .chip {
