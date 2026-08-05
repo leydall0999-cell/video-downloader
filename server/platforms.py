@@ -139,6 +139,7 @@ CHINA_DOMAINS: tuple[str, ...] = (
     "yangshipin.cn", "cntv.cn", "cctv.com",
     "tudou.com", "meipai.com",
     "le.com", "wasu.cn", "1905.com",
+    "chrqj.com",
 )
 
 

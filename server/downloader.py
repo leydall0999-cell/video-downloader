@@ -73,17 +73,24 @@ def _host_of(url: str) -> str:
 
 
 def _resolve_proxy(host: str = "") -> str:
-    """决定 yt-dlp 使用的代理，优先级：VDL_PROXY > 国内站直连 > macOS 系统代理 > 标准环境变量。
+    """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
-    - 显式 VDL_PROXY 永远优先（手动覆盖）。
-    - 国内站点（腾讯/优酷/爱奇艺/B站等）直连即可，走海外代理反而会因跨境/节点问题超时，故强制不走代理。
-    - 否则 macOS 上优先用系统设置的真实客户端（scutil），刻意避开 WorkBuddy 注入的 57885（实测不通海外）。
+    国内站（B站/抖音/腾讯/chrqj 等）：
+      VDL_PROXY_CN（国内出口回源代理）> 直连。
+      服务部署在海外（Railway 等）时，国内站会被地理围栏 403，必须配 VDL_PROXY_CN
+      指向一台国内机器的 HTTP 代理；本机跑在国内则留空直连即可。
+
+    海外站（YouTube/Twitter 等）：
+      VDL_PROXY > macOS 系统代理（scutil）> 标准 http(s)_proxy 环境变量。
+      刻意避开 WorkBuddy 注入的 127.0.0.1:57885（实测不通海外）。
+
+    关键：绝不能用同一个变量兜住两边——国内代理出不去海外，海外代理进不来国内。
     """
+    if host and is_china_host(host):
+        return os.environ.get("VDL_PROXY_CN", "").strip()
     explicit = os.environ.get("VDL_PROXY", "").strip()
     if explicit:
         return explicit
-    if host and is_china_host(host):
-        return ""  # 国内站直连
     if sys.platform == "darwin":
         mac = _macos_system_proxy()
         if mac:
