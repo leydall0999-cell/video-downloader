@@ -85,6 +85,7 @@ COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "1800"
 # 解说 worker 调用模式：local=同机 subprocess(默认) / http=独立 HTTP worker 服务(强机独立部署)
 COMMENTARY_MODE = os.environ.get("VDL_COMMENTARY_MODE", "local").strip().lower()
 COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstrip("/")
+COMMENTARY_TOKEN = os.environ.get("VDL_COMMENTARY_TOKEN", "").strip()  # 与 worker 的 WORKER_TOKEN 对应
 _HERE = Path(__file__).resolve().parent
 _COMMENTARY_OUT_RAW = os.environ.get("VDL_COMMENTARY_LOCAL_OUTPUT", "").strip()
 COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW) if _COMMENTARY_OUT_RAW else (_HERE.parent / "commentary_out")
@@ -249,12 +250,14 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
 def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
+    headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
     try:
         with open(src_path, "rb") as fh:
             resp = requests.post(
                 f"{endpoint}/render",
                 files={"video": (f"{job_id}.mp4", fh, "video/mp4")},
                 data={"vertical": "true" if vertical else "false", "voice": voice},
+                headers=headers,
                 timeout=600,
             )
         if resp.status_code != 200:
@@ -266,7 +269,7 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str)
         deadline = time.time() + COMMENTARY_TIMEOUT_SECONDS
         while time.time() < deadline:
             time.sleep(5)
-            st = requests.get(f"{endpoint}/status/{wjob}", timeout=30).json()
+            st = requests.get(f"{endpoint}/status/{wjob}", headers=headers, timeout=30).json()
             status = st.get("status")
             if status == "completed":
                 break
@@ -275,7 +278,7 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str)
         else:
             raise RuntimeError("解说 worker 渲染超时（超过 VDL_COMMENTARY_TIMEOUT）")
 
-        fr = requests.get(f"{endpoint}/file/{wjob}", stream=True, timeout=(10, 600))
+        fr = requests.get(f"{endpoint}/file/{wjob}", headers=headers, stream=True, timeout=(10, 600))
         if fr.status_code != 200:
             raise RuntimeError(f"解说 worker /file 返回 {fr.status_code}")
         out_path = COMMENTARY_LOCAL_OUTPUT / f"{job_id}.mp4"

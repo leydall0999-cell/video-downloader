@@ -1,0 +1,11 @@
+# 解说视频自动剪辑管线 - Python 依赖
+# 安装: pip install -r requirements.txt
+# 系统级前置(见部署脚本): ffmpeg/ffprobe、中文字体(fonts-noto-cjk 等)
+faster-whisper==1.2.1      # 本地转写(CPU int8, 默认 base 模型)
+edge-tts==7.2.8            # 微软免费 AI 配音(需联网)
+moviepy==2.2.1             # 渲染回退路径(默认走 ffmpeg 原生, 见 scripts/edit_ffmpeg.py)
+
+# 独立解说 worker HTTP 服务(commentary_worker.py)
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20      # Form/File 上传必需(否则 worker 启动报缺失)
