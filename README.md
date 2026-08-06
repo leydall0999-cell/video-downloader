@@ -159,6 +159,55 @@ VDL_REGION=global VDL_PEER_ENDPOINT=https://cn.example.com ./run.sh
 - **加 `robots.txt` 禁止索引**，不做 SEO 引流。
 - 只支持公开可访问、无 DRM、无付费墙的内容——这是底线，别碰。
 
+### 自动解说（增值功能）· 独立解说 Worker 部署
+
+「生成解说成片」吃 CPU（whisper 转写 + ffmpeg 渲染），**不应和下载服务挤同一台机器**。
+推荐把解说管线部署成独立 HTTP worker（强机），主站通过 HTTP 调用，互不干扰。
+
+**机器配置建议（海外强机，免备案、YouTube 可达）**
+- CPU 4 核以上（转写是 CPU 密集；用 GPU 更快但非必需）
+- 内存 8 GB+（whisper base + ffmpeg 中间文件）
+- 磁盘 20 GB+（模型 + 中间文件 + 成片）
+- 系统：Ubuntu 22.04 / Debian 12（apt 直接装 ffmpeg 与中文字体最方便）
+
+**解说管线仓库**（本仓库不含，需单独部署）：含 `process.py`（一键管线）、
+`commentary_worker.py`（独立 HTTP 服务）、`requirements.txt`、`start_worker.sh`、`Dockerfile`。
+部署前请先把它纳入你自己的版本库或打包传到目标机器。
+
+**部署解说 worker（二选一）**
+
+方式 A · 脚本（Debian/Ubuntu）：
+```bash
+apt-get install -y ffmpeg fonts-noto-cjk            # 系统级依赖：ffmpeg + 中文字幕字体
+git clone <你的 commentary-pipeline 仓库> /opt/commentary-pipeline
+cd /opt/commentary-pipeline
+COMMENTARY_BASE=/opt/commentary-pipeline WORKER_PORT=8100 ./start_worker.sh
+```
+
+方式 B · Docker：
+```bash
+docker build -t commentary-worker .
+docker run -d -p 8100:8100 -e WORKER_MAX_CONCURRENCY=2 commentary-worker
+```
+
+> **安全**：worker 端口（8100）只对内网 / 主站开放，不要直接暴露公网。
+> 主站用内网地址（如 `http://10.x.x.x:8100` 或同机 `http://127.0.0.1:8100`）调用。
+
+**主站开启解说（HTTP 模式）**，在 Railway / 主站环境变量加：
+
+| 变量 | 说明 |
+| --- | --- |
+| `VDL_COMMENTARY_ENABLED` | `true` 启用解说功能 |
+| `VDL_COMMENTARY_MODE` | `http`（独立 worker，推荐）或 `local`（同机 subprocess，仅自托管测试用） |
+| `VDL_COMMENTARY_ENDPOINT` | worker 地址，如 `http://127.0.0.1:8100`（mode=http 必填） |
+| `VDL_COMMENTARY_VOICE` | 默认配音嗓音，如 `zh-CN-YunxiNeural` |
+| `VDL_COMMENTARY_TIMEOUT` | 单任务超时秒，默认 `1800` |
+| `VDL_COMMENTARY_LOCAL_OUTPUT` | HTTP 模式成片落盘目录（主站本地），默认 `<仓库>/commentary_out` |
+
+同机测试：主站与 worker 同一台机器时，`VDL_COMMENTARY_MODE=http` +
+`VDL_COMMENTARY_ENDPOINT=http://127.0.0.1:8100` 即可；也可设 `VDL_COMMENTARY_MODE=local` +
+`VDL_COMMENTARY_DIR` 直接同机 subprocess（最简单，但会挤占下载 CPU）。
+
 ## 目录结构
 
 ```

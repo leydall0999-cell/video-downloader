@@ -24,6 +24,7 @@ import sys
 import shutil
 import subprocess
 import threading
+import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -81,6 +82,13 @@ COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
 COMMENTARY_VOICE = os.environ.get("VDL_COMMENTARY_VOICE", "zh-CN-YunxiNeural").strip() or "zh-CN-YunxiNeural"
 COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "1800") or 1800)  # 长视频渲染可能很久
+# 解说 worker 调用模式：local=同机 subprocess(默认) / http=独立 HTTP worker 服务(强机独立部署)
+COMMENTARY_MODE = os.environ.get("VDL_COMMENTARY_MODE", "local").strip().lower()
+COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstrip("/")
+_HERE = Path(__file__).resolve().parent
+_COMMENTARY_OUT_RAW = os.environ.get("VDL_COMMENTARY_LOCAL_OUTPUT", "").strip()
+COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW) if _COMMENTARY_OUT_RAW else (_HERE.parent / "commentary_out")
+COMMENTARY_LOCAL_OUTPUT.mkdir(parents=True, exist_ok=True)
 commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
 
@@ -190,9 +198,12 @@ prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefi
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
-    复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → moviepy 出片），
+    复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
     本函数只负责文件桥接与成片定位。算力由解说 worker 独立承担，不影响下载服务。
+    HTTP 模式(VDL_COMMENTARY_MODE=http)下转发给独立 worker 服务。
     """
+    if COMMENTARY_MODE == "http":
+        return _commentary_run_http(job_id, src_path, vertical, voice)
     try:
         base = job_id  # 用 job_id 作安全 ascii 文件名，避开中文/空格对 process.py 路径处理的干扰
         in_dir = COMMENTARY_DIR / "input"
@@ -233,6 +244,53 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             commentary_jobs.setdefault(job_id, {})["status"] = "failed"
             commentary_jobs[job_id]["error"] = str(exc)[:800]
         logger.exception("解说任务 %s 失败", job_id)
+
+
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
+    """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
+    endpoint = COMMENTARY_ENDPOINT
+    try:
+        with open(src_path, "rb") as fh:
+            resp = requests.post(
+                f"{endpoint}/render",
+                files={"video": (f"{job_id}.mp4", fh, "video/mp4")},
+                data={"vertical": "true" if vertical else "false", "voice": voice},
+                timeout=600,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"解说 worker /render 返回 {resp.status_code}: {resp.text[:400]}")
+        wjob = resp.json().get("job_id")
+        if not wjob:
+            raise RuntimeError("解说 worker 未返回 job_id")
+
+        deadline = time.time() + COMMENTARY_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            time.sleep(5)
+            st = requests.get(f"{endpoint}/status/{wjob}", timeout=30).json()
+            status = st.get("status")
+            if status == "completed":
+                break
+            if status == "failed":
+                raise RuntimeError("解说 worker 渲染失败: " + str(st.get("error", ""))[:600])
+        else:
+            raise RuntimeError("解说 worker 渲染超时（超过 VDL_COMMENTARY_TIMEOUT）")
+
+        fr = requests.get(f"{endpoint}/file/{wjob}", stream=True, timeout=(10, 600))
+        if fr.status_code != 200:
+            raise RuntimeError(f"解说 worker /file 返回 {fr.status_code}")
+        out_path = COMMENTARY_LOCAL_OUTPUT / f"{job_id}.mp4"
+        with open(out_path, "wb") as o:
+            for chunk in fr.iter_content(1024 * 1024):
+                if chunk:
+                    o.write(chunk)
+
+        with _commentary_lock:
+            commentary_jobs[job_id].update(status="completed", output_path=str(out_path))
+    except Exception as exc:  # noqa: BLE001
+        with _commentary_lock:
+            commentary_jobs.setdefault(job_id, {})["status"] = "failed"
+            commentary_jobs[job_id]["error"] = str(exc)[:800]
+        logger.exception("解说任务 %s 失败(http 模式)", job_id)
 
 
 async def _cleanup_loop() -> None:
@@ -449,8 +507,12 @@ class CommentaryRequest(BaseModel):
 def create_commentary(payload: CommentaryRequest) -> dict:
     if not COMMENTARY_ENABLED:
         raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "process.py").exists():
-        raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
+    if COMMENTARY_MODE == "http":
+        if not COMMENTARY_ENDPOINT:
+            raise HTTPException(status_code=503, detail="解说 worker 未配置（VDL_COMMENTARY_MODE=http 但缺少 VDL_COMMENTARY_ENDPOINT）")
+    else:
+        if not COMMENTARY_DIR or not (COMMENTARY_DIR / "process.py").exists():
+            raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
     task = _require_task(payload.task_id)
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")

@@ -10,6 +10,9 @@ __pycache__/
 downloads/*
 !downloads/.gitkeep
 
+# HTTP 模式解说成片落盘（运行时生成）
+commentary_out/
+
 # 环境/密钥
 .env
 *.local
