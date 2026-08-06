@@ -445,16 +445,19 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="视频下载站", version="1.0.0", lifespan=lifespan)
 
-# 双节点部署时，另一个节点的前端需要跨域调本节点 API（含 SSE 进度流与文件下载）
-if ALLOW_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=ALLOW_ORIGINS,
-        allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Subscription-Key"],
-    )
-    logger.info("CORS 已开启，允许来源：%s", ", ".join(ALLOW_ORIGINS))
+# 跨域 CORS：公开站默认允许所有来源（allow_credentials=False，不携凭证，安全）。
+# 部署者可通过 VDL_ALLOW_ORIGINS 或双节点 PEER_ENDPOINT 限定具体来源；否则回退 "*"。
+# 注意：中间件必须始终注册，否则跨域自托管（含带 X-Subscription-Key 的订阅请求）
+# 的浏览器预检会被 405 拒绝。
+_cors_origins = ALLOW_ORIGINS if ALLOW_ORIGINS else ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Subscription-Key"],
+)
+logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
 
 
 # --------------------------------------------------------------------------- #
