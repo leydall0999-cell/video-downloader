@@ -902,11 +902,12 @@
       pollCloud(jobId);
     } catch (error) {
       el.cloudSave.disabled = false;
-      if (error.subscribe) {
+      const msg = (error && error.message) || '';
+      if (msg.indexOf('订阅') >= 0) {
         promptSubscribe();
         el.cloudStatus.textContent = '今日免费次数已用完，点右上角「订阅解锁」无限存网盘';
       } else {
-        el.cloudStatus.textContent = '保存失败：' + (error.message || '');
+        el.cloudStatus.textContent = '保存失败：' + msg;
       }
       el.cloudStatus.className = 'cloud-status is-err';
     }
@@ -966,7 +967,7 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
@@ -975,16 +976,15 @@
       el.adsSlot.hidden = !node.adsEnabled;
       node.convertSubRequired = !!(convert && convert.subscription_required);
       node.convertFreeDaily = (convert && convert.free_daily) || 3;
-      const dl = data.download;
-      node.downloadSubRequired = !!(dl && dl.subscription_required);
-      node.downloadFreeDaily = (dl && dl.free_daily) || 10;
-      const cloud = data.cloud || {};
-      node.cloudSubRequired = !!(cloud && cloud.subscription_required);
-      node.cloudFreeDaily = (cloud && cloud.free_daily) || 5;
+      node.downloadSubRequired = !!(download && download.subscription_required);
+      node.downloadFreeDaily = (download && download.free_daily) || 10;
+      const cloudInfo = cloud || {};
+      node.cloudSubRequired = !!(cloudInfo && cloudInfo.subscription_required);
+      node.cloudFreeDaily = (cloudInfo && cloudInfo.free_daily) || 5;
       node.cloudFreeUsed = 0;
-      node.cloudProviders = (cloud && cloud.providers) || ['webdav'];
-      node.baiduAvailable = !!(cloud && cloud.baidu_available);
-      node.baiduAuthUrl = (cloud && cloud.baidu_auth_url) || '';
+      node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
+      node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
+      node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
       initSubUI();
       paintNodeBar();
     })

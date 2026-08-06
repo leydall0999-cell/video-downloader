@@ -846,6 +846,7 @@ def cloud_save(payload: CloudSaveRequest, request: Request) -> dict:
     else:
         raise HTTPException(status_code=400, detail="不支持的网盘类型")
     job_id = uuid.uuid4().hex[:12]
+    _prune_cloud_jobs()
     with CLOUD_LOCK:
         CLOUD_JOBS[job_id] = {"status": "running", "error": "", "remote_path": "", "progress": 0.0}
     cloud_executor.submit(_run_cloud, job_id, inst, str(task.filepath), payload.dest_path, creds)
@@ -892,6 +893,16 @@ def _run_cloud(job_id: str, inst, src: str, dest_path: str, creds: dict) -> None
         job["status"] = "failed"
         job["error"] = str(exc)[:400]
         logger.exception("cloud %s failed", job_id)
+
+
+def _prune_cloud_jobs() -> None:
+    """云盘任务字典只增不删会内存泄漏；超过阈值时清理最旧的已完成/失败任务（保留最新 200 条）。"""
+    if len(CLOUD_JOBS) <= 500:
+        return
+    with CLOUD_LOCK:
+        done = [jid for jid, j in CLOUD_JOBS.items() if j.get("status") in ("completed", "failed")]
+        for jid in (done[:-200] if len(done) > 200 else []):
+            CLOUD_JOBS.pop(jid, None)
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
