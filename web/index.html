@@ -214,6 +214,7 @@
         <button type="button" class="btn btn-ghost btn-sm" data-commentary hidden>生成解说成片</button>
         <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
         <a class="btn btn-accent btn-sm" data-commentary-file hidden download>解说成片</a>
+        <button type="button" class="btn btn-ghost btn-sm" data-cloud hidden>☁️ 存到网盘</button>
       </span>
     </div>
     <div class="convert-box" data-convert-wrap hidden>
@@ -240,6 +241,7 @@
     </div>
     <p class="commentary-status" data-commentary-status hidden></p>
     <p class="save-hint" data-save-hint hidden></p>
+    <p class="cloud-status-line" data-cloud-status hidden></p>
     <p class="task-error" data-error hidden></p>
   </li>
 </template>
@@ -248,7 +250,7 @@
 <dialog id="subModal" class="modal" aria-labelledby="subModalTitle">
   <div class="modal-card">
     <div class="modal-head">
-      <h2 id="subModalTitle">订阅解锁无限转换</h2>
+      <h2 id="subModalTitle">订阅解锁全部增值能力</h2>
       <button type="button" class="modal-close" id="subModalClose" aria-label="关闭">✕</button>
     </div>
     <p class="modal-sub" id="subModalSub">免费用户每日限格式转换次数，订阅后无限使用。</p>
@@ -258,6 +260,51 @@
     </div>
     <p class="sub-msg" id="subMsg" hidden></p>
     <p class="sub-note">密钥由站长 / 部署者提供。自托管可在服务端设置 VDL_CONVERT_REQUIRE_SUB=true 与 VDL_CONVERT_SUB_KEY 自定义。</p>
+  </div>
+</dialog>
+
+<!-- 云盘存盘弹窗：把已下载文件上传到用户自己的网盘 -->
+<dialog id="cloudModal" class="modal" aria-labelledby="cloudModalTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="cloudModalTitle">存到我的网盘</h2>
+      <button type="button" class="modal-close" id="cloudModalClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub">把已下载的文件上传到你自己的网盘。服务端仅做临时中转，不留存内容。</p>
+
+    <div class="cloud-sub" id="cloudSubNote" hidden></div>
+
+    <div class="cloud-providers">
+      <label class="cloud-radio"><input type="radio" name="cloudProvider" value="webdav" checked> WebDAV（Nextcloud / 群晖 / 自建）</label>
+      <label class="cloud-radio" id="cloudBaiduRadio" hidden><input type="radio" name="cloudProvider" value="baidu"> 百度网盘</label>
+    </div>
+
+    <div class="cloud-form" id="cloudWebdavForm">
+      <label>WebDAV 地址
+        <input type="text" id="cloudWebdavUrl" class="adv-input" placeholder="https://dav.example.com/remote.php/dav/files/用户名/" autocomplete="off" spellcheck="false">
+      </label>
+      <label>账号
+        <input type="text" id="cloudWebdavUser" class="adv-input" placeholder="用户名" autocomplete="off" spellcheck="false">
+      </label>
+      <label>密码
+        <input type="password" id="cloudWebdavPass" class="adv-input" placeholder="仅保存在本机浏览器" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="cloud-form" id="cloudBaiduForm" hidden>
+      <button type="button" class="btn btn-primary btn-sm" id="cloudBaiduBtn">授权百度网盘</button>
+      <p class="cloud-baidu-status" id="cloudBaiduStatus">未授权</p>
+    </div>
+
+    <label class="cloud-dest">保存到网盘的路径（可留空，默认用文件名）
+      <input type="text" id="cloudDest" class="adv-input" placeholder="如 Videos/ 或 /Movies/foo.mp4" autocomplete="off" spellcheck="false">
+    </label>
+
+    <div class="cloud-actions">
+      <button type="button" class="btn btn-primary" id="cloudSave">开始保存</button>
+      <span class="cloud-status" id="cloudStatus"></span>
+    </div>
+    <p class="cloud-note">凭据仅保存在你本机浏览器（localStorage），只发往你配置的网盘。自托管实例下服务端会短暂读取以完成上传。</p>
   </div>
 </dialog>
 

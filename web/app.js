@@ -61,6 +61,20 @@
     subInput: $('subInput'),
     subApply: $('subApply'),
     subMsg: $('subMsg'),
+    cloudModal: $('cloudModal'),
+    cloudModalClose: $('cloudModalClose'),
+    cloudWebdavForm: $('cloudWebdavForm'),
+    cloudBaiduForm: $('cloudBaiduForm'),
+    cloudBaiduRadio: $('cloudBaiduRadio'),
+    cloudWebdavUrl: $('cloudWebdavUrl'),
+    cloudWebdavUser: $('cloudWebdavUser'),
+    cloudWebdavPass: $('cloudWebdavPass'),
+    cloudBaiduBtn: $('cloudBaiduBtn'),
+    cloudBaiduStatus: $('cloudBaiduStatus'),
+    cloudDest: $('cloudDest'),
+    cloudSave: $('cloudSave'),
+    cloudStatus: $('cloudStatus'),
+    cloudSubNote: $('cloudSubNote'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
@@ -75,9 +89,14 @@
 
   const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false,
     convertSubRequired: false, convertFreeDaily: 3,
-    downloadSubRequired: false, downloadFreeDaily: 10, downloadFreeUsed: 0, subscribed: false };
+    downloadSubRequired: false, downloadFreeDaily: 10, downloadFreeUsed: 0, subscribed: false,
+    cloudSubRequired: false, cloudFreeDaily: 5, cloudFreeUsed: 0,
+    cloudProviders: ['webdav'], baiduAvailable: false, baiduAuthUrl: '' };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
+  /** 最近一个下载完成的任务（供交叉入口「存到网盘」定位；task 结束时 trackers 会移除，故单独留存） */
+  let lastCompletedTask = null;
+  let lastCompletedRefs = null;
 
   const hostOf = (raw) => {
     try {
@@ -347,6 +366,8 @@
       convertBtn: node.querySelector('[data-convert-btn]'),
       convertFile: node.querySelector('[data-convert-file]'),
       convertStatus: node.querySelector('[data-convert-status]'),
+      cloud: node.querySelector('[data-cloud]'),
+      cloudStatus: node.querySelector('[data-cloud-status]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.title.textContent = meta.title;
@@ -408,6 +429,15 @@
         refs.commentary.addEventListener('click', () => createCommentary(task.task_id, refs, refs.base || ''));
       }
     }
+
+    // 下载完成后展示「存到网盘」入口（增值能力）：把文件上传到用户自己的网盘
+    refs.cloud.hidden = false;
+    if (!refs.cloud.dataset.bound) {
+      refs.cloud.dataset.bound = '1';
+      refs.cloud.addEventListener('click', () => openCloudModal(task.task_id, refs));
+    }
+    lastCompletedTask = task.task_id;
+    lastCompletedRefs = refs;
   };
 
   /** 对已完成的任务发起格式转换，轮询直到出片。 */
@@ -720,7 +750,14 @@
       el.upsellMp3.disabled = true;
     }
   });
-  el.upsellCloud.addEventListener('click', () => showUpsellPlaceholder('存网盘'));
+  el.upsellCloud.addEventListener('click', () => {
+    if (lastCompletedTask && lastCompletedRefs) {
+      openCloudModal(lastCompletedTask, lastCompletedRefs);
+      return;
+    }
+    el.upsellStatus.hidden = false;
+    el.upsellStatus.textContent = '先等一个下载任务完成，再点它卡片上的「☁️ 存到网盘」即可。';
+  });
   el.modalClose.addEventListener('click', () => el.modal.close());
   el.modal.addEventListener('click', (event) => {
     if (event.target === el.modal) el.modal.close();
@@ -735,13 +772,17 @@
       const left = Math.max(0, node.downloadFreeDaily - node.downloadFreeUsed);
       parts.push(`下载每日限 ${node.downloadFreeDaily} 次（当前剩余 ${left}）`);
     }
+    if (node.cloudSubRequired) {
+      const left = Math.max(0, node.cloudFreeDaily - node.cloudFreeUsed);
+      parts.push(`存网盘每日限 ${node.cloudFreeDaily} 次（当前剩余 ${left}）`);
+    }
     el.subModalSub.textContent = parts.length
       ? `免费用户：${parts.join('；')}。订阅后全部无限使用。`
       : '订阅后解锁全部增值能力，无限使用。';
   };
 
   const initSubUI = () => {
-    if (!node.convertSubRequired && !node.downloadSubRequired) return;
+    if (!node.convertSubRequired && !node.downloadSubRequired && !node.cloudSubRequired) return;
     const key = localStorage.getItem('vdl_sub_key');
     el.subBadge.hidden = false;
     el.subBadge.textContent = key ? '已订阅 ✓' : '🔓 订阅解锁';
@@ -778,6 +819,148 @@
     setTimeout(() => el.subModal.close(), 900);
   });
 
+  // ------------------------------------------------------------------ 云盘存盘
+  let cloudCurrentTaskId = null;
+  let cloudCurrentRefs = null;
+  let baiduToken = localStorage.getItem('vdl_baidu_token') || '';
+
+  const syncCloudForm = () => {
+    const p = document.querySelector('input[name=cloudProvider]:checked').value;
+    el.cloudWebdavForm.hidden = p !== 'webdav';
+    el.cloudBaiduForm.hidden = p !== 'baidu';
+  };
+
+  const openCloudModal = (taskId, refs) => {
+    cloudCurrentTaskId = taskId;
+    cloudCurrentRefs = refs;
+    try {
+      const wd = JSON.parse(localStorage.getItem('vdl_webdav') || '{}');
+      el.cloudWebdavUrl.value = wd.url || '';
+      el.cloudWebdavUser.value = wd.user || '';
+      el.cloudWebdavPass.value = wd.pass || '';
+    } catch { /* 忽略损坏的本地配置 */ }
+    el.cloudDest.value = '';
+    el.cloudStatus.textContent = '';
+    el.cloudStatus.className = 'cloud-status';
+    el.cloudBaiduRadio.hidden = !node.baiduAvailable;
+    if (!node.baiduAvailable) {
+      const wdRadio = document.querySelector('input[name=cloudProvider][value=webdav]');
+      if (wdRadio) wdRadio.checked = true;
+    }
+    syncCloudForm();
+    el.cloudBaiduStatus.textContent = baiduToken ? '已授权 ✓' : '未授权';
+    if (node.cloudSubRequired) {
+      const left = Math.max(0, node.cloudFreeDaily - node.cloudFreeUsed);
+      el.cloudSubNote.hidden = false;
+      el.cloudSubNote.textContent = node.subscribed
+        ? '已订阅 · 无限存网盘 ✓'
+        : (left > 0 ? `今日免费剩余 ${left}/${node.cloudFreeDaily} 次` : '今日免费次数已用完 · 点右上角订阅解锁');
+    } else {
+      el.cloudSubNote.hidden = true;
+    }
+    if (typeof el.cloudModal.showModal === 'function') el.cloudModal.showModal();
+    else el.cloudModal.setAttribute('open', '');
+  };
+
+  const startCloudSave = async () => {
+    if (!cloudCurrentTaskId) return;
+    const provider = document.querySelector('input[name=cloudProvider]:checked').value;
+    const dest = el.cloudDest.value.trim();
+    const body = { task_id: cloudCurrentTaskId, provider, dest_path: dest };
+    if (provider === 'webdav') {
+      const wd = {
+        url: el.cloudWebdavUrl.value.trim(),
+        user: el.cloudWebdavUser.value.trim(),
+        pass: el.cloudWebdavPass.value,
+      };
+      if (!wd.url) {
+        el.cloudStatus.textContent = '请填写 WebDAV 地址';
+        el.cloudStatus.className = 'cloud-status is-err';
+        return;
+      }
+      localStorage.setItem('vdl_webdav', JSON.stringify(wd));
+      body.webdav = wd;
+    } else if (provider === 'baidu') {
+      if (!baiduToken) {
+        el.cloudStatus.textContent = '请先点「授权百度网盘」完成授权';
+        el.cloudStatus.className = 'cloud-status is-err';
+        return;
+      }
+      body.baidu = { token: baiduToken };
+    }
+    el.cloudSave.disabled = true;
+    el.cloudStatus.textContent = '上传中…';
+    el.cloudStatus.className = 'cloud-status';
+    try {
+      const { job_id: jobId, quota } = await request('/api/cloud/save', {
+        method: 'POST', body: JSON.stringify(body),
+      });
+      if (quota) {
+        if (quota.subscribed) node.subscribed = true;
+        node.cloudFreeUsed = quota.free_used || node.cloudFreeUsed;
+      }
+      pollCloud(jobId);
+    } catch (error) {
+      el.cloudSave.disabled = false;
+      if (error.subscribe) {
+        promptSubscribe();
+        el.cloudStatus.textContent = '今日免费次数已用完，点右上角「订阅解锁」无限存网盘';
+      } else {
+        el.cloudStatus.textContent = '保存失败：' + (error.message || '');
+      }
+      el.cloudStatus.className = 'cloud-status is-err';
+    }
+  };
+
+  const pollCloud = (jobId) => {
+    const timer = setInterval(async () => {
+      try {
+        const st = await request('/api/cloud/status/' + jobId);
+        if (st.status === 'completed') {
+          clearInterval(timer);
+          el.cloudSave.disabled = false;
+          el.cloudStatus.textContent = '已存到网盘 ✓' + (st.remote_path ? '（' + st.remote_path + '）' : '');
+          el.cloudStatus.className = 'cloud-status is-ok';
+          if (cloudCurrentRefs) {
+            cloudCurrentRefs.cloud.hidden = false;
+            cloudCurrentRefs.cloudStatus.hidden = false;
+            cloudCurrentRefs.cloudStatus.textContent = '已存到网盘：' + (st.remote_path || '');
+          }
+        } else if (st.status === 'failed') {
+          clearInterval(timer);
+          el.cloudSave.disabled = false;
+          el.cloudStatus.textContent = '保存失败：' + (st.error || '未知错误');
+          el.cloudStatus.className = 'cloud-status is-err';
+        } else {
+          el.cloudStatus.textContent = '上传中…' + (st.progress ? ' ' + st.progress + '%' : '');
+        }
+      } catch { /* 轮询出错继续 */ }
+    }, 3000);
+  };
+
+  // 云盘弹窗事件绑定
+  el.cloudModalClose.addEventListener('click', () => el.cloudModal.close());
+  el.cloudModal.addEventListener('click', (e) => { if (e.target === el.cloudModal) el.cloudModal.close(); });
+  el.cloudSave.addEventListener('click', startCloudSave);
+  el.cloudModal.querySelectorAll('input[name=cloudProvider]').forEach((r) => r.addEventListener('change', syncCloudForm));
+  el.cloudBaiduBtn.addEventListener('click', () => {
+    if (!node.baiduAuthUrl) { el.cloudBaiduStatus.textContent = '该实例未启用百度网盘'; return; }
+    const w = window.open(node.baiduAuthUrl, 'baidu', 'width=600,height=720');
+    if (!w) el.cloudBaiduStatus.textContent = '弹窗被拦截，请允许弹出窗口后重试';
+  });
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    const d = e.data || {};
+    if (d.source !== 'vdl-baidu') return;
+    if (d.token) {
+      baiduToken = d.token;
+      localStorage.setItem('vdl_baidu_token', d.token);
+      el.cloudBaiduStatus.textContent = '已授权 ✓';
+    } else if (d.error) {
+      el.cloudBaiduStatus.textContent = '授权失败：' + d.error;
+    }
+  });
+
   request('/api/platforms')
     .then(({ platforms }) => renderPlatforms(platforms))
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
@@ -795,6 +978,13 @@
       const dl = data.download;
       node.downloadSubRequired = !!(dl && dl.subscription_required);
       node.downloadFreeDaily = (dl && dl.free_daily) || 10;
+      const cloud = data.cloud || {};
+      node.cloudSubRequired = !!(cloud && cloud.subscription_required);
+      node.cloudFreeDaily = (cloud && cloud.free_daily) || 5;
+      node.cloudFreeUsed = 0;
+      node.cloudProviders = (cloud && cloud.providers) || ['webdav'];
+      node.baiduAvailable = !!(cloud && cloud.baidu_available);
+      node.baiduAuthUrl = (cloud && cloud.baidu_auth_url) || '';
       initSubUI();
       paintNodeBar();
     })

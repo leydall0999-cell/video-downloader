@@ -48,6 +48,7 @@ macOS `brew install ffmpeg`，Ubuntu `sudo apt install ffmpeg`。
 - **商业化方向**：本项目以 **开源** 形式发布；未来若提供订阅，仅围绕**合法媒体管理的增值能力**（格式转换、云盘集成、批量管理、API 额度等），绝不把盈利建立在「绕过付费墙」之上。
 - **格式转换订阅开关**：开源默认**不开启订阅墙**，所有人免费无限使用格式转换。部署者设 `VDL_CONVERT_REQUIRE_SUB=true` 并填 `VDL_CONVERT_SUB_KEY` 后，进入「订阅墙」模式——免费用户按客户端 IP **每日限 `VDL_CONVERT_FREE_DAILY` 次**（默认 3），超出返回提示引导订阅；请求头携带正确 `X-Subscription-Key` 的订阅用户不受限。密钥由部署者生成分发，前端在右上角「🔓 订阅解锁」填入后自动携带，切换设备需重新输入。详见下方环境变量表。
 - **下载订阅开关（freemium）**：开源默认免费无限下载。部署者额外设 `VDL_DOWNLOAD_REQUIRE_SUB=true` 后，免费用户按 IP **每日限 `VDL_DOWNLOAD_FREE_DAILY` 次**（默认 10，核心功能给得比转换宽松）创建下载任务，超出返回 `402` 引导订阅；持有 `VDL_CONVERT_SUB_KEY` 的订阅用户不受限。同一把订阅密钥通用于转换与下载（一个订阅解锁全部增值能力）。云盘集成、批量管理等后续增值能力复用同一套开关与限流桶，接好后自动纳入订阅墙。
+- **云盘集成（存到自己的网盘）**：下载完成后可一键把文件上传到**用户自己的网盘**——支持 **WebDAV**（Nextcloud / 群晖 / 任意自建 WebDAV，零额外依赖，开箱即用）与 **百度网盘**（官方 OAuth2 授权，需部署者自备百度开放平台应用）。服务端只做临时中转，**不留存、不托管他人内容**，本地文件仍由既有过期清理机制回收。订阅墙默认关闭；设 `VDL_CLOUD_REQUIRE_SUB=true` 后免费用户按 IP **每日限 `VDL_CLOUD_FREE_DAILY` 次**（默认 5）存盘，超出返回 `402` 引导订阅，持有 `VDL_CONVERT_SUB_KEY` 的订阅用户不受限。详见下方环境变量表与「云盘集成」小节。
 - **许可证**：本项目以 [MIT](LICENSE) 许可证开源——任何人可自由使用、复制、修改、再分发（含商用），只需保留版权与许可声明。
 
 ## 代理（国内外分流）
@@ -131,6 +132,11 @@ docker run -d --name gost --restart always -p 18888:18888 \
 | `VDL_CONVERT_FREE_DAILY` | 免费用户每日格式转换次数上限（按 IP 计），默认 `3`；仅订阅墙开启时有效 |
 | `VDL_DOWNLOAD_REQUIRE_SUB` | 下载订阅墙开关，默认 `false`。与 `VDL_CONVERT_SUB_KEY` 同时设置后才生效；开启后免费用户每日下载限次 |
 | `VDL_DOWNLOAD_FREE_DAILY` | 免费用户每日下载任务数上限（按 IP 计），默认 `10`；仅下载订阅墙开启时有效 |
+| `VDL_CLOUD_REQUIRE_SUB` | 云盘存盘订阅墙开关，默认 `false`。与 `VDL_CONVERT_SUB_KEY` 同时设置后才生效；开启后免费用户每日存盘限次 |
+| `VDL_CLOUD_FREE_DAILY` | 免费用户每日存盘次数上限（按 IP 计），默认 `5`；仅云盘订阅墙开启时有效 |
+| `VDL_BAIDU_APP_KEY` | 百度网盘开放平台应用的 API Key（仅启用百度网盘需要） |
+| `VDL_BAIDU_APP_SECRET` | 百度网盘开放平台应用的 Secret（仅启用百度网盘需要） |
+| `VDL_BAIDU_REDIRECT_URI` | 百度网盘 OAuth 回调地址，须与开放平台配置一致，如 `https://你的域名/api/cloud/baidu/callback` |
 
 ```bash
 # 国内节点
@@ -214,6 +220,48 @@ docker run -d -p 8100:8100 -e WORKER_MAX_CONCURRENCY=2 commentary-worker
 同机测试：主站与 worker 同一台机器时，`VDL_COMMENTARY_MODE=http` +
 `VDL_COMMENTARY_ENDPOINT=http://127.0.0.1:8100` 即可；也可设 `VDL_COMMENTARY_MODE=local` +
 `VDL_COMMENTARY_DIR` 直接同机 subprocess（最简单，但会挤占下载 CPU）。
+
+## 云盘集成（存到自己的网盘）
+
+下载完成后，在任务卡片上点「☁️ 存到网盘」即可把文件上传到**你自己的网盘**。
+服务端只做临时中转，**不留存、不托管他人内容**。
+
+### WebDAV（开箱即用，推荐）
+
+任意 Nextcloud / 群晖 / 自建 WebDAV 都可直接用，无需任何服务端配置。
+弹窗里填：
+
+- **WebDAV 地址**：含你的用户根，例如 Nextcloud 为
+  `https://dav.example.com/remote.php/dav/files/你的用户名/`
+- **账号 / 密码**：你的网盘登录凭据（仅存本机浏览器 localStorage）
+- **保存路径**：可选，如 `Videos/` 或 `/Movies/foo.mp4`，留空用文件名
+
+> 凭据只发往你填的网盘地址；自托管实例下服务端会短暂读取以完成上传，上传完即结束。
+
+### 百度网盘（需自备开放平台应用）
+
+百度网盘走官方 OAuth2 授权码流程，需部署者先在
+[百度智能云开放平台](https://cloud.baidu.com/) 注册「个人网盘」应用，拿到
+`API Key` / `Secret`，并把回调地址配成
+`https://你的域名/api/cloud/baidu/callback`，然后给主站加三个环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `VDL_BAIDU_APP_KEY` | 百度网盘应用的 API Key |
+| `VDL_BAIDU_APP_SECRET` | 百度网盘应用的 Secret |
+| `VDL_BAIDU_REDIRECT_URI` | 回调地址，须与开放平台完全一致：`https://你的域名/api/cloud/baidu/callback` |
+
+配置后，前端「存到网盘」弹窗会出现「百度网盘」选项，点「授权百度网盘」走官方授权，
+授权令牌仅保存在你本机浏览器（localStorage），服务端不存储。
+
+> ⚠️ 百度网盘开放平台对「个人网盘」读写权限有审核要求，且分片上传对大文件较吃带宽；
+> 个人轻度使用更推荐 WebDAV（如自建 Nextcloud 或群晖）。
+
+### 订阅墙（变现，可选）
+
+与转换 / 下载共用一把订阅主密钥 `VDL_CONVERT_SUB_KEY`。设
+`VDL_CLOUD_REQUIRE_SUB=true` 后，免费用户按 IP 每日限 `VDL_CLOUD_FREE_DAILY` 次（默认 5）
+存盘，超出返回 `402` 引导订阅；持有密钥的订阅用户无限。
 
 ## 目录结构
 

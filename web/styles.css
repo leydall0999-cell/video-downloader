@@ -491,3 +491,26 @@ img { max-width: 100%; display: block; }
   margin-top: .8rem; padding-top: .7rem; border-top: 1px dashed var(--line);
   font-size: .76rem; color: #94a0b4; line-height: 1.6;
 }
+
+/* ---- 云盘存盘弹窗 ---- */
+.cloud-sub {
+  margin: .4rem 0 .2rem; padding: .5rem .7rem; border-radius: 8px;
+  background: rgba(79, 70, 229, .08); color: var(--brand); font-size: .8rem;
+}
+.cloud-providers { display: flex; flex-wrap: wrap; gap: .8rem; margin: .6rem 0; }
+.cloud-radio { display: inline-flex; align-items: center; gap: .35rem; font-size: .88rem; cursor: pointer; }
+.cloud-form { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .7rem; }
+.cloud-form label { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; color: var(--text-mute); }
+.cloud-form .adv-input { width: 100%; }
+.cloud-baidu-status { margin: .5rem 0 0; font-size: .82rem; color: var(--text-mute); }
+.cloud-dest { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; color: var(--text-mute); margin-bottom: .7rem; }
+.cloud-dest .adv-input { width: 100%; }
+.cloud-actions { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
+.cloud-status { font-size: .85rem; color: var(--text-mute); }
+.cloud-status.is-ok { color: var(--success); }
+.cloud-status.is-err { color: var(--danger); }
+.cloud-note {
+  margin-top: .8rem; padding-top: .7rem; border-top: 1px dashed var(--line);
+  font-size: .76rem; color: #94a0b4; line-height: 1.6;
+}
+.cloud-status-line { margin-top: .5rem; font-size: .82rem; color: var(--success); }

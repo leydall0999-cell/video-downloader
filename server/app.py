@@ -32,12 +32,20 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from urllib.parse import urlparse
 
 import downloader
+from clouddrive import (
+    BaiduProvider,
+    CloudError,
+    WebDAVProvider,
+    baidu_auth_url,
+    baidu_exchange_token,
+    _baidu_callback_html,
+)
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore
 
@@ -115,6 +123,23 @@ DOWNLOAD_FREE_DAILY = int(os.environ.get("VDL_DOWNLOAD_FREE_DAILY", "10") or 10)
 DOWNLOAD_SUB_ENABLED = DOWNLOAD_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
 _download_quota: dict[str, dict] = {}     # ip -> {"date": "YYYY-MM-DD", "count": int}
 _download_quota_lock = threading.Lock()
+# ---- 云盘集成（增值能力）：把已下载文件存到用户自己的网盘（WebDAV / 百度网盘）----
+# 默认关闭订阅墙（全免费无限）；开启后免费用户按 IP 每日限次（VDL_CLOUD_FREE_DAILY）。
+# 与转换/下载共用同一把订阅主密钥 VDL_CONVERT_SUB_KEY（一个订阅解锁全部增值能力）。
+CLOUD_REQUIRE_SUB = os.environ.get("VDL_CLOUD_REQUIRE_SUB", "false").strip().lower() == "true"
+CLOUD_FREE_DAILY = int(os.environ.get("VDL_CLOUD_FREE_DAILY", "5") or 5)
+CLOUD_SUB_ENABLED = CLOUD_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
+_cloud_quota: dict[str, dict] = {}        # ip -> {"date": "YYYY-MM-DD", "count": int}
+_cloud_quota_lock = threading.Lock()
+# 百度网盘 OAuth：需部署者自备开放平台应用（个人网盘读写的授权）
+BAIDU_APP_KEY = os.environ.get("VDL_BAIDU_APP_KEY", "").strip()
+BAIDU_APP_SECRET = os.environ.get("VDL_BAIDU_APP_SECRET", "").strip()
+BAIDU_REDIRECT_URI = os.environ.get("VDL_BAIDU_REDIRECT_URI", "").strip()
+BAIDU_ENABLED = bool(BAIDU_APP_KEY and BAIDU_APP_SECRET and BAIDU_REDIRECT_URI)
+_webdav_provider = WebDAVProvider()
+_baidu_provider = BaiduProvider()
+CLOUD_JOBS: dict[str, dict] = {}
+CLOUD_LOCK = threading.Lock()
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
@@ -270,6 +295,15 @@ def _check_download_quota(request: Request) -> tuple[bool, int, int]:
     )
 
 
+def _check_cloud_quota(request: Request) -> tuple[bool, int, int]:
+    """云盘存盘订阅 / 限次校验（freemium：免费每日限次，订阅无限）。"""
+    return _subscription_quota(
+        request, enabled=CLOUD_SUB_ENABLED, sub_key=CONVERT_SUB_KEY,
+        free_daily=CLOUD_FREE_DAILY, quota_store=_cloud_quota,
+        quota_lock=_cloud_quota_lock, label="存网盘",
+    )
+
+
 def _host_of(url: str) -> str:
     """从链接取出主机名（去掉 www./m. 前缀），解析失败返回空串。"""
     try:
@@ -281,6 +315,7 @@ def _host_of(url: str) -> str:
 store = TaskStore(DOWNLOAD_DIR)
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS, thread_name_prefix="vdl-dl")
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
+cloud_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cloud")  # 云盘上传独立线程池，避免挤占下载
 
 
 # --------------------------------------------------------------------------- #
@@ -405,6 +440,7 @@ async def lifespan(_: FastAPI):
     cleaner.cancel()
     executor.shutdown(wait=False, cancel_futures=True)
     prober.shutdown(wait=False, cancel_futures=True)
+    cloud_executor.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="视频下载站", version="1.0.0", lifespan=lifespan)
@@ -486,6 +522,13 @@ def node_info() -> dict:
         "download": {
             "subscription_required": DOWNLOAD_SUB_ENABLED,
             "free_daily": DOWNLOAD_FREE_DAILY,
+        },
+        "cloud": {
+            "subscription_required": CLOUD_SUB_ENABLED,
+            "free_daily": CLOUD_FREE_DAILY,
+            "providers": (["webdav"] + (["baidu"] if BAIDU_ENABLED else [])),
+            "baidu_available": BAIDU_ENABLED,
+            "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY) if BAIDU_ENABLED else "",
         },
     }
 
@@ -736,6 +779,116 @@ def commentary_file(job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=410, detail="成片文件已清理")
     return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
+
+
+# --------------------------------------------------------------------------- #
+# 云盘集成（增值能力）：把已下载文件存到用户自己的网盘（WebDAV / 百度网盘）
+# --------------------------------------------------------------------------- #
+
+class CloudSaveRequest(BaseModel):
+    task_id: str = Field(min_length=1, max_length=64)
+    provider: str = Field(min_length=1, max_length=16)
+    dest_path: str = Field(default="", max_length=1024)
+    webdav: dict = Field(default_factory=dict)
+    baidu: dict = Field(default_factory=dict)
+
+
+@app.get("/api/cloud/providers")
+def cloud_providers() -> dict:
+    """列出本实例可用的云盘类型与百度授权地址。"""
+    providers = ["webdav"]
+    if BAIDU_ENABLED:
+        providers.append("baidu")
+    return {
+        "providers": providers,
+        "baidu_available": BAIDU_ENABLED,
+        "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY) if BAIDU_ENABLED else "",
+    }
+
+
+@app.get("/api/cloud/baidu/auth_url")
+def cloud_baidu_auth_url() -> dict:
+    if not BAIDU_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
+    return {"auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY)}
+
+
+@app.get("/api/cloud/baidu/callback")
+def cloud_baidu_callback(code: str = "", state: str = ""):
+    """OAuth 回调：用 code 换取 access_token，返回把令牌回传给 opener 的页面（服务端不存令牌）。"""
+    if not BAIDU_ENABLED:
+        return HTMLResponse(_baidu_callback_html(error="该实例未配置百度网盘凭据"))
+    try:
+        token = baidu_exchange_token(code, BAIDU_REDIRECT_URI, BAIDU_APP_KEY, BAIDU_APP_SECRET)
+    except CloudError as exc:
+        return HTMLResponse(_baidu_callback_html(error=exc.message))
+    return HTMLResponse(_baidu_callback_html(token=token.get("access_token", "")))
+
+
+@app.post("/api/cloud/save")
+def cloud_save(payload: CloudSaveRequest, request: Request) -> dict:
+    subscribed, free_used, free_daily = _check_cloud_quota(request)
+    task = _require_task(payload.task_id)
+    if task.status != "completed" or not task.filepath or not task.filepath.exists():
+        raise HTTPException(status_code=409, detail="下载任务尚未完成，无法存到网盘")
+    provider = payload.provider
+    if provider == "webdav":
+        inst = _webdav_provider
+        creds = payload.webdav or {}
+    elif provider == "baidu":
+        if not BAIDU_ENABLED:
+            raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
+        inst = _baidu_provider
+        creds = payload.baidu or {}
+    else:
+        raise HTTPException(status_code=400, detail="不支持的网盘类型")
+    job_id = uuid.uuid4().hex[:12]
+    with CLOUD_LOCK:
+        CLOUD_JOBS[job_id] = {"status": "running", "error": "", "remote_path": "", "progress": 0.0}
+    cloud_executor.submit(_run_cloud, job_id, inst, str(task.filepath), payload.dest_path, creds)
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
+
+
+@app.get("/api/cloud/status/{job_id}")
+def cloud_status(job_id: str) -> dict:
+    with CLOUD_LOCK:
+        job = CLOUD_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="云盘任务不存在")
+    return {
+        "status": job["status"],
+        "error": job.get("error", ""),
+        "remote_path": job.get("remote_path", ""),
+        "progress": job.get("progress", 0.0),
+    }
+
+
+def _run_cloud(job_id: str, inst, src: str, dest_path: str, creds: dict) -> None:
+    """后台线程：把本地文件上传到用户云盘，更新 CLOUD_JOBS 状态。"""
+    with CLOUD_LOCK:
+        job = CLOUD_JOBS.get(job_id)
+    if not job:
+        return
+    try:
+        def _progress(sent: int, total: int) -> None:
+            job["progress"] = round(sent / total * 100, 1) if total else 0.0
+
+        remote = inst.upload(Path(src), dest_path, creds, progress=_progress)
+        job["status"] = "completed"
+        job["remote_path"] = remote
+        logger.info("cloud %s -> %s", job_id, remote)
+    except CloudError as exc:
+        job["status"] = "failed"
+        job["error"] = exc.message + (("：" + exc.hint) if exc.hint else "")
+        logger.warning("cloud %s failed: %s", job_id, job["error"])
+    except Exception as exc:  # noqa: BLE001
+        job["status"] = "failed"
+        job["error"] = str(exc)[:400]
+        logger.exception("cloud %s failed", job_id)
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
