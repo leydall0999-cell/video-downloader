@@ -47,6 +47,7 @@ macOS `brew install ffmpeg`，Ubuntu `sudo apt install ffmpeg`。
 - **责任归属**：使用者须遵守各平台服务条款与所在地法律法规，违规用途的责任由使用者自行承担。
 - **商业化方向**：本项目以 **开源** 形式发布；未来若提供订阅，仅围绕**合法媒体管理的增值能力**（格式转换、云盘集成、批量管理、API 额度等），绝不把盈利建立在「绕过付费墙」之上。
 - **格式转换订阅开关**：开源默认**不开启订阅墙**，所有人免费无限使用格式转换。部署者设 `VDL_CONVERT_REQUIRE_SUB=true` 并填 `VDL_CONVERT_SUB_KEY` 后，进入「订阅墙」模式——免费用户按客户端 IP **每日限 `VDL_CONVERT_FREE_DAILY` 次**（默认 3），超出返回提示引导订阅；请求头携带正确 `X-Subscription-Key` 的订阅用户不受限。密钥由部署者生成分发，前端在右上角「🔓 订阅解锁」填入后自动携带，切换设备需重新输入。详见下方环境变量表。
+- **下载订阅开关（freemium）**：开源默认免费无限下载。部署者额外设 `VDL_DOWNLOAD_REQUIRE_SUB=true` 后，免费用户按 IP **每日限 `VDL_DOWNLOAD_FREE_DAILY` 次**（默认 10，核心功能给得比转换宽松）创建下载任务，超出返回 `402` 引导订阅；持有 `VDL_CONVERT_SUB_KEY` 的订阅用户不受限。同一把订阅密钥通用于转换与下载（一个订阅解锁全部增值能力）。云盘集成、批量管理等后续增值能力复用同一套开关与限流桶，接好后自动纳入订阅墙。
 - **许可证**：本项目以 [MIT](LICENSE) 许可证开源——任何人可自由使用、复制、修改、再分发（含商用），只需保留版权与许可声明。
 
 ## 代理（国内外分流）
@@ -126,8 +127,10 @@ docker run -d --name gost --restart always -p 18888:18888 \
 | `VDL_MAX_FILE_MB` | 单文件下载体积上限（MB），默认 `2048`（`0`=不限），防磁盘 / 带宽被撑爆 |
 | `VDL_ADS_ENABLED` | 广告位开关，默认 `false`（关闭）。下载站属广告平台高风险类目，默认不挂广告；流量稳定并确定合规广告源后再设为 `true` 显示广告位 |
 | `VDL_CONVERT_REQUIRE_SUB` | 格式转换订阅墙开关，默认 `false`。与 `VDL_CONVERT_SUB_KEY` 同时设置后才生效 |
-| `VDL_CONVERT_SUB_KEY` | 订阅密钥。请求头 `X-Subscription-Key` 与之相等即视为已订阅（不限次） |
+| `VDL_CONVERT_SUB_KEY` | **订阅主密钥**（格式转换、下载、云盘集成等全部增值能力共用同一把）。请求头 `X-Subscription-Key` 与之相等即视为已订阅（不限次） |
 | `VDL_CONVERT_FREE_DAILY` | 免费用户每日格式转换次数上限（按 IP 计），默认 `3`；仅订阅墙开启时有效 |
+| `VDL_DOWNLOAD_REQUIRE_SUB` | 下载订阅墙开关，默认 `false`。与 `VDL_CONVERT_SUB_KEY` 同时设置后才生效；开启后免费用户每日下载限次 |
+| `VDL_DOWNLOAD_FREE_DAILY` | 免费用户每日下载任务数上限（按 IP 计），默认 `10`；仅下载订阅墙开启时有效 |
 
 ```bash
 # 国内节点

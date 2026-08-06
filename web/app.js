@@ -74,7 +74,8 @@
   // 免去跨境回源。单节点部署（peer 为空）时全部走本节点，行为与以前一致。
 
   const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false,
-    convertSubRequired: false, convertFreeDaily: 3, subscribed: false };
+    convertSubRequired: false, convertFreeDaily: 3,
+    downloadSubRequired: false, downloadFreeDaily: 10, downloadFreeUsed: 0, subscribed: false };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
 
@@ -456,16 +457,24 @@
   /** 直接创建下载任务（不解析、用默认 best 画质），供批量模式复用。 */
   const enqueueDownload = async (url, { cookie = '', proxy = '', base = '' } = {}) => {
     try {
-      const { task_id: taskId } = await request(
+      const data = await request(
         '/api/download',
         { method: 'POST', body: JSON.stringify({ url, quality: 'best', cookie, proxy }) },
         base,
       );
-      const refs = createTaskCard(taskId, { title: url, platform: '' });
+      if (data.quota) {
+        node.downloadFreeUsed = data.quota.free_used || 0;
+        if (node.downloadSubRequired) refreshSubModalText();
+      }
+      const refs = createTaskCard(data.task_id, { title: url, platform: '' });
       refs.base = base;
-      trackTask(taskId, refs, base);
-      return taskId;
+      trackTask(data.task_id, refs, base);
+      return data.task_id;
     } catch (error) {
+      if (error.subscribe) {
+        promptSubscribe();
+        return { subscribe: true };
+      }
       console.warn('批量任务创建失败:', url, error);
       return null;
     }
@@ -477,12 +486,16 @@
     clearError();
     el.resultPanel.hidden = true;
     let ok = 0;
+    let hitSubscribe = false;
     for (const u of urls) {
-      const id = await enqueueDownload(u, { cookie, proxy, base });
-      if (id) ok += 1;
+      const res = await enqueueDownload(u, { cookie, proxy, base });
+      if (res && res.subscribe) { hitSubscribe = true; break; }   // 免费额度耗尽，停止继续创建
+      if (res) ok += 1;
     }
     setLoading(false);
-    if (ok > 0) {
+    if (hitSubscribe) {
+      showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
+    } else if (ok > 0) {
       el.alertBox.hidden = false;
       el.alertTitle.textContent = `已创建 ${ok} 个下载任务`;
       el.alertHint.textContent = '在下方「下载任务」列表查看进度';
@@ -565,7 +578,7 @@
     clearError();
     const base = resolved.base || '';
     try {
-      const { task_id: taskId } = await request('/api/download', {
+      const data = await request('/api/download', {
         method: 'POST',
         body: JSON.stringify({
           url: resolved.url,
@@ -574,6 +587,11 @@
           proxy: resolved.proxy || '',
         }),
       }, base);
+      const taskId = data.task_id;
+      if (data.quota) {
+        node.downloadFreeUsed = data.quota.free_used || 0;
+        if (node.downloadSubRequired) refreshSubModalText();
+      }
       const refs = createTaskCard(taskId, {
         title: resolved.video.title,
         platform: resolved.platform.name,
@@ -582,7 +600,12 @@
       trackTask(taskId, refs, base);
       return taskId;
     } catch (error) {
-      showError(error.message || '创建下载任务失败', error.hint);
+      if (error.subscribe) {
+        promptSubscribe();
+        showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
+      } else {
+        showError(error.message || '创建下载任务失败', error.hint);
+      }
       return null;
     }
   };
@@ -704,13 +727,32 @@
   });
   el.badge.addEventListener('click', () => openPlatformModal(allPlatforms));
 
-  // 订阅解锁（增值能力变现）：默认不开墙则 UI 不出现
+  // 订阅解锁（增值能力变现）：默认不开墙则 UI 不出现；convert 或 download 任一开墙即显示入口
+  const refreshSubModalText = () => {
+    const parts = [];
+    if (node.convertSubRequired) parts.push(`格式转换每日限 ${node.convertFreeDaily} 次`);
+    if (node.downloadSubRequired) {
+      const left = Math.max(0, node.downloadFreeDaily - node.downloadFreeUsed);
+      parts.push(`下载每日限 ${node.downloadFreeDaily} 次（当前剩余 ${left}）`);
+    }
+    el.subModalSub.textContent = parts.length
+      ? `免费用户：${parts.join('；')}。订阅后全部无限使用。`
+      : '订阅后解锁全部增值能力，无限使用。';
+  };
+
   const initSubUI = () => {
-    if (!node.convertSubRequired) return;
+    if (!node.convertSubRequired && !node.downloadSubRequired) return;
     const key = localStorage.getItem('vdl_sub_key');
     el.subBadge.hidden = false;
     el.subBadge.textContent = key ? '已订阅 ✓' : '🔓 订阅解锁';
-    el.subModalSub.textContent = `免费用户每日限 ${node.convertFreeDaily} 次格式转换，订阅后无限使用。`;
+    refreshSubModalText();
+  };
+
+  // 免费额度耗尽 / 未订阅时，引导用户点右上角订阅（闪烁提示 + 入口常驻）
+  const promptSubscribe = () => {
+    el.subBadge.hidden = false;
+    el.subBadge.classList.add('pulse');
+    el.subBadge.textContent = '🔓 订阅解锁';
   };
   el.subBadge.addEventListener('click', () => {
     if (typeof el.subModal.showModal === 'function') el.subModal.showModal();
@@ -729,7 +771,8 @@
     }
     localStorage.setItem('vdl_sub_key', key);
     msg.hidden = false; msg.className = 'sub-msg is-ok';
-    msg.textContent = '已保存，下次转换将自动验证解锁';
+    msg.textContent = '已保存，下次下载 / 转换将自动验证解锁';
+    refreshSubModalText();
     el.subBadge.textContent = '已订阅 ✓';
     el.subBadge.hidden = false;
     setTimeout(() => el.subModal.close(), 900);
@@ -749,6 +792,9 @@
       el.adsSlot.hidden = !node.adsEnabled;
       node.convertSubRequired = !!(convert && convert.subscription_required);
       node.convertFreeDaily = (convert && convert.free_daily) || 3;
+      const dl = data.download;
+      node.downloadSubRequired = !!(dl && dl.subscription_required);
+      node.downloadFreeDaily = (dl && dl.free_daily) || 10;
       initSubUI();
       paintNodeBar();
     })

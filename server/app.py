@@ -106,6 +106,15 @@ CONVERT_FREE_DAILY = int(os.environ.get("VDL_CONVERT_FREE_DAILY", "3") or 3)
 CONVERT_SUB_ENABLED = CONVERT_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
 _convert_quota: dict[str, dict] = {}      # ip -> {"date": "YYYY-MM-DD", "count": int}
 _convert_quota_lock = threading.Lock()
+# ---- 下载订阅开关（整体 freemium：免费每日限次、订阅无限；默认关闭保持全免费）----
+# 与格式转换共用同一把订阅密钥 VDL_CONVERT_SUB_KEY（一个订阅解锁全部增值能力）。
+# 单独开关 VDL_DOWNLOAD_REQUIRE_SUB 控制「是否对下载也启用限次」；
+# VDL_DOWNLOAD_FREE_DAILY 设置免费用户每日可创建的任务数（默认 10，核心功能给得比转换宽松）。
+DOWNLOAD_REQUIRE_SUB = os.environ.get("VDL_DOWNLOAD_REQUIRE_SUB", "false").strip().lower() == "true"
+DOWNLOAD_FREE_DAILY = int(os.environ.get("VDL_DOWNLOAD_FREE_DAILY", "10") or 10)
+DOWNLOAD_SUB_ENABLED = DOWNLOAD_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
+_download_quota: dict[str, dict] = {}     # ip -> {"date": "YYYY-MM-DD", "count": int}
+_download_quota_lock = threading.Lock()
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
@@ -213,33 +222,52 @@ def _today_str() -> str:
     return time.strftime("%Y-%m-%d", time.localtime())
 
 
-def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
-    """格式转换订阅 / 限次校验。
+def _subscription_quota(request, *, enabled, sub_key, free_daily, quota_store, quota_lock, label):
+    """通用订阅 / 限次校验（格式转换、下载等增值 / 受限能力共用此一处）。
 
     返回 (subscribed, free_used, free_daily)：
-      - 未启用订阅墙：subscribed=False，免费额度字段为 0（全免费无限）。
+      - 未启用订阅墙（enabled=False）：subscribed=False，免费额度字段为 0（全免费无限）。
       - 启用墙且携带正确订阅密钥：subscribed=True，不受免费额度限制。
       - 启用墙但免费用户：按 IP 当日计数，超出抛 402（前端据此引导订阅）。
+    label 仅用于 402 文案（如「转换」「下载」）。
     """
-    if not CONVERT_SUB_ENABLED:
+    if not enabled:
         return (False, 0, 0)
     key = (request.headers.get("x-subscription-key") or "").strip()
-    if CONVERT_SUB_KEY and key == CONVERT_SUB_KEY:
-        return (True, 0, CONVERT_FREE_DAILY)
+    if sub_key and key == sub_key:
+        return (True, 0, free_daily)
     ip = _client_ip(request)
     today = _today_str()
-    with _convert_quota_lock:
-        rec = _convert_quota.get(ip)
+    with quota_lock:
+        rec = quota_store.get(ip)
         if not rec or rec["date"] != today:
             rec = {"date": today, "count": 0}
-            _convert_quota[ip] = rec
-        if rec["count"] >= CONVERT_FREE_DAILY:
+            quota_store[ip] = rec
+        if rec["count"] >= free_daily:
             raise HTTPException(
                 status_code=402,
-                detail="今日免费转换次数已用完，订阅可解锁无限转换",
+                detail=f"今日免费{label}次数已用完，订阅可解锁无限{label}",
             )
         rec["count"] += 1
-        return (False, rec["count"], CONVERT_FREE_DAILY)
+        return (False, rec["count"], free_daily)
+
+
+def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
+    """格式转换订阅 / 限次校验（复用通用 _subscription_quota）。"""
+    return _subscription_quota(
+        request, enabled=CONVERT_SUB_ENABLED, sub_key=CONVERT_SUB_KEY,
+        free_daily=CONVERT_FREE_DAILY, quota_store=_convert_quota,
+        quota_lock=_convert_quota_lock, label="转换",
+    )
+
+
+def _check_download_quota(request: Request) -> tuple[bool, int, int]:
+    """下载订阅 / 限次校验（freemium：免费每日限次，订阅无限）。"""
+    return _subscription_quota(
+        request, enabled=DOWNLOAD_SUB_ENABLED, sub_key=CONVERT_SUB_KEY,
+        free_daily=DOWNLOAD_FREE_DAILY, quota_store=_download_quota,
+        quota_lock=_download_quota_lock, label="下载",
+    )
 
 
 def _host_of(url: str) -> str:
@@ -455,6 +483,10 @@ def node_info() -> dict:
             "subscription_required": CONVERT_SUB_ENABLED,
             "free_daily": CONVERT_FREE_DAILY,
         },
+        "download": {
+            "subscription_required": DOWNLOAD_SUB_ENABLED,
+            "free_daily": DOWNLOAD_FREE_DAILY,
+        },
     }
 
 
@@ -491,6 +523,7 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
 @app.post("/api/download")
 def create_download(payload: DownloadRequest, request: Request) -> dict:
     _check_rate_limit(request)
+    subscribed, free_used, free_daily = _check_download_quota(request)
     _assert_safe_url(payload.url)          # 先拦内网/环回地址，避免可疑 URL 进入解析流程
     url, platform = parse_source(payload.url)
     if not downloader.is_valid_quality(payload.quality):
@@ -503,7 +536,11 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
         quality=downloader.quality_label(payload.quality),
     )
     executor.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy)
-    return {"task_id": task.id, "status": task.status}
+    return {
+        "task_id": task.id,
+        "status": task.status,
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
 
 
 @app.get("/api/tasks/{task_id}")
