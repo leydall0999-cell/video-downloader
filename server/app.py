@@ -18,8 +18,12 @@ import contextlib
 import json
 import logging
 import os
+import sys
+import shutil
+import subprocess
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -57,6 +61,23 @@ RESOLVE_TIMEOUT_DOMESTIC = 20         # 国内站（腾讯/优酷/B站等直连�
 SSE_INTERVAL_SECONDS = 0.5
 SSE_MAX_SECONDS = 60 * 30
 CLEANUP_INTERVAL_SECONDS = 600
+
+# ---- 自动解说（增值功能）：松耦合桥接用户现成的 commentary-pipeline ----
+# 复用 commentary-pipeline/process.py 整条管线（转写→配音→出片），本服务只负责
+# 把下载好的视频喂进它的 input/、等成片回传，绝不重写解说逻辑。
+# 默认关闭：需显式开启 + 配置管线目录，且解说 worker 应在独立机器/进程跑，别和下载抢 CPU。
+#   VDL_COMMENTARY_ENABLED=true                      启用
+#   VDL_COMMENTARY_DIR=/path/to/commentary-pipeline  管线项目根目录（需有 process.py + input/ + output/）
+#   VDL_COMMENTARY_PYTHON=/path/to/python            跑 process.py 的解释器（需装 faster_whisper 等依赖）
+#   VDL_COMMENTARY_VOICE=zh-CN-YunxiNeural           默认配音嗓音
+COMMENTARY_ENABLED = os.environ.get("VDL_COMMENTARY_ENABLED", "false").strip().lower() == "true"
+_commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
+COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
+COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
+COMMENTARY_VOICE = os.environ.get("VDL_COMMENTARY_VOICE", "zh-CN-YunxiNeural").strip() or "zh-CN-YunxiNeural"
+COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "1800") or 1800)  # 长视频渲染可能很久
+commentary_jobs: dict[str, dict] = {}
+_commentary_lock = threading.Lock()
 
 # ---- 公开部署护栏：防止实例被当免费下载器薅爆带宽 ---- #
 # 设为 0 表示不限制（自托管、内部使用时可关掉）
@@ -108,6 +129,58 @@ def _host_of(url: str) -> str:
 store = TaskStore(DOWNLOAD_DIR)
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS, thread_name_prefix="vdl-dl")
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
+
+
+# --------------------------------------------------------------------------- #
+# 自动解说（松耦合桥接 commentary-pipeline/process.py，不重写解说逻辑）
+# --------------------------------------------------------------------------- #
+
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
+    """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
+
+    复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → moviepy 出片），
+    本函数只负责文件桥接与成片定位。算力由解说 worker 独立承担，不影响下载服务。
+    """
+    try:
+        base = job_id  # 用 job_id 作安全 ascii 文件名，避开中文/空格对 process.py 路径处理的干扰
+        in_dir = COMMENTARY_DIR / "input"
+        out_dir = COMMENTARY_DIR / "output"
+        in_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        in_file = in_dir / f"{base}.mp4"
+        if in_file.exists() or in_file.is_symlink():
+            in_file.unlink()
+        try:
+            os.symlink(src_path, in_file)
+        except OSError:
+            shutil.copyfile(src_path, in_file)  # 跨挂载点软链失败则退化为复制
+
+        args = [COMMENTARY_PYTHON, "process.py", str(in_file), "--auto"]
+        if vertical:
+            args.append("--vertical")
+        args += ["--voice", voice]
+        proc = subprocess.run(
+            args, cwd=str(COMMENTARY_DIR), capture_output=True, text=True,
+            timeout=COMMENTARY_TIMEOUT_SECONDS,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "解说管线执行失败").strip()[-800:])
+
+        # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
+        candidates = sorted(
+            (p for p in out_dir.glob(f"{base}*.mp4") if p.name != in_file.name),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        out = next(iter(candidates), None)
+        if not out:
+            raise RuntimeError("解说管线执行成功但未找到成片，请检查 output/ 目录")
+        with _commentary_lock:
+            commentary_jobs[job_id].update(status="completed", output_path=str(out))
+    except Exception as exc:  # noqa: BLE001
+        with _commentary_lock:
+            commentary_jobs.setdefault(job_id, {})["status"] = "failed"
+            commentary_jobs[job_id]["error"] = str(exc)[:800]
+        logger.exception("解说任务 %s 失败", job_id)
 
 
 async def _cleanup_loop() -> None:
@@ -200,6 +273,7 @@ def node_info() -> dict:
         "region": NODE_REGION,
         "peer": PEER_ENDPOINT,
         "china_domains": list(CHINA_DOMAINS),
+        "commentary_enabled": COMMENTARY_ENABLED,
     }
 
 
@@ -303,6 +377,54 @@ def cancel_task(task_id: str) -> dict:
         store.remove(task_id)
         return {"task_id": task_id, "canceled": False, "removed": True}
     return {"task_id": task_id, "canceled": store.request_cancel(task_id), "removed": False}
+
+
+# --------------------------------------------------------------------------- #
+# 自动解说（增值功能）：下载完 → 一键生成解说成片。壳，逻辑全在 commentary-pipeline
+# --------------------------------------------------------------------------- #
+
+class CommentaryRequest(BaseModel):
+    task_id: str = Field(min_length=1, max_length=64)
+    vertical: bool = True
+    voice: str = Field(default="", max_length=64)
+
+
+@app.post("/api/commentary")
+def create_commentary(payload: CommentaryRequest) -> dict:
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "process.py").exists():
+        raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
+    task = _require_task(payload.task_id)
+    if task.status != "completed" or not task.filepath or not task.filepath.exists():
+        raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")
+    job_id = uuid.uuid4().hex[:12]
+    with _commentary_lock:
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
+    executor.submit(_commentary_run, job_id, str(task.filepath), payload.vertical, payload.voice or COMMENTARY_VOICE)
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/commentary/{job_id}")
+def commentary_status(job_id: str) -> dict:
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="解说任务不存在或已过期")
+    return {"job_id": job_id, "status": job["status"], "error": job.get("error", ""),
+            "ready": job["status"] == "completed"}
+
+
+@app.get("/api/commentary/{job_id}/file")
+def commentary_file(job_id: str) -> FileResponse:
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+    if not job or job["status"] != "completed" or not job.get("output_path"):
+        raise HTTPException(status_code=409, detail="成片尚未就绪")
+    path = Path(job["output_path"])
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="成片文件已清理")
+    return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

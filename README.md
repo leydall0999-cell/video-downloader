@@ -214,6 +214,9 @@ docker run -d -p 8000:8000 -e PORT=8000 video-downloader
 | GET | `/api/tasks/{id}/events` | SSE 实时进度 |
 | GET | `/api/tasks/{id}/file` | 下载成品文件 |
 | DELETE | `/api/tasks/{id}` | 取消任务并清理临时文件 |
+| POST | `/api/commentary` | `{task_id, vertical, voice}` → `{job_id}`（需先启用并配置解说管线） |
+| GET | `/api/commentary/{job_id}` | 解说任务状态（轮询） |
+| GET | `/api/commentary/{job_id}/file` | 下载解说成片 |
 
 错误响应统一为 `{"error": "面向用户的说明", "hint": "补充建议"}`，HTTP 状态码：
 400 链接非法 / 415 平台不支持 / 404 任务不存在 / 409 文件未就绪 / 504 解析超时。
@@ -224,6 +227,30 @@ docker run -d -p 8000:8000 -e PORT=8000 video-downloader
 - 任务状态存在内存中，重启即清空；成品文件保留 1 小时后自动删除。
 - 直播流、DRM 加密内容不支持。
 - 部分平台的高清晰度需要登录态，请配合 `VDL_COOKIES_FROM_BROWSER` 使用。
+
+## 自动解说（增值功能，可选）
+
+下载完一个视频后，可一键「生成解说成片」——后端把视频喂给你自己独立的
+commentary-pipeline（转写 → 配音 → 出片，输入 `input/`、跑 `process.py`、输出 `output/` 的本地脚本管线），
+跑完回传成片。本服务只做**文件桥接，不重写解说逻辑**，解说管线在你自己的机器上独立运行。
+
+> 适合做订阅增值点：算力可控（本地 whisper-base + 免费 edge-tts，无 LLM/TTS API 费），
+> 但渲染吃 CPU，建议放在独立 worker，别和下载服务抢资源。
+
+**启用方式**（默认关闭，开源版不显示该入口）：
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `VDL_COMMENTARY_ENABLED` | 设为 `true` 才启用 |
+| `VDL_COMMENTARY_DIR` | commentary-pipeline 项目根目录（需含 `process.py` 及 `input/`、`output/`） |
+| `VDL_COMMENTARY_PYTHON` | 跑 `process.py` 的 Python 解释器（需装 faster_whisper 等依赖），默认同进程解释器 |
+| `VDL_COMMENTARY_VOICE` | 默认配音嗓音，默认 `zh-CN-YunxiNeural` |
+| `VDL_COMMENTARY_TIMEOUT` | 单任务超时秒数，默认 `1800` |
+
+前端在下载完成的任务卡片上自动出现「生成解说成片」按钮（仅当本节点启用该功能）。
+
+> **版权边界**：下载他人视频 + 自动解说二创并公开发布，属于你自己的发布行为，
+> 需注意各平台（YouTube/B站）的二创政策；本工具不破解付费墙、不替代原作者的授权。
 
 ## 合规提示
 

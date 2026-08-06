@@ -58,7 +58,7 @@
   // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
   // 免去跨境回源。单节点部署（peer 为空）时全部走本节点，行为与以前一致。
 
-  const node = { region: 'global', peer: '', chinaDomains: [] };
+  const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
 
@@ -269,6 +269,9 @@
       cancel: node.querySelector('[data-cancel]'),
       save: node.querySelector('[data-save]'),
       error: node.querySelector('[data-error]'),
+      commentary: node.querySelector('[data-commentary]'),
+      commentaryFile: node.querySelector('[data-commentary-file]'),
+      commentaryStatus: node.querySelector('[data-commentary-status]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.title.textContent = meta.title;
@@ -302,6 +305,15 @@
     refs.save.href = `${refs.base || ''}/api/tasks/${task.task_id}/file`;
     refs.save.setAttribute('download', task.filename || '');
     if (autoSave) refs.save.click();
+
+    // 本节点启用了解说增值功能：下载完成后展示「生成解说成片」入口
+    if (node.commentaryEnabled) {
+      refs.commentary.hidden = false;
+      if (!refs.commentary.dataset.bound) {
+        refs.commentary.dataset.bound = '1';
+        refs.commentary.addEventListener('click', () => createCommentary(taskId, refs, refs.base || ''));
+      }
+    }
   };
 
   /** 用 SSE 跟踪进度，浏览器不支持或连接断开时回退到轮询。 */
@@ -404,6 +416,49 @@
     }
   };
 
+  // ------------------------------------------------------------------ 自动解说（增值功能）
+  // 下载完成的任务 → 点「生成解说成片」→ 后台调 commentary-pipeline/process.py → 回传成片。
+  // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
+
+  const createCommentary = async (taskId, refs, base = '') => {
+    refs.commentary.disabled = true;
+    refs.commentary.textContent = '生成中…';
+    refs.commentaryStatus.hidden = false;
+    refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
+    try {
+      const { job_id } = await request('/api/commentary', {
+        method: 'POST',
+        body: JSON.stringify({ task_id: taskId, vertical: true }),
+      }, base);
+
+      const poll = setInterval(async () => {
+        try {
+          const st = await request(`/api/commentary/${job_id}`, {}, base);
+          if (st.status === 'completed') {
+            clearInterval(poll);
+            refs.commentaryStatus.textContent = '解说成片已生成';
+            refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
+            refs.commentaryFile.setAttribute('download', '解说成片.mp4');
+            refs.commentaryFile.hidden = false;
+            refs.commentary.hidden = true;
+          } else if (st.status === 'failed') {
+            clearInterval(poll);
+            refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
+            refs.commentary.disabled = false;
+            refs.commentary.textContent = '重试生成解说';
+          }
+        } catch {
+          /* 静默重试，下一轮轮询补上 */
+        }
+      }, 2500);
+    } catch (err) {
+      refs.commentaryStatus.hidden = false;
+      refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      refs.commentary.disabled = false;
+      refs.commentary.textContent = '生成解说成片';
+    }
+  };
+
   // ------------------------------------------------------------------ 初始化
 
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
@@ -437,10 +492,11 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
+      node.commentaryEnabled = !!commentary_enabled;
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
