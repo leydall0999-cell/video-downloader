@@ -30,6 +30,22 @@ python3 cn_proxy.py 18888        # 监听 0.0.0.0:18888
 买阿里云/腾讯云轻量（国内地域，约 ¥60–100/年），公网 IP 直连，无需隧道。
 `cn_proxy.py` 已内置 Basic 鉴权（设 `CN_PROXY_AUTH` 环境变量即生效），公网暴露**必须开**。
 
+**一键脚本（推荐）**：仓库自带 `setup_vps.sh`，在 VPS 上 root 跑一条命令即可完成下面 1–5 步：
+
+```bash
+# 把脚本弄到 VPS（任选其一）：
+#   a) 本地 scp：  scp setup_vps.sh root@<VPS公网IP>:~/
+#   b) VPS 上直接拉： curl -fsSL https://raw.githubusercontent.com/leydall0999-cell/video-downloader/main/setup_vps.sh -o setup_vps.sh
+
+# 在 VPS 上执行（--auth 即代理账号密码，Railway 要用同一对）：
+sudo bash setup_vps.sh --auth 你的user:你的强密码 --port 18888
+# 脚本会自动：装 python3 → 放 cn_proxy.py 到 /opt/vdl-proxy → 写 systemd 单元(含 CN_PROXY_AUTH)
+#            → 开机自启+崩溃重启 → 自检鉴权(无密码407/带密码200) → 放行防火墙
+#            → 末尾打印 Railway 要填的 VDL_PROXY_CN
+```
+
+想手动一步步来，见下方分步说明。
+
 **1) 上传脚本到 VPS**
 ```bash
 mkdir -p /opt/vdl-proxy
