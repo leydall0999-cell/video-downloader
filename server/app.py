@@ -329,8 +329,8 @@ def node_info() -> dict:
 @app.post("/api/resolve")
 async def resolve(payload: ResolveRequest, request: Request) -> dict:
     _check_rate_limit(request)
+    _assert_safe_url(payload.url)          # 先拦内网/环回地址，避免可疑 URL 进入解析流程
     url, platform = parse_source(payload.url)
-    _assert_safe_url(url)
     # 国内站直连、本就快，用更短超时；受限视频也能更快判定，不必让用户空等
     host = _host_of(url)
     timeout = RESOLVE_TIMEOUT_DOMESTIC if is_china_host(host) else RESOLVE_TIMEOUT_SECONDS
@@ -359,8 +359,8 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
 @app.post("/api/download")
 def create_download(payload: DownloadRequest, request: Request) -> dict:
     _check_rate_limit(request)
+    _assert_safe_url(payload.url)          # 先拦内网/环回地址，避免可疑 URL 进入解析流程
     url, platform = parse_source(payload.url)
-    _assert_safe_url(url)
     if not downloader.is_valid_quality(payload.quality):
         raise HTTPException(status_code=400, detail="不支持的清晰度选项")
 
