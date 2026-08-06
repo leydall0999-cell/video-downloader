@@ -89,11 +89,18 @@
   const REGION_LABEL = { cn: '国内线路', global: '海外线路' };
 
   const paintNodeBar = () => {
-    if (!node.peer) return;                        // 单节点部署不展示该条
-    el.nodeBar.hidden = false;
+    el.nodeBar.hidden = false;                     // 线路条常驻：让用户始终能看到当前走哪条线
+    if (!node.peer) {
+      // 单节点部署：全部请求走本机，不提供线路切换
+      el.nodeDot.className = 'node-dot';
+      el.nodeText.textContent = '线路：本机直连';
+      el.nodeSwitch.hidden = true;
+      return;
+    }
     const region = regionFor(el.input.value);
     el.nodeDot.className = `node-dot is-${region}`;
     el.nodeText.textContent = `线路：${REGION_LABEL[region]}（${forcedRegion ? '已手动指定' : '自动'}）`;
+    el.nodeSwitch.hidden = false;
     el.nodeSwitch.textContent = forcedRegion ? '恢复自动' : '切换线路';
   };
 

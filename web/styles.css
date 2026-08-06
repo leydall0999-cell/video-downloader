@@ -178,9 +178,10 @@ img { max-width: 100%; display: block; }
 /* ---------------- control row ---------------- */
 .control-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: .75rem;
+  flex-wrap: wrap;
+  gap: .6rem;
   margin-top: .85rem;
 }
 
