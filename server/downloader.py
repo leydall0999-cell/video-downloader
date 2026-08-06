@@ -105,6 +105,45 @@ MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
 DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给合并/转码
 
+# 直链透传：用户贴的是单个可直接下载的媒体文件（.mp4 等）时，让前端直接从源站
+# 把文件拉到本地，跳过服务器落盘与带宽消耗（真正只下一遍）。
+_DIRECT_EXT_RE = re.compile(
+    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts)(\?|#|$|&)", re.IGNORECASE
+)
+# 这些域名即使是媒体扩展名结尾，也属于需经 yt-dlp 解析的平台，不能用直链透传绕过
+_KNOWN_PLATFORM_HOSTS = {
+    "bilibili.com", "b23.tv", "douyin.com", "tiktok.com", "tiktokv.com",
+    "youtube.com", "youtu.be", "twitch.tv", "twitter.com", "x.com",
+    "vimeo.com", "facebook.com", "instagram.com", "weibo.com", "qq.com",
+    "v.qq.com", "iqiyi.com", "youku.com", "chrqj.com", "pan.baidu.com",
+}
+
+
+def _looks_like_direct_file(url: str) -> str | None:
+    """若 URL 指向单个可直接下载的媒体文件（非已知平台），返回该 URL，否则 None。"""
+    host = _host_of(url)
+    if not host or host in _KNOWN_PLATFORM_HOSTS or is_china_host(host):
+        return None
+    if _DIRECT_EXT_RE.search(urlparse(url).path or ""):
+        return url
+    return None
+
+
+def _detect_direct_url(info: dict[str, Any]) -> str | None:
+    """yt-dlp 解析结果若本身就是单个可直接下载的媒体文件，返回其直链。"""
+    if not info.get("direct"):
+        return None
+    url = info.get("url") or ""
+    if not url:
+        return None
+    protocol = (info.get("protocol") or "").split("+")[0].lower()
+    if protocol not in ("http", "https", ""):
+        return None
+    if _DIRECT_EXT_RE.search(url) or _DIRECT_EXT_RE.search(f".{info.get('ext') or ''}"):
+        return url
+    return None
+
+
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 NOISE_PATTERN = re.compile(
     r"(please report this issue.*|Confirm you are on the latest version.*|"
@@ -220,6 +259,17 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
+    direct = _looks_like_direct_file(url)
+    if direct:
+        # 本身就是完整媒体文件，跳过 yt-dlp，直接交给前端从源站下载（不走服务器）
+        filename = Path(urlparse(url).path).name or "video.mp4"
+        return {
+            "direct": True,
+            "url": url,
+            "title": filename,
+            "ext": (Path(filename).suffix or ".mp4").lstrip("."),
+            "webpage_url": url,
+        }
     try:
         with YoutubeDL(_base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -472,4 +522,5 @@ def summarize(info: dict[str, Any]) -> dict[str, Any]:
         "view_count": info.get("view_count") or 0,
         "webpage_url": info.get("webpage_url") or "",
         "extractor": info.get("extractor_key") or "",
+        "direct_url": _detect_direct_url(info),
     }

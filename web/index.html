@@ -107,7 +107,7 @@
       </div>
     </div>
 
-    <div class="quality-block">
+    <div class="quality-block" id="qualityBlock">
       <div class="block-title">选择清晰度</div>
       <div class="quality-grid" id="qualityGrid" role="radiogroup" aria-label="选择清晰度"></div>
     </div>
@@ -118,6 +118,9 @@
       </svg>
       开始下载
     </button>
+
+    <p class="direct-hint" id="directHint" hidden></p>
+    <button type="button" class="btn btn-ghost btn-block" id="serverFallbackBtn" hidden>源站直连失败？改用服务器下载</button>
 
     <!-- 交叉引流入口：下载完成后还能转 MP3 / 存网盘（占位，后续接通后端） -->
     <div class="upsell" id="upsellBox" hidden>
@@ -213,6 +216,7 @@
       </span>
     </div>
     <p class="commentary-status" data-commentary-status hidden></p>
+    <p class="save-hint" data-save-hint hidden></p>
     <p class="task-error" data-error hidden></p>
   </li>
 </template>

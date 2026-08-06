@@ -43,6 +43,9 @@
     cookieInput: $('cookieInput'),
     proxyInput: $('proxyInput'),
     upsellBox: $('upsellBox'),
+    qualityBlock: $('qualityBlock'),
+    directHint: $('directHint'),
+    serverFallbackBtn: $('serverFallbackBtn'),
     upsellMp3: $('upsellMp3'),
     upsellCloud: $('upsellCloud'),
     upsellStatus: $('upsellStatus'),
@@ -260,9 +263,25 @@
       el.thumb.onerror = () => { el.thumb.hidden = true; };
     }
 
-    renderQualities(data.qualities);
+    const directUrl = video.direct_url;
+    if (directUrl) {
+      // 直链透传：跳过清晰度选择与服务器下载，直接让浏览器从源站拉文件
+      el.qualityBlock.hidden = true;
+      el.upsellBox.hidden = true;
+      el.downloadBtn.lastChild.textContent = '直接保存到本机 ⬇';
+      el.directHint.hidden = false;
+      el.directHint.textContent = '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
+      el.serverFallbackBtn.hidden = false;
+    } else {
+      el.qualityBlock.hidden = false;
+      el.upsellBox.hidden = false;
+      el.downloadBtn.lastChild.textContent = '开始下载';
+      el.directHint.hidden = true;
+      el.directHint.textContent = '';
+      el.serverFallbackBtn.hidden = true;
+      renderQualities(data.qualities);
+    }
     // 展示交叉引流卡片：转 MP3 已接通可直接用，存网盘待后续打通
-    el.upsellBox.hidden = false;
     el.upsellStatus.hidden = true;
     el.upsellMp3.disabled = false;
     el.resultPanel.hidden = false;
@@ -288,6 +307,7 @@
       commentary: node.querySelector('[data-commentary]'),
       commentaryFile: node.querySelector('[data-commentary-file]'),
       commentaryStatus: node.querySelector('[data-commentary-status]'),
+      saveHint: node.querySelector('[data-save-hint]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.title.textContent = meta.title;
@@ -320,7 +340,18 @@
     // 任务在哪个节点跑，文件就从哪个节点取
     refs.save.href = `${refs.base || ''}/api/tasks/${task.task_id}/file`;
     refs.save.setAttribute('download', task.filename || '');
-    if (autoSave) refs.save.click();
+    refs.save.textContent = '保存到本机 ⬇';
+    refs.status.textContent = autoSave
+      ? '已完成 · 已自动保存到本机'
+      : '已完成 · 点「保存到本机」';
+    if (autoSave) {
+      refs.save.click();
+      refs.saveHint.hidden = false;
+      refs.saveHint.textContent = '文件已自动保存到你的下载文件夹；若浏览器拦截未出现，请点上方按钮手动保存。';
+    } else {
+      refs.saveHint.hidden = false;
+      refs.saveHint.textContent = '点上方「保存到本机」即可把处理好的视频从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
+    }
 
     // 本节点启用了解说增值功能：下载完成后展示「生成解说成片」入口
     if (node.commentaryEnabled) {
@@ -424,7 +455,23 @@
     }
   };
 
-  const handleDownload = () => startDownload(selectedQuality);
+  const triggerDirectDownload = (url, title) => {
+    const a = document.createElement('a');
+    a.href = url;
+    if (title) a.download = title;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。若源站拒绝直连，请用上方「改用服务器下载」。';
+  };
+
+  const handleDownload = () => {
+    if (resolved?.video?.direct_url) {
+      triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
+      return;
+    }
+    startDownload(selectedQuality);
+  };
 
   const cancelTask = async (taskId, base = '') => {
     try {
@@ -483,6 +530,7 @@
 
   el.form.addEventListener('submit', handleResolve);
   el.downloadBtn.addEventListener('click', handleDownload);
+  el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
   el.clearBtn.addEventListener('click', () => {
     el.input.value = '';
