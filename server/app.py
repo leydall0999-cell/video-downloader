@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
+import socket
 import logging
 import os
 import sys
@@ -81,18 +83,65 @@ _commentary_lock = threading.Lock()
 
 # ---- 公开部署护栏：防止实例被当免费下载器薅爆带宽 ---- #
 # 设为 0 表示不限制（自托管、内部使用时可关掉）
-RATE_LIMIT_PER_HOUR = int(os.environ.get("VDL_RATE_LIMIT_PER_HOUR", "0") or 0)
+RATE_LIMIT_PER_HOUR = int(os.environ.get("VDL_RATE_LIMIT_PER_HOUR", "30") or 30)
 RATE_LIMIT_WINDOW = 3600
 _rate_log: dict[str, list[float]] = {}
 _rate_lock = threading.Lock()
 
 
 def _client_ip(request: Request) -> str:
-    """取真实客户端 IP：优先 X-Forwarded-For 首段（Cloudflare / Railway 等反代场景）。"""
+    """取真实客户端 IP，避免伪造 X-Forwarded-For 头绕过限流。
+
+    优先级：X-Real-IP（Cloudflare 等反代会覆盖用户自填、最可信）
+            > X-Forwarded-For 最右段（平台/反代追加的最近一跳，用户无法伪造最右）
+            > 直连地址。
+    """
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.split(",")[0].strip()
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
+
+
+# ---- SSRF 防护：拒绝指向内网 / 环回 / 链路本地 / 云元数据的链接 ----
+# 视频站都是公网域名；攻击者若传入内网地址（如 169.254.169.254 云元数据），
+# 服务器会去请求并可能泄露凭据，或被当成跳板。入口强制只允许公网可达地址。
+_PRIVATE_NETS = [
+    ipaddress.ip_network(n) for n in (
+        "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+        "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15",
+        "::1/128", "fc00::/7", "fe80::/10",
+    )
+]
+
+
+def _assert_safe_url(url: str) -> None:
+    """SSRF 护栏：解析主机名，拒绝落在私有 / 环回 / 链路本地 / 保留网段的地址。"""
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        raise LinkError("链接缺少主机名", "请检查链接是否完整")
+    if host == "localhost" or host.endswith(".local") or host.endswith(".internal"):
+        raise LinkError("该主机不在允许范围内", "请粘贴公开可访问的视频链接")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        # 解析不到的域名交给 yt-dlp 统一报错，这里不拦（避免误杀偶发 DNS 抖动）
+        return
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
+            raise LinkError(
+                "该链接指向非公开网络，已拒绝",
+                "只允许下载公开可访问的视频；内网 / 本地 / 云元数据地址不可用",
+            )
 
 
 def _check_rate_limit(request: Request) -> None:
@@ -278,8 +327,10 @@ def node_info() -> dict:
 
 
 @app.post("/api/resolve")
-async def resolve(payload: ResolveRequest) -> dict:
+async def resolve(payload: ResolveRequest, request: Request) -> dict:
+    _check_rate_limit(request)
     url, platform = parse_source(payload.url)
+    _assert_safe_url(url)
     # 国内站直连、本就快，用更短超时；受限视频也能更快判定，不必让用户空等
     host = _host_of(url)
     timeout = RESOLVE_TIMEOUT_DOMESTIC if is_china_host(host) else RESOLVE_TIMEOUT_SECONDS
@@ -309,6 +360,7 @@ async def resolve(payload: ResolveRequest) -> dict:
 def create_download(payload: DownloadRequest, request: Request) -> dict:
     _check_rate_limit(request)
     url, platform = parse_source(payload.url)
+    _assert_safe_url(url)
     if not downloader.is_valid_quality(payload.quality):
         raise HTTPException(status_code=400, detail="不支持的清晰度选项")
 

@@ -97,6 +97,9 @@ def _resolve_proxy(host: str = "") -> str:
             return mac
     return os.environ.get("https_proxy") or os.environ.get("http_proxy") or ""
 DOWNLOAD_RETRIES = 3
+# 下载体积上限（MB）：防止被当成免费大盘偷跑带宽 / 撑爆磁盘。设为 0 表示不限。
+_MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "2048") or 2048)
+_MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
 CONCURRENT_FRAGMENTS = 4
 MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
@@ -392,6 +395,8 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
         "postprocessor_hooks": [reporter.on_postprocess],
         "overwrites": True,
     }
+    if _MAX_FILE_BYTES:
+        options["max_filesize"] = _MAX_FILE_BYTES
     if quality_key == AUDIO_KEY:
         options["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
