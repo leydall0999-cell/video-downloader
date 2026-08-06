@@ -100,7 +100,12 @@ img { max-width: 100%; display: block; }
   padding: 1.25rem; margin-bottom: 1rem;
 }
 
-.input-row { display: flex; gap: .7rem; max-width: 680px; margin: 0 auto; }
+.input-row {
+  display: flex;
+  flex-direction: column;
+  gap: .85rem;
+}
+.input-row #resolveBtn { align-self: flex-end; }
 
 .input-shell {
   position: relative; flex: 1; display: flex; align-items: center;
@@ -399,6 +404,7 @@ img { max-width: 100%; display: block; }
   .hero { padding: 1.9rem 0 1.2rem; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; max-width: none; }
+  .input-row #resolveBtn { align-self: stretch; width: 100%; }
   .btn-primary { width: 100%; }
   .video-card { grid-template-columns: 1fr; }
   .thumb-box { max-width: 100%; }
