@@ -54,6 +54,13 @@
     nodeText: $('nodeText'),
     nodeSwitch: $('nodeSwitch'),
     adsSlot: $('adsSlot'),
+    subBadge: $('subBadge'),
+    subModal: $('subModal'),
+    subModalClose: $('subModalClose'),
+    subModalSub: $('subModalSub'),
+    subInput: $('subInput'),
+    subApply: $('subApply'),
+    subMsg: $('subMsg'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
@@ -66,7 +73,8 @@
   // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
   // 免去跨境回源。单节点部署（peer 为空）时全部走本节点，行为与以前一致。
 
-  const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false };
+  const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false,
+    convertSubRequired: false, convertFreeDaily: 3, subscribed: false };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
 
@@ -111,13 +119,15 @@
   // ------------------------------------------------------------------ 工具
 
   const request = async (path, options = {}, base = '') => {
-    const response = await fetch(base + path, {
-      headers: { 'Content-Type': 'application/json' },
-      ...options,
-    });
+    const headers = { 'Content-Type': 'application/json' };
+    const subKey = localStorage.getItem('vdl_sub_key');
+    if (subKey) headers['X-Subscription-Key'] = subKey;
+    const response = await fetch(base + path, { headers, ...options });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '' };
+      const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '' };
+      if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
+      throw err;
     }
     return payload;
   };
@@ -143,6 +153,28 @@
   };
 
   const formatEta = (seconds) => (seconds > 0 ? `剩余 ${formatDuration(seconds) || '<1s'}` : '');
+
+  // 转换订阅额度显示：仅在订阅墙开启时生效
+  const updateConvertQuota = (refs, quota) => {
+    if (!node.convertSubRequired) return;
+    const q = refs.convertQuota;
+    q.hidden = false;
+    if (quota && quota.subscribed) {
+      node.subscribed = true;
+      q.textContent = '已订阅 · 无限转换 ✓';
+      q.className = 'convert-quota is-sub';
+      el.subBadge.textContent = '已订阅 ✓';
+      el.subBadge.hidden = false;
+      return;
+    }
+    const total = (quota && quota.free_daily) || node.convertFreeDaily;
+    const used = (quota && quota.free_used) || 0;
+    const left = Math.max(0, total - used);
+    q.className = 'convert-quota' + (left <= 0 ? ' is-empty' : '');
+    q.textContent = left > 0
+      ? `今日免费剩余 ${left}/${total} 次`
+      : '今日免费次数已用完 · 点右上角订阅解锁';
+  };
 
   const buildStats = (task) => {
     if (task.status === 'completed') return `${formatBytes(task.filesize)} · 已就绪`;
@@ -365,6 +397,7 @@
       refs.convertBtn.dataset.bound = '1';
       refs.convertBtn.addEventListener('click', () => startConvert(task.task_id, refs));
     }
+    if (node.convertSubRequired) updateConvertQuota(refs, null);
 
     // 本节点启用了解说增值功能：下载完成后展示「生成解说成片」入口
     if (node.commentaryEnabled) {
@@ -384,11 +417,13 @@
     refs.convertStatus.textContent = '转换中…';
     const base = refs.base || '';
     try {
-      const { job_id: jobId } = await request(
+      const data = await request(
         '/api/convert',
         { method: 'POST', body: JSON.stringify({ task_id: taskId, target, resolution }) },
         base,
       );
+      const jobId = data.job_id;
+      updateConvertQuota(refs, data.quota);
       const timer = setInterval(async () => {
         try {
           const st = await request('/api/convert/' + jobId, {}, base);
@@ -407,8 +442,14 @@
         } catch (_e) { /* 轮询中出错则继续 */ }
       }, 3000);
     } catch (error) {
-      refs.convertStatus.textContent = '转换请求失败：' + (error.message || '');
       refs.convertBtn.disabled = false;
+      if (error.subscribe) {
+        refs.convertStatus.textContent = '今日免费次数已用完，点右上角「订阅解锁」无限使用';
+        el.subBadge.hidden = false;
+        el.subBadge.classList.add('pulse');
+      } else {
+        refs.convertStatus.textContent = '转换请求失败：' + (error.message || '');
+      }
     }
   };
 
@@ -663,18 +704,52 @@
   });
   el.badge.addEventListener('click', () => openPlatformModal(allPlatforms));
 
+  // 订阅解锁（增值能力变现）：默认不开墙则 UI 不出现
+  const initSubUI = () => {
+    if (!node.convertSubRequired) return;
+    const key = localStorage.getItem('vdl_sub_key');
+    el.subBadge.hidden = false;
+    el.subBadge.textContent = key ? '已订阅 ✓' : '🔓 订阅解锁';
+    el.subModalSub.textContent = `免费用户每日限 ${node.convertFreeDaily} 次格式转换，订阅后无限使用。`;
+  };
+  el.subBadge.addEventListener('click', () => {
+    if (typeof el.subModal.showModal === 'function') el.subModal.showModal();
+    else el.subModal.setAttribute('open', '');
+  });
+  el.subModalClose.addEventListener('click', () => el.subModal.close());
+  el.subModal.addEventListener('click', (event) => {
+    if (event.target === el.subModal) el.subModal.close();
+  });
+  el.subApply.addEventListener('click', () => {
+    const key = el.subInput.value.trim();
+    const msg = el.subMsg;
+    if (!key) {
+      msg.hidden = false; msg.className = 'sub-msg is-err'; msg.textContent = '请输入订阅密钥';
+      return;
+    }
+    localStorage.setItem('vdl_sub_key', key);
+    msg.hidden = false; msg.className = 'sub-msg is-ok';
+    msg.textContent = '已保存，下次转换将自动验证解锁';
+    el.subBadge.textContent = '已订阅 ✓';
+    el.subBadge.hidden = false;
+    setTimeout(() => el.subModal.close(), 900);
+  });
+
   request('/api/platforms')
     .then(({ platforms }) => renderPlatforms(platforms))
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
       node.commentaryEnabled = !!commentary_enabled;
       node.adsEnabled = !!ads_enabled;
       el.adsSlot.hidden = !node.adsEnabled;
+      node.convertSubRequired = !!(convert && convert.subscription_required);
+      node.convertFreeDaily = (convert && convert.free_daily) || 3;
+      initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });

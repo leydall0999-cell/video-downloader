@@ -465,3 +465,29 @@ img { max-width: 100%; display: block; }
 }
 .ads-body { flex: 1 1 auto; }
 .ads-fallback { margin: 0; font-size: .85rem; color: var(--text-mute); text-align: center; }
+
+/* ---------------- 格式转换订阅开关 ---------------- */
+.convert-quota {
+  font-size: .78rem; color: var(--text-mute);
+  flex-basis: 100%; margin-left: 0; margin-top: .15rem;
+}
+.convert-quota.is-sub { color: var(--success); font-weight: 600; }
+.convert-quota.is-empty { color: var(--brand-strong); font-weight: 600; cursor: pointer; }
+
+/* 订阅徽标脉冲提示：免费额度用完后吸引点击 */
+#subBadge.pulse { animation: sub-pulse 1.4s ease-in-out infinite; }
+@keyframes sub-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, .0); }
+  50% { box-shadow: 0 0 0 4px rgba(79, 70, 229, .22); }
+}
+@media (prefers-reduced-motion: reduce) { #subBadge.pulse { animation: none; } }
+
+.sub-form { display: flex; gap: .5rem; align-items: center; margin-top: .9rem; }
+.sub-form .adv-input { flex: 1; min-height: 40px; }
+.sub-msg { margin-top: .6rem; font-size: .82rem; }
+.sub-msg.is-ok { color: var(--success); }
+.sub-msg.is-err { color: var(--danger); }
+.sub-note {
+  margin-top: .8rem; padding-top: .7rem; border-top: 1px dashed var(--line);
+  font-size: .76rem; color: #94a0b4; line-height: 1.6;
+}

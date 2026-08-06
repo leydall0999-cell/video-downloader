@@ -95,6 +95,17 @@ COMMENTARY_ENABLED = os.environ.get("VDL_COMMENTARY_ENABLED", "false").strip().l
 # 广告位开关：默认关闭。下载站属广告平台高风险类目，默认不挂广告，
 # 待流量稳定、确定接入合规广告源后再开。前端据此决定是否渲染广告位容器。
 ADS_ENABLED = os.environ.get("VDL_ADS_ENABLED", "false").strip().lower() == "true"
+# ---- 格式转换订阅开关（增值能力变现，默认关闭以保持开源全免费体验）----
+# 部署者设 VDL_CONVERT_REQUIRE_SUB=true 并填 VDL_CONVERT_SUB_KEY 后进入「订阅墙」模式：
+#   免费用户每日限 VDL_CONVERT_FREE_DAILY 次（按客户端 IP 计），超出需订阅；
+#   请求头携带正确 X-Subscription-Key 的用户不限次。
+# 两个开关任一为空/未设 → 视为未启用订阅墙，所有人免费无限（开源默认）。
+CONVERT_REQUIRE_SUB = os.environ.get("VDL_CONVERT_REQUIRE_SUB", "false").strip().lower() == "true"
+CONVERT_SUB_KEY = os.environ.get("VDL_CONVERT_SUB_KEY", "").strip()
+CONVERT_FREE_DAILY = int(os.environ.get("VDL_CONVERT_FREE_DAILY", "3") or 3)
+CONVERT_SUB_ENABLED = CONVERT_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
+_convert_quota: dict[str, dict] = {}      # ip -> {"date": "YYYY-MM-DD", "count": int}
+_convert_quota_lock = threading.Lock()
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
@@ -195,6 +206,40 @@ def _check_rate_limit(request: Request) -> None:
         if len(_rate_log) > 10000:        # 兜底清理，避免长期运行内存堆积
             for key in [k for k, v in _rate_log.items() if not v or now - v[-1] > RATE_LIMIT_WINDOW]:
                 _rate_log.pop(key, None)
+
+
+def _today_str() -> str:
+    """当前服务器本地日期 YYYY-MM-DD，用于按自然日重置免费额度。"""
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
+    """格式转换订阅 / 限次校验。
+
+    返回 (subscribed, free_used, free_daily)：
+      - 未启用订阅墙：subscribed=False，免费额度字段为 0（全免费无限）。
+      - 启用墙且携带正确订阅密钥：subscribed=True，不受免费额度限制。
+      - 启用墙但免费用户：按 IP 当日计数，超出抛 402（前端据此引导订阅）。
+    """
+    if not CONVERT_SUB_ENABLED:
+        return (False, 0, 0)
+    key = (request.headers.get("x-subscription-key") or "").strip()
+    if CONVERT_SUB_KEY and key == CONVERT_SUB_KEY:
+        return (True, 0, CONVERT_FREE_DAILY)
+    ip = _client_ip(request)
+    today = _today_str()
+    with _convert_quota_lock:
+        rec = _convert_quota.get(ip)
+        if not rec or rec["date"] != today:
+            rec = {"date": today, "count": 0}
+            _convert_quota[ip] = rec
+        if rec["count"] >= CONVERT_FREE_DAILY:
+            raise HTTPException(
+                status_code=402,
+                detail="今日免费转换次数已用完，订阅可解锁无限转换",
+            )
+        rec["count"] += 1
+        return (False, rec["count"], CONVERT_FREE_DAILY)
 
 
 def _host_of(url: str) -> str:
@@ -343,7 +388,7 @@ if ALLOW_ORIGINS:
         allow_origins=ALLOW_ORIGINS,
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "X-Subscription-Key"],
     )
     logger.info("CORS 已开启，允许来源：%s", ", ".join(ALLOW_ORIGINS))
 
@@ -406,6 +451,10 @@ def node_info() -> dict:
         "china_domains": list(CHINA_DOMAINS),
         "commentary_enabled": COMMENTARY_ENABLED,
         "ads_enabled": ADS_ENABLED,
+        "convert": {
+            "subscription_required": CONVERT_SUB_ENABLED,
+            "free_daily": CONVERT_FREE_DAILY,
+        },
     }
 
 
@@ -514,6 +563,7 @@ class ConvertRequest(BaseModel):
 @app.post("/api/convert")
 def create_convert(payload: ConvertRequest, request: Request) -> dict:
     _check_rate_limit(request)
+    subscribed, free_used, free_daily = _check_convert_quota(request)
     task = _require_task(payload.task_id)
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
@@ -531,7 +581,11 @@ def create_convert(payload: ConvertRequest, request: Request) -> dict:
             "filename": out_path.name,
         }
     executor.submit(_run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
-    return {"job_id": job_id, "status": "running"}
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
 
 
 @app.get("/api/convert/{job_id}")

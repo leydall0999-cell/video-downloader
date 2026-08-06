@@ -26,6 +26,7 @@
       </div>
     </div>
     <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 15+ 平台</button>
+    <button type="button" class="badge" id="subBadge" hidden aria-haspopup="dialog" title="订阅解锁无限格式转换">🔓 订阅解锁</button>
   </div>
 </header>
 
@@ -235,12 +236,30 @@
       <button type="button" class="btn btn-ghost btn-sm" data-convert-btn>转换</button>
       <a class="btn btn-accent btn-sm" data-convert-file hidden download>下载转换文件</a>
       <span class="convert-status" data-convert-status></span>
+      <span class="convert-quota" data-convert-quota hidden></span>
     </div>
     <p class="commentary-status" data-commentary-status hidden></p>
     <p class="save-hint" data-save-hint hidden></p>
     <p class="task-error" data-error hidden></p>
   </li>
 </template>
+
+<!-- 订阅解锁弹窗：携带有效密钥可解锁无限格式转换 -->
+<dialog id="subModal" class="modal" aria-labelledby="subModalTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="subModalTitle">订阅解锁无限转换</h2>
+      <button type="button" class="modal-close" id="subModalClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub" id="subModalSub">免费用户每日限格式转换次数，订阅后无限使用。</p>
+    <div class="sub-form">
+      <input type="text" id="subInput" class="adv-input" placeholder="粘贴订阅密钥（X-Subscription-Key）" autocomplete="off" spellcheck="false" />
+      <button type="button" class="btn btn-primary btn-sm" id="subApply">解锁</button>
+    </div>
+    <p class="sub-msg" id="subMsg" hidden></p>
+    <p class="sub-note">密钥由站长 / 部署者提供。自托管可在服务端设置 VDL_CONVERT_REQUIRE_SUB=true 与 VDL_CONVERT_SUB_KEY 自定义。</p>
+  </div>
+</dialog>
 
 <script src="app.js"></script>
 </body>
