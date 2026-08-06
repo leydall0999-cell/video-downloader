@@ -51,6 +51,24 @@ DOWNLOAD_DIR = BASE_DIR / "downloads"
 MAX_CONCURRENT_DOWNLOADS = 3
 MAX_CONCURRENT_PROBES = 8
 
+# ---- 格式转换（增值能力）：对已下载文件做 ffmpeg 转码，异步 job ----
+CONVERT_DIR = DOWNLOAD_DIR / "conversions"
+CONVERT_DIR.mkdir(parents=True, exist_ok=True)
+CONVERT_JOBS: dict[str, dict] = {}
+CONVERT_LOCK = threading.Lock()
+FFMPEG_BIN = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+# 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
+CONVERT_TARGETS = {
+    "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
+    "mov":  ["-c:v", "libx264", "-c:a", "aac"],
+    "mkv":  ["-c:v", "libx264", "-c:a", "aac"],
+    "webm": ["-c:v", "libvpx-vp9", "-c:a", "libopus", "-b:v", "1M"],
+    "mp3":  ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
+    "m4a":  ["-vn", "-c:a", "aac"],
+    "gif":  ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
+}
+CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "mp3": "mp3", "m4a": "m4a", "gif": "gif"}
+
 # ---- 双节点分流：国内节点直连国内站，海外节点直连海外站，前端按链接域名自动选 ---- #
 # VDL_REGION: 本节点所在区域，"cn"=国内 / "global"=海外（默认海外）
 # VDL_PEER_ENDPOINT: 对端节点的完整地址，如 https://cn.example.com（留空=单节点模式）
@@ -484,6 +502,87 @@ def download_file(task_id: str) -> FileResponse:
         filename=task.filepath.name,
         media_type="application/octet-stream",
     )
+
+
+# ---- 格式转换：对已下载完成的文件做 ffmpeg 转码（增值能力） ----
+class ConvertRequest(BaseModel):
+    task_id: str
+    target: str
+    resolution: str = "original"
+
+
+@app.post("/api/convert")
+def create_convert(payload: ConvertRequest, request: Request) -> dict:
+    _check_rate_limit(request)
+    task = _require_task(payload.task_id)
+    if task.status != "completed" or not task.filepath or not task.filepath.exists():
+        raise HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
+    target = payload.target
+    if target not in CONVERT_TARGETS:
+        raise HTTPException(status_code=400, detail="不支持的目标格式")
+    job_id = uuid.uuid4().hex[:12]
+    ext = CONVERT_EXT[target]
+    out_path = CONVERT_DIR / f"{task.id}_conv_{job_id}.{ext}"
+    with CONVERT_LOCK:
+        CONVERT_JOBS[job_id] = {
+            "status": "running",
+            "out_path": str(out_path),
+            "error": "",
+            "filename": out_path.name,
+        }
+    executor.submit(_run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/convert/{job_id}")
+def convert_status(job_id: str) -> dict:
+    job = CONVERT_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="转换任务不存在")
+    return {"status": job["status"], "error": job.get("error", ""), "filename": job.get("filename", "")}
+
+
+@app.get("/api/convert/{job_id}/file")
+def convert_file(job_id: str) -> FileResponse:
+    job = CONVERT_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="转换任务不存在")
+    if job["status"] != "completed":
+        raise HTTPException(status_code=409, detail="转换尚未完成")
+    out = Path(job["out_path"])
+    if not out.exists():
+        raise HTTPException(status_code=410, detail="转换文件已清理")
+    return FileResponse(path=str(out), filename=out.name, media_type="application/octet-stream")
+
+
+def _run_convert(job_id: str, src: str, target: str, resolution: str) -> None:
+    """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。"""
+    job = CONVERT_JOBS.get(job_id)
+    if not job:
+        return
+    try:
+        out = Path(job["out_path"])
+        cmd = [FFMPEG_BIN, "-y", "-i", src]
+        if target == "gif":
+            cmd += CONVERT_TARGETS["gif"]
+        else:
+            cmd += CONVERT_TARGETS[target]
+            if resolution != "original" and target not in ("mp3", "m4a"):
+                h = {"1080": "1080", "720": "720", "480": "480"}.get(resolution)
+                if h:
+                    cmd += ["-vf", f"scale=-2:{h}"]
+        cmd.append(str(out))
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or "")[-500:] or "ffmpeg 执行失败")
+        if not out.exists() or out.stat().st_size == 0:
+            raise RuntimeError("ffmpeg 未产出有效文件")
+        job["status"] = "completed"
+        logger.info("convert %s done -> %s", job_id, out.name)
+    except Exception as e:
+        job["status"] = "failed"
+        job["error"] = str(e)[:400]
+        logger.warning("convert %s failed: %s", job_id, e)
 
 
 @app.delete("/api/tasks/{task_id}")

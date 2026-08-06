@@ -47,8 +47,8 @@
             <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
             <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
           </svg>
-          <input id="urlInput" name="url" type="text" inputmode="url" spellcheck="false" maxlength="2048"
-                 placeholder="例如 https://www.bilibili.com/video/BV1..." />
+          <textarea id="urlInput" name="url" rows="2" spellcheck="false" maxlength="8192"
+                 placeholder="粘贴视频链接，每行一个可批量下载（例如 https://www.bilibili.com/video/BV1...）"></textarea>
           <button type="button" id="clearBtn" class="icon-btn" title="清空" aria-label="清空输入" hidden>✕</button>
         </div>
         <button type="submit" id="resolveBtn" class="btn btn-primary">
@@ -214,6 +214,27 @@
         <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
         <a class="btn btn-accent btn-sm" data-commentary-file hidden download>解说成片</a>
       </span>
+    </div>
+    <div class="convert-box" data-convert-wrap hidden>
+      <span class="convert-label">转成</span>
+      <select class="convert-target" data-convert-target>
+        <option value="mp4">MP4</option>
+        <option value="mov">MOV</option>
+        <option value="mkv">MKV</option>
+        <option value="webm">WebM</option>
+        <option value="mp3">MP3（仅音频）</option>
+        <option value="m4a">M4A（仅音频）</option>
+        <option value="gif">GIF（前5秒）</option>
+      </select>
+      <select class="convert-res" data-convert-res>
+        <option value="original">原画质</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+      </select>
+      <button type="button" class="btn btn-ghost btn-sm" data-convert-btn>转换</button>
+      <a class="btn btn-accent btn-sm" data-convert-file hidden download>下载转换文件</a>
+      <span class="convert-status" data-convert-status></span>
     </div>
     <p class="commentary-status" data-commentary-status hidden></p>
     <p class="save-hint" data-save-hint hidden></p>

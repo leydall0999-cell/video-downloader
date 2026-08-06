@@ -308,6 +308,12 @@
       commentaryFile: node.querySelector('[data-commentary-file]'),
       commentaryStatus: node.querySelector('[data-commentary-status]'),
       saveHint: node.querySelector('[data-save-hint]'),
+      convertWrap: node.querySelector('[data-convert-wrap]'),
+      convertTarget: node.querySelector('[data-convert-target]'),
+      convertRes: node.querySelector('[data-convert-res]'),
+      convertBtn: node.querySelector('[data-convert-btn]'),
+      convertFile: node.querySelector('[data-convert-file]'),
+      convertStatus: node.querySelector('[data-convert-status]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.title.textContent = meta.title;
@@ -353,6 +359,13 @@
       refs.saveHint.textContent = '点上方「保存到本机」即可把处理好的视频从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
     }
 
+    // 已完成任务展示格式转换入口（增值能力）
+    refs.convertWrap.hidden = false;
+    if (!refs.convertBtn.dataset.bound) {
+      refs.convertBtn.dataset.bound = '1';
+      refs.convertBtn.addEventListener('click', () => startConvert(task.task_id, refs));
+    }
+
     // 本节点启用了解说增值功能：下载完成后展示「生成解说成片」入口
     if (node.commentaryEnabled) {
       refs.commentary.hidden = false;
@@ -360,6 +373,78 @@
         refs.commentary.dataset.bound = '1';
         refs.commentary.addEventListener('click', () => createCommentary(task.task_id, refs, refs.base || ''));
       }
+    }
+  };
+
+  /** 对已完成的任务发起格式转换，轮询直到出片。 */
+  const startConvert = async (taskId, refs) => {
+    const target = refs.convertTarget.value;
+    const resolution = refs.convertRes.value;
+    refs.convertBtn.disabled = true;
+    refs.convertStatus.textContent = '转换中…';
+    const base = refs.base || '';
+    try {
+      const { job_id: jobId } = await request(
+        '/api/convert',
+        { method: 'POST', body: JSON.stringify({ task_id: taskId, target, resolution }) },
+        base,
+      );
+      const timer = setInterval(async () => {
+        try {
+          const st = await request('/api/convert/' + jobId, {}, base);
+          if (st.status === 'completed') {
+            clearInterval(timer);
+            refs.convertFile.href = `${base}/api/convert/${jobId}/file`;
+            refs.convertFile.setAttribute('download', st.filename || 'converted');
+            refs.convertFile.hidden = false;
+            refs.convertStatus.textContent = '转换完成 ✅';
+            refs.convertBtn.disabled = false;
+          } else if (st.status === 'failed') {
+            clearInterval(timer);
+            refs.convertStatus.textContent = '转换失败：' + (st.error || '未知错误');
+            refs.convertBtn.disabled = false;
+          }
+        } catch (_e) { /* 轮询中出错则继续 */ }
+      }, 3000);
+    } catch (error) {
+      refs.convertStatus.textContent = '转换请求失败：' + (error.message || '');
+      refs.convertBtn.disabled = false;
+    }
+  };
+
+  /** 直接创建下载任务（不解析、用默认 best 画质），供批量模式复用。 */
+  const enqueueDownload = async (url, { cookie = '', proxy = '', base = '' } = {}) => {
+    try {
+      const { task_id: taskId } = await request(
+        '/api/download',
+        { method: 'POST', body: JSON.stringify({ url, quality: 'best', cookie, proxy }) },
+        base,
+      );
+      const refs = createTaskCard(taskId, { title: url, platform: '' });
+      refs.base = base;
+      trackTask(taskId, refs, base);
+      return taskId;
+    } catch (error) {
+      console.warn('批量任务创建失败:', url, error);
+      return null;
+    }
+  };
+
+  /** 批量下载：逐条创建任务并进入列表。 */
+  const runBatch = async (urls, cookie, proxy, base) => {
+    setLoading(true);
+    clearError();
+    el.resultPanel.hidden = true;
+    let ok = 0;
+    for (const u of urls) {
+      const id = await enqueueDownload(u, { cookie, proxy, base });
+      if (id) ok += 1;
+    }
+    setLoading(false);
+    if (ok > 0) {
+      el.alertBox.hidden = false;
+      el.alertTitle.textContent = `已创建 ${ok} 个下载任务`;
+      el.alertHint.textContent = '在下方「下载任务」列表查看进度';
     }
   };
 
@@ -407,6 +492,12 @@
     const proxy = el.proxyInput.value.trim();
     if (!url) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
+      return;
+    }
+    // 批量：检测到多个链接时直接进入批量下载，跳过单链接解析面板
+    const urls = url.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+    if (urls.length > 1) {
+      await runBatch(urls, cookie, proxy, baseFor(url));
       return;
     }
     clearError();
