@@ -114,6 +114,17 @@
       </svg>
       开始下载
     </button>
+
+    <!-- 交叉引流入口：下载完成后还能转 MP3 / 存网盘（占位，后续接通后端） -->
+    <div class="upsell" id="upsellBox" hidden>
+      <div class="upsell-title">顺手再处理一下？</div>
+      <p class="upsell-sub">下完这个视频，还能帮你一键转成 MP3 收听，或直接存到自己的网盘。</p>
+      <div class="upsell-actions">
+        <button type="button" class="upsell-btn" id="upsellMp3">🎵 转成 MP3</button>
+        <button type="button" class="upsell-btn" id="upsellCloud">☁️ 存到网盘</button>
+      </div>
+      <p class="upsell-status" id="upsellStatus" hidden></p>
+    </div>
   </section>
 
   <!-- 任务列表 -->

@@ -42,6 +42,10 @@
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
     proxyInput: $('proxyInput'),
+    upsellBox: $('upsellBox'),
+    upsellMp3: $('upsellMp3'),
+    upsellCloud: $('upsellCloud'),
+    upsellStatus: $('upsellStatus'),
     nodeBar: $('nodeBar'),
     nodeDot: $('nodeDot'),
     nodeText: $('nodeText'),
@@ -249,6 +253,9 @@
     }
 
     renderQualities(data.qualities);
+    // 展示交叉引流占位卡片（后端功能后续接通）
+    el.upsellBox.hidden = false;
+    el.upsellStatus.hidden = true;
     el.resultPanel.hidden = false;
   };
 
@@ -481,6 +488,14 @@
     forcedRegion = forcedRegion ? null : (regionFor(el.input.value) === 'cn' ? 'global' : 'cn');
     paintNodeBar();
   });
+
+  // 交叉引流入口（占位）：后端转 MP3 / 存网盘功能尚未接通，先给明确提示，避免误以为已可用
+  const showUpsellPlaceholder = (label) => {
+    el.upsellStatus.hidden = false;
+    el.upsellStatus.textContent = `🚧 ${label}功能即将上线，敬请期待（订阅会员开放）`;
+  };
+  el.upsellMp3.addEventListener('click', () => showUpsellPlaceholder('转 MP3'));
+  el.upsellCloud.addEventListener('click', () => showUpsellPlaceholder('存网盘'));
   el.modalClose.addEventListener('click', () => el.modal.close());
   el.modal.addEventListener('click', (event) => {
     if (event.target === el.modal) el.modal.close();

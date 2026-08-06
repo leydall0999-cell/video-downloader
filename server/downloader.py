@@ -120,6 +120,8 @@ QUALITY_PRESETS: tuple[tuple[int, str], ...] = (
 
 BEST_KEY = "best"
 AUDIO_KEY = "audio"
+WEBM_KEY = "webm"
+M4A_KEY = "m4a"
 
 
 class ResolveError(LinkError):
@@ -288,20 +290,28 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     options.append(
         {"key": AUDIO_KEY, "label": "仅音频 MP3", "note": "提取音轨", "approx_size": audio_size}
     )
+    options.append(
+        {"key": WEBM_KEY, "label": "WebM 格式", "note": "体积小·适合网页嵌入", "approx_size": 0}
+    )
+    options.append(
+        {"key": M4A_KEY, "label": "仅音频 M4A", "note": "无损音轨", "approx_size": audio_size}
+    )
     return options
 
 
 def _format_selector(quality_key: str) -> str:
     if quality_key == BEST_KEY:
         return "bv*+ba/b"
-    if quality_key == AUDIO_KEY:
+    if quality_key in (AUDIO_KEY, M4A_KEY):
         return "ba/b"
+    if quality_key == WEBM_KEY:
+        return "bv*+ba/b"
     height = int(quality_key)
     return f"bv*[height<={height}]+ba/b[height<={height}]/bv*+ba/b"
 
 
 def is_valid_quality(quality_key: str) -> bool:
-    return quality_key in (BEST_KEY, AUDIO_KEY) or quality_key in {
+    return quality_key in (BEST_KEY, AUDIO_KEY, WEBM_KEY, M4A_KEY) or quality_key in {
         str(h) for h, _ in QUALITY_PRESETS
     }
 
@@ -311,6 +321,10 @@ def quality_label(quality_key: str) -> str:
         return "最佳画质（自动）"
     if quality_key == AUDIO_KEY:
         return "仅音频 MP3"
+    if quality_key == WEBM_KEY:
+        return "WebM 格式"
+    if quality_key == M4A_KEY:
+        return "仅音频 M4A"
     return dict(QUALITY_PRESETS).get(int(quality_key), f"{quality_key}P")
 
 
@@ -382,6 +396,12 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
         options["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
         ]
+    elif quality_key == M4A_KEY:
+        options["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "192"}
+        ]
+    elif quality_key == WEBM_KEY:
+        options["merge_output_format"] = "webm"
     else:
         options["merge_output_format"] = "mp4"
     return options

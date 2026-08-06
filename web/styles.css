@@ -271,6 +271,24 @@ img { max-width: 100%; display: block; }
 .quality-opt strong { font-size: .89rem; font-weight: 650; }
 .quality-opt small { font-size: .74rem; color: var(--text-mute); }
 
+/* ---------------- upsell（交叉引流占位卡片） ---------------- */
+.upsell {
+  margin-top: 1.1rem; padding: 1rem 1.1rem;
+  border: 1px dashed #c7cbe0; border-radius: var(--radius-md);
+  background: linear-gradient(180deg, #fbfcff, #f6f7fe);
+}
+.upsell-title { font-weight: 650; font-size: .92rem; color: var(--text); }
+.upsell-sub { margin-top: .3rem; font-size: .8rem; color: var(--text-mute); }
+.upsell-actions { display: flex; gap: .55rem; margin-top: .7rem; flex-wrap: wrap; }
+.upsell-btn {
+  min-height: var(--tap); padding: .5rem 1rem; cursor: pointer;
+  border: 1.5px solid var(--brand); border-radius: 999px;
+  background: #fff; color: var(--brand-strong); font-family: inherit; font-size: .85rem; font-weight: 600;
+  transition: background .16s, color .16s;
+}
+.upsell-btn:hover { background: var(--brand-soft); }
+.upsell-status { margin-top: .7rem; font-size: .8rem; color: var(--brand-strong); }
+
 /* ---------------- tasks ---------------- */
 .task-list { list-style: none; margin: .7rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .7rem; }
 .task { border: 1px solid var(--line); border-radius: var(--radius-md); padding: .85rem; background: #fcfcff; }
