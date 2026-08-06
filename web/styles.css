@@ -436,3 +436,21 @@ img { max-width: 100%; display: block; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---------------- 广告位（默认隐藏，仅后端 VDL_ADS_ENABLED=true 时显示）---------------- */
+.ads-slot {
+  display: none;
+  margin-top: 1.4rem;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  padding: .85rem 1rem;
+  background: #fbfbfe;
+  position: relative;
+}
+.ads-slot:not([hidden]) { display: flex; align-items: center; gap: .75rem; }
+.ads-label {
+  font-size: .68rem; letter-spacing: .08em; color: var(--text-mute);
+  background: #eef0f6; border-radius: 6px; padding: .15rem .45rem; flex: 0 0 auto;
+}
+.ads-body { flex: 1 1 auto; }
+.ads-fallback { margin: 0; font-size: .85rem; color: var(--text-mute); text-align: center; }

@@ -50,6 +50,7 @@
     nodeDot: $('nodeDot'),
     nodeText: $('nodeText'),
     nodeSwitch: $('nodeSwitch'),
+    adsSlot: $('adsSlot'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
@@ -62,7 +63,7 @@
   // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
   // 免去跨境回源。单节点部署（peer 为空）时全部走本节点，行为与以前一致。
 
-  const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false };
+  const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
 
@@ -528,11 +529,13 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
       node.commentaryEnabled = !!commentary_enabled;
+      node.adsEnabled = !!ads_enabled;
+      el.adsSlot.hidden = !node.adsEnabled;
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });

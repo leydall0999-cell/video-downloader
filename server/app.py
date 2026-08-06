@@ -73,6 +73,9 @@ CLEANUP_INTERVAL_SECONDS = 600
 #   VDL_COMMENTARY_PYTHON=/path/to/python            跑 process.py 的解释器（需装 faster_whisper 等依赖）
 #   VDL_COMMENTARY_VOICE=zh-CN-YunxiNeural           默认配音嗓音
 COMMENTARY_ENABLED = os.environ.get("VDL_COMMENTARY_ENABLED", "false").strip().lower() == "true"
+# 广告位开关：默认关闭。下载站属广告平台高风险类目，默认不挂广告，
+# 待流量稳定、确定接入合规广告源后再开。前端据此决定是否渲染广告位容器。
+ADS_ENABLED = os.environ.get("VDL_ADS_ENABLED", "false").strip().lower() == "true"
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
@@ -323,6 +326,7 @@ def node_info() -> dict:
         "peer": PEER_ENDPOINT,
         "china_domains": list(CHINA_DOMAINS),
         "commentary_enabled": COMMENTARY_ENABLED,
+        "ads_enabled": ADS_ENABLED,
     }
 
 
