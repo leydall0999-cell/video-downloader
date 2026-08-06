@@ -179,16 +179,15 @@ img { max-width: 100%; display: block; }
 .control-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
-  gap: .6rem;
+  gap: .5rem;
   margin-top: .85rem;
 }
 
 /* ---------------- node routing bar ---------------- */
 .node-bar {
   display: flex; align-items: center; gap: .5rem;
-  padding: .45rem .8rem; border: 1px solid var(--line); border-radius: 999px;
+  padding: .45rem .9rem; border: 1px solid var(--line); border-radius: 999px;
   background: #fbfbfe; font-size: .82rem; color: var(--text-mute);
 }
 .node-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-mute); flex: none; }
@@ -204,6 +203,7 @@ img { max-width: 100%; display: block; }
 
 /* ---------------- advanced options ---------------- */
 .adv { border: 1px solid var(--line); border-radius: 999px; padding: .45rem .9rem; background: #fbfbfe; }
+.adv[open] { flex: 1 1 100%; border-radius: var(--radius-md); }
 .adv-summary { cursor: pointer; font-size: .82rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
 .adv-summary::-webkit-details-marker { display: none; }
 .adv-summary::before { content: "\25B8  "; }
