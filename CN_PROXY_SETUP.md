@@ -28,14 +28,49 @@ python3 cn_proxy.py 18888        # 监听 0.0.0.0:18888
 
 ### ✅ A. 国内 VPS（最稳，推荐）
 买阿里云/腾讯云轻量（国内地域，约 ¥60–100/年），公网 IP 直连，无需隧道。
+`cn_proxy.py` 已内置 Basic 鉴权（设 `CN_PROXY_AUTH` 环境变量即生效），公网暴露**必须开**。
 
-1. 上传 `cn_proxy.py` 到 VPS，`python3 cn_proxy.py 18888` 后台常驻。
-2. 安全组放行 `18888`（建议同时限制来源 IP 为 Railway 出口，或加代理认证）。
-3. Railway 环境变量加：
-   ```
-   VDL_PROXY_CN=http://<VPS公网IP>:18888
-   ```
-（README 里也给了 `gogost/gost` Docker 版，二选一。）
+**1) 上传脚本到 VPS**
+```bash
+mkdir -p /opt/vdl-proxy
+scp cn_proxy.py root@<VPS公网IP>:/opt/vdl-proxy/cn_proxy.py
+```
+
+**2) 前台试跑 + 自检（确认鉴权生效）**
+```bash
+# 在 VPS 上
+CN_PROXY_AUTH=你的user:你的强密码 python3 /opt/vdl-proxy/cn_proxy.py 18888
+# 日志出现：listening on 0.0.0.0:18888 (auth=on, user=你的user)
+
+# 另开窗口自检：
+curl -s -x http://你的user:你的强密码@127.0.0.1:18888 http://www.bilibili.com -o /dev/null -w "%{http_code}\n"
+# 期望 200/301（转发成功）；不带密码应返回 407
+curl -s -x http://127.0.0.1:18888 http://www.bilibili.com -o /dev/null -w "%{http_code}\n"
+# 期望 407（鉴权拦截）
+```
+
+**3) systemd 常驻（开机自启、崩溃重启）**
+仓库附带 `cn_proxy.service` 示例：
+```bash
+scp cn_proxy.service root@<VPS公网IP>:/etc/systemd/system/cn_proxy.service
+# 在 VPS 上编辑该文件，改 CN_PROXY_AUTH 与脚本路径，然后：
+systemctl daemon-reload
+systemctl enable --now cn_proxy
+systemctl status cn_proxy        # 应 active (running)
+```
+
+**4) 防火墙放行（只放 Railway 出口更稳）**
+```bash
+# 腾讯云/阿里云控制台：安全组入站放行 TCP 18888，来源建议限 Railway 出口 IP
+# 或 VPS 本机 firewalld：
+firewall-cmd --permanent --add-port=18888/tcp && firewall-cmd --reload
+```
+
+**5) Railway 加环境变量并重新部署**
+```
+VDL_PROXY_CN=http://你的user:你的强密码@<VPS公网IP>:18888
+```
+（README 里也给了 `gogost/gost` Docker 版，二选一；两者都用 `user:pass` 鉴权，格式一致。）
 
 ### ⚠️ B. 本机隧道（零月费，但需绑卡 + 本机常开）
 免费隧道服务**几乎都不透传 `CONNECT`**（HTTP 代理访问 HTTPS 目标必须用它），实测结论：
@@ -84,12 +119,12 @@ VDL_PROXY_CN=http://user:pass@host:port
 
 ## 四、安全提醒（重要）
 
-- 公网暴露的代理是**开放中继**，务必三选一加固：
-  1. 限制来源 IP（VPS 安全组只允许 Railway 出口）；
-  2. 加代理认证（`cn_proxy.py` 当前未内置，可自加 token 校验，或用 gost 的 `user:pass@`）；
-  3. 仅用 ngrok/cloudflared 的随机隧道 URL（URL 即密码，但不稳定）。
+- 公网暴露的代理是**开放中继**，务必加固（建议叠加）：
+  1. **加代理认证**（首选）：`cn_proxy.py` 已内置——设 `CN_PROXY_AUTH=user:pass` 环境变量即要求所有请求（含 CONNECT）带 Basic 鉴权，否则返回 407；gost 版用 `user:pass@` 同理。Railway 的 `VDL_PROXY_CN` 写成 `http://user:pass@host:port` 即可。
+  2. **限制来源 IP**（更稳）：VPS 安全组入站只放行 Railway 出口 IP，或本机 firewalld 限制来源。
+  3. 仅用随机隧道 URL（ngrok/cloudflared，URL 即密码，但不稳定）。
 - 该代理**仅供本服务回源国内站点**，不要对外提供跨境代理服务。
-- `cn_proxy.py` 默认无认证，仅建议在「随机隧道 URL / 已限制来源 IP」场景下使用。
+- 未设 `CN_PROXY_AUTH` 时 `cn_proxy.py` 不鉴权，仅可用于「已限制来源 IP / 随机隧道 URL」场景，切勿公网裸奔。
 
 ---
 

@@ -1,0 +1,18 @@
+[Unit]
+Description=VDL 国内回源代理 (cn_proxy.py)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# 脚本路径按实际上传位置改；CN_PROXY_AUTH 改成你自己的 user:强密码
+WorkingDirectory=/opt/vdl-proxy
+Environment=CN_PROXY_AUTH=改成你的user:改成你的强密码
+ExecStart=/usr/bin/python3 /opt/vdl-proxy/cn_proxy.py 18888
+Restart=always
+RestartSec=5
+# 仅监听代理，不暴露多余信息
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

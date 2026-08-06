@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-"""零依赖的国内正向代理（HTTP + HTTPS/CONNECT 隧道）。
+"""零依赖的国内正向代理（HTTP + HTTPS/CONNECT 隧道），支持可选 Basic 鉴权。
 
 用途：video-downloader 部署在海外（Railway 等）时，国内站（B站/抖音/腾讯…）
-会被地理围栏拦截。把本代理跑在**物理位于国内**的机器上，再用 ngrok/cloudflared
-把它的端口暴露成公网 URL，最后在 Railway 设置：
+会被地理围栏拦截。把本代理跑在**物理位于国内**的机器上，再用公网 IP / 隧道
+暴露它的端口，最后在 Railway 设置：
 
-    VDL_PROXY_CN=http://<公网URL>
+    VDL_PROXY_CN=http://user:pass@<公网地址>:端口
 
 yt-dlp 解析/下载国内站就会经此代理回源，绕开地域封锁。
 
 仅用 Python 标准库，无需 pip 安装任何东西。
 
 用法：
-    python3 cn_proxy.py [端口]      # 默认 8899，监听 0.0.0.0
+    python3 cn_proxy.py [端口]                # 默认 8899，监听 0.0.0.0
+    CN_PROXY_AUTH=user:pass python3 cn_proxy.py 18888   # 启用 Basic 鉴权（上公网必开）
+
+鉴权：
+    - 设置 CN_PROXY_AUTH=user:pass 后，所有请求（含 HTTPS 的 CONNECT）必须带
+      Proxy-Authorization: Basic <base64(user:pass)>，否则返回 407。
+    - 不设置则行为不变（本地 / 已限来源 IP 场景用）。
 """
 from __future__ import annotations
 
+import base64
+import os
 import select
 import socket
 import sys
@@ -26,6 +34,11 @@ import urllib.request
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
 
+# 可选 Basic 鉴权：设置 CN_PROXY_AUTH=user:pass 后，所有请求（含 CONNECT）必须带
+# Proxy-Authorization: Basic base64(user:pass)，否则返回 407。
+_AUTH = os.environ.get("CN_PROXY_AUTH", "").strip()
+_EXPECTED = ("Basic " + base64.b64encode(_AUTH.encode("utf-8")).decode("ascii")) if _AUTH else None
+
 # 跳过的逐跳头，避免代理把自身连接头转发给上游
 _HOP_BY_HOP = {
     "proxy-connection", "connection", "keep-alive", "proxy-authenticate",
@@ -35,12 +48,26 @@ _HOP_BY_HOP = {
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "VDL-CN-Proxy/1.0"
+    server_version = "VDL-CN-Proxy/1.1"
 
-    # ---- HTTPS：客户端发 CONNECT host:port，代理建立 TCP 隧道双向转发 ----
+    # ---- 鉴权：所有请求入口先过这一关 ----
     _counter = 0
 
+    def _authenticate(self) -> bool:
+        if not _EXPECTED:
+            return True
+        if self.headers.get("Proxy-Authorization", "") == _EXPECTED:
+            return True
+        self.send_response(407, "Proxy Authentication Required")
+        self.send_header("Proxy-Authenticate", 'Basic realm="VDL-CN-Proxy"')
+        self.send_header("Connection", "close")
+        self.end_headers()
+        return False
+
+    # ---- HTTPS：客户端发 CONNECT host:port，代理建立 TCP 隧道双向转发 ----
     def do_CONNECT(self) -> None:
+        if not self._authenticate():
+            return
         host, _, port = self.path.partition(":")
         port = int(port) or 443
         Handler._counter += 1
@@ -69,6 +96,8 @@ class Handler(BaseHTTPRequestHandler):
         self._proxy()
 
     def _proxy(self) -> None:
+        if not self._authenticate():
+            return
         target = self.path
         Handler._counter += 1
         print(f"[cn_proxy] #{Handler._counter} {self.command} {target[:120]}", flush=True)
@@ -136,7 +165,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     httpd = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
-    print(f"[cn_proxy] listening on {LISTEN_HOST}:{LISTEN_PORT}", flush=True)
+    if _AUTH:
+        note = f" (auth=on, user={_AUTH.split(':', 1)[0]})"
+    else:
+        note = " (auth=OFF — 仅限已限制来源 IP / 随机隧道 URL 场景)"
+    print(f"[cn_proxy] listening on {LISTEN_HOST}:{LISTEN_PORT}{note}", flush=True)
     httpd.serve_forever()
 
 

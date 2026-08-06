@@ -103,13 +103,13 @@ docker run -d --name gost --restart always -p 18888:18888 \
 `VDL_PROXY_CN=http://用户名:强密码@服务器公网IP:18888` 即可。
 
 **不想装 Docker？** 本仓库附带零依赖代理 [`cn_proxy.py`](./CN_PROXY_SETUP.md)（仅用 Python 标准库），
-在国内机器上一条命令即可：
+用 `CN_PROXY_AUTH` 环境变量开 Basic 鉴权（公网必开），可 systemd 常驻：
 
 ```bash
-python3 cn_proxy.py 18888      # 监听 0.0.0.0:18888，无需 pip install
+CN_PROXY_AUTH=你的user:你的强密码 python3 cn_proxy.py 18888   # 监听 0.0.0.0:18888，带鉴权
 ```
 
-详细步骤、免费隧道踩坑与加固建议见 [CN_PROXY_SETUP.md](./CN_PROXY_SETUP.md)。
+完整步骤（上传 / 鉴权 / systemd 守护 / 防火墙 / Railway 变量）见 [CN_PROXY_SETUP.md](./CN_PROXY_SETUP.md) 的「A. 国内 VPS」一节。
 
 > ⚠️ **必须设账号密码 / 限制来源 IP**。裸奔的公开 HTTP 代理会在几小时内被全网扫到并滥用，
 > 流量跑爆、IP 被封，甚至被拿去干违法的事，责任在机主。
