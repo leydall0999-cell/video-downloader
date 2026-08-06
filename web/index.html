@@ -39,40 +39,44 @@
   <!-- 输入区 -->
   <section class="panel input-panel" aria-labelledby="inputTitle">
     <h2 id="inputTitle" class="sr-only">输入视频链接</h2>
-    <form id="resolveForm" class="input-row" autocomplete="off">
-      <label class="sr-only" for="urlInput">视频链接</label>
-      <div class="input-shell">
-        <svg class="input-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
-          <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
-        </svg>
-        <input id="urlInput" name="url" type="text" inputmode="url" spellcheck="false" maxlength="2048"
-               placeholder="例如 https://www.bilibili.com/video/BV1..." />
-        <button type="button" id="clearBtn" class="icon-btn" title="清空" aria-label="清空输入" hidden>✕</button>
-      </div>
-      <button type="submit" id="resolveBtn" class="btn btn-primary">
-        <span class="btn-label">解析链接</span>
-        <span class="spinner" aria-hidden="true"></span>
-      </button>
-
-      <div class="node-bar" id="nodeBar" hidden>
-        <span class="node-dot" id="nodeDot" aria-hidden="true"></span>
-        <span class="node-text" id="nodeText">线路：自动</span>
-        <button type="button" class="node-switch" id="nodeSwitch" title="自动判断不准时可手动指定线路">切换线路</button>
-      </div>
-
-      <details class="adv" id="advToggle">
-        <summary class="adv-summary">高级选项（Cookie / 代理，按需填写）</summary>
-        <div class="adv-body">
-          <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
-          <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
-            placeholder="仅用于需要登录态的平台（如抖音）。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
-          <label class="adv-label" for="proxyInput">代理地址（可选）</label>
-          <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
-            placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
-          <p class="adv-note">Cookie 仅用于本次解析/下载，服务端不留存；代理留空时按平台自动选择。</p>
+    <form id="resolveForm" autocomplete="off">
+      <div class="input-row">
+        <label class="sr-only" for="urlInput">视频链接</label>
+        <div class="input-shell">
+          <svg class="input-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+            <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+          </svg>
+          <input id="urlInput" name="url" type="text" inputmode="url" spellcheck="false" maxlength="2048"
+                 placeholder="例如 https://www.bilibili.com/video/BV1..." />
+          <button type="button" id="clearBtn" class="icon-btn" title="清空" aria-label="清空输入" hidden>✕</button>
         </div>
-      </details>
+        <button type="submit" id="resolveBtn" class="btn btn-primary">
+          <span class="btn-label">解析链接</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="control-row">
+        <div class="node-bar" id="nodeBar" hidden>
+          <span class="node-dot" id="nodeDot" aria-hidden="true"></span>
+          <span class="node-text" id="nodeText">线路：自动</span>
+          <button type="button" class="node-switch" id="nodeSwitch" title="自动判断不准时可手动指定线路">切换线路</button>
+        </div>
+
+        <details class="adv" id="advToggle">
+          <summary class="adv-summary">高级选项（Cookie / 代理，按需填写）</summary>
+          <div class="adv-body">
+            <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
+            <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
+              placeholder="仅用于需要登录态的平台（如抖音）。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
+            <label class="adv-label" for="proxyInput">代理地址（可选）</label>
+            <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
+              placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
+            <p class="adv-note">Cookie 仅用于本次解析/下载，服务端不留存；代理留空时按平台自动选择。</p>
+          </div>
+        </details>
+      </div>
     </form>
 
     <div class="chips" id="platformChips" aria-label="支持的平台"></div>
