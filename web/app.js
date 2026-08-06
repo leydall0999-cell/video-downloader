@@ -260,9 +260,10 @@
     }
 
     renderQualities(data.qualities);
-    // 展示交叉引流占位卡片（后端功能后续接通）
+    // 展示交叉引流卡片：转 MP3 已接通可直接用，存网盘待后续打通
     el.upsellBox.hidden = false;
     el.upsellStatus.hidden = true;
+    el.upsellMp3.disabled = false;
     el.resultPanel.hidden = false;
   };
 
@@ -394,17 +395,17 @@
     }
   };
 
-  const handleDownload = async () => {
-    if (!resolved) return;
+  /** 用指定清晰度发起一个下载任务；返回 taskId 或 null。被"开始下载"与"转 MP3"复用。 */
+  const startDownload = async (quality) => {
+    if (!resolved) return null;
     clearError();
-    el.downloadBtn.disabled = true;
+    const base = resolved.base || '';
     try {
-      const base = resolved.base || '';
       const { task_id: taskId } = await request('/api/download', {
         method: 'POST',
         body: JSON.stringify({
           url: resolved.url,
-          quality: selectedQuality,
+          quality,
           cookie: resolved.cookie || '',
           proxy: resolved.proxy || '',
         }),
@@ -415,12 +416,14 @@
       });
       refs.base = base;
       trackTask(taskId, refs, base);
+      return taskId;
     } catch (error) {
       showError(error.message || '创建下载任务失败', error.hint);
-    } finally {
-      el.downloadBtn.disabled = false;
+      return null;
     }
   };
+
+  const handleDownload = () => startDownload(selectedQuality);
 
   const cancelTask = async (taskId, base = '') => {
     try {
@@ -496,12 +499,23 @@
     paintNodeBar();
   });
 
-  // 交叉引流入口（占位）：后端转 MP3 / 存网盘功能尚未接通，先给明确提示，避免误以为已可用
+  // 交叉引流入口：
+  //  - 转 MP3 已接通：直接发起一个"仅音频"下载任务（复用下载框架），进度在下方任务列表展示
+  //  - 存网盘 尚未接通，暂时保留占位提示
   const showUpsellPlaceholder = (label) => {
     el.upsellStatus.hidden = false;
-    el.upsellStatus.textContent = `🚧 ${label}功能即将上线，敬请期待（订阅会员开放）`;
+    el.upsellStatus.textContent = `🚧 ${label}功能即将上线，敬请期待`;
   };
-  el.upsellMp3.addEventListener('click', () => showUpsellPlaceholder('转 MP3'));
+  el.upsellMp3.addEventListener('click', async () => {
+    if (!resolved) return;
+    const audioKey = resolved.qualities?.find((q) => /MP3|音频/.test(q.label))?.key || 'audio';
+    const taskId = await startDownload(audioKey);
+    if (taskId) {
+      el.upsellStatus.hidden = false;
+      el.upsellStatus.textContent = '已为你发起 MP3 音频提取任务，进度见下方「下载任务」列表 👇';
+      el.upsellMp3.disabled = true;
+    }
+  });
   el.upsellCloud.addEventListener('click', () => showUpsellPlaceholder('存网盘'));
   el.modalClose.addEventListener('click', () => el.modal.close());
   el.modal.addEventListener('click', (event) => {
