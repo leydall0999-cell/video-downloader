@@ -358,7 +358,7 @@
       refs.commentary.hidden = false;
       if (!refs.commentary.dataset.bound) {
         refs.commentary.dataset.bound = '1';
-        refs.commentary.addEventListener('click', () => createCommentary(taskId, refs, refs.base || ''));
+        refs.commentary.addEventListener('click', () => createCommentary(task.task_id, refs, refs.base || ''));
       }
     }
   };
