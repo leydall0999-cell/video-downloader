@@ -121,7 +121,8 @@ docker run -d --name gost --restart always -p 18888:18888 \
 | `VDL_REGION` | 本节点区域：`cn` 或 `global`（默认 `global`） |
 | `VDL_PEER_ENDPOINT` | 对端节点完整地址，如 `https://cn.example.com`；留空则退化为单节点 |
 | `VDL_ALLOW_ORIGINS` | 允许跨域调本节点 API 的来源，逗号分隔；不填则默认只允许 `VDL_PEER_ENDPOINT` |
-| `VDL_RATE_LIMIT_PER_HOUR` | 每 IP 每小时下载次数上限，`0`=不限（自托管建议 0，公开实例建议 5~10） |
+| `VDL_RATE_LIMIT_PER_HOUR` | 每 IP 每小时下载 / 解析次数上限，默认 `30`（`0`=不限） |
+| `VDL_MAX_FILE_MB` | 单文件下载体积上限（MB），默认 `2048`（`0`=不限），防磁盘 / 带宽被撑爆 |
 
 ```bash
 # 国内节点
@@ -146,6 +147,9 @@ VDL_REGION=global VDL_PEER_ENDPOINT=https://cn.example.com ./run.sh
   更稳的做法是国内机器只做 `VDL_PROXY_CN` 回源代理（不跑 web、不暴露端口给公网）。
 - **必开限流**。设 `VDL_RATE_LIMIT_PER_HOUR`，否则实例会被脚本当免费下载器薅，
   轻量服务器 3~5 Mbps 带宽两人同时下就打满，超额流量按 GB 计费。
+  （默认已内置 30 次/小时基础限流，可按需调高 / 调低。）
+- **SSRF 已内置防护**。解析 / 下载入口会校验链接主机名，拒绝指向内网、环回、链路本地
+  （含云元数据 `169.254.169.254`）、私有网段的地址，普通部署无需额外配置。
 - **公开实例定位成"体验版"**。重度用户引导去自托管（一条 `docker run` 的事），
   这既是开源项目的正常用法，也让你对外提供的始终是「有限速的工具」而非「高速下载服务」。
 - **加 `robots.txt` 禁止索引**，不做 SEO 引流。
