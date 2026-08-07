@@ -87,6 +87,33 @@
       </div>
     </form>
 
+    <!-- 批量下载面板：一次粘贴多个链接，统一排队并发下载 -->
+    <details class="batch-box" id="batchBox">
+      <summary>批量下载 · 每行一个链接</summary>
+      <div class="batch-body">
+        <textarea id="batchInput" class="batch-textarea" rows="4" spellcheck="false"
+          placeholder="每行一个视频链接，可一次下载多个&#10;例如：&#10;https://www.bilibili.com/video/BV1...&#10;https://youtu.be/xxxx"></textarea>
+        <div class="batch-opts">
+          <label class="batch-opt">画质
+            <select id="batchQuality" class="adv-input">
+              <option value="best">最佳画质</option>
+              <option value="1080">1080P</option>
+              <option value="720">720P</option>
+              <option value="480">480P</option>
+              <option value="audio">仅音频 MP3</option>
+            </select>
+          </label>
+          <label class="batch-opt">同时下载
+            <span class="conc">
+              <input type="range" id="batchConcurrency" min="1" max="5" value="3" />
+              <span id="batchConcVal" class="conc-val">3</span>
+            </span>
+          </label>
+        </div>
+        <button type="button" class="btn btn-primary" id="batchBtn">批量下载</button>
+      </div>
+    </details>
+
     <div class="chips" id="platformChips" aria-label="支持的平台"></div>
 
     <div class="alert" id="alertBox" role="alert" hidden>
@@ -144,7 +171,11 @@
 
   <!-- 任务列表 -->
   <section class="panel tasks-panel" id="tasksPanel" hidden aria-live="polite">
-    <div class="block-title">下载任务</div>
+    <div class="block-title queue-head">
+      <span>下载任务</span>
+      <span class="queue-bar" id="queueBar">暂无任务</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="cancelAllBtn" hidden>全部取消</button>
+    </div>
     <ul class="task-list" id="taskList"></ul>
   </section>
 
@@ -255,6 +286,7 @@
       <span class="task-stats" data-stats>等待开始…</span>
       <span class="task-actions">
         <button type="button" class="btn btn-ghost btn-sm" data-cancel>取消</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-retry hidden>重试</button>
         <button type="button" class="btn btn-ghost btn-sm" data-commentary hidden>生成解说成片</button>
         <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
         <a class="btn btn-accent btn-sm" data-commentary-file hidden download>解说成片</a>

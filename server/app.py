@@ -40,6 +40,7 @@ from urllib.parse import urlparse
 
 import downloader
 import library as library_mod
+from batch import BatchScheduler
 from clouddrive import (
     BaiduProvider,
     CloudError,
@@ -79,6 +80,14 @@ else:
 
 MAX_CONCURRENT_DOWNLOADS = 3
 MAX_CONCURRENT_PROBES = 8
+# 批量下载相关环境变量（桌面版万能下载器重点能力）：
+#   VDL_BATCH_HARD_MAX   线程池硬上限（实际并发不超过它，默认 8）
+#   VDL_BATCH_RETRIES    失败自动重试次数（默认 2，指数退避最多 30s）
+#   VDL_BATCH_MAX_ITEMS  单次批量最多链接数（默认 50，防误粘贴巨量链接打爆）
+VDL_BATCH_HARD_MAX = int(os.environ.get("VDL_BATCH_HARD_MAX", "8") or 8)
+BATCH_RETRIES_DEFAULT = int(os.environ.get("VDL_BATCH_RETRIES", "2") or 2)
+VDL_BATCH_MAX_ITEMS = int(os.environ.get("VDL_BATCH_MAX_ITEMS", "50") or 50)
+SINGLE_DOWNLOAD_RETRIES = 0  # 单条下载默认不自动重试（失败让用户手动点重试）；批量才默认重试
 
 # ---- 格式转换（增值能力）：对已下载文件做 ffmpeg 转码，异步 job ----
 CONVERT_DIR = DOWNLOAD_DIR / "conversions"
@@ -339,7 +348,9 @@ def _host_of(url: str) -> str:
         return ""
 
 store = TaskStore(DOWNLOAD_DIR)
-executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS, thread_name_prefix="vdl-dl")
+# 线程池只设硬上限；真正的「同时下几个」由 BatchScheduler 的并发计数器软控（可动态调整）
+executor = ThreadPoolExecutor(max_workers=VDL_BATCH_HARD_MAX, thread_name_prefix="vdl-dl")
+scheduler = BatchScheduler(executor, default_concurrency=MAX_CONCURRENT_DOWNLOADS)
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
 cloud_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cloud")  # 云盘上传独立线程池，避免挤占下载
 
@@ -612,13 +623,106 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
         title="",
         platform=platform.name,
         quality=downloader.quality_label(payload.quality),
+        quality_key=payload.quality,
     )
-    executor.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy)
+    scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES)
     return {
         "task_id": task.id,
         "status": task.status,
         "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
     }
+
+
+# ---- 批量下载：一次提交多个链接，受全局并发上限统一调度 ----
+class BatchRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list, max_length=VDL_BATCH_MAX_ITEMS)
+    quality: str = Field(default=downloader.BEST_KEY, max_length=16)
+    cookie: str = Field(default="", max_length=8192)
+    proxy: str = Field(default="", max_length=256)
+    concurrency: int = Field(default=0, ge=0, le=VDL_BATCH_HARD_MAX)
+    retries: int = Field(default=-1, ge=-1, le=10)
+
+
+@app.post("/api/batch")
+def create_batch(payload: BatchRequest, request: Request) -> dict:
+    _check_rate_limit(request)
+    urls = [u.strip() for u in payload.urls if u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="没有提供有效的链接")
+    if not downloader.is_valid_quality(payload.quality):
+        raise HTTPException(status_code=400, detail="不支持的清晰度选项")
+    if payload.concurrency > 0:
+        scheduler.set_concurrency(payload.concurrency)
+    retries = payload.retries if payload.retries >= 0 else BATCH_RETRIES_DEFAULT
+
+    task_ids: list[str] = []
+    skipped = 0
+    quota_exhausted = False
+    for u in urls:
+        # 免费额度逐条消耗；耗尽时停止后续创建（已创建的照常排队下载）
+        try:
+            _check_download_quota(request)
+        except HTTPException as exc:
+            if exc.status_code == 402:
+                quota_exhausted = True
+                break
+            raise
+        try:
+            url, platform = parse_source(u)
+        except (UnsupportedPlatformError, LinkError):
+            skipped += 1
+            continue
+        task = store.create(
+            url=url, title="", platform=platform.name,
+            quality=downloader.quality_label(payload.quality), quality_key=payload.quality,
+        )
+        scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, retries)
+        task_ids.append(task.id)
+    if not task_ids:
+        if quota_exhausted:
+            raise HTTPException(status_code=402, detail="今日免费下载次数已用完，订阅可解锁无限下载")
+        raise HTTPException(status_code=400, detail="链接均无法识别，请确认是视频播放页链接")
+    return {"task_ids": task_ids, "count": len(task_ids), "skipped": skipped, "quota_exhausted": quota_exhausted}
+
+
+@app.get("/api/tasks")
+def list_tasks() -> dict:
+    """列出当前所有任务（含排队 / 进行中 / 已完成），供前端队列概览。"""
+    tasks = [t.to_public_dict() for t in store.list_all()]
+    stats = {"pending": 0, "downloading": 0, "merging": 0, "completed": 0, "failed": 0, "canceled": 0}
+    for t in tasks:
+        stats[t["status"]] = stats.get(t["status"], 0) + 1
+    stats["active"] = scheduler.active_count()
+    return {"tasks": tasks, "stats": stats, "concurrency": scheduler.concurrency}
+
+
+@app.post("/api/tasks/{task_id}/retry")
+def retry_task(task_id: str) -> dict:
+    task = _require_task(task_id)
+    if task.status not in ("failed", "canceled"):
+        raise HTTPException(status_code=400, detail="仅失败 / 已取消的任务可以重试")
+    task.cancel_requested = False
+    store.update(
+        task_id, status="pending", error="", hint="", progress=0.0,
+        downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0, filesize=0, filename="",
+    )
+    scheduler.submit(downloader.run_download, task, store, task.quality_key, "", "", BATCH_RETRIES_DEFAULT)
+    return {"task_id": task_id, "status": "pending"}
+
+
+@app.post("/api/tasks/cancel-all")
+def cancel_all_tasks() -> dict:
+    """取消所有进行中 / 排队中的任务；已完成与失败的任务保留（不删文件）。"""
+    canceled = 0
+    for t in store.list_all():
+        if not t.is_finished and store.request_cancel(t.id):
+            canceled += 1
+    return {"canceled": canceled}
+
+
+@app.get("/api/batch/config")
+def batch_config() -> dict:
+    return {"concurrency": scheduler.concurrency, "hard_max": VDL_BATCH_HARD_MAX, "retries": BATCH_RETRIES_DEFAULT}
 
 
 @app.get("/api/tasks/{task_id}")

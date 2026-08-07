@@ -75,6 +75,14 @@
     cloudSave: $('cloudSave'),
     cloudStatus: $('cloudStatus'),
     cloudSubNote: $('cloudSubNote'),
+    // 批量下载（桌面版万能下载器重点能力）
+    batchInput: $('batchInput'),
+    batchQuality: $('batchQuality'),
+    batchConcurrency: $('batchConcurrency'),
+    batchConcVal: $('batchConcVal'),
+    batchBtn: $('batchBtn'),
+    queueBar: $('queueBar'),
+    cancelAllBtn: $('cancelAllBtn'),
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
     tabDownload: $('tabDownload'),
@@ -388,8 +396,10 @@
       convertStatus: node.querySelector('[data-convert-status]'),
       cloud: node.querySelector('[data-cloud]'),
       cloudStatus: node.querySelector('[data-cloud-status]'),
+      retry: node.querySelector('[data-retry]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
+    refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.title.textContent = meta.title;
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
@@ -414,6 +424,8 @@
     const failed = task.status === 'failed';
     refs.error.hidden = !failed;
     refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
+    // 失败 / 已取消的任务展示「重试」按钮
+    refs.retry.hidden = !(task.status === 'failed' || task.status === 'canceled');
 
     if (task.status !== 'completed') return;
     refs.save.hidden = false;
@@ -531,24 +543,37 @@
   };
 
   /** 批量下载：逐条创建任务并进入列表。 */
-  const runBatch = async (urls, cookie, proxy, base) => {
-    setLoading(true);
+  const runBatch = async (urls, cookie, proxy) => {
     clearError();
     el.resultPanel.hidden = true;
-    let ok = 0;
-    let hitSubscribe = false;
-    for (const u of urls) {
-      const res = await enqueueDownload(u, { cookie, proxy, base });
-      if (res && res.subscribe) { hitSubscribe = true; break; }   // 免费额度耗尽，停止继续创建
-      if (res) ok += 1;
-    }
-    setLoading(false);
-    if (hitSubscribe) {
-      showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
-    } else if (ok > 0) {
+    el.batchBtn.disabled = true;
+    const origLabel = el.batchBtn.textContent;
+    el.batchBtn.textContent = '提交中…';
+    const quality = el.batchQuality.value || 'best';
+    const concurrency = parseInt(el.batchConcurrency.value, 10) || 3;
+    try {
+      const data = await request('/api/batch', {
+        method: 'POST',
+        body: JSON.stringify({ urls, quality, cookie, proxy, concurrency }),
+      });
       el.alertBox.hidden = false;
-      el.alertTitle.textContent = `已创建 ${ok} 个下载任务`;
-      el.alertHint.textContent = '在下方「下载任务」列表查看进度';
+      el.alertTitle.textContent = `已提交 ${data.count} 个下载任务`
+        + (data.skipped ? `（${data.skipped} 个链接无法识别已跳过）` : '');
+      el.alertHint.textContent = '在下方「下载任务」列表查看进度；可调整「同时下载」数量控制并发。';
+      data.task_ids.forEach((tid) => {
+        const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
+        trackTask(tid, refs, '');
+      });
+    } catch (error) {
+      if (error.subscribe) {
+        promptSubscribe();
+        showError('今日免费下载次数已用完', '点右上角「订阅解锁」即可无限下载');
+      } else {
+        showError(error.message || '批量提交失败', error.hint);
+      }
+    } finally {
+      el.batchBtn.disabled = false;
+      el.batchBtn.textContent = origLabel;
     }
   };
 
@@ -601,7 +626,7 @@
     // 批量：检测到多个链接时直接进入批量下载，跳过单链接解析面板
     const urls = url.split(/\s+/).map((s) => s.trim()).filter(Boolean);
     if (urls.length > 1) {
-      await runBatch(urls, cookie, proxy, baseFor(url));
+      await runBatch(urls, cookie, proxy);
       return;
     }
     clearError();
@@ -686,6 +711,61 @@
     }
   };
 
+  // 任务重试：失败 / 已取消的任务重新加入下载队列
+  const retryTask = async (taskId, refs) => {
+    try {
+      await request(`/api/tasks/${taskId}/retry`, { method: 'POST' }, refs.base || '');
+      refs.retry.hidden = true;
+      refs.error.hidden = true;
+      trackTask(taskId, refs, refs.base || '');  // 重新跟踪（原 tracker 已因终态移除）
+    } catch (error) {
+      showError(error.message || '重试失败', error.hint);
+    }
+  };
+
+  // 队列概览：轮询任务统计，刷新进度条与「全部取消」可见性
+  const loadQueue = async () => {
+    if (el.downloadView.hidden) return;  // 仅下载视图可见时轮询，省请求
+    try {
+      const data = await request('/api/tasks');
+      paintQueue(data.stats);
+      syncMissingCards(data.tasks);
+    } catch { /* 瞬时错误忽略，下一轮补上 */ }
+  };
+
+  const paintQueue = (stats) => {
+    const active = (stats.active != null) ? stats.active : (stats.downloading + stats.merging);
+    const parts = [];
+    if (active) parts.push(`进行中 ${active}`);
+    if (stats.pending) parts.push(`排队 ${stats.pending}`);
+    if (stats.completed) parts.push(`完成 ${stats.completed}`);
+    if (stats.failed) parts.push(`失败 ${stats.failed}`);
+    if (stats.canceled) parts.push(`已取消 ${stats.canceled}`);
+    el.queueBar.textContent = parts.length ? parts.join(' · ') : '暂无任务';
+    el.cancelAllBtn.hidden = (active + stats.pending) === 0;
+  };
+
+  // 刷新后 / 跨标签页补齐「活跃任务」卡片（避免任务在跑但列表空）
+  const syncMissingCards = (tasks) => {
+    tasks.forEach((t) => {
+      if (!ACTIVE_STATES.includes(t.status)) return;
+      if (el.taskList.querySelector(`[data-task-id="${t.task_id}"]`)) return;
+      const refs = createTaskCard(t.task_id, { title: t.title, platform: t.platform });
+      trackTask(t.task_id, refs, '');
+    });
+  };
+
+  // 全部取消：取消所有进行中 / 排队的任务（不删已完成文件）
+  const cancelAll = async () => {
+    if (!window.confirm('确定取消所有进行中 / 排队的下载任务吗？已完成的文件不会删除。')) return;
+    try {
+      await request('/api/tasks/cancel-all', { method: 'POST' });
+      loadQueue();
+    } catch (error) {
+      showError(error.message || '取消失败', error.hint);
+    }
+  };
+
   // ------------------------------------------------------------------ 自动解说（增值功能）
   // 下载完成的任务 → 点「生成解说成片」→ 后台调 commentary-pipeline/process.py → 回传成片。
   // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
@@ -734,6 +814,13 @@
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
 
   el.form.addEventListener('submit', handleResolve);
+  el.batchBtn.addEventListener('click', () => {
+    const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+    if (!urls.length) { showError('请先粘贴至少一个视频链接'); return; }
+    runBatch(urls, el.cookieInput.value.trim(), el.proxyInput.value.trim());
+  });
+  el.batchConcurrency.addEventListener('input', () => { el.batchConcVal.textContent = el.batchConcurrency.value; });
+  el.cancelAllBtn.addEventListener('click', cancelAll);
   el.downloadBtn.addEventListener('click', handleDownload);
   el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
@@ -1148,6 +1235,8 @@
   el.libModalClose.addEventListener('click', () => el.libModal.close());
   el.libModal.addEventListener('click', (e) => { if (e.target === el.libModal) el.libModal.close(); });
   el.libDelete.addEventListener('click', deleteLibItem);
+
+  setInterval(loadQueue, 2500);  // 队列概览：持续轮询任务统计
 
   request('/api/platforms')
     .then(({ platforms }) => renderPlatforms(platforms))

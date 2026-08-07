@@ -573,3 +573,41 @@ img { max-width: 100%; display: block; }
 .lib-meta-k { flex: 0 0 64px; color: var(--text-mute); }
 .lib-meta-v { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .lib-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+
+/* ---- 批量下载面板 ---- */
+.batch-box {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-lg, 14px);
+  background: var(--surface, #fff);
+  padding: .6rem .9rem;
+  margin: 0 0 1rem;
+}
+.batch-box > summary {
+  cursor: pointer; font-weight: 600; color: var(--text); user-select: none;
+  list-style: none; padding: .3rem 0;
+}
+.batch-box > summary::-webkit-details-marker { display: none; }
+.batch-box > summary::before { content: "▸ "; color: var(--primary, #4f46e5); }
+.batch-box[open] > summary::before { content: "▾ "; }
+.batch-body { display: flex; flex-direction: column; gap: .7rem; margin-top: .6rem; }
+.batch-textarea {
+  width: 100%; resize: vertical; min-height: 88px; box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem;
+  padding: .6rem .7rem; border: 1px solid var(--border, #e5e7eb); border-radius: 10px;
+  background: var(--bg, #f8f9fb); color: var(--text);
+}
+.batch-textarea:focus { outline: none; border-color: var(--primary, #4f46e5); }
+.batch-opts { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: center; }
+.batch-opt { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--text-mute); }
+.batch-opt .adv-input { width: auto; min-width: 110px; }
+.conc { display: inline-flex; align-items: center; gap: .5rem; }
+.conc input[type=range] { width: 120px; accent-color: var(--primary, #4f46e5); }
+.conc-val { min-width: 1.2em; text-align: center; font-weight: 600; color: var(--text); }
+
+/* ---- 队列概览条 ---- */
+.queue-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+.queue-bar {
+  flex: 1; min-width: 0; font-size: .8rem; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.queue-bar:empty::before { content: "暂无任务"; }

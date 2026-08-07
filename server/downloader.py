@@ -198,6 +198,7 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         "retries": retries,
         "extractor_retries": retries,
         "ignoreerrors": False,
+        "continue": True,   # 断点续传：上次中断的 .part 可从断点接着下，大文件更稳
     }
     # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
     effective_proxy = proxy or _resolve_proxy(host)
@@ -504,8 +505,34 @@ def _write_sidecar(output: Path, task: "DownloadTask", info: dict[str, Any]) -> 
         logger.debug("写入元数据侧车失败: %s", output, exc_info=True)
 
 
-def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
-    """在后台线程中执行，全部异常都写回任务状态，不向外抛。"""
+def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0) -> None:
+    """在后台线程执行，全部异常都写回任务状态，不向外抛。
+
+    max_retries=N 时，对网络/超时/连接类等「可重试」错误最多再试 N 次（指数退避）。
+    重试在 worker 线程内循环进行，不会额外占用并发槽；会员受限 / 链接失效等不可重试
+    错误会直接以 failed 结束，避免无效重试浪费带宽。
+    """
+    for attempt in range(1, max_retries + 2):
+        if attempt > 1:
+            # 重试前把状态拨回排队，让前端进度条归零、状态显示「重试中」
+            store.update(
+                task.id, status="pending", error="", hint="", progress=0.0,
+                downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0,
+            )
+        _run_once(task, store, quality_key, cookie, proxy)
+        t = store.get(task.id)
+        if t is None:
+            return
+        if t.status != "failed":
+            return  # completed / canceled -> 停止
+        if attempt > max_retries:
+            return
+        if not _is_retryable(t.error):
+            return
+        time.sleep(min(2 ** attempt, 30))  # 指数退避，最多 30s
+
+
+def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
     reporter = _ProgressReporter(task, store)
     try:
         with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
@@ -541,6 +568,20 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
             speed=0.0,
             eta=0,
         )
+
+
+def _is_retryable(error: str) -> bool:
+    """判断失败原因是否值得自动重试：网络/超时/连接/代理/临时服务端错误可重试，
+    会员受限、链接失效等应直接失败，避免无效刷带宽。"""
+    if not error:
+        return True
+    lowered = error.lower()
+    keywords = (
+        "超时", "timeout", "连接", "connection", "网络", "network", "resolve",
+        "代理", "proxy", "ssl", "reset", "refused", "unreachable", "中断",
+        "interrupted", "503", "502", "500", "429", "temporary", "temp",
+    )
+    return any(k in lowered for k in keywords)
 
 
 def summarize(info: dict[str, Any]) -> dict[str, Any]:

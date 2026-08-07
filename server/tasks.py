@@ -29,6 +29,7 @@ class DownloadTask:
     title: str
     platform: str
     quality: str
+    quality_key: str = "best"          # 原始清晰度 key（如 best/1080/audio），重试时用它重下
     status: TaskStatus = "pending"
     progress: float = 0.0
     downloaded_bytes: int = 0
@@ -76,12 +77,13 @@ class TaskStore:
         self._lock = threading.Lock()
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def create(self, *, url: str, title: str, platform: str, quality: str) -> DownloadTask:
+    def create(self, *, url: str, title: str, platform: str, quality: str, quality_key: str = "best") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
         task = DownloadTask(
-            id=task_id, url=url, title=title, platform=platform, quality=quality, workdir=workdir
+            id=task_id, url=url, title=title, platform=platform, quality=quality,
+            quality_key=quality_key, workdir=workdir,
         )
         with self._lock:
             self._tasks[task_id] = task
@@ -123,6 +125,11 @@ class TaskStore:
             task = self._tasks.pop(task_id, None)
         if task and task.workdir:
             shutil.rmtree(task.workdir, ignore_errors=True)
+
+    def list_all(self) -> list["DownloadTask"]:
+        """返回当前所有任务的安全快照（不暴露内部 dict），供队列概览使用。"""
+        with self._lock:
+            return list(self._tasks.values())
 
     def purge_expired(self, ttl: int = TASK_TTL_SECONDS) -> int:
         deadline = time.time() - ttl
