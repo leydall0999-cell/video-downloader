@@ -74,6 +74,22 @@
 
 ---
 
+## 2.5 格式 / 片段增强（已实现）
+
+### 需求
+- 对已下载的媒体（视频/音频）做本地 ffmpeg 加工，无需重新下载：转音频、生成 GIF、时间裁剪、画面裁剪、压缩、放大/轻量超分。
+- 产物自动落回媒体库（带元信息侧车），用户可立即在「媒体库」看到/播放/管理/删除。
+
+### 技术方案
+- 新增 `server/ffmpeg_tools.py`（纯 ffmpeg，无外部依赖）：`extract_audio / make_gif / trim_video / crop_video / compress_video / upscale_video`，统一 `_unique_out`（中文后缀安全，不用 `Path.with_suffix`）+ `_write_sidecar`。
+- 新增 `POST /api/process/run` + `GET /api/process/{job_id}`（基于 lib_id，复用下载线程池 `executor` 异步跑）；产物写源目录并写侧车，`encode_id` 回传新 lib_id。
+- 开关同媒体库：`VDL_LIBRARY_ENABLED=true` 或桌面 frozen 才暴露（前端「🛠 处理」按钮 + 媒体库弹窗加工面板）。
+- 前端 `index.html`/`app.js`/`styles.css`：媒体库弹窗加「🛠 处理」按钮与加工面板；按媒体类型（video/audio/image）过滤可用操作；动态参数表单；提交后轮询进度，完成自动关闭弹窗并刷新媒体库。
+- 媒体库识别增强：`library.py` 的 `MEDIA_EXTS` 增加 `.gif/.webp`（kind=image），前端 `openLibModal` 增加 image 分支用 `<img>` 预览。
+- 「超分」说明：实为 lanczos 放大 + unsharp 锐化（非 AI 超分，无模型依赖），UI 标注「轻量超分」。
+- 修复：字幕烧录 `burn_subtitle` 与 `ffmpeg_tools._unique_out` 的中文后缀被 `Path.with_suffix` 吞掉的 bug（改用字符串拼接）。
+- 测试：ffmpeg 端到端（6 函数全过）+ TestClient 路由集成（op 校验 400 / 404 / 真实加工 completed / 产物入媒体库识别）。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
-- 字幕提取/翻译/烧录；格式片段增强（GIF/裁剪/超分）；抽帧封面/抽音频铃声；一键归档网盘；本地媒体库加密。
+- 抽帧封面/抽音频铃声；一键归档网盘；本地媒体库加密。
 - 详见 MEMORY.md 桌面其他功能思路。

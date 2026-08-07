@@ -158,12 +158,11 @@ def extract_embedded_subs(video_path: Path, out_dir: Path | None = None,
 # --------------------------------------------------------------------------- #
 def burn_subtitle(video_path: Path, sub_path: Path, ffmpeg_bin: str = "ffmpeg") -> Path | None:
     """把字幕烧录成硬字幕，输出 <标题>.字幕版.mp4 到视频同目录。"""
-    base = video_path.parent / f"{video_path.stem}.字幕版"
-    out_path = base.with_suffix(".mp4")
+    stem = video_path.stem
+    out_path = video_path.parent / f"{stem}.字幕版.mp4"
     n = 1
     while out_path.exists():
-        out_path = base.with_suffix("")  # 去掉 .mp4
-        out_path = video_path.parent / f"{video_path.stem}.字幕版.{n}.mp4"
+        out_path = video_path.parent / f"{stem}.字幕版.{n}.mp4"
         n += 1
     vf = f"subtitles={_escape_ff(str(sub_path))}"
     cmd = [

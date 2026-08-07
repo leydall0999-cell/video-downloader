@@ -117,6 +117,14 @@
     subTarget: $('subTarget'),
     subTranslate: $('subTranslate'),
     subBurn: $('subBurn'),
+    // 格式 / 片段加工（桌面版功能）
+    libProcess: $('libProcess'),
+    processPanel: $('processPanel'),
+    processPanelClose: $('processPanelClose'),
+    processOp: $('processOp'),
+    processParams: $('processParams'),
+    processRun: $('processRun'),
+    processStatus: $('processStatus'),
     // 订阅追更（桌面版功能）
     tabSubscribe: $('tabSubscribe'),
     subscribeView: $('subscribeView'),
@@ -1335,6 +1343,11 @@
       v.preload = 'metadata';
       v.className = 'lib-video';
       el.libPlayer.appendChild(v);
+    } else if (item.kind === 'image') {
+      const img = document.createElement('img');
+      img.src = libFileUrl(item.id);
+      img.className = 'lib-image';
+      el.libPlayer.appendChild(img);
     } else {
       const a = document.createElement('audio');
       a.src = libFileUrl(item.id);
@@ -1365,7 +1378,9 @@
     else el.libModal.setAttribute('open', '');
     const showSub = node.libraryEnabled && item.kind === 'video';
     el.libSubtitle.hidden = !showSub;
+    el.libProcess.hidden = !node.libraryEnabled;
     resetSubPanel();
+    resetProcessPanel();
   };
 
   const deleteLibItem = async () => {
@@ -1507,10 +1522,186 @@
   el.libDelete.addEventListener('click', deleteLibItem);
   el.libSubtitle.addEventListener('click', toggleSubPanel);
   el.subPanelClose.addEventListener('click', () => { el.subPanel.hidden = true; });
+  el.libProcess.addEventListener('click', toggleProcessPanel);
+  el.processPanelClose.addEventListener('click', () => { el.processPanel.hidden = true; });
+  el.processOp.addEventListener('change', renderProcessParams);
+  el.processRun.addEventListener('click', runProcess);
   el.subProbe.addEventListener('click', probeSubtitles);
   el.subExtract.addEventListener('click', extractSubtitle);
   el.subTranslate.addEventListener('click', translateSubtitle);
   el.subBurn.addEventListener('click', burnSubtitle);
+
+  // ---- 格式 / 片段加工（桌面版功能） ----
+  // 操作类型定义：label 显示名、kinds 适用媒体类型、params 动态表单字段。
+  const PROCESS_OPS = {
+    audio:    { label: '提取音频', kinds: ['video', 'audio'], params: [
+      { key: 'fmt', label: '格式', type: 'select', options: ['mp3', 'm4a', 'aac', 'opus', 'flac', 'wav'], def: 'mp3' },
+      { key: 'bitrate', label: '码率', type: 'select', options: ['128k', '192k', '256k', '320k'], def: '192k' },
+    ]},
+    gif:      { label: '生成 GIF 动图', kinds: ['video'], params: [
+      { key: 'start', label: '开始(秒)', type: 'number', def: 0 },
+      { key: 'duration', label: '时长(秒)', type: 'number', def: 5 },
+      { key: 'fps', label: '帧率', type: 'number', def: 12 },
+      { key: 'width', label: '宽度(px)', type: 'number', def: 480 },
+    ]},
+    trim:     { label: '时间裁剪', kinds: ['video'], params: [
+      { key: 'start', label: '开始(秒)', type: 'number', def: 0 },
+      { key: 'end', label: '结束(秒，0=剪到末尾)', type: 'number', def: 0 },
+      { key: 'reencode', label: '精确重编码', type: 'checkbox', def: true },
+    ]},
+    crop:     { label: '画面裁剪', kinds: ['video'], params: [
+      { key: 'preset', label: '比例预设', type: 'select', options: ['自由', '9:16 竖屏', '1:1 方形', '4:3', '16:9'], def: '自由' },
+      { key: 'crop_expr', label: 'Crop 表达式(自由时填，如 iw/2:ih:0:0；宽高需偶数)', type: 'text', def: '' },
+    ]},
+    compress: { label: '压缩', kinds: ['video'], params: [
+      { key: 'scale_h', label: '目标高度', type: 'select', options: ['480', '720', '1080'], def: '720' },
+      { key: 'crf', label: '质量(数值越大越压)', type: 'select', options: ['23', '28', '32'], def: '28' },
+    ]},
+    upscale:  { label: '放大 / 轻量超分', kinds: ['video'], params: [
+      { key: 'factor', label: '放大倍率', type: 'select', options: ['1.5', '2', '4'], def: '2' },
+      { key: 'sharpen', label: '锐化', type: 'checkbox', def: true },
+    ]},
+  };
+
+  // 比例预设 → 确保偶数的 crop 表达式（ffmpeg crop 要求宽高为偶）。
+  const CROP_PRESETS = {
+    '9:16 竖屏': 'trunc(ih*9/16/2)*2:trunc(ih/2)*2:(iw-trunc(ih*9/16/2)*2)/2:0',
+    '1:1 方形': 'trunc(ih/2)*2:trunc(ih/2)*2:(iw-trunc(ih/2)*2)/2:(ih-trunc(ih/2)*2)/2',
+    '4:3': 'trunc(ih*4/3/2)*2:trunc(ih/2)*2:(iw-trunc(ih*4/3/2)*2)/2:0',
+    '16:9': 'trunc(iw/2)*2:trunc(iw*9/16/2)*2:0:(ih-trunc(iw*9/16/2)*2)/2',
+  };
+
+  const resetProcessPanel = () => {
+    el.processPanel.hidden = true;
+    el.processStatus.hidden = true;
+    el.processParams.replaceChildren();
+    if (!currentLibItem) return;
+    const kind = currentLibItem.kind;
+    el.processOp.replaceChildren();
+    Object.entries(PROCESS_OPS).forEach(([op, cfg]) => {
+      if (!cfg.kinds.includes(kind)) return;
+      const o = document.createElement('option');
+      o.value = op; o.textContent = cfg.label;
+      el.processOp.appendChild(o);
+    });
+    if (el.processOp.options.length) renderProcessParams();
+  };
+
+  const showProcessStatus = (msg, isError) => {
+    el.processStatus.hidden = false;
+    el.processStatus.textContent = msg;
+    el.processStatus.classList.toggle('is-error', !!isError);
+  };
+
+  const renderProcessParams = () => {
+    const op = el.processOp.value;
+    const cfg = PROCESS_OPS[op];
+    el.processParams.replaceChildren();
+    if (!cfg) return;
+    cfg.params.forEach((p) => {
+      const row = document.createElement('div');
+      row.className = 'sub-row';
+      const label = document.createElement('label');
+      label.className = 'process-param';
+      label.textContent = p.label;
+      let input;
+      if (p.type === 'select') {
+        input = document.createElement('select');
+        input.className = 'adv-input';
+        p.options.forEach((o) => {
+          const opt = document.createElement('option');
+          opt.value = o; opt.textContent = o;
+          if (o === p.def) opt.selected = true;
+          input.appendChild(opt);
+        });
+      } else if (p.type === 'checkbox') {
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !!p.def;
+      } else {
+        input = document.createElement('input');
+        input.type = p.type === 'number' ? 'number' : 'text';
+        input.className = 'adv-input';
+        if (p.def !== undefined) input.value = p.def;
+      }
+      input.dataset.key = p.key;
+      label.appendChild(input);
+      row.appendChild(label);
+      el.processParams.appendChild(row);
+    });
+    if (op === 'crop') {
+      const presetSel = el.processParams.querySelector('select[data-key="preset"]');
+      const exprInput = el.processParams.querySelector('input[data-key="crop_expr"]');
+      if (presetSel && exprInput) {
+        presetSel.addEventListener('change', () => {
+          exprInput.value = CROP_PRESETS[presetSel.value] || '';
+        });
+      }
+    }
+  };
+
+  const collectParams = () => {
+    const op = el.processOp.value;
+    const cfg = PROCESS_OPS[op];
+    const params = {};
+    if (!cfg) return params;
+    cfg.params.forEach((p) => {
+      const node = el.processParams.querySelector(`[data-key="${p.key}"]`);
+      if (!node) return;
+      if (p.type === 'checkbox') params[p.key] = node.checked;
+      else if (p.type === 'number') params[p.key] = Number(node.value);
+      else params[p.key] = node.value;
+    });
+    return params;
+  };
+
+  const toggleProcessPanel = () => {
+    el.processPanel.hidden = !el.processPanel.hidden;
+    if (!el.processPanel.hidden) renderProcessParams();
+  };
+
+  const pollProcess = (jobId) => new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; clearInterval(timer); clearTimeout(guard); resolve(r); } };
+    const timer = setInterval(async () => {
+      try {
+        const d = await request(`/api/process/${encodeURIComponent(jobId)}`);
+        if (!el.processPanel.hidden) showProcessStatus('处理中…（' + d.status + '）', false);
+        if (d.status === 'completed' || d.status === 'failed') finish(d);
+      } catch (e) {
+        finish({ status: 'failed', error: e.message });
+      }
+    }, 1500);
+    // 兜底超时：10 分钟（超大视频压缩/放大可能很久）
+    const guard = setTimeout(() => finish({ status: 'failed', error: '处理超时（超过 10 分钟）' }), 600000);
+  });
+
+  const runProcess = async () => {
+    if (!currentLibItem) return;
+    const op = el.processOp.value;
+    if (!op) { showProcessStatus('请选择一个处理操作', true); return; }
+    const params = collectParams();
+    el.processRun.disabled = true;
+    showProcessStatus('正在处理…（大视频可能要几分钟）', false);
+    try {
+      const data = await request('/api/process/run', {
+        method: 'POST',
+        body: JSON.stringify({ lib_id: currentLibItem.id, op, params }),
+      });
+      const result = await pollProcess(data.job_id);
+      if (result.status === 'completed') {
+        if (typeof el.libModal.close === 'function') el.libModal.close();
+        loadLibrary();
+        showProcessStatus(`已生成：${result.name}（去「媒体库」刷新即可看到）`, false);
+      } else {
+        showProcessStatus('处理失败：' + (result.error || '未知错误'), true);
+      }
+    } catch (e) {
+      showProcessStatus(e.message || '处理请求失败', true);
+    } finally {
+      el.processRun.disabled = false;
+    }
+  };
 
   setInterval(loadQueue, 2500);  // 队列概览：持续轮询任务统计
 

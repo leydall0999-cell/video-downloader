@@ -43,6 +43,7 @@ import downloader
 import library as library_mod
 import subtitles as subtitles_mod
 import subscriptions as subs_mod
+import ffmpeg_tools as fftools
 from batch import BatchScheduler
 from clouddrive import (
     BaiduProvider,
@@ -178,6 +179,10 @@ _webdav_provider = WebDAVProvider()
 _baidu_provider = BaiduProvider()
 CLOUD_JOBS: dict[str, dict] = {}
 CLOUD_LOCK = threading.Lock()
+
+# ---- 格式 / 片段增强（桌面版本地加工）：基于 lib_id 的 ffmpeg 任务 ----
+PROCESS_JOBS: dict[str, dict] = {}
+PROCESS_LOCK = threading.Lock()
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
@@ -1216,6 +1221,108 @@ def sub_translate(req: SubTranslateRequest) -> dict:
     new_path = sub_path.with_name(f"{base_stem}.{ext}.srt")
     new_path.write_text(translated, encoding="utf-8")
     return {"sub_rel": new_path.relative_to(out_dir).as_posix(), "lang": req.target, "text": translated}
+
+
+# ---- 格式 / 片段增强：对已下载媒体做本地 ffmpeg 加工（转音频 / GIF / 裁剪 / 压缩 / 放大）----
+# 与字幕处理同源（基于 lib_id）；产物落源目录并写侧车 → 媒体库自动可见。
+
+class ProcessRequest(BaseModel):
+    lib_id: str = Field(min_length=1)
+    op: str = Field(min_length=1, max_length=16)
+    params: dict = Field(default_factory=dict)
+
+
+@app.post("/api/process/run")
+def process_run(req: ProcessRequest) -> dict:
+    if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
+        raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
+    if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale"):
+        raise HTTPException(status_code=400, detail="不支持的处理类型")
+    src = library_mod._resolve_safe(DOWNLOAD_DIR, req.lib_id)
+    if not src or not src.is_file():
+        raise HTTPException(status_code=404, detail="源文件不存在")
+    job_id = uuid.uuid4().hex[:12]
+    with PROCESS_LOCK:
+        PROCESS_JOBS[job_id] = {"status": "running", "error": "", "out_path": "", "lib_id": "", "name": ""}
+    executor.submit(_run_process, job_id, str(src), req.op, req.params or {})
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/process/{job_id}")
+def process_status(job_id: str) -> dict:
+    with PROCESS_LOCK:
+        job = PROCESS_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="处理任务不存在")
+    return {"status": job["status"], "error": job.get("error", ""),
+            "lib_id": job.get("lib_id", ""), "name": job.get("name", "")}
+
+
+def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
+    """后台线程：按 op 调用 ffmpeg_tools，产物落源目录并写侧车，更新 PROCESS_JOBS。"""
+    with PROCESS_LOCK:
+        job = PROCESS_JOBS.get(job_id)
+    if not job:
+        return
+    try:
+        src_path = Path(src)
+        out_dir = src_path.parent
+        meta = library_mod._load_sidecar(src_path)
+        p = params or {}
+        out = None
+        suffix = ""
+        if op == "audio":
+            out = fftools.extract_audio(src_path, out_dir,
+                                       fmt=str(p.get("fmt", "mp3")),
+                                       bitrate=str(p.get("bitrate", "192k")),
+                                       ffmpeg_bin=FFMPEG_BIN)
+            suffix = "音频"
+        elif op == "gif":
+            out = fftools.make_gif(src_path, out_dir,
+                                  start=float(p.get("start", 0) or 0),
+                                  duration=float(p.get("duration", 5) or 5),
+                                  fps=int(p.get("fps", 12) or 12),
+                                  width=int(p.get("width", 480) or 480),
+                                  ffmpeg_bin=FFMPEG_BIN)
+            suffix = "动图"
+        elif op == "trim":
+            out = fftools.trim_video(src_path, out_dir,
+                                    start=float(p.get("start", 0) or 0),
+                                    end=float(p.get("end", 0) or 0),
+                                    reencode=bool(p.get("reencode", True)),
+                                    ffmpeg_bin=FFMPEG_BIN)
+            suffix = "片段"
+        elif op == "crop":
+            out = fftools.crop_video(src_path, out_dir,
+                                    crop_expr=str(p.get("crop_expr", "")),
+                                    ffmpeg_bin=FFMPEG_BIN)
+            suffix = "裁剪"
+        elif op == "compress":
+            sh = int(p.get("scale_h", 720) or 720)
+            out = fftools.compress_video(src_path, out_dir, scale_h=sh,
+                                        crf=int(p.get("crf", 28) or 28),
+                                        ffmpeg_bin=FFMPEG_BIN)
+            suffix = f"压缩{sh}p"
+        elif op == "upscale":
+            fac = float(p.get("factor", 2) or 2)
+            out = fftools.upscale_video(src_path, out_dir, factor=fac,
+                                       sharpen=bool(p.get("sharpen", True)),
+                                       ffmpeg_bin=FFMPEG_BIN)
+            suffix = f"放大{fac}x"
+        else:
+            raise ValueError("不支持的处理类型")
+        if not out or not out.exists() or out.stat().st_size == 0:
+            raise RuntimeError("处理未产出有效文件")
+        fftools._write_sidecar(out, meta, suffix)
+        new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
+        with PROCESS_LOCK:
+            job.update(status="completed", out_path=str(out), lib_id=new_id, name=out.name)
+        logger.info("process %s (%s) done -> %s", job_id, op, out.name)
+    except Exception as e:  # noqa: BLE001
+        with PROCESS_LOCK:
+            job["status"] = "failed"
+            job["error"] = str(e)[:400]
+        logger.warning("process %s (%s) failed: %s", job_id, op, e)
 
 
 # ---- 订阅监控：关注频道/UP 主，自动下载新发布的视频 ----

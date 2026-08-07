@@ -18,7 +18,8 @@ from typing import Any
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".ts", ".flv", ".mpeg", ".mpg"}
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav", ".opus", ".wma"}
-MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS
+IMAGE_EXTS = {".gif", ".webp"}
+MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS | IMAGE_EXTS
 
 THUMB_DIR_NAME = ".thumbs"
 _THUMB_LOCK = threading.Lock()
@@ -89,7 +90,12 @@ def scan_library(download_dir: Path) -> list[dict[str, Any]]:
         if _in_progress(path):
             continue
         meta = _load_sidecar(path)
-        kind = "audio" if suffix in AUDIO_EXTS else "video"
+        if suffix in AUDIO_EXTS:
+            kind = "audio"
+        elif suffix in IMAGE_EXTS:
+            kind = "image"
+        else:
+            kind = "video"
         stat = path.stat()
         items.append(
             {

@@ -646,3 +646,7 @@ img { max-width: 100%; display: block; }
 .sub-translate-body label { display: flex; flex-direction: column; gap: .2rem; font-size: .78rem; color: var(--text-mute); }
 .sub-translate-body .adv-input { width: 100%; }
 .sub-burn-row { display: flex; align-items: center; gap: .8rem; }
+.lib-image { max-width: 100%; max-height: 60vh; display: block; margin: 0 auto; border-radius: 12px; background: #000; }
+.process-params { display: flex; flex-direction: column; gap: .55rem; }
+.process-param { display: flex; flex-direction: column; gap: .2rem; font-size: .82rem; color: var(--text-mute); }
+.process-param .adv-input { width: 100%; }

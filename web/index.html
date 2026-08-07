@@ -247,6 +247,7 @@
     <div class="lib-actions">
       <a class="btn btn-success btn-sm" id="libDownload" download>保存到本机 ⬇</a>
       <button type="button" class="btn btn-ghost btn-sm" id="libSubtitle" hidden>📝 字幕</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="libProcess" hidden>🛠 处理</button>
       <button type="button" class="btn btn-ghost btn-sm" id="libDelete">删除</button>
     </div>
 
@@ -277,6 +278,21 @@
       </details>
       <div class="sub-burn-row">
         <button type="button" class="btn btn-primary btn-sm" id="subBurn">烧录硬字幕成片</button>
+      </div>
+    </section>
+
+    <section class="sub-panel" id="processPanel" hidden>
+      <div class="sub-panel-head">
+        <strong>格式 / 片段加工</strong>
+        <button type="button" class="modal-close sub-close" id="processPanelClose" aria-label="收起">✕</button>
+      </div>
+      <p class="sub-status" id="processStatus" hidden></p>
+      <div class="sub-row">
+        <select id="processOp" class="adv-input"></select>
+      </div>
+      <div id="processParams" class="process-params"></div>
+      <div class="sub-burn-row">
+        <button type="button" class="btn btn-primary btn-sm" id="processRun">开始处理</button>
       </div>
     </section>
   </div>
