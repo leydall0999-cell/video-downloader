@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import threading
 import time
@@ -95,6 +96,13 @@ def validate_uri(uri: str) -> str:
         from urllib.parse import parse_qs, urlencode, quote
         qs = parse_qs(parsed.query, keep_blank_values=False)
         keep = {k: v[0] for k, v in qs.items() if k in ("xt", "dn", "tr", "xs", "as") and v}
+        # 校验 tr/xs/as 等 URL 字段，拒绝指向内网/本地地址的 tracker 或源（防 SSRF）
+        for key in ("tr", "xs", "as"):
+            val = keep.get(key, "")
+            if not val:
+                continue
+            if re.match(r"^[A-Za-z][A-Za-z0-9+.\-]*://", val) and not _is_safe_url(val):
+                raise ValueError(f"magnet 中的 {key} 指向非公开地址，已拒绝")
         # 重组时保留冒号与斜杠（标准 magnet 形如 xt=urn:btih:... / tr=http://...），
         # 仅编码空格等不安全字符。
         return "magnet:?" + urlencode(keep, quote_via=lambda s, *a, **_kw: quote(s, safe=":/"))
@@ -224,6 +232,13 @@ class TorrentManager:
             src_label = params["url"]
         elif torrent_data:
             ti = lt.torrent_info(lt.bdecode(torrent_data))
+            # 安全：恶意 .torrent 可能用 `../` 或绝对路径把文件写到 save_path 之外，
+            # libtorrent 不会自动清洗内部文件路径，必须在此逐一拦截。
+            for i in range(ti.num_files()):
+                rel = ti.files().file_path(i)
+                cand = (sp / rel).resolve()
+                if not (cand == sp or sp in cand.parents):
+                    raise ValueError(f"torrent 含非法文件路径（疑似目录穿越）：{rel}")
             params["ti"] = ti
             src_label = ti.name() or "torrent"
         else:

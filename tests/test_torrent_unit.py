@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import torrent as torrent_mod
+import fake_libtorrent
 from fake_libtorrent import FakeHandle, FakeTI
 
 
@@ -110,3 +111,39 @@ def test_describe_with_fake_handle():
     assert len(d["files"]) == 2
     assert d["files"][0]["name"] == "a.mkv"
     assert d["files"][0]["skipped"] is False
+
+
+def test_add_rejects_traversal_in_torrent_files():
+    """恶意 .torrent 用 ../ 或绝对路径把文件写到 save_path 之外，必须被拒。"""
+    tmp = Path(tempfile.mkdtemp())
+    orig_lt = torrent_mod.lt
+    torrent_mod.lt = fake_libtorrent.FakeLT()
+    # 让 torrent_info 返回一个内部路径含 ../ 的假 torrent，模拟恶意 .torrent
+    torrent_mod.lt.torrent_info = staticmethod(lambda d: FakeTI("Evil", [("../evil.txt", 10)]))
+    try:
+        mgr = torrent_mod.TorrentManager(tmp)
+        mgr._session = torrent_mod.lt.session()
+        mgr._started = True  # 跳过 start() 避免起后台线程
+        try:
+            mgr.add(torrent_data=b"dummy")
+            assert False, "应拒绝含目录穿越路径的 .torrent"
+        except ValueError as e:
+            assert "目录穿越" in str(e)
+    finally:
+        torrent_mod.lt = orig_lt
+
+
+def test_validate_uri_rejects_private_tracker():
+    """magnet 里的 tracker 若指向内网/本地，必须被拒（防 SSRF）。"""
+    for bad in ("magnet:?xt=urn:btih:0123456789abcdef&tr=http://127.0.0.1/ann",
+                "magnet:?xt=urn:btih:0123456789abcdef&tr=http://192.168.0.1/ann",
+                "magnet:?xt=urn:btih:0123456789abcdef&as=http://10.0.0.1/x"):
+        try:
+            torrent_mod.validate_uri(bad)
+            assert False, f"应拒绝私网 tracker/source: {bad}"
+        except ValueError:
+            pass
+    # 公网 tracker 仍放行
+    assert torrent_mod.validate_uri(
+        "magnet:?xt=urn:btih:0123456789abcdef&tr=http://tracker.example.com/ann"
+    ).startswith("magnet:?")

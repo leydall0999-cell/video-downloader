@@ -182,6 +182,11 @@ def crop_video(video: Path, out_dir: Path | None = None, crop_expr: str = "",
     """画面裁剪：crop_expr 形如 "iw:ih:0:0" 或 "iw/2:ih:0:0"（ffmpeg crop 滤镜）。"""
     if not crop_expr or not crop_expr.strip():
         return None
+    # 安全：ffmpeg 滤镜链注入防护。crop 合法语法为 w:h:x:y 定位参数（如 iw/2:ih:0:0），
+    # 真正的注入载体是滤镜图元字符 , [ ] ; = #（可拼接额外滤镜链或赋值）。
+    # 采用黑名单拒绝这些元字符，放行 iw/ih/数字/运算符等合法写法。
+    if re.search(r"[,\[\];=#]", crop_expr.strip()):
+        raise ValueError("非法的裁剪表达式（含滤镜链元字符 , [ ] ; = #）")
     out_dir = out_dir or video.parent
     ext = video.suffix.lstrip(".") or "mp4"
     out = _unique_out(video, "裁剪", ext)

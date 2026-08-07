@@ -64,6 +64,22 @@ def test_crop_empty_expr_returns_none_without_calling_ffmpeg():
     assert fake.calls == [], "空 crop_expr 不应触发任何 ffmpeg 调用"
 
 
+def test_crop_rejects_filter_injection():
+    # 滤镜链注入防护：含 , [ ] = ; # 等滤镜图元字符必须被拒绝
+    for bad in ("iw:ih,split[a][b]", "iw:ih;reverse", "iw:ih#foo", "iw:ih=a"):
+        try:
+            ft.crop_video(_vid(), crop_expr=bad)
+            assert False, f"应拒绝恶意裁剪表达式: {bad}"
+        except ValueError:
+            pass
+    # 合法表达式仍可用，且确实触发 ffmpeg（mock 下不依赖真实文件落盘）
+    fake = _FakeRun()
+    with patch.object(ft.subprocess, "run", fake):
+        ft.crop_video(_vid(), crop_expr="iw/2:ih:0:0")
+    assert fake.calls, "合法 crop_expr 应触发 ffmpeg"
+    assert any("crop=" in " ".join(c) for c in fake.calls), "命令应含 crop 滤镜"
+
+
 # --------------------------------------------------------------------------- #
 # 命令构造（mock subprocess.run）
 # --------------------------------------------------------------------------- #
