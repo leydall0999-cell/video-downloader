@@ -132,28 +132,50 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _tunnel(self, client: socket.socket, upstream: socket.socket) -> None:
+        # 非阻塞双向转发 + 发送缓冲。
+        # 重要：sendall 在非阻塞 socket 上遇到背压会抛 BlockingIOError，绝不能当致命错误
+        # 关掉整条隧道——否则下载大文件时只要对端接收稍慢就会被掐断（IncompleteRead）。
         client.setblocking(False)
         upstream.setblocking(False)
-        conns = [client, upstream]
+        socks = [client, upstream]
+        peer = {client: upstream, upstream: client}
+        buf = {client: b"", upstream: b""}  # 待发给各端的数据（背压时堆积）
         try:
             while True:
-                readable, _, _ = select.select(conns, [], [], 120)
-                if not readable:
-                    return
-                for src in readable:
-                    dst = upstream if src is client else client
+                rlist, wlist, _ = select.select(
+                    socks,                       # 谁可读
+                    [s for s in socks if buf[s]],# 谁还有积压数据待发
+                    [], 120,
+                )
+                if not rlist and not wlist:
+                    return  # 120s 无活动，超时关闭
+                for src in rlist:
                     try:
                         data = src.recv(65536)
                     except (BlockingIOError, OSError):
-                        return
+                        continue  # 临时错误，下一轮再试
                     if not data:
-                        return
+                        # 该方向 EOF：不再读它，并通知对端"写端关闭"
+                        socks.remove(src)
+                        try:
+                            peer[src].shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+                        continue
+                    buf[peer[src]] += data
+                for dst in wlist:
+                    if not buf[dst]:
+                        continue
                     try:
-                        dst.sendall(data)
-                    except OSError:
-                        return
+                        sent = dst.send(buf[dst])
+                        buf[dst] = buf[dst][sent:]
+                    except (BlockingIOError, OSError):
+                        continue  # 发送缓冲满，下一轮再发
+                # 双方都已 EOF 且积压清空 → 干净退出
+                if not socks and not any(buf.values()):
+                    return
         finally:
-            for s in conns:
+            for s in (client, upstream):
                 try:
                     s.close()
                 except OSError:
