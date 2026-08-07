@@ -40,6 +40,7 @@ from urllib.parse import urlparse
 
 import downloader
 import library as library_mod
+import subscriptions as subs_mod
 from batch import BatchScheduler
 from clouddrive import (
     BaiduProvider,
@@ -50,7 +51,7 @@ from clouddrive import (
     _baidu_callback_html,
 )
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
-from tasks import TaskStore
+from tasks import TaskStore, TASK_ID_LENGTH
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vdl")
@@ -351,6 +352,12 @@ store = TaskStore(DOWNLOAD_DIR)
 # 线程池只设硬上限；真正的「同时下几个」由 BatchScheduler 的并发计数器软控（可动态调整）
 executor = ThreadPoolExecutor(max_workers=VDL_BATCH_HARD_MAX, thread_name_prefix="vdl-dl")
 scheduler = BatchScheduler(executor, default_concurrency=MAX_CONCURRENT_DOWNLOADS)
+
+# ---- 订阅监控（桌面版功能）：本地 JSON 持久化 + 后台定时探查新视频 ----
+SUB_ENABLED = bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_SUBSCRIPTIONS_ENABLED"))
+SUBSCRIBE_PROBE_LIMIT = int(os.environ.get("VDL_SUBSCRIBE_PROBE_LIMIT", "100") or 100)
+SUB_CHECK_INTERVAL = int(os.environ.get("VDL_SUB_CHECK_INTERVAL", "1800") or 1800)  # 默认 30 分钟
+sub_store = subs_mod.SubscriptionStore(DOWNLOAD_DIR / ".subscriptions.json")
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
 cloud_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cloud")  # 云盘上传独立线程池，避免挤占下载
 
@@ -573,6 +580,12 @@ def node_info() -> dict:
         # 本地媒体库：仅桌面版（frozen）或显式开启时暴露给前端；网页版目录临时、默认关闭
         "library": {
             "enabled": bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_LIBRARY_ENABLED")),
+        },
+        # 订阅监控：与媒体库同开关策略（桌面版/显式开启）；持久化在本地 JSON
+        "subscriptions": {
+            "enabled": SUB_ENABLED,
+            "probe_limit": SUBSCRIBE_PROBE_LIMIT,
+            "check_interval": SUB_CHECK_INTERVAL,
         },
     }
 
@@ -1101,6 +1114,121 @@ def library_delete(lib_id: str) -> dict:
     if not library_mod.delete_item(DOWNLOAD_DIR, lib_id):
         raise HTTPException(status_code=404, detail="文件不存在")
     return {"deleted": True}
+
+
+# ---- 订阅监控：关注频道/UP 主，自动下载新发布的视频 ----
+
+def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
+    """探查频道新视频并加入下载队列；更新已知 id 基线。返回结果摘要。
+
+    基线策略：仅把"成功创建下载任务"的视频 id 计入 last_video_ids，
+    解析失败的 id 不计入（下次 check 仍可重试）；任务最终失败由用户在下载面板手动重试。
+    """
+    items = subs_mod.probe_channel(sub.url, sub.cookie, sub.proxy, limit=SUBSCRIBE_PROBE_LIMIT)
+    known = set(sub.last_video_ids)
+    fresh = [it for it in items if it["id"] not in known]
+    task_ids: list[str] = []
+    failed: list[str] = []
+    submitted_ids: set[str] = set()
+    for it in fresh:
+        if not it.get("url"):
+            continue
+        try:
+            url, platform = parse_source(it["url"])
+        except (UnsupportedPlatformError, LinkError):
+            failed.append(it["title"])
+            continue
+        task = store.create(
+            url=url, title=it["title"], platform=platform.name,
+            quality=downloader.quality_label(sub.quality_key), quality_key=sub.quality_key,
+        )
+        scheduler.submit(downloader.run_download, task, store, sub.quality_key, sub.cookie, sub.proxy, SINGLE_DOWNLOAD_RETRIES)
+        task_ids.append(task.id)
+        submitted_ids.add(it["id"])
+    # 合并基线（保留最近最多 200 条），仅计入成功提交任务的 id
+    new_baseline = list(sub.last_video_ids)
+    for vid in submitted_ids:
+        if vid not in new_baseline:
+            new_baseline.append(vid)
+    sub_store.update(sub.id, last_video_ids=new_baseline[:200], last_checked=time.time())
+    return {"sub_id": sub.id, "checked": len(items), "new_videos": fresh, "task_ids": task_ids, "failed": failed}
+
+
+class SubscribeRequest(BaseModel):
+    url: str = Field(min_length=4, max_length=8192)
+    name: str = Field(default="", max_length=128)
+    quality: str = Field(default=downloader.BEST_KEY, max_length=16)
+    cookie: str = Field(default="", max_length=8192)
+    proxy: str = Field(default="", max_length=256)
+    auto_check: bool = True
+
+
+@app.get("/api/subscriptions")
+def list_subscriptions() -> dict:
+    return {"subscriptions": [s.to_public_dict() for s in sub_store.list_all()], "enabled": SUB_ENABLED}
+
+
+@app.post("/api/subscriptions")
+def add_subscription(payload: SubscribeRequest) -> dict:
+    if not SUB_ENABLED:
+        raise HTTPException(status_code=403, detail="当前部署未启用订阅功能")
+    if not downloader.is_valid_quality(payload.quality):
+        raise HTTPException(status_code=400, detail="不支持的清晰度选项")
+    url, platform = parse_source(payload.url)  # 校验为已知公开平台
+    sid = uuid.uuid4().hex[:TASK_ID_LENGTH]
+    # 首次添加只记录基线（不下载历史视频），之后发布的新视频才自动下载
+    items = subs_mod.probe_channel(url, payload.cookie, payload.proxy, limit=SUBSCRIBE_PROBE_LIMIT)
+    baseline = [it["id"] for it in items][:200]
+    sub = subs_mod.Subscription(
+        id=sid, url=url, name=payload.name or platform.name,
+        platform=platform.name, quality_key=payload.quality,
+        quality_label=downloader.quality_label(payload.quality),
+        cookie=payload.cookie, proxy=payload.proxy, auto_check=payload.auto_check,
+        last_video_ids=baseline, last_checked=time.time(), created_at=time.time(),
+    )
+    sub_store.add(sub)
+    return sub.to_public_dict()
+
+
+@app.delete("/api/subscriptions/{sub_id}")
+def remove_subscription(sub_id: str) -> dict:
+    if not sub_store.remove(sub_id):
+        raise HTTPException(status_code=404, detail="订阅不存在")
+    return {"deleted": True}
+
+
+@app.post("/api/subscriptions/{sub_id}/check")
+def check_subscription_route(sub_id: str) -> dict:
+    sub = sub_store.get(sub_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="订阅不存在")
+    try:
+        result = _run_subscription_check(sub)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("订阅 %s 手动检查失败", sub_id)
+        raise HTTPException(status_code=502, detail=f"探查频道失败：{str(exc)[:200]}")
+    return result
+
+
+def _subscription_watchdog() -> None:
+    """后台常驻：周期性对开启 auto_check 的订阅探查新视频并下载。"""
+    while True:
+        time.sleep(SUB_CHECK_INTERVAL)
+        try:
+            for sub in sub_store.list_all():
+                if not sub.auto_check:
+                    continue
+                try:
+                    _run_subscription_check(sub)
+                except Exception:
+                    logger.exception("订阅 %s 自动检查失败", sub.id)
+        except Exception:
+            logger.exception("订阅 watchpod 异常")
+
+
+if SUB_ENABLED:
+    _sub_watchdog = threading.Thread(target=_subscription_watchdog, name="vdl-sub-watchdog", daemon=True)
+    _sub_watchdog.start()
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

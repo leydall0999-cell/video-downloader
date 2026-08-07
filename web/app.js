@@ -101,6 +101,17 @@
     libMeta: $('libMeta'),
     libDownload: $('libDownload'),
     libDelete: $('libDelete'),
+    // 订阅追更（桌面版功能）
+    tabSubscribe: $('tabSubscribe'),
+    subscribeView: $('subscribeView'),
+    subUrl: $('subUrl'),
+    subName: $('subName'),
+    subQuality: $('subQuality'),
+    subAuto: $('subAuto'),
+    subAddBtn: $('subAddBtn'),
+    subHint: $('subHint'),
+    subList: $('subList'),
+    subEmpty: $('subEmpty'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
@@ -119,6 +130,7 @@
     cloudSubRequired: false, cloudFreeDaily: 5, cloudFreeUsed: 0,
     cloudProviders: ['webdav'], baiduAvailable: false, baiduAuthUrl: '',
     libraryEnabled: false,
+    subscriptionsEnabled: false,
   };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
@@ -1083,11 +1095,15 @@
 
   const switchView = (view) => {
     const isLib = view === 'library';
-    el.downloadView.hidden = isLib;
+    const isSub = view === 'subscribe';
+    el.downloadView.hidden = isLib || isSub;
     el.libraryView.hidden = !isLib;
-    el.tabDownload.classList.toggle('is-active', !isLib);
+    el.subscribeView.hidden = !isSub;
+    el.tabDownload.classList.toggle('is-active', !isLib && !isSub);
     el.tabLibrary.classList.toggle('is-active', isLib);
+    el.tabSubscribe.classList.toggle('is-active', isSub);
     if (isLib) loadLibrary();
+    if (isSub) loadSubscriptions();
   };
 
   const loadLibrary = async () => {
@@ -1129,6 +1145,125 @@
     if (items.length === 0) el.libEmpty.textContent = '还没有下载内容。去「下载」粘贴链接保存第一个视频吧。';
     items.forEach((item) => el.libGrid.appendChild(createLibCard(item)));
     refreshLibPlatforms(items);
+  };
+
+  // ---- 订阅追更（桌面版功能） ----
+  const loadSubscriptions = async () => {
+    if (!node.subscriptionsEnabled) return;
+    try {
+      const data = await request('/api/subscriptions');
+      renderSubscriptions(data.subscriptions || []);
+    } catch (e) {
+      el.subEmpty.hidden = false;
+      el.subEmpty.textContent = '读取订阅失败：' + (e.message || '未知错误');
+    }
+  };
+
+  const renderSubscriptions = (subs) => {
+    el.subList.replaceChildren();
+    el.subEmpty.hidden = subs.length > 0;
+    if (subs.length === 0) {
+      el.subEmpty.textContent = '还没有订阅。添加频道后，新视频会自动下载。';
+      return;
+    }
+    subs.forEach((s) => el.subList.appendChild(createSubCard(s)));
+  };
+
+  const createSubCard = (s) => {
+    const li = document.createElement('li');
+    li.className = 'sub-item';
+    li.dataset.id = s.id;
+
+    const head = document.createElement('div');
+    head.className = 'sub-item-head';
+    const title = document.createElement('span');
+    title.className = 'sub-item-title';
+    title.textContent = s.name || s.platform || '订阅';
+    const meta = document.createElement('span');
+    meta.className = 'sub-item-meta';
+    const checked = s.last_checked ? new Date(s.last_checked * 1000).toLocaleString() : '未检查';
+    const known = Array.isArray(s.last_video_ids) ? s.last_video_ids.length : 0;
+    meta.textContent = `${s.platform} · 已关注 ${known} 个视频 · 最近检查 ${checked}`;
+    head.appendChild(title);
+    head.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'sub-item-actions';
+    const checkBtn = document.createElement('button');
+    checkBtn.type = 'button';
+    checkBtn.className = 'btn btn-ghost btn-sm';
+    checkBtn.textContent = '检查更新';
+    checkBtn.addEventListener('click', () => checkSubscription(s.id));
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn btn-ghost btn-sm';
+    delBtn.textContent = '删除';
+    delBtn.addEventListener('click', () => deleteSubscription(s.id));
+    actions.appendChild(checkBtn);
+    actions.appendChild(delBtn);
+
+    li.appendChild(head);
+    li.appendChild(actions);
+    return li;
+  };
+
+  const addSubscription = async () => {
+    const url = el.subUrl.value.trim();
+    if (!url) { showSubHint('请粘贴频道主页链接', true); return; }
+    el.subAddBtn.disabled = true;
+    try {
+      const data = await request('/api/subscriptions', {
+        method: 'POST',
+        body: JSON.stringify({
+          url,
+          name: el.subName.value.trim(),
+          quality: el.subQuality.value,
+          auto_check: el.subAuto.checked,
+        }),
+      });
+      const known = Array.isArray(data.last_video_ids) ? data.last_video_ids.length : 0;
+      showSubHint(`已订阅「${data.name || data.platform}」，记录 ${known} 个已有视频；之后发布的新视频将自动下载`, false);
+      el.subUrl.value = '';
+      el.subName.value = '';
+      loadSubscriptions();
+    } catch (e) {
+      showSubHint(e.message || '添加订阅失败', true);
+    } finally {
+      el.subAddBtn.disabled = false;
+    }
+  };
+
+  const checkSubscription = async (id) => {
+    try {
+      const data = await request(`/api/subscriptions/${id}/check`, { method: 'POST' });
+      const n = (data.new_videos || []).length;
+      const tid = (data.task_ids || []).length;
+      if (n === 0) {
+        showSubHint('已是最新，没有新视频', false);
+      } else {
+        showSubHint(`发现 ${n} 个新视频，已加入下载队列（${tid} 个任务）`, false);
+        switchView('download');
+      }
+      loadSubscriptions();
+    } catch (e) {
+      showSubHint(e.message || '检查失败', true);
+    }
+  };
+
+  const deleteSubscription = async (id) => {
+    if (!window.confirm('确定取消该订阅？已下载的视频不会删除。')) return;
+    try {
+      await request(`/api/subscriptions/${id}`, { method: 'DELETE' });
+      loadSubscriptions();
+    } catch (e) {
+      showSubHint(e.message || '删除失败', true);
+    }
+  };
+
+  const showSubHint = (msg, isError) => {
+    el.subHint.hidden = false;
+    el.subHint.textContent = msg;
+    el.subHint.classList.toggle('is-error', !!isError);
   };
 
   const createLibCard = (item) => {
@@ -1228,6 +1363,8 @@
 
   el.tabDownload.addEventListener('click', () => switchView('download'));
   el.tabLibrary.addEventListener('click', () => switchView('library'));
+  el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
+  el.subAddBtn.addEventListener('click', addSubscription);
   el.libRefresh.addEventListener('click', loadLibrary);
   el.libSearch.addEventListener('input', debounce(loadLibrary, 300));
   el.libPlatform.addEventListener('change', loadLibrary);
@@ -1243,7 +1380,7 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
@@ -1262,7 +1399,8 @@
       node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
       node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
       node.libraryEnabled = !!(library && library.enabled);
-      if (node.libraryEnabled) el.tabs.hidden = false;
+      node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
+      if (node.libraryEnabled || node.subscriptionsEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();
     })

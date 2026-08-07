@@ -611,3 +611,19 @@ img { max-width: 100%; display: block; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .queue-bar:empty::before { content: "暂无任务"; }
+
+/* ---- 订阅追更 ---- */
+.sub-head { display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.sub-tip { font-size: .82rem; color: var(--text-mute); }
+.sub-add { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin-bottom: .8rem; }
+.sub-add .adv-input { flex: 1; min-width: 180px; }
+.sub-auto { display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; color: var(--text-mute); }
+.sub-hint { margin: .2rem 0 .8rem; font-size: .85rem; color: var(--text-mute); }
+.sub-hint.is-error { color: #dc2626; }
+.sub-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .6rem; }
+.sub-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .7rem .9rem; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--panel, #fff); }
+.sub-item-head { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.sub-item-title { font-weight: 600; color: var(--text); }
+.sub-item-meta { font-size: .78rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub-item-actions { display: flex; gap: .5rem; flex-shrink: 0; }
+.sub-empty { color: var(--text-mute); font-size: .9rem; margin-top: .6rem; }
