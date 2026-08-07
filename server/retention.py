@@ -92,11 +92,11 @@ class RetentionConfig:
 
     # 4) 媒体本体：默认关（用户资产），开启后走回收站
     media_enabled: bool = False
-    media_days: float = 90.0
+    media_days: float = 30.0
 
     # 5) 容量上限（GB）：默认关；超额时按最旧删媒体，同样走回收站
     quota_enabled: bool = False
-    quota_gb: float = 50.0
+    quota_gb: float = 20.0
 
     # 媒体删除是否必须走回收站（强烈建议保持 True）
     media_use_trash: bool = True

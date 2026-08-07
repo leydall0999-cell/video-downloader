@@ -1582,9 +1582,9 @@
     el.cleanThumbsOn.checked = !!cfg.thumbs_enabled;
     el.cleanThumbsDays.value = cfg.thumbs_days ?? 30;
     el.cleanMediaOn.checked = !!cfg.media_enabled;
-    el.cleanMediaDays.value = cfg.media_days ?? 90;
+    el.cleanMediaDays.value = cfg.media_days ?? 30;
     el.cleanQuotaOn.checked = !!cfg.quota_enabled;
-    el.cleanQuotaGb.value = cfg.quota_gb ?? 50;
+    el.cleanQuotaGb.value = cfg.quota_gb ?? 20;
     applyTrashLock();
   };
 
@@ -1598,9 +1598,9 @@
     thumbs_enabled: el.cleanThumbsOn.checked,
     thumbs_days: Number(el.cleanThumbsDays.value) || 0,
     media_enabled: el.cleanMediaOn.checked,
-    media_days: Number(el.cleanMediaDays.value) || 90,
+    media_days: Number(el.cleanMediaDays.value) || 30,
     quota_enabled: el.cleanQuotaOn.checked,
-    quota_gb: Number(el.cleanQuotaGb.value) || 50,
+    quota_gb: Number(el.cleanQuotaGb.value) || 20,
   });
 
   const paintUsage = (usage) => {
