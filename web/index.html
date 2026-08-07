@@ -223,6 +223,7 @@
       <div class="lib-head-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="libCleanup" hidden>🧹 自动清理</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libArchive" hidden>☁️ 归档网盘</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="libCrypto" hidden>🔐 保险箱</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
       </div>
     </div>
@@ -574,6 +575,60 @@
     </div>
   </div>
 </dialog>
+
+  <!-- 库内保险箱 -->
+  <dialog id="cryptoModal" class="modal" aria-labelledby="cryptoModalTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="cryptoModalTitle">🔐 媒体库保险箱</h2>
+        <button type="button" class="modal-close" id="cryptoModalClose" aria-label="关闭">✕</button>
+      </div>
+
+      <!-- 设密码 / 解锁 / 已解锁 三态 -->
+      <div id="cryptoView">
+        <!-- 尚未设置密码 -->
+        <div data-view="set" hidden>
+          <p class="modal-sub">为保险箱设置一个主密码。密码只用于在本机派生密钥，<b>服务端不存储明文</b>，忘记密码将无法恢复已加密文件。</p>
+          <label class="field"><span>主密码</span><input type="password" id="cryptoPass" class="adv-input" placeholder="至少 4 位" /></label>
+          <label class="field"><span>确认密码</span><input type="password" id="cryptoConfirm" class="adv-input" placeholder="再次输入" /></label>
+          <p class="arc-msg" id="cryptoSetMsg" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="cryptoSetPass">设置并解锁</button>
+          </div>
+        </div>
+
+        <!-- 已设密码但锁定 -->
+        <div data-view="unlock" hidden>
+          <p class="modal-sub">保险箱已锁定，输入主密码解锁后即可加密 / 解密。</p>
+          <label class="field"><span>主密码</span><input type="password" id="cryptoUnlockPass" class="adv-input" placeholder="输入主密码" /></label>
+          <p class="arc-msg" id="cryptoUnlockMsg" hidden></p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="cryptoUnlock">解锁</button>
+          </div>
+        </div>
+
+        <!-- 已解锁 -->
+        <div data-view="open" hidden>
+          <p class="modal-sub">保险箱已解锁。勾选文件后加密（原件移入回收站保底）或解密还原。</p>
+          <div class="arc-actions">
+            <label class="arc-filter">筛选
+              <select id="cryptoFilter" class="adv-input adv-input-sm">
+                <option value="all">全部</option>
+                <option value="plain">未加密</option>
+                <option value="enc">已加密</option>
+              </select>
+            </label>
+            <button type="button" class="btn btn-success btn-sm" id="cryptoEncrypt">🔒 加密选中</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="cryptoDecrypt">🔓 解密选中</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="cryptoLock">锁定</button>
+          </div>
+          <ul class="arc-preview" id="cryptoList"></ul>
+          <p class="arc-msg" id="cryptoStatus" hidden></p>
+          <div class="arc-job" id="cryptoJob" hidden></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
 
 <script src="app.js"></script>
 </body>

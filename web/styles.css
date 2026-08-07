@@ -757,3 +757,16 @@ img { max-width: 100%; display: block; }
 .arc-records-list li { font-size: .74rem; color: var(--text-mute); word-break: break-all; }
 .arc-records-empty { font-style: italic; }
 
+/* ===== 库内保险箱弹窗 ===== */
+.lib-lock-badge {
+  position: absolute; top: .4rem; left: .4rem;
+  background: rgba(20, 24, 34, .78); color: #fff;
+  font-size: .66rem; font-weight: 600; padding: .12rem .4rem; border-radius: .4rem;
+  pointer-events: none;
+}
+.lib-thumb { position: relative; }
+[data-view] .field { margin-bottom: .6rem; }
+.arc-filter { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; color: var(--text-mute); }
+.adv-input-sm { width: auto; padding: .25rem .4rem; font-size: .8rem; }
+
+

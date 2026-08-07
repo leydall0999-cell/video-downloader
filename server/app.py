@@ -46,6 +46,7 @@ import subscriptions as subs_mod
 import ffmpeg_tools as fftools
 import retention as retention_mod
 import archive as archive_mod
+import crypto_vault as crypto_mod
 from batch import BatchScheduler
 from clouddrive import (
     BaiduProvider,
@@ -409,6 +410,66 @@ archive_store = archive_mod.ArchiveStore(ARCHIVE_CONFIG_PATH)
 ARCHIVE_JOBS: dict[str, dict] = {}
 ARCHIVE_LOCK = threading.Lock()
 
+# ---- 库内保险箱（桌面版功能）：选中文件就地 AES 加密为 .vdlenc，播放前临时解密 ----
+# 与媒体库同一开关。内存密钥 VAULT_KEY 为 None 即「锁定」态；vault.json 只存 salt+verify，
+# 绝不存明文密码或密钥（见 crypto_vault.new_vault / unlock_key）。
+CRYPTO_ENABLED = (
+    bool(getattr(sys, "frozen", False))
+    or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
+    or bool(os.environ.get("VDL_CRYPTO_ENABLED"))
+)
+VAULT_PATH = Path(
+    os.environ.get("VDL_VAULT_CONFIG") or (Path.home() / ".video-downloader" / "vault.json")
+)
+VAULT_LOCK = threading.Lock()
+VAULT_KEY: bytes | None = None  # 解锁后驻留内存；锁定/重启即清空
+CRYPTO_JOBS: dict[str, dict] = {}
+CRYPTO_LOCK = threading.Lock()
+# 解密播放临时目录（与下载目录同盘，避免跨卷复制大文件）
+VAULT_TMP = DOWNLOAD_DIR / ".vault_tmp"
+VAULT_TMP.mkdir(parents=True, exist_ok=True)
+CRYPTO_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-crypto")
+
+
+def _vault_load() -> dict | None:
+    try:
+        if VAULT_PATH.exists():
+            return json.loads(VAULT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def _vault_save(vault: dict) -> None:
+    VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = VAULT_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(vault, ensure_ascii=False), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(VAULT_PATH)
+    try:
+        os.chmod(VAULT_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def _vault_tmp_for(lib_id: str) -> Path:
+    VAULT_TMP.mkdir(parents=True, exist_ok=True)
+    return VAULT_TMP / (lib_id + ".dec")
+
+
+def _prune_vault_tmp(max_age_seconds: int = 1800) -> None:
+    """清理解密播放的临时文件（超过 30 分钟），避免明文长期留盘。"""
+    try:
+        now = time.time()
+        for f in VAULT_TMP.iterdir():
+            if f.is_file() and now - f.stat().st_mtime > max_age_seconds:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
 
 # --------------------------------------------------------------------------- #
 # 自动解说（松耦合桥接 commentary-pipeline/process.py，不重写解说逻辑）
@@ -646,6 +707,11 @@ def node_info() -> dict:
             "configured": (
                 archive_store.has_creds(archive_store.get().provider) if ARCHIVE_ENABLED else False
             ),
+        },
+        "crypto": {
+            "enabled": CRYPTO_ENABLED,
+            "has_pass": bool(_vault_load()) if CRYPTO_ENABLED else False,
+            "locked": VAULT_KEY is None,
         },
     }
 
@@ -1492,6 +1558,252 @@ def _prune_archive_jobs() -> None:
                 if j.get("status") in ("completed", "failed", "canceled")]
         for jid in (done[:-50] if len(done) > 50 else []):
             ARCHIVE_JOBS.pop(jid, None)
+
+
+# --------------------------------------------------------------------------- #
+# 库内保险箱：选中文件就地 AES 加密 / 解密 + 解密播放
+# --------------------------------------------------------------------------- #
+class CryptoSetPassRequest(BaseModel):
+    passwd: str = Field(min_length=1, max_length=512)
+    confirm: str = Field(default="", max_length=512)
+    old: str = Field(default="", max_length=512)
+
+
+class CryptoUnlockRequest(BaseModel):
+    passwd: str = Field(min_length=1, max_length=512)
+
+
+class CryptoIdsRequest(BaseModel):
+    lib_ids: list[str] = Field(default_factory=list)
+
+
+def _require_crypto() -> None:
+    if not CRYPTO_ENABLED:
+        raise HTTPException(status_code=404, detail="保险箱功能未启用")
+
+
+def _require_unlocked() -> None:
+    if VAULT_KEY is None:
+        raise HTTPException(status_code=423, detail="保险箱已锁定，请先解锁")
+
+
+def _crypto_job_status(job_id: str) -> dict:
+    with CRYPTO_LOCK:
+        job = CRYPTO_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
+@app.get("/api/crypto/status")
+def crypto_status() -> dict:
+    _require_crypto()
+    return {
+        "enabled": CRYPTO_ENABLED,
+        "has_pass": bool(_vault_load()),
+        "locked": VAULT_KEY is None,
+    }
+
+
+@app.post("/api/crypto/set-pass")
+def crypto_set_pass(req: CryptoSetPassRequest) -> dict:
+    _require_crypto()
+    vault = _vault_load()
+    if vault is not None:
+        # 已有密码：必须提供正确的旧密码方可修改
+        if not req.old or not crypto_mod.verify_passphrase(req.old, vault):
+            raise HTTPException(status_code=400, detail="旧密码错误")
+    else:
+        if req.passwd != req.confirm:
+            raise HTTPException(status_code=400, detail="两次输入的密码不一致")
+    if len(req.passwd) < 4:
+        raise HTTPException(status_code=400, detail="密码至少 4 位")
+    new_vault = crypto_mod.new_vault(req.passwd)
+    _vault_save(new_vault)
+    # 设完即解锁，立即可用
+    global VAULT_KEY
+    VAULT_KEY = crypto_mod.unlock_key(req.passwd, new_vault)
+    return {"has_pass": True, "locked": False}
+
+
+@app.post("/api/crypto/unlock")
+def crypto_unlock(req: CryptoUnlockRequest) -> dict:
+    _require_crypto()
+    vault = _vault_load()
+    if not vault:
+        raise HTTPException(status_code=400, detail="尚未设置保险箱密码")
+    if not crypto_mod.verify_passphrase(req.passwd, vault):
+        raise HTTPException(status_code=401, detail="密码错误")
+    global VAULT_KEY
+    VAULT_KEY = crypto_mod.unlock_key(req.passwd, vault)
+    return {"locked": False}
+
+
+@app.post("/api/crypto/lock")
+def crypto_lock() -> dict:
+    _require_crypto()
+    global VAULT_KEY
+    VAULT_KEY = None
+    return {"locked": True}
+
+
+def _kind_of(path: Path) -> str:
+    suf = path.suffix.lower()
+    if suf in library_mod.AUDIO_EXTS:
+        return "audio"
+    if suf in library_mod.IMAGE_EXTS:
+        return "image"
+    return "video"
+
+
+def _run_crypto_job(job_id: str, lib_ids: list[str], mode: str) -> None:
+    """mode = 'encrypt' | 'decrypt'。加密把原件移回收站保底；解密还原原名并删除 .vdlenc。"""
+    total = len(lib_ids)
+    done = 0
+    errors: list[str] = []
+    with CRYPTO_LOCK:
+        job = CRYPTO_JOBS.get(job_id)
+        if job:
+            job["status"] = "running"
+            job["total"] = total
+
+    for lid in lib_ids:
+        with CRYPTO_LOCK:
+            job = CRYPTO_JOBS.get(job_id)
+            if not job or job.get("cancel"):
+                with CRYPTO_LOCK:
+                    if job:
+                        job["status"] = "canceled"
+                return
+        src = library_mod._resolve_safe(DOWNLOAD_DIR, lid)
+        if not src:
+            errors.append(lid + ": 文件不存在")
+            done += 1
+            with CRYPTO_LOCK:
+                if job:
+                    job["done"] = done
+            continue
+        try:
+            if mode == "encrypt":
+                if src.suffix.lower() == library_mod.ENCRYPTED_EXT:
+                    errors.append(src.name + ": 已是加密文件")
+                else:
+                    dst = src.parent / (src.name + library_mod.ENCRYPTED_EXT)
+                    crypto_mod.encrypt_file(src, dst, VAULT_KEY, src.name, _kind_of(src))
+                    # 原件移回收站保底，绝不静默硬删
+                    retention_mod.move_to_trash(src)
+            else:  # decrypt
+                if src.suffix.lower() != library_mod.ENCRYPTED_EXT:
+                    errors.append(src.name + ": 不是加密文件")
+                else:
+                    orig_name, _kind, _ext = crypto_mod.read_header(src)
+                    out = src.parent / orig_name
+                    if out.exists():
+                        errors.append(src.name + ": 还原目标已存在，跳过")
+                    else:
+                        tmp_dec = src.parent / "tmp_dec"
+                        crypto_mod.decrypt_file(src, tmp_dec, VAULT_KEY)
+                        tmp_dec.replace(out)
+                        src.unlink()  # 解密成功才删 .vdlenc
+        except Exception as exc:  # 单文件失败不中断整批
+            errors.append(src.name + ": " + type(exc).__name__ + " " + str(exc)[:120])
+        done += 1
+        with CRYPTO_LOCK:
+            if job:
+                job["done"] = done
+                job["errors"] = errors
+
+    with CRYPTO_LOCK:
+        job = CRYPTO_JOBS.get(job_id)
+        if job and job.get("status") != "canceled":
+            job["status"] = "completed"
+            job["errors"] = errors
+
+
+@app.post("/api/crypto/encrypt")
+def crypto_encrypt(req: CryptoIdsRequest) -> dict:
+    _require_crypto()
+    _require_unlocked()
+    if not req.lib_ids:
+        raise HTTPException(status_code=400, detail="未选择文件")
+    job_id = "cry_" + uuid.uuid4().hex[:12]
+    with CRYPTO_LOCK:
+        CRYPTO_JOBS[job_id] = {"status": "queued", "done": 0, "total": len(req.lib_ids),
+                               "errors": [], "cancel": False, "mode": "encrypt"}
+    CRYPTO_EXECUTOR.submit(_run_crypto_job, job_id, list(req.lib_ids), "encrypt")
+    _prune_crypto_jobs()
+    return {"job_id": job_id}
+
+
+@app.post("/api/crypto/decrypt")
+def crypto_decrypt(req: CryptoIdsRequest) -> dict:
+    _require_crypto()
+    _require_unlocked()
+    if not req.lib_ids:
+        raise HTTPException(status_code=400, detail="未选择文件")
+    job_id = "cry_" + uuid.uuid4().hex[:12]
+    with CRYPTO_LOCK:
+        CRYPTO_JOBS[job_id] = {"status": "queued", "done": 0, "total": len(req.lib_ids),
+                               "errors": [], "cancel": False, "mode": "decrypt"}
+    CRYPTO_EXECUTOR.submit(_run_crypto_job, job_id, list(req.lib_ids), "decrypt")
+    _prune_crypto_jobs()
+    return {"job_id": job_id}
+
+
+@app.get("/api/crypto/job/{job_id}")
+def crypto_job(job_id: str) -> dict:
+    _require_crypto()
+    return _crypto_job_status(job_id)
+
+
+@app.post("/api/crypto/cancel/{job_id}")
+def crypto_cancel(job_id: str) -> dict:
+    _require_crypto()
+    with CRYPTO_LOCK:
+        job = CRYPTO_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        job["cancel"] = True
+    return {"canceled": True}
+
+
+def _prune_crypto_jobs() -> None:
+    if len(CRYPTO_JOBS) <= 200:
+        return
+    with CRYPTO_LOCK:
+        done = [jid for jid, j in CRYPTO_JOBS.items()
+                if j.get("status") in ("completed", "failed", "canceled")]
+        for jid in (done[:-50] if len(done) > 50 else []):
+            CRYPTO_JOBS.pop(jid, None)
+
+
+@app.get("/api/library/encfile/{lib_id}")
+def library_encfile(lib_id: str) -> FileResponse:
+    """解密播放：把 .vdlenc 临时解密到 .vault_tmp 并返回（带 Range 支持）。锁定时 423。"""
+    _require_crypto()
+    _require_unlocked()
+    src = library_mod._resolve_safe(DOWNLOAD_DIR, lib_id)
+    if not src or src.suffix.lower() != library_mod.ENCRYPTED_EXT:
+        raise HTTPException(status_code=404, detail="加密文件不存在")
+    try:
+        orig_name, _kind, _ext = crypto_mod.read_header(src)
+    except Exception:
+        raise HTTPException(status_code=400, detail="加密文件损坏")
+    tmp = _vault_tmp_for(lib_id)
+    try:
+        crypto_mod.decrypt_file(src, tmp, VAULT_KEY)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="解密失败：" + type(exc).__name__)
+    ext = Path(orig_name).suffix.lower()
+    media = {
+        ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime",
+        ".webm": "video/webm", ".avi": "video/x-msvideo", ".m4v": "video/mp4",
+        ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
+        ".flac": "audio/flac", ".ogg": "audio/ogg", ".wav": "audio/wav",
+        ".opus": "audio/ogg", ".gif": "image/gif", ".webp": "image/webp",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(path=str(tmp), filename=orig_name, media_type=media)
 
 
 # ---- 字幕处理：在线字幕提取 / 内嵌字幕抽取 / 硬字幕烧录 / 可选 LLM 翻译 ----

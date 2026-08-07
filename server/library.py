@@ -16,10 +16,14 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import crypto_vault as crypto_mod
+
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".ts", ".flv", ".mpeg", ".mpg"}
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav", ".opus", ".wma", ".m4r"}
 IMAGE_EXTS = {".gif", ".webp", ".jpg", ".jpeg", ".png"}
 MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS | IMAGE_EXTS
+# 库内保险箱加密文件后缀（内容 AES 加密，仅文件头明文保留原名/类型）。
+ENCRYPTED_EXT = ".vdlenc"
 
 THUMB_DIR_NAME = ".thumbs"
 # 批量抽帧产物目录（`<标题>.抽帧[.n]`）：里面动辄上百张图，不进媒体库列表，避免刷屏。
@@ -83,8 +87,6 @@ def scan_library(download_dir: Path) -> list[dict[str, Any]]:
         if not path.is_file():
             continue
         suffix = path.suffix.lower()
-        if suffix not in MEDIA_EXTS:
-            continue
         rel = path.relative_to(download_dir)
         # 跳过缩略图缓存目录与转换目录里的临时/派生文件（可选包含 conversions，但跳过 .part）
         if rel.parts and rel.parts[0] == THUMB_DIR_NAME:
@@ -94,28 +96,49 @@ def scan_library(download_dir: Path) -> list[dict[str, Any]]:
             continue
         if _in_progress(path):
             continue
-        meta = _load_sidecar(path)
-        if suffix in AUDIO_EXTS:
-            kind = "audio"
-        elif suffix in IMAGE_EXTS:
-            kind = "image"
+        # 库内保险箱加密项：读明文文件头还原原名/类型，标记 encrypted
+        encrypted = False
+        if suffix == ENCRYPTED_EXT:
+            try:
+                orig_name, orig_kind, orig_ext = crypto_mod.read_header(path)
+            except Exception:
+                continue  # 损坏/非法的加密文件，跳过
+            kind = orig_kind
+            ext = orig_ext or "vdlenc"
+            name = orig_name
+            encrypted = True
+        elif suffix not in MEDIA_EXTS:
+            continue
         else:
-            kind = "video"
+            if suffix in AUDIO_EXTS:
+                kind = "audio"
+            elif suffix in IMAGE_EXTS:
+                kind = "image"
+            else:
+                kind = "video"
+            ext = suffix.lstrip(".")
+            name = path.name
+        meta = _load_sidecar(path)
+        if encrypted:
+            title = meta.get("title") or Path(orig_name).stem
+        else:
+            title = meta.get("title") or path.stem
         stat = path.stat()
         items.append(
             {
                 "id": encode_id(rel.as_posix()),
-                "name": path.name,
-                "title": meta.get("title") or path.stem,
+                "name": name,
+                "title": title,
                 "platform": meta.get("platform") or "",
                 "uploader": meta.get("uploader") or "",
                 "duration": int(meta.get("duration") or 0),
                 "source_url": meta.get("source_url") or "",
                 "thumbnail": meta.get("thumbnail") or "",  # 外链缩略图，可能失效，前端可回退
                 "kind": kind,
-                "ext": suffix.lstrip("."),
+                "ext": ext,
                 "size": stat.st_size,
                 "mtime": int(stat.st_mtime),
+                "encrypted": encrypted,
             }
         )
     items.sort(key=lambda x: x["mtime"], reverse=True)
@@ -134,6 +157,9 @@ def get_thumbnail(download_dir: Path, lib_id: str, ffmpeg_bin: str) -> Path | No
     """为视频生成首帧缩略图（缓存）。音频返回 None；生成失败返回 None。"""
     item_path = _resolve_safe(download_dir, lib_id)
     if not item_path or item_path.suffix.lower() in AUDIO_EXTS:
+        return None
+    # 加密项无缩略图（内容是密文，抽帧无意义），前端显示锁图标
+    if item_path.suffix.lower() == ENCRYPTED_EXT:
         return None
     tp = _thumb_path(download_dir, lib_id)
     if tp.exists():

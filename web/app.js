@@ -144,6 +144,23 @@
     arcPreview: $('arcPreview'),
     arcRecords: $('arcRecords'),
     arcForget: $('arcForget'),
+    // 库内保险箱（桌面版功能）
+    libCrypto: $('libCrypto'),
+    cryptoModal: $('cryptoModal'),
+    cryptoModalClose: $('cryptoModalClose'),
+    cryptoView: $('cryptoView'),
+    cryptoPass: $('cryptoPass'),
+    cryptoConfirm: $('cryptoConfirm'),
+    cryptoUnlockPass: $('cryptoUnlockPass'),
+    cryptoSetPass: $('cryptoSetPass'),
+    cryptoUnlock: $('cryptoUnlock'),
+    cryptoLock: $('cryptoLock'),
+    cryptoFilter: $('cryptoFilter'),
+    cryptoList: $('cryptoList'),
+    cryptoEncrypt: $('cryptoEncrypt'),
+    cryptoDecrypt: $('cryptoDecrypt'),
+    cryptoStatus: $('cryptoStatus'),
+    cryptoJob: $('cryptoJob'),
     libSearch: $('libSearch'),
     libPlatform: $('libPlatform'),
     libKind: $('libKind'),
@@ -214,6 +231,9 @@
     archiveEnabled: false,
     archiveBaiduAvailable: false,
     archiveConfigured: false,
+    cryptoEnabled: false,
+    cryptoHasPass: false,
+    cryptoLocked: true,
   };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
@@ -1175,6 +1195,7 @@
   };
   const libThumbUrl = (id) => `/api/library/thumb/${encodeURIComponent(id)}`;
   const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}`;
+  const libEncFileUrl = (id) => `/api/library/encfile/${encodeURIComponent(id)}`;
 
   const switchView = (view) => {
     const isLib = view === 'library';
@@ -1367,8 +1388,14 @@
     }
     const fallback = document.createElement('span');
     fallback.className = 'lib-thumb-fallback';
-    fallback.textContent = item.kind === 'video' ? '🎬' : '🎵';
+    fallback.textContent = item.encrypted ? '🔒' : (item.kind === 'video' ? '🎬' : '🎵');
     thumbBox.appendChild(fallback);
+    if (item.encrypted) {
+      const lock = document.createElement('span');
+      lock.className = 'lib-lock-badge';
+      lock.textContent = '🔒 已加密';
+      thumbBox.appendChild(lock);
+    }
     if (item.duration) {
       const dur = document.createElement('span');
       dur.className = 'lib-duration';
@@ -1395,21 +1422,23 @@
   const openLibModal = (item) => {
     currentLibItem = item;
     el.libPlayer.replaceChildren();
+    const isEnc = !!item.encrypted;
+    const fileUrl = isEnc ? libEncFileUrl(item.id) : libFileUrl(item.id);
     if (item.kind === 'video') {
       const v = document.createElement('video');
-      v.src = libFileUrl(item.id);
+      v.src = fileUrl;
       v.controls = true;
       v.preload = 'metadata';
       v.className = 'lib-video';
       el.libPlayer.appendChild(v);
     } else if (item.kind === 'image') {
       const img = document.createElement('img');
-      img.src = libFileUrl(item.id);
+      img.src = fileUrl;
       img.className = 'lib-image';
       el.libPlayer.appendChild(img);
     } else {
       const a = document.createElement('audio');
-      a.src = libFileUrl(item.id);
+      a.src = fileUrl;
       a.controls = true;
       a.className = 'lib-audio';
       el.libPlayer.appendChild(a);
@@ -1431,7 +1460,15 @@
       row.append(kk, vv);
       el.libMeta.appendChild(row);
     });
-    el.libDownload.href = libFileUrl(item.id);
+    if (isEnc) {
+      const row = document.createElement('div');
+      row.className = 'lib-meta-row';
+      const kk = document.createElement('span'); kk.className = 'lib-meta-k'; kk.textContent = '保险箱';
+      const vv = document.createElement('span'); vv.className = 'lib-meta-v'; vv.textContent = '🔒 已加密存放';
+      row.append(kk, vv);
+      el.libMeta.appendChild(row);
+    }
+    el.libDownload.href = fileUrl;
     el.libDownload.setAttribute('download', item.name || 'video');
     if (typeof el.libModal.showModal === 'function') el.libModal.showModal();
     else el.libModal.setAttribute('open', '');
@@ -2121,6 +2158,173 @@
     if (node.baiduAuthUrl) window.open(node.baiduAuthUrl, '_blank');
   });
 
+  // ---- 库内保险箱（桌面版功能） ----
+  let cryptoItems = [];
+  let cryptoPollTimer = null;
+
+  const openCryptoModal = async () => {
+    if (!node.cryptoEnabled) return;
+    if (typeof el.cryptoModal.showModal === 'function') el.cryptoModal.showModal();
+    else el.cryptoModal.setAttribute('open', '');
+    await refreshCrypto();
+  };
+
+  const setCryptoView = (view) => {
+    el.cryptoView.querySelectorAll('[data-view]').forEach((d) => { d.hidden = d.dataset.view !== view; });
+  };
+
+  const setMsg = (elem, text, isErr) => {
+    if (!elem) return;
+    elem.hidden = !text;
+    elem.textContent = text || '';
+    elem.className = 'arc-msg' + (isErr ? ' is-err' : ' is-ok');
+  };
+
+  const refreshCrypto = async () => {
+    let st;
+    try { st = await request('/api/crypto/status'); }
+    catch (e) { setMsg(el.cryptoStatus, '读取保险箱状态失败：' + (e.message || ''), true); return; }
+    node.cryptoHasPass = !!st.has_pass;
+    node.cryptoLocked = !!st.locked;
+    setCryptoView(st.has_pass ? (st.locked ? 'unlock' : 'open') : 'set');
+    if (!st.locked) loadCryptoList();
+  };
+
+  const loadCryptoList = async () => {
+    if (node.cryptoLocked) return;
+    let data;
+    try { data = await request('/api/library'); }
+    catch (e) { return; }
+    cryptoItems = data.items || [];
+    renderCryptoList();
+  };
+
+  const renderCryptoList = () => {
+    const f = el.cryptoFilter ? el.cryptoFilter.value : 'all';
+    const list = cryptoItems.filter((it) => {
+      if (f === 'plain') return !it.encrypted;
+      if (f === 'enc') return !!it.encrypted;
+      return true;
+    });
+    el.cryptoList.replaceChildren();
+    if (list.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'arc-empty';
+      li.textContent = '没有匹配的文件';
+      el.cryptoList.appendChild(li);
+      return;
+    }
+    list.forEach((it) => {
+      const li = document.createElement('li');
+      li.className = 'arc-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'arc-item-cb';
+      cb.dataset.id = it.id;
+      const label = document.createElement('label');
+      label.className = 'arc-item-label';
+      const name = document.createElement('span');
+      name.className = 'arc-item-name';
+      name.textContent = (it.encrypted ? '🔒 ' : '') + (it.title || it.name);
+      const meta = document.createElement('span');
+      meta.className = 'arc-item-meta';
+      meta.textContent = `${it.kind} · ${formatBytes(it.size)}`;
+      label.append(name, meta);
+      li.append(cb, label);
+      el.cryptoList.appendChild(li);
+    });
+  };
+
+  const reloadCurrentEncPlayer = () => {
+    if (currentLibItem && currentLibItem.encrypted) {
+      const m = el.libPlayer.querySelector('video, audio, img');
+      if (m) m.src = libEncFileUrl(currentLibItem.id);
+    }
+  };
+
+  const pollCryptoJob = (jobId, mode) => {
+    if (cryptoPollTimer) clearInterval(cryptoPollTimer);
+    el.cryptoJob.hidden = false;
+    el.cryptoJob.className = 'arc-job';
+    cryptoPollTimer = setInterval(async () => {
+      let j;
+      try { j = await request('/api/crypto/job/' + jobId); }
+      catch (e) { clearInterval(cryptoPollTimer); return; }
+      const done = j.done || 0, total = j.total || 0;
+      let txt = `进度 ${done}/${total}` + (j.errors && j.errors.length ? ` · ${j.errors.length} 个出错` : '');
+      el.cryptoJob.textContent = txt;
+      if (j.status === 'completed' || j.status === 'failed' || j.status === 'canceled') {
+        clearInterval(cryptoPollTimer);
+        if (j.errors && j.errors.length) {
+          txt += '\n' + j.errors.slice(0, 5).join('\n');
+          el.cryptoJob.className = 'arc-job is-err';
+        } else {
+          el.cryptoJob.className = 'arc-job is-ok';
+        }
+        el.cryptoJob.textContent = txt;
+        loadCryptoList();
+        loadLibrary();
+      }
+    }, 800);
+  };
+
+  const cryptoRun = async (mode) => {
+    const ids = Array.from(el.cryptoList.querySelectorAll('.arc-item-cb:checked')).map((cb) => cb.dataset.id);
+    if (ids.length === 0) { setMsg(el.cryptoStatus, '请先勾选文件', true); return; }
+    setMsg(el.cryptoStatus, '');
+    try {
+      const r = await request('/api/crypto/' + mode, { method: 'POST', body: { lib_ids: ids } });
+      pollCryptoJob(r.job_id, mode);
+    } catch (e) {
+      setMsg(el.cryptoStatus, e.message || '操作失败', true);
+      el.cryptoJob.hidden = true;
+    }
+  };
+
+  // 按钮与输入绑定
+  if (el.libCrypto) el.libCrypto.addEventListener('click', openCryptoModal);
+  if (el.cryptoModalClose) el.cryptoModalClose.addEventListener('click', () => {
+    if (cryptoPollTimer) clearInterval(cryptoPollTimer);
+    if (typeof el.cryptoModal.close === 'function') el.cryptoModal.close();
+  });
+  if (el.cryptoModal) el.cryptoModal.addEventListener('click', (e) => { if (e.target === el.cryptoModal) el.cryptoModal.close(); });
+  if (el.cryptoSetPass) el.cryptoSetPass.addEventListener('click', async () => {
+    const pass = el.cryptoPass.value, confirm = el.cryptoConfirm.value;
+    setMsg(el.cryptoSetMsg, '');
+    if (!pass || pass.length < 4) { setMsg(el.cryptoSetMsg, '密码至少 4 位', true); return; }
+    if (pass !== confirm) { setMsg(el.cryptoSetMsg, '两次输入不一致', true); return; }
+    try {
+      await request('/api/crypto/set-pass', { method: 'POST', body: { passwd: pass, confirm } });
+      el.cryptoPass.value = ''; el.cryptoConfirm.value = '';
+      setMsg(el.cryptoSetMsg, '已设置并解锁', false);
+      node.cryptoHasPass = true; node.cryptoLocked = false;
+      setCryptoView('open');
+      loadCryptoList();
+    } catch (e) { setMsg(el.cryptoSetMsg, e.message || '设置失败', true); }
+  });
+  if (el.cryptoUnlock) el.cryptoUnlock.addEventListener('click', async () => {
+    const pass = el.cryptoUnlockPass.value;
+    setMsg(el.cryptoUnlockMsg, '');
+    try {
+      await request('/api/crypto/unlock', { method: 'POST', body: { passwd: pass } });
+      el.cryptoUnlockPass.value = '';
+      node.cryptoLocked = false;
+      setCryptoView('open');
+      loadCryptoList();
+      reloadCurrentEncPlayer();
+    } catch (e) { setMsg(el.cryptoUnlockMsg, e.message || '解锁失败', true); }
+  });
+  if (el.cryptoLock) el.cryptoLock.addEventListener('click', async () => {
+    try { await request('/api/crypto/lock', { method: 'POST' }); } catch (e) {}
+    node.cryptoLocked = true;
+    setCryptoView('unlock');
+    el.cryptoList.replaceChildren();
+    el.cryptoJob.hidden = true;
+  });
+  if (el.cryptoFilter) el.cryptoFilter.addEventListener('change', renderCryptoList);
+  if (el.cryptoEncrypt) el.cryptoEncrypt.addEventListener('click', () => cryptoRun('encrypt'));
+  if (el.cryptoDecrypt) el.cryptoDecrypt.addEventListener('click', () => cryptoRun('decrypt'));
+
   el.libRefresh.addEventListener('click', loadLibrary);
   el.libSearch.addEventListener('input', debounce(loadLibrary, 300));
   el.libPlatform.addEventListener('change', loadLibrary);
@@ -2350,7 +2554,7 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
@@ -2375,8 +2579,12 @@
       node.archiveEnabled = !!(archive && archive.enabled);
       node.archiveBaiduAvailable = !!(archive && archive.baidu_available);
       node.archiveConfigured = !!(archive && archive.configured);
+      node.cryptoEnabled = !!(crypto && crypto.enabled);
+      node.cryptoHasPass = !!(crypto && crypto.has_pass);
+      node.cryptoLocked = !!(crypto && crypto.locked);
       if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
       if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
+      if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (node.libraryEnabled || node.subscriptionsEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();

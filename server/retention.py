@@ -45,6 +45,7 @@ PROTECTED_NAMES = {
     ".retention.json",
     ".subscriptions.json",
     ".cleanup.json",
+    ".vault.json",
     ".DS_Store",
 }
 

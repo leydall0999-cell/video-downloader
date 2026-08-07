@@ -177,6 +177,28 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 - 前端：媒体库头部「☁️ 归档网盘」按钮 + 独立弹窗（provider 单选、WebDAV/百度凭据、路径模板+占位符提示、类型/静置/上限/删本地开关、定时自动开关、扫描预览清单+勾选、进度轮询、最近归档记录、忘记记录）。
 - 测试覆盖：`/tmp/test_archive.py`（12 组单测：模板渲染、`..` 穿越、筛选、去重、凭据脱敏/留空沿用/0600、正常上传、单条失败继续、删本地回收站不可用只传不删、回收站可用本体+侧车一起走、取消、human_size）；`/tmp/test_archive_routes.py`（TestClient 路由集成：nodes 开关、config 脱敏/私网 WebDAV 放行/非法 scheme 拒/删本地回收站不可用拒、scan、run 去重、cancel、forget、关闭 404）。
 
+## 2.9 库内保险箱（已实现）
+
+### 需求
+把媒体库里敏感的文件**就地 AES 加密**成 `.vdlenc` 留在原目录，列表显示 🔒；播放时输密码临时解密到缓存播放、关即清；可整体解密还原。原件加密成功后**移入系统回收站保底**，绝不静默硬删。忘记密码 = 文件永久不可恢复（密钥只在内存，服务端不存）。
+
+### 安全设计（改代码前必读）
+1. **密钥只在内存**：`vault.json` 只存 `{salt, verify, iterations}`，**绝不存明文密码、也绝不存 enc_key**；`verify = PBKDF2(pass, salt)[32:]`（派生主密钥 64B 的后半段），攻击者拿到 vault.json 仍需密码才能算出 enc_key。服务器/磁盘上永远没有可用于解密的密钥。
+2. **算法**：PBKDF2-HMAC-SHA256（600k 迭代）派生主密钥 → 切 enc_key(32B) 作 AES-256 密钥；每个文件独立随机 nonce_base，按 1MB 分块 GCM 加密，每块 nonce = nonce_base XOR 块序号，带 16B 认证标签，篡改即解密失败。
+3. **文件头明文仅含原名/类型**：`magic + nonce_base + 原名 + 类型`，便于扫描时显示原名与图标而无需解密内容；正文密文。
+4. **原件保底**：加密成功后原件移回收站（复用 `retention.move_to_trash` 四级兜底），回收站不可用则跳过加密并提示，绝不硬删用户资产。
+5. **解密播放为临时文件**：`/api/library/encfile/{id}` 把 `.vdlenc` 解密到 `.vault_tmp/` 再 `FileResponse`（HTML5 播放器原生支持 Range），由 `_prune_vault_tmp` 定时清理明文临时文件，避免长期留盘。
+6. **锁定态**：内存密钥 `VAULT_KEY=None` 即锁定；`encfile`/加密/解密均要求解锁（423），重启即自动锁定。
+
+### 技术方案
+- 新增 `server/crypto_vault.py`：`new_vault` / `verify_passphrase` / `unlock_key` / `encrypt_file` / `decrypt_file` / `read_header`（流式分块，支持 >1 块与非对齐大文件）。依赖 `cryptography`（新增 `requirements.txt`）。
+- `server/library.py`：`scan_library` 识别 `.vdlenc`，读明文文件头还原 `name/kind/ext` 并标 `encrypted:true`；缩略图对加密项返回 None（前端显示锁图标）。
+- `server/app.py`：`CRYPTO_ENABLED`（与媒体库同开关）+ `VAULT_KEY`(内存) + `VAULT_PATH`(0600)；路由 `GET /api/crypto/status`、`POST set-pass`(设完即解锁)、`POST unlock`(错密码 401)、`POST lock`、`POST encrypt`(job)、`POST decrypt`(job)、`GET job/{id}`、`POST cancel/{id}`、`GET /api/library/encfile/{id}`；`/api/nodes` 暴露 `crypto.enabled/has_pass/locked`；`retention.PROTECTED_NAMES` 加 `.vault.json`；`archive.pending_items` 跳过加密项。
+- 前端：媒体库头部「🔐 保险箱」按钮 + 弹窗（三态：设密码/解锁/已解锁；已解锁态可筛选未加密/已加密、勾选后加密或解密、显示进度与错误）；卡片与详情显示 🔒，加密项播放走 `encfile` 端点。
+- 测试：`tests/test_crypto_unit.py`（派生/校验、加解密往返含大文件>分块/空文件、错密码解密失败、read_header、损坏拒绝、vault 不泄露密钥）+ `tests/test_crypto_routes.py`（status/set-pass/unlock错对/encrypt移回收站+库识别/decrypt还原/lock清密钥/encfile内容一致/禁用 404）全过。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
-- 本地媒体库加密。
+- 桌面版种子下载（libtorrent 集成）。
+- 订阅监控后台自动下载（见 §3）。
+- 视频渲染/解说管线（见 MEMORY.md 解说规划）。
 - 详见 MEMORY.md 桌面其他功能思路。

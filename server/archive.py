@@ -310,6 +310,8 @@ def pending_items(items: list[dict], cfg: ArchiveConfig, store: ArchiveStore,
     max_bytes = max(0.0, float(cfg.max_file_gb or 0)) * 1024 ** 3
     out: list[dict] = []
     for it in items:
+        if it.get("encrypted"):
+            continue  # 加密项不进归档（避免把密文当明文媒体上传；需解密后再归档）
         if it.get("kind") not in kinds:
             continue
         size = int(it.get("size") or 0)
