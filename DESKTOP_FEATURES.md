@@ -216,6 +216,19 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 - `requirements.txt`：`libtorrent==2.0.11; sys_platform == "linux"`（条件依赖，避免 macOS 13 / Windows 无对应 wheel 时 `pip install -r` 失败）。macOS / Windows 桌面版手动安装：`pip install "libtorrent==2.0.11"`（2.0.11 提供 macOS 13 的 x86_64 wheel；arm64 需 macOS 14+，用 2.0.13）。
 - 测试：`tests/fake_libtorrent.py`（mock `lt` 表面：`FakeLT/FakeSession/FakeHandle/FakeTI/FakeStatus/FakeHash/FakeErr`，驱动全逻辑）+ `tests/test_torrent_unit.py`（9 项：magnet 归一化/缺 xt 拒/ftp 拒/公网放行/私网拒/`_is_safe_url`/`safe_save_path` 穿越防护/状态映射/侧车仅媒体/`describe` 字段）+ `tests/test_torrent_routes.py`（21 项：注入 `torrent_mod.lt=FakeLT()`、隔离 `torrent_manager`，覆盖 add/list/pause/resume/files 优先级/非法 uri 400/remove/nodes 暴露/禁用 404）全过。
 
+## 2.11 可选 API 鉴权（VDL_API_TOKEN，已实现，默认关）
+### 需求
+- 在线版公网开放、给外部用户使用时，防止任何人随意调用（下载/torrent/加工/读删媒体）。**个人本机/私用无需开启**。
+### 安全设计
+- 仅一个开关 `VDL_API_TOKEN`：设了即开启，没设维持无鉴权（当前行为）。
+- 中间件 `_ApiTokenMiddleware` 拦截所有 `/api/*`（除 `/api/nodes` 与静态资源外）；token 取自 `Authorization: Bearer <t>` 或 `X-Api-Key: <t>`，不匹配返回 401。
+- `/api/nodes` 故意放行并回传 `authRequired`，前端据此首次弹窗要 token（存 `localStorage.vdl_api_token`），之后所有请求自动带 `X-Api-Key`。
+- 固定前端 `request()` 隐患：multipart 上传（`.torrent` 文件）原本因 `headers:{}` 覆盖会丢掉鉴权头，已改为「合并增强、不覆盖」，且 FormData 不再强制 `Content-Type`（交给浏览器设 boundary）。
+- CORS `allow_headers` 已加 `X-Api-Key`。
+### 技术方案
+- `server/app.py`：`API_TOKEN = os.environ.get("VDL_API_TOKEN","").strip()`、`AUTH_REQUIRED = bool(API_TOKEN)`；`app.add_middleware(_ApiTokenMiddleware)`；`/api/nodes` 返回加 `authRequired`。
+- 测试：`tests/test_auth_routes.py`（7 项：nodes 公开且回传 authRequired / 无 token 拒 / Bearer 与 X-Api-Key 均接受 / 错 token 拒 / 静态根放行 / 未设 token 不鉴权）全过。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
 - 订阅监控后台自动下载（见 §3）。
 - 视频渲染/解说管线（见 MEMORY.md 解说规划）。

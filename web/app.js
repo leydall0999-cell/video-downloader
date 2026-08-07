@@ -291,11 +291,7 @@
 
   // ------------------------------------------------------------------ 工具
 
-  const request = async (path, options = {}, base = '') => {
-    const headers = { 'Content-Type': 'application/json' };
-    const subKey = localStorage.getItem('vdl_sub_key');
-    if (subKey) headers['X-Subscription-Key'] = subKey;
-    const response = await fetch(base + path, { headers, ...options });
+  const _parseResponse = async (response) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '' };
@@ -303,6 +299,33 @@
       throw err;
     }
     return payload;
+  };
+
+  const request = async (path, options = {}, base = '') => {
+    const headers = {};
+    const subKey = localStorage.getItem('vdl_sub_key');
+    if (subKey) headers['X-Subscription-Key'] = subKey;
+    const apiToken = localStorage.getItem('vdl_api_token');
+    if (apiToken) headers['X-Api-Key'] = apiToken;
+    // FormData（multipart 上传）不强制 Content-Type，交给浏览器设 boundary；
+    // 其余默认 JSON。options.headers 仅做增强、不覆盖（避免丢失 token）。
+    const isForm = options.body instanceof FormData;
+    if (!isForm && !(options.headers && 'Content-Type' in options.headers)) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const merged = { ...headers, ...(options.headers || {}) };
+    const doFetch = () => fetch(base + path, { ...options, headers: merged });
+    let response = await doFetch();
+    if (response.status === 401) {
+      // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
+      const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
+      if (t && t.trim()) {
+        localStorage.setItem('vdl_api_token', t.trim());
+        merged['X-Api-Key'] = t.trim();
+        response = await doFetch();
+      }
+    }
+    return await _parseResponse(response);
   };
 
   const formatBytes = (bytes) => {
@@ -2710,7 +2733,12 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, authRequired }) => {
+      node.authRequired = !!authRequired;
+      if (node.authRequired && !localStorage.getItem('vdl_api_token')) {
+        const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
+        if (t && t.trim()) localStorage.setItem('vdl_api_token', t.trim());
+      }
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];

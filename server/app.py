@@ -35,6 +35,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import File as _FastAPIFile, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -631,9 +632,45 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Subscription-Key"],
+    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key"],
 )
 logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
+
+
+# --------------------------------------------------------------------------- #
+# 可选 API 鉴权（对外给用户使用时建议开启）
+# 设置 VDL_API_TOKEN 后，除 /api/nodes（前端要先拿到 authRequired 才能引导输入 token）
+# 与静态资源外，所有 /api/* 请求必须携带正确 token，否则 401。
+# token 取自 Authorization: Bearer <t> 或 X-Api-Key: <t>。
+# 未设置则维持当前无鉴权行为（个人本机/私用）。
+# --------------------------------------------------------------------------- #
+API_TOKEN = (os.environ.get("VDL_API_TOKEN") or "").strip()
+AUTH_REQUIRED = bool(API_TOKEN)
+
+
+class _ApiTokenMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not AUTH_REQUIRED:
+            return await call_next(request)
+        path = request.url.path
+        # 静态资源与节点信息接口放行：前端需先读 authRequired 才能引导用户输入 token
+        if not path.startswith("/api/") or path == "/api/nodes":
+            return await call_next(request)
+        auth = request.headers.get("Authorization", "")
+        token = ""
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        else:
+            token = (request.headers.get("X-Api-Key") or "").strip()
+        if token and token == API_TOKEN:
+            return await call_next(request)
+        return JSONResponse(
+            status_code=401,
+            content={"error": "缺少或错误的 API Token", "hint": "服务端已启用 VDL_API_TOKEN，请输入访问令牌"},
+        )
+
+
+app.add_middleware(_ApiTokenMiddleware)
 
 
 # --------------------------------------------------------------------------- #
@@ -740,6 +777,7 @@ def node_info() -> dict:
             "enabled": TORRENT_ENABLED,
             "available": torrent_mod.available(),
         },
+        "authRequired": AUTH_REQUIRED,
     }
 
 
