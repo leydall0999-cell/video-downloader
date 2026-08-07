@@ -63,6 +63,19 @@ class _ProgressReader:
 # WebDAV
 # --------------------------------------------------------------------------- #
 
+def _safe_rel_path(dest_path: str, fallback_name: str) -> str | None:
+    """安全规范化用户给定的目标路径，杜绝 '..' 穿越与绝对路径跳出服务根。
+
+    返回相对路径段（用 '/' 连接）；为空或仅含 '.'/'..' 时返回 None，调用方应回退到 fallback_name。
+    不保留前导/尾随斜杠，也不允许任何段为 '..' —— 这样无论 WebDAV 还是百度，
+    文件都只能落在用户网盘根目录之下，无法覆盖根外的既有文件。
+    """
+    if not dest_path or not dest_path.strip():
+        return None
+    parts = [p for p in dest_path.replace("\\", "/").split("/") if p not in ("", ".", "..")]
+    return "/".join(parts) or None
+
+
 class WebDAVProvider:
     name = "webdav"
 
@@ -90,8 +103,8 @@ class WebDAVProvider:
         base_url = (creds.get("url") or "").strip().rstrip("/")
         if not base_url:
             raise CloudError("WebDAV 地址为空", "请在设置中填写完整的 WebDAV 地址")
-        dest_path = (dest_path or "").strip() or local_path.name
-        dest_path = dest_path.lstrip("/")  # base 已含用户根（如 Nextcloud 的 .../dav/files/user）
+        norm = _safe_rel_path(dest_path, local_path.name)
+        dest_path = (norm or local_path.name).lstrip("/")  # base 已含用户根（如 Nextcloud 的 .../dav/files/user），过滤 '..' 防穿越
 
         session = requests.Session()
         user = (creds.get("user") or "").strip()
@@ -135,9 +148,8 @@ class BaiduProvider:
         token = (creds.get("token") or "").strip()
         if not token:
             raise CloudError("未授权百度网盘", "请先在弹窗中完成百度账号授权")
-        dest_path = (dest_path or "").strip() or ("/" + local_path.name)
-        if not dest_path.startswith("/"):
-            dest_path = "/" + dest_path
+        norm = _safe_rel_path(dest_path, local_path.name)
+        dest_path = "/" + (norm or local_path.name)  # 百度以 '/' 为根，过滤 '..' 防穿越
         size = local_path.stat().st_size
 
         # 1) 计算每块（4MB）md5

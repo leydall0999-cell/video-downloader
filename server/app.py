@@ -26,6 +26,7 @@ import subprocess
 import threading
 import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
 import time
+import secrets
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -136,6 +137,11 @@ BAIDU_APP_KEY = os.environ.get("VDL_BAIDU_APP_KEY", "").strip()
 BAIDU_APP_SECRET = os.environ.get("VDL_BAIDU_APP_SECRET", "").strip()
 BAIDU_REDIRECT_URI = os.environ.get("VDL_BAIDU_REDIRECT_URI", "").strip()
 BAIDU_ENABLED = bool(BAIDU_APP_KEY and BAIDU_APP_SECRET and BAIDU_REDIRECT_URI)
+# 百度 OAuth state：防止授权码流程被 CSRF 诱导。state 由服务端签发并短期缓存，
+# 回调时比对；过期/缺失/不匹配一律拒绝。注意：单实例进程内缓存；多副本部署需换成共享存储。
+_BAIDU_STATES: dict[str, float] = {}
+_BAIDU_STATES_LOCK = threading.Lock()
+_BAIDU_STATE_TTL = 600
 _webdav_provider = WebDAVProvider()
 _baidu_provider = BaiduProvider()
 CLOUD_JOBS: dict[str, dict] = {}
@@ -813,7 +819,15 @@ def cloud_providers() -> dict:
 def cloud_baidu_auth_url() -> dict:
     if not BAIDU_ENABLED:
         raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    return {"auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY)}
+    state = secrets.token_urlsafe(16)
+    now = time.time()
+    with _BAIDU_STATES_LOCK:
+        _BAIDU_STATES[state] = now + _BAIDU_STATE_TTL
+        # 顺手清理过期条目，避免长期运行堆积
+        expired = [s for s, exp in _BAIDU_STATES.items() if exp < now]
+        for s in expired:
+            _BAIDU_STATES.pop(s, None)
+    return {"auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, state)}
 
 
 @app.get("/api/cloud/baidu/callback")
@@ -821,6 +835,11 @@ def cloud_baidu_callback(code: str = "", state: str = ""):
     """OAuth 回调：用 code 换取 access_token，返回把令牌回传给 opener 的页面（服务端不存令牌）。"""
     if not BAIDU_ENABLED:
         return HTMLResponse(_baidu_callback_html(error="该实例未配置百度网盘凭据"))
+    # state 校验：拒绝被诱导发起的授权（CSRF），过期/缺失/不匹配均拒绝
+    with _BAIDU_STATES_LOCK:
+        exp = _BAIDU_STATES.pop(state, None)
+    if exp is None or time.time() > exp:
+        return HTMLResponse(_baidu_callback_html(error="授权状态校验失败，请重新点击授权"))
     try:
         token = baidu_exchange_token(code, BAIDU_REDIRECT_URI, BAIDU_APP_KEY, BAIDU_APP_SECRET)
     except CloudError as exc:
@@ -838,6 +857,13 @@ def cloud_save(payload: CloudSaveRequest, request: Request) -> dict:
     if provider == "webdav":
         inst = _webdav_provider
         creds = payload.webdav or {}
+        # SSRF 防护：拒绝指向内网 / 环回 / 云元数据的 WebDAV 地址，避免本服务被当跳板
+        wurl = (creds.get("url") or "").strip()
+        if wurl:
+            try:
+                _assert_safe_url(wurl)
+            except LinkError as exc:
+                raise HTTPException(status_code=400, detail="WebDAV 地址不在允许范围内：" + exc.message)
     elif provider == "baidu":
         if not BAIDU_ENABLED:
             raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
