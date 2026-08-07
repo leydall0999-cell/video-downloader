@@ -222,6 +222,7 @@
       <h2 id="libTitle" class="guide-title">我的媒体库</h2>
       <div class="lib-head-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="libCleanup" hidden>🧹 自动清理</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="libArchive" hidden>☁️ 归档网盘</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
       </div>
     </div>
@@ -495,6 +496,82 @@
     </div>
 
     <div class="clean-preview" id="cleanPreview" hidden></div>
+  </div>
+</dialog>
+
+<!-- 归档网盘：把媒体库文件按规则批量 / 定时上传到用户自己的网盘 -->
+<dialog id="archiveModal" class="modal" aria-labelledby="archiveModalTitle">
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 id="archiveModalTitle">☁️ 归档到我的网盘</h2>
+      <button type="button" class="modal-close" id="archiveModalClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub">把本机媒体库的文件按规则批量 / 定时上传到你<strong>自己的网盘</strong>。凭据只存本机配置文件（权限 0600），接口传输一律脱敏。</p>
+
+    <div class="arc-provider-row">
+      <label class="arc-radio"><input type="radio" name="arcProvider" value="webdav" checked> WebDAV（群晖 / Nextcloud / 自建）</label>
+      <label class="arc-radio" id="arcBaiduRadio" hidden><input type="radio" name="arcProvider" value="baidu"> 百度网盘</label>
+    </div>
+
+    <div class="arc-form" id="arcWebdavForm">
+      <label class="arc-field">WebDAV 地址
+        <input type="text" id="arcWebdavUrl" class="adv-input" placeholder="https://dav.example.com/remote.php/dav/files/用户名/" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="arc-field">用户名
+        <input type="text" id="arcWebdavUser" class="adv-input" placeholder="用户名" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="arc-field">密码
+        <input type="password" id="arcWebdavPass" class="adv-input" placeholder="留空则沿用已保存" autocomplete="new-password">
+      </label>
+    </div>
+
+    <div class="arc-form" id="arcBaiduForm" hidden>
+      <button type="button" class="btn btn-primary btn-sm" id="arcBaiduBtn">授权百度网盘</button>
+      <label class="arc-field">授权后粘贴 token
+        <input type="text" id="arcBaiduToken" class="adv-input" placeholder="在回调页复制 token 粘贴到这里" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="arc-baidu-status" id="arcBaiduStatus">未授权</p>
+    </div>
+
+    <label class="arc-field">远端路径模板
+      <input type="text" id="arcTemplate" class="adv-input" placeholder="VideoDownloader/{platform}/{date}/{filename}" autocomplete="off" spellcheck="false">
+    </label>
+    <p class="arc-tokens" id="arcTokens"></p>
+
+    <div class="arc-row">
+      <label class="arc-check"><input type="checkbox" id="arcVideo" checked> 视频</label>
+      <label class="arc-check"><input type="checkbox" id="arcAudio" checked> 音频</label>
+      <label class="arc-check"><input type="checkbox" id="arcImage"> 图片（抽帧 / 封面等）</label>
+    </div>
+    <div class="arc-row">
+      <label class="arc-num">静置 <input type="number" id="arcMinAge" class="adv-input" min="0" max="10080" step="1" value="3"> 分钟后再传</label>
+      <label class="arc-num">单文件上限 <input type="number" id="arcMaxGb" class="adv-input" min="0" max="1024" step="0.5" value="10"> GB</label>
+    </div>
+    <label class="arc-check arc-danger"><input type="checkbox" id="arcDeleteAfter"> 归档成功后删除本地文件（强制走系统回收站，回收站不可用则只归档不删）</label>
+
+    <div class="arc-auto">
+      <label class="arc-check"><input type="checkbox" id="arcAuto"> 开启定时自动归档</label>
+      <label class="arc-num">每 <input type="number" id="arcInterval" class="adv-input" min="0.25" max="720" step="0.25" value="6"> 小时</label>
+    </div>
+    <p class="arc-trash-warn" id="arcTrashWarn" hidden>⚠️ 当前系统没有可用的回收站通道，「归档后删除本地」已锁定 —— 不允许直接硬删你的资产。</p>
+
+    <div class="arc-actions">
+      <button type="button" class="btn btn-ghost" id="arcSave">保存配置</button>
+      <button type="button" class="btn btn-ghost" id="arcScan">扫描预览</button>
+      <button type="button" class="btn btn-primary" id="arcRun" disabled>开始归档</button>
+      <button type="button" class="btn btn-primary" id="arcCancel" hidden>取消</button>
+      <span class="arc-status" id="arcStatus"></span>
+    </div>
+
+    <div class="arc-preview" id="arcPreview" hidden></div>
+
+    <div class="arc-records">
+      <div class="arc-records-head">
+        <span>最近归档记录</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="arcForget">忘记记录</button>
+      </div>
+      <ul class="arc-records-list" id="arcRecords"></ul>
+    </div>
   </div>
 </dialog>
 

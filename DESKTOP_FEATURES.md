@@ -152,6 +152,31 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 - 开关同媒体库：桌面 frozen 或 `VDL_RETENTION_ENABLED=true` 才暴露。
 - 前端：媒体库头部「🧹 自动清理」按钮 + 独立弹窗（磁盘占用条、总开关+检查周期、五档规则、预览清单、危险档二次确认）。
 
+## 2.8 一键归档网盘（已实现）
+
+### 需求
+本机下完 / 加工完的文件，按规则**批量 / 定时上传到用户自己的网盘**（WebDAV / 百度网盘），把本地媒体库兜底备份到云端。只搬用户自己的文件，服务端不留存、不中转。
+
+### 设计要点（核心）
+- **与 `clouddrive.py` 解耦**：`clouddrive.py` 负责「怎么传」（WebDAV / 百度网盘协议），`archive.py` 负责「传什么 / 传到哪 / 传过没有」（选取规则、路径模板、去重记录、自动巡检）。归档层独立可单测。
+- **去重指纹** `fingerprint = "{rel}|{size}|{mtime}"`：文件没变不重传；被重新加工（大小/时间变了）会自动再传。
+- **凭据安全**：明文凭据单独存本机配置文件 `~/.video-downloader/archive.json`（**不放下载目录**，避免把下载目录同步到网盘时泄露密码），权限 `0600`；接口返回一律脱敏（首尾各 2 字符），前端改密码留空则沿用旧值。
+- **路径模板**：`VideoDownloader/{platform}/{date}/{filename}`，占位符 `{filename}{title}{ext}{platform}{uploader}{kind}{date}{year}{month}`；`..` 段直接丢弃、非法字符清洗，防穿越与怪目录。
+- **归档后删本地**：可选且默认关，开启也强制走系统回收站（复用 `retention` 四级兜底）；回收站不可用则只归档不删，**绝不静默硬删用户资产**。
+- **单文件失败不中断整批**；支持取消（`should_stop`）；前端必须 `scan` 预览再 `run`。
+
+### 安全设计
+- WebDAV 地址用 **`_assert_archive_url`**（区别于下载的 `_assert_safe_url`）：桌面版里用户指向自己的 NAS/网盘是正当场景，故**放行私网 / 环回 / 链路本地**（如 `https://192.168.1.100:5006/dav`、`my-nas.local`），只拦截非 `http(s)` 与缺主机名。这是特意与下载 SSRF 护栏区分的——归档是用户显式填自己的目标。
+- 归档记录按指纹去重；配置损坏降级默认；守护线程只在校验 `auto_enabled and has_creds` 后才跑。
+- 跨平台回站兜底与 `retention.py` 同源：回收站不可用 → 删除动作被禁用并提示，绝不硬删。
+
+### 技术方案
+- 新增 `server/archive.py`：`ArchiveConfig`(dataclass) + `ArchiveStore`(JSON 持久化，RLock+损坏降级+0600) + `fingerprint` / `render_dest` / `pending_items` / `run_archive` / `human_size`。
+- `app.py`：`GET/POST /api/archive/config`（含凭据脱敏返回、set_creds 写入、delete_after 无回收站拒 400）、`POST /api/archive/scan`（只算不传，最多 200 条预览）、`POST /api/archive/run`（按 lib_ids 过滤、线程池提交 `_run_archive_job`）、`GET /api/archive/status/{job_id}`、`POST /api/archive/cancel/{job_id}`、`POST /api/archive/forget` 清记录；`_archive_watchdog` 静默 180s 后按 interval 周期跑（仅 `auto_enabled and has_creds`）。
+- 开关同媒体库：桌面 frozen 或 `VDL_ARCHIVE_ENABLED=true` 才暴露；`/api/nodes` 暴露 `archive.enabled` / `baidu_available` / `configured`。
+- 前端：媒体库头部「☁️ 归档网盘」按钮 + 独立弹窗（provider 单选、WebDAV/百度凭据、路径模板+占位符提示、类型/静置/上限/删本地开关、定时自动开关、扫描预览清单+勾选、进度轮询、最近归档记录、忘记记录）。
+- 测试覆盖：`/tmp/test_archive.py`（12 组单测：模板渲染、`..` 穿越、筛选、去重、凭据脱敏/留空沿用/0600、正常上传、单条失败继续、删本地回收站不可用只传不删、回收站可用本体+侧车一起走、取消、human_size）；`/tmp/test_archive_routes.py`（TestClient 路由集成：nodes 开关、config 脱敏/私网 WebDAV 放行/非法 scheme 拒/删本地回收站不可用拒、scan、run 去重、cancel、forget、关闭 404）。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
-- 一键归档网盘；本地媒体库加密。
+- 本地媒体库加密。
 - 详见 MEMORY.md 桌面其他功能思路。
