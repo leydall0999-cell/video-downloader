@@ -157,5 +157,6 @@ m.archive_store.update(include_video=False, include_audio=False, include_image=F
 r = client.post("/api/archive/run", json={})
 check("无待归档 run -> 409", r.status_code == 409)
 
-print("\n" + ("ALL_PASS" if all(ok) else f"SOME_FAIL ({ok.count(False)} 项失败)"))
-sys.exit(0 if all(ok) else 1)
+if __name__ == "__main__":
+    print("\n" + ("ALL_PASS" if all(ok) else f"SOME_FAIL ({ok.count(False)} 项失败)"))
+    sys.exit(0 if all(ok) else 1)
