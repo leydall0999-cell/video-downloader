@@ -1,0 +1,221 @@
+"""解说桥接路由测试（TestClient）：mock 掉真实解说算力（subprocess / 独立 worker），只验桥接与分支。
+
+无需装 whisper / ffmpeg / commentary-pipeline，无需联网。
+运行：PYTHONPATH=server:tests python -m pytest tests/test_commentary_routes.py -q
+"""
+import os
+import sys
+from pathlib import Path
+
+# 在 import app 前把解说开关打开、并默认走 http 模式（最干净的桥接形态）
+os.environ.setdefault("VDL_COMMENTARY_ENABLED", "true")
+os.environ["VDL_COMMENTARY_MODE"] = "http"
+os.environ["VDL_COMMENTARY_ENDPOINT"] = "http://fake-worker.local"
+
+SERVER = str(Path(__file__).resolve().parent.parent / "server")
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)
+
+from unittest.mock import patch  # noqa: E402
+import pytest  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+import app as m  # noqa: E402
+
+client = TestClient(m.app)
+
+
+@pytest.fixture(autouse=True)
+def _ensure_commentary_config():
+    # 强制开启并固定为 http 模式 + 有效 endpoint，避免依赖测试文件导入顺序。
+    # 注：pytest 收集顺序不确定时，app 可能在本测试的 env 设置前被其他测试文件（如
+    # test_torrent_routes）先 import，导致 COMMENTARY_* 模块全局落到默认值（local / None），
+    # 使 create 路由误走 local 分支而返回 503。各专项 503 测试会在自身上下文内 patch 覆盖。
+    m.COMMENTARY_ENABLED = True
+    m.COMMENTARY_MODE = "http"
+    m.COMMENTARY_ENDPOINT = "http://fake-worker.local"
+    yield
+
+
+def _fake_task(status="completed", filepath=None):
+    class _T:
+        pass
+    t = _T()
+    t.status = status
+    t.filepath = filepath
+    return t
+
+
+def _run_ok(job_id, src, vertical, voice):
+    with m._commentary_lock:
+        m.commentary_jobs[job_id].update(status="completed", output_path="/tmp/commentary_out/ok.mp4")
+
+
+def _run_fail(job_id, src, vertical, voice):
+    with m._commentary_lock:
+        m.commentary_jobs[job_id].update(status="failed", error="boom")
+
+
+@pytest.fixture
+def src_file(tmp_path):
+    p = tmp_path / "src.mp4"
+    p.write_bytes(b"data")
+    return p
+
+
+@pytest.fixture
+def patch_task(src_file):
+    with patch.object(m, "_require_task", return_value=_fake_task("completed", src_file)):
+        yield
+
+
+def test_disabled_returns_503():
+    with patch.object(m, "COMMENTARY_ENABLED", False):
+        r = client.post("/api/commentary", json={"task_id": "x"})
+    assert r.status_code == 503
+
+
+def test_http_mode_missing_endpoint_503():
+    with patch.object(m, "COMMENTARY_ENABLED", True), \
+         patch.object(m, "COMMENTARY_MODE", "http"), \
+         patch.object(m, "COMMENTARY_ENDPOINT", ""):
+        r = client.post("/api/commentary", json={"task_id": "x"})
+    assert r.status_code == 503
+    assert "endpoint" in r.json()["detail"].lower() or "worker" in r.json()["detail"].lower()
+
+
+def test_local_mode_missing_pipeline_503():
+    with patch.object(m, "COMMENTARY_ENABLED", True), \
+         patch.object(m, "COMMENTARY_MODE", "local"), \
+         patch.object(m, "COMMENTARY_DIR", Path("/no_such_pipeline_xyz")):
+        r = client.post("/api/commentary", json={"task_id": "x"})
+    assert r.status_code == 503
+
+
+def test_task_not_found_404(patch_task):
+    with patch.object(m, "_require_task", side_effect=HTTPException(status_code=404, detail="no")):
+        r = client.post("/api/commentary", json={"task_id": "nope"})
+    assert r.status_code == 404
+
+
+def test_task_not_completed_409():
+    with patch.object(m, "_require_task", return_value=_fake_task("downloading", None)):
+        r = client.post("/api/commentary", json={"task_id": "x"})
+    assert r.status_code == 409
+
+
+def test_create_runs_and_completes(patch_task):
+    with patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as run:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        run.side_effect = _run_ok
+        r = client.post("/api/commentary", json={"task_id": "t1", "vertical": True})
+        assert r.status_code == 200
+        assert r.json()["status"] == "running"
+        jid = r.json()["job_id"]
+        st = client.get(f"/api/commentary/{jid}").json()
+    assert st["status"] == "completed"
+    assert st["ready"] is True
+
+
+def test_create_failure_reported(patch_task):
+    with patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as run:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        run.side_effect = _run_fail
+        jid = client.post("/api/commentary", json={"task_id": "t2"}).json()["job_id"]
+        st = client.get(f"/api/commentary/{jid}").json()
+    assert st["status"] == "failed"
+    assert st["error"]
+
+
+def test_status_unknown_404():
+    r = client.get("/api/commentary/does_not_exist")
+    assert r.status_code == 404
+
+
+def test_file_download(tmp_path):
+    out = tmp_path / "out.mp4"
+    out.write_bytes(b"video-bytes")
+
+    def _run(job_id, src, vertical, voice):
+        with m._commentary_lock:
+            m.commentary_jobs[job_id].update(status="completed", output_path=str(out))
+
+    src = tmp_path / "s.mp4"
+    src.write_bytes(b"x")
+    with patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+         patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as r2:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        r2.side_effect = _run
+        jid = client.post("/api/commentary", json={"task_id": "t3"}).json()["job_id"]
+        fr = client.get(f"/api/commentary/{jid}/file")
+    assert fr.status_code == 200
+    assert fr.content == b"video-bytes"
+
+
+def test_file_not_ready_409():
+    def _run(job_id, src, vertical, voice):
+        with m._commentary_lock:
+            m.commentary_jobs[job_id].update(status="running", output_path="")
+
+    src = Path("/tmp/__cs.mp4")
+    src.write_bytes(b"x")
+    with patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+         patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as r2:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        r2.side_effect = _run
+        jid = client.post("/api/commentary", json={"task_id": "t4"}).json()["job_id"]
+        fr = client.get(f"/api/commentary/{jid}/file")
+    assert fr.status_code == 409
+
+
+def test_file_missing_410(tmp_path):
+    def _run(job_id, src, vertical, voice):
+        with m._commentary_lock:
+            m.commentary_jobs[job_id].update(status="completed", output_path=str(tmp_path / "gone.mp4"))
+
+    src = tmp_path / "s.mp4"
+    src.write_bytes(b"x")
+    with patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+         patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as r2:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        r2.side_effect = _run
+        jid = client.post("/api/commentary", json={"task_id": "t5"}).json()["job_id"]
+        fr = client.get(f"/api/commentary/{jid}/file")
+    assert fr.status_code == 410
+
+
+def test_local_mode_builds_and_locates_output(tmp_path):
+    """local 模式：命令构造正确（--auto/--voice），且能从 output/ 定位最新成片。"""
+    (tmp_path / "input").mkdir()
+    (tmp_path / "output").mkdir()
+    (tmp_path / "process.py").write_text("# fake pipeline entry")
+
+    def _fake_subprocess_run(args, **kw):
+        # 不真跑 process.py，只按命名规则造一个成片，模拟管线产出
+        assert "--auto" in args, "local 模式必须带 --auto"
+        assert "--voice" in args, "voice 应注入命令（即便默认音色）"
+        infile = args[2]  # [PYTHON, "process.py", in_file, "--auto", ...]
+        base = Path(infile).stem
+        out = tmp_path / "output" / f"{base}_成片.mp4"
+        out.write_bytes(b"rendered")
+        class _R:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+        return _R()
+
+    src = tmp_path / "s.mp4"
+    src.write_bytes(b"x")
+    with patch.object(m, "COMMENTARY_ENABLED", True), \
+         patch.object(m, "COMMENTARY_MODE", "local"), \
+         patch.object(m, "COMMENTARY_DIR", tmp_path), \
+         patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+         patch.object(m, "executor") as ex, \
+         patch.object(m, "subprocess") as sp:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        sp.run.side_effect = _fake_subprocess_run
+        jid = client.post("/api/commentary", json={"task_id": "t6", "vertical": False}).json()["job_id"]
+        st = client.get(f"/api/commentary/{jid}").json()
+    assert st["status"] == "completed"
+    # output_path 仅存于内部 jobs 表，status 接口不暴露；直接校验成片定位结果
+    assert "成片.mp4" in m.commentary_jobs[jid]["output_path"]

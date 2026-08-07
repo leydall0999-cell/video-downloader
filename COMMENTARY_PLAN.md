@@ -1,6 +1,6 @@
 # 视频解说（Commentary）功能规划备忘
 
-> 本文记录 video-downloader 的视频解说增值方向的架构选型与成本，**非已实现代码**，是给后续落地时的决策底稿。
+> 本文记录 video-downloader 的视频解说增值方向的架构选型与成本。代码**已落地**（后端桥接 + 前端入口 + 独立 worker），但默认 `VDL_COMMENTARY_ENABLED=false` 处于暂停/可选状态；启用方式与 A/B 选择见文末「实现状态」。
 
 ## 背景
 
@@ -48,8 +48,18 @@
 3. 只有"重度本地模型"才需第二台算力机 —— 那是后话，当前不采购。
 4. 落地顺序建议：先打通 VPS 回源（当前进行中）→ 再决定解说走 A 还是 B。
 
-## 待办（未做）
+## 待办
 
-- [ ] 确定解说走 A 还是 B
-- [ ] 若走 B：评估 Railway 付费档、接入 ASR/LLM/TTS API、恢复解说 worker（`VDL_COMMENTARY_ENABLED`）
-- [ ] 若走 A：把 `commentary-pipeline` 与本项目的下载/媒体库打通
+- [x] 解说桥接代码落地：后端 `server/app.py`（local / http 双模式）+ 前端「生成解说成片」入口（`web/`）+ 独立 worker `commentary-pipeline/commentary_worker.py`（复用 `process.py`）。默认 `VDL_COMMENTARY_ENABLED=false` 暂停。
+- [x] 测试覆盖：`tests/test_commentary_routes.py`（12 项，mock 掉 whisper/ffmpeg，覆盖禁用/缺配置/任务校验/创建/状态/下载全分支 + local 成片定位）。
+- [ ] **部署时决定运行模式**（二者代码均已支持，无需二选一重写）：
+  - 桌面版（本机跑 video-downloader）→ `VDL_COMMENTARY_MODE=local` + `VDL_COMMENTARY_DIR=<commentary-pipeline 路径>` + `VDL_COMMENTARY_PYTHON=<装了 faster_whisper 的解释器>`。
+  - 在线版（Railway）→ `VDL_COMMENTARY_MODE=http` + `VDL_COMMENTARY_ENDPOINT=<本机 worker 的 tunnel 地址>` + `VDL_COMMENTARY_TOKEN`，算力在本机 Mac（零额外服务器费）。
+- [ ] 真机端到端验证一次（dev 机 macOS 13 受限：whisper 模型需联网下载、且访问不了 Google/huggingface，暂只能靠测试保证逻辑正确）。
+
+## 实现状态（2026-08-08 更新）
+
+- 后端 `server/app.py`：`COMMENTARY_ENABLED` / `COMMENTARY_DIR` / `COMMENTARY_PYTHON` / `COMMENTARY_VOICE` / `COMMENTARY_TIMEOUT_SECONDS` / `COMMENTARY_MODE`(local|http) / `COMMENTARY_ENDPOINT` / `COMMENTARY_TOKEN` / `COMMENTARY_LOCAL_OUTPUT` 九个开关；路由 `POST /api/commentary`、`GET /api/commentary/{id}`、`GET /api/commentary/{id}/file`；`/api/nodes` 暴露 `commentary_enabled`。
+- 前端：下载完成的任务出现「生成解说成片」按钮（受 `node.commentaryEnabled` 控制），点击后轮询状态并在完成后提供成片下载。
+- local 模式已修复：voice 为空时不传 `--voice`（避免 process.py 收到空串报错）。
+- 启用示例（桌面版）：在 run.sh / 桌面配置里加 `VDL_COMMENTARY_ENABLED=true VDL_COMMENTARY_MODE=local VDL_COMMENTARY_DIR=/abs/path/to/commentary-pipeline VDL_COMMENTARY_PYTHON=/path/to/python3.13`。

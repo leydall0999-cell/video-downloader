@@ -512,7 +512,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
         args = [COMMENTARY_PYTHON, "process.py", str(in_file), "--auto"]
         if vertical:
             args.append("--vertical")
-        args += ["--voice", voice]
+        if voice:
+            args += ["--voice", voice]
         proc = subprocess.run(
             args, cwd=str(COMMENTARY_DIR), capture_output=True, text=True,
             timeout=COMMENTARY_TIMEOUT_SECONDS,
