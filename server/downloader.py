@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import sys
+import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -484,6 +486,24 @@ def _locate_output(info: dict[str, Any], workdir: Path) -> Path:
     return max(candidates, key=lambda p: p.stat().st_size)
 
 
+def _write_sidecar(output: Path, task: "DownloadTask", info: dict[str, Any]) -> None:
+    """下载完成后在成品旁写一个 .vdlmeta.json，供本地媒体库展示标题/平台/作者/时长。"""
+    try:
+        meta = {
+            "title": info.get("title") or output.stem,
+            "platform": task.platform,
+            "uploader": info.get("uploader") or info.get("channel") or "",
+            "duration": int(info.get("duration") or 0),
+            "source_url": info.get("webpage_url") or task.url,
+            "thumbnail": info.get("thumbnail") or "",
+            "completed_at": int(time.time()),
+        }
+        sidecar = output.with_name(output.stem + ".vdlmeta.json")
+        sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.debug("写入元数据侧车失败: %s", output, exc_info=True)
+
+
 def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
     """在后台线程中执行，全部异常都写回任务状态，不向外抛。"""
     reporter = _ProgressReporter(task, store)
@@ -493,6 +513,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
         if info.get("title"):
             store.update(task.id, title=info["title"])
         output = _locate_output(info, task.workdir or Path("."))
+        _write_sidecar(output, task, info)
     except DownloadCanceled:
         store.update(task.id, status="canceled", error="已取消下载", progress=0.0)
         store.clear_files(task.id)

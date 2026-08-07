@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from urllib.parse import urlparse
 
 import downloader
+import library as library_mod
 from clouddrive import (
     BaiduProvider,
     CloudError,
@@ -558,6 +559,10 @@ def node_info() -> dict:
             "baidu_available": BAIDU_ENABLED,
             "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY) if BAIDU_ENABLED else "",
         },
+        # 本地媒体库：仅桌面版（frozen）或显式开启时暴露给前端；网页版目录临时、默认关闭
+        "library": {
+            "enabled": bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_LIBRARY_ENABLED")),
+        },
     }
 
 
@@ -950,6 +955,48 @@ def _prune_cloud_jobs() -> None:
         done = [jid for jid, j in CLOUD_JOBS.items() if j.get("status") in ("completed", "failed")]
         for jid in (done[:-200] if len(done) > 200 else []):
             CLOUD_JOBS.pop(jid, None)
+
+
+# ---- 本地媒体库（桌面版功能）：浏览 / 播放 / 删除已下载的媒体文件 ----
+@app.get("/api/library")
+def library_list(q: str = "", platform: str = "", kind: str = "all") -> dict:
+    items = library_mod.scan_library(DOWNLOAD_DIR)
+    if q:
+        ql = q.lower()
+        items = [
+            i for i in items
+            if ql in (i["title"] or "").lower()
+            or ql in (i["name"] or "").lower()
+            or ql in (i["uploader"] or "").lower()
+        ]
+    if platform:
+        items = [i for i in items if i["platform"] == platform]
+    if kind in ("video", "audio"):
+        items = [i for i in items if i["kind"] == kind]
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/library/file/{lib_id}")
+def library_file(lib_id: str) -> FileResponse:
+    p = library_mod._resolve_safe(DOWNLOAD_DIR, lib_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(path=p, filename=p.name, media_type="application/octet-stream")
+
+
+@app.get("/api/library/thumb/{lib_id}")
+def library_thumb(lib_id: str) -> FileResponse:
+    p = library_mod.get_thumbnail(DOWNLOAD_DIR, lib_id, FFMPEG_BIN)
+    if not p:
+        raise HTTPException(status_code=404, detail="无缩略图")
+    return FileResponse(path=p, media_type="image/jpeg")
+
+
+@app.delete("/api/library/{lib_id}")
+def library_delete(lib_id: str) -> dict:
+    if not library_mod.delete_item(DOWNLOAD_DIR, lib_id):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return {"deleted": True}
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

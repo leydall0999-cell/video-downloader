@@ -75,6 +75,24 @@
     cloudSave: $('cloudSave'),
     cloudStatus: $('cloudStatus'),
     cloudSubNote: $('cloudSubNote'),
+    // 媒体库（桌面版功能）
+    tabs: $('tabs'),
+    tabDownload: $('tabDownload'),
+    tabLibrary: $('tabLibrary'),
+    downloadView: $('downloadView'),
+    libraryView: $('libraryView'),
+    libRefresh: $('libRefresh'),
+    libSearch: $('libSearch'),
+    libPlatform: $('libPlatform'),
+    libKind: $('libKind'),
+    libGrid: $('libGrid'),
+    libEmpty: $('libEmpty'),
+    libModal: $('libModal'),
+    libModalClose: $('libModalClose'),
+    libPlayer: $('libPlayer'),
+    libMeta: $('libMeta'),
+    libDownload: $('libDownload'),
+    libDelete: $('libDelete'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
@@ -91,7 +109,9 @@
     convertSubRequired: false, convertFreeDaily: 3,
     downloadSubRequired: false, downloadFreeDaily: 10, downloadFreeUsed: 0, subscribed: false,
     cloudSubRequired: false, cloudFreeDaily: 5, cloudFreeUsed: 0,
-    cloudProviders: ['webdav'], baiduAvailable: false, baiduAuthUrl: '' };
+    cloudProviders: ['webdav'], baiduAvailable: false, baiduAuthUrl: '',
+    libraryEnabled: false,
+  };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
   /** 最近一个下载完成的任务（供交叉入口「存到网盘」定位；task 结束时 trackers 会移除，故单独留存） */
@@ -962,12 +982,179 @@
     }
   });
 
+  // ------------------------------------------------------------------ 媒体库（桌面版功能）
+  // 以磁盘文件为准浏览/播放/删除已下载内容；能力由 /api/nodes 的 library.enabled 控制。
+  let libItems = [];
+  let currentLibItem = null;
+
+  const debounce = (fn, ms) => {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  };
+  const libThumbUrl = (id) => `/api/library/thumb/${encodeURIComponent(id)}`;
+  const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}`;
+
+  const switchView = (view) => {
+    const isLib = view === 'library';
+    el.downloadView.hidden = isLib;
+    el.libraryView.hidden = !isLib;
+    el.tabDownload.classList.toggle('is-active', !isLib);
+    el.tabLibrary.classList.toggle('is-active', isLib);
+    if (isLib) loadLibrary();
+  };
+
+  const loadLibrary = async () => {
+    const params = new URLSearchParams();
+    const q = el.libSearch.value.trim();
+    const platform = el.libPlatform.value;
+    const kind = el.libKind.value;
+    if (q) params.set('q', q);
+    if (platform) params.set('platform', platform);
+    if (kind && kind !== 'all') params.set('kind', kind);
+    try {
+      const data = await request(`/api/library?${params.toString()}`);
+      libItems = data.items || [];
+      renderLibGrid(libItems);
+    } catch (e) {
+      el.libEmpty.hidden = false;
+      el.libEmpty.textContent = '读取媒体库失败：' + (e.message || '未知错误');
+    }
+  };
+
+  const refreshLibPlatforms = (items) => {
+    const current = el.libPlatform.value;
+    const platforms = Array.from(new Set(items.map((i) => i.platform).filter(Boolean))).sort();
+    el.libPlatform.replaceChildren();
+    const all = document.createElement('option');
+    all.value = ''; all.textContent = '全部平台';
+    el.libPlatform.appendChild(all);
+    platforms.forEach((p) => {
+      const o = document.createElement('option');
+      o.value = p; o.textContent = p;
+      el.libPlatform.appendChild(o);
+    });
+    if ([...el.libPlatform.options].some((o) => o.value === current)) el.libPlatform.value = current;
+  };
+
+  const renderLibGrid = (items) => {
+    el.libGrid.replaceChildren();
+    el.libEmpty.hidden = items.length > 0;
+    if (items.length === 0) el.libEmpty.textContent = '还没有下载内容。去「下载」粘贴链接保存第一个视频吧。';
+    items.forEach((item) => el.libGrid.appendChild(createLibCard(item)));
+    refreshLibPlatforms(items);
+  };
+
+  const createLibCard = (item) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'lib-card';
+    card.setAttribute('aria-label', item.title || item.name);
+
+    const thumbBox = document.createElement('div');
+    thumbBox.className = 'lib-thumb';
+    if (item.kind === 'video') {
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = libThumbUrl(item.id);
+      img.onerror = () => { img.remove(); };
+      thumbBox.appendChild(img);
+    }
+    const fallback = document.createElement('span');
+    fallback.className = 'lib-thumb-fallback';
+    fallback.textContent = item.kind === 'video' ? '🎬' : '🎵';
+    thumbBox.appendChild(fallback);
+    if (item.duration) {
+      const dur = document.createElement('span');
+      dur.className = 'lib-duration';
+      dur.textContent = formatDuration(item.duration);
+      thumbBox.appendChild(dur);
+    }
+
+    const metaBox = document.createElement('div');
+    metaBox.className = 'lib-card-meta';
+    const title = document.createElement('span');
+    title.className = 'lib-card-title';
+    title.textContent = item.title || item.name;
+    const sub = document.createElement('span');
+    sub.className = 'lib-card-sub';
+    const parts = [item.platform, formatBytes(item.size), new Date(item.mtime * 1000).toLocaleDateString()].filter(Boolean);
+    sub.textContent = parts.join(' · ');
+    metaBox.append(title, sub);
+
+    card.append(thumbBox, metaBox);
+    card.addEventListener('click', () => openLibModal(item));
+    return card;
+  };
+
+  const openLibModal = (item) => {
+    currentLibItem = item;
+    el.libPlayer.replaceChildren();
+    if (item.kind === 'video') {
+      const v = document.createElement('video');
+      v.src = libFileUrl(item.id);
+      v.controls = true;
+      v.preload = 'metadata';
+      v.className = 'lib-video';
+      el.libPlayer.appendChild(v);
+    } else {
+      const a = document.createElement('audio');
+      a.src = libFileUrl(item.id);
+      a.controls = true;
+      a.className = 'lib-audio';
+      el.libPlayer.appendChild(a);
+    }
+    el.libMeta.replaceChildren();
+    const rows = [
+      ['标题', item.title || item.name],
+      ['平台', item.platform || '—'],
+      ['作者', item.uploader || '—'],
+      ['时长', item.duration ? formatDuration(item.duration) : '—'],
+      ['大小', formatBytes(item.size)],
+      ['下载于', new Date(item.mtime * 1000).toLocaleString()],
+    ];
+    rows.forEach(([k, v]) => {
+      const row = document.createElement('div');
+      row.className = 'lib-meta-row';
+      const kk = document.createElement('span'); kk.className = 'lib-meta-k'; kk.textContent = k;
+      const vv = document.createElement('span'); vv.className = 'lib-meta-v'; vv.textContent = String(v);
+      row.append(kk, vv);
+      el.libMeta.appendChild(row);
+    });
+    el.libDownload.href = libFileUrl(item.id);
+    el.libDownload.setAttribute('download', item.name || 'video');
+    if (typeof el.libModal.showModal === 'function') el.libModal.showModal();
+    else el.libModal.setAttribute('open', '');
+  };
+
+  const deleteLibItem = async () => {
+    if (!currentLibItem) return;
+    if (!window.confirm('确定从磁盘删除这个文件吗？此操作不可恢复。')) return;
+    try {
+      await request(`/api/library/${encodeURIComponent(currentLibItem.id)}`, { method: 'DELETE' });
+      if (typeof el.libModal.close === 'function') el.libModal.close();
+      loadLibrary();
+    } catch (e) {
+      window.alert('删除失败：' + (e.message || '未知错误'));
+    }
+  };
+
+  el.tabDownload.addEventListener('click', () => switchView('download'));
+  el.tabLibrary.addEventListener('click', () => switchView('library'));
+  el.libRefresh.addEventListener('click', loadLibrary);
+  el.libSearch.addEventListener('input', debounce(loadLibrary, 300));
+  el.libPlatform.addEventListener('change', loadLibrary);
+  el.libKind.addEventListener('change', loadLibrary);
+  el.libModalClose.addEventListener('click', () => el.libModal.close());
+  el.libModal.addEventListener('click', (e) => { if (e.target === el.libModal) el.libModal.close(); });
+  el.libDelete.addEventListener('click', deleteLibItem);
+
   request('/api/platforms')
     .then(({ platforms }) => renderPlatforms(platforms))
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
@@ -985,6 +1172,8 @@
       node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
       node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
       node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
+      node.libraryEnabled = !!(library && library.enabled);
+      if (node.libraryEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();
     })

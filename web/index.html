@@ -32,6 +32,13 @@
 
 <main id="main" class="wrap">
 
+  <nav class="tabs" id="tabs" hidden>
+    <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
+    <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
+  </nav>
+
+  <div id="downloadView">
+
   <section class="hero">
     <h1>粘贴链接，直接保存视频</h1>
     <p>支持 YouTube、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
@@ -174,6 +181,43 @@
   <p class="notice">
     仅供个人学习与备份使用。请遵守各平台服务条款及著作权法，勿下载或传播未获授权的内容。
   </p>
+
+  </div><!-- /#downloadView -->
+
+  <!-- 媒体库视图（桌面版功能） -->
+  <section id="libraryView" class="panel" hidden aria-labelledby="libTitle">
+    <div class="lib-head">
+      <h2 id="libTitle" class="guide-title">我的媒体库</h2>
+      <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
+    </div>
+    <div class="lib-controls">
+      <input id="libSearch" class="adv-input" type="search" placeholder="搜索标题 / 作者 / 文件名" />
+      <select id="libPlatform" class="adv-input"><option value="">全部平台</option></select>
+      <select id="libKind" class="adv-input">
+        <option value="all">全部类型</option>
+        <option value="video">视频</option>
+        <option value="audio">音频</option>
+      </select>
+    </div>
+    <div class="lib-grid" id="libGrid"></div>
+    <p class="lib-empty" id="libEmpty" hidden>还没有下载内容。去「下载」粘贴链接保存第一个视频吧。</p>
+  </section>
+
+  <!-- 媒体库播放/详情弹窗 -->
+  <dialog id="libModal" class="modal" aria-labelledby="libModalTitle">
+    <div class="modal-card lib-modal-card">
+      <div class="modal-head">
+        <h2 id="libModalTitle">媒体详情</h2>
+        <button type="button" class="modal-close" id="libModalClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="lib-player" id="libPlayer"></div>
+      <div class="lib-meta" id="libMeta"></div>
+      <div class="lib-actions">
+        <a class="btn btn-success btn-sm" id="libDownload" download>保存到本机 ⬇</a>
+        <button type="button" class="btn btn-ghost btn-sm" id="libDelete">删除</button>
+      </div>
+    </div>
+  </dialog>
 
   <!-- 广告位：默认 hidden，仅当后端 VDL_ADS_ENABLED=true 时由前端显示 -->
   <aside class="ads-slot" id="adsSlot" hidden aria-label="广告位">
