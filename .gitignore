@@ -21,3 +21,13 @@ commentary_out/
 .DS_Store
 .idea/
 .vscode/
+
+# 桌面版构建产物（构建脚本在 desktop/，产物不入库）
+.build_venv/
+build/
+dist/
+VideoDownloader.spec
+# 桌面版构建时生成的图标（脚本自动生成）
+desktop/icon.png
+desktop/icon.icns
+desktop/icon.ico

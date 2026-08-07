@@ -53,9 +53,28 @@ from tasks import TaskStore
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vdl")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-WEB_DIR = BASE_DIR / "web"
-DOWNLOAD_DIR = BASE_DIR / "downloads"
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包后资源位置：
+    #   - 单文件模式：解压到 sys._MEIPASS
+    #   - macOS .app（单文件夹）：数据文件在 Contents/Resources
+    #   - 其它单文件夹模式：与可执行文件同目录
+    _exe = sys.executable
+    _macos_dir = os.path.dirname(_exe)
+    _resources = os.path.normpath(os.path.join(_macos_dir, "..", "Resources"))
+    if getattr(sys, "_MEIPASS", None):
+        _frozen_base = Path(sys._MEIPASS)
+    elif os.path.exists(os.path.join(_resources, "web")):
+        _frozen_base = Path(_resources)
+    else:
+        _frozen_base = Path(_macos_dir)
+    BASE_DIR = _frozen_base
+    WEB_DIR = _frozen_base / "web"
+    # 下载产物放在用户目录，避免写入只读的 .app 包内
+    DOWNLOAD_DIR = Path.home() / "Downloads" / "VideoDownloader"
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    WEB_DIR = BASE_DIR / "web"
+    DOWNLOAD_DIR = BASE_DIR / "downloads"
 
 MAX_CONCURRENT_DOWNLOADS = 3
 MAX_CONCURRENT_PROBES = 8
@@ -65,7 +84,7 @@ CONVERT_DIR = DOWNLOAD_DIR / "conversions"
 CONVERT_DIR.mkdir(parents=True, exist_ok=True)
 CONVERT_JOBS: dict[str, dict] = {}
 CONVERT_LOCK = threading.Lock()
-FFMPEG_BIN = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 # 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
 CONVERT_TARGETS = {
     "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
@@ -576,7 +595,9 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
 def create_download(payload: DownloadRequest, request: Request) -> dict:
     _check_rate_limit(request)
     subscribed, free_used, free_daily = _check_download_quota(request)
-    _assert_safe_url(payload.url)          # 先拦内网/环回地址，避免可疑 URL 进入解析流程
+    # 注意：源视频 URL 不做 SSRF 的 DNS 解析拦截——它经过 parse_source 限定为已知公开平台，
+    # 且代理/CDN/沙盒网络下 gethostbyname 常把公网域名解析成保留地址导致误杀（能解析却不能下载）。
+    # SSRF 护栏仅保留在云盘目标地址（cloud_save 的 WebDAV URL）。
     url, platform = parse_source(payload.url)
     if not downloader.is_valid_quality(payload.quality):
         raise HTTPException(status_code=400, detail="不支持的清晰度选项")
