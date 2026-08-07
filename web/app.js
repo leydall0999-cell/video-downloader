@@ -101,6 +101,22 @@
     libMeta: $('libMeta'),
     libDownload: $('libDownload'),
     libDelete: $('libDelete'),
+    libSubtitle: $('libSubtitle'),
+    subPanel: $('subPanel'),
+    subPanelClose: $('subPanelClose'),
+    subCookie: $('subCookie'),
+    subProbe: $('subProbe'),
+    subStatus: $('subStatus'),
+    subExtractRow: $('subExtractRow'),
+    subLang: $('subLang'),
+    subExtract: $('subExtract'),
+    subList: $('subList'),
+    subApiKey: $('subApiKey'),
+    subBaseUrl: $('subBaseUrl'),
+    subModel: $('subModel'),
+    subTarget: $('subTarget'),
+    subTranslate: $('subTranslate'),
+    subBurn: $('subBurn'),
     // 订阅追更（桌面版功能）
     tabSubscribe: $('tabSubscribe'),
     subscribeView: $('subscribeView'),
@@ -1347,6 +1363,9 @@
     el.libDownload.setAttribute('download', item.name || 'video');
     if (typeof el.libModal.showModal === 'function') el.libModal.showModal();
     else el.libModal.setAttribute('open', '');
+    const showSub = node.libraryEnabled && item.kind === 'video';
+    el.libSubtitle.hidden = !showSub;
+    resetSubPanel();
   };
 
   const deleteLibItem = async () => {
@@ -1361,6 +1380,120 @@
     }
   };
 
+  // ---- 字幕处理（桌面版功能） ----
+  let extractedSubs = [];
+  let selectedSub = null;
+
+  const resetSubPanel = () => {
+    extractedSubs = [];
+    selectedSub = null;
+    el.subPanel.hidden = true;
+    el.subStatus.hidden = true;
+    el.subExtractRow.hidden = true;
+    el.subLang.replaceChildren();
+    const def = document.createElement('option');
+    def.value = ''; def.textContent = '选择语言';
+    el.subLang.appendChild(def);
+    el.subList.replaceChildren();
+  };
+
+  const showSubStatus = (msg, isError) => {
+    el.subStatus.hidden = false;
+    el.subStatus.textContent = msg;
+    el.subStatus.classList.toggle('is-error', !!isError);
+  };
+
+  const toggleSubPanel = () => { el.subPanel.hidden = !el.subPanel.hidden; };
+
+  const probeSubtitles = async () => {
+    if (!currentLibItem) return;
+    try {
+      const data = await request('/api/subtitles/list', {
+        method: 'POST',
+        body: JSON.stringify({ lib_id: currentLibItem.id, cookie: el.subCookie.value.trim() }),
+      });
+      const subs = data.subs || [];
+      el.subLang.replaceChildren();
+      const def = document.createElement('option');
+      def.value = ''; def.textContent = subs.length ? '选择语言' : '无可用字幕';
+      el.subLang.appendChild(def);
+      subs.forEach((s) => {
+        const o = document.createElement('option');
+        o.value = s.lang;
+        o.textContent = `${s.lang} · ${s.name}${s.auto ? '（自动生成）' : ''}`;
+        el.subLang.appendChild(o);
+      });
+      el.subExtractRow.hidden = false;
+      if (subs.length === 0) showSubStatus('未探测到在线字幕；可直接点「提取字幕」（语言留空）尝试抽取内嵌字幕流。', false);
+    } catch (e) {
+      showSubStatus(e.message || '探测失败', true);
+    }
+  };
+
+  const extractSubtitle = async () => {
+    if (!currentLibItem) return;
+    const lang = el.subLang.value;
+    try {
+      const data = await request('/api/subtitles/extract', {
+        method: 'POST',
+        body: JSON.stringify({ lib_id: currentLibItem.id, lang, cookie: el.subCookie.value.trim() }),
+      });
+      extractedSubs.push({ sub_rel: data.sub_rel, lang: data.lang || lang, size: data.size });
+      selectedSub = data.sub_rel;
+      renderSubList();
+      showSubStatus(`已提取字幕：${data.sub_rel}`, false);
+    } catch (e) {
+      showSubStatus(e.message || '提取失败', true);
+    }
+  };
+
+  const renderSubList = () => {
+    el.subList.replaceChildren();
+    if (extractedSubs.length === 0) return;
+    extractedSubs.forEach((s) => {
+      const li = document.createElement('li');
+      li.className = 'sub-item' + (selectedSub === s.sub_rel ? ' is-selected' : '');
+      li.textContent = `${s.sub_rel}（${s.lang}）`;
+      li.addEventListener('click', () => { selectedSub = s.sub_rel; renderSubList(); });
+      el.subList.appendChild(li);
+    });
+  };
+
+  const translateSubtitle = async () => {
+    if (!currentLibItem) return;
+    if (!selectedSub) { showSubStatus('请先在上方选择一个字幕文件', true); return; }
+    try {
+      const data = await request('/api/subtitles/translate', {
+        method: 'POST',
+        body: JSON.stringify({
+          lib_id: currentLibItem.id, sub_rel: selectedSub,
+          api_key: el.subApiKey.value.trim(), base_url: el.subBaseUrl.value.trim(),
+          model: el.subModel.value.trim(), target: el.subTarget.value.trim() || '简体中文',
+        }),
+      });
+      extractedSubs.push({ sub_rel: data.sub_rel, lang: data.lang || '中', size: 0 });
+      selectedSub = data.sub_rel;
+      renderSubList();
+      showSubStatus(`已翻译并生成 ${data.sub_rel}（可立即烧录）`, false);
+    } catch (e) {
+      showSubStatus(e.message || '翻译失败', true);
+    }
+  };
+
+  const burnSubtitle = async () => {
+    if (!currentLibItem) return;
+    if (!selectedSub) { showSubStatus('请先选择一个字幕文件（提取或翻译后）', true); return; }
+    try {
+      const data = await request('/api/subtitles/burn', {
+        method: 'POST',
+        body: JSON.stringify({ lib_id: currentLibItem.id, sub_rel: selectedSub }),
+      });
+      showSubStatus(`已生成字幕版视频：${data.name}（去「媒体库」刷新即可看到）`, false);
+    } catch (e) {
+      showSubStatus(e.message || '烧录失败', true);
+    }
+  };
+
   el.tabDownload.addEventListener('click', () => switchView('download'));
   el.tabLibrary.addEventListener('click', () => switchView('library'));
   el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
@@ -1372,6 +1505,12 @@
   el.libModalClose.addEventListener('click', () => el.libModal.close());
   el.libModal.addEventListener('click', (e) => { if (e.target === el.libModal) el.libModal.close(); });
   el.libDelete.addEventListener('click', deleteLibItem);
+  el.libSubtitle.addEventListener('click', toggleSubPanel);
+  el.subPanelClose.addEventListener('click', () => { el.subPanel.hidden = true; });
+  el.subProbe.addEventListener('click', probeSubtitles);
+  el.subExtract.addEventListener('click', extractSubtitle);
+  el.subTranslate.addEventListener('click', translateSubtitle);
+  el.subBurn.addEventListener('click', burnSubtitle);
 
   setInterval(loadQueue, 2500);  // 队列概览：持续轮询任务统计
 

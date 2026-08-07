@@ -244,12 +244,43 @@
       </div>
       <div class="lib-player" id="libPlayer"></div>
       <div class="lib-meta" id="libMeta"></div>
-      <div class="lib-actions">
-        <a class="btn btn-success btn-sm" id="libDownload" download>保存到本机 ⬇</a>
-        <button type="button" class="btn btn-ghost btn-sm" id="libDelete">删除</button>
-      </div>
+    <div class="lib-actions">
+      <a class="btn btn-success btn-sm" id="libDownload" download>保存到本机 ⬇</a>
+      <button type="button" class="btn btn-ghost btn-sm" id="libSubtitle" hidden>📝 字幕</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="libDelete">删除</button>
     </div>
-  </dialog>
+
+    <section class="sub-panel" id="subPanel" hidden>
+      <div class="sub-panel-head">
+        <strong>字幕处理</strong>
+        <button type="button" class="modal-close sub-close" id="subPanelClose" aria-label="收起">✕</button>
+      </div>
+      <p class="sub-status" id="subStatus" hidden></p>
+      <div class="sub-row">
+        <input id="subCookie" class="adv-input" type="text" placeholder="Cookie（可选，登录态字幕用）" autocomplete="off" spellcheck="false" />
+        <button type="button" class="btn btn-ghost btn-sm" id="subProbe">探测字幕</button>
+      </div>
+      <div class="sub-row" id="subExtractRow" hidden>
+        <select id="subLang" class="adv-input"><option value="">选择语言</option></select>
+        <button type="button" class="btn btn-primary btn-sm" id="subExtract">提取字幕</button>
+      </div>
+      <ul class="sub-list" id="subList"></ul>
+      <details class="sub-translate-box">
+        <summary>翻译字幕（可选，需 LLM Key）</summary>
+        <div class="sub-translate-body">
+          <label>API Key<input id="subApiKey" class="adv-input" type="password" placeholder="OpenAI 兼容 Key，可留空用服务端配置" autocomplete="off" spellcheck="false" /></label>
+          <label>Base URL<input id="subBaseUrl" class="adv-input" type="text" placeholder="https://api.openai.com" autocomplete="off" spellcheck="false" /></label>
+          <label>模型<input id="subModel" class="adv-input" type="text" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" /></label>
+          <label>目标语言<input id="subTarget" class="adv-input" type="text" placeholder="简体中文" autocomplete="off" spellcheck="false" /></label>
+          <button type="button" class="btn btn-ghost btn-sm" id="subTranslate">翻译选中字幕</button>
+        </div>
+      </details>
+      <div class="sub-burn-row">
+        <button type="button" class="btn btn-primary btn-sm" id="subBurn">烧录硬字幕成片</button>
+      </div>
+    </section>
+  </div>
+</dialog>
 
   <!-- 广告位：默认 hidden，仅当后端 VDL_ADS_ENABLED=true 时由前端显示 -->
   <aside class="ads-slot" id="adsSlot" hidden aria-label="广告位">

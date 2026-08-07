@@ -20,6 +20,7 @@ import json
 import socket
 import logging
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -40,6 +41,7 @@ from urllib.parse import urlparse
 
 import downloader
 import library as library_mod
+import subtitles as subtitles_mod
 import subscriptions as subs_mod
 from batch import BatchScheduler
 from clouddrive import (
@@ -1114,6 +1116,106 @@ def library_delete(lib_id: str) -> dict:
     if not library_mod.delete_item(DOWNLOAD_DIR, lib_id):
         raise HTTPException(status_code=404, detail="文件不存在")
     return {"deleted": True}
+
+
+# ---- 字幕处理：在线字幕提取 / 内嵌字幕抽取 / 硬字幕烧录 / 可选 LLM 翻译 ----
+
+class SubListRequest(BaseModel):
+    lib_id: str = Field(min_length=1)
+    cookie: str = Field(default="", max_length=8192)
+
+
+class SubExtractRequest(BaseModel):
+    lib_id: str = Field(min_length=1)
+    lang: str = Field(min_length=1, max_length=16)
+    cookie: str = Field(default="", max_length=8192)
+
+
+class SubBurnRequest(BaseModel):
+    lib_id: str = Field(min_length=1)
+    sub_rel: str = Field(min_length=1, max_length=256)  # 相对视频目录的字幕文件名
+
+
+class SubTranslateRequest(BaseModel):
+    lib_id: str = Field(min_length=1)
+    sub_rel: str = Field(min_length=1, max_length=256)
+    api_key: str = Field(default="", max_length=512)
+    base_url: str = Field(default="", max_length=512)
+    model: str = Field(default="", max_length=128)
+    target: str = Field(default="简体中文", max_length=32)
+
+
+def _resolve_lib_video(lib_id: str) -> Path:
+    p = library_mod._resolve_safe(DOWNLOAD_DIR, lib_id)
+    if not p or p.suffix.lower() not in library_mod.VIDEO_EXTS:
+        raise HTTPException(status_code=404, detail="视频文件不存在")
+    return p
+
+
+@app.post("/api/subtitles/list")
+def sub_list(req: SubListRequest) -> dict:
+    video = _resolve_lib_video(req.lib_id)
+    meta = library_mod._load_sidecar(video)
+    subs = subtitles_mod.list_online_subs(meta.get("source_url") or "", req.cookie)
+    return {"subs": subs}
+
+
+@app.post("/api/subtitles/extract")
+def sub_extract(req: SubExtractRequest) -> dict:
+    video = _resolve_lib_video(req.lib_id)
+    meta = library_mod._load_sidecar(video)
+    out_dir = video.parent
+    sub = subtitles_mod.extract_online_sub(
+        meta.get("source_url") or "", req.lang, req.cookie, "", out_dir, meta.get("title") or ""
+    )
+    if not sub and not meta.get("source_url"):
+        # 无源链接则尝试抽内嵌字幕流
+        sub = subtitles_mod.extract_embedded_subs(video, out_dir, FFMPEG_BIN)
+    if not sub or not sub.exists():
+        raise HTTPException(status_code=404, detail="未找到该语言的字幕（源站无此字幕且无内嵌字幕流）")
+    rel = sub.relative_to(out_dir).as_posix()
+    return {"sub_rel": rel, "lang": req.lang, "size": sub.stat().st_size}
+
+
+@app.post("/api/subtitles/burn")
+def sub_burn(req: SubBurnRequest) -> dict:
+    video = _resolve_lib_video(req.lib_id)
+    out_dir = video.parent
+    sub_path = (out_dir / req.sub_rel).resolve()
+    if out_dir.resolve() not in sub_path.parents or not sub_path.exists():
+        raise HTTPException(status_code=404, detail="字幕文件不存在")
+    out = subtitles_mod.burn_subtitle(video, sub_path, FFMPEG_BIN)
+    if not out:
+        raise HTTPException(status_code=500, detail="烧录失败，请检查字幕文件格式")
+    meta = library_mod._load_sidecar(video)
+    subtitles_mod._write_subtitle_sidecar(out, meta)
+    new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
+    return {"lib_id": new_id, "name": out.name, "title": (meta.get("title") or out.stem) + "（字幕版）"}
+
+
+@app.post("/api/subtitles/translate")
+def sub_translate(req: SubTranslateRequest) -> dict:
+    video = _resolve_lib_video(req.lib_id)
+    out_dir = video.parent
+    sub_path = (out_dir / req.sub_rel).resolve()
+    if out_dir.resolve() not in sub_path.parents or not sub_path.exists():
+        raise HTTPException(status_code=404, detail="字幕文件不存在")
+    text = sub_path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        translated = subtitles_mod.translate_srt(text, req.api_key, req.base_url, req.model, req.target)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    t = (req.target or "简体中文").strip().lower()
+    if any(k in t for k in ("zh", "chinese", "中", "简")):
+        ext = "zh"
+    else:
+        ext = re.split(r"[^a-z]", t)[0][:4] or "zh"
+    base_stem = re.sub(r"\.(zh|en|ja|ko|fr|de|es|ru|pt|it)$", "", sub_path.stem, flags=re.I)
+    new_path = sub_path.with_name(f"{base_stem}.{ext}.srt")
+    new_path.write_text(translated, encoding="utf-8")
+    return {"sub_rel": new_path.relative_to(out_dir).as_posix(), "lang": req.target, "text": translated}
 
 
 # ---- 订阅监控：关注频道/UP 主，自动下载新发布的视频 ----
