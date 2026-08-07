@@ -197,8 +197,26 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 - 前端：媒体库头部「🔐 保险箱」按钮 + 弹窗（三态：设密码/解锁/已解锁；已解锁态可筛选未加密/已加密、勾选后加密或解密、显示进度与错误）；卡片与详情显示 🔒，加密项播放走 `encfile` 端点。
 - 测试：`tests/test_crypto_unit.py`（派生/校验、加解密往返含大文件>分块/空文件、错密码解密失败、read_header、损坏拒绝、vault 不泄露密钥）+ `tests/test_crypto_routes.py`（status/set-pass/unlock错对/encrypt移回收站+库识别/decrypt还原/lock清密钥/encfile内容一致/禁用 404）全过。
 
+## 2.10 种子下载（libtorrent，已实现）
+
+### 需求
+桌面版（或 `VDL_LIBRARY_ENABLED`/`VDL_TORRENT_ENABLED` 开启）支持三类来源下载到**本地媒体库**：magnet 链接、本地 `.torrent` 文件、`.torrent` 直链（http(s)）。管理：列表、暂停/继续、移除（可选删文件）、按文件优先级跳过不想下的文件。完成后自动进入「媒体库」视图（落盘目录即媒体库扫描目录）。
+
+### 安全设计（改代码前必读）
+1. **依赖缺失即关**：`try: import libtorrent as lt except: lt = None`；`TorrentManager.available()` 返回 `lt is not None`。未装 libtorrent 时功能整体禁用，UI 提示安装，进程照常起（与媒体库/保险箱原则一致）。
+2. **URI 校验**：magnet 必须含 `xt=urn:btih:`，并归一化为最小 magnet（仅保留 `xt/dn/tr/xs/as`），拒绝非 btih 的 xt；`ftp`、私网/环回/链路本地/`.local` 的 `.torrent` 直链一律拒绝（SSRF 护栏，复用下载逻辑的 `_assert_safe_url` 思路，但**仅放行公网 http(s)**）。
+3. **save_path 穿越防护**：子目录必须 resolve 在 `DOWNLOAD_DIR` 内（base==下载目录或 base in parents），越界一律落到下载根目录，绝不写任意路径。
+4. **状态只存内存**：所有任务状态（handle map + meta）仅存于 `TorrentManager` 实例，**重启即丢**，符合项目「任务状态只存内存」原则；不写磁盘任务库。
+5. **下载目录 == 媒体库扫描目录**：种子落盘到 `~/Downloads/VideoDownloader`（媒体库默认扫描根），完成后在媒体文件旁写 `.vdlenc`? 否——写 `.vdlmeta.json`（platform="torrent"），使 `library.scan_library` 自然识别。
+
+### 技术方案
+- 新增 `server/torrent.py`：`TorrentManager` 封装 libtorrent 2.0 API（`session()`/`add_torrent`/`status`/`torrent_file`/`file_progress`/`set_file_priority`/`post_torrent_updates`/`pop_alerts`；`storage_mode_sparse`）。含 `available()`、`validate_uri()`、`_is_safe_url()`、`safe_save_path()`、`start/stop`（自带后台线程 `_loop` + `_on_alert` 处理完成/进度）、`add/get/list/pause/resume/remove/set_file_priorities/describe/_write_sidecar_for`。状态枚举 `_STATE_NAMES = ["queued","checking","downloading","seeding","finished","allocating","checking_resume_data"]`；`PRIORITY_SKIP=0`、`PRIORITY_NORMAL=4`、`PLATFORM_NAME="torrent"`。完成时（`is_finished` 或 state in finished/seeding）遍历 `torrent_file().files()`，仅对 `library.MEDIA_EXTS` 内的文件写 `.vdlmeta.json`。
+- `server/app.py`：开关 `TORRENT_ENABLED`（frozen | VDL_LIBRARY_ENABLED | VDL_TORRENT_ENABLED）；lifespan 启停 `torrent_manager`。`/api/nodes` 暴露 `torrent.enabled/available`；8 条路由：`GET /api/torrents`、`POST /api/torrents/add`、`POST /api/torrents/add-file`（UploadFile+Form，注意 `UploadFile | None` 而非 `File | None`）、`GET /api/torrents/{tid}`、`POST /api/torrents/{tid}/pause|resume|remove`、`POST /api/torrents/{tid}/files`。`_require_torrent()` 守卫：未启用或 `available()==False` 返回 404。
+- 前端：tab 栏新增「🧲 种子」（仅 `torrentEnabled` 时显示）；`#torrentView` 面板（magnet/url 输入 + `.torrent` 文件选择 + 子目录 + 添加按钮 + 列表/轮询状态）；`loadTorrents`/`renderTorrents`/`renderTorrentCard`（进度条/状态/文件勾选/暂停继续删除）、2s 轮询 `startTorPoll/stopTorPoll`。未装 libtorrent 时列表区显示安装提示。新增样式复用 `--brand/--line/--radius-md` 变量。
+- `requirements.txt`：`libtorrent==2.0.11; sys_platform == "linux"`（条件依赖，避免 macOS 13 / Windows 无对应 wheel 时 `pip install -r` 失败）。macOS / Windows 桌面版手动安装：`pip install "libtorrent==2.0.11"`（2.0.11 提供 macOS 13 的 x86_64 wheel；arm64 需 macOS 14+，用 2.0.13）。
+- 测试：`tests/fake_libtorrent.py`（mock `lt` 表面：`FakeLT/FakeSession/FakeHandle/FakeTI/FakeStatus/FakeHash/FakeErr`，驱动全逻辑）+ `tests/test_torrent_unit.py`（9 项：magnet 归一化/缺 xt 拒/ftp 拒/公网放行/私网拒/`_is_safe_url`/`safe_save_path` 穿越防护/状态映射/侧车仅媒体/`describe` 字段）+ `tests/test_torrent_routes.py`（21 项：注入 `torrent_mod.lt=FakeLT()`、隔离 `torrent_manager`，覆盖 add/list/pause/resume/files 优先级/非法 uri 400/remove/nodes 暴露/禁用 404）全过。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
-- 桌面版种子下载（libtorrent 集成）。
 - 订阅监控后台自动下载（见 §3）。
 - 视频渲染/解说管线（见 MEMORY.md 解说规划）。
 - 详见 MEMORY.md 桌面其他功能思路。

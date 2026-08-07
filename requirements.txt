@@ -3,3 +3,9 @@ uvicorn[standard]==0.52.1
 yt-dlp==2026.7.4
 requests==2.32.3
 cryptography==50.0.0
+# 种子下载（桌面版可选）：libtorrent 为可选依赖，未安装时功能自动关闭（import 守护）。
+# 官方 wheel 现状：2.0.13 仅 macOS 14/15；2.0.11 额外提供 macOS 13 的 x86_64 wheel。
+# 为避免在 macOS 13 / Windows 等无对应 wheel 的环境让 `pip install -r requirements.txt` 失败，
+# 这里仅对 Linux 自动安装；macOS / Windows 桌面版请手动安装（见 DESKTOP_FEATURES.md §2.10）：
+#   pip install "libtorrent==2.0.11"
+libtorrent==2.0.11; sys_platform == "linux"

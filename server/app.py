@@ -35,6 +35,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import File as _FastAPIFile, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from urllib.parse import urlparse
@@ -47,6 +48,7 @@ import ffmpeg_tools as fftools
 import retention as retention_mod
 import archive as archive_mod
 import crypto_vault as crypto_mod
+import torrent as torrent_mod
 from batch import BatchScheduler
 from clouddrive import (
     BaiduProvider,
@@ -430,6 +432,15 @@ VAULT_TMP = DOWNLOAD_DIR / ".vault_tmp"
 VAULT_TMP.mkdir(parents=True, exist_ok=True)
 CRYPTO_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-crypto")
 
+# ---- 桌面版种子下载（libtorrent 集成）：把 magnet/.torrent 下载到本地媒体库 ----
+# 与媒体库同一开关策略（桌面版/显式开启）；libtorrent 为可选依赖，未安装时功能整体禁用。
+TORRENT_ENABLED = (
+    bool(getattr(sys, "frozen", False))
+    or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
+    or bool(os.environ.get("VDL_TORRENT_ENABLED"))
+)
+torrent_manager = torrent_mod.TorrentManager(DOWNLOAD_DIR)
+
 
 def _vault_load() -> dict | None:
     try:
@@ -588,9 +599,20 @@ async def lifespan(_: FastAPI):
     orphans = store.purge_orphans()
     if orphans:
         logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)
+    # 桌面版种子下载：启动 libtorrent session（libtorrent 缺失时内部为空操作）
+    if TORRENT_ENABLED and torrent_mod.available():
+        try:
+            torrent_manager.start()
+        except Exception:
+            logger.exception("启动种子下载管理器失败")
     cleaner = asyncio.create_task(_cleanup_loop())
     yield
     cleaner.cancel()
+    if TORRENT_ENABLED:
+        try:
+            torrent_manager.stop()
+        except Exception:
+            pass
     executor.shutdown(wait=False, cancel_futures=True)
     prober.shutdown(wait=False, cancel_futures=True)
     cloud_executor.shutdown(wait=False, cancel_futures=True)
@@ -712,6 +734,10 @@ def node_info() -> dict:
             "enabled": CRYPTO_ENABLED,
             "has_pass": bool(_vault_load()) if CRYPTO_ENABLED else False,
             "locked": VAULT_KEY is None,
+        },
+        "torrent": {
+            "enabled": TORRENT_ENABLED,
+            "available": torrent_mod.available(),
         },
     }
 
@@ -1804,6 +1830,113 @@ def library_encfile(lib_id: str) -> FileResponse:
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
     }.get(ext, "application/octet-stream")
     return FileResponse(path=str(tmp), filename=orig_name, media_type=media)
+
+
+# ---- 桌面版种子下载（libtorrent 集成）：magnet/.torrent → 本地媒体库 ----
+class TorrentAddRequest(BaseModel):
+    uri: str = Field(min_length=1, max_length=8192)
+    name: str = Field(default="", max_length=512)
+    paused: bool = False
+    save_path: str = Field(default="", max_length=4096)  # 相对 DOWNLOAD_DIR 的子目录；留空=根
+    file_priorities: dict[int, int] = Field(default_factory=dict)  # {文件下标: 优先级(0=跳过)}
+
+
+class TorrentRemoveRequest(BaseModel):
+    delete_files: bool = False
+
+
+class TorrentFilesRequest(BaseModel):
+    priorities: dict[int, int] = Field(default_factory=dict)  # {文件下标: 优先级(0=跳过)}
+
+
+def _require_torrent() -> None:
+    if not (TORRENT_ENABLED and torrent_mod.available()):
+        raise HTTPException(status_code=404, detail="种子下载功能未启用（需桌面版并安装 libtorrent）")
+
+
+@app.get("/api/torrents")
+def torrent_list() -> dict:
+    _require_torrent()
+    return {"items": torrent_manager.list(), "available": True}
+
+
+@app.post("/api/torrents/add")
+def torrent_add(req: TorrentAddRequest) -> dict:
+    _require_torrent()
+    try:
+        return torrent_manager.add(
+            uri=req.uri, name=req.name or None, paused=req.paused,
+            save_path=req.save_path or None,
+            file_priorities={int(k): int(v) for k, v in req.file_priorities.items()} or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/torrents/add-file")
+async def torrent_add_file(
+    torrent: UploadFile | None = _FastAPIFile(default=None),
+    name: str = Form(default=""),
+    paused: bool = Form(default=False),
+    save_path: str = Form(default=""),
+) -> dict:
+    _require_torrent()
+    if not torrent:
+        raise HTTPException(status_code=400, detail="未收到 .torrent 文件")
+    data = await torrent.read()
+    if not data:
+        raise HTTPException(status_code=400, detail=".torrent 文件为空")
+    try:
+        return torrent_manager.add(
+            torrent_data=data, name=name or None, paused=paused, save_path=save_path or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/torrents/{tid}")
+def torrent_detail(tid: str) -> dict:
+    _require_torrent()
+    item = torrent_manager.get(tid)
+    if not item:
+        raise HTTPException(status_code=404, detail="种子不存在")
+    return item
+
+
+@app.post("/api/torrents/{tid}/pause")
+def torrent_pause(tid: str) -> dict:
+    _require_torrent()
+    if not torrent_manager.pause(tid):
+        raise HTTPException(status_code=404, detail="种子不存在")
+    return {"paused": True}
+
+
+@app.post("/api/torrents/{tid}/resume")
+def torrent_resume(tid: str) -> dict:
+    _require_torrent()
+    if not torrent_manager.resume(tid):
+        raise HTTPException(status_code=404, detail="种子不存在")
+    return {"paused": False}
+
+
+@app.post("/api/torrents/{tid}/remove")
+def torrent_remove(tid: str, req: TorrentRemoveRequest) -> dict:
+    _require_torrent()
+    if not torrent_manager.remove(tid, delete_files=req.delete_files):
+        raise HTTPException(status_code=404, detail="种子不存在")
+    return {"removed": True}
+
+
+@app.post("/api/torrents/{tid}/files")
+def torrent_set_files(tid: str, req: TorrentFilesRequest) -> dict:
+    _require_torrent()
+    if not torrent_manager.set_file_priorities(tid, {int(k): int(v) for k, v in req.priorities.items()}):
+        raise HTTPException(status_code=404, detail="种子不存在或尚无元数据")
+    return {"updated": True}
 
 
 # ---- 字幕处理：在线字幕提取 / 内嵌字幕抽取 / 硬字幕烧录 / 可选 LLM 翻译 ----

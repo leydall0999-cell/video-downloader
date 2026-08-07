@@ -207,6 +207,16 @@
     subHint: $('subHint'),
     subList: $('subList'),
     subEmpty: $('subEmpty'),
+    // 种子下载（桌面版功能）
+    tabTorrent: $('tabTorrent'),
+    torrentView: $('torrentView'),
+    torAddInput: $('torAddInput'),
+    torTorrentFile: $('torTorrentFile'),
+    torSavePath: $('torSavePath'),
+    torAddBtn: $('torAddBtn'),
+    torEmpty: $('torEmpty'),
+    torList: $('torList'),
+    torStatus: $('torStatus'),
   };
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
@@ -1200,14 +1210,19 @@
   const switchView = (view) => {
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
-    el.downloadView.hidden = isLib || isSub;
+    const isTor = view === 'torrent';
+    el.downloadView.hidden = isLib || isSub || isTor;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub);
+    el.torrentView.hidden = !isTor;
+    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor);
     el.tabLibrary.classList.toggle('is-active', isLib);
     el.tabSubscribe.classList.toggle('is-active', isSub);
+    el.tabTorrent.classList.toggle('is-active', isTor);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
+    if (isTor) { loadTorrents(); startTorPoll(); }
+    else stopTorPoll();
   };
 
   const loadLibrary = async () => {
@@ -1608,6 +1623,7 @@
   el.tabDownload.addEventListener('click', () => switchView('download'));
   el.tabLibrary.addEventListener('click', () => switchView('library'));
   el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
+  el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {
@@ -2549,12 +2565,152 @@
 
   setInterval(loadQueue, 2500);  // 队列概览：持续轮询任务统计
 
+  // ------------------------------------------------------------------ 种子下载（桌面版功能）
+  // 把 magnet/.torrent 下载到本地媒体库；能力由 /api/nodes 的 torrent.enabled 控制。
+  let torTimer = null;
+  const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmtSpeed = (n) => formatBytes(n) + '/s';
+  const fmtEta = (s) => {
+    s = Number(s) || 0;
+    if (s <= 0) return '—';
+    if (s > 86400) return Math.round(s / 86400) + ' 天';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h) return `${h}时${m}分`;
+    if (m) return `${m}分${sec}秒`;
+    return `${sec}秒`;
+  };
+
+  const loadTorrents = async () => {
+    if (!node.torrentEnabled) return;
+    try {
+      const data = await request('/api/torrents');
+      renderTorrents(data.items || []);
+    } catch (e) {
+      if (el.torStatus) { el.torStatus.hidden = true; }
+      if (el.torEmpty) { el.torEmpty.hidden = false; el.torEmpty.textContent = '读取种子列表失败：' + (e.message || '未知错误'); }
+    }
+  };
+
+  const renderTorrents = (items) => {
+    if (!el.torList) return;
+    if (!node.torrentAvailable) {
+      el.torList.replaceChildren();
+      if (el.torEmpty) {
+        el.torEmpty.hidden = false;
+        el.torEmpty.textContent = '当前环境未安装 libtorrent，无法使用种子下载。请在桌面版（macOS 14+ / Linux / Windows，Python ≤3.13）执行 pip install "libtorrent==2.0.11" 后重启本应用。';
+      }
+      return;
+    }
+    if (el.torStatus) el.torStatus.hidden = true;
+    if (el.torEmpty) el.torEmpty.hidden = items.length > 0;
+    el.torList.replaceChildren();
+    for (const t of items) el.torList.appendChild(renderTorrentCard(t));
+  };
+
+  const renderTorrentCard = (t) => {
+    const card = document.createElement('div');
+    card.className = 'tor-card';
+    const pct = Math.round((t.progress || 0) * 100);
+    const stateBadge = t.paused
+      ? '⏸ 已暂停'
+      : (t.state === 'seeding' ? '🌱 做种'
+        : (t.state === 'finished' ? '✅ 完成'
+          : (t.has_metadata ? '⬇️ 下载中' : '🔍 获取元信息')));
+    const meta = [
+      `${formatBytes(t.downloaded)} / ${formatBytes(t.size)}`,
+      `${pct}%`,
+      `↓${fmtSpeed(t.download_speed)} ↑${fmtSpeed(t.upload_speed)}`,
+      `peers ${t.peers}`,
+      `seeds ${t.seeds}`,
+      `ETA ${fmtEta(t.eta)}`,
+    ];
+    let html = `<div class="tor-head"><div class="tor-name" title="${escHtml(t.name)}">${escHtml(t.name)}</div><div class="tor-state">${stateBadge}</div></div>`;
+    html += `<div class="tor-bar"><div class="tor-bar-fill" style="width:${pct}%"></div></div>`;
+    html += `<div class="tor-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>`;
+    if (t.error) html += `<div class="tor-error">⚠ ${escHtml(t.error)}</div>`;
+    if (t.files && t.files.length) {
+      html += `<div class="tor-files"><div class="tor-files-title">文件（取消勾选可跳过该文件下载）：</div>`;
+      for (const f of t.files) {
+        html += `<label class="tor-file"><input type="checkbox" data-tid="${escHtml(t.id)}" data-fidx="${f.index}" ${f.skipped ? '' : 'checked'}> <span class="tor-fname">${escHtml(f.name)}</span> <span class="tor-fsize">${formatBytes(f.size)} · ${Math.round((f.progress || 0) * 100)}%</span></label>`;
+      }
+      html += `</div>`;
+    }
+    html += `<div class="tor-actions">`;
+    html += t.paused
+      ? `<button class="btn btn-ghost btn-sm" data-tor-resume="${escHtml(t.id)}">▶ 继续</button>`
+      : `<button class="btn btn-ghost btn-sm" data-tor-pause="${escHtml(t.id)}">⏸ 暂停</button>`;
+    html += `<button class="btn btn-ghost btn-sm" data-tor-remove="${escHtml(t.id)}">🗑 移除</button></div>`;
+    card.innerHTML = html;
+    return card;
+  };
+
+  if (el.torList) {
+    el.torList.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-tor-pause],[data-tor-resume],[data-tor-remove]');
+      if (!btn) return;
+      const id = btn.getAttribute('data-tor-pause') || btn.getAttribute('data-tor-resume') || btn.getAttribute('data-tor-remove');
+      try {
+        if (btn.hasAttribute('data-tor-pause')) await request(`/api/torrents/${id}/pause`, { method: 'POST' });
+        else if (btn.hasAttribute('data-tor-resume')) await request(`/api/torrents/${id}/resume`, { method: 'POST' });
+        else if (btn.hasAttribute('data-tor-remove')) {
+          if (!confirm('确定移除该种子？已下载的文件不会被删除（如需一并删除文件请到媒体库操作）。')) return;
+          await request(`/api/torrents/${id}/remove`, { method: 'POST', body: JSON.stringify({ delete_files: false }) });
+        }
+        await loadTorrents();
+      } catch (err) { alert('操作失败：' + (err.message || err)); }
+    });
+    el.torList.addEventListener('change', async (e) => {
+      const cb = e.target.closest('input[type=checkbox][data-tid]');
+      if (!cb) return;
+      const tid = cb.getAttribute('data-tid');
+      const fidx = Number(cb.getAttribute('data-fidx'));
+      const prio = cb.checked ? 4 : 0;
+      try {
+        await request(`/api/torrents/${tid}/files`, { method: 'POST', body: JSON.stringify({ priorities: { [fidx]: prio } }) });
+        await loadTorrents();
+      } catch (err) { alert('设置失败：' + (err.message || err)); }
+    });
+  }
+
+  if (el.torAddBtn) {
+    el.torAddBtn.addEventListener('click', async () => {
+      if (!node.torrentAvailable) { alert('当前环境未安装 libtorrent，无法添加种子。'); return; }
+      const uri = (el.torAddInput.value || '').trim();
+      const file = el.torTorrentFile.files && el.torTorrentFile.files[0];
+      if (!uri && !file) { alert('请粘贴 magnet 链接 / .torrent 网址，或选择一个 .torrent 文件'); return; }
+      el.torAddBtn.disabled = true;
+      try {
+        if (file) {
+          const fd = new FormData();
+          fd.append('torrent', file);
+          if (el.torSavePath && el.torSavePath.value.trim()) fd.append('save_path', el.torSavePath.value.trim());
+          await request('/api/torrents/add-file', { method: 'POST', body: fd, headers: {} });
+        } else {
+          const body = { uri };
+          if (el.torSavePath && el.torSavePath.value.trim()) body.save_path = el.torSavePath.value.trim();
+          await request('/api/torrents/add', { method: 'POST', body: JSON.stringify(body) });
+        }
+        el.torAddInput.value = '';
+        if (el.torTorrentFile) el.torTorrentFile.value = '';
+        await loadTorrents();
+      } catch (err) {
+        alert('添加失败：' + (err.message || err));
+      } finally {
+        el.torAddBtn.disabled = false;
+      }
+    });
+  }
+
+  function startTorPoll() { if (!torTimer) torTimer = setInterval(loadTorrents, 2000); }
+  function stopTorPoll() { if (torTimer) { clearInterval(torTimer); torTimer = null; } }
+
   request('/api/platforms')
     .then(({ platforms }) => renderPlatforms(platforms))
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
@@ -2582,10 +2738,13 @@
       node.cryptoEnabled = !!(crypto && crypto.enabled);
       node.cryptoHasPass = !!(crypto && crypto.has_pass);
       node.cryptoLocked = !!(crypto && crypto.locked);
+      node.torrentEnabled = !!(torrent && torrent.enabled);
+      node.torrentAvailable = !!(torrent && torrent.available);
       if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
       if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
-      if (node.libraryEnabled || node.subscriptionsEnabled) el.tabs.hidden = false;
+      if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
+      if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();
     })

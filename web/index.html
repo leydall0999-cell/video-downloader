@@ -36,6 +36,7 @@
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
+    <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
   </nav>
 
   <div id="downloadView">
@@ -238,6 +239,26 @@
     </div>
     <div class="lib-grid" id="libGrid"></div>
     <p class="lib-empty" id="libEmpty" hidden>还没有下载内容。去「下载」粘贴链接保存第一个视频吧。</p>
+  </section>
+
+  <!-- 种子下载视图（桌面版功能） -->
+  <section id="torrentView" class="panel" hidden aria-labelledby="torTitle">
+    <div class="lib-head">
+      <h2 id="torTitle" class="guide-title">🧲 种子下载</h2>
+      <p class="tor-hint">支持 magnet 链接、.torrent 文件或 .torrent 直链；下载到本地媒体库，完成后可在「媒体库」查看。</p>
+    </div>
+    <div class="tor-add">
+      <input id="torAddInput" class="adv-input" type="text" placeholder="magnet:?xt=urn:btih:... 或 https://.../x.torrent" />
+      <label class="tor-file-label btn btn-ghost btn-sm">
+        选择 .torrent
+        <input id="torTorrentFile" type="file" accept=".torrent,application/x-bittorrent" hidden />
+      </label>
+      <input id="torSavePath" class="adv-input tor-save" type="text" placeholder="保存子目录（可选，留空=根目录）" />
+      <button type="button" class="btn btn-primary btn-sm" id="torAddBtn">＋ 添加种子</button>
+    </div>
+    <p class="tor-status" id="torStatus" hidden></p>
+    <div class="tor-list" id="torList"></div>
+    <p class="lib-empty" id="torEmpty" hidden>还没有进行中的种子。</p>
   </section>
 
   <!-- 媒体库播放/详情弹窗 -->

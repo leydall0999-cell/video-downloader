@@ -537,6 +537,32 @@ img { max-width: 100%; display: block; }
 .lib-controls .adv-input { flex: 1; min-width: 140px; }
 .lib-controls select.adv-input { flex: 0 0 auto; min-width: 120px; }
 
+/* ---- 种子下载（桌面版功能） ---- */
+.tor-hint { color: var(--muted); font-size: .85rem; margin: .2rem 0 .9rem; }
+.tor-add { display: flex; gap: .55rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+.tor-add .adv-input { flex: 1; min-width: 220px; }
+.tor-add .tor-save { flex: 0 0 200px; min-width: 160px; }
+.tor-file-label { display: inline-flex; align-items: center; cursor: pointer; }
+.tor-status { color: #b45309; font-size: .85rem; margin: .2rem 0 .8rem; }
+.tor-list { display: flex; flex-direction: column; gap: .7rem; }
+.tor-card {
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: #fcfcff;
+  padding: .8rem .9rem; display: flex; flex-direction: column; gap: .45rem;
+}
+.tor-head { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
+.tor-name { font-weight: 600; font-size: .92rem; color: var(--text); word-break: break-all; }
+.tor-state { flex: 0 0 auto; font-size: .78rem; color: var(--muted); white-space: nowrap; }
+.tor-bar { height: 8px; background: #e9ecf5; border-radius: 99px; overflow: hidden; }
+.tor-bar-fill { height: 100%; background: linear-gradient(90deg, var(--brand), var(--brand-2)); width: 0; transition: width .4s; }
+.tor-meta { display: flex; flex-wrap: wrap; gap: .5rem .9rem; font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tor-error { font-size: .78rem; color: #dc2626; }
+.tor-files { border-top: 1px dashed var(--line); padding-top: .5rem; display: flex; flex-direction: column; gap: .25rem; }
+.tor-files-title { font-size: .76rem; color: var(--muted); margin-bottom: .15rem; }
+.tor-file { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: var(--text); }
+.tor-fname { word-break: break-all; }
+.tor-fsize { color: var(--muted); font-size: .74rem; font-variant-numeric: tabular-nums; margin-left: auto; }
+.tor-actions { display: flex; gap: .45rem; flex-wrap: wrap; }
+
 .lib-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .8rem;
 }
