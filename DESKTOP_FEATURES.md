@@ -115,6 +115,43 @@
 ### 已知取舍
 - 抽帧目录不进媒体库列表，因此也**无法在 App 内删除**，需用户去下载目录手动清理（避免误删整目录的风险）。
 
+## 2.7 时效自动清理（已实现）
+
+### 需求
+长期用下来磁盘会无声爆掉，尤其是「批量抽帧」一次上百张图、中断下载留下的 `.part` 碎片 —— 用户既看不见也删不掉。需要按保留期自动清，但**媒体本体是用户资产，绝不能默认删**。
+
+### 分档策略（核心）
+按「可再生程度」分五档，各自独立开关与保留期：
+
+| 档位 | 默认 | 保留期 | 删除方式 |
+|---|---|---|---|
+| 临时碎片 `.part`/`.ytdl` | 开 | 2 天 | 直接删（进回收站反而白占空间） |
+| 批量抽帧目录 `xxx.抽帧/` | 开 | 7 天 | 直接删（可随时重抽） |
+| 缩略图缓存 `.thumbs/` | 开 | 30 天 | 直接删（下次浏览自动重建） |
+| **媒体本体** | **关** | 90 天 | **强制进系统回收站** |
+| **磁盘容量上限** | **关** | 50 GB | **最旧优先，进回收站** |
+
+### 安全设计（改代码前必读）
+1. **媒体删除强制走回收站**：回收站不可用时**整档跳过并记录原因**，绝不静默硬删。后端 `POST /api/retention/config` 在回收站不可用时直接拒绝开启媒体/容量两档（400）。
+2. **穿越防护**：每个候选路径 `resolve()` 后必须仍在 `download_dir` 内，否则跳过（防符号链接把清理引到目录外）。
+3. **保护名单**：`.subscriptions.json` / `.retention.json` 等配置文件永不删；`download_dir` 本身永不删。
+4. **dry-run 优先**：`scan()` 只算不删，前端必须先「预览将清理什么」才能点「立即清理」，且危险档二次 confirm。
+5. **时间基准用 mtime**；目录取「目录内最新文件的 mtime」，避免误删刚生成的抽帧目录。
+6. **伴生文件联动**：删媒体时 `.vdlmeta.json` / `.srt` 等同名伴生文件一起走，不留孤儿。
+
+### 回收站实现（踩过坑，别退回去）
+macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」授权，**未授权报 -10004，而 `which osascript` 依然为 True** —— 典型假阳性。现为四级兜底：
+
+`PyObjC NSFileManager.trashItemAtURL` → `trash` CLI → Finder AppleScript → **手动移入 `~/.Trash`（零依赖，永远可用）**
+
+`trash_available()` 检测的是「回收站目录真的可写」，不是查命令存在。跨卷时走 `<卷>/.Trashes/<uid>`，避免把几十 GB 复制回系统盘。Linux 手动兜底会补写 `.trashinfo` 以支持「还原」。
+
+### 技术方案
+- 新增 `server/retention.py`：`RetentionConfig`（dataclass）+ `RetentionStore`（JSON 持久化到 `.retention.json`，RLock + 损坏降级）+ `scan()` / `run()` + 跨平台回收站 + `disk_usage()` / `human_size()`。
+- `app.py`：`GET/POST /api/retention/config`、`POST /api/retention/scan`、`POST /api/retention/run`；`_retention_watchdog` 后台守护线程按 `interval_hours` 周期跑；`/api/nodes` 暴露 `retention.enabled` / `trash_available`。
+- 开关同媒体库：桌面 frozen 或 `VDL_RETENTION_ENABLED=true` 才暴露。
+- 前端：媒体库头部「🧹 自动清理」按钮 + 独立弹窗（磁盘占用条、总开关+检查周期、五档规则、预览清单、危险档二次确认）。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
 - 一键归档网盘；本地媒体库加密。
 - 详见 MEMORY.md 桌面其他功能思路。

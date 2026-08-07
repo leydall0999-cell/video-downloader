@@ -220,7 +220,10 @@
   <section id="libraryView" class="panel" hidden aria-labelledby="libTitle">
     <div class="lib-head">
       <h2 id="libTitle" class="guide-title">我的媒体库</h2>
-      <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
+      <div class="lib-head-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="libCleanup" hidden>🧹 自动清理</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
+      </div>
     </div>
     <div class="lib-controls">
       <input id="libSearch" class="adv-input" type="search" placeholder="搜索标题 / 作者 / 文件名" />
@@ -429,6 +432,69 @@
       <span class="cloud-status" id="cloudStatus"></span>
     </div>
     <p class="cloud-note">凭据仅保存在你本机浏览器（localStorage），只发往你配置的网盘。自托管实例下服务端会短暂读取以完成上传。</p>
+  </div>
+</dialog>
+
+<!-- 时效自动清理：按保留期/容量上限清理下载目录 -->
+<dialog id="cleanModal" class="modal" aria-labelledby="cleanModalTitle">
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 id="cleanModalTitle">时效自动清理</h2>
+      <button type="button" class="modal-close" id="cleanModalClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub">按保留期自动清掉过期的临时碎片与派生产物。<strong>媒体本体默认不动</strong>，开启后也只会移入系统回收站。</p>
+
+    <p class="clean-usage" id="cleanUsage">正在读取磁盘占用…</p>
+
+    <div class="clean-master">
+      <label class="clean-switch">
+        <input type="checkbox" id="cleanAuto">
+        <span>开启后台自动清理</span>
+      </label>
+      <label class="clean-interval">每
+        <input type="number" id="cleanInterval" class="adv-input" min="0.25" max="168" step="0.25" value="6">
+        小时检查一次
+      </label>
+    </div>
+
+    <div class="clean-rules">
+      <div class="clean-rule">
+        <label class="clean-switch"><input type="checkbox" id="cleanTempOn"><span>中断下载的临时碎片</span></label>
+        <label class="clean-days">保留 <input type="number" id="cleanTempDays" class="adv-input" min="0" max="3650" step="1" value="2"> 天</label>
+        <p class="clean-hint">.part / .ytdl 等下载失败留下的碎片，直接删除。</p>
+      </div>
+      <div class="clean-rule">
+        <label class="clean-switch"><input type="checkbox" id="cleanFramesOn"><span>批量抽帧目录</span></label>
+        <label class="clean-days">保留 <input type="number" id="cleanFramesDays" class="adv-input" min="0" max="3650" step="1" value="7"> 天</label>
+        <p class="clean-hint">`xxx.抽帧/` 里动辄上百张图，可随时重新抽，直接删除。</p>
+      </div>
+      <div class="clean-rule">
+        <label class="clean-switch"><input type="checkbox" id="cleanThumbsOn"><span>缩略图缓存</span></label>
+        <label class="clean-days">保留 <input type="number" id="cleanThumbsDays" class="adv-input" min="0" max="3650" step="1" value="30"> 天</label>
+        <p class="clean-hint">`.thumbs/` 纯缓存，删掉下次浏览会自动重建。</p>
+      </div>
+      <div class="clean-rule clean-rule-danger">
+        <label class="clean-switch"><input type="checkbox" id="cleanMediaOn"><span>媒体文件（按保留期）</span></label>
+        <label class="clean-days">保留 <input type="number" id="cleanMediaDays" class="adv-input" min="1" max="3650" step="1" value="90"> 天</label>
+        <p class="clean-hint">⚠️ 这是你的下载资产。开启后超期视频/音频会连同字幕、元信息一起<strong>移入系统回收站</strong>（不是直接删）。</p>
+      </div>
+      <div class="clean-rule clean-rule-danger">
+        <label class="clean-switch"><input type="checkbox" id="cleanQuotaOn"><span>磁盘容量上限</span></label>
+        <label class="clean-days">上限 <input type="number" id="cleanQuotaGb" class="adv-input" min="1" max="100000" step="1" value="50"> GB</label>
+        <p class="clean-hint">⚠️ 超出后按「最旧优先」移入回收站，直到降回上限以内。</p>
+      </div>
+    </div>
+
+    <p class="clean-trash-warn" id="cleanTrashWarn" hidden>⚠️ 当前系统没有可用的回收站通道，「媒体文件」与「容量上限」两档已锁定 —— 不允许直接硬删你的资产。</p>
+
+    <div class="clean-actions">
+      <button type="button" class="btn btn-ghost" id="cleanSave">保存设置</button>
+      <button type="button" class="btn btn-ghost" id="cleanScan">预览将清理什么</button>
+      <button type="button" class="btn btn-primary" id="cleanRun" disabled>立即清理</button>
+      <span class="clean-status" id="cleanStatus"></span>
+    </div>
+
+    <div class="clean-preview" id="cleanPreview" hidden></div>
   </div>
 </dialog>
 

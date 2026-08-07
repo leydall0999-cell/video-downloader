@@ -44,6 +44,7 @@ import library as library_mod
 import subtitles as subtitles_mod
 import subscriptions as subs_mod
 import ffmpeg_tools as fftools
+import retention as retention_mod
 from batch import BatchScheduler
 from clouddrive import (
     BaiduProvider,
@@ -368,6 +369,11 @@ sub_store = subs_mod.SubscriptionStore(DOWNLOAD_DIR / ".subscriptions.json")
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
 cloud_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cloud")  # 云盘上传独立线程池，避免挤占下载
 
+# ---- 时效自动清理（桌面版功能）：按保留期/容量上限清理下载目录 ----
+# 与媒体库同一开关：只有桌面版（或显式开 VDL_LIBRARY_ENABLED）才管理本地磁盘。
+RETENTION_ENABLED = bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
+retention_store = retention_mod.RetentionStore(DOWNLOAD_DIR / ".retention.json")
+
 
 # --------------------------------------------------------------------------- #
 # 自动解说（松耦合桥接 commentary-pipeline/process.py，不重写解说逻辑）
@@ -593,6 +599,11 @@ def node_info() -> dict:
             "enabled": SUB_ENABLED,
             "probe_limit": SUBSCRIBE_PROBE_LIMIT,
             "check_interval": SUB_CHECK_INTERVAL,
+        },
+        # 时效自动清理：与媒体库同开关；trash_available 决定「删媒体」档能否开启
+        "retention": {
+            "enabled": RETENTION_ENABLED,
+            "trash_available": retention_mod.trash_available() if RETENTION_ENABLED else False,
         },
     }
 
@@ -1123,6 +1134,98 @@ def library_delete(lib_id: str) -> dict:
     return {"deleted": True}
 
 
+# ---- 时效自动清理：按保留期/容量上限清理下载目录（预览 → 执行，媒体走回收站） ----
+
+class RetentionConfigRequest(BaseModel):
+    auto_enabled: bool | None = None
+    interval_hours: float | None = Field(default=None, ge=0.25, le=168)
+    temp_enabled: bool | None = None
+    temp_days: float | None = Field(default=None, ge=0, le=3650)
+    frames_enabled: bool | None = None
+    frames_days: float | None = Field(default=None, ge=0, le=3650)
+    thumbs_enabled: bool | None = None
+    thumbs_days: float | None = Field(default=None, ge=0, le=3650)
+    media_enabled: bool | None = None
+    media_days: float | None = Field(default=None, ge=1, le=3650)
+    quota_enabled: bool | None = None
+    quota_gb: float | None = Field(default=None, ge=1, le=100000)
+    media_use_trash: bool | None = None
+
+
+class RetentionRunRequest(BaseModel):
+    # 只清指定档位；留空=按当前配置全清。前端「预览后执行」会带上用户勾选的档位。
+    categories: list[str] | None = None
+
+
+def _require_retention() -> None:
+    if not RETENTION_ENABLED:
+        raise HTTPException(status_code=404, detail="自动清理仅桌面版可用")
+
+
+@app.get("/api/retention/config")
+def retention_config_get() -> dict:
+    _require_retention()
+    cfg = retention_store.get()
+    return {
+        "config": cfg.to_dict(),
+        "labels": retention_mod.CATEGORY_LABELS,
+        "trash_available": retention_mod.trash_available(),
+        "usage": retention_mod.disk_usage(DOWNLOAD_DIR),
+    }
+
+
+@app.post("/api/retention/config")
+def retention_config_set(req: RetentionConfigRequest) -> dict:
+    _require_retention()
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    # 安全阀：没有可用回收站时不允许开启「删媒体本体」，避免静默硬删用户资产
+    if not retention_mod.trash_available():
+        if fields.get("media_enabled") or fields.get("quota_enabled"):
+            raise HTTPException(status_code=400, detail="系统回收站不可用，无法开启媒体清理（拒绝直接硬删）")
+    if fields.get("media_use_trash") is False:
+        raise HTTPException(status_code=400, detail="媒体清理必须走回收站，不允许关闭")
+    cfg = retention_store.update(**fields)
+    return {"config": cfg.to_dict()}
+
+
+@app.post("/api/retention/scan")
+def retention_scan() -> dict:
+    """只算不删：返回将被清理的分档清单与可释放空间。"""
+    _require_retention()
+    cfg = retention_store.get()
+    plan = retention_mod.scan(DOWNLOAD_DIR, cfg)
+    plan["usage"] = retention_mod.disk_usage(DOWNLOAD_DIR)
+    # 每档只回传前 50 条明细，避免上千条把响应撑爆；总数/总大小已单列
+    for cat, entries in plan["categories"].items():
+        plan["categories"][cat] = {
+            "count": len(entries),
+            "size": sum(e["size"] for e in entries),
+            "items": entries[:50],
+        }
+    return plan
+
+
+@app.post("/api/retention/run")
+def retention_run(req: RetentionRunRequest) -> dict:
+    _require_retention()
+    cfg = retention_store.get()
+    cats = req.categories or None
+    if cats:
+        unknown = [c for c in cats if c not in retention_mod.CATEGORY_LABELS]
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"未知清理类别：{', '.join(unknown)}")
+    try:
+        result = retention_mod.run(DOWNLOAD_DIR, cfg, cats)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("手动清理失败")
+        raise HTTPException(status_code=500, detail=f"清理失败：{str(exc)[:200]}")
+    retention_store.update(last_run=result["ran_at"], last_freed=result["freed"],
+                           last_removed=result["removed"])
+    result["usage"] = retention_mod.disk_usage(DOWNLOAD_DIR)
+    result["freed_text"] = retention_mod.human_size(result["freed"])
+    return result
+
+
 # ---- 字幕处理：在线字幕提取 / 内嵌字幕抽取 / 硬字幕烧录 / 可选 LLM 翻译 ----
 
 class SubListRequest(BaseModel):
@@ -1482,6 +1585,37 @@ def _subscription_watchdog() -> None:
 if SUB_ENABLED:
     _sub_watchdog = threading.Thread(target=_subscription_watchdog, name="vdl-sub-watchdog", daemon=True)
     _sub_watchdog.start()
+
+
+def _retention_watchdog() -> None:
+    """后台常驻：按 interval_hours 周期执行时效清理。
+
+    启动后先静置 120 秒再首跑 —— 避免「刚开 App 就开始删东西」，也给用户留出
+    改配置的窗口。总开关 auto_enabled 关闭时只空转，不碰磁盘。
+    """
+    time.sleep(120)
+    while True:
+        cfg = retention_store.get()
+        interval = max(0.25, float(cfg.interval_hours or 6.0)) * 3600
+        if not cfg.auto_enabled:
+            time.sleep(min(interval, 1800))
+            continue
+        try:
+            result = retention_mod.run(DOWNLOAD_DIR, cfg)
+            if result["removed"] or result["failed"]:
+                logger.info("自动清理：移除 %s 项，释放 %s，失败 %s 项",
+                            result["removed"], retention_mod.human_size(result["freed"]),
+                            result["failed"])
+                retention_store.update(last_run=result["ran_at"], last_freed=result["freed"],
+                                       last_removed=result["removed"])
+        except Exception:
+            logger.exception("自动清理执行异常")
+        time.sleep(interval)
+
+
+if RETENTION_ENABLED:
+    _ret_watchdog = threading.Thread(target=_retention_watchdog, name="vdl-retention", daemon=True)
+    _ret_watchdog.start()
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

@@ -90,6 +90,28 @@
     downloadView: $('downloadView'),
     libraryView: $('libraryView'),
     libRefresh: $('libRefresh'),
+    libCleanup: $('libCleanup'),
+    cleanModal: $('cleanModal'),
+    cleanModalClose: $('cleanModalClose'),
+    cleanUsage: $('cleanUsage'),
+    cleanAuto: $('cleanAuto'),
+    cleanInterval: $('cleanInterval'),
+    cleanTempOn: $('cleanTempOn'),
+    cleanTempDays: $('cleanTempDays'),
+    cleanFramesOn: $('cleanFramesOn'),
+    cleanFramesDays: $('cleanFramesDays'),
+    cleanThumbsOn: $('cleanThumbsOn'),
+    cleanThumbsDays: $('cleanThumbsDays'),
+    cleanMediaOn: $('cleanMediaOn'),
+    cleanMediaDays: $('cleanMediaDays'),
+    cleanQuotaOn: $('cleanQuotaOn'),
+    cleanQuotaGb: $('cleanQuotaGb'),
+    cleanTrashWarn: $('cleanTrashWarn'),
+    cleanSave: $('cleanSave'),
+    cleanScan: $('cleanScan'),
+    cleanRun: $('cleanRun'),
+    cleanStatus: $('cleanStatus'),
+    cleanPreview: $('cleanPreview'),
     libSearch: $('libSearch'),
     libPlatform: $('libPlatform'),
     libKind: $('libKind'),
@@ -155,6 +177,8 @@
     cloudProviders: ['webdav'], baiduAvailable: false, baiduAuthUrl: '',
     libraryEnabled: false,
     subscriptionsEnabled: false,
+    retentionEnabled: false,
+    trashAvailable: false,
   };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
@@ -1513,6 +1537,234 @@
   el.tabLibrary.addEventListener('click', () => switchView('library'));
   el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   el.subAddBtn.addEventListener('click', addSubscription);
+  // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
+  const CLEAN_LABELS = {
+    temp: '中断下载的临时碎片',
+    frames: '批量抽帧目录',
+    thumbs: '缩略图缓存',
+    media: '媒体文件（超过保留期）',
+    quota: '媒体文件（超出容量上限）',
+  };
+  const DANGER_CATS = ['media', 'quota'];
+  let cleanPlan = null;
+
+  const fmtSize = (n) => {
+    let v = Number(n) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
+  };
+
+  const showCleanStatus = (msg, isErr = false) => {
+    el.cleanStatus.textContent = msg || '';
+    el.cleanStatus.classList.toggle('is-error', !!isErr);
+  };
+
+  const applyTrashLock = () => {
+    const locked = !node.trashAvailable;
+    el.cleanTrashWarn.hidden = !locked;
+    [el.cleanMediaOn, el.cleanQuotaOn].forEach((cb) => {
+      cb.disabled = locked;
+      if (locked) cb.checked = false;
+    });
+    el.cleanMediaDays.disabled = locked;
+    el.cleanQuotaGb.disabled = locked;
+  };
+
+  const fillCleanForm = (cfg) => {
+    el.cleanAuto.checked = !!cfg.auto_enabled;
+    el.cleanInterval.value = cfg.interval_hours ?? 6;
+    el.cleanTempOn.checked = !!cfg.temp_enabled;
+    el.cleanTempDays.value = cfg.temp_days ?? 2;
+    el.cleanFramesOn.checked = !!cfg.frames_enabled;
+    el.cleanFramesDays.value = cfg.frames_days ?? 7;
+    el.cleanThumbsOn.checked = !!cfg.thumbs_enabled;
+    el.cleanThumbsDays.value = cfg.thumbs_days ?? 30;
+    el.cleanMediaOn.checked = !!cfg.media_enabled;
+    el.cleanMediaDays.value = cfg.media_days ?? 90;
+    el.cleanQuotaOn.checked = !!cfg.quota_enabled;
+    el.cleanQuotaGb.value = cfg.quota_gb ?? 50;
+    applyTrashLock();
+  };
+
+  const collectCleanConfig = () => ({
+    auto_enabled: el.cleanAuto.checked,
+    interval_hours: Number(el.cleanInterval.value) || 6,
+    temp_enabled: el.cleanTempOn.checked,
+    temp_days: Number(el.cleanTempDays.value) || 0,
+    frames_enabled: el.cleanFramesOn.checked,
+    frames_days: Number(el.cleanFramesDays.value) || 0,
+    thumbs_enabled: el.cleanThumbsOn.checked,
+    thumbs_days: Number(el.cleanThumbsDays.value) || 0,
+    media_enabled: el.cleanMediaOn.checked,
+    media_days: Number(el.cleanMediaDays.value) || 90,
+    quota_enabled: el.cleanQuotaOn.checked,
+    quota_gb: Number(el.cleanQuotaGb.value) || 50,
+  });
+
+  const paintUsage = (usage) => {
+    if (!usage) return;
+    el.cleanUsage.textContent =
+      `下载目录已占用 ${fmtSize(usage.dir_size)}，磁盘剩余 ${fmtSize(usage.disk_free)} · ${usage.path}`;
+  };
+
+  const openCleanModal = async () => {
+    cleanPlan = null;
+    el.cleanPreview.hidden = true;
+    el.cleanPreview.replaceChildren();
+    el.cleanRun.disabled = true;
+    showCleanStatus('');
+    el.cleanUsage.textContent = '正在读取磁盘占用…';
+    if (typeof el.cleanModal.showModal === 'function') el.cleanModal.showModal();
+    try {
+      const data = await request('/api/retention/config');
+      node.trashAvailable = !!data.trash_available;
+      fillCleanForm(data.config || {});
+      paintUsage(data.usage);
+    } catch (err) {
+      el.cleanUsage.textContent = '';
+      showCleanStatus(err.message || '读取清理设置失败', true);
+    }
+  };
+
+  const saveClean = async () => {
+    el.cleanSave.disabled = true;
+    showCleanStatus('保存中…');
+    try {
+      await request('/api/retention/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectCleanConfig()),
+      });
+      showCleanStatus('设置已保存');
+    } catch (err) {
+      showCleanStatus(err.message || '保存失败', true);
+    } finally {
+      el.cleanSave.disabled = false;
+    }
+  };
+
+  const renderCleanPreview = (plan) => {
+    el.cleanPreview.replaceChildren();
+    const cats = plan.categories || {};
+    const rows = Object.entries(cats).filter(([, v]) => (v.count || 0) > 0);
+    if (!rows.length) {
+      const p = document.createElement('p');
+      p.className = 'clean-empty';
+      p.textContent = '按当前设置，没有需要清理的东西。';
+      el.cleanPreview.appendChild(p);
+      el.cleanPreview.hidden = false;
+      el.cleanRun.disabled = true;
+      return;
+    }
+    const head = document.createElement('p');
+    head.className = 'clean-total';
+    head.textContent = `共 ${plan.total_files} 项，可释放约 ${fmtSize(plan.total_size)}`;
+    el.cleanPreview.appendChild(head);
+
+    rows.forEach(([cat, info]) => {
+      const box = document.createElement('div');
+      box.className = 'clean-cat' + (DANGER_CATS.includes(cat) ? ' clean-cat-danger' : '');
+      const title = document.createElement('p');
+      title.className = 'clean-cat-title';
+      title.textContent = `${CLEAN_LABELS[cat] || cat} · ${info.count} 项 · ${fmtSize(info.size)}`
+        + (DANGER_CATS.includes(cat) ? '（移入回收站）' : '');
+      box.appendChild(title);
+      const list = document.createElement('ul');
+      list.className = 'clean-cat-list';
+      (info.items || []).slice(0, 8).forEach((it) => {
+        const li = document.createElement('li');
+        li.textContent = `${it.rel}${it.is_dir ? '/' : ''} · ${fmtSize(it.size)} · ${it.age_days} 天前`;
+        list.appendChild(li);
+      });
+      if (info.count > 8) {
+        const li = document.createElement('li');
+        li.className = 'clean-more';
+        li.textContent = `…另有 ${info.count - 8} 项`;
+        list.appendChild(li);
+      }
+      box.appendChild(list);
+      el.cleanPreview.appendChild(box);
+    });
+    el.cleanPreview.hidden = false;
+    el.cleanRun.disabled = false;
+  };
+
+  const scanClean = async () => {
+    el.cleanScan.disabled = true;
+    el.cleanRun.disabled = true;
+    showCleanStatus('正在扫描…');
+    try {
+      // 先落盘当前表单，保证预览用的就是屏幕上这套设置
+      await request('/api/retention/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectCleanConfig()),
+      });
+      cleanPlan = await request('/api/retention/scan', { method: 'POST' });
+      paintUsage(cleanPlan.usage);
+      renderCleanPreview(cleanPlan);
+      showCleanStatus('');
+    } catch (err) {
+      showCleanStatus(err.message || '扫描失败', true);
+    } finally {
+      el.cleanScan.disabled = false;
+    }
+  };
+
+  const runClean = async () => {
+    if (!cleanPlan) { showCleanStatus('请先点「预览将清理什么」', true); return; }
+    const cats = Object.entries(cleanPlan.categories || {})
+      .filter(([, v]) => (v.count || 0) > 0)
+      .map(([k]) => k);
+    if (!cats.length) { showCleanStatus('没有需要清理的内容'); return; }
+    const dangerous = cats.filter((c) => DANGER_CATS.includes(c));
+    const total = cleanPlan.total_files;
+    let msg = `确定清理 ${total} 项、释放约 ${fmtSize(cleanPlan.total_size)}？`;
+    if (dangerous.length) {
+      const n = dangerous.reduce((s, c) => s + (cleanPlan.categories[c].count || 0), 0);
+      msg += `\n\n⚠️ 其中 ${n} 个是你的媒体文件，会连同字幕/元信息一起移入系统回收站（可从回收站找回）。`;
+    }
+    if (!window.confirm(msg)) return;
+
+    el.cleanRun.disabled = true;
+    showCleanStatus('正在清理…');
+    try {
+      const res = await request('/api/retention/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categories: cats }),
+      });
+      paintUsage(res.usage);
+      let text = `已清理 ${res.removed} 项，释放 ${res.freed_text || fmtSize(res.freed)}`;
+      if (res.failed) text += `，${res.failed} 项失败`;
+      showCleanStatus(text, !!res.failed);
+      if ((res.errors || []).length) {
+        const box = document.createElement('div');
+        box.className = 'clean-errors';
+        res.errors.forEach((e) => {
+          const p = document.createElement('p');
+          p.textContent = e;
+          box.appendChild(p);
+        });
+        el.cleanPreview.appendChild(box);
+      }
+      cleanPlan = null;
+      loadLibrary();
+    } catch (err) {
+      showCleanStatus(err.message || '清理失败', true);
+    }
+  };
+
+  el.libCleanup.addEventListener('click', openCleanModal);
+  el.cleanModalClose.addEventListener('click', () => {
+    if (typeof el.cleanModal.close === 'function') el.cleanModal.close();
+  });
+  el.cleanSave.addEventListener('click', saveClean);
+  el.cleanScan.addEventListener('click', scanClean);
+  el.cleanRun.addEventListener('click', runClean);
+
   el.libRefresh.addEventListener('click', loadLibrary);
   el.libSearch.addEventListener('input', debounce(loadLibrary, 300));
   el.libPlatform.addEventListener('change', loadLibrary);
@@ -1742,7 +1994,7 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention }) => {
       node.region = region || 'global';
       node.peer = peer || '';
       node.chinaDomains = domains || [];
@@ -1762,6 +2014,9 @@
       node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
       node.libraryEnabled = !!(library && library.enabled);
       node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
+      node.retentionEnabled = !!(retention && retention.enabled);
+      node.trashAvailable = !!(retention && retention.trash_available);
+      if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
       if (node.libraryEnabled || node.subscriptionsEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();
