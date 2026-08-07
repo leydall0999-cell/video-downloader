@@ -201,12 +201,22 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     effective_proxy = proxy or _resolve_proxy(host)
     if effective_proxy:
         options["proxy"] = effective_proxy
+    # 国内站（B站/抖音等）反爬严格：缺 Referer/UA 常被直接 412，无论是否带 cookie 都先补上浏览器请求头
+    headers = options.setdefault("http_headers", {})
+    if is_china_host(host):
+        referer = "https://www.douyin.com/" if "douyin" in host else "https://www.bilibili.com/"
+        headers.setdefault("Referer", referer)
+        headers.setdefault(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
     # Cookie：用户粘贴的会话 Cookie（字符串）优先注入请求头，覆盖环境变量级的浏览器 Cookie
     cookie_text = cookie.strip()
     if cookie_text.lower().startswith("cookie:"):
         cookie_text = cookie_text[7:].strip()
     if cookie_text:
-        options.setdefault("http_headers", {})["Cookie"] = cookie_text
+        headers["Cookie"] = cookie_text
     # 兜底：环境变量指定的浏览器 Cookie 来源（服务器级配置）
     browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
     if browser:
