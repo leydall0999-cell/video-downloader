@@ -1561,6 +1561,30 @@
       { key: 'factor', label: '放大倍率', type: 'select', options: ['1.5', '2', '4'], def: '2' },
       { key: 'sharpen', label: '锐化', type: 'checkbox', def: true },
     ]},
+    frame:    { label: '抽帧封面（单张）', kinds: ['video'], params: [
+      { key: 'at', label: '时间点(秒)', type: 'number', def: 1 },
+      { key: 'fmt', label: '图片格式', type: 'select', options: ['jpg', 'png', 'webp'], def: 'jpg' },
+      { key: 'width', label: '宽度(px，0=原始)', type: 'number', def: 0 },
+    ]},
+    frames:   { label: '批量抽帧（存子目录）', kinds: ['video'], params: [
+      { key: 'start', label: '开始(秒)', type: 'number', def: 0 },
+      { key: 'end', label: '结束(秒，0=到末尾)', type: 'number', def: 0 },
+      { key: 'interval', label: '每隔几秒抽一帧', type: 'number', def: 1 },
+      { key: 'limit', label: '最多抽多少帧', type: 'number', def: 100 },
+      { key: 'fmt', label: '图片格式', type: 'select', options: ['jpg', 'png'], def: 'jpg' },
+      { key: 'width', label: '宽度(px，0=原始)', type: 'number', def: 0 },
+    ]},
+    sheet:    { label: '预览图（九宫格拼图）', kinds: ['video'], params: [
+      { key: 'rows', label: '行数', type: 'select', options: ['2', '3', '4', '5'], def: '3' },
+      { key: 'cols', label: '列数', type: 'select', options: ['2', '3', '4', '5'], def: '4' },
+      { key: 'width', label: '总宽度(px)', type: 'select', options: ['960', '1280', '1920'], def: '1280' },
+    ]},
+    ringtone: { label: '做铃声（片段+淡入淡出）', kinds: ['video', 'audio'], params: [
+      { key: 'start', label: '开始(秒)', type: 'number', def: 0 },
+      { key: 'duration', label: '时长(秒，iPhone 上限 40)', type: 'number', def: 30 },
+      { key: 'fmt', label: '格式', type: 'select', options: ['m4r', 'm4a', 'mp3'], def: 'm4r' },
+      { key: 'fade', label: '淡入淡出(秒，0=关闭)', type: 'number', def: 1 },
+    ]},
   };
 
   // 比例预设 → 确保偶数的 crop 表达式（ffmpeg crop 要求宽高为偶）。
@@ -1681,6 +1705,9 @@
     const op = el.processOp.value;
     if (!op) { showProcessStatus('请选择一个处理操作', true); return; }
     const params = collectParams();
+    if (op === 'ringtone' && params.fmt === 'm4r' && Number(params.duration) > 40) {
+      showProcessStatus('提示：iPhone 铃声上限 40 秒，超出可能无法导入（仍会生成）', true);
+    }
     el.processRun.disabled = true;
     showProcessStatus('正在处理…（大视频可能要几分钟）', false);
     try {
@@ -1690,9 +1717,14 @@
       });
       const result = await pollProcess(data.job_id);
       if (result.status === 'completed') {
-        if (typeof el.libModal.close === 'function') el.libModal.close();
-        loadLibrary();
-        showProcessStatus(`已生成：${result.name}（去「媒体库」刷新即可看到）`, false);
+        if (result.is_dir) {
+          // 批量抽帧：产物是子目录，不进媒体库列表，留在面板里提示路径
+          showProcessStatus(`已抽 ${result.count} 帧 → 下载目录/${result.name}/`, false);
+        } else {
+          if (typeof el.libModal.close === 'function') el.libModal.close();
+          loadLibrary();
+          showProcessStatus(`已生成：${result.name}（去「媒体库」刷新即可看到）`, false);
+        }
       } else {
         showProcessStatus('处理失败：' + (result.error || '未知错误'), true);
       }

@@ -17,11 +17,13 @@ from pathlib import Path
 from typing import Any
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".ts", ".flv", ".mpeg", ".mpg"}
-AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav", ".opus", ".wma"}
-IMAGE_EXTS = {".gif", ".webp"}
+AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav", ".opus", ".wma", ".m4r"}
+IMAGE_EXTS = {".gif", ".webp", ".jpg", ".jpeg", ".png"}
 MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS | IMAGE_EXTS
 
 THUMB_DIR_NAME = ".thumbs"
+# 批量抽帧产物目录（`<标题>.抽帧[.n]`）：里面动辄上百张图，不进媒体库列表，避免刷屏。
+FRAMES_DIR_MARK = ".抽帧"
 _THUMB_LOCK = threading.Lock()
 
 
@@ -87,6 +89,9 @@ def scan_library(download_dir: Path) -> list[dict[str, Any]]:
         # 跳过缩略图缓存目录与转换目录里的临时/派生文件（可选包含 conversions，但跳过 .part）
         if rel.parts and rel.parts[0] == THUMB_DIR_NAME:
             continue
+        # 跳过批量抽帧子目录（`<标题>.抽帧` / `<标题>.抽帧.2`）里的成百上千张帧图
+        if any(FRAMES_DIR_MARK in part for part in rel.parts[:-1]):
+            continue
         if _in_progress(path):
             continue
         meta = _load_sidecar(path)
@@ -141,17 +146,22 @@ def get_thumbnail(download_dir: Path, lib_id: str, ffmpeg_bin: str) -> Path | No
             return tp
         tp.parent.mkdir(parents=True, exist_ok=True)
         tmp = tp.with_suffix(".tmp.jpg")
-        cmd = [
-            ffmpeg_bin, "-y", "-ss", "1", "-i", str(item_path),
-            "-vf", "scale=320:-1", "-frames:v", "1", "-q:v", "4", str(tmp),
-        ]
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=30)
-        except Exception:
-            return None
-        if tmp.exists() and tmp.stat().st_size > 0:
-            tmp.replace(tp)
-            return tp
+        # 静态图片（封面/预览图）只有一帧，带任何 -ss（含 -ss 0）都会被 seek 掉导致输出为空，
+        # 所以图片一律不加 -ss；视频先试 1 秒（跳过黑场片头），失败再回退到不 seek。
+        is_image = item_path.suffix.lower() in IMAGE_EXTS
+        seek_variants: list[list[str]] = [[]] if is_image else [["-ss", "1"], []]
+        for seek in seek_variants:
+            cmd = [
+                ffmpeg_bin, "-y", *seek, "-i", str(item_path),
+                "-vf", "scale=320:-1", "-frames:v", "1", "-q:v", "4", str(tmp),
+            ]
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=30)
+            except Exception:
+                continue
+            if tmp.exists() and tmp.stat().st_size > 0:
+                tmp.replace(tp)
+                return tp
         return None
 
 

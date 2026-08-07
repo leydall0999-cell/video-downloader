@@ -1236,14 +1236,16 @@ class ProcessRequest(BaseModel):
 def process_run(req: ProcessRequest) -> dict:
     if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
         raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
-    if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale"):
+    if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
+                      "frame", "frames", "sheet", "ringtone"):
         raise HTTPException(status_code=400, detail="不支持的处理类型")
     src = library_mod._resolve_safe(DOWNLOAD_DIR, req.lib_id)
     if not src or not src.is_file():
         raise HTTPException(status_code=404, detail="源文件不存在")
     job_id = uuid.uuid4().hex[:12]
     with PROCESS_LOCK:
-        PROCESS_JOBS[job_id] = {"status": "running", "error": "", "out_path": "", "lib_id": "", "name": ""}
+        PROCESS_JOBS[job_id] = {"status": "running", "error": "", "out_path": "",
+                                "lib_id": "", "name": "", "count": 0, "is_dir": False}
     executor.submit(_run_process, job_id, str(src), req.op, req.params or {})
     return {"job_id": job_id, "status": "running"}
 
@@ -1255,7 +1257,8 @@ def process_status(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="处理任务不存在")
     return {"status": job["status"], "error": job.get("error", ""),
-            "lib_id": job.get("lib_id", ""), "name": job.get("name", "")}
+            "lib_id": job.get("lib_id", ""), "name": job.get("name", ""),
+            "count": job.get("count", 0), "is_dir": job.get("is_dir", False)}
 
 
 def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
@@ -1309,6 +1312,47 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
                                        sharpen=bool(p.get("sharpen", True)),
                                        ffmpeg_bin=FFMPEG_BIN)
             suffix = f"放大{fac}x"
+        elif op == "frame":
+            out = fftools.snapshot(src_path, out_dir,
+                                  at=float(p.get("at", 1) or 0),
+                                  fmt=str(p.get("fmt", "jpg")),
+                                  width=int(p.get("width", 0) or 0),
+                                  ffmpeg_bin=FFMPEG_BIN)
+            suffix = "封面"
+        elif op == "sheet":
+            out = fftools.contact_sheet(src_path, out_dir,
+                                       rows=int(p.get("rows", 3) or 3),
+                                       cols=int(p.get("cols", 4) or 4),
+                                       width=int(p.get("width", 1280) or 1280),
+                                       duration=float(meta.get("duration") or 0),
+                                       ffmpeg_bin=FFMPEG_BIN)
+            suffix = "预览图"
+        elif op == "ringtone":
+            out = fftools.make_ringtone(src_path, out_dir,
+                                       start=float(p.get("start", 0) or 0),
+                                       duration=float(p.get("duration", 30) or 30),
+                                       fmt=str(p.get("fmt", "m4r")),
+                                       fade=float(p.get("fade", 1) or 0),
+                                       ffmpeg_bin=FFMPEG_BIN)
+            suffix = "铃声"
+        elif op == "frames":
+            # 批量抽帧：产物是一个子目录（不是单文件），单独收尾
+            res = fftools.extract_frames(src_path, out_dir,
+                                        start=float(p.get("start", 0) or 0),
+                                        end=float(p.get("end", 0) or 0),
+                                        interval=float(p.get("interval", 1) or 1),
+                                        limit=int(p.get("limit", 200) or 200),
+                                        fmt=str(p.get("fmt", "jpg")),
+                                        width=int(p.get("width", 0) or 0),
+                                        ffmpeg_bin=FFMPEG_BIN)
+            if not res:
+                raise RuntimeError("未抽到任何帧（检查起止时间是否超出视频时长）")
+            frames_dir, count = res
+            with PROCESS_LOCK:
+                job.update(status="completed", out_path=str(frames_dir), lib_id="",
+                           name=frames_dir.name, count=count, is_dir=True)
+            logger.info("process %s (frames) done -> %s (%d 帧)", job_id, frames_dir.name, count)
+            return
         else:
             raise ValueError("不支持的处理类型")
         if not out or not out.exists() or out.stat().st_size == 0:

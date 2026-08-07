@@ -90,6 +90,31 @@
 - 修复：字幕烧录 `burn_subtitle` 与 `ffmpeg_tools._unique_out` 的中文后缀被 `Path.with_suffix` 吞掉的 bug（改用字符串拼接）。
 - 测试：ffmpeg 端到端（6 函数全过）+ TestClient 路由集成（op 校验 400 / 404 / 真实加工 completed / 产物入媒体库识别）。
 
+## 2.6 抽帧封面 / 抽音频铃声（已实现）
+
+### 需求
+- **抽帧封面**：从视频任意时间点抽一张图做封面/配图（jpg/png/webp，可指定宽度）。
+- **批量抽帧**：按固定间隔批量抽帧（做解说素材、逐帧分析），带帧数上限防止长视频抽出上万张。
+- **预览图**：把视频均匀采样成一张九宫格拼图（contact sheet），一眼看完整片内容。
+- **铃声**：从视频/音频截一段做手机铃声，带淡入淡出，支持 m4r（iPhone）/ m4a / mp3。
+
+### 技术方案
+- `ffmpeg_tools.py` 新增 4 个函数 + 1 个工具：
+  - `snapshot(video, at, fmt, width)` → `<标题>.封面.jpg`；**seek 超出时长自动回退**（先试 at，再试 0，最后不带 `-ss`）。
+  - `extract_frames(video, start, end, interval, limit, fmt, width)` → 输出到子目录 `<标题>.抽帧[.n]/frame_0001.jpg`，返回 `(目录, 帧数)`；`fps=1/interval` + `-frames:v limit` 封顶（默认 200，硬上限 2000）；部分成功也按实际产出算，零产出则删空目录返回 None。
+  - `contact_sheet(video, rows, cols, width, duration)` → `<标题>.预览图.jpg`；用 `fps=n/时长` 均匀采样 + `tile=colsxrows`；时长优先取侧车 `duration`，缺失则 `probe_duration` 探测，再缺失退化为 `thumbnail=100`。
+  - `make_ringtone(src, start, duration, fmt, fade)` → `<标题>.铃声.m4r`；`afade` 淡入淡出；**m4r 必须显式 `-f ipod`**，否则 ffmpeg 不认该扩展名。
+  - `probe_duration(video)` → 不依赖 ffprobe，直接正则解析 `ffmpeg -i` 的 stderr `Duration:` 行。
+- `app.py`：op 白名单加 `frame / frames / sheet / ringtone`；`frames` 产物是**目录**不是文件，单独收尾（`is_dir=True` + `count`，不写侧车、不编 lib_id），`/api/process/{job_id}` 增返 `count` / `is_dir`。
+- `library.py`：
+  - `AUDIO_EXTS` 加 `.m4r`；`IMAGE_EXTS` 加 `.jpg/.jpeg/.png`（封面、预览图能进媒体库）。
+  - 新增 `FRAMES_DIR_MARK = ".抽帧"`，扫描时跳过抽帧子目录内的所有帧图，**避免上百张帧刷屏媒体库**。
+  - 缩略图生成修复：**静态图片带任何 `-ss`（含 `-ss 0`）都会把唯一一帧 seek 掉、输出为空**；改为图片不加 `-ss`，视频先试 `-ss 1` 失败再回退无 seek。
+- 前端 `app.js`：`PROCESS_OPS` 加 4 项（含 iPhone 铃声 >40 秒的提示）；`frames` 完成后不关弹窗、不刷媒体库，直接提示「已抽 N 帧 → 下载目录/xxx.抽帧/」。
+
+### 已知取舍
+- 抽帧目录不进媒体库列表，因此也**无法在 App 内删除**，需用户去下载目录手动清理（避免误删整目录的风险）。
+
 ## 4. 后续（阶段3 及以后，仅列思路）
-- 抽帧封面/抽音频铃声；一键归档网盘；本地媒体库加密。
+- 一键归档网盘；本地媒体库加密。
 - 详见 MEMORY.md 桌面其他功能思路。
