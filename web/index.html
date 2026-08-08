@@ -176,6 +176,7 @@
     <div class="block-title queue-head">
       <span>下载任务</span>
       <span class="queue-bar" id="queueBar">暂无任务</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="openFolderBtn" title="在 Finder 中打开下载目录">📂 下载目录</button>
       <button type="button" class="btn btn-ghost btn-sm" id="cancelAllBtn" hidden>全部取消</button>
     </div>
     <ul class="task-list" id="taskList"></ul>
@@ -382,6 +383,7 @@
       <span class="task-actions">
         <button type="button" class="btn btn-ghost btn-sm" data-cancel>取消</button>
         <button type="button" class="btn btn-ghost btn-sm" data-retry hidden>重试</button>
+        <button type="button" class="btn btn-ghost btn-sm task-delete" data-delete hidden title="删除这条任务记录">🗑</button>
         <button type="button" class="btn btn-ghost btn-sm" data-commentary hidden>生成解说成片</button>
         <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
         <a class="btn btn-accent btn-sm" data-commentary-file hidden download>解说成片</a>

@@ -1103,6 +1103,49 @@ def cancel_task(task_id: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# 文件系统辅助（桌面版便捷入口）
+# --------------------------------------------------------------------------- #
+
+class OpenPathRequest(BaseModel):
+    """打开本地目录/文件。仅允许白名单路径（下载目录及其子项）。"""
+    path: str = Field(default="", max_length=4096)
+
+
+@app.post("/api/fs/open")
+def fs_open(payload: OpenPathRequest) -> dict:
+    """在系统文件管理器中打开本地路径。
+
+    桌面版用户从浏览器里点「打开下载目录」→ 弹系统通知 / 调起 Finder。
+    仅允许打开 DOWNLOAD_DIR 及其子项，不开放任意路径（防误开系统关键目录）。
+    """
+    if sys.platform != "darwin" and sys.platform != "win32":
+        raise HTTPException(status_code=400, detail="该接口仅在桌面端可用")
+
+    raw = (payload.path or "").strip()
+    target = Path(raw).expanduser().resolve() if raw else DOWNLOAD_DIR.resolve()
+
+    # 白名单：必须在 DOWNLOAD_DIR 下（除非用户显式请求 DOWNLOAD_DIR 本身）
+    try:
+        target.relative_to(DOWNLOAD_DIR.resolve())
+    except ValueError:
+        if target != DOWNLOAD_DIR.resolve():
+            raise HTTPException(status_code=403, detail="只允许打开下载目录及其子路径")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"路径不存在：{target}")
+
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])
+        else:
+            subprocess.Popen(["explorer", str(target)])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"打开失败：{e}")
+
+    return {"opened": str(target), "platform": sys.platform}
+
+
+# --------------------------------------------------------------------------- #
 # 自动解说（增值功能）：下载完 → 一键生成解说成片。壳，逻辑全在 commentary-pipeline
 # --------------------------------------------------------------------------- #
 

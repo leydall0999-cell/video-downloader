@@ -83,6 +83,7 @@
     batchBtn: $('batchBtn'),
     queueBar: $('queueBar'),
     cancelAllBtn: $('cancelAllBtn'),
+    openFolderBtn: $('openFolderBtn'),
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
     tabDownload: $('tabDownload'),
@@ -561,9 +562,11 @@
       cloud: node.querySelector('[data-cloud]'),
       cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
+      del: node.querySelector('[data-delete]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
+    refs.del.addEventListener('click', () => deleteTask(taskId, refs));
     refs.title.textContent = meta.title;
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
@@ -590,6 +593,8 @@
     refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
     // 失败 / 已取消的任务展示「重试」按钮
     refs.retry.hidden = !(task.status === 'failed' || task.status === 'canceled');
+    // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
+    refs.del.hidden = active;
 
     if (task.status !== 'completed') return;
     refs.save.hidden = false;
@@ -887,6 +892,32 @@
     }
   };
 
+  // 删除单条任务记录（已完成/失败/已取消都能删）
+  const deleteTask = async (taskId, refs) => {
+    const isFinished = refs.status?.dataset?.state
+      ? !['pending','downloading','processing','resolving'].includes(refs.status.dataset.state)
+      : true;
+    const fileNote = isFinished
+      ? '\n文件也会被一并删除（回收站优先，无法回收时直接清理）'
+      : '\n任务将被取消';
+    if (!window.confirm(`确定删除这条任务记录吗？${fileNote}`)) return;
+    try {
+      await request(`/api/tasks/${taskId}`, { method: 'DELETE' });
+      refs.root.remove();  // 从 DOM 移除
+    } catch (error) {
+      showError(error.message || '删除失败', error.hint);
+    }
+  };
+
+  // 在 Finder / 资源管理器中打开下载目录（仅桌面版可用）
+  const openDownloadFolder = async () => {
+    try {
+      await request('/api/fs/open', { method: 'POST', body: JSON.stringify({}) });
+    } catch (error) {
+      showError(error.message || '打开下载目录失败', error.hint);
+    }
+  };
+
   // 队列概览：轮询任务统计，刷新进度条与「全部取消」可见性
   const loadQueue = async () => {
     if (el.downloadView.hidden) return;  // 仅下载视图可见时轮询，省请求
@@ -989,6 +1020,7 @@
   });
   el.batchConcurrency.addEventListener('input', () => { el.batchConcVal.textContent = el.batchConcurrency.value; });
   el.cancelAllBtn.addEventListener('click', cancelAll);
+  el.openFolderBtn.addEventListener('click', openDownloadFolder);
   el.downloadBtn.addEventListener('click', handleDownload);
   el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });

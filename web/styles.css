@@ -160,6 +160,8 @@ img { max-width: 100%; display: block; }
 .btn-block { width: 100%; margin-top: 1rem; }
 .btn-ghost { background: #f2f3f8; color: var(--text-mute); border-color: var(--line); }
 .btn-ghost:hover:not(:disabled) { background: #e9ebf3; color: var(--text); }
+.task-delete { color: #b91c1c; }
+.task-delete:hover:not(:disabled) { background: #fee2e2; color: #991b1b; }
 .btn-success { color: #fff; background: var(--success); box-shadow: 0 6px 14px rgba(22, 163, 74, .24); }
 .btn-success:hover { background: #15803d; }
 .btn-accent { color: #fff; background: var(--accent); box-shadow: 0 6px 14px rgba(6, 182, 212, .24); }
