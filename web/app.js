@@ -204,9 +204,6 @@
     comGenerate: $('comGenerate'),
     comStatus: $('comStatus'),
     comRefresh: $('comRefresh'),
-    comUrl: $('comUrl'),
-    comUrlBtn: $('comUrlBtn'),
-    comUrlStatus: $('comUrlStatus'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
     comFileStatus: $('comFileStatus'),
@@ -1027,29 +1024,6 @@
     }
   };
 
-  const createCommentaryFromUrl = async (url, refs, onCompleted = null) => {
-    if (refs.commentary) {
-      refs.commentary.disabled = true;
-      refs.commentary.textContent = '生成中…';
-    }
-    refs.commentaryStatus.hidden = false;
-    refs.commentaryStatus.textContent = '正在下载视频并生成解说成片…';
-    try {
-      const { job_id } = await request('/api/commentary/from-url', {
-        method: 'POST',
-        body: JSON.stringify({ url, vertical: true }),
-      });
-      pollCommentaryJob(job_id, refs, '', onCompleted);
-    } catch (err) {
-      refs.commentaryStatus.hidden = false;
-      refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
-      if (refs.commentary) {
-        refs.commentary.disabled = false;
-        refs.commentary.textContent = '开始解说';
-      }
-    }
-  };
-
   const createCommentaryFromFile = async (file, refs, onCompleted = null) => {
     refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在上传视频并生成解说成片…';
@@ -1074,10 +1048,6 @@
     el.comGenerate.textContent = '生成解说';
     el.comGenerate.hidden = false;
     el.comStatus.hidden = true;
-    el.comUrl.value = '';
-    el.comUrlBtn.disabled = false;
-    el.comUrlBtn.textContent = '开始解说';
-    el.comUrlStatus.hidden = true;
     el.comFileStatus.hidden = true;
 
     try {
@@ -1086,7 +1056,7 @@
       el.comGrid.replaceChildren();
       el.comEmpty.hidden = items.length > 0;
       if (items.length === 0) {
-        el.comEmpty.textContent = '还没有解说成片。粘贴链接、拖入本地视频，或从媒体库选择视频即可开始。';
+        el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
       } else {
         items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
       }
@@ -1172,21 +1142,6 @@
       { fileId },
       { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
       '',
-      () => loadCommentary(),
-    );
-  });
-
-  // 入口 1：从链接生成
-  el.comUrlBtn.addEventListener('click', () => {
-    const url = el.comUrl.value.trim();
-    if (!url) {
-      el.comUrlStatus.hidden = false;
-      el.comUrlStatus.textContent = '请先粘贴视频链接';
-      return;
-    }
-    createCommentaryFromUrl(
-      url,
-      { commentary: el.comUrlBtn, commentaryStatus: el.comUrlStatus, commentaryFile: noopComFile },
       () => loadCommentary(),
     );
   });

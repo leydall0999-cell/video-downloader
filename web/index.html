@@ -282,15 +282,13 @@
     </div>
 
     <div class="com-entry-grid">
-      <!-- 入口 1：粘贴链接（从下载入口演变） -->
+      <!-- 入口 1：从下载历史库（媒体库）生成 -->
       <div class="com-entry-card">
-        <h3 class="com-entry-title">🔗 从链接生成</h3>
-        <p class="com-entry-tip">粘贴视频链接，自动下载并生成解说成片</p>
-        <div class="com-url-row">
-          <input id="comUrl" class="adv-input" type="text" placeholder="https://..." autocomplete="off" spellcheck="false" />
-          <button type="button" class="btn btn-primary" id="comUrlBtn">开始解说</button>
-        </div>
-        <span class="com-status" id="comUrlStatus" hidden></span>
+        <h3 class="com-entry-title">📚 从下载历史库生成</h3>
+        <p class="com-entry-tip">选择已下载到媒体库的视频，直接生成解说成片（无需重新下载）</p>
+        <select id="comSource" class="adv-input"><option value="">选择视频…</option></select>
+        <button type="button" class="btn btn-primary" id="comGenerate">生成解说</button>
+        <span class="com-status" id="comStatus" hidden></span>
       </div>
 
       <!-- 入口 2：拖入本地文件 -->
@@ -303,15 +301,7 @@
       </div>
     </div>
 
-    <!-- 备用入口：从媒体库选择 -->
-    <div class="com-create" id="comCreateBox">
-      <span class="com-create-label">或从媒体库选择已有视频：</span>
-      <select id="comSource" class="adv-input"><option value="">选择视频…</option></select>
-      <button type="button" class="btn btn-primary btn-sm" id="comGenerate">生成解说</button>
-      <span class="com-status" id="comStatus" hidden></span>
-    </div>
-
-    <p class="com-empty" id="comEmpty" hidden>还没有解说成片。粘贴链接、拖入本地视频，或从媒体库选择视频即可开始。</p>
+    <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
     <div class="com-grid" id="comGrid"></div>
   </section>
 
