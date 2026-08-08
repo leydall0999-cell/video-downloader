@@ -2202,12 +2202,13 @@ def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
     w = int(params.get("w", 100) or 100)
     h = int(params.get("h", 50) or 50)
     band = int(params.get("band", 5) or 5)
+    mode = str(params.get("mode", "auto") or "auto")
 
     try:
         if AI_DEWATERMARK_MODE == "http":
             resp = _requests.post(
                 f"{AI_DEWATERMARK_ENDPOINT}/render",
-                json={"video": src, "x": x, "y": y, "w": w, "h": h, "band": band},
+                json={"video": src, "x": x, "y": y, "w": w, "h": h, "band": band, "mode": mode},
                 headers={"X-Worker-Token": AI_DEWATERMARK_TOKEN} if AI_DEWATERMARK_TOKEN else {},
                 timeout=30,
             )
@@ -2223,7 +2224,7 @@ def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
             result = _sp.run(
                 [AI_DEWATERMARK_PYTHON, str(proc), src,
                  "--x", str(x), "--y", str(y), "--w", str(w), "--h", str(h),
-                 "--band", str(band)],
+                 "--band", str(band), "--mode", mode],
                 capture_output=True, text=True, timeout=AI_DEWATERMARK_TIMEOUT,
                 env=dict(os.environ, E2FGVI_BASE=str(proc_dir / "E2FGVI")),
             )
