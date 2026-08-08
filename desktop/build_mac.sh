@@ -14,7 +14,7 @@ echo "▶ 准备构建环境（独立 venv）"
 if [[ ! -x "$VENV/bin/python" ]]; then
   python3 -m venv "$VENV"
 fi
-"$VENV/bin/pip" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow
+"$VENV/bin/pip" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview
 
 echo "▶ 生成应用图标（512x512 圆角 + 下载箭头）"
 "$VENV/bin/python" - "$REPO" <<'PY'
@@ -71,6 +71,8 @@ fi
   --hidden-import yt_dlp_plugins.extractor \
   --hidden-import yt_dlp_plugins.extractor.chrqj \
   --hidden-import yt_dlp_plugins.extractor.kuaishou \
+  --hidden-import webview \
+  --hidden-import webview.platforms.cocoa \
   --collect-submodules yt_dlp \
   "$REPO/desktop/desktop_launcher.py"
 

@@ -3,22 +3,18 @@
 职责：
 1. 定位捆绑的资源（ffmpeg / server 代码 / 前端静态文件 / yt-dlp 插件）
 2. 自动挑选空闲端口（默认 8321，被占用时顺延，避免启动即崩溃）
-3. 启动本地 FastAPI 服务（uvicorn）
-4. 自动打开浏览器到本地地址，并弹系统通知告知访问地址
+3. 后台启动 FastAPI 服务（uvicorn）
+4. 在原生窗口中打开 Web UI（优先 pywebview，回退浏览器）
 
 普通用户双击 .app / .exe 即可，无需安装 Python、ffmpeg 或任何依赖。
-抓视频用的是用户自己的网络出口（家庭宽带 IP），因此 B站/抖音等国内站也能下，
-且不需要任何代理配置。退出：macOS 在 Dock 右键 Quit，或关掉后进程随系统；Windows 在系统托盘退出。
+退出：关掉窗口即可。
 """
-
 import os
 import sys
 import time
 import socket
 import signal
-import webbrowser
 import threading
-import subprocess
 from pathlib import Path
 
 # ---- 定位资源目录 ----
@@ -41,7 +37,6 @@ PLUGINS_DIR = BASE / "yt_dlp_plugins"
 
 
 def _detect_ffmpeg() -> str | None:
-    """优先用捆绑的 ffmpeg。.app 内位于 Contents/MacOS/bin/ffmpeg；单文件夹/Windows 位于可执行文件同目录 bin/。"""
     candidates = []
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable).parent / "bin" / "ffmpeg")
@@ -54,10 +49,8 @@ def _detect_ffmpeg() -> str | None:
 
 _ff = _detect_ffmpeg()
 if _ff:
-    # app.py 读取 VDL_FFMPEG_BIN 作为 ffmpeg 路径；用户机器通常没装 ffmpeg，必须用捆绑的
     os.environ["VDL_FFMPEG_BIN"] = _ff
 
-# 把 server 与 yt-dlp 插件目录加入导入路径
 sys.path.insert(0, str(SERVER_DIR))
 if PLUGINS_DIR.exists():
     sys.path.insert(0, str(BASE))
@@ -77,25 +70,6 @@ HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
 
 
-def _notify(title: str, msg: str) -> None:
-    if sys.platform == "darwin":
-        try:
-            subprocess.run(
-                ["osascript", "-e", f'display notification "{msg}" with title "{title}"'],
-                check=False, capture_output=True,
-            )
-        except Exception:
-            pass
-
-
-def _open_browser() -> None:
-    time.sleep(2.0)
-    try:
-        webbrowser.open(URL)
-    except Exception:
-        pass
-
-
 def _handle_exit(*_args) -> None:
     os._exit(0)
 
@@ -106,21 +80,57 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_exit)
     signal.signal(signal.SIGINT, _handle_exit)
 
-    threading.Thread(target=_open_browser, daemon=True).start()
-    _notify("VideoDownloader 已启动", f"浏览器将打开 {URL}（退出请在 Dock 右键 Quit）")
+    # 后台启动 FastAPI 服务
+    server_thread = threading.Thread(
+        target=uvicorn.run,
+        kwargs={
+            "app": "app:app",
+            "app_dir": str(BASE) if getattr(sys, "frozen", False) else str(SERVER_DIR),
+            "host": HOST,
+            "port": PORT,
+            "log_level": "info",
+        },
+        daemon=True,
+    )
+    server_thread.start()
 
-    # 冻结模式：模块已打包为顶层模块，app_dir 用资源根目录；开发模式：用 server 目录
-    app_dir = str(BASE) if getattr(sys, "frozen", False) else str(SERVER_DIR)
+    # 等服务器就绪
+    for _ in range(30):
+        try:
+            with socket.create_connection((HOST, PORT), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.2)
+    else:
+        print(f"服务器启动超时，请手动访问 {URL}")
+        server_thread.join()
+        return
+
+    # 开窗口 → 优先原生窗口（pywebview），回退浏览器
     try:
-        uvicorn.run(
-            "app:app",
-            app_dir=app_dir,
-            host=HOST,
-            port=PORT,
-            log_level="info",
+        import webview
+        window = webview.create_window(
+            title="VideoDownloader",
+            url=URL,
+            width=1100,
+            height=750,
+            min_size=(800, 500),
+            text_select=True,
         )
-    except KeyboardInterrupt:
-        pass
+        # Windows 端退出 webview 后清理资源
+        webview.start()
+        os._exit(0)
+    except ImportError:
+        import webbrowser
+        import subprocess as _sp
+        _sp.run(
+            ["osascript", "-e",
+             f'display notification "VideoDownloader 已启动" with title "{URL}"'],
+            check=False, capture_output=True,
+        )
+        webbrowser.open(URL)
+        # 保持进程存活直到 uvicorn 退出
+        server_thread.join()
 
 
 if __name__ == "__main__":

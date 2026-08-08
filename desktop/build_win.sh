@@ -19,7 +19,7 @@ echo "▶ 准备构建环境（独立 venv）"
 if [[ ! -x "$VENV/Scripts/python.exe" ]]; then
   python -m venv "$VENV"
 fi
-"$VENV/Scripts/pip.exe" install --quiet --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow
+"$VENV/Scripts/pip.exe" install --quiet --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview
 
 echo "▶ 生成应用图标"
 "$VENV/Scripts/python.exe" - "$REPO" <<'PY'
@@ -59,6 +59,8 @@ echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
   --hidden-import yt_dlp_plugins.extractor \
   --hidden-import yt_dlp_plugins.extractor.chrqj \
   --hidden-import yt_dlp_plugins.extractor.kuaishou \
+  --hidden-import webview \
+  --hidden-import webview.platforms.winforms \
   --collect-submodules yt_dlp \
   "$REPO/desktop/desktop_launcher.py"
 
