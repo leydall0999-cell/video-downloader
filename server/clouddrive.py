@@ -266,19 +266,20 @@ def baidu_exchange_token(code: str, redirect_uri: str, app_key: str, app_secret:
 
 
 def _baidu_callback_html(token: str = "", error: str = "") -> str:
-    """OAuth 回调页：把令牌通过 postMessage 回传给 opener，服务端不存储用户令牌。"""
+    """OAuth 回调页：把令牌通过 postMessage 回传（兼容 opener 弹窗与 iframe 页内嵌入），服务端不存储用户令牌。"""
     return (
         "<!doctype html><html lang='zh'><head><meta charset='utf-8'>"
         "<title>百度网盘授权</title></head><body><p id='msg'>授权处理中…</p>"
         "<script>"
         "var data={token:" + json.dumps(token) + ",error:" + json.dumps(error) + "};"
         "var msg=document.getElementById('msg');"
-        "if(window.opener){"
-        "  window.opener.postMessage({source:'vdl-baidu',token:data.token,error:data.error},location.origin);"
-        "  msg.textContent=data.token?'授权成功，请返回原页面':'授权失败：'+(data.error||'未知错误');"
-        "}else{"
-        "  msg.textContent='未检测到来源窗口，请关闭此页返回原页面。';"
+        "var sent=false;"
+        "function post(d){if(sent)return;sent=true;d.source='vdl-baidu';"
+        "  if(window.opener){window.opener.postMessage(d,location.origin);}"
+        "  if(window.parent&&window.parent!==window){window.parent.postMessage(d,location.origin);}"
+        "  msg.textContent=d.token?'授权成功，请返回原页面':'授权失败：'+(d.error||'未知错误');"
+        "  setTimeout(function(){try{window.close();}catch(e){}},1500);"
         "}"
-        "setTimeout(function(){window.close();},1500);"
+        "post(data);"
         "</script></body></html>"
     )

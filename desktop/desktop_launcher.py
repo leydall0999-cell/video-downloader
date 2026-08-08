@@ -14,8 +14,14 @@ import sys
 import time
 import socket
 import signal
+import subprocess
 import threading
 from pathlib import Path
+
+try:
+    import fcntl as _fcntl  # macOS / Linux
+except ImportError:  # pragma: no cover - Windows 走 .exe 单实例
+    _fcntl = None
 
 # ---- 定位资源目录 ----
 if getattr(sys, "frozen", False):
@@ -76,11 +82,66 @@ def _handle_exit(*_args) -> None:
     os._exit(0)
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _activate_existing_window() -> None:
+    """重复启动时把已有 VideoDownloader 窗口提到最前（macOS）。"""
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to set frontmost of '
+             '(every process whose name contains "VideoDownloader") to true'],
+            check=False, capture_output=True,
+        )
+    except Exception:  # pragma: no cover - 激活失败不影响退出
+        pass
+
+
+def _ensure_single_instance():
+    """同一用户只保留一个 GUI 实例。重复启动返回 None（调用方应激活并退出）。"""
+    if _fcntl is None:
+        return None
+    lock_path = Path.home() / ".vdl_instance.lock"
+    # 清理僵尸锁（上次异常退出未释放且持有进程已死）
+    try:
+        if lock_path.exists():
+            old = lock_path.read_text().strip()
+            if old.isdigit() and not _pid_alive(int(old)):
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    try:
+        f = open(lock_path, "w")
+        _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        f.write(str(os.getpid()))
+        f.flush()
+        return f  # 调用方必须持有此对象直到退出
+    except OSError:
+        return None
+
+
 def main() -> None:
     import uvicorn
 
     signal.signal(signal.SIGTERM, _handle_exit)
     signal.signal(signal.SIGINT, _handle_exit)
+
+    # 单实例：已有窗口则激活并退出，绝不创建第二个页面
+    _lock = _ensure_single_instance()
+    if _lock is None:
+        _activate_existing_window()
+        sys.exit(0)
 
     # 后台启动 FastAPI 服务
     server_thread = threading.Thread(

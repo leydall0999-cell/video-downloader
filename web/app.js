@@ -1454,6 +1454,27 @@
     }, 3000);
   };
 
+  // 在当前页内（dialog）完成百度授权，绝不再开第二个浏览器窗口
+  const openBaiduAuthInPage = (url) => {
+    document.getElementById('baiduAuthDialog')?.remove();
+    const dlg = document.createElement('dialog');
+    dlg.id = 'baiduAuthDialog';
+    dlg.className = 'modal';
+    dlg.innerHTML =
+      '<div class="modal-card">' +
+      '  <div class="baidu-auth-head">' +
+      '    <h2>百度网盘授权</h2>' +
+      '    <button type="button" class="modal-close" id="baiduAuthClose" aria-label="关闭">✕</button>' +
+      '  </div>' +
+      '  <iframe class="baidu-auth-frame" src="' + url + '"></iframe>' +
+      '</div>';
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+    dlg.querySelector('#baiduAuthClose').addEventListener('click', () => dlg.close());
+    dlg.addEventListener('close', () => dlg.remove());
+  };
+
   // 云盘弹窗事件绑定
   el.cloudModalClose.addEventListener('click', () => el.cloudModal.close());
   el.cloudModal.addEventListener('click', (e) => { if (e.target === el.cloudModal) el.cloudModal.close(); });
@@ -1461,8 +1482,7 @@
   el.cloudModal.querySelectorAll('input[name=cloudProvider]').forEach((r) => r.addEventListener('change', syncCloudForm));
   el.cloudBaiduBtn.addEventListener('click', () => {
     if (!node.baiduAuthUrl) { el.cloudBaiduStatus.textContent = '该实例未启用百度网盘'; return; }
-    const w = window.open(node.baiduAuthUrl, 'baidu', 'width=600,height=720');
-    if (!w) el.cloudBaiduStatus.textContent = '弹窗被拦截，请允许弹出窗口后重试';
+    openBaiduAuthInPage(node.baiduAuthUrl);
   });
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin) return;
@@ -1475,6 +1495,8 @@
     } else if (d.error) {
       el.cloudBaiduStatus.textContent = '授权失败：' + d.error;
     }
+    const bd = document.getElementById('baiduAuthDialog');
+    if (bd) bd.close();
   });
 
   // ------------------------------------------------------------------ 媒体库（桌面版功能）
@@ -2479,7 +2501,7 @@
   el.arcCancel.addEventListener('click', cancelArc);
   el.arcForget.addEventListener('click', forgetArc);
   if (el.arcBaiduBtn) el.arcBaiduBtn.addEventListener('click', () => {
-    if (node.baiduAuthUrl) window.open(node.baiduAuthUrl, '_blank');
+    if (node.baiduAuthUrl) openBaiduAuthInPage(node.baiduAuthUrl);
   });
 
   // ---- 库内保险箱（桌面版功能） ----

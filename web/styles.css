@@ -747,6 +747,11 @@ img { max-width: 100%; display: block; }
 /* ---------------- 时效自动清理 ---------------- */
 .modal-wide { max-width: 620px; }
 
+/* 百度授权：页内 dialog 嵌入授权页，不开第二个窗口 */
+.baidu-auth-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .6rem; }
+.baidu-auth-head h2 { font-size: 1rem; font-weight: 700; }
+.baidu-auth-frame { width: 100%; height: 560px; border: 0; border-radius: 8px; background: #fff; }
+
 .clean-usage {
   margin: .9rem 0 .2rem; padding: .6rem .8rem; border-radius: 10px;
   background: #f4f6fb; font-size: .84rem; color: var(--text);
