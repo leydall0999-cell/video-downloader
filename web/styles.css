@@ -530,18 +530,20 @@ img { max-width: 100%; display: block; }
 
 /* ---------------- 媒体库（桌面版功能） ---------------- */
 .tabs {
-  display: flex; gap: .4rem; margin: 1.1rem auto .2rem; width: min(880px, 100% - 2rem);
+  display: flex; gap: .75rem; margin: 1.25rem auto .35rem; width: min(900px, 100% - 2rem);
 }
 .tab {
-  flex: 1; min-height: var(--tap); padding: 0 1rem; cursor: pointer;
+  flex: 1; min-height: 46px; padding: 0 1.15rem; cursor: pointer;
   border: 1.5px solid var(--line); border-radius: 999px; background: #fff;
-  color: var(--text-mute); font-family: inherit; font-size: .92rem; font-weight: 600;
-  transition: border-color .16s, background .16s, color .16s, box-shadow .16s;
+  color: var(--text-mute); font-family: inherit; font-size: .95rem; font-weight: 700;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, .06);
+  transition: border-color .16s, background .16s, color .16s, box-shadow .16s, transform .12s;
 }
-.tab:hover { border-color: #c7cbe0; }
+.tab:hover { border-color: #c7cbe0; box-shadow: 0 5px 14px rgba(15, 23, 42, .1); }
+.tab:active { transform: translateY(1px); }
 .tab.is-active {
   color: #fff; background: linear-gradient(135deg, var(--brand), #6366f1);
-  border-color: transparent; box-shadow: 0 8px 18px rgba(79, 70, 229, .26);
+  border-color: transparent; box-shadow: 0 10px 24px rgba(79, 70, 229, .32);
 }
 
 .lib-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .9rem; }
