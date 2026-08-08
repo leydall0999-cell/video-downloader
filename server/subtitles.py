@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -194,7 +195,7 @@ def _write_subtitle_sidecar(out_path: Path, source_meta: dict[str, Any]) -> None
         base_title = f"{base_title}（字幕版）"
     meta["title"] = base_title
     meta["source_url"] = meta.get("source_url") or ""
-    meta["completed_at"] = int(__import__("time").time())
+    meta["completed_at"] = int(time.time())
     try:
         sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except Exception:

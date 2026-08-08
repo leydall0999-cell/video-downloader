@@ -2149,14 +2149,17 @@ def process_run(req: ProcessRequest) -> dict:
         raise HTTPException(status_code=400, detail="不支持的处理类型")
 
     # 解析来源：lib_ids 批量优先，否则单个 lib_id
+    skipped = []
     if req.lib_ids:
         sources = []
+        skipped = []
         for lid in req.lib_ids:
             if not lid or not lid.strip():
                 continue
             p = library_mod._resolve_safe(DOWNLOAD_DIR, lid.strip())
             if not p or not p.is_file():
-                return JSONResponse(status_code=404, content={"error": f"文件不存在：{lid}"})
+                skipped.append(lid)
+                continue
             sources.append((lid.strip(), p))
         if not sources:
             raise HTTPException(status_code=400, detail="lib_ids 中没有有效文件")
@@ -2176,9 +2179,13 @@ def process_run(req: ProcessRequest) -> dict:
         process_queue.submit(jid, name, lid, req.op, _run_process, jid, str(src_path), req.op, req.params or {})
         jobs_out.append({"job_id": jid, "lib_id": lid, "name": name})
 
-    if len(jobs_out) == 1:
+    if len(jobs_out) == 1 and not skipped:
         return {"job_id": jobs_out[0]["job_id"], "status": "running"}
-    return {"jobs": jobs_out, "total": len(jobs_out), "status": "queued"}
+    result = {"jobs": jobs_out, "total": len(jobs_out), "status": "queued"}
+    if skipped:
+        result["skipped"] = skipped
+        result["skipped_count"] = len(skipped)
+    return result
 
 
 @app.get("/api/process/queue")

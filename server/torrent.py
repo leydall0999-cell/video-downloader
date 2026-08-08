@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import socket
 import threading
@@ -432,7 +433,7 @@ class TorrentManager:
                 sidecar = fp.with_name(fp.stem + ".vdlmeta.json")
                 try:
                     sidecar.write_text(
-                        __import__("json").dumps({
+                        json.dumps({
                             "title": fp.stem,
                             "platform": PLATFORM_NAME,
                             "uploader": "",

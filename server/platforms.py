@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 MAX_INPUT_LENGTH = 2048
 ALLOWED_SCHEMES = ("http", "https")
-URL_PATTERN = re.compile(r"https?://[^\s\u4e00-\u9fff\"'<>）)】\]]+", re.IGNORECASE)
+URL_PATTERN = re.compile(r"https?://[^\s\u4e00-\u9fff\"'<>）)】\]`]+", re.IGNORECASE)
 
 
 class LinkError(ValueError):
