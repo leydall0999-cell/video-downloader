@@ -287,8 +287,6 @@
         <h3 class="com-entry-title">📚 从下载历史库生成</h3>
         <p class="com-entry-tip">选择已下载到媒体库的视频，直接生成解说成片（无需重新下载）</p>
         <select id="comSource" class="adv-input"><option value="">选择视频…</option></select>
-        <button type="button" class="btn btn-primary" id="comGenerate">生成解说</button>
-        <span class="com-status" id="comStatus" hidden></span>
       </div>
 
       <!-- 入口 2：拖入本地文件 -->
@@ -297,9 +295,13 @@
         <p class="com-entry-tip">把本地视频文件拖到这里，或点击选择文件</p>
         <input id="comFileInput" type="file" accept="video/*" hidden />
         <button type="button" class="btn btn-secondary" id="comFileBtn">选择本地视频</button>
+        <span id="comFileName" class="com-file-name"></span>
         <span class="com-status" id="comFileStatus" hidden></span>
       </div>
     </div>
+
+    <button type="button" class="btn btn-primary com-generate-main" id="comGenerate">生成解说</button>
+    <span class="com-status" id="comStatus" hidden></span>
 
     <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
     <div class="com-grid" id="comGrid"></div>

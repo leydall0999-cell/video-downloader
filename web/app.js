@@ -206,6 +206,7 @@
     comRefresh: $('comRefresh'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
+    comFileName: $('comFileName'),
     comFileStatus: $('comFileStatus'),
     comDropZone: $('comDropZone'),
     tabCommentary: $('tabCommentary'),
@@ -1025,6 +1026,10 @@
   };
 
   const createCommentaryFromFile = async (file, refs, onCompleted = null) => {
+    if (refs.commentary) {
+      refs.commentary.disabled = true;
+      refs.commentary.textContent = '生成中…';
+    }
     refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在上传视频并生成解说成片…';
     try {
@@ -1036,11 +1041,16 @@
     } catch (err) {
       refs.commentaryStatus.hidden = false;
       refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      if (refs.commentary) {
+        refs.commentary.disabled = false;
+        refs.commentary.textContent = '生成解说';
+      }
     }
   };
 
   // ---- 视频解说独立标签页 ----
   const noopComFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
+  let selectedLocalFile = null;
 
   const loadCommentary = async () => {
     // 重置生成区状态
@@ -1049,6 +1059,9 @@
     el.comGenerate.hidden = false;
     el.comStatus.hidden = true;
     el.comFileStatus.hidden = true;
+    el.comSource.value = '';
+    selectedLocalFile = null;
+    el.comFileName.textContent = '';
 
     try {
       const data = await request('/api/commentary/list');
@@ -1133,36 +1146,52 @@
 
   el.comGenerate.addEventListener('click', () => {
     const fileId = el.comSource.value;
-    if (!fileId) {
-      el.comStatus.hidden = false;
-      el.comStatus.textContent = '请先在右侧选择一个视频';
+    if (fileId) {
+      createCommentary(
+        { fileId },
+        { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        '',
+        () => loadCommentary(),
+      );
       return;
     }
-    createCommentary(
-      { fileId },
-      { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
-      '',
-      () => loadCommentary(),
-    );
+    if (selectedLocalFile) {
+      createCommentaryFromFile(
+        selectedLocalFile,
+        { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        () => loadCommentary(),
+      );
+      return;
+    }
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
+  });
+
+  // 来源互斥：选了下拉就清空本地文件
+  el.comSource.addEventListener('change', () => {
+    if (el.comSource.value) {
+      selectedLocalFile = null;
+      el.comFileName.textContent = '';
+      el.comFileStatus.hidden = true;
+    }
   });
 
   // 入口 2：从本地文件生成
-  const startFileCommentary = (file) => {
+  const setLocalFile = (file) => {
     if (!file || !file.type.startsWith('video/')) {
       el.comFileStatus.hidden = false;
       el.comFileStatus.textContent = '请选择视频文件';
       return;
     }
-    createCommentaryFromFile(
-      file,
-      { commentary: null, commentaryStatus: el.comFileStatus, commentaryFile: noopComFile },
-      () => loadCommentary(),
-    );
+    selectedLocalFile = file;
+    el.comFileName.textContent = file.name;
+    el.comFileStatus.hidden = true;
+    el.comSource.value = '';
   };
   el.comFileBtn.addEventListener('click', () => el.comFileInput.click());
   el.comFileInput.addEventListener('change', () => {
     const file = el.comFileInput.files[0];
-    if (file) startFileCommentary(file);
+    if (file) setLocalFile(file);
   });
   ['dragenter', 'dragover'].forEach((ev) => {
     el.comDropZone.addEventListener(ev, (e) => {
@@ -1178,7 +1207,7 @@
   });
   el.comDropZone.addEventListener('drop', (e) => {
     const file = e.dataTransfer.files[0];
-    if (file) startFileCommentary(file);
+    if (file) setLocalFile(file);
   });
 
   el.comRefresh.addEventListener('click', loadCommentary);

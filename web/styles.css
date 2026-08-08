@@ -879,6 +879,10 @@ img { max-width: 100%; display: block; }
 .com-entry-tip { font-size: .82rem; color: var(--text-mute); margin: 0 0 .7rem; }
 .com-url-row { display: flex; gap: .6rem; flex-wrap: wrap; }
 .com-url-row .adv-input { flex: 1; min-width: 200px; }
+.com-entry-card select.adv-input { width: 100%; display: block; }
+.com-generate-main { width: 100%; margin-top: .75rem; padding: .85rem; font-size: 1.05rem; font-weight: 700; }
+.com-generate-main + .com-status { display: block; margin-top: .5rem; text-align: center; }
+.com-file-name { display: block; margin-top: .5rem; font-size: .8rem; color: var(--text-mute); word-break: break-all; }
 #comDropZone { cursor: pointer; }
 #comDropZone:hover { border-color: var(--brand); }
 
