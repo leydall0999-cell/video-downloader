@@ -49,7 +49,9 @@ def _detect_ffmpeg() -> str | None:
 
 _ff = _detect_ffmpeg()
 if _ff:
-    os.environ["VDL_FFMPEG_BIN"] = _ff
+    os.environ["VDL_FFMPEG_BIN"] = _ff              # app.py 自己用
+    os.environ["FFMPEG_LOCATION"] = str(Path(_ff).parent)  # yt-dlp 找 ffmpeg 用
+    os.environ["PATH"] = str(Path(_ff).parent) + os.pathsep + os.environ.get("PATH", "")  # 兜底
 
 sys.path.insert(0, str(SERVER_DIR))
 if PLUGINS_DIR.exists():
