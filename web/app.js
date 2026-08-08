@@ -525,7 +525,7 @@
       el.serverFallbackBtn.hidden = true;
       renderQualities(data.qualities);
     }
-    // 展示交叉引流卡片：转 MP3 已接通可直接用，存网盘待后续打通
+    // 展示交叉引流卡片：转 MP3 直接发起音频下载，存网盘弹出云盘上传弹窗
     el.upsellStatus.hidden = true;
     el.upsellMp3.disabled = false;
     el.resultPanel.hidden = false;

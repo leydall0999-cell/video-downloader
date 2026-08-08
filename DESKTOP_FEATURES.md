@@ -2,7 +2,7 @@
 
 > 定位（见 MEMORY.md「产品定位决策」）：桌面版 = 万能下载器（yt-dlp + 后续 libtorrent 种子）+ 视频渲染/解说管线 + 其他功能。
 > 本文件把"其他功能"第一层（最该先做、与下载内核耦合最紧、成本最低）展开为具体需求与技术方案。
-> 落地节奏：阶段1 平台下载（已完成）→ **阶段2 媒体库管理（本次实现）+ 批量队列 + 订阅监控** → 阶段3 渲染/解说管线。
+> 落地节奏：阶段1 平台下载（已完成）→ 阶段2 媒体库+批量队列+订阅监控（已完成）→ 阶段3 解说管线+AI去水印（已完成，2026-08-08）。
 
 ---
 
@@ -46,21 +46,21 @@
 
 ---
 
-## 2. 批量任务队列（待实现，复用现有框架）
+## 2. 批量任务队列（已实现）
 
 ### 需求
-- 用户贴多个链接时**已支持逐条创建任务**（`runBatch`）；本功能补上：并发上限、断点续传、失败自动重试、限速/闲时下载、全局进度汇总。
-- 任务列表支持：拖拽排序优先级、暂停/继续单条、一键全部重试失败项。
+- 下载批量队列：并发上限（默认3/硬顶8）、失败重试、断点续传。
+- 加工批量队列：并发控制（默认2/硬顶4）、批量提交 lib_ids、队列面板轮询。
 
 ### 技术方案
-- 后端 `TaskStore` 增 `priority`/`paused` 字段；新增调度器（现有 `MAX_CONCURRENT_DOWNLOADS=3` 已是信号量式并发，升级为带优先级的线程池）。
-- 断点续传：yt-dlp 原生支持 `-c/--continue`（默认开），`.part` 续传；任务被取消后重下可复用 `.part`。
-- 失败重试：`run_download` 包一层指数退避（最多 N 次），区分"可重试网络错"与"硬错（受限/不支持）"。
-- 前端：任务卡片加「暂停/继续/重试」按钮；顶部加汇总条（X 进行中 / Y 完成 / Z 失败）。
+- 下载调度：`server/batch.py` — BatchScheduler，Condition+计数器模式，并发可动态调整。
+- 加工调度：`server/process_queue.py` — ProcessQueue，同样模式，前端队列面板 + 并发数滑块。
+- 失败重试：`downloader.run_download` 内置指数退避（区分可重试网络错 vs 硬错）。
+- 前端：任务卡片展示进度/状态；批量操作栏（全选/计数/批量提交）。
 
 ---
 
-## 3. 订阅监控（待实现）
+## 3. 订阅监控（已实现）
 
 ### 需求
 - 用户填入 UP 主 / 频道主页，App 定期（如每小时）**自动检测新视频并后台下载**到媒体库。
@@ -230,7 +230,15 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 - `server/app.py`：`API_TOKEN = os.environ.get("VDL_API_TOKEN","").strip()`、`AUTH_REQUIRED = bool(API_TOKEN)`；`app.add_middleware(_ApiTokenMiddleware)`；`/api/nodes` 返回加 `authRequired`。
 - 测试：`tests/test_auth_routes.py`（7 项：nodes 公开且回传 authRequired / 无 token 拒 / Bearer 与 X-Api-Key 均接受 / 错 token 拒 / 静态根放行 / 未设 token 不鉴权）全过。
 
-## 4. 后续（阶段3 及以后，仅列思路）
-- 订阅监控后台自动下载（见 §3）。
-- 视频渲染/解说管线（见 MEMORY.md 解说规划）。
+## 4. 后续（阶段3 及以后，已完成）
+
+阶段3 内容已于 2026-08-08 全部落地，详见各对应章节：
+- 订阅监控后台自动下载：§3 + `server/subscriptions.py`
+- 视频解说管线：`COMMENTARY_PLAN.md` + commentary-pipeline 独立项目（含 LLM 智能解说词）
+- AI 去水印：§2.5 + watermark-removal 独立项目（E2FGVI/OpenCV 三级降级）
+- 新平台：小红书（内置 extractor）+ 快手（自写 extractor）
+
+待探索的方向：
+- 视频渲染/特效管线（非 ffmpeg 范畴，可能接入 AE/Blender 自动化）
+- 移动端 App（React Native / Flutter）
 - 详见 MEMORY.md 桌面其他功能思路。

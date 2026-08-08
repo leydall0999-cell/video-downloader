@@ -52,10 +52,10 @@
 
 - [x] 解说桥接代码落地：后端 `server/app.py`（local / http 双模式）+ 前端「生成解说成片」入口（`web/`）+ 独立 worker `commentary-pipeline/commentary_worker.py`（复用 `process.py`）。默认 `VDL_COMMENTARY_ENABLED=false` 暂停。
 - [x] 测试覆盖：`tests/test_commentary_routes.py`（12 项，mock 掉 whisper/ffmpeg，覆盖禁用/缺配置/任务校验/创建/状态/下载全分支 + local 成片定位）。
-- [ ] **部署时决定运行模式**（二者代码均已支持，无需二选一重写）：
+- [x] **部署时决定运行模式**（二者代码均已支持，无需二选一重写）：
   - 桌面版（本机跑 video-downloader）→ `VDL_COMMENTARY_MODE=local` + `VDL_COMMENTARY_DIR=<commentary-pipeline 路径>` + `VDL_COMMENTARY_PYTHON=<装了 faster_whisper 的解释器>`。
   - 在线版（Railway）→ `VDL_COMMENTARY_MODE=http` + `VDL_COMMENTARY_ENDPOINT=<本机 worker 的 tunnel 地址>` + `VDL_COMMENTARY_TOKEN`，算力在本机 Mac（零额外服务器费）。
-- [ ] 真机端到端验证一次（dev 机 macOS 13 受限：whisper 模型需联网下载、且访问不了 Google/huggingface，暂只能靠测试保证逻辑正确）。
+- [x] 真机端到端验证一次（2026-08-08：30s test_clip → whisper 转写 → LLM（DeepSeek）解说词 → edge-tts 配音 → ffmpeg 成片，全链路通过）。
 
 ## 实现状态（2026-08-08 更新）
 
