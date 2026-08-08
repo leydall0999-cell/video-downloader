@@ -279,3 +279,54 @@ def test_create_no_source_400():
     """既不给 task_id 也不给 file_id，应返回 400。"""
     r = client.post("/api/commentary", json={})
     assert r.status_code == 400
+
+
+# --- 独立「解说成片」标签页：list + file/{id} ---
+
+def test_list_commentary_outputs(tmp_path):
+    """扫描 COMMENTARY_LOCAL_OUTPUT 返回按时间倒序的成片列表。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "a.mp4").write_bytes(b"aaa")
+    (out / "b.mov").write_bytes(b"bbb")
+    (out / "skip.txt").write_text("skip")
+    import os as _os
+    _os.utime(out / "a.mp4", (1700000000, 1700000001))
+    _os.utime(out / "b.mov", (1700000000, 1700000002))
+
+    with patch.object(m, "COMMENTARY_LOCAL_OUTPUT", out):
+        r = client.get("/api/commentary/list")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 2
+    assert items[0]["name"] == "b.mov"
+    assert items[1]["name"] == "a.mp4"
+    assert all("id" in it and "size" in it and "mtime" in it for it in items)
+
+
+def test_file_by_id(tmp_path):
+    """通过 list 返回的 id 直接播放/下载成片，且拒绝路径穿越。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    vid = out / "ok.mp4"
+    vid.write_bytes(b"video")
+
+    with patch.object(m, "COMMENTARY_LOCAL_OUTPUT", out):
+        lst = client.get("/api/commentary/list").json()["items"]
+        cid = lst[0]["id"]
+        r = client.get(f"/api/commentary/file/{cid}")
+    assert r.status_code == 200
+    assert r.content == b"video"
+
+
+def test_file_by_id_escape(tmp_path):
+    """路径穿越 id 应返回 403/404，不能访问输出目录外的文件。"""
+    out = tmp_path / "out"
+    out.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("leak")
+
+    bad_cid = base64.urlsafe_b64encode(str(secret).encode()).decode()
+    with patch.object(m, "COMMENTARY_LOCAL_OUTPUT", out):
+        r = client.get(f"/api/commentary/file/{bad_cid}")
+    assert r.status_code in (403, 404)

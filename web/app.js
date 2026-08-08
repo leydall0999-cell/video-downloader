@@ -194,6 +194,15 @@
     libCommentary: $('libCommentary'),
     libCommentaryStatus: $('libCommentaryStatus'),
     libCommentaryFile: $('libCommentaryFile'),
+    // 解说成片独立标签页
+    commentaryView: $('commentaryView'),
+    comGrid: $('comGrid'),
+    comEmpty: $('comEmpty'),
+    comSource: $('comSource'),
+    comGenerate: $('comGenerate'),
+    comStatus: $('comStatus'),
+    comRefresh: $('comRefresh'),
+    tabCommentary: $('tabCommentary'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -966,7 +975,8 @@
   // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
-  const createCommentary = async (source, refs, base = '') => {
+  // onCompleted: 可选回调，成片生成成功后触发（用于独立「解说成片」标签页刷新清单）
+  const createCommentary = async (source, refs, base = '', onCompleted = null) => {
     refs.commentary.disabled = true;
     refs.commentary.textContent = '生成中…';
     refs.commentaryStatus.hidden = false;
@@ -990,6 +1000,7 @@
             refs.commentaryFile.setAttribute('download', '解说成片.mp4');
             refs.commentaryFile.hidden = false;
             refs.commentary.hidden = true;
+            if (typeof onCompleted === 'function') onCompleted();
           } else if (st.status === 'failed') {
             clearInterval(poll);
             refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
@@ -1007,6 +1018,113 @@
       refs.commentary.textContent = '生成解说成片';
     }
   };
+
+  // ---- 解说成片独立标签页 ----
+  const loadCommentary = async () => {
+    // 重置生成区状态
+    el.comGenerate.disabled = false;
+    el.comGenerate.textContent = '🎬 生成解说成片';
+    el.comGenerate.hidden = false;
+    el.comStatus.hidden = true;
+
+    try {
+      const data = await request('/api/commentary/list');
+      const items = data.items || [];
+      el.comGrid.replaceChildren();
+      el.comEmpty.hidden = items.length > 0;
+      if (items.length === 0) {
+        el.comEmpty.textContent = '还没有解说成片。选一个媒体库里的视频，点「生成解说成片」，长视频约需几分钟，完成后会显示在这里。';
+      } else {
+        items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
+      }
+    } catch (e) {
+      el.comEmpty.hidden = false;
+      el.comEmpty.textContent = '读取解说成片失败：' + (e.message || '未知错误');
+    }
+    refreshComSource();
+  };
+
+  const refreshComSource = async () => {
+    try {
+      const data = await request('/api/library');
+      const items = (data.items || []).filter((i) => i.kind === 'video');
+      const current = el.comSource.value;
+      el.comSource.replaceChildren();
+      const def = document.createElement('option');
+      def.value = '';
+      def.textContent = items.length ? '选择视频…' : '媒体库暂无视频';
+      el.comSource.appendChild(def);
+      items.forEach((i) => {
+        const o = document.createElement('option');
+        o.value = i.id;
+        o.textContent = i.title || i.name || i.id;
+        el.comSource.appendChild(o);
+      });
+      if ([...el.comSource.options].some((o) => o.value === current)) el.comSource.value = current;
+    } catch {
+      // 媒体库不可用时下拉只保留默认提示
+      el.comSource.replaceChildren();
+      const def = document.createElement('option');
+      def.value = ''; def.textContent = '无法读取媒体库';
+      el.comSource.appendChild(def);
+    }
+  };
+
+  const createComCard = (it) => {
+    const card = document.createElement('div');
+    card.className = 'com-card';
+
+    const url = `/api/commentary/file/${encodeURIComponent(it.id)}`;
+    const video = document.createElement('video');
+    video.className = 'com-video';
+    video.src = url;
+    video.controls = true;
+    video.preload = 'metadata';
+
+    const meta = document.createElement('div');
+    meta.className = 'com-meta';
+    const name = document.createElement('span');
+    name.className = 'com-name';
+    name.title = it.name;
+    name.textContent = it.name;
+    const size = document.createElement('span');
+    size.className = 'com-size';
+    size.textContent = `${formatBytes(it.size)} · ${new Date(it.mtime * 1000).toLocaleString()}`;
+    meta.appendChild(name);
+    meta.appendChild(size);
+
+    const actions = document.createElement('div');
+    actions.className = 'com-actions';
+    const dl = document.createElement('a');
+    dl.className = 'btn btn-success btn-sm';
+    dl.href = url;
+    dl.setAttribute('download', it.name);
+    dl.textContent = '⬇ 下载';
+    actions.appendChild(dl);
+
+    card.appendChild(video);
+    card.appendChild(meta);
+    card.appendChild(actions);
+    return card;
+  };
+
+  el.comGenerate.addEventListener('click', () => {
+    const fileId = el.comSource.value;
+    if (!fileId) {
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = '请先在右侧选择一个视频';
+      return;
+    }
+    const noopFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
+    createCommentary(
+      { fileId },
+      { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopFile },
+      '',
+      () => loadCommentary(),
+    );
+  });
+
+  el.comRefresh.addEventListener('click', loadCommentary);
 
   // ------------------------------------------------------------------ 初始化
 
@@ -1283,16 +1401,20 @@
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
-    el.downloadView.hidden = isLib || isSub || isTor;
+    const isCom = view === 'commentary';
+    el.downloadView.hidden = isLib || isSub || isTor || isCom;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor);
+    el.commentaryView.hidden = !isCom;
+    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom);
     el.tabLibrary.classList.toggle('is-active', isLib);
     el.tabSubscribe.classList.toggle('is-active', isSub);
     el.tabTorrent.classList.toggle('is-active', isTor);
+    el.tabCommentary.classList.toggle('is-active', isCom);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
+    if (isCom) loadCommentary();
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
   };
@@ -1714,6 +1836,7 @@
 
   el.tabDownload.addEventListener('click', () => switchView('download'));
   el.tabLibrary.addEventListener('click', () => switchView('library'));
+  el.tabCommentary.addEventListener('click', () => switchView('commentary'));
   el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
@@ -3024,7 +3147,8 @@
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
-      if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled) el.tabs.hidden = false;
+      if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
+      if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled || node.commentaryEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();
     })

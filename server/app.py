@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import ipaddress
 import json
@@ -1211,6 +1212,65 @@ def create_commentary(payload: CommentaryRequest) -> dict:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE)
     return {"job_id": job_id, "status": "running"}
+
+
+# 独立「解说成片」标签页：列出所有已生成成片，并支持按 id 直接下载/播放。
+# id 为成片绝对路径的 urlsafe base64，便于无状态回查且防止路径穿越。
+def _commentary_roots() -> list[Path]:
+    """扫描两个可能的输出目录：HTTP 模式落地到 COMMENTARY_LOCAL_OUTPUT，
+    本地模式落地到 COMMENTARY_DIR/output。"""
+    roots = []
+    if COMMENTARY_LOCAL_OUTPUT and COMMENTARY_LOCAL_OUTPUT.exists() and COMMENTARY_LOCAL_OUTPUT.is_dir():
+        roots.append(COMMENTARY_LOCAL_OUTPUT)
+    if COMMENTARY_DIR:
+        d = COMMENTARY_DIR / "output"
+        if d.exists() and d.is_dir():
+            roots.append(d)
+    return roots
+
+
+def _decode_commentary_id(cid: str) -> Path:
+    try:
+        raw = base64.urlsafe_b64decode(cid.encode("ascii")).decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=400, detail="非法的成片标识")
+    p = Path(raw).resolve()
+    allowed = {r.resolve() for r in _commentary_roots()}
+    if not any(p == root or str(p).startswith(str(root) + os.sep) for root in allowed):
+        raise HTTPException(status_code=403, detail="越权访问被拒绝")
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="成片不存在或已被清理")
+    return p
+
+
+@app.get("/api/commentary/list")
+def commentary_list() -> dict:
+    """按修改时间倒序列出所有已生成的解说成片。"""
+    items = []
+    seen: set[str] = set()
+    for root in _commentary_roots():
+        for p in root.iterdir():
+            if not p.is_file() or p.suffix.lower() not in (".mp4", ".mkv", ".mov", ".webm"):
+                continue
+            key = str(p.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            cid = base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii")
+            items.append({
+                "id": cid,
+                "name": p.name,
+                "size": p.stat().st_size,
+                "mtime": int(p.stat().st_mtime),
+            })
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return {"items": items}
+
+
+@app.get("/api/commentary/file/{cid}")
+def commentary_file_by_id(cid: str) -> FileResponse:
+    p = _decode_commentary_id(cid)
+    return FileResponse(str(p), filename=p.name, media_type="video/mp4")
 
 
 @app.get("/api/commentary/{job_id}")
