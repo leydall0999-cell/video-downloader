@@ -58,6 +58,7 @@ echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
   --hidden-import yt_dlp_plugins \
   --hidden-import yt_dlp_plugins.extractor \
   --hidden-import yt_dlp_plugins.extractor.chrqj \
+  --hidden-import yt_dlp_plugins.extractor.kuaishou \
   --collect-submodules yt_dlp \
   "$REPO/desktop/desktop_launcher.py"
 

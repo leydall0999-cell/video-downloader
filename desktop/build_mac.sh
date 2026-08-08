@@ -70,6 +70,7 @@ fi
   --hidden-import yt_dlp_plugins \
   --hidden-import yt_dlp_plugins.extractor \
   --hidden-import yt_dlp_plugins.extractor.chrqj \
+  --hidden-import yt_dlp_plugins.extractor.kuaishou \
   --collect-submodules yt_dlp \
   "$REPO/desktop/desktop_launcher.py"
 
