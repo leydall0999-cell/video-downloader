@@ -974,6 +974,7 @@
   const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {
     refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
+    let shownProgress = 0;  // 已显示过的进度行数，避免重复追加
     const poll = setInterval(async () => {
       try {
         const st = await request(`/api/commentary/${job_id}`, {}, base);
@@ -991,6 +992,15 @@
           if (refs.commentary) {
             refs.commentary.disabled = false;
             refs.commentary.textContent = '重试生成解说';
+          }
+        } else if (st.status === 'running') {
+          // 实时把进程最新输出追加到状态文本，避免「30 分钟黑屏焦虑」
+          const progress = Array.isArray(st.progress) ? st.progress : [];
+          if (progress.length > shownProgress) {
+            const newLines = progress.slice(shownProgress).join('\n');
+            shownProgress = progress.length;
+            const prev = refs.commentaryStatus.textContent || '';
+            refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + newLines;
           }
         }
       } catch {

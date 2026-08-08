@@ -190,19 +190,22 @@ def test_local_mode_builds_and_locates_output(tmp_path):
     (tmp_path / "output").mkdir()
     (tmp_path / "process.py").write_text("# fake pipeline entry")
 
-    def _fake_subprocess_run(args, **kw):
+    def _fake_subprocess_popen(args, **kw):
         # 不真跑 process.py，只按命名规则造一个成片，模拟管线产出
         assert "--auto" in args, "local 模式必须带 --auto"
         assert "--voice" in args, "voice 应注入命令（即便默认音色）"
         infile = args[2]  # [PYTHON, "process.py", in_file, "--auto", ...]
         base = Path(infile).stem
+        (tmp_path / "output").mkdir(exist_ok=True)
         out = tmp_path / "output" / f"{base}_成片.mp4"
         out.write_bytes(b"rendered")
-        class _R:
-            returncode = 0
-            stderr = ""
-            stdout = ""
-        return _R()
+        # 模拟 Popen：stdout 是可迭代的（这里空），wait() 返回 0
+        import io
+        class _P:
+            stdout = io.StringIO("")  # 实时流读取（空）
+            def wait(self, timeout=None):
+                return 0
+        return _P()
 
     src = tmp_path / "s.mp4"
     src.write_bytes(b"x")
@@ -213,7 +216,7 @@ def test_local_mode_builds_and_locates_output(tmp_path):
          patch.object(m, "executor") as ex, \
          patch.object(m, "subprocess") as sp:
         ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
-        sp.run.side_effect = _fake_subprocess_run
+        sp.Popen.side_effect = _fake_subprocess_popen
         jid = client.post("/api/commentary", json={"task_id": "t6", "vertical": False}).json()["job_id"]
         st = client.get(f"/api/commentary/{jid}").json()
     assert st["status"] == "completed"

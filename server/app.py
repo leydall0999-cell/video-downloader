@@ -219,7 +219,7 @@ _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 # 解说 Python 解释器与工具链(ffmpeg/ffprobe)由下方 _CommentaryRuntime 在模块加载时集中探测。
 COMMENTARY_VOICE = os.environ.get("VDL_COMMENTARY_VOICE", "zh-CN-YunxiNeural").strip() or "zh-CN-YunxiNeural"
-COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "1800") or 1800)  # 长视频渲染可能很久
+COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "7200") or 7200)  # 长视频 + whisper 大模型首跑 + edge-tts 排队，默认 2 小时
 # 解说 worker 调用模式：local=同机 subprocess(默认) / http=独立 HTTP worker 服务(强机独立部署)
 COMMENTARY_MODE = os.environ.get("VDL_COMMENTARY_MODE", "local").strip().lower()
 COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstrip("/")
@@ -715,13 +715,44 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             args.append("--vertical")
         if voice:
             args += ["--voice", voice]
-        proc = subprocess.run(
-            args, cwd=str(COMMENTARY_DIR), capture_output=True, text=True,
-            timeout=COMMENTARY_TIMEOUT_SECONDS, env=COMMENTARY_RT.env(),
-        )
-        if proc.returncode != 0:
-            err = (proc.stderr or proc.stdout or "解说管线执行失败").strip()[-800:]
-            raise RuntimeError(err)
+
+        # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
+        # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
+        last_lines: list[str] = []
+
+        def _append(line: str) -> None:
+            line = line.rstrip("\n")
+            if not line:
+                return
+            last_lines.append(line)
+            if len(last_lines) > 80:  # 只保留最近 80 行，避免内存膨胀
+                del last_lines[: len(last_lines) - 80]
+            with _commentary_lock:
+                commentary_jobs.setdefault(job_id, {})["progress"] = list(last_lines)
+
+        try:
+            proc = subprocess.Popen(
+                args, cwd=str(COMMENTARY_DIR),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, env=COMMENTARY_RT.env(),
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"解说管线无法启动：{exc}") from exc
+
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            _append(line)
+        try:
+            ret = proc.wait(timeout=COMMENTARY_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            tail = "\n".join(last_lines[-20:]) or "无输出"
+            raise RuntimeError(
+                f"解说管线超过 {COMMENTARY_TIMEOUT_SECONDS} 秒未完成，已终止。\n最近输出：\n{tail}"
+            )
+        if ret != 0:
+            tail = "\n".join(last_lines[-20:]) or "无输出"
+            raise RuntimeError(f"解说管线退出码 {ret}。\n最近输出：\n{tail}")
 
         # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
         candidates = sorted(
@@ -730,8 +761,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
         )
         out = next(iter(candidates), None)
         if not out:
-            hint = (proc.stderr or proc.stdout or "").strip()[-600:] or "无输出"
-            raise RuntimeError(f"解说管线执行成功但未找到成片。process.py 输出：{hint}")
+            tail = "\n".join(last_lines[-20:]) or "无输出"
+            raise RuntimeError(f"解说管线执行成功但未找到成片。process.py 输出：\n{tail}")
         with _commentary_lock:
             commentary_jobs[job_id].update(status="completed", output_path=str(out))
     except Exception as exc:  # noqa: BLE001
@@ -1365,7 +1396,7 @@ def create_commentary(payload: CommentaryRequest) -> dict:
 
     job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE)
     return {"job_id": job_id, "status": "running"}
 
@@ -1394,7 +1425,7 @@ def create_commentary_upload(
 
     job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": []}
     executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE)
     return {"job_id": job_id, "status": "running"}
 
@@ -1483,7 +1514,8 @@ def commentary_status(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="解说任务不存在或已过期")
     return {"job_id": job_id, "status": job["status"], "error": job.get("error", ""),
-            "ready": job["status"] == "completed"}
+            "ready": job["status"] == "completed",
+            "progress": job.get("progress", [])}
 
 
 @app.get("/api/commentary/{job_id}/file")

@@ -915,7 +915,8 @@ img { max-width: 100%; display: block; }
 }
 .com-create-label { font-size: .9rem; color: var(--text-mute); }
 .com-create select.adv-input { flex: 1 1 220px; min-width: 180px; }
-.com-status { font-size: .82rem; color: var(--text-mute); }
+.com-status { font-size: .82rem; color: var(--text-mute); white-space: pre-wrap; word-break: break-word; max-height: 12rem; overflow-y: auto; text-align: left; background: var(--bg-soft); border-radius: 6px; padding: .5rem .7rem; margin-top: .5rem; }
+#comFileStatus { margin-top: .5rem; }
 .com-empty {
   text-align: center; color: var(--text-mute); padding: 2rem 1rem;
   background: var(--surface); border-radius: var(--radius-md); border: 1px dashed var(--line);
