@@ -140,7 +140,26 @@ CLEANUP_INTERVAL_SECONDS = 600
 #   VDL_COMMENTARY_DIR=/path/to/commentary-pipeline  管线项目根目录（需有 process.py + input/ + output/）
 #   VDL_COMMENTARY_PYTHON=/path/to/python            跑 process.py 的解释器（需装 faster_whisper 等依赖）
 #   VDL_COMMENTARY_VOICE=zh-CN-YunxiNeural           默认配音嗓音
+_COMMENTARY_EXPLICIT = "VDL_COMMENTARY_ENABLED" in os.environ
 COMMENTARY_ENABLED = os.environ.get("VDL_COMMENTARY_ENABLED", "false").strip().lower() == "true"
+# 桌面版自动探测：如果没显式设 COMMENTARY_ENABLED，但项目目录存在 → 自动开启
+if not _COMMENTARY_EXPLICIT and getattr(sys, "frozen", False):
+    _c_dir = os.environ.get("VDL_COMMENTARY_DIR") or ""
+    if not _c_dir:
+        # 尝试常规路径
+        for _cand in [
+            os.path.expanduser("~/commentary-pipeline"),
+            os.path.expanduser("~/WorkBuddy/问问题/commentary-pipeline"),
+        ]:
+            if os.path.isdir(_cand) and os.path.isfile(os.path.join(_cand, "process.py")):
+                _c_dir = _cand
+                break
+    if _c_dir and os.path.isfile(os.path.join(_c_dir, "process.py")):
+        COMMENTARY_ENABLED = True
+        if "VDL_COMMENTARY_DIR" not in os.environ:
+            os.environ["VDL_COMMENTARY_DIR"] = _c_dir
+        if "VDL_COMMENTARY_MODE" not in os.environ:
+            os.environ["VDL_COMMENTARY_MODE"] = "local"
 # 广告位开关：默认关闭。下载站属广告平台高风险类目，默认不挂广告，
 # 待流量稳定、确定接入合规广告源后再开。前端据此决定是否渲染广告位容器。
 ADS_ENABLED = os.environ.get("VDL_ADS_ENABLED", "false").strip().lower() == "true"
