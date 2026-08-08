@@ -66,6 +66,15 @@
           <span class="btn-label">解析链接</span>
           <span class="spinner" aria-hidden="true"></span>
         </button>
+        <button type="button" id="batchToggle" class="btn btn-batch" title="展开批量下载" aria-expanded="false" aria-controls="batchBox">
+          <span class="btn-label">
+            <svg class="batch-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m7 13 5 5 5-5" />
+              <path d="m7 6 5 5 5-5" />
+            </svg>
+            批量下载
+          </span>
+        </button>
       </div>
 
       <div class="control-row">
@@ -91,8 +100,10 @@
     </form>
 
     <!-- 批量下载面板：一次粘贴多个链接，统一排队并发下载 -->
-    <details class="batch-box" id="batchBox">
-      <summary>批量下载 · 每行一个链接</summary>
+    <div class="batch-box" id="batchBox" hidden>
+      <div class="batch-head">
+        <span class="batch-title">批量下载 · 每行一个链接</span>
+      </div>
       <div class="batch-body">
         <textarea id="batchInput" class="batch-textarea" rows="4" spellcheck="false"
           placeholder="每行一个视频链接，可一次下载多个&#10;例如：&#10;https://www.bilibili.com/video/BV1...&#10;https://youtu.be/xxxx"></textarea>
@@ -115,7 +126,7 @@
         </div>
         <button type="button" class="btn btn-primary" id="batchBtn">批量下载</button>
       </div>
-    </details>
+    </div>
 
     <div class="chips" id="platformChips" aria-label="支持的平台"></div>
 

@@ -167,6 +167,16 @@ img { max-width: 100%; display: block; }
 .btn-accent { color: #fff; background: var(--accent); box-shadow: 0 6px 14px rgba(6, 182, 212, .24); }
 .btn-accent:hover { background: #0891b2; }
 .btn-sm { min-height: 36px; padding: 0 .85rem; font-size: .84rem; border-radius: var(--radius-sm); }
+.btn-batch {
+  min-width: 120px; min-height: 52px; padding: 0 1.1rem;
+  font-size: .98rem; letter-spacing: .02em;
+  color: var(--brand); background: #eef0ff; border: 1.5px solid var(--brand);
+  box-shadow: 0 6px 16px rgba(79, 70, 229, .14);
+}
+.btn-batch:hover:not(:disabled) { background: #e2e5ff; }
+.btn-batch.is-open { background: var(--brand); color: #fff; }
+.btn-batch .batch-icon { transition: transform .2s; }
+.btn-batch.is-open .batch-icon { transform: rotate(180deg); }
 
 .spinner {
   width: 15px; height: 15px; border-radius: 50%; display: none;
@@ -436,6 +446,7 @@ img { max-width: 100%; display: block; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; }
   .input-row #resolveBtn { width: 100%; height: 48px; }
+  .input-row .btn-batch { width: 100%; min-height: 48px; }
   .btn-primary { width: 100%; }
   .control-row { flex-direction: column; align-items: stretch; gap: .55rem; }
   .video-card { grid-template-columns: 1fr; }
@@ -653,20 +664,20 @@ img { max-width: 100%; display: block; }
 
 /* ---- 批量下载面板 ---- */
 .batch-box {
-  border: 1px solid var(--border, #e5e7eb);
+  border: 1.5px solid var(--brand, #4f46e5);
   border-radius: var(--radius-lg, 14px);
-  background: var(--surface, #fff);
-  padding: .6rem .9rem;
+  background: linear-gradient(180deg, #fbfbfe 0%, #f4f5ff 100%);
+  padding: 1rem 1.1rem;
   margin: 0 0 1rem;
+  animation: batch-slide .25s ease;
 }
-.batch-box > summary {
-  cursor: pointer; font-weight: 600; color: var(--text); user-select: none;
-  list-style: none; padding: .3rem 0;
+@keyframes batch-slide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-.batch-box > summary::-webkit-details-marker { display: none; }
-.batch-box > summary::before { content: "▸ "; color: var(--primary, #4f46e5); }
-.batch-box[open] > summary::before { content: "▾ "; }
-.batch-body { display: flex; flex-direction: column; gap: .7rem; margin-top: .6rem; }
+.batch-head { margin-bottom: .7rem; }
+.batch-title { font-weight: 700; color: var(--text); font-size: .95rem; }
+.batch-body { display: flex; flex-direction: column; gap: .7rem; }
 .batch-textarea {
   width: 100%; resize: vertical; min-height: 88px; box-sizing: border-box;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem;

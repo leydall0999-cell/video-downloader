@@ -76,6 +76,8 @@
     cloudStatus: $('cloudStatus'),
     cloudSubNote: $('cloudSubNote'),
     // 批量下载（桌面版万能下载器重点能力）
+    batchToggle: $('batchToggle'),
+    batchBox: $('batchBox'),
     batchInput: $('batchInput'),
     batchQuality: $('batchQuality'),
     batchConcurrency: $('batchConcurrency'),
@@ -1135,6 +1137,13 @@
     const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
     if (!urls.length) { showError('请先粘贴至少一个视频链接'); return; }
     runBatch(urls, el.cookieInput.value.trim(), el.proxyInput.value.trim());
+  });
+  el.batchToggle.addEventListener('click', () => {
+    const open = el.batchBox.hidden;
+    el.batchBox.hidden = !open;
+    el.batchToggle.setAttribute('aria-expanded', String(open));
+    el.batchToggle.classList.toggle('is-open', open);
+    if (open) setTimeout(() => el.batchInput.focus(), 50);
   });
   el.batchConcurrency.addEventListener('input', () => { el.batchConcVal.textContent = el.batchConcurrency.value; });
   el.cancelAllBtn.addEventListener('click', cancelAll);
