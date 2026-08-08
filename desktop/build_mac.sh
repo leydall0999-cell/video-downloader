@@ -84,6 +84,16 @@ mkdir -p "$APP_BIN/bin"
 cp "$FF" "$APP_BIN/bin/ffmpeg"
 chmod +x "$APP_BIN/bin/ffmpeg"
 
+echo "▶ dylibbundler 把 ffmpeg 依赖打进来（脱离 Homebrew）"
+# ⚠️ @executable_path = bin/ 这个目录，所以 ../libs 才是 Contents/MacOS/libs/
+# ⚠️ 之前用 @executable_path/libs 错了——会落到 Contents/MacOS/bin/libs/
+if command -v dylibbundler >/dev/null 2>&1; then
+  rm -rf "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs"
+  dylibbundler -x "$APP_BIN/bin/ffmpeg" -d "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs" -p "@executable_path/../libs" -b >/dev/null
+else
+  echo "⚠️  未找到 dylibbundler（brew install dylibbundler）—— 跳过；将依赖系统 Homebrew dylib"
+fi
+
 echo "▶ 签名（ad-hoc）"
 codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
