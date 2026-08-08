@@ -218,6 +218,18 @@ AI_DEWATERMARK_ENDPOINT = os.environ.get("VDL_AI_DEWATERMARK_ENDPOINT", "http://
 AI_DEWATERMARK_TOKEN = os.environ.get("VDL_AI_DEWATERMARK_TOKEN", "").strip()
 AI_DEWATERMARK_TIMEOUT = int(os.environ.get("VDL_AI_DEWATERMARK_TIMEOUT", "3600") or 3600)
 
+# 启动时检测 GPU（用于 /api/nodes 告知前端）
+def _detect_gpu() -> bool:
+    try:
+        import torch  # noqa: F401
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+    except ImportError:
+        return False
+
+AI_GPU_AVAILABLE = _detect_gpu() if AI_DEWATERMARK_ENABLED else False
+
 # ---- 公开部署护栏：防止实例被当免费下载器薅爆带宽 ---- #
 # 设为 0 表示不限制（自托管、内部使用时可关掉）
 RATE_LIMIT_PER_HOUR = int(os.environ.get("VDL_RATE_LIMIT_PER_HOUR", "30") or 30)
@@ -790,6 +802,10 @@ def node_info() -> dict:
         "torrent": {
             "enabled": TORRENT_ENABLED,
             "available": torrent_mod.available(),
+        },
+        "ai_dewatermark": {
+            "enabled": AI_DEWATERMARK_ENABLED,
+            "gpu": AI_GPU_AVAILABLE,
         },
         "authRequired": AUTH_REQUIRED,
     }

@@ -2945,7 +2945,7 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, authRequired }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, authRequired }) => {
       node.authRequired = !!authRequired;
       if (node.authRequired && !localStorage.getItem('vdl_api_token')) {
         const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
@@ -2980,6 +2980,13 @@
       node.cryptoLocked = !!(crypto && crypto.locked);
       node.torrentEnabled = !!(torrent && torrent.enabled);
       node.torrentAvailable = !!(torrent && torrent.available);
+      node.aiDewatermarkGpu = !!(ai_dewatermark && ai_dewatermark.gpu);
+      // 有 GPU → 标签显示加速；没有 → 提示 CPU 模式
+      if (PROCESS_OPS.ai_dewatermark) {
+        PROCESS_OPS.ai_dewatermark.label = node.aiDewatermarkGpu
+          ? '🤖 AI 去水印（GPU 加速）'
+          : '🤖 AI 去水印（CPU，较慢但任何电脑可跑）';
+      }
       if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
       if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
