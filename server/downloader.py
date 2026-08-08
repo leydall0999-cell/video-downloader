@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-SOCKET_TIMEOUT = 15
+SOCKET_TIMEOUT = 30  # 国内 CDN 偶发慢响应，30 秒更稳
 PROBE_RETRIES = 1
 
 
@@ -102,7 +102,9 @@ DOWNLOAD_RETRIES = 3
 # 下载体积上限（MB）：防止被当成免费大盘偷跑带宽 / 撑爆磁盘。设为 0 表示不限。
 _MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "2048") or 2048)
 _MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
-CONCURRENT_FRAGMENTS = 4
+# 国内站 m3u8 CDN 对高并发抓段敏感（容易被限速/拒绝），桌面版默认 2 段
+# 通过 VDL_CONCURRENT_FRAGMENTS 环境变量调
+CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "2") or 2)
 MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
 DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给合并/转码
@@ -580,6 +582,7 @@ def _is_retryable(error: str) -> bool:
         "超时", "timeout", "连接", "connection", "网络", "network", "resolve",
         "代理", "proxy", "ssl", "reset", "refused", "unreachable", "中断",
         "interrupted", "503", "502", "500", "429", "temporary", "temp",
+        "ffmpeg", "m3u8", "hls",  # HLS 合并偶发，ffmpeg 偶发退出 → 自动重试
     )
     return any(k in lowered for k in keywords)
 
