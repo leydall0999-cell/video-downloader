@@ -1008,13 +1008,10 @@
     paintNodeBar();
   });
 
-  // 交叉引流入口：
-  //  - 转 MP3 已接通：直接发起一个"仅音频"下载任务（复用下载框架），进度在下方任务列表展示
-  //  - 存网盘 尚未接通，暂时保留占位提示
-  const showUpsellPlaceholder = (label) => {
-    el.upsellStatus.hidden = false;
-    el.upsellStatus.textContent = `🚧 ${label}功能即将上线，敬请期待`;
-  };
+  // 交叉引流入口（结果页底部）：
+  //  - 转 MP3：直接发起一个"仅音频"下载任务，进度在下方任务列表展示
+  //  - 存网盘：下载完成后点击 → 弹出网盘弹窗选 WebDAV/百度网盘上传
+  //    未完成下载时提示"先完成下载再存"
   el.upsellMp3.addEventListener('click', async () => {
     if (!resolved) return;
     const audioKey = resolved.qualities?.find((q) => /MP3|音频/.test(q.label))?.key || 'audio';
