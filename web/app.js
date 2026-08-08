@@ -1277,6 +1277,9 @@
     if (platform) params.set('platform', platform);
     if (kind && kind !== 'all') params.set('kind', kind);
     try {
+      // 每次刷新清除旧选中（卡片重新渲染，旧 ID 已无效）
+      selectedLibIds.clear();
+      updateBatchUI();
       const data = await request(`/api/library?${params.toString()}`);
       libItems = data.items || [];
       renderLibGrid(libItems);
