@@ -902,20 +902,26 @@ img { max-width: 100%; display: block; }
 .com-url-row .adv-input { flex: 1; min-width: 200px; }
 .com-entry-card select.adv-input { width: 100%; display: block; }
 .com-generate-main { width: 100%; margin-top: .75rem; padding: .85rem; font-size: 1.05rem; font-weight: 700; }
-.com-generate-main + .com-status { display: block; margin-top: .5rem; text-align: center; }
+/* ---- 解说进度条 ---- */
+#comProgress { margin-top: .75rem; }
+.com-progress-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .3rem; }
+.com-phase-tag { font-size: .78rem; font-weight: 600; color: var(--brand); }
+.com-percent { font-size: .78rem; font-weight: 700; color: var(--text); }
+.com-progress-bar { width: 100%; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.com-bar-fill {
+  height: 100%; background: linear-gradient(135deg, var(--brand-strong), var(--brand));
+  border-radius: 4px; transition: width .3s ease;
+}
+/* ---- 文件选择 ---- */
 .com-file-name { display: block; margin-top: .5rem; font-size: .8rem; color: var(--text-mute); word-break: break-all; }
 #comDropZone { cursor: pointer; }
 #comDropZone:hover { border-color: var(--brand); }
-
-.com-create {
-  display: flex; flex-wrap: wrap; align-items: center; gap: .6rem;
-  margin-bottom: 1rem; padding: .8rem 1rem;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
-  box-shadow: var(--shadow);
+/* ---- 解说状态文本 ---- */
+.com-status {
+  font-size: .82rem; color: var(--text-mute); white-space: pre-wrap; word-break: break-word;
+  max-height: 12rem; overflow-y: auto; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: .5rem .7rem; margin-top: .5rem;
 }
-.com-create-label { font-size: .9rem; color: var(--text-mute); }
-.com-create select.adv-input { flex: 1 1 220px; min-width: 180px; }
-.com-status { font-size: .82rem; color: var(--text-mute); white-space: pre-wrap; word-break: break-word; max-height: 12rem; overflow-y: auto; text-align: left; background: var(--bg-soft); border-radius: 6px; padding: .5rem .7rem; margin-top: .5rem; }
 #comFileStatus { margin-top: .5rem; }
 .com-empty {
   text-align: center; color: var(--text-mute); padding: 2rem 1rem;

@@ -304,6 +304,16 @@
     </div>
 
     <button type="button" class="btn btn-primary com-generate-main" id="comGenerate">生成解说</button>
+    <!-- 解说进度条：阶段标签 + 百分比 + 渐变填充条 -->
+    <div id="comProgress" hidden>
+      <div class="com-progress-head">
+        <span id="comPhase" class="com-phase-tag">转写中</span>
+        <span id="comPercent" class="com-percent">0%</span>
+      </div>
+      <div class="com-progress-bar">
+        <div id="comBarFill" class="com-bar-fill" style="width:0%"></div>
+      </div>
+    </div>
     <span class="com-status" id="comStatus" hidden></span>
 
     <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>

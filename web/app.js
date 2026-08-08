@@ -202,6 +202,10 @@
     comEmpty: $('comEmpty'),
     comSource: $('comSource'),
     comGenerate: $('comGenerate'),
+    comProgress: $('comProgress'),
+    comPhase: $('comPhase'),
+    comPercent: $('comPercent'),
+    comBarFill: $('comBarFill'),
     comStatus: $('comStatus'),
     comRefresh: $('comRefresh'),
     comEnvStatus: $('comEnvStatus'),
@@ -994,7 +998,7 @@
             refs.commentary.textContent = '重试生成解说';
           }
         } else if (st.status === 'running') {
-          // 实时把进程最新输出追加到状态文本，避免「30 分钟黑屏焦虑」
+          // 实时把进程最新输出追加到状态文本
           const progress = Array.isArray(st.progress) ? st.progress : [];
           if (progress.length > shownProgress) {
             const newLines = progress.slice(shownProgress).join('\n');
@@ -1002,6 +1006,43 @@
             const prev = refs.commentaryStatus.textContent || '';
             refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + newLines;
           }
+          // 解析进度：阶段名 + 百分比
+          let phase = '处理中', pct = 0;
+          const all = progress.join('\n');
+          // 阶段检测
+          if (/===.*(?:转写|transcribe)/i.test(all)) phase = '转写中';
+          else if (/自动解说词|解说词草稿|LLM.*生成/i.test(all)) phase = '生成解说词';
+          else if (/开始批量生成旁白|旁白生成/i.test(all)) phase = '生成旁白中';
+          else if (/开始并行渲染|✓\s*\[/i.test(all)) phase = '渲染中';
+          else if (/拼接成片/i.test(all)) phase = '拼接中';
+          else if (/✅|🎬.*全部完成/i.test(all)) phase = '完成';
+          // 百分比：优先取 "✓ [N/M]" 渲染进度
+          const match = all.match(/✓\s*\[(\d+)\s*\/\s*(\d+)\]/g);
+          if (match) {
+            const last = match[match.length - 1];
+            const m2 = last.match(/(\d+)\s*\/\s*(\d+)/);
+            if (m2) pct = Math.round((+m2[1] / +m2[2]) * 100);
+          } else if (/转写完成/.test(all)) {
+            pct = 30;
+          } else if (/旁白生成完成/.test(all)) {
+            const ppm = all.match(/旁白生成完成\s*[（(]\s*(\d+)\s*\/\s*(\d+)/);
+            if (ppm) pct = Math.round((+ppm[1] / +ppm[2]) * 30 + 35);
+            else pct = 50;
+          } else if (/拼接成片/.test(all)) {
+            pct = 95;
+          } else if (/✅|🎬/.test(all)) {
+            pct = 100;
+          }
+          // 更新进度条
+          el.comProgress.hidden = false;
+          el.comPhase.textContent = phase;
+          el.comPercent.textContent = pct + '%';
+          el.comBarFill.style.width = pct + '%';
+          if (pct >= 100) el.comBarFill.style.background = 'var(--success)';
+        }
+        // 完成/失败时隐藏进度条，保留日志文本
+        if (st.status === 'completed' || st.status === 'failed') {
+          el.comProgress.hidden = true;
         }
       } catch {
         /* 静默重试，下一轮轮询补上 */
@@ -1092,6 +1133,7 @@
     el.comGenerate.disabled = false;
     el.comGenerate.textContent = '生成解说';
     el.comGenerate.hidden = false;
+    el.comProgress.hidden = true;
     el.comStatus.hidden = true;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
