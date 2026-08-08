@@ -222,6 +222,8 @@ _HERE = Path(__file__).resolve().parent
 _COMMENTARY_OUT_RAW = os.environ.get("VDL_COMMENTARY_LOCAL_OUTPUT", "").strip()
 COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW) if _COMMENTARY_OUT_RAW else (_HERE.parent / "commentary_out")
 COMMENTARY_LOCAL_OUTPUT.mkdir(parents=True, exist_ok=True)
+COMMENTARY_WORK_DIR = COMMENTARY_LOCAL_OUTPUT / "work"
+COMMENTARY_WORK_DIR.mkdir(parents=True, exist_ok=True)
 commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
 
@@ -532,6 +534,41 @@ def _prune_vault_tmp(max_age_seconds: int = 1800) -> None:
 # --------------------------------------------------------------------------- #
 # 自动解说（松耦合桥接 commentary-pipeline/process.py，不重写解说逻辑）
 # --------------------------------------------------------------------------- #
+
+
+def _commentary_work_dir() -> Path:
+    d = COMMENTARY_WORK_DIR / uuid.uuid4().hex[:12]
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _download_for_commentary(url: str) -> Path:
+    """为解说功能临时下载一个公开视频，返回本地文件路径。"""
+    _assert_safe_url(url)
+    work_dir = _commentary_work_dir()
+    outtmpl = str(work_dir / "%(title)s [%(id)s].%(ext)s")
+    proxy = os.environ.get("VDL_PROXY_CN" if is_china_host(url) else "VDL_PROXY", "").strip()
+    args = [
+        sys.executable, "-m", "yt_dlp",
+        "--no-playlist",
+        "--merge-output-format", "mp4",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "-o", outtmpl,
+        "--quiet",
+        "--no-warnings",
+        url,
+    ]
+    if proxy:
+        args += ["--proxy", proxy]
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "下载失败").strip()
+        raise RuntimeError(err[-800:])
+    videos = [p for p in work_dir.iterdir() if p.is_file() and p.suffix.lower() in {".mp4", ".mkv", ".mov", ".webm", ".avi"}]
+    if not videos:
+        raise RuntimeError("下载完成但未找到视频文件")
+    return max(videos, key=lambda p: p.stat().st_size)
+
 
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
@@ -1211,6 +1248,74 @@ def create_commentary(payload: CommentaryRequest) -> dict:
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE)
+    return {"job_id": job_id, "status": "running"}
+
+
+class CommentaryFromUrlRequest(BaseModel):
+    url: str = Field(..., max_length=2048)
+    vertical: bool = False
+    voice: str = Field(default="", max_length=64)
+
+
+@app.post("/api/commentary/from-url")
+def create_commentary_from_url(payload: CommentaryFromUrlRequest) -> dict:
+    """粘贴公开视频链接 → 临时下载 → 直接生成解说成片。"""
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    try:
+        _assert_safe_url(payload.url)
+    except LinkError as e:
+        raise HTTPException(status_code=400, detail=e.user_message if hasattr(e, "user_message") else str(e))
+    try:
+        parse_source(payload.url)
+    except UnsupportedPlatformError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    job_id = uuid.uuid4().hex[:12]
+    with _commentary_lock:
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
+
+    def _run() -> None:
+        try:
+            src = _download_for_commentary(payload.url)
+        except Exception as exc:  # noqa: BLE001
+            with _commentary_lock:
+                commentary_jobs.setdefault(job_id, {})["status"] = "failed"
+                commentary_jobs[job_id]["error"] = str(exc)[:800]
+            logger.exception("解说链接下载失败 %s", job_id)
+            return
+        _commentary_run(job_id, str(src), payload.vertical, payload.voice or COMMENTARY_VOICE)
+
+    executor.submit(_run)
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.post("/api/commentary/upload")
+def create_commentary_upload(
+    file: UploadFile = _FastAPIFile(...),
+    vertical: bool = Form(False),
+    voice: str = Form(""),
+) -> dict:
+    """上传本地视频 → 直接生成解说成片。"""
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in {".mp4", ".mkv", ".mov", ".webm", ".avi"}:
+        raise HTTPException(status_code=409, detail="请上传视频文件")
+    work_dir = _commentary_work_dir()
+    dest = work_dir / f"upload{suffix}"
+    try:
+        with dest.open("wb") as fh:
+            shutil.copyfileobj(file.file, fh)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
+    finally:
+        file.file.close()
+
+    job_id = uuid.uuid4().hex[:12]
+    with _commentary_lock:
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
+    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE)
     return {"job_id": job_id, "status": "running"}
 
 

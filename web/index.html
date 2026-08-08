@@ -35,7 +35,7 @@
   <nav class="tabs" id="tabs" hidden>
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
-    <button type="button" class="tab" data-view="commentary" id="tabCommentary" hidden>🎬 解说成片</button>
+    <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
   </nav>
@@ -275,20 +275,43 @@
   <!-- 解说成片视图（桌面版功能） -->
   <section id="commentaryView" class="panel" hidden aria-labelledby="comTitle">
     <div class="lib-head">
-      <h2 id="comTitle" class="guide-title">🎬 解说成片</h2>
+      <h2 id="comTitle" class="guide-title">🎬 视频解说</h2>
       <div class="lib-head-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="comRefresh">刷新</button>
       </div>
     </div>
 
+    <div class="com-entry-grid">
+      <!-- 入口 1：粘贴链接（从下载入口演变） -->
+      <div class="com-entry-card">
+        <h3 class="com-entry-title">🔗 从链接生成</h3>
+        <p class="com-entry-tip">粘贴视频链接，自动下载并生成解说成片</p>
+        <div class="com-url-row">
+          <input id="comUrl" class="adv-input" type="text" placeholder="https://..." autocomplete="off" spellcheck="false" />
+          <button type="button" class="btn btn-primary" id="comUrlBtn">开始解说</button>
+        </div>
+        <span class="com-status" id="comUrlStatus" hidden></span>
+      </div>
+
+      <!-- 入口 2：拖入本地文件 -->
+      <div class="com-entry-card" id="comDropZone">
+        <h3 class="com-entry-title">📁 从本地文件生成</h3>
+        <p class="com-entry-tip">把本地视频文件拖到这里，或点击选择文件</p>
+        <input id="comFileInput" type="file" accept="video/*" hidden />
+        <button type="button" class="btn btn-secondary" id="comFileBtn">选择本地视频</button>
+        <span class="com-status" id="comFileStatus" hidden></span>
+      </div>
+    </div>
+
+    <!-- 备用入口：从媒体库选择 -->
     <div class="com-create" id="comCreateBox">
-      <span class="com-create-label">从媒体库生成解说成片：</span>
+      <span class="com-create-label">或从媒体库选择已有视频：</span>
       <select id="comSource" class="adv-input"><option value="">选择视频…</option></select>
-      <button type="button" class="btn btn-primary btn-sm" id="comGenerate">🎬 生成解说成片</button>
+      <button type="button" class="btn btn-primary btn-sm" id="comGenerate">生成解说</button>
       <span class="com-status" id="comStatus" hidden></span>
     </div>
 
-    <p class="com-empty" id="comEmpty" hidden>还没有解说成片。选一个媒体库里的视频，点「生成解说成片」，长视频约需几分钟，完成后会显示在这里。</p>
+    <p class="com-empty" id="comEmpty" hidden>还没有解说成片。粘贴链接、拖入本地视频，或从媒体库选择视频即可开始。</p>
     <div class="com-grid" id="comGrid"></div>
   </section>
 
@@ -439,9 +462,7 @@
         <button type="button" class="btn btn-ghost btn-sm" data-cancel>取消</button>
         <button type="button" class="btn btn-ghost btn-sm" data-retry hidden>重试</button>
         <button type="button" class="btn btn-ghost btn-sm task-delete" data-delete hidden title="删除这条任务记录">🗑</button>
-        <button type="button" class="btn btn-ghost btn-sm" data-commentary hidden>生成解说成片</button>
         <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
-        <a class="btn btn-accent btn-sm" data-commentary-file hidden download>解说成片</a>
         <button type="button" class="btn btn-ghost btn-sm" data-cloud hidden>☁️ 存到网盘</button>
       </span>
     </div>
@@ -467,7 +488,6 @@
       <span class="convert-status" data-convert-status></span>
       <span class="convert-quota" data-convert-quota hidden></span>
     </div>
-    <p class="commentary-status" data-commentary-status hidden></p>
     <p class="save-hint" data-save-hint hidden></p>
     <p class="cloud-status-line" data-cloud-status hidden></p>
     <p class="task-error" data-error hidden></p>

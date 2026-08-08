@@ -204,6 +204,13 @@
     comGenerate: $('comGenerate'),
     comStatus: $('comStatus'),
     comRefresh: $('comRefresh'),
+    comUrl: $('comUrl'),
+    comUrlBtn: $('comUrlBtn'),
+    comUrlStatus: $('comUrlStatus'),
+    comFileInput: $('comFileInput'),
+    comFileBtn: $('comFileBtn'),
+    comFileStatus: $('comFileStatus'),
+    comDropZone: $('comDropZone'),
     tabCommentary: $('tabCommentary'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
@@ -560,9 +567,6 @@
       cancel: node.querySelector('[data-cancel]'),
       save: node.querySelector('[data-save]'),
       error: node.querySelector('[data-error]'),
-      commentary: node.querySelector('[data-commentary]'),
-      commentaryFile: node.querySelector('[data-commentary-file]'),
-      commentaryStatus: node.querySelector('[data-commentary-status]'),
       saveHint: node.querySelector('[data-save-hint]'),
       convertWrap: node.querySelector('[data-convert-wrap]'),
       convertTarget: node.querySelector('[data-convert-target]'),
@@ -632,15 +636,6 @@
       refs.convertBtn.addEventListener('click', () => startConvert(task.task_id, refs));
     }
     if (node.convertSubRequired) updateConvertQuota(refs, null);
-
-    // 本节点启用了解说增值功能：下载完成后展示「生成解说成片」入口
-    if (node.commentaryEnabled) {
-      refs.commentary.hidden = false;
-      if (!refs.commentary.dataset.bound) {
-        refs.commentary.dataset.bound = '1';
-        refs.commentary.addEventListener('click', () => createCommentary({ taskId: task.task_id }, refs, refs.base || ''));
-      }
-    }
 
     // 下载完成后展示「存到网盘」入口（增值能力）：把文件上传到用户自己的网盘
     refs.cloud.hidden = false;
@@ -976,11 +971,41 @@
   // 下载完成的任务 → 点「生成解说成片」→ 后台调 commentary-pipeline/process.py → 回传成片。
   // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
 
+  // 通用轮询：拿到 job_id 后定时查状态，更新 refs（commentary 按钮 / status / file 链接）。
+  const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {
+    refs.commentaryStatus.hidden = false;
+    refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
+    const poll = setInterval(async () => {
+      try {
+        const st = await request(`/api/commentary/${job_id}`, {}, base);
+        if (st.status === 'completed') {
+          clearInterval(poll);
+          refs.commentaryStatus.textContent = '解说成片已生成';
+          refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
+          refs.commentaryFile.setAttribute('download', '解说成片.mp4');
+          refs.commentaryFile.hidden = false;
+          if (refs.commentary) refs.commentary.hidden = true;
+          if (typeof onCompleted === 'function') onCompleted();
+        } else if (st.status === 'failed') {
+          clearInterval(poll);
+          refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
+          if (refs.commentary) {
+            refs.commentary.disabled = false;
+            refs.commentary.textContent = '重试生成解说';
+          }
+        }
+      } catch {
+        /* 静默重试，下一轮轮询补上 */
+      }
+    }, 2500);
+  };
+
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
-  // onCompleted: 可选回调，成片生成成功后触发（用于独立「解说成片」标签页刷新清单）
   const createCommentary = async (source, refs, base = '', onCompleted = null) => {
-    refs.commentary.disabled = true;
-    refs.commentary.textContent = '生成中…';
+    if (refs.commentary) {
+      refs.commentary.disabled = true;
+      refs.commentary.textContent = '生成中…';
+    }
     refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
     try {
@@ -991,43 +1016,69 @@
         method: 'POST',
         body: JSON.stringify(body),
       }, base);
-
-      const poll = setInterval(async () => {
-        try {
-          const st = await request(`/api/commentary/${job_id}`, {}, base);
-          if (st.status === 'completed') {
-            clearInterval(poll);
-            refs.commentaryStatus.textContent = '解说成片已生成';
-            refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
-            refs.commentaryFile.setAttribute('download', '解说成片.mp4');
-            refs.commentaryFile.hidden = false;
-            refs.commentary.hidden = true;
-            if (typeof onCompleted === 'function') onCompleted();
-          } else if (st.status === 'failed') {
-            clearInterval(poll);
-            refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
-            refs.commentary.disabled = false;
-            refs.commentary.textContent = '重试生成解说';
-          }
-        } catch {
-          /* 静默重试，下一轮轮询补上 */
-        }
-      }, 2500);
+      pollCommentaryJob(job_id, refs, base, onCompleted);
     } catch (err) {
       refs.commentaryStatus.hidden = false;
       refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
-      refs.commentary.disabled = false;
-      refs.commentary.textContent = '生成解说成片';
+      if (refs.commentary) {
+        refs.commentary.disabled = false;
+        refs.commentary.textContent = '生成解说成片';
+      }
     }
   };
 
-  // ---- 解说成片独立标签页 ----
+  const createCommentaryFromUrl = async (url, refs, onCompleted = null) => {
+    if (refs.commentary) {
+      refs.commentary.disabled = true;
+      refs.commentary.textContent = '生成中…';
+    }
+    refs.commentaryStatus.hidden = false;
+    refs.commentaryStatus.textContent = '正在下载视频并生成解说成片…';
+    try {
+      const { job_id } = await request('/api/commentary/from-url', {
+        method: 'POST',
+        body: JSON.stringify({ url, vertical: true }),
+      });
+      pollCommentaryJob(job_id, refs, '', onCompleted);
+    } catch (err) {
+      refs.commentaryStatus.hidden = false;
+      refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      if (refs.commentary) {
+        refs.commentary.disabled = false;
+        refs.commentary.textContent = '开始解说';
+      }
+    }
+  };
+
+  const createCommentaryFromFile = async (file, refs, onCompleted = null) => {
+    refs.commentaryStatus.hidden = false;
+    refs.commentaryStatus.textContent = '正在上传视频并生成解说成片…';
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('vertical', 'false');
+      const { job_id } = await request('/api/commentary/upload', { method: 'POST', body: form });
+      pollCommentaryJob(job_id, refs, '', onCompleted);
+    } catch (err) {
+      refs.commentaryStatus.hidden = false;
+      refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+    }
+  };
+
+  // ---- 视频解说独立标签页 ----
+  const noopComFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
+
   const loadCommentary = async () => {
     // 重置生成区状态
     el.comGenerate.disabled = false;
-    el.comGenerate.textContent = '🎬 生成解说成片';
+    el.comGenerate.textContent = '生成解说';
     el.comGenerate.hidden = false;
     el.comStatus.hidden = true;
+    el.comUrl.value = '';
+    el.comUrlBtn.disabled = false;
+    el.comUrlBtn.textContent = '开始解说';
+    el.comUrlStatus.hidden = true;
+    el.comFileStatus.hidden = true;
 
     try {
       const data = await request('/api/commentary/list');
@@ -1035,7 +1086,7 @@
       el.comGrid.replaceChildren();
       el.comEmpty.hidden = items.length > 0;
       if (items.length === 0) {
-        el.comEmpty.textContent = '还没有解说成片。选一个媒体库里的视频，点「生成解说成片」，长视频约需几分钟，完成后会显示在这里。';
+        el.comEmpty.textContent = '还没有解说成片。粘贴链接、拖入本地视频，或从媒体库选择视频即可开始。';
       } else {
         items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
       }
@@ -1117,13 +1168,62 @@
       el.comStatus.textContent = '请先在右侧选择一个视频';
       return;
     }
-    const noopFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
     createCommentary(
       { fileId },
-      { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopFile },
+      { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
       '',
       () => loadCommentary(),
     );
+  });
+
+  // 入口 1：从链接生成
+  el.comUrlBtn.addEventListener('click', () => {
+    const url = el.comUrl.value.trim();
+    if (!url) {
+      el.comUrlStatus.hidden = false;
+      el.comUrlStatus.textContent = '请先粘贴视频链接';
+      return;
+    }
+    createCommentaryFromUrl(
+      url,
+      { commentary: el.comUrlBtn, commentaryStatus: el.comUrlStatus, commentaryFile: noopComFile },
+      () => loadCommentary(),
+    );
+  });
+
+  // 入口 2：从本地文件生成
+  const startFileCommentary = (file) => {
+    if (!file || !file.type.startsWith('video/')) {
+      el.comFileStatus.hidden = false;
+      el.comFileStatus.textContent = '请选择视频文件';
+      return;
+    }
+    createCommentaryFromFile(
+      file,
+      { commentary: null, commentaryStatus: el.comFileStatus, commentaryFile: noopComFile },
+      () => loadCommentary(),
+    );
+  };
+  el.comFileBtn.addEventListener('click', () => el.comFileInput.click());
+  el.comFileInput.addEventListener('change', () => {
+    const file = el.comFileInput.files[0];
+    if (file) startFileCommentary(file);
+  });
+  ['dragenter', 'dragover'].forEach((ev) => {
+    el.comDropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      el.comDropZone.classList.add('is-dragover');
+    });
+  });
+  ['dragleave', 'drop'].forEach((ev) => {
+    el.comDropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      el.comDropZone.classList.remove('is-dragover');
+    });
+  });
+  el.comDropZone.addEventListener('drop', (e) => {
+    const file = e.dataTransfer.files[0];
+    if (file) startFileCommentary(file);
   });
 
   el.comRefresh.addEventListener('click', loadCommentary);
@@ -3156,7 +3256,8 @@
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
-      if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
+      // 视频解说已提升为主功能，tab 始终显示；后端未启用时操作会提示 503。
+      if (el.tabCommentary) el.tabCommentary.hidden = false;
       if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled || node.commentaryEnabled) el.tabs.hidden = false;
       initSubUI();
       paintNodeBar();

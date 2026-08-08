@@ -862,6 +862,26 @@ img { max-width: 100%; display: block; }
 .adv-input-sm { width: auto; padding: .25rem .4rem; font-size: .8rem; }
 
 /* ===== 解说成片独立标签页 ===== */
+.com-entry-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem;
+  margin-bottom: 1rem;
+}
+.com-entry-card {
+  padding: 1rem; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: var(--shadow);
+  transition: border-color .16s, box-shadow .16s;
+}
+.com-entry-card.is-dragover {
+  border-color: var(--brand); border-style: dashed;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, .12);
+}
+.com-entry-title { font-size: 1rem; font-weight: 700; margin: 0 0 .3rem; color: var(--text); }
+.com-entry-tip { font-size: .82rem; color: var(--text-mute); margin: 0 0 .7rem; }
+.com-url-row { display: flex; gap: .6rem; flex-wrap: wrap; }
+.com-url-row .adv-input { flex: 1; min-width: 200px; }
+#comDropZone { cursor: pointer; }
+#comDropZone:hover { border-color: var(--brand); }
+
 .com-create {
   display: flex; flex-wrap: wrap; align-items: center; gap: .6rem;
   margin-bottom: 1rem; padding: .8rem 1rem;
