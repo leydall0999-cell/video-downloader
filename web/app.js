@@ -184,7 +184,7 @@
     subExtractRow: $('subExtractRow'),
     subLang: $('subLang'),
     subExtract: $('subExtract'),
-    subList: $('subList'),
+    subExtractList: $('subExtractList'),
     subApiKey: $('subApiKey'),
     subBaseUrl: $('subBaseUrl'),
     subModel: $('subModel'),
@@ -1743,7 +1743,7 @@
     const def = document.createElement('option');
     def.value = ''; def.textContent = '选择语言';
     el.subLang.appendChild(def);
-    el.subList.replaceChildren();
+    el.subExtractList.replaceChildren();
   };
 
   const showSubStatus = (msg, isError) => {
@@ -1797,14 +1797,14 @@
   };
 
   const renderSubList = () => {
-    el.subList.replaceChildren();
+    el.subExtractList.replaceChildren();
     if (extractedSubs.length === 0) return;
     extractedSubs.forEach((s) => {
       const li = document.createElement('li');
       li.className = 'sub-item' + (selectedSub === s.sub_rel ? ' is-selected' : '');
       li.textContent = `${s.sub_rel}（${s.lang}）`;
       li.addEventListener('click', () => { selectedSub = s.sub_rel; renderSubList(); });
-      el.subList.appendChild(li);
+      el.subExtractList.appendChild(li);
     });
   };
 

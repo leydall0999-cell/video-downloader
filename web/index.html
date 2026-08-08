@@ -292,6 +292,29 @@
     <div class="com-grid" id="comGrid"></div>
   </section>
 
+  <!-- 订阅追更视图（桌面版功能） -->
+  <section id="subscribeView" class="panel" hidden aria-labelledby="subTitle">
+    <div class="lib-head">
+      <h2 id="subTitle" class="guide-title">🔔 订阅追更</h2>
+    </div>
+    <p class="sub-tip">粘贴频道主页链接，新发布的视频会自动下载到媒体库。</p>
+    <div class="sub-add">
+      <input id="subUrl" class="adv-input" type="text" placeholder="频道主页链接（如 B站 / YouTube 频道 URL）" autocomplete="off" spellcheck="false" />
+      <input id="subName" class="adv-input" type="text" placeholder="备注名（可选）" autocomplete="off" spellcheck="false" />
+      <select id="subQuality" class="adv-input">
+        <option value="best">最高画质</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="bestaudio">仅音频</option>
+      </select>
+      <label class="sub-auto"><input id="subAuto" type="checkbox" checked /> 自动检查</label>
+      <button type="button" class="btn btn-primary btn-sm" id="subAddBtn">添加订阅</button>
+    </div>
+    <p class="sub-hint" id="subHint" hidden></p>
+    <ul class="sub-list" id="subList"></ul>
+    <p class="sub-empty" id="subEmpty" hidden>还没有订阅。添加频道后，新视频会自动下载。</p>
+  </section>
+
   <!-- 种子下载视图（桌面版功能） -->
   <section id="torrentView" class="panel" hidden aria-labelledby="torTitle">
     <div class="lib-head">
@@ -345,7 +368,7 @@
         <select id="subLang" class="adv-input"><option value="">选择语言</option></select>
         <button type="button" class="btn btn-primary btn-sm" id="subExtract">提取字幕</button>
       </div>
-      <ul class="sub-list" id="subList"></ul>
+      <ul class="sub-list" id="subExtractList"></ul>
       <details class="sub-translate-box">
         <summary>翻译字幕（可选，需 LLM Key）</summary>
         <div class="sub-translate-body">
