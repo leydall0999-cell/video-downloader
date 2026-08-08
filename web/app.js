@@ -2489,6 +2489,13 @@
       { key: 'h', label: '水印高度(px)', type: 'number', def: 50 },
       { key: 'band', label: '模糊强度(1-100, 越大越柔和)', type: 'number', def: 10 },
     ]},
+    ai_dewatermark: { label: '🤖 AI 去水印（需worker）', kinds: ['video'], params: [
+      { key: 'x', label: '水印 X 坐标(px)', type: 'number', def: 0 },
+      { key: 'y', label: '水印 Y 坐标(px)', type: 'number', def: 0 },
+      { key: 'w', label: '水印宽度(px)', type: 'number', def: 120 },
+      { key: 'h', label: '水印高度(px)', type: 'number', def: 60 },
+      { key: 'band', label: '羽化宽度(0-20, 默认5)', type: 'number', def: 5 },
+    ]},
   };
 
   // 比例预设 → 确保偶数的 crop 表达式（ffmpeg crop 要求宽高为偶）。

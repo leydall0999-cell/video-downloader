@@ -205,6 +205,19 @@ COMMENTARY_LOCAL_OUTPUT.mkdir(parents=True, exist_ok=True)
 commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
 
+# ---- AI 去水印（E2FGVI worker，桌面版可选）：local subprocess 或 http worker ----
+AI_DEWATERMARK_ENABLED = bool(
+    getattr(sys, "frozen", False)
+    or bool(os.environ.get("VDL_AI_DEWATERMARK_ENABLED"))
+)
+AI_DEWATERMARK_MODE = os.environ.get("VDL_AI_DEWATERMARK_MODE", "local").strip().lower()
+AI_DEWATERMARK_DIR_RAW = os.environ.get("VDL_AI_DEWATERMARK_DIR", "").strip()
+AI_DEWATERMARK_DIR = Path(AI_DEWATERMARK_DIR_RAW) if AI_DEWATERMARK_DIR_RAW else None
+AI_DEWATERMARK_PYTHON = os.environ.get("VDL_AI_DEWATERMARK_PYTHON", sys.executable)
+AI_DEWATERMARK_ENDPOINT = os.environ.get("VDL_AI_DEWATERMARK_ENDPOINT", "http://127.0.0.1:8101")
+AI_DEWATERMARK_TOKEN = os.environ.get("VDL_AI_DEWATERMARK_TOKEN", "").strip()
+AI_DEWATERMARK_TIMEOUT = int(os.environ.get("VDL_AI_DEWATERMARK_TIMEOUT", "3600") or 3600)
+
 # ---- 公开部署护栏：防止实例被当免费下载器薅爆带宽 ---- #
 # 设为 0 表示不限制（自托管、内部使用时可关掉）
 RATE_LIMIT_PER_HOUR = int(os.environ.get("VDL_RATE_LIMIT_PER_HOUR", "30") or 30)
@@ -2115,7 +2128,8 @@ def process_run(req: ProcessRequest) -> dict:
     if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
         raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
-                      "frame", "frames", "sheet", "ringtone", "dewatermark"):
+                      "frame", "frames", "sheet", "ringtone", "dewatermark",
+                      "ai_dewatermark"):
         raise HTTPException(status_code=400, detail="不支持的处理类型")
 
     # 解析来源：lib_ids 批量优先，否则单个 lib_id
@@ -2176,6 +2190,95 @@ def process_status(job_id: str) -> dict:
     return {"status": job["status"], "error": job.get("error", ""),
             "lib_id": job.get("lib_id", ""), "name": job.get("name", ""),
             "count": job.get("count", 0), "is_dir": job.get("is_dir", False)}
+
+
+def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
+    """AI 去水印：调 watermark-removal worker（HTTP 或本地 subprocess），轮询完成。"""
+    import json, time as _time
+    import requests as _requests
+
+    x = int(params.get("x", 0) or 0)
+    y = int(params.get("y", 0) or 0)
+    w = int(params.get("w", 100) or 100)
+    h = int(params.get("h", 50) or 50)
+    band = int(params.get("band", 5) or 5)
+
+    try:
+        if AI_DEWATERMARK_MODE == "http":
+            resp = _requests.post(
+                f"{AI_DEWATERMARK_ENDPOINT}/render",
+                json={"video": src, "x": x, "y": y, "w": w, "h": h, "band": band},
+                headers={"X-Worker-Token": AI_DEWATERMARK_TOKEN} if AI_DEWATERMARK_TOKEN else {},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            worker_job = resp.json()["job_id"]
+        else:
+            # local 模式：subprocess 调 process.py
+            proc_dir = AI_DEWATERMARK_DIR or (Path(__file__).resolve().parent.parent / "watermark-removal")
+            proc = proc_dir / "process.py"
+            if not proc.exists():
+                raise RuntimeError(f"AI 去水印管线未找到：{proc}")
+            import subprocess as _sp
+            result = _sp.run(
+                [AI_DEWATERMARK_PYTHON, str(proc), src,
+                 "--x", str(x), "--y", str(y), "--w", str(w), "--h", str(h),
+                 "--band", str(band)],
+                capture_output=True, text=True, timeout=AI_DEWATERMARK_TIMEOUT,
+                env=dict(os.environ, E2FGVI_BASE=str(proc_dir / "E2FGVI")),
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "AI 去水印失败")
+            # local 模式同步完成，直接走收尾
+            out = Path(src).parent / f"{Path(src).stem}_AI去水印.mp4"
+            if not out.exists():
+                raise RuntimeError("AI 去水印未生成输出文件")
+            meta = library_mod._load_sidecar(Path(src))
+            fftools._write_sidecar(out, meta, "AI去水印")
+            new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
+            with process_queue.lock:
+                process_queue.jobs[job_id].update(status="completed", out_path=str(out), lib_id=new_id, name=out.name)
+            logger.info("ai_dewatermark %s done -> %s", job_id, out.name)
+            return
+
+        # HTTP 模式：轮询 worker 直到完成
+        deadline = _time.time() + AI_DEWATERMARK_TIMEOUT
+        while _time.time() < deadline:
+            _time.sleep(5)
+            st = _requests.get(
+                f"{AI_DEWATERMARK_ENDPOINT}/status/{worker_job}",
+                headers={"X-Worker-Token": AI_DEWATERMARK_TOKEN} if AI_DEWATERMARK_TOKEN else {},
+                timeout=10,
+            ).json()
+            if st["status"] == "completed":
+                break
+            if st["status"] == "failed":
+                raise RuntimeError(st.get("error", "AI 去水印 worker 失败"))
+        else:
+            raise RuntimeError("AI 去水印超时")
+
+        # 下载成片
+        dl = _requests.get(
+            f"{AI_DEWATERMARK_ENDPOINT}/file/{worker_job}",
+            headers={"X-Worker-Token": AI_DEWATERMARK_TOKEN} if AI_DEWATERMARK_TOKEN else {},
+            timeout=60,
+        )
+        dl.raise_for_status()
+        out = Path(src).parent / f"{Path(src).stem}_AI去水印.mp4"
+        out.write_bytes(dl.content)
+
+        meta = library_mod._load_sidecar(Path(src))
+        fftools._write_sidecar(out, meta, "AI去水印")
+        new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
+        with process_queue.lock:
+            process_queue.jobs[job_id].update(status="completed", out_path=str(out), lib_id=new_id, name=out.name)
+        logger.info("ai_dewatermark %s (http) done -> %s", job_id, out.name)
+
+    except Exception as e:
+        with process_queue.lock:
+            process_queue.jobs[job_id]["status"] = "failed"
+            process_queue.jobs[job_id]["error"] = str(e)[:400]
+        logger.warning("ai_dewatermark %s failed: %s", job_id, e)
 
 
 def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
@@ -2268,6 +2371,9 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
                 logger.info("process %s (dewatermark-show) done", job_id)
                 return
             suffix = "去水印"
+        elif op == "ai_dewatermark":
+            _run_ai_dewatermark(job_id, str(src_path), p)
+            return  # 异步 worker，不在此处收尾
         elif op == "frames":
             # 批量抽帧：产物是一个子目录（不是单文件），单独收尾
             res = fftools.extract_frames(src_path, out_dir,
