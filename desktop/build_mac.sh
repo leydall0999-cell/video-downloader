@@ -81,6 +81,11 @@ mkdir -p "$APP_BIN/bin"
 cp "$FF" "$APP_BIN/bin/ffmpeg"
 chmod +x "$APP_BIN/bin/ffmpeg"
 
+echo "▶ 签名（ad-hoc）"
+codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null
+xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
+echo "   签名完成：$(codesign -dv "$REPO/dist/VideoDownloader.app" 2>&1 | grep 'Signature=' | head -1)"
+
 echo "▶ 生成 DMG 分发包"
 rm -f "$REPO/dist/VideoDownloader.dmg"
 hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader.app" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
