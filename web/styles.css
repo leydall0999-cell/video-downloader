@@ -894,4 +894,11 @@ img { max-width: 100%; display: block; }
 .com-size { font-size: .75rem; color: var(--text-mute); }
 .com-actions { padding: .7rem .9rem; display: flex; gap: .5rem; justify-content: flex-end; }
 
+/* ---- 页脚构建指纹：便于确认跑的是不是最新版 ---- */
+.app-footer {
+  margin: 1.4rem auto .4rem; width: min(900px, 100% - 2rem);
+  text-align: center; font-size: .7rem; color: var(--text-mute); letter-spacing: .03em;
+}
+.build-tag::before { content: "● "; color: var(--brand); }
+
 

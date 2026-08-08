@@ -94,6 +94,13 @@ else
   echo "⚠️  未找到 dylibbundler（brew install dylibbundler）—— 跳过；将依赖系统 Homebrew dylib"
 fi
 
+echo "▶ 注入构建指纹（页脚显示，便于确认是否最新版）"
+BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
+BUILD_INFO="构建 $BUILD_HASH @ $BUILD_DATE"
+perl -0pi -e "s{<span id=\"buildTag\" class=\"build-tag\"></span>}{<span id=\"buildTag\" class=\"build-tag\">$BUILD_INFO</span>}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
+echo "   指纹：$BUILD_INFO"
+
 echo "▶ 签名（ad-hoc）"
 codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
