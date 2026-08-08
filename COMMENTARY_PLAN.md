@@ -60,6 +60,6 @@
 ## 实现状态（2026-08-08 更新）
 
 - 后端 `server/app.py`：`COMMENTARY_ENABLED` / `COMMENTARY_DIR` / `COMMENTARY_PYTHON` / `COMMENTARY_VOICE` / `COMMENTARY_TIMEOUT_SECONDS` / `COMMENTARY_MODE`(local|http) / `COMMENTARY_ENDPOINT` / `COMMENTARY_TOKEN` / `COMMENTARY_LOCAL_OUTPUT` 九个开关；路由 `POST /api/commentary`、`GET /api/commentary/{id}`、`GET /api/commentary/{id}/file`；`/api/nodes` 暴露 `commentary_enabled`。
-- 前端：下载完成的任务出现「生成解说成片」按钮（受 `node.commentaryEnabled` 控制），点击后轮询状态并在完成后提供成片下载。
+- 前端：下载完成的任务 + 媒体库弹窗里的现成视频（非加密文件）均出现「生成解说成片」按钮（受 `node.commentaryEnabled` 控制），点击后轮询状态并在完成后提供成片下载。
 - local 模式已修复：voice 为空时不传 `--voice`（避免 process.py 收到空串报错）。
 - 启用示例（桌面版）：在 run.sh / 桌面配置里加 `VDL_COMMENTARY_ENABLED=true VDL_COMMENTARY_MODE=local VDL_COMMENTARY_DIR=/abs/path/to/commentary-pipeline VDL_COMMENTARY_PYTHON=/path/to/python3.13`。

@@ -219,3 +219,63 @@ def test_local_mode_builds_and_locates_output(tmp_path):
     assert st["status"] == "completed"
     # output_path 仅存于内部 jobs 表，status 接口不暴露；直接校验成片定位结果
     assert "成片.mp4" in m.commentary_jobs[jid]["output_path"]
+
+
+# --- 媒体库 file_id 来源（新增） ---
+
+import base64  # noqa: E402
+
+
+def _make_file_id(rel: str) -> str:
+    return base64.urlsafe_b64encode(rel.encode()).rstrip(b"=").decode()
+
+
+def test_create_from_file_id_ok(tmp_path):
+    """媒体库里已存在的视频文件，通过 file_id 创建解说。"""
+    (tmp_path / "videos").mkdir()
+    vid = tmp_path / "videos" / "my-video.mp4"
+    vid.write_bytes(b"fake-video")
+    fid = _make_file_id("videos/my-video.mp4")
+
+    with patch.object(m, "DOWNLOAD_DIR", tmp_path), \
+         patch.object(m, "executor") as ex, \
+         patch.object(m, "_commentary_run") as run:
+        ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
+        run.side_effect = _run_ok
+        r = client.post("/api/commentary", json={"file_id": fid, "vertical": True})
+        assert r.status_code == 200
+        assert r.json()["status"] == "running"
+        jid = r.json()["job_id"]
+        st = client.get(f"/api/commentary/{jid}").json()
+    assert st["status"] == "completed"
+    assert st["ready"] is True
+
+
+def test_create_file_id_encrypted_409(tmp_path):
+    """加密文件（.vdlenc）不支持生成解说，应返回 409。"""
+    enc = tmp_path / "secret.mp4.vdlenc"
+    enc.write_bytes(b"encrypted-data")
+    fid = _make_file_id("secret.mp4.vdlenc")
+
+    with patch.object(m, "DOWNLOAD_DIR", tmp_path):
+        r = client.post("/api/commentary", json={"file_id": fid})
+    assert r.status_code == 409
+    assert "加密" in r.json()["detail"]
+
+
+def test_create_file_id_non_video_409(tmp_path):
+    """非视频文件（如 .txt）不支持生成解说，应返回 409。"""
+    txt = tmp_path / "readme.txt"
+    txt.write_text("hello")
+    fid = _make_file_id("readme.txt")
+
+    with patch.object(m, "DOWNLOAD_DIR", tmp_path):
+        r = client.post("/api/commentary", json={"file_id": fid})
+    assert r.status_code == 409
+    assert "视频" in r.json()["detail"]
+
+
+def test_create_no_source_400():
+    """既不给 task_id 也不给 file_id，应返回 400。"""
+    r = client.post("/api/commentary", json={})
+    assert r.status_code == 400

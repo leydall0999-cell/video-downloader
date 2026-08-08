@@ -190,6 +190,9 @@
     subBurn: $('subBurn'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
+    libCommentary: $('libCommentary'),
+    libCommentaryStatus: $('libCommentaryStatus'),
+    libCommentaryFile: $('libCommentaryFile'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -606,7 +609,7 @@
       refs.commentary.hidden = false;
       if (!refs.commentary.dataset.bound) {
         refs.commentary.dataset.bound = '1';
-        refs.commentary.addEventListener('click', () => createCommentary(task.task_id, refs, refs.base || ''));
+        refs.commentary.addEventListener('click', () => createCommentary({ taskId: task.task_id }, refs, refs.base || ''));
       }
     }
 
@@ -918,15 +921,19 @@
   // 下载完成的任务 → 点「生成解说成片」→ 后台调 commentary-pipeline/process.py → 回传成片。
   // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
 
-  const createCommentary = async (taskId, refs, base = '') => {
+  // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
+  const createCommentary = async (source, refs, base = '') => {
     refs.commentary.disabled = true;
     refs.commentary.textContent = '生成中…';
     refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
     try {
+      const body = source.taskId
+        ? { task_id: source.taskId, vertical: true }
+        : { file_id: source.fileId, vertical: true };
       const { job_id } = await request('/api/commentary', {
         method: 'POST',
-        body: JSON.stringify({ task_id: taskId, vertical: true }),
+        body: JSON.stringify(body),
       }, base);
 
       const poll = setInterval(async () => {
@@ -1513,6 +1520,14 @@
     const showSub = node.libraryEnabled && item.kind === 'video';
     el.libSubtitle.hidden = !showSub;
     el.libProcess.hidden = !node.libraryEnabled;
+    // 媒体库现成视频也可一键生成解说成片（加密文件不支持）
+    const showCommentary = node.commentaryEnabled && item.kind === 'video' && !isEnc;
+    el.libCommentary.hidden = !showCommentary;
+    el.libCommentary.disabled = false;
+    el.libCommentary.textContent = '生成解说成片';
+    el.libCommentaryStatus.hidden = true;
+    el.libCommentaryStatus.textContent = '';
+    el.libCommentaryFile.hidden = true;
     resetSubPanel();
     resetProcessPanel();
   };
@@ -2373,6 +2388,14 @@
   el.libDelete.addEventListener('click', deleteLibItem);
   el.libSubtitle.addEventListener('click', toggleSubPanel);
   el.subPanelClose.addEventListener('click', () => { el.subPanel.hidden = true; });
+  el.libCommentary.addEventListener('click', () => {
+    if (!currentLibItem) return;
+    createCommentary(
+      { fileId: currentLibItem.id },
+      { commentary: el.libCommentary, commentaryStatus: el.libCommentaryStatus, commentaryFile: el.libCommentaryFile },
+      '',
+    );
+  });
   el.libProcess.addEventListener('click', toggleProcessPanel);
   el.processPanelClose.addEventListener('click', () => { el.processPanel.hidden = true; });
   el.processOp.addEventListener('change', renderProcessParams);

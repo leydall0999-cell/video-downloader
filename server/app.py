@@ -1077,7 +1077,8 @@ def cancel_task(task_id: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 class CommentaryRequest(BaseModel):
-    task_id: str = Field(min_length=1, max_length=64)
+    task_id: str = Field(default="", max_length=64)
+    file_id: str = Field(default="", max_length=2048)
     vertical: bool = True
     voice: str = Field(default="", max_length=64)
 
@@ -1092,13 +1093,31 @@ def create_commentary(payload: CommentaryRequest) -> dict:
     else:
         if not COMMENTARY_DIR or not (COMMENTARY_DIR / "process.py").exists():
             raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
-    task = _require_task(payload.task_id)
-    if task.status != "completed" or not task.filepath or not task.filepath.exists():
-        raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")
+
+    # 来源二选一：下载完成的任务（task_id）或媒体库里的现成视频文件（file_id）
+    src_path: str | None = None
+    if payload.file_id:
+        p = library_mod._resolve_safe(DOWNLOAD_DIR, payload.file_id)
+        if not p:
+            raise HTTPException(status_code=404, detail="媒体库文件不存在")
+        suffix = p.suffix.lower()
+        if suffix == library_mod.ENCRYPTED_EXT:
+            raise HTTPException(status_code=409, detail="加密文件不支持生成解说，请先在保险箱解锁")
+        if suffix not in library_mod.VIDEO_EXTS:
+            raise HTTPException(status_code=409, detail="该文件不是视频，无法生成解说成片")
+        src_path = str(p)
+    elif payload.task_id:
+        task = _require_task(payload.task_id)
+        if task.status != "completed" or not task.filepath or not task.filepath.exists():
+            raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")
+        src_path = str(task.filepath)
+    else:
+        raise HTTPException(status_code=400, detail="请提供 task_id 或 file_id")
+
     job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": ""}
-    executor.submit(_commentary_run, job_id, str(task.filepath), payload.vertical, payload.voice or COMMENTARY_VOICE)
+    executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE)
     return {"job_id": job_id, "status": "running"}
 
 
