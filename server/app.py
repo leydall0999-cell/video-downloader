@@ -2115,7 +2115,7 @@ def process_run(req: ProcessRequest) -> dict:
     if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
         raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
-                      "frame", "frames", "sheet", "ringtone"):
+                      "frame", "frames", "sheet", "ringtone", "dewatermark"):
         raise HTTPException(status_code=400, detail="不支持的处理类型")
 
     # 解析来源：lib_ids 批量优先，否则单个 lib_id
@@ -2252,6 +2252,22 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
                                        fade=float(p.get("fade", 1) or 0),
                                        ffmpeg_bin=FFMPEG_BIN)
             suffix = "铃声"
+        elif op == "dewatermark":
+            out = fftools.remove_watermark(src_path, out_dir,
+                                          x=int(p.get("x", 0) or 0),
+                                          y=int(p.get("y", 0) or 0),
+                                          w=int(p.get("w", 100) or 100),
+                                          h=int(p.get("h", 50) or 50),
+                                          show=bool(p.get("show", False)),
+                                          band=int(p.get("band", 10) or 10),
+                                          ffmpeg_bin=FFMPEG_BIN)
+            if out and bool(p.get("show", False)):
+                # show 模式：仅画框不做处理，不写侧车，提示用户再指定位置提交
+                with process_queue.lock:
+                    job.update(status="completed", out_path=str(out), lib_id="", name=out.name)
+                logger.info("process %s (dewatermark-show) done", job_id)
+                return
+            suffix = "去水印"
         elif op == "frames":
             # 批量抽帧：产物是一个子目录（不是单文件），单独收尾
             res = fftools.extract_frames(src_path, out_dir,

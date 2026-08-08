@@ -150,3 +150,31 @@ def test_contact_sheet_builds_tile_filter():
         ft.contact_sheet(_vid(), rows=3, cols=4, width=1280)
     vf = next((c for c in fake.last if "tile=" in c), "")
     assert "tile=4x3" in vf
+
+
+def test_dewatermark_delogo_cmd():
+    """去水印使用 delogo 滤镜，参数正确注入命令。"""
+    fake = _FakeRun()
+    with patch.object(ft.subprocess, "run", fake):
+        ft.remove_watermark(_vid(), x=50, y=30, w=120, h=80, band=15)
+    vf = next((c for c in fake.last if "delogo=" in c), "")
+    assert "x=50" in vf
+    assert "y=30" in vf
+    assert "w=120" in vf
+    assert "h=80" in vf
+    assert "band=15" in vf
+
+
+def test_dewatermark_show_drawbox():
+    """show 模式只画框，不去水印。"""
+    fake = _FakeRun()
+    with patch.object(ft.subprocess, "run", fake):
+        ft.remove_watermark(_vid(), x=10, y=20, w=200, h=100, show=True)
+    vf = next((c for c in fake.last if "drawbox=" in c), "")
+    assert "x=10" in vf
+    assert "y=20" in vf
+    assert "w=200" in vf
+    assert "h=100" in vf
+    assert "green" in vf
+    # show 模式不用 delogo
+    assert not any("delogo=" in c for c in fake.last)

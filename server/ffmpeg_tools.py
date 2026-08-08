@@ -381,3 +381,39 @@ def make_ringtone(src: Path, out_dir: Path | None = None, start: float = 0.0,
     except Exception:
         return None
     return out if (out.exists() and out.stat().st_size > 0) else None
+
+
+# --------------------------------------------------------------------------- #
+# 11. 去水印（ffmpeg delogo 滤镜，模糊固定位置的水印）
+# --------------------------------------------------------------------------- #
+def remove_watermark(src: Path, out_dir: Path | None = None,
+                     x: int = 0, y: int = 0, w: int = 100, h: int = 50,
+                     show: bool = False, band: int = 10,
+                     ffmpeg_bin: str = "ffmpeg") -> Path | None:
+    """用 delogo 滤镜模糊指定矩形区域内的水印/logo。
+
+    - x, y: 水印左上角坐标（像素，默认 0,0 即左上角）
+    - w, h: 水印区域的宽高（像素）
+    - show: 仅显示检测框（绿色框线），不实际处理，用于调试定位
+    - band: 模糊带宽（默认 10，越大模糊过渡越柔和）
+
+    产物命名：`<原标题>.去水印.<原扩展名>`
+    """
+    out_dir = out_dir or src.parent
+    out = _unique_out(src, "去水印", src.suffix.lstrip("."))
+    xv = max(0, int(x))
+    yv = max(0, int(y))
+    wv = max(1, int(w))
+    hv = max(1, int(h))
+    bv = max(1, min(int(band), 100))
+    if show:
+        vf = f"drawbox=x={xv}:y={yv}:w={wv}:h={hv}:color=green@0.5:t=3"
+    else:
+        vf = f"delogo=x={xv}:y={yv}:w={wv}:h={hv}:band={bv}"
+    cmd = [ffmpeg_bin, "-y", "-i", str(src), "-vf", vf, "-c:a", "copy"]
+    cmd.append(str(out))
+    try:
+        _run(cmd, timeout=1800)
+    except Exception:
+        return None
+    return out if (out.exists() and out.stat().st_size > 0) else None
