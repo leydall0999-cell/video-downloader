@@ -161,6 +161,39 @@ if not _COMMENTARY_EXPLICIT and getattr(sys, "frozen", False):
             os.environ["VDL_COMMENTARY_DIR"] = _c_dir
         if "VDL_COMMENTARY_MODE" not in os.environ:
             os.environ["VDL_COMMENTARY_MODE"] = "local"
+
+
+def _resolve_commentary_python() -> str:
+    """桌面版打包后 sys.executable 是 .app 主程序，不能用来跑 process.py；优先用管线自己的 venv。"""
+    if os.environ.get("VDL_COMMENTARY_PYTHON"):
+        return os.environ["VDL_COMMENTARY_PYTHON"].strip()
+    if COMMENTARY_DIR:
+        venv_py = COMMENTARY_DIR / ".venv" / "bin" / "python"
+        if venv_py.exists():
+            return str(venv_py)
+    default_py = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default" / "bin" / "python"
+    if default_py.exists():
+        return str(default_py)
+    return sys.executable
+
+
+def _assert_commentary_python(python_path: str) -> None:
+    """确保给定的解释器真的是 Python，而不是 PyInstaller 打包后的 .app 主程序。
+    开发/测试模式（非 frozen 且未显式设 VDL_COMMENTARY_PYTHON）跳过校验，避免误伤 mock。"""
+    if not getattr(sys, "frozen", False) and "VDL_COMMENTARY_PYTHON" not in os.environ:
+        return
+    try:
+        proc = subprocess.run(
+            [python_path, "-c", "import sys; print(sys.executable)"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if proc.returncode != 0 or "python" not in (proc.stdout or "").lower():
+            err = (proc.stderr or proc.stdout or "未知错误").strip()[:200]
+            raise RuntimeError(err)
+    except Exception as exc:
+        raise RuntimeError(f"解说管线 Python 解释器不可用（{python_path}）：{exc}") from exc
+
+
 # 广告位开关：默认关闭。下载站属广告平台高风险类目，默认不挂广告，
 # 待流量稳定、确定接入合规广告源后再开。前端据此决定是否渲染广告位容器。
 ADS_ENABLED = os.environ.get("VDL_ADS_ENABLED", "false").strip().lower() == "true"
@@ -211,7 +244,7 @@ CLOUD_LOCK = threading.Lock()
 # process_queue 在 executor 创建后初始化（见下方）
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
-COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
+COMMENTARY_PYTHON = _resolve_commentary_python()
 COMMENTARY_VOICE = os.environ.get("VDL_COMMENTARY_VOICE", "zh-CN-YunxiNeural").strip() or "zh-CN-YunxiNeural"
 COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "1800") or 1800)  # 长视频渲染可能很久
 # 解说 worker 调用模式：local=同机 subprocess(默认) / http=独立 HTTP worker 服务(强机独立部署)
@@ -552,6 +585,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
     if COMMENTARY_MODE == "http":
         return _commentary_run_http(job_id, src_path, vertical, voice)
     try:
+        _assert_commentary_python(COMMENTARY_PYTHON)
         base = job_id  # 用 job_id 作安全 ascii 文件名，避开中文/空格对 process.py 路径处理的干扰
         in_dir = COMMENTARY_DIR / "input"
         out_dir = COMMENTARY_DIR / "output"
@@ -575,7 +609,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             timeout=COMMENTARY_TIMEOUT_SECONDS,
         )
         if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "解说管线执行失败").strip()[-800:])
+            err = (proc.stderr or proc.stdout or "解说管线执行失败").strip()[-800:]
+            raise RuntimeError(err)
 
         # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
         candidates = sorted(
@@ -584,7 +619,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
         )
         out = next(iter(candidates), None)
         if not out:
-            raise RuntimeError("解说管线执行成功但未找到成片，请检查 output/ 目录")
+            hint = (proc.stderr or proc.stdout or "").strip()[-600:] or "无输出"
+            raise RuntimeError(f"解说管线执行成功但未找到成片。process.py 输出：{hint}")
         with _commentary_lock:
             commentary_jobs[job_id].update(status="completed", output_path=str(out))
     except Exception as exc:  # noqa: BLE001
