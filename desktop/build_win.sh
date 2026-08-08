@@ -50,6 +50,7 @@ echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
   --paths "$REPO/server" \
   --paths "$REPO" \
   --add-data "$REPO/web;web" \
+  --add-data "$REPO/yt_dlp_plugins;yt_dlp_plugins" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import clouddrive \

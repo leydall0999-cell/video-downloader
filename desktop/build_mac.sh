@@ -62,6 +62,7 @@ fi
   --paths "$REPO/server" \
   --paths "$REPO" \
   --add-data "$REPO/web:web" \
+  --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import clouddrive \
