@@ -77,19 +77,22 @@ fi
   --collect-submodules yt_dlp \
   "$REPO/desktop/desktop_launcher.py"
 
-echo "▶ 捆绑 ffmpeg"
+echo "▶ 捆绑 ffmpeg + ffprobe"
 FF="$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)"
+FFPROBE="$(command -v ffprobe || echo /opt/homebrew/bin/ffprobe)"
 APP_BIN="$REPO/dist/VideoDownloader.app/Contents/MacOS"
 mkdir -p "$APP_BIN/bin"
 cp "$FF" "$APP_BIN/bin/ffmpeg"
-chmod +x "$APP_BIN/bin/ffmpeg"
+cp "$FFPROBE" "$APP_BIN/bin/ffprobe"
+chmod +x "$APP_BIN/bin/ffmpeg" "$APP_BIN/bin/ffprobe"
 
-echo "▶ dylibbundler 把 ffmpeg 依赖打进来（脱离 Homebrew）"
+echo "▶ dylibbundler 把 ffmpeg/ffprobe 依赖打进来（脱离 Homebrew）"
 # ⚠️ @executable_path = bin/ 这个目录，所以 ../libs 才是 Contents/MacOS/libs/
 # ⚠️ 之前用 @executable_path/libs 错了——会落到 Contents/MacOS/bin/libs/
 if command -v dylibbundler >/dev/null 2>&1; then
   rm -rf "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs"
   dylibbundler -x "$APP_BIN/bin/ffmpeg" -d "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs" -p "@executable_path/../libs" -cd -b >/dev/null
+  dylibbundler -x "$APP_BIN/bin/ffprobe" -d "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs" -p "@executable_path/../libs" -cd -b >/dev/null
 else
   echo "⚠️  未找到 dylibbundler（brew install dylibbundler）—— 跳过；将依赖系统 Homebrew dylib"
 fi

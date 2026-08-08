@@ -53,11 +53,40 @@ def _detect_ffmpeg() -> str | None:
     return None
 
 
+def _detect_commentary() -> tuple[str | None, str | None]:
+    """定位 commentary-pipeline 目录及其 .venv 解释器；找不到时返回 (None, None)。"""
+    cdir = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
+    if not cdir:
+        for cand in [
+            Path.home() / "WorkBuddy" / "问问题" / "commentary-pipeline",
+            Path.home() / "commentary-pipeline",
+        ]:
+            if cand.is_dir() and (cand / "process.py").is_file():
+                cdir = str(cand)
+                break
+    if not cdir:
+        return None, None
+    venv_py = Path(cdir) / ".venv" / "bin" / "python"
+    if venv_py.exists():
+        return cdir, str(venv_py)
+    # 没有 .venv 时，尝试 WorkBuddy default python（需用户自行装好依赖）
+    default_py = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default" / "bin" / "python"
+    if default_py.exists():
+        return cdir, str(default_py)
+    return cdir, None
+
+
 _ff = _detect_ffmpeg()
 if _ff:
     os.environ["VDL_FFMPEG_BIN"] = _ff              # app.py 自己用
     os.environ["FFMPEG_LOCATION"] = str(Path(_ff).parent)  # yt-dlp 找 ffmpeg 用
     os.environ["PATH"] = str(Path(_ff).parent) + os.pathsep + os.environ.get("PATH", "")  # 兜底
+
+_c_dir, _c_py = _detect_commentary()
+if _c_dir:
+    os.environ["VDL_COMMENTARY_DIR"] = _c_dir
+if _c_py:
+    os.environ["VDL_COMMENTARY_PYTHON"] = _c_py
 
 sys.path.insert(0, str(SERVER_DIR))
 if PLUGINS_DIR.exists():

@@ -204,6 +204,7 @@
     comGenerate: $('comGenerate'),
     comStatus: $('comStatus'),
     comRefresh: $('comRefresh'),
+    comEnvStatus: $('comEnvStatus'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
     comFileName: $('comFileName'),
@@ -1051,6 +1052,30 @@
   // ---- 视频解说独立标签页 ----
   const noopComFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
   let selectedLocalFile = null;
+  let commentaryEnvReady = false;
+
+  const refreshCommentaryDiagnostics = async () => {
+    try {
+      const d = await request('/api/commentary/diagnostics');
+      const issues = d.issues || [];
+      const ready = d.ready && !issues.length;
+      commentaryEnvReady = ready;
+      el.comEnvStatus.hidden = false;
+      el.comEnvStatus.className = 'com-env-status ' + (ready ? 'ok' : 'err');
+      if (ready) {
+        el.comEnvStatus.textContent = '✓ 解说环境就绪：python=' + d.python + '  ffprobe=' + (d.ffmpeg_dir || '');
+      } else if (!d.enabled) {
+        el.comEnvStatus.textContent = '⚠ 解说功能未启用：未检测到 commentary-pipeline 目录。';
+      } else {
+        el.comEnvStatus.textContent = '⚠ 解说环境未就绪：' + issues.join('；') + '  dir=' + (d.dir || 'none') + ' python=' + (d.python || '');
+      }
+    } catch (e) {
+      commentaryEnvReady = false;
+      el.comEnvStatus.hidden = false;
+      el.comEnvStatus.className = 'com-env-status err';
+      el.comEnvStatus.textContent = '⚠ 无法读取解说环境诊断：' + (e.message || '未知错误');
+    }
+  };
 
   const loadCommentary = async () => {
     // 重置生成区状态
@@ -1078,6 +1103,7 @@
       el.comEmpty.textContent = '读取解说成片失败：' + (e.message || '未知错误');
     }
     refreshComSource();
+    refreshCommentaryDiagnostics();
   };
 
   const refreshComSource = async () => {
@@ -1145,6 +1171,11 @@
   };
 
   el.comGenerate.addEventListener('click', () => {
+    if (!commentaryEnvReady) {
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
+      return;
+    }
     const fileId = el.comSource.value;
     if (fileId) {
       createCommentary(

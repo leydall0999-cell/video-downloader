@@ -163,35 +163,8 @@ if not _COMMENTARY_EXPLICIT and getattr(sys, "frozen", False):
             os.environ["VDL_COMMENTARY_MODE"] = "local"
 
 
-def _resolve_commentary_python() -> str:
-    """桌面版打包后 sys.executable 是 .app 主程序，不能用来跑 process.py；优先用管线自己的 venv。"""
-    if os.environ.get("VDL_COMMENTARY_PYTHON"):
-        return os.environ["VDL_COMMENTARY_PYTHON"].strip()
-    if COMMENTARY_DIR:
-        venv_py = COMMENTARY_DIR / ".venv" / "bin" / "python"
-        if venv_py.exists():
-            return str(venv_py)
-    default_py = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default" / "bin" / "python"
-    if default_py.exists():
-        return str(default_py)
-    return sys.executable
-
-
-def _assert_commentary_python(python_path: str) -> None:
-    """确保给定的解释器真的是 Python，而不是 PyInstaller 打包后的 .app 主程序。
-    开发/测试模式（非 frozen 且未显式设 VDL_COMMENTARY_PYTHON）跳过校验，避免误伤 mock。"""
-    if not getattr(sys, "frozen", False) and "VDL_COMMENTARY_PYTHON" not in os.environ:
-        return
-    try:
-        proc = subprocess.run(
-            [python_path, "-c", "import sys; print(sys.executable)"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if proc.returncode != 0 or "python" not in (proc.stdout or "").lower():
-            err = (proc.stderr or proc.stdout or "未知错误").strip()[:200]
-            raise RuntimeError(err)
-    except Exception as exc:
-        raise RuntimeError(f"解说管线 Python 解释器不可用（{python_path}）：{exc}") from exc
+# 解说运行环境探测已集中到 _CommentaryRuntime（见下方 _commentary_work_dir 之前的定义），
+# 模块加载时一次性解析解释器与工具链，并暴露清晰的诊断信息，避免打包后路径截断导致静默失败。
 
 
 # 广告位开关：默认关闭。下载站属广告平台高风险类目，默认不挂广告，
@@ -244,7 +217,7 @@ CLOUD_LOCK = threading.Lock()
 # process_queue 在 executor 创建后初始化（见下方）
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
-COMMENTARY_PYTHON = _resolve_commentary_python()
+# 解说 Python 解释器与工具链(ffmpeg/ffprobe)由下方 _CommentaryRuntime 在模块加载时集中探测。
 COMMENTARY_VOICE = os.environ.get("VDL_COMMENTARY_VOICE", "zh-CN-YunxiNeural").strip() or "zh-CN-YunxiNeural"
 COMMENTARY_TIMEOUT_SECONDS = int(os.environ.get("VDL_COMMENTARY_TIMEOUT", "1800") or 1800)  # 长视频渲染可能很久
 # 解说 worker 调用模式：local=同机 subprocess(默认) / http=独立 HTTP worker 服务(强机独立部署)
@@ -259,6 +232,8 @@ COMMENTARY_WORK_DIR = COMMENTARY_LOCAL_OUTPUT / "work"
 COMMENTARY_WORK_DIR.mkdir(parents=True, exist_ok=True)
 commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
+
+
 
 # ---- AI 去水印（E2FGVI worker，桌面版可选）：local subprocess 或 http worker ----
 AI_DEWATERMARK_ENABLED = bool(
@@ -569,44 +544,144 @@ def _prune_vault_tmp(max_age_seconds: int = 1800) -> None:
 # --------------------------------------------------------------------------- #
 
 
+class _CommentaryRuntime:
+    """模块加载时一次性探测解说运行环境，集中管理解释器与工具链。
+
+    打包后 sys.executable 是 .app 主程序、子进程 PATH 可能被截断，
+    这里把所有不确定性收敛到一处，并暴露清晰的诊断信息（issues/ready）。
+    """
+
+    def __init__(self) -> None:
+        self.python = self._resolve_python()
+        self.python_ok = self._check_python(self.python)
+        self.deps_ok = self._check_deps(self.python) if self.python_ok else False
+        self.ffmpeg_dir, self.ffprobe_ok = self._resolve_ffmpeg()
+        self.issues = self._collect_issues()
+
+    # ---- 解释器 ----
+    def _resolve_python(self) -> str:
+        if os.environ.get("VDL_COMMENTARY_PYTHON"):
+            return os.environ["VDL_COMMENTARY_PYTHON"].strip()
+        # 优先用已探测到的 commentary-pipeline 自己的 .venv
+        if COMMENTARY_DIR:
+            venv_py = COMMENTARY_DIR / ".venv" / "bin" / "python"
+            if venv_py.exists():
+                return str(venv_py)
+        # 即使 COMMENTARY_DIR 未探测到（罕见），也按常用绝对路径再找一次 .venv
+        for cand_dir in [
+            Path.home() / "WorkBuddy" / "问问题" / "commentary-pipeline",
+            Path.home() / "commentary-pipeline",
+        ]:
+            venv_py = cand_dir / ".venv" / "bin" / "python"
+            if venv_py.exists():
+                return str(venv_py)
+        # 兜底：WorkBuddy default python（需用户自己装好 faster_whisper/edge_tts）
+        default_py = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default" / "bin" / "python"
+        if default_py.exists():
+            return str(default_py)
+        return sys.executable
+
+    def _check_python(self, py: str) -> bool:
+        # 打包后 sys.executable 是 .app 主程序，绝不能作为解释器
+        if getattr(sys, "frozen", False) and py == sys.executable:
+            return False
+        # 开发/测试模式（非 frozen 且未显式设 VDL_COMMENTARY_PYTHON）信任当前解释器
+        if "VDL_COMMENTARY_PYTHON" not in os.environ and not getattr(sys, "frozen", False):
+            return True
+        try:
+            r = subprocess.run(
+                [py, "-c", "import sys; print(sys.executable)"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return r.returncode == 0 and "python" in (r.stdout or "").lower()
+        except Exception:
+            return False
+
+    def _check_deps(self, py: str) -> bool:
+        if not self.python_ok:
+            return False
+        try:
+            r = subprocess.run(
+                [py, "-c", "import faster_whisper, edge_tts"],
+                capture_output=True, text=True, timeout=30,
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    # ---- 工具链 ffmpeg / ffprobe ----
+    def _resolve_ffmpeg(self) -> tuple[str, bool]:
+        """解析 ffmpeg/ffprobe 所在目录；打包后 PATH 可能被截断，这里显式收集所有可能目录。
+
+        策略：
+        1. 优先 VDL_FFPROBE_BIN / VDL_FFMPEG_BIN 的目录；
+        2. 如果该目录没有 ffprobe，再补充系统常见目录；
+        3. 返回所有可用目录（用 ; 拼接），并验证 ffprobe 确实能在合并后的 PATH 里找到。
+        """
+        dirs: list[str] = []
+        seen: set[str] = set()
+
+        def add(d: str | Path) -> None:
+            s = str(d)
+            if s and s not in seen:
+                seen.add(s)
+                dirs.append(s)
+
+        # 1) 用户/启动器显式指定的 bin
+        for key in ("VDL_FFPROBE_BIN", "VDL_FFMPEG_BIN"):
+            v = os.environ.get(key, "").strip()
+            if v:
+                add(Path(v).parent)
+
+        # 2) 当前进程 PATH 里能直接找到的工具
+        for name in ("ffprobe", "ffmpeg"):
+            p = shutil.which(name)
+            if p:
+                add(Path(p).parent)
+
+        # 3) 系统常见目录兜底（ARM Homebrew / Intel Homebrew / 系统）
+        for fb in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
+            add(fb)
+
+        if not dirs:
+            return "", False
+
+        # 4) 验证：把这些目录前置到 PATH 后，ffprobe 是否真的能被发现
+        probe_path = os.pathsep.join(dirs + ([os.environ.get("PATH", "")] if os.environ.get("PATH") else []))
+        ok = bool(shutil.which("ffprobe", path=probe_path))
+        return os.pathsep.join(dirs), ok
+
+    def _collect_issues(self) -> list[str]:
+        issues: list[str] = []
+        if not self.python_ok:
+            issues.append("解说 Python 解释器不可用（请设置 VDL_COMMENTARY_PYTHON 指向装了 faster_whisper/edge_tts 的解释器）")
+        elif not self.deps_ok:
+            issues.append("解说 Python 缺少依赖（faster_whisper / edge_tts 未安装）")
+        if not self.ffprobe_ok:
+            issues.append("找不到 ffprobe（请安装 ffmpeg 或设置 VDL_FFPROBE_BIN）")
+        return issues
+
+    def env(self) -> dict[str, str]:
+        """为 process.py 子进程准备环境变量，关键是把 ffmpeg/ffprobe 目录前置到 PATH。"""
+        env = os.environ.copy()
+        if self.ffmpeg_dir:
+            env["PATH"] = self.ffmpeg_dir + os.pathsep + env.get("PATH", "")
+        return env
+
+    def ready(self) -> bool:
+        return not self.issues
+
+
+COMMENTARY_RT = _CommentaryRuntime()
+
+
 def _commentary_work_dir() -> Path:
     d = COMMENTARY_WORK_DIR / uuid.uuid4().hex[:12]
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _commentary_env() -> dict[str, str]:
-    """为 commentary-pipeline 子进程准备环境变量，关键是注入 ffmpeg/ffprobe 所在目录。
 
-    桌面版打包后子进程 PATH 可能被截断，导致 process.py 找不到 ffprobe。
-    优先从环境变量 VDL_FFMPEG_BIN / VDL_FFPROBE_BIN 读取，其次自动探测。
-    """
-    env = os.environ.copy()
-    candidates: list[str] = []
-    for key in ("VDL_FFPROBE_BIN", "VDL_FFMPEG_BIN"):
-        v = env.get(key, "").strip()
-        if v:
-            candidates.append(str(Path(v).parent))
-    if not candidates:
-        for name in ("ffprobe", "ffmpeg"):
-            p = shutil.which(name)
-            if p:
-                candidates.append(str(Path(p).parent))
-        if not candidates:
-            for fallback in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
-                if (Path(fallback) / "ffprobe").exists():
-                    candidates.append(fallback)
-                    break
-    if candidates:
-        # 去重并保持顺序
-        seen: set[str] = set()
-        extra = []
-        for c in candidates:
-            if c and c not in seen:
-                seen.add(c)
-                extra.append(c)
-        env["PATH"] = os.pathsep.join(extra + ([env.get("PATH", "")] if env.get("PATH") else []))
-    return env
 
 
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
@@ -619,7 +694,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
     if COMMENTARY_MODE == "http":
         return _commentary_run_http(job_id, src_path, vertical, voice)
     try:
-        _assert_commentary_python(COMMENTARY_PYTHON)
+        # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
+        if not COMMENTARY_RT.ready():
+            raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
         base = job_id  # 用 job_id 作安全 ascii 文件名，避开中文/空格对 process.py 路径处理的干扰
         in_dir = COMMENTARY_DIR / "input"
         out_dir = COMMENTARY_DIR / "output"
@@ -633,14 +710,14 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
         except OSError:
             shutil.copyfile(src_path, in_file)  # 跨挂载点软链失败则退化为复制
 
-        args = [COMMENTARY_PYTHON, "process.py", str(in_file), "--auto"]
+        args = [COMMENTARY_RT.python, "process.py", str(in_file), "--auto"]
         if vertical:
             args.append("--vertical")
         if voice:
             args += ["--voice", voice]
         proc = subprocess.run(
             args, cwd=str(COMMENTARY_DIR), capture_output=True, text=True,
-            timeout=COMMENTARY_TIMEOUT_SECONDS, env=_commentary_env(),
+            timeout=COMMENTARY_TIMEOUT_SECONDS, env=COMMENTARY_RT.env(),
         )
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "解说管线执行失败").strip()[-800:]
@@ -1349,6 +1426,24 @@ def _decode_commentary_id(cid: str) -> Path:
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="成片不存在或已被清理")
     return p
+
+
+@app.get("/api/commentary/diagnostics")
+def commentary_diagnostics() -> dict:
+    """返回解说运行环境诊断信息，让桌面用户一眼看清 python / ffprobe 是否就绪。"""
+    return {
+        "enabled": COMMENTARY_ENABLED,
+        "mode": COMMENTARY_MODE,
+        "dir": str(COMMENTARY_DIR) if COMMENTARY_DIR else None,
+        "python": COMMENTARY_RT.python,
+        "python_ok": COMMENTARY_RT.python_ok,
+        "deps_ok": COMMENTARY_RT.deps_ok,
+        "ffmpeg_dir": COMMENTARY_RT.ffmpeg_dir,
+        "ffprobe_ok": COMMENTARY_RT.ffprobe_ok,
+        "ready": COMMENTARY_RT.ready(),
+        "issues": COMMENTARY_RT.issues,
+        "frozen": getattr(sys, "frozen", False),
+    }
 
 
 @app.get("/api/commentary/list")

@@ -882,6 +882,22 @@ img { max-width: 100%; display: block; }
 }
 .com-entry-title { font-size: 1rem; font-weight: 700; margin: 0 0 .3rem; color: var(--text); }
 .com-entry-tip { font-size: .82rem; color: var(--text-mute); margin: 0 0 .7rem; }
+.com-env-status {
+  margin-bottom: .75rem; padding: .55rem .8rem; border-radius: var(--radius-md);
+  font-size: .82rem; line-height: 1.4;
+}
+.com-env-status.ok {
+  background: #e8f5e9; color: #1b5e20; border: 1px solid #a5d6a7;
+}
+.com-env-status.warn {
+  background: #fff8e1; color: #5d4037; border: 1px solid #ffe082;
+}
+.com-env-status.err {
+  background: #ffebee; color: #b71c1c; border: 1px solid #ef9a9a;
+}
+.com-env-status code {
+  background: rgba(0,0,0,.06); padding: .05rem .25rem; border-radius: 4px; font-size: .75rem;
+}
 .com-url-row { display: flex; gap: .6rem; flex-wrap: wrap; }
 .com-url-row .adv-input { flex: 1; min-width: 200px; }
 .com-entry-card select.adv-input { width: 100%; display: block; }
