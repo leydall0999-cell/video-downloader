@@ -49,6 +49,7 @@ import ffmpeg_tools as fftools
 import retention as retention_mod
 import archive as archive_mod
 import crypto_vault as crypto_mod
+import process_queue as pq_mod
 import torrent as torrent_mod
 from batch import BatchScheduler
 from clouddrive import (
@@ -187,8 +188,7 @@ CLOUD_JOBS: dict[str, dict] = {}
 CLOUD_LOCK = threading.Lock()
 
 # ---- 格式 / 片段增强（桌面版本地加工）：基于 lib_id 的 ffmpeg 任务 ----
-PROCESS_JOBS: dict[str, dict] = {}
-PROCESS_LOCK = threading.Lock()
+# process_queue 在 executor 创建后初始化（见下方）
 _commentary_dir_raw = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
 COMMENTARY_DIR = Path(_commentary_dir_raw) if _commentary_dir_raw else None
 COMMENTARY_PYTHON = os.environ.get("VDL_COMMENTARY_PYTHON", sys.executable)
@@ -380,6 +380,7 @@ store = TaskStore(DOWNLOAD_DIR)
 # 线程池只设硬上限；真正的「同时下几个」由 BatchScheduler 的并发计数器软控（可动态调整）
 executor = ThreadPoolExecutor(max_workers=VDL_BATCH_HARD_MAX, thread_name_prefix="vdl-dl")
 scheduler = BatchScheduler(executor, default_concurrency=MAX_CONCURRENT_DOWNLOADS)
+process_queue = pq_mod.ProcessQueue(executor, default_concurrency=2, hard_max=4)
 
 # ---- 订阅监控（桌面版功能）：本地 JSON 持久化 + 后台定时探查新视频 ----
 SUB_ENABLED = bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_SUBSCRIPTIONS_ENABLED"))
@@ -2101,7 +2102,10 @@ def sub_translate(req: SubTranslateRequest) -> dict:
 # 与字幕处理同源（基于 lib_id）；产物落源目录并写侧车 → 媒体库自动可见。
 
 class ProcessRequest(BaseModel):
-    lib_id: str = Field(min_length=1)
+    # 单个文件（向后兼容）
+    lib_id: str = Field(default="", max_length=2048)
+    # 批量文件
+    lib_ids: list[str] = Field(default_factory=list)
     op: str = Field(min_length=1, max_length=16)
     params: dict = Field(default_factory=dict)
 
@@ -2113,21 +2117,60 @@ def process_run(req: ProcessRequest) -> dict:
     if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
                       "frame", "frames", "sheet", "ringtone"):
         raise HTTPException(status_code=400, detail="不支持的处理类型")
-    src = library_mod._resolve_safe(DOWNLOAD_DIR, req.lib_id)
-    if not src or not src.is_file():
-        raise HTTPException(status_code=404, detail="源文件不存在")
-    job_id = uuid.uuid4().hex[:12]
-    with PROCESS_LOCK:
-        PROCESS_JOBS[job_id] = {"status": "running", "error": "", "out_path": "",
-                                "lib_id": "", "name": "", "count": 0, "is_dir": False}
-    executor.submit(_run_process, job_id, str(src), req.op, req.params or {})
-    return {"job_id": job_id, "status": "running"}
+
+    # 解析来源：lib_ids 批量优先，否则单个 lib_id
+    if req.lib_ids:
+        sources = []
+        for lid in req.lib_ids:
+            if not lid or not lid.strip():
+                continue
+            p = library_mod._resolve_safe(DOWNLOAD_DIR, lid.strip())
+            if not p or not p.is_file():
+                return JSONResponse(status_code=404, content={"error": f"文件不存在：{lid}"})
+            sources.append((lid.strip(), p))
+        if not sources:
+            raise HTTPException(status_code=400, detail="lib_ids 中没有有效文件")
+    elif req.lib_id:
+        p = library_mod._resolve_safe(DOWNLOAD_DIR, req.lib_id)
+        if not p or not p.is_file():
+            raise HTTPException(status_code=404, detail="源文件不存在")
+        sources = [(req.lib_id, p)]
+    else:
+        raise HTTPException(status_code=400, detail="请提供 lib_id 或 lib_ids")
+
+    import uuid as _uuid
+    jobs_out = []
+    for lid, src_path in sources:
+        jid = _uuid.uuid4().hex[:12]
+        name = src_path.name
+        process_queue.submit(jid, name, lid, req.op, _run_process, jid, str(src_path), req.op, req.params or {})
+        jobs_out.append({"job_id": jid, "lib_id": lid, "name": name})
+
+    if len(jobs_out) == 1:
+        return {"job_id": jobs_out[0]["job_id"], "status": "running"}
+    return {"jobs": jobs_out, "total": len(jobs_out), "status": "queued"}
+
+
+@app.get("/api/process/queue")
+def process_queue_list() -> dict:
+    if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
+        raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
+    return process_queue.get_queue()
+
+
+@app.post("/api/process/concurrency")
+def process_set_concurrency(req: dict = None) -> dict:
+    if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
+        raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
+    n = int((req or {}).get("n", process_queue.concurrency))
+    process_queue.set_concurrency(n)
+    return {"concurrency": process_queue.concurrency}
 
 
 @app.get("/api/process/{job_id}")
 def process_status(job_id: str) -> dict:
-    with PROCESS_LOCK:
-        job = PROCESS_JOBS.get(job_id)
+    with process_queue.lock:
+        job = process_queue.jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="处理任务不存在")
     return {"status": job["status"], "error": job.get("error", ""),
@@ -2136,9 +2179,9 @@ def process_status(job_id: str) -> dict:
 
 
 def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
-    """后台线程：按 op 调用 ffmpeg_tools，产物落源目录并写侧车，更新 PROCESS_JOBS。"""
-    with PROCESS_LOCK:
-        job = PROCESS_JOBS.get(job_id)
+    """后台线程：按 op 调用 ffmpeg_tools，产物落源目录并写侧车，更新 process_queue.jobs。"""
+    with process_queue.lock:
+        job = process_queue.jobs.get(job_id)
     if not job:
         return
     try:
@@ -2222,7 +2265,7 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
             if not res:
                 raise RuntimeError("未抽到任何帧（检查起止时间是否超出视频时长）")
             frames_dir, count = res
-            with PROCESS_LOCK:
+            with process_queue.lock:
                 job.update(status="completed", out_path=str(frames_dir), lib_id="",
                            name=frames_dir.name, count=count, is_dir=True)
             logger.info("process %s (frames) done -> %s (%d 帧)", job_id, frames_dir.name, count)
@@ -2233,11 +2276,11 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
             raise RuntimeError("处理未产出有效文件")
         fftools._write_sidecar(out, meta, suffix)
         new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
-        with PROCESS_LOCK:
+        with process_queue.lock:
             job.update(status="completed", out_path=str(out), lib_id=new_id, name=out.name)
         logger.info("process %s (%s) done -> %s", job_id, op, out.name)
     except Exception as e:  # noqa: BLE001
-        with PROCESS_LOCK:
+        with process_queue.lock:
             job["status"] = "failed"
             job["error"] = str(e)[:400]
         logger.warning("process %s (%s) failed: %s", job_id, op, e)

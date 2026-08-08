@@ -82,7 +82,8 @@
 
 ### 技术方案
 - 新增 `server/ffmpeg_tools.py`（纯 ffmpeg，无外部依赖）：`extract_audio / make_gif / trim_video / crop_video / compress_video / upscale_video`，统一 `_unique_out`（中文后缀安全，不用 `Path.with_suffix`）+ `_write_sidecar`。
-- 新增 `POST /api/process/run` + `GET /api/process/{job_id}`（基于 lib_id，复用下载线程池 `executor` 异步跑）；产物写源目录并写侧车，`encode_id` 回传新 lib_id。
+- 新增 `POST /api/process/run`（支持单文件 `lib_id` 或批量 `lib_ids`）+ `GET /api/process/{job_id}` + `GET /api/process/queue` + `POST /api/process/concurrency`。
+- 加工队列：`server/process_queue.py` 基于 Condition+计数器做并发控制（默认 2 / 硬顶 4），批量提交一次性入列按序出队，状态只存内存。单文件仍返回 `{job_id, status: "running"}`（向后兼容），批量返回 `{jobs: [...], total, status: "queued"}`。
 - 开关同媒体库：`VDL_LIBRARY_ENABLED=true` 或桌面 frozen 才暴露（前端「🛠 处理」按钮 + 媒体库弹窗加工面板）。
 - 前端 `index.html`/`app.js`/`styles.css`：媒体库弹窗加「🛠 处理」按钮与加工面板；按媒体类型（video/audio/image）过滤可用操作；动态参数表单；提交后轮询进度，完成自动关闭弹窗并刷新媒体库。
 - 媒体库识别增强：`library.py` 的 `MEDIA_EXTS` 增加 `.gif/.webp`（kind=image），前端 `openLibModal` 增加 image 分支用 `<img>` 预览。
