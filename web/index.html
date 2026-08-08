@@ -225,6 +225,7 @@
         <button type="button" class="btn btn-ghost btn-sm" id="libCleanup" hidden>🧹 自动清理</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libArchive" hidden>☁️ 归档网盘</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libCrypto" hidden>🔐 保险箱</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="libShowQueue" hidden>📋 队列</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
       </div>
     </div>
@@ -237,8 +238,25 @@
         <option value="audio">音频</option>
       </select>
     </div>
+    <div class="lib-batch" id="libBatch" hidden>
+      <button type="button" class="btn btn-ghost btn-sm" id="libSelectAll">全选</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="libDeselectAll">取消</button>
+      <span class="batch-count" id="libBatchCount"></span>
+      <button type="button" class="btn btn-primary btn-sm" id="libBatchProcess">批量处理</button>
+    </div>
     <div class="lib-grid" id="libGrid"></div>
     <p class="lib-empty" id="libEmpty" hidden>还没有下载内容。去「下载」粘贴链接保存第一个视频吧。</p>
+    <section class="queue-panel" id="queuePanel" hidden>
+      <div class="queue-panel-head">
+        <strong>加工队列</strong>
+        <button type="button" class="modal-close" id="queuePanelClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="queue-controls">
+        <label>并发数 <input type="range" id="queueConcurrency" min="1" max="4" value="2"> <span id="queueConcurrencyVal">2</span></label>
+      </div>
+      <ul class="queue-list" id="queueList"></ul>
+      <p class="queue-empty" id="queueEmpty" hidden>队列为空，选择媒体库文件点击「批量处理」开始。</p>
+    </section>
   </section>
 
   <!-- 种子下载视图（桌面版功能） -->

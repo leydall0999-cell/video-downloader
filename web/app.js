@@ -199,6 +199,19 @@
     processParams: $('processParams'),
     processRun: $('processRun'),
     processStatus: $('processStatus'),
+    // 批量处理 + 加工队列
+    libShowQueue: $('libShowQueue'),
+    queuePanel: $('queuePanel'),
+    queuePanelClose: $('queuePanelClose'),
+    queueConcurrency: $('queueConcurrency'),
+    queueConcurrencyVal: $('queueConcurrencyVal'),
+    queueList: $('queueList'),
+    queueEmpty: $('queueEmpty'),
+    libBatch: $('libBatch'),
+    libSelectAll: $('libSelectAll'),
+    libDeselectAll: $('libDeselectAll'),
+    libBatchCount: $('libBatchCount'),
+    libBatchProcess: $('libBatchProcess'),
     // 订阅追更（桌面版功能）
     tabSubscribe: $('tabSubscribe'),
     subscribeView: $('subscribeView'),
@@ -1418,8 +1431,17 @@
   const createLibCard = (item) => {
     const card = document.createElement('button');
     card.type = 'button';
-    card.className = 'lib-card';
+    card.className = 'lib-card selectable';
     card.setAttribute('aria-label', item.title || item.name);
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'lib-check';
+    cb.dataset.libId = item.id;
+    cb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleLibSelect(item.id, card, cb);
+    });
 
     const thumbBox = document.createElement('div');
     thumbBox.className = 'lib-thumb';
@@ -1459,7 +1481,7 @@
     sub.textContent = parts.join(' · ');
     metaBox.append(title, sub);
 
-    card.append(thumbBox, metaBox);
+    card.append(cb, thumbBox, metaBox);
     card.addEventListener('click', () => openLibModal(item));
     return card;
   };
@@ -2609,6 +2631,158 @@
     }
   };
 
+  // ------------------------------------------------------------------ 批量处理 + 加工队列
+  let selectedLibIds = new Set();
+  let procQueueTimer = null;
+
+  // 切换卡片勾选态
+  const toggleLibSelect = (id, card, cb) => {
+    if (selectedLibIds.has(id)) {
+      selectedLibIds.delete(id);
+      card.classList.remove('selected');
+      if (cb) cb.checked = false;
+    } else {
+      selectedLibIds.add(id);
+      card.classList.add('selected');
+      if (cb) cb.checked = true;
+    }
+    updateBatchUI();
+  };
+
+  const updateBatchUI = () => {
+    const n = selectedLibIds.size;
+    el.libBatch.hidden = n === 0;
+    el.libBatchCount.textContent = n > 0 ? `已选 ${n} 个` : '';
+    el.libBatchProcess.hidden = n === 0;
+  };
+
+  // 批量处理：收集所有选中 ID 提交加工
+  const runBatchProcess = async () => {
+    const ids = [...selectedLibIds];
+    if (!ids.length) return;
+    // 确保 processOp 已填充（批量模式下可能没开过弹窗）
+    if (!el.processOp.options.length) {
+      Object.entries(PROCESS_OPS).forEach(([op, cfg]) => {
+        if (!cfg.kinds.includes('video')) return;
+        const o = document.createElement('option');
+        o.value = op; o.textContent = cfg.label;
+        el.processOp.appendChild(o);
+      });
+    }
+    const op = el.processOp.value;
+    const params = collectParams();
+    el.libBatchProcess.disabled = true;
+    el.libBatchProcess.textContent = '提交中…';
+    try {
+      const result = await request('/api/process/run', {
+        method: 'POST',
+        body: JSON.stringify({ lib_ids: ids, op, params }),
+      });
+      if (result.error) {
+        alert(result.error);
+        return;
+      }
+      showProcessStatus(`已提交 ${result.total || ids.length} 个任务`);
+      // 清空选择并打开队列
+      selectedLibIds.clear();
+      updateBatchUI();
+      // 清除卡片勾选态
+      el.libGrid.querySelectorAll('.lib-card.selected').forEach((c) => c.classList.remove('selected'));
+      el.libGrid.querySelectorAll('.lib-check').forEach((c) => c.checked = false);
+      el.queuePanel.hidden = false;
+      loadProcessQueue();
+      startProcQueuePoll();
+    } catch (e) {
+      showProcessStatus(e.message || '批量提交失败', true);
+    } finally {
+      el.libBatchProcess.disabled = false;
+      el.libBatchProcess.textContent = '批量处理';
+    }
+  };
+
+  // 加工队列轮询
+  const loadProcessQueue = async () => {
+    if (!node.libraryEnabled) return;
+    try {
+      const data = await request('/api/process/queue');
+      renderProcQueue(data);
+    } catch { /* 忽略 */ }
+  };
+
+  const renderProcQueue = (data) => {
+    el.queueConcurrency.value = data.concurrency;
+    el.queueConcurrencyVal.textContent = data.concurrency;
+    el.queueList.replaceChildren();
+    el.queueEmpty.hidden = data.jobs.length > 0;
+    data.jobs.forEach((j) => {
+      const li = document.createElement('li');
+      li.className = `queue-item st-${j.status}`;
+      const name = document.createElement('span');
+      name.className = 'queue-item-name';
+      name.textContent = `${j.op || '加工'} · ${j.name || j.job_id}`;
+      li.appendChild(name);
+      if (j.error) {
+        const err = document.createElement('span');
+        err.className = 'queue-item-err';
+        err.textContent = j.error;
+        li.appendChild(err);
+      }
+      const badge = document.createElement('span');
+      badge.className = `queue-item-badge ${j.status}`;
+      const labels = { running: '运行中', completed: '完成', failed: '失败', pending: '排队中' };
+      badge.textContent = labels[j.status] || j.status;
+      li.appendChild(badge);
+      el.queueList.appendChild(li);
+    });
+  };
+
+  const startProcQueuePoll = () => {
+    stopProcQueuePoll();
+    procQueueTimer = setInterval(loadProcessQueue, 2000);
+  };
+
+  const stopProcQueuePoll = () => {
+    if (procQueueTimer) { clearInterval(procQueueTimer); procQueueTimer = null; }
+  };
+
+  // 事件绑定：复选框、全选/取消、批量处理按钮、队列面板开关、并发滑块
+  el.libShowQueue.addEventListener('click', () => {
+    el.queuePanel.hidden = !el.queuePanel.hidden;
+    if (!el.queuePanel.hidden) { loadProcessQueue(); startProcQueuePoll(); }
+  });
+  el.queuePanelClose.addEventListener('click', () => {
+    el.queuePanel.hidden = true;
+    stopProcQueuePoll();
+  });
+  el.queueConcurrency.addEventListener('input', () => {
+    el.queueConcurrencyVal.textContent = el.queueConcurrency.value;
+  });
+  el.queueConcurrency.addEventListener('change', async () => {
+    await request('/api/process/concurrency', {
+      method: 'POST',
+      body: JSON.stringify({ n: parseInt(el.queueConcurrency.value) }),
+    });
+  });
+  el.libSelectAll.addEventListener('click', () => {
+    el.libGrid.querySelectorAll('.lib-card').forEach((card) => {
+      const cb = card.querySelector('.lib-check');
+      const id = cb?.dataset.libId;
+      if (id && !selectedLibIds.has(id)) {
+        selectedLibIds.add(id);
+        card.classList.add('selected');
+        if (cb) cb.checked = true;
+      }
+    });
+    updateBatchUI();
+  });
+  el.libDeselectAll.addEventListener('click', () => {
+    selectedLibIds.clear();
+    el.libGrid.querySelectorAll('.lib-card.selected').forEach((c) => c.classList.remove('selected'));
+    el.libGrid.querySelectorAll('.lib-check').forEach((c) => c.checked = false);
+    updateBatchUI();
+  });
+  el.libBatchProcess.addEventListener('click', runBatchProcess);
+
   setInterval(loadQueue, 2500);  // 队列概览：持续轮询任务统计
 
   // ------------------------------------------------------------------ 种子下载（桌面版功能）
@@ -2794,6 +2968,7 @@
       if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
       if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
+      if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
       if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled) el.tabs.hidden = false;
       initSubUI();
