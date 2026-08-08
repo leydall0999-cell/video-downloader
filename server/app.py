@@ -575,6 +575,40 @@ def _commentary_work_dir() -> Path:
     return d
 
 
+def _commentary_env() -> dict[str, str]:
+    """为 commentary-pipeline 子进程准备环境变量，关键是注入 ffmpeg/ffprobe 所在目录。
+
+    桌面版打包后子进程 PATH 可能被截断，导致 process.py 找不到 ffprobe。
+    优先从环境变量 VDL_FFMPEG_BIN / VDL_FFPROBE_BIN 读取，其次自动探测。
+    """
+    env = os.environ.copy()
+    candidates: list[str] = []
+    for key in ("VDL_FFPROBE_BIN", "VDL_FFMPEG_BIN"):
+        v = env.get(key, "").strip()
+        if v:
+            candidates.append(str(Path(v).parent))
+    if not candidates:
+        for name in ("ffprobe", "ffmpeg"):
+            p = shutil.which(name)
+            if p:
+                candidates.append(str(Path(p).parent))
+        if not candidates:
+            for fallback in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
+                if (Path(fallback) / "ffprobe").exists():
+                    candidates.append(fallback)
+                    break
+    if candidates:
+        # 去重并保持顺序
+        seen: set[str] = set()
+        extra = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                extra.append(c)
+        env["PATH"] = os.pathsep.join(extra + ([env.get("PATH", "")] if env.get("PATH") else []))
+    return env
+
+
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
@@ -606,7 +640,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             args += ["--voice", voice]
         proc = subprocess.run(
             args, cwd=str(COMMENTARY_DIR), capture_output=True, text=True,
-            timeout=COMMENTARY_TIMEOUT_SECONDS,
+            timeout=COMMENTARY_TIMEOUT_SECONDS, env=_commentary_env(),
         )
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "解说管线执行失败").strip()[-800:]
