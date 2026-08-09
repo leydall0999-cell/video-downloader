@@ -881,7 +881,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--auto"]
             if vertical:
                 args.append("--vertical")
-            if mode and mode != "full":
+            if mode and mode != "highlights":
                 args += ["--mode", mode]
             if voice:
                 args += ["--voice", voice]
@@ -1637,7 +1637,7 @@ class CommentaryRequest(BaseModel):
     trim_start: float = Field(default=0.0, ge=0.0)
     trim_end: float = Field(default=0.0, ge=0.0)
     mode: str = Field(default="highlights",
-                      description="解说模式: full=全片完整解说; highlights=选择一(全片保留+仅高光叠加解说); "
+                      description="解说模式(三选一，无第四种): highlights=选择一(全片保留+仅高光叠加解说); "
                                   "highlights_intro=选择二(高光+开场精彩片段+可剪切≤20%); "
                                   "full_web=选择三(全片解说+联网自由发挥+单行字幕+羽化原字幕)")
 

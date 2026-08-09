@@ -333,15 +333,15 @@
     <div class="com-mode-group" id="comModeGroup">
       <div class="com-mode-option">
         <input type="radio" name="comMode" id="comMode1" value="highlights" checked />
-        <label for="comMode1"><b>选择一</b>：全片保留，仅高光处叠加深度解说（间隙原声、无解说无字幕）</label>
+        <label for="comMode1"><b>选择一</b>：跳过片头片尾（可手填秒数）+ AI 先挑高光 + 你微调；全片保留，仅高光处叠加深度解说（间隙原声、无解说无字幕）</label>
       </div>
       <div class="com-mode-option">
         <input type="radio" name="comMode" id="comMode2" value="highlights_intro" />
-        <label for="comMode2"><b>选择二</b>：高光解说 + 跳过片头片尾平淡处（≤全片 20%）+ 开头插入精彩片段钩子</label>
+        <label for="comMode2"><b>选择二</b>：跳过片头片尾 + AI 先挑高光 + 你微调；可剪切平淡段（≤全片20%）+ 高光叠加深度解说 + 开头插精彩片段钩子</label>
       </div>
       <div class="com-mode-option">
         <input type="radio" name="comMode" id="comMode3" value="full_web" />
-        <label for="comMode3"><b>选择三</b>：全片解说 + 联网自由发挥 + 单行字幕 + 羽化原字幕（画面不羽化）</label>
+        <label for="comMode3"><b>选择三</b>：AI 联网查现有解说、高度自由发挥；全片解说 + 单行字幕（与原字幕同行）+ 只羽化原字幕（画面不羽化）</label>
       </div>
     </div>
 
