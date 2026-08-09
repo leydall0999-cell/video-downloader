@@ -615,17 +615,33 @@ def _format_bytes(n: int) -> str:
 
 
 def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
+    """执行一次下载：先解析元数据，再进入实际下载。
+
+    把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
+    让「解析视频信息」步骤能快速收敛，且下载阶段一旦卡住就能被看门狗识别。
+    """
     reporter = _ProgressReporter(task, store)
     task.add_step("排队等待", "done", "已开始执行")
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
+    info: dict[str, Any] = {}
     try:
         with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
-            info = ydl.extract_info(task.url, download=True) or {}
-        if info.get("title"):
-            store.update(task.id, title=info["title"])
-            task.add_step("解析视频信息", "done", f"已获取标题《{info['title']}》")
-        output = _locate_output(info, task.workdir or Path("."))
-        _write_sidecar(output, task, info)
+            # 阶段 1：只解析元数据，不下载
+            info = ydl.extract_info(task.url, download=False) or {}
+            if info.get("title"):
+                store.update(task.id, title=info["title"])
+                task.add_step("解析视频信息", "done", f"已获取标题《{info['title']}》")
+            else:
+                task.add_step("解析视频信息", "done", "未获取到标题")
+
+            # 阶段 2：真正开始下载；先把状态置为 downloading，看门狗才能生效
+            task.add_step("下载音视频", "running", f"已选清晰度：{task.quality}")
+            task.log(f"开始下载：{task.quality}")
+            store.update(task.id, status="downloading", progress=0.0)
+            ydl.process_info(info)
+
+            output = _locate_output(info, task.workdir or Path("."))
+            _write_sidecar(output, task, info)
     except DownloadCanceled:
         _mark_step_error(task, "用户已取消")
         store.update(task.id, status="canceled", error="已取消下载", progress=0.0)
