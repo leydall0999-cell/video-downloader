@@ -1642,16 +1642,18 @@
   let currentScriptJobId = null;  // 当前脚本审核任务的 job_id
   let currentScriptSegments = null;  // 原始脚本 segments（保留 start/end/note 供 save 合并）
 
-  /** edge-tts 中文 Neural 音色可选列表 */
+  /** edge-tts 中文 Neural 音色可选列表。
+   *  只保留 edge-tts list_voices() 真实返回、且经实测稳定的音色。
+   *  云希(Yunxi) 对部分含口语/方言文本会返回 NoAudioReceived，故用云健(Yunjian) 替代「沉稳男声」。
+   */
   const COM_VOICES = [
     { value: 'zh-CN-XiaoxiaoNeural', label: '晓晓（温柔女声）' },
     { value: 'zh-CN-XiaoyiNeural', label: '晓伊（活泼女声）' },
-    { value: 'zh-CN-YunxiNeural', label: '云希（沉稳男声）' },
+    { value: 'zh-CN-YunjianNeural', label: '云健（沉稳男声）' },
     { value: 'zh-CN-YunyangNeural', label: '云扬（新闻腔男声）' },
-    { value: 'zh-CN-XiaochenNeural', label: '晓辰（舒缓女声）' },
-    { value: 'zh-CN-XiaohanNeural', label: '晓涵（温暖女声）' },
-    { value: 'zh-CN-XiaomoNeural', label: '晓墨（知性女声）' },
-    { value: 'zh-CN-XiaoruiNeural', label: '晓睿（干练女声）' },
+    { value: 'zh-CN-YunxiaNeural', label: '云夏（青年男声）' },
+    { value: 'zh-CN-liaoning-XiaobeiNeural', label: '晓北（辽宁话女声）' },
+    { value: 'zh-CN-shaanxi-XiaoniNeural', label: '晓妮（陕西话女声）' },
   ];
 
   const refreshCommentaryDiagnostics = async () => {
