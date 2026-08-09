@@ -973,6 +973,47 @@ img { max-width: 100%; display: block; }
   height: 100%; background: linear-gradient(135deg, var(--brand-strong), var(--brand));
   border-radius: 4px; transition: width .3s ease;
 }
+.com-eta {
+  margin-left: auto; font-size: .76rem; font-weight: 600; color: var(--text-mute);
+  background: var(--bg-soft, #f3f4f6); padding: .15rem .55rem; border-radius: 999px;
+}
+
+/* ---- 预览与裁剪卡片 ---- */
+.com-trim-card {
+  margin-top: .85rem; padding: 1rem;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: var(--shadow);
+}
+.com-trim-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  margin-bottom: .65rem;
+}
+.com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); }
+.com-trim-dur { font-size: .78rem; color: var(--brand); font-weight: 600; }
+.com-preview {
+  width: 100%; max-height: 320px; background: #000; border-radius: 6px; display: block;
+}
+.com-trim-timeline {
+  display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; margin-top: .7rem;
+}
+.com-trim-field {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .5rem;
+}
+.com-trim-label { font-size: .8rem; color: var(--text-mute); white-space: nowrap; }
+.com-time-input {
+  width: 92px; font-size: .8rem; text-align: center; font-family: monospace;
+  padding: .3rem .35rem; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg, #fff); color: var(--text);
+}
+.com-range {
+  width: 100%; accent-color: var(--brand); cursor: pointer;
+}
+.com-trim-actions {
+  display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem;
+}
+@media (max-width: 560px) {
+  .com-trim-timeline { grid-template-columns: 1fr; }
+}
 /* ---- 文件选择 ---- */
 .com-file-name { display: block; margin-top: .5rem; font-size: .8rem; color: var(--text-mute); word-break: break-all; }
 #comDropZone { cursor: pointer; }

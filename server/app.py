@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import ipaddress
 import json
 import socket
@@ -771,7 +772,65 @@ def _commentary_mark_error(job_id: str, detail: str) -> None:
                 break
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False) -> None:
+def _apply_trim(src_path: str, in_dir: Path, start: float, end: float):
+    """服务端预处理裁剪：同一源+起止始终产出同名文件，便于 script-only 与后续 render 复用。
+    返回 (裁剪后路径, 裁剪后时长)；裁剪失败则回退原路径。"""
+    key = hashlib.md5(f"{src_path}|{start:.3f}|{end:.3f}".encode("utf-8")).hexdigest()[:12]
+    trim_out = in_dir / f"trim_{key}.mp4"
+    if trim_out.exists() and trim_out.stat().st_size > 0:
+        return str(trim_out), (end - start)
+    dur = max(0.1, end - start)
+    try:
+        subprocess.run(
+            [FFMPEG_BIN, "-y", "-ss", f"{start:.3f}", "-i", str(src_path),
+             "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+             "-c:a", "aac", "-movflags", "+faststart", str(trim_out)],
+            capture_output=True, text=True, timeout=1800,
+        )
+    except Exception as exc:
+        logger.warning("视频裁剪失败，回退使用原视频：%s", exc)
+        return src_path, 0.0
+    if not (trim_out.exists() and trim_out.stat().st_size > 0):
+        return src_path, 0.0
+    return str(trim_out), dur
+
+
+def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
+    """从子进程进度行推算 ETA，写入 job['eta_remaining']（剩余秒）/ eta_done_at（绝对时间戳）。"""
+    now = time.time()
+    m = re.search(r"共\s*(\d+)\s*段", line)
+    if m:
+        job["eta_total_segs"] = int(m.group(1))
+    m = re.search(r"开始渲染\s*(\d+)\s*段", line)
+    if m:
+        job["eta_render_total"] = int(m.group(1))
+        job["eta_render_start"] = now
+    m = re.search(r"\[(\d+)/(\d+)\]", line)
+    if m:
+        done = int(m.group(1))
+        job["eta_render_done"] = done
+        rs = job.get("eta_render_start")
+        if rs:
+            elapsed = now - rs
+            if done > 0:
+                per = elapsed / done
+                total = job.get("eta_render_total") or done
+                # 段是并发渲染的（min(cpu,8)），按并行度折算墙钟时间
+                par = max(1, min(os.cpu_count() or 4, 8))
+                remaining = per * max(0, total - done) / par
+                job["eta_remaining"] = int(remaining)
+                job["eta_done_at"] = int(now + remaining)
+            return
+    # 渲染前（转写/TTS）：用源时长做粗估，进入渲染段后由上面的实时进度收敛
+    if job.get("eta_render_start") is None and src_dur:
+        elapsed = now - job.get("started_at", now)
+        coarse = src_dur * 1.2
+        rem = max(0, int(coarse - elapsed))
+        job["eta_remaining"] = rem
+        job["eta_done_at"] = int(now + rem)
+
+
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -789,21 +848,42 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         out_dir = COMMENTARY_DIR / "output"
         in_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # ---- 时长裁剪（服务端预处理）----
+        # 用确定性命名（源路径+起止哈希）切出裁剪片段，script-only 与后续 render 复用同一文件，避免重复切。
+        try:
+            src_dur = fftools.probe_duration(Path(src_path), ffmpeg_bin=FFMPEG_BIN)
+        except Exception:
+            src_dur = 0.0
+        ts, te = float(trim_start or 0), float(trim_end or 0)
+        use_src = src_path
+        if te > ts > 0 and (not src_dur or te <= src_dur + 1.0):
+            use_src, _ = _apply_trim(src_path, in_dir, ts, te)
+
         in_file = in_dir / f"{base}.mp4"
         if in_file.exists() or in_file.is_symlink():
             in_file.unlink()
         try:
-            os.symlink(src_path, in_file)
+            os.symlink(use_src, in_file)
         except OSError:
-            shutil.copyfile(src_path, in_file)  # 跨挂载点软链失败则退化为复制
+            shutil.copyfile(use_src, in_file)  # 跨挂载点软链失败则退化为复制
 
-        args = [COMMENTARY_RT.python, "process.py", str(in_file), "--auto"]
-        if vertical:
-            args.append("--vertical")
-        if voice:
-            args += ["--voice", voice]
-        if script_only:
-            args.append("--script-only")
+        # 子进程参数：edit_only 真 → 走 --edit-only（吃已审核脚本，不重跑转录）；否则 --auto。
+        # 加 -u 关闭 stdout 块缓冲，让进度行实时回流（ETA 才平滑）。
+        if edit_only:
+            args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--edit-only", edit_only]
+            if vertical:
+                args.append("--vertical")
+            if voice:
+                args += ["--voice", voice]
+        else:
+            args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--auto"]
+            if vertical:
+                args.append("--vertical")
+            if voice:
+                args += ["--voice", voice]
+            if script_only:
+                args.append("--script-only")
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
@@ -821,12 +901,19 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 job["progress"] = list(last_lines)
                 _commentary_log(job, line)
                 _update_commentary_steps(job, line)
+                _commentary_eta(job, line, src_dur)
 
         with _commentary_lock:
             job = commentary_jobs.setdefault(job_id, {})
+            job["started_at"] = job.get("started_at") or time.time()
+            job["source_duration"] = src_dur
+            job["trim_start"] = ts
+            job["trim_end"] = te
+            job["trim_path"] = use_src if use_src != src_path else ""
             steps = _ensure_commentary_steps(job)
             steps[0]["status"] = "running"
-            steps[0]["detail"] = f"源视频: {Path(src_path).name}"
+            steps[0]["detail"] = f"源视频: {Path(src_path).name}" + (
+                f"（已裁剪 {ts:.0f}~{te:.0f}s）" if use_src != src_path else "")
             steps[0]["updated_at"] = time.time()
 
         try:
@@ -1543,6 +1630,8 @@ class CommentaryRequest(BaseModel):
     file_id: str = Field(default="", max_length=2048)
     vertical: bool = True
     voice: str = Field(default="", max_length=64)
+    trim_start: float = Field(default=0.0, ge=0.0)
+    trim_end: float = Field(default=0.0, ge=0.0)
 
 
 class ScriptUpdateRequest(BaseModel):
@@ -1569,7 +1658,8 @@ def create_commentary(payload: CommentaryRequest) -> dict:
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": []}
-    executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE)
+    executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
+                    trim_start=payload.trim_start, trim_end=payload.trim_end)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1578,6 +1668,8 @@ def create_commentary_upload(
     file: UploadFile = _FastAPIFile(...),
     vertical: bool = Form(False),
     voice: str = Form(""),
+    trim_start: float = Form(0.0),
+    trim_end: float = Form(0.0),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
     if not COMMENTARY_ENABLED:
@@ -1599,7 +1691,8 @@ def create_commentary_upload(
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": []}
-    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE)
+    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE,
+                    trim_start=trim_start, trim_end=trim_end)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1608,6 +1701,8 @@ def create_script_only_upload(
     file: UploadFile = _FastAPIFile(...),
     vertical: bool = Form(False),
     voice: str = Form(""),
+    trim_start: float = Form(0.0),
+    trim_end: float = Form(0.0),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
     if not COMMENTARY_ENABLED:
@@ -1631,7 +1726,8 @@ def create_script_only_upload(
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "steps": [], "logs": []}
-    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE, script_only=True)
+    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE, script_only=True,
+                    trim_start=trim_start, trim_end=trim_end)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1753,7 +1849,11 @@ def commentary_status(job_id: str) -> dict:
                   "detail": "", "created_at": time.time(), "updated_at": time.time()}]
     result = {"job_id": job_id, "status": job["status"], "error": job.get("error", ""),
               "ready": ready, "progress": job.get("progress", []),
-              "steps": steps, "logs": job.get("logs", [])}
+              "steps": steps, "logs": job.get("logs", []),
+              "eta_remaining": job.get("eta_remaining"),
+              "eta_done_at": job.get("eta_done_at"),
+              "started_at": job.get("started_at"),
+              "source_duration": job.get("source_duration")}
     if job.get("script_path"):
         result["script_path"] = job["script_path"]
     return result
@@ -1810,7 +1910,7 @@ def create_script_only(payload: CommentaryRequest) -> dict:
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "", "progress": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
-                    script_only=True)
+                    script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1914,13 +2014,18 @@ def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form(""
         raise HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
     src_path = str(src_candidates[0])
 
+    # 复用父任务的裁剪参数：同一源+起止会命中确定性命名的裁剪文件，直接吃裁剪后视频渲染
+    trim_start = float(job.get("trim_start", 0.0) or 0.0)
+    trim_end = float(job.get("trim_end", 0.0) or 0.0)
+
     # 用新的 job_id 提交渲染（保留原 script 关联）
     render_job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
         commentary_jobs[render_job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                           "parent_script_job": job_id, "steps": [], "logs": []}
     v = voice or job.get("voice", "") or COMMENTARY_VOICE
-    executor.submit(_commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path)
+    executor.submit(_commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path,
+                    trim_start=trim_start, trim_end=trim_end)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 

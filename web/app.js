@@ -242,6 +242,18 @@
     comFileName: $('comFileName'),
     comFileStatus: $('comFileStatus'),
     comDropZone: $('comDropZone'),
+    comTrimCard: $('comTrimCard'),
+    comPreview: $('comPreview'),
+    comTrimStartRange: $('comTrimStartRange'),
+    comTrimEndRange: $('comTrimEndRange'),
+    comTrimStart: $('comTrimStart'),
+    comTrimEnd: $('comTrimEnd'),
+    comTrimDuration: $('comTrimDuration'),
+    comTrimSetStart: $('comTrimSetStart'),
+    comTrimSetEnd: $('comTrimSetEnd'),
+    comTrimPreview: $('comTrimPreview'),
+    comTrimReset: $('comTrimReset'),
+    comEta: $('comEta'),
     tabCommentary: $('tabCommentary'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
@@ -284,6 +296,12 @@
     torList: $('torList'),
     torStatus: $('torStatus'),
   };
+
+  // 解说裁剪状态
+  let comTrimStart = 0;        // 裁剪起点（秒）
+  let comTrimEnd = 0;          // 裁剪终点（秒）
+  let comPreviewDuration = 0;  // 源视频总时长（秒）
+  let comPreviewUrl = null;    // 预览视频 URL（本地文件为 objectURL，需释放）
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
@@ -420,6 +438,32 @@
   };
 
   const formatEta = (seconds) => (seconds > 0 ? `剩余 ${formatDuration(seconds) || '<1s'}` : '');
+
+  // 秒数 → HH:MM:SS（裁剪时间输入用）
+  const formatHMS = (sec) => {
+    if (!isFinite(sec) || sec < 0) sec = 0;
+    sec = Math.floor(sec);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+  };
+  // HH:MM:SS / MM:SS / 纯数字秒 → 秒数
+  const parseHMS = (str) => {
+    if (str == null) return 0;
+    str = String(str).trim();
+    if (/^\d+(\.\d+)?$/.test(str)) return parseFloat(str);
+    const parts = str.split(':').map((p) => parseInt(p, 10) || 0);
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0] || 0;
+  };
+  // unix 时间戳 → 本地时钟 HH:MM:SS
+  const formatClock = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+  };
 
   // 转换订阅额度显示：仅在订阅墙开启时生效
   const updateConvertQuota = (refs, quota) => {
@@ -1092,6 +1136,7 @@
           refs.commentaryFile.hidden = false;
           if (refs.commentary) refs.commentary.hidden = true;
           el.comProgress.hidden = true;
+          el.comEta.hidden = true;
           if (typeof onCompleted === 'function') onCompleted();
         } else if (st.status === 'failed') {
           clearInterval(poll);
@@ -1101,6 +1146,7 @@
             refs.commentary.textContent = '重试生成解说';
           }
           el.comProgress.hidden = true;
+          el.comEta.hidden = true;
         } else if (st.status === 'running') {
           // 实时把进程最新输出追加到状态文本（兼容无 steps 的旧后端）
           if (!hasSteps) {
@@ -1119,6 +1165,13 @@
           el.comPercent.textContent = phasePct.pct + '%';
           el.comBarFill.style.width = phasePct.pct + '%';
           if (phasePct.pct >= 100) el.comBarFill.style.background = 'var(--success)';
+          // ETA：预计完成时间 + 剩余时间
+          if (st.eta_done_at) {
+            el.comEta.hidden = false;
+            el.comEta.textContent = `预计完成 ${formatClock(st.eta_done_at)} · ${formatEta(st.eta_remaining)}`;
+          } else {
+            el.comEta.hidden = true;
+          }
         }
       } catch {
         /* 静默重试，下一轮轮询补上 */
@@ -1200,8 +1253,8 @@
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
     try {
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true }
-        : { file_id: source.fileId, vertical: true };
+        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd }
+        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd };
       const { job_id } = await request('/api/commentary', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -1228,6 +1281,8 @@
       const form = new FormData();
       form.append('file', file);
       form.append('vertical', 'false');
+      form.append('trim_start', String(comTrimStart));
+      form.append('trim_end', String(comTrimEnd));
       const { job_id } = await request('/api/commentary/upload', { method: 'POST', body: form });
       pollCommentaryJob(job_id, refs, '', onCompleted);
     } catch (err) {
@@ -1253,8 +1308,8 @@
     el.comStatus.textContent = '正在转写并生成AI解说词（不渲染成片），长视频可能需数分钟…';
     try {
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true }
-        : { file_id: source.fileId, vertical: true };
+        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd }
+        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST', body: JSON.stringify(body),
       });
@@ -1280,6 +1335,8 @@
       const form = new FormData();
       form.append('file', file);
       form.append('vertical', 'false');
+      form.append('trim_start', String(comTrimStart));
+      form.append('trim_end', String(comTrimEnd));
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);
@@ -1336,6 +1393,12 @@
             el.comPhase.textContent = phasePct.phase;
             el.comPercent.textContent = phasePct.pct + '%';
             el.comBarFill.style.width = phasePct.pct + '%';
+          }
+          if (st.eta_done_at) {
+            el.comEta.hidden = false;
+            el.comEta.textContent = `预计完成 ${formatClock(st.eta_done_at)} · ${formatEta(st.eta_remaining)}`;
+          } else {
+            el.comEta.hidden = true;
           }
         }
       } catch {
@@ -1629,9 +1692,11 @@
     el.comProgress.hidden = true;
     el.comStatus.hidden = true;
     el.comFileStatus.hidden = true;
+    el.comEta.hidden = true;
     el.comSource.value = '';
     selectedLocalFile = null;
     el.comFileName.textContent = '';
+    setupComPreview(null);
 
     try {
       const data = await request('/api/commentary/list');
@@ -1728,6 +1793,69 @@
       def.value = ''; def.textContent = '无法读取媒体库';
       el.comSource.appendChild(def);
     }
+  };
+
+  // ---- 预览与裁剪逻辑 ----
+  const releaseComPreview = () => {
+    if (comPreviewUrl && comPreviewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(comPreviewUrl);
+    }
+    comPreviewUrl = null;
+  };
+
+  const setupComPreview = (url) => {
+    if (!url) {
+      el.comTrimCard.hidden = true;
+      releaseComPreview();
+      comTrimStart = 0;
+      comTrimEnd = 0;
+      comPreviewDuration = 0;
+      return;
+    }
+    releaseComPreview();
+    comPreviewUrl = url;
+    el.comTrimCard.hidden = false;
+    el.comPreview.src = url;
+    el.comPreview.load();
+    el.comPreview.onloadedmetadata = () => {
+      comPreviewDuration = el.comPreview.duration || 0;
+      el.comTrimStartRange.max = String(comPreviewDuration || 100);
+      el.comTrimEndRange.max = String(comPreviewDuration || 100);
+      resetTrim();
+    };
+    el.comPreview.onerror = () => { el.comTrimCard.hidden = true; };
+  };
+
+  const resetTrim = () => {
+    comTrimStart = 0;
+    comTrimEnd = comPreviewDuration || 0;
+    syncTrimInputs();
+  };
+
+  const syncTrimInputs = () => {
+    el.comTrimStartRange.value = String(comTrimStart);
+    el.comTrimEndRange.value = String(comTrimEnd);
+    el.comTrimStart.value = formatHMS(comTrimStart);
+    el.comTrimEnd.value = formatHMS(comTrimEnd);
+    updateTrimDurationText();
+  };
+
+  const updateTrimDurationText = () => {
+    const dur = Math.max(0, comTrimEnd - comTrimStart);
+    el.comTrimDuration.textContent = `裁剪后时长：${formatDuration(dur) || '0s'}`;
+  };
+
+  const clampTrim = () => {
+    const total = comPreviewDuration || 0;
+    let s = Math.max(0, Math.min(comTrimStart, total));
+    let e = Math.max(0, Math.min(comTrimEnd, total));
+    if (e <= s) {
+      if (s >= total) s = Math.max(0, total - 0.5);
+      e = Math.min(total, s + 0.5);
+    }
+    comTrimStart = s;
+    comTrimEnd = e;
+    syncTrimInputs();
   };
 
   const createComCard = (it, gallery = false) => {
@@ -1847,6 +1975,9 @@
       selectedLocalFile = null;
       el.comFileName.textContent = '';
       el.comFileStatus.hidden = true;
+      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`);
+    } else {
+      setupComPreview(null);
     }
   });
 
@@ -1861,6 +1992,7 @@
     el.comFileName.textContent = file.name;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
+    setupComPreview(URL.createObjectURL(file));
   };
   el.comFileBtn.addEventListener('click', () => el.comFileInput.click());
   el.comFileInput.addEventListener('change', () => {
@@ -1883,6 +2015,49 @@
     const file = e.dataTransfer.files[0];
     if (file) setLocalFile(file);
   });
+
+  // 裁剪控件事件
+  el.comTrimStartRange.addEventListener('input', () => {
+    comTrimStart = parseFloat(el.comTrimStartRange.value) || 0;
+    if (comTrimStart > comTrimEnd) comTrimStart = comTrimEnd;
+    syncTrimInputs();
+  });
+  el.comTrimEndRange.addEventListener('input', () => {
+    comTrimEnd = parseFloat(el.comTrimEndRange.value) || 0;
+    if (comTrimEnd < comTrimStart) comTrimEnd = comTrimStart;
+    syncTrimInputs();
+  });
+  el.comTrimStart.addEventListener('change', () => {
+    comTrimStart = Math.max(0, parseHMS(el.comTrimStart.value));
+    clampTrim();
+  });
+  el.comTrimEnd.addEventListener('change', () => {
+    comTrimEnd = parseHMS(el.comTrimEnd.value);
+    clampTrim();
+  });
+  el.comTrimSetStart.addEventListener('click', () => {
+    comTrimStart = Math.max(0, Math.min(el.comPreview.currentTime, comTrimEnd - 0.5));
+    syncTrimInputs();
+  });
+  el.comTrimSetEnd.addEventListener('click', () => {
+    comTrimEnd = Math.min(comPreviewDuration || el.comPreview.currentTime,
+                          Math.max(el.comPreview.currentTime, comTrimStart + 0.5));
+    syncTrimInputs();
+  });
+  el.comTrimPreview.addEventListener('click', () => {
+    if (!comPreviewDuration) return;
+    el.comPreview.currentTime = comTrimStart;
+    const stopAt = comTrimEnd;
+    const onTime = () => {
+      if (el.comPreview.currentTime >= stopAt) {
+        el.comPreview.pause();
+        el.comPreview.removeEventListener('timeupdate', onTime);
+      }
+    };
+    el.comPreview.addEventListener('timeupdate', onTime);
+    el.comPreview.play().catch(() => {});
+  });
+  el.comTrimReset.addEventListener('click', resetTrim);
 
   el.comRefresh.addEventListener('click', loadCommentary);
 

@@ -303,6 +303,33 @@
       </div>
     </div>
 
+    <!-- 预览与裁剪：选好源视频后出现，可手动选起止时间裁剪 -->
+    <div class="com-trim-card" id="comTrimCard" hidden>
+      <div class="com-trim-head">
+        <h3>✂️ 预览与裁剪</h3>
+        <span class="com-trim-dur" id="comTrimDuration">裁剪后时长：--</span>
+      </div>
+      <video id="comPreview" class="com-preview" controls preload="metadata"></video>
+      <div class="com-trim-timeline">
+        <label class="com-trim-field">
+          <span class="com-trim-label">起点</span>
+          <input type="range" id="comTrimStartRange" class="com-range" min="0" max="100" step="0.1" value="0" />
+          <input type="text" id="comTrimStart" class="com-time-input" value="00:00:00" inputmode="numeric" />
+        </label>
+        <label class="com-trim-field">
+          <span class="com-trim-label">终点</span>
+          <input type="range" id="comTrimEndRange" class="com-range" min="0" max="100" step="0.1" value="100" />
+          <input type="text" id="comTrimEnd" class="com-time-input" value="00:00:00" inputmode="numeric" />
+        </label>
+      </div>
+      <div class="com-trim-actions">
+        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetStart">↩ 用播放位置设起点</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetEnd">↪ 用播放位置设终点</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="comTrimPreview">▶ 预览裁剪片段</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset">重置为整段</button>
+      </div>
+    </div>
+
     <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
       <button type="button" class="btn btn-secondary com-generate-main" id="comGenerateDirect">一键生成成片</button>
@@ -312,6 +339,7 @@
       <div class="com-progress-head">
         <span id="comPhase" class="com-phase-tag">转写中</span>
         <span id="comPercent" class="com-percent">0%</span>
+        <span id="comEta" class="com-eta" hidden></span>
       </div>
       <div class="com-progress-bar">
         <div id="comBarFill" class="com-bar-fill" style="width:0%"></div>
