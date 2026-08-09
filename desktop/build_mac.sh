@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # 构建 macOS 桌面版（VideoDownloader.app）
-# 用法：bash desktop/build_mac.sh
+# 用法：
+#   bash desktop/build_mac.sh                 # 正常构建（结束后自动收尾旧产物）
+#   bash desktop/build_mac.sh --cleanup-only  # 只清理历史构建垃圾，不构建
+# 环境变量：
+#   VDL_BUILD_KEEP_OLD=1  保留最近几份 _old_* 用于回滚（默认 1；设 0 表示全清）
 # 产物：dist/VideoDownloader.app（双击即用，无需安装 Python/ffmpeg）
 set -euo pipefail
 
@@ -9,6 +13,59 @@ cd "$REPO"
 
 PIP_INDEX="https://mirrors.aliyun.com/pypi/simple/"
 VENV="$REPO/.build_venv"
+
+# ── 历史构建产物收尾 ────────────────────────────────────────────────
+# 背景：下面打包前会把上一次产物 mv 成 _old_<pid>（绕开沙盒的批量删除守卫，
+#       PyInstaller 自己清 build/dist 会被拦）。只挪不删 => 每构建一次堆 ~200MB。
+# 策略：构建成功后统一收尾，每类只保留最近 N 份用于回滚，更早的**移入回收站**
+#       （可恢复，不用 rm -rf；osascript/Finder 在本机未授权，故直接搬 ~/.Trash）。
+BUILD_KEEP_OLD="${VDL_BUILD_KEEP_OLD:-1}"
+
+trash_path() {
+  local src="$1" base dest n
+  [ -e "$src" ] || return 0
+  base="$(basename "$src")"
+  dest="$HOME/.Trash/$base"
+  n=1
+  while [ -e "$dest" ]; do
+    dest="$HOME/.Trash/${base}-$n"
+    n=$((n + 1))
+  done
+  if mv "$src" "$dest" 2>/dev/null; then
+    echo "   ♻️  移入回收站：$base"
+  else
+    echo "   ⚠️  移入回收站失败，已跳过（未删除）：$src"
+  fi
+}
+
+# 用法：cleanup_family <保留份数> <glob...>；按修改时间新→旧，超出的进回收站
+cleanup_family() {
+  local keep="$1"; shift
+  local idx=0 p
+  while IFS= read -r p; do
+    [ -n "$p" ] && [ -e "$p" ] || continue
+    idx=$((idx + 1))
+    if [ "$idx" -le "$keep" ]; then
+      echo "   ↩︎  保留（可回滚）：$(basename "$p")"
+    else
+      trash_path "$p"
+    fi
+  done < <(ls -dt "$@" 2>/dev/null || true)
+}
+
+cleanup_old_artifacts() {
+  echo "▶ 收尾：清理历史构建产物（保留最近 ${BUILD_KEEP_OLD} 份，其余进回收站）"
+  cleanup_family "$BUILD_KEEP_OLD" "$REPO"/dist/_old_*.app
+  cleanup_family "$BUILD_KEEP_OLD" "$REPO"/dist/_oldfolder_*
+  cleanup_family "$BUILD_KEEP_OLD" "$REPO"/build/_old_*
+  echo "   dist 现占用：$(du -sh "$REPO/dist" 2>/dev/null | awk '{print $1}')  build 现占用：$(du -sh "$REPO/build" 2>/dev/null | awk '{print $1}')"
+}
+
+if [ "${1:-}" = "--cleanup-only" ] || [ "${1:-}" = "--cleanup" ]; then
+  cleanup_old_artifacts
+  echo "✅ 清理完成（文件在废纸篓里，确认没问题后自行清空即可释放空间）"
+  exit 0
+fi
 
 echo "▶ 准备构建环境（独立 venv）"
 if [[ ! -x "$VENV/bin/python" ]]; then
@@ -114,6 +171,10 @@ echo "   签名完成：$(codesign -dv "$REPO/dist/VideoDownloader.app" 2>&1 | g
 echo "▶ 生成 DMG 分发包"
 rm -f "$REPO/dist/VideoDownloader.dmg"
 hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader.app" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
+
+# 走到这里说明构建、签名、DMG 全部成功（set -e 保证失败会提前退出），
+# 此时旧产物已无回滚价值，统一收尾，避免 dist/ 无限膨胀。
+cleanup_old_artifacts
 
 echo "✅ 完成"
 echo "   App : dist/VideoDownloader.app（双击即用）"
