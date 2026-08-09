@@ -226,7 +226,14 @@ COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstr
 COMMENTARY_TOKEN = os.environ.get("VDL_COMMENTARY_TOKEN", "").strip()  # 与 worker 的 WORKER_TOKEN 对应
 _HERE = Path(__file__).resolve().parent
 _COMMENTARY_OUT_RAW = os.environ.get("VDL_COMMENTARY_LOCAL_OUTPUT", "").strip()
-COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW) if _COMMENTARY_OUT_RAW else (_HERE.parent / "commentary_out")
+if _COMMENTARY_OUT_RAW:
+    COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW)
+elif getattr(sys, "frozen", False):
+    # 打包后 _HERE 位于 .app 包内部，若沿用会把上传的大视频写进 /Applications/*.app，
+    # 导致替换 app 即丢数据、包体积暴涨、破坏代码签名。一律落到用户目录。
+    COMMENTARY_LOCAL_OUTPUT = Path.home() / ".video-downloader" / "commentary_out"
+else:
+    COMMENTARY_LOCAL_OUTPUT = _HERE.parent / "commentary_out"
 COMMENTARY_LOCAL_OUTPUT.mkdir(parents=True, exist_ok=True)
 COMMENTARY_WORK_DIR = COMMENTARY_LOCAL_OUTPUT / "work"
 COMMENTARY_WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -856,13 +863,22 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 job = commentary_jobs[job_id]
                 _ensure_commentary_steps(job)
                 now = time.time()
+                # --script-only 只跑到「生成 AI 解说词」为止：配音/渲染尚未执行，
+                # 绝不能标 done（否则 UI 全绿、用户误以为成片已生成）。
+                _DONE_IN_SCRIPT_ONLY = ("准备输入文件", "转写视频语音", "生成 AI 解说词")
                 for s in job["steps"]:
-                    if s["name"] in ("生成 AI 解说词", "完成"):
+                    if s["name"] in _DONE_IN_SCRIPT_ONLY:
                         s["status"] = "done"
                         s["updated_at"] = now
-                    elif s["status"] in ("pending", "running"):
-                        s["status"] = "done"
+                    elif s["name"] in ("合成 AI 配音", "渲染成片"):
+                        s["status"] = "pending"
+                        s["detail"] = "等待脚本审核通过后执行"
                         s["updated_at"] = now
+                    elif s["name"] == "完成":
+                        s["status"] = "pending"
+                        s["detail"] = "解说词已生成，请先审核脚本再渲染成片"
+                        s["updated_at"] = now
+                _commentary_log(job, "解说词已生成，等待人工审核后再渲染成片")
                 job.update(status="script_ready", script_path=str(script_path), output_path="")
         else:
             # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
