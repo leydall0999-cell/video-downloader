@@ -210,6 +210,8 @@
     commentaryView: $('commentaryView'),
     comGrid: $('comGrid'),
     comEmpty: $('comEmpty'),
+    comHistory: $('comHistory'),
+    comHistoryCount: $('comHistoryCount'),
     comSource: $('comSource'),
     comGenerate: $('comGenerate'),
     comGenerateScript: $('comGenerateScript'),
@@ -1628,9 +1630,11 @@
       const items = data.items || [];
       el.comGrid.replaceChildren();
       el.comEmpty.hidden = items.length > 0;
+      el.comHistory.hidden = items.length === 0;
       if (items.length === 0) {
         el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
       } else {
+        el.comHistoryCount.textContent = `${items.length} 个`;
         items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
       }
     } catch (e) {

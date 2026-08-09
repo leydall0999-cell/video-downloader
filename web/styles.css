@@ -988,6 +988,27 @@ img { max-width: 100%; display: block; }
   text-align: center; color: var(--text-mute); padding: 2rem 1rem;
   background: var(--surface); border-radius: var(--radius-md); border: 1px dashed var(--line);
 }
+.com-history {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+}
+.com-history-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: .85rem; padding-bottom: .65rem;
+  border-bottom: 1px solid var(--line);
+}
+.com-history-head h3 {
+  margin: 0; font-size: 1rem; color: var(--text);
+  display: flex; align-items: center; gap: .35rem;
+}
+.com-history-count {
+  font-size: .75rem; color: var(--text-mute);
+  background: var(--bg-soft, #f3f4f6); padding: .15rem .5rem; border-radius: 999px;
+}
 .com-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem;
 }
