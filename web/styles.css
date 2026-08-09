@@ -1132,6 +1132,14 @@ img { max-width: 100%; display: block; }
 .com-generate-row .com-generate-main {
   flex: 1; padding: .85rem; font-size: 1.05rem; font-weight: 700;
 }
+.com-highlights-toggle {
+  display: flex; align-items: flex-start; gap: .5rem; margin-top: .75rem;
+  padding: .6rem .75rem; background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: var(--radius-md); cursor: pointer; font-size: .9rem; line-height: 1.4;
+}
+.com-highlights-toggle input { margin-top: .2rem; width: 1.05rem; height: 1.05rem; accent-color: var(--accent); flex: none; }
+.com-highlights-toggle b { color: var(--accent); }
 
 /* ---- 脚本审核编辑面板 ---- */
 #comScriptPanel {

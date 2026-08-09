@@ -830,7 +830,7 @@ def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
         job["eta_done_at"] = int(now + rem)
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0) -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, highlights: bool = False) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -838,7 +838,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
     HTTP 模式(VDL_COMMENTARY_MODE=http)下转发给独立 worker 服务。
     """
     if COMMENTARY_MODE == "http":
-        return _commentary_run_http(job_id, src_path, vertical, voice)
+        return _commentary_run_http(job_id, src_path, vertical, voice, highlights)
     try:
         # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
         if not COMMENTARY_RT.ready():
@@ -876,10 +876,13 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args.append("--vertical")
             if voice:
                 args += ["--voice", voice]
+            # edit_only 走已审核脚本，高光/全片由脚本自带 mode 字段决定，无需重复传参
         else:
             args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--auto"]
             if vertical:
                 args.append("--vertical")
+            if highlights:
+                args.append("--highlights")
             if voice:
                 args += ["--voice", voice]
             if script_only:
@@ -994,7 +997,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         logger.exception("解说任务 %s 失败", job_id)
 
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, highlights: bool = False) -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
@@ -1039,7 +1042,8 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str)
             resp = requests.post(
                 f"{endpoint}/render",
                 files={"video": (f"{job_id}.mp4", fh, "video/mp4")},
-                data={"vertical": "true" if vertical else "false", "voice": voice},
+                data={"vertical": "true" if vertical else "false", "voice": voice,
+                      "highlights": "true" if highlights else "false"},
                 headers=headers,
                 timeout=600,
             )
@@ -1632,6 +1636,7 @@ class CommentaryRequest(BaseModel):
     voice: str = Field(default="", max_length=64)
     trim_start: float = Field(default=0.0, ge=0.0)
     trim_end: float = Field(default=0.0, ge=0.0)
+    highlights: bool = Field(default=False, description="高光解说模式：仅解说精彩片段，全片保留")
 
 
 class ScriptUpdateRequest(BaseModel):
@@ -1659,7 +1664,8 @@ def create_commentary(payload: CommentaryRequest) -> dict:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
-                    trim_start=payload.trim_start, trim_end=payload.trim_end)
+                    trim_start=payload.trim_start, trim_end=payload.trim_end,
+                    highlights=payload.highlights)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1670,6 +1676,7 @@ def create_commentary_upload(
     voice: str = Form(""),
     trim_start: float = Form(0.0),
     trim_end: float = Form(0.0),
+    highlights: bool = Form(False),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
     if not COMMENTARY_ENABLED:
@@ -1692,7 +1699,7 @@ def create_commentary_upload(
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE,
-                    trim_start=trim_start, trim_end=trim_end)
+                    trim_start=trim_start, trim_end=trim_end, highlights=highlights)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1703,6 +1710,7 @@ def create_script_only_upload(
     voice: str = Form(""),
     trim_start: float = Form(0.0),
     trim_end: float = Form(0.0),
+    highlights: bool = Form(False),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
     if not COMMENTARY_ENABLED:
@@ -1727,7 +1735,7 @@ def create_script_only_upload(
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE, script_only=True,
-                    trim_start=trim_start, trim_end=trim_end)
+                    trim_start=trim_start, trim_end=trim_end, highlights=highlights)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1910,7 +1918,8 @@ def create_script_only(payload: CommentaryRequest) -> dict:
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "", "progress": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
-                    script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end)
+                    script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end,
+                    highlights=payload.highlights)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1970,6 +1979,8 @@ def update_script(job_id: str, payload: ScriptUpdateRequest) -> dict:
         "title": payload.title or existing.get("title", ""),
         "voice": payload.voice or existing.get("voice", job.get("voice", "")),
         "segments": merged,
+        # 保留原始 mode（如高光解说模式），否则保存后再渲染会丢失高光标记
+        "mode": existing.get("mode", ""),
     }
     try:
         script_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
