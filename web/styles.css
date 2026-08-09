@@ -1141,6 +1141,16 @@ img { max-width: 100%; display: block; }
 .com-highlights-toggle input { margin-top: .2rem; width: 1.05rem; height: 1.05rem; accent-color: var(--accent); flex: none; }
 .com-highlights-toggle b { color: var(--accent); }
 
+.com-mode-group {
+  display: flex; flex-direction: column; gap: .45rem; margin-top: .75rem;
+  padding: .6rem .75rem; background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: var(--radius-md);
+}
+.com-mode-option { display: flex; align-items: flex-start; gap: .5rem; font-size: .9rem; line-height: 1.4; cursor: pointer; }
+.com-mode-option input { margin-top: .2rem; width: 1rem; height: 1rem; accent-color: var(--accent); flex: none; }
+.com-mode-option b { color: var(--accent); }
+
 /* ---- 脚本审核编辑面板 ---- */
 #comScriptPanel {
   margin-top: 1.25rem; padding: 1rem; background: var(--surface);

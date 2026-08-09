@@ -232,7 +232,7 @@
     comPercent: $('comPercent'),
     comBarFill: $('comBarFill'),
     comStatus: $('comStatus'),
-    comHighlights: $('comHighlights'),
+    comModeGroup: $('comModeGroup'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
     comLogs: $('comLogs'),
@@ -1245,6 +1245,12 @@
   };
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
+  // 读取当前选中的解说模式（选择一/二/三）
+  const comCurrentMode = () => {
+    const r = document.querySelector('input[name="comMode"]:checked');
+    return r ? r.value : 'highlights';
+  };
+
   const createCommentary = async (source, refs, base = '', onCompleted = null) => {
     if (refs.commentary) {
       refs.commentary.disabled = true;
@@ -1254,8 +1260,8 @@
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
     try {
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, highlights: el.comHighlights.checked }
-        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, highlights: el.comHighlights.checked };
+        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() }
+        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() };
       const { job_id } = await request('/api/commentary', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -1284,7 +1290,7 @@
       form.append('vertical', 'false');
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
-      form.append('highlights', el.comHighlights.checked ? 'true' : 'false');
+      form.append('mode', comCurrentMode());
       const { job_id } = await request('/api/commentary/upload', { method: 'POST', body: form });
       pollCommentaryJob(job_id, refs, '', onCompleted);
     } catch (err) {
@@ -1310,8 +1316,8 @@
     el.comStatus.textContent = '正在转写并生成AI解说词（不渲染成片），长视频可能需数分钟…';
     try {
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, highlights: el.comHighlights.checked }
-        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, highlights: el.comHighlights.checked };
+        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() }
+        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST', body: JSON.stringify(body),
       });
@@ -1339,7 +1345,7 @@
       form.append('vertical', 'false');
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
-      form.append('highlights', el.comHighlights.checked ? 'true' : 'false');
+      form.append('mode', comCurrentMode());
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);

@@ -330,10 +330,20 @@
       </div>
     </div>
 
-    <label class="com-highlights-toggle" title="AI 自动挑选视频里的精彩高光时刻，只对那些时刻写深入发挥性解说；非高光片段保持原片原声、不叠加解说。生成脚本后仍可在审核面板手动增删微调。">
-      <input type="checkbox" id="comHighlights" checked />
-      <span>🎯 <b>高光解说模式</b>：AI 自动挑选精彩片段，全片保留、仅高光处加解说</span>
-    </label>
+    <div class="com-mode-group" id="comModeGroup">
+      <div class="com-mode-option">
+        <input type="radio" name="comMode" id="comMode1" value="highlights" checked />
+        <label for="comMode1"><b>选择一</b>：全片保留，仅高光处叠加深度解说（间隙原声、无解说无字幕）</label>
+      </div>
+      <div class="com-mode-option">
+        <input type="radio" name="comMode" id="comMode2" value="highlights_intro" />
+        <label for="comMode2"><b>选择二</b>：高光解说 + 跳过片头片尾平淡处（≤全片 20%）+ 开头插入精彩片段钩子</label>
+      </div>
+      <div class="com-mode-option">
+        <input type="radio" name="comMode" id="comMode3" value="full_web" />
+        <label for="comMode3"><b>选择三</b>：全片解说 + 联网自由发挥 + 单行字幕 + 羽化原字幕（画面不羽化）</label>
+      </div>
+    </div>
 
     <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
