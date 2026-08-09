@@ -16,10 +16,12 @@ from pathlib import Path
 from typing import Literal
 
 TaskStatus = Literal["pending", "downloading", "merging", "completed", "failed", "canceled"]
+StepStatus = Literal["pending", "running", "done", "error"]
 
 TASK_TTL_SECONDS = 60 * 60  # 成品文件保留 1 小时
 TASK_ID_LENGTH = 16
 TASK_DIR_PATTERN = re.compile(rf"^[0-9a-f]{{{TASK_ID_LENGTH}}}$")
+_MAX_LOG_LINES = 200
 
 
 @dataclass
@@ -44,10 +46,44 @@ class DownloadTask:
     cancel_requested: bool = False
     workdir: Path | None = None
     filepath: Path | None = None
+    # 过程展示：结构化步骤 + 文本日志
+    steps: list[dict] = field(default_factory=list)
+    logs: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        # 初始任务自动带有"排队等待"步骤，让前端过程面板一创建就有东西展示
+        if not self.steps:
+            self.add_step("排队等待", "pending")
 
     @property
     def is_finished(self) -> bool:
         return self.status in ("completed", "failed", "canceled")
+
+    def add_step(self, name: str, status: StepStatus = "running", detail: str = "") -> None:
+        """记录/更新一个执行步骤。同名步骤会覆盖状态，避免列表无限膨胀。"""
+        now = time.time()
+        for step in self.steps:
+            if step.get("name") == name:
+                step["status"] = status
+                step["detail"] = detail
+                step["updated_at"] = now
+                return
+        self.steps.append({
+            "name": name,
+            "status": status,
+            "detail": detail,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+    def log(self, line: str) -> None:
+        """追加一行带时间戳的运行日志，限制最大行数防止内存泄漏。"""
+        if not line:
+            return
+        ts = time.strftime("%H:%M:%S", time.localtime())
+        self.logs.append(f"{ts}  {line.strip()}")
+        if len(self.logs) > _MAX_LOG_LINES:
+            self.logs[:] = self.logs[-_MAX_LOG_LINES:]
 
     def to_public_dict(self) -> dict:
         return {
@@ -65,6 +101,8 @@ class DownloadTask:
             "filesize": self.filesize,
             "error": self.error,
             "hint": self.hint,
+            "steps": self.steps,
+            "logs": self.logs,
         }
 
 
@@ -111,6 +149,7 @@ class TaskStore:
             if task.status == "pending":
                 task.status = "canceled"
                 task.error = "已取消下载"
+                task.add_step("排队等待", "error", "用户已取消")
             return True
 
     def clear_files(self, task_id: str) -> None:

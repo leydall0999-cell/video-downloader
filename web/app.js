@@ -14,6 +14,16 @@
   const ACTIVE_STATES = ['pending', 'downloading', 'merging'];
   const POLL_FALLBACK_MS = 1500;
 
+  /** 时间格式化 (mm:ss.s) —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
+  const fmtTs = (t) => {
+    const m = Math.floor(t / 60);
+    const s = (t % 60).toFixed(1);
+    return `${m}:${s.padStart(4, '0')}`;
+  };
+  /** HTML 转义 —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
+  const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
   const $ = (id) => document.getElementById(id);
   const el = {
     form: $('resolveForm'),
@@ -202,11 +212,24 @@
     comEmpty: $('comEmpty'),
     comSource: $('comSource'),
     comGenerate: $('comGenerate'),
+    comGenerateScript: $('comGenerateScript'),
+    comGenerateDirect: $('comGenerateDirect'),
+    comScriptPanel: $('comScriptPanel'),
+    comScriptVoice: $('comScriptVoice'),
+    comScriptVoicePreview: $('comScriptVoicePreview'),
+    comScriptSegments: $('comScriptSegments'),
+    comScriptSave: $('comScriptSave'),
+    comScriptRender: $('comScriptRender'),
+    comScriptStatus: $('comScriptStatus'),
+    comScriptPrevAll: $('comScriptPrevAll'),
     comProgress: $('comProgress'),
     comPhase: $('comPhase'),
     comPercent: $('comPercent'),
     comBarFill: $('comBarFill'),
     comStatus: $('comStatus'),
+    comStepsPanel: $('comStepsPanel'),
+    comStepsList: $('comStepsList'),
+    comLogs: $('comLogs'),
     comRefresh: $('comRefresh'),
     comEnvStatus: $('comEnvStatus'),
     comFileInput: $('comFileInput'),
@@ -581,10 +604,23 @@
       cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
+      stepsBox: node.querySelector('[data-steps-box]'),
+      stepsToggle: node.querySelector('[data-steps-toggle]'),
+      stepsToggleLabel: node.querySelector('.task-steps-toggle-label'),
+      stepsChevron: node.querySelector('[data-steps-chevron]'),
+      stepsPanel: node.querySelector('[data-steps-panel]'),
+      stepsList: node.querySelector('[data-steps-list]'),
+      logs: node.querySelector('[data-logs]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
+    refs.stepsToggle.addEventListener('click', () => {
+      const hidden = refs.stepsPanel.hidden;
+      refs.stepsPanel.hidden = !hidden;
+      refs.stepsChevron.textContent = hidden ? '▼' : '▶';
+      refs.stepsToggleLabel.textContent = hidden ? '收起过程' : '查看过程';
+    });
     refs.title.textContent = meta.title;
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
@@ -614,7 +650,17 @@
     // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
     refs.del.hidden = active;
 
-    if (task.status !== 'completed') return;
+    // 刷新过程时间线（步骤 + 日志）：进行中/失败时自动展开
+    renderTaskSteps(refs, task);
+
+    // 任务离开完成态后，必须隐藏完成态专属入口，避免重试/失败后仍显示转换/保存/存网盘
+    if (task.status !== 'completed') {
+      refs.save.hidden = true;
+      refs.saveHint.hidden = true;
+      refs.convertWrap.hidden = true;
+      refs.cloud.hidden = true;
+      return;
+    }
     refs.save.hidden = false;
     // 任务在哪个节点跑，文件就从哪个节点取
     refs.save.href = `${refs.base || ''}/api/tasks/${task.task_id}/file`;
@@ -648,6 +694,47 @@
     }
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
+  };
+
+  const renderTaskSteps = (refs, task) => {
+    const steps = Array.isArray(task.steps) ? task.steps : [];
+    const logs = Array.isArray(task.logs) ? task.logs : [];
+    const hasSteps = steps.length > 0;
+    if (refs.stepsBox) refs.stepsBox.hidden = !hasSteps;
+    if (!hasSteps || !refs.stepsList) return;
+
+    const activeStatus = ['pending', 'downloading', 'merging', 'running', 'failed'];
+    const autoOpen = activeStatus.includes(task.status);
+    if (autoOpen && refs.stepsPanel && refs.stepsPanel.hidden) {
+      refs.stepsPanel.hidden = false;
+      if (refs.stepsChevron) refs.stepsChevron.textContent = '▼';
+      if (refs.stepsToggleLabel) refs.stepsToggleLabel.textContent = '收起过程';
+    }
+
+    refs.stepsList.innerHTML = steps.map((s) => {
+      const statusClass = s.status === 'running' ? 'task-step--running' :
+                          s.status === 'done' ? 'task-step--done' :
+                          s.status === 'error' ? 'task-step--error' : 'task-step--pending';
+      const icon = s.status === 'running' ? '●' :
+                   s.status === 'done' ? '✓' :
+                   s.status === 'error' ? '✕' : '○';
+      const detail = s.detail ? `<span class="task-step-detail">${escHtml(String(s.detail))}</span>` : '';
+      return `<div class="task-step ${statusClass}">
+        <span class="task-step-dot">${icon}</span>
+        <div class="task-step-body">
+          <span class="task-step-name">${escHtml(s.name)}</span>
+          ${detail}
+        </div>
+      </div>`;
+    }).join('');
+
+    if (refs.logs) {
+      refs.logs.textContent = logs.slice(-30).join('\n');
+      const logsWrap = refs.logs.parentElement;
+      if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
+        logsWrap.open = logs.length > 0 && (task.status === 'failed' || logs.length > 3);
+      }
+    }
   };
 
   /** 对已完成的任务发起格式转换，轮询直到出片。 */
@@ -982,6 +1069,11 @@
     const poll = setInterval(async () => {
       try {
         const st = await request(`/api/commentary/${job_id}`, {}, base);
+        // 优先用后端返回的结构化步骤时间线
+        const hasSteps = Array.isArray(st.steps) && st.steps.length > 0;
+        if (hasSteps) {
+          renderComSteps(st);
+        }
         if (st.status === 'completed') {
           clearInterval(poll);
           refs.commentaryStatus.textContent = '解说成片已生成';
@@ -989,6 +1081,7 @@
           refs.commentaryFile.setAttribute('download', '解说成片.mp4');
           refs.commentaryFile.hidden = false;
           if (refs.commentary) refs.commentary.hidden = true;
+          el.comProgress.hidden = true;
           if (typeof onCompleted === 'function') onCompleted();
         } else if (st.status === 'failed') {
           clearInterval(poll);
@@ -997,57 +1090,94 @@
             refs.commentary.disabled = false;
             refs.commentary.textContent = '重试生成解说';
           }
-        } else if (st.status === 'running') {
-          // 实时把进程最新输出追加到状态文本
-          const progress = Array.isArray(st.progress) ? st.progress : [];
-          if (progress.length > shownProgress) {
-            const newLines = progress.slice(shownProgress).join('\n');
-            shownProgress = progress.length;
-            const prev = refs.commentaryStatus.textContent || '';
-            refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + newLines;
-          }
-          // 解析进度：阶段名 + 百分比
-          let phase = '处理中', pct = 0;
-          const all = progress.join('\n');
-          // 阶段检测
-          if (/===.*(?:转写|transcribe)/i.test(all)) phase = '转写中';
-          else if (/自动解说词|解说词草稿|LLM.*生成/i.test(all)) phase = '生成解说词';
-          else if (/开始批量生成旁白|旁白生成/i.test(all)) phase = '生成旁白中';
-          else if (/开始并行渲染|✓\s*\[/i.test(all)) phase = '渲染中';
-          else if (/拼接成片/i.test(all)) phase = '拼接中';
-          else if (/✅|🎬.*全部完成/i.test(all)) phase = '完成';
-          // 百分比：优先取 "✓ [N/M]" 渲染进度
-          const match = all.match(/✓\s*\[(\d+)\s*\/\s*(\d+)\]/g);
-          if (match) {
-            const last = match[match.length - 1];
-            const m2 = last.match(/(\d+)\s*\/\s*(\d+)/);
-            if (m2) pct = Math.round((+m2[1] / +m2[2]) * 100);
-          } else if (/转写完成/.test(all)) {
-            pct = 30;
-          } else if (/旁白生成完成/.test(all)) {
-            const ppm = all.match(/旁白生成完成\s*[（(]\s*(\d+)\s*\/\s*(\d+)/);
-            if (ppm) pct = Math.round((+ppm[1] / +ppm[2]) * 30 + 35);
-            else pct = 50;
-          } else if (/拼接成片/.test(all)) {
-            pct = 95;
-          } else if (/✅|🎬/.test(all)) {
-            pct = 100;
-          }
-          // 更新进度条
-          el.comProgress.hidden = false;
-          el.comPhase.textContent = phase;
-          el.comPercent.textContent = pct + '%';
-          el.comBarFill.style.width = pct + '%';
-          if (pct >= 100) el.comBarFill.style.background = 'var(--success)';
-        }
-        // 完成/失败时隐藏进度条，保留日志文本
-        if (st.status === 'completed' || st.status === 'failed') {
           el.comProgress.hidden = true;
+        } else if (st.status === 'running') {
+          // 实时把进程最新输出追加到状态文本（兼容无 steps 的旧后端）
+          if (!hasSteps) {
+            const progress = Array.isArray(st.progress) ? st.progress : [];
+            if (progress.length > shownProgress) {
+              const newLines = progress.slice(shownProgress).join('\n');
+              shownProgress = progress.length;
+              const prev = refs.commentaryStatus.textContent || '';
+              refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + newLines;
+            }
+          }
+          // 进度条：优先从 steps 计算，无 steps 时退回到日志解析
+          el.comProgress.hidden = false;
+          const phasePct = _deriveComPhasePct(st);
+          el.comPhase.textContent = phasePct.phase;
+          el.comPercent.textContent = phasePct.pct + '%';
+          el.comBarFill.style.width = phasePct.pct + '%';
+          if (phasePct.pct >= 100) el.comBarFill.style.background = 'var(--success)';
         }
       } catch {
         /* 静默重试，下一轮轮询补上 */
       }
     }, 2500);
+  };
+
+  const _deriveComPhasePct = (st) => {
+    const steps = Array.isArray(st.steps) ? st.steps : [];
+    if (steps.length > 0) {
+      const running = steps.find((s) => s.status === 'running');
+      const doneCount = steps.filter((s) => s.status === 'done').length;
+      const phase = running ? running.name : (doneCount >= steps.length - 1 ? '完成' : '等待中');
+      const pct = Math.round((doneCount / Math.max(steps.length - 1, 1)) * 100);
+      return { phase, pct: Math.min(pct, 99) };
+    }
+    // fallback：按日志文本推导
+    let phase = '处理中', pct = 0;
+    const all = (st.progress || []).join('\n');
+    if (/===.*(?:转写|transcribe)/i.test(all)) phase = '转写中';
+    else if (/自动解说词|解说词草稿|LLM.*生成/i.test(all)) phase = '生成解说词';
+    else if (/开始批量生成旁白|旁白生成/i.test(all)) phase = '生成旁白中';
+    else if (/开始并行渲染|✓\s*\[/i.test(all)) phase = '渲染中';
+    else if (/拼接成片/i.test(all)) phase = '拼接中';
+    else if (/✅|🎬.*全部完成/i.test(all)) phase = '完成';
+    const match = all.match(/✓\s*\[(\d+)\s*\/\s*(\d+)\]/g);
+    if (match) {
+      const last = match[match.length - 1];
+      const m2 = last.match(/(\d+)\s*\/\s*(\d+)/);
+      if (m2) pct = Math.round((+m2[1] / +m2[2]) * 100);
+    } else if (/转写完成/.test(all)) pct = 30;
+    else if (/旁白生成完成/.test(all)) {
+      const ppm = all.match(/旁白生成完成\s*[（(]\s*(\d+)\s*\/\s*(\d+)/);
+      if (ppm) pct = Math.round((+ppm[1] / +ppm[2]) * 30 + 35);
+      else pct = 50;
+    } else if (/拼接成片/.test(all)) pct = 95;
+    else if (/✅|🎬/.test(all)) pct = 100;
+    return { phase, pct };
+  };
+
+  const renderComSteps = (st) => {
+    const steps = Array.isArray(st.steps) ? st.steps : [];
+    const logs = Array.isArray(st.logs) ? st.logs : [];
+    if (steps.length === 0) {
+      el.comStepsPanel.hidden = true;
+      return;
+    }
+    el.comStepsPanel.hidden = false;
+    el.comStepsList.innerHTML = steps.map((s) => {
+      const statusClass = s.status === 'running' ? 'task-step--running' :
+                          s.status === 'done' ? 'task-step--done' :
+                          s.status === 'error' ? 'task-step--error' : 'task-step--pending';
+      const icon = s.status === 'running' ? '●' :
+                   s.status === 'done' ? '✓' :
+                   s.status === 'error' ? '✕' : '○';
+      const detail = s.detail ? `<span class="task-step-detail">${escHtml(String(s.detail))}</span>` : '';
+      return `<div class="task-step ${statusClass}">
+        <span class="task-step-dot">${icon}</span>
+        <div class="task-step-body">
+          <span class="task-step-name">${escHtml(s.name)}</span>
+          ${detail}
+        </div>
+      </div>`;
+    }).join('');
+    el.comLogs.textContent = logs.slice(-30).join('\n');
+    const logsWrap = el.comLogs.parentElement;
+    if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
+      logsWrap.open = logs.length > 0 && (st.status === 'failed' || logs.length > 3);
+    }
   };
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
@@ -1100,10 +1230,356 @@
     }
   };
 
+  // ---- 脚本审核模式 ----
+
+  /** 从媒体库创建脚本-only 任务 */
+  const createScriptOnly = async (source) => {
+    el.comGenerateScript.disabled = true;
+    el.comGenerateScript.textContent = '正在转写+生成解说词…';
+    el.comGenerateDirect.disabled = true;
+    el.comScriptPanel.hidden = true;
+    el.comScriptSegments.replaceChildren();
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '正在转写并生成AI解说词（不渲染成片），长视频可能需数分钟…';
+    try {
+      const body = source.taskId
+        ? { task_id: source.taskId, vertical: true }
+        : { file_id: source.fileId, vertical: true };
+      const { job_id } = await request('/api/commentary/script-only', {
+        method: 'POST', body: JSON.stringify(body),
+      });
+      currentScriptJobId = job_id;
+      pollScriptJob(job_id);
+    } catch (err) {
+      el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      el.comGenerateScript.disabled = false;
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateDirect.disabled = false;
+    }
+  };
+
+  /** 从本地文件创建脚本-only 任务 */
+  const createScriptOnlyFromFile = async (file) => {
+    el.comGenerateScript.disabled = true;
+    el.comGenerateScript.textContent = '正在上传+生成解说词…';
+    el.comGenerateDirect.disabled = true;
+    el.comScriptPanel.hidden = true;
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '正在上传视频并生成AI解说词（不渲染成片）…';
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('vertical', 'false');
+      const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
+      currentScriptJobId = job_id;
+      pollScriptJob(job_id);
+    } catch (err) {
+      el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      el.comGenerateScript.disabled = false;
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateDirect.disabled = false;
+    }
+  };
+
+  /** 轮询脚本-only 任务，拿到 script.json 后载入编辑面板 */
+  const pollScriptJob = (job_id) => {
+    el.comProgress.hidden = false;
+    el.comPhase.textContent = '转写+生成解说词';
+    el.comPercent.textContent = '...';
+    let shownProgress = 0;
+    const poll = setInterval(async () => {
+      try {
+        const st = await request(`/api/commentary/${job_id}`);
+        const hasSteps = Array.isArray(st.steps) && st.steps.length > 0;
+        if (hasSteps) {
+          renderComSteps(st);
+        }
+        if (st.status === 'script_ready') {
+          clearInterval(poll);
+          el.comProgress.hidden = true;
+          el.comStatus.textContent = 'AI 解说词已生成，请在下方审核修改后生成成片';
+          loadScriptToPanel(job_id);
+        } else if (st.status === 'failed') {
+          clearInterval(poll);
+          el.comProgress.hidden = true;
+          el.comStatus.textContent = `生成失败：${st.error || '未知错误'}`;
+          el.comGenerateScript.disabled = false;
+          el.comGenerateScript.textContent = '重试生成脚本';
+          el.comGenerateDirect.disabled = false;
+        } else if (st.status === 'running') {
+          if (!hasSteps) {
+            const progress = Array.isArray(st.progress) ? st.progress : [];
+            if (progress.length > shownProgress) {
+              shownProgress = progress.length;
+            }
+            const all = progress.join('\n');
+            let phase = '处理中', pct = 0;
+            if (/===.*(?:转写|transcribe)/i.test(all)) { phase = '转写中'; pct = 10; }
+            else if (/转写完成/.test(all)) { phase = '生成解说词中'; pct = 35; }
+            else if (/自动解说词|解说词草稿|LLM/.test(all)) { phase = 'AI 生成解说词中'; pct = 60; }
+            else if (/脚本已生成|✅/.test(all)) { phase = '脚本就绪'; pct = 100; }
+            el.comPhase.textContent = phase;
+            el.comPercent.textContent = pct + '%';
+            el.comBarFill.style.width = pct + '%';
+          } else {
+            const phasePct = _deriveComPhasePct(st);
+            el.comPhase.textContent = phasePct.phase;
+            el.comPercent.textContent = phasePct.pct + '%';
+            el.comBarFill.style.width = phasePct.pct + '%';
+          }
+        }
+      } catch {
+        /* 静默重试 */
+      }
+    }, 2500);
+  };
+
+  /** 加载脚本到编辑面板 */
+  const loadScriptToPanel = async (job_id) => {
+    try {
+      const data = await request(`/api/commentary/script/${job_id}`);
+      el.comScriptPanel.hidden = false;
+      el.comScriptSegments.replaceChildren();
+
+      // 初始化全局配音选择器
+      el.comScriptVoice.replaceChildren();
+      COM_VOICES.forEach((v) => {
+        const o = document.createElement('option');
+        o.value = v.value;
+        o.textContent = v.label;
+        if (v.value === (data.voice || 'zh-CN-XiaoxiaoNeural')) o.selected = true;
+        el.comScriptVoice.appendChild(o);
+      });
+
+      // 逐段渲染可编辑行
+      const segs = data.segments || [];
+      currentScriptSegments = segs;  // 保留原始时间戳+note，供 saveScript 合并
+      segs.forEach((seg, idx) => {
+        const row = document.createElement('div');
+        row.className = 'com-seg-row';
+        const dur = `${fmtTs(seg.start)} – ${fmtTs(seg.end)}`;
+        row.innerHTML = `<div class="com-seg-meta">
+          <span class="com-seg-idx">#${idx + 1}</span>
+          <span class="com-seg-time">${dur} (${(seg.end - seg.start).toFixed(1)}s)</span>
+          ${seg.note ? `<span class="com-seg-note">${escHtml(seg.note)}</span>` : ''}
+        </div>
+        <textarea class="adv-input com-seg-text" data-idx="${idx}" rows="3">${escHtml(seg.narration || '')}</textarea>`;
+        el.comScriptSegments.appendChild(row);
+      });
+
+      el.comScriptStatus.hidden = true;
+      el.comGenerateScript.textContent = '重新生成脚本';
+      el.comGenerateScript.disabled = false;
+      el.comGenerateDirect.disabled = false;
+
+      // 滚动到面板
+      el.comScriptPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = `加载脚本失败：${err.message}`;
+      el.comGenerateScript.disabled = false;
+      el.comGenerateScript.textContent = '重试生成脚本';
+      el.comGenerateDirect.disabled = false;
+    }
+  };
+
+  /** 保存人工修改后的脚本回写 server，保留原始时间戳和 note。 */
+  const saveScript = async () => {
+    if (!currentScriptJobId) return;
+    const orig = currentScriptSegments || [];
+    const segments = [];
+    const rows = el.comScriptSegments.querySelectorAll('.com-seg-row');
+    rows.forEach((row) => {
+      const ta = row.querySelector('.com-seg-text');
+      if (!ta) return;
+      const idx = parseInt(ta.dataset.idx, 10);
+      const narration = ta.value.trim();
+      if (!narration) return;
+      const oseg = (idx >= 0 && idx < orig.length) ? orig[idx] : null;
+      segments.push({
+        start: oseg ? oseg.start : 0,
+        end: oseg ? oseg.end : 0,
+        narration,
+        note: oseg ? (oseg.note || '') : '',
+      });
+    });
+    if (segments.length === 0) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = '至少保留一段解说词';
+      return;
+    }
+    el.comScriptStatus.hidden = false;
+    el.comScriptStatus.className = 'com-script-status';
+    el.comScriptStatus.textContent = '保存中…';
+    try {
+      await request(`/api/commentary/script/${currentScriptJobId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          segments,
+          voice: el.comScriptVoice.value,
+        }),
+      });
+      el.comScriptStatus.textContent = '已保存 ✓';
+      el.comScriptStatus.className = 'com-script-status com-script-ok';
+      setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
+    } catch (err) {
+      el.comScriptStatus.textContent = `保存失败：${err.message}`;
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+    }
+  };
+
+  /** 用已审核脚本渲染成片 */
+  const renderFromScript = async () => {
+    if (!currentScriptJobId) return;
+    el.comScriptRender.disabled = true;
+    el.comScriptRender.textContent = '渲染中…';
+    el.comScriptSave.disabled = true;
+    el.comProgress.hidden = false;
+    el.comPhase.textContent = '渲染成片';
+    el.comPercent.textContent = '0%';
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '正在用已审核脚本渲染成片…';
+    try {
+      const form = new FormData();
+      form.append('vertical', 'true');
+      form.append('voice', el.comScriptVoice.value);
+      const { job_id } = await request(`/api/commentary/render/${currentScriptJobId}`, {
+        method: 'POST', body: form,
+      });
+      pollCommentaryJob(job_id,
+        { commentary: el.comScriptRender, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        '',
+        () => {
+          loadCommentary();
+          el.comScriptPanel.hidden = true;
+          currentScriptJobId = null;
+        });
+    } catch (err) {
+      el.comStatus.textContent = `渲染启动失败：${err.message}`;
+      el.comScriptRender.disabled = false;
+      el.comScriptRender.textContent = '🎬 生成成片';
+      el.comScriptSave.disabled = false;
+    }
+  };
+
+  /** 用选中 voice 试听一句示例文本。复用同一 <audio> 元素，避免重复创建。 */
+  let _previewAudio = null;
+  const playAudio = (audioUrl) => {
+    if (!_previewAudio) {
+      _previewAudio = new Audio();
+      _previewAudio.addEventListener('ended', () => { /* 自然结束不重置按钮（按钮由调用方控制） */ });
+    }
+    _previewAudio.src = audioUrl + '?t=' + Date.now();  // 防缓存
+    return _previewAudio.play();
+  };
+
+  /** 试听：把当前 voice + 一句示例文本发到后端 edge-tts 生成 mp3 播放 */
+  const previewVoice = async () => {
+    if (!commentaryEnvReady) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.textContent = '解说环境未就绪，无法试听';
+      return;
+    }
+    const voice = el.comScriptVoice.value;
+    const originalText = el.comScriptVoicePreview.textContent;
+    el.comScriptVoicePreview.disabled = true;
+    el.comScriptVoicePreview.textContent = '⏳ 生成中…';
+    try {
+      const form = new FormData();
+      form.append('voice', voice);
+      form.append('text', '你好，我是视频解说员。我将为你解说这段视频。');
+      // request 不能直接拿 blob，但 /api/commentary/voice-preview 返回 mp3 二进制；
+      // 这里直接用 fetch 处理，方便放 audio 播放
+      const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.error || '生成失败');
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      await playAudio(url);
+      // 播放完释放 URL（如果还在放就先保留 30s）
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.className = 'com-script-status com-script-ok';
+      el.comScriptStatus.textContent = `✓ 已用 ${voice} 试听`;
+      setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
+    } catch (err) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = `试听失败：${err.message}`;
+    } finally {
+      el.comScriptVoicePreview.disabled = false;
+      el.comScriptVoicePreview.textContent = originalText;
+    }
+  };
+
+  /** 预览全部：把 script.json 前 3 段 narrations 用当前 voice 串成一段 mp3 播放 */
+  const previewAllSegments = async () => {
+    if (!currentScriptJobId) return;
+    if (!commentaryEnvReady) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.textContent = '解说环境未就绪，无法预览';
+      return;
+    }
+    const originalText = el.comScriptPrevAll.textContent;
+    el.comScriptPrevAll.disabled = true;
+    el.comScriptPrevAll.textContent = '⏳ 生成中…';
+    el.comScriptStatus.hidden = false;
+    el.comScriptStatus.className = 'com-script-status';
+    el.comScriptStatus.textContent = '正在用当前配音生成前 3 段预览…';
+    try {
+      const form = new FormData();
+      form.append('voice', el.comScriptVoice.value);
+      form.append('max_segments', '3');
+      const resp = await fetch(`/api/commentary/preview/${currentScriptJobId}`, {
+        method: 'POST', body: form,
+      });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.error || '生成失败');
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      await playAudio(url);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      el.comScriptStatus.className = 'com-script-status com-script-ok';
+      el.comScriptStatus.textContent = '✓ 预览播放中…';
+    } catch (err) {
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = `预览失败：${err.message}`;
+    } finally {
+      el.comScriptPrevAll.disabled = false;
+      el.comScriptPrevAll.textContent = originalText;
+    }
+  };
+
+  // 脚本面板事件
+  el.comScriptSave.addEventListener('click', saveScript);
+  el.comScriptRender.addEventListener('click', renderFromScript);
+  el.comScriptVoicePreview.addEventListener('click', previewVoice);
+  el.comScriptPrevAll.addEventListener('click', previewAllSegments);
+
   // ---- 视频解说独立标签页 ----
   const noopComFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
   let selectedLocalFile = null;
   let commentaryEnvReady = false;
+  let currentScriptJobId = null;  // 当前脚本审核任务的 job_id
+  let currentScriptSegments = null;  // 原始脚本 segments（保留 start/end/note 供 save 合并）
+
+  /** edge-tts 中文 Neural 音色可选列表 */
+  const COM_VOICES = [
+    { value: 'zh-CN-XiaoxiaoNeural', label: '晓晓（温柔女声）' },
+    { value: 'zh-CN-XiaoyiNeural', label: '晓伊（活泼女声）' },
+    { value: 'zh-CN-YunxiNeural', label: '云希（沉稳男声）' },
+    { value: 'zh-CN-YunyangNeural', label: '云扬（新闻腔男声）' },
+    { value: 'zh-CN-XiaochenNeural', label: '晓辰（舒缓女声）' },
+    { value: 'zh-CN-XiaohanNeural', label: '晓涵（温暖女声）' },
+    { value: 'zh-CN-XiaomoNeural', label: '晓墨（知性女声）' },
+    { value: 'zh-CN-XiaoruiNeural', label: '晓睿（干练女声）' },
+  ];
 
   const refreshCommentaryDiagnostics = async () => {
     try {
@@ -1130,9 +1606,16 @@
 
   const loadCommentary = async () => {
     // 重置生成区状态
-    el.comGenerate.disabled = false;
-    el.comGenerate.textContent = '生成解说';
-    el.comGenerate.hidden = false;
+    el.comGenerateScript.disabled = false;
+    el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+    el.comGenerateScript.hidden = false;
+    el.comGenerateDirect.disabled = false;
+    el.comGenerateDirect.textContent = '一键生成成片';
+    el.comGenerateDirect.hidden = false;
+    el.comScriptPanel.hidden = true;
+    el.comScriptSegments.replaceChildren();
+    el.comScriptStatus.hidden = true;
+    currentScriptJobId = null;
     el.comProgress.hidden = true;
     el.comStatus.hidden = true;
     el.comFileStatus.hidden = true;
@@ -1222,7 +1705,26 @@
     return card;
   };
 
-  el.comGenerate.addEventListener('click', () => {
+  el.comGenerateScript.addEventListener('click', () => {
+    if (!commentaryEnvReady) {
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
+      return;
+    }
+    const fileId = el.comSource.value;
+    if (fileId) {
+      createScriptOnly({ fileId });
+      return;
+    }
+    if (selectedLocalFile) {
+      createScriptOnlyFromFile(selectedLocalFile);
+      return;
+    }
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
+  });
+
+  el.comGenerateDirect.addEventListener('click', () => {
     if (!commentaryEnvReady) {
       el.comStatus.hidden = false;
       el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
@@ -1232,7 +1734,7 @@
     if (fileId) {
       createCommentary(
         { fileId },
-        { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
         '',
         () => loadCommentary(),
       );
@@ -1241,7 +1743,7 @@
     if (selectedLocalFile) {
       createCommentaryFromFile(
         selectedLocalFile,
-        { commentary: el.comGenerate, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
         () => loadCommentary(),
       );
       return;
@@ -3085,21 +3587,30 @@
     data.jobs.forEach((j) => {
       const li = document.createElement('li');
       li.className = `queue-item st-${j.status}`;
-      const name = document.createElement('span');
-      name.className = 'queue-item-name';
-      name.textContent = `${j.op || '加工'} · ${j.name || j.job_id}`;
-      li.appendChild(name);
-      if (j.error) {
-        const err = document.createElement('span');
-        err.className = 'queue-item-err';
-        err.textContent = j.error;
-        li.appendChild(err);
-      }
-      const badge = document.createElement('span');
-      badge.className = `queue-item-badge ${j.status}`;
+      const steps = Array.isArray(j.steps) ? j.steps : [];
+      const stepsHtml = steps.length ? `<div class="task-steps queue-item-steps">${steps.map((s) => {
+        const statusClass = s.status === 'running' ? 'task-step--running' :
+                            s.status === 'done' ? 'task-step--done' :
+                            s.status === 'error' ? 'task-step--error' : 'task-step--pending';
+        const icon = s.status === 'running' ? '●' :
+                     s.status === 'done' ? '✓' :
+                     s.status === 'error' ? '✕' : '○';
+        const detail = s.detail ? `<span class="task-step-detail">${escHtml(String(s.detail))}</span>` : '';
+        return `<div class="task-step ${statusClass}">
+          <span class="task-step-dot">${icon}</span>
+          <div class="task-step-body">
+            <span class="task-step-name">${escHtml(s.name)}</span>
+            ${detail}
+          </div>
+        </div>`;
+      }).join('')}</div>` : '';
       const labels = { running: '运行中', completed: '完成', failed: '失败', pending: '排队中' };
-      badge.textContent = labels[j.status] || j.status;
-      li.appendChild(badge);
+      li.innerHTML = `
+        <span class="queue-item-name">${escHtml(j.op || '加工')} · ${escHtml(j.name || j.job_id)}</span>
+        ${j.error ? `<span class="queue-item-err">${escHtml(j.error)}</span>` : ''}
+        <span class="queue-item-badge ${j.status}">${labels[j.status] || j.status}</span>
+        ${stepsHtml}
+      `;
       el.queueList.appendChild(li);
     });
   };
@@ -3156,8 +3667,6 @@
   // ------------------------------------------------------------------ 种子下载（桌面版功能）
   // 把 magnet/.torrent 下载到本地媒体库；能力由 /api/nodes 的 torrent.enabled 控制。
   let torTimer = null;
-  const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmtSpeed = (n) => formatBytes(n) + '/s';
   const fmtEta = (s) => {
     s = Number(s) || 0;

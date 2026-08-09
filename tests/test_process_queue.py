@@ -125,6 +125,25 @@ class TestProcessQueueUnit:
         with self.q.lock:
             assert self.q.jobs[jid]["status"] in ("pending", "running", "completed")
 
+    def test_submit_includes_steps_and_logs(self):
+        import uuid
+        jid = uuid.uuid4().hex[:8]
+        self.q.submit(jid, "x", "lib-x", "audio", lambda *a: None,
+                      jid, "/tmp/x.mp4", "audio", {})
+        with self.q.lock:
+            job = self.q.jobs[jid]
+            assert "steps" in job
+            assert "logs" in job
+            assert len(job["steps"]) == 4
+            assert job["steps"][0]["name"] == "排队等待"
+            assert job["steps"][0]["status"] == "pending"
+            assert job["steps"][2]["name"] == "执行 audio"
+        snap = self.q.get_queue()
+        found = next((j for j in snap["jobs"] if j["job_id"] == jid), None)
+        assert found is not None
+        assert "steps" in found
+        assert "logs" in found
+
 
 # ---- 路由集成测试 -----------------------------------------------------------
 

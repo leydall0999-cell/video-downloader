@@ -57,12 +57,14 @@ fi
   --name VideoDownloader \
   --windowed \
   --noconfirm \
+  --clean \
   --icon "$ICON_ICNS" \
   --osx-bundle-identifier com.videodownloader.desktop \
   --paths "$REPO/server" \
   --paths "$REPO" \
   --add-data "$REPO/web:web" \
   --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
+  --add-data "$REPO/server:server" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import clouddrive \

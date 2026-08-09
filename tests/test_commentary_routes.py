@@ -18,6 +18,7 @@ if SERVER not in sys.path:
 
 from unittest.mock import patch  # noqa: E402
 import pytest  # noqa: E402
+import json  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 import app as m  # noqa: E402
@@ -333,3 +334,128 @@ def test_file_by_id_escape(tmp_path):
     with patch.object(m, "COMMENTARY_LOCAL_OUTPUT", out):
         r = client.get(f"/api/commentary/file/{bad_cid}")
     assert r.status_code in (403, 404)
+
+
+# ---- voice-preview / preview/{job_id} 测试 ----
+
+def _setup_voice_preview_dir(tmp_path: Path) -> None:
+    """在 tmp_path 下创建 scripts/voice_preview.py，让 COMMENTARY_DIR 检查通过。"""
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "voice_preview.py").write_text("# mock")
+
+
+def test_voice_preview_rejects_http_mode():
+    """HTTP worker 模式下 voice-preview 必须 400，因为脚本审核只支持 local。"""
+    r = client.post("/api/commentary/voice-preview",
+                    data={"voice": "zh-CN-XiaoxiaoNeural", "text": "test"})
+    # 当前 fixture 已固定 MODE=http, 但 mock 不到 external — 应 400
+    assert r.status_code == 400
+    assert "local" in r.text.lower()
+
+
+def test_voice_preview_validates_voice_format():
+    """不是 zh-* 音色必须 400。"""
+    with patch.object(m, "COMMENTARY_MODE", "local"):
+        r = client.post("/api/commentary/voice-preview",
+                        data={"voice": "en-US-AriaNeural", "text": "test"})
+        assert r.status_code == 400
+        assert "voice" in r.json().get("detail", "").lower()
+
+
+def test_voice_preview_empty_text_falls_back_to_default(tmp_path):
+    """空 text 时退回默认样例（FastAPI Form() 对空字符串的默认行为），而不是 400。
+    这样用户即使前端忘填 text 也能听到声音。"""
+    _setup_voice_preview_dir(tmp_path)
+    def fake_run(text, voice, output_mp3, timeout=60):
+        output_mp3.write_bytes(b"ID3" + b"\x00" * 4096)
+    with patch.object(m, "COMMENTARY_MODE", "local"), \
+         patch.object(m, "_run_voice_preview", side_effect=fake_run) as run_mock, \
+         patch.object(m, "COMMENTARY_DIR", tmp_path):
+        r = client.post("/api/commentary/voice-preview",
+                        data={"voice": "zh-CN-XiaoxiaoNeural", "text": ""})
+        assert r.status_code == 200
+        # 验证退回默认文本传给 edge-tts
+        args = run_mock.call_args[0]
+        assert "你好" in args[0] or "解说" in args[0]
+
+
+def test_voice_preview_local_success(tmp_path, monkeypatch):
+    """local 模式下，mock _run_voice_preview 让它写入一个有效 mp3，应返回 200 + 音频。"""
+    _setup_voice_preview_dir(tmp_path)
+    fake_mp3 = tmp_path / "preview.mp3"
+    fake_mp3.write_bytes(b"ID3" + b"\x00" * 4096)  # 模拟一个 mp3
+
+    def fake_run(text, voice, output_mp3, timeout=60):
+        output_mp3.write_bytes(fake_mp3.read_bytes())
+
+    with patch.object(m, "COMMENTARY_MODE", "local"), \
+         patch.object(m, "_run_voice_preview", side_effect=fake_run), \
+         patch.object(m, "COMMENTARY_DIR", tmp_path):
+        r = client.post("/api/commentary/voice-preview",
+                        data={"voice": "zh-CN-XiaoxiaoNeural",
+                              "text": "你好世界"})
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "audio/mpeg"
+        assert len(r.content) > 100
+
+
+def test_voice_preview_subprocess_failure_returns_500(tmp_path):
+    """edge-tts 失败时必须 500 而不是默默 200。"""
+    _setup_voice_preview_dir(tmp_path)
+    def fake_run(text, voice, output_mp3, timeout=60):
+        raise RuntimeError("edge-tts 退出码 1: network unreachable")
+
+    with patch.object(m, "COMMENTARY_MODE", "local"), \
+         patch.object(m, "_run_voice_preview", side_effect=fake_run), \
+         patch.object(m, "COMMENTARY_DIR", tmp_path):
+        r = client.post("/api/commentary/voice-preview",
+                        data={"voice": "zh-CN-XiaoxiaoNeural", "text": "test"})
+        assert r.status_code == 500
+        assert "edge-tts" in r.json().get("detail", "")
+
+
+def test_preview_segments_requires_script_ready(tmp_path):
+    """preview/{job_id} 必须 script_ready 状态，否则 409。"""
+    with m._commentary_lock:
+        m.commentary_jobs["fake_job_id"] = {"status": "running", "script_path": "", "output_path": "", "error": ""}
+    try:
+        with patch.object(m, "COMMENTARY_MODE", "local"):
+            r = client.post("/api/commentary/preview/fake_job_id",
+                            data={"voice": "zh-CN-XiaoxiaoNeural", "max_segments": "3"})
+            assert r.status_code == 409
+    finally:
+        with m._commentary_lock:
+            m.commentary_jobs.pop("fake_job_id", None)
+
+
+def test_preview_segments_local_success(tmp_path):
+    """完整链路：script_ready + 模拟 edge-tts 生成 + ffmpeg concat → 200。"""
+    _setup_voice_preview_dir(tmp_path)
+    script = tmp_path / "test.script.json"
+    script.write_text(json.dumps({
+        "title": "测试", "voice": "zh-CN-XiaoxiaoNeural",
+        "segments": [
+            {"start": 0, "end": 3, "narration": "第一段旁白", "note": ""},
+            {"start": 3, "end": 6, "narration": "第二段旁白", "note": ""},
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    def fake_run(text, voice, output_mp3, timeout=60):
+        output_mp3.write_bytes(b"ID3" + b"\x00" * 8192)  # 模拟生成有效音频
+
+    with m._commentary_lock:
+        m.commentary_jobs["ready_job"] = {"status": "script_ready",
+                                          "script_path": str(script),
+                                          "output_path": "", "error": ""}
+    try:
+        with patch.object(m, "COMMENTARY_MODE", "local"), \
+             patch.object(m, "_run_voice_preview", side_effect=fake_run), \
+             patch.object(m, "COMMENTARY_DIR", tmp_path):
+            r = client.post("/api/commentary/preview/ready_job",
+                            data={"voice": "zh-CN-XiaoxiaoNeural", "max_segments": "3"})
+            assert r.status_code == 200, r.text
+            assert r.headers["content-type"] == "audio/mpeg"
+    finally:
+        with m._commentary_lock:
+            m.commentary_jobs.pop("ready_job", None)

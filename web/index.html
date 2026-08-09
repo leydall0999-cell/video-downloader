@@ -303,7 +303,10 @@
       </div>
     </div>
 
-    <button type="button" class="btn btn-primary com-generate-main" id="comGenerate">生成解说</button>
+    <div class="com-generate-row">
+      <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
+      <button type="button" class="btn btn-secondary com-generate-main" id="comGenerateDirect">一键生成成片</button>
+    </div>
     <!-- 解说进度条：阶段标签 + 百分比 + 渐变填充条 -->
     <div id="comProgress" hidden>
       <div class="com-progress-head">
@@ -315,6 +318,34 @@
       </div>
     </div>
     <span class="com-status" id="comStatus" hidden></span>
+
+    <!-- 解说过程时间线：步骤 + 日志 -->
+    <div id="comStepsPanel" class="com-steps-panel" hidden>
+      <div id="comStepsList" class="com-steps"></div>
+      <details class="com-logs-wrap">
+        <summary>运行日志</summary>
+        <pre id="comLogs" class="com-logs"></pre>
+      </details>
+    </div>
+
+    <!-- 脚本审核编辑面板：生成脚本后展示，可逐段修改解说词 + 选配音 -->
+    <div id="comScriptPanel" hidden>
+      <div class="com-script-head">
+        <h3>✏️ 解说词审核</h3>
+        <div class="com-script-head-actions">
+          <label class="com-voice-label">全局配音：</label>
+          <select id="comScriptVoice" class="adv-input com-voice-select"></select>
+          <button type="button" class="btn btn-sm btn-secondary" id="comScriptVoicePreview">▶ 试听</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="comScriptPrevAll">预览全部</button>
+        </div>
+      </div>
+      <div id="comScriptSegments" class="com-script-segments"></div>
+      <div class="com-script-actions">
+        <button type="button" class="btn btn-primary" id="comScriptSave">💾 保存修改</button>
+        <button type="button" class="btn btn-success" id="comScriptRender">🎬 生成成片</button>
+        <span id="comScriptStatus" class="com-script-status" hidden></span>
+      </div>
+    </div>
 
     <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
     <div class="com-grid" id="comGrid"></div>
@@ -496,6 +527,19 @@
     <p class="save-hint" data-save-hint hidden></p>
     <p class="cloud-status-line" data-cloud-status hidden></p>
     <p class="task-error" data-error hidden></p>
+    <div class="task-steps-box" data-steps-box hidden>
+      <button type="button" class="task-steps-toggle" data-steps-toggle>
+        <span class="task-steps-toggle-label">查看过程</span>
+        <span class="task-steps-chevron" data-steps-chevron>▶</span>
+      </button>
+      <div class="task-steps-panel" data-steps-panel hidden>
+        <div class="task-steps" data-steps-list></div>
+        <details class="task-logs-wrap">
+          <summary>运行日志</summary>
+          <pre class="task-logs" data-logs></pre>
+        </details>
+      </div>
+    </div>
   </li>
 </template>
 

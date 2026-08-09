@@ -9,6 +9,7 @@ import subprocess
 import sys
 import json
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,12 @@ logger = logging.getLogger(__name__)
 
 SOCKET_TIMEOUT = 30  # 国内 CDN 偶发慢响应，30 秒更稳
 PROBE_RETRIES = 1
+# 下载健壮性：防止站点/CDN 假死导致任务永久挂起、占满并发槽拖垮后续任务
+# 1) 下载阶段：已开始下分片但 N 秒无字节增量 → 判定停滞，自动终止
+# 2) 整体硬上限：解析+下载任意阶段超过此秒数 → 强制结束（兜底，极少触发）
+DOWNLOAD_STALL_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_STALL_TIMEOUT", "180"))
+DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "1800"))
+WATCHDOG_POLL = int(os.environ.get("VDL_WATCHDOG_POLL", "5"))  # 看门狗轮询间隔（秒）
 
 
 def _macos_system_proxy() -> str:
@@ -408,6 +415,7 @@ class _ProgressReporter:
         self._store = store
         self._streams: dict[str, tuple[int, int]] = {}
         self._last_progress = 0.0
+        self._has_download_step = False
 
     def __call__(self, payload: dict[str, Any]) -> None:
         if self._task.cancel_requested:
@@ -415,6 +423,10 @@ class _ProgressReporter:
         if payload.get("status") != "downloading":
             return
         self._ensure_title(payload)
+        if not self._has_download_step:
+            self._task.add_step("下载音视频", "running", f"已选清晰度：{self._task.quality}")
+            self._task.log(f"开始下载：{self._task.quality}")
+            self._has_download_step = True
         key = payload.get("filename") or payload.get("tmpfilename") or "stream"
         downloaded = int(payload.get("downloaded_bytes") or 0)
         total = int(payload.get("total_bytes") or payload.get("total_bytes_estimate") or 0)
@@ -428,6 +440,7 @@ class _ProgressReporter:
         title = (payload.get("info_dict") or {}).get("title")
         if title:
             self._store.update(self._task.id, title=title)
+            self._task.add_step("解析视频信息", "done", f"已获取标题《{title}》")
 
     def _push(self, payload: dict[str, Any]) -> None:
         done = sum(d for d, _ in self._streams.values())
@@ -446,6 +459,8 @@ class _ProgressReporter:
 
     def on_postprocess(self, payload: dict[str, Any]) -> None:
         if payload.get("status") == "started":
+            self._task.add_step("下载音视频", "done", "音视频下载完成")
+            self._task.add_step("合并与后处理", "running", "正在合并音视频…")
             self._store.update(self._task.id, status="merging", progress=98.0)
 
 
@@ -513,53 +528,126 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     max_retries=N 时，对网络/超时/连接类等「可重试」错误最多再试 N 次（指数退避）。
     重试在 worker 线程内循环进行，不会额外占用并发槽；会员受限 / 链接失效等不可重试
     错误会直接以 failed 结束，避免无效重试浪费带宽。
+
+    健壮性：内置「停滞看门狗 + 整体硬超时」，防止站点/CDN 假死让任务永久挂起、
+    占满并发槽拖垮后续所有下载（典型如 m3u8 流慢速 trickle 不触发 socket_timeout）。
     """
-    for attempt in range(1, max_retries + 2):
-        if attempt > 1:
-            # 重试前把状态拨回排队，让前端进度条归零、状态显示「重试中」
-            store.update(
-                task.id, status="pending", error="", hint="", progress=0.0,
-                downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0,
+    stop = threading.Event()
+    last = {"bytes": 0, "ts": time.time()}
+
+    def _watchdog() -> None:
+        """下载中但 N 秒无字节增量 → 判定停滞，置取消标记让进度回调抛出终止。"""
+        while not stop.is_set() and not task.is_finished:
+            time.sleep(WATCHDOG_POLL)
+            if task.status != "downloading":
+                continue
+            cur = task.downloaded_bytes
+            if cur > last["bytes"]:
+                last["bytes"] = cur
+                last["ts"] = time.time()
+            elif time.time() - last["ts"] > DOWNLOAD_STALL_TIMEOUT:
+                task.add_step("下载音视频", "error", f"停滞 {DOWNLOAD_STALL_TIMEOUT}s，已自动终止")
+                task.log(f"下载停滞超过 {DOWNLOAD_STALL_TIMEOUT}s，自动终止")
+                task.cancel_requested = True
+                return
+
+    wd = threading.Thread(target=_watchdog, name=f"wd-{task.id}", daemon=True)
+    wd.start()
+    try:
+        for attempt in range(1, max_retries + 2):
+            if attempt > 1:
+                # 重试前把状态拨回排队，让前端进度条归零、状态显示「重试中」
+                store.update(
+                    task.id, status="pending", error="", hint="", progress=0.0,
+                    downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0,
+                )
+                last["bytes"] = 0
+                last["ts"] = time.time()
+            # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
+            th = threading.Thread(
+                target=_run_once, args=(task, store, quality_key, cookie, proxy),
+                name=f"dl-{task.id}-{attempt}", daemon=True,
             )
-        _run_once(task, store, quality_key, cookie, proxy)
-        t = store.get(task.id)
-        if t is None:
-            return
-        if t.status != "failed":
-            return  # completed / canceled -> 停止
-        if attempt > max_retries:
-            return
-        if not _is_retryable(t.error):
-            return
-        time.sleep(min(2 ** attempt, 30))  # 指数退避，最多 30s
+            th.start()
+            th.join(timeout=DOWNLOAD_HARD_TIMEOUT)
+            if th.is_alive():
+                task.add_step("下载音视频", "error", f"超过硬上限 {DOWNLOAD_HARD_TIMEOUT}s")
+                task.log(f"下载超过整体硬上限 {DOWNLOAD_HARD_TIMEOUT}s，强制结束")
+                task.cancel_requested = True
+                store.update(
+                    task.id, status="failed", error="下载超时",
+                    hint="站点响应过慢或连接不稳定，请稍后重试或更换清晰度/代理",
+                )
+                break
+            t = store.get(task.id)
+            if t is None:
+                return
+            if t.status != "failed":
+                return  # completed / canceled -> 停止
+            if attempt > max_retries:
+                return
+            if not _is_retryable(t.error):
+                return
+            time.sleep(min(2 ** attempt, 30))  # 指数退避，最多 30s
+    finally:
+        stop.set()
+
+
+def _mark_step_error(task: DownloadTask, detail: str) -> None:
+    """根据当前进行中的步骤，把对应步骤标记为失败。"""
+    if any(s.get("name") == "合并与后处理" and s.get("status") == "running" for s in task.steps):
+        task.add_step("合并与后处理", "error", detail)
+    elif any(s.get("name") == "下载音视频" and s.get("status") in ("running", "done") for s in task.steps):
+        task.add_step("下载音视频", "error", detail)
+    else:
+        task.add_step("解析视频信息", "error", detail)
+
+
+def _format_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    value = float(n)
+    for unit in ("KB", "MB", "GB", "TB"):
+        value /= 1024
+        if value < 1024:
+            return f"{value:.2f} {unit}"
+    return f"{value:.2f} PB"
 
 
 def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
     reporter = _ProgressReporter(task, store)
+    task.add_step("排队等待", "done", "已开始执行")
+    task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     try:
         with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
             info = ydl.extract_info(task.url, download=True) or {}
         if info.get("title"):
             store.update(task.id, title=info["title"])
+            task.add_step("解析视频信息", "done", f"已获取标题《{info['title']}》")
         output = _locate_output(info, task.workdir or Path("."))
         _write_sidecar(output, task, info)
     except DownloadCanceled:
+        _mark_step_error(task, "用户已取消")
         store.update(task.id, status="canceled", error="已取消下载", progress=0.0)
         store.clear_files(task.id)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
         err = _friendly_error(exc)
+        _mark_step_error(task, err.message)
         store.update(task.id, status="failed", error=err.message, hint=err.hint)
     except (OSError, ResolveError) as exc:
         message = getattr(exc, "message", None) or "下载过程中出现错误"
+        _mark_step_error(task, message)
         store.update(task.id, status="failed", error=message, hint=_clean_message(str(exc)))
     except Exception as exc:  # noqa: BLE001 - 兜底，保证任务状态一定收敛
         logger.exception("下载任务 %s 未预期失败", task.id)
+        _mark_step_error(task, "未预期错误")
         store.update(task.id, status="failed", error="下载失败", hint=_clean_message(str(exc)))
     else:
-        if task.cancel_requested:  # 取消请求赶在最后一个进度回调之后到达
-            store.update(task.id, status="canceled", error="已取消下载", progress=0.0)
-            store.clear_files(task.id)
+        if task.cancel_requested or task.is_finished:  # 已被看门狗/硬超时/用户终止，不再写完成态
             return
+        task.add_step("合并与后处理", "done", f"输出文件：{output.name}")
+        task.add_step("下载完成", "done", f"文件大小：{_format_bytes(output.stat().st_size)}")
+        task.log(f"下载完成：{output.name}")
         store.update(
             task.id,
             status="completed",

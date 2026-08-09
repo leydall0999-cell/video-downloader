@@ -308,6 +308,12 @@ def _assert_safe_url(url: str) -> None:
     except socket.gaierror:
         # 解析不到的域名交给 yt-dlp 统一报错，这里不拦（避免误杀偶发 DNS 抖动）
         return
+    # DNS 污染 / 代理 / CDN 场景下，getaddrinfo 常同时返回「真实公网 IP」和
+    # 「保留 / 链路本地假地址」(如本机 youtube.com 解析出 2001::1 这类 Teredo 保留地址)。
+    # 只要存在任一公网可达地址即视为合法公开域名，避免被假地址一票否决（与 /api/download
+    # 去掉护栏的考量一致）。仅当【所有】解析地址都落在私网 / 环回 / 链路本地 / 保留 /
+    # 组播段时才拒绝——这才是真正的内部地址攻击（如 169.254.169.254 云元数据）。
+    has_public = False
     for info in infos:
         ip = info[4][0]
         try:
@@ -316,11 +322,15 @@ def _assert_safe_url(url: str) -> None:
             continue
         if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
             addr = addr.ipv4_mapped
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
-            raise LinkError(
-                "该链接指向非公开网络，已拒绝",
-                "只允许下载公开可访问的视频；内网 / 本地 / 云元数据地址不可用",
-            )
+        if not (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast):
+            has_public = True
+            break
+    if not has_public:
+        raise LinkError(
+            "该链接指向非公开网络，已拒绝",
+            "只允许下载公开可访问的视频；内网 / 本地 / 云元数据地址不可用",
+        )
 
 
 def _assert_archive_url(url: str) -> None:
@@ -684,7 +694,77 @@ def _commentary_work_dir() -> Path:
 
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> None:
+# 解说任务过程展示：阶段名 + 匹配日志关键词（不区分大小写）
+_COMMENTARY_STEP_KEYWORDS = [
+    ("准备输入文件", ["准备", "复制", "软链", "输入文件", "symlink", "copy file", "save upload"]),
+    ("转写视频语音", ["[1/2] 转写", "whisper", "transcribe", "提取音轨", "转写完成", "transcript"]),
+    ("生成 AI 解说词", ["[2/2] 自动解说词", "auto_script", "解说词", "script.json", "生成脚本", "script ready"]),
+    ("合成 AI 配音", ["配音", "edge_tts", "tts", "语音合成", "synthesize", "narration"]),
+    ("渲染成片", ["剪辑成片", "edit_ffmpeg", "edit.py", "ffmpeg", "渲染", "合并", "concat", "build", "成片"]),
+    ("完成", ["全部完成", "成片在", "completed", "done"]),
+]
+
+
+def _ensure_commentary_steps(job: dict) -> list[dict]:
+    """初始化或返回解说任务的步骤时间线。"""
+    if "steps" not in job or not job["steps"]:
+        now = time.time()
+        job["steps"] = [
+            {"name": name, "status": "pending", "detail": "", "created_at": now, "updated_at": now}
+            for name, _ in _COMMENTARY_STEP_KEYWORDS
+        ]
+    return job["steps"]
+
+
+def _commentary_log(job: dict, line: str) -> None:
+    """给解说任务追加一行带时间戳的运行日志。"""
+    if not line:
+        return
+    ts = time.strftime("%H:%M:%S", time.localtime())
+    job.setdefault("logs", []).append(f"{ts}  {line.strip()}")
+    if len(job.get("logs", [])) > 200:
+        job["logs"][:] = job["logs"][-200:]
+
+
+def _update_commentary_steps(job: dict, line: str) -> None:
+    """根据 process.py 输出关键词自动推进步骤状态。"""
+    steps = _ensure_commentary_steps(job)
+    line_lower = line.lower()
+    matched = -1
+    for idx, (name, keywords) in enumerate(_COMMENTARY_STEP_KEYWORDS):
+        if any(k.lower() in line_lower for k in keywords):
+            matched = idx
+            break
+    if matched < 0:
+        return
+    now = time.time()
+    for s in steps[:matched]:
+        if s["status"] == "pending":
+            s["status"] = "done"
+            s["updated_at"] = now
+    cur = steps[matched]
+    cur["status"] = "running"
+    cur["detail"] = line[:200]
+    cur["updated_at"] = now
+
+
+def _commentary_mark_error(job_id: str, detail: str) -> None:
+    """把当前 running 的步骤标为 error。"""
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+        if not job:
+            return
+        steps = _ensure_commentary_steps(job)
+        now = time.time()
+        for s in steps:
+            if s["status"] == "running":
+                s["status"] = "error"
+                s["detail"] = detail[:200]
+                s["updated_at"] = now
+                break
+
+
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -715,6 +795,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             args.append("--vertical")
         if voice:
             args += ["--voice", voice]
+        if script_only:
+            args.append("--script-only")
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
@@ -728,7 +810,17 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             if len(last_lines) > 80:  # 只保留最近 80 行，避免内存膨胀
                 del last_lines[: len(last_lines) - 80]
             with _commentary_lock:
-                commentary_jobs.setdefault(job_id, {})["progress"] = list(last_lines)
+                job = commentary_jobs.setdefault(job_id, {})
+                job["progress"] = list(last_lines)
+                _commentary_log(job, line)
+                _update_commentary_steps(job, line)
+
+        with _commentary_lock:
+            job = commentary_jobs.setdefault(job_id, {})
+            steps = _ensure_commentary_steps(job)
+            steps[0]["status"] = "running"
+            steps[0]["detail"] = f"源视频: {Path(src_path).name}"
+            steps[0]["updated_at"] = time.time()
 
         try:
             proc = subprocess.Popen(
@@ -754,18 +846,45 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str) -> N
             tail = "\n".join(last_lines[-20:]) or "无输出"
             raise RuntimeError(f"解说管线退出码 {ret}。\n最近输出：\n{tail}")
 
-        # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
-        candidates = sorted(
-            (p for p in out_dir.glob(f"{base}*.mp4") if p.name != in_file.name),
-            key=lambda p: p.stat().st_mtime, reverse=True,
-        )
-        out = next(iter(candidates), None)
-        if not out:
-            tail = "\n".join(last_lines[-20:]) or "无输出"
-            raise RuntimeError(f"解说管线执行成功但未找到成片。process.py 输出：\n{tail}")
-        with _commentary_lock:
-            commentary_jobs[job_id].update(status="completed", output_path=str(out))
+        if script_only:
+            # --script-only 模式：只出了 script.json，不生成成片
+            script_path = COMMENTARY_DIR / "work" / f"{base}.script.json"
+            if not script_path.exists():
+                tail = "\n".join(last_lines[-20:]) or "无输出"
+                raise RuntimeError(f"解说管线执行成功但未找到脚本文件：{script_path}\n输出：\n{tail}")
+            with _commentary_lock:
+                job = commentary_jobs[job_id]
+                _ensure_commentary_steps(job)
+                now = time.time()
+                for s in job["steps"]:
+                    if s["name"] in ("生成 AI 解说词", "完成"):
+                        s["status"] = "done"
+                        s["updated_at"] = now
+                    elif s["status"] in ("pending", "running"):
+                        s["status"] = "done"
+                        s["updated_at"] = now
+                job.update(status="script_ready", script_path=str(script_path), output_path="")
+        else:
+            # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
+            candidates = sorted(
+                (p for p in out_dir.glob(f"{base}*.mp4") if p.name != in_file.name),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+            out = next(iter(candidates), None)
+            if not out:
+                tail = "\n".join(last_lines[-20:]) or "无输出"
+                raise RuntimeError(f"解说管线执行成功但未找到成片。process.py 输出：\n{tail}")
+            with _commentary_lock:
+                job = commentary_jobs[job_id]
+                _ensure_commentary_steps(job)
+                now = time.time()
+                for s in job["steps"]:
+                    if s["status"] in ("pending", "running"):
+                        s["status"] = "done"
+                        s["updated_at"] = now
+                job.update(status="completed", output_path=str(out))
     except Exception as exc:  # noqa: BLE001
+        _commentary_mark_error(job_id, str(exc))
         with _commentary_lock:
             commentary_jobs.setdefault(job_id, {})["status"] = "failed"
             commentary_jobs[job_id]["error"] = str(exc)[:800]
@@ -776,7 +895,43 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str)
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
+    now = time.time()
+    http_steps = [
+        {"name": "上传视频到 worker", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+        {"name": "worker 渲染中", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+        {"name": "下载成片", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+        {"name": "完成", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+    ]
+    with _commentary_lock:
+        job = commentary_jobs.setdefault(job_id, {})
+        job["steps"] = http_steps
+        job["logs"] = []
+
+    def _set_http_step(idx: int, status: str, detail: str = "") -> None:
+        with _commentary_lock:
+            steps = commentary_jobs.get(job_id, {}).get("steps", [])
+            now2 = time.time()
+            for i, s in enumerate(steps):
+                if i < idx and s["status"] == "pending":
+                    s["status"] = "done"
+                    s["updated_at"] = now2
+            if 0 <= idx < len(steps):
+                steps[idx]["status"] = status
+                steps[idx]["detail"] = detail[:200]
+                steps[idx]["updated_at"] = now2
+
+    def _http_log(line: str) -> None:
+        with _commentary_lock:
+            job = commentary_jobs.get(job_id)
+            if not job:
+                return
+            ts = time.strftime("%H:%M:%S", time.localtime())
+            job.setdefault("logs", []).append(f"{ts}  {line.strip()}")
+            if len(job["logs"]) > 200:
+                job["logs"][:] = job["logs"][-200:]
+
     try:
+        _set_http_step(0, "running", f"上传 {Path(src_path).name}")
         with open(src_path, "rb") as fh:
             resp = requests.post(
                 f"{endpoint}/render",
@@ -790,31 +945,42 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str)
         wjob = resp.json().get("job_id")
         if not wjob:
             raise RuntimeError("解说 worker 未返回 job_id")
+        _set_http_step(0, "done", "已提交渲染任务")
+        _http_log(f"worker job_id: {wjob}")
 
+        _set_http_step(1, "running", f"worker job: {wjob}")
         deadline = time.time() + COMMENTARY_TIMEOUT_SECONDS
         while time.time() < deadline:
             time.sleep(5)
             st = requests.get(f"{endpoint}/status/{wjob}", headers=headers, timeout=30).json()
             status = st.get("status")
+            _http_log(f"worker status: {status}")
             if status == "completed":
                 break
             if status == "failed":
                 raise RuntimeError("解说 worker 渲染失败: " + str(st.get("error", ""))[:600])
         else:
             raise RuntimeError("解说 worker 渲染超时（超过 VDL_COMMENTARY_TIMEOUT）")
+        _set_http_step(1, "done", "worker 渲染完成")
 
+        _set_http_step(2, "running", "正在下载成片")
         fr = requests.get(f"{endpoint}/file/{wjob}", headers=headers, stream=True, timeout=(10, 600))
         if fr.status_code != 200:
             raise RuntimeError(f"解说 worker /file 返回 {fr.status_code}")
         out_path = COMMENTARY_LOCAL_OUTPUT / f"{job_id}.mp4"
+        downloaded = 0
         with open(out_path, "wb") as o:
             for chunk in fr.iter_content(1024 * 1024):
                 if chunk:
                     o.write(chunk)
+                    downloaded += len(chunk)
+        _set_http_step(2, "done", f"已下载 {downloaded / 1024 / 1024:.1f} MB")
 
+        _set_http_step(3, "done", "成片已就绪")
         with _commentary_lock:
             commentary_jobs[job_id].update(status="completed", output_path=str(out_path))
     except Exception as exc:  # noqa: BLE001
+        _set_http_step(1 if http_steps[0]["status"] == "done" else 0, "error", str(exc)[:200])
         with _commentary_lock:
             commentary_jobs.setdefault(job_id, {})["status"] = "failed"
             commentary_jobs[job_id]["error"] = str(exc)[:800]
@@ -1363,6 +1529,13 @@ class CommentaryRequest(BaseModel):
     voice: str = Field(default="", max_length=64)
 
 
+class ScriptUpdateRequest(BaseModel):
+    """PUT /api/commentary/script/{job_id}：提交人工修改后的解说词与全局配音。"""
+    title: str = Field(default="", max_length=256)
+    voice: str = Field(default="", max_length=64)
+    segments: list = Field(default_factory=list)  # [{start, end, narration, note, voice?}, ...]
+
+
 @app.post("/api/commentary")
 def create_commentary(payload: CommentaryRequest) -> dict:
     if not COMMENTARY_ENABLED:
@@ -1374,29 +1547,12 @@ def create_commentary(payload: CommentaryRequest) -> dict:
         if not COMMENTARY_DIR or not (COMMENTARY_DIR / "process.py").exists():
             raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
 
-    # 来源二选一：下载完成的任务（task_id）或媒体库里的现成视频文件（file_id）
-    src_path: str | None = None
-    if payload.file_id:
-        p = library_mod._resolve_safe(DOWNLOAD_DIR, payload.file_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="媒体库文件不存在")
-        suffix = p.suffix.lower()
-        if suffix == library_mod.ENCRYPTED_EXT:
-            raise HTTPException(status_code=409, detail="加密文件不支持生成解说，请先在保险箱解锁")
-        if suffix not in library_mod.VIDEO_EXTS:
-            raise HTTPException(status_code=409, detail="该文件不是视频，无法生成解说成片")
-        src_path = str(p)
-    elif payload.task_id:
-        task = _require_task(payload.task_id)
-        if task.status != "completed" or not task.filepath or not task.filepath.exists():
-            raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")
-        src_path = str(task.filepath)
-    else:
-        raise HTTPException(status_code=400, detail="请提供 task_id 或 file_id")
+    src_path = _resolve_source(payload)
 
     job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": []}
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
+                                   "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE)
     return {"job_id": job_id, "status": "running"}
 
@@ -1425,8 +1581,41 @@ def create_commentary_upload(
 
     job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": []}
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
+                                   "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE)
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.post("/api/commentary/script-only/upload")
+def create_script_only_upload(
+    file: UploadFile = _FastAPIFile(...),
+    vertical: bool = Form(False),
+    voice: str = Form(""),
+) -> dict:
+    """上传本地视频 → 只生成脚本不渲染成片。"""
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if COMMENTARY_MODE == "http":
+        raise HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
+    suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in {".mp4", ".mkv", ".mov", ".webm", ".avi"}:
+        raise HTTPException(status_code=409, detail="请上传视频文件")
+    work_dir = _commentary_work_dir()
+    dest = work_dir / f"upload{suffix}"
+    try:
+        with dest.open("wb") as fh:
+            shutil.copyfileobj(file.file, fh)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
+    finally:
+        file.file.close()
+
+    job_id = uuid.uuid4().hex[:12]
+    with _commentary_lock:
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
+                                   "progress": [], "steps": [], "logs": []}
+    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE, script_only=True)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1513,9 +1702,19 @@ def commentary_status(job_id: str) -> dict:
         job = commentary_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="解说任务不存在或已过期")
-    return {"job_id": job_id, "status": job["status"], "error": job.get("error", ""),
-            "ready": job["status"] == "completed",
-            "progress": job.get("progress", [])}
+    # script_ready 也算就绪态（脚本已生成，等待人工确认后渲染）
+    ready = job["status"] in ("completed", "script_ready")
+    steps = job.get("steps") or []
+    if not steps:
+        # 旧任务或 HTTP 模式可能还没初始化步骤，兜底生成一个简单时间线
+        steps = [{"name": "处理中", "status": "running" if job["status"] == "running" else "done",
+                  "detail": "", "created_at": time.time(), "updated_at": time.time()}]
+    result = {"job_id": job_id, "status": job["status"], "error": job.get("error", ""),
+              "ready": ready, "progress": job.get("progress", []),
+              "steps": steps, "logs": job.get("logs", [])}
+    if job.get("script_path"):
+        result["script_path"] = job["script_path"]
+    return result
 
 
 @app.get("/api/commentary/{job_id}/file")
@@ -1528,6 +1727,297 @@ def commentary_file(job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=410, detail="成片文件已清理")
     return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
+
+
+# ---- 脚本审核专用路由 ----
+
+def _resolve_source(payload: CommentaryRequest) -> str:
+    """解析视频来源（task_id 或 file_id），返回绝对路径。"""
+    if payload.file_id:
+        p = library_mod._resolve_safe(DOWNLOAD_DIR, payload.file_id)
+        if not p:
+            raise HTTPException(status_code=404, detail="媒体库文件不存在")
+        suffix = p.suffix.lower()
+        if suffix == library_mod.ENCRYPTED_EXT:
+            raise HTTPException(status_code=409, detail="加密文件不支持生成解说，请先在保险箱解锁")
+        if suffix not in library_mod.VIDEO_EXTS:
+            raise HTTPException(status_code=409, detail="该文件不是视频，无法生成解说成片")
+        return str(p)
+    elif payload.task_id:
+        task = _require_task(payload.task_id)
+        if task.status != "completed" or not task.filepath or not task.filepath.exists():
+            raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")
+        return str(task.filepath)
+    else:
+        raise HTTPException(status_code=400, detail="请提供 task_id 或 file_id")
+
+
+@app.post("/api/commentary/script-only")
+def create_script_only(payload: CommentaryRequest) -> dict:
+    """只做转写+解说词生成，不渲染成片。返回 job_id 供前端轮询，
+    拿到 script.json 后展示可编辑解说词面板。"""
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if COMMENTARY_MODE == "http":
+        if not COMMENTARY_ENDPOINT:
+            raise HTTPException(status_code=503, detail="解说 worker 未配置")
+        raise HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
+
+    src_path = _resolve_source(payload)
+    job_id = uuid.uuid4().hex[:12]
+    with _commentary_lock:
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "", "progress": []}
+    executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
+                    script_only=True)
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/commentary/script/{job_id}")
+def get_script(job_id: str) -> dict:
+    """获取已生成脚本文件内容（script.json）。"""
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if job["status"] != "script_ready" or not job.get("script_path"):
+        raise HTTPException(status_code=409, detail="脚本尚未就绪（当前状态: " + job["status"] + "）")
+    script_path = Path(job["script_path"])
+    if not script_path.exists():
+        raise HTTPException(status_code=410, detail="脚本文件已被清理")
+    try:
+        data = json.loads(script_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取脚本文件失败：{e}")
+    return {"job_id": job_id, "title": data.get("title", ""),
+            "voice": data.get("voice", ""),
+            "segments": data.get("segments", []), "segment_count": len(data.get("segments", []))}
+
+
+@app.put("/api/commentary/script/{job_id}")
+def update_script(job_id: str, payload: ScriptUpdateRequest) -> dict:
+    """人工修改后提交更新脚本（写回 script.json）。
+    保留原始时间戳（前端发 start/end=0），只更新 narration / voice。
+    """
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if job["status"] != "script_ready" or not job.get("script_path"):
+        raise HTTPException(status_code=409, detail="脚本尚未就绪，无法修改（当前状态: " + job["status"] + "）")
+    script_path = Path(job["script_path"])
+
+    # 读现有脚本以保留时间戳
+    try:
+        existing = json.loads(script_path.read_text(encoding="utf-8"))
+    except Exception:
+        existing = {}
+    existing_segs = existing.get("segments", [])
+
+    # 合并：payload 里每个 seg 的 narration 写回对应 idx 的原始 seg
+    merged = []
+    for i, pseg in enumerate(payload.segments):
+        orig = existing_segs[i] if i < len(existing_segs) else {}
+        merged.append({
+            "start": orig.get("start", pseg.get("start", 0)),
+            "end": orig.get("end", pseg.get("end", 0)),
+            "narration": pseg.get("narration", orig.get("narration", "")),
+            "note": pseg.get("note", orig.get("note", "")),
+        })
+
+    data = {
+        "title": payload.title or existing.get("title", ""),
+        "voice": payload.voice or existing.get("voice", job.get("voice", "")),
+        "segments": merged,
+    }
+    try:
+        script_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"写入脚本失败：{e}")
+
+    # 更新内存中的 voice 偏好（渲染时会用到）
+    if payload.voice:
+        with _commentary_lock:
+            commentary_jobs[job_id]["voice"] = payload.voice
+
+    return {"job_id": job_id, "status": "updated", "segment_count": len(payload.segments)}
+
+
+@app.post("/api/commentary/render/{job_id}")
+def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form("")) -> dict:
+    """用已审核的脚本渲染成片（process.py --edit-only）。"""
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if COMMENTARY_MODE == "http":
+        raise HTTPException(status_code=400, detail="脚本渲染暂不支持 HTTP worker 模式，请使用 local 模式")
+
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if job["status"] != "script_ready" or not job.get("script_path"):
+        raise HTTPException(status_code=409, detail="请先生成脚本再渲染（当前状态: " + job["status"] + "）")
+    script_path = job["script_path"]
+    # 从 script.json 的 segments 里找回原始视频名
+    try:
+        seg_data = json.loads(Path(script_path).read_text(encoding="utf-8"))
+        title = seg_data.get("title", "")
+    except Exception:
+        title = ""
+
+    # 反查原始视频路径（优先同名 input 文件，否则从工作目录搜）
+    base_name = title or job_id
+    in_dir = COMMENTARY_DIR / "input"
+    src_candidates = list(in_dir.glob(f"{base_name}.*")) or list(in_dir.glob(f"{job_id}.*"))
+    if not src_candidates:
+        raise HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
+    src_path = str(src_candidates[0])
+
+    # 用新的 job_id 提交渲染（保留原 script 关联）
+    render_job_id = uuid.uuid4().hex[:12]
+    with _commentary_lock:
+        commentary_jobs[render_job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
+                                          "parent_script_job": job_id, "steps": [], "logs": []}
+    v = voice or job.get("voice", "") or COMMENTARY_VOICE
+    executor.submit(_commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path)
+    return {"job_id": render_job_id, "status": "running", "script_job": job_id}
+
+
+# ---- 配音试听 / 预览全部 ----
+
+def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 60) -> None:
+    """用 commentary-pipeline 的 edge-tts 脚本把一段文本转成指定音色的 mp3。
+    通过 COMMENTARY_RT.env() 走 venv，确保 edge-tts 在隔离环境里能 import。
+    失败抛 RuntimeError 给上层 catch 转 500。"""
+    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
+        raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
+    if not COMMENTARY_RT.ready():
+        raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
+    script = COMMENTARY_DIR / "scripts" / "voice_preview.py"
+    cmd = [COMMENTARY_RT.python, str(script), text, voice, str(output_mp3)]
+    try:
+        proc = subprocess.run(cmd, cwd=str(COMMENTARY_DIR), capture_output=True,
+                              text=True, timeout=timeout, env=COMMENTARY_RT.env())
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"edge-tts 生成超时（>{timeout}s）") from exc
+    except Exception as exc:
+        raise RuntimeError(f"edge-tts 调用失败：{exc}") from exc
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "无输出").strip()[:400]
+        raise RuntimeError(f"edge-tts 退出码 {proc.returncode}: {msg}")
+    if not output_mp3.exists() or output_mp3.stat().st_size < 100:
+        raise RuntimeError("edge-tts 未产出有效音频文件")
+
+
+@app.post("/api/commentary/voice-preview")
+def voice_preview(
+    voice: str = Form(...),
+    text: str = Form("你好，我是视频解说员。我将为你解说这段视频。"),
+) -> FileResponse:
+    """配音试听：把指定文本用指定 voice 转成 mp3 返回给前端播放。"""
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if COMMENTARY_MODE == "http":
+        raise HTTPException(status_code=400, detail="配音试听需在 local 模式使用")
+    # 1. 先校验输入（不等 COMMENTARY_DIR 挂掉）
+    voice = (voice or "").strip()
+    if not voice.startswith("zh-"):
+        raise HTTPException(status_code=400, detail=f"voice 必须是 zh-CN-* 音色，当前: {voice}")
+    # FastAPI Form() 有 bug：空字符串会落回默认值（即使前端显式发 text=），所以加 fallback
+    text = (text or "").strip()[:500] if text else ""
+    if not text:
+        text = "你好，我是视频解说员。我将为你解说这段视频。"
+    # 2. 再检查资源可用性
+    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
+        raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
+
+    out_dir = COMMENTARY_DIR / "work" / "voice_preview"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{uuid.uuid4().hex[:12]}.mp3"
+    try:
+        _run_voice_preview(text, voice, out_path, timeout=45)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=f"试听生成失败：{e}")
+    # 加过期清理保护：定时任务会清理 work/voice_preview/ 下超过 1 天的文件（用户本机 .cleanup）
+    return FileResponse(path=str(out_path), filename="preview.mp3", media_type="audio/mpeg")
+
+
+@app.post("/api/commentary/preview/{job_id}")
+def preview_segments(
+    job_id: str,
+    voice: str = Form(""),
+    max_segments: int = Form(3),
+) -> FileResponse:
+    """用当前 voice 朗读 script.json 里前 N 段的 narration，拼接成一段 mp3 返回。
+    主要给「预览全部」按钮用——按全脚本生成太长，前 3 段够判断音色和节奏。
+    """
+    if not COMMENTARY_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if COMMENTARY_MODE == "http":
+        raise HTTPException(status_code=400, detail="预览需在 local 模式使用")
+    # 1. 先校验 job 状态（不等资源检查）
+    with _commentary_lock:
+        job = commentary_jobs.get(job_id)
+    if not job or job["status"] != "script_ready" or not job.get("script_path"):
+        raise HTTPException(status_code=409, detail="请先生成脚本再预览（当前状态: " + (job or {}).get("status", "missing") + "）")
+    script_path = Path(job["script_path"])
+    if not script_path.exists():
+        raise HTTPException(status_code=410, detail="脚本文件已被清理")
+    try:
+        data = json.loads(script_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取脚本失败：{e}")
+    segs = [s for s in (data.get("segments") or []) if (s.get("narration") or "").strip()]
+    if not segs:
+        raise HTTPException(status_code=409, detail="脚本里没有可朗读的 narration")
+    n = max(1, min(int(max_segments), len(segs), 6))
+    chosen = segs[:n]
+    v = (voice or "").strip() or data.get("voice") or job.get("voice", "") or COMMENTARY_VOICE
+    if not v.startswith("zh-"):
+        raise HTTPException(status_code=400, detail=f"voice 必须是 zh-CN-* 音色")
+    # 2. 再检查资源可用性
+    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
+        raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
+
+    out_dir = COMMENTARY_DIR / "work" / "voice_preview"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = out_dir / uuid.uuid4().hex[:12]
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    final_mp3 = tmp_dir / "preview.mp3"
+    # 逐段生成
+    try:
+        clips = []
+        for i, seg in enumerate(chosen, 1):
+            seg_mp3 = tmp_dir / f"seg{i:02d}.mp3"
+            narration = (seg.get("narration") or "").strip()
+            if not narration:
+                continue
+            try:
+                _run_voice_preview(narration, v, seg_mp3, timeout=45)
+            except RuntimeError as e:
+                raise RuntimeError(f"第 {i} 段朗读失败：{e}")
+            clips.append(seg_mp3)
+        if not clips:
+            raise RuntimeError("没有可用 narration 可朗读")
+        # 用 ffmpeg concat demuxer 拼接
+        list_file = tmp_dir / "concat.txt"
+        list_file.write_text("\n".join(f"file '{p.name}'" for p in clips), encoding="utf-8")
+        concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                      "-i", str(list_file), "-c", "copy", str(final_mp3)]
+        proc = subprocess.run(concat_cmd, cwd=str(tmp_dir), capture_output=True, text=True, timeout=60,
+                              env={"PATH": COMMENTARY_RT.ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")})
+        if proc.returncode != 0 or not final_mp3.exists():
+            # concat 失败时退到单段：直接把第一段作为 preview（保证有声音）
+            try:
+                shutil.copyfile(clips[0], final_mp3)
+            except Exception as e:
+                raise RuntimeError(f"拼接失败且回退也失败：{e}; 原 stderr: {(proc.stderr or '')[:200]}")
+    except RuntimeError as e:
+        # 清理临时目录（保留 final_mp3 不存在路径下不会报错）
+        try: shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception: pass
+        raise HTTPException(status_code=500, detail=f"预览生成失败：{e}")
+    # 返回临时文件，让客户端下载/播放
+    return FileResponse(path=str(final_mp3), filename="preview.mp3", media_type="audio/mpeg")
 
 
 # --------------------------------------------------------------------------- #
@@ -2567,9 +3057,14 @@ def process_status(job_id: str) -> dict:
         job = process_queue.jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="处理任务不存在")
+    steps = job.get("steps") or []
+    if not steps:
+        steps = [{"name": "处理中", "status": "running" if job["status"] == "running" else "done",
+                  "detail": "", "created_at": time.time(), "updated_at": time.time()}]
     return {"status": job["status"], "error": job.get("error", ""),
             "lib_id": job.get("lib_id", ""), "name": job.get("name", ""),
-            "count": job.get("count", 0), "is_dir": job.get("is_dir", False)}
+            "count": job.get("count", 0), "is_dir": job.get("is_dir", False),
+            "steps": steps, "logs": job.get("logs", [])}
 
 
 def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
@@ -2662,12 +3157,45 @@ def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
         logger.warning("ai_dewatermark %s failed: %s", job_id, e)
 
 
+def _process_log(job_id: str, line: str) -> None:
+    if not line:
+        return
+    with process_queue.lock:
+        job = process_queue.jobs.get(job_id)
+        if not job:
+            return
+        ts = time.strftime("%H:%M:%S", time.localtime())
+        job.setdefault("logs", []).append(f"{ts}  {line.strip()}")
+        if len(job.get("logs", [])) > 200:
+            job["logs"][:] = job["logs"][-200:]
+
+
+def _process_set_step(job_id: str, idx: int, status: str, detail: str = "") -> None:
+    with process_queue.lock:
+        job = process_queue.jobs.get(job_id)
+        if not job:
+            return
+        steps = job.get("steps") or []
+        now = time.time()
+        for s in steps[:idx]:
+            if s["status"] == "pending":
+                s["status"] = "done"
+                s["updated_at"] = now
+        if 0 <= idx < len(steps):
+            steps[idx]["status"] = status
+            steps[idx]["detail"] = detail[:200]
+            steps[idx]["updated_at"] = now
+
+
 def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
     """后台线程：按 op 调用 ffmpeg_tools，产物落源目录并写侧车，更新 process_queue.jobs。"""
     with process_queue.lock:
         job = process_queue.jobs.get(job_id)
     if not job:
         return
+    _process_set_step(job_id, 1, "done", f"源文件: {Path(src).name}")
+    _process_set_step(job_id, 2, "running", f"操作: {op}")
+    _process_log(job_id, f"开始处理: {op} -> {src}")
     try:
         src_path = Path(src)
         out_dir = src_path.parent
@@ -2747,6 +3275,8 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
                                           ffmpeg_bin=FFMPEG_BIN)
             if out and bool(p.get("show", False)):
                 # show 模式：仅画框不做处理，不写侧车，提示用户再指定位置提交
+                _process_set_step(job_id, 3, "done", f"预览框: {out.name}")
+                _process_log(job_id, f"dewatermark-show 完成: {out.name}")
                 with process_queue.lock:
                     job.update(status="completed", out_path=str(out), lib_id="", name=out.name)
                 logger.info("process %s (dewatermark-show) done", job_id)
@@ -2768,6 +3298,8 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
             if not res:
                 raise RuntimeError("未抽到任何帧（检查起止时间是否超出视频时长）")
             frames_dir, count = res
+            _process_set_step(job_id, 3, "done", f"{count} 帧 -> {frames_dir.name}")
+            _process_log(job_id, f"抽帧完成: {count} 帧")
             with process_queue.lock:
                 job.update(status="completed", out_path=str(frames_dir), lib_id="",
                            name=frames_dir.name, count=count, is_dir=True)
@@ -2779,10 +3311,14 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
             raise RuntimeError("处理未产出有效文件")
         fftools._write_sidecar(out, meta, suffix)
         new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
+        _process_set_step(job_id, 3, "done", f"输出: {out.name}")
+        _process_log(job_id, f"处理完成: {out.name}")
         with process_queue.lock:
             job.update(status="completed", out_path=str(out), lib_id=new_id, name=out.name)
         logger.info("process %s (%s) done -> %s", job_id, op, out.name)
     except Exception as e:  # noqa: BLE001
+        _process_set_step(job_id, 2, "error", str(e)[:200])
+        _process_log(job_id, f"处理失败: {e}")
         with process_queue.lock:
             job["status"] = "failed"
             job["error"] = str(e)[:400]

@@ -58,11 +58,19 @@ class ProcessQueue:
     def submit(self, job_id: str, name: str, lib_id: str, op: str,
                fn: Callable, *args) -> None:
         """提交一个加工任务，入列后自动调度。"""
+        now = time.time()
+        steps = [
+            {"name": "排队等待", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+            {"name": "读取源文件", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+            {"name": f"执行 {op}", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+            {"name": "写入结果", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+        ]
         with self._lock:
             self._jobs[job_id] = {
                 "status": "pending", "op": op, "name": name,
                 "lib_id": lib_id, "error": "", "out_path": "",
-                "count": 0, "is_dir": False, "submitted_at": time.time(),
+                "count": 0, "is_dir": False, "submitted_at": now,
+                "steps": steps, "logs": [],
                 "_fn": fn, "_args": args,
             }
         self._dispatch()
@@ -76,10 +84,19 @@ class ProcessQueue:
         with self._lock:
             for item in items:
                 jid = item["job_id"]
+                now = time.time()
+                op = item["op"]
+                steps = [
+                    {"name": "排队等待", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+                    {"name": "读取源文件", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+                    {"name": f"执行 {op}", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+                    {"name": "写入结果", "status": "pending", "detail": "", "created_at": now, "updated_at": now},
+                ]
                 self._jobs[jid] = {
-                    "status": "pending", "op": item["op"], "name": item["name"],
+                    "status": "pending", "op": op, "name": item["name"],
                     "lib_id": item["lib_id"], "error": "", "out_path": "",
-                    "count": 0, "is_dir": False, "submitted_at": time.time(),
+                    "count": 0, "is_dir": False, "submitted_at": now,
+                    "steps": steps, "logs": [],
                     "_fn": fn, "_args": fn_args_template,
                 }
                 job_ids.append(jid)
@@ -110,6 +127,13 @@ class ProcessQueue:
         if not job:
             self._release()
             return
+        now = time.time()
+        steps = job.get("steps") or []
+        if steps:
+            steps[0]["status"] = "done"
+            steps[0]["updated_at"] = now
+            steps[1]["status"] = "running"
+            steps[1]["updated_at"] = now
         fn = job.pop("_fn", None)
         args = job.pop("_args", ())
         try:
