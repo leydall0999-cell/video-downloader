@@ -1712,6 +1712,32 @@ def commentary_file_by_id(cid: str) -> FileResponse:
     return FileResponse(str(p), filename=p.name, media_type="video/mp4")
 
 
+@app.delete("/api/commentary/file/{cid}")
+def commentary_delete_by_id(cid: str) -> dict:
+    """把已生成的解说成片移入系统回收站，拒绝直接硬删用户资产。"""
+    p = _decode_commentary_id(cid)
+    allowed_roots = _commentary_roots()
+    if not allowed_roots:
+        raise HTTPException(status_code=503, detail="解说输出目录未配置")
+    try:
+        resolved = p.resolve()
+    except Exception:
+        resolved = p
+    in_allowed_root = any(
+        resolved == root.resolve() or root.resolve() in resolved.parents
+        for root in allowed_roots
+    )
+    if not in_allowed_root:
+        raise HTTPException(status_code=403, detail="文件路径不在解说输出目录内")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="成片文件不存在")
+    if not retention_mod.trash_available():
+        raise HTTPException(status_code=503, detail="系统回收站不可用，拒绝直接删除")
+    if not retention_mod.move_to_trash(resolved):
+        raise HTTPException(status_code=500, detail="移入回收站失败")
+    return {"deleted": True, "trashed": True, "name": p.name, "size": resolved.stat().st_size}
+
+
 @app.get("/api/commentary/{job_id}")
 def commentary_status(job_id: str) -> dict:
     with _commentary_lock:

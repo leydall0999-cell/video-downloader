@@ -212,6 +212,9 @@
     comEmpty: $('comEmpty'),
     comHistory: $('comHistory'),
     comHistoryCount: $('comHistoryCount'),
+    comHistoryToolbar: $('comHistoryToolbar'),
+    comGrid: $('comGrid'),
+    comSortBy: $('comSortBy'),
     comSource: $('comSource'),
     comGenerate: $('comGenerate'),
     comGenerateScript: $('comGenerateScript'),
@@ -287,6 +290,11 @@
   let selectedQuality = 'best';
   let allPlatforms = [];
   const trackers = new Map();
+
+  // 解说成片列表视图状态
+  let commentaryItems = [];
+  let commentaryViewMode = 'grid';   // grid | list | timeline | gallery
+  let commentarySort = 'mtime-desc'; // mtime-desc | mtime-asc | size-desc | size-asc | name-asc | name-desc
 
   // -------------------------------------------------------------- 节点分流
   // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
@@ -1627,22 +1635,73 @@
 
     try {
       const data = await request('/api/commentary/list');
-      const items = data.items || [];
-      el.comGrid.replaceChildren();
-      el.comEmpty.hidden = items.length > 0;
-      el.comHistory.hidden = items.length === 0;
-      if (items.length === 0) {
-        el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
-      } else {
-        el.comHistoryCount.textContent = `${items.length} 个`;
-        items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
-      }
+      commentaryItems = data.items || [];
+      renderCommentaryList();
     } catch (e) {
       el.comEmpty.hidden = false;
       el.comEmpty.textContent = '读取解说成片失败：' + (e.message || '未知错误');
     }
     refreshComSource();
     refreshCommentaryDiagnostics();
+  };
+
+  /** 按当前视图模式与排序重新渲染成片列表 */
+  const renderCommentaryList = () => {
+    const items = commentaryItems.slice();
+    const [sortKey, sortOrder] = commentarySort.split('-');
+    items.sort((a, b) => {
+      let av, bv;
+      if (sortKey === 'mtime') { av = a.mtime; bv = b.mtime; }
+      else if (sortKey === 'size') { av = a.size; bv = b.size; }
+      else { av = String(a.name).toLowerCase(); bv = String(b.name).toLowerCase(); }
+      if (av < bv) return sortOrder === 'asc' ? -1 : 1;
+      if (av > bv) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    el.comGrid.className = 'com-grid com-view-' + commentaryViewMode;
+    el.comGrid.replaceChildren();
+    el.comEmpty.hidden = items.length > 0;
+    el.comHistory.hidden = items.length === 0;
+
+    if (items.length === 0) {
+      el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
+    } else {
+      el.comHistoryCount.textContent = `${items.length} 个`;
+      if (commentaryViewMode === 'timeline') {
+        renderComTimeline(items);
+      } else if (commentaryViewMode === 'gallery') {
+        renderComGallery(items);
+      } else {
+        items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
+      }
+    }
+  };
+
+  /** 时间线视图：按日期分组 */
+  const renderComTimeline = (items) => {
+    const groups = {};
+    items.forEach((it) => {
+      const d = new Date(it.mtime * 1000).toLocaleDateString();
+      (groups[d] = groups[d] || []).push(it);
+    });
+    Object.keys(groups).sort((a, b) => {
+      const desc = commentarySort === 'mtime-desc';
+      const da = new Date(a).getTime();
+      const db = new Date(b).getTime();
+      return desc ? db - da : da - db;
+    }).forEach((date) => {
+      const h = document.createElement('div');
+      h.className = 'com-timeline-date';
+      h.textContent = date;
+      el.comGrid.appendChild(h);
+      groups[date].forEach((it) => el.comGrid.appendChild(createComCard(it)));
+    });
+  };
+
+  /** 画廊视图：只放视频大图，隐藏元信息 */
+  const renderComGallery = (items) => {
+    items.forEach((it) => el.comGrid.appendChild(createComCard(it, true)));
   };
 
   const refreshComSource = async () => {
@@ -1671,9 +1730,10 @@
     }
   };
 
-  const createComCard = (it) => {
+  const createComCard = (it, gallery = false) => {
     const card = document.createElement('div');
-    card.className = 'com-card';
+    card.className = 'com-card' + (gallery ? ' com-card-gallery' : '');
+    card.dataset.id = it.id;
 
     const url = `/api/commentary/file/${encodeURIComponent(it.id)}`;
     const video = document.createElement('video');
@@ -1701,12 +1761,37 @@
     dl.href = url;
     dl.setAttribute('download', it.name);
     dl.textContent = '⬇ 下载';
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn btn-ghost btn-sm';
+    delBtn.title = '删除（移入回收站）';
+    delBtn.textContent = '🗑 删除';
+    delBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      deleteCommentary(it.id, it.name, card);
+    });
     actions.appendChild(dl);
+    actions.appendChild(delBtn);
 
     card.appendChild(video);
     card.appendChild(meta);
     card.appendChild(actions);
     return card;
+  };
+
+  /** 删除解说成片：后端移入回收站，成功后刷新列表 */
+  const deleteCommentary = async (id, name, cardEl) => {
+    if (!window.confirm(`确定删除解说成片「${name}」？\n删除后会移入系统回收站，可从回收站找回。`)) return;
+    cardEl.style.opacity = '.5';
+    try {
+      await request(`/api/commentary/file/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      commentaryItems = commentaryItems.filter((it) => it.id !== id);
+      renderCommentaryList();
+    } catch (e) {
+      cardEl.style.opacity = '1';
+      showError(e.message || '删除失败', '删除后已移入回收站，请检查回收站是否可用');
+    }
   };
 
   el.comGenerateScript.addEventListener('click', () => {
@@ -1800,6 +1885,21 @@
   });
 
   el.comRefresh.addEventListener('click', loadCommentary);
+
+  // 解说成片：视图模式切换
+  el.comHistoryToolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.com-view-btn');
+    if (!btn) return;
+    commentaryViewMode = btn.dataset.mode;
+    el.comHistoryToolbar.querySelectorAll('.com-view-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    renderCommentaryList();
+  });
+
+  // 解说成片：排序切换
+  el.comSortBy.addEventListener('change', () => {
+    commentarySort = el.comSortBy.value;
+    renderCommentaryList();
+  });
 
   // ------------------------------------------------------------------ 初始化
 

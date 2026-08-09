@@ -350,8 +350,26 @@
     <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
     <div class="com-history" id="comHistory" hidden>
       <div class="com-history-head">
-        <h3>已生成成片</h3>
-        <span class="com-history-count" id="comHistoryCount"></span>
+        <div class="com-history-title-wrap">
+          <h3>已生成成片</h3>
+          <span class="com-history-count" id="comHistoryCount"></span>
+        </div>
+        <div class="com-history-toolbar" id="comHistoryToolbar">
+          <div class="com-view-toggle">
+            <button type="button" class="com-view-btn active" data-mode="grid" title="图标网格">⊞</button>
+            <button type="button" class="com-view-btn" data-mode="list" title="列表">☰</button>
+            <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">◷</button>
+            <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">▣</button>
+          </div>
+          <select id="comSortBy" class="adv-input com-sort-select" title="排序方式">
+            <option value="mtime-desc">时间：最新在前</option>
+            <option value="mtime-asc">时间：最早在前</option>
+            <option value="size-desc">大小：从大到小</option>
+            <option value="size-asc">大小：从小到大</option>
+            <option value="name-asc">名称：A-Z</option>
+            <option value="name-desc">名称：Z-A</option>
+          </select>
+        </div>
       </div>
       <div class="com-grid" id="comGrid"></div>
     </div>
