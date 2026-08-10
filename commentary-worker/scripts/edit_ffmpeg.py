@@ -542,8 +542,11 @@ def _seg_cmd_narration(video_path, s, e, vdur, vpath, narration, vertical, inter
         _render_subtitle_png(chunk, png_path, w=cw, h=ch, size=size, y_bottom=y_bottom)
         cmd_inputs += ["-i", png_path]
         nxt = "[vout]" if i == len(chunks) - 1 else f"[vo{i}]"
+        # 字幕 PNG 是单帧静态图，overlay 默认 eof_action=repeat 会保持最后一帧可见；
+        # 若用 eof_action=pass，PNG 到达 EOF 后 overlay 直接透传主视频，字幕会“叠了但看不见”。
+        # enable='between(t,a,b)' 已经精确控制显示窗口，无需 pass。
         v_filters += (f";{cur}[{2 + i}:v]"
-                      f"overlay=0:0:eof_action=pass:enable='between(t,{a:.3f},{b:.3f})'{nxt}")
+                      f"overlay=0:0:enable='between(t,{a:.3f},{b:.3f})'{nxt}")
         cur = nxt
 
     # 原声：解说期间压低，旁白结束后恢复原音量（volume 支持 timeline enable）
