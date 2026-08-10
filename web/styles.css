@@ -1240,6 +1240,9 @@ img { max-width: 100%; display: block; }
 .com-review-hint {
   font-size: .85rem; color: var(--text-mute);
 }
+.com-oneclick-note {
+  margin: .45rem 0 0; font-size: .82rem; line-height: 1.6; color: var(--text-mute);
+}
 .com-script-head {
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: .75rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line);

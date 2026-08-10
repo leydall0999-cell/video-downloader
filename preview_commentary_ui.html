@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>视频解说 UI 预览</title>
+<style>
+  :root {
+    --accent: #0ea5e9;
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --radius-sm: .35rem;
+    --radius-md: .6rem;
+    --radius-lg: .85rem;
+    --shadow: 0 2px 8px rgba(0,0,0,.06);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif; background: var(--bg); color: var(--text); }
+  .container { max-width: 760px; margin: 0 auto; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 1.25rem; }
+  h2 { margin: 0 0 1rem; font-size: 1.25rem; }
+
+  /* 选项面板 */
+  .com-opts {
+    display: flex; flex-direction: column; gap: .6rem;
+    padding: .85rem .9rem; background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--radius-md);
+  }
+  .com-opt-block { display: flex; flex-direction: column; gap: .4rem; }
+  .com-opt-title { font-size: .95rem; font-weight: 700; color: var(--accent); }
+  .com-opt-row { display: flex; flex-wrap: wrap; gap: .4rem .9rem; }
+  .com-mode-option { display: flex; align-items: flex-start; gap: .5rem; font-size: .9rem; line-height: 1.4; cursor: pointer; padding: .35rem .5rem; border-radius: var(--radius-sm); }
+  .com-mode-option:hover { background: #f1f5f9; }
+  .com-mode-option input { margin-top: .15rem; accent-color: var(--accent); }
+  .com-mode-option b { color: var(--accent); }
+
+  .com-highlights-toggle {
+    display: flex; align-items: flex-start; gap: .5rem; margin-top: .55rem;
+    padding: .6rem .75rem; background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    border-radius: var(--radius-md); cursor: pointer; font-size: .9rem; line-height: 1.4;
+  }
+  .com-highlights-toggle input { margin-top: .2rem; width: 1.05rem; height: 1.05rem; accent-color: var(--accent); flex: none; }
+
+  /* 新的百分比输入 */
+  .com-retain-field {
+    display: grid; grid-template-columns: auto 1fr; gap: .35rem .75rem;
+    align-items: center; margin-top: .6rem; padding: .65rem .75rem;
+    background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+    border-radius: var(--radius-md);
+  }
+  .com-retain-label { font-size: .9rem; font-weight: 600; color: var(--text); grid-column: 1 / -1; }
+  .com-retain-input { display: flex; align-items: center; gap: .35rem; }
+  .com-retain-input input {
+    width: 5.5rem; padding: .4rem .55rem; font-size: .95rem; font-weight: 500;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; color: var(--text);
+  }
+  .com-retain-unit { font-size: .95rem; font-weight: 600; color: var(--accent); }
+  .com-retain-hint { font-size: .82rem; opacity: .75; }
+
+  /* 按钮行 */
+  .com-generate-row { display: flex; gap: .75rem; margin-top: 1rem; }
+  .btn { border: none; border-radius: var(--radius-md); padding: .85rem; font-size: 1.05rem; font-weight: 700; cursor: pointer; flex: 1; transition: filter .15s; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { filter: brightness(1.05); }
+  .com-oneclick { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff7a00)); border: none; color: #fff; }
+
+  /* 当前选项展示 */
+  .preview-meta { margin-top: 1rem; padding: .75rem; background: #f1f5f9; border-radius: var(--radius-md); font-size: .85rem; line-height: 1.6; }
+  .preview-meta code { background: #e2e8f0; padding: .1rem .35rem; border-radius: .25rem; }
+  .preview-note { color: var(--muted); margin-top: .4rem; font-size: .8rem; }
+
+  .oneclick-badge { display: inline-block; background: #0ea5e9; color: #fff; font-size: .72rem; padding: .15rem .45rem; border-radius: 999px; margin-left: .35rem; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h2>🎬 视频解说（UI 预览）</h2>
+
+  <div class="com-opts" id="comOpts">
+    <div class="com-opt-block">
+      <div class="com-opt-title">① 自动挑高光</div>
+      <div class="com-opt-row">
+        <label class="com-mode-option"><input type="radio" name="hl" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
+        <label class="com-mode-option"><input type="radio" name="hl" value="manual" /><span>人工在审核面板挑选</span></label>
+      </div>
+    </div>
+
+    <div class="com-opt-block">
+      <div class="com-opt-title">② 解说</div>
+      <div class="com-opt-row">
+        <label class="com-mode-option"><input type="radio" name="type" value="deep_hl" checked /><span><b>高光处叠加深度解说</b></span></label>
+        <label class="com-mode-option"><input type="radio" name="type" value="normal_hl" /><span>高光部分普通解说</span></label>
+        <label class="com-mode-option"><input type="radio" name="type" value="full_normal" /><span>全片普通解说</span></label>
+        <label class="com-mode-option"><input type="radio" name="type" value="full_deep" /><span>全片深入解说</span></label>
+      </div>
+    </div>
+
+    <div class="com-opt-block">
+      <div class="com-opt-title">③ 开头加高光</div>
+      <label class="com-highlights-toggle">
+        <input type="checkbox" id="intro" />
+        <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
+      </label>
+    </div>
+
+    <div class="com-opt-block">
+      <div class="com-opt-title">④ 固定选择项</div>
+      <label class="com-highlights-toggle">
+        <input type="checkbox" id="skip" />
+        <span>跳过片头片尾（各砍约 8%，上限 90s）</span>
+      </label>
+      <div class="com-retain-field">
+        <label class="com-retain-label" for="retain">保留全片时长百分比</label>
+        <div class="com-retain-input">
+          <input type="number" id="retain" min="10" max="100" step="1" placeholder="例如 100" />
+          <span class="com-retain-unit">%</span>
+        </div>
+        <span class="com-retain-hint">10~100，留空表示不裁剪</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="com-generate-row">
+    <button type="button" class="btn btn-primary com-oneclick" id="btnOneClick">⚡ 一键生成</button>
+    <button type="button" class="btn btn-primary" id="btnScript">生成脚本（可审核修改）</button>
+  </div>
+  <p class="preview-note">一键生成：AI 高度自由发挥 + 自动联网查找资料 + 全片深入解说 + 片头插入高光钩子 + 单行字幕（与原字幕同行）+ 仅羽化原字幕 + 弱化原声</p>
+
+  <div class="preview-meta" id="meta">
+    <strong>当前选项（普通生成）：</strong><br>
+    高光来源：<code id="m-hl">ai</code>　
+    解说类型：<code id="m-type">deep_hl</code>　
+    片头钩子：<code id="m-intro">false</code>　
+    跳过片头片尾：<code id="m-skip">false</code>　
+    保留百分比：<code id="m-retain">不裁剪</code><br>
+    <span class="preview-note">联网查找资料已归入「一键生成」，常规生成不再显示该选项。</span>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const state = () => ({
+    highlight_source: document.querySelector('input[name="hl"]:checked').value,
+    commentary_type: document.querySelector('input[name="type"]:checked').value,
+    intro_highlight: $('intro').checked,
+    skip_intro_outro: $('skip').checked,
+    retain_pct: $('retain').value ? Number($('retain').value) : null,
+    one_click: false,
+  });
+
+  const updateMeta = (oneClick = false) => {
+    const s = state();
+    if (oneClick) {
+      $('meta').innerHTML = `<strong>一键生成模式：</strong> 全片深入解说 + 联网查找资料 + 片头插精彩片段 + 不裁剪 + 不跳过片头片尾 <span class="oneclick-badge">web=true</span><br><span class="preview-note">一键生成会强制覆盖解说类型/联网/片头开关，其余选项沿用。</span>`;
+      return;
+    }
+    $('m-hl').textContent = s.highlight_source;
+    $('m-type').textContent = s.commentary_type;
+    $('m-intro').textContent = s.intro_highlight;
+    $('m-skip').textContent = s.skip_intro_outro;
+    $('m-retain').textContent = s.retain_pct == null ? '不裁剪' : s.retain_pct + '%';
+    $('meta').innerHTML = `<strong>当前选项（普通生成）：</strong><br>
+    高光来源：<code>${s.highlight_source}</code>　
+    解说类型：<code>${s.commentary_type}</code>　
+    片头钩子：<code>${s.intro_highlight}</code>　
+    跳过片头片尾：<code>${s.skip_intro_outro}</code>　
+    保留百分比：<code>${s.retain_pct == null ? '不裁剪' : s.retain_pct + '%'}</code><br>
+    <span class="preview-note">联网查找资料已归入「一键生成」，常规生成不再显示该选项。</span>`;
+  };
+
+  document.querySelectorAll('input[name="hl"], input[name="type"], #intro, #skip, #retain').forEach(el => {
+    el.addEventListener('input', () => updateMeta(false));
+    el.addEventListener('change', () => updateMeta(false));
+  });
+
+  $('btnOneClick').addEventListener('click', () => updateMeta(true));
+  $('btnScript').addEventListener('click', () => updateMeta(false));
+</script>
+</body>
+</html>
