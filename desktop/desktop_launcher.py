@@ -162,7 +162,9 @@ def _run_commentary_worker(argv: list[str]) -> int:
         return 1
 
     # 去掉哨兵后交给 process.main（其内部直接读 sys.argv）
-    worker_argv = [a for a in argv if a != "--vdl-commentary-worker"]
+    # argv[0] 是 sys.executable，需跳过——否则 argparse 会把它当 video positional，
+    # 真正传入的 in_file 会变成第二个 positional 报「unrecognized arguments」。
+    worker_argv = [a for a in argv[1:] if a != "--vdl-commentary-worker"]
     sys.argv = ["process.py", *worker_argv]
     try:
         process.main()
