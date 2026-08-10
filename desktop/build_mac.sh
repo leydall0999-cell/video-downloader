@@ -11,6 +11,15 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
+# ── 构建互斥锁：防止并发构建互相争抢 dist/ 与 .build_venv（原子 mkdir，退出即释放）──
+BUILD_LOCK="$REPO/.build.lock"
+if ! mkdir "$BUILD_LOCK" 2>/dev/null; then
+  echo "❌ 已有另一个构建在运行（锁目录 $BUILD_LOCK 存在）。请等其结束后再构建。" >&2
+  echo "   若确认无其它构建，可手动删除该锁目录：rmdir '$BUILD_LOCK'" >&2
+  exit 1
+fi
+trap 'rmdir "$BUILD_LOCK" 2>/dev/null || true' EXIT
+
 PIP_INDEX="https://mirrors.aliyun.com/pypi/simple/"
 VENV="$REPO/.build_venv"
 

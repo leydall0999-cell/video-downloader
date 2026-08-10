@@ -26,6 +26,7 @@ commentary_out/
 .build_venv/
 build/
 dist/
+.build.lock
 VideoDownloader.spec
 # 桌面版构建时生成的图标（脚本自动生成）
 desktop/icon.png
