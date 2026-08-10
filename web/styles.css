@@ -396,6 +396,25 @@ img { max-width: 100%; display: block; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
 .commentary-status { margin-top: .5rem; font-size: .8rem; color: var(--brand-strong); }
 
+/* ---- 提取文案结果 ---- */
+.extract-result {
+  margin-top: .6rem; padding: .75rem; background: var(--surface);
+  border: 1px dashed var(--line); border-radius: var(--radius-md);
+}
+.extract-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: .5rem; gap: .5rem;
+}
+.extract-title { font-size: .85rem; font-weight: 600; color: var(--text); }
+.extract-actions { display: flex; gap: .4rem; }
+.extract-body {
+  max-height: 24vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-size: .82rem; line-height: 1.5; color: var(--text); background: var(--bg-soft, #f9fafb);
+  border-radius: var(--radius-sm); padding: .6rem; margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.task.is-collapsed .extract-result { display: none; }
+
 /* ---- 任务过程时间线 ---- */
 .task-steps-box { margin-top: .55rem; border-top: 1px dashed var(--line); padding-top: .5rem; }
 .task-steps-toggle {

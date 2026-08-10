@@ -1234,6 +1234,8 @@ class DownloadRequest(BaseModel):
     quality: str = Field(default=downloader.BEST_KEY, max_length=16)
     cookie: str = Field(default="", max_length=8192)
     proxy: str = Field(default="", max_length=256)
+    # 提取文案："" 不提取 / "spoken" 口播文案 / "description" 发布简介 / "both" 两者
+    extract_script: str = Field(default="", max_length=16)
 
 
 @app.exception_handler(LinkError)
@@ -1361,6 +1363,11 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
     }
 
 
+def _valid_extract_mode(value: str) -> str:
+    """校验并归一化文案提取模式，非法值回退为不提取。"""
+    return value if value in ("spoken", "description", "both") else ""
+
+
 @app.post("/api/download")
 def create_download(payload: DownloadRequest, request: Request) -> dict:
     _check_rate_limit(request)
@@ -1371,6 +1378,7 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
     url, platform = parse_source(payload.url)
     if not downloader.is_valid_quality(payload.quality):
         raise HTTPException(status_code=400, detail="不支持的清晰度选项")
+    extract_mode = _valid_extract_mode(payload.extract_script)
 
     task = store.create(
         url=url,
@@ -1378,6 +1386,7 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
         platform=platform.name,
         quality=downloader.quality_label(payload.quality),
         quality_key=payload.quality,
+        extract_mode=extract_mode,
     )
     scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES)
     return {
@@ -1395,6 +1404,7 @@ class BatchRequest(BaseModel):
     proxy: str = Field(default="", max_length=256)
     concurrency: int = Field(default=0, ge=0, le=VDL_BATCH_HARD_MAX)
     retries: int = Field(default=-1, ge=-1, le=10)
+    extract_script: str = Field(default="", max_length=16)
 
 
 @app.post("/api/batch")
@@ -1405,6 +1415,7 @@ def create_batch(payload: BatchRequest, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="没有提供有效的链接")
     if not downloader.is_valid_quality(payload.quality):
         raise HTTPException(status_code=400, detail="不支持的清晰度选项")
+    extract_mode = _valid_extract_mode(payload.extract_script)
     if payload.concurrency > 0:
         scheduler.set_concurrency(payload.concurrency)
     retries = payload.retries if payload.retries >= 0 else BATCH_RETRIES_DEFAULT
@@ -1429,6 +1440,7 @@ def create_batch(payload: BatchRequest, request: Request) -> dict:
         task = store.create(
             url=url, title="", platform=platform.name,
             quality=downloader.quality_label(payload.quality), quality_key=payload.quality,
+            extract_mode=extract_mode,
         )
         scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, retries)
         task_ids.append(task.id)
@@ -1462,6 +1474,21 @@ def retry_task(task_id: str) -> dict:
     )
     scheduler.submit(downloader.run_download, task, store, task.quality_key, "", "", BATCH_RETRIES_DEFAULT)
     return {"task_id": task_id, "status": "pending"}
+
+
+@app.post("/api/tasks/{task_id}/extract-text")
+def reextract_text(task_id: str) -> dict:
+    """对已完成任务重新提取文案（如首次语音转写超时，可点重试）。"""
+    task = _require_task(task_id)
+    if not task.extract_mode:
+        raise HTTPException(status_code=400, detail="该任务未开启文案提取")
+    if not task.filepath or not Path(task.filepath).exists():
+        raise HTTPException(status_code=400, detail="任务文件不存在，无法提取文案")
+    executor.submit(
+        downloader._run_extraction, task, store, Path(task.filepath), None, "", "",
+        mode=task.extract_mode,
+    )
+    return {"task_id": task_id, "status": "running"}
 
 
 @app.post("/api/tasks/cancel-all")

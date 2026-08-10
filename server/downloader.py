@@ -656,6 +656,8 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
+            if info.get("webpage_url"):
+                task.source_url = info["webpage_url"]
             if info.get("title"):
                 store.update(task.id, title=info["title"])
                 task.add_step("解析视频信息", "done", f"已获取标题《{info['title']}》")
@@ -695,6 +697,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     else:
         if task.cancel_requested or task.is_finished:  # 已被看门狗/硬超时/用户终止，不再写完成态
             return
+        # 可选：下载完成后提取文案（口播/简介），失败不影响下载完成态
+        if task.extract_mode:
+            _run_extraction(task, store, output, info, cookie, proxy)
         task.add_step("合并与后处理", "done", f"输出文件：{output.name}")
         task.add_step("下载完成", "done", f"文件大小：{_format_bytes(output.stat().st_size)}")
         task.log(f"下载完成：{output.name}")
@@ -708,6 +713,42 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             speed=0.0,
             eta=0,
         )
+
+
+def _run_extraction(task: DownloadTask, store: TaskStore, output: Path, info: dict[str, Any],
+                    cookie: str = "", proxy: str = "", mode: str | None = None) -> None:
+    """在后台线程里执行文案提取，结果写回任务。任何失败都降级处理，不影响下载完成态。
+
+    mode 为 None 时沿用 task.extract_mode；info 为 None 时（重提取场景）改用 task.source_url。
+    """
+    mode = mode or task.extract_mode
+    if mode not in ("spoken", "description", "both"):
+        return
+    source_url = (info.get("webpage_url") if info else None) or task.source_url or task.url
+    task.add_step("提取文案", "running", "正在提取文案…")
+    store.update(task.id, extract_status="running")
+    workdir = task.workdir
+
+    def progress_cb(stage: str, detail: str) -> None:
+        task.add_step("提取文案", "running", detail)
+
+    try:
+        from extract_text import extract_all
+        result = extract_all(
+            str(output), source_url=source_url, cookie=cookie, proxy=proxy,
+            mode=mode, workdir=workdir, progress_cb=progress_cb,
+        )
+        task.extracted_text = result
+        task.extract_status = "done"
+        task.add_step("提取文案", "done", "文案提取完成")
+        store.update(task.id, extracted_text=result, extract_status="done")
+    except Exception as exc:  # noqa: BLE001 - 文案提取失败绝不能拖垮下载任务
+        logger.exception("提取文案失败 task=%s", task.id)
+        err = {"error": str(exc)[:300]}
+        task.extracted_text = err
+        task.extract_status = "error"
+        task.add_step("提取文案", "error", f"文案提取失败：{str(exc)[:120]}")
+        store.update(task.id, extracted_text=err, extract_status="error")
 
 
 def _is_retryable(error: str) -> bool:

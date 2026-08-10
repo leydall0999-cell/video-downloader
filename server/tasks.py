@@ -47,6 +47,11 @@ class DownloadTask:
     pause_requested: bool = False
     workdir: Path | None = None
     filepath: Path | None = None
+    # 提取文案：模式（"spoken"/"description"/"both"/""）+ 状态 + 结果
+    extract_mode: str = ""
+    extract_status: str = "none"   # none / running / done / error
+    extracted_text: dict = field(default_factory=dict)
+    source_url: str = ""
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -102,6 +107,10 @@ class DownloadTask:
             "filesize": self.filesize,
             "error": self.error,
             "hint": self.hint,
+            "extract_mode": self.extract_mode,
+            "extract_status": self.extract_status,
+            "extracted_text": self.extracted_text,
+            "source_url": self.source_url,
             "steps": self.steps,
             "logs": self.logs,
         }
@@ -116,13 +125,14 @@ class TaskStore:
         self._lock = threading.Lock()
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def create(self, *, url: str, title: str, platform: str, quality: str, quality_key: str = "best") -> DownloadTask:
+    def create(self, *, url: str, title: str, platform: str, quality: str,
+                quality_key: str = "best", extract_mode: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
         task = DownloadTask(
             id=task_id, url=url, title=title, platform=platform, quality=quality,
-            quality_key=quality_key, workdir=workdir,
+            quality_key=quality_key, workdir=workdir, extract_mode=extract_mode,
         )
         with self._lock:
             self._tasks[task_id] = task

@@ -715,6 +715,24 @@
       refs.stepsChevron.textContent = hidden ? '▼' : '▶';
       refs.stepsToggleLabel.textContent = hidden ? '收起过程' : '查看过程';
     });
+    refs.extractCopy.addEventListener('click', () => {
+      const text = refs.extractBody.textContent || '';
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        const old = refs.extractCopy.textContent;
+        refs.extractCopy.textContent = '已复制';
+        setTimeout(() => { refs.extractCopy.textContent = old; }, 1500);
+      });
+    });
+    refs.extractRetry.addEventListener('click', () => {
+      if (!refs.extractRetry.dataset.running) {
+        refs.extractRetry.dataset.running = '1';
+        const base = refs.base || '';
+        request(`/api/tasks/${taskId}/extract-text`, { method: 'POST' }, base)
+          .catch((err) => alert('重试提取失败：' + (err.message || err)))
+          .finally(() => { refs.extractRetry.dataset.running = ''; });
+      }
+    });
     refs.title.textContent = meta.title;
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
@@ -843,6 +861,67 @@
         logsWrap.open = logs.length > 0 && (task.status === 'failed' || logs.length > 3);
       }
     }
+  };
+
+  /** 渲染文案提取结果到任务卡片。 */
+  const renderExtractedText = (refs, task) => {
+    if (!refs.extractWrap || !refs.extractBody) return;
+    const mode = task.extract_mode;
+    const status = task.extract_status;
+    const data = task.extracted_text || {};
+    if (!mode) {
+      refs.extractWrap.hidden = true;
+      return;
+    }
+
+    const spoken = data.spoken || {};
+    const desc = data.description || {};
+    const parts = [];
+    if (desc.ok && desc.title) {
+      parts.push(`标题：${desc.title}`);
+      if (desc.uploader) parts.push(`作者：${desc.uploader}`);
+      if (desc.description) parts.push(`\n简介：\n${desc.description}`);
+      if (desc.tags && desc.tags.length) parts.push(`\n标签：${desc.tags.join(' / ')}`);
+    }
+    if (spoken.ok && spoken.text) {
+      if (parts.length) parts.push('\n---\n口播文案：\n');
+      else parts.push('口播文案：\n');
+      parts.push(spoken.text);
+    }
+
+    const hasContent = parts.length > 0;
+    const hasError = (!spoken.ok && spoken.error) || (!desc.ok && desc.error);
+    const running = status === 'running' || (!status && task.status !== 'completed');
+
+    if (running && !hasContent && !hasError) {
+      refs.extractWrap.hidden = false;
+      refs.extractBody.textContent = '正在提取文案…';
+      refs.extractCopy.hidden = true;
+      refs.extractRetry.hidden = true;
+      return;
+    }
+    if (hasError && !hasContent) {
+      refs.extractWrap.hidden = false;
+      const errs = [];
+      if (desc.error) errs.push(`发布简介：${desc.error}`);
+      if (spoken.error) errs.push(`口播文案：${spoken.error}`);
+      refs.extractBody.textContent = '提取失败\n' + errs.join('\n');
+      refs.extractCopy.hidden = true;
+      refs.extractRetry.hidden = false;
+      return;
+    }
+    if (hasContent) {
+      refs.extractWrap.hidden = false;
+      refs.extractBody.textContent = parts.join('\n');
+      refs.extractCopy.hidden = false;
+      refs.extractRetry.hidden = task.status !== 'completed';
+      return;
+    }
+    // 已开启但尚无结果，且任务未完成：展示占位
+    refs.extractWrap.hidden = task.status === 'completed';
+    refs.extractBody.textContent = '暂无提取结果';
+    refs.extractCopy.hidden = true;
+    refs.extractRetry.hidden = task.status !== 'completed';
   };
 
   /** 对已完成的任务发起格式转换，轮询直到出片。 */
