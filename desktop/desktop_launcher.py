@@ -43,14 +43,22 @@ PLUGINS_DIR = BASE / "yt_dlp_plugins"
 
 
 def _detect_ffmpeg() -> str | None:
+    exe = ".exe" if sys.platform == "win32" else ""
     candidates = []
     if getattr(sys, "frozen", False):
-        candidates.append(Path(sys.executable).parent / "bin" / "ffmpeg")
-    candidates.append(BASE / "bin" / "ffmpeg")
+        candidates.append(Path(sys.executable).parent / "bin" / f"ffmpeg{exe}")
+    candidates.append(BASE / "bin" / f"ffmpeg{exe}")
     for c in candidates:
         if c.exists():
             return str(c)
     return None
+
+
+def _venv_python(root: Path) -> Path:
+    """跨平台返回某 venv 的解释器路径（Win: .venv\\Scripts\\python.exe / POSIX: .venv/bin/python）。"""
+    if sys.platform == "win32":
+        return root / ".venv" / "Scripts" / "python.exe"
+    return root / ".venv" / "bin" / "python"
 
 
 def _detect_commentary() -> tuple[str | None, str | None]:
@@ -66,11 +74,12 @@ def _detect_commentary() -> tuple[str | None, str | None]:
                 break
     if not cdir:
         return None, None
-    venv_py = Path(cdir) / ".venv" / "bin" / "python"
+    venv_py = _venv_python(Path(cdir))
     if venv_py.exists():
         return cdir, str(venv_py)
     # 没有 .venv 时，尝试 WorkBuddy default python（需用户自行装好依赖）
-    default_py = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default" / "bin" / "python"
+    default_root = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default"
+    default_py = _venv_python(default_root)
     if default_py.exists():
         return cdir, str(default_py)
     return cdir, None
@@ -81,6 +90,10 @@ if _ff:
     os.environ["VDL_FFMPEG_BIN"] = _ff              # app.py 自己用
     os.environ["FFMPEG_LOCATION"] = str(Path(_ff).parent)  # yt-dlp 找 ffmpeg 用
     os.environ["PATH"] = str(Path(_ff).parent) + os.pathsep + os.environ.get("PATH", "")  # 兜底
+    # 同目录探测 ffprobe（Windows 上为 ffprobe.exe），注入给 app.py 用
+    _fp = Path(_ff).with_name("ffprobe" + (".exe" if sys.platform == "win32" else ""))
+    if _fp.exists():
+        os.environ["VDL_FFPROBE_BIN"] = str(_fp)
 
 _c_dir, _c_py = _detect_commentary()
 if _c_dir:
@@ -135,9 +148,7 @@ def _activate_existing_window() -> None:
 
 
 def _ensure_single_instance():
-    """同一用户只保留一个 GUI 实例。重复启动返回 None（调用方应激活并退出）。"""
-    if _fcntl is None:
-        return None
+    """同一用户只保留一个 GUI 实例。返回 lock handle（非 None=已拿到锁，可启动）。"""
     lock_path = Path.home() / ".vdl_instance.lock"
     # 清理僵尸锁（上次异常退出未释放且持有进程已死）
     try:
@@ -152,11 +163,19 @@ def _ensure_single_instance():
         pass
     try:
         f = open(lock_path, "w")
-        _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         f.write(str(os.getpid()))
         f.flush()
         return f  # 调用方必须持有此对象直到退出
-    except OSError:
+    except Exception:
+        try:
+            f.close()
+        except Exception:
+            pass
         return None
 
 
@@ -215,11 +234,16 @@ def main() -> None:
     except ImportError:
         import webbrowser
         import subprocess as _sp
-        _sp.run(
-            ["osascript", "-e",
-             f'display notification "VideoDownloader 已启动" with title "{URL}"'],
-            check=False, capture_output=True,
-        )
+        # 桌面通知仅 macOS 支持；Windows 无 osascript，必须用 try 包裹避免崩溃
+        if sys.platform == "darwin":
+            try:
+                _sp.run(
+                    ["osascript", "-e",
+                     f'display notification "VideoDownloader 已启动" with title "{URL}"'],
+                    check=False, capture_output=True,
+                )
+            except Exception:
+                pass
         webbrowser.open(URL)
         # 保持进程存活直到 uvicorn 退出
         server_thread.join()

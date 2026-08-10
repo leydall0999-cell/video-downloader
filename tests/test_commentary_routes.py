@@ -47,12 +47,12 @@ def _fake_task(status="completed", filepath=None):
     return t
 
 
-def _run_ok(job_id, src, vertical, voice):
+def _run_ok(job_id, src, vertical=None, voice=None, **kwargs):
     with m._commentary_lock:
         m.commentary_jobs[job_id].update(status="completed", output_path="/tmp/commentary_out/ok.mp4")
 
 
-def _run_fail(job_id, src, vertical, voice):
+def _run_fail(job_id, src, vertical=None, voice=None, **kwargs):
     with m._commentary_lock:
         m.commentary_jobs[job_id].update(status="failed", error="boom")
 
@@ -137,7 +137,7 @@ def test_file_download(tmp_path):
     out = tmp_path / "out.mp4"
     out.write_bytes(b"video-bytes")
 
-    def _run(job_id, src, vertical, voice):
+    def _run(job_id, src, vertical=None, voice=None, **kwargs):
         with m._commentary_lock:
             m.commentary_jobs[job_id].update(status="completed", output_path=str(out))
 
@@ -154,7 +154,7 @@ def test_file_download(tmp_path):
 
 
 def test_file_not_ready_409():
-    def _run(job_id, src, vertical, voice):
+    def _run(job_id, src, vertical=None, voice=None, **kwargs):
         with m._commentary_lock:
             m.commentary_jobs[job_id].update(status="running", output_path="")
 
@@ -170,7 +170,7 @@ def test_file_not_ready_409():
 
 
 def test_file_missing_410(tmp_path):
-    def _run(job_id, src, vertical, voice):
+    def _run(job_id, src, vertical=None, voice=None, **kwargs):
         with m._commentary_lock:
             m.commentary_jobs[job_id].update(status="completed", output_path=str(tmp_path / "gone.mp4"))
 
@@ -195,7 +195,7 @@ def test_local_mode_builds_and_locates_output(tmp_path):
         # 不真跑 process.py，只按命名规则造一个成片，模拟管线产出
         assert "--auto" in args, "local 模式必须带 --auto"
         assert "--voice" in args, "voice 应注入命令（即便默认音色）"
-        infile = args[2]  # [PYTHON, "process.py", in_file, "--auto", ...]
+        infile = args[3]  # [PYTHON, "-u", "process.py", in_file, "--auto", ...]
         base = Path(infile).stem
         (tmp_path / "output").mkdir(exist_ok=True)
         out = tmp_path / "output" / f"{base}_成片.mp4"

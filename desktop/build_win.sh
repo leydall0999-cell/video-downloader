@@ -65,7 +65,7 @@ echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
   --collect-submodules yt_dlp \
   "$REPO/desktop/desktop_launcher.py"
 
-echo "▶ 捆绑 ffmpeg（放入 bin/ 子目录，启动器会优先用捆绑版本）"
+echo "▶ 捆绑 ffmpeg / ffprobe（放入 bin/ 子目录，启动器会优先用捆绑版本）"
 if command -v ffmpeg >/dev/null 2>&1; then
   FF="$(command -v ffmpeg)"
 elif [[ -f "$REPO/ffmpeg.exe" ]]; then
@@ -76,6 +76,16 @@ else
 fi
 mkdir -p "$REPO/dist/VideoDownloader/bin"
 cp "$FF" "$REPO/dist/VideoDownloader/bin/ffmpeg.exe"
+# ffprobe 与 ffmpeg 同目录（Windows 上为 ffprobe.exe），解说管线重度依赖
+if [[ -f "${FF%ffmpeg}ffprobe" ]]; then
+  cp "${FF%ffmpeg}ffprobe" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
+elif command -v ffprobe >/dev/null 2>&1; then
+  cp "$(command -v ffprobe)" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
+elif [[ -f "$REPO/ffprobe.exe" ]]; then
+  cp "$REPO/ffprobe.exe" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
+else
+  echo "⚠️  未找到 ffprobe，解说功能将不可用（下载不受影响）"
+fi
 
 echo "✅ 完成：dist/VideoDownloader/VideoDownloader.exe"
 echo "   双击打开即可，浏览器自动访问 http://127.0.0.1:8321（端口被占用会自动顺延）"

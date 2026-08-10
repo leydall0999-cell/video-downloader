@@ -107,7 +107,7 @@ CONVERT_DIR = DOWNLOAD_DIR / "conversions"
 CONVERT_DIR.mkdir(parents=True, exist_ok=True)
 CONVERT_JOBS: dict[str, dict] = {}
 CONVERT_LOCK = threading.Lock()
-FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/opt/homebrew/bin/ffmpeg" if sys.platform == "darwin" else "")
 # 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
 CONVERT_TARGETS = {
     "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
@@ -227,12 +227,20 @@ COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstr
 COMMENTARY_TOKEN = os.environ.get("VDL_COMMENTARY_TOKEN", "").strip()  # 与 worker 的 WORKER_TOKEN 对应
 _HERE = Path(__file__).resolve().parent
 _COMMENTARY_OUT_RAW = os.environ.get("VDL_COMMENTARY_LOCAL_OUTPUT", "").strip()
+def _user_data_dir() -> Path:
+    """跨平台用户数据目录：Windows 打包后用 %APPDATA%/VideoDownloader（符合 Windows 规范，
+    避免凭据被同机其他用户读取）；macOS/Linux 维持 ~/.video-downloader 以兼容现有用户。"""
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        return Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
+    return Path.home() / ".video-downloader"
+
+
 if _COMMENTARY_OUT_RAW:
     COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW)
 elif getattr(sys, "frozen", False):
     # 打包后 _HERE 位于 .app 包内部，若沿用会把上传的大视频写进 /Applications/*.app，
     # 导致替换 app 即丢数据、包体积暴涨、破坏代码签名。一律落到用户目录。
-    COMMENTARY_LOCAL_OUTPUT = Path.home() / ".video-downloader" / "commentary_out"
+    COMMENTARY_LOCAL_OUTPUT = _user_data_dir() / "commentary_out"
 else:
     COMMENTARY_LOCAL_OUTPUT = _HERE.parent / "commentary_out"
 COMMENTARY_LOCAL_OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -526,16 +534,31 @@ def _vault_load() -> dict | None:
     return None
 
 
+def _chmod_600(path: Path) -> None:
+    """跨平台收紧文件权限到仅当前用户可读写。Windows 的 os.chmod 只切只读位、不控 ACL，
+    故改用 icacls 移除继承并仅授权当前用户（无 pywin32 也可工作）。"""
+    if sys.platform == "win32":
+        try:
+            import subprocess as _sp
+            _sp.run(["icacls", str(path), "/inheritance:r",
+                     "/grant:r", f"{os.environ.get('USERNAME', '')}:(R,W)"],
+                    check=False, capture_output=True)
+        except Exception:
+            pass
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def _vault_save(vault: dict) -> None:
     VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = VAULT_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(vault, ensure_ascii=False), encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    _chmod_600(tmp)
     tmp.replace(VAULT_PATH)
-    try:
-        os.chmod(VAULT_PATH, 0o600)
-    except OSError:
-        pass
+    _chmod_600(VAULT_PATH)
 
 
 def _vault_tmp_for(lib_id: str) -> Path:
@@ -578,11 +601,16 @@ class _CommentaryRuntime:
 
     # ---- 解释器 ----
     def _resolve_python(self) -> str:
+        def _vp(root: Path) -> Path:
+            if sys.platform == "win32":
+                return root / ".venv" / "Scripts" / "python.exe"
+            return root / ".venv" / "bin" / "python"
+
         if os.environ.get("VDL_COMMENTARY_PYTHON"):
             return os.environ["VDL_COMMENTARY_PYTHON"].strip()
         # 优先用已探测到的 commentary-pipeline 自己的 .venv
         if COMMENTARY_DIR:
-            venv_py = COMMENTARY_DIR / ".venv" / "bin" / "python"
+            venv_py = _vp(COMMENTARY_DIR)
             if venv_py.exists():
                 return str(venv_py)
         # 即使 COMMENTARY_DIR 未探测到（罕见），也按常用绝对路径再找一次 .venv
@@ -590,11 +618,11 @@ class _CommentaryRuntime:
             Path.home() / "WorkBuddy" / "问问题" / "commentary-pipeline",
             Path.home() / "commentary-pipeline",
         ]:
-            venv_py = cand_dir / ".venv" / "bin" / "python"
+            venv_py = _vp(cand_dir)
             if venv_py.exists():
                 return str(venv_py)
         # 兜底：WorkBuddy default python（需用户自己装好 faster_whisper/edge_tts）
-        default_py = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default" / "bin" / "python"
+        default_py = _vp(Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default")
         if default_py.exists():
             return str(default_py)
         return sys.executable
@@ -657,7 +685,10 @@ class _CommentaryRuntime:
             if p:
                 add(Path(p).parent)
 
-        # 3) 系统常见目录兜底（ARM Homebrew / Intel Homebrew / 系统）
+        # 3) 系统常见目录兜底（按平台补充）
+        if sys.platform == "win32":
+            add(r"C:\ffmpeg\bin")
+            add(os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links"))
         for fb in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
             add(fb)
 
@@ -680,8 +711,10 @@ class _CommentaryRuntime:
         return issues
 
     def env(self) -> dict[str, str]:
-        """为 process.py 子进程准备环境变量，关键是把 ffmpeg/ffprobe 目录前置到 PATH。"""
+        """为 process.py 子进程准备环境变量，关键是把 ffmpeg/ffprobe 目录前置到 PATH，
+        并强制 PYTHONIOENCODING=utf-8（Windows 默认 cp936 会让 emoji 日志乱码/抛错）。"""
         env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         if self.ffmpeg_dir:
             env["PATH"] = self.ffmpeg_dir + os.pathsep + env.get("PATH", "")
         return env
@@ -923,7 +956,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             proc = subprocess.Popen(
                 args, cwd=str(COMMENTARY_DIR),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, env=COMMENTARY_RT.env(),
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=COMMENTARY_RT.env(),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(f"解说管线无法启动：{exc}") from exc
