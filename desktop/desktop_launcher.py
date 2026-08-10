@@ -232,28 +232,55 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _activate_existing_window() -> None:
-    """重复启动时把已有 VideoDownloader 窗口提到最前（macOS）。"""
-    if sys.platform != "darwin":
-        return
+    """重复启动时把已有 VideoDownloader 窗口提到最前（macOS），并兜底打开浏览器。
+
+    关键修复：原本仅靠 System Events 的 `set frontmost`，而该操作需要「辅助功能」
+    权限，未授权时静默失败、双击看起来像「打不开」。现改为：先尽力用 System
+    Events 提窗，失败（无权限/被拒）则直接打开浏览器访问已运行的本地服务，
+    保证用户双击总能获得可用界面，绝不静默无响应。
+    """
+    port = None
     try:
-        subprocess.run(
-            ["osascript", "-e",
-             'tell application "System Events" to set frontmost of '
-             '(every process whose name contains "VideoDownloader") to true'],
-            check=False, capture_output=True,
-        )
-    except Exception:  # pragma: no cover - 激活失败不影响退出
+        lp = Path.home() / ".vdl_instance.lock"
+        if lp.exists():
+            parts = lp.read_text().strip().split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                port = int(parts[1])
+    except Exception:
         pass
+    # 兜底：直接打开浏览器访问已运行的本地服务（不依赖任何辅助功能权限）
+    if port:
+        try:
+            import webbrowser
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+        except Exception:
+            pass
+    # 尽力把原生窗口提到最前（无权限时失败也不影响上面的浏览器兜底）
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to set frontmost of '
+                 '(every process whose name contains "VideoDownloader") to true'],
+                check=False, capture_output=True,
+            )
+        except Exception:
+            pass
 
 
 def _ensure_single_instance():
-    """同一用户只保留一个 GUI 实例。返回 lock handle（非 None=已拿到锁，可启动）。"""
+    """同一用户只保留一个 GUI 实例。返回 lock handle（非 None=已拿到锁，可启动）。
+
+    锁文件写入 `PID PORT`，供 _activate_existing_window 在重复启动时读取端口、
+    直接打开浏览器访问已运行的服务（避免依赖 System Events 权限导致的静默失败）。
+    """
     lock_path = Path.home() / ".vdl_instance.lock"
     # 清理僵尸锁（上次异常退出未释放且持有进程已死）
     try:
         if lock_path.exists():
             old = lock_path.read_text().strip()
-            if old.isdigit() and not _pid_alive(int(old)):
+            old_pid = old.split()[0] if old else ""
+            if old_pid.isdigit() and not _pid_alive(int(old_pid)):
                 try:
                     lock_path.unlink()
                 except OSError:
@@ -267,7 +294,7 @@ def _ensure_single_instance():
             msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
         else:
             _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-        f.write(str(os.getpid()))
+        f.write(f"{os.getpid()} {PORT}\n")
         f.flush()
         return f  # 调用方必须持有此对象直到退出
     except Exception:
