@@ -537,18 +537,36 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     占满并发槽拖垮后续所有下载（典型如 m3u8 流慢速 trickle 不触发 socket_timeout）。
     """
     stop = threading.Event()
-    last = {"bytes": 0, "ts": time.time()}
+    last = {"bytes": 0, "disk": 0, "ts": time.time()}
+    _workdir = Path(task.workdir) if task.workdir else None
+
+    def _workdir_bytes() -> int:
+        """工作目录里最大文件体积——m3u8_native 等协议 yt-dlp 进度钩子只在整段下完才触发，
+        不足以作为「还在跑」的信号；用磁盘上文件实际增长作兜底。"""
+        if not _workdir or not _workdir.is_dir():
+            return 0
+        try:
+            return max((p.stat().st_size for p in _workdir.iterdir() if p.is_file()), default=0)
+        except OSError:
+            return 0
 
     def _watchdog() -> None:
-        """下载中但 N 秒无字节增量 → 判定停滞，置取消标记让进度回调抛出终止。"""
+        """下载中但 N 秒无字节增量 → 判定停滞，置取消标记让进度回调抛出终止。
+        信号：①yt-dlp 进度钩子报告的 downloaded_bytes ②工作目录里最大文件体积
+        （覆盖 m3u8_native/分段合并等无进度钩子场景）"""
         while not stop.is_set() and not task.is_finished:
             time.sleep(WATCHDOG_POLL)
             if task.status != "downloading":
                 continue
-            cur = task.downloaded_bytes
-            if cur > last["bytes"]:
-                last["bytes"] = cur
+            cur_disk = _workdir_bytes()
+            if cur_disk > last["disk"]:
+                last["disk"] = cur_disk
                 last["ts"] = time.time()
+            if task.downloaded_bytes > last["bytes"]:
+                last["bytes"] = task.downloaded_bytes
+                last["ts"] = time.time()
+            elif cur_disk > last["disk"]:
+                pass  # 上一分支已更新时间
             elif time.time() - last["ts"] > DOWNLOAD_STALL_TIMEOUT:
                 task.add_step("下载音视频", "error", f"停滞 {DOWNLOAD_STALL_TIMEOUT}s，已自动终止")
                 task.log(f"下载停滞超过 {DOWNLOAD_STALL_TIMEOUT}s，自动终止")
