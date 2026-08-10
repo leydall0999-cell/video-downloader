@@ -256,6 +256,7 @@ def _friendly_error(exc: Exception) -> ResolveError:
         (("timed out", "timeout", "connection", "network", "resolve", "proxy", "ssl"), "网络连接超时", "请检查本机网络（部分海外站点需要代理）后重试"),
         (("drm", "protected"), "该视频有版权保护，无法下载", "请通过官方渠道观看"),
         (("extractor error", "keyerror", "unable to extract"), "无法识别该链接对应的视频", "请确认链接完整且指向具体的视频页面"),
+        (("ffmpeg", "postprocessing", "post processing", "merging"), "音视频合并失败，可能是该画质源文件格式兼容性问题", "建议：①点「重试」试一次（偶发）；②换 720P 或其他画质重新下载；③仍不行请反馈该链接"),
     )
     for keywords, message, hint in rules:
         if any(word in lowered for word in keywords):
