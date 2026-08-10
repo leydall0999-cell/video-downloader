@@ -859,7 +859,28 @@ def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
         job["eta_done_at"] = int(now + rem)
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str = "highlights") -> None:
+def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_source: str = "ai",
+                             intro_highlight: bool = False, skip_intro_outro: bool = False,
+                             retain_pct: float | None = None, web: bool = False,
+                             one_click: bool = False, mode: str | None = None) -> list:
+    """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。"""
+    args = ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
+    if intro_highlight:
+        args.append("--intro-highlight")
+    if skip_intro_outro:
+        args.append("--skip-intro-outro")
+    if retain_pct is not None:
+        args += ["--retain-pct", str(retain_pct)]
+    if web:
+        args.append("--web")
+    if one_click:
+        args.append("--one-click")
+    if mode:  # 旧版兼容字段，仅当显式传了才带
+        args += ["--mode", mode]
+    return args
+
+
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, retain_pct: float | None = None, web: bool = False, one_click: bool = False) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -867,7 +888,13 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
     HTTP 模式(VDL_COMMENTARY_MODE=http)下转发给独立 worker 服务。
     """
     if COMMENTARY_MODE == "http":
-        return _commentary_run_http(job_id, src_path, vertical, voice, mode)
+        return _commentary_run_http(job_id, src_path, vertical, voice, mode,
+                                    commentary_type=commentary_type,
+                                    highlight_source=highlight_source,
+                                    intro_highlight=intro_highlight,
+                                    skip_intro_outro=skip_intro_outro,
+                                    retain_pct=retain_pct, web=web,
+                                    one_click=one_click)
     try:
         # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
         if not COMMENTARY_RT.ready():
@@ -902,6 +929,12 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         # bundled 模式：用主程序自身(sys.executable)以 --vdl-commentary-worker 重入为 worker，
         # 依赖随包内置(已砍 torch)，无需外部 Python / pip，契合自包含铁律。
         _bundled = _commentary_is_bundled()
+        extra = _commentary_option_args(commentary_type=commentary_type,
+                                        highlight_source=highlight_source,
+                                        intro_highlight=intro_highlight,
+                                        skip_intro_outro=skip_intro_outro,
+                                        retain_pct=retain_pct, web=web,
+                                        one_click=one_click, mode=mode)
         if edit_only:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker",
@@ -912,7 +945,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args.append("--vertical")
             if voice:
                 args += ["--voice", voice]
-            # edit_only 走已审核脚本，高光/全片由脚本自带 mode 字段决定，无需重复传参
+            # 审核后出片：把用户在面板上改过的剪辑选项一并传下去（覆盖脚本自带选项）
+            args += extra
         else:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker", str(in_file), "--auto"]
@@ -920,12 +954,11 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--auto"]
             if vertical:
                 args.append("--vertical")
-            if mode and mode != "highlights":
-                args += ["--mode", mode]
             if voice:
                 args += ["--voice", voice]
             if script_only:
                 args.append("--script-only")
+            args += extra
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
@@ -1037,7 +1070,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         logger.exception("解说任务 %s 失败", job_id)
 
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str = "highlights") -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, retain_pct: float | None = None, web: bool = False, one_click: bool = False) -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
@@ -1079,11 +1112,24 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
     try:
         _set_http_step(0, "running", f"上传 {Path(src_path).name}")
         with open(src_path, "rb") as fh:
+            data = {
+                "vertical": "true" if vertical else "false",
+                "voice": voice,
+                "commentary_type": commentary_type,
+                "highlight_source": highlight_source,
+                "intro_highlight": "true" if intro_highlight else "false",
+                "skip_intro_outro": "true" if skip_intro_outro else "false",
+                "web": "true" if web else "false",
+                "one_click": "true" if one_click else "false",
+            }
+            if retain_pct is not None:
+                data["retain_pct"] = str(retain_pct)
+            if mode:
+                data["mode"] = mode
             resp = requests.post(
                 f"{endpoint}/render",
                 files={"video": (f"{job_id}.mp4", fh, "video/mp4")},
-                data={"vertical": "true" if vertical else "false", "voice": voice,
-                      "mode": mode},
+                data=data,
                 headers=headers,
                 timeout=600,
             )
@@ -1732,10 +1778,18 @@ class CommentaryRequest(BaseModel):
     voice: str = Field(default="", max_length=64)
     trim_start: float = Field(default=0.0, ge=0.0)
     trim_end: float = Field(default=0.0, ge=0.0)
-    mode: str = Field(default="highlights",
-                      description="解说模式(三选一，无第四种): highlights=选择一(全片保留+仅高光叠加解说); "
-                                  "highlights_intro=选择二(高光+开场精彩片段+可剪切≤20%); "
-                                  "full_web=选择三(全片解说+联网自由发挥+单行字幕+羽化原字幕)")
+    # 剪辑选项（与 commentary-pipeline 的 commentary_options 模型一致）
+    commentary_type: str = Field(default="deep_hl",
+                                 description="解说类型: deep_hl=高光处叠加深度解说; normal_hl=高光部分普通解说; "
+                                             "full_normal=全片普通解说; full_deep=全片深入解说")
+    highlight_source: str = Field(default="ai", description="高光来源: ai=AI自动挑; manual=人工在审核面板挑")
+    intro_highlight: bool = Field(default=False, description="片头插入最精彩片段当钩子")
+    skip_intro_outro: bool = Field(default=False, description="跳过片头片尾")
+    retain_pct: float | None = Field(default=None, description="保留全片时长百分比(10~100, 不填=不裁剪)")
+    web: bool = Field(default=False, description="联网搜索资料辅助发挥")
+    one_click: bool = Field(default=False, description="一键生成: 全片深入解说+AI联网+片头插精彩片段")
+    mode: str | None = Field(default=None,
+                             description="(旧版兼容) 三选一解说模式，会被上面的新选项覆盖")
 
 
 class ScriptUpdateRequest(BaseModel):
@@ -1764,7 +1818,12 @@ def create_commentary(payload: CommentaryRequest) -> dict:
                                    "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
                     trim_start=payload.trim_start, trim_end=payload.trim_end,
-                    mode=payload.mode)
+                    mode=payload.mode, commentary_type=payload.commentary_type,
+                    highlight_source=payload.highlight_source,
+                    intro_highlight=payload.intro_highlight,
+                    skip_intro_outro=payload.skip_intro_outro,
+                    retain_pct=payload.retain_pct, web=payload.web,
+                    one_click=payload.one_click)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1810,6 +1869,13 @@ def create_script_only_upload(
     trim_start: float = Form(0.0),
     trim_end: float = Form(0.0),
     mode: str = Form("highlights"),
+    commentary_type: str = Form("deep_hl"),
+    highlight_source: str = Form("ai"),
+    intro_highlight: bool = Form(False),
+    skip_intro_outro: bool = Form(False),
+    retain_pct: float = Form(None),
+    web: bool = Form(False),
+    one_click: bool = Form(False),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
     if not COMMENTARY_ENABLED:
@@ -1834,7 +1900,10 @@ def create_script_only_upload(
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE, script_only=True,
-                    trim_start=trim_start, trim_end=trim_end, mode=mode)
+                    trim_start=trim_start, trim_end=trim_end, mode=mode,
+                    commentary_type=commentary_type, highlight_source=highlight_source,
+                    intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
+                    retain_pct=retain_pct, web=web, one_click=one_click)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -2018,7 +2087,12 @@ def create_script_only(payload: CommentaryRequest) -> dict:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "", "progress": []}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
                     script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end,
-                    mode=payload.mode)
+                    mode=payload.mode, commentary_type=payload.commentary_type,
+                    highlight_source=payload.highlight_source,
+                    intro_highlight=payload.intro_highlight,
+                    skip_intro_outro=payload.skip_intro_outro,
+                    retain_pct=payload.retain_pct, web=payload.web,
+                    one_click=payload.one_click)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -2080,6 +2154,9 @@ def update_script(job_id: str, payload: ScriptUpdateRequest) -> dict:
         "segments": merged,
         # 保留原始 mode（如高光解说模式），否则保存后再渲染会丢失高光标记
         "mode": existing.get("mode", ""),
+        # 保留原始 options（剪辑选项：解说类型/高光来源/片头高光/联网/保留时长等），
+        # 否则审核后渲染会丢失用户在面板上的剪辑选择
+        "options": existing.get("options", {}),
     }
     try:
         script_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2096,7 +2173,11 @@ def update_script(job_id: str, payload: ScriptUpdateRequest) -> dict:
 
 @app.post("/api/commentary/render/{job_id}")
 def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form("")) -> dict:
-    """用已审核的脚本渲染成片（process.py --edit-only）。"""
+    """用已审核的脚本渲染成片（process.py --edit-only）。
+
+    剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
+    避免用默认值覆盖用户当初的选择（例如一键生成的全片深入+联网会被 deep_hl 默认值冲掉）。
+    """
     if not COMMENTARY_ENABLED:
         raise HTTPException(status_code=503, detail="该实例未启用解说功能")
     if COMMENTARY_MODE == "http":
@@ -2109,12 +2190,22 @@ def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form(""
     if job["status"] != "script_ready" or not job.get("script_path"):
         raise HTTPException(status_code=409, detail="请先生成脚本再渲染（当前状态: " + job["status"] + "）")
     script_path = job["script_path"]
-    # 从 script.json 的 segments 里找回原始视频名
+    # 从 script.json 的 segments 里找回原始视频名 + 已保存的剪辑选项
     try:
         seg_data = json.loads(Path(script_path).read_text(encoding="utf-8"))
         title = seg_data.get("title", "")
+        saved = seg_data.get("options") or {}
     except Exception:
         title = ""
+        saved = {}
+
+    commentary_type = saved.get("commentary_type", "deep_hl")
+    highlight_source = saved.get("highlight_source", "ai")
+    intro_highlight = bool(saved.get("intro_highlight", False))
+    skip_intro_outro = bool(saved.get("skip_intro_outro", False))
+    retain_pct = saved.get("retain_pct")
+    web = bool(saved.get("web", False))
+    one_click = bool(saved.get("one_click", False))
 
     # 反查原始视频路径（优先同名 input 文件，否则从工作目录搜）
     base_name = title or job_id
@@ -2135,7 +2226,10 @@ def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form(""
                                           "parent_script_job": job_id, "steps": [], "logs": []}
     v = voice or job.get("voice", "") or COMMENTARY_VOICE
     executor.submit(_commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path,
-                    trim_start=trim_start, trim_end=trim_end)
+                    trim_start=trim_start, trim_end=trim_end,
+                    commentary_type=commentary_type, highlight_source=highlight_source,
+                    intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
+                    retain_pct=retain_pct, web=web, one_click=one_click)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 

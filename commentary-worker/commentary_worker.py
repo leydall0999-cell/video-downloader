@@ -62,6 +62,14 @@ async def render(
     video: UploadFile = File(...),
     vertical: bool = Form(False),
     voice: str = Form("zh-CN-XiaoxiaoNeural"),
+    commentary_type: str = Form("deep_hl"),
+    highlight_source: str = Form("ai"),
+    intro_highlight: bool = Form(False),
+    skip_intro_outro: bool = Form(False),
+    retain_pct: str = Form(""),
+    web: bool = Form(False),
+    one_click: bool = Form(False),
+    mode: str = Form(""),
 ):
     global _running
     with _lock:
@@ -81,6 +89,19 @@ async def render(
             args.append("--vertical")
         if voice:
             args += ["--voice", voice]
+        args += ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
+        if intro_highlight:
+            args.append("--intro-highlight")
+        if skip_intro_outro:
+            args.append("--skip-intro-outro")
+        if retain_pct and retain_pct.strip():
+            args += ["--retain-pct", retain_pct.strip()]
+        if web:
+            args.append("--web")
+        if one_click:
+            args.append("--one-click")
+        if mode:
+            args += ["--mode", mode]
 
         with _lock:
             jobs[job_id] = {

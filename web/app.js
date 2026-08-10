@@ -244,6 +244,11 @@
     comReviewActions: $('comReviewActions'),
     comOpenReview: $('comOpenReview'),
     comModeGroup: $('comModeGroup'),
+    comGenerateOneClick: $('comGenerateOneClick'),
+    comIntroHighlight: $('comIntroHighlight'),
+    comSkipIntroOutro: $('comSkipIntroOutro'),
+    comWeb: $('comWeb'),
+    comRetainPct: $('comRetainPct'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
     comLogs: $('comLogs'),
@@ -1395,10 +1400,20 @@
   };
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
-  // 读取当前选中的解说模式（选择一/二/三）
-  const comCurrentMode = () => {
-    const r = document.querySelector('input[name="comMode"]:checked');
-    return r ? r.value : 'highlights';
+  // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关 / 保留时长 / 一键生成）
+  const comGetOptions = (forceOneClick = false) => {
+    const typeEl = document.querySelector('input[name="comType"]:checked');
+    const srcEl = document.querySelector('input[name="comHlSource"]:checked');
+    const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
+    return {
+      commentary_type: typeEl ? typeEl.value : 'deep_hl',
+      highlight_source: srcEl ? srcEl.value : 'ai',
+      intro_highlight: !!(el.comIntroHighlight && el.comIntroHighlight.checked),
+      skip_intro_outro: !!(el.comSkipIntroOutro && el.comSkipIntroOutro.checked),
+      retain_pct: rp,
+      web: !!(el.comWeb && el.comWeb.checked),
+      one_click: !!forceOneClick,
+    };
   };
 
   /** 根据按钮 id 返回初始文案，错误恢复时使用。 */
@@ -1412,7 +1427,7 @@
   /** 统一的「生成解说」入口：统一先走 script-only，打开人工审核面板，
    *  用户确认后再点击「生成成片」。避免直接渲染导致无法修改。
    *  从媒体库调用时自动切到解说标签页。 */
-  const createCommentary = async (source, refs, base = '') => {
+  const createCommentary = async (source, refs, base = '', oneClick = false) => {
     switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
@@ -1421,9 +1436,10 @@
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在生成解说词，生成后可在下方审核修改…';
     try {
+      const opts = comGetOptions(oneClick);
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() }
-        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() };
+        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
+        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -1448,7 +1464,7 @@
     }
   };
 
-  const createCommentaryFromFile = async (file, refs) => {
+  const createCommentaryFromFile = async (file, refs, oneClick = false) => {
     switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
@@ -1462,7 +1478,14 @@
       form.append('vertical', 'false');
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
-      form.append('mode', comCurrentMode());
+      const opts = comGetOptions(oneClick);
+      form.append('commentary_type', opts.commentary_type);
+      form.append('highlight_source', opts.highlight_source);
+      form.append('intro_highlight', String(opts.intro_highlight));
+      form.append('skip_intro_outro', String(opts.skip_intro_outro));
+      if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
+      form.append('web', String(opts.web));
+      form.append('one_click', String(opts.one_click));
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
@@ -1497,9 +1520,10 @@
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在转写并生成AI解说词（不渲染成片），长视频可能需数分钟…';
     try {
+      const opts = comGetOptions();
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() }
-        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() };
+        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
+        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST', body: JSON.stringify(body),
       });
@@ -1528,7 +1552,14 @@
       form.append('vertical', 'false');
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
-      form.append('mode', comCurrentMode());
+      const opts = comGetOptions();
+      form.append('commentary_type', opts.commentary_type);
+      form.append('highlight_source', opts.highlight_source);
+      form.append('intro_highlight', String(opts.intro_highlight));
+      form.append('skip_intro_outro', String(opts.skip_intro_outro));
+      if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
+      form.append('web', String(opts.web));
+      form.append('one_click', String(opts.one_click));
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);
@@ -2191,6 +2222,36 @@
       createCommentaryFromFile(
         selectedLocalFile,
         { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+      );
+      return;
+    }
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
+  });
+
+  // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；
+  // 仍走脚本审核流程（默认铁律：AI 解说词可人工审核修改）。
+  el.comGenerateOneClick.addEventListener('click', () => {
+    if (!commentaryEnvReady) {
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
+      return;
+    }
+    const fileId = el.comSource.value;
+    if (fileId) {
+      createCommentary(
+        { fileId },
+        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        '',
+        true,
+      );
+      return;
+    }
+    if (selectedLocalFile) {
+      createCommentaryFromFile(
+        selectedLocalFile,
+        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        true,
       );
       return;
     }

@@ -359,22 +359,60 @@
       </div>
     </div>
 
-    <div class="com-mode-group" id="comModeGroup">
-      <div class="com-mode-option">
-        <input type="radio" name="comMode" id="comMode1" value="highlights" checked />
-        <label for="comMode1"><b>选择一</b>：跳过片头片尾（可手填秒数）+ AI 先挑高光 + 你微调；全片保留，仅高光处叠加深度解说（间隙原声、无解说无字幕）</label>
+    <!-- 剪辑选项：四类方案按需选用，不设固定勾选（默认给出合理选择） -->
+    <div class="com-opts" id="comOpts">
+      <!-- 方案①：自动挑高光（高光来源） -->
+      <div class="com-opt-block">
+        <div class="com-opt-title">① 自动挑高光</div>
+        <div class="com-opt-row">
+          <label class="com-mode-option"><input type="radio" name="comHlSource" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
+          <label class="com-mode-option"><input type="radio" name="comHlSource" value="manual" /><span>人工在审核面板挑选</span></label>
+        </div>
       </div>
-      <div class="com-mode-option">
-        <input type="radio" name="comMode" id="comMode2" value="highlights_intro" />
-        <label for="comMode2"><b>选择二</b>：跳过片头片尾 + AI 先挑高光 + 你微调；可剪切平淡段（≤全片20%）+ 高光叠加深度解说 + 开头插精彩片段钩子</label>
+
+      <!-- 方案②：解说类型 -->
+      <div class="com-opt-block">
+        <div class="com-opt-title">② 解说</div>
+        <div class="com-opt-row">
+          <label class="com-mode-option"><input type="radio" name="comType" value="deep_hl" checked /><span><b>高光处叠加深度解说</b></span></label>
+          <label class="com-mode-option"><input type="radio" name="comType" value="normal_hl" /><span>高光部分普通解说</span></label>
+          <label class="com-mode-option"><input type="radio" name="comType" value="full_normal" /><span>全片普通解说</span></label>
+          <label class="com-mode-option"><input type="radio" name="comType" value="full_deep" /><span>全片深入解说</span></label>
+        </div>
       </div>
-      <div class="com-mode-option">
-        <input type="radio" name="comMode" id="comMode3" value="full_web" />
-        <label for="comMode3"><b>选择三</b>：AI 联网查现有解说、高度自由发挥；全片解说 + 单行字幕（与原字幕同行）+ 只羽化原字幕（画面不羽化）</label>
+
+      <!-- 方案③：开头加高光 -->
+      <div class="com-opt-block">
+        <div class="com-opt-title">③ 开头加高光</div>
+        <label class="com-highlights-toggle">
+          <input type="checkbox" id="comIntroHighlight" />
+          <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
+        </label>
       </div>
+
+      <!-- 方案④：固定选择项 -->
+      <div class="com-opt-block">
+        <div class="com-opt-title">④ 固定选择项</div>
+        <label class="com-highlights-toggle">
+          <input type="checkbox" id="comSkipIntroOutro" />
+          <span>跳过片头片尾（各砍约 8%，上限 90s）</span>
+        </label>
+        <label class="com-highlights-toggle com-retain-row">
+          <span class="com-retain-label">保留全片时长百分比</span>
+          <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="100=不裁" class="com-num" />
+          <span class="com-unit">%（10~100，留空=不裁剪）</span>
+        </label>
+      </div>
+
+      <!-- 联网发挥（任何解说类型都可开启） -->
+      <label class="com-highlights-toggle">
+        <input type="checkbox" id="comWeb" />
+        <span><b>联网查找资料辅助发挥</b>（AI 高度自由发挥、可自动联网搜集相关资料）</span>
+      </label>
     </div>
 
     <div class="com-generate-row">
+      <button type="button" class="btn btn-primary com-generate-main com-oneclick" id="comGenerateOneClick">⚡ 一键生成（全片深入+联网+片头钩子）</button>
       <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
       <button type="button" class="btn btn-secondary com-generate-main" id="comGenerateDirect">生成脚本并审核</button>
     </div>

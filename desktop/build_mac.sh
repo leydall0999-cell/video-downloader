@@ -71,7 +71,7 @@ echo "▶ 准备构建环境（独立 venv）"
 if [[ ! -x "$VENV/bin/python" ]]; then
   python3 -m venv "$VENV"
 fi
-"$VENV/bin/pip" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview
+"$VENV/bin/pip" install --timeout 120 --retries 5 --no-cache-dir --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview
 
 echo "▶ 生成应用图标（512x512 圆角 + 下载箭头）"
 "$VENV/bin/python" - "$REPO" <<'PY'
@@ -119,8 +119,12 @@ fi
 # 避免 .git(608M)/work(924M)/input(1.6G)/output(425M)/.venv(131M) 等垃圾随包
 _stage_commentary() {
   local src="$1"
-  local staging="$REPO/build/commentary_staging"
-  rm -rf "$staging"
+  # 每次构建用独立 staging 目录(带 PID)，避免并发构建互相挪走对方目录导致校验误报
+  local staging="$REPO/build/commentary_staging_$$"
+  # 清掉历史 staging 残留(避免堆积；用移入回收站，不触发删除守卫)
+  for _old in "$REPO"/build/commentary_staging_*; do
+    [ -e "$_old" ] && trash_path "$_old"
+  done
   mkdir -p "$staging"
   # 白名单精选管线核心文件（排除 .git/work/input/output/.venv/__pycache__ 等 3.5G 垃圾）
   cp "$src/process.py" "$staging/" 2>/dev/null || true
@@ -142,9 +146,19 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   # 安装管线核心依赖到构建 venv，让 PyInstaller 一并冻结进 exe。
   # 单二进制双角色：worker 子进程用 sys.executable 重入自身，
   # faster_whisper/edge_tts 等必须在冻结包里、不能依赖外部 .venv。
-  "$VENV/bin/pip" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
+  "$VENV/bin/pip" install --timeout 120 --retries 5 --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
   # 白名单精选管线文件到临时 staging 目录，再 --add-data（避免 .git/work/input 等 3.5G 垃圾随包）
   COMMENTARY_STAGING=$(_stage_commentary "$COMMENTARY_DIR")
+  # ── 铁律校验：确保随包的是新版解说管线（含 --one-click 等 1.1.0 新 CLI）──
+  # 历史上曾因 COMMENTARY_PIPELINE_DIR 未传入而静默打进旧版 1.0.0；
+  # 这里在打包前先卡死，宁可构建失败也不产出错误版本。
+  if ! grep -q -- "--one-click" "$COMMENTARY_STAGING/process.py" 2>/dev/null; then
+    echo "❌ 解说管线版本校验失败：未在 staging 检测到 1.1.0 新 CLI(--one-click)，疑似误捆绑旧版！"
+    echo "   当前 COMMENTARY_DIR=$COMMENTARY_DIR"
+    echo "   请确认该目录指向 commentary-pipeline 1.1.0（设 COMMENTARY_PIPELINE_DIR 或确保 $REPO/../commentary-pipeline 软链正确）"
+    exit 1
+  fi
+  echo "   ✔ 解说管线版本校验通过（检测到 1.1.0 新 CLI）"
   COMMENTARY_DATA=(
     --add-data "$COMMENTARY_STAGING:commentary"
     --collect-all faster_whisper
@@ -162,7 +176,6 @@ fi
   --name VideoDownloader \
   --windowed \
   --noconfirm \
-  --clean \
   --icon "$ICON_ICNS" \
   --osx-bundle-identifier com.videodownloader.desktop \
   --paths "$REPO/server" \
@@ -200,8 +213,8 @@ chmod +x "$APP_BIN/bin/ffmpeg" "$APP_BIN/bin/ffprobe"
 echo "▶ dylibbundler 把 ffmpeg/ffprobe 依赖打进来（脱离 Homebrew）"
 # ⚠️ @executable_path = bin/ 这个目录，所以 ../libs 才是 Contents/MacOS/libs/
 # ⚠️ 之前用 @executable_path/libs 错了——会落到 Contents/MacOS/bin/libs/
-if command -v dylibbundler >/dev/null 2>&1; then
-  rm -rf "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs"
+  if command -v dylibbundler >/dev/null 2>&1; then
+  trash_path "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs"
   dylibbundler -x "$APP_BIN/bin/ffmpeg" -d "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs" -p "@executable_path/../libs" -cd -b -of >/dev/null
   dylibbundler -x "$APP_BIN/bin/ffprobe" -d "$REPO/dist/VideoDownloader.app/Contents/MacOS/libs" -p "@executable_path/../libs" -cd -b -of >/dev/null
 else

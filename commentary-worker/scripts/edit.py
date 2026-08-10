@@ -34,7 +34,8 @@ import asyncio
 import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import OUTPUT, WORK, VOICE, FONT, SUBTITLE_SIZE, ORIGINAL_DUCK
+from config import OUTPUT, WORK, VOICE, FONT, SUBTITLE_SIZE, ORIGINAL_DUCK, ensure_dirs
+from ffmpeg_path import ffprobe_bin
 
 
 def _wrap(text, max_chars=20):
@@ -72,6 +73,7 @@ def build(video_path, script_path, out_path,
                          CompositeVideoClip, CompositeAudioClip,
                          concatenate_videoclips)
 
+    ensure_dirs()
     with open(script_path, encoding="utf-8") as f:
         script = json.load(f)
     voice = voice_override or script.get("voice", VOICE)
@@ -82,7 +84,7 @@ def build(video_path, script_path, out_path,
 
     # 用 ffprobe 取总时长, 避免为拿时长一直开着视频
     dur_total = float(subprocess.check_output(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+        [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", video_path]).strip())
 
     clips = []

@@ -1191,6 +1191,25 @@ img { max-width: 100%; display: block; }
 .com-mode-option input { margin-top: .2rem; width: 1rem; height: 1rem; accent-color: var(--accent); flex: none; }
 .com-mode-option b { color: var(--accent); }
 
+/* ---- 剪辑选项面板（四类方案） ---- */
+.com-opts {
+  display: flex; flex-direction: column; gap: .6rem; margin-top: .9rem;
+  padding: .85rem .9rem; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+}
+.com-opt-block { display: flex; flex-direction: column; gap: .4rem; }
+.com-opt-title { font-size: .95rem; font-weight: 700; color: var(--accent); }
+.com-opt-row { display: flex; flex-wrap: wrap; gap: .4rem .9rem; }
+.com-opt-row .com-mode-option { flex: 0 0 auto; }
+.com-retain-row { align-items: center; gap: .5rem; }
+.com-retain-label { white-space: nowrap; }
+.com-num { width: 4.5rem; padding: .3rem .4rem; font-size: .9rem; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--bg); color: var(--text); }
+.com-unit { font-size: .82rem; opacity: .8; }
+.com-oneclick { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff7a00));
+  border: none; color: #fff; }
+.com-oneclick:hover { filter: brightness(1.05); }
+
 /* ---- 脚本审核编辑面板 ---- */
 #comScriptPanel {
   margin-top: 1.25rem; padding: 1rem; background: var(--surface);
