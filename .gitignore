@@ -31,3 +31,6 @@ VideoDownloader.spec
 desktop/icon.png
 desktop/icon.icns
 desktop/icon.ico
+
+# 测试运行产生的临时媒体库目录
+tests/_phases_tmp/
