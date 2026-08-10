@@ -233,6 +233,7 @@
     comScriptSegments: $('comScriptSegments'),
     comScriptSave: $('comScriptSave'),
     comScriptRender: $('comScriptRender'),
+    comScriptFile: $('comScriptFile'),
     comScriptStatus: $('comScriptStatus'),
     comScriptPrevAll: $('comScriptPrevAll'),
     comAudioPreview: $('comAudioPreview'),
@@ -1760,7 +1761,7 @@
         method: 'POST', body: form,
       });
       pollCommentaryJob(job_id,
-        { commentary: el.comScriptRender, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        { commentary: el.comScriptRender, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
         '',
         () => {
           loadCommentary();
@@ -1881,6 +1882,37 @@
   el.comScriptRender.addEventListener('click', renderFromScript);
   el.comScriptVoicePreview.addEventListener('click', previewVoice);
   el.comScriptPrevAll.addEventListener('click', previewAllSegments);
+
+  // 桌面版(pywebview)下载拦截：<a download> 在 WebKit 里不弹保存框，
+  // 改为调用 Python 桥接 API 直接把文件复制到「下载」文件夹。
+  function wireSaveToDownloads(aEl) {
+    if (!aEl) return;
+    aEl.addEventListener('click', async (ev) => {
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || !api.save_commentary_file) return;  // 浏览器环境：放行默认 <a download>
+      ev.preventDefault();
+      const href = aEl.href || '';
+      const m = /\/api\/commentary\/([^/]+)\/file/.exec(href);
+      const jobId = m ? m[1] : '';
+      const fname = aEl.getAttribute('download') || '解说成片.mp4';
+      const orig = aEl.textContent;
+      aEl.textContent = '保存中…';
+      try {
+        const res = await api.save_commentary_file(jobId, fname);
+        if (typeof res === 'string' && res.startsWith('ERROR:')) {
+          aEl.textContent = '保存失败';
+          setTimeout(() => { aEl.textContent = orig; }, 3000);
+        } else {
+          aEl.textContent = '已保存到下载文件夹 ✓';
+        }
+      } catch (err) {
+        aEl.textContent = '保存失败';
+        setTimeout(() => { aEl.textContent = orig; }, 3000);
+      }
+    });
+  }
+  wireSaveToDownloads(el.comScriptFile);
+  wireSaveToDownloads(el.libCommentaryFile);
 
   // ---- 视频解说独立标签页 ----
   const noopComFile = { hidden: true, href: '', setAttribute() {}, classList: { toggle() {} } };
@@ -2205,7 +2237,7 @@
     if (fileId) {
       createCommentary(
         { fileId },
-        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
         '',
         true,
       );

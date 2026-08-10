@@ -140,6 +140,21 @@ _stage_commentary() {
   [ -d "$src/scripts" ] && cp -R "$src/scripts" "$staging/"
   [ -d "$src/models" ] && cp -R "$src/models" "$staging/"
   [ -d "$src/assets" ] && cp -R "$src/assets" "$staging/"
+  # 字幕自包含铁律：确保随包 assets/fonts 有真实中文字体，否则 PIPL 在打包机上字幕中文
+  # 会回落到系统字体（用户机器缺中文字体时直接不显示 -> 用户看到的「没有字幕」）。
+  # 开发态 assets/fonts 通常只有 README，这里从本机系统字体补一份进去。
+  _fonts="$staging/assets/fonts"
+  mkdir -p "$_fonts"
+  if ! ls "$_fonts"/*.tt[cf] >/dev/null 2>&1; then
+    for _sys in "/System/Library/Fonts/Hiragino Sans GB.ttc" \
+                "/System/Library/Fonts/PingFang.ttc" \
+                "/System/Library/Fonts/STHeiti Light.ttc"; do
+      if [ -f "$_sys" ]; then
+        cp "$_sys" "$_fonts/" 2>/dev/null && echo "   ✔ 复制系统中文字体进包: $(basename "$_sys")"
+        break
+      fi
+    done
+  fi
   for _f in "requirements.txt" "requirements-gpu.txt" "requirements-moviepy.txt" "requirements-worker.txt" \
             "VERSION" "selfcheck.py" "prepare_model.py" "start_worker.sh" \
             "COMMENTARY_PLAN.md" "verify_quality.py" "run_local.sh" "README.md"; do

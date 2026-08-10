@@ -187,6 +187,38 @@ HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
 
 
+class VdlApi:
+    """暴露给前端 JS 的桥接 API（仅 pywebview 桌面模式生效）。
+
+    桌面版无法通过 <a download> 触发系统保存框（WebKit 限制），
+    因此解说成片的「保存到本机」改由前端调用本 API，由 Python 直接把文件
+    复制到用户「下载」文件夹；返回保存路径或 "ERROR: ..."。
+    """
+
+    def save_commentary_file(self, job_id: str, filename: str) -> str:
+        import requests
+        from pathlib import Path
+        url = f"http://{HOST}:{PORT}/api/commentary/{job_id}/file"
+        downloads = Path.home() / "Downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        name = filename or "解说成片.mp4"
+        dest = downloads / name
+        # 避免覆盖已有文件
+        if dest.exists():
+            stem, suf = dest.stem, dest.suffix
+            i = 1
+            while dest.exists():
+                dest = downloads / f"{stem}({i}){suf}"
+                i += 1
+        try:
+            r = requests.get(url, timeout=(10, 600))
+            r.raise_for_status()
+            dest.write_bytes(r.content)
+        except Exception as exc:  # 把错误回传前端展示
+            return f"ERROR: {exc}"
+        return str(dest)
+
+
 def _handle_exit(*_args) -> None:
     os._exit(0)
 
