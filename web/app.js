@@ -500,6 +500,22 @@
     if (task.status === 'failed') return '下载中断';
     if (task.status === 'canceled') return '已取消';
     if (task.status === 'merging') return '正在合并音视频…';
+    if (task.status === 'downloading') {
+      const speed = task.speed > 0 ? `${formatBytes(task.speed)}/s` : '';
+      const eta = task.eta > 0 ? ` · 剩余 ${formatEta(task.eta)}` : '';
+      // 总大小已知：显示百分比 + 进度 + 速度 + ETA（最完整）
+      if (task.total_bytes > 0) {
+        const pct = ((task.downloaded_bytes || 0) / task.total_bytes * 100);
+        return `${pct.toFixed(1)}% · ${formatBytes(task.downloaded_bytes)} / ${formatBytes(task.total_bytes)} · ${speed}${eta}`.replace(' ·  · ', ' · ');
+      }
+      // 有速度但拿不到总大小（多数小站）：显示已下 + 速度（让用户看到"在动"）
+      if (task.speed > 0) {
+        return `已下载 ${formatBytes(task.downloaded_bytes)} · ${speed}`;
+      }
+      // 还没接到首个进度回调：占位
+      return '建立连接中…';
+    }
+    // 排队中、解析中等
     if (!task.total_bytes) return '正在建立连接…';
     const speed = task.speed > 0 ? `${formatBytes(task.speed)}/s` : '';
     return [`${formatBytes(task.downloaded_bytes)} / ${formatBytes(task.total_bytes)}`, speed, formatEta(task.eta)]
@@ -697,7 +713,10 @@
     refs.quality.textContent = task.quality;
     refs.status.textContent = STATUS_TEXT[task.status] || task.status;
     refs.status.dataset.state = task.status;
-    refs.bar.style.width = `${task.progress}%`;
+    // 进度条：拿到了 total 用百分比，否则 indeterminate 状态（CSS 走左右扫动）
+    const indeterminate = task.status === 'downloading' && (!task.total_bytes || task.total_bytes <= 0);
+    refs.bar.parentElement.classList.toggle('is-indeterminate', indeterminate);
+    refs.bar.style.width = indeterminate ? '40%' : `${task.progress}%`;
     refs.stats.textContent = buildStats(task);
     refs.cancel.hidden = !active;
     refs.root.classList.toggle('is-active', active);

@@ -343,11 +343,22 @@ img { max-width: 100%; display: block; }
 .status[data-state="completed"] { background: var(--success-soft); color: #15803d; }
 .status[data-state="failed"], .status[data-state="canceled"] { background: var(--danger-soft); color: #b91c1c; }
 
-.bar { height: 7px; border-radius: 99px; background: #eaecf4; overflow: hidden; margin: .65rem 0 .5rem; }
+.bar { height: 7px; border-radius: 99px; background: #eaecf4; overflow: hidden; margin: .65rem 0 .5rem; position: relative; }
 .bar-fill {
   height: 100%; width: 0%; border-radius: 99px;
   background: linear-gradient(90deg, var(--brand), var(--accent));
   transition: width .3s ease;
+}
+/* 总大小未知时的 indeterminate：bar-fill 在容器里左右扫动，表明"在跑只是没数字" */
+.bar.is-indeterminate { overflow: hidden; }
+.bar.is-indeterminate .bar-fill {
+  width: 40% !important;
+  background: linear-gradient(90deg, transparent, var(--brand), var(--accent), transparent);
+  animation: indeterminate-sweep 1.4s ease-in-out infinite;
+}
+@keyframes indeterminate-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
 }
 .task.is-active .bar-fill {
   background-size: 200% 100%;
