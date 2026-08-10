@@ -80,21 +80,22 @@ class ChrqjIE(InfoExtractor):
             name = item.get('resolutionName') or ('%sp' % resolution)
             need_login = bool(item.get('needLogin')) and not item.get('flag')
             note = name + ('（需登录）' if need_login else '')
-            formats.append({
-                'url': play_url,
-                'format_id': '%s-%s' % (resolution, name),
-                'format_note': note,
-                'ext': 'mp4',
-                'protocol': 'm3u8',
-                'vcodec': 'h264',
-                'height': resolution if isinstance(resolution, int) else None,
-                # 免登录清晰度优先，避免默认选到需登录的高清导致下载失败
-                'preference': 1 if not need_login else -1,
-                'http_headers': {
-                    'Referer': self._WEB_HOST,
-                    'User-Agent': self._UA,
-                },
-            })
+        formats.append({
+            'url': play_url,
+            'format_id': '%s-%s' % (resolution, name),
+            'format_note': note,
+            'ext': 'mp4',
+            'protocol': 'm3u8_native',  # 走 python 原生 HLS 下载器，避开 ffmpeg（沙盒偶发 SIGXCPU 强杀）
+            'vcodec': 'h264',
+            'acodec': 'aac',
+            'height': resolution if isinstance(resolution, int) else None,
+            # 免登录清晰度优先，避免默认选到需登录的高清导致下载失败
+            'preference': 1 if not need_login else -1,
+            'http_headers': {
+                'Referer': self._WEB_HOST,
+                'User-Agent': self._UA,
+            },
+        })
 
         if not formats:
             raise ExtractorError('未找到可播放的视频地址（该清晰度可能需登录）')

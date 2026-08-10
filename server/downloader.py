@@ -475,6 +475,9 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
         "progress_hooks": [reporter],
         "postprocessor_hooks": [reporter.on_postprocess],
         "overwrites": True,
+        # HLS 流优先走 Python 原生下载器，下载阶段不用 ffmpeg（沙盒偶发 SIGXCPU 152 强杀）
+        # 仅保留最后的 TS→mp4 remux 调用 ffmpeg（快、低风险）
+        "hls_prefer_native": True,
     }
     if _MAX_FILE_BYTES:
         options["max_filesize"] = _MAX_FILE_BYTES
