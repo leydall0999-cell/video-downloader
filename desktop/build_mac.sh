@@ -252,6 +252,8 @@ BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
 BUILD_INFO="构建 $BUILD_HASH @ $BUILD_DATE"
 perl -0pi -e "s{<span id=\"buildTag\" class=\"build-tag\"></span>}{<span id=\"buildTag\" class=\"build-tag\">$BUILD_INFO</span>}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
+# 同时把指纹写入程序可读文件，供 /api/version 自检（避免肉眼误判版本）
+echo "$BUILD_INFO" > "$REPO/dist/VideoDownloader.app/Contents/Resources/build_version.txt"
 echo "   指纹：$BUILD_INFO"
 
 echo "▶ 签名（ad-hoc）"

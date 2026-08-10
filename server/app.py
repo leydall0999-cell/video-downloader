@@ -1317,6 +1317,30 @@ def list_platforms() -> dict:
     return {"platforms": platform_catalog()}
 
 
+@app.get("/api/version")
+def api_version() -> dict:
+    """返回运行实例的构建指纹 + 实际加载的可执行文件路径。
+
+    部署脚本 deploy_mac.sh 用它做自校验：只有运行中的服务返回的指纹与
+    刚构建的 build_version.txt 一致、且 exe 路径确实指向目标 app 时，
+    才算「部署成功」，否则直接判定失败，杜绝「装的是旧版却以为装好了」。
+    """
+    # build_version.txt 的位置随运行形态不同：
+    #  - 打包后：<exe>/../Resources/build_version.txt（exe = Contents/MacOS/VideoDownloader）
+    #  - 开发态：server/app.py 的上两级（仓库根）无此文件，回落 "dev"
+    candidates = []
+    exe = getattr(sys, "executable", "")
+    if exe:
+        candidates.append(Path(exe).resolve().parent.parent / "Resources" / "build_version.txt")
+    candidates.append(Path(__file__).resolve().parent.parent / "build_version.txt")
+    version = "dev"
+    for c in candidates:
+        if c.exists():
+            version = c.read_text(encoding="utf-8").strip()
+            break
+    return {"version": version, "exe": sys.executable}
+
+
 @app.get("/api/nodes")
 def node_info() -> dict:
     """告诉前端：本节点在哪个区、对端节点在哪、哪些域名算国内站。
