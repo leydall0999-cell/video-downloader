@@ -201,6 +201,13 @@
     subTarget: $('subTarget'),
     subTranslate: $('subTranslate'),
     subBurn: $('subBurn'),
+    // LLM 服务商选择器（统一配置面板）
+    llmProvider: $('llmProvider'),
+    llmApiKey: $('llmApiKey'),
+    llmBaseUrl: $('llmBaseUrl'),
+    llmModel: $('llmModel'),
+    llmSave: $('llmSave'),
+    llmStatus: $('llmStatus'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -3571,6 +3578,93 @@
   el.subExtract.addEventListener('click', extractSubtitle);
   el.subTranslate.addEventListener('click', translateSubtitle);
   el.subBurn.addEventListener('click', burnSubtitle);
+
+  // ---- LLM 服务商选择器 ----
+  (async () => {
+    // 加载提供商预设列表
+    let providers = {};
+    let defaultProvider = 'openai';
+    try {
+      const r = await request('/api/llm/providers');
+      if (r.ok) {
+        const d = await r.json();
+        providers = d.providers || {};
+        defaultProvider = d.default || 'openai';
+      }
+    } catch (e) { /* 未启用时静默退 */ }
+    // 填充下拉菜单
+    if (el.llmProvider) {
+      el.llmProvider.innerHTML = '';
+      for (const [k, v] of Object.entries(providers)) {
+        const opt = document.createElement('option');
+        opt.value = k;
+        opt.textContent = v.name;
+        el.llmProvider.appendChild(opt);
+      }
+      // 选自定义时显示 base_url 输入
+      el.llmProvider.addEventListener('change', () => {
+        const sel = el.llmProvider.value;
+        el.llmBaseUrl.style.display = sel === 'custom' ? '' : 'none';
+        // 选中预设后自动填 base_url 和 model
+        const preset = providers[sel];
+        if (preset) {
+          if (preset.base_url) el.llmBaseUrl.value = preset.base_url;
+          if (preset.default_model) el.llmModel.value = preset.default_model;
+        }
+      });
+    }
+    // 回填已保存的配置
+    try {
+      const r = await request('/api/llm/config');
+      if (r.ok) {
+        const cfg = await r.json();
+        if (el.llmProvider) el.llmProvider.value = cfg.provider || defaultProvider;
+        if (el.llmApiKey) el.llmApiKey.value = cfg.api_key || '';
+        if (el.llmBaseUrl) el.llmBaseUrl.value = cfg.base_url || '';
+        if (el.llmModel) el.llmModel.value = cfg.model || '';
+        // 初始显示/隐藏 base_url
+        if (el.llmBaseUrl) el.llmBaseUrl.style.display = (cfg.provider === 'custom') ? '' : 'none';
+      }
+    } catch (e) { /* */ }
+
+    // 保存按钮
+    if (el.llmSave) {
+      el.llmSave.addEventListener('click', async () => {
+        const body = {
+          provider: el.llmProvider ? el.llmProvider.value : 'openai',
+          api_key: el.llmApiKey ? el.llmApiKey.value.trim() : '',
+          base_url: el.llmBaseUrl ? el.llmBaseUrl.value.trim() : '',
+          model: el.llmModel ? el.llmModel.value.trim() : '',
+        };
+        try {
+          const r = await request('/api/llm/config', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (r.ok && d.ok) {
+            if (el.llmStatus) {
+              el.llmStatus.hidden = false;
+              el.llmStatus.textContent = '✅ 已保存';
+              setTimeout(() => { el.llmStatus.hidden = true; }, 2000);
+            }
+          } else {
+            if (el.llmStatus) {
+              el.llmStatus.hidden = false;
+              el.llmStatus.style.color = '#e74c3c';
+              el.llmStatus.textContent = '❌ 保存失败';
+            }
+          }
+        } catch (e) {
+          if (el.llmStatus) {
+            el.llmStatus.hidden = false;
+            el.llmStatus.style.color = '#e74c3c';
+            el.llmStatus.textContent = '❌ 网络错误';
+          }
+        }
+      });
+    }
+  })();
 
   // ---- 格式 / 片段加工（桌面版功能） ----
   // 操作类型定义：label 显示名、kinds 适用媒体类型、params 动态表单字段。

@@ -64,6 +64,7 @@ from clouddrive import (
 )
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
+from llm_config import inject_llm_env, get_llm_config, save_llm_config, PROVIDER_PRESETS, DEFAULT_PROVIDER
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vdl")
@@ -704,11 +705,14 @@ class _CommentaryRuntime:
 
     def env(self) -> dict[str, str]:
         """为 process.py 子进程准备环境变量，关键是把 ffmpeg/ffprobe 目录前置到 PATH，
-        并强制 PYTHONIOENCODING=utf-8（Windows 默认 cp936 会让 emoji 日志乱码/抛错）。"""
+        并强制 PYTHONIOENCODING=utf-8（Windows 默认 cp936 会让 emoji 日志乱码/抛错）。
+        同时注入统一 LLM 配置——若用户已在前端配置了 Key/提供商/模型。"""
         env = os.environ.copy()
         env.setdefault("PYTHONIOENCODING", "utf-8")
         if self.ffmpeg_dir:
             env["PATH"] = self.ffmpeg_dir + os.pathsep + env.get("PATH", "")
+        # 统一 LLM 配置：仅 Key 非空时注入，无 Key 不污染子进程环境
+        inject_llm_env(env)
         return env
 
     def ready(self) -> bool:
@@ -3154,8 +3158,13 @@ def sub_translate(req: SubTranslateRequest) -> dict:
     if out_dir.resolve() not in sub_path.parents or not sub_path.exists():
         raise HTTPException(status_code=404, detail="字幕文件不存在")
     text = sub_path.read_text(encoding="utf-8", errors="ignore")
+    # 用统一 LLM 配置做 fallback：用户在前端留空时自动取已保存的 Key/URL/Model
+    llm = get_llm_config()
+    api_key = req.api_key or llm.get("api_key", "")
+    base_url = req.base_url or llm.get("base_url", "")
+    model = req.model or llm.get("model", "")
     try:
-        translated = subtitles_mod.translate_srt(text, req.api_key, req.base_url, req.model, req.target)
+        translated = subtitles_mod.translate_srt(text, api_key, base_url, model, req.target)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
@@ -3169,6 +3178,47 @@ def sub_translate(req: SubTranslateRequest) -> dict:
     new_path = sub_path.with_name(f"{base_stem}.{ext}.srt")
     new_path.write_text(translated, encoding="utf-8")
     return {"sub_rel": new_path.relative_to(out_dir).as_posix(), "lang": req.target, "text": translated}
+
+
+# ---- LLM 服务商选择器 API（统一配置，前端面板持久化）----
+
+class LLMConfigRequest(BaseModel):
+    provider: str = Field(default="openai", max_length=32)
+    api_key: str = Field(default="", max_length=256)
+    base_url: str = Field(default="", max_length=512)
+    model: str = Field(default="", max_length=128)
+
+
+@app.get("/api/llm/providers")
+def llm_providers() -> dict:
+    """返回可用的提供商预设（供前端下拉菜单）。"""
+    return {"providers": PROVIDER_PRESETS, "default": DEFAULT_PROVIDER}
+
+
+@app.get("/api/llm/config")
+def llm_config_get() -> dict:
+    """返回当前 LLM 配置（前端面板回填）。api_key 脱敏返回，仅显示首尾各 4 位。"""
+    cfg = get_llm_config()
+    key = cfg.get("api_key", "")
+    if len(key) > 8:
+        cfg["api_key"] = key[:4] + "****" + key[-4:]
+    return cfg
+
+
+@app.post("/api/llm/config")
+def llm_config_save(req: LLMConfigRequest) -> dict:
+    """保存 LLM 配置。如果前端传了脱敏的 api_key(含 ****)则沿用已有 Key 不覆盖。"""
+    current = get_llm_config()
+    data = {
+        "provider": req.provider,
+        "api_key": req.api_key if "****" not in (req.api_key or "") else current.get("api_key", ""),
+        "base_url": req.base_url,
+        "model": req.model,
+        "max_tokens": current.get("max_tokens", 4096),
+        "temperature": current.get("temperature", 0.7),
+    }
+    save_llm_config(data)
+    return {"ok": True}
 
 
 # ---- 格式 / 片段增强：对已下载媒体做本地 ffmpeg 加工（转音频 / GIF / 裁剪 / 压缩 / 放大）----
