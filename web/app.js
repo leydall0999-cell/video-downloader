@@ -722,6 +722,8 @@
     refs.root.classList.toggle('is-active', active);
     refs.root.classList.toggle('is-done', task.status === 'completed');
     refs.root.classList.toggle('is-error', task.status === 'failed' || task.status === 'canceled');
+    // 已完成任务：折叠过程/进度条/转换等冗余信息，只留标题+核心动作（保存到本机/网盘/删除）
+    refs.root.classList.toggle('is-collapsed', task.status === 'completed');
 
     const failed = task.status === 'failed';
     refs.error.hidden = !failed;

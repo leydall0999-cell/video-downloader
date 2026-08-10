@@ -344,6 +344,14 @@ img { max-width: 100%; display: block; }
 .status[data-state="failed"], .status[data-state="canceled"] { background: var(--danger-soft); color: #b91c1c; }
 
 .bar { height: 7px; border-radius: 99px; background: #eaecf4; overflow: hidden; margin: .65rem 0 .5rem; position: relative; }
+/* 已完成任务：折叠非必要信息，只留标题+核心动作（保存/网盘/删除） */
+.task.is-collapsed .bar { display: none; }
+.task.is-collapsed .task-foot { gap: .35rem; padding-top: 0; margin-top: 0; border-top: none; }
+.task.is-collapsed .task-foot > .task-stats { display: none; }
+.task.is-collapsed .convert-box { display: none; }
+.task.is-collapsed .save-hint { display: none; }
+.task.is-collapsed .cloud-status-line { display: none; }
+.task.is-collapsed .task-steps-box { display: none; }
 .bar-fill {
   height: 100%; width: 0%; border-radius: 99px;
   background: linear-gradient(90deg, var(--brand), var(--accent));
