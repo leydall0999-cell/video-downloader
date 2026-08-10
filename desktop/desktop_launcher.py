@@ -250,6 +250,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_exit)
     signal.signal(signal.SIGINT, _handle_exit)
 
+    # 主进程也注入 COMMENTARY_WORK_ROOT，让 _commentary_root 始终走用户可写目录，
+    # 不污染包内的 Contents/Resources/commentary 与 Contents/Frameworks/commentary
+    os.environ.setdefault("COMMENTARY_WORK_ROOT", str(_app_data_dir() / "commentary"))
+
     # 单实例：已有窗口则激活并退出，绝不创建第二个页面
     _lock = _ensure_single_instance()
     if _lock is None:
