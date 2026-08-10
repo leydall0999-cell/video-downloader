@@ -501,18 +501,21 @@
     if (task.status === 'canceled') return '已取消';
     if (task.status === 'merging') return '正在合并音视频…';
     if (task.status === 'downloading') {
-      const speed = task.speed > 0 ? `${formatBytes(task.speed)}/s` : '';
       const eta = task.eta > 0 ? ` · 剩余 ${formatEta(task.eta)}` : '';
-      // 总大小已知：显示百分比 + 进度 + 速度 + ETA（最完整）
+      // 总大小已知：显示百分比 + 已下/总 + 速度 + ETA（最完整）
       if (task.total_bytes > 0) {
         const pct = ((task.downloaded_bytes || 0) / task.total_bytes * 100);
+        const speed = task.speed > 0 ? `${formatBytes(task.speed)}/s` : '';
         return `${pct.toFixed(1)}% · ${formatBytes(task.downloaded_bytes)} / ${formatBytes(task.total_bytes)} · ${speed}${eta}`.replace(' ·  · ', ' · ');
       }
-      // 有速度但拿不到总大小（多数小站）：显示已下 + 速度（让用户看到"在动"）
-      if (task.speed > 0) {
-        return `已下载 ${formatBytes(task.downloaded_bytes)} · ${speed}`;
+      // 拿不到总大小（多数小站）：有下载量就立刻显示，不等 speed
+      if (task.downloaded_bytes > 0) {
+        const parts = [`已下载 ${formatBytes(task.downloaded_bytes)}`];
+        if (task.speed > 0) parts.push(`${formatBytes(task.speed)}/s`);
+        if (task.eta > 0) parts.push(`剩余 ${formatEta(task.eta)}`);
+        return parts.join(' · ');
       }
-      // 还没接到首个进度回调：占位
+      // 还没接到首个进度回调：占位 + indeterminate 扫动已在 paintTask 里处理
       return '建立连接中…';
     }
     // 排队中、解析中等
