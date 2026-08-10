@@ -1776,19 +1776,40 @@
     }
   };
 
-  /** 用选中 voice 试听/预览音频。使用 DOM 内的 <audio> 元素，避免 pywebview WebKit 对
-   *  离屏 new Audio() 支持不佳导致 "The operation is not supported" 错误。 */
-  const playAudio = async (audioUrl) => {
+  /** 用选中 voice 试听/预览音频。使用 DOM 内的 <audio> 元素 + data URL，避免 pywebview
+   *  的 WKWebView 对 new Audio()/blob URL 支持不佳导致 "The operation is not supported"。 */
+  const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+  const playAudio = async (blobOrUrl) => {
     const audio = el.comAudioPreview;
     if (!audio) return Promise.reject(new Error('音频播放器未初始化'));
     audio.pause();
-    try {
-      URL.revokeObjectURL(audio.dataset.blobUrl || '');
-    } catch (_) {}
-    audio.src = audioUrl + '?t=' + Date.now();
-    audio.dataset.blobUrl = audioUrl;
+    // blob URL 在 pywebview 的 WKWebView 里常被媒体播放器拒绝，统一转成 data URL。
+    // data URL 不需要 URL.revokeObjectURL，src 被覆盖后即可被 GC。
+    let dataUrl = blobOrUrl;
+    if (typeof Blob !== 'undefined' && blobOrUrl instanceof Blob) {
+      dataUrl = await blobToDataUrl(blobOrUrl);
+    } else if (typeof blobOrUrl === 'string' && blobOrUrl.startsWith('blob:')) {
+      try {
+        const resp = await fetch(blobOrUrl);
+        dataUrl = await blobToDataUrl(await resp.blob());
+      } catch (_) {
+        // 兜底：仍尝试原 blob URL
+        dataUrl = blobOrUrl;
+      }
+    }
+    audio.src = dataUrl;
+    audio.dataset.dataUrl = dataUrl;
     audio.currentTime = 0;
+    audio.muted = false;
+    audio.playsInline = true;
     try {
+      audio.load();
       return await audio.play();
     } catch (err) {
       // 若 DOM audio 仍失败，给出更具体提示
@@ -1819,10 +1840,17 @@
         throw new Error(errData.detail || errData.error || '生成失败');
       }
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      await playAudio(url);
-      // 播放完释放 URL（如果还在放就先保留 30s）
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      await playAudio(blob);
+      // 30s 后清空 src，让 data URL 字符串尽早被 GC（data URL 不需要 revokeObjectURL）
+      setTimeout(() => {
+        const a = el.comAudioPreview;
+        if (a && a.dataset.dataUrl === a.src) {
+          a.pause();
+          a.removeAttribute('src');
+          a.load();
+          a.removeAttribute('data-data-url');
+        }
+      }, 30000);
       el.comScriptStatus.hidden = false;
       el.comScriptStatus.className = 'com-script-status com-script-ok';
       el.comScriptStatus.textContent = `✓ 已用 ${voice} 试听`;
@@ -1863,9 +1891,17 @@
         throw new Error(errData.detail || errData.error || '生成失败');
       }
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      await playAudio(url);
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      await playAudio(blob);
+      // 60s 后清空 src，让 data URL 字符串尽早被 GC
+      setTimeout(() => {
+        const a = el.comAudioPreview;
+        if (a && a.dataset.dataUrl === a.src) {
+          a.pause();
+          a.removeAttribute('src');
+          a.load();
+          a.removeAttribute('data-data-url');
+        }
+      }, 60000);
       el.comScriptStatus.className = 'com-script-status com-script-ok';
       el.comScriptStatus.textContent = '✓ 预览播放中…';
     } catch (err) {

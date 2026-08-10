@@ -451,8 +451,9 @@
         </div>
       </div>
       <div id="comScriptSegments" class="com-script-segments"></div>
-      <!-- 真实的 <audio> 元素：pywebview 的 WebKit 对离屏 new Audio() 支持不佳，用 DOM 内元素播放更稳定 -->
-      <audio id="comAudioPreview" preload="auto" style="display:none"></audio>
+      <!-- 真实的 <audio> 元素：pywebview 的 WebKit 对离屏 new Audio()/blob URL 支持不佳，
+           用 DOM 内元素 + data URL 播放更稳定。不能用 display:none，否则 WebKit 拒绝播放。 -->
+      <audio id="comAudioPreview" preload="auto" playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></audio>
       <div class="com-script-actions">
         <button type="button" class="btn btn-primary" id="comScriptSave">💾 保存修改</button>
         <button type="button" class="btn btn-success" id="comScriptRender">🎬 生成成片</button>
