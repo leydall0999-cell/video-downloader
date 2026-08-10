@@ -989,6 +989,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             job["trim_start"] = ts
             job["trim_end"] = te
             job["trim_path"] = use_src if use_src != src_path else ""
+            job["src_path"] = src_path
             steps = _ensure_commentary_steps(job)
             steps[0]["status"] = "running"
             steps[0]["detail"] = f"源视频: {Path(src_path).name}" + (
@@ -1900,10 +1901,11 @@ def create_script_only_upload(
         file.file.close()
 
     job_id = uuid.uuid4().hex[:12]
+    src_path = str(dest)
     with _commentary_lock:
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
-                                   "progress": [], "steps": [], "logs": []}
-    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE, script_only=True,
+                                   "progress": [], "steps": [], "logs": [], "src_path": src_path}
+    executor.submit(_commentary_run, job_id, src_path, vertical, voice or COMMENTARY_VOICE, script_only=True,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     commentary_type=commentary_type, highlight_source=highlight_source,
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
@@ -2088,7 +2090,8 @@ def create_script_only(payload: CommentaryRequest) -> dict:
     src_path = _resolve_source(payload)
     job_id = uuid.uuid4().hex[:12]
     with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "", "progress": []}
+        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
+                                   "progress": [], "src_path": src_path}
     executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
                     script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end,
                     mode=payload.mode, commentary_type=payload.commentary_type,
@@ -2211,13 +2214,16 @@ def render_script(job_id: str, vertical: bool = Form(False), voice: str = Form("
     web = bool(saved.get("web", False))
     one_click = bool(saved.get("one_click", False))
 
-    # 反查原始视频路径（优先同名 input 文件，否则从工作目录搜）
-    base_name = title or job_id
-    in_dir = _commentary_root("input")
-    src_candidates = list(in_dir.glob(f"{base_name}.*")) or list(in_dir.glob(f"{job_id}.*"))
-    if not src_candidates:
-        raise HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
-    src_path = str(src_candidates[0])
+    # 反查原始视频路径：优先用脚本任务记录的 src_path，避免按 title/job_id 在 input 目录里猜错。
+    src_path = job.get("src_path")
+    if not src_path:
+        # 兼容旧任务：按 title 或 job_id 在 input 目录搜索（已不推荐）
+        base_name = title or job_id
+        in_dir = _commentary_root("input")
+        src_candidates = list(in_dir.glob(f"{base_name}.*")) or list(in_dir.glob(f"{job_id}.*"))
+        if not src_candidates:
+            raise HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
+        src_path = str(src_candidates[0])
 
     # 复用父任务的裁剪参数：同一源+起止会命中确定性命名的裁剪文件，直接吃裁剪后视频渲染
     trim_start = float(job.get("trim_start", 0.0) or 0.0)

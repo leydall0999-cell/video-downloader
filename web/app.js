@@ -2282,7 +2282,7 @@
     if (selectedLocalFile) {
       createCommentaryFromFile(
         selectedLocalFile,
-        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
+        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
         true,
       );
       return;
