@@ -55,6 +55,7 @@
     proxyInput: $('proxyInput'),
     upsellBox: $('upsellBox'),
     qualityBlock: $('qualityBlock'),
+    extractSelect: $('extractSelect'),
     directHint: $('directHint'),
     serverFallbackBtn: $('serverFallbackBtn'),
     upsellMp3: $('upsellMp3'),
@@ -240,6 +241,8 @@
     comPercent: $('comPercent'),
     comBarFill: $('comBarFill'),
     comStatus: $('comStatus'),
+    comReviewActions: $('comReviewActions'),
+    comOpenReview: $('comOpenReview'),
     comModeGroup: $('comModeGroup'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
@@ -696,6 +699,10 @@
       stepsPanel: node.querySelector('[data-steps-panel]'),
       stepsList: node.querySelector('[data-steps-list]'),
       logs: node.querySelector('[data-logs]'),
+      extractWrap: node.querySelector('[data-extract-wrap]'),
+      extractBody: node.querySelector('[data-extract-text]'),
+      extractCopy: node.querySelector('[data-extract-copy]'),
+      extractRetry: node.querySelector('[data-extract-retry]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.pause.addEventListener('click', () => pauseTask(taskId, refs.base || ''));
@@ -750,6 +757,9 @@
 
     // 刷新过程时间线（步骤 + 日志）：进行中/失败时自动展开
     renderTaskSteps(refs, task);
+
+    // 提取文案结果展示（下载/转写中也会显示进度）
+    renderExtractedText(refs, task);
 
     // 任务离开完成态后，必须隐藏完成态专属入口，避免重试/失败后仍显示转换/保存/存网盘
     if (task.status !== 'completed') {
@@ -1023,6 +1033,7 @@
           quality,
           cookie: resolved.cookie || '',
           proxy: resolved.proxy || '',
+          extract_script: el.extractSelect.value || '',
         }),
       }, base);
       const taskId = data.task_id;
@@ -1172,7 +1183,8 @@
   };
 
   // ------------------------------------------------------------------ 自动解说（增值功能）
-  // 下载完成的任务 → 点「生成解说成片」→ 后台调 commentary-pipeline/process.py → 回传成片。
+  // 下载完成的任务 → 点「生成解说成片」→ 后台先 script-only 生成脚本 → 前端展示人工审核面板
+  // → 用户确认后调 commentary-pipeline/process.py --edit-only 渲染成片。
   // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
 
   // 通用轮询：拿到 job_id 后定时查状态，更新 refs（commentary 按钮 / status / file 链接）。
@@ -1310,39 +1322,61 @@
     return r ? r.value : 'highlights';
   };
 
-  const createCommentary = async (source, refs, base = '', onCompleted = null) => {
+  /** 根据按钮 id 返回初始文案，错误恢复时使用。 */
+  const comButtonOriginalText = (btn) => {
+    if (!btn) return '';
+    if (btn.id === 'comGenerateDirect') return '生成脚本并审核';
+    if (btn.id === 'libCommentary') return '生成解说成片';
+    return btn.dataset.originalText || '生成';
+  };
+
+  /** 统一的「生成解说」入口：统一先走 script-only，打开人工审核面板，
+   *  用户确认后再点击「生成成片」。避免直接渲染导致无法修改。
+   *  从媒体库调用时自动切到解说标签页。 */
+  const createCommentary = async (source, refs, base = '') => {
+    switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
-      refs.commentary.textContent = '生成中…';
+      refs.commentary.textContent = '生成脚本中…';
     }
-    refs.commentaryStatus.hidden = false;
-    refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '正在生成解说词，生成后可在下方审核修改…';
     try {
       const body = source.taskId
         ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() }
         : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, mode: comCurrentMode() };
-      const { job_id } = await request('/api/commentary', {
+      const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST',
         body: JSON.stringify(body),
       }, base);
-      pollCommentaryJob(job_id, refs, base, onCompleted);
+      currentScriptJobId = job_id;
+      el.comGenerateScript.disabled = true;
+      el.comGenerateScript.textContent = '正在转写+生成解说词…';
+      el.comGenerateDirect.disabled = true;
+      el.comScriptPanel.hidden = true;
+      el.comReviewActions.hidden = true;
+      pollScriptJob(job_id);
     } catch (err) {
-      refs.commentaryStatus.hidden = false;
-      refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       if (refs.commentary) {
         refs.commentary.disabled = false;
-        refs.commentary.textContent = '生成解说成片';
+        refs.commentary.textContent = comButtonOriginalText(refs.commentary);
       }
+      el.comGenerateScript.disabled = false;
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateDirect.disabled = false;
     }
   };
 
-  const createCommentaryFromFile = async (file, refs, onCompleted = null) => {
+  const createCommentaryFromFile = async (file, refs) => {
+    switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
-      refs.commentary.textContent = '生成中…';
+      refs.commentary.textContent = '生成脚本中…';
     }
-    refs.commentaryStatus.hidden = false;
-    refs.commentaryStatus.textContent = '正在上传视频并生成解说成片…';
+    el.comStatus.hidden = false;
+    el.comStatus.textContent = '正在上传视频并生成解说词，生成后可在下方审核修改…';
     try {
       const form = new FormData();
       form.append('file', file);
@@ -1350,15 +1384,24 @@
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
       form.append('mode', comCurrentMode());
-      const { job_id } = await request('/api/commentary/upload', { method: 'POST', body: form });
-      pollCommentaryJob(job_id, refs, '', onCompleted);
+      const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
+      currentScriptJobId = job_id;
+      el.comGenerateScript.disabled = true;
+      el.comGenerateScript.textContent = '正在上传+生成解说词…';
+      el.comGenerateDirect.disabled = true;
+      el.comScriptPanel.hidden = true;
+      el.comReviewActions.hidden = true;
+      pollScriptJob(job_id);
     } catch (err) {
-      refs.commentaryStatus.hidden = false;
-      refs.commentaryStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       if (refs.commentary) {
         refs.commentary.disabled = false;
-        refs.commentary.textContent = '生成解说';
+        refs.commentary.textContent = comButtonOriginalText(refs.commentary);
       }
+      el.comGenerateScript.disabled = false;
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateDirect.disabled = false;
     }
   };
 
@@ -1370,6 +1413,7 @@
     el.comGenerateScript.textContent = '正在转写+生成解说词…';
     el.comGenerateDirect.disabled = true;
     el.comScriptPanel.hidden = true;
+    el.comReviewActions.hidden = true;
     el.comScriptSegments.replaceChildren();
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在转写并生成AI解说词（不渲染成片），长视频可能需数分钟…';
@@ -1396,6 +1440,7 @@
     el.comGenerateScript.textContent = '正在上传+生成解说词…';
     el.comGenerateDirect.disabled = true;
     el.comScriptPanel.hidden = true;
+    el.comReviewActions.hidden = true;
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在上传视频并生成AI解说词（不渲染成片）…';
     try {
@@ -1421,6 +1466,8 @@
     el.comProgress.hidden = false;
     el.comPhase.textContent = '转写+生成解说词';
     el.comPercent.textContent = '...';
+    el.comEmpty.hidden = true;
+    currentScriptJobId = job_id;
     let shownProgress = 0;
     const poll = setInterval(async () => {
       try {
@@ -1432,11 +1479,14 @@
         if (st.status === 'script_ready') {
           clearInterval(poll);
           el.comProgress.hidden = true;
-          el.comStatus.textContent = 'AI 解说词已生成，请在下方审核修改后生成成片';
-          loadScriptToPanel(job_id);
+          el.comStatus.textContent = 'AI 解说词已生成，请审核修改后生成成片';
+          el.comReviewActions.hidden = false;
+          openScriptReview(job_id, { autoScroll: true });
         } else if (st.status === 'failed') {
           clearInterval(poll);
           el.comProgress.hidden = true;
+          el.comScriptPanel.hidden = true;
+          el.comReviewActions.hidden = true;
           el.comStatus.textContent = `生成失败：${st.error || '未知错误'}`;
           el.comGenerateScript.disabled = false;
           el.comGenerateScript.textContent = '重试生成脚本';
@@ -1475,6 +1525,23 @@
     }, 2500);
   };
 
+  /** 打开脚本审核面板：先展示面板（带加载态），再异步拉取脚本内容。
+   *  即使拉取失败也保留面板可见，并给出重试按钮，避免用户看不到任何反馈。 */
+  const openScriptReview = (job_id, opts = {}) => {
+    el.comScriptPanel.hidden = false;
+    el.comEmpty.hidden = true;
+    el.comScriptSegments.replaceChildren();
+    el.comScriptStatus.hidden = false;
+    el.comScriptStatus.className = 'com-script-status';
+    el.comScriptStatus.textContent = '正在加载解说词…';
+    el.comScriptSave.disabled = true;
+    el.comScriptRender.disabled = true;
+    if (opts.autoScroll) {
+      el.comScriptPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    loadScriptToPanel(job_id);
+  };
+
   /** 加载脚本到编辑面板 */
   const loadScriptToPanel = async (job_id) => {
     try {
@@ -1509,6 +1576,8 @@
       });
 
       el.comScriptStatus.hidden = true;
+      el.comScriptSave.disabled = false;
+      el.comScriptRender.disabled = false;
       el.comGenerateScript.textContent = '重新生成脚本';
       el.comGenerateScript.disabled = false;
       el.comGenerateDirect.disabled = false;
@@ -1516,9 +1585,16 @@
       // 滚动到面板
       el.comScriptPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
-      el.comScriptStatus.hidden = false;
-      el.comScriptStatus.className = 'com-script-status com-script-err';
-      el.comScriptStatus.textContent = `加载脚本失败：${err.message}`;
+      el.comScriptPanel.hidden = false;
+      el.comScriptSegments.innerHTML = `<div class="com-seg-row">
+        <p class="com-script-status com-script-err">加载脚本失败：${escHtml(err.message || '未知错误')}</p>
+        <button type="button" class="btn btn-sm btn-secondary" id="comScriptRetryLoad">重新加载</button>
+      </div>`;
+      const retryBtn = document.getElementById('comScriptRetryLoad');
+      if (retryBtn) {
+        retryBtn.addEventListener('click', () => loadScriptToPanel(job_id));
+      }
+      el.comScriptStatus.hidden = true;
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '重试生成脚本';
       el.comGenerateDirect.disabled = false;
@@ -1753,7 +1829,7 @@
     el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     el.comGenerateScript.hidden = false;
     el.comGenerateDirect.disabled = false;
-    el.comGenerateDirect.textContent = '一键生成成片';
+    el.comGenerateDirect.textContent = '生成脚本并审核';
     el.comGenerateDirect.hidden = false;
     el.comScriptPanel.hidden = true;
     el.comScriptSegments.replaceChildren();
@@ -2011,6 +2087,12 @@
     el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
   });
 
+  el.comOpenReview.addEventListener('click', () => {
+    if (currentScriptJobId) {
+      openScriptReview(currentScriptJobId, { autoScroll: true });
+    }
+  });
+
   el.comGenerateDirect.addEventListener('click', () => {
     if (!commentaryEnvReady) {
       el.comStatus.hidden = false;
@@ -2023,7 +2105,6 @@
         { fileId },
         { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
         '',
-        () => loadCommentary(),
       );
       return;
     }
@@ -2031,7 +2112,6 @@
       createCommentaryFromFile(
         selectedLocalFile,
         { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
-        () => loadCommentary(),
       );
       return;
     }
@@ -2745,7 +2825,7 @@
     const showSub = node.libraryEnabled && item.kind === 'video';
     el.libSubtitle.hidden = !showSub;
     el.libProcess.hidden = !node.libraryEnabled;
-    // 媒体库现成视频也可一键生成解说成片（加密文件不支持）
+    // 媒体库现成视频生成解说：统一先出脚本，展示人工审核面板后再渲染成片
     const showCommentary = node.commentaryEnabled && item.kind === 'video' && !isEnc;
     el.libCommentary.hidden = !showCommentary;
     el.libCommentary.disabled = false;

@@ -179,6 +179,17 @@
       <div class="quality-grid" id="qualityGrid" role="radiogroup" aria-label="选择清晰度"></div>
     </div>
 
+    <div class="extract-block" id="extractBlock">
+      <div class="block-title">提取文案</div>
+      <select id="extractSelect" class="adv-input" aria-label="提取文案选项">
+        <option value="">不提取</option>
+        <option value="spoken">口播文案（字幕 / 语音转写）</option>
+        <option value="description">发布简介（标题 / 描述）</option>
+        <option value="both">两者都要</option>
+      </select>
+      <p class="extract-hint">下载完成后自动提取，可在任务卡片查看并一键复制。</p>
+    </div>
+
     <button type="button" id="downloadBtn" class="btn btn-primary btn-block">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M4 20h16" />
@@ -365,7 +376,7 @@
 
     <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
-      <button type="button" class="btn btn-secondary com-generate-main" id="comGenerateDirect">一键生成成片</button>
+      <button type="button" class="btn btn-secondary com-generate-main" id="comGenerateDirect">生成脚本并审核</button>
     </div>
     <!-- 解说进度条：阶段标签 + 百分比 + 渐变填充条 -->
     <div id="comProgress" hidden>
@@ -379,6 +390,10 @@
       </div>
     </div>
     <span class="com-status" id="comStatus" hidden></span>
+    <div id="comReviewActions" class="com-review-actions" hidden>
+      <button type="button" class="btn btn-primary" id="comOpenReview">✏️ 审核 / 修改脚本</button>
+      <span class="com-review-hint">解说词已生成，审核通过后再渲染成片</span>
+    </div>
 
     <!-- 解说过程时间线：步骤 + 日志 -->
     <div id="comStepsPanel" class="com-steps-panel" hidden>
@@ -613,6 +628,16 @@
     </div>
     <p class="save-hint" data-save-hint hidden></p>
     <p class="cloud-status-line" data-cloud-status hidden></p>
+    <div class="extract-result" data-extract-wrap hidden>
+      <div class="extract-head">
+        <span class="extract-title">📝 提取文案</span>
+        <span class="extract-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-extract-retry hidden>重试提取</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-extract-copy hidden>复制</button>
+        </span>
+      </div>
+      <pre class="extract-body" data-extract-text></pre>
+    </div>
     <p class="task-error" data-error hidden></p>
     <div class="task-steps-box" data-steps-box hidden>
       <button type="button" class="task-steps-toggle" data-steps-toggle>
