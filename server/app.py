@@ -706,9 +706,13 @@ class _CommentaryRuntime:
     def env(self) -> dict[str, str]:
         """为 process.py 子进程准备环境变量，关键是把 ffmpeg/ffprobe 目录前置到 PATH，
         并强制 PYTHONIOENCODING=utf-8（Windows 默认 cp936 会让 emoji 日志乱码/抛错）。
-        同时注入统一 LLM 配置——若用户已在前端配置了 Key/提供商/模型。"""
+        同时注入统一 LLM 配置——若用户已在前端配置了 Key/提供商/模型。
+        另外显式设置 COMMENTARY_BASE，确保打包后 config.py 里的 BASE 一定指向管线根目录
+        （避免 PyInstaller 的 __file__ 解析差异导致找不到 assets/fonts 下捆绑的中文字体）。"""
         env = os.environ.copy()
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        if COMMENTARY_DIR:
+            env["COMMENTARY_BASE"] = str(COMMENTARY_DIR)
         if self.ffmpeg_dir:
             env["PATH"] = self.ffmpeg_dir + os.pathsep + env.get("PATH", "")
         # 统一 LLM 配置：仅 Key 非空时注入，无 Key 不污染子进程环境
