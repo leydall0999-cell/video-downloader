@@ -2115,13 +2115,23 @@ def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form(""
 # ---- 配音试听 / 预览全部 ----
 
 def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 60) -> None:
-    """用 commentary-pipeline 的 edge-tts 脚本把一段文本转成指定音色的 mp3。
-    通过 COMMENTARY_RT.env() 走 venv，确保 edge-tts 在隔离环境里能 import。
-    失败抛 RuntimeError 给上层 catch 转 500。"""
-    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
-        raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
+    """用 edge-tts 把一段文本转成指定音色的 mp3。
+
+    bundled 模式：edge_tts 已随包冻结，直接 in-process 调用，避开「subprocess 跑
+    .py 脚本 vs PyInstaller frozen exe」的兼容性问题。
+    dev 模式：edge_tts 装在 commentary-pipeline .venv 里，subprocess 到 COMMENTARY_RT.python。
+    """
     if not COMMENTARY_RT.ready():
         raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
+
+    # bundled 模式：sys.frozen = True，edge_tts 已冻结进 exe，直接 in-process 调用
+    if getattr(sys, "frozen", False):
+        _run_voice_preview_inprocess(text, voice, output_mp3, timeout=timeout)
+        return
+
+    # dev/外部：subprocess 走 commentary-pipeline 的 venv
+    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
+        raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
     script = COMMENTARY_DIR / "scripts" / "voice_preview.py"
     cmd = [COMMENTARY_RT.python, str(script), text, voice, str(output_mp3)]
     try:
@@ -2134,6 +2144,48 @@ def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 6
     if proc.returncode != 0:
         msg = (proc.stderr or proc.stdout or "无输出").strip()[:400]
         raise RuntimeError(f"edge-tts 退出码 {proc.returncode}: {msg}")
+    if not output_mp3.exists() or output_mp3.stat().st_size < 100:
+        raise RuntimeError("edge-tts 未产出有效音频文件")
+
+
+def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeout: int = 60) -> None:
+    """bundled 模式：in-process 调 edge_tts 合成 mp3，省去 PyInstaller frozen exe 跑 .py 脚本的兼容坑。"""
+    import asyncio
+    import edge_tts
+
+    FALLBACK_VOICES = [
+        "zh-CN-YunjianNeural",
+        "zh-CN-YunyangNeural",
+        "zh-CN-YunxiaNeural",
+        "zh-CN-XiaoxiaoNeural",
+    ]
+
+    async def _try(text: str, v: str, timeout_s: float) -> bool:
+        try:
+            await asyncio.wait_for(edge_tts.Communicate(text, v).save(str(output_mp3)), timeout=timeout_s)
+            return output_mp3.exists() and output_mp3.stat().st_size > 100
+        except Exception:
+            return False
+
+    async def _main():
+        for _ in range(2):
+            if await _try(text, voice, 20):
+                return
+        tried = [voice]
+        for fb in FALLBACK_VOICES:
+            if fb == voice:
+                continue
+            tried.append(fb)
+            if await _try(text, fb, 20):
+                return
+        raise RuntimeError(f"edge-tts 生成失败: 已尝试 {', '.join(tried)}，均无法合成该文本")
+
+    try:
+        asyncio.run(_main())
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"edge-tts 调用失败：{exc}") from exc
     if not output_mp3.exists() or output_mp3.stat().st_size < 100:
         raise RuntimeError("edge-tts 未产出有效音频文件")
 
