@@ -110,6 +110,32 @@ fi
 if [ -e "$REPO/build/VideoDownloader" ]; then
   mv "$REPO/build/VideoDownloader" "$REPO/build/_old_$$" 2>/dev/null || true
 fi
+
+# ── 解说管线随包（自包含铁律：#198 单二进制双角色）──
+# 设环境变量 COMMENTARY_PIPELINE_DIR 指向 commentary-pipeline 仓库根目录；
+# 不设默认尝试 REPO 平级目录（可被 Python 项目目录布局覆盖）。
+COMMENTARY_DIR="${COMMENTARY_PIPELINE_DIR:-$REPO/../commentary-pipeline}"
+COMMENTARY_DATA=()
+if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
+  echo "▶ 捆绑解说管线(随包自包含): $COMMENTARY_DIR"
+  # 安装管线核心依赖到构建 venv，让 PyInstaller 一并冻结进 exe。
+  # 单二进制双角色：worker 子进程用 sys.executable 重入自身，
+  # faster_whisper/edge_tts 等必须在冻结包里、不能依赖外部 .venv。
+  "$VENV/bin/pip" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
+  COMMENTARY_DATA=(
+    --add-data "$COMMENTARY_DIR:commentary"
+    --hidden-import faster_whisper
+    --hidden-import ctranslate2
+    --hidden-import tokenizers
+    --hidden-import onnxruntime
+    --hidden-import edge_tts
+    --hidden-import av
+    --collect-submodules edge_tts
+  )
+else
+  echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
+fi
+
 "$VENV/bin/pyinstaller" \
   --name VideoDownloader \
   --windowed \
@@ -134,6 +160,7 @@ fi
   --hidden-import webview \
   --hidden-import webview.platforms.cocoa \
   --collect-submodules yt_dlp \
+  "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"
 
 echo "▶ 捆绑 ffmpeg + ffprobe"

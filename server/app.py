@@ -144,24 +144,19 @@ CLEANUP_INTERVAL_SECONDS = 600
 #   VDL_COMMENTARY_VOICE=zh-CN-XiaoxiaoNeural        默认配音嗓音
 _COMMENTARY_EXPLICIT = "VDL_COMMENTARY_ENABLED" in os.environ
 COMMENTARY_ENABLED = os.environ.get("VDL_COMMENTARY_ENABLED", "false").strip().lower() == "true"
-# 桌面版自动探测：如果没显式设 COMMENTARY_ENABLED，但项目目录存在 → 自动开启
+# 桌面版自动探测：没显式设 COMMENTARY_ENABLED 时，若管线可用则自动开启。
+# 仅 frozen(打包版)生效——dev/在线版须显式开启，避免 import 即改写默认行为。
+# 统一走 commentary_locate.locate_commentary()（含包内捆绑候选，践行自包含铁律）。
 if not _COMMENTARY_EXPLICIT and getattr(sys, "frozen", False):
-    _c_dir = os.environ.get("VDL_COMMENTARY_DIR") or ""
-    if not _c_dir:
-        # 尝试常规路径
-        for _cand in [
-            os.path.expanduser("~/commentary-pipeline"),
-            os.path.expanduser("~/WorkBuddy/问问题/commentary-pipeline"),
-        ]:
-            if os.path.isdir(_cand) and os.path.isfile(os.path.join(_cand, "process.py")):
-                _c_dir = _cand
-                break
-    if _c_dir and os.path.isfile(os.path.join(_c_dir, "process.py")):
+    from commentary_locate import locate_commentary
+    _loc = locate_commentary()
+    if _loc is not None:
         COMMENTARY_ENABLED = True
         if "VDL_COMMENTARY_DIR" not in os.environ:
-            os.environ["VDL_COMMENTARY_DIR"] = _c_dir
+            os.environ["VDL_COMMENTARY_DIR"] = str(_loc.root)
         if "VDL_COMMENTARY_MODE" not in os.environ:
-            os.environ["VDL_COMMENTARY_MODE"] = "local"
+            # 包内捆绑走 worker 重入(#198 实现)；外部/显式走 local 子进程
+            os.environ["VDL_COMMENTARY_MODE"] = "bundled" if _loc.bundled else "local"
 
 
 # 解说运行环境探测已集中到 _CommentaryRuntime（见下方 _commentary_work_dir 之前的定义），
@@ -226,6 +221,18 @@ COMMENTARY_MODE = os.environ.get("VDL_COMMENTARY_MODE", "local").strip().lower()
 COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstrip("/")
 COMMENTARY_TOKEN = os.environ.get("VDL_COMMENTARY_TOKEN", "").strip()  # 与 worker 的 WORKER_TOKEN 对应
 _HERE = Path(__file__).resolve().parent
+
+
+def _commentary_is_bundled() -> bool:
+    """是否走「单二进制双角色」包内捆绑模式（worker 重入自身，依赖随包内置）。"""
+    return os.environ.get("VDL_COMMENTARY_BUNDLED") == "1" or COMMENTARY_MODE == "bundled"
+
+
+def _commentary_root(sub: str) -> Path:
+    """解说管线工作目录(input/output/work)；bundled 模式重定向到可写目录(COMMENTARY_WORK_ROOT)。"""
+    wr = os.environ.get("COMMENTARY_WORK_ROOT") or ""
+    root = Path(wr) if wr else (COMMENTARY_DIR or Path("."))
+    return root / sub
 _COMMENTARY_OUT_RAW = os.environ.get("VDL_COMMENTARY_LOCAL_OUTPUT", "").strip()
 def _user_data_dir() -> Path:
     """跨平台用户数据目录：Windows 打包后用 %APPDATA%/VideoDownloader（符合 Windows 规范，
@@ -601,35 +608,20 @@ class _CommentaryRuntime:
 
     # ---- 解释器 ----
     def _resolve_python(self) -> str:
-        def _vp(root: Path) -> Path:
-            if sys.platform == "win32":
-                return root / ".venv" / "Scripts" / "python.exe"
-            return root / ".venv" / "bin" / "python"
-
-        if os.environ.get("VDL_COMMENTARY_PYTHON"):
-            return os.environ["VDL_COMMENTARY_PYTHON"].strip()
-        # 优先用已探测到的 commentary-pipeline 自己的 .venv
-        if COMMENTARY_DIR:
-            venv_py = _vp(COMMENTARY_DIR)
-            if venv_py.exists():
-                return str(venv_py)
-        # 即使 COMMENTARY_DIR 未探测到（罕见），也按常用绝对路径再找一次 .venv
-        for cand_dir in [
-            Path.home() / "WorkBuddy" / "问问题" / "commentary-pipeline",
-            Path.home() / "commentary-pipeline",
-        ]:
-            venv_py = _vp(cand_dir)
-            if venv_py.exists():
-                return str(venv_py)
-        # 兜底：WorkBuddy default python（需用户自己装好 faster_whisper/edge_tts）
-        default_py = _vp(Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default")
-        if default_py.exists():
-            return str(default_py)
-        return sys.executable
+        """解析跑 process.py 的解释器，统一委托 commentary_locate。"""
+        from commentary_locate import locate_commentary
+        loc = locate_commentary()
+        if loc is None:
+            return sys.executable
+        return loc.python
 
     def _check_python(self, py: str) -> bool:
-        # 打包后 sys.executable 是 .app 主程序，绝不能作为解释器
+        # 打包后 sys.executable 通常是 .app 主程序，不应作为解释器——
+        # 但「单二进制双角色」bundled 模式下，worker 正是用自身(sys.executable)重入，
+        # 依赖已随包内置，故该例外下允许 sys.executable 作为解释器。
         if getattr(sys, "frozen", False) and py == sys.executable:
+            if os.environ.get("VDL_COMMENTARY_BUNDLED") == "1" or COMMENTARY_MODE == "bundled":
+                return True
             return False
         # 开发/测试模式（非 frozen 且未显式设 VDL_COMMENTARY_PYTHON）信任当前解释器
         if "VDL_COMMENTARY_PYTHON" not in os.environ and not getattr(sys, "frozen", False):
@@ -877,8 +869,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         if not COMMENTARY_RT.ready():
             raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
         base = job_id  # 用 job_id 作安全 ascii 文件名，避开中文/空格对 process.py 路径处理的干扰
-        in_dir = COMMENTARY_DIR / "input"
-        out_dir = COMMENTARY_DIR / "output"
+        in_dir = _commentary_root("input")
+        out_dir = _commentary_root("output")
         in_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -903,15 +895,25 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
 
         # 子进程参数：edit_only 真 → 走 --edit-only（吃已审核脚本，不重跑转录）；否则 --auto。
         # 加 -u 关闭 stdout 块缓冲，让进度行实时回流（ETA 才平滑）。
+        # bundled 模式：用主程序自身(sys.executable)以 --vdl-commentary-worker 重入为 worker，
+        # 依赖随包内置(已砍 torch)，无需外部 Python / pip，契合自包含铁律。
+        _bundled = _commentary_is_bundled()
         if edit_only:
-            args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--edit-only", edit_only]
+            if _bundled:
+                args = [sys.executable, "--vdl-commentary-worker",
+                        str(in_file), "--edit-only", edit_only]
+            else:
+                args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--edit-only", edit_only]
             if vertical:
                 args.append("--vertical")
             if voice:
                 args += ["--voice", voice]
             # edit_only 走已审核脚本，高光/全片由脚本自带 mode 字段决定，无需重复传参
         else:
-            args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--auto"]
+            if _bundled:
+                args = [sys.executable, "--vdl-commentary-worker", str(in_file), "--auto"]
+            else:
+                args = [COMMENTARY_RT.python, "-u", "process.py", str(in_file), "--auto"]
             if vertical:
                 args.append("--vertical")
             if mode and mode != "highlights":
@@ -979,7 +981,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
 
         if script_only:
             # --script-only 模式：只出了 script.json，不生成成片
-            script_path = COMMENTARY_DIR / "work" / f"{base}.script.json"
+            script_path = _commentary_root("work") / f"{base}.script.json"
             if not script_path.exists():
                 tail = "\n".join(last_lines[-20:]) or "无输出"
                 raise RuntimeError(f"解说管线执行成功但未找到脚本文件：{script_path}\n输出：\n{tail}")
@@ -1785,7 +1787,7 @@ def _commentary_roots() -> list[Path]:
     if COMMENTARY_LOCAL_OUTPUT and COMMENTARY_LOCAL_OUTPUT.exists() and COMMENTARY_LOCAL_OUTPUT.is_dir():
         roots.append(COMMENTARY_LOCAL_OUTPUT)
     if COMMENTARY_DIR:
-        d = COMMENTARY_DIR / "output"
+        d = _commentary_root("output")
         if d.exists() and d.is_dir():
             roots.append(d)
     return roots
@@ -2056,7 +2058,7 @@ def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form(""
 
     # 反查原始视频路径（优先同名 input 文件，否则从工作目录搜）
     base_name = title or job_id
-    in_dir = COMMENTARY_DIR / "input"
+    in_dir = _commentary_root("input")
     src_candidates = list(in_dir.glob(f"{base_name}.*")) or list(in_dir.glob(f"{job_id}.*"))
     if not src_candidates:
         raise HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
@@ -2125,7 +2127,7 @@ def voice_preview(
     if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
         raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
 
-    out_dir = COMMENTARY_DIR / "work" / "voice_preview"
+    out_dir = _commentary_root("work") / "voice_preview"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{uuid.uuid4().hex[:12]}.mp3"
     try:
@@ -2173,7 +2175,7 @@ def preview_segments(
     if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
         raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
 
-    out_dir = COMMENTARY_DIR / "work" / "voice_preview"
+    out_dir = _commentary_root("work") / "voice_preview"
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = out_dir / uuid.uuid4().hex[:12]
     tmp_dir.mkdir(parents=True, exist_ok=True)

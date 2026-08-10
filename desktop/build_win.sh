@@ -41,6 +41,27 @@ PY
 ICON_ICO="$REPO/desktop/icon.ico"
 
 echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
+
+# ── 解说管线随包（自包含铁律：#198 单二进制双角色）──
+COMMENTARY_DIR="${COMMENTARY_PIPELINE_DIR:-$REPO/../commentary-pipeline}"
+COMMENTARY_DATA=()
+if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
+  echo "▶ 捆绑解说管线(随包自包含): $COMMENTARY_DIR"
+  "$VENV/Scripts/pip.exe" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
+  COMMENTARY_DATA=(
+    --add-data "$COMMENTARY_DIR;commentary"
+    --hidden-import faster_whisper
+    --hidden-import ctranslate2
+    --hidden-import tokenizers
+    --hidden-import onnxruntime
+    --hidden-import edge_tts
+    --hidden-import av
+    --collect-submodules edge_tts
+  )
+else
+  echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
+fi
+
 "$VENV/Scripts/pyinstaller.exe" \
   --name VideoDownloader \
   --windowed \
@@ -63,6 +84,7 @@ echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
   --hidden-import webview \
   --hidden-import webview.platforms.winforms \
   --collect-submodules yt_dlp \
+  "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"
 
 echo "▶ 捆绑 ffmpeg / ffprobe（放入 bin/ 子目录，启动器会优先用捆绑版本）"

@@ -40,6 +40,8 @@ else:
 SERVER_DIR = BASE / "server"
 WEB_DIR = BASE / "web"
 PLUGINS_DIR = BASE / "yt_dlp_plugins"
+# 提前把 server 目录注入路径，供 _detect_commentary 直接 import commentary_locate
+sys.path.insert(0, str(SERVER_DIR))
 
 
 def _detect_ffmpeg() -> str | None:
@@ -62,27 +64,16 @@ def _venv_python(root: Path) -> Path:
 
 
 def _detect_commentary() -> tuple[str | None, str | None]:
-    """定位 commentary-pipeline 目录及其 .venv 解释器；找不到时返回 (None, None)。"""
-    cdir = os.environ.get("VDL_COMMENTARY_DIR", "").strip()
-    if not cdir:
-        for cand in [
-            Path.home() / "WorkBuddy" / "问问题" / "commentary-pipeline",
-            Path.home() / "commentary-pipeline",
-        ]:
-            if cand.is_dir() and (cand / "process.py").is_file():
-                cdir = str(cand)
-                break
-    if not cdir:
+    """定位 commentary-pipeline 目录及其解释器；找不到时返回 (None, None)。
+
+    统一走 server/commentary_locate.locate_commentary()（含包内捆绑候选）。
+    包内捆绑模式不暴露 python（由 worker 重入自身处理，见 #198），仅返回目录。
+    """
+    from commentary_locate import locate_commentary
+    loc = locate_commentary()
+    if not loc:
         return None, None
-    venv_py = _venv_python(Path(cdir))
-    if venv_py.exists():
-        return cdir, str(venv_py)
-    # 没有 .venv 时，尝试 WorkBuddy default python（需用户自行装好依赖）
-    default_root = Path.home() / ".workbuddy" / "binaries" / "python" / "envs" / "default"
-    default_py = _venv_python(default_root)
-    if default_py.exists():
-        return cdir, str(default_py)
-    return cdir, None
+    return str(loc.root), (None if loc.bundled else loc.python)
 
 
 _ff = _detect_ffmpeg()
@@ -101,9 +92,83 @@ if _c_dir:
 if _c_py:
     os.environ["VDL_COMMENTARY_PYTHON"] = _c_py
 
-sys.path.insert(0, str(SERVER_DIR))
 if PLUGINS_DIR.exists():
     sys.path.insert(0, str(BASE))
+
+
+# ---- 单二进制双角色：解说管线 worker 重入 ----
+def _app_data_dir() -> Path:
+    """跨平台返回本应用的可写数据目录（input/output/work 重定向到这里）。"""
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", str(Path.home() / ".vdl")))
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "VideoDownloader"
+    return Path.home() / ".local" / "share" / "videodownloader"
+
+
+def _rebind_std_streams() -> None:
+    """Windows windowed(.exe 无控制台)下，重绑标准流到 nul，避免 ffmpeg/print 写已关闭 fd 崩溃。"""
+    try:
+        dn = open(os.devnull, "w")
+        os.dup2(dn.fileno(), 1)
+        os.dup2(dn.fileno(), 2)
+        if sys.stdin is not None:
+            os.dup2(dn.fileno(), 0)
+    except Exception:
+        pass
+
+
+def _run_commentary_worker(argv: list[str]) -> int:
+    """以 --vdl-commentary-worker 重入自身时，把主程序当作解说管线 worker 运行。
+
+    依赖随包内置（config 已砍 torch），无需外部 Python / pip；脚本与模型在包内只读资源目录，
+    input/output/work 重定向到可写目录(COMMENTARY_WORK_ROOT)。详见 server/commentary_locate.py。
+    """
+    import multiprocessing
+    multiprocessing.freeze_support()  # PyInstaller 子进程兼容（保险）
+
+    # 保险丝：防止递归重入（worker 不应再拉起 worker）
+    depth = int(os.environ.get("VDL_WORKER_DEPTH", "0") or "0")
+    if depth > 0:
+        print("[worker] 检测到重入保险丝(VDL_WORKER_DEPTH>0)，拒绝二次重入")
+        return 1
+    os.environ["VDL_WORKER_DEPTH"] = str(depth + 1)
+
+    from commentary_locate import locate_commentary
+    loc = locate_commentary()
+    if loc is None or not loc.bundled:
+        print("[worker] 未找到包内捆绑的解说管线，无法以 worker 模式运行")
+        return 1
+
+    # 注入工作环境：模型/脚本在包内(只读)，工作目录重定向到可写位置
+    os.environ["VDL_COMMENTARY_BUNDLED"] = "1"
+    os.environ.setdefault("COMMENTARY_BASE", str(loc.root))
+    _model_dir = os.path.join(str(loc.root), "models", "whisper-base")
+    if os.path.isdir(_model_dir):
+        os.environ["COMMENTARY_MODEL_DIR"] = _model_dir
+    _work_root = _app_data_dir() / "commentary"
+    os.environ["COMMENTARY_WORK_ROOT"] = str(_work_root)
+
+    # Windows windowed 无控制台，重绑标准流避免崩溃
+    if sys.platform == "win32":
+        _rebind_std_streams()
+
+    # 把包内管线根注入 sys.path，使 import process 命中包内版本（process.py 自行接管 scripts/）
+    sys.path.insert(0, str(loc.root))
+    try:
+        import process
+    except Exception as exc:
+        print(f"[worker] 导入包内 process 失败: {exc}")
+        return 1
+
+    # 去掉哨兵后交给 process.main（其内部直接读 sys.argv）
+    worker_argv = [a for a in argv if a != "--vdl-commentary-worker"]
+    sys.argv = ["process.py", *worker_argv]
+    try:
+        process.main()
+    except SystemExit as e:
+        return int(e.code) if isinstance(e.code, int) else 0
+    return 0
 
 
 def _find_free_port(start: int = 8321, tries: int = 80) -> int:
@@ -250,4 +315,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--vdl-commentary-worker" in sys.argv:
+        # 单二进制双角色：自身重入为解说管线 worker（依赖随包内置，无需外部 Python）
+        raise SystemExit(_run_commentary_worker(sys.argv))
     main()
