@@ -227,7 +227,6 @@
     comSource: $('comSource'),
     comGenerate: $('comGenerate'),
     comGenerateScript: $('comGenerateScript'),
-    comGenerateDirect: $('comGenerateDirect'),
     comScriptPanel: $('comScriptPanel'),
     comScriptVoice: $('comScriptVoice'),
     comScriptVoicePreview: $('comScriptVoicePreview'),
@@ -247,7 +246,6 @@
     comGenerateOneClick: $('comGenerateOneClick'),
     comIntroHighlight: $('comIntroHighlight'),
     comSkipIntroOutro: $('comSkipIntroOutro'),
-    comWeb: $('comWeb'),
     comRetainPct: $('comRetainPct'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
@@ -1411,7 +1409,6 @@
       intro_highlight: !!(el.comIntroHighlight && el.comIntroHighlight.checked),
       skip_intro_outro: !!(el.comSkipIntroOutro && el.comSkipIntroOutro.checked),
       retain_pct: rp,
-      web: !!(el.comWeb && el.comWeb.checked),
       one_click: !!forceOneClick,
     };
   };
@@ -1419,7 +1416,6 @@
   /** 根据按钮 id 返回初始文案，错误恢复时使用。 */
   const comButtonOriginalText = (btn) => {
     if (!btn) return '';
-    if (btn.id === 'comGenerateDirect') return '生成脚本并审核';
     if (btn.id === 'libCommentary') return '生成解说成片';
     return btn.dataset.originalText || '生成';
   };
@@ -1447,7 +1443,6 @@
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
       el.comGenerateScript.textContent = '正在转写+生成解说词…';
-      el.comGenerateDirect.disabled = true;
       el.comScriptPanel.hidden = true;
       el.comReviewActions.hidden = true;
       pollScriptJob(job_id);
@@ -1460,7 +1455,6 @@
       }
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '生成脚本（可审核修改）';
-      el.comGenerateDirect.disabled = false;
     }
   };
 
@@ -1484,13 +1478,11 @@
       form.append('intro_highlight', String(opts.intro_highlight));
       form.append('skip_intro_outro', String(opts.skip_intro_outro));
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
-      form.append('web', String(opts.web));
       form.append('one_click', String(opts.one_click));
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
       el.comGenerateScript.textContent = '正在上传+生成解说词…';
-      el.comGenerateDirect.disabled = true;
       el.comScriptPanel.hidden = true;
       el.comReviewActions.hidden = true;
       pollScriptJob(job_id);
@@ -1503,7 +1495,6 @@
       }
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '生成脚本（可审核修改）';
-      el.comGenerateDirect.disabled = false;
     }
   };
 
@@ -1513,7 +1504,6 @@
   const createScriptOnly = async (source) => {
     el.comGenerateScript.disabled = true;
     el.comGenerateScript.textContent = '正在转写+生成解说词…';
-    el.comGenerateDirect.disabled = true;
     el.comScriptPanel.hidden = true;
     el.comReviewActions.hidden = true;
     el.comScriptSegments.replaceChildren();
@@ -1533,7 +1523,6 @@
       el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '生成脚本（可审核修改）';
-      el.comGenerateDirect.disabled = false;
     }
   };
 
@@ -1541,7 +1530,6 @@
   const createScriptOnlyFromFile = async (file) => {
     el.comGenerateScript.disabled = true;
     el.comGenerateScript.textContent = '正在上传+生成解说词…';
-    el.comGenerateDirect.disabled = true;
     el.comScriptPanel.hidden = true;
     el.comReviewActions.hidden = true;
     el.comStatus.hidden = false;
@@ -1558,7 +1546,6 @@
       form.append('intro_highlight', String(opts.intro_highlight));
       form.append('skip_intro_outro', String(opts.skip_intro_outro));
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
-      form.append('web', String(opts.web));
       form.append('one_click', String(opts.one_click));
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
@@ -1567,7 +1554,6 @@
       el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '生成脚本（可审核修改）';
-      el.comGenerateDirect.disabled = false;
     }
   };
 
@@ -1600,7 +1586,6 @@
           el.comStatus.textContent = `生成失败：${st.error || '未知错误'}`;
           el.comGenerateScript.disabled = false;
           el.comGenerateScript.textContent = '重试生成脚本';
-          el.comGenerateDirect.disabled = false;
         } else if (st.status === 'running') {
           if (!hasSteps) {
             const progress = Array.isArray(st.progress) ? st.progress : [];
@@ -1690,7 +1675,6 @@
       el.comScriptRender.disabled = false;
       el.comGenerateScript.textContent = '重新生成脚本';
       el.comGenerateScript.disabled = false;
-      el.comGenerateDirect.disabled = false;
 
       // 滚动到面板
       el.comScriptPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1707,7 +1691,6 @@
       el.comScriptStatus.hidden = true;
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '重试生成脚本';
-      el.comGenerateDirect.disabled = false;
     }
   };
 
@@ -1938,9 +1921,6 @@
     el.comGenerateScript.disabled = false;
     el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     el.comGenerateScript.hidden = false;
-    el.comGenerateDirect.disabled = false;
-    el.comGenerateDirect.textContent = '生成脚本并审核';
-    el.comGenerateDirect.hidden = false;
     el.comScriptPanel.hidden = true;
     el.comScriptSegments.replaceChildren();
     el.comScriptStatus.hidden = true;
@@ -2201,32 +2181,6 @@
     if (currentScriptJobId) {
       openScriptReview(currentScriptJobId, { autoScroll: true });
     }
-  });
-
-  el.comGenerateDirect.addEventListener('click', () => {
-    if (!commentaryEnvReady) {
-      el.comStatus.hidden = false;
-      el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
-      return;
-    }
-    const fileId = el.comSource.value;
-    if (fileId) {
-      createCommentary(
-        { fileId },
-        { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
-        '',
-      );
-      return;
-    }
-    if (selectedLocalFile) {
-      createCommentaryFromFile(
-        selectedLocalFile,
-        { commentary: el.comGenerateDirect, commentaryStatus: el.comStatus, commentaryFile: noopComFile },
-      );
-      return;
-    }
-    el.comStatus.hidden = false;
-    el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
   });
 
   // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；

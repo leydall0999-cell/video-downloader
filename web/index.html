@@ -397,24 +397,20 @@
           <input type="checkbox" id="comSkipIntroOutro" />
           <span>跳过片头片尾（各砍约 8%，上限 90s）</span>
         </label>
-        <label class="com-highlights-toggle com-retain-row">
-          <span class="com-retain-label">保留全片时长百分比</span>
-          <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="100=不裁" class="com-num" />
-          <span class="com-unit">%（10~100，留空=不裁剪）</span>
-        </label>
+        <div class="com-retain-field">
+          <label class="com-retain-label" for="comRetainPct">保留全片时长百分比</label>
+          <div class="com-retain-input">
+            <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
+            <span class="com-retain-unit">%</span>
+          </div>
+          <span class="com-retain-hint">10~100，留空表示不裁剪</span>
+        </div>
       </div>
-
-      <!-- 联网发挥（任何解说类型都可开启） -->
-      <label class="com-highlights-toggle">
-        <input type="checkbox" id="comWeb" />
-        <span><b>联网查找资料辅助发挥</b>（AI 高度自由发挥、可自动联网搜集相关资料）</span>
-      </label>
     </div>
 
     <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main com-oneclick" id="comGenerateOneClick">⚡ 一键生成（全片深入+联网+片头钩子）</button>
       <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
-      <button type="button" class="btn btn-secondary com-generate-main" id="comGenerateDirect">生成脚本并审核</button>
     </div>
     <!-- 解说进度条：阶段标签 + 百分比 + 渐变填充条 -->
     <div id="comProgress" hidden>
