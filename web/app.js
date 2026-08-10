@@ -7,11 +7,12 @@
     pending: '排队中',
     downloading: '下载中',
     merging: '合并中',
+    paused: '已暂停',
     completed: '已完成',
     failed: '失败',
     canceled: '已取消',
   };
-  const ACTIVE_STATES = ['pending', 'downloading', 'merging'];
+  const ACTIVE_STATES = ['pending', 'downloading', 'merging', 'paused'];
   const POLL_FALLBACK_MS = 1500;
 
   /** 时间格式化 (mm:ss.s) —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
@@ -499,6 +500,7 @@
     if (task.status === 'completed') return `${formatBytes(task.filesize)} · 已就绪`;
     if (task.status === 'failed') return '下载中断';
     if (task.status === 'canceled') return '已取消';
+    if (task.status === 'paused') return `已暂停（已下载 ${formatBytes(task.downloaded_bytes)}）`;
     if (task.status === 'merging') return '正在合并音视频…';
     if (task.status === 'downloading') {
       const eta = task.eta > 0 ? ` · 剩余 ${formatEta(task.eta)}` : '';
@@ -672,6 +674,8 @@
       bar: node.querySelector('[data-bar]'),
       stats: node.querySelector('[data-stats]'),
       cancel: node.querySelector('[data-cancel]'),
+      pause: node.querySelector('[data-pause]'),
+      resume: node.querySelector('[data-resume]'),
       save: node.querySelector('[data-save]'),
       error: node.querySelector('[data-error]'),
       saveHint: node.querySelector('[data-save-hint]'),
@@ -694,6 +698,8 @@
       logs: node.querySelector('[data-logs]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
+    refs.pause.addEventListener('click', () => pauseTask(taskId, refs.base || ''));
+    refs.resume.addEventListener('click', () => resumeTask(taskId, refs.base || ''));
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
     refs.stepsToggle.addEventListener('click', () => {
@@ -722,10 +728,15 @@
     refs.bar.parentElement.classList.toggle('is-indeterminate', indeterminate);
     refs.bar.style.width = indeterminate ? '45%' : `${task.progress}%`;
     refs.stats.textContent = buildStats(task);
-    refs.cancel.hidden = !active;
+    const downloading = task.status === 'downloading' || task.status === 'merging';
+    const isPaused = task.status === 'paused';
+    refs.pause.hidden = !downloading;
+    refs.resume.hidden = !isPaused;
+    refs.cancel.hidden = isPaused;
     refs.root.classList.toggle('is-active', active);
     refs.root.classList.toggle('is-done', task.status === 'completed');
     refs.root.classList.toggle('is-error', task.status === 'failed' || task.status === 'canceled');
+    refs.root.classList.toggle('is-paused', isPaused);
     // 已完成任务：折叠过程/进度条/转换等冗余信息，只留标题+核心动作（保存到本机/网盘/删除）
     refs.root.classList.toggle('is-collapsed', task.status === 'completed');
 
@@ -1060,6 +1071,22 @@
       await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, base);
     } catch (error) {
       showError(error.message || '取消失败', error.hint);
+    }
+  };
+
+  const pauseTask = async (taskId, base = '') => {
+    try {
+      await request(`/api/tasks/${taskId}/pause`, { method: 'POST' }, base);
+    } catch (error) {
+      showError(error.message || '暂停失败', error.hint);
+    }
+  };
+
+  const resumeTask = async (taskId, base = '') => {
+    try {
+      await request(`/api/tasks/${taskId}/resume`, { method: 'POST' }, base);
+    } catch (error) {
+      showError(error.message || '继续失败', error.hint);
     }
   };
 

@@ -193,6 +193,10 @@ class DownloadCanceled(Exception):
     """用户主动取消下载。"""
 
 
+class DownloadPaused(Exception):
+    """用户暂停下载——保留 .part 文件，后续可断点续传。"""
+
+
 # --------------------------------------------------------------------------- #
 # 信息解析
 # --------------------------------------------------------------------------- #
@@ -421,6 +425,8 @@ class _ProgressReporter:
     def __call__(self, payload: dict[str, Any]) -> None:
         if self._task.cancel_requested:
             raise DownloadCanceled()
+        if getattr(self._task, "pause_requested", False):
+            raise DownloadPaused()
         if payload.get("status") != "downloading":
             return
         self._ensure_title(payload)
@@ -664,6 +670,12 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
 
             output = _locate_output(info, task.workdir or Path("."))
             _write_sidecar(output, task, info)
+    except DownloadPaused:
+        task.add_step("下载音视频", "done", "已暂停（可继续下载）")
+        task.log("用户暂停下载")
+        store.update(task.id, status="paused",
+                     progress=task.progress, downloaded_bytes=task.downloaded_bytes)
+        # 保留 .part 文件，不清除——后续继续时 yt-dlp 断点续传
     except DownloadCanceled:
         _mark_step_error(task, "用户已取消")
         store.update(task.id, status="canceled", error="已取消下载", progress=0.0)

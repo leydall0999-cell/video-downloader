@@ -1622,6 +1622,35 @@ def cancel_task(task_id: str) -> dict:
     return {"task_id": task_id, "canceled": store.request_cancel(task_id), "removed": False}
 
 
+@app.post("/api/tasks/{task_id}/pause")
+def pause_task(task_id: str) -> dict:
+    """暂停正在下载的任务——保留 .part 文件，后续可断点续传。"""
+    task = _require_task(task_id)
+    if task.is_finished:
+        return {"task_id": task_id, "paused": False, "message": "任务已结束，无法暂停"}
+    if task.status == "paused":
+        return {"task_id": task_id, "paused": True, "message": "已暂停"}
+    task.pause_requested = True
+    task.add_step("下载音视频", "pending", "正在暂停…")
+    store.update(task.id, status="pausing")
+    return {"task_id": task_id, "paused": True}
+
+
+@app.post("/api/tasks/{task_id}/resume")
+def resume_task(task_id: str) -> dict:
+    """继续被暂停的下载——yt-dlp 自动从已下载的 .part 文件断点续传。"""
+    task = _require_task(task_id)
+    if task.status not in ("paused",):
+        return {"task_id": task_id, "resumed": False, "message": "任务未处于暂停状态"}
+    task.pause_requested = False
+    task.add_step("下载音视频", "running", "继续下载…")
+    task.log("用户继续下载（断点续传）")
+    store.update(task.id, status="downloading")
+    # 重新提入调度器，yt-dlp continuedl 自动从 .part 文件恢复
+    scheduler.submit(downloader.run_download, task, store, task.quality_key, "", "", SINGLE_DOWNLOAD_RETRIES)
+    return {"task_id": task_id, "resumed": True}
+
+
 # --------------------------------------------------------------------------- #
 # 文件系统辅助（桌面版便捷入口）
 # --------------------------------------------------------------------------- #

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-TaskStatus = Literal["pending", "downloading", "merging", "completed", "failed", "canceled"]
+TaskStatus = Literal["pending", "downloading", "merging", "paused", "completed", "failed", "canceled"]
 StepStatus = Literal["pending", "running", "done", "error"]
 
 TASK_TTL_SECONDS = 60 * 60  # 成品文件保留 1 小时
@@ -44,6 +44,7 @@ class DownloadTask:
     hint: str = ""
     created_at: float = field(default_factory=time.time)
     cancel_requested: bool = False
+    pause_requested: bool = False
     workdir: Path | None = None
     filepath: Path | None = None
     # 过程展示：结构化步骤 + 文本日志
