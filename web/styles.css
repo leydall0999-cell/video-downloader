@@ -1219,6 +1219,10 @@ img { max-width: 100%; display: block; }
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--bg); color: var(--text);
 }
+.com-retain-input input::placeholder {
+  font-size: .75rem; font-weight: 400;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
 .com-retain-unit { font-size: .95rem; font-weight: 600; color: var(--accent); }
 .com-retain-hint { font-size: .82rem; opacity: .75; }
 .com-oneclick { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff7a00));
