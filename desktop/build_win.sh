@@ -43,13 +43,33 @@ ICON_ICO="$REPO/desktop/icon.ico"
 echo "▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）"
 
 # ── 解说管线随包（自包含铁律：#198 单二进制双角色）──
+
+# 白名单精选管线文件到临时 staging 目录（排除 .git/work/input/output/.venv 等垃圾）
+_stage_commentary() {
+  local src="$1"
+  local staging="$REPO/build/commentary_staging"
+  rm -rf "$staging"
+  mkdir -p "$staging"
+  cp "$src/process.py" "$staging/" 2>/dev/null || true
+  [ -d "$src/scripts" ] && cp -R "$src/scripts" "$staging/"
+  [ -d "$src/models" ] && cp -R "$src/models" "$staging/"
+  [ -d "$src/assets" ] && cp -R "$src/assets" "$staging/"
+  for _f in "requirements.txt" "requirements-gpu.txt" "requirements-moviepy.txt" "requirements-worker.txt" \
+            "VERSION" "selfcheck.py" "prepare_model.py" "start_worker.sh" \
+            "COMMENTARY_PLAN.md" "verify_quality.py" "run_local.sh" "README.md"; do
+    [ -f "$src/$_f" ] && cp "$src/$_f" "$staging/"
+  done
+  echo "$staging"
+}
+
 COMMENTARY_DIR="${COMMENTARY_PIPELINE_DIR:-$REPO/../commentary-pipeline}"
 COMMENTARY_DATA=()
 if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   echo "▶ 捆绑解说管线(随包自包含): $COMMENTARY_DIR"
   "$VENV/Scripts/pip.exe" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
+  COMMENTARY_STAGING=$(_stage_commentary "$COMMENTARY_DIR")
   COMMENTARY_DATA=(
-    --add-data "$COMMENTARY_DIR;commentary"
+    --add-data "$COMMENTARY_STAGING;commentary"
     --collect-all faster_whisper
     --collect-all edge_tts
     --collect-all ctranslate2
@@ -85,6 +105,9 @@ fi
   --collect-submodules yt_dlp \
   "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"
+
+# 清理 staging 临时目录
+[ -n "${COMMENTARY_STAGING:-}" ] && [ -d "$COMMENTARY_STAGING" ] && mv "$COMMENTARY_STAGING" "$HOME/.Trash/commentary_staging_$(date +%s)" 2>/dev/null || true
 
 echo "▶ 捆绑 ffmpeg / ffprobe（放入 bin/ 子目录，启动器会优先用捆绑版本）"
 if command -v ffmpeg >/dev/null 2>&1; then
