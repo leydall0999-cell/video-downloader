@@ -330,6 +330,7 @@ def main() -> None:
             height=750,
             min_size=(800, 500),
             text_select=True,
+            js_api=VdlApi(),
         )
         # Windows 端退出 webview 后清理资源
         webview.start()

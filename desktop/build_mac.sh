@@ -131,8 +131,10 @@ _stage_commentary() {
   # 每次构建用独立 staging 目录(带 PID)，避免并发构建互相挪走对方目录导致校验误报
   local staging="$REPO/build/commentary_staging_$$"
   # 清掉历史 staging 残留(避免堆积；用移入回收站，不触发删除守卫)
+  # 注意：trash_path 的日志必须丢到 stderr，否则会被 $(_stage_commentary ...) 一并捕获，
+  # 污染 COMMENTARY_STAGING 变量（见下方 grep 校验），导致版本校验误报失败。
   for _old in "$REPO"/build/commentary_staging_*; do
-    [ -e "$_old" ] && trash_path "$_old"
+    [ -e "$_old" ] && trash_path "$_old" >&2
   done
   mkdir -p "$staging"
   # 白名单精选管线核心文件（排除 .git/work/input/output/.venv/__pycache__ 等 3.5G 垃圾）
@@ -150,7 +152,7 @@ _stage_commentary() {
                 "/System/Library/Fonts/PingFang.ttc" \
                 "/System/Library/Fonts/STHeiti Light.ttc"; do
       if [ -f "$_sys" ]; then
-        cp "$_sys" "$_fonts/" 2>/dev/null && echo "   ✔ 复制系统中文字体进包: $(basename "$_sys")"
+        cp "$_sys" "$_fonts/" 2>/dev/null && echo "   ✔ 复制系统中文字体进包: $(basename "$_sys")" >&2
         break
       fi
     done
