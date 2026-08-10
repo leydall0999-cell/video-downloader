@@ -235,6 +235,7 @@
     comScriptRender: $('comScriptRender'),
     comScriptStatus: $('comScriptStatus'),
     comScriptPrevAll: $('comScriptPrevAll'),
+    comAudioPreview: $('comAudioPreview'),
     comProgress: $('comProgress'),
     comPhase: $('comPhase'),
     comPercent: $('comPercent'),
@@ -1774,15 +1775,24 @@
     }
   };
 
-  /** 用选中 voice 试听一句示例文本。复用同一 <audio> 元素，避免重复创建。 */
-  let _previewAudio = null;
-  const playAudio = (audioUrl) => {
-    if (!_previewAudio) {
-      _previewAudio = new Audio();
-      _previewAudio.addEventListener('ended', () => { /* 自然结束不重置按钮（按钮由调用方控制） */ });
+  /** 用选中 voice 试听/预览音频。使用 DOM 内的 <audio> 元素，避免 pywebview WebKit 对
+   *  离屏 new Audio() 支持不佳导致 "The operation is not supported" 错误。 */
+  const playAudio = async (audioUrl) => {
+    const audio = el.comAudioPreview;
+    if (!audio) return Promise.reject(new Error('音频播放器未初始化'));
+    audio.pause();
+    try {
+      URL.revokeObjectURL(audio.dataset.blobUrl || '');
+    } catch (_) {}
+    audio.src = audioUrl + '?t=' + Date.now();
+    audio.dataset.blobUrl = audioUrl;
+    audio.currentTime = 0;
+    try {
+      return await audio.play();
+    } catch (err) {
+      // 若 DOM audio 仍失败，给出更具体提示
+      throw new Error(`当前环境不支持自动播放音频：${err.message || '请尝试升级系统或手动点击播放'}`);
     }
-    _previewAudio.src = audioUrl + '?t=' + Date.now();  // 防缓存
-    return _previewAudio.play();
   };
 
   /** 试听：把当前 voice + 一句示例文本发到后端 edge-tts 生成 mp3 播放 */
