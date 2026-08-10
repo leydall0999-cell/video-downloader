@@ -1774,7 +1774,7 @@ def fs_open(payload: OpenPathRequest) -> dict:
 class CommentaryRequest(BaseModel):
     task_id: str = Field(default="", max_length=64)
     file_id: str = Field(default="", max_length=2048)
-    vertical: bool = True
+    vertical: bool = False
     voice: str = Field(default="", max_length=64)
     trim_start: float = Field(default=0.0, ge=0.0)
     trim_end: float = Field(default=0.0, ge=0.0)
@@ -2172,7 +2172,7 @@ def update_script(job_id: str, payload: ScriptUpdateRequest) -> dict:
 
 
 @app.post("/api/commentary/render/{job_id}")
-def render_script(job_id: str, vertical: bool = Form(True), voice: str = Form("")) -> dict:
+def render_script(job_id: str, vertical: bool = Form(False), voice: str = Form("")) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
     剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），

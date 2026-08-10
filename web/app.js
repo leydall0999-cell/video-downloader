@@ -1435,8 +1435,8 @@
     try {
       const opts = comGetOptions(oneClick);
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
-        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
+        ? { task_id: source.taskId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
+        : { file_id: source.fileId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -1513,8 +1513,8 @@
     try {
       const opts = comGetOptions();
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
-        : { file_id: source.fileId, vertical: true, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
+        ? { task_id: source.taskId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
+        : { file_id: source.fileId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST', body: JSON.stringify(body),
       });
@@ -1754,7 +1754,7 @@
     el.comStatus.textContent = '正在用已审核脚本渲染成片…';
     try {
       const form = new FormData();
-      form.append('vertical', 'true');
+      form.append('vertical', 'false');
       form.append('voice', el.comScriptVoice.value);
       const { job_id } = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
