@@ -124,13 +124,12 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   "$VENV/bin/pip" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
   COMMENTARY_DATA=(
     --add-data "$COMMENTARY_DIR:commentary"
-    --hidden-import faster_whisper
-    --hidden-import ctranslate2
-    --hidden-import tokenizers
-    --hidden-import onnxruntime
-    --hidden-import edge_tts
-    --hidden-import av
-    --collect-submodules edge_tts
+    --collect-all faster_whisper
+    --collect-all edge_tts
+    --collect-all ctranslate2
+    --collect-all tokenizers
+    --collect-all onnxruntime
+    --collect-all av
   )
 else
   echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
