@@ -716,10 +716,11 @@
     refs.quality.textContent = task.quality;
     refs.status.textContent = STATUS_TEXT[task.status] || task.status;
     refs.status.dataset.state = task.status;
-    // 进度条：拿到了 total 用百分比，否则 indeterminate 状态（CSS 走左右扫动）
-    const indeterminate = task.status === 'downloading' && (!task.total_bytes || task.total_bytes <= 0);
+    // 进度条：所有进行中状态无 total 时都走 indeterminate 扫动，
+    // 让 chrqj 这类秒下的任务从 queued→downloading→merging 全程有视觉反馈
+    const indeterminate = active && (!task.total_bytes || task.total_bytes <= 0);
     refs.bar.parentElement.classList.toggle('is-indeterminate', indeterminate);
-    refs.bar.style.width = indeterminate ? '40%' : `${task.progress}%`;
+    refs.bar.style.width = indeterminate ? '45%' : `${task.progress}%`;
     refs.stats.textContent = buildStats(task);
     refs.cancel.hidden = !active;
     refs.root.classList.toggle('is-active', active);
