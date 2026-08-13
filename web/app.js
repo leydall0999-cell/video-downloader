@@ -1065,8 +1065,11 @@
   };
 
   // ------------------------------------------------------------------ 下载用途确认弹窗
+  // 临时关闭：当前不弹用途确认（2026-08-13）。后期启用 → 把 CONSENT_MODAL_ENABLED 改为 true 即可，弹窗逻辑完好保留。
+  const CONSENT_MODAL_ENABLED = false;
   /** 下载前校验用途：未确认过时弹窗询问；选商用则要求确认已获授权。返回是否允许继续。 */
   const ensureConsent = () => new Promise((resolve) => {
+    if (!CONSENT_MODAL_ENABLED) return resolve(true);
     const saved = localStorage.getItem('vdl_use');
     if (saved === 'personal' || saved === 'commercial') return resolve(true);
     const dlg = el.consentModal;
