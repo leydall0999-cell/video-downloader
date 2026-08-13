@@ -633,12 +633,23 @@
 
   // ------------------------------------------------------------------ 提示
 
+  const _friendlyNetworkError = (msg) => {
+    const lower = msg.toLowerCase();
+    if (lower === 'load failed' || lower === 'failed to fetch' || lower === 'networkerror' || lower.includes('load failed')) {
+      return { message: '连接本地服务失败', hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。' };
+    }
+    return null;
+  };
+
   const showError = (message, hint = '') => {
-    const msg = String(message || '').trim();
+    let msg = String(message || '').trim();
+    let h = String(hint || '').trim();
     if (!msg) { clearError(); return; }
+    const net = _friendlyNetworkError(msg);
+    if (net) { msg = net.message; h = h || net.hint; }
     el.alertTitle.textContent = msg;
-    el.alertHint.textContent = String(hint || '').trim();
-    el.alertHint.hidden = !String(hint || '').trim();
+    el.alertHint.textContent = h;
+    el.alertHint.hidden = !h;
     el.alert.hidden = false;
   };
 
