@@ -91,9 +91,11 @@ def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
     国内站（B站/抖音/腾讯/chrqj 等）：
-      VDL_PROXY_CN（国内出口回源代理）> 直连。
+      VDL_PROXY_CN（国内出口回源代理）> macOS 系统代理（用户开了 VPN 客户端的「系统代理」时自动用）> 直连。
       服务部署在海外（Railway 等）时，国内站会被地理围栏 403，必须配 VDL_PROXY_CN
       指向一台国内机器的 HTTP 代理；本机跑在国内则留空直连即可。
+      此外当用户在本机开了 VPN/代理客户端的「系统代理」(scutil 可查到 127.0.0.1:port)，
+      也自动用于国内站，方便用户换出口 IP 绕过腾讯按 IP 限速——前提是该代理能访问腾讯。
 
     海外站（YouTube/Twitter 等）：
       VDL_PROXY > macOS 系统代理（scutil）> 标准 http(s)_proxy 环境变量。
@@ -102,7 +104,15 @@ def _resolve_proxy(host: str = "") -> str:
     关键：绝不能用同一个变量兜住两边——国内代理出不去海外，海外代理进不来国内。
     """
     if host and is_china_host(host):
-        return os.environ.get("VDL_PROXY_CN", "").strip()
+        cn = os.environ.get("VDL_PROXY_CN", "").strip()
+        if cn:
+            return cn
+        # 用户在 VPN 客户端开了「系统代理」时，自动复用，免去手动填
+        if sys.platform == "darwin":
+            mac = _macos_system_proxy()
+            if mac:
+                return mac
+        return ""
     explicit = os.environ.get("VDL_PROXY", "").strip()
     if explicit:
         return explicit
