@@ -324,8 +324,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     }
     # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
     effective_proxy = proxy or _resolve_proxy(host)
-    if is_china_host(host):
-        # 国内站必须显式置空，否则 yt-dlp 仍会从环境变量读取代理导致超时/被拒
+    if is_china_host(host) and not effective_proxy:
+        # 国内站默认直连（走代理常被拒/超时）；但用户显式填代理、或配了 VDL_PROXY_CN 时尊重之，
+        # 用于换国内出口 IP 绕过站点按 IP 限速
         options["proxy"] = ""
     elif effective_proxy:
         options["proxy"] = effective_proxy
@@ -515,10 +516,18 @@ SPEEDTEST_WINDOW = float(os.environ.get("VDL_SPEEDTEST_WINDOW", "5.0"))      # �
 SPEEDTEST_FRAGMENTS = int(os.environ.get("VDL_SPEEDTEST_FRAGMENTS", "4"))    # 并发下载的分片数
 
 
-def _m3u8_segments(m3u8_url: str, headers: dict[str, str]) -> list[str]:
+def _build_opener(proxy: str):
+    """构造 urllib opener；走代理时用 ProxyHandler，否则直连。"""
+    if proxy:
+        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    return urllib.request.build_opener()
+
+
+def _m3u8_segments(m3u8_url: str, headers: dict[str, str], opener=None) -> list[str]:
     """下载 m3u8 清单，返回分片 URL 列表（转成绝对地址）。"""
     req = urllib.request.Request(m3u8_url, headers=headers)
-    with urllib.request.urlopen(req, timeout=SOCKET_TIMEOUT) as resp:
+    open_fn = opener.open if opener is not None else urllib.request.urlopen
+    with open_fn(req, timeout=SOCKET_TIMEOUT) as resp:
         text = resp.read().decode("utf-8", "ignore")
     base = m3u8_url.rsplit("/", 1)[0] + "/"
     segments: list[str] = []
@@ -530,7 +539,7 @@ def _m3u8_segments(m3u8_url: str, headers: dict[str, str]) -> list[str]:
     return segments
 
 
-def _measure_speed(segment_urls: list[str], headers: dict[str, str], window: float) -> float:
+def _measure_speed(segment_urls: list[str], headers: dict[str, str], window: float, opener=None) -> float:
     """并发下载若干分片，在 window 秒窗口内统计真实字节速率（字节/秒）。
 
     注意：read 块必须小（8KB），否则慢速源（如 5KB/s trickle）凑满大块要十几秒，
@@ -540,11 +549,12 @@ def _measure_speed(segment_urls: list[str], headers: dict[str, str], window: flo
         return 0.0
     total = [0]
     stop_at = time.time() + window
+    open_fn = opener.open if opener is not None else urllib.request.urlopen
 
     def _worker(url: str) -> None:
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with open_fn(req, timeout=8) as resp:
                 while time.time() < stop_at:
                     chunk = resp.read(8192)
                     if not chunk:
@@ -569,6 +579,9 @@ def _speedtest_formats(info: dict[str, Any], host: str, cookie: str = "", proxy:
     每个源并行测、统一窗口，保证相对排序可比；结果按高度降序、每组标出最快源。
     """
     headers = dict(_base_options(PROBE_RETRIES, host, cookie=cookie, proxy=proxy).get("http_headers") or {})
+    # 测速与实际下载走同一代理，保证测出的速率就是用户下载时能拿到的速率
+    effective_proxy = proxy or _resolve_proxy(host)
+    opener = _build_opener(effective_proxy)
     formats = [f for f in (info.get("formats") or [])
                if isinstance(f, dict) and f.get("protocol") in ("m3u8_native", "m3u8", "https", "http")]
 
@@ -583,10 +596,10 @@ def _speedtest_formats(info: dict[str, Any], host: str, cookie: str = "", proxy:
             try:
                 if proto in ("m3u8_native", "m3u8"):
                     # HLS：先拉清单得到分片列表，再并发测分片
-                    speed = _measure_speed(_m3u8_segments(url, headers), headers, SPEEDTEST_WINDOW)
+                    speed = _measure_speed(_m3u8_segments(url, headers, opener), headers, SPEEDTEST_WINDOW, opener)
                 else:
                     # MP4 直链：直接对文件 URL 流式测速
-                    speed = _measure_speed([url], headers, SPEEDTEST_WINDOW)
+                    speed = _measure_speed([url], headers, SPEEDTEST_WINDOW, opener)
             except Exception:
                 speed = 0.0
         measured.append({
