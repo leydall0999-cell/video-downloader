@@ -131,5 +131,9 @@ else
   echo "⚠️  未找到 ffprobe，解说功能将不可用（下载不受影响）"
 fi
 
+echo "▶ 捆绑 aria2c（种子后端随安装包自包含，从官方 GitHub release 下载 Windows 版）"
+"$VENV/Scripts/python.exe" "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用，需本机安装 aria2 或装 VC++ 运行库）"
+
 echo "✅ 完成：dist/VideoDownloader/VideoDownloader.exe"
 echo "   双击打开即可，浏览器自动访问 http://127.0.0.1:8321（端口被占用会自动顺延）"
+echo "   种子（磁力/种子）下载已随包自带 aria2c，无需本机安装"

@@ -119,6 +119,9 @@ fi
 if [ -e "$REPO/build/VideoDownloader" ]; then
   mv "$REPO/build/VideoDownloader" "$REPO/build/_old_$$" 2>/dev/null || true
 fi
+# 删除 stale .spec：PyInstaller 若发现 repo 根已有同名 spec，会直接复用其配置，
+# 而旧 spec 可能指向已不存在的 staging 目录或导致 onedir 输出，破坏后续 .app 注入步骤。
+rm -f "$REPO/VideoDownloader.spec"
 
 # ── 解说管线随包（自包含铁律：#198 单二进制双角色）──
 # 设环境变量 COMMENTARY_PIPELINE_DIR 指向 commentary-pipeline 仓库根目录；
@@ -218,11 +221,19 @@ fi
   --hidden-import yt_dlp_plugins.extractor \
   --hidden-import yt_dlp_plugins.extractor.chrqj \
   --hidden-import yt_dlp_plugins.extractor.kuaishou \
+  --hidden-import yt_dlp_plugins.extractor.vqq_patch \
   --hidden-import webview \
   --hidden-import webview.platforms.cocoa \
   --collect-submodules yt_dlp \
   "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"
+
+# 校验：PyInstaller 必须产出 .app bundle，否则后续注入 ffmpeg/web 都会失败
+if [ ! -d "$REPO/dist/VideoDownloader.app" ]; then
+  echo "❌ PyInstaller 未产出 dist/VideoDownloader.app（可能被 stale .spec 覆盖为 onedir）" >&2
+  echo "   请检查是否有 VideoDownloader.spec 残留或 PyInstaller 输出异常。" >&2
+  exit 1
+fi
 
 # 清理 staging 临时目录（PyInstaller 已把文件拷进 .app，不再需要）
 [ -n "${COMMENTARY_STAGING:-}" ] && [ -d "$COMMENTARY_STAGING" ] && mv "$COMMENTARY_STAGING" "$HOME/.Trash/commentary_staging_$(date +%s)" 2>/dev/null || true
@@ -251,10 +262,18 @@ echo "▶ 注入构建指纹（页脚显示，便于确认是否最新版）"
 BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
 BUILD_INFO="构建 $BUILD_HASH @ $BUILD_DATE"
-perl -0pi -e "s{<span id=\"buildTag\" class=\"build-tag\"></span>}{<span id=\"buildTag\" class=\"build-tag\">$BUILD_INFO</span>}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
+# 缓存 bust 用的纯数字构建戳（避免中文/@ 在 perl 替换侧被错误插值），每次构建都变化
+BUILD_STAMP="$(date +%y%m%d%H%M%S)"
+# 页脚用 .*? 而非空 span，保证重复构建也能覆盖旧指纹（之前空 span 模式在已有内容时不匹配）
+perl -0pi -e "s{<span id=\"buildTag\" class=\"build-tag\">.*?</span>}{<span id=\"buildTag\" class=\"build-tag\">$BUILD_INFO</span>}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
+# 给 app.js 注入构建戳作为缓存 bust 版本号（与页脚同源变化），避免桌面端缓存旧脚本
+perl -0pi -e "s{__BUILD_FP__}{$BUILD_STAMP}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
 # 同时把指纹写入程序可读文件，供 /api/version 自检（避免肉眼误判版本）
 echo "$BUILD_INFO" > "$REPO/dist/VideoDownloader.app/Contents/Resources/build_version.txt"
-echo "   指纹：$BUILD_INFO"
+echo "   指纹：$BUILD_INFO  缓存戳：$BUILD_STAMP"
+
+echo "▶ 打包 aria2c（种子后端随安装包自包含，脱离本机 Homebrew）"
+python3 "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader.app/Contents/Resources" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用）"
 
 echo "▶ 签名（ad-hoc）"
 codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null

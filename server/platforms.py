@@ -186,6 +186,16 @@ def _match_platform(host: str) -> Platform:
     return _generic_platform(host)
 
 
+def _normalize_url(url: str, host: str) -> str:
+    """把平台特有的「移动端/短链」格式转成 yt-dlp 能识别的标准格式。"""
+    # 腾讯视频：移动端 m.v.qq.com/x/m/play?vid=xxx → 桌面端 v.qq.com/x/page/xxx.html
+    if host == "v.qq.com" and "/x/m/play" in url:
+        m = re.search(r"[?&]vid=([a-zA-Z0-9]+)", url)
+        if m:
+            return f"https://v.qq.com/x/page/{m.group(1)}.html"
+    return url
+
+
 def parse_source(raw_input: str) -> tuple[str, Platform]:
     """校验输入并返回 (规范化链接, 命中的平台)。"""
     url = extract_first_url(raw_input)
@@ -196,6 +206,7 @@ def parse_source(raw_input: str) -> tuple[str, Platform]:
             "请粘贴视频播放页链接（如 B 站、抖音、YouTube 等）",
         )
     platform = _match_platform(host)
+    url = _normalize_url(url, host)
     return url, platform
 
 

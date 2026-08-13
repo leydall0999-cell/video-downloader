@@ -121,7 +121,7 @@ def self_version_json():
 
 def auto_script(transcript_path, script_path, voice=None, title="", mode=None,
                 commentary_type=None, highlight_source=None, intro_highlight=None,
-                web=None, retain_pct=None, skip_intro_outro=None):
+                web=None, retain_pct=None, skip_intro_outro=None, style="none"):
     """生成解说词：调用 LLM 生成（强依赖 LLM_API_KEY）。
 
     剪辑选项（与 llm_script / edit_ffmpeg 共用 commentary_options 模型）：
@@ -141,7 +141,8 @@ def auto_script(transcript_path, script_path, voice=None, title="", mode=None,
                           voice=voice, mode=mode, commentary_type=commentary_type,
                           highlight_source=highlight_source,
                           intro_highlight=intro_highlight, web=web,
-                          retain_pct=retain_pct, skip_intro_outro=skip_intro_outro)
+                          retain_pct=retain_pct, skip_intro_outro=skip_intro_outro,
+                          style=style)
     except RuntimeError:
         raise
     except Exception as e:
@@ -222,6 +223,11 @@ def main():
     ap.add_argument("--edit-only", metavar="SCRIPT",
                     help="跳过转写, 直接用指定 script.json 剪辑出片")
     ap.add_argument("--voice", default=None, help="AI 旁白音色, 如 zh-CN-YunxiNeural")
+    ap.add_argument("--style", default="none",
+                    choices=["none", "funny", "serious", "domineering", "angry",
+                             "suspense", "healing", "sarcastic"],
+                    help="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; "
+                         "angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌")
     ap.add_argument("--vertical", action="store_true", help="输出竖屏 9:16")
     ap.add_argument("--original-speed", action="store_true",
                     help="画面原速(不快进): 窗口跟随旁白时长, 不拉伸画面")
@@ -300,7 +306,8 @@ def main():
                     highlight_source=args.highlight_source,
                     intro_highlight=args.intro_highlight, web=args.web,
                     retain_pct=args.retain_pct,
-                    skip_intro_outro=args.skip_intro_outro)
+                    skip_intro_outro=args.skip_intro_outro,
+                    style=args.style)
     else:
         print("\n✅ 转写完成。下一步二选一:")
         print(f"   A) 全自动草稿:  python process.py {args.video} --auto"

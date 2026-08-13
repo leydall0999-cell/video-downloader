@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import glob
+import sqlite3
 import subprocess
 import sys
 import json
@@ -201,6 +203,94 @@ class DownloadPaused(Exception):
 # 信息解析
 # --------------------------------------------------------------------------- #
 
+# —— 强反爬平台：服务端校验游客 Cookie（如抖音 s_v_web_id），匿名请求直接被拒 ——
+# 这类平台无法直接匿名下载，需从用户已登录/访问过的浏览器读取 Cookie。
+# 一旦检测到本机浏览器含该站 Cookie，VDL 自动注入，实现“粘贴链接即下”。
+_COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
+    "douyin.com", "iesdouyin.com",
+    "kuaishou.com", "chenzhongtech.com", "gifshow.com",
+    "xiaohongshu.com", "xhslink.com",
+    "tiktok.com", "instagram.com",
+    # 腾讯视频：限免/会员视频走另一套播放 API，需要登录态 cookie；
+    # 加入后 app 会自动从本机浏览器读 cookie 并注入请求，提示用户粘贴。
+    "v.qq.com",
+)
+
+# 候选浏览器（按优先级）。Chrome/Edge/Brave/Chromium 的 Cookie 解密仅需 cryptography
+# （已打包进 .app），不依赖 brotli，故优先；Firefox 需 brotli，暂不入列。
+_BROWSER_COOKIE_PROFILES: tuple[tuple[str, str], ...] = (
+    ("chrome", "~/Library/Application Support/Google/Chrome/*/Cookies"),
+    ("edge", "~/Library/Application Support/Microsoft Edge/*/Cookies"),
+    ("brave", "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Cookies"),
+    ("chromium", "~/Library/Application Support/Chromium/*/Cookies"),
+)
+
+
+def is_cookie_hardened_host(host: str) -> bool:
+    """判断是否为需要浏览器 Cookie 才能解析的强反爬平台。"""
+    host = (host or "").lower()
+    return any(host == d or host.endswith(f".{d}") for d in _COOKIE_HARDENED_DOMAINS)
+
+
+def _detect_browser_cookie_source() -> str | None:
+    """探测本机已安装且含 Cookie 数据库的浏览器，返回 yt-dlp 可用的浏览器名。"""
+    for name, pattern in _BROWSER_COOKIE_PROFILES:
+        if glob.glob(os.path.expanduser(pattern)):
+            return name
+    return None
+
+
+def _root_domain(host: str) -> str:
+    """取根域：v.qq.com → qq.com；www.douyin.com → douyin.com；a.b.com.cn → b.com.cn。"""
+    parts = (host or "").strip().lower().split(".")
+    if len(parts) <= 2:
+        return (host or "").strip().lower()
+    if len(parts) >= 3 and parts[-2] in ("com", "net", "org", "gov", "edu", "co") \
+            and parts[-1] in ("cn", "hk", "tw", "jp", "uk", "kr", "sg"):
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
+    """探测哪个浏览器的哪个 Profile 含有目标站点的 cookie，返回 (browser, profile)。
+
+    背景：yt-dlp 的 cookiesfrombrowser 若不指定 profile 只读 Default；但用户登录态
+    常落在其它 Profile（如 Chrome 的 Profile 33），导致「自动读 cookie」读错地方而落空。
+    这里遍历各浏览器的所有 Profile，用 sqlite 直查 Cookies 数据库的 host_key
+    是否命中目标根域，返回第一个命中 Profile。
+    """
+    root = _root_domain(host)
+    if not root:
+        return None
+    try:
+        import sqlite3 as _sq
+    except Exception:
+        return None
+    for name, pattern in _BROWSER_COOKIE_PROFILES:
+        for db in glob.glob(os.path.expanduser(pattern)):
+            profile_dir = os.path.basename(os.path.dirname(db))
+            try:
+                con = _sq.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+                try:
+                    row = con.execute(
+                        "SELECT 1 FROM cookies WHERE host_key LIKE ? LIMIT 1",
+                        (f"%.{root}",),
+                    ).fetchone()
+                    # host_key 有的带前导点(.qq.com)、有的是裸域(qq.com)，两种都试
+                    if row is None:
+                        row = con.execute(
+                            "SELECT 1 FROM cookies WHERE host_key = ? LIMIT 1",
+                            (root,),
+                        ).fetchone()
+                    if row:
+                        return (name, profile_dir)
+                finally:
+                    con.close()
+            except Exception:
+                continue
+    return None
+
+
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     options: dict[str, Any] = {
         "quiet": True,
@@ -215,7 +305,10 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     }
     # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
     effective_proxy = proxy or _resolve_proxy(host)
-    if effective_proxy:
+    if is_china_host(host):
+        # 国内站必须显式置空，否则 yt-dlp 仍会从环境变量读取代理导致超时/被拒
+        options["proxy"] = ""
+    elif effective_proxy:
         options["proxy"] = effective_proxy
     # 国内站（B站/抖音等）反爬严格：缺 Referer/UA 常被直接 412，无论是否带 cookie 都先补上浏览器请求头
     headers = options.setdefault("http_headers", {})
@@ -233,10 +326,22 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         cookie_text = cookie_text[7:].strip()
     if cookie_text:
         headers["Cookie"] = cookie_text
-    # 兜底：环境变量指定的浏览器 Cookie 来源（服务器级配置）
+    # 浏览器 Cookie：优先用环境变量指定的来源；未指定时，对强反爬平台
+    # （抖音等）自动探测本机浏览器并读取其 Cookie，实现“粘贴口令即下”。
+    # 用户在高级选项手动填了 Cookie 则以用户填写的为准（上方已注入请求头）。
     browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
     if browser:
         options["cookiesfrombrowser"] = (browser,)
+    elif not cookie_text and is_cookie_hardened_host(host):
+        # 精确定位：找「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
+        found = _find_host_cookie_profile(host)
+        if found:
+            options["cookiesfrombrowser"] = found  # (browser, profile)
+        else:
+            # 回退：探测不到具体 Profile 时仍用默认（Default）读，至少给一次机会
+            b = _detect_browser_cookie_source()
+            if b:
+                options["cookiesfrombrowser"] = (b,)
     return options
 
 
@@ -253,6 +358,9 @@ def _friendly_error(exc: Exception) -> ResolveError:
     text = _clean_message(str(exc))
     lowered = text.lower()
     rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
+        (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
+         "请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
+         "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串"),
         (("private", "login required", "sign in", "members-only"), "该视频需要登录或为私密内容", "请更换公开可访问的视频链接"),
         (("geo", "not available in your country", "region"), "该视频在当前网络所在地区不可播放", "可尝试更换网络环境后重试"),
         (("unsupported url", "no video"), "无法从该链接中找到视频", "请确认链接指向的是视频播放页，而不是首页或列表页"),

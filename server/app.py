@@ -530,7 +530,7 @@ TORRENT_ENABLED = (
     or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
     or bool(os.environ.get("VDL_TORRENT_ENABLED"))
 )
-torrent_manager = torrent_mod.TorrentManager(DOWNLOAD_DIR)
+torrent_manager = torrent_mod.get_manager(DOWNLOAD_DIR)
 
 
 def _vault_load() -> dict | None:
@@ -865,14 +865,20 @@ def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
 
 def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_source: str = "ai",
                              intro_highlight: bool = False, skip_intro_outro: bool = False,
-                             retain_pct: float | None = None, web: bool = False,
-                             one_click: bool = False, mode: str | None = None) -> list:
+                             no_narrate_intro_outro: bool = True, retain_pct: float | None = None,
+                             web: bool = False, one_click: bool = False, mode: str | None = None,
+                             style: str = "none") -> list:
     """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。"""
     args = ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
+    if style and style != "none":
+        args += ["--style", style]
     if intro_highlight:
         args.append("--intro-highlight")
     if skip_intro_outro:
         args.append("--skip-intro-outro")
+    if not no_narrate_intro_outro:
+        # 默认就是「保留片头片尾·不解说」，仅当用户显式要全片解说时才带 --narrate-all
+        args.append("--narrate-all")
     if retain_pct is not None:
         args += ["--retain-pct", str(retain_pct)]
     if web:
@@ -884,7 +890,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     return args
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, retain_pct: float | None = None, web: bool = False, one_click: bool = False) -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -897,13 +903,21 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                     highlight_source=highlight_source,
                                     intro_highlight=intro_highlight,
                                     skip_intro_outro=skip_intro_outro,
+                                    no_narrate_intro_outro=no_narrate_intro_outro,
                                     retain_pct=retain_pct, web=web,
-                                    one_click=one_click)
+                                    one_click=one_click, style=style)
     try:
         # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
         if not COMMENTARY_RT.ready():
             raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
         base = job_id  # 用 job_id 作安全 ascii 文件名，避开中文/空格对 process.py 路径处理的干扰
+        # 解说锚点：优先用调用方传入的标题；否则从源文件名推断（下载任务文件名通常含剧集名）。
+        # 目的是给 LLM 一个「当前剧集」的锚点，防止解说词凭记忆跑题到别的剧集。
+        if not title:
+            try:
+                title = Path(src_path).stem or ""
+            except Exception:
+                title = ""
         in_dir = _commentary_root("input")
         out_dir = _commentary_root("output")
         in_dir.mkdir(parents=True, exist_ok=True)
@@ -937,8 +951,10 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         highlight_source=highlight_source,
                                         intro_highlight=intro_highlight,
                                         skip_intro_outro=skip_intro_outro,
+                                        no_narrate_intro_outro=no_narrate_intro_outro,
                                         retain_pct=retain_pct, web=web,
-                                        one_click=one_click, mode=mode)
+                                        one_click=one_click, mode=mode,
+                                        style=style)
         if edit_only:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker",
@@ -960,6 +976,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args.append("--vertical")
             if voice:
                 args += ["--voice", voice]
+            if title:
+                args += ["--title", title]
             if script_only:
                 args.append("--script-only")
             args += extra
@@ -1075,7 +1093,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         logger.exception("解说任务 %s 失败", job_id)
 
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, retain_pct: float | None = None, web: bool = False, one_click: bool = False) -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none") -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
@@ -1124,8 +1142,10 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
                 "highlight_source": highlight_source,
                 "intro_highlight": "true" if intro_highlight else "false",
                 "skip_intro_outro": "true" if skip_intro_outro else "false",
+                "no_narrate_intro_outro": "true" if no_narrate_intro_outro else "false",
                 "web": "true" if web else "false",
                 "one_click": "true" if one_click else "false",
+                "style": style or "none",
             }
             if retain_pct is not None:
                 data["retain_pct"] = str(retain_pct)
@@ -1231,6 +1251,17 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key"],
 )
+
+
+# 前端脚本未做版本化，pywebview/WKWebView 易缓存旧 app.js，导致修复不生效。
+# 对 HTML/JS/CSS 及首页强制 no-store，确保客户端每次都拉取最新前端。
+@app.middleware("http")
+async def _no_cache_frontend(request: Request, call_next):
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".js", ".html", ".css", ".htm")):
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
 logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
 
 
@@ -1415,7 +1446,14 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
     url, platform = parse_source(payload.url)
     # 国内站直连、本就快，用更短超时；受限视频也能更快判定，不必让用户空等
     host = _host_of(url)
-    timeout = RESOLVE_TIMEOUT_DOMESTIC if is_china_host(host) else RESOLVE_TIMEOUT_SECONDS
+    # 腾讯视频的 vqq 提取器容易卡在 m3u8 循环（新版页面 pinia 数据提取失败），
+    # 给更长超时避免误报；其他国内站保持快速响应。
+    if host == "v.qq.com":
+        timeout = 35
+    elif is_china_host(host):
+        timeout = RESOLVE_TIMEOUT_DOMESTIC
+    else:
+        timeout = RESOLVE_TIMEOUT_SECONDS
     loop = asyncio.get_running_loop()
     try:
         info = await asyncio.wait_for(
@@ -1423,13 +1461,20 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail=(
-                f"解析超时（超过 {timeout} 秒）。常见原因是该视频为会员专享 / 付费 / 地区限制内容，"
-                "或当前网络无法访问；此类受限内容通常无法解析下载"
-            ),
-        ) from None
+        host = _host_of(url)
+        if host == "v.qq.com":
+            detail = (
+                "腾讯视频解析超时。该视频可能是会员/付费内容，或腾讯页面改版导致提取器暂时失效。"
+                "建议：①在「高级选项」粘贴浏览器 Cookie 后重试；"
+                "②确认视频可公开访问（非 VIP 专享）；③稍后重试或反馈此链接"
+            )
+        else:
+            detail = (
+                f"解析超时（超过 {timeout} 秒）。常见原因：①视频本身受限（限免/会员专享/付费/地区限制，"
+                "这类通常需登录 cookie 才能拿到真实流，请到右上角「高级选项」粘贴浏览器 Cookie 后重试）；"
+                "②当前网络无法访问该平台（可尝试在「高级选项」设置代理）"
+            )
+        raise HTTPException(status_code=504, detail=detail) from None
     return {
         "url": url,
         "platform": {"key": platform.key, "name": platform.name},
@@ -1813,10 +1858,13 @@ class CommentaryRequest(BaseModel):
                                              "full_normal=全片普通解说; full_deep=全片深入解说")
     highlight_source: str = Field(default="ai", description="高光来源: ai=AI自动挑; manual=人工在审核面板挑")
     intro_highlight: bool = Field(default=False, description="片头插入最精彩片段当钩子")
-    skip_intro_outro: bool = Field(default=False, description="跳过片头片尾")
+    skip_intro_outro: bool = Field(default=False, description="去片头片尾(自动检测边界后剪掉)")
+    no_narrate_intro_outro: bool = Field(default=True,
+                                         description="保留片头片尾但不解说(默认开启；与 skip_intro_outro 互斥，后者优先)")
     retain_pct: float | None = Field(default=None, description="保留全片时长百分比(10~100, 不填=不裁剪)")
     web: bool = Field(default=False, description="联网搜索资料辅助发挥")
     one_click: bool = Field(default=False, description="一键生成: 全片深入解说+AI联网+片头插精彩片段")
+    style: str = Field(default="none", description="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌")
     mode: str | None = Field(default=None,
                              description="(旧版兼容) 三选一解说模式，会被上面的新选项覆盖")
 
@@ -1851,8 +1899,11 @@ def create_commentary(payload: CommentaryRequest) -> dict:
                     highlight_source=payload.highlight_source,
                     intro_highlight=payload.intro_highlight,
                     skip_intro_outro=payload.skip_intro_outro,
+                    no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
-                    one_click=payload.one_click)
+                    one_click=payload.one_click,
+                    title=_commentary_title(payload, src_path),
+                    style=payload.style)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1886,7 +1937,8 @@ def create_commentary_upload(
         commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": []}
     executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE,
-                    trim_start=trim_start, trim_end=trim_end, mode=mode)
+                    trim_start=trim_start, trim_end=trim_end, mode=mode,
+                    title=Path(file.filename).stem if file.filename else "")
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1902,9 +1954,11 @@ def create_script_only_upload(
     highlight_source: str = Form("ai"),
     intro_highlight: bool = Form(False),
     skip_intro_outro: bool = Form(False),
+    no_narrate_intro_outro: bool = Form(True),
     retain_pct: float = Form(None),
     web: bool = Form(False),
     one_click: bool = Form(False),
+    style: str = Form("none"),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
     if not COMMENTARY_ENABLED:
@@ -1933,7 +1987,10 @@ def create_script_only_upload(
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     commentary_type=commentary_type, highlight_source=highlight_source,
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
-                    retain_pct=retain_pct, web=web, one_click=one_click)
+                    no_narrate_intro_outro=no_narrate_intro_outro,
+                    retain_pct=retain_pct, web=web, one_click=one_click,
+                    title=Path(file.filename).stem if file.filename else "",
+                    style=style)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -2035,9 +2092,91 @@ def commentary_delete_by_id(cid: str) -> dict:
         raise HTTPException(status_code=404, detail="成片文件不存在")
     if not retention_mod.trash_available():
         raise HTTPException(status_code=503, detail="系统回收站不可用，拒绝直接删除")
+    # 先记录大小：移动成片到回收站后原路径已不存在，再 stat 会抛异常导致 500。
+    try:
+        file_size = resolved.stat().st_size
+    except Exception:
+        file_size = 0
     if not retention_mod.move_to_trash(resolved):
         raise HTTPException(status_code=500, detail="移入回收站失败")
-    return {"deleted": True, "trashed": True, "name": p.name, "size": resolved.stat().st_size}
+    return {"deleted": True, "trashed": True, "name": p.name, "size": file_size}
+
+
+class CommentaryRenameReq(BaseModel):
+    name: str
+
+
+@app.put("/api/commentary/file/{cid}")
+def commentary_rename_by_id(cid: str, payload: CommentaryRenameReq) -> dict:
+    """重命名已生成的解说成片（仅改文件名，不移动目录，保留原扩展名）。"""
+    p = _decode_commentary_id(cid)
+    allowed_roots = _commentary_roots()
+    if not allowed_roots:
+        raise HTTPException(status_code=503, detail="解说输出目录未配置")
+    resolved = p.resolve()
+    in_allowed_root = any(
+        resolved == root.resolve() or root.resolve() in resolved.parents
+        for root in allowed_roots
+    )
+    if not in_allowed_root:
+        raise HTTPException(status_code=403, detail="文件路径不在解说输出目录内")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="成片文件不存在")
+
+    new_name = (payload.name or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="新文件名不能为空")
+    # 去掉可能用于路径穿越的字符
+    new_name = new_name.replace("/", "_").replace("\\", "_").replace("..", "_").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="新文件名非法")
+    # 保留原扩展名（若新名未带扩展名）
+    if "." not in new_name:
+        new_name = new_name + p.suffix
+    # 防止覆盖已有文件：重名自动追加 (1)/(2)…
+    dest = resolved.parent / new_name
+    n = 1
+    while dest.exists():
+        stem, suffix = new_name.rsplit(".", 1) if "." in new_name else (new_name, "")
+        dest = resolved.parent / f"{stem} ({n}){('.' + suffix) if suffix else ''}"
+        n += 1
+    try:
+        resolved.rename(dest)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重命名失败：{e}")
+    new_cid = base64.urlsafe_b64encode(str(dest.resolve()).encode("utf-8")).decode("ascii")
+    return {"renamed": True, "id": new_cid, "name": dest.name}
+
+
+@app.post("/api/commentary/file/{cid}/save")
+def commentary_save_to_downloads(cid: str) -> dict:
+    """把已生成的解说成片复制到「下载」文件夹。
+
+    桌面版 WebView 的 <a download> 在 cocoa/WKWebView 下不会触发本机保存，
+    而 pywebview 原生 Api 也未暴露 save_commentary_file 桥接；因此由本地
+    FastAPI 后端（与 app 同机同用户运行，有权限写 ~/Downloads）直接复制文件，
+    前端点击「下载」时调用本接口即可真正把成片落到下载目录。
+    """
+    p = _decode_commentary_id(cid)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="成片文件不存在")
+    downloads = Path.home() / "Downloads"
+    try:
+        downloads.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        raise HTTPException(status_code=500, detail="无法访问下载文件夹")
+    # 避免覆盖已有同名文件：dst 已存在则追加 (1)/(2)…
+    stem, suffix = p.stem, p.suffix
+    dst = downloads / p.name
+    n = 1
+    while dst.exists():
+        dst = downloads / f"{stem} ({n}){suffix}"
+        n += 1
+    try:
+        shutil.copy2(str(p), str(dst))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"复制失败：{e}")
+    return {"saved": True, "path": str(dst), "name": dst.name}
 
 
 @app.get("/api/commentary/{job_id}")
@@ -2069,12 +2208,18 @@ def commentary_status(job_id: str) -> dict:
 def commentary_file(job_id: str) -> FileResponse:
     with _commentary_lock:
         job = commentary_jobs.get(job_id)
-    if not job or job["status"] != "completed" or not job.get("output_path"):
-        raise HTTPException(status_code=409, detail="成片尚未就绪")
-    path = Path(job["output_path"])
-    if not path.exists():
-        raise HTTPException(status_code=410, detail="成片文件已清理")
-    return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
+    if job and job["status"] == "completed" and job.get("output_path"):
+        path = Path(job["output_path"])
+        if path.exists():
+            return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
+    # 兼容「已生成成片列表」卡片的 cid（base64 编码的文件路径标识）：
+    # 桌面版桥接 save_commentary_file(cid) 会请求 /api/commentary/{cid}/file，
+    # 命中本路由；此处按 cid 解码并校验后直接返回文件，使列表卡片也能下载。
+    try:
+        p = _decode_commentary_id(job_id)
+    except Exception:
+        raise HTTPException(status_code=409, detail="成片尚未就绪或标识无效")
+    return FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 
 # ---- 脚本审核专用路由 ----
@@ -2100,6 +2245,19 @@ def _resolve_source(payload: CommentaryRequest) -> str:
         raise HTTPException(status_code=400, detail="请提供 task_id 或 file_id")
 
 
+def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
+    """为解说任务推导剧名锚点：优先用下载任务的标题，否则退回源文件名（下载文件名通常含剧集名）。"""
+    if getattr(payload, "task_id", ""):
+        try:
+            t = _require_task(payload.task_id)
+            tt = getattr(t, "title", "") or ""
+            if tt:
+                return tt
+        except Exception:
+            pass
+    return Path(src_path).stem or ""
+
+
 @app.post("/api/commentary/script-only")
 def create_script_only(payload: CommentaryRequest) -> dict:
     """只做转写+解说词生成，不渲染成片。返回 job_id 供前端轮询，
@@ -2122,8 +2280,11 @@ def create_script_only(payload: CommentaryRequest) -> dict:
                     highlight_source=payload.highlight_source,
                     intro_highlight=payload.intro_highlight,
                     skip_intro_outro=payload.skip_intro_outro,
+                    no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
-                    one_click=payload.one_click)
+                    one_click=payload.one_click,
+                    title=_commentary_title(payload, src_path),
+                    style=payload.style)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -2234,6 +2395,7 @@ def render_script(job_id: str, vertical: bool = Form(False), voice: str = Form("
     highlight_source = saved.get("highlight_source", "ai")
     intro_highlight = bool(saved.get("intro_highlight", False))
     skip_intro_outro = bool(saved.get("skip_intro_outro", False))
+    no_narrate_intro_outro = bool(saved.get("no_narrate_intro_outro", True))
     retain_pct = saved.get("retain_pct")
     web = bool(saved.get("web", False))
     one_click = bool(saved.get("one_click", False))
@@ -2263,6 +2425,7 @@ def render_script(job_id: str, vertical: bool = Form(False), voice: str = Form("
                     trim_start=trim_start, trim_end=trim_end,
                     commentary_type=commentary_type, highlight_source=highlight_source,
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
+                    no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
@@ -3222,8 +3385,8 @@ class TorrentFilesRequest(BaseModel):
 
 
 def _require_torrent() -> None:
-    if not (TORRENT_ENABLED and torrent_mod.available()):
-        raise HTTPException(status_code=404, detail="种子下载功能未启用（需桌面版并安装 libtorrent）")
+    if not (TORRENT_ENABLED and torrent_mod.available() and torrent_manager is not None):
+        raise HTTPException(status_code=404, detail="种子下载功能未启用（需桌面版并安装 libtorrent 或 aria2）")
 
 
 @app.get("/api/torrents")

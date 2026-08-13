@@ -283,8 +283,16 @@ def _render_subtitle_png(text, out_path, w=480, h=854, size=None, y_bottom=None)
     tw = bbox[2] - bbox[0]
     margin = int(y_bottom) if y_bottom and y_bottom > 0 else int(h * 0.08)
     y = max(0, h - margin - used)
-    draw.text((w // 2 - tw // 2, y), text, font=font,
-              fill=(255, 255, 255, 255), stroke_width=max(2, used // 16),
+    tx = w // 2 - tw // 2
+    ty = y
+    # 阴影：半透明黑，向右下偏移，提升在浅色/花背景上的可读性。
+    # 此前只有黑描边、无阴影，浅底视频上字容易糊进画面。
+    shadow_off = max(2, used // 24)
+    draw.text((tx + shadow_off, ty + shadow_off), text, font=font,
+              fill=(0, 0, 0, 150))
+    # 主字：白字 + 加粗黑描边（描边由原 used//16 加粗到 used//10，更硬朗）
+    draw.text((tx, ty), text, font=font,
+              fill=(255, 255, 255, 255), stroke_width=max(3, used // 10),
               stroke_fill=(0, 0, 0, 255))
     img.save(out_path)
 
@@ -435,9 +443,10 @@ def _prepare_feather(video_path, vertical, canvas):
 
     返回 {"band_y","band_h","margin_v"} 或 None。
     """
+    # 竖屏(9:16 Shorts)不再跳过羽化：原视频经 scale=480:854 居中放大裁剪，原字幕仍保留
+    # 在底部区域；探测抽帧 scale=480:-2 与竖屏渲染 canvas(480x854) 尺寸一致，坐标可复用。
     if vertical:
-        print("[字幕] 竖屏会重排画面，跳过原字幕羽化")
-        return None
+        print("[字幕] 竖屏按 480x854 居中裁剪，原字幕保留在底部，照常探测羽化带")
     try:
         from PIL import Image
     except ImportError:
@@ -492,7 +501,8 @@ def _seg_cmd_narration(video_path, s, e, vdur, vpath, narration, vertical, inter
     四条默认铁律全在这里落地：
       1. 单行字幕：长旁白切块后按时间轮播，任意时刻画面上只有一行；
       2. 同行显示：字幕纵向位置取自原字幕 .ass 的 MarginV（拿不到用底部 8%）；
-      3. 只羽化原字幕：原字幕单独抽成透明层高斯模糊后叠回，**画面本身不模糊**；
+      3. 只羽化原字幕：原字幕带用 delogo/inpaint **彻底擦除**；
+         解说字幕显示在**原字幕带上方**，不再同行覆盖，避免视觉上像"把原字幕又配了一遍"；画面其余部分保持清晰；
       4. 弱化原声：解说播放期间把原声压到 ORIGINAL_DUCK，旁白结束后自动回满音量。
     """
     win = max(e - s, 0.1)
@@ -501,7 +511,20 @@ def _seg_cmd_narration(video_path, s, e, vdur, vpath, narration, vertical, inter
     out_dur = win * k
     cw, ch = canvas if canvas else ((480, 854) if vertical else _probe_size(video_path))
     size = _subtitle_size(ch)
-    y_bottom = (feather or {}).get("margin_v") or int(ch * 0.08)
+    base_margin = (feather or {}).get("margin_v") or int(ch * 0.08)
+    if feather:
+        # 解说字幕放在原字幕带「上方」，留足视觉间距，避免与被羽化的原字幕
+        # 紧贴在一起被误认为"重新配了一遍原字幕"。
+        # y_bottom 是字幕底边距画面底边的距离；band_y 是原字幕带顶边距画面顶边的距离。
+        # 竖屏用 12% 间距（太大会跳到画面中上部，喧宾夺主），横屏用 20%。
+        gap_pct = 0.12 if vertical else 0.20
+        gap = max(int(ch * gap_pct), int(size * 3))
+        y_bottom = int(ch - feather["band_y"] + gap)
+        # 安全 clamp：不低于默认底部边距，且整行不超出画面顶。
+        y_bottom = max(y_bottom, base_margin)
+        y_bottom = min(y_bottom, ch - size)
+    else:
+        y_bottom = base_margin
 
     # ---- 单行字幕切块 + 时间分配（字幕只在旁白播放期间出现）----
     max_chars = max(8, int((cw - 40) / size))

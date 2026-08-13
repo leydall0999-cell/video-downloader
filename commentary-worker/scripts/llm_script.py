@@ -20,6 +20,89 @@ import urllib.parse
 import commentary_options as copts
 
 
+# 解说口吻风格表：每个风格对应「系统提示里的风格指令」「LLM 温度」「默认联动音色」。
+# 新增风格只需在此加一项，并在前端 index.html 的 comStyle radio、app.js 的 STYLE_VOICE 同步。
+STYLE_CONFIG = {
+    "none": {
+        "label": "默认",
+        "temperature": 0.7,
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "prompt": "",
+    },
+    "funny": {
+        "label": "搞笑",
+        "temperature": 0.4,
+        "voice": "zh-CN-YunxiaNeural",  # 青年男声：年轻活泼
+        "prompt": (
+            "【解说风格·搞笑】用幽默调侃的口吻解说：玩梗、夸张比喻、制造反差、自嘲式吐槽，"
+            "让观众会心一笑。笑点必须建立在对内容真实解读之上，不许为了搞笑编造剧情或歪曲事实。"
+        ),
+    },
+    "serious": {
+        "label": "严肃",
+        "temperature": 0.3,
+        "voice": "zh-CN-YunyangNeural",  # 新闻腔男声
+        "prompt": (
+            "【解说风格·严肃】用冷静、克制、客观的口吻解说：重事实、讲逻辑、少情绪渲染，"
+            "把事情讲清楚、讲准确，不玩梗、不煽情。"
+        ),
+    },
+    "domineering": {
+        "label": "霸道",
+        "temperature": 0.35,
+        "voice": "zh-CN-YunjianNeural",  # 沉稳男声：低沉笃定
+        "prompt": (
+            "【解说风格·霸道】用强势笃定的口气解说：多用肯定句下判断、给结论，节奏干脆利落，"
+            "像在替观众做主、把观点砸实，不模棱两可。"
+        ),
+    },
+    "angry": {
+        "label": "愤青",
+        "temperature": 0.45,
+        "voice": "zh-CN-YunyangNeural",  # 新闻腔男声
+        "prompt": (
+            "【解说风格·愤青】用代入感强、带情绪锋芒的口吻解说：为不公鸣不平、为观众抱不平，"
+            "敢吐槽、敢批点，但立场要站得住、指向要明确。"
+        ),
+    },
+    "suspense": {
+        "label": "悬疑",
+        "temperature": 0.6,
+        "voice": "zh-CN-YunjianNeural",  # 沉稳男声：低沉神秘
+        "prompt": (
+            "【解说风格·悬疑】用层层递进、留钩子、放慢节奏的口吻解说：先抛谜题、压低信息、再逐步揭晓，"
+            "制造「接下来会发生什么」的紧张感与期待感。"
+        ),
+    },
+    "healing": {
+        "label": "治愈",
+        "temperature": 0.4,
+        "voice": "zh-CN-XiaoxiaoNeural",  # 温柔女声
+        "prompt": (
+            "【解说风格·治愈】用温柔、松弛、有陪伴感的口吻解说：语速舒缓、多共情、像在轻声分享，"
+            "让观众感到被理解、被安抚，不急不躁。"
+        ),
+    },
+    "sarcastic": {
+        "label": "毒舌",
+        "temperature": 0.4,
+        "voice": "zh-CN-YunyangNeural",  # 新闻腔男声：犀利冷幽默
+        "prompt": (
+            "【解说风格·毒舌】用犀利、一针见血、带冷幽默反讽的口吻解说：精准戳破套路与荒谬，"
+            "金句频出、嘴不留情，但讽刺要有理有据、不人身攻击。"
+        ),
+    },
+}
+
+
+def _style_prompt(style: str) -> str:
+    """返回某风格的口吻指令（none/未知返回空串）。"""
+    cfg = STYLE_CONFIG.get(style)
+    if not cfg:
+        return ""
+    return cfg.get("prompt", "")
+
+
 def _web_search(query: str, n: int = 5):
     """尽力而为的联网搜索：优先 SerpAPI，其次 Bing，再次 DuckDuckGo lite。
     全程异常吞掉，失败返回空列表（调用方会退化到仅用模型自身知识）。"""
@@ -60,7 +143,7 @@ def _web_search(query: str, n: int = 5):
     return results
 
 
-def _call_llm(system_prompt: str, user_prompt: str) -> str:
+def _call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.7) -> str:
     """调 OpenAI 兼容 API，返回 assistant 文本。"""
     api_key = (os.environ.get("LLM_API_KEY") or os.environ.get("LLM_APIKEY") or "").strip()
     if not api_key:
@@ -77,7 +160,7 @@ def _call_llm(system_prompt: str, user_prompt: str) -> str:
             {"role": "user", "content": user_prompt},
         ],
         "max_tokens": max_tokens,
-        "temperature": 0.7,
+        "temperature": temperature,
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -101,7 +184,7 @@ def _call_llm(system_prompt: str, user_prompt: str) -> str:
         raise RuntimeError(f"LLM API 调用失败: {e}")
 
 
-def _build_system_prompt(family, depth, src, intro):
+def _build_system_prompt(family, depth, src, intro, style="none"):
     """按（解说家族, 深浅, 高光来源, 是否片头高光）组合出 system prompt。
 
     family: "highlights"（只挑高光叠加解说） / "full"（全片连贯解说）
@@ -151,6 +234,9 @@ def _build_system_prompt(family, depth, src, intro):
 - 旁白文本要写完整句子，不要省略。"""
         if intro:
             base += "\n- 在挑出的高光里，把**最精彩、最能勾人的那一段**单独标为 note=\"开场钩子\"，成片会把它剪到**最开头**当钩子；其余高光 note 仍为 \"高光\"。"
+        style_block = _style_prompt(style)
+        if style_block:
+            base += "\n\n" + style_block + "\n（以上为本条解说须贯穿全文的风格基调，请全程保持此口吻。）"
     else:  # full
         base = """你是一个风格鲜明的「全片解说」写手，对全片做连贯解说（开场钩子 + 主体 + 结尾引导），不要有空白冷场。
 
@@ -181,13 +267,17 @@ def _build_system_prompt(family, depth, src, intro):
 **重要：** start/end 取自转写稿时间戳；narration 必须是**单行短句**（一行字幕装得下）。"""
         if intro:
             base += "\n- 把**最精彩、最能勾人的那一段**标为 note=\"开场钩子\"，成片会把它剪到**最开头**当钩子。"
+        style_block = _style_prompt(style)
+        if style_block:
+            base += "\n\n" + style_block + "\n（以上为本条解说须贯穿全文的风格基调，请全程保持此口吻。）"
     return base
 
 
 def llm_script(transcript_path: str, script_path: str, title: str = "",
                voice: str = "", mode: str = None, commentary_type: str = None,
                highlight_source: str = None, intro_highlight: bool = None,
-               web: bool = None, retain_pct=None, skip_intro_outro: bool = None) -> str:
+               web: bool = None, retain_pct=None, skip_intro_outro: bool = None,
+               style: str = "none") -> str:
     """核心：读转写稿 → 调 LLM 生成解说脚本 JSON → 写回。
 
     剪辑选项（与 process.py / edit_ffmpeg.py 共用 commentary_options 模型）：
@@ -224,7 +314,7 @@ def llm_script(transcript_path: str, script_path: str, title: str = "",
     total_duration = segs[-1]["end"] if segs else 0
     title_hint = f'视频标题：{title}\n' if title else ""
 
-    system_prompt = _build_system_prompt(family, depth, src, intro)
+    system_prompt = _build_system_prompt(family, depth, src, intro, style=style)
     mode_label = copts.COMMENTARY_TYPES[ctype]["label"]
 
     user_prompt = f"""{title_hint}视频总时长：{total_duration:.0f}秒
@@ -248,8 +338,9 @@ def llm_script(transcript_path: str, script_path: str, title: str = "",
 请根据上面的转写稿，生成这个视频的解说脚本 JSON。"""
 
     print(f"  [LLM] 调用 {os.environ.get('LLM_MODEL', 'gpt-4o-mini')} 生成解说词"
-          f"（{ctype}{' · 联网' if web_on else ''}）…")
-    result = _call_llm(system_prompt, user_prompt)
+          f"（{ctype} · 风格={STYLE_CONFIG.get(style, {}).get('label', style)}{' · 联网' if web_on else ''}）…")
+    style_temp = STYLE_CONFIG.get(style, {}).get("temperature", 0.7)
+    result = _call_llm(system_prompt, user_prompt, temperature=style_temp)
 
     # 解析 JSON（LLM 可能用 ```json ... ``` 包着，去掉）
     result = result.strip()
@@ -266,6 +357,9 @@ def llm_script(transcript_path: str, script_path: str, title: str = "",
         script["title"] = title or os.path.splitext(os.path.basename(transcript_path))[0]
     if voice:
         script["voice"] = voice
+    elif style in STYLE_CONFIG and STYLE_CONFIG[style].get("voice"):
+        # 风格联动音色：未显式指定 voice 时，默认套用该风格的推荐音色
+        script["voice"] = STYLE_CONFIG[style]["voice"]
     if "voice" not in script:
         script["voice"] = os.environ.get("VOICE", "zh-CN-XiaoxiaoNeural")
 

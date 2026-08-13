@@ -218,6 +218,101 @@ class VdlApi:
             return f"ERROR: {exc}"
         return str(dest)
 
+    def save_commentary_file_dialog(self, cid: str, suggested_name: str) -> str:
+        """弹出系统保存面板（默认目录=下载文件夹、预填文件名），用户可改位置/重命名。
+
+        实现：用 osascript `choose file name` 子进程弹原生窗口。它不受 pywebview
+        主线程 run loop 阻塞影响（之前的 NSSavePanel 在主线程被同步 JS 调用卡住，
+        导致面板永远弹不出、后台线程永久挂起）。取消返回 "CANCELLED"；若 osascript
+        不可用则退化为直接保存到「下载」文件夹（即默认行为）。
+        """
+        import json
+        import os
+        import tempfile
+        import requests
+        import subprocess
+        import datetime as _dt
+        import threading as _th
+        from pathlib import Path
+
+        def _log(msg):
+            try:
+                with open("/tmp/vdl_save.log", "a") as f:
+                    f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+            except Exception:
+                pass
+
+        url = f"http://{HOST}:{PORT}/api/commentary/{cid}/file"
+        suggested = suggested_name or "解说成片.mp4"
+        downloads = Path.home() / "Downloads"
+        try:
+            downloads.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads = Path.home()
+        _log(f"enter thread={_th.current_thread().name} main={_th.current_thread() is _th.main_thread()} suggested={suggested!r}")
+
+        dest = None
+        # 主路径：osascript choose file name —— 真正的原生保存窗口，
+        # 默认位置=下载文件夹、预填文件名，用户可改位置/重命名。任意线程可用。
+        # 关键：必须写入临时 .applescript 文件（UTF-8）再 `osascript <file>` 执行，
+        # 不能走 `osascript -e <脚本>` —— 中文经 argv 传给 osascript 时会被错误解码，
+        # 触发「syntax error: 预期是引号，却找到未知的记号」导致面板不弹。
+        try:
+            name_json = json.dumps(suggested, ensure_ascii=False)
+            script = (
+                'set p to choose file name with prompt "保存解说成片" '
+                f'default name {name_json} '
+                'default location (path to downloads folder)\n'
+                'POSIX path of p'
+            )
+            fd, scpt = tempfile.mkstemp(suffix=".applescript")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(script)
+            try:
+                r = subprocess.run(
+                    ["osascript", scpt],
+                    capture_output=True, text=True, timeout=600,
+                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    dest = r.stdout.strip()
+                    _log(f"osascript chose: {dest}")
+                else:
+                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
+                    return "CANCELLED"
+            finally:
+                try:
+                    os.remove(scpt)
+                except Exception:
+                    pass
+        except Exception as e:
+            _log(f"osascript exception: {e!r}")
+            dest = None
+
+        if not dest:
+            # 兜底：osascript 不可用时直接存到下载文件夹（符合默认行为）。
+            _log("fallback -> ~/Downloads copy")
+            dest = str(downloads / suggested)
+
+        target = Path(dest)
+        try:
+            resp = requests.get(url, timeout=(10, 600))
+            resp.raise_for_status()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # 避免覆盖已有文件
+            if target.exists():
+                stem, suf = target.stem, target.suffix
+                i = 1
+                while target.exists():
+                    target = target.parent / f"{stem}({i}){suf}"
+                    i += 1
+            target.write_bytes(resp.content)
+        except Exception as exc:
+            _log(f"write error: {exc!r}")
+            return f"ERROR: {exc}"
+        _log(f"saved -> {target}")
+        return str(target)
+
 
 def _handle_exit(*_args) -> None:
     os._exit(0)

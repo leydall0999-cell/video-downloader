@@ -35,3 +35,8 @@ desktop/icon.ico
 
 # 测试运行产生的临时媒体库目录
 tests/_phases_tmp/
+
+# 本地备份 / 测试产物（含大模型与成片，不入库）
+backup/
+e2e_out/
+commentary-pipeline
