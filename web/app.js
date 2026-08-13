@@ -72,14 +72,10 @@
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
     proxyInput: $('proxyInput'),
-    upsellBox: $('upsellBox'),
     qualityBlock: $('qualityBlock'),
     extractSelect: $('extractSelect'),
     directHint: $('directHint'),
     serverFallbackBtn: $('serverFallbackBtn'),
-    upsellMp3: $('upsellMp3'),
-    upsellCloud: $('upsellCloud'),
-    upsellStatus: $('upsellStatus'),
     nodeBar: $('nodeBar'),
     nodeDot: $('nodeDot'),
     nodeText: $('nodeText'),
@@ -738,23 +734,18 @@
     if (directUrl) {
       // 直链透传：跳过清晰度选择与服务器下载，直接让浏览器从源站拉文件
       el.qualityBlock.hidden = true;
-      el.upsellBox.hidden = true;
       el.downloadBtn.lastChild.textContent = '直接保存到本机 ⬇';
       el.directHint.hidden = false;
       el.directHint.textContent = '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
       el.serverFallbackBtn.hidden = false;
     } else {
       el.qualityBlock.hidden = false;
-      el.upsellBox.hidden = false;
       el.downloadBtn.lastChild.textContent = '开始下载';
       el.directHint.hidden = true;
       el.directHint.textContent = '';
       el.serverFallbackBtn.hidden = true;
       renderQualities(data.qualities);
     }
-    // 展示交叉引流卡片：转 MP3 直接发起音频下载，存网盘弹出云盘上传弹窗
-    el.upsellStatus.hidden = true;
-    el.upsellMp3.disabled = false;
     el.resultPanel.hidden = false;
   };
 
@@ -2812,28 +2803,6 @@
     paintNodeBar();
   });
 
-  // 交叉引流入口（结果页底部）：
-  //  - 转 MP3：直接发起一个"仅音频"下载任务，进度在下方任务列表展示
-  //  - 存网盘：下载完成后点击 → 弹出网盘弹窗选 WebDAV/百度网盘上传
-  //    未完成下载时提示"先完成下载再存"
-  el.upsellMp3.addEventListener('click', async () => {
-    if (!resolved) return;
-    const audioKey = resolved.qualities?.find((q) => /MP3|音频/.test(q.label))?.key || 'audio';
-    const taskId = await startDownload(audioKey);
-    if (taskId) {
-      el.upsellStatus.hidden = false;
-      el.upsellStatus.textContent = '已为你发起 MP3 音频提取任务，进度见下方「下载任务」列表 👇';
-      el.upsellMp3.disabled = true;
-    }
-  });
-  el.upsellCloud.addEventListener('click', () => {
-    if (lastCompletedTask && lastCompletedRefs) {
-      openCloudModal(lastCompletedTask, lastCompletedRefs);
-      return;
-    }
-    el.upsellStatus.hidden = false;
-    el.upsellStatus.textContent = '先等一个下载任务完成，再点它卡片上的「☁️ 存到网盘」即可。';
-  });
   el.modalClose.addEventListener('click', () => el.modal.close());
   el.modal.addEventListener('click', (event) => {
     if (event.target === el.modal) el.modal.close();
