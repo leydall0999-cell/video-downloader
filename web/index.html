@@ -89,7 +89,7 @@
           <div class="adv-body">
             <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
             <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
-              placeholder="仅用于需要登录态的平台（如抖音）。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
+              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
             <label class="adv-label" for="proxyInput">代理地址（可选）</label>
             <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
               placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
@@ -155,6 +155,16 @@
         <span id="alertHint"></span>
       </div>
     </div>
+  </section>
+
+  <!-- 正版素材库入口：引导批量商用优先使用已授权素材 -->
+  <section class="panel stock-panel" id="stockPanel" aria-labelledby="stockTitle">
+    <div class="stock-head">
+      <h2 id="stockTitle" class="stock-title">📦 需要商用素材？优先用正版来源</h2>
+      <button type="button" class="stock-use-edit" id="stockUseEdit" title="修改下载用途">我的用途：<span id="stockUseLabel">未设置</span> ✎</button>
+    </div>
+    <p class="stock-sub">批量商用请优先选用已授权素材，规避版权与账号风险。下列平台均提供可商用授权内容。</p>
+    <div class="stock-grid" id="stockGrid"></div>
   </section>
 
   <!-- 解析结果 -->
@@ -394,8 +404,12 @@
       <div class="com-opt-block">
         <div class="com-opt-title">④ 固定选择项</div>
         <label class="com-highlights-toggle">
+          <input type="checkbox" id="comKeepNoNarrate" checked />
+          <span>保留片头片尾·不解说（自动检测边界，默认开启）</span>
+        </label>
+        <label class="com-highlights-toggle">
           <input type="checkbox" id="comSkipIntroOutro" />
-          <span>跳过片头片尾（各砍约 8%，上限 90s）</span>
+          <span>去片头片尾（自动检测后剪掉，与上方互斥）</span>
         </label>
         <div class="com-retain-field">
           <label class="com-retain-label" for="comRetainPct">保留全片时长百分比</label>
@@ -405,6 +419,32 @@
           </div>
           <span class="com-retain-hint">10~100，留空表示不裁剪</span>
         </div>
+      </div>
+
+      <!-- 方案⑤：画幅 -->
+      <div class="com-opt-block">
+        <div class="com-opt-title">⑤ 画幅</div>
+        <div class="com-opt-row">
+          <label class="com-mode-option"><input type="radio" name="comAspect" value="auto" checked /><span><b>自动（跟视频走）</b></span></label>
+          <label class="com-mode-option"><input type="radio" name="comAspect" value="landscape" /><span>横屏 16:9</span></label>
+          <label class="com-mode-option"><input type="radio" name="comAspect" value="vertical" /><span>竖屏 9:16（抖音/视频号）</span></label>
+        </div>
+      </div>
+
+      <!-- 方案⑥：解说风格 -->
+      <div class="com-opt-block">
+        <div class="com-opt-title">⑥ 解说风格</div>
+        <div class="com-opt-row">
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="none" checked /><span><b>默认</b></span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="funny" /><span>搞笑</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="serious" /><span>严肃</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="domineering" /><span>霸道</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="angry" /><span>愤青</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="suspense" /><span>悬疑</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="healing" /><span>治愈</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="sarcastic" /><span>毒舌</span></label>
+        </div>
+        <p class="com-style-hint" id="comStyleHint">默认风格：音色由下方「全局配音」决定。</p>
       </div>
     </div>
 
@@ -471,19 +511,33 @@
         </div>
         <div class="com-history-toolbar" id="comHistoryToolbar">
           <div class="com-view-toggle">
-            <button type="button" class="com-view-btn active" data-mode="grid" title="图标网格">⊞</button>
-            <button type="button" class="com-view-btn" data-mode="list" title="列表">☰</button>
-            <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">◷</button>
-            <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">▣</button>
+            <button type="button" class="com-view-btn active" data-mode="list" title="列表">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="5" width="16" height="2" rx="1"/><rect x="2" y="9" width="16" height="2" rx="1"/><rect x="2" y="13" width="16" height="2" rx="1"/></svg>
+            </button>
+            <button type="button" class="com-view-btn" data-mode="grid" title="图标网格">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
+            </button>
+            <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="3.4" height="14" rx="1.2"/><rect x="8.3" y="3" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="3" width="3.4" height="14" rx="1.2"/></svg>
+            </button>
+            <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="9" r="1.8"/><path d="M4 14l3.5-3.5 2.5 2.5 3-3 3 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
           </div>
-          <select id="comSortBy" class="adv-input com-sort-select" title="排序方式">
-            <option value="mtime-desc">时间：最新在前</option>
-            <option value="mtime-asc">时间：最早在前</option>
-            <option value="size-desc">大小：从大到小</option>
-            <option value="size-asc">大小：从小到大</option>
-            <option value="name-asc">名称：A-Z</option>
-            <option value="name-desc">名称：Z-A</option>
-          </select>
+          <div class="com-sort">
+            <button type="button" class="com-sort-btn" id="comSortBtn" aria-haspopup="true" aria-expanded="false">
+              <span class="com-sort-label" id="comSortLabel">时间：最新在前</span>
+              <svg class="com-sort-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <ul class="com-sort-menu" id="comSortMenu" role="menu">
+              <li role="menuitem" data-value="mtime-desc">时间：最新在前</li>
+              <li role="menuitem" data-value="mtime-asc">时间：最早在前</li>
+              <li role="menuitem" data-value="size-desc">大小：从大到小</li>
+              <li role="menuitem" data-value="size-asc">大小：从小到大</li>
+              <li role="menuitem" data-value="name-asc">名称：A-Z</li>
+              <li role="menuitem" data-value="name-desc">名称：Z-A</li>
+            </ul>
+          </div>
         </div>
       </div>
       <div class="com-grid" id="comGrid"></div>
@@ -949,7 +1003,42 @@
     </div>
   </dialog>
 
+<!-- 下载用途确认：避免将受保护内容用于商用 -->
+<dialog id="consentModal" class="modal" aria-labelledby="consentTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="consentTitle">下载用途确认</h2>
+      <button type="button" class="modal-close" id="consentClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub">请选择本次下载内容的主要用途：</p>
+    <div class="consent-uses">
+      <label class="consent-radio"><input type="radio" name="consentUse" value="personal" checked /> <span>个人学习 / 备份</span></label>
+      <label class="consent-radio"><input type="radio" name="consentUse" value="commercial" /> <span>商业用途（当素材）</span></label>
+    </div>
+    <div class="consent-commercial" id="consentCommercialBox" hidden>
+      <p class="consent-warn">⚠️ 商用场景请注意：请确保已获得内容的权利人授权，或来源为正版可商用素材库。规避平台付费 / 会员保护用于商用，存在法律与账号封禁风险。</p>
+      <label class="consent-check"><input type="checkbox" id="consentAuthorized" /> <span>我确认已获得该内容的商用授权，或来源为正版可商用素材库。</span></label>
+    </div>
+    <p class="consent-err" id="consentErr" hidden>请先勾选确认已获授权，再继续下载。</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="consentCancel">取消</button>
+      <button type="button" class="btn btn-primary" id="consentConfirm">确认并继续</button>
+    </div>
+    <p class="consent-note">选择会保存在你的本机浏览器，可在上方「正版素材库」卡片里随时修改。</p>
+  </div>
+</dialog>
+
 <footer class="app-footer"><span id="buildTag" class="build-tag"></span></footer>
-<script src="app.js"></script>
+<script>
+  // 前端未做版本化，浏览器/WKWebView 易缓存旧 app.js 导致修复不生效。
+  // 构建时由 build_mac.sh 把占位符替换为本次构建戳；开发模式（占位符未被替换）回退到时间戳，保证改动立即生效。
+  (function () {
+    var fp = '__BUILD_FP__';
+    var v = (fp && fp.indexOf('__BUILD_FP__') === -1) ? fp : ('dev' + Date.now());
+    var s = document.createElement('script');
+    s.src = 'app.js?v=' + encodeURIComponent(v);
+    document.head.appendChild(s);
+  })();
+</script>
 </body>
 </html>

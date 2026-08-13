@@ -3,6 +3,25 @@
 (() => {
   'use strict';
 
+  // 启动诊断：捕获任何未处理的脚本错误并显示在页面顶部红条，便于定位初始化失败
+  // （之前默认视图兜底没生效，很可能是 IIFE 中途同步抛错导致末尾 switchView 未执行）。
+  window.addEventListener('error', (e) => {
+    try {
+      let box = document.getElementById('bootErr');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'bootErr';
+        box.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;background:#c0392b;color:#fff;font:12px/1.5 monospace;padding:8px 12px;white-space:pre-wrap;';
+        (document.body || document.documentElement).appendChild(box);
+      }
+      const loc = e.filename ? (' @ ' + String(e.filename).split('/').pop() + ':' + e.lineno) : '';
+      box.textContent = '启动错误: ' + (e.message || (e.error && e.error.message) || e.error) + loc;
+    } catch (_) {}
+  });
+  // 默认展示「已生成成片」列表：用 setTimeout 异步兜底，即使后续初始化同步抛错，
+  // 事件循环也会执行本回调切到解说视图，不再依赖 IIFE 末尾是否跑到。
+  setTimeout(() => { try { switchView('commentary'); } catch (_) {} }, 0);
+
   const STATUS_TEXT = {
     pending: '排队中',
     downloading: '下载中',
@@ -95,6 +114,18 @@
     batchConcurrency: $('batchConcurrency'),
     batchConcVal: $('batchConcVal'),
     batchBtn: $('batchBtn'),
+    // 正版素材库入口 & 下载用途确认
+    stockPanel: $('stockPanel'),
+    stockGrid: $('stockGrid'),
+    stockUseEdit: $('stockUseEdit'),
+    stockUseLabel: $('stockUseLabel'),
+    consentModal: $('consentModal'),
+    consentCommercialBox: $('consentCommercialBox'),
+    consentAuthorized: $('consentAuthorized'),
+    consentConfirm: $('consentConfirm'),
+    consentCancel: $('consentCancel'),
+    consentClose: $('consentClose'),
+    consentErr: $('consentErr'),
     queueBar: $('queueBar'),
     cancelAllBtn: $('cancelAllBtn'),
     openFolderBtn: $('openFolderBtn'),
@@ -223,9 +254,10 @@
     comHistoryCount: $('comHistoryCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comGrid: $('comGrid'),
-    comSortBy: $('comSortBy'),
+    comSortBtn: $('comSortBtn'),
+    comSortMenu: $('comSortMenu'),
+    comSortLabel: $('comSortLabel'),
     comSource: $('comSource'),
-    comGenerate: $('comGenerate'),
     comGenerateScript: $('comGenerateScript'),
     comScriptPanel: $('comScriptPanel'),
     comScriptVoice: $('comScriptVoice'),
@@ -244,10 +276,10 @@
     comStatus: $('comStatus'),
     comReviewActions: $('comReviewActions'),
     comOpenReview: $('comOpenReview'),
-    comModeGroup: $('comModeGroup'),
     comGenerateOneClick: $('comGenerateOneClick'),
     comIntroHighlight: $('comIntroHighlight'),
     comSkipIntroOutro: $('comSkipIntroOutro'),
+    comKeepNoNarrate: $('comKeepNoNarrate'),
     comRetainPct: $('comRetainPct'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
@@ -319,6 +351,8 @@
   let comTrimEnd = 0;          // 裁剪终点（秒）
   let comPreviewDuration = 0;  // 源视频总时长（秒）
   let comPreviewUrl = null;    // 预览视频 URL（本地文件为 objectURL，需释放）
+  let comPreviewW = 0;         // 源视频宽度（像素，0=未加载）
+  let comPreviewH = 0;         // 源视频高度（像素，0=未加载）
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
@@ -328,7 +362,7 @@
 
   // 解说成片列表视图状态
   let commentaryItems = [];
-  let commentaryViewMode = 'grid';   // grid | list | timeline | gallery
+  let commentaryViewMode = 'list';   // grid | list | timeline | gallery
   let commentarySort = 'mtime-desc'; // mtime-desc | mtime-asc | size-desc | size-asc | name-asc | name-desc
 
   // -------------------------------------------------------------- 节点分流
@@ -445,6 +479,67 @@
     }
     return `${value.toFixed(value >= 100 || index === 0 ? 0 : 1)} ${units[index]}`;
   };
+
+  // 自定义确认弹窗（不依赖 pywebview 的 window.confirm，后者在 WebView 下无效）
+  const showConfirm = (message, { okText = '确定', cancelText = '取消', danger = false } = {}) =>
+    new Promise((resolve) => {
+      let overlay = document.getElementById('vdl-confirm-overlay');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'vdl-confirm-overlay';
+        overlay.style.cssText =
+          'position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:9999;';
+        document.body.appendChild(overlay);
+      }
+      overlay.innerHTML = '';
+      const box = document.createElement('div');
+      box.style.cssText =
+        'background:#1f2430;color:#eaeaea;max-width:360px;width:90%;border-radius:10px;padding:18px;box-shadow:0 8px 30px rgba(0,0,0,.4);font-size:14px;';
+      const msg = document.createElement('div');
+      msg.style.cssText = 'white-space:pre-wrap;line-height:1.5;margin-bottom:16px;';
+      msg.textContent = message;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;justify-content:flex-end;';
+      const cancel = document.createElement('button');
+      cancel.textContent = cancelText;
+      cancel.style.cssText =
+        'padding:7px 14px;border:none;border-radius:6px;background:#3a4356;color:#eaeaea;cursor:pointer;';
+      const ok = document.createElement('button');
+      ok.textContent = okText;
+      ok.style.cssText = `padding:7px 14px;border:none;border-radius:6px;cursor:pointer;background:${danger ? '#e5484d' : '#2f81f7'};color:#fff;`;
+      const close = (v) => {
+        overlay.style.display = 'none';
+        resolve(v);
+      };
+      cancel.onclick = () => close(false);
+      ok.onclick = () => close(true);
+      row.appendChild(cancel);
+      row.appendChild(ok);
+      box.appendChild(msg);
+      box.appendChild(row);
+      overlay.appendChild(box);
+      overlay.style.display = 'flex';
+      ok.focus();
+    });
+
+  // 轻量 toast 提示
+  const showToast = (msg, ms = 2600) => {
+    let t = document.getElementById('vdl-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'vdl-toast';
+      t.style.cssText =
+        'position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#222a38;color:#eaeaea;padding:10px 16px;border-radius:8px;font-size:13px;z-index:10000;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:80vw;display:none;';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => {
+      t.style.display = 'none';
+    }, ms);
+  };
+
 
   const formatDuration = (seconds) => {
     if (!seconds || seconds <= 0) return '';
@@ -973,6 +1068,94 @@
     }
   };
 
+  // ------------------------------------------------------------------ 正版素材库 & 商用授权校验
+  const STOCK_LIBRARIES = [
+    { name: 'Pexels', desc: '免费可商用视频（CC0）', url: 'https://www.pexels.com/videos/' },
+    { name: 'Pixabay', desc: '免费可商用视频 / 音乐', url: 'https://pixabay.com/videos/' },
+    { name: 'Mixkit', desc: '免费可商用视频素材', url: 'https://mixkit.co/free-stock-video/' },
+    { name: 'Coverr', desc: '免费可商用视频', url: 'https://coverr.co/' },
+    { name: '视觉中国', desc: '正版图库 / 视频授权', url: 'https://www.vcg.com/' },
+    { name: '新片场', desc: '正版视频素材 / 商用授权', url: 'https://www.xinpianchang.com/' },
+    { name: '包图网', desc: '国内商用设计 / 视频素材', url: 'https://ibaotu.com/' },
+    { name: 'Shutterstock', desc: '国际商用素材授权', url: 'https://www.shutterstock.com/' },
+  ];
+
+  const renderStockLibraries = () => {
+    if (!el.stockGrid) return;
+    el.stockGrid.innerHTML = '';
+    STOCK_LIBRARIES.forEach((s) => {
+      const a = document.createElement('a');
+      a.className = 'stock-card';
+      a.href = s.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.innerHTML = `<span class="stock-card-name">${s.name}</span><span class="stock-card-desc">${s.desc}</span>`;
+      el.stockGrid.appendChild(a);
+    });
+  };
+
+  const updateUseLabel = () => {
+    if (!el.stockUseLabel) return;
+    const use = localStorage.getItem('vdl_use');
+    el.stockUseLabel.textContent =
+      use === 'commercial' ? '商业素材' : use === 'personal' ? '个人学习' : '未设置';
+  };
+
+  /** 下载前校验用途：未确认过时弹窗询问；选商用则要求确认已获授权。返回是否允许继续。 */
+  const ensureConsent = () => new Promise((resolve) => {
+    const saved = localStorage.getItem('vdl_use');
+    if (saved === 'personal' || saved === 'commercial') return resolve(true);
+    const dlg = el.consentModal;
+    const errEl = el.consentErr;
+    const box = el.consentCommercialBox;
+    // 缓存错位/旧版 HTML 缺元素时直接放行，避免阻断下载
+    if (!dlg || !errEl || !box || typeof dlg.showModal !== 'function') {
+      localStorage.setItem('vdl_use', 'personal');
+      return resolve(true);
+    }
+    const radio = () => dlg.querySelector('input[name="consentUse"]:checked')?.value || 'personal';
+    errEl.hidden = true;
+    box.hidden = true;
+
+    const onUseChange = () => {
+      const commercial = radio() === 'commercial';
+      box.hidden = !commercial;
+      if (!commercial) { el.consentAuthorized.checked = false; errEl.hidden = true; }
+    };
+    const cleanup = () => {
+      el.consentConfirm.removeEventListener('click', onConfirm);
+      el.consentCancel.removeEventListener('click', onCancel);
+      el.consentClose.removeEventListener('click', onCancel);
+      dlg.removeEventListener('click', onBackdrop);
+      dlg.removeEventListener('close', onClose);
+      dlg.querySelector('input[name="consentUse"][value="personal"]').checked = true;
+      el.consentAuthorized.checked = false;
+      box.hidden = true;
+      errEl.hidden = true;
+    };
+    const onBackdrop = (e) => { if (e.target === dlg) dlg.close(); };
+    const onClose = () => { cleanup(); resolve(false); };
+    const onCancel = () => { dlg.close(); };
+    const onConfirm = () => {
+      const use = radio();
+      if (use === 'commercial' && !el.consentAuthorized.checked) {
+        errEl.hidden = false;
+        return;
+      }
+      localStorage.setItem('vdl_use', use);
+      updateUseLabel();
+      dlg.close();
+      resolve(true);
+    };
+    el.consentConfirm.addEventListener('click', onConfirm);
+    el.consentCancel.addEventListener('click', onCancel);
+    el.consentClose.addEventListener('click', onCancel);
+    dlg.addEventListener('click', onBackdrop);
+    dlg.addEventListener('close', onClose);
+    dlg.querySelectorAll('input[name="consentUse"]').forEach((r) => r.addEventListener('change', onUseChange));
+    dlg.showModal();
+  });
+
   /** 直接创建下载任务（不解析、用默认 best 画质），供批量模式复用。 */
   const enqueueDownload = async (url, { cookie = '', proxy = '', base = '' } = {}) => {
     try {
@@ -1001,6 +1184,7 @@
 
   /** 批量下载：逐条创建任务并进入列表。 */
   const runBatch = async (urls, cookie, proxy) => {
+    if (!(await ensureConsent())) return;
     clearError();
     el.resultPanel.hidden = true;
     el.batchBtn.disabled = true;
@@ -1013,10 +1197,7 @@
         method: 'POST',
         body: JSON.stringify({ urls, quality, cookie, proxy, concurrency }),
       });
-      el.alertBox.hidden = false;
-      el.alertTitle.textContent = `已提交 ${data.count} 个下载任务`
-        + (data.skipped ? `（${data.skipped} 个链接无法识别已跳过）` : '');
-      el.alertHint.textContent = '在下方「下载任务」列表查看进度；可调整「同时下载」数量控制并发。';
+      el.alert.hidden = true;
       data.task_ids.forEach((tid) => {
         const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
         trackTask(tid, refs, '');
@@ -1107,6 +1288,7 @@
   /** 用指定清晰度发起一个下载任务；返回 taskId 或 null。被"开始下载"与"转 MP3"复用。 */
   const startDownload = async (quality) => {
     if (!resolved) return null;
+    if (!(await ensureConsent())) return null;
     clearError();
     const base = resolved.base || '';
     try {
@@ -1404,15 +1586,35 @@
   const comGetOptions = (forceOneClick = false) => {
     const typeEl = document.querySelector('input[name="comType"]:checked');
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
+    const styleEl = document.querySelector('input[name="comStyle"]:checked');
     const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
       highlight_source: srcEl ? srcEl.value : 'ai',
       intro_highlight: !!(el.comIntroHighlight && el.comIntroHighlight.checked),
       skip_intro_outro: !!(el.comSkipIntroOutro && el.comSkipIntroOutro.checked),
+      // 默认保留片头片尾·不解说；若勾选「去片头片尾」则以 skip 优先（互斥，后端处理）
+      no_narrate_intro_outro: !!(el.comKeepNoNarrate && el.comKeepNoNarrate.checked),
       retain_pct: rp,
       one_click: !!forceOneClick,
+      style: styleEl ? styleEl.value : 'none',
     };
+  };
+
+  /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
+  const comGetAspect = () => {
+    const aspectEl = document.querySelector('input[name="comAspect"]:checked');
+    return aspectEl ? aspectEl.value : 'auto';
+  };
+
+  /** 把画幅选择解析成 vertical 布尔值。auto 时用已加载的视频宽高判断（竖屏素材→竖屏）。 */
+  const resolveVertical = () => {
+    const aspect = comGetAspect();
+    if (aspect === 'vertical') return true;
+    if (aspect === 'landscape') return false;
+    // auto：优先用已加载的预览宽高；拿不到（媒体库直出未加载预览）就按横屏兜底。
+    if (comPreviewW > 0 && comPreviewH > 0) return comPreviewH > comPreviewW;
+    return false;
   };
 
   /** 根据按钮 id 返回初始文案，错误恢复时使用。 */
@@ -1436,8 +1638,8 @@
     try {
       const opts = comGetOptions(oneClick);
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
-        : { file_id: source.fileId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
+        ? { task_id: source.taskId, vertical: resolveVertical(), trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
+        : { file_id: source.fileId, vertical: resolveVertical(), trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -1471,7 +1673,7 @@
     try {
       const form = new FormData();
       form.append('file', file);
-      form.append('vertical', 'false');
+      form.append('vertical', String(resolveVertical()));
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
       const opts = comGetOptions(oneClick);
@@ -1479,8 +1681,10 @@
       form.append('highlight_source', opts.highlight_source);
       form.append('intro_highlight', String(opts.intro_highlight));
       form.append('skip_intro_outro', String(opts.skip_intro_outro));
+      form.append('no_narrate_intro_outro', String(opts.no_narrate_intro_outro));
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
       form.append('one_click', String(opts.one_click));
+      form.append('style', opts.style || 'none');
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
@@ -1514,8 +1718,8 @@
     try {
       const opts = comGetOptions();
       const body = source.taskId
-        ? { task_id: source.taskId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
-        : { file_id: source.fileId, vertical: false, trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
+        ? { task_id: source.taskId, vertical: resolveVertical(), trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
+        : { file_id: source.fileId, vertical: resolveVertical(), trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
       const { job_id } = await request('/api/commentary/script-only', {
         method: 'POST', body: JSON.stringify(body),
       });
@@ -1539,7 +1743,7 @@
     try {
       const form = new FormData();
       form.append('file', file);
-      form.append('vertical', 'false');
+      form.append('vertical', String(resolveVertical()));
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
       const opts = comGetOptions();
@@ -1547,8 +1751,10 @@
       form.append('highlight_source', opts.highlight_source);
       form.append('intro_highlight', String(opts.intro_highlight));
       form.append('skip_intro_outro', String(opts.skip_intro_outro));
+      form.append('no_narrate_intro_outro', String(opts.no_narrate_intro_outro));
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
       form.append('one_click', String(opts.one_click));
+      form.append('style', opts.style || 'none');
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);
@@ -1646,13 +1852,14 @@
       el.comScriptPanel.hidden = false;
       el.comScriptSegments.replaceChildren();
 
-      // 初始化全局配音选择器
+      // 初始化全局配音选择器（默认选中当前风格联动的音色）
       el.comScriptVoice.replaceChildren();
+      const linkedVoice = STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
       COM_VOICES.forEach((v) => {
         const o = document.createElement('option');
         o.value = v.value;
         o.textContent = v.label;
-        if (v.value === (data.voice || 'zh-CN-XiaoxiaoNeural')) o.selected = true;
+        if (v.value === linkedVoice) o.selected = true;
         el.comScriptVoice.appendChild(o);
       });
 
@@ -1675,6 +1882,7 @@
       el.comScriptStatus.hidden = true;
       el.comScriptSave.disabled = false;
       el.comScriptRender.disabled = false;
+      currentScriptJobId = job_id; // 兜底：面板打开时确保全局 job_id 与显示内容一致
       el.comGenerateScript.textContent = '重新生成脚本';
       el.comGenerateScript.disabled = false;
 
@@ -1744,7 +1952,12 @@
 
   /** 用已审核脚本渲染成片 */
   const renderFromScript = async () => {
-    if (!currentScriptJobId) return;
+    if (!currentScriptJobId) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = '未找到当前任务，请重新生成脚本后再试';
+      return;
+    }
     el.comScriptRender.disabled = true;
     el.comScriptRender.textContent = '渲染中…';
     el.comScriptSave.disabled = true;
@@ -1755,7 +1968,7 @@
     el.comStatus.textContent = '正在用已审核脚本渲染成片…';
     try {
       const form = new FormData();
-      form.append('vertical', 'false');
+      form.append('vertical', String(resolveVertical()));
       form.append('voice', el.comScriptVoice.value);
       const { job_id } = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
@@ -1920,31 +2133,63 @@
   el.comScriptPrevAll.addEventListener('click', previewAllSegments);
 
   // 桌面版(pywebview)下载拦截：<a download> 在 WebKit 里不弹保存框，
-  // 改为调用 Python 桥接 API 直接把文件复制到「下载」文件夹。
+  // 下载/保存解说成片。由于后端被冻结在 PyInstaller 二进制里，新增 POST 路由
+  // 不会生效；因此复用已经存在的 GET /api/commentary/file/{cid} 文件路由，
+  // 优先尝试原生桥接，桥接不可用时再用 Blob + <a download> 触发浏览器保存。
   function wireSaveToDownloads(aEl) {
     if (!aEl) return;
     aEl.addEventListener('click', async (ev) => {
       const api = window.pywebview && window.pywebview.api;
-      if (!api || !api.save_commentary_file) return;  // 浏览器环境：放行默认 <a download>
-      ev.preventDefault();
       const href = aEl.href || '';
-      const m = /\/api\/commentary\/([^/]+)\/file/.exec(href);
-      const jobId = m ? m[1] : '';
-      const fname = aEl.getAttribute('download') || '解说成片.mp4';
+      // 兼容两种资源标识：
+      //  - 已生成成片列表卡片：/api/commentary/file/{cid}
+      //  - 生成完成的「保存到本机」：/api/commentary/{jobId}/file
+      const mFile = /\/api\/commentary\/file\/([^/?#]+)/.exec(href);
+      const mJob = /\/api\/commentary\/([^/]+)\/file/.exec(href);
+      const cid = mFile ? mFile[1] : (mJob ? mJob[1] : '');
+      const filename = aEl.getAttribute('download') || '解说成片.mp4';
       const orig = aEl.textContent;
+      ev.preventDefault();
+      if (!cid) { aEl.textContent = '保存失败：缺少成片标识'; setTimeout(() => aEl.textContent = orig, 3000); return; }
+
+      // 方案 A：优先调用原生 Python 桥接。该桥接内部会请求 GET /api/commentary/{id}/file
+      // 并把文件写到用户「下载」文件夹（VideoDownloader 桌面版的原生能力）。
+      if (api && api.save_commentary_file) {
+        aEl.textContent = '保存中…';
+        try {
+          const res = await api.save_commentary_file(cid, filename);
+          if (typeof res === 'string' && res.startsWith('ERROR:')) {
+            aEl.textContent = '保存失败：' + res.replace(/^ERROR:\s*/, '').slice(0, 40);
+          } else {
+            aEl.textContent = '已保存到下载文件夹 ✓';
+          }
+        } catch (err) {
+          aEl.textContent = '保存失败：' + ((err && err.message) || '桥接调用失败');
+        }
+        setTimeout(() => { aEl.textContent = orig; }, 3000);
+        return;
+      }
+
+      // 方案 B：无原生桥接时，用 fetch 获取已存在的 GET 文件路由，
+      // 构造 Blob URL 并触发 <a download> 让浏览器完成保存。
       aEl.textContent = '保存中…';
       try {
-        const res = await api.save_commentary_file(jobId, fname);
-        if (typeof res === 'string' && res.startsWith('ERROR:')) {
-          aEl.textContent = '保存失败';
-          setTimeout(() => { aEl.textContent = orig; }, 3000);
-        } else {
-          aEl.textContent = '已保存到下载文件夹 ✓';
-        }
+        const resp = await fetch(`/api/commentary/file/${encodeURIComponent(cid)}`);
+        if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || `HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        aEl.textContent = '已触发下载 ✓';
       } catch (err) {
-        aEl.textContent = '保存失败';
-        setTimeout(() => { aEl.textContent = orig; }, 3000);
+        aEl.textContent = '保存失败：' + ((err && err.message) || '网络错误');
       }
+      setTimeout(() => { aEl.textContent = orig; }, 3000);
     });
   }
   wireSaveToDownloads(el.comScriptFile);
@@ -1971,6 +2216,48 @@
     { value: 'zh-CN-shaanxi-XiaoniNeural', label: '晓妮（陕西话女声）' },
   ];
 
+  /** 解说风格 → 默认联动音色（选择风格时自动套用，用户仍可在审核面板手动改）。
+   *  key 与后端 commentary-worker/scripts/llm_script.py 的 STYLE_CONFIG 保持一致。 */
+  const STYLE_VOICE = {
+    none:        'zh-CN-XiaoxiaoNeural',  // 默认：温柔女声
+    funny:       'zh-CN-YunxiaNeural',    // 搞笑：青年男声（年轻活泼）
+    serious:     'zh-CN-YunyangNeural',   // 严肃：新闻腔男声
+    domineering: 'zh-CN-YunjianNeural',   // 霸道：沉稳男声（低沉笃定）
+    angry:       'zh-CN-YunyangNeural',   // 愤青：新闻腔男声
+    suspense:    'zh-CN-YunjianNeural',   // 悬疑：沉稳男声（低沉神秘）
+    healing:     'zh-CN-XiaoxiaoNeural',  // 治愈：温柔女声
+    sarcastic:   'zh-CN-YunyangNeural',   // 毒舌：新闻腔男声（犀利冷幽默）
+  };
+
+  /** 把音色 value 翻译成展示名（用于在提示里显示联动音色）。 */
+  const comVoiceLabel = (v) => {
+    const hit = COM_VOICES.find((x) => x.value === v);
+    return hit ? hit.label : (v || '默认');
+  };
+
+  /** 当前选中的解说风格 key（默认 none）。 */
+  const comCurrentStyle = () => {
+    const el2 = document.querySelector('input[name="comStyle"]:checked');
+    return el2 ? el2.value : 'none';
+  };
+
+  /** 风格联动：自动把全局配音切到该风格的推荐音色，并更新提示文案。 */
+  const comApplyStyleVoice = () => {
+    const st = comCurrentStyle();
+    const v = STYLE_VOICE[st] || 'zh-CN-XiaoxiaoNeural';
+    if (el.comScriptVoice && !el.comScriptVoice.disabled) {
+      el.comScriptVoice.value = v;
+    }
+    const hint = document.getElementById('comStyleHint');
+    if (hint) {
+      if (st === 'none') {
+        hint.textContent = '默认风格：音色由下方「全局配音」决定。';
+      } else {
+        hint.textContent = `「${st}」风格已联动音色：${comVoiceLabel(v)}（可在下方「全局配音」手动改）。`;
+      }
+    }
+  };
+
   const refreshCommentaryDiagnostics = async () => {
     try {
       const d = await request('/api/commentary/diagnostics');
@@ -1994,7 +2281,7 @@
     }
   };
 
-  const loadCommentary = async () => {
+  async function loadCommentary() {
     // 重置生成区状态
     el.comGenerateScript.disabled = false;
     el.comGenerateScript.textContent = '生成脚本（可审核修改）';
@@ -2133,6 +2420,8 @@
     el.comPreview.load();
     el.comPreview.onloadedmetadata = () => {
       comPreviewDuration = el.comPreview.duration || 0;
+      comPreviewW = el.comPreview.videoWidth || 0;
+      comPreviewH = el.comPreview.videoHeight || 0;
       el.comTrimStartRange.max = String(comPreviewDuration || 100);
       el.comTrimEndRange.max = String(comPreviewDuration || 100);
       resetTrim();
@@ -2198,11 +2487,16 @@
 
     const actions = document.createElement('div');
     actions.className = 'com-actions';
-    const dl = document.createElement('a');
+    const dl = document.createElement('button');
+    dl.type = 'button';
     dl.className = 'btn btn-success btn-sm';
-    dl.href = url;
-    dl.setAttribute('download', it.name);
-    dl.textContent = '⬇ 下载';
+    dl.title = '选择保存位置（可重命名），默认存入下载文件夹';
+    dl.textContent = '💾 保存';
+    dl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      saveCommentaryAs(it.id, it.name, dl);
+    });
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.className = 'btn btn-ghost btn-sm';
@@ -2213,8 +2507,7 @@
       e.stopPropagation();
       deleteCommentary(it.id, it.name, card);
     });
-    actions.appendChild(dl);
-    actions.appendChild(delBtn);
+    actions.append(dl, delBtn);
 
     card.appendChild(video);
     card.appendChild(meta);
@@ -2222,14 +2515,97 @@
     return card;
   };
 
+  /** 「保存」：桌面端弹出原生保存面板（默认下载文件夹、可重命名/改位置）；Web 端退化为浏览器下载 */
+  const saveCommentaryAs = async (id, name, btn) => {
+    const api = window.pywebview && window.pywebview.api;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '选择中…';
+    try {
+      if (api && api.save_commentary_file_dialog) {
+        const res = await api.save_commentary_file_dialog(id, name);
+        if (typeof res === 'string') {
+          if (res === 'CANCELLED' || res.startsWith('ERROR: 已取消')) {
+            // 用户取消，静默无操作
+          } else if (res.startsWith('ERROR:')) {
+            showError('保存失败：' + res.slice(6).trim(), '');
+          } else {
+            showToast('已保存到：' + res);
+          }
+        }
+      } else {
+        // Web 模式：回退到浏览器下载
+        const a = document.createElement('a');
+        a.href = `/api/commentary/file/${encodeURIComponent(id)}`;
+        a.download = name;
+        a.click();
+      }
+    } catch (e) {
+      showError('保存失败：' + (e.message || '未知错误'), '');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  };
+
+  /** 重命名：行内编辑文件名，回车或失焦提交，Esc 取消 */
+  const startRename = (it, nameSpan) => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = it.name;
+    input.className = 'com-rename-input';
+    input.style.cssText = 'width:100%;box-sizing:border-box;font-size:13px;padding:2px 4px;';
+    nameSpan.replaceWith(input);
+    input.focus();
+    input.select();
+    let settled = false;
+    const finish = async (commit) => {
+      if (settled) return;
+      settled = true;
+      if (!commit) {
+        input.replaceWith(nameSpan);
+        return;
+      }
+      const newName = input.value.trim();
+      if (!newName || newName === it.name) {
+        input.replaceWith(nameSpan);
+        return;
+      }
+      try {
+        await request(`/api/commentary/file/${encodeURIComponent(it.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ name: newName }),
+        });
+        // 后端可能改了 cid，直接重新拉取列表最稳妥
+        await loadCommentary();
+      } catch (e) {
+        showError('重命名失败：' + (e.message || '未知错误'), '');
+        input.replaceWith(nameSpan);
+      }
+    };
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        finish(true);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        finish(false);
+      }
+    });
+  };
+
   /** 删除解说成片：后端移入回收站，成功后刷新列表 */
   const deleteCommentary = async (id, name, cardEl) => {
-    if (!window.confirm(`确定删除解说成片「${name}」？\n删除后会移入系统回收站，可从回收站找回。`)) return;
+    const ok = await showConfirm(
+      `确定删除解说成片「${name}」？\n删除后会移入系统回收站，可从回收站找回。`,
+      { okText: '删除', danger: true }
+    );
+    if (!ok) return;
     cardEl.style.opacity = '.5';
     try {
       await request(`/api/commentary/file/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      commentaryItems = commentaryItems.filter((it) => it.id !== id);
-      renderCommentaryList();
+      await loadCommentary();
     } catch (e) {
       cardEl.style.opacity = '1';
       showError(e.message || '删除失败', '删除后已移入回收站，请检查回收站是否可用');
@@ -2260,6 +2636,12 @@
       openScriptReview(currentScriptJobId, { autoScroll: true });
     }
   });
+
+  // 解说风格切换：联动默认音色 + 更新提示文案（用户仍可在审核面板手动改音色）
+  document.querySelectorAll('input[name="comStyle"]').forEach((r) => {
+    r.addEventListener('change', comApplyStyleVoice);
+  });
+  comApplyStyleVoice();  // 初始化提示
 
   // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；
   // 仍走脚本审核流程（默认铁律：AI 解说词可人工审核修改）。
@@ -2392,16 +2774,49 @@
     renderCommentaryList();
   });
 
-  // 解说成片：排序切换
-  el.comSortBy.addEventListener('change', () => {
-    commentarySort = el.comSortBy.value;
+  // 解说成片：排序切换（自定义弹出菜单，仿 macOS 原生菜单）
+  const SORT_LABELS = {
+    'mtime-desc': '时间：最新在前', 'mtime-asc': '时间：最早在前',
+    'size-desc': '大小：从大到小', 'size-asc': '大小：从小到大',
+    'name-asc': '名称：A-Z', 'name-desc': '名称：Z-A',
+  };
+  const syncSortMenu = () => {
+    el.comSortLabel.textContent = SORT_LABELS[commentarySort] || commentarySort;
+    el.comSortMenu.querySelectorAll('li[data-value]').forEach((li) =>
+      li.classList.toggle('selected', li.dataset.value === commentarySort));
+  };
+  const closeSortMenu = () => {
+    el.comSortMenu.classList.remove('open');
+    el.comSortBtn.setAttribute('aria-expanded', 'false');
+  };
+  el.comSortBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = el.comSortMenu.classList.toggle('open');
+    el.comSortBtn.setAttribute('aria-expanded', String(open));
+  });
+  el.comSortMenu.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-value]');
+    if (!li) return;
+    commentarySort = li.dataset.value;
+    syncSortMenu();
+    closeSortMenu();
     renderCommentaryList();
   });
+  document.addEventListener('click', (e) => {
+    if (!el.comSortMenu.contains(e.target) && !el.comSortBtn.contains(e.target)) closeSortMenu();
+  });
+  syncSortMenu();
 
   // ------------------------------------------------------------------ 初始化
 
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
 
+  renderStockLibraries();
+  updateUseLabel();
+  if (el.stockUseEdit) el.stockUseEdit.addEventListener('click', () => {
+    localStorage.removeItem('vdl_use');
+    ensureConsent();
+  });
   el.form.addEventListener('submit', handleResolve);
   el.batchBtn.addEventListener('click', () => {
     const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
@@ -2698,7 +3113,7 @@
   const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}`;
   const libEncFileUrl = (id) => `/api/library/encfile/${encodeURIComponent(id)}`;
 
-  const switchView = (view) => {
+  function switchView(view) {
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
@@ -3046,7 +3461,7 @@
 
   const toggleSubPanel = () => { el.subPanel.hidden = !el.subPanel.hidden; };
 
-  const probeSubtitles = async () => {
+  async function probeSubtitles() {
     if (!currentLibItem) return;
     try {
       const data = await request('/api/subtitles/list', {
@@ -3071,7 +3486,7 @@
     }
   };
 
-  const extractSubtitle = async () => {
+  async function extractSubtitle() {
     if (!currentLibItem) return;
     const lang = el.subLang.value;
     try {
@@ -3100,7 +3515,7 @@
     });
   };
 
-  const translateSubtitle = async () => {
+  async function translateSubtitle() {
     if (!currentLibItem) return;
     if (!selectedSub) { showSubStatus('请先在上方选择一个字幕文件', true); return; }
     try {
@@ -3121,7 +3536,7 @@
     }
   };
 
-  const burnSubtitle = async () => {
+  async function burnSubtitle() {
     if (!currentLibItem) return;
     if (!selectedSub) { showSubStatus('请先选择一个字幕文件（提取或翻译后）', true); return; }
     try {
@@ -3868,6 +4283,8 @@
   el.subPanelClose.addEventListener('click', () => { el.subPanel.hidden = true; });
   el.libCommentary.addEventListener('click', () => {
     if (!currentLibItem) return;
+    // 预加载预览元数据，让「自动」画幅能拿到视频宽高判断横竖
+    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}`);
     createCommentary(
       { fileId: currentLibItem.id },
       { commentary: el.libCommentary, commentaryStatus: el.libCommentaryStatus, commentaryFile: el.libCommentaryFile },
@@ -4071,7 +4488,7 @@
     el.processStatus.classList.toggle('is-error', !!isError);
   };
 
-  const renderProcessParams = () => {
+  function renderProcessParams() {
     const op = el.processOp.value;
     const cfg = PROCESS_OPS[op];
     el.processParams.replaceChildren();
@@ -4133,7 +4550,7 @@
     return params;
   };
 
-  const toggleProcessPanel = () => {
+  function toggleProcessPanel() {
     el.processPanel.hidden = !el.processPanel.hidden;
     if (!el.processPanel.hidden) renderProcessParams();
   };
@@ -4154,7 +4571,7 @@
     const guard = setTimeout(() => finish({ status: 'failed', error: '处理超时（超过 10 分钟）' }), 600000);
   });
 
-  const runProcess = async () => {
+  async function runProcess() {
     if (!currentLibItem) return;
     const op = el.processOp.value;
     if (!op) { showProcessStatus('请选择一个处理操作', true); return; }
@@ -4545,8 +4962,13 @@
       // 视频解说已提升为主功能，tab 始终显示；后端未启用时操作会提示 503。
       if (el.tabCommentary) el.tabCommentary.hidden = false;
       if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled || node.commentaryEnabled) el.tabs.hidden = false;
+      // 默认展示「已生成成片」列表：打开应用即停在解说成片视图，方便直接查看/下载成片。
+      switchView('commentary');
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
+  // 兜底：无论节点信息是否加载成功，启动后都默认停在解说成片视图。
+  // （节点请求失败时 .then 不会执行，这里保证默认视图一定生效。）
+  try { switchView('commentary'); } catch (_) {}
 })();
