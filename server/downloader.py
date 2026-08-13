@@ -43,10 +43,6 @@ PROBE_RETRIES = 1
 DOWNLOAD_STALL_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_STALL_TIMEOUT", "180"))
 DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "1800"))
 WATCHDOG_POLL = int(os.environ.get("VDL_WATCHDOG_POLL", "5"))  # 看门狗轮询间隔（秒）
-# 慢速告警：下载中持续慢于此速率（字节/秒）超过窗口，则在前端弹出「建议换清晰度/代理」提示。
-# 注意：这是下载过程中的实时检测（无法在真正下载前预估 CDN 速率），窗口设小以便尽早提示。
-SLOW_SPEED_THRESHOLD = int(os.environ.get("VDL_SLOW_SPEED_THRESHOLD", str(30 * 1024)))  # 30 KB/s
-SLOW_WINDOW = int(os.environ.get("VDL_SLOW_WINDOW", "12"))  # 持续慢速多少秒后提示
 
 
 def _macos_system_proxy() -> str:
@@ -91,11 +87,9 @@ def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
     国内站（B站/抖音/腾讯/chrqj 等）：
-      VDL_PROXY_CN（国内出口回源代理）> macOS 系统代理（用户开了 VPN 客户端的「系统代理」时自动用）> 直连。
+      VDL_PROXY_CN（国内出口回源代理）> 直连。
       服务部署在海外（Railway 等）时，国内站会被地理围栏 403，必须配 VDL_PROXY_CN
       指向一台国内机器的 HTTP 代理；本机跑在国内则留空直连即可。
-      此外当用户在本机开了 VPN/代理客户端的「系统代理」(scutil 可查到 127.0.0.1:port)，
-      也自动用于国内站，方便用户换出口 IP 绕过腾讯按 IP 限速——前提是该代理能访问腾讯。
 
     海外站（YouTube/Twitter 等）：
       VDL_PROXY > macOS 系统代理（scutil）> 标准 http(s)_proxy 环境变量。
@@ -104,15 +98,7 @@ def _resolve_proxy(host: str = "") -> str:
     关键：绝不能用同一个变量兜住两边——国内代理出不去海外，海外代理进不来国内。
     """
     if host and is_china_host(host):
-        cn = os.environ.get("VDL_PROXY_CN", "").strip()
-        if cn:
-            return cn
-        # 用户在 VPN 客户端开了「系统代理」时，自动复用，免去手动填
-        if sys.platform == "darwin":
-            mac = _macos_system_proxy()
-            if mac:
-                return mac
-        return ""
+        return os.environ.get("VDL_PROXY_CN", "").strip()
     explicit = os.environ.get("VDL_PROXY", "").strip()
     if explicit:
         return explicit
@@ -125,10 +111,9 @@ DOWNLOAD_RETRIES = 3
 # 下载体积上限（MB）：防止被当成免费大盘偷跑带宽 / 撑爆磁盘。设为 0 表示不限。
 _MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "2048") or 2048)
 _MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
-# 国内站 m3u8 分片并行下载段数。低并发易触发 CDN 慢速 trickle（单连接被限速到几 KB/s），
-# 适度提高到 5 段可让多连接分摊带宽、显著改善长视频下载速度。
-# 通过 VDL_CONCURRENT_FRAGMENTS 环境变量可调（1-8）
-CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "5") or 5)
+# 国内站 m3u8 CDN 对高并发抓段敏感（容易被限速/拒绝），桌面版默认 3 段
+# 通过 VDL_CONCURRENT_FRAGMENTS 环境变量调（1-8）
+CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "3") or 3)
 MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
 DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给合并/转码
@@ -306,20 +291,6 @@ def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     return None
 
 
-def detect_browser_cookie(host: str) -> dict[str, Any]:
-    """探测本机浏览器是否含目标站点的 Cookie，供前端「检测登录态」按钮与解析结果展示。
-
-    复用 _find_host_cookie_profile 的 sqlite 直查逻辑：若命中则返回具体
-    (browser, profile)，前端可据此告诉用户「已自动读取，无需手动粘贴」。
-    """
-    found = _find_host_cookie_profile(host)
-    if found:
-        return {"available": True, "browser": found[0], "profile": found[1]}
-    # 浏览器装了、但该站无 Cookie：仍返回浏览器名，便于提示「请先在浏览器登录」
-    b = _detect_browser_cookie_source()
-    return {"available": False, "browser": b, "profile": None}
-
-
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     options: dict[str, Any] = {
         "quiet": True,
@@ -334,9 +305,8 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     }
     # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
     effective_proxy = proxy or _resolve_proxy(host)
-    if is_china_host(host) and not effective_proxy:
-        # 国内站默认直连（走代理常被拒/超时）；但用户显式填代理、或配了 VDL_PROXY_CN 时尊重之，
-        # 用于换国内出口 IP 绕过站点按 IP 限速
+    if is_china_host(host):
+        # 国内站必须显式置空，否则 yt-dlp 仍会从环境变量读取代理导致超时/被拒
         options["proxy"] = ""
     elif effective_proxy:
         options["proxy"] = effective_proxy
@@ -517,139 +487,6 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     return options
 
 
-# --------------------------------------------------------------------------- #
-# 源测速（多 CDN 选源）：腾讯等站同一清晰度常有多个 CDN 源（format_id 后缀 -0/-1/-2/-3），
-# yt-dlp 默认选第一个，常撞上被限速的默认 CDN。这里对每个源实测分片下载速率，
-# 前端据此自动挑最快源，从根上绕开「默认 CDN 限速」。
-# --------------------------------------------------------------------------- #
-SPEEDTEST_WINDOW = float(os.environ.get("VDL_SPEEDTEST_WINDOW", "5.0"))      # 每个源测速窗口（秒），够长才能测到持续速率而非「起步冲刺」
-SPEEDTEST_FRAGMENTS = int(os.environ.get("VDL_SPEEDTEST_FRAGMENTS", "4"))    # 并发下载的分片数
-
-
-def _build_opener(proxy: str):
-    """构造 urllib opener；走代理时用 ProxyHandler，否则直连。"""
-    if proxy:
-        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-    return urllib.request.build_opener()
-
-
-def _m3u8_segments(m3u8_url: str, headers: dict[str, str], opener=None) -> list[str]:
-    """下载 m3u8 清单，返回分片 URL 列表（转成绝对地址）。"""
-    req = urllib.request.Request(m3u8_url, headers=headers)
-    open_fn = opener.open if opener is not None else urllib.request.urlopen
-    with open_fn(req, timeout=SOCKET_TIMEOUT) as resp:
-        text = resp.read().decode("utf-8", "ignore")
-    base = m3u8_url.rsplit("/", 1)[0] + "/"
-    segments: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        segments.append(line if line.startswith("http") else base + line)
-    return segments
-
-
-def _measure_speed(segment_urls: list[str], headers: dict[str, str], window: float, opener=None) -> float:
-    """并发下载若干分片，在 window 秒窗口内统计真实字节速率（字节/秒）。
-
-    注意：read 块必须小（8KB），否则慢速源（如 5KB/s trickle）凑满大块要十几秒，
-    会卡在首个 read 上导致窗口内统计不到任何字节。
-    """
-    if not segment_urls:
-        return 0.0
-    total = [0]
-    stop_at = time.time() + window
-    open_fn = opener.open if opener is not None else urllib.request.urlopen
-
-    def _worker(url: str) -> None:
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with open_fn(req, timeout=8) as resp:
-                while time.time() < stop_at:
-                    chunk = resp.read(8192)
-                    if not chunk:
-                        break
-                    total[0] += len(chunk)
-        except Exception:
-            pass
-
-    urls = segment_urls[:SPEEDTEST_FRAGMENTS]
-    threads = [threading.Thread(target=_worker, args=(u,)) for u in urls]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=window + 8)
-    return total[0] / max(window, 0.5)
-
-
-def _speedtest_formats(info: dict[str, Any], host: str, cookie: str = "", proxy: str = "") -> list[dict[str, Any]]:
-    """对已解析出的 info 里的每个流媒体源实测下载速率，返回按清晰度取最快源的列表。
-
-    覆盖两种协议：m3u8_native（HLS 分片，下载清单再测分片）与 https/http（MP4 直链，直接测文件）。
-    每个源并行测、统一窗口，保证相对排序可比；结果按高度降序、每组标出最快源。
-    """
-    headers = dict(_base_options(PROBE_RETRIES, host, cookie=cookie, proxy=proxy).get("http_headers") or {})
-    # 测速与实际下载走同一代理，保证测出的速率就是用户下载时能拿到的速率
-    effective_proxy = proxy or _resolve_proxy(host)
-    opener = _build_opener(effective_proxy)
-    formats = [f for f in (info.get("formats") or [])
-               if isinstance(f, dict) and f.get("protocol") in ("m3u8_native", "m3u8", "https", "http")]
-
-    measured: list[dict[str, Any]] = []
-    threads: list[threading.Thread] = []
-
-    def _run_one(f: dict[str, Any]) -> None:
-        url = f.get("url") or f.get("manifest_url") or ""
-        proto = f.get("protocol") or ""
-        speed = 0.0
-        if url:
-            try:
-                if proto in ("m3u8_native", "m3u8"):
-                    # HLS：先拉清单得到分片列表，再并发测分片
-                    speed = _measure_speed(_m3u8_segments(url, headers, opener), headers, SPEEDTEST_WINDOW, opener)
-                else:
-                    # MP4 直链：直接对文件 URL 流式测速
-                    speed = _measure_speed([url], headers, SPEEDTEST_WINDOW, opener)
-            except Exception:
-                speed = 0.0
-        measured.append({
-            "height": f.get("height") or 0,
-            "format_id": f.get("format_id") or "",
-            "host": urlparse(url).netloc or "",
-            "speed_bps": round(speed),
-            "speed_label": (_format_bytes(int(speed)) + "/s") if speed > 0 else "不可用",
-            "is_default": str(f.get("format_id") or "").endswith("-0") or str(f.get("format_id") or "") in ("0", ""),
-        })
-
-    for f in formats:
-        t = threading.Thread(target=_run_one, args=(f,))
-        t.start()
-        threads.append(t)
-    for t in threads:
-        t.join(timeout=SPEEDTEST_WINDOW * max(len(formats), 1) + 20)
-
-    by_height: dict[int, list[dict[str, Any]]] = {}
-    for m in measured:
-        by_height.setdefault(m["height"], []).append(m)
-
-    best_by_height: list[dict[str, Any]] = []
-    for height in sorted(by_height, reverse=True):
-        ordered = sorted(by_height[height], key=lambda x: -x["speed_bps"])
-        fastest = dict(ordered[0])          # 浅拷贝，避免污染 measured / 共享引用
-        fastest["height"] = height
-        fastest["alternatives"] = [dict(a) for a in ordered[1:]]  # 排除最快自己，杜绝循环引用
-        best_by_height.append(fastest)
-    if best_by_height:
-        max(best_by_height, key=lambda x: x["speed_bps"])["is_fastest_overall"] = True
-    return best_by_height
-
-
-def speedtest_sources(url: str, cookie: str = "", proxy: str = "") -> list[dict[str, Any]]:
-    """解析视频并对各 CDN 源测速（独立调用入口，内部会重新 probe）。"""
-    info = probe(url, cookie, proxy)
-    return _speedtest_formats(info, _host_of(url), cookie, proxy)
-
-
 def _format_selector(quality_key: str) -> str:
     if quality_key == BEST_KEY:
         return "bv*+ba/b"
@@ -742,10 +579,9 @@ class _ProgressReporter:
             self._store.update(self._task.id, status="merging", progress=98.0)
 
 
-def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "", format_id: str = "") -> dict:
+def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "") -> dict:
     options = _base_options(DOWNLOAD_RETRIES, _host_of(task.url), cookie=cookie, proxy=proxy) | {
-        # format_id 精确指定某个 CDN 源（如腾讯 hd-1/shd-3）；未指定时按清晰度自适应
-        "format": format_id if format_id else _format_selector(quality_key),
+        "format": _format_selector(quality_key),
         "outtmpl": {"default": f"%(title).{MAX_TITLE_CHARS}s.%(ext)s"},
         "paths": {"home": str(task.workdir)},
         "windowsfilenames": True,
@@ -804,31 +640,7 @@ def _write_sidecar(output: Path, task: "DownloadTask", info: dict[str, Any]) -> 
         logger.debug("写入元数据侧车失败: %s", output, exc_info=True)
 
 
-def build_slow_warning(host: str, speed_bps: float) -> dict:
-    """构造慢速告警负载：文案 + 建议 + 可一键尝试的更低清晰度。
-
-    国内强反爬站（腾讯/B站等）限速常因单/CDN 节点带宽限制，降清晰度往往换到
-    更快的节点；本机 IP 被限则建议代理/VPN。
-    """
-    speed_txt = _format_bytes(int(speed_bps)) + "/s"
-    hardened = host in ("v.qq.com", "bilibili.com", "www.bilibili.com", "iyunying.com")
-    message = f"下载速度过慢（{speed_txt}），可能触发了站点限速"
-    suggestions = [
-        "更换更低清晰度（如 480P / 360P），常分配到更快的 CDN 节点",
-        "使用代理 / VPN 绕过本机 IP 限速（已自动注入的浏览器登录态换节点后保留）",
-    ]
-    if not hardened:
-        suggestions.pop(1) if len(suggestions) > 1 else None
-    return {
-        "level": "warn",
-        "speed_bps": int(speed_bps),
-        "message": message,
-        "suggestions": suggestions,
-        "suggested_quality_keys": ["480", "360"] if hardened else ["480", "360"],
-    }
-
-
-def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "") -> None:
+def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
     max_retries=N 时，对网络/超时/连接类等「可重试」错误最多再试 N 次（指数退避）。
@@ -840,11 +652,6 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     """
     stop = threading.Event()
     last = {"bytes": 0, "disk": 0, "ts": time.time()}
-    # 慢速检测：用看门狗自己测得的真实吞吐（相邻轮询的字节增量 / 间隔）判断，
-    # 不依赖 yt-dlp 回报的 speed（HLS 慢速 trickle 时该字段常为 0，会漏判）。
-    slow_sample: dict = {"bytes": 0, "ts": time.time()}
-    slow_since: float | None = None
-    warned = False  # 避免每个轮询周期都写一次 store
     _workdir = Path(task.workdir) if task.workdir else None
 
     def _workdir_bytes() -> int:
@@ -858,13 +665,9 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
             return 0
 
     def _watchdog() -> None:
-        nonlocal slow_since, warned
         """下载中但 N 秒无字节增量 → 判定停滞，置取消标记让进度回调抛出终止。
         信号：①yt-dlp 进度钩子报告的 downloaded_bytes ②工作目录里最大文件体积
-        （覆盖 m3u8_native/分段合并等无进度钩子场景）
-
-        附带「慢速告警」：真实吞吐持续低于阈值超过窗口，则在任务状态写入 slow_warning，
-        前端据此弹出「建议换清晰度/代理」提示（速率恢复后自动清除，可再次触发）。"""
+        （覆盖 m3u8_native/分段合并等无进度钩子场景）"""
         while not stop.is_set() and not task.is_finished:
             time.sleep(WATCHDOG_POLL)
             if task.status != "downloading":
@@ -884,31 +687,6 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 task.cancel_requested = True
                 return
 
-            # —— 慢速检测：用看门狗实测吞吐（字节增量/间隔）而非 yt-dlp 的 speed 字段 ——
-            now = time.time()
-            cur = task.downloaded_bytes
-            dt = now - slow_sample["ts"]
-            if dt >= 1.0:
-                rate = (cur - slow_sample["bytes"]) / dt  # 字节/秒
-                slow_sample["bytes"] = cur
-                slow_sample["ts"] = now
-                if rate > 0 and rate < SLOW_SPEED_THRESHOLD:
-                    if slow_since is None:
-                        slow_since = now
-                    elif not warned and now - slow_since >= SLOW_WINDOW:
-                        w = build_slow_warning(_host_of(task.url), rate)
-                        store.update(task.id, slow_warning=w)
-                        task.slow_warning = w
-                        task.log(f"下载速度过慢（{_format_bytes(int(rate))}/s），已提示可换清晰度/代理")
-                        warned = True
-                else:
-                    # 吞吐恢复到阈值以上视为「正常」，重置以便再次变慢时重新提示
-                    slow_since = None
-                    if warned:
-                        store.update(task.id, slow_warning={})
-                        task.slow_warning = {}
-                        warned = False
-
     wd = threading.Thread(target=_watchdog, name=f"wd-{task.id}", daemon=True)
     wd.start()
     try:
@@ -917,13 +695,13 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 # 重试前把状态拨回排队，让前端进度条归零、状态显示「重试中」
                 store.update(
                     task.id, status="pending", error="", hint="", progress=0.0,
-                    downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0, slow_warning={},
+                    downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0,
                 )
                 last["bytes"] = 0
                 last["ts"] = time.time()
             # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
             th = threading.Thread(
-                target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id),
+                target=_run_once, args=(task, store, quality_key, cookie, proxy),
                 name=f"dl-{task.id}-{attempt}", daemon=True,
             )
             th.start()
@@ -972,7 +750,7 @@ def _format_bytes(n: int) -> str:
     return f"{value:.2f} PB"
 
 
-def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", format_id: str = "") -> None:
+def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
     """执行一次下载：先解析元数据，再进入实际下载。
 
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
@@ -983,7 +761,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     info: dict[str, Any] = {}
     try:
-        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id)) as ydl:
+        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):

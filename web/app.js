@@ -74,8 +74,6 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
-    cookieDetectBtn: $('cookieDetectBtn'),
-    cookieStatus: $('cookieStatus'),
     proxyInput: $('proxyInput'),
     qualityBlock: $('qualityBlock'),
     extractSelect: $('extractSelect'),
@@ -354,9 +352,6 @@
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
   let selectedQuality = 'best';
-  // 测速选源：{ height: {format_id, speed_bps, speed_label, is_fastest_overall, ...} }
-  let speedByHeight = {};
-  let selectedFormatId = '';   // 当前选中清晰度对应的最快 CDN 源 format_id
   let allPlatforms = [];
   const trackers = new Map();
 
@@ -703,20 +698,8 @@
     else el.modal.setAttribute('open', '');
   };
 
-  const renderQualities = (qualities, sources = []) => {
-    // 建立「高度 → 最快源」映射，并找出全局最快源，用于默认选中 + 下载时带 format_id
-    speedByHeight = {};
-    let overallFastest = null;
-    sources.forEach((s) => {
-      speedByHeight[s.height] = s;
-      if (s.is_fastest_overall) overallFastest = s;
-    });
-    let defaultKey = qualities[0]?.key ?? 'best';
-    if (overallFastest && qualities.some((q) => q.key === String(overallFastest.height))) {
-      defaultKey = String(overallFastest.height);
-    }
-    selectedQuality = defaultKey;
-    selectedFormatId = (speedByHeight[overallFastest?.height] || {}).format_id || '';
+  const renderQualities = (qualities) => {
+    selectedQuality = qualities[0]?.key ?? 'best';
 
     el.qualityGrid.replaceChildren();
 
@@ -731,20 +714,9 @@
       const label = document.createElement('strong');
       label.textContent = quality.label;
       const note = document.createElement('small');
-      let noteText = quality.approx_size
+      const noteText = quality.approx_size
         ? `${quality.note} · 约 ${formatBytes(quality.approx_size)}`
         : quality.note;
-      // 测速选源：该清晰度若有实测速度，标注最快源；不可用则提示
-      const spd = speedByHeight[Number(quality.key)];
-      if (spd) {
-        if (spd.speed_bps > 0) {
-          const tag = spd.is_fastest_overall ? '⚡ 全局最快' : '⚡';
-          noteText = `${noteText} · ${tag}实测 ${spd.speed_label}`;
-          option.classList.add('has-speed');
-        } else {
-          noteText = `${noteText} · 该清晰度源不可用`;
-        }
-      }
       note.textContent = noteText;
 
       option.append(label, note);
@@ -755,7 +727,6 @@
 
   const selectQuality = (key) => {
     selectedQuality = key;
-    selectedFormatId = (speedByHeight[Number(key)] || {}).format_id || '';
     el.qualityGrid.querySelectorAll('.quality-opt').forEach((node) => {
       node.setAttribute('aria-checked', String(node.dataset.key === key));
     });
@@ -792,7 +763,7 @@
       el.directHint.hidden = true;
       el.directHint.textContent = '';
       el.serverFallbackBtn.hidden = true;
-      renderQualities(data.qualities, data.sources || []);
+      renderQualities(data.qualities);
     }
     el.resultPanel.hidden = false;
   };
@@ -827,7 +798,6 @@
       cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
-      slowWarn: node.querySelector('[data-slow-warn]'),
       stepsBox: node.querySelector('[data-steps-box]'),
       stepsToggle: node.querySelector('[data-steps-toggle]'),
       stepsToggleLabel: node.querySelector('.task-steps-toggle-label'),
@@ -845,28 +815,6 @@
     refs.resume.addEventListener('click', () => resumeTask(taskId, refs.base || ''));
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
-    // 慢速告警横幅内的快捷动作（换清晰度重试 / 填代理），事件委托到卡片根节点，
-    // 每次 paintTask 重渲染横幅也不会重复绑定。
-    node.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action]');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const url = refs.root.dataset.srcUrl;
-      if (action === 'retry-quality') {
-        const quality = btn.dataset.quality;
-        // 自动取消当前慢速任务，开启更低清晰度重试（复用当前解析的 url/cookie/proxy）
-        cancelTask(taskId, refs.base || '');
-        startDownload(quality, {
-          url,
-          cookie: el.cookieInput.value.trim(),
-          proxy: el.proxyInput.value.trim(),
-        });
-      } else if (action === 'focus-proxy') {
-        el.proxyInput.focus();
-        el.proxyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        if (el.advancedToggle) el.advancedToggle.classList.add('is-open');
-      }
-    });
     refs.stepsToggle.addEventListener('click', () => {
       const hidden = refs.stepsPanel.hidden;
       refs.stepsPanel.hidden = !hidden;
@@ -927,8 +875,6 @@
     refs.error.hidden = !failed;
     refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
 
-    // 慢速告警横幅：下载中且速率持续过低时展示提示 + 快捷动作
-    renderSlowWarning(refs, task);
     // 失败 / 已取消的任务展示「重试」按钮
     refs.retry.hidden = !(task.status === 'failed' || task.status === 'canceled');
     // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
@@ -981,31 +927,6 @@
     }
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
-  };
-
-  const renderSlowWarning = (refs, task) => {
-    // 记录当前任务 url 供横幅内「换清晰度重试」委托处理器读取（全局 resolved 可能已被新链接覆盖）
-    refs.root.dataset.srcUrl = task.source_url || '';
-    const warn = task.slow_warning;
-    const active = ACTIVE_STATES.includes(task.status);
-    if (!warn || !active) {
-      refs.slowWarn.hidden = true;
-      refs.slowWarn.innerHTML = '';
-      return;
-    }
-    const msg = escHtml(warn.message || '下载速度过慢');
-    const tips = (Array.isArray(warn.suggestions) ? warn.suggestions : [])
-      .map((s) => `<li>${escHtml(s)}</li>`).join('');
-    const keys = Array.isArray(warn.suggested_quality_keys) ? warn.suggested_quality_keys : [];
-    const retryBtns = keys.map((q) =>
-      `<button type="button" class="btn btn-accent btn-sm" data-action="retry-quality" data-quality="${escHtml(q)}">换 ${escHtml(q)}P 重试</button>`
-    ).join('');
-    refs.slowWarn.innerHTML =
-      `<div class="slow-warn-head">⚠️ <span>${msg}</span></div>` +
-      (tips ? `<ul class="slow-warn-tips">${tips}</ul>` : '') +
-      `<div class="slow-warn-actions">${retryBtns}` +
-      `<button type="button" class="btn btn-ghost btn-sm" data-action="focus-proxy">填入代理</button></div>`;
-    refs.slowWarn.hidden = false;
   };
 
   const renderTaskSteps = (refs, task) => {
@@ -1314,44 +1235,6 @@
 
   // ------------------------------------------------------------------ 动作
 
-  /** 平台 key → 中文名，用于登录态提示。 */
-  const platCN = (k) => ({
-    tencent: '腾讯视频', douyin: '抖音', kuaishou: '快手',
-    xiaohongshu: '小红书', bilibili: 'B站', youtube: 'YouTube',
-  }[k] || '该平台');
-
-  /** 调用 /api/cookie/status 检测本机浏览器是否含目标站登录态，并刷新状态徽章。
-   *  命中则告知「已自动读取，无需手动粘贴」；未命中则提示先登录或手动粘贴。 */
-  const updateCookieStatus = async (url) => {
-    const btn = el.cookieDetectBtn;
-    const span = el.cookieStatus;
-    if (!url) { span.textContent = ''; span.className = 'cookie-status'; return; }
-    btn.disabled = true;
-    span.textContent = '检测中…';
-    span.className = 'cookie-status loading';
-    try {
-      const data = await request(`/api/cookie/status?url=${encodeURIComponent(url)}`);
-      const name = platCN(data.platform);
-      if (data.available) {
-        const where = data.profile && data.profile !== 'Default'
-          ? `${data.browser}（${data.profile}）` : data.browser;
-        span.textContent = `✅ 已自动读取 ${where} 的${name}登录态，无需手动粘贴`;
-        span.className = 'cookie-status ok';
-      } else if (data.browser) {
-        span.textContent = `⚠️ 未在 ${data.browser} 中检测到${name}登录态，如需更快速度/会员内容请先在浏览器登录，或手动粘贴 Cookie`;
-        span.className = 'cookie-status warn';
-      } else {
-        span.textContent = '⚠️ 未检测到浏览器登录态，部分平台需手动粘贴 Cookie 后才能下载';
-        span.className = 'cookie-status warn';
-      }
-    } catch (_) {
-      span.textContent = '检测失败，可直接手动粘贴 Cookie';
-      span.className = 'cookie-status err';
-    } finally {
-      btn.disabled = false;
-    }
-  };
-
   const handleResolve = async (event) => {
     event.preventDefault();
     const url = el.input.value.trim();
@@ -1377,7 +1260,6 @@
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
-      updateCookieStatus(url);   // 解析成功后自动检测浏览器登录态，省去手动粘贴
     } catch (error) {
       resolved = null;
       showError(error.message || '解析失败', error.hint);
@@ -1402,7 +1284,6 @@
           cookie: opts.cookie ?? resolved?.cookie ?? '',
           proxy: opts.proxy ?? resolved?.proxy ?? '',
           extract_script: el.extractSelect.value || '',
-          format_id: opts.format_id ?? selectedFormatId ?? '',
         }),
       }, base);
       const taskId = data.task_id;
@@ -2931,11 +2812,6 @@
   el.cancelAllBtn.addEventListener('click', cancelAll);
   el.openFolderBtn.addEventListener('click', openDownloadFolder);
   el.downloadBtn.addEventListener('click', handleDownload);
-  el.cookieDetectBtn.addEventListener('click', () => {
-    const u = el.input.value.trim();
-    if (!u) { el.cookieStatus.textContent = '请先粘贴视频链接再检测'; el.cookieStatus.className = 'cookie-status warn'; return; }
-    updateCookieStatus(u);
-  });
   el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
   el.clearBtn.addEventListener('click', () => {

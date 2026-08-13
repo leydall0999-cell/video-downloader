@@ -231,21 +231,6 @@ img { max-width: 100%; display: block; }
 .adv-textarea { line-height: 1.5; }
 .adv-note { font-size: .76rem; color: #94a0b4; line-height: 1.5; }
 
-/* Cookie 登录态检测 */
-.cookie-detect { display: flex; align-items: center; gap: .6rem; margin-top: .5rem; flex-wrap: wrap; }
-.cookie-detect-btn {
-  font-size: .76rem; font-weight: 600; color: var(--brand-strong);
-  background: rgba(79, 70, 229, .08); border: 1px solid rgba(79, 70, 229, .25);
-  border-radius: var(--radius-sm); padding: .4rem .7rem; cursor: pointer; transition: background .15s;
-}
-.cookie-detect-btn:hover { background: rgba(79, 70, 229, .16); }
-.cookie-detect-btn:disabled { opacity: .55; cursor: default; }
-.cookie-status { font-size: .76rem; line-height: 1.4; }
-.cookie-status.ok { color: #16a34a; font-weight: 600; }
-.cookie-status.warn { color: #d97706; font-weight: 600; }
-.cookie-status.err { color: #dc2626; }
-.cookie-status.loading { color: var(--text-mute); }
-
 /* ---------------- chips ---------------- */
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .9rem; }
 .chip {
@@ -404,11 +389,6 @@ img { max-width: 100%; display: block; }
 .task-stats { font-size: .78rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .task-actions { display: flex; gap: .4rem; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
-.task-slow-warn { margin-top: .55rem; padding: .6rem .7rem; border: 1px solid #f4c430; border-radius: var(--radius-sm, 8px); background: #fff8e6; }
-.slow-warn-head { font-size: .82rem; color: #8a5a00; font-weight: 600; }
-.slow-warn-tips { margin: .35rem 0 .1rem; padding-left: 1.1rem; }
-.slow-warn-tips li { font-size: .78rem; color: #6b4a00; line-height: 1.5; }
-.slow-warn-actions { display: flex; gap: .45rem; flex-wrap: wrap; margin-top: .45rem; }
 
 .commentary-status { margin-top: .5rem; font-size: .8rem; color: var(--brand-strong); }
 
