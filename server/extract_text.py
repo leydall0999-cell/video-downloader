@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -161,6 +162,55 @@ def extract_spoken(
     }
 
 
+def _whisper_transcribe_inprocess(
+    loc: "CommentaryLocation",
+    video_path: str | Path,
+    workdir: str | Path | None,
+    progress_cb: ProgressCb = None,
+) -> dict[str, Any] | None:
+    """打包版专用：直接在当前进程内调用随包 frozen 的 faster_whisper + commentary/scripts/transcribe。
+
+    macOS windowed 二进制无法用 `subprocess -c` 重入自身（PyInstaller 限制），故不走子进程。
+    包内已冻结 faster_whisper，且随包含 commentary/scripts/transcribe.py 与 models/whisper-base，
+    只需把 scripts 目录加入 sys.path 即可正常 import。
+    """
+    try:
+        import faster_whisper  # frozen 包内已冻结，能否 import 即自检可用性
+    except Exception:
+        return None
+
+    scripts_dir = Path(loc.root) / "scripts"
+    if not (scripts_dir / "transcribe.py").exists():
+        return None
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+
+    workdir = Path(workdir) if workdir else Path(tempfile.mkdtemp())
+    workdir.mkdir(parents=True, exist_ok=True)
+    stem = Path(video_path).stem
+    audio_path = workdir / f"{stem}.wav"
+    out_json = workdir / f"{stem}.transcript.json"
+
+    if progress_cb:
+        progress_cb("whisper", "未找到字幕，尝试 AI 语音转写…")
+    try:
+        from transcribe import transcribe, extract_audio
+        extract_audio(str(video_path), str(audio_path))
+        segs, _ = transcribe(str(audio_path))
+    except Exception:  # noqa: BLE001 - 任一环节失败都视为无法转写
+        return None
+    try:
+        json.dump(segs, open(out_json, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception:
+        pass
+    text = "\n".join(
+        (s.get("text") or "").strip() for s in segs if (s.get("text") or "").strip()
+    )
+    if not text:
+        return None
+    return {"text": text, "segments": segs}
+
+
 def _whisper_transcribe(
     video_path: str | Path,
     workdir: str | Path | None = None,
@@ -168,17 +218,21 @@ def _whisper_transcribe(
 ) -> dict[str, Any] | None:
     """用 AI 解说管线的 faster_whisper 转写音轨。成功返回 {'text','segments'}，否则 None。"""
     try:
-        from commentary_locate import locate_commentary
+        from commentary_locate import locate_commentary, CommentaryLocation
     except Exception:
         return None
     loc = locate_commentary()
     if loc is None:
         return None
-    # 确认该解释器真的装了 faster_whisper，避免盲目子进程
+    # 打包版（frozen / windowed）：windowed 二进制无法用 subprocess -c 重入自身，
+    # 改走进程内调用（见 _whisper_transcribe_inprocess）。
+    if loc.bundled:
+        return _whisper_transcribe_inprocess(loc, video_path, workdir, progress_cb)
+    # 开发/外部：用解说管线自带的 Python（其 venv 已装 faster_whisper），子进程最稳。
     try:
         chk = subprocess.run(
             [loc.python, "-c", "import faster_whisper"],
-            capture_output=True, timeout=15,
+            capture_output=True, timeout=60,
         )
         if chk.returncode != 0:
             return None
