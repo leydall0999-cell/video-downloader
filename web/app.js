@@ -115,10 +115,6 @@
     batchConcVal: $('batchConcVal'),
     batchBtn: $('batchBtn'),
     // 正版素材库入口 & 下载用途确认
-    stockPanel: $('stockPanel'),
-    stockGrid: $('stockGrid'),
-    stockUseEdit: $('stockUseEdit'),
-    stockUseLabel: $('stockUseLabel'),
     consentModal: $('consentModal'),
     consentCommercialBox: $('consentCommercialBox'),
     consentAuthorized: $('consentAuthorized'),
@@ -1068,39 +1064,7 @@
     }
   };
 
-  // ------------------------------------------------------------------ 正版素材库 & 商用授权校验
-  const STOCK_LIBRARIES = [
-    { name: 'Pexels', desc: '免费可商用视频（CC0）', url: 'https://www.pexels.com/videos/' },
-    { name: 'Pixabay', desc: '免费可商用视频 / 音乐', url: 'https://pixabay.com/videos/' },
-    { name: 'Mixkit', desc: '免费可商用视频素材', url: 'https://mixkit.co/free-stock-video/' },
-    { name: 'Coverr', desc: '免费可商用视频', url: 'https://coverr.co/' },
-    { name: '视觉中国', desc: '正版图库 / 视频授权', url: 'https://www.vcg.com/' },
-    { name: '新片场', desc: '正版视频素材 / 商用授权', url: 'https://www.xinpianchang.com/' },
-    { name: '包图网', desc: '国内商用设计 / 视频素材', url: 'https://ibaotu.com/' },
-    { name: 'Shutterstock', desc: '国际商用素材授权', url: 'https://www.shutterstock.com/' },
-  ];
-
-  const renderStockLibraries = () => {
-    if (!el.stockGrid) return;
-    el.stockGrid.innerHTML = '';
-    STOCK_LIBRARIES.forEach((s) => {
-      const a = document.createElement('a');
-      a.className = 'stock-card';
-      a.href = s.url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      a.innerHTML = `<span class="stock-card-name">${s.name}</span><span class="stock-card-desc">${s.desc}</span>`;
-      el.stockGrid.appendChild(a);
-    });
-  };
-
-  const updateUseLabel = () => {
-    if (!el.stockUseLabel) return;
-    const use = localStorage.getItem('vdl_use');
-    el.stockUseLabel.textContent =
-      use === 'commercial' ? '商业素材' : use === 'personal' ? '个人学习' : '未设置';
-  };
-
+  // ------------------------------------------------------------------ 下载用途确认弹窗
   /** 下载前校验用途：未确认过时弹窗询问；选商用则要求确认已获授权。返回是否允许继续。 */
   const ensureConsent = () => new Promise((resolve) => {
     const saved = localStorage.getItem('vdl_use');
@@ -1143,7 +1107,6 @@
         return;
       }
       localStorage.setItem('vdl_use', use);
-      updateUseLabel();
       dlg.close();
       resolve(true);
     };
@@ -2811,12 +2774,6 @@
 
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
 
-  renderStockLibraries();
-  updateUseLabel();
-  if (el.stockUseEdit) el.stockUseEdit.addEventListener('click', () => {
-    localStorage.removeItem('vdl_use');
-    ensureConsent();
-  });
   el.form.addEventListener('submit', handleResolve);
   el.batchBtn.addEventListener('click', () => {
     const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);

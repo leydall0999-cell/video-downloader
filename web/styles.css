@@ -1343,26 +1343,6 @@ img { max-width: 100%; display: block; }
 }
 .build-tag::before { content: "● "; color: var(--brand); }
 
-/* ---- 正版素材库入口 ---- */
-.stock-panel { margin-top: 1rem; }
-.stock-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .2rem; }
-.stock-title { font-size: 1.05rem; font-weight: 700; color: var(--text); margin: 0; }
-.stock-use-edit {
-  flex: none; font-size: .78rem; color: var(--text-mute); background: #f2f3f8;
-  border: 1px solid var(--line); border-radius: 999px; padding: .3rem .7rem; cursor: pointer;
-}
-.stock-use-edit:hover { color: var(--text); background: #e9ebf3; }
-.stock-sub { margin: .3rem 0 .9rem; font-size: .82rem; color: var(--text-mute); line-height: 1.5; }
-.stock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .7rem; }
-.stock-card {
-  display: flex; flex-direction: column; gap: .15rem; padding: .85rem .9rem;
-  background: var(--bg-soft, #f9fafb); border: 1px solid var(--line); border-radius: 12px;
-  text-decoration: none; transition: border-color .15s, transform .15s, box-shadow .15s;
-}
-.stock-card:hover { border-color: var(--brand); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(79,70,229,.12); }
-.stock-card-name { font-weight: 650; font-size: .92rem; color: var(--text); }
-.stock-card-desc { font-size: .74rem; color: var(--text-mute); line-height: 1.4; }
-
 /* ---- 下载用途确认弹窗 ---- */
 .consent-uses { display: flex; flex-direction: column; gap: .5rem; margin: .8rem 0 .2rem; }
 .consent-radio { display: flex; align-items: center; gap: .5rem; font-size: .9rem; color: var(--text); cursor: pointer; }
