@@ -1274,14 +1274,23 @@ img { max-width: 100%; display: block; }
   color: color-mix(in srgb, var(--accent) 82%, var(--text)); font-weight: 600;
 }
 
-/* ④ 固定选择项：三栏等宽 */
+/* ④ 固定选择项：双 checkbox 半行 + 保留时长整行 */
 .com-opt-row-fixed {
-  display: grid; gap: .4rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex; flex-wrap: wrap;
+  gap: .45rem;
   align-items: stretch;
 }
-.com-opt-row-fixed > .com-highlights-toggle,
-.com-opt-row-fixed > .com-retain-field { min-width: 0; }
+.com-opt-row-fixed > .com-highlights-toggle {
+  flex: 1 1 calc(50% - .25rem);
+  display: flex; align-items: center; gap: .4rem;
+  padding: .35rem .55rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.com-opt-row-fixed > .com-retain-field {
+  flex: 1 1 100%;
+}
 
 .com-retain-field {
   display: flex; flex-wrap: wrap; align-items: center;
@@ -1316,10 +1325,10 @@ img { max-width: 100%; display: block; }
 /* 高级剪辑：折叠区 */
 .com-opts-inner {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: 1fr;
   align-items: start;
-  gap: .5rem .9rem;
-  padding: .55rem .7rem .7rem;
+  gap: .45rem;
+  padding: .5rem .7rem .65rem;
 }
 .com-advanced {
   grid-column: 1 / -1;
@@ -1348,12 +1357,14 @@ img { max-width: 100%; display: block; }
 }
 
 @media (max-width: 900px) {
-  .com-opt-row-fixed { grid-template-columns: 1fr; }
+  .com-opt-row-fixed > .com-highlights-toggle,
+  .com-opt-row-fixed > .com-retain-field { flex: 1 1 100%; }
 }
 @media (max-width: 720px) {
   .com-opts { grid-template-columns: 1fr; padding: .6rem; gap: .5rem; }
-  .com-opts-inner { grid-template-columns: 1fr; gap: .5rem; }
-  .com-opt-row-fixed { grid-template-columns: 1fr; }
+  .com-opts-inner { grid-template-columns: 1fr; gap: .45rem; }
+  .com-opt-row-fixed > .com-highlights-toggle,
+  .com-opt-row-fixed > .com-retain-field { flex: 1 1 100%; }
 }
 
 /* ---- 脚本审核编辑面板 ---- */
