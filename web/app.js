@@ -626,10 +626,11 @@
   // ------------------------------------------------------------------ 提示
 
   const showError = (message, hint = '') => {
-    if (!message) { clearError(); return; }
-    el.alertTitle.textContent = message;
-    el.alertHint.textContent = hint;
-    el.alertHint.hidden = !hint;
+    const msg = String(message || '').trim();
+    if (!msg) { clearError(); return; }
+    el.alertTitle.textContent = msg;
+    el.alertHint.textContent = String(hint || '').trim();
+    el.alertHint.hidden = !String(hint || '').trim();
     el.alert.hidden = false;
   };
 
