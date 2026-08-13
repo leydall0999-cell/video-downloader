@@ -999,6 +999,12 @@
     }
     if (hasContent) {
       refs.extractWrap.hidden = false;
+      if (hasError) {
+        const errs = [];
+        if (desc.error) errs.push(`发布简介：${desc.error}`);
+        if (spoken.error) errs.push(`口播文案：${spoken.error}`);
+        parts.push('\n---\n部分提取失败：\n' + errs.join('\n'));
+      }
       refs.extractBody.textContent = parts.join('\n');
       refs.extractCopy.hidden = false;
       refs.extractRetry.hidden = task.status !== 'completed';
