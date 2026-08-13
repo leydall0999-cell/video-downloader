@@ -43,6 +43,10 @@ PROBE_RETRIES = 1
 DOWNLOAD_STALL_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_STALL_TIMEOUT", "180"))
 DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "1800"))
 WATCHDOG_POLL = int(os.environ.get("VDL_WATCHDOG_POLL", "5"))  # 看门狗轮询间隔（秒）
+# 慢速告警：下载中持续慢于此速率（字节/秒）超过窗口，则在前端弹出「建议换清晰度/代理」提示。
+# 注意：这是下载过程中的实时检测（无法在真正下载前预估 CDN 速率），窗口设小以便尽早提示。
+SLOW_SPEED_THRESHOLD = int(os.environ.get("VDL_SLOW_SPEED_THRESHOLD", str(30 * 1024)))  # 30 KB/s
+SLOW_WINDOW = int(os.environ.get("VDL_SLOW_WINDOW", "12"))  # 持续慢速多少秒后提示
 
 
 def _macos_system_proxy() -> str:
@@ -655,6 +659,30 @@ def _write_sidecar(output: Path, task: "DownloadTask", info: dict[str, Any]) -> 
         logger.debug("写入元数据侧车失败: %s", output, exc_info=True)
 
 
+def build_slow_warning(host: str, speed_bps: float) -> dict:
+    """构造慢速告警负载：文案 + 建议 + 可一键尝试的更低清晰度。
+
+    国内强反爬站（腾讯/B站等）限速常因单/CDN 节点带宽限制，降清晰度往往换到
+    更快的节点；本机 IP 被限则建议代理/VPN。
+    """
+    speed_txt = _format_bytes(int(speed_bps)) + "/s"
+    hardened = host in ("v.qq.com", "bilibili.com", "www.bilibili.com", "iyunying.com")
+    message = f"下载速度过慢（{speed_txt}），可能触发了站点限速"
+    suggestions = [
+        "更换更低清晰度（如 480P / 360P），常分配到更快的 CDN 节点",
+        "使用代理 / VPN 绕过本机 IP 限速（已自动注入的浏览器登录态换节点后保留）",
+    ]
+    if not hardened:
+        suggestions.pop(1) if len(suggestions) > 1 else None
+    return {
+        "level": "warn",
+        "speed_bps": int(speed_bps),
+        "message": message,
+        "suggestions": suggestions,
+        "suggested_quality_keys": ["480", "360"] if hardened else ["480", "360"],
+    }
+
+
 def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
@@ -667,6 +695,11 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     """
     stop = threading.Event()
     last = {"bytes": 0, "disk": 0, "ts": time.time()}
+    # 慢速检测：用看门狗自己测得的真实吞吐（相邻轮询的字节增量 / 间隔）判断，
+    # 不依赖 yt-dlp 回报的 speed（HLS 慢速 trickle 时该字段常为 0，会漏判）。
+    slow_sample: dict = {"bytes": 0, "ts": time.time()}
+    slow_since: float | None = None
+    warned = False  # 避免每个轮询周期都写一次 store
     _workdir = Path(task.workdir) if task.workdir else None
 
     def _workdir_bytes() -> int:
@@ -680,9 +713,13 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
             return 0
 
     def _watchdog() -> None:
+        nonlocal slow_since, warned
         """下载中但 N 秒无字节增量 → 判定停滞，置取消标记让进度回调抛出终止。
         信号：①yt-dlp 进度钩子报告的 downloaded_bytes ②工作目录里最大文件体积
-        （覆盖 m3u8_native/分段合并等无进度钩子场景）"""
+        （覆盖 m3u8_native/分段合并等无进度钩子场景）
+
+        附带「慢速告警」：真实吞吐持续低于阈值超过窗口，则在任务状态写入 slow_warning，
+        前端据此弹出「建议换清晰度/代理」提示（速率恢复后自动清除，可再次触发）。"""
         while not stop.is_set() and not task.is_finished:
             time.sleep(WATCHDOG_POLL)
             if task.status != "downloading":
@@ -702,6 +739,31 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 task.cancel_requested = True
                 return
 
+            # —— 慢速检测：用看门狗实测吞吐（字节增量/间隔）而非 yt-dlp 的 speed 字段 ——
+            now = time.time()
+            cur = task.downloaded_bytes
+            dt = now - slow_sample["ts"]
+            if dt >= 1.0:
+                rate = (cur - slow_sample["bytes"]) / dt  # 字节/秒
+                slow_sample["bytes"] = cur
+                slow_sample["ts"] = now
+                if rate > 0 and rate < SLOW_SPEED_THRESHOLD:
+                    if slow_since is None:
+                        slow_since = now
+                    elif not warned and now - slow_since >= SLOW_WINDOW:
+                        w = build_slow_warning(_host_of(task.url), rate)
+                        store.update(task.id, slow_warning=w)
+                        task.slow_warning = w
+                        task.log(f"下载速度过慢（{_format_bytes(int(rate))}/s），已提示可换清晰度/代理")
+                        warned = True
+                else:
+                    # 吞吐恢复到阈值以上视为「正常」，重置以便再次变慢时重新提示
+                    slow_since = None
+                    if warned:
+                        store.update(task.id, slow_warning={})
+                        task.slow_warning = {}
+                        warned = False
+
     wd = threading.Thread(target=_watchdog, name=f"wd-{task.id}", daemon=True)
     wd.start()
     try:
@@ -710,7 +772,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 # 重试前把状态拨回排队，让前端进度条归零、状态显示「重试中」
                 store.update(
                     task.id, status="pending", error="", hint="", progress=0.0,
-                    downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0,
+                    downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0, slow_warning={},
                 )
                 last["bytes"] = 0
                 last["ts"] = time.time()

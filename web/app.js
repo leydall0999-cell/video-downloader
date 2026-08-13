@@ -787,6 +787,7 @@
       cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
+      slowWarn: node.querySelector('[data-slow-warn]'),
       stepsBox: node.querySelector('[data-steps-box]'),
       stepsToggle: node.querySelector('[data-steps-toggle]'),
       stepsToggleLabel: node.querySelector('.task-steps-toggle-label'),
@@ -804,6 +805,28 @@
     refs.resume.addEventListener('click', () => resumeTask(taskId, refs.base || ''));
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
+    // 慢速告警横幅内的快捷动作（换清晰度重试 / 填代理），事件委托到卡片根节点，
+    // 每次 paintTask 重渲染横幅也不会重复绑定。
+    node.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const url = refs.root.dataset.srcUrl;
+      if (action === 'retry-quality') {
+        const quality = btn.dataset.quality;
+        // 自动取消当前慢速任务，开启更低清晰度重试（复用当前解析的 url/cookie/proxy）
+        cancelTask(taskId, refs.base || '');
+        startDownload(quality, {
+          url,
+          cookie: el.cookieInput.value.trim(),
+          proxy: el.proxyInput.value.trim(),
+        });
+      } else if (action === 'focus-proxy') {
+        el.proxyInput.focus();
+        el.proxyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (el.advancedToggle) el.advancedToggle.classList.add('is-open');
+      }
+    });
     refs.stepsToggle.addEventListener('click', () => {
       const hidden = refs.stepsPanel.hidden;
       refs.stepsPanel.hidden = !hidden;
@@ -863,6 +886,9 @@
     const failed = task.status === 'failed';
     refs.error.hidden = !failed;
     refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
+
+    // 慢速告警横幅：下载中且速率持续过低时展示提示 + 快捷动作
+    renderSlowWarning(refs, task);
     // 失败 / 已取消的任务展示「重试」按钮
     refs.retry.hidden = !(task.status === 'failed' || task.status === 'canceled');
     // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
@@ -915,6 +941,31 @@
     }
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
+  };
+
+  const renderSlowWarning = (refs, task) => {
+    // 记录当前任务 url 供横幅内「换清晰度重试」委托处理器读取（全局 resolved 可能已被新链接覆盖）
+    refs.root.dataset.srcUrl = task.source_url || '';
+    const warn = task.slow_warning;
+    const active = ACTIVE_STATES.includes(task.status);
+    if (!warn || !active) {
+      refs.slowWarn.hidden = true;
+      refs.slowWarn.innerHTML = '';
+      return;
+    }
+    const msg = escHtml(warn.message || '下载速度过慢');
+    const tips = (Array.isArray(warn.suggestions) ? warn.suggestions : [])
+      .map((s) => `<li>${escHtml(s)}</li>`).join('');
+    const keys = Array.isArray(warn.suggested_quality_keys) ? warn.suggested_quality_keys : [];
+    const retryBtns = keys.map((q) =>
+      `<button type="button" class="btn btn-accent btn-sm" data-action="retry-quality" data-quality="${escHtml(q)}">换 ${escHtml(q)}P 重试</button>`
+    ).join('');
+    refs.slowWarn.innerHTML =
+      `<div class="slow-warn-head">⚠️ <span>${msg}</span></div>` +
+      (tips ? `<ul class="slow-warn-tips">${tips}</ul>` : '') +
+      `<div class="slow-warn-actions">${retryBtns}` +
+      `<button type="button" class="btn btn-ghost btn-sm" data-action="focus-proxy">填入代理</button></div>`;
+    refs.slowWarn.hidden = false;
   };
 
   const renderTaskSteps = (refs, task) => {
@@ -1296,19 +1347,20 @@
   };
 
   /** 用指定清晰度发起一个下载任务；返回 taskId 或 null。被"开始下载"与"转 MP3"复用。 */
-  const startDownload = async (quality) => {
-    if (!resolved) return null;
+  const startDownload = async (quality, opts = {}) => {
+    const url = opts.url || resolved?.url;
+    if (!url) return null;
     if (!(await ensureConsent())) return null;
     clearError();
-    const base = resolved.base || '';
+    const base = resolved?.base || '';
     try {
       const data = await request('/api/download', {
         method: 'POST',
         body: JSON.stringify({
-          url: resolved.url,
+          url,
           quality,
-          cookie: resolved.cookie || '',
-          proxy: resolved.proxy || '',
+          cookie: opts.cookie ?? resolved?.cookie ?? '',
+          proxy: opts.proxy ?? resolved?.proxy ?? '',
           extract_script: el.extractSelect.value || '',
         }),
       }, base);

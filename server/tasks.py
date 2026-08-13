@@ -42,6 +42,8 @@ class DownloadTask:
     filesize: int = 0
     error: str = ""
     hint: str = ""
+    # 慢速告警：下载中速率持续过低时由看门狗写入，前端据此弹出「建议换清晰度/代理」提示
+    slow_warning: dict = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     cancel_requested: bool = False
     pause_requested: bool = False
@@ -107,6 +109,7 @@ class DownloadTask:
             "filesize": self.filesize,
             "error": self.error,
             "hint": self.hint,
+            "slow_warning": self.slow_warning,
             "extract_mode": self.extract_mode,
             "extract_status": self.extract_status,
             "extracted_text": self.extracted_text,

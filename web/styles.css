@@ -400,6 +400,12 @@ img { max-width: 100%; display: block; }
 .task-stats { font-size: .78rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .task-actions { display: flex; gap: .4rem; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
+.task-slow-warn { margin-top: .55rem; padding: .6rem .7rem; border: 1px solid #f4c430; border-radius: var(--radius-sm, 8px); background: #fff8e6; }
+.slow-warn-head { font-size: .82rem; color: #8a5a00; font-weight: 600; }
+.slow-warn-tips { margin: .35rem 0 .1rem; padding-left: 1.1rem; }
+.slow-warn-tips li { font-size: .78rem; color: #6b4a00; line-height: 1.5; }
+.slow-warn-actions { display: flex; gap: .45rem; flex-wrap: wrap; margin-top: .45rem; }
+
 .commentary-status { margin-top: .5rem; font-size: .8rem; color: var(--brand-strong); }
 
 /* ---- 提取文案结果 ---- */
