@@ -391,23 +391,25 @@
       </div>
 
       <!-- 方案④：固定选择项 -->
-      <div class="com-opt-block">
+      <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">④ 固定选择项</div>
-        <label class="com-highlights-toggle">
-          <input type="checkbox" id="comKeepNoNarrate" checked />
-          <span>保留片头片尾·不解说（自动检测边界，默认开启）</span>
-        </label>
-        <label class="com-highlights-toggle">
-          <input type="checkbox" id="comSkipIntroOutro" />
-          <span>去片头片尾（自动检测后剪掉，与上方互斥）</span>
-        </label>
-        <div class="com-retain-field">
-          <label class="com-retain-label" for="comRetainPct">保留全片时长百分比</label>
-          <div class="com-retain-input">
-            <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
-            <span class="com-retain-unit">%</span>
+        <div class="com-opt-row">
+          <label class="com-highlights-toggle">
+            <input type="checkbox" id="comKeepNoNarrate" checked />
+            <span>保留片头片尾·不解说（自动检测边界，默认开启）</span>
+          </label>
+          <label class="com-highlights-toggle">
+            <input type="checkbox" id="comSkipIntroOutro" />
+            <span>去片头片尾（自动检测后剪掉，与上方互斥）</span>
+          </label>
+          <div class="com-retain-field">
+            <label class="com-retain-label" for="comRetainPct">保留时长</label>
+            <div class="com-retain-input">
+              <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
+              <span class="com-retain-unit">%</span>
+            </div>
+            <span class="com-retain-hint">10~100，留空不裁剪</span>
           </div>
-          <span class="com-retain-hint">10~100，留空表示不裁剪</span>
         </div>
       </div>
 
@@ -422,7 +424,7 @@
       </div>
 
       <!-- 方案⑥：解说风格 -->
-      <div class="com-opt-block">
+      <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">⑥ 解说风格</div>
         <div class="com-opt-row">
           <label class="com-mode-option"><input type="radio" name="comStyle" value="none" checked /><span><b>默认</b></span></label>
