@@ -258,6 +258,15 @@ img { max-width: 100%; display: block; }
 }
 .alert-body { display: flex; flex-direction: column; gap: .1rem; }
 .alert-body span { color: #b45309; opacity: .95; }
+.alert-close {
+  flex: none; margin-left: auto;
+  width: 24px; height: 24px; display: grid; place-items: center;
+  border: none; border-radius: 50%; background: transparent; color: #7f1d1d;
+  font-size: 1.1rem; line-height: 1; cursor: pointer;
+  transition: background .15s;
+}
+.alert-close:hover { background: rgba(153, 27, 27, .1); }
+.alert-close:focus-visible { outline: 2px solid rgba(153, 27, 27, .35); outline-offset: 1px; }
 
 /* ---------------- video card ---------------- */
 .video-card { display: grid; grid-template-columns: 190px 1fr; gap: 1rem; }

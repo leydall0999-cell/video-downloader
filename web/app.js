@@ -626,6 +626,7 @@
   // ------------------------------------------------------------------ 提示
 
   const showError = (message, hint = '') => {
+    if (!message) { clearError(); return; }
     el.alertTitle.textContent = message;
     el.alertHint.textContent = hint;
     el.alertHint.hidden = !hint;
@@ -633,6 +634,7 @@
   };
 
   const clearError = () => { el.alert.hidden = true; };
+  document.getElementById('alertClose').addEventListener('click', clearError);
 
   const setLoading = (loading) => {
     el.resolveBtn.classList.toggle('loading', loading);
