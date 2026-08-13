@@ -22,6 +22,9 @@
   // 事件循环也会执行本回调切到解说视图，不再依赖 IIFE 末尾是否跑到。
   setTimeout(() => { try { switchView('commentary'); } catch (_) {} }, 0);
 
+  // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
+  try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
+
   const STATUS_TEXT = {
     pending: '排队中',
     downloading: '下载中',
