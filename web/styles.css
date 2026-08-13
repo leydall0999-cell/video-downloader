@@ -1211,46 +1211,40 @@ img { max-width: 100%; display: block; }
 .com-generate-row .com-generate-main {
   flex: 1; padding: .85rem; font-size: 1.05rem; font-weight: 700;
 }
-/* ---- 剪辑选项面板（六类方案） ---- */
+/* ---- 剪辑选项面板（六类方案·紧凑分段控件） ---- */
 .com-opts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   align-items: start;
-  gap: .75rem .9rem;
-  margin-top: .75rem;
-  padding: .75rem .9rem;
+  gap: .5rem .9rem;
+  margin-top: .5rem;
+  padding: .65rem .8rem;
   background: var(--surface);
   border: 1px solid var(--line); border-radius: var(--radius-md);
 }
 .com-opt-block {
-  display: flex; flex-direction: column; gap: .45rem;
-  padding: .55rem .65rem;
-  background: color-mix(in srgb, var(--bg) 60%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
-  border-radius: var(--radius-sm);
+  display: flex; flex-direction: column; gap: .28rem;
+  padding: 0; background: none; border: none;
 }
 .com-opt-block-full { grid-column: 1 / -1; }
 .com-opt-title {
-  font-size: .78rem; font-weight: 700; letter-spacing: .02em; color: var(--accent);
-  padding-bottom: .25rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  font-size: .72rem; font-weight: 700; letter-spacing: .02em; color: var(--accent);
 }
-.com-opt-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: stretch; }
+.com-opt-row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
 
-/* radio 卡片化：透明 input 铺满整卡，span 承载视觉 */
+/* 分段（胶囊）控件：radio 透明铺满，span 承载视觉 */
 .com-opts .com-mode-option {
-  position: relative; display: block; flex: 0 0 auto; cursor: pointer;
+  position: relative; display: inline-block; flex: 0 0 auto; cursor: pointer;
 }
 .com-opts .com-mode-option input {
-  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer;
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer;
 }
 .com-opts .com-mode-option > span {
-  display: block; padding: .42rem .7rem;
-  font-size: .84rem; line-height: 1.3; color: var(--text);
+  display: block; padding: .3rem .7rem;
+  font-size: .8rem; line-height: 1.2; color: var(--text);
   background: var(--surface);
-  border: 1.5px solid var(--line);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  border-radius: 999px;
   transition: border-color .15s, background .15s, color .15s;
 }
 .com-opts .com-mode-option > span b { color: inherit; font-weight: 700; }
@@ -1259,41 +1253,30 @@ img { max-width: 100%; display: block; }
 }
 .com-opts .com-mode-option input:checked + span {
   border-color: var(--accent); font-weight: 600;
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 82%, var(--text));
 }
 .com-opts .com-mode-option input:focus-visible + span {
   outline: 3px solid color-mix(in srgb, var(--accent) 32%, transparent);
   outline-offset: 1px;
 }
-.com-opts .com-mode-option input:focus + span {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
-}
 
-/* checkbox 统一成同规格卡片 */
+/* checkbox 轻量化：去掉卡片边框，仅勾选强调 */
 .com-opts .com-highlights-toggle {
-  display: flex; align-items: center; gap: .45rem;
-  padding: .42rem .6rem; background: var(--surface);
-  border: 1.5px solid var(--line); border-radius: var(--radius-sm);
-  font-size: .84rem; line-height: 1.3; cursor: pointer;
-  transition: border-color .15s, background .15s;
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: 0; background: none; border: none;
+  font-size: .82rem; line-height: 1.3; cursor: pointer;
 }
 .com-opts .com-highlights-toggle input {
   margin: 0; width: 1rem; height: 1rem; accent-color: var(--accent); flex: none;
 }
 .com-opts .com-highlights-toggle input:checked + span {
-  color: color-mix(in srgb, var(--accent) 78%, var(--text)); font-weight: 600;
-}
-@supports selector(:has(*)) {
-  .com-opts .com-highlights-toggle:has(input:checked) {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-  }
+  color: color-mix(in srgb, var(--accent) 82%, var(--text)); font-weight: 600;
 }
 
 /* ④ 固定选择项：三栏等宽 */
 .com-opt-row-fixed {
-  display: grid; gap: .5rem;
+  display: grid; gap: .4rem;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
 }
@@ -1303,42 +1286,38 @@ img { max-width: 100%; display: block; }
 .com-retain-field {
   display: flex; flex-wrap: wrap; align-items: center;
   gap: .25rem .55rem;
-  padding: .35rem .55rem;
+  padding: .3rem .5rem;
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border: 1.5px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
   border-radius: var(--radius-sm);
 }
-.com-retain-label { font-size: .85rem; font-weight: 600; color: var(--text); }
+.com-retain-label { font-size: .8rem; font-weight: 600; color: var(--text); }
 .com-retain-input { display: flex; align-items: center; gap: .25rem; }
 .com-retain-input input {
-  width: 4.2rem; padding: .3rem .45rem; font-size: .9rem; font-weight: 500;
+  width: 4rem; padding: .25rem .4rem; font-size: .85rem; font-weight: 500;
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: var(--bg); color: var(--text);
 }
 .com-retain-input input::placeholder {
-  font-size: .75rem; font-weight: 400;
+  font-size: .72rem; font-weight: 400;
   color: color-mix(in srgb, var(--text) 45%, transparent);
 }
-.com-retain-unit { font-size: .9rem; font-weight: 600; color: var(--accent); }
-.com-retain-hint { font-size: .78rem; opacity: .75; }
+.com-retain-unit { font-size: .85rem; font-weight: 600; color: var(--accent); }
+.com-retain-hint { font-size: .74rem; opacity: .75; }
 .com-oneclick { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff7a00));
   border: none; color: #fff; }
 .com-oneclick:hover { filter: brightness(1.05); }
 
-/* ⑥ 解说风格：等宽卡片 */
-.com-opt-row-styles {
-  display: grid; gap: .4rem;
-  grid-template-columns: repeat(auto-fill, minmax(98px, 1fr));
-}
-.com-opt-row-styles .com-mode-option { flex: none; }
+/* ⑥ 解说风格：胶囊换行 */
+.com-opt-row-styles { display: flex; flex-wrap: wrap; gap: .35rem; }
+.com-opt-row-styles .com-mode-option { flex: 0 0 auto; }
 .com-opt-row-styles .com-mode-option > span { text-align: center; }
 
 @media (max-width: 900px) {
   .com-opt-row-fixed { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
-  .com-opts { grid-template-columns: 1fr; padding: .65rem; gap: .65rem; }
-  .com-opt-row-styles { grid-template-columns: repeat(auto-fill, minmax(82px, 1fr)); }
+  .com-opts { grid-template-columns: 1fr; padding: .6rem; gap: .5rem; }
   .com-opt-row-fixed { grid-template-columns: 1fr; }
 }
 
