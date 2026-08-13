@@ -395,8 +395,6 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius-sm); padding: .6rem; margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.task.is-collapsed .extract-result { display: none; }
-
 /* ---- 任务过程时间线 ---- */
 .task-steps-box { margin-top: .55rem; border-top: 1px dashed var(--line); padding-top: .5rem; }
 .task-steps-toggle {
