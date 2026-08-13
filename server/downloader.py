@@ -506,6 +506,127 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     return options
 
 
+# --------------------------------------------------------------------------- #
+# 源测速（多 CDN 选源）：腾讯等站同一清晰度常有多个 CDN 源（format_id 后缀 -0/-1/-2/-3），
+# yt-dlp 默认选第一个，常撞上被限速的默认 CDN。这里对每个源实测分片下载速率，
+# 前端据此自动挑最快源，从根上绕开「默认 CDN 限速」。
+# --------------------------------------------------------------------------- #
+SPEEDTEST_WINDOW = float(os.environ.get("VDL_SPEEDTEST_WINDOW", "5.0"))      # 每个源测速窗口（秒），够长才能测到持续速率而非「起步冲刺」
+SPEEDTEST_FRAGMENTS = int(os.environ.get("VDL_SPEEDTEST_FRAGMENTS", "4"))    # 并发下载的分片数
+
+
+def _m3u8_segments(m3u8_url: str, headers: dict[str, str]) -> list[str]:
+    """下载 m3u8 清单，返回分片 URL 列表（转成绝对地址）。"""
+    req = urllib.request.Request(m3u8_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=SOCKET_TIMEOUT) as resp:
+        text = resp.read().decode("utf-8", "ignore")
+    base = m3u8_url.rsplit("/", 1)[0] + "/"
+    segments: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        segments.append(line if line.startswith("http") else base + line)
+    return segments
+
+
+def _measure_speed(segment_urls: list[str], headers: dict[str, str], window: float) -> float:
+    """并发下载若干分片，在 window 秒窗口内统计真实字节速率（字节/秒）。
+
+    注意：read 块必须小（8KB），否则慢速源（如 5KB/s trickle）凑满大块要十几秒，
+    会卡在首个 read 上导致窗口内统计不到任何字节。
+    """
+    if not segment_urls:
+        return 0.0
+    total = [0]
+    stop_at = time.time() + window
+
+    def _worker(url: str) -> None:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                while time.time() < stop_at:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    total[0] += len(chunk)
+        except Exception:
+            pass
+
+    urls = segment_urls[:SPEEDTEST_FRAGMENTS]
+    threads = [threading.Thread(target=_worker, args=(u,)) for u in urls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=window + 8)
+    return total[0] / max(window, 0.5)
+
+
+def _speedtest_formats(info: dict[str, Any], host: str, cookie: str = "", proxy: str = "") -> list[dict[str, Any]]:
+    """对已解析出的 info 里的每个流媒体源实测下载速率，返回按清晰度取最快源的列表。
+
+    覆盖两种协议：m3u8_native（HLS 分片，下载清单再测分片）与 https/http（MP4 直链，直接测文件）。
+    每个源并行测、统一窗口，保证相对排序可比；结果按高度降序、每组标出最快源。
+    """
+    headers = dict(_base_options(PROBE_RETRIES, host, cookie=cookie, proxy=proxy).get("http_headers") or {})
+    formats = [f for f in (info.get("formats") or [])
+               if isinstance(f, dict) and f.get("protocol") in ("m3u8_native", "m3u8", "https", "http")]
+
+    measured: list[dict[str, Any]] = []
+    threads: list[threading.Thread] = []
+
+    def _run_one(f: dict[str, Any]) -> None:
+        url = f.get("url") or f.get("manifest_url") or ""
+        proto = f.get("protocol") or ""
+        speed = 0.0
+        if url:
+            try:
+                if proto in ("m3u8_native", "m3u8"):
+                    # HLS：先拉清单得到分片列表，再并发测分片
+                    speed = _measure_speed(_m3u8_segments(url, headers), headers, SPEEDTEST_WINDOW)
+                else:
+                    # MP4 直链：直接对文件 URL 流式测速
+                    speed = _measure_speed([url], headers, SPEEDTEST_WINDOW)
+            except Exception:
+                speed = 0.0
+        measured.append({
+            "height": f.get("height") or 0,
+            "format_id": f.get("format_id") or "",
+            "host": urlparse(url).netloc or "",
+            "speed_bps": round(speed),
+            "speed_label": (_format_bytes(int(speed)) + "/s") if speed > 0 else "不可用",
+            "is_default": str(f.get("format_id") or "").endswith("-0") or str(f.get("format_id") or "") in ("0", ""),
+        })
+
+    for f in formats:
+        t = threading.Thread(target=_run_one, args=(f,))
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=SPEEDTEST_WINDOW * max(len(formats), 1) + 20)
+
+    by_height: dict[int, list[dict[str, Any]]] = {}
+    for m in measured:
+        by_height.setdefault(m["height"], []).append(m)
+
+    best_by_height: list[dict[str, Any]] = []
+    for height in sorted(by_height, reverse=True):
+        ordered = sorted(by_height[height], key=lambda x: -x["speed_bps"])
+        fastest = dict(ordered[0])          # 浅拷贝，避免污染 measured / 共享引用
+        fastest["height"] = height
+        fastest["alternatives"] = [dict(a) for a in ordered[1:]]  # 排除最快自己，杜绝循环引用
+        best_by_height.append(fastest)
+    if best_by_height:
+        max(best_by_height, key=lambda x: x["speed_bps"])["is_fastest_overall"] = True
+    return best_by_height
+
+
+def speedtest_sources(url: str, cookie: str = "", proxy: str = "") -> list[dict[str, Any]]:
+    """解析视频并对各 CDN 源测速（独立调用入口，内部会重新 probe）。"""
+    info = probe(url, cookie, proxy)
+    return _speedtest_formats(info, _host_of(url), cookie, proxy)
+
+
 def _format_selector(quality_key: str) -> str:
     if quality_key == BEST_KEY:
         return "bv*+ba/b"
@@ -598,9 +719,10 @@ class _ProgressReporter:
             self._store.update(self._task.id, status="merging", progress=98.0)
 
 
-def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "") -> dict:
+def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "", format_id: str = "") -> dict:
     options = _base_options(DOWNLOAD_RETRIES, _host_of(task.url), cookie=cookie, proxy=proxy) | {
-        "format": _format_selector(quality_key),
+        # format_id 精确指定某个 CDN 源（如腾讯 hd-1/shd-3）；未指定时按清晰度自适应
+        "format": format_id if format_id else _format_selector(quality_key),
         "outtmpl": {"default": f"%(title).{MAX_TITLE_CHARS}s.%(ext)s"},
         "paths": {"home": str(task.workdir)},
         "windowsfilenames": True,
@@ -683,7 +805,7 @@ def build_slow_warning(host: str, speed_bps: float) -> dict:
     }
 
 
-def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0) -> None:
+def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "") -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
     max_retries=N 时，对网络/超时/连接类等「可重试」错误最多再试 N 次（指数退避）。
@@ -778,7 +900,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 last["ts"] = time.time()
             # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
             th = threading.Thread(
-                target=_run_once, args=(task, store, quality_key, cookie, proxy),
+                target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id),
                 name=f"dl-{task.id}-{attempt}", daemon=True,
             )
             th.start()
@@ -827,7 +949,7 @@ def _format_bytes(n: int) -> str:
     return f"{value:.2f} PB"
 
 
-def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "") -> None:
+def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", format_id: str = "") -> None:
     """执行一次下载：先解析元数据，再进入实际下载。
 
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
@@ -838,7 +960,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     info: dict[str, Any] = {}
     try:
-        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy)) as ydl:
+        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id)) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):

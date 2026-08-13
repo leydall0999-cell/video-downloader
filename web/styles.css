@@ -329,6 +329,10 @@ img { max-width: 100%; display: block; }
 }
 .quality-opt strong { font-size: .89rem; font-weight: 650; }
 .quality-opt small { font-size: .74rem; color: var(--text-mute); }
+/* 测速选源：带实测速度的清晰度选项，绿色强调（提示该源可用且已标出速率） */
+.quality-opt.has-speed { border-color: #34b57a; }
+.quality-opt.has-speed small { color: #177245; }
+.quality-opt.has-speed[aria-checked="true"] { border-color: var(--brand); }
 
 /* ---------------- tasks ---------------- */
 .task-list { list-style: none; margin: .7rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .7rem; }

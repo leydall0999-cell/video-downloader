@@ -354,6 +354,9 @@
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
   let selectedQuality = 'best';
+  // 测速选源：{ height: {format_id, speed_bps, speed_label, is_fastest_overall, ...} }
+  let speedByHeight = {};
+  let selectedFormatId = '';   // 当前选中清晰度对应的最快 CDN 源 format_id
   let allPlatforms = [];
   const trackers = new Map();
 
@@ -689,9 +692,22 @@
     else el.modal.setAttribute('open', '');
   };
 
-  const renderQualities = (qualities) => {
+  const renderQualities = (qualities, sources = []) => {
+    // 建立「高度 → 最快源」映射，并找出全局最快源，用于默认选中 + 下载时带 format_id
+    speedByHeight = {};
+    let overallFastest = null;
+    sources.forEach((s) => {
+      speedByHeight[s.height] = s;
+      if (s.is_fastest_overall) overallFastest = s;
+    });
+    let defaultKey = qualities[0]?.key ?? 'best';
+    if (overallFastest && qualities.some((q) => q.key === String(overallFastest.height))) {
+      defaultKey = String(overallFastest.height);
+    }
+    selectedQuality = defaultKey;
+    selectedFormatId = (speedByHeight[overallFastest?.height] || {}).format_id || '';
+
     el.qualityGrid.replaceChildren();
-    selectedQuality = qualities[0]?.key ?? 'best';
 
     qualities.forEach((quality) => {
       const option = document.createElement('button');
@@ -704,9 +720,21 @@
       const label = document.createElement('strong');
       label.textContent = quality.label;
       const note = document.createElement('small');
-      note.textContent = quality.approx_size
+      let noteText = quality.approx_size
         ? `${quality.note} · 约 ${formatBytes(quality.approx_size)}`
         : quality.note;
+      // 测速选源：该清晰度若有实测速度，标注最快源；不可用则提示
+      const spd = speedByHeight[Number(quality.key)];
+      if (spd) {
+        if (spd.speed_bps > 0) {
+          const tag = spd.is_fastest_overall ? '⚡ 全局最快' : '⚡';
+          noteText = `${noteText} · ${tag}实测 ${spd.speed_label}`;
+          option.classList.add('has-speed');
+        } else {
+          noteText = `${noteText} · 该清晰度源不可用`;
+        }
+      }
+      note.textContent = noteText;
 
       option.append(label, note);
       option.addEventListener('click', () => selectQuality(quality.key));
@@ -716,6 +744,7 @@
 
   const selectQuality = (key) => {
     selectedQuality = key;
+    selectedFormatId = (speedByHeight[Number(key)] || {}).format_id || '';
     el.qualityGrid.querySelectorAll('.quality-opt').forEach((node) => {
       node.setAttribute('aria-checked', String(node.dataset.key === key));
     });
@@ -752,7 +781,7 @@
       el.directHint.hidden = true;
       el.directHint.textContent = '';
       el.serverFallbackBtn.hidden = true;
-      renderQualities(data.qualities);
+      renderQualities(data.qualities, data.sources || []);
     }
     el.resultPanel.hidden = false;
   };
@@ -1362,6 +1391,7 @@
           cookie: opts.cookie ?? resolved?.cookie ?? '',
           proxy: opts.proxy ?? resolved?.proxy ?? '',
           extract_script: el.extractSelect.value || '',
+          format_id: opts.format_id ?? selectedFormatId ?? '',
         }),
       }, base);
       const taskId = data.task_id;

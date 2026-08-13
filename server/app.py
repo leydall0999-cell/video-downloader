@@ -1318,6 +1318,8 @@ class DownloadRequest(BaseModel):
     proxy: str = Field(default="", max_length=256)
     # 提取文案："" 不提取 / "spoken" 口播文案 / "description" 发布简介 / "both" 两者
     extract_script: str = Field(default="", max_length=16)
+    # 精确指定 CDN 源（如腾讯 hd-1/shd-3），空则按清晰度自适应；由「测速选源」自动填入
+    format_id: str = Field(default="", max_length=64)
 
 
 @app.exception_handler(LinkError)
@@ -1475,11 +1477,23 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
                 "②当前网络无法访问该平台（可尝试在「高级选项」设置代理）"
             )
         raise HTTPException(status_code=504, detail=detail) from None
+    # 腾讯等 HLS 站同一清晰度常有多 CDN 源、默认源易被限速：解析后对腾讯视频自动测速，
+    # 前端据此标出最快源并默认选中，从根上绕开「默认 CDN 限速」。
+    sources: list[dict] = []
+    if host == "v.qq.com":
+        try:
+            sources = await asyncio.wait_for(
+                loop.run_in_executor(prober, downloader._speedtest_formats, info, host, payload.cookie, payload.proxy),
+                timeout=30,
+            )
+        except Exception:
+            sources = []  # 测速失败/超时不影响解析主流程，前端降级为无速度提示
     return {
         "url": url,
         "platform": {"key": platform.key, "name": platform.name},
         "video": downloader.summarize(info),
         "qualities": downloader.build_quality_options(info),
+        "sources": sources,
     }
 
 
@@ -1531,7 +1545,7 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
         quality_key=payload.quality,
         extract_mode=extract_mode,
     )
-    scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES)
+    scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES, payload.format_id)
     return {
         "task_id": task.id,
         "status": task.status,
