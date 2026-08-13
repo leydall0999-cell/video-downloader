@@ -1483,6 +1483,29 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
     }
 
 
+@app.get("/api/cookie/status")
+def cookie_status(url: str = "") -> dict:
+    """探测本机浏览器是否含目标站点的登录 Cookie，供前端「检测登录态」与解析后自动提示。
+
+    返回 available/browser/profile：前端据此告知用户「已自动读取，无需手动粘贴」
+    或「未检测到，请先在浏览器登录该平台，或手动粘贴 Cookie」。
+    """
+    if not url:
+        raise HTTPException(status_code=400, detail="请提供链接")
+    _assert_safe_url(url)
+    url, platform = parse_source(url)
+    host = _host_of(url)
+    info = downloader.detect_browser_cookie(host)
+    return {
+        "host": host,
+        "platform": platform.key,
+        "needed": downloader.is_cookie_hardened_host(host),
+        "available": info["available"],
+        "browser": info["browser"],
+        "profile": info["profile"],
+    }
+
+
 def _valid_extract_mode(value: str) -> str:
     """校验并归一化文案提取模式，非法值回退为不提取。"""
     return value if value in ("spoken", "description", "both") else ""

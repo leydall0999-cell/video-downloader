@@ -74,6 +74,8 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
+    cookieDetectBtn: $('cookieDetectBtn'),
+    cookieStatus: $('cookieStatus'),
     proxyInput: $('proxyInput'),
     qualityBlock: $('qualityBlock'),
     extractSelect: $('extractSelect'),
@@ -1221,6 +1223,44 @@
 
   // ------------------------------------------------------------------ 动作
 
+  /** 平台 key → 中文名，用于登录态提示。 */
+  const platCN = (k) => ({
+    tencent: '腾讯视频', douyin: '抖音', kuaishou: '快手',
+    xiaohongshu: '小红书', bilibili: 'B站', youtube: 'YouTube',
+  }[k] || '该平台');
+
+  /** 调用 /api/cookie/status 检测本机浏览器是否含目标站登录态，并刷新状态徽章。
+   *  命中则告知「已自动读取，无需手动粘贴」；未命中则提示先登录或手动粘贴。 */
+  const updateCookieStatus = async (url) => {
+    const btn = el.cookieDetectBtn;
+    const span = el.cookieStatus;
+    if (!url) { span.textContent = ''; span.className = 'cookie-status'; return; }
+    btn.disabled = true;
+    span.textContent = '检测中…';
+    span.className = 'cookie-status loading';
+    try {
+      const data = await request(`/api/cookie/status?url=${encodeURIComponent(url)}`);
+      const name = platCN(data.platform);
+      if (data.available) {
+        const where = data.profile && data.profile !== 'Default'
+          ? `${data.browser}（${data.profile}）` : data.browser;
+        span.textContent = `✅ 已自动读取 ${where} 的${name}登录态，无需手动粘贴`;
+        span.className = 'cookie-status ok';
+      } else if (data.browser) {
+        span.textContent = `⚠️ 未在 ${data.browser} 中检测到${name}登录态，如需更快速度/会员内容请先在浏览器登录，或手动粘贴 Cookie`;
+        span.className = 'cookie-status warn';
+      } else {
+        span.textContent = '⚠️ 未检测到浏览器登录态，部分平台需手动粘贴 Cookie 后才能下载';
+        span.className = 'cookie-status warn';
+      }
+    } catch (_) {
+      span.textContent = '检测失败，可直接手动粘贴 Cookie';
+      span.className = 'cookie-status err';
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   const handleResolve = async (event) => {
     event.preventDefault();
     const url = el.input.value.trim();
@@ -1246,6 +1286,7 @@
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
+      updateCookieStatus(url);   // 解析成功后自动检测浏览器登录态，省去手动粘贴
     } catch (error) {
       resolved = null;
       showError(error.message || '解析失败', error.hint);
@@ -2797,6 +2838,11 @@
   el.cancelAllBtn.addEventListener('click', cancelAll);
   el.openFolderBtn.addEventListener('click', openDownloadFolder);
   el.downloadBtn.addEventListener('click', handleDownload);
+  el.cookieDetectBtn.addEventListener('click', () => {
+    const u = el.input.value.trim();
+    if (!u) { el.cookieStatus.textContent = '请先粘贴视频链接再检测'; el.cookieStatus.className = 'cookie-status warn'; return; }
+    updateCookieStatus(u);
+  });
   el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
   el.clearBtn.addEventListener('click', () => {

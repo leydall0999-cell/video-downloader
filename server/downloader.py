@@ -292,6 +292,20 @@ def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     return None
 
 
+def detect_browser_cookie(host: str) -> dict[str, Any]:
+    """探测本机浏览器是否含目标站点的 Cookie，供前端「检测登录态」按钮与解析结果展示。
+
+    复用 _find_host_cookie_profile 的 sqlite 直查逻辑：若命中则返回具体
+    (browser, profile)，前端可据此告诉用户「已自动读取，无需手动粘贴」。
+    """
+    found = _find_host_cookie_profile(host)
+    if found:
+        return {"available": True, "browser": found[0], "profile": found[1]}
+    # 浏览器装了、但该站无 Cookie：仍返回浏览器名，便于提示「请先在浏览器登录」
+    b = _detect_browser_cookie_source()
+    return {"available": False, "browser": b, "profile": None}
+
+
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     options: dict[str, Any] = {
         "quiet": True,

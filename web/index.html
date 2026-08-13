@@ -90,6 +90,10 @@
             <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
             <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
               placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
+            <div class="cookie-detect">
+              <button type="button" id="cookieDetectBtn" class="cookie-detect-btn">检测浏览器登录态</button>
+              <span id="cookieStatus" class="cookie-status"></span>
+            </div>
             <label class="adv-label" for="proxyInput">代理地址（可选）</label>
             <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
               placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
