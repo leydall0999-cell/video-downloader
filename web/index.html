@@ -359,20 +359,11 @@
       </div>
     </div>
 
-    <!-- 剪辑选项：四类方案按需选用，不设固定勾选（默认给出合理选择） -->
+    <!-- 剪辑选项：核心选风格即可，其余收进高级折叠区 -->
     <div class="com-opts" id="comOpts">
-      <!-- 方案①：自动挑高光（高光来源） -->
-      <div class="com-opt-block">
-        <div class="com-opt-title">① 自动挑高光</div>
-        <div class="com-opt-row">
-          <label class="com-mode-option"><input type="radio" name="comHlSource" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
-          <label class="com-mode-option"><input type="radio" name="comHlSource" value="manual" /><span>人工在审核面板挑选</span></label>
-        </div>
-      </div>
-
-      <!-- 方案②：解说类型 -->
-      <div class="com-opt-block">
-        <div class="com-opt-title">② 解说</div>
+      <!-- 核心：解说类型 -->
+      <div class="com-opt-block com-opt-block-full">
+        <div class="com-opt-title">解说类型</div>
         <div class="com-opt-row">
           <label class="com-mode-option"><input type="radio" name="comType" value="deep_hl" checked /><span><b>高光处叠加深度解说</b></span></label>
           <label class="com-mode-option"><input type="radio" name="comType" value="normal_hl" /><span>高光部分普通解说</span></label>
@@ -381,51 +372,63 @@
         </div>
       </div>
 
-      <!-- 方案③：开头加高光 -->
-      <div class="com-opt-block">
-        <div class="com-opt-title">③ 开头加高光</div>
-        <label class="com-highlights-toggle">
-          <input type="checkbox" id="comIntroHighlight" />
-          <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
-        </label>
-      </div>
-
-      <!-- 方案④：固定选择项 -->
-      <div class="com-opt-block com-opt-block-full">
-        <div class="com-opt-title">④ 固定选择项</div>
-        <div class="com-opt-row com-opt-row-fixed">
-          <label class="com-highlights-toggle">
-            <input type="checkbox" id="comKeepNoNarrate" checked />
-            <span>保留片头片尾·不解说（自动检测边界，默认开启）</span>
-          </label>
-          <label class="com-highlights-toggle">
-            <input type="checkbox" id="comSkipIntroOutro" />
-            <span>去片头片尾（自动检测后剪掉，与上方互斥）</span>
-          </label>
-          <div class="com-retain-field">
-            <label class="com-retain-label" for="comRetainPct">保留时长</label>
-            <div class="com-retain-input">
-              <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
-              <span class="com-retain-unit">%</span>
+      <!-- 高级剪辑：默认收起 -->
+      <details class="com-advanced" id="comAdvanced">
+        <summary class="com-adv-summary">高级剪辑选项<small>开头钩子 · 画幅 · 固定裁剪 · 高光来源</small></summary>
+        <div class="com-opts-inner">
+          <!-- 自动挑高光 -->
+          <div class="com-opt-block">
+            <div class="com-opt-title">自动挑高光</div>
+            <div class="com-opt-row">
+              <label class="com-mode-option"><input type="radio" name="comHlSource" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
+              <label class="com-mode-option"><input type="radio" name="comHlSource" value="manual" /><span>人工在审核面板挑选</span></label>
             </div>
-            <span class="com-retain-hint">10~100，留空不裁剪</span>
+          </div>
+          <!-- 开头加高光 -->
+          <div class="com-opt-block">
+            <div class="com-opt-title">开头加高光</div>
+            <label class="com-highlights-toggle">
+              <input type="checkbox" id="comIntroHighlight" />
+              <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
+            </label>
+          </div>
+          <!-- 固定选择项 -->
+          <div class="com-opt-block com-opt-block-full">
+            <div class="com-opt-title">固定选择项</div>
+            <div class="com-opt-row com-opt-row-fixed">
+              <label class="com-highlights-toggle">
+                <input type="checkbox" id="comKeepNoNarrate" checked />
+                <span>保留片头片尾·不解说（自动检测边界，默认开启）</span>
+              </label>
+              <label class="com-highlights-toggle">
+                <input type="checkbox" id="comSkipIntroOutro" />
+                <span>去片头片尾（自动检测后剪掉，与上方互斥）</span>
+              </label>
+              <div class="com-retain-field">
+                <label class="com-retain-label" for="comRetainPct">保留时长</label>
+                <div class="com-retain-input">
+                  <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
+                  <span class="com-retain-unit">%</span>
+                </div>
+                <span class="com-retain-hint">10~100，留空不裁剪</span>
+              </div>
+            </div>
+          </div>
+          <!-- 画幅 -->
+          <div class="com-opt-block">
+            <div class="com-opt-title">画幅</div>
+            <div class="com-opt-row">
+              <label class="com-mode-option"><input type="radio" name="comAspect" value="auto" checked /><span><b>自动（跟视频走）</b></span></label>
+              <label class="com-mode-option"><input type="radio" name="comAspect" value="landscape" /><span>横屏 16:9</span></label>
+              <label class="com-mode-option"><input type="radio" name="comAspect" value="vertical" /><span>竖屏 9:16（抖音/视频号）</span></label>
+            </div>
           </div>
         </div>
-      </div>
+      </details>
 
-      <!-- 方案⑤：画幅 -->
-      <div class="com-opt-block">
-        <div class="com-opt-title">⑤ 画幅</div>
-        <div class="com-opt-row">
-          <label class="com-mode-option"><input type="radio" name="comAspect" value="auto" checked /><span><b>自动（跟视频走）</b></span></label>
-          <label class="com-mode-option"><input type="radio" name="comAspect" value="landscape" /><span>横屏 16:9</span></label>
-          <label class="com-mode-option"><input type="radio" name="comAspect" value="vertical" /><span>竖屏 9:16（抖音/视频号）</span></label>
-        </div>
-      </div>
-
-      <!-- 方案⑥：解说风格 -->
+      <!-- 核心：解说风格（联动音色） -->
       <div class="com-opt-block com-opt-block-full">
-        <div class="com-opt-title">⑥ 解说风格</div>
+        <div class="com-opt-title">解说风格（联动音色）</div>
         <div class="com-opt-row com-opt-row-styles">
           <label class="com-mode-option"><input type="radio" name="comStyle" value="none" checked /><span><b>默认</b></span></label>
           <label class="com-mode-option"><input type="radio" name="comStyle" value="funny" /><span>搞笑</span></label>
