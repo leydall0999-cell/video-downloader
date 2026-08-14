@@ -1561,9 +1561,20 @@ def stream_proxy(u: str = "", cookie: str = "", request: Request = None):
         raise HTTPException(status_code=400, detail="缺少 u 参数")
     _assert_safe_url(u)  # SSRF 护栏：拒绝内网 / 环回 / 保留地址
     host = _host_of(u)
-    cookie_text = (cookie or "").strip()
-    if cookie_text.lower().startswith("cookie:"):
-        cookie_text = cookie_text[7:].strip()
+    user_cookie = (cookie or "").strip()
+    if user_cookie.lower().startswith("cookie:"):
+        user_cookie = user_cookie[7:].strip()
+    cookie_text = user_cookie
+    used_auto_cookie = False
+    # 用户未手动粘贴 Cookie 时，自动探测本机浏览器登录态并携带，免去手动操作
+    if not cookie_text:
+        try:
+            auto = downloader.get_browser_cookie_header(host, u)
+        except Exception:
+            auto = None
+        if auto:
+            cookie_text = auto
+            used_auto_cookie = True
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -1580,7 +1591,12 @@ def stream_proxy(u: str = "", cookie: str = "", request: Request = None):
     if resp.status_code >= 400:
         detail = f"上游返回 {resp.status_code}"
         if resp.status_code in (401, 403):
-            detail += "（防盗链被拒，可能需要登录 Cookie，可在「高级选项」粘贴后重试）"
+            if used_auto_cookie:
+                detail += "（已自动携带浏览器登录态仍被拒，可能需先在浏览器登录该平台，或手动粘贴 Cookie）"
+            elif cookie_text:
+                detail += "（防盗链被拒，可在「高级选项」重新粘贴 Cookie 后重试）"
+            else:
+                detail += "（防盗链被拒，可能需要登录 Cookie，请在「高级选项」粘贴浏览器 Cookie 后重试）"
         resp.close()
         raise HTTPException(status_code=resp.status_code, detail=detail)
 

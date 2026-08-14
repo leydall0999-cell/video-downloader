@@ -369,6 +369,28 @@ def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     return None
 
 
+def get_browser_cookie_header(host: str, url: str) -> str | None:
+    """若本机浏览器含目标站点的登录 Cookie，提取并构造可用于请求头的 Cookie 字符串。
+
+    供「在线观看」代理自动携带登录态，免去手动粘贴。返回 None 表示无可用 Cookie
+    （浏览器未安装 / 该站未登录 / 解密失败）。复用 _find_host_cookie_profile 定位
+    具体 Profile（登录态常不在 Default），再用 yt-dlp 的 cookie 解密能力导出。
+    """
+    found = _find_host_cookie_profile(host)
+    if not found:
+        return None
+    browser, profile = found
+    try:
+        from yt_dlp.cookies import extract_cookies_from_browser
+        from urllib.request import Request
+        jar = extract_cookies_from_browser(browser, profile)
+        req = Request(url)
+        jar.add_cookie_header(req)
+        return req.get_header("Cookie") or None
+    except Exception:
+        return None
+
+
 def detect_browser_cookie(host: str) -> dict[str, Any]:
     """探测本机浏览器是否含目标站点的 Cookie，供前端「检测登录态」按钮与解析结果展示。
 
