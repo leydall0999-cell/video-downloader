@@ -866,6 +866,7 @@
       convertBtn: node.querySelector('[data-convert-btn]'),
       convertFile: node.querySelector('[data-convert-file]'),
       convertStatus: node.querySelector('[data-convert-status]'),
+      convertQuota: node.querySelector('[data-convert-quota]'),
       cloud: node.querySelector('[data-cloud]'),
       cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
@@ -1473,7 +1474,7 @@
 
   const cancelTask = async (taskId, base = '') => {
     try {
-      await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, base);
+      const r = await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, base);
     } catch (error) {
       showError(error.message || '取消失败', error.hint);
     }
@@ -1481,7 +1482,7 @@
 
   const pauseTask = async (taskId, base = '') => {
     try {
-      await request(`/api/tasks/${taskId}/pause`, { method: 'POST' }, base);
+      const r = await request(`/api/tasks/${taskId}/pause`, { method: 'POST' }, base);
     } catch (error) {
       showError(error.message || '暂停失败', error.hint);
     }
@@ -1489,7 +1490,7 @@
 
   const resumeTask = async (taskId, base = '') => {
     try {
-      await request(`/api/tasks/${taskId}/resume`, { method: 'POST' }, base);
+      const r = await request(`/api/tasks/${taskId}/resume`, { method: 'POST' }, base);
     } catch (error) {
       showError(error.message || '继续失败', error.hint);
     }
@@ -1498,7 +1499,7 @@
   // 任务重试：失败 / 已取消的任务重新加入下载队列
   const retryTask = async (taskId, refs) => {
     try {
-      await request(`/api/tasks/${taskId}/retry`, { method: 'POST' }, refs.base || '');
+      const r = await request(`/api/tasks/${taskId}/retry`, { method: 'POST' }, refs.base || '');
       refs.retry.hidden = true;
       refs.error.hidden = true;
       trackTask(taskId, refs, refs.base || '');  // 重新跟踪（原 tracker 已因终态移除）
@@ -1515,9 +1516,11 @@
     const fileNote = isFinished
       ? '\n文件也会被一并删除（回收站优先，无法回收时直接清理）'
       : '\n任务将被取消';
-    if (!window.confirm(`确定删除这条任务记录吗？${fileNote}`)) return;
+    if (!window.confirm(`确定删除这条任务记录吗？${fileNote}`)) {
+      return;
+    }
     try {
-      await request(`/api/tasks/${taskId}`, { method: 'DELETE' });
+      const r = await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, refs.base || '');
       refs.root.remove();  // 从 DOM 移除
     } catch (error) {
       showError(error.message || '删除失败', error.hint);
