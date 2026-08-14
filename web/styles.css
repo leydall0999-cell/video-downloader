@@ -158,6 +158,18 @@ img { max-width: 100%; display: block; }
 }
 .btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--brand-strong), #5457ea); }
 .btn-block { width: 100%; margin-top: 1rem; }
+
+/* 在线观看 + 清晰度选择 */
+.watch-row { display: flex; align-items: stretch; gap: .6rem; margin-top: 1rem; }
+.watch-row .btn { flex: 1 1 auto; margin-top: 0; }
+.watch-quality {
+  flex: 0 0 auto; max-width: 46%; min-width: 132px;
+  border: 1.5px solid var(--line); border-radius: var(--radius-md);
+  padding: .6rem .7rem; font-size: .9rem; font-family: inherit; color: var(--text);
+  background: #fff; cursor: pointer; outline: none; transition: border-color .18s, box-shadow .18s;
+}
+.watch-quality:hover { border-color: var(--brand); }
+.watch-quality:focus-visible { outline: 3px solid rgba(79, 70, 229, .35); outline-offset: 2px; }
 .btn-ghost { background: #f2f3f8; color: var(--text-mute); border-color: var(--line); }
 .btn-ghost:hover:not(:disabled) { background: #e9ebf3; color: var(--text); }
 .task-delete { color: #b91c1c; }
@@ -245,6 +257,21 @@ img { max-width: 100%; display: block; }
 .cookie-status.warn { color: #d97706; font-weight: 600; }
 .cookie-status.err { color: #dc2626; }
 .cookie-status.loading { color: var(--text-mute); }
+
+/* Cookie 操作指引 */
+.cookie-help { margin-top: .6rem; border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: .3rem .7rem; }
+.cookie-help-summary { cursor: pointer; font-size: .8rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
+.cookie-help-summary::-webkit-details-marker { display: none; }
+.cookie-help-summary::before { content: "\25B8  "; }
+.cookie-help[open] .cookie-help-summary::before { content: "\25BE  "; }
+.cookie-help-body { margin-top: .5rem; font-size: .8rem; color: var(--text-mute); line-height: 1.6; }
+.cookie-help-step { margin: .3rem 0; }
+.cookie-help-steps { margin: .3rem 0 .3rem 1.1rem; padding: 0; }
+.cookie-help-steps li { margin: .25rem 0; }
+.cookie-help-note { font-size: .76rem; color: #94a0b4; margin: .4rem 0; }
+.cookie-help-copy { font-size: .76rem; font-weight: 600; color: var(--brand-strong); background: rgba(79, 70, 229, .08); border: 1px solid rgba(79, 70, 229, .25); border-radius: var(--radius-sm); padding: .35rem .7rem; cursor: pointer; transition: background .15s; }
+.cookie-help-copy:hover { background: rgba(79, 70, 229, .16); }
+.cookie-help-copy:active { transform: translateY(1px); }
 
 /* ---------------- chips ---------------- */
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .9rem; }

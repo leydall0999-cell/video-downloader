@@ -54,6 +54,13 @@ class DownloadTask:
     extract_status: str = "none"   # none / running / done / error
     extracted_text: dict = field(default_factory=dict)
     source_url: str = ""
+    # 断点续传：保存首次下载时的关键参数，供「重试/继续」时原样复用（避免从 0 重下）
+    concurrent_fragments: int = 0
+    downloader_type: str = ""
+    cookie: str = ""
+    proxy: str = ""
+    # 续传标记：取消/失败时若工作目录残留 .part 分片，置 True，前端据此提示「可断点续传」
+    resumable: bool = False
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -114,6 +121,7 @@ class DownloadTask:
             "extract_status": self.extract_status,
             "extracted_text": self.extracted_text,
             "source_url": self.source_url,
+            "resumable": self.resumable,
             "steps": self.steps,
             "logs": self.logs,
         }
@@ -129,13 +137,17 @@ class TaskStore:
         self._root.mkdir(parents=True, exist_ok=True)
 
     def create(self, *, url: str, title: str, platform: str, quality: str,
-                quality_key: str = "best", extract_mode: str = "") -> DownloadTask:
+                quality_key: str = "best", extract_mode: str = "",
+                concurrent_fragments: int = 0, downloader_type: str = "",
+                cookie: str = "", proxy: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
         task = DownloadTask(
             id=task_id, url=url, title=title, platform=platform, quality=quality,
             quality_key=quality_key, workdir=workdir, extract_mode=extract_mode,
+            concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
+            cookie=cookie, proxy=proxy,
         )
         with self._lock:
             self._tasks[task_id] = task

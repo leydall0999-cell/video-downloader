@@ -92,6 +92,50 @@ if _c_dir:
 if _c_py:
     os.environ["VDL_COMMENTARY_PYTHON"] = _c_py
 
+# ---- 从用户配置文件读取 VDL_* 代理设置（让打包后的 .app 也能用国内/海外出口，无需改系统代理）----
+def _load_external_config() -> dict:
+    """读取用户可写配置目录下的 config.json，把其中的 VDL_PROXY_CN / VDL_PROXY 等注入 os.environ。
+
+    用途：用户租了国内 VPS 或买了付费国内节点后，把代理地址写进配置文件，.app 双击即可生效，
+    不必去改 macOS 系统代理，也不必重打包。downloader._resolve_proxy 在每次请求时读取这些变量。
+
+    优先级：运行时已存在的环境变量(launchd/shell 注入) > 配置文件 > _resolve_proxy 自动检测系统代理。
+    """
+    import json
+
+    candidates = []
+    if sys.platform == "darwin":
+        candidates.append(Path.home() / "Library" / "Application Support" / "VideoDownloader" / "config.json")
+    candidates.append(Path.home() / ".config" / "videodownloader" / "config.json")
+    candidates.append(BASE / "config.json")  # 便携 / 调试用
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text("utf-8"))
+        except Exception as e:  # 坏 JSON 不致命，跳过并报警
+            print(f"[VDL] 配置文件损坏已忽略 {path}: {e}", file=sys.stderr)
+            continue
+        if not isinstance(data, dict):
+            continue
+        applied = []
+        for key in ("VDL_PROXY_CN", "VDL_PROXY", "VDL_MAX_FILE_MB"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                if key not in os.environ:        # 显式环境变量优先于配置文件
+                    os.environ[key] = val.strip()
+                    applied.append(f"{key}=<set>")
+                else:
+                    applied.append(f"{key}(env-override)")
+        if applied:
+            print(f"[VDL] 已从 {path} 应用配置: {', '.join(applied)}", file=sys.stderr)
+        return data  # 命中第一个存在的配置文件即止
+    return {}
+
+
+_load_external_config()
+
 if PLUGINS_DIR.exists():
     sys.path.insert(0, str(BASE))
 
@@ -184,6 +228,10 @@ def _find_free_port(start: int = 8321, tries: int = 80) -> int:
 _env_port = (os.environ.get("VDL_PORT") or "").strip()
 PORT = int(_env_port) if _env_port else _find_free_port()
 HOST = "127.0.0.1"
+API_URL = f"http://{HOST}:{PORT}"          # 后端 FastAPI 地址（API 调用用这个）
+# 使用 http:// 模式加载（相对路径天然工作，CSS/JS/图片无跨协议问题）。
+# 通过 PyObjC 配置 WKWebViewConfiguration 绕过系统代理/PAC/VPN 网络扩展(NE)，
+# 解决 Karing 等 NE 在网卡层劫持 WKWebView 导致的 "Load failed"。
 URL = f"http://{HOST}:{PORT}"
 
 
@@ -445,6 +493,7 @@ def main() -> None:
     # 开窗口 → 优先原生窗口（pywebview），回退浏览器
     try:
         import webview
+
         window = webview.create_window(
             title="VideoDownloader",
             url=URL,

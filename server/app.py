@@ -36,12 +36,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import File as _FastAPIFile, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from urllib.parse import urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import downloader
 import library as library_mod
@@ -1320,6 +1320,10 @@ class DownloadRequest(BaseModel):
     extract_script: str = Field(default="", max_length=16)
     # 精确指定 CDN 源（如腾讯 hd-1/shd-3），空则按清晰度自适应；由「测速选源」自动填入
     format_id: str = Field(default="", max_length=64)
+    # 下载加速：m3u8 分片并行段数（0=用默认 32，范围 1-64）。腾讯等单连接限速站提高可线性提速
+    concurrent_fragments: int = Field(default=0, ge=0, le=64)
+    # 下载器：native（默认，yt-dlp 原生）/ aria2c（外部下载器，需本机已装，缺失自动回退）
+    downloader: str = Field(default="native", max_length=16)
 
 
 @app.exception_handler(LinkError)
@@ -1497,6 +1501,128 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
     }
 
 
+def _stream_referer(host: str) -> str:
+    """按平台返回防盗链 Referer：腾讯视频 HLS 分片必须带正确的 Referer 才返回 200。"""
+    if "v.qq.com" in host:
+        return "https://v.qq.com/"
+    if "douyin" in host:
+        return "https://www.douyin.com/"
+    if "bilibili" in host:
+        return "https://www.bilibili.com/"
+    return f"https://{host}/" if host else "https://v.qq.com/"
+
+
+def _rewrite_m3u8(text: str, base_url: str, proxy_prefix: str) -> str:
+    """把 m3u8 内每条 URL 绝对化后改写成指向本端点的代理 URL。
+
+    - 非注释、非空行即 URL 行（子 playlist / ts 分片），整行改写；
+    - #EXT-X-KEY / #EXT-X-MEDIA 等标签行里的 URI="..." 属性也改写（加密流的 key 直连
+      会被防盗链 403，必须走本端点带 Referer）。
+    这样原生 <video> 播放器解析 master→子 playlist→ts→key 时，每一跳都走本端点。
+    """
+    uri_re = re.compile(r'(URI=")([^"]+)(")')
+
+    def _rewrite_uri(m: "re.Match") -> str:
+        seg = m.group(2).strip()
+        abs_url = urljoin(base_url, seg)
+        return m.group(1) + proxy_prefix + quote(abs_url, safe="") + m.group(3)
+
+    out: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            out.append(line)
+            continue
+        if stripped.startswith("#"):
+            if "URI=" in line:
+                line = uri_re.sub(_rewrite_uri, line)
+            out.append(line)
+            continue
+        abs_url = urljoin(base_url, stripped)
+        out.append(proxy_prefix + quote(abs_url, safe=""))
+    return "\n".join(out)
+
+
+@app.get("/api/stream/proxy")
+def stream_proxy(u: str = "", cookie: str = "", request: Request = None):
+    """在线观看流代理：浏览器（WKWebView）直连腾讯会被防盗链 403，且原生 HLS 无法自定义
+    Referer 头。这里由后端带 Referer/Cookie 去源站拉取回传，从而绕开防盗链。
+
+    - 对非 m3u8（MP4/ts 分片等）原样流式透传；
+    - 对 m3u8 清单：把内部相对/绝对 URL 改写为指向本端点的代理 URL，这样原生 <video>
+      播放器解析 master→子 playlist→ts 分片时，每一跳都走本端点（后端统一带 Referer），
+      无需 hls.js，macOS 原生 HLS 即可播放。
+    """
+    if not u:
+        raise HTTPException(status_code=400, detail="缺少 u 参数")
+    _assert_safe_url(u)  # SSRF 护栏：拒绝内网 / 环回 / 保留地址
+    host = _host_of(u)
+    cookie_text = (cookie or "").strip()
+    if cookie_text.lower().startswith("cookie:"):
+        cookie_text = cookie_text[7:].strip()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": _stream_referer(host),
+    }
+    if cookie_text:
+        headers["Cookie"] = cookie_text
+    try:
+        resp = requests.get(u, headers=headers, stream=True, timeout=(10, 120))
+    except Exception as exc:  # noqa: BLE001 - 上游不可达，统一转 502 让前端提示
+        raise HTTPException(status_code=502, detail=f"上游拉取失败：{_clean_message(str(exc))}") from None
+    if resp.status_code >= 400:
+        detail = f"上游返回 {resp.status_code}"
+        if resp.status_code in (401, 403):
+            detail += "（防盗链被拒，可能需要登录 Cookie，可在「高级选项」粘贴后重试）"
+        resp.close()
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    content_type = (resp.headers.get("Content-Type") or "").lower()
+    is_m3u8 = ("mpegurl" in content_type or content_type in ("application/x-mpegurl", "")
+               or ".m3u8" in u)
+    base = (str(request.base_url).rstrip("/") if request is not None else "http://127.0.0.1")
+    proxy_prefix = f"{base}/api/stream/proxy?u="
+
+    if is_m3u8:
+        raw = resp.content.decode("utf-8", errors="replace")
+        resp.close()
+        # 仅当确实是 HLS 清单时才改写，避免误伤（例如 .m3u8 后缀的其它文本）
+        if raw.lstrip().startswith("#EXTM3U"):
+            rewritten = _rewrite_m3u8(raw, u, proxy_prefix)
+            return Response(
+                rewritten,
+                media_type="application/vnd.apple.mpegurl",
+                headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
+            )
+        # 不是真正的 m3u8：当普通文本透传
+        return Response(
+            raw,
+            media_type=(content_type or "application/octet-stream"),
+            headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
+        )
+
+    def _gen():
+        try:
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            resp.close()
+
+    return StreamingResponse(
+        _gen(),
+        media_type=(content_type or "application/octet-stream"),
+        headers={
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:
     """探测本机浏览器是否含目标站点的登录 Cookie，供前端「检测登录态」与解析后自动提示。
@@ -1544,8 +1670,12 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
         quality=downloader.quality_label(payload.quality),
         quality_key=payload.quality,
         extract_mode=extract_mode,
+        concurrent_fragments=payload.concurrent_fragments,
+        downloader_type=payload.downloader,
+        cookie=payload.cookie,
+        proxy=payload.proxy,
     )
-    scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES, payload.format_id)
+    scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     return {
         "task_id": task.id,
         "status": task.status,
@@ -1625,12 +1755,24 @@ def retry_task(task_id: str) -> dict:
     if task.status not in ("failed", "canceled"):
         raise HTTPException(status_code=400, detail="仅失败 / 已取消的任务可以重试")
     task.cancel_requested = False
+    # 断点续传：工作目录残留 .part 分片则从中断处接上（复用并发/下载器/cookie/proxy），
+    # 否则从头重下。
+    resume = downloader._has_partial(task.workdir)
+    # 复用首次下载时的关键参数，避免续传时退化成默认配置（尤其 cookie 决定能否取到源）
     store.update(
-        task_id, status="pending", error="", hint="", progress=0.0,
-        downloaded_bytes=0, total_bytes=0, speed=0.0, eta=0, filesize=0, filename="",
+        task_id, status="pending", error="", hint="",
+        progress=task.progress if resume else 0.0,
+        downloaded_bytes=task.downloaded_bytes if resume else 0,
+        total_bytes=task.total_bytes if resume else 0,
+        speed=0.0, eta=0, filesize=0, filename="",
+        resumable=False,
     )
-    scheduler.submit(downloader.run_download, task, store, task.quality_key, "", "", BATCH_RETRIES_DEFAULT)
-    return {"task_id": task_id, "status": "pending"}
+    scheduler.submit(
+        downloader.run_download, task, store, task.quality_key,
+        task.cookie, task.proxy, BATCH_RETRIES_DEFAULT, "",
+        task.concurrent_fragments, task.downloader_type, resume,
+    )
+    return {"task_id": task_id, "status": "pending", "resume": resume}
 
 
 @app.post("/api/tasks/{task_id}/extract-text")

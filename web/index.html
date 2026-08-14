@@ -94,6 +94,21 @@
               <button type="button" id="cookieDetectBtn" class="cookie-detect-btn">检测浏览器登录态</button>
               <span id="cookieStatus" class="cookie-status"></span>
             </div>
+            <details class="cookie-help" id="cookieHelp">
+              <summary class="cookie-help-summary">如何获取 / 复制浏览器 Cookie？</summary>
+              <div class="cookie-help-body">
+                <p class="cookie-help-step"><b>方式 A（推荐，免粘贴）：</b>在本机 Chrome / Edge / Brave 登录腾讯视频等平台，app 解析时会自动读取浏览器 Cookie，无需手动粘贴。点上方「检测浏览器登录态」可确认是否已读到。</p>
+                <p class="cookie-help-step"><b>方式 B（手动复制，用于 Safari / Firefox、指定账号、或自动读取失败）：</b></p>
+                <ol class="cookie-help-steps">
+                  <li>浏览器打开并<b>登录</b>目标站点（如 v.qq.com）。</li>
+                  <li>按 <code>F12</code>（Mac：<code>⌘+⌥+I</code>）打开开发者工具 → <b>Application（应用）</b> → 左侧 <b>Cookies</b> → 选站点域名 → 复制整列 Cookie 值；
+                    <br>或切到 <b>Console（控制台）</b> 输入 <code>document.cookie</code> 复制整串。</li>
+                  <li>把复制到的字符串粘贴到上方「会话 Cookie」文本框。</li>
+                </ol>
+                <p class="cookie-help-note">Cookie 仅用于本次解析/下载，服务端不留存；VIP 账号需保持订阅有效才能拿到高画质。</p>
+                <button type="button" id="cookieHelpCopy" class="cookie-help-copy">复制操作指引</button>
+              </div>
+            </details>
             <label class="adv-label" for="proxyInput">代理地址（可选）</label>
             <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
               placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
@@ -195,6 +210,19 @@
       <p class="extract-hint">下载完成后自动提取，可在任务卡片查看并一键复制。</p>
     </div>
 
+    <div class="extract-block" id="speedBlock">
+      <div class="block-title">下载加速（限速站适用）</div>
+      <label class="adv-label" for="concurrentInput">并行分片数：<span id="concurrentVal">16</span>（越高越快，过高易被限）</label>
+      <input id="concurrentInput" class="adv-range" type="range" min="8" max="64" step="8" value="16"
+             oninput="document.getElementById('concurrentVal').textContent=this.value" />
+      <label class="adv-label" for="downloaderSelect">下载器</label>
+      <select id="downloaderSelect" class="adv-input" aria-label="下载器选项">
+        <option value="native">原生（默认）</option>
+        <option value="aria2c">aria2c（需本机已装，未装自动回退）</option>
+      </select>
+      <p class="extract-hint">腾讯等站按单连接限速，提高并行数可线性提速（实测 16→32 约翻倍）。</p>
+    </div>
+
     <button type="button" id="downloadBtn" class="btn btn-primary btn-block">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M4 20h16" />
@@ -202,10 +230,36 @@
       开始下载
     </button>
 
+    <div id="watchRow" class="watch-row" hidden>
+      <button type="button" id="watchBtn" class="btn btn-secondary">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+        在线观看
+      </button>
+      <select id="watchQuality" class="select watch-quality" aria-label="选择观看清晰度" title="选择观看清晰度"></select>
+    </div>
+
     <p class="direct-hint" id="directHint" hidden></p>
     <button type="button" class="btn btn-ghost btn-block" id="serverFallbackBtn" hidden>源站直连失败？改用服务器下载</button>
 
   </section>
+
+  <!-- 在线观看弹窗 -->
+  <div id="watchModal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.78);display:flex;align-items:center;justify-content:center;z-index:1000;padding:24px;">
+    <div style="background:#0f0f12;border-radius:12px;max-width:900px;width:100%;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;color:#fff;border-bottom:1px solid #2a2a30;">
+        <h3 id="watchTitle" style="margin:0;font-size:15px;font-weight:600;">在线观看</h3>
+        <button type="button" id="watchClose" style="background:none;border:none;color:#aaa;font-size:24px;line-height:1;cursor:pointer;padding:0 4px;">×</button>
+      </div>
+      <video id="watchVideo" controls preload="metadata" playsinline
+             style="display:block;width:100%;max-height:70vh;background:#000;"></video>
+      <div style="padding:10px 16px;color:#bbb;font-size:12px;">
+        <p id="watchStatus" style="margin:0 0 6px;color:#ffd479;">正在连接源站…</p>
+        <p style="margin:0;line-height:1.5;">在线观看为实时流，受单连接限速可能缓冲；如需稳定观看，建议下载完成后在「媒体库」播放。</p>
+      </div>
+    </div>
+  </div>
 
   <!-- 任务列表 -->
   <section class="panel tasks-panel" id="tasksPanel" hidden aria-live="polite">

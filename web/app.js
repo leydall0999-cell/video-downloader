@@ -65,6 +65,14 @@
     uploader: $('videoUploader'),
     qualityGrid: $('qualityGrid'),
     downloadBtn: $('downloadBtn'),
+    watchRow: $('watchRow'),
+    watchBtn: $('watchBtn'),
+    watchQuality: $('watchQuality'),
+    watchModal: $('watchModal'),
+    watchVideo: $('watchVideo'),
+    watchTitle: $('watchTitle'),
+    watchStatus: $('watchStatus'),
+    watchClose: $('watchClose'),
     tasksPanel: $('tasksPanel'),
     taskList: $('taskList'),
     badge: $('engineBadge'),
@@ -77,10 +85,14 @@
     cookieDetectBtn: $('cookieDetectBtn'),
     cookieStatus: $('cookieStatus'),
     proxyInput: $('proxyInput'),
+    concurrentInput: $('concurrentInput'),
+    downloaderSelect: $('downloaderSelect'),
     qualityBlock: $('qualityBlock'),
     extractSelect: $('extractSelect'),
     directHint: $('directHint'),
     serverFallbackBtn: $('serverFallbackBtn'),
+    cookieHelp: $('cookieHelp'),
+    cookieHelpCopy: $('cookieHelpCopy'),
     nodeBar: $('nodeBar'),
     nodeDot: $('nodeDot'),
     nodeText: $('nodeText'),
@@ -454,7 +466,10 @@
       headers['Content-Type'] = 'application/json';
     }
     const merged = { ...headers, ...(options.headers || {}) };
-    const doFetch = () => fetch(base + path, { ...options, headers: merged });
+    // file:// 模式下相对路径会解析到 file:// 协议（无法请求后端），
+    // 此时使用 launcher 通过 evaluate_js 注入的 window.VDL_API_BASE（绝对 http 地址）。
+    const apiBase = base || window.VDL_API_BASE || '';
+    const doFetch = () => fetch(apiBase + path, { ...options, headers: merged });
     let response = await doFetch();
     if (response.status === 401) {
       // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
@@ -633,11 +648,30 @@
 
   // ------------------------------------------------------------------ 提示
 
+  // 把 WebKit 原始网络错误（load failed / Failed to fetch / NetworkError）
+  // 转成用户友好的中文提示，避免用户看到吓人的技术报错。
+  const _friendlyNetworkError = (msg) => {
+    const lower = String(msg || '').toLowerCase();
+    if (lower === 'load failed' || lower === 'failed to fetch' || lower === 'networkerror'
+        || lower.includes('load failed') || lower.includes('failed to fetch')
+        || lower.includes('networkerror') || lower.includes('network error')) {
+      return {
+        message: '连接本地服务失败',
+        hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。'
+      };
+    }
+    return null;
+  };
+
   const showError = (message, hint = '') => {
-    const msg = String(message || '').trim();
+    let msg = String(message || '').trim();
+    let h = String(hint || '').trim();
     if (!msg) { clearError(); return; }
+    // 网络层原始错误 → 友好提示
+    const net = _friendlyNetworkError(msg);
+    if (net) { msg = net.message; h = h || net.hint; }
     el.alertTitle.textContent = msg;
-    el.alertHint.textContent = String(hint || '').trim();
+    el.alertHint.textContent = h;
     el.alertHint.hidden = !String(hint || '').trim();
     el.alert.hidden = false;
   };
@@ -783,6 +817,37 @@
       el.serverFallbackBtn.hidden = true;
       renderQualities(data.qualities, data.sources || []);
     }
+    // 在线观看：按清晰度生成下拉，默认选最高画质
+    const watchOpts = (video.watch_options && video.watch_options.length) ? video.watch_options : null;
+    if (watchOpts) {
+      el.watchQuality.hidden = false;
+      el.watchQuality.replaceChildren();
+      watchOpts.forEach((opt) => {
+        const o = document.createElement("option");
+        o.value = opt.key;
+        o.textContent = opt.label;
+        o.dataset.url = opt.url || "";
+        o.dataset.hls = String(!!opt.is_hls);
+        el.watchQuality.appendChild(o);
+      });
+      const first = watchOpts[0];
+      el.watchBtn.dataset.url = first.url || "";
+      el.watchBtn.dataset.hls = String(!!first.is_hls);
+      el.watchRow.hidden = false;
+    } else if (video.play_url) {
+      // 兼容纯文件直链视频（无多清晰度 HLS）：只显示按钮、隐藏下拉
+      el.watchQuality.hidden = true;
+      el.watchQuality.replaceChildren();
+      el.watchBtn.dataset.url = video.play_url;
+      el.watchBtn.dataset.hls = String(!!video.is_hls);
+      el.watchRow.hidden = false;
+    } else {
+      el.watchRow.hidden = true;
+      el.watchQuality.hidden = false;
+      el.watchBtn.dataset.url = "";
+      el.watchBtn.dataset.hls = "false";
+    }
+    el.watchTitle.textContent = video.title || "在线观看";
     el.resultPanel.hidden = false;
   };
 
@@ -918,8 +983,16 @@
 
     // 慢速告警横幅：下载中且速率持续过低时展示提示 + 快捷动作
     renderSlowWarning(refs, task);
-    // 失败 / 已取消的任务展示「重试」按钮
-    refs.retry.hidden = !(task.status === 'failed' || task.status === 'canceled');
+    // 失败 / 已取消的任务展示「重试 / 继续下载」按钮
+    const canRetry = task.status === 'failed' || task.status === 'canceled';
+    refs.retry.hidden = !canRetry;
+    if (canRetry) {
+      // 断点续传：工作目录残留部分文件时，按钮提示「继续下载」而非「重试」
+      refs.retry.textContent = task.resumable ? '继续下载' : '重试';
+      refs.retry.title = task.resumable
+        ? '从上次中断处继续（已保留已下载部分，不会从头重下）'
+        : '重新下载';
+    }
     // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
     refs.del.hidden = active;
 
@@ -939,7 +1012,7 @@
     }
     refs.save.hidden = false;
     // 任务在哪个节点跑，文件就从哪个节点取
-    refs.save.href = `${refs.base || ''}/api/tasks/${task.task_id}/file`;
+    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file`;
     refs.save.setAttribute('download', task.filename || '');
     refs.save.textContent = '保存到本机 ⬇';
     refs.status.textContent = autoSave
@@ -1125,7 +1198,7 @@
           const st = await request('/api/convert/' + jobId, {}, base);
           if (st.status === 'completed') {
             clearInterval(timer);
-            refs.convertFile.href = `${base}/api/convert/${jobId}/file`;
+            refs.convertFile.href = `${base || window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
             refs.convertFile.setAttribute('download', st.filename || 'converted');
             refs.convertFile.hidden = false;
             refs.convertStatus.textContent = '转换完成 ✅';
@@ -1294,7 +1367,7 @@
       }
     }, POLL_FALLBACK_MS);
 
-    const source = new EventSource(`${base}/api/tasks/${taskId}/events`);
+    const source = new EventSource(`${base || window.VDL_API_BASE || ''}/api/tasks/${taskId}/events`);
     source.onmessage = (event) => handle(JSON.parse(event.data));
     source.onerror = () => source.close();
 
@@ -1332,6 +1405,10 @@
       } else {
         span.textContent = '⚠️ 未检测到浏览器登录态，部分平台需手动粘贴 Cookie 后才能下载';
         span.className = 'cookie-status warn';
+      }
+      // 未读到浏览器登录态时，自动展开操作指引，用户立刻看到手动复制步骤
+      if (!data || !data.available) {
+        if (el.cookieHelp) el.cookieHelp.open = true;
       }
     } catch (_) {
       span.textContent = '检测失败，可直接手动粘贴 Cookie';
@@ -1392,6 +1469,8 @@
           proxy: opts.proxy ?? resolved?.proxy ?? '',
           extract_script: el.extractSelect.value || '',
           format_id: opts.format_id ?? selectedFormatId ?? '',
+          concurrent_fragments: el.concurrentInput.value ? parseInt(el.concurrentInput.value, 10) || 0 : 0,
+          downloader: el.downloaderSelect ? el.downloaderSelect.value || 'native' : 'native',
         }),
       }, base);
       const taskId = data.task_id;
@@ -2920,10 +2999,64 @@
   el.cancelAllBtn.addEventListener('click', cancelAll);
   el.openFolderBtn.addEventListener('click', openDownloadFolder);
   el.downloadBtn.addEventListener('click', handleDownload);
+  // 在线观看：经后端 /api/stream/proxy 代理（带 Referer 绕开防盗链，原生 HLS 播放）
+  el.watchBtn.addEventListener('click', openWatch);
+  // 切换观看清晰度：更新播放用的 url / 是否 HLS，下次点「在线观看」即用所选清晰度
+  el.watchQuality.addEventListener('change', () => {
+    const o = el.watchQuality.selectedOptions && el.watchQuality.selectedOptions[0];
+    if (!o) return;
+    el.watchBtn.dataset.url = o.dataset.url || "";
+    el.watchBtn.dataset.hls = o.dataset.hls || "false";
+  });
+  el.watchClose.addEventListener('click', closeWatch);
+  el.watchModal.addEventListener('click', (e) => { if (e.target === el.watchModal) closeWatch(); });
+  function openWatch() {
+    const url = el.watchBtn.dataset.url;
+    if (!url) return;
+    const base = window.VDL_API_BASE || "";
+    let proxy = base + "/api/stream/proxy?u=" + encodeURIComponent(url);
+    const cookie = (el.cookieInput && el.cookieInput.value || "").trim();
+    if (cookie) proxy += "&cookie=" + encodeURIComponent(cookie);
+    el.watchTitle.textContent = el.videoTitle.textContent || "在线观看";
+    el.watchStatus.textContent = "正在连接源站…";
+    el.watchStatus.style.color = "#ffd479";
+    el.watchModal.hidden = false;
+    const v = el.watchVideo;
+    v.onerror = v.onloadeddata = v.onplaying = null;
+    v.src = proxy;
+    v.play().catch(() => {});
+    v.onloadeddata = v.onplaying = () => {
+      el.watchStatus.textContent = "正在播放（实时流，受单连接限速可能缓冲，建议下载后看）";
+      el.watchStatus.style.color = "#9be29b";
+    };
+    v.onerror = () => {
+      el.watchStatus.textContent = "播放失败：源站拒绝或需登录 Cookie，请在「高级选项」粘贴浏览器 Cookie 后重试";
+      el.watchStatus.style.color = "#ff8a8a";
+    };
+  }
+  function closeWatch() {
+    const v = el.watchVideo;
+    try { v.pause(); } catch (e) {}
+    v.onerror = v.onloadeddata = v.onplaying = null;
+    v.removeAttribute("src");
+    try { v.load(); } catch (e) {}
+    el.watchModal.hidden = true;
+  }
   el.cookieDetectBtn.addEventListener('click', () => {
     const u = el.input.value.trim();
     if (!u) { el.cookieStatus.textContent = '请先粘贴视频链接再检测'; el.cookieStatus.className = 'cookie-status warn'; return; }
     updateCookieStatus(u);
+  });
+  // 「复制操作指引」：一键复制 Cookie 获取步骤文本（便于照做或转发）
+  el.cookieHelpCopy.addEventListener('click', async () => {
+    const txt = (el.cookieHelp.innerText || '').replace(/\s+/g, ' ').trim();
+    try {
+      await navigator.clipboard.writeText(txt);
+      el.cookieHelpCopy.textContent = '已复制 ✓';
+    } catch (e) {
+      el.cookieHelpCopy.textContent = '复制失败，请手动选择';
+    }
+    setTimeout(() => { el.cookieHelpCopy.textContent = '复制操作指引'; }, 1500);
   });
   el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
