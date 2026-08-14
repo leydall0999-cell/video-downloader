@@ -1510,7 +1510,7 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
         "platform": {"key": platform.key, "name": platform.name},
         "video": downloader.summarize(info),
         "qualities": downloader.build_quality_options(info),
-        "sources": sources,
+        "sources": [],
     }
 
 
