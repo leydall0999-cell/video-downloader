@@ -64,6 +64,8 @@
     platform: $('videoPlatform'),
     uploader: $('videoUploader'),
     qualityGrid: $('qualityGrid'),
+    hqTip: $('hqTip'),
+    hqTipText: $('hqTipText'),
     downloadBtn: $('downloadBtn'),
     watchRow: $('watchRow'),
     watchBtn: $('watchBtn'),
@@ -1441,12 +1443,23 @@
           ? `${data.browser}（${data.profile}）` : data.browser;
         span.textContent = `✅ 已自动读取 ${where} 的${name}登录态，无需手动粘贴`;
         span.className = 'cookie-status ok';
+        // 已登录：正向确认已解锁更高分辨率
+        el.hqTip.hidden = false;
+        el.hqTip.className = 'hq-tip hq-tip--ok';
+        el.hqTipText.textContent = `已自动读取${name}登录态，已为你解锁更高分辨率。`;
       } else if (data.browser) {
         span.textContent = `⚠️ 未在 ${data.browser} 中检测到${name}登录态，如需更快速度/会员内容请先在浏览器登录，或手动粘贴 Cookie`;
         span.className = 'cookie-status warn';
+        // 未登录：引导登录后重新解析可获取更高分辨率
+        el.hqTip.hidden = false;
+        el.hqTip.className = 'hq-tip hq-tip--warn';
+        el.hqTipText.textContent = `提示：在浏览器登录${name}后，重新复制视频地址到此处解析，可获取更高分辨率。`;
       } else {
         span.textContent = '⚠️ 未检测到浏览器登录态，部分平台需手动粘贴 Cookie 后才能下载';
         span.className = 'cookie-status warn';
+        el.hqTip.hidden = false;
+        el.hqTip.className = 'hq-tip hq-tip--warn';
+        el.hqTipText.textContent = '提示：在浏览器登录对应平台后，重新复制视频地址解析，可获取更高分辨率。';
       }
       // 未读到浏览器登录态时，自动展开操作指引，用户立刻看到手动复制步骤
       if (!data || !data.available) {
@@ -1478,6 +1491,7 @@
     clearError();
     setLoading(true);
     el.resultPanel.hidden = true;
+    el.hqTip.hidden = true;   // 每次重新解析时重置「更高分辨率」提示，避免残留
     const base = baseFor(url);
     try {
       resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
