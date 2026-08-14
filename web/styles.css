@@ -170,6 +170,14 @@ img { max-width: 100%; display: block; }
 }
 .watch-quality:hover { border-color: var(--brand); }
 .watch-quality:focus-visible { outline: 3px solid rgba(79, 70, 229, .35); outline-offset: 2px; }
+/* 在线观看弹窗：hidden 移除后 display:flex 才生效，避免内联样式覆盖 hidden 属性 */
+.watch-modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.78);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; padding: 24px;
+}
+.watch-modal[hidden] { display: none !important; }
 .btn-ghost { background: #f2f3f8; color: var(--text-mute); border-color: var(--line); }
 .btn-ghost:hover:not(:disabled) { background: #e9ebf3; color: var(--text); }
 .task-delete { color: #b91c1c; }
