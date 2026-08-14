@@ -870,7 +870,6 @@
       cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
-      slowWarn: node.querySelector('[data-slow-warn]'),
       watchBtn: node.querySelector('[data-watch]'),
       watchQuality: node.querySelector('[data-watch-quality]'),
       stepsBox: node.querySelector('[data-steps-box]'),
@@ -950,8 +949,6 @@
     refs.error.hidden = !failed;
     refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
 
-    // 慢速告警横幅：下载中且速率持续过低时展示提示 + 快捷动作
-    renderSlowWarning(refs, task);
 
     // 在线观看：任务面板也显示观看按钮（解析结果里的播放地址存入任务后可在此直接打开）
     const twUrl = task.play_url || refs._watchUrl || '';
