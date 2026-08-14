@@ -66,9 +66,6 @@
     qualityGrid: $('qualityGrid'),
     hqTip: $('hqTip'),
     hqTipText: $('hqTipText'),
-    cookieCacheClearBtn: $('cookieCacheClearBtn'),
-    ydlpUpdateBtn: $('ydlpUpdateBtn'),
-    advActionStatus: $('advActionStatus'),
     downloadBtn: $('downloadBtn'),
     watchRow: $('watchRow'),
     watchBtn: $('watchBtn'),
@@ -1373,53 +1370,6 @@
     tencent: '腾讯视频', douyin: '抖音', kuaishou: '快手',
     xiaohongshu: '小红书', bilibili: 'B站', youtube: 'YouTube',
   }[k] || '该平台');
-
-  /** 调用 /api/cookie/status 检测本机浏览器是否含目标站登录态，并刷新状态徽章。
-   *  命中则告知「已自动读取，无需手动粘贴」；未命中则提示先登录或手动粘贴。 */
-  const updateCookieStatus = async (url) => {
-    const btn = el.cookieDetectBtn;
-    const span = el.cookieStatus;
-    if (!url) { span.textContent = ''; span.className = 'cookie-status'; return; }
-    btn.disabled = true;
-    span.textContent = '检测中…';
-    span.className = 'cookie-status loading';
-    try {
-      const data = await request(`/api/cookie/status?url=${encodeURIComponent(url)}`);
-      const name = platCN(data.platform);
-      if (data.available) {
-        const where = data.profile && data.profile !== 'Default'
-          ? `${data.browser}（${data.profile}）` : data.browser;
-        span.textContent = `✅ 已自动读取 ${where} 的${name}登录态，无需手动粘贴`;
-        span.className = 'cookie-status ok';
-        // 已登录：正向确认已解锁更高分辨率
-        el.hqTip.hidden = false;
-        el.hqTip.className = 'hq-tip hq-tip--ok';
-        el.hqTipText.textContent = `已自动读取${name}登录态，已为你解锁更高分辨率。`;
-      } else if (data.browser) {
-        span.textContent = `⚠️ 未在 ${data.browser} 中检测到${name}登录态，如需更快速度/会员内容请先在浏览器登录，或手动粘贴 Cookie`;
-        span.className = 'cookie-status warn';
-        // 未登录：引导登录后重新解析可获取更高分辨率
-        el.hqTip.hidden = false;
-        el.hqTip.className = 'hq-tip hq-tip--warn';
-        el.hqTipText.textContent = `提示：在浏览器登录${name}后，重新复制视频地址到此处解析，可获取更高分辨率。`;
-      } else {
-        span.textContent = '⚠️ 未检测到浏览器登录态，部分平台需手动粘贴 Cookie 后才能下载';
-        span.className = 'cookie-status warn';
-        el.hqTip.hidden = false;
-        el.hqTip.className = 'hq-tip hq-tip--warn';
-        el.hqTipText.textContent = '提示：在浏览器登录对应平台后，重新复制视频地址解析，可获取更高分辨率。';
-      }
-      // 未读到浏览器登录态时，自动展开操作指引，用户立刻看到手动复制步骤
-      if (!data || !data.available) {
-        if (el.cookieHelp) el.cookieHelp.open = true;
-      }
-    } catch (_) {
-      span.textContent = '检测失败，可直接手动粘贴 Cookie';
-      span.className = 'cookie-status err';
-    } finally {
-      btn.disabled = false;
-    }
-  };
 
   const handleResolve = async (event) => {
     event.preventDefault();
@@ -3067,43 +3017,6 @@
     try { v.load(); } catch (e) {}
     el.watchModal.hidden = true;
   }
-  el.cookieDetectBtn.addEventListener('click', () => {
-    const u = el.input.value.trim();
-    if (!u) { el.cookieStatus.textContent = '请先粘贴视频链接再检测'; el.cookieStatus.className = 'cookie-status warn'; return; }
-    updateCookieStatus(u);
-  });
-  el.cookieCacheClearBtn.addEventListener('click', async () => {
-    el.advActionStatus.textContent = '清除中…';
-    el.advActionStatus.className = 'cookie-status loading';
-    try {
-      const r = await request('/api/cookie/cache/clear', { method: 'POST' });
-      el.advActionStatus.textContent = `已清除 ${r.cleared} 条本机 Cookie 缓存（不影响浏览器）`;
-      el.advActionStatus.className = 'cookie-status ok';
-    } catch (_) {
-      el.advActionStatus.textContent = '清除失败';
-      el.advActionStatus.className = 'cookie-status err';
-    }
-  });
-  el.ydlpUpdateBtn.addEventListener('click', async () => {
-    el.advActionStatus.textContent = '正在检查并更新解析器…';
-    el.advActionStatus.className = 'cookie-status loading';
-    try {
-      const r = await request('/api/ydlp/update', { method: 'POST' });
-      if (r.ok && r.updated) {
-        el.advActionStatus.textContent = `已更新 yt-dlp 至 ${r.version}，重启后生效`;
-        el.advActionStatus.className = 'cookie-status ok';
-      } else if (r.ok && !r.updated) {
-        el.advActionStatus.textContent = `解析器已是最新（${r.version}）`;
-        el.advActionStatus.className = 'cookie-status ok';
-      } else {
-        el.advActionStatus.textContent = `更新失败：${r.error || ''}`;
-        el.advActionStatus.className = 'cookie-status err';
-      }
-    } catch (_) {
-      el.advActionStatus.textContent = '更新失败，请检查网络';
-      el.advActionStatus.className = 'cookie-status err';
-    }
-  });
   // 「复制操作指引」：一键复制 Cookie 获取步骤文本（便于照做或转发）
   el.cookieHelpCopy.addEventListener('click', async () => {
     const txt = (el.cookieHelp.innerText || '').replace(/\s+/g, ' ').trim();
