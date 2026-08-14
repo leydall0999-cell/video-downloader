@@ -126,9 +126,72 @@ DOWNLOAD_RETRIES = 3
 _MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "2048") or 2048)
 _MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
 # 国内站 m3u8 分片并行下载段数。低并发易触发 CDN 慢速 trickle（单连接被限速到几 KB/s），
-# 适度提高到 5 段可让多连接分摊带宽、显著改善长视频下载速度。
-# 通过 VDL_CONCURRENT_FRAGMENTS 环境变量可调（1-8）
-CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "5") or 5)
+# 适度提高可让多连接分摊带宽、显著改善长视频下载速度。
+# 腾讯等平台实测：单连接限速 ~1KB/s，但**单 IP 总带宽硬顶 ~18KB/s**（与并发数无关）。
+# 16 并发已吃满该上限（VPS 实测：5并发=5KB/s, 16并发=18KB/s, 32/64/aria2c 均未突破）。
+# 通过 VDL_CONCURRENT_FRAGMENTS 环境变量或下载请求字段可调（1-64，腾讯以外平台可能受益于更高值）。
+CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "16") or 16)
+# 可选的外部下载器：aria2c 对大量小 .ts 分片可开更多并行连接，某些平台比内置并发上限更高。
+# 需本机已安装 aria2c（打包 app 运行时依赖 PATH 上的 aria2c，缺失则自动回退原生下载器）。
+# 通过 VDL_DOWNLOADER 环境变量或下载请求字段切换（值为 "aria2c" 时启用）。
+VDL_DOWNLOADER = (os.environ.get("VDL_DOWNLOADER") or "native").strip().lower()
+_MAX_CONCURRENT = 64  # 单任务并发上限，防止被腾讯封总连接数
+
+
+def _clamp_concurrency(value: int) -> int:
+    if not value or value < 1:
+        return CONCURRENT_FRAGMENTS
+    return max(1, min(_MAX_CONCURRENT, int(value)))
+
+
+def _aria2c_path() -> str | None:
+    """返回 aria2c 可执行路径；未安装返回 None（调用方回退原生下载器）。
+
+    查找顺序：PATH（本机 brew/apt 安装）→ 打包内置（PyInstaller 冻结的 Resources/bin/aria2c，
+    或 macOS .app 的 Contents/Resources/bin/aria2c）。找到打包内置版时把它所在目录前置到
+    os.environ["PATH"]，确保 yt-dlp 的 subprocess 能按名检索到（yt-dlp 仅按名调用外部下载器）。
+    """
+    import shutil
+
+    found = shutil.which("aria2c")
+    if found:
+        return found
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "bin", "aria2c"))
+    exe = sys.executable
+    if exe:
+        # macOS .app: Contents/MacOS/VideoDownloader -> ../Resources/bin/aria2c
+        candidates.append(os.path.join(os.path.dirname(exe), "..", "Resources", "bin", "aria2c"))
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            bin_dir = os.path.dirname(os.path.abspath(c))
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+            return c
+    return None
+
+
+def _build_aria2c_args(concurrency: int) -> list[str]:
+    n = str(_clamp_concurrency(concurrency))
+    # -x 每服务器最大连接 / -s 分片数 / -j 整体并行下载数 / -k 最小分片大小
+    return ["-x", n, "-s", n, "-j", n, "-k", "1M", "--continue=true", "--max-tries=5"]
+
+
+def _has_partial(workdir: Path | None) -> bool:
+    """工作目录里是否残留可续传的部分文件（.part / .aria2 控制文件 / .FragN 分片）。"""
+    if not workdir or not workdir.is_dir():
+        return False
+    try:
+        for p in workdir.iterdir():
+            if not p.is_file():
+                continue
+            name = p.name
+            if name.endswith(".part") or name.endswith(".aria2") or ".Frag" in name or name.endswith(".ytdl"):
+                return True
+        return False
+    except OSError:
+        return False
 MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
 DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给合并/转码
@@ -742,14 +805,14 @@ class _ProgressReporter:
             self._store.update(self._task.id, status="merging", progress=98.0)
 
 
-def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "", format_id: str = "") -> dict:
+def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "", format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> dict:
     options = _base_options(DOWNLOAD_RETRIES, _host_of(task.url), cookie=cookie, proxy=proxy) | {
         # format_id 精确指定某个 CDN 源（如腾讯 hd-1/shd-3）；未指定时按清晰度自适应
         "format": format_id if format_id else _format_selector(quality_key),
         "outtmpl": {"default": f"%(title).{MAX_TITLE_CHARS}s.%(ext)s"},
         "paths": {"home": str(task.workdir)},
         "windowsfilenames": True,
-        "concurrent_fragment_downloads": CONCURRENT_FRAGMENTS,
+        "concurrent_fragment_downloads": _clamp_concurrency(concurrent_fragments),
         "progress_hooks": [reporter],
         "postprocessor_hooks": [reporter.on_postprocess],
         "overwrites": True,
@@ -757,6 +820,20 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
         # 仅保留最后的 TS→mp4 remux 调用 ffmpeg（快、低风险）
         "hls_prefer_native": True,
     }
+    # 断点续传：保留 .part 分片的前提下，显式开启 continue 让 yt-dlp 从上次中断处接上。
+    # aria2c 分支已在 _build_aria2c_args 内置 --continue=true；此处覆盖原生下载器场景。
+    if resume:
+        options["continue"] = True
+    # 外部下载器：aria2c（需本机已装）。未安装或类型非 aria2c 时自动回退原生，不影响下载。
+    use_aria2c = (downloader_type or VDL_DOWNLOADER) == "aria2c"
+    if use_aria2c:
+        a2 = _aria2c_path()
+        if a2:
+            options["downloader"] = "aria2c"
+            options["downloader_args"] = {"aria2c": _build_aria2c_args(concurrent_fragments)}
+            logger.info("使用 aria2c 下载器（并发=%d, 路径=%s）", _clamp_concurrency(concurrent_fragments), a2)
+        else:
+            logger.warning("请求 aria2c 但本机未安装，回退原生下载器（请 brew install aria2 或 apt install aria2）")
     if _MAX_FILE_BYTES:
         options["max_filesize"] = _MAX_FILE_BYTES
     if quality_key == AUDIO_KEY:
@@ -828,7 +905,7 @@ def build_slow_warning(host: str, speed_bps: float) -> dict:
     }
 
 
-def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "") -> None:
+def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
     max_retries=N 时，对网络/超时/连接类等「可重试」错误最多再试 N 次（指数退避）。
@@ -923,7 +1000,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 last["ts"] = time.time()
             # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
             th = threading.Thread(
-                target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id),
+                target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id, concurrent_fragments, downloader_type, resume),
                 name=f"dl-{task.id}-{attempt}", daemon=True,
             )
             th.start()
@@ -972,7 +1049,7 @@ def _format_bytes(n: int) -> str:
     return f"{value:.2f} PB"
 
 
-def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", format_id: str = "") -> None:
+def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
     """执行一次下载：先解析元数据，再进入实际下载。
 
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
@@ -983,7 +1060,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     info: dict[str, Any] = {}
     try:
-        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id)) as ydl:
+        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):
@@ -1010,20 +1087,32 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         # 保留 .part 文件，不清除——后续继续时 yt-dlp 断点续传
     except DownloadCanceled:
         _mark_step_error(task, "用户已取消")
-        store.update(task.id, status="canceled", error="已取消下载", progress=0.0)
-        store.clear_files(task.id)
+        # 断点续传：取消时【不清除】工作目录里的 .part 分片，仅当确实残留部分文件时标记可续传，
+        # 后续「继续下载」让 yt-dlp 从中断处接上（aria2c 走 --continue，原生下载器走 continue=True）。
+        resumable = _has_partial(task.workdir)
+        store.update(
+            task.id, status="canceled", error="已取消下载",
+            progress=task.progress, downloaded_bytes=task.downloaded_bytes,
+            resumable=resumable,
+        )
+        if not resumable:
+            store.clear_files(task.id)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
         err = _friendly_error(exc)
         _mark_step_error(task, err.message)
-        store.update(task.id, status="failed", error=err.message, hint=err.hint)
+        # 下载中断类失败（网络抖动/限速假死）往往残留部分分片，标记可续传
+        store.update(task.id, status="failed", error=err.message, hint=err.hint,
+                     resumable=_has_partial(task.workdir))
     except (OSError, ResolveError) as exc:
         message = getattr(exc, "message", None) or "下载过程中出现错误"
         _mark_step_error(task, message)
-        store.update(task.id, status="failed", error=message, hint=_clean_message(str(exc)))
+        store.update(task.id, status="failed", error=message, hint=_clean_message(str(exc)),
+                     resumable=_has_partial(task.workdir))
     except Exception as exc:  # noqa: BLE001 - 兜底，保证任务状态一定收敛
         logger.exception("下载任务 %s 未预期失败", task.id)
         _mark_step_error(task, "未预期错误")
-        store.update(task.id, status="failed", error="下载失败", hint=_clean_message(str(exc)))
+        store.update(task.id, status="failed", error="下载失败", hint=_clean_message(str(exc)),
+                     resumable=_has_partial(task.workdir))
     else:
         if task.cancel_requested or task.is_finished:  # 已被看门狗/硬超时/用户终止，不再写完成态
             return
@@ -1096,8 +1185,130 @@ def _is_retryable(error: str) -> bool:
     return any(k in lowered for k in keywords)
 
 
+def _is_hls_url(url: str) -> bool:
+    """粗略判断是否为 HLS 播放清单地址。"""
+    return bool(url) and (".m3u8" in url or url.rstrip().endswith(".m3u8"))
+
+
+def _detect_play_url(info: dict[str, Any]) -> tuple[str | None, bool]:
+    """返回适合「在线观看」的播放地址与是否为 HLS。
+
+    HLS 优先（腾讯等站原生就是 m3u8 流，浏览器可经后端代理播放）；
+    否则退回 MP4 直链。返回 (url, is_hls)。
+    """
+    formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    # 1) 从 formats 里挑分辨率最高的 HLS 流
+    cands: list[tuple[int, str]] = []
+    for f in formats:
+        u = f.get("url") or f.get("manifest_url") or ""
+        if not u:
+            continue
+        proto = (f.get("protocol") or "").split("+")[0].lower()
+        is_hls = proto in ("m3u8", "m3u8_native") or _is_hls_url(u)
+        if is_hls:
+            cands.append((int(f.get("height") or 0), u))
+    if cands:
+        cands.sort(key=lambda x: x[0], reverse=True)
+        return cands[0][1], True
+    # 2) 合并 info 本身的 url 若是 HLS
+    u = info.get("url") or ""
+    if _is_hls_url(u):
+        return u, True
+    # 3) 普通 MP4 直链
+    du = _detect_direct_url(info)
+    if du:
+        return du, False
+    return None, False
+
+
+def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
+    """为「在线观看」生成可选清晰度列表（每个清晰度对应一个可直接播放的地址）。
+
+    - 按清晰度（height）去重：同一分辨率下平台常给出多个 format（不同码率/音轨/CDN），
+      只保留码率最高、可播放的一个 url，避免下拉出现重复项；
+    - 同时覆盖两类可播源：HLS 直播清单（m3u8）与渐进式直链（MP4/WebM，可在 <video> 直接播）；
+    - 所有视频清晰度共用同一 HLS url 时，合并为「自动（源站自适应）」；
+    - 既无 HLS 又有 MP4 直链时，补一个 MP4 直链选项。
+    保证返回的每个 url 都能直接交给后端 /api/stream/proxy 代理播放。
+    """
+    formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    by_height: dict[int, dict[str, Any]] = {}   # height -> HLS 最佳可播放项
+    prog: dict[int, dict[str, Any]] = {}         # height -> 渐进式直链最佳项
+    audio: dict[str, Any] | None = None          # 纯音频 HLS（无 height）
+    for f in formats:
+        u = (f.get("url") or f.get("manifest_url") or "").strip()
+        if not u:
+            continue
+        proto = (f.get("protocol") or "").split("+")[0].lower()
+        is_hls = proto in ("m3u8", "m3u8_native") or _is_hls_url(u)
+        height = int(f.get("height") or 0)
+        note = (f.get("format_note") or "").strip()
+        fid = f.get("format_id") or ""
+        tbr = float(f.get("tbr") or 0) or 0.0
+        item = {"url": u, "note": note, "fid": fid, "tbr": tbr}
+        if is_hls:
+            if height:
+                cur = by_height.get(height)
+                if cur is None or tbr > cur["tbr"]:
+                    by_height[height] = item
+            elif audio is None:
+                audio = item
+        else:
+            # 渐进式直链（MP4/WebM 等可在 WKWebView <video> 直接播放）
+            ext = (f.get("ext") or "").lower()
+            if height and ext in ("mp4", "webm", "m4v", "mov") \
+                    and proto in ("http", "https", "direct", "https-direct", "http-direct"):
+                cur = prog.get(height)
+                if cur is None or tbr > cur["tbr"]:
+                    prog[height] = item
+
+    # 合并：同清晰度优先 HLS（自适应更好），无 HLS 才用渐进式直链
+    merged: dict[int, tuple[bool, dict[str, Any]]] = {}
+    for h, v in by_height.items():
+        merged[h] = (True, v)          # (is_hls, item)
+    for h, v in prog.items():
+        merged.setdefault(h, (False, v))
+
+    opts: list[dict[str, Any]] = []
+    video_urls = {v["url"] for v in by_height.values()}
+    if len(video_urls) == 1 and by_height:
+        # 所有视频清晰度共用同一清单：源站按带宽自适应，无需手动选
+        url = next(iter(video_urls))
+        tag = f"{max(by_height)}P"
+        opts.append({"key": "auto", "label": f"自动（源站自适应） · {tag}",
+                     "url": url, "format_id": "", "is_hls": True})
+    else:
+        for height in sorted(merged, reverse=True):
+            is_hls, v = merged[height]
+            label = f"{height}P"
+            note = v["note"]
+            if note and str(height) not in note and note.lower() not in ("hls", "m3u8"):
+                label = f"{label} · {note}"
+            if not is_hls:
+                label += " · MP4"
+            opts.append({
+                "key": str(height),
+                "label": label,
+                "url": v["url"],
+                "format_id": v["fid"],
+                "is_hls": is_hls,
+            })
+
+    # 无视频流但有纯音频 HLS 时，单列一个音频选项
+    if not opts and audio:
+        opts.append({"key": "audio", "label": audio["note"] or "音频",
+                     "url": audio["url"], "format_id": "", "is_hls": True})
+
+    if not opts:
+        du = _detect_direct_url(info)
+        if du:
+            opts.append({"key": "mp4", "label": "MP4 直链", "url": du, "format_id": "", "is_hls": False})
+    return opts
+
+
 def summarize(info: dict[str, Any]) -> dict[str, Any]:
     """抽取前端需要的字段。"""
+    play_url, is_hls = _detect_play_url(info)
     return {
         "title": info.get("title") or "未命名视频",
         "uploader": info.get("uploader") or info.get("channel") or "",
@@ -1107,4 +1318,7 @@ def summarize(info: dict[str, Any]) -> dict[str, Any]:
         "webpage_url": info.get("webpage_url") or "",
         "extractor": info.get("extractor_key") or "",
         "direct_url": _detect_direct_url(info),
+        "play_url": play_url,
+        "is_hls": is_hls,
+        "watch_options": build_watch_options(info),
     }
