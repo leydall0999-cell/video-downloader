@@ -101,6 +101,7 @@ def _load_external_config() -> dict:
 
     同样支持把百度网盘开放平台应用凭据写进配置文件（VDL_BAIDU_APP_KEY / VDL_BAIDU_APP_SECRET /
     VDL_BAIDU_REDIRECT_URI），从而启用「百度网盘」下载/上传而无需重打包。凭据仅存于本机配置文件。
+    另支持 VDL_PORT 固定端口——百度 OAuth 的 redirect_uri 必须精确匹配运行端口，固定端口可避免端口顺延导致回调不匹配。
 
     优先级：运行时已存在的环境变量(launchd/shell 注入) > 配置文件 > _resolve_proxy 自动检测系统代理。
     """
@@ -127,6 +128,7 @@ def _load_external_config() -> dict:
             "VDL_PROXY_CN",
             "VDL_PROXY",
             "VDL_MAX_FILE_MB",
+            "VDL_PORT",
             "VDL_BAIDU_APP_KEY",
             "VDL_BAIDU_APP_SECRET",
             "VDL_BAIDU_REDIRECT_URI",
