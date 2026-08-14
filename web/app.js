@@ -1408,8 +1408,9 @@
   /** 用指定清晰度发起一个下载任务；返回 taskId 或 null。被"开始下载"与"转 MP3"复用。 */
   const startDownload = async (quality, opts = {}) => {
     const url = opts.url || resolved?.url;
-    if (!url) return null;
-    if (!(await ensureConsent())) return null;
+    showToast('调试：startDownload url=' + (url || '空'));
+    if (!url) { showToast('调试：url 为空，不发起下载'); return null; }
+    if (!(await ensureConsent())) { showToast('调试：未同意用途'); return null; }
     clearError();
     const base = resolved?.base || '';
     try {
@@ -1421,7 +1422,7 @@
           cookie: opts.cookie ?? resolved?.cookie ?? '',
           proxy: opts.proxy ?? resolved?.proxy ?? '',
           extract_script: el.extractSelect.value || '',
-          format_id: opts.format_id ?? selectedFormatId ?? '',
+          format_id: opts.format_id ?? '',
           concurrent_fragments: el.concurrentInput.value ? parseInt(el.concurrentInput.value, 10) || 0 : 0,
           downloader: el.downloaderSelect ? el.downloaderSelect.value || 'native' : 'native',
           play_url: resolved?.video?.play_url || '',
@@ -1430,6 +1431,7 @@
         }),
       }, base);
       const taskId = data.task_id;
+      showToast('调试：后端返回 taskId=' + taskId);
       if (data.quota) {
         node.downloadFreeUsed = data.quota.free_used || 0;
         if (node.downloadSubRequired) refreshSubModalText();
@@ -1446,6 +1448,7 @@
       trackTask(taskId, refs, base);
       return taskId;
     } catch (error) {
+      showToast('调试：下载异常 ' + (error?.message || String(error)));
       if (error.subscribe) {
         promptSubscribe();
         showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
@@ -1467,6 +1470,8 @@
   };
 
   const handleDownload = () => {
+    showToast('调试：点击开始下载');
+    console.log('[debug] handleDownload', { resolved, selectedQuality });
     if (resolved?.video?.direct_url) {
       triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
       return;
