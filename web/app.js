@@ -3066,7 +3066,7 @@
     let proxy = base + "/api/stream/proxy?u=" + encodeURIComponent(url);
     const cookie = (el.cookieInput && el.cookieInput.value || "").trim();
     if (cookie) proxy += "&cookie=" + encodeURIComponent(cookie);
-    el.watchTitle.textContent = el.videoTitle.textContent || "在线观看";
+    el.watchTitle.textContent = (el.title && el.title.textContent) || "在线观看";
     el.watchStatus.textContent = "正在连接源站…";
     el.watchStatus.style.color = "#ffd479";
     el.watchModal.hidden = false;
