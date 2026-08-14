@@ -1032,7 +1032,12 @@
       refs.watchBtn.hidden = false;
       if (!refs.watchBtn.dataset.boundWatch) {
         refs.watchBtn.dataset.boundWatch = '1';
-        refs.watchBtn.addEventListener('click', () => openWatch());
+        refs.watchBtn.addEventListener('click', () => openWatch({
+          url: refs.watchBtn.dataset.url,
+          taskId: refs.root.dataset.taskId,
+          completed: refs.root.classList.contains('is-done'),
+          base: refs.base || '',
+        }));
         refs.watchQuality.addEventListener('change', () => {
           const o = refs.watchQuality.selectedOptions && refs.watchQuality.selectedOptions[0];
           if (o) {
@@ -3082,7 +3087,7 @@
   el.openFolderBtn.addEventListener('click', openDownloadFolder);
   el.downloadBtn.addEventListener('click', handleDownload);
   // 在线观看：经后端 /api/stream/proxy 代理（带 Referer 绕开防盗链，原生 HLS 播放）
-  el.watchBtn.addEventListener('click', openWatch);
+  el.watchBtn.addEventListener('click', () => openWatch({ url: el.watchBtn.dataset.url }));
   // 切换观看清晰度：更新播放用的 url / 是否 HLS，下次点「在线观看」即用所选清晰度
   el.watchQuality.addEventListener('change', () => {
     const o = el.watchQuality.selectedOptions && el.watchQuality.selectedOptions[0];
@@ -3092,27 +3097,42 @@
   });
   el.watchClose.addEventListener('click', closeWatch);
   el.watchModal.addEventListener('click', (e) => { if (e.target === el.watchModal) closeWatch(); });
-  function openWatch() {
-    const url = el.watchBtn.dataset.url;
-    if (!url) return;
-    const base = window.VDL_API_BASE || "";
-    let proxy = base + "/api/stream/proxy?u=" + encodeURIComponent(url);
-    const cookie = (el.cookieInput && el.cookieInput.value || "").trim();
-    if (cookie) proxy += "&cookie=" + encodeURIComponent(cookie);
+  function openWatch(opts = {}) {
+    // 任务卡片已下载完成 → 直接播放本地文件；否则（解析面板 / 下载中）走源站实时流代理
+    let src;
+    let isLocal = false;
+    if (opts.taskId && opts.completed) {
+      const base = opts.base || window.VDL_API_BASE || "";
+      src = base + "/api/tasks/" + encodeURIComponent(opts.taskId) + "/file";
+      isLocal = true;
+    } else if (opts.url) {
+      const base = window.VDL_API_BASE || "";
+      src = base + "/api/stream/proxy?u=" + encodeURIComponent(opts.url);
+      const cookie = (el.cookieInput && el.cookieInput.value || "").trim();
+      if (cookie) src += "&cookie=" + encodeURIComponent(cookie);
+    } else {
+      return;
+    }
     el.watchTitle.textContent = (el.title && el.title.textContent) || "在线观看";
-    el.watchStatus.textContent = "正在连接源站…";
+    el.watchStatus.textContent = isLocal ? "正在打开本地文件…" : "正在连接源站…";
     el.watchStatus.style.color = "#ffd479";
     el.watchModal.hidden = false;
     const v = el.watchVideo;
     v.onerror = v.onloadeddata = v.onplaying = null;
-    v.src = proxy;
+    v.src = src;
     v.play().catch(() => {});
     v.onloadeddata = v.onplaying = () => {
-      el.watchStatus.textContent = "正在播放（实时流，受单连接限速可能缓冲，建议下载后看）";
+      el.watchStatus.textContent = isLocal
+        ? "正在播放本地文件"
+        : "正在播放（实时流，受单连接限速可能缓冲，建议下载后看）";
       el.watchStatus.style.color = "#9be29b";
     };
     v.onerror = () => {
-      el.watchStatus.textContent = "播放失败：源站拒绝或需登录 Cookie，请在「高级选项」粘贴浏览器 Cookie 后重试";
+      if (isLocal) {
+        el.watchStatus.textContent = "本地文件播放失败，可改用「保存到本机」后用系统播放器打开";
+      } else {
+        el.watchStatus.textContent = "播放失败：源站拒绝或需登录 Cookie，请在「高级选项」粘贴浏览器 Cookie 后重试";
+      }
       el.watchStatus.style.color = "#ff8a8a";
     };
   }
