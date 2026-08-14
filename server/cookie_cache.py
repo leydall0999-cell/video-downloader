@@ -6,7 +6,7 @@
 设计原则（合规）：
 - 仅本机：文件落在 ~/.videodownloader/cookies/，不外传、不共享、不上报服务器。
 - 不跨用户：每个用户只读自己的浏览器与自己的缓存，不涉及任何「共享库」。
-- 有时效：Cookie 会过期，缓存 7 天后自动重新解密，避免拿到失效凭证
+- 有时效：Cookie 会过期，缓存 30 天后自动重新解密，避免拿到失效凭证
   （日常使用只要浏览器仍登录该平台即无缝续命，无需手动操作）。
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 _COOKIE_CACHE_DIR = Path.home() / ".videodownloader" / "cookies"
-_COOKIE_TTL = 7 * 24 * 3600  # 秒；超时自动重新解密浏览器，避免用到失效 Cookie
+_COOKIE_TTL = 30 * 24 * 3600  # 秒；超时自动重新解密浏览器，避免用到失效 Cookie
 
 
 def _cache_file(host: str) -> Path:
@@ -50,6 +50,8 @@ def get_cached_cookie_header(host: str) -> str | None:
 def _save(host: str, header: str) -> None:
     try:
         _COOKIE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # 目录仅本人可读：避免其他本地用户列目录名（文件名含登录站点，泄露登录足迹）
+        os.chmod(_COOKIE_CACHE_DIR, 0o700)
         f = _cache_file(host)
         f.write_text(json.dumps({"header": header, "ts": int(time.time())}))
         os.chmod(f, 0o600)  # 仅当前用户可读写，保护登录凭证

@@ -48,8 +48,25 @@ def latest_version() -> str | None:
         return None
 
 
+def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
+    """解压并防 Zip Slip：任何解析后落在 dest 之外的成员一律拒绝（跨 Python 版本稳健）。"""
+    dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in zf.namelist():
+        target = (dest / name).resolve()
+        if target != dest and dest not in target.parents:
+            raise RuntimeError(f"wheel 含越界路径，拒绝解压：{name}")
+    zf.extractall(dest)
+
+
 def update() -> dict:
-    """下载并解压最新 yt-dlp 到本机目录，返回结果（需重启生效）。"""
+    """下载并解压最新 yt-dlp 到本机目录，返回结果（需重启生效）。
+
+    安全加固：
+    - 校验 PyPI 公布的 sha256（防投毒 / 中间人篡改）；
+    - 解压前逐成员校验路径（防 Zip Slip）；
+    - 先解到临时目录，校验通过再原子替换，避免半解压导致下次启动崩溃。
+    """
     ver = latest_version()
     if not ver:
         return {"ok": False, "error": "无法获取最新版本（请检查网络）"}
@@ -57,21 +74,35 @@ def update() -> dict:
     if _VERSION_FILE.exists() and _VERSION_FILE.read_text().strip() == ver:
         return {"ok": True, "updated": False, "version": ver, "restart_required": False}
     try:
+        import shutil
         meta = requests.get(_PYPI_JSON, timeout=_PYPI_TIMEOUT).json()
         urls = meta.get("urls", [])
         wheel = next((u for u in urls if u.get("filename", "").endswith(".whl")), None)
         if not wheel:
             return {"ok": False, "error": "未找到可用的 yt-dlp wheel"}
+        # 供应链校验：核对 PyPI 公布的 sha256，防投毒 / 中间人
+        expected_sha = (wheel.get("digests") or {}).get("sha256")
         VDL_YTDLP_DIR.mkdir(parents=True, exist_ok=True)
-        # 清掉旧版，避免残留文件干扰
-        old = VDL_YTDLP_DIR / "yt_dlp"
-        if old.exists():
-            import shutil
-            shutil.rmtree(old, ignore_errors=True)
         dl = requests.get(wheel["url"], timeout=180, stream=True)
         dl.raise_for_status()
-        z = zipfile.ZipFile(BytesIO(dl.content))
-        z.extractall(VDL_YTDLP_DIR)
+        raw = dl.content
+        if expected_sha:
+            import hashlib
+            if hashlib.sha256(raw).hexdigest() != expected_sha:
+                return {"ok": False, "error": "校验和不匹配，疑似下载被篡改，已终止更新"}
+        # 先解压到临时目录，成功后再原子替换，避免半解压导致下次启动崩溃
+        tmp = VDL_YTDLP_DIR.with_name("yt_dlp_tmp")
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+        _safe_extract(zipfile.ZipFile(BytesIO(raw)), tmp)
+        old = VDL_YTDLP_DIR.with_name("yt_dlp_old")
+        if VDL_YTDLP_DIR.exists():
+            if old.exists():
+                shutil.rmtree(old, ignore_errors=True)
+            VDL_YTDLP_DIR.rename(old)
+        tmp.rename(VDL_YTDLP_DIR)
+        if old.exists():
+            shutil.rmtree(old, ignore_errors=True)
         _VERSION_FILE.write_text(ver)
         return {"ok": True, "updated": True, "version": ver, "restart_required": True}
     except Exception as exc:  # noqa: BLE001
