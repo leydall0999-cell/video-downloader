@@ -137,3 +137,71 @@ def test_baidu_list_route_requires_token(monkeypatch):
     c = TestClient(m.app)
     r = c.get("/api/cloud/baidu/list?path=%2F")  # 无 token
     assert r.status_code == 400
+
+
+# ── aria2c 并发下载后端 ────────────────────────────────────────────────
+def test_download_uses_aria2c_when_available(tmp_path, monkeypatch):
+    import types
+    prov = BaiduProvider()
+    monkeypatch.setattr(prov, "download_url", lambda *a, **k: {"dlink": "https://d.pcs.baidu.com/x", "size": 10})
+    monkeypatch.setattr(cd, "_aria2c_path", lambda: "/usr/bin/aria2c")
+
+    dest = tmp_path / "out.bin"
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        # 校验并发参数与输出文件名确实传给 aria2c
+        assert "-x" in cmd and "8" in cmd
+        assert "--out" in cmd and dest.name in cmd
+        assert "pan.baidu.com" in cmd
+        captured["cmd"] = cmd
+        # 模拟 aria2c 已把文件下完
+        dest.write_bytes(b"helloworld")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cd.subprocess, "run", fake_run)
+    prog = []
+    written = prov.download("TOK", 99, "/a/file.txt", dest, progress=lambda d, t: prog.append((d, t)))
+    assert written == 10
+    assert dest.read_bytes() == b"helloworld"
+    assert captured["cmd"][0].endswith("aria2c")  # 用的是 aria2c 而不是 requests
+    assert prog[-1] == (10, 10)
+
+
+def test_download_auto_falls_back_to_requests(tmp_path, monkeypatch):
+    """backend=auto 但本机无 aria2c 时，应回退 requests 流式下载（功能不中断）。"""
+    prov = BaiduProvider()
+    monkeypatch.setattr(prov, "download_url", lambda *a, **k: {"dlink": "https://d.pcs.baidu.com/x", "size": 10})
+    monkeypatch.setattr(cd, "_aria2c_path", lambda: None)  # 模拟无 aria2c
+
+    def fake_get(url, **k):
+        assert k.get("headers", {}).get("User-Agent") == "pan.baidu.com"
+        return _Resp(status_code=200, chunks=[b"hello", b"wor", b"ld"])
+
+    monkeypatch.setattr(cd.requests, "get", fake_get)
+    dest = tmp_path / "out.bin"
+    written = prov.download("TOK", 99, "/a/file.txt", dest, backend="auto")
+    assert written == 10
+    assert dest.read_bytes() == b"helloworld"
+
+
+def test_download_aria2c_forced_raises_without_binary(tmp_path, monkeypatch):
+    """backend='aria2c' 但本机无 aria2c 时，应直接报错（不静默回退）。"""
+    prov = BaiduProvider()
+    monkeypatch.setattr(prov, "download_url", lambda *a, **k: {"dlink": "https://d.pcs.baidu.com/x", "size": 10})
+    monkeypatch.setattr(cd, "_aria2c_path", lambda: None)
+    with pytest.raises(CloudError):
+        prov.download("TOK", 99, "/a/file.txt", tmp_path / "x.bin", backend="aria2c")
+
+
+def test_aria2c_download_failure_raises(tmp_path, monkeypatch):
+    import types
+    monkeypatch.setattr(cd, "_aria2c_path", lambda: "/usr/bin/aria2c")
+    dest = tmp_path / "out.bin"
+
+    def fake_run(cmd, **kwargs):
+        return types.SimpleNamespace(returncode=2, stdout="", stderr="some aria2c error")
+
+    monkeypatch.setattr(cd.subprocess, "run", fake_run)
+    with pytest.raises(CloudError):
+        cd._aria2c_download("https://d.pcs.baidu.com/x", dest, 10, progress=None)

@@ -2917,6 +2917,7 @@ class BaiduDownloadRequest(BaseModel):
     fs_id: int = 0
     path: str = ""
     name: str = ""
+    backend: str = ""  # 空=auto（优先 aria2c 并发，缺失回退 requests）
 
 
 @app.get("/api/cloud/baidu/list")
@@ -2989,7 +2990,10 @@ def cloud_baidu_download(payload: BaiduDownloadRequest):
                     if total:
                         t["total"] = total
 
-            _baidu_provider.download(token, int(payload.fs_id), payload.path, dest, progress=_prog)
+            _baidu_provider.download(
+                token, int(payload.fs_id), payload.path, dest,
+                progress=_prog, backend=payload.backend or "auto",
+            )
             with _baidu_dl_lock:
                 _baidu_dl_tasks[tid].update(
                     status="completed",

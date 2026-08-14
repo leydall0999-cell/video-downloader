@@ -11,11 +11,119 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import requests
 
 logger = logging.getLogger("vdl.cloud")
+
+
+# --------------------------------------------------------------------------- #
+# aria2c 工具（供百度网盘下载走并发拉取；与 downloader._aria2c_path 同源逻辑，
+# 但放在本模块以避免跨模块循环 import）
+# --------------------------------------------------------------------------- #
+
+def _aria2c_path() -> str | None:
+    """返回 aria2c 可执行路径；未安装返回 None（调用方回退 requests 流式下载）。
+
+    查找顺序：PATH（本机 brew/apt 安装）→ 打包内置（PyInstaller 冻结的 _MEIPASS/bin/aria2c，
+    或 macOS .app 的 Contents/Resources/bin/aria2c）。
+    """
+    found = shutil.which("aria2c")
+    if found:
+        return found
+    candidates: list[str] = []
+    meipass = os.environ.get("MEIPASS") or getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "bin", "aria2c"))  # type: ignore[arg-type]
+    exe = sys.executable or ""
+    if "Contents/MacOS" in exe:
+        # .../Contents/MacOS/VideoDownloader -> ../Resources/bin/aria2c
+        candidates.append(os.path.join(os.path.dirname(exe), "..", "Resources", "bin", "aria2c"))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def _aria2c_download(
+    dlink: str,
+    dest: Path,
+    total: int,
+    concurrency: int = 8,
+    progress=None,
+    timeout: int = 1800,
+) -> int:
+    """用 aria2c 并发拉取 dlink 到 dest，返回写入字节数。
+
+    进度通过后台线程轮询 dest 当前大小回报（aria2c 边下边落盘）。
+    断点续传：dest 已存在部分内容时 --continue=true 续传。
+    注意：百度对 dlink 仍按账号等级限速，aria2c 多连接无法突破服务端限速，
+    仅能提升小文件并发与利用续传；大文件免费账号仍可能被限。
+    """
+    a2 = _aria2c_path()
+    if not a2:
+        raise CloudError(
+            "本机未安装 aria2c",
+            "请 brew install aria2 或由打包版提供；已自动回退 requests 流式下载",
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        a2,
+        "--dir", str(dest.parent),
+        "--out", dest.name,
+        "-x", str(concurrency),       # 每服务器最大连接数
+        "-s", str(concurrency),       # 分片数
+        "-k", "1M",                   # 分块 1MB（便于并发+续传）
+        "--continue=true",
+        "--summary-interval=0",       # 关掉周期摘要，靠文件大小轮询进度
+        "--connect-timeout=30",
+        "--timeout=300",
+        "--max-tries=5",
+        "--retry-wait=3",
+        "--user-agent", "pan.baidu.com",
+        # 百度 dlink 必须用「像样的」UA 请求，否则在鉴权跳转里 403/死循环
+        "--header", "User-Agent: pan.baidu.com",
+        dlink,
+    ]
+
+    stop = threading.Event()
+    written = [0]
+
+    def _poll() -> None:
+        while not stop.is_set():
+            try:
+                if dest.exists():
+                    sz = dest.stat().st_size
+                    written[0] = sz
+                    if progress:
+                        progress(sz, total or sz)
+            except OSError:
+                pass
+            stop.wait(0.5)
+
+    poller = threading.Thread(target=_poll, daemon=True)
+    poller.start()
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        stop.set()
+        raise CloudError("aria2c 下载超时", str(exc)) from exc
+    finally:
+        stop.set()
+        poller.join(timeout=2)
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "")[-2000:]
+        raise CloudError("aria2c 下载失败", f"exit={proc.returncode} {err}")
+    final = dest.stat().st_size
+    if progress:
+        progress(final, total or final)
+    return final
 
 
 class CloudError(Exception):
@@ -280,15 +388,30 @@ class BaiduProvider:
             )
         return data
 
-    def download(self, token: str, fs_id: int, path: str, local_path: Path, progress=None) -> int:
-        """把网盘文件流式下载到本地 local_path，回报进度（已下载字节 / 总字节）。返回写入字节数。
+    def download(self, token: str, fs_id: int, path: str, local_path: Path, progress=None, backend: str = "auto") -> int:
+        """把网盘文件下载到本地 local_path，回报进度（已下载字节 / 总字节）。返回写入字节数。
+
+        backend:
+          - "auto"（默认）：优先 aria2c 并发拉取，缺失则自动回退 requests 流式。
+          - "aria2c"：强制走 aria2c，缺失则报错。
+          - "requests"：强制走 requests 流式（单连接）。
 
         注意：免费账号大文件常被百度服务端限速或要求「提速」（会员），这部分速度由账号等级决定，
-        本方法只做合规的官方下载，不绕过平台限速。
+        本方法只做合规的官方下载，不绕过平台限速；aria2c 多连接同样无法突破服务端限速。
         """
         info = self.download_url(token, fs_id, path)
         dlink = info["dlink"]
         total = int(info.get("size") or 0)
+
+        if backend in ("auto", "aria2c") and _aria2c_path() is not None:
+            try:
+                return _aria2c_download(dlink, local_path, total, concurrency=8, progress=progress)
+            except CloudError:
+                if backend == "aria2c":
+                    raise
+                logger.warning("aria2c 不可用，回退 requests 流式下载百度网盘文件")
+
+        # requests 流式（单连接）兜底
         # 百度 dlink 必须用「像样的」UA 请求，否则会在鉴权跳转里 403/死循环
         headers = {"User-Agent": "pan.baidu.com"}
         try:
