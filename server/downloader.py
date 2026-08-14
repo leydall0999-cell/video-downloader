@@ -39,9 +39,9 @@ SOCKET_TIMEOUT = 30  # 国内 CDN 偶发慢响应，30 秒更稳
 PROBE_RETRIES = 1
 # 下载健壮性：防止站点/CDN 假死导致任务永久挂起、占满并发槽拖垮后续任务
 # 1) 下载阶段：已开始下分片但 N 秒无字节增量 → 判定停滞，自动终止
-# 2) 整体硬上限：解析+下载任意阶段超过此秒数 → 强制结束（兜底，极少触发）
+# 2) 整体硬上限：解析+下载任意阶段超过此秒数 → 强制结束（兜底；腾讯等限速站常需更久）
 DOWNLOAD_STALL_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_STALL_TIMEOUT", "180"))
-DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "1800"))
+DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "7200"))
 WATCHDOG_POLL = int(os.environ.get("VDL_WATCHDOG_POLL", "5"))  # 看门狗轮询间隔（秒）
 
 
@@ -111,9 +111,9 @@ DOWNLOAD_RETRIES = 3
 # 下载体积上限（MB）：防止被当成免费大盘偷跑带宽 / 撑爆磁盘。设为 0 表示不限。
 _MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "2048") or 2048)
 _MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
-# 国内站 m3u8 CDN 对高并发抓段敏感（容易被限速/拒绝），桌面版默认 3 段
+# 国内站 m3u8 CDN 对高并发抓段敏感（容易被限速/拒绝），桌面版默认 5 段
 # 通过 VDL_CONCURRENT_FRAGMENTS 环境变量调（1-8）
-CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "3") or 3)
+CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "5") or 5)
 MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
 DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给合并/转码
