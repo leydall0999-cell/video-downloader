@@ -1,0 +1,5 @@
+{
+  "VDL_PROXY_CN": "http://user:pass@<国内VPS公网IP>:8899",
+  "VDL_PROXY": "http://user:pass@<海外/全局节点IP>:7890",
+  "VDL_MAX_FILE_MB": "2048"
+}

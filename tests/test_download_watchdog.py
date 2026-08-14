@@ -28,7 +28,7 @@ def test_run_download_stall_does_not_hang(monkeypatch):
 
     # 用一个「卡死」的 _run_once 替代真实下载：进入 downloading 后永远 sleep，
     # 且不检查 cancel_requested（模拟进度回调彻底不来）
-    def fake_run_once(task, store, quality_key, cookie, proxy):
+    def fake_run_once(task, store, quality_key, cookie="", proxy="", format_id="", concurrent_fragments=0, downloader_type="", resume=False):
         store.update(task.id, status="downloading")
         time.sleep(30)  # 假死
 
@@ -71,7 +71,7 @@ def test_run_download_stall_canceled_via_hook(monkeypatch):
         def on_postprocess(self, payload):
             pass
 
-    def fake_run_once(task, store, quality_key, cookie, proxy):
+    def fake_run_once(task, store, quality_key, cookie="", proxy="", format_id="", concurrent_fragments=0, downloader_type="", resume=False):
         reporter = _FakeReporter()
         reporter._task = task
         store.update(task.id, status="downloading")

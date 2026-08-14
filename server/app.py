@@ -2439,6 +2439,8 @@ def commentary_file(job_id: str) -> FileResponse:
         path = Path(job["output_path"])
         if path.exists():
             return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
+        # 任务标记完成但成片文件已丢失/被清理 → 410 Gone，不应再走 cid 解码分支（否则误报 409）
+        raise HTTPException(status_code=410, detail="成片文件已清理或丢失")
     # 兼容「已生成成片列表」卡片的 cid（base64 编码的文件路径标识）：
     # 桌面版桥接 save_commentary_file(cid) 会请求 /api/commentary/{cid}/file，
     # 命中本路由；此处按 cid 解码并校验后直接返回文件，使列表卡片也能下载。
