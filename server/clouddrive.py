@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -434,6 +435,182 @@ class BaiduProvider:
                 if progress:
                     progress(written, total or written)
         return written
+
+    # ------------------------------------------------------------------ #
+    # 分享链接下载：列出分享内容 → 转存到自己网盘 → 从自己网盘下载（官方通道）
+    # ------------------------------------------------------------------ #
+
+    def _parse_share_surl(self, share_url: str) -> str:
+        """从分享链接中提取 surl（短链码）。支持 /s/xxx 与 ?surl=xxx 两种形式。"""
+        from urllib.parse import urlparse, parse_qs
+
+        u = urlparse((share_url or "").strip())
+        if u.query:
+            qs = parse_qs(u.query)
+            if qs.get("surl"):
+                return qs["surl"][0].strip()
+        # 必须来自 pan.baidu.com 的 /s/ 或 /share/ 短链，避免把脏串当 surl
+        if "baidu" in (u.netloc or "").lower():
+            parts = [p for p in u.path.split("/") if p]
+            for i, p in enumerate(parts):
+                if p in ("s", "share", "shareInit", "share_init") and i + 1 < len(parts):
+                    return parts[i + 1].strip()
+            if parts:
+                return parts[-1].strip()
+        raise CloudError("无法解析分享链接", "请检查链接格式，应为 https://pan.baidu.com/s/... 形式")
+
+    def share_list(self, share_url: str, pwd: str = "") -> dict:
+        """列出分享链接里的文件（看分享内容无需登录；转存才需 token）。返回归一化列表。"""
+        surl = self._parse_share_surl(share_url)
+        params = {
+            "channel": "chunlei",
+            "clienttype": "0",
+            "web": "1",
+            "surl": surl,
+            "page": "1",
+            "num": "100",
+            "order": "time",
+            "desc": "1",
+        }
+        if pwd:
+            params["pwd"] = pwd
+        try:
+            resp = requests.get(BAIDU_SHARE_API + "/list", params=params, timeout=30)
+        except requests.RequestException as exc:
+            raise CloudError("获取分享文件列表失败", str(exc)) from exc
+        data = resp.json()
+        errno = data.get("errno", 0)
+        if errno != 0:
+            msg = {
+                -9: "分享链接不存在或已失效",
+                -12: "提取码错误",
+                -10: "分享已被取消",
+                -1: "分享链接无效",
+            }.get(errno, f"获取分享列表失败(errno={errno})")
+            raise CloudError(msg, str(data.get("errmsg", "")))
+        items = data.get("list") or []
+        files = [
+            {
+                "fs_id": it.get("fs_id"),
+                "path": it.get("path"),
+                "name": it.get("server_filename") or it.get("filename") or "",
+                "size": it.get("size", 0),
+                "isdir": bool(it.get("isdir")),
+            }
+            for it in items
+        ]
+        files.sort(key=lambda x: (not x["isdir"], -(x.get("size") or 0)))
+        return {"surl": surl, "list": files, "has_more": bool(data.get("has_more"))}
+
+    def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str) -> list:
+        """把分享里的文件转存到用户自己的网盘 dest 目录，返回转存后的 [{fs_id, path}]。"""
+        if not token:
+            raise CloudError("未授权百度网盘", "请先完成百度账号授权")
+        surl = self._parse_share_surl(share_url)
+        dest = "/" + (dest.strip("/") or "VideoDownloader_Share")
+        try:
+            resp = requests.post(
+                BAIDU_SHARE_API + "/transfer",
+                params={"channel": "chunlei", "clienttype": "0", "web": "1", "access_token": token},
+                data={
+                    "surl": surl,
+                    "pwd": pwd or "",
+                    "filelist": json.dumps(paths, ensure_ascii=False),
+                    "dest": dest,
+                },
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            raise CloudError("转存分享文件失败", str(exc)) from exc
+        data = resp.json()
+        errno = data.get("errno", 0)
+        if errno != 0:
+            msg = {
+                -9: "分享链接不存在或已失效",
+                -12: "提取码错误",
+                -30: "文件已在网盘中存在（请更换目标目录或文件名）",
+                -70: "网盘容量不足，无法转存",
+            }.get(errno, f"转存失败(errno={errno})")
+            raise CloudError(msg, str(data.get("errmsg", "")))
+        transferred = (data.get("extra") or {}).get("list") or []
+        return [{"fs_id": it.get("fs_id"), "path": it.get("path")} for it in transferred]
+
+    def download_share(
+        self,
+        share_url: str,
+        pwd: str,
+        share_path: str,
+        local_path: Path,
+        token: str,
+        progress=None,
+        backend: str = "auto",
+        dest: str = "/VideoDownloader_Share",
+    ) -> int:
+        """把分享里的某个文件：先转存到用户网盘，再从用户网盘下载到本机。返回写入字节数。
+
+        速度由用户账号等级决定，本方法只做官方合规下载，不绕过平台限速。
+        """
+        transferred = self.share_transfer(share_url, pwd, [share_path], dest, token)
+        if not transferred:
+            raise CloudError("转存后未获得文件信息", "请稍后重试或检查分享链接")
+        item = transferred[0]
+        return self.download(
+            token, item["fs_id"], item["path"], local_path, progress=progress, backend=backend
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 百度分享 / 令牌相关模块级常量与本地存储
+# --------------------------------------------------------------------------- #
+
+BAIDU_SHARE_API = "https://pan.baidu.com/share"
+
+
+def _baidu_token_path() -> Path:
+    """返回本机百度令牌存储路径（跨平台，仅存于用户机器，不进二进制/不进 git）。"""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", str(Path.home() / ".vdl")))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "VideoDownloader"
+    else:
+        base = Path.home() / ".local" / "share" / "videodownloader"
+    return base / "baidu_token.json"
+
+
+def save_baidu_token(data: dict) -> None:
+    """把用户授权得到的令牌（access_token 等）写到本机文件，权限 600。"""
+    if not isinstance(data, dict) or not data.get("access_token"):
+        return
+    p = _baidu_token_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+    except OSError as exc:
+        logger.warning("保存百度令牌失败: %s", exc)
+
+
+def load_baidu_token() -> dict:
+    """读取本机存储的百度令牌；不存在/损坏返回空 dict。"""
+    p = _baidu_token_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text("utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def clear_baidu_token() -> None:
+    """删除本机存储的百度令牌（退出登录）。"""
+    p = _baidu_token_path()
+    try:
+        p.unlink()
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #

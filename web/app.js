@@ -134,6 +134,12 @@
     baiduBreadcrumb: $('baiduBreadcrumb'),
     baiduList: $('baiduList'),
     baiduDlList: $('baiduDlList'),
+    // 百度网盘「分享链接下载」
+    baiduShareUrl: $('baiduShareUrl'),
+    baiduSharePwd: $('baiduSharePwd'),
+    baiduShareListBtn: $('baiduShareListBtn'),
+    baiduShareStatus: $('baiduShareStatus'),
+    baiduShareList: $('baiduShareList'),
     // 批量下载（桌面版万能下载器重点能力）
     batchToggle: $('batchToggle'),
     batchBox: $('batchBox'),
@@ -3428,6 +3434,7 @@
   el.tabBaidu.addEventListener('click', () => {
     if (!node.baiduAvailable) { el.baiduDriveHint.textContent = '该实例未配置百度网盘凭据'; return; }
     baiduModalOpen = true;
+    restoreBaiduToken();
     if (baiduToken) {
       el.baiduDriveStatus.textContent = '已授权 ✓';
       el.baiduDriveStatus.className = 'baidu-status is-ok';
@@ -3446,6 +3453,104 @@
     if (!node.baiduAuthUrl) { el.baiduDriveStatus.textContent = '该实例未启用百度网盘'; return; }
     openBaiduAuthInPage(node.baiduAuthUrl);
   });
+
+  // ── 百度网盘「分享链接下载」（登录后转存到自己网盘再下）──
+  async function restoreBaiduToken() {
+    // localStorage 优先；为空时回退本机服务端持久化的令牌（重启后免重复授权）
+    if (baiduToken) return;
+    try {
+      const r = await fetch('/api/cloud/baidu/token');
+      const d = await r.json();
+      if (d && d.logged_in && d.access_token) {
+        baiduToken = d.access_token;
+        localStorage.setItem('vdl_baidu_token', d.access_token);
+        if (el.baiduDriveStatus) {
+          el.baiduDriveStatus.textContent = '已授权 ✓';
+          el.baiduDriveStatus.className = 'baidu-status is-ok';
+        }
+        if (el.cloudBaiduStatus) el.cloudBaiduStatus.textContent = '已授权 ✓';
+      }
+    } catch { /* 忽略：离线或后端未启用 */ }
+  }
+
+  el.baiduShareListBtn.addEventListener('click', async () => {
+    restoreBaiduToken();
+    const url = (el.baiduShareUrl.value || '').trim();
+    if (!url) { el.baiduShareStatus.textContent = '请先粘贴分享链接'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
+    el.baiduShareStatus.textContent = '加载中…';
+    el.baiduShareStatus.className = 'baidu-share-status';
+    el.baiduShareList.innerHTML = '<p class="baidu-empty">加载中…</p>';
+    try {
+      const r = await fetch('/api/cloud/baidu/share/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, pwd: (el.baiduSharePwd.value || '').trim() }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        el.baiduShareStatus.textContent = '列出失败：' + (data.detail || r.status);
+        el.baiduShareStatus.className = 'baidu-share-status is-err';
+        el.baiduShareList.innerHTML = `<p class="baidu-empty">${data.detail || r.status}</p>`;
+        return;
+      }
+      const list = data.list || [];
+      if (!list.length) {
+        el.baiduShareStatus.textContent = '该分享为空或链接已失效';
+        el.baiduShareStatus.className = 'baidu-share-status';
+        el.baiduShareList.innerHTML = '<p class="baidu-empty">分享里没有文件。</p>';
+        return;
+      }
+      el.baiduShareStatus.textContent = `共 ${list.length} 项`;
+      el.baiduShareStatus.className = 'baidu-share-status';
+      el.baiduShareList.innerHTML = list.map((it) => {
+        const size = it.isdir ? '文件夹' : _fmtSize(it.size);
+        const icon = it.isdir ? '📁' : '📄';
+        const label = it.name || it.path || '';
+        return `<div class="baidu-row" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}">
+          <span class="name">${icon} ${label}</span>
+          <span class="size">${size}</span>
+          <span class="dl"><button type="button" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}"${it.isdir ? ' disabled title="暂不支持整文件夹，请展开后选具体文件"' : ''}>转存并下载</button></span>
+        </div>`;
+      }).join('');
+      el.baiduShareList.querySelectorAll('.dl button').forEach((b) => {
+        if (b.disabled) return;
+        b.addEventListener('click', () => startBaiduShareDownload({
+          path: decodeURIComponent(b.dataset.path),
+          name: decodeURIComponent(b.dataset.name),
+          url: (el.baiduShareUrl.value || '').trim(),
+          pwd: (el.baiduSharePwd.value || '').trim(),
+        }));
+      });
+    } catch (err) {
+      el.baiduShareStatus.textContent = '列出出错：' + err.message;
+      el.baiduShareStatus.className = 'baidu-share-status is-err';
+      el.baiduShareList.innerHTML = `<p class="baidu-empty">出错：${err.message}</p>`;
+    }
+  });
+
+  function startBaiduShareDownload(item) {
+    if (!baiduToken) { el.baiduShareStatus.textContent = '请先点「授权百度网盘」完成授权'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
+    el.baiduShareStatus.textContent = '已提交，正在转存…';
+    el.baiduShareStatus.className = 'baidu-share-status';
+    fetch('/api/cloud/baidu/share/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: item.url, pwd: item.pwd, path: item.path, name: item.name, token: baiduToken }),
+    }).then((r) => r.json()).then((data) => {
+      if (data.task_id) {
+        addBaiduDlItem(data.task_id, item.name);
+        pollBaiduTask(data.task_id);
+        el.baiduShareStatus.textContent = '已加入下载队列：' + item.name;
+        el.baiduShareStatus.className = 'baidu-share-status';
+      } else if (data.detail) {
+        el.baiduShareStatus.textContent = '下载失败：' + data.detail;
+        el.baiduShareStatus.className = 'baidu-share-status is-err';
+      }
+    }).catch((err) => {
+      el.baiduShareStatus.textContent = '下载出错：' + err.message;
+      el.baiduShareStatus.className = 'baidu-share-status is-err';
+    });
+  }
 
   function _fmtSize(n) {
     n = Number(n) || 0;

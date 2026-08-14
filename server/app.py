@@ -66,6 +66,9 @@ from clouddrive import (
     baidu_auth_url,
     baidu_exchange_token,
     _baidu_callback_html,
+    save_baidu_token,
+    load_baidu_token,
+    clear_baidu_token,
 )
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
@@ -2903,6 +2906,7 @@ def cloud_baidu_callback(code: str = "", state: str = ""):
         token = baidu_exchange_token(code, BAIDU_REDIRECT_URI, BAIDU_APP_KEY, BAIDU_APP_SECRET)
     except CloudError as exc:
         return HTMLResponse(_baidu_callback_html(error=exc.message))
+    save_baidu_token(token)
     return HTMLResponse(_baidu_callback_html(token=token.get("access_token", "")))
 
 
@@ -3021,6 +3025,134 @@ def cloud_baidu_task(tid: str):
     if not t:
         raise HTTPException(status_code=404, detail="下载任务不存在")
     return t
+
+
+# ── 百度网盘「分享链接下载」（登录后转存到自己网盘再下，官方通道）──────────
+class BaiduShareListRequest(BaseModel):
+    url: str = ""
+    pwd: str = ""
+
+
+@app.post("/api/cloud/baidu/share/list")
+def cloud_baidu_share_list(payload: BaiduShareListRequest):
+    """列出分享链接里的文件（看分享内容本身无需登录）。"""
+    if not BAIDU_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
+    if not payload.url.strip():
+        raise HTTPException(status_code=400, detail="缺少分享链接")
+    try:
+        result = _baidu_provider.share_list(payload.url, payload.pwd)
+    except CloudError as exc:
+        raise HTTPException(status_code=502, detail=exc.message + (("：" + exc.hint) if exc.hint else ""))
+    return result
+
+
+class BaiduShareDownloadRequest(BaseModel):
+    url: str = ""
+    pwd: str = ""
+    path: str = ""        # 分享内文件路径（来自 share/list 的 path 字段）
+    name: str = ""
+    token: str = ""       # 可选；缺省回退到本机持久化的令牌
+    backend: str = ""     # 空=auto（优先 aria2c 并发，缺失回退 requests）
+
+
+@app.post("/api/cloud/baidu/share/download")
+def cloud_baidu_share_download(payload: BaiduShareDownloadRequest):
+    """把分享里的某个文件转存到用户自己网盘并从自己网盘下载到本机（后台任务）。"""
+    if not BAIDU_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
+    token = (payload.token or "").strip() or (load_baidu_token() or {}).get("access_token") or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="请先完成百度账号授权")
+    if not payload.url.strip() or not payload.path:
+        raise HTTPException(status_code=400, detail="缺少分享链接或文件路径")
+    name = _baidu_safe_name(payload.name) or _baidu_safe_name(payload.path)
+    tid = secrets.token_hex(8)
+    with _baidu_dl_lock:
+        _baidu_dl_tasks[tid] = {
+            "status": "pending", "progress": 0, "total": 0,
+            "error": "", "name": name, "filepath": "",
+        }
+
+    def _worker() -> None:
+        dest = DOWNLOAD_DIR / "baidu" / "share" / name
+        try:
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(status="transferring")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                stem, suffix = dest.stem, dest.suffix
+                i = 1
+                while dest.exists():
+                    dest = dest.with_name(f"{stem}({i}){suffix}")
+                    i += 1
+
+            def _prog(done: int, total: int) -> None:
+                with _baidu_dl_lock:
+                    t = _baidu_dl_tasks[tid]
+                    t["progress"] = done
+                    if total:
+                        t["total"] = total
+
+            _baidu_provider.download_share(
+                payload.url, payload.pwd, payload.path, dest, token,
+                progress=_prog, backend=payload.backend or "auto",
+            )
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(
+                    status="completed",
+                    progress=_baidu_dl_tasks[tid]["total"] or _baidu_dl_tasks[tid]["progress"],
+                    filepath=str(dest),
+                )
+        except CloudError as exc:
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(
+                    status="failed",
+                    error=exc.message + (("：" + exc.hint) if exc.hint else ""),
+                )
+        except Exception as exc:  # noqa: BLE001 — 兜底，避免后台线程静默崩溃
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(status="failed", error=str(exc))
+
+    threading.Thread(target=_worker, name=f"vdl-baidushare-{tid}", daemon=True).start()
+    return {"task_id": tid, "name": name}
+
+
+# ── 百度令牌本机持久化（每个用户各自存自己机器，重启后免重复授权）────────
+@app.get("/api/cloud/baidu/token")
+def cloud_baidu_token_get():
+    if not BAIDU_ENABLED:
+        return {"logged_in": False, "reason": "未配置百度网盘凭据"}
+    data = load_baidu_token() or {}
+    tok = data.get("access_token") or ""
+    return {
+        "logged_in": bool(tok),
+        "access_token": tok,
+        "expires_in": data.get("expires_in"),
+        "scope": data.get("scope"),
+    }
+
+
+class BaiduTokenSet(BaseModel):
+    access_token: str = ""
+    expires_in: int | None = None
+    scope: str = ""
+    refresh_token: str = ""
+
+
+@app.post("/api/cloud/baidu/token")
+def cloud_baidu_token_set(payload: BaiduTokenSet):
+    tok = (payload.access_token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=400, detail="缺少 access_token")
+    save_baidu_token(payload.model_dump())
+    return {"ok": True}
+
+
+@app.delete("/api/cloud/baidu/token")
+def cloud_baidu_token_del():
+    clear_baidu_token()
+    return {"ok": True}
 
 
 @app.post("/api/cloud/save")
