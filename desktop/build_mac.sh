@@ -227,7 +227,7 @@ fi
   --hidden-import webview \
   --hidden-import webview.platforms.cocoa \
   --collect-submodules yt_dlp \
-  "${COMMENTARY_DATA[@]}" \
+  ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   "$REPO/desktop/desktop_launcher.py"
 
 # 校验：PyInstaller 必须产出 .app bundle，否则后续注入 ffmpeg/web 都会失败

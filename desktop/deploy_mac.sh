@@ -44,7 +44,10 @@ pkill -9 -f "$EXE" 2>/dev/null || true
 sleep 2
 pgrep -f "$EXE" >/dev/null && die "旧实例进程仍存活，无法安全部署（请手动检查 Activity Monitor）"
 
-# 2) 复制（ditto 可靠合并，且不需要先删除旧目录，沙盒安全）
+# 2) 复制（先删除旧 app 再 ditto，避免新旧结构差异导致目录冲突——
+#    例如旧版含解说 collect-all 目录 tokenizers/av/onnxruntime，新版不含时 ditto 会报 Is a directory）
+echo "▶ 删除旧版本 $APP ..."
+rm -rf "$APP" || die "删除旧 app 失败"
 echo "▶ 复制新版本到 $APP ..."
 ditto "$DIST" "$APP" || die "ditto 复制失败"
 
