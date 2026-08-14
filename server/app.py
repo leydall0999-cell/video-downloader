@@ -2906,6 +2906,119 @@ def cloud_baidu_callback(code: str = "", state: str = ""):
     return HTMLResponse(_baidu_callback_html(token=token.get("access_token", "")))
 
 
+# ── 百度网盘「下载到本机」（官方 PCS，速度由账号等级决定）─────────────────
+# 内存任务表：仅保存下载进度，不持久化（百度 dlink 短时效，断点续传意义不大）。
+_baidu_dl_tasks: dict[str, dict] = {}
+_baidu_dl_lock = threading.Lock()
+
+
+class BaiduDownloadRequest(BaseModel):
+    token: str = ""
+    fs_id: int = 0
+    path: str = ""
+    name: str = ""
+
+
+@app.get("/api/cloud/baidu/list")
+def cloud_baidu_list(path: str = "/", token: str = ""):
+    """浏览用户网盘目录：返回归一化文件列表（文件夹在前）。"""
+    if not BAIDU_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
+    if not token:
+        raise HTTPException(status_code=400, detail="缺少 access_token（请先完成百度授权）")
+    try:
+        data = _baidu_provider.list_files(token, path)
+    except CloudError as exc:
+        raise HTTPException(status_code=502, detail=exc.message + (("：" + exc.hint) if exc.hint else ""))
+    items = data.get("list") or []
+    files = [
+        {
+            "fs_id": it.get("fs_id"),
+            "path": it.get("path"),
+            "name": it.get("server_filename") or it.get("filename") or "",
+            "size": it.get("size", 0),
+            "isdir": bool(it.get("isdir")),
+            "mtime": it.get("server_mtime", 0),
+        }
+        for it in items
+    ]
+    files.sort(key=lambda x: (not x["isdir"], -x["mtime"]))
+    return {"path": path or "/", "list": files, "has_more": bool(data.get("has_more"))}
+
+
+def _baidu_safe_name(name: str) -> str:
+    """取网盘文件名的纯文件名部分，剔除路径穿越字符。"""
+    base = Path(name or "").name
+    return base or "file"
+
+
+@app.post("/api/cloud/baidu/download")
+def cloud_baidu_download(payload: BaiduDownloadRequest):
+    """把网盘文件下载到本机 ~/Downloads/VideoDownloader/baidu/，后台线程跑，轮询进度。"""
+    if not BAIDU_ENABLED:
+        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
+    token = (payload.token or "").strip()
+    if not token or not payload.fs_id or not payload.path:
+        raise HTTPException(status_code=400, detail="缺少 token / fs_id / path")
+    name = _baidu_safe_name(payload.name) or _baidu_safe_name(payload.path)
+    tid = secrets.token_hex(8)
+    with _baidu_dl_lock:
+        _baidu_dl_tasks[tid] = {
+            "status": "pending", "progress": 0, "total": 0,
+            "error": "", "name": name, "filepath": "",
+        }
+
+    def _worker() -> None:
+        dest = DOWNLOAD_DIR / "baidu" / name
+        try:
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(status="downloading")
+            if dest.exists():
+                # 同名文件加序号，避免覆盖已下好的
+                stem = dest.stem
+                suffix = dest.suffix
+                i = 1
+                while dest.exists():
+                    dest = dest.with_name(f"{stem}({i}){suffix}")
+                    i += 1
+
+            def _prog(done: int, total: int) -> None:
+                with _baidu_dl_lock:
+                    t = _baidu_dl_tasks[tid]
+                    t["progress"] = done
+                    if total:
+                        t["total"] = total
+
+            _baidu_provider.download(token, int(payload.fs_id), payload.path, dest, progress=_prog)
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(
+                    status="completed",
+                    progress=_baidu_dl_tasks[tid]["total"] or _baidu_dl_tasks[tid]["progress"],
+                    filepath=str(dest),
+                )
+        except CloudError as exc:
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(
+                    status="failed",
+                    error=exc.message + (("：" + exc.hint) if exc.hint else ""),
+                )
+        except Exception as exc:  # noqa: BLE001 — 兜底，避免后台线程静默崩溃
+            with _baidu_dl_lock:
+                _baidu_dl_tasks[tid].update(status="failed", error=str(exc))
+
+    threading.Thread(target=_worker, name=f"vdl-baidudl-{tid}", daemon=True).start()
+    return {"task_id": tid, "name": name}
+
+
+@app.get("/api/cloud/baidu/task/{tid}")
+def cloud_baidu_task(tid: str):
+    with _baidu_dl_lock:
+        t = _baidu_dl_tasks.get(tid)
+    if not t:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
+    return t
+
+
 @app.post("/api/cloud/save")
 def cloud_save(payload: CloudSaveRequest, request: Request) -> dict:
     subscribed, free_used, free_daily = _check_cloud_quota(request)

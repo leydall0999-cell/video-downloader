@@ -38,6 +38,7 @@
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
+    <button type="button" class="tab" id="tabBaidu" hidden>☁️ 百度网盘</button>
   </nav>
 
   <div id="downloadView">
@@ -864,6 +865,33 @@
       <span class="cloud-status" id="cloudStatus"></span>
     </div>
     <p class="cloud-note">凭据仅保存在你本机浏览器（localStorage），只发往你配置的网盘。自托管实例下服务端会短暂读取以完成上传。</p>
+  </div>
+</dialog>
+
+<!-- 百度网盘浏览/下载：从用户自己的网盘把文件拉回本机（官方 PCS，速度由账号等级决定）-->
+<dialog id="baiduModal" class="modal" aria-labelledby="baiduModalTitle">
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 id="baiduModalTitle">☁️ 百度网盘</h2>
+      <button type="button" class="modal-close" id="baiduModalClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="modal-sub">从你<strong>自己的</strong>百度网盘把文件下载到本机（~/Downloads/VideoDownloader/baidu/）。走官方授权，速度由你账号等级决定；免费账号大文件可能被限速或需开通会员提速。</p>
+
+    <div class="baidu-auth-row">
+      <button type="button" class="btn btn-primary btn-sm" id="baiduDriveAuthBtn">授权百度网盘</button>
+      <span class="baidu-status" id="baiduDriveStatus">未授权</span>
+      <span class="baidu-hint" id="baiduDriveHint"></span>
+    </div>
+
+    <div class="baidu-breadcrumb" id="baiduBreadcrumb"></div>
+
+    <div class="baidu-list" id="baiduList"><p class="baidu-empty">请先授权百度网盘。</p></div>
+
+    <div class="baidu-dl">
+      <h3 class="baidu-dl-title">本机下载进度</h3>
+      <div class="baidu-dl-list" id="baiduDlList"><p class="baidu-empty">还没有下载任务。</p></div>
+    </div>
+    <p class="cloud-note">需在配置文件中填入你自己的百度开放平台应用凭据（VDL_BAIDU_APP_KEY / VDL_BAIDU_APP_SECRET / VDL_BAIDU_REDIRECT_URI，redirect_uri 须指向本机回调地址）才会显示本功能。</p>
   </div>
 </dialog>
 

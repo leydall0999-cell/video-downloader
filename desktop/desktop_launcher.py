@@ -99,6 +99,9 @@ def _load_external_config() -> dict:
     用途：用户租了国内 VPS 或买了付费国内节点后，把代理地址写进配置文件，.app 双击即可生效，
     不必去改 macOS 系统代理，也不必重打包。downloader._resolve_proxy 在每次请求时读取这些变量。
 
+    同样支持把百度网盘开放平台应用凭据写进配置文件（VDL_BAIDU_APP_KEY / VDL_BAIDU_APP_SECRET /
+    VDL_BAIDU_REDIRECT_URI），从而启用「百度网盘」下载/上传而无需重打包。凭据仅存于本机配置文件。
+
     优先级：运行时已存在的环境变量(launchd/shell 注入) > 配置文件 > _resolve_proxy 自动检测系统代理。
     """
     import json
@@ -120,7 +123,14 @@ def _load_external_config() -> dict:
         if not isinstance(data, dict):
             continue
         applied = []
-        for key in ("VDL_PROXY_CN", "VDL_PROXY", "VDL_MAX_FILE_MB"):
+        for key in (
+            "VDL_PROXY_CN",
+            "VDL_PROXY",
+            "VDL_MAX_FILE_MB",
+            "VDL_BAIDU_APP_KEY",
+            "VDL_BAIDU_APP_SECRET",
+            "VDL_BAIDU_REDIRECT_URI",
+        ):
             val = data.get(key)
             if isinstance(val, str) and val.strip():
                 if key not in os.environ:        # 显式环境变量优先于配置文件

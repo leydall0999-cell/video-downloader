@@ -124,6 +124,16 @@
     cloudSave: $('cloudSave'),
     cloudStatus: $('cloudStatus'),
     cloudSubNote: $('cloudSubNote'),
+    // 百度网盘浏览/下载
+    tabBaidu: $('tabBaidu'),
+    baiduModal: $('baiduModal'),
+    baiduModalClose: $('baiduModalClose'),
+    baiduDriveAuthBtn: $('baiduDriveAuthBtn'),
+    baiduDriveStatus: $('baiduDriveStatus'),
+    baiduDriveHint: $('baiduDriveHint'),
+    baiduBreadcrumb: $('baiduBreadcrumb'),
+    baiduList: $('baiduList'),
+    baiduDlList: $('baiduDlList'),
     // 批量下载（桌面版万能下载器重点能力）
     batchToggle: $('batchToggle'),
     batchBox: $('batchBox'),
@@ -3393,12 +3403,169 @@
       baiduToken = d.token;
       localStorage.setItem('vdl_baidu_token', d.token);
       el.cloudBaiduStatus.textContent = '已授权 ✓';
+      // 同步百度网盘浏览面板状态
+      if (el.baiduDriveStatus) {
+        el.baiduDriveStatus.textContent = '已授权 ✓';
+        el.baiduDriveStatus.className = 'baidu-status is-ok';
+      }
+      if (baiduModalOpen) loadBaiduList(currentBaiduPath);
     } else if (d.error) {
       el.cloudBaiduStatus.textContent = '授权失败：' + d.error;
+      if (el.baiduDriveStatus) {
+        el.baiduDriveStatus.textContent = '授权失败：' + d.error;
+        el.baiduDriveStatus.className = 'baidu-status is-err';
+      }
     }
     const bd = document.getElementById('baiduAuthDialog');
     if (bd) bd.close();
   });
+
+  // ── 百度网盘浏览/下载面板 ──
+  let baiduModalOpen = false;
+  let currentBaiduPath = '/';
+  const baiduDlPollers = {};  // tid -> interval
+
+  el.tabBaidu.addEventListener('click', () => {
+    if (!node.baiduAvailable) { el.baiduDriveHint.textContent = '该实例未配置百度网盘凭据'; return; }
+    baiduModalOpen = true;
+    if (baiduToken) {
+      el.baiduDriveStatus.textContent = '已授权 ✓';
+      el.baiduDriveStatus.className = 'baidu-status is-ok';
+    } else {
+      el.baiduDriveStatus.textContent = '未授权';
+      el.baiduDriveStatus.className = 'baidu-status';
+      el.baiduList.innerHTML = '<p class="baidu-empty">请先点「授权百度网盘」。</p>';
+    }
+    el.baiduModal.showModal();
+    if (baiduToken) loadBaiduList(currentBaiduPath);
+  });
+  el.baiduModalClose.addEventListener('click', () => el.baiduModal.close());
+  el.baiduModal.addEventListener('click', (e) => { if (e.target === el.baiduModal) el.baiduModal.close(); });
+  el.baiduModal.addEventListener('close', () => { baiduModalOpen = false; });
+  el.baiduDriveAuthBtn.addEventListener('click', () => {
+    if (!node.baiduAuthUrl) { el.baiduDriveStatus.textContent = '该实例未启用百度网盘'; return; }
+    openBaiduAuthInPage(node.baiduAuthUrl);
+  });
+
+  function _fmtSize(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  function renderBaiduBreadcrumb() {
+    const parts = currentBaiduPath.split('/').filter(Boolean);
+    let acc = '';
+    const crumbs = [{ label: '根目录', path: '/' }];
+    parts.forEach((p) => { acc += '/' + p; crumbs.push({ label: p, path: acc }); });
+    el.baiduBreadcrumb.innerHTML = crumbs.map((c, i) => {
+      const sep = i ? '<span class="sep"> / </span>' : '';
+      return `${sep}<span class="crumb" data-path="${encodeURIComponent(c.path)}">${c.label}</span>`;
+    }).join('');
+    el.baiduBreadcrumb.querySelectorAll('.crumb').forEach((elc) => {
+      elc.addEventListener('click', () => loadBaiduList(decodeURIComponent(elc.dataset.path)));
+    });
+  }
+
+  async function loadBaiduList(path) {
+    if (!baiduToken) return;
+    currentBaiduPath = path || '/';
+    renderBaiduBreadcrumb();
+    el.baiduList.innerHTML = '<p class="baidu-empty">加载中…</p>';
+    try {
+      const r = await fetch(`/api/cloud/baidu/list?path=${encodeURIComponent(currentBaiduPath)}&token=${encodeURIComponent(baiduToken)}`);
+      const data = await r.json();
+      if (!r.ok) {
+        el.baiduList.innerHTML = `<p class="baidu-empty">加载失败：${data.detail || r.status}</p>`;
+        return;
+      }
+      const list = data.list || [];
+      if (!list.length) {
+        el.baiduList.innerHTML = '<p class="baidu-empty">此目录为空。</p>';
+        return;
+      }
+      el.baiduList.innerHTML = list.map((it) => {
+        const icon = it.isdir ? '📁' : '📄';
+        const dlBtn = it.isdir ? '' : `<button type="button" class="btn btn-accent btn-sm dl" data-fsid="${it.fs_id}" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(it.name)}">下载</button>`;
+        return `<div class="baidu-row">
+          <span class="icon">${icon}</span>
+          <span class="name ${it.isdir ? 'folder' : ''}" ${it.isdir ? `data-go="${encodeURIComponent(it.path)}"` : ''}>${it.name}</span>
+          <span class="size">${it.isdir ? '' : _fmtSize(it.size)}</span>
+          <span class="dl">${dlBtn}</span>
+        </div>`;
+      }).join('');
+      el.baiduList.querySelectorAll('.name.folder').forEach((n) => {
+        n.addEventListener('click', () => loadBaiduList(decodeURIComponent(n.dataset.go)));
+      });
+      el.baiduList.querySelectorAll('.dl button').forEach((b) => {
+        b.addEventListener('click', () => startBaiduDownload({
+          fs_id: Number(b.dataset.fsid),
+          path: decodeURIComponent(b.dataset.path),
+          name: decodeURIComponent(b.dataset.name),
+        }));
+      });
+    } catch (err) {
+      el.baiduList.innerHTML = `<p class="baidu-empty">加载出错：${err.message}</p>`;
+    }
+  }
+
+  function startBaiduDownload(item) {
+    if (!baiduToken) { el.baiduDriveStatus.textContent = '请先授权'; return; }
+    fetch('/api/cloud/baidu/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: baiduToken, fs_id: item.fs_id, path: item.path, name: item.name }),
+    }).then((r) => r.json()).then((data) => {
+      if (!data.task_id) { alert('发起下载失败：' + (data.detail || '未知错误')); return; }
+      addBaiduDlItem(data.task_id, item.name);
+      pollBaiduTask(data.task_id);
+    }).catch((err) => alert('发起下载失败：' + err.message));
+  }
+
+  function addBaiduDlItem(tid, name) {
+    if (el.baiduDlList.querySelector('.baidu-empty')) el.baiduDlList.innerHTML = '';
+    const div = document.createElement('div');
+    div.className = 'baidu-dl-item';
+    div.id = 'baidudl-' + tid;
+    div.innerHTML = `<div class="top"><span class="nm">${name}</span><span class="st">排队中…</span></div>
+      <div class="baidu-dl-bar"><i></i></div>`;
+    el.baiduDlList.prepend(div);
+  }
+
+  function pollBaiduTask(tid) {
+    if (baiduDlPollers[tid]) clearInterval(baiduDlPollers[tid]);
+    baiduDlPollers[tid] = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/cloud/baidu/task/${tid}`);
+        const t = await r.json();
+        const div = document.getElementById('baidudl-' + tid);
+        if (!div) return;
+        const st = div.querySelector('.st');
+        const bar = div.querySelector('.baidu-dl-bar > i');
+        const total = Number(t.total) || 0;
+        const pct = total ? Math.min(100, Math.round((Number(t.progress) / total) * 100)) : 0;
+        bar.style.width = pct + '%';
+        if (t.status === 'downloading') {
+          st.textContent = `下载中 ${pct}%  (${_fmtSize(t.progress)} / ${_fmtSize(total)})`;
+          st.className = 'st';
+        } else if (t.status === 'completed') {
+          st.textContent = `完成 ✓  ${_fmtSize(t.total || t.progress)}`;
+          st.className = 'st is-ok';
+          clearInterval(baiduDlPollers[tid]);
+        } else if (t.status === 'failed') {
+          st.textContent = '失败：' + (t.error || '未知');
+          st.className = 'st is-err';
+          clearInterval(baiduDlPollers[tid]);
+        } else {
+          st.textContent = '排队中…';
+        }
+      } catch (err) {
+        /* 忽略瞬时错误，下次轮询重试 */
+      }
+    }, 1000);
+  }
 
   // ------------------------------------------------------------------ 媒体库（桌面版功能）
   // 以磁盘文件为准浏览/播放/删除已下载内容；能力由 /api/nodes 的 library.enabled 控制。
@@ -5235,6 +5402,7 @@
       node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
       node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
       node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
+      el.tabBaidu.hidden = !node.baiduAvailable;
       node.libraryEnabled = !!(library && library.enabled);
       node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
       node.retentionEnabled = !!(retention && retention.enabled);

@@ -229,6 +229,89 @@ class BaiduProvider:
             raise CloudError("百度网盘合并文件失败", f"errno={create.get('errno')} {create.get('errmsg', '')}")
         return dest_path
 
+    # ------------------------------------------------------------------ #
+    # 下载：从用户自己的网盘把文件拉回本机（官方 PCS，速度由账号等级决定）
+    # ------------------------------------------------------------------ #
+
+    def list_files(self, token: str, dir_path: str = "/", page: int = 1, limit: int = 200) -> dict:
+        """列出用户网盘某目录下的文件（含子目录）。返回百度原始 JSON。"""
+        if not token:
+            raise CloudError("未授权百度网盘", "请先完成百度账号授权")
+        params = {
+            "method": "list",
+            "access_token": token,
+            "dir": dir_path or "/",
+            "order": "time",
+            "desc": "1",
+            "limit": str(min(max(int(limit), 1), 1000)),
+            "page": str(max(int(page), 1)),
+        }
+        try:
+            resp = requests.get(self.PAN_API, params=params, timeout=30)
+        except requests.RequestException as exc:
+            raise CloudError("列出百度网盘文件失败", str(exc)) from exc
+        data = resp.json()
+        if data.get("errno", 0) not in (0, None):
+            raise CloudError("列出百度网盘文件失败", f"errno={data.get('errno')} {data.get('errmsg', '')}")
+        return data
+
+    def download_url(self, token: str, fs_id: int, path: str) -> dict:
+        """换取单个文件的下载直链 dlink（短时效，请求时须带正确 UA）。"""
+        if not token:
+            raise CloudError("未授权百度网盘", "请先完成百度账号授权")
+        try:
+            resp = requests.get(
+                self.PAN_API,
+                params={
+                    "method": "download",
+                    "access_token": token,
+                    "fid": str(fs_id),
+                    "path": path,
+                },
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise CloudError("获取百度网盘下载链接失败", str(exc)) from exc
+        data = resp.json()
+        if data.get("errno", 0) != 0 or not data.get("dlink"):
+            raise CloudError(
+                "获取百度网盘下载链接失败",
+                f"errno={data.get('errno')} {data.get('errmsg', '')} {data.get('error_msg', '')}",
+            )
+        return data
+
+    def download(self, token: str, fs_id: int, path: str, local_path: Path, progress=None) -> int:
+        """把网盘文件流式下载到本地 local_path，回报进度（已下载字节 / 总字节）。返回写入字节数。
+
+        注意：免费账号大文件常被百度服务端限速或要求「提速」（会员），这部分速度由账号等级决定，
+        本方法只做合规的官方下载，不绕过平台限速。
+        """
+        info = self.download_url(token, fs_id, path)
+        dlink = info["dlink"]
+        total = int(info.get("size") or 0)
+        # 百度 dlink 必须用「像样的」UA 请求，否则会在鉴权跳转里 403/死循环
+        headers = {"User-Agent": "pan.baidu.com"}
+        try:
+            resp = requests.get(dlink, headers=headers, stream=True, timeout=30, allow_redirects=True)
+        except requests.RequestException as exc:
+            raise CloudError("百度网盘下载请求失败", str(exc)) from exc
+        if resp.status_code != 200:
+            raise CloudError(
+                "百度网盘下载被拒绝",
+                f"HTTP {resp.status_code}（免费账号大文件可能需开通会员提速）",
+            )
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        with open(local_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                written += len(chunk)
+                if progress:
+                    progress(written, total or written)
+        return written
+
 
 # --------------------------------------------------------------------------- #
 # 百度 OAuth 辅助（供 app.py 路由调用）
