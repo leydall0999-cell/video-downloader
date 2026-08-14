@@ -132,6 +132,7 @@ def _load_external_config() -> dict:
             "VDL_BAIDU_APP_KEY",
             "VDL_BAIDU_APP_SECRET",
             "VDL_BAIDU_REDIRECT_URI",
+            "VDL_BAIDU_APP_NAME",
         ):
             val = data.get(key)
             if isinstance(val, str) and val.strip():

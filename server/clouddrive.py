@@ -507,7 +507,9 @@ class BaiduProvider:
         if not token:
             raise CloudError("未授权百度网盘", "请先完成百度账号授权")
         surl = self._parse_share_surl(share_url)
-        dest = "/" + (dest.strip("/") or "VideoDownloader_Share")
+        dest = dest or _baidu_share_dest("VideoDownloader_Share")
+        if not dest.startswith("/"):
+            dest = "/" + dest
         try:
             resp = requests.post(
                 BAIDU_SHARE_API + "/transfer",
@@ -544,12 +546,13 @@ class BaiduProvider:
         token: str,
         progress=None,
         backend: str = "auto",
-        dest: str = "/VideoDownloader_Share",
+        dest: str = "",
     ) -> int:
         """把分享里的某个文件：先转存到用户网盘，再从用户网盘下载到本机。返回写入字节数。
 
         速度由用户账号等级决定，本方法只做官方合规下载，不绕过平台限速。
         """
+        dest = dest or _baidu_share_dest("VideoDownloader_Share")
         transferred = self.share_transfer(share_url, pwd, [share_path], dest, token)
         if not transferred:
             raise CloudError("转存后未获得文件信息", "请稍后重试或检查分享链接")
@@ -564,6 +567,21 @@ class BaiduProvider:
 # --------------------------------------------------------------------------- #
 
 BAIDU_SHARE_API = "https://pan.baidu.com/share"
+
+
+def _baidu_app_name() -> str | None:
+    """返回百度开放平台应用名（来自环境变量 VDL_BAIDU_APP_NAME）。
+    2026-06-03 后新建的应用只能访问 /apps/{appname}/ 目录，
+    配置此项后转存/下载自动使用该前缀路径；未配置则走根目录（兼容老应用）。"""
+    return (os.environ.get("VDL_BAIDU_APP_NAME") or "").strip() or None
+
+
+def _baidu_share_dest(fallback: str = "VideoDownloader_Share") -> str:
+    """返回分享转存的目标目录。有 APP_NAME 时用 /apps/{name}/{fallback}，否则 /{fallback}（根目录，兼容老应用）。"""
+    app = _baidu_app_name()
+    if app:
+        return f"/apps/{app}/{fallback}"
+    return f"/{fallback}"
 
 
 def _baidu_token_path() -> Path:

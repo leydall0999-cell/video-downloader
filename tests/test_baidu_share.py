@@ -208,3 +208,38 @@ def test_token_routes(tmp_path, monkeypatch):
     assert g2.json()["access_token"] == "TOK"
     assert c.delete("/api/cloud/baidu/token").status_code == 200
     assert c.get("/api/cloud/baidu/token").json()["logged_in"] is False
+
+
+# ── 2026 新政：/apps/{appname}/ 路径兼容 ────────────────────────────────
+def test_baidu_app_name_from_env(monkeypatch):
+    monkeypatch.setattr(cd.os.environ, "get", lambda k, d="": {"VDL_BAIDU_APP_NAME": "MyApp"}.get(k, d))
+    assert cd._baidu_app_name() == "MyApp"
+
+
+def test_baidu_app_name_empty(monkeypatch):
+    monkeypatch.setattr(cd.os.environ, "get", lambda k, d="": "")
+    assert cd._baidu_app_name() is None
+
+
+def test_share_dest_with_app_name(monkeypatch):
+    monkeypatch.setattr(cd.os.environ, "get", lambda k, d="": {"VDL_BAIDU_APP_NAME": "VDL"}.get(k, d))
+    assert cd._baidu_share_dest("Share") == "/apps/VDL/Share"
+
+
+def test_share_dest_without_app_name(monkeypatch):
+    monkeypatch.setattr(cd.os.environ, "get", lambda k, d="": "")
+    assert cd._baidu_share_dest("Share") == "/Share"
+
+
+def test_share_transfer_uses_apps_path(monkeypatch):
+    """配置 APP_NAME 后，share_transfer 的 dest 自动走 /apps/{name}/ 前缀（不传 dest 时）。"""
+    prov = BaiduProvider()
+    monkeypatch.setattr(cd.os.environ, "get", lambda k, d="": {"VDL_BAIDU_APP_NAME": "TestApp"}.get(k, d))
+    captured = []
+    monkeypatch.setattr(cd.requests, "post", lambda *a, **k: (captured.append(k) or _Resp({
+        "errno": 0,
+        "extra": {"list": [{"fs_id": 1, "path": "/apps/TestApp/VideoDownloader_Share/f.mp4"}]},
+    })))
+    prov.share_transfer("https://pan.baidu.com/s/1AbC", "pwd", ["/f.mp4"], "", "TOK")
+    # 验证 POST data 里 dest 是 /apps/{appname}/VideoDownloader_Share
+    assert captured[0]["data"]["dest"] == "/apps/TestApp/VideoDownloader_Share"
