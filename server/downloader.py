@@ -1214,10 +1214,27 @@ def _detect_play_url(info: dict[str, Any]) -> tuple[str | None, bool]:
     u = info.get("url") or ""
     if _is_hls_url(u):
         return u, True
-    # 3) 普通 MP4 直链
+    # 3) 普通 MP4 直链（info.direct 标记）
     du = _detect_direct_url(info)
     if du:
         return du, False
+    # 3b) 从 formats 中挑最高分辨率非 HLS 直链（覆盖 info.direct=False 的站点）
+    prog_cands: list[tuple[int, str]] = []
+    for f in formats:
+        u = f.get("url") or ""
+        if not u:
+            continue
+        proto = (f.get("protocol") or "").split("+")[0].lower()
+        if proto in ("m3u8", "m3u8_native") or _is_hls_url(u):
+            continue
+        h = int(f.get("height") or 0)
+        if h:
+            tbr = float(f.get("tbr") or 0) or 0.0
+            prog_cands.append((h, tbr, u))
+    if prog_cands:
+        # 先按 height 降序，同 height 按 tbr 降序
+        prog_cands.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return prog_cands[0][2], False
     return None, False
 
 
@@ -1254,10 +1271,9 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
             elif audio is None:
                 audio = item
         else:
-            # 渐进式直链（MP4/WebM 等可在 WKWebView <video> 直接播放）
-            ext = (f.get("ext") or "").lower()
-            if height and ext in ("mp4", "webm", "m4v", "mov") \
-                    and proto in ("http", "https", "direct", "https-direct", "http-direct"):
+            # 渐进式直链：放宽过滤——只要有 url + height 就纳入观看选项。
+            # 很多第三方提取器 ext/proto 字段不规范；播放失败由前端 onerror 兜底。
+            if height:
                 cur = prog.get(height)
                 if cur is None or tbr > cur["tbr"]:
                     prog[height] = item
