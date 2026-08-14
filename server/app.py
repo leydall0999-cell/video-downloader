@@ -1476,10 +1476,10 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
     url, platform = parse_source(payload.url)
     # 国内站直连、本就快，用更短超时；受限视频也能更快判定，不必让用户空等
     host = _host_of(url)
-    # 腾讯视频的 vqq 提取器需要拉 m3u8 分片列表（长视频/剧集更慢），
-    # 给 60s 超时避免误报；其他国内站保持快速响应。
+    # 腾讯视频的 vqq 提取器容易卡在 m3u8 循环（新版页面 pinia 数据提取失败），
+    # 给更长超时避免误报；其他国内站保持快速响应。
     if host == "v.qq.com":
-        timeout = 60
+        timeout = 35
     elif is_china_host(host):
         timeout = RESOLVE_TIMEOUT_DOMESTIC
     else:
@@ -1505,17 +1505,6 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
                 "②当前网络无法访问该平台（可尝试在「高级选项」设置代理）"
             )
         raise HTTPException(status_code=504, detail=detail) from None
-    # 腾讯等 HLS 站同一清晰度常有多 CDN 源、默认源易被限速：解析后对腾讯视频自动测速，
-    # 前端据此标出最快源并默认选中，从根上绕开「默认 CDN 限速」。
-    sources: list[dict] = []
-    if host == "v.qq.com":
-        try:
-            sources = await asyncio.wait_for(
-                loop.run_in_executor(prober, downloader._speedtest_formats, info, host, payload.cookie, payload.proxy),
-                timeout=30,
-            )
-        except Exception:
-            sources = []  # 测速失败/超时不影响解析主流程，前端降级为无速度提示
     return {
         "url": url,
         "platform": {"key": platform.key, "name": platform.name},

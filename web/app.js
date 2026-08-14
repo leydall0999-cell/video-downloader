@@ -87,8 +87,6 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
-    cookieDetectBtn: $('cookieDetectBtn'),
-    cookieStatus: $('cookieStatus'),
     proxyInput: $('proxyInput'),
     concurrentInput: $('concurrentInput'),
     downloaderSelect: $('downloaderSelect'),
@@ -387,9 +385,6 @@
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
   let selectedQuality = 'best';
-  // 测速选源：{ height: {format_id, speed_bps, speed_label, is_fastest_overall, ...} }
-  let speedByHeight = {};
-  let selectedFormatId = '';   // 当前选中清晰度对应的最快 CDN 源 format_id
   let allPlatforms = [];
   const trackers = new Map();
 
@@ -747,20 +742,8 @@
     else el.modal.setAttribute('open', '');
   };
 
-  const renderQualities = (qualities, sources = []) => {
-    // 建立「高度 → 最快源」映射，并找出全局最快源，用于默认选中 + 下载时带 format_id
-    speedByHeight = {};
-    let overallFastest = null;
-    sources.forEach((s) => {
-      speedByHeight[s.height] = s;
-      if (s.is_fastest_overall) overallFastest = s;
-    });
-    let defaultKey = qualities[0]?.key ?? 'best';
-    if (overallFastest && qualities.some((q) => q.key === String(overallFastest.height))) {
-      defaultKey = String(overallFastest.height);
-    }
-    selectedQuality = defaultKey;
-    selectedFormatId = (speedByHeight[overallFastest?.height] || {}).format_id || '';
+  const renderQualities = (qualities) => {
+    selectedQuality = qualities[0]?.key ?? 'best';
 
     el.qualityGrid.replaceChildren();
 
@@ -775,20 +758,9 @@
       const label = document.createElement('strong');
       label.textContent = quality.label;
       const note = document.createElement('small');
-      let noteText = quality.approx_size
+      const noteText = quality.approx_size
         ? `${quality.note} · 约 ${formatBytes(quality.approx_size)}`
         : quality.note;
-      // 测速选源：该清晰度若有实测速度，标注最快源；不可用则提示
-      const spd = speedByHeight[Number(quality.key)];
-      if (spd) {
-        if (spd.speed_bps > 0) {
-          const tag = spd.is_fastest_overall ? '⚡ 全局最快' : '⚡';
-          noteText = `${noteText} · ${tag}实测 ${spd.speed_label}`;
-          option.classList.add('has-speed');
-        } else {
-          noteText = `${noteText} · 该清晰度源不可用`;
-        }
-      }
       note.textContent = noteText;
 
       option.append(label, note);
@@ -799,7 +771,6 @@
 
   const selectQuality = (key) => {
     selectedQuality = key;
-    selectedFormatId = (speedByHeight[Number(key)] || {}).format_id || '';
     el.qualityGrid.querySelectorAll('.quality-opt').forEach((node) => {
       node.setAttribute('aria-checked', String(node.dataset.key === key));
     });
@@ -836,7 +807,7 @@
       el.directHint.hidden = true;
       el.directHint.textContent = '';
       el.serverFallbackBtn.hidden = true;
-      renderQualities(data.qualities, data.sources || []);
+      renderQualities(data.qualities);
     }
     // 在线观看：按清晰度生成下拉，默认选最高画质
     const watchOpts = (video.watch_options && video.watch_options.length) ? video.watch_options : null;
@@ -922,28 +893,6 @@
     refs.resume.addEventListener('click', () => resumeTask(taskId, refs.base || ''));
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
-    // 慢速告警横幅内的快捷动作（换清晰度重试 / 填代理），事件委托到卡片根节点，
-    // 每次 paintTask 重渲染横幅也不会重复绑定。
-    node.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action]');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const url = refs.root.dataset.srcUrl;
-      if (action === 'retry-quality') {
-        const quality = btn.dataset.quality;
-        // 自动取消当前慢速任务，开启更低清晰度重试（复用当前解析的 url/cookie/proxy）
-        cancelTask(taskId, refs.base || '');
-        startDownload(quality, {
-          url,
-          cookie: el.cookieInput.value.trim(),
-          proxy: el.proxyInput.value.trim(),
-        });
-      } else if (action === 'focus-proxy') {
-        el.proxyInput.focus();
-        el.proxyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        if (el.advancedToggle) el.advancedToggle.classList.add('is-open');
-      }
-    });
     refs.stepsToggle.addEventListener('click', () => {
       const hidden = refs.stepsPanel.hidden;
       refs.stepsPanel.hidden = !hidden;
@@ -1111,31 +1060,6 @@
     }
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
-  };
-
-  const renderSlowWarning = (refs, task) => {
-    // 记录当前任务 url 供横幅内「换清晰度重试」委托处理器读取（全局 resolved 可能已被新链接覆盖）
-    refs.root.dataset.srcUrl = task.source_url || '';
-    const warn = task.slow_warning;
-    const active = ACTIVE_STATES.includes(task.status);
-    if (!warn || !active) {
-      refs.slowWarn.hidden = true;
-      refs.slowWarn.innerHTML = '';
-      return;
-    }
-    const msg = escHtml(warn.message || '下载速度过慢');
-    const tips = (Array.isArray(warn.suggestions) ? warn.suggestions : [])
-      .map((s) => `<li>${escHtml(s)}</li>`).join('');
-    const keys = Array.isArray(warn.suggested_quality_keys) ? warn.suggested_quality_keys : [];
-    const retryBtns = keys.map((q) =>
-      `<button type="button" class="btn btn-accent btn-sm" data-action="retry-quality" data-quality="${escHtml(q)}">换 ${escHtml(q)}P 重试</button>`
-    ).join('');
-    refs.slowWarn.innerHTML =
-      `<div class="slow-warn-head">⚠️ <span>${msg}</span></div>` +
-      (tips ? `<ul class="slow-warn-tips">${tips}</ul>` : '') +
-      `<div class="slow-warn-actions">${retryBtns}` +
-      `<button type="button" class="btn btn-ghost btn-sm" data-action="focus-proxy">填入代理</button></div>`;
-    refs.slowWarn.hidden = false;
   };
 
   const renderTaskSteps = (refs, task) => {
@@ -1523,7 +1447,6 @@
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
-      updateCookieStatus(url);   // 解析成功后自动检测浏览器登录态，省去手动粘贴
     } catch (error) {
       resolved = null;
       showError(error.message || '解析失败', error.hint);

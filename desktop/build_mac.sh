@@ -223,7 +223,6 @@ fi
   --hidden-import yt_dlp_plugins.extractor \
   --hidden-import yt_dlp_plugins.extractor.chrqj \
   --hidden-import yt_dlp_plugins.extractor.kuaishou \
-  --hidden-import yt_dlp_plugins.extractor.vqq_patch \
   --hidden-import webview \
   --hidden-import webview.platforms.cocoa \
   --collect-submodules yt_dlp \
