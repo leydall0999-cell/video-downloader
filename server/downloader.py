@@ -41,7 +41,8 @@ PROBE_RETRIES = 1
 # 1) 下载阶段：已开始下分片但 N 秒无字节增量 → 判定停滞，自动终止
 # 2) 整体硬上限：解析+下载任意阶段超过此秒数 → 强制结束（兜底，极少触发）
 DOWNLOAD_STALL_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_STALL_TIMEOUT", "180"))
-DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "1800"))
+# 腾讯等站按 IP/单连接限速（实测 ~16KB/s），1800s 仅够下 29MB，故放宽到 7200s 兜底
+DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "7200"))
 WATCHDOG_POLL = int(os.environ.get("VDL_WATCHDOG_POLL", "5"))  # 看门狗轮询间隔（秒）
 # 慢速告警：下载中持续慢于此速率（字节/秒）超过窗口，则在前端弹出「建议换清晰度/代理」提示。
 # 注意：这是下载过程中的实时检测（无法在真正下载前预估 CDN 速率），窗口设小以便尽早提示。
