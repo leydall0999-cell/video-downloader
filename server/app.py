@@ -1324,6 +1324,10 @@ class DownloadRequest(BaseModel):
     concurrent_fragments: int = Field(default=0, ge=0, le=64)
     # 下载器：native（默认，yt-dlp 原生）/ aria2c（外部下载器，需本机已装，缺失自动回退）
     downloader: str = Field(default="native", max_length=16)
+    # 在线观看：前端从解析结果传入，存入任务后任务面板可直接打开观看
+    play_url: str = Field(default="", max_length=2048)
+    watch_options: list[dict] = Field(default_factory=list)
+    is_hls: bool = False
 
 
 @app.exception_handler(LinkError)
@@ -1674,6 +1678,9 @@ def create_download(payload: DownloadRequest, request: Request) -> dict:
         downloader_type=payload.downloader,
         cookie=payload.cookie,
         proxy=payload.proxy,
+        play_url=payload.play_url,
+        watch_options=payload.watch_options,
+        is_hls=payload.is_hls,
     )
     scheduler.submit(downloader.run_download, task, store, payload.quality, payload.cookie, payload.proxy, SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     return {

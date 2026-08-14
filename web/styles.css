@@ -273,6 +273,14 @@ img { max-width: 100%; display: block; }
 .cookie-help-copy:hover { background: rgba(79, 70, 229, .16); }
 .cookie-help-copy:active { transform: translateY(1px); }
 
+/* 任务面板：在线观看清晰度选择 */
+.task-watch-quality {
+  max-width: 110px; font-size: .78rem; padding: .2rem .4rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text);
+}
+.task-watch-quality:focus { border-color: var(--accent); outline: none; }
+
 /* ---------------- chips ---------------- */
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .9rem; }
 .chip {

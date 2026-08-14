@@ -61,6 +61,10 @@ class DownloadTask:
     proxy: str = ""
     # 续传标记：取消/失败时若工作目录残留 .part 分片，置 True，前端据此提示「可断点续传」
     resumable: bool = False
+    # 在线观看：解析时提取的播放地址与清晰度列表，存入任务后前端可在任务面板直接打开观看
+    play_url: str = ""
+    watch_options: list[dict] = field(default_factory=list)
+    is_hls: bool = False
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -122,6 +126,9 @@ class DownloadTask:
             "extracted_text": self.extracted_text,
             "source_url": self.source_url,
             "resumable": self.resumable,
+            "play_url": self.play_url,
+            "watch_options": self.watch_options,
+            "is_hls": self.is_hls,
             "steps": self.steps,
             "logs": self.logs,
         }
@@ -139,7 +146,9 @@ class TaskStore:
     def create(self, *, url: str, title: str, platform: str, quality: str,
                 quality_key: str = "best", extract_mode: str = "",
                 concurrent_fragments: int = 0, downloader_type: str = "",
-                cookie: str = "", proxy: str = "") -> DownloadTask:
+                cookie: str = "", proxy: str = "",
+                play_url: str = "", watch_options: list[dict] | None = None,
+                is_hls: bool = False) -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -148,6 +157,7 @@ class TaskStore:
             quality_key=quality_key, workdir=workdir, extract_mode=extract_mode,
             concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
             cookie=cookie, proxy=proxy,
+            play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
         )
         with self._lock:
             self._tasks[task_id] = task

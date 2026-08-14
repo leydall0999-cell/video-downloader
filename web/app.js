@@ -882,6 +882,8 @@
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
       slowWarn: node.querySelector('[data-slow-warn]'),
+      watchBtn: node.querySelector('[data-watch]'),
+      watchQuality: node.querySelector('[data-watch-quality]'),
       stepsBox: node.querySelector('[data-steps-box]'),
       stepsToggle: node.querySelector('[data-steps-toggle]'),
       stepsToggleLabel: node.querySelector('.task-steps-toggle-label'),
@@ -983,6 +985,46 @@
 
     // 慢速告警横幅：下载中且速率持续过低时展示提示 + 快捷动作
     renderSlowWarning(refs, task);
+
+    // 在线观看：任务面板也显示观看按钮（解析结果里的播放地址存入任务后可在此直接打开）
+    const twUrl = task.play_url || refs._watchUrl || '';
+    const twOpts = (task.watch_options && task.watch_options.length) ? task.watch_options : (refs._watchOpts || []);
+    const twHls = task.is_hls ?? refs._watchHls ?? false;
+    if (twUrl) {
+      if (twOpts.length) {
+        refs.watchQuality.replaceChildren();
+        twOpts.forEach((o) => {
+          const opt = document.createElement('option');
+          opt.value = o.key; opt.textContent = o.label;
+          opt.dataset.url = o.url || ''; opt.dataset.hls = String(!!o.is_hls);
+          refs.watchQuality.appendChild(opt);
+        });
+        const first = twOpts[0];
+        refs.watchBtn.dataset.url = first.url || '';
+        refs.watchBtn.dataset.hls = String(!!first.is_hls);
+        refs.watchQuality.hidden = false;
+      } else {
+        refs.watchQuality.hidden = true;
+        refs.watchBtn.dataset.url = twUrl;
+        refs.watchBtn.dataset.hls = String(twHls);
+      }
+      refs.watchBtn.hidden = false;
+      if (!refs.watchBtn.dataset.boundWatch) {
+        refs.watchBtn.dataset.boundWatch = '1';
+        refs.watchBtn.addEventListener('click', () => openWatch());
+        refs.watchQuality.addEventListener('change', () => {
+          const o = refs.watchQuality.selectedOptions && refs.watchQuality.selectedOptions[0];
+          if (o) {
+            refs.watchBtn.dataset.url = o.dataset.url || '';
+            refs.watchBtn.dataset.hls = o.dataset.hls || 'false';
+          }
+        });
+      }
+    } else {
+      refs.watchBtn.hidden = true;
+      refs.watchQuality.hidden = true;
+    }
+
     // 失败 / 已取消的任务展示「重试 / 继续下载」按钮
     const canRetry = task.status === 'failed' || task.status === 'canceled';
     refs.retry.hidden = !canRetry;
@@ -1471,6 +1513,9 @@
           format_id: opts.format_id ?? selectedFormatId ?? '',
           concurrent_fragments: el.concurrentInput.value ? parseInt(el.concurrentInput.value, 10) || 0 : 0,
           downloader: el.downloaderSelect ? el.downloaderSelect.value || 'native' : 'native',
+          play_url: resolved?.video?.play_url || '',
+          watch_options: resolved?.video?.watch_options || [],
+          is_hls: !!resolved?.video?.is_hls,
         }),
       }, base);
       const taskId = data.task_id;
@@ -1483,6 +1528,10 @@
         platform: resolved.platform.name,
       });
       refs.base = base;
+      // 存储观看数据供 paintTask 渲染任务面板观看按钮
+      refs._watchUrl = resolved?.video?.play_url || '';
+      refs._watchOpts = resolved?.video?.watch_options || [];
+      refs._watchHls = !!resolved?.video?.is_hls;
       trackTask(taskId, refs, base);
       return taskId;
     } catch (error) {
