@@ -214,6 +214,8 @@ fi
   --add-data "$REPO/server:server" \
   --hidden-import app \
   --hidden-import downloader \
+  --hidden-import cookie_cache \
+  --hidden-import ydlp_update \
   --hidden-import clouddrive \
   --hidden-import platforms \
   --hidden-import tasks \

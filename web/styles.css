@@ -536,6 +536,19 @@ img { max-width: 100%; display: block; }
   padding: .4rem 0 2.4rem; line-height: 1.7;
 }
 
+/* ---------------- 高级选项：本机操作按钮 ---------------- */
+.adv-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  margin: .5rem 0 .25rem;
+}
+.adv-btn {
+  font-size: .76rem; padding: .35rem .7rem; border-radius: 8px;
+  border: 1px solid var(--border, #d7dce6); background: var(--surface, #fff);
+  color: var(--text, #1f2733); cursor: pointer;
+}
+.adv-btn:hover { border-color: #9aa6c2; background: #f4f6fb; }
+.adv-btn:active { transform: translateY(1px); }
+
 /* ---------------- 更高分辨率提示条 ---------------- */
 .hq-tip {
   display: flex; align-items: flex-start; gap: .5rem;

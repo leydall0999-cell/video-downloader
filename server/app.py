@@ -43,6 +43,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from urllib.parse import quote, urljoin, urlparse
 
+# 在 import downloader（间接 import yt_dlp）之前，先把本机可能已下载的新版 yt-dlp
+# 插入 sys.path 最前，实现「解析器自动更新」无需重新打包。
+import ydlp_update
+ydlp_update.bootstrap()
+
 import downloader
 import library as library_mod
 import subtitles as subtitles_mod
@@ -1382,6 +1387,18 @@ def api_version() -> dict:
     return {"version": version, "exe": sys.executable}
 
 
+@app.get("/api/ydlp/version")
+def ydlp_version_api() -> dict:
+    """返回当前与最新 yt-dlp 版本，前端据此提示是否需要更新解析器。"""
+    return {"current": ydlp_update.current_version(), "latest": ydlp_update.latest_version()}
+
+
+@app.post("/api/ydlp/update")
+async def ydlp_update_api() -> dict:
+    """下载最新 yt-dlp 解析器到本机目录（下次启动生效）。"""
+    return await asyncio.to_thread(ydlp_update.update)
+
+
 @app.get("/api/nodes")
 def node_info() -> dict:
     """告诉前端：本节点在哪个区、对端节点在哪、哪些域名算国内站。
@@ -1664,6 +1681,14 @@ def cookie_status(url: str = "") -> dict:
         "browser": info["browser"],
         "profile": info["profile"],
     }
+
+
+@app.post("/api/cookie/cache/clear")
+def cookie_cache_clear() -> dict:
+    """清除本机 Cookie 缓存（仅删 ~/.videodownloader/cookies，不影响浏览器本身）。"""
+    from cookie_cache import clear_cookie_cache
+    n = clear_cookie_cache()
+    return {"ok": True, "cleared": n}
 
 
 def _valid_extract_mode(value: str) -> str:

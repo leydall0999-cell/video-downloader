@@ -66,6 +66,9 @@
     qualityGrid: $('qualityGrid'),
     hqTip: $('hqTip'),
     hqTipText: $('hqTipText'),
+    cookieCacheClearBtn: $('cookieCacheClearBtn'),
+    ydlpUpdateBtn: $('ydlpUpdateBtn'),
+    advActionStatus: $('advActionStatus'),
     downloadBtn: $('downloadBtn'),
     watchRow: $('watchRow'),
     watchBtn: $('watchBtn'),
@@ -3109,6 +3112,38 @@
     const u = el.input.value.trim();
     if (!u) { el.cookieStatus.textContent = '请先粘贴视频链接再检测'; el.cookieStatus.className = 'cookie-status warn'; return; }
     updateCookieStatus(u);
+  });
+  el.cookieCacheClearBtn.addEventListener('click', async () => {
+    el.advActionStatus.textContent = '清除中…';
+    el.advActionStatus.className = 'cookie-status loading';
+    try {
+      const r = await request('/api/cookie/cache/clear', { method: 'POST' });
+      el.advActionStatus.textContent = `已清除 ${r.cleared} 条本机 Cookie 缓存（不影响浏览器）`;
+      el.advActionStatus.className = 'cookie-status ok';
+    } catch (_) {
+      el.advActionStatus.textContent = '清除失败';
+      el.advActionStatus.className = 'cookie-status err';
+    }
+  });
+  el.ydlpUpdateBtn.addEventListener('click', async () => {
+    el.advActionStatus.textContent = '正在检查并更新解析器…';
+    el.advActionStatus.className = 'cookie-status loading';
+    try {
+      const r = await request('/api/ydlp/update', { method: 'POST' });
+      if (r.ok && r.updated) {
+        el.advActionStatus.textContent = `已更新 yt-dlp 至 ${r.version}，重启后生效`;
+        el.advActionStatus.className = 'cookie-status ok';
+      } else if (r.ok && !r.updated) {
+        el.advActionStatus.textContent = `解析器已是最新（${r.version}）`;
+        el.advActionStatus.className = 'cookie-status ok';
+      } else {
+        el.advActionStatus.textContent = `更新失败：${r.error || ''}`;
+        el.advActionStatus.className = 'cookie-status err';
+      }
+    } catch (_) {
+      el.advActionStatus.textContent = '更新失败，请检查网络';
+      el.advActionStatus.className = 'cookie-status err';
+    }
   });
   // 「复制操作指引」：一键复制 Cookie 获取步骤文本（便于照做或转发）
   el.cookieHelpCopy.addEventListener('click', async () => {

@@ -441,22 +441,31 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         cookie_text = cookie_text[7:].strip()
     if cookie_text:
         headers["Cookie"] = cookie_text
-    # 浏览器 Cookie：优先用环境变量指定的来源；未指定时，对强反爬平台
-    # （抖音等）自动探测本机浏览器并读取其 Cookie，实现“粘贴口令即下”。
-    # 用户在高级选项手动填了 Cookie 则以用户填写的为准（上方已注入请求头）。
-    browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
-    if browser:
-        options["cookiesfrombrowser"] = (browser,)
-    elif not cookie_text and is_cookie_hardened_host(host):
-        # 精确定位：找「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
-        found = _find_host_cookie_profile(host)
-        if found:
-            options["cookiesfrombrowser"] = found  # (browser, profile)
+    else:
+        # 自动登录态：用户未手动粘贴时，优先用本机缓存的浏览器 Cookie（任意站点均可，
+        # 含缓存、浏览器关闭后仍可用，仅本机不外传）；缺失再实时解密。这样登录过的平台
+        # 在解析 / 下载时也能自动带登录态，从而拿到更高分辨率档位。
+        try:
+            from cookie_cache import get_cached_cookie_header
+            cached = get_cached_cookie_header(host)
+        except Exception:
+            cached = None
+        if cached:
+            headers["Cookie"] = cached
         else:
-            # 回退：探测不到具体 Profile 时仍用默认（Default）读，至少给一次机会
-            b = _detect_browser_cookie_source()
-            if b:
-                options["cookiesfrombrowser"] = (b,)
+            browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
+            if browser:
+                options["cookiesfrombrowser"] = (browser,)
+            elif is_cookie_hardened_host(host):
+                # 精确定位：找「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
+                found = _find_host_cookie_profile(host)
+                if found:
+                    options["cookiesfrombrowser"] = found  # (browser, profile)
+                else:
+                    # 回退：探测不到具体 Profile 时仍用默认（Default）读，至少给一次机会
+                    b = _detect_browser_cookie_source()
+                    if b:
+                        options["cookiesfrombrowser"] = (b,)
     return options
 
 
