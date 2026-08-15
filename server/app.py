@@ -207,7 +207,8 @@ _cloud_quota_lock = threading.Lock()
 BAIDU_APP_KEY = os.environ.get("VDL_BAIDU_APP_KEY", "").strip()
 BAIDU_APP_SECRET = os.environ.get("VDL_BAIDU_APP_SECRET", "").strip()
 BAIDU_REDIRECT_URI = os.environ.get("VDL_BAIDU_REDIRECT_URI", "").strip()
-BAIDU_ENABLED = bool(BAIDU_APP_KEY and BAIDU_APP_SECRET and BAIDU_REDIRECT_URI)
+BAIDU_APP_ID = os.environ.get("VDL_BAIDU_APP_ID", "").strip()  # AppID（≠AppKey），OAuth device_id 必需
+BAIDU_ENABLED = bool(BAIDU_APP_KEY and BAIDU_APP_SECRET and BAIDU_REDIRECT_URI and BAIDU_APP_ID)
 # 百度 OAuth state：防止授权码流程被 CSRF 诱导。state 由服务端签发并短期缓存，
 # 回调时比对；过期/缺失/不匹配一律拒绝。注意：单实例进程内缓存；多副本部署需换成共享存储。
 _BAIDU_STATES: dict[str, float] = {}
@@ -1428,7 +1429,7 @@ def node_info() -> dict:
             "free_daily": CLOUD_FREE_DAILY,
             "providers": (["webdav"] + (["baidu"] if BAIDU_ENABLED else [])),
             "baidu_available": BAIDU_ENABLED,
-            "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY) if BAIDU_ENABLED else "",
+            "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, app_id=BAIDU_APP_ID) if BAIDU_ENABLED else "",
         },
         # 本地媒体库：仅桌面版（frozen）或显式开启时暴露给前端；网页版目录临时、默认关闭
         "library": {
@@ -2931,7 +2932,7 @@ def cloud_providers() -> dict:
     return {
         "providers": providers,
         "baidu_available": BAIDU_ENABLED,
-        "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY) if BAIDU_ENABLED else "",
+        "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, app_id=BAIDU_APP_ID) if BAIDU_ENABLED else "",
     }
 
 
@@ -2947,7 +2948,7 @@ def cloud_baidu_auth_url() -> dict:
         expired = [s for s, exp in _BAIDU_STATES.items() if exp < now]
         for s in expired:
             _BAIDU_STATES.pop(s, None)
-    return {"auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, state)}
+    return {"auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, state, app_id=BAIDU_APP_ID)}
 
 
 @app.get("/api/cloud/baidu/callback")

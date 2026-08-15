@@ -131,6 +131,7 @@ def _load_external_config() -> dict:
             "VDL_PORT",
             "VDL_BAIDU_APP_KEY",
             "VDL_BAIDU_APP_SECRET",
+            "VDL_BAIDU_APP_ID",
             "VDL_BAIDU_REDIRECT_URI",
             "VDL_BAIDU_APP_NAME",
         ):

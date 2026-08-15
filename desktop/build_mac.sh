@@ -239,6 +239,67 @@ fi
 # 清理 staging 临时目录（PyInstaller 已把文件拷进 .app，不再需要）
 [ -n "${COMMENTARY_STAGING:-}" ] && [ -d "$COMMENTARY_STAGING" ] && mv "$COMMENTARY_STAGING" "$HOME/.Trash/commentary_staging_$(date +%s)" 2>/dev/null || true
 
+echo "▶ 应用中文名称（菜单栏 / Dock / 关于窗口）"
+PLIST="$REPO/dist/VideoDownloader.app/Contents/Info.plist"
+if [ -f "$PLIST" ]; then
+  # CFBundleDisplayName：Dock 悬浮提示、菜单栏应用名、About 窗口标题
+  # CFBundleName：Application 菜单中 "About XXX" / "Hide XXX" / "Quit XXX" 的 XXX 部分
+  plutil -replace CFBundleDisplayName -string "视频下载器" "$PLIST"
+  plutil -replace CFBundleName -string "视频下载器" "$PLIST"
+  # 声明支持中文本地化（否则 macOS 不加载 zh-Hans.lproj）
+  plutil -replace CFBundleLocalizations -json '["zh-Hans", "en"]' "$PLIST"
+  plutil -replace CFBundleDevelopmentRegion -string "zh-Hans" "$PLIST"
+  echo "   已设置中文名 + 本地化声明：视频下载器 (zh-Hans)"
+else
+  echo "   ⚠️ Info.plist 不存在，跳过"
+fi
+
+echo "▶ 注入中文本地化（覆盖系统默认英文菜单词）"
+LPROJ="$REPO/dist/VideoDownloader.app/Contents/Resources/zh-Hans.lproj"
+mkdir -p "$LPROJ"
+cat > "$LPROJ/Localizable.strings" << 'LOCEOF'
+/* Menu bar items */
+"About %@" = "关于 %@";
+"Hide %@" = "隐藏 %@";
+"Hide Others" = "隐藏其他";
+"Show All" = "显示全部";
+"Quit %@" = "退出 %@";
+
+/* Window menu */
+"Minimize" = "最小化";
+"Zoom" = "缩放";
+"Bring All to Front" = "全部移到最前";
+
+/* File menu */
+"Close" = "关闭";
+"Save…" = "保存…";
+"Revert to Saved" = "恢复已保存版本";
+
+/* Edit menu */
+"Undo" = "撤销";
+"Redo" = "重做";
+"Cut" = "剪切";
+"Copy" = "复制";
+"Paste" = "粘贴";
+"Select All" = "全选";
+"Delete" = "删除";
+
+/* Format menu */
+"Font" = "字体";
+"Show Fonts" = "显示字体";
+"Bigger" = "更大";
+"Smaller" = "更小";
+"Bold" = "粗体";
+"Italic" = "斜体";
+"Underline" = "下划线";
+
+/* Help */
+"Help" = "帮助";
+LOCEOF
+# .strings 文件必须转成二进制 plist 格式（UTF-8 文本格式 macOS 不加载）
+plutil -convert binary1 "$LPROJ/Localizable.strings"
+echo "   已注入 zh-Hans.lproj（Quit→退出 / Hide→隐藏 / About→关于 等，二进制格式）"
+
 echo "▶ 捆绑 ffmpeg + ffprobe"
 FF="$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)"
 FFPROBE="$(command -v ffprobe || echo /opt/homebrew/bin/ffprobe)"

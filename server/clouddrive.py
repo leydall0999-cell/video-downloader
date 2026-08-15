@@ -250,9 +250,10 @@ class WebDAVProvider:
 
 class BaiduProvider:
     name = "baidu"
-    # 百度网盘开放平台（pan.baidu.com）的 OAuth 端点，不是通用开放平台 openapi.baidu.com
-    # 两者的 AppKey 不互通：在 pan.baidu.com 创建的应用必须用 pan.baidu.com/union/oauth/
-    AUTH_BASE = "https://pan.baidu.com/union"
+    # 百度网盘开放平台的 OAuth 端点使用 openapi.baidu.com（官方文档明确）
+    # 注意：pan.baidu.com/union 是 API 调用端点，OAuth 授权/换令牌用 openapi.baidu.com
+    # 两者的 AppKey 互通：在 pan.baidu.com/union 创建的应用，OAuth 用 openapi.baidu.com
+    OAUTH_BASE = "https://openapi.baidu.com"
     PAN_API = "https://pan.baidu.com/rest/2.0/xpan/file"
 
     def upload(self, local_path: Path, dest_path: str, creds: dict, progress=None) -> str:
@@ -637,7 +638,7 @@ def clear_baidu_token() -> None:
 # 百度 OAuth 辅助（供 app.py 路由调用）
 # --------------------------------------------------------------------------- #
 
-def baidu_auth_url(redirect_uri: str, app_key: str, state: str = "") -> str:
+def baidu_auth_url(redirect_uri: str, app_key: str, state: str = "", app_id: str = "") -> str:
     from urllib.parse import urlencode
 
     q = {
@@ -647,12 +648,17 @@ def baidu_auth_url(redirect_uri: str, app_key: str, state: str = "") -> str:
         "scope": "basic,netdisk",
         "state": state,
     }
-    return BaiduProvider.AUTH_BASE + "/oauth/2.0/authorize?" + urlencode(q)
+    # device_id（AppID）是百度网盘开放平台 OAuth 的必需参数
+    # 文档：https://pan.baidu.com/union/doc/使用入门/接入授权/授权码模式/
+    # 硬件应用必填，软件应用也建议填写（缺省可能导致 invalid_client 或跳转首页）
+    if app_id:
+        q["device_id"] = app_id
+    return BaiduProvider.OAUTH_BASE + "/oauth/2.0/authorize?" + urlencode(q)
 
 
 def baidu_exchange_token(code: str, redirect_uri: str, app_key: str, app_secret: str) -> dict:
     resp = requests.post(
-        BaiduProvider.AUTH_BASE + "/oauth/2.0/token",
+        BaiduProvider.OAUTH_BASE + "/oauth/2.0/token",
         data={
             "grant_type": "authorization_code",
             "code": code,
