@@ -3334,13 +3334,13 @@
   // 百度授权：用系统浏览器打开 OAuth 页（pywebview 不支持 window.open 弹窗）
   let _baiduAuthPoll = null;
   const openBaiduAuthInPage = async () => {
-    // 必须每次请求带 state 的 URL（/api/cloud/baidu/auth-url 会生成新 state 写入
+    // 必须每次请求带 state 的 URL（/api/cloud/baidu/auth_url 会生成新 state 写入
     // 服务端 _BAIDU_STATES；state=空串会让回调校验失败）。/api/version 里的
     // baidu_auth_url 字段不带 state（仅作启用标志），不能直接拿来跳转。
     let url = '';
     let errMsg = '';
     try {
-      const r = await request('/api/cloud/baidu/auth-url', {}, '');
+      const r = await request('/api/cloud/baidu/auth_url', {}, '');
       if (r && r.auth_url) url = r.auth_url;
     } catch (e) {
       errMsg = (e && e.message) ? e.message : String(e);
