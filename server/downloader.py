@@ -379,6 +379,30 @@ def _root_domain(host: str) -> str:
     return ".".join(parts[-2:])
 
 
+# ── CDN 域名 → Cookie 登录域映射 ──────────────────────────────────────
+# 部分平台的视频流 URL 托管在独立 CDN 域（如 bilivideo.cn），但浏览器
+# Cookie 存在主站域（如 bilibili.com）。_find_host_cookie_profile 按播放
+# URL 的 host 查 Cookie 会落空，需回溯到正确的登录域。
+_CDN_TO_COOKIE_DOMAIN: dict[str, str] = {
+    # B 站：视频 CDN 在 *.bilivideo.[com|cn]，Cookie 在 bilibili.com
+    "bilivideo.com": "bilibili.com",
+    "bilivideo.cn": "bilibili.com",
+}
+
+
+def _cookie_domains_for_host(host: str) -> list[str]:
+    """返回用于查找 Cookie 的候选域名列表（含 CDN→登录域回溯）。
+
+    优先返回 host 自身的根域，再追加映射的登录域（去重）。
+    """
+    root = _root_domain(host)
+    candidates = [root] if root else []
+    mapped = _CDN_TO_COOKIE_DOMAIN.get(root)
+    if mapped and mapped not in candidates:
+        candidates.append(mapped)
+    return candidates
+
+
 def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     """探测哪个浏览器的哪个 Profile 含有目标站点的 cookie，返回 (browser, profile)。
 
@@ -386,9 +410,12 @@ def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     常落在其它 Profile（如 Chrome 的 Profile 33），导致「自动读 cookie」读错地方而落空。
     这里遍历各浏览器的所有 Profile，用 sqlite 直查 Cookies 数据库的 host_key
     是否命中目标根域，返回第一个命中 Profile。
+
+    改进：支持 CDN 域名到 Cookie 登录域的回溯（如 bilivideo.cn → bilibili.com），
+    解决 B 站等平台「播放 URL 域 ≠ Cookie 域」导致自动 Cookie 检测失效的问题。
     """
-    root = _root_domain(host)
-    if not root:
+    domains = _cookie_domains_for_host(host)
+    if not domains:
         return None
     try:
         import sqlite3 as _sq
@@ -400,17 +427,22 @@ def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
             try:
                 con = _sq.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
                 try:
-                    row = con.execute(
-                        "SELECT 1 FROM cookies WHERE host_key LIKE ? LIMIT 1",
-                        (f"%.{root}",),
-                    ).fetchone()
-                    # host_key 有的带前导点(.qq.com)、有的是裸域(qq.com)，两种都试
-                    if row is None:
+                    found = False
+                    for domain in domains:
                         row = con.execute(
-                            "SELECT 1 FROM cookies WHERE host_key = ? LIMIT 1",
-                            (root,),
+                            "SELECT 1 FROM cookies WHERE host_key LIKE ? LIMIT 1",
+                            (f"%.{domain}",),
                         ).fetchone()
-                    if row:
+                        # host_key 有的带前导点(.qq.com)、有的是裸域(qq.com)，两种都试
+                        if row is None:
+                            row = con.execute(
+                                "SELECT 1 FROM cookies WHERE host_key = ? LIMIT 1",
+                                (domain,),
+                            ).fetchone()
+                        if row:
+                            found = True
+                            break
+                    if found:
                         return (name, profile_dir)
                 finally:
                     con.close()
