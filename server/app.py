@@ -1930,7 +1930,7 @@ def _sse(data: dict) -> str:
 
 
 @app.get("/api/tasks/{task_id}/file")
-def download_file(task_id: str, download: int = 0) -> FileResponse | Response:
+def download_file(task_id: str, download: int = 0) -> Response:
     task = _require_task(task_id)
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise HTTPException(status_code=409, detail="文件尚未准备好")
