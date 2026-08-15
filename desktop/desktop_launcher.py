@@ -389,7 +389,9 @@ class VdlApi:
 
     def quit_app(self) -> None:
         """真正退出软件（仅当用户在窗口内显式点击「退出」按钮时调用）。"""
-        os._exit(0)
+        global _quitting
+        _quitting = True  # 标记正在退出，让 closing 拦截器放行
+        os._exit(0)       # 强制退出（不经过 closing 事件循环）
 
 
 def _handle_exit(*_args) -> None:
@@ -624,8 +626,24 @@ def main() -> None:
         #   - 前端「返回桌面」按钮 → api.hide_to_desktop() → window.minimize()（最小化常驻）
         #   - 前端「退出」按钮    → api.quit_app() → os._exit(0) 强制退出
         #   - macOS 标准：Cmd+H 最小化到 Dock；Cmd+Q / Dock 右键Quit 退出应用
-        # 注意：不再拦截 events.closing（上一版无条件 return False 导致 Cmd+Q/Dock Quit 也被拦死，
-        #       用户无法通过任何系统途径退出程序）
+        # ── 窗口关闭 vs 退出软件（macOS 原生窗口）──
+        # 全局标志：quit_app() 设置后 closing 拦截器放行
+        _quitting = False
+
+        def _on_closing(*_args):
+            """拦截窗口关闭事件：
+            - 点红叉 / Cmd+W → 最小化到 Dock（返回桌面，软件常驻）
+            - quit_app() 已设置 _quitting=True → 放行退出
+            """
+            if _quitting:
+                return True  # 正在退出，放行
+            try:
+                window.minimize()
+            except Exception:
+                pass
+            return False  # 取消关闭，用最小化代替
+
+        window.events.closing += _on_closing
 
         # Windows 端退出 webview 后清理资源
         webview.start()
