@@ -261,6 +261,20 @@ class VdlApi:
     复制到用户「下载」文件夹；返回保存路径或 "ERROR: ..."。
     """
 
+    def open_external(self, url: str) -> str:
+        """在系统默认浏览器中打开外部 URL（如百度 OAuth 授权页）。
+
+        pywebview 的 WKWebView 不支持 window.open() 弹窗（会被静默拦截），
+        因此百度授权改由 Python 调系统浏览器打开，前端轮询 /api/cloud/baidu/token
+        检测授权完成。返回 "OK" 或 "ERROR: ..."。
+        """
+        import webbrowser
+        try:
+            webbrowser.open(url)
+            return "OK"
+        except Exception as exc:  # 把错误回传前端展示
+            return f"ERROR: {exc}"
+
     def save_commentary_file(self, job_id: str, filename: str) -> str:
         import requests
         from pathlib import Path

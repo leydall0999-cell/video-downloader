@@ -3331,36 +3331,44 @@
     }, 3000);
   };
 
-  // 百度授权：通过弹窗打开 OAuth 页（百度设 X-Frame-Options: SAMEORIGIN，禁止 iframe 嵌入）
+  // 百度授权：用系统浏览器打开 OAuth 页（pywebview 不支持 window.open 弹窗）
+  let _baiduAuthPoll = null;
   const openBaiduAuthInPage = (url) => {
-    // 先关闭可能残留的旧弹窗
-    if (window._baiduAuthWin && !window._baiduAuthWin.closed) {
-      try { window._baiduAuthWin.close(); } catch(e) {}
+    // 调 Python 桥接 API 在系统浏览器打开授权页
+    let opened = false;
+    try {
+      const res = window.pywebview?.api?.open_external?.(url);
+      opened = (typeof res === 'string') ? !res.startsWith('ERROR') : true;
+    } catch (e) {
+      // 非 pywebview 环境（如 web 测试）回退到 window.open
+      try {
+        const w = window.open(url, '_blank');
+        opened = !!w;
+      } catch (e2) { opened = false; }
     }
-    // 居中弹出小窗口
-    const W = 760, H = 680;
-    const L = Math.round((screen.width - W) / 2);
-    const T = Math.round((screen.height - H) / 3);
-    window._baiduAuthWin = window.open(
-      url, 'vdl_baidu_auth',
-      `width=${W},height=${H},left=${L},top=${T},resizable=yes,scrollbars=yes`
-    );
-    // 弹窗被拦截时提示
-    if (!window._baiduAuthWin || window._baiduAuthWin.closed) {
-      el.cloudBaiduStatus.textContent = '授权窗口被拦截，请允许弹出窗口后重试';
+    if (!opened) {
+      el.cloudBaiduStatus.textContent = '无法打开授权页，请用浏览器访问：' + url;
       return;
     }
-    el.cloudBaiduStatus.textContent = '请在弹出的窗口中完成百度账号登录…';
-    // 轮询检测弹窗是否被用户手动关闭（未完成授权）
-    const poll = setInterval(() => {
-      if (!window._baiduAuthWin || window._baiduAuthWin.closed) {
-        clearInterval(poll);
-        // 如果还没拿到 token，说明用户关了弹窗
-        if (!localStorage.getItem('vdl_baidu_token')) {
-          el.cloudBaiduStatus.textContent = '授权已取消';
+    el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
+    // 轮询后端检测授权完成（百度回调写入 token 文件后本端点返回 logged_in）
+    if (_baiduAuthPoll) clearInterval(_baiduAuthPoll);
+    _baiduAuthPoll = setInterval(async () => {
+      try {
+        const r = await request('/api/cloud/baidu/token', {}, '');
+        if (r && r.logged_in && r.access_token) {
+          clearInterval(_baiduAuthPoll); _baiduAuthPoll = null;
+          baiduToken = r.access_token;
+          localStorage.setItem('vdl_baidu_token', r.access_token);
+          el.cloudBaiduStatus.textContent = '已授权 ✓';
+          if (el.baiduDriveStatus) {
+            el.baiduDriveStatus.textContent = '已授权 ✓';
+            el.baiduDriveStatus.className = 'baidu-status is-ok';
+          }
+          if (baiduModalOpen) loadBaiduList(currentBaiduPath);
         }
-      }
-    }, 1000);
+      } catch (e) { /* 轮询出错忽略 */ }
+    }, 1500);
   };
 
   // 云盘弹窗事件绑定
