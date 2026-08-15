@@ -248,6 +248,11 @@ API_URL = f"http://{HOST}:{PORT}"          # 后端 FastAPI 地址（API 调用�
 URL = f"http://{HOST}:{PORT}"
 
 
+# Dock Quit / Cmd+Q 退出标记：AppDelegate.applicationShouldTerminate_ 被调用时置 True，
+# 使窗口 closing 拦截放行；红叉（windowShouldClose）不置此标记 → 仍最小化返回桌面。
+_app_terminating = False
+
+
 class VdlApi:
     """暴露给前端 JS 的桥接 API（仅 pywebview 桌面模式生效）。
 
@@ -608,6 +613,31 @@ def main() -> None:
     try:
         import webview
 
+        # ── macOS 退出语义修复：区分「红叉(Cmd+W)=返回桌面」与「Dock Quit(Cmd+Q)=彻底退出」──
+        # pywebview 6.x 把两者都导向同一个 closing 事件；其 cocoa 后端中：
+        #   * 红叉 / Cmd+W      → WindowDelegate.windowShouldClose_ → closing
+        #   * Dock Quit / Cmd+Q → AppDelegate.applicationShouldTerminate_ → 同样经 closing
+        # 由于我们让 closing 返回 False 实现「红叉=最小化」，会连带把 Dock Quit 也取消，
+        # 导致右键 Quit 退不出来。修复：拦截 applicationShouldTerminate_（仅 Dock Quit 走这条），
+        # 置 _app_terminating 标志并放行；红叉仍走 windowShouldClose → closing 返回 False 最小化。
+        if sys.platform == "darwin":
+            try:
+                import Foundation as _Foundation
+                import webview.platforms.cocoa as _cocoa
+                _AD = _cocoa.BrowserView.AppDelegate
+
+                def _patch_app_should_terminate(self, app):
+                    global _app_terminating
+                    _app_terminating = True  # 来自 Dock Quit / Cmd+Q
+                    return _Foundation.YES    # 始终允许退出
+
+                _AD.applicationShouldTerminate_ = _patch_app_should_terminate
+            except Exception as _e:
+                print(
+                    f"[VDL] 无法 patch applicationShouldTerminate（Dock Quit 可能退不出）: {_e}",
+                    file=sys.stderr,
+                )
+
         api = VdlApi()
         window = webview.create_window(
             title="VideoDownloader",
@@ -621,27 +651,28 @@ def main() -> None:
         # 把 window 引用交给桥接 API，供「返回桌面」/「退出」按钮调用
         api.window = window
 
-        # 窗口行为说明：
-        #   - 点窗口红叉 / Cmd+W  → 关闭窗口 → webview.start() 返回 → os._exit(0) 正常退出
+        # 窗口行为说明（macOS 原生窗口）：
+        #   - 点窗口红叉 / Cmd+W  → closing 拦截 → 最小化到 Dock（返回桌面，软件常驻）
         #   - 前端「返回桌面」按钮 → api.hide_to_desktop() → window.minimize()（最小化常驻）
         #   - 前端「退出」按钮    → api.quit_app() → os._exit(0) 强制退出
-        #   - macOS 标准：Cmd+H 最小化到 Dock；Cmd+Q / Dock 右键Quit 退出应用
+        #   - 顶部菜单 Cmd+Q / Dock 右键 Quit → 彻底退出（经 AppDelegate.applicationShouldTerminate_）
         # ── 窗口关闭 vs 退出软件（macOS 原生窗口）──
-        # 全局标志：quit_app() 设置后 closing 拦截器放行
+        # 全局标志：quit_app() 设 _quitting；Dock Quit/Cmd+Q 经 applicationShouldTerminate_ 设 _app_terminating；
+        # 二者任一为真时 closing 拦截器放行真正退出，否则红叉最小化（返回桌面）。
         _quitting = False
 
         def _on_closing(*_args):
             """拦截窗口关闭事件：
             - 点红叉 / Cmd+W → 最小化到 Dock（返回桌面，软件常驻）
-            - quit_app() 已设置 _quitting=True → 放行退出
+            - Dock Quit / Cmd+Q（_app_terminating）或 显式「退出」按钮（_quitting）→ 放行退出
             """
-            if _quitting:
+            if _quitting or _app_terminating:
                 return True  # 正在退出，放行
             try:
                 window.minimize()
             except Exception:
                 pass
-            return False  # 取消关闭，用最小化代替
+            return False  # 取消关闭，用最小化代替（返回桌面）
 
         window.events.closing += _on_closing
 
