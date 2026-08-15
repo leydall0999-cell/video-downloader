@@ -3751,11 +3751,34 @@
           st.className = 'st is-err';
           clearInterval(baiduDlPollers[tid]);
         } else if (t.status === 'browser_fallback') {
-          st.textContent = '已打开浏览器下载';
+          st.textContent = '请在浏览器中下载';
           st.className = 'st is-warn';
           clearInterval(baiduDlPollers[tid]);
-          // 自动打开系统浏览器，让百度原生页面处理下载
-          if (t.browser_url) window.open(t.browser_url, '_blank');
+          // pywebview 的 WKWebView 不支持 window.open（会被静默拦截），
+          // 改用 Python 桥接的 open_external() 在系统浏览器打开百度原生分享页
+          if (t.browser_url) {
+            // 显示可点击链接，双重保险（即使自动打开失败也能手动点）
+            let link = div.querySelector('a.baidu-open-link');
+            if (!link) {
+              link = document.createElement('a');
+              link.className = 'baidu-open-link';
+              link.target = '_blank';
+              link.rel = 'noopener';
+              link.style.cssText = 'display:inline-block;margin-top:6px;color:#4a90d9;font-size:.8rem;';
+              div.appendChild(link);
+            }
+            link.href = t.browser_url;
+            link.textContent = '↗ 点击在浏览器打开百度分享页下载';
+            try {
+              if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+                window.pywebview.api.open_external(t.browser_url);
+              } else {
+                window.open(t.browser_url, '_blank');  // 浏览器模式回退
+              }
+            } catch (e) {
+              // 自动打开失败不致命，用户可点上面的链接手动打开
+            }
+          }
         } else {
           st.textContent = '排队中…';
         }
