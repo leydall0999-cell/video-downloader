@@ -723,8 +723,8 @@ class BaiduProvider:
             ]
         return result
 
-    def _share_dlink(self, meta: dict, fs_id: int) -> str:
-        """从分享直接获取文件下载直链（绕过 transfer，参考 BaiduPCS-Py / baidupcs-go 签名算法）。
+    def _share_dlink(self, meta: dict, fs_id: int, share_url: str = "") -> str:
+        """从分享直接获取文件下载直链（绕过 transfer，参考社区逆向签名算法）。
 
         签名公式：sign = MD5("shareid={shareid}&uk={uk}&fid={fs_id}{sekey}")
         """
@@ -741,12 +741,18 @@ class BaiduProvider:
         try:
             s = meta.get("session")
             if not s:
-                # 预取模式下没有 session → 新建一个（仅用于 HTTP 请求，不需要特定 surl）
+                # 预取模式下没有 session → 新建并访问分享页获取 BAIDUID 等 cookie
                 s = requests.Session()
                 s.headers.update({
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-                    "Referer": f"https://pan.baidu.com/s/1{share_id}",
                 })
+                # 关键：必须先访问分享页拿 cookie，否则 /share/download 返回 errno=2
+                if share_url:
+                    try:
+                        s.get(share_url, timeout=15)
+                    except requests.RequestException:
+                        pass  # cookie 拿不到不致命
+                s.headers.update({"Referer": f"https://pan.baidu.com/s/1{share_id}"})
             resp = s.post(
                 BAIDU_SHARE_API + "/download",
                 params={
@@ -765,7 +771,7 @@ class BaiduProvider:
             if errno != 0:
                 raise CloudError(
                     f"获取分享下载直链失败(errno={errno})",
-                    data.get("show_msg") or data.get("errmsg") or "",
+                    data.get("show_msg") or data.get("errmsg") or f"sign={sign[:16]}... raw={raw_sign[:40]}",
                 )
             # dlink 可能在顶层或 dlink_list[0].dlink
             dlink = data.get("dlink") or ""
@@ -865,7 +871,7 @@ class BaiduProvider:
         # ── 策略 2：直链下载（绕过 transfer）──────────────────────────
         if not fs_id:
             raise CloudError("未找到要下载的文件", "请重新列出分享内容后再试")
-        dlink = self._share_dlink(meta, fs_id)
+        dlink = self._share_dlink(meta, fs_id, share_url=share_url)
         return self._download_from_url(dlink, local_path, progress=progress)
 
     def _find_in_dest_dir(self, token: str, dest_dir: str, name: str) -> dict | None:
