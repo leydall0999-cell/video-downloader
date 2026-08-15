@@ -31,11 +31,31 @@ class ChrqjIE(InfoExtractor):
     _UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
+    def _load_cached_cookie(self, default='') -> str:
+        """兜底读取本机 Cookie 缓存（~/.videodownloader/cookies/<host>.json）。
+
+        当全局 http_headers 里没有 Cookie（例如 Cookie 仅在 yt-dlp 的浏览器
+        jar 里、未透传进 http_headers）时，直接从缓存文件取，确保视频流带登录态。
+        """
+        try:
+            import json
+            from pathlib import Path
+            cache_dir = Path.home() / ".videodownloader" / "cookies"
+            for host in ("www.chrqj.com", "chrqj.com", "m.chrqj.com"):
+                f = cache_dir / f"{host}.json"
+                if f.exists():
+                    data = json.loads(f.read_text())
+                    h = data.get("header") or ""
+                    if h:
+                        return h
+        except Exception:
+            pass
+        return default
+
     def _real_extract(self, url):
         mobj = self._match_valid_url(url)
         vid = mobj.group('id')
         nid = mobj.group('nid')
-
         params = {'clientType': '1', 'id': vid, 'nid': nid}
         t = str(int(time.time() * 1000))
         # 与前端签名逻辑一致：参数按 key 排序 -> k=v&k=v
@@ -72,6 +92,18 @@ class ChrqjIE(InfoExtractor):
         except Exception:
             pass
 
+        # 自动获取登录态 Cookie 并透传到视频流请求头：
+        # ① 优先取全局 http_headers（用户粘贴 或 _base_options 已从本机浏览器解密注入）；
+        # ② 兜底直接读本地 Cookie 缓存文件（~/.videodownloader/cookies/<host>.json），
+        #    覆盖「Cookie 只在 yt-dlp jar 里、未进 http_headers」的情况。
+        # 源站（m3u8/ts CDN）会校验播放页下发的会话 Cookie，缺它直接 403/拒绝。
+        # 注意：yt-dlp 的 format 级 http_headers 会覆盖全局，必须显式合并进来，
+        # 否则全局注入的 Cookie 在真正下载流时被丢掉。
+        global_headers = (self._downloader.params.get('http_headers') or {}) if self._downloader else {}
+        stream_cookie = global_headers.get('Cookie') or ''
+        if not stream_cookie:
+            stream_cookie = self._load_cached_cookie(vid) or ''
+
         formats = []
         for item in item_list:
             play_url = item.get('url')
@@ -86,6 +118,12 @@ class ChrqjIE(InfoExtractor):
             name = item.get('resolutionName') or ('%sp' % resolution)
             need_login = bool(item.get('needLogin')) and not item.get('flag')
             note = name + ('（需登录）' if need_login else '')
+            fmt_headers = {
+                'Referer': self._WEB_HOST,
+                'User-Agent': self._UA,
+            }
+            if stream_cookie:
+                fmt_headers['Cookie'] = stream_cookie
             formats.append({
                 'url': play_url,
                 'format_id': '%s-%s' % (resolution, name),
@@ -97,10 +135,7 @@ class ChrqjIE(InfoExtractor):
                 'height': resolution_int if resolution_int > 0 else None,
                 # 免登录清晰度优先，避免默认选到需登录的高清导致下载失败
                 'preference': 1 if not need_login else -1,
-                'http_headers': {
-                    'Referer': self._WEB_HOST,
-                    'User-Agent': self._UA,
-                },
+                'http_headers': fmt_headers,
             })
 
         if not formats:

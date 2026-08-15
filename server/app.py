@@ -1480,6 +1480,10 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
     # 给更长超时避免误报；其他国内站保持快速响应。
     if host == "v.qq.com":
         timeout = 35
+    elif "youtube.com" in host or "youtu.be" in host:
+        # YouTube（尤其走代理时）解析慢：需拉取 player.js + n 参数 + 签名，
+        # 代理延迟叠加后 40s 经常不够，给 70s 余量
+        timeout = 70
     elif is_china_host(host):
         timeout = RESOLVE_TIMEOUT_DOMESTIC
     else:
@@ -1498,6 +1502,12 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
                 "建议：①在「高级选项」粘贴浏览器 Cookie 后重试；"
                 "②确认视频可公开访问（非 VIP 专享）；③稍后重试或反馈此链接"
             )
+        elif "youtube.com" in host or "youtu.be" in host:
+            detail = (
+                f"YouTube 解析超时（超过 {timeout} 秒）。常见原因：①代理速度慢或不稳定（YouTube 需要拉取 "
+                "player.js 签名，代理延迟会叠加）；②该视频可能受限（地区/年龄限制）；"
+                "建议：①检查代理是否通畅；②稍后重试；③若持续失败，尝试更换节点或关闭代理直连"
+            )
         else:
             detail = (
                 f"解析超时（超过 {timeout} 秒）。常见原因：①视频本身受限（限免/会员专享/付费/地区限制，"
@@ -1515,13 +1525,21 @@ async def resolve(payload: ResolveRequest, request: Request) -> dict:
 
 
 def _stream_referer(host: str) -> str:
-    """按平台返回防盗链 Referer：腾讯视频 HLS 分片必须带正确的 Referer 才返回 200。"""
+    """按平台返回防盗链 Referer：腾讯视频 HLS 分片必须带正确的 Referer 才返回 200。
+
+    注意：YouTube / googlevideo.com 等**不在此返回 Referer**——它们靠 URL 签名（ip/n/sig 参数）
+    验证请求合法性，带错误 Referer（如 googlevideo.com 自身）反而会触发 403 拒绝。
+    调用方应对 YouTube 域跳过 Referer。
+    """
     if "v.qq.com" in host:
         return "https://v.qq.com/"
     if "douyin" in host:
         return "https://www.douyin.com/"
     if "bilibili" in host:
         return "https://www.bilibili.com/"
+    # YouTube / googlevideo.com 不返回 Referer（由调用方决定是否设置）
+    if "googlevideo.com" in host or "youtube.com" in host or "youtu.be" in host:
+        return ""
     return f"https://{host}/" if host else "https://v.qq.com/"
 
 
@@ -1570,6 +1588,14 @@ def stream_proxy(u: str = "", cookie: str = "", request: Request = None):
         raise HTTPException(status_code=400, detail="缺少 u 参数")
     _assert_safe_url(u)  # SSRF 护栏：拒绝内网 / 环回 / 保留地址
     host = _host_of(u)
+    # 代理：YouTube 等站的视频 URL 绑定出口 IP（URL 内含 ip/n 参数签名），
+    # 必须与解析时使用同一代理，否则源站 403 拒绝或超时。
+    # 国内站直连不走代理（避免不必要的延迟），其余走系统/自动代理。
+    _proxies: dict[str, str] | None = None
+    if not is_china_host(host):
+        _proxy_url = downloader._resolve_proxy(host)
+        if _proxy_url:
+            _proxies = {"http": _proxy_url, "https": _proxy_url}
     user_cookie = (cookie or "").strip()
     if user_cookie.lower().startswith("cookie:"):
         user_cookie = user_cookie[7:].strip()
@@ -1589,12 +1615,23 @@ def stream_proxy(u: str = "", cookie: str = "", request: Request = None):
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ),
-        "Referer": _stream_referer(host),
+        "Range": "bytes=0-",
     }
+    _ref = _stream_referer(host)
+    if _ref:
+        headers["Referer"] = _ref
     if cookie_text:
         headers["Cookie"] = cookie_text
+    # 转发客户端的 Range 头（<video> seek 时会带），否则用默认值
+    _client_range = None
+    if request:
+        _cr = request.headers.get("range")
+        if _cr:
+            _client_range = _cr
+            headers["Range"] = _cr
+
     try:
-        resp = requests.get(u, headers=headers, stream=True, timeout=(10, 120))
+        resp = requests.get(u, headers=headers, stream=True, timeout=(10, 120), proxies=_proxies)
     except Exception as exc:  # noqa: BLE001 - 上游不可达，统一转 502 让前端提示
         raise HTTPException(status_code=502, detail=f"上游拉取失败：{_clean_message(str(exc))}") from None
     if resp.status_code >= 400:
@@ -1641,14 +1678,26 @@ def stream_proxy(u: str = "", cookie: str = "", request: Request = None):
         finally:
             resp.close()
 
+    # 转发上游的播放关键头，让浏览器 <video> 能正常 seek/缓冲
+    _resp_headers = {
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no",
+    }
+    # Accept-Ranges：告诉浏览器支持字节范围请求
+    if resp.headers.get("Accept-Ranges"):
+        _resp_headers["Accept-Ranges"] = resp.headers["Accept-Ranges"]
+    # Content-Length / Content-Range：文件大小和范围（seek 必需）
+    if resp.status_code == 206 and resp.headers.get("Content-Range"):
+        _resp_headers["Content-Range"] = resp.headers["Content-Range"]
+    if resp.headers.get("Content-Length"):
+        _resp_headers["Content-Length"] = resp.headers["Content-Length"]
+
     return StreamingResponse(
         _gen(),
         media_type=(content_type or "application/octet-stream"),
-        headers={
-            "Cache-Control": "no-store",
-            "Access-Control-Allow-Origin": "*",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_resp_headers,
+        status_code=resp.status_code,  # 206 Partial Content 或 200
     )
 
 

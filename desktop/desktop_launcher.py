@@ -387,6 +387,40 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _read_self_build_version() -> str:
+    """读取当前 .app 的构建指纹（由 build_mac.sh 写入 Resources/build_version.txt）。
+
+    用于启动时的版本自检——若已有实例的版本比当前 .app 旧，则自动接管，
+    彻底避免「双击后仍在跑旧版」导致的反复调试浪费。
+    """
+    try:
+        p = BASE / "build_version.txt"
+        if p.exists():
+            return p.read_text("utf-8").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
+    """向目标进程发 SIGTERM，等待其退出；超时则 SIGKILL。返回是否成功终止。"""
+    import time as _t
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return not _pid_alive(pid)
+    _deadline = _t.monotonic() + timeout
+    while _t.monotonic() < _deadline:
+        if not _pid_alive(pid):
+            return True
+        _t.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    return not _pid_alive(pid)
+
+
 def _activate_existing_window() -> None:
     """重复启动时把已有 VideoDownloader 窗口提到最前（macOS），并兜底打开浏览器。
 
@@ -425,10 +459,14 @@ def _activate_existing_window() -> None:
 
 
 def _ensure_single_instance():
-    """同一用户只保留一个 GUI 实例。返回 lock handle（非 None=已拿到锁，可启动）。
+    """同一用户只保留一个 GUI 实例，且确保运行的是最新构建版本。
 
-    锁文件写入 `PID PORT`，供 _activate_existing_window 在重复启动时读取端口、
-    直接打开浏览器访问已运行的服务（避免依赖 System Events 权限导致的静默失败）。
+    锁文件格式：`PID PORT BUILD_VERSION`
+    - 拿到锁（无别的实例）→ 写自己信息，返回锁 handle，正常启动
+    - 拿不到锁（有别实例）→
+        * 旧实例版本 == 当前版本 → 激活窗口并退出（保持单实例，避免重复窗口）
+        * 旧实例版本 ≠ 当前版本（旧版在跑、新版双击）→ **自动终止旧实例**，
+          自己成为唯一实例（彻底解决「双击后仍在跑旧版」导致反复调试浪费的问题）
     """
     lock_path = Path.home() / ".vdl_instance.lock"
     # 清理僵尸锁（上次异常退出未释放且持有进程已死）
@@ -443,6 +481,10 @@ def _ensure_single_instance():
                     pass
     except Exception:
         pass
+
+    self_build = _read_self_build_version()
+
+    # 尝试拿锁；拿到说明无别的实例
     try:
         f = open(lock_path, "w")
         if sys.platform == "win32":
@@ -450,7 +492,7 @@ def _ensure_single_instance():
             msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
         else:
             _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-        f.write(f"{os.getpid()} {PORT}\n")
+        f.write(f"{os.getpid()} {PORT} {self_build}\n")
         f.flush()
         return f  # 调用方必须持有此对象直到退出
     except Exception:
@@ -458,7 +500,47 @@ def _ensure_single_instance():
             f.close()
         except Exception:
             pass
-        return None
+
+    # ── 拿不到锁：有别的实例在跑 ──
+    old_pid = None
+    old_build = ""
+    try:
+        old = lock_path.read_text().strip().split()
+        if old and old[0].isdigit():
+            old_pid = int(old[0])
+        if len(old) >= 3:
+            old_build = old[2]
+    except Exception:
+        pass
+
+    # 旧实例版本 ≠ 当前版本（含旧格式锁文件无版本号的情况）→ 自动接管
+    if old_pid and _pid_alive(old_pid) and old_build != self_build:
+        print(
+            f"[VDL] 检测到旧版本实例({old_build or '未知'})仍在运行，"
+            f"当前已是最新({self_build})，自动接管并关闭旧实例…",
+            file=sys.stderr,
+        )
+        _kill_process_tree(old_pid)
+        # 旧进程退出后 flock 由内核自动释放；保险起见重写锁文件并占用
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        try:
+            f2 = open(lock_path, "w")
+            _fcntl.flock(f2, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            f2.write(f"{os.getpid()} {PORT} {self_build}\n")
+            f2.flush()
+            return f2
+        except Exception:
+            try:
+                f2.close()
+            except Exception:
+                pass
+
+    # 版本相同 → 激活已有窗口并退出（保持单实例）
+    _activate_existing_window()
+    sys.exit(0)
 
 
 def main() -> None:

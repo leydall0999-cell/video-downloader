@@ -30,6 +30,7 @@ from yt_dlp.utils import DownloadError, ExtractorError, GeoRestrictedError, Unsu
 
 from platforms import LinkError, is_china_host
 from tasks import DownloadTask, TaskStore
+import socket
 import urllib.request
 from urllib.parse import urlparse
 
@@ -75,6 +76,43 @@ def _macos_system_proxy() -> str:
     return ""
 
 
+# 常见本地代理端口（仅 macOS 兜底扫描用）：GUI 应用读不到 shell 代理时启用
+_PROXY_PORTS = (
+    (7890, "http"), (7891, "socks"), (7892, "http"), (7893, "socks"),
+    (10808, "http"), (10809, "socks"), (6152, "http"), (6153, "socks"),
+    (1079, "http"), (1080, "socks"), (1081, "socks"), (8888, "http"),
+)
+_PROXY_PROBE_CACHE: str | None = None  # None=未探测, ""=无命中, str=代理串
+
+
+def _probe_local_proxy_ports() -> str:
+    """扫描 127.0.0.1 上的常见代理端口，命中监听的第一个即返回 yt-dlp 代理串。
+
+    仅作兜底：当 scutil 未配置系统代理、但本机确在跑 Clash/V2Ray/Surge 等时启用。
+    双击 .app 是 GUI 进程、不继承终端 http_proxy，靠此兜底避免 YouTube 直连 403。
+    结果缓存到模块级变量，避免每次 YouTube 解析都重扫（约 3s 开销）。
+    """
+    global _PROXY_PROBE_CACHE
+    if _PROXY_PROBE_CACHE is not None:
+        return _PROXY_PROBE_CACHE
+    for port, kind in _PROXY_PORTS:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        try:
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                _PROXY_PROBE_CACHE = (
+                    f"socks5://127.0.0.1:{port}" if kind == "socks"
+                    else f"http://127.0.0.1:{port}"
+                )
+                return _PROXY_PROBE_CACHE
+        except OSError:
+            pass
+        finally:
+            s.close()
+    _PROXY_PROBE_CACHE = ""
+    return ""
+
+
 def _host_of(url: str) -> str:
     """从链接里取出主机名（去掉 www./m. 前缀），解析失败返回空串。"""
     try:
@@ -107,6 +145,11 @@ def _resolve_proxy(host: str = "") -> str:
         mac = _macos_system_proxy()
         if mac:
             return mac
+        # scutil 读空时（双击 .app 是 GUI 进程，不继承终端 http_proxy；
+        # Clash 等开了但没写系统代理时）扫描本机常见代理端口兜底
+        probed = _probe_local_proxy_ports()
+        if probed:
+            return probed
     return os.environ.get("https_proxy") or os.environ.get("http_proxy") or ""
 DOWNLOAD_RETRIES = 3
 # 下载体积上限（MB）：防止被当成免费大盘偷跑带宽 / 撑爆磁盘。设为 0 表示不限。
@@ -207,6 +250,23 @@ def _looks_like_direct_file(url: str) -> str | None:
     return None
 
 
+def _cache_user_cookie(host: str, cookie: str) -> None:
+    """把用户在「高级选项」手动粘贴的 Cookie 持久化到本地缓存。
+
+    这样同站点后续解析/下载自动带登录态，不必每次重粘。
+    复用 cookie_cache 模块（chmod 600、30 天 TTL、仅本机），合规且不外传。
+    """
+    try:
+        from cookie_cache import _save
+        text = cookie.strip()
+        if text.lower().startswith("cookie:"):
+            text = text[7:].strip()
+        if text:
+            _save(host, text)
+    except Exception:
+        pass
+
+
 def _detect_direct_url(info: dict[str, Any]) -> str | None:
     """yt-dlp 解析结果若本身就是单个可直接下载的媒体文件，返回其直链。"""
     if not info.get("direct"):
@@ -279,6 +339,9 @@ _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
     # 腾讯视频：限免/会员视频走另一套播放 API，需要登录态 cookie；
     # 加入后 app 会自动从本机浏览器读 cookie 并注入请求，提示用户粘贴。
     "v.qq.com",
+    # chrqj 影视聚合站：视频流（m3u8/ts CDN）校验播放页会话 Cookie，缺则拒绝。
+    # 加入后自动从本机浏览器读该站 Cookie 并注入视频流请求头（无需手动粘贴）。
+    "chrqj.com",
 )
 
 # 候选浏览器（按优先级）。Chrome/Edge/Brave/Chromium 的 Cookie 解密仅需 cryptography
@@ -411,6 +474,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         options["proxy"] = ""
     elif effective_proxy:
         options["proxy"] = effective_proxy
+        # 走代理时（Clash/V2Ray/Surge 等常做 HTTPS MITM 中间人解密），
+        # 代理替换了 SSL 证书，必须跳过证书校验否则直接 SSL 握手失败
+        options["no_check_certificates"] = True
     # 国内站（B站/抖音等）反爬严格：缺 Referer/UA 常被直接 412，无论是否带 cookie 都先补上浏览器请求头
     headers = options.setdefault("http_headers", {})
     if is_china_host(host):
@@ -427,6 +493,14 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         cookie_text = cookie_text[7:].strip()
     if cookie_text:
         headers["Cookie"] = cookie_text
+    # YouTube 专用参数：player_client 选择。
+    # 2026-08 起 YouTube 对 web/ios client 强制 SABR 流（DASH only），
+    # 导致 extract_info 拿不到任何可下载格式（formats 为空或仅含图片）。
+    # android_music / tv_embedded / media_connect / create 仍返回完整格式列表。
+    # 注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
+    # 多 client 列表会导致 web 的空 SABR 结果污染整体，必须只传一个。
+    if host and ("youtube.com" in host or "youtu.be" in host):
+        options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
     else:
         # 自动登录态：用户未手动粘贴时，优先用本机缓存的浏览器 Cookie（任意站点均可，
         # 含缓存、浏览器关闭后仍可用，仅本机不外传）；缺失再实时解密。这样登录过的平台
@@ -442,8 +516,10 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
             if browser:
                 options["cookiesfrombrowser"] = (browser,)
-            elif is_cookie_hardened_host(host):
-                # 精确定位：找「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
+            else:
+                # 全站默认尝试从本机浏览器读登录态（不再局限于白名单），
+                # 覆盖更多需要 Cookie 的站点（影视聚合站、会员专享、地区限制等）。
+                # 精确定位「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
                 found = _find_host_cookie_profile(host)
                 if found:
                     options["cookiesfrombrowser"] = found  # (browser, profile)
@@ -468,6 +544,7 @@ def _friendly_error(exc: Exception) -> ResolveError:
     text = _clean_message(str(exc))
     lowered = text.lower()
     rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
+        (("403", "forbidden", "http error 403"), "YouTube 下载被服务器拒绝（403）", "该格式链接被 YouTube CDN 拒绝。建议：①确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；②换更低画质重试；③若仍失败，该视频当前可能受限，稍后再试"),
         (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
          "请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
          "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串"),
@@ -504,6 +581,23 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
+    # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
+    # 后续同站点解析/下载自动复用，免去每次重粘。
+    host = _host_of(url)
+    if cookie and host:
+        _cache_user_cookie(host, cookie)
+    # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
+    _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
+    try:
+        with open(_debug_log, "a") as _f:
+            _f.write(f"[{__import__('datetime').datetime.now().isoformat()}] URL={url[:80]} host={host}\n")
+            _f.write(f"  proxy={proxy or '(auto)'} cookie={'yes' if cookie else 'no'}\n")
+            _effective = proxy or _resolve_proxy(host)
+            _f.write(f"  effective_proxy={_effective or '(none)'}\n")
+            _sys_p = _macos_system_proxy()
+            _f.write(f"  macos_system_proxy={_sys_p or '(none)'}\n")
+    except Exception:
+        pass
     direct = _looks_like_direct_file(url)
     if direct:
         # 本身就是完整媒体文件，跳过 yt-dlp，直接交给前端从源站下载（不走服务器）
@@ -515,16 +609,68 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "ext": (Path(filename).suffix or ".mp4").lstrip("."),
             "webpage_url": url,
         }
+    # 记录最后一次异常信息，用于 info 为空时透传真实原因
+    _last_err: str | None = None
+
     try:
-        with YoutubeDL(_base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)) as ydl:
+        opts = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
+        # 解析阶段只拿 info dict，不做格式选择（避免 YouTube 等站因格式不匹配
+        # 直接抛 "Requested format is not available"）。下载阶段再由 _format_selector 选格式。
+        opts["format"] = None
+        # ignoreerrors：YouTube 通过代理时格式列表可能不完整，跳过格式错误
+        # 让 extract_info 尽量返回能拿到的信息（标题/时长/缩略图等）
+        opts["ignoreerrors"] = "only_download"
+        with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
+        # 诊断：记录 extract_info 返回值
+        try:
+            _info_keys = list(info.keys()) if info else ["(None)"]
+            _info_title = (info or {}).get("title", "(no title)")
+            _fmt_count = len((info or {}).get("formats") or [])
+            with open(_debug_log, "a") as _f:
+                _f.write(f"  extract_info OK: title={str(_info_title)[:60]} formats={_fmt_count} keys={_info_keys[:15]}\n")
+        except Exception:
+            pass
+    except (UnsupportedError, GeoRestrictedError, DownloadError) as exc:
         raise _friendly_error(exc) from exc
+    except ExtractorError as exc:
+        _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
+        # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
+        if "format" in str(exc).lower() or "not available" in str(exc).lower():
+            try:
+                opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
+                opts2["extract_flat"] = "in"
+                if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
+                    opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
+                with YoutubeDL(opts2) as ydl2:
+                    info = ydl2.extract_info(url, download=False)
+                    _last_err = None  # 降级成功
+            except Exception as fb_err:
+                _last_err = f"{_last_err}; 降级: {type(fb_err).__name__}: {str(fb_err)[:150]}"
+                raise ResolveError(
+                    "视频解析失败",
+                    f"建议：①检查代理是否通畅；②在「高级选项」粘贴 Cookie；"
+                    f"③更换代理节点。\n详情：{_last_err}"
+                ) from exc
+        else:
+            raise _friendly_error(exc) from exc
     except OSError as exc:  # 网络/DNS 层面的错误
+        _last_err = f"{type(exc).__name__}: {_clean_message(str(exc))[:200]}"
         raise ResolveError("网络请求失败", _clean_message(str(exc))) from exc
+    except Exception as exc:
+        # 兜底：捕获任何未预期异常，保留完整错误用于诊断
+        _last_err = f"{type(exc).__name__}: {str(exc)[:300]}"
 
     if not info:
-        raise ResolveError("未获取到视频信息", "请稍后重试或更换链接")
+        detail = "请稍后重试或更换链接"
+        # 透传诊断信息：如果 extract_info 静默返回空（未抛异常），补充上下文
+        diag = _last_err or (
+            "extract_info 返回空结果（无异常）。"
+            "常见原因：①代理 MITM 导致 SSL 握手失败但被 ignoreerrors 吞掉；"
+            "②站点返回空页面；③需要登录 Cookie。建议在「高级选项」粘贴 Cookie 后重试。"
+        )
+        detail += f"\n\n诊断信息：{diag}"
+        raise ResolveError("未获取到视频信息", detail)
     if info.get("_type") == "playlist":
         entries = [e for e in (info.get("entries") or []) if e]
         if not entries:
@@ -599,13 +745,14 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _format_selector(quality_key: str) -> str:
     if quality_key == BEST_KEY:
-        return "bv*+ba/b"
+        # 优先 best 合并流；YouTube 等站有时合并流不可用，fallback 到单视频+音频
+        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/bv*+ba/b"
     if quality_key in (AUDIO_KEY, M4A_KEY):
         return "ba/b"
     if quality_key == WEBM_KEY:
-        return "bv*+ba/b"
+        return "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"
     height = int(quality_key)
-    return f"bv*[height<={height}]+ba/b[height<={height}]/bv*+ba/b"
+    return f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/bv*[height<={height}]+ba/b[height<={height}]/b[height<={height}]"
 
 
 def is_valid_quality(quality_key: str) -> bool:
@@ -924,7 +1071,81 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             task.add_step("下载音视频", "running", f"已选清晰度：{task.quality}")
             task.log(f"开始下载：{task.quality}")
             store.update(task.id, status="downloading", progress=0.0)
-            ydl.process_info(info)
+
+            # 记录本次 yt-dlp 实际选中的格式 ID（用于 403 降级时向用户说明原因）
+            _sel_parts: list[str] = []
+            if info.get("requested_formats"):
+                _sel_parts = [str(f.get("format_id", "?")) for f in info["requested_formats"]]
+            elif info.get("format_id"):
+                _sel_parts = [str(info["format_id"])]
+            _sel_fmt = "+".join(_sel_parts) or "未知"
+
+            # YouTube 403 自动降级：tv_embedded 等客户端的某些格式 ID
+            # （如 AV1 400/39x、部分 H.264 298/18）URL 被 Google CDN 拒绝，
+            # 捕获后自动换已知可用格式重试，用户无感知。
+            try:
+                ydl.process_info(info)
+            except (DownloadError, ExtractorError) as _exc:
+                _err_str = str(_exc)
+                _is_403 = "403" in _err_str or "Forbidden" in _err_str
+                _yt_host = _host_of(task.url)
+                _is_yt = _yt_host and ("youtube.com" in _yt_host or "youtu.be" in _yt_host)
+                if _is_403 and _is_yt:
+                    task.log(
+                        f"YouTube 格式 {_sel_fmt} 的下载地址被 CDN 拒绝(403，"
+                        f"URL 绑定的出口 IP / 签名不匹配)，自动降级重试…"
+                    )
+                    task.add_step(
+                        "下载音视频", "running",
+                        f"格式 {_sel_fmt} 被 YouTube 拒绝，自动切换兼容格式…",
+                    )
+                    # 多轮降级：依次尝试不同格式链，优先 H.264(avc1) 编码
+                    # （最不易被 CDN 拒绝），再放宽到 VP9/AV1、降低分辨率，
+                    # 最终兜底 best。每一轮独立 try，直到成功或穷尽所有链。
+                    _fb_base = _download_options(
+                        task, quality_key, reporter, cookie=cookie, proxy=proxy,
+                        format_id=format_id, concurrent_fragments=concurrent_fragments,
+                        downloader_type=downloader_type, resume=resume,
+                    )
+                    _fallback_chains = [
+                        "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4]",
+                        "bv*[vcodec^=avc1]+ba/bv*[height<=720]+ba/b[height<=720]",
+                        "299+140/248+140/137+140/136+140/135+140/134+140/133+140/160+140",
+                        "bv*+ba/best[height<=1080]/best",
+                    ]
+                    _done = False
+                    for _chain in _fallback_chains:
+                        try:
+                            _fb_opts = dict(_fb_base)
+                            _fb_opts["format"] = _chain
+                            with YoutubeDL(_fb_opts) as _ydl2:
+                                info = _ydl2.extract_info(task.url, download=False) or info
+                                if info.get("title"):
+                                    store.update(task.id, title=info["title"])
+                                _ydl2.process_info(info)
+                            _done = True
+                            task.log(f"已用兼容格式链 {_chain} 完成下载")
+                            break
+                        except (DownloadError, ExtractorError) as _e2:
+                            _e2_str = str(_e2)
+                            if "403" in _e2_str or "Forbidden" in _e2_str:
+                                task.log(f"格式链 {_chain} 仍被拒绝，继续尝试下一组…")
+                                continue
+                            raise
+                    if not _done:
+                        # 所有格式链都 403：极可能是代理出口 IP 不一致
+                        _eff = proxy or _resolve_proxy(_yt_host)
+                        _proxy_note = (
+                            "（当前生效代理：%s；双击 .app 不继承终端代理，"
+                            "请确认 Clash/V2Ray 已开启「系统代理」或 TUN 模式）"
+                            % (_eff or "无，直连")
+                        )
+                        task.log("YouTube 所有兼容格式均被 CDN 拒绝，疑似代理出口 IP 不匹配" + _proxy_note)
+                        raise DownloadError(
+                            "YouTube 下载被 CDN 全面拒绝(403)：请检查代理设置后重试" + _proxy_note
+                        )
+                else:
+                    raise
 
             output = _locate_output(info, task.workdir or Path("."))
             _write_sidecar(output, task, info)

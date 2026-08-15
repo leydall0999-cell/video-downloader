@@ -270,8 +270,10 @@ perl -0pi -e "s{<span id=\"buildTag\" class=\"build-tag\">.*?</span>}{<span id=\
 # 给 app.js 注入构建戳作为缓存 bust 版本号（与页脚同源变化），避免桌面端缓存旧脚本
 perl -0pi -e "s{__BUILD_FP__}{$BUILD_STAMP}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
 # 同时把指纹写入程序可读文件，供 /api/version 自检（避免肉眼误判版本）
-echo "$BUILD_INFO" > "$REPO/dist/VideoDownloader.app/Contents/Resources/build_version.txt"
-echo "   指纹：$BUILD_INFO  缓存戳：$BUILD_STAMP"
+# 注意：指纹必须每次构建都变化（含 BUILD_STAMP 时间戳），否则自动接管逻辑
+# 会误判"版本相同"而不接管旧实例，导致仍跑旧版。
+echo "$BUILD_INFO #$BUILD_STAMP" > "$REPO/dist/VideoDownloader.app/Contents/Resources/build_version.txt"
+echo "   指纹：$BUILD_INFO #$BUILD_STAMP"
 
 echo "▶ 打包 aria2c（种子后端随安装包自包含，脱离本机 Homebrew）"
 python3 "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader.app/Contents/Resources" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用）"

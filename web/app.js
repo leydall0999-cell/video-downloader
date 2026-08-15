@@ -855,8 +855,7 @@
       bar: node.querySelector('[data-bar]'),
       stats: node.querySelector('[data-stats]'),
       cancel: node.querySelector('[data-cancel]'),
-      pause: node.querySelector('[data-pause]'),
-      resume: node.querySelector('[data-resume]'),
+      togglePause: node.querySelector('[data-toggle-pause]'),
       save: node.querySelector('[data-save]'),
       error: node.querySelector('[data-error]'),
       saveHint: node.querySelector('[data-save-hint]'),
@@ -886,8 +885,11 @@
       extractRetry: node.querySelector('[data-extract-retry]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
-    refs.pause.addEventListener('click', () => pauseTask(taskId, refs.base || ''));
-    refs.resume.addEventListener('click', () => resumeTask(taskId, refs.base || ''));
+    refs.togglePause.addEventListener('click', () => {
+      const isPaused = refs.root.classList.contains('is-paused');
+      if (isPaused) resumeTask(taskId, refs.base || '');
+      else pauseTask(taskId, refs.base || '');
+    });
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
     refs.stepsToggle.addEventListener('click', () => {
@@ -936,8 +938,9 @@
     refs.stats.textContent = buildStats(task);
     const downloading = task.status === 'downloading' || task.status === 'merging';
     const isPaused = task.status === 'paused';
-    refs.pause.hidden = !downloading;
-    refs.resume.hidden = !isPaused;
+    refs.togglePause.hidden = !downloading && !isPaused;
+    refs.togglePause.textContent = isPaused ? '▶ 继续' : '⏸ 暂停';
+    refs.togglePause.title = isPaused ? '继续下载' : '暂停下载';
     refs.cancel.hidden = isPaused;
     refs.root.classList.toggle('is-active', active);
     refs.root.classList.toggle('is-done', task.status === 'completed');
