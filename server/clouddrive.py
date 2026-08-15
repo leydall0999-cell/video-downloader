@@ -250,10 +250,10 @@ class WebDAVProvider:
 
 class BaiduProvider:
     name = "baidu"
-    # 百度网盘开放平台的 OAuth 端点使用 openapi.baidu.com（官方文档明确）
-    # 注意：pan.baidu.com/union 是 API 调用端点，OAuth 授权/换令牌用 openapi.baidu.com
-    # 两者的 AppKey 互通：在 pan.baidu.com/union 创建的应用，OAuth 用 openapi.baidu.com
-    OAUTH_BASE = "https://openapi.baidu.com"
+    # 百度网盘开放平台（pan.baidu.com/union）创建的应用，OAuth 端点和 API 端点都用
+    # pan.baidu.com/union 域名。openapi.baidu.com 是通用开放平台，AppKey 不互通。
+    # ⚠️ device_id（= AppID）是必需参数，缺省会导致跳转营销首页或 invalid_client
+    OAUTH_BASE = "https://pan.baidu.com/union"
     PAN_API = "https://pan.baidu.com/rest/2.0/xpan/file"
 
     def upload(self, local_path: Path, dest_path: str, creds: dict, progress=None) -> str:
