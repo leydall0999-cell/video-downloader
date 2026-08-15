@@ -623,7 +623,7 @@ class BaiduProvider:
                 -12: "提取码错误",
                 -30: "文件已在网盘中存在（请更换目标目录或文件名）",
                 -70: "网盘容量不足，无法转存",
-                2: "文件已存在（请更换目标目录或文件名）",
+                2: "转存失败（百度对该分享标记为已转存/目标目录不可用），请尝试其他分享或重置 OAuth 重新授权",
             }.get(errno, f"转存失败(errno={errno})")
             raise CloudError(msg, str(show))
         transferred = (data.get("extra") or {}).get("list") or []
@@ -650,15 +650,44 @@ class BaiduProvider:
         """把分享里的某个文件：先转存到用户网盘，再从用户网盘下载到本机。返回写入字节数。
 
         速度由用户账号等级决定，本方法只做官方合规下载，不绕过平台限速。
+
+        转存若报「文件已存在」（errno=2/-30），说明文件已在 dest 目录里，自动 fallback：
+        列 dest 目录找同名文件，直接用现有 fs_id+path 下载，避免重复转存失败。
         """
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
-        transferred = self.share_transfer(share_url, pwd, [share_path], dest, token)
-        if not transferred:
-            raise CloudError("转存后未获得文件信息", "请稍后重试或检查分享链接")
-        item = transferred[0]
+        target_name = os.path.basename(share_path or "")
+        item: dict | None = None
+        try:
+            transferred = self.share_transfer(share_url, pwd, [share_path], dest, token)
+            if transferred:
+                item = transferred[0]
+            else:
+                raise CloudError("转存后未获得文件信息", "请稍后重试或检查分享链接")
+        except CloudError as exc:
+            # 「文件已存在」→ fallback 到 dest 目录找现有同名文件
+            if "文件已存在" not in exc.message or not target_name:
+                raise
+            existing = self._find_in_dest_dir(token, dest, target_name)
+            if not existing:
+                raise
+            item = existing
         return self.download(
             token, item["fs_id"], item["path"], local_path, progress=progress, backend=backend
         )
+
+    def _find_in_dest_dir(self, token: str, dest_dir: str, name: str) -> dict | None:
+        """在用户网盘 dest_dir 下找名为 name 的文件/目录，返回 {fs_id, path}；找不到返回 None。"""
+        try:
+            data = self.list_files(token, dest_dir, page=1, limit=200)
+        except CloudError:
+            return None
+        for it in data.get("list") or []:
+            if (it.get("server_filename") or "") == name:
+                return {
+                    "fs_id": it.get("fs_id"),
+                    "path": it.get("path") or (dest_dir.rstrip("/") + "/" + name),
+                }
+        return None
 
 
 # --------------------------------------------------------------------------- #
