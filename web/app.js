@@ -3595,7 +3595,9 @@
       }
       el.baiduList.innerHTML = list.map((it) => {
         const icon = it.isdir ? '📁' : '📄';
-        const dlBtn = it.isdir ? '' : `<button type="button" class="btn btn-accent btn-sm dl" data-fsid="${it.fs_id}" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(it.name)}">下载</button>`;
+        // 百度限制：第三方应用只能下载 /apps/ 目录，用户网盘任意路径文件直下会 errno=20020。
+        // 因此这里只浏览，下载引导用户走「分享链接下载」（转存到 /apps/ 目录再下）。
+        const dlBtn = it.isdir ? '' : `<span class="baidu-nodl" title="百度限制第三方应用不能直下网盘任意文件，请用上方「分享链接下载」">需用分享链接</span>`;
         return `<div class="baidu-row">
           <span class="icon">${icon}</span>
           <span class="name ${it.isdir ? 'folder' : ''}" ${it.isdir ? `data-go="${encodeURIComponent(it.path)}"` : ''}>${it.name}</span>
@@ -3605,13 +3607,6 @@
       }).join('');
       el.baiduList.querySelectorAll('.name.folder').forEach((n) => {
         n.addEventListener('click', () => loadBaiduList(decodeURIComponent(n.dataset.go)));
-      });
-      el.baiduList.querySelectorAll('.dl button').forEach((b) => {
-        b.addEventListener('click', () => startBaiduDownload({
-          fs_id: Number(b.dataset.fsid),
-          path: decodeURIComponent(b.dataset.path),
-          name: decodeURIComponent(b.dataset.name),
-        }));
       });
     } catch (err) {
       el.baiduList.innerHTML = `<p class="baidu-empty">加载出错：${err.message}</p>`;
