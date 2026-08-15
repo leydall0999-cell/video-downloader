@@ -1934,10 +1934,18 @@ def download_file(task_id: str) -> FileResponse:
     task = _require_task(task_id)
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise HTTPException(status_code=409, detail="文件尚未准备好")
+    _ext = task.filepath.suffix.lower()
+    _mt = {
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+        ".m4a": "audio/mp4",
+        ".mp3": "audio/mpeg",
+    }.get(_ext, "application/octet-stream")
     return FileResponse(
         path=task.filepath,
         filename=task.filepath.name,
-        media_type="application/octet-stream",
+        media_type=_mt,
     )
 
 

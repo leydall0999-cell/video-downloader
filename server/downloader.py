@@ -745,14 +745,28 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _format_selector(quality_key: str) -> str:
     if quality_key == BEST_KEY:
-        # 优先 best 合并流；YouTube 等站有时合并流不可用，fallback 到单视频+音频
-        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/bv*+ba/b"
+        # 优先 H.264(avc1) —— macOS WKWebView / Safari 不支持 AV1 和 VP9 解码，
+        # 选了会导致「下载成功但播不了」。[ext=mp4] 不够（YouTube AV1 也是 .mp4），
+        # 必须用 [vcodec^=avc1] 锁编码。降级链：H.264≤1080p → H.264任意 → mp4容器 → 兜底
+        return (
+            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/"
+            "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/"
+            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio/"
+            "bestvideo[vcodec^=avc1]+bestaudio/"
+            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
+            "bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio/bv*+ba/b"
+        )
     if quality_key in (AUDIO_KEY, M4A_KEY):
         return "ba/b"
     if quality_key == WEBM_KEY:
         return "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"
     height = int(quality_key)
-    return f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/bv*[height<={height}]+ba/b[height<={height}]/b[height<={height}]"
+    return (
+        f"bv*[vcodec^=avc1][height<={height}]+ba[ext=m4a]/"
+        f"bv*[vcodec^=avc1][height<={height}]+ba/"
+        f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
+        f"bv*[height<={height}]+ba/b[height<={height}]/b[height<={height}]"
+    )
 
 
 def is_valid_quality(quality_key: str) -> bool:
@@ -1289,7 +1303,8 @@ def _detect_play_url(info: dict[str, Any]) -> tuple[str | None, bool]:
     if du:
         return du, False
     # 3b) 从 formats 中挑最高分辨率非 HLS 直链（覆盖 info.direct=False 的站点）
-    prog_cands: list[tuple[int, str]] = []
+    #     优先 H.264(avc1) —— macOS WKWebView 不支持 AV1/VP9，选了会导致黑屏
+    prog_cands: list[tuple[int, int, int, str]] = []  # (is_avc1, height, tbr, url)
     for f in formats:
         u = f.get("url") or ""
         if not u:
@@ -1300,11 +1315,13 @@ def _detect_play_url(info: dict[str, Any]) -> tuple[str | None, bool]:
         h = int(f.get("height") or 0)
         if h:
             tbr = float(f.get("tbr") or 0) or 0.0
-            prog_cands.append((h, tbr, u))
+            vc = (f.get("vcodec") or "").lower()
+            is_avc1 = 1 if ("avc1" in vc or "h264" in vc or "avc" in vc) else 0
+            prog_cands.append((is_avc1, h, tbr, u))
     if prog_cands:
-        # 先按 height 降序，同 height 按 tbr 降序
-        prog_cands.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        return prog_cands[0][2], False
+        # 先按是否 H.264 降序（H.264 优先），同编码按 height 降序，同 height 按 tbr 降序
+        prog_cands.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        return prog_cands[0][3], False
     return None, False
 
 
@@ -1343,9 +1360,16 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             # 渐进式直链：放宽过滤——只要有 url + height 就纳入观看选项。
             # 很多第三方提取器 ext/proto 字段不规范；播放失败由前端 onerror 兜底。
+            # 同分辨率优先 H.264(avc1) —— WKWebView 不支持 AV1/VP9
             if height:
                 cur = prog.get(height)
-                if cur is None or tbr > cur["tbr"]:
+                vc = (f.get("vcodec") or "").lower()
+                is_avc1 = ("avc1" in vc or "h264" in vc or "avc" in vc)
+                cur_vc = (cur.get("vcodec") or "") if cur else ""
+                cur_is_avc1 = ("avc1" in cur_vc or "h264" in cur_vc or "avc" in cur_vc) if cur else False
+                # 优先 H.264；同编码选高码率
+                if cur is None or (is_avc1 and not cur_is_avc1) or (is_avc1 == cur_is_avc1 and tbr > cur["tbr"]):
+                    item["_vcodec"] = vc  # 保留编码信息供调试
                     prog[height] = item
 
     # 合并：同清晰度优先 HLS（自适应更好），无 HLS 才用渐进式直链
