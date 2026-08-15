@@ -485,13 +485,16 @@ class BaiduProvider:
         data = resp.json()
         errno = data.get("errno", 0)
         if errno != 0:
+            # 百度分享接口错误提示在 show_msg 字段（"啊哦，链接出错了"等），errmsg 可能为空
+            show = data.get("show_msg") or data.get("errmsg") or ""
             msg = {
                 -9: "分享链接不存在或已失效",
                 -12: "提取码错误",
                 -10: "分享已被取消",
                 -1: "分享链接无效",
+                2: "分享链接已失效或不存在",
             }.get(errno, f"获取分享列表失败(errno={errno})")
-            raise CloudError(msg, str(data.get("errmsg", "")))
+            raise CloudError(msg, str(show))
         items = data.get("list") or []
         files = [
             {
@@ -531,13 +534,15 @@ class BaiduProvider:
         data = resp.json()
         errno = data.get("errno", 0)
         if errno != 0:
+            show = data.get("show_msg") or data.get("errmsg") or ""
             msg = {
                 -9: "分享链接不存在或已失效",
                 -12: "提取码错误",
                 -30: "文件已在网盘中存在（请更换目标目录或文件名）",
                 -70: "网盘容量不足，无法转存",
+                2: "分享链接已失效或不存在",
             }.get(errno, f"转存失败(errno={errno})")
-            raise CloudError(msg, str(data.get("errmsg", "")))
+            raise CloudError(msg, str(show))
         transferred = (data.get("extra") or {}).get("list") or []
         return [{"fs_id": it.get("fs_id"), "path": it.get("path")} for it in transferred]
 
