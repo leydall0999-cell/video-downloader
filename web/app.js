@@ -34,7 +34,7 @@
     failed: '失败',
     canceled: '已取消',
   };
-  const ACTIVE_STATES = ['pending', 'downloading', 'merging', 'paused'];
+  const ACTIVE_STATES = ['pending', 'downloading', 'merging', 'paused', 'pausing'];
   const POLL_FALLBACK_MS = 1500;
 
   /** 时间格式化 (mm:ss.s) —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
@@ -889,17 +889,26 @@
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.togglePause.addEventListener('click', () => {
-      // 乐观更新：点击后立即切换按钮视觉，不等后端与轮询，消除「点了没反应」的延迟感
-      const wantPaused = !refs.root.classList.contains('is-paused'); // 当前在下载→要暂停；当前暂停→要恢复
-      refs._opPaused = wantPaused;
-      refs._opPauseUntil = Date.now() + 1500;
-      refs.root.classList.toggle('is-paused', wantPaused);
-      refs.togglePause.textContent = wantPaused ? '▶ 继续' : '⏸ 暂停';
-      refs.togglePause.title = wantPaused ? '继续下载' : '暂停下载';
-      refs.togglePause.disabled = true;
-      const done = () => { refs.togglePause.disabled = false; };
-      const action = wantPaused ? pauseTask(taskId, refs.base || '') : resumeTask(taskId, refs.base || '');
-      action.finally(done);
+      const isPausedNow = refs.root.classList.contains('is-paused');
+      if (isPausedNow) {
+        // 意图：继续下载 → 立即反馈「继续中…」并短暂锁定，等后端/轮询转 downloading
+        refs._opState = 'resuming';
+        refs._opPauseUntil = Date.now() + POLL_FALLBACK_MS;
+        refs.togglePause.textContent = '继续中…';
+        refs.togglePause.disabled = true;
+        refs.togglePause.title = '正在继续';
+        refs.root.classList.remove('is-paused');
+        resumeTask(taskId, refs.base || '');
+      } else {
+        // 意图：暂停下载 → 立即反馈「暂停中…」，等 yt-dlp 真正停止（pausing→paused）
+        refs._opState = 'pausing';
+        refs._opPauseUntil = Date.now() + 2500;
+        refs.togglePause.textContent = '暂停中…';
+        refs.togglePause.disabled = true;
+        refs.togglePause.title = '正在暂停';
+        refs.root.classList.add('is-paused');
+        pauseTask(taskId, refs.base || '');
+      }
     });
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
@@ -947,19 +956,39 @@
     refs.bar.parentElement.classList.toggle('is-indeterminate', indeterminate);
     refs.bar.style.width = indeterminate ? '45%' : `${task.progress}%`;
     refs.stats.textContent = buildStats(task);
-    const downloading = task.status === 'downloading' || task.status === 'merging';
-    // 乐观更新锁：点击暂停/继续后短时间内，按钮视觉以乐观值为准，
-    // 避免被「真实状态尚未变化」的轮询/SSE 刷回，造成按钮闪烁、像没反应。
-    const _opLock = refs._opPauseUntil && Date.now() < refs._opPauseUntil;
-    const isPaused = _opLock ? !!refs._opPaused : (task.status === 'paused');
-    refs.togglePause.hidden = !downloading && !isPaused;
-    refs.togglePause.textContent = isPaused ? '▶ 继续' : '⏸ 暂停';
-    refs.togglePause.title = isPaused ? '继续下载' : '暂停下载';
-    refs.cancel.hidden = isPaused;
+    // 暂停/继续按钮状态机（含 pausing 过渡态 + 乐观意图锁，确保点击反馈连贯不闪烁/不消失）
+    const st = task.status;
+    const isPausing = st === 'pausing';
+    const isPaused = st === 'paused';
+    const downloading = st === 'downloading' || st === 'merging';
+    // 乐观意图锁：点击后短时间内按钮以「用户意图」渲染，避免被尚未变化的轮询/SSE 刷回
+    const opState = (refs._opPauseUntil && Date.now() < refs._opPauseUntil) ? refs._opState : null;
+    refs.togglePause.hidden = !(downloading || isPaused || isPausing);
+    if (opState === 'pausing' || isPausing) {
+      refs.togglePause.textContent = '暂停中…';
+      refs.togglePause.disabled = true;
+      refs.togglePause.title = '正在暂停';
+      refs.root.classList.add('is-paused');
+    } else if (isPaused) {
+      refs.togglePause.textContent = '▶ 继续';
+      refs.togglePause.disabled = false;
+      refs.togglePause.title = '继续下载';
+      refs.root.classList.add('is-paused');
+    } else if (opState === 'resuming') {
+      refs.togglePause.textContent = '继续中…';
+      refs.togglePause.disabled = true;
+      refs.togglePause.title = '正在继续';
+      refs.root.classList.remove('is-paused');
+    } else {
+      refs.togglePause.textContent = '⏸ 暂停';
+      refs.togglePause.disabled = false;
+      refs.togglePause.title = '暂停下载';
+      refs.root.classList.remove('is-paused');
+    }
+    refs.cancel.hidden = isPaused || isPausing;
     refs.root.classList.toggle('is-active', active);
     refs.root.classList.toggle('is-done', task.status === 'completed');
     refs.root.classList.toggle('is-error', task.status === 'failed' || task.status === 'canceled');
-    refs.root.classList.toggle('is-paused', isPaused);
     // 已完成任务：折叠过程/进度条/转换等冗余信息，只留标题+核心动作（保存到本机/网盘/删除）
     refs.root.classList.toggle('is-collapsed', task.status === 'completed');
 
