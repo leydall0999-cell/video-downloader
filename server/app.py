@@ -3117,6 +3117,11 @@ class BaiduShareDownloadRequest(BaseModel):
     name: str = ""
     token: str = ""       # 可选；缺省回退到本机持久化的令牌
     backend: str = ""     # 空=auto（优先 aria2c 并发，缺失回退 requests）
+    # 以下来自 share/list 响应，传入后可跳过重复 verify（避免百度限频）
+    sekey: str = ""       # list 返回的 sekey（randsk）
+    share_id: int | None = None  # list 返回的 share_id
+    uk: int | None = None        # list 返回的 uk
+    fs_id: int | None = None     # 要下载的文件的 fs_id（list items 里）
 
 
 @app.post("/api/cloud/baidu/share/download")
@@ -3160,6 +3165,10 @@ def cloud_baidu_share_download(payload: BaiduShareDownloadRequest):
             _baidu_provider.download_share(
                 payload.url, payload.pwd, payload.path, dest, token,
                 progress=_prog, backend=payload.backend or "auto",
+                pre_sekey=payload.sekey or "",
+                pre_share_id=payload.share_id,
+                pre_uk=payload.uk,
+                pre_fs_id=payload.fs_id,
             )
             with _baidu_dl_lock:
                 _baidu_dl_tasks[tid].update(

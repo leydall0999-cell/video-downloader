@@ -739,7 +739,13 @@ class BaiduProvider:
         sign = hashlib.md5(raw_sign.encode()).hexdigest()
 
         try:
-            resp = meta["session"].post(
+            s = meta.get("session") or self._share_session(
+                self._parse_share_surl("")  # 仅用于创建 session，不需要真实 surl
+            )
+            # 修正 session 的 Referer（share_session 默认用假 surl）
+            if "1" not in (s.headers.get("Referer") or ""):
+                s.headers.update({"Referer": f"https://pan.baidu.com/s/1{share_id}"})
+            resp = s.post(
                 BAIDU_SHARE_API + "/download",
                 params={
                     "sign": sign,
@@ -804,42 +810,61 @@ class BaiduProvider:
         progress=None,
         backend: str = "auto",
         dest: str = "",
+        # 以下来自 share/list 响应（前端传入），提供后跳过重复 verify
+        pre_sekey: str = "",
+        pre_share_id: int | None = None,
+        pre_uk: int | None = None,
+        pre_fs_id: int | None = None,
     ) -> int:
         """把分享里的某个文件下载到本机。返回写入字节数。
 
         策略（按优先级）：
           1. transfer → 从用户网盘下载（官方合规路径）
           2. transfer 失败时 → 直接从分享提取 dlink 下载（绕过 transfer）
+
+        如果传入了 pre_sekey/pre_share_id/pre_uk（来自 list 响应），
+        则跳过 _share_meta（不重复 verify），直接用预取值。
         """
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         target_name = os.path.basename(share_path or "")
         sub_dir = os.path.dirname(share_path or "").replace("\\", "/")
+        surl = self._parse_share_surl(share_url)
+
+        # ── 构造 meta（优先用前端传入的预取值，避免重复 verify）────────
+        if pre_sekey and pre_share_id is not None and pre_uk is not None:
+            # 前端已传入 list 阶段的 verify 结果 → 直接用，不再 verify
+            meta = {
+                "sekey": pre_sekey,
+                "share_id": pre_share_id,
+                "uk": pre_uk,
+                "items": [],  # transfer/dlink 不依赖 items（已有 fs_id）
+                "session": None,
+            }
+            fs_id = pre_fs_id
+        else:
+            # 没有预取值 → 回退到 _share_meta（会重新 verify）
+            meta = self._share_meta(surl, pwd, sub_dir=sub_dir)
+            by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
+            by_name = {it.get("server_filename") or "": it.get("fs_id") for it in meta["items"]}
+            fs_id = by_path.get(share_path) or by_name.get(target_name)
 
         # ── 策略 1：transfer 路径（官方合规）─────────────────────────
         try:
-            transferred = self.share_transfer(share_url, pwd, [share_path], dest, token, sub_dir=sub_dir)
-            if transferred and transferred[0].get("fs_id"):
-                item = transferred[0]
-                return self.download(token, item["fs_id"], item["path"], local_path,
-                                     progress=progress, backend=backend)
+            # 只有非预取模式才走 transfer（预取模式下跳过，直接走 dlink）
+            if not pre_sekey:
+                transferred = self.share_transfer(share_url, pwd, [share_path], dest, token, sub_dir=sub_dir)
+                if transferred and transferred[0].get("fs_id"):
+                    item = transferred[0]
+                    return self.download(token, item["fs_id"], item["path"], local_path,
+                                         progress=progress, backend=backend)
         except CloudError as exc:
             transfer_err = exc  # 保存错误信息，用于策略 2 失败时报告
 
         # ── 策略 2：直链下载（绕过 transfer）──────────────────────────
-        try:
-            surl = self._parse_share_surl(share_url)
-            meta = self._share_meta(surl, pwd, sub_dir=sub_dir)
-            # 找到目标文件的 fs_id
-            by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
-            by_name = {it.get("server_filename") or "": it.get("fs_id") for it in meta["items"]}
-            fs_id = by_path.get(share_path) or by_name.get(target_name)
-            if not fs_id:
-                raise CloudError("未找到要下载的文件", "请重新列出分享内容后再试")
-            dlink = self._share_dlink(meta, fs_id)
-            return self._download_from_url(dlink, local_path, progress=progress)
-        except CloudError:
-            # 直链也失败 → 报告策略 1 的原始错误（更有信息量）
-            raise transfer_err
+        if not fs_id:
+            raise CloudError("未找到要下载的文件", "请重新列出分享内容后再试")
+        dlink = self._share_dlink(meta, fs_id)
+        return self._download_from_url(dlink, local_path, progress=progress)
 
     def _find_in_dest_dir(self, token: str, dest_dir: str, name: str) -> dict | None:
         """在用户网盘 dest_dir 下找名为 name 的文件/目录，返回 {fs_id, path}；找不到返回 None。"""

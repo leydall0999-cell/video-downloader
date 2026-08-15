@@ -3557,7 +3557,7 @@
             const btn = it.isdir
               ? `<button type="button" class="btn btn-accent btn-sm open" ${nameAction}>展开</button>`
               : `<button type="button" class="btn btn-accent btn-sm dl" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}">转存并下载</button>`;
-            return `<div class="baidu-row" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}">
+            return `<div class="baidu-row" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}" data-fsid="${it.fs_id || ''}">
               <span class="name" ${nameAction}>${icon} ${label}</span>
               <span class="size">${size}</span>
               <span class="dl">${btn}</span>
@@ -3580,12 +3580,21 @@
         });
       });
       // 转存下载按钮
+      // 保存 list 级别的 verify 结果（sekey/share_id/uk），下载时传入后端跳过重复 verify
+      const _listSekey = data.sekey || '';
+      const _listShareId = data.share_id != null ? data.share_id : null;
+      const _listUk = data.uk != null ? data.uk : null;
       el.baiduShareList.querySelectorAll('.dl button').forEach((b) => {
+        const itemFsId = b.closest('.baidu-row')?.dataset?.fsid || '';
         b.addEventListener('click', () => startBaiduShareDownload({
           path: decodeURIComponent(b.dataset.path),
           name: decodeURIComponent(b.dataset.name),
           url,
           pwd,
+          _sekey: _listSekey,
+          _share_id: _listShareId,
+          _uk: _listUk,
+          fs_id: itemFsId ? Number(itemFsId) : null,
         }));
       });
     } catch (err) {
@@ -3611,7 +3620,14 @@
     fetch('/api/cloud/baidu/share/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: item.url, pwd: item.pwd, path: item.path, name: item.name, token: baiduToken }),
+      body: JSON.stringify({
+        url: item.url, pwd: item.pwd, path: item.path, name: item.name, token: baiduToken,
+        // 传入 list 阶段的 verify 结果，后端跳过重复 verify
+        sekey: item._sekey || '',
+        share_id: item._share_id != null ? item._share_id : null,
+        uk: item._uk != null ? item._uk : null,
+        fs_id: item.fs_id != null ? item.fs_id : null,
+      }),
     }).then((r) => r.json()).then((data) => {
       if (data.task_id) {
         addBaiduDlItem(data.task_id, item.name);
