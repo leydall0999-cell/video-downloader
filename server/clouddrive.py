@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import requests
@@ -445,7 +446,11 @@ class BaiduProvider:
     # ------------------------------------------------------------------ #
 
     def _parse_share_surl(self, share_url: str) -> str:
-        """从分享链接中提取 surl（短链码）。支持 /s/xxx 与 ?surl=xxx 两种形式。"""
+        """从分享链接中提取 surl（短链核心码）。支持 /s/xxx 与 ?surl=xxx 两种形式。
+
+        关键：百度分享短链 /s/1xxx 的「1」是类型前缀（1=普通分享、5=知识分享、7=三方加密），
+        API 调用必须用去掉前缀后的核心码，否则 verify/list 会报 errno=2「链接出错了」。
+        """
         from urllib.parse import urlparse, parse_qs
 
         u = urlparse((share_url or "").strip())
@@ -458,28 +463,67 @@ class BaiduProvider:
             parts = [p for p in u.path.split("/") if p]
             for i, p in enumerate(parts):
                 if p in ("s", "share", "shareInit", "share_init") and i + 1 < len(parts):
-                    return parts[i + 1].strip()
+                    return _strip_surl_prefix(parts[i + 1].strip())
             if parts:
-                return parts[-1].strip()
+                return _strip_surl_prefix(parts[-1].strip())
         raise CloudError("无法解析分享链接", "请检查链接格式，应为 https://pan.baidu.com/s/... 形式")
 
-    def share_list(self, share_url: str, pwd: str = "") -> dict:
-        """列出分享链接里的文件（看分享内容无需登录；转存才需 token）。返回归一化列表。"""
-        surl = self._parse_share_surl(share_url)
+    def _share_session(self, surl: str):
+        """创建带 UA + Referer 的 Session，先访问分享页拿 BAIDUID cookie。
+
+        百度 share/verify 依赖 Referer 头 + 分享页 cookie，缺一不可（否则 errno=2）。
+        """
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Referer": f"https://pan.baidu.com/s/1{surl}",
+        })
+        try:
+            s.get(f"https://pan.baidu.com/s/1{surl}", timeout=15)
+        except requests.RequestException:
+            pass  # cookie 拿不到不致命，verify 仍可能成功
+        return s
+
+    def _share_verify(self, surl: str, pwd: str, session=None) -> str:
+        """验证分享提取码，返回 sekey（randsk）。"""
+        s = session or self._share_session(surl)
+        params = {"t": str(int(time.time() * 1000)), "surl": surl}
+        try:
+            resp = s.post(
+                BAIDU_SHARE_API + "/verify",
+                params=params,
+                data={"pwd": pwd or "", "vcode": "", "vcode_str": ""},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise CloudError("验证分享提取码失败", str(exc)) from exc
+        data = resp.json()
+        errno = data.get("errno", 0)
+        if errno != 0:
+            show = data.get("show_msg") or data.get("err_msg") or ""
+            msg = {
+                -12: "提取码错误",
+                105: "提取码错误",
+                -9: "分享链接不存在或已失效",
+            }.get(errno, f"验证提取码失败(errno={errno})")
+            raise CloudError(msg, str(show))
+        return data.get("randsk", "")
+
+    def _share_meta(self, surl: str, pwd: str) -> dict:
+        """verify + list，返回 {sekey, share_id, uk, items, session}（transfer 依赖这些）。"""
+        s = self._share_session(surl)
+        sekey = self._share_verify(surl, pwd, session=s)
         params = {
-            "channel": "chunlei",
-            "clienttype": "0",
-            "web": "1",
-            "surl": surl,
+            "shorturl": surl,
+            "sekey": sekey,
+            "root": "1",
             "page": "1",
             "num": "100",
             "order": "time",
             "desc": "1",
         }
-        if pwd:
-            params["pwd"] = pwd
         try:
-            resp = requests.get(BAIDU_SHARE_API + "/list", params=params, timeout=30)
+            resp = s.get(BAIDU_SHARE_API + "/list", params=params, timeout=30)
         except requests.RequestException as exc:
             raise CloudError("获取分享文件列表失败", str(exc)) from exc
         data = resp.json()
@@ -495,37 +539,76 @@ class BaiduProvider:
                 2: "分享链接已失效或不存在",
             }.get(errno, f"获取分享列表失败(errno={errno})")
             raise CloudError(msg, str(show))
-        items = data.get("list") or []
+        return {
+            "sekey": sekey,
+            "share_id": data.get("share_id"),
+            "uk": data.get("uk"),
+            "items": data.get("list") or [],
+            "session": s,
+        }
+
+    def share_list(self, share_url: str, pwd: str = "") -> dict:
+        """列出分享链接里的文件（看分享内容无需登录；转存才需 token）。返回归一化列表。"""
+        surl = self._parse_share_surl(share_url)
+        meta = self._share_meta(surl, pwd)
         files = [
             {
                 "fs_id": it.get("fs_id"),
                 "path": it.get("path"),
                 "name": it.get("server_filename") or it.get("filename") or "",
                 "size": it.get("size", 0),
-                "isdir": bool(it.get("isdir")),
+                "isdir": bool(int(it.get("isdir") or 0)) and not _looks_like_file(it.get("server_filename") or ""),
             }
-            for it in items
+            for it in meta["items"]
         ]
-        files.sort(key=lambda x: (not x["isdir"], -(x.get("size") or 0)))
-        return {"surl": surl, "list": files, "has_more": bool(data.get("has_more"))}
+        files.sort(key=lambda x: (not x["isdir"], -(int(x.get("size") or 0) or 0)))
+        return {
+            "surl": surl,
+            "list": files,
+            "has_more": False,
+            "share_id": meta["share_id"],
+            "uk": meta["uk"],
+            "sekey": meta["sekey"],
+        }
 
     def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str) -> list:
         """把分享里的文件转存到用户自己的网盘 dest 目录，返回转存后的 [{fs_id, path}]。"""
         if not token:
             raise CloudError("未授权百度网盘", "请先完成百度账号授权")
         surl = self._parse_share_surl(share_url)
+        meta = self._share_meta(surl, pwd)
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         if not dest.startswith("/"):
             dest = "/" + dest
+        # 把要转存的 path 映射到 fs_id（transfer 接口用 fsidlist，不是 path/filelist）
+        by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
+        fsids: list = []
+        for p in paths:
+            fid = by_path.get(p)
+            if fid is not None:
+                fsids.append(fid)
+                continue
+            for it in meta["items"]:  # 回退：按文件名匹配
+                if (it.get("server_filename") or "") == p:
+                    fsids.append(it.get("fs_id"))
+                    break
+        if not fsids:
+            raise CloudError("未找到要转存的文件", "请重新列出分享内容后再试")
         try:
-            resp = requests.post(
+            resp = meta["session"].post(
                 BAIDU_SHARE_API + "/transfer",
-                params={"channel": "chunlei", "clienttype": "0", "web": "1", "access_token": token},
+                params={
+                    "shareid": str(meta["share_id"] or ""),
+                    "from": str(meta["uk"] or ""),
+                    "sekey": meta["sekey"],
+                    "channel": "chunlei",
+                    "clienttype": "0",
+                    "web": "1",
+                    "access_token": token,
+                },
                 data={
-                    "surl": surl,
-                    "pwd": pwd or "",
-                    "filelist": json.dumps(paths, ensure_ascii=False),
-                    "dest": dest,
+                    "fsidlist": json.dumps(fsids, ensure_ascii=False),
+                    "path": dest,
                 },
                 timeout=60,
             )
@@ -540,11 +623,18 @@ class BaiduProvider:
                 -12: "提取码错误",
                 -30: "文件已在网盘中存在（请更换目标目录或文件名）",
                 -70: "网盘容量不足，无法转存",
-                2: "分享链接已失效或不存在",
+                2: "文件已存在（请更换目标目录或文件名）",
             }.get(errno, f"转存失败(errno={errno})")
             raise CloudError(msg, str(show))
         transferred = (data.get("extra") or {}).get("list") or []
-        return [{"fs_id": it.get("fs_id"), "path": it.get("path")} for it in transferred]
+        result = [{"fs_id": it.get("fs_id"), "path": it.get("path")} for it in transferred]
+        if not result:
+            # 兜底：extra.list 为空时按 dest+文件名构造（后续 download 会再查真实 fs_id）
+            result = [
+                {"fs_id": None, "path": dest.rstrip("/") + "/" + os.path.basename(p)}
+                for p in paths
+            ]
+        return result
 
     def download_share(
         self,
@@ -576,6 +666,26 @@ class BaiduProvider:
 # --------------------------------------------------------------------------- #
 
 BAIDU_SHARE_API = "https://pan.baidu.com/share"
+
+
+def _strip_surl_prefix(surl: str) -> str:
+    """去掉百度分享短链的类型前缀（1=普通分享、5=知识分享、7=三方加密）。
+
+    API（verify/list）必须用去掉前缀后的核心码；老链接本身不带前缀则原样返回。
+    """
+    surl = (surl or "").strip()
+    if surl and surl[0] in "157":
+        return surl[1:]
+    return surl
+
+
+def _looks_like_file(name: str) -> bool:
+    """判断文件名是否像文件（含扩展名且非隐藏文件）。
+
+    百度新版 share/list 对单文件分享会误返回 isdir=1，用此兜底纠正。
+    """
+    base = (name or "").strip().rsplit("/", 1)[-1]
+    return "." in base and not base.startswith(".")
 
 
 def _baidu_app_name() -> str | None:
