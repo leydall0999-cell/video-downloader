@@ -258,6 +258,11 @@ class BaiduProvider:
     OAUTH_BASE = "https://openapi.baidu.com"
     PAN_API = "https://pan.baidu.com/rest/2.0/xpan/file"
 
+    def __init__(self) -> None:
+        # 缓存 share_meta（verify+list 结果），避免下载时重复 verify 被百度限频
+        # key: (surl, pwd, sub_dir) → value: dict (sekey, share_id, uk, items, session)
+        self._share_meta_cache: dict[tuple[str, str, str], dict] = {}
+
     def upload(self, local_path: Path, dest_path: str, creds: dict, progress=None) -> str:
         token = (creds.get("token") or "").strip()
         if not token:
@@ -513,7 +518,14 @@ class BaiduProvider:
         """verify + list，返回 {sekey, share_id, uk, items, session}（transfer 依赖这些）。
 
         sub_dir: 分享内的子目录路径（如 "/子文件夹"），空字符串=根目录。
+        结果会缓存（同 surl+pwd+sub_dir 不重复 verify），避免下载时被百度限频。
         """
+        # ── 缓存命中：直接返回，不再重复 verify ─────────────────────
+        cache_key = (surl, pwd, sub_dir)
+        cached = self._share_meta_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         s = self._share_session(surl)
         sekey = self._share_verify(surl, pwd, session=s)
         params = {
@@ -543,13 +555,16 @@ class BaiduProvider:
                 2: "分享链接已失效或不存在",
             }.get(errno, f"获取分享列表失败(errno={errno})")
             raise CloudError(msg, str(show))
-        return {
+        result = {
             "sekey": sekey,
             "share_id": data.get("share_id"),
             "uk": data.get("uk"),
             "items": data.get("list") or [],
             "session": s,
         }
+        # 写入缓存（下载时复用，避免重复 verify 被限频）
+        self._share_meta_cache[cache_key] = result
+        return result
 
     def share_list(self, share_url: str, pwd: str = "", sub_dir: str = "") -> dict:
         """列出分享链接里的文件（看分享内容无需登录；转存才需 token）。返回归一化列表。
