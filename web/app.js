@@ -75,6 +75,8 @@
     watchTitle: $('watchTitle'),
     watchStatus: $('watchStatus'),
     watchClose: $('watchClose'),
+    watchBack: $('watchBack'),
+    quitAppBtn: $('quitAppBtn'),
     tasksPanel: $('tasksPanel'),
     taskList: $('taskList'),
     badge: $('engineBadge'),
@@ -2972,7 +2974,25 @@
     el.watchBtn.dataset.hls = o.dataset.hls || "false";
   });
   el.watchClose.addEventListener('click', closeWatch);
+  el.watchBack.addEventListener('click', closeWatch);
   el.watchModal.addEventListener('click', (e) => { if (e.target === el.watchModal) closeWatch(); });
+  // 显式「退出」按钮：仅桌面版(pywebview)显示；浏览器回退模式隐藏（无原生窗口可退）
+  (function initQuitButton() {
+    const wire = () => {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.quit_app === "function") {
+        el.quitAppBtn.hidden = false;
+        el.quitAppBtn.addEventListener("click", () => {
+          if (window.confirm("确定退出 VideoDownloader？")) api.quit_app();
+        });
+      }
+    };
+    if (window.pywebview && window.pywebview.api) {
+      wire();
+    } else {
+      document.addEventListener("pywebviewready", wire, { once: true });
+    }
+  })();
   function openWatch(opts = {}) {
     // 任务卡片已下载完成 → 直接播放本地文件；否则（解析面板 / 下载中）走源站实时流代理
     let src;

@@ -27,6 +27,7 @@
     </div>
     <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 15+ 平台</button>
     <button type="button" class="badge" id="subBadge" hidden aria-haspopup="dialog" title="订阅解锁无限格式转换">🔓 订阅解锁</button>
+    <button type="button" class="badge" id="quitAppBtn" hidden title="退出 VideoDownloader（仅此按钮会真正退出软件）">退出</button>
   </div>
 </header>
 
@@ -251,8 +252,11 @@
   <div id="watchModal" class="watch-modal" hidden>
     <div style="background:#0f0f12;border-radius:12px;max-width:900px;width:100%;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5);">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;color:#fff;border-bottom:1px solid #2a2a30;">
-        <h3 id="watchTitle" style="margin:0;font-size:15px;font-weight:600;">在线观看</h3>
-        <button type="button" id="watchClose" style="background:none;border:none;color:#aaa;font-size:24px;line-height:1;cursor:pointer;padding:0 4px;">×</button>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button type="button" id="watchBack" style="background:none;border:none;color:#9bbcff;font-size:14px;cursor:pointer;padding:0 6px 0 0;">‹ 返回</button>
+          <h3 id="watchTitle" style="margin:0;font-size:15px;font-weight:600;">在线观看</h3>
+        </div>
+        <button type="button" id="watchClose" style="background:none;border:none;color:#aaa;font-size:24px;line-height:1;cursor:pointer;padding:0 4px;" title="关闭">×</button>
       </div>
       <video id="watchVideo" controls preload="metadata" playsinline
              style="display:block;width:100%;max-height:70vh;background:#000;"></video>

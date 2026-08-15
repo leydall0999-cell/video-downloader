@@ -374,6 +374,23 @@ class VdlApi:
         _log(f"saved -> {target}")
         return str(target)
 
+    # ── 窗口关闭 / 退出 行为区分（macOS 原生窗口）──
+    # 设计：
+    #   * 点窗口红叉 / 页面 X  → 仅「返回桌面」(最小化窗口，软件继续在后台运行)
+    #   * 只有在窗口内显式点击「退出」按钮 → 真正退出整程序
+    # 这样避免用户误触红叉把整个软件关掉。
+    def hide_to_desktop(self) -> None:
+        """返回桌面：最小化窗口，软件继续后台运行（点页面 X / 窗口红叉走这条）。"""
+        try:
+            if getattr(self, "window", None) is not None:
+                self.window.minimize()
+        except Exception:
+            pass
+
+    def quit_app(self) -> None:
+        """真正退出软件（仅当用户在窗口内显式点击「退出」按钮时调用）。"""
+        os._exit(0)
+
 
 def _handle_exit(*_args) -> None:
     os._exit(0)
@@ -589,6 +606,7 @@ def main() -> None:
     try:
         import webview
 
+        api = VdlApi()
         window = webview.create_window(
             title="VideoDownloader",
             url=URL,
@@ -596,8 +614,23 @@ def main() -> None:
             height=750,
             min_size=(800, 500),
             text_select=True,
-            js_api=VdlApi(),
+            js_api=api,
         )
+        # 把 window 引用交给桥接 API，供「退出」按钮 / 「返回桌面」调用
+        api.window = window
+
+        # 区分「关闭页面」与「退出软件」：
+        #   - 点窗口红叉 / 页面 X → 仅返回桌面（最小化，软件常驻后台）
+        #   - 真正的退出只能由窗口内显式「退出」按钮触发（调用 pywebview.api.quit_app）
+        def _on_closing(*_args):
+            try:
+                window.minimize()
+            except Exception:
+                pass
+            return False  # 取消关闭，避免整程序被关掉
+
+        window.events.closing += _on_closing
+
         # Windows 端退出 webview 后清理资源
         webview.start()
         os._exit(0)
