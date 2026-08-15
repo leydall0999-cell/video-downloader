@@ -3177,11 +3177,21 @@ def cloud_baidu_share_download(payload: BaiduShareDownloadRequest):
                     filepath=str(dest),
                 )
         except CloudError as exc:
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(
-                    status="failed",
-                    error=exc.message + (("：" + exc.hint) if exc.hint else ""),
-                )
+            # 策略 3：浏览器降级——API 全部失败时，返回浏览器打开指令
+            if exc.hint and exc.hint.startswith("BROWSER_FALLBACK:"):
+                browser_url = exc.hint.replace("BROWSER_FALLBACK:", "", 1)
+                with _baidu_dl_lock:
+                    _baidu_dl_tasks[tid].update(
+                        status="browser_fallback",
+                        error=exc.message,
+                        browser_url=browser_url,
+                    )
+            else:
+                with _baidu_dl_lock:
+                    _baidu_dl_tasks[tid].update(
+                        status="failed",
+                        error=exc.message + (("：" + exc.hint) if exc.hint else ""),
+                    )
         except Exception as exc:  # noqa: BLE001 — 兜底，避免后台线程静默崩溃
             with _baidu_dl_lock:
                 _baidu_dl_tasks[tid].update(status="failed", error=str(exc))

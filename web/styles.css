@@ -714,6 +714,7 @@ img { max-width: 100%; display: block; }
 .baidu-dl-item .top .st { color: var(--text-mute); }
 .baidu-dl-item .top .st.is-ok { color: var(--success); }
 .baidu-dl-item .top .st.is-err { color: var(--danger); }
+.baidu-dl-item .top .st.is-warn { color: #e6a23c; }
 .baidu-dl-bar { height: 6px; background: var(--line); border-radius: 4px; margin-top: .35rem; overflow: hidden; }
 .baidu-dl-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 .baidu-sep { border: none; border-top: 1px solid var(--line); margin: 1rem 0; }

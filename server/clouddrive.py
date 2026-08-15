@@ -871,8 +871,17 @@ class BaiduProvider:
         # ── 策略 2：直链下载（绕过 transfer）──────────────────────────
         if not fs_id:
             raise CloudError("未找到要下载的文件", "请重新列出分享内容后再试")
-        dlink = self._share_dlink(meta, fs_id, share_url=share_url)
-        return self._download_from_url(dlink, local_path, progress=progress)
+        try:
+            dlink = self._share_dlink(meta, fs_id, share_url=share_url)
+            return self._download_from_url(dlink, local_path, progress=progress)
+        except CloudError:
+            pass  # dlink 也失败 → 降级到策略 3
+
+        # ── 策略 3：浏览器降级（打开百度原生分享页，用户手动/浏览器下载）──
+        raise CloudError(
+            "API下载不可用，请在浏览器中打开链接下载",
+            f"BROWSER_FALLBACK:{share_url}",
+        )
 
     def _find_in_dest_dir(self, token: str, dest_dir: str, name: str) -> dict | None:
         """在用户网盘 dest_dir 下找名为 name 的文件/目录，返回 {fs_id, path}；找不到返回 None。"""

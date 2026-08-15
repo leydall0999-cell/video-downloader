@@ -3750,6 +3750,12 @@
           st.textContent = '失败：' + (t.error || '未知');
           st.className = 'st is-err';
           clearInterval(baiduDlPollers[tid]);
+        } else if (t.status === 'browser_fallback') {
+          st.textContent = '已打开浏览器下载';
+          st.className = 'st is-warn';
+          clearInterval(baiduDlPollers[tid]);
+          // 自动打开系统浏览器，让百度原生页面处理下载
+          if (t.browser_url) window.open(t.browser_url, '_blank');
         } else {
           st.textContent = '排队中…';
         }
