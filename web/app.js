@@ -889,9 +889,17 @@
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
     refs.togglePause.addEventListener('click', () => {
-      const isPaused = refs.root.classList.contains('is-paused');
-      if (isPaused) resumeTask(taskId, refs.base || '');
-      else pauseTask(taskId, refs.base || '');
+      // 乐观更新：点击后立即切换按钮视觉，不等后端与轮询，消除「点了没反应」的延迟感
+      const wantPaused = !refs.root.classList.contains('is-paused'); // 当前在下载→要暂停；当前暂停→要恢复
+      refs._opPaused = wantPaused;
+      refs._opPauseUntil = Date.now() + 1500;
+      refs.root.classList.toggle('is-paused', wantPaused);
+      refs.togglePause.textContent = wantPaused ? '▶ 继续' : '⏸ 暂停';
+      refs.togglePause.title = wantPaused ? '继续下载' : '暂停下载';
+      refs.togglePause.disabled = true;
+      const done = () => { refs.togglePause.disabled = false; };
+      const action = wantPaused ? pauseTask(taskId, refs.base || '') : resumeTask(taskId, refs.base || '');
+      action.finally(done);
     });
     refs.retry.addEventListener('click', () => retryTask(taskId, refs));
     refs.del.addEventListener('click', () => deleteTask(taskId, refs));
@@ -940,7 +948,10 @@
     refs.bar.style.width = indeterminate ? '45%' : `${task.progress}%`;
     refs.stats.textContent = buildStats(task);
     const downloading = task.status === 'downloading' || task.status === 'merging';
-    const isPaused = task.status === 'paused';
+    // 乐观更新锁：点击暂停/继续后短时间内，按钮视觉以乐观值为准，
+    // 避免被「真实状态尚未变化」的轮询/SSE 刷回，造成按钮闪烁、像没反应。
+    const _opLock = refs._opPauseUntil && Date.now() < refs._opPauseUntil;
+    const isPaused = _opLock ? !!refs._opPaused : (task.status === 'paused');
     refs.togglePause.hidden = !downloading && !isPaused;
     refs.togglePause.textContent = isPaused ? '▶ 继续' : '⏸ 暂停';
     refs.togglePause.title = isPaused ? '继续下载' : '暂停下载';
