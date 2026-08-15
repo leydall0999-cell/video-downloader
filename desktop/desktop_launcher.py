@@ -616,20 +616,16 @@ def main() -> None:
             text_select=True,
             js_api=api,
         )
-        # 把 window 引用交给桥接 API，供「退出」按钮 / 「返回桌面」调用
+        # 把 window 引用交给桥接 API，供「返回桌面」/「退出」按钮调用
         api.window = window
 
-        # 区分「关闭页面」与「退出软件」：
-        #   - 点窗口红叉 / 页面 X → 仅返回桌面（最小化，软件常驻后台）
-        #   - 真正的退出只能由窗口内显式「退出」按钮触发（调用 pywebview.api.quit_app）
-        def _on_closing(*_args):
-            try:
-                window.minimize()
-            except Exception:
-                pass
-            return False  # 取消关闭，避免整程序被关掉
-
-        window.events.closing += _on_closing
+        # 窗口行为说明：
+        #   - 点窗口红叉 / Cmd+W  → 关闭窗口 → webview.start() 返回 → os._exit(0) 正常退出
+        #   - 前端「返回桌面」按钮 → api.hide_to_desktop() → window.minimize()（最小化常驻）
+        #   - 前端「退出」按钮    → api.quit_app() → os._exit(0) 强制退出
+        #   - macOS 标准：Cmd+H 最小化到 Dock；Cmd+Q / Dock 右键Quit 退出应用
+        # 注意：不再拦截 events.closing（上一版无条件 return False 导致 Cmd+Q/Dock Quit 也被拦死，
+        #       用户无法通过任何系统途径退出程序）
 
         # Windows 端退出 webview 后清理资源
         webview.start()

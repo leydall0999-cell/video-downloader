@@ -77,6 +77,7 @@
     watchClose: $('watchClose'),
     watchBack: $('watchBack'),
     quitAppBtn: $('quitAppBtn'),
+    hideToDesktopBtn: $('hideToDesktopBtn'),
     tasksPanel: $('tasksPanel'),
     taskList: $('taskList'),
     badge: $('engineBadge'),
@@ -3009,6 +3010,12 @@
         el.quitAppBtn.hidden = false;
         el.quitAppBtn.addEventListener("click", () => {
           if (window.confirm("确定退出 VideoDownloader？")) api.quit_app();
+        });
+      }
+      if (api && typeof api.hide_to_desktop === "function") {
+        el.hideToDesktopBtn.hidden = false;
+        el.hideToDesktopBtn.addEventListener("click", () => {
+          api.hide_to_desktop();
         });
       }
     };
