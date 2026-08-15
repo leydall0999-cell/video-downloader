@@ -3338,13 +3338,19 @@
     // 服务端 _BAIDU_STATES；state=空串会让回调校验失败）。/api/version 里的
     // baidu_auth_url 字段不带 state（仅作启用标志），不能直接拿来跳转。
     let url = '';
+    let errMsg = '';
     try {
       const r = await request('/api/cloud/baidu/auth-url', {}, '');
       if (r && r.auth_url) url = r.auth_url;
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      errMsg = (e && e.message) ? e.message : String(e);
+    }
     if (!url) {
-      el.cloudBaiduStatus.textContent = '获取百度授权链接失败，请稍后重试';
-      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '获取百度授权链接失败';
+      // 常见原因：app 没重启（env 未加载新 config）/ config 字段缺失。后端 503 会经
+      // request() 抛 {message: '该实例未配置百度网盘应用凭据'}，直接显示便于定位。
+      const tip = errMsg || '请确认 config.json 已填好 4 个百度凭据且 app 已重启';
+      el.cloudBaiduStatus.textContent = '获取百度授权链接失败：' + tip;
+      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '获取百度授权链接失败：' + tip;
       return;
     }
     // 调 Python 桥接 API 在系统浏览器打开授权页
