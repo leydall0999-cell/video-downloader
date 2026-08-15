@@ -3012,7 +3012,10 @@ def cloud_baidu_list(path: str = "/", token: str = ""):
 
 def _baidu_safe_name(name: str) -> str:
     """取网盘文件名的纯文件名部分，剔除路径穿越字符。"""
-    base = Path(name or "").name
+    s = (name or "").strip()
+    if not s or s in ("undefined", "(null)", "None"):
+        s = "file"
+    base = Path(s).name
     return base or "file"
 
 

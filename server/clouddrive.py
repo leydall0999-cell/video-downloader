@@ -579,6 +579,30 @@ class BaiduProvider:
             "sub_dir": sub_dir,
         }
 
+    def _ensure_dest_dir(self, token: str, dest: str) -> None:
+        """确保转存目标目录存在（百度 transfer 要求 dest 路径已创建）。"""
+        if not dest or not token:
+            return
+        # 逐级创建：/apps/X/VideoDownloader_Share → 先 /apps/X → 再全路径
+        segments = [s for s in dest.strip("/").split("/") if s]
+        current = ""
+        for seg in segments:
+            current = current + "/" + seg
+            try:
+                resp = requests.post(
+                    self.PAN_API,
+                    params={"method": "create", "access_token": token},
+                    data={"path": current, "size": "0", "type": "directory", "isdir": "1"},
+                    timeout=30,
+                )
+                d = resp.json()
+                errno = d.get("errno", 0)
+                if errno not in (0, -8):  # 0=成功, -8=目录已存在(部分版本)
+                    # 非致命错误：仅记录，不阻断 transfer（transfer 本身会报更精确的错误）
+                    pass
+            except Exception:
+                pass  # 创建失败不阻断——transfer 会返回明确错误
+
     def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str, sub_dir: str = "") -> list:
         """把分享里的文件转存到用户自己的网盘 dest 目录，返回转存后的 [{fs_id, path}]。
 
@@ -591,6 +615,8 @@ class BaiduProvider:
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         if not dest.startswith("/"):
             dest = "/" + dest
+        # ★ 关键：先确保目标目录存在（否则 transfer 报「路径不存在」）
+        self._ensure_dest_dir(token, dest)
         # 把要转存的 path 映射到 fs_id（transfer 接口用 fsidlist，不是 path/filelist）
         by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
         fsids: list = []

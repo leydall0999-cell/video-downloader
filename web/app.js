@@ -3552,7 +3552,7 @@
         + list.map((it) => {
             const size = it.isdir ? '文件夹' : _fmtSize(it.size);
             const icon = it.isdir ? '📁' : '📄';
-            const label = it.name || it.path || '';
+            const label = it.name || it.path || '(未命名)';
             const nameAction = it.isdir ? `data-open="${encodeURIComponent(it.path)}"` : '';
             const btn = it.isdir
               ? `<button type="button" class="btn btn-accent btn-sm open" ${nameAction}>展开</button>`
