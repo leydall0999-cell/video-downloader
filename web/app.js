@@ -387,6 +387,8 @@
   let selectedQuality = 'best';
   let allPlatforms = [];
   const trackers = new Map();
+  // 正在删除的任务 ID 集合：防止 syncMissingCards 在 DELETE 生效前把卡片重建回来
+  const _deletingIds = new Set();
 
   // 解说成片列表视图状态
   let commentaryItems = [];
@@ -1591,9 +1593,15 @@
       return;
     }
     try {
-      const r = await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, refs.base || '');
-      refs.root.remove();  // 从 DOM 移除
+      _deletingIds.add(taskId);          // 标记「正在删除」，防止 syncMissingCards 重建
+      const tr = trackers.get(taskId);     // 停掉该任务的 SSE/轮询
+      if (tr) { tr.source?.close(); clearInterval(tr.timer); trackers.delete(taskId); }
+      await request(`/api/tasks/${taskId}`, { method: 'DELETE' }, refs.base || '');
+      refs.root.remove();                // 从 DOM 移除
+      // 保留在 _deletingIds 约 10 秒，覆盖可能的延迟轮询
+      setTimeout(() => _deletingIds.delete(taskId), 10000);
     } catch (error) {
+      _deletingIds.delete(taskId);       // 失败则取消标记，卡片保持原样
       showError(error.message || '删除失败', error.hint);
     }
   };
@@ -1633,6 +1641,7 @@
   const syncMissingCards = (tasks) => {
     tasks.forEach((t) => {
       if (!ACTIVE_STATES.includes(t.status)) return;
+      if (_deletingIds.has(t.task_id)) return;   // 正在删除，不重建
       if (el.taskList.querySelector(`[data-task-id="${t.task_id}"]`)) return;
       const refs = createTaskCard(t.task_id, { title: t.title, platform: t.platform });
       trackTask(t.task_id, refs, '');
