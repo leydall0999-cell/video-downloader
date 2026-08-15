@@ -1374,21 +1374,46 @@
     xiaohongshu: '小红书', bilibili: 'B站', youtube: 'YouTube',
   }[k] || '该平台');
 
+  /** 从任意文本中提取有效的 http(s) URL（处理用户粘贴带标题/参数的多行分享内容）。
+   *  特殊处理：B站 vd_source 等查询参数单独成行时，合并到前一个 URL 末尾。
+   */
+  const extractUrls = (text) => {
+    const raw = text.match(/https?:\/\/[^\s<>"')\]]+/g) || [];
+    const merged = [];
+    for (const t of raw) {
+      if (/^[?&][a-zA-Z_]/.test(t) && merged.length) {
+        // 查询参数独行（如 "vd_source=xxx"）→ 拼接到上一个 URL
+        merged[merged.length - 1] += t;
+      } else {
+        merged.push(t);
+      }
+    }
+    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u));
+  };
+
   const handleResolve = async (event) => {
     event.preventDefault();
-    const url = el.input.value.trim();
+    const raw = el.input.value.trim();
     const cookie = el.cookieInput.value.trim();
     const proxy = el.proxyInput.value.trim();
-    if (!url) {
+    if (!raw) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
       return;
     }
-    // 批量：检测到多个链接时直接进入批量下载，跳过单链接解析面板
-    const urls = url.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+
+    // 智能提取 URL（兼容带标题、参数分行的多行粘贴）
+    let urls = extractUrls(raw);
+    if (!urls.length) {
+      // 提取不到任何 URL 时，回退到原始整段文字（向后兼容旧行为）
+      urls = [raw];
+    }
+
+    // 单 URL → 解析；多 URL → 批量
     if (urls.length > 1) {
       await runBatch(urls, cookie, proxy);
       return;
     }
+    const url = urls[0];
     clearError();
     setLoading(true);
     el.resultPanel.hidden = true;
