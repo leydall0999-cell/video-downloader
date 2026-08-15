@@ -579,12 +579,15 @@ class BaiduProvider:
             "sub_dir": sub_dir,
         }
 
-    def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str) -> list:
-        """把分享里的文件转存到用户自己的网盘 dest 目录，返回转存后的 [{fs_id, path}]。"""
+    def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str, sub_dir: str = "") -> list:
+        """把分享里的文件转存到用户自己的网盘 dest 目录，返回转存后的 [{fs_id, path}]。
+
+        sub_dir: 分享内子目录（如 "/极简风格(36)"）；列子目录才能找到对应 fs_id。
+        """
         if not token:
             raise CloudError("未授权百度网盘", "请先完成百度账号授权")
         surl = self._parse_share_surl(share_url)
-        meta = self._share_meta(surl, pwd)
+        meta = self._share_meta(surl, pwd, sub_dir=sub_dir)
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         if not dest.startswith("/"):
             dest = "/" + dest
@@ -664,9 +667,11 @@ class BaiduProvider:
         """
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         target_name = os.path.basename(share_path or "")
+        # 从 share_path 提取分享内子目录（供 transfer 列文件用），如 "/极简风格(36)/里七素材.pptx" → "/极简风格(36)"
+        sub_dir = os.path.dirname(share_path or "").replace("\\", "/")
         item: dict | None = None
         try:
-            transferred = self.share_transfer(share_url, pwd, [share_path], dest, token)
+            transferred = self.share_transfer(share_url, pwd, [share_path], dest, token, sub_dir=sub_dir)
             if transferred:
                 item = transferred[0]
             else:
