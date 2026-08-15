@@ -250,7 +250,9 @@ class WebDAVProvider:
 
 class BaiduProvider:
     name = "baidu"
-    AUTH_BASE = "https://openapi.baidu.com"
+    # 百度网盘开放平台（pan.baidu.com）的 OAuth 端点，不是通用开放平台 openapi.baidu.com
+    # 两者的 AppKey 不互通：在 pan.baidu.com 创建的应用必须用 pan.baidu.com/union/oauth/
+    AUTH_BASE = "https://pan.baidu.com/union"
     PAN_API = "https://pan.baidu.com/rest/2.0/xpan/file"
 
     def upload(self, local_path: Path, dest_path: str, creds: dict, progress=None) -> str:
