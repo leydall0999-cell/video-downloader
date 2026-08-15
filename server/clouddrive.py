@@ -708,6 +708,77 @@ class BaiduProvider:
             ]
         return result
 
+    def _share_dlink(self, meta: dict, fs_id: int) -> str:
+        """从分享直接获取文件下载直链（绕过 transfer，参考 BaiduPCS-Py / baidupcs-go 签名算法）。
+
+        签名公式：sign = MD5("shareid={shareid}&uk={uk}&fid={fs_id}{sekey}")
+        """
+        import hashlib, time, base64
+
+        share_id = meta["share_id"]
+        uk = meta["uk"]
+        sekey = meta["sekey"]
+
+        timestamp = str(int(time.time()))
+        raw_sign = f"shareid={share_id}&uk={uk}&fid={fs_id}{sekey}"
+        sign = hashlib.md5(raw_sign.encode()).hexdigest()
+
+        try:
+            resp = meta["session"].post(
+                BAIDU_SHARE_API + "/download",
+                params={
+                    "sign": sign,
+                    "timestamp": timestamp,
+                    "shareid": str(share_id),
+                    "uk": str(uk),
+                    "fid": str(fs_id),
+                    "type": "download",
+                },
+                data={"enc_fs_id": base64.b64encode(str(fs_id).encode()).decode()},
+                timeout=30,
+            )
+            data = resp.json()
+            errno = data.get("errno", 0)
+            if errno != 0:
+                raise CloudError(
+                    f"获取分享下载直链失败(errno={errno})",
+                    data.get("show_msg") or data.get("errmsg") or "",
+                )
+            # dlink 可能在顶层或 dlink_list[0].dlink
+            dlink = data.get("dlink") or ""
+            if not dlink:
+                dl_list = data.get("dlink_list") or []
+                if dl_list:
+                    dlink = dl_list[0].get("dlink") or ""
+            if not dlink:
+                raise CloudError("分享下载直链为空", "响应中无 dlink 字段")
+            return dlink
+        except CloudError:
+            raise
+        except Exception as exc:
+            raise CloudError("获取分享下载直链失败", str(exc)) from exc
+
+    def _download_from_url(self, url: str, local_path: Path, progress=None) -> int:
+        """从给定 URL 流式下载文件到本地，返回写入字节数。"""
+        import shutil
+
+        resp = requests.get(url, stream=True, timeout=30,
+                            headers={"User-Agent": "pan.baidu.com"})
+        resp.raise_for_status()
+
+        total = int(resp.headers.get("content-length", 0))
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        done = 0
+
+        with open(local_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=2 * 1024 * 1024):
+                f.write(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(done, total)
+
+        return done
+
     def download_share(
         self,
         share_url: str,
@@ -719,35 +790,41 @@ class BaiduProvider:
         backend: str = "auto",
         dest: str = "",
     ) -> int:
-        """把分享里的某个文件：先转存到用户网盘，再从用户网盘下载到本机。返回写入字节数。
+        """把分享里的某个文件下载到本机。返回写入字节数。
 
-        速度由用户账号等级决定，本方法只做官方合规下载，不绕过平台限速。
-
-        转存若报「文件已存在」（errno=2/-30），说明文件已在 dest 目录里，自动 fallback：
-        列 dest 目录找同名文件，直接用现有 fs_id+path 下载，避免重复转存失败。
+        策略（按优先级）：
+          1. transfer → 从用户网盘下载（官方合规路径）
+          2. transfer 失败时 → 直接从分享提取 dlink 下载（绕过 transfer）
         """
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         target_name = os.path.basename(share_path or "")
-        # 从 share_path 提取分享内子目录（供 transfer 列文件用），如 "/极简风格(36)/里七素材.pptx" → "/极简风格(36)"
         sub_dir = os.path.dirname(share_path or "").replace("\\", "/")
-        item: dict | None = None
+
+        # ── 策略 1：transfer 路径（官方合规）─────────────────────────
         try:
             transferred = self.share_transfer(share_url, pwd, [share_path], dest, token, sub_dir=sub_dir)
-            if transferred:
+            if transferred and transferred[0].get("fs_id"):
                 item = transferred[0]
-            else:
-                raise CloudError("转存后未获得文件信息", "请稍后重试或检查分享链接")
+                return self.download(token, item["fs_id"], item["path"], local_path,
+                                     progress=progress, backend=backend)
         except CloudError as exc:
-            # 「文件已存在」→ fallback 到 dest 目录找现有同名文件
-            if "文件已存在" not in exc.message or not target_name:
-                raise
-            existing = self._find_in_dest_dir(token, dest, target_name)
-            if not existing:
-                raise
-            item = existing
-        return self.download(
-            token, item["fs_id"], item["path"], local_path, progress=progress, backend=backend
-        )
+            transfer_err = exc  # 保存错误信息，用于策略 2 失败时报告
+
+        # ── 策略 2：直链下载（绕过 transfer）──────────────────────────
+        try:
+            surl = self._parse_share_surl(share_url)
+            meta = self._share_meta(surl, pwd, sub_dir=sub_dir)
+            # 找到目标文件的 fs_id
+            by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
+            by_name = {it.get("server_filename") or "": it.get("fs_id") for it in meta["items"]}
+            fs_id = by_path.get(share_path) or by_name.get(target_name)
+            if not fs_id:
+                raise CloudError("未找到要下载的文件", "请重新列出分享内容后再试")
+            dlink = self._share_dlink(meta, fs_id)
+            return self._download_from_url(dlink, local_path, progress=progress)
+        except CloudError:
+            # 直链也失败 → 报告策略 1 的原始错误（更有信息量）
+            raise transfer_err
 
     def _find_in_dest_dir(self, token: str, dest_dir: str, name: str) -> dict | None:
         """在用户网盘 dest_dir 下找名为 name 的文件/目录，返回 {fs_id, path}；找不到返回 None。"""
