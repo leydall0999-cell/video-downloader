@@ -3499,28 +3499,23 @@
     } catch { /* 忽略：离线或后端未启用 */ }
   }
 
-  el.baiduShareListBtn.addEventListener('click', async () => {
-    restoreBaiduToken();
-    // 点击时再解析一次（应对手动删除 input 事件触发的情况），提取 URL 和提取码
-    const parsed = parseBaiduShareText(el.baiduShareUrl.value || '');
-    let url = parsed.url || (el.baiduShareUrl.value || '').trim();
-    let pwd = parsed.pwd || (el.baiduSharePwd.value || '').trim();
-    // 同步回输入框让用户看到解析结果
-    if (parsed.url && parsed.url !== el.baiduShareUrl.value.trim()) {
-      el.baiduShareUrl.value = parsed.url;
-    }
-    if (parsed.pwd && !el.baiduSharePwd.value.trim()) {
-      el.baiduSharePwd.value = parsed.pwd;
-    }
-    if (!url) { el.baiduShareStatus.textContent = '请先粘贴分享链接'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
-    el.baiduShareStatus.textContent = '加载中…';
+  // 分享当前上下文（用于文件夹展开）
+  let _shareCtx = { url: '', pwd: '', dir: '' };
+
+  // 递归渲染分享列表（支持面包屑导航 + 点文件夹展开）
+  async function renderShareList(url, pwd, subDir, pwdSynced) {
+    _shareCtx = { url, pwd, dir: subDir || '' };
+    el.baiduShareStatus.textContent = subDir ? `加载子目录：${subDir}…` : '加载中…';
     el.baiduShareStatus.className = 'baidu-share-status';
     el.baiduShareList.innerHTML = '<p class="baidu-empty">加载中…</p>';
+    // 同步回输入框让用户看到解析结果
+    if (!pwdSynced && url && url !== el.baiduShareUrl.value.trim()) el.baiduShareUrl.value = url;
+    if (!pwdSynced && pwd && !el.baiduSharePwd.value.trim()) el.baiduSharePwd.value = pwd;
     try {
       const r = await fetch('/api/cloud/baidu/share/list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, pwd }),
+        body: JSON.stringify({ url, pwd, dir: subDir || '' }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -3530,31 +3525,67 @@
         return;
       }
       const list = data.list || [];
+      // 面包屑
+      let crumbs = '';
+      if (subDir) {
+        const parts = subDir.split('/').filter(Boolean);
+        let acc = '';
+        crumbs = '<a href="#" data-nav="root">根目录</a>';
+        parts.forEach((seg, i) => {
+          acc += '/' + seg;
+          const isLast = i === parts.length - 1;
+          crumbs += ' / ' + (isLast
+            ? `<span>${seg}</span>`
+            : `<a href="#" data-nav="${encodeURIComponent(acc)}">${seg}</a>`);
+        });
+      }
       if (!list.length) {
-        el.baiduShareStatus.textContent = '该分享为空或链接已失效';
+        el.baiduShareStatus.textContent = subDir ? `${subDir} 为空` : '该分享为空或链接已失效';
         el.baiduShareStatus.className = 'baidu-share-status';
-        el.baiduShareList.innerHTML = '<p class="baidu-empty">分享里没有文件。</p>';
+        el.baiduShareList.innerHTML = (crumbs ? `<div class="baidu-crumbs">${crumbs}</div>` : '')
+          + '<p class="baidu-empty">此目录下没有文件。</p>';
         return;
       }
       el.baiduShareStatus.textContent = `共 ${list.length} 项`;
       el.baiduShareStatus.className = 'baidu-share-status';
-      el.baiduShareList.innerHTML = list.map((it) => {
-        const size = it.isdir ? '文件夹' : _fmtSize(it.size);
-        const icon = it.isdir ? '📁' : '📄';
-        const label = it.name || it.path || '';
-        return `<div class="baidu-row" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}">
-          <span class="name">${icon} ${label}</span>
-          <span class="size">${size}</span>
-          <span class="dl"><button type="button" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}"${it.isdir ? ' disabled title="暂不支持整文件夹，请展开后选具体文件"' : ''}>转存并下载</button></span>
-        </div>`;
-      }).join('');
+      el.baiduShareList.innerHTML = (crumbs ? `<div class="baidu-crumbs">${crumbs}</div>` : '')
+        + list.map((it) => {
+            const size = it.isdir ? '文件夹' : _fmtSize(it.size);
+            const icon = it.isdir ? '📁' : '📄';
+            const label = it.name || it.path || '';
+            const nameAction = it.isdir ? `data-open="${encodeURIComponent(it.path)}"` : '';
+            const btn = it.isdir
+              ? `<button type="button" class="btn btn-accent btn-sm open" ${nameAction}>展开</button>`
+              : `<button type="button" class="btn btn-accent btn-sm dl" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}">转存并下载</button>`;
+            return `<div class="baidu-row" data-path="${encodeURIComponent(it.path)}" data-name="${encodeURIComponent(label)}">
+              <span class="name" ${nameAction}>${icon} ${label}</span>
+              <span class="size">${size}</span>
+              <span class="dl">${btn}</span>
+            </div>`;
+          }).join('');
+      // 文件夹点击/展开按钮
+      el.baiduShareList.querySelectorAll('.open, .name[data-open]').forEach((el_) => {
+        el_.addEventListener('click', (e) => {
+          e.preventDefault();
+          const p = decodeURIComponent(el_.dataset.open);
+          renderShareList(url, pwd, p, true);
+        });
+      });
+      // 面包屑导航
+      el.baiduShareList.querySelectorAll('.baidu-crumbs a').forEach((a) => {
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          const target = decodeURIComponent(a.dataset.nav);
+          renderShareList(url, pwd, target === 'root' ? '' : target, true);
+        });
+      });
+      // 转存下载按钮
       el.baiduShareList.querySelectorAll('.dl button').forEach((b) => {
-        if (b.disabled) return;
         b.addEventListener('click', () => startBaiduShareDownload({
           path: decodeURIComponent(b.dataset.path),
           name: decodeURIComponent(b.dataset.name),
-          url: url,
-          pwd: pwd,
+          url,
+          pwd,
         }));
       });
     } catch (err) {
@@ -3562,6 +3593,15 @@
       el.baiduShareStatus.className = 'baidu-share-status is-err';
       el.baiduShareList.innerHTML = `<p class="baidu-empty">出错：${err.message}</p>`;
     }
+  }
+
+  el.baiduShareListBtn.addEventListener('click', () => {
+    restoreBaiduToken();
+    const parsed = parseBaiduShareText(el.baiduShareUrl.value || '');
+    const url = parsed.url || (el.baiduShareUrl.value || '').trim();
+    const pwd = parsed.pwd || (el.baiduSharePwd.value || '').trim();
+    if (!url) { el.baiduShareStatus.textContent = '请先粘贴分享链接'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
+    renderShareList(url, pwd, '', false);
   });
 
   function startBaiduShareDownload(item) {

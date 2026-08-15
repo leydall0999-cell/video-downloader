@@ -3090,6 +3090,7 @@ def cloud_baidu_task(tid: str):
 class BaiduShareListRequest(BaseModel):
     url: str = ""
     pwd: str = ""
+    dir: str = ""           # 分享内子目录（空=根），用于点击文件夹展开
 
 
 @app.post("/api/cloud/baidu/share/list")
@@ -3100,7 +3101,7 @@ def cloud_baidu_share_list(payload: BaiduShareListRequest):
     if not payload.url.strip():
         raise HTTPException(status_code=400, detail="缺少分享链接")
     try:
-        result = _baidu_provider.share_list(payload.url, payload.pwd)
+        result = _baidu_provider.share_list(payload.url, payload.pwd, payload.dir)
     except CloudError as exc:
         raise HTTPException(status_code=502, detail=exc.message + (("：" + exc.hint) if exc.hint else ""))
     return result

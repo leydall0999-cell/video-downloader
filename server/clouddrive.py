@@ -509,14 +509,18 @@ class BaiduProvider:
             raise CloudError(msg, str(show))
         return data.get("randsk", "")
 
-    def _share_meta(self, surl: str, pwd: str) -> dict:
-        """verify + list，返回 {sekey, share_id, uk, items, session}（transfer 依赖这些）。"""
+    def _share_meta(self, surl: str, pwd: str, sub_dir: str = "") -> dict:
+        """verify + list，返回 {sekey, share_id, uk, items, session}（transfer 依赖这些）。
+
+        sub_dir: 分享内的子目录路径（如 "/子文件夹"），空字符串=根目录。
+        """
         s = self._share_session(surl)
         sekey = self._share_verify(surl, pwd, session=s)
         params = {
             "shorturl": surl,
             "sekey": sekey,
-            "root": "1",
+            "root": "1" if not sub_dir else "0",
+            "dir": sub_dir or "",
             "page": "1",
             "num": "100",
             "order": "time",
@@ -547,10 +551,13 @@ class BaiduProvider:
             "session": s,
         }
 
-    def share_list(self, share_url: str, pwd: str = "") -> dict:
-        """列出分享链接里的文件（看分享内容无需登录；转存才需 token）。返回归一化列表。"""
+    def share_list(self, share_url: str, pwd: str = "", sub_dir: str = "") -> dict:
+        """列出分享链接里的文件（看分享内容无需登录；转存才需 token）。返回归一化列表。
+
+        sub_dir: 分享内的子目录路径（如 "/子文件夹"），空字符串=根目录（用于点文件夹展开）。
+        """
         surl = self._parse_share_surl(share_url)
-        meta = self._share_meta(surl, pwd)
+        meta = self._share_meta(surl, pwd, sub_dir=sub_dir)
         files = [
             {
                 "fs_id": it.get("fs_id"),
@@ -569,6 +576,7 @@ class BaiduProvider:
             "share_id": meta["share_id"],
             "uk": meta["uk"],
             "sekey": meta["sekey"],
+            "sub_dir": sub_dir,
         }
 
     def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str) -> list:

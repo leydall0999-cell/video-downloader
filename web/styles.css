@@ -699,6 +699,12 @@ img { max-width: 100%; display: block; }
 .baidu-row .size { font-size: .78rem; color: #94a0b4; }
 .baidu-row .dl { flex: none; }
 .baidu-row .baidu-nodl { font-size: .72rem; color: #94a0b4; cursor: help; white-space: nowrap; }
+.baidu-crumbs { padding: .5rem .7rem .3rem; font-size: .78rem; color: var(--accent); word-break: break-all; }
+.baidu-crumbs a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.baidu-crumbs a:hover { text-decoration: underline; }
+.baidu-crumbs span { color: var(--text); font-weight: 600; }
+.baidu-row .name[data-open] { cursor: pointer; }
+.baidu-row .name[data-open]:hover { color: var(--accent); }
 .baidu-empty { padding: 1rem; text-align: center; color: #94a0b4; font-size: .85rem; }
 .baidu-dl { margin-top: .9rem; }
 .baidu-dl-title { font-size: .9rem; color: var(--text-mute); margin-bottom: .4rem; }
