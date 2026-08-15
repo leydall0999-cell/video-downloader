@@ -739,12 +739,14 @@ class BaiduProvider:
         sign = hashlib.md5(raw_sign.encode()).hexdigest()
 
         try:
-            s = meta.get("session") or self._share_session(
-                self._parse_share_surl("")  # 仅用于创建 session，不需要真实 surl
-            )
-            # 修正 session 的 Referer（share_session 默认用假 surl）
-            if "1" not in (s.headers.get("Referer") or ""):
-                s.headers.update({"Referer": f"https://pan.baidu.com/s/1{share_id}"})
+            s = meta.get("session")
+            if not s:
+                # 预取模式下没有 session → 新建一个（仅用于 HTTP 请求，不需要特定 surl）
+                s = requests.Session()
+                s.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                    "Referer": f"https://pan.baidu.com/s/1{share_id}",
+                })
             resp = s.post(
                 BAIDU_SHARE_API + "/download",
                 params={
