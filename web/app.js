@@ -1027,7 +1027,7 @@
     }
     refs.save.hidden = false;
     // 任务在哪个节点跑，文件就从哪个节点取
-    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file`;
+    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1`;
     refs.save.setAttribute('download', task.filename || '');
     refs.save.textContent = '保存到本机 ⬇';
     refs.status.textContent = autoSave

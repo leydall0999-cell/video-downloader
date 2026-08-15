@@ -1930,7 +1930,7 @@ def _sse(data: dict) -> str:
 
 
 @app.get("/api/tasks/{task_id}/file")
-def download_file(task_id: str) -> FileResponse:
+def download_file(task_id: str, download: int = 0) -> FileResponse | Response:
     task = _require_task(task_id)
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise HTTPException(status_code=409, detail="文件尚未准备好")
@@ -1942,6 +1942,18 @@ def download_file(task_id: str) -> FileResponse:
         ".m4a": "audio/mp4",
         ".mp3": "audio/mpeg",
     }.get(_ext, "application/octet-stream")
+    # download=1 → 保存到本机（<a download> 点击），强制附件下载不内联播放
+    # download=0 → 本地播放（<video src>），返回正确 MIME 让浏览器解码
+    if download:
+        from starlette.responses import Response as RawResponse
+        _body = task.filepath.read_bytes()
+        import urllib.parse
+        _encoded = urllib.parse.quote(task.filepath.name)
+        return RawResponse(
+            content=_body,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{task.filepath.name}"; filename*=UTF-8\'\'{_encoded}'},
+        )
     return FileResponse(
         path=task.filepath,
         filename=task.filepath.name,
