@@ -579,11 +579,11 @@ class BaiduProvider:
             "sub_dir": sub_dir,
         }
 
-    def _ensure_dest_dir(self, token: str, dest: str) -> None:
-        """确保转存目标目录存在（百度 transfer 要求 dest 路径已创建）。"""
+    def _ensure_dest_dir(self, token: str, dest: str) -> list:
+        """确保转存目标目录存在（百度 transfer 要求 dest 路径已创建）。返回创建日志。"""
+        logs = []
         if not dest or not token:
-            return
-        # 逐级创建：/apps/X/VideoDownloader_Share → 先 /apps/X → 再全路径
+            return logs
         segments = [s for s in dest.strip("/").split("/") if s]
         current = ""
         for seg in segments:
@@ -597,11 +597,12 @@ class BaiduProvider:
                 )
                 d = resp.json()
                 errno = d.get("errno", 0)
-                if errno not in (0, -8):  # 0=成功, -8=目录已存在(部分版本)
-                    # 非致命错误：仅记录，不阻断 transfer（transfer 本身会报更精确的错误）
-                    pass
-            except Exception:
-                pass  # 创建失败不阻断——transfer 会返回明确错误
+                logs.append(f"mkdir {current} → errno={errno} {d.get('errmsg','')}")
+                if errno not in (0, -8):
+                    pass  # 非致命
+            except Exception as exc:
+                logs.append(f"mkdir {current} → EXCEPTION: {exc}")
+        return logs
 
     def share_transfer(self, share_url: str, pwd: str, paths: list, dest: str, token: str, sub_dir: str = "") -> list:
         """把分享里的文件转存到用户自己的网盘 dest 目录，返回转存后的 [{fs_id, path}]。
@@ -616,7 +617,7 @@ class BaiduProvider:
         if not dest.startswith("/"):
             dest = "/" + dest
         # ★ 关键：先确保目标目录存在（否则 transfer 报「路径不存在」）
-        self._ensure_dest_dir(token, dest)
+        mkdir_logs = self._ensure_dest_dir(token, dest)
         # 把要转存的 path 映射到 fs_id（transfer 接口用 fsidlist，不是 path/filelist）
         by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
         fsids: list = []
@@ -655,14 +656,48 @@ class BaiduProvider:
         errno = data.get("errno", 0)
         if errno != 0:
             show = data.get("show_msg") or data.get("errmsg") or ""
+            # 详细诊断信息（不再隐藏原始错误）
+            diag = f" | dest={dest} | fsids={fsids} | mkdir={'; '.join(mkdir_logs) if mkdir_logs else 'N/A'}"
+            # 如果 dest 在 /apps/ 下且失败，fallback 到根目录重试一次
+            if dest.startswith("/apps/") and not getattr(self, '_share_transfer_fallback', False):
+                self._share_transfer_fallback = True
+                simple_dest = "/VideoDownloader_Share"
+                try:
+                    fallback_logs = self._ensure_dest_dir(token, simple_dest)
+                    resp2 = meta["session"].post(
+                        BAIDU_SHARE_API + "/transfer",
+                        params={
+                            "shareid": str(meta["share_id"] or ""),
+                            "from": str(meta["uk"] or ""),
+                            "sekey": meta["sekey"],
+                            "channel": "chunlei",
+                            "clienttype": "0",
+                            "web": "1",
+                            "access_token": token,
+                        },
+                        data={"fsidlist": json.dumps(fsids, ensure_ascii=False), "path": simple_dest},
+                        timeout=60,
+                    )
+                    d2 = resp2.json()
+                    if d2.get("errno", 0) == 0:
+                        transferred = (d2.get("extra") or {}).get("list") or []
+                        result = [{"fs_id": it.get("fs_id"), "path": it.get("path")} for it in transferred]
+                        if not result:
+                            result = [{"fs_id": None, "path": simple_dest.rstrip("/") + "/" + os.path.basename(p)} for p in paths]
+                        self._share_transfer_fallback = False
+                        return result
+                except Exception:
+                    pass
+                self._share_transfer_fallback = False
+                diag += f" | fallback_dest={simple_dest} 也失败"
             msg = {
                 -9: "分享链接不存在或已失效",
                 -12: "提取码错误",
                 -30: "文件已在网盘中存在（请更换目标目录或文件名）",
                 -70: "网盘容量不足，无法转存",
-                2: "转存失败（百度对该分享标记为已转存/目标目录不可用），请尝试其他分享或重置 OAuth 重新授权",
+                2: "转存失败（百度返回errno=2，可能原因：目标目录不存在/分享已被标记/应用无权写入该路径）",
             }.get(errno, f"转存失败(errno={errno})")
-            raise CloudError(msg, str(show))
+            raise CloudError(msg + diag, f"百度原始: errno={errno} show_msg={show}")
         transferred = (data.get("extra") or {}).get("list") or []
         result = [{"fs_id": it.get("fs_id"), "path": it.get("path")} for it in transferred]
         if not result:
