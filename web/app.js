@@ -3331,25 +3331,36 @@
     }, 3000);
   };
 
-  // 在当前页内（dialog）完成百度授权，绝不再开第二个浏览器窗口
+  // 百度授权：通过弹窗打开 OAuth 页（百度设 X-Frame-Options: SAMEORIGIN，禁止 iframe 嵌入）
   const openBaiduAuthInPage = (url) => {
-    document.getElementById('baiduAuthDialog')?.remove();
-    const dlg = document.createElement('dialog');
-    dlg.id = 'baiduAuthDialog';
-    dlg.className = 'modal';
-    dlg.innerHTML =
-      '<div class="modal-card">' +
-      '  <div class="baidu-auth-head">' +
-      '    <h2>百度网盘授权</h2>' +
-      '    <button type="button" class="modal-close" id="baiduAuthClose" aria-label="关闭">✕</button>' +
-      '  </div>' +
-      '  <iframe class="baidu-auth-frame" src="' + url + '"></iframe>' +
-      '</div>';
-    document.body.appendChild(dlg);
-    dlg.showModal();
-    dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
-    dlg.querySelector('#baiduAuthClose').addEventListener('click', () => dlg.close());
-    dlg.addEventListener('close', () => dlg.remove());
+    // 先关闭可能残留的旧弹窗
+    if (window._baiduAuthWin && !window._baiduAuthWin.closed) {
+      try { window._baiduAuthWin.close(); } catch(e) {}
+    }
+    // 居中弹出小窗口
+    const W = 760, H = 680;
+    const L = Math.round((screen.width - W) / 2);
+    const T = Math.round((screen.height - H) / 3);
+    window._baiduAuthWin = window.open(
+      url, 'vdl_baidu_auth',
+      `width=${W},height=${H},left=${L},top=${T},resizable=yes,scrollbars=yes`
+    );
+    // 弹窗被拦截时提示
+    if (!window._baiduAuthWin || window._baiduAuthWin.closed) {
+      el.cloudBaiduStatus.textContent = '授权窗口被拦截，请允许弹出窗口后重试';
+      return;
+    }
+    el.cloudBaiduStatus.textContent = '请在弹出的窗口中完成百度账号登录…';
+    // 轮询检测弹窗是否被用户手动关闭（未完成授权）
+    const poll = setInterval(() => {
+      if (!window._baiduAuthWin || window._baiduAuthWin.closed) {
+        clearInterval(poll);
+        // 如果还没拿到 token，说明用户关了弹窗
+        if (!localStorage.getItem('vdl_baidu_token')) {
+          el.cloudBaiduStatus.textContent = '授权已取消';
+        }
+      }
+    }, 1000);
   };
 
   // 云盘弹窗事件绑定
@@ -3374,6 +3385,10 @@
         el.baiduDriveStatus.textContent = '已授权 ✓';
         el.baiduDriveStatus.className = 'baidu-status is-ok';
       }
+      // 关闭授权弹窗（回调页 1.5s 后也会自关闭）
+      if (window._baiduAuthWin && !window._baiduAuthWin.closed) {
+        try { window._baiduAuthWin.close(); } catch(e) {}
+      }
       if (baiduModalOpen) loadBaiduList(currentBaiduPath);
     } else if (d.error) {
       el.cloudBaiduStatus.textContent = '授权失败：' + d.error;
@@ -3382,8 +3397,6 @@
         el.baiduDriveStatus.className = 'baidu-status is-err';
       }
     }
-    const bd = document.getElementById('baiduAuthDialog');
-    if (bd) bd.close();
   });
 
   // ── 百度网盘浏览/下载面板 ──
