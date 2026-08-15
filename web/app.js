@@ -3333,7 +3333,20 @@
 
   // 百度授权：用系统浏览器打开 OAuth 页（pywebview 不支持 window.open 弹窗）
   let _baiduAuthPoll = null;
-  const openBaiduAuthInPage = (url) => {
+  const openBaiduAuthInPage = async () => {
+    // 必须每次请求带 state 的 URL（/api/cloud/baidu/auth-url 会生成新 state 写入
+    // 服务端 _BAIDU_STATES；state=空串会让回调校验失败）。/api/version 里的
+    // baidu_auth_url 字段不带 state（仅作启用标志），不能直接拿来跳转。
+    let url = '';
+    try {
+      const r = await request('/api/cloud/baidu/auth-url', {}, '');
+      if (r && r.auth_url) url = r.auth_url;
+    } catch (e) { /* ignore */ }
+    if (!url) {
+      el.cloudBaiduStatus.textContent = '获取百度授权链接失败，请稍后重试';
+      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '获取百度授权链接失败';
+      return;
+    }
     // 调 Python 桥接 API 在系统浏览器打开授权页
     let opened = false;
     try {
@@ -3348,9 +3361,11 @@
     }
     if (!opened) {
       el.cloudBaiduStatus.textContent = '无法打开授权页，请用浏览器访问：' + url;
+      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '无法打开授权页';
       return;
     }
     el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
+    if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
     // 轮询后端检测授权完成（百度回调写入 token 文件后本端点返回 logged_in）
     if (_baiduAuthPoll) clearInterval(_baiduAuthPoll);
     _baiduAuthPoll = setInterval(async () => {
@@ -3378,7 +3393,7 @@
   el.cloudModal.querySelectorAll('input[name=cloudProvider]').forEach((r) => r.addEventListener('change', syncCloudForm));
   el.cloudBaiduBtn.addEventListener('click', () => {
     if (!node.baiduAuthUrl) { el.cloudBaiduStatus.textContent = '该实例未启用百度网盘'; return; }
-    openBaiduAuthInPage(node.baiduAuthUrl);
+    openBaiduAuthInPage();
   });
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin) return;
@@ -3432,7 +3447,7 @@
   el.baiduModal.addEventListener('close', () => { baiduModalOpen = false; });
   el.baiduDriveAuthBtn.addEventListener('click', () => {
     if (!node.baiduAuthUrl) { el.baiduDriveStatus.textContent = '该实例未启用百度网盘'; return; }
-    openBaiduAuthInPage(node.baiduAuthUrl);
+    openBaiduAuthInPage();
   });
 
   // ── 百度网盘「分享链接下载」（登录后转存到自己网盘再下）──
@@ -4655,7 +4670,7 @@
   el.arcCancel.addEventListener('click', cancelArc);
   el.arcForget.addEventListener('click', forgetArc);
   if (el.arcBaiduBtn) el.arcBaiduBtn.addEventListener('click', () => {
-    if (node.baiduAuthUrl) openBaiduAuthInPage(node.baiduAuthUrl);
+    if (node.baiduAuthUrl) openBaiduAuthInPage();
   });
 
   // ---- 库内保险箱（桌面版功能） ----
