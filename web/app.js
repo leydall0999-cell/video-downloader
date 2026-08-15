@@ -3457,6 +3457,30 @@
   });
 
   // ── 百度网盘「分享链接下载」（登录后转存到自己网盘再下）──
+  // 智能解析用户粘贴的百度分享文本（"通过网盘分享的文件：xxx 链接：URL 提取码：abcd"）
+  // → 自动分离出 URL 和提取码填回对应输入框，避免手动复制两端。
+  const parseBaiduShareText = (text) => {
+    const out = { url: '', pwd: '' };
+    if (!text) return out;
+    // URL：复用现有 extractUrls（支持多行 + 分行参数合并）
+    const urls = extractUrls(text);
+    if (urls.length) out.url = urls[0].replace(/[，。、；！？]+$/, '');  // 去末尾中文标点
+    // 提取码：兼容「提取码：abcd」「密码：abcd」「Code：abcd」「code：abcd」「pwd：abcd」
+    const m = text.match(/(?:提取码|密码|code|pwd|Code|Pwd)\s*[:：=]?\s*([A-Za-z0-9]{4,8})/i);
+    if (m) out.pwd = m[1];
+    return out;
+  };
+  // 输入框实时解析：粘贴完文本后自动把 URL/提取码填回正确位置
+  el.baiduShareUrl.addEventListener('input', () => {
+    const parsed = parseBaiduShareText(el.baiduShareUrl.value);
+    if (parsed.url && parsed.url !== el.baiduShareUrl.value.trim()) {
+      el.baiduShareUrl.value = parsed.url;
+    }
+    if (parsed.pwd && !el.baiduSharePwd.value.trim()) {
+      el.baiduSharePwd.value = parsed.pwd;
+    }
+  });
+
   async function restoreBaiduToken() {
     // localStorage 优先；为空时回退本机服务端持久化的令牌（重启后免重复授权）
     if (baiduToken) return;
@@ -3477,7 +3501,17 @@
 
   el.baiduShareListBtn.addEventListener('click', async () => {
     restoreBaiduToken();
-    const url = (el.baiduShareUrl.value || '').trim();
+    // 点击时再解析一次（应对手动删除 input 事件触发的情况），提取 URL 和提取码
+    const parsed = parseBaiduShareText(el.baiduShareUrl.value || '');
+    let url = parsed.url || (el.baiduShareUrl.value || '').trim();
+    let pwd = parsed.pwd || (el.baiduSharePwd.value || '').trim();
+    // 同步回输入框让用户看到解析结果
+    if (parsed.url && parsed.url !== el.baiduShareUrl.value.trim()) {
+      el.baiduShareUrl.value = parsed.url;
+    }
+    if (parsed.pwd && !el.baiduSharePwd.value.trim()) {
+      el.baiduSharePwd.value = parsed.pwd;
+    }
     if (!url) { el.baiduShareStatus.textContent = '请先粘贴分享链接'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
     el.baiduShareStatus.textContent = '加载中…';
     el.baiduShareStatus.className = 'baidu-share-status';
@@ -3486,7 +3520,7 @@
       const r = await fetch('/api/cloud/baidu/share/list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, pwd: (el.baiduSharePwd.value || '').trim() }),
+        body: JSON.stringify({ url, pwd }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -3519,8 +3553,8 @@
         b.addEventListener('click', () => startBaiduShareDownload({
           path: decodeURIComponent(b.dataset.path),
           name: decodeURIComponent(b.dataset.name),
-          url: (el.baiduShareUrl.value || '').trim(),
-          pwd: (el.baiduSharePwd.value || '').trim(),
+          url: url,
+          pwd: pwd,
         }));
       });
     } catch (err) {
