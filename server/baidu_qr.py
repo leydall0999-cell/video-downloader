@@ -35,6 +35,8 @@ QR_STATUS = "https://passport.baidu.com/v2/api/qrcodestatus"
 _lock = threading.Lock()
 _STATE = {"sign": None, "session": None, "gid": None, "created": 0.0,
           "confirmed": False, "login_result": None}
+# 轮询计数器：用于在 unicast 长轮询无响应时穿插 qrcodestatus 兜底检测
+_poll_count = 0
 
 
 def _new_session():
@@ -87,44 +89,94 @@ def _parse_unicast(body: str) -> dict:
 def qr_poll(sign: str) -> dict:
     """轮询扫码状态。confirmed 时自动完成登录。
 
-    策略：unicast 是百度长轮询接口，服务端可能挂起连接 30s+。
-    用共享 session（保留 Set-Cookie 中的 BDUSS）+ 短超时(12s)，
-    超时/异常一律返回 waiting（前端会自动 1s 后重试）。
+    混合策略（解决 unicast 长轮询在部分网络环境下不推送状态的问题）：
+      - 奇数次：unicast 长轮询（25s 超时），等待百度服务端主动推送
+      - 偶数次：qrcodestatus 短查询（10s 超时），主动拉取当前状态
+    两种方式任一检测到状态变更即返回。
     """
+    global _poll_count
     with _lock:
         if _STATE.get("sign") != sign or _STATE.get("session") is None:
             return {"status": "expired", "message": "二维码已失效，请刷新"}
-        s = _STATE["session"]  # 共享 session：保留 unicast 下发的 Set-Cookie(BDUSS)
+        s = _STATE["session"]
         gid = _STATE["gid"]
         if _STATE.get("confirmed"):
             return {"status": "confirmed", "login": _STATE.get("login_result")}
+
+    _poll_count += 1
+    use_unicast = (_poll_count % 2 == 1)  # 奇数用长轮询，偶数用短查询
+
     try:
-        cb = "bd__cbs__" + str(int(time.time() * 1000))[-8:]
-        params = {"channel_id": sign, "tpl": "netdisk_web", "gid": gid,
-                  "callback": cb, "tt": str(int(time.time() * 1000))}
-        # connect=5s, read=12s：覆盖网络延迟但不会卡死
-        r = s.get(UNICAST, params=params, timeout=(5, 12))
-        j = _parse_unicast(r.text)
-        errno_val = j.get("errno")
-        if errno_val == 404:
-            return {"status": "expired", "message": "二维码已过期，请刷新"}
-        data = j.get("data") or {}
-        status = str(data.get("status", "0"))
-        if status == "0":
-            return {"status": "waiting", "message": "等待扫码…"}
-        if status == "1":
-            return {"status": "scanned", "message": "已扫码，请在手机上确认"}
-        if status == "2":
+        if use_unicast:
+            result = _poll_unicast(s, sign, gid)
+        else:
+            result = _poll_qrcodestatus(s, sign, gid)
+
+        # 无论哪种方式，status=2 都走统一登录流程
+        if result.get("status") == "2":
             return _finish_login(sign)
-        return {"status": "unknown", "message": f"未知状态：{status}", "raw": j}
+        return result
     except Exception as e:  # noqa: BLE001
         err_type = type(e).__name__
-        # 所有超时/网络异常 → waiting（前端 1s 后自动重试）
         if any(k in err_type.lower() for k in ("timeout", "connection", "socket")):
-            logger.debug("qr_poll 超时/网络异常（视为等待扫码）: %s", e)
+            logger.debug("[qr_poll] %s 超时（视为等待扫码）: %s",
+                         "unicast" if use_unicast else "qrcodestatus", e)
             return {"status": "waiting", "message": "等待扫码…"}
-        logger.exception("qr_poll 异常")
+        logger.exception("[qr_poll] 异常")
         return {"status": "error", "message": f"轮询出错：{e}"}
+
+
+def _poll_unicast(session, sign: str, gid: str) -> dict:
+    """unicast 长轮询：等待百度服务端推送状态变更。"""
+    cb = "bd__cbs__" + str(int(time.time() * 1000))[-8:]
+    params = {"channel_id": sign, "tpl": "netdisk_web", "gid": gid,
+              "callback": cb, "tt": str(int(time.time() * 1000))}
+    r = session.get(UNICAST, params=params, timeout=(8, 25))
+    body_text = r.text
+    j = _parse_unicast(body_text)
+    logger.info("[qr_poll] unicast响应: errno=%s data.status=%s raw=%s",
+                j.get("errno"), (j.get("data") or {}).get("status"), body_text[:200])
+    errno_val = j.get("errno")
+    if errno_val == 404:
+        return {"status": "expired", "message": "二维码已过期，请刷新"}
+    data = j.get("data") or {}
+    status = str(data.get("status", "0"))
+    if status == "0":
+        return {"status": "waiting", "message": "等待扫码…"}
+    if status == "1":
+        return {"status": "scanned", "message": "已扫码，请在手机上确认"}
+    if status == "2":
+        return {"status": "2"}  # 由调用方处理登录
+    return {"status": "unknown", "message": f"未知状态：{status}", "raw": j}
+
+
+def _poll_qrcodestatus(session, sign: str, gid: str) -> dict:
+    """qrcodestatus 短查询：主动拉取当前扫码状态（unicast 兜底）。"""
+    tt = str(int(time.time() * 1000))
+    cb = "bd__cbs__" + tt[-8:]
+    params = {"code": sign, "tpl": "netdisk_web", "subpro": "netdisk_web",
+              "apiver": "v3", "gid": gid, "tt": tt, "callback": cb}
+    r = session.get(QR_STATUS, params=params, timeout=(5, 10), allow_redirects=True)
+    body_text = r.text
+    j = _parse_unicast(body_text)
+    logger.info("[qr_poll] qrcodestatus响应: errno=%s status=%s raw=%s",
+                j.get("errno"), j.get("status"), body_text[:200])
+    errno_val = j.get("errno")
+    if errno_val == 404 or errno_val == 400400:
+        return {"status": "expired", "message": "二维码已过期，请刷新"}
+    # qrcodestatus 返回格式可能不同，尝试多种字段名
+    status = str(j.get("status") or j.get("errno") or "0")
+    if status in ("0", "0'"):
+        return {"status": "waiting", "message": "等待扫码…"}
+    if status in ("1", "1'"):
+        return {"status": "scanned", "message": "已扫码，请在手机上确认"}
+    if status in ("2", "2'"):
+        return {"status": "2"}  # 由调用方处理登录
+    # 如果 qrcodestatus 返回了 BDUSS cookie（确认后直接下发的场景）
+    bduss_match = re.search(r'"bduss"\s*:\s*"([^"]+)"', body_text, re.IGNORECASE)
+    if bduss_match and bduss_match.group(1):
+        return {"status": "2"}  # 有 BDUSS 说明已确认
+    return {"status": "waiting", "message": "等待扫码…"}
 
 
 def _collect_cookies(session) -> dict:
