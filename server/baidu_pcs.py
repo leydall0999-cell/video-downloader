@@ -254,6 +254,33 @@ def _login_failed(combined: str) -> bool:
     return bool(_FAIL_PATTERNS.search(combined))
 
 
+def _extract_uid(who_output: str) -> int:
+    """从 who 命令输出中提取 uid，提取失败返回 0。"""
+    m = re.search(r'uid[:\s]+(\d+)', who_output, re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return 0
+
+
+def _verify_login() -> tuple[bool, str]:
+    """登录后验证：调 who 确认 uid > 0。返回 (是否有效, 提示文本)。"""
+    try:
+        w = who()
+        if w.get("logged_in") and w.get("ok"):
+            uid = _extract_uid(w.get("message", "") or w.get("raw", ""))
+            if uid > 0:
+                return True, w.get("message", "")
+            return False, f"登录态无效（uid=0，BDUSS 可能已过期或无效）\nwho 输出: {w.get('message', '')}"
+        return False, f"登录后验证失败: {w.get('message', '未知')}"
+    except Exception as e:
+        # who 调用异常不阻断（可能是网络问题），仅记录
+        logger.warning("登录后 who 验证异常（不阻断）: %s", e)
+        return True, ""  # 放行，避免误拦
+
+
 def login(raw: str) -> dict:
     """用 cookie 串或纯 BDUSS 登录。统一走 -cookies=（最可靠，工具会自行解析 BDUSS/STOKEN）。"""
     try:
@@ -296,6 +323,10 @@ def login(raw: str) -> dict:
         combined = res.get("combined", res.get("stderr", "未知错误"))
         # 退出码 0 不代表成功：baiduPCS-Go 失败时也常返回 0，需看输出
         if res["ok"] and not _login_failed(combined):
+            # 二次验证：确认 who 返回有效 uid（防止退出码 0 但实际未登录）
+            verified, hint = _verify_login()
+            if not verified:
+                return {"ok": False, "message": f"登录失败（凭证无效）：{hint}", "raw": _tail(combined, 12)}
             return {"ok": True, "message": "登录成功 ✓", "raw": _tail(combined, 6)}
         return {"ok": False, "message": "登录失败：" + _tail(combined, 3).strip(), "raw": _tail(combined, 12)}
     except Exception as e:
@@ -317,6 +348,10 @@ def login_by_password(username: str, password: str) -> dict:
         res = _run(["login", f"-username={username}", f"-password={password}"], timeout=60)
         combined = res.get("combined", res.get("stderr", "未知错误"))
         if res["ok"] and not _login_failed(combined):
+            # 二次验证：确认 who 返回有效 uid
+            verified, hint = _verify_login()
+            if not verified:
+                return {"ok": False, "message": f"登录失败（凭证无效）：{hint}", "raw": _tail(combined, 12)}
             return {"ok": True, "message": "登录成功 ✓", "raw": _tail(combined, 6)}
         return {"ok": False, "message": "登录失败：" + _tail(combined, 3).strip(), "raw": _tail(combined, 12)}
     except Exception as e:

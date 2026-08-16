@@ -25,6 +25,7 @@ if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
 import baidu_qr  # noqa: E402
+import baidu_pcs  # noqa: E402
 
 # 一个合法的最小 1x1 PNG（base64 解码），Mock 的二维码图片直接返回它
 import base64 as _b64
@@ -228,8 +229,48 @@ def test_qr_poll_expired():
     print("✅ 场景C(失效sign): 安全返回 expired")
 
 
+def test_extract_uid():
+    """场景 D：_extract_uid 从 who 输出正确提取 uid。"""
+    # 正常输出
+    assert baidu_pcs._extract_uid("当前账号: uid: 12345, 用户名: test") == 12345
+    # uid:0（无效登录）
+    assert baidu_pcs._extract_uid("当前账号: uid: 0, 用户名: , 性别: , 年龄: 0.0") == 0
+    # 无 uid 信息
+    assert baidu_pcs._extract_uid("未登录") == 0
+    # 不同格式
+    assert baidu_pcs._extract_uid("uid:99999 something") == 99999
+    print("✅ 场景D(_extract_uid): uid 提取逻辑正确")
+
+
+def test_login_rejects_uid_zero():
+    """场景 E：login 成功但 who 返回 uid=0 → 应返回 ok=False（假登录拦截）。"""
+    from unittest.mock import patch
+
+    # 模拟：_run 返回退出码 0 + 无失败关键词（看起来成功）
+    fake_run_ok = {"ok": True, "code": 0, "stdout": "登录成功", "stderr": "", "combined": "登录成功"}
+    # 但 who 返回 uid:0
+    fake_who_uid0 = {"ok": True, "logged_in": True, "message": "uid: 0, 用户名: ", "raw": "uid: 0"}
+
+    with patch.object(baidu_pcs, "_run", return_value=fake_run_ok), \
+         patch.object(baidu_pcs, "who", return_value=fake_who_uid0):
+        result = baidu_pcs.login("BDUSS=fake_invalid_bduss")
+        assert result["ok"] is False, f"uid=0 应被拦截为登录失败: {result}"
+        assert "uid=0" in result["message"] or "无效" in result["message"], \
+            f"错误信息应提示凭证无效: {result['message']}"
+
+    # 正常情况：who 返回有效 uid → ok=True
+    fake_who_ok = {"ok": True, "logged_in": True, "message": "uid: 12345, 用户名: testuser", "raw": "uid: 12345"}
+    with patch.object(baidu_pcs, "_run", return_value=fake_run_ok), \
+         patch.object(baidu_pcs, "who", return_value=fake_who_ok):
+        result = baidu_pcs.login("BDUSS=valid_bduss")
+        assert result["ok"] is True, f"有效 uid 应通过: {result}"
+    print("✅ 场景E(uid=0假登录拦截): login→who 验证逻辑正确，uid:0 被拦截，正常 uid 通过")
+
+
 if __name__ == "__main__":
     test_qr_flow_cookie_mode()
     test_qr_flow_body_mode()
     test_qr_poll_expired()
-    print("\n🎉 全部离线集成测试通过 — 扫码登录链路已在沙盒内自测，不再依赖用户真机。")
+    test_extract_uid()
+    test_login_rejects_uid_zero()
+    print("\n🎉 全部离线集成测试通过 — 扫码登录链路 + uid 验证已在沙盒内自测，不再依赖用户真机。")
