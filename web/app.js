@@ -3582,6 +3582,8 @@
     try {
       const r = await pcsFetch('/api/pcs/qr/poll?sign=' + encodeURIComponent(_pcsQrSign));
       const st = r.status;
+      // 诊断：打印每次轮询结果到控制台（排查"卡在等待扫码"问题）
+      console.log('[pcs] poll result:', JSON.stringify(r).slice(0, 300));
       if (st === 'waiting') {
         if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '等待扫码…'; pcsQrStatusEl.className = 'pcs-qr-status'; }
       } else if (st === 'scanned') {
@@ -3600,10 +3602,21 @@
           if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '✗ ' + (login.message || '登录失败'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; pcsQrStatusEl.title = login.raw || ''; }
         }
       } else if (st === 'error') {
-        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = r.message || '轮询出错'; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
+        // 后端明确报错（如超时、百度接口异常）→ 显示错误但继续轮询（不停止）
+        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '⚠ ' + (r.message || '轮询异常'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
+      } else {
+        // 兜底：status 缺失或未知值（后端返回了非预期格式、HTTP 错误、JSON 解析失败等）
+        console.warn('[pcs] poll 返回未知状态', r);
+        if (pcsQrStatusEl) {
+          pcsQrStatusEl.textContent = '⚠ 轮询异常（' + (r.message || r._raw_slice ? (r.message || '').slice(0, 60) : '无响应') + '）';
+          pcsQrStatusEl.className = 'pcs-qr-status is-err';
+        }
       }
     } catch (e) {
-      if (pcsQrStatusEl) pcsQrStatusEl.textContent = '连接中…';
+      // 网络层完全失败（fetch 抛出异常）
+      console.error('[pcs] poll fetch 异常', e);
+      if (pcsQrStatusEl) pcsQrStatusEl.textContent = '⚠ 连接断开，重试中…';
+      // 不停定时器，下次轮询自动重试
     }
   }
 

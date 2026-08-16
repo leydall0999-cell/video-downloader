@@ -4854,15 +4854,23 @@ def pcs_login_password(payload: dict) -> dict:
 @app.get("/api/pcs/qr/gen")
 def pcs_qr_gen() -> dict:
     if baidu_qr is None:
-        return {"ok": False, "error": "baidu_qr 模块未加载"}
-    return baidu_qr.qr_gen()
+        return {"ok": False, "status": "error", "message": "baidu_qr 模块未加载"}
+    try:
+        return baidu_qr.qr_gen()
+    except Exception as e:
+        logger.exception("pcs_qr_gen 异常")
+        return {"ok": False, "status": "error", "message": f"生成二维码失败：{e}"}
 
 
 @app.get("/api/pcs/qr/poll")
 def pcs_qr_poll(sign: str = "") -> dict:
     if baidu_qr is None:
-        return {"ok": False, "error": "baidu_qr 模块未加载"}
-    return baidu_qr.qr_poll(sign)
+        return {"ok": False, "status": "error", "message": "baidu_qr 模块未加载"}
+    try:
+        return baidu_qr.qr_poll(sign)
+    except Exception as e:
+        logger.exception("pcs_qr_poll 异常")
+        return {"ok": False, "status": "error", "message": f"轮询异常：{e}"}
 
 
 @app.get("/api/pcs/who")
