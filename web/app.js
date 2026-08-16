@@ -3052,29 +3052,8 @@
   el.watchClose.addEventListener('click', closeWatch);
   el.watchBack.addEventListener('click', closeWatch);
   el.watchModal.addEventListener('click', (e) => { if (e.target === el.watchModal) closeWatch(); });
-  // 显式「退出」按钮：仅桌面版(pywebview)显示；浏览器回退模式隐藏（无原生窗口可退）
-  (function initQuitButton() {
-    const wire = () => {
-      const api = window.pywebview && window.pywebview.api;
-      if (api && typeof api.quit_app === "function") {
-        el.quitAppBtn.hidden = false;
-        el.quitAppBtn.addEventListener("click", () => {
-          if (window.confirm("确定退出 VideoDownloader？")) api.quit_app();
-        });
-      }
-      if (api && typeof api.hide_to_desktop === "function") {
-        el.hideToDesktopBtn.hidden = false;
-        el.hideToDesktopBtn.addEventListener("click", () => {
-          api.hide_to_desktop();
-        });
-      }
-    };
-    if (window.pywebview && window.pywebview.api) {
-      wire();
-    } else {
-      document.addEventListener("pywebviewready", wire, { once: true });
-    }
-  })();
+  // 注：「退出」/「返回桌面」按钮的初始化已迁至 web/js/desktop-app.js（桌面版专属脚本，
+  // 仅 pywebview 环境加载）。web 端无原生窗口可退，相关逻辑不进入 web 加载集。
   function openWatch(opts = {}) {
     // 任务卡片已下载完成 → 直接播放本地文件；否则（解析面板 / 下载中）走源站实时流代理
     let src;
@@ -6136,4 +6115,16 @@
   try { switchView('commentary'); } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
+
+  // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
+  // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。
+  window.VDL = Object.assign(window.VDL || {}, {
+    el,
+    $,
+    escHtml,
+    request,
+    showError,
+    createTaskCard,
+    switchView,
+  });
 })();

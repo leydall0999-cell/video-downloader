@@ -1200,6 +1200,27 @@
     var v = (fp && fp.indexOf('__BUILD_FP__') === -1) ? fp : ('dev' + Date.now());
     var s = document.createElement('script');
     s.src = 'app.js?v=' + encodeURIComponent(v);
+    s.onload = function () {
+      // app.js 已执行并暴露 window.VDL。仅桌面版(pywebview)加载 app 专属脚本；
+      // 纯 web 环境永不加载 desktop-app.js，app 专属逻辑不进入 web 加载集。
+      var loadDesktopApp = function () {
+        var d = document.createElement('script');
+        d.src = 'js/desktop-app.js?v=' + encodeURIComponent(v);
+        document.head.appendChild(d);
+      };
+      if (window.pywebview) {
+        loadDesktopApp();
+      } else {
+        // pywebview 可能稍后注入 window.pywebview（早于 pywebviewready 事件）
+        document.addEventListener('pywebviewready', loadDesktopApp, { once: true });
+        // 兜底：1.5s 内仍未出现 pywebview，判定为纯 web 环境，移除监听不再加载
+        setTimeout(function () {
+          if (!window.pywebview) {
+            document.removeEventListener('pywebviewready', loadDesktopApp);
+          }
+        }, 1500);
+      }
+    };
     document.head.appendChild(s);
   })();
 </script>
