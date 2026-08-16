@@ -34,6 +34,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import platform_model as plat
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -159,7 +161,7 @@ COMMENTARY_ENABLED = os.environ.get("VDL_COMMENTARY_ENABLED", "false").strip().l
 # 桌面版自动探测：没显式设 COMMENTARY_ENABLED 时，若管线可用则自动开启。
 # 仅 frozen(打包版)生效——dev/在线版须显式开启，避免 import 即改写默认行为。
 # 统一走 commentary_locate.locate_commentary()（含包内捆绑候选，践行自包含铁律）。
-if not _COMMENTARY_EXPLICIT and getattr(sys, "frozen", False):
+if not _COMMENTARY_EXPLICIT and plat.is_desktop():
     from commentary_locate import locate_commentary
     _loc = locate_commentary()
     if _loc is not None:
@@ -273,7 +275,7 @@ _commentary_lock = threading.Lock()
 
 # ---- AI 去水印（E2FGVI worker，桌面版可选）：local subprocess 或 http worker ----
 AI_DEWATERMARK_ENABLED = bool(
-    getattr(sys, "frozen", False)
+    plat.is_desktop()
     or bool(os.environ.get("VDL_AI_DEWATERMARK_ENABLED"))
 )
 AI_DEWATERMARK_MODE = os.environ.get("VDL_AI_DEWATERMARK_MODE", "local").strip().lower()
@@ -484,7 +486,7 @@ scheduler = BatchScheduler(executor, default_concurrency=MAX_CONCURRENT_DOWNLOAD
 process_queue = pq_mod.ProcessQueue(executor, default_concurrency=2, hard_max=4)
 
 # ---- 订阅监控（桌面版功能）：本地 JSON 持久化 + 后台定时探查新视频 ----
-SUB_ENABLED = bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_SUBSCRIPTIONS_ENABLED"))
+SUB_ENABLED = plat.is_desktop() or bool(os.environ.get("VDL_SUBSCRIPTIONS_ENABLED"))
 SUBSCRIBE_PROBE_LIMIT = int(os.environ.get("VDL_SUBSCRIBE_PROBE_LIMIT", "100") or 100)
 SUB_CHECK_INTERVAL = int(os.environ.get("VDL_SUB_CHECK_INTERVAL", "1800") or 1800)  # 默认 30 分钟
 sub_store = subs_mod.SubscriptionStore(DOWNLOAD_DIR / ".subscriptions.json")
@@ -494,7 +496,7 @@ cloud_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cloud
 # ---- 时效自动清理（桌面版功能）：按保留期/容量上限清理下载目录 ----
 # 与媒体库同一开关：只有桌面版（或显式开 VDL_LIBRARY_ENABLED）才管理本地磁盘。
 RETENTION_ENABLED = (
-    bool(getattr(sys, "frozen", False))
+    plat.is_desktop()
     or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
     or bool(os.environ.get("VDL_RETENTION_ENABLED"))
 )
@@ -504,7 +506,7 @@ retention_store = retention_mod.RetentionStore(DOWNLOAD_DIR / ".retention.json")
 # 配置含明文凭据，刻意放在 home 配置目录而不是下载目录 —— 避免用户把整个下载目录
 # 同步/打包到网盘时连带泄露密码。
 ARCHIVE_ENABLED = (
-    bool(getattr(sys, "frozen", False))
+    plat.is_desktop()
     or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
     or bool(os.environ.get("VDL_ARCHIVE_ENABLED"))
 )
@@ -519,7 +521,7 @@ ARCHIVE_LOCK = threading.Lock()
 # 与媒体库同一开关。内存密钥 VAULT_KEY 为 None 即「锁定」态；vault.json 只存 salt+verify，
 # 绝不存明文密码或密钥（见 crypto_vault.new_vault / unlock_key）。
 CRYPTO_ENABLED = (
-    bool(getattr(sys, "frozen", False))
+    plat.is_desktop()
     or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
     or bool(os.environ.get("VDL_CRYPTO_ENABLED"))
 )
@@ -538,7 +540,7 @@ CRYPTO_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cryp
 # ---- 桌面版种子下载（libtorrent 集成）：把 magnet/.torrent 下载到本地媒体库 ----
 # 与媒体库同一开关策略（桌面版/显式开启）；libtorrent 为可选依赖，未安装时功能整体禁用。
 TORRENT_ENABLED = (
-    bool(getattr(sys, "frozen", False))
+    plat.is_desktop()
     or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
     or bool(os.environ.get("VDL_TORRENT_ENABLED"))
 )
@@ -632,12 +634,12 @@ class _CommentaryRuntime:
         # 打包后 sys.executable 通常是 .app 主程序，不应作为解释器——
         # 但「单二进制双角色」bundled 模式下，worker 正是用自身(sys.executable)重入，
         # 依赖已随包内置，故该例外下允许 sys.executable 作为解释器。
-        if getattr(sys, "frozen", False) and py == sys.executable:
+        if plat.is_desktop() and py == sys.executable:
             if os.environ.get("VDL_COMMENTARY_BUNDLED") == "1" or COMMENTARY_MODE == "bundled":
                 return True
             return False
         # 开发/测试模式（非 frozen 且未显式设 VDL_COMMENTARY_PYTHON）信任当前解释器
-        if "VDL_COMMENTARY_PYTHON" not in os.environ and not getattr(sys, "frozen", False):
+        if "VDL_COMMENTARY_PYTHON" not in os.environ and not plat.is_desktop():
             return True
         try:
             r = subprocess.run(
@@ -1413,7 +1415,7 @@ def node_info() -> dict:
     前端据此在粘贴链接时自动把请求发到「离目标站点更近」的节点：
     国内站 → cn 节点，海外站 → global 节点。对端为空则退化为单节点模式。
     """
-    return {
+    info = {
         "region": NODE_REGION,
         "peer": PEER_ENDPOINT,
         "china_domains": list(CHINA_DOMAINS),
@@ -1436,7 +1438,7 @@ def node_info() -> dict:
         },
         # 本地媒体库：仅桌面版（frozen）或显式开启时暴露给前端；网页版目录临时、默认关闭
         "library": {
-            "enabled": bool(getattr(sys, "frozen", False)) or bool(os.environ.get("VDL_LIBRARY_ENABLED")),
+            "enabled": plat.is_desktop() or bool(os.environ.get("VDL_LIBRARY_ENABLED")),
         },
         # 订阅监控：与媒体库同开关策略（桌面版/显式开启）；持久化在本地 JSON
         "subscriptions": {
@@ -1471,6 +1473,8 @@ def node_info() -> dict:
         },
         "authRequired": AUTH_REQUIRED,
     }
+    caps = plat.node_capabilities()
+    return {k: v for k, v in info.items() if k not in plat.NODE_GROUPS or k in caps}
 
 
 @app.post("/api/resolve")
@@ -2736,8 +2740,8 @@ def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 6
     if not COMMENTARY_RT.ready():
         raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
 
-    # bundled 模式：sys.frozen = True，edge_tts 已冻结进 exe，直接 in-process 调用
-    if getattr(sys, "frozen", False):
+    # bundled 模式：桌面打包态，edge_tts 已冻结进 exe，直接 in-process 调用
+    if plat.is_desktop():
         _run_voice_preview_inprocess(text, voice, output_mp3, timeout=timeout)
         return
 
@@ -4222,7 +4226,7 @@ class ProcessRequest(BaseModel):
 
 @app.post("/api/process/run")
 def process_run(req: ProcessRequest) -> dict:
-    if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
+    if not (plat.is_desktop() or os.environ.get("VDL_LIBRARY_ENABLED")):
         raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
                       "frame", "frames", "sheet", "ringtone", "dewatermark",
@@ -4271,14 +4275,14 @@ def process_run(req: ProcessRequest) -> dict:
 
 @app.get("/api/process/queue")
 def process_queue_list() -> dict:
-    if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
+    if not (plat.is_desktop() or os.environ.get("VDL_LIBRARY_ENABLED")):
         raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     return process_queue.get_queue()
 
 
 @app.post("/api/process/concurrency")
 def process_set_concurrency(req: dict = None) -> dict:
-    if not (getattr(sys, "frozen", False) or os.environ.get("VDL_LIBRARY_ENABLED")):
+    if not (plat.is_desktop() or os.environ.get("VDL_LIBRARY_ENABLED")):
         raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     n = int((req or {}).get("n", process_queue.concurrency))
     process_queue.set_concurrency(n)
