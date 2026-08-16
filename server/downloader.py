@@ -32,6 +32,19 @@ from platforms import LinkError, is_china_host
 from tasks import DownloadTask, TaskStore
 import socket
 import urllib.request
+import tempfile
+
+
+def _cookie_diag(key: str, value: str = "") -> -> None:
+    """写 Cookie 诊断日志到临时文件（打包后可读，不影响正常运行）。"""
+    try:
+        path = os.path.join(tempfile.gettempdir(), "vdl_cookie_diag.txt")
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S")
+        with open(path, "a") as f:
+            f.write(f"[{ts}] {key}={value}\n")
+    except Exception:
+        pass
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -513,6 +526,7 @@ def detect_browser_cookie(host: str) -> dict[str, Any]:
 
 
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    _cookie_diag("base_options_enter", f"host={host!r} cookie_len={len(cookie)}")
     options: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
@@ -565,21 +579,27 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         try:
             from cookie_cache import get_cached_cookie_header
             cached = get_cached_cookie_header(host)
-        except Exception:
+        except Exception as e:
             cached = None
+            _cookie_diag("cache_exception", str(e)[:200])
         if cached:
             headers["Cookie"] = cached
+            _cookie_diag("cache_hit", f"len={len(cached)} names={[p.split('=')[0] for p in cached.split('; ')]}")
         else:
             browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
+            _cookie_diag("cache_miss", f"host={host}")
             if browser:
                 options["cookiesfrombrowser"] = (browser,)
+                _cookie_diag("cfb_env", browser)
             else:
                 # 全站默认尝试从本机浏览器读登录态（不再局限于白名单），
                 # 覆盖更多需要 Cookie 的站点（影视聚合站、会员专享、地区限制等）。
                 # 精确定位「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
                 found = _find_host_cookie_profile(host)
+                _cookie_diag("find_profile", str(found))
                 if found:
                     options["cookiesfrombrowser"] = found  # (browser, profile)
+                    _cookie_diag("cfb_found", str(found))
                 else:
                     # 回退：探测不到具体 Profile 时仍用默认（Default）读，至少给一次机会
                     b = _detect_browser_cookie_source()

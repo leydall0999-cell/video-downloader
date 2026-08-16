@@ -52,6 +52,37 @@ class KuaishouIE(InfoExtractor):
             note="正在下载快手页面…",
         )
 
+        # ── 诊断日志（写临时文件，打包后可读）──
+        diag_path = None
+        try:
+            import tempfile, os
+            diag_path = os.path.join(tempfile.gettempdir(), "vdl_ks_diag.txt")
+            has_apollo = "__APOLLO_STATE__" in webpage
+            has_init = "__INIT_STATE__" in webpage
+            state_blob = self._extract_state_blob(webpage, "__APOLLO_STATE__")
+            state_size = len(json.dumps(state_blob)) if state_blob else 0
+            photo_found = bool(state_blob and self._find_photo(state_blob, video_id))
+            # 检查是否有 Cookie（通过页面内容推断）
+            has_login_hint = "passToken" in webpage or "kwscode" in webpage
+
+            with open(diag_path, "w") as f:
+                f.write(f"url={url}\n")
+                f.write(f"video_id={video_id}\n")
+                f.write(f"webpage_len={len(webpage)}\n")
+                f.write(f"has_APOLLO_STATE={has_apollo}\n")
+                f.write(f"has_INIT_STATE={has_init}\n")
+                f.write(f"state_blob_size={state_size}\n")
+                f.write(f"photo_found={photo_found}\n")
+                f.write(f"has_login_cookie_hints={has_login_hint}\n")
+                f.write(f"webpage_first300={webpage[:300]!r}\n")
+                f.write(f"webpage_last300={webpage[-300:]!r}\n")
+                # 列出所有 window.__ 变量
+                import re as _re
+                blobs = _re.findall(r'window\.__(\w+)__', webpage)
+                f.write(f"window_vars={blobs}\n")
+        except Exception:
+            pass
+
         # 1) 新版 SSR：window.__APOLLO_STATE__（主视频数据在这里）
         state = self._extract_state_blob(webpage, "__APOLLO_STATE__")
         if state is not None:
