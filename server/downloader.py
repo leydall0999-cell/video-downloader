@@ -457,6 +457,10 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
     供「在线观看」代理自动携带登录态，免去手动粘贴。返回 None 表示无可用 Cookie
     （浏览器未安装 / 该站未登录 / 解密失败）。复用 _find_host_cookie_profile 定位
     具体 Profile（登录态常不在 Default），再用 yt-dlp 的 cookie 解密能力导出。
+
+    重要：短链域名（如 v.kuaishou.com）的 Cookie Jar 匹配只能拿到设备指纹 Cookie，
+    登录 Session 和反爬 token 通常在主域（www.kuaishou.com）或登录子域（id.kuaishou.com）。
+    因此对每个候选域名都尝试 add_cookie_header，合并去重后返回完整 Cookie 头。
     """
     found = _find_host_cookie_profile(host)
     if not found:
@@ -466,9 +470,30 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
         from yt_dlp.cookies import extract_cookies_from_browser
         from urllib.request import Request
         jar = extract_cookies_from_browser(browser, profile)
-        req = Request(url)
-        jar.add_cookie_header(req)
-        return req.get_header("Cookie") or None
+
+        # 生成候选 URL 列表：原始域名 + 常见主域变体
+        # 短链/CDN 域名的登录态在主域，必须合并才能拿到完整 Session
+        parts = host.split(".")
+        candidates = [url]
+        if len(parts) >= 2:
+            base = ".".join(parts[-2:])  # e.g. kuaishou.com from v.kuaishou.com
+            for sub in ("www", "id", "m"):
+                c_url = f"https://{sub}.{base}/"
+                if c_url != url:
+                    candidates.append(c_url)
+
+        merged_names: dict[str, str] = {}  # name → value (后者覆盖前者)
+        for c_url in candidates:
+            req = Request(c_url)
+            jar.add_cookie_header(req)
+            hdr = req.get_header("Cookie")
+            if hdr:
+                for pair in hdr.split("; "):
+                    if "=" in pair:
+                        name, _, val = pair.partition("=")
+                        merged_names[name.strip()] = val.strip()
+
+        return "; ".join(f"{n}={v}" for n, v in merged_names.items()) or None
     except Exception:
         return None
 
