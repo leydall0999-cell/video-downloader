@@ -229,6 +229,49 @@ def test_qr_poll_expired():
     print("✅ 场景C(失效sign): 安全返回 expired")
 
 
+def test_qr_poll_long_poll_timeout_is_waiting():
+    """场景 F：unicast 长轮询 ReadTimeout（服务端挂起连接直到超时）应判定为 waiting，
+    而非上报 error。这是修复「扫码后卡在等待扫码 / 轮询出错」的核心回归测试。"""
+    import requests
+
+    with _MockServer(mode="cookie") as srv:
+        base = f"http://127.0.0.1:{srv.port}"
+        saved = (baidu_qr.GET_QR, baidu_qr.UNICAST, baidu_qr.QR_STATUS, baidu_qr.PCS_LOGIN)
+        baidu_qr.GET_QR = base + "/v2/api/getqrcode"
+        baidu_qr.UNICAST = base + "/channel/unicast"
+        baidu_qr.QR_STATUS = base + "/v2/api/qrcodestatus"
+        captured = {}
+
+        class FakePCS:
+            def login(self, cookie_str):
+                captured["cookie"] = cookie_str
+                return {"ok": True, "message": "登录成功(测试)"}
+
+        baidu_qr.PCS_LOGIN = FakePCS()
+        baidu_qr._STATE.update({"sign": None, "session": None, "gid": None,
+                                 "confirmed": False, "login_result": None})
+
+        gen = baidu_qr.qr_gen()
+        assert gen.get("ok")
+
+        # 制造长轮询超时：让 unicast 请求抛 requests ReadTimeout
+        real_session = baidu_qr._STATE.get("session")
+        orig_get = real_session.get
+
+        def _raise_timeout(*a, **k):
+            raise requests.exceptions.ReadTimeout("Read timed out. (read timeout=60)")
+
+        real_session.get = _raise_timeout
+        try:
+            r = baidu_qr.qr_poll(srv.sign)
+        finally:
+            real_session.get = orig_get
+
+        assert r["status"] == "waiting", f"长轮询超时应为 waiting: {r}"
+        assert "等待" in r.get("message", ""), f"提示语应表达等待: {r}"
+        print("✅ 场景F(长轮询超时→waiting): 不再误报 error，前端可继续轮询")
+
+
 def test_extract_uid():
     """场景 D：_extract_uid 从 who 输出正确提取 uid。"""
     # 正常输出
@@ -271,6 +314,7 @@ if __name__ == "__main__":
     test_qr_flow_cookie_mode()
     test_qr_flow_body_mode()
     test_qr_poll_expired()
+    test_qr_poll_long_poll_timeout_is_waiting()
     test_extract_uid()
     test_login_rejects_uid_zero()
-    print("\n🎉 全部离线集成测试通过 — 扫码登录链路 + uid 验证已在沙盒内自测，不再依赖用户真机。")
+    print("\n🎉 全部离线集成测试通过 — 扫码登录链路 + uid 验证 + 长轮询超时已在沙盒内自测，不再依赖用户真机。")

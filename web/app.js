@@ -3472,6 +3472,7 @@
   const pcsQrRefreshEl = document.getElementById('pcsQrRefresh');
   let _pcsQrTimer = null;
   let _pcsQrSign = null;
+  let _pcsQrActive = false;
   const _pcsPollers = {};
 
   const pcsFetch = async (url, body) => {
@@ -3554,12 +3555,14 @@
 
   // ── 扫码登录（二维码）──
   function pcsStopQr() {
-    if (_pcsQrTimer) { clearInterval(_pcsQrTimer); _pcsQrTimer = null; }
+    _pcsQrActive = false;
+    if (_pcsQrTimer) { clearTimeout(_pcsQrTimer); _pcsQrTimer = null; }
   }
 
   async function pcsStartQr() {
     pcsStopQr();
     _pcsQrSign = null;
+    _pcsQrActive = true;
     if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '正在生成二维码…'; pcsQrStatusEl.className = 'pcs-qr-status'; }
     if (pcsQrImgEl) pcsQrImgEl.classList.add('is-hidden');
     try {
@@ -3571,14 +3574,15 @@
       _pcsQrSign = r.sign;
       if (pcsQrImgEl) { pcsQrImgEl.src = r.img; pcsQrImgEl.classList.remove('is-hidden'); }
       if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '请用手机百度网盘 App 扫码'; pcsQrStatusEl.className = 'pcs-qr-status'; }
-      _pcsQrTimer = setInterval(pcsPollQr, 2500);
+      // 顺序轮询：等上一次返回后再排下一次（避免长轮询请求重叠成风暴）
+      pcsPollQr();
     } catch (e) {
       if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '生成二维码出错：' + e.message; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
     }
   }
 
   async function pcsPollQr() {
-    if (!_pcsQrSign) return;
+    if (!_pcsQrActive || !_pcsQrSign) return;
     try {
       const r = await pcsFetch('/api/pcs/qr/poll?sign=' + encodeURIComponent(_pcsQrSign));
       const st = r.status;
@@ -3616,7 +3620,12 @@
       // 网络层完全失败（fetch 抛出异常）
       console.error('[pcs] poll fetch 异常', e);
       if (pcsQrStatusEl) pcsQrStatusEl.textContent = '⚠ 连接断开，重试中…';
-      // 不停定时器，下次轮询自动重试
+    } finally {
+      // 顺序轮询：上一轮结束（无论成功/失败/超时）后，间隔 1s 再发起下一轮。
+      // 关键修复：后端是 60s 长轮询，若用 setInterval 会叠加成请求风暴。
+      if (_pcsQrActive) {
+        _pcsQrTimer = setTimeout(pcsPollQr, 1000);
+      }
     }
   }
 

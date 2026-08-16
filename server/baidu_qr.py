@@ -85,7 +85,13 @@ def _parse_unicast(body: str) -> dict:
 
 
 def qr_poll(sign: str) -> dict:
-    """轮询扫码状态。confirmed 时自动完成登录。"""
+    """轮询扫码状态。confirmed 时自动完成登录。
+
+    注意：channel/unicast 是百度服务端的**长轮询**接口——服务端会保持
+    HTTP 连接打开，直到扫码状态变化（scanned/confirmed）或服务端自身超时。
+    因此客户端必须给足 timeout，且把 ReadTimeout 当作「尚未扫码、继续等待」
+    处理，而不是上报成错误。
+    """
     with _lock:
         if _STATE.get("sign") != sign or _STATE.get("session") is None:
             return {"status": "expired", "message": "二维码已失效，请刷新"}
@@ -97,7 +103,14 @@ def qr_poll(sign: str) -> dict:
         cb = "bd__cbs__" + str(int(time.time() * 1000))[-8:]
         params = {"channel_id": sign, "tpl": "netdisk_web", "gid": gid,
                   "callback": cb, "tt": str(int(time.time() * 1000))}
-        r = s.get(UNICAST, params=params, timeout=20)
+        # 长轮询超时：百度服务端可能挂起连接 30s+ 直到状态变化。
+        # 60s 覆盖常见服务端长轮询周期；触发 ReadTimeout 视为「尚未扫码」继续等待。
+        try:
+            r = s.get(UNICAST, params=params, timeout=60)
+        except Exception as to:  # ReadTimeout / ConnectTimeout 等网络超时
+            if "timeout" in str(type(to)).lower() or "timeout" in str(to).lower():
+                return {"status": "waiting", "message": "等待扫码…"}
+            raise
         j = _parse_unicast(r.text)
         errno = j.get("errno")
         if errno == 404:
