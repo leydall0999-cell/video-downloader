@@ -652,9 +652,14 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # 解析阶段只拿 info dict，不做格式选择（避免 YouTube 等站因格式不匹配
         # 直接抛 "Requested format is not available"）。下载阶段再由 _format_selector 选格式。
         opts["format"] = None
-        # ignoreerrors：YouTube 通过代理时格式列表可能不完整，跳过格式错误
-        # 让 extract_info 尽量返回能拿到的信息（标题/时长/缩略图等）
-        opts["ignoreerrors"] = "only_download"
+        # ignoreerrors：仅 YouTube 通过代理时格式列表可能不完整，需要跳过格式错误
+        # 让 extract_info 尽量返回能拿到的信息（标题/时长/缩略图等）。
+        # ⚠️ 绝不能对所有站点生效！国内站（快手/抖音等）提取失败时，
+        # ignoreerrors 会吞掉 ExtractorError/DownloadError 导致 extract_info 返回 None，
+        # 真正的错误原因（页面结构变更/需要登录等）被完全丢失。
+        _h = _host_of(url)
+        if _h and ("youtube.com" in _h or "youtu.be" in _h):
+            opts["ignoreerrors"] = "only_download"
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         # 诊断：记录 extract_info 返回值
