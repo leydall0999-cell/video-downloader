@@ -576,7 +576,10 @@ def _friendly_error(exc: Exception) -> ResolveError:
     text = _clean_message(str(exc))
     lowered = text.lower()
     rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
-        (("403", "forbidden", "http error 403"), "YouTube 下载被服务器拒绝（403）", "该格式链接被 YouTube CDN 拒绝。建议：①确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；②换更低画质重试；③若仍失败，该视频当前可能受限，稍后再试"),
+        (("403", "forbidden", "http error 403"), "下载被服务器拒绝（403）",
+         "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
+         "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
+         "④换更低画质重试；⑤稍后再试"),
         (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
          "请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
          "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串"),
