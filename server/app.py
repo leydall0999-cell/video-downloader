@@ -3748,56 +3748,15 @@ def _crypto_job_status(job_id: str) -> dict:
     return job
 
 
-@app.get("/api/crypto/status")
-def crypto_status() -> dict:
-    _require_crypto()
-    return {
-        "enabled": CRYPTO_ENABLED,
-        "has_pass": bool(_vault_load()),
-        "locked": VAULT_KEY is None,
-    }
+# [moved -> routers/crypto.py] (Phase 1)
 
 
-@app.post("/api/crypto/set-pass")
-def crypto_set_pass(req: CryptoSetPassRequest) -> dict:
-    _require_crypto()
-    vault = _vault_load()
-    if vault is not None:
-        # 已有密码：必须提供正确的旧密码方可修改
-        if not req.old or not crypto_mod.verify_passphrase(req.old, vault):
-            raise HTTPException(status_code=400, detail="旧密码错误")
-    else:
-        if req.passwd != req.confirm:
-            raise HTTPException(status_code=400, detail="两次输入的密码不一致")
-    if len(req.passwd) < 4:
-        raise HTTPException(status_code=400, detail="密码至少 4 位")
-    new_vault = crypto_mod.new_vault(req.passwd)
-    _vault_save(new_vault)
-    # 设完即解锁，立即可用
-    global VAULT_KEY
-    VAULT_KEY = crypto_mod.unlock_key(req.passwd, new_vault)
-    return {"has_pass": True, "locked": False}
+# [moved -> routers/crypto.py] (Phase 1)
+
+# [moved -> routers/crypto.py] (Phase 1)
 
 
-@app.post("/api/crypto/unlock")
-def crypto_unlock(req: CryptoUnlockRequest) -> dict:
-    _require_crypto()
-    vault = _vault_load()
-    if not vault:
-        raise HTTPException(status_code=400, detail="尚未设置保险箱密码")
-    if not crypto_mod.verify_passphrase(req.passwd, vault):
-        raise HTTPException(status_code=401, detail="密码错误")
-    global VAULT_KEY
-    VAULT_KEY = crypto_mod.unlock_key(req.passwd, vault)
-    return {"locked": False}
-
-
-@app.post("/api/crypto/lock")
-def crypto_lock() -> dict:
-    _require_crypto()
-    global VAULT_KEY
-    VAULT_KEY = None
-    return {"locked": True}
+# [moved -> routers/crypto.py] (Phase 1)
 
 
 def _kind_of(path: Path) -> str:
@@ -3873,52 +3832,13 @@ def _run_crypto_job(job_id: str, lib_ids: list[str], mode: str) -> None:
             job["errors"] = errors
 
 
-@app.post("/api/crypto/encrypt")
-def crypto_encrypt(req: CryptoIdsRequest) -> dict:
-    _require_crypto()
-    _require_unlocked()
-    if not req.lib_ids:
-        raise HTTPException(status_code=400, detail="未选择文件")
-    job_id = "cry_" + uuid.uuid4().hex[:12]
-    with CRYPTO_LOCK:
-        CRYPTO_JOBS[job_id] = {"status": "queued", "done": 0, "total": len(req.lib_ids),
-                               "errors": [], "cancel": False, "mode": "encrypt"}
-    CRYPTO_EXECUTOR.submit(_run_crypto_job, job_id, list(req.lib_ids), "encrypt")
-    _prune_crypto_jobs()
-    return {"job_id": job_id}
+# [moved -> routers/crypto.py] (Phase 1)
 
+# [moved -> routers/crypto.py] (Phase 1)
 
-@app.post("/api/crypto/decrypt")
-def crypto_decrypt(req: CryptoIdsRequest) -> dict:
-    _require_crypto()
-    _require_unlocked()
-    if not req.lib_ids:
-        raise HTTPException(status_code=400, detail="未选择文件")
-    job_id = "cry_" + uuid.uuid4().hex[:12]
-    with CRYPTO_LOCK:
-        CRYPTO_JOBS[job_id] = {"status": "queued", "done": 0, "total": len(req.lib_ids),
-                               "errors": [], "cancel": False, "mode": "decrypt"}
-    CRYPTO_EXECUTOR.submit(_run_crypto_job, job_id, list(req.lib_ids), "decrypt")
-    _prune_crypto_jobs()
-    return {"job_id": job_id}
+# [moved -> routers/crypto.py] (Phase 1)
 
-
-@app.get("/api/crypto/job/{job_id}")
-def crypto_job(job_id: str) -> dict:
-    _require_crypto()
-    return _crypto_job_status(job_id)
-
-
-@app.post("/api/crypto/cancel/{job_id}")
-def crypto_cancel(job_id: str) -> dict:
-    _require_crypto()
-    with CRYPTO_LOCK:
-        job = CRYPTO_JOBS.get(job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        job["cancel"] = True
-    return {"canceled": True}
-
+# [moved -> routers/crypto.py] (Phase 1)
 
 def _prune_crypto_jobs() -> None:
     if len(CRYPTO_JOBS) <= 200:
@@ -4973,5 +4893,11 @@ def pcs_task(tid: str):
         return {"ok": False, "detail": "任务不存在"}
     return t
 
+
+# --------------------------------------------------------------------------- #
+# Phase 1：按域抽取的功能路由（来自 server/app.py，行为不变，全 profile 挂载）
+# 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
+from routers import crypto as _crypto_rtr
+app.include_router(_crypto_rtr.router)
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
