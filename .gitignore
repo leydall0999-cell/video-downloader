@@ -40,3 +40,7 @@ tests/_phases_tmp/
 backup/
 e2e_out/
 commentary-pipeline
+
+# 构建信息产物（构建脚本在 desktop/ 生成，不入库）
+server/.build_info.json
+server/build_info.txt
