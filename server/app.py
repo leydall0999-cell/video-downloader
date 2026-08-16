@@ -69,6 +69,9 @@ from clouddrive import (
     save_baidu_token,
     load_baidu_token,
     clear_baidu_token,
+    baidu_qr_create,
+    baidu_qr_poll,
+    baidu_qr_status,
 )
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
@@ -3122,6 +3125,8 @@ class BaiduShareDownloadRequest(BaseModel):
     share_id: int | None = None  # list 返回的 share_id
     uk: int | None = None        # list 返回的 uk
     fs_id: int | None = None     # 要下载的文件的 fs_id（list items 里）
+    bduss: str = ""       # 用户提供的百度 BDUSS Cookie（用于高速直链下载）
+    dlink: str = ""        # 前端通过 WebView 注入 JS 预取的直链（优先级最高，跳过 transfer+dlink 策略）
 
 
 @app.post("/api/cloud/baidu/share/download")
@@ -3169,6 +3174,8 @@ def cloud_baidu_share_download(payload: BaiduShareDownloadRequest):
                 pre_share_id=payload.share_id,
                 pre_uk=payload.uk,
                 pre_fs_id=payload.fs_id,
+                bduss=(payload.bduss or "").strip(),
+                pre_dlink=(payload.dlink or "").strip(),
             )
             with _baidu_dl_lock:
                 _baidu_dl_tasks[tid].update(
@@ -3235,6 +3242,27 @@ def cloud_baidu_token_set(payload: BaiduTokenSet):
 def cloud_baidu_token_del():
     clear_baidu_token()
     return {"ok": True}
+
+
+# ── 百度扫码登录（自动获取 BDUSS，免手动复制 Cookie）────────────────
+@app.get("/api/cloud/baidu/qr/create")
+def cloud_baidu_qr_create() -> dict:
+    try:
+        return baidu_qr_create()
+    except CloudError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/cloud/baidu/qr/poll")
+def cloud_baidu_qr_poll(sign: str = "") -> dict:
+    if not sign:
+        raise HTTPException(status_code=400, detail="缺少 sign 参数")
+    return baidu_qr_poll(sign)
+
+
+@app.get("/api/cloud/baidu/qr/status")
+def cloud_baidu_qr_status() -> dict:
+    return baidu_qr_status()
 
 
 @app.post("/api/cloud/save")
@@ -4715,6 +4743,185 @@ def _archive_watchdog() -> None:
 if ARCHIVE_ENABLED:
     _arc_watchdog = threading.Thread(target=_archive_watchdog, name="vdl-archive", daemon=True)
     _arc_watchdog.start()
+
+
+# ---- 百度网盘直链下载（油猴脚本 → 本接口 → aria2c）----
+# 油猴脚本在用户已登录的浏览器里拦截百度 API 拿到 dlink，POST 到这里。
+# 后端用 aria2c 多线程下载到本地，彻底摆脱 app 内 WebView 注入 BDUSS 的不稳定链路。
+class BaiduDlinkRequest(BaseModel):
+    dlink: str = Field(..., min_length=10, max_length=8192)
+    filename: str = Field(default="", max_length=255)
+
+
+@app.post("/api/baidu_dlink")
+def add_baidu_dlink(payload: BaiduDlinkRequest, request: Request) -> dict:
+    # SSRF 护栏：仅允许百度域名直链
+    if "pan.baidu.com" not in payload.dlink and "baidu.com" not in payload.dlink:
+        raise HTTPException(status_code=400, detail="仅支持百度网盘下载直链")
+    # 文件名安全化
+    raw = (payload.filename or "baidu_download").strip()
+    fname = re.sub(r'[^\w\-\.\(\)\u4e00-\u9fff ]', '_', raw) or "baidu_download"
+    if not fname.lower().endswith((".apk", ".zip", ".rar", ".mp4", ".pdf", ".7z", ".tar", ".gz", ".exe", ".dmg", ".iso", ".txt", ".json")):
+        fname += ".bin"
+    dest_dir = DOWNLOAD_DIR / "baidu"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / fname
+    # 防重名
+    if dest.exists():
+        base, ext = os.path.splitext(fname)
+        i = 1
+        while dest.exists():
+            dest = dest_dir / f"{base}_{i}{ext}"
+            i += 1
+    task_id = "bd_" + str(int(time.time() * 1000))[-10:]
+
+    def _run():
+        try:
+            clouddrive._aria2c_download(dlink=payload.dlink, dest=dest, total=0, concurrency=8)
+            logger.info("百度直链下载完成: %s", dest)
+        except Exception as e:
+            logger.error("百度直链下载失败: %s", e)
+
+    _t2 = threading.Thread(target=_run, name="vdl-baidu-dlink", daemon=True)
+    _t2.start()
+    return {"ok": True, "task_id": task_id, "dest": str(dest), "message": "已提交 aria2c 下载"}
+
+
+# ---- 百度网盘下载（baiduPCS-Go 适配器，替代脆弱的 WebView 注入）----
+try:
+    import baidu_pcs  # noqa: E402
+except Exception as _pcs_err:  # pragma: no cover
+    logger.warning("baidu_pcs 加载失败，百度网盘(PCS-Go)功能不可用: %s", _pcs_err)
+    baidu_pcs = None
+
+try:
+    import baidu_qr  # noqa: E402
+    if baidu_pcs is not None:
+        baidu_qr.PCS_LOGIN = baidu_pcs
+except Exception as _qr_err:  # pragma: no cover
+    logger.warning("baidu_qr 加载失败，扫码登录不可用: %s", _qr_err)
+    baidu_qr = None
+
+_pcs_tasks: dict[str, dict] = {}
+_pcs_lock = threading.Lock()
+
+
+@app.get("/api/pcs/status")
+def pcs_status() -> dict:
+    if baidu_pcs is None:
+        return {"binary_installed": False, "error": "baidu_pcs 模块未加载"}
+    try:
+        return baidu_pcs.status()
+    except Exception as e:
+        return {"binary_installed": False, "error": str(e)}
+
+
+@app.post("/api/pcs/install")
+def pcs_install() -> dict:
+    if baidu_pcs is None:
+        return {"ok": False, "error": "baidu_pcs 模块未加载"}
+    def _prog(d):
+        with _pcs_lock:
+            _pcs_tasks["_install"] = {"status": "installing", **d}
+    return baidu_pcs.ensure_binary(_prog)
+
+
+@app.post("/api/pcs/login")
+def pcs_login(payload: dict) -> dict:
+    if baidu_pcs is None:
+        return {"ok": False, "error": "baidu_pcs 模块未加载"}
+    raw = (payload or {}).get("cookies") or (payload or {}).get("bduss") or ""
+    try:
+        return baidu_pcs.login(raw)
+    except Exception as e:
+        logger.exception("pcs_login 异常")
+        return {"ok": False, "message": f"登录接口异常：{e}"}
+
+
+@app.post("/api/pcs/login-password")
+def pcs_login_password(payload: dict) -> dict:
+    if baidu_pcs is None:
+        return {"ok": False, "error": "baidu_pcs 模块未加载"}
+    username = (payload or {}).get("username") or ""
+    password = (payload or {}).get("password") or ""
+    try:
+        return baidu_pcs.login_by_password(username, password)
+    except Exception as e:
+        logger.exception("pcs_login_password 异常")
+        return {"ok": False, "message": f"登录接口异常：{e}"}
+
+
+@app.get("/api/pcs/qr/gen")
+def pcs_qr_gen() -> dict:
+    if baidu_qr is None:
+        return {"ok": False, "error": "baidu_qr 模块未加载"}
+    return baidu_qr.qr_gen()
+
+
+@app.get("/api/pcs/qr/poll")
+def pcs_qr_poll(sign: str = "") -> dict:
+    if baidu_qr is None:
+        return {"ok": False, "error": "baidu_qr 模块未加载"}
+    return baidu_qr.qr_poll(sign)
+
+
+@app.get("/api/pcs/who")
+def pcs_who() -> dict:
+    if baidu_pcs is None:
+        return {"ok": False, "logged_in": False, "error": "baidu_pcs 模块未加载"}
+    return baidu_pcs.who()
+
+
+@app.post("/api/pcs/share/transfer")
+def pcs_share_transfer(payload: dict) -> dict:
+    if baidu_pcs is None:
+        return {"ok": False, "error": "baidu_pcs 模块未加载"}
+    url = (payload or {}).get("url") or ""
+    pwd = (payload or {}).get("pwd") or ""
+    return baidu_pcs.transfer(url, pwd)
+
+
+@app.post("/api/pcs/ls")
+def pcs_ls(payload: dict) -> dict:
+    if baidu_pcs is None:
+        return {"ok": False, "error": "baidu_pcs 模块未加载"}
+    path = (payload or {}).get("path") or "/"
+    return baidu_pcs.ls(path)
+
+
+@app.post("/api/pcs/download")
+def pcs_download(payload: dict):
+    remote = (payload or {}).get("path") or (payload or {}).get("remote_path") or ""
+    name = (payload or {}).get("name") or remote.split("/")[-1] or "pcs_download"
+    if not remote:
+        return {"ok": False, "detail": "缺少网盘路径 path"}
+    tid = "pcs_" + str(int(time.time() * 1000))[-10:]
+
+    def _worker():
+        def _prog(d):
+            with _pcs_lock:
+                _pcs_tasks[tid]["progress"] = d
+        with _pcs_lock:
+            _pcs_tasks[tid] = {"status": "downloading", "name": name, "progress": {"stage": "starting"}}
+        try:
+            res = baidu_pcs.download(remote, progress=_prog)
+            with _pcs_lock:
+                _pcs_tasks[tid].update(status="done" if res["ok"] else "failed", **res)
+        except Exception as e:  # noqa: BLE001
+            with _pcs_lock:
+                _pcs_tasks[tid].update(status="failed", message=str(e))
+
+    threading.Thread(target=_worker, name=f"vdl-pcs-{tid}", daemon=True).start()
+    return {"ok": True, "task_id": tid, "message": "已提交下载"}
+
+
+@app.get("/api/pcs/task/{tid}")
+def pcs_task(tid: str):
+    with _pcs_lock:
+        t = _pcs_tasks.get(tid)
+    if not t:
+        return {"ok": False, "detail": "任务不存在"}
+    return t
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

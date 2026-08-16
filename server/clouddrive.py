@@ -724,68 +724,222 @@ class BaiduProvider:
         return result
 
     def _share_dlink(self, meta: dict, fs_id: int, share_url: str = "") -> str:
-        """从分享直接获取文件下载直链（绕过 transfer，参考社区逆向签名算法）。
+        """从分享获取文件下载直链（高速通道）。
 
-        签名公式：sign = MD5("shareid={shareid}&uk={uk}&fid={fs_id}{sekey}")
+        多级策略（按可靠性排序）：
+          策略 A: BDUSS Cookie + /api/sharedownload（最稳定，需用户配置 Cookie）
+          策略 B: 页面 HTML 提取 sign + /api/sharedownload（SPA 页面可能失败）
+          策略 C: 兜底报错
+
+        拿到 dlink 后配合 aria2c -x16 多线程即可跑满带宽。
         """
-        import hashlib, time, base64
+        import re
+        import time
 
         share_id = meta["share_id"]
         uk = meta["uk"]
-        sekey = meta["sekey"]
+        sekey = meta.get("sekey", "")
 
-        timestamp = str(int(time.time()))
-        raw_sign = f"shareid={share_id}&uk={uk}&fid={fs_id}{sekey}"
-        sign = hashlib.md5(raw_sign.encode()).hexdigest()
+        # ── 尝试策略 A：BDUSS Cookie 方式 ──────────────────────────────
+        # 优先用前端传入的 BDUSS（meta），其次读本地配置
+        bduss = (meta.get("bduss") or "").strip() or self._get_bduss()
+        if bduss:
+            try:
+                return self._share_dlink_bduss(bduss, share_id, uk, fs_id,
+                                                sekey, share_url)
+            except CloudError as exc:
+                logger.warning("BDUSS dlink 失败: %s，尝试页面提取", exc)
+
+        # ── 策略 B：从分享页 HTML 提取 sign/timestamp ─────────────────
+        try:
+            return self._share_dlink_from_page(meta, fs_id, share_url,
+                                                share_id, uk, sekey)
+        except CloudError as exc:
+            logger.warning("页面提取 dlink 失败: %s", exc)
+
+        # ── 全部失败 ───────────────────────────────────────────────────
+        raise CloudError(
+            "无法获取下载直链",
+            "所有获取方式均失败。如需高速下载，请在设置中配置百度网盘 BDUSS Cookie "
+            "（浏览器 F12 → Application → Cookies → BDUSS 值）",
+        )
+
+    def _get_bduss(self) -> str | None:
+        """返回用户配置的百度 BDUSS Cookie；未配置返回 None。
+
+        优先从环境变量 VDL_BAIDU_BDUSS 读取，
+        其次从 ~/.vdl/baidu_bduss.txt 文件读取（首行去空白）。
+        """
+        import os
+        # 环境变量
+        env = (os.environ.get("VDL_BAIDU_BDUSS") or "").strip()
+        if env:
+            return env
+        # 文件
+        p = Path.home() / ".vdl" / "baidu_bduss.txt"
+        try:
+            if p.exists():
+                return p.read_text("utf-8").strip().splitlines()[0].strip()
+        except OSError:
+            pass
+        return None
+
+    def _share_dlink_bduss(self, bduss: str, share_id: int, uk: int,
+                             fs_id: int, sekey: str, share_url: str) -> str:
+        """用 BDUSS Cookie 调用 /api/sharedownload 获取直链（最稳定方案）。"""
+        import base64
+
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/131.0.0.0 Safari/537.36",
+            "Referer": share_url or f"https://pan.baidu.com/s/1{share_id}",
+            "Origin": "https://pan.baidu.com",
+        })
+        # 注入 BDUSS Cookie（核心：模拟浏览器登录态）
+        s.cookies.set("BDUSS", bduss, domain=".baidu.com")
+
+        # 先访问一次分享页建立会话
+        if share_url:
+            try:
+                s.get(share_url, timeout=15,
+                      headers={"Accept-Encoding": "identity"})
+            except requests.RequestException:
+                pass
+
+        timestamp = str(int(time.time() * 1000))
+
+        # 调用内部 API
+        resp = s.post(
+            "https://pan.baidu.com/api/sharedownload",
+            params={"sign": "", "timestamp": timestamp},
+            data={
+                "encrypt": 0,
+                "product": "share",
+                "uk": str(uk),
+                "primaryid": fs_id,
+                "fid_list": f"[{fs_id}]",
+                "shareid": str(share_id),
+                "sekey": sekey or "",
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        errno = data.get("errno", 0)
+        if errno != 0:
+            show = data.get("show_msg") or data.get("errmsg") or ""
+            raise CloudError(
+                f"BDUSS 获取直链失败(errno={errno})",
+                show,
+            )
+
+        dlink = data.get("dlink") or ""
+        if not dlink:
+            dl_list = data.get("list") or []
+            if dl_list and isinstance(dl_list, list):
+                dlink = dl_list[0].get("dlink") or ""
+        if not dlink:
+            raise CloudError("BDUSS 直链为空", str(data)[:300])
+        logger.info("[BDUSS] got dlink: %s...", dlink[:80])
+        return dlink
+
+    def _share_dlink_from_page(self, meta: dict, fs_id: int, share_url: str,
+                                 share_id: int, uk: int, sekey: str) -> str:
+        """从分享页 HTML 提取 sign/timestamp → 调 /api/sharedownload（备用方案）。
+        
+        注意：百度新版 SPA 分享页的初始 HTML 中可能不包含这些参数，
+        此方法在 SPA 页面上会失败，仅对旧版页面有效。
+        """
+        import re
+
+        s = meta.get("session")
+        if not s:
+            s = requests.Session()
+            s.headers.update({
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/131.0.0.0 Safari/537.36",
+                "Accept-Encoding": "identity",
+            })
 
         try:
-            s = meta.get("session")
-            if not s:
-                # 预取模式下没有 session → 新建并访问分享页获取 BAIDUID 等 cookie
-                s = requests.Session()
-                s.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-                })
-                # 关键：必须先访问分享页拿 cookie，否则 /share/download 返回 errno=2
-                if share_url:
-                    try:
-                        s.get(share_url, timeout=15)
-                    except requests.RequestException:
-                        pass  # cookie 拿不到不致命
-                s.headers.update({"Referer": f"https://pan.baidu.com/s/1{share_id}"})
-            resp = s.post(
-                BAIDU_SHARE_API + "/download",
-                params={
-                    "sign": sign,
-                    "timestamp": timestamp,
-                    "shareid": str(share_id),
-                    "uk": str(uk),
-                    "fid": str(fs_id),
-                    "type": "download",
-                },
-                data={"enc_fs_id": base64.b64encode(str(fs_id).encode()).decode()},
-                timeout=30,
+            page_resp = s.get(share_url, timeout=20)
+        except requests.RequestException as exc:
+            raise CloudError("无法访问分享链接页面", str(exc)) from exc
+
+        page_text = page_resp.text
+
+        # 如果返回的是错误页面（404等），直接失败
+        if "页面不存在" in page_text or page_resp.status_code == 404:
+            raise CloudError("分享页面无法访问",
+                            f"HTTP {page_resp.status_code}，可能是网络问题或链接已失效")
+
+        def _extract(pattern: str, default="") -> str:
+            m = re.search(pattern, page_text)
+            return m.group(1).strip('"\'') if m else default
+
+        sign = _extract(r'"sign"\s*:\s*"([^"]+)"')
+        timestamp = _extract(r'"timestamp"\s*:\s*"?(\d+)"?')
+
+        # 如果 HTML 中没有 sign（SPA 页面），尝试从 JS 数据块提取
+        if not sign:
+            # 百度可能在 <script> 标签或 JSON 块中注入数据
+            for block_pat in [r'yunData\s*=\s*(\{[^}]+)',
+                               r'__INITIAL_STATE__\s*=\s*(\{[^}]+)',
+                               r'window.__DATA__\s*=\s*(\{[^}]+)']:
+                m = re.search(block_pat, page_text)
+                if m:
+                    block = m.group(1)
+                    s2 = re.search(r'"sign"\s*:\s*"([^"]+)"', block)
+                    t2 = re.search(r'"timestamp"\s*:\s*"?(\d+)"?', block)
+                    if s2:
+                        sign = s2.group(1)
+                    if t2:
+                        timestamp = t2.group(1)
+                    break
+
+        if not sign:
+            raise CloudError(
+                "无法从页面提取签名参数",
+                "百度分享页已改为 SPA 架构，HTML 中不包含 sign/timestamp。"
+                "请配置 BDUSS Cookie 以使用高速下载。",
             )
-            data = resp.json()
-            errno = data.get("errno", 0)
-            if errno != 0:
-                raise CloudError(
-                    f"获取分享下载直链失败(errno={errno})",
-                    data.get("show_msg") or data.get("errmsg") or f"sign={sign[:16]}... raw={raw_sign[:40]}",
-                )
-            # dlink 可能在顶层或 dlink_list[0].dlink
-            dlink = data.get("dlink") or ""
-            if not dlink:
-                dl_list = data.get("dlink_list") or []
-                if dl_list:
-                    dlink = dl_list[0].get("dlink") or ""
-            if not dlink:
-                raise CloudError("分享下载直链为空", "响应中无 dlink 字段")
-            return dlink
-        except CloudError:
-            raise
-        except Exception as exc:
-            raise CloudError("获取分享下载直链失败", str(exc)) from exc
+
+        timestamp = timestamp or str(int(time.time()))
+        s.headers.update({"Referer": share_url, "Origin": "https://pan.baidu.com"})
+
+        resp = s.post(
+            "https://pan.baidu.com/api/sharedownload",
+            params={"sign": sign, "timestamp": timestamp},
+            data={
+                "encrypt": 0,
+                "product": "share",
+                "uk": str(uk),
+                "primaryid": fs_id,
+                "fid_list": f"[{fs_id}]",
+                "shareid": str(share_id),
+                "sekey": sekey or "",
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        errno = data.get("errno", 0)
+        if errno != 0:
+            raise CloudError(
+                f"获取下载直链失败(errno={errno})",
+                data.get("show_msg") or data.get("errmsg") or "",
+            )
+        dlink = data.get("dlink") or ""
+        if not dlink:
+            dl_list = data.get("list") or data.get("dlink_list") or []
+            if dl_list and isinstance(dl_list, list):
+                dlink = dl_list[0].get("dlink") or ""
+        if not dlink:
+            raise CloudError("下载直链为空", str(data)[:300])
+        logger.info("[PAGE] got dlink: %s...", dlink[:80])
+        return dlink
+
 
     def _download_from_url(self, url: str, local_path: Path, progress=None) -> int:
         """从给定 URL 流式下载文件到本地，返回写入字节数。"""
@@ -823,15 +977,16 @@ class BaiduProvider:
         pre_share_id: int | None = None,
         pre_uk: int | None = None,
         pre_fs_id: int | None = None,
+        bduss: str = "",       # 用户提供的 BDUSS Cookie（用于高速直链）
+        pre_dlink: str = "",    # 前端通过 WebView JS 注入预取的直链（优先级最高）
     ) -> int:
-        """把分享里的某个文件下载到本机。返回写入字节数。
+        """把分享文件下载到本机。返回写入字节数。
 
         策略（按优先级）：
+          0. pre_dlink → 前端 WebView 注入的直链，直接 aria2c 下载（最可靠）
           1. transfer → 从用户网盘下载（官方合规路径）
-          2. transfer 失败时 → 直接从分享提取 dlink 下载（绕过 transfer）
-
-        如果传入了 pre_sekey/pre_share_id/pre_uk（来自 list 响应），
-        则跳过 _share_meta（不重复 verify），直接用预取值。
+          2. dlink 直链 + aria2c（BDUSS 或页面提取）
+          3. 浏览器降级
         """
         dest = dest or _baidu_share_dest("VideoDownloader_Share")
         target_name = os.path.basename(share_path or "")
@@ -839,6 +994,9 @@ class BaiduProvider:
         surl = self._parse_share_surl(share_url)
 
         # ── 构造 meta（优先用前端传入的预取值，避免重复 verify）────────
+        # 注入 BDUSS（如果有），供 _share_dlink 优先使用
+        _bduss = (bduss or "").strip()
+
         if pre_sekey and pre_share_id is not None and pre_uk is not None:
             # 前端已传入 list 阶段的 verify 结果 → 直接用，不再 verify
             meta = {
@@ -847,6 +1005,7 @@ class BaiduProvider:
                 "uk": pre_uk,
                 "items": [],  # transfer/dlink 不依赖 items（已有 fs_id）
                 "session": None,
+                "bduss": _bduss,
             }
             fs_id = pre_fs_id
         else:
@@ -855,6 +1014,22 @@ class BaiduProvider:
             by_path = {it.get("path"): it.get("fs_id") for it in meta["items"]}
             by_name = {it.get("server_filename") or "": it.get("fs_id") for it in meta["items"]}
             fs_id = by_path.get(share_path) or by_name.get(target_name)
+            meta["bduss"] = _bduss
+
+        # ── 策略 0：前端 WebView 注入的预取直链（最可靠，优先级最高）────
+        _pre_dlink = (pre_dlink or "").strip()
+        if _pre_dlink:
+            logger.info("[策略0] 使用 WebView 预取直链: %s...", _pre_dlink[:80])
+            total = int(meta.get("items", [{}])[0].get("size", 0) or 0)
+            if backend in ("auto", "aria2c") and _aria2c_path() is not None:
+                try:
+                    return _aria2c_download(_pre_dlink, local_path, total,
+                                           concurrency=16, progress=progress)
+                except CloudError:
+                    if backend == "aria2c":
+                        raise
+                    logger.warning("aria2c 不可用，回退 requests 流式下载")
+            return self._download_from_url(_pre_dlink, local_path, progress=progress)
 
         # ── 策略 1：transfer 路径（官方合规）─────────────────────────
         try:
@@ -868,14 +1043,24 @@ class BaiduProvider:
         except CloudError as exc:
             transfer_err = exc  # 保存错误信息，用于策略 2 失败时报告
 
-        # ── 策略 2：直链下载（绕过 transfer）──────────────────────────
+        # ── 策略 2：直链 + aria2c 高速下载（绕过 transfer）──────────────
         if not fs_id:
             raise CloudError("未找到要下载的文件", "请重新列出分享内容后再试")
         try:
             dlink = self._share_dlink(meta, fs_id, share_url=share_url)
+            # ★ 用 aria2c 多线程下载（-x16 -s16），跑满带宽
+            total = int(meta.get("items", [{}])[0].get("size", 0) or 0)
+            if backend in ("auto", "aria2c") and _aria2c_path() is not None:
+                try:
+                    return _aria2c_download(dlink, local_path, total,
+                                           concurrency=16, progress=progress)
+                except CloudError:
+                    if backend == "aria2c":
+                        raise
+                    logger.warning("aria2c 不可用，回退 requests 流式下载")
             return self._download_from_url(dlink, local_path, progress=progress)
         except CloudError:
-            pass  # dlink 也失败 → 降级到策略 3
+            pass  # dlink 也失败 → 降级到策略3
 
         # ── 策略 3：浏览器降级（打开百度原生分享页，用户手动/浏览器下载）──
         raise CloudError(
@@ -901,6 +1086,151 @@ class BaiduProvider:
 # --------------------------------------------------------------------------- #
 # 百度分享 / 令牌相关模块级常量与本地存储
 # --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# 百度扫码登录（自动获取 BDUSS，免去手动复制 Cookie 的复杂步骤）
+# --------------------------------------------------------------------------- #
+import threading as _threading
+
+_BAIDU_QR_SESSIONS: "dict" = {}
+_BAIDU_QR_LOCK = _threading.Lock()
+
+
+def baidu_qr_create() -> dict:
+    """生成百度网盘扫码登录二维码，返回 {sign, qrcode_url}。"""
+    import re as _re
+    import time as _time
+
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/131.0.0.0 Safari/537.36",
+        "Accept-Encoding": "identity",
+    })
+    tt = int(_time.time() * 1000)
+    r = s.get(
+        "https://passport.baidu.com/v2/api/getqrcode",
+        params={"lp": "pc", "qrloginfrom": "pc", "logPage": "pcLogin",
+                "tpl": "netdisk", "apiver": "v3", "tt": tt},
+        timeout=15,
+    )
+    try:
+        d = r.json()
+    except ValueError:
+        raise CloudError("获取登录二维码失败", "响应无法解析")
+    sign = d.get("sign")
+    if not sign:
+        raise CloudError("获取登录二维码失败", str(d)[:200])
+    imgurl = d.get("imgurl") or ""
+    qrcode_url = imgurl if imgurl.startswith("http") else "https://" + imgurl.lstrip("/")
+    with _BAIDU_QR_LOCK:
+        _BAIDU_QR_SESSIONS[sign] = s
+    return {"sign": sign, "qrcode_url": qrcode_url}
+
+
+def baidu_qr_poll(sign: str) -> dict:
+    """长轮询扫码状态；用户确认后自动兑换 BDUSS 并存盘。返回 {status, ...}。"""
+    import re as _re
+    import json as _json
+    import time as _time
+
+    with _BAIDU_QR_LOCK:
+        s = _BAIDU_QR_SESSIONS.get(sign)
+    if not s:
+        return {"status": "expired"}
+    try:
+        r = s.get(
+            "https://passport.baidu.com/channel/unicast",
+            params={"channel_id": sign, "callback": "__cb__",
+                    "t": int(_time.time() * 1000)},
+            timeout=30,
+        )
+    except requests.Timeout:
+        return {"status": "waiting"}
+    except requests.RequestException as exc:
+        return {"status": "error", "msg": f"轮询异常: {exc}"}
+
+    m = _re.search(r"__cb__\((.*)\)", r.text, _re.S)
+    if not m:
+        return {"status": "waiting"}
+    try:
+        payload = _json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return {"status": "waiting"}
+    errno = payload.get("errno")
+    if errno == 1:
+        return {"status": "waiting"}
+    if errno == 0:
+        channel_v = payload.get("channel_v") or "{}"
+        try:
+            cv = _json.loads(channel_v) if isinstance(channel_v, str) else channel_v
+        except (ValueError, TypeError):
+            cv = {}
+        v = (cv or {}).get("v")
+        if not v:
+            return {"status": "waiting"}
+        try:
+            s.get(
+                "https://passport.baidu.com/v3/login/main/qrbdusslogin",
+                params={"bduss": v},
+                timeout=15,
+            )
+        except requests.RequestException:
+            pass
+        bduss = s.cookies.get("BDUSS")
+        if not bduss:
+            return {"status": "error", "msg": "未能从登录响应中获取 BDUSS"}
+        _save_bduss(bduss)
+        with _BAIDU_QR_LOCK:
+            _BAIDU_QR_SESSIONS.pop(sign, None)
+        return {"status": "confirmed"}
+    return {"status": "error", "msg": str(payload)[:200]}
+
+
+def _save_bduss(bduss: str, username: str = "") -> None:
+    """把 BDUSS 存盘（~/.vdl/baidu_bduss.txt，_get_bduss 读取），并记录登录信息。"""
+    import time as _time
+    import json as _json
+
+    d = Path.home() / ".vdl"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        bp = d / "baidu_bduss.txt"
+        bp.write_text((bduss or "").strip() + "\n", "utf-8")
+        try:
+            bp.chmod(0o600)
+        except OSError:
+            pass
+        info = {
+            "username": username,
+            "saved_at": int(_time.time()),
+            "bduss_masked": (bduss[:6] + "…" + bduss[-4:]) if len(bduss) > 12 else "***",
+        }
+        (d / "baidu_bduss_info.json").write_text(
+            _json.dumps(info, ensure_ascii=False), "utf-8")
+    except OSError as exc:
+        logger.warning("保存 BDUSS 失败: %s", exc)
+
+
+def baidu_qr_status() -> dict:
+    """返回当前 BDUSS 登录状态（供前端显示）。"""
+    import json as _json
+
+    p = Path.home() / ".vdl" / "baidu_bduss_info.json"
+    try:
+        if p.exists():
+            info = _json.loads(p.read_text("utf-8"))
+            return {
+                "logged_in": True,
+                "username": info.get("username", ""),
+                "saved_at": info.get("saved_at", 0),
+                "bduss_masked": info.get("bduss_masked", ""),
+            }
+    except (OSError, ValueError):
+        pass
+    return {"logged_in": False}
+
 
 BAIDU_SHARE_API = "https://pan.baidu.com/share"
 

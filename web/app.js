@@ -135,6 +135,7 @@
     // 百度网盘「分享链接下载」
     baiduShareUrl: $('baiduShareUrl'),
     baiduSharePwd: $('baiduSharePwd'),
+    baiduLoginStatus: $('baiduLoginStatus'),
     baiduShareListBtn: $('baiduShareListBtn'),
     baiduShareStatus: $('baiduShareStatus'),
     baiduShareList: $('baiduShareList'),
@@ -3451,6 +3452,344 @@
   el.baiduModalClose.addEventListener('click', () => el.baiduModal.close());
   el.baiduModal.addEventListener('click', (e) => { if (e.target === el.baiduModal) el.baiduModal.close(); });
   el.baiduModal.addEventListener('close', () => { baiduModalOpen = false; });
+
+  // ── 百度网盘下载（baiduPCS-Go 适配器，独立于 OAuth 版百度面板）──
+  const pcsModal = document.getElementById('pcsModal');
+  const pcsStatusEl = document.getElementById('pcsStatus');
+  const pcsCookiesEl = document.getElementById('pcsCookies');
+  const pcsLoginBtn = document.getElementById('pcsLoginBtn');
+  const pcsWhoEl = document.getElementById('pcsWho');
+  const pcsShareUrlEl = document.getElementById('pcsShareUrl');
+  const pcsSharePwdEl = document.getElementById('pcsSharePwd');
+  const pcsTransferBtn = document.getElementById('pcsTransferBtn');
+  const pcsLsBtn = document.getElementById('pcsLsBtn');
+  const pcsShareStatusEl = document.getElementById('pcsShareStatus');
+  const pcsListEl = document.getElementById('pcsList');
+  const pcsDlListEl = document.getElementById('pcsDlList');
+  const pcsModalClose = document.getElementById('pcsModalClose');
+  const pcsQrImgEl = document.getElementById('pcsQrImg');
+  const pcsQrStatusEl = document.getElementById('pcsQrStatus');
+  const pcsQrRefreshEl = document.getElementById('pcsQrRefresh');
+  let _pcsQrTimer = null;
+  let _pcsQrSign = null;
+  const _pcsPollers = {};
+
+  const pcsFetch = async (url, body) => {
+    const opt = { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' } };
+    if (body) opt.body = JSON.stringify(body);
+    try {
+      const r = await fetch(url, opt);
+      const text = await r.text();
+      // 安全解析 JSON：响应可能不是 JSON（如服务器错误返回 HTML）
+      try { return JSON.parse(text); }
+      catch (_) {
+        console.warn('[pcs] 非 JSON 响应', r.status, text.slice(0, 200));
+        return { ok: false, message: '服务器响应异常（HTTP ' + r.status + '）', _raw_slice: text.slice(0, 300) };
+      }
+    } catch (e) {
+      console.error('[pcs] fetch 失败', url, e);
+      throw e; // 向上抛给调用方 catch
+    }
+  };
+
+  async function pcsRefreshStatus() {
+    try {
+      const s = await pcsFetch('/api/pcs/status');
+      let html = '';
+      if (!s.binary_installed) {
+        html = '⚙️ baiduPCS-Go 尚未安装，即将自动下载…';
+        // 自动触发安装
+        setTimeout(() => pcsEnsure(), 500);
+      } else if (s.logged_in) {
+        html = '✅ 工具已就绪 ｜ 已登录：' + (s.who || '');
+      } else {
+        html = '✅ 工具已就绪 ｜ ⚠️ 尚未登录（请先完成第①步）';
+      }
+      pcsStatusEl.innerHTML = html;
+      pcsStatusEl.className = 'pcs-status' + (s.logged_in ? ' is-ok' : '');
+      if (s.logged_in) { pcsWhoEl.textContent = '已登录 ✓'; pcsWhoEl.style.color = '#07c160'; }
+      return s;
+    } catch (e) {
+      // 网络或解析错误时，静默提示并尝试安装（首次使用最常见的原因是二进制不存在）
+      pcsStatusEl.textContent = '正在初始化 baiduPCS-Go…';
+      pcsStatusEl.className = 'pcs-status';
+      setTimeout(() => pcsEnsure(), 800);
+      return null;
+    }
+  }
+
+  // 确保二进制已安装；未安装则先下载（带进度）
+  async function pcsEnsure() {
+    try { var s = await pcsFetch('/api/pcs/status'); } catch(e) { s = {}; }
+    if (s.binary_installed) return true;
+    pcsStatusEl.textContent = '正在下载 baiduPCS-Go（首次约 30MB，请稍候）…';
+    pcsStatusEl.className = 'pcs-status';
+    try {
+      const r = await pcsFetch('/api/pcs/install', {});
+      await pcsRefreshStatus();
+      if (!r.ok) {
+        pcsStatusEl.textContent = '安装失败：' + (r.message || '未知');
+        pcsStatusEl.className = 'pcs-status is-err';
+        return false;
+      }
+      return true;
+    } catch(e2) {
+      pcsStatusEl.textContent = '安装请求失败：' + e2.message;
+      pcsStatusEl.className = 'pcs-status is-err';
+      return false;
+    }
+  }
+
+  const pcsOpenWebBtn = document.getElementById('pcsOpenWebBtn');
+  if (pcsOpenWebBtn) {
+    pcsOpenWebBtn.addEventListener('click', () => {
+      const url = 'https://pan.baidu.com/';
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+        window.pywebview.api.open_external(url);
+      } else {
+        window.open(url, '_blank');
+      }
+    });
+  }
+
+  // ── 扫码登录（二维码）──
+  function pcsStopQr() {
+    if (_pcsQrTimer) { clearInterval(_pcsQrTimer); _pcsQrTimer = null; }
+  }
+
+  async function pcsStartQr() {
+    pcsStopQr();
+    _pcsQrSign = null;
+    if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '正在生成二维码…'; pcsQrStatusEl.className = 'pcs-qr-status'; }
+    if (pcsQrImgEl) pcsQrImgEl.classList.add('is-hidden');
+    try {
+      const r = await pcsFetch('/api/pcs/qr/gen');
+      if (!r.ok) {
+        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '生成失败：' + (r.message || r.error || '未知'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
+        return;
+      }
+      _pcsQrSign = r.sign;
+      if (pcsQrImgEl) { pcsQrImgEl.src = r.img; pcsQrImgEl.classList.remove('is-hidden'); }
+      if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '请用手机百度网盘 App 扫码'; pcsQrStatusEl.className = 'pcs-qr-status'; }
+      _pcsQrTimer = setInterval(pcsPollQr, 2500);
+    } catch (e) {
+      if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '生成二维码出错：' + e.message; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
+    }
+  }
+
+  async function pcsPollQr() {
+    if (!_pcsQrSign) return;
+    try {
+      const r = await pcsFetch('/api/pcs/qr/poll?sign=' + encodeURIComponent(_pcsQrSign));
+      const st = r.status;
+      if (st === 'waiting') {
+        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '等待扫码…'; pcsQrStatusEl.className = 'pcs-qr-status'; }
+      } else if (st === 'scanned') {
+        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '已扫码，请在手机上确认'; pcsQrStatusEl.className = 'pcs-qr-status'; }
+      } else if (st === 'expired') {
+        pcsStopQr();
+        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '二维码已过期，请点「刷新二维码」'; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
+      } else if (st === 'confirmed') {
+        pcsStopQr();
+        const login = r.login || {};
+        if (login.ok) {
+          if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '✓ 登录成功'; pcsQrStatusEl.className = 'pcs-qr-status is-ok'; }
+          if (pcsWhoEl) { pcsWhoEl.textContent = '已登录 ✓'; pcsWhoEl.style.color = '#07c160'; }
+          await pcsRefreshStatus();
+        } else {
+          if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '✗ ' + (login.message || '登录失败'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; pcsQrStatusEl.title = login.raw || ''; }
+        }
+      } else if (st === 'error') {
+        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = r.message || '轮询出错'; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
+      }
+    } catch (e) {
+      if (pcsQrStatusEl) pcsQrStatusEl.textContent = '连接中…';
+    }
+  }
+
+  if (pcsQrRefreshEl) pcsQrRefreshEl.addEventListener('click', pcsStartQr);
+
+  // 新增：账号密码登录元素
+  const pcsUsernameEl = document.getElementById('pcsUsername');
+  const pcsPasswordEl = document.getElementById('pcsPassword');
+  const pcsCookieLoginBtn = document.getElementById('pcsCookieLoginBtn');
+
+  // 🔑 主登录按钮（账号密码）
+  pcsLoginBtn.addEventListener('click', async () => {
+    const username = (pcsUsernameEl && pcsUsernameEl.value) || '';
+    const password = (pcsPasswordEl && pcsPasswordEl.value) || '';
+    if (!username || !password) { pcsWhoEl.textContent = '请输入百度账号和密码'; pcsWhoEl.style.color = '#e64340'; return; }
+
+    if (!(await pcsEnsure())) return;
+    pcsLoginBtn.disabled = true;
+    pcsLoginBtn.textContent = '登录中…';
+    try {
+      const r = await pcsFetch('/api/pcs/login-password', { username, password });
+      if (r.ok) {
+        pcsWhoEl.textContent = '✓ ' + (r.message || '登录成功');
+        pcsWhoEl.style.color = '#07c160';
+        pcsWhoEl.title = '';
+      } else {
+        pcsWhoEl.textContent = '✗ ' + (r.message || '失败');
+        pcsWhoEl.style.color = '#e64340';
+        pcsWhoEl.title = r.raw || '';
+      }
+      await pcsRefreshStatus();
+    } catch (e) {
+      console.error('[pcs login] 异常:', e);
+      pcsWhoEl.textContent = '请求异常：' + (e.message || e);
+      pcsWhoEl.style.color = '#e64340';
+    } finally {
+      pcsLoginBtn.disabled = false; pcsLoginBtn.textContent = '🔑 登录';
+    }
+  });
+
+  // Cookie 登录（高级备选）
+  if (pcsCookieLoginBtn) {
+    pcsCookieLoginBtn.addEventListener('click', async () => {
+      const raw = (pcsCookiesEl && pcsCookiesEl.value.trim()) || '';
+      if (!raw) { pcsWhoEl.textContent = '请先粘贴 Cookie / BDUSS'; pcsWhoEl.style.color = '#e64340'; return; }
+      if (!(await pcsEnsure())) return;
+      pcsCookieLoginBtn.disabled = true;
+      pcsCookieLoginBtn.textContent = '登录中…';
+      try {
+        const r = await pcsFetch('/api/pcs/login', { cookies: raw });
+        if (r.ok) {
+          pcsWhoEl.textContent = '✓ ' + (r.message || '登录成功');
+          pcsWhoEl.style.color = '#07c160';
+        } else {
+          pcsWhoEl.textContent = '✗ ' + (r.message || '失败');
+          pcsWhoEl.style.color = '#e64340';
+          pcsWhoEl.title = r.raw || '';
+        }
+        await pcsRefreshStatus();
+      } catch (e) {
+        pcsWhoEl.textContent = '异常：' + e.message; pcsWhoEl.style.color = '#e64340';
+      } finally {
+        pcsCookieLoginBtn.disabled = false; pcsCookieLoginBtn.textContent = '用 Cookie 登录';
+      }
+    });
+  }
+
+  // 回车键触发登录
+  [pcsUsernameEl, pcsPasswordEl].forEach(el => {
+    if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') pcsLoginBtn.click(); });
+  });
+
+  async function pcsRenderList() {
+    const r = await pcsFetch('/api/pcs/ls', { path: '/' });
+    if (r.ok && r.items && r.items.length) {
+      pcsListEl.innerHTML = r.items.map((it) => {
+        const sz = it.size ? `（${(it.size / 1048576).toFixed(1)} MB）` : (it.is_dir ? '（目录）' : '');
+        const path = '/' + it.name;
+        return `<div class="baidu-list-item"><span class="bi-name">${it.name}${sz}</span>` +
+          `<button type="button" class="btn btn-sm pcs-dl-btn" data-path="${encodeURIComponent(path)}" data-name="${encodeURIComponent(it.name)}">下载</button></div>`;
+      }).join('');
+    } else if (r.raw) {
+      pcsListEl.innerHTML = `<pre class="pcs-raw">${pcsEscapeHtml(r.raw)}</pre>`;
+    } else {
+      pcsListEl.innerHTML = '<p class="baidu-empty">列出为空或失败。</p>';
+    }
+  }
+
+  pcsTransferBtn.addEventListener('click', async () => {
+    const url = pcsShareUrlEl.value.trim();
+    const pwd = pcsSharePwdEl.value.trim();
+    if (!url) { pcsShareStatusEl.textContent = '请先粘贴分享链接'; pcsShareStatusEl.className = 'pcs-status is-err'; return; }
+    if (!(await pcsEnsure())) return;
+    pcsTransferBtn.disabled = true; pcsTransferBtn.textContent = '转存中…';
+    pcsShareStatusEl.textContent = '正在转存到你的网盘…'; pcsShareStatusEl.className = 'pcs-status';
+    try {
+      const r = await pcsFetch('/api/pcs/share/transfer', { url, pwd });
+      if (r.ok) {
+        pcsShareStatusEl.textContent = '✓ 转存成功，正在列出文件…'; pcsShareStatusEl.className = 'pcs-status is-ok';
+        await pcsRenderList();
+      } else {
+        pcsShareStatusEl.textContent = '✗ 转存失败：' + (r.message || '未知'); pcsShareStatusEl.className = 'pcs-status is-err';
+        if (r.raw) console.log('[pcs transfer]', r.raw);
+      }
+    } catch (e) {
+      pcsShareStatusEl.textContent = '出错：' + e.message; pcsShareStatusEl.className = 'pcs-status is-err';
+    } finally {
+      pcsTransferBtn.disabled = false; pcsTransferBtn.textContent = '转存';
+    }
+  });
+
+  pcsLsBtn.addEventListener('click', () => pcsRenderList());
+
+  const pcsManualPathEl = document.getElementById('pcsManualPath');
+  const pcsManualDlBtn = document.getElementById('pcsManualDlBtn');
+  pcsManualDlBtn.addEventListener('click', () => {
+    const path = (pcsManualPathEl.value || '').trim();
+    if (!path) { pcsShareStatusEl.textContent = '请填写网盘路径'; pcsShareStatusEl.className = 'pcs-status is-err'; return; }
+    const name = path.split('/').pop() || 'pcs_file';
+    startPcsDownload(path, name, pcsManualDlBtn);
+  });
+
+  pcsListEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.pcs-dl-btn');
+    if (!btn) return;
+    const path = decodeURIComponent(btn.dataset.path);
+    const name = decodeURIComponent(btn.dataset.name);
+    startPcsDownload(path, name, btn);
+  });
+
+  function startPcsDownload(path, name, btn) {
+    pcsFetch('/api/pcs/download', { path, name }).then((r) => {
+      if (!r.ok || !r.task_id) {
+        pcsShareStatusEl.textContent = '提交下载失败：' + (r.detail || '未知'); pcsShareStatusEl.className = 'pcs-status is-err';
+        return;
+      }
+      const tid = r.task_id;
+      addPcsDlItem(tid, name);
+      pollPcsTask(tid);
+    });
+  }
+
+  function addPcsDlItem(tid, name) {
+    const empty = pcsDlListEl.querySelector('.baidu-empty');
+    if (empty) empty.remove();
+    const div = document.createElement('div');
+    div.className = 'baidu-dl-item';
+    div.id = 'pcs-dl-' + tid;
+    div.innerHTML = `<span class="di-name">${name}</span><span class="di-progress">排队中…</span>`;
+    pcsDlListEl.appendChild(div);
+  }
+
+  function pollPcsTask(tid) {
+    if (_pcsPollers[tid]) clearInterval(_pcsPollers[tid]);
+    _pcsPollers[tid] = setInterval(async () => {
+      try {
+        const t = await pcsFetch('/api/pcs/task/' + tid);
+        const div = document.getElementById('pcs-dl-' + tid);
+        if (!div) return;
+        const p = t.progress || {};
+        let txt = '';
+        if (t.status === 'downloading') txt = (p.percent ? p.percent.toFixed(1) + '% ' : '') + (p.line ? p.line.slice(0, 80) : '下载中…');
+        else if (t.status === 'done') txt = '✓ ' + (t.message || '完成');
+        else if (t.status === 'failed') txt = '✗ ' + (t.message || t.last || '失败');
+        else txt = t.status || '处理中…';
+        div.querySelector('.di-progress').textContent = txt;
+        if (t.status === 'done' || t.status === 'failed') {
+          clearInterval(_pcsPollers[tid]);
+          div.querySelector('.di-progress').style.color = t.status === 'done' ? '#07c160' : '#e64340';
+        }
+      } catch (e) { /* ignore */ }
+    }, 1000);
+  }
+
+  function pcsEscapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  document.getElementById('tabPcs').addEventListener('click', () => {
+    if (typeof pcsModal.showModal === 'function') pcsModal.showModal();
+    else pcsModal.setAttribute('open', '');
+    pcsRefreshStatus();
+    pcsStartQr();
+  });
+  pcsModalClose.addEventListener('click', () => { pcsStopQr(); pcsModal.close(); });
+  pcsModal.addEventListener('click', (e) => { if (e.target === pcsModal) pcsModal.close(); });
   el.baiduDriveAuthBtn.addEventListener('click', () => {
     if (!node.baiduAuthUrl) { el.baiduDriveStatus.textContent = '该实例未启用百度网盘'; return; }
     openBaiduAuthInPage();
@@ -3613,35 +3952,139 @@
     renderShareList(url, pwd, '', false);
   });
 
-  function startBaiduShareDownload(item) {
-    if (!baiduToken) { el.baiduShareStatus.textContent = '请先点「授权百度网盘」完成授权'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
-    el.baiduShareStatus.textContent = '已提交，正在转存…';
-    el.baiduShareStatus.className = 'baidu-share-status';
-    fetch('/api/cloud/baidu/share/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: item.url, pwd: item.pwd, path: item.path, name: item.name, token: baiduToken,
-        // 传入 list 阶段的 verify 结果，后端跳过重复 verify
-        sekey: item._sekey || '',
-        share_id: item._share_id != null ? item._share_id : null,
-        uk: item._uk != null ? item._uk : null,
-        fs_id: item.fs_id != null ? item.fs_id : null,
-      }),
-    }).then((r) => r.json()).then((data) => {
-      if (data.task_id) {
-        addBaiduDlItem(data.task_id, item.name);
-        pollBaiduTask(data.task_id);
-        el.baiduShareStatus.textContent = '已加入下载队列：' + item.name;
-        el.baiduShareStatus.className = 'baidu-share-status';
-      } else if (data.detail) {
-        el.baiduShareStatus.textContent = '下载失败：' + data.detail;
-        el.baiduShareStatus.className = 'baidu-share-status is-err';
+  // ── 百度网盘登录（唯一入口：app 内 WebView 真实登录）──
+  // 已移除扫码登录入口：扫码的 BDUSS 与下载分享必需的 WebView 登录态是两回事，
+  // 保留会让用户混淆（之前用户已踩坑）。现在只需在 app 内 WebView 登录一次，
+  // cookie 持久化在 WKWebsiteDataStore，重启不丢，自动用于后续下载。
+  async function refreshBaiduLoginStatus() {
+    try {
+      const r = await fetch('/api/cloud/baidu/qr/status');
+      const d = await r.json();
+      // 仅显示用户名（如果 OAuth 授权过），不再误显示为「app 内登录」状态
+      if (d.logged_in && d.username) {
+        el.baiduLoginStatus.textContent = '（账号：' + d.username + '）';
+        el.baiduLoginStatus.style.color = '#888';
+      } else {
+        el.baiduLoginStatus.textContent = '';
       }
-    }).catch((err) => {
-      el.baiduShareStatus.textContent = '下载出错：' + err.message;
-      el.baiduShareStatus.className = 'baidu-share-status is-err';
-    });
+    } catch (e) { /* ignore */ }
+  }
+
+  // app 内 WebView 真实登录（零扩展依赖，登录态持久化）
+  const baiduAppLoginBtn = document.getElementById('baiduAppLoginBtn');
+  if (baiduAppLoginBtn) baiduAppLoginBtn.addEventListener('click', async () => {
+    if (!(window.pywebview && window.pywebview.api && window.pywebview.api.baidu_login)) {
+      alert('此功能仅在桌面版 VideoDownloader.app 内可用'); return;
+    }
+    baiduAppLoginBtn.disabled = true;
+    const _origText = baiduAppLoginBtn.textContent;
+    baiduAppLoginBtn.textContent = '正在打开登录窗口…';
+    try {
+      const r = await window.pywebview.api.baidu_login();
+      // pywebview 6.x 桥接可能返回字符串（未自动 JSON.parse）—— 兼容处理
+      let info = r;
+      if (typeof r === 'string') {
+        try { info = JSON.parse(r); } catch { info = null; }
+      }
+      const ok = !!(info && (info.ok || info.logged));
+      el.baiduLoginStatus.textContent = ok ? '✓ 登录成功（已自动用于下载）' : '⚠ 登录未完成，请重试';
+      el.baiduLoginStatus.style.color = ok ? '#07c160' : '#e64340';
+    } catch (e) {
+      el.baiduLoginStatus.textContent = '⚠ 登录出错：' + e.message;
+      el.baiduLoginStatus.style.color = '#e64340';
+    } finally {
+      baiduAppLoginBtn.disabled = false;
+      baiduAppLoginBtn.textContent = _origText;
+    }
+  });
+  refreshBaiduLoginStatus();
+
+  async function startBaiduShareDownload(item) {
+    if (!baiduToken) { el.baiduShareStatus.textContent = '请先点「授权百度网盘」完成授权'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
+
+    // ★ 策略 0：通过 WebView 注入 JS 预取 dlink（最可靠，等同油猴原理）
+    const _doDownload = (prefetchedDlink) => {
+      el.baiduShareStatus.textContent = prefetchedDlink ? '已获取直链，正在下载…' : '已提交，正在转存…';
+      el.baiduShareStatus.className = 'baidu-share-status';
+      fetch('/api/cloud/baidu/share/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: item.url, pwd: item.pwd, path: item.path, name: item.name, token: baiduToken,
+          sekey: item._sekey || '',
+          share_id: item._share_id != null ? item._share_id : null,
+          uk: item._uk != null ? item._uk : null,
+          fs_id: item.fs_id != null ? item.fs_id : null,
+          bduss: '',  // 高级 BDUSS 输入已删除，留字段兼容后端
+          dlink: prefetchedDlink || '',  // ★ WebView 预取的直链（后端策略0）
+        }),
+      }).then((r) => r.json()).then((data) => {
+        if (data.task_id) {
+          addBaiduDlItem(data.task_id, item.name);
+          pollBaiduTask(data.task_id);
+          el.baiduShareStatus.textContent = '已加入下载队列：' + item.name;
+          el.baiduShareStatus.className = 'baidu-share-status';
+        } else if (data.detail) {
+          el.baiduShareStatus.textContent = '下载失败：' + data.detail;
+          el.baiduShareStatus.className = 'baidu-share-status is-err';
+        }
+      }).catch((err) => {
+        el.baiduShareStatus.textContent = '下载出错：' + err.message;
+        el.baiduShareStatus.className = 'baidu-share-status is-err';
+      });
+    };
+
+    // 尝试通过 app 内 WebView 获取直链（仅桌面版有 pywebview.api）
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_baidu_dlink && item.fs_id) {
+      el.baiduShareStatus.textContent = '正在通过 app 内浏览器获取下载直链…';
+      try {
+        const callGetDlink = async () => {
+          const result = await window.pywebview.api.get_baidu_dlink(item.url, item.fs_id, item.pwd || '');
+          // pywebview 6.x 桥接已自动 JSON.parse，result 可能是对象或字符串，兼容两种
+          if (typeof result === 'object' && result !== null) return result;
+          try { return JSON.parse(result); } catch { return { ok: false, error: '解析失败' }; }
+        };
+        let info = await callGetDlink();
+        if (info && info.ok && info.dlink) {
+          return _doDownload(info.dlink);  // ★ 拿到直链 → 策略0
+        }
+        // 未登录 / 登录态失效 / 无登录cookie → 静默打开 app 内登录窗口，登录成功后自动重试一次。
+        // 不显示红色错误：用户体验上等价于「下载需要先登录一次」，自动弹出窗口就好。
+        if (info && (info.error === 'NOT_LOGGED_IN' || info.error === 'NO_LOGIN_COOKIE')) {
+          el.baiduShareStatus.textContent = info.error === 'NO_LOGIN_COOKIE'
+            ? '检测到未登录百度网盘，请在弹出的窗口完成登录…'
+            : '首次下载需登录百度网盘，请在弹出的窗口完成登录…';
+          el.baiduShareStatus.className = 'baidu-share-status';
+          let loginRes = null;
+          try { loginRes = await window.pywebview.api.baidu_login(); } catch (le) { loginRes = null; }
+          // 兼容桥接可能返回字符串：typeof + JSON.parse fallback
+          let loginInfo = loginRes;
+          if (typeof loginRes === 'string') {
+            try { loginInfo = JSON.parse(loginRes); } catch { loginInfo = null; }
+          }
+          if (loginInfo && (loginInfo.ok || loginInfo.logged)) {
+            el.baiduShareStatus.textContent = '登录成功，正在获取直链…';
+            el.baiduShareStatus.className = 'baidu-share-status';
+            const info2 = await callGetDlink();
+            if (info2 && info2.ok && info2.dlink) {
+              return _doDownload(info2.dlink);
+            }
+            info = info2 || info;
+          }
+        }
+        // 其它错误：提示，不再降级浏览器
+        const msg = (info && info.message) || ('WebView 获取失败：' + ((info && info.error) || '未知'));
+        el.baiduShareStatus.textContent = '⚠ ' + msg;
+        el.baiduShareStatus.className = 'baidu-share-status is-err';
+        return;  // ★ 停止，绝不回退浏览器
+      } catch (e) {
+        el.baiduShareStatus.textContent = '⚠ WebView 获取异常：' + e.message;
+        el.baiduShareStatus.className = 'baidu-share-status is-err';
+        return;
+      }
+    }
+    // 回退：无 WebView / 无 fs_id → 走原有 transfer/dlink/浏览器降级链路
+    _doDownload('');
   }
 
   function _fmtSize(n) {

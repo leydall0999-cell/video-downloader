@@ -725,8 +725,48 @@ img { max-width: 100%; display: block; }
 .baidu-share-row .adv-input-pwd { flex: 0 0 140px; }
 .baidu-share-status { font-size: .85rem; color: var(--text-mute); margin: .5rem 0; min-height: 1.1rem; }
 .baidu-share-status.is-err { color: var(--danger); }
+.baidu-bduss-row { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .3rem 0; padding: .35rem .5rem; background: var(--bg-card, rgba(0,0,0,.03)); border-radius: 6px; font-size: .78rem; }
+.baidu-bduss-row label { color: var(--text-mute); white-space: nowrap; font-size: .78rem; }
+.baidu-bduss-row .adv-input { flex: 1 1 200px; font-size: .78rem; }
+.baidu-bduss-row .btn-outline { flex: 0 0 auto; font-size: .75rem; padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; cursor: pointer; }
 .baidu-share-list { max-height: 280px; }
 .baidu-share-list .baidu-row .dl button:disabled { opacity: .45; cursor: not-allowed; }
+.baidu-login-status { font-size: .76rem; color: var(--text-mute); }
+.baidu-login-status.is-ok { color: var(--success); }
+.baidu-bduss-manual { width: 100%; margin-top: .25rem; font-size: .76rem; }
+.baidu-bduss-manual summary { cursor: pointer; color: var(--text-mute); user-select: none; }
+.baidu-bduss-manual-inner { display: flex; gap: .4rem; margin-top: .35rem; align-items: center; }
+.baidu-bduss-manual-inner .adv-input { flex: 1 1 200px; font-size: .78rem; }
+
+/* ── baiduPCS-Go 面板 ── */
+.pcs-status { font-size: .85rem; color: var(--text-mute); margin: .4rem 0 .2rem; padding: .4rem .6rem; background: var(--bg-card, rgba(0,0,0,.03)); border-radius: 6px; }
+.pcs-status.is-ok { color: var(--success); }
+.pcs-status.is-err { color: var(--danger); }
+.pcs-block { margin-top: .6rem; }
+.pcs-block h3 { font-size: .92rem; margin: .4rem 0 .3rem; }
+.pcs-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .3rem 0; }
+.pcs-row .adv-input { flex: 1 1 160px; }
+.pcs-who { font-size: .82rem; color: var(--text-mute); }
+.pcs-qr-wrap { display: flex; flex-direction: column; align-items: center; gap: .5rem; margin: .4rem 0; }
+.pcs-qr-img { width: 220px; height: 220px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 6px; object-fit: contain; }
+.pcs-qr-img.is-hidden { display: none; }
+.pcs-qr-status { font-size: .85rem; color: var(--text-mute); text-align: center; min-height: 1.2em; }
+.pcs-qr-status.is-ok { color: var(--success); }
+.pcs-qr-status.is-err { color: var(--danger); }
+.pcs-raw { max-height: 220px; overflow: auto; background: #0f172a; color: #c8d3e0; padding: .6rem; border-radius: 6px; font-size: .72rem; white-space: pre-wrap; word-break: break-all; }
+.baidu-list-item { display: flex; align-items: center; gap: .6rem; padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
+.baidu-list-item:last-child { border-bottom: none; }
+.baidu-list-item .bi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+.pcs-dl-btn { flex: none; }
+.baidu-bduss-manual-inner .btn-outline { flex: 0 0 auto; font-size: .75rem; padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; cursor: pointer; }
+/* 扫码登录弹窗 */
+.baidu-qr-modal .modal-card { max-width: 360px; }
+.baidu-qr-box { text-align: center; padding: 1rem 0; }
+.baidu-qr-box img { width: 220px; height: 220px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.baidu-qr-status { margin-top: .6rem; font-size: .82rem; color: var(--text-mute); }
+.baidu-qr-status.is-ok { color: var(--success); }
+.baidu-qr-status.is-err { color: var(--danger); }
+.baidu-qr-modal .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .5rem; }
 
 /* ---------------- 媒体库（桌面版功能） ---------------- */
 .tabs {
