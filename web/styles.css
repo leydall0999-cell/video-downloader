@@ -262,6 +262,8 @@ img { max-width: 100%; display: block; }
 .cookie-help-steps { margin: .3rem 0 .3rem 1.1rem; padding: 0; }
 .cookie-help-steps li { margin: .25rem 0; }
 .cookie-help-note { font-size: .76rem; color: #94a0b4; margin: .4rem 0; }
+.cookie-boundary { margin: .5rem 0; padding: .5rem .7rem; background: rgba(255, 179, 71, .12);
+  border-left: 3px solid #ffb347; border-radius: 4px; color: var(--text); line-height: 1.65; }
 .cookie-help-copy { font-size: .76rem; font-weight: 600; color: var(--brand-strong); background: rgba(79, 70, 229, .08); border: 1px solid rgba(79, 70, 229, .25); border-radius: var(--radius-sm); padding: .35rem .7rem; cursor: pointer; transition: background .15s; }
 .cookie-help-copy:hover { background: rgba(79, 70, 229, .16); }
 .cookie-help-copy:active { transform: translateY(1px); }
