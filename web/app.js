@@ -3809,6 +3809,11 @@
     else pcsModal.setAttribute('open', '');
     pcsRefreshStatus();
     pcsStartQr();
+    // 显示构建版本信息（防止跑错旧版）
+    pcsFetch('/api/pcs/build-info').then(bi => {
+      const el = document.getElementById('pcsBuildInfo');
+      if (el) el.textContent = `· ${bi.hash || '?'} · ${bi.time || ''}`;
+    }).catch(() => {});
   });
   pcsModalClose.addEventListener('click', () => { pcsStopQr(); pcsModal.close(); });
   pcsModal.addEventListener('click', (e) => { if (e.target === pcsModal) pcsModal.close(); });

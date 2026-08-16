@@ -4816,6 +4816,30 @@ def pcs_status() -> dict:
         return {"binary_installed": False, "error": str(e)}
 
 
+@app.get("/api/pcs/build-info")
+def pcs_build_info() -> dict:
+    """返回构建信息（git 哈希 + 构建时间），用于界面显示版本号防止跑错旧版。"""
+    import json, os
+    _info_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".build_info.json")
+    default = {"hash": "unknown", "time": "unknown", "version": "?"}
+    try:
+        if os.path.exists(_info_path):
+            with open(_info_path, "r") as f:
+                return json.load(f)
+        # fallback: 尝试从 git 读取
+        import subprocess
+        try:
+            h = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                        stderr=subprocess.DEVNULL, timeout=5).decode().strip()
+            default["hash"] = h
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return default
+
+
 @app.post("/api/pcs/install")
 def pcs_install() -> dict:
     if baidu_pcs is None:

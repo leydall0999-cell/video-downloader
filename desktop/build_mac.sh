@@ -263,6 +263,14 @@ else
   echo "   ⚠️ baiduPCS-Go 未预打包（用户首次使用时从 GitHub 下载）"
 fi
 
+# ── 写入构建信息（版本号显示用）──
+_BUILD_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+_BUILD_TIME="$(date '+%m-%d %H:%M')"
+cat > "$REPO/server/.build_info.json" <<BUILDINFO
+{"hash": "${_BUILD_HASH}", "time": "${_BUILD_TIME}"}
+BUILDINFO
+echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
+
 "$VENV/bin/pyinstaller" \
   --name VideoDownloader \
   --windowed \
