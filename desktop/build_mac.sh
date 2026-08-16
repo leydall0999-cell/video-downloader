@@ -282,6 +282,7 @@ echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
   --add-data "$REPO/web:web" \
   --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
   --add-data "$REPO/server:server" \
+  --add-data "$REPO/server/.build_info.json:server" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import cookie_cache \

@@ -87,15 +87,14 @@ def _parse_unicast(body: str) -> dict:
 def qr_poll(sign: str) -> dict:
     """轮询扫码状态。confirmed 时自动完成登录。
 
-    注意：channel/unicast 是百度服务端的**长轮询**接口——服务端会保持
-    HTTP 连接打开，直到扫码状态变化（scanned/confirmed）或服务端自身超时。
-    因此客户端必须给足 timeout，且把 ReadTimeout 当作「尚未扫码、继续等待」
-    处理，而不是上报成错误。
+    策略：unicast 是百度长轮询接口，服务端可能挂起连接 30s+。
+    用共享 session（保留 Set-Cookie 中的 BDUSS）+ 短超时(12s)，
+    超时/异常一律返回 waiting（前端会自动 1s 后重试）。
     """
     with _lock:
         if _STATE.get("sign") != sign or _STATE.get("session") is None:
             return {"status": "expired", "message": "二维码已失效，请刷新"}
-        s = _STATE["session"]
+        s = _STATE["session"]  # 共享 session：保留 unicast 下发的 Set-Cookie(BDUSS)
         gid = _STATE["gid"]
         if _STATE.get("confirmed"):
             return {"status": "confirmed", "login": _STATE.get("login_result")}
@@ -103,17 +102,11 @@ def qr_poll(sign: str) -> dict:
         cb = "bd__cbs__" + str(int(time.time() * 1000))[-8:]
         params = {"channel_id": sign, "tpl": "netdisk_web", "gid": gid,
                   "callback": cb, "tt": str(int(time.time() * 1000))}
-        # 长轮询超时：百度服务端可能挂起连接 30s+ 直到状态变化。
-        # 60s 覆盖常见服务端长轮询周期；触发 ReadTimeout 视为「尚未扫码」继续等待。
-        try:
-            r = s.get(UNICAST, params=params, timeout=60)
-        except Exception as to:  # ReadTimeout / ConnectTimeout 等网络超时
-            if "timeout" in str(type(to)).lower() or "timeout" in str(to).lower():
-                return {"status": "waiting", "message": "等待扫码…"}
-            raise
+        # connect=5s, read=12s：覆盖网络延迟但不会卡死
+        r = s.get(UNICAST, params=params, timeout=(5, 12))
         j = _parse_unicast(r.text)
-        errno = j.get("errno")
-        if errno == 404:
+        errno_val = j.get("errno")
+        if errno_val == 404:
             return {"status": "expired", "message": "二维码已过期，请刷新"}
         data = j.get("data") or {}
         status = str(data.get("status", "0"))
@@ -125,6 +118,11 @@ def qr_poll(sign: str) -> dict:
             return _finish_login(sign)
         return {"status": "unknown", "message": f"未知状态：{status}", "raw": j}
     except Exception as e:  # noqa: BLE001
+        err_type = type(e).__name__
+        # 所有超时/网络异常 → waiting（前端 1s 后自动重试）
+        if any(k in err_type.lower() for k in ("timeout", "connection", "socket")):
+            logger.debug("qr_poll 超时/网络异常（视为等待扫码）: %s", e)
+            return {"status": "waiting", "message": "等待扫码…"}
         logger.exception("qr_poll 异常")
         return {"status": "error", "message": f"轮询出错：{e}"}
 

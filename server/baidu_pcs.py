@@ -360,13 +360,16 @@ def login_by_password(username: str, password: str) -> dict:
 
 
 def who() -> dict:
-    """返回当前登录账号信息。"""
+    """返回当前登录账号信息。uid=0 视为未登录（无效凭证）。"""
     ensure_home()
     res = _run(["who"], timeout=30)
     combined = res.get("combined", res.get("stderr", ""))
     if not res["ok"]:
         return {"ok": False, "logged_in": False, "message": "未登录或查询失败", "raw": _tail(combined, 8)}
     txt = combined.strip()
+    uid = _extract_uid(txt)
+    if uid is not None and uid <= 0:
+        return {"ok": False, "logged_in": False, "message": f"凭证无效（uid={uid}），请重新登录", "raw": txt}
     return {"ok": True, "logged_in": True, "message": txt, "raw": txt}
 
 
