@@ -3813,7 +3813,11 @@
     pcsFetch('/api/pcs/build-info').then(bi => {
       const el = document.getElementById('pcsBuildInfo');
       if (el) el.textContent = `· ${bi.hash || '?'} · ${bi.time || ''}`;
-    }).catch(() => {});
+    }).catch((e) => {
+      const el = document.getElementById('pcsBuildInfo');
+      if (el) el.textContent = '· (build-info 不可用: ' + String(e).slice(0, 40) + ')';
+      console.error('[pcs] build-info fetch failed:', e);
+    });
   });
   pcsModalClose.addEventListener('click', () => { pcsStopQr(); pcsModal.close(); });
   pcsModal.addEventListener('click', (e) => { if (e.target === pcsModal) pcsModal.close(); });

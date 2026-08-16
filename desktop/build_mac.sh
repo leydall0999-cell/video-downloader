@@ -266,7 +266,7 @@ fi
 # ── 写入构建信息（版本号显示用）──
 _BUILD_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 _BUILD_TIME="$(date '+%m-%d %H:%M')"
-cat > "$REPO/server/.build_info.json" <<BUILDINFO
+cat > "$REPO/server/build_info.txt" <<BUILDINFO
 {"hash": "${_BUILD_HASH}", "time": "${_BUILD_TIME}"}
 BUILDINFO
 echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
@@ -282,7 +282,7 @@ echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
   --add-data "$REPO/web:web" \
   --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
   --add-data "$REPO/server:server" \
-  --add-data "$REPO/server/.build_info.json:server" \
+  --add-data "$REPO/server/build_info.txt:server" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import cookie_cache \

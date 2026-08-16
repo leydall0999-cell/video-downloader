@@ -4819,24 +4819,38 @@ def pcs_status() -> dict:
 @app.get("/api/pcs/build-info")
 def pcs_build_info() -> dict:
     """返回构建信息（git 哈希 + 构建时间），用于界面显示版本号防止跑错旧版。"""
-    import json, os
-    _info_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".build_info.json")
+    import json, os, sys
     default = {"hash": "unknown", "time": "unknown", "version": "?"}
-    try:
-        if os.path.exists(_info_path):
-            with open(_info_path, "r") as f:
-                return json.load(f)
-        # fallback: 尝试从 git 读取
-        import subprocess
+    # 尝试多个可能路径（PyInstaller 提取目录 / 开发目录 / Resources）
+    _candidates = []
+    _base = os.path.dirname(os.path.abspath(__file__))
+    for _name in ("build_info.txt", ".build_info.json"):
+        _candidates.append(os.path.join(_base, _name))
+        # PyInstaller onedir: 也尝试 sys._MEIPASS 下的 server/ 子目录
+        if getattr(sys, 'frozen', False):
+            _mei = getattr(sys, '_MEIPASS', None)
+            if _mei:
+                _candidates.append(os.path.join(_mei, "server", _name))
+                _candidates.append(os.path.join(_mei, _name))
+    for _p in _candidates:
         try:
-            h = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
-                                        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                        stderr=subprocess.DEVNULL, timeout=5).decode().strip()
-            default["hash"] = h
-        except Exception:
-            pass
+            if os.path.exists(_p):
+                with open(_p, "r") as _f:
+                    _data = json.load(_f)
+                    print(f"[build-info] OK from {_p} -> {_data}")
+                    return _data
+        except Exception as _e:
+            print(f"[build-info] read error {_p}: {_e}")
+    # fallback: 尝试从 git 读取
+    import subprocess
+    try:
+        h = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                    cwd=os.path.dirname(_base),
+                                    stderr=subprocess.DEVNULL, timeout=5).decode().strip()
+        default["hash"] = h
     except Exception:
         pass
+    print(f"[build-info] FALLBACK -> {default}, candidates={_candidates}")
     return default
 
 
