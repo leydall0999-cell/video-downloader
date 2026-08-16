@@ -1976,53 +1976,10 @@ class ConvertRequest(BaseModel):
     resolution: str = "original"
 
 
-@app.post("/api/convert")
-def create_convert(payload: ConvertRequest, request: Request) -> dict:
-    _check_rate_limit(request)
-    subscribed, free_used, free_daily = _check_convert_quota(request)
-    task = _require_task(payload.task_id)
-    if task.status != "completed" or not task.filepath or not task.filepath.exists():
-        raise HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
-    target = payload.target
-    if target not in CONVERT_TARGETS:
-        raise HTTPException(status_code=400, detail="不支持的目标格式")
-    job_id = uuid.uuid4().hex[:12]
-    ext = CONVERT_EXT[target]
-    out_path = CONVERT_DIR / f"{task.id}_conv_{job_id}.{ext}"
-    with CONVERT_LOCK:
-        CONVERT_JOBS[job_id] = {
-            "status": "running",
-            "out_path": str(out_path),
-            "error": "",
-            "filename": out_path.name,
-        }
-    executor.submit(_run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
-    return {
-        "job_id": job_id,
-        "status": "running",
-        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
-    }
 
 
-@app.get("/api/convert/{job_id}")
-def convert_status(job_id: str) -> dict:
-    job = CONVERT_JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="转换任务不存在")
-    return {"status": job["status"], "error": job.get("error", ""), "filename": job.get("filename", "")}
 
 
-@app.get("/api/convert/{job_id}/file")
-def convert_file(job_id: str) -> FileResponse:
-    job = CONVERT_JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="转换任务不存在")
-    if job["status"] != "completed":
-        raise HTTPException(status_code=409, detail="转换尚未完成")
-    out = Path(job["out_path"])
-    if not out.exists():
-        raise HTTPException(status_code=410, detail="转换文件已清理")
-    return FileResponse(path=str(out), filename=out.name, media_type="application/octet-stream")
 
 
 def _run_convert(job_id: str, src: str, target: str, resolution: str) -> None:
@@ -2103,38 +2060,6 @@ class OpenPathRequest(BaseModel):
     path: str = Field(default="", max_length=4096)
 
 
-@app.post("/api/fs/open")
-def fs_open(payload: OpenPathRequest) -> dict:
-    """在系统文件管理器中打开本地路径。
-
-    桌面版用户从浏览器里点「打开下载目录」→ 弹系统通知 / 调起 Finder。
-    仅允许打开 DOWNLOAD_DIR 及其子项，不开放任意路径（防误开系统关键目录）。
-    """
-    if sys.platform != "darwin" and sys.platform != "win32":
-        raise HTTPException(status_code=400, detail="该接口仅在桌面端可用")
-
-    raw = (payload.path or "").strip()
-    target = Path(raw).expanduser().resolve() if raw else DOWNLOAD_DIR.resolve()
-
-    # 白名单：必须在 DOWNLOAD_DIR 下（除非用户显式请求 DOWNLOAD_DIR 本身）
-    try:
-        target.relative_to(DOWNLOAD_DIR.resolve())
-    except ValueError:
-        if target != DOWNLOAD_DIR.resolve():
-            raise HTTPException(status_code=403, detail="只允许打开下载目录及其子路径")
-
-    if not target.exists():
-        raise HTTPException(status_code=404, detail=f"路径不存在：{target}")
-
-    try:
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", str(target)])
-        else:
-            subprocess.Popen(["explorer", str(target)])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"打开失败：{e}")
-
-    return {"opened": str(target), "platform": sys.platform}
 
 
 # --------------------------------------------------------------------------- #
@@ -2172,122 +2097,10 @@ class ScriptUpdateRequest(BaseModel):
     segments: list = Field(default_factory=list)  # [{start, end, narration, note, voice?}, ...]
 
 
-@app.post("/api/commentary")
-def create_commentary(payload: CommentaryRequest) -> dict:
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if COMMENTARY_MODE == "http":
-        if not COMMENTARY_ENDPOINT:
-            raise HTTPException(status_code=503, detail="解说 worker 未配置（VDL_COMMENTARY_MODE=http 但缺少 VDL_COMMENTARY_ENDPOINT）")
-    else:
-        if not COMMENTARY_DIR or not (COMMENTARY_DIR / "process.py").exists():
-            raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
-
-    src_path = _resolve_source(payload)
-
-    job_id = uuid.uuid4().hex[:12]
-    with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                   "steps": [], "logs": []}
-    executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
-                    trim_start=payload.trim_start, trim_end=payload.trim_end,
-                    mode=payload.mode, commentary_type=payload.commentary_type,
-                    highlight_source=payload.highlight_source,
-                    intro_highlight=payload.intro_highlight,
-                    skip_intro_outro=payload.skip_intro_outro,
-                    no_narrate_intro_outro=payload.no_narrate_intro_outro,
-                    retain_pct=payload.retain_pct, web=payload.web,
-                    one_click=payload.one_click,
-                    title=_commentary_title(payload, src_path),
-                    style=payload.style)
-    return {"job_id": job_id, "status": "running"}
 
 
-@app.post("/api/commentary/upload")
-def create_commentary_upload(
-    file: UploadFile = _FastAPIFile(...),
-    vertical: bool = Form(False),
-    voice: str = Form(""),
-    trim_start: float = Form(0.0),
-    trim_end: float = Form(0.0),
-    mode: str = Form("highlights"),
-) -> dict:
-    """上传本地视频 → 直接生成解说成片。"""
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in {".mp4", ".mkv", ".mov", ".webm", ".avi"}:
-        raise HTTPException(status_code=409, detail="请上传视频文件")
-    work_dir = _commentary_work_dir()
-    dest = work_dir / f"upload{suffix}"
-    try:
-        with dest.open("wb") as fh:
-            shutil.copyfileobj(file.file, fh)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
-    finally:
-        file.file.close()
-
-    job_id = uuid.uuid4().hex[:12]
-    with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                   "steps": [], "logs": []}
-    executor.submit(_commentary_run, job_id, str(dest), vertical, voice or COMMENTARY_VOICE,
-                    trim_start=trim_start, trim_end=trim_end, mode=mode,
-                    title=Path(file.filename).stem if file.filename else "")
-    return {"job_id": job_id, "status": "running"}
 
 
-@app.post("/api/commentary/script-only/upload")
-def create_script_only_upload(
-    file: UploadFile = _FastAPIFile(...),
-    vertical: bool = Form(False),
-    voice: str = Form(""),
-    trim_start: float = Form(0.0),
-    trim_end: float = Form(0.0),
-    mode: str = Form("highlights"),
-    commentary_type: str = Form("deep_hl"),
-    highlight_source: str = Form("ai"),
-    intro_highlight: bool = Form(False),
-    skip_intro_outro: bool = Form(False),
-    no_narrate_intro_outro: bool = Form(True),
-    retain_pct: float = Form(None),
-    web: bool = Form(False),
-    one_click: bool = Form(False),
-    style: str = Form("none"),
-) -> dict:
-    """上传本地视频 → 只生成脚本不渲染成片。"""
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if COMMENTARY_MODE == "http":
-        raise HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
-    suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in {".mp4", ".mkv", ".mov", ".webm", ".avi"}:
-        raise HTTPException(status_code=409, detail="请上传视频文件")
-    work_dir = _commentary_work_dir()
-    dest = work_dir / f"upload{suffix}"
-    try:
-        with dest.open("wb") as fh:
-            shutil.copyfileobj(file.file, fh)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
-    finally:
-        file.file.close()
-
-    job_id = uuid.uuid4().hex[:12]
-    src_path = str(dest)
-    with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
-                                   "progress": [], "steps": [], "logs": [], "src_path": src_path}
-    executor.submit(_commentary_run, job_id, src_path, vertical, voice or COMMENTARY_VOICE, script_only=True,
-                    trim_start=trim_start, trim_end=trim_end, mode=mode,
-                    commentary_type=commentary_type, highlight_source=highlight_source,
-                    intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
-                    no_narrate_intro_outro=no_narrate_intro_outro,
-                    retain_pct=retain_pct, web=web, one_click=one_click,
-                    title=Path(file.filename).stem if file.filename else "",
-                    style=style)
-    return {"job_id": job_id, "status": "running"}
 
 
 # 独立「解说成片」标签页：列出所有已生成成片，并支持按 id 直接下载/播放。
@@ -2319,205 +2132,24 @@ def _decode_commentary_id(cid: str) -> Path:
     return p
 
 
-@app.get("/api/commentary/diagnostics")
-def commentary_diagnostics() -> dict:
-    """返回解说运行环境诊断信息，让桌面用户一眼看清 python / ffprobe 是否就绪。"""
-    return {
-        "enabled": COMMENTARY_ENABLED,
-        "mode": COMMENTARY_MODE,
-        "dir": str(COMMENTARY_DIR) if COMMENTARY_DIR else None,
-        "python": COMMENTARY_RT.python,
-        "python_ok": COMMENTARY_RT.python_ok,
-        "deps_ok": COMMENTARY_RT.deps_ok,
-        "ffmpeg_dir": COMMENTARY_RT.ffmpeg_dir,
-        "ffprobe_ok": COMMENTARY_RT.ffprobe_ok,
-        "ready": COMMENTARY_RT.ready(),
-        "issues": COMMENTARY_RT.issues,
-        "frozen": getattr(sys, "frozen", False),
-    }
 
 
-@app.get("/api/commentary/list")
-def commentary_list() -> dict:
-    """按修改时间倒序列出所有已生成的解说成片。"""
-    items = []
-    seen: set[str] = set()
-    for root in _commentary_roots():
-        for p in root.iterdir():
-            if not p.is_file() or p.suffix.lower() not in (".mp4", ".mkv", ".mov", ".webm"):
-                continue
-            key = str(p.resolve())
-            if key in seen:
-                continue
-            seen.add(key)
-            cid = base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii")
-            items.append({
-                "id": cid,
-                "name": p.name,
-                "size": p.stat().st_size,
-                "mtime": int(p.stat().st_mtime),
-            })
-    items.sort(key=lambda x: x["mtime"], reverse=True)
-    return {"items": items}
 
 
-@app.get("/api/commentary/file/{cid}")
-def commentary_file_by_id(cid: str) -> FileResponse:
-    p = _decode_commentary_id(cid)
-    return FileResponse(str(p), filename=p.name, media_type="video/mp4")
 
 
-@app.delete("/api/commentary/file/{cid}")
-def commentary_delete_by_id(cid: str) -> dict:
-    """把已生成的解说成片移入系统回收站，拒绝直接硬删用户资产。"""
-    p = _decode_commentary_id(cid)
-    allowed_roots = _commentary_roots()
-    if not allowed_roots:
-        raise HTTPException(status_code=503, detail="解说输出目录未配置")
-    try:
-        resolved = p.resolve()
-    except Exception:
-        resolved = p
-    in_allowed_root = any(
-        resolved == root.resolve() or root.resolve() in resolved.parents
-        for root in allowed_roots
-    )
-    if not in_allowed_root:
-        raise HTTPException(status_code=403, detail="文件路径不在解说输出目录内")
-    if not resolved.is_file():
-        raise HTTPException(status_code=404, detail="成片文件不存在")
-    if not retention_mod.trash_available():
-        raise HTTPException(status_code=503, detail="系统回收站不可用，拒绝直接删除")
-    # 先记录大小：移动成片到回收站后原路径已不存在，再 stat 会抛异常导致 500。
-    try:
-        file_size = resolved.stat().st_size
-    except Exception:
-        file_size = 0
-    if not retention_mod.move_to_trash(resolved):
-        raise HTTPException(status_code=500, detail="移入回收站失败")
-    return {"deleted": True, "trashed": True, "name": p.name, "size": file_size}
 
 
 class CommentaryRenameReq(BaseModel):
     name: str
 
 
-@app.put("/api/commentary/file/{cid}")
-def commentary_rename_by_id(cid: str, payload: CommentaryRenameReq) -> dict:
-    """重命名已生成的解说成片（仅改文件名，不移动目录，保留原扩展名）。"""
-    p = _decode_commentary_id(cid)
-    allowed_roots = _commentary_roots()
-    if not allowed_roots:
-        raise HTTPException(status_code=503, detail="解说输出目录未配置")
-    resolved = p.resolve()
-    in_allowed_root = any(
-        resolved == root.resolve() or root.resolve() in resolved.parents
-        for root in allowed_roots
-    )
-    if not in_allowed_root:
-        raise HTTPException(status_code=403, detail="文件路径不在解说输出目录内")
-    if not resolved.is_file():
-        raise HTTPException(status_code=404, detail="成片文件不存在")
-
-    new_name = (payload.name or "").strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="新文件名不能为空")
-    # 去掉可能用于路径穿越的字符
-    new_name = new_name.replace("/", "_").replace("\\", "_").replace("..", "_").strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="新文件名非法")
-    # 保留原扩展名（若新名未带扩展名）
-    if "." not in new_name:
-        new_name = new_name + p.suffix
-    # 防止覆盖已有文件：重名自动追加 (1)/(2)…
-    dest = resolved.parent / new_name
-    n = 1
-    while dest.exists():
-        stem, suffix = new_name.rsplit(".", 1) if "." in new_name else (new_name, "")
-        dest = resolved.parent / f"{stem} ({n}){('.' + suffix) if suffix else ''}"
-        n += 1
-    try:
-        resolved.rename(dest)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"重命名失败：{e}")
-    new_cid = base64.urlsafe_b64encode(str(dest.resolve()).encode("utf-8")).decode("ascii")
-    return {"renamed": True, "id": new_cid, "name": dest.name}
 
 
-@app.post("/api/commentary/file/{cid}/save")
-def commentary_save_to_downloads(cid: str) -> dict:
-    """把已生成的解说成片复制到「下载」文件夹。
-
-    桌面版 WebView 的 <a download> 在 cocoa/WKWebView 下不会触发本机保存，
-    而 pywebview 原生 Api 也未暴露 save_commentary_file 桥接；因此由本地
-    FastAPI 后端（与 app 同机同用户运行，有权限写 ~/Downloads）直接复制文件，
-    前端点击「下载」时调用本接口即可真正把成片落到下载目录。
-    """
-    p = _decode_commentary_id(cid)
-    if not p.is_file():
-        raise HTTPException(status_code=404, detail="成片文件不存在")
-    downloads = Path.home() / "Downloads"
-    try:
-        downloads.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        raise HTTPException(status_code=500, detail="无法访问下载文件夹")
-    # 避免覆盖已有同名文件：dst 已存在则追加 (1)/(2)…
-    stem, suffix = p.stem, p.suffix
-    dst = downloads / p.name
-    n = 1
-    while dst.exists():
-        dst = downloads / f"{stem} ({n}){suffix}"
-        n += 1
-    try:
-        shutil.copy2(str(p), str(dst))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"复制失败：{e}")
-    return {"saved": True, "path": str(dst), "name": dst.name}
 
 
-@app.get("/api/commentary/{job_id}")
-def commentary_status(job_id: str) -> dict:
-    with _commentary_lock:
-        job = commentary_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="解说任务不存在或已过期")
-    # script_ready 也算就绪态（脚本已生成，等待人工确认后渲染）
-    ready = job["status"] in ("completed", "script_ready")
-    steps = job.get("steps") or []
-    if not steps:
-        # 旧任务或 HTTP 模式可能还没初始化步骤，兜底生成一个简单时间线
-        steps = [{"name": "处理中", "status": "running" if job["status"] == "running" else "done",
-                  "detail": "", "created_at": time.time(), "updated_at": time.time()}]
-    result = {"job_id": job_id, "status": job["status"], "error": job.get("error", ""),
-              "ready": ready, "progress": job.get("progress", []),
-              "steps": steps, "logs": job.get("logs", []),
-              "eta_remaining": job.get("eta_remaining"),
-              "eta_done_at": job.get("eta_done_at"),
-              "started_at": job.get("started_at"),
-              "source_duration": job.get("source_duration")}
-    if job.get("script_path"):
-        result["script_path"] = job["script_path"]
-    return result
 
 
-@app.get("/api/commentary/{job_id}/file")
-def commentary_file(job_id: str) -> FileResponse:
-    with _commentary_lock:
-        job = commentary_jobs.get(job_id)
-    if job and job["status"] == "completed" and job.get("output_path"):
-        path = Path(job["output_path"])
-        if path.exists():
-            return FileResponse(path=str(path), filename=path.name, media_type="application/octet-stream")
-        # 任务标记完成但成片文件已丢失/被清理 → 410 Gone，不应再走 cid 解码分支（否则误报 409）
-        raise HTTPException(status_code=410, detail="成片文件已清理或丢失")
-    # 兼容「已生成成片列表」卡片的 cid（base64 编码的文件路径标识）：
-    # 桌面版桥接 save_commentary_file(cid) 会请求 /api/commentary/{cid}/file，
-    # 命中本路由；此处按 cid 解码并校验后直接返回文件，使列表卡片也能下载。
-    try:
-        p = _decode_commentary_id(job_id)
-    except Exception:
-        raise HTTPException(status_code=409, detail="成片尚未就绪或标识无效")
-    return FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 
 # ---- 脚本审核专用路由 ----
@@ -2556,176 +2188,12 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     return Path(src_path).stem or ""
 
 
-@app.post("/api/commentary/script-only")
-def create_script_only(payload: CommentaryRequest) -> dict:
-    """只做转写+解说词生成，不渲染成片。返回 job_id 供前端轮询，
-    拿到 script.json 后展示可编辑解说词面板。"""
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if COMMENTARY_MODE == "http":
-        if not COMMENTARY_ENDPOINT:
-            raise HTTPException(status_code=503, detail="解说 worker 未配置")
-        raise HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
-
-    src_path = _resolve_source(payload)
-    job_id = uuid.uuid4().hex[:12]
-    with _commentary_lock:
-        commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
-                                   "progress": [], "src_path": src_path}
-    executor.submit(_commentary_run, job_id, src_path, payload.vertical, payload.voice or COMMENTARY_VOICE,
-                    script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end,
-                    mode=payload.mode, commentary_type=payload.commentary_type,
-                    highlight_source=payload.highlight_source,
-                    intro_highlight=payload.intro_highlight,
-                    skip_intro_outro=payload.skip_intro_outro,
-                    no_narrate_intro_outro=payload.no_narrate_intro_outro,
-                    retain_pct=payload.retain_pct, web=payload.web,
-                    one_click=payload.one_click,
-                    title=_commentary_title(payload, src_path),
-                    style=payload.style)
-    return {"job_id": job_id, "status": "running"}
 
 
-@app.get("/api/commentary/script/{job_id}")
-def get_script(job_id: str) -> dict:
-    """获取已生成脚本文件内容（script.json）。"""
-    with _commentary_lock:
-        job = commentary_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    if job["status"] != "script_ready" or not job.get("script_path"):
-        raise HTTPException(status_code=409, detail="脚本尚未就绪（当前状态: " + job["status"] + "）")
-    script_path = Path(job["script_path"])
-    if not script_path.exists():
-        raise HTTPException(status_code=410, detail="脚本文件已被清理")
-    try:
-        data = json.loads(script_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"读取脚本文件失败：{e}")
-    return {"job_id": job_id, "title": data.get("title", ""),
-            "voice": data.get("voice", ""),
-            "segments": data.get("segments", []), "segment_count": len(data.get("segments", []))}
 
 
-@app.put("/api/commentary/script/{job_id}")
-def update_script(job_id: str, payload: ScriptUpdateRequest) -> dict:
-    """人工修改后提交更新脚本（写回 script.json）。
-    保留原始时间戳（前端发 start/end=0），只更新 narration / voice。
-    """
-    with _commentary_lock:
-        job = commentary_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    if job["status"] != "script_ready" or not job.get("script_path"):
-        raise HTTPException(status_code=409, detail="脚本尚未就绪，无法修改（当前状态: " + job["status"] + "）")
-    script_path = Path(job["script_path"])
-
-    # 读现有脚本以保留时间戳
-    try:
-        existing = json.loads(script_path.read_text(encoding="utf-8"))
-    except Exception:
-        existing = {}
-    existing_segs = existing.get("segments", [])
-
-    # 合并：payload 里每个 seg 的 narration 写回对应 idx 的原始 seg
-    merged = []
-    for i, pseg in enumerate(payload.segments):
-        orig = existing_segs[i] if i < len(existing_segs) else {}
-        merged.append({
-            "start": orig.get("start", pseg.get("start", 0)),
-            "end": orig.get("end", pseg.get("end", 0)),
-            "narration": pseg.get("narration", orig.get("narration", "")),
-            "note": pseg.get("note", orig.get("note", "")),
-        })
-
-    data = {
-        "title": payload.title or existing.get("title", ""),
-        "voice": payload.voice or existing.get("voice", job.get("voice", "")),
-        "segments": merged,
-        # 保留原始 mode（如高光解说模式），否则保存后再渲染会丢失高光标记
-        "mode": existing.get("mode", ""),
-        # 保留原始 options（剪辑选项：解说类型/高光来源/片头高光/联网/保留时长等），
-        # 否则审核后渲染会丢失用户在面板上的剪辑选择
-        "options": existing.get("options", {}),
-    }
-    try:
-        script_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"写入脚本失败：{e}")
-
-    # 更新内存中的 voice 偏好（渲染时会用到）
-    if payload.voice:
-        with _commentary_lock:
-            commentary_jobs[job_id]["voice"] = payload.voice
-
-    return {"job_id": job_id, "status": "updated", "segment_count": len(payload.segments)}
 
 
-@app.post("/api/commentary/render/{job_id}")
-def render_script(job_id: str, vertical: bool = Form(False), voice: str = Form("")) -> dict:
-    """用已审核的脚本渲染成片（process.py --edit-only）。
-
-    剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
-    避免用默认值覆盖用户当初的选择（例如一键生成的全片深入+联网会被 deep_hl 默认值冲掉）。
-    """
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if COMMENTARY_MODE == "http":
-        raise HTTPException(status_code=400, detail="脚本渲染暂不支持 HTTP worker 模式，请使用 local 模式")
-
-    with _commentary_lock:
-        job = commentary_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    if job["status"] != "script_ready" or not job.get("script_path"):
-        raise HTTPException(status_code=409, detail="请先生成脚本再渲染（当前状态: " + job["status"] + "）")
-    script_path = job["script_path"]
-    # 从 script.json 的 segments 里找回原始视频名 + 已保存的剪辑选项
-    try:
-        seg_data = json.loads(Path(script_path).read_text(encoding="utf-8"))
-        title = seg_data.get("title", "")
-        saved = seg_data.get("options") or {}
-    except Exception:
-        title = ""
-        saved = {}
-
-    commentary_type = saved.get("commentary_type", "deep_hl")
-    highlight_source = saved.get("highlight_source", "ai")
-    intro_highlight = bool(saved.get("intro_highlight", False))
-    skip_intro_outro = bool(saved.get("skip_intro_outro", False))
-    no_narrate_intro_outro = bool(saved.get("no_narrate_intro_outro", True))
-    retain_pct = saved.get("retain_pct")
-    web = bool(saved.get("web", False))
-    one_click = bool(saved.get("one_click", False))
-
-    # 反查原始视频路径：优先用脚本任务记录的 src_path，避免按 title/job_id 在 input 目录里猜错。
-    src_path = job.get("src_path")
-    if not src_path:
-        # 兼容旧任务：按 title 或 job_id 在 input 目录搜索（已不推荐）
-        base_name = title or job_id
-        in_dir = _commentary_root("input")
-        src_candidates = list(in_dir.glob(f"{base_name}.*")) or list(in_dir.glob(f"{job_id}.*"))
-        if not src_candidates:
-            raise HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
-        src_path = str(src_candidates[0])
-
-    # 复用父任务的裁剪参数：同一源+起止会命中确定性命名的裁剪文件，直接吃裁剪后视频渲染
-    trim_start = float(job.get("trim_start", 0.0) or 0.0)
-    trim_end = float(job.get("trim_end", 0.0) or 0.0)
-
-    # 用新的 job_id 提交渲染（保留原 script 关联）
-    render_job_id = uuid.uuid4().hex[:12]
-    with _commentary_lock:
-        commentary_jobs[render_job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                          "parent_script_job": job_id, "steps": [], "logs": []}
-    v = voice or job.get("voice", "") or COMMENTARY_VOICE
-    executor.submit(_commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path,
-                    trim_start=trim_start, trim_end=trim_end,
-                    commentary_type=commentary_type, highlight_source=highlight_source,
-                    intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
-                    no_narrate_intro_outro=no_narrate_intro_outro,
-                    retain_pct=retain_pct, web=web, one_click=one_click)
-    return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 
 # ---- 配音试听 / 预览全部 ----
@@ -2806,116 +2274,8 @@ def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeou
         raise RuntimeError("edge-tts 未产出有效音频文件")
 
 
-@app.post("/api/commentary/voice-preview")
-def voice_preview(
-    voice: str = Form(...),
-    text: str = Form("你好，我是视频解说员。我将为你解说这段视频。"),
-) -> FileResponse:
-    """配音试听：把指定文本用指定 voice 转成 mp3 返回给前端播放。"""
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if COMMENTARY_MODE == "http":
-        raise HTTPException(status_code=400, detail="配音试听需在 local 模式使用")
-    # 1. 先校验输入（不等 COMMENTARY_DIR 挂掉）
-    voice = (voice or "").strip()
-    if not voice.startswith("zh-"):
-        raise HTTPException(status_code=400, detail=f"voice 必须是 zh-CN-* 音色，当前: {voice}")
-    # FastAPI Form() 有 bug：空字符串会落回默认值（即使前端显式发 text=），所以加 fallback
-    text = (text or "").strip()[:500] if text else ""
-    if not text:
-        text = "你好，我是视频解说员。我将为你解说这段视频。"
-    # 2. 再检查资源可用性
-    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
-        raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
-
-    out_dir = _commentary_root("work") / "voice_preview"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{uuid.uuid4().hex[:12]}.mp3"
-    try:
-        _run_voice_preview(text, voice, out_path, timeout=45)
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=f"试听生成失败：{e}")
-    # 加过期清理保护：定时任务会清理 work/voice_preview/ 下超过 1 天的文件（用户本机 .cleanup）
-    return FileResponse(path=str(out_path), filename="preview.mp3", media_type="audio/mpeg")
 
 
-@app.post("/api/commentary/preview/{job_id}")
-def preview_segments(
-    job_id: str,
-    voice: str = Form(""),
-    max_segments: int = Form(3),
-) -> FileResponse:
-    """用当前 voice 朗读 script.json 里前 N 段的 narration，拼接成一段 mp3 返回。
-    主要给「预览全部」按钮用——按全脚本生成太长，前 3 段够判断音色和节奏。
-    """
-    if not COMMENTARY_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未启用解说功能")
-    if COMMENTARY_MODE == "http":
-        raise HTTPException(status_code=400, detail="预览需在 local 模式使用")
-    # 1. 先校验 job 状态（不等资源检查）
-    with _commentary_lock:
-        job = commentary_jobs.get(job_id)
-    if not job or job["status"] != "script_ready" or not job.get("script_path"):
-        raise HTTPException(status_code=409, detail="请先生成脚本再预览（当前状态: " + (job or {}).get("status", "missing") + "）")
-    script_path = Path(job["script_path"])
-    if not script_path.exists():
-        raise HTTPException(status_code=410, detail="脚本文件已被清理")
-    try:
-        data = json.loads(script_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"读取脚本失败：{e}")
-    segs = [s for s in (data.get("segments") or []) if (s.get("narration") or "").strip()]
-    if not segs:
-        raise HTTPException(status_code=409, detail="脚本里没有可朗读的 narration")
-    n = max(1, min(int(max_segments), len(segs), 6))
-    chosen = segs[:n]
-    v = (voice or "").strip() or data.get("voice") or job.get("voice", "") or COMMENTARY_VOICE
-    if not v.startswith("zh-"):
-        raise HTTPException(status_code=400, detail=f"voice 必须是 zh-CN-* 音色")
-    # 2. 再检查资源可用性
-    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
-        raise HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
-
-    out_dir = _commentary_root("work") / "voice_preview"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = out_dir / uuid.uuid4().hex[:12]
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    final_mp3 = tmp_dir / "preview.mp3"
-    # 逐段生成
-    try:
-        clips = []
-        for i, seg in enumerate(chosen, 1):
-            seg_mp3 = tmp_dir / f"seg{i:02d}.mp3"
-            narration = (seg.get("narration") or "").strip()
-            if not narration:
-                continue
-            try:
-                _run_voice_preview(narration, v, seg_mp3, timeout=45)
-            except RuntimeError as e:
-                raise RuntimeError(f"第 {i} 段朗读失败：{e}")
-            clips.append(seg_mp3)
-        if not clips:
-            raise RuntimeError("没有可用 narration 可朗读")
-        # 用 ffmpeg concat demuxer 拼接
-        list_file = tmp_dir / "concat.txt"
-        list_file.write_text("\n".join(f"file '{p.name}'" for p in clips), encoding="utf-8")
-        concat_cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                      "-i", str(list_file), "-c", "copy", str(final_mp3)]
-        proc = subprocess.run(concat_cmd, cwd=str(tmp_dir), capture_output=True, text=True, timeout=60,
-                              env={"PATH": COMMENTARY_RT.ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")})
-        if proc.returncode != 0 or not final_mp3.exists():
-            # concat 失败时退到单段：直接把第一段作为 preview（保证有声音）
-            try:
-                shutil.copyfile(clips[0], final_mp3)
-            except Exception as e:
-                raise RuntimeError(f"拼接失败且回退也失败：{e}; 原 stderr: {(proc.stderr or '')[:200]}")
-    except RuntimeError as e:
-        # 清理临时目录（保留 final_mp3 不存在路径下不会报错）
-        try: shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception: pass
-        raise HTTPException(status_code=500, detail=f"预览生成失败：{e}")
-    # 返回临时文件，让客户端下载/播放
-    return FileResponse(path=str(final_mp3), filename="preview.mp3", media_type="audio/mpeg")
 
 
 # --------------------------------------------------------------------------- #
@@ -2930,50 +2290,10 @@ class CloudSaveRequest(BaseModel):
     baidu: dict = Field(default_factory=dict)
 
 
-@app.get("/api/cloud/providers")
-def cloud_providers() -> dict:
-    """列出本实例可用的云盘类型与百度授权地址。"""
-    providers = ["webdav"]
-    if BAIDU_ENABLED:
-        providers.append("baidu")
-    return {
-        "providers": providers,
-        "baidu_available": BAIDU_ENABLED,
-        "baidu_auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, app_id=BAIDU_APP_ID) if BAIDU_ENABLED else "",
-    }
 
 
-@app.get("/api/cloud/baidu/auth_url")
-def cloud_baidu_auth_url() -> dict:
-    if not BAIDU_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    state = secrets.token_urlsafe(16)
-    now = time.time()
-    with _BAIDU_STATES_LOCK:
-        _BAIDU_STATES[state] = now + _BAIDU_STATE_TTL
-        # 顺手清理过期条目，避免长期运行堆积
-        expired = [s for s, exp in _BAIDU_STATES.items() if exp < now]
-        for s in expired:
-            _BAIDU_STATES.pop(s, None)
-    return {"auth_url": baidu_auth_url(BAIDU_REDIRECT_URI, BAIDU_APP_KEY, state, app_id=BAIDU_APP_ID)}
 
 
-@app.get("/api/cloud/baidu/callback")
-def cloud_baidu_callback(code: str = "", state: str = ""):
-    """OAuth 回调：用 code 换取 access_token，返回把令牌回传给 opener 的页面（服务端不存令牌）。"""
-    if not BAIDU_ENABLED:
-        return HTMLResponse(_baidu_callback_html(error="该实例未配置百度网盘凭据"))
-    # state 校验：拒绝被诱导发起的授权（CSRF），过期/缺失/不匹配均拒绝
-    with _BAIDU_STATES_LOCK:
-        exp = _BAIDU_STATES.pop(state, None)
-    if exp is None or time.time() > exp:
-        return HTMLResponse(_baidu_callback_html(error="授权状态校验失败，请重新点击授权"))
-    try:
-        token = baidu_exchange_token(code, BAIDU_REDIRECT_URI, BAIDU_APP_KEY, BAIDU_APP_SECRET)
-    except CloudError as exc:
-        return HTMLResponse(_baidu_callback_html(error=exc.message))
-    save_baidu_token(token)
-    return HTMLResponse(_baidu_callback_html(token=token.get("access_token", "")))
 
 
 # ── 百度网盘「下载到本机」（官方 PCS，速度由账号等级决定）─────────────────
@@ -2990,31 +2310,6 @@ class BaiduDownloadRequest(BaseModel):
     backend: str = ""  # 空=auto（优先 aria2c 并发，缺失回退 requests）
 
 
-@app.get("/api/cloud/baidu/list")
-def cloud_baidu_list(path: str = "/", token: str = ""):
-    """浏览用户网盘目录：返回归一化文件列表（文件夹在前）。"""
-    if not BAIDU_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    if not token:
-        raise HTTPException(status_code=400, detail="缺少 access_token（请先完成百度授权）")
-    try:
-        data = _baidu_provider.list_files(token, path)
-    except CloudError as exc:
-        raise HTTPException(status_code=502, detail=exc.message + (("：" + exc.hint) if exc.hint else ""))
-    items = data.get("list") or []
-    files = [
-        {
-            "fs_id": it.get("fs_id"),
-            "path": it.get("path"),
-            "name": it.get("server_filename") or it.get("filename") or "",
-            "size": it.get("size", 0),
-            "isdir": bool(it.get("isdir")),
-            "mtime": it.get("server_mtime", 0),
-        }
-        for it in items
-    ]
-    files.sort(key=lambda x: (not x["isdir"], -x["mtime"]))
-    return {"path": path or "/", "list": files, "has_more": bool(data.get("has_more"))}
 
 
 def _baidu_safe_name(name: str) -> str:
@@ -3026,74 +2321,8 @@ def _baidu_safe_name(name: str) -> str:
     return base or "file"
 
 
-@app.post("/api/cloud/baidu/download")
-def cloud_baidu_download(payload: BaiduDownloadRequest):
-    """把网盘文件下载到本机 ~/Downloads/VideoDownloader/baidu/，后台线程跑，轮询进度。"""
-    if not BAIDU_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    token = (payload.token or "").strip()
-    if not token or not payload.fs_id or not payload.path:
-        raise HTTPException(status_code=400, detail="缺少 token / fs_id / path")
-    name = _baidu_safe_name(payload.name) or _baidu_safe_name(payload.path)
-    tid = secrets.token_hex(8)
-    with _baidu_dl_lock:
-        _baidu_dl_tasks[tid] = {
-            "status": "pending", "progress": 0, "total": 0,
-            "error": "", "name": name, "filepath": "",
-        }
-
-    def _worker() -> None:
-        dest = DOWNLOAD_DIR / "baidu" / name
-        try:
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(status="downloading")
-            if dest.exists():
-                # 同名文件加序号，避免覆盖已下好的
-                stem = dest.stem
-                suffix = dest.suffix
-                i = 1
-                while dest.exists():
-                    dest = dest.with_name(f"{stem}({i}){suffix}")
-                    i += 1
-
-            def _prog(done: int, total: int) -> None:
-                with _baidu_dl_lock:
-                    t = _baidu_dl_tasks[tid]
-                    t["progress"] = done
-                    if total:
-                        t["total"] = total
-
-            _baidu_provider.download(
-                token, int(payload.fs_id), payload.path, dest,
-                progress=_prog, backend=payload.backend or "auto",
-            )
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(
-                    status="completed",
-                    progress=_baidu_dl_tasks[tid]["total"] or _baidu_dl_tasks[tid]["progress"],
-                    filepath=str(dest),
-                )
-        except CloudError as exc:
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(
-                    status="failed",
-                    error=exc.message + (("：" + exc.hint) if exc.hint else ""),
-                )
-        except Exception as exc:  # noqa: BLE001 — 兜底，避免后台线程静默崩溃
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(status="failed", error=str(exc))
-
-    threading.Thread(target=_worker, name=f"vdl-baidudl-{tid}", daemon=True).start()
-    return {"task_id": tid, "name": name}
 
 
-@app.get("/api/cloud/baidu/task/{tid}")
-def cloud_baidu_task(tid: str):
-    with _baidu_dl_lock:
-        t = _baidu_dl_tasks.get(tid)
-    if not t:
-        raise HTTPException(status_code=404, detail="下载任务不存在")
-    return t
 
 
 # ── 百度网盘「分享链接下载」（登录后转存到自己网盘再下，官方通道）──────────
@@ -3103,18 +2332,6 @@ class BaiduShareListRequest(BaseModel):
     dir: str = ""           # 分享内子目录（空=根），用于点击文件夹展开
 
 
-@app.post("/api/cloud/baidu/share/list")
-def cloud_baidu_share_list(payload: BaiduShareListRequest):
-    """列出分享链接里的文件（看分享内容本身无需登录）。"""
-    if not BAIDU_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    if not payload.url.strip():
-        raise HTTPException(status_code=400, detail="缺少分享链接")
-    try:
-        result = _baidu_provider.share_list(payload.url, payload.pwd, payload.dir)
-    except CloudError as exc:
-        raise HTTPException(status_code=502, detail=exc.message + (("：" + exc.hint) if exc.hint else ""))
-    return result
 
 
 class BaiduShareDownloadRequest(BaseModel):
@@ -3133,97 +2350,9 @@ class BaiduShareDownloadRequest(BaseModel):
     dlink: str = ""        # 前端通过 WebView 注入 JS 预取的直链（优先级最高，跳过 transfer+dlink 策略）
 
 
-@app.post("/api/cloud/baidu/share/download")
-def cloud_baidu_share_download(payload: BaiduShareDownloadRequest):
-    """把分享里的某个文件转存到用户自己网盘并从自己网盘下载到本机（后台任务）。"""
-    if not BAIDU_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    token = (payload.token or "").strip() or (load_baidu_token() or {}).get("access_token") or ""
-    if not token:
-        raise HTTPException(status_code=400, detail="请先完成百度账号授权")
-    if not payload.url.strip() or not payload.path:
-        raise HTTPException(status_code=400, detail="缺少分享链接或文件路径")
-    name = _baidu_safe_name(payload.name) or _baidu_safe_name(payload.path)
-    tid = secrets.token_hex(8)
-    with _baidu_dl_lock:
-        _baidu_dl_tasks[tid] = {
-            "status": "pending", "progress": 0, "total": 0,
-            "error": "", "name": name, "filepath": "",
-        }
-
-    def _worker() -> None:
-        dest = DOWNLOAD_DIR / "baidu" / "share" / name
-        try:
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(status="transferring")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.exists():
-                stem, suffix = dest.stem, dest.suffix
-                i = 1
-                while dest.exists():
-                    dest = dest.with_name(f"{stem}({i}){suffix}")
-                    i += 1
-
-            def _prog(done: int, total: int) -> None:
-                with _baidu_dl_lock:
-                    t = _baidu_dl_tasks[tid]
-                    t["progress"] = done
-                    if total:
-                        t["total"] = total
-
-            _baidu_provider.download_share(
-                payload.url, payload.pwd, payload.path, dest, token,
-                progress=_prog, backend=payload.backend or "auto",
-                pre_sekey=payload.sekey or "",
-                pre_share_id=payload.share_id,
-                pre_uk=payload.uk,
-                pre_fs_id=payload.fs_id,
-                bduss=(payload.bduss or "").strip(),
-                pre_dlink=(payload.dlink or "").strip(),
-            )
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(
-                    status="completed",
-                    progress=_baidu_dl_tasks[tid]["total"] or _baidu_dl_tasks[tid]["progress"],
-                    filepath=str(dest),
-                )
-        except CloudError as exc:
-            # 策略 3：浏览器降级——API 全部失败时，返回浏览器打开指令
-            if exc.hint and exc.hint.startswith("BROWSER_FALLBACK:"):
-                browser_url = exc.hint.replace("BROWSER_FALLBACK:", "", 1)
-                with _baidu_dl_lock:
-                    _baidu_dl_tasks[tid].update(
-                        status="browser_fallback",
-                        error=exc.message,
-                        browser_url=browser_url,
-                    )
-            else:
-                with _baidu_dl_lock:
-                    _baidu_dl_tasks[tid].update(
-                        status="failed",
-                        error=exc.message + (("：" + exc.hint) if exc.hint else ""),
-                    )
-        except Exception as exc:  # noqa: BLE001 — 兜底，避免后台线程静默崩溃
-            with _baidu_dl_lock:
-                _baidu_dl_tasks[tid].update(status="failed", error=str(exc))
-
-    threading.Thread(target=_worker, name=f"vdl-baidushare-{tid}", daemon=True).start()
-    return {"task_id": tid, "name": name}
 
 
 # ── 百度令牌本机持久化（每个用户各自存自己机器，重启后免重复授权）────────
-@app.get("/api/cloud/baidu/token")
-def cloud_baidu_token_get():
-    if not BAIDU_ENABLED:
-        return {"logged_in": False, "reason": "未配置百度网盘凭据"}
-    data = load_baidu_token() or {}
-    tok = data.get("access_token") or ""
-    return {
-        "logged_in": bool(tok),
-        "access_token": tok,
-        "expires_in": data.get("expires_in"),
-        "scope": data.get("scope"),
-    }
 
 
 class BaiduTokenSet(BaseModel):
@@ -3233,90 +2362,19 @@ class BaiduTokenSet(BaseModel):
     refresh_token: str = ""
 
 
-@app.post("/api/cloud/baidu/token")
-def cloud_baidu_token_set(payload: BaiduTokenSet):
-    tok = (payload.access_token or "").strip()
-    if not tok:
-        raise HTTPException(status_code=400, detail="缺少 access_token")
-    save_baidu_token(payload.model_dump())
-    return {"ok": True}
 
 
-@app.delete("/api/cloud/baidu/token")
-def cloud_baidu_token_del():
-    clear_baidu_token()
-    return {"ok": True}
 
 
 # ── 百度扫码登录（自动获取 BDUSS，免手动复制 Cookie）────────────────
-@app.get("/api/cloud/baidu/qr/create")
-def cloud_baidu_qr_create() -> dict:
-    try:
-        return baidu_qr_create()
-    except CloudError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/api/cloud/baidu/qr/poll")
-def cloud_baidu_qr_poll(sign: str = "") -> dict:
-    if not sign:
-        raise HTTPException(status_code=400, detail="缺少 sign 参数")
-    return baidu_qr_poll(sign)
 
 
-@app.get("/api/cloud/baidu/qr/status")
-def cloud_baidu_qr_status() -> dict:
-    return baidu_qr_status()
 
 
-@app.post("/api/cloud/save")
-def cloud_save(payload: CloudSaveRequest, request: Request) -> dict:
-    subscribed, free_used, free_daily = _check_cloud_quota(request)
-    task = _require_task(payload.task_id)
-    if task.status != "completed" or not task.filepath or not task.filepath.exists():
-        raise HTTPException(status_code=409, detail="下载任务尚未完成，无法存到网盘")
-    provider = payload.provider
-    if provider == "webdav":
-        inst = _webdav_provider
-        creds = payload.webdav or {}
-        # SSRF 防护：拒绝指向内网 / 环回 / 云元数据的 WebDAV 地址，避免本服务被当跳板
-        wurl = (creds.get("url") or "").strip()
-        if wurl:
-            try:
-                _assert_safe_url(wurl)
-            except LinkError as exc:
-                raise HTTPException(status_code=400, detail="WebDAV 地址不在允许范围内：" + exc.message)
-    elif provider == "baidu":
-        if not BAIDU_ENABLED:
-            raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-        inst = _baidu_provider
-        creds = payload.baidu or {}
-    else:
-        raise HTTPException(status_code=400, detail="不支持的网盘类型")
-    job_id = uuid.uuid4().hex[:12]
-    _prune_cloud_jobs()
-    with CLOUD_LOCK:
-        CLOUD_JOBS[job_id] = {"status": "running", "error": "", "remote_path": "", "progress": 0.0}
-    cloud_executor.submit(_run_cloud, job_id, inst, str(task.filepath), payload.dest_path, creds)
-    return {
-        "job_id": job_id,
-        "status": "running",
-        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
-    }
 
 
-@app.get("/api/cloud/status/{job_id}")
-def cloud_status(job_id: str) -> dict:
-    with CLOUD_LOCK:
-        job = CLOUD_JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="云盘任务不存在")
-    return {
-        "status": job["status"],
-        "error": job.get("error", ""),
-        "remote_path": job.get("remote_path", ""),
-        "progress": job.get("progress", 0.0),
-    }
 
 
 def _run_cloud(job_id: str, inst, src: str, dest_path: str, creds: dict) -> None:
@@ -3354,45 +2412,12 @@ def _prune_cloud_jobs() -> None:
 
 
 # ---- 本地媒体库（桌面版功能）：浏览 / 播放 / 删除已下载的媒体文件 ----
-@app.get("/api/library")
-def library_list(q: str = "", platform: str = "", kind: str = "all") -> dict:
-    items = library_mod.scan_library(DOWNLOAD_DIR)
-    if q:
-        ql = q.lower()
-        items = [
-            i for i in items
-            if ql in (i["title"] or "").lower()
-            or ql in (i["name"] or "").lower()
-            or ql in (i["uploader"] or "").lower()
-        ]
-    if platform:
-        items = [i for i in items if i["platform"] == platform]
-    if kind in ("video", "audio"):
-        items = [i for i in items if i["kind"] == kind]
-    return {"items": items, "total": len(items)}
 
 
-@app.get("/api/library/file/{lib_id}")
-def library_file(lib_id: str) -> FileResponse:
-    p = library_mod._resolve_safe(DOWNLOAD_DIR, lib_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(path=p, filename=p.name, media_type="application/octet-stream")
 
 
-@app.get("/api/library/thumb/{lib_id}")
-def library_thumb(lib_id: str) -> FileResponse:
-    p = library_mod.get_thumbnail(DOWNLOAD_DIR, lib_id, FFMPEG_BIN)
-    if not p:
-        raise HTTPException(status_code=404, detail="无缩略图")
-    return FileResponse(path=p, media_type="image/jpeg")
 
 
-@app.delete("/api/library/{lib_id}")
-def library_delete(lib_id: str) -> dict:
-    if not library_mod.delete_item(DOWNLOAD_DIR, lib_id):
-        raise HTTPException(status_code=404, detail="文件不存在")
-    return {"deleted": True}
 
 
 # ---- 时效自动清理：按保留期/容量上限清理下载目录（预览 → 执行，媒体走回收站） ----
@@ -3423,68 +2448,12 @@ def _require_retention() -> None:
         raise HTTPException(status_code=404, detail="自动清理仅桌面版可用")
 
 
-@app.get("/api/retention/config")
-def retention_config_get() -> dict:
-    _require_retention()
-    cfg = retention_store.get()
-    return {
-        "config": cfg.to_dict(),
-        "labels": retention_mod.CATEGORY_LABELS,
-        "trash_available": retention_mod.trash_available(),
-        "usage": retention_mod.disk_usage(DOWNLOAD_DIR),
-    }
 
 
-@app.post("/api/retention/config")
-def retention_config_set(req: RetentionConfigRequest) -> dict:
-    _require_retention()
-    fields = {k: v for k, v in req.model_dump().items() if v is not None}
-    # 安全阀：没有可用回收站时不允许开启「删媒体本体」，避免静默硬删用户资产
-    if not retention_mod.trash_available():
-        if fields.get("media_enabled") or fields.get("quota_enabled"):
-            raise HTTPException(status_code=400, detail="系统回收站不可用，无法开启媒体清理（拒绝直接硬删）")
-    if fields.get("media_use_trash") is False:
-        raise HTTPException(status_code=400, detail="媒体清理必须走回收站，不允许关闭")
-    cfg = retention_store.update(**fields)
-    return {"config": cfg.to_dict()}
 
 
-@app.post("/api/retention/scan")
-def retention_scan() -> dict:
-    """只算不删：返回将被清理的分档清单与可释放空间。"""
-    _require_retention()
-    cfg = retention_store.get()
-    plan = retention_mod.scan(DOWNLOAD_DIR, cfg)
-    plan["usage"] = retention_mod.disk_usage(DOWNLOAD_DIR)
-    # 每档只回传前 50 条明细，避免上千条把响应撑爆；总数/总大小已单列
-    for cat, entries in plan["categories"].items():
-        plan["categories"][cat] = {
-            "count": len(entries),
-            "size": sum(e["size"] for e in entries),
-            "items": entries[:50],
-        }
-    return plan
 
 
-@app.post("/api/retention/run")
-def retention_run(req: RetentionRunRequest) -> dict:
-    _require_retention()
-    cfg = retention_store.get()
-    cats = req.categories or None
-    if cats:
-        unknown = [c for c in cats if c not in retention_mod.CATEGORY_LABELS]
-        if unknown:
-            raise HTTPException(status_code=400, detail=f"未知清理类别：{', '.join(unknown)}")
-    try:
-        result = retention_mod.run(DOWNLOAD_DIR, cfg, cats)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("手动清理失败")
-        raise HTTPException(status_code=500, detail=f"清理失败：{str(exc)[:200]}")
-    retention_store.update(last_run=result["ran_at"], last_freed=result["freed"],
-                           last_removed=result["removed"])
-    result["usage"] = retention_mod.disk_usage(DOWNLOAD_DIR)
-    result["freed_text"] = retention_mod.human_size(result["freed"])
-    return result
 
 
 # ---- 一键归档网盘：按模板把媒体库文件批量 / 自动上传到用户自己的网盘 ----
@@ -3539,132 +2508,18 @@ def _archive_provider(cfg) -> tuple:
     raise HTTPException(status_code=400, detail="不支持的网盘类型")
 
 
-@app.get("/api/archive/config")
-def archive_config_get() -> dict:
-    _require_archive()
-    cfg = archive_store.get()
-    return {
-        "config": cfg.to_dict(),
-        "creds": archive_store.creds_masked(),
-        "configured": archive_store.has_creds(cfg.provider),
-        "providers": ["webdav"] + (["baidu"] if BAIDU_ENABLED else []),
-        "tokens": archive_mod.TEMPLATE_TOKENS,
-        "default_template": archive_mod.DEFAULT_TEMPLATE,
-        "trash_available": retention_mod.trash_available(),
-        "records": archive_store.records(30),
-    }
 
 
-@app.post("/api/archive/config")
-def archive_config_set(req: ArchiveConfigRequest) -> dict:
-    _require_archive()
-    data = req.model_dump()
-    webdav = data.pop("webdav", None)
-    baidu = data.pop("baidu", None)
-    fields = {k: v for k, v in data.items() if v is not None}
-
-    if fields.get("provider") and fields["provider"] not in ("webdav", "baidu"):
-        raise HTTPException(status_code=400, detail="不支持的网盘类型")
-    if fields.get("provider") == "baidu" and not BAIDU_ENABLED:
-        raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-    # 安全阀：没有可用回收站时不允许开「归档后删本地」，避免静默硬删用户资产
-    if fields.get("delete_after") and not retention_mod.trash_available():
-        raise HTTPException(status_code=400, detail="系统回收站不可用，无法开启「归档后删本地」（拒绝直接硬删）")
-
-    if webdav is not None:
-        url = (webdav.get("url") or "").strip()
-        if url:
-            try:
-                _assert_archive_url(url)
-            except LinkError as exc:
-                raise HTTPException(status_code=400, detail="WebDAV 地址不合法：" + exc.message)
-        archive_store.set_creds("webdav", {
-            "url": url,
-            "user": (webdav.get("user") or "").strip(),
-            "pass": webdav.get("pass") or "",
-        })
-    if baidu is not None:
-        archive_store.set_creds("baidu", {"token": (baidu.get("token") or "").strip()})
-
-    cfg = archive_store.update(**fields)
-    return {
-        "config": cfg.to_dict(),
-        "creds": archive_store.creds_masked(),
-        "configured": archive_store.has_creds(cfg.provider),
-    }
 
 
-@app.post("/api/archive/scan")
-def archive_scan() -> dict:
-    """只算不传：列出待归档文件与目标远端路径，前端必须先看这个再执行。"""
-    _require_archive()
-    cfg = archive_store.get()
-    items = library_mod.scan_library(DOWNLOAD_DIR)
-    pend = archive_mod.pending_items(items, cfg, archive_store)
-    return {
-        "count": len(pend),
-        "size": sum(p["size"] for p in pend),
-        "size_text": archive_mod.human_size(sum(p["size"] for p in pend)),
-        "items": pend[:200],
-        "truncated": len(pend) > 200,
-        "configured": archive_store.has_creds(cfg.provider),
-        "provider": cfg.provider,
-    }
 
 
-@app.post("/api/archive/run")
-def archive_run(req: ArchiveRunRequest) -> dict:
-    _require_archive()
-    cfg = archive_store.get()
-    upload_fn, creds = _archive_provider(cfg)
-
-    items = library_mod.scan_library(DOWNLOAD_DIR)
-    pend = archive_mod.pending_items(items, cfg, archive_store)
-    if req.lib_ids:
-        wanted = set(req.lib_ids)
-        pend = [p for p in pend if p["id"] in wanted]
-    if not pend:
-        raise HTTPException(status_code=409, detail="没有待归档的文件")
-
-    job_id = uuid.uuid4().hex[:12]
-    _prune_archive_jobs()
-    with ARCHIVE_LOCK:
-        ARCHIVE_JOBS[job_id] = {
-            "status": "running", "index": 0, "total": len(pend), "current": "",
-            "file_percent": 0.0, "uploaded": 0, "failed": 0, "errors": [],
-            "cancel": False, "started_at": int(time.time()),
-        }
-    cloud_executor.submit(_run_archive_job, job_id, pend, cfg, upload_fn, creds)
-    return {"job_id": job_id, "total": len(pend)}
 
 
-@app.get("/api/archive/status/{job_id}")
-def archive_status(job_id: str) -> dict:
-    _require_archive()
-    with ARCHIVE_LOCK:
-        job = ARCHIVE_JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="归档任务不存在")
-    return {k: v for k, v in job.items() if k != "cancel"}
 
 
-@app.post("/api/archive/cancel/{job_id}")
-def archive_cancel(job_id: str) -> dict:
-    _require_archive()
-    with ARCHIVE_LOCK:
-        job = ARCHIVE_JOBS.get(job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="归档任务不存在")
-        job["cancel"] = True
-    return {"canceling": True}
 
 
-@app.post("/api/archive/forget")
-def archive_forget(req: ArchiveForgetRequest) -> dict:
-    """清除归档记录，让文件下次重新上传（例如网盘那头被误删了）。"""
-    _require_archive()
-    n = archive_store.forget(req.rel)
-    return {"cleared": n}
 
 
 def _run_archive_job(job_id: str, targets: list[dict], cfg, upload_fn, creds: dict) -> None:
@@ -3850,33 +2705,6 @@ def _prune_crypto_jobs() -> None:
             CRYPTO_JOBS.pop(jid, None)
 
 
-@app.get("/api/library/encfile/{lib_id}")
-def library_encfile(lib_id: str) -> FileResponse:
-    """解密播放：把 .vdlenc 临时解密到 .vault_tmp 并返回（带 Range 支持）。锁定时 423。"""
-    _require_crypto()
-    _require_unlocked()
-    src = library_mod._resolve_safe(DOWNLOAD_DIR, lib_id)
-    if not src or src.suffix.lower() != library_mod.ENCRYPTED_EXT:
-        raise HTTPException(status_code=404, detail="加密文件不存在")
-    try:
-        orig_name, _kind, _ext = crypto_mod.read_header(src)
-    except Exception:
-        raise HTTPException(status_code=400, detail="加密文件损坏")
-    tmp = _vault_tmp_for(lib_id)
-    try:
-        crypto_mod.decrypt_file(src, tmp, VAULT_KEY)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="解密失败：" + type(exc).__name__)
-    ext = Path(orig_name).suffix.lower()
-    media = {
-        ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime",
-        ".webm": "video/webm", ".avi": "video/x-msvideo", ".m4v": "video/mp4",
-        ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
-        ".flac": "audio/flac", ".ogg": "audio/ogg", ".wav": "audio/wav",
-        ".opus": "audio/ogg", ".gif": "image/gif", ".webp": "image/webp",
-        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-    }.get(ext, "application/octet-stream")
-    return FileResponse(path=str(tmp), filename=orig_name, media_type=media)
 
 
 # ---- 桌面版种子下载（libtorrent 集成）：magnet/.torrent → 本地媒体库 ----
@@ -3901,89 +2729,20 @@ def _require_torrent() -> None:
         raise HTTPException(status_code=404, detail="种子下载功能未启用（需桌面版并安装 libtorrent 或 aria2）")
 
 
-@app.get("/api/torrents")
-def torrent_list() -> dict:
-    _require_torrent()
-    return {"items": torrent_manager.list(), "available": True}
 
 
-@app.post("/api/torrents/add")
-def torrent_add(req: TorrentAddRequest) -> dict:
-    _require_torrent()
-    try:
-        return torrent_manager.add(
-            uri=req.uri, name=req.name or None, paused=req.paused,
-            save_path=req.save_path or None,
-            file_priorities={int(k): int(v) for k, v in req.file_priorities.items()} or None,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/torrents/add-file")
-async def torrent_add_file(
-    torrent: UploadFile | None = _FastAPIFile(default=None),
-    name: str = Form(default=""),
-    paused: bool = Form(default=False),
-    save_path: str = Form(default=""),
-) -> dict:
-    _require_torrent()
-    if not torrent:
-        raise HTTPException(status_code=400, detail="未收到 .torrent 文件")
-    data = await torrent.read()
-    if not data:
-        raise HTTPException(status_code=400, detail=".torrent 文件为空")
-    try:
-        return torrent_manager.add(
-            torrent_data=data, name=name or None, paused=paused, save_path=save_path or None,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/torrents/{tid}")
-def torrent_detail(tid: str) -> dict:
-    _require_torrent()
-    item = torrent_manager.get(tid)
-    if not item:
-        raise HTTPException(status_code=404, detail="种子不存在")
-    return item
 
 
-@app.post("/api/torrents/{tid}/pause")
-def torrent_pause(tid: str) -> dict:
-    _require_torrent()
-    if not torrent_manager.pause(tid):
-        raise HTTPException(status_code=404, detail="种子不存在")
-    return {"paused": True}
 
 
-@app.post("/api/torrents/{tid}/resume")
-def torrent_resume(tid: str) -> dict:
-    _require_torrent()
-    if not torrent_manager.resume(tid):
-        raise HTTPException(status_code=404, detail="种子不存在")
-    return {"paused": False}
 
 
-@app.post("/api/torrents/{tid}/remove")
-def torrent_remove(tid: str, req: TorrentRemoveRequest) -> dict:
-    _require_torrent()
-    if not torrent_manager.remove(tid, delete_files=req.delete_files):
-        raise HTTPException(status_code=404, detail="种子不存在")
-    return {"removed": True}
 
 
-@app.post("/api/torrents/{tid}/files")
-def torrent_set_files(tid: str, req: TorrentFilesRequest) -> dict:
-    _require_torrent()
-    if not torrent_manager.set_file_priorities(tid, {int(k): int(v) for k, v in req.priorities.items()}):
-        raise HTTPException(status_code=404, detail="种子不存在或尚无元数据")
-    return {"updated": True}
 
 
 # ---- 字幕处理：在线字幕提取 / 内嵌字幕抽取 / 硬字幕烧录 / 可选 LLM 翻译 ----
@@ -4020,75 +2779,12 @@ def _resolve_lib_video(lib_id: str) -> Path:
     return p
 
 
-@app.post("/api/subtitles/list")
-def sub_list(req: SubListRequest) -> dict:
-    video = _resolve_lib_video(req.lib_id)
-    meta = library_mod._load_sidecar(video)
-    subs = subtitles_mod.list_online_subs(meta.get("source_url") or "", req.cookie)
-    return {"subs": subs}
 
 
-@app.post("/api/subtitles/extract")
-def sub_extract(req: SubExtractRequest) -> dict:
-    video = _resolve_lib_video(req.lib_id)
-    meta = library_mod._load_sidecar(video)
-    out_dir = video.parent
-    sub = subtitles_mod.extract_online_sub(
-        meta.get("source_url") or "", req.lang, req.cookie, "", out_dir, meta.get("title") or ""
-    )
-    if not sub and not meta.get("source_url"):
-        # 无源链接则尝试抽内嵌字幕流
-        sub = subtitles_mod.extract_embedded_subs(video, out_dir, FFMPEG_BIN)
-    if not sub or not sub.exists():
-        raise HTTPException(status_code=404, detail="未找到该语言的字幕（源站无此字幕且无内嵌字幕流）")
-    rel = sub.relative_to(out_dir).as_posix()
-    return {"sub_rel": rel, "lang": req.lang, "size": sub.stat().st_size}
 
 
-@app.post("/api/subtitles/burn")
-def sub_burn(req: SubBurnRequest) -> dict:
-    video = _resolve_lib_video(req.lib_id)
-    out_dir = video.parent
-    sub_path = (out_dir / req.sub_rel).resolve()
-    if out_dir.resolve() not in sub_path.parents or not sub_path.exists():
-        raise HTTPException(status_code=404, detail="字幕文件不存在")
-    out = subtitles_mod.burn_subtitle(video, sub_path, FFMPEG_BIN)
-    if not out:
-        raise HTTPException(status_code=500, detail="烧录失败，请检查字幕文件格式")
-    meta = library_mod._load_sidecar(video)
-    subtitles_mod._write_subtitle_sidecar(out, meta)
-    new_id = library_mod.encode_id(out.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
-    return {"lib_id": new_id, "name": out.name, "title": (meta.get("title") or out.stem) + "（字幕版）"}
 
 
-@app.post("/api/subtitles/translate")
-def sub_translate(req: SubTranslateRequest) -> dict:
-    video = _resolve_lib_video(req.lib_id)
-    out_dir = video.parent
-    sub_path = (out_dir / req.sub_rel).resolve()
-    if out_dir.resolve() not in sub_path.parents or not sub_path.exists():
-        raise HTTPException(status_code=404, detail="字幕文件不存在")
-    text = sub_path.read_text(encoding="utf-8", errors="ignore")
-    # 用统一 LLM 配置做 fallback：用户在前端留空时自动取已保存的 Key/URL/Model
-    llm = get_llm_config()
-    api_key = req.api_key or llm.get("api_key", "")
-    base_url = req.base_url or llm.get("base_url", "")
-    model = req.model or llm.get("model", "")
-    try:
-        translated = subtitles_mod.translate_srt(text, api_key, base_url, model, req.target)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    t = (req.target or "简体中文").strip().lower()
-    if any(k in t for k in ("zh", "chinese", "中", "简")):
-        ext = "zh"
-    else:
-        ext = re.split(r"[^a-z]", t)[0][:4] or "zh"
-    base_stem = re.sub(r"\.(zh|en|ja|ko|fr|de|es|ru|pt|it)$", "", sub_path.stem, flags=re.I)
-    new_path = sub_path.with_name(f"{base_stem}.{ext}.srt")
-    new_path.write_text(translated, encoding="utf-8")
-    return {"sub_rel": new_path.relative_to(out_dir).as_posix(), "lang": req.target, "text": translated}
 
 
 # ---- LLM 服务商选择器 API（统一配置，前端面板持久化）----
@@ -4100,36 +2796,10 @@ class LLMConfigRequest(BaseModel):
     model: str = Field(default="", max_length=128)
 
 
-@app.get("/api/llm/providers")
-def llm_providers() -> dict:
-    """返回可用的提供商预设（供前端下拉菜单）。"""
-    return {"providers": PROVIDER_PRESETS, "default": DEFAULT_PROVIDER}
 
 
-@app.get("/api/llm/config")
-def llm_config_get() -> dict:
-    """返回当前 LLM 配置（前端面板回填）。api_key 脱敏返回，仅显示首尾各 4 位。"""
-    cfg = get_llm_config()
-    key = cfg.get("api_key", "")
-    if len(key) > 8:
-        cfg["api_key"] = key[:4] + "****" + key[-4:]
-    return cfg
 
 
-@app.post("/api/llm/config")
-def llm_config_save(req: LLMConfigRequest) -> dict:
-    """保存 LLM 配置。如果前端传了脱敏的 api_key(含 ****)则沿用已有 Key 不覆盖。"""
-    current = get_llm_config()
-    data = {
-        "provider": req.provider,
-        "api_key": req.api_key if "****" not in (req.api_key or "") else current.get("api_key", ""),
-        "base_url": req.base_url,
-        "model": req.model,
-        "max_tokens": current.get("max_tokens", 4096),
-        "temperature": current.get("temperature", 0.7),
-    }
-    save_llm_config(data)
-    return {"ok": True}
 
 
 # ---- 格式 / 片段增强：对已下载媒体做本地 ffmpeg 加工（转音频 / GIF / 裁剪 / 压缩 / 放大）----
@@ -4144,85 +2814,12 @@ class ProcessRequest(BaseModel):
     params: dict = Field(default_factory=dict)
 
 
-@app.post("/api/process/run")
-def process_run(req: ProcessRequest) -> dict:
-    if not (plat.is_desktop() or os.environ.get("VDL_LIBRARY_ENABLED")):
-        raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
-    if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
-                      "frame", "frames", "sheet", "ringtone", "dewatermark",
-                      "ai_dewatermark"):
-        raise HTTPException(status_code=400, detail="不支持的处理类型")
-
-    # 解析来源：lib_ids 批量优先，否则单个 lib_id
-    skipped = []
-    if req.lib_ids:
-        sources = []
-        skipped = []
-        for lid in req.lib_ids:
-            if not lid or not lid.strip():
-                continue
-            p = library_mod._resolve_safe(DOWNLOAD_DIR, lid.strip())
-            if not p or not p.is_file():
-                skipped.append(lid)
-                continue
-            sources.append((lid.strip(), p))
-        if not sources:
-            raise HTTPException(status_code=400, detail="lib_ids 中没有有效文件")
-    elif req.lib_id:
-        p = library_mod._resolve_safe(DOWNLOAD_DIR, req.lib_id)
-        if not p or not p.is_file():
-            raise HTTPException(status_code=404, detail="源文件不存在")
-        sources = [(req.lib_id, p)]
-    else:
-        raise HTTPException(status_code=400, detail="请提供 lib_id 或 lib_ids")
-
-    import uuid as _uuid
-    jobs_out = []
-    for lid, src_path in sources:
-        jid = _uuid.uuid4().hex[:12]
-        name = src_path.name
-        process_queue.submit(jid, name, lid, req.op, _run_process, jid, str(src_path), req.op, req.params or {})
-        jobs_out.append({"job_id": jid, "lib_id": lid, "name": name})
-
-    if len(jobs_out) == 1 and not skipped:
-        return {"job_id": jobs_out[0]["job_id"], "status": "running"}
-    result = {"jobs": jobs_out, "total": len(jobs_out), "status": "queued"}
-    if skipped:
-        result["skipped"] = skipped
-        result["skipped_count"] = len(skipped)
-    return result
 
 
-@app.get("/api/process/queue")
-def process_queue_list() -> dict:
-    if not (plat.is_desktop() or os.environ.get("VDL_LIBRARY_ENABLED")):
-        raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
-    return process_queue.get_queue()
 
 
-@app.post("/api/process/concurrency")
-def process_set_concurrency(req: dict = None) -> dict:
-    if not (plat.is_desktop() or os.environ.get("VDL_LIBRARY_ENABLED")):
-        raise HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
-    n = int((req or {}).get("n", process_queue.concurrency))
-    process_queue.set_concurrency(n)
-    return {"concurrency": process_queue.concurrency}
 
 
-@app.get("/api/process/{job_id}")
-def process_status(job_id: str) -> dict:
-    with process_queue.lock:
-        job = process_queue.jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="处理任务不存在")
-    steps = job.get("steps") or []
-    if not steps:
-        steps = [{"name": "处理中", "status": "running" if job["status"] == "running" else "done",
-                  "detail": "", "created_at": time.time(), "updated_at": time.time()}]
-    return {"status": job["status"], "error": job.get("error", ""),
-            "lib_id": job.get("lib_id", ""), "name": job.get("name", ""),
-            "count": job.get("count", 0), "is_dir": job.get("is_dir", False),
-            "steps": steps, "logs": job.get("logs", [])}
 
 
 def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
@@ -4530,51 +3127,12 @@ class SubscribeRequest(BaseModel):
     auto_check: bool = True
 
 
-@app.get("/api/subscriptions")
-def list_subscriptions() -> dict:
-    return {"subscriptions": [s.to_public_dict() for s in sub_store.list_all()], "enabled": SUB_ENABLED}
 
 
-@app.post("/api/subscriptions")
-def add_subscription(payload: SubscribeRequest) -> dict:
-    if not SUB_ENABLED:
-        raise HTTPException(status_code=403, detail="当前部署未启用订阅功能")
-    if not downloader.is_valid_quality(payload.quality):
-        raise HTTPException(status_code=400, detail="不支持的清晰度选项")
-    url, platform = parse_source(payload.url)  # 校验为已知公开平台
-    sid = uuid.uuid4().hex[:TASK_ID_LENGTH]
-    # 首次添加只记录基线（不下载历史视频），之后发布的新视频才自动下载
-    items = subs_mod.probe_channel(url, payload.cookie, payload.proxy, limit=SUBSCRIBE_PROBE_LIMIT)
-    baseline = [it["id"] for it in items][:200]
-    sub = subs_mod.Subscription(
-        id=sid, url=url, name=payload.name or platform.name,
-        platform=platform.name, quality_key=payload.quality,
-        quality_label=downloader.quality_label(payload.quality),
-        cookie=payload.cookie, proxy=payload.proxy, auto_check=payload.auto_check,
-        last_video_ids=baseline, last_checked=time.time(), created_at=time.time(),
-    )
-    sub_store.add(sub)
-    return sub.to_public_dict()
 
 
-@app.delete("/api/subscriptions/{sub_id}")
-def remove_subscription(sub_id: str) -> dict:
-    if not sub_store.remove(sub_id):
-        raise HTTPException(status_code=404, detail="订阅不存在")
-    return {"deleted": True}
 
 
-@app.post("/api/subscriptions/{sub_id}/check")
-def check_subscription_route(sub_id: str) -> dict:
-    sub = sub_store.get(sub_id)
-    if not sub:
-        raise HTTPException(status_code=404, detail="订阅不存在")
-    try:
-        result = _run_subscription_check(sub)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("订阅 %s 手动检查失败", sub_id)
-        raise HTTPException(status_code=502, detail=f"探查频道失败：{str(exc)[:200]}")
-    return result
 
 
 def _subscription_watchdog() -> None:
@@ -4677,38 +3235,6 @@ class BaiduDlinkRequest(BaseModel):
     filename: str = Field(default="", max_length=255)
 
 
-@app.post("/api/baidu_dlink")
-def add_baidu_dlink(payload: BaiduDlinkRequest, request: Request) -> dict:
-    # SSRF 护栏：仅允许百度域名直链
-    if "pan.baidu.com" not in payload.dlink and "baidu.com" not in payload.dlink:
-        raise HTTPException(status_code=400, detail="仅支持百度网盘下载直链")
-    # 文件名安全化
-    raw = (payload.filename or "baidu_download").strip()
-    fname = re.sub(r'[^\w\-\.\(\)\u4e00-\u9fff ]', '_', raw) or "baidu_download"
-    if not fname.lower().endswith((".apk", ".zip", ".rar", ".mp4", ".pdf", ".7z", ".tar", ".gz", ".exe", ".dmg", ".iso", ".txt", ".json")):
-        fname += ".bin"
-    dest_dir = DOWNLOAD_DIR / "baidu"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / fname
-    # 防重名
-    if dest.exists():
-        base, ext = os.path.splitext(fname)
-        i = 1
-        while dest.exists():
-            dest = dest_dir / f"{base}_{i}{ext}"
-            i += 1
-    task_id = "bd_" + str(int(time.time() * 1000))[-10:]
-
-    def _run():
-        try:
-            clouddrive._aria2c_download(dlink=payload.dlink, dest=dest, total=0, concurrency=8)
-            logger.info("百度直链下载完成: %s", dest)
-        except Exception as e:
-            logger.error("百度直链下载失败: %s", e)
-
-    _t2 = threading.Thread(target=_run, name="vdl-baidu-dlink", daemon=True)
-    _t2.start()
-    return {"ok": True, "task_id": task_id, "dest": str(dest), "message": "已提交 aria2c 下载"}
 
 
 # ---- 百度网盘下载（baiduPCS-Go 适配器，替代脆弱的 WebView 注入）----
@@ -4730,168 +3256,28 @@ _pcs_tasks: dict[str, dict] = {}
 _pcs_lock = threading.Lock()
 
 
-@app.get("/api/pcs/status")
-def pcs_status() -> dict:
-    if baidu_pcs is None:
-        return {"binary_installed": False, "error": "baidu_pcs 模块未加载"}
-    try:
-        return baidu_pcs.status()
-    except Exception as e:
-        return {"binary_installed": False, "error": str(e)}
 
 
-@app.get("/api/pcs/build-info")
-def pcs_build_info() -> dict:
-    """返回构建信息（git 哈希 + 构建时间），用于界面显示版本号防止跑错旧版。"""
-    import json, os, sys
-    default = {"hash": "unknown", "time": "unknown", "version": "?"}
-    # 尝试多个可能路径（PyInstaller 提取目录 / 开发目录 / Resources）
-    _candidates = []
-    _base = os.path.dirname(os.path.abspath(__file__))
-    for _name in ("build_info.txt", ".build_info.json"):
-        _candidates.append(os.path.join(_base, _name))
-        # PyInstaller onedir: 也尝试 sys._MEIPASS 下的 server/ 子目录
-        if getattr(sys, 'frozen', False):
-            _mei = getattr(sys, '_MEIPASS', None)
-            if _mei:
-                _candidates.append(os.path.join(_mei, "server", _name))
-                _candidates.append(os.path.join(_mei, _name))
-    for _p in _candidates:
-        try:
-            if os.path.exists(_p):
-                with open(_p, "r") as _f:
-                    _data = json.load(_f)
-                    print(f"[build-info] OK from {_p} -> {_data}")
-                    return _data
-        except Exception as _e:
-            print(f"[build-info] read error {_p}: {_e}")
-    # fallback: 尝试从 git 读取
-    import subprocess
-    try:
-        h = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
-                                    cwd=os.path.dirname(_base),
-                                    stderr=subprocess.DEVNULL, timeout=5).decode().strip()
-        default["hash"] = h
-    except Exception:
-        pass
-    print(f"[build-info] FALLBACK -> {default}, candidates={_candidates}")
-    return default
 
 
-@app.post("/api/pcs/install")
-def pcs_install() -> dict:
-    if baidu_pcs is None:
-        return {"ok": False, "error": "baidu_pcs 模块未加载"}
-    def _prog(d):
-        with _pcs_lock:
-            _pcs_tasks["_install"] = {"status": "installing", **d}
-    return baidu_pcs.ensure_binary(_prog)
 
 
-@app.post("/api/pcs/login")
-def pcs_login(payload: dict) -> dict:
-    if baidu_pcs is None:
-        return {"ok": False, "error": "baidu_pcs 模块未加载"}
-    raw = (payload or {}).get("cookies") or (payload or {}).get("bduss") or ""
-    try:
-        return baidu_pcs.login(raw)
-    except Exception as e:
-        logger.exception("pcs_login 异常")
-        return {"ok": False, "message": f"登录接口异常：{e}"}
 
 
-@app.post("/api/pcs/login-password")
-def pcs_login_password(payload: dict) -> dict:
-    if baidu_pcs is None:
-        return {"ok": False, "error": "baidu_pcs 模块未加载"}
-    username = (payload or {}).get("username") or ""
-    password = (payload or {}).get("password") or ""
-    try:
-        return baidu_pcs.login_by_password(username, password)
-    except Exception as e:
-        logger.exception("pcs_login_password 异常")
-        return {"ok": False, "message": f"登录接口异常：{e}"}
 
 
-@app.get("/api/pcs/qr/gen")
-def pcs_qr_gen() -> dict:
-    if baidu_qr is None:
-        return {"ok": False, "status": "error", "message": "baidu_qr 模块未加载"}
-    try:
-        return baidu_qr.qr_gen()
-    except Exception as e:
-        logger.exception("pcs_qr_gen 异常")
-        return {"ok": False, "status": "error", "message": f"生成二维码失败：{e}"}
 
 
-@app.get("/api/pcs/qr/poll")
-def pcs_qr_poll(sign: str = "") -> dict:
-    if baidu_qr is None:
-        return {"ok": False, "status": "error", "message": "baidu_qr 模块未加载"}
-    try:
-        return baidu_qr.qr_poll(sign)
-    except Exception as e:
-        logger.exception("pcs_qr_poll 异常")
-        return {"ok": False, "status": "error", "message": f"轮询异常：{e}"}
 
 
-@app.get("/api/pcs/who")
-def pcs_who() -> dict:
-    if baidu_pcs is None:
-        return {"ok": False, "logged_in": False, "error": "baidu_pcs 模块未加载"}
-    return baidu_pcs.who()
 
 
-@app.post("/api/pcs/share/transfer")
-def pcs_share_transfer(payload: dict) -> dict:
-    if baidu_pcs is None:
-        return {"ok": False, "error": "baidu_pcs 模块未加载"}
-    url = (payload or {}).get("url") or ""
-    pwd = (payload or {}).get("pwd") or ""
-    return baidu_pcs.transfer(url, pwd)
 
 
-@app.post("/api/pcs/ls")
-def pcs_ls(payload: dict) -> dict:
-    if baidu_pcs is None:
-        return {"ok": False, "error": "baidu_pcs 模块未加载"}
-    path = (payload or {}).get("path") or "/"
-    return baidu_pcs.ls(path)
 
 
-@app.post("/api/pcs/download")
-def pcs_download(payload: dict):
-    remote = (payload or {}).get("path") or (payload or {}).get("remote_path") or ""
-    name = (payload or {}).get("name") or remote.split("/")[-1] or "pcs_download"
-    if not remote:
-        return {"ok": False, "detail": "缺少网盘路径 path"}
-    tid = "pcs_" + str(int(time.time() * 1000))[-10:]
-
-    def _worker():
-        def _prog(d):
-            with _pcs_lock:
-                _pcs_tasks[tid]["progress"] = d
-        with _pcs_lock:
-            _pcs_tasks[tid] = {"status": "downloading", "name": name, "progress": {"stage": "starting"}}
-        try:
-            res = baidu_pcs.download(remote, progress=_prog)
-            with _pcs_lock:
-                _pcs_tasks[tid].update(status="done" if res["ok"] else "failed", **res)
-        except Exception as e:  # noqa: BLE001
-            with _pcs_lock:
-                _pcs_tasks[tid].update(status="failed", message=str(e))
-
-    threading.Thread(target=_worker, name=f"vdl-pcs-{tid}", daemon=True).start()
-    return {"ok": True, "task_id": tid, "message": "已提交下载"}
 
 
-@app.get("/api/pcs/task/{tid}")
-def pcs_task(tid: str):
-    with _pcs_lock:
-        t = _pcs_tasks.get(tid)
-    if not t:
-        return {"ok": False, "detail": "任务不存在"}
-    return t
 
 
 # --------------------------------------------------------------------------- #
@@ -4899,5 +3285,34 @@ def pcs_task(tid: str):
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
+
+from routers import convert as _convert_rtr
+app.include_router(_convert_rtr.router)
+from routers import fs as _fs_rtr
+app.include_router(_fs_rtr.router)
+from routers import commentary as _commentary_rtr
+app.include_router(_commentary_rtr.router)
+from routers import cloud as _cloud_rtr
+app.include_router(_cloud_rtr.router)
+from routers import library as _library_rtr
+app.include_router(_library_rtr.router)
+from routers import retention as _retention_rtr
+app.include_router(_retention_rtr.router)
+from routers import archive as _archive_rtr
+app.include_router(_archive_rtr.router)
+from routers import torrents as _torrents_rtr
+app.include_router(_torrents_rtr.router)
+from routers import subtitles as _subtitles_rtr
+app.include_router(_subtitles_rtr.router)
+from routers import llm as _llm_rtr
+app.include_router(_llm_rtr.router)
+from routers import process as _process_rtr
+app.include_router(_process_rtr.router)
+from routers import subscriptions as _subscriptions_rtr
+app.include_router(_subscriptions_rtr.router)
+from routers import baidu_dlink as _baidu_dlink_rtr
+app.include_router(_baidu_dlink_rtr.router)
+from routers import pcs as _pcs_rtr
+app.include_router(_pcs_rtr.router)
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
