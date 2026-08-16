@@ -35,7 +35,7 @@ import urllib.request
 import tempfile
 
 
-def _cookie_diag(key: str, value: str = "") -> -> None:
+def _cookie_diag(key: str, value: str = "") -> None:
     """写 Cookie 诊断日志到临时文件（打包后可读，不影响正常运行）。"""
     try:
         path = os.path.join(tempfile.gettempdir(), "vdl_cookie_diag.txt")
