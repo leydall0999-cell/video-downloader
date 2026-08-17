@@ -3333,13 +3333,14 @@
       if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '获取百度授权链接失败：' + tip;
       return;
     }
-    // 调 Python 桥接 API 在系统浏览器打开授权页
+    // 委托桌面增强层用原生桥接在系统浏览器打开授权页；无桥接（含纯 web 端）
+    // 时回退 window.open。window.VDL.desktop 仅在 desktop-app.js 加载后存在。
     let opened = false;
-    try {
-      const res = window.pywebview?.api?.open_external?.(url);
-      opened = (typeof res === 'string') ? !res.startsWith('ERROR') : true;
-    } catch (e) {
-      // 非 pywebview 环境（如 web 测试）回退到 window.open
+    const viaDesktop = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal(url);
+    if (viaDesktop) {
+      opened = true;
+    } else {
+      // web 端或原生桥接不可用：回退浏览器打开
       try {
         const w = window.open(url, '_blank');
         opened = !!w;
@@ -3524,11 +3525,9 @@
   if (pcsOpenWebBtn) {
     pcsOpenWebBtn.addEventListener('click', () => {
       const url = 'https://pan.baidu.com/';
-      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
-        window.pywebview.api.open_external(url);
-      } else {
-        window.open(url, '_blank');
-      }
+      // 委托桌面增强层原生打开；无桥接（含 web 端）回退浏览器
+      const opened = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal(url);
+      if (!opened) window.open(url, '_blank');
     });
   }
 
@@ -4223,11 +4222,9 @@
             link.href = t.browser_url;
             link.textContent = '↗ 点击在浏览器打开百度分享页下载';
             try {
-              if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
-                window.pywebview.api.open_external(t.browser_url);
-              } else {
-                window.open(t.browser_url, '_blank');  // 浏览器模式回退
-              }
+              // 委托桌面增强层原生打开；无桥接（含 web 端）回退浏览器
+              const opened = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal(t.browser_url);
+              if (!opened) window.open(t.browser_url, '_blank');  // 浏览器模式回退
             } catch (e) {
               // 自动打开失败不致命，用户可点上面的链接手动打开
             }
