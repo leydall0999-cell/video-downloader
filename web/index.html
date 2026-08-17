@@ -323,6 +323,8 @@
   <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle">
     <h2 id="ucTitle" class="guide-title">上传视频 · 格式转换</h2>
     <p class="uc-tip">本地已有视频，不想走下载？直接上传，转成想要的格式 / 分辨率 / 码率，或提取音频。</p>
+    <div class="card">
+      <h3 class="card-title">转换设置</h3>
     <div class="uc-form">
       <label class="uc-field">
         <span class="uc-label">视频文件</span>
@@ -372,11 +374,15 @@
         <input type="checkbox" id="ucLibrary" /> <span class="uc-label">完成后存入媒体库</span>
       </label>
     </div>
-    <button type="button" class="btn btn-primary" id="ucBtn">开始转换</button>
-    <span class="convert-status" id="ucStatus"></span>
+      <button type="button" class="btn btn-primary btn-block" id="ucBtn">开始转换</button>
+      <span class="convert-status" id="ucStatus"></span>
+    </div>
     <div class="uc-result" id="ucResult" hidden>
-      <a class="btn btn-accent btn-sm" id="ucDownload" download>下载转换文件</a>
-      <a class="btn btn-ghost btn-sm" id="ucLibLink" hidden>在媒体库查看</a>
+      <div class="uc-preview" id="ucPreview"></div>
+      <div class="uc-result-actions">
+        <a class="btn btn-accent btn-sm" id="ucDownload" download>下载转换文件</a>
+        <a class="btn btn-ghost btn-sm" id="ucLibLink" hidden>在媒体库查看</a>
+      </div>
     </div>
   </section>
 
@@ -502,6 +508,8 @@
         <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
       </div>
     </div>
+    <div class="card">
+      <h3 class="card-title">筛选与操作</h3>
     <div class="lib-controls">
       <input id="libSearch" class="adv-input" type="search" placeholder="搜索标题 / 作者 / 文件名" />
       <select id="libPlatform" class="adv-input"><option value="">全部平台</option></select>
@@ -516,6 +524,7 @@
       <button type="button" class="btn btn-ghost btn-sm" id="libDeselectAll">取消</button>
       <span class="batch-count" id="libBatchCount"></span>
       <button type="button" class="btn btn-primary btn-sm" id="libBatchProcess">批量处理</button>
+    </div>
     </div>
     <div class="lib-grid" id="libGrid"></div>
     <p class="lib-empty" id="libEmpty" hidden>还没有下载内容。去「下载」粘贴链接保存第一个视频吧。</p>
@@ -776,6 +785,8 @@
       <h2 id="subTitle" class="guide-title">🔔 订阅追更</h2>
     </div>
     <p class="sub-tip">粘贴频道主页链接，新发布的视频会自动下载到媒体库。</p>
+    <div class="card">
+      <h3 class="card-title">添加频道</h3>
     <div class="sub-add">
       <input id="subUrl" class="adv-input" type="text" placeholder="频道主页链接（如 B站 / YouTube 频道 URL）" autocomplete="off" spellcheck="false" />
       <input id="subName" class="adv-input" type="text" placeholder="备注名（可选）" autocomplete="off" spellcheck="false" />
@@ -788,7 +799,8 @@
       <label class="sub-auto"><input id="subAuto" type="checkbox" checked /> 自动检查</label>
       <button type="button" class="btn btn-primary btn-sm" id="subAddBtn">添加订阅</button>
     </div>
-    <p class="sub-hint" id="subHint" hidden></p>
+      <p class="sub-hint" id="subHint" hidden></p>
+    </div>
     <ul class="sub-list" id="subList"></ul>
     <p class="sub-empty" id="subEmpty" hidden>还没有订阅。添加频道后，新视频会自动下载。</p>
   </section>
