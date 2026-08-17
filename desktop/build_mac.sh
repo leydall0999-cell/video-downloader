@@ -300,7 +300,8 @@ echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
   --hidden-import baidu_qr \
   --hidden-import dewatermark_core \
   --collect-binaries cv2 \
-  --collect-binaries fitz \
+  --collect-all pymupdf \
+  --collect-all fitz \
   --collect-all requests \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
