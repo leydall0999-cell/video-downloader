@@ -2682,42 +2682,18 @@ _pcs_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
-# Phase 1：按域抽取的功能路由（来自 server/app.py，行为不变，全 profile 挂载）
+# Web 精简版路由（web-dev）：仅挂载网页基础功能所需路由
+#   保留：core(解析/下载) / crypto / fs / cloud(公共 Cookie 池接收端)
+#   剥离(App 专属，仅在 main 完整版挂载)：convert / commentary / library /
+#     retention / archive / torrents / subtitles / llm / process / subscriptions /
+#     baidu_dlink / pcs / dewatermark
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
-
-from routers import convert as _convert_rtr
-app.include_router(_convert_rtr.router)
 from routers import fs as _fs_rtr
 app.include_router(_fs_rtr.router)
-from routers import commentary as _commentary_rtr
-app.include_router(_commentary_rtr.router)
 from routers import cloud as _cloud_rtr
 app.include_router(_cloud_rtr.router)
-from routers import library as _library_rtr
-app.include_router(_library_rtr.router)
-from routers import retention as _retention_rtr
-app.include_router(_retention_rtr.router)
-from routers import archive as _archive_rtr
-app.include_router(_archive_rtr.router)
-from routers import torrents as _torrents_rtr
-app.include_router(_torrents_rtr.router)
-from routers import subtitles as _subtitles_rtr
-app.include_router(_subtitles_rtr.router)
-from routers import llm as _llm_rtr
-app.include_router(_llm_rtr.router)
-from routers import process as _process_rtr
-app.include_router(_process_rtr.router)
-from routers import subscriptions as _subscriptions_rtr
-app.include_router(_subscriptions_rtr.router)
-from routers import baidu_dlink as _baidu_dlink_rtr
-app.include_router(_baidu_dlink_rtr.router)
-from routers import pcs as _pcs_rtr
-app.include_router(_pcs_rtr.router)
-from routers import dewatermark as _dewatermark_rtr
-app.include_router(_dewatermark_rtr.router)
-
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
 
