@@ -333,6 +333,22 @@
     comTrimReset: $('comTrimReset'),
     comEta: $('comEta'),
     tabCommentary: $('tabCommentary'),
+    // 上传转换（需求文档模块一）
+    tabUploadConvert: $('tabUploadConvert'),
+    uploadConvertView: $('uploadConvertView'),
+    ucFile: $('ucFile'),
+    ucTarget: $('ucTarget'),
+    ucRes: $('ucRes'),
+    ucBitrate: $('ucBitrate'),
+    ucAudio: $('ucAudio'),
+    ucRotate: $('ucRotate'),
+    ucRemux: $('ucRemux'),
+    ucLibrary: $('ucLibrary'),
+    ucBtn: $('ucBtn'),
+    ucStatus: $('ucStatus'),
+    ucResult: $('ucResult'),
+    ucDownload: $('ucDownload'),
+    ucLibLink: $('ucLibLink'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -1257,6 +1273,59 @@
       }
     }
   };
+
+  // ------------------------------------------------------------------ 上传视频直接转码（需求文档模块一）
+  const startUploadConvert = async () => {
+    const file = el.ucFile.files[0];
+    if (!file) { el.ucStatus.textContent = '请先选择视频文件'; return; }
+    el.ucBtn.disabled = true;
+    el.ucStatus.textContent = '上传并转换中…';
+    el.ucResult.hidden = true;
+    const form = new FormData();
+    form.append('file', file);
+    form.append('target', el.ucTarget.value);
+    form.append('resolution', el.ucRes.value);
+    form.append('bitrate', el.ucBitrate.value.trim());
+    form.append('audio', el.ucAudio.checked ? 'true' : 'false');
+    form.append('rotate', el.ucRotate.value);
+    form.append('remux', el.ucRemux.checked ? 'true' : 'false');
+    form.append('to_library', el.ucLibrary.checked ? 'true' : 'false');
+    try {
+      const data = await request('/api/upload-convert', { method: 'POST', body: form });
+      const jobId = data.job_id;
+      const timer = setInterval(async () => {
+        try {
+          const st = await request('/api/convert/' + jobId);
+          if (st.status === 'completed') {
+            clearInterval(timer);
+            el.ucDownload.href = `${window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
+            el.ucDownload.setAttribute('download', st.filename || 'converted');
+            el.ucResult.hidden = false;
+            el.ucStatus.textContent = '转换完成 ✅';
+            el.ucBtn.disabled = false;
+            if (st.library_id) {
+              el.ucLibLink.dataset.lid = st.library_id;
+              el.ucLibLink.hidden = false;
+            } else {
+              el.ucLibLink.hidden = true;
+            }
+          } else if (st.status === 'failed') {
+            clearInterval(timer);
+            el.ucStatus.textContent = '转换失败：' + (st.error || '未知错误');
+            el.ucBtn.disabled = false;
+          }
+        } catch (_e) { /* 轮询出错继续 */ }
+      }, 3000);
+    } catch (error) {
+      el.ucBtn.disabled = false;
+      el.ucStatus.textContent = '请求失败：' + (error.message || '');
+    }
+  };
+  el.ucBtn.addEventListener('click', startUploadConvert);
+  el.ucLibLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchView('library');
+  });
 
   // ------------------------------------------------------------------ 下载用途确认弹窗
   // 临时关闭：当前不弹用途确认（2026-08-13）。后期启用 → 把 CONSENT_MODAL_ENABLED 改为 true 即可，弹窗逻辑完好保留。
@@ -4256,19 +4325,23 @@
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
     const isCom = view === 'commentary';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom;
+    const isUp = view === 'uploadconvert';
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
     el.commentaryView.hidden = !isCom;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom);
+    el.uploadConvertView.hidden = !isUp;
+    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp);
     el.tabLibrary.classList.toggle('is-active', isLib);
     el.tabSubscribe.classList.toggle('is-active', isSub);
     el.tabTorrent.classList.toggle('is-active', isTor);
     el.tabCommentary.classList.toggle('is-active', isCom);
+    el.tabUploadConvert.classList.toggle('is-active', isUp);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
+    if (isUp) { el.ucStatus.textContent = ''; el.ucResult.hidden = true; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
   };
@@ -4691,6 +4764,7 @@
   el.tabDownload.addEventListener('click', () => switchView('download'));
   el.tabLibrary.addEventListener('click', () => switchView('library'));
   el.tabCommentary.addEventListener('click', () => switchView('commentary'));
+  el.tabUploadConvert.addEventListener('click', () => switchView('uploadconvert'));
   el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
@@ -6100,6 +6174,8 @@
       if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
       // 视频解说已提升为主功能，tab 始终显示；后端未启用时操作会提示 503。
       if (el.tabCommentary) el.tabCommentary.hidden = false;
+      // 上传转换是本地核心能力，tab 始终显示
+      if (el.tabUploadConvert) el.tabUploadConvert.hidden = false;
       if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled || node.commentaryEnabled) el.tabs.hidden = false;
       // 默认展示「已生成成片」列表：打开应用即停在解说成片视图，方便直接查看/下载成片。
       switchView('commentary');

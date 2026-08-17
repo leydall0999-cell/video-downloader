@@ -134,6 +134,14 @@ CONVERT_TARGETS = {
 }
 CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "mp3": "mp3", "m4a": "m4a", "gif": "gif"}
 
+# ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
+UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
+UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
+# 上传文件大小上限（字节），默认 2GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
+UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
+# 允许上传的视频后缀白名单
+UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
+
 # ---- 双节点分流：国内节点直连国内站，海外节点直连海外站，前端按链接域名自动选 ---- #
 # VDL_REGION: 本节点所在区域，"cn"=国内 / "global"=海外（默认海外）
 # VDL_PEER_ENDPOINT: 对端节点的完整地址，如 https://cn.example.com（留空=单节点模式）
@@ -1359,28 +1367,60 @@ def _require_task(task_id: str):
 
 
 
-def _run_convert(job_id: str, src: str, target: str, resolution: str) -> None:
-    """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。"""
+def _run_convert(job_id: str, src: str, target: str, resolution: str,
+                bitrate: str = "", audio: bool = True, rotate: int = 0,
+                remux: bool = False) -> None:
+    """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。
+    新增参数（上传转码用）：bitrate 视频码率、audio 是否保留音轨、
+    rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损(-c copy)。
+    """
     job = CONVERT_JOBS.get(job_id)
     if not job:
         return
     try:
         out = Path(job["out_path"])
         cmd = [FFMPEG_BIN, "-y", "-i", src]
+        audio_only = target in ("mp3", "m4a")
         if target == "gif":
             cmd += CONVERT_TARGETS["gif"]
+        elif remux and rotate == 0:
+            # 仅换容器无损复制，忽略码率/分辨率/旋转（旋转需滤镜，与 -c copy 不兼容）
+            cmd += ["-c", "copy"]
         else:
             cmd += CONVERT_TARGETS[target]
-            if resolution != "original" and target not in ("mp3", "m4a"):
-                h = {"1080": "1080", "720": "720", "480": "480"}.get(resolution)
-                if h:
-                    cmd += ["-vf", f"scale=-2:{h}"]
+            if not audio_only:
+                vf = []
+                if resolution != "original":
+                    h = {"1080": "1080", "720": "720", "480": "480"}.get(resolution)
+                    if h:
+                        vf.append(f"scale=-2:{h}")
+                if rotate in (90, 180, 270):
+                    tf = {90: "transpose=1", 180: "transpose=3", 270: "transpose=2"}[rotate]
+                    vf.append(tf)
+                if vf:
+                    cmd += ["-vf", ",".join(vf)]
+                if bitrate:
+                    cmd += ["-b:v", str(bitrate)]
+                if not audio:
+                    cmd += ["-an"]
         cmd.append(str(out))
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or "")[-500:] or "ffmpeg 执行失败")
         if not out.exists() or out.stat().st_size == 0:
             raise RuntimeError("ffmpeg 未产出有效文件")
+        # 可选：存入媒体库（DOWNLOAD_DIR 磁盘目录，scan_library 会自动收录）
+        if job.get("to_library"):
+            dest = DOWNLOAD_DIR / out.name
+            if dest.exists() and dest.resolve() != out.resolve():
+                stem = out.stem + f"_{uuid.uuid4().hex[:6]}"
+                dest = DOWNLOAD_DIR / f"{stem}{out.suffix}"
+            shutil.copy2(out, dest)
+            try:
+                job["library_id"] = library_mod.encode_id(
+                    dest.resolve().relative_to(DOWNLOAD_DIR.resolve()).as_posix())
+            except Exception:
+                job["library_id"] = ""
         job["status"] = "completed"
         logger.info("convert %s done -> %s", job_id, out.name)
     except Exception as e:

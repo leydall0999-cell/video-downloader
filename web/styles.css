@@ -431,6 +431,22 @@ img { max-width: 100%; display: block; }
   padding: 0 .5rem; background: #fff; font-size: .85rem; color: var(--text);
 }
 .convert-status { font-size: .82rem; color: var(--brand); margin-left: .25rem; }
+
+/* ---- 上传转换视图（需求文档模块一） ---- */
+.uc-tip { color: var(--text-mute); font-size: .9rem; margin: .25rem 0 1rem; }
+.uc-form {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: .85rem 1.1rem; align-items: end; margin-bottom: 1.1rem;
+}
+.uc-field { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; }
+.uc-label { color: var(--text-mute); font-size: .8rem; }
+.uc-field input[type="text"], .uc-field select, .uc-field input[type="file"] {
+  min-height: 36px; border: 1.5px solid var(--line); border-radius: 10px;
+  padding: .35rem .55rem; background: #fff; font-size: .85rem; color: var(--text);
+}
+.uc-check { flex-direction: row; align-items: center; gap: .4rem; }
+.uc-check .uc-label { color: var(--text); font-size: .85rem; }
+.uc-result { display: flex; gap: .6rem; margin-top: .8rem; align-items: center; }
 .task-stats { font-size: .78rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .task-actions { display: flex; gap: .4rem; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
