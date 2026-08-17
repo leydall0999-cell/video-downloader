@@ -2603,17 +2603,6 @@ def _crypto_job_status(job_id: str) -> dict:
     return job
 
 
-# [moved -> routers/crypto.py] (Phase 1)
-
-
-# [moved -> routers/crypto.py] (Phase 1)
-
-# [moved -> routers/crypto.py] (Phase 1)
-
-
-# [moved -> routers/crypto.py] (Phase 1)
-
-
 def _kind_of(path: Path) -> str:
     suf = path.suffix.lower()
     if suf in library_mod.AUDIO_EXTS:
@@ -2686,14 +2675,6 @@ def _run_crypto_job(job_id: str, lib_ids: list[str], mode: str) -> None:
             job["status"] = "completed"
             job["errors"] = errors
 
-
-# [moved -> routers/crypto.py] (Phase 1)
-
-# [moved -> routers/crypto.py] (Phase 1)
-
-# [moved -> routers/crypto.py] (Phase 1)
-
-# [moved -> routers/crypto.py] (Phase 1)
 
 def _prune_crypto_jobs() -> None:
     if len(CRYPTO_JOBS) <= 200:
