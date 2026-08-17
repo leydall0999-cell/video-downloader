@@ -2074,14 +2074,11 @@ def download_file(task_id: str, download: int = 0) -> Response:
     # download=1 → 保存到本机（<a download> 点击），强制附件下载不内联播放
     # download=0 → 本地播放（<video src>），返回正确 MIME 让浏览器解码
     if download:
-        from starlette.responses import Response as RawResponse
-        _body = task.filepath.read_bytes()
-        import urllib.parse
-        _encoded = urllib.parse.quote(task.filepath.name)
-        return RawResponse(
-            content=_body,
+        return FileResponse(
+            path=task.filepath,
+            filename=task.filepath.name,
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{task.filepath.name}"; filename*=UTF-8\'\'{_encoded}'},
+            content_disposition_type="attachment",
         )
     return FileResponse(
         path=task.filepath,
