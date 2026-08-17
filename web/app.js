@@ -6621,12 +6621,14 @@
         if (el.tabPcs) el.tabPcs.hidden = !node.baiduAvailable;
       }
       el.tabs.hidden = false; // 至少有下载 tab，导航栏始终显示
+      // 默认视图：网页精简版停在下载，App 端停在解说成片
+      switchView(profile === 'web' ? 'download' : 'commentary');
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
-  // 兜底默认视图：网页精简版停在下载，App 端停在解说成片（节点信息未加载时按 App 端处理）。
-  try { switchView(node.profile === 'web' ? 'download' : 'commentary'); } catch (_) {}
+  // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
+  try { switchView('download'); } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
 
