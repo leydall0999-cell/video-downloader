@@ -1416,9 +1416,25 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 if not audio:
                     cmd += ["-an"]
         cmd.append(str(out))
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        job["stage"] = "转码中"
+        job["progress"] = 0
+        # 流式读取 ffmpeg stderr，解析总时长与当前进度，实时回写进度百分比
+        _re_dur = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+        _re_time = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+        total_dur = 0.0
+        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, bufsize=1, text=True)
+        for line in proc.stderr:
+            if not total_dur:
+                m = _re_dur.search(line)
+                if m:
+                    total_dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+            m = _re_time.search(line)
+            if m and total_dur > 0:
+                cur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                job["progress"] = int(min(100, max(0, cur / total_dur * 100)))
+        proc.wait(timeout=1800)
         if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or "")[-500:] or "ffmpeg 执行失败")
+            raise RuntimeError("ffmpeg 执行失败")
         if not out.exists() or out.stat().st_size == 0:
             raise RuntimeError("ffmpeg 未产出有效文件")
         # 可选：存入媒体库（DOWNLOAD_DIR 磁盘目录，scan_library 会自动收录）

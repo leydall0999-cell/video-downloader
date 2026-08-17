@@ -40,7 +40,8 @@ def convert_status(job_id: str) -> dict:
     if not job:
         raise app.HTTPException(status_code=404, detail="转换任务不存在")
     return {"status": job["status"], "error": job.get("error", ""),
-            "filename": job.get("filename", ""), "library_id": job.get("library_id", "")}
+            "filename": job.get("filename", ""), "library_id": job.get("library_id", ""),
+            "progress": job.get("progress", 0), "stage": job.get("stage", "")}
 
 @router.get("/api/convert/{job_id}/file")
 def convert_file(job_id: str) -> app.FileResponse:
