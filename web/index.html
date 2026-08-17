@@ -1384,22 +1384,22 @@
   // 构建时由 build_mac.sh 把占位符替换为本次构建戳；开发模式（占位符未被替换）回退到时间戳，保证改动立即生效。
   (function () {
     var fp = '__BUILD_FP__';
-    var v = (fp && fp.indexOf('__BUILD_FP__') === -1) ? fp : ('dev' + Date.now());
+    var isDesktopBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
+    var v = isDesktopBuild ? fp : ('dev' + Date.now());
     var s = document.createElement('script');
     s.src = 'app.js?v=' + encodeURIComponent(v);
     s.onload = function () {
-      // app.js 已执行并暴露 window.VDL。仅桌面版(pywebview)加载 app 专属脚本；
-      // 纯 web 环境永不加载 desktop-app.js，app 专属逻辑不进入 web 加载集。
+      // app.js 已执行并暴露 window.VDL。仅桌面版加载 app 专属脚本；
+      // 通过 build 指纹判断是否为桌面打包产物，避免 pywebview 注入时机不稳定导致漏载。
       var loadDesktopApp = function () {
         var d = document.createElement('script');
         d.src = 'js/desktop-app.js?v=' + encodeURIComponent(v);
         document.head.appendChild(d);
       };
-      if (window.pywebview) {
+      if (window.pywebview || isDesktopBuild) {
         loadDesktopApp();
       } else {
-        // pywebview 可能稍后注入 window.pywebview（早于 pywebviewready 事件）
-        // 桌面 app 里 pywebview 最终一定会就绪，不要设超时移除，避免慢启动漏加载
+        // 纯 web 环境：pywebview 可能稍后注入，但 build 指纹证明不是桌面包，永不加载
         document.addEventListener('pywebviewready', loadDesktopApp, { once: true });
       }
     };
