@@ -27,6 +27,7 @@ import sys
 import shutil
 import subprocess
 import threading
+import urllib.request
 import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
 import time
 import secrets
@@ -2812,15 +2813,116 @@ def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     return {"ok": True, "added": added, "verified": (ok is True)}
 
 
-@app.get("/api/cookie/status")
+def _cloud_sync_config() -> tuple[str, str]:
+    """返回 (sync_url, token)。优先读 env，其次读本机配置文件。
+
+    配置文件路径：~/.videodownloader/cloud_sync.json = {"url": "...", "token": "..."}
+    桌面版用此配置把本机浏览器登录态推送到网页版(Railway)公共池。
+    """
+    url = (os.environ.get("VDL_COOKIE_SYNC_URL") or "").strip()
+    token = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
+    cfg = Path.home() / ".videodownloader" / "cloud_sync.json"
+    if (not url or not token) and cfg.exists():
+        try:
+            d = json.loads(cfg.read_text(encoding="utf-8"))
+            url = url or (d.get("url") or "").strip()
+            token = token or (d.get("token") or "").strip()
+        except Exception:
+            pass
+    return url, token
+
+
+def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dict:
+    """把单站 Cookie 推送到云端公共池（POST /api/cookie/sync）。
+
+    带浏览器 User-Agent 以绕过 Cloudflare 对 Python-urllib 的拦截（error 1010）。
+    """
+    target = url.rstrip("/") + "/api/cookie/sync"
+    body = json.dumps({"token": token, "domain": domain, "cookie": header}).encode()
+    req = urllib.request.Request(
+        target,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+@app.post("/api/cookie/sync/to-cloud")
+def cookie_sync_to_cloud(request: Request) -> dict:
+    """仅本机(App 端)调用：读取本机浏览器各强反爬站的登录态并推送到网页版公共池。
+
+    这是「网页版由桌面版共享登录态」的核心：桌面版常驻时，自动把抖音/B站/快手等
+    登录态推送到 Railway 公共池，网页版访客无需手动粘贴即可复用。
+    """
+    ip = (request.client.host if request.client else "") or ""
+    if ip not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="仅允许本机调用")
+    from cookie_pool import _root_domains, is_allowed, _norm_domain
+    url, token = _cloud_sync_config()
+    if not url or not token:
+        raise HTTPException(
+            status_code=400,
+            detail="未配置云端同步地址/令牌。请在桌面版环境设置 VDL_COOKIE_SYNC_URL 与 "
+                   "VDL_COOKIE_SYNC_TOKEN，或写入 ~/.videodownloader/cloud_sync.json",
+        )
+    results = []
+    for domain in sorted(_root_domains()):
+        if domain == "chrqj.com":
+            # chrqj 不需要推到公共池（本身就是桌面专享），跳过
+            continue
+        try:
+            header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
+        except Exception:
+            header = None
+        if not header:
+            results.append({"domain": domain, "pushed": False, "reason": "本机未登录"})
+            continue
+        try:
+            resp = _push_cookie_to_cloud(domain, header, url, token)
+            results.append({
+                "domain": domain,
+                "pushed": bool(resp.get("ok")),
+                "verified": resp.get("verified"),
+            })
+        except Exception as e:
+            results.append({"domain": domain, "pushed": False, "reason": str(e)[:120]})
+    pushed = sum(1 for r in results if r.get("pushed"))
+    return {"ok": True, "pushed": pushed, "total": len(results), "results": results}
+
+
+
 def cookie_status(url: str = "") -> dict:
-    """查询某链接是否需要 Cookie、以及本机浏览器是否已有可用登录态。"""
+    """查询某链接是否需要 Cookie、本机浏览器是否已有可用登录态、以及公共池新鲜度。"""
     if not url:
         raise HTTPException(status_code=400, detail="请提供链接")
     _assert_safe_url(url)
     url, platform = parse_source(url)
     host = _host_of(url)
     info = downloader.detect_browser_cookie(host)
+    pool_ts = None
+    try:
+        from cookie_pool import _candidates, _pool_file
+        for d in _candidates(host):
+            f = _pool_file(d)
+            if f.exists():
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    for c in data.get("cookies", []):
+                        ts = c.get("ts")
+                        if ts and (pool_ts is None or ts > pool_ts):
+                            pool_ts = ts
+                except Exception:
+                    pass
+    except Exception:
+        pass
     return {
         "host": host,
         "platform": platform.key,
@@ -2828,6 +2930,7 @@ def cookie_status(url: str = "") -> dict:
         "available": info["available"],
         "browser": info["browser"],
         "profile": info["profile"],
+        "pool_updated_at": pool_ts,
     }
 
 

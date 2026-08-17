@@ -62,43 +62,76 @@
   };
   window.VDL.desktop = desktop;
 
-  // 「同步 Cookie 到云端」：仅 App 端。经用户知情同意，把本机浏览器 chrqj 登录态
-  // 上报到公共池，供网页版公共服务复用（访客无需手动粘贴）。后端限定仅本机调用。
+  // 「同步 Cookie 到云端」：仅 App 端。把本机浏览器各强反爬站(抖音/B站/快手/小红书等)
+  // 的登录态自动推送到网页版(Railway)公共池，让网页版访客无需手动粘贴即可复用。
+  // 桌面版常驻时每 30 分钟自动刷新一次，使网页版共享登录态保持新鲜。
   (function initSyncButton() {
     const btn = document.createElement('button');
     btn.id = 'syncCookieBtn';
     btn.textContent = '同步 Cookie 到云端';
     btn.style.cssText = 'margin-left:8px;padding:4px 10px;cursor:pointer;';
-    btn.addEventListener('click', async () => {
-      const ok = window.confirm(
-        '将上传你在 chrqj.com 的登录态到公共服务，供网页版访客使用\n'
-        + '（仅 chrqj，不涉及其他网站；可随时清除）。是否继续？'
-      );
-      if (!ok) return;
+    const badge = document.createElement('span');
+    badge.id = 'syncCookieBadge';
+    badge.style.cssText = 'margin-left:8px;font-size:12px;color:#888;';
+
+    async function syncToCloud(showAlert) {
       const old = btn.textContent;
       btn.disabled = true;
       btn.textContent = '同步中…';
       try {
-        const resp = await fetch('/api/cookie/sync/from-local', {
+        const resp = await fetch('/api/cookie/sync/to-cloud', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),   // domain 可传 {domain:"douyin.com"} 等，缺省 chrqj.com
+          body: JSON.stringify({}),
         });
         const data = await resp.json().catch(() => ({}));
         if (resp.ok) {
-          window.alert('同步成功' + (data.verified ? '（已通过目标站验真）' : '（已接收，稍后后台验真）'));
+          const t = new Date().toLocaleTimeString();
+          badge.textContent = `云端登录态已同步 ${t}（${data.pushed}/${data.total} 站）`;
+          if (showAlert) {
+            const lines = (data.results || [])
+              .map((r) => `· ${r.domain}: ${r.pushed ? '已推送' : '未推送' + (r.reason ? '(' + r.reason + ')' : '')}`)
+              .join('\n');
+            window.alert(`同步完成（${data.pushed}/${data.total} 站成功）\n\n${lines}`);
+          }
         } else {
-          window.alert('同步失败：' + (data.detail || '未知错误'));
+          badge.textContent = '云端同步未配置/失败';
+          if (showAlert) window.alert('同步失败：' + (data.detail || '未知错误'));
         }
       } catch (e) {
-        window.alert('同步出错：' + e.message);
+        badge.textContent = '云端同步出错';
+        if (showAlert) window.alert('同步出错：' + e.message);
       } finally {
         btn.disabled = false;
         btn.textContent = old;
       }
+    }
+
+    btn.addEventListener('click', () => {
+      const ok = window.confirm(
+        '将把本机浏览器已登录的抖音/B站/快手/小红书等强反爬站登录态\n'
+        + '推送到网页版(Railway)公共池，供网页版访客共享使用（不涉及密码，仅登录态 Cookie）。\n'
+        + '桌面版会每 30 分钟自动刷新一次。是否立即同步？'
+      );
+      if (ok) syncToCloud(true);
     });
+
     const header = document.querySelector('header');
-    if (header) header.appendChild(btn);
-    else document.body.appendChild(btn);
+    if (header) {
+      header.appendChild(btn);
+      header.appendChild(badge);
+    } else {
+      document.body.appendChild(btn);
+      document.body.appendChild(badge);
+    }
+
+    // 桌面版就绪后自动同步一次，并每 30 分钟保活
+    const wire = () => { syncToCloud(false); };
+    if (window.pywebview && window.pywebview.api) {
+      wire();
+    } else {
+      document.addEventListener('pywebviewready', wire, { once: true });
+    }
+    setInterval(() => syncToCloud(false), 30 * 60 * 1000);
   })();
 })();

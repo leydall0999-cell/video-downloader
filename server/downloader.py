@@ -634,14 +634,23 @@ def _friendly_error(exc: Exception) -> ResolveError:
     """把 yt-dlp 的英文异常转成用户能看懂的提示。"""
     text = _clean_message(str(exc))
     lowered = text.lower()
+    # 云端(网页版)实例遇到强反爬站需要登录态时，提示用户依赖桌面版共享登录态，
+    # 而不是让用户去"本机浏览器登录"（网页版访客没有本机浏览器）。
+    cloud_note = ""
+    if os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud":
+        cloud_note = (
+            "网页版由「桌面版 VDL」共享登录态：请在桌面版 VDL 中打开并保持该平台登录，"
+            "点『同步 Cookie 到云端』刷新后重试；或直接用桌面版 VDL 解析本链接。"
+        )
     rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
         (("403", "forbidden", "http error 403"), "下载被服务器拒绝（403）",
          "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
          "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
          "④换更低画质重试；⑤稍后再试"),
         (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
-         "请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
-         "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串"),
+         ("请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
+          "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串")
+         if not cloud_note else cloud_note),
         (("private", "login required", "sign in", "members-only"), "该视频需要登录或为私密内容", "请更换公开可访问的视频链接"),
         (("geo", "not available in your country", "region"), "该视频在当前网络所在地区不可播放", "可尝试更换网络环境后重试"),
         (("unsupported url", "no video"), "无法从该链接中找到视频", "请确认链接指向的是视频播放页，而不是首页或列表页"),
