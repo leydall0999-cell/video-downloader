@@ -778,13 +778,15 @@
     if (el.alertToggle) el.alertToggle.hidden = true;
   };
   document.getElementById('alertClose').addEventListener('click', clearError);
-  // 点击横幅主体（除关闭按钮外）切换错误详情展开/收起
+  // 点击横幅主体（除关闭按钮外）切换错误详情展开/收起。
+  // 只有「有详情可看」时才允许切换——通过 alertToggle 是否可见判断（showError 里 hidden=!hasDetail）。
+  // 旧的 `!el.alertDetail.hidden === false` 优先级 + 操作符有坑：hidden=false 时会卡死永远不切换。
   if (el.alertBody) {
     el.alertBody.addEventListener('click', (e) => {
       if (e.target.closest('.alert-close')) return;
-      if (el.alertDetail && !el.alertDetail.hidden === false) {
+      if (el.alertDetail && el.alertToggle && !el.alertToggle.hidden) {
         el.alertDetail.hidden = !el.alertDetail.hidden;
-        if (el.alertToggle) el.alertToggle.textContent = el.alertDetail.hidden ? '点击展开错误详情' : '点击收起错误详情';
+        el.alertToggle.textContent = el.alertDetail.hidden ? '点击展开错误详情' : '点击收起错误详情';
       }
     });
   }

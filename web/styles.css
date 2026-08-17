@@ -304,6 +304,10 @@ img { max-width: 100%; display: block; }
 .chip-more:focus-visible { outline: 3px solid rgba(79, 70, 229, .35); outline-offset: 2px; }
 
 /* ---------------- alert ---------------- */
+/* .alert { display:flex } 与浏览器自带的 [hidden] 选择器优先级打平（都是 0,1,0），
+   后写的 .alert 反而胜出，导致 hidden 属性被覆盖、横条一直露脸。补一条 .alert[hidden]
+   把优先级拉到 0,2,0，才能真正隐藏（与 .watch-modal[hidden] 同款防御）。 */
+.alert[hidden] { display: none !important; }
 .alert {
   display: flex; gap: .65rem; align-items: flex-start; margin-top: .9rem;
   background: var(--danger-soft); border: 1px solid #fbd5d5; color: #991b1b;
