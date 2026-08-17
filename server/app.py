@@ -24,6 +24,11 @@ import logging
 import os
 import re
 import sys
+# 防御性保证：uvicorn --app-dir server 等工作目录切换后，项目根仍须在 sys.path 最前，
+# 否则 yt_dlp_plugins/ 下的自定义 extractor（chrqj/kuaishou/vqq_patch）无法被 yt-dlp 加载。
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 import shutil
 import subprocess
 import threading
