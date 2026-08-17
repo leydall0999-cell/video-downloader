@@ -1546,6 +1546,36 @@
   };
   el.dwPdfBtn.addEventListener('click', startDwPdf);
 
+  // 桌面 WebView 中 <a download> 不会触发下载，改用 fetch blob + 临时 a 标签触发保存。
+  const downloadWithFetch = async (url, filename, btn) => {
+    try {
+      btn.style.opacity = '0.6';
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    } catch (err) {
+      alert('下载失败：' + (err && err.message ? err.message : err));
+    } finally {
+      btn.style.opacity = '';
+    }
+  };
+  el.dwImgDownload.addEventListener('click', (e) => {
+    e.preventDefault();
+    downloadWithFetch(el.dwImgDownload.href, el.dwImgDownload.getAttribute('download') || 'dewatered', el.dwImgDownload);
+  });
+  el.dwPdfDownload.addEventListener('click', (e) => {
+    e.preventDefault();
+    downloadWithFetch(el.dwPdfDownload.href, el.dwPdfDownload.getAttribute('download') || 'dewatered.pdf', el.dwPdfDownload);
+  });
+
   // ------------------------------------------------------------------ 下载用途确认弹窗
   // 临时关闭：当前不弹用途确认（2026-08-13）。后期启用 → 把 CONSENT_MODAL_ENABLED 改为 true 即可，弹窗逻辑完好保留。
   const CONSENT_MODAL_ENABLED = false;
