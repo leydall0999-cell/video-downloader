@@ -350,6 +350,8 @@
     ucPreview: $('ucPreview'),
     ucDownload: $('ucDownload'),
     ucLibLink: $('ucLibLink'),
+    ucProgress: $('ucProgress'),
+    ucProgressFill: $('ucProgressFill'),
 
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
@@ -922,6 +924,8 @@
       convertBtn: node.querySelector('[data-convert-btn]'),
       convertFile: node.querySelector('[data-convert-file]'),
       convertStatus: node.querySelector('[data-convert-status]'),
+      convertProgress: node.querySelector('[data-convert-progress]'),
+      convertProgressFill: node.querySelector('[data-convert-progress] .progress-fill'),
       convertQuota: node.querySelector('[data-convert-quota]'),
       cloud: node.querySelector('[data-cloud]'),
       cloudStatus: node.querySelector('[data-cloud-status]'),
@@ -1271,6 +1275,12 @@
     const resolution = refs.convertRes.value;
     refs.convertBtn.disabled = true;
     refs.convertStatus.textContent = '转换中…';
+    refs.convertStatus.classList.remove('is-progress');
+    if (refs.convertProgress) {
+      refs.convertProgress.hidden = false;
+      refs.convertProgress.classList.add('is-indeterminate');
+      if (refs.convertProgressFill) refs.convertProgressFill.style.width = '';
+    }
     const base = refs.base || '';
     try {
       const data = await request(
@@ -1285,14 +1295,34 @@
           const st = await request('/api/convert/' + jobId, {}, base);
           if (st.status === 'completed') {
             clearInterval(timer);
+            if (refs.convertProgress) {
+              refs.convertProgress.classList.remove('is-indeterminate');
+              if (refs.convertProgressFill) refs.convertProgressFill.style.width = '100%';
+              setTimeout(() => { refs.convertProgress.hidden = true; }, 400);
+            }
             refs.convertFile.href = `${base || window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
             refs.convertFile.setAttribute('download', st.filename || 'converted');
             refs.convertFile.hidden = false;
             refs.convertStatus.textContent = '转换完成 ✅';
+            refs.convertStatus.classList.remove('is-progress');
             refs.convertBtn.disabled = false;
+          } else if (st.status === 'running') {
+            const p = typeof st.progress === 'number' ? st.progress : 0;
+            if (refs.convertProgress) {
+              if (p > 0) {
+                refs.convertProgress.classList.remove('is-indeterminate');
+                if (refs.convertProgressFill) refs.convertProgressFill.style.width = p + '%';
+              } else {
+                refs.convertProgress.classList.add('is-indeterminate');
+              }
+            }
+            refs.convertStatus.textContent = p > 0 ? `转码中 ${p}%` : '转码中…';
+            refs.convertStatus.classList.add('is-progress');
           } else if (st.status === 'failed') {
             clearInterval(timer);
+            if (refs.convertProgress) refs.convertProgress.hidden = true;
             refs.convertStatus.textContent = '转换失败：' + (st.error || '未知错误');
+            refs.convertStatus.classList.remove('is-progress');
             refs.convertBtn.disabled = false;
           }
         } catch (_e) { /* 轮询中出错则继续 */ }
@@ -1314,7 +1344,11 @@
     const file = el.ucFile.files[0];
     if (!file) { el.ucStatus.textContent = '请先选择视频文件'; return; }
     el.ucBtn.disabled = true;
-    el.ucStatus.textContent = '上传并转换中…';
+    el.ucStatus.textContent = '上传中…';
+    el.ucStatus.classList.remove('is-progress');
+    el.ucProgress.hidden = false;
+    el.ucProgress.classList.add('is-indeterminate');
+    el.ucProgressFill.style.width = '';
     el.ucResult.hidden = true;
     el.ucPreview.innerHTML = '';
     const form = new FormData();
@@ -1329,11 +1363,17 @@
     try {
       const data = await request('/api/upload-convert', { method: 'POST', body: form });
       const jobId = data.job_id;
+      // 上传完成，进入转码阶段：进度条先保持不确定态，等首个轮询拿到百分比
+      el.ucStatus.textContent = '转码中…';
       const timer = setInterval(async () => {
         try {
           const st = await request('/api/convert/' + jobId);
           if (st.status === 'completed') {
             clearInterval(timer);
+            // 收尾：进度条填满并淡出
+            el.ucProgress.classList.remove('is-indeterminate');
+            el.ucProgressFill.style.width = '100%';
+            setTimeout(() => { el.ucProgress.hidden = true; }, 400);
             const fileUrl = `${window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
             el.ucDownload.href = fileUrl;
             el.ucDownload.setAttribute('download', st.filename || 'converted');
@@ -1357,6 +1397,7 @@
             }
             el.ucResult.hidden = false;
             el.ucStatus.textContent = '转换完成 ✅';
+            el.ucStatus.classList.remove('is-progress');
             el.ucBtn.disabled = false;
             if (st.library_id) {
               el.ucLibLink.dataset.lid = st.library_id;
@@ -1364,9 +1405,22 @@
             } else {
               el.ucLibLink.hidden = true;
             }
+          } else if (st.status === 'running') {
+            // 实时进度：有百分比则确定态填充，否则保持流动不确定态
+            const p = typeof st.progress === 'number' ? st.progress : 0;
+            if (p > 0) {
+              el.ucProgress.classList.remove('is-indeterminate');
+              el.ucProgressFill.style.width = p + '%';
+            } else {
+              el.ucProgress.classList.add('is-indeterminate');
+            }
+            el.ucStatus.textContent = p > 0 ? `转码中 ${p}%` : '转码中…';
+            el.ucStatus.classList.add('is-progress');
           } else if (st.status === 'failed') {
             clearInterval(timer);
+            el.ucProgress.hidden = true;
             el.ucStatus.textContent = '转换失败：' + (st.error || '未知错误');
+            el.ucStatus.classList.remove('is-progress');
             el.ucBtn.disabled = false;
           }
         } catch (_e) { /* 轮询出错继续 */ }

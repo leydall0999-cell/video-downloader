@@ -28,21 +28,30 @@ def _redirect_dirs(tmp_path):
 
 
 def _fake_ffmpeg(monkeypatch, tmp_path):
-    """mock subprocess.run：按命令最后一个参数（输出路径）写个假文件。"""
-    orig = tmp_path
+    """mock subprocess.Popen：写个假输出文件，并产出带 Duration/time= 的伪进度行，
+    以便校验 _run_convert 的实时进度采集（job['progress']）。"""
+    fake_stderr = [
+        "  Duration: 00:00:10.00, start: 0.0, bitrate: 1000 kb/s",
+        "frame=  100 fps=50 time=00:00:02.50 bitrate= 800kbits/s speed=2.0x",
+        "frame=  200 fps=50 time=00:00:05.00 bitrate= 800kbits/s speed=2.0x",
+        "frame=  400 fps=50 time=00:00:10.00 bitrate= 800kbits/s speed=2.0x",
+    ]
 
-    def fake_run(cmd, *a, **k):
+    class _FakeProc:
+        def __init__(self):
+            self.stderr = iter(fake_stderr)
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, *a, **k):
         out = Path(cmd[-1])
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"fake-converted")
+        return _FakeProc()
 
-        class R:
-            returncode = 0
-            stderr = ""
-
-        return R()
-
-    monkeypatch.setattr(app.subprocess, "run", fake_run)
+    monkeypatch.setattr(app.subprocess, "Popen", fake_popen)
 
 
 def _wait_completed(client, job_id, timeout=5.0):
@@ -106,6 +115,10 @@ def test_upload_convert_happy_path(tmp_path, monkeypatch):
     status = _wait_completed(client, job_id)
     assert status["status"] == "completed", status
     assert status["library_id"] == ""  # 未要求入库
+    # 进度采集：伪 ffmpeg 输出含 Duration+三段 time=，应被解析为 100%
+    assert "progress" in status and "stage" in status
+    assert status["stage"] == "转码中"
+    assert status["progress"] == 100, status
 
     # 下载产物
     dl = client.get(f"/api/convert/{job_id}/file")

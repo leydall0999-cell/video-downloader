@@ -468,6 +468,17 @@ img { max-width: 100%; display: block; }
 }
 .uc-preview audio { width: 100%; }
 .uc-result-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+/* 进度条：确定态按百分比填充，不确定态流动动画（转换刚开始、尚不知总时长时） */
+.progress { width: 100%; height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; margin: .5rem 0; }
+.progress[hidden] { display: none; }
+.progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand), var(--brand-strong)); border-radius: 999px; transition: width .35s ease; }
+.progress.is-indeterminate .progress-fill {
+  width: 38%; background: linear-gradient(90deg, transparent, var(--brand), transparent);
+  animation: progress-indet 1.1s linear infinite;
+}
+@keyframes progress-indet { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
+.convert-status { font-size: .85rem; }
+.convert-status.is-progress { color: var(--brand-strong); font-weight: 600; }
 .task-stats { font-size: .78rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .task-actions { display: flex; gap: .4rem; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
