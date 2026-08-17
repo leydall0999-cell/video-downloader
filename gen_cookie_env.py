@@ -100,7 +100,10 @@ def push_to_pool(sync_url: str, token: str, domain: str, header: str) -> tuple[i
     body = json.dumps({"token": token, "domain": domain, "cookie": header}).encode()
     req = urllib.request.Request(
         url, data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as r:
