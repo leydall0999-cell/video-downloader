@@ -11,11 +11,24 @@
       if (!box) {
         box = document.createElement('div');
         box.id = 'bootErr';
-        box.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;background:#c0392b;color:#fff;font:12px/1.5 monospace;padding:8px 12px;white-space:pre-wrap;';
+        box.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;background:#c0392b;color:#fff;font:12px/1.5 monospace;padding:8px 36px 8px 12px;white-space:pre-wrap;';
+        const close = document.createElement('button');
+        close.textContent = '×';
+        close.style.cssText = 'position:absolute;right:8px;top:6px;border:none;background:transparent;color:#fff;font-size:16px;cursor:pointer;line-height:1;';
+        close.onclick = () => box.remove();
+        box.appendChild(close);
         (document.body || document.documentElement).appendChild(box);
       }
       const loc = e.filename ? (' @ ' + String(e.filename).split('/').pop() + ':' + e.lineno) : '';
-      box.textContent = '启动错误: ' + (e.message || (e.error && e.error.message) || e.error) + loc;
+      let msg = document.getElementById('bootErrMsg');
+      if (!msg) { msg = document.createElement('div'); msg.id = 'bootErrMsg'; box.insertBefore(msg, box.firstChild); }
+      msg.textContent = '启动错误: ' + (e.message || (e.error && e.error.message) || e.error) + loc;
+      const stack = (e.error && e.error.stack) ? String(e.error.stack) : '';
+      if (stack) {
+        let pre = document.getElementById('bootErrStack');
+        if (!pre) { pre = document.createElement('pre'); pre.id = 'bootErrStack'; pre.style.cssText = 'margin:4px 0 0;white-space:pre-wrap;opacity:.85;'; box.appendChild(pre); }
+        pre.textContent = stack;
+      }
     } catch (_) {}
   });
   // 默认展示「已生成成片」列表：用 setTimeout 异步兜底，即使后续初始化同步抛错，
@@ -55,8 +68,11 @@
     resolveBtn: $('resolveBtn'),
     chips: $('platformChips'),
     alert: $('alertBox'),
+    alertBody: $('alertBody'),
     alertTitle: $('alertTitle'),
     alertHint: $('alertHint'),
+    alertDetail: $('alertDetail'),
+    alertToggle: $('alertToggle'),
     resultPanel: $('resultPanel'),
     thumb: $('videoThumb'),
     duration: $('videoDuration'),
@@ -735,7 +751,7 @@
     return null;
   };
 
-  const showError = (message, hint = '') => {
+  const showError = (message, hint = '', detail = '') => {
     let msg = String(message || '').trim();
     let h = String(hint || '').trim();
     if (!msg) { clearError(); return; }
@@ -744,12 +760,34 @@
     if (net) { msg = net.message; h = h || net.hint; }
     el.alertTitle.textContent = msg;
     el.alertHint.textContent = h;
-    el.alertHint.hidden = !String(hint || '').trim();
+    el.alertHint.hidden = !h;
+    // 完整原始错误：点击横幅可展开，便于看清"到底什么错"；同时打到控制台
+    const hasDetail = !!String(detail || '').trim();
+    if (el.alertDetail) {
+      el.alertDetail.textContent = detail || '';
+      el.alertDetail.hidden = true;
+    }
+    if (el.alertToggle) el.alertToggle.hidden = !hasDetail;
     el.alert.hidden = false;
+    try { console.error('[VDL] ' + msg + (h ? '（' + h + '）' : ''), detail || ''); } catch (_) {}
   };
 
-  const clearError = () => { el.alert.hidden = true; };
+  const clearError = () => {
+    el.alert.hidden = true;
+    if (el.alertDetail) { el.alertDetail.hidden = true; el.alertDetail.textContent = ''; }
+    if (el.alertToggle) el.alertToggle.hidden = true;
+  };
   document.getElementById('alertClose').addEventListener('click', clearError);
+  // 点击横幅主体（除关闭按钮外）切换错误详情展开/收起
+  if (el.alertBody) {
+    el.alertBody.addEventListener('click', (e) => {
+      if (e.target.closest('.alert-close')) return;
+      if (el.alertDetail && !el.alertDetail.hidden === false) {
+        el.alertDetail.hidden = !el.alertDetail.hidden;
+        if (el.alertToggle) el.alertToggle.textContent = el.alertDetail.hidden ? '点击展开错误详情' : '点击收起错误详情';
+      }
+    });
+  }
 
   const setLoading = (loading) => {
     el.resolveBtn.classList.toggle('loading', loading);

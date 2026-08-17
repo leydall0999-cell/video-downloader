@@ -325,6 +325,17 @@ img { max-width: 100%; display: block; }
 }
 .alert-close:hover { background: rgba(153, 27, 27, .1); }
 .alert-close:focus-visible { outline: 2px solid rgba(153, 27, 27, .35); outline-offset: 1px; }
+.alert-body { cursor: pointer; }
+.alert-detail {
+  margin: .35rem 0 0; padding: .5rem .6rem; max-height: 240px; overflow: auto;
+  background: rgba(127, 29, 29, .08); border-radius: 6px;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word; color: #7f1d1d;
+}
+.alert-toggle {
+  margin-top: .25rem; font-size: .78rem; color: #7f1d1d; text-decoration: underline;
+  opacity: .85;
+}
 
 /* ---------------- video card ---------------- */
 .video-card { display: grid; grid-template-columns: 190px 1fr; gap: 1rem; }
