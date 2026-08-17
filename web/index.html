@@ -172,9 +172,11 @@
 
     <div class="alert" id="alertBox" role="alert" hidden>
       <span class="alert-icon" aria-hidden="true">!</span>
-      <div class="alert-body">
+      <div class="alert-body" id="alertBody">
         <strong id="alertTitle"></strong>
         <span id="alertHint"></span>
+        <pre id="alertDetail" class="alert-detail" hidden></pre>
+        <span id="alertToggle" class="alert-toggle" hidden>点击展开错误详情</span>
       </div>
       <button type="button" class="alert-close" id="alertClose" aria-label="关闭">×</button>
     </div>
