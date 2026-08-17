@@ -347,6 +347,7 @@
     ucBtn: $('ucBtn'),
     ucStatus: $('ucStatus'),
     ucResult: $('ucResult'),
+    ucPreview: $('ucPreview'),
     ucDownload: $('ucDownload'),
     ucLibLink: $('ucLibLink'),
 
@@ -1315,6 +1316,7 @@
     el.ucBtn.disabled = true;
     el.ucStatus.textContent = '上传并转换中…';
     el.ucResult.hidden = true;
+    el.ucPreview.innerHTML = '';
     const form = new FormData();
     form.append('file', file);
     form.append('target', el.ucTarget.value);
@@ -1332,8 +1334,27 @@
           const st = await request('/api/convert/' + jobId);
           if (st.status === 'completed') {
             clearInterval(timer);
-            el.ucDownload.href = `${window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
+            const fileUrl = `${window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
+            el.ucDownload.href = fileUrl;
             el.ucDownload.setAttribute('download', st.filename || 'converted');
+            // 按结果文件类型内嵌预览（视频/音频/GIF 直接看，无需先下载）
+            const ext = (st.filename || '').split('.').pop().toLowerCase();
+            const VIDEO = ['mp4', 'mov', 'mkv', 'webm', 'flv', 'avi', 'ts'];
+            const AUDIO = ['mp3', 'm4a', 'aac', 'wav', 'ogg'];
+            el.ucPreview.innerHTML = '';
+            if (VIDEO.includes(ext)) {
+              const v = document.createElement('video');
+              v.src = fileUrl; v.controls = true; v.preload = 'metadata';
+              el.ucPreview.appendChild(v);
+            } else if (AUDIO.includes(ext)) {
+              const a = document.createElement('audio');
+              a.src = fileUrl; a.controls = true;
+              el.ucPreview.appendChild(a);
+            } else if (ext === 'gif') {
+              const im = document.createElement('img');
+              im.src = fileUrl;
+              el.ucPreview.appendChild(im);
+            }
             el.ucResult.hidden = false;
             el.ucStatus.textContent = '转换完成 ✅';
             el.ucBtn.disabled = false;

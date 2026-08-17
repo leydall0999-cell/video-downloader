@@ -100,6 +100,19 @@ img { max-width: 100%; display: block; }
   padding: 1.25rem; margin-bottom: 1rem;
 }
 
+/* ---- 通用卡片：全站统一浅色容器（去水印 .dw-card 复用此规范） ---- */
+.card {
+  background: var(--surface, #fff); border: 1px solid var(--line);
+  border-radius: var(--radius-md); padding: 1rem 1.1rem;
+  box-shadow: 0 2px 8px rgba(20, 24, 40, .04);
+}
+.card + .card { margin-top: 1rem; }
+.card-title { font-size: .95rem; font-weight: 700; margin: 0 0 .8rem; color: var(--text); }
+/* 卡片内的表单/筛选条：取消自带外边距，交由卡片内边距统一控制 */
+.card .uc-form { margin: 0 0 .9rem; }
+.card .lib-controls { margin-bottom: .7rem; }
+.card .sub-add { margin-bottom: 0; }
+
 .input-row {
   display: flex;
   align-items: center;
@@ -446,7 +459,15 @@ img { max-width: 100%; display: block; }
 }
 .uc-check { flex-direction: row; align-items: center; gap: .4rem; }
 .uc-check .uc-label { color: var(--text); font-size: .85rem; }
-.uc-result { display: flex; gap: .6rem; margin-top: .8rem; align-items: center; }
+.uc-result { display: flex; flex-direction: column; gap: .7rem; margin-top: .8rem; }
+/* 转换结果预览：视频/音频/GIF 内嵌播放，带深色画框并限制尺寸 */
+.uc-preview { margin: 0; }
+.uc-preview video, .uc-preview img {
+  display: block; max-width: 100%; max-height: 62vh; margin: 0 auto;
+  border-radius: var(--radius-md); background: #000; box-shadow: 0 2px 10px rgba(0,0,0,.18);
+}
+.uc-preview audio { width: 100%; }
+.uc-result-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 .task-stats { font-size: .78rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .task-actions { display: flex; gap: .4rem; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
@@ -517,7 +538,7 @@ img { max-width: 100%; display: block; }
 .dw-result { margin-top: .8rem; display: flex; flex-direction: column; gap: .6rem; }
 .dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
-.dw-compare img { width: 100%; height: auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
+.dw-compare img { width: 100%; height: auto; max-height: 300px; object-fit: contain; display: block; margin: 0 auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
 .dw-cap { font-size: .78rem; color: var(--text-mute); }
 
 @media (max-width: 760px) {
