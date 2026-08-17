@@ -391,39 +391,52 @@
 
     <!-- 图片模式 -->
     <div id="dwImgPane">
-      <label class="uc-field">
-        <span class="uc-label">图片文件</span>
-        <input type="file" id="dwImgFile" accept="image/*" />
-      </label>
-      <div class="dw-preview-wrap">
-        <img id="dwImgPreview" alt="预览" />
-        <canvas id="dwImgCanvas" class="dw-canvas"></canvas>
+      <div class="dw-layout">
+        <div class="dw-main">
+          <label class="uc-field">
+            <span class="uc-label">图片文件</span>
+            <input type="file" id="dwImgFile" accept="image/*" />
+          </label>
+          <div class="dw-preview-wrap">
+            <img id="dwImgPreview" alt="预览" />
+            <canvas id="dwImgCanvas" class="dw-canvas"></canvas>
+          </div>
+          <div class="dw-toolbar">
+            <div class="dw-toolgroup dw-seg" role="group" aria-label="选区模式">
+              <button type="button" class="dw-mode is-active" data-mode="new" title="替换已有选区，重新框选"><span class="dw-ico">🆕</span>新建</button>
+              <button type="button" class="dw-mode" data-mode="add" title="在已有选区上叠加新区域"><span class="dw-ico">➕</span>加选</button>
+              <button type="button" class="dw-mode" data-mode="subtract" title="从已选区域中抠除"><span class="dw-ico">➖</span>减选</button>
+            </div>
+            <span class="dw-tooldiv" aria-hidden="true"></span>
+            <div class="dw-toolgroup" role="group" aria-label="选区操作">
+              <button type="button" class="dw-mode" data-act="undo" title="撤销最后一个选区"><span class="dw-ico">↩</span>撤销</button>
+              <button type="button" class="dw-mode" data-act="clear" title="清空所有选区"><span class="dw-ico">🗑</span>清空</button>
+            </div>
+            <span class="dw-selinfo" id="dwSelInfo">尚未框选</span>
+          </div>
+          <p class="dw-hint">在预览图上<b>拖拽框选</b>。🆕 新建替换选区；➕ 加选叠加；➖ 减选抠除（绿框=保留，红框=抠除）。</p>
+        </div>
+        <aside class="dw-side">
+          <div class="dw-card">
+            <h3 class="dw-card-title">处理参数</h3>
+            <div class="uc-form">
+              <label class="uc-field">
+                <span class="uc-label">修复方法</span>
+                <select id="dwImgMethod">
+                  <option value="telea">TELEA（快 / 边缘自然）</option>
+                  <option value="ns">NS（纹理更细）</option>
+                </select>
+              </label>
+              <label class="uc-field">
+                <span class="uc-label">半径 (1-20)</span>
+                <input type="number" id="dwImgRadius" value="3" min="1" max="20" />
+              </label>
+            </div>
+            <button type="button" class="btn btn-primary btn-block" id="dwImgBtn">开始去水印</button>
+            <span class="convert-status" id="dwImgStatus"></span>
+          </div>
+        </aside>
       </div>
-      <div class="dw-tools">
-        <button type="button" class="dw-mode is-active" data-mode="new" title="替换已有选区，重新框选">🆕 新建</button>
-        <button type="button" class="dw-mode" data-mode="add" title="在已有选区上叠加新区域">➕ 加选</button>
-        <button type="button" class="dw-mode" data-mode="subtract" title="从已选区域中抠除">➖ 减选</button>
-        <span class="dw-sep"></span>
-        <button type="button" class="dw-mode" data-act="undo" title="撤销最后一个选区">↩ 撤销</button>
-        <button type="button" class="dw-mode" data-act="clear" title="清空所有选区">🗑 清空</button>
-        <span class="dw-selinfo" id="dwSelInfo">尚未框选</span>
-      </div>
-      <p class="dw-hint">在预览图上<b>拖拽框选</b>。🆕 新建替换选区；➕ 加选叠加；➖ 减选抠除（绿框=保留，红框=抠除）。</p>
-      <div class="uc-form" style="margin-top:.5rem">
-        <label class="uc-field">
-          <span class="uc-label">修复方法</span>
-          <select id="dwImgMethod">
-            <option value="telea">TELEA（快 / 边缘自然）</option>
-            <option value="ns">NS（纹理更细）</option>
-          </select>
-        </label>
-        <label class="uc-field">
-          <span class="uc-label">半径 (1-20)</span>
-          <input type="number" id="dwImgRadius" value="3" min="1" max="20" />
-        </label>
-      </div>
-      <button type="button" class="btn btn-primary" id="dwImgBtn">开始去水印</button>
-      <span class="convert-status" id="dwImgStatus"></span>
       <div class="dw-result" id="dwImgResult" hidden>
         <div class="dw-compare">
           <div><span class="dw-cap">原图</span><img id="dwImgOrig" alt="原图" /></div>
@@ -435,39 +448,42 @@
 
     <!-- PDF 模式 -->
     <div id="dwPdfPane" hidden>
-      <label class="uc-field">
-        <span class="uc-label">PDF 文件</span>
-        <input type="file" id="dwPdfFile" accept="application/pdf,.pdf" />
-      </label>
-      <div class="uc-form" style="margin-top:.5rem">
+      <div class="dw-card">
+        <h3 class="dw-card-title">PDF 去水印</h3>
         <label class="uc-field">
-          <span class="uc-label">去水印模式</span>
-          <select id="dwPdfMode">
-            <option value="annotations">注释型（无损删 Watermark 注释）</option>
-            <option value="raster">栅格化（扫描件 / 内容流内嵌水印）</option>
-          </select>
+          <span class="uc-label">PDF 文件</span>
+          <input type="file" id="dwPdfFile" accept="application/pdf,.pdf" />
         </label>
-      </div>
-      <div id="dwPdfRasterOpts" hidden>
-        <p class="dw-hint">栅格化模式按页面比例框选水印区域（百分比，0-100）：</p>
-        <div class="uc-form">
-          <label class="uc-field"><span class="uc-label">X%</span><input type="number" id="dwPdfX" value="10" min="0" max="100" /></label>
-          <label class="uc-field"><span class="uc-label">Y%</span><input type="number" id="dwPdfY" value="10" min="0" max="100" /></label>
-          <label class="uc-field"><span class="uc-label">宽%</span><input type="number" id="dwPdfW" value="30" min="1" max="100" /></label>
-          <label class="uc-field"><span class="uc-label">高%</span><input type="number" id="dwPdfH" value="10" min="1" max="100" /></label>
+        <div class="uc-form" style="margin-top:.4rem">
           <label class="uc-field">
-            <span class="uc-label">修复方法</span>
-            <select id="dwPdfMethod">
-              <option value="telea">TELEA</option>
-              <option value="ns">NS</option>
+            <span class="uc-label">去水印模式</span>
+            <select id="dwPdfMode">
+              <option value="annotations">注释型（无损删 Watermark 注释）</option>
+              <option value="raster">栅格化（扫描件 / 内容流内嵌水印）</option>
             </select>
           </label>
-          <label class="uc-field"><span class="uc-label">半径</span><input type="number" id="dwPdfRadius" value="3" min="1" max="20" /></label>
-          <label class="uc-field"><span class="uc-label">清晰度 DPI</span><input type="number" id="dwPdfDpi" value="150" min="50" max="400" /></label>
         </div>
+        <div id="dwPdfRasterOpts" hidden>
+          <p class="dw-hint">栅格化模式按页面比例框选水印区域（百分比，0-100）：</p>
+          <div class="uc-form" style="margin-bottom:.4rem">
+            <label class="uc-field"><span class="uc-label">X%</span><input type="number" id="dwPdfX" value="10" min="0" max="100" /></label>
+            <label class="uc-field"><span class="uc-label">Y%</span><input type="number" id="dwPdfY" value="10" min="0" max="100" /></label>
+            <label class="uc-field"><span class="uc-label">宽%</span><input type="number" id="dwPdfW" value="30" min="1" max="100" /></label>
+            <label class="uc-field"><span class="uc-label">高%</span><input type="number" id="dwPdfH" value="10" min="1" max="100" /></label>
+            <label class="uc-field">
+              <span class="uc-label">修复方法</span>
+              <select id="dwPdfMethod">
+                <option value="telea">TELEA</option>
+                <option value="ns">NS</option>
+              </select>
+            </label>
+            <label class="uc-field"><span class="uc-label">半径</span><input type="number" id="dwPdfRadius" value="3" min="1" max="20" /></label>
+            <label class="uc-field"><span class="uc-label">清晰度 DPI</span><input type="number" id="dwPdfDpi" value="150" min="50" max="400" /></label>
+          </div>
+        </div>
+        <button type="button" class="btn btn-primary btn-block" id="dwPdfBtn">开始去水印</button>
+        <span class="convert-status" id="dwPdfStatus"></span>
       </div>
-      <button type="button" class="btn btn-primary" id="dwPdfBtn">开始去水印</button>
-      <span class="convert-status" id="dwPdfStatus"></span>
       <div class="dw-result" id="dwPdfResult" hidden>
         <a class="btn btn-accent btn-sm" id="dwPdfDownload" download>下载结果 PDF</a>
       </div>
