@@ -9,6 +9,7 @@
 """
 
 import hashlib
+import os
 import time
 import uuid
 
@@ -37,6 +38,13 @@ class ChrqjIE(InfoExtractor):
         当全局 http_headers 里没有 Cookie（例如 Cookie 仅在 yt-dlp 的浏览器
         jar 里、未透传进 http_headers）时，直接从缓存文件取，确保视频流带登录态。
         """
+        # 部署平台（如 Railway）通过环境变量注入登录态，优先级最高，
+        # 且不怕容器重建（缓存文件会随容器销毁而丢失）。格式为纯 Cookie 值
+        # （如 "PHPSESSID=abc; uid=123"），不带 "Cookie: " 前缀。
+        env_cookie = os.environ.get('CHRQJ_COOKIE')
+        if env_cookie:
+            return env_cookie
+
         try:
             import json
             from pathlib import Path
