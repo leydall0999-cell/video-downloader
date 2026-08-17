@@ -84,8 +84,59 @@ def test_all_pcs_routes_wired():
     print("✅ 全部 /api/pcs/* 路由装配正确（qr.gen/poll, login, login-password, transfer, who）")
 
 
+def _assert_wired(c, method, path, body=None):
+    """断言路由已挂载且 handler 已运行（排除 Starlette 原生 404「Not Found」）。
+
+    业务层的 404（如「任务不存在」）是合法响应，与「路由根本没挂上」的
+    Starlette 404 区分：后者 detail 恒定是 "Not Found"。
+    """
+    r = c.request(method, path, json=body) if body is not None else c.request(method, path)
+    assert r.status_code < 500, f"{method} {path} 返回 {r.status_code}（疑似 handler 崩溃）: {r.text[:200]}"
+    if r.status_code == 404:
+        detail = (r.json() or {}).get("detail", "")
+        assert detail != "Not Found", f"{method} {path} 是路由未挂载的 404（Starlette Not Found），说明 core router 没 include"
+    return r
+
+
+def test_core_routes_wired():
+    """验证 Phase3 抽到 routers/core.py 的核心路由已装配、可响应。
+
+    覆盖 /api/version、/api/platforms、/api/nodes、/api/ydlp/version、
+    /api/tasks、/api/batch/config、/api/cookie/status、/api/resolve、
+    /api/download、/api/convert、/api/batch、/api/tasks/cancel-all。
+    """
+    c = _client()
+    # GET 类：应直接返回 200 + 合法 JSON
+    for path in [
+        "/api/version",
+        "/api/platforms",
+        "/api/nodes",
+        "/api/ydlp/version",
+        "/api/tasks",
+        "/api/batch/config",
+        "/api/cookie/status?url=https://example.com/x",
+    ]:
+        r = c.get(path)
+        assert r.status_code == 200, f"GET {path} 非 200: {r.status_code} {r.text[:200]}"
+        assert isinstance(r.json(), (dict, list)), f"GET {path} 响应非 JSON: {r.text[:200]}"
+    print("✅ 核心 GET 路由（version/platforms/nodes/ydlp/tasks/batch/cookie）装配正确 (200)")
+
+    # POST 类：不 mock 后端，只要路由挂上、handler 跑通（业务 4xx 视为通过）
+    post_cases = [
+        ("/api/resolve", {"url": "https://example.com/x"}),
+        ("/api/download", {"url": "https://example.com/a.mp4", "quality": "best"}),
+        ("/api/convert", {"task_id": "nope", "target": "mp4"}),
+        ("/api/batch", {"urls": ["https://example.com/a.mp4"]}),
+        ("/api/tasks/cancel-all", {}),
+    ]
+    for path, body in post_cases:
+        _assert_wired(c, "POST", path, body)
+    print("✅ 核心 POST 路由（resolve/download/convert/batch/cancel-all）已挂载并装配正确")
+
+
 if __name__ == "__main__":
     test_root_serves_html()
     test_pcs_status_real_offline()
     test_all_pcs_routes_wired()
-    print("\n🎉 后端无头冒烟测试全部通过 — 所有 PCS 路由装配正确，沙盒内可验证。")
+    test_core_routes_wired()
+    print("\n🎉 后端无头冒烟测试全部通过 — 所有 PCS + 核心路由装配正确，沙盒内可验证。")
