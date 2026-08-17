@@ -473,24 +473,57 @@ img { max-width: 100%; display: block; }
   position: absolute; border: 2px dashed #ff4d4f; background: rgba(255,77,79,.18);
   pointer-events: none;
 }
-.dw-tools { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin: .5rem 0 .2rem; }
+/* 工具栏：模式分段控件 + 操作组 + 选区计数 */
+.dw-toolbar {
+  display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
+  background: #f6f7fb; border: 1px solid var(--line);
+  border-radius: var(--radius-md); padding: .5rem .55rem; margin: .6rem 0 .3rem;
+}
+.dw-toolgroup { display: inline-flex; gap: .3rem; align-items: center; }
+.dw-toolgroup.dw-seg { background: #eceef5; border-radius: 10px; padding: 3px; gap: 2px; }
+.dw-tooldiv { width: 1px; align-self: stretch; background: var(--line); margin: 0 .12rem; }
+.dw-toolbar .dw-selinfo { margin-left: auto; white-space: nowrap; padding-left: .4rem; }
+.dw-ico { font-size: .92em; line-height: 1; }
+
 .dw-mode {
   padding: .35rem .8rem; border: 1px solid var(--line); background: var(--surface);
   border-radius: 999px; cursor: pointer; font-size: .84rem; color: var(--text-mute);
   transition: background .12s, color .12s, border-color .12s;
+  display: inline-flex; align-items: center; gap: .25rem;
 }
 .dw-mode:hover { border-color: var(--brand); }
 .dw-mode.is-active { background: var(--brand); color: #fff; border-color: var(--brand); }
 .dw-mode[data-mode="add"].is-active { background: #2ecc71; border-color: #2ecc71; }
 .dw-mode[data-mode="subtract"].is-active { background: #e74c3c; border-color: #e74c3c; }
+/* 分段控件内的模式按钮：白底卡片高亮，避免大面积色块 */
+.dw-toolgroup.dw-seg .dw-mode { border: 0; background: transparent; box-shadow: none; border-radius: 8px; }
+.dw-toolgroup.dw-seg .dw-mode.is-active { background: #fff; color: var(--brand-strong); box-shadow: 0 1px 3px rgba(20,24,40,.14); font-weight: 700; }
+.dw-toolgroup.dw-seg .dw-mode[data-mode="add"].is-active { color: #1e9e5a; }
+.dw-toolgroup.dw-seg .dw-mode[data-mode="subtract"].is-active { color: #c0392b; }
+
 .dw-sep { width: 1px; height: 1.2rem; background: var(--line); margin: 0 .15rem; }
 .dw-selinfo { font-size: .8rem; color: var(--text-mute); margin-left: .3rem; }
-.dw-hint { color: var(--text-mute); font-size: .82rem; margin: .2rem 0 .6rem; }
+.dw-hint { color: var(--text-mute); font-size: .82rem; margin: .2rem 0 .6rem; line-height: 1.5; }
+
+/* 图片模式两栏布局 */
+.dw-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 1.2rem; align-items: start; }
+.dw-main { min-width: 0; }
+.dw-side { min-width: 0; }
+.dw-card { background: var(--surface, #fff); border: 1px solid var(--line); border-radius: var(--radius-md); padding: .9rem 1rem; box-shadow: 0 2px 8px rgba(20,24,40,.04); }
+.dw-card-title { font-size: .95rem; font-weight: 700; margin: 0 0 .7rem; color: var(--text); }
+.dw-card .uc-form { display: flex; flex-direction: column; gap: .7rem; margin: 0 0 .8rem; }
+
+/* 结果对比卡片 */
 .dw-result { margin-top: .8rem; display: flex; flex-direction: column; gap: .6rem; }
-.dw-compare { display: flex; gap: 1rem; flex-wrap: wrap; }
-.dw-compare > div { display: flex; flex-direction: column; gap: .3rem; }
-.dw-compare img { max-width: 320px; max-height: 320px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
+.dw-compare img { width: 100%; height: auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
 .dw-cap { font-size: .78rem; color: var(--text-mute); }
+
+@media (max-width: 760px) {
+  .dw-layout { grid-template-columns: 1fr; }
+  .dw-compare { grid-template-columns: 1fr; }
+}
 
 /* ---- 提取文案结果 ---- */
 .extract-result {
