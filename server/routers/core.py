@@ -175,7 +175,7 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
     try:
         resp = app.requests.get(u, headers=headers, stream=True, timeout=(10, 120), proxies=_proxies)
     except Exception as exc:
-        raise app.HTTPException(status_code=502, detail=f'上游拉取失败：{_clean_message(str(exc))}') from None
+        raise app.HTTPException(status_code=502, detail=f'上游拉取失败：{app.downloader._clean_message(str(exc))}') from None
     if resp.status_code >= 400:
         detail = f'上游返回 {resp.status_code}'
         if resp.status_code in (401, 403):

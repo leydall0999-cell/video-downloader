@@ -136,9 +136,25 @@ def test_core_routes_wired():
     print("✅ 核心 POST 路由（resolve/download/convert/batch/cancel-all）已挂载并装配正确")
 
 
+def test_stream_proxy_upstream_error():
+    """回归测试：/api/stream/proxy 上游请求失败时，错误处理分支不得 NameError。
+
+    修复前 core.py 在 178 行裸调不存在的 _clean_message -> 500 NameError；
+    修复后改为 app.downloader._clean_message -> 正常返回 502 业务错误。
+    该分支此前从无任何测试覆盖，属潜伏雷。
+    """
+    with patch.object(server_app.requests, "get", side_effect=RuntimeError("simulated upstream failure")):
+        c = _client()
+        r = c.get("/api/stream/proxy", params={"u": "http://example.com/a.m3u8"})
+        assert r.status_code == 502, f"预期 502，实际 {r.status_code}（若是 500 即 _clean_message 雷未排）"
+        assert "上游拉取失败" in (r.json().get("detail") or ""), f"detail 异常: {r.text[:200]}"
+    print("✅ /api/stream/proxy 上游失败分支返回 502（_clean_message 雷已排，无 NameError）")
+
+
 if __name__ == "__main__":
     test_root_serves_html()
     test_pcs_status_real_offline()
     test_all_pcs_routes_wired()
     test_core_routes_wired()
+    test_stream_proxy_upstream_error()
     print("\n🎉 后端无头冒烟测试全部通过 — 所有 PCS + 核心路由装配正确，沙盒内可验证。")
