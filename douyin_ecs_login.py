@@ -44,16 +44,15 @@ def launch():
 
     Path(PROFILE).mkdir(parents=True, exist_ok=True)
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(
+    # user_data_dir 只在 launch_persistent_context 里生效，且保证登录态持久化
+    context = pw.chromium.launch_persistent_context(
+        user_data_dir=PROFILE,
         headless=True,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
         ],
-    )
-    context = browser.new_context(
-        user_data_dir=PROFILE,
         user_agent=(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -65,7 +64,7 @@ def launch():
     context.add_init_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
-    return pw, browser, context
+    return pw, context.browser, context
 
 
 def _detect_slider(page):
