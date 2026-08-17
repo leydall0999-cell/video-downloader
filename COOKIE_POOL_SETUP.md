@@ -39,6 +39,13 @@ chrqj 的 Cookie 有三层来源，优先级从高到低：
 
 ## 三、部署步骤
 
+> **快速生成环境变量**：本机跑 `gen_cookie_env.py` 一键产出 `CHRQJ_COOKIE` + `VDL_COOKIE_ENC_KEY`，
+> 自动从浏览器读 chrqj 登录态并验真，复制即用：
+> ```bash
+> .build_venv/bin/python gen_cookie_env.py          # 自动读浏览器
+> .build_venv/bin/python gen_cookie_env.py --cookie-file cookies.txt   # 或从文件读
+> ```
+
 功能已在 commit `4d44f69`（env 兜底）+ `2b4d334`（公共池）中实现，并已推送到 `main`。
 
 1. **GitHub 已是最新**（`origin/main` 已含上述提交，Railway 自动部署即可生效）。
