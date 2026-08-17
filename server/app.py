@@ -142,6 +142,12 @@ UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
 # 允许上传的视频后缀白名单
 UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
 
+# ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
+DW_DIR = DOWNLOAD_DIR / "dewatermark"
+DW_DIR.mkdir(parents=True, exist_ok=True)
+DW_JOBS: dict[str, dict] = {}
+DW_LOCK = threading.Lock()
+
 # ---- 双节点分流：国内节点直连国内站，海外节点直连海外站，前端按链接域名自动选 ---- #
 # VDL_REGION: 本节点所在区域，"cn"=国内 / "global"=海外（默认海外）
 # VDL_PEER_ENDPOINT: 对端节点的完整地址，如 https://cn.example.com（留空=单节点模式）
@@ -2687,6 +2693,8 @@ from routers import baidu_dlink as _baidu_dlink_rtr
 app.include_router(_baidu_dlink_rtr.router)
 from routers import pcs as _pcs_rtr
 app.include_router(_pcs_rtr.router)
+from routers import dewatermark as _dewatermark_rtr
+app.include_router(_dewatermark_rtr.router)
 
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)

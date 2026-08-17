@@ -10,3 +10,8 @@ python-multipart==0.0.20
 # 这里仅对 Linux 自动安装；macOS / Windows 桌面版请手动安装（见 DESKTOP_FEATURES.md §2.10）：
 #   pip install "libtorrent==2.0.11"
 libtorrent==2.0.11; sys_platform == "linux"
+
+# PDF / 图片去水印（需求文档模块二）：OpenCV inpainting + PyMuPDF。
+# 两者均有全平台 wheel；缺失时去水印路由自动返回 503（import 守护，不影响其余功能）。
+opencv-python-headless>=4.8.0
+pymupdf>=1.23.0

@@ -39,6 +39,7 @@
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
     <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎞️ 上传转换</button>
+    <button type="button" class="tab" data-view="dw" id="tabDw">🧽 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
     <button type="button" class="tab" id="tabBaidu" hidden>☁️ 百度网盘</button>
@@ -376,6 +377,91 @@
     <div class="uc-result" id="ucResult" hidden>
       <a class="btn btn-accent btn-sm" id="ucDownload" download>下载转换文件</a>
       <a class="btn btn-ghost btn-sm" id="ucLibLink" hidden>在媒体库查看</a>
+    </div>
+  </section>
+
+  <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
+  <section id="dwView" class="panel" hidden aria-labelledby="dwTitle">
+    <h2 id="dwTitle" class="guide-title">图片 / PDF 去水印</h2>
+    <p class="dw-tip">仅处理你<b>自有或已授权</b>的内容（demo 水印、自己添加的标记、已购素材的预览水印等）。不应用于去除他人版权标识。</p>
+    <div class="dw-tabs">
+      <button type="button" class="dw-sub is-active" id="dwModeImg">🖼️ 图片去水印</button>
+      <button type="button" class="dw-sub" id="dwModePdf">📄 PDF 去水印</button>
+    </div>
+
+    <!-- 图片模式 -->
+    <div id="dwImgPane">
+      <label class="uc-field">
+        <span class="uc-label">图片文件</span>
+        <input type="file" id="dwImgFile" accept="image/*" />
+      </label>
+      <div class="dw-preview-wrap">
+        <img id="dwImgPreview" alt="预览" />
+        <div id="dwImgBox" class="dw-box" hidden></div>
+      </div>
+      <p class="dw-hint">在预览图上<b>拖拽框选</b>水印区域（松手即记录）</p>
+      <div class="uc-form" style="margin-top:.5rem">
+        <label class="uc-field">
+          <span class="uc-label">修复方法</span>
+          <select id="dwImgMethod">
+            <option value="telea">TELEA（快 / 边缘自然）</option>
+            <option value="ns">NS（纹理更细）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">半径 (1-20)</span>
+          <input type="number" id="dwImgRadius" value="3" min="1" max="20" />
+        </label>
+      </div>
+      <button type="button" class="btn btn-primary" id="dwImgBtn">开始去水印</button>
+      <span class="convert-status" id="dwImgStatus"></span>
+      <div class="dw-result" id="dwImgResult" hidden>
+        <div class="dw-compare">
+          <div><span class="dw-cap">原图</span><img id="dwImgOrig" alt="原图" /></div>
+          <div><span class="dw-cap">处理后</span><img id="dwImgOut" alt="处理后" /></div>
+        </div>
+        <a class="btn btn-accent btn-sm" id="dwImgDownload" download>下载结果</a>
+      </div>
+    </div>
+
+    <!-- PDF 模式 -->
+    <div id="dwPdfPane" hidden>
+      <label class="uc-field">
+        <span class="uc-label">PDF 文件</span>
+        <input type="file" id="dwPdfFile" accept="application/pdf,.pdf" />
+      </label>
+      <div class="uc-form" style="margin-top:.5rem">
+        <label class="uc-field">
+          <span class="uc-label">去水印模式</span>
+          <select id="dwPdfMode">
+            <option value="annotations">注释型（无损删 Watermark 注释）</option>
+            <option value="raster">栅格化（扫描件 / 内容流内嵌水印）</option>
+          </select>
+        </label>
+      </div>
+      <div id="dwPdfRasterOpts" hidden>
+        <p class="dw-hint">栅格化模式按页面比例框选水印区域（百分比，0-100）：</p>
+        <div class="uc-form">
+          <label class="uc-field"><span class="uc-label">X%</span><input type="number" id="dwPdfX" value="10" min="0" max="100" /></label>
+          <label class="uc-field"><span class="uc-label">Y%</span><input type="number" id="dwPdfY" value="10" min="0" max="100" /></label>
+          <label class="uc-field"><span class="uc-label">宽%</span><input type="number" id="dwPdfW" value="30" min="1" max="100" /></label>
+          <label class="uc-field"><span class="uc-label">高%</span><input type="number" id="dwPdfH" value="10" min="1" max="100" /></label>
+          <label class="uc-field">
+            <span class="uc-label">修复方法</span>
+            <select id="dwPdfMethod">
+              <option value="telea">TELEA</option>
+              <option value="ns">NS</option>
+            </select>
+          </label>
+          <label class="uc-field"><span class="uc-label">半径</span><input type="number" id="dwPdfRadius" value="3" min="1" max="20" /></label>
+          <label class="uc-field"><span class="uc-label">清晰度 DPI</span><input type="number" id="dwPdfDpi" value="150" min="50" max="400" /></label>
+        </div>
+      </div>
+      <button type="button" class="btn btn-primary" id="dwPdfBtn">开始去水印</button>
+      <span class="convert-status" id="dwPdfStatus"></span>
+      <div class="dw-result" id="dwPdfResult" hidden>
+        <a class="btn btn-accent btn-sm" id="dwPdfDownload" download>下载结果 PDF</a>
+      </div>
     </div>
   </section>
 
