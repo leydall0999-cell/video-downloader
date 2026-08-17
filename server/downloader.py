@@ -551,7 +551,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     # 国内站（B站/抖音等）反爬严格：缺 Referer/UA 常被直接 412，无论是否带 cookie 都先补上浏览器请求头
     headers = options.setdefault("http_headers", {})
     if is_china_host(host):
-        referer = "https://www.douyin.com/" if "douyin" in host else "https://www.bilibili.com/"
+        # 防盗链 Referer 必须用站点自身 origin（与在线观看代理 _stream_referer 一致），
+        # 写死 bilibili.com 会让 chrqj.com 等影视聚合站拿到错误 Referer → CDN 403。
+        referer = "https://www.douyin.com/" if "douyin" in host else f"https://{host}/"
         headers.setdefault("Referer", referer)
         headers.setdefault(
             "User-Agent",
