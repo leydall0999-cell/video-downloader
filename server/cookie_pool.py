@@ -113,13 +113,32 @@ def _pool_file(domain: str) -> Path:
 
 
 def _candidates(domain: str):
-    """归一化后的候选 host（带 / 不带 www）。"""
+    """归一化后的候选 host（带 / 不带 www，并回退到根域）。
+
+    例如 v.douyin.com 的视频请求要能匹配到存在 douyin.com.json 里的公共池 Cookie。
+    """
     d = _norm_domain(domain)
     if not d:
         return []
-    if d.startswith("www."):
-        return [d, d[4:]]
-    return [d, "www." + d]
+    root = _strip_sub(d)
+    seen: set[str] = set()
+    out: list[str] = []
+    for cand in (d, root):
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
+        out.append(cand)
+        if cand.startswith("www."):
+            no_www = cand[4:]
+            if no_www not in seen:
+                seen.add(no_www)
+                out.append(no_www)
+        else:
+            with_www = "www." + cand
+            if with_www not in seen:
+                seen.add(with_www)
+                out.append(with_www)
+    return out
 
 
 def _decrypt_item(c: dict) -> str:
