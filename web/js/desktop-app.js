@@ -40,4 +40,40 @@
       document.addEventListener('pywebviewready', wire, { once: true });
     }
   })();
+
+  // 「同步 Cookie 到云端」：仅 App 端。经用户知情同意，把本机浏览器 chrqj 登录态
+  // 上报到公共池，供网页版公共服务复用（访客无需手动粘贴）。后端限定仅本机调用。
+  (function initSyncButton() {
+    const btn = document.createElement('button');
+    btn.id = 'syncCookieBtn';
+    btn.textContent = '同步 Cookie 到云端';
+    btn.style.cssText = 'margin-left:8px;padding:4px 10px;cursor:pointer;';
+    btn.addEventListener('click', async () => {
+      const ok = window.confirm(
+        '将上传你在 chrqj.com 的登录态到公共服务，供网页版访客使用\n'
+        + '（仅 chrqj，不涉及其他网站；可随时清除）。是否继续？'
+      );
+      if (!ok) return;
+      const old = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '同步中…';
+      try {
+        const resp = await fetch('/api/cookie/sync/from-local', { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok) {
+          window.alert('同步成功' + (data.verified ? '（已通过目标站验真）' : '（已接收，稍后后台验真）'));
+        } else {
+          window.alert('同步失败：' + (data.detail || '未知错误'));
+        }
+      } catch (e) {
+        window.alert('同步出错：' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = old;
+      }
+    });
+    const header = document.querySelector('header');
+    if (header) header.appendChild(btn);
+    else document.body.appendChild(btn);
+  })();
 })();

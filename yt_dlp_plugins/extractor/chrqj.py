@@ -45,6 +45,16 @@ class ChrqjIE(InfoExtractor):
         if env_cookie:
             return env_cookie
 
+        # 公共池（用户经 /api/cookie/sync 验真上报，供网页版公共服务复用）。
+        # 与个人本机缓存隔离，由 server.cookie_pool 管理；import 失败时降级跳过。
+        try:
+            from server.cookie_pool import get_cookie as _pool_get
+            pooled = _pool_get("chrqj.com")
+            if pooled:
+                return pooled
+        except Exception:
+            pass
+
         try:
             import json
             from pathlib import Path

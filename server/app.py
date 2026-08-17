@@ -1244,6 +1244,11 @@ async def lifespan(_: FastAPI):
         except Exception:
             logger.exception("启动种子下载管理器失败")
     cleaner = asyncio.create_task(_cleanup_loop())
+    # 公共 Cookie 池后台探测（chrqj 等需登录态的站，避免公共池静默失效）
+    try:
+        _start_cookie_pool_watchdog()
+    except Exception:
+        logger.exception("启动公共 Cookie 池探测失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
@@ -1743,6 +1748,112 @@ def cookie_cache_clear() -> dict:
     from cookie_cache import clear_cookie_cache
     n = clear_cookie_cache()
     return {"ok": True, "cleared": n}
+
+
+# —— 公共 Cookie 池：App 端经用户知情同意上报指定站点登录态，供网页版公共服务复用 ——
+# 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。
+_SYNC_RL = {"ts": {}, "lock": threading.Lock()}
+
+
+def _sync_rate_ok(ip: str) -> bool:
+    """单 IP 30 秒内至多一次，防滥用。"""
+    now = time.time()
+    with _SYNC_RL["lock"]:
+        last = _SYNC_RL["ts"].get(ip, 0)
+        if now - last < 30:
+            return False
+        _SYNC_RL["ts"][ip] = now
+        return True
+
+
+# —— 公共 Cookie 池后台探测：定期验真剔除失效项，全失效告警开发端 ——
+def _cookie_pool_alert(domain: str) -> None:
+    msg = (f"[cookie_pool] 域名 {domain} 公共 Cookie 池已空/全部失效，"
+           f"网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）")
+    logger.warning(msg)
+    try:
+        alert = Path.home() / ".videodownloader" / "cookie_pool_alert.json"
+        alert.write_text(json.dumps({"domain": domain, "ts": int(time.time()), "empty": True}, ensure_ascii=False))
+    except Exception:
+        pass
+    wh = os.environ.get("VDL_COOKIE_ALERT_WEBHOOK")
+    if wh:
+        try:
+            requests.post(wh, json={"text": msg}, timeout=10)
+        except Exception:
+            pass
+
+
+def _cookie_pool_watchdog() -> None:
+    while True:
+        try:
+            from cookie_pool import verify_and_prune, all_domains
+            for d in all_domains():
+                try:
+                    if verify_and_prune(d) == 0:
+                        _cookie_pool_alert(d)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        time.sleep(1800)  # 30 分钟一轮
+
+
+def _start_cookie_pool_watchdog() -> None:
+    t = threading.Thread(target=_cookie_pool_watchdog, daemon=True)
+    t.start()
+
+
+@app.post("/api/cookie/sync")
+def cookie_sync(payload: dict, request: Request) -> dict:
+    """App 端上报指定站点登录态到公共池（需用户知情同意 + 客户端令牌）。
+
+    流程：校验令牌 → 白名单域 → 限频 → 目标站验真(无效拒) → 入池。
+    供网页版公共服务复用，让普通访客无需手动粘贴 Cookie。
+    """
+    token = os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    supplied = (payload or {}).get("token", "")
+    if not token or supplied != token:
+        raise HTTPException(status_code=403, detail="无效令牌")
+    domain = (payload or {}).get("domain", "")
+    cookie = (payload or {}).get("cookie", "")
+    if not domain or not cookie:
+        raise HTTPException(status_code=400, detail="缺少 domain/cookie")
+    from cookie_pool import add_cookie, verify_chrqj, _ALLOWED_DOMAINS
+    if domain not in _ALLOWED_DOMAINS:
+        raise HTTPException(status_code=400, detail="不支持的域名")
+    ip = (request.client.host if request.client else "") or ""
+    if not _sync_rate_ok(ip):
+        raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+    ok = verify_chrqj(cookie)
+    if ok is False:
+        raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
+    added = add_cookie(domain, cookie, source="sync")
+    return {"ok": True, "added": added, "verified": (ok is True)}
+
+
+@app.post("/api/cookie/sync/from-local")
+def cookie_sync_from_local(request: Request) -> dict:
+    """仅本机(App 端)调用：读取本机浏览器 chrqj 登录态并上报到公共池。
+
+    安全：来源必须是本机(127.0.0.1/::1)，因为 App 后端运行在用户电脑上，
+    只有本机才能读到该用户的浏览器 Cookie；公网调用一律拒绝。
+    """
+    ip = (request.client.host if request.client else "") or ""
+    if ip not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="仅允许本机调用")
+    from cookie_pool import add_cookie, verify_chrqj
+    header = downloader.get_browser_cookie_header("chrqj.com", "https://www.chrqj.com/")
+    if not header:
+        raise HTTPException(
+            status_code=400,
+            detail="本机浏览器未检测到 chrqj 登录态，请先在浏览器登录 chrqj.com",
+        )
+    ok = verify_chrqj(header)
+    if ok is False:
+        raise HTTPException(status_code=400, detail="本机 Cookie 无效，未能通过目标站验真")
+    added = add_cookie("chrqj.com", header, source="local")
+    return {"ok": True, "added": added, "verified": (ok is True)}
 
 
 def _valid_extract_mode(value: str) -> str:
