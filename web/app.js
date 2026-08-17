@@ -1547,29 +1547,33 @@
   el.dwPdfBtn.addEventListener('click', startDwPdf);
 
   // 去水印结果下载：桌面端(pywebview/WKWebView) <a download> 不弹保存框，
-  // 优先调用原生 Python 桥接 save_dw_file 写盘到「下载」文件夹；桥接不可用(web/浏览器)时
-  // 回退到 <a download>。jobId 从处理完成时的 href 中提取。
+  // 优先调用原生 Python 桥接 save_dw_file_dialog 弹出系统保存面板，由用户自选位置/重命名；
+  // 桥接不可用(web/浏览器)时回退到 <a download>。jobId 从处理完成时的 href 中提取。
   const dwDownload = async (btn, kind) => {
     const href = btn.href || '';
     const m = href.match(/\/api\/dw\/(?:image|pdf)\/([^/?#]+)(?:\/file)?/);
     const jobId = m ? m[1] : null;
     const filename = btn.getAttribute('download') || (kind === 'image' ? 'dewatered.png' : 'dewatered.pdf');
     const api = window.pywebview && window.pywebview.api;
-    // 桌面桥接可用 → 直接 Python 写盘（最稳，绕开 WebView 下载限制）
-    if (api && api.save_dw_file && jobId) {
+    // 桌面桥接可用 → 弹原生保存面板，用户自选位置写盘（最稳，绕开 WebView 下载限制）
+    if (api && api.save_dw_file_dialog && jobId) {
       const orig = btn.textContent;
-      btn.textContent = '保存中…';
+      btn.textContent = '选择保存位置…';
       btn.disabled = true;
       try {
-        const res = await api.save_dw_file(jobId, kind, filename);
-        if (typeof res === 'string' && res.startsWith('ERROR:')) {
+        const res = await api.save_dw_file_dialog(jobId, kind, filename);
+        if (res === 'CANCELLED') {
+          btn.textContent = orig;  // 用户取消，恢复按钮
+        } else if (typeof res === 'string' && res.startsWith('ERROR:')) {
           alert('保存失败：' + res.replace(/^ERROR:\s*/, ''));
+          btn.textContent = orig;
         } else {
-          btn.textContent = '已保存到下载文件夹';
-          setTimeout(() => { btn.textContent = orig; }, 3000);
+          btn.textContent = '已保存：' + res;  // 显示实际保存路径
+          setTimeout(() => { btn.textContent = orig; }, 4000);
         }
       } catch (err) {
         alert('保存失败：' + (err && err.message ? err.message : err));
+        btn.textContent = orig;
       } finally {
         btn.disabled = false;
       }
