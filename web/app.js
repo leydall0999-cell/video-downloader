@@ -6606,8 +6606,9 @@
       node.profile = profile;
       // —— Route B：网页精简版（profile=web）按 profile 隐藏 App 专属 tab ——
       if (profile === 'web') {
-        // 网页端只保留核心「下载」；其余 App 专属入口全部隐藏（后端未挂载对应 router，点了会 404/503）
-        ['tabLibrary', 'tabCommentary', 'tabUploadConvert', 'tabDw', 'tabSubscribe', 'tabTorrent', 'tabBaidu', 'tabPcs']
+        // 网页端保留：下载(核心) / 视频转换 / 去水印；隐藏其余 App 专属入口。
+        // （convert / dewatermark router 已在 web-dev 挂载；缺依赖时优雅返回 503，不会 404）
+        ['tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent', 'tabBaidu', 'tabPcs']
           .forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
       } else {
         // App 端：沿用能力精细控制（修掉之前漏隐藏 library/subscribe/pcs 的 bug）

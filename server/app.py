@@ -2683,15 +2683,20 @@ _pcs_lock = threading.Lock()
 
 # --------------------------------------------------------------------------- #
 # Web 精简版路由（web-dev）：仅挂载网页基础功能所需路由
-#   保留：core(解析/下载) / crypto / fs / cloud(公共 Cookie 池接收端)
-#   剥离(App 专属，仅在 main 完整版挂载)：convert / commentary / library /
+#   保留：core(解析/下载) / crypto / fs / cloud(公共 Cookie 池接收端) /
+#     convert(视频转换) / dewatermark(PDF/图片去水印)
+#   剥离(App 专属，仅在 main 完整版挂载)：commentary / library /
 #     retention / archive / torrents / subtitles / llm / process / subscriptions /
-#     baidu_dlink / pcs / dewatermark
+#     baidu_dlink / pcs
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
 from routers import fs as _fs_rtr
 app.include_router(_fs_rtr.router)
+from routers import convert as _convert_rtr
+app.include_router(_convert_rtr.router)
+from routers import dewatermark as _dewatermark_rtr
+app.include_router(_dewatermark_rtr.router)
 from routers import cloud as _cloud_rtr
 app.include_router(_cloud_rtr.router)
 from routers import core as _core_rtr
