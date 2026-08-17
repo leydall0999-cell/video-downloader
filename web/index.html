@@ -1397,13 +1397,8 @@
         loadDesktopApp();
       } else {
         // pywebview 可能稍后注入 window.pywebview（早于 pywebviewready 事件）
+        // 桌面 app 里 pywebview 最终一定会就绪，不要设超时移除，避免慢启动漏加载
         document.addEventListener('pywebviewready', loadDesktopApp, { once: true });
-        // 兜底：1.5s 内仍未出现 pywebview，判定为纯 web 环境，移除监听不再加载
-        setTimeout(function () {
-          if (!window.pywebview) {
-            document.removeEventListener('pywebviewready', loadDesktopApp);
-          }
-        }, 1500);
       }
     };
     document.head.appendChild(s);
