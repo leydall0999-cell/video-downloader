@@ -102,6 +102,10 @@ fi
   --hidden-import yt_dlp_plugins.extractor.kuaishou \
   --hidden-import webview \
   --hidden-import webview.platforms.winforms \
+  --hidden-import dewatermark_core \
+  --collect-binaries cv2 \
+  --collect-all pymupdf \
+  --collect-all fitz \
   --collect-submodules yt_dlp \
   "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"

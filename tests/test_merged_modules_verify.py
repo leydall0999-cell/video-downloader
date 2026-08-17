@@ -45,6 +45,9 @@ def _assert_subset(name, backend_keys, frontend_fields):
 # 模块一：订阅监控
 # =========================================================================== #
 def test_subscriptions_smoke_and_contract(tmp_path, monkeypatch):
+    # 顺序无关：app 可能被更早的测试文件抢先 import（SUB_ENABLED 按 import 期 env 求值），
+    # 此处就地把模块级开关置 True，确保路由不早退、enabled=True（不触发 import 期守护线程）。
+    monkeypatch.setattr(m, "SUB_ENABLED", True)
     # 打桩：构造一个假平台，避免真实解析 / yt-dlp 网络探查
     class _FakePlatform:
         name = "TestTube"
@@ -99,6 +102,9 @@ def test_subscriptions_smoke_and_contract(tmp_path, monkeypatch):
 # 模块二：时效清理（retention）
 # =========================================================================== #
 def test_retention_smoke_and_contract(tmp_path, monkeypatch):
+    # 顺序无关：RETENTION_ENABLED 在 app import 期求值，可能被更早 import app 的测试置 False。
+    # 就地把模块级开关置 True，确保 _require_retention() 不返回 404「仅桌面版可用」。
+    monkeypatch.setattr(m, "RETENTION_ENABLED", True)
     monkeypatch.setattr(m, "DOWNLOAD_DIR", tmp_path)
     # 造一个超期的 .part 临时碎片（temp_days=2 默认 -> 立刻命中）
     old = tmp_path / "leftover.part"

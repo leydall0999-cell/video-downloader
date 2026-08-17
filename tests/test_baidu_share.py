@@ -26,9 +26,38 @@ class _Resp:
         return self._json
 
 
+class _FakeSession:
+    """替代 requests.Session()：拦截 verify/list/transfer 请求，避免真实联网。
+
+    transfer POST 的 data 会被记录到 captured_data，供断言转存目标路径使用。
+    """
+
+    def __init__(self, transfer_resp=None, verify_resp=None):
+        self._transfer_resp = transfer_resp or _Resp({
+            "errno": 0,
+            "extra": {"list": [{"fs_id": 1, "path": "/x"}]},
+        })
+        self._verify_resp = verify_resp or _Resp({"errno": 0, "randsk": "R"})
+        self.captured_data = None
+
+    def post(self, url, *a, **k):
+        if "transfer" in str(url):
+            self.captured_data = k.get("data")
+            return self._transfer_resp
+        return self._verify_resp
+
+    def get(self, *a, **k):
+        return _Resp({})
+
+
+def _fake_meta(items, sekey="SEK", share_id=123, uk=456, session=None):
+    """构造 _share_meta 的桩返回值（绕过真实的 verify/list 请求）。"""
+    return {"sekey": sekey, "share_id": share_id, "uk": uk, "items": items, "session": session}
+
+
 # ── _parse_share_surl ───────────────────────────────────────────────────
 def test_parse_surl_short():
-    assert BaiduProvider()._parse_share_surl("https://pan.baidu.com/s/1AbCdEf") == "1AbCdEf"
+    assert BaiduProvider()._parse_share_surl("https://pan.baidu.com/s/1AbCdEf") == "AbCdEf"  # 类型前缀 1 已剥离
 
 
 def test_parse_surl_query():
@@ -36,7 +65,7 @@ def test_parse_surl_query():
 
 
 def test_parse_surl_share_path():
-    assert BaiduProvider()._parse_share_surl("https://pan.baidu.com/share/1QwEr") == "1QwEr"
+    assert BaiduProvider()._parse_share_surl("https://pan.baidu.com/share/1QwEr") == "QwEr"  # 类型前缀 1 已剥离
 
 
 def test_parse_surl_invalid():
@@ -47,15 +76,13 @@ def test_parse_surl_invalid():
 # ── share_list ──────────────────────────────────────────────────────────
 def test_share_list_parses(monkeypatch):
     prov = BaiduProvider()
-    monkeypatch.setattr(cd.requests, "get", lambda *a, **k: _Resp({
-        "errno": 0,
-        "list": [
-            {"fs_id": 11, "path": "/movie.mp4", "server_filename": "movie.mp4", "size": 100, "isdir": 0},
-            {"fs_id": 12, "path": "/sub", "server_filename": "sub", "size": 0, "isdir": 1},
-        ],
-    }))
+    # 桩掉 _share_meta，避免真实 verify/list 请求；直接喂 list 数据验证归一化与排序
+    monkeypatch.setattr(prov, "_share_meta", lambda *a, **k: _fake_meta([
+        {"fs_id": 11, "path": "/movie.mp4", "server_filename": "movie.mp4", "size": 100, "isdir": 0},
+        {"fs_id": 12, "path": "/sub", "server_filename": "sub", "size": 0, "isdir": 1},
+    ]))
     res = prov.share_list("https://pan.baidu.com/s/1AbC", "pwd1")
-    assert res["surl"] == "1AbC"
+    assert res["surl"] == "AbC"  # 短链类型前缀 1 已被剥离
     assert len(res["list"]) == 2
     assert res["list"][0]["isdir"] is True  # 文件夹在前
 
@@ -70,10 +97,16 @@ def test_share_list_bad_pwd(monkeypatch):
 # ── share_transfer ──────────────────────────────────────────────────────
 def test_share_transfer_ok(monkeypatch):
     prov = BaiduProvider()
-    monkeypatch.setattr(cd.requests, "post", lambda *a, **k: _Resp({
+    sess = _FakeSession(transfer_resp=_Resp({
         "errno": 0,
         "extra": {"list": [{"fs_id": 999, "path": "/VideoDownloader_Share/movie.mp4"}]},
     }))
+    # 桩掉 _share_meta（verify）与 _ensure_dest_dir 的真实联网
+    monkeypatch.setattr(prov, "_share_meta", lambda *a, **k: _fake_meta(
+        [{"fs_id": 11, "path": "/movie.mp4", "server_filename": "movie.mp4", "isdir": 0}],
+        session=sess,
+    ))
+    monkeypatch.setattr(cd.requests, "post", lambda *a, **k: _Resp({}))
     out = prov.share_transfer("https://pan.baidu.com/s/1AbC", "pwd1", ["/movie.mp4"], "/VideoDownloader_Share", "TOK")
     assert out == [{"fs_id": 999, "path": "/VideoDownloader_Share/movie.mp4"}]
 
@@ -96,7 +129,7 @@ def test_download_share_transfer_then_download(tmp_path, monkeypatch):
     prov = BaiduProvider()
     captured = {}
 
-    def fake_transfer(url, pwd, paths, dest, token):
+    def fake_transfer(url, pwd, paths, dest, token, **k):
         return [{"fs_id": 999, "path": "/VideoDownloader_Share/movie.mp4"}]
 
     def fake_download(token, fs_id, path, local_path, **k):
@@ -104,6 +137,10 @@ def test_download_share_transfer_then_download(tmp_path, monkeypatch):
         captured["path"] = path
         return 123
 
+    # 桩掉 _share_meta，否则 download_share 会真实 verify
+    monkeypatch.setattr(prov, "_share_meta", lambda *a, **k: _fake_meta([
+        {"fs_id": 999, "path": "/movie.mp4", "server_filename": "movie.mp4", "isdir": 0},
+    ]))
     monkeypatch.setattr(prov, "share_transfer", fake_transfer)
     monkeypatch.setattr(prov, "download", fake_download)
     dest = tmp_path / "movie.mp4"
@@ -134,8 +171,8 @@ def test_token_store_ignores_empty(tmp_path, monkeypatch):
 def test_share_list_route(monkeypatch):
     import app as m
     monkeypatch.setattr(m, "BAIDU_ENABLED", True)
-    monkeypatch.setattr(m._baidu_provider, "share_list", lambda url, pwd="": {
-        "surl": "1AbC",
+    monkeypatch.setattr(m._baidu_provider, "share_list", lambda url, pwd="", _dir="": {
+        "surl": "AbC",
         "list": [{"fs_id": 1, "path": "/f.mp4", "name": "f.mp4", "size": 10, "isdir": 0}],
     })
     from fastapi.testclient import TestClient
@@ -172,7 +209,7 @@ def test_share_download_route_ok(tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "_baidu_token_path", lambda: tmp_path / "tok.json")
     cd.save_baidu_token({"access_token": "TOK"})  # 真实持久化令牌，供路由回退读取
 
-    def fake_ds(url, pwd, share_path, local_path, token, progress=None, backend="auto", dest="/VideoDownloader_Share"):
+    def fake_ds(url, pwd, share_path, local_path, token, progress=None, backend="auto", dest="/VideoDownloader_Share", **kwargs):
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_bytes(b"data")
         if progress:
@@ -235,11 +272,16 @@ def test_share_transfer_uses_apps_path(monkeypatch):
     """配置 APP_NAME 后，share_transfer 的 dest 自动走 /apps/{name}/ 前缀（不传 dest 时）。"""
     prov = BaiduProvider()
     monkeypatch.setattr(cd.os.environ, "get", lambda k, d="": {"VDL_BAIDU_APP_NAME": "TestApp"}.get(k, d))
-    captured = []
-    monkeypatch.setattr(cd.requests, "post", lambda *a, **k: (captured.append(k) or _Resp({
+    sess = _FakeSession(transfer_resp=_Resp({
         "errno": 0,
         "extra": {"list": [{"fs_id": 1, "path": "/apps/TestApp/VideoDownloader_Share/f.mp4"}]},
-    })))
+    }))
+    # 桩掉 _share_meta（verify）与 _ensure_dest_dir；用假 session 捕获 transfer POST 的 data
+    monkeypatch.setattr(prov, "_share_meta", lambda *a, **k: _fake_meta(
+        [{"fs_id": 1, "path": "/f.mp4", "server_filename": "f.mp4", "isdir": 0}],
+        session=sess,
+    ))
+    monkeypatch.setattr(cd.requests, "post", lambda *a, **k: _Resp({}))
     prov.share_transfer("https://pan.baidu.com/s/1AbC", "pwd", ["/f.mp4"], "", "TOK")
-    # 验证 POST data 里 dest 是 /apps/{appname}/VideoDownloader_Share
-    assert captured[0]["data"]["dest"] == "/apps/TestApp/VideoDownloader_Share"
+    # 验证 transfer POST 的 data.path 是 /apps/{appname}/VideoDownloader_Share
+    assert sess.captured_data["path"] == "/apps/TestApp/VideoDownloader_Share"

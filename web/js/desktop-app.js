@@ -41,6 +41,27 @@
     }
   })();
 
+  // 桌面增强命名空间：app.js 通过 window.VDL.desktop 委托纯桌面能力；
+  // 纯 web 环境不加载本文件，故 window.VDL.desktop 为 undefined，app.js 自动走 web 回退。
+  // 这是 Phase2「前端按端拆分」的增强层归宿——所有「无 web 等价」的桌面行为集中于此。
+  const desktop = {
+    // 在系统浏览器打开外部链接（OAuth 授权页等）。返回 true=已用原生桥接打开，
+    // false=无原生桥接（调用方应回退到 window.open）。
+    openExternal(url) {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.open_external === 'function') {
+        try {
+          const r = api.open_external(url);
+          return (typeof r === 'string') ? !r.startsWith('ERROR') : true;
+        } catch (e) {
+          return false; // 桥接异常：告知调用方回退
+        }
+      }
+      return false; // 无原生桥接
+    },
+  };
+  window.VDL.desktop = desktop;
+
   // 「同步 Cookie 到云端」：仅 App 端。经用户知情同意，把本机浏览器 chrqj 登录态
   // 上报到公共池，供网页版公共服务复用（访客无需手动粘贴）。后端限定仅本机调用。
   (function initSyncButton() {

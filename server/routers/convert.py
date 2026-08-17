@@ -39,7 +39,8 @@ def convert_status(job_id: str) -> dict:
     job = app.CONVERT_JOBS.get(job_id)
     if not job:
         raise app.HTTPException(status_code=404, detail="转换任务不存在")
-    return {"status": job["status"], "error": job.get("error", ""), "filename": job.get("filename", "")}
+    return {"status": job["status"], "error": job.get("error", ""),
+            "filename": job.get("filename", ""), "library_id": job.get("library_id", "")}
 
 @router.get("/api/convert/{job_id}/file")
 def convert_file(job_id: str) -> app.FileResponse:
@@ -52,3 +53,72 @@ def convert_file(job_id: str) -> app.FileResponse:
     if not out.exists():
         raise app.HTTPException(status_code=410, detail="转换文件已清理")
     return app.FileResponse(path=str(out), filename=out.name, media_type="application/octet-stream")
+
+
+@router.post("/api/upload-convert")
+def create_upload_convert(
+    file: app.UploadFile = app._FastAPIFile(...),
+    target: str = app.Form("mp4"),
+    resolution: str = app.Form("original"),
+    bitrate: str = app.Form(""),
+    audio: bool = app.Form(True),
+    rotate: int = app.Form(0),
+    remux: bool = app.Form(False),
+    to_library: bool = app.Form(False),
+    request: app.Request = None,
+) -> dict:
+    """上传本地视频 → 直接转码（复用 ffmpeg 管线），无需先下载。
+    参数：target 目标格式、resolution 分辨率、bitrate 视频码率、audio 是否保留音轨、
+    rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损、to_library 完成后存入媒体库。
+    """
+    app._check_rate_limit(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    if target not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的目标格式")
+    suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in app.UPLOAD_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    # 流式落盘并限制大小
+    save_path = app.UPLOAD_TMP / f"up_{app.uuid.uuid4().hex[:12]}{suffix}"
+    written = 0
+    try:
+        with save_path.open("wb") as fh:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > app.UPLOAD_MAX_BYTES:
+                    fh.close()
+                    save_path.unlink(missing_ok=True)
+                    raise app.HTTPException(status_code=413, detail="文件超过上传大小上限")
+                fh.write(chunk)
+    except app.HTTPException:
+        raise
+    except Exception as e:
+        save_path.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
+    finally:
+        file.file.close()
+
+    ext = app.CONVERT_EXT[target]
+    job_id = app.uuid.uuid4().hex[:12]
+    out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
+    with app.CONVERT_LOCK:
+        app.CONVERT_JOBS[job_id] = {
+            "status": "running",
+            "out_path": str(out_path),
+            "error": "",
+            "filename": out_path.name,
+            "to_library": to_library,
+            "library_id": "",
+        }
+    app.executor.submit(app._run_convert, job_id, str(save_path), target,
+                        resolution, bitrate, audio, rotate, remux)
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "target": target,
+        "filename": out_path.name,
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
