@@ -6556,7 +6556,7 @@
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, authRequired }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, authRequired, profile }) => {
       node.authRequired = !!authRequired;
       if (node.authRequired && !localStorage.getItem('vdl_api_token')) {
         const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
@@ -6603,23 +6603,30 @@
       if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
-      if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
-      // 视频解说已提升为主功能，tab 始终显示；后端未启用时操作会提示 503。
-      if (el.tabCommentary) el.tabCommentary.hidden = false;
-      // 上传转换是本地核心能力，tab 始终显示
-      if (el.tabUploadConvert) el.tabUploadConvert.hidden = false;
-      // 去水印是本地核心能力，tab 始终显示（后端缺依赖时操作提示 503）
-      if (el.tabDw) el.tabDw.hidden = false;
-      if (node.libraryEnabled || node.subscriptionsEnabled || node.torrentEnabled || node.commentaryEnabled) el.tabs.hidden = false;
-      // 默认展示「已生成成片」列表：打开应用即停在解说成片视图，方便直接查看/下载成片。
-      switchView('commentary');
+      node.profile = profile;
+      // —— Route B：网页精简版（profile=web）按 profile 隐藏 App 专属 tab ——
+      if (profile === 'web') {
+        // 网页端只保留核心「下载」；其余 App 专属入口全部隐藏（后端未挂载对应 router，点了会 404/503）
+        ['tabLibrary', 'tabCommentary', 'tabUploadConvert', 'tabDw', 'tabSubscribe', 'tabTorrent', 'tabBaidu', 'tabPcs']
+          .forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
+      } else {
+        // App 端：沿用能力精细控制（修掉之前漏隐藏 library/subscribe/pcs 的 bug）
+        if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
+        if (el.tabBaidu) el.tabBaidu.hidden = !node.baiduAvailable;
+        if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
+        if (el.tabUploadConvert) el.tabUploadConvert.hidden = false; // 本地核心能力
+        if (el.tabDw) el.tabDw.hidden = !node.aiDewatermarkEnabled;  // 依赖 AI 去水印能力
+        if (el.tabLibrary) el.tabLibrary.hidden = !node.libraryEnabled;
+        if (el.tabSubscribe) el.tabSubscribe.hidden = !node.subscriptionsEnabled;
+        if (el.tabPcs) el.tabPcs.hidden = !node.baiduAvailable;
+      }
+      el.tabs.hidden = false; // 至少有下载 tab，导航栏始终显示
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
-  // 兜底：无论节点信息是否加载成功，启动后都默认停在解说成片视图。
-  // （节点请求失败时 .then 不会执行，这里保证默认视图一定生效。）
-  try { switchView('commentary'); } catch (_) {}
+  // 兜底默认视图：网页精简版停在下载，App 端停在解说成片（节点信息未加载时按 App 端处理）。
+  try { switchView(node.profile === 'web' ? 'download' : 'commentary'); } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
 
