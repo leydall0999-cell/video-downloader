@@ -41,11 +41,12 @@ chrqj 的 Cookie 有三层来源，优先级从高到低：
 
 ## 三、部署步骤
 
-> **快速生成环境变量**：本机跑 `gen_cookie_env.py` 一键产出 `CHRQJ_COOKIE` + `VDL_COOKIE_ENC_KEY`，
-> 自动从浏览器读 chrqj 登录态并验真，复制即用：
+> **快速生成配置**：本机跑 `gen_cookie_env.py`，按站点类型自动产出对应配置（自动读浏览器 + 验真）：
 > ```bash
-> .build_venv/bin/python gen_cookie_env.py          # 自动读浏览器
-> .build_venv/bin/python gen_cookie_env.py --cookie-file cookies.txt   # 或从文件读
+> .build_venv/bin/python gen_cookie_env.py                              # chrqj → 输出 CHRQJ_COOKIE/VDL_COOKIE_ENC_KEY
+> .build_venv/bin/python gen_cookie_env.py --host douyin.com \
+>     --sync-url https://hanyuxz.top --sync-token <TOKEN>               # 其他站 → 上报公共池
+> .build_venv/bin/python gen_cookie_env.py --host chrqj.com --cookie-file cookies.txt   # 从文件读
 > ```
 
 功能已在 commit `4d44f69`（env 兜底）+ `2b4d334`（公共池）中实现，并已推送到 `main`。
