@@ -1481,6 +1481,7 @@
             el.dwImgOrig.src = URL.createObjectURL(file);
             el.dwImgOut.src = `${window.VDL_API_BASE || ''}/api/dw/image/${jobId}/file`;
             el.dwImgDownload.href = `${window.VDL_API_BASE || ''}/api/dw/image/${jobId}/file`;
+            el.dwImgDownload.dataset.jobId = jobId;
             el.dwImgDownload.setAttribute('download', st.filename || 'dewatered');
             el.dwImgResult.hidden = false;
             el.dwImgStatus.textContent = '去水印完成 ✅';
@@ -1528,6 +1529,7 @@
           if (st.status === 'completed') {
             clearInterval(timer);
             el.dwPdfDownload.href = `${window.VDL_API_BASE || ''}/api/dw/pdf/${jobId}/file`;
+            el.dwPdfDownload.dataset.jobId = jobId;
             el.dwPdfDownload.setAttribute('download', st.filename || 'dewatered.pdf');
             el.dwPdfResult.hidden = false;
             el.dwPdfStatus.textContent = '去水印完成 ✅';
@@ -1548,11 +1550,14 @@
 
   // 去水印结果下载：桌面端(pywebview/WKWebView) <a download> 不弹保存框，
   // 优先调用原生 Python 桥接 save_dw_file_dialog 弹出系统保存面板，由用户自选位置/重命名；
-  // 桥接不可用(web/浏览器)时回退到 <a download>。jobId 从处理完成时的 href 中提取。
+  // 桥接不可用(web/浏览器)时回退到 <a download>。jobId 优先从 data-job-id 读取，
+  // 缺失时再从 href 正则兜底。
   const dwDownload = async (btn, kind) => {
     const href = btn.href || '';
-    const m = href.match(/\/api\/dw\/(?:image|pdf)\/([^/?#]+)(?:\/file)?/);
-    const jobId = m ? m[1] : null;
+    const jobId = btn.dataset.jobId || (() => {
+      const m = href.match(/\/api\/dw\/(?:image|pdf)\/([^/?#]+)(?:\/file)?/);
+      return m ? m[1] : null;
+    })();
     const filename = btn.getAttribute('download') || (kind === 'image' ? 'dewatered.png' : 'dewatered.pdf');
     const api = window.pywebview && window.pywebview.api;
     // 桌面桥接可用 → 弹原生保存面板，用户自选位置写盘（最稳，绕开 WebView 下载限制）
@@ -1588,7 +1593,7 @@
       a.click();
       a.remove();
     } else {
-      alert('未找到去水印任务，无法下载');
+      alert('未找到去水印任务，无法下载。\nhref=' + href + '\njobId=' + String(jobId));
     }
   };
   el.dwImgDownload.addEventListener('click', (e) => {
