@@ -574,10 +574,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     # 多 client 列表会导致 web 的空 SABR 结果污染整体，必须只传一个。
     if host and ("youtube.com" in host or "youtu.be" in host):
         options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
-    else:
-        # 自动登录态：用户未手动粘贴时，优先用本机缓存的浏览器 Cookie（任意站点均可，
-        # 含缓存、浏览器关闭后仍可用，仅本机不外传）；缺失再实时解密。这样登录过的平台
-        # 在解析 / 下载时也能自动带登录态，从而拿到更高分辨率档位。
+    elif not cookie_text:
+        # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
+        # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
         try:
             from cookie_cache import get_cached_cookie_header
             cached = get_cached_cookie_header(host)
@@ -588,25 +587,38 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             headers["Cookie"] = cached
             _cookie_diag("cache_hit", f"len={len(cached)} names={[p.split('=')[0] for p in cached.split('; ')]}")
         else:
-            browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
-            _cookie_diag("cache_miss", f"host={host}")
-            if browser:
-                options["cookiesfrombrowser"] = (browser,)
-                _cookie_diag("cfb_env", browser)
+            # 公共池：服务器（Railway）无本机浏览器、本机缓存也不存在时，用
+            # 「用户/开发端上报、验真过的共享登录态」兜底，让 douyin/快手等
+            # hardened 站在网页版也能带 Cookie 下载（配合 VDL_PROXY_CN 即闭环）。
+            pooled = None
+            try:
+                from cookie_pool import get_cookie as _pool_get
+                pooled = _pool_get(host)
+            except Exception as e:
+                _cookie_diag("pool_exception", str(e)[:200])
+            if pooled:
+                headers["Cookie"] = pooled
+                _cookie_diag("pool_hit", f"len={len(pooled)}")
             else:
-                # 全站默认尝试从本机浏览器读登录态（不再局限于白名单），
-                # 覆盖更多需要 Cookie 的站点（影视聚合站、会员专享、地区限制等）。
-                # 精确定位「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
-                found = _find_host_cookie_profile(host)
-                _cookie_diag("find_profile", str(found))
-                if found:
-                    options["cookiesfrombrowser"] = found  # (browser, profile)
-                    _cookie_diag("cfb_found", str(found))
+                browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
+                _cookie_diag("cache_miss", f"host={host}")
+                if browser:
+                    options["cookiesfrombrowser"] = (browser,)
+                    _cookie_diag("cfb_env", browser)
                 else:
-                    # 回退：探测不到具体 Profile 时仍用默认（Default）读，至少给一次机会
-                    b = _detect_browser_cookie_source()
-                    if b:
-                        options["cookiesfrombrowser"] = (b,)
+                    # 全站默认尝试从本机浏览器读登录态（不再局限于白名单），
+                    # 覆盖更多需要 Cookie 的站点（影视聚合站、会员专享、地区限制等）。
+                    # 精确定位「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
+                    found = _find_host_cookie_profile(host)
+                    _cookie_diag("find_profile", str(found))
+                    if found:
+                        options["cookiesfrombrowser"] = found  # (browser, profile)
+                        _cookie_diag("cfb_found", str(found))
+                    else:
+                        # 回退：探测不到具体 Profile 时仍用默认（Default）读，至少给一次机会
+                        b = _detect_browser_cookie_source()
+                        if b:
+                            options["cookiesfrombrowser"] = (b,)
     return options
 
 

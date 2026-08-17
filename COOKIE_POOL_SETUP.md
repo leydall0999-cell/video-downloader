@@ -128,4 +128,9 @@ chrqj 的 Cookie 有三层来源，优先级从高到低：
    - 有 yt-dlp 内置提取器的站 → 设 `VDL_COOKIE_POOL_TEST_URLS=域名=该站任意视频页URL`，用通用验真；
    - 接口签名特殊的聚合站（像 chrqj）→ 在 `cookie_pool.py` 加一个 `verify_xxx` 并挂进 `verify_cookie` 分发。
 
+> **下载层已接入公共池**：对需要登录态的平台，Cookie 来源优先级为
+> `用户粘贴 > 本机缓存/浏览器 > 公共池 > 浏览器实时读`。服务器（无浏览器/无缓存）会自动落到
+> 公共池，所以 App 端「同步 Cookie 到云端」或 `gen_cookie_env.py --sync-url` 上报后，
+> 网页版即可带该站登录态下载。
+>
 > 注意：内置主流站（douyin/快手等）在 Railway 上的 403 通常还有**海外 IP 地域墙**因素，公共池喂 Cookie 之外还需 `VDL_PROXY_CN` 国内代理配合。
