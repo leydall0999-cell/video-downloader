@@ -990,6 +990,36 @@ class VdlApi:
             return f"ERROR: {exc}"
         return str(dest)
 
+    def save_dw_file(self, job_id: str, kind: str, filename: str) -> str:
+        """去水印结果写盘（桌面版原生下载，绕开 WKWebView 的 <a download> 限制）。
+
+        kind: 'image' | 'pdf'；请求 /api/dw/{kind}/{job_id}/file，存到「下载」文件夹。
+        返回保存路径或 "ERROR: ..."。
+        """
+        import requests
+        from pathlib import Path
+        if kind not in ("image", "pdf"):
+            return "ERROR: 未知的去水印类型"
+        url = f"http://{HOST}:{PORT}/api/dw/{kind}/{job_id}/file"
+        downloads = Path.home() / "Downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        name = filename or ("dewatered.png" if kind == "image" else "dewatered.pdf")
+        dest = downloads / name
+        # 避免覆盖已有文件
+        if dest.exists():
+            stem, suf = dest.stem, dest.suffix
+            i = 1
+            while dest.exists():
+                dest = downloads / f"{stem}({i}){suf}"
+                i += 1
+        try:
+            r = requests.get(url, timeout=(10, 600))
+            r.raise_for_status()
+            dest.write_bytes(r.content)
+        except Exception as exc:  # 把错误回传前端展示
+            return f"ERROR: {exc}"
+        return str(dest)
+
     def save_commentary_file_dialog(self, cid: str, suggested_name: str) -> str:
         """弹出系统保存面板（默认目录=下载文件夹、预填文件名），用户可改位置/重命名。
 

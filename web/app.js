@@ -1546,34 +1546,54 @@
   };
   el.dwPdfBtn.addEventListener('click', startDwPdf);
 
-  // 桌面 WebView 中 <a download> 不会触发下载，改用 fetch blob + 临时 a 标签触发保存。
-  const downloadWithFetch = async (url, filename, btn) => {
-    try {
-      btn.style.opacity = '0.6';
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
-      const blobUrl = URL.createObjectURL(blob);
+  // 去水印结果下载：桌面端(pywebview/WKWebView) <a download> 不弹保存框，
+  // 优先调用原生 Python 桥接 save_dw_file 写盘到「下载」文件夹；桥接不可用(web/浏览器)时
+  // 回退到 <a download>。jobId 从处理完成时的 href 中提取。
+  const dwDownload = async (btn, kind) => {
+    const href = btn.href || '';
+    const m = href.match(/\/api\/dw\/(?:image|pdf)\/([^/?#]+)(?:\/file)?/);
+    const jobId = m ? m[1] : null;
+    const filename = btn.getAttribute('download') || (kind === 'image' ? 'dewatered.png' : 'dewatered.pdf');
+    const api = window.pywebview && window.pywebview.api;
+    // 桌面桥接可用 → 直接 Python 写盘（最稳，绕开 WebView 下载限制）
+    if (api && api.save_dw_file && jobId) {
+      const orig = btn.textContent;
+      btn.textContent = '保存中…';
+      btn.disabled = true;
+      try {
+        const res = await api.save_dw_file(jobId, kind, filename);
+        if (typeof res === 'string' && res.startsWith('ERROR:')) {
+          alert('保存失败：' + res.replace(/^ERROR:\s*/, ''));
+        } else {
+          btn.textContent = '已保存到下载文件夹';
+          setTimeout(() => { btn.textContent = orig; }, 3000);
+        }
+      } catch (err) {
+        alert('保存失败：' + (err && err.message ? err.message : err));
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
+    // 回退：web / 浏览器模式直接触发 <a download>
+    if (jobId) {
       const a = document.createElement('a');
-      a.href = blobUrl;
+      a.href = href;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-    } catch (err) {
-      alert('下载失败：' + (err && err.message ? err.message : err));
-    } finally {
-      btn.style.opacity = '';
+    } else {
+      alert('未找到去水印任务，无法下载');
     }
   };
   el.dwImgDownload.addEventListener('click', (e) => {
     e.preventDefault();
-    downloadWithFetch(el.dwImgDownload.href, el.dwImgDownload.getAttribute('download') || 'dewatered', el.dwImgDownload);
+    dwDownload(el.dwImgDownload, 'image');
   });
   el.dwPdfDownload.addEventListener('click', (e) => {
     e.preventDefault();
-    downloadWithFetch(el.dwPdfDownload.href, el.dwPdfDownload.getAttribute('download') || 'dewatered.pdf', el.dwPdfDownload);
+    dwDownload(el.dwPdfDownload, 'pdf');
   });
 
   // ------------------------------------------------------------------ 下载用途确认弹窗
