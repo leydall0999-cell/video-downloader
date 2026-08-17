@@ -4,6 +4,7 @@
 依赖（cv2/fitz）缺失时返回 503，功能优雅降级，不影响其余路由。
 """
 import app
+import json
 import dewatermark_core as dwc
 from fastapi import APIRouter
 
@@ -39,7 +40,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_image(job_id: str, src: str, region: dict, method: str, radius: int) -> None:
+def _run_image(job_id: str, src: str, regions, method: str, radius: int) -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -49,7 +50,7 @@ def _run_image(job_id: str, src: str, region: dict, method: str, radius: int) ->
         if ext not in DW_IMAGE_EXTS:
             ext = ".png"
         out_path = app.DW_DIR / f"dw_img_{job_id}{ext}"
-        dwc.image_inpaint(src_path, out_path, region, method, radius)
+        dwc.image_inpaint(src_path, out_path, regions, method, radius)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("去水印未产出有效文件")
         job["status"] = "completed"
@@ -63,7 +64,7 @@ def _run_image(job_id: str, src: str, region: dict, method: str, radius: int) ->
         app.logger.warning("dw image %s failed: %s", job_id, e)
 
 
-def _run_pdf(job_id: str, src: str, mode: str, region: dict, method: str, radius: int, dpi: int) -> None:
+def _run_pdf(job_id: str, src: str, mode: str, regions, method: str, radius: int, dpi: int) -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -71,7 +72,7 @@ def _run_pdf(job_id: str, src: str, mode: str, region: dict, method: str, radius
         src_path = app.Path(src)
         out_path = app.DW_DIR / f"dw_pdf_{job_id}.pdf"
         if mode == "raster":
-            dwc.pdf_raster_remove(src_path, out_path, region, method, radius, dpi)
+            dwc.pdf_raster_remove(src_path, out_path, regions, method, radius, dpi)
         else:
             dwc.pdf_remove_annotations(src_path, out_path)
         if not out_path.exists() or out_path.stat().st_size == 0:
@@ -89,6 +90,7 @@ def _run_pdf(job_id: str, src: str, mode: str, region: dict, method: str, radius
 @router.post("/api/dw/image")
 def create_dw_image(
     file: app.UploadFile = app._FastAPIFile(...),
+    regions: str = app.Form(""),
     x: float = app.Form(0.0),
     y: float = app.Form(0.0),
     w: float = app.Form(0.0),
@@ -97,16 +99,19 @@ def create_dw_image(
     radius: int = app.Form(3),
     request: app.Request = None,
 ) -> dict:
-    """图片去水印：上传图片 + 框选区域（归一化 x/y/w/h）+ 修复方法。"""
+    """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
+
+    优先解析 regions（前端多选区）；缺失时回退单个 x/y/w/h 区域（兼容旧客户端）。
+    """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
         raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
-    region = dwc.normalize_region({"x": x, "y": y, "w": w, "h": h})
-    if not region:
-        raise app.HTTPException(status_code=400, detail="请框选水印区域（x/y/w/h 需有效）")
+    regions_list = _parse_regions(regions, x, y, w, h)
+    if not regions_list:
+        raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h 需有效）")
     if method not in ("telea", "ns"):
         raise app.HTTPException(status_code=400, detail="method 仅支持 telea / ns")
     if not (1 <= radius <= 20):
@@ -118,8 +123,25 @@ def create_dw_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "image",
         }
-    app.executor.submit(_run_image, job_id, str(save_path), region, method, radius)
+    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius)
     return {"job_id": job_id, "status": "running", "kind": "image"}
+
+
+def _parse_regions(regions_json: str, x: float, y: float, w: float, h: float):
+    """从 regions JSON 字段解析多区域；为空则回退单个 x/y/w/h。
+
+    返回 normalize_regions 的结果（list），无效返回 None。
+    """
+    if regions_json:
+        try:
+            parsed = json.loads(regions_json)
+        except (ValueError, TypeError):
+            return None
+        return dwc.normalize_regions(parsed)
+    single = dwc.normalize_region({"x": x, "y": y, "w": w, "h": h})
+    if not single:
+        return None
+    return [single]
 
 
 @router.get("/api/dw/image/{job_id}")
@@ -147,6 +169,7 @@ def dw_image_file(job_id: str) -> app.FileResponse:
 def create_dw_pdf(
     file: app.UploadFile = app._FastAPIFile(...),
     mode: str = app.Form("annotations"),
+    regions: str = app.Form(""),
     x: float = app.Form(0.0),
     y: float = app.Form(0.0),
     w: float = app.Form(0.0),
@@ -159,7 +182,7 @@ def create_dw_pdf(
     """PDF 去水印：上传 PDF + 模式（annotations 注释型 / raster 栅格化）。
 
     annotations 模式无损删除 Watermark 注释；raster 模式栅格化后区域 inpaint 重排。
-    raster 模式需要框选区域（x/y/w/h）。"""
+    raster 模式需要框选区域（regions 多选区或 x/y/w/h 单区域）。"""
     if not dwc.pdf_available():
         raise app.HTTPException(status_code=503, detail="PDF 去水印不可用（缺少 PyMuPDF 依赖）")
     app._check_rate_limit(request)
@@ -168,13 +191,13 @@ def create_dw_pdf(
         raise app.HTTPException(status_code=409, detail="请上传 PDF 文件")
     if mode not in ("annotations", "raster"):
         raise app.HTTPException(status_code=400, detail="mode 仅支持 annotations / raster")
-    region = None
+    regions_list = None
     if mode == "raster":
         if not dwc.available():
             raise app.HTTPException(status_code=503, detail="栅格化去水印需要 OpenCV 依赖")
-        region = dwc.normalize_region({"x": x, "y": y, "w": w, "h": h})
-        if not region:
-            raise app.HTTPException(status_code=400, detail="栅格化模式需要框选水印区域（x/y/w/h）")
+        regions_list = _parse_regions(regions, x, y, w, h)
+        if not regions_list:
+            raise app.HTTPException(status_code=400, detail="栅格化模式需要框选水印区域（regions 或 x/y/w/h）")
         if method not in ("telea", "ns"):
             raise app.HTTPException(status_code=400, detail="method 仅支持 telea / ns")
         if not (1 <= radius <= 20):
@@ -188,7 +211,7 @@ def create_dw_pdf(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "pdf",
         }
-    app.executor.submit(_run_pdf, job_id, str(save_path), mode, region, method, radius, dpi)
+    app.executor.submit(_run_pdf, job_id, str(save_path), mode, regions_list, method, radius, dpi)
     return {"job_id": job_id, "status": "running", "kind": "pdf", "mode": mode}
 
 

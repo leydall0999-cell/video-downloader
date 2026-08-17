@@ -58,6 +58,36 @@ def test_normalize_region_clamps_overflow():
     assert r["y"] + r["h"] <= 1.0
 
 
+def test_normalize_regions_valid_with_ops():
+    raw = [
+        {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "op": "add"},
+        {"x": 0.5, "y": 0.5, "w": 0.2, "h": 0.2, "op": "subtract"},
+        {"x": 0.3, "y": 0.3, "w": 0.1, "h": 0.1},  # 缺省 op -> add
+    ]
+    out = dwc.normalize_regions(raw)
+    assert out is not None
+    assert len(out) == 3
+    assert out[0]["op"] == "add"
+    assert out[1]["op"] == "subtract"
+    assert out[2]["op"] == "add"
+    # 归一化字段齐全
+    for r in out:
+        assert set(r.keys()) == {"x", "y", "w", "h", "op"}
+
+
+def test_normalize_regions_invalid_op_falls_back_to_add():
+    out = dwc.normalize_regions([{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "op": "bogus"}])
+    assert out[0]["op"] == "add"
+
+
+def test_normalize_regions_rejects_bad_input():
+    assert dwc.normalize_regions(None) is None
+    assert dwc.normalize_regions("nope") is None
+    assert dwc.normalize_regions([]) is None
+    assert dwc.normalize_regions([{"x": 0, "w": -1}]) is None  # 含非法区域
+    assert dwc.normalize_regions([{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "bad"]) is None
+
+
 def test_region_to_px_uses_image_dims():
     # 100x80 图像，归一化 (0.1,0.1,0.2,0.1) -> (10,8,20,8)
     x, y, w, h = dwc._region_to_px({"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1}, 100, 80)

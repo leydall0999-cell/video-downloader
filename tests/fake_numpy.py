@@ -25,6 +25,13 @@ class FakeArray:
     def reshape(self, *shape):
         return self
 
+    def any(self, axis=None):
+        # fake 不追踪真实内容；测试只关心控制流，返回 True 让 inpaint 分支走通
+        return True
+
+    def all(self, axis=None):
+        return True
+
     def tobytes(self):
         return b"RGBRGB"
 

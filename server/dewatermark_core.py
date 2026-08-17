@@ -88,6 +88,55 @@ def _region_to_px(region: dict, w: int, h: int):
     return x, y, rw, rh
 
 
+def normalize_regions(regions) -> list:
+    """校验并归一化多区域列表。
+
+    入参 regions 应为 [{"x","y","w","h", "op": "add"|"subtract"}, ...]。
+    每项经 normalize_region 收敛；op 缺省 "add"，非法值回退 "add"。
+    返回 [{"x","y","w","h","op"}]；空 / 非 list / 任一区域非法 → 返回 None（调用方据此报 400）。
+    """
+    if not regions or not isinstance(regions, list):
+        return None
+    out = []
+    for r in regions:
+        if not isinstance(r, dict):
+            return None
+        nr = normalize_region(r)
+        if not nr:
+            return None
+        op = r.get("op") or "add"
+        if op not in ("add", "subtract"):
+            op = "add"
+        out.append({"x": nr["x"], "y": nr["y"], "w": nr["w"], "h": nr["h"], "op": op})
+    if not out:
+        return None
+    return out
+
+
+def _build_region_mask(regions, w: int, h: int):
+    """把多区域合并为单张二值 mask（uint8）。
+
+    add 区域填 255；subtract 区域置 0（从已选区域抠除，优先级高于 add）。
+    任一区域像素矩形为空则跳过。返回全 0 表示没有有效加选区域。
+    """
+    mask = _np.zeros((h, w), dtype=_np.uint8)
+    for r in regions:
+        x, y, rw, rh = _region_to_px(r, w, h)
+        if rw <= 0 or rh <= 0:
+            continue
+        if r.get("op") == "subtract":
+            mask[y:y + rh, x:x + rw] = 0
+        else:
+            mask[y:y + rh, x:x + rw] = 255
+    return mask
+
+
+def _inpaint_from_mask(img, mask, method: str, radius: float):
+    """对一张 BGR numpy 数组按给定 mask 做 inpaint，返回同形状数组。"""
+    flag = _cv2.INPAINT_TELEA if method == "telea" else _cv2.INPAINT_NS
+    return _cv2.inpaint(img, mask, float(radius), flag)
+
+
 def _inpaint_array(img, region: dict, w: int, h: int, method: str, radius: float):
     """对一张 BGR numpy 数组做区域 inpaint，返回同形状数组。"""
     x, y, rw, rh = _region_to_px(region, w, h)
@@ -95,27 +144,33 @@ def _inpaint_array(img, region: dict, w: int, h: int, method: str, radius: float
         raise ValueError("水印区域无效")
     mask = _np.zeros((h, w), dtype=_np.uint8)
     mask[y:y + rh, x:x + rw] = 255
-    flag = _cv2.INPAINT_TELEA if method == "telea" else _cv2.INPAINT_NS
-    return _cv2.inpaint(img, mask, float(radius), flag)
+    return _inpaint_from_mask(img, mask, method, radius)
 
 
 # ------------------------------------------------------------------ 图片去水印
 
-def image_inpaint(src_path, dst_path, region: dict, method: str = "telea", radius: int = 3) -> Path:
+def image_inpaint(src_path, dst_path, regions, method: str = "telea", radius: int = 3) -> Path:
     """对上传图片做区域 inpaint，结果写入 dst_path（保留原扩展名）。
 
-    区域 region 为归一化字典 {"x","y","w","h"}（0..1），缺失则报错。
+    区域 regions 为归一化区域列表 [{"x","y","w","h","op"}]（0..1，op=add/subtract），
+    合并为单张 mask 后一次 inpaint（多选区叠加/减去）。兼容传入单个区域 dict。
+    至少需要一个有效 add 区域；缺失或全为减去区域则报错。
     method: telea | ns；radius: inpaint 半径（建议 1..10）。
     """
     if not available():
         raise RuntimeError("OpenCV/numpy 未安装，图片去水印不可用")
-    if not region:
+    if isinstance(regions, dict):
+        regions = [regions]
+    if not regions:
         raise ValueError("图片去水印需要框选水印区域")
     img = _cv2.imread(str(src_path), _cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("无法读取图片，可能是损坏或格式不支持")
     h, w = img.shape[:2]
-    out = _inpaint_array(img, region, w, h, method, radius)
+    mask = _build_region_mask(regions, w, h)
+    if not mask.any():
+        raise ValueError("未框选有效加选区域（请先框选水印，减选需依附加选）")
+    out = _inpaint_from_mask(img, mask, method, radius)
     ok = _cv2.imwrite(str(dst_path), out)
     if not ok:
         raise RuntimeError("去水印结果写入失败")
@@ -143,16 +198,19 @@ def pdf_remove_annotations(src_path, dst_path) -> int:
     return removed
 
 
-def pdf_raster_remove(src_path, dst_path, region: dict, method: str = "telea",
+def pdf_raster_remove(src_path, dst_path, regions, method: str = "telea",
                       radius: int = 3, dpi: int = 150) -> Path:
     """栅格化去水印：每页渲染为图片 → 区域 inpaint → 重排合成新 PDF。
 
     适用于扫描件或水印内嵌在内容流中的 PDF。会丢失文字可选中性（按图片重排）。
-    region 为归一化字典；dpi 控制栅格化清晰度。
+    regions 为归一化区域列表（含 op），兼容单个区域 dict；dpi 控制栅格化清晰度。
+    若无有效加选区域（mask 全 0），该页不做 inpaint（等效保留原页）。
     """
     if not (pdf_available() and available()):
         raise RuntimeError("PyMuPDF / OpenCV 未安装，PDF 栅格化去水印不可用")
-    if not region:
+    if isinstance(regions, dict):
+        regions = [regions]
+    if not regions:
         raise ValueError("栅格化去水印需要框选水印区域")
     doc = _fitz.open(str(src_path))
     try:
@@ -165,7 +223,11 @@ def pdf_raster_remove(src_path, dst_path, region: dict, method: str = "telea",
                 img = _cv2.cvtColor(img, _cv2.COLOR_RGBA2BGR)
             else:
                 img = _cv2.cvtColor(img, _cv2.COLOR_RGB2BGR)
-            out = _inpaint_array(img, region, pix.width, pix.height, method, radius)
+            mask = _build_region_mask(regions, pix.width, pix.height)
+            if mask.any():
+                out = _inpaint_from_mask(img, mask, method, radius)
+            else:
+                out = img
             img_rgb = _cv2.cvtColor(out, _cv2.COLOR_BGR2RGB)
             out_pix = _fitz.Pixmap(_fitz.csRGB, pix.width, pix.height, img_rgb.tobytes())
             new_page = new_doc.new_page(width=page.rect.width, height=page.rect.height)

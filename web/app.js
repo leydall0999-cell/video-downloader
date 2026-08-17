@@ -358,7 +358,8 @@
     dwImgPane: $('dwImgPane'),
     dwImgFile: $('dwImgFile'),
     dwImgPreview: $('dwImgPreview'),
-    dwImgBox: $('dwImgBox'),
+    dwImgCanvas: $('dwImgCanvas'),
+    dwSelInfo: $('dwSelInfo'),
     dwImgMethod: $('dwImgMethod'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
@@ -1380,83 +1381,115 @@
   });
 
   // 图片预览 + 框选区域
-  let dwImgRegion = null; // 归一化 {x,y,w,h}（0..1）
+  // ---- 图片去水印：多选区（新建/加选/减选/撤销/清空） ----
+  let dwSelections = [];   // [{x,y,w,h,op}] 归一化 0..1，op: 'add' | 'subtract'
+  let dwDrawMode = 'new';  // 'new' | 'add' | 'subtract'
+  let dwDragging = false, dwStartX = 0, dwStartY = 0, dwCur = null;
+
+  const dwResizeCanvas = () => {
+    const img = el.dwImgPreview, cv = el.dwImgCanvas;
+    if (!img || !cv || !img.clientWidth) return;
+    cv.width = img.clientWidth;
+    cv.height = img.clientHeight;
+    cv.style.width = img.clientWidth + 'px';
+    cv.style.height = img.clientHeight + 'px';
+    dwDrawCanvas();
+  };
+  const dwDrawCanvas = () => {
+    const cv = el.dwImgCanvas;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const draw = (s, active) => {
+      const add = !s.op || s.op === 'add';
+      const x = s.x * cv.width, y = s.y * cv.height;
+      const w = s.w * cv.width, h = s.h * cv.height;
+      ctx.lineWidth = 2;
+      ctx.setLineDash(active ? [6, 4] : []);
+      ctx.strokeStyle = add ? '#2ecc71' : '#e74c3c';
+      ctx.fillStyle = add ? 'rgba(46,204,113,.18)' : 'rgba(231,76,60,.18)';
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+    };
+    dwSelections.forEach((s) => draw(s, false));
+    if (dwCur) draw(dwCur, true);
+    ctx.setLineDash([]);
+    const adds = dwSelections.filter((s) => !s.op || s.op === 'add').length;
+    const subs = dwSelections.filter((s) => s.op === 'subtract').length;
+    if (el.dwSelInfo) el.dwSelInfo.textContent = dwSelections.length ? `已选 ${adds} 加 / ${subs} 减` : '尚未框选';
+  };
+  const dwNormFromEvent = (clientX, clientY) => {
+    const img = el.dwImgPreview, rect = img.getBoundingClientRect();
+    const nx = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+    const ny = Math.min(Math.max((clientY - rect.top) / rect.height, 0), 1);
+    return [nx, ny];
+  };
+
   el.dwImgFile.addEventListener('change', () => {
     const f = el.dwImgFile.files[0];
     if (!f) return;
     const url = URL.createObjectURL(f);
     el.dwImgPreview.src = url;
-    el.dwImgPreview.onload = () => URL.revokeObjectURL(url);
-    el.dwImgBox.hidden = true;
-    dwImgRegion = null;
+    el.dwImgPreview.onload = () => { URL.revokeObjectURL(url); dwResizeCanvas(); };
+    dwSelections = [];
+    dwCur = null;
+    dwDrawCanvas();
     el.dwImgResult.hidden = true;
     el.dwImgStatus.textContent = '';
   });
 
-  const dwBoxToRegion = () => {
-    const img = el.dwImgPreview;
-    const natW = img.naturalWidth, natH = img.naturalHeight;
-    if (!natW || !natH) return null;
-    // 框选坐标相对显示尺寸，换算到原图比例
-    const rect = img.getBoundingClientRect();
-    const bx = parseFloat(el.dwImgBox.style.left) || 0;
-    const by = parseFloat(el.dwImgBox.style.top) || 0;
-    const bw = parseFloat(el.dwImgBox.style.width) || 0;
-    const bh = parseFloat(el.dwImgBox.style.height) || 0;
-    const x = bx / rect.width; // 框选坐标已是相对显示图区域，直接归一化
-    const y = by / rect.height;
-    const w = bw / rect.width;
-    const h = bh / rect.height;
-    return {
-      x: Math.min(Math.max(x, 0), 1),
-      y: Math.min(Math.max(y, 0), 1),
-      w: Math.min(Math.max(w, 0), 1 - Math.min(Math.max(x, 0), 1)),
-      h: Math.min(Math.max(h, 0), 1 - Math.min(Math.max(y, 0), 1)),
-    };
-  };
-
-  // 拖拽框选
-  let dwDragging = false, dwStartX = 0, dwStartY = 0;
-  const dwInitBox = () => {
-    const img = el.dwImgPreview;
-    const rect = img.getBoundingClientRect();
-    const sx = dwStartX - rect.left, sy = dwStartY - rect.top;
-    el.dwImgBox.hidden = false;
-    el.dwImgBox.style.left = sx + 'px';
-    el.dwImgBox.style.top = sy + 'px';
-    el.dwImgBox.style.width = '0px';
-    el.dwImgBox.style.height = '0px';
-  };
-  const dwMoveBox = (clientX, clientY) => {
-    const img = el.dwImgPreview;
-    const rect = img.getBoundingClientRect();
-    const sx = dwStartX - rect.left, sy = dwStartY - rect.top;
-    let cx = Math.min(Math.max(clientX - rect.left, 0), rect.width);
-    let cy = Math.min(Math.max(clientY - rect.top, 0), rect.height);
-    const x = Math.min(sx, cx), y = Math.min(sy, cy);
-    const w = Math.abs(cx - sx), h = Math.abs(cy - sy);
-    el.dwImgBox.style.left = x + 'px';
-    el.dwImgBox.style.top = y + 'px';
-    el.dwImgBox.style.width = w + 'px';
-    el.dwImgBox.style.height = h + 'px';
-  };
   el.dwImgPreview.addEventListener('mousedown', (e) => {
+    if (!el.dwImgPreview.src) return;
     dwDragging = true;
-    dwStartX = e.clientX; dwStartY = e.clientY;
-    dwInitBox();
+    const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
+    dwStartX = nx; dwStartY = ny;
+    if (dwDrawMode === 'new') dwSelections = [];
+    dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
+    dwDrawCanvas();
     e.preventDefault();
   });
-  window.addEventListener('mousemove', (e) => { if (dwDragging) dwMoveBox(e.clientX, e.clientY); });
+  window.addEventListener('mousemove', (e) => {
+    if (!dwDragging || !dwCur) return;
+    const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
+    dwCur.x = Math.min(dwStartX, nx);
+    dwCur.y = Math.min(dwStartY, ny);
+    dwCur.w = Math.abs(nx - dwStartX);
+    dwCur.h = Math.abs(ny - dwStartY);
+    dwDrawCanvas();
+  });
   window.addEventListener('mouseup', () => {
     if (!dwDragging) return;
     dwDragging = false;
-    dwImgRegion = dwBoxToRegion();
+    if (dwCur) {
+      // 误点（区域过小）则丢弃
+      if (dwCur.w > 0.004 && dwCur.h > 0.004) dwSelections.push(dwCur);
+      dwCur = null;
+    }
+    dwDrawCanvas();
+  });
+  window.addEventListener('resize', dwResizeCanvas);
+
+  // 选区工具按钮（新建/加选/减选/撤销/清空）
+  (document.querySelectorAll('.dw-mode') || []).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.mode) {
+        dwDrawMode = btn.dataset.mode;
+        document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b === btn));
+      } else if (btn.dataset.act === 'undo') {
+        dwSelections.pop();
+        dwDrawCanvas();
+      } else if (btn.dataset.act === 'clear') {
+        dwSelections = [];
+        dwDrawCanvas();
+      }
+    });
   });
 
   const startDwImage = async () => {
     const file = el.dwImgFile.files[0];
     if (!file) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
-    if (!dwImgRegion || dwImgRegion.w <= 0 || dwImgRegion.h <= 0) {
+    const valid = dwSelections.filter((s) => s.w > 0 && s.h > 0);
+    if (!valid.length) {
       el.dwImgStatus.textContent = '请在预览图上拖拽框选水印区域'; return;
     }
     el.dwImgBtn.disabled = true;
@@ -1464,10 +1497,11 @@
     el.dwImgResult.hidden = true;
     const form = new FormData();
     form.append('file', file);
-    form.append('x', dwImgRegion.x.toFixed(4));
-    form.append('y', dwImgRegion.y.toFixed(4));
-    form.append('w', dwImgRegion.w.toFixed(4));
-    form.append('h', dwImgRegion.h.toFixed(4));
+    form.append('regions', JSON.stringify(valid.map((s) => ({
+      x: +s.x.toFixed(4), y: +s.y.toFixed(4),
+      w: +s.w.toFixed(4), h: +s.h.toFixed(4),
+      op: s.op || 'add',
+    }))));
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
     try {
