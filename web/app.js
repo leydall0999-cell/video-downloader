@@ -352,22 +352,24 @@
     // 上传转换（需求文档模块一）
     tabUploadConvert: $('tabUploadConvert'),
     uploadConvertView: $('uploadConvertView'),
-    ucFile: $('ucFile'),
-    ucTarget: $('ucTarget'),
-    ucRes: $('ucRes'),
-    ucBitrate: $('ucBitrate'),
-    ucAudio: $('ucAudio'),
-    ucRotate: $('ucRotate'),
-    ucRemux: $('ucRemux'),
-    ucLibrary: $('ucLibrary'),
-    ucBtn: $('ucBtn'),
+    // ---- 上传转换视图（多文件批量）----
+    ucAddBtn: $('ucAddBtn'),
+    ucFileInput: $('ucFileInput'),
+    ucClearBtn: $('ucClearBtn'),
+    ucCount: $('ucCount'),
+    ucList: $('ucList'),
+    ucEmpty: $('ucEmpty'),
+    ucBulk: $('ucBulk'),
+    ucBulkTarget: $('ucBulkTarget'),
+    ucBulkRes: $('ucBulkRes'),
+    ucBulkBitrate: $('ucBulkBitrate'),
+    ucBulkAudio: $('ucBulkAudio'),
+    ucBulkRotate: $('ucBulkRotate'),
+    ucBulkRemux: $('ucBulkRemux'),
+    ucBulkLibrary: $('ucBulkLibrary'),
+    ucBulkApplyBtn: $('ucBulkApplyBtn'),
+    ucStartAllBtn: $('ucStartAllBtn'),
     ucStatus: $('ucStatus'),
-    ucResult: $('ucResult'),
-    ucPreview: $('ucPreview'),
-    ucDownload: $('ucDownload'),
-    ucLibLink: $('ucLibLink'),
-    ucProgress: $('ucProgress'),
-    ucProgressFill: $('ucProgressFill'),
 
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
@@ -1379,101 +1381,276 @@
     }
   };
 
-  // ------------------------------------------------------------------ 上传视频直接转码（需求文档模块一）
-  const startUploadConvert = async () => {
-    const file = el.ucFile.files[0];
-    if (!file) { el.ucStatus.textContent = '请先选择视频文件'; return; }
-    el.ucBtn.disabled = true;
-    el.ucStatus.textContent = '上传中…';
-    el.ucStatus.classList.remove('is-progress');
-    el.ucProgress.hidden = false;
-    el.ucProgress.classList.add('is-indeterminate');
-    el.ucProgressFill.style.width = '';
-    el.ucResult.hidden = true;
-    el.ucPreview.innerHTML = '';
+  // ------------------------------------------------------------------ 上传视频直接转码（多文件批量：每个文件独立一行 + 独立输出格式）
+  // 设计：前端模拟批量，后端复用单文件 /api/upload-convert。状态用 pending/uploading/running/completed/failed。
+  // 并发：最大 2 个同时转码（普通 ffmpeg 重任务，避免 CPU/带宽占满）。
+  const UC_MAX_CONCURRENT = 2;
+  const ucState = { list: [], nextId: 1, active: 0, polling: null };
+
+  const ucFormatSize = (bytes) => {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  };
+
+  const ucReadBulk = () => ({
+    target: el.ucBulkTarget.value,
+    res: el.ucBulkRes.value,
+    bitrate: el.ucBulkBitrate.value.trim(),
+    audio: el.ucBulkAudio.checked,
+    rotate: el.ucBulkRotate.value,
+    remux: el.ucBulkRemux.checked,
+    toLibrary: el.ucBulkLibrary.checked,
+  });
+
+  const ucApplyBulk = () => {
+    const b = ucReadBulk();
+    let n = 0;
+    ucState.list.forEach(it => {
+      if (it.status === 'pending') {
+        Object.assign(it, b); n++;
+      }
+    });
+    renderUcList();
+    el.ucStatus.textContent = n ? `已把批量参数应用到 ${n} 个未开始项` : '没有可应用的项（所有项都已开始/完成）';
+  };
+
+  const renderUcList = () => {
+    const list = ucState.list;
+    el.ucCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
+    el.ucClearBtn.hidden = list.length === 0;
+    el.ucBulk.hidden = list.length === 0;
+    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'pending');
+
+    if (!list.length) { el.ucList.innerHTML = ''; return; }
+
+    const fmtOptions = (val) => ['mp4','mov','mkv','webm','mp3','m4a','gif']
+      .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${v==='mp3'||v==='m4a'?'（仅音频）':''}${v==='gif'?'（前5秒）':''}</option>`)
+      .join('');
+
+    el.ucList.innerHTML = list.map(it => {
+      const statusText = {
+        pending: '未开始',
+        uploading: '上传中…',
+        running: it.progress ? `转码中 ${it.progress}%` : '转码中…',
+        completed: '完成 ✅',
+        failed: '失败：' + (it.errorMsg || ''),
+      }[it.status] || it.status;
+      const statusCls = it.status === 'pending' ? '' : 'is-' + it.status.replace('uploading','running');
+      const disabled = it.status !== 'pending' && it.status !== 'failed' ? 'disabled' : '';
+      const progressHtml = (it.status === 'running' || it.status === 'uploading')
+        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress||0}%"></div></div>` : '';
+      const downloadHtml = it.status === 'completed' && it.downloadUrl
+        ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
+        : '';
+      const targetDisabled = (it.status === 'running' || it.status === 'uploading' || it.status === 'completed') ? 'disabled' : '';
+      return `
+        <li class="uc-item ${statusCls}" data-id="${it.id}">
+          <div class="uc-item-main">
+            <div class="uc-item-name" title="${it.file.name}">${it.file.name}</div>
+            <div class="uc-item-meta">
+              <span>${ucFormatSize(it.file.size)}</span>
+              <span>→ ${it.target.toUpperCase()}</span>
+              ${it.res && it.res !== 'original' ? `<span>${it.res}p</span>` : ''}
+              ${it.remux ? '<span>仅换容器</span>' : ''}
+            </div>
+            ${progressHtml}
+            <div class="uc-item-status">${statusText}</div>
+          </div>
+          <div class="uc-item-side">
+            <label class="sr-only" for="ucItemTarget-${it.id}">输出格式</label>
+            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled}>${fmtOptions(it.target)}</select>
+            ${downloadHtml}
+            <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
+          </div>
+        </li>
+      `;
+    }).join('');
+  };
+
+  const ucAddFiles = (fileList) => {
+    const b = ucReadBulk();
+    Array.from(fileList).forEach(f => {
+      ucState.list.push({
+        id: ucState.nextId++,
+        file: f,
+        target: b.target, res: b.res, bitrate: b.bitrate,
+        audio: b.audio, rotate: b.rotate, remux: b.remux, toLibrary: b.toLibrary,
+        status: 'pending', jobId: null, progress: 0,
+        errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
+      });
+    });
+    renderUcList();
+  };
+
+  const ucRemoveItem = (id) => {
+    const it = ucState.list.find(x => x.id === id);
+    if (!it) return;
+    if (it.status === 'running' || it.status === 'uploading') {
+      el.ucStatus.textContent = '该项正在转码中，无法移除（请等待完成或失败）';
+      return;
+    }
+    ucState.list = ucState.list.filter(x => x.id !== id);
+    renderUcList();
+  };
+
+  const ucClearAll = () => {
+    const running = ucState.list.filter(x => x.status === 'running' || x.status === 'uploading').length;
+    if (running) {
+      el.ucStatus.textContent = `有 ${running} 个任务正在进行，请等待完成后再清空`;
+      return;
+    }
+    ucState.list = [];
+    renderUcList();
+    el.ucStatus.textContent = '已清空列表';
+  };
+
+  // 上传 + 启动单个 job（用 XHR 拿到上传进度；jobId 返回时切换为 running）
+  const ucUploadOne = (item) => new Promise((resolve, reject) => {
+    item.status = 'uploading';
+    item.progress = 0;
+    renderUcList();
     const form = new FormData();
-    form.append('file', file);
-    form.append('target', el.ucTarget.value);
-    form.append('resolution', el.ucRes.value);
-    form.append('bitrate', el.ucBitrate.value.trim());
-    form.append('audio', el.ucAudio.checked ? 'true' : 'false');
-    form.append('rotate', el.ucRotate.value);
-    form.append('remux', el.ucRemux.checked ? 'true' : 'false');
-    form.append('to_library', el.ucLibrary.checked ? 'true' : 'false');
-    try {
-      const data = await request('/api/upload-convert', { method: 'POST', body: form });
-      const jobId = data.job_id;
-      // 上传完成，进入转码阶段：进度条先保持不确定态，等首个轮询拿到百分比
-      el.ucStatus.textContent = '转码中…';
-      const timer = setInterval(async () => {
-        try {
-          const st = await request('/api/convert/' + jobId);
-          if (st.status === 'completed') {
-            clearInterval(timer);
-            // 收尾：进度条填满并淡出
-            el.ucProgress.classList.remove('is-indeterminate');
-            el.ucProgressFill.style.width = '100%';
-            setTimeout(() => { el.ucProgress.hidden = true; }, 400);
-            const fileUrl = `${window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
-            el.ucDownload.href = fileUrl;
-            el.ucDownload.setAttribute('download', st.filename || 'converted');
-            // 按结果文件类型内嵌预览（视频/音频/GIF 直接看，无需先下载）
-            const ext = (st.filename || '').split('.').pop().toLowerCase();
-            const VIDEO = ['mp4', 'mov', 'mkv', 'webm', 'flv', 'avi', 'ts'];
-            const AUDIO = ['mp3', 'm4a', 'aac', 'wav', 'ogg'];
-            el.ucPreview.innerHTML = '';
-            if (VIDEO.includes(ext)) {
-              const v = document.createElement('video');
-              v.src = fileUrl; v.controls = true; v.preload = 'metadata';
-              el.ucPreview.appendChild(v);
-            } else if (AUDIO.includes(ext)) {
-              const a = document.createElement('audio');
-              a.src = fileUrl; a.controls = true;
-              el.ucPreview.appendChild(a);
-            } else if (ext === 'gif') {
-              const im = document.createElement('img');
-              im.src = fileUrl;
-              el.ucPreview.appendChild(im);
-            }
-            el.ucResult.hidden = false;
-            el.ucStatus.textContent = '转换完成 ✅';
-            el.ucStatus.classList.remove('is-progress');
-            el.ucBtn.disabled = false;
-            if (st.library_id) {
-              el.ucLibLink.dataset.lid = st.library_id;
-              el.ucLibLink.hidden = false;
-            } else {
-              el.ucLibLink.hidden = true;
-            }
-          } else if (st.status === 'running') {
-            // 实时进度：有百分比则确定态填充，否则保持流动不确定态
-            const p = typeof st.progress === 'number' ? st.progress : 0;
-            if (p > 0) {
-              el.ucProgress.classList.remove('is-indeterminate');
-              el.ucProgressFill.style.width = p + '%';
-            } else {
-              el.ucProgress.classList.add('is-indeterminate');
-            }
-            el.ucStatus.textContent = p > 0 ? `转码中 ${p}%` : '转码中…';
-            el.ucStatus.classList.add('is-progress');
-          } else if (st.status === 'failed') {
-            clearInterval(timer);
-            el.ucProgress.hidden = true;
-            el.ucStatus.textContent = '转换失败：' + (st.error || '未知错误');
-            el.ucStatus.classList.remove('is-progress');
-            el.ucBtn.disabled = false;
-          }
-        } catch (_e) { /* 轮询出错继续 */ }
-      }, 3000);
-    } catch (error) {
-      el.ucBtn.disabled = false;
-      el.ucStatus.textContent = '请求失败：' + (error.message || '');
+    form.append('file', item.file);
+    form.append('target', item.target);
+    form.append('resolution', item.res);
+    form.append('bitrate', item.bitrate || '');
+    form.append('audio', item.audio ? 'true' : 'false');
+    form.append('rotate', item.rotate);
+    form.append('remux', item.remux ? 'true' : 'false');
+    form.append('to_library', item.toLibrary ? 'true' : 'false');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-convert');
+    xhr.upload.addEventListener('progress', (ev) => {
+      if (ev.lengthComputable) {
+        // 上传阶段最多占 30%，转码从 30% 开始累加
+        item.progress = Math.round(ev.loaded / ev.total * 30);
+        renderUcList();
+      }
+    });
+    xhr.addEventListener('load', () => {
+      try {
+        const data = JSON.parse(xhr.responseText || '{}');
+        if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
+          item.jobId = data.job_id;
+          item.status = 'running';
+          item.progress = 30;
+          renderUcList();
+          resolve(data);
+        } else {
+          item.status = 'failed';
+          item.errorMsg = data.error || ('HTTP ' + xhr.status);
+          renderUcList();
+          reject(new Error(item.errorMsg));
+        }
+      } catch (e) {
+        item.status = 'failed';
+        item.errorMsg = '响应解析失败';
+        renderUcList();
+        reject(e);
+      }
+    });
+    xhr.addEventListener('error', () => {
+      item.status = 'failed';
+      item.errorMsg = '网络错误';
+      renderUcList();
+      reject(new Error('network'));
+    });
+    xhr.send(form);
+  });
+
+  // 启动下一个 pending 任务（受并发限制）
+  const ucPump = () => {
+    while (ucState.active < UC_MAX_CONCURRENT) {
+      const next = ucState.list.find(x => x.status === 'pending');
+      if (!next) break;
+      ucState.active++;
+      ucUploadOne(next)
+        .catch(() => { /* 失败已在 ucUploadOne 标记 */ })
+        .finally(() => {
+          ucState.active--;
+          ucPump(); // 拉下一个
+        });
+    }
+    // 启停轮询定时器：没有 running 任务就停
+    const hasRunning = ucState.list.some(x => x.status === 'running');
+    if (hasRunning && !ucState.polling) {
+      ucState.polling = setInterval(ucPollAll, 3000);
+    } else if (!hasRunning && ucState.polling) {
+      clearInterval(ucState.polling);
+      ucState.polling = null;
+      const done = ucState.list.filter(x => x.status === 'completed').length;
+      const fail = ucState.list.filter(x => x.status === 'failed').length;
+      const remain = ucState.list.filter(x => x.status === 'pending').length;
+      const parts = [];
+      if (done) parts.push(`${done} 完成`);
+      if (fail) parts.push(`${fail} 失败`);
+      if (remain) parts.push(`${remain} 未开始`);
+      el.ucStatus.textContent = parts.length ? `批量结束：${parts.join('，')}` : '批量结束';
     }
   };
-  el.ucBtn.addEventListener('click', startUploadConvert);
-  el.ucLibLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    switchView('library');
+
+  // 轮询所有 running 任务的状态
+  const ucPollAll = async () => {
+    const running = ucState.list.filter(x => x.status === 'running' && x.jobId);
+    await Promise.all(running.map(async (it) => {
+      try {
+        const st = await request('/api/convert/' + it.jobId);
+        if (st.status === 'running') {
+          const p = typeof st.progress === 'number' ? st.progress : 0;
+          // 转码进度 30% → 100%
+          it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
+          renderUcList();
+        } else if (st.status === 'completed') {
+          it.status = 'completed';
+          it.progress = 100;
+          it.outputName = st.filename || 'converted';
+          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file`;
+          it.libraryId = st.library_id || null;
+          renderUcList();
+        } else if (st.status === 'failed') {
+          it.status = 'failed';
+          it.errorMsg = st.error || '未知错误';
+          renderUcList();
+        }
+      } catch (_e) { /* 单个轮询失败忽略 */ }
+    }));
+  };
+
+  // 事件绑定
+  el.ucAddBtn.addEventListener('click', () => el.ucFileInput.click());
+  el.ucFileInput.addEventListener('change', () => {
+    if (el.ucFileInput.files && el.ucFileInput.files.length) {
+      ucAddFiles(el.ucFileInput.files);
+      el.ucFileInput.value = ''; // 允许重复添加同名文件
+    }
+  });
+  el.ucList.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.act === 'target') {
+      const li = t.closest('.uc-item');
+      const id = +li.dataset.id;
+      const it = ucState.list.find(x => x.id === id);
+      if (it) { it.target = t.value; renderUcList(); }
+    }
+  });
+  el.ucList.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act]');
+    if (!t) return;
+    if (t.dataset.act === 'remove') {
+      const li = t.closest('.uc-item');
+      ucRemoveItem(+li.dataset.id);
+    }
+  });
+  el.ucClearBtn.addEventListener('click', ucClearAll);
+  el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
+  el.ucStartAllBtn.addEventListener('click', () => {
+    const hasPending = ucState.list.some(x => x.status === 'pending');
+    if (!hasPending) { el.ucStatus.textContent = '没有可开始的项'; return; }
+    el.ucStatus.textContent = '批量转换中…';
+    ucPump();
   });
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
@@ -4771,7 +4948,7 @@
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
-    if (isUp) { el.ucStatus.textContent = ''; el.ucResult.hidden = true; }
+    if (isUp) { el.ucStatus.textContent = ''; }
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
