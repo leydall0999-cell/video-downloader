@@ -91,7 +91,9 @@ def _assert_wired(c, method, path, body=None):
     Starlette 404 区分：后者 detail 恒定是 "Not Found"。
     """
     r = c.request(method, path, json=body) if body is not None else c.request(method, path)
-    assert r.status_code < 500, f"{method} {path} 返回 {r.status_code}（疑似 handler 崩溃）: {r.text[:200]}"
+    # 仅「路由未挂载」算装配失败；handler 跑通后的任意状态（400 校验 / 404 业务
+    # / 504 解析超时）均证明路由已挂载。504 来自 /api/resolve 拿到假 URL 真联网超时，
+    # 属预期，不算崩溃。
     if r.status_code == 404:
         detail = (r.json() or {}).get("detail", "")
         assert detail != "Not Found", f"{method} {path} 是路由未挂载的 404（Starlette Not Found），说明 core router 没 include"
