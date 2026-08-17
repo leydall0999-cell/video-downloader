@@ -70,12 +70,14 @@ def _norm_domain(domain: str) -> str:
 
 
 def _strip_sub(domain: str) -> str:
-    """去常见子域前缀（www./m.），得到根域；其余子域（如 CDN 域）保留。"""
+    """提取根域（近似 eTLD+1）：去掉任意子域前缀，保留最后两段。"""
     d = _norm_domain(domain)
-    for sub in ("www.", "m."):
-        if d.startswith(sub):
-            d = d[len(sub):]
-    return d
+    if not d:
+        return ""
+    parts = d.split(".")
+    if len(parts) <= 2:
+        return d
+    return ".".join(parts[-2:])
 
 
 def _root_domains() -> set:
