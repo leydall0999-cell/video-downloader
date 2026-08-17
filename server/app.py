@@ -1819,13 +1819,13 @@ def cookie_sync(payload: dict, request: Request) -> dict:
     cookie = (payload or {}).get("cookie", "")
     if not domain or not cookie:
         raise HTTPException(status_code=400, detail="缺少 domain/cookie")
-    from cookie_pool import add_cookie, verify_chrqj, _ALLOWED_DOMAINS
-    if domain not in _ALLOWED_DOMAINS:
+    from cookie_pool import add_cookie, verify_cookie, is_allowed
+    if not is_allowed(domain):
         raise HTTPException(status_code=400, detail="不支持的域名")
     ip = (request.client.host if request.client else "") or ""
     if not _sync_rate_ok(ip):
         raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
-    ok = verify_chrqj(cookie)
+    ok = verify_cookie(domain, cookie)
     if ok is False:
         raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
     added = add_cookie(domain, cookie, source="sync")
@@ -1833,26 +1833,31 @@ def cookie_sync(payload: dict, request: Request) -> dict:
 
 
 @app.post("/api/cookie/sync/from-local")
-def cookie_sync_from_local(request: Request) -> dict:
-    """仅本机(App 端)调用：读取本机浏览器 chrqj 登录态并上报到公共池。
+def cookie_sync_from_local(payload: dict, request: Request) -> dict:
+    """仅本机(App 端)调用：读取本机浏览器指定站点登录态并上报到公共池。
 
+    domain 默认 chrqj.com，可传任意白名单域（douyin.com/快手/bilibili 等），
+    由后端读该域浏览器 Cookie → 验真 → 入池。
     安全：来源必须是本机(127.0.0.1/::1)，因为 App 后端运行在用户电脑上，
     只有本机才能读到该用户的浏览器 Cookie；公网调用一律拒绝。
     """
     ip = (request.client.host if request.client else "") or ""
     if ip not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="仅允许本机调用")
-    from cookie_pool import add_cookie, verify_chrqj
-    header = downloader.get_browser_cookie_header("chrqj.com", "https://www.chrqj.com/")
+    from cookie_pool import add_cookie, verify_cookie, is_allowed, _norm_domain
+    domain = _norm_domain((payload or {}).get("domain") or "chrqj.com")
+    if not is_allowed(domain):
+        raise HTTPException(status_code=400, detail="不支持的域名")
+    header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
     if not header:
         raise HTTPException(
             status_code=400,
-            detail="本机浏览器未检测到 chrqj 登录态，请先在浏览器登录 chrqj.com",
+            detail=f"本机浏览器未检测到 {domain} 登录态，请先在浏览器登录该站",
         )
-    ok = verify_chrqj(header)
+    ok = verify_cookie(domain, header)
     if ok is False:
         raise HTTPException(status_code=400, detail="本机 Cookie 无效，未能通过目标站验真")
-    added = add_cookie("chrqj.com", header, source="local")
+    added = add_cookie(domain, header, source="local")
     return {"ok": True, "added": added, "verified": (ok is True)}
 
 

@@ -58,7 +58,11 @@
       btn.disabled = true;
       btn.textContent = '同步中…';
       try {
-        const resp = await fetch('/api/cookie/sync/from-local', { method: 'POST' });
+        const resp = await fetch('/api/cookie/sync/from-local', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),   // domain 可传 {domain:"douyin.com"} 等，缺省 chrqj.com
+        });
         const data = await resp.json().catch(() => ({}));
         if (resp.ok) {
           window.alert('同步成功' + (data.verified ? '（已通过目标站验真）' : '（已接收，稍后后台验真）'));

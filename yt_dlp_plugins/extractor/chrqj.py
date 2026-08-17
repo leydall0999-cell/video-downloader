@@ -47,8 +47,13 @@ class ChrqjIE(InfoExtractor):
 
         # 公共池（用户经 /api/cookie/sync 验真上报，供网页版公共服务复用）。
         # 与个人本机缓存隔离，由 server.cookie_pool 管理；import 失败时降级跳过。
+        # import 路径兼容两种运行环境：app 内(uvicorn --app-dir server)走顶层 cookie_pool，
+        # 纯 yt-dlp CLI 走 server.cookie_pool（项目根在 sys.path）。
         try:
-            from server.cookie_pool import get_cookie as _pool_get
+            try:
+                from cookie_pool import get_cookie as _pool_get
+            except ImportError:
+                from server.cookie_pool import get_cookie as _pool_get
             pooled = _pool_get("chrqj.com")
             if pooled:
                 return pooled

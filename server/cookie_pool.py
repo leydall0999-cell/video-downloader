@@ -36,8 +36,10 @@ _POOL_DIR = Path.home() / ".videodownloader" / "cookie_pool"
 _TTL = 30 * 24 * 3600  # 30 天，超时视为失效
 _LOCK = threading.Lock()
 
-# 仅允许这些域上报（与 downloader._COOKIE_HARDENED_DOMAINS 中的 chrqj 对应）
-_ALLOWED_DOMAINS = {"chrqj.com", "www.chrqj.com", "m.chrqj.com"}
+# 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
+#   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
+# 这样「哪些站允许上报登录态」不再写死 chrqj，加站只需改清单/配 env。
+_BASE_DOMAINS = {"chrqj.com"}
 
 # chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
 _CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"
@@ -65,6 +67,44 @@ def _norm_domain(domain: str) -> str:
         if domain.startswith(p):
             domain = domain[len(p):]
     return domain.split("/")[0].split(":")[0]
+
+
+def _strip_sub(domain: str) -> str:
+    """去常见子域前缀（www./m.），得到根域；其余子域（如 CDN 域）保留。"""
+    d = _norm_domain(domain)
+    for sub in ("www.", "m."):
+        if d.startswith(sub):
+            d = d[len(sub):]
+    return d
+
+
+def _root_domains() -> set:
+    """白名单根域集合 = 基础集 + hardened 清单派生 + env 扩展。"""
+    ds: set = {_strip_sub(d) for d in _BASE_DOMAINS if _strip_sub(d)}
+    # env 扩展：逗号/分号/空格分隔的域名列表
+    extra = os.environ.get("VDL_COOKIE_POOL_DOMAINS", "")
+    for d in extra.replace(";", ",").replace(" ", ",").split(","):
+        d = _strip_sub(d)
+        if d:
+            ds.add(d)
+    # 从下载层强反爬清单派生（惰性，避免拉重依赖）
+    try:
+        import downloader  # noqa: F401
+        for d in getattr(downloader, "_COOKIE_HARDENED_DOMAINS", ()):
+            d = _strip_sub(d)
+            if d:
+                ds.add(d)
+    except Exception:
+        pass
+    return ds
+
+
+def is_allowed(domain: str) -> bool:
+    """判断域名是否在公共池白名单内（精确根域 或 其子域）。"""
+    d = _strip_sub(domain)
+    if not d:
+        return False
+    return any(d == r or d.endswith("." + r) for r in _root_domains())
 
 
 def _pool_file(domain: str) -> Path:
@@ -142,7 +182,7 @@ def get_cookie(domain: str) -> str | None:
 def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
     """入池。返回 True=新增 / 更新，False=重复或非法域。"""
     domain = _norm_domain(domain)
-    if domain not in _ALLOWED_DOMAINS:
+    if not is_allowed(domain):
         return False
     header = (header or "").strip()
     if not header:
@@ -197,11 +237,65 @@ def verify_chrqj(header: str) -> bool | None:
         return None
 
 
-def verify_and_prune(domain: str) -> int:
-    """后台探测：剔除过期 / 失效项，返回剩余有效数。"""
-    domain = _norm_domain(domain)
-    if domain not in _ALLOWED_DOMAINS:
-        return 0
+# 站点通用验真用的测试 URL（domain 根域 -> 该站任意一个可解析的视频页）。
+# 只有「接口签名特殊、需专属验真」的站才写专属 verify；其余站用 _verify_generic
+# 拿这里的 URL 试解析判定 Cookie 有效性。env VDL_COOKIE_POOL_TEST_URLS 可追加：
+#   "domain=url;domain2=url2"
+_TEST_URLS = {
+    "chrqj.com": "https://www.chrqj.com/vod/play/116537/1/877419",
+}
+
+
+def _test_url(domain: str) -> str | None:
+    d = _strip_sub(domain)
+    if d in _TEST_URLS:
+        return _TEST_URLS[d]
+    extra = os.environ.get("VDL_COOKIE_POOL_TEST_URLS", "")
+    for part in extra.split(";"):
+        if "=" in part:
+            k, _, v = part.partition("=")
+            if _strip_sub(k) == d:
+                return v.strip()
+    return None
+
+
+def _verify_generic(domain: str, header: str) -> bool | None:
+    """yt-dlp 通用验真兜底：带 Cookie 试解析该站测试 URL，成功拿到 info 即视为有效。
+
+    适用于一切有 yt-dlp 提取器的平台（douyin/快手/bilibili/v.qq 等），
+    无需为每站单独写签名验真。无测试 URL 时返回 None（无法判定，放行入池）。
+    """
+    url = _test_url(domain)
+    if not url:
+        return None
+    try:
+        from yt_dlp import YoutubeDL
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+            "socket_timeout": 15,
+            "retries": 1,
+            "http_headers": {"Cookie": header, "User-Agent": _CHRQJ_UA},
+        }
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        return bool(info and info.get("id"))
+    except Exception:
+        return False
+
+
+def verify_cookie(domain: str, header: str) -> bool | None:
+    """按域分发验真：chrqj 走专属签名验真，其余走 yt-dlp 通用验真。"""
+    d = _strip_sub(domain)
+    if d == "chrqj.com":
+        return verify_chrqj(header)
+    return _verify_generic(d, header)
+
+
+def _prune_one(domain: str) -> int:
+    """对单个规范化域文件做剔除，返回剩余有效数。"""
     with _LOCK:
         f = _pool_file(domain)
         if not f.exists():
@@ -217,7 +311,7 @@ def verify_and_prune(domain: str) -> int:
                 continue
             if time.time() - c.get("ts", 0) > _TTL:
                 continue
-            ok = verify_chrqj(header)
+            ok = verify_cookie(domain, header)
             if ok is False:  # 明确无效才剔除；None(网络不可达)保留
                 continue
             kept.append(c)
@@ -225,5 +319,16 @@ def verify_and_prune(domain: str) -> int:
         return len(kept)
 
 
+def verify_and_prune(domain: str) -> int:
+    """后台探测：对域及其 www 变体剔除过期/失效项，返回剩余有效总数。"""
+    domain = _norm_domain(domain)
+    if not is_allowed(domain):
+        return 0
+    total = 0
+    for d in _candidates(domain):
+        total += _prune_one(d)
+    return total
+
+
 def all_domains() -> list:
-    return sorted(_ALLOWED_DOMAINS)
+    return sorted(_root_domains())

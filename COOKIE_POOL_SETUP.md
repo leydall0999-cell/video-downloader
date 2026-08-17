@@ -32,6 +32,8 @@ chrqj 的 Cookie 有三层来源，优先级从高到低：
 | `VDL_COOKIE_ENC_KEY` | Fernet key，加密公共池存储。不设则降级为 `chmod 600` 明文 | 生产环境建议设（用 `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成） |
 | `VDL_COOKIE_ALERT_WEBHOOK` | 公共池空了/全失效时，向该 URL `POST` 告警 JSON（企业微信/飞书/钉钉机器人） | 想被动变主动就设 |
 | `VDL_COOKIE_SYNC_TOKEN` | 通用上报接口 `/api/cookie/sync` 的客户端令牌。**App 走 `from-local` 不需要它** | 仅当你要对外提供通用上报时才设 |
+| `VDL_COOKIE_POOL_DOMAINS` | 公共池白名单扩展（逗号/分号分隔，如 `douyin.com;example.com`）。不设则默认 = 下载层「强反爬域名清单」+ chrqj | 要支持额外站点时设 |
+| `VDL_COOKIE_POOL_TEST_URLS` | 通用验真的测试 URL（`domain=url` 分号分隔，如 `mysite.io=https://mysite.io/v/1`）。没配的站验真会「放行」而非验真 | 要用 yt-dlp 通用验真时设 |
 
 > 探测周期固定 **30 分钟**一轮，Cookie 有效期固定 **30 天**，均在代码内（无需环境变量调）。
 
@@ -99,14 +101,30 @@ chrqj 的 Cookie 有三层来源，优先级从高到低：
 | 想换共享账号 | 改 `CHRQJ_COOKIE` 环境变量 → Redeploy |
 | 想增强存储加密 | 设 `VDL_COOKIE_ENC_KEY`（Fernet key） → Redeploy |
 | 想接告警到群 | 设 `VDL_COOKIE_ALERT_WEBHOOK` 为机器人 webhook → Redeploy |
-| 某用户上报垃圾/失效 Cookie | `verify_chrqj` 验真失败直接拒，进不了池；进了也会在 30 分钟内被探测剔除 |
+| 某用户上报垃圾/失效 Cookie | `verify_cookie` 验真失败直接拒，进不了池；进了也会在 30 分钟内被探测剔除 |
 
 ---
 
 ## 八、合规与风险边界
 
-- 仅收**白名单域**（目前 `chrqj.com` / `www.chrqj.com` / `m.chrqj.com`），绝不收其他网站 Cookie。
+- 仅收**白名单域**（默认 = 下载层「强反爬域名清单」`_COOKIE_HARDENED_DOMAINS` + chrqj，可用 `VDL_COOKIE_POOL_DOMAINS` 扩展），**绝不收清单之外的网站 Cookie**。
 - 公共池默认只下**免费清晰度**（提取器优先免登录清晰度），不主动暴露会员资源，降低账号被封/盗用风险。
 - App 端上报**必须用户知情同意**，绝不静默上传。
 - 守住 VDL 红线：不破解付费墙 / DRM / 付费 VIP 内容；免费资源共享一般无碍，请勿用它下明确付费内容。
 - 残余风险：共享登录态在极端情况下可能被源站风控（聚合站通常弱）；Cookie 必过期，靠上面运维手段兜底。
+
+---
+
+## 九、如何复用到其他平台
+
+公共池已通用化，加站不再需要改「存储/加密/限频/知情同意/探测」这些框架，只需两步：
+
+1. **放行域名**（三选一，任选即可）：
+   - 该站已在下载层 `_COOKIE_HARDENED_DOMAINS` 清单里（douyin/快手/小红书/bilibili/v.qq 等）→ **自动放行**；
+   - 或设环境变量 `VDL_COOKIE_POOL_DOMAINS=新域名`；
+   - 或在 `server/cookie_pool.py` 的 `_BASE_DOMAINS` 加一条。
+2. **验真**（可选，但建议）：
+   - 有 yt-dlp 内置提取器的站 → 设 `VDL_COOKIE_POOL_TEST_URLS=域名=该站任意视频页URL`，用通用验真；
+   - 接口签名特殊的聚合站（像 chrqj）→ 在 `cookie_pool.py` 加一个 `verify_xxx` 并挂进 `verify_cookie` 分发。
+
+> 注意：内置主流站（douyin/快手等）在 Railway 上的 403 通常还有**海外 IP 地域墙**因素，公共池喂 Cookie 之外还需 `VDL_PROXY_CN` 国内代理配合。
