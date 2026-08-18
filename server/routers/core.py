@@ -13,17 +13,19 @@ from fastapi import APIRouter
 router = APIRouter()
 
 def _git_sha(repo_root: str) -> str:
-    """读取仓库当前 checkout 的真实 git commit SHA（Railway 部署的就是它）。"""
+    """读取仓库当前 checkout 的真实 git commit SHA；Railway 部署无 .git 时 fallback 到环境变量。"""
     try:
         out = subprocess.run(
             ['git', 'rev-parse', 'HEAD'],
             cwd=repo_root, capture_output=True, text=True, timeout=5,
         )
         if out.returncode == 0:
-            return out.stdout.strip()
+            sha = out.stdout.strip()
+            if sha:
+                return sha
     except Exception:
         pass
-    return ''
+    return os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')
 
 @router.get('/api/platforms')
 def list_platforms() -> dict:
