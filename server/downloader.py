@@ -656,9 +656,13 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     elif not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
+        # B站 短链 b23.tv 与长链 bilibili.com 同属一个站，云端公共池 Cookie 以
+        # bilibili.com 域存储。用户用 b23.tv 短链时 host=b23.tv，必须回退到
+        # bilibili.com 取 Cookie，否则云端池匹配不到 → web 端无登录态 → B站 412。
+        cookie_host = "bilibili.com" if "b23.tv" in host else host
         try:
             from cookie_cache import get_cached_cookie_header
-            cached = get_cached_cookie_header(host)
+            cached = get_cached_cookie_header(cookie_host)
         except Exception as e:
             cached = None
             _cookie_diag("cache_exception", str(e)[:200])
@@ -672,7 +676,7 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             pooled = None
             try:
                 from cookie_pool import get_cookie as _pool_get
-                pooled = _pool_get(host)
+                pooled = _pool_get(cookie_host)
             except Exception as e:
                 _cookie_diag("pool_exception", str(e)[:200])
             if pooled:
