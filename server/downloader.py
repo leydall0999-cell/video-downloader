@@ -727,11 +727,18 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
                 context=ctx,
             )
         # 兜底通用 403
-        return ResolveError(
-            "下载被服务器拒绝（403）",
+        hint = (
             "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
             "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
-            "④换更低画质重试；⑤稍后再试",
+            "④换更低画质重试；⑤稍后再试"
+        )
+        # 折中：B站 不进 _COOKIE_HARDENED_DOMAINS（避免一刀切改文案），
+        # 仅在通用 403 文案后追加专属提示，保留全部排查步骤。
+        if host and ("bilibili.com" in host or "b23.tv" in host):
+            hint += "；B站 高画质/会员视频常需登录态 Cookie，请先在本机常用浏览器登录 B站 后重试（VDL 会自动读取浏览器 Cookie 注入请求）。"
+        return ResolveError(
+            "下载被服务器拒绝（403）",
+            hint,
             category="cdn_forbidden",
             context=ctx,
         )

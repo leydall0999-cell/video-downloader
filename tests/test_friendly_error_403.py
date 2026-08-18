@@ -62,11 +62,22 @@ def test_youtube_403_is_cdn_forbidden():
 
 
 def test_bilibili_403_is_cdn_forbidden():
-    # B 站公开视频一般不强制登录，403 多来自 CDN 防盗链/地区，当前按通用分支处理
+    # B 站公开视频一般不强制登录，403 多来自 CDN 防盗链/地区，当前按通用分支处理；
+    # 但文案需追加 B站 专属提示（高画质/会员常需登录态 Cookie）
     exc, ctx = _ctx403("www.bilibili.com")
     assert ctx["is_hardened"] is False
     err = downloader._friendly_error(exc, ctx)
     assert err.category == "cdn_forbidden"
+    assert "B站" in err.hint and "登录态 Cookie" in err.hint
+
+
+def test_bilibili_short_link_403_has_bilibili_hint():
+    # 短链 b23.tv 也应命中 B站 专属提示
+    exc, ctx = _ctx403("b23.tv")
+    assert ctx["is_hardened"] is False
+    err = downloader._friendly_error(exc, ctx)
+    assert err.category == "cdn_forbidden"
+    assert "B站" in err.hint
 
 
 def test_non_403_private_video_keeps_unknown_category():
@@ -89,6 +100,7 @@ if __name__ == "__main__":
     test_vqq_hardened_no_cookie_is_cookie_required()
     test_youtube_403_is_cdn_forbidden()
     test_bilibili_403_is_cdn_forbidden()
+    test_bilibili_short_link_403_has_bilibili_hint()
     test_non_403_private_video_keeps_unknown_category()
     test_no_context_returns_cdn_forbidden_fallback_for_403()
     print("✅ 全部 403 诊断分层测试通过")
