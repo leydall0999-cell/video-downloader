@@ -45,7 +45,7 @@ def _cookie_diag(key: str, value: str = "") -> None:
             f.write(f"[{ts}] {key}={value}\n")
     except Exception:
         pass
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qsl, urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +133,31 @@ def _host_of(url: str) -> str:
         return host.removeprefix("www.").removeprefix("m.")
     except ValueError:
         return ""
+
+
+# B站 长链 → b23.tv 短链：B站 对 www.bilibili.com/video/BVxxx 直链风控更严，
+# 手机 App 分享的 b23.tv 短链则能正常解析。这里把长链归一化为短链，绕过该限制。
+_BILIBILI_LONG_URL_RE = re.compile(r"https?://(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]+)")
+
+
+def _normalize_bilibili_url(url: str) -> str:
+    """把 B站 长链归一化为 b23.tv/BVxxx 短链。
+
+    仅归一化域名路径；保留分P（p）和时间戳（t）参数；去掉 vd_source/spm_id_from
+    等追踪参数，避免触发额外风控或污染日志。非 B站 链接原样返回。
+    """
+    m = _BILIBILI_LONG_URL_RE.match(url)
+    if not m:
+        return url
+    bvid = m.group(1)
+    parsed = urlparse(url)
+    params: dict[str, str] = {}
+    if parsed.query:
+        for k, v in parse_qsl(parsed.query):
+            if k in ("p", "t"):
+                params[k] = v
+    query = urlencode(params)
+    return f"https://b23.tv/{bvid}" + (f"?{query}" if query else "")
 
 
 def _resolve_proxy(host: str = "") -> str:
@@ -794,6 +819,7 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
+    url = _normalize_bilibili_url(url)
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)
@@ -1283,6 +1309,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
     让「解析视频信息」步骤能快速收敛，且下载阶段一旦卡住就能被看门狗识别。
     """
+    task.url = _normalize_bilibili_url(task.url)
     reporter = _ProgressReporter(task, store)
     task.add_step("排队等待", "done", "已开始执行")
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
