@@ -2710,14 +2710,14 @@ _pcs_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
-# Web 精简版路由（web-dev）：仅挂载网页基础功能所需路由
-#   保留：core(解析/下载) / crypto / fs / cloud(WebDAV 云盘) /
-#     convert(视频转换) / dewatermark(PDF/图片去水印)
-#   公共 Cookie 池：代码内联于本文件后部（非 cloud.py），含接收端 /api/cookie/sync、
-#     本机 from-local、查询 status、清理 cache/clear 及后台探测 watchdog，网页版复用。
-#   剥离(App 专属，仅在 main 完整版挂载)：commentary / library /
-#     retention / archive / torrents / subtitles / llm / process / subscriptions /
-#     baidu_dlink / pcs
+# App 完整版路由（app-dev）：挂载全部业务模块
+#   包含：core(解析/下载) / crypto / fs / cloud(WebDAV 云盘) /
+#     convert(视频转换) / dewatermark(PDF/图片去水印) /
+#     commentary(视频解说) / library(媒体库) / retention(时效清理) / archive /
+#     torrents / subtitles / llm / process / subscriptions /
+#     baidu_dlink(百度直链) / pcs(百度网盘 PCS)
+#   公共 Cookie 池：代码内联于本文件后部，含接收端 /api/cookie/sync、
+#     本机 from-local、查询 status、清理 cache/clear 及后台探测 watchdog。
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
@@ -2731,6 +2731,28 @@ from routers import cloud as _cloud_rtr
 app.include_router(_cloud_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
+from routers import commentary as _commentary_rtr
+app.include_router(_commentary_rtr.router)
+from routers import library as _library_rtr
+app.include_router(_library_rtr.router)
+from routers import retention as _retention_rtr
+app.include_router(_retention_rtr.router)
+from routers import archive as _archive_rtr
+app.include_router(_archive_rtr.router)
+from routers import torrents as _torrents_rtr
+app.include_router(_torrents_rtr.router)
+from routers import subtitles as _subtitles_rtr
+app.include_router(_subtitles_rtr.router)
+from routers import llm as _llm_rtr
+app.include_router(_llm_rtr.router)
+from routers import process as _process_rtr
+app.include_router(_process_rtr.router)
+from routers import subscriptions as _subscriptions_rtr
+app.include_router(_subscriptions_rtr.router)
+from routers import baidu_dlink as _baidu_dlink_rtr
+app.include_router(_baidu_dlink_rtr.router)
+from routers import pcs as _pcs_rtr
+app.include_router(_pcs_rtr.router)
 
 # —— 公共 Cookie 池 + 本机 Cookie 缓存（来自 main 分支，合并时保留）——
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。
