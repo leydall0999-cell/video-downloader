@@ -1244,6 +1244,24 @@ async def _cleanup_loop() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
+    # 启动即打印运行实例的真实代码版本，便于在 Railway Deploy Logs 首行确认
+    # 线上部署到哪次提交（Railway 的部署 ID 不是 git SHA，容易误判「没更新」）。
+    try:
+        import subprocess
+        _root = str(Path(__file__).resolve().parent.parent)
+        _sha = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'], cwd=_root,
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        _sha = ''
+    logger.info(
+        "启动版本 git_sha=%s railway_commit=%s railway_deployment=%s railway_branch=%s",
+        _sha,
+        os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
+        os.environ.get('RAILWAY_DEPLOYMENT_ID', ''),
+        os.environ.get('RAILWAY_GIT_BRANCH', ''),
+    )
     orphans = store.purge_orphans()
     if orphans:
         logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)

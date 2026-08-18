@@ -5,9 +5,25 @@
 各 ENABLED 常量 / 辅助函数等；本文件在 app.py 末尾才被 import，符号已就绪），
 handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在 app.py 末尾 include。
 """
+import os
+import subprocess
+
 import app
 from fastapi import APIRouter
 router = APIRouter()
+
+def _git_sha(repo_root: str) -> str:
+    """读取仓库当前 checkout 的真实 git commit SHA（Railway 部署的就是它）。"""
+    try:
+        out = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=repo_root, capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return ''
 
 @router.get('/api/platforms')
 def list_platforms() -> dict:
@@ -15,11 +31,13 @@ def list_platforms() -> dict:
 
 @router.get('/api/version')
 def api_version() -> dict:
-    """返回运行实例的构建指纹 + 实际加载的可执行文件路径。
+    """返回运行实例的真实代码版本指纹。
 
-    部署脚本 deploy_mac.sh 用它做自校验：只有运行中的服务返回的指纹与
-    刚构建的 build_version.txt 一致、且 exe 路径确实指向目标 app 时，
-    才算「部署成功」，否则直接判定失败，杜绝「装的是旧版却以为装好了」。
+    关键字段：
+    - git_sha：当前运行代码 checkout 的 git commit（Railway 部署到哪版一目了然）
+    - railway_commit / railway_deployment / railway_branch：Railway 注入的环境变量
+    以前只返回 build_version.txt 的 'dev'，无法确认线上跑的是哪次提交，
+    排查「改了没生效」类问题纯靠猜日志。现在直接暴露真实 SHA。
     """
     candidates = []
     exe = getattr(app.sys, 'executable', '')
@@ -31,7 +49,15 @@ def api_version() -> dict:
         if c.exists():
             version = c.read_text(encoding='utf-8').strip()
             break
-    return {'version': version, 'exe': app.sys.executable}
+    repo_root = str(app.Path(__file__).resolve().parent.parent.parent)
+    return {
+        'version': version,
+        'exe': app.sys.executable,
+        'git_sha': _git_sha(repo_root),
+        'railway_commit': os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
+        'railway_deployment': os.environ.get('RAILWAY_DEPLOYMENT_ID', ''),
+        'railway_branch': os.environ.get('RAILWAY_GIT_BRANCH', ''),
+    }
 
 @router.get('/api/ydlp/version')
 def ydlp_version_api() -> dict:
