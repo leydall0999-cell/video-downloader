@@ -33,7 +33,23 @@ except Exception:  # pragma: no cover
     Fernet = None
 
 
-_POOL_DIR = Path.home() / ".videodownloader" / "cookie_pool"
+def _resolve_pool_dir() -> Path:
+    """解析公共池存储目录。优先级：
+    1. VDL_COOKIE_POOL_DIR —— 显式指定（已是完整目录，直接采用）
+    2. RAILWAY_VOLUME_MOUNT_PATH —— Railway 持久卷自动注入，拼 /cookie_pool
+    3. 兜底 —— ~/.videodownloader/cookie_pool（本地 / 无卷环境，向后兼容）
+    这样挂了 Railway 持久卷后，池文件自动落到卷上、跨容器重启存活。
+    """
+    custom = os.environ.get("VDL_COOKIE_POOL_DIR")
+    if custom:
+        return Path(custom)
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+    if mount:
+        return Path(mount) / "cookie_pool"
+    return Path.home() / ".videodownloader" / "cookie_pool"
+
+
+_POOL_DIR = _resolve_pool_dir()
 _TTL = 30 * 24 * 3600  # 30 天，超时视为失效
 _LOCK = threading.Lock()
 
