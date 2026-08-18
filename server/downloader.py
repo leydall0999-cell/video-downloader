@@ -565,6 +565,14 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     if cookie_text.lower().startswith("cookie:"):
         cookie_text = cookie_text[7:].strip()
     if cookie_text:
+        # 容错：用户从 DevTools 复制的常是「裸值」（只复制了 SESSDATA 那一格的 Value，
+        # 没有 SESSDATA= 前缀）。B站 用 SESSDATA 单键鉴权，检测到裸值自动补前缀，
+        # 避免「明明填了 Cookie 还 403」的困惑。后端直接把该字符串当 Cookie 头发，
+        # 裸值会被 B站 当作无效 Cookie 导致 403。
+        is_bili = host and ("bilibili.com" in host or "b23.tv" in host)
+        if is_bili and "=" not in cookie_text:
+            cookie_text = f"SESSDATA={cookie_text}"
+            _cookie_diag("cookie_bare_value_fixed", "bilibili bare SESSDATA auto-prefixed")
         headers["Cookie"] = cookie_text
     # YouTube 专用参数：player_client 选择。
     # 2026-08 起 YouTube 对 web/ios client 强制 SABR 流（DASH only），
