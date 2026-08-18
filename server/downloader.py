@@ -321,6 +321,79 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     return _strip_tracking_params(url)
 
 
+def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str = "") -> None:
+    """为 BiliBiliIE 打补丁：视频页 HTML 用 requests 预下载，绕过 yt-dlp urllib 经代理 IncompleteRead。
+
+    仅对 bilibili.com/video/BVxxx 的第一次 _download_webpage_handle 生效。
+    如果 requests 也失败，回退原 yt-dlp 行为。
+    """
+    try:
+        from yt_dlp.extractor.bilibili import BiliBiliIE
+    except Exception:
+        return
+
+    attr = "_vdl_webpage_patched"
+    if getattr(BiliBiliIE._download_webpage_handle, attr, False):
+        return
+
+    _orig = BiliBiliIE._download_webpage_handle
+
+    def _patched(self, url_or_request, video_id, *args, **kwargs):
+        url = ""
+        try:
+            if isinstance(url_or_request, str):
+                url = url_or_request
+            else:
+                url = getattr(url_or_request, "url", "") or str(url_or_request)
+        except Exception:
+            url = str(url_or_request)
+
+        if url and "/video/BV" in url and "bilibili.com" in url:
+            logger.info("[bilibili patch] try requests for %s", url)
+            try:
+                import requests
+                headers = {
+                    "User-Agent": ua or (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": "https://www.bilibili.com/",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Accept-Encoding": "identity",
+                    "Connection": "close",
+                }
+                if cookie:
+                    headers["Cookie"] = cookie
+                proxies = {"http": proxy, "https": proxy} if proxy else None
+                resp = requests.get(
+                    url,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=30,
+                    allow_redirects=True,
+                )
+                resp.raise_for_status()
+                content = resp.content
+
+                class _FakeURLH:
+                    url = resp.url
+                    headers = resp.headers
+
+                    def read(self):
+                        return content
+
+                logger.info("[bilibili patch] requests OK %s bytes=%s", resp.url, len(content))
+                return resp.text, _FakeURLH()
+            except Exception as e:
+                logger.warning("[bilibili patch] requests failed for %s: %s, fallback to yt-dlp", url, str(e)[:200])
+
+        return _orig(self, url_or_request, video_id, *args, **kwargs)
+
+    BiliBiliIE._download_webpage_handle = _patched
+    setattr(BiliBiliIE._download_webpage_handle, attr, True)
+
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
@@ -1027,6 +1100,15 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
 
     try:
         opts = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
+        # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
+        # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
+        _h = _host_of(url)
+        if _h and ("bilibili.com" in _h or "b23.tv" in _h):
+            _patch_bilibili_webpage_download(
+                proxy=effective_proxy,
+                cookie=cookie,
+                ua=(opts.get("http_headers") or {}).get("User-Agent"),
+            )
         # 解析阶段只拿 info dict，不做格式选择（避免 YouTube 等站因格式不匹配
         # 直接抛 "Requested format is not available"）。下载阶段再由 _format_selector 选格式。
         opts["format"] = None
@@ -1035,7 +1117,6 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # ⚠️ 绝不能对所有站点生效！国内站（快手/抖音等）提取失败时，
         # ignoreerrors 会吞掉 ExtractorError/DownloadError 导致 extract_info 返回 None，
         # 真正的错误原因（页面结构变更/需要登录等）被完全丢失。
-        _h = _host_of(url)
         if _h and ("youtube.com" in _h or "youtu.be" in _h):
             opts["ignoreerrors"] = "only_download"
         with YoutubeDL(opts) as ydl:
@@ -1491,6 +1572,15 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     info: dict[str, Any] = {}
     try:
         _dl_opts = _download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)
+        # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
+        # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
+        _task_host = _host_of(task.url)
+        if _task_host and ("bilibili.com" in _task_host or "b23.tv" in _task_host):
+            _patch_bilibili_webpage_download(
+                proxy=effective_proxy,
+                cookie=cookie,
+                ua=(_dl_opts.get("http_headers") or {}).get("User-Agent"),
+            )
         with YoutubeDL(_dl_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
