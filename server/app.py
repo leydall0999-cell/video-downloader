@@ -1470,6 +1470,31 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
 
 
 
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    """兜底：任何未被具体 handler 覆盖的异常，向前端返回可读的错误原因。
+
+    默认 FastAPI（debug=False）只会返回笼统的 "Internal Server Error"，
+    排查时拿不到真实堆栈。这里把异常类型+消息透传给前端，并写服务端日志，
+    让用户（双击启动 App 也能）直接看到 500 的真实成因。
+    """
+    logger.exception("未捕获异常 %s %s: %s", request.method, request.url.path, exc)
+    # 不要拦截 FastAPI 自身的 HTTPException（如 402 订阅提示、400 参数错误）
+    from fastapi import HTTPException as _HTTPException
+
+    if isinstance(exc, _HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": msg,
+            "hint": "服务端未预期错误，请把上方错误信息反馈，或查看服务端日志",
+            "detail": msg,
+        },
+    )
+
+
 @app.exception_handler(LinkError)
 async def handle_link_error(_: Request, exc: LinkError) -> JSONResponse:
     status = 415 if isinstance(exc, UnsupportedPlatformError) else 400
