@@ -103,6 +103,7 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
+    cookieContribute: $('cookieContribute'),
     proxyInput: $('proxyInput'),
     concurrentInput: $('concurrentInput'),
     downloaderSelect: $('downloaderSelect'),
@@ -2035,6 +2036,9 @@
         const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
         trackTask(tid, refs, '');
       });
+      if (el.cookieContribute.checked) {           // 访客勾选才贡献，共享登录态给其他人
+        urls.forEach((u) => contributeCookie(u, cookie));
+      }
     } catch (error) {
       if (error.subscribe) {
         promptSubscribe();
@@ -2108,6 +2112,15 @@
     return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u));
   };
 
+  // 访客自愿贡献 Cookie 到公共池（火后即弃，不阻断主流程；后端会做域名白名单+验真+限频）
+  const contributeCookie = (url, cookie) => {
+    if (!url || !cookie) return;
+    request('/api/cookie/contribute', {
+      method: 'POST',
+      body: JSON.stringify({ url, cookie }),
+    }).catch(() => { /* 池写入失败不影响解析/下载结果 */ });
+  };
+
   const handleResolve = async (event) => {
     event.preventDefault();
     const raw = el.input.value.trim();
@@ -2142,6 +2155,9 @@
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
+      if (el.cookieContribute.checked) {           // 访客勾选才贡献，共享登录态给其他人
+        contributeCookie(url, cookie);
+      }
     } catch (error) {
       resolved = null;
       showError(error.message || '解析失败', error.hint);

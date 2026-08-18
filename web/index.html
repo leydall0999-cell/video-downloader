@@ -112,10 +112,14 @@
                 <button type="button" id="cookieHelpCopy" class="cookie-help-copy">复制操作指引</button>
               </div>
             </details>
+            <label class="adv-checkbox" title="勾选即表示同意把你本次的登录态共享到公共池，供网页版所有访客复用（仅登录态，不含密码）">
+              <input type="checkbox" id="cookieContribute" />
+              同时把本 Cookie <b>贡献到公共池</b>（他人可复用，仅登录态、不含密码；勾选即同意共享）
+            </label>
             <label class="adv-label" for="proxyInput">代理地址（可选）</label>
             <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
               placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
-            <p class="adv-note">Cookie 仅用于本次解析/下载，服务端不留存；代理留空时按平台自动选择。</p>
+            <p class="adv-note">Cookie 默认仅用于本次解析/下载、服务端不留存；若勾选上方「贡献到公共池」才会保存为共享登录态，供其他访客复用。</p>
           </div>
         </details>
       </div>

@@ -2860,6 +2860,40 @@ def cookie_sync(payload: dict, request: Request) -> dict:
     return {"ok": True, "added": added, "verified": (ok is True)}
 
 
+@app.post("/api/cookie/contribute")
+def cookie_contribute(payload: dict, request: Request) -> dict:
+    """访客自愿把本次登录态贡献到公共池（需前端显式勾选 + 后端验真）。
+
+    与 /api/cookie/sync（运维令牌写入）不同，本端点面向网页访客、无需令牌，
+    但门槛更严格：① 仅白名单域名；② 单 IP 30s 一次限频；③ 必须 verify_cookie
+    验真（明确无效才拒，网络不可达放行）；④ B站 裸 SESSDATA 自动补前缀。
+    隐私保护：只有访客主动勾选才会入池，且其登录态将共享给所有访客。
+    """
+    from urllib.parse import urlparse
+    url = (payload or {}).get("url", "")
+    cookie = (payload or {}).get("cookie", "")
+    host = urlparse(url).netloc if url else ""
+    from cookie_pool import add_cookie, is_allowed, verify_cookie, _norm_domain, _strip_sub
+    domain = _strip_sub(_norm_domain(host))
+    if not domain or not is_allowed(domain):
+        raise HTTPException(status_code=400, detail="该平台暂不支持公共池贡献")
+    cookie = (cookie or "").strip()
+    if not cookie:
+        raise HTTPException(status_code=400, detail="缺少 cookie")
+    # B站 裸 SESSDATA 归一化，保证从池复用时不 403（与 _base_options 一致）
+    if domain == "bilibili.com" and "=" not in cookie:
+        cookie = f"SESSDATA={cookie}"
+    ip = (request.client.host if request.client else "") or ""
+    if not _sync_rate_ok(ip):
+        raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+    ok = verify_cookie(domain, cookie)
+    if ok is False:
+        raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
+    added = add_cookie(domain, cookie, source="contrib")
+    logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s", domain, ip, added)
+    return {"ok": True, "added": added, "verified": (ok is True)}
+
+
 @app.post("/api/cookie/sync/from-local")
 def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     """仅本机(App 端)调用：读取本机浏览器指定站点登录态并上报到公共池。"""
