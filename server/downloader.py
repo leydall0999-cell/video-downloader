@@ -357,7 +357,7 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
         "Connection": "close",
     }
     if cookie:
-        headers["Cookie"] = cookie
+        headers["Cookie"] = _clean_header_value(cookie)
 
     # 1) 取视频元数据
     view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
@@ -490,6 +490,29 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
     return info
 
 
+def _clean_header_value(value: str) -> str:
+    """过滤 HTTP header 值，只保留 latin-1 安全字符。
+
+    浏览器复制出的 Cookie 串可能混入中文/特殊字符，requests/urllib3 在把 header
+    编码为 latin-1 发送时会抛 `UnicodeEncodeError: 'latin-1' ... ordinal not in range(256)`。
+    这里按字节清理：保留能 encode 成 latin-1 且解码后不变的字符，其余丢弃。
+    """
+    if not value:
+        return value
+    try:
+        encoded = value.encode("latin-1")
+        return encoded.decode("latin-1")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        cleaned = []
+        for ch in value:
+            try:
+                ch.encode("latin-1")
+                cleaned.append(ch)
+            except UnicodeEncodeError:
+                pass
+        return "".join(cleaned)
+
+
 def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str = "") -> None:
     """为 BiliBiliIE 打补丁：视频页 HTML 用 requests 预下载，绕过 yt-dlp urllib 经代理 IncompleteRead。
 
@@ -537,7 +560,7 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
                     "Connection": "close",
                 }
                 if cookie:
-                    headers["Cookie"] = cookie
+                    headers["Cookie"] = _clean_header_value(cookie)
                 proxies = {"http": proxy, "https": proxy} if proxy else None
                 resp = requests.get(
                     url,
