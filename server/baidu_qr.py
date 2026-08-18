@@ -74,6 +74,21 @@ def qr_gen() -> dict:
         return {"ok": False, "message": f"生成二维码出错：{e}"}
 
 
+def _safe_preview(body: str, limit: int = 200) -> str:
+    """日志安全预览：遇到二进制/不可打印内容（如被重定向到的 PNG 图片）降级为摘要，
+    避免把图片字节当文本打印造成乱码污染日志。"""
+    if not body:
+        return ""
+    # 图片魔数快速识别（PNG / JPEG / GIF）
+    head = body[:8].encode("utf-8", "replace") if isinstance(body, str) else body[:8]
+    if head[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1", b"GIF8"):
+        return f"[binary image len={len(body)}]"
+    sample = body[:limit]
+    if any((ord(c) < 32 or ord(c) > 126) and c not in "\r\n\t" for c in sample):
+        return f"[binary len={len(body)}]"
+    return sample
+
+
 def _parse_unicast(body: str) -> dict:
     """解析 channel/unicast 的 JSONP 响应。"""
     body = (body or "").strip()
@@ -132,10 +147,14 @@ def _poll_unicast(session, sign: str, gid: str) -> dict:
     params = {"channel_id": sign, "tpl": "netdisk_web", "gid": gid,
               "callback": cb, "tt": str(int(time.time() * 1000))}
     r = session.get(UNICAST, params=params, timeout=(8, 25))
+    # 防御：若响应为图片（异常重定向）则降级为等待，不解析
+    ct = r.headers.get("Content-Type", "")
+    if ct.startswith("image/") or r.content[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0"):
+        return {"status": "waiting", "message": "等待扫码…"}
     body_text = r.text
     j = _parse_unicast(body_text)
     logger.info("[qr_poll] unicast响应: errno=%s data.status=%s raw=%s",
-                j.get("errno"), (j.get("data") or {}).get("status"), body_text[:200])
+                j.get("errno"), (j.get("data") or {}).get("status"), _safe_preview(body_text))
     errno_val = j.get("errno")
     if errno_val == 404:
         return {"status": "expired", "message": "二维码已过期，请刷新"}
@@ -156,11 +175,20 @@ def _poll_qrcodestatus(session, sign: str, gid: str) -> dict:
     cb = "bd__cbs__" + tt[-8:]
     params = {"code": sign, "tpl": "netdisk_web", "subpro": "netdisk_web",
               "apiver": "v3", "gid": gid, "tt": tt, "callback": cb}
-    r = session.get(QR_STATUS, params=params, timeout=(5, 10), allow_redirects=True)
+    # 不自动跟随重定向：百度在二维码未确认时常 302 到 PNG 图片，跟随后
+    # 响应体为图片二进制，r.text 强解 UTF-8 会乱码、JSONP 解析失败 errno=-1。
+    r = session.get(QR_STATUS, params=params, timeout=(5, 10), allow_redirects=False)
+    # 3xx 重定向到二维码图片（未登录态常见）→ 视为等待，不解析
+    if 300 <= r.status_code < 400:
+        return {"status": "waiting", "message": "等待扫码…"}
+    # 响应体为图片（被重定向到 PNG/JPEG）时也降级为等待
+    ct = r.headers.get("Content-Type", "")
+    if ct.startswith("image/") or r.content[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0"):
+        return {"status": "waiting", "message": "等待扫码…"}
     body_text = r.text
     j = _parse_unicast(body_text)
     logger.info("[qr_poll] qrcodestatus响应: errno=%s status=%s raw=%s",
-                j.get("errno"), j.get("status"), body_text[:200])
+                j.get("errno"), j.get("status"), _safe_preview(body_text))
     errno_val = j.get("errno")
     if errno_val == 404 or errno_val == 400400:
         return {"status": "expired", "message": "二维码已过期，请刷新"}
