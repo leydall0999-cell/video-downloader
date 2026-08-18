@@ -321,6 +321,175 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     return _strip_tracking_params(url)
 
 
+def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[str, Any] | None:
+    """B站 专用兜底解析器：当 yt-dlp 网络栈反复 IncompleteRead 时，直接用 requests 调 B站 API。
+
+    这是「绕过 yt-dlp 网络层」的最后手段。只处理最常见的 www.bilibili.com/video/BVxxx
+    单 P 视频，构造一个足够前端展示 + 后续下载的 info dict。若 API 返回需 WBI 签名或
+    其他复杂形态，返回 None 让外层继续抛原异常。
+    """
+    m = re.search(r"/video/(BV[0-9A-Za-z]+)", url)
+    if not m:
+        return None
+    bvid = m.group(1)
+    parsed = urlparse(url)
+    page = 1
+    try:
+        page = int(parse_qs(parsed.query).get("p", ["1"])[0])
+    except Exception:
+        pass
+
+    try:
+        import requests
+    except Exception as e:
+        logger.warning("[bilibili api fallback] requests not available: %s", e)
+        return None
+
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.bilibili.com/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Connection": "close",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+
+    # 1) 取视频元数据
+    view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+    try:
+        r = requests.get(view_url, headers=headers, proxies=proxies, timeout=30)
+        r.raise_for_status()
+        view_data = r.json()
+        if view_data.get("code") != 0:
+            logger.warning("[bilibili api fallback] view API code=%s msg=%s", view_data.get("code"), view_data.get("message"))
+            return None
+        video_info = view_data["data"] or {}
+        pages = video_info.get("pages") or []
+        page_info = pages[page - 1] if 1 <= page <= len(pages) else (pages[0] if pages else {})
+        cid = page_info.get("cid")
+        if not cid:
+            logger.warning("[bilibili api fallback] no cid found")
+            return None
+    except Exception as e:
+        logger.warning("[bilibili api fallback] view request failed: %s", str(e)[:200])
+        return None
+
+    # 2) 取播放地址（优先 DASH）
+    play_url = (
+        f"https://api.bilibili.com/x/player/playurl"
+        f"?bvid={bvid}&cid={cid}&qn=127&fnver=0&fnval=4048&fourk=1"
+    )
+    try:
+        r = requests.get(play_url, headers=headers, proxies=proxies, timeout=30)
+        r.raise_for_status()
+        play_data = r.json()
+        if play_data.get("code") != 0:
+            logger.warning("[bilibili api fallback] playurl API code=%s msg=%s", play_data.get("code"), play_data.get("message"))
+            return None
+        play_info = play_data.get("data") or {}
+    except Exception as e:
+        logger.warning("[bilibili api fallback] playurl request failed: %s", str(e)[:200])
+        return None
+
+    # 3) 构造 formats
+    formats: list[dict[str, Any]] = []
+    fmt_names = {
+        q.get("quality"): q.get("new_description") or q.get("display_desc")
+        for q in play_info.get("support_formats") or []
+    }
+
+    def _mime_ext(mime: str) -> str:
+        return {"video/mp4": "m4s", "audio/mp4": "m4s"}.get(mime, "mp4")
+
+    dash = play_info.get("dash") or {}
+
+    # DASH 视频
+    for v in dash.get("video") or []:
+        url0 = v.get("baseUrl") or v.get("base_url") or v.get("url")
+        if not url0:
+            continue
+        fid_match = re.search(r"-([0-9]+)\.m4s\\?", url0)
+        fmt_id = str(v.get("id")) if not fid_match else fid_match.group(1)
+        formats.append({
+            "format_id": fmt_id,
+            "url": url0,
+            "ext": _mime_ext(v.get("mimeType") or v.get("mime_type") or ""),
+            "vcodec": (v.get("codecs") or "").split(".")[0] or "avc",
+            "acodec": "none",
+            "width": v.get("width"),
+            "height": v.get("height"),
+            "fps": v.get("frameRate") or v.get("frame_rate"),
+            "tbr": (v.get("bandwidth") or 0) / 1000.0,
+            "filesize": v.get("size"),
+            "quality": v.get("id"),
+            "format": fmt_names.get(v.get("id")),
+            "protocol": "https",
+            "http_headers": {"Referer": "https://www.bilibili.com/"},
+        })
+
+    # DASH 音频
+    for a in dash.get("audio") or []:
+        url0 = a.get("baseUrl") or a.get("base_url") or a.get("url")
+        if not url0:
+            continue
+        formats.append({
+            "format_id": f'a-{a.get("id", "audio")}',
+            "url": url0,
+            "ext": _mime_ext(a.get("mimeType") or a.get("mime_type") or ""),
+            "vcodec": "none",
+            "acodec": (a.get("codecs") or "").split(".")[0] or "aac",
+            "tbr": (a.get("bandwidth") or 0) / 1000.0,
+            "filesize": a.get("size"),
+            "format": "音频",
+            "protocol": "https",
+            "http_headers": {"Referer": "https://www.bilibili.com/"},
+        })
+
+    # 兼容旧版 durl（FLV/MP4 直链）
+    for d in play_info.get("durl") or []:
+        url0 = d.get("url")
+        if not url0:
+            continue
+        formats.append({
+            "format_id": f'durl-{d.get("order", 0)}',
+            "url": url0,
+            "ext": "mp4",
+            "filesize": d.get("size"),
+            "protocol": "https",
+            "http_headers": {"Referer": "https://www.bilibili.com/"},
+        })
+
+    if not formats:
+        logger.warning("[bilibili api fallback] no formats extracted from play_info")
+        return None
+
+    owner = video_info.get("owner") or {}
+    stat = video_info.get("stat") or {}
+    info = {
+        "id": f'{bvid}{f"_p{page}" if page > 1 else ""}',
+        "title": video_info.get("title", bvid),
+        "description": video_info.get("desc"),
+        "thumbnail": video_info.get("pic"),
+        "uploader": owner.get("name"),
+        "uploader_id": str(owner.get("mid") or ""),
+        "duration": video_info.get("duration"),
+        "view_count": stat.get("view"),
+        "like_count": stat.get("like"),
+        "comment_count": stat.get("reply"),
+        "timestamp": video_info.get("pubdate"),
+        "webpage_url": url,
+        "formats": formats,
+        "http_headers": {"Referer": "https://www.bilibili.com/"},
+    }
+    logger.info("[bilibili api fallback] extracted %s formats for %s", len(formats), bvid)
+    return info
+
+
 def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str = "") -> None:
     """为 BiliBiliIE 打补丁：视频页 HTML 用 requests 预下载，绕过 yt-dlp urllib 经代理 IncompleteRead。
 
@@ -419,11 +588,82 @@ class _YoutubeDL(YoutubeDL):
     """
 
     def build_request_director(self, handlers, preferences=None):
+        all_keys = [getattr(h, "RH_KEY", "?") for h in handlers]
         requests_handlers = [h for h in handlers if getattr(h, "RH_KEY", None) == "Requests"]
+        logger.info("[yt-dlp] available handlers=%s requests_found=%s", all_keys, bool(requests_handlers))
+
         if requests_handlers:
             logger.info("[yt-dlp] forcing requests request handler only")
             handlers = requests_handlers
-        return super().build_request_director(handlers, preferences)
+        else:
+            logger.warning("[yt-dlp] requests handler NOT available, falling back to all handlers")
+
+        director = super().build_request_director(handlers, preferences)
+
+        # 安全网：如果 filtering 没生效（例如 super() 内部又重新加入了 urllib），
+        # 强制把 Urllib handler 从 director 里拿掉。
+        if requests_handlers and "Urllib" in director.handlers:
+            logger.warning("[yt-dlp] removing Urllib handler from director safety net")
+            del director.handlers["Urllib"]
+
+        final_keys = list(director.handlers.keys())
+        logger.info("[yt-dlp] final director handlers=%s", final_keys)
+        return director
+
+
+def _patch_requests_handler_retries() -> None:
+    """让 yt-dlp 的 Requests handler 启用 urllib3 自动重试。
+
+    yt-dlp 默认传 Retry(False) 禁用重试。Railway→国内代理链路不稳定，
+    经常读到一半连接被重置，需要 urllib3 对 GET/HEAD 等幂等请求自动重试。
+    """
+    try:
+        from yt_dlp.networking._requests import RequestsRH
+        from yt_dlp.networking._requests import RequestsHTTPAdapter
+        import urllib3.util.retry
+    except Exception as e:
+        logger.warning("[requests patch] cannot import yt-dlp requests handler: %s", e)
+        return
+
+    if getattr(RequestsRH._create_instance, "_vdl_retries_patched", False):
+        return
+
+    _orig_create_instance = RequestsRH._create_instance
+
+    def _patched_create_instance(self, cookiejar, legacy_ssl_support=None):
+        # 先调原方法拿到 session（含默认 adapter 配置）
+        session = _orig_create_instance(self, cookiejar=cookiejar, legacy_ssl_support=legacy_ssl_support)
+
+        # 重新 mount 一个带重试策略的 adapter
+        retry = urllib3.util.retry.Retry(
+            total=int(os.environ.get("VDL_REQUESTS_RETRY_TOTAL", "5")),
+            connect=int(os.environ.get("VDL_REQUESTS_RETRY_CONNECT", "3")),
+            read=int(os.environ.get("VDL_REQUESTS_RETRY_READ", "5")),
+            backoff_factor=float(os.environ.get("VDL_REQUESTS_RETRY_BACKOFF", "0.5")),
+            # 对 IncompleteRead / Connection reset / read timeout 等做重试
+            raise_on_status=False,
+            raise_on_redirect=False,
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+            status_forcelist=[500, 502, 503, 504, 408, 429],
+        )
+        adapter = RequestsHTTPAdapter(
+            ssl_context=self._make_sslcontext(legacy_ssl_support=legacy_ssl_support),
+            source_address=self.source_address,
+            max_retries=retry,
+        )
+        session.adapters.clear()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        logger.debug("[requests patch] mounted retry adapter total=%s", retry.total)
+        return session
+
+    RequestsRH._create_instance = _patched_create_instance
+    setattr(RequestsRH._create_instance, "_vdl_retries_patched", True)
+    logger.info("[requests patch] enabled urllib3 retries for yt-dlp requests handler")
+
+
+# 模块加载时即启用 requests 重试补丁
+_patch_requests_handler_retries()
 
 
 def _resolve_proxy(host: str = "") -> str:
@@ -826,6 +1066,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         "socket_timeout": SOCKET_TIMEOUT,
         "retries": retries,
         "extractor_retries": retries,
+        "fragment_retries": int(os.environ.get("VDL_FRAGMENT_RETRIES", "10")),
+        "file_access_retries": int(os.environ.get("VDL_FILE_ACCESS_RETRIES", "10")),
+        "skip_unavailable_fragments": True,
         "ignoreerrors": False,
         "continue": True,   # 断点续传：上次中断的 .part 可从断点接着下，大文件更稳
     }
@@ -1162,29 +1405,48 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                 _f.write(f"  extract_info OK: title={str(_info_title)[:60]} formats={_fmt_count} keys={_info_keys[:15]}\n")
         except Exception:
             pass
-    except (UnsupportedError, GeoRestrictedError, DownloadError) as exc:
+    except (UnsupportedError, GeoRestrictedError) as exc:
         raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
-    except ExtractorError as exc:
+    except (DownloadError, ExtractorError) as exc:
         _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
-        # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
-        if "format" in str(exc).lower() or "not available" in str(exc).lower():
+        # B站 在国内代理 IncompleteRead/连接重置时，走 requests 直连 API 兜底
+        if _h and ("bilibili.com" in _h or "b23.tv" in _h) and (
+            "incompleteread" in str(exc).lower()
+            or "error reading response" in str(exc).lower()
+            or "connection" in str(exc).lower()
+            or "transport" in str(exc).lower()
+        ):
+            logger.info("[probe] yt-dlp Bilibili failed with network error, trying API fallback: %s", _last_err)
             try:
-                opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
-                opts2["extract_flat"] = "in"
-                if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
-                    opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
-                with _YoutubeDL(opts2) as ydl2:
-                    info = ydl2.extract_info(url, download=False)
-                    _last_err = None  # 降级成功
+                info = _bilibili_api_extract(url, proxy=effective_proxy, cookie=cookie)
+                if info:
+                    logger.info("[probe] Bilibili API fallback succeeded")
+                    _last_err = None
+                else:
+                    logger.warning("[probe] Bilibili API fallback returned no info")
             except Exception as fb_err:
-                _last_err = f"{_last_err}; 降级: {type(fb_err).__name__}: {str(fb_err)[:150]}"
-                raise ResolveError(
-                    "视频解析失败",
-                    f"建议：①检查代理是否通畅；②在「高级选项」粘贴 Cookie；"
-                    f"③更换代理节点。\n详情：{_last_err}"
-                ) from exc
-        else:
-            raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
+                logger.warning("[probe] Bilibili API fallback failed: %s", str(fb_err)[:200])
+
+        if _last_err:
+            # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
+            if "format" in str(exc).lower() or "not available" in str(exc).lower():
+                try:
+                    opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
+                    opts2["extract_flat"] = "in"
+                    if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
+                        opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
+                    with _YoutubeDL(opts2) as ydl2:
+                        info = ydl2.extract_info(url, download=False)
+                        _last_err = None  # 降级成功
+                except Exception as fb_err:
+                    _last_err = f"{_last_err}; 降级: {type(fb_err).__name__}: {str(fb_err)[:150]}"
+                    raise ResolveError(
+                        "视频解析失败",
+                        f"建议：①检查代理是否通畅；②在「高级选项」粘贴 Cookie；"
+                        f"③更换代理节点。\n详情：{_last_err}"
+                    ) from exc
+            else:
+                raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except OSError as exc:  # 网络/DNS 层面的错误
         _last_err = f"{type(exc).__name__}: {_clean_message(str(exc))[:200]}"
         raise ResolveError("网络请求失败", _clean_message(str(exc))) from exc
