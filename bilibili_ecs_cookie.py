@@ -171,12 +171,15 @@ def main():
         try:
             resp = _push_to_cloud(args.url, args.token, header)
             print("   推送结果：", resp)
-            # 打印出可手动粘贴到网页端 Cookie 框的字符串（应急调试用）
-            safe_header = header
-            if args.sessdata and "SESSDATA=" in safe_header:
-                safe_header = re.sub(r"SESSDATA=[^;]+", "SESSDATA=***", safe_header)
-            print("   [DEBUG] Cookie字符串（可复制粘贴到网页端）:")
-            print("   " + safe_header)
+            # 打印完整 Cookie 字符串，供用户手动粘贴到网页端「会话 Cookie」框应急验证。
+            # 注意：不脱敏——因为本就用于用户自己粘贴到自己的浏览器；测试完建议重跑脚本轮换 SESSDATA。
+            print("   [DEBUG] 复制下面这整行，粘贴到网页端「会话 Cookie」框（含登录态）：")
+            print("   " + header)
+            if args.sessdata:
+                if "SESSDATA=" in header:
+                    print("   ✅ 已采集到 SESSDATA 登录态 Cookie")
+                else:
+                    print("   ⚠️ 未采集到 SESSDATA，注入可能失败：请检查 SESSDATA 值是否正确、是否已过期")
         except Exception as e:
             print("   ❌ 推送失败：", str(e)[:200])
         if not args.loop:
