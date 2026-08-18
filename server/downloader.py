@@ -610,8 +610,10 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
     effective_proxy = proxy or _resolve_proxy(host)
     if is_china_host(host):
-        # 国内站必须显式置空，否则 yt-dlp 仍会从环境变量读取代理导致超时/被拒
-        options["proxy"] = ""
+        # 国内站：海外部署（Railway 等）必须经 VDL_PROXY_CN 回源到国内出口，
+        # 否则被地理围栏 403；本机在国内直连时该变量为空，显式置空避免 yt-dlp
+        # 误读系统/环境变量里的海外代理导致超时/被拒。
+        options["proxy"] = os.environ.get("VDL_PROXY_CN", "").strip()
     elif effective_proxy:
         options["proxy"] = effective_proxy
         # 走代理时（Clash/V2Ray/Surge 等常做 HTTPS MITM 中间人解密），
