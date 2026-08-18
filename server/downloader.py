@@ -1402,9 +1402,10 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
         _h = _host_of(url)
         if _h and ("bilibili.com" in _h or "b23.tv" in _h):
+            # patch 必须带最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
             _patch_bilibili_webpage_download(
                 proxy=effective_proxy,
-                cookie=cookie,
+                cookie=(opts.get("http_headers") or {}).get("Cookie", cookie),
                 ua=(opts.get("http_headers") or {}).get("User-Agent"),
             )
         # 解析阶段只拿 info dict，不做格式选择（避免 YouTube 等站因格式不匹配
@@ -1893,9 +1894,10 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
         _task_host = _host_of(task.url)
         if _task_host and ("bilibili.com" in _task_host or "b23.tv" in _task_host):
+            # patch 必须带最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
             _patch_bilibili_webpage_download(
                 proxy=effective_proxy,
-                cookie=cookie,
+                cookie=(_dl_opts.get("http_headers") or {}).get("Cookie", cookie),
                 ua=(_dl_opts.get("http_headers") or {}).get("User-Agent"),
             )
         with _YoutubeDL(_dl_opts) as ydl:

@@ -39,7 +39,9 @@ _LOCK = threading.Lock()
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
 # 这样「哪些站允许上报登录态」不再写死 chrqj，加站只需改清单/配 env。
-_BASE_DOMAINS = {"chrqj.com"}
+_BASE_DOMAINS = {"chrqj.com", "bilibili.com"}
+
+logger = logging.getLogger(__name__)
 
 # chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
 _CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"
@@ -183,8 +185,11 @@ def _save(domain: str, cookies: list) -> None:
 
 def get_cookie(domain: str) -> str | None:
     """返回该域最新有效的明文 Cookie（最近上报优先）；无则返回 None。"""
-    for d in _candidates(domain):
+    candidates = _candidates(domain)
+    logger.info("[cookie_pool] get domain=%s candidates=%s", domain, candidates)
+    for d in candidates:
         f = _pool_file(d)
+        logger.info("[cookie_pool] get file=%s exists=%s", f, f.exists())
         if not f.exists():
             continue
         try:
@@ -194,22 +199,28 @@ def get_cookie(domain: str) -> str | None:
                     continue
                 header = _decrypt_item(c)
                 if header:
+                    logger.info("[cookie_pool] get hit domain=%s candidate=%s len=%s", domain, d, len(header))
                     return header
-        except Exception:
+        except Exception as e:
+            logger.warning("[cookie_pool] get read error domain=%s file=%s: %s", domain, f, e)
             continue
+    logger.info("[cookie_pool] get miss domain=%s", domain)
     return None
 
 
 def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
     """入池。返回 True=新增 / 更新，False=重复或非法域。"""
     domain = _norm_domain(domain)
-    if not is_allowed(domain):
+    allowed = is_allowed(domain)
+    logger.info("[cookie_pool] add domain=%s allowed=%s source=%s len=%s", domain, allowed, source, len(header or ""))
+    if not allowed:
         return False
     header = (header or "").strip()
     if not header:
         return False
     with _LOCK:
         f = _pool_file(domain)
+        logger.info("[cookie_pool] add file=%s exists=%s", f, f.exists())
         cookies = []
         if f.exists():
             try:
@@ -224,6 +235,7 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
                 return True
         cookies.append({"header": header, "ts": int(time.time()), "source": source})
         _save(domain, cookies)
+        logger.info("[cookie_pool] add saved domain=%s total=%s", domain, len(cookies))
         return True
 
 
