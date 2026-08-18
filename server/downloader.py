@@ -160,6 +160,50 @@ def _normalize_bilibili_url(url: str) -> str:
     return f"https://b23.tv/{bvid}" + (f"?{query}" if query else "")
 
 
+# --------------------------------------------------------------------------- #
+# 通用链接归一化：平台无关净化 + B站 长链特例转 b23.tv 短链
+# --------------------------------------------------------------------------- #
+# 通用追踪/推广参数（地址栏常带，对解析无益；部分平台会据此触发更严的防盗链/风控）
+_URL_TRACKING_PARAMS = frozenset({
+    "vd_source", "spm_id_from", "from", "from_source",     "share_source",
+    "share_medium", "share_from", "share_id", "shareid", "share_channel", "timestamp",
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "is_search", "scene", "sid", "campaign", "ame_from", "monitor",
+    "xhsshare", "appuid", "wxfcache", "m_source",
+})
+
+
+def _strip_tracking_params(url: str) -> str:
+    """通用：剥掉 vd_source/spm_id_from/from/share_* 等追踪参数，其余保留。"""
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    kept: list[tuple[str, str]] = []
+    for k, v in parse_qsl(parsed.query, keep_blank_values=True):
+        if k.lower() in _URL_TRACKING_PARAMS:
+            continue
+        kept.append((k, v))
+    if not kept:
+        return parsed._replace(query="").geturl()
+    return parsed._replace(query=urlencode(kept)).geturl()
+
+
+def _normalize_share_url(url: str) -> str:
+    """链接归一化入口（平台无关）。
+
+    1. B站：www.bilibili.com/video/BVxxx 长链 → b23.tv/BVxxx 短链
+       （B站 对分享短链放行、对长链直链风控更严，已验证有效）。
+    2. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
+       不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
+       无法从长链静态推导，强行构造会破坏解析（需调分享 API，不在本范围）。
+    """
+    # B站 特例优先：长链转 b23.tv 短链；短链本身若带追踪参数再剥一层
+    if "bilibili.com" in url or "b23.tv" in url:
+        return _strip_tracking_params(_normalize_bilibili_url(url))
+    # 其余平台：仅做通用追踪参数净化，零风险
+    return _strip_tracking_params(url)
+
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
@@ -819,7 +863,7 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
-    url = _normalize_bilibili_url(url)
+    url = _normalize_share_url(url)
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)
@@ -1309,7 +1353,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
     让「解析视频信息」步骤能快速收敛，且下载阶段一旦卡住就能被看门狗识别。
     """
-    task.url = _normalize_bilibili_url(task.url)
+    task.url = _normalize_share_url(task.url)
     reporter = _ProgressReporter(task, store)
     task.add_step("排队等待", "done", "已开始执行")
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
