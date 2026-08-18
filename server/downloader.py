@@ -679,6 +679,7 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                 pooled = _pool_get(cookie_host)
             except Exception as e:
                 _cookie_diag("pool_exception", str(e)[:200])
+            logger.info("[cookie] host=%s cookie_host=%s pool=%s", host, cookie_host, "hit" if pooled else "miss")
             if pooled:
                 headers["Cookie"] = pooled
                 _cookie_diag("pool_hit", f"len={len(pooled)}")

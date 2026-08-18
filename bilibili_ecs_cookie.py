@@ -31,6 +31,7 @@
 """
 import argparse
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -170,6 +171,12 @@ def main():
         try:
             resp = _push_to_cloud(args.url, args.token, header)
             print("   推送结果：", resp)
+            # 打印出可手动粘贴到网页端 Cookie 框的字符串（应急调试用）
+            safe_header = header
+            if args.sessdata and "SESSDATA=" in safe_header:
+                safe_header = re.sub(r"SESSDATA=[^;]+", "SESSDATA=***", safe_header)
+            print("   [DEBUG] Cookie字符串（可复制粘贴到网页端）:")
+            print("   " + safe_header)
         except Exception as e:
             print("   ❌ 推送失败：", str(e)[:200])
         if not args.loop:
