@@ -2,13 +2,16 @@
 
 沙盒无法安装 cv2/fitz（PyPI 被代理拦截），用 fake 模块注入 dewatermark_core 命名空间，
 跑通真实 job 生命周期与接线；像素正确性由部署环境真实库保证（用户本机验证）。
-运行：PYTHONPATH=server:tests .build_venv/bin/python -m pytest tests/test_dewatermark.py -v
+运行：.build_venv/bin/python -m pytest tests/test_dewatermark.py -v
+（sys.path 已自包含 server/ 与 tests/，无需再设 PYTHONPATH）
 """
 import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(__file__))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)                          # tests/  — fake_cv2 / fake_numpy / fake_fitz
+sys.path.insert(0, os.path.join(_HERE, "..", "server"))  # server/ — dewatermark_core / app
 
 import dewatermark_core as dwc
 import fake_cv2 as _fcv2
