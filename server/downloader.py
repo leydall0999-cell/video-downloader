@@ -135,18 +135,68 @@ def _host_of(url: str) -> str:
         return ""
 
 
-# B站 长链 → b23.tv 短链：B站 对 www.bilibili.com/video/BVxxx 直链风控更严，
-# 手机 App 分享的 b23.tv 短链则能正常解析。这里把长链归一化为短链，绕过该限制。
+# B站 URL 归一化：统一转为 www.bilibili.com/video/BVxxx 长链。
+#
+# 历史策略曾把长链转 b23.tv 短链，因为无 Cookie 时长链被 B站 412 风控；但网页端
+# (Railway) 必须使用登录态 Cookie，而 yt-dlp 的 BiliBili 提取器只识别 bilibili.com
+# 长链，对 b23.tv 随机短码会退化为 [generic] 提取器，无法注入 Cookie/Referer，
+# 导致代理 IP 下仍 412。因此新策略：所有 B站 链接统一归一化为 bilibili.com 长链，
+# 由 BiliBili 提取器处理；对 b23.tv 短码先用 HEAD 请求展开真实长链。
 _BILIBILI_LONG_URL_RE = re.compile(r"https?://(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]+)")
+_BILIBILI_SHORT_BV_RE = re.compile(r"https?://(?:www\.|m\.)?b23\.tv/(BV[0-9A-Za-z]+)")
+
+
+def _expand_b23tv_url(url: str, proxy: str = "") -> str:
+    """把 b23.tv 随机短码短链通过 HEAD 请求展开为真实 bilibili.com 长链。
+
+    yt-dlp 对 b23.tv/xxxxx 随机短码会使用 [generic] 提取器，无法按 B站 逻辑注入
+    Cookie/Referer/UA；在代理 IP 风控较严时会被 412 拦截。HEAD 到 b23.tv 会返回
+    302 Location，指向真实 www.bilibili.com/video/BVxxx 长链，后续即可交给
+    BiliBili 提取器处理。
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("b23.tv", "www.b23.tv", "m.b23.tv"):
+        return url
+    # 已经是 /BVxxx 的短链可以直接推导成长链，不必发请求
+    m = _BILIBILI_SHORT_BV_RE.match(url)
+    if m:
+        return f"https://www.bilibili.com/video/{m.group(1)}"
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, method="HEAD")
+        req.add_header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+        req.add_header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        req.add_header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        req.add_header("Referer", "https://b23.tv/")
+        handlers = []
+        if proxy:
+            handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+        opener = urllib.request.build_opener(*handlers)
+        with opener.open(req, timeout=15) as resp:
+            expanded = resp.geturl()
+            if expanded and "bilibili.com" in expanded:
+                return expanded
+    except Exception:
+        # 展开失败不要阻塞主流程；yt-dlp 会自己再试一次
+        pass
+    return url
 
 
 def _normalize_bilibili_url(url: str) -> str:
-    """把 B站 长链归一化为 b23.tv/BVxxx 短链。
+    """把 B站 长链/b23.tv BV 短链统一归一化为 www.bilibili.com/video/BVxxx 长链。
 
-    仅归一化域名路径；保留分P（p）和时间戳（t）参数；去掉 vd_source/spm_id_from
-    等追踪参数，避免触发额外风控或污染日志。非 B站 链接原样返回。
+    保留分P（p）和时间戳（t）参数；去掉 vd_source/spm_id_from 等追踪参数。
+    非 B站 链接原样返回。
     """
+    # 先尝试长链
     m = _BILIBILI_LONG_URL_RE.match(url)
+    if not m:
+        # 再尝试 b23.tv/BVxxx 短链
+        m = _BILIBILI_SHORT_BV_RE.match(url)
     if not m:
         return url
     bvid = m.group(1)
@@ -157,11 +207,11 @@ def _normalize_bilibili_url(url: str) -> str:
             if k in ("p", "t"):
                 params[k] = v
     query = urlencode(params)
-    return f"https://b23.tv/{bvid}" + (f"?{query}" if query else "")
+    return f"https://www.bilibili.com/video/{bvid}" + (f"?{query}" if query else "")
 
 
 # --------------------------------------------------------------------------- #
-# 通用链接归一化：平台无关净化 + B站 长链特例转 b23.tv 短链
+# 通用链接归一化：平台无关净化 + B站 归一为 bilibili.com 长链
 # --------------------------------------------------------------------------- #
 # 通用追踪/推广参数（地址栏常带，对解析无益；部分平台会据此触发更严的防盗链/风控）
 _URL_TRACKING_PARAMS = frozenset({
@@ -188,18 +238,21 @@ def _strip_tracking_params(url: str) -> str:
     return parsed._replace(query=urlencode(kept)).geturl()
 
 
-def _normalize_share_url(url: str) -> str:
+def _normalize_share_url(url: str, proxy: str = "") -> str:
     """链接归一化入口（平台无关）。
 
-    1. B站：www.bilibili.com/video/BVxxx 长链 → b23.tv/BVxxx 短链
-       （B站 对分享短链放行、对长链直链风控更严，已验证有效）。
+    1. B站：所有链接统一归一化为 www.bilibili.com/video/BVxxx 长链。
+       b23.tv 随机短码会先用 HEAD 请求 302 展开，确保 yt-dlp 使用 BiliBili
+       提取器（能正确注入 Cookie/Referer/UA）。桌面端 IP 风控较松时短链也
+       能走 generic 通过；网页端(Railway 代理 IP)必须走 bilibili 提取器。
     2. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
        不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
        无法从长链静态推导，强行构造会破坏解析（需调分享 API，不在本范围）。
     """
-    # B站 特例优先：长链转 b23.tv 短链；短链本身若带追踪参数再剥一层
+    # B站 特例优先：先把短链展开成长链，再统一规范化为 bilibili.com 长链
     if "bilibili.com" in url or "b23.tv" in url:
-        return _strip_tracking_params(_normalize_bilibili_url(url))
+        expanded = _expand_b23tv_url(url, proxy=proxy)
+        return _strip_tracking_params(_normalize_bilibili_url(expanded))
     # 其余平台：仅做通用追踪参数净化，零风险
     return _strip_tracking_params(url)
 
@@ -870,7 +923,8 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
-    url = _normalize_share_url(url)
+    effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
+    url = _normalize_share_url(url, proxy=effective_proxy)
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)
@@ -1360,7 +1414,8 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
     让「解析视频信息」步骤能快速收敛，且下载阶段一旦卡住就能被看门狗识别。
     """
-    task.url = _normalize_share_url(task.url)
+    effective_proxy = task.proxy or _resolve_proxy(_host_of(task.url) or "")
+    task.url = _normalize_share_url(task.url, proxy=effective_proxy)
     reporter = _ProgressReporter(task, store)
     task.add_step("排队等待", "done", "已开始执行")
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
