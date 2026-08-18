@@ -630,23 +630,118 @@ def _clean_message(raw: str) -> str:
     return " ".join(text.split())[:MAX_HINT_CHARS]
 
 
-def _friendly_error(exc: Exception) -> ResolveError:
-    """把 yt-dlp 的英文异常转成用户能看懂的提示。"""
+def _effective_cookie_source(options: dict[str, Any], user_cookie: str = "") -> str:
+    """根据 _base_options 产物判断 Cookie 实际来源。"""
+    if user_cookie.strip():
+        return "user_pasted"
+    headers = options.get("http_headers", {})
+    if headers.get("Cookie"):
+        # 用户未粘贴时，_base_options 会从 cache / pool 注入 Cookie
+        return "auto"
+    if options.get("cookiesfrombrowser"):
+        return "browser"
+    return "none"
+
+
+def _build_diag_context(
+    url: str,
+    cookie: str = "",
+    proxy: str = "",
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构造下载异常（403 等）所需的诊断上下文。"""
+    host = _host_of(url) or ""
+    headers = (options or {}).get("http_headers", {})
+    effective_proxy = proxy or _resolve_proxy(host)
+    return {
+        "url": url,
+        "host": host,
+        "is_hardened": is_cookie_hardened_host(host),
+        "is_china": is_china_host(host),
+        "cookie_present": bool(headers.get("Cookie")),
+        "cookie_source": _effective_cookie_source(options or {}, cookie),
+        "proxy_used": bool(effective_proxy),
+        "proxy": effective_proxy if effective_proxy else None,
+        "referer": headers.get("Referer"),
+        "user_agent": headers.get("User-Agent"),
+        "is_cloud": os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud",
+    }
+
+
+def _diag_403(context: dict[str, Any], exc: Exception) -> None:
+    """把 403 发生的上下文结构化写入临时日志，供线上排查。"""
+    try:
+        path = os.path.join(tempfile.gettempdir(), "vdl_403_diag.txt")
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "a") as f:
+            f.write(
+                f"[{ts}] 403 host={context.get('host')} "
+                f"url={str(context.get('url', ''))[:120]} "
+                f"cookie_source={context.get('cookie_source')} "
+                f"proxy={context.get('proxy')} "
+                f"referer={context.get('referer')} "
+                f"ua={context.get('user_agent')} "
+                f"exc={type(exc).__name__}: {str(exc)[:200]}\n"
+            )
+    except Exception:
+        pass
+
+
+def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> ResolveError:
+    """把 yt-dlp 的英文异常转成用户能看懂的提示，并对 403 做根因分层。"""
     text = _clean_message(str(exc))
     lowered = text.lower()
+    ctx = context or {}
+    is_cloud = ctx.get(
+        "is_cloud", os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud"
+    )
+    cloud_cookie_hint = (
+        "网页版由「桌面版 VDL」共享登录态：请在桌面版 VDL 中打开并保持该平台登录，"
+        "点『同步 Cookie 到云端』刷新后重试；或直接用桌面版 VDL 解析本链接。"
+    )
+
+    # 403 单独做根因分层，并记录结构化诊断日志
+    if any(word in lowered for word in ("403", "forbidden", "http error 403")):
+        _diag_403(ctx, exc)
+        host = ctx.get("host", "")
+        hardened = ctx.get("is_hardened", is_cookie_hardened_host(host)) if host else False
+        cookie_present = ctx.get("cookie_present", False)
+        if hardened and not cookie_present:
+            return ResolveError(
+                "下载被服务器拒绝（403）：该站需要登录 Cookie",
+                cloud_cookie_hint if is_cloud else (
+                    "该平台为强反爬站点，未检测到有效 Cookie。"
+                    "请在常用浏览器登录该平台后重试，或到「高级选项 → Cookie」手动粘贴 Cookie。"
+                ),
+                category="cookie_required",
+                context=ctx,
+            )
+        if hardened and cookie_present:
+            return ResolveError(
+                "下载被服务器拒绝（403）：Cookie 无效或已过期",
+                "已检测到 Cookie，但服务器仍拒绝访问。可能原因："
+                "① Cookie 已过期，请重新登录并同步；② 账号权限不足；"
+                "③ 该视频为会员/付费/地区限制。",
+                category="cookie_invalid_or_expired",
+                context=ctx,
+            )
+        # 兜底通用 403
+        return ResolveError(
+            "下载被服务器拒绝（403）",
+            "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
+            "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
+            "④换更低画质重试；⑤稍后再试",
+            category="cdn_forbidden",
+            context=ctx,
+        )
+
     # 云端(网页版)实例遇到强反爬站需要登录态时，提示用户依赖桌面版共享登录态，
     # 而不是让用户去"本机浏览器登录"（网页版访客没有本机浏览器）。
     cloud_note = ""
-    if os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud":
-        cloud_note = (
-            "网页版由「桌面版 VDL」共享登录态：请在桌面版 VDL 中打开并保持该平台登录，"
-            "点『同步 Cookie 到云端』刷新后重试；或直接用桌面版 VDL 解析本链接。"
-        )
+    if is_cloud:
+        cloud_note = cloud_cookie_hint
     rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
-        (("403", "forbidden", "http error 403"), "下载被服务器拒绝（403）",
-         "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
-         "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
-         "④换更低画质重试；⑤稍后再试"),
         (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
          ("请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
           "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串")
@@ -740,7 +835,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         except Exception:
             pass
     except (UnsupportedError, GeoRestrictedError, DownloadError) as exc:
-        raise _friendly_error(exc) from exc
+        raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except ExtractorError as exc:
         _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
         # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
@@ -761,7 +856,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                     f"③更换代理节点。\n详情：{_last_err}"
                 ) from exc
         else:
-            raise _friendly_error(exc) from exc
+            raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except OSError as exc:  # 网络/DNS 层面的错误
         _last_err = f"{type(exc).__name__}: {_clean_message(str(exc))[:200]}"
         raise ResolveError("网络请求失败", _clean_message(str(exc))) from exc
@@ -1178,7 +1273,8 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     info: dict[str, Any] = {}
     try:
-        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)) as ydl:
+        _dl_opts = _download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)
+        with YoutubeDL(_dl_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):
@@ -1290,7 +1386,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         if not resumable:
             store.clear_files(task.id)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
-        err = _friendly_error(exc)
+        err = _friendly_error(exc, _build_diag_context(task.url, cookie=cookie, proxy=proxy, options=_dl_opts))
         _mark_step_error(task, err.message)
         # 下载中断类失败（网络抖动/限速假死）往往残留部分分片，标记可续传
         store.update(task.id, status="failed", error=err.message, hint=err.hint,

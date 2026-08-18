@@ -1473,13 +1473,29 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
 @app.exception_handler(LinkError)
 async def handle_link_error(_: Request, exc: LinkError) -> JSONResponse:
     status = 415 if isinstance(exc, UnsupportedPlatformError) else 400
-    return JSONResponse(status_code=status, content={"error": exc.message, "hint": exc.hint})
+    content = {"error": exc.message, "hint": exc.hint}
+    # 诊断增强：把错误分类与脱敏后的上下文透传给前端，便于精准提示与线上排查
+    category = getattr(exc, "category", None) or "unknown"
+    content["category"] = category
+    ctx = getattr(exc, "context", None) or {}
+    if ctx:
+        content["diag"] = {
+            "host": ctx.get("host"),
+            "is_china": ctx.get("is_china"),
+            "is_hardened": ctx.get("is_hardened"),
+            "cookie_source": ctx.get("cookie_source"),
+            "proxy_used": ctx.get("proxy_used"),
+            "is_cloud": ctx.get("is_cloud"),
+        }
+    return JSONResponse(status_code=status, content=content)
 
 
 @app.exception_handler(downloader.ResolveRestricted)
 async def handle_restricted(_: Request, exc: "downloader.ResolveRestricted") -> JSONResponse:
     # 受限内容属于"确认无解"，用 422 与网络/解析异常区分开
-    return JSONResponse(status_code=422, content={"error": exc.message, "hint": exc.hint})
+    content = {"error": exc.message, "hint": exc.hint}
+    content["category"] = getattr(exc, "category", None) or "restricted"
+    return JSONResponse(status_code=422, content=content)
 
 
 
