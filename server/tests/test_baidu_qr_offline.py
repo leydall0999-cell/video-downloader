@@ -310,6 +310,30 @@ def test_login_rejects_uid_zero():
     print("✅ 场景E(uid=0假登录拦截): login→who 验证逻辑正确，uid:0 被拦截，正常 uid 通过")
 
 
+def test_poll_qrcodestatus_image_is_waiting():
+    """场景 G：qrcodestatus 返回图片/重定向（百度未确认时常见）应降级为 waiting，
+    不再把二进制当文本解析导致 errno=-1 乱码（对应 2026-08-18 修复）。"""
+    class _FakeResp:
+        def __init__(self, status_code, content_type, content):
+            self.status_code = status_code
+            self.headers = {"Content-Type": content_type}
+            self.content = content
+            self.text = content.decode("latin-1", "replace") if isinstance(content, bytes) else content
+    fake_session = type("S", (), {})()
+    # 302 重定向到 PNG
+    fake_session.get = lambda *a, **k: _FakeResp(302, "text/html", b"")
+    r1 = baidu_qr._poll_qrcodestatus(fake_session, "SIGN", "GID")
+    assert r1["status"] == "waiting", f"302 应降级 waiting: {r1}"
+    # 直接返回 PNG 图片（曾被 r.text 强解成乱码）
+    png = _b64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    fake_session.get = lambda *a, **k: _FakeResp(200, "image/png", png)
+    r2 = baidu_qr._poll_qrcodestatus(fake_session, "SIGN", "GID")
+    assert r2["status"] == "waiting", f"image 应降级 waiting: {r2}"
+    print("✅ 场景G(qrcodestatus图片/重定向→waiting): 不再乱码 errno=-1")
+
+
 if __name__ == "__main__":
     test_qr_flow_cookie_mode()
     test_qr_flow_body_mode()
@@ -317,4 +341,5 @@ if __name__ == "__main__":
     test_qr_poll_long_poll_timeout_is_waiting()
     test_extract_uid()
     test_login_rejects_uid_zero()
-    print("\n🎉 全部离线集成测试通过 — 扫码登录链路 + uid 验证 + 长轮询超时已在沙盒内自测，不再依赖用户真机。")
+    test_poll_qrcodestatus_image_is_waiting()
+    print("\n🎉 全部离线集成测试通过 — 扫码登录链路 + uid 验证 + 长轮询超时 + qrcodestatus图片降级已在沙盒内自测，不再依赖用户真机。")
