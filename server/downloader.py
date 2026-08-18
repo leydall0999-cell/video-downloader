@@ -409,6 +409,23 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
     setattr(BiliBiliIE._download_webpage_handle, attr, True)
 
 
+class _YoutubeDL(YoutubeDL):
+    """强制使用 yt-dlp 的 requests request handler。
+
+    Railway + 国内代理回源时，yt-dlp 默认的 urllib handler 频繁在响应体
+    传输中间报 IncompleteRead，且不会自动重试。requests/urllib3 对连接
+    重置、分块传输不完整更健壮。只要 requests handler 可用，就只保留它，
+    完全绕过 urllib handler。
+    """
+
+    def build_request_director(self, handlers, preferences=None):
+        requests_handlers = [h for h in handlers if getattr(h, "RH_KEY", None) == "Requests"]
+        if requests_handlers:
+            logger.info("[yt-dlp] forcing requests request handler only")
+            handlers = requests_handlers
+        return super().build_request_director(handlers, preferences)
+
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
@@ -1134,7 +1151,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # 真正的错误原因（页面结构变更/需要登录等）被完全丢失。
         if _h and ("youtube.com" in _h or "youtu.be" in _h):
             opts["ignoreerrors"] = "only_download"
-        with YoutubeDL(opts) as ydl:
+        with _YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         # 诊断：记录 extract_info 返回值
         try:
@@ -1156,7 +1173,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                 opts2["extract_flat"] = "in"
                 if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
                     opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
-                with YoutubeDL(opts2) as ydl2:
+                with _YoutubeDL(opts2) as ydl2:
                     info = ydl2.extract_info(url, download=False)
                     _last_err = None  # 降级成功
             except Exception as fb_err:
@@ -1596,7 +1613,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 cookie=cookie,
                 ua=(_dl_opts.get("http_headers") or {}).get("User-Agent"),
             )
-        with YoutubeDL(_dl_opts) as ydl:
+        with _YoutubeDL(_dl_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
             info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):
@@ -1658,7 +1675,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         try:
                             _fb_opts = dict(_fb_base)
                             _fb_opts["format"] = _chain
-                            with YoutubeDL(_fb_opts) as _ydl2:
+                            with _YoutubeDL(_fb_opts) as _ydl2:
                                 info = _ydl2.extract_info(task.url, download=False) or info
                                 if info.get("title"):
                                     store.update(task.id, title=info["title"])
