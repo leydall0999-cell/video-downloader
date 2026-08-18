@@ -163,26 +163,28 @@ def _expand_b23tv_url(url: str, proxy: str = "") -> str:
     if m:
         return f"https://www.bilibili.com/video/{m.group(1)}"
     try:
-        import urllib.request
-        req = urllib.request.Request(url, method="HEAD")
-        req.add_header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        import requests
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://b23.tv/",
+        }
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        resp = requests.head(
+            url,
+            headers=headers,
+            proxies=proxies,
+            timeout=15,
+            allow_redirects=False,
         )
-        req.add_header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        req.add_header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        req.add_header("Referer", "https://b23.tv/")
-        handlers = []
-        if proxy:
-            handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-        opener = urllib.request.build_opener(*handlers)
-        with opener.open(req, timeout=15) as resp:
-            expanded = resp.geturl()
-            if expanded and "bilibili.com" in expanded:
-                return expanded
-    except Exception:
-        # 展开失败不要阻塞主流程；yt-dlp 会自己再试一次
-        pass
+        expanded = resp.headers.get("Location") or ""
+        if resp.status_code in (301, 302, 307, 308) and expanded and "bilibili.com" in expanded:
+            logger.info("[b23.tv expand] %s -> %s", url, expanded)
+            return expanded
+        logger.info("[b23.tv expand] %s status=%s location=%s", url, resp.status_code, expanded[:200])
+    except Exception as e:
+        logger.info("[b23.tv expand] %s failed: %s", url, str(e)[:200])
     return url
 
 
@@ -252,7 +254,9 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     # B站 特例优先：先把短链展开成长链，再统一规范化为 bilibili.com 长链
     if "bilibili.com" in url or "b23.tv" in url:
         expanded = _expand_b23tv_url(url, proxy=proxy)
-        return _strip_tracking_params(_normalize_bilibili_url(expanded))
+        normalized = _strip_tracking_params(_normalize_bilibili_url(expanded))
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
     # 其余平台：仅做通用追踪参数净化，零风险
     return _strip_tracking_params(url)
 
