@@ -159,28 +159,35 @@ def _decrypt_item(c: dict) -> str:
     return ""
 
 
-def _save(domain: str, cookies: list) -> None:
-    _POOL_DIR.mkdir(parents=True, exist_ok=True)
+def _save(domain: str, cookies: list) -> bool:
     try:
-        os.chmod(_POOL_DIR, 0o700)
-    except Exception:
-        pass
-    cipher = _cipher()
-    payload = []
-    for c in cookies:
-        item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
-        header = c.get("header") or ""
-        if cipher and header:
-            item["header_enc"] = cipher.encrypt(header.encode()).decode()
-        else:
-            item["header"] = header
-        payload.append(item)
-    f = _pool_file(domain)
-    f.write_text(json.dumps({"cookies": payload}, ensure_ascii=False))
-    try:
-        os.chmod(f, 0o600)
-    except Exception:
-        pass
+        _POOL_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(_POOL_DIR, 0o700)
+        except Exception:
+            pass
+        cipher = _cipher()
+        payload = []
+        for c in cookies:
+            item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
+            header = c.get("header") or ""
+            if cipher and header:
+                item["header_enc"] = cipher.encrypt(header.encode()).decode()
+            else:
+                item["header"] = header
+            payload.append(item)
+        f = _pool_file(domain)
+        text = json.dumps({"cookies": payload}, ensure_ascii=False)
+        f.write_text(text)
+        try:
+            os.chmod(f, 0o600)
+        except Exception:
+            pass
+        logger.info("[cookie_pool] _save ok domain=%s file=%s bytes=%s", domain, f, len(text))
+        return True
+    except Exception as e:
+        logger.error("[cookie_pool] _save failed domain=%s dir=%s err=%s", domain, _POOL_DIR, e)
+        return False
 
 
 def get_cookie(domain: str) -> str | None:
@@ -231,12 +238,11 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
             if _decrypt_item(c) == header:
                 c["ts"] = int(time.time())
                 c["source"] = source
-                _save(domain, cookies)
-                return True
+                return _save(domain, cookies)
         cookies.append({"header": header, "ts": int(time.time()), "source": source})
-        _save(domain, cookies)
-        logger.info("[cookie_pool] add saved domain=%s total=%s", domain, len(cookies))
-        return True
+        ok = _save(domain, cookies)
+        logger.info("[cookie_pool] add saved domain=%s total=%s ok=%s", domain, len(cookies), ok)
+        return ok
 
 
 def verify_chrqj(header: str) -> bool | None:
