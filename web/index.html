@@ -38,8 +38,8 @@
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
-    <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎞️ 上传转换</button>
-    <button type="button" class="tab" data-view="dw" id="tabDw">🧽 去水印</button>
+    <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
+    <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
     <button type="button" class="tab" id="tabBaidu" hidden>☁️ 百度网盘</button>
@@ -95,7 +95,7 @@
           <div class="adv-body">
             <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
             <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
-              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
+              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的完整 Cookie 字符串，本请求内使用、不会保存。B站 直接粘贴 DevTools 里 SESSDATA 那一格的裸值即可（无需 SESSDATA= 前缀，后端会自动补）。"></textarea>
             <details class="cookie-help" id="cookieHelp">
               <summary class="cookie-help-summary">如何获取 / 复制浏览器 Cookie？</summary>
               <div class="cookie-help-body">
@@ -172,9 +172,11 @@
 
     <div class="alert" id="alertBox" role="alert" hidden>
       <span class="alert-icon" aria-hidden="true">!</span>
-      <div class="alert-body">
+      <div class="alert-body" id="alertBody">
         <strong id="alertTitle"></strong>
         <span id="alertHint"></span>
+        <pre id="alertDetail" class="alert-detail" hidden></pre>
+        <span id="alertToggle" class="alert-toggle" hidden>点击展开错误详情</span>
       </div>
       <button type="button" class="alert-close" id="alertClose" aria-label="关闭">×</button>
     </div>
@@ -319,72 +321,80 @@
 
   </div><!-- /#downloadView -->
 
-  <!-- 上传转换视图（需求文档模块一：本地视频上传后直接转码，无需先下载） -->
+  <!-- 上传转换视图（多文件批量：参考 DataTool 风格，每个文件单独一行 + 独立输出格式） -->
   <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle">
-    <h2 id="ucTitle" class="guide-title">上传视频 · 格式转换</h2>
-    <p class="uc-tip">本地已有视频，不想走下载？直接上传，转成想要的格式 / 分辨率 / 码率，或提取音频。</p>
-    <div class="card">
-      <h3 class="card-title">转换设置</h3>
-    <div class="uc-form">
-      <label class="uc-field">
-        <span class="uc-label">视频文件</span>
-        <input type="file" id="ucFile" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv" />
-      </label>
-      <label class="uc-field">
-        <span class="uc-label">目标格式</span>
-        <select id="ucTarget">
-          <option value="mp4">MP4</option>
-          <option value="mov">MOV</option>
-          <option value="mkv">MKV</option>
-          <option value="webm">WebM</option>
-          <option value="mp3">MP3（仅音频）</option>
-          <option value="m4a">M4A（仅音频）</option>
-          <option value="gif">GIF（前5秒）</option>
-        </select>
-      </label>
-      <label class="uc-field">
-        <span class="uc-label">分辨率</span>
-        <select id="ucRes">
-          <option value="original">原画质</option>
-          <option value="1080">1080p</option>
-          <option value="720">720p</option>
-          <option value="480">480p</option>
-        </select>
-      </label>
-      <label class="uc-field">
-        <span class="uc-label">视频码率</span>
-        <input type="text" id="ucBitrate" placeholder="如 2M（留空=默认）" />
-      </label>
-      <label class="uc-field uc-check">
-        <input type="checkbox" id="ucAudio" checked /> <span class="uc-label">保留音轨</span>
-      </label>
-      <label class="uc-field">
-        <span class="uc-label">竖屏旋转</span>
-        <select id="ucRotate">
-          <option value="0">不旋转</option>
-          <option value="90">90°</option>
-          <option value="180">180°</option>
-          <option value="270">270°</option>
-        </select>
-      </label>
-      <label class="uc-field uc-check">
-        <input type="checkbox" id="ucRemux" /> <span class="uc-label">仅换容器（无损，忽略码率/旋转）</span>
-      </label>
-      <label class="uc-field uc-check">
-        <input type="checkbox" id="ucLibrary" /> <span class="uc-label">完成后存入媒体库</span>
-      </label>
+    <h2 id="ucTitle" class="guide-title">视频格式转换</h2>
+    <p class="uc-tip">添加多个本地视频，批量转码为指定格式。每个文件单独成行，可独立设置输出格式。</p>
+
+    <!-- 工具栏：添加 / 清空 / 计数 -->
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="ucAddBtn">添加文件</button>
+      <input type="file" id="ucFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="ucClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="ucCount">尚未添加文件</span>
     </div>
-      <button type="button" class="btn btn-primary btn-block" id="ucBtn">开始转换</button>
-      <span class="convert-status" id="ucStatus"></span>
-      <div class="progress" id="ucProgress" hidden><div class="progress-fill" id="ucProgressFill"></div></div>
-    </div>
-    <div class="uc-result" id="ucResult" hidden>
-      <div class="uc-preview" id="ucPreview"></div>
-      <div class="uc-result-actions">
-        <a class="btn btn-accent btn-sm" id="ucDownload" download>下载转换文件</a>
-        <a class="btn btn-ghost btn-sm" id="ucLibLink" hidden>在媒体库查看</a>
+
+    <!-- 文件列表（每行一个文件） -->
+    <ul class="uc-list" id="ucList" aria-live="polite"></ul>
+
+    <!-- 空状态提示 -->
+    <div class="uc-empty" id="ucEmpty">点击「添加文件」选择 1 个或多个视频，可同时设置不同输出格式。</div>
+
+    <!-- 批量参数 + 操作区（仅当有文件时显示） -->
+    <div class="uc-bulk" id="ucBulk" hidden>
+      <h3 class="card-title">批量参数（可应用到所有未开始的项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">默认输出格式</span>
+          <select id="ucBulkTarget">
+            <option value="mp4">MP4</option>
+            <option value="mov">MOV</option>
+            <option value="mkv">MKV</option>
+            <option value="webm">WebM</option>
+            <option value="mp3">MP3（仅音频）</option>
+            <option value="m4a">M4A（仅音频）</option>
+            <option value="gif">GIF（前5秒）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">分辨率</span>
+          <select id="ucBulkRes">
+            <option value="original">原画质</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">视频码率</span>
+          <input type="text" id="ucBulkBitrate" placeholder="如 2M（留空=默认）" />
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">竖屏旋转</span>
+          <select id="ucBulkRotate">
+            <option value="0">不旋转</option>
+            <option value="90">90°</option>
+            <option value="180">180°</option>
+            <option value="270">270°</option>
+          </select>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="ucBulkAudio" checked /> <span class="uc-label">保留音轨</span>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="ucBulkRemux" /> <span class="uc-label">仅换容器（无损，忽略码率/旋转）</span>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="ucBulkLibrary" /> <span class="uc-label">完成后存入媒体库</span>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="ucBulkApplyBtn" title="把当前批量参数覆盖到所有未开始的项">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="ucStartAllBtn">开始批量转换</button>
       </div>
     </div>
+
+    <span class="convert-status" id="ucStatus" aria-live="polite"></span>
   </section>
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
@@ -1384,28 +1394,23 @@
   // 构建时由 build_mac.sh 把占位符替换为本次构建戳；开发模式（占位符未被替换）回退到时间戳，保证改动立即生效。
   (function () {
     var fp = '__BUILD_FP__';
-    var v = (fp && fp.indexOf('__BUILD_FP__') === -1) ? fp : ('dev' + Date.now());
+    var isDesktopBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
+    var v = isDesktopBuild ? fp : ('dev' + Date.now());
     var s = document.createElement('script');
     s.src = 'app.js?v=' + encodeURIComponent(v);
     s.onload = function () {
-      // app.js 已执行并暴露 window.VDL。仅桌面版(pywebview)加载 app 专属脚本；
-      // 纯 web 环境永不加载 desktop-app.js，app 专属逻辑不进入 web 加载集。
+      // app.js 已执行并暴露 window.VDL。仅桌面版加载 app 专属脚本；
+      // 通过 build 指纹判断是否为桌面打包产物，避免 pywebview 注入时机不稳定导致漏载。
       var loadDesktopApp = function () {
         var d = document.createElement('script');
         d.src = 'js/desktop-app.js?v=' + encodeURIComponent(v);
         document.head.appendChild(d);
       };
-      if (window.pywebview) {
+      if (window.pywebview || isDesktopBuild) {
         loadDesktopApp();
       } else {
-        // pywebview 可能稍后注入 window.pywebview（早于 pywebviewready 事件）
+        // 纯 web 环境：pywebview 可能稍后注入，但 build 指纹证明不是桌面包，永不加载
         document.addEventListener('pywebviewready', loadDesktopApp, { once: true });
-        // 兜底：1.5s 内仍未出现 pywebview，判定为纯 web 环境，移除监听不再加载
-        setTimeout(function () {
-          if (!window.pywebview) {
-            document.removeEventListener('pywebviewready', loadDesktopApp);
-          }
-        }, 1500);
       }
     };
     document.head.appendChild(s);

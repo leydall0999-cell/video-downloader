@@ -7,8 +7,13 @@
 - to_library：完成后复制进媒体库（DOWNLOAD_DIR）并回传 library_id
 - 不影响既有 /api/convert（task 模式）的 _run_convert 默认参数
 """
+import sys
 import time
 from pathlib import Path
+
+SERVER = str(Path(__file__).resolve().parent.parent / "server")
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)
 
 import app
 from fastapi.testclient import TestClient
@@ -158,3 +163,22 @@ def test_run_convert_default_params_no_break(tmp_path, monkeypatch):
     app._run_convert(job_id, str(src), "mp4", "original")  # 仅 4 个位置参数
     assert app.CONVERT_JOBS[job_id]["status"] == "completed"
     assert out.exists()
+
+
+def test_upload_convert_temp_source_cleaned(tmp_path, monkeypatch):
+    """上传临时源文件在转码结束后（成败都）应被清理，避免 UPLOAD_TMP 堆积。"""
+    _redirect_dirs(tmp_path)
+    _fake_ffmpeg(monkeypatch, tmp_path)
+    client = _client()
+    r = client.post("/api/upload-convert",
+                    files={"file": ("clip.mp4", b"x" * 200, "video/mp4")},
+                    data={"target": "mp4"})
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    status = _wait_completed(client, job_id)
+    assert status["status"] == "completed", status
+    # 上传落盘的临时源文件应已被删除
+    leftovers = list(app.UPLOAD_TMP.glob("up_*"))
+    assert leftovers == [], f"上传临时文件未清理: {leftovers}"
+    # 产物仍在（在 CONVERT_DIR），不受影响
+    assert (app.CONVERT_DIR / status["filename"]).exists()

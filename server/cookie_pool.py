@@ -39,7 +39,7 @@ _LOCK = threading.Lock()
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
 # 这样「哪些站允许上报登录态」不再写死 chrqj，加站只需改清单/配 env。
-_BASE_DOMAINS = {"chrqj.com"}
+_BASE_DOMAINS = {"chrqj.com", "bilibili.com"}
 
 # chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
 _CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"

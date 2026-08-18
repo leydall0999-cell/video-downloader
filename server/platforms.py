@@ -16,12 +16,14 @@ URL_PATTERN = re.compile(r"https?://[^\s\u4e00-\u9fff\"'<>）)】\]`]+", re.IGNO
 
 
 class LinkError(ValueError):
-    """链接相关错误的基类，携带面向用户的中文提示。"""
+    """链接相关错误的基类，携带面向用户的中文提示与诊断分类。"""
 
-    def __init__(self, message: str, hint: str = "") -> None:
+    def __init__(self, message: str, hint: str = "", category: str = "", context: dict | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.hint = hint
+        self.category = category or "unknown"
+        self.context = context or {}
 
 
 class InvalidURLError(LinkError):

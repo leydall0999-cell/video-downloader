@@ -27,6 +27,7 @@ import sys
 import shutil
 import subprocess
 import threading
+import urllib.request
 import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
 import time
 import secrets
@@ -1380,14 +1381,17 @@ def _require_task(task_id: str):
 
 def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 bitrate: str = "", audio: bool = True, rotate: int = 0,
-                remux: bool = False) -> None:
+                remux: bool = False, src_is_temp: bool = False) -> None:
     """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。
     新增参数（上传转码用）：bitrate 视频码率、audio 是否保留音轨、
     rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损(-c copy)。
+    src_is_temp：src 是否为上传落盘的临时文件，True 时转码结束（成败都）
+    清理，避免 UPLOAD_TMP 无限堆积；task 模式（已下载文件）必须为 False。
     """
     job = CONVERT_JOBS.get(job_id)
     if not job:
         return
+    out = None
     try:
         out = Path(job["out_path"])
         cmd = [FFMPEG_BIN, "-y", "-i", src]
@@ -1454,19 +1458,44 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
         job["status"] = "failed"
         job["error"] = str(e)[:400]
         logger.warning("convert %s failed: %s", job_id, e)
+    finally:
+        # 上传临时源文件：转码结束（无论成败）后清理，避免 UPLOAD_TMP 无限堆积
+        if src_is_temp and src:
+            try:
+                _src = Path(src)
+                if _src.exists() and (out is None or _src.resolve() != out.resolve()):
+                    _src.unlink(missing_ok=True)
+            except Exception:
+                logger.warning("convert %s cleanup temp src failed: %s", job_id, src)
 
 
 
 @app.exception_handler(LinkError)
 async def handle_link_error(_: Request, exc: LinkError) -> JSONResponse:
     status = 415 if isinstance(exc, UnsupportedPlatformError) else 400
-    return JSONResponse(status_code=status, content={"error": exc.message, "hint": exc.hint})
+    content = {"error": exc.message, "hint": exc.hint}
+    # 诊断增强：把错误分类与脱敏后的上下文透传给前端，便于精准提示与线上排查
+    category = getattr(exc, "category", None) or "unknown"
+    content["category"] = category
+    ctx = getattr(exc, "context", None) or {}
+    if ctx:
+        content["diag"] = {
+            "host": ctx.get("host"),
+            "is_china": ctx.get("is_china"),
+            "is_hardened": ctx.get("is_hardened"),
+            "cookie_source": ctx.get("cookie_source"),
+            "proxy_used": ctx.get("proxy_used"),
+            "is_cloud": ctx.get("is_cloud"),
+        }
+    return JSONResponse(status_code=status, content=content)
 
 
 @app.exception_handler(downloader.ResolveRestricted)
 async def handle_restricted(_: Request, exc: "downloader.ResolveRestricted") -> JSONResponse:
     # 受限内容属于"确认无解"，用 422 与网络/解析异常区分开
-    return JSONResponse(status_code=422, content={"error": exc.message, "hint": exc.hint})
+    content = {"error": exc.message, "hint": exc.hint}
+    content["category"] = getattr(exc, "category", None) or "restricted"
+    return JSONResponse(status_code=422, content=content)
 
 
 
@@ -2681,42 +2710,25 @@ _pcs_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
-# Phase 1：按域抽取的功能路由（来自 server/app.py，行为不变，全 profile 挂载）
+# Web 精简版路由（web-dev）：仅挂载网页基础功能所需路由
+#   保留：core(解析/下载) / crypto / fs / cloud(WebDAV 云盘) /
+#     convert(视频转换) / dewatermark(PDF/图片去水印)
+#   公共 Cookie 池：代码内联于本文件后部（非 cloud.py），含接收端 /api/cookie/sync、
+#     本机 from-local、查询 status、清理 cache/clear 及后台探测 watchdog，网页版复用。
+#   剥离(App 专属，仅在 main 完整版挂载)：commentary / library /
+#     retention / archive / torrents / subtitles / llm / process / subscriptions /
+#     baidu_dlink / pcs
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
-
-from routers import convert as _convert_rtr
-app.include_router(_convert_rtr.router)
 from routers import fs as _fs_rtr
 app.include_router(_fs_rtr.router)
-from routers import commentary as _commentary_rtr
-app.include_router(_commentary_rtr.router)
-from routers import cloud as _cloud_rtr
-app.include_router(_cloud_rtr.router)
-from routers import library as _library_rtr
-app.include_router(_library_rtr.router)
-from routers import retention as _retention_rtr
-app.include_router(_retention_rtr.router)
-from routers import archive as _archive_rtr
-app.include_router(_archive_rtr.router)
-from routers import torrents as _torrents_rtr
-app.include_router(_torrents_rtr.router)
-from routers import subtitles as _subtitles_rtr
-app.include_router(_subtitles_rtr.router)
-from routers import llm as _llm_rtr
-app.include_router(_llm_rtr.router)
-from routers import process as _process_rtr
-app.include_router(_process_rtr.router)
-from routers import subscriptions as _subscriptions_rtr
-app.include_router(_subscriptions_rtr.router)
-from routers import baidu_dlink as _baidu_dlink_rtr
-app.include_router(_baidu_dlink_rtr.router)
-from routers import pcs as _pcs_rtr
-app.include_router(_pcs_rtr.router)
+from routers import convert as _convert_rtr
+app.include_router(_convert_rtr.router)
 from routers import dewatermark as _dewatermark_rtr
 app.include_router(_dewatermark_rtr.router)
-
+from routers import cloud as _cloud_rtr
+app.include_router(_cloud_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
 
@@ -2851,24 +2863,41 @@ def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dic
     """把单站 Cookie 推送到云端公共池（POST /api/cookie/sync）。
 
     带浏览器 User-Agent 以绕过 Cloudflare 对 Python-urllib 的拦截（error 1010）。
+    对 429/5xx 做有限指数退避重试，降低连发导致的限流。
     """
+    import time
     import urllib.request
+    import urllib.error
+
     target = url.rstrip("/") + "/api/cookie/sync"
     body = json.dumps({"token": token, "domain": domain, "cookie": header}).encode()
-    req = urllib.request.Request(
-        target,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-            ),
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode() or "{}")
+    last_err: Exception | None = None
+    for attempt in range(3):
+        req = urllib.request.Request(
+            target,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                ),
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except Exception as e:
+            last_err = e
+            raise
+    raise last_err or RuntimeError("推送 Cookie 到云端失败")
 
 
 @app.post("/api/cookie/sync/to-cloud")
@@ -2882,6 +2911,7 @@ def cookie_sync_to_cloud(request: Request) -> dict:
     if ip not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="仅允许本机调用")
     from cookie_pool import _root_domains, is_allowed, _norm_domain
+    import time
     url, token = _cloud_sync_config()
     if not url or not token:
         raise HTTPException(
@@ -2890,10 +2920,8 @@ def cookie_sync_to_cloud(request: Request) -> dict:
                    "VDL_COOKIE_SYNC_TOKEN，或写入 ~/.videodownloader/cloud_sync.json",
         )
     results = []
-    for domain in sorted(_root_domains()):
-        if domain == "chrqj.com":
-            # chrqj 不需要推到公共池（本身就是桌面专享），跳过
-            continue
+    domains = [d for d in sorted(_root_domains()) if d != "chrqj.com"]
+    for idx, domain in enumerate(domains):
         try:
             header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
         except Exception:
@@ -2910,19 +2938,38 @@ def cookie_sync_to_cloud(request: Request) -> dict:
             })
         except Exception as e:
             results.append({"domain": domain, "pushed": False, "reason": str(e)[:120]})
+        # 连发易触发 Cloudflare/Railway 限流，站间间隔 1s（最后一站除外）
+        if idx < len(domains) - 1:
+            time.sleep(1.0)
     pushed = sum(1 for r in results if r.get("pushed"))
     return {"ok": True, "pushed": pushed, "total": len(results), "results": results}
 
 
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:
-    """查询某链接是否需要 Cookie、以及本机浏览器是否已有可用登录态。"""
+    """查询某链接是否需要 Cookie、本机浏览器是否已有可用登录态、以及公共池新鲜度。"""
     if not url:
         raise HTTPException(status_code=400, detail="请提供链接")
     _assert_safe_url(url)
     url, platform = parse_source(url)
     host = _host_of(url)
     info = downloader.detect_browser_cookie(host)
+    pool_ts = None
+    try:
+        from cookie_pool import _candidates, _pool_file
+        for d in _candidates(host):
+            f = _pool_file(d)
+            if f.exists():
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    for c in data.get("cookies", []):
+                        ts = c.get("ts")
+                        if ts and (pool_ts is None or ts > pool_ts):
+                            pool_ts = ts
+                except Exception:
+                    pass
+    except Exception:
+        pass
     return {
         "host": host,
         "platform": platform.key,
@@ -2930,6 +2977,7 @@ def cookie_status(url: str = "") -> dict:
         "available": info["available"],
         "browser": info["browser"],
         "profile": info["profile"],
+        "pool_updated_at": pool_ts,
     }
 
 
