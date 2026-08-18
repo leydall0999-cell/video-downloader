@@ -115,7 +115,7 @@ def create_upload_convert(
             "library_id": "",
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
-                        resolution, bitrate, audio, rotate, remux)
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=True)
     return {
         "job_id": job_id,
         "status": "running",

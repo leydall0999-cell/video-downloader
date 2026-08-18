@@ -1381,14 +1381,17 @@ def _require_task(task_id: str):
 
 def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 bitrate: str = "", audio: bool = True, rotate: int = 0,
-                remux: bool = False) -> None:
+                remux: bool = False, src_is_temp: bool = False) -> None:
     """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。
     新增参数（上传转码用）：bitrate 视频码率、audio 是否保留音轨、
     rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损(-c copy)。
+    src_is_temp：src 是否为上传落盘的临时文件，True 时转码结束（成败都）
+    清理，避免 UPLOAD_TMP 无限堆积；task 模式（已下载文件）必须为 False。
     """
     job = CONVERT_JOBS.get(job_id)
     if not job:
         return
+    out = None
     try:
         out = Path(job["out_path"])
         cmd = [FFMPEG_BIN, "-y", "-i", src]
@@ -1455,6 +1458,15 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
         job["status"] = "failed"
         job["error"] = str(e)[:400]
         logger.warning("convert %s failed: %s", job_id, e)
+    finally:
+        # 上传临时源文件：转码结束（无论成败）后清理，避免 UPLOAD_TMP 无限堆积
+        if src_is_temp and src:
+            try:
+                _src = Path(src)
+                if _src.exists() and (out is None or _src.resolve() != out.resolve()):
+                    _src.unlink(missing_ok=True)
+            except Exception:
+                logger.warning("convert %s cleanup temp src failed: %s", job_id, src)
 
 
 
