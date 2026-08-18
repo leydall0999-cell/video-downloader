@@ -147,12 +147,18 @@ _BILIBILI_SHORT_BV_RE = re.compile(r"https?://(?:www\.|m\.)?b23\.tv/(BV[0-9A-Za-
 
 
 def _expand_b23tv_url(url: str, proxy: str = "") -> str:
-    """把 b23.tv 随机短码短链通过 HEAD 请求展开为真实 bilibili.com 长链。
+    """把 b23.tv 随机短码短链展开为真实 bilibili.com 长链。
 
     yt-dlp 对 b23.tv/xxxxx 随机短码会使用 [generic] 提取器，无法按 B站 逻辑注入
-    Cookie/Referer/UA；在代理 IP 风控较严时会被 412 拦截。HEAD 到 b23.tv 会返回
-    302 Location，指向真实 www.bilibili.com/video/BVxxx 长链，后续即可交给
+    Cookie/Referer/UA；在代理 IP 风控较严时会被 412 拦截。b23.tv 会返回 302
+    Location，指向真实 www.bilibili.com/video/BVxxx 长链，后续即可交给
     BiliBili 提取器处理。
+
+    实现策略：
+    1) 优先 HEAD 取 Location（不下载 body，最省带宽）；
+    2) HEAD 失败/无有效 Location 时回退 GET + allow_redirects=True，取最终 URL；
+    3) 兼容相对 Location；
+    4) 全链路记录日志，便于线上排查。
     """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -162,29 +168,83 @@ def _expand_b23tv_url(url: str, proxy: str = "") -> str:
     m = _BILIBILI_SHORT_BV_RE.match(url)
     if m:
         return f"https://www.bilibili.com/video/{m.group(1)}"
+
     try:
         import requests
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Referer": "https://b23.tv/",
-        }
-        proxies = {"http": proxy, "https": proxy} if proxy else None
+    except Exception as e:
+        logger.warning("[b23.tv expand] requests not available: %s", e)
+        return url
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://b23.tv/",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    timeout = int(os.environ.get("VDL_B23TV_EXPAND_TIMEOUT", "15"))
+
+    def _is_bili_location(location: str) -> bool:
+        return bool(location) and "bilibili.com" in location
+
+    def _abs_location(resp) -> str:
+        loc = resp.headers.get("Location") or ""
+        if loc and not loc.startswith(("http://", "https://")):
+            # 相对 Location：按 RFC 3986 拼成绝对 URL
+            from urllib.parse import urljoin
+            loc = urljoin(resp.url, loc)
+        return loc
+
+    # 1) 先尝试 HEAD（轻量）
+    try:
         resp = requests.head(
             url,
             headers=headers,
             proxies=proxies,
-            timeout=15,
+            timeout=timeout,
             allow_redirects=False,
         )
-        expanded = resp.headers.get("Location") or ""
-        if resp.status_code in (301, 302, 307, 308) and expanded and "bilibili.com" in expanded:
-            logger.info("[b23.tv expand] %s -> %s", url, expanded)
+        expanded = _abs_location(resp)
+        if resp.status_code in (301, 302, 307, 308) and _is_bili_location(expanded):
+            logger.info("[b23.tv expand] HEAD %s -> %s", url, expanded)
             return expanded
-        logger.info("[b23.tv expand] %s status=%s location=%s", url, resp.status_code, expanded[:200])
+        logger.info(
+            "[b23.tv expand] HEAD %s status=%s location=%s",
+            url,
+            resp.status_code,
+            expanded[:200],
+        )
     except Exception as e:
-        logger.info("[b23.tv expand] %s failed: %s", url, str(e)[:200])
+        logger.info("[b23.tv expand] HEAD %s failed: %s", url, str(e)[:200])
+
+    # 2) 回退 GET + 自动跟随重定向（某些环境 HEAD 被 CDN 丢弃/不返回 Location）
+    try:
+        resp = requests.get(
+            url,
+            headers=headers,
+            proxies=proxies,
+            timeout=timeout,
+            allow_redirects=True,
+            stream=True,
+        )
+        # 消费/关闭响应，避免连接泄漏
+        resp.close()
+        final_url = resp.url
+        if _is_bili_location(final_url):
+            logger.info("[b23.tv expand] GET %s -> %s", url, final_url)
+            return final_url
+        logger.info(
+            "[b23.tv expand] GET %s final=%s history=%s",
+            url,
+            final_url,
+            [r.status_code for r in resp.history],
+        )
+    except Exception as e:
+        logger.info("[b23.tv expand] GET %s failed: %s", url, str(e)[:200])
+
     return url
 
 
