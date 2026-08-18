@@ -748,6 +748,11 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
+        # B站 经国内代理回源时，偶发 IncompleteRead/连接重置：禁用 keep-alive + 关闭压缩，
+        # 让代理/服务端按短连接完整传输页面 HTML，避免 chunked/gzip 半包问题。
+        if host and ("bilibili.com" in host or "b23.tv" in host):
+            headers.setdefault("Connection", "close")
+            headers.setdefault("Accept-Encoding", "identity")
     # Cookie：用户粘贴的会话 Cookie（字符串）优先注入请求头，覆盖环境变量级的浏览器 Cookie
     cookie_text = cookie.strip()
     if cookie_text.lower().startswith("cookie:"):
