@@ -379,11 +379,17 @@ def download_file(task_id: str, download: int=0) -> app.Response:
     _ext = task.filepath.suffix.lower()
     _mt = {'.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg'}.get(_ext, 'application/octet-stream')
     if download:
-        from starlette.responses import Response as RawResponse
-        _body = task.filepath.read_bytes()
+        # 强制下载：流式传输，避免 read_bytes() 把大文件读进内存；
+        # Content-Disposition 的 filename= 只能是 ASCII，中文走 filename*=UTF-8''。
         import urllib.parse
+        from starlette.responses import FileResponse
         _encoded = urllib.parse.quote(task.filepath.name)
-        return RawResponse(content=_body, media_type='application/octet-stream', headers={'Content-Disposition': f"""attachment; filename="{task.filepath.name}"; filename*=UTF-8''{_encoded}"""})
+        _ascii = task.filepath.name.encode('ascii', 'ignore').decode() or 'download'
+        return FileResponse(
+            path=task.filepath,
+            media_type='application/octet-stream',
+            headers={'Content-Disposition': f"attachment; filename=\"{_ascii}\"; filename*=UTF-8''{_encoded}"},
+        )
     return app.FileResponse(path=task.filepath, filename=task.filepath.name, media_type=_mt)
 
 @router.delete('/api/tasks/{task_id}')
