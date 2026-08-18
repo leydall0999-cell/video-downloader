@@ -2683,8 +2683,10 @@ _pcs_lock = threading.Lock()
 
 # --------------------------------------------------------------------------- #
 # Web 精简版路由（web-dev）：仅挂载网页基础功能所需路由
-#   保留：core(解析/下载) / crypto / fs / cloud(公共 Cookie 池接收端) /
+#   保留：core(解析/下载) / crypto / fs / cloud(WebDAV 云盘) /
 #     convert(视频转换) / dewatermark(PDF/图片去水印)
+#   公共 Cookie 池：代码内联于本文件后部（非 cloud.py），含接收端 /api/cookie/sync、
+#     本机 from-local、查询 status、清理 cache/clear 及后台探测 watchdog，网页版复用。
 #   剥离(App 专属，仅在 main 完整版挂载)：commentary / library /
 #     retention / archive / torrents / subtitles / llm / process / subscriptions /
 #     baidu_dlink / pcs
