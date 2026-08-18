@@ -351,7 +351,11 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
         if url and "/video/BV" in url and "bilibili.com" in url:
             logger.info("[bilibili patch] try requests for %s", url)
             try:
+                import email.message
+                import io
                 import requests
+                from urllib.response import addinfourl
+
                 headers = {
                     "User-Agent": ua or (
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -376,17 +380,28 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
                 resp.raise_for_status()
                 content = resp.content
 
-                class _FakeURLH:
-                    url = resp.url
-                    headers = resp.headers
-
-                    def read(self):
-                        return content
+                # B站 响应头里可能含非 latin-1 字符，直接塞给 yt-dlp 会触发
+                # 'latin-1' codec can't encode characters... 回退到原 urllib 路径。
+                # 这里只保留 latin-1 安全的头，并用标准库 addinfourl 包装。
+                safe_headers = email.message.Message()
+                for k, v in resp.headers.items():
+                    try:
+                        v.encode("latin-1")
+                        safe_headers[k] = v
+                    except UnicodeEncodeError:
+                        logger.debug("[bilibili patch] drop non-latin1 header %s", k)
+                fp = io.BytesIO(content)
+                urlh = addinfourl(fp, safe_headers, resp.url, code=resp.status_code)
 
                 logger.info("[bilibili patch] requests OK %s bytes=%s", resp.url, len(content))
-                return resp.text, _FakeURLH()
+                return resp.text, urlh
             except Exception as e:
-                logger.warning("[bilibili patch] requests failed for %s: %s, fallback to yt-dlp", url, str(e)[:200])
+                logger.warning(
+                    "[bilibili patch] requests failed for %s: %s, fallback to yt-dlp",
+                    url,
+                    str(e)[:200],
+                    exc_info=False,
+                )
 
         return _orig(self, url_or_request, video_id, *args, **kwargs)
 
