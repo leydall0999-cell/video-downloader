@@ -2894,60 +2894,6 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
     return {"ok": True, "added": added, "verified": (ok is True)}
 
 
-@app.get("/api/cookie/debug")
-def cookie_debug(request: Request) -> dict:
-    """运维调试：返回公共池文件系统状态、可写性、当前文件列表与摘要。需 sync token。"""
-    token = os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
-    supplied = (request.query_params.get("token") or "").strip()
-    if not token or supplied != token:
-        raise HTTPException(status_code=403, detail="无效令牌")
-    from cookie_pool import _POOL_DIR, _pool_file, _root_domains
-    home = str(Path.home())
-    pool_dir = str(_POOL_DIR)
-    dir_exists = _POOL_DIR.exists()
-    writable = False
-    write_err = ""
-    try:
-        probe = _POOL_DIR / ".write_probe"
-        probe.write_text(str(time.time()))
-        probe.unlink(missing_ok=True)
-        writable = True
-    except Exception as e:
-        write_err = str(e)
-    files = []
-    if dir_exists:
-        try:
-            for f in sorted(_POOL_DIR.glob("*.json")):
-                try:
-                    data = json.loads(f.read_text())
-                    cookies = data.get("cookies", [])
-                    files.append({
-                        "domain": f.stem,
-                        "size": f.stat().st_size,
-                        "cookies": len(cookies),
-                        "latest_ts": max((c.get("ts", 0) for c in cookies), default=0),
-                        "sources": sorted({c.get("source", "unknown") for c in cookies}),
-                        "preview": "; ".join(
-                            f"{c.get('name','?')}={c.get('value','')[:8]}..."
-                            for c in cookies[:1]
-                        ) if False else "",
-                    })
-                except Exception as e:
-                    files.append({"domain": f.stem, "error": str(e)})
-        except Exception as e:
-            files.append({"error": str(e)})
-    return {
-        "ok": True,
-        "home": home,
-        "pool_dir": pool_dir,
-        "pool_dir_exists": dir_exists,
-        "pool_dir_writable": writable,
-        "write_err": write_err,
-        "root_domains": sorted(_root_domains()),
-        "files": files,
-    }
-
-
 @app.post("/api/cookie/sync/from-local")
 def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     """仅本机(App 端)调用：读取本机浏览器指定站点登录态并上报到公共池。"""
