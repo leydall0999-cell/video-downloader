@@ -1277,6 +1277,12 @@ async def lifespan(_: FastAPI):
         _start_cookie_pool_watchdog()
     except Exception:
         logger.exception("启动公共 Cookie 池探测失败")
+    # 启动预热：若公共池为空（容器重建/重启后持久卷被清空），异步召唤 VPS 守护进程
+    # 立即补推一次 Cookie，使池在 ~30s 内补满，无需人工干预。
+    try:
+        _warm_cookie_pool()
+    except Exception:
+        logger.exception("启动公共 Cookie 池预热失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
@@ -2826,6 +2832,21 @@ def _cookie_pool_watchdog() -> None:
 def _start_cookie_pool_watchdog() -> None:
     t = threading.Thread(target=_cookie_pool_watchdog, daemon=True)
     t.start()
+
+
+def _warm_cookie_pool() -> None:
+    """启动时若公共池为空，主动召唤 VPS 守护进程补推（非阻塞，秒级填满）。
+
+    覆盖「Railway 容器重建/重启导致持久卷被清空」的空窗：不再等 VPS 下次定时推送，
+    启动即触发一次立即补推（request_refill 内部带 60s 冷却，避免重复召唤）。
+    """
+    try:
+        from cookie_pool import get_cookie, request_refill, all_domains
+        for d in all_domains():
+            if get_cookie(d) is None:
+                request_refill(d)
+    except Exception:
+        logger.exception("公共池启动预热异常")
 
 
 @app.post("/api/cookie/cache/clear")

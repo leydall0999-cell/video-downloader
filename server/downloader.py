@@ -1177,6 +1177,13 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                 headers["Cookie"] = pooled
                 _cookie_diag("pool_hit", f"len={len(pooled)}")
             else:
+                # 公共池 miss 时，异步召唤 VPS 守护进程补推（非阻塞、带冷却），
+                # 下次请求即可命中登录态，实现「容器重建/重启后秒级自愈」。
+                try:
+                    from cookie_pool import request_refill as _pool_refill
+                    _pool_refill(cookie_host)
+                except Exception:
+                    pass
                 browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
                 _cookie_diag("cache_miss", f"host={host}")
                 if browser:

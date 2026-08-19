@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -195,7 +196,11 @@ def _save(domain: str, cookies: list) -> bool:
             payload.append(item)
         f = _pool_file(domain)
         text = json.dumps({"cookies": payload}, ensure_ascii=False)
-        f.write_text(text)
+        # 原子写：先写同目录临时文件再 os.replace，避免跨进程并发（VPS 推送 / Railway prune / 读取）
+        # 读到「写一半」的撕裂文件（之前诡异 65 字节空条目的根因之一）。
+        tmp = f.with_suffix(f.suffix + ".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, f)
         try:
             os.chmod(f, 0o600)
         except Exception:
@@ -388,3 +393,59 @@ def verify_and_prune(domain: str) -> int:
 
 def all_domains() -> list:
     return sorted(_root_domains())
+
+
+# ----------------------------------------------------------------------------
+# 按需补推（Railway -> VPS 守护进程）
+# 场景：Railway 容器重建/重启后持久卷被清空，或下载时公共池 miss。
+# 主动召唤 VPS 守护进程的 /v1/push 立即推送一次 Cookie，使池在 ~30s 内补满，
+# 不再依赖人工补推。只在配置了 VDL_COOKIE_REFILL_URL + VDL_COOKIE_REFILL_TOKEN 时生效。
+# ----------------------------------------------------------------------------
+_REFILL_COOLDOWN: dict[str, float] = {}
+
+
+def request_refill(domain: str, blocking: bool = False) -> bool:
+    """请求 VPS 守护进程立即补推一次指定域 Cookie。
+
+    - 带每域冷却（默认 60s），避免重启后请求洪峰反复触发。
+    - blocking=False 时后台线程执行（不阻塞当前请求）；True 时同步等待结果。
+    返回是否成功发起/完成。
+    """
+    domain = _norm_domain(domain)
+    if not is_allowed(domain):
+        return False
+    base = os.environ.get("VDL_COOKIE_REFILL_URL")
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
+    if not base or not token:
+        logger.info("[cookie_pool] request_refill skipped (未配置 REFILL_URL/TOKEN) domain=%s", domain)
+        return False
+    now = time.time()
+    last = _REFILL_COOLDOWN.get(domain, 0.0)
+    if now - last < 60:
+        return False
+    _REFILL_COOLDOWN[domain] = now
+
+    def _do():
+        try:
+            import urllib.request
+
+            url = (base.rstrip("/") + "/v1/push?token="
+                   + urllib.parse.quote(token, safe=""))
+            req = urllib.request.Request(
+                url, method="POST",
+                headers={"User-Agent": "vdl-cookie-refill"},
+            )
+            with urllib.request.urlopen(req, timeout=90) as r:
+                data = r.read().decode() or "{}"
+            ok = bool(json.loads(data).get("ok"))
+            logger.info("[cookie_pool] request_refill done domain=%s ok=%s", domain, ok)
+        except Exception as e:
+            logger.warning("[cookie_pool] request_refill failed domain=%s: %s", domain, e)
+
+    if blocking:
+        _do()
+        return True
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    return True
+
