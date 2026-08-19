@@ -2849,6 +2849,43 @@ def _warm_cookie_pool() -> None:
         logger.exception("公共池启动预热异常")
 
 
+@app.get("/api/cookie/dump")
+def cookie_dump(domain: str = "") -> dict:
+    """[临时 debug] 池文件内容与解密结果，便于线上排查池 miss 问题。"""
+    from cookie_pool import _pool_file, _decrypt_item
+    out = {"domain": domain, "files": []}
+    try:
+        if not domain:
+            return out
+        f = _pool_file(domain)
+        out["file"] = str(f)
+        out["exists"] = f.exists()
+        if not f.exists():
+            return out
+        import json as _json, time as _time
+        data = _json.loads(f.read_text())
+        cookies = data.get("cookies") or []
+        out["count"] = len(cookies)
+        out["items"] = []
+        for c in cookies:
+            ts = c.get("ts", 0)
+            age = int(_time.time() - ts) if ts else None
+            has_header = bool(c.get("header"))
+            has_enc = bool(c.get("header_enc"))
+            decrypted = _decrypt_item(c)
+            out["items"].append({
+                "ts": ts,
+                "age_sec": age,
+                "has_header": has_header,
+                "has_header_enc": has_enc,
+                "decrypted_len": len(decrypted) if decrypted else 0,
+                "decrypted_preview": (decrypted[:60] + "...") if decrypted else "",
+            })
+    except Exception as e:
+        out["error"] = str(e)[:200]
+    return out
+
+
 @app.post("/api/cookie/cache/clear")
 def cookie_cache_clear() -> dict:
     """清除本机 Cookie 缓存（仅删 ~/.videodownloader/cookies，不影响浏览器本身）。"""
