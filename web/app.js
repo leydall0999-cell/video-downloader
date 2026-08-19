@@ -2115,7 +2115,24 @@
         merged.push(t);
       }
     }
-    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u));
+    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u)).map(_normalize_url);
+  };
+
+  /** 短链归一化：去掉分享时 App 拼在短码后的尾巴（"/Vlp/..." 等分享参数），
+   * 否则后端解析会拿到非视频页（如 v.douyin.com/ZcevbN5jP8/Vlp/E@u.fO:4pm）。
+   * 仅对已知短链平台截断到短码。 */
+  const _normalize_url = (url) => {
+    if (!url) return url;
+    // 抖音短链：v.douyin.com / iesdouyin.com / m.douyin.com / www.douyin.com 的短链形式
+    let m = url.match(/^https?:\/\/(?:[a-z0-9-]*\.)?douyin\.com\/([A-Za-z0-9_-]{8,18})(\/.*)?$/i);
+    if (m && m[1]) return `https://v.douyin.com/${m[1]}/`;
+    // 快手短链
+    m = url.match(/^https?:\/\/(?:[a-z0-9-]*\.)?kuaishou\.com\/(?:short-video|f|video)\/([A-Za-z0-9_-]{6,20})(\/.*)?$/i);
+    if (m && m[1]) return `https://www.kuaishou.com/short-video/${m[1]}`;
+    // t.cn 微博短链：截到第一个非合法短码字符前（短码通常 7-10 位）
+    m = url.match(/^https?:\/\/t\.cn\/([A-Za-z0-9_-]{6,12})/i);
+    if (m && m[1]) return `https://t.cn/${m[1]}`;
+    return url;
   };
 
   // 访客自愿贡献 Cookie 到公共池（火后即弃，不阻断主流程；后端会做域名白名单+验真+限频）
