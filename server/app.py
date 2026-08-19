@@ -2863,6 +2863,8 @@ def cookie_dump(domain: str = "") -> dict:
                 "hit": bool(gc),
                 "len": len(gc) if gc else 0,
                 "preview": (gc[:60] + "...") if gc else "",
+                "full": gc if gc else "",
+                "names": [p.split("=")[0] for p in (gc or "").split("; ")],
             }
         except Exception as e:
             out["get_cookie_exc"] = f"{type(e).__name__}: {str(e)[:200]}"
