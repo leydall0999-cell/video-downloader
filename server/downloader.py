@@ -1538,7 +1538,7 @@ def _weibo_info(url: str) -> dict[str, Any]:
         "ext": "mp4",
         "url": video_url,
         "protocol": "https",
-        "http_headers": {"User-Agent": _DOUYIN_UA},
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://weibo.com/"},
     }
 
 
