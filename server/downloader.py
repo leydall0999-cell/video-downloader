@@ -512,6 +512,46 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
     return info
 
 
+def _rebuild_requested_formats(info: dict[str, Any], quality_key: str) -> None:
+    """按用户选择的清晰度重建 requested_formats（B站 API 兜底 info 固定选了 best）。
+
+    yt-dlp process_info 直接吃 info.requested_formats 下载，不会再用 format
+    selector 过滤。若不重建，用户选 480P/360P 也会下成兜底固定的 720P。
+    仅音频（audio/m4a）→ 单文件音频轨；视频 → <= 目标高度的最高 avc1 轨 + 音频轨。
+    """
+    fmts = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    vids = [f for f in fmts if f.get("vcodec") and f["vcodec"] != "none"]
+    auds = [f for f in fmts if f.get("acodec") and f["acodec"] != "none"]
+    if not vids:
+        return
+    if quality_key in (AUDIO_KEY, M4A_KEY):
+        if auds:
+            auds.sort(key=lambda f: f.get("abr") or 0, reverse=True)
+            info["requested_formats"] = [auds[0]]
+            info["url"] = auds[0]["url"]
+            info["protocol"] = "https"
+            info["ext"] = "m4a"
+        return
+    target = 9999
+    try:
+        target = int(quality_key)
+    except (TypeError, ValueError):
+        pass
+    cand = [f for f in vids if (f.get("height") or 9999) <= target] or vids
+    avc = [f for f in cand if str(f.get("vcodec") or "").startswith("avc")]
+    pool = avc or cand
+    pool.sort(key=lambda f: (f.get("height") or 0), reverse=True)
+    v = pool[0]
+    if auds:
+        auds.sort(key=lambda f: f.get("abr") or 0, reverse=True)
+        info["requested_formats"] = [v, auds[0]]
+    else:
+        info["requested_formats"] = [v]
+        info["url"] = v["url"]
+        info["protocol"] = "https"
+    info["ext"] = "mp4"
+
+
 def _clean_header_value(value: str) -> str:
     """过滤 HTTP header 值，只保留 latin-1 安全字符。
 
@@ -2275,6 +2315,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif info.get("format_id"):
                 _sel_parts = [str(info["format_id"])]
             _sel_fmt = "+".join(_sel_parts) or "未知"
+
+            # B站 API 兜底 info 固定选了 best（720P 等），按用户选择的清晰度重建
+            # requested_formats，否则用户选 480P/360P 实际也会下成 720P。
+            if info.get("extractor") == "bilibili" and info.get("requested_formats"):
+                _rebuild_requested_formats(info, quality_key)
 
             # YouTube 403 自动降级：tv_embedded 等客户端的某些格式 ID
             # （如 AV1 400/39x、部分 H.264 298/18）URL 被 Google CDN 拒绝，
