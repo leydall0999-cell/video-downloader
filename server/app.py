@@ -2855,6 +2855,17 @@ def cookie_dump(domain: str = "") -> dict:
     from cookie_pool import _pool_file, _decrypt_item
     out = {"domain": domain, "files": []}
     try:
+        from cookie_pool import _candidates, get_cookie
+        out["candidates"] = _candidates(domain)
+        try:
+            gc = get_cookie(domain)
+            out["get_cookie"] = {
+                "hit": bool(gc),
+                "len": len(gc) if gc else 0,
+                "preview": (gc[:60] + "...") if gc else "",
+            }
+        except Exception as e:
+            out["get_cookie_exc"] = f"{type(e).__name__}: {str(e)[:200]}"
         if not domain:
             return out
         f = _pool_file(domain)
