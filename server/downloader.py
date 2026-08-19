@@ -1424,6 +1424,82 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
     return data
 
 
+_PLAYLIST_PATHS = ("/playlist", "/discover/toplist", "/album/")
+
+
+def is_playlist_url(url: str) -> bool:
+    """判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。"""
+    host = _host_of(url)
+    path = (url or "").split("?", 1)[0]
+    if host in ("music.163.com", "y.music.163.com"):
+        return any(p in path for p in ("/playlist", "/discover/toplist"))
+    if host in ("ximalaya.com",):
+        return "/album/" in path
+    return False
+
+
+def probe_playlist(url: str) -> dict[str, Any]:
+    """解析歌单/专辑，返回 {title, count, items:[{index,title,duration,url,is_paid?}]}。
+
+    喜马拉雅专辑走 VPS Playwright（yt-dlp XimalayaAlbumIE 已失效，
+    revision/album/v1/getTracksList 需登录；新路径 revision/album/getTracksList
+    需浏览器游客态）；网易云歌单/榜单走 yt-dlp extract_flat 快速提取（~1s/200条）。
+    """
+    host = _host_of(url)
+    if host in ("ximalaya.com",):
+        data = _call_vps_worker("ximalaya_album", url)
+        items = data.get("items") or []
+        if not items:
+            raise ResolveError("专辑解析失败", data.get("error") or "未获取到剧集列表")
+        return {
+            "title": data.get("title") or "喜马拉雅专辑",
+            "count": data.get("count") or len(items),
+            "items": items,
+        }
+
+    # 网易云歌单/榜单（及通用 playlist 兜底）→ yt-dlp extract_flat 快速提取
+    opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": False,
+        "extract_flat": "in_playlist",
+        "playlist_items": "1-500",
+        "ignoreerrors": True,
+    }
+    if is_china_host(host):
+        opts["proxy"] = os.environ.get("VDL_PROXY_CN", "").strip()
+    try:
+        with _YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False) or {}
+    except Exception as e:
+        raise ResolveError("歌单解析失败", _clean_message(str(e))) from e
+    if info.get("_type") != "playlist":
+        raise ResolveError("该链接不是歌单/专辑", "请粘贴网易云歌单或喜马拉雅专辑的完整链接")
+    items: list[dict[str, Any]] = []
+    for idx, e in enumerate((info.get("entries") or []), 1):
+        if not e:
+            continue
+        item_url = e.get("url") or e.get("webpage_url") or ""
+        if host in ("music.163.com", "y.music.163.com") and item_url:
+            # extract_flat 返回 music.163.com/#/song?id=xxx，转标准单曲链
+            m = re.search(r"[?&]id=(\d+)", item_url)
+            if m:
+                item_url = "https://music.163.com/song?id=" + m.group(1)
+        items.append({
+            "index": idx,
+            "title": e.get("title") or "",
+            "duration": e.get("duration"),
+            "url": item_url,
+        })
+    if not items:
+        raise ResolveError("歌单/专辑为空", "该歌单没有可下载的内容")
+    return {
+        "title": info.get("title") or "歌单",
+        "count": info.get("playlist_count") or len(items),
+        "items": items,
+    }
+
+
 def _douyin_info(url: str) -> dict[str, Any]:
     """调 VPS worker 拿抖音真实流，构造成 yt-dlp 兼容的 info dict。
 

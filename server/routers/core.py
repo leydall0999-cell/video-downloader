@@ -133,6 +133,34 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=504, detail=detail) from None
     return {'url': url, 'platform': {'key': platform.key, 'name': platform.name}, 'video': app.downloader.summarize(info), 'qualities': app.downloader.build_quality_options(info), 'sources': []}
 
+
+@router.post('/api/playlist')
+async def playlist(payload: app.ResolveRequest, request: app.Request) -> dict:
+    """解析歌单/专辑（网易云歌单、榜单、喜马拉雅专辑），返回曲目列表。
+
+    与 /api/resolve 不同：不返回单个视频，而是返回 {title, count, items[]}，
+    前端展示列表后由用户逐个/批量发起下载（每项是独立的单曲链接，复用单曲下载链路）。
+    """
+    app._check_rate_limit(request)
+    app._assert_safe_url(payload.url)
+    url, platform = app.parse_source(payload.url)
+    timeout = 75  # 喜马拉雅专辑走 VPS Playwright（~12s）+ 网易云歌单 yt-dlp 提取
+    loop = app.asyncio.get_running_loop()
+    try:
+        data = await app.asyncio.wait_for(
+            loop.run_in_executor(app.prober, app.downloader.probe_playlist, url),
+            timeout=timeout,
+        )
+    except app.asyncio.TimeoutError:
+        raise app.HTTPException(status_code=504, detail='歌单/专辑解析超时（超过 75 秒）。常见原因：专辑集数过多、或当前网络访问该平台较慢。建议稍后重试') from None
+    return {
+        'url': url,
+        'platform': {'key': platform.key, 'name': platform.name},
+        'title': data.get('title') or '歌单/专辑',
+        'count': data.get('count') or 0,
+        'items': data.get('items') or [],
+    }
+
 def _stream_referer(host: str) -> str:
     """按平台返回防盗链 Referer：腾讯视频 HLS 分片必须带正确的 Referer 才返回 200。
 

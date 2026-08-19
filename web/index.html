@@ -208,6 +208,17 @@
       <span id="hqTipText"></span>
     </div>
 
+    <!-- 歌单 / 专辑列表（网易云歌单、喜马拉雅专辑） -->
+    <div id="playlistPanel" hidden>
+      <div class="block-title" id="playlistTitle"></div>
+      <p class="extract-hint" id="playlistMeta"></p>
+      <div id="playlistList" class="playlist-list"></div>
+      <div class="playlist-actions">
+        <button type="button" id="playlistDownloadBtn" class="btn btn-primary">批量下载全部</button>
+        <span id="playlistProgress" class="extract-hint"></span>
+      </div>
+    </div>
+
     <div class="quality-block" id="qualityBlock">
       <div class="block-title">选择清晰度</div>
       <div class="quality-grid" id="qualityGrid" role="radiogroup" aria-label="选择清晰度"></div>
