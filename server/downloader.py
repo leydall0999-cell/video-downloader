@@ -2214,7 +2214,25 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)
             else:
-                info = ydl.extract_info(task.url, download=False) or {}
+                try:
+                    info = ydl.extract_info(task.url, download=False) or {}
+                except (DownloadError, ExtractorError) as _exc:
+                    # B站 页面风控（412/403，2026-08 B站对非浏览器 TLS 栈返回 412 验证页）
+                    # 或网络错误 → 下载阶段同样走 API 兜底（api.bilibili.com 不过页面风控）
+                    _low = str(_exc).lower()
+                    if _task_host and ("bilibili.com" in _task_host or "b23.tv" in _task_host) and (
+                        "412" in _low or "403" in _low or "forbidden" in _low
+                        or "precondition" in _low or "incompleteread" in _low
+                        or "connection" in _low
+                    ):
+                        task.log("B站 页面被风控拦截，改用 API 直连解析…")
+                        info = _bilibili_api_extract(
+                            task.url,
+                            proxy=effective_proxy,
+                            cookie=(_dl_opts.get("http_headers") or {}).get("Cookie", cookie),
+                        ) or {}
+                    else:
+                        raise
             if info.get("webpage_url"):
                 task.source_url = info["webpage_url"]
             if info.get("title"):
