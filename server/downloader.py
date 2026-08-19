@@ -1387,8 +1387,8 @@ def _is_douyin_host(host: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in _DOUYIN_HOSTS)
 
 
-def _call_douyin_worker(url: str) -> dict[str, Any]:
-    """调用 VPS 抖音解析 worker（/v1/douyin/resolve），返回真实流元数据。
+def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
+    """调用 VPS Playwright 解析 worker（/v1/resolve?platform=xx），返回真实流元数据。
 
     复用 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN（与 Cookie 补推同一套
     VPS 端点与令牌），无需额外配置。超时 90s（Playwright 起浏览器 + 页面加载）。
@@ -1397,15 +1397,16 @@ def _call_douyin_worker(url: str) -> dict[str, Any]:
     token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
     if not base or not token:
         raise ResolveError(
-            "抖音解析服务未配置",
-            "网页端抖音下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN",
+            "视频解析服务未配置",
+            "该平台下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN",
         )
     endpoint = (
-        base.rstrip("/") + "/v1/douyin/resolve?token="
+        base.rstrip("/") + "/v1/resolve?token="
         + urllib.parse.quote(token, safe="")
+        + "&platform=" + urllib.parse.quote(platform, safe="")
         + "&url=" + urllib.parse.quote(url, safe="")
     )
-    req = urllib.request.Request(endpoint, headers={"User-Agent": "vdl-douyin-resolve"})
+    req = urllib.request.Request(endpoint, headers={"User-Agent": "vdl-platform-resolve"})
     try:
         with urllib.request.urlopen(req, timeout=90) as r:
             data = json.loads(r.read().decode() or "{}")
@@ -1415,11 +1416,11 @@ def _call_douyin_worker(url: str) -> dict[str, Any]:
             body = e.read().decode()[:200]
         except Exception:
             pass
-        raise ResolveError("抖音解析服务返回错误", f"HTTP {e.code}: {body}") from e
+        raise ResolveError("视频解析服务返回错误", f"HTTP {e.code}: {body}") from e
     except Exception as e:
-        raise ResolveError("抖音解析服务不可达", f"{_clean_message(str(e))}") from e
+        raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
     if not data.get("ok"):
-        raise ResolveError("抖音解析失败", data.get("error") or "未知错误")
+        raise ResolveError("视频解析失败", data.get("error") or "未知错误")
     return data
 
 
@@ -1430,7 +1431,7 @@ def _douyin_info(url: str) -> dict[str, Any]:
     返回的 info dict 已模拟"yt-dlp 已选过流"的状态：包含 url + requested_formats，
     这样 yt-dlp 的 process_info 会走多格式下载分支（FFmpegFD 同时下载音视频并合并）。
     """
-    data = _call_douyin_worker(url)
+    data = _call_vps_worker("douyin", url)
     headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
     height = int(data.get("height") or 0) or 720
     width = int(data.get("width") or 0) or (height * 16 // 9)
@@ -1478,6 +1479,40 @@ def _douyin_info(url: str) -> dict[str, Any]:
     }
 
 
+# 快手（kuaishou.com）：SSR 无设备指纹 Cookie 时 __APOLLO_STATE__ 为空，纯 requests
+# 拿不到主视频数据；改走 VPS Playwright 解析（kuaishou_resolve.py），返回合并好的
+# mp4 直链（音视频已合并，无需 ffmpeg 再合）。
+_KUAISHOU_HOSTS: tuple[str, ...] = ("kuaishou.com", "chenzhongtech.com", "gifshow.com")
+
+
+def _is_kuaishou_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _KUAISHOU_HOSTS)
+
+
+def _kuaishou_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿快手真实流（合并 mp4），构造成 yt-dlp 兼容的 info dict。
+
+    快手视频是「音视频已合并的单个 mp4」，走 process_info 单文件分支直接下载，
+    无需 requested_formats。快手 CDN 不校验 Referer，带 UA 即可。
+    """
+    data = _call_vps_worker("kuaishou", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "快手视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Kuaishou",
+        "extractor": "kuaishou",
+        "ext": "mp4",
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA},
+    }
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
@@ -1487,9 +1522,11 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     host = _host_of(url)
     if cookie and host:
         _cache_user_cookie(host, cookie)
-    # 抖音：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
+    # 抖音/快手：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
         return _douyin_info(url)
+    if _is_kuaishou_host(host):
+        return _kuaishou_info(url)
     # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
     _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
     try:
@@ -2031,6 +2068,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             if _is_douyin_host(_task_host):
                 # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
                 info = _douyin_info(task.url)
+            elif _is_kuaishou_host(_task_host):
+                # 快手：同上，VPS 解析出合并 mp4 直链
+                info = _kuaishou_info(task.url)
             else:
                 info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):
