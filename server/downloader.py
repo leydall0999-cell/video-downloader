@@ -1427,7 +1427,8 @@ def _douyin_info(url: str) -> dict[str, Any]:
     """调 VPS worker 拿抖音真实流，构造成 yt-dlp 兼容的 info dict。
 
     视频轨 + 音频轨分离，各自带 Referer（抖音 CDN 校验 Referer，缺则 403）。
-    yt-dlp 的 bestvideo+bestaudio 会自动选两轨，process_info 用 ffmpeg 合并。
+    返回的 info dict 已模拟"yt-dlp 已选过流"的状态：包含 url + requested_formats，
+    这样 yt-dlp 的 process_info 会走多格式下载分支（FFmpegFD 同时下载音视频并合并）。
     """
     data = _call_douyin_worker(url)
     headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
@@ -1457,6 +1458,7 @@ def _douyin_info(url: str) -> dict[str, Any]:
             "abr": 128,
             "http_headers": dict(headers),
         })
+    # 模拟"已选流"：process_info 会走 requested_formats 分支（FFmpegFD 多格式下载+合并）
     return {
         "id": data.get("video_id") or "",
         "title": data.get("title") or "抖音视频",
@@ -1465,6 +1467,9 @@ def _douyin_info(url: str) -> dict[str, Any]:
         "webpage_url": data.get("webpage_url") or url,
         "extractor_key": "Douyin",
         "extractor": "douyin",
+        "ext": "mp4",
+        "url": data.get("video_url") or "",
+        "requested_formats": list(formats),
         "formats": formats,
         "http_headers": dict(headers),
     }
