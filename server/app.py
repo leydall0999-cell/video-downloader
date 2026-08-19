@@ -2899,10 +2899,12 @@ def cookie_dump(domain: str = "") -> dict:
     # 附上 cookie 注入诊断日志（_cookie_diag 写入 /tmp/vdl_cookie_diag.txt）
     try:
         import os as _os
-        diag_path = _os.path.join(__import__("tempfile").gettempdir(), "vdl_cookie_diag.txt")
-        if _os.path.exists(diag_path):
-            lines = open(diag_path, encoding="utf-8", errors="ignore").read().splitlines()
-            out["cookie_diag_tail"] = lines[-40:]
+        _tmp = __import__("tempfile").gettempdir()
+        for name in ("vdl_cookie_diag.txt", "vdl_403_diag.txt"):
+            p = _os.path.join(_tmp, name)
+            if _os.path.exists(p):
+                lines = open(p, encoding="utf-8", errors="ignore").read().splitlines()
+                out[name.replace(".txt", "_tail")] = lines[-40:]
     except Exception as e:
         out["cookie_diag_err"] = str(e)[:100]
     return out
