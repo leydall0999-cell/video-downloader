@@ -1577,6 +1577,7 @@ def _kuaishou_info(url: str) -> dict[str, Any]:
     return {
         "id": data.get("video_id") or "",
         "title": data.get("title") or "快手视频",
+        "uploader": data.get("uploader") or "",
         "duration": data.get("duration"),
         "thumbnail": data.get("thumbnail") or "",
         "webpage_url": data.get("webpage_url") or url,
