@@ -2894,6 +2894,15 @@ def cookie_dump(domain: str = "") -> dict:
             })
     except Exception as e:
         out["error"] = str(e)[:200]
+    # 附上 cookie 注入诊断日志（_cookie_diag 写入 /tmp/vdl_cookie_diag.txt）
+    try:
+        import os as _os
+        diag_path = _os.path.join(__import__("tempfile").gettempdir(), "vdl_cookie_diag.txt")
+        if _os.path.exists(diag_path):
+            lines = open(diag_path, encoding="utf-8", errors="ignore").read().splitlines()
+            out["cookie_diag_tail"] = lines[-40:]
+    except Exception as e:
+        out["cookie_diag_err"] = str(e)[:100]
     return out
 
 
