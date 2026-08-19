@@ -1413,10 +1413,19 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
     except urllib.error.HTTPError as e:
         body = ""
         try:
-            body = e.read().decode()[:200]
+            body = e.read().decode()[:300]
+            # daemon 502 时 body 含 {"error": "具体原因"}——直接透传，让用户看到友好错误
+            try:
+                bd = json.loads(body)
+                if isinstance(bd, dict) and bd.get("error"):
+                    raise ResolveError(bd["error"], f"HTTP {e.code}") from e
+            except ResolveError:
+                raise
+            except Exception:
+                pass
         except Exception:
             pass
-        raise ResolveError("视频解析服务返回错误", f"HTTP {e.code}: {body}") from e
+        raise ResolveError("视频解析服务返回错误", f"HTTP {e.code}: {body[:120]}") from e
     except Exception as e:
         raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
     if not data.get("ok"):
