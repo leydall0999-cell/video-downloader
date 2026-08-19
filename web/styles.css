@@ -386,6 +386,13 @@ img { max-width: 100%; display: block; }
 .playlist-item .pl-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playlist-item .pl-dur { color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .playlist-item .pl-paid { color: #d97706; font-size: .72rem; border: 1px solid rgba(217,119,6,.4); border-radius: 4px; padding: 0 .3rem; flex: 0 0 auto; }
+.playlist-item .pl-btn {
+  flex: 0 0 auto; font-size: .74rem; padding: .18rem .6rem; cursor: pointer;
+  border: 1px solid var(--brand); color: var(--brand); border-radius: 6px;
+  background: transparent; font-family: inherit; line-height: 1.4;
+}
+.playlist-item .pl-btn:hover { background: var(--brand-soft); }
+.playlist-item .pl-btn:disabled { opacity: .55; cursor: default; border-color: var(--line); color: var(--text-mute); }
 .playlist-actions { display: flex; align-items: center; gap: .8rem; margin-top: .7rem; }
 .playlist-actions .btn { flex: 0 0 auto; }
 .playlist-item.done { opacity: .5; }

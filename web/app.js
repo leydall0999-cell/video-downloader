@@ -2166,9 +2166,9 @@
     const paid = items.length - free;
     el.playlistTitle.textContent = `${data.platform?.name || '歌单'}：${data.title || '(未命名)'}`;
     el.playlistMeta.textContent =
-      `共 ${data.count || items.length} 集（免费 ${free} 集` +
-      (paid > 0 ? `，付费 ${paid} 集将自动跳过` : '') +
-      `）。点「批量下载」会逐个创建下载任务。`;
+      `共 ${data.count || items.length} 集` +
+      (paid > 0 ? `（其中会员 ${paid} 集，按合规要求不支持下载）` : '') +
+      `。每集右侧有「下载」按钮可单独下，或点「批量下载全部」。`;
     el.playlistList.replaceChildren();
     items.forEach((item) => {
       const row = document.createElement('div');
@@ -2189,10 +2189,37 @@
         row.appendChild(d);
       }
       if (item.is_paid) {
+        // 付费项：合规红线，不提供下载（标注会员并禁用）
         const p = document.createElement('span');
         p.className = 'pl-paid';
-        p.textContent = '付费';
+        p.textContent = '会员';
+        p.title = '会员/付费内容按合规要求不支持下载';
         row.appendChild(p);
+      } else if (item.url) {
+        // 免费项：单曲下载按钮
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost pl-btn';
+        btn.textContent = '下载';
+        btn.title = '只下载这一集';
+        btn.onclick = async (ev) => {
+          ev.stopPropagation();
+          if (btn.disabled) return;
+          if (!(await ensureConsent())) return;
+          btn.disabled = true;
+          btn.textContent = '创建中…';
+          try {
+            item.platformName = item.platformName || data.platform?.name || '歌单';
+            await createSingleDownload(item, data.base || '');
+            btn.textContent = '已创建 ✓';
+            row.classList.add('done');
+          } catch (e) {
+            btn.textContent = '失败';
+            row.classList.add('fail');
+            showError('创建下载任务失败', e.message || e.hint);
+          }
+        };
+        row.appendChild(btn);
       }
       el.playlistList.appendChild(row);
     });
