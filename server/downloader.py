@@ -1368,6 +1368,108 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
     return False
 
 
+# --------------------------------------------------------------------------- #
+# 抖音（douyin）专用解析：走 VPS Playwright 真实浏览器拦截视频流
+# --------------------------------------------------------------------------- #
+# yt-dlp 抖音提取器在抖音 2026 初反爬升级后失效（aweme_detail API 需 a_bogus
+# 签名，未实现，报 "Fresh cookies needed"），即使带完整登录态 cookie 也无解。
+# 故网页端抖音改走 VPS 上的 Playwright 无头浏览器（douyin_resolve.py），拿到真实
+# 视频/音频轨 URL（音视频分离），再交给 yt-dlp process_info 下载 + ffmpeg 合并。
+_DOUYIN_HOSTS: tuple[str, ...] = ("douyin.com", "iesdouyin.com")
+_DOUYIN_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def _is_douyin_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _DOUYIN_HOSTS)
+
+
+def _call_douyin_worker(url: str) -> dict[str, Any]:
+    """调用 VPS 抖音解析 worker（/v1/douyin/resolve），返回真实流元数据。
+
+    复用 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN（与 Cookie 补推同一套
+    VPS 端点与令牌），无需额外配置。超时 90s（Playwright 起浏览器 + 页面加载）。
+    """
+    base = os.environ.get("VDL_COOKIE_REFILL_URL")
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
+    if not base or not token:
+        raise ResolveError(
+            "抖音解析服务未配置",
+            "网页端抖音下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN",
+        )
+    endpoint = (
+        base.rstrip("/") + "/v1/douyin/resolve?token="
+        + urllib.parse.quote(token, safe="")
+        + "&url=" + urllib.parse.quote(url, safe="")
+    )
+    req = urllib.request.Request(endpoint, headers={"User-Agent": "vdl-douyin-resolve"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            data = json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()[:200]
+        except Exception:
+            pass
+        raise ResolveError("抖音解析服务返回错误", f"HTTP {e.code}: {body}") from e
+    except Exception as e:
+        raise ResolveError("抖音解析服务不可达", f"{_clean_message(str(e))}") from e
+    if not data.get("ok"):
+        raise ResolveError("抖音解析失败", data.get("error") or "未知错误")
+    return data
+
+
+def _douyin_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿抖音真实流，构造成 yt-dlp 兼容的 info dict。
+
+    视频轨 + 音频轨分离，各自带 Referer（抖音 CDN 校验 Referer，缺则 403）。
+    yt-dlp 的 bestvideo+bestaudio 会自动选两轨，process_info 用 ffmpeg 合并。
+    """
+    data = _call_douyin_worker(url)
+    headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
+    height = int(data.get("height") or 0) or 720
+    width = int(data.get("width") or 0) or (height * 16 // 9)
+    formats: list[dict[str, Any]] = []
+    if data.get("video_url"):
+        formats.append({
+            "url": data["video_url"],
+            "format_id": "dy-video",
+            "format": "dy-video",
+            "ext": "mp4",
+            "vcodec": "avc1",
+            "acodec": "none",
+            "width": width,
+            "height": height,
+            "http_headers": dict(headers),
+        })
+    if data.get("audio_url"):
+        formats.append({
+            "url": data["audio_url"],
+            "format_id": "dy-audio",
+            "format": "dy-audio",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "abr": 128,
+            "http_headers": dict(headers),
+        })
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "抖音视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Douyin",
+        "extractor": "douyin",
+        "formats": formats,
+        "http_headers": dict(headers),
+    }
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
@@ -1377,6 +1479,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     host = _host_of(url)
     if cookie and host:
         _cache_user_cookie(host, cookie)
+    # 抖音：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
+    if _is_douyin_host(host):
+        return _douyin_info(url)
     # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
     _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
     try:
@@ -1538,6 +1643,12 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
     heights = sorted({f["height"] for f in formats if f.get("height")}, reverse=True)
     audio_size = _best_audio_size(formats)
+
+    # 抖音（VPS 解析）只有单一视频档位，避免展示 480P/360P 等不存在的选项导致下载失败
+    if info.get("extractor_key") == "Douyin":
+        return [
+            {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
+        ]
 
     options: list[dict[str, Any]] = [
         {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
@@ -1909,7 +2020,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             )
         with _YoutubeDL(_dl_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
-            info = ydl.extract_info(task.url, download=False) or {}
+            if _is_douyin_host(_task_host):
+                # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
+                info = _douyin_info(task.url)
+            else:
+                info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):
                 task.source_url = info["webpage_url"]
             if info.get("title"):
