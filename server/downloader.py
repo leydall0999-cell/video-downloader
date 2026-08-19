@@ -1441,6 +1441,7 @@ def _douyin_info(url: str) -> dict[str, Any]:
             "format_id": "dy-video",
             "format": "dy-video",
             "ext": "mp4",
+            "protocol": "https",
             "vcodec": "avc1",
             "acodec": "none",
             "width": width,
@@ -1453,12 +1454,15 @@ def _douyin_info(url: str) -> dict[str, Any]:
             "format_id": "dy-audio",
             "format": "dy-audio",
             "ext": "m4a",
+            "protocol": "https",
             "vcodec": "none",
             "acodec": "mp4a",
             "abr": 128,
             "http_headers": dict(headers),
         })
-    # 模拟"已选流"：process_info 会走 requested_formats 分支（FFmpegFD 多格式下载+合并）
+    # 模拟"已选流"：只给 requested_formats + formats，不设外层 url/protocol。
+    # 这样 process_info 的 fd=None，走「逐个 format 下载 + FFmpegMergerPP 合并」分支。
+    # （若给外层 url，fd 会被设为 HttpFD，走合并 url 分支，HttpFD 无法下多 URL，音频轨丢失。）
     return {
         "id": data.get("video_id") or "",
         "title": data.get("title") or "抖音视频",
@@ -1468,7 +1472,6 @@ def _douyin_info(url: str) -> dict[str, Any]:
         "extractor_key": "Douyin",
         "extractor": "douyin",
         "ext": "mp4",
-        "url": data.get("video_url") or "",
         "requested_formats": list(formats),
         "formats": formats,
         "http_headers": dict(headers),
