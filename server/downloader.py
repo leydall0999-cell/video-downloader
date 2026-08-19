@@ -495,9 +495,19 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
         "webpage_url": url,
         "extractor": "bilibili",
         "extractor_key": "BiliBili",
+        "ext": "mp4",
         "formats": formats,
         "http_headers": {"Referer": "https://www.bilibili.com/"},
     }
+    # 模拟"已选流"：yt-dlp process_info 直接吃 info（不经 process_ie_result），
+    # 无 requested_formats 会走单文件分支 → dl() 因无顶层 url 抛 No video formats。
+    # 手动挑 best 视频轨 + 音频轨构造 requested_formats（同抖音修复经验，
+    # 不设顶层 url 避免 HttpFD 合并分支丢音频；format 级已带 protocol=https）。
+    _vids = [f for f in formats if f.get("vcodec") and f["vcodec"] != "none"]
+    _auds = [f for f in formats if f.get("acodec") and f["acodec"] != "none"]
+    if _vids and _auds:
+        _vids.sort(key=lambda f: (f.get("height") or 0), reverse=True)
+        info["requested_formats"] = [_vids[0], _auds[0]]
     logger.info("[bilibili api fallback] extracted %s formats for %s", len(formats), bvid)
     return info
 
