@@ -1513,6 +1513,35 @@ def _kuaishou_info(url: str) -> dict[str, Any]:
     }
 
 
+# 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
+# WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
+_WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
+
+
+def _is_weibo_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _WEIBO_HOSTS)
+
+
+def _weibo_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿微博真实流（合并 mp4），构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("weibo", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "微博视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Weibo",
+        "extractor": "weibo",
+        "ext": "mp4",
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA},
+    }
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
@@ -1522,11 +1551,13 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     host = _host_of(url)
     if cookie and host:
         _cache_user_cookie(host, cookie)
-    # 抖音/快手：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
+    # 抖音/快手/微博：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
         return _douyin_info(url)
     if _is_kuaishou_host(host):
         return _kuaishou_info(url)
+    if _is_weibo_host(host):
+        return _weibo_info(url)
     # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
     _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
     try:
@@ -2071,6 +2102,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif _is_kuaishou_host(_task_host):
                 # 快手：同上，VPS 解析出合并 mp4 直链
                 info = _kuaishou_info(task.url)
+            elif _is_weibo_host(_task_host):
+                # 微博：同上，VPS 解析出合并 mp4 直链
+                info = _weibo_info(task.url)
             else:
                 info = ydl.extract_info(task.url, download=False) or {}
             if info.get("webpage_url"):
