@@ -1707,16 +1707,26 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except (DownloadError, ExtractorError) as exc:
         _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
-        # B站 在国内代理 IncompleteRead/连接重置时，走 requests 直连 API 兜底
+        # B站 走 API 兜底：网络错误（IncompleteRead/连接重置）OR 页面风控（412/403）。
+        # 2026-08 B站 风控升级：对 urllib3/requests 的非浏览器 TLS 栈访问视频页返回
+        # 412 验证页（curl 不受影响），yt-dlp 抓页面必 412 → 提取器报 403。
+        # API（api.bilibili.com）不过页面风控，仍 200，因此直接走 API 构造 info。
+        _exc_low = str(exc).lower()
         if _h and ("bilibili.com" in _h or "b23.tv" in _h) and (
-            "incompleteread" in str(exc).lower()
-            or "error reading response" in str(exc).lower()
-            or "connection" in str(exc).lower()
-            or "transport" in str(exc).lower()
+            "incompleteread" in _exc_low
+            or "error reading response" in _exc_low
+            or "connection" in _exc_low
+            or "transport" in _exc_low
+            or "412" in _exc_low
+            or "403" in _exc_low
+            or "forbidden" in _exc_low
+            or "precondition" in _exc_low
         ):
-            logger.info("[probe] yt-dlp Bilibili failed with network error, trying API fallback: %s", _last_err)
+            logger.info("[probe] yt-dlp Bilibili failed (%s), trying API fallback", _last_err)
             try:
-                info = _bilibili_api_extract(url, proxy=effective_proxy, cookie=cookie)
+                # 用最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
+                _final_cookie = (opts.get("http_headers") or {}).get("Cookie") or cookie
+                info = _bilibili_api_extract(url, proxy=effective_proxy, cookie=_final_cookie)
                 if info:
                     logger.info("[probe] Bilibili API fallback succeeded")
                     _last_err = None
