@@ -321,6 +321,16 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     return _strip_tracking_params(url)
 
 
+def _to_int(v):
+    """安全转 int：B站 view API 的 duration/stat 字段常是字符串。"""
+    if v is None or v == "":
+        return None
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
 def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[str, Any] | None:
     """B站 专用兜底解析器：当 yt-dlp 网络栈反复 IncompleteRead 时，直接用 requests 调 B站 API。
 
@@ -423,9 +433,9 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
             "acodec": "none",
             "width": v.get("width"),
             "height": v.get("height"),
-            "fps": v.get("frameRate") or v.get("frame_rate"),
-            "tbr": (v.get("bandwidth") or 0) / 1000.0,
-            "filesize": v.get("size"),
+            "fps": _to_int(v.get("frameRate")) or _to_int(v.get("frame_rate")),
+            "tbr": (_to_int(v.get("bandwidth")) or 0) / 1000.0,
+            "filesize": _to_int(v.get("size")),
             "quality": v.get("id"),
             "format": fmt_names.get(v.get("id")),
             "protocol": "https",
@@ -443,8 +453,8 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
             "ext": _mime_ext(a.get("mimeType") or a.get("mime_type") or ""),
             "vcodec": "none",
             "acodec": (a.get("codecs") or "").split(".")[0] or "aac",
-            "tbr": (a.get("bandwidth") or 0) / 1000.0,
-            "filesize": a.get("size"),
+            "tbr": (_to_int(a.get("bandwidth")) or 0) / 1000.0,
+            "filesize": _to_int(a.get("size")),
             "format": "音频",
             "protocol": "https",
             "http_headers": {"Referer": "https://www.bilibili.com/"},
@@ -459,7 +469,7 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
             "format_id": f'durl-{d.get("order", 0)}',
             "url": url0,
             "ext": "mp4",
-            "filesize": d.get("size"),
+            "filesize": _to_int(d.get("size")),
             "protocol": "https",
             "http_headers": {"Referer": "https://www.bilibili.com/"},
         })
@@ -477,11 +487,11 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
         "thumbnail": video_info.get("pic"),
         "uploader": owner.get("name"),
         "uploader_id": str(owner.get("mid") or ""),
-        "duration": video_info.get("duration"),
-        "view_count": stat.get("view"),
-        "like_count": stat.get("like"),
-        "comment_count": stat.get("reply"),
-        "timestamp": video_info.get("pubdate"),
+        "duration": _to_int(video_info.get("duration")),
+        "view_count": _to_int(stat.get("view")),
+        "like_count": _to_int(stat.get("like")),
+        "comment_count": _to_int(stat.get("reply")),
+        "timestamp": _to_int(video_info.get("pubdate")),
         "webpage_url": url,
         "formats": formats,
         "http_headers": {"Referer": "https://www.bilibili.com/"},
