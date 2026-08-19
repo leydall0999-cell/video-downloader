@@ -1726,6 +1726,18 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
             {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
         ]
 
+    # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示 4K/1080P 等视频画质选项
+    if not heights:
+        audio_ex = {str(f.get("ext") or "").lower() for f in formats}
+        audio_opts: list[dict[str, Any]] = []
+        if "mp3" in audio_ex:
+            audio_opts.append({"key": AUDIO_KEY, "label": "仅音频 MP3", "note": "MP3 格式", "approx_size": audio_size})
+        if "m4a" in audio_ex:
+            audio_opts.append({"key": M4A_KEY, "label": "仅音频 M4A", "note": "M4A 格式", "approx_size": audio_size})
+        return [
+            {"key": BEST_KEY, "label": "最佳音质（自动）", "note": "自动选择最高音质", "approx_size": audio_size},
+        ] + audio_opts
+
     options: list[dict[str, Any]] = [
         {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
     ]
