@@ -493,6 +493,8 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
         "comment_count": _to_int(stat.get("reply")),
         "timestamp": _to_int(video_info.get("pubdate")),
         "webpage_url": url,
+        "extractor": "bilibili",
+        "extractor_key": "BiliBili",
         "formats": formats,
         "http_headers": {"Referer": "https://www.bilibili.com/"},
     }
