@@ -2127,17 +2127,19 @@
     }).catch(() => { /* 池写入失败不影响解析/下载结果 */ });
   };
 
-  /** 判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。 */
+  /** 判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。
+   * 注意：网易云分享链接常带 # 锚点（如 https://music.163.com/#/playlist?id=xx），
+   * new URL() 会把 # 后归到 hash 不算 pathname——这里把 hash 拼到 path 一起查。 */
   const isPlaylistUrl = (url) => {
     try {
       const u = new URL(url);
       const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
-      const path = u.pathname;
+      const pathAndHash = u.pathname + (u.hash || '');
       if (host === 'music.163.com' || host === 'y.music.163.com') {
-        return path.includes('/playlist') || path.includes('/discover/toplist');
+        return pathAndHash.includes('/playlist') || pathAndHash.includes('/discover/toplist');
       }
       if (host === 'ximalaya.com') {
-        return path.includes('/album/');
+        return u.pathname.includes('/album/');
       }
       return false;
     } catch (e) {
