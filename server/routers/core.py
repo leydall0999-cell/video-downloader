@@ -52,6 +52,23 @@ def api_version() -> dict:
             version = c.read_text(encoding='utf-8').strip()
             break
     repo_root = str(app.Path(__file__).resolve().parent.parent.parent)
+    # 调试：公共池实际写入位置（排查 Railway 持久卷是否生效、Cookie 落到哪）
+    pool_info = {}
+    try:
+        import cookie_pool as _cp
+        d = _cp._POOL_DIR
+        files = []
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file():
+                    files.append({'name': f.name, 'size': f.stat().st_size})
+        pool_info = {
+            'dir': str(d),
+            'mount_env': os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', ''),
+            'files': files,
+        }
+    except Exception as e:
+        pool_info = {'error': str(e)}
     return {
         'version': version,
         'exe': app.sys.executable,
@@ -59,6 +76,7 @@ def api_version() -> dict:
         'railway_commit': os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
         'railway_deployment': os.environ.get('RAILWAY_DEPLOYMENT_ID', ''),
         'railway_branch': os.environ.get('RAILWAY_GIT_BRANCH', ''),
+        'cookie_pool': pool_info,
     }
 
 @router.get('/api/ydlp/version')
