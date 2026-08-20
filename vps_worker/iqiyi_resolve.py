@@ -30,14 +30,33 @@ UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
 _IQIYI_CDN_KEY = "d5fb4bd9d50c4be6948c97edd7254b0e"
 _IQIYI_SRC = "76f90cbd92f94a2e925d83e8ccd22cb7"
 
-# 从页面提取 tvid / videoid / 标题：先找带 data-* 属性的元素，再整页正则兜底
+# 从页面提取 tvid / videoid / 标题：
+#   1) DOM data-player-tvid/videoid 属性（部分版本）
+#   2) window.playbackPageStageStatus._tvid / playInfo.bid（iQIYI 播放器全局状态）
+#   3) window._accData.videoInfo.tvId / .bid（页面数据对象）
+#   4) 整页 HTML 正则兜底（属性写在 script 模板里的场景）
 _JS_EXTRACT = (
     "() => {"
     "  const out = { t: '', v: '', title: '' };"
+    "  // 1) DOM 属性"
     "  let el = document.querySelector('[data-player-tvid],[data-shareplattrigger-tvid]');"
     "  if (el) out.t = el.getAttribute('data-player-tvid') || el.getAttribute('data-shareplattrigger-tvid') || el.dataset.playerTvid || el.dataset.shareplattriggerTvid || '';"
     "  let el2 = document.querySelector('[data-player-videoid],[data-shareplattrigger-videoid]');"
     "  if (el2) out.v = el2.getAttribute('data-player-videoid') || el2.getAttribute('data-shareplattrigger-videoid') || el2.dataset.playerVideoid || el2.dataset.shareplattriggerVideoid || '';"
+    "  // 2) iQIYI 播放器全局状态"
+    "  if (!out.t && window.playbackPageStageStatus) {"
+    "    out.t = window.playbackPageStageStatus._tvid || '';"
+    "    if (!out.v && window.playbackPageStageStatus.playInfo) {"
+    "      out.v = window.playbackPageStageStatus.playInfo.bid || '';"
+    "    }"
+    "  }"
+    "  // 3) _accData 视频对象（playShare.html 解析分享后会写入）"
+    "  if (!out.t && window._accData && window._accData.videoInfo) {"
+    "    const vi = window._accData.videoInfo;"
+    "    out.t = vi.tvId || vi.tvid || '';"
+    "    if (!out.v) out.v = vi.bid || vi.vid || vi.videoid || '';"
+    "  }"
+    "  // 4) 整页正则兜底"
     "  if (!out.t || !out.v) {"
     "    const html = document.documentElement.outerHTML;"
     "    const mt = html.match(/data-(?:player|shareplattrigger)-tvid=[\"'](\\d+)/);"
@@ -45,6 +64,7 @@ _JS_EXTRACT = (
     "    const mv = html.match(/data-(?:player|shareplattrigger)-videoid=[\"']([a-f\\d]+)/);"
     "    if (mv && !out.v) out.v = mv[1];"
     "  }"
+    "  // 5) 标题"
     "  const tt = document.querySelector('#widget-videotitle');"
     "  if (tt) out.title = tt.textContent.trim();"
     "  return out;"
@@ -81,7 +101,7 @@ def _get_raw_data(tvid: str, video_id: str) -> dict:
     return json.loads(body)
 
 
-def resolve(url, timeout=45):
+def resolve(url, timeout=60):
     """解析爱奇艺视频。成功返回 dict，失败抛 RuntimeError。"""
     from playwright.sync_api import sync_playwright
 
@@ -110,7 +130,8 @@ def resolve(url, timeout=45):
 
             # 等待分享页 JS 跳转 + 播放器数据注入（tvid / videoid 同时出现才视为成功）
             tvid, videoid, title = "", "", ""
-            deadline = time.time() + 35
+            # 分享页需 JS 解析 shareId 写入 _accData.videoInfo.tvId，可能较慢
+            deadline = time.time() + 50
             while time.time() < deadline:
                 try:
                     d = page.evaluate(_JS_EXTRACT) or {}
