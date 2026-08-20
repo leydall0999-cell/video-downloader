@@ -2696,11 +2696,30 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     return opts
 
 
+def _combine_series_title(info: dict[str, Any]) -> str:
+    """组合剧集名 + 单集标题，避免前端只显示"第X话 XXX"。
+
+    yt-dlp 对剧集/动漫/综艺通常把整部剧名放在 series/alt_title，单集标题放在 title。
+    如果两者都存在且 title 不含剧名，则拼接为"剧名 - 单集标题"。
+    """
+    title = (info.get("title") or "").strip()
+    series = (info.get("series") or "").strip()
+    alt = (info.get("alt_title") or "").strip()
+    # 优先用 series；没有则用 alt_title
+    show = series or alt
+    if show and title:
+        # 避免重复拼接（有些平台 title 里已经带了剧名前缀）
+        if title.startswith(show) or show in title:
+            return title
+        return f"{show} - {title}"
+    return title or show or "未命名视频"
+
+
 def summarize(info: dict[str, Any]) -> dict[str, Any]:
     """抽取前端需要的字段。"""
     play_url, is_hls = _detect_play_url(info)
     return {
-        "title": info.get("title") or "未命名视频",
+        "title": _combine_series_title(info),
         "uploader": info.get("uploader") or info.get("channel") or "",
         "duration": int(info.get("duration") or 0),
         "thumbnail": info.get("thumbnail") or "",
