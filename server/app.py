@@ -2850,8 +2850,15 @@ def _warm_cookie_pool() -> None:
 
 
 @app.get("/api/cookie/dump")
-def cookie_dump(domain: str = "") -> dict:
-    """[临时 debug] 池文件内容与解密结果，便于线上排查池 miss 问题。"""
+def cookie_dump(domain: str = "", token: str = "") -> dict:
+    """[临时 debug] 池文件内容与解密结果，便于线上排查池 miss 问题。
+
+    安全收敛：默认禁用，需配置 VDL_DEBUG_TOKEN 且传入匹配 token 才返回详情；
+    否则返回 403 且不暴露任何 Cookie 内容。配置为空时该端点等同于关闭。
+    """
+    debug_token = os.environ.get("VDL_DEBUG_TOKEN", "")
+    if not debug_token or token != debug_token:
+        raise HTTPException(status_code=403, detail="调试端点已关闭")
     from cookie_pool import _pool_file, _decrypt_item
     out = {"domain": domain, "files": []}
     try:
