@@ -346,6 +346,14 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         logger.info("[normalize] %s -> %s", url, normalized)
         return normalized
 
+    # 西瓜视频（字节跳动同系，视频ID互通）：ixigua.com/<ID> 直接链接
+    # 归一化为 douyin.com/video/<ID>，复用抖音解析通道即可正常解析下载。
+    m = re.search(r"ixigua\.com/(?:video/|i)?(\d{15,})", url)
+    if m:
+        normalized = f"https://www.douyin.com/video/{m.group(1)}"
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
     # 其余平台：仅做通用追踪参数净化，零风险
     return _strip_tracking_params(url)
 
@@ -1466,7 +1474,7 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 # 签名，未实现，报 "Fresh cookies needed"），即使带完整登录态 cookie 也无解。
 # 故网页端抖音改走 VPS 上的 Playwright 无头浏览器（douyin_resolve.py），拿到真实
 # 视频/音频轨 URL（音视频分离），再交给 yt-dlp process_info 下载 + ffmpeg 合并。
-_DOUYIN_HOSTS: tuple[str, ...] = ("douyin.com", "iesdouyin.com")
+_DOUYIN_HOSTS: tuple[str, ...] = ("douyin.com", "iesdouyin.com", "ixigua.com")
 _DOUYIN_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
