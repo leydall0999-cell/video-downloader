@@ -26,6 +26,9 @@ PROFILE = "/opt/vdl-worker/iqiyi_profile"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+# 简易诊断日志：写 daemon.log 方便 Railway 端排查 worker 真实状态
+LOG_PATH = "/opt/vdl-worker/iqiyi_resolve.log"
+
 # 与 yt-dlp IqiyiIE.get_raw_data 一致的签名常量（2026-08 实测仍有效）
 _IQIYI_CDN_KEY = "d5fb4bd9d50c4be6948c97edd7254b0e"
 _IQIYI_SRC = "76f90cbd92f94a2e925d83e8ccd22cb7"
@@ -142,6 +145,16 @@ def resolve(url, timeout=60):
                     caught.append(u)
 
             page.on("request", _on_request)
+
+            # 关键：先访问 iqiyi.com 主页建立真实会话 cookie，再访问分享页
+            # 否则爱奇艺反爬会把首次直访 share URL 的请求跳到 video/error.html
+            # （实测：iQIYI 自有 Playwright 检测会拒绝未建立会话的 share 访问）
+            try:
+                page.goto("https://www.iqiyi.com/", wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_timeout(5000)
+            except Exception:
+                pass  # 主页失败不影响后续，best-effort
+
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
             # 等 m3u8 请求 + 真实标题（最多 50s，分享页 JS 解析较慢）
@@ -166,6 +179,14 @@ def resolve(url, timeout=60):
                 time.sleep(1.5)
 
             if not caught:
+                # 失败诊断：写 daemon.log 看到底什么状态
+                try:
+                    with open(LOG_PATH, "a", encoding="utf-8") as f:
+                        f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] FAIL url={url[:120]} "
+                                f"final_url={(page.url or '')[:160]} "
+                                f"title={(page.title() or '')[:120]}\n")
+                except Exception:
+                    pass
                 raise RuntimeError(
                     "未捕获到爱奇艺视频流（m3u8 请求未发出，"
                     "可能是付费/VIP 专享、链接失效或页面未加载）"
