@@ -5,9 +5,27 @@
 各 ENABLED 常量 / 辅助函数等；本文件在 app.py 末尾才被 import，符号已就绪），
 handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在 app.py 末尾 include。
 """
+import os
+import subprocess
+
 import app
 from fastapi import APIRouter
 router = APIRouter()
+
+def _git_sha(repo_root: str) -> str:
+    """读取仓库当前 checkout 的真实 git commit SHA；Railway 部署无 .git 时 fallback 到环境变量。"""
+    try:
+        out = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=repo_root, capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            sha = out.stdout.strip()
+            if sha:
+                return sha
+    except Exception:
+        pass
+    return os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')
 
 @router.get('/api/platforms')
 def list_platforms() -> dict:
@@ -15,11 +33,13 @@ def list_platforms() -> dict:
 
 @router.get('/api/version')
 def api_version() -> dict:
-    """返回运行实例的构建指纹 + 实际加载的可执行文件路径。
+    """返回运行实例的真实代码版本指纹。
 
-    部署脚本 deploy_mac.sh 用它做自校验：只有运行中的服务返回的指纹与
-    刚构建的 build_version.txt 一致、且 exe 路径确实指向目标 app 时，
-    才算「部署成功」，否则直接判定失败，杜绝「装的是旧版却以为装好了」。
+    关键字段：
+    - git_sha：当前运行代码 checkout 的 git commit（Railway 部署到哪版一目了然）
+    - railway_commit / railway_deployment / railway_branch：Railway 注入的环境变量
+    以前只返回 build_version.txt 的 'dev'，无法确认线上跑的是哪次提交，
+    排查「改了没生效」类问题纯靠猜日志。现在直接暴露真实 SHA。
     """
     candidates = []
     exe = getattr(app.sys, 'executable', '')
@@ -31,7 +51,33 @@ def api_version() -> dict:
         if c.exists():
             version = c.read_text(encoding='utf-8').strip()
             break
-    return {'version': version, 'exe': app.sys.executable}
+    repo_root = str(app.Path(__file__).resolve().parent.parent.parent)
+    # 调试：公共池实际写入位置（排查 Railway 持久卷是否生效、Cookie 落到哪）
+    pool_info = {}
+    try:
+        import cookie_pool as _cp
+        d = _cp._POOL_DIR
+        files = []
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file():
+                    files.append({'name': f.name, 'size': f.stat().st_size})
+        pool_info = {
+            'dir': str(d),
+            'mount_env': os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', ''),
+            'files': files,
+        }
+    except Exception as e:
+        pool_info = {'error': str(e)}
+    return {
+        'version': version,
+        'exe': app.sys.executable,
+        'git_sha': _git_sha(repo_root),
+        'railway_commit': os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
+        'railway_deployment': os.environ.get('RAILWAY_DEPLOYMENT_ID', ''),
+        'railway_branch': os.environ.get('RAILWAY_GIT_BRANCH', ''),
+        'cookie_pool': pool_info,
+    }
 
 @router.get('/api/ydlp/version')
 def ydlp_version_api() -> dict:
@@ -60,7 +106,10 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     app._assert_safe_url(payload.url)
     url, platform = app.parse_source(payload.url)
     host = app._host_of(url)
-    if host == 'v.qq.com':
+    if app.downloader._is_douyin_host(host):
+        # 抖音走 VPS Playwright 真实浏览器解析，起 Chromium + 页面加载实测 25-30s
+        timeout = 75
+    elif host == 'v.qq.com':
         timeout = 35
     elif 'youtube.com' in host or 'youtu.be' in host:
         timeout = 70
@@ -73,7 +122,9 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         info = await app.asyncio.wait_for(loop.run_in_executor(app.prober, app.downloader.probe, url, payload.cookie, payload.proxy), timeout=timeout)
     except app.asyncio.TimeoutError:
         host = app._host_of(url)
-        if host == 'v.qq.com':
+        if app.downloader._is_douyin_host(host):
+            detail = '抖音解析超时。抖音已升级反爬，网页端依赖 VPS 真实浏览器解析，偶发加载较慢。建议：①稍后重试；②确认链接是单个视频播放页（而非首页/列表）；③仍失败请反馈该链接'
+        elif host == 'v.qq.com':
             detail = '腾讯视频解析超时。该视频可能是会员/付费内容，或腾讯页面改版导致提取器暂时失效。建议：①在「高级选项」粘贴浏览器 Cookie 后重试；②确认视频可公开访问（非 VIP 专享）；③稍后重试或反馈此链接'
         elif 'youtube.com' in host or 'youtu.be' in host:
             detail = f'YouTube 解析超时（超过 {timeout} 秒）。常见原因：①代理速度慢或不稳定（YouTube 需要拉取 player.js 签名，代理延迟会叠加）；②该视频可能受限（地区/年龄限制）；建议：①检查代理是否通畅；②稍后重试；③若持续失败，尝试更换节点或关闭代理直连'
@@ -81,6 +132,34 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
             detail = f'解析超时（超过 {timeout} 秒）。常见原因：①视频本身受限（限免/会员专享/付费/地区限制，这类通常需登录 cookie 才能拿到真实流，请到右上角「高级选项」粘贴浏览器 Cookie 后重试）；②当前网络无法访问该平台（可尝试在「高级选项」设置代理）'
         raise app.HTTPException(status_code=504, detail=detail) from None
     return {'url': url, 'platform': {'key': platform.key, 'name': platform.name}, 'video': app.downloader.summarize(info), 'qualities': app.downloader.build_quality_options(info), 'sources': []}
+
+
+@router.post('/api/playlist')
+async def playlist(payload: app.ResolveRequest, request: app.Request) -> dict:
+    """解析歌单/专辑（网易云歌单、榜单、喜马拉雅专辑），返回曲目列表。
+
+    与 /api/resolve 不同：不返回单个视频，而是返回 {title, count, items[]}，
+    前端展示列表后由用户逐个/批量发起下载（每项是独立的单曲链接，复用单曲下载链路）。
+    """
+    app._check_rate_limit(request)
+    app._assert_safe_url(payload.url)
+    url, platform = app.parse_source(payload.url)
+    timeout = 75  # 喜马拉雅专辑走 VPS Playwright（~12s）+ 网易云歌单 yt-dlp 提取
+    loop = app.asyncio.get_running_loop()
+    try:
+        data = await app.asyncio.wait_for(
+            loop.run_in_executor(app.prober, app.downloader.probe_playlist, url),
+            timeout=timeout,
+        )
+    except app.asyncio.TimeoutError:
+        raise app.HTTPException(status_code=504, detail='歌单/专辑解析超时（超过 75 秒）。常见原因：专辑集数过多、或当前网络访问该平台较慢。建议稍后重试') from None
+    return {
+        'url': url,
+        'platform': {'key': platform.key, 'name': platform.name},
+        'title': data.get('title') or '歌单/专辑',
+        'count': data.get('count') or 0,
+        'items': data.get('items') or [],
+    }
 
 def _stream_referer(host: str) -> str:
     """按平台返回防盗链 Referer：腾讯视频 HLS 分片必须带正确的 Referer 才返回 200。
@@ -379,11 +458,17 @@ def download_file(task_id: str, download: int=0) -> app.Response:
     _ext = task.filepath.suffix.lower()
     _mt = {'.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg'}.get(_ext, 'application/octet-stream')
     if download:
-        from starlette.responses import Response as RawResponse
-        _body = task.filepath.read_bytes()
+        # 强制下载：流式传输，避免 read_bytes() 把大文件读进内存；
+        # Content-Disposition 的 filename= 只能是 ASCII，中文走 filename*=UTF-8''。
         import urllib.parse
+        from starlette.responses import FileResponse
         _encoded = urllib.parse.quote(task.filepath.name)
-        return RawResponse(content=_body, media_type='application/octet-stream', headers={'Content-Disposition': f"""attachment; filename="{task.filepath.name}"; filename*=UTF-8''{_encoded}"""})
+        _ascii = task.filepath.name.encode('ascii', 'ignore').decode() or 'download'
+        return FileResponse(
+            path=task.filepath,
+            media_type='application/octet-stream',
+            headers={'Content-Disposition': f"attachment; filename=\"{_ascii}\"; filename*=UTF-8''{_encoded}"},
+        )
     return app.FileResponse(path=task.filepath, filename=task.filepath.name, media_type=_mt)
 
 @router.delete('/api/tasks/{task_id}')

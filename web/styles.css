@@ -369,6 +369,35 @@ img { max-width: 100%; display: block; }
 /* ---------------- quality ---------------- */
 .block-title { font-size: .82rem; font-weight: 700; color: var(--text-mute); letter-spacing: .04em; }
 .quality-block { margin-top: 1.15rem; }
+/* 歌单/专辑列表 */
+.playlist-list {
+  display: flex; flex-direction: column; gap: .35rem;
+  max-height: 280px; overflow-y: auto; margin-top: .6rem;
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: .45rem; background: #fbfbfe;
+}
+.playlist-item {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .35rem .5rem; border-radius: var(--radius-sm);
+  font-size: .83rem;
+}
+.playlist-item:nth-child(odd) { background: rgba(79,70,229,.04); }
+.playlist-item .pl-idx { color: var(--text-mute); min-width: 2rem; text-align: right; font-variant-numeric: tabular-nums; }
+.playlist-item .pl-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playlist-item .pl-dur { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.playlist-item .pl-paid { color: #d97706; font-size: .72rem; border: 1px solid rgba(217,119,6,.4); border-radius: 4px; padding: 0 .3rem; flex: 0 0 auto; }
+.playlist-item .pl-btn {
+  flex: 0 0 auto; font-size: .74rem; padding: .18rem .6rem; cursor: pointer;
+  border: 1px solid var(--brand); color: var(--brand); border-radius: 6px;
+  background: transparent; font-family: inherit; line-height: 1.4;
+}
+.playlist-item .pl-btn:hover { background: var(--brand-soft); }
+.playlist-item .pl-btn:disabled { opacity: .55; cursor: default; border-color: var(--line); color: var(--text-mute); }
+.playlist-actions { display: flex; align-items: center; gap: .8rem; margin-top: .7rem; }
+.playlist-actions .btn { flex: 0 0 auto; }
+.playlist-item.done { opacity: .5; }
+.playlist-item.done .pl-title::after { content: ' ✓'; color: #16a34a; }
+.playlist-item.fail .pl-title { color: #dc2626; text-decoration: line-through; }
 .quality-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: .55rem; margin-top: .6rem;

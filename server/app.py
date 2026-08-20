@@ -1244,6 +1244,24 @@ async def _cleanup_loop() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
+    # 启动即打印运行实例的真实代码版本，便于在 Railway Deploy Logs 首行确认
+    # 线上部署到哪次提交（Railway 的部署 ID 不是 git SHA，容易误判「没更新」）。
+    try:
+        import subprocess
+        _root = str(Path(__file__).resolve().parent.parent)
+        _sha = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'], cwd=_root,
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        _sha = ''
+    logger.info(
+        "启动版本 git_sha=%s railway_commit=%s railway_deployment=%s railway_branch=%s",
+        _sha,
+        os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
+        os.environ.get('RAILWAY_DEPLOYMENT_ID', ''),
+        os.environ.get('RAILWAY_GIT_BRANCH', ''),
+    )
     orphans = store.purge_orphans()
     if orphans:
         logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)
@@ -1259,6 +1277,12 @@ async def lifespan(_: FastAPI):
         _start_cookie_pool_watchdog()
     except Exception:
         logger.exception("启动公共 Cookie 池探测失败")
+    # 启动预热：若公共池为空（容器重建/重启后持久卷被清空），异步召唤 VPS 守护进程
+    # 立即补推一次 Cookie，使池在 ~30s 内补满，无需人工干预。
+    try:
+        _warm_cookie_pool()
+    except Exception:
+        logger.exception("启动公共 Cookie 池预热失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
@@ -1470,16 +1494,57 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
 
 
 
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    """兜底：任何未被具体 handler 覆盖的异常，向前端返回可读的错误原因。
+
+    默认 FastAPI（debug=False）只会返回笼统的 "Internal Server Error"，
+    排查时拿不到真实堆栈。这里把异常类型+消息透传给前端，并写服务端日志，
+    让用户（双击启动 App 也能）直接看到 500 的真实成因。
+    """
+    logger.exception("未捕获异常 %s %s: %s", request.method, request.url.path, exc)
+    # 不要拦截 FastAPI 自身的 HTTPException（如 402 订阅提示、400 参数错误）
+    from fastapi import HTTPException as _HTTPException
+
+    if isinstance(exc, _HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": msg,
+            "hint": "服务端未预期错误，请把上方错误信息反馈，或查看服务端日志",
+            "detail": msg,
+        },
+    )
+
+
 @app.exception_handler(LinkError)
 async def handle_link_error(_: Request, exc: LinkError) -> JSONResponse:
     status = 415 if isinstance(exc, UnsupportedPlatformError) else 400
-    return JSONResponse(status_code=status, content={"error": exc.message, "hint": exc.hint})
+    content = {"error": exc.message, "hint": exc.hint}
+    # 诊断增强：把错误分类与脱敏后的上下文透传给前端，便于精准提示与线上排查
+    category = getattr(exc, "category", None) or "unknown"
+    content["category"] = category
+    ctx = getattr(exc, "context", None) or {}
+    if ctx:
+        content["diag"] = {
+            "host": ctx.get("host"),
+            "is_china": ctx.get("is_china"),
+            "is_hardened": ctx.get("is_hardened"),
+            "cookie_source": ctx.get("cookie_source"),
+            "proxy_used": ctx.get("proxy_used"),
+            "is_cloud": ctx.get("is_cloud"),
+        }
+    return JSONResponse(status_code=status, content=content)
 
 
 @app.exception_handler(downloader.ResolveRestricted)
 async def handle_restricted(_: Request, exc: "downloader.ResolveRestricted") -> JSONResponse:
     # 受限内容属于"确认无解"，用 422 与网络/解析异常区分开
-    return JSONResponse(status_code=422, content={"error": exc.message, "hint": exc.hint})
+    content = {"error": exc.message, "hint": exc.hint}
+    content["category"] = getattr(exc, "category", None) or "restricted"
+    return JSONResponse(status_code=422, content=content)
 
 
 
@@ -2786,6 +2851,89 @@ def _start_cookie_pool_watchdog() -> None:
     t.start()
 
 
+def _warm_cookie_pool() -> None:
+    """启动时若公共池为空，主动召唤 VPS 守护进程补推（非阻塞，秒级填满）。
+
+    覆盖「Railway 容器重建/重启导致持久卷被清空」的空窗：不再等 VPS 下次定时推送，
+    启动即触发一次立即补推（request_refill 内部带 60s 冷却，避免重复召唤）。
+    """
+    try:
+        from cookie_pool import get_cookie, request_refill, all_domains
+        for d in all_domains():
+            if get_cookie(d) is None:
+                request_refill(d)
+    except Exception:
+        logger.exception("公共池启动预热异常")
+
+
+@app.get("/api/cookie/dump")
+def cookie_dump(domain: str = "", token: str = "") -> dict:
+    """[临时 debug] 池文件内容与解密结果，便于线上排查池 miss 问题。
+
+    安全收敛：默认禁用，需配置 VDL_DEBUG_TOKEN 且传入匹配 token 才返回详情；
+    否则返回 403 且不暴露任何 Cookie 内容。配置为空时该端点等同于关闭。
+    """
+    debug_token = os.environ.get("VDL_DEBUG_TOKEN", "")
+    if not debug_token or token != debug_token:
+        raise HTTPException(status_code=403, detail="调试端点已关闭")
+    from cookie_pool import _pool_file, _decrypt_item
+    out = {"domain": domain, "files": []}
+    try:
+        from cookie_pool import _candidates, get_cookie
+        out["candidates"] = _candidates(domain)
+        try:
+            gc = get_cookie(domain)
+            out["get_cookie"] = {
+                "hit": bool(gc),
+                "len": len(gc) if gc else 0,
+                "preview": (gc[:60] + "...") if gc else "",
+                "full": gc if gc else "",
+                "names": [p.split("=")[0] for p in (gc or "").split("; ")],
+            }
+        except Exception as e:
+            out["get_cookie_exc"] = f"{type(e).__name__}: {str(e)[:200]}"
+        if not domain:
+            return out
+        f = _pool_file(domain)
+        out["file"] = str(f)
+        out["exists"] = f.exists()
+        if not f.exists():
+            return out
+        import json as _json, time as _time
+        data = _json.loads(f.read_text())
+        cookies = data.get("cookies") or []
+        out["count"] = len(cookies)
+        out["items"] = []
+        for c in cookies:
+            ts = c.get("ts", 0)
+            age = int(_time.time() - ts) if ts else None
+            has_header = bool(c.get("header"))
+            has_enc = bool(c.get("header_enc"))
+            decrypted = _decrypt_item(c)
+            out["items"].append({
+                "ts": ts,
+                "age_sec": age,
+                "has_header": has_header,
+                "has_header_enc": has_enc,
+                "decrypted_len": len(decrypted) if decrypted else 0,
+                "decrypted_preview": (decrypted[:60] + "...") if decrypted else "",
+            })
+    except Exception as e:
+        out["error"] = str(e)[:200]
+    # 附上 cookie 注入诊断日志（_cookie_diag 写入 /tmp/vdl_cookie_diag.txt）
+    try:
+        import os as _os
+        _tmp = __import__("tempfile").gettempdir()
+        for name in ("vdl_cookie_diag.txt", "vdl_403_diag.txt"):
+            p = _os.path.join(_tmp, name)
+            if _os.path.exists(p):
+                lines = open(p, encoding="utf-8", errors="ignore").read().splitlines()
+                out[name.replace(".txt", "_tail")] = lines[-40:]
+    except Exception as e:
+        out["cookie_diag_err"] = str(e)[:100]
+    return out
+
+
 @app.post("/api/cookie/cache/clear")
 def cookie_cache_clear() -> dict:
     """清除本机 Cookie 缓存（仅删 ~/.videodownloader/cookies，不影响浏览器本身）。"""
@@ -2815,6 +2963,40 @@ def cookie_sync(payload: dict, request: Request) -> dict:
     if ok is False:
         raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
     added = add_cookie(domain, cookie, source="sync")
+    return {"ok": True, "added": added, "verified": (ok is True)}
+
+
+@app.post("/api/cookie/contribute")
+def cookie_contribute(payload: dict, request: Request) -> dict:
+    """访客自愿把本次登录态贡献到公共池（需前端显式勾选 + 后端验真）。
+
+    与 /api/cookie/sync（运维令牌写入）不同，本端点面向网页访客、无需令牌，
+    但门槛更严格：① 仅白名单域名；② 单 IP 30s 一次限频；③ 必须 verify_cookie
+    验真（明确无效才拒，网络不可达放行）；④ B站 裸 SESSDATA 自动补前缀。
+    隐私保护：只有访客主动勾选才会入池，且其登录态将共享给所有访客。
+    """
+    from urllib.parse import urlparse
+    url = (payload or {}).get("url", "")
+    cookie = (payload or {}).get("cookie", "")
+    host = urlparse(url).netloc if url else ""
+    from cookie_pool import add_cookie, is_allowed, verify_cookie, _norm_domain, _strip_sub
+    domain = _strip_sub(_norm_domain(host))
+    if not domain or not is_allowed(domain):
+        raise HTTPException(status_code=400, detail="该平台暂不支持公共池贡献")
+    cookie = (cookie or "").strip()
+    if not cookie:
+        raise HTTPException(status_code=400, detail="缺少 cookie")
+    # B站 裸 SESSDATA 归一化，保证从池复用时不 403（与 _base_options 一致）
+    if domain == "bilibili.com" and "=" not in cookie:
+        cookie = f"SESSDATA={cookie}"
+    ip = (request.client.host if request.client else "") or ""
+    if not _sync_rate_ok(ip):
+        raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+    ok = verify_cookie(domain, cookie)
+    if ok is False:
+        raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
+    added = add_cookie(domain, cookie, source="contrib")
+    logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s", domain, ip, added)
     return {"ok": True, "added": added, "verified": (ok is True)}
 
 

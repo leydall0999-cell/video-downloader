@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -32,14 +34,32 @@ except Exception:  # pragma: no cover
     Fernet = None
 
 
-_POOL_DIR = Path.home() / ".videodownloader" / "cookie_pool"
+def _resolve_pool_dir() -> Path:
+    """解析公共池存储目录。优先级：
+    1. VDL_COOKIE_POOL_DIR —— 显式指定（已是完整目录，直接采用）
+    2. RAILWAY_VOLUME_MOUNT_PATH —— Railway 持久卷自动注入，拼 /cookie_pool
+    3. 兜底 —— ~/.videodownloader/cookie_pool（本地 / 无卷环境，向后兼容）
+    这样挂了 Railway 持久卷后，池文件自动落到卷上、跨容器重启存活。
+    """
+    custom = os.environ.get("VDL_COOKIE_POOL_DIR")
+    if custom:
+        return Path(custom)
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+    if mount:
+        return Path(mount) / "cookie_pool"
+    return Path.home() / ".videodownloader" / "cookie_pool"
+
+
+_POOL_DIR = _resolve_pool_dir()
 _TTL = 30 * 24 * 3600  # 30 天，超时视为失效
 _LOCK = threading.Lock()
 
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
 # 这样「哪些站允许上报登录态」不再写死 chrqj，加站只需改清单/配 env。
-_BASE_DOMAINS = {"chrqj.com"}
+_BASE_DOMAINS = {"chrqj.com", "bilibili.com"}
+
+logger = logging.getLogger(__name__)
 
 # chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
 _CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"
@@ -157,34 +177,48 @@ def _decrypt_item(c: dict) -> str:
     return ""
 
 
-def _save(domain: str, cookies: list) -> None:
-    _POOL_DIR.mkdir(parents=True, exist_ok=True)
+def _save(domain: str, cookies: list) -> bool:
     try:
-        os.chmod(_POOL_DIR, 0o700)
-    except Exception:
-        pass
-    cipher = _cipher()
-    payload = []
-    for c in cookies:
-        item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
-        header = c.get("header") or ""
-        if cipher and header:
-            item["header_enc"] = cipher.encrypt(header.encode()).decode()
-        else:
-            item["header"] = header
-        payload.append(item)
-    f = _pool_file(domain)
-    f.write_text(json.dumps({"cookies": payload}, ensure_ascii=False))
-    try:
-        os.chmod(f, 0o600)
-    except Exception:
-        pass
+        _POOL_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(_POOL_DIR, 0o700)
+        except Exception:
+            pass
+        cipher = _cipher()
+        payload = []
+        for c in cookies:
+            item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
+            header = c.get("header") or ""
+            if cipher and header:
+                item["header_enc"] = cipher.encrypt(header.encode()).decode()
+            else:
+                item["header"] = header
+            payload.append(item)
+        f = _pool_file(domain)
+        text = json.dumps({"cookies": payload}, ensure_ascii=False)
+        # 原子写：先写同目录临时文件再 os.replace，避免跨进程并发（VPS 推送 / Railway prune / 读取）
+        # 读到「写一半」的撕裂文件（之前诡异 65 字节空条目的根因之一）。
+        tmp = f.with_suffix(f.suffix + ".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, f)
+        try:
+            os.chmod(f, 0o600)
+        except Exception:
+            pass
+        logger.info("[cookie_pool] _save ok domain=%s file=%s bytes=%s", domain, f, len(text))
+        return True
+    except Exception as e:
+        logger.error("[cookie_pool] _save failed domain=%s dir=%s err=%s", domain, _POOL_DIR, e)
+        return False
 
 
 def get_cookie(domain: str) -> str | None:
     """返回该域最新有效的明文 Cookie（最近上报优先）；无则返回 None。"""
-    for d in _candidates(domain):
+    candidates = _candidates(domain)
+    logger.info("[cookie_pool] get domain=%s candidates=%s", domain, candidates)
+    for d in candidates:
         f = _pool_file(d)
+        logger.info("[cookie_pool] get file=%s exists=%s", f, f.exists())
         if not f.exists():
             continue
         try:
@@ -194,22 +228,28 @@ def get_cookie(domain: str) -> str | None:
                     continue
                 header = _decrypt_item(c)
                 if header:
+                    logger.info("[cookie_pool] get hit domain=%s candidate=%s len=%s", domain, d, len(header))
                     return header
-        except Exception:
+        except Exception as e:
+            logger.warning("[cookie_pool] get read error domain=%s file=%s: %s", domain, f, e)
             continue
+    logger.info("[cookie_pool] get miss domain=%s", domain)
     return None
 
 
 def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
     """入池。返回 True=新增 / 更新，False=重复或非法域。"""
     domain = _norm_domain(domain)
-    if not is_allowed(domain):
+    allowed = is_allowed(domain)
+    logger.info("[cookie_pool] add domain=%s allowed=%s source=%s len=%s", domain, allowed, source, len(header or ""))
+    if not allowed:
         return False
     header = (header or "").strip()
     if not header:
         return False
     with _LOCK:
         f = _pool_file(domain)
+        logger.info("[cookie_pool] add file=%s exists=%s", f, f.exists())
         cookies = []
         if f.exists():
             try:
@@ -220,11 +260,11 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
             if _decrypt_item(c) == header:
                 c["ts"] = int(time.time())
                 c["source"] = source
-                _save(domain, cookies)
-                return True
+                return _save(domain, cookies)
         cookies.append({"header": header, "ts": int(time.time()), "source": source})
-        _save(domain, cookies)
-        return True
+        ok = _save(domain, cookies)
+        logger.info("[cookie_pool] add saved domain=%s total=%s ok=%s", domain, len(cookies), ok)
+        return ok
 
 
 def verify_chrqj(header: str) -> bool | None:
@@ -353,3 +393,59 @@ def verify_and_prune(domain: str) -> int:
 
 def all_domains() -> list:
     return sorted(_root_domains())
+
+
+# ----------------------------------------------------------------------------
+# 按需补推（Railway -> VPS 守护进程）
+# 场景：Railway 容器重建/重启后持久卷被清空，或下载时公共池 miss。
+# 主动召唤 VPS 守护进程的 /v1/push 立即推送一次 Cookie，使池在 ~30s 内补满，
+# 不再依赖人工补推。只在配置了 VDL_COOKIE_REFILL_URL + VDL_COOKIE_REFILL_TOKEN 时生效。
+# ----------------------------------------------------------------------------
+_REFILL_COOLDOWN: dict[str, float] = {}
+
+
+def request_refill(domain: str, blocking: bool = False) -> bool:
+    """请求 VPS 守护进程立即补推一次指定域 Cookie。
+
+    - 带每域冷却（默认 60s），避免重启后请求洪峰反复触发。
+    - blocking=False 时后台线程执行（不阻塞当前请求）；True 时同步等待结果。
+    返回是否成功发起/完成。
+    """
+    domain = _norm_domain(domain)
+    if not is_allowed(domain):
+        return False
+    base = os.environ.get("VDL_COOKIE_REFILL_URL")
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
+    if not base or not token:
+        logger.info("[cookie_pool] request_refill skipped (未配置 REFILL_URL/TOKEN) domain=%s", domain)
+        return False
+    now = time.time()
+    last = _REFILL_COOLDOWN.get(domain, 0.0)
+    if now - last < 60:
+        return False
+    _REFILL_COOLDOWN[domain] = now
+
+    def _do():
+        try:
+            import urllib.request
+
+            url = (base.rstrip("/") + "/v1/push?token="
+                   + urllib.parse.quote(token, safe=""))
+            req = urllib.request.Request(
+                url, method="POST",
+                headers={"User-Agent": "vdl-cookie-refill"},
+            )
+            with urllib.request.urlopen(req, timeout=90) as r:
+                data = r.read().decode() or "{}"
+            ok = bool(json.loads(data).get("ok"))
+            logger.info("[cookie_pool] request_refill done domain=%s ok=%s", domain, ok)
+        except Exception as e:
+            logger.warning("[cookie_pool] request_refill failed domain=%s: %s", domain, e)
+
+    if blocking:
+        _do()
+        return True
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    return True
+

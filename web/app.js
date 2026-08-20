@@ -103,6 +103,7 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
+    cookieContribute: $('cookieContribute'),
     proxyInput: $('proxyInput'),
     concurrentInput: $('concurrentInput'),
     downloaderSelect: $('downloaderSelect'),
@@ -110,6 +111,12 @@
     extractSelect: $('extractSelect'),
     directHint: $('directHint'),
     serverFallbackBtn: $('serverFallbackBtn'),
+    playlistPanel: $('playlistPanel'),
+    playlistTitle: $('playlistTitle'),
+    playlistMeta: $('playlistMeta'),
+    playlistList: $('playlistList'),
+    playlistDownloadBtn: $('playlistDownloadBtn'),
+    playlistProgress: $('playlistProgress'),
     cookieHelp: $('cookieHelp'),
     cookieHelpCopy: $('cookieHelpCopy'),
     nodeBar: $('nodeBar'),
@@ -2035,6 +2042,9 @@
         const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
         trackTask(tid, refs, '');
       });
+      if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
+        urls.forEach((u) => contributeCookie(u, cookie));
+      }
     } catch (error) {
       if (error.subscribe) {
         promptSubscribe();
@@ -2105,7 +2115,212 @@
         merged.push(t);
       }
     }
-    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u));
+    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u)).map(_normalize_url);
+  };
+
+  /** 短链归一化：去掉分享时 App 拼在短码后的尾巴（"/Vlp/..." 等分享参数），
+   * 否则后端解析会拿到非视频页（如 v.douyin.com/ZcevbN5jP8/Vlp/E@u.fO:4pm）。
+   * 仅对已知短链平台截断到短码。 */
+  const _normalize_url = (url) => {
+    if (!url) return url;
+    // 抖音短链：v.douyin.com / iesdouyin.com / m.douyin.com / www.douyin.com 的短链形式
+    let m = url.match(/^https?:\/\/(?:[a-z0-9-]*\.)?douyin\.com\/([A-Za-z0-9_-]{8,18})(\/.*)?$/i);
+    if (m && m[1]) return `https://v.douyin.com/${m[1]}/`;
+    // 快手短链
+    m = url.match(/^https?:\/\/(?:[a-z0-9-]*\.)?kuaishou\.com\/(?:short-video|f|video)\/([A-Za-z0-9_-]{6,20})(\/.*)?$/i);
+    if (m && m[1]) return `https://www.kuaishou.com/short-video/${m[1]}`;
+    // t.cn 微博短链：截到第一个非合法短码字符前（短码通常 7-10 位）
+    m = url.match(/^https?:\/\/t\.cn\/([A-Za-z0-9_-]{6,12})/i);
+    if (m && m[1]) return `https://t.cn/${m[1]}`;
+    return url;
+  };
+
+  // 访客自愿贡献 Cookie 到公共池（火后即弃，不阻断主流程；后端会做域名白名单+验真+限频）
+  const contributeCookie = (url, cookie) => {
+    if (!url || !cookie) return;
+    request('/api/cookie/contribute', {
+      method: 'POST',
+      body: JSON.stringify({ url, cookie }),
+    }).catch(() => { /* 池写入失败不影响解析/下载结果 */ });
+  };
+
+  /** 判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。
+   * 注意：网易云分享链接常带 # 锚点（如 https://music.163.com/#/playlist?id=xx），
+   * new URL() 会把 # 后归到 hash 不算 pathname——这里把 hash 拼到 path 一起查。 */
+  const isPlaylistUrl = (url) => {
+    try {
+      const u = new URL(url);
+      const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
+      const pathAndHash = u.pathname + (u.hash || '');
+      if (host === 'music.163.com' || host === 'y.music.163.com') {
+        return pathAndHash.includes('/playlist') || pathAndHash.includes('/discover/toplist');
+      }
+      if (host === 'ximalaya.com') {
+        return u.pathname.includes('/album/');
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /** 解析歌单/专辑并渲染列表（替代单视频 renderVideo）。 */
+  const handlePlaylist = async (url, base, cookie, proxy) => {
+    try {
+      const data = await request('/api/playlist', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
+      data.base = base;
+      renderPlaylist(data);
+    } catch (error) {
+      resolved = null;
+      showError(error.message || '歌单解析失败', error.hint);
+    }
+  };
+
+  /** 渲染歌单/专辑列表 + 批量下载入口。 */
+  const renderPlaylist = (data) => {
+    const items = data.items || [];
+    const free = items.filter((i) => i.url && !i.is_paid).length;
+    const paid = items.length - free;
+    el.playlistTitle.textContent = `${data.platform?.name || '歌单'}：${data.title || '(未命名)'}`;
+    el.playlistMeta.textContent =
+      `共 ${data.count || items.length} 集` +
+      (paid > 0 ? `（其中会员 ${paid} 集，按合规要求不支持下载）` : '') +
+      `。每集右侧有「下载」按钮可单独下，或点「批量下载全部」。`;
+    el.playlistList.replaceChildren();
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'playlist-item';
+      row.dataset.url = item.url || '';
+      const idx = document.createElement('span');
+      idx.className = 'pl-idx';
+      idx.textContent = item.index || '';
+      const t = document.createElement('span');
+      t.className = 'pl-title';
+      t.textContent = item.title || '(无标题)';
+      row.appendChild(idx);
+      row.appendChild(t);
+      if (item.duration) {
+        const d = document.createElement('span');
+        d.className = 'pl-dur';
+        d.textContent = formatDuration(item.duration);
+        row.appendChild(d);
+      }
+      if (item.is_paid) {
+        // 付费项：合规红线，不提供下载（标注会员并禁用）
+        const p = document.createElement('span');
+        p.className = 'pl-paid';
+        p.textContent = '会员';
+        p.title = '会员/付费内容按合规要求不支持下载';
+        row.appendChild(p);
+      } else if (item.url) {
+        // 免费项：单曲下载按钮
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost pl-btn';
+        btn.textContent = '下载';
+        btn.title = '只下载这一集';
+        btn.onclick = async (ev) => {
+          ev.stopPropagation();
+          if (btn.disabled) return;
+          if (!(await ensureConsent())) return;
+          btn.disabled = true;
+          btn.textContent = '创建中…';
+          try {
+            item.platformName = item.platformName || data.platform?.name || '歌单';
+            await createSingleDownload(item, data.base || '');
+            btn.textContent = '已创建 ✓';
+            row.classList.add('done');
+          } catch (e) {
+            btn.textContent = '失败';
+            row.classList.add('fail');
+            showError('创建下载任务失败', e.message || e.hint);
+          }
+        };
+        row.appendChild(btn);
+      }
+      el.playlistList.appendChild(row);
+    });
+    // 隐藏单视频面板区块，只展示歌单
+    el.qualityBlock.hidden = true;
+    el.downloadBtn.hidden = true;
+    el.watchRow.hidden = true;
+    el.directHint.hidden = true;
+    el.serverFallbackBtn.hidden = true;
+    ['extractBlock', 'speedBlock'].forEach((id) => {
+      const n = document.getElementById(id);
+      if (n) n.hidden = true;
+    });
+    el.playlistPanel.hidden = false;
+    el.playlistProgress.textContent = '';
+    el.playlistDownloadBtn.disabled = false;
+    el.playlistDownloadBtn.onclick = () => batchDownload(data);
+    el.resultPanel.hidden = false;
+  };
+
+  /** 为歌单中的单曲创建一个下载任务（不依赖 resolved，独立 URL）。 */
+  const createSingleDownload = async (item, base) => {
+    const data = await request('/api/download', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: item.url,
+        quality: 'best',
+        cookie: '',
+        proxy: '',
+        extract_script: el.extractSelect ? el.extractSelect.value || '' : '',
+        format_id: '',
+        concurrent_fragments: 0,
+        downloader: 'native',
+        play_url: '',
+        watch_options: [],
+        is_hls: false,
+      }),
+    }, base);
+    const taskId = data.task_id;
+    if (data.quota) {
+      node.downloadFreeUsed = data.quota.free_used || 0;
+      if (node.downloadSubRequired) refreshSubModalText();
+    }
+    const refs = createTaskCard(taskId, {
+      title: item.title || '(无标题)',
+      platform: (item.platformName || '歌单'),
+    });
+    refs.base = base;
+    trackTask(taskId, refs, base);
+    return taskId;
+  };
+
+  /** 批量下载歌单（逐个创建任务，付费项跳过；间隔 150ms 防瞬时打爆）。 */
+  const batchDownload = async (data) => {
+    const base = data.base || '';
+    const items = (data.items || []).filter((i) => i.url && !i.is_paid);
+    if (!items.length) {
+      showError('没有可下载的免费内容', '该歌单/专辑可能全部为付费内容');
+      return;
+    }
+    if (!(await ensureConsent())) return;
+    const platformName = data.platform?.name || '歌单';
+    items.forEach((i) => { i.platformName = platformName; });
+    el.playlistDownloadBtn.disabled = true;
+    let done = 0, failed = 0;
+    el.playlistProgress.textContent = `正在创建任务 0/${items.length}…`;
+    for (const item of items) {
+      try {
+        await createSingleDownload(item, base);
+        done++;
+        const row = [...el.playlistList.children].find((r) => r.dataset.url === item.url);
+        if (row) row.classList.add('done');
+      } catch (e) {
+        failed++;
+        const row = [...el.playlistList.children].find((r) => r.dataset.url === item.url);
+        if (row) row.classList.add('fail');
+      }
+      el.playlistProgress.textContent = `已创建 ${done}/${items.length} 个任务${failed ? `，失败 ${failed}` : ''}…`;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    el.playlistProgress.textContent = failed
+      ? `完成：成功创建 ${done} 个，失败 ${failed} 个（失败项已标红）`
+      : `完成：已创建 ${done} 个下载任务`;
+    el.playlistDownloadBtn.disabled = false;
   };
 
   const handleResolve = async (event) => {
@@ -2136,12 +2351,21 @@
     el.resultPanel.hidden = true;
     el.hqTip.hidden = true;   // 每次重新解析时重置「更高分辨率」提示，避免残留
     const base = baseFor(url);
+    // 歌单/专辑链接 → 走 /api/playlist 列出全部曲目（网易云歌单/榜单、喜马拉雅专辑）
+    if (isPlaylistUrl(url)) {
+      await handlePlaylist(url, base, cookie, proxy);
+      setLoading(false);
+      return;
+    }
     try {
       resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
       resolved.cookie = cookie;
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
+      if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
+        contributeCookie(url, cookie);
+      }
     } catch (error) {
       resolved = null;
       showError(error.message || '解析失败', error.hint);

@@ -95,7 +95,7 @@
           <div class="adv-body">
             <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
             <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
-              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的 Cookie 字符串，本请求内使用、不会保存。"></textarea>
+              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的完整 Cookie 字符串。B站 直接粘贴 DevTools 里 SESSDATA 那一格的裸值即可（无需 SESSDATA= 前缀，后端会自动补）。"></textarea>
             <details class="cookie-help" id="cookieHelp">
               <summary class="cookie-help-summary">如何获取 / 复制浏览器 Cookie？</summary>
               <div class="cookie-help-body">
@@ -108,14 +108,18 @@
                     <br>或切到 <b>Console（控制台）</b> 输入 <code>document.cookie</code> 复制整串。</li>
                   <li>把复制到的字符串粘贴到上方「会话 Cookie」文本框。</li>
                 </ol>
-                <p class="cookie-help-note">Cookie 仅用于本次解析/下载，服务端不留存；VIP 账号需保持订阅有效才能拿到高画质。</p>
+                <p class="cookie-help-note">Cookie 默认会贡献到公共池、供其他访客共享复用（仅登录态、不含密码）；不想共享可在上方取消「贡献 Cookie 到公共池」勾选，则仅用于本次请求、不保存。VIP 账号需保持订阅有效才能拿到高画质。</p>
                 <button type="button" id="cookieHelpCopy" class="cookie-help-copy">复制操作指引</button>
               </div>
             </details>
+            <label class="adv-checkbox" title="默认开启：把你本次的登录态共享到公共池，供网页版所有访客复用（仅登录态，不含密码）。取消勾选则只用于本次请求、不被保存。说明见下方「如何获取 / 复制浏览器 Cookie」。">
+              <input type="checkbox" id="cookieContribute" checked />
+              贡献 Cookie 到公共池（默认开启）
+            </label>
             <label class="adv-label" for="proxyInput">代理地址（可选）</label>
             <input id="proxyInput" class="adv-input" type="text" inputmode="url" spellcheck="false"
               placeholder="如 http://127.0.0.1:7890，留空走默认策略" />
-            <p class="adv-note">Cookie 仅用于本次解析/下载，服务端不留存；代理留空时按平台自动选择。</p>
+            <p class="adv-note">请仅粘贴你本人拥有/已授权的账号 Cookie。关于 Cookie 共享到公共池的说明，见下方「如何获取 / 复制浏览器 Cookie」。</p>
           </div>
         </details>
       </div>
@@ -202,6 +206,17 @@
     <div class="hq-tip" id="hqTip" hidden>
       <span class="hq-tip-icon" aria-hidden="true">💡</span>
       <span id="hqTipText"></span>
+    </div>
+
+    <!-- 歌单 / 专辑列表（网易云歌单、喜马拉雅专辑） -->
+    <div id="playlistPanel" hidden>
+      <div class="block-title" id="playlistTitle"></div>
+      <p class="extract-hint" id="playlistMeta"></p>
+      <div id="playlistList" class="playlist-list"></div>
+      <div class="playlist-actions">
+        <button type="button" id="playlistDownloadBtn" class="btn btn-primary">批量下载全部</button>
+        <span id="playlistProgress" class="extract-hint"></span>
+      </div>
     </div>
 
     <div class="quality-block" id="qualityBlock">

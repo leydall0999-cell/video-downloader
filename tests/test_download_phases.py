@@ -47,7 +47,7 @@ def test_run_once_splits_extract_and_download():
     fake_ydl.__enter__ = MagicMock(return_value=fake_ydl)
     fake_ydl.__exit__ = MagicMock(return_value=None)
 
-    with patch.object(dl, "YoutubeDL", return_value=fake_ydl):
+    with patch.object(dl, "_YoutubeDL", return_value=fake_ydl):
         dl._run_once(task, store, "1080")
 
     # 调用了 extract_info 且 download=False
@@ -82,7 +82,7 @@ def test_run_once_marks_extract_error_on_failure():
     fake_ydl.__enter__ = MagicMock(return_value=fake_ydl)
     fake_ydl.__exit__ = MagicMock(return_value=None)
 
-    with patch.object(dl, "YoutubeDL", return_value=fake_ydl):
+    with patch.object(dl, "_YoutubeDL", return_value=fake_ydl):
         dl._run_once(task, store, "best")
 
     fake_ydl.extract_info.assert_called_once_with(task.url, download=False)

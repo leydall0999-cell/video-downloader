@@ -45,7 +45,7 @@ def _cookie_diag(key: str, value: str = "") -> None:
             f.write(f"[{ts}] {key}={value}\n")
     except Exception:
         pass
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qsl, urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +133,666 @@ def _host_of(url: str) -> str:
         return host.removeprefix("www.").removeprefix("m.")
     except ValueError:
         return ""
+
+
+# B站 URL 归一化：统一转为 www.bilibili.com/video/BVxxx 长链。
+#
+# 历史策略曾把长链转 b23.tv 短链，因为无 Cookie 时长链被 B站 412 风控；但网页端
+# (Railway) 必须使用登录态 Cookie，而 yt-dlp 的 BiliBili 提取器只识别 bilibili.com
+# 长链，对 b23.tv 随机短码会退化为 [generic] 提取器，无法注入 Cookie/Referer，
+# 导致代理 IP 下仍 412。因此新策略：所有 B站 链接统一归一化为 bilibili.com 长链，
+# 由 BiliBili 提取器处理；对 b23.tv 短码先用 HEAD 请求展开真实长链。
+_BILIBILI_LONG_URL_RE = re.compile(r"https?://(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]+)")
+_BILIBILI_SHORT_BV_RE = re.compile(r"https?://(?:www\.|m\.)?b23\.tv/(BV[0-9A-Za-z]+)")
+# 根路径 BV（无 /video/ 前缀，B站 在某些分享场景下会给出此形态）：
+# yt-dlp 原生正则只认 /video/ 前缀，此形态会退化成 generic 提取器导致 403；
+# 必须归一化为标准 /video/BVxxx 长链，API 兜底正则也依赖 /video/ 形态。
+_BILIBILI_ROOT_BV_RE = re.compile(r"https?://(?:www\.)?bilibili\.com/(BV[0-9A-Za-z]+)")
+
+
+def _expand_b23tv_url(url: str, proxy: str = "") -> str:
+    """把 b23.tv 随机短码短链展开为真实 bilibili.com 长链。
+
+    yt-dlp 对 b23.tv/xxxxx 随机短码会使用 [generic] 提取器，无法按 B站 逻辑注入
+    Cookie/Referer/UA；在代理 IP 风控较严时会被 412 拦截。b23.tv 会返回 302
+    Location，指向真实 www.bilibili.com/video/BVxxx 长链，后续即可交给
+    BiliBili 提取器处理。
+
+    实现策略：
+    1) 优先 HEAD 取 Location（不下载 body，最省带宽）；
+    2) HEAD 失败/无有效 Location 时回退 GET + allow_redirects=True，取最终 URL；
+    3) 兼容相对 Location；
+    4) 全链路记录日志，便于线上排查。
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("b23.tv", "www.b23.tv", "m.b23.tv"):
+        return url
+    # 已经是 /BVxxx 的短链可以直接推导成长链，不必发请求
+    m = _BILIBILI_SHORT_BV_RE.match(url)
+    if m:
+        bvid = m.group(1)
+        params: dict[str, str] = {}
+        if parsed.query:
+            for k, v in parse_qsl(parsed.query):
+                if k in ("p", "t"):
+                    params[k] = v
+        query = urlencode(params)
+        return f"https://www.bilibili.com/video/{bvid}" + (f"?{query}" if query else "")
+
+    try:
+        import requests
+    except Exception as e:
+        logger.warning("[b23.tv expand] requests not available: %s", e)
+        return url
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://b23.tv/",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    timeout = int(os.environ.get("VDL_B23TV_EXPAND_TIMEOUT", "15"))
+
+    def _is_bili_location(location: str) -> bool:
+        return bool(location) and "bilibili.com" in location
+
+    def _abs_location(resp) -> str:
+        loc = resp.headers.get("Location") or ""
+        if loc and not loc.startswith(("http://", "https://")):
+            # 相对 Location：按 RFC 3986 拼成绝对 URL
+            from urllib.parse import urljoin
+            loc = urljoin(resp.url, loc)
+        return loc
+
+    # 1) 先尝试 HEAD（轻量）
+    try:
+        resp = requests.head(
+            url,
+            headers=headers,
+            proxies=proxies,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        expanded = _abs_location(resp)
+        if resp.status_code in (301, 302, 307, 308) and _is_bili_location(expanded):
+            logger.info("[b23.tv expand] HEAD %s -> %s", url, expanded)
+            return expanded
+        logger.info(
+            "[b23.tv expand] HEAD %s status=%s location=%s",
+            url,
+            resp.status_code,
+            expanded[:200],
+        )
+    except Exception as e:
+        logger.info("[b23.tv expand] HEAD %s failed: %s", url, str(e)[:200])
+
+    # 2) 回退 GET + 自动跟随重定向（某些环境 HEAD 被 CDN 丢弃/不返回 Location）
+    try:
+        resp = requests.get(
+            url,
+            headers=headers,
+            proxies=proxies,
+            timeout=timeout,
+            allow_redirects=True,
+            stream=True,
+        )
+        final_url = resp.url
+        # b23.tv 随机短码有时会返回 200 HTML 页面（前端 JS 跳转），
+        # 此时 resp.url 仍是 b23.tv 自身，需从 body 解析真实 bilibili.com 链接兜底。
+        if not _is_bili_location(final_url):
+            try:
+                body = resp.text
+                m = re.search(r"https?://(?:www\.|m\.)?bilibili\.com/[^\"'\\s<>]+", body)
+                if m:
+                    cand = m.group(0)
+                    if _is_bili_location(cand):
+                        logger.info("[b23.tv expand] body-parse %s -> %s", url, cand)
+                        resp.close()
+                        return cand
+            except Exception as be:
+                logger.info("[b23.tv expand] body-parse %s failed: %s", url, str(be)[:120])
+        resp.close()
+        if _is_bili_location(final_url):
+            logger.info("[b23.tv expand] GET %s -> %s", url, final_url)
+            return final_url
+        logger.info(
+            "[b23.tv expand] GET %s final=%s history=%s",
+            url,
+            final_url,
+            [r.status_code for r in resp.history],
+        )
+    except Exception as e:
+        logger.info("[b23.tv expand] GET %s failed: %s", url, str(e)[:200])
+
+    return url
+
+
+def _normalize_bilibili_url(url: str) -> str:
+    """把 B站 长链/b23.tv BV 短链统一归一化为 www.bilibili.com/video/BVxxx 长链。
+
+    保留分P（p）和时间戳（t）参数；去掉 vd_source/spm_id_from 等追踪参数。
+    非 B站 链接原样返回。
+    """
+    # 先尝试长链（/video/BVxxx）
+    m = _BILIBILI_LONG_URL_RE.match(url)
+    if not m:
+        # 再尝试 b23.tv/BVxxx 短链
+        m = _BILIBILI_SHORT_BV_RE.match(url)
+    if not m:
+        # 根路径 BV（无 /video/ 前缀，B站 部分分享场景给出此形态）
+        m = _BILIBILI_ROOT_BV_RE.match(url)
+    if not m:
+        return url
+    bvid = m.group(1)
+    parsed = urlparse(url)
+    params: dict[str, str] = {}
+    if parsed.query:
+        for k, v in parse_qsl(parsed.query):
+            if k in ("p", "t"):
+                params[k] = v
+    query = urlencode(params)
+    return f"https://www.bilibili.com/video/{bvid}" + (f"?{query}" if query else "")
+
+
+# --------------------------------------------------------------------------- #
+# 通用链接归一化：平台无关净化 + B站 归一为 bilibili.com 长链
+# --------------------------------------------------------------------------- #
+# 通用追踪/推广参数（地址栏常带，对解析无益；部分平台会据此触发更严的防盗链/风控）
+_URL_TRACKING_PARAMS = frozenset({
+    "vd_source", "spm_id_from", "from", "from_source",     "share_source",
+    "share_medium", "share_from", "share_id", "shareid", "share_channel", "timestamp",
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "is_search", "scene", "sid", "campaign", "ame_from", "monitor",
+    "xhsshare", "appuid", "wxfcache", "m_source",
+})
+
+
+def _strip_tracking_params(url: str) -> str:
+    """通用：剥掉 vd_source/spm_id_from/from/share_* 等追踪参数，其余保留。"""
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    kept: list[tuple[str, str]] = []
+    for k, v in parse_qsl(parsed.query, keep_blank_values=True):
+        if k.lower() in _URL_TRACKING_PARAMS:
+            continue
+        kept.append((k, v))
+    if not kept:
+        return parsed._replace(query="").geturl()
+    return parsed._replace(query=urlencode(kept)).geturl()
+
+
+def _normalize_share_url(url: str, proxy: str = "") -> str:
+    """链接归一化入口（平台无关）。
+
+    1. B站：所有链接统一归一化为 www.bilibili.com/video/BVxxx 长链。
+       b23.tv 随机短码会先用 HEAD 请求 302 展开，确保 yt-dlp 使用 BiliBili
+       提取器（能正确注入 Cookie/Referer/UA）。桌面端 IP 风控较松时短链也
+       能走 generic 通过；网页端(Railway 代理 IP)必须走 bilibili 提取器。
+    2. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
+       不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
+       无法从长链静态推导，强行构造会破坏解析（需调分享 API，不在本范围）。
+    """
+    # B站 特例优先：先把短链展开成长链，再统一规范化为 bilibili.com 长链
+    if "bilibili.com" in url or "b23.tv" in url:
+        expanded = _expand_b23tv_url(url, proxy=proxy)
+        normalized = _strip_tracking_params(_normalize_bilibili_url(expanded))
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
+    # 抖音：分享短链 v.douyin.com 展开后常为 iesdouyin.com/xg/video/ID，
+    # 该域名 Playwright 解析拿不到视频流；归一化为 douyin.com/video/ID 即可正常解析。
+    m = re.search(r"iesdouyin\.com/xg/video/(\d{15,})", url)
+    if m:
+        normalized = f"https://www.douyin.com/video/{m.group(1)}"
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
+    # 西瓜视频（字节跳动同系，视频ID互通）：ixigua.com/<ID> 直接链接
+    # 归一化为 douyin.com/video/<ID>，复用抖音解析通道即可正常解析下载。
+    m = re.search(r"ixigua\.com/(?:video/|i)?(\d{15,})", url)
+    if m:
+        normalized = f"https://www.douyin.com/video/{m.group(1)}"
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
+    # 其余平台：仅做通用追踪参数净化，零风险
+    return _strip_tracking_params(url)
+
+
+def _to_int(v):
+    """安全转 int：B站 view API 的 duration/stat 字段常是字符串。"""
+    if v is None or v == "":
+        return None
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[str, Any] | None:
+    """B站 专用兜底解析器：当 yt-dlp 网络栈反复 IncompleteRead 时，直接用 requests 调 B站 API。
+
+    这是「绕过 yt-dlp 网络层」的最后手段。只处理最常见的 www.bilibili.com/video/BVxxx
+    单 P 视频，构造一个足够前端展示 + 后续下载的 info dict。若 API 返回需 WBI 签名或
+    其他复杂形态，返回 None 让外层继续抛原异常。
+    """
+    m = re.search(r"bilibili\.com/(?:video/)?(BV[0-9A-Za-z]+)", url)
+    if not m:
+        return None
+    bvid = m.group(1)
+    parsed = urlparse(url)
+    page = 1
+    try:
+        page = int(parse_qs(parsed.query).get("p", ["1"])[0])
+    except Exception:
+        pass
+
+    try:
+        import requests
+    except Exception as e:
+        logger.warning("[bilibili api fallback] requests not available: %s", e)
+        return None
+
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.bilibili.com/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Connection": "close",
+    }
+    if cookie:
+        headers["Cookie"] = _clean_header_value(cookie)
+
+    # 1) 取视频元数据
+    view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+    try:
+        r = requests.get(view_url, headers=headers, proxies=proxies, timeout=30)
+        r.raise_for_status()
+        view_data = r.json()
+        if view_data.get("code") != 0:
+            logger.warning("[bilibili api fallback] view API code=%s msg=%s", view_data.get("code"), view_data.get("message"))
+            return None
+        video_info = view_data["data"] or {}
+        pages = video_info.get("pages") or []
+        page_info = pages[page - 1] if 1 <= page <= len(pages) else (pages[0] if pages else {})
+        cid = page_info.get("cid")
+        if not cid:
+            logger.warning("[bilibili api fallback] no cid found")
+            return None
+    except Exception as e:
+        logger.warning("[bilibili api fallback] view request failed: %s", str(e)[:200])
+        return None
+
+    # 2) 取播放地址（优先 DASH）
+    play_url = (
+        f"https://api.bilibili.com/x/player/playurl"
+        f"?bvid={bvid}&cid={cid}&qn=127&fnver=0&fnval=4048&fourk=1"
+    )
+    try:
+        r = requests.get(play_url, headers=headers, proxies=proxies, timeout=30)
+        r.raise_for_status()
+        play_data = r.json()
+        if play_data.get("code") != 0:
+            logger.warning("[bilibili api fallback] playurl API code=%s msg=%s", play_data.get("code"), play_data.get("message"))
+            return None
+        play_info = play_data.get("data") or {}
+    except Exception as e:
+        logger.warning("[bilibili api fallback] playurl request failed: %s", str(e)[:200])
+        return None
+
+    # 3) 构造 formats
+    formats: list[dict[str, Any]] = []
+    fmt_names = {
+        q.get("quality"): q.get("new_description") or q.get("display_desc")
+        for q in play_info.get("support_formats") or []
+    }
+
+    def _mime_ext(mime: str) -> str:
+        return {"video/mp4": "m4s", "audio/mp4": "m4s"}.get(mime, "mp4")
+
+    dash = play_info.get("dash") or {}
+
+    # DASH 视频
+    for v in dash.get("video") or []:
+        url0 = v.get("baseUrl") or v.get("base_url") or v.get("url")
+        if not url0:
+            continue
+        fid_match = re.search(r"-([0-9]+)\.m4s\\?", url0)
+        fmt_id = str(v.get("id")) if not fid_match else fid_match.group(1)
+        formats.append({
+            "format_id": fmt_id,
+            "url": url0,
+            "ext": _mime_ext(v.get("mimeType") or v.get("mime_type") or ""),
+            "vcodec": (v.get("codecs") or "").split(".")[0] or "avc",
+            "acodec": "none",
+            "width": v.get("width"),
+            "height": v.get("height"),
+            "fps": _to_int(v.get("frameRate")) or _to_int(v.get("frame_rate")),
+            "tbr": (_to_int(v.get("bandwidth")) or 0) / 1000.0,
+            "filesize": _to_int(v.get("size")),
+            "quality": v.get("id"),
+            "format": fmt_names.get(v.get("id")),
+            "protocol": "https",
+            "http_headers": {"Referer": "https://www.bilibili.com/"},
+        })
+
+    # DASH 音频
+    for a in dash.get("audio") or []:
+        url0 = a.get("baseUrl") or a.get("base_url") or a.get("url")
+        if not url0:
+            continue
+        formats.append({
+            "format_id": f'a-{a.get("id", "audio")}',
+            "url": url0,
+            "ext": _mime_ext(a.get("mimeType") or a.get("mime_type") or ""),
+            "vcodec": "none",
+            "acodec": (a.get("codecs") or "").split(".")[0] or "aac",
+            "tbr": (_to_int(a.get("bandwidth")) or 0) / 1000.0,
+            "filesize": _to_int(a.get("size")),
+            "format": "音频",
+            "protocol": "https",
+            "http_headers": {"Referer": "https://www.bilibili.com/"},
+        })
+
+    # 兼容旧版 durl（FLV/MP4 直链）
+    for d in play_info.get("durl") or []:
+        url0 = d.get("url")
+        if not url0:
+            continue
+        formats.append({
+            "format_id": f'durl-{d.get("order", 0)}',
+            "url": url0,
+            "ext": "mp4",
+            "filesize": _to_int(d.get("size")),
+            "protocol": "https",
+            "http_headers": {"Referer": "https://www.bilibili.com/"},
+        })
+
+    if not formats:
+        logger.warning("[bilibili api fallback] no formats extracted from play_info")
+        return None
+
+    owner = video_info.get("owner") or {}
+    stat = video_info.get("stat") or {}
+    info = {
+        "id": f'{bvid}{f"_p{page}" if page > 1 else ""}',
+        "title": video_info.get("title", bvid),
+        "description": video_info.get("desc"),
+        "thumbnail": video_info.get("pic"),
+        "uploader": owner.get("name"),
+        "uploader_id": str(owner.get("mid") or ""),
+        "duration": _to_int(video_info.get("duration")),
+        "view_count": _to_int(stat.get("view")),
+        "like_count": _to_int(stat.get("like")),
+        "comment_count": _to_int(stat.get("reply")),
+        "timestamp": _to_int(video_info.get("pubdate")),
+        "webpage_url": url,
+        "extractor": "bilibili",
+        "extractor_key": "BiliBili",
+        "ext": "mp4",
+        "formats": formats,
+        "http_headers": {"Referer": "https://www.bilibili.com/"},
+    }
+    # 模拟"已选流"：yt-dlp process_info 直接吃 info（不经 process_ie_result），
+    # 无 requested_formats 会走单文件分支 → dl() 因无顶层 url 抛 No video formats。
+    # 手动挑 best 视频轨 + 音频轨构造 requested_formats（同抖音修复经验，
+    # 不设顶层 url 避免 HttpFD 合并分支丢音频；format 级已带 protocol=https）。
+    _vids = [f for f in formats if f.get("vcodec") and f["vcodec"] != "none"]
+    _auds = [f for f in formats if f.get("acodec") and f["acodec"] != "none"]
+    if _vids and _auds:
+        _vids.sort(key=lambda f: (f.get("height") or 0), reverse=True)
+        info["requested_formats"] = [_vids[0], _auds[0]]
+    logger.info("[bilibili api fallback] extracted %s formats for %s", len(formats), bvid)
+    return info
+
+
+def _rebuild_requested_formats(info: dict[str, Any], quality_key: str) -> None:
+    """按用户选择的清晰度重建 requested_formats（B站 API 兜底 info 固定选了 best）。
+
+    yt-dlp process_info 直接吃 info.requested_formats 下载，不会再用 format
+    selector 过滤。若不重建，用户选 480P/360P 也会下成兜底固定的 720P。
+    仅音频（audio/m4a）→ 单文件音频轨；视频 → <= 目标高度的最高 avc1 轨 + 音频轨。
+    """
+    fmts = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    vids = [f for f in fmts if f.get("vcodec") and f["vcodec"] != "none"]
+    auds = [f for f in fmts if f.get("acodec") and f["acodec"] != "none"]
+    if not vids:
+        return
+    if quality_key in (AUDIO_KEY, M4A_KEY):
+        if auds:
+            auds.sort(key=lambda f: f.get("abr") or 0, reverse=True)
+            info["requested_formats"] = [auds[0]]
+            info["url"] = auds[0]["url"]
+            info["protocol"] = "https"
+            info["ext"] = "m4a"
+        return
+    target = 9999
+    try:
+        target = int(quality_key)
+    except (TypeError, ValueError):
+        pass
+    cand = [f for f in vids if (f.get("height") or 9999) <= target] or vids
+    avc = [f for f in cand if str(f.get("vcodec") or "").startswith("avc")]
+    pool = avc or cand
+    pool.sort(key=lambda f: (f.get("height") or 0), reverse=True)
+    v = pool[0]
+    if auds:
+        auds.sort(key=lambda f: f.get("abr") or 0, reverse=True)
+        info["requested_formats"] = [v, auds[0]]
+    else:
+        info["requested_formats"] = [v]
+        info["url"] = v["url"]
+        info["protocol"] = "https"
+    info["ext"] = "mp4"
+
+
+def _clean_header_value(value: str) -> str:
+    """过滤 HTTP header 值，只保留 latin-1 安全字符。
+
+    浏览器复制出的 Cookie 串可能混入中文/特殊字符，requests/urllib3 在把 header
+    编码为 latin-1 发送时会抛 `UnicodeEncodeError: 'latin-1' ... ordinal not in range(256)`。
+    这里按字节清理：保留能 encode 成 latin-1 且解码后不变的字符，其余丢弃。
+    """
+    if not value:
+        return value
+    try:
+        encoded = value.encode("latin-1")
+        return encoded.decode("latin-1")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        cleaned = []
+        for ch in value:
+            try:
+                ch.encode("latin-1")
+                cleaned.append(ch)
+            except UnicodeEncodeError:
+                pass
+        return "".join(cleaned)
+
+
+def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str = "") -> None:
+    """为 BiliBiliIE 打补丁：视频页 HTML 用 requests 预下载，绕过 yt-dlp urllib 经代理 IncompleteRead。
+
+    仅对 bilibili.com/video/BVxxx 的第一次 _download_webpage_handle 生效。
+    如果 requests 也失败，回退原 yt-dlp 行为。
+    """
+    try:
+        from yt_dlp.extractor.bilibili import BiliBiliIE
+    except Exception:
+        return
+
+    attr = "_vdl_webpage_patched"
+    if getattr(BiliBiliIE._download_webpage_handle, attr, False):
+        return
+
+    _orig = BiliBiliIE._download_webpage_handle
+
+    def _patched(self, url_or_request, video_id, *args, **kwargs):
+        url = ""
+        try:
+            if isinstance(url_or_request, str):
+                url = url_or_request
+            else:
+                url = getattr(url_or_request, "url", "") or str(url_or_request)
+        except Exception:
+            url = str(url_or_request)
+
+        if url and "/video/BV" in url and "bilibili.com" in url:
+            logger.info("[bilibili patch] try requests for %s", url)
+            try:
+                import email.message
+                import io
+                import requests
+                from urllib.response import addinfourl
+
+                headers = {
+                    "User-Agent": ua or (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": "https://www.bilibili.com/",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Accept-Encoding": "identity",
+                    "Connection": "close",
+                }
+                if cookie:
+                    headers["Cookie"] = _clean_header_value(cookie)
+                proxies = {"http": proxy, "https": proxy} if proxy else None
+                resp = requests.get(
+                    url,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=30,
+                    allow_redirects=True,
+                )
+                resp.raise_for_status()
+                content = resp.content
+
+                # B站 响应头里可能含非 latin-1 字符，直接塞给 yt-dlp 会触发
+                # 'latin-1' codec can't encode characters... 回退到原 urllib 路径。
+                # 这里只保留 latin-1 安全的头，并用标准库 addinfourl 包装。
+                safe_headers = email.message.Message()
+                for k, v in resp.headers.items():
+                    try:
+                        v.encode("latin-1")
+                        safe_headers[k] = v
+                    except UnicodeEncodeError:
+                        logger.debug("[bilibili patch] drop non-latin1 header %s", k)
+                fp = io.BytesIO(content)
+                urlh = addinfourl(fp, safe_headers, resp.url, code=resp.status_code)
+
+                logger.info("[bilibili patch] requests OK %s bytes=%s", resp.url, len(content))
+                return resp.text, urlh
+            except Exception as e:
+                logger.warning(
+                    "[bilibili patch] requests failed for %s: %s, fallback to yt-dlp",
+                    url,
+                    str(e)[:200],
+                    exc_info=False,
+                )
+
+        return _orig(self, url_or_request, video_id, *args, **kwargs)
+
+    BiliBiliIE._download_webpage_handle = _patched
+    setattr(BiliBiliIE._download_webpage_handle, attr, True)
+
+
+class _YoutubeDL(YoutubeDL):
+    """强制使用 yt-dlp 的 requests request handler。
+
+    Railway + 国内代理回源时，yt-dlp 默认的 urllib handler 频繁在响应体
+    传输中间报 IncompleteRead，且不会自动重试。requests/urllib3 对连接
+    重置、分块传输不完整更健壮。只要 requests handler 可用，就只保留它，
+    完全绕过 urllib handler。
+    """
+
+    def build_request_director(self, handlers, preferences=None):
+        all_keys = [getattr(h, "RH_KEY", "?") for h in handlers]
+        requests_handlers = [h for h in handlers if getattr(h, "RH_KEY", None) == "Requests"]
+        logger.info("[yt-dlp] available handlers=%s requests_found=%s", all_keys, bool(requests_handlers))
+
+        if requests_handlers:
+            logger.info("[yt-dlp] forcing requests request handler only")
+            handlers = requests_handlers
+        else:
+            logger.warning("[yt-dlp] requests handler NOT available, falling back to all handlers")
+
+        director = super().build_request_director(handlers, preferences)
+
+        # 安全网：如果 filtering 没生效（例如 super() 内部又重新加入了 urllib），
+        # 强制把 Urllib handler 从 director 里拿掉。
+        if requests_handlers and "Urllib" in director.handlers:
+            logger.warning("[yt-dlp] removing Urllib handler from director safety net")
+            del director.handlers["Urllib"]
+
+        final_keys = list(director.handlers.keys())
+        logger.info("[yt-dlp] final director handlers=%s", final_keys)
+        return director
+
+
+def _patch_requests_handler_retries() -> None:
+    """让 yt-dlp 的 Requests handler 启用 urllib3 自动重试。
+
+    yt-dlp 默认传 Retry(False) 禁用重试。Railway→国内代理链路不稳定，
+    经常读到一半连接被重置，需要 urllib3 对 GET/HEAD 等幂等请求自动重试。
+    """
+    try:
+        from yt_dlp.networking._requests import RequestsRH
+        from yt_dlp.networking._requests import RequestsHTTPAdapter
+        import urllib3.util.retry
+    except Exception as e:
+        logger.warning("[requests patch] cannot import yt-dlp requests handler: %s", e)
+        return
+
+    if getattr(RequestsRH._create_instance, "_vdl_retries_patched", False):
+        return
+
+    _orig_create_instance = RequestsRH._create_instance
+
+    def _patched_create_instance(self, cookiejar, legacy_ssl_support=None):
+        # 先调原方法拿到 session（含默认 adapter 配置）
+        session = _orig_create_instance(self, cookiejar=cookiejar, legacy_ssl_support=legacy_ssl_support)
+
+        # 重新 mount 一个带重试策略的 adapter
+        retry = urllib3.util.retry.Retry(
+            total=int(os.environ.get("VDL_REQUESTS_RETRY_TOTAL", "5")),
+            connect=int(os.environ.get("VDL_REQUESTS_RETRY_CONNECT", "3")),
+            read=int(os.environ.get("VDL_REQUESTS_RETRY_READ", "5")),
+            backoff_factor=float(os.environ.get("VDL_REQUESTS_RETRY_BACKOFF", "0.5")),
+            # 对 IncompleteRead / Connection reset / read timeout 等做重试
+            raise_on_status=False,
+            raise_on_redirect=False,
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
+            status_forcelist=[500, 502, 503, 504, 408, 429],
+        )
+        adapter = RequestsHTTPAdapter(
+            ssl_context=self._make_sslcontext(legacy_ssl_support=legacy_ssl_support),
+            source_address=self.source_address,
+            max_retries=retry,
+        )
+        session.adapters.clear()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        logger.debug("[requests patch] mounted retry adapter total=%s", retry.total)
+        return session
+
+    RequestsRH._create_instance = _patched_create_instance
+    setattr(RequestsRH._create_instance, "_vdl_retries_patched", True)
+    logger.info("[requests patch] enabled urllib3 retries for yt-dlp requests handler")
+
+
+# 模块加载时即启用 requests 重试补丁
+_patch_requests_handler_retries()
 
 
 def _resolve_proxy(host: str = "") -> str:
@@ -535,14 +1195,19 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         "socket_timeout": SOCKET_TIMEOUT,
         "retries": retries,
         "extractor_retries": retries,
+        "fragment_retries": int(os.environ.get("VDL_FRAGMENT_RETRIES", "10")),
+        "file_access_retries": int(os.environ.get("VDL_FILE_ACCESS_RETRIES", "10")),
+        "skip_unavailable_fragments": True,
         "ignoreerrors": False,
         "continue": True,   # 断点续传：上次中断的 .part 可从断点接着下，大文件更稳
     }
     # 代理：用户显式传入优先；否则按平台自动策略（VDL_PROXY 环境变量 / 国内站直连 / macOS 系统代理）
     effective_proxy = proxy or _resolve_proxy(host)
     if is_china_host(host):
-        # 国内站必须显式置空，否则 yt-dlp 仍会从环境变量读取代理导致超时/被拒
-        options["proxy"] = ""
+        # 国内站：海外部署（Railway 等）必须经 VDL_PROXY_CN 回源到国内出口，
+        # 否则被地理围栏 403；本机在国内直连时该变量为空，显式置空避免 yt-dlp
+        # 误读系统/环境变量里的海外代理导致超时/被拒。
+        options["proxy"] = os.environ.get("VDL_PROXY_CN", "").strip()
     elif effective_proxy:
         options["proxy"] = effective_proxy
         # 走代理时（Clash/V2Ray/Surge 等常做 HTTPS MITM 中间人解密），
@@ -560,11 +1225,24 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
+        # B站 经国内代理回源时，偶发 IncompleteRead/连接重置：禁用 keep-alive + 关闭压缩，
+        # 让代理/服务端按短连接完整传输页面 HTML，避免 chunked/gzip 半包问题。
+        if host and ("bilibili.com" in host or "b23.tv" in host):
+            headers.setdefault("Connection", "close")
+            headers.setdefault("Accept-Encoding", "identity")
     # Cookie：用户粘贴的会话 Cookie（字符串）优先注入请求头，覆盖环境变量级的浏览器 Cookie
     cookie_text = cookie.strip()
     if cookie_text.lower().startswith("cookie:"):
         cookie_text = cookie_text[7:].strip()
     if cookie_text:
+        # 容错：用户从 DevTools 复制的常是「裸值」（只复制了 SESSDATA 那一格的 Value，
+        # 没有 SESSDATA= 前缀）。B站 用 SESSDATA 单键鉴权，检测到裸值自动补前缀，
+        # 避免「明明填了 Cookie 还 403」的困惑。后端直接把该字符串当 Cookie 头发，
+        # 裸值会被 B站 当作无效 Cookie 导致 403。
+        is_bili = host and ("bilibili.com" in host or "b23.tv" in host)
+        if is_bili and "=" not in cookie_text:
+            cookie_text = f"SESSDATA={cookie_text}"
+            _cookie_diag("cookie_bare_value_fixed", "bilibili bare SESSDATA auto-prefixed")
         headers["Cookie"] = cookie_text
     # YouTube 专用参数：player_client 选择。
     # 2026-08 起 YouTube 对 web/ios client 强制 SABR 流（DASH only），
@@ -577,9 +1255,13 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     elif not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
+        # B站 短链 b23.tv 与长链 bilibili.com 同属一个站，云端公共池 Cookie 以
+        # bilibili.com 域存储。用户用 b23.tv 短链时 host=b23.tv，必须回退到
+        # bilibili.com 取 Cookie，否则云端池匹配不到 → web 端无登录态 → B站 412。
+        cookie_host = "bilibili.com" if "b23.tv" in host else host
         try:
             from cookie_cache import get_cached_cookie_header
-            cached = get_cached_cookie_header(host)
+            cached = get_cached_cookie_header(cookie_host)
         except Exception as e:
             cached = None
             _cookie_diag("cache_exception", str(e)[:200])
@@ -593,13 +1275,21 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             pooled = None
             try:
                 from cookie_pool import get_cookie as _pool_get
-                pooled = _pool_get(host)
+                pooled = _pool_get(cookie_host)
             except Exception as e:
                 _cookie_diag("pool_exception", str(e)[:200])
+            logger.info("[cookie] host=%s cookie_host=%s pool=%s", host, cookie_host, "hit" if pooled else "miss")
             if pooled:
                 headers["Cookie"] = pooled
                 _cookie_diag("pool_hit", f"len={len(pooled)}")
             else:
+                # 公共池 miss 时，异步召唤 VPS 守护进程补推（非阻塞、带冷却），
+                # 下次请求即可命中登录态，实现「容器重建/重启后秒级自愈」。
+                try:
+                    from cookie_pool import request_refill as _pool_refill
+                    _pool_refill(cookie_host)
+                except Exception:
+                    pass
                 browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
                 _cookie_diag("cache_miss", f"host={host}")
                 if browser:
@@ -630,23 +1320,125 @@ def _clean_message(raw: str) -> str:
     return " ".join(text.split())[:MAX_HINT_CHARS]
 
 
-def _friendly_error(exc: Exception) -> ResolveError:
-    """把 yt-dlp 的英文异常转成用户能看懂的提示。"""
+def _effective_cookie_source(options: dict[str, Any], user_cookie: str = "") -> str:
+    """根据 _base_options 产物判断 Cookie 实际来源。"""
+    if user_cookie.strip():
+        return "user_pasted"
+    headers = options.get("http_headers", {})
+    if headers.get("Cookie"):
+        # 用户未粘贴时，_base_options 会从 cache / pool 注入 Cookie
+        return "auto"
+    if options.get("cookiesfrombrowser"):
+        return "browser"
+    return "none"
+
+
+def _build_diag_context(
+    url: str,
+    cookie: str = "",
+    proxy: str = "",
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构造下载异常（403 等）所需的诊断上下文。"""
+    host = _host_of(url) or ""
+    headers = (options or {}).get("http_headers", {})
+    effective_proxy = proxy or _resolve_proxy(host)
+    return {
+        "url": url,
+        "host": host,
+        "is_hardened": is_cookie_hardened_host(host),
+        "is_china": is_china_host(host),
+        "cookie_present": bool(headers.get("Cookie")),
+        "cookie_source": _effective_cookie_source(options or {}, cookie),
+        "proxy_used": bool(effective_proxy),
+        "proxy": effective_proxy if effective_proxy else None,
+        "referer": headers.get("Referer"),
+        "user_agent": headers.get("User-Agent"),
+        "is_cloud": os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud",
+    }
+
+
+def _diag_403(context: dict[str, Any], exc: Exception) -> None:
+    """把 403 发生的上下文结构化写入临时日志，供线上排查。"""
+    try:
+        path = os.path.join(tempfile.gettempdir(), "vdl_403_diag.txt")
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "a") as f:
+            f.write(
+                f"[{ts}] 403 host={context.get('host')} "
+                f"url={str(context.get('url', ''))[:120]} "
+                f"cookie_source={context.get('cookie_source')} "
+                f"proxy={context.get('proxy')} "
+                f"referer={context.get('referer')} "
+                f"ua={context.get('user_agent')} "
+                f"exc={type(exc).__name__}: {str(exc)[:200]}\n"
+            )
+    except Exception:
+        pass
+
+
+def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> ResolveError:
+    """把 yt-dlp 的英文异常转成用户能看懂的提示，并对 403 做根因分层。"""
     text = _clean_message(str(exc))
     lowered = text.lower()
+    ctx = context or {}
+    is_cloud = ctx.get(
+        "is_cloud", os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud"
+    )
+    cloud_cookie_hint = (
+        "网页版由「桌面版 VDL」共享登录态：请在桌面版 VDL 中打开并保持该平台登录，"
+        "点『同步 Cookie 到云端』刷新后重试；或直接用桌面版 VDL 解析本链接。"
+    )
+
+    # 403 单独做根因分层，并记录结构化诊断日志
+    if any(word in lowered for word in ("403", "forbidden", "http error 403")):
+        _diag_403(ctx, exc)
+        host = ctx.get("host", "")
+        hardened = ctx.get("is_hardened", is_cookie_hardened_host(host)) if host else False
+        cookie_present = ctx.get("cookie_present", False)
+        if hardened and not cookie_present:
+            return ResolveError(
+                "下载被服务器拒绝（403）：该站需要登录 Cookie",
+                cloud_cookie_hint if is_cloud else (
+                    "该平台为强反爬站点，未检测到有效 Cookie。"
+                    "请在常用浏览器登录该平台后重试，或到「高级选项 → Cookie」手动粘贴 Cookie。"
+                ),
+                category="cookie_required",
+                context=ctx,
+            )
+        if hardened and cookie_present:
+            return ResolveError(
+                "下载被服务器拒绝（403）：Cookie 无效或已过期",
+                "已检测到 Cookie，但服务器仍拒绝访问。可能原因："
+                "① Cookie 已过期，请重新登录并同步；② 账号权限不足；"
+                "③ 该视频为会员/付费/地区限制。",
+                category="cookie_invalid_or_expired",
+                context=ctx,
+            )
+        # 兜底通用 403
+        hint = (
+            "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
+            "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
+            "④换更低画质重试；⑤稍后再试"
+        )
+        # 折中：B站 不进 _COOKIE_HARDENED_DOMAINS（避免一刀切改文案），
+        # 仅在通用 403 文案后追加专属提示，保留全部排查步骤。
+        if host and ("bilibili.com" in host or "b23.tv" in host):
+            hint += "；B站 高画质/会员视频常需登录态 Cookie，请先在本机常用浏览器登录 B站 后重试（VDL 会自动读取浏览器 Cookie 注入请求）。"
+        return ResolveError(
+            "下载被服务器拒绝（403）",
+            hint,
+            category="cdn_forbidden",
+            context=ctx,
+        )
+
     # 云端(网页版)实例遇到强反爬站需要登录态时，提示用户依赖桌面版共享登录态，
     # 而不是让用户去"本机浏览器登录"（网页版访客没有本机浏览器）。
     cloud_note = ""
-    if os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud":
-        cloud_note = (
-            "网页版由「桌面版 VDL」共享登录态：请在桌面版 VDL 中打开并保持该平台登录，"
-            "点『同步 Cookie 到云端』刷新后重试；或直接用桌面版 VDL 解析本链接。"
-        )
+    if is_cloud:
+        cloud_note = cloud_cookie_hint
     rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
-        (("403", "forbidden", "http error 403"), "下载被服务器拒绝（403）",
-         "该链接被目标网站 CDN 拒绝。可能原因：①该站需要登录或 Cookie；②视频有防盗链/地区限制；"
-         "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
-         "④换更低画质重试；⑤稍后再试"),
         (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
          ("请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
           "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串")
@@ -682,13 +1474,295 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
     return False
 
 
+# --------------------------------------------------------------------------- #
+# 抖音（douyin）专用解析：走 VPS Playwright 真实浏览器拦截视频流
+# --------------------------------------------------------------------------- #
+# yt-dlp 抖音提取器在抖音 2026 初反爬升级后失效（aweme_detail API 需 a_bogus
+# 签名，未实现，报 "Fresh cookies needed"），即使带完整登录态 cookie 也无解。
+# 故网页端抖音改走 VPS 上的 Playwright 无头浏览器（douyin_resolve.py），拿到真实
+# 视频/音频轨 URL（音视频分离），再交给 yt-dlp process_info 下载 + ffmpeg 合并。
+_DOUYIN_HOSTS: tuple[str, ...] = ("douyin.com", "iesdouyin.com", "ixigua.com")
+_DOUYIN_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def _is_douyin_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _DOUYIN_HOSTS)
+
+
+def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
+    """调用 VPS Playwright 解析 worker（/v1/resolve?platform=xx），返回真实流元数据。
+
+    复用 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN（与 Cookie 补推同一套
+    VPS 端点与令牌），无需额外配置。超时 90s（Playwright 起浏览器 + 页面加载）。
+    """
+    base = os.environ.get("VDL_COOKIE_REFILL_URL")
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
+    if not base or not token:
+        raise ResolveError(
+            "视频解析服务未配置",
+            "该平台下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN",
+        )
+    endpoint = (
+        base.rstrip("/") + "/v1/resolve?token="
+        + urllib.parse.quote(token, safe="")
+        + "&platform=" + urllib.parse.quote(platform, safe="")
+        + "&url=" + urllib.parse.quote(url, safe="")
+    )
+    req = urllib.request.Request(endpoint, headers={"User-Agent": "vdl-platform-resolve"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            data = json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()[:300]
+            # daemon 502 时 body 含 {"error": "具体原因"}——直接透传，让用户看到友好错误
+            try:
+                bd = json.loads(body)
+                if isinstance(bd, dict) and bd.get("error"):
+                    raise ResolveError(bd["error"], f"HTTP {e.code}") from e
+            except ResolveError:
+                raise
+            except Exception:
+                pass
+        except Exception:
+            pass
+        raise ResolveError("视频解析服务返回错误", f"HTTP {e.code}: {body[:120]}") from e
+    except Exception as e:
+        raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
+    if not data.get("ok"):
+        raise ResolveError("视频解析失败", data.get("error") or "未知错误")
+    return data
+
+
+_PLAYLIST_PATHS = ("/playlist", "/discover/toplist", "/album/")
+
+
+def is_playlist_url(url: str) -> bool:
+    """判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。"""
+    host = _host_of(url)
+    path = (url or "").split("?", 1)[0]
+    if host in ("music.163.com", "y.music.163.com"):
+        return any(p in path for p in ("/playlist", "/discover/toplist"))
+    if host in ("ximalaya.com",):
+        return "/album/" in path
+    return False
+
+
+def probe_playlist(url: str) -> dict[str, Any]:
+    """解析歌单/专辑，返回 {title, count, items:[{index,title,duration,url,is_paid?}]}。
+
+    喜马拉雅专辑走 VPS Playwright（yt-dlp XimalayaAlbumIE 已失效，
+    revision/album/v1/getTracksList 需登录；新路径 revision/album/getTracksList
+    需浏览器游客态）；网易云歌单/榜单走 yt-dlp extract_flat 快速提取（~1s/200条）。
+    """
+    host = _host_of(url)
+    if host in ("ximalaya.com",):
+        data = _call_vps_worker("ximalaya_album", url)
+        items = data.get("items") or []
+        if not items:
+            raise ResolveError("专辑解析失败", data.get("error") or "未获取到剧集列表")
+        return {
+            "title": data.get("title") or "喜马拉雅专辑",
+            "count": data.get("count") or len(items),
+            "items": items,
+        }
+
+    # 网易云歌单/榜单（及通用 playlist 兜底）→ yt-dlp extract_flat 快速提取
+    opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": False,
+        "extract_flat": "in_playlist",
+        "playlist_items": "1-500",
+        "ignoreerrors": True,
+    }
+    if is_china_host(host):
+        opts["proxy"] = os.environ.get("VDL_PROXY_CN", "").strip()
+    try:
+        with _YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False) or {}
+    except Exception as e:
+        raise ResolveError("歌单解析失败", _clean_message(str(e))) from e
+    if info.get("_type") != "playlist":
+        raise ResolveError("该链接不是歌单/专辑", "请粘贴网易云歌单或喜马拉雅专辑的完整链接")
+    items: list[dict[str, Any]] = []
+    for idx, e in enumerate((info.get("entries") or []), 1):
+        if not e:
+            continue
+        item_url = e.get("url") or e.get("webpage_url") or ""
+        if host in ("music.163.com", "y.music.163.com") and item_url:
+            # extract_flat 返回 music.163.com/#/song?id=xxx，转标准单曲链
+            m = re.search(r"[?&]id=(\d+)", item_url)
+            if m:
+                item_url = "https://music.163.com/song?id=" + m.group(1)
+        items.append({
+            "index": idx,
+            "title": e.get("title") or "",
+            "duration": e.get("duration"),
+            "url": item_url,
+        })
+    if not items:
+        raise ResolveError("歌单/专辑为空", "该歌单没有可下载的内容")
+    return {
+        "title": info.get("title") or "歌单",
+        "count": info.get("playlist_count") or len(items),
+        "items": items,
+    }
+
+
+def _douyin_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿抖音真实流，构造成 yt-dlp 兼容的 info dict。
+
+    视频轨 + 音频轨分离，各自带 Referer（抖音 CDN 校验 Referer，缺则 403）。
+    返回的 info dict 已模拟"yt-dlp 已选过流"的状态：包含 url + requested_formats，
+    这样 yt-dlp 的 process_info 会走多格式下载分支（FFmpegFD 同时下载音视频并合并）。
+    """
+    data = _call_vps_worker("douyin", url)
+    headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
+    height = int(data.get("height") or 0) or 720
+    width = int(data.get("width") or 0) or (height * 16 // 9)
+    formats: list[dict[str, Any]] = []
+    if data.get("video_url"):
+        formats.append({
+            "url": data["video_url"],
+            "format_id": "dy-video",
+            "format": "dy-video",
+            "ext": "mp4",
+            "protocol": "https",
+            "vcodec": "avc1",
+            "acodec": "none",
+            "width": width,
+            "height": height,
+            "http_headers": dict(headers),
+        })
+    if data.get("audio_url"):
+        formats.append({
+            "url": data["audio_url"],
+            "format_id": "dy-audio",
+            "format": "dy-audio",
+            "ext": "m4a",
+            "protocol": "https",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "abr": 128,
+            "http_headers": dict(headers),
+        })
+    # 模拟"已选流"：只给 requested_formats + formats，不设外层 url/protocol。
+    # 这样 process_info 的 fd=None，走「逐个 format 下载 + FFmpegMergerPP 合并」分支。
+    # （若给外层 url，fd 会被设为 HttpFD，走合并 url 分支，HttpFD 无法下多 URL，音频轨丢失。）
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "抖音视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Douyin",
+        "extractor": "douyin",
+        "ext": "mp4",
+        "requested_formats": list(formats),
+        "formats": formats,
+        "http_headers": dict(headers),
+    }
+
+
+# 快手（kuaishou.com）：SSR 无设备指纹 Cookie 时 __APOLLO_STATE__ 为空，纯 requests
+# 拿不到主视频数据；改走 VPS Playwright 解析（kuaishou_resolve.py），返回合并好的
+# mp4 直链（音视频已合并，无需 ffmpeg 再合）。
+_KUAISHOU_HOSTS: tuple[str, ...] = ("kuaishou.com", "chenzhongtech.com", "gifshow.com")
+
+
+def _is_kuaishou_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _KUAISHOU_HOSTS)
+
+
+def _kuaishou_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿快手真实流（合并 mp4），构造成 yt-dlp 兼容的 info dict。
+
+    快手视频是「音视频已合并的单个 mp4」，走 process_info 单文件分支直接下载，
+    无需 requested_formats。快手 CDN 不校验 Referer，带 UA 即可。
+    """
+    data = _call_vps_worker("kuaishou", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "快手视频",
+        "uploader": data.get("uploader") or "",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Kuaishou",
+        "extractor": "kuaishou",
+        "ext": "mp4",
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA},
+    }
+
+
+# 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
+# WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
+_WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
+
+
+def _is_weibo_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _WEIBO_HOSTS)
+
+
+def _weibo_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿微博真实流（合并 mp4），构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("weibo", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "微博视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Weibo",
+        "extractor": "weibo",
+        "ext": "mp4",
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://weibo.com/"},
+    }
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
+    effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
+    # 归一化前先做非视频页（空间/动态/番剧）可读拦截，避免 yt-dlp 提取失败后
+    # 只给用户一句笼统的"视频解析失败"。与归一化入参解耦：此处只做链接形态判断。
+    _norm_for_check = _normalize_share_url(url, proxy=effective_proxy)
+    if "space.bilibili.com" in _norm_for_check or "bilibili.com/opus/" in _norm_for_check:
+        raise ResolveError(
+            "这是 B站 个人空间 / 动态页，不是单个视频",
+            "请打开该视频，复制浏览器地址栏中以 bilibili.com/video/BVxxxx 开头的播放页链接，再粘贴解析。",
+        )
+    if "bangumi" in _norm_for_check:
+        raise ResolveRestricted(
+            "该链接是 B站 番剧 / 影视（会员 DRM 内容）",
+            "番剧、电影、纪录片等受版权 DRM 保护，标准下载方式无法解析。请更换为公开可播放的普通视频链接。",
+        )
+    url = _norm_for_check
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)
     if cookie and host:
         _cache_user_cookie(host, cookie)
+    # 抖音/快手/微博：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
+    if _is_douyin_host(host):
+        return _douyin_info(url)
+    if _is_kuaishou_host(host):
+        return _kuaishou_info(url)
+    if _is_weibo_host(host):
+        return _weibo_info(url)
     # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
     _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
     try:
@@ -717,6 +1791,16 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
 
     try:
         opts = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
+        # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
+        # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
+        _h = _host_of(url)
+        if _h and ("bilibili.com" in _h or "b23.tv" in _h):
+            # patch 必须带最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
+            _patch_bilibili_webpage_download(
+                proxy=effective_proxy,
+                cookie=(opts.get("http_headers") or {}).get("Cookie", cookie),
+                ua=(opts.get("http_headers") or {}).get("User-Agent"),
+            )
         # 解析阶段只拿 info dict，不做格式选择（避免 YouTube 等站因格式不匹配
         # 直接抛 "Requested format is not available"）。下载阶段再由 _format_selector 选格式。
         opts["format"] = None
@@ -725,10 +1809,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # ⚠️ 绝不能对所有站点生效！国内站（快手/抖音等）提取失败时，
         # ignoreerrors 会吞掉 ExtractorError/DownloadError 导致 extract_info 返回 None，
         # 真正的错误原因（页面结构变更/需要登录等）被完全丢失。
-        _h = _host_of(url)
         if _h and ("youtube.com" in _h or "youtu.be" in _h):
             opts["ignoreerrors"] = "only_download"
-        with YoutubeDL(opts) as ydl:
+        with _YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         # 诊断：记录 extract_info 返回值
         try:
@@ -739,29 +1822,58 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                 _f.write(f"  extract_info OK: title={str(_info_title)[:60]} formats={_fmt_count} keys={_info_keys[:15]}\n")
         except Exception:
             pass
-    except (UnsupportedError, GeoRestrictedError, DownloadError) as exc:
-        raise _friendly_error(exc) from exc
-    except ExtractorError as exc:
+    except (UnsupportedError, GeoRestrictedError) as exc:
+        raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
+    except (DownloadError, ExtractorError) as exc:
         _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
-        # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
-        if "format" in str(exc).lower() or "not available" in str(exc).lower():
+        # B站 走 API 兜底：网络错误（IncompleteRead/连接重置）OR 页面风控（412/403）。
+        # 2026-08 B站 风控升级：对 urllib3/requests 的非浏览器 TLS 栈访问视频页返回
+        # 412 验证页（curl 不受影响），yt-dlp 抓页面必 412 → 提取器报 403。
+        # API（api.bilibili.com）不过页面风控，仍 200，因此直接走 API 构造 info。
+        _exc_low = str(exc).lower()
+        if _h and ("bilibili.com" in _h or "b23.tv" in _h) and (
+            "incompleteread" in _exc_low
+            or "error reading response" in _exc_low
+            or "connection" in _exc_low
+            or "transport" in _exc_low
+            or "412" in _exc_low
+            or "403" in _exc_low
+            or "forbidden" in _exc_low
+            or "precondition" in _exc_low
+        ):
+            logger.info("[probe] yt-dlp Bilibili failed (%s), trying API fallback", _last_err)
             try:
-                opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
-                opts2["extract_flat"] = "in"
-                if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
-                    opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
-                with YoutubeDL(opts2) as ydl2:
-                    info = ydl2.extract_info(url, download=False)
-                    _last_err = None  # 降级成功
+                # 用最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
+                _final_cookie = (opts.get("http_headers") or {}).get("Cookie") or cookie
+                info = _bilibili_api_extract(url, proxy=effective_proxy, cookie=_final_cookie)
+                if info:
+                    logger.info("[probe] Bilibili API fallback succeeded")
+                    _last_err = None
+                else:
+                    logger.warning("[probe] Bilibili API fallback returned no info")
             except Exception as fb_err:
-                _last_err = f"{_last_err}; 降级: {type(fb_err).__name__}: {str(fb_err)[:150]}"
-                raise ResolveError(
-                    "视频解析失败",
-                    f"建议：①检查代理是否通畅；②在「高级选项」粘贴 Cookie；"
-                    f"③更换代理节点。\n详情：{_last_err}"
-                ) from exc
-        else:
-            raise _friendly_error(exc) from exc
+                logger.warning("[probe] Bilibili API fallback failed: %s", str(fb_err)[:200])
+
+        if _last_err:
+            # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
+            if "format" in str(exc).lower() or "not available" in str(exc).lower():
+                try:
+                    opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
+                    opts2["extract_flat"] = "in"
+                    if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
+                        opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
+                    with _YoutubeDL(opts2) as ydl2:
+                        info = ydl2.extract_info(url, download=False)
+                        _last_err = None  # 降级成功
+                except Exception as fb_err:
+                    _last_err = f"{_last_err}; 降级: {type(fb_err).__name__}: {str(fb_err)[:150]}"
+                    raise ResolveError(
+                        "视频解析失败",
+                        f"建议：①检查代理是否通畅；②在「高级选项」粘贴 Cookie；"
+                        f"③更换代理节点。\n详情：{_last_err}"
+                    ) from exc
+            else:
+                raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except OSError as exc:  # 网络/DNS 层面的错误
         _last_err = f"{type(exc).__name__}: {_clean_message(str(exc))[:200]}"
         raise ResolveError("网络请求失败", _clean_message(str(exc))) from exc
@@ -822,6 +1934,24 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
     heights = sorted({f["height"] for f in formats if f.get("height")}, reverse=True)
     audio_size = _best_audio_size(formats)
+
+    # 抖音（VPS 解析）只有单一视频档位，避免展示 480P/360P 等不存在的选项导致下载失败
+    if info.get("extractor_key") == "Douyin":
+        return [
+            {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
+        ]
+
+    # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示 4K/1080P 等视频画质选项
+    if not heights:
+        audio_ex = {str(f.get("ext") or "").lower() for f in formats}
+        audio_opts: list[dict[str, Any]] = []
+        if "mp3" in audio_ex:
+            audio_opts.append({"key": AUDIO_KEY, "label": "仅音频 MP3", "note": "MP3 格式", "approx_size": audio_size})
+        if "m4a" in audio_ex:
+            audio_opts.append({"key": M4A_KEY, "label": "仅音频 M4A", "note": "M4A 格式", "approx_size": audio_size})
+        return [
+            {"key": BEST_KEY, "label": "最佳音质（自动）", "note": "自动选择最高音质", "approx_size": audio_size},
+        ] + audio_opts
 
     options: list[dict[str, Any]] = [
         {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
@@ -1173,14 +2303,55 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
     让「解析视频信息」步骤能快速收敛，且下载阶段一旦卡住就能被看门狗识别。
     """
+    effective_proxy = task.proxy or _resolve_proxy(_host_of(task.url) or "")
+    task.url = _normalize_share_url(task.url, proxy=effective_proxy)
     reporter = _ProgressReporter(task, store)
     task.add_step("排队等待", "done", "已开始执行")
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     info: dict[str, Any] = {}
     try:
-        with YoutubeDL(_download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)) as ydl:
+        _dl_opts = _download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)
+        # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
+        # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
+        _task_host = _host_of(task.url)
+        if _task_host and ("bilibili.com" in _task_host or "b23.tv" in _task_host):
+            # patch 必须带最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
+            _patch_bilibili_webpage_download(
+                proxy=effective_proxy,
+                cookie=(_dl_opts.get("http_headers") or {}).get("Cookie", cookie),
+                ua=(_dl_opts.get("http_headers") or {}).get("User-Agent"),
+            )
+        with _YoutubeDL(_dl_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
-            info = ydl.extract_info(task.url, download=False) or {}
+            if _is_douyin_host(_task_host):
+                # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
+                info = _douyin_info(task.url)
+            elif _is_kuaishou_host(_task_host):
+                # 快手：同上，VPS 解析出合并 mp4 直链
+                info = _kuaishou_info(task.url)
+            elif _is_weibo_host(_task_host):
+                # 微博：同上，VPS 解析出合并 mp4 直链
+                info = _weibo_info(task.url)
+            else:
+                try:
+                    info = ydl.extract_info(task.url, download=False) or {}
+                except (DownloadError, ExtractorError) as _exc:
+                    # B站 页面风控（412/403，2026-08 B站对非浏览器 TLS 栈返回 412 验证页）
+                    # 或网络错误 → 下载阶段同样走 API 兜底（api.bilibili.com 不过页面风控）
+                    _low = str(_exc).lower()
+                    if _task_host and ("bilibili.com" in _task_host or "b23.tv" in _task_host) and (
+                        "412" in _low or "403" in _low or "forbidden" in _low
+                        or "precondition" in _low or "incompleteread" in _low
+                        or "connection" in _low
+                    ):
+                        task.log("B站 页面被风控拦截，改用 API 直连解析…")
+                        info = _bilibili_api_extract(
+                            task.url,
+                            proxy=effective_proxy,
+                            cookie=(_dl_opts.get("http_headers") or {}).get("Cookie", cookie),
+                        ) or {}
+                    else:
+                        raise
             if info.get("webpage_url"):
                 task.source_url = info["webpage_url"]
             if info.get("title"):
@@ -1201,6 +2372,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif info.get("format_id"):
                 _sel_parts = [str(info["format_id"])]
             _sel_fmt = "+".join(_sel_parts) or "未知"
+
+            # B站 API 兜底 info 固定选了 best（720P 等），按用户选择的清晰度重建
+            # requested_formats，否则用户选 480P/360P 实际也会下成 720P。
+            if info.get("extractor") == "bilibili" and info.get("requested_formats"):
+                _rebuild_requested_formats(info, quality_key)
 
             # YouTube 403 自动降级：tv_embedded 等客户端的某些格式 ID
             # （如 AV1 400/39x、部分 H.264 298/18）URL 被 Google CDN 拒绝，
@@ -1240,7 +2416,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         try:
                             _fb_opts = dict(_fb_base)
                             _fb_opts["format"] = _chain
-                            with YoutubeDL(_fb_opts) as _ydl2:
+                            with _YoutubeDL(_fb_opts) as _ydl2:
                                 info = _ydl2.extract_info(task.url, download=False) or info
                                 if info.get("title"):
                                     store.update(task.id, title=info["title"])
@@ -1290,7 +2466,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         if not resumable:
             store.clear_files(task.id)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
-        err = _friendly_error(exc)
+        err = _friendly_error(exc, _build_diag_context(task.url, cookie=cookie, proxy=proxy, options=_dl_opts))
         _mark_step_error(task, err.message)
         # 下载中断类失败（网络抖动/限速假死）往往残留部分分片，标记可续传
         store.update(task.id, status="failed", error=err.message, hint=err.hint,
