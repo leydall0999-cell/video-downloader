@@ -102,7 +102,13 @@ def _get_raw_data(tvid: str, video_id: str) -> dict:
 
 
 def resolve(url, timeout=60):
-    """解析爱奇艺视频。成功返回 dict，失败抛 RuntimeError。"""
+    """解析爱奇艺视频。成功返回 dict，失败抛 RuntimeError。
+
+    策略（2026-08-20 实测 VPS 有效）：不自己调 tmts API 拼 video_id——
+    页面 JS 加载后播放器会主动请求 meta-cdn.video.iqiyi.com/*.m3u8（带签名参数），
+    直接用 Playwright 监听网络请求捕获 m3u8 直链，最稳。
+    标题等 page.title 从通用壳（"爱奇艺-在线视频网站..."）变成真实剧名后再取。
+    """
     from playwright.sync_api import sync_playwright
 
     os.makedirs(PROFILE, exist_ok=True)
@@ -126,64 +132,65 @@ def resolve(url, timeout=60):
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
             page = context.new_page()
+
+            # 捕获播放器发出的 m3u8 请求（主视频流，带 qd_* 签名参数）
+            caught: list[str] = []
+
+            def _on_request(req):
+                u = req.url or ""
+                if ".m3u8" in u and "iqiyi" in u:
+                    caught.append(u)
+
+            page.on("request", _on_request)
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-            # 等待分享页 JS 跳转 + 播放器数据注入（tvid / videoid 同时出现才视为成功）
-            tvid, videoid, title = "", "", ""
-            # 分享页需 JS 解析 shareId 写入 _accData.videoInfo.tvId，可能较慢
+            # 等 m3u8 请求 + 真实标题（最多 50s，分享页 JS 解析较慢）
+            title = ""
             deadline = time.time() + 50
             while time.time() < deadline:
+                if not caught:
+                    try:
+                        page.mouse.wheel(0, 600)
+                    except Exception:
+                        pass
+                    time.sleep(1.5)
+                    continue
                 try:
-                    d = page.evaluate(_JS_EXTRACT) or {}
-                    tvid = (d.get("t") or "").strip()
-                    videoid = (d.get("v") or "").strip()
-                    title = (d.get("title") or "").strip()
-                except Exception:
-                    pass
-                if tvid and videoid:
-                    break
-                try:
-                    page.mouse.wheel(0, 800)
+                    t = page.title() or ""
+                    # 通用壳标题（"爱奇艺-在线视频网站-海量正版高清视频在线观看"）不算数
+                    if t and "爱奇艺-在线视频网站" not in t:
+                        title = t
+                        break
                 except Exception:
                     pass
                 time.sleep(1.5)
 
-            if not tvid or not videoid:
+            if not caught:
                 raise RuntimeError(
-                    "未解析到爱奇艺视频（data-player-tvid/videoid 为空，"
-                    "可能是付费/VIP 专享、链接失效或页面改版）"
+                    "未捕获到爱奇艺视频流（m3u8 请求未发出，"
+                    "可能是付费/VIP 专享、链接失效或页面未加载）"
                 )
 
             if not title:
                 try:
-                    title = (page.title() or "").strip()
-                    title = re.sub(r"[-_|｜].*?(爱奇艺|iqiyi).*$", "", title).strip()
+                    title = page.title() or ""
                 except Exception:
                     pass
+            # 清理标题站点后缀："活佛济公3-电视剧全集-完整版视频在线观看-爱奇艺" → "活佛济公3"
+            title = re.sub(r"\s*[-_|｜].*?(爱奇艺|iqiyi).*$", "", title).strip()
             if not title:
-                title = tvid
-
-            # 调 tmts API 拿 m3u8（选最高 vd 码率）
-            raw = _get_raw_data(tvid, videoid)
-            if raw.get("code") != "A00000":
-                raise RuntimeError("爱奇艺流获取失败: " + str(raw.get("code")))
-            d2 = raw.get("data") or {}
-            vidl = d2.get("vidl") or []
-            streams = [s for s in vidl if s.get("m3utx")]
-            if not streams:
-                raise RuntimeError("未找到可下载的视频流（可能为付费/VIP 专享）")
-            best = max(streams, key=lambda s: int(s.get("vd") or 0))
+                title = "爱奇艺视频"
 
             return {
                 "ok": True,
                 "title": title,
-                "duration": d2.get("dt") or None,
-                "video_id": videoid,
-                "tvid": tvid,
-                "video_url": best.get("m3utx"),
-                "quality": str(best.get("vd") or ""),
+                "duration": None,
+                "video_id": "",
+                "tvid": "",
+                "video_url": caught[0],
+                "quality": "",
                 "webpage_url": page.url or url,
-                "thumbnail": d2.get("pic") or "",
+                "thumbnail": "",
                 "ext": "mp4",
             }
         finally:
