@@ -265,6 +265,90 @@ def _expand_b23tv_url(url: str, proxy: str = "") -> str:
     return url
 
 
+def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
+    """把 iqy.net 短链（爱奇艺官方 302 跳转短链服务）展开为 iqiyi.com 真实视频页。
+
+    yt-dlp 的 IqiyiIE 仅识别 iqiyi.com / iq.com 域；对 iqy.net/i/<id> 会落 [generic]
+    提取器，而 iqy.net 页面本身不是 HTML 视频页，generic 拿不到视频流 → 「无法从该链接中
+    找到视频」。把短链展开成长链后即可走 IqiyiIE 正常拿到 info。
+
+    实现策略（沿用 _expand_b23tv_url 模式）：
+    1) 优先 HEAD 取 Location（不下载 body，最省带宽）；
+    2) HEAD 失败/无有效 Location 时回退 GET + allow_redirects=True，取最终 URL；
+    3) Location 仅在指向 iqiyi.com / iq.com 时才接受，避免被跳到无关域。
+    4) 展开失败保留原 URL —— 让下游 yt-dlp 走 generic 给出更明确的「找不到视频」错误。
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("iqy.net", "www.iqy.net", "m.iqy.net"):
+        return url
+
+    try:
+        import requests
+    except Exception as e:
+        logger.warning("[iqy.net expand] requests not available: %s", e)
+        return url
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://iqy.net/",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    timeout = int(os.environ.get("VDL_B23TV_EXPAND_TIMEOUT", "15"))
+
+    def _is_iqiyi_location(location: str) -> bool:
+        return bool(location) and ("iqiyi.com" in location or "iq.com" in location)
+
+    def _abs_location(resp) -> str:
+        loc = resp.headers.get("Location") or ""
+        if loc and not loc.startswith(("http://", "https://")):
+            from urllib.parse import urljoin
+            loc = urljoin(resp.url, loc)
+        return loc
+
+    # 1) HEAD（轻量，拿到 Location 就返回）
+    try:
+        resp = requests.head(
+            url, headers=headers, proxies=proxies, timeout=timeout, allow_redirects=False,
+        )
+        expanded = _abs_location(resp)
+        if resp.status_code in (301, 302, 307, 308) and _is_iqiyi_location(expanded):
+            logger.info("[iqy.net expand] HEAD %s -> %s", url, expanded)
+            return expanded
+        logger.info(
+            "[iqy.net expand] HEAD %s status=%s location=%s",
+            url, resp.status_code, expanded[:200],
+        )
+    except Exception as e:
+        logger.info("[iqy.net expand] HEAD %s failed: %s", url, str(e)[:200])
+
+    # 2) GET + 自动跟随重定向（HEAD 被 CDN 丢弃/不返回 Location 时回退）
+    try:
+        resp = requests.get(
+            url, headers=headers, proxies=proxies, timeout=timeout,
+            allow_redirects=True, stream=True,
+        )
+        final_url = resp.url
+        resp.close()
+        if _is_iqiyi_location(final_url):
+            logger.info("[iqy.net expand] GET %s -> %s", url, final_url)
+            return final_url
+        logger.info(
+            "[iqy.net expand] GET %s final=%s history=%s",
+            url, final_url, [r.status_code for r in resp.history],
+        )
+    except Exception as e:
+        logger.info("[iqy.net expand] GET %s failed: %s", url, str(e)[:200])
+
+    # 展开失败：保留原 URL，让 yt-dlp 走 generic 给出「找不到视频」的明确错误
+    return url
+
+
 def _normalize_bilibili_url(url: str) -> str:
     """把 B站 长链/b23.tv BV 短链统一归一化为 www.bilibili.com/video/BVxxx 长链。
 
@@ -327,7 +411,9 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
        b23.tv 随机短码会先用 HEAD 请求 302 展开，确保 yt-dlp 使用 BiliBili
        提取器（能正确注入 Cookie/Referer/UA）。桌面端 IP 风控较松时短链也
        能走 generic 通过；网页端(Railway 代理 IP)必须走 bilibili 提取器。
-    2. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
+    2. 爱奇艺：iqy.net 短链先 HEAD/GET 302 展开为 iqiyi.com 长链，
+       否则 yt-dlp IqiyiIE 不认 iqy.net 域会落 [generic] 返回空。
+    3. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
        不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
        无法从长链静态推导，强行构造会破坏解析（需调分享 API，不在本范围）。
     """
@@ -337,6 +423,16 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         normalized = _strip_tracking_params(_normalize_bilibili_url(expanded))
         logger.info("[normalize] %s -> %s", url, normalized)
         return normalized
+
+    # 爱奇艺 短链 iqy.net 展开为 iqiyi.com 长链（yt-dlp IqiyiIE 仅识别 iqiyi.com）
+    if "iqy.net" in url:
+        expanded = _expand_iqiyi_short_url(url, proxy=proxy)
+        if expanded != url:
+            normalized = _strip_tracking_params(expanded)
+            logger.info("[normalize] %s -> %s", url, normalized)
+            return normalized
+        # 展开失败：保留原 URL，让 yt-dlp 走 generic 给「找不到视频」更明确的错误
+        return _strip_tracking_params(url)
 
     # 抖音：分享短链 v.douyin.com 展开后常为 iesdouyin.com/xg/video/ID，
     # 该域名 Playwright 解析拿不到视频流；归一化为 douyin.com/video/ID 即可正常解析。
