@@ -30,14 +30,17 @@ def _frame(typ: int, id_: int, payload: bytes = b"") -> bytes:
 
 
 async def tunnel_client():
-    # id -> (reader, writer, up_queue)
-    sessions: dict[int, tuple[asyncio.StreamReader, asyncio.StreamWriter, asyncio.Queue]] = {}
+    send_lock = asyncio.Lock()
+    # id -> (reader, writer, up_queue, up_task)
+    sessions: dict[int, tuple[asyncio.StreamReader, asyncio.StreamWriter, asyncio.Queue, asyncio.Task]] = {}
 
     def cleanup(id_: int):
         sess = sessions.pop(id_, None)
         if not sess:
             return
-        _reader, writer, _q = sess
+        _reader, writer, _q, up_task = sess
+        if up_task and not up_task.done():
+            up_task.cancel()
         try:
             writer.close()
         except Exception:
@@ -50,12 +53,14 @@ async def tunnel_client():
                 data = await reader.read(65536)
                 if not data:
                     break
-                await ws.send(_frame(1, id_, data))
+                async with send_lock:
+                    await ws.send(_frame(1, id_, data))
         except Exception:
             pass
         finally:
             try:
-                await ws.send(_frame(2, id_))
+                async with send_lock:
+                    await ws.send(_frame(2, id_))
             except Exception:
                 pass
             cleanup(id_)
@@ -87,14 +92,15 @@ async def tunnel_client():
         except Exception as e:
             print(f"[cn_tunnel_client] id={id_} connect local proxy failed: {e}", flush=True)
             try:
-                await ws.send(_frame(2, id_))
+                async with send_lock:
+                    await ws.send(_frame(2, id_))
             except Exception:
                 pass
             return
         q: asyncio.Queue = asyncio.Queue()
-        sessions[id_] = (reader, writer, q)
+        up_task = asyncio.create_task(pump_up(id_, writer, q))
+        sessions[id_] = (reader, writer, q, up_task)
         asyncio.create_task(pump_down(id_, reader, writer))
-        asyncio.create_task(pump_up(id_, writer, q))
 
     while True:
         try:

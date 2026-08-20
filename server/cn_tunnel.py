@@ -25,6 +25,9 @@ import asyncio
 import logging
 import os
 import struct
+import asyncio
+import time
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger("cn_tunnel")
@@ -158,6 +161,50 @@ async def _tunnel_writer(ws: "WebSocket", id_: int, reader: asyncio.StreamReader
             await _send(_TUNNEL, 2, id_)
         except Exception:
             pass
+
+
+@router.get("/api/tunnel-test")
+async def tunnel_test() -> dict:
+    """调试用：经本地隧道代理访问 bilibili，验证反向隧道是否通。"""
+    target = "www.bilibili.com"
+    start = time.time()
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(_PROXY_HOST, _PROXY_PORT), timeout=10
+        )
+    except Exception as e:
+        return {"ok": False, "stage": "connect_local_proxy", "error": str(e), "elapsed": round(time.time() - start, 2)}
+
+    request = (
+        f"GET http://{target}/ HTTP/1.1\r\n"
+        f"Host: {target}\r\n"
+        f"User-Agent: Mozilla/5.0\r\n"
+        f"Connection: close\r\n\r\n"
+    ).encode()
+    writer.write(request)
+    await writer.drain()
+
+    try:
+        response = await asyncio.wait_for(reader.read(4096), timeout=30)
+    except Exception as e:
+        writer.close()
+        return {"ok": False, "stage": "read_response", "error": str(e), "elapsed": round(time.time() - start, 2)}
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+    head = response.split(b"\r\n", 1)[0].decode("latin-1", errors="ignore")
+    return {
+        "ok": True,
+        "stage": "success",
+        "head": head,
+        "body_preview": response[:200].decode("latin-1", errors="ignore"),
+        "elapsed": round(time.time() - start, 2),
+        "tunnel_ready": _TUNNEL_READY.is_set(),
+    }
 
 
 async def start_cn_tunnel_proxy() -> None:
