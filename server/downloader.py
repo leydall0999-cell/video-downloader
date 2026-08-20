@@ -884,6 +884,22 @@ def _patch_requests_handler_retries() -> None:
 _patch_requests_handler_retries()
 
 
+def _cn_proxy_url() -> str:
+    """国内站回源代理地址。
+
+    Railway 环境（VDL 网页版部署在海外）默认走本机反向隧道代理 127.0.0.1:18889，
+    该代理经 WebSocket 隧道把流量透明转发到国内 ECS 的 cn_proxy，绕开跨境入站瓶颈。
+    本机（桌面/Mac，非 Railway）留空直连即可。VDL_PROXY_CN 可显式覆盖默认值。
+    """
+    default = (
+        "http://127.0.0.1:18889"
+        if (os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_SERVICE_ID")
+             or os.environ.get("RAILWAY_PROJECT_ID"))
+        else ""
+    )
+    return os.environ.get("VDL_PROXY_CN", default).strip()
+
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
@@ -899,7 +915,7 @@ def _resolve_proxy(host: str = "") -> str:
     关键：绝不能用同一个变量兜住两边——国内代理出不去海外，海外代理进不来国内。
     """
     if host and is_china_host(host):
-        return os.environ.get("VDL_PROXY_CN", "").strip()
+        return _cn_proxy_url()
     explicit = os.environ.get("VDL_PROXY", "").strip()
     if explicit:
         return explicit
@@ -1299,7 +1315,7 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         # 国内站：海外部署（Railway 等）必须经 VDL_PROXY_CN 回源到国内出口，
         # 否则被地理围栏 403；本机在国内直连时该变量为空，显式置空避免 yt-dlp
         # 误读系统/环境变量里的海外代理导致超时/被拒。
-        options["proxy"] = os.environ.get("VDL_PROXY_CN", "").strip()
+        options["proxy"] = _cn_proxy_url()
     elif effective_proxy:
         options["proxy"] = effective_proxy
         # 走代理时（Clash/V2Ray/Surge 等常做 HTTPS MITM 中间人解密），
@@ -1688,7 +1704,7 @@ def probe_playlist(url: str) -> dict[str, Any]:
         "ignoreerrors": True,
     }
     if is_china_host(host):
-        opts["proxy"] = os.environ.get("VDL_PROXY_CN", "").strip()
+        opts["proxy"] = _cn_proxy_url()
     try:
         with _YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False) or {}
