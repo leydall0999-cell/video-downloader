@@ -144,6 +144,10 @@ def _host_of(url: str) -> str:
 # 由 BiliBili 提取器处理；对 b23.tv 短码先用 HEAD 请求展开真实长链。
 _BILIBILI_LONG_URL_RE = re.compile(r"https?://(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]+)")
 _BILIBILI_SHORT_BV_RE = re.compile(r"https?://(?:www\.|m\.)?b23\.tv/(BV[0-9A-Za-z]+)")
+# 根路径 BV（无 /video/ 前缀，B站 在某些分享场景下会给出此形态）：
+# yt-dlp 原生正则只认 /video/ 前缀，此形态会退化成 generic 提取器导致 403；
+# 必须归一化为标准 /video/BVxxx 长链，API 兜底正则也依赖 /video/ 形态。
+_BILIBILI_ROOT_BV_RE = re.compile(r"https?://(?:www\.)?bilibili\.com/(BV[0-9A-Za-z]+)")
 
 
 def _expand_b23tv_url(url: str, proxy: str = "") -> str:
@@ -254,11 +258,14 @@ def _normalize_bilibili_url(url: str) -> str:
     保留分P（p）和时间戳（t）参数；去掉 vd_source/spm_id_from 等追踪参数。
     非 B站 链接原样返回。
     """
-    # 先尝试长链
+    # 先尝试长链（/video/BVxxx）
     m = _BILIBILI_LONG_URL_RE.match(url)
     if not m:
         # 再尝试 b23.tv/BVxxx 短链
         m = _BILIBILI_SHORT_BV_RE.match(url)
+    if not m:
+        # 根路径 BV（无 /video/ 前缀，B站 部分分享场景给出此形态）
+        m = _BILIBILI_ROOT_BV_RE.match(url)
     if not m:
         return url
     bvid = m.group(1)
@@ -338,7 +345,7 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
     单 P 视频，构造一个足够前端展示 + 后续下载的 info dict。若 API 返回需 WBI 签名或
     其他复杂形态，返回 None 让外层继续抛原异常。
     """
-    m = re.search(r"/video/(BV[0-9A-Za-z]+)", url)
+    m = re.search(r"bilibili\.com/(?:video/)?(BV[0-9A-Za-z]+)", url)
     if not m:
         return None
     bvid = m.group(1)
