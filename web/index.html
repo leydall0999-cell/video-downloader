@@ -175,10 +175,11 @@
     <div class="chips" id="platformChips" aria-label="支持的平台"></div>
 
     <div class="alert" id="alertBox" role="alert" hidden>
-      <span class="alert-icon" aria-hidden="true">!</span>
+      <span class="alert-icon" id="alertIcon" aria-hidden="true">!</span>
       <div class="alert-body" id="alertBody">
         <strong id="alertTitle"></strong>
         <span id="alertHint"></span>
+        <button type="button" class="alert-action" id="alertAction" hidden></button>
         <pre id="alertDetail" class="alert-detail" hidden></pre>
         <span id="alertToggle" class="alert-toggle" hidden>点击展开错误详情</span>
       </div>

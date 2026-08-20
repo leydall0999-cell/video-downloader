@@ -1434,23 +1434,29 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
     cloud_note = ""
     if is_cloud:
         cloud_note = cloud_cookie_hint
-    rules: tuple[tuple[tuple[str, ...], str, str], ...] = (
-        (("fresh cookies", "not necessarily logged in"), "该平台需要登录/游客 Cookie 才能访问",
+    # 每条规则带 category，使前端能按错误类型给出差异化行动建议
+    # （cookie_required → 去粘贴 Cookie；network → 重试；restricted → 官方渠道）。
+    # 注意：优酷 -3007、会员/登录类文案也归入 cookie_required，让「去粘贴 Cookie」
+    # 按钮在该出现的场景都能出现。
+    rules: tuple[tuple[tuple[str, ...], str, str, str], ...] = (
+        (("fresh cookies", "not necessarily logged in", "-3007", "please log in",
+          "login required", "sign in", "authentication", "请登录", "需登录", "会员"),
+         "该平台需要登录/游客 Cookie 才能访问",
          ("请在常用浏览器（Chrome 等）打开并登录过该平台，VDL 会自动读取浏览器 Cookie；"
           "或到「高级选项 → Cookie」手动粘贴该平台的 Cookie 字符串")
-         if not cloud_note else cloud_note),
-        (("private", "login required", "sign in", "members-only"), "该视频需要登录或为私密内容", "请更换公开可访问的视频链接"),
-        (("geo", "not available in your country", "region"), "该视频在当前网络所在地区不可播放", "可尝试更换网络环境后重试"),
-        (("unsupported url", "no video"), "无法从该链接中找到视频", "请确认链接指向的是视频播放页，而不是首页或列表页"),
-        (("404", "not found", "removed", "unavailable", "does not exist"), "视频不存在或已被删除", "请检查链接是否正确、视频是否仍然在线"),
-        (("timed out", "timeout", "connection", "network", "resolve", "proxy", "ssl"), "网络连接超时", "请检查本机网络（部分海外站点需要代理）后重试"),
-        (("drm", "protected"), "该视频有版权保护，无法下载", "请通过官方渠道观看"),
-        (("extractor error", "keyerror", "unable to extract"), "无法识别该链接对应的视频", "请确认链接完整且指向具体的视频页面"),
-        (("ffmpeg", "postprocessing", "post processing", "merging"), "音视频合并失败，可能是该画质源文件格式兼容性问题", "建议：①点「重试」试一次（偶发）；②换 720P 或其他画质重新下载；③仍不行请反馈该链接"),
+         if not cloud_note else cloud_note, "cookie_required"),
+        (("private", "members-only"), "该视频需要登录或为私密内容", "请更换公开可访问的视频链接", "cookie_required"),
+        (("geo", "not available in your country", "region"), "该视频在当前网络所在地区不可播放", "可尝试更换网络环境后重试", "restricted"),
+        (("unsupported url", "no video"), "无法从该链接中找到视频", "请确认链接指向的是视频播放页，而不是首页或列表页", "unknown"),
+        (("404", "not found", "removed", "unavailable", "does not exist"), "视频不存在或已被删除", "请检查链接是否正确、视频是否仍然在线", "unknown"),
+        (("timed out", "timeout", "connection", "network", "resolve", "proxy", "ssl"), "网络连接超时", "请检查本机网络（部分海外站点需要代理）后重试", "network"),
+        (("drm", "protected"), "该视频有版权保护，无法下载", "请通过官方渠道观看", "restricted"),
+        (("extractor error", "keyerror", "unable to extract"), "无法识别该链接对应的视频", "请确认链接完整且指向具体的视频页面", "unknown"),
+        (("ffmpeg", "postprocessing", "post processing", "merging"), "音视频合并失败，可能是该画质源文件格式兼容性问题", "建议：①点「重试」试一次（偶发）；②换 720P 或其他画质重新下载；③仍不行请反馈该链接", "unknown"),
     )
-    for keywords, message, hint in rules:
+    for keywords, message, hint, category in rules:
         if any(word in lowered for word in keywords):
-            return ResolveError(message, hint)
+            return ResolveError(message, hint, category=category)
     return ResolveError("视频解析失败", text)
 
 
@@ -2308,6 +2314,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     task.add_step("排队等待", "done", "已开始执行")
     task.add_step("解析视频信息", "running", f"正在解析：{task.url[:120]}…")
     info: dict[str, Any] = {}
+    # 提前初始化，避免 _download_options 自身抛错时下面 except 引用 _dl_opts 触发
+    # UnboundLocalError（会被兜底 except 吞掉，丢失错误分类）
+    _dl_opts: dict = {}
     try:
         _dl_opts = _download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)
         # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
@@ -2469,17 +2478,23 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         _mark_step_error(task, err.message)
         # 下载中断类失败（网络抖动/限速假死）往往残留部分分片，标记可续传
         store.update(task.id, status="failed", error=err.message, hint=err.hint,
+                     category=getattr(err, "category", None) or "unknown",
                      resumable=_has_partial(task.workdir))
     except (OSError, ResolveError) as exc:
         message = getattr(exc, "message", None) or "下载过程中出现错误"
+        # OSError 多为网络层错误（DNS/连接/超时），归为 network 便于前端给「重试」建议；
+        # ResolveError 自带 category（如优酷 -3007 的 cookie_required），优先采用
+        cat = getattr(exc, "category", None)
+        if not cat:
+            cat = "network" if isinstance(exc, OSError) else "unknown"
         _mark_step_error(task, message)
         store.update(task.id, status="failed", error=message, hint=_clean_message(str(exc)),
-                     resumable=_has_partial(task.workdir))
+                     category=cat, resumable=_has_partial(task.workdir))
     except Exception as exc:  # noqa: BLE001 - 兜底，保证任务状态一定收敛
         logger.exception("下载任务 %s 未预期失败", task.id)
         _mark_step_error(task, "未预期错误")
         store.update(task.id, status="failed", error="下载失败", hint=_clean_message(str(exc)),
-                     resumable=_has_partial(task.workdir))
+                     category="unknown", resumable=_has_partial(task.workdir))
     else:
         if task.cancel_requested or task.is_finished:  # 已被看门狗/硬超时/用户终止，不再写完成态
             return

@@ -68,9 +68,11 @@
     resolveBtn: $('resolveBtn'),
     chips: $('platformChips'),
     alert: $('alertBox'),
+    alertIcon: $('alertIcon'),
     alertBody: $('alertBody'),
     alertTitle: $('alertTitle'),
     alertHint: $('alertHint'),
+    alertAction: $('alertAction'),
     alertDetail: $('alertDetail'),
     alertToggle: $('alertToggle'),
     resultPanel: $('resultPanel'),
@@ -543,7 +545,7 @@
   const _parseResponse = async (response) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '' };
+      const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '', category: payload.category || '' };
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
       throw err;
     }
@@ -760,13 +762,46 @@
     return null;
   };
 
-  const showError = (message, hint = '', detail = '') => {
+  const showError = (message, hint = '', detail = '', category = '') => {
     let msg = String(message || '').trim();
     let h = String(hint || '').trim();
     if (!msg) { clearError(); return; }
     // 网络层原始错误 → 友好提示
     const net = _friendlyNetworkError(msg);
     if (net) { msg = net.message; h = h || net.hint; }
+
+    // —— 按错误分类做视觉区分 + 针对性行动建议 ——
+    // category 由后端 _friendly_error 产出（cookie_required / cdn_forbidden /
+    // network / restricted / unknown 等），让同一个横幅对不同错误给出不同引导，
+    // 而不是千篇一律的「解析失败」。
+    const cat = String(category || '').trim();
+    const ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐' };
+    const ACCENT = { cookie_required: '#e0a33a', cookie_invalid_or_expired: '#e0a33a', cdn_forbidden: '#e2554f', restricted: '#9aa0a6', network: '#4a90d9' };
+    // 先重置上一次的分类样式，避免串台
+    el.alert.className = 'alert';
+    el.alert.style.borderLeftColor = '';
+    if (el.alertIcon) el.alertIcon.textContent = ICON[cat] || '!';
+    if (ACCENT[cat]) el.alert.style.borderLeftColor = ACCENT[cat];
+    // cookie 类错误：给一个「去粘贴 Cookie」按钮，一键展开高级选项并聚焦输入框
+    if (el.alertAction) {
+      const isCookie = cat === 'cookie_required' || cat === 'cookie_invalid_or_expired';
+      if (isCookie) {
+        el.alertAction.textContent = '去粘贴 Cookie';
+        el.alertAction.hidden = false;
+        el.alertAction.style.cssText = 'margin-top:.5rem;padding:.35rem .7rem;border:none;border-radius:6px;background:#e0a33a;color:#1b1b1b;font-size:12px;font-weight:600;cursor:pointer;';
+        el.alertAction.onclick = () => {
+          const adv = document.getElementById('advToggle');
+          if (adv) adv.open = true;
+          if (el.cookieInput) {
+            try { el.cookieInput.focus(); el.cookieInput.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+          }
+        };
+      } else {
+        el.alertAction.hidden = true;
+        el.alertAction.onclick = null;
+      }
+    }
+
     el.alertTitle.textContent = msg;
     el.alertHint.textContent = h;
     el.alertHint.hidden = !h;
@@ -785,6 +820,11 @@
     el.alert.hidden = true;
     if (el.alertDetail) { el.alertDetail.hidden = true; el.alertDetail.textContent = ''; }
     if (el.alertToggle) el.alertToggle.hidden = true;
+    // 一并重置分类样式/行动按钮，避免下次非分类错误仍残留旧样式
+    el.alert.className = 'alert';
+    el.alert.style.borderLeftColor = '';
+    if (el.alertIcon) el.alertIcon.textContent = '!';
+    if (el.alertAction) { el.alertAction.hidden = true; el.alertAction.onclick = null; }
   };
   document.getElementById('alertClose').addEventListener('click', clearError);
   // 点击横幅主体（除关闭按钮外）切换错误详情展开/收起。
@@ -1101,7 +1141,25 @@
 
     const failed = task.status === 'failed';
     refs.error.hidden = !failed;
-    refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
+    if (failed) {
+      // 按错误分类给出图标 + 一句行动建议，让用户一看就知道下一步该干嘛
+      // （cookie 类→去粘贴 Cookie；403→登录/会员/地区；网络→重试；受限→官方渠道）
+      const cat = task.category || '';
+      const CAT_ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐' };
+      const CAT_TIP = {
+        cookie_required: '需在「高级选项」粘贴该平台 Cookie 后重试',
+        cookie_invalid_or_expired: 'Cookie 已失效，请重新登录并在「高级选项」粘贴后重试',
+        cdn_forbidden: '服务器拒绝（403）：多为需登录 / 会员 / 地区限制',
+        restricted: '该内容受版权或地区保护，无法下载',
+        network: '网络不稳定，可点「重试 / 继续下载」再试一次',
+      };
+      const icon = CAT_ICON[cat] || '⚠️';
+      const base = [task.error, task.hint].filter(Boolean).join(' — ');
+      const tip = CAT_TIP[cat] ? `（${CAT_TIP[cat]}）` : '';
+      refs.error.textContent = `${icon} ${base}${tip}`;
+    } else {
+      refs.error.textContent = '';
+    }
 
 
     // 在线观看：任务面板也显示观看按钮（解析结果里的播放地址存入任务后可在此直接打开）
@@ -2368,7 +2426,7 @@
       }
     } catch (error) {
       resolved = null;
-      showError(error.message || '解析失败', error.hint);
+      showError(error.message || '解析失败', error.hint, '', error.category);
     } finally {
       setLoading(false);
     }
