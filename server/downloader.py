@@ -1900,6 +1900,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "腾讯等平台的会员专享、付费或地区限制内容需官方客户端或登录态才能获取，"
             "标准下载方式无法解析。请更换为公开可播放的视频链接",
         )
+    # 优酷：yt-dlp 的 YoukuIE 只返回单集标题，从网页 <title> 补全整部剧名
+    if info and _host_of(url) in ("youku.com", "tudou.com"):
+        info = _enrich_youku_series(info, effective_proxy)
     return info
 
 
@@ -2694,6 +2697,78 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
         if du:
             opts.append({"key": "mp4", "label": "MP4 直链", "url": du, "format_id": "", "is_hls": False})
     return opts
+
+
+def _enrich_youku_series(info: dict[str, Any], proxy: str = "") -> dict[str, Any]:
+    """优酷剧集：yt-dlp 只返回单集标题，从网页 <title> 提取整部剧名补到 info['series']。
+
+    优酷播放页 HTML 的 title 通常是：
+        "神墓 辰南觉醒 第1话 我自远古来 - 优酷视频"
+    而 yt-dlp 返回的 info['title'] 只有：
+        "第1话 我自远古来"
+    用网页 title 减去单集标题，即可得到 "神墓 辰南觉醒" 作为 series。
+
+    该请求失败时静默忽略，不影响主解析流程。
+    """
+    title = (info.get("title") or "").strip()
+    if not title:
+        return info
+    # 只对明显是"第X话/集"的单集标题做补全，避免普通短视频也走一次请求
+    if not re.search(r"^(?:第\s*\d+\s*[话集]|\d+\s*[话集])", title):
+        return info
+
+    webpage_url = info.get("webpage_url") or ""
+    host = _host_of(webpage_url)
+    if not webpage_url or not (host.endswith("youku.com") or host.endswith("tudou.com")):
+        return info
+
+    try:
+        import requests
+    except Exception:
+        return info
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://v.youku.com/",
+    }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    timeout = int(os.environ.get("VDL_YOUKU_TITLE_TIMEOUT", "12"))
+
+    try:
+        resp = requests.get(
+            webpage_url,
+            headers=headers,
+            proxies=proxies,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as exc:
+        logger.debug("[youku series] fetch webpage title failed: %s", str(exc)[:120])
+        return info
+
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return info
+    raw = m.group(1).strip()
+    # 去掉 " - 优酷视频" / "| 优酷视频" / "_优酷" 等站点后缀
+    full = re.sub(r"\s*(?:[-|_])?\s*优酷(?:视频)?\s*$", "", raw).strip()
+    if not full:
+        return info
+
+    # 网页 title 去掉单集标题后剩余的前缀即为剧名
+    if full.endswith(title):
+        series = full[: -len(title)].strip()
+        if series:
+            info["series"] = series
+            logger.info("[youku series] extracted series=%r from webpage title", series)
+    return info
 
 
 def _combine_series_title(info: dict[str, Any]) -> str:
