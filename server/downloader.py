@@ -1844,12 +1844,19 @@ def _is_iqiyi_host(host: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in _IQIYI_HOSTS)
 
 
-def _iqiyi_info(url: str) -> dict[str, Any] | None:
+def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
     """调 VPS worker 拿爱奇艺真实流，构造成 yt-dlp 兼容的 info dict。
 
     返回 None 表示应回退 yt-dlp 通用流程（仅 VPS worker 未配置/不可达且
     链接非分享页时，保留本地桌面既有的 yt-dlp IqiyiIE 路径）。
+
+    长期稳定路径：若用户已在「高级选项」提供登录 Cookie 且链接非分享页
+    (playShare.html)，则跳过 VPS worker，直接回退 yt-dlp IqiyiIE（带上用户
+    Cookie）直下——不受爱奇艺对 worker 的反爬检测影响，VIP Cookie 也能生效。
     """
+    # Cookie + 非分享页 → 跳过 worker，走 yt-dlp 直下（长期稳定路径）
+    if cookie and "playShare" not in url:
+        return None
     try:
         data = _call_vps_worker("iqiyi", url)
     except ResolveError as e:
@@ -1905,7 +1912,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
-        info = _iqiyi_info(url)
+        info = _iqiyi_info(url, cookie=cookie)
         if info is not None:
             return info
         # worker 未配置（本地桌面）且非分享页 → 回退 yt-dlp 通用流程
@@ -2486,7 +2493,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 info = _weibo_info(task.url)
             elif _is_iqiyi_host(_task_host):
                 # 爱奇艺：分享页 JS-only，VPS 解析 m3u8；worker 未配置且非分享页时回退 yt-dlp
-                info = _iqiyi_info(task.url)
+                info = _iqiyi_info(task.url, cookie=cookie)
                 if info is None:
                     info = ydl.extract_info(task.url, download=False) or {}
             else:
