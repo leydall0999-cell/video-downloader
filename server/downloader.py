@@ -1005,6 +1005,9 @@ _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
     # 腾讯视频：限免/会员视频走另一套播放 API，需要登录态 cookie；
     # 加入后 app 会自动从本机浏览器读 cookie 并注入请求，提示用户粘贴。
     "v.qq.com",
+    # 优酷：会员/受限视频需要登录态 Cookie，yt-dlp 解析时会报 -3007"请先登录"。
+    # 加入 hardened 后桌面端自动读取浏览器 Cookie，云端可经公共池共享。
+    "youku.com",
     # chrqj 影视聚合站：视频流（m3u8/ts CDN）校验播放页会话 Cookie，缺则拒绝。
     # 加入后自动从本机浏览器读该站 Cookie 并注入视频流请求头（无需手动粘贴）。
     "chrqj.com",
