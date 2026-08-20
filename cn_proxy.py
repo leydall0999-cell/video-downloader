@@ -135,10 +135,37 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _blocking_tunnel(self, client: socket.socket, upstream: socket.socket) -> None:
+        """阻塞双向转发：解析阶段响应通常 <1MB，阻塞转发更简单可靠，避免 IncompleteRead。"""
+        def forward(src: socket.socket, dst: socket.socket) -> None:
+            try:
+                while True:
+                    data = src.recv(65536)
+                    if not data:
+                        break
+                    dst.sendall(data)
+            except Exception:
+                pass
+            finally:
+                try:
+                    dst.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        t1 = threading.Thread(target=forward, args=(client, upstream), daemon=True)
+        t2 = threading.Thread(target=forward, args=(upstream, client), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
     def _tunnel(self, client: socket.socket, upstream: socket.socket) -> None:
-        # 非阻塞双向转发 + 发送缓冲。
+        # 非阻塞双向转发 + 发送缓冲（下载大文件时避免背压掐断）。
         # 重要：sendall 在非阻塞 socket 上遇到背压会抛 BlockingIOError，绝不能当致命错误
         # 关掉整条隧道——否则下载大文件时只要对端接收稍慢就会被掐断（IncompleteRead）。
+        if os.environ.get("CN_PROXY_BLOCKING_TUNNEL") == "1":
+            self._blocking_tunnel(client, upstream)
+            return
         client.setblocking(False)
         upstream.setblocking(False)
         socks = [client, upstream]
