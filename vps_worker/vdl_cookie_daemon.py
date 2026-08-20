@@ -31,6 +31,32 @@ from weibo_resolve import resolve as weibo_resolve  # noqa: E402
 from ximalaya_album_resolve import resolve_album as ximalaya_album_resolve  # noqa: E402
 from iqiyi_resolve import resolve as iqiyi_resolve  # noqa: E402
 
+
+def _load_env_file(path: str) -> None:
+    """启动时自加载同目录 .cookie_sync.env（VAR=value 或 VAR='value' 格式）。
+
+    不覆盖已存在的环境变量（显式注入的优先）。这样无论 daemon 由 systemd /
+    nohup / 手动哪种方式启动，配置都可靠加载，不会因外部 source 失效而丢 token。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                    val = val[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except Exception:
+        pass
+
+
+_load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cookie_sync.env"))
+
 API_TOKEN = os.environ.get("VDL_COOKIE_API_TOKEN", "")
 API_PORT = int(os.environ.get("VDL_COOKIE_API_PORT", "18731"))
 SYNC_URL = os.environ.get("VDL_COOKIE_SYNC_URL", "https://hanyuxz.top")
