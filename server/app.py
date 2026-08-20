@@ -1283,6 +1283,12 @@ async def lifespan(_: FastAPI):
         _warm_cookie_pool()
     except Exception:
         logger.exception("启动公共 Cookie 池预热失败")
+    # 反向 WebSocket 隧道本地代理（127.0.0.1:18889）：ECS 主动连入后，
+    # Railway 上的 yt-dlp 经此代理的流量被透明转发到国内 cn_proxy，绕开跨境入站瓶颈
+    try:
+        asyncio.create_task(_cn_tunnel.start_cn_tunnel_proxy())
+    except Exception:
+        logger.exception("启动反向隧道本地代理失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
@@ -2780,6 +2786,9 @@ from routers import cloud as _cloud_rtr
 app.include_router(_cloud_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
+# 反向 WebSocket 隧道：ECS 主动连入，把国内 cn_proxy 经隧道暴露给本机代理
+import cn_tunnel as _cn_tunnel
+app.include_router(_cn_tunnel.router)
 
 # —— 公共 Cookie 池 + 本机 Cookie 缓存（来自 main 分支，合并时保留）——
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。

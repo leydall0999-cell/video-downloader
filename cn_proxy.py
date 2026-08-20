@@ -54,6 +54,10 @@ class Handler(BaseHTTPRequestHandler):
     _counter = 0
 
     def _authenticate(self) -> bool:
+        # 本地回环信任：反向隧道 client 从本机 127.0.0.1 连入，无需重复鉴权
+        # （隧道本身由 VDL_TUNNEL_TOKEN 保护）；公网入站 IP 仍需 Basic 鉴权。
+        if self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return True
         if not _EXPECTED:
             return True
         if self.headers.get("Proxy-Authorization", "") == _EXPECTED:

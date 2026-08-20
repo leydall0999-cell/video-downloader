@@ -1,0 +1,18 @@
+[Unit]
+Description=VDL CN Tunnel Client (ECS -> Railway reverse WS tunnel)
+After=network-online.target cn_proxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vdl-tunnel
+Environment=CN_TUNNEL_WS=wss://hanyuxz.top/ws/cn-tunnel
+Environment=VDL_TUNNEL_TOKEN=vdl-rv-tunnel-7f3a9c2e-4b1d-8c66-2e5f9a0b3c7d
+Environment=CN_PROXY_LOCAL=127.0.0.1:18888
+ExecStart=/usr/bin/python3 /opt/vdl-tunnel/cn_tunnel_client.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
