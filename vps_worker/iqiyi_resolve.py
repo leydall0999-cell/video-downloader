@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -125,6 +126,10 @@ def resolve(url, timeout=60):
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--no-zygote",
+                "--single-process",
                 "--disable-blink-features=AutomationControlled",
                 "--autoplay-policy=no-user-gesture-required",
             ],
@@ -222,6 +227,28 @@ def resolve(url, timeout=60):
         finally:
             context.close()
             browser.close()
+            # 强杀残留 chromium 子进程——VPS 1.6GB 内存吃紧，Playwright 的 close()
+            # 有时漏掉 chromium_headless_shell 等子进程，累积占用致后续启动失败。
+            # 用 ps -eo 精确挑 chromium 子进程 PID（避免 pkill -f chromium 误杀本进程，
+            # 因为本进程命令行本身不含 chromium，但 pkill -f 在 shell 包装下会匹配命令行）。
+            # best-effort，失败不影响 resolve 结果。
+            try:
+                out = subprocess.run(
+                    ["ps", "-eo", "pid=,comm="],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout
+                for line in out.splitlines():
+                    parts = line.strip().split(None, 1)
+                    if len(parts) != 2 or "chrom" not in parts[1].lower():
+                        continue
+                    pid = int(parts[0])
+                    if pid > 0 and pid != os.getpid():
+                        try:
+                            os.kill(pid, 9)
+                        except ProcessLookupError:
+                            pass
+            except Exception:
+                pass
     finally:
         pw.stop()
 
