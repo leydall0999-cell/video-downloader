@@ -117,8 +117,10 @@ def resolve(url, timeout=60):
     os.makedirs(PROFILE, exist_ok=True)
     pw = sync_playwright().start()
     try:
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=PROFILE,
+        # 用 ephemeral context（不传 user_data_dir）—— 避免持久 profile 被爱奇艺
+        # 风控打标后跨调用污染（实测：持久 profile 多次失败后即使清 cookie 也跳
+        # error.html，ephemeral 每次干净 + 先访问主页建会话能稳定拿到 m3u8）。
+        browser = pw.chromium.launch(
             headless=True,
             args=[
                 "--no-sandbox",
@@ -126,9 +128,12 @@ def resolve(url, timeout=60):
                 "--disable-blink-features=AutomationControlled",
                 "--autoplay-policy=no-user-gesture-required",
             ],
+        )
+        context = browser.new_context(
             user_agent=UA,
             viewport={"width": 1280, "height": 800},
             locale="zh-CN",
+            timezone_id="Asia/Shanghai",
         )
         try:
             context.add_init_script(
@@ -216,6 +221,7 @@ def resolve(url, timeout=60):
             }
         finally:
             context.close()
+            browser.close()
     finally:
         pw.stop()
 
