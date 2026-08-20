@@ -337,6 +337,15 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         normalized = _strip_tracking_params(_normalize_bilibili_url(expanded))
         logger.info("[normalize] %s -> %s", url, normalized)
         return normalized
+
+    # 抖音：分享短链 v.douyin.com 展开后常为 iesdouyin.com/xg/video/ID，
+    # 该域名 Playwright 解析拿不到视频流；归一化为 douyin.com/video/ID 即可正常解析。
+    m = re.search(r"iesdouyin\.com/xg/video/(\d{15,})", url)
+    if m:
+        normalized = f"https://www.douyin.com/video/{m.group(1)}"
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
     # 其余平台：仅做通用追踪参数净化，零风险
     return _strip_tracking_params(url)
 
