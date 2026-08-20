@@ -2699,32 +2699,107 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     return opts
 
 
+def _extract_page_title(html: str) -> str:
+    """从优酷页面 HTML 抽取剧名候选标题。
+
+    优先 <title>；回退 <meta property="og:title">；再回退 JSON-LD 的 name/title。
+    """
+    if not html:
+        return ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    if m:
+        t = m.group(1).strip()
+        if t:
+            return t
+    m = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']',
+        html, re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        t = m.group(1).strip()
+        if t:
+            return t
+    for lm in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            data = json.loads(lm.group(1))
+        except Exception:
+            continue
+        name = data.get("name") or data.get("title")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        items = data.get("itemListElement")
+        if isinstance(items, list) and items:
+            n = items[0].get("name")
+            if isinstance(n, str) and n.strip():
+                return n.strip()
+    return ""
+
+
+def _parse_series_from_title(raw: str, title: str, is_show_page: bool = False) -> str:
+    """从优酷网页标题里切出整部剧名。
+
+    raw 形如：
+      "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看-优酷"
+    末尾 "-优酷"（可能带"视频"）之前还夹着站点描述，需整体剥离后再定位单集标题。
+
+    is_show_page=True 时表示这是 show_page 总页（标题只有剧名、无单集标题），
+    直接取首个描述分隔符前的内容作为剧名。
+    """
+    if not raw:
+        return ""
+    body = re.split(r"[-_|｜]\s*优酷", raw)[0].strip()
+    if is_show_page:
+        # 总页标题形如 "神墓 辰南觉醒-动漫-高清完整正版视频在线观看"，
+        # 剧名在首个 "-" 之前。
+        return re.split(r"[-_|｜]", body)[0].strip()
+    if not title:
+        return ""
+    series = ""
+    # 策略1：网页标题里能直接定位 yt-dlp 的单集标题，取它之前的部分作为剧名
+    if title in body:
+        series = body[: body.index(title)].strip(" -_｜|")
+    # 策略2：兜底——单集标题与网页略有出入时，按"第X话/集"把剧名切出来
+    if not series:
+        mm = re.match(r"^(.*?)[\s\-_]+第\s*\d+\s*[话集]", body)
+        if mm:
+            series = mm.group(1).strip(" -_｜|")
+    return series
+
+
 def _enrich_youku_series(info: dict[str, Any], proxy: str = "") -> dict[str, Any]:
     """优酷剧集：yt-dlp 只返回单集标题，从网页 <title> 提取整部剧名补到 info['series']。
 
     优酷播放页 HTML 的 title 通常是：
-        "神墓 辰南觉醒 第1话 我自远古来 - 优酷视频"
+        "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看-优酷"
     而 yt-dlp 返回的 info['title'] 只有：
         "第1话 我自远古来"
     用网页 title 减去单集标题，即可得到 "神墓 辰南觉醒" 作为 series。
 
-    该请求失败时静默忽略，不影响主解析流程。
+    抓取走 VDL_PROXY_CN（海外部署经国内代理回源）；失败时记录 _series_source 诊断，
+    便于线上排查（Railway 抓优酷页可能被风控返回非视频页）。
     """
     title = (info.get("title") or "").strip()
     if not title:
+        info["_series_source"] = "no_title"
         return info
     # 只对明显是"第X话/集"的单集标题做补全，避免普通短视频也走一次请求
     if not re.search(r"^(?:第\s*\d+\s*[话集]|\d+\s*[话集])", title):
+        info["_series_source"] = "not_episode"
         return info
 
     webpage_url = info.get("webpage_url") or ""
     host = _host_of(webpage_url)
     if not webpage_url or not (host.endswith("youku.com") or host.endswith("tudou.com")):
+        info["_series_source"] = "not_youku"
         return info
 
     try:
         import requests
     except Exception:
+        info["_series_source"] = "no_requests"
         return info
 
     headers = {
@@ -2737,44 +2812,60 @@ def _enrich_youku_series(info: dict[str, Any], proxy: str = "") -> dict[str, Any
         "Referer": "https://v.youku.com/",
     }
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    timeout = int(os.environ.get("VDL_YOUKU_TITLE_TIMEOUT", "12"))
+    timeout = int(os.environ.get("VDL_YOUKU_TITLE_TIMEOUT", "15"))
 
-    try:
-        resp = requests.get(
-            webpage_url,
-            headers=headers,
-            proxies=proxies,
-            timeout=timeout,
-            allow_redirects=True,
+    # 候选页面：v_show 单集页优先；URL 带 show id（s=）时追加 show_page 总页兜底
+    candidates = [webpage_url]
+    m_show = re.search(r"[?&]s=([0-9a-f]{12,})", webpage_url)
+    if m_show:
+        candidates.append(f"https://www.youku.com/show_page/id_{m_show.group(1)}.html")
+
+    raw = ""
+    parsed_series = ""
+    last_err = ""
+    for attempt in range(3):
+        for u in candidates:
+            try:
+                resp = requests.get(
+                    u, headers=headers, proxies=proxies,
+                    timeout=timeout, allow_redirects=True,
+                )
+                resp.raise_for_status()
+                candidate_raw = _extract_page_title(resp.text)
+                if not candidate_raw:
+                    continue
+                # 只有真正从候选标题里解析出剧名才提前结束；
+                # 否则（如被风控返回纯站点名"优酷"）继续尝试下一个候选页。
+                is_show_page = "show_page" in u
+                series_candidate = _parse_series_from_title(
+                    candidate_raw, title, is_show_page=is_show_page
+                )
+                if series_candidate:
+                    parsed_series = series_candidate
+                    raw = candidate_raw
+                    break
+                # 没解析出剧名但拿到了标题，留作诊断候选（不覆盖已成功解析的）
+                if not raw:
+                    raw = candidate_raw
+            except Exception as exc:
+                last_err = f"{type(exc).__name__}: {str(exc)[:100]}"
+        if parsed_series:
+            break
+        if attempt < 2:
+            time.sleep(1)
+
+    if not parsed_series:
+        info["_series_source"] = (
+            f"fetch_failed:{last_err or 'empty'}" if not raw else "parse_failed"
         )
-        resp.raise_for_status()
-        html = resp.text
-    except Exception as exc:
-        logger.debug("[youku series] fetch webpage title failed: %s", str(exc)[:120])
+        logger.warning(
+            "[youku series] no series parsed (raw=%r, err=%s)", raw, last_err
+        )
         return info
 
-    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-    if not m:
-        return info
-    raw = m.group(1).strip()
-    # 优酷 title 形如：
-    #   "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看-优酷"
-    # 末尾 "-优酷"（可能带"视频"）之前还夹着 "-动漫-高清完整正版视频在线观看"
-    # 这类站点描述，需要整体剥离后再定位单集标题。
-    body = re.split(r"[-_|｜]\s*优酷", raw)[0].strip()
-    # body = "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看"
-    series = ""
-    # 策略1：网页标题里能直接定位 yt-dlp 的单集标题，取它之前的部分作为剧名
-    if title and title in body:
-        series = body[: body.index(title)].strip(" -_｜|")
-    # 策略2：兜底——单集标题与网页略有出入时，按"第X话/集"把剧名切出来
-    if not series:
-        mm = re.match(r"^(.*?)[\s\-_]+第\s*\d+\s*[话集]", body)
-        if mm:
-            series = mm.group(1).strip(" -_｜|")
-    if series:
-        info["series"] = series
-        logger.info("[youku series] extracted series=%r from webpage title", series)
+    info["series"] = parsed_series
+    info["_series_source"] = "web_title"
+    logger.info("[youku series] extracted series=%r from webpage title", parsed_series)
     return info
 
 
@@ -2812,4 +2903,6 @@ def summarize(info: dict[str, Any]) -> dict[str, Any]:
         "play_url": play_url,
         "is_hls": is_hls,
         "watch_options": build_watch_options(info),
+        # 诊断字段（仅供排查优酷剧集剧名补全是否生效，前端忽略即可）
+        "_series_source": info.get("_series_source", ""),
     }
