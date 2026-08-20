@@ -29,6 +29,7 @@ from douyin_resolve import resolve as douyin_resolve  # noqa: E402
 from kuaishou_resolve import resolve as kuaishou_resolve  # noqa: E402
 from weibo_resolve import resolve as weibo_resolve  # noqa: E402
 from ximalaya_album_resolve import resolve_album as ximalaya_album_resolve  # noqa: E402
+from iqiyi_resolve import resolve as iqiyi_resolve  # noqa: E402
 
 API_TOKEN = os.environ.get("VDL_COOKIE_API_TOKEN", "")
 API_PORT = int(os.environ.get("VDL_COOKIE_API_PORT", "18731"))
@@ -49,6 +50,7 @@ _RESOLVERS = {
     "kuaishou": kuaishou_resolve,
     "weibo": weibo_resolve,
     "ximalaya_album": ximalaya_album_resolve,
+    "iqiyi": iqiyi_resolve,
 }
 
 

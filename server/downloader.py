@@ -1832,6 +1832,49 @@ def _weibo_info(url: str) -> dict[str, Any]:
     }
 
 
+# 爱奇艺（iqiyi.com / iq.com）：分享页 playShare.html?shareId=X 是纯 JS SPA，
+# yt-dlp IqiyiIE 提取不到 tvid 报 "Can't find any video"；改走 VPS Playwright
+# 解析（iqiyi_resolve.py），等 JS 渲染出 data-player-tvid/videoid 后调 tmts API
+# 拿 m3u8 直链（音视频合一清单，由 yt-dlp 分段下载）。
+_IQIYI_HOSTS: tuple[str, ...] = ("iqiyi.com", "iq.com")
+
+
+def _is_iqiyi_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _IQIYI_HOSTS)
+
+
+def _iqiyi_info(url: str) -> dict[str, Any] | None:
+    """调 VPS worker 拿爱奇艺真实流，构造成 yt-dlp 兼容的 info dict。
+
+    返回 None 表示应回退 yt-dlp 通用流程（仅 VPS worker 未配置/不可达且
+    链接非分享页时，保留本地桌面既有的 yt-dlp IqiyiIE 路径）。
+    """
+    try:
+        data = _call_vps_worker("iqiyi", url)
+    except ResolveError as e:
+        msg = e.message or ""
+        # 分享页必须 Playwright，回退 yt-dlp 也没用 → 直接报错；
+        # worker 未配置/不可达（本地桌面/开发环境）且非分享页 → 回退 yt-dlp。
+        if "playShare" in url or ("未配置" not in msg and "不可达" not in msg):
+            raise
+        return None
+    m3u8 = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or data.get("tvid") or "",
+        "title": data.get("title") or "爱奇艺视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Iqiyi",
+        "extractor": "iqiyi",
+        "ext": "mp4",
+        "url": m3u8,
+        "protocol": "m3u8_native",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": data.get("webpage_url") or url},
+    }
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
@@ -1854,13 +1897,18 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     host = _host_of(url)
     if cookie and host:
         _cache_user_cookie(host, cookie)
-    # 抖音/快手/微博：yt-dlp 提取器已失效，走 VPS Playwright 真实浏览器解析
+    # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
         return _douyin_info(url)
     if _is_kuaishou_host(host):
         return _kuaishou_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
+    if _is_iqiyi_host(host):
+        info = _iqiyi_info(url)
+        if info is not None:
+            return info
+        # worker 未配置（本地桌面）且非分享页 → 回退 yt-dlp 通用流程
     # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
     _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
     try:
@@ -2436,6 +2484,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)
+            elif _is_iqiyi_host(_task_host):
+                # 爱奇艺：分享页 JS-only，VPS 解析 m3u8；worker 未配置且非分享页时回退 yt-dlp
+                info = _iqiyi_info(task.url)
+                if info is None:
+                    info = ydl.extract_info(task.url, download=False) or {}
             else:
                 try:
                     info = ydl.extract_info(task.url, download=False) or {}
