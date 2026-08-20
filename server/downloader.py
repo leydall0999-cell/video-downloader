@@ -1629,6 +1629,14 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
                 pass
         except Exception:
             pass
+        # 爱奇艺 worker 返回 407 = 站点要求登录；
+        # 转成 cookie_required 让前端给出去粘贴 Cookie 的行动建议。
+        if platform == "iqiyi" and e.code == 407:
+            raise ResolveError(
+                "爱奇艺该链接需要登录 Cookie",
+                "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；粘贴后 VDL 会走 yt-dlp 长期稳定路径直接解析。",
+                category="cookie_required",
+            ) from e
         raise ResolveError("视频解析服务返回错误", f"HTTP {e.code}: {body[:120]}") from e
     except Exception as e:
         raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
@@ -1857,6 +1865,14 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
     # Cookie + 非分享页 → 跳过 worker，走 yt-dlp 直下（长期稳定路径）
     if cookie and "playShare" not in url:
         return None
+    # 非分享页但没有 Cookie：worker 对 iqiyi 常规页也会 407（需要登录态），
+    # 直接提示用户贴 Cookie，避免无意义调 worker。
+    if "playShare" not in url and not cookie:
+        raise ResolveError(
+            "爱奇艺该链接需要登录 Cookie",
+            "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；粘贴后 VDL 会走 yt-dlp 长期稳定路径直接解析。",
+            category="cookie_required",
+        )
     try:
         data = _call_vps_worker("iqiyi", url)
     except ResolveError as e:
