@@ -234,9 +234,22 @@ def _expand_b23tv_url(url: str, proxy: str = "") -> str:
             allow_redirects=True,
             stream=True,
         )
-        # 消费/关闭响应，避免连接泄漏
-        resp.close()
         final_url = resp.url
+        # b23.tv 随机短码有时会返回 200 HTML 页面（前端 JS 跳转），
+        # 此时 resp.url 仍是 b23.tv 自身，需从 body 解析真实 bilibili.com 链接兜底。
+        if not _is_bili_location(final_url):
+            try:
+                body = resp.text
+                m = re.search(r"https?://(?:www\.|m\.)?bilibili\.com/[^\"'\\s<>]+", body)
+                if m:
+                    cand = m.group(0)
+                    if _is_bili_location(cand):
+                        logger.info("[b23.tv expand] body-parse %s -> %s", url, cand)
+                        resp.close()
+                        return cand
+            except Exception as be:
+                logger.info("[b23.tv expand] body-parse %s failed: %s", url, str(be)[:120])
+        resp.close()
         if _is_bili_location(final_url):
             logger.info("[b23.tv expand] GET %s -> %s", url, final_url)
             return final_url
@@ -1848,6 +1861,18 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         info = entries[0]
     if info.get("is_live"):
         raise ResolveError("暂不支持下载正在直播的内容", "请等直播结束生成回放后再试")
+    # 用户常误粘贴 B站 个人空间/动态页（非具体视频），提前给出可读提示
+    _raw = (info.get("webpage_url") or url or "")
+    if "space.bilibili.com" in _raw or "bilibili.com/opus/" in _raw:
+        raise ResolveError(
+            "这是 B站 个人空间 / 动态页，不是单个视频",
+            "请打开该视频，复制浏览器地址栏中以 bilibili.com/video/BVxxxx 开头的播放页链接，再粘贴解析。",
+        )
+    if "bangumi" in _raw:
+        raise ResolveRestricted(
+            "该链接是 B站 番剧 / 影视（会员 DRM 内容）",
+            "番剧、电影、纪录片等受版权 DRM 保护，标准下载方式无法解析。请更换为公开可播放的普通视频链接。",
+        )
     if _is_restricted_placeholder(info):
         raise ResolveRestricted(
             "该视频疑似会员 / 付费受限，本工具暂不支持",
