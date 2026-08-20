@@ -1,101 +1,142 @@
 #!/usr/bin/env python3
-"""反向 WebSocket 隧道 client（国内 ECS 端）。
+"""反向 WebSocket 隧道 ECS 端 client。
 
-主动出站连 Railway 的 /ws/cn-tunnel（跨境出站稳定），把本机 cn_proxy（127.0.0.1:18888）
-经隧道反向暴露给 Railway 本机。收到 Railway 的 open 帧后，连本机 cn_proxy 并双向透传。
+Railway 端协议帧：[1B type][4B id BE][payload]
+  type 0 = open   payload = yt-dlp 发给本地代理的第一笔数据
+  type 1 = data   payload = 透明转发数据
+  type 2 = close  该 id 隧道关闭
 
-与 Railway 端 cn_tunnel.py 配套：整条链路按连接 id 做 raw byte 透传，不解析 HTTP。
-
-依赖：
-    pip install websockets
-
-部署（systemd，见 cn_tunnel_client.service）：
-    - 放本文件到 /opt/vdl-tunnel/cn_tunnel_client.py
-    - 设环境变量 CN_TUNNEL_WS / VDL_TUNNEL_TOKEN / CN_PROXY_LOCAL
-    - systemctl enable --now cn_tunnel_client
+ECS client 采用与 Railway 端对称的架构：
+- 单主循环从 WS 读消息
+- 每个 id 对应一条到本机 cn_proxy 的 TCP 连接和一个上行队列
+- 主循环按 id 把 type=1/type=2 消息分发给对应队列
+- 每连接有两个 task： pump_down（proxy -> WS）、pump_up（queue -> proxy）
 """
-from __future__ import annotations
-
 import asyncio
-import logging
 import os
 import struct
+from websockets.asyncio.client import connect
 
-import websockets
+RAILWAY_WS = os.environ.get("VDL_TUNNEL_URL", "wss://hanyuxz.top/ws/cn-tunnel")
+TOKEN = os.environ.get("VDL_TUNNEL_TOKEN", "")
+LOCAL_PROXY = os.environ.get("VDL_LOCAL_PROXY", "http://127.0.0.1:18888")
+RECONNECT = 5
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [cn_tunnel_client] %(levelname)s %(message)s",
-)
-log = logging.getLogger()
-
-WS_URL = os.environ.get("CN_TUNNEL_WS", "wss://hanyuxz.top/ws/cn-tunnel").rstrip("/")
-TOKEN = os.environ.get(
-    "VDL_TUNNEL_TOKEN", "vdl-rv-tunnel-7f3a9c2e-4b1d-8c66-2e5f9a0b3c7d"
-)
-_CN = os.environ.get("CN_PROXY_LOCAL", "127.0.0.1:18888")
-CN_HOST, CN_PORT = _CN.split(":")
-CN_PORT = int(CN_PORT)
+_WS_URL = RAILWAY_WS + (f"?token={TOKEN}" if TOKEN else "")
 
 
 def _frame(typ: int, id_: int, payload: bytes = b"") -> bytes:
     return struct.pack(">BI", typ, id_) + payload
 
 
-async def _reader_to_ws(ws, id_: int, reader: asyncio.StreamReader) -> None:
-    """把本机 cn_proxy 的响应经隧道发回 Railway。"""
-    try:
-        while True:
-            data = await reader.read(65536)
-            if not data:
-                break
-            await ws.send(_frame(1, id_, data))
-    except Exception:
-        pass
-    finally:
+async def tunnel_client():
+    # id -> (reader, writer, up_queue)
+    sessions: dict[int, tuple[asyncio.StreamReader, asyncio.StreamWriter, asyncio.Queue]] = {}
+
+    def cleanup(id_: int):
+        sess = sessions.pop(id_, None)
+        if not sess:
+            return
+        _reader, writer, _q = sess
         try:
-            await ws.send(_frame(2, id_))
+            writer.close()
         except Exception:
             pass
 
+    async def pump_down(id_: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """从本机 proxy 读 -> WS type=1；连接关闭时发 type=2。"""
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                await ws.send(_frame(1, id_, data))
+        except Exception:
+            pass
+        finally:
+            try:
+                await ws.send(_frame(2, id_))
+            except Exception:
+                pass
+            cleanup(id_)
 
-async def client_loop() -> None:
-    url = f"{WS_URL}?token={TOKEN}"
+    async def pump_up(id_: int, writer: asyncio.StreamWriter, q: asyncio.Queue):
+        """从队列读 -> 本机 proxy。"""
+        try:
+            while True:
+                kind, payload = await q.get()
+                if kind == "close":
+                    break
+                writer.write(payload)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            cleanup(id_)
+
+    async def handle_open(id_: int, initial: bytes):
+        """收到 open 帧：新建到本机 cn_proxy 的 TCP 连接。"""
+        parsed = LOCAL_PROXY.replace("http://", "").replace("https://", "")
+        host, port_s = parsed.rsplit(":", 1)
+        port = int(port_s)
+        ssl = LOCAL_PROXY.startswith("https://")
+        try:
+            reader, writer = await asyncio.open_connection(host, port, ssl=ssl)
+            writer.write(initial)
+            await writer.drain()
+        except Exception as e:
+            print(f"[cn_tunnel_client] id={id_} connect local proxy failed: {e}", flush=True)
+            try:
+                await ws.send(_frame(2, id_))
+            except Exception:
+                pass
+            return
+        q: asyncio.Queue = asyncio.Queue()
+        sessions[id_] = (reader, writer, q)
+        asyncio.create_task(pump_down(id_, reader, writer))
+        asyncio.create_task(pump_up(id_, writer, q))
+
     while True:
         try:
-            async with websockets.connect(
-                url, ping_interval=20, ping_timeout=30, max_size=None
-            ) as ws:
-                log.info("隧道已连 Railway: %s", WS_URL)
-                conns: dict[int, asyncio.StreamWriter] = {}
-                async for raw in ws:
-                    if not isinstance(raw, (bytes, bytearray)) or len(raw) < 5:
+            async with connect(_WS_URL, ping_interval=20, ping_timeout=10) as ws:
+                print(f"[cn_tunnel_client] connected {_WS_URL}", flush=True)
+                async for msg in ws:
+                    if isinstance(msg, str):
                         continue
-                    typ = raw[0]
-                    id_ = struct.unpack(">I", raw[1:5])[0]
-                    payload = raw[5:]
-                    if typ == 0:  # open：连本机 cn_proxy
-                        reader, writer = await asyncio.open_connection(CN_HOST, CN_PORT)
-                        writer.write(payload)
-                        await writer.drain()
-                        conns[id_] = writer
-                        asyncio.create_task(_reader_to_ws(ws, id_, reader))
-                    elif typ == 1:  # data：写本机 cn_proxy
-                        w = conns.get(id_)
-                        if w:
-                            w.write(payload)
-                            await w.drain()
-                    elif typ == 2:  # close
-                        w = conns.pop(id_, None)
-                        if w:
+                    if len(msg) < 5:
+                        continue
+                    typ = msg[0]
+                    id_ = struct.unpack(">I", msg[1:5])[0]
+                    payload = msg[5:]
+                    if typ == 0:  # open
+                        if id_ in sessions:
+                            cleanup(id_)
+                        asyncio.create_task(handle_open(id_, payload))
+                    elif typ == 1:  # data
+                        sess = sessions.get(id_)
+                        if sess:
                             try:
-                                w.close()
+                                sess[2].put_nowait(("data", payload))
                             except Exception:
                                 pass
-        except Exception as e:  # noqa: BLE001
-            log.warning("隧道断开: %s；5s 后重连", e)
-            await asyncio.sleep(5)
+                    elif typ == 2:  # close
+                        sess = sessions.pop(id_, None)
+                        if sess:
+                            try:
+                                sess[2].put_nowait(("close", b""))
+                            except Exception:
+                                pass
+                            try:
+                                sess[1].close()
+                            except Exception:
+                                pass
+        except Exception as e:
+            print(f"[cn_tunnel_client] error: {e}, reconnect in {RECONNECT}s", flush=True)
+            # 清理所有会话
+            for id_ in list(sessions.keys()):
+                cleanup(id_)
+            await asyncio.sleep(RECONNECT)
 
 
 if __name__ == "__main__":
-    asyncio.run(client_loop())
+    asyncio.run(tunnel_client())
