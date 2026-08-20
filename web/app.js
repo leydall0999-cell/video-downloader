@@ -31,9 +31,10 @@
       }
     } catch (_) {}
   });
-  // 默认展示「已生成成片」列表：用 setTimeout 异步兜底，即使后续初始化同步抛错，
-  // 事件循环也会执行本回调切到解说视图，不再依赖 IIFE 末尾是否跑到。
-  setTimeout(() => { try { switchView('commentary'); } catch (_) {} }, 0);
+  // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
+  // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
+  let bootViewSet = false;
+  setTimeout(() => { try { if (!bootViewSet) switchView('download'); } catch (_) {} }, 0);
 
   // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
   try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
@@ -7083,12 +7084,13 @@
       el.tabs.hidden = false; // 至少有下载 tab，导航栏始终显示
       // 默认视图：网页精简版停在下载，App 端停在解说成片
       switchView(profile === 'web' ? 'download' : 'commentary');
+      bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
   // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
-  try { switchView('download'); } catch (_) {}
+  try { switchView('download'); bootViewSet = true; } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
 
