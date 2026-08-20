@@ -109,6 +109,9 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     if app.downloader._is_douyin_host(host):
         # 抖音走 VPS Playwright 真实浏览器解析，起 Chromium + 页面加载实测 25-30s
         timeout = 75
+    elif app.downloader._is_iqiyi_host(host):
+        # 爱奇艺 VPS Playwright worker：起 Chromium + 等播放器发 m3u8 请求，实测 30-50s
+        timeout = 90
     elif host == 'v.qq.com':
         timeout = 35
     elif 'youtube.com' in host or 'youtu.be' in host:
@@ -124,6 +127,8 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         host = app._host_of(url)
         if app.downloader._is_douyin_host(host):
             detail = '抖音解析超时。抖音已升级反爬，网页端依赖 VPS 真实浏览器解析，偶发加载较慢。建议：①稍后重试；②确认链接是单个视频播放页（而非首页/列表）；③仍失败请反馈该链接'
+        elif app.downloader._is_iqiyi_host(host):
+            detail = '爱奇艺解析超时。依赖 VPS Playwright worker（启动 Chromium + 等播放器发 m3u8 请求）。建议：①稍后重试；②确认链接是分享页或 v_xxx.html 而非首页；③若持续失败请反馈该链接'
         elif host == 'v.qq.com':
             detail = '腾讯视频解析超时。该视频可能是会员/付费内容，或腾讯页面改版导致提取器暂时失效。建议：①在「高级选项」粘贴浏览器 Cookie 后重试；②确认视频可公开访问（非 VIP 专享）；③稍后重试或反馈此链接'
         elif 'youtube.com' in host or 'youtu.be' in host:
