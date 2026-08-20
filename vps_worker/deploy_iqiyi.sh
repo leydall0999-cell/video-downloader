@@ -15,8 +15,8 @@ scp -P "$SSH_PORT" "$HERE/iqiyi_resolve.py" "$HERE/vdl_cookie_daemon.py" "$VPS_H
 echo "==> [2/3] VPS 上验证模块可导入（Playwright 环境检查）"
 ssh -p "$SSH_PORT" "$VPS_HOST" "cd $DIR && python3 -c 'import iqiyi_resolve, vdl_cookie_daemon; print(\"import OK: iqiyi_resolve + vdl_cookie_daemon\")'"
 
-echo "==> [3/3] 重启 daemon（source 配置环境变量 + nohup 常驻）"
-ssh -p "$SSH_PORT" "$VPS_HOST" "cd $DIR && (source .cookie_sync.env 2>/dev/null || true) && pkill -f vdl_cookie_daemon.py 2>/dev/null || true; sleep 1; nohup python3 vdl_cookie_daemon.py >> daemon.log 2>&1 & sleep 2; echo '--- healthz ---'; curl -s http://127.0.0.1:18731/healthz; echo"
+echo "==> [3/3] 重启 daemon（强杀全部 + 释端口 + 起新 daemon）"
+ssh -p "$SSH_PORT" "$VPS_HOST" "cd $DIR && pgrep -f '[v]dl_cookie_daemon.py' | xargs -r kill -9 2>/dev/null; sleep 1; fuser -k -n tcp 18731 2>/dev/null; sleep 1; nohup .venv/bin/python vdl_cookie_daemon.py >> daemon.log 2>&1 & sleep 3; echo '--- healthz ---'; curl -s http://127.0.0.1:18731/healthz; echo"
 
 echo "==> 完成。可再验证："
 echo "  ssh -p $SSH_PORT $VPS_HOST \"curl -s 'http://127.0.0.1:18731/v1/resolve?token=<VDL_COOKIE_API_TOKEN>&platform=iqiyi&url=<爱奇艺分享链接>'\""
