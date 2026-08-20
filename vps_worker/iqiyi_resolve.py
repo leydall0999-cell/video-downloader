@@ -24,11 +24,26 @@ import urllib.parse
 import urllib.request
 
 PROFILE = "/opt/vdl-worker/iqiyi_profile"
-UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 # 简易诊断日志：写 daemon.log 方便 Railway 端排查 worker 真实状态
 LOG_PATH = "/opt/vdl-worker/iqiyi_resolve.log"
+
+# 浏览器 stealth 指纹伪装（2026-08-20 实测必要）：
+# 爱奇艺反爬会检测 headless 特征（navigator.webdriver/plugins/chrome 对象缺失、
+# --enable-automation 标志），识别出 Playwright 后拒绝返回 m3u8（跳 error.html）。
+# 这套伪装在 VPS 上实测拿到 m3u8（test_stealth.py CAUGHT=1）。
+_STEALTH_JS = r"""
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN','zh','en']});
+window.chrome = window.chrome || { runtime: {}, loadTimes: function(){}, csi: function(){}, app: {isInstalled: false}, webstore: {onInstallStageChanged: {}} };
+Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 5});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+"""
 
 # 与 yt-dlp IqiyiIE.get_raw_data 一致的签名常量（2026-08 实测仍有效）
 _IQIYI_CDN_KEY = "d5fb4bd9d50c4be6948c97edd7254b0e"
@@ -123,6 +138,7 @@ def resolve(url, timeout=60):
         # error.html，ephemeral 每次干净 + 先访问主页建会话能稳定拿到 m3u8）。
         browser = pw.chromium.launch(
             headless=True,
+            ignore_default_args=["--enable-automation"],  # 关键：去掉自动化标志
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
@@ -132,6 +148,7 @@ def resolve(url, timeout=60):
                 "--single-process",
                 "--disable-blink-features=AutomationControlled",
                 "--autoplay-policy=no-user-gesture-required",
+                "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
         context = browser.new_context(
@@ -141,9 +158,7 @@ def resolve(url, timeout=60):
             timezone_id="Asia/Shanghai",
         )
         try:
-            context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            context.add_init_script(_STEALTH_JS)
             page = context.new_page()
 
             # 捕获播放器发出的 m3u8 请求（主视频流，带 qd_* 签名参数）
