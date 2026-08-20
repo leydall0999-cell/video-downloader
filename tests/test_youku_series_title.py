@@ -1,4 +1,9 @@
-"""优酷剧集：从网页 <title> 补全整部剧名。"""
+"""优酷剧集：从网页 <title> 补全整部剧名。
+
+优酷单集播放页真实 <title> 形如：
+    "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看-优酷"
+单集标题与 "-优酷" 之间夹着站点描述，不能用 endswith 精确匹配。
+"""
 
 import pytest
 from unittest.mock import MagicMock
@@ -33,7 +38,28 @@ def _mock_get(monkeypatch, text, status=200, exc=None):
     return calls
 
 
-def test_enrich_extracts_series_from_webpage_title(monkeypatch):
+# 真实抓到的优酷单集页 <title>（带站点描述后缀）
+REAL_TITLE = "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看-优酷"
+
+
+def test_enrich_extracts_series_from_real_webpage_title(monkeypatch):
+    """真实格式：单集标题后夹着 -动漫-高清...-优酷。"""
+    calls = _mock_get(monkeypatch, f"<title>{REAL_TITLE}</title>")
+    info = {
+        "title": "第1话 我自远古来",
+        "webpage_url": "https://v.youku.com/v_show/id_XNTg4NjYwMzk0OA==.html",
+    }
+    out = _enrich_youku_series(info, proxy="http://proxy.example:8080")
+    assert out["series"] == "神墓 辰南觉醒"
+    assert len(calls) == 1
+    assert calls[0]["proxies"] == {
+        "http": "http://proxy.example:8080",
+        "https": "http://proxy.example:8080",
+    }
+
+
+def test_enrich_legacy_format_with_spaces_still_works(monkeypatch):
+    """旧格式（带空格 + '视频'）仍能正确提取。"""
     calls = _mock_get(
         monkeypatch,
         "<title>神墓 辰南觉醒 第1话 我自远古来 - 优酷视频</title>",
@@ -42,14 +68,24 @@ def test_enrich_extracts_series_from_webpage_title(monkeypatch):
         "title": "第1话 我自远古来",
         "webpage_url": "https://v.youku.com/v_show/id_XNTg4NjYwMzk0OA==.html",
     }
-    out = _enrich_youku_series(info, proxy="http://proxy.example:8080")
+    out = _enrich_youku_series(info)
     assert out["series"] == "神墓 辰南觉醒"
-    assert len(calls) == 1
-    assert calls[0]["proxies"] == {"http": "http://proxy.example:8080", "https": "http://proxy.example:8080"}
+
+
+def test_enrich_fallback_when_title_digits_mismatch(monkeypatch):
+    """策略2兜底：网页用 '第01话' 而 yt-dlp 返回 '第1话'（缺前导零）。"""
+    title = REAL_TITLE.replace("第1话", "第01话")
+    calls = _mock_get(monkeypatch, f"<title>{title}</title>")
+    info = {
+        "title": "第1话 我自远古来",
+        "webpage_url": "https://v.youku.com/v_show/id_X.html",
+    }
+    out = _enrich_youku_series(info)
+    assert out["series"] == "神墓 辰南觉醒"
 
 
 def test_enrich_skips_non_episode_title(monkeypatch):
-    calls = _mock_get(monkeypatch, "<title>某某短视频 - 优酷视频</title>")
+    calls = _mock_get(monkeypatch, "<title>某某短视频-优酷</title>")
     info = {
         "title": "某某短视频",
         "webpage_url": "https://v.youku.com/v_show/id_abc.html",
@@ -81,14 +117,13 @@ def test_enrich_ignores_network_error(monkeypatch):
 
 
 def test_enrich_no_double_prefix_when_title_already_contains_series(monkeypatch):
-    calls = _mock_get(monkeypatch, "<title>神墓 辰南觉醒 第1话 我自远古来 - 优酷视频</title>")
+    calls = _mock_get(monkeypatch, f"<title>{REAL_TITLE}</title>")
     info = {
         "title": "第1话 我自远古来",
         "webpage_url": "https://v.youku.com/v_show/id_XNTg4NjYwMzk0OA==.html",
         "series": "神墓 辰南觉醒",
     }
     out = _enrich_youku_series(info)
-    # 已有 series 时仍然会被覆盖为同一值，最终组合不会重复
     combined = _combine_series_title(out)
     assert combined == "神墓 辰南觉醒 - 第1话 我自远古来"
 

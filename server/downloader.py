@@ -2757,17 +2757,24 @@ def _enrich_youku_series(info: dict[str, Any], proxy: str = "") -> dict[str, Any
     if not m:
         return info
     raw = m.group(1).strip()
-    # 去掉 " - 优酷视频" / "| 优酷视频" / "_优酷" 等站点后缀
-    full = re.sub(r"\s*(?:[-|_])?\s*优酷(?:视频)?\s*$", "", raw).strip()
-    if not full:
-        return info
-
-    # 网页 title 去掉单集标题后剩余的前缀即为剧名
-    if full.endswith(title):
-        series = full[: -len(title)].strip()
-        if series:
-            info["series"] = series
-            logger.info("[youku series] extracted series=%r from webpage title", series)
+    # 优酷 title 形如：
+    #   "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看-优酷"
+    # 末尾 "-优酷"（可能带"视频"）之前还夹着 "-动漫-高清完整正版视频在线观看"
+    # 这类站点描述，需要整体剥离后再定位单集标题。
+    body = re.split(r"[-_|｜]\s*优酷", raw)[0].strip()
+    # body = "神墓 辰南觉醒 第1话 我自远古来-动漫-高清完整正版视频在线观看"
+    series = ""
+    # 策略1：网页标题里能直接定位 yt-dlp 的单集标题，取它之前的部分作为剧名
+    if title and title in body:
+        series = body[: body.index(title)].strip(" -_｜|")
+    # 策略2：兜底——单集标题与网页略有出入时，按"第X话/集"把剧名切出来
+    if not series:
+        mm = re.match(r"^(.*?)[\s\-_]+第\s*\d+\s*[话集]", body)
+        if mm:
+            series = mm.group(1).strip(" -_｜|")
+    if series:
+        info["series"] = series
+        logger.info("[youku series] extracted series=%r from webpage title", series)
     return info
 
 
