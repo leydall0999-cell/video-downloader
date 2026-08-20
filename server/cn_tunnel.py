@@ -63,7 +63,9 @@ async def _send(ws: "WebSocket", typ: int, id_: int, payload: bytes = b"") -> No
 async def cn_tunnel_ws(ws: WebSocket) -> None:
     """ECS client 主动连入的 WebSocket 端点（出站，稳定）。"""
     global _TUNNEL
-    token = ws.query_params.get("token", "")
+    auth = ws.headers.get("Authorization", "")
+    header_token = auth.removeprefix("Bearer ").strip() if auth else ""
+    token = ws.query_params.get("token", "") or header_token
     if _TUNNEL_TOKEN and token != _TUNNEL_TOKEN:
         await ws.close(code=1008, reason="unauthorized")
         return
