@@ -209,6 +209,20 @@ async def tunnel_test(mode: str = "http") -> dict:
             pass
 
     head = response.split(b"\r\n", 1)[0].decode("latin-1", errors="ignore")
+    # ---- 运行时诊断：国内站回源代理的真实生效值（排查「改了没生效」）----
+    diag = {}
+    try:
+        import downloader as _dl
+        diag["cn_proxy_url"] = _dl._cn_proxy_url()
+        diag["vdl_proxy_cn"] = os.environ.get("VDL_PROXY_CN", "<unset>")
+        diag["railway_envs"] = {
+            k: bool(os.environ.get(k))
+            for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_SERVICE_ID", "RAILWAY_PROJECT_ID",
+                      "RAILWAY_BRANCH", "RAILWAY_DEPLOYMENT_ID", "RAILWAY_REPLICA_ID")
+        }
+        diag["is_china_bilibili"] = _dl.is_china_host("bilibili.com")
+    except Exception as e:
+        diag["diag_error"] = str(e)
     extra = {}
     if mode == "connect" and head.startswith("HTTP/1.1 200"):
         # CONNECT 已 200：再发一个 TLS ClientHello 试探，确认双向能透传 TLS 字节
@@ -244,6 +258,7 @@ async def tunnel_test(mode: str = "http") -> dict:
         "body_preview": response[:200].decode("latin-1", errors="ignore"),
         "elapsed": round(time.time() - start, 2),
         "tunnel_ready": _TUNNEL_READY.is_set(),
+        **diag,
         **extra,
     }
 
