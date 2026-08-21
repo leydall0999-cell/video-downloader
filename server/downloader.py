@@ -2095,17 +2095,62 @@ def _youtube_cookie_candidates(user_cookie: str) -> list[tuple[str, str]]:
     return cands
 
 
+def _fetch_youtube_visitor_data(proxy: str = "") -> str:
+    """无 Cookie 从 YouTube 首页 HTML 提取 visitorData（PO Token 免 Cookie 链路）。
+
+    2026-08 实测：数据中心 IP 访问 www.youtube.com 首页返回 200，HTML 内含
+    "VISITOR_DATA":"Cg..."（ytcfg），无需登录态。yt-dlp 的 GVS PO Token 必须
+    绑定 visitor_data，之前因缺它而无法触发 bgutil server 生成 token——
+    这里自动补上，即可走「PO Token 免 Cookie」路径。
+
+    失败（被限流/网络）返回空串，调用方回退 Cookie 源。
+    """
+    import re as _re
+    import requests as _requests
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+    }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        r = _requests.get(
+            "https://www.youtube.com/", headers=headers, proxies=proxies, timeout=15
+        )
+        if r.status_code == 200:
+            m = _re.search(r'"VISITOR_DATA":"([^"]+)"', r.text)
+            if m:
+                return m.group(1)
+    except Exception as _e:  # noqa: BLE001
+        logger.info("[youtube] 获取 visitor_data 失败（不影响 Cookie 兜底）: %s", str(_e)[:100])
+    return ""
+
+
 def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """YouTube 自动降级解析：方法一（免 Cookie + PO Token）→ 方法二（Cookie 源自动切换）。
+
+    方法一：自动获取 visitor_data → 注入 yt-dlp（youtube:visitor_data + fetch_pot=always）
+    → bgutil server 生成 PO Token → 免 Cookie 解析；
+    方法一被 bot 拦截或不可用时，自动按序尝试 Cookie 源（user > env > cache > pool）。
 
     返回 yt-dlp info dict；全部失败抛 ResolveError（bot 拦截时 category=cookie_required）。
     """
     host = _host_of(url)
     effective_proxy = proxy or _resolve_proxy(host)
+    # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路
+    visitor_data = _fetch_youtube_visitor_data(effective_proxy)
+    if visitor_data:
+        logger.info("[youtube] 已自动获取 visitor_data（%s…），启用 PO Token 免 Cookie 路径", visitor_data[:20])
 
-    def _try(cookie_text: str) -> dict[str, Any]:
+    def _try(cookie_text: str, use_visitor: bool = True) -> dict[str, Any]:
         opts = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
         opts["format"] = None
+        # 免 Cookie 路径：注入 visitor_data + 强制 fetch PO Token（bgutil 自动生效）
+        if use_visitor and not cookie_text and visitor_data:
+            ya = opts.setdefault("extractor_args", {}).setdefault("youtube", {})
+            ya["visitor_data"] = [visitor_data]
+            ya["fetch_pot"] = ["always"]
         try:
             with _YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)

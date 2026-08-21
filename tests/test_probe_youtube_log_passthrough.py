@@ -86,6 +86,8 @@ def _base_patches(monkeypatch, fake_youtube_module=True):
     monkeypatch.setattr(dl, "_resolve_proxy", lambda *a, **kw: "")
     monkeypatch.setattr(dl, "is_china_host", lambda *a, **kw: False)
     monkeypatch.setattr(dl, "_looks_like_direct_file", lambda *a, **kw: False)
+    # 沙盒连不上 YouTube：mock visitor_data 获取
+    monkeypatch.setattr(dl, "_fetch_youtube_visitor_data", lambda *a, **kw: "")
     # 默认 opts 不带 ignoreerrors（验证移除后行为）
     monkeypatch.setattr(
         dl,

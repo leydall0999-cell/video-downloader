@@ -51,6 +51,8 @@ def _patch_env(monkeypatch):
     monkeypatch.setattr(dl, "_resolve_proxy", lambda *a, **kw: "")
     monkeypatch.setattr(dl, "is_china_host", lambda *a, **kw: False)
     monkeypatch.setattr(dl, "_YoutubeDL", _FakeYDL)
+    # 沙盒连不上 YouTube：mock visitor_data 获取（返回空走纯 Cookie 链路）
+    monkeypatch.setattr(dl, "_fetch_youtube_visitor_data", lambda *a, **kw: "")
     monkeypatch.setattr(
         dl,
         "_base_options",
@@ -141,3 +143,49 @@ def test_youtube_no_cookie_sources(monkeypatch):
     except ResolveError as e:
         assert e.category == "cookie_required"
         assert "VDL_YOUTUBE_COOKIE" in (e.hint or "")
+
+
+def test_youtube_visitor_data_injected_for_pot(monkeypatch):
+    """方法一：自动拿到 visitor_data 后注入 yt-dlp（visitor_data + fetch_pot=always），
+    触发 bgutil PO Token 免 Cookie 解析。"""
+    _patch_env(monkeypatch)
+    captured = {}
+
+    class _VisYDL(_FakeYDL):
+        def extract_info(self, url, download=False):
+            captured["extractor_args"] = self.opts.get("extractor_args") or {}
+            return dict(OK_INFO)
+
+    monkeypatch.setattr(dl, "_YoutubeDL", _VisYDL)
+    monkeypatch.setattr(dl, "_fetch_youtube_visitor_data", lambda *a, **kw: "Cgtestvisitordata123")
+
+    info = dl._resolve_youtube("https://youtu.be/eVAx63QSgc4")
+    assert info["title"] == "Test Video"
+    ya = captured["extractor_args"].get("youtube") or {}
+    assert ya.get("visitor_data") == ["Cgtestvisitordata123"], f"应注入 visitor_data，实际 {ya}"
+    assert ya.get("fetch_pot") == ["always"], f"应强制 fetch_pot，实际 {ya}"
+
+
+def test_youtube_cookie_path_no_visitor(monkeypatch):
+    """方法一（免 Cookie+visitor）bot 拦 → 方法二（Cookie）成功且不注入 visitor_data，
+    避免 Cookie 与 visitor 冲突。"""
+    _patch_env(monkeypatch)
+    captured = []
+
+    class _VisYDL(_FakeYDL):
+        def extract_info(self, url, download=False):
+            captured.append(self.opts.get("extractor_args") or {})
+            return super().extract_info(url, download=False)
+
+    monkeypatch.setattr(dl, "_YoutubeDL", _VisYDL)
+    monkeypatch.setattr(dl, "_fetch_youtube_visitor_data", lambda *a, **kw: "Cgtestvisitor")
+    monkeypatch.setenv("VDL_YOUTUBE_COOKIE", "GOOD_COOKIE=env")
+
+    info = dl._resolve_youtube("https://youtu.be/eVAx63QSgc4")
+    # 方法一（无 cookie + visitor）bot 拦 → 方法二（env cookie GOOD_COOKIE）成功
+    assert len(captured) >= 2, f"应至少尝试两次（方法一+方法二），实际 {len(captured)}"
+    # 最后一次调用（带 cookie）不应注入 visitor_data
+    last_ya = captured[-1].get("youtube") or {}
+    assert "visitor_data" not in last_ya, "带 Cookie 不应注入 visitor_data"
+    assert "fetch_pot" not in last_ya, "带 Cookie 不应强制 fetch_pot"
+    assert info["title"] == "Test Video"
