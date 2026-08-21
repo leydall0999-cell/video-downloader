@@ -29,6 +29,23 @@ def _frame(typ: int, id_: int, payload: bytes = b"") -> bytes:
     return struct.pack(">BI", typ, id_) + payload
 
 
+async def heartbeat(ws):
+    """周期心跳数据帧：Cloudflare 等反代对 WS 的空闲超时只认【数据帧】，
+    ping/pong 控制帧不计入活动，纯 ping 会被反代在 ~100s 后断开 TCP
+    （表现为 client 侧 'no close frame received or sent' 反复重连）。
+    每 30s 发一帧 type=3 空数据（服务端忽略），把连接保持为"活跃"。"""
+    try:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                async with send_lock:
+                    await ws.send(_frame(3, 0, b""))
+            except Exception:
+                return  # 连接已断，主循环会处理重连
+    except asyncio.CancelledError:
+        pass
+
+
 async def tunnel_client():
     send_lock = asyncio.Lock()
     # id -> (reader, writer, up_queue, up_task)
@@ -114,36 +131,40 @@ async def tunnel_client():
                 close_timeout=5,
             ) as ws:
                 print(f"[cn_tunnel_client] connected {_WS_URL}", flush=True)
-                async for msg in ws:
-                    if isinstance(msg, str):
-                        continue
-                    if len(msg) < 5:
-                        continue
-                    typ = msg[0]
-                    id_ = struct.unpack(">I", msg[1:5])[0]
-                    payload = msg[5:]
-                    if typ == 0:  # open
-                        if id_ in sessions:
-                            cleanup(id_)
-                        asyncio.create_task(handle_open(id_, payload))
-                    elif typ == 1:  # data
-                        sess = sessions.get(id_)
-                        if sess:
-                            try:
-                                sess[2].put_nowait(("data", payload))
-                            except Exception:
-                                pass
-                    elif typ == 2:  # close
-                        sess = sessions.pop(id_, None)
-                        if sess:
-                            try:
-                                sess[2].put_nowait(("close", b""))
-                            except Exception:
-                                pass
-                            try:
-                                sess[1].close()
-                            except Exception:
-                                pass
+                hb = asyncio.create_task(heartbeat(ws))
+                try:
+                    async for msg in ws:
+                        if isinstance(msg, str):
+                            continue
+                        if len(msg) < 5:
+                            continue
+                        typ = msg[0]
+                        id_ = struct.unpack(">I", msg[1:5])[0]
+                        payload = msg[5:]
+                        if typ == 0:  # open
+                            if id_ in sessions:
+                                cleanup(id_)
+                            asyncio.create_task(handle_open(id_, payload))
+                        elif typ == 1:  # data
+                            sess = sessions.get(id_)
+                            if sess:
+                                try:
+                                    sess[2].put_nowait(("data", payload))
+                                except Exception:
+                                    pass
+                        elif typ == 2:  # close
+                            sess = sessions.pop(id_, None)
+                            if sess:
+                                try:
+                                    sess[2].put_nowait(("close", b""))
+                                except Exception:
+                                    pass
+                                try:
+                                    sess[1].close()
+                                except Exception:
+                                    pass
+                finally:
+                    hb.cancel()
         except Exception as e:
             print(f"[cn_tunnel_client] error: {e}, reconnect in {RECONNECT}s", flush=True)
             # 清理所有会话

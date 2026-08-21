@@ -109,6 +109,7 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
                 q = _PENDING.pop(id_, None)
                 if q:
                     await q.put(("close", b""))
+            # typ == 3：client 心跳数据帧（保持 Cloudflare WS 活跃），忽略
     except WebSocketDisconnect:
         logger.warning("[cn_tunnel] ECS client 断开")
     except Exception:
