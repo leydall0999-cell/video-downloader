@@ -890,14 +890,21 @@ def _cn_proxy_url() -> str:
     Railway 环境（VDL 网页版部署在海外）默认走本机反向隧道代理 127.0.0.1:18889，
     该代理经 WebSocket 隧道把流量透明转发到国内 ECS 的 cn_proxy，绕开跨境入站瓶颈。
     本机（桌面/Mac，非 Railway）留空直连即可。VDL_PROXY_CN 可显式覆盖默认值。
+
+    注意：VDL_PROXY_CN 显式置空（''）视同未设置，必须回落默认值——否则 Railway
+    网页版国内站会退化成海外直连，被地理围栏 403（Cloudflare 1010）。
     """
-    default = (
-        "http://127.0.0.1:18889"
-        if (os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_SERVICE_ID")
-             or os.environ.get("RAILWAY_PROJECT_ID"))
-        else ""
+    explicit = os.environ.get("VDL_PROXY_CN", "").strip()
+    if explicit:
+        return explicit
+    on_railway = any(
+        os.environ.get(k)
+        for k in (
+            "RAILWAY_ENVIRONMENT", "RAILWAY_SERVICE_ID", "RAILWAY_PROJECT_ID",
+            "RAILWAY_BRANCH", "RAILWAY_DEPLOYMENT_ID", "RAILWAY_REPLICA_ID",
+        )
     )
-    return os.environ.get("VDL_PROXY_CN", default).strip()
+    return "http://127.0.0.1:18889" if on_railway else ""
 
 
 def _resolve_proxy(host: str = "") -> str:
@@ -1315,7 +1322,8 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         # 国内站：海外部署（Railway 等）必须经 VDL_PROXY_CN 回源到国内出口，
         # 否则被地理围栏 403；本机在国内直连时该变量为空，显式置空避免 yt-dlp
         # 误读系统/环境变量里的海外代理导致超时/被拒。
-        options["proxy"] = _cn_proxy_url()
+        # 用户显式传入的 proxy 优先（高级选项 → 代理），否则用默认回源代理。
+        options["proxy"] = proxy or _cn_proxy_url()
     elif effective_proxy:
         options["proxy"] = effective_proxy
         # 走代理时（Clash/V2Ray/Surge 等常做 HTTPS MITM 中间人解密），
