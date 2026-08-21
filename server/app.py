@@ -2931,28 +2931,21 @@ def youtube_diag(url: str = "https://youtu.be/eIvAx63QSgc") -> dict:
     ydl_logger.setLevel(logging.DEBUG)
     out: dict = {"url": url, "ytdlp_version": yt_dlp.version.__version__}
     try:
-        opts = {
-            "quiet": True,
-            "no_warnings": False,
-            "skip_download": True,
-            "format": None,
-            "noplaylist": True,
-            "ignoreerrors": False,
-            "retries": 1,
-            "socket_timeout": 20,
-        }
+        # 完整跑 probe() 走真实业务路径
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-            out["info_truthy"] = bool(info)
-            out["info_type"] = type(info).__name__
+            from downloader import probe
+            info = probe(url)
+            out["probe_truthy"] = bool(info)
+            out["probe_type"] = type(info).__name__
             if info:
-                out["title"] = info.get("title", "")[:80]
-                out["formats_count"] = len(info.get("formats") or [])
-                out["keys_top"] = list(info.keys())[:10]
+                out["probe_title"] = info.get("title", "")[:80]
+                out["probe_formats_count"] = len(info.get("formats") or [])
+                out["probe_keys"] = list(info.keys())[:10]
         except Exception as e:  # noqa: BLE001
-            out["exception_type"] = type(e).__name__
-            out["exception_msg"] = str(e)[:400]
+            out["probe_exception_type"] = type(e).__name__
+            out["probe_exception_msg"] = str(e)[:600]
+            out["probe_exception_cat"] = getattr(e, "category", "?")
+            out["probe_exception_hint"] = getattr(e, "hint", "")[:300]
         out["log_tail"] = buf.getvalue().splitlines()[-30:]
     finally:
         ydl_logger.removeHandler(handler)
