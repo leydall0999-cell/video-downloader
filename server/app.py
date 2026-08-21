@@ -2922,7 +2922,7 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
 
     out: dict = {"url": url, "ytdlp_version": yt_dlp.version.__version__}
 
-    def _run(label, extractor_args=None, extra_opts=None):
+    def _run(label, extractor_args=None, extra_opts=None, target_url=None):
         opts = {
             "quiet": True,
             "skip_download": True,
@@ -2935,9 +2935,10 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
         if extra_opts:
             opts.update(extra_opts)
         result = {"label": label}
+        target = target_url or url
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+                info = ydl.extract_info(target, download=False)
             result["ok"] = True
             if info:
                 result["title"] = info.get("title", "")[:60]
@@ -2952,10 +2953,15 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
 
     out["tests"] = [
         _run("default"),
+        _run("ios", {"youtube": {"player_client": ["ios"]}}),
+        _run("mweb", {"youtube": {"player_client": ["mweb"]}}),
         _run("tv", {"youtube": {"player_client": ["tv"]}}),
-        _run("tv_embedded", {"youtube": {"player_client": ["tv_embedded"]}}),
-        _run("android_vr", {"youtube": {"player_client": ["android_vr"]}}),
+        _run("web_embedded", {"youtube": {"player_client": ["web_embedded"]}}),
     ]
+    # 长链对照
+    if "youtu.be" in url:
+        long_url = url.replace("youtu.be/", "www.youtube.com/watch?v=")
+        out["tests"].append(_run("long_url_www", None, {"noplaylist": True}, target_url=long_url))
     return out
 
 
