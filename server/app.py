@@ -2961,6 +2961,7 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             "format": None,
             "socket_timeout": 12,
             "retries": 0,
+            "verbose": True,
         }
         if extractor_args:
             opts["extractor_args"] = extractor_args
@@ -2968,6 +2969,17 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             opts.update(extra_opts)
         result = {"label": label}
         target = target_url or url
+        # 捕获 yt-dlp 日志（PO token 获取过程）
+        import io as _io
+        import logging as _log
+        _buf = _io.StringIO()
+        _h = _log.StreamHandler(_buf)
+        _h.setLevel(_log.DEBUG)
+        _h.setFormatter(_log.Formatter("%(message)s"))
+        _lg = _log.getLogger("yt_dlp")
+        _lg.addHandler(_h)
+        _old_lvl = _lg.level
+        _lg.setLevel(_log.DEBUG)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(target, download=False)
@@ -2975,18 +2987,17 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             if info:
                 result["title"] = info.get("title", "")[:60]
                 result["formats"] = len(info.get("formats") or [])
-                fmts = info.get("formats") or []
-                result["fmt_summary"] = [
-                    "%s/%s/%s" % (f.get("format_id"), f.get("ext"), f.get("height") or f.get("resolution") or "?")
-                    for f in fmts[:8]
-                ]
-                result["requested_formats"] = len(info.get("requested_formats") or [])
         except Exception as e:  # noqa: BLE001
             result["ok"] = False
             msg = str(e)
             result["err"] = msg[:220]
             if "bot" in msg.lower():
                 result["bot"] = True
+        finally:
+            _lg.removeHandler(_h)
+            _lg.setLevel(_old_lvl)
+        lines = _buf.getvalue().splitlines()
+        result["pot_lines"] = [l for l in lines if "po" in l.lower() or "POT" in l or "bot" in l.lower()][-15:]
         return result
 
     out["tests"] = [
