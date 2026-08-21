@@ -266,7 +266,7 @@ def _expand_b23tv_url(url: str, proxy: str = "") -> str:
 
 
 def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
-    """把 iqy.net 短链（爱奇艺官方 302 跳转短链服务）展开为 iqiyi.com 真实视频页。
+    """把爱奇艺短链（iqy.net / qy.net 官方 302 跳转短链服务）展开为 iqiyi.com 真实视频页。
 
     yt-dlp 的 IqiyiIE 仅识别 iqiyi.com / iq.com 域；对 iqy.net/i/<id> 会落 [generic]
     提取器，而 iqy.net 页面本身不是 HTML 视频页，generic 拿不到视频流 → 「无法从该链接中
@@ -280,7 +280,8 @@ def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
     """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    if host not in ("iqy.net", "www.iqy.net", "m.iqy.net"):
+    if host not in ("iqy.net", "www.iqy.net", "m.iqy.net",
+                    "qy.net", "www.qy.net", "m.qy.net"):
         return url
 
     try:
@@ -294,7 +295,7 @@ def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://iqy.net/",
+        "Referer": "https://iqiyi.com/",
         "DNT": "1",
         "Upgrade-Insecure-Requests": "1",
     }
@@ -411,7 +412,7 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
        b23.tv 随机短码会先用 HEAD 请求 302 展开，确保 yt-dlp 使用 BiliBili
        提取器（能正确注入 Cookie/Referer/UA）。桌面端 IP 风控较松时短链也
        能走 generic 通过；网页端(Railway 代理 IP)必须走 bilibili 提取器。
-    2. 爱奇艺：iqy.net 短链先 HEAD/GET 302 展开为 iqiyi.com 长链，
+    2. 爱奇艺：iqy.net / qy.net 短链先 HEAD/GET 302 展开为 iqiyi.com 长链，
        否则 yt-dlp IqiyiIE 不认 iqy.net 域会落 [generic] 返回空。
     3. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
        不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
@@ -424,8 +425,8 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         logger.info("[normalize] %s -> %s", url, normalized)
         return normalized
 
-    # 爱奇艺 短链 iqy.net 展开为 iqiyi.com 长链（yt-dlp IqiyiIE 仅识别 iqiyi.com）
-    if "iqy.net" in url:
+    # 爱奇艺 短链 iqy.net / qy.net 展开为 iqiyi.com 长链（yt-dlp IqiyiIE 仅识别 iqiyi.com）
+    if "iqy.net" in url or "qy.net" in url:
         expanded = _expand_iqiyi_short_url(url, proxy=proxy)
         if expanded != url:
             normalized = _strip_tracking_params(expanded)
@@ -1357,6 +1358,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             referer = "https://www.douyin.com/"
         elif "bilibili.com" in host or "b23.tv" in host:
             referer = "https://www.bilibili.com/"
+        elif "iqiyi.com" in host:
+            # 爱奇艺与 B站同理：页面/接口校验 Referer 只认带 www 的 https://www.iqiyi.com/
+            referer = "https://www.iqiyi.com/"
         else:
             referer = f"https://{host}/"
         headers.setdefault("Referer", referer)
