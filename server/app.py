@@ -2972,6 +2972,24 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
     except Exception as _e:  # noqa: BLE001
         out["direct_fetch_pot_err"] = str(_e)[:250]
 
+    # CLI 方式验证：subprocess 跑 yt-dlp --extractor-args（完整参数解析路径）
+    try:
+        import subprocess as _sp
+        _cli = _sp.run(
+            [
+                sys.executable, "-m", "yt_dlp", "--skip-download", "--dump-json",
+                "--no-warnings", "--extractor-args", "youtube:fetch_pot=always",
+                "--print", "%(title)s|%(id)s",
+                url,
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+        out["cli_rc"] = _cli.returncode
+        out["cli_stdout"] = _cli.stdout[:200]
+        out["cli_stderr"] = _cli.stderr.splitlines()[-12:]
+    except Exception as _e:  # noqa: BLE001
+        out["cli_err"] = str(_e)[:200]
+
     def _run(label, extractor_args=None, extra_opts=None, target_url=None):
         opts = {
             "quiet": True,
