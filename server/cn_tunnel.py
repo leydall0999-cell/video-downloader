@@ -221,6 +221,26 @@ async def tunnel_test(mode: str = "http") -> dict:
                       "RAILWAY_BRANCH", "RAILWAY_DEPLOYMENT_ID", "RAILWAY_REPLICA_ID")
         }
         diag["is_china_bilibili"] = _dl.is_china_host("bilibili.com")
+        # 副本标识：连续请求间变化 => 多副本负载均衡（WS 与 HTTP 落到不同实例）
+        diag["replica_id"] = os.environ.get("RAILWAY_REPLICA_ID", "?")
+        diag["hostname"] = os.environ.get("RAILWAY_POD_NAME", os.environ.get("HOSTNAME", "?"))
+        diag["pid"] = os.getpid()
+        # yt-dlp 实际 handler 配置：模拟 probe 构建 _YoutubeDL，看 proxy 是否真的进了 handler
+        if mode == "handlers":
+            try:
+                import logging as _logging
+                _logging.disable(_logging.INFO)
+                opts = _dl._base_options(3, "bilibili.com")
+                opts["format"] = None
+                ydl = _dl._YoutubeDL(opts)
+                rd = ydl._request_director
+                diag["ytdlp_proxy_param"] = ydl.params.get("proxy")
+                diag["ytdlp_handlers"] = list(rd.handlers.keys())
+                diag["ytdlp_handler_proxies"] = {
+                    k: str(getattr(h, "proxies", "N/A")) for k, h in rd.handlers.items()
+                }
+            except Exception as e:
+                diag["ytdlp_diag_error"] = f"{type(e).__name__}: {str(e)[:200]}"
         # 运行代码版本指纹：确认容器里跑的是否为最新 downloader.py（防 Docker COPY 缓存/分支错位）
         _dl_path = os.path.abspath(_dl.__file__)
         with open(_dl_path, "rb") as _f:
