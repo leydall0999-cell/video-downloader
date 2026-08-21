@@ -2910,6 +2910,56 @@ def _warm_cookie_pool() -> None:
     except Exception:
         logger.exception("公共池启动预热异常")
 
+
+@app.get("/api/youtube-diag")
+def youtube_diag(url: str = "https://youtu.be/eIvAx63QSgc") -> dict:
+    """临时诊断：跑 yt-dlp 真实抓 YouTube 视频页，把 yt-dlp stdout/stderr + 异常返回。
+
+    仅用于排查 YouTube「extract_info 返回空」根因，验证后移除。
+    """
+    import io
+    import logging
+    import yt_dlp
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    ydl_logger = logging.getLogger("yt_dlp")
+    ydl_logger.addHandler(handler)
+    old_level = ydl_logger.level
+    ydl_logger.setLevel(logging.DEBUG)
+    out: dict = {"url": url, "ytdlp_version": yt_dlp.version.__version__}
+    try:
+        opts = {
+            "quiet": True,
+            "no_warnings": False,
+            "skip_download": True,
+            "format": None,
+            "noplaylist": True,
+            "ignoreerrors": False,
+            "retries": 1,
+            "socket_timeout": 20,
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            out["info_truthy"] = bool(info)
+            out["info_type"] = type(info).__name__
+            if info:
+                out["title"] = info.get("title", "")[:80]
+                out["formats_count"] = len(info.get("formats") or [])
+                out["keys_top"] = list(info.keys())[:10]
+        except Exception as e:  # noqa: BLE001
+            out["exception_type"] = type(e).__name__
+            out["exception_msg"] = str(e)[:400]
+        out["log_tail"] = buf.getvalue().splitlines()[-30:]
+    finally:
+        ydl_logger.removeHandler(handler)
+        ydl_logger.setLevel(old_level)
+    return out
+
+
 @app.get("/api/cookie/pull-diag")
 def cookie_pull_diag() -> dict:
     """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
