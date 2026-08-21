@@ -2922,6 +2922,34 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
 
     out: dict = {"url": url, "ytdlp_version": yt_dlp.version.__version__}
 
+    # ---- 诊断：bgutil PO token 基础设施 ----
+    env_url = os.environ.get("YT_DLP_POT_PROVIDER_URL", "")
+    out["env_pot_url"] = env_url
+    out["bgutil_path"] = os.path.exists("/opt/bgutil/server/build/main.js")
+    # 4416 端口探测
+    try:
+        import socket as _s
+        with _s.create_connection(("127.0.0.1", 4416), timeout=1):
+            out["pot_server_4416"] = True
+    except Exception as _e:  # noqa: BLE001
+        out["pot_server_4416"] = False
+        out["pot_server_4416_err"] = str(_e)[:100]
+    # 检查 yt-dlp 是否加载了 PO token provider 插件
+    try:
+        from yt_dlp.extractor.youtube._pot import get_pot_providers
+        provs = get_pot_providers({}) or []
+        out["pot_providers"] = [
+            {"name": getattr(p, "POT_NAME", type(p).__name__), "enabled": getattr(p, "is_enabled", "?")}
+            for p in provs
+        ]
+    except Exception as _e:  # noqa: BLE001
+        out["pot_providers_err"] = str(_e)[:200]
+        try:
+            import importlib.metadata as _md
+            out["bgutil_pip_installed"] = [d.metadata["Name"] for d in _md.distributions() if "bgutil" in (d.metadata.get("Name") or "").lower()]
+        except Exception as _e2:  # noqa: BLE001
+            out["bgutil_pip_err"] = str(_e2)[:100]
+
     def _run(label, extractor_args=None, extra_opts=None, target_url=None):
         opts = {
             "quiet": True,
