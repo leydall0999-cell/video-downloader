@@ -108,8 +108,10 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
                 if q:
                     await q.put(("close", b""))
             # typ == 3：client 心跳数据帧（保持 Cloudflare WS 活跃），忽略
-    except WebSocketDisconnect:
-        logger.warning("[cn_tunnel] ECS client 断开")
+            if typ == 3:
+                logger.debug("[cn_tunnel] 收到心跳 type=3 id=%s", id_)
+    except WebSocketDisconnect as e:
+        logger.warning("[cn_tunnel] ECS client 断开: code=%s reason=%s", getattr(e, "code", "?"), getattr(e, "reason", "?"))
     except Exception:
         logger.exception("[cn_tunnel] 隧道接收循环异常")
     finally:
