@@ -34,6 +34,11 @@ import socket
 import urllib.request
 import tempfile
 
+try:
+    import requests as _requests
+except Exception:  # pragma: no cover
+    _requests = None  # type: ignore[assignment]
+
 
 def _cookie_diag(key: str, value: str = "") -> None:
     """写 Cookie 诊断日志到临时文件（打包后可读，不影响正常运行）。"""
@@ -168,10 +173,12 @@ def _expand_b23tv_url(url: str, proxy: str = "") -> str:
     host = (parsed.hostname or "").lower()
     if host not in ("b23.tv", "www.b23.tv", "m.b23.tv"):
         return url
-    # 已经是 /BVxxx 的短链可以直接推导成长链，不必发请求
+    # 已经是 /BVxxx 的短链可以直接推导成长链，不必发请求；保留 p/t 参数
     m = _BILIBILI_SHORT_BV_RE.match(url)
     if m:
-        return f"https://www.bilibili.com/video/{m.group(1)}"
+        kept = [(k, v) for k, v in parse_qsl(parsed.query) if k in ("p", "t")]
+        query = urlencode(kept)
+        return f"https://www.bilibili.com/video/{m.group(1)}" + (f"?{query}" if query else "")
 
     try:
         import requests
@@ -1663,51 +1670,88 @@ def _is_douyin_host(host: str) -> bool:
 def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
     """调用 VPS Playwright 解析 worker（/v1/resolve?platform=xx），返回真实流元数据。
 
-    复用 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN（与 Cookie 补推同一套
-    VPS 端点与令牌），无需额外配置。超时 90s（Playwright 起浏览器 + 页面加载）。
+    默认经反向隧道访问 VPS 本机 daemon：Railway 侧连 127.0.0.1:18889 隧道代理，
+    转发到 ECS 127.0.0.1:18731。通过显式 ``proxies`` 参数覆盖 Railway 环境变量中的
+    ``http_proxy``/``https_proxy``，避免外部代理把本地隧道/内网请求误拦截为 407。
+
+    配置优先级：
+      1. VDL_WORKER_URL / VDL_WORKER_PROXY（推荐，语义最清晰）
+      2. VDL_COOKIE_REFILL_URL / VDL_COOKIE_PULL_PROXY（向后兼容）
+      3. 默认值 http://127.0.0.1:18731 经 http://127.0.0.1:18889 隧道代理
     """
-    base = os.environ.get("VDL_COOKIE_REFILL_URL")
-    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
-    if not base or not token:
+    worker_base = os.environ.get("VDL_WORKER_URL") or os.environ.get("VDL_COOKIE_REFILL_URL", "")
+    worker_proxy = os.environ.get("VDL_WORKER_PROXY") or os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    if not worker_base:
+        worker_base = "http://127.0.0.1:18731"
+    # 兼容旧配置：若把隧道代理地址错填成 worker 目标，自动纠正为 daemon 目标
+    if ":18889" in worker_base:
+        worker_base = "http://127.0.0.1:18731"
+
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    if not token:
         raise ResolveError(
             "视频解析服务未配置",
-            "该平台下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN",
+            "该平台下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN 或 VDL_COOKIE_SYNC_TOKEN",
         )
     endpoint = (
-        base.rstrip("/") + "/v1/resolve?token="
+        worker_base.rstrip("/") + "/v1/resolve?token="
         + urllib.parse.quote(token, safe="")
         + "&platform=" + urllib.parse.quote(platform, safe="")
         + "&url=" + urllib.parse.quote(url, safe="")
     )
-    req = urllib.request.Request(endpoint, headers={"User-Agent": "vdl-platform-resolve"})
+    # 显式指定代理并覆盖环境变量代理，确保本地隧道/内网请求不被外部 http_proxy 截获
+    proxies = {"http": worker_proxy, "https": worker_proxy} if worker_proxy else None
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            data = json.loads(r.read().decode() or "{}")
-    except urllib.error.HTTPError as e:
+        if _requests is None:
+            raise RuntimeError("requests 库未安装")
+        r = _requests.get(
+            endpoint,
+            headers={"User-Agent": "vdl-platform-resolve"},
+            proxies=proxies,
+            timeout=90,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        status = 0
         body = ""
         try:
-            body = e.read().decode()[:300]
-            # daemon 502 时 body 含 {"error": "具体原因"}——直接透传，让用户看到友好错误
-            try:
-                bd = json.loads(body)
-                if isinstance(bd, dict) and bd.get("error"):
-                    raise ResolveError(bd["error"], f"HTTP {e.code}") from e
-            except ResolveError:
-                raise
-            except Exception:
-                pass
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                status = getattr(resp, "status_code", 0)
+                body = (getattr(resp, "text", None) or "")[:300]
         except Exception:
             pass
-        # 爱奇艺 worker 返回 407 = 站点要求登录；
-        # 转成 cookie_required 让前端给出去粘贴 Cookie 的行动建议。
-        if platform == "iqiyi" and e.code == 407:
+        # 透传 daemon 返回的业务错误（502 时 body 通常含 {"error": "..."}）
+        try:
+            bd = json.loads(body) if body else {}
+            if isinstance(bd, dict) and bd.get("error"):
+                err_msg = str(bd["error"])
+                # 仅当 body 明确包含爱奇艺业务错误时才提示「需要 Cookie」；
+                # 外部代理返回的 407 不应被误归类为 cookie_required。
+                if platform == "iqiyi" and status == 407 and "爱奇艺" in err_msg:
+                    raise ResolveError(
+                        "爱奇艺该链接需要登录 Cookie",
+                        "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；粘贴后 VDL 会走 yt-dlp 长期稳定路径直接解析。",
+                        category="cookie_required",
+                    ) from e
+                # 任何 407 都按代理异常提示，避免外部代理认证错误误导成站点需登录
+                if status == 407:
+                    raise ResolveError(
+                        "视频解析服务代理异常",
+                        f"本地请求被外部代理拦截（HTTP 407）。原始响应：{err_msg[:120]}",
+                    ) from e
+                raise ResolveError(err_msg, f"HTTP {status}") from e
+        except ResolveError:
+            raise
+        except Exception:
+            pass
+        # 非业务错误的网络/代理/超时异常：给运维侧明确提示
+        if status == 407:
             raise ResolveError(
-                "爱奇艺该链接需要登录 Cookie",
-                "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；粘贴后 VDL 会走 yt-dlp 长期稳定路径直接解析。",
-                category="cookie_required",
+                "视频解析服务代理异常",
+                f"本地请求被外部代理拦截（HTTP 407），请检查 Railway 环境变量 http_proxy/https_proxy 是否误伤内网地址。原始响应：{body[:120]}",
             ) from e
-        raise ResolveError("视频解析服务返回错误", f"HTTP {e.code}: {body[:120]}") from e
-    except Exception as e:
         raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
     if not data.get("ok"):
         raise ResolveError("视频解析失败", data.get("error") or "未知错误")
@@ -1945,19 +1989,25 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
         data = _call_vps_worker("iqiyi", url)
     except ResolveError as e:
         msg = e.message or ""
-        # worker 未配置/不可达（本地桌面/开发环境）→ 仅当用户提供 Cookie 时回退 yt-dlp
+        cat = getattr(e, "category", "")
+        # playShare 分享页只能走 worker；即使贴了 Cookie，yt-dlp 也无对应提取器，
+        # 因此直接透传 worker 的真实错误，不让它落进 yt-dlp 兜底的死胡同。
+        if "playShare" in url and cat == "cookie_required":
+            raise
+        # worker 未配置/不可达（本地桌面/开发环境，或隧道断开）→
+        # 仅当用户提供 Cookie 且非分享页时回退 yt-dlp；分享页只能等 worker 恢复。
         if "未配置" in msg or "不可达" in msg:
-            if cookie:
+            if cookie and "playShare" not in url:
                 return None
             raise ResolveError(
                 "爱奇艺该链接需要登录 Cookie 或启用解析服务",
                 "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；"
-                "或联系管理员确认 VPS 解析服务可用。",
+                "或联系管理员确认 VPS 解析服务（含反向隧道）可用。",
                 category="cookie_required",
             ) from e
-        # worker 配置可用但解析失败（407 需登录 / VIP / 链接失效等）：
-        # 有 Cookie 则回退 yt-dlp 直下兜底，无 Cookie 则直接抛出原错误
-        if cookie:
+        # worker 配置可用但解析失败（407 需登录 / VIP / 链接失效 / 代理异常等）：
+        # 有 Cookie 且非分享页则回退 yt-dlp 直下兜底；否则直接抛出原错误
+        if cookie and "playShare" not in url:
             return None
         raise
 

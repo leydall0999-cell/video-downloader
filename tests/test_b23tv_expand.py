@@ -38,7 +38,7 @@ def test_expand_b23tv_random_short(monkeypatch):
 
 
 def test_expand_b23tv_bv_short_no_request(monkeypatch):
-    """b23.tv/BVxxx 直接推导，不必发网络请求。"""
+    """b23.tv/BVxxx 直接推导成长链，不必发网络请求；保留 p/t 参数。"""
     called = {"n": 0}
 
     def fake_head(url, *, headers=None, proxies=None, timeout=None, allow_redirects=None):
@@ -47,7 +47,7 @@ def test_expand_b23tv_bv_short_no_request(monkeypatch):
 
     monkeypatch.setattr("requests.head", fake_head)
     url = _expand_b23tv_url("https://b23.tv/BV1Rh411h7Fp?p=3")
-    assert url == "https://www.bilibili.com/video/BV1Rh411h7Fp"
+    assert url == "https://www.bilibili.com/video/BV1Rh411h7Fp?p=3"
     assert called["n"] == 0
 
 

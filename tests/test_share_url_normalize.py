@@ -1,4 +1,4 @@
-"""测试链接归一化：B站 长链转 b23.tv 短链 + 通用追踪参数净化。"""
+"""测试链接归一化：B站统一为 www.bilibili.com/video/BVxxx 长链 + 通用追踪参数净化。"""
 
 import sys
 from pathlib import Path
@@ -9,32 +9,33 @@ sys.path.insert(0, str(ROOT / "server"))
 from downloader import _normalize_share_url, _strip_tracking_params
 
 
-# —— B站：长链自动转 b23.tv 短链（已验证有效绕过直链 403）——
-def test_bili_long_to_b23tv():
+# —— B站：统一归一化为 www.bilibili.com/video/BVxxx 长链（带 Cookie 经国内代理注入时，
+# yt-dlp BiliBiliIE 对 b23.tv 短链会落 generic 提取器导致 412，长链更稳）——
+def test_bili_long_unchanged():
     assert (
         _normalize_share_url("https://www.bilibili.com/video/BV1Rh411h7Fp")
-        == "https://b23.tv/BV1Rh411h7Fp"
+        == "https://www.bilibili.com/video/BV1Rh411h7Fp"
     )
 
 
 def test_bili_long_without_www():
     assert (
         _normalize_share_url("https://bilibili.com/video/BV1Rh411h7Fp")
-        == "https://b23.tv/BV1Rh411h7Fp"
+        == "https://www.bilibili.com/video/BV1Rh411h7Fp"
     )
 
 
 def test_bili_mobile_long():
     assert (
         _normalize_share_url("https://m.bilibili.com/video/BV1Rh411h7Fp")
-        == "https://b23.tv/BV1Rh411h7Fp"
+        == "https://www.bilibili.com/video/BV1Rh411h7Fp"
     )
 
 
 def test_bili_long_preserves_p_t():
     assert (
         _normalize_share_url("https://www.bilibili.com/video/BV1Rh411h7Fp?p=2&t=120")
-        == "https://b23.tv/BV1Rh411h7Fp?p=2&t=120"
+        == "https://www.bilibili.com/video/BV1Rh411h7Fp?p=2&t=120"
     )
 
 
@@ -43,30 +44,24 @@ def test_bili_long_strips_tracking():
         _normalize_share_url(
             "https://www.bilibili.com/video/BV1Rh411h7Fp?vd_source=a8cc883975&spm_id_from=333.999.0.0"
         )
-        == "https://b23.tv/BV1Rh411h7Fp"
+        == "https://www.bilibili.com/video/BV1Rh411h7Fp"
     )
 
 
-def test_bili_short_unchanged():
-    assert (
-        _normalize_share_url("https://b23.tv/pjNtDgD")
-        == "https://b23.tv/pjNtDgD"
-    )
-
-
-def test_bili_short_bv_unchanged():
+def test_bili_short_bv_to_long():
+    # b23.tv/BVxxx 直接展开为长链
     assert (
         _normalize_share_url("https://b23.tv/BV1Rh411h7Fp?p=2")
-        == "https://b23.tv/BV1Rh411h7Fp?p=2"
+        == "https://www.bilibili.com/video/BV1Rh411h7Fp?p=2"
     )
 
 
-def test_bili_short_strips_tracking():
-    # 短链自带的追踪参数也应被剥除
-    assert (
-        _normalize_share_url("https://b23.tv/pjNtDgD?from=share&vd_source=abc")
-        == "https://b23.tv/pjNtDgD"
-    )
+def test_bili_short_random_to_long():
+    # b23.tv/xxxxx 随机短码经 HEAD 302 展开为真实长链
+    out = _normalize_share_url("https://b23.tv/pjNtDgD?from=share&vd_source=abc")
+    assert out.startswith("https://www.bilibili.com/video/BV")
+    assert "from=" not in out
+    assert "vd_source=" not in out
 
 
 # —— 通用追踪参数净化（抖音/快手/小红书/腾讯等，不转短链，仅去噪）——
@@ -133,14 +128,13 @@ def test_strip_all_tracking_yields_clean():
 
 
 if __name__ == "__main__":
-    test_bili_long_to_b23tv()
+    test_bili_long_unchanged()
     test_bili_long_without_www()
     test_bili_mobile_long()
     test_bili_long_preserves_p_t()
     test_bili_long_strips_tracking()
-    test_bili_short_unchanged()
-    test_bili_short_bv_unchanged()
-    test_bili_short_strips_tracking()
+    test_bili_short_bv_to_long()
+    test_bili_short_random_to_long()
     test_douyin_long_strips_tracking()
     test_douyin_short_unchanged()
     test_kuaishou_long_strips_tracking()
@@ -149,4 +143,4 @@ if __name__ == "__main__":
     test_non_url_unchanged()
     test_strip_only_tracking()
     test_strip_all_tracking_yields_clean()
-    print("share url normalize: 16 passed")
+    print("share url normalize: 15 passed")

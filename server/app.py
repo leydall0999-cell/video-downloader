@@ -2876,7 +2876,8 @@ def _cookie_pull_from_vps() -> None:
                 continue
             proxy = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
             url = "http://127.0.0.1:18731/v1/pull-cookie?token=" + token
-            resp = requests.get(url, proxies={"http": proxy}, timeout=90)
+            # 显式同时覆盖 http/https 代理，避免 Railway 环境变量 http_proxy/https_proxy 误伤本地隧道
+            resp = requests.get(url, proxies={"http": proxy, "https": proxy}, timeout=90)
             data = resp.json()
             cookie = (data or {}).get("cookie") or ""
             if data.get("ok") and cookie:
@@ -2931,7 +2932,8 @@ def cookie_pull_diag() -> dict:
     proxy = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
     url = "http://127.0.0.1:18731/v1/pull-cookie?token=" + tok
     try:
-        resp = requests.get(url, proxies={"http": proxy}, timeout=90)
+        # 显式同时覆盖 http/https 代理，避免 Railway 环境变量代理误伤本地隧道
+        resp = requests.get(url, proxies={"http": proxy, "https": proxy}, timeout=90)
         out["http_status"] = resp.status_code
         try:
             data = resp.json()

@@ -134,18 +134,32 @@ def test_iqiyi_info_worker_real_error_no_cookie_raises(monkeypatch):
 
 
 def test_iqiyi_info_worker_fails_but_cookie_falls_back(monkeypatch):
-    """worker 解析失败但有 Cookie（含分享页）→ 回退 yt-dlp 直下兜底，不报错。"""
+    """worker 解析失败但有 Cookie + 非分享页 → 回退 yt-dlp 直下兜底，不报错。"""
 
     def fake_call(platform, url):
         raise ResolveError("视频解析失败", "爱奇艺流获取失败: A00001")
 
     monkeypatch.setattr(dl, "_call_vps_worker", fake_call)
-    for url in (
-        "https://www.iqiyi.com/playShare.html?shareId=abc",
-        "https://www.iqiyi.com/v_19rr9mcb2g.html",
-    ):
-        info = dl._iqiyi_info(url, cookie="P00001=xxx")
-        assert info is None, f"有 Cookie 应回退 yt-dlp: {url}"
+    info = dl._iqiyi_info("https://www.iqiyi.com/v_19rr9mcb2g.html", cookie="P00001=xxx")
+    assert info is None, "有 Cookie 的非分享页应回退 yt-dlp"
+
+
+def test_iqiyi_info_playShare_worker_fails_with_cookie_raises(monkeypatch):
+    """分享页贴了 Cookie 但 worker 失败 → 不能直接回退 yt-dlp（yt-dlp 不支持 playShare）。"""
+
+    def fake_call(platform, url):
+        raise ResolveError(
+            "爱奇艺该链接需要登录 Cookie",
+            "请贴 Cookie",
+            category="cookie_required",
+        )
+
+    monkeypatch.setattr(dl, "_call_vps_worker", fake_call)
+    try:
+        dl._iqiyi_info("https://www.iqiyi.com/playShare.html?shareId=abc", cookie="P00001=xxx")
+        raise AssertionError("应抛 ResolveError")
+    except ResolveError as e:
+        assert e.category == "cookie_required"
 
 
 def test_iqiyi_info_playShare_with_cookie_uses_worker(monkeypatch):
@@ -191,3 +205,69 @@ def test_iqiyi_info_empty_m3u8_with_cookie_falls_back(monkeypatch):
     monkeypatch.setattr(dl, "_call_vps_worker", fake_call)
     info = dl._iqiyi_info("https://www.iqiyi.com/v_19rr9mcb2g.html", cookie="P00001=xxx")
     assert info is None
+
+
+class _FakeRequestsResponse:
+    def __init__(self, status_code, json_data=None, text=""):
+        self.status_code = status_code
+        self._json = json_data
+        self.text = text
+
+    def json(self):
+        return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise dl._requests.exceptions.HTTPError(response=self)
+
+
+def test_call_vps_worker_uses_tunnel_proxy_and_disables_env_proxy(monkeypatch):
+    """_call_vps_worker 通过隧道代理访问 daemon，并覆盖环境变量代理。"""
+    calls = []
+
+    def fake_get(url, *, headers=None, proxies=None, timeout=None):
+        calls.append({"url": url, "proxies": proxies, "timeout": timeout})
+        return _FakeRequestsResponse(200, {"ok": True, "video_url": "http://x"})
+
+    monkeypatch.setattr(dl._requests, "get", fake_get)
+    monkeypatch.setenv("VDL_COOKIE_REFILL_TOKEN", "tok")
+    monkeypatch.setenv("VDL_COOKIE_REFILL_URL", "http://127.0.0.1:18731")
+    monkeypatch.setenv("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    data = dl._call_vps_worker("iqiyi", "https://www.iqiyi.com/v_1.html")
+    assert data["video_url"] == "http://x"
+    assert len(calls) == 1
+    assert "127.0.0.1:18731/v1/resolve" in calls[0]["url"]
+    assert calls[0]["proxies"] == {"http": "http://127.0.0.1:18889", "https": "http://127.0.0.1:18889"}
+    assert calls[0]["timeout"] == 90
+
+
+def test_call_vps_worker_corrects_18889_misconfiguration(monkeypatch):
+    """旧配置把隧道代理 18889 误当成 worker 目标时，自动纠正为 18731。"""
+    calls = []
+
+    def fake_get(url, *, headers=None, proxies=None, timeout=None):
+        calls.append({"url": url})
+        return _FakeRequestsResponse(200, {"ok": True, "video_url": "http://x"})
+
+    monkeypatch.setattr(dl._requests, "get", fake_get)
+    monkeypatch.setenv("VDL_COOKIE_REFILL_TOKEN", "tok")
+    monkeypatch.setenv("VDL_COOKIE_REFILL_URL", "http://127.0.0.1:18889")
+    dl._call_vps_worker("iqiyi", "https://www.iqiyi.com/v_1.html")
+    assert "127.0.0.1:18731/v1/resolve" in calls[0]["url"]
+
+
+def test_call_vps_worker_407_without_iqiyi_body_is_proxy_error(monkeypatch):
+    """外部代理返回的 407 不应被误归类为 cookie_required。"""
+
+    def fake_get(url, **kwargs):
+        raise dl._requests.exceptions.HTTPError(
+            response=_FakeRequestsResponse(407, text='{"error":"Proxy Authentication Required"}')
+        )
+
+    monkeypatch.setattr(dl._requests, "get", fake_get)
+    monkeypatch.setenv("VDL_COOKIE_REFILL_TOKEN", "tok")
+    try:
+        dl._call_vps_worker("iqiyi", "https://www.iqiyi.com/v_1.html")
+        raise AssertionError("应抛 ResolveError")
+    except ResolveError as e:
+        assert "代理异常" in e.message or "不可达" in e.message
