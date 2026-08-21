@@ -2045,6 +2045,125 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
     }
 
 
+# YouTube（youtube.com / youtu.be）：2025 起对数据中心 IP 强制 bot 检测
+# （"Sign in to confirm you're not a bot"），所有 player_client 轮换无效，
+# 必须带登录态 Cookie 或 PO Token 才能解析。实现自动降级：
+#   方法一：无 Cookie + bgutil PO Token（Docker 集成，尽力而为）；
+#   方法二：方法一被 bot 拦截 → 自动按序尝试 Cookie 源：
+#          用户显式粘贴 > 环境变量 VDL_YOUTUBE_COOKIE > 本机缓存 > 公共池。
+# 全部失败 → 抛 cookie_required 提示（粘贴一次即缓存复用，免每次手动）。
+_YOUTUBE_HOSTS: tuple[str, ...] = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+_BOT_KEYWORDS: tuple[str, ...] = (
+    "sign in to confirm", "not a bot", "please sign in",
+    "login_required", "confirm you're not", "sign in to continue",
+)
+
+
+def _is_youtube_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _YOUTUBE_HOSTS)
+
+
+class _YouTubeBotBlocked(Exception):
+    """yt-dlp 返回 bot 检测类错误，应触发 Cookie 降级。"""
+
+
+def _youtube_cookie_candidates(user_cookie: str) -> list[tuple[str, str]]:
+    """收集 YouTube Cookie 候选（去重，用户显式优先）。"""
+    cands: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(src: str, ck: str) -> None:
+        ck = (ck or "").strip()
+        if ck and ck not in seen:
+            seen.add(ck)
+            cands.append((src, ck))
+
+    if user_cookie:
+        _add("user", user_cookie)
+    _add("env", os.environ.get("VDL_YOUTUBE_COOKIE", ""))
+    try:
+        from cookie_cache import get_cached_cookie_header
+        _add("cache", get_cached_cookie_header("youtube.com") or "")
+    except Exception:
+        pass
+    try:
+        from cookie_pool import get_cookie as _pool_get
+        _add("pool", _pool_get("youtube.com") or "")
+    except Exception:
+        pass
+    return cands
+
+
+def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    """YouTube 自动降级解析：方法一（免 Cookie + PO Token）→ 方法二（Cookie 源自动切换）。
+
+    返回 yt-dlp info dict；全部失败抛 ResolveError（bot 拦截时 category=cookie_required）。
+    """
+    host = _host_of(url)
+    effective_proxy = proxy or _resolve_proxy(host)
+
+    def _try(cookie_text: str) -> dict[str, Any]:
+        opts = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
+        opts["format"] = None
+        try:
+            with _YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            return info or {}
+        except (DownloadError, ExtractorError) as exc:
+            low = str(exc).lower()
+            if any(k in low for k in _BOT_KEYWORDS):
+                raise _YouTubeBotBlocked(str(exc)[:300]) from exc
+            # 非 bot 错误（format not available 等 SABR 问题）：extract_flat 降级一次
+            try:
+                opts2 = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
+                opts2["extract_flat"] = "in"
+                with _YoutubeDL(opts2) as ydl2:
+                    info2 = ydl2.extract_info(url, download=False)
+                if info2:
+                    return info2
+            except Exception:
+                pass
+            raise
+
+    # 方法一：无 Cookie（bgutil PO Token 尽力）
+    try:
+        info = _try(user_cookie or "")
+        if info:
+            return info
+    except _YouTubeBotBlocked:
+        logger.info("[youtube] %s 被 bot 检测拦截，自动切换 Cookie 源", url[:60])
+    except (DownloadError, ExtractorError) as exc:
+        # 非 bot 错误（视频不可用/链接失效等）→ 转 ResolveError 透传真实原因
+        raise ResolveError("视频解析失败", _clean_message(str(exc))[:300]) from exc
+
+    # 方法二：Cookie 源自动切换（user > env > cache > pool）
+    for src, ck in _youtube_cookie_candidates(user_cookie):
+        try:
+            info = _try(ck)
+            if info:
+                logger.info("[youtube] bot 拦截后自动切换 Cookie 源=%s 解析成功", src)
+                return info
+        except _YouTubeBotBlocked:
+            logger.info("[youtube] Cookie 源=%s 仍被 bot 拦截，换下一个", src)
+            continue
+        except (DownloadError, ExtractorError) as exc:
+            low = str(exc).lower()
+            if any(k in low for k in _BOT_KEYWORDS):
+                continue
+            logger.info("[youtube] Cookie 源=%s 报非 bot 错误（可能 Cookie 过期），换下一个: %s",
+                        src, str(exc)[:120])
+            continue
+
+    raise ResolveError(
+        "YouTube 需要登录 Cookie 才能解析",
+        "YouTube 2025 起对服务器数据中心 IP 强制 bot 检测，需带登录态才能绕过。\n"
+        "请在「高级选项 → Cookie」粘贴一次 YouTube 登录 Cookie（后端自动缓存，后续免粘贴）；"
+        "或由管理员配置环境变量 VDL_YOUTUBE_COOKIE 全局生效。",
+        category="cookie_required",
+    )
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
@@ -2079,6 +2198,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         if info is not None:
             return info
         # worker 未配置（本地桌面）且非分享页 → 回退 yt-dlp 通用流程
+    # YouTube：自动降级（方法一免 Cookie + PO Token → 方法二 Cookie 源自动切换）
+    if _is_youtube_host(host):
+        return _resolve_youtube(url, user_cookie=cookie, proxy=proxy)
     # YouTube 诊断日志（临时，定位代理/Cookie 问题后可移除）
     _debug_log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
     try:
@@ -2743,6 +2865,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 info = _iqiyi_info(task.url, cookie=cookie)
                 if info is None:
                     info = ydl.extract_info(task.url, download=False) or {}
+            elif _is_youtube_host(_task_host):
+                # YouTube：自动降级（免 Cookie + PO Token → Cookie 源自动切换）
+                info = _resolve_youtube(task.url, user_cookie=cookie, proxy=effective_proxy)
             else:
                 try:
                     info = ydl.extract_info(task.url, download=False) or {}

@@ -117,7 +117,7 @@ def test_probe_youtube_unavailable_passes_real_error(monkeypatch):
 
 
 def test_probe_youtube_silent_empty_falls_back_to_placeholder(monkeypatch):
-    """yt-dlp 既不抛错也不 logger.error 静默返回空：用占位提示（兜底兼容）。"""
+    """yt-dlp 静默返回空（无异常）：YouTube 专用链路视为 bot/登录问题 → cookie_required。"""
     _base_patches(monkeypatch)
     monkeypatch.setattr(dl, "_YoutubeDL", _YDLReturnsEmpty)
 
@@ -126,33 +126,8 @@ def test_probe_youtube_silent_empty_falls_back_to_placeholder(monkeypatch):
     try:
         probe("https://youtu.be/eIvAx63QSgc")
     except ResolveError as e:
-        hint = e.hint or ""
-        assert "extract_info 返回空结果" in hint or "常见原因" in hint
-    else:
-        raise AssertionError("应抛 ResolveError")
-
-
-def test_probe_youtube_logger_capture_as_safety_net(monkeypatch):
-    """logger 捕获兜底：若 yt-dlp 不抛错只 logger.error，应透传日志。"""
-    _base_patches(monkeypatch)
-
-    class _YDLLogOnlyError(_YDLReturnsEmpty):
-        def extract_info(self, url, download=False):
-            logging.getLogger("yt_dlp").error(
-                "[youtube] abc: Sign in to confirm you're not a bot"
-            )
-            return None
-
-    monkeypatch.setattr(dl, "_YoutubeDL", _YDLLogOnlyError)
-
-    from downloader import probe, ResolveError
-
-    try:
-        probe("https://youtu.be/abc")
-    except ResolveError as e:
-        assert "Sign in to confirm" in (e.hint or ""), (
-            f"应透传 yt-dlp logger 错误，实际：{(e.hint or '')[:300]}"
-        )
+        # YouTube 空结果基本是 bot/登录态问题，_resolve_youtube 无 Cookie 源 → cookie_required
+        assert e.category == "cookie_required"
     else:
         raise AssertionError("应抛 ResolveError")
 
