@@ -2959,10 +2959,10 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
 
     out["tests"] = [
         _run("default"),
-        _run("web_safari", {"youtube": {"player_client": ["web_safari"]}}),
-        _run("web_embedded", {"youtube": {"player_client": ["web_embedded"]}}),
-        _run("tv_downgraded", {"youtube": {"player_client": ["tv_downgraded"]}}),
-        _run("web_creator", {"youtube": {"player_client": ["web_creator"]}}),
+        _run("mweb_missing_pot", {"youtube": {"player_client": ["mweb"], "formats": ["missing_pot"]}}),
+        _run("web_safari_missing_pot", {"youtube": {"player_client": ["web_safari"], "formats": ["missing_pot"]}}),
+        _run("web_embedded_missing_pot", {"youtube": {"player_client": ["web_embedded"], "formats": ["missing_pot"]}}),
+        _run("default_missing_pot", {"youtube": {"formats": ["missing_pot"]}}),
     ]
     return out
 
