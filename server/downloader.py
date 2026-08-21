@@ -1988,27 +1988,19 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
     try:
         data = _call_vps_worker("iqiyi", url)
     except ResolveError as e:
-        msg = e.message or ""
-        cat = getattr(e, "category", "")
-        # playShare 分享页只能走 worker；即使贴了 Cookie，yt-dlp 也无对应提取器，
-        # 因此直接透传 worker 的真实错误，不让它落进 yt-dlp 兜底的死胡同。
-        if "playShare" in url and cat == "cookie_required":
+        cat = getattr(e, "category", None)
+        # playShare 分享页只能走 worker（yt-dlp 无对应提取器），直接透传 worker 真实错误——
+        # 无论是真需要登录（cookie_required）还是隧道/VPS 故障（不可达/代理异常），
+        # 都如实抛出，不伪造提示。
+        if "playShare" in url:
             raise
-        # worker 未配置/不可达（本地桌面/开发环境，或隧道断开）→
-        # 仅当用户提供 Cookie 且非分享页时回退 yt-dlp；分享页只能等 worker 恢复。
-        if "未配置" in msg or "不可达" in msg:
-            if cookie and "playShare" not in url:
-                return None
-            raise ResolveError(
-                "爱奇艺该链接需要登录 Cookie 或启用解析服务",
-                "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；"
-                "或联系管理员确认 VPS 解析服务（含反向隧道）可用。",
-                category="cookie_required",
-            ) from e
-        # worker 配置可用但解析失败（407 需登录 / VIP / 链接失效 / 代理异常等）：
-        # 有 Cookie 且非分享页则回退 yt-dlp 直下兜底；否则直接抛出原错误
-        if cookie and "playShare" not in url:
+        # 非分享页：用户已贴 Cookie → 回退 yt-dlp 直下兜底（长期稳定路径，VIP Cookie 也生效）
+        if cookie:
             return None
+        # 非分享页 + 无 Cookie：
+        # - worker 明确需要登录（category=cookie_required）→ 透传，提示去「高级选项 → Cookie」粘贴；
+        # - 其余（未配置 / 不可达 / 代理异常 / 解析失败）→ 透传服务真实状态，
+        #   绝不再伪装成「需要 Cookie」，避免把隧道/VPS 故障误导成登录问题。
         raise
 
     m3u8 = data.get("video_url") or ""

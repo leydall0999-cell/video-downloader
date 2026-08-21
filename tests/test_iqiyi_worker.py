@@ -100,8 +100,9 @@ def test_iqiyi_info_album_page_no_cookie_uses_worker(monkeypatch):
     assert info["title"] == "专辑视频"
 
 
-def test_iqiyi_info_worker_unconfigured_no_cookie_raises(monkeypatch):
-    """worker 未配置且无 Cookie（含分享页与普通页）→ 提示启用解析服务/贴 Cookie。"""
+def test_iqiyi_info_worker_unconfigured_no_cookie_transparent(monkeypatch):
+    """worker 未配置且无 Cookie → 透明报「解析服务未配置」，绝不伪装成需要 Cookie
+    （含普通播放页与 playShare 分享页——隧道/VPS 故障必须如实暴露）。"""
 
     def fake_call(platform, url):
         raise ResolveError("视频解析服务未配置", "请配置 VDL_COOKIE_REFILL_URL")
@@ -115,8 +116,8 @@ def test_iqiyi_info_worker_unconfigured_no_cookie_raises(monkeypatch):
             dl._iqiyi_info(url)
             raise AssertionError(f"应抛 ResolveError: {url}")
         except ResolveError as e:
-            assert e.category == "cookie_required"
-            assert "Cookie" in e.message
+            assert e.category != "cookie_required", f"隧道/VPS 故障不应伪装成 Cookie 问题: {url}"
+            assert "解析服务" in e.message
 
 
 def test_iqiyi_info_worker_real_error_no_cookie_raises(monkeypatch):
