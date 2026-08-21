@@ -1686,6 +1686,11 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
     # 兼容旧配置：若把隧道代理地址错填成 worker 目标，自动纠正为 daemon 目标
     if ":18889" in worker_base:
         worker_base = "http://127.0.0.1:18731"
+    # 兼容旧配置：worker 目标若指向 cn_proxy(18888，需 Basic 认证)，应改为直连
+    # daemon(18731) 并经隧道访问，否则会被 cn_proxy 拦成 407 误报「需要 Cookie」
+    if ":18888" in worker_base:
+        worker_base = "http://127.0.0.1:18731"
+        worker_proxy = "http://127.0.0.1:18889"
 
     token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
     if not token:
