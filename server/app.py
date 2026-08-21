@@ -2964,12 +2964,18 @@ def cookie_pull_diag() -> dict:
                             fdata = json.loads(f.read_text())
                             cookies = fdata.get("cookies", [])
                             info["n"] = len(cookies)
-                            if cookies:
-                                c0 = cookies[0]
-                                info["first_ts"] = c0.get("ts")
-                                info["age"] = int(time.time() - (c0.get("ts") or 0))
-                                info["decrypted_len"] = len(_decrypt_item(c0))
-                                info["keys"] = sorted(c0.keys())
+                            info["entries"] = []
+                            for idx, c0 in enumerate(cookies):
+                                ent = {
+                                    "idx": idx,
+                                    "ts": c0.get("ts"),
+                                    "age": int(time.time() - (c0.get("ts") or 0)),
+                                    "keys": sorted(c0.keys()),
+                                    "header_len": len(c0.get("header") or ""),
+                                    "enc_len": len(c0.get("header_enc") or ""),
+                                    "decrypted_len": len(_decrypt_item(c0)),
+                                }
+                                info["entries"].append(ent)
                         except Exception as e:  # noqa: BLE001
                             info["read_err"] = str(e)[:120]
                     out["candidates"].append(info)
