@@ -2988,9 +2988,6 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
     out["tests"] = [
         _run("default"),
         _run("tv_embedded", {"youtube": {"player_client": ["tv_embedded"]}}),
-        _run("android_music", {"youtube": {"player_client": ["android_music"]}}),
-        _run("media_connect", {"youtube": {"player_client": ["media_connect"]}}),
-        _run("create", {"youtube": {"player_client": ["create"]}}),
     ]
     return out
 
