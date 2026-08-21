@@ -2978,7 +2978,7 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
         _cli = _sp.run(
             [
                 sys.executable, "-m", "yt_dlp", "--skip-download", "--dump-json",
-                "--no-warnings", "--extractor-args", "youtube:fetch_pot=always",
+                "-v", "--extractor-args", "youtube:fetch_pot=always",
                 "--print", "%(title)s|%(id)s",
                 url,
             ],
@@ -2986,7 +2986,10 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
         )
         out["cli_rc"] = _cli.returncode
         out["cli_stdout"] = _cli.stdout[:200]
-        out["cli_stderr"] = _cli.stderr.splitlines()[-12:]
+        _errs = _cli.stderr.splitlines()
+        out["cli_stderr"] = _errs[-15:]
+        # 提取 PO token 相关行
+        out["cli_pot_lines"] = [l for l in _errs if "PO" in l or "pot" in l.lower() or "visitor" in l.lower()][-12:]
     except Exception as _e:  # noqa: BLE001
         out["cli_err"] = str(_e)[:200]
 
