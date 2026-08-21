@@ -2909,6 +2909,50 @@ def _warm_cookie_pool() -> None:
     except Exception:
         logger.exception("公共池启动预热异常")
 
+@app.get("/api/cookie/pull-diag")
+def cookie_pull_diag() -> dict:
+    """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
+
+    仅用于排查黄灯，不含敏感内容（Cookie 只报长度不报明文）。排查完成后移除。
+    """
+    import cn_tunnel as _cn
+    out: dict = {
+        "token_present": bool(os.environ.get("VDL_COOKIE_SYNC_TOKEN") or os.environ.get("VDL_COOKIE_REFILL_TOKEN")),
+        "tunnel_ready": _cn._TUNNEL_READY.is_set(),
+    }
+    try:
+        import requests
+    except Exception as e:  # noqa: BLE001
+        out["requests_available"] = False
+        out["requests_error"] = str(e)[:160]
+        return out
+    out["requests_available"] = True
+    tok = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    proxy = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    url = "http://127.0.0.1:18731/v1/pull-cookie?token=" + tok
+    try:
+        resp = requests.get(url, proxies={"http": proxy}, timeout=90)
+        out["http_status"] = resp.status_code
+        try:
+            data = resp.json()
+            out["vps_ok"] = bool((data or {}).get("ok"))
+            ck = (data or {}).get("cookie") or ""
+            out["cookie_len"] = len(ck)
+            if (data or {}).get("ok") and ck:
+                from cookie_pool import add_cookie
+                out["added"] = add_cookie("bilibili.com", ck, source="vps-pull")
+                from cookie_pool import get_cookie
+                out["pool_available_after"] = bool(get_cookie("bilibili.com"))
+            else:
+                out["vps_msg"] = str(data)[:160]
+        except Exception as e:  # noqa: BLE001
+            out["json_error"] = str(e)[:160]
+            out["resp_head"] = resp.text[:160]
+    except Exception as e:  # noqa: BLE001
+        out["pull_error"] = str(e)[:200]
+    return out
+
+
 @app.post("/api/cookie/cache/clear")
 def cookie_cache_clear() -> dict:
     """清除本机 Cookie 缓存（仅删 ~/.videodownloader/cookies，不影响浏览器本身）。"""
