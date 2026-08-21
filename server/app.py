@@ -2861,9 +2861,11 @@ def _cookie_pull_from_vps() -> None:
     except Exception:
         logger.warning("[cookie_pull] requests 不可用，跳过隧道拉取")
         return
-    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN", "")
+    # 优先用显式配置的拉取 token；否则复用共享的同步 token（VDL_COOKIE_SYNC_TOKEN，
+    # Railway 校验 /api/cookie/sync 时同款，两端天然一致，无需另配密钥）。
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
     if not token:
-        logger.warning("[cookie_pull] 未配置 VDL_COOKIE_REFILL_TOKEN（应 = VPS VDL_COOKIE_API_TOKEN），跳过")
+        logger.warning("[cookie_pull] 未配置 VDL_COOKIE_REFILL_TOKEN / VDL_COOKIE_SYNC_TOKEN，跳过")
         return
     interval = int(os.environ.get("VDL_COOKIE_PULL_INTERVAL", "1200"))  # 默认 20 分钟
     while True:

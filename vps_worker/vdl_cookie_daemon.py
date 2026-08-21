@@ -202,7 +202,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _check_token(self, q):
         token = q.get("token", [""])[0]
-        return bool(API_TOKEN) and token == API_TOKEN
+        if not token:
+            return False
+        # 接受两种 token：本机 API token（VDL_COOKIE_API_TOKEN），或共享的同步
+        # token（VDL_COOKIE_SYNC_TOKEN）。Railway 经隧道拉取时复用共享 sync token 即可，
+        # 无需在两端另配独立密钥。
+        if API_TOKEN and token == API_TOKEN:
+            return True
+        if SYNC_TOKEN and token == SYNC_TOKEN:
+            return True
+        return False
 
     def do_GET(self):
         p = urlparse(self.path)
