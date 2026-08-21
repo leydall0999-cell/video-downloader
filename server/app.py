@@ -2912,78 +2912,53 @@ def _warm_cookie_pool() -> None:
 
 
 @app.get("/api/youtube-diag")
-def youtube_diag(url: str = "https://youtu.be/eIvAx63QSgc") -> dict:
-    """临时诊断：跑 yt-dlp 真实抓 YouTube 视频页，把 yt-dlp stdout/stderr + 异常返回。
+def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
+    """临时诊断：测不同 yt-dlp YouTube player_client 组合对 bot 验证的绕过效果。
 
-    仅用于排查 YouTube「extract_info 返回空」根因，验证后移除。
+    仅用于排查 YouTube「Sign in to confirm you're not a bot」，验证后移除。
     """
-    import io
     import logging
     import yt_dlp
 
-    # 测试 1: yt-dlp 默认 + ignoreerrors=False（应抛 DownloadError）
-    buf1 = io.StringIO()
-    h1 = logging.StreamHandler(buf1)
-    h1.setLevel(logging.WARNING)
-    h1.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    logger = logging.getLogger("yt_dlp")
-    logger.addHandler(h1)
-    old_level = logger.level
-    logger.setLevel(logging.WARNING)
     out: dict = {"url": url, "ytdlp_version": yt_dlp.version.__version__}
 
-    def _run(opts, label):
-        buf = io.StringIO()
-        h = logging.StreamHandler(buf)
-        h.setLevel(logging.WARNING)
-        h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-        logger.addHandler(h)
-        result = {"label": label, "opts": opts}
+    def _run(label, extractor_args=None, extra_opts=None):
+        opts = {
+            "quiet": True,
+            "skip_download": True,
+            "format": None,
+            "socket_timeout": 25,
+        }
+        if extractor_args:
+            opts["extractor_args"] = extractor_args
+        if extra_opts:
+            opts.update(extra_opts)
+        result = {"label": label}
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-            result["info_truthy"] = bool(info)
+            result["ok"] = True
             if info:
                 result["title"] = info.get("title", "")[:60]
                 result["formats"] = len(info.get("formats") or [])
         except Exception as e:  # noqa: BLE001
-            result["exception_type"] = type(e).__name__
-            result["exception_msg"] = str(e)[:300]
-        result["log_lines"] = buf.getvalue().splitlines()[-10:]
-        logger.removeHandler(h)
+            result["ok"] = False
+            msg = str(e)
+            result["err"] = msg[:220]
+            if "bot" in msg.lower():
+                result["bot"] = True
         return result
 
-    try:
-        # 完整 probe() 路径
-        try:
-            from downloader import probe
-            info = probe(url)
-            out["probe_title"] = (info or {}).get("title", "")[:60]
-            out["probe_formats"] = len((info or {}).get("formats") or [])
-        except Exception as e:  # noqa: BLE001
-            out["probe_exception_type"] = type(e).__name__
-            out["probe_exception_msg"] = str(e)[:400]
-            out["probe_exception_hint"] = getattr(e, "hint", "")[:300]
-
-        # 测试 yt-dlp 各种 ignoreerrors 配置的真实行为
-        out["test_ignoreerrors_false"] = _run(
-            {"quiet": True, "skip_download": True, "format": None,
-             "ignoreerrors": False, "socket_timeout": 20},
-            "ignoreerrors=False",
-        )
-        out["test_ignoreerrors_only_download"] = _run(
-            {"quiet": True, "skip_download": True, "format": None,
-             "ignoreerrors": "only_download", "socket_timeout": 20},
-            "ignoreerrors=only_download",
-        )
-        out["test_ignoreerrors_true"] = _run(
-            {"quiet": True, "skip_download": True, "format": None,
-             "ignoreerrors": True, "socket_timeout": 20},
-            "ignoreerrors=True",
-        )
-    finally:
-        logger.removeHandler(h1)
-        logger.setLevel(old_level)
+    out["tests"] = [
+        _run("default"),
+        _run("tv", {"youtube": {"player_client": ["tv"]}}),
+        _run("tv_embedded", {"youtube": {"player_client": ["tv_embedded"]}}),
+        _run("ios", {"youtube": {"player_client": ["ios"]}}),
+        _run("android_vr", {"youtube": {"player_client": ["android_vr"]}}),
+        _run("mweb", {"youtube": {"player_client": ["mweb"]}}),
+        _run("default+tv+ios", {"youtube": {"player_client": ["default", "tv", "ios"]}}),
+        _run("all_clients", {"youtube": {"player_client": ["default", "tv", "ios", "android_vr", "mweb", "tv_embedded"]}}),
+    ]
     return out
 
 
