@@ -2936,10 +2936,14 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
         out["pot_server_4416_err"] = str(_e)[:100]
     # 检查 yt-dlp 是否加载了 PO token provider 插件
     try:
-        from yt_dlp.extractor.youtube._pot import get_pot_providers
-        provs = get_pot_providers({}) or []
+        from yt_dlp.extractor.youtube.pot._registry import _pot_providers
+        provs = _pot_providers.value.values()
         out["pot_providers"] = [
-            {"name": getattr(p, "POT_NAME", type(p).__name__), "enabled": getattr(p, "is_enabled", "?")}
+            {
+                "name": getattr(p, "PROVIDER_NAME", type(p).__name__),
+                "key": getattr(p, "PROVIDER_KEY", "?"),
+                "available": getattr(p, "is_available", lambda: "?")() if not isinstance(p, type) else "?",
+            }
             for p in provs
         ]
     except Exception as _e:  # noqa: BLE001
