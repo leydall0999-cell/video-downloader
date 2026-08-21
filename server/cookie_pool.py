@@ -189,10 +189,25 @@ def _save(domain: str, cookies: list) -> bool:
         for c in cookies:
             item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
             header = c.get("header") or ""
-            if cipher and header:
-                item["header_enc"] = cipher.encrypt(header.encode()).decode()
+            enc = c.get("header_enc") or ""
+            if not header and not enc:
+                # 双空条目（历史写坏/旧 bug 产物）直接丢弃，避免池文件无限膨胀
+                continue
+            if cipher:
+                # 有明文 → 加密存储；只有密文 → 原样保留
+                # （修复：旧实现用 c.get("header") 取明文，加密记录取到空串后
+                #  走 else 把已有密文重写成空明文条目，导致每次 _save 丢失历史记录）
+                item["header_enc"] = cipher.encrypt(header.encode()).decode() if header else enc
             else:
-                item["header"] = header
+                if header:
+                    item["header"] = header
+                elif enc:
+                    # 无 cipher 但有密文：尝试解密回明文，失败则保留密文
+                    plain = _decrypt_item(c)
+                    if plain:
+                        item["header"] = plain
+                    else:
+                        item["header_enc"] = enc
             payload.append(item)
         f = _pool_file(domain)
         text = json.dumps({"cookies": payload}, ensure_ascii=False)
