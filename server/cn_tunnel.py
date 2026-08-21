@@ -78,21 +78,19 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
     logger.info("[cn_tunnel] 反向隧道已建立（ECS client 已连接）")
     try:
         while True:
-            # 空闲不断开：隧道可能长时间无流量（没有解析/下载任务），断开会让
-            # client 反复重连、期间 18889 代理不可用。改用「30s 无消息则 ping 探测」：
-            # ping 由 websockets 库自动处理 pong，不进 receive()，因此 30s 窗口只
-            # 是探测节奏，不影响空闲保持；ping 失败（client 死/网络半开）才断开，
-            # 从而及时清理 _TUNNEL 残留死连接（否则 _proxy_conn 发 open 帧失败 →
-            # yt-dlp 报 Remote end closed）。
+            # 空闲保持：隧道可能长时间无流量，绝不能因空闲断开（否则 client 反复
+            # 重连、期间 18889 代理不可用）。注意：FastAPI/Starlette 的 WebSocket
+            # 没有 ping() 方法（那是 websockets 库的 API），调用会 AttributeError
+            # 误判"死连接"断开。死连接检测交给 client 侧：client 每 20s ping，
+            # ping_timeout=10 超时即自动重连，新连接覆盖 _TUNNEL；这里只用一个
+            # 很长的 receive 超时（300s）兜底清理"进程被 SIGKILL/网络无声断"的
+            # 僵尸连接（TCP 半开时 receive 永不返回，不留兜底会永久卡死）。
+            # client 的 type=3 心跳数据帧每 30s 到达，也会让 receive 不断返回。
             try:
-                msg = await asyncio.wait_for(ws.receive(), timeout=30)
+                msg = await asyncio.wait_for(ws.receive(), timeout=300)
             except asyncio.TimeoutError:
-                try:
-                    await asyncio.wait_for(ws.ping(), timeout=10)
-                except Exception:
-                    logger.warning("[cn_tunnel] WS ping 探测失败，判定死连接断开")
-                    break
-                continue  # 连接存活，继续等消息
+                logger.warning("[cn_tunnel] WS receive 300s 无任何消息，判定僵尸连接断开")
+                break
             if msg.get("type") == "websocket.disconnect":
                 break
             data = msg.get("bytes")
