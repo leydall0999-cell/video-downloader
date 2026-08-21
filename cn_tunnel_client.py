@@ -104,7 +104,15 @@ async def tunnel_client():
 
     while True:
         try:
-            async with connect(_WS_URL, ping_interval=20, ping_timeout=10) as ws:
+            # open_timeout=30：Cloudflare→Railway WS 链路偶发握手慢，默认 10s 容易误判
+            # 超时触发 websockets 库的 InvalidStateError 竞态崩溃（response.set_exception）。
+            async with connect(
+                _WS_URL,
+                ping_interval=20,
+                ping_timeout=10,
+                open_timeout=30,
+                close_timeout=5,
+            ) as ws:
                 print(f"[cn_tunnel_client] connected {_WS_URL}", flush=True)
                 async for msg in ws:
                     if isinstance(msg, str):

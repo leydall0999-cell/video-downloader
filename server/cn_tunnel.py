@@ -78,7 +78,14 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
     logger.info("[cn_tunnel] 反向隧道已建立（ECS client 已连接）")
     try:
         while True:
-            msg = await ws.receive()
+            # receive 加超时：client 进程崩溃/网络半开（TCP 半开时 receive 永不返回，
+            # 旧版在这里卡死导致 _TUNNEL 残留死连接，18889 代理用死连接发 open 帧
+            # 立即失败 → yt-dlp 报 Remote end closed）。超时强制走 finally 清理。
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=90)
+            except asyncio.TimeoutError:
+                logger.warning("[cn_tunnel] WS receive 90s 无消息，视为死连接主动断开")
+                break
             if msg.get("type") == "websocket.disconnect":
                 break
             data = msg.get("bytes")
@@ -102,6 +109,14 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
     finally:
         _TUNNEL = None
         _TUNNEL_READY.clear()
+        # 断开时把残留的 pending 代理连接全部关闭，避免它们卡到客户端超时
+        for _pid in list(_PENDING.keys()):
+            _q = _PENDING.pop(_pid, None)
+            if _q:
+                try:
+                    _q.put_nowait(("close", b""))
+                except Exception:
+                    pass
         logger.warning("[cn_tunnel] 反向隧道断开（ECS client 失联）")
 
 
@@ -112,17 +127,29 @@ async def _proxy_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         id_ = _NEXT_ID
         _NEXT_ID += 1
     try:
-        if _TUNNEL is None:
-            # 隧道还没连上，最多等 10s 让 ECS client 重连
+        # 等隧道就绪；若现有 _TUNNEL 是死连接（WS 断开但 receive 未察觉的残留），
+        # 立即清掉并等新的 WS 连接，避免把 open 帧发到死连接上（yt-dlp 报 Remote end closed）。
+        if _TUNNEL is None or _TUNNEL.client_state.value != 1:  # 1 = OPEN
+            _TUNNEL_READY.clear()
             await asyncio.wait_for(_TUNNEL_READY.wait(), timeout=10)
         ws = _TUNNEL
+        if ws is None or ws.client_state.value != 1:
+            logger.warning("[cn_tunnel] 代理 id=%s 无可用隧道，关闭", id_)
+            return
         # 读第一笔（CONNECT / GET 请求头），作为 open 帧 payload
         first = await reader.read(65536)
         if not first:
             return
         q: "asyncio.Queue[tuple[str, bytes]]" = asyncio.Queue()
         _PENDING[id_] = q
-        await _send(ws, 0, id_, first)
+        try:
+            await _send(ws, 0, id_, first)
+        except Exception as e:
+            # open 帧发送失败：隧道刚断。清掉 pending，等重连后由客户端重试
+            logger.warning("[cn_tunnel] open 帧发送失败 id=%s: %s", id_, str(e)[:120])
+            _PENDING.pop(id_, None)
+            _TUNNEL_READY.clear()
+            return
         # 把 yt-dlp 后续字节发给 ECS
         writer_task = asyncio.create_task(_tunnel_writer(ws, id_, reader))
         try:
