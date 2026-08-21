@@ -9,6 +9,8 @@
   3) 提供多平台 Playwright 解析接口（绕开已失效的 yt-dlp 提取器）：
        GET /v1/resolve?token=<token>&platform=<douyin|kuaishou>&url=<链接>
        （兼容旧路径 GET /v1/douyin/resolve、/v1/kuaishou/resolve）
+  3.5) GET /v1/pull-cookie?token=<token> 返回本地缓存的 B站 Cookie，供 Railway 经
+       反向隧道主动拉取（替代 VPS 主动推送，规避 VPS→Railway 跨境链路抖动）。
 
 配置来自 .cookie_sync.env：VDL_COOKIE_SYNC_URL / VDL_COOKIE_SYNC_TOKEN / VDL_BILI_SESSDATA
   + VDL_COOKIE_API_TOKEN（Railway 调用 /v1/push、/v1/resolve 的令牌，务必与
@@ -24,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bilibili_ecs_cookie import push_once  # noqa: E402
+from bilibili_ecs_cookie import push_once, _collect_cookies, _push_to_cloud  # noqa: E402
 from douyin_resolve import resolve as douyin_resolve  # noqa: E402
 from kuaishou_resolve import resolve as kuaishou_resolve  # noqa: E402
 from weibo_resolve import resolve as weibo_resolve  # noqa: E402
@@ -72,6 +74,13 @@ _push_lock = threading.Lock()
 # 否则推送因网络抖动（urlopen 无 timeout）长期占锁会把所有 /v1/resolve 饿死。
 _resolve_lock = threading.Lock()
 _state = {"ts": 0, "ok": None, "msg": ""}
+# 主动推送开关：默认开启；设为 false 时仅收集并缓存 Cookie（供 Railway 经隧道拉取），
+# 不再直连 Railway 推送——规避 VPS→Railway 跨境公网链路抖动导致的推送失败。
+PUSH_ENABLED = os.environ.get("VDL_COOKIE_PUSH_ENABLED", "true").lower() in ("1", "true", "yes")
+# 本地缓存有效期（秒）：/v1/pull-cookie 在有效期内直接返回缓存，避免每次起 Chromium。
+COOKIE_TTL = int(os.environ.get("VDL_COOKIE_CACHE_TTL", "1800"))
+# 最近一次收集到的 B站 Cookie 缓存（供 Railway 经隧道 /v1/pull-cookie 拉取）。
+_cached = {"cookie": "", "cookies": [], "ts": 0, "passed": False, "hit_slider": False}
 
 # 平台 → Playwright 解析函数映射（新增平台在此注册即可）
 _RESOLVERS = {
@@ -83,46 +92,79 @@ _RESOLVERS = {
 }
 
 
-PUSH_TIMEOUT = int(os.environ.get("VDL_COOKIE_PUSH_TIMEOUT", "20"))
+PUSH_RETRIES = int(os.environ.get("VDL_COOKIE_PUSH_RETRIES", "2"))
+PUSH_RETRY_BACKOFF = int(os.environ.get("VDL_COOKIE_PUSH_BACKOFF", "15"))
+
+
+def _collect_and_cache():
+    """串行起 Chromium 收集一次 B站 Cookie 并写入 _cached（不推送）。
+
+    用 _resolve_lock 串行化，避免与 /v1/resolve 并发起多个 Chromium 撑爆 VPS 内存。
+    """
+    if not _resolve_lock.acquire(blocking=False):
+        _resolve_lock.acquire()
+    try:
+        header, passed, hit_slider, cookies = _collect_cookies(SESSDATA)
+        with _lock:
+            _cached.update(cookie=header, cookies=cookies, ts=int(time.time()),
+                           passed=passed, hit_slider=hit_slider)
+        return header
+    finally:
+        _resolve_lock.release()
+
+
+def _push_once_to_cloud(header):
+    """推送一次到云端，返回 (ok, msg)。仅封装底层，不含重试。"""
+    try:
+        resp = _push_to_cloud(SYNC_URL, SYNC_TOKEN, header)
+        return bool(resp and resp.get("ok")), str(resp)[:200]
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)[:200]
 
 
 def do_push(wait: bool = True):
-    """推送一次。wait=True 时若已有推送在进行则阻塞等待；wait=False 时立即返回 busy。
+    """收集并（可选）推送一次 B站 Cookie。
 
-    推送底层用 urllib.urlopen（bilibili_ecs_cookie.push_once）默认无 timeout，
-    网络抖动时会长时间挂起。这里用独立线程包一层 + join(timeout) 兜底，
-    最多等 PUSH_TIMEOUT 秒，避免把后台推送线程永久卡死、也顺带保护 _push_lock。
+    - 收集始终执行并写入 _cached（Railway 可经隧道拉取，独立于推送成败）。
+    - 推送受 VDL_COOKIE_PUSH_ENABLED 开关控制：默认开启，采用「重试 + 退避」，
+      且推送与解析已拆锁（见 _resolve_lock），推送抖动不再饿死 /v1/resolve。
+    - 推送失败仅更新状态、不刷屏（避免 VPS→Railway 跨境链路抖动时日志刷屏）。
+    - 关闭主动推送（PUSH_ENABLED=false）时仅维持缓存供 Railway 拉取。
     """
+    if not PUSH_ENABLED:
+        try:
+            _collect_and_cache()
+        except Exception as e:  # noqa: BLE001
+            with _lock:
+                _state.update(ts=int(time.time()), ok=False,
+                              msg="collect failed: %s" % str(e)[:120])
+        return False, {"error": "push disabled (Railway pulls instead)"}
     if not _push_lock.acquire(blocking=False):
         if not wait:
             return False, {"error": "push already in progress"}
         _push_lock.acquire()  # 阻塞等待上一轮完成
     try:
-        holder = {}
-
-        def _run():
-            try:
-                holder["v"] = push_once(SYNC_URL, SYNC_TOKEN, SESSDATA)
-            except Exception as e:  # noqa: BLE001
-                holder["e"] = e
-
-        th = threading.Thread(target=_run, daemon=True)
-        th.start()
-        th.join(timeout=PUSH_TIMEOUT)
-        if th.is_alive():
+        try:
+            header = _collect_and_cache()
+        except Exception as e:  # noqa: BLE001
             with _lock:
                 _state.update(ts=int(time.time()), ok=False,
-                              msg="push timed out (>%ds)" % PUSH_TIMEOUT)
-            return False, {"error": "push timed out (>%ds)" % PUSH_TIMEOUT}
-        if "e" in holder:
-            with _lock:
-                _state.update(ts=int(time.time()), ok=False, msg=str(holder["e"])[:200])
-            return False, {"error": str(holder["e"])[:200]}
-        resp = holder.get("v")
-        ok = bool(resp and resp.get("ok"))
+                              msg="collect failed: %s" % str(e)[:120])
+            return False, {"error": "collect failed: %s" % str(e)[:120]}
+        last_err = None
+        for attempt in range(1, PUSH_RETRIES + 1):
+            ok, msg = _push_once_to_cloud(header)
+            if ok:
+                with _lock:
+                    _state.update(ts=int(time.time()), ok=True, msg="pushed ok")
+                return True, {"ok": True, "msg": msg}
+            last_err = msg
+            if attempt < PUSH_RETRIES:
+                time.sleep(PUSH_RETRY_BACKOFF)
         with _lock:
-            _state.update(ts=int(time.time()), ok=ok, msg=str(resp)[:200])
-        return ok, resp
+            _state.update(ts=int(time.time()), ok=False,
+                          msg="push failed after %d tries: %s" % (PUSH_RETRIES, last_err))
+        return False, {"error": "push failed after %d tries: %s" % (PUSH_RETRIES, last_err)}
     finally:
         _push_lock.release()
 
@@ -168,6 +210,32 @@ class _Handler(BaseHTTPRequestHandler):
         q = parse_qs(p.query)
         if path == "/healthz":
             self._send(200, {"ok": True, "ts": int(time.time())})
+            return
+        # 供 Railway 经反向隧道主动拉取本地缓存的 B站 Cookie（替代 VPS 主动推送，
+        # 规避 VPS→Railway 跨境公网链路抖动）。Railway 经本机隧道代理 127.0.0.1:18889
+        # 转发到本机 127.0.0.1:18731 即达此端点。
+        if path == "/v1/pull-cookie":
+            if not self._check_token(q):
+                self._send(403, {"error": "forbidden"})
+                return
+            with _lock:
+                fresh = _cached.get("cookie") and (time.time() - _cached["ts"]) < COOKIE_TTL
+            if not fresh:
+                try:
+                    _collect_and_cache()
+                except Exception:  # noqa: BLE001
+                    pass  # 收集失败也尽量返回已有缓存
+            with _lock:
+                c = dict(_cached)
+            self._send(200, {
+                "ok": True,
+                "domain": "bilibili.com",
+                "cookie": c.get("cookie", ""),
+                "cookies": c.get("cookies", []),
+                "ts": c.get("ts", 0),
+                "passed": c.get("passed", False),
+                "hit_slider": c.get("hit_slider", False),
+            })
             return
         # 通用 resolve 端点：/v1/resolve?platform=xx&url=yy
         # 兼容旧路径 /v1/<platform>/resolve?url=yy

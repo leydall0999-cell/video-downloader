@@ -1289,6 +1289,11 @@ async def lifespan(_: FastAPI):
         asyncio.create_task(_cn_tunnel.start_cn_tunnel_proxy())
     except Exception:
         logger.exception("启动反向隧道本地代理失败")
+    # 经反向隧道主动从 VPS 拉取 Cookie 写入公共池（替代 VPS 主动推，规避跨境链路抖动）
+    try:
+        _start_cookie_pull_from_vps()
+    except Exception:
+        logger.exception("启动 Cookie 隧道拉取任务失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
@@ -2840,6 +2845,51 @@ def _cookie_pool_watchdog() -> None:
 
 def _start_cookie_pool_watchdog() -> None:
     t = threading.Thread(target=_cookie_pool_watchdog, daemon=True)
+    t.start()
+
+
+def _cookie_pull_from_vps() -> None:
+    """经反向隧道从 VPS 守护进程主动拉取 B站 Cookie 写入公共池。
+
+    替代「VPS 主动直连 Railway 推送」：VPS→Railway 跨境公网链路抖动，直连推送
+    频繁 TLS 握手超时失败（实测三次全挂）。改为 Railway 经本机隧道代理
+    127.0.0.1:18889 主动拉取 VPS 本机 daemon 的 /v1/pull-cookie（入站，链路稳定），
+    再把 Cookie 写入公共池。隧道未就绪时退避等待，不报错。
+    """
+    try:
+        import requests
+    except Exception:
+        logger.warning("[cookie_pull] requests 不可用，跳过隧道拉取")
+        return
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN", "")
+    if not token:
+        logger.warning("[cookie_pull] 未配置 VDL_COOKIE_REFILL_TOKEN（应 = VPS VDL_COOKIE_API_TOKEN），跳过")
+        return
+    interval = int(os.environ.get("VDL_COOKIE_PULL_INTERVAL", "1200"))  # 默认 20 分钟
+    while True:
+        try:
+            import cn_tunnel as _cn
+            if not _cn._TUNNEL_READY.is_set():
+                time.sleep(30)
+                continue
+            proxy = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+            url = "http://127.0.0.1:18731/v1/pull-cookie?token=" + token
+            resp = requests.get(url, proxies={"http": proxy}, timeout=90)
+            data = resp.json()
+            cookie = (data or {}).get("cookie") or ""
+            if data.get("ok") and cookie:
+                from cookie_pool import add_cookie
+                added = add_cookie("bilibili.com", cookie, source="vps-pull")
+                logger.info("[cookie_pull] 已从 VPS 拉取并写入公共池 added=%s", added)
+            else:
+                logger.warning("[cookie_pull] VPS 返回空/失败: %s", str(data)[:160])
+        except Exception as e:
+            logger.warning("[cookie_pull] 拉取失败: %s", str(e)[:160])
+        time.sleep(interval)
+
+
+def _start_cookie_pull_from_vps() -> None:
+    t = threading.Thread(target=_cookie_pull_from_vps, name="vdl-cookie-pull", daemon=True)
     t.start()
 
 
