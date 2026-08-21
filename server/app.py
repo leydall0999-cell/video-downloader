@@ -2959,9 +2959,9 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
 
     out["tests"] = [
         _run("default"),
-        _run("ios", {"youtube": {"player_client": ["ios"]}}),
-        _run("ios_flat", {"youtube": {"player_client": ["ios"]}}, {"extract_flat": True}),
-        _run("ios_fmt18", {"youtube": {"player_client": ["ios"]}}, {"format": "18/best"}),
+        _run("tv_downgraded", {"youtube": {"player_client": ["tv_downgraded"]}}),
+        _run("web_creator", {"youtube": {"player_client": ["web_creator"]}}),
+        _run("android_vr", {"youtube": {"player_client": ["android_vr"]}}),
         _run("mweb", {"youtube": {"player_client": ["mweb"]}}),
     ]
     return out
