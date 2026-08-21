@@ -2941,9 +2941,38 @@ def cookie_pull_diag() -> dict:
             ck = (data or {}).get("cookie") or ""
             out["cookie_len"] = len(ck)
             if (data or {}).get("ok") and ck:
-                from cookie_pool import add_cookie
+                from cookie_pool import (
+                    add_cookie,
+                    get_cookie,
+                    _candidates,
+                    _pool_file,
+                    _decrypt_item,
+                    _POOL_DIR,
+                    _cipher,
+                )
                 out["added"] = add_cookie("bilibili.com", ck, source="vps-pull")
-                from cookie_pool import get_cookie
+                # 细粒度诊断：看清 add 后文件落盘位置 / 读取候选 / 解密链路
+                out["pool_dir"] = str(_POOL_DIR)
+                out["mount"] = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or ""
+                out["cipher_ok"] = _cipher() is not None
+                out["candidates"] = []
+                for d in _candidates("bilibili.com"):
+                    f = _pool_file(d)
+                    info = {"cand": d, "exists": f.exists()}
+                    if f.exists():
+                        try:
+                            fdata = json.loads(f.read_text())
+                            cookies = fdata.get("cookies", [])
+                            info["n"] = len(cookies)
+                            if cookies:
+                                c0 = cookies[0]
+                                info["first_ts"] = c0.get("ts")
+                                info["age"] = int(time.time() - (c0.get("ts") or 0))
+                                info["decrypted_len"] = len(_decrypt_item(c0))
+                                info["keys"] = sorted(c0.keys())
+                        except Exception as e:  # noqa: BLE001
+                            info["read_err"] = str(e)[:120]
+                    out["candidates"].append(info)
                 out["pool_available_after"] = bool(get_cookie("bilibili.com"))
             else:
                 out["vps_msg"] = str(data)[:160]
