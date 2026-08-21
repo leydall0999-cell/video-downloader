@@ -65,9 +65,12 @@ SESSDATA = os.environ.get("VDL_BILI_SESSDATA", "")
 INTERVAL = int(os.environ.get("VDL_COOKIE_PUSH_INTERVAL", "120"))
 
 _lock = threading.Lock()
-# 全局 Playwright 串行锁：cookie 推送与各平台解析都跑无头浏览器，
-# 共用一个锁保证任何时刻只有一个 Chromium 实例（否则并发会卡死 VPS）。
+# 推送锁：仅串行化「云端 Cookie 推送」自身（推送不启动 Chromium）。
 _push_lock = threading.Lock()
+# 解析锁：串行化各平台 Playwright 解析，确保任意时刻只有一个 Chromium 实例
+# （VPS 内存吃紧，并发会卡死）。注意：解析与推送各用各的锁，互不阻塞——
+# 否则推送因网络抖动（urlopen 无 timeout）长期占锁会把所有 /v1/resolve 饿死。
+_resolve_lock = threading.Lock()
 _state = {"ts": 0, "ok": None, "msg": ""}
 
 # 平台 → Playwright 解析函数映射（新增平台在此注册即可）
@@ -80,39 +83,64 @@ _RESOLVERS = {
 }
 
 
+PUSH_TIMEOUT = int(os.environ.get("VDL_COOKIE_PUSH_TIMEOUT", "20"))
+
+
 def do_push(wait: bool = True):
-    """推送一次。wait=True 时若已有推送在进行则阻塞等待；wait=False 时立即返回 busy。"""
+    """推送一次。wait=True 时若已有推送在进行则阻塞等待；wait=False 时立即返回 busy。
+
+    推送底层用 urllib.urlopen（bilibili_ecs_cookie.push_once）默认无 timeout，
+    网络抖动时会长时间挂起。这里用独立线程包一层 + join(timeout) 兜底，
+    最多等 PUSH_TIMEOUT 秒，避免把后台推送线程永久卡死、也顺带保护 _push_lock。
+    """
     if not _push_lock.acquire(blocking=False):
         if not wait:
             return False, {"error": "push already in progress"}
         _push_lock.acquire()  # 阻塞等待上一轮完成
     try:
-        header, resp = push_once(SYNC_URL, SYNC_TOKEN, SESSDATA)
+        holder = {}
+
+        def _run():
+            try:
+                holder["v"] = push_once(SYNC_URL, SYNC_TOKEN, SESSDATA)
+            except Exception as e:  # noqa: BLE001
+                holder["e"] = e
+
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        th.join(timeout=PUSH_TIMEOUT)
+        if th.is_alive():
+            with _lock:
+                _state.update(ts=int(time.time()), ok=False,
+                              msg="push timed out (>%ds)" % PUSH_TIMEOUT)
+            return False, {"error": "push timed out (>%ds)" % PUSH_TIMEOUT}
+        if "e" in holder:
+            with _lock:
+                _state.update(ts=int(time.time()), ok=False, msg=str(holder["e"])[:200])
+            return False, {"error": str(holder["e"])[:200]}
+        resp = holder.get("v")
         ok = bool(resp and resp.get("ok"))
         with _lock:
             _state.update(ts=int(time.time()), ok=ok, msg=str(resp)[:200])
         return ok, resp
-    except Exception as e:
-        with _lock:
-            _state.update(ts=int(time.time()), ok=False, msg=str(e)[:200])
-        return False, {"error": str(e)[:200]}
     finally:
         _push_lock.release()
 
 
 def do_resolve(platform, url):
-    """用 Playwright 解析指定平台视频。复用 _push_lock 保证全局串行。"""
+    """用 Playwright 解析指定平台视频。用 _resolve_lock 串行化 Chromium，
+    与推送锁独立，避免被云端推送的网络抖动饿死。"""
     resolver = _RESOLVERS.get(platform)
     if resolver is None:
         return False, "不支持的平台: %s" % platform
-    if not _push_lock.acquire(blocking=False):
-        _push_lock.acquire()  # 阻塞等待上一轮 Playwright 完成
+    if not _resolve_lock.acquire(blocking=False):
+        _resolve_lock.acquire()  # 阻塞等待上一轮 Chromium 完成
     try:
         return True, resolver(url)
     except Exception as e:
         return False, str(e)[:300]
     finally:
-        _push_lock.release()
+        _resolve_lock.release()
 
 
 def _loop():
