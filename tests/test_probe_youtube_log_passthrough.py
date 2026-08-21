@@ -1,13 +1,15 @@
-"""probe() 应透传 yt-dlp logger 真实错误，而非用「未获取到视频信息」占位提示误导用户。
+"""probe() 对 YouTube 应让 yt-dlp 真实抛 DownloadError，再由 except 分支降级 + 透传错误。
 
 回归背景（2026-08-21）：用户反馈 YouTube 链接解析失败，错误信息是笼统的
 「未获取到视频信息 / extract_info 返回空结果（无异常）」，但 yt-dlp 真实原因是
-"This video is unavailable"。原因：probe() 对 YouTube 设了 ignoreerrors="only_download"，
-yt-dlp 在该模式下不抛错只 logger.error；原代码在 `if not info:` 时只看 _last_err，
-不读 yt-dlp 日志，导致真实错误被遮蔽。
+"This video is unavailable"。
 
-修复：probe() 在 yt-dlp 调用前后捕获 WARNING/ERROR 日志，`if not info:` 时优先
-透传 yt-dlp 真实错误。
+根因：probe() 对 YouTube 设了 ignoreerrors="only_download"，yt-dlp 2026.07 在该
+模式下对业务错误（unavailable/sign-in/format not available）既不抛 DownloadError
+也不 logger.error，直接返回空 dict，原始错误被完全吞掉。
+
+修复：移除 YouTube 的 ignoreerrors 设置，让 yt-dlp 真实抛 DownloadError；probe()
+的 except DownloadError 分支会捕获并透传真实错误，同时 logger 捕获作为兜底。
 """
 import os
 import sys
@@ -20,9 +22,12 @@ import logging
 import pytest
 
 import downloader as dl
+from yt_dlp.utils import DownloadError
 
 
-class _FakeYDL:
+class _YDLRaisesDownloadError:
+    """模拟 yt-dlp 抛 DownloadError（如 YouTube unavailable）。"""
+
     def __init__(self, opts):
         self.opts = opts
 
@@ -33,23 +38,55 @@ class _FakeYDL:
         return False
 
     def extract_info(self, url, download=False):
-        # 模拟 yt-dlp 在 ignoreerrors 模式下不抛错，但 logger.error
-        logging.getLogger("yt_dlp").error(
-            "[youtube] eIvAx63QSgc: This video is unavailable"
-        )
-        return None
+        raise DownloadError("ERROR: [youtube] eIvAx63QSgc: This video is unavailable")
 
 
-class _SilentYDL(_FakeYDL):
+class _YDLReturnsEmpty:
+    """模拟 yt-dlp 静默返回空（无错误）。"""
+
+    def __init__(self, opts):
+        self.opts = opts
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
     def extract_info(self, url, download=False):
         return None
 
 
-@pytest.fixture
-def patch_youtube_url(monkeypatch):
-    """YouTube host + ignoreerrors="only_download"，让 yt-dlp 走 ignoreerrors 路径。"""
+class _YDLReturnsValidYouTube:
+    """模拟 yt-dlp 正常解析 YouTube 视频。"""
+
+    def __init__(self, opts):
+        self.opts = opts
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def extract_info(self, url, download=False):
+        return {
+            "id": "abc",
+            "title": "Test Video",
+            "duration": 100,
+            "formats": [
+                {"url": "https://x/v.mp4", "format_id": "f1", "ext": "mp4", "height": 720},
+            ],
+            "webpage_url": url,
+        }
+
+
+def _base_patches(monkeypatch, fake_youtube_module=True):
     monkeypatch.setattr(dl, "_host_of", lambda u: "youtu.be")
-    monkeypatch.setattr(dl, "_YoutubeDL", _FakeYDL)
+    monkeypatch.setattr(dl, "_resolve_proxy", lambda *a, **kw: "")
+    monkeypatch.setattr(dl, "is_china_host", lambda *a, **kw: False)
+    monkeypatch.setattr(dl, "_looks_like_direct_file", lambda *a, **kw: False)
+    # 默认 opts 不带 ignoreerrors（验证移除后行为）
     monkeypatch.setattr(
         dl,
         "_base_options",
@@ -58,16 +95,15 @@ def patch_youtube_url(monkeypatch):
             "http_headers": {},
             "format": None,
             "extractor_args": {},
-            "ignoreerrors": "only_download",
         },
     )
-    monkeypatch.setattr(dl, "_resolve_proxy", lambda *a, **kw: "")
-    monkeypatch.setattr(dl, "is_china_host", lambda *a, **kw: False)
-    monkeypatch.setattr(dl, "_looks_like_direct_file", lambda *a, **kw: False)
 
 
-def test_probe_unavailable_youtube_passes_yt_dlp_log(patch_youtube_url):
-    """yt-dlp 不抛错但 logger.error 时，probe() 应透传真实错误给用户。"""
+def test_probe_youtube_unavailable_passes_real_error(monkeypatch):
+    """yt-dlp 抛 DownloadError 时，probe() 应透传真实错误（不再用占位提示）。"""
+    _base_patches(monkeypatch)
+    monkeypatch.setattr(dl, "_YoutubeDL", _YDLRaisesDownloadError)
+
     from downloader import probe, ResolveError
 
     try:
@@ -76,14 +112,14 @@ def test_probe_unavailable_youtube_passes_yt_dlp_log(patch_youtube_url):
         assert "This video is unavailable" in (e.hint or ""), (
             f"应透传 yt-dlp 真实错误，实际：{(e.hint or '')[:300]}"
         )
-        assert e.message == "未获取到视频信息"
     else:
         raise AssertionError("应抛 ResolveError")
 
 
-def test_probe_no_yt_dlp_log_uses_placeholder(patch_youtube_url, monkeypatch):
-    """yt-dlp 既没抛错也没 logger：保留占位提示（兼容极端情况）。"""
-    monkeypatch.setattr(dl, "_YoutubeDL", _SilentYDL)
+def test_probe_youtube_silent_empty_falls_back_to_placeholder(monkeypatch):
+    """yt-dlp 既不抛错也不 logger.error 静默返回空：用占位提示（兜底兼容）。"""
+    _base_patches(monkeypatch)
+    monkeypatch.setattr(dl, "_YoutubeDL", _YDLReturnsEmpty)
 
     from downloader import probe, ResolveError
 
@@ -96,18 +132,58 @@ def test_probe_no_yt_dlp_log_uses_placeholder(patch_youtube_url, monkeypatch):
         raise AssertionError("应抛 ResolveError")
 
 
-def test_probe_logger_handler_cleanup(patch_youtube_url):
+def test_probe_youtube_logger_capture_as_safety_net(monkeypatch):
+    """logger 捕获兜底：若 yt-dlp 不抛错只 logger.error，应透传日志。"""
+    _base_patches(monkeypatch)
+
+    class _YDLLogOnlyError(_YDLReturnsEmpty):
+        def extract_info(self, url, download=False):
+            logging.getLogger("yt_dlp").error(
+                "[youtube] abc: Sign in to confirm you're not a bot"
+            )
+            return None
+
+    monkeypatch.setattr(dl, "_YoutubeDL", _YDLLogOnlyError)
+
+    from downloader import probe, ResolveError
+
+    try:
+        probe("https://youtu.be/abc")
+    except ResolveError as e:
+        assert "Sign in to confirm" in (e.hint or ""), (
+            f"应透传 yt-dlp logger 错误，实际：{(e.hint or '')[:300]}"
+        )
+    else:
+        raise AssertionError("应抛 ResolveError")
+
+
+def test_probe_youtube_valid_video_works(monkeypatch):
+    """可用 YouTube 视频应正常解析（移除 ignoreerrors 后不影响健康路径）。"""
+    _base_patches(monkeypatch)
+    monkeypatch.setattr(dl, "_YoutubeDL", _YDLReturnsValidYouTube)
+
+    from downloader import probe
+
+    info = probe("https://youtu.be/abc")
+    assert info.get("title") == "Test Video"
+    assert len(info.get("formats") or []) == 1
+
+
+def test_probe_logger_handler_cleanup(monkeypatch):
     """每次 probe() 调用后应清理 logger handler，不污染后续请求。"""
+    _base_patches(monkeypatch)
+    monkeypatch.setattr(dl, "_YoutubeDL", _YDLRaisesDownloadError)
+
     from downloader import probe
 
     ydl_logger = logging.getLogger("yt_dlp")
-    n_before = sum(1 for h in ydl_logger.handlers if type(h).__name__ == "_YdlLogCapture")
-
+    n_before = sum(
+        1 for h in ydl_logger.handlers if type(h).__name__ == "_YdlLogCapture"
+    )
     try:
         probe("https://youtu.be/abc")
     except Exception:
         pass
-
     n_after = sum(
         1 for h in ydl_logger.handlers if type(h).__name__ == "_YdlLogCapture"
     )

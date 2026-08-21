@@ -2104,23 +2104,17 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         }
     # 记录最后一次异常信息，用于 info 为空时透传真实原因
     _last_err: str | None = None
-    # 捕获 yt-dlp logger 的 WARNING/ERROR 输出：ignoreerrors 模式下 yt-dlp 不抛错
-    # 但会 logger.error 真实原因（如 [youtube] xxx: This video is unavailable），
-    # 提取出来透传给用户，避免「未获取到视频信息」误导。
+    # 收集 yt-dlp logger 的 WARNING/ERROR 输出，供 `if not info:` 时透传真实业务原因。
+    # handler 的添加/移除严格包在内层 try/finally（紧贴 extract_info 调用），
+    # 确保任何路径（包括 raise）都清理，不污染后续请求的 logger。
     import logging as _logging
-    _ydlp_logs: list[str] = []
 
     class _YdlLogCapture(_logging.Handler):
         def emit(self, record):  # noqa: ANN401
             if record.levelno >= _logging.WARNING:
                 _ydlp_logs.append(self.format(record))
 
-    _capture = _YdlLogCapture()
-    _capture.setFormatter(_logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    _ydlp_logger = _logging.getLogger("yt_dlp")
-    _ydlp_logger.addHandler(_capture)
-    _old_level = _ydlp_logger.level
-    _ydlp_logger.setLevel(_logging.WARNING)
+    _ydlp_logs: list[str] = []
 
     try:
         opts = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
@@ -2142,8 +2136,11 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # ⚠️ 绝不能对所有站点生效！国内站（快手/抖音等）提取失败时，
         # ignoreerrors 会吞掉 ExtractorError/DownloadError 导致 extract_info 返回 None，
         # 真正的错误原因（页面结构变更/需要登录等）被完全丢失。
-        if _h and ("youtube.com" in _h or "youtu.be" in _h):
-            opts["ignoreerrors"] = "only_download"
+        # ⚠️ 也不对 YouTube 生效！"only_download" 在 2026.07 yt-dlp 下对
+        # "This video is unavailable"/"Sign in to confirm you're not a bot" 这类业务
+        # 错误既不抛 DownloadError 也不 logger.error，导致前端「未获取到视频信息」
+        # 误导。让 yt-dlp 真实抛 DownloadError，由下方 except DownloadError 分支
+        # 统一捕获 + extract_flat/tv_embedded 降级。
         with _YoutubeDL(opts) as ydl:
             # 诊断：记录 yt-dlp 运行时真实配置（proxy/handlers/每 handler proxies）
             try:
@@ -2160,7 +2157,19 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                         _f.write(f"  ytdlp_runtime diag_err={str(_dge)[:120]}\n")
                 except Exception:
                     pass
-            info = ydl.extract_info(url, download=False)
+            # yt-dlp logger 捕获（业务错误透传兜底）。内层 try/finally 确保任何路径都清理
+            import logging as _logging
+            _capture = _YdlLogCapture()
+            _capture.setFormatter(_logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+            _ydlp_logger = _logging.getLogger("yt_dlp")
+            _old_level = _ydlp_logger.level
+            _ydlp_logger.addHandler(_capture)
+            _ydlp_logger.setLevel(_logging.WARNING)
+            try:
+                info = ydl.extract_info(url, download=False)
+            finally:
+                _ydlp_logger.removeHandler(_capture)
+                _ydlp_logger.setLevel(_old_level)
         # 诊断：记录 extract_info 返回值
         try:
             _info_keys = list(info.keys()) if info else ["(None)"]
@@ -2262,9 +2271,8 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # 兜底：捕获任何未预期异常，保留完整错误用于诊断
         _last_err = f"{type(exc).__name__}: {str(exc)[:300]}"
 
-    # 清理 yt-dlp logger handler（避免泄漏到其他请求）
-    _ydlp_logger.removeHandler(_capture)
-    _ydlp_logger.setLevel(_old_level)
+    # 注意：yt-dlp logger handler 的清理已在 extract_info 调用的内层 finally 完成
+    # （确保任何 raise 路径都清理，不污染后续请求）
 
     if not info:
         detail = "请稍后重试或更换链接"
