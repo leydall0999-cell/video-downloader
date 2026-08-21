@@ -2943,6 +2943,12 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             if info:
                 result["title"] = info.get("title", "")[:60]
                 result["formats"] = len(info.get("formats") or [])
+                fmts = info.get("formats") or []
+                result["fmt_summary"] = [
+                    "%s/%s/%s" % (f.get("format_id"), f.get("ext"), f.get("height") or f.get("resolution") or "?")
+                    for f in fmts[:8]
+                ]
+                result["requested_formats"] = len(info.get("requested_formats") or [])
         except Exception as e:  # noqa: BLE001
             result["ok"] = False
             msg = str(e)
@@ -2954,14 +2960,11 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
     out["tests"] = [
         _run("default"),
         _run("ios", {"youtube": {"player_client": ["ios"]}}),
+        _run("ios_no_format", {"youtube": {"player_client": ["ios"]}}, {"format": "bv*+ba/b"}),
         _run("mweb", {"youtube": {"player_client": ["mweb"]}}),
         _run("tv", {"youtube": {"player_client": ["tv"]}}),
         _run("web_embedded", {"youtube": {"player_client": ["web_embedded"]}}),
     ]
-    # 长链对照
-    if "youtu.be" in url:
-        long_url = url.replace("youtu.be/", "www.youtube.com/watch?v=")
-        out["tests"].append(_run("long_url_www", None, {"noplaylist": True}, target_url=long_url))
     return out
 
 
