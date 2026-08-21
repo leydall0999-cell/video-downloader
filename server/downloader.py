@@ -452,6 +452,14 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         # 展开失败：保留原 URL，让 yt-dlp 走 generic 给「找不到视频」更明确的错误
         return _strip_tracking_params(url)
 
+    # 爱奇艺 直接 playShare 分享页（www.iqiyi.com/playShare.html?shareId=...）：
+    # shareId / positiveId 是视频标识，必须保留，否则 bare playShare.html 会被
+    # 爱奇艺跳到 error.html?errortype=2（"内容暂时无法观看"），worker 也抓不到 m3u8。
+    if "iqiyi.com" in url and "playShare" in url:
+        normalized = _strip_tracking_params(url, keep={"shareId", "positiveId"})
+        logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
     # 抖音：分享短链 v.douyin.com 展开后常为 iesdouyin.com/xg/video/ID，
     # 该域名 Playwright 解析拿不到视频流；归一化为 douyin.com/video/ID 即可正常解析。
     m = re.search(r"iesdouyin\.com/xg/video/(\d{15,})", url)

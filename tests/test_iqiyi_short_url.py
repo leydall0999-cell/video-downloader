@@ -199,3 +199,21 @@ def test_normalize_share_url_iqynnet_playshare_preserves_shareid(monkeypatch):
     assert "shareId=NDUzNTE0NDg5Mzk3NTUwMA%3D%3D" in out
     assert "positiveId=NDUzNTE0NDg5Mzk3NTUwMA%3D%3D" in out
     assert "vd_source" not in out
+
+def test_normalize_direct_iqiyi_playshare_preserves_shareid():
+    """直接粘贴 www.iqiyi.com/playShare.html?shareId=... 时，归一化必须保留
+    shareId / positiveId，否则 VPS worker 拿到 bare playShare.html 会被爱奇艺
+    跳到 error.html?errortype=2，导致抓不到 m3u8。"""
+    url = (
+        "https://www.iqiyi.com/playShare.html?shareId=NTA0MTMxMTU0Mzg5MDcwMA=="
+        "&positiveId=NTA0MTMxMTU0Mzg5MDcwMA==&type=0"
+        "&rpage=sharepage_new&p1=2_22_222&qr_template=directshare"
+        "&social_platform=link&vd_source=abc"
+    )
+    out = _normalize_share_url(url)
+    assert "shareId=NTA0MTMxMTU0Mzg5MDcwMA%3D%3D" in out
+    assert "positiveId=NTA0MTMxMTU0Mzg5MDcwMA%3D%3D" in out
+    # 真正的追踪参数应被剥除
+    assert "vd_source" not in out
+    # 必须是 playShare 完整页，而非 bare；其余分享参数（rpage/p1 等）原样保留
+    assert out.startswith("https://www.iqiyi.com/playShare.html?")
