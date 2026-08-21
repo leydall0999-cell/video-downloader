@@ -2960,6 +2960,18 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
     except Exception as _e:  # noqa: BLE001
         out["bgutil_server_log_err"] = str(_e)[:120]
 
+    # 直接调 fetch_po_token 验证 bgutil 链路（绕过 extract_info）
+    try:
+        import yt_dlp as _ytdlp
+        from yt_dlp.extractor.youtube import YoutubeIE
+        _opts = {"quiet": True, "socket_timeout": 20}
+        with _ytdlp.YoutubeDL(_opts) as _ydl:
+            _ie = YoutubeIE(_ydl)
+            _tok = _ie.fetch_po_token(client="web", context="gvs", required=True)
+            out["direct_fetch_pot_web"] = (str(_tok)[:40] + "...") if _tok else None
+    except Exception as _e:  # noqa: BLE001
+        out["direct_fetch_pot_err"] = str(_e)[:250]
+
     def _run(label, extractor_args=None, extra_opts=None, target_url=None):
         opts = {
             "quiet": True,
