@@ -78,14 +78,21 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
     logger.info("[cn_tunnel] 反向隧道已建立（ECS client 已连接）")
     try:
         while True:
-            # receive 加超时：client 进程崩溃/网络半开（TCP 半开时 receive 永不返回，
-            # 旧版在这里卡死导致 _TUNNEL 残留死连接，18889 代理用死连接发 open 帧
-            # 立即失败 → yt-dlp 报 Remote end closed）。超时强制走 finally 清理。
+            # 空闲不断开：隧道可能长时间无流量（没有解析/下载任务），断开会让
+            # client 反复重连、期间 18889 代理不可用。改用「30s 无消息则 ping 探测」：
+            # ping 由 websockets 库自动处理 pong，不进 receive()，因此 30s 窗口只
+            # 是探测节奏，不影响空闲保持；ping 失败（client 死/网络半开）才断开，
+            # 从而及时清理 _TUNNEL 残留死连接（否则 _proxy_conn 发 open 帧失败 →
+            # yt-dlp 报 Remote end closed）。
             try:
-                msg = await asyncio.wait_for(ws.receive(), timeout=90)
+                msg = await asyncio.wait_for(ws.receive(), timeout=30)
             except asyncio.TimeoutError:
-                logger.warning("[cn_tunnel] WS receive 90s 无消息，视为死连接主动断开")
-                break
+                try:
+                    await asyncio.wait_for(ws.ping(), timeout=10)
+                except Exception:
+                    logger.warning("[cn_tunnel] WS ping 探测失败，判定死连接断开")
+                    break
+                continue  # 连接存活，继续等消息
             if msg.get("type") == "websocket.disconnect":
                 break
             data = msg.get("bytes")
