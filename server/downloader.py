@@ -2065,6 +2065,29 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except (DownloadError, ExtractorError) as exc:
         _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
+        # 网络类错误（隧道重连窗口/链路抖动）：国内站经反向隧道回源时，本机隧道
+        # 端（住宅 IP→Cloudflare）偶发断线，client 5s 后重连。撞上窗口会报
+        # "Remote end closed / 1010 / connection" 类错误，等 3s 重试一次可显著
+        # 提高成功率（重试用的是全新 _base_options + _YoutubeDL，无状态残留）。
+        _exc_low = str(exc).lower()
+        _net_like = any(
+            w in _exc_low
+            for w in ("remote end closed", "connection", "timed out", "1010",
+                      "transport", "incompleteread", "reset", "closed")
+        )
+        if _net_like and _h and is_china_host(_h):
+            logger.info("[probe] 网络类错误(%s)，3s 后重试一次", _last_err[:100])
+            try:
+                import time as _t
+                _t.sleep(3)
+                _opts2 = _base_options(PROBE_RETRIES, _h, cookie=cookie, proxy=proxy)
+                _opts2["format"] = None
+                with _YoutubeDL(_opts2) as _ydl2:
+                    info = _ydl2.extract_info(url, download=False)
+                _last_err = None
+                logger.info("[probe] 隧道重试成功")
+            except Exception as _re2:
+                logger.warning("[probe] 隧道重试仍失败: %s", str(_re2)[:150])
         # B站 走 API 兜底：网络错误（IncompleteRead/连接重置）OR 页面风控（412/403）。
         # 2026-08 B站 风控升级：对 urllib3/requests 的非浏览器 TLS 栈访问视频页返回
         # 412 验证页（curl 不受影响），yt-dlp 抓页面必 412 → 提取器报 403。

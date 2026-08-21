@@ -33,10 +33,11 @@ async def heartbeat(ws):
     """周期心跳数据帧：Cloudflare 等反代对 WS 的空闲超时只认【数据帧】，
     ping/pong 控制帧不计入活动，纯 ping 会被反代在 ~100s 后断开 TCP
     （表现为 client 侧 'no close frame received or sent' 反复重连）。
-    每 30s 发一帧 type=3 空数据（服务端忽略），把连接保持为"活跃"。"""
+    每 15s 发一帧 type=3 空数据（服务端忽略），把连接保持为"活跃"，
+    并压低运营商 NAT/反代空闲超时窗口（深圳移动等 NAT 对空闲连接约 2-5 分钟）。"""
     try:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
             try:
                 async with send_lock:
                     await ws.send(_frame(3, 0, b""))
