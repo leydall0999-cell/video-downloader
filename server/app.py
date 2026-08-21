@@ -2927,7 +2927,8 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             "quiet": True,
             "skip_download": True,
             "format": None,
-            "socket_timeout": 25,
+            "socket_timeout": 12,
+            "retries": 0,
         }
         if extractor_args:
             opts["extractor_args"] = extractor_args
@@ -2953,11 +2954,7 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
         _run("default"),
         _run("tv", {"youtube": {"player_client": ["tv"]}}),
         _run("tv_embedded", {"youtube": {"player_client": ["tv_embedded"]}}),
-        _run("ios", {"youtube": {"player_client": ["ios"]}}),
         _run("android_vr", {"youtube": {"player_client": ["android_vr"]}}),
-        _run("mweb", {"youtube": {"player_client": ["mweb"]}}),
-        _run("default+tv+ios", {"youtube": {"player_client": ["default", "tv", "ios"]}}),
-        _run("all_clients", {"youtube": {"player_client": ["default", "tv", "ios", "android_vr", "mweb", "tv_embedded"]}}),
     ]
     return out
 
