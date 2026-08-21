@@ -1562,6 +1562,13 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
             "③若为 YouTube：确认代理已开启且对 VDL 生效（双击 .app 不继承终端代理，需在 Clash 开启「系统代理」或 TUN 模式）；"
             "④换更低画质重试；⑤稍后再试"
         )
+        # 临时诊断：把实际生效的代理/Referer 拼进 detail，定位「改了没生效」类问题
+        if ctx and (ctx.get("proxy") or ctx.get("referer")):
+            hint += (
+                f"\n[diag] host={ctx.get('host')} proxy={ctx.get('proxy') or '(none)'} "
+                f"referer={ctx.get('referer') or '(none)'} is_china={ctx.get('is_china')} "
+                f"cookie={ctx.get('cookie_source') or '(none)'}"
+            )
         # 折中：B站 不进 _COOKIE_HARDENED_DOMAINS（避免一刀切改文案），
         # 仅在通用 403 文案后追加专属提示，保留全部排查步骤。
         if host and ("bilibili.com" in host or "b23.tv" in host):
@@ -2090,7 +2097,17 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                         f"③更换代理节点。\n详情：{_last_err}"
                     ) from exc
             else:
-                raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
+                # 临时诊断：B站 403/1010 时输出实际生效的 proxy/host/Referer
+                _probe_host = _host_of(url) or ""
+                _diag_note = (
+                    f"\n[diag] host={_probe_host!r} is_china={is_china_host(_probe_host)} "
+                    f"opts_proxy={opts.get('proxy')!r} effective_proxy={effective_proxy!r} "
+                    f"referer={(opts.get('http_headers') or {}).get('Referer')!r}"
+                )
+                raise ResolveError(
+                    "视频解析失败",
+                    _clean_message(str(exc))[:200] + _diag_note,
+                ) from exc
     except OSError as exc:  # 网络/DNS 层面的错误
         _last_err = f"{type(exc).__name__}: {_clean_message(str(exc))[:200]}"
         raise ResolveError("网络请求失败", _clean_message(str(exc))) from exc
