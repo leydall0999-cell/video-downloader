@@ -1924,34 +1924,52 @@ def _is_iqiyi_host(host: str) -> bool:
 def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
     """调 VPS worker 拿爱奇艺真实流，构造成 yt-dlp 兼容的 info dict。
 
-    返回 None 表示应回退 yt-dlp 通用流程（仅 VPS worker 未配置/不可达且
-    链接非分享页时，保留本地桌面既有的 yt-dlp IqiyiIE 路径）。
+    返回 None 表示应回退 yt-dlp 通用流程（用户已提供 Cookie 且 worker 不可用/失败，
+    走 yt-dlp IqiyiIE 直下——不受爱奇艺对 worker 的反爬检测影响，VIP Cookie 也能生效）。
 
-    长期稳定路径：若用户已在「高级选项」提供登录 Cookie 且链接非分享页
-    (playShare.html)，则跳过 VPS worker，直接回退 yt-dlp IqiyiIE（带上用户
-    Cookie）直下——不受爱奇艺对 worker 的反爬检测影响，VIP Cookie 也能生效。
+    分发策略（覆盖爱奇艺所有链接形式——playShare 分享页 / v_xxx.html 普通播放页 /
+    a_xxx.html 专辑详情页 / intl iq.com 等）：
+    1. 用户已贴 Cookie 且链接非 playShare 分享页 → 跳过 worker，直接回退 yt-dlp 直下
+       （长期稳定路径，避免 worker 反爬抖动影响已知可用链接，也省 VPS 资源）。
+    2. 其余情况（playShare 分享页 / 普通页无 Cookie）→ 优先走 VPS worker，
+       worker 成功即返回 m3u8 直链，无需用户 Cookie。
+    3. worker 不可用（未配置/不可达）或解析失败（407 需登录 / VIP / 链接失效等）：
+       - 用户已贴 Cookie → 回退 yt-dlp 直下兜底；
+       - 用户未贴 Cookie → 提示去「高级选项 → Cookie」粘贴爱奇艺网页版 Cookie。
     """
-    # Cookie + 非分享页 → 跳过 worker，走 yt-dlp 直下（长期稳定路径）
+    # 长期稳定路径：用户已贴 Cookie 且非分享页 → 跳过 worker 直下 yt-dlp
     if cookie and "playShare" not in url:
         return None
-    # 非分享页但没有 Cookie：worker 对 iqiyi 常规页也会 407（需要登录态），
-    # 直接提示用户贴 Cookie，避免无意义调 worker。
-    if "playShare" not in url and not cookie:
-        raise ResolveError(
-            "爱奇艺该链接需要登录 Cookie",
-            "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；粘贴后 VDL 会走 yt-dlp 长期稳定路径直接解析。",
-            category="cookie_required",
-        )
+
     try:
         data = _call_vps_worker("iqiyi", url)
     except ResolveError as e:
         msg = e.message or ""
-        # 分享页必须 Playwright，回退 yt-dlp 也没用 → 直接报错；
-        # worker 未配置/不可达（本地桌面/开发环境）且非分享页 → 回退 yt-dlp。
-        if "playShare" in url or ("未配置" not in msg and "不可达" not in msg):
-            raise
-        return None
+        # worker 未配置/不可达（本地桌面/开发环境）→ 仅当用户提供 Cookie 时回退 yt-dlp
+        if "未配置" in msg or "不可达" in msg:
+            if cookie:
+                return None
+            raise ResolveError(
+                "爱奇艺该链接需要登录 Cookie 或启用解析服务",
+                "请在「高级选项 → Cookie」粘贴爱奇艺网页版的 Cookie 后重试；"
+                "或联系管理员确认 VPS 解析服务可用。",
+                category="cookie_required",
+            ) from e
+        # worker 配置可用但解析失败（407 需登录 / VIP / 链接失效等）：
+        # 有 Cookie 则回退 yt-dlp 直下兜底，无 Cookie 则直接抛出原错误
+        if cookie:
+            return None
+        raise
+
     m3u8 = data.get("video_url") or ""
+    if not m3u8:
+        if cookie:
+            return None
+        raise ResolveError(
+            "爱奇艺解析失败",
+            "worker 未返回视频流，可能是付费/VIP 专享、链接失效或页面未加载。",
+            category="parse_failed",
+        )
     return {
         "id": data.get("video_id") or data.get("tvid") or "",
         "title": data.get("title") or "爱奇艺视频",
