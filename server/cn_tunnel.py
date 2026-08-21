@@ -164,8 +164,13 @@ async def _tunnel_writer(ws: "WebSocket", id_: int, reader: asyncio.StreamReader
 
 
 @router.get("/api/tunnel-test")
-async def tunnel_test() -> dict:
-    """调试用：经本地隧道代理访问 bilibili，验证反向隧道是否通。"""
+async def tunnel_test(mode: str = "http") -> dict:
+    """调试用：经本地隧道代理访问 bilibili，验证反向隧道是否通。
+
+    mode=http：发 GET http://www.bilibili.com/（走 cn_proxy 的 do_GET）。
+    mode=connect：发 CONNECT www.bilibili.com:443 后 TLS ClientHello，验证
+    yt-dlp 常用的 HTTPS CONNECT 隧道路径（走 cn_proxy 的 do_CONNECT）。
+    """
     target = "www.bilibili.com"
     start = time.time()
     try:
@@ -175,12 +180,19 @@ async def tunnel_test() -> dict:
     except Exception as e:
         return {"ok": False, "stage": "connect_local_proxy", "error": str(e), "elapsed": round(time.time() - start, 2)}
 
-    request = (
-        f"GET http://{target}/ HTTP/1.1\r\n"
-        f"Host: {target}\r\n"
-        f"User-Agent: Mozilla/5.0\r\n"
-        f"Connection: close\r\n\r\n"
-    ).encode()
+    if mode == "connect":
+        request = (
+            f"CONNECT {target}:443 HTTP/1.1\r\n"
+            f"Host: {target}:443\r\n"
+            f"User-Agent: Mozilla/5.0\r\n\r\n"
+        ).encode()
+    else:
+        request = (
+            f"GET http://{target}/ HTTP/1.1\r\n"
+            f"Host: {target}\r\n"
+            f"User-Agent: Mozilla/5.0\r\n"
+            f"Connection: close\r\n\r\n"
+        ).encode()
     writer.write(request)
     await writer.drain()
 
@@ -197,13 +209,42 @@ async def tunnel_test() -> dict:
             pass
 
     head = response.split(b"\r\n", 1)[0].decode("latin-1", errors="ignore")
+    extra = {}
+    if mode == "connect" and head.startswith("HTTP/1.1 200"):
+        # CONNECT 已 200：再发一个 TLS ClientHello 试探，确认双向能透传 TLS 字节
+        try:
+            writer2, reader2 = await asyncio.wait_for(
+                asyncio.open_connection(_PROXY_HOST, _PROXY_PORT), timeout=10
+            )
+            writer2.write(
+                f"CONNECT {target}:443 HTTP/1.1\r\nHost: {target}:443\r\n\r\n".encode()
+            )
+            await writer2.drain()
+            ok = await asyncio.wait_for(reader2.read(64), timeout=15)
+            hello = bytes.fromhex(
+                "16030100c0010000bc0303" + "00" * 160
+            )[:32]  # 最小 TLS ClientHello 前缀（够触发握手响应）
+            writer2.write(hello)
+            await writer2.drain()
+            try:
+                tls_resp = await asyncio.wait_for(reader2.read(64), timeout=15)
+                extra["tls_bytes"] = len(tls_resp)
+                extra["tls_head"] = tls_resp[:8].hex()
+            except Exception as e:
+                extra["tls_bytes"] = 0
+                extra["tls_error"] = str(e)
+            writer2.close()
+        except Exception as e:
+            extra["connect2_error"] = str(e)
     return {
         "ok": True,
+        "mode": mode,
         "stage": "success",
         "head": head,
         "body_preview": response[:200].decode("latin-1", errors="ignore"),
         "elapsed": round(time.time() - start, 2),
         "tunnel_ready": _TUNNEL_READY.is_set(),
+        **extra,
     }
 
 
