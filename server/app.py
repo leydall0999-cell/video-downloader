@@ -2953,6 +2953,12 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             out["bgutil_pip_installed"] = [d.metadata["Name"] for d in _md.distributions() if "bgutil" in (d.metadata.get("Name") or "").lower()]
         except Exception as _e2:  # noqa: BLE001
             out["bgutil_pip_err"] = str(_e2)[:100]
+    # bgutil server 日志（start.py 重定向到 /tmp/bgutil-pot-server.log）
+    try:
+        if os.path.exists("/tmp/bgutil-pot-server.log"):
+            out["bgutil_server_log"] = open("/tmp/bgutil-pot-server.log", errors="replace").read().splitlines()[-20:]
+    except Exception as _e:  # noqa: BLE001
+        out["bgutil_server_log_err"] = str(_e)[:120]
 
     def _run(label, extractor_args=None, extra_opts=None, target_url=None):
         opts = {
