@@ -2921,35 +2921,69 @@ def youtube_diag(url: str = "https://youtu.be/eIvAx63QSgc") -> dict:
     import logging
     import yt_dlp
 
-    buf = io.StringIO()
-    handler = logging.StreamHandler(buf)
-    handler.setLevel(logging.DEBUG)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    ydl_logger = logging.getLogger("yt_dlp")
-    ydl_logger.addHandler(handler)
-    old_level = ydl_logger.level
-    ydl_logger.setLevel(logging.DEBUG)
+    # 测试 1: yt-dlp 默认 + ignoreerrors=False（应抛 DownloadError）
+    buf1 = io.StringIO()
+    h1 = logging.StreamHandler(buf1)
+    h1.setLevel(logging.WARNING)
+    h1.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    logger = logging.getLogger("yt_dlp")
+    logger.addHandler(h1)
+    old_level = logger.level
+    logger.setLevel(logging.WARNING)
     out: dict = {"url": url, "ytdlp_version": yt_dlp.version.__version__}
+
+    def _run(opts, label):
+        buf = io.StringIO()
+        h = logging.StreamHandler(buf)
+        h.setLevel(logging.WARNING)
+        h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        logger.addHandler(h)
+        result = {"label": label, "opts": opts}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            result["info_truthy"] = bool(info)
+            if info:
+                result["title"] = info.get("title", "")[:60]
+                result["formats"] = len(info.get("formats") or [])
+        except Exception as e:  # noqa: BLE001
+            result["exception_type"] = type(e).__name__
+            result["exception_msg"] = str(e)[:300]
+        result["log_lines"] = buf.getvalue().splitlines()[-10:]
+        logger.removeHandler(h)
+        return result
+
     try:
-        # 完整跑 probe() 走真实业务路径
+        # 完整 probe() 路径
         try:
             from downloader import probe
             info = probe(url)
-            out["probe_truthy"] = bool(info)
-            out["probe_type"] = type(info).__name__
-            if info:
-                out["probe_title"] = info.get("title", "")[:80]
-                out["probe_formats_count"] = len(info.get("formats") or [])
-                out["probe_keys"] = list(info.keys())[:10]
+            out["probe_title"] = (info or {}).get("title", "")[:60]
+            out["probe_formats"] = len((info or {}).get("formats") or [])
         except Exception as e:  # noqa: BLE001
             out["probe_exception_type"] = type(e).__name__
-            out["probe_exception_msg"] = str(e)[:600]
-            out["probe_exception_cat"] = getattr(e, "category", "?")
+            out["probe_exception_msg"] = str(e)[:400]
             out["probe_exception_hint"] = getattr(e, "hint", "")[:300]
-        out["log_tail"] = buf.getvalue().splitlines()[-30:]
+
+        # 测试 yt-dlp 各种 ignoreerrors 配置的真实行为
+        out["test_ignoreerrors_false"] = _run(
+            {"quiet": True, "skip_download": True, "format": None,
+             "ignoreerrors": False, "socket_timeout": 20},
+            "ignoreerrors=False",
+        )
+        out["test_ignoreerrors_only_download"] = _run(
+            {"quiet": True, "skip_download": True, "format": None,
+             "ignoreerrors": "only_download", "socket_timeout": 20},
+            "ignoreerrors=only_download",
+        )
+        out["test_ignoreerrors_true"] = _run(
+            {"quiet": True, "skip_download": True, "format": None,
+             "ignoreerrors": True, "socket_timeout": 20},
+            "ignoreerrors=True",
+        )
     finally:
-        ydl_logger.removeHandler(handler)
-        ydl_logger.setLevel(old_level)
+        logger.removeHandler(h1)
+        logger.setLevel(old_level)
     return out
 
 
