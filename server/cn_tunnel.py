@@ -225,6 +225,11 @@ async def tunnel_test(mode: str = "http") -> dict:
         diag["replica_id"] = os.environ.get("RAILWAY_REPLICA_ID", "?")
         diag["hostname"] = os.environ.get("RAILWAY_POD_NAME", os.environ.get("HOSTNAME", "?"))
         diag["pid"] = os.getpid()
+        # Railway 提供的公网/私有域名（client 直连源站绕 Cloudflare 用）
+        diag["railway_public_domain"] = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+        diag["railway_private_domain"] = os.environ.get("RAILWAY_PRIVATE_DOMAIN", "")
+        diag["railway_app_name"] = os.environ.get("RAILWAY_APP_NAME", "")
+        diag["railway_service_name"] = os.environ.get("RAILWAY_SERVICE_NAME", "")
         # yt-dlp 实际 handler 配置：模拟 probe 构建 _YoutubeDL，看 proxy 是否真的进了 handler
         if mode == "handlers":
             try:
