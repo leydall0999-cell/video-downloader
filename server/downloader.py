@@ -2036,6 +2036,21 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         if _h and ("youtube.com" in _h or "youtu.be" in _h):
             opts["ignoreerrors"] = "only_download"
         with _YoutubeDL(opts) as ydl:
+            # 诊断：记录 yt-dlp 运行时真实配置（proxy/handlers/每 handler proxies）
+            try:
+                _rd = ydl._request_director
+                with open(_debug_log, "a") as _f:
+                    _f.write(
+                        f"  ytdlp_runtime proxy={ydl.params.get('proxy')!r} "
+                        f"handlers={list(_rd.handlers.keys())} "
+                        f"hproxies={{k: str(getattr(h,'proxies','N/A')) for k, h in _rd.handlers.items()}}\n"
+                    )
+            except Exception as _dge:
+                try:
+                    with open(_debug_log, "a") as _f:
+                        _f.write(f"  ytdlp_runtime diag_err={str(_dge)[:120]}\n")
+                except Exception:
+                    pass
             info = ydl.extract_info(url, download=False)
         # 诊断：记录 extract_info 返回值
         try:
