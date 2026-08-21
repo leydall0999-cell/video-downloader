@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
-from downloader import _expand_iqiyi_short_url, _normalize_share_url
+from downloader import _expand_iqiyi_short_url, _normalize_share_url, _strip_tracking_params
 import platforms as platforms_mod  # noqa: E402
 
 
@@ -23,15 +23,14 @@ class _FakeRequestsResponse:
         self._closed = True
 
 
-def test_expand_iqiyi_via_head_302(monkeypatch):
-    """HEAD 302 → iqiyi.com，直接返回展开结果。"""
+def test_expand_iqiyi_via_head_redirects(monkeypatch):
+    """HEAD allow_redirects=True 直接拿到 iqiyi.com 最终 URL，返回展开结果。"""
     calls = []
 
     def fake_head(url, *, headers=None, proxies=None, timeout=None, allow_redirects=None):
         calls.append({"url": url, "allow_redirects": allow_redirects, "proxies": proxies})
-        return _FakeRequestsResponse(
-            302, "https://www.iqiyi.com/v_19rr9mcb2g.html"
-        )
+        # requests 已帮我们跟随 302，这里直接模拟跟随后的最终响应
+        return _FakeRequestsResponse(200, url="https://www.iqiyi.com/v_19rr9mcb2g.html")
 
     monkeypatch.setattr("requests.head", fake_head)
 
@@ -39,7 +38,7 @@ def test_expand_iqiyi_via_head_302(monkeypatch):
     assert url == "https://www.iqiyi.com/v_19rr9mcb2g.html"
     # 只发了 HEAD，没有走 GET fallback
     assert len(calls) == 1
-    assert calls[0]["allow_redirects"] is False
+    assert calls[0]["allow_redirects"] is True
 
 
 def test_expand_iqiyi_via_get_fallback(monkeypatch):
@@ -167,3 +166,36 @@ def test_iqynnet_in_iqiyi_platform_and_china_domains():
     assert matched.key == "iqiyi"
     matched2 = platforms_mod._match_platform("www.iq.com")
     assert matched2.key == "iqiyi"
+
+
+def test_strip_tracking_params_keeps_iqiyi_playshare_ids():
+    """爱奇艺 playShare 的 shareId / positiveId 是视频标识，不能当追踪参数剥离。"""
+    url = (
+        "https://www.iqiyi.com/playShare.html?shareId=NDUzNTE0NDg5Mzk3NTUwMA=="
+        "&positiveId=NDUzNTE0NDg5Mzk3NTUwMA==&type=0"
+        "&rpage=sharepage_new&p1=2_22_222&qr_template=directshare"
+        "&social_platform=link&vd_source=foo"
+    )
+    out = _strip_tracking_params(url, keep={"shareId", "positiveId"})
+    assert "shareId=NDUzNTE0NDg5Mzk3NTUwMA%3D%3D" in out
+    assert "positiveId=NDUzNTE0NDg5Mzk3NTUwMA%3D%3D" in out
+    assert "vd_source" not in out
+    # rpage 不是通用追踪参数，保留即可
+    assert "type=0" in out
+
+
+def test_normalize_share_url_iqynnet_playshare_preserves_shareid(monkeypatch):
+    """iqy.net 展开成 playShare.html 后必须保留 shareId / positiveId。"""
+
+    def fake_expand(url, *, proxy=""):
+        return (
+            "https://www.iqiyi.com/playShare.html?shareId=NDUzNTE0NDg5Mzk3NTUwMA=="
+            "&positiveId=NDUzNTE0NDg5Mzk3NTUwMA==&type=0&vd_source=foo"
+        )
+
+    monkeypatch.setattr("downloader._expand_iqiyi_short_url", fake_expand)
+
+    out = _normalize_share_url("https://qy.net/08JJ7ZI-53?vfrm=pcw_album_auto")
+    assert "shareId=NDUzNTE0NDg5Mzk3NTUwMA%3D%3D" in out
+    assert "positiveId=NDUzNTE0NDg5Mzk3NTUwMA%3D%3D" in out
+    assert "vd_source" not in out

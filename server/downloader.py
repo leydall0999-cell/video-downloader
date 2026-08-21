@@ -390,13 +390,21 @@ _URL_TRACKING_PARAMS = frozenset({
 })
 
 
-def _strip_tracking_params(url: str) -> str:
-    """通用：剥掉 vd_source/spm_id_from/from/share_* 等追踪参数，其余保留。"""
+def _strip_tracking_params(url: str, keep: frozenset[str] | set[str] | None = None) -> str:
+    """通用：剥掉 vd_source/spm_id_from/from/share_* 等追踪参数，其余保留。
+
+    keep: 指定需要保留的参数名集合（大小写敏感，按需使用）。用于爱奇艺
+    playShare.html 等场景，其中 shareId / positiveId 是视频标识而非追踪参数。
+    """
     parsed = urlparse(url)
     if not parsed.query:
         return url
+    keep_set = keep or set()
     kept: list[tuple[str, str]] = []
     for k, v in parse_qsl(parsed.query, keep_blank_values=True):
+        if k in keep_set:
+            kept.append((k, v))
+            continue
         if k.lower() in _URL_TRACKING_PARAMS:
             continue
         kept.append((k, v))
@@ -429,7 +437,9 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     if "iqy.net" in url or "qy.net" in url:
         expanded = _expand_iqiyi_short_url(url, proxy=proxy)
         if expanded != url:
-            normalized = _strip_tracking_params(expanded)
+            # playShare 分享页的 shareId / positiveId 是视频标识，必须保留
+            keep = {"shareId", "positiveId"} if "playShare" in expanded else None
+            normalized = _strip_tracking_params(expanded, keep=keep)
             logger.info("[normalize] %s -> %s", url, normalized)
             return normalized
         # 展开失败：保留原 URL，让 yt-dlp 走 generic 给「找不到视频」更明确的错误
