@@ -2998,6 +2998,7 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
             _lg.setLevel(_old_lvl)
         lines = _buf.getvalue().splitlines()
         result["pot_lines"] = [l for l in lines if "po" in l.lower() or "POT" in l or "bot" in l.lower()][-15:]
+        result["log_tail"] = lines[-20:]
         return result
 
     out["tests"] = [
