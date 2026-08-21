@@ -279,6 +279,24 @@ async def tunnel_test(mode: str = "http") -> dict:
                 }
             except Exception as e:
                 diag["ytdlp_diag_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        # 在当前容器真实执行 probe()：若成功而 /api/resolve 失败，则证明 resolve 落到了
+        # 另一个容器（多副本/部署切换旧容器残留），而不是代码/代理配置问题。
+        if mode == "probe":
+            import asyncio as _asyncio
+            try:
+                info = await _asyncio.wait_for(
+                    _asyncio.to_thread(_dl.probe, "https://www.bilibili.com/video/BV1GJ411x7h7"),
+                    timeout=120,
+                )
+                v = info.get("video", info) if isinstance(info, dict) else {}
+                diag["probe_result"] = "OK"
+                diag["probe_title"] = str(v.get("title"))[:60]
+                diag["probe_formats"] = len(v.get("formats") or [])
+            except Exception as e:
+                import traceback as _tb
+                diag["probe_result"] = "FAIL"
+                diag["probe_error"] = f"{type(e).__name__}: {str(e)[:300]}"
+                diag["probe_tb"] = _tb.format_exc()[-1500:]
         # 运行代码版本指纹：确认容器里跑的是否为最新 downloader.py（防 Docker COPY 缓存/分支错位）
         _dl_path = os.path.abspath(_dl.__file__)
         with open(_dl_path, "rb") as _f:
