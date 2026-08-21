@@ -4,6 +4,12 @@ yt-dlp==2026.7.4
 requests==2.32.3
 cryptography==50.0.0
 python-multipart==0.0.20
+
+# YouTube bot 检测绕过（PO Token provider）：yt-dlp 插件，配合 Docker 内置的
+# bgutil PO token server（/opt/bgutil/server/build/main.js，监听 127.0.0.1:4416）
+# 自动为 YouTube 请求生成 proof-of-origin token，解决数据中心 IP 被
+# "Sign in to confirm you're not a bot" 拦截的问题。
+bgutil-ytdlp-pot-provider>=1.3.2
 # 种子下载（桌面版可选）：libtorrent 为可选依赖，未安装时功能自动关闭（import 守护）。
 # 官方 wheel 现状：2.0.13 仅 macOS 14/15；2.0.11 额外提供 macOS 13 的 x86_64 wheel。
 # 为避免在 macOS 13 / Windows 等无对应 wheel 的环境让 `pip install -r requirements.txt` 失败，
