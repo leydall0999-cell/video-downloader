@@ -1931,6 +1931,9 @@ def _kuaishou_info(url: str) -> dict[str, Any]:
         "extractor_key": "Kuaishou",
         "extractor": "kuaishou",
         "ext": "mp4",
+        # worker 返回的是「音视频已合并的单个 mp4 直链」，标记为直接可下载媒体，
+        # 否则 summarize → _detect_direct_url 因缺少 direct 标记丢弃直链，play_url 为空
+        "direct": True,
         "url": video_url,
         "protocol": "https",
         "http_headers": {"User-Agent": _DOUYIN_UA},
@@ -1960,6 +1963,8 @@ def _weibo_info(url: str) -> dict[str, Any]:
         "extractor_key": "Weibo",
         "extractor": "weibo",
         "ext": "mp4",
+        # worker 返回的是「音视频已合并的单个 mp4 直链」，标记为直接可下载媒体
+        "direct": True,
         "url": video_url,
         "protocol": "https",
         "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://weibo.com/"},
