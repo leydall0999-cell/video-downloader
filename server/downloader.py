@@ -312,21 +312,21 @@ def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
             loc = urljoin(resp.url, loc)
         return loc
 
-    # 1) HEAD（轻量，拿到 Location 就返回）
+    # 1) HEAD（轻量，跟随重定向拿到最终 iqiyi.com 链接）
     try:
         resp = requests.head(
-            url, headers=headers, proxies=proxies, timeout=timeout, allow_redirects=False,
+            url, headers=headers, proxies=proxies, timeout=timeout, allow_redirects=True,
         )
-        expanded = _abs_location(resp)
-        if resp.status_code in (301, 302, 307, 308) and _is_iqiyi_location(expanded):
-            logger.info("[iqy.net expand] HEAD %s -> %s", url, expanded)
+        expanded = resp.url
+        if _is_iqiyi_location(expanded):
+            logger.info("[iqiyi short expand] HEAD %s -> %s", url, expanded)
             return expanded
         logger.info(
-            "[iqy.net expand] HEAD %s status=%s location=%s",
+            "[iqiyi short expand] HEAD %s status=%s final=%s",
             url, resp.status_code, expanded[:200],
         )
     except Exception as e:
-        logger.info("[iqy.net expand] HEAD %s failed: %s", url, str(e)[:200])
+        logger.info("[iqiyi short expand] HEAD %s failed: %s", url, str(e)[:200])
 
     # 2) GET + 自动跟随重定向（HEAD 被 CDN 丢弃/不返回 Location 时回退）
     try:
