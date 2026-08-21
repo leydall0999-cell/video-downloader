@@ -797,18 +797,33 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
 
 
 class _YoutubeDL(YoutubeDL):
-    """强制使用 yt-dlp 的 requests request handler。
+    """按是否走代理选择 request handler。
 
-    Railway + 国内代理回源时，yt-dlp 默认的 urllib handler 频繁在响应体
-    传输中间报 IncompleteRead，且不会自动重试。requests/urllib3 对连接
-    重置、分块传输不完整更健壮。只要 requests handler 可用，就只保留它，
-    完全绕过 urllib handler。
+    - 有 proxy（国内站回源代理 / 用户显式代理）：强制用 **Urllib** handler。
+      yt-dlp 的 Requests handler 不支持 `proxy` option（构造时忽略），强制
+      requests-only 会导致请求直连 → Railway 海外 IP 访问国内站被地理围栏
+      403（Cloudflare 1010）。urllib 的 ProxyHandler 对 http 代理支持可靠。
+    - 无 proxy（直连场景）：维持 requests-only——urllib 频繁 IncompleteRead，
+      requests/urllib3 对连接重置、分块传输不完整更健壮。
     """
 
     def build_request_director(self, handlers, preferences=None):
+        proxy = (self.params or {}).get("proxy") or ""
         all_keys = [getattr(h, "RH_KEY", "?") for h in handlers]
+
+        if proxy:
+            urllib_handlers = [h for h in handlers if getattr(h, "RH_KEY", None) == "Urllib"]
+            if urllib_handlers:
+                logger.info(
+                    "[yt-dlp] proxy=%s -> forcing urllib handler only (requests ignores proxy)",
+                    proxy,
+                )
+                return super().build_request_director(urllib_handlers, preferences)
+            logger.warning("[yt-dlp] proxy set but no Urllib handler available: %s", all_keys)
+            return super().build_request_director(handlers, preferences)
+
         requests_handlers = [h for h in handlers if getattr(h, "RH_KEY", None) == "Requests"]
-        logger.info("[yt-dlp] available handlers=%s requests_found=%s", all_keys, bool(requests_handlers))
+        logger.info("[yt-dlp] no proxy, available handlers=%s requests_found=%s", all_keys, bool(requests_handlers))
 
         if requests_handlers:
             logger.info("[yt-dlp] forcing requests request handler only")
@@ -1332,9 +1347,18 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     # 国内站（B站/抖音等）反爬严格：缺 Referer/UA 常被直接 412，无论是否带 cookie 都先补上浏览器请求头
     headers = options.setdefault("http_headers", {})
     if is_china_host(host):
-        # 防盗链 Referer 必须用站点自身 origin（与在线观看代理 _stream_referer 一致），
-        # 写死 bilibili.com 会让 chrqj.com 等影视聚合站拿到错误 Referer → CDN 403。
-        referer = "https://www.douyin.com/" if "douyin" in host else f"https://{host}/"
+        # 防盗链 Referer 必须用站点自身 origin（与在线观看代理 _stream_referer 一致）。
+        # 注意 _host_of() 已剥掉 www. 前缀（host=bilibili.com），若直接 f"https://{host}/"
+        # 会生成 https://bilibili.com/ —— bilibili API 校验 Referer 只认带 www 的
+        # https://www.bilibili.com/，无 www 直接 403（"Unable to download JSON metadata"）。
+        # 抖音也同理（www.douyin.com）。其余站用裸域 origin 即可（chrqj.com 等聚合站
+        # 写死 bilibili.com 反而会拿到错误 Referer → CDN 403）。
+        if "douyin" in host or "iesdouyin" in host:
+            referer = "https://www.douyin.com/"
+        elif "bilibili.com" in host or "b23.tv" in host:
+            referer = "https://www.bilibili.com/"
+        else:
+            referer = f"https://{host}/"
         headers.setdefault("Referer", referer)
         headers.setdefault(
             "User-Agent",
