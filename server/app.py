@@ -3001,8 +3001,9 @@ def youtube_diag(url: str = "https://youtu.be/eVAx63QSgc4") -> dict:
         return result
 
     out["tests"] = [
-        _run("default"),
-        _run("tv_embedded", {"youtube": {"player_client": ["tv_embedded"]}}),
+        _run("default_fetch_pot_always", {"youtube": {"fetch_pot": ["always"]}}),
+        _run("tv_embedded_fetch_pot_always", {"youtube": {"player_client": ["tv_embedded"], "fetch_pot": ["always"]}}),
+        _run("default", None),
     ]
     return out
 
