@@ -2104,6 +2104,23 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         }
     # 记录最后一次异常信息，用于 info 为空时透传真实原因
     _last_err: str | None = None
+    # 捕获 yt-dlp logger 的 WARNING/ERROR 输出：ignoreerrors 模式下 yt-dlp 不抛错
+    # 但会 logger.error 真实原因（如 [youtube] xxx: This video is unavailable），
+    # 提取出来透传给用户，避免「未获取到视频信息」误导。
+    import logging as _logging
+    _ydlp_logs: list[str] = []
+
+    class _YdlLogCapture(_logging.Handler):
+        def emit(self, record):  # noqa: ANN401
+            if record.levelno >= _logging.WARNING:
+                _ydlp_logs.append(self.format(record))
+
+    _capture = _YdlLogCapture()
+    _capture.setFormatter(_logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    _ydlp_logger = _logging.getLogger("yt_dlp")
+    _ydlp_logger.addHandler(_capture)
+    _old_level = _ydlp_logger.level
+    _ydlp_logger.setLevel(_logging.WARNING)
 
     try:
         opts = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
@@ -2245,14 +2262,25 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # 兜底：捕获任何未预期异常，保留完整错误用于诊断
         _last_err = f"{type(exc).__name__}: {str(exc)[:300]}"
 
+    # 清理 yt-dlp logger handler（避免泄漏到其他请求）
+    _ydlp_logger.removeHandler(_capture)
+    _ydlp_logger.setLevel(_old_level)
+
     if not info:
         detail = "请稍后重试或更换链接"
         # 透传诊断信息：如果 extract_info 静默返回空（未抛异常），补充上下文
-        diag = _last_err or (
-            "extract_info 返回空结果（无异常）。"
-            "常见原因：①代理 MITM 导致 SSL 握手失败但被 ignoreerrors 吞掉；"
-            "②站点返回空页面；③需要登录 Cookie。建议在「高级选项」粘贴 Cookie 后重试。"
-        )
+        if _last_err:
+            diag = _last_err
+        elif _ydlp_logs:
+            # 优先取 ERROR 行（业务原因如"video is unavailable"），其次 WARNING
+            errs = [l for l in _ydlp_logs if l.startswith("ERROR")]
+            diag = "\n".join(errs[:5]) if errs else "\n".join(_ydlp_logs[:5])
+        else:
+            diag = (
+                "extract_info 返回空结果（无异常）。"
+                "常见原因：①代理 MITM 导致 SSL 握手失败但被 ignoreerrors 吞掉；"
+                "②站点返回空页面；③需要登录 Cookie。建议在「高级选项」粘贴 Cookie 后重试。"
+            )
         detail += f"\n\n诊断信息：{diag}"
         raise ResolveError("未获取到视频信息", detail)
     if info.get("_type") == "playlist":
