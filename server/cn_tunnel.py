@@ -221,6 +221,22 @@ async def tunnel_test(mode: str = "http") -> dict:
                       "RAILWAY_BRANCH", "RAILWAY_DEPLOYMENT_ID", "RAILWAY_REPLICA_ID")
         }
         diag["is_china_bilibili"] = _dl.is_china_host("bilibili.com")
+        # 运行代码版本指纹：确认容器里跑的是否为最新 downloader.py（防 Docker COPY 缓存/分支错位）
+        _dl_path = os.path.abspath(_dl.__file__)
+        with open(_dl_path, "rb") as _f:
+            _dl_bytes = _f.read()
+        diag["dl_path"] = _dl_path
+        diag["dl_sha256"] = __import__("hashlib").sha256(_dl_bytes).hexdigest()[:16]
+        diag["dl_has_urllib_fix"] = b"forcing urllib handler only" in _dl_bytes
+        diag["dl_has_probe_diag"] = b"[diag] host=" in _dl_bytes
+        diag["dl_len"] = len(_dl_bytes)
+        # probe 诊断日志（effective_proxy 真实生效值 + extract_info 结果）
+        _plog = os.path.join(os.environ.get("TMPDIR", "/tmp"), "vdl_probe_debug.log")
+        if os.path.exists(_plog):
+            _lines = open(_plog, encoding="utf-8", errors="ignore").read().splitlines()
+            diag["probe_log"] = _lines[-40:]
+        else:
+            diag["probe_log"] = ["<no probe log yet>"]
     except Exception as e:
         diag["diag_error"] = str(e)
     extra = {}
