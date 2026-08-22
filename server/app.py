@@ -1589,7 +1589,7 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 cur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
                 job["progress"] = int(min(100, max(0, cur / total_dur * 100)))
             stderr_tail.append(line.rstrip())
-            if len(stderr_tail) > 30:
+            if len(stderr_tail) > 80:
                 stderr_tail.pop(0)
         proc.wait(timeout=1800)
         if proc.returncode != 0:
@@ -1597,7 +1597,7 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
             meaningful = [l for l in stderr_tail
                           if l and not l.startswith(('ffmpeg version', '  built with', '  configuration:',
                                                       '  libav', '  libsw', '  libpostproc', '  libavutil'))]
-            tail = "\n".join(meaningful[-20:]).strip() or "\n".join(stderr_tail[-5:]).strip() or "(无 stderr)"
+            tail = "\n".join(meaningful[-30:]).strip() or "\n".join(stderr_tail[-10:]).strip() or "(无 stderr)"
             raise RuntimeError(f"ffmpeg 执行失败（rc={proc.returncode}）：\n{tail}")
         if not out.exists() or out.stat().st_size == 0:
             raise RuntimeError("ffmpeg 未产出有效文件")
@@ -1617,7 +1617,7 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
         logger.info("convert %s done -> %s", job_id, out.name)
     except Exception as e:
         job["status"] = "failed"
-        job["error"] = str(e)[:1500]   # 转码错误信息（ffmpeg stderr 尾部 20 行，含真正诊断价值），加大上限便于排查
+        job["error"] = str(e)[:4000]   # 转码错误信息（ffmpeg stderr 尾部 30 行，含真正诊断价值），加大上限便于排查
         logger.warning("convert %s failed: %s", job_id, e)
     finally:
         # 上传临时源文件：转码结束（无论成败）后清理，避免 UPLOAD_TMP 无限堆积
