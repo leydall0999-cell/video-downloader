@@ -2910,50 +2910,6 @@ def _warm_cookie_pool() -> None:
     except Exception:
         logger.exception("公共池启动预热异常")
 
-
-@app.get("/api/yt-visitor-test")
-def yt_visitor_test() -> dict:
-    """临时诊断：无 Cookie 从 YouTube 拿 visitorData（PO Token 免 Cookie 方案可行性）。
-
-    验证后移除。
-    """
-    import re
-    import requests as _r
-    out: dict = {}
-    headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    for label, url in (
-        ("home", "https://www.youtube.com/"),
-        ("watch", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
-        ("yti", "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"),
-    ):
-        try:
-            if label == "yti":
-                r = _r.post(
-                    url,
-                    headers={**headers, "Content-Type": "application/json"},
-                    json={"context": {"client": {"clientName": "WEB", "clientVersion": "2.20240801.00.00"}}},
-                    timeout=15,
-                )
-            else:
-                r = _r.get(url, headers=headers, timeout=15)
-            item = {"status": r.status_code, "len": len(r.text), "cookies": list(r.cookies.keys())}
-            m = re.search(r'"VISITOR_DATA":"([^"]+)"', r.text)
-            if m:
-                item["visitor_data"] = m.group(1)[:80]
-            m2 = re.search(r'"visitorData":"([^"]+)"', r.text)
-            if m2:
-                item["visitor_data2"] = m2.group(1)[:80]
-            item["head"] = re.sub(r"\s+", " ", r.text[:200])[:150]
-            out[label] = item
-        except Exception as e:  # noqa: BLE001
-            out[label] = {"err": str(e)[:200]}
-    return out
-
-
 @app.get("/api/cookie/pull-diag")
 def cookie_pull_diag() -> dict:
     """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
