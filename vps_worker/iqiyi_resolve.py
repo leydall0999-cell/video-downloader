@@ -123,10 +123,11 @@ def _get_raw_data(tvid: str, video_id: str) -> dict:
 def resolve(url, timeout=60):
     """解析爱奇艺视频。成功返回 dict，失败抛 RuntimeError。
 
-    策略（2026-08-20 实测 VPS 有效）：不自己调 tmts API 拼 video_id——
-    页面 JS 加载后播放器会主动请求 meta-cdn.video.iqiyi.com/*.m3u8（带签名参数），
-    直接用 Playwright 监听网络请求捕获 m3u8 直链，最稳。
-    标题等 page.title 从通用壳（"爱奇艺-在线视频网站..."）变成真实剧名后再取。
+    策略（2026-08-22 实测 VPS 有效）：不自己调 tmts API 拼 video_id——
+    页面 JS 加载后播放器会主动请求流（VIP/部分内容走 meta-cdn.video.iqiyi.com/*.m3u8
+    HLS 清单；免费/低清内容走 *.inter.71edge.com/videos/...f4v 完整 FLV 直链，
+    2026-08 实测改版后免费电影已无 m3u8 请求），用 Playwright 监听网络请求捕获，
+    最稳。标题等 page.title 从通用壳（"爱奇艺-在线视频网站..."）变成真实剧名后再取。
     """
     from playwright.sync_api import sync_playwright
 
@@ -161,13 +162,27 @@ def resolve(url, timeout=60):
             context.add_init_script(_STEALTH_JS)
             page = context.new_page()
 
-            # 捕获播放器发出的 m3u8 请求（主视频流，带 qd_* 签名参数）
+            # 捕获播放器发出的流请求（2026-08 实测：免费视频走 F4V 直链，
+            # VIP/部分内容仍走 m3u8，两者都要监听）。
+            #   - m3u8：meta-cdn.video.iqiyi.com/*.m3u8（HLS 清单）
+            #   - f4v：inter.71edge.com/videos/...f4v 完整文件（FLV 容器直链）；
+            #     data.video.iqiyi.com / pcw-data.video.iqiyi.com 的 *.f4v 是 JSON
+            #     重定向代理（返回 {"t":..,"l":真实CDN}），不是真实媒体，需排除。
             caught: list[str] = []
+            caught_f4v: list[str] = []
 
             def _on_request(req):
                 u = req.url or ""
-                if ".m3u8" in u and "iqiyi" in u:
+                low = u.lower()
+                if ".m3u8" in low and "iqiyi" in low:
                     caught.append(u)
+                elif ".f4v" in low and not any(
+                    h in low for h in ("data.video.iqiyi.com", "pcw-data.video.iqiyi.com")
+                ):
+                    # data/pcw-data.video.iqiyi.com 的 *.f4v 是 JSON 重定向代理
+                    # （返回 {"t":..,"l":真实CDN}），不是真实媒体；其余（如
+                    # *.inter.71edge.com）是完整 FLV 直链（首字节 FLV 头）
+                    caught_f4v.append(u)
 
             page.on("request", _on_request)
 
@@ -182,11 +197,11 @@ def resolve(url, timeout=60):
 
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-            # 等 m3u8 请求 + 真实标题（最多 50s，分享页 JS 解析较慢）
+            # 等 m3u8/f4v 请求 + 真实标题（最多 50s，分享页 JS 解析较慢）
             title = ""
             deadline = time.time() + 50
             while time.time() < deadline:
-                if not caught:
+                if not caught and not caught_f4v:
                     try:
                         page.mouse.wheel(0, 600)
                     except Exception:
@@ -203,7 +218,7 @@ def resolve(url, timeout=60):
                     pass
                 time.sleep(1.5)
 
-            if not caught:
+            if not caught and not caught_f4v:
                 # 失败诊断：写 daemon.log 看到底什么状态
                 try:
                     with open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -213,7 +228,7 @@ def resolve(url, timeout=60):
                 except Exception:
                     pass
                 raise RuntimeError(
-                    "未捕获到爱奇艺视频流（m3u8 请求未发出，"
+                    "未捕获到爱奇艺视频流（m3u8/f4v 请求未发出，"
                     "可能是付费/VIP 专享、链接失效或页面未加载）"
                 )
 
@@ -227,17 +242,26 @@ def resolve(url, timeout=60):
             if not title:
                 title = "爱奇艺视频"
 
+            # 流地址选择：优先 m3u8（VIP/HLS 路径）；否则取完整 f4v（FLV 直链）。
+            # f4v 可能有多个（广告/不同清晰度），取最后一个（正片主流的规律）。
+            if caught:
+                video_url = caught[0]
+                ext = "mp4"
+            else:
+                video_url = caught_f4v[-1]
+                ext = "flv"  # f4v 容器即 FLV（H.264 + AAC），HttpFD 原样下载出 .flv
+
             return {
                 "ok": True,
                 "title": title,
                 "duration": None,
                 "video_id": "",
                 "tvid": "",
-                "video_url": caught[0],
+                "video_url": video_url,
                 "quality": "",
                 "webpage_url": page.url or url,
                 "thumbnail": "",
-                "ext": "mp4",
+                "ext": ext,
             }
         finally:
             context.close()

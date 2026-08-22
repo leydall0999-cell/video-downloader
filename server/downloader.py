@@ -1096,7 +1096,7 @@ DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给�
 # 直链透传：用户贴的是单个可直接下载的媒体文件（.mp4 等）时，让前端直接从源站
 # 把文件拉到本地，跳过服务器落盘与带宽消耗（真正只下一遍）。
 _DIRECT_EXT_RE = re.compile(
-    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv|m3u8)(\?|#|$|&)", re.IGNORECASE
+    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv|f4v|m3u8)(\?|#|$|&)", re.IGNORECASE
 )
 # 这些域名即使是媒体扩展名结尾，也属于需经 yt-dlp 解析的平台，不能用直链透传绕过
 _KNOWN_PLATFORM_HOSTS = {
@@ -2301,8 +2301,8 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
         #   绝不再伪装成「需要 Cookie」，避免把隧道/VPS 故障误导成登录问题。
         raise
 
-    m3u8 = data.get("video_url") or ""
-    if not m3u8:
+    stream_url = data.get("video_url") or ""
+    if not stream_url:
         if cookie:
             return None
         raise ResolveError(
@@ -2310,6 +2310,9 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
             "worker 未返回视频流，可能是付费/VIP 专享、链接失效或页面未加载。",
             category="parse_failed",
         )
+    # 2026-08 实测：免费/低清内容播放器走 *.inter.71edge.com 的 f4v 完整直链
+    # （FLV 容器），VIP/部分内容仍走 m3u8 HLS。按 URL 形态区分协议与扩展名：
+    is_hls = _is_hls_url(stream_url)
     return {
         "id": data.get("video_id") or data.get("tvid") or "",
         "title": data.get("title") or "爱奇艺视频",
@@ -2318,9 +2321,9 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
         "webpage_url": data.get("webpage_url") or url,
         "extractor_key": "Iqiyi",
         "extractor": "iqiyi",
-        "ext": "mp4",
-        "url": m3u8,
-        "protocol": "m3u8_native",
+        "ext": "mp4" if is_hls else "flv",
+        "url": stream_url,
+        "protocol": "m3u8_native" if is_hls else "https",
         "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": data.get("webpage_url") or url},
     }
 
@@ -3285,6 +3288,18 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             else:
                 task.add_step("解析视频信息", "done", "未获取到标题")
 
+            # 直链 m3u8 协议归一化：bestv/inke/douyu 等 worker 返回的 info dict
+            # protocol=https + m3u8 URL，yt-dlp determine_protocol 会沿用 dict 里
+            # 已有的 protocol（不重新看 URL）→ 用 HttpFD 把 HLS 播放清单文本当文件
+            # 下载。统一按 URL 修正为 m3u8_native（走 HLS 下载器分段拉流出 mp4，
+            # 与 _iqiyi_info 的成熟路径一致）。
+            if _is_hls_url(info.get("url") or ""):
+                _proto = (info.get("protocol") or "").split("+")[0].lower()
+                if _proto in ("http", "https", ""):
+                    info["protocol"] = "m3u8_native"
+                    if not info.get("ext") or info["ext"] == "mp4":
+                        info["ext"] = "m3u8"
+
             # 阶段 2：真正开始下载；先把状态置为 downloading，看门狗才能生效
             task.add_step("下载音视频", "running", f"已选清晰度：{task.quality}")
             task.log(f"开始下载：{task.quality}")
@@ -3627,7 +3642,12 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     if not opts:
         du = _detect_direct_url(info)
         if du:
-            opts.append({"key": "mp4", "label": "MP4 直链", "url": du, "format_id": "", "is_hls": False})
+            # 按真实扩展名标注标签（f4v/flv 直链不该标成 "MP4 直链"）
+            _du_ext = (Path(urlparse(du).path).suffix or "").lstrip(".").lower()
+            _du_ext = _du_ext or (info.get("ext") or "").lower()
+            _du_label = {"flv": "FLV 直链", "f4v": "FLV 直链", "m3u8": "HLS 直播流"}.get(_du_ext, "直链")
+            opts.append({"key": _du_ext or "mp4", "label": _du_label,
+                         "url": du, "format_id": "", "is_hls": _du_ext == "m3u8"})
     return opts
 
 

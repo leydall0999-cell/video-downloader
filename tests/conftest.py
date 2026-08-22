@@ -39,3 +39,16 @@ os.environ["VDL_ARCHIVE_ENABLED"] = "1"
 os.environ["VDL_COMMENTARY_ENABLED"] = "true"
 os.environ["VDL_COMMENTARY_MODE"] = "http"
 os.environ["VDL_COMMENTARY_ENDPOINT"] = "http://fake-worker.local"
+
+# ---- 脚本式测试排除 ----
+# test_crypto_routes / test_crypto_unit / test_torrent_routes 是独立脚本式测试
+# （模块顶层 check() 失败时 raise SystemExit），设计上单文件运行
+# （python3 tests/test_xxx.py）。pytest 收集它们会在导入期触发 SystemExit，
+# 导致整个套件 INTERNALERROR。此处显式忽略，让 pytest 只收集 pytest 风格用例。
+import pytest as _pytest
+
+collect_ignore = [
+    "test_crypto_routes.py",
+    "test_crypto_unit.py",
+    "test_torrent_routes.py",
+]
