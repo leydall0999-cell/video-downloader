@@ -2190,6 +2190,7 @@ def _inke_info(url: str) -> dict[str, Any]:
         "direct": True,
         "url": video_url,
         "protocol": "https",
+        "is_live": bool(data.get("is_live")),
         "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.inke.cn/"},
     }
 
@@ -2216,6 +2217,7 @@ def _cc_info(url: str) -> dict[str, Any]:
         "direct": True,
         "url": video_url,
         "protocol": "https",
+        "is_live": bool(data.get("is_live")),
         "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://cc.163.com/"},
     }
 
