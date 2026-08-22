@@ -85,8 +85,16 @@ Amazon Freevee（amazon.com 域被非视频站拦截）
 
 > 2026-08-22 复核修正：AfreecaTV / Red Bull TV / F1 TV / PeerTube / Niconico /
 > SonyLIV / iflix / meWATCH / KinoPoisk / CHZZK 其实都有 yt-dlp extractor（已补白名单或走通用兜底）；
-> Channel 4 / Criterion / Acorn 归入 DRM 类。剩余平台若 yt-dlp 未来支持或开发 VPS worker 可接入；
-> 其中 DAZN/Tubi/Plex/Showmax 等本身是付费/DRM 服务，即使开发 extractor 也受账号与地区限制。
+> Channel 4 / Criterion / Acorn 归入 DRM 类。
+>
+> **DAZN 深度评估（2026-08-22，用户点名重点）**：免费方案存在（注册账号看精选
+> 直播/回放），但播放走 `authentication-prod.ar.indazn.com/v1/authenticate` 认证 +
+> DASH(.mpd) + **Widevine DRM** license 管线；VPS 中国 IP 与 Railway 数据中心 IP
+> 均 403 地区封锁（仅住宅 IP 实测可访问）。→ **VPS worker 不可行**（物理地区封锁）
+> + 合规不破解 Widevine。已加白名单识别（`3a09736`），解析/下载返回明确提示。
+> 同类付费服务（Showmax / beIN / Turkcell / Movistar+ 等）大概率同构（账号+DRM+
+> 地区）；无 DRM 的免费 AVOD（Tubi / Popcornflix 等）理论上可开发 worker，但
+> VPS 中国 IP 同样受地区/反爬限制，需逐个实测。
 
 ## 使用提示
 1. **网络**：Railway 部署机房在海外，多数国际站可直连；本地部署需配 `VDL_PROXY`
