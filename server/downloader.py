@@ -3858,6 +3858,7 @@ def summarize(info: dict[str, Any]) -> dict[str, Any]:
         "direct_url": _detect_direct_url(info),
         "play_url": play_url,
         "is_hls": is_hls,
+        "is_live": bool(info.get("is_live")),
         "watch_options": build_watch_options(info),
         # 诊断字段（仅供排查优酷剧集剧名补全是否生效，前端忽略即可）
         "_series_source": info.get("_series_source", ""),

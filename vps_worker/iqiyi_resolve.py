@@ -170,6 +170,22 @@ def resolve(url, timeout=60):
             #     重定向代理（返回 {"t":..,"l":真实CDN}），不是真实媒体，需排除。
             caught: list[str] = []
             caught_f4v: list[str] = []
+            # VIP 检测：播放器会请求 mesh.if.iqiyi.com/player/pcw/video/playervideoinfo
+            # 返回 vipType（VIP_TYPE_*）。免费内容该字段为空；VIP 内容未登录时播放器
+            # 只拉广告/试看 f4v（几 MB），正片不可得（tmts 返回 DRM/H265）。
+            vip_info: dict = {"vip": [], "vn": ""}
+
+            def _on_resp(resp):
+                try:
+                    if "playervideoinfo" in resp.url:
+                        d = json.loads(resp.text())
+                        data = d.get("data") or {}
+                        vip_info["vip"] = data.get("vipType") or []
+                        vip_info["vn"] = data.get("vn") or ""
+                except Exception:
+                    pass
+
+            page.on("response", _on_resp)
 
             def _on_request(req):
                 u = req.url or ""
@@ -197,24 +213,36 @@ def resolve(url, timeout=60):
 
             page.goto(url, wait_until="domcontentloaded", timeout=25000)
 
-            # 等 m3u8/f4v 请求 + 真实标题（最多 32s：Railway 对 iqiyi 限时 90s，
+            # 等 m3u8/f4v 请求 + 真实标题（最多 38s：Railway 对 iqiyi 限时 90s，
             # 需预留隧道/浏览器启动开销；实测 f4v 请求在页面加载后 ~15-25s 内发出）
+            # ⚠️ f4v 陷阱（2026-08-22 实测）：免费内容播放器先拉**广告 f4v**（约
+            # 8s 时长，20260730 等路径），正片 f4v 在首个 f4v 后 ~8s 发出（实测
+            # 三连发：广告1→广告2→正片）。若拿到标题/首个 f4v 就退出，会捕获到
+            # 广告。策略：f4v 首现后再等 F4V_SETTLE 秒收集完整序列，最后取
+            # caught_f4v[-1]（正片在广告之后）。
+            F4V_SETTLE = 12
             title = ""
-            deadline = time.time() + 32
+            first_f4v_ts = None
+            deadline = time.time() + 42
             while time.time() < deadline:
-                if not caught and not caught_f4v:
-                    try:
-                        page.mouse.wheel(0, 600)
-                    except Exception:
-                        pass
-                    time.sleep(1.5)
-                    continue
+                if caught:
+                    # m3u8 路径（VIP 无广告分片）：拿到即可
+                    break
+                if caught_f4v:
+                    if first_f4v_ts is None:
+                        first_f4v_ts = time.time()
+                    elif time.time() - first_f4v_ts >= F4V_SETTLE:
+                        # 首个 f4v 出现后已等满 settle 秒，广告与正片序列已完整
+                        break
                 try:
                     t = page.title() or ""
                     # 通用壳标题（"爱奇艺-在线视频网站-海量正版高清视频在线观看"）不算数
-                    if t and "爱奇艺-在线视频网站" not in t:
+                    if t and "爱奇艺-在线视频网站" not in t and not title:
                         title = t
-                        break
+                except Exception:
+                    pass
+                try:
+                    page.mouse.wheel(0, 600)
                 except Exception:
                     pass
                 time.sleep(1.5)
@@ -251,6 +279,28 @@ def resolve(url, timeout=60):
             else:
                 video_url = caught_f4v[-1]
                 ext = "flv"  # f4v 容器即 FLV（H.264 + AAC），HttpFD 原样下载出 .flv
+                # VIP 试看检测（2026-08-22 实测）：VIP 内容未登录时播放器只拉
+                # 广告/试看 f4v（几 MB，HEAD Content-Length < 50MB），正片不可得
+                # （tmts 对 VIP 返回 DRM/H265）。此时明确提示需 Cookie，避免用户
+                # 下载到几秒广告还以为是 bug。
+                if vip_info.get("vip"):
+                    try:
+                        _size = 0
+                        req = urllib.request.Request(
+                            video_url, method="HEAD",
+                            headers={"User-Agent": UA, "Referer": "https://www.iqiyi.com/"},
+                        )
+                        with urllib.request.urlopen(req, timeout=10) as _r:
+                            _size = int(_r.headers.get("Content-Length") or 0)
+                        if 0 < _size < 50 * 1024 * 1024:
+                            raise RuntimeError(
+                                "该视频为爱奇艺 VIP 专享，未登录只能获取广告/试看片段。"
+                                "请在「高级选项 → Cookie」粘贴爱奇艺网页版 Cookie 后重试"
+                            )
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        pass  # HEAD 探测失败不阻断，按原行为返回
 
             return {
                 "ok": True,

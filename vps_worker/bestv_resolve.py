@@ -91,6 +91,27 @@ def resolve(url: str, timeout: int = 60) -> dict:
         return {"ok": False, "error": "未能生成百视TV播放地址"}
 
     title = _fetch_title(vid) or "百视TV"
+
+    # 试看检测（2026-08-22 实测）：preview.m3u8 是 web 端试看流——《上海滩往事》
+    # 只返回 1 个 9s 分片。若用户下载到这种文件会误以为是 bug，直接明确提示。
+    # 拉取清单统计 EXTINF 总时长，< 60s 判为试看片段。
+    try:
+        req = urllib.request.Request(m3u8_url, headers={"User-Agent": _UA, "Referer": _REFERER})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            body = r.read().decode("utf-8", "replace")
+        infs = re.findall(r"#EXTINF:\s*([0-9.]+)", body)
+        total = sum(float(x) for x in infs)
+        if total and total < 60:
+            return {
+                "ok": False,
+                "error": (
+                    f"百视TV 网页端仅提供试看片段（约 {int(total)} 秒），"
+                    "完整版需在百视TV APP 或登录后观看"
+                ),
+            }
+    except Exception:
+        pass  # 清单探测失败不阻断，保持原行为
+
     return {
         "ok": True,
         "video_id": vid,
