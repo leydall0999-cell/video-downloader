@@ -1,0 +1,88 @@
+# 国际流媒体平台支持矩阵（2026-08-22 盘点）
+
+> 基于 yt-dlp 2026.7.4 静态 extractor 探测 + VPS/线上实解析抽测。
+> VDL 架构说明：白名单平台识别/显示中文名；**任意 yt-dlp 有 extractor 的站点即使不在
+> 白名单也会走「通用兜底」解析**（平台名显示为裸域名）。国际站走海外代理分流
+> （VDL_PROXY > macOS 系统代理 > 环境变量；Railway 机房在海外，多数国际站可直连）。
+
+## ✅ 第一类：可直接解析下载（yt-dlp 原生 extractor + 白名单已加）
+
+| 平台 | 域名 | 说明 |
+|---|---|---|
+| YouTube | youtube.com / youtu.be | VDL 已有自动降级链路（免Cookie PO Token → Cookie源），最稳 |
+| TikTok | tiktok.com / vt.tiktok.com | 国际版，已支持 |
+| Twitch | twitch.tv | 直播需正在开播；视频/回放/Clip 可解析 |
+| Kick | kick.com | 直播需正在开播；VOD/Clip 可解析（实测 extractor 生效） |
+| Vimeo / Dailymotion | vimeo.com / dailymotion.com | 已支持 |
+| Facebook / Instagram | facebook.com / instagram.com | 已支持（部分内容需登录） |
+| Rumble | rumble.com | ⚠️ 数据中心 IP 偶发 403（反爬），可重试/换代理 |
+| Odysee / BitChute | odysee.com / bitchute.com | 已支持 |
+| VEVO | vevo.com | 音乐 MV（YouTube 托管） |
+| CuriosityStream | curiositystream.com | 免费片段可下，完整需订阅 |
+| Pluto TV | pluto.tv | ⚠️ 偶发 429 限流，重试即可 |
+| CBC Gem（加拿大） | gem.cbc.ca | 已支持 |
+| ITVX（英国） | itv.com | 需英国可访问网络 |
+| Arte.tv（德法） | arte.tv | 免费公开，已支持 |
+| France.tv / franceinfo（法国） | france.tv / francetvinfo.fr | ⚠️ 数据中心 IP 偶发反爬失败 |
+| RAI Play（意大利） | raiplay.it | 免费公开，已支持 |
+| SVT Play（瑞典） | svtplay.se | 免费公开 |
+| NRK TV（挪威） | nrk.no | 免费公开 |
+| Yle Areena（芬兰） | areena.yle.fi | ⚠️ 数据中心 IP 偶发 403 |
+| RTVE Play（西班牙） | rtve.es | 免费公开 |
+| Niconico（日本） | nicovideo.jp | 已支持 |
+| TVer（日本） | tver.jp | 免费公开 |
+| CHZZK（韩国） | chzzk.naver.com | 直播/视频，部分需登录 |
+| SonyLIV（印度） | sonyliv.com | 免费内容可下 |
+| Disney+ Hotstar（印度） | hotstar.com | 免费内容可下 |
+| iflix / Viu / meWATCH（东南亚） | iflix.com / viu.com / mewatch.sg | 已支持 |
+| IVI / KinoPoisk（俄罗斯） | ivi.ru / kinopoisk.ru | 已支持 |
+| ABC iview / SBS（澳洲） | iview.abc.net.au / sbs.com.au | 免费公开 |
+| Nebula | nebula.tv | ⚠️ 需账号 Cookie（注册用户） |
+| PeerTube | 各实例 | 去中心化，公开实例可下 |
+| Snapchat（Spotlight） | snapchat.com | 仅 Spotlight 公开视频 |
+| BIGO LIVE | bigo.tv | 直播/回放 |
+| Twitter/X、Reddit、VK、LinkedIn、TED 等 | — | 原有白名单，已支持 |
+
+## 🔑 第二类：需登录 Cookie 或地区 IP（粘贴 Cookie / 配置代理后可用）
+
+| 平台 | 说明 |
+|---|---|
+| BBC iPlayer（英国） | 需**英国 IP + 账号**，双重门槛 |
+| Nebula | 需账号 Cookie（`--cookies`） |
+| CuriosityStream 完整内容 | 需订阅账号 |
+| CHZZK 部分内容 | 需 Naver 登录 |
+| Facebook / Instagram 部分 | 私密/未公开内容需登录 |
+| Snapchat / SonyLIV / Hotstar 部分 | 视内容权限 |
+
+> 用法：在「高级选项 → Cookie」粘贴该站浏览器 Cookie 后重试；BBC 等地区站还需代理 IP 落在对应地区。
+
+## 🚫 第三类：DRM / 订阅付费墙（合规红线，不支持破解）
+
+yt-dlp 对这些站点仅返回 `KnownDRMIE`（Unsupported 提示），正片受 Widevine/PlayReady
+DRM 加密，**破解 DRM 违反合规原则，明确不支持**：
+
+Netflix · Disney+ · Prime Video · Apple TV+ · Max (HBO) · Paramount+ · Hulu ·
+Peacock · Crunchyroll · Mubi · Rakuten Viki · Crackle · STARZ · AMC+ · ESPN+ ·
+RTL+ · U-NEXT · FOD · ZEE5 · TVNZ+ · CTV · Globoplay · JioCinema · TVING ·
+Sling TV · FuboTV · YouTube TV · Acorn TV
+
+> 这些平台已加入白名单（前端显示平台名），粘贴链接后返回明确的 DRM 提示，而非笼统错误。
+
+## ❌ 第四类：yt-dlp 无 extractor（暂不支持，需自行开发或无法）
+
+DAZN · Tubi · Plex · Kanopy · Popcornflix · The Roku Channel · Criterion Channel ·
+Crave · Channel 4 · My5 · BritBox · Now TV · Movistar+ · iVysilani · Pro TV Plus ·
+Antena Play · Hulu Japan · AfreecaTV · Watcha · ALTBalaji · YuppTV · Kwai ·
+SnackVideo · more.tv · Claro TV+ · 13Go · ThreeNow · Showmax · beIN CONNECT ·
+Turkcell TV+ · Red Bull TV · F1 TV · Vudu · Amazon Freevee（amazon.com 域被非视频站拦截）
+
+> 这些平台若 yt-dlp 未来支持或开发 VPS worker 可接入；其中部分（DAZN/Tubi/Plex 等）
+> 本身是付费/DRM 服务，即使开发 extractor 也受账号与地区限制。
+
+## 使用提示
+1. **网络**：Railway 部署机房在海外，多数国际站可直连；本地部署需配 `VDL_PROXY`
+   海外代理（详见 CN_PROXY_SETUP.md）。
+2. **Cookie**：付费/登录墙内容粘贴浏览器 Cookie 到「高级选项 → Cookie」。
+3. **地区**：BBC/France.tv 等地区限制内容需代理 IP 落在对应国家。
+4. **反爬**：Rumble/Pluto/Yle 等偶发 403/429/403，重试或稍后再试。
+5. 本矩阵基于 2026-08-22 探测，平台改版后能力可能变化。
