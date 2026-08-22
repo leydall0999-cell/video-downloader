@@ -1096,7 +1096,7 @@ DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给�
 # 直链透传：用户贴的是单个可直接下载的媒体文件（.mp4 等）时，让前端直接从源站
 # 把文件拉到本地，跳过服务器落盘与带宽消耗（真正只下一遍）。
 _DIRECT_EXT_RE = re.compile(
-    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv)(\?|#|$|&)", re.IGNORECASE
+    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv|m3u8)(\?|#|$|&)", re.IGNORECASE
 )
 # 这些域名即使是媒体扩展名结尾，也属于需经 yt-dlp 解析的平台，不能用直链透传绕过
 _KNOWN_PLATFORM_HOSTS = {
@@ -2120,6 +2120,31 @@ def _funshion_info(url: str) -> dict[str, Any]:
     }
 
 
+# 百视TV（bestv.com.cn）：web 端播放地址由 wasm 函数 window.makepreviewquery(vid)
+# 生成签名参数 s，再请求 /api/source/preview.m3u8?s={s} 返回 HLS 流；纯 requests 无法
+# 复现 wasm 签名，走 VPS Playwright worker 调该函数拿 m3u8 直链。
+def _bestv_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿百视TV HLS 流（preview.m3u8），构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("bestv", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "百视TV",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Bestv",
+        "extractor": "bestv",
+        "ext": data.get("ext") or "m3u8",
+        # m3u8 是 HLS 清单（含 ts 分片），需经 ffmpeg/yt-dlp 拉流；标记 direct 让
+        # summarize 当作直链透传给前端（前端用 hls.js 或下载器拉流）。
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.bestv.com.cn/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2429,6 +2454,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 风行网：播放地址需 pm.funshion.com 接口签名，走 VPS Playwright 解析
     if "fun.tv" in (host or ""):
         return _funshion_info(url)
+    # 百视TV：web 端播放地址需 wasm 签名（makepreviewquery），走 VPS Playwright 解析
+    if "bestv.com.cn" in (host or ""):
+        return _bestv_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3122,6 +3150,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "fun.tv" in (_task_host or ""):
                 # 风行：播放地址需接口签名，VPS Playwright 解析
                 info = _funshion_info(task.url)
+            elif "bestv.com.cn" in (_task_host or ""):
+                # 百视TV：wasm 签名，VPS Playwright 解析出 m3u8 直链
+                info = _bestv_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)
