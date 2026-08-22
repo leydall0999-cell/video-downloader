@@ -35,11 +35,14 @@ _JS_COLLECT = (
     ".map(v => ({src: v.src || v.currentSrc || '', dur: v.duration || 0}))"
     ".filter(x => x.src.startsWith('http'))"
 )
-# 触发真实视频加载：滚动 + 对 douyinvod 视频静音播放
+# 触发真实视频加载：滚动 + 对 douyinvod 视频先静音起播（绕过浏览器 autoplay 拦截），
+# 1.5s 后取消静音——抖音播放器此时才会加载分离的音频轨（media-audio-und-mp4a），
+# 否则 audio_url 恒空 → 下载合并后无声（2026-08-23 实测根因）。
 _JS_PLAY_ALL = (
     "() => Array.from(document.querySelectorAll('video')).forEach(v => { "
     "if (v.src && v.src.indexOf('douyinvod') >= 0) { v.muted = true; "
-    "if (v.play) v.play().catch(() => {}); } })"
+    "if (v.play) v.play().catch(() => {}); "
+    "setTimeout(() => { try { v.muted = false; if (v.play) v.play().catch(() => {}); } catch (e) {} }, 1500); } })"
 )
 
 
@@ -49,14 +52,22 @@ def _pick_video_id(url: str) -> str:
 
 
 def _classify(urls):
-    """把捕获到的 douyinvod.com URL 分成 视频轨 / 音频轨。"""
-    video, audio = [], []
+    """把捕获到的 douyinvod.com URL 分成 混合轨 / 分离视频轨 / 音频轨。
+
+    抖音 PC 网页两种流形态（2026-08-23 无声问题根因）：
+    - 混合轨（v{id}-web.douyinvod.com/.../video/tos/...mp4）：视频+音频一体，有声
+    - 分离轨：media-video-avc1（纯视频，无声）+ media-audio-und-mp4a（音频）
+    混合轨优先返回；只有分离轨时才需要 audio_url 配对合并。
+    """
+    mixed, video, audio = [], [], []
     for u in urls:
-        if "media-video-avc1" in u:
+        if "media-video-avc1" in u or "media-video" in u:
             video.append(u)
-        elif "media-audio-und-mp4a" in u or "media-audio" in u:
+        elif "media-audio-und-mp4a" in u or "media-audio" in u or "mime_type=audio" in u:
             audio.append(u)
-    return video, audio
+        else:
+            mixed.append(u)  # 其余 douyinvod URL（v26-web 等）→ 混合轨（自带音轨）
+    return mixed, video, audio
 
 
 def _normalize_douyin_url(url: str) -> str:
@@ -117,7 +128,12 @@ def resolve(url, timeout=30):
 
             def _on_resp(resp):
                 u = resp.url
-                if "douyinvod.com" in u and ("video" in u or "mime_type=video" in u):
+                # ⚠️ 必须同时捕获音视频轨：抖音 PC 网页音视频分离，音频轨 URL
+                # （media-audio-und-mp4a / mime_type=audio）不含 "video" 字样，
+                # 旧过滤条件只收 video → audio_url 恒空 → 合并后无声（2026-08-23 实测）
+                if "douyinvod.com" in u and (
+                    "video" in u or "audio" in u or "mime_type=" in u or "media-" in u
+                ):
                     captured.append(u)
 
             page.on("response", _on_resp)
@@ -147,15 +163,19 @@ def resolve(url, timeout=30):
                         break
                 time.sleep(1.0)
 
-            # 分类捕获的 URL：视频轨 / 音频轨
-            c_video, c_audio = _classify(captured)
+            # 分类捕获的 URL：混合轨 / 分离视频轨 / 音频轨
+            c_mixed, c_video, c_audio = _classify(captured)
 
-            # 视频轨：优先 video 标签 src，兜底捕获
-            video_url = chosen["src"] if chosen else ""
+            # 视频轨：优先 video 标签 src（混合轨），再优先捕获的混合轨，兜底分离视频轨
+            video_url = chosen["src"] if (chosen and chosen["src"].startswith("http")) else ""
+            if not video_url.startswith("http") and c_mixed:
+                video_url = c_mixed[0]
             if not video_url.startswith("http") and c_video:
                 video_url = c_video[0]
-            # 音频轨：从捕获里取（video 标签不含音频轨）
+            # 音频轨：仅分离视频轨场景需要配对（混合轨自带音轨）；从捕获里取
             audio_url = c_audio[0] if c_audio else ""
+            # 标记视频轨是否自带音频：混合轨 = 有声；分离轨 = 无声需合并
+            video_has_audio = bool(c_mixed) or (chosen and chosen["src"].startswith("http"))
 
             final_url = page.url
             vid = _pick_video_id(final_url) or _pick_video_id(url)
@@ -195,6 +215,7 @@ def resolve(url, timeout=30):
                 "video_id": vid,
                 "video_url": video_url,
                 "audio_url": audio_url,
+                "video_has_audio": video_has_audio,
                 "width": width,
                 "height": height,
                 "webpage_url": "https://www.douyin.com/video/%s" % vid,

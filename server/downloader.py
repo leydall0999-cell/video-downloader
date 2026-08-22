@@ -1971,43 +1971,59 @@ def probe_playlist(url: str) -> dict[str, Any]:
 def _douyin_info(url: str) -> dict[str, Any]:
     """调 VPS worker 拿抖音真实流，构造成 yt-dlp 兼容的 info dict。
 
-    视频轨 + 音频轨分离，各自带 Referer（抖音 CDN 校验 Referer，缺则 403）。
-    返回的 info dict 已模拟"yt-dlp 已选过流"的状态：包含 url + requested_formats，
-    这样 yt-dlp 的 process_info 会走多格式下载分支（FFmpegFD 同时下载音视频并合并）。
+    抖音 PC 网页两种流形态（2026-08-23 无声问题根因）：
+    - 混合轨（v{id}-web.douyinvod.com 带音轨 mp4）→ 单直链下载（HttpFD，最稳）
+    - 分离轨（media-video-avc1 纯视频 + media-audio 音频）→ formats + requested_formats
+      让 yt-dlp 走 FFmpegFD 双轨合并分支；各自带 Referer（抖音 CDN 校验，缺则 403）。
     """
     data = _call_vps_worker("douyin", url)
     headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
+    video_url = data.get("video_url") or ""
+    audio_url = data.get("audio_url") or ""
+    video_has_audio = bool(data.get("video_has_audio"))
+    if not video_url:
+        raise ResolveError("抖音解析失败", "worker 未返回视频流", category="parse_failed")
+    # 混合轨（视频自带音轨）：单直链下载，绝不构造分离 format（避免无谓合并/双音轨）
+    if video_has_audio or not audio_url:
+        return {
+            "id": data.get("video_id") or "",
+            "title": data.get("title") or "抖音视频",
+            "duration": data.get("duration"),
+            "thumbnail": data.get("thumbnail") or "",
+            "webpage_url": data.get("webpage_url") or url,
+            "extractor_key": "Douyin",
+            "extractor": "douyin",
+            "ext": "mp4",
+            "url": video_url,
+            "protocol": "https",
+            "direct": True,
+            "http_headers": dict(headers),
+        }
+    # 分离轨：视频 + 音频两轨合并
     height = int(data.get("height") or 0) or 720
     width = int(data.get("width") or 0) or (height * 16 // 9)
-    formats: list[dict[str, Any]] = []
-    if data.get("video_url"):
-        formats.append({
-            "url": data["video_url"],
-            "format_id": "dy-video",
-            "format": "dy-video",
-            "ext": "mp4",
-            "protocol": "https",
-            "vcodec": "avc1",
-            "acodec": "none",
-            "width": width,
-            "height": height,
-            "http_headers": dict(headers),
-        })
-    if data.get("audio_url"):
-        formats.append({
-            "url": data["audio_url"],
-            "format_id": "dy-audio",
-            "format": "dy-audio",
-            "ext": "m4a",
-            "protocol": "https",
-            "vcodec": "none",
-            "acodec": "mp4a",
-            "abr": 128,
-            "http_headers": dict(headers),
-        })
-    # 模拟"已选流"：只给 requested_formats + formats，不设外层 url/protocol。
-    # 这样 process_info 的 fd=None，走「逐个 format 下载 + FFmpegMergerPP 合并」分支。
-    # （若给外层 url，fd 会被设为 HttpFD，走合并 url 分支，HttpFD 无法下多 URL，音频轨丢失。）
+    formats: list[dict[str, Any]] = [{
+        "url": video_url,
+        "format_id": "dy-video",
+        "format": "dy-video",
+        "ext": "mp4",
+        "protocol": "https",
+        "vcodec": "avc1",
+        "acodec": "none",
+        "width": width,
+        "height": height,
+        "http_headers": dict(headers),
+    }, {
+        "url": audio_url,
+        "format_id": "dy-audio",
+        "format": "dy-audio",
+        "ext": "m4a",
+        "protocol": "https",
+        "vcodec": "none",
+        "acodec": "mp4a",
+        "abr": 128,
+        "http_headers": dict(headers),
+    }]
     return {
         "id": data.get("video_id") or "",
         "title": data.get("title") or "抖音视频",
