@@ -2595,6 +2595,29 @@ def _tubi_info(url: str, cookie: str = "") -> dict[str, Any]:
             elif _t in ("hlsv3", "hlsv6") and not hls_url:
                 hls_url = _u
 
+    # 页面无 __data（反爬/GDPR 页）→ 尝试公开清单 API（oz/videos/{id}/manifest.*）。
+    # 302 到 gdpr 页时 urllib 跟随后返回 HTML，不匹配 #EXTM3U/<MPD 即跳过。
+    if not hls_url and not dash_url:
+        for _api in (
+            f"https://tubitv.com/oz/videos/{vid}/manifest.m3u8",
+            f"https://tubitv.com/oz/videos/{vid}/manifest.mpd",
+        ):
+            try:
+                _req = urllib.request.Request(_api, headers=headers)
+                _resp = urllib.request.urlopen(_req, timeout=15)
+                _body = _resp.read().decode("utf-8", "replace")
+                _ct = (_resp.headers.get("Content-Type") or "").lower()
+                if _body.lstrip().startswith("#EXTM3U"):
+                    hls_url = _api
+                    _feat.append("oz-api-hls")
+                    break
+                if "<MPD" in _body or "mpd" in _ct or _body.lstrip().startswith("<?xml"):
+                    dash_url = _api
+                    _feat.append("oz-api-mpd")
+                    break
+            except Exception:
+                continue
+
     # 优先 HLS（m3u8，VDL 直链可播放可下载）；无 HLS 时 DASH 仅提示（MPD 需 DASH 下载器）
     stream_url = hls_url
     is_hls = bool(hls_url)
