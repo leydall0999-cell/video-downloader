@@ -2838,6 +2838,15 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "该链接是 B站 番剧 / 影视（会员 DRM 内容）",
             "番剧、电影、纪录片等受版权 DRM 保护，标准下载方式无法解析。请更换为公开可播放的普通视频链接。",
         )
+    # 喜马拉雅专辑链接：走专辑功能（/api/playlist + worker），单集才走 yt-dlp。
+    # 直接喂 probe 会被 yt-dlp XimalayaIE 报 KeyError('data')（专辑页非单集结构）。
+    _probe_host = _host_of(url)
+    if _probe_host in ("ximalaya.com",) and "/album/" in (url or "").split("?", 1)[0]:
+        raise ResolveError(
+            "这是喜马拉雅专辑链接",
+            "专辑请使用「歌单 / 专辑下载」功能：粘贴链接后选择专辑模式即可整批下载；"
+            "下载单个音频请打开具体集数的播放页链接。",
+        )
     url = _norm_for_check
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。

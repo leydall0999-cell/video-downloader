@@ -112,6 +112,9 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     elif app.downloader._is_iqiyi_host(host):
         # 爱奇艺 VPS Playwright worker：起 Chromium + 等播放器发 m3u8 请求，实测 30-50s
         timeout = 90
+    elif 'bestv.com.cn' in host:
+        # 百视TV wasm 签名 worker：实测 40-60s，默认 45s 会误超时
+        timeout = 80
     elif host == 'v.qq.com':
         timeout = 35
     elif 'youtube.com' in host or 'youtu.be' in host:
