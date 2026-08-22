@@ -16,7 +16,7 @@
 | Vimeo / Dailymotion | vimeo.com / dailymotion.com | 已支持 |
 | Facebook / Instagram | facebook.com / instagram.com | 已支持（部分内容需登录） |
 | Rumble | rumble.com | ⚠️ 数据中心 IP 偶发 403（反爬），可重试/换代理 |
-| Odysee / BitChute | odysee.com / bitchute.com | 已支持 |
+| Odysee / BitChute | odysee.com / bitchute.com | ✅ BitChute 2026-08-22 已实测打通（yt-dlp 直连，修复无 height 直链漏选） |
 | VEVO | vevo.com | 音乐 MV（YouTube 托管） |
 | CuriosityStream | curiositystream.com | 免费片段可下，完整需订阅 |
 | Pluto TV | pluto.tv | ⚠️ 偶发 429 限流，重试即可 |
@@ -37,6 +37,9 @@
 | iflix / Viu / meWATCH（东南亚） | iflix.com / viu.com / mewatch.sg | 已支持 |
 | IVI / KinoPoisk（俄罗斯） | ivi.ru / kinopoisk.ru | 已支持 |
 | ABC iview / SBS（澳洲） | iview.abc.net.au / sbs.com.au | 免费公开 |
+| F1 TV | f1tv.com | 赛事片段/VOD 可解析（正式直播需订阅） |
+| Red Bull TV | redbull.tv | 免费公开，已支持 |
+| AfreecaTV（韩国） | afreecatv.com | 直播/回放，部分需登录 |
 | Nebula | nebula.tv | ⚠️ 需账号 Cookie（注册用户） |
 | PeerTube | 各实例 | 去中心化，公开实例可下 |
 | Snapchat（Spotlight） | snapchat.com | 仅 Spotlight 公开视频 |
@@ -48,13 +51,16 @@
 | 平台 | 说明 |
 |---|---|
 | BBC iPlayer（英国） | 需**英国 IP + 账号**，双重门槛 |
+| NRK / SVT / RAI / RTVE 等北欧公共台 | 大部分内容地区锁（仅本国 IP），海外数据中心 IP 返回"不可用"/403（2026-08-22 实测 NRK 报 Ikke tilgjengelig lenger、SVT 404 过期链接、Yle 403） |
+| France.tv / Yle | 部分内容**全球公开**（实测中国 IP 可完整解析 1600s+），数据中心 IP 偶发反爬 |
 | Nebula | 需账号 Cookie（`--cookies`） |
 | CuriosityStream 完整内容 | 需订阅账号 |
 | CHZZK 部分内容 | 需 Naver 登录 |
 | Facebook / Instagram 部分 | 私密/未公开内容需登录 |
 | Snapchat / SonyLIV / Hotstar 部分 | 视内容权限 |
 
-> 用法：在「高级选项 → Cookie」粘贴该站浏览器 Cookie 后重试；BBC 等地区站还需代理 IP 落在对应地区。
+> 用法：在「高级选项 → Cookie」粘贴该站浏览器 Cookie 后重试；BBC/北欧台等地区站还需代理 IP 落在对应地区。
+> 2026-08-22 实测：Channel 4 返回 KnownDRMIE（DRM）→ 已归入第三类；Yle 在中国 VPS IP 可解析、在美国数据中心 IP 403，地区/反爬敏感。
 
 ## 🚫 第三类：DRM / 订阅付费墙（合规红线，不支持破解）
 
@@ -64,20 +70,23 @@ DRM 加密，**破解 DRM 违反合规原则，明确不支持**：
 Netflix · Disney+ · Prime Video · Apple TV+ · Max (HBO) · Paramount+ · Hulu ·
 Peacock · Crunchyroll · Mubi · Rakuten Viki · Crackle · STARZ · AMC+ · ESPN+ ·
 RTL+ · U-NEXT · FOD · ZEE5 · TVNZ+ · CTV · Globoplay · JioCinema · TVING ·
-Sling TV · FuboTV · YouTube TV · Acorn TV
+Sling TV · FuboTV · YouTube TV · Acorn TV · **Channel 4（2026-08-22 实测 KnownDRMIE）** ·
+Criterion Channel · Crave
 
 > 这些平台已加入白名单（前端显示平台名），粘贴链接后返回明确的 DRM 提示，而非笼统错误。
 
 ## ❌ 第四类：yt-dlp 无 extractor（暂不支持，需自行开发或无法）
 
 DAZN · Tubi · Plex · Kanopy · Popcornflix · The Roku Channel · Criterion Channel ·
-Crave · Channel 4 · My5 · BritBox · Now TV · Movistar+ · iVysilani · Pro TV Plus ·
-Antena Play · Hulu Japan · AfreecaTV · Watcha · ALTBalaji · YuppTV · Kwai ·
-SnackVideo · more.tv · Claro TV+ · 13Go · ThreeNow · Showmax · beIN CONNECT ·
-Turkcell TV+ · Red Bull TV · F1 TV · Vudu · Amazon Freevee（amazon.com 域被非视频站拦截）
+My5 · BritBox · Now TV · Movistar+ · iVysilani · Pro TV Plus · Antena Play ·
+Hulu Japan · Watcha · ALTBalaji · YuppTV · Kwai · SnackVideo · more.tv ·
+Claro TV+ · 13Go · ThreeNow · Showmax · beIN CONNECT · Turkcell TV+ · Vudu ·
+Amazon Freevee（amazon.com 域被非视频站拦截）
 
-> 这些平台若 yt-dlp 未来支持或开发 VPS worker 可接入；其中部分（DAZN/Tubi/Plex 等）
-> 本身是付费/DRM 服务，即使开发 extractor 也受账号与地区限制。
+> 2026-08-22 复核修正：AfreecaTV / Red Bull TV / F1 TV / PeerTube / Niconico /
+> SonyLIV / iflix / meWATCH / KinoPoisk / CHZZK 其实都有 yt-dlp extractor（已补白名单或走通用兜底）；
+> Channel 4 / Criterion / Acorn 归入 DRM 类。剩余平台若 yt-dlp 未来支持或开发 VPS worker 可接入；
+> 其中 DAZN/Tubi/Plex/Showmax 等本身是付费/DRM 服务，即使开发 extractor 也受账号与地区限制。
 
 ## 使用提示
 1. **网络**：Railway 部署机房在海外，多数国际站可直连；本地部署需配 `VDL_PROXY`
