@@ -2098,6 +2098,28 @@ def _m1905_info(url: str) -> dict[str, Any]:
     }
 
 
+# 风行网（fun.tv）：播放地址来自 pm.funshion.com/v7/media/play/ 接口（带
+# fudid/token 签名），走 VPS Playwright 解析（fun_resolve.py），返回 mp4 直链。
+def _funshion_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿风行真实流，构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("funshion", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "风行网",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Funshion",
+        "extractor": "funshion",
+        "ext": data.get("ext") or "mp4",
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.fun.tv/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2404,6 +2426,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 1905 电影网：详情页反爬（数据中心 IP 403），走 VPS Playwright 解析
     if "1905.com" in (host or ""):
         return _m1905_info(url)
+    # 风行网：播放地址需 pm.funshion.com 接口签名，走 VPS Playwright 解析
+    if "fun.tv" in (host or ""):
+        return _funshion_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3094,6 +3119,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "1905.com" in (_task_host or ""):
                 # 1905：详情页反爬，VPS Playwright 解析
                 info = _m1905_info(task.url)
+            elif "fun.tv" in (_task_host or ""):
+                # 风行：播放地址需接口签名，VPS Playwright 解析
+                info = _funshion_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)

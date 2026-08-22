@@ -35,6 +35,7 @@ from iqiyi_resolve import resolve as iqiyi_resolve  # noqa: E402
 from douyu_resolve import resolve as douyu_resolve  # noqa: E402
 from ysp_resolve import resolve as ysp_resolve  # noqa: E402
 from m1905_resolve import resolve as m1905_resolve  # noqa: E402
+from fun_resolve import resolve as fun_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -95,6 +96,7 @@ _RESOLVERS = {
     "douyu": douyu_resolve,
     "yangshipin": ysp_resolve,
     "1905": m1905_resolve,
+    "funshion": fun_resolve,
 }
 
 
