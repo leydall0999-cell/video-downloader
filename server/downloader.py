@@ -357,6 +357,38 @@ def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
     return url
 
 
+def _expand_generic_302(url: str, proxy: str = "", allowed_hosts: tuple[str, ...] = ()) -> str:
+    """通用短链 302 展开（如 shturl.cc → inke.cn），带目标域名白名单校验。
+
+    与 _expand_iqiyi_short_url 同思路：yt-dlp 的 InkeIE 只认 inke.cn 域，
+    shturl.cc 短链会落 [generic] 失败，需先 HEAD/GET 跟随 302 展开。
+
+    安全：展开后目标 host 必须在 allowed_hosts 白名单内，否则视为展开失败
+    返回原 URL（防恶意短链把用户带到无关站点）。
+    """
+    import requests as _requests
+
+    host = _host_of(url) or ""
+    if not any(h in host for h in allowed_hosts):
+        return url
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        "Referer": "https://www.inke.cn/",
+    }
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        r = _requests.get(url, headers=headers, proxies=proxies,
+                          allow_redirects=True, timeout=15)
+        final = r.url or url
+        final_host = _host_of(final) or ""
+        if any(h in final_host for h in allowed_hosts):
+            return final
+    except Exception as e:  # noqa: BLE001
+        logger.info("[shturl expand] %s failed: %s", url, str(e)[:120])
+    return url
+
+
 def _normalize_bilibili_url(url: str) -> str:
     """把 B站 长链/b23.tv BV 短链统一归一化为 www.bilibili.com/video/BVxxx 长链。
 
@@ -450,6 +482,15 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
             logger.info("[normalize] %s -> %s", url, normalized)
             return normalized
         # 展开失败：保留原 URL，让 yt-dlp 走 generic 给「找不到视频」更明确的错误
+        return _strip_tracking_params(url)
+
+    # 花椒直播短链 shturl.cc/xxx：302 展开为 inke.cn 真实直播/回放页
+    # （yt-dlp InkeIE 只认 inke.cn 域，shturl.cc 会落 generic 失败）
+    if "shturl.cc" in url:
+        expanded = _expand_generic_302(url, proxy=proxy, allowed_hosts=("inke.cn",))
+        if expanded != url:
+            logger.info("[normalize] %s -> %s", url, expanded)
+            return expanded
         return _strip_tracking_params(url)
 
     # 爱奇艺 直接 playShare 分享页（www.iqiyi.com/playShare.html?shareId=...）：

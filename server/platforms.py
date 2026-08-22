@@ -68,6 +68,21 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("huya", "虎牙直播", ("huya.com",), "🎮"),
     Platform("douyu", "斗鱼直播", ("douyu.com",), "🐟"),
     Platform("yangshipin", "央视频", ("yangshipin.cn", "cntv.cn", "cctv.com"), "📡"),
+    Platform("letv", "乐视视频", ("le.com",), "🔵"),
+    Platform("migu", "咪咕视频", ("miguvideo.com",), "🎧"),
+    Platform("pptv", "PPTV聚力", ("pptv.com",), "🟣"),
+    Platform("funshion", "风行网", ("fun.tv",), "🌪️"),
+    Platform("movie1905", "1905电影网", ("1905.com",), "🎬"),
+    Platform("bestv", "百视TV", ("bestv.com.cn",), "📺"),
+    Platform("wasu", "华数TV", ("wasu.com.cn",), "🏞️"),
+    Platform("xinpianchang", "新片场", ("xinpianchang.com",), "🎞️"),
+    Platform("hongguo", "红果短剧", ("hongguoduanju.com",), "🍎"),
+    Platform("vcinema", "南瓜电影", ("vcinema.cn",), "🎃"),
+    Platform("yy", "YY直播", ("yy.com",), "🎤"),
+    Platform("neteasecc", "网易CC直播", ("cc.163.com",), "🎙️"),
+    Platform("huajiao", "花椒直播", ("shturl.cc",), "🌶️"),
+    Platform("inke", "映客直播", ("inke.cn",), "📱"),
+    Platform("taolive", "淘宝直播", ("taolive.taobao.com",), "🛍️"),
     Platform("tudou", "土豆", ("tudou.com",), "🥔"),
     Platform("meipai", "美拍", ("meipai.com",), "📷"),
     Platform("nivod", "泥视频", ("nivod.vip",), "🎬"),
@@ -143,6 +158,9 @@ CHINA_DOMAINS: tuple[str, ...] = (
     "yangshipin.cn", "cntv.cn", "cctv.com",
     "tudou.com", "meipai.com",
     "le.com", "wasu.cn", "1905.com",
+    "miguvideo.com", "pptv.com", "fun.tv",
+    "bestv.com.cn", "xinpianchang.com", "hongguoduanju.com",
+    "yy.com", "cc.163.com", "inke.cn", "shturl.cc", "taolive.taobao.com",
     "chrqj.com",
 )
 
@@ -204,7 +222,8 @@ def parse_source(raw_input: str) -> tuple[str, Platform]:
     """校验输入并返回 (规范化链接, 命中的平台)。"""
     url = extract_first_url(raw_input)
     host = _hostname_of(url)
-    if host in NON_VIDEO_HOSTS:
+    # taolive.taobao.com（淘宝直播）是视频直播站，需从 taobao.com 主体拦截中放行
+    if host in NON_VIDEO_HOSTS and not host.endswith(".taobao.com"):
         raise UnsupportedPlatformError(
             f"该站点暂不支持视频下载：{host}",
             "请粘贴视频播放页链接（如 B 站、抖音、YouTube 等）",
