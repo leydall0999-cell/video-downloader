@@ -2323,6 +2323,10 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
         "extractor": "iqiyi",
         "ext": "mp4" if is_hls else "flv",
         "url": stream_url,
+        # f4v 是完整媒体文件（非 HLS），需 direct 标记才能经 _detect_direct_url
+        # 透传给前端（play_url / watch_options / 直链下载入口）；
+        # m3u8 走 _detect_play_url 的 HLS 检测，无需 direct。
+        "direct": not is_hls,
         "protocol": "m3u8_native" if is_hls else "https",
         "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": data.get("webpage_url") or url},
     }

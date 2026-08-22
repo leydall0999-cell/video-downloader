@@ -18,10 +18,14 @@
   + VDL_COOKIE_API_PORT（默认 18731）/ VDL_COOKIE_PUSH_INTERVAL（默认 120）
 """
 import os
+import re
+import signal
+import subprocess
 import sys
 import time
 import json
 import threading
+import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -185,6 +189,29 @@ def do_push(wait: bool = True):
         _push_lock.release()
 
 
+def _kill_all_chromium():
+    """清掉所有残留 chrome-headless 进程（Playwright 的 browser.close() 偶发漏杀，
+    1.6GB 小内存 VPS 上孤儿 chromium 会拖慢后续解析甚至导致 Railway 90s 超时）。
+    do_resolve 串行化 + 每次解析前清理，保证同一时刻只有本次解析的 chromium 存活。"""
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,comm="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        for line in out.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) != 2 or "chrom" not in parts[1].lower():
+                continue
+            try:
+                pid = int(parts[0])
+                if pid > 0 and pid != os.getpid():
+                    os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+    except Exception:
+        pass
+
+
 def do_resolve(platform, url):
     """用 Playwright 解析指定平台视频。用 _resolve_lock 串行化 Chromium，
     与推送锁独立，避免被云端推送的网络抖动饿死。"""
@@ -194,10 +221,29 @@ def do_resolve(platform, url):
     if not _resolve_lock.acquire(blocking=False):
         _resolve_lock.acquire()  # 阻塞等待上一轮 Chromium 完成
     try:
-        return True, resolver(url)
+        # 解析前清残留 chromium：上一轮若异常退出（客户端断连/超时杀线程），
+        # browser.close() 的 finally 未必执行，孤儿会占内存拖慢本轮。
+        _kill_all_chromium()
+        # 硬超时兜底：worker 内部已有时间预算，但 VPS 内存压力下 Playwright 启动
+        # 可能显著变慢（>90s），超出 Railway 限时。这里强制 85s 上限，超时杀
+        # chromium 并返回干净错误，避免请求堆积在 _resolve_lock 后饿死后续请求。
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        fut = ex.submit(resolver, url)
+        try:
+            result = fut.result(timeout=85)
+            ex.shutdown(wait=False)
+            return True, result
+        except concurrent.futures.TimeoutError:
+            # shutdown(wait=False)：不阻塞等待卡死的 worker 线程（线程无法强杀，
+            # 但 chromium 已被清掉，线程会在下次访问页面时自然抛错退出）
+            ex.shutdown(wait=False)
+            _kill_all_chromium()
+            return False, "解析超时（>85s，VPS 资源紧张或平台变慢），请稍后重试"
     except Exception as e:
+        _kill_all_chromium()
         return False, str(e)[:300]
     finally:
+        _kill_all_chromium()
         _resolve_lock.release()
 
 
