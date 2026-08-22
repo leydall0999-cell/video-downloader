@@ -1553,7 +1553,8 @@
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status.replace('uploading','running');
-      const disabled = it.status !== 'pending' && it.status !== 'failed' ? 'disabled' : '';
+      // 移除按钮：pending/failed/uploading 可移除（上传中=取消上传）；转码中禁用
+      const disabled = it.status !== 'pending' && it.status !== 'failed' && it.status !== 'uploading' ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress||0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
@@ -1603,11 +1604,31 @@
     ucPump();
   };
 
+  // 取消单个上传中任务：abort 分片 XHR + 通知后端清理已传分片 + 释放并发槽
+  const ucCancelUpload = (it) => {
+    it._removed = true;
+    if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (e) { /* ignore */ } });
+    if (it._uploadId) {
+      const fd = new FormData();
+      fd.append('upload_id', it._uploadId);
+      fetch('/api/upload-chunk/abort', { method: 'POST', body: fd, headers: { 'X-Device-Id': deviceId() } }).catch(() => { /* 失败靠 24h 孤儿清理兜底 */ });
+    }
+  };
+
   const ucRemoveItem = (id) => {
     const it = ucState.list.find(x => x.id === id);
     if (!it) return;
-    if (it.status === 'running' || it.status === 'uploading') {
+    if (it.status === 'running') {
       el.ucStatus.textContent = '该项正在转码中，无法移除（请等待完成或失败）';
+      return;
+    }
+    if (it.status === 'uploading') {
+      ucCancelUpload(it);
+      ucState.list = ucState.list.filter(x => x.id !== id);
+      ucState.active = Math.max(0, ucState.active - 1);  // 释放并发槽（ucUploadOne 不会 resolve）
+      renderUcList();
+      el.ucStatus.textContent = '已取消上传并移除';
+      ucPump();  // 拉下一个 pending
       return;
     }
     ucState.list = ucState.list.filter(x => x.id !== id);
@@ -1615,19 +1636,25 @@
   };
 
   const ucClearAll = () => {
-    const running = ucState.list.filter(x => x.status === 'running' || x.status === 'uploading').length;
+    const running = ucState.list.filter(x => x.status === 'running').length;
     if (running) {
-      el.ucStatus.textContent = `有 ${running} 个任务正在进行，请等待完成后再清空`;
+      el.ucStatus.textContent = `有 ${running} 个任务正在转码，请等待完成后再清空`;
       return;
     }
+    // 取消所有上传中项，再清空
+    const uploading = ucState.list.filter(x => x.status === 'uploading');
+    uploading.forEach(ucCancelUpload);
+    ucState.active = Math.max(0, ucState.active - uploading.length);
     ucState.list = [];
     renderUcList();
-    el.ucStatus.textContent = '已清空列表';
+    el.ucStatus.textContent = uploading.length ? `已取消 ${uploading.length} 个上传并清空列表` : '已清空列表';
+    ucPump();
   };
 
   // 上传单个分片（32MB；小文件=1 片，与整传等效）
   // onProgress(loaded) 让调用方合并 in-flight 字节算总进度，避免「长时间 0%」假卡死
-  const ucUploadChunk = (uploadId, index, total, blob, onProgress) => new Promise((resolve, reject) => {
+  // xhrs(Set) 收集进行中的 XHR，供「上传中删除」时 abort
+  const ucUploadChunk = (uploadId, index, total, blob, onProgress, xhrs) => new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('upload_id', uploadId);
     form.append('index', index);
@@ -1637,12 +1664,15 @@
     xhr.open('POST', '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    if (xhrs) xhrs.add(xhr);
+    const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
     if (onProgress) {
       xhr.upload.addEventListener('progress', (ev) => {
         if (ev.lengthComputable) onProgress(ev.loaded);
       });
     }
     xhr.addEventListener('load', () => {
+      cleanup();
       if (xhr.status >= 200 && xhr.status < 300) resolve();
       else {
         let msg = '分片上传失败 HTTP ' + xhr.status;
@@ -1650,7 +1680,8 @@
         reject(new Error(msg));
       }
     });
-    xhr.addEventListener('error', () => reject(new Error('网络错误')));
+    xhr.addEventListener('error', () => { cleanup(); reject(new Error('网络错误')); });
+    xhr.addEventListener('abort', () => { cleanup(); reject(new Error('已取消')); });
     xhr.send(form);
   });
 
@@ -1660,10 +1691,12 @@
     item.progress = 0;
     item.speedText = '';
     item.uploadedText = '';
+    item._removed = false;            // 上传中删除标记（abort 后不再重试/不再 finish）
+    item._xhrs = new Set();           // 进行中的分片 XHR（删除时 abort）
     renderUcList();
     const file = item.file;
     const totalChunks = Math.max(1, Math.ceil(file.size / UC_CHUNK_SIZE));
-    const uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const uploadId = item._uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0;          // 已成功分片的累计字节
     const done = new Set();          // 已成功分片 index（重试去重）
     const inFlight = new Map();      // 正在上传分片 index → 当前 loaded 字节（合并算进度，避免「长时间 0%」）
@@ -1699,7 +1732,7 @@
     const workers = [];
     const worker = async () => {
       while (idx < totalChunks) {
-        if (item.status === 'failed') return;
+        if (item._removed || item.status === 'failed') return;
         const i = idx++;
         const start = i * UC_CHUNK_SIZE;
         const end = Math.min(start + UC_CHUNK_SIZE, file.size);
@@ -1710,9 +1743,10 @@
             await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => {
               inFlight.set(i, loaded);  // 单片实时进度反馈
               updateProgress();
-            });
+            }, item._xhrs);
             break;
           } catch (e) {
+            if (item._removed) return;  // 用户已删除：直接退出，不重试不报错
             attempts++;
             if (attempts > UC_CHUNK_RETRIES) {
               item.status = 'failed';
@@ -1733,7 +1767,7 @@
 
     // 全部分片完成 → finish 合并并提交转码 job
     Promise.allSettled(workers).then(async () => {
-      if (item.status === 'failed') return;
+      if (item._removed || item.status === 'failed') return;
       try {
         const form = new FormData();
         form.append('upload_id', uploadId);

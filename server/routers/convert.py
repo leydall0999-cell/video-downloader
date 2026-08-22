@@ -200,6 +200,23 @@ def upload_chunk(
     return {"ok": True, "received": written, "uploaded_bytes": total_bytes}
 
 
+@router.post("/api/upload-chunk/abort")
+def abort_upload_chunk(upload_id: str = app.Form(...), request: app.Request = None) -> dict:
+    """取消分片上传：删除该 upload 已落盘的全部部分（前端删除上传中任务时调用）。
+    正常路径 finish 已合并删除；此处兜底用户中途取消/删除，避免孤儿分片占磁盘。"""
+    app._check_rate_limit(request)
+    if not _UPLOAD_ID_RE.match(upload_id):
+        raise app.HTTPException(status_code=400, detail="upload_id 非法")
+    n = 0
+    for p in _upload_parts(upload_id):
+        try:
+            p.unlink(missing_ok=True)
+            n += 1
+        except OSError:
+            pass
+    return {"ok": True, "removed": n}
+
+
 @router.post("/api/upload-chunk/finish")
 def finish_upload_chunk(
     upload_id: str = app.Form(...),
