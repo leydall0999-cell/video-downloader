@@ -70,6 +70,8 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("yangshipin", "央视频", ("yangshipin.cn", "cntv.cn", "cctv.com"), "📡"),
     Platform("tudou", "土豆", ("tudou.com",), "🥔"),
     Platform("meipai", "美拍", ("meipai.com",), "📷"),
+    Platform("nivod", "泥视频", ("nivod.vip",), "🎬"),
+    Platform("pomo", "Pomo", ("pomo.mom",), "🎬"),
     # —— 国际 ——
     Platform("youtube", "YouTube", ("youtube.com", "youtu.be", "youtube-nocookie.com"), "▶️"),
     Platform("tiktok", "TikTok", ("tiktok.com", "vt.tiktok.com"), "🎵"),
