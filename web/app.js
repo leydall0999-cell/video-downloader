@@ -7133,6 +7133,51 @@
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
 
+  // ------------------------------------------------------------------ 留言反馈（2026-08-23）
+  // 右下角悬浮按钮 → 弹窗 → POST /api/feedback（request 自动带 X-Device-Id）
+  const initFeedback = () => {
+    const fab = document.getElementById('feedbackFab');
+    const dlg = document.getElementById('feedbackDialog');
+    const form = document.getElementById('feedbackForm');
+    if (!fab || !dlg || !form) return;
+    const content = document.getElementById('feedbackContent');
+    const contact = document.getElementById('feedbackContact');
+    const status = document.getElementById('feedbackStatus');
+    const cancelBtn = document.getElementById('feedbackCancel');
+    const submitBtn = document.getElementById('feedbackSubmit');
+    const closeDlg = () => { try { dlg.close(); } catch (e) { dlg.removeAttribute('open'); } };
+    const openDlg = () => { status.hidden = true; try { dlg.showModal(); } catch (e) { dlg.setAttribute('open', ''); } };
+    fab.addEventListener('click', openDlg);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeDlg);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = (content.value || '').trim();
+      if (!text) {
+        status.textContent = '请先填写反馈内容';
+        status.className = 'feedback-status err'; status.hidden = false;
+        return;
+      }
+      if (submitBtn) submitBtn.disabled = true;
+      status.className = 'feedback-status'; status.textContent = '提交中…'; status.hidden = false;
+      try {
+        await request('/api/feedback', {
+          method: 'POST',
+          body: JSON.stringify({ content: text, contact: (contact.value || '').trim() }),
+        });
+        status.className = 'feedback-status ok';
+        status.textContent = '✅ 已收到你的反馈，感谢！';
+        content.value = ''; contact.value = '';
+        setTimeout(closeDlg, 1200);
+      } catch (err) {
+        status.className = 'feedback-status err';
+        status.textContent = '提交失败：' + (err.message || '请稍后重试');
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    });
+  };
+  try { initFeedback(); } catch (_) { /* 反馈组件缺失不影响主流程 */ }
+
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。
   window.VDL = Object.assign(window.VDL || {}, {

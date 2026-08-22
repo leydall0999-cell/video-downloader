@@ -522,3 +522,55 @@ def resume_task(task_id: str, request: app.Request) -> dict:
     app.store.update(task.id, status='downloading')
     app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, '', '', app.SINGLE_DOWNLOAD_RETRIES)
     return {'task_id': task_id, 'resumed': True}
+
+
+class FeedbackRequest(app.BaseModel):
+    content: str = app.Field(default='', max_length=2000)
+    contact: str = app.Field(default='', max_length=100)
+
+
+@router.post('/api/feedback')
+def create_feedback(payload: FeedbackRequest, request: app.Request) -> dict:
+    """留言反馈：保存到 downloads/.feedback.json（追加，保留最近 500 条）。
+    走限流防止刷屏；content 必填，contact 可选。
+    """
+    app._check_rate_limit(request)
+    content = (payload.content or '').strip()
+    if not content:
+        raise app.HTTPException(status_code=400, detail='反馈内容不能为空')
+    record = {
+        "ts": int(app.time.time()),
+        "device": _device_of(request),
+        "contact": (payload.contact or '').strip()[:100],
+        "content": content[:2000],
+        "ua": (request.headers.get("User-Agent") or "")[:200],
+    }
+    path = app.DOWNLOAD_DIR / ".feedback.json"
+    return _append_feedback(path, record)
+
+
+# 反馈写入锁（模块级，防止并发写坏 JSON）
+_feedback_lock_obj = app.threading.Lock()
+
+
+def _feedback_lock():
+    return _feedback_lock_obj
+
+
+def _append_feedback(path, record: dict) -> dict:
+    with _feedback_lock():
+        items = []
+        try:
+            if path.exists():
+                data = app.json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    items = data
+        except Exception:
+            items = []
+        items.append(record)
+        items = items[-500:]  # 只保留最近 500 条，防膨胀
+        try:
+            path.write_text(app.json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            pass  # 写入失败不阻塞反馈接口
+    return {"ok": True, "ts": record["ts"]}

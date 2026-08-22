@@ -1403,6 +1403,25 @@
 </dialog>
 
 <footer class="app-footer"><span id="buildTag" class="build-tag"></span></footer>
+
+<!-- 留言反馈：右下角悬浮入口（2026-08-23） -->
+<button type="button" class="feedback-fab" id="feedbackFab" title="留言反馈问题">💬<span class="feedback-fab-label">反馈</span></button>
+<dialog class="feedback-dialog" id="feedbackDialog">
+  <form method="dialog" class="feedback-form" id="feedbackForm">
+    <h3 class="feedback-title">留言反馈</h3>
+    <p class="feedback-sub">遇到问题？写下来告诉我们（平台 / 链接 / 具体现象，越详细越好）</p>
+    <textarea id="feedbackContent" class="feedback-textarea" rows="5"
+              maxlength="2000" placeholder="例如：抖音链接解析失败 / 下载的视频没有声音 / 转换后文件打不开…" required></textarea>
+    <input id="feedbackContact" class="feedback-contact" type="text" maxlength="100"
+           placeholder="联系方式（选填，方便回复：邮箱 / 微信 / 其他）" />
+    <p class="feedback-status" id="feedbackStatus" hidden></p>
+    <div class="feedback-actions">
+      <button type="button" class="btn btn-ghost" id="feedbackCancel">取消</button>
+      <button type="submit" class="btn btn-primary" id="feedbackSubmit">提交反馈</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
   // 前端未做版本化，浏览器/WKWebView 易缓存旧 app.js 导致修复不生效。
   // 构建时由 build_mac.sh 把占位符替换为本次构建戳；开发模式（占位符未被替换）回退到时间戳，保证改动立即生效。

@@ -1854,3 +1854,42 @@ img { max-width: 100%; display: block; }
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
 
 
+
+/* ============ 留言反馈（2026-08-23 右下角悬浮入口） ============ */
+.feedback-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 200;
+  display: flex; align-items: center; gap: 6px;
+  padding: 11px 16px; border: none; border-radius: 999px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, .35);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.feedback-fab:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(59,130,246,.45); }
+.feedback-fab-label { font-size: 13px; }
+.feedback-dialog {
+  border: none; border-radius: 16px; padding: 0; width: min(420px, 92vw);
+  box-shadow: 0 12px 40px rgba(0,0,0,.25); background: var(--panel, #fff);
+  color: var(--text, #1f2937);
+}
+.feedback-dialog::backdrop { background: rgba(0,0,0,.35); }
+.feedback-form { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 12px; }
+.feedback-title { margin: 0; font-size: 17px; font-weight: 700; }
+.feedback-sub { margin: 0; font-size: 12.5px; color: var(--text-mute, #6b7280); line-height: 1.5; }
+.feedback-textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 110px;
+  padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px;
+  font-size: 14px; line-height: 1.6; background: var(--bg, #f9fafb); color: var(--text, #1f2937);
+  font-family: inherit;
+}
+.feedback-textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+.feedback-contact {
+  width: 100%; box-sizing: border-box; padding: 9px 12px;
+  border: 1px solid var(--border, #e5e7eb); border-radius: 10px;
+  font-size: 13px; background: var(--bg, #f9fafb); color: var(--text, #1f2937);
+}
+.feedback-contact:focus { outline: none; border-color: #3b82f6; }
+.feedback-status { margin: 0; font-size: 13px; line-height: 1.5; }
+.feedback-status.ok { color: var(--success, #16a34a); }
+.feedback-status.err { color: var(--danger, #dc2626); }
+.feedback-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
