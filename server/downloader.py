@@ -28,7 +28,7 @@ except ImportError:
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError, GeoRestrictedError, UnsupportedError
 
-from platforms import LinkError, is_china_host
+from platforms import LinkError, is_china_host, SUPPORTED_PLATFORMS
 from tasks import DownloadTask, TaskStore
 import socket
 import urllib.request
@@ -1555,6 +1555,23 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
     is_cloud = ctx.get(
         "is_cloud", os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud"
     )
+
+    # yt-dlp 抛出 UnsupportedError 通常意味着「域名不在 yt-dlp 支持的 extractor 列表」
+    # ——对 VDL 用户来说，含义比 1625 行通用提示更具体：要么找原视频、要么找
+    # 页面里的 m3u8/iframe 直链、要么通知我们加 extractor。
+    if isinstance(exc, UnsupportedError) or "unsupported url" in lowered:
+        host = ctx.get("host", "")
+        return ResolveError(
+            f"该链接暂不在 VDL 支持的 {len(SUPPORTED_PLATFORMS)} 个平台列表中",
+            f"yt-dlp 也未提供 {host or '该域名'} 的解析器（可能是第三方视频聚合/解析站）。\n\n"
+            "请尝试以下任一方式：\n"
+            "① 在该网站播放页面右键 → 查看页面源代码，搜索 `m3u8` / `mp4` / `<video` / `<iframe src=`，"
+            "把找到的直链 URL 粘贴到 VDL（m3u8 / mp4 直链可被 yt-dlp 直接下载）。\n"
+            "② 跳转到原视频平台（YouTube / B站 / 抖音等）后再粘贴。\n"
+            "③ 如果是您常用的网站，告诉我该网站任意一个播放页，我可以为它写个 extractor 加进 VDL。",
+            category="unsupported_platform",
+        )
+
     cloud_cookie_hint = (
         "网页版由「桌面版 VDL」共享登录态：请在桌面版 VDL 中打开并保持该平台登录，"
         "点『同步 Cookie 到云端』刷新后重试；或直接用桌面版 VDL 解析本链接。"
