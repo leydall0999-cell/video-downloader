@@ -2986,6 +2986,73 @@ def plex_diag(url: str = "https://watch.plex.tv/zh/watch/movie/the-message-1976?
     return out
 
 
+@app.get("/api/plex-token-test")
+def plex_token_test(metadata_id: str = "5d9f3563adeb7a0021ce194e") -> dict:
+    """临时诊断：Plex VOD 匿名 token + metadata 完整流程测试。"""
+    import requests as _r
+    import json as _json
+    import uuid as _uuid
+    out: dict = {"metadata_id": metadata_id}
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    # 1) 匿名注册拿 token
+    try:
+        reg = _r.post(
+            "https://watch.plex.tv/api/v2/user/register",
+            headers=headers,
+            json={"clientIdentifier": str(_uuid.uuid4()), "service": "watch.plex.tv"},
+            timeout=20,
+        )
+        out["register_status"] = reg.status_code
+        try:
+            reg_data = reg.json()
+            out["authToken"] = (reg_data.get("authToken") or "")[:20] + "..." if reg_data.get("authToken") else None
+            out["register_keys"] = list(reg_data.keys())[:10]
+        except Exception:
+            out["register_raw"] = reg.text[:200]
+    except Exception as e:  # noqa: BLE001
+        out["register_err"] = str(e)[:200]
+
+    token = ""
+    if out.get("authToken"):
+        token = reg_data.get("authToken")
+
+    # 2) 用 token 拿 metadata
+    if token:
+        try:
+            meta = _r.get(
+                f"https://vod.provider.plex.tv/library/metadata/{metadata_id}",
+                headers={**headers, "X-Plex-Token": token},
+                timeout=20,
+            )
+            out["meta_status"] = meta.status_code
+            out["meta_head"] = meta.text[:300]
+            try:
+                md = meta.json()
+                m = (md.get("MediaContainer") or {}).get("Metadata") or []
+                out["meta_count"] = len(m)
+                if m:
+                    out["title"] = m[0].get("title")
+                    media = m[0].get("Media") or []
+                    out["media_count"] = len(media)
+                    if media:
+                        parts = media[0].get("Part") or []
+                        out["part_count"] = len(parts)
+                        if parts:
+                            out["part_key"] = parts[0].get("key")
+                            out["part_container"] = parts[0].get("container")
+                            out["part_has_streams"] = bool(parts[0].get("Stream"))
+            except Exception:
+                pass
+        except Exception as e:  # noqa: BLE001
+            out["meta_err"] = str(e)[:200]
+    return out
+
+
 @app.get("/api/cookie/pull-diag")
 def cookie_pull_diag() -> dict:
     """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
