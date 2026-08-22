@@ -1602,6 +1602,21 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
     # 页面里的 m3u8/iframe 直链、要么通知我们加 extractor。
     if isinstance(exc, UnsupportedError) or "unsupported url" in lowered:
         host = ctx.get("host", "")
+        # 已收录平台（白名单内但 yt-dlp 无 extractor）与完全未知域名区分提示，
+        # 避免误报「不在支持列表」（2026-08-22 实测 yy.com/inke.cn 等已在白名单）。
+        if host and any(
+            host == d or host.endswith(f".{d}")
+            for p in SUPPORTED_PLATFORMS
+            for d in p.domains
+        ):
+            return ResolveError(
+                f"该平台已收录（{host}），但暂未实现该站的解析器",
+                "yt-dlp 未提供该网站的解析器，VDL 正在为它开发专用提取器。\n\n"
+                "当前可尝试：\n"
+                "① 若页面里有 m3u8 / mp4 直链（右键查看源代码搜索），直接粘贴直链可下载；\n"
+                "② 等后续版本支持（常用站可反馈优先开发）。",
+                category="pending_extractor",
+            )
         return ResolveError(
             f"该链接暂不在 VDL 支持的 {len(SUPPORTED_PLATFORMS)} 个平台列表中",
             f"yt-dlp 也未提供 {host or '该域名'} 的解析器（可能是第三方视频聚合/解析站）。\n\n"
@@ -2327,6 +2342,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "ext": (Path(filename).suffix or ".mp4").lstrip("."),
             "webpage_url": url,
         }
+    # info 可能因 yt-dlp 抛异常（网络重试失败等）从未被赋值，必须初始化，
+    # 否则下方 `if not info:` 会抛 UnboundLocalError（搜狐等平台实测触发）
+    info: dict[str, Any] | None = None
     # 记录最后一次异常信息，用于 info 为空时透传真实原因
     _last_err: str | None = None
     # 收集 yt-dlp logger 的 WARNING/ERROR 输出，供 `if not info:` 时透传真实业务原因。
