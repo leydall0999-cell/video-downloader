@@ -234,5 +234,15 @@ def parse_source(raw_input: str) -> tuple[str, Platform]:
 
 
 def platform_catalog() -> list[dict[str, str]]:
-    """给前端展示的平台清单。"""
-    return [{"key": p.key, "name": p.name, "icon": p.icon} for p in SUPPORTED_PLATFORMS]
+    """给前端展示的平台清单（已下线的直播平台不展示）。"""
+    return [
+        {"key": p.key, "name": p.name, "icon": p.icon}
+        for p in SUPPORTED_PLATFORMS
+        if p.key not in DISABLED_PLATFORMS
+    ]
+
+
+# 已下线平台（2026-08-22 用户要求直播模块下线）：
+# 斗鱼直播 / 映客 / 网易CC 三个直播平台整体下线，恢复时间待定。
+# 前端列表隐藏 + probe() 拦截给出明确提示（见 downloader.py）。
+DISABLED_PLATFORMS: frozenset[str] = frozenset({"douyu", "inke", "neteasecc"})

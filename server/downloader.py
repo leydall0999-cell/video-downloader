@@ -2520,6 +2520,13 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     host = _host_of(url)
     if cookie and host:
         _cache_user_cookie(host, cookie)
+    # 直播模块已下线（2026-08-22 用户要求）：斗鱼 / 映客 / 网易CC 统一拦截
+    if host and any(_lb in host for _lb in ("douyu.com", "inke.cn", "cc.163.com")):
+        raise ResolveError(
+            "该直播平台已暂时下线",
+            "直播模块（斗鱼 / 映客 / 网易CC）已于 2026-08-22 下线，恢复时间待定。"
+            "可关注后续更新，或使用其他平台。",
+        )
     # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
         return _douyin_info(url)
@@ -3216,6 +3223,12 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
         # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
         _task_host = _host_of(task.url)
+        # 直播模块已下线（2026-08-22）：下载链路同样拦截
+        if _task_host and any(_lb in _task_host for _lb in ("douyu.com", "inke.cn", "cc.163.com")):
+            raise ResolveError(
+                "该直播平台已暂时下线",
+                "直播模块（斗鱼 / 映客 / 网易CC）已于 2026-08-22 下线，恢复时间待定。",
+            )
         if _task_host and ("bilibili.com" in _task_host or "b23.tv" in _task_host):
             # patch 必须带最终生效的 Cookie（含公共池自动注入），而不是用户原始输入
             _patch_bilibili_webpage_download(
