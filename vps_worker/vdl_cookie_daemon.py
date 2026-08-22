@@ -264,7 +264,14 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "missing url"})
                 return
             ok, result = do_resolve(platform, url)
-            self._send(200 if ok else 502, result if ok else {"error": result})
+            if not ok:
+                # 业务失败（链接无效/需登录/视频删除/未开播等）返回 200 + ok:false，
+                # 让 Railway 端 _call_vps_worker 透传真实业务原因；只有解析器
+                # 内部异常才返回 5xx。
+                self._send(200, {"ok": False, "error": result})
+                return
+            # 成功：透传 worker 返回的 dict（worker 内部自带 ok:true）
+            self._send(200, result)
             return
         self._send(404, {"error": "not found"})
 

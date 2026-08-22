@@ -1096,7 +1096,7 @@ DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给�
 # 直链透传：用户贴的是单个可直接下载的媒体文件（.mp4 等）时，让前端直接从源站
 # 把文件拉到本地，跳过服务器落盘与带宽消耗（真正只下一遍）。
 _DIRECT_EXT_RE = re.compile(
-    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts)(\?|#|$|&)", re.IGNORECASE
+    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv)(\?|#|$|&)", re.IGNORECASE
 )
 # 这些域名即使是媒体扩展名结尾，也属于需经 yt-dlp 解析的平台，不能用直链透传绕过
 _KNOWN_PLATFORM_HOSTS = {

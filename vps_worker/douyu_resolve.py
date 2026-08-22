@@ -114,6 +114,7 @@ def resolve(url, timeout=40):
     stream_url = streams[-1]
     ext = "m3u8" if ".m3u8" in stream_url else ("flv" if ".flv" in stream_url else "mp4")
     return {
+        "ok": True,
         "video_id": _pick_id(url) or "",
         "title": page_meta.get("title") or "斗鱼直播",
         "uploader": page_meta.get("author") or "",
