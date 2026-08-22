@@ -2622,11 +2622,14 @@ def _tubi_info(url: str, cookie: str = "") -> dict[str, Any]:
     stream_url = hls_url
     is_hls = bool(hls_url)
     if not stream_url:
+        _title_m = re.search(r"<title>([^<]*)</title>", html)
+        _page_title = _title_m.group(1).strip()[:60] if _title_m else "(无 title)"
         raise ResolveError(
             "Tubi 解析失败",
-            f"未找到可用的视频流（页面特征: {', '.join(_feat) or '正常但无 manifest'}）。"
-            f"{'该内容可能仅提供 DASH(MPD) 流，暂不支持。' if dash_url else ''}"
-            f"建议稍后重试或在「高级选项」设置代理。",
+            f"未找到可用的视频流（页面特征: {', '.join(_feat) or '正常但无 manifest'}；"
+            f"len={len(html)} title={_page_title}）。"
+            f"Railway 数据中心 IP 可能不在 Tubi 支持地区（美/加/澳/新/英/墨等）或触发反爬。"
+            f"建议在「高级选项」设置 Tubi 支持地区的代理后重试。",
             category="parse_failed",
         )
 
