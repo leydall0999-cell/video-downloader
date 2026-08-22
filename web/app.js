@@ -1088,6 +1088,8 @@
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
     el.tasksPanel.hidden = false;
+    // 新任务卡滚动到可见区，用户点击「开始下载」后立即看到进度
+    try { node.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* 忽略 */ }
     return refs;
   };
 
@@ -2494,12 +2496,26 @@
     el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。若源站拒绝直连，请用上方「改用服务器下载」。';
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (resolved?.video?.direct_url) {
+      // 直链直存：浏览器从源站拉文件，瞬时响应，无需 loading 态
       triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
       return;
     }
-    startDownload(selectedQuality);
+    // 服务器下载：loading 态防重复点击（连点会建多个任务）；后端 90s 内命中
+    // 解析缓存，「解析视频信息」步骤 <1s，这里反馈也要跟上。
+    if (el.downloadBtn.dataset.submitting === '1') return;
+    el.downloadBtn.dataset.submitting = '1';
+    el.downloadBtn.disabled = true;
+    const origLabel = el.downloadBtn.lastChild.textContent;
+    el.downloadBtn.lastChild.textContent = '创建任务中…';
+    try {
+      await startDownload(selectedQuality);
+    } finally {
+      el.downloadBtn.dataset.submitting = '';
+      el.downloadBtn.disabled = false;
+      el.downloadBtn.lastChild.textContent = origLabel;
+    }
   };
 
   const cancelTask = async (taskId, base = '') => {
