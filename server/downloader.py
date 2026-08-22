@@ -2360,7 +2360,6 @@ def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
     if not vid:
         raise ResolveError("Rumble 解析失败", "无法从链接中识别视频 ID。", category="parse_failed")
 
-    api = f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={vid}"
     headers = {
         "User-Agent": _RUMBLE_UA,
         "Accept": "*/*",
@@ -2368,28 +2367,50 @@ def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
         "Referer": "https://rumble.com/",
         "Connection": "keep-alive",
     }
+
+    def _cf_fetch(_u: str) -> str:
+        """curl_cffi 带浏览器指纹抓取；403 限流时重试并轮换指纹。返回响应文本。"""
+        if _cf_requests is None:
+            req = urllib.request.Request(_u, headers=headers)
+            return urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+        body = ""
+        _last_status = 0
+        for _attempt in range(3):
+            _imp = ("chrome", "chrome124", "firefox133")[_attempt % 3]
+            _resp = _cf_requests.get(_u, headers=headers, impersonate=_imp, timeout=20)
+            if _resp.status_code == 200:
+                body = _resp.text
+                break
+            _last_status = _resp.status_code
+        if not body:
+            raise ResolveError(
+                "Rumble 解析失败",
+                f"Rumble 接口返回 {_last_status}（Cloudflare 反爬或地区限制）。"
+                f"建议：①稍后重试；②在「高级选项」设置海外代理后重试。",
+                category="parse_failed",
+            )
+        return body
+
+    # 关键：v{短id} 与真实 embed id 未必相同，embedJS 用错 id 会返回随机视频。
+    # RumbleIE 的做法是从视频页提取 Rumble("play",{video:"xxx"}) 的 embed id。
+    # 页面同样被 Cloudflare 保护，走 curl_cffi 指纹抓取。
+    embed_id = ""
     try:
-        if _cf_requests is not None:
-            # Cloudflare 偶发限流：重试 2 次，轮换浏览器指纹
-            body = ""
-            _last_status = 0
-            for _attempt in range(3):
-                _imp = ("chrome", "chrome124", "firefox133")[_attempt % 3]
-                _resp = _cf_requests.get(api, headers=headers, impersonate=_imp, timeout=20)
-                if _resp.status_code == 200:
-                    body = _resp.text
-                    break
-                _last_status = _resp.status_code
-            if not body:
-                raise ResolveError(
-                    "Rumble 解析失败",
-                    f"Rumble 接口返回 {_last_status}（Cloudflare 反爬或地区限制）。"
-                    f"建议：①稍后重试；②在「高级选项」设置海外代理后重试。",
-                    category="parse_failed",
-                )
-        else:
-            req = urllib.request.Request(api, headers=headers)
-            body = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+        _page_html = _cf_fetch(url)
+        _m = re.search(
+            r'Rumble\(\s*"play"\s*,\s*{[^}]*?\bvideo\b\s*:\s*["\']([0-9a-z]+)["\']',
+            _page_html,
+        )
+        if not _m:
+            _m = re.search(r"rumble\.com/embed/([0-9a-z]+)", _page_html)
+        embed_id = _m.group(1) if _m else ""
+    except Exception:
+        pass  # 页面抓取失败时退回 URL 短 id
+
+    api_vid = embed_id or vid
+    api = f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={api_vid}"
+    try:
+        body = _cf_fetch(api)
     except ResolveError:
         raise
     except urllib.error.HTTPError as e:
