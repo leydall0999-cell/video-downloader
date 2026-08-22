@@ -552,12 +552,31 @@
     return payload;
   };
 
+  /** 设备隔离 ID：sessionStorage 级（标签页独立，刷新保留，新标签页/新设备是新 ID）。
+   *  同浏览器开两个标签页 = 两个互不可见的任务空间；手机与电脑自然隔离。 */
+  const deviceId = () => {
+    let id = '';
+    try { id = sessionStorage.getItem('vdl_device_id') || ''; } catch (e) { /* 隐私模式可能抛错 */ }
+    if (!id) {
+      try {
+        id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+      } catch (e) {
+        id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      }
+      try { sessionStorage.setItem('vdl_device_id', id); } catch (e) { /* 忽略 */ }
+    }
+    return id;
+  };
+
   const request = async (path, options = {}, base = '') => {
     const headers = {};
     const subKey = localStorage.getItem('vdl_sub_key');
     if (subKey) headers['X-Subscription-Key'] = subKey;
     const apiToken = localStorage.getItem('vdl_api_token');
     if (apiToken) headers['X-Api-Key'] = apiToken;
+    // 设备隔离（2026-08-22）：每标签页独立 device_id（sessionStorage），
+    // 后端据此只返回本页面创建的任务——手机/其他页面完全看不到本页任务。
+    headers['X-Device-Id'] = deviceId();
     // FormData（multipart 上传）不强制 Content-Type，交给浏览器设 boundary；
     // 其余默认 JSON。options.headers 仅做增强、不覆盖（避免丢失 token）。
     const isForm = options.body instanceof FormData;
@@ -1240,7 +1259,7 @@
     }
     refs.save.hidden = false;
     // 任务在哪个节点跑，文件就从哪个节点取
-    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1`;
+    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1&device=${encodeURIComponent(deviceId())}`;
     refs.save.setAttribute('download', task.filename || '');
     refs.save.textContent = '保存到本机 ⬇';
     refs.status.textContent = autoSave
@@ -2149,7 +2168,7 @@
       }
     }, POLL_FALLBACK_MS);
 
-    const source = new EventSource(`${base || window.VDL_API_BASE || ''}/api/tasks/${taskId}/events`);
+    const source = new EventSource(`${base || window.VDL_API_BASE || ''}/api/tasks/${taskId}/events?device=${encodeURIComponent(deviceId())}`);
     source.onmessage = (event) => handle(JSON.parse(event.data));
     source.onerror = () => source.close();
 

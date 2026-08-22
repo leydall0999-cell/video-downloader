@@ -328,6 +328,15 @@ def _valid_extract_mode(value: str) -> str:
     """校验并归一化文案提取模式，非法值回退为不提取。"""
     return value if value in ('spoken', 'description', 'both') else ''
 
+def _device_of(request: app.Request) -> str:
+    """取设备 ID：优先请求头 X-Device-Id（fetch 请求），其次 query device=
+    （EventSource / <a href> 文件下载无法带自定义 header，走 query）。"""
+    dev = (request.headers.get("X-Device-Id") or "").strip()
+    if not dev:
+        dev = (request.query_params.get("device") or "").strip()
+    return dev[:64]
+
+
 @router.post('/api/download')
 def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
@@ -336,7 +345,7 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
-    task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
+    task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, device_id=_device_of(request))
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}}
 
@@ -377,7 +386,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
         except (app.UnsupportedPlatformError, app.LinkError):
             skipped += 1
             continue
-        task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode)
+        task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, device_id=_device_of(request))
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
         task_ids.append(task.id)
     if not task_ids:
@@ -387,9 +396,9 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted}
 
 @router.get('/api/tasks')
-def list_tasks() -> dict:
-    """列出当前所有任务（含排队 / 进行中 / 已完成），供前端队列概览。"""
-    tasks = [t.to_public_dict() for t in app.store.list_all()]
+def list_tasks(request: app.Request) -> dict:
+    """列出当前设备可见的任务（设备隔离：只返回本设备创建 + 系统任务），供前端队列概览。"""
+    tasks = [t.to_public_dict() for t in app.store.list_all(device=_device_of(request))]
     stats = {'pending': 0, 'downloading': 0, 'merging': 0, 'completed': 0, 'failed': 0, 'canceled': 0}
     for t in tasks:
         stats[t['status']] = stats.get(t['status'], 0) + 1
@@ -397,8 +406,8 @@ def list_tasks() -> dict:
     return {'tasks': tasks, 'stats': stats, 'concurrency': app.scheduler.concurrency}
 
 @router.post('/api/tasks/{task_id}/retry')
-def retry_task(task_id: str) -> dict:
-    task = app._require_task(task_id)
+def retry_task(task_id: str, request: app.Request) -> dict:
+    task = app._require_task(task_id, _device_of(request))
     if task.status not in ('failed', 'canceled'):
         raise app.HTTPException(status_code=400, detail='仅失败 / 已取消的任务可以重试')
     task.cancel_requested = False
@@ -408,9 +417,9 @@ def retry_task(task_id: str) -> dict:
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
 
 @router.post('/api/tasks/{task_id}/extract-text')
-def reextract_text(task_id: str) -> dict:
+def reextract_text(task_id: str, request: app.Request) -> dict:
     """对已完成任务重新提取文案（如首次语音转写超时，可点重试）。"""
-    task = app._require_task(task_id)
+    task = app._require_task(task_id, _device_of(request))
     if not task.extract_mode:
         raise app.HTTPException(status_code=400, detail='该任务未开启文案提取')
     if not task.filepath or not app.Path(task.filepath).exists():
@@ -419,10 +428,10 @@ def reextract_text(task_id: str) -> dict:
     return {'task_id': task_id, 'status': 'running'}
 
 @router.post('/api/tasks/cancel-all')
-def cancel_all_tasks() -> dict:
-    """取消所有进行中 / 排队中的任务；已完成与失败的任务保留（不删文件）。"""
+def cancel_all_tasks(request: app.Request) -> dict:
+    """取消当前设备所有进行中 / 排队中的任务；已完成与失败的任务保留（不删文件）。"""
     canceled = 0
-    for t in app.store.list_all():
+    for t in app.store.list_all(device=_device_of(request)):
         if not t.is_finished and app.store.request_cancel(t.id):
             canceled += 1
     return {'canceled': canceled}
@@ -432,12 +441,12 @@ def batch_config() -> dict:
     return {'concurrency': app.scheduler.concurrency, 'hard_max': app.VDL_BATCH_HARD_MAX, 'retries': app.BATCH_RETRIES_DEFAULT}
 
 @router.get('/api/tasks/{task_id}')
-def task_status(task_id: str) -> dict:
-    return app._require_task(task_id).to_public_dict()
+def task_status(task_id: str, request: app.Request) -> dict:
+    return app._require_task(task_id, _device_of(request)).to_public_dict()
 
 @router.get('/api/tasks/{task_id}/events')
 async def task_events(task_id: str, request: app.Request) -> app.StreamingResponse:
-    app._require_task(task_id)
+    app._require_task(task_id, _device_of(request))
 
     async def event_stream():
         elapsed = 0.0
@@ -459,8 +468,8 @@ def _sse(data: dict) -> str:
     return f'data: {app.json.dumps(data, ensure_ascii=False)}\n\n'
 
 @router.get('/api/tasks/{task_id}/file')
-def download_file(task_id: str, download: int=0) -> app.Response:
-    task = app._require_task(task_id)
+def download_file(task_id: str, request: app.Request, download: int=0) -> app.Response:
+    task = app._require_task(task_id, _device_of(request))
     if task.status != 'completed' or not task.filepath or (not task.filepath.exists()):
         raise app.HTTPException(status_code=409, detail='文件尚未准备好')
     _ext = task.filepath.suffix.lower()
@@ -480,18 +489,18 @@ def download_file(task_id: str, download: int=0) -> app.Response:
     return app.FileResponse(path=task.filepath, filename=task.filepath.name, media_type=_mt)
 
 @router.delete('/api/tasks/{task_id}')
-def cancel_task(task_id: str) -> dict:
+def cancel_task(task_id: str, request: app.Request) -> dict:
     """进行中的任务 → 请求取消并保留记录；已结束的任务 → 连同文件一起清理。"""
-    task = app._require_task(task_id)
+    task = app._require_task(task_id, _device_of(request))
     if task.is_finished:
         app.store.remove(task_id)
         return {'task_id': task_id, 'canceled': False, 'removed': True}
     return {'task_id': task_id, 'canceled': app.store.request_cancel(task_id), 'removed': False}
 
 @router.post('/api/tasks/{task_id}/pause')
-def pause_task(task_id: str) -> dict:
+def pause_task(task_id: str, request: app.Request) -> dict:
     """暂停正在下载的任务——保留 .part 文件，后续可断点续传。"""
-    task = app._require_task(task_id)
+    task = app._require_task(task_id, _device_of(request))
     if task.is_finished:
         return {'task_id': task_id, 'paused': False, 'message': '任务已结束，无法暂停'}
     if task.status == 'paused':
@@ -502,9 +511,9 @@ def pause_task(task_id: str) -> dict:
     return {'task_id': task_id, 'paused': True}
 
 @router.post('/api/tasks/{task_id}/resume')
-def resume_task(task_id: str) -> dict:
+def resume_task(task_id: str, request: app.Request) -> dict:
     """继续被暂停的下载——yt-dlp 自动从已下载的 .part 文件断点续传。"""
-    task = app._require_task(task_id)
+    task = app._require_task(task_id, _device_of(request))
     if task.status not in ('paused',):
         return {'task_id': task_id, 'resumed': False, 'message': '任务未处于暂停状态'}
     task.pause_requested = False

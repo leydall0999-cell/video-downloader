@@ -71,6 +71,10 @@ class DownloadTask:
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
+    # 设备隔离（2026-08-22）：创建任务的前端页面/标签页设备 ID（sessionStorage 级）。
+    # 空字符串 = 系统/无归属任务（后台自动创建、遗留任务），对所有设备可见；
+    # 非空 = 仅同 device_id 的页面可见（手机任务电脑端完全看不见）。
+    device_id: str = ""
 
     def __post_init__(self):
         # 初始任务自动带有"排队等待"步骤，让前端过程面板一创建就有东西展示
@@ -152,7 +156,7 @@ class TaskStore:
                 concurrent_fragments: int = 0, downloader_type: str = "",
                 cookie: str = "", proxy: str = "",
                 play_url: str = "", watch_options: list[dict] | None = None,
-                is_hls: bool = False) -> DownloadTask:
+                is_hls: bool = False, device_id: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -162,6 +166,7 @@ class TaskStore:
             concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
             cookie=cookie, proxy=proxy,
             play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
+            device_id=device_id,
         )
         with self._lock:
             self._tasks[task_id] = task
@@ -205,10 +210,19 @@ class TaskStore:
         if task and task.workdir:
             shutil.rmtree(task.workdir, ignore_errors=True)
 
-    def list_all(self) -> list["DownloadTask"]:
-        """返回当前所有任务的安全快照（不暴露内部 dict），供队列概览使用。"""
+    def list_all(self, device: str = "") -> list["DownloadTask"]:
+        """返回当前设备可见的任务安全快照（不暴露内部 dict），供队列概览使用。
+
+        设备隔离规则：
+        - device 非空：返回「无归属（device_id 为空，系统任务）或属于该设备」的任务；
+        - device 为空（未提供/兼容路径）：只返回无归属系统任务——绝不泄露
+          任何设备专属任务（无头请求/老客户端拿不到用户任务）。
+        """
         with self._lock:
-            return list(self._tasks.values())
+            tasks = list(self._tasks.values())
+        if device:
+            return [t for t in tasks if not t.device_id or t.device_id == device]
+        return [t for t in tasks if not t.device_id]
 
     def purge_expired(self, ttl: int = TASK_TTL_SECONDS) -> int:
         deadline = time.time() - ttl

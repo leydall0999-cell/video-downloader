@@ -1406,9 +1406,16 @@ class ConvertRequest(BaseModel):
     resolution: str = "original"
 
 
-def _require_task(task_id: str):
+def _require_task(task_id: str, device_id: str = ""):
+    """取任务，可选设备归属校验（2026-08-22 设备隔离）。
+
+    device_id 非空时：任务属于其他设备（device_id 非空且不匹配）→ 视为不存在
+    （404，不泄露任务存在性）；无归属任务（系统任务）对所有设备可见。
+    """
     task = store.get(task_id)
     if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if device_id and task.device_id and task.device_id != device_id:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return task
 
