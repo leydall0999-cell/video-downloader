@@ -2169,6 +2169,31 @@ def _hongguo_info(url: str) -> dict[str, Any]:
     }
 
 
+# 映客直播/回放（inke.cn）：直播间 URL 形如 liveroom/index.html?uid={uid}&id={liveid}。
+# 公开接口 live_share_pc 无需登录即可返回主播昵称/直播状态；真实流地址规律为
+#   https://record2.inke.cn/record_{liveid}/{liveid}.m3u8?uid=0
+# 该 m3u8 带 EXT-X-ENDLIST，是「开播至今的 DVR 窗口」，可一次性下载为 mp4。
+# 纯 HTTP 即可构造，走 VPS worker（中国 IP 出口稳，与 bestv/hongguo 一致）。
+def _inke_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿映客直播/回放 m3u8，构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("inke", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "映客直播",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Inke",
+        "extractor": "inke",
+        "ext": data.get("ext") or "m3u8",
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.inke.cn/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2484,6 +2509,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 红果短剧：字节系 CDN 流需真实浏览器点开播放器捕获，走 VPS Playwright 解析
     if "hongguoduanju.com" in (host or ""):
         return _hongguo_info(url)
+    # 映客直播/回放：公开接口拿昵称+状态，流地址规律化构造，走 VPS worker
+    if "inke.cn" in (host or ""):
+        return _inke_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3183,6 +3211,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "hongguoduanju.com" in (_task_host or ""):
                 # 红果短剧：字节 CDN 流，VPS Playwright 点开播放器捕获真流直链
                 info = _hongguo_info(task.url)
+            elif "inke.cn" in (_task_host or ""):
+                # 映客直播/回放：公开接口构造 m3u8，VPS worker 解析
+                info = _inke_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)
