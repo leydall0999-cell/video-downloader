@@ -3739,13 +3739,13 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         "299+140/248+140/137+140/136+140/135+140/134+140/133+140/160+140",
                         "bv*+ba/best[height<=1080]/best",
                     ]
-                    # 2026-08-22 实测：tv_embedded 解析 OK 但下载分片被 CDN 403
-                    # （数据中心 IP）。不同 player_client 的下载 URL 形态不同
-                    # （ios/tv 多为 HLS、android 直连 mp4），对云 IP 的限制策略
-                    # 也不同——client × format 矩阵轮换，直到找到可下载的组合。
-                    # 顺序优化：tv_embedded 下载实测必 403，放最后；HLS 形态的
-                    # ios/tv 对云 IP 限制最松，优先尝试（实测 2 视频均在此区间成功）。
-                    _yt_clients = ["ios", "tv", "android", "web_safari", "tv_embedded"]
+                    # 2026-08-22 实测（task logs 确认）：数据中心 IP 下
+                    #   ios    → Requested format is not available（SABR 无格式）
+                    #   tv     → The page needs to be reloaded
+                    #   android → ✅ 直连 mp4 对云 IP 放行，成功
+                    #   tv_embedded → 解析 OK 但下载分片 403
+                    # 故 android 前置（首次尝试即成功，降级 ~35s），其余兜底。
+                    _yt_clients = ["android", "ios", "tv", "web_safari", "tv_embedded"]
                     _done = False
                     for _client in _yt_clients:
                         if task.cancel_requested:
