@@ -2544,6 +2544,13 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         if not entries:
             raise ResolveError("该链接是一个空的合集", "请粘贴单个视频的播放地址")
         info = entries[0]
+    # 多分片视频（如搜狐 SohuIE 返回 _type=multi_video，一个视频切成 N 个 mp4 分片）：
+    # 取第一个分片继续（分片间可无缝拼接，youtube-dl 也这样处理）。
+    if info.get("_type") == "multi_video":
+        entries = [e for e in (info.get("entries") or []) if e]
+        if not entries:
+            raise ResolveError("该视频无法解析出分片", "请更换链接或稍后重试")
+        info = entries[0]
     if info.get("is_live"):
         raise ResolveError("暂不支持下载正在直播的内容", "请等直播结束生成回放后再试")
     if _is_restricted_placeholder(info):
