@@ -2334,6 +2334,94 @@ def _iqiyi_info(url: str, cookie: str = "") -> dict[str, Any] | None:
     }
 
 
+# Rumble（rumble.com）：yt-dlp 的 RumbleIE/RumbleEmbedIE 被 Cloudflare 反爬
+# 403 拦截（数据中心 IP + 非浏览器指纹请求），线上实测 embedJS JSON 也 403。
+# 方案：带完整浏览器头的直连请求 embedJS/u3 API（SPA 播放器同源接口），
+# 解析 mp4/hls 直链（sp.rmbl.ws CDN 不受 Cloudflare 挑战）。若仍 403 则
+# 明确提示需要海外浏览器环境，交由通用兜底报错。
+_RUMBLE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
+    import json as _json
+
+    m = re.search(r"rumble\.com/(?:embed/)?(?:v(?!ideos))?([0-9a-z]+)", url)
+    vid = m.group(1) if m else ""
+    if not vid:
+        raise ResolveError("Rumble 解析失败", "无法从链接中识别视频 ID。", category="parse_failed")
+
+    api = f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={vid}"
+    req = urllib.request.Request(api, headers={
+        "User-Agent": _RUMBLE_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://rumble.com/",
+        "Connection": "keep-alive",
+    })
+    try:
+        body = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise ResolveError(
+            "Rumble 解析失败",
+            f"Rumble 接口返回 {e.code}（Cloudflare 反爬或地区限制）。"
+            f"建议：①稍后重试；②在「高级选项」设置海外代理后重试。",
+            category="parse_failed",
+        ) from None
+    except Exception as e:
+        raise ResolveError("Rumble 解析失败", f"访问 Rumble 接口失败：{e}", category="parse_failed") from None
+
+    try:
+        data = _json.loads(body)
+    except Exception:
+        raise ResolveError("Rumble 解析失败", "Rumble 接口返回非 JSON 数据（可能被反爬拦截）。",
+                           category="parse_failed") from None
+
+    title = data.get("title") or "Rumble 视频"
+    # 流选择：优先 mp4 直链（sp.rmbl.ws，完整文件可直接下载/播放），
+    # 无 mp4 时退回 hls 清单。
+    stream_url = ""
+    ext = "mp4"
+    is_hls = False
+    ua = data.get("ua") or {}
+    mp4s = ua.get("mp4") or {}
+    if isinstance(mp4s, dict) and mp4s:
+        # 按清晰度降序取最高清直链
+        for h in sorted((k for k in mp4s.keys() if isinstance(k, (str, int))), key=lambda x: int(x), reverse=True):
+            v = mp4s[h]
+            if isinstance(v, dict) and v.get("url"):
+                stream_url = v["url"]
+                break
+    if not stream_url:
+        hls = ua.get("hls") or {}
+        if isinstance(hls, dict):
+            for h, v in hls.items():
+                if isinstance(v, dict) and v.get("url"):
+                    stream_url = v["url"]
+                    ext = "m3u8"
+                    is_hls = True
+                    break
+    if not stream_url:
+        raise ResolveError("Rumble 解析失败", "未从 Rumble 接口获取到可用视频流。",
+                           category="parse_failed")
+
+    return {
+        "id": vid,
+        "title": title,
+        "duration": data.get("duration"),
+        "thumbnail": (data.get("i") or ""),
+        "webpage_url": url,
+        "extractor_key": "Rumble",
+        "extractor": "rumble",
+        "ext": ext,
+        "url": stream_url,
+        "direct": not is_hls,
+        "protocol": "m3u8_native" if is_hls else "https",
+        "http_headers": {"User-Agent": _RUMBLE_UA, "Referer": "https://rumble.com/"},
+    }
+
 # YouTube（youtube.com / youtu.be）：2025 起对数据中心 IP 强制 bot 检测
 # （"Sign in to confirm you're not a bot"），所有 player_client 轮换无效，
 # 必须带登录态 Cookie 或 PO Token 才能解析。实现自动降级：
@@ -2530,6 +2618,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
         return _douyin_info(url)
+    # Rumble：Cloudflare 反爬 403 拦 yt-dlp，走专用浏览器头接口（embedJS/u3）
+    if "rumble.com" in (host or ""):
+        return _rumble_info(url, cookie)
     if _is_kuaishou_host(host):
         return _kuaishou_info(url)
     # 斗鱼：yt-dlp DouyuTVIE 旧正则失效（room_id 格式已改）+ DouyuShowIE 依赖
@@ -3241,6 +3332,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             if _is_douyin_host(_task_host):
                 # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
                 info = _douyin_info(task.url)
+            elif "rumble.com" in (_task_host or ""):
+                # Rumble：Cloudflare 反爬，专用浏览器头接口解析直链
+                info = _rumble_info(task.url)
             elif _is_kuaishou_host(_task_host):
                 # 快手：同上，VPS 解析出合并 mp4 直链
                 info = _kuaishou_info(task.url)
@@ -3571,6 +3665,16 @@ def _detect_play_url(info: dict[str, Any]) -> tuple[str | None, bool]:
         # 先按是否 H.264 降序（H.264 优先），同编码按 height 降序，同 height 按 tbr 降序
         prog_cands.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
         return prog_cands[0][3], False
+    # 3c) 兜底：无 height 的渐进式直链（BitChute 等 _check_format 只返回 url+filesize，
+    #     没有 height/protocol 字段，会全部漏过上面 3b 的高度分桶）
+    for f in formats:
+        u = f.get("url") or ""
+        if not u:
+            continue
+        proto = (f.get("protocol") or "").split("+")[0].lower()
+        if proto in ("m3u8", "m3u8_native") or _is_hls_url(u):
+            continue
+        return u, False
     return None, False
 
 
@@ -3588,6 +3692,7 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     by_height: dict[int, dict[str, Any]] = {}   # height -> HLS 最佳可播放项
     prog: dict[int, dict[str, Any]] = {}         # height -> 渐进式直链最佳项
     audio: dict[str, Any] | None = None          # 纯音频 HLS（无 height）
+    prog_unknown: dict[str, Any] | None = None   # 无 height 的渐进式直链兜底
     for f in formats:
         u = (f.get("url") or f.get("manifest_url") or "").strip()
         if not u:
@@ -3620,6 +3725,10 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
                 if cur is None or (is_avc1 and not cur_is_avc1) or (is_avc1 == cur_is_avc1 and tbr > cur["tbr"]):
                     item["_vcodec"] = vc  # 保留编码信息供调试
                     prog[height] = item
+            else:
+                # 无 height 直链（BitChute 等）：保留第一个作兜底
+                if prog_unknown is None:
+                    prog_unknown = item
 
     # 合并：同清晰度优先 HLS（自适应更好），无 HLS 才用渐进式直链
     merged: dict[int, tuple[bool, dict[str, Any]]] = {}
@@ -3657,6 +3766,14 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     if not opts and audio:
         opts.append({"key": "audio", "label": audio["note"] or "音频",
                      "url": audio["url"], "format_id": "", "is_hls": True})
+
+    # 无 height 的渐进式直链兜底（BitChute 等 _check_format 只给 url+filesize）
+    if not opts and prog_unknown:
+        _pu_url = prog_unknown["url"]
+        _pu_ext = (Path(urlparse(_pu_url).path).suffix or "").lstrip(".").lower()
+        _pu_label = f"直链 · {_pu_ext.upper()}" if _pu_ext else "直链"
+        opts.append({"key": "direct", "label": _pu_label,
+                     "url": _pu_url, "format_id": "", "is_hls": False})
 
     if not opts:
         du = _detect_direct_url(info)
