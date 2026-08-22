@@ -2366,6 +2366,11 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     except (UnsupportedError, GeoRestrictedError) as exc:
         raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
     except (DownloadError, ExtractorError) as exc:
+        # yt-dlp 2026+ 把 \"Unsupported URL\" 包成 ExtractorError 抛出（而非直接的
+        # UnsupportedError 实例），必须在此短路到 unsupported_platform 友好提示，
+        # 否则会被 2248 `if not info:` 当作未知失败处理。
+        if "unsupported url" in str(exc).lower():
+            raise _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts)) from exc
         _last_err = f"{type(exc).__name__}: {str(exc)[:200]}"
         # 网络类错误（隧道重连窗口/链路抖动）：国内站经反向隧道回源时，本机隧道
         # 端（住宅 IP→Cloudflare）偶发断线，client 5s 后重连。撞上窗口会报
