@@ -16,6 +16,7 @@
 | Vimeo / Dailymotion | vimeo.com / dailymotion.com | 已支持 |
 | Facebook / Instagram | facebook.com / instagram.com | 已支持（部分内容需登录） |
 | Rumble | rumble.com | ⚠️ 数据中心 IP 偶发 403（反爬），可重试/换代理 |
+| Tubi（2026-08-22 新增） | tubitv.com | 免费 AVOD 无 DRM，专用解析已就绪（页面 __data→HLS 直链）；云部署数据中心 IP 被反爬（2.8KB 壳页），配美/加/澳/新/英/墨住宅代理即可打通 |
 | Odysee / BitChute | odysee.com / bitchute.com | ✅ BitChute 2026-08-22 已实测打通（yt-dlp 直连，修复无 height 直链漏选） |
 | VEVO | vevo.com | 音乐 MV（YouTube 托管） |
 | CuriosityStream | curiositystream.com | 免费片段可下，完整需订阅 |
@@ -77,7 +78,7 @@ Criterion Channel · Crave
 
 ## ❌ 第四类：yt-dlp 无 extractor（暂不支持，需自行开发或无法）
 
-DAZN · Tubi · Plex · Kanopy · Popcornflix · The Roku Channel · Criterion Channel ·
+DAZN · Plex · Kanopy · Popcornflix · The Roku Channel · Criterion Channel ·
 My5 · BritBox · Now TV · Movistar+ · iVysilani · Pro TV Plus · Antena Play ·
 Hulu Japan · Watcha · ALTBalaji · YuppTV · Kwai · SnackVideo · more.tv ·
 Claro TV+ · 13Go · ThreeNow · Showmax · beIN CONNECT · Turkcell TV+ · Vudu ·
