@@ -2070,6 +2070,34 @@ def _yangshipin_info(url: str) -> dict[str, Any]:
     }
 
 
+# 1905 电影网（1905.com）：详情页 SSR + 反爬（数据中心 IP 403），
+# 走 VPS Playwright 解析（m1905_resolve.py），返回 vodfile.m1905.com 的 mp4/m3u8 直链。
+def _m1905_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿 1905 真实流，构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("1905", url)
+    video_url = data.get("video_url") or ""
+    duration = data.get("duration")
+    try:
+        if duration is not None:
+            duration = float(duration)
+    except (TypeError, ValueError):
+        duration = None
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "1905电影网",
+        "duration": duration,
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "M1905",
+        "extractor": "1905",
+        "ext": data.get("ext") or "mp4",
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.1905.com/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2373,6 +2401,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 央视频：播放地址需 playvinfo JSONP 签名（cKey），走 VPS Playwright 解析
     if "yangshipin.cn" in (host or ""):
         return _yangshipin_info(url)
+    # 1905 电影网：详情页反爬（数据中心 IP 403），走 VPS Playwright 解析
+    if "1905.com" in (host or ""):
+        return _m1905_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3060,6 +3091,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "yangshipin.cn" in (_task_host or ""):
                 # 央视频：播放地址需 playvinfo JSONP 签名，VPS Playwright 解析
                 info = _yangshipin_info(task.url)
+            elif "1905.com" in (_task_host or ""):
+                # 1905：详情页反爬，VPS Playwright 解析
+                info = _m1905_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)

@@ -34,6 +34,7 @@ from ximalaya_album_resolve import resolve_album as ximalaya_album_resolve  # no
 from iqiyi_resolve import resolve as iqiyi_resolve  # noqa: E402
 from douyu_resolve import resolve as douyu_resolve  # noqa: E402
 from ysp_resolve import resolve as ysp_resolve  # noqa: E402
+from m1905_resolve import resolve as m1905_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -93,6 +94,7 @@ _RESOLVERS = {
     "iqiyi": iqiyi_resolve,
     "douyu": douyu_resolve,
     "yangshipin": ysp_resolve,
+    "1905": m1905_resolve,
 }
 
 
