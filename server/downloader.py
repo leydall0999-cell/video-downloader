@@ -2370,15 +2370,23 @@ def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
     }
     try:
         if _cf_requests is not None:
-            _resp = _cf_requests.get(api, headers=headers, impersonate="chrome", timeout=20)
-            if _resp.status_code != 200:
+            # Cloudflare 偶发限流：重试 2 次，轮换浏览器指纹
+            body = ""
+            _last_status = 0
+            for _attempt in range(3):
+                _imp = ("chrome", "chrome124", "firefox133")[_attempt % 3]
+                _resp = _cf_requests.get(api, headers=headers, impersonate=_imp, timeout=20)
+                if _resp.status_code == 200:
+                    body = _resp.text
+                    break
+                _last_status = _resp.status_code
+            if not body:
                 raise ResolveError(
                     "Rumble 解析失败",
-                    f"Rumble 接口返回 {_resp.status_code}（Cloudflare 反爬或地区限制）。"
+                    f"Rumble 接口返回 {_last_status}（Cloudflare 反爬或地区限制）。"
                     f"建议：①稍后重试；②在「高级选项」设置海外代理后重试。",
                     category="parse_failed",
                 )
-            body = _resp.text
         else:
             req = urllib.request.Request(api, headers=headers)
             body = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
@@ -3797,12 +3805,20 @@ def build_watch_options(info: dict[str, Any]) -> list[dict[str, Any]]:
                      "url": _pu_url, "format_id": "", "is_hls": False})
 
     if not opts:
+        # HLS 源兜底：部分平台只设 info.url 为 m3u8（不填充 formats），
+        # 如 Rumble 的 hls-vod 路径——此时给出「自动（HLS）」观看选项
+        _iu = info.get("url") or ""
+        if _is_hls_url(_iu):
+            opts.append({"key": "auto", "label": "自动（HLS）",
+                         "url": _iu, "format_id": "", "is_hls": True})
+            return opts
         du = _detect_direct_url(info)
         if du:
             # 按真实扩展名标注标签（f4v/flv 直链不该标成 "MP4 直链"）
             _du_ext = (Path(urlparse(du).path).suffix or "").lstrip(".").lower()
             _du_ext = _du_ext or (info.get("ext") or "").lower()
-            _du_label = {"flv": "FLV 直链", "f4v": "FLV 直链", "m3u8": "HLS 直播流"}.get(_du_ext, "直链")
+            _du_label = {"flv": "FLV 直链", "f4v": "FLV 直链",
+                         "m3u8": "HLS 直播流", "mp4": "MP4 直链"}.get(_du_ext, "直链")
             opts.append({"key": _du_ext or "mp4", "label": _du_label,
                          "url": du, "format_id": "", "is_hls": _du_ext == "m3u8"})
     return opts
