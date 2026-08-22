@@ -2935,6 +2935,44 @@ def net_probe(url: str = "https://watch.plex.tv/zh/watch/movie/the-message-1976?
     return out
 
 
+@app.get("/api/plex-diag")
+def plex_diag(url: str = "https://watch.plex.tv/zh/watch/movie/the-message-1976?detailsSource=vod&uri=provider%3A%2F%2Ftv.plex.provider.vod%2Flibrary%2Fmetadata%2F5d9f3563adeb7a0021ce194e") -> dict:
+    """临时诊断：分析 watch.plex.tv 页面的播放流获取机制（GraphQL/REST/__NEXT_DATA__）。"""
+    import requests as _r
+    import re as _re
+    out: dict = {"url": url[:120]}
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        r = _r.get(url, headers=headers, timeout=25)
+        html = r.text
+        out["status"] = r.status_code
+        out["len"] = len(html)
+        # 1) GraphQL / API 端点
+        eps = sorted(set(_re.findall(r'["\'](/api/[^"\']{0,80})["\']', html)))
+        out["api_endpoints"] = eps[:15]
+        # 2) GraphQL query 名称（playback/mediaContainer/stream）
+        qs = sorted(set(_re.findall(r'["\'](?:query|mutation) ([A-Za-z0-9_]+)', html)))
+        out["graphql_ops"] = qs[:20]
+        # 3) __NEXT_DATA__ 大小
+        m = _re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, _re.S)
+        out["has_next_data"] = bool(m)
+        if m:
+            out["next_data_len"] = len(m.group(1))
+        # 4) metadata uri / id
+        ids = sorted(set(_re.findall(r'5d9f3563adeb7a0021ce194e|library/metadata/[0-9a-f]{24}', html)))
+        out["metadata_refs"] = ids[:8]
+        # 5) 播放相关 token/stream 关键词
+        kw = sorted(set(w for w in ("X-Plex-Token", "playbackStreams", "streamUrl", "mediaContainer", "vod.provider.plex.tv", "metaUrl") if w in html))
+        out["plex_keywords"] = kw
+    except Exception as e:  # noqa: BLE001
+        out["err"] = str(e)[:200]
+    return out
+
+
 @app.get("/api/cookie/pull-diag")
 def cookie_pull_diag() -> dict:
     """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
