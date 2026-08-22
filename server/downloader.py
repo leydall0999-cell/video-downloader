@@ -3437,6 +3437,85 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     return options
 
 
+def _ensure_audio_track(output: Path, info: dict[str, Any], task: DownloadTask) -> Path:
+    """成品音轨完整性校验与补救（2026-08-23「部分下载无声」防御）。
+
+    无声两大来源：
+    A. DASH 分离下载（YouTube/B站）合并失败 → 成品只有视频轨，info.formats 有独立音频轨
+    B. HLS MP2 / FLV MP3 等 mp4 容器不支持的音频编码 → remux -c copy 时被 ffmpeg 丢弃
+    补救顺序：A 独立音频轨重新合并 → B 转封装 mkv 保留全轨 → 仍无声则任务日志明确提示。
+    ffprobe/ffmpeg 缺失或补救失败均静默降级，绝不阻塞下载成功态。
+    """
+    def _has_audio(path: Path) -> bool:
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                 "-of", "compact", str(path)],
+                capture_output=True, text=True, timeout=25,
+            )
+            return "codec_type=audio" in (r.stdout or "")
+        except Exception:
+            return True  # ffprobe 不可用/异常不阻塞，跳过校验
+
+    try:
+        if _has_audio(output):
+            return output
+    except Exception:
+        return output
+
+    task.log("检测到成品无音轨，尝试补救…")
+    # —— 补救 A：info 提供独立音频轨（DASH 分离下载合并失败场景）——
+    try:
+        auds = [f for f in (info.get("formats") or []) if isinstance(f, dict)
+                and f.get("acodec") and f["acodec"] != "none" and f.get("url")]
+        if auds:
+            auds.sort(key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
+            au = auds[0]
+            aurl = str(au["url"])
+            headers = au.get("http_headers") or info.get("http_headers") or {}
+            atmp = output.with_name(output.stem + ".aud" + (Path(aurl.split("?")[0]).suffix or ".m4a"))
+            hdr_args: list[str] = []
+            for k, v in (headers or {}).items():
+                hdr_args += ["-H", f"{k}: {v}"]
+            dl = subprocess.run(
+                ["curl", "-s", "-L", "-m", "120"] + hdr_args + ["-o", str(atmp), aurl],
+                capture_output=True, timeout=130,
+            )
+            if atmp.exists() and atmp.stat().st_size > 1024 and _has_audio(atmp):
+                merged = output.with_name(output.stem + ".merged.mp4")
+                rr = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-y", "-i", str(output), "-i", str(atmp),
+                     "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", "-shortest", str(merged)],
+                    capture_output=True, timeout=180,
+                )
+                if merged.exists() and merged.stat().st_size > 1024 and _has_audio(merged):
+                    atmp.unlink(missing_ok=True)
+                    merged.replace(output)
+                    task.log("已重新合并音轨 ✅")
+                    return output
+            atmp.unlink(missing_ok=True)
+    except Exception:
+        logger.debug("音轨补救A失败（独立音频轨合并）", exc_info=True)
+
+    # —— 补救 B：转封装 mkv 保留全轨（mp4 不支持的音频编码场景）——
+    try:
+        mkv = output.with_suffix(".mkv")
+        rr = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(output), "-c", "copy", "-map", "0", str(mkv)],
+            capture_output=True, timeout=120,
+        )
+        if mkv.exists() and mkv.stat().st_size > 1024 and _has_audio(mkv):
+            output.unlink(missing_ok=True)
+            task.log("已转封装 mkv 保留音轨 ✅")
+            return mkv
+        mkv.unlink(missing_ok=True)
+    except Exception:
+        logger.debug("音轨补救B失败（转 mkv）", exc_info=True)
+
+    task.log("⚠️ 该视频源无音轨（或合并失败），文件为无声视频，请尝试其他清晰度")
+    return output
+
+
 def _locate_output(info: dict[str, Any], workdir: Path) -> Path:
     """优先用 yt-dlp 回报的路径，兜底扫描工作目录里最大的成品文件。"""
     for entry in info.get("requested_downloads") or []:
@@ -3853,6 +3932,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     raise
 
             output = _locate_output(info, task.workdir or Path("."))
+            # 无声防御（2026-08-23）：成品音轨校验 + 补救（纯音频任务跳过）
+            if task.quality_key not in (AUDIO_KEY, M4A_KEY):
+                output = _ensure_audio_track(output, info, task)
             _write_sidecar(output, task, info)
     except DownloadPaused:
         task.add_step("下载音视频", "done", "已暂停（可继续下载）")
