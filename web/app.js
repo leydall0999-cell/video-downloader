@@ -1621,7 +1621,8 @@
   };
 
   // 上传单个分片（32MB；小文件=1 片，与整传等效）
-  const ucUploadChunk = (uploadId, index, total, blob) => new Promise((resolve, reject) => {
+  // onProgress(loaded) 让调用方合并 in-flight 字节算总进度，避免「长时间 0%」假卡死
+  const ucUploadChunk = (uploadId, index, total, blob, onProgress) => new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('upload_id', uploadId);
     form.append('index', index);
@@ -1631,6 +1632,11 @@
     xhr.open('POST', '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (ev.lengthComputable) onProgress(ev.loaded);
+      });
+    }
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
       else {
@@ -1655,19 +1661,28 @@
     const uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0;          // 已成功分片的累计字节
     const done = new Set();          // 已成功分片 index（重试去重）
+    const inFlight = new Map();      // 正在上传分片 index → 当前 loaded 字节（合并算进度，避免「长时间 0%」）
     const t0 = performance.now();
     let lastRender = 0, lastBytes = 0, lastT = t0;
 
+    // 计算总已上传字节 = 已完成分片 + 所有 in-flight 分片当前 loaded
+    const totalUploaded = () => {
+      let t = uploadedBytes;
+      for (const v of inFlight.values()) t += v;
+      return t;
+    };
+
     const updateProgress = () => {
       const now = performance.now();
+      const tot = totalUploaded();
       const dt = (now - lastT) / 1000;
       if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度
-        item.speedText = ucFormatSpeed((uploadedBytes - lastBytes) / dt);
-        lastBytes = uploadedBytes;
+        item.speedText = ucFormatSpeed((tot - lastBytes) / dt);
+        lastBytes = tot;
         lastT = now;
       }
-      item.uploadedText = `${ucFormatSize(uploadedBytes)} / ${ucFormatSize(file.size)}`;
-      item.progress = Math.round(uploadedBytes / file.size * 30);
+      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
+      item.progress = Math.round(tot / file.size * 30);
       if (now - lastRender > 150) {  // 节流渲染，避免每片刷屏
         lastRender = now;
         renderUcList();
@@ -1687,7 +1702,10 @@
         let attempts = 0;
         for (;;) {
           try {
-            await ucUploadChunk(uploadId, i, totalChunks, blob);
+            await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => {
+              inFlight.set(i, loaded);  // 单片实时进度反馈
+              updateProgress();
+            });
             break;
           } catch (e) {
             attempts++;
@@ -1701,6 +1719,7 @@
             }
           }
         }
+        inFlight.delete(i);
         if (!done.has(i)) { done.add(i); uploadedBytes += (end - start); }
         updateProgress();
       }
