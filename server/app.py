@@ -2999,27 +2999,30 @@ def plex_token_test(metadata_id: str = "5d9f3563adeb7a0021ce194e") -> dict:
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    # 1) 匿名注册拿 token
-    try:
-        reg = _r.post(
-            "https://watch.plex.tv/api/v2/user/register",
-            headers=headers,
-            json={"clientIdentifier": str(_uuid.uuid4()), "service": "watch.plex.tv"},
-            timeout=20,
-        )
-        out["register_status"] = reg.status_code
-        try:
-            reg_data = reg.json()
-            out["authToken"] = (reg_data.get("authToken") or "")[:20] + "..." if reg_data.get("authToken") else None
-            out["register_keys"] = list(reg_data.keys())[:10]
-        except Exception:
-            out["register_raw"] = reg.text[:200]
-    except Exception as e:  # noqa: BLE001
-        out["register_err"] = str(e)[:200]
-
+    # 1) 匿名注册拿 token（试多个端点）
     token = ""
-    if out.get("authToken"):
-        token = reg_data.get("authToken")
+    reg_attempts = [
+        ("plex.tv", "https://plex.tv/api/v2/user/register",
+         {"clientIdentifier": str(_uuid.uuid4()), "service": "plex.tv", "authenticationMethod": "anonymous"}),
+        ("watch.plex.tv", "https://watch.plex.tv/api/v2/user/register",
+         {"clientIdentifier": str(_uuid.uuid4()), "service": "watch.plex.tv"}),
+    ]
+    for label, reg_url, reg_body in reg_attempts:
+        try:
+            reg = _r.post(reg_url, headers=headers, json=reg_body, timeout=20)
+            out[f"register_{label}_status"] = reg.status_code
+            try:
+                reg_data = reg.json()
+                tk = reg_data.get("authToken") or (reg_data.get("data") or {}).get("authToken")
+                out[f"register_{label}_keys"] = list(reg_data.keys())[:8]
+                if tk:
+                    out["authToken"] = tk[:24] + "..."
+                    token = tk
+                    break
+            except Exception:
+                out[f"register_{label}_raw"] = reg.text[:120]
+        except Exception as e:  # noqa: BLE001
+            out[f"register_{label}_err"] = str(e)[:150]
 
     # 2) 用 token 拿 metadata
     if token:
