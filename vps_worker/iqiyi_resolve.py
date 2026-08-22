@@ -190,16 +190,17 @@ def resolve(url, timeout=60):
             # 否则爱奇艺反爬会把首次直访 share URL 的请求跳到 video/error.html
             # （实测：iQIYI 自有 Playwright 检测会拒绝未建立会话的 share 访问）
             try:
-                page.goto("https://www.iqiyi.com/", wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(5000)
+                page.goto("https://www.iqiyi.com/", wait_until="domcontentloaded", timeout=15000)
+                page.wait_for_timeout(2000)
             except Exception:
                 pass  # 主页失败不影响后续，best-effort
 
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.goto(url, wait_until="domcontentloaded", timeout=25000)
 
-            # 等 m3u8/f4v 请求 + 真实标题（最多 50s，分享页 JS 解析较慢）
+            # 等 m3u8/f4v 请求 + 真实标题（最多 32s：Railway 对 iqiyi 限时 90s，
+            # 需预留隧道/浏览器启动开销；实测 f4v 请求在页面加载后 ~15-25s 内发出）
             title = ""
-            deadline = time.time() + 50
+            deadline = time.time() + 32
             while time.time() < deadline:
                 if not caught and not caught_f4v:
                     try:
