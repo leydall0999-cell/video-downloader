@@ -2691,6 +2691,14 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
         return _douyin_info(url)
+    # DAZN：认证墙 + Widevine DRM + 地区封锁（2026-08-22 深度评估），明确提示
+    if "dazn.com" in (host or ""):
+        raise ResolveError(
+            "DAZN 暂不支持解析",
+            "DAZN 为付费体育流媒体：①内容受 Widevine DRM 保护（合规不破解）；"
+            "②需 DAZN 支持地区的住宅网络与账号（中国 IP / 数据中心 IP 均被 403 地区封锁）。"
+            "免费内容同样走认证+DRM 管线。建议使用已支持的平台或 DAZN 官方离线功能。",
+        )
     # Rumble：Cloudflare 反爬 403 拦 yt-dlp，走专用浏览器头接口（embedJS/u3）
     if "rumble.com" in (host or ""):
         return _rumble_info(url, cookie)
@@ -3405,6 +3413,13 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             if _is_douyin_host(_task_host):
                 # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
                 info = _douyin_info(task.url)
+            elif "dazn.com" in (_task_host or ""):
+                # DAZN：DRM+地区封锁，明确提示（与 probe 一致）
+                raise ResolveError(
+                    "DAZN 暂不支持解析",
+                    "DAZN 为付费体育流媒体：内容受 Widevine DRM 保护（合规不破解），"
+                    "且中国 IP / 数据中心 IP 均被 403 地区封锁。",
+                )
             elif "rumble.com" in (_task_host or ""):
                 # Rumble：Cloudflare 反爬，专用浏览器头接口解析直链
                 info = _rumble_info(task.url)

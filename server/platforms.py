@@ -167,6 +167,12 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("zee5", "ZEE5", ("zee5.com",), "🇮🇳"),
     Platform("tvnz", "TVNZ+", ("tvnz.co.nz",), "🇳🇿"),
     Platform("ctv", "CTV", ("ctv.ca",), "🇨🇦"),
+    # DAZN：全球体育流媒体。2026-08-22 深度评估：认证墙
+    # （authentication-prod.ar.indazn.com/v1/authenticate）+ DASH(.mpd) +
+    # Widevine DRM；VPS 中国 IP 与数据中心 IP 均 403 地区封锁 → VPS worker
+    # 不可行；合规上不破解 Widevine。加入白名单仅为识别平台名，解析返回
+    # 明确提示（需 DAZN 支持地区的网络 + 账号；免费内容同样走 DRM 管线）。
+    Platform("dazn", "DAZN", ("dazn.com",), "🥊"),
 )
 
 # 明显不是视频站点的域名，直接拦截并给出提示，避免无谓地请求 yt-dlp。
