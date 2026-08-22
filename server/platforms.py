@@ -173,6 +173,11 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     # 不可行；合规上不破解 Widevine。加入白名单仅为识别平台名，解析返回
     # 明确提示（需 DAZN 支持地区的网络 + 账号；免费内容同样走 DRM 管线）。
     Platform("dazn", "DAZN", ("dazn.com",), "🥊"),
+    # Tubi：免费 AVOD（广告支持，无 DRM）。数据中心 IP 返回反爬壳页
+    # （无 window.__data，2026-08-22 实测 len=2.8KB 无 title）；VPS 中国 IP
+    # 302 gdpr 墙。_tubi_info 已实现完整解析（页面 __data → dash/hls manifest，
+    # 优先 HLS 直链），配 Tubi 支持地区（美/加/澳/新/英/墨等）住宅代理即可用。
+    Platform("tubi", "Tubi", ("tubitv.com",), "🦊"),
 )
 
 # 明显不是视频站点的域名，直接拦截并给出提示，避免无谓地请求 yt-dlp。

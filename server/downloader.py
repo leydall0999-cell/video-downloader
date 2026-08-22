@@ -2506,7 +2506,7 @@ _TUBI_UA = (
 )
 
 
-def _tubi_info(url: str, cookie: str = "") -> dict[str, Any]:
+def _tubi_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     import json as _json
 
     m = re.search(r"tubitv\.com/(?:[a-z]{2}-[a-z]{2}/)?(video|movies|tv-shows)/(\d+)", url)
@@ -2520,13 +2520,23 @@ def _tubi_info(url: str, cookie: str = "") -> dict[str, Any]:
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        req = urllib.request.Request(page_url, headers=headers)
-        html = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
+        # 支持代理（Tubi 需美/加/澳/新/英/墨等住宅 IP；数据中心 IP 返回反爬壳页）
+        if proxy:
+            _handler = urllib.request.ProxyHandler({
+                "http": proxy if proxy.startswith("http") else f"http://{proxy}",
+                "https": proxy if proxy.startswith("http") else f"http://{proxy}",
+            })
+            _opener = urllib.request.build_opener(_handler)
+            req = urllib.request.Request(page_url, headers=headers)
+            html = _opener.open(req, timeout=30).read().decode("utf-8", "replace")
+        else:
+            req = urllib.request.Request(page_url, headers=headers)
+            html = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         raise ResolveError(
             "Tubi 解析失败",
             f"Tubi 页面返回 {e.code}（地区限制或反爬）。建议：①稍后重试；"
-            f"②在「高级选项」设置美国等 Tubi 支持地区的代理。",
+            f"②在「高级选项」设置美国/加拿大等 Tubi 支持地区的代理。",
             category="parse_failed",
         ) from None
     except Exception as e:
@@ -2622,14 +2632,11 @@ def _tubi_info(url: str, cookie: str = "") -> dict[str, Any]:
     stream_url = hls_url
     is_hls = bool(hls_url)
     if not stream_url:
-        _title_m = re.search(r"<title>([^<]*)</title>", html)
-        _page_title = _title_m.group(1).strip()[:60] if _title_m else "(无 title)"
         raise ResolveError(
             "Tubi 解析失败",
-            f"未找到可用的视频流（页面特征: {', '.join(_feat) or '正常但无 manifest'}；"
-            f"len={len(html)} title={_page_title}）。"
-            f"Railway 数据中心 IP 可能不在 Tubi 支持地区（美/加/澳/新/英/墨等）或触发反爬。"
-            f"建议在「高级选项」设置 Tubi 支持地区的代理后重试。",
+            f"未找到可用的视频流（页面特征: {', '.join(_feat) or '正常但无 manifest'}）。"
+            f"当前网络出口（数据中心 IP）可能不在 Tubi 支持地区（美/加/澳/新/英/墨等）"
+            f"或触发反爬。建议在「高级选项」设置 Tubi 支持地区的住宅代理后重试。",
             category="parse_failed",
         )
 
@@ -2856,7 +2863,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         return _rumble_info(url, cookie)
     # Tubi：免费 AVOD 无 DRM，yt-dlp 提取器在数据中心 IP 偶发失败，专用页面解析
     if "tubitv.com" in (host or ""):
-        return _tubi_info(url, cookie)
+        return _tubi_info(url, cookie, proxy)
     if _is_kuaishou_host(host):
         return _kuaishou_info(url)
     # 斗鱼：yt-dlp DouyuTVIE 旧正则失效（room_id 格式已改）+ DouyuShowIE 依赖
@@ -3579,8 +3586,8 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 # Rumble：Cloudflare 反爬，专用浏览器头接口解析直链
                 info = _rumble_info(task.url)
             elif "tubitv.com" in (_task_host or ""):
-                # Tubi：免费 AVOD，专用页面解析 HLS 直链
-                info = _tubi_info(task.url)
+                # Tubi：免费 AVOD，专用页面解析 HLS 直链（支持住宅代理）
+                info = _tubi_info(task.url, "", effective_proxy)
             elif _is_kuaishou_host(_task_host):
                 # 快手：同上，VPS 解析出合并 mp4 直链
                 info = _kuaishou_info(task.url)
