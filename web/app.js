@@ -1612,6 +1612,8 @@
     form.append('to_library', item.toLibrary ? 'true' : 'false');
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-convert');
+    // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
+    xhr.setRequestHeader('X-Device-Id', deviceId());
     xhr.upload.addEventListener('progress', (ev) => {
       if (ev.lengthComputable) {
         // 上传阶段最多占 30%，转码从 30% 开始累加

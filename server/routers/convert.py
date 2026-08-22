@@ -121,6 +121,7 @@ def create_upload_convert(
             "filename": out_path.name,
             "to_library": to_library,
             "library_id": "",
+            "device_id": _device_of(request),   # 设备隔离：上传转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
                         resolution, bitrate, audio, rotate, remux, src_is_temp=True)
