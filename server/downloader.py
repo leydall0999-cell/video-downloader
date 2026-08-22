@@ -3370,6 +3370,13 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
         options["merge_output_format"] = "webm"
     else:
         options["merge_output_format"] = "mp4"
+        # 视频 remux 兜底：HLS 原生下载器可能产出 .m3u8/TS 容器（bestv/inke 等
+        # 直链 m3u8 平台），flv/f4v 直链同理——统一 ffmpeg -c copy 快速封装成
+        # mp4，避免用户拿到扩展名/容器错乱的文件（单文件场景 FFmpegMergerPP
+        # 不触发，必须有此 remux 处理器）。
+        options.setdefault("postprocessors", []).append(
+            {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}
+        )
     return options
 
 
@@ -3554,6 +3561,19 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     _dl_opts: dict = {}
     try:
         _dl_opts = _download_options(task, quality_key, reporter, cookie=cookie, proxy=proxy, format_id=format_id, concurrent_fragments=concurrent_fragments, downloader_type=downloader_type, resume=resume)
+        # YouTube 免 Cookie 路径：下载阶段也注入 PO Token 上下文——process_info
+        # 对部分格式会重新取 URL，无 pot 的请求在数据中心 IP 下被 CDN 403
+        # （实测 YouTube 无 Cookie 下载卡 29.93% 后 403）。与解析阶段保持一致会话。
+        _task_host = _host_of(task.url)
+        if _task_host and _is_youtube_host(_task_host) and not (cookie or "").strip():
+            try:
+                _yd_vd = _fetch_youtube_visitor_data(effective_proxy)
+                if _yd_vd:
+                    _ya = _dl_opts.setdefault("extractor_args", {}).setdefault("youtube", {})
+                    _ya.setdefault("visitor_data", [_yd_vd])
+                    _ya["fetch_pot"] = ["always"]
+            except Exception:
+                logger.debug("YouTube 下载前获取 visitor_data 失败", exc_info=True)
         # B站 经国内代理回源时，yt-dlp 原生 urllib 读取页面偶发 IncompleteRead；
         # 用 requests 预下载视频页 HTML 并注入 extractor，提高连接稳定性。
         _task_host = _host_of(task.url)
@@ -3659,12 +3679,14 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             # 已有的 protocol（不重新看 URL）→ 用 HttpFD 把 HLS 播放清单文本当文件
             # 下载。统一按 URL 修正为 m3u8_native（走 HLS 下载器分段拉流出 mp4，
             # 与 _iqiyi_info 的成熟路径一致）。
+            # ⚠️ ext 保持 mp4（勿改成 m3u8）：否则 outtmpl 产出 .m3u8 扩展名的文件
+            # （内容实为 TS 流），用户拿到 .m3u8 会误以为下载失败。
             if _is_hls_url(info.get("url") or ""):
                 _proto = (info.get("protocol") or "").split("+")[0].lower()
                 if _proto in ("http", "https", ""):
                     info["protocol"] = "m3u8_native"
-                    if not info.get("ext") or info["ext"] == "mp4":
-                        info["ext"] = "m3u8"
+                    if not info.get("ext") or info["ext"] in ("mp4", "m3u8"):
+                        info["ext"] = "mp4"
 
             # 阶段 2：真正开始下载；先把状态置为 downloading，看门狗才能生效
             task.add_step("下载音视频", "running", f"已选清晰度：{task.quality}")
