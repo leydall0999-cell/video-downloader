@@ -1527,7 +1527,8 @@
     const list = ucState.list;
     el.ucCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
     el.ucClearBtn.hidden = list.length === 0;
-    el.ucBulk.hidden = list.length === 0;
+    // 批量参数区常显：允许在添加文件前先设好转换条件（2026-08-23）
+    el.ucStartAllBtn.hidden = true; // 已自动开始，按钮不再需要
     el.ucStartAllBtn.disabled = !list.some(it => it.status === 'pending');
     // 批量「默认输出格式」下拉与每行下拉同步（含新增格式）
     if (el.ucBulkTarget) {
@@ -1596,6 +1597,10 @@
       });
     });
     renderUcList();
+    // 2026-08-23 自动开始：添加文件即自动排队上传（受并发限制），无需手动点「开始转码」，
+    // 上传完成自动提交转码；排队中的项仍可改批量参数并「应用到未开始」。
+    el.ucStatus.textContent = `已添加 ${ucState.list.length} 个文件，自动开始上传转码…`;
+    ucPump();
   };
 
   const ucRemoveItem = (id) => {
