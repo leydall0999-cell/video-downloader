@@ -2981,6 +2981,17 @@ def plex_diag(url: str = "https://watch.plex.tv/zh/watch/movie/the-message-1976?
         out["has_playbackStreams"] = "playbackStreams" in all_js
         out["has_streamUrl"] = "streamUrl" in all_js
         out["has_graphql"] = "api/graphql" in all_js
+        # 所有 plex.tv / provider.plex.tv API 端点
+        api_all = set()
+        for pat in (r'["\'](https?://[a-z0-9.-]*plex\.tv[^"\']{0,80})["\']',
+                    r'["\'](/api/v[0-9][^"\']{0,80})["\']',
+                    r'["\'](/playback[^"\']{0,60})["\']'):
+            for m in _re2.finditer(pat, all_js):
+                api_all.add(m.group(1))
+        out["all_api_endpoints"] = sorted(api_all)[:40]
+        # 播放相关 header（X-Plex-）
+        hdrs = sorted(set(_re2.findall(r'["\'](X-Plex-[A-Za-z-]+)["\']', all_js)))
+        out["plex_headers"] = hdrs[:15]
     except Exception as e:  # noqa: BLE001
         out["err"] = str(e)[:200]
     return out
