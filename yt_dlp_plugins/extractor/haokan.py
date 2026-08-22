@@ -78,10 +78,11 @@ class HaokanIE(InfoExtractor):
                 "url": u,
                 "format_id": f"hk-{i}",
                 "ext": "mp4",
-                "format_note": item.get("clarity") or "",
+                "format_note": item.get("title") or item.get("key") or "",
+                "vcodec": "h264",
             }
-            # clarity 字段可能是 360p/720p/1080p 或 cae_h264 等
-            note = str(item.get("clarity") or "")
+            # title 形如「标清 360P」「高清 480P」「超清 720P」「蓝光 1080P」
+            note = str(item.get("title") or "")
             m_h = re.search(r"(\d{3,4})[pP]", note)
             if m_h:
                 fmt["height"] = int(m_h.group(1))
