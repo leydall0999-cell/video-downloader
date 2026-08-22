@@ -1788,6 +1788,7 @@
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/upload-chunk/finish');
         xhr.setRequestHeader('X-Device-Id', deviceId());
+        xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
         xhr.addEventListener('load', () => {
           try {
             const data = JSON.parse(xhr.responseText || '{}');
@@ -1806,17 +1807,25 @@
               reject(new Error(item.errorMsg));
             }
           } catch (e) {
+            // responseText 非 JSON（HTML 错误页/空响应/被代理截断）—— 通常是 Cloudflare↔Railway 链路抖动，
+            // 提示用户重新上传（finish 是合并+提交转码一次性操作，无法重试，只能重传）
             item.status = 'failed';
-            item.errorMsg = '响应解析失败';
+            item.errorMsg = '服务器响应中断（可能是网络/代理超时），请重新上传文件';
             renderUcList();
             reject(e);
           }
         });
         xhr.addEventListener('error', () => {
           item.status = 'failed';
-          item.errorMsg = '网络错误';
+          item.errorMsg = '网络错误（请重新上传文件）';
           renderUcList();
           reject(new Error('network'));
+        });
+        xhr.addEventListener('timeout', () => {
+          item.status = 'failed';
+          item.errorMsg = '上传完成但响应超时（请重新上传文件）';
+          renderUcList();
+          reject(new Error('finish timeout'));
         });
         xhr.send(form);
       } catch (e) {
