@@ -2495,6 +2495,132 @@ def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
         "http_headers": {"User-Agent": _RUMBLE_UA, "Referer": "https://rumble.com/"},
     }
 
+
+# Tubi（tubitv.com）：免费 AVOD（广告支持），内容无 DRM。yt-dlp TubiTvIE 在
+# 数据中心 IP 偶发失败（页面 window.__data 提取不到，可能是反爬页或 GDPR 页）。
+# 专用解析：抓视频页 → 提取 window.__data 的 video_resources（dash/hlsv3/hlsv6
+# manifest，无 DRM）→ 优先 HLS m3u8（适配 VDL 直链模式），失败时带页面特征诊断。
+_TUBI_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def _tubi_info(url: str, cookie: str = "") -> dict[str, Any]:
+    import json as _json
+
+    m = re.search(r"tubitv\.com/(?:[a-z]{2}-[a-z]{2}/)?(video|movies|tv-shows)/(\d+)", url)
+    if not m:
+        raise ResolveError("Tubi 解析失败", "无法识别 Tubi 视频 ID。", category="parse_failed")
+    vtype, vid = m.group(1), m.group(2)
+    page_url = f"https://tubitv.com/{vtype}/{vid}/"
+    headers = {
+        "User-Agent": _TUBI_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        req = urllib.request.Request(page_url, headers=headers)
+        html = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise ResolveError(
+            "Tubi 解析失败",
+            f"Tubi 页面返回 {e.code}（地区限制或反爬）。建议：①稍后重试；"
+            f"②在「高级选项」设置美国等 Tubi 支持地区的代理。",
+            category="parse_failed",
+        ) from None
+    except Exception as e:
+        raise ResolveError("Tubi 解析失败", f"访问 Tubi 页面失败：{e}", category="parse_failed") from None
+
+    # 诊断特征（页面被反爬/GDPR 时 hint 会带出）
+    _feat = []
+    if "window.__data" not in html:
+        _feat.append("no-__data")
+    low = html.lower()
+    for _k in ("gdpr", "captcha", "robot", "access denied", "just a moment"):
+        if _k in low:
+            _feat.append(_k)
+
+    # 提取 window.__data 的 video_resources（dash/hlsv3/hlsv6 manifest，均无 DRM）
+    dash_url = hls_url = ""
+    _m2 = re.search(r"window\.__data\s*=\s*(\{)", html)
+    if _m2:
+        _start = _m2.start(1)
+        _depth = 0
+        _i = _start
+        while _i < len(html):
+            if html[_i] == "{":
+                _depth += 1
+            elif html[_i] == "}":
+                _depth -= 1
+                if _depth == 0:
+                    break
+            _i += 1
+        if _i < len(html):
+            _raw = html[_start:_i + 1]
+            # 简化 js_to_json：key 补引号 + 单引号转双引号 + undefined→null
+            try:
+                _raw2 = _json.loads(_raw)
+            except Exception:
+                try:
+                    _fixed = re.sub(r"([{,])\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*:", r'\1"\2":', _raw)
+                    _fixed = re.sub(r":\s*'((?:[^'\\]|\\.)*)'", r':"\1"', _fixed)
+                    _fixed = _fixed.replace("undefined", "null").replace("NaN", "null")
+                    _raw2 = _json.loads(_fixed)
+                except Exception:
+                    _raw2 = None
+            if isinstance(_raw2, dict):
+                _vd = ((_raw2.get("video") or {}).get("byId") or {}).get(vid) or {}
+                for _res in _vd.get("video_resources") or []:
+                    _u = (_res.get("manifest") or {}).get("url") or ""
+                    if not _u:
+                        continue
+                    if _u.startswith("//"):
+                        _u = "https:" + _u
+                    _t = (_res.get("type") or "").lower()
+                    if _t == "dash" and not dash_url:
+                        dash_url = _u
+                    elif _t in ("hlsv3", "hlsv6") and not hls_url:
+                        hls_url = _u
+                _title = _vd.get("title") or ""
+    if not dash_url and not hls_url:
+        # 兜底：正则直接抓 manifest URL
+        for _mm in re.finditer(r'"manifest"\s*:\s*\{[^}]*?"url"\s*:\s*"([^"]+)"[^}]*?"type"\s*:\s*"([a-z0-9]+)"', html):
+            _u = _mm.group(1)
+            if _u.startswith("//"):
+                _u = "https:" + _u
+            _t = _mm.group(2).lower()
+            if _t == "dash" and not dash_url:
+                dash_url = _u
+            elif _t in ("hlsv3", "hlsv6") and not hls_url:
+                hls_url = _u
+
+    # 优先 HLS（m3u8，VDL 直链可播放可下载）；无 HLS 时 DASH 仅提示（MPD 需 DASH 下载器）
+    stream_url = hls_url
+    is_hls = bool(hls_url)
+    if not stream_url:
+        raise ResolveError(
+            "Tubi 解析失败",
+            f"未找到可用的视频流（页面特征: {', '.join(_feat) or '正常但无 manifest'}）。"
+            f"{'该内容可能仅提供 DASH(MPD) 流，暂不支持。' if dash_url else ''}"
+            f"建议稍后重试或在「高级选项」设置代理。",
+            category="parse_failed",
+        )
+
+    return {
+        "id": vid,
+        "title": _title or "Tubi 视频",
+        "duration": None,
+        "webpage_url": url,
+        "extractor_key": "TubiTv",
+        "extractor": "tubitv",
+        "ext": "m3u8" if is_hls else "mpd",
+        "url": stream_url,
+        "direct": True,
+        "protocol": "m3u8_native" if is_hls else "https",
+        "http_headers": {"User-Agent": _TUBI_UA, "Referer": "https://tubitv.com/"},
+    }
+
 # YouTube（youtube.com / youtu.be）：2025 起对数据中心 IP 强制 bot 检测
 # （"Sign in to confirm you're not a bot"），所有 player_client 轮换无效，
 # 必须带登录态 Cookie 或 PO Token 才能解析。实现自动降级：
@@ -2702,6 +2828,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # Rumble：Cloudflare 反爬 403 拦 yt-dlp，走专用浏览器头接口（embedJS/u3）
     if "rumble.com" in (host or ""):
         return _rumble_info(url, cookie)
+    # Tubi：免费 AVOD 无 DRM，yt-dlp 提取器在数据中心 IP 偶发失败，专用页面解析
+    if "tubitv.com" in (host or ""):
+        return _tubi_info(url, cookie)
     if _is_kuaishou_host(host):
         return _kuaishou_info(url)
     # 斗鱼：yt-dlp DouyuTVIE 旧正则失效（room_id 格式已改）+ DouyuShowIE 依赖
@@ -3423,6 +3552,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "rumble.com" in (_task_host or ""):
                 # Rumble：Cloudflare 反爬，专用浏览器头接口解析直链
                 info = _rumble_info(task.url)
+            elif "tubitv.com" in (_task_host or ""):
+                # Tubi：免费 AVOD，专用页面解析 HLS 直链
+                info = _tubi_info(task.url)
             elif _is_kuaishou_host(_task_host):
                 # 快手：同上，VPS 解析出合并 mp4 直链
                 info = _kuaishou_info(task.url)
