@@ -3743,10 +3743,17 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     # （数据中心 IP）。不同 player_client 的下载 URL 形态不同
                     # （ios/tv 多为 HLS、android 直连 mp4），对云 IP 的限制策略
                     # 也不同——client × format 矩阵轮换，直到找到可下载的组合。
-                    _yt_clients = ["tv_embedded", "ios", "android", "tv", "web_safari"]
+                    # 顺序优化：tv_embedded 下载实测必 403，放最后；HLS 形态的
+                    # ios/tv 对云 IP 限制最松，优先尝试（实测 2 视频均在此区间成功）。
+                    _yt_clients = ["ios", "tv", "android", "web_safari", "tv_embedded"]
                     _done = False
                     for _client in _yt_clients:
+                        if task.cancel_requested:
+                            task.log("用户取消下载，停止 YouTube 降级尝试")
+                            break
                         for _chain in _fallback_chains:
+                            if task.cancel_requested:
+                                break
                             try:
                                 _fb_opts = dict(_fb_base)
                                 _fb_opts["format"] = _chain
