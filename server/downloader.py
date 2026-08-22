@@ -2046,10 +2046,17 @@ def _yangshipin_info(url: str) -> dict[str, Any]:
     """调 VPS worker 拿央视频真实流（签名 mp4），构造成 yt-dlp 兼容的 info dict。"""
     data = _call_vps_worker("yangshipin", url)
     video_url = data.get("video_url") or ""
+    # worker 返回的 duration 可能是字符串（"2504.2722"），转 float 兼容
+    duration = data.get("duration")
+    try:
+        if duration is not None:
+            duration = float(duration)
+    except (TypeError, ValueError):
+        duration = None
     return {
         "id": data.get("video_id") or "",
         "title": data.get("title") or "央视频",
-        "duration": data.get("duration"),
+        "duration": duration,
         "thumbnail": data.get("thumbnail") or "",
         "webpage_url": data.get("webpage_url") or url,
         "extractor_key": "Yangshipin",
