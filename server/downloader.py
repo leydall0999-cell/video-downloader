@@ -2391,24 +2391,36 @@ def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
             )
         return body
 
-    # 关键：v{短id} 与真实 embed id 未必相同，embedJS 用错 id 会返回随机视频。
-    # RumbleIE 的做法是从视频页提取 Rumble("play",{video:"xxx"}) 的 embed id。
-    # 页面同样被 Cloudflare 保护，走 curl_cffi 指纹抓取。
-    embed_id = ""
+    # 关键：v{短id} 与 embedJS 的真实 embed id 未必相同，embedJS 用错 id 会返回
+    # 随机/推荐视频（实测同一 URL 三次返回三个不同视频，均为无效 id 的兜底响应）。
+    # 对齐 RumbleIE 做法：先抓视频页提取 Rumble("play",{video:"xxx"}) 的 embed id，
+    # 提取不到就明确报错（绝不退回短 id 请求 embedJS）。
     try:
         _page_html = _cf_fetch(url)
-        _m = re.search(
-            r'Rumble\(\s*"play"\s*,\s*{[^}]*?\bvideo\b\s*:\s*["\']([0-9a-z]+)["\']',
-            _page_html,
+    except ResolveError:
+        raise
+    except Exception as e:
+        raise ResolveError(
+            "Rumble 解析失败",
+            f"无法抓取 Rumble 视频页（{type(e).__name__}），可能是 Cloudflare 反爬。"
+            f"建议：①稍后重试；②在「高级选项」设置海外代理后重试。",
+            category="parse_failed",
+        ) from None
+    _m = re.search(
+        r'Rumble\(\s*"play"\s*,\s*{[^}]*?\bvideo\b\s*:\s*["\']([0-9a-z]+)["\']',
+        _page_html,
+    )
+    if not _m:
+        _m = re.search(r"rumble\.com/embed/([0-9a-z]+)", _page_html)
+    embed_id = _m.group(1) if _m else ""
+    if not embed_id:
+        raise ResolveError(
+            "Rumble 解析失败",
+            "视频页已加载但未找到播放器配置（页面结构可能变化）。请反馈该链接。",
+            category="parse_failed",
         )
-        if not _m:
-            _m = re.search(r"rumble\.com/embed/([0-9a-z]+)", _page_html)
-        embed_id = _m.group(1) if _m else ""
-    except Exception:
-        pass  # 页面抓取失败时退回 URL 短 id
 
-    api_vid = embed_id or vid
-    api = f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={api_vid}"
+    api = f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={embed_id}"
     try:
         body = _cf_fetch(api)
     except ResolveError:
