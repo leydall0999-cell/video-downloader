@@ -2951,23 +2951,36 @@ def plex_diag(url: str = "https://watch.plex.tv/zh/watch/movie/the-message-1976?
         html = r.text
         out["status"] = r.status_code
         out["len"] = len(html)
-        # 1) GraphQL / API 端点
-        eps = sorted(set(_re.findall(r'["\'](/api/[^"\']{0,80})["\']', html)))
-        out["api_endpoints"] = eps[:15]
-        # 2) GraphQL query 名称（playback/mediaContainer/stream）
-        qs = sorted(set(_re.findall(r'["\'](?:query|mutation) ([A-Za-z0-9_]+)', html)))
-        out["graphql_ops"] = qs[:20]
-        # 3) __NEXT_DATA__ 大小
-        m = _re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, _re.S)
-        out["has_next_data"] = bool(m)
-        if m:
-            out["next_data_len"] = len(m.group(1))
-        # 4) metadata uri / id
-        ids = sorted(set(_re.findall(r'5d9f3563adeb7a0021ce194e|library/metadata/[0-9a-f]{24}', html)))
-        out["metadata_refs"] = ids[:8]
-        # 5) 播放相关 token/stream 关键词
-        kw = sorted(set(w for w in ("X-Plex-Token", "playbackStreams", "streamUrl", "mediaContainer", "vod.provider.plex.tv", "metaUrl") if w in html))
-        out["plex_keywords"] = kw
+        # 抓 JS chunk 引用（_next/static/chunks/...js），下载最大的几个分析 API 调用
+        import re as _re2
+        chunks = sorted(set(_re2.findall(r'src="(/_next/static/chunks/[^"]+\.js)"', html)))
+        out["chunk_count"] = len(chunks)
+        base = url.split("/zh/")[0]
+        gql_ops = set()
+        api_eps = set()
+        for c in chunks[:12]:
+            try:
+                cjs = _r.get(base + c, headers=headers, timeout=15).text
+            except Exception:
+                continue
+            for m in _re2.finditer(r'["\'](?:query|mutation) ([A-Za-z0-9_]+)', cjs):
+                gql_ops.add(m.group(1))
+            for m in _re2.finditer(r'["\'](/api/[A-Za-z0-9_./-]{3,60})["\']', cjs):
+                api_eps.add(m.group(1))
+            for m in _re2.finditer(r'["\'](https?://[a-z0-9.-]*plex\.tv[^"\']{0,60})["\']', cjs):
+                api_eps.add(m.group(1))
+        out["graphql_ops"] = sorted(gql_ops)[:25]
+        out["api_endpoints"] = sorted(api_eps)[:25]
+        # 播放流相关关键词
+        all_js = ""
+        for c in chunks[:12]:
+            try:
+                all_js += _r.get(base + c, headers=headers, timeout=15).text
+            except Exception:
+                continue
+        out["has_playbackStreams"] = "playbackStreams" in all_js
+        out["has_streamUrl"] = "streamUrl" in all_js
+        out["has_graphql"] = "api/graphql" in all_js
     except Exception as e:  # noqa: BLE001
         out["err"] = str(e)[:200]
     return out
