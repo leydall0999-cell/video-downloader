@@ -37,6 +37,7 @@ from ysp_resolve import resolve as ysp_resolve  # noqa: E402
 from m1905_resolve import resolve as m1905_resolve  # noqa: E402
 from fun_resolve import resolve as fun_resolve  # noqa: E402
 from bestv_resolve import resolve as bestv_resolve  # noqa: E402
+from hongguo_resolve import resolve as hongguo_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -99,6 +100,7 @@ _RESOLVERS = {
     "1905": m1905_resolve,
     "funshion": fun_resolve,
     "bestv": bestv_resolve,
+    "hongguo": hongguo_resolve,
 }
 
 

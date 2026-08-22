@@ -2145,6 +2145,30 @@ def _bestv_info(url: str) -> dict[str, Any]:
     }
 
 
+# 红果短剧（hongguoduanju.com）：字节系短剧平台，播放地址来自字节 CDN
+# （*.qznovelvod.com 的 /video/tos/cn/... 链接），URL 无扩展名但属可直接下载的
+# 渐进式流；纯 requests 拿不到签名，走 VPS Playwright worker 点开播放器捕获真流。
+def _hongguo_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿红果短剧真流，构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("hongguo", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "红果短剧",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Hongguo",
+        "extractor": "hongguo",
+        # 字节 CDN 流无扩展名，但 ext 固定 mp4 让 _detect_direct_url 经 ext 兜底匹配透传
+        "ext": data.get("ext") or "mp4",
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.hongguoduanju.com/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2457,6 +2481,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 百视TV：web 端播放地址需 wasm 签名（makepreviewquery），走 VPS Playwright 解析
     if "bestv.com.cn" in (host or ""):
         return _bestv_info(url)
+    # 红果短剧：字节系 CDN 流需真实浏览器点开播放器捕获，走 VPS Playwright 解析
+    if "hongguoduanju.com" in (host or ""):
+        return _hongguo_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3153,6 +3180,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "bestv.com.cn" in (_task_host or ""):
                 # 百视TV：wasm 签名，VPS Playwright 解析出 m3u8 直链
                 info = _bestv_info(task.url)
+            elif "hongguoduanju.com" in (_task_host or ""):
+                # 红果短剧：字节 CDN 流，VPS Playwright 点开播放器捕获真流直链
+                info = _hongguo_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)
