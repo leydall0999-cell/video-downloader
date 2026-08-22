@@ -124,24 +124,43 @@ CONVERT_JOBS: dict[str, dict] = {}
 CONVERT_LOCK = threading.Lock()
 FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/opt/homebrew/bin/ffmpeg" if sys.platform == "darwin" else "")
 # 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
+# （2026-08-23 扩充：+avi/flv/ts/m4v/wmv/mpeg/3gp/ogv 视频 + aac/wav/flac/ogg/opus 音频）
 CONVERT_TARGETS = {
     "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
     "mov":  ["-c:v", "libx264", "-c:a", "aac"],
     "mkv":  ["-c:v", "libx264", "-c:a", "aac"],
     "webm": ["-c:v", "libvpx-vp9", "-c:a", "libopus", "-b:v", "1M"],
+    "avi":  ["-c:v", "libx264", "-c:a", "aac"],
+    "flv":  ["-c:v", "libx264", "-c:a", "aac", "-flvflags", "add_keyframe_index"],
+    "ts":   ["-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast"],
+    "m4v":  ["-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart"],
+    "wmv":  ["-c:v", "wmv2", "-b:v", "2M", "-c:a", "wmav2", "-b:a", "192k"],
+    "mpeg": ["-c:v", "mpeg2video", "-q:v", "3", "-c:a", "mp2", "-b:a", "192k"],
+    "3gp":  ["-c:v", "libx264", "-c:a", "aac", "-vf", "scale='min(320,iw)':-2"],
+    "ogv":  ["-c:v", "libvpx", "-b:v", "1M", "-c:a", "libopus"],
     "mp3":  ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
     "m4a":  ["-vn", "-c:a", "aac"],
+    "aac":  ["-vn", "-c:a", "aac", "-b:a", "192k"],
+    "wav":  ["-vn", "-c:a", "pcm_s16le"],
+    "flac": ["-vn", "-c:a", "flac"],
+    "ogg":  ["-vn", "-c:a", "libopus", "-b:a", "128k"],
+    "opus": ["-vn", "-c:a", "libopus", "-b:a", "128k"],
     "gif":  ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
 }
-CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "mp3": "mp3", "m4a": "m4a", "gif": "gif"}
+CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "avi": "avi", "flv": "flv",
+               "ts": "ts", "m4v": "m4v", "wmv": "wmv", "mpeg": "mpg", "3gp": "3gp", "ogv": "ogv",
+               "mp3": "mp3", "m4a": "m4a", "aac": "aac", "wav": "wav", "flac": "flac",
+               "ogg": "ogg", "opus": "opus", "gif": "gif"}
 
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
 UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
 # 上传文件大小上限（字节），默认 2GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
 UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
-# 允许上传的视频后缀白名单
-UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
+# 允许上传的文件后缀白名单（2026-08-23：视频 + 音频都可上传转换）
+UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv",
+                     ".mpeg", ".mpg", ".3gp", ".ogv", ".mp3", ".m4a", ".aac", ".wav",
+                     ".flac", ".ogg", ".opus"}
 
 # ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
 DW_DIR = DOWNLOAD_DIR / "dewatermark"

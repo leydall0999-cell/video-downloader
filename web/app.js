@@ -1473,7 +1473,7 @@
   // ------------------------------------------------------------------ 上传视频直接转码（多文件批量：每个文件独立一行 + 独立输出格式）
   // 设计：前端模拟批量，后端复用单文件 /api/upload-convert。状态用 pending/uploading/running/completed/failed。
   // 并发：最大 2 个同时转码（普通 ffmpeg 重任务，避免 CPU/带宽占满）。
-  const UC_MAX_CONCURRENT = 2;
+  const UC_MAX_CONCURRENT = 3; // 上传阶段并发（转码由后端线程池排队，上传本身无 CPU 负担）
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
   const ucFormatSize = (bytes) => {
@@ -1506,18 +1506,30 @@
     el.ucStatus.textContent = n ? `已把批量参数应用到 ${n} 个未开始项` : '没有可应用的项（所有项都已开始/完成）';
   };
 
+  // 输出格式下拉选项（格式列表来自节点配置，缺省回退硬编码；音频类标注「仅音频」）
+  const fmtOptions = (val) => (node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'])
+    .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${v==='mp3'||v==='m4a'||v==='aac'||v==='wav'||v==='flac'||v==='ogg'||v==='opus'?'（仅音频）':''}${v==='gif'?'（前5秒）':''}</option>`)
+    .join('');
+
   const renderUcList = () => {
     const list = ucState.list;
     el.ucCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
     el.ucClearBtn.hidden = list.length === 0;
     el.ucBulk.hidden = list.length === 0;
     el.ucStartAllBtn.disabled = !list.some(it => it.status === 'pending');
+    // 批量「默认输出格式」下拉与每行下拉同步（含新增格式）
+    if (el.ucBulkTarget) {
+      const cur = el.ucBulkTarget.value || 'mp4';
+      el.ucBulkTarget.innerHTML = fmtOptions(cur);
+    }
+    // 大小上限提示（来自节点配置；默认 2GB）
+    if (el.ucLimitTip) {
+      const mb = node.convertMaxUpload || 0;
+      const gb = mb > 0 ? (mb / 1024 / 1024 / 1024).toFixed(1) : '2.0';
+      el.ucLimitTip.textContent = `单个文件最大 ${gb}GB；大文件（>500MB）建议先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。`;
+    }
 
     if (!list.length) { el.ucList.innerHTML = ''; return; }
-
-    const fmtOptions = (val) => ['mp4','mov','mkv','webm','mp3','m4a','gif']
-      .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${v==='mp3'||v==='m4a'?'（仅音频）':''}${v==='gif'?'（前5秒）':''}</option>`)
-      .join('');
 
     el.ucList.innerHTML = list.map(it => {
       const statusText = {
@@ -7069,6 +7081,9 @@
       el.adsSlot.hidden = !node.adsEnabled;
       node.convertSubRequired = !!(convert && convert.subscription_required);
       node.convertFreeDaily = (convert && convert.free_daily) || 3;
+      node.convertMaxUpload = (convert && convert.max_upload_bytes) || 0;
+      node.convertTargets = (convert && Array.isArray(convert.targets) && convert.targets.length)
+        ? convert.targets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'];
       node.downloadSubRequired = !!(download && download.subscription_required);
       node.downloadFreeDaily = (download && download.free_daily) || 10;
       const cloudInfo = cloud || {};

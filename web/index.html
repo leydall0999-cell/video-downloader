@@ -339,11 +339,14 @@
   <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle">
     <h2 id="ucTitle" class="guide-title">视频格式转换</h2>
     <p class="uc-tip">添加多个本地视频，批量转码为指定格式。每个文件单独成行，可独立设置输出格式。</p>
+    <p class="uc-tip" id="ucLimitTip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      单个文件最大 2GB；大文件（&gt;500MB）建议先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。
+    </p>
 
     <!-- 工具栏：添加 / 清空 / 计数 -->
     <div class="uc-toolbar">
       <button type="button" class="btn btn-primary" id="ucAddBtn">添加文件</button>
-      <input type="file" id="ucFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav" multiple hidden />
+      <input type="file" id="ucFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv,audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus" multiple hidden />
       <button type="button" class="btn btn-ghost" id="ucClearBtn" hidden>清空列表</button>
       <span class="uc-count" id="ucCount">尚未添加文件</span>
     </div>
