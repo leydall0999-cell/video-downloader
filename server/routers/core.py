@@ -100,6 +100,33 @@ def node_info() -> dict:
     caps = app.plat.node_capabilities()
     return {k: v for k, v in info.items() if k not in app.plat.NODE_GROUPS or k in caps}
 
+@router.get('/api/admin/disk-usage')
+def disk_usage() -> dict:
+    """磁盘/目录占用诊断（运维端点，URL 隐秘；建议生产受 VDL_API_TOKEN 保护）。
+    用于排查 ffmpeg 写输出 ENOSPC、容器磁盘满等问题。"""
+    import shutil as _shutil
+    total, used, free = _shutil.disk_usage(app.DOWNLOAD_DIR)
+
+    def _dir_size(p):
+        s = 0
+        try:
+            for f in p.rglob('*'):
+                if f.is_file():
+                    try: s += f.stat().st_size
+                    except OSError: pass
+        except OSError:
+            pass
+        return s
+
+    return {
+        'disk_total': total, 'disk_used': used, 'disk_free': free,
+        'disk_used_pct': round(used * 100 / total, 1) if total else None,
+        'download_dir_size': _dir_size(app.DOWNLOAD_DIR),
+        'convert_dir_size': _dir_size(app.CONVERT_DIR),
+        'convert_dir_files': sum(1 for _ in app.CONVERT_DIR.iterdir() if _.is_file()),
+    }
+
+
 @router.post('/api/resolve')
 async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)

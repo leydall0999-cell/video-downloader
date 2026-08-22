@@ -1302,6 +1302,7 @@ async def _cleanup_loop() -> None:
         if removed:
             logger.info("已清理 %s 个过期任务", removed)
         _cleanup_orphan_upload_parts()
+        _purge_conversions_dir()
 
 
 def _cleanup_orphan_upload_parts(max_age: float = 24 * 3600) -> int:
@@ -1320,6 +1321,31 @@ def _cleanup_orphan_upload_parts(max_age: float = 24 * 3600) -> int:
         pass
     if n:
         logger.info("已清理 %s 个孤儿上传分片", n)
+    return n
+
+
+def _purge_conversions_dir(max_age: float = 7 * 24 * 3600) -> int:
+    """清理 CONVERT_DIR 下早于 max_age 秒的转换产物（用户下载后过期）。
+    Railway ephemeral 磁盘有限、retention 默认关闭，此清理是「转码 ENOSPC」的主要防线。
+    只清 conversions 子目录，不动 downloads 主目录（用户的下载资源）。"""
+    n = 0
+    freed = 0
+    try:
+        for p in CONVERT_DIR.iterdir():
+            if not p.is_file():
+                continue
+            try:
+                st = p.stat()
+                if time.time() - st.st_mtime > max_age:
+                    freed += st.st_size
+                    p.unlink(missing_ok=True)
+                    n += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    if n:
+        logger.info("已清理 %s 个过期转换产物（释放 %s MB）", n, int(freed / 1024 / 1024))
     return n
 
 
@@ -1346,6 +1372,9 @@ async def lifespan(_: FastAPI):
     orphans = store.purge_orphans()
     if orphans:
         logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)
+    # 启动时立即清理过期转换产物：Railway ephemeral 磁盘有限，retention 默认关闭，
+    # 历史累积可能已撑满磁盘导致 ffmpeg 写输出 ENOSPC → rc=9 退出
+    _purge_conversions_dir()
     # 桌面版种子下载：启动 libtorrent session（libtorrent 缺失时内部为空操作）
     if TORRENT_ENABLED and torrent_mod.available():
         try:
