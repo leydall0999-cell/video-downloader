@@ -37,9 +37,14 @@ class HaokanIE(InfoExtractor):
         webpage = self._download_webpage(url, video_id, headers={
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
             ),
             "Referer": "https://haokan.baidu.com/",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            # 百度对无 Cookie 的数据中心请求返回简化页（无 encrptedVideoMeta），
+            # BIDUPSID/PSTM 是百度系通用访客 Cookie（2026-08 实测 VPS 带此
+            # Cookie 即可拿到完整 SSR 数据）
+            "Cookie": "BIDUPSID=080A06EA5F585DF4688EF4D0F4152440; PSTM=1710125001",
         })
 
         # 1) 提取加密 meta
