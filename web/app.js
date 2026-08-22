@@ -67,7 +67,6 @@
     input: $('urlInput'),
     clearBtn: $('clearBtn'),
     resolveBtn: $('resolveBtn'),
-    chips: $('platformChips'),
     alert: $('alertBox'),
     alertIcon: $('alertIcon'),
     alertBody: $('alertBody'),
@@ -853,20 +852,23 @@
 
   const renderPlatforms = (platforms) => {
     allPlatforms = platforms;
-    el.chips.replaceChildren();
-    platforms.slice(0, MAX_VISIBLE_PLATFORMS).forEach(({ name, icon }) => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.textContent = (icon ? icon + ' ' : '') + name;
-      el.chips.appendChild(chip);
-    });
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'chip chip-more';
-    more.textContent = `查看全部 ${platforms.length} 个平台 →`;
-    more.setAttribute('aria-haspopup', 'dialog');
-    more.addEventListener('click', () => openPlatformModal(platforms));
-    el.chips.appendChild(more);
+    // 平台列表只保留 header 徽章入口（engineBadge 弹窗），输入区 chips 已移除
+    if (el.chips) {
+      el.chips.replaceChildren();
+      platforms.slice(0, MAX_VISIBLE_PLATFORMS).forEach(({ name, icon }) => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = (icon ? icon + ' ' : '') + name;
+        el.chips.appendChild(chip);
+      });
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'chip chip-more';
+      more.textContent = `查看全部 ${platforms.length} 个平台 →`;
+      more.setAttribute('aria-haspopup', 'dialog');
+      more.addEventListener('click', () => openPlatformModal(platforms));
+      el.chips.appendChild(more);
+    }
     el.badge.textContent = `支持 ${platforms.length} 个平台`;
   };
 
