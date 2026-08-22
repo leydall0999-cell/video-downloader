@@ -2910,6 +2910,31 @@ def _warm_cookie_pool() -> None:
     except Exception:
         logger.exception("公共池启动预热异常")
 
+
+@app.get("/api/net-probe")
+def net_probe(url: str = "https://watch.plex.tv/zh/watch/movie/the-message-1976?detailsSource=vod") -> dict:
+    """临时诊断：从 Railway 测任意 URL 可达性（用于评估 Plex 等站是否支持）。"""
+    import requests as _r
+    out: dict = {"url": url[:100]}
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        r = _r.get(url, headers=headers, timeout=20, allow_redirects=True)
+        out["status"] = r.status_code
+        out["final_url"] = r.url[:120]
+        out["len"] = len(r.text)
+        out["head"] = re.sub(r"\s+", " ", r.text[:300])[:200] if r.text else ""
+        import re as _re
+        m = _re.search(r'<title>([^<]*)</title>', r.text)
+        out["title"] = m.group(1).strip()[:80] if m else ""
+    except Exception as e:  # noqa: BLE001
+        out["err"] = str(e)[:200]
+    return out
+
+
 @app.get("/api/cookie/pull-diag")
 def cookie_pull_diag() -> dict:
     """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
