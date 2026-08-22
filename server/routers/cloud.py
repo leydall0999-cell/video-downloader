@@ -4,6 +4,7 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 """
 import app
 from fastapi import APIRouter
+from .core import _device_of
 
 router = APIRouter()
 
@@ -280,7 +281,7 @@ def cloud_baidu_qr_status() -> dict:
 @router.post("/api/cloud/save")
 def cloud_save(payload: app.CloudSaveRequest, request: app.Request) -> dict:
     subscribed, free_used, free_daily = app._check_cloud_quota(request)
-    task = app._require_task(payload.task_id)
+    task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise app.HTTPException(status_code=409, detail="下载任务尚未完成，无法存到网盘")
     provider = payload.provider

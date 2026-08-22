@@ -1431,7 +1431,7 @@
               if (refs.convertProgressFill) refs.convertProgressFill.style.width = '100%';
               setTimeout(() => { refs.convertProgress.hidden = true; }, 400);
             }
-            refs.convertFile.href = `${base || window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
+            refs.convertFile.href = `${base || window.VDL_API_BASE || ''}/api/convert/${jobId}/file?device=${encodeURIComponent(deviceId())}`;
             refs.convertFile.setAttribute('download', st.filename || 'converted');
             refs.convertFile.hidden = false;
             refs.convertStatus.textContent = '转换完成 ✅';
@@ -1696,7 +1696,7 @@
           it.status = 'completed';
           it.progress = 100;
           it.outputName = st.filename || 'converted';
-          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file`;
+          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
           it.libraryId = st.library_id || null;
           renderUcList();
         } else if (st.status === 'failed') {

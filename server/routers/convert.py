@@ -4,6 +4,7 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 """
 import app
 from fastapi import APIRouter
+from .core import _device_of
 
 router = APIRouter()
 
@@ -11,7 +12,7 @@ router = APIRouter()
 def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
-    task = app._require_task(payload.task_id)
+    task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise app.HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
     target = payload.target
@@ -26,6 +27,7 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
             "out_path": str(out_path),
             "error": "",
             "filename": out_path.name,
+            "device_id": _device_of(request),   # 设备隔离：转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
     return {
@@ -35,18 +37,24 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     }
 
 @router.get("/api/convert/{job_id}")
-def convert_status(job_id: str) -> dict:
+def convert_status(job_id: str, request: app.Request) -> dict:
     job = app.CONVERT_JOBS.get(job_id)
     if not job:
+        raise app.HTTPException(status_code=404, detail="转换任务不存在")
+    # 设备隔离：job 记录归属时校验（历史无归属 job 兼容可见）
+    if job.get("device_id") and job["device_id"] != _device_of(request):
         raise app.HTTPException(status_code=404, detail="转换任务不存在")
     return {"status": job["status"], "error": job.get("error", ""),
             "filename": job.get("filename", ""), "library_id": job.get("library_id", ""),
             "progress": job.get("progress", 0), "stage": job.get("stage", "")}
 
 @router.get("/api/convert/{job_id}/file")
-def convert_file(job_id: str) -> app.FileResponse:
+def convert_file(job_id: str, request: app.Request) -> app.FileResponse:
     job = app.CONVERT_JOBS.get(job_id)
     if not job:
+        raise app.HTTPException(status_code=404, detail="转换任务不存在")
+    # 设备隔离：转换文件仅创建者可下载（query device=，<a href> 无法带 header）
+    if job.get("device_id") and job["device_id"] != _device_of(request):
         raise app.HTTPException(status_code=404, detail="转换任务不存在")
     if job["status"] != "completed":
         raise app.HTTPException(status_code=409, detail="转换尚未完成")
