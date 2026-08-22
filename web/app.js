@@ -1530,10 +1530,10 @@
     // 批量参数区常显：允许在添加文件前先设好转换条件（2026-08-23）
     el.ucStartAllBtn.hidden = true; // 已自动开始，按钮不再需要
     el.ucStartAllBtn.disabled = !list.some(it => it.status === 'pending');
-    // 批量「默认输出格式」下拉与每行下拉同步（含新增格式）
-    if (el.ucBulkTarget) {
-      const cur = el.ucBulkTarget.value || 'mp4';
-      el.ucBulkTarget.innerHTML = fmtOptions(cur);
+    // 批量「默认输出格式」下拉只填充一次（避免每次渲染重建导致选中/焦点被打断而闪烁）
+    if (el.ucBulkTarget && !el.ucBulkTarget.dataset.inited) {
+      el.ucBulkTarget.dataset.inited = '1';
+      el.ucBulkTarget.innerHTML = fmtOptions(el.ucBulkTarget.value || 'mp4');
     }
     // 大小上限提示（来自节点配置；默认 10GB）
     if (el.ucLimitTip) {
@@ -1701,7 +1701,7 @@
     const done = new Set();          // 已成功分片 index（重试去重）
     const inFlight = new Map();      // 正在上传分片 index → 当前 loaded 字节（合并算进度，避免「长时间 0%」）
     const t0 = performance.now();
-    let lastRender = 0, lastBytes = 0, lastT = t0;
+    let lastBytes = 0, lastT = t0;
 
     // 计算总已上传字节 = 已完成分片 + 所有 in-flight 分片当前 loaded
     const totalUploaded = () => {
@@ -1721,9 +1721,14 @@
       }
       item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
       item.progress = Math.round(tot / file.size * 30);
-      if (now - lastRender > 150) {  // 节流渲染，避免每片刷屏
-        lastRender = now;
-        renderUcList();
+      // 定向更新该行 DOM（进度条 + 状态文字），不重建整个列表——
+      // 否则高频渲染会反复重建下拉/卡片导致闪烁与焦点丢失
+      const li = document.querySelector(`.uc-item[data-id="${item.id}"]`);
+      if (li) {
+        const fill = li.querySelector('.progress-fill');
+        if (fill) fill.style.width = `${item.progress || 0}%`;
+        const st = li.querySelector('.uc-item-status');
+        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
       }
     };
 
