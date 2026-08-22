@@ -3739,25 +3739,40 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         "299+140/248+140/137+140/136+140/135+140/134+140/133+140/160+140",
                         "bv*+ba/best[height<=1080]/best",
                     ]
+                    # 2026-08-22 实测：tv_embedded 解析 OK 但下载分片被 CDN 403
+                    # （数据中心 IP）。不同 player_client 的下载 URL 形态不同
+                    # （ios/tv 多为 HLS、android 直连 mp4），对云 IP 的限制策略
+                    # 也不同——client × format 矩阵轮换，直到找到可下载的组合。
+                    _yt_clients = ["tv_embedded", "ios", "android", "tv", "web_safari"]
                     _done = False
-                    for _chain in _fallback_chains:
-                        try:
-                            _fb_opts = dict(_fb_base)
-                            _fb_opts["format"] = _chain
-                            with _YoutubeDL(_fb_opts) as _ydl2:
-                                info = _ydl2.extract_info(task.url, download=False) or info
-                                if info.get("title"):
-                                    store.update(task.id, title=info["title"])
-                                _ydl2.process_info(info)
-                            _done = True
-                            task.log(f"已用兼容格式链 {_chain} 完成下载")
-                            break
-                        except (DownloadError, ExtractorError) as _e2:
-                            _e2_str = str(_e2)
-                            if "403" in _e2_str or "Forbidden" in _e2_str:
-                                task.log(f"格式链 {_chain} 仍被拒绝，继续尝试下一组…")
+                    for _client in _yt_clients:
+                        for _chain in _fallback_chains:
+                            try:
+                                _fb_opts = dict(_fb_base)
+                                _fb_opts["format"] = _chain
+                                _ya = _fb_opts.setdefault("extractor_args", {}).setdefault("youtube", {})
+                                _ya["player_client"] = [_client]
+                                # 免 Cookie 时保持 PO Token 上下文
+                                if not (cookie or "").strip():
+                                    _ya.setdefault("fetch_pot", ["always"])
+                                with _YoutubeDL(_fb_opts) as _ydl2:
+                                    info = _ydl2.extract_info(task.url, download=False) or info
+                                    if info.get("title"):
+                                        store.update(task.id, title=info["title"])
+                                    _ydl2.process_info(info)
+                                _done = True
+                                task.log(f"已用 client={_client} 格式链 {_chain} 完成下载")
+                                break
+                            except (DownloadError, ExtractorError) as _e2:
+                                _e2_str = str(_e2)
+                                if "403" in _e2_str or "Forbidden" in _e2_str:
+                                    task.log(f"client={_client} 链 {_chain} 仍被拒绝，继续…")
+                                    continue
+                                # 非 403 错误（格式不存在等）换下一个 client/链
+                                task.log(f"client={_client} 链 {_chain} 失败({_e2_str[:60]})，继续…")
                                 continue
-                            raise
+                        if _done:
+                            break
                     if not _done:
                         # 所有格式链都 403：极可能是代理出口 IP 不一致
                         _eff = proxy or _resolve_proxy(_yt_host)
