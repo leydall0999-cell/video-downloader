@@ -1473,7 +1473,12 @@
   // ------------------------------------------------------------------ 上传视频直接转码（多文件批量：每个文件独立一行 + 独立输出格式）
   // 设计：前端模拟批量，后端复用单文件 /api/upload-convert。状态用 pending/uploading/running/completed/failed。
   // 并发：最大 2 个同时转码（普通 ffmpeg 重任务，避免 CPU/带宽占满）。
-  const UC_MAX_CONCURRENT = 3; // 上传阶段并发（转码由后端线程池排队，上传本身无 CPU 负担）
+  // 2026-08-24 上传提速：单文件分片并发（32MB/片 × 4 路，单片失败重试 2 次），
+  // 文件级并发 2（避免多文件抢占带宽），大文件总连接数 = 2×4 = 8，HTTP/1.1 排队 HTTP/2 全并发。
+  const UC_MAX_CONCURRENT = 2; // 文件级上传并发
+  const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB
+  const UC_CHUNK_CONCURRENCY = 4;               // 单文件分片并发路数
+  const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
   const ucFormatSize = (bytes) => {
@@ -1482,6 +1487,12 @@
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + ' MB';
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  };
+
+  const ucFormatSpeed = (bps) => {
+    if (!bps || bps <= 0) return '';
+    if (bps > 1024 * 1024) return (bps / 1024 / 1024).toFixed(1) + ' MB/s';
+    return (bps / 1024).toFixed(0) + ' KB/s';
   };
 
   const ucReadBulk = () => ({
@@ -1507,8 +1518,9 @@
   };
 
   // 输出格式下拉选项（格式列表来自节点配置，缺省回退硬编码；音频类标注「仅音频」）
-  const fmtOptions = (val) => (node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'])
-    .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${v==='mp3'||v==='m4a'||v==='aac'||v==='wav'||v==='flac'||v==='ogg'||v==='opus'?'（仅音频）':''}${v==='gif'?'（前5秒）':''}</option>`)
+  const AUDIO_ONLY_FMTS = ['mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2'];
+  const fmtOptions = (val) => (node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','hevc','mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2','gif'])
+    .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${AUDIO_ONLY_FMTS.includes(v)?'（仅音频）':''}${v==='gif'?'（前5秒）':''}${v==='hevc'?'（H.265 省空间）':''}</option>`)
     .join('');
 
   const renderUcList = () => {
@@ -1522,11 +1534,11 @@
       const cur = el.ucBulkTarget.value || 'mp4';
       el.ucBulkTarget.innerHTML = fmtOptions(cur);
     }
-    // 大小上限提示（来自节点配置；默认 2GB）
+    // 大小上限提示（来自节点配置；默认 10GB）
     if (el.ucLimitTip) {
       const mb = node.convertMaxUpload || 0;
-      const gb = mb > 0 ? (mb / 1024 / 1024 / 1024).toFixed(1) : '2.0';
-      el.ucLimitTip.textContent = `单个文件最大 ${gb}GB；大文件（>500MB）建议先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。`;
+      const gb = mb > 0 ? (mb / 1024 / 1024 / 1024).toFixed(1) : '10.0';
+      el.ucLimitTip.textContent = `单个文件最大 ${gb}GB（大文件已自动分片并发上传提速）；超过上限请先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。`;
     }
 
     if (!list.length) { el.ucList.innerHTML = ''; return; }
@@ -1534,7 +1546,7 @@
     el.ucList.innerHTML = list.map(it => {
       const statusText = {
         pending: '未开始',
-        uploading: '上传中…',
+        uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
         running: it.progress ? `转码中 ${it.progress}%` : '转码中…',
         completed: '完成 ✅',
         failed: '失败：' + (it.errorMsg || ''),
@@ -1608,60 +1620,151 @@
     el.ucStatus.textContent = '已清空列表';
   };
 
-  // 上传 + 启动单个 job（用 XHR 拿到上传进度；jobId 返回时切换为 running）
+  // 上传单个分片（32MB；小文件=1 片，与整传等效）
+  const ucUploadChunk = (uploadId, index, total, blob) => new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('upload_id', uploadId);
+    form.append('index', index);
+    form.append('total', total);
+    form.append('file', blob, 'chunk');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-chunk');
+    // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
+    xhr.setRequestHeader('X-Device-Id', deviceId());
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else {
+        let msg = '分片上传失败 HTTP ' + xhr.status;
+        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) msg = d.detail; } catch (e) { /* ignore */ }
+        reject(new Error(msg));
+      }
+    });
+    xhr.addEventListener('error', () => reject(new Error('网络错误')));
+    xhr.send(form);
+  });
+
+  // 上传 + 启动单个 job：32MB 分片 × 4 路并发，进度占 30%（转码从 30% 累加），实时速度显示
   const ucUploadOne = (item) => new Promise((resolve, reject) => {
     item.status = 'uploading';
     item.progress = 0;
+    item.speedText = '';
+    item.uploadedText = '';
     renderUcList();
-    const form = new FormData();
-    form.append('file', item.file);
-    form.append('target', item.target);
-    form.append('resolution', item.res);
-    form.append('bitrate', item.bitrate || '');
-    form.append('audio', item.audio ? 'true' : 'false');
-    form.append('rotate', item.rotate);
-    form.append('remux', item.remux ? 'true' : 'false');
-    form.append('to_library', item.toLibrary ? 'true' : 'false');
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload-convert');
-    // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
-    xhr.setRequestHeader('X-Device-Id', deviceId());
-    xhr.upload.addEventListener('progress', (ev) => {
-      if (ev.lengthComputable) {
-        // 上传阶段最多占 30%，转码从 30% 开始累加
-        item.progress = Math.round(ev.loaded / ev.total * 30);
+    const file = item.file;
+    const totalChunks = Math.max(1, Math.ceil(file.size / UC_CHUNK_SIZE));
+    const uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    let uploadedBytes = 0;          // 已成功分片的累计字节
+    const done = new Set();          // 已成功分片 index（重试去重）
+    const t0 = performance.now();
+    let lastRender = 0, lastBytes = 0, lastT = t0;
+
+    const updateProgress = () => {
+      const now = performance.now();
+      const dt = (now - lastT) / 1000;
+      if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度
+        item.speedText = ucFormatSpeed((uploadedBytes - lastBytes) / dt);
+        lastBytes = uploadedBytes;
+        lastT = now;
+      }
+      item.uploadedText = `${ucFormatSize(uploadedBytes)} / ${ucFormatSize(file.size)}`;
+      item.progress = Math.round(uploadedBytes / file.size * 30);
+      if (now - lastRender > 150) {  // 节流渲染，避免每片刷屏
+        lastRender = now;
         renderUcList();
       }
-    });
-    xhr.addEventListener('load', () => {
-      try {
-        const data = JSON.parse(xhr.responseText || '{}');
-        if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
-          item.jobId = data.job_id;
-          item.status = 'running';
-          item.progress = 30;
-          renderUcList();
-          resolve(data);
-        } else {
-          item.status = 'failed';
-          item.errorMsg = data.error || ('HTTP ' + xhr.status);
-          renderUcList();
-          reject(new Error(item.errorMsg));
+    };
+
+    // 分片并发 worker 池：每片失败重试 UC_CHUNK_RETRIES 次，耗尽则整个文件失败
+    let idx = 0;
+    const workers = [];
+    const worker = async () => {
+      while (idx < totalChunks) {
+        if (item.status === 'failed') return;
+        const i = idx++;
+        const start = i * UC_CHUNK_SIZE;
+        const end = Math.min(start + UC_CHUNK_SIZE, file.size);
+        const blob = file.slice(start, end);
+        let attempts = 0;
+        for (;;) {
+          try {
+            await ucUploadChunk(uploadId, i, totalChunks, blob);
+            break;
+          } catch (e) {
+            attempts++;
+            if (attempts > UC_CHUNK_RETRIES) {
+              item.status = 'failed';
+              item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}`;
+              item.speedText = ''; item.uploadedText = '';
+              renderUcList();
+              reject(new Error(item.errorMsg));
+              return;
+            }
+          }
         }
+        if (!done.has(i)) { done.add(i); uploadedBytes += (end - start); }
+        updateProgress();
+      }
+    };
+    for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
+
+    // 全部分片完成 → finish 合并并提交转码 job
+    Promise.allSettled(workers).then(async () => {
+      if (item.status === 'failed') return;
+      try {
+        const form = new FormData();
+        form.append('upload_id', uploadId);
+        form.append('total', totalChunks);
+        form.append('filename', file.name);
+        form.append('target', item.target);
+        form.append('resolution', item.res);
+        form.append('bitrate', item.bitrate || '');
+        form.append('audio', item.audio ? 'true' : 'false');
+        form.append('rotate', item.rotate);
+        form.append('remux', item.remux ? 'true' : 'false');
+        form.append('to_library', item.toLibrary ? 'true' : 'false');
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload-chunk/finish');
+        xhr.setRequestHeader('X-Device-Id', deviceId());
+        xhr.addEventListener('load', () => {
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
+              item.jobId = data.job_id;
+              item.status = 'running';
+              item.progress = 30;
+              item.speedText = ''; item.uploadedText = '';
+              renderUcList();
+              resolve(data);
+            } else {
+              item.status = 'failed';
+              item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
+              item.speedText = ''; item.uploadedText = '';
+              renderUcList();
+              reject(new Error(item.errorMsg));
+            }
+          } catch (e) {
+            item.status = 'failed';
+            item.errorMsg = '响应解析失败';
+            renderUcList();
+            reject(e);
+          }
+        });
+        xhr.addEventListener('error', () => {
+          item.status = 'failed';
+          item.errorMsg = '网络错误';
+          renderUcList();
+          reject(new Error('network'));
+        });
+        xhr.send(form);
       } catch (e) {
-        item.status = 'failed';
-        item.errorMsg = '响应解析失败';
-        renderUcList();
-        reject(e);
+        if (item.status !== 'failed') {
+          item.status = 'failed';
+          item.errorMsg = e.message || '上传失败';
+          renderUcList();
+          reject(e);
+        }
       }
     });
-    xhr.addEventListener('error', () => {
-      item.status = 'failed';
-      item.errorMsg = '网络错误';
-      renderUcList();
-      reject(new Error('network'));
-    });
-    xhr.send(form);
   });
 
   // 启动下一个 pending 任务（受并发限制）

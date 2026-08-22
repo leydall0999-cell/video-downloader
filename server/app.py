@@ -125,6 +125,7 @@ CONVERT_LOCK = threading.Lock()
 FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/opt/homebrew/bin/ffmpeg" if sys.platform == "darwin" else "")
 # 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
 # （2026-08-23 扩充：+avi/flv/ts/m4v/wmv/mpeg/3gp/ogv 视频 + aac/wav/flac/ogg/opus 音频）
+# （2026-08-24 再扩充：+hevc(H.265/MP4) 视频 + wma/mp2 音频，共 23 种）
 CONVERT_TARGETS = {
     "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
     "mov":  ["-c:v", "libx264", "-c:a", "aac"],
@@ -138,6 +139,7 @@ CONVERT_TARGETS = {
     "mpeg": ["-c:v", "mpeg2video", "-q:v", "3", "-c:a", "mp2", "-b:a", "192k"],
     "3gp":  ["-c:v", "libx264", "-c:a", "aac", "-vf", "scale='min(320,iw)':-2"],
     "ogv":  ["-c:v", "libvpx", "-b:v", "1M", "-c:a", "libopus"],
+    "hevc": ["-c:v", "libx265", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart", "-tag:v", "hvc1"],
     "mp3":  ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
     "m4a":  ["-vn", "-c:a", "aac"],
     "aac":  ["-vn", "-c:a", "aac", "-b:a", "192k"],
@@ -145,22 +147,62 @@ CONVERT_TARGETS = {
     "flac": ["-vn", "-c:a", "flac"],
     "ogg":  ["-vn", "-c:a", "libopus", "-b:a", "128k"],
     "opus": ["-vn", "-c:a", "libopus", "-b:a", "128k"],
+    "wma":  ["-vn", "-c:a", "wmav2", "-b:a", "192k"],
+    "mp2":  ["-vn", "-c:a", "mp2", "-b:a", "192k"],
     "gif":  ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
 }
 CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "avi": "avi", "flv": "flv",
                "ts": "ts", "m4v": "m4v", "wmv": "wmv", "mpeg": "mpg", "3gp": "3gp", "ogv": "ogv",
-               "mp3": "mp3", "m4a": "m4a", "aac": "aac", "wav": "wav", "flac": "flac",
-               "ogg": "ogg", "opus": "opus", "gif": "gif"}
+               "hevc": "mp4", "mp3": "mp3", "m4a": "m4a", "aac": "aac", "wav": "wav", "flac": "flac",
+               "ogg": "ogg", "opus": "opus", "wma": "wma", "mp2": "mp2", "gif": "gif"}
+# 各目标格式依赖的 ffmpeg 编码器（缺 libx265 等库的 ffmpeg 需自动隐藏对应格式）
+_TARGET_ENCODER_DEPS = {
+    "mp4": ["libx264"], "mov": ["libx264"], "mkv": ["libx264"], "avi": ["libx264"],
+    "flv": ["libx264"], "ts": ["libx264"], "m4v": ["libx264"], "3gp": ["libx264"],
+    "webm": ["libvpx-vp9", "libopus"], "ogv": ["libvpx", "libopus"],
+    "wmv": ["wmav2"], "mpeg": ["mpeg2video"], "hevc": ["libx265"],
+    "mp3": ["libmp3lame"], "ogg": ["libopus"], "opus": ["libopus"],
+    "m4a": [], "aac": [], "wav": [], "flac": [], "wma": [], "mp2": [], "gif": [],
+}
+
+
+def _probe_ffmpeg_encoders() -> set:
+    """探测当前 ffmpeg 支持的编码器集合（一次，模块加载时）。
+    探测失败（无 ffmpeg / 异常）返回空集合 = 不做任何限制。
+    """
+    if not FFMPEG_BIN:
+        return set()
+    try:
+        r = subprocess.run([FFMPEG_BIN, "-hide_banner", "-encoders"],
+                           capture_output=True, text=True, timeout=15)
+    except Exception:
+        return set()
+    encs = set()
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0][:1] in ("V", "A", "S") and parts[1] != "=":
+            encs.add(parts[1])
+    return encs
+
+
+# 可用目标格式（按依赖编码器过滤；无 ffmpeg 环境视为全部可用）
+_FFMPEG_ENCODERS = _probe_ffmpeg_encoders()
+CONVERT_TARGETS_AVAILABLE: list = (
+    list(CONVERT_TARGETS.keys()) if not _FFMPEG_ENCODERS
+    else [k for k, deps in _TARGET_ENCODER_DEPS.items() if not deps or all(d in _FFMPEG_ENCODERS for d in deps)]
+)
 
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
 UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
-# 上传文件大小上限（字节），默认 2GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
-UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
+# 上传文件大小上限（字节），默认 10GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
+UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 10_000_000_000)
+# 单次分片上传块大小上限（前端固定 32MB，留余量防超限）
+UPLOAD_CHUNK_MAX = 64 * 1024 * 1024
 # 允许上传的文件后缀白名单（2026-08-23：视频 + 音频都可上传转换）
 UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv",
-                     ".mpeg", ".mpg", ".3gp", ".ogv", ".mp3", ".m4a", ".aac", ".wav",
-                     ".flac", ".ogg", ".opus"}
+                     ".mpeg", ".mpg", ".3gp", ".ogv", ".hevc", ".h265",
+                     ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".wma"}
 
 # ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
 DW_DIR = DOWNLOAD_DIR / "dewatermark"
@@ -1259,6 +1301,26 @@ async def _cleanup_loop() -> None:
         removed = store.purge_expired()
         if removed:
             logger.info("已清理 %s 个过期任务", removed)
+        _cleanup_orphan_upload_parts()
+
+
+def _cleanup_orphan_upload_parts(max_age: float = 24 * 3600) -> int:
+    """清理断传/取消遗留的孤儿分片（up_*.pNNNN），避免 UPLOAD_TMP 无限堆积。
+    正常路径：finish 合并后分片即删；>24h 仍残留视为上传中断（断网/关页）。"""
+    n = 0
+    try:
+        for p in UPLOAD_TMP.glob("up_*.p*"):
+            try:
+                if time.time() - p.stat().st_mtime > max_age:
+                    p.unlink(missing_ok=True)
+                    n += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    if n:
+        logger.info("已清理 %s 个孤儿上传分片", n)
+    return n
 
 
 @contextlib.asynccontextmanager

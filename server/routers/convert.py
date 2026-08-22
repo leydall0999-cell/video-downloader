@@ -132,3 +132,129 @@ def create_upload_convert(
         "filename": out_path.name,
         "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
     }
+
+
+# ---- 分片上传（大文件提速）：前端 32MB/片 × 4 并发 → /api/upload-chunk → finish 合并转码 ----
+_UPLOAD_ID_RE = app.re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _upload_parts(upload_id: str):
+    return sorted(app.UPLOAD_TMP.glob(f"up_{upload_id}.p*"))
+
+
+def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, remux,
+                        to_library, device_id) -> tuple:
+    """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
+    ext = app.CONVERT_EXT[target]
+    job_id = app.uuid.uuid4().hex[:12]
+    out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
+    with app.CONVERT_LOCK:
+        app.CONVERT_JOBS[job_id] = {
+            "status": "running",
+            "out_path": str(out_path),
+            "error": "",
+            "filename": out_path.name,
+            "to_library": to_library,
+            "library_id": "",
+            "device_id": device_id,   # 设备隔离：上传转换文件仅创建者可见
+        }
+    app.executor.submit(app._run_convert, job_id, str(save_path), target,
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=True)
+    return job_id, out_path.name
+
+
+@router.post("/api/upload-chunk")
+def upload_chunk(
+    upload_id: str = app.Form(...),
+    index: int = app.Form(...),
+    total: int = app.Form(...),
+    file: app.UploadFile = app._FastAPIFile(...),
+    request: app.Request = None,
+) -> dict:
+    """分片上传：单块（32MB）落盘 up_{id}.p{index}，支持并发。
+    累计字节超 UPLOAD_MAX_BYTES 即 413 并清理该 upload 全部已传分片。"""
+    app._check_rate_limit(request)
+    if not _UPLOAD_ID_RE.match(upload_id) or total <= 0 or index < 0 or index >= total:
+        raise app.HTTPException(status_code=400, detail="分片参数非法")
+    part_path = app.UPLOAD_TMP / f"up_{upload_id}.p{index:04d}"
+    written = 0
+    try:
+        with part_path.open("wb") as fh:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > app.UPLOAD_CHUNK_MAX:
+                    fh.close()
+                    part_path.unlink(missing_ok=True)
+                    raise app.HTTPException(status_code=413, detail="单个分片超过大小上限")
+                fh.write(chunk)
+    finally:
+        file.file.close()
+    total_bytes = sum(p.stat().st_size for p in _upload_parts(upload_id))
+    if total_bytes > app.UPLOAD_MAX_BYTES:
+        for p in _upload_parts(upload_id):
+            p.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=413, detail="文件超过上传大小上限")
+    return {"ok": True, "received": written, "uploaded_bytes": total_bytes}
+
+
+@router.post("/api/upload-chunk/finish")
+def finish_upload_chunk(
+    upload_id: str = app.Form(...),
+    total: int = app.Form(...),
+    filename: str = app.Form("upload.mp4"),
+    target: str = app.Form("mp4"),
+    resolution: str = app.Form("original"),
+    bitrate: str = app.Form(""),
+    audio: bool = app.Form(True),
+    rotate: int = app.Form(0),
+    remux: bool = app.Form(False),
+    to_library: bool = app.Form(False),
+    request: app.Request = None,
+) -> dict:
+    """分片上传收尾：校验分片齐全 → 顺序合并 → 精确校验总大小 → 提交转码 job。"""
+    app._check_rate_limit(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    if not _UPLOAD_ID_RE.match(upload_id) or total <= 0:
+        raise app.HTTPException(status_code=400, detail="分片参数非法")
+    if target not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的目标格式")
+    suffix = app.Path(filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in app.UPLOAD_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    parts = _upload_parts(upload_id)
+    if len(parts) != total:
+        raise app.HTTPException(status_code=400, detail=f"分片不完整（{len(parts)}/{total}），请重试")
+    save_path = app.UPLOAD_TMP / f"up_{app.uuid.uuid4().hex[:12]}{suffix}"
+    written = 0
+    try:
+        with save_path.open("wb") as fh:
+            for p in parts:
+                written += p.stat().st_size
+                if written > app.UPLOAD_MAX_BYTES:
+                    raise app.HTTPException(status_code=413, detail="文件超过上传大小上限")
+                with p.open("rb") as ph:
+                    app.shutil.copyfileobj(ph, fh, 1024 * 1024)
+                p.unlink(missing_ok=True)
+    except app.HTTPException:
+        save_path.unlink(missing_ok=True)
+        for p in _upload_parts(upload_id):
+            p.unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        save_path.unlink(missing_ok=True)
+        for p in _upload_parts(upload_id):
+            p.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=500, detail=f"合并上传文件失败：{e}")
+    job_id, out_name = _submit_convert_job(
+        save_path, target, resolution, bitrate, audio, rotate, remux,
+        to_library, _device_of(request))
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "target": target,
+        "filename": out_name,
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
