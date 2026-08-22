@@ -2040,6 +2040,29 @@ def _douyu_info(url: str) -> dict[str, Any]:
     }
 
 
+# 央视频（yangshipin.cn）：播放地址来自 playvinfo JSONP 接口（带动态 cKey 签名），
+# 纯 requests 无法复现；走 VPS Playwright 解析（ysp_resolve.py），返回带签名 mp4 直链。
+def _yangshipin_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿央视频真实流（签名 mp4），构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("yangshipin", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "央视频",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Yangshipin",
+        "extractor": "yangshipin",
+        "ext": data.get("ext") or "mp4",
+        # worker 返回的是带签名的单个 mp4 直链（音视频已合并）
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.yangshipin.cn/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2340,6 +2363,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 过时 PhantomJS，走 VPS Playwright 真实浏览器监听流请求
     if "douyu.com" in (host or ""):
         return _douyu_info(url)
+    # 央视频：播放地址需 playvinfo JSONP 签名（cKey），走 VPS Playwright 解析
+    if "yangshipin.cn" in (host or ""):
+        return _yangshipin_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3024,6 +3050,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "douyu.com" in (_task_host or ""):
                 # 斗鱼：yt-dlp 旧提取器失效，VPS Playwright 监听流
                 info = _douyu_info(task.url)
+            elif "yangshipin.cn" in (_task_host or ""):
+                # 央视频：播放地址需 playvinfo JSONP 签名，VPS Playwright 解析
+                info = _yangshipin_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)

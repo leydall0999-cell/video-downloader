@@ -33,6 +33,7 @@ from weibo_resolve import resolve as weibo_resolve  # noqa: E402
 from ximalaya_album_resolve import resolve_album as ximalaya_album_resolve  # noqa: E402
 from iqiyi_resolve import resolve as iqiyi_resolve  # noqa: E402
 from douyu_resolve import resolve as douyu_resolve  # noqa: E402
+from ysp_resolve import resolve as ysp_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -91,6 +92,7 @@ _RESOLVERS = {
     "ximalaya_album": ximalaya_album_resolve,
     "iqiyi": iqiyi_resolve,
     "douyu": douyu_resolve,
+    "yangshipin": ysp_resolve,
 }
 
 
