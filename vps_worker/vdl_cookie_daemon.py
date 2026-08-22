@@ -32,6 +32,7 @@ from kuaishou_resolve import resolve as kuaishou_resolve  # noqa: E402
 from weibo_resolve import resolve as weibo_resolve  # noqa: E402
 from ximalaya_album_resolve import resolve_album as ximalaya_album_resolve  # noqa: E402
 from iqiyi_resolve import resolve as iqiyi_resolve  # noqa: E402
+from douyu_resolve import resolve as douyu_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -89,6 +90,7 @@ _RESOLVERS = {
     "weibo": weibo_resolve,
     "ximalaya_album": ximalaya_album_resolve,
     "iqiyi": iqiyi_resolve,
+    "douyu": douyu_resolve,
 }
 
 

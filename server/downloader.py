@@ -2013,6 +2013,33 @@ def _kuaishou_info(url: str) -> dict[str, Any]:
     }
 
 
+def _douyu_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿斗鱼直播/回放流，构造成 yt-dlp 兼容的 info dict。
+
+    斗鱼直播间返回当前直播 m3u8/flv 流（is_live 由调用方按 m3u8 判断），
+    回放页返回回放流。worker 用 Playwright 真实浏览器渲染，绕过 yt-dlp
+    DouyuTVIE 旧正则（room_id 格式已改）与 DouyuShowIE 的 PhantomJS 依赖。
+    """
+    data = _call_vps_worker("douyu", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "斗鱼直播",
+        "uploader": data.get("uploader") or "",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "Douyu",
+        "extractor": "douyu",
+        "ext": data.get("ext") or "mp4",
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "is_live": bool(data.get("is_live")),
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.douyu.com/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2309,6 +2336,10 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         return _douyin_info(url)
     if _is_kuaishou_host(host):
         return _kuaishou_info(url)
+    # 斗鱼：yt-dlp DouyuTVIE 旧正则失效（room_id 格式已改）+ DouyuShowIE 依赖
+    # 过时 PhantomJS，走 VPS Playwright 真实浏览器监听流请求
+    if "douyu.com" in (host or ""):
+        return _douyu_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -2990,6 +3021,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif _is_kuaishou_host(_task_host):
                 # 快手：同上，VPS 解析出合并 mp4 直链
                 info = _kuaishou_info(task.url)
+            elif "douyu.com" in (_task_host or ""):
+                # 斗鱼：yt-dlp 旧提取器失效，VPS Playwright 监听流
+                info = _douyu_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)
