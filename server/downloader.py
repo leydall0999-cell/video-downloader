@@ -1748,6 +1748,39 @@ def _is_douyin_host(host: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in _DOUYIN_HOSTS)
 
 
+# ---- VPS worker 解析结果短时缓存（resolve → 下载复用）----
+# 用户先点「解析」拿直链，再点「下载」——_run_once 对 worker 平台会再次调用
+# _xxx_info → _call_vps_worker，等于 VPS 上二次冷启动 Chromium（20-60s）。
+# 这里按 (platform, url) 缓存 90s（覆盖「看完解析结果再点下载」的典型间隔；
+# 签名直链时效：抖音 dy_q ~1h、cc auth_key ~5min、bestv s 短期，90s 保守安全），
+# 命中后下载阶段解析从 20-60s 降到 <1s。失败结果不缓存。
+_RESOLVE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_RESOLVE_CACHE_LOCK = threading.Lock()
+_RESOLVE_CACHE_TTL = 90.0
+# 复用连接（keep-alive）省去每次 TLS 握手/建连（~100-300ms）
+_worker_http: Any = None
+
+
+def _resolve_cache_get(key: str) -> dict[str, Any] | None:
+    with _RESOLVE_CACHE_LOCK:
+        item = _RESOLVE_CACHE.get(key)
+        if item and time.time() - item[0] <= _RESOLVE_CACHE_TTL:
+            return dict(item[1])
+        if item:
+            _RESOLVE_CACHE.pop(key, None)
+    return None
+
+
+def _resolve_cache_put(key: str, data: dict[str, Any]) -> None:
+    with _RESOLVE_CACHE_LOCK:
+        if len(_RESOLVE_CACHE) > 200:  # 防膨胀：超限先清过期
+            now = time.time()
+            for k, (ts, _v) in list(_RESOLVE_CACHE.items()):
+                if now - ts > _RESOLVE_CACHE_TTL:
+                    _RESOLVE_CACHE.pop(k, None)
+        _RESOLVE_CACHE[key] = (time.time(), data)
+
+
 def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
     """调用 VPS Playwright 解析 worker（/v1/resolve?platform=xx），返回真实流元数据。
 
@@ -1783,6 +1816,12 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
             "视频解析服务未配置",
             "该平台下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN 或 VDL_COOKIE_SYNC_TOKEN",
         )
+    # 命中缓存：probe() 刚解析过（90s 内），下载阶段直接复用，跳过二次 Playwright
+    _ckey = platform + "|" + url
+    _cached = _resolve_cache_get(_ckey)
+    if _cached is not None:
+        logger.info("[worker cache] hit %s %s", platform, url[:80])
+        return _cached
     endpoint = (
         worker_base.rstrip("/") + "/v1/resolve?token="
         + urllib.parse.quote(token, safe="")
@@ -1794,7 +1833,10 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
     try:
         if _requests is None:
             raise RuntimeError("requests 库未安装")
-        r = _requests.get(
+        global _worker_http
+        if _worker_http is None:
+            _worker_http = _requests.Session()
+        r = _worker_http.get(
             endpoint,
             headers={"User-Agent": "vdl-platform-resolve"},
             proxies=proxies,
@@ -1845,6 +1887,8 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
         raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
     if not data.get("ok"):
         raise ResolveError("视频解析失败", data.get("error") or "未知错误")
+    # 成功结果写入短时缓存（供「解析 → 立即下载」复用，避免二次 Playwright）
+    _resolve_cache_put(_ckey, data)
     return data
 
 
