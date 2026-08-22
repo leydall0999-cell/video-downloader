@@ -2348,21 +2348,42 @@ _RUMBLE_UA = (
 def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
     import json as _json
 
+    # curl_cffi 提供 Chrome TLS 指纹模拟，可绕过 Cloudflare 基础反爬；
+    # 未安装（本地测试环境）时降级 urllib（生产 Railway 已装依赖）。
+    try:
+        from curl_cffi import requests as _cf_requests
+    except Exception:
+        _cf_requests = None
+
     m = re.search(r"rumble\.com/(?:embed/)?(?:v(?!ideos))?([0-9a-z]+)", url)
     vid = m.group(1) if m else ""
     if not vid:
         raise ResolveError("Rumble 解析失败", "无法从链接中识别视频 ID。", category="parse_failed")
 
     api = f"https://rumble.com/embedJS/u3/?request=video&ver=2&v={vid}"
-    req = urllib.request.Request(api, headers={
+    headers = {
         "User-Agent": _RUMBLE_UA,
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://rumble.com/",
         "Connection": "keep-alive",
-    })
+    }
     try:
-        body = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+        if _cf_requests is not None:
+            _resp = _cf_requests.get(api, headers=headers, impersonate="chrome", timeout=20)
+            if _resp.status_code != 200:
+                raise ResolveError(
+                    "Rumble 解析失败",
+                    f"Rumble 接口返回 {_resp.status_code}（Cloudflare 反爬或地区限制）。"
+                    f"建议：①稍后重试；②在「高级选项」设置海外代理后重试。",
+                    category="parse_failed",
+                )
+            body = _resp.text
+        else:
+            req = urllib.request.Request(api, headers=headers)
+            body = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+    except ResolveError:
+        raise
     except urllib.error.HTTPError as e:
         raise ResolveError(
             "Rumble 解析失败",
