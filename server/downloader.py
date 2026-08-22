@@ -2194,6 +2194,32 @@ def _inke_info(url: str) -> dict[str, Any]:
     }
 
 
+# 网易CC直播（cc.163.com）：房间 URL 形如 cc.163.com/{cuteid}。
+# 公开接口（无需登录）：
+#   https://vapi.cc.163.com/video_play_url/{cuteid}?webrtc=0&src=webcc_4000_h5&...
+#   → 返回签名 FLV 直链 videourl（alirelayhdl/hsrelayhdl/alirtspull.cc.netease.com），
+#     离线频道返回 HTTP 410 + {"code":"Gone","data":"no live"}。
+# 标题从房间页 SSR JSON 的 "title" 字段提取。纯 HTTP 走 VPS worker（中国 IP 出口稳）。
+def _cc_info(url: str) -> dict[str, Any]:
+    """调 VPS worker 拿网易CC直播 FLV 直链，构造成 yt-dlp 兼容的 info dict。"""
+    data = _call_vps_worker("cc", url)
+    video_url = data.get("video_url") or ""
+    return {
+        "id": data.get("video_id") or "",
+        "title": data.get("title") or "网易CC直播",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail") or "",
+        "webpage_url": data.get("webpage_url") or url,
+        "extractor_key": "CCLive",
+        "extractor": "cc",
+        "ext": data.get("ext") or "flv",
+        "direct": True,
+        "url": video_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://cc.163.com/"},
+    }
+
+
 # 微博（weibo.com）：非浏览器请求返回 Sina Visitor System 反爬验证页，yt-dlp 内置
 # WeiboIE 也已失效；改走 VPS Playwright 解析（weibo_resolve.py），返回合并 mp4 直链。
 _WEIBO_HOSTS: tuple[str, ...] = ("weibo.com", "weibo.cn", "t.cn")
@@ -2512,6 +2538,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 映客直播/回放：公开接口拿昵称+状态，流地址规律化构造，走 VPS worker
     if "inke.cn" in (host or ""):
         return _inke_info(url)
+    # 网易CC直播：vapi 公开接口拿签名 FLV 直链，走 VPS worker
+    if "cc.163.com" in (host or ""):
+        return _cc_info(url)
     if _is_weibo_host(host):
         return _weibo_info(url)
     if _is_iqiyi_host(host):
@@ -3214,6 +3243,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "inke.cn" in (_task_host or ""):
                 # 映客直播/回放：公开接口构造 m3u8，VPS worker 解析
                 info = _inke_info(task.url)
+            elif "cc.163.com" in (_task_host or ""):
+                # 网易CC直播：vapi 公开接口拿签名 FLV 直链，VPS worker 解析
+                info = _cc_info(task.url)
             elif _is_weibo_host(_task_host):
                 # 微博：同上，VPS 解析出合并 mp4 直链
                 info = _weibo_info(task.url)

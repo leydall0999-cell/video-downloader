@@ -39,6 +39,7 @@ from fun_resolve import resolve as fun_resolve  # noqa: E402
 from bestv_resolve import resolve as bestv_resolve  # noqa: E402
 from hongguo_resolve import resolve as hongguo_resolve  # noqa: E402
 from inke_resolve import resolve as inke_resolve  # noqa: E402
+from cc_resolve import resolve as cc_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -103,6 +104,7 @@ _RESOLVERS = {
     "bestv": bestv_resolve,
     "hongguo": hongguo_resolve,
     "inke": inke_resolve,
+    "cc": cc_resolve,
 }
 
 
