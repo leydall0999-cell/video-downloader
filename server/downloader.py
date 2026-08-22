@@ -2441,6 +2441,17 @@ def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
         raise ResolveError("Rumble 解析失败", "Rumble 接口返回非 JSON 数据（可能被反爬拦截）。",
                            category="parse_failed") from None
 
+    # 无效 id / 无会话时 embedJS 返回的 sys.msg 提示 + 随机推荐内容
+    # （实测同一 URL 多次调用返回不同视频——必须拦截，避免误导用户）
+    _sys_msg = ((data.get("sys") or {}).get("msg") or "").strip()
+    if _sys_msg:
+        raise ResolveError(
+            "Rumble 解析失败",
+            f"Rumble 返回：{_sys_msg}。建议：①稍后重试；"
+            f"②在「高级选项」设置海外代理（住宅 IP）后重试。",
+            category="parse_failed",
+        )
+
     title = data.get("title") or "Rumble 视频"
     # 流选择：优先 mp4 直链（sp.rmbl.ws，完整文件可直接下载/播放），
     # 无 mp4 时退回 hls 清单。
