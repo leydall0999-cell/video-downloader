@@ -2390,6 +2390,84 @@
     }
   };
 
+  // 轴对齐矩形并集外轮廓（仅用于描边，填充仍走 SVG mask）
+  const dwRectsUnionOutline = (rects) => {
+    if (!rects.length) return [];
+    const EPS = 1e-4;
+    const round = (v) => Math.round(v / EPS) * EPS;
+
+    const xs = [...new Set(rects.flatMap((r) => [round(r.x), round(r.x + r.w)]))].sort((a, b) => a - b);
+    const ys = [...new Set(rects.flatMap((r) => [round(r.y), round(r.y + r.h)]))].sort((a, b) => a - b);
+    if (xs.length < 2 || ys.length < 2) return [];
+
+    const inside = (x, y) => rects.some((r) => x >= r.x - EPS && x <= r.x + r.w + EPS && y >= r.y - EPS && y <= r.y + r.h + EPS);
+
+    const counts = new Map();
+    const toggle = (type, a, b, c) => {
+      const k = `${type}|${round(a)}|${round(b)}|${round(c)}`;
+      counts.set(k, (counts.get(k) || 0) + 1);
+    };
+
+    for (let i = 0; i < xs.length - 1; i++) {
+      for (let j = 0; j < ys.length - 1; j++) {
+        const cx = (xs[i] + xs[i + 1]) / 2;
+        const cy = (ys[j] + ys[j + 1]) / 2;
+        if (!inside(cx, cy)) continue;
+        if (!inside(xs[i] - EPS, cy)) toggle('v', xs[i], ys[j], ys[j + 1]);
+        if (!inside(xs[i + 1] + EPS, cy)) toggle('v', xs[i + 1], ys[j], ys[j + 1]);
+        if (!inside(cx, ys[j] - EPS)) toggle('h', ys[j], xs[i], xs[i + 1]);
+        if (!inside(cx, ys[j + 1] + EPS)) toggle('h', ys[j + 1], xs[i], xs[i + 1]);
+      }
+    }
+
+    const segs = [];
+    counts.forEach((cnt, k) => {
+      if (cnt % 2 === 0) return;
+      const [type, a, b, c] = k.split('|');
+      if (type === 'v') segs.push({ x1: +a, y1: +b, x2: +a, y2: +c });
+      else segs.push({ x1: +b, y1: +a, x2: +c, y2: +a });
+    });
+
+    const used = new Set();
+    const polys = [];
+    for (let i = 0; i < segs.length; i++) {
+      if (used.has(i)) continue;
+      const poly = [];
+      const start = { x: segs[i].x1, y: segs[i].y1 };
+      let end = { x: segs[i].x2, y: segs[i].y2 };
+      used.add(i);
+      poly.push(start);
+
+      let guard = 0;
+      while (guard++ < segs.length + 2) {
+        let nextIdx = -1;
+        let reverse = false;
+        for (let j = 0; j < segs.length; j++) {
+          if (used.has(j)) continue;
+          if (Math.abs(segs[j].x1 - end.x) < EPS && Math.abs(segs[j].y1 - end.y) < EPS) { nextIdx = j; reverse = false; break; }
+          if (Math.abs(segs[j].x2 - end.x) < EPS && Math.abs(segs[j].y2 - end.y) < EPS) { nextIdx = j; reverse = true; break; }
+        }
+        if (nextIdx < 0) break;
+        used.add(nextIdx);
+        const sg = segs[nextIdx];
+        end = reverse ? { x: sg.x1, y: sg.y1 } : { x: sg.x2, y: sg.y2 };
+        const last = poly[poly.length - 1];
+        if (poly.length >= 2) {
+          const prev = poly[poly.length - 2];
+          const collinear = (Math.abs(prev.x - last.x) < EPS && Math.abs(last.x - end.x) < EPS) ||
+                            (Math.abs(prev.y - last.y) < EPS && Math.abs(last.y - end.y) < EPS);
+          if (collinear) poly[poly.length - 1] = end;
+          else poly.push(end);
+        } else {
+          poly.push(end);
+        }
+        if (Math.abs(end.x - start.x) < EPS && Math.abs(end.y - start.y) < EPS) break;
+      }
+      if (poly.length > 2) polys.push(poly);
+    }
+    return polys;
+  };
+
   const dwDrawOverlay = (cv, svg, infoEl) => {
     if (!cv || !svg) return;
     const W = cv.width, H = cv.height;
@@ -2464,19 +2542,18 @@
     fill.setAttribute('mask', `url(#${maskId})`);
     svg.appendChild(fill);
 
-    // 加选区边界（让用户看到每个选区）
-    adds.forEach((s) => {
-      const r = document.createElementNS(NS, 'rect');
-      r.setAttribute('x', s.x);
-      r.setAttribute('y', s.y);
-      r.setAttribute('width', s.w);
-      r.setAttribute('height', s.h);
-      r.setAttribute('fill', 'none');
-      r.setAttribute('stroke', '#2ecc71');
-      r.setAttribute('stroke-width', '2');
-      r.setAttribute('stroke-dasharray', '6,4');
-      svg.appendChild(r);
-    });
+    // 加选区外轮廓虚线：重叠后只保留合并外边框，内部不再有多余虚线
+    const outline = dwRectsUnionOutline(adds);
+    if (outline.length) {
+      const d = outline.map((poly) => 'M' + poly.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L') + ' Z').join(' ');
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      p.setAttribute('fill', 'none');
+      p.setAttribute('stroke', '#2ecc71');
+      p.setAttribute('stroke-width', '2');
+      p.setAttribute('stroke-dasharray', '6,4');
+      svg.appendChild(p);
+    }
 
     // 减选区红色显示（让用户看清被抠除的位置）
     subs.forEach((s) => {
