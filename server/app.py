@@ -3197,6 +3197,54 @@ def cookie_pull_diag() -> dict:
     return out
 
 
+@app.get("/api/cookie/inject-diag")
+def cookie_inject_diag(host: str = "") -> dict:
+    """诊断：给定 host（如 v.youku.com / bilibili.com），返回 _base_options 解析时会注入的登录态来源。
+
+    复刻 _base_options 的 Cookie 解析分支（本机缓存 → 公共池 → miss），但不真正下载。
+    仅返回来源与脱敏长度，不含明文 Cookie。用于确认「共享池 Cookie 能否在解析时自动注入」
+    （即 [5] 验证项）：贡献优酷 Cookie 后访问 /api/cookie/inject-diag?host=v.youku.com，
+    resolved.source 应为 pool、len>0。
+    """
+    from urllib.parse import urlparse
+
+    h = urlparse(host).netloc or host or ""
+    if not h:
+        return {"ok": False, "error": "missing host"}
+    # 与 _base_options 同口径：b23.tv 回退 bilibili.com；其余用 host 本身
+    cookie_host = "bilibili.com" if "b23.tv" in h else h
+    out: dict = {"host": h, "cookie_host": cookie_host}
+    # 1) 本机浏览器缓存（Railway 无浏览器，通常 miss）
+    try:
+        from cookie_cache import get_cached_cookie_header
+
+        cached = get_cached_cookie_header(cookie_host)
+    except Exception:
+        cached = None
+    out["cache"] = {"hit": bool(cached), "len": len(cached or "")} if cached else {"hit": False}
+    # 2) 公共池（Railway 实际生效的兜底）
+    try:
+        from cookie_pool import get_cookie, _candidates, is_allowed
+
+        pooled = get_cookie(cookie_host)
+        out["pool"] = {
+            "allowed": is_allowed(cookie_host),
+            "candidates": _candidates(cookie_host),
+            "hit": bool(pooled),
+            "len": len(pooled or ""),
+        }
+    except Exception as e:  # noqa: BLE001
+        out["pool"] = {"error": str(e)[:160]}
+    # 3) 最终解析结论（与 _base_options 一致：cache 优先，否则 pool）
+    resolved = cached or pooled
+    out["resolved"] = {
+        "source": "cache" if cached else ("pool" if pooled else "miss"),
+        "len": len(resolved or ""),
+    }
+    out["ok"] = bool(resolved)
+    return out
+
+
 @app.post("/api/cookie/cache/clear")
 def cookie_cache_clear() -> dict:
     """清除本机 Cookie 缓存（仅删 ~/.videodownloader/cookies，不影响浏览器本身）。"""
