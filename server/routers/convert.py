@@ -61,7 +61,15 @@ def convert_file(job_id: str, request: app.Request) -> app.FileResponse:
     out = app.Path(job["out_path"])
     if not out.exists():
         raise app.HTTPException(status_code=410, detail="转换文件已清理")
-    return app.FileResponse(path=str(out), filename=out.name, media_type="application/octet-stream")
+    # 下载文件名带参数前缀 `[格式]原名.ext`，与前端 download 属性一致；
+    # 否则 FileResponse 的 Content-Disposition 会覆盖浏览器 <a download>，保存成 up_conv_xxx.mp4
+    target = job.get("target", "")
+    src_name = job.get("src_name", "")
+    if target and src_name:
+        dl_name = f"[{target.upper()}]{app.Path(src_name).stem}{out.suffix}"
+    else:
+        dl_name = out.name
+    return app.FileResponse(path=str(out), filename=dl_name, media_type="application/octet-stream")
 
 
 @router.post("/api/upload-convert")
@@ -120,6 +128,7 @@ def create_upload_convert(
             "error": "",
             "filename": out_path.name,
             "src_name": file.filename or "",   # 原始上传文件名（媒体库命名用）
+            "target": target,                  # 目标格式（下载文件名 [格式]原名.ext 用）
             "stage": "排队中",
             "to_library": to_library,
             "library_id": "",
@@ -157,6 +166,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
             "error": "",
             "filename": out_path.name,
             "src_name": src_name,        # 原始上传文件名（用于媒体库命名 [格式]原名.ext）
+            "target": target,            # 目标格式（下载文件名 [格式]原名.ext 用）
             "stage": "排队中",            # 前端据此显示「排队中…」（转码线程繁忙时）
             "to_library": to_library,
             "library_id": "",
