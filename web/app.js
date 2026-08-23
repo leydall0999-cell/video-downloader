@@ -416,6 +416,7 @@
     dwModalZoomFit: $('dwModalZoomFit'),
     dwModalZoomLabel: $('dwModalZoomLabel'),
     dwModalSelInfo: $('dwModalSelInfo'),
+    dwModalPreviewWrap: $('dwModalPreviewWrap'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
     dwImgStatus: $('dwImgStatus'),
