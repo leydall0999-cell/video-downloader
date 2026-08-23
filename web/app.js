@@ -392,15 +392,26 @@
     dwModePdf: $('dwModePdf'),
     dwImgPane: $('dwImgPane'),
     dwImgFile: $('dwImgFile'),
+    dwPreviewWrap: $('dwPreviewWrap'),
     dwImgPreview: $('dwImgPreview'),
     dwImgSvg: $('dwImgSvg'),
     dwImgCanvas: $('dwImgCanvas'),
+    dwExpandBtn: $('dwExpandBtn'),
+    dwExpandBtn2: $('dwExpandBtn2'),
     dwSelInfo: $('dwSelInfo'),
-    dwZoomIn: $('dwZoomIn'),
-    dwZoomOut: $('dwZoomOut'),
-    dwZoomFit: $('dwZoomFit'),
-    dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
+    // 去水印放大弹窗
+    dwImgModal: $('dwImgModal'),
+    dwModalClose: $('dwModalClose'),
+    dwModalDone: $('dwModalDone'),
+    dwModalImg: $('dwModalImg'),
+    dwModalSvg: $('dwModalSvg'),
+    dwModalCanvas: $('dwModalCanvas'),
+    dwModalZoomIn: $('dwModalZoomIn'),
+    dwModalZoomOut: $('dwModalZoomOut'),
+    dwModalZoomFit: $('dwModalZoomFit'),
+    dwModalZoomLabel: $('dwModalZoomLabel'),
+    dwModalSelInfo: $('dwModalSelInfo'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
     dwImgStatus: $('dwImgStatus'),
@@ -2348,8 +2359,7 @@
   let dwDrawMode = 'new';  // 'new' | 'add' | 'subtract'
   let dwDragging = false, dwStartX = 0, dwStartY = 0, dwCur = null;
 
-  const dwResizeCanvas = () => {
-    const img = el.dwImgPreview, cv = el.dwImgCanvas, svg = el.dwImgSvg;
+  const dwResizeOverlay = (img, cv, svg) => {
     if (!img || !cv || !svg || !img.clientWidth) return;
     cv.width = img.clientWidth;
     cv.height = img.clientHeight;
@@ -2358,7 +2368,13 @@
     svg.setAttribute('width', img.clientWidth);
     svg.setAttribute('height', img.clientHeight);
     svg.setAttribute('viewBox', `0 0 ${img.clientWidth} ${img.clientHeight}`);
-    dwDrawCanvas();
+  };
+
+  const dwResizeAll = () => {
+    dwResizeOverlay(el.dwImgPreview, el.dwImgCanvas, el.dwImgSvg);
+    if (!el.dwImgModal.hidden) {
+      dwResizeOverlay(el.dwModalImg, el.dwModalCanvas, el.dwModalSvg);
+    }
   };
 
   // 轴对齐矩形并集轮廓（用于加选区真正合并，重叠不再消失）
@@ -2451,8 +2467,7 @@
   const dwPolysToPath = (polys) =>
     polys.map((poly) => 'M' + poly.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L') + ' Z').join(' ');
 
-  const dwDrawCanvas = () => {
-    const cv = el.dwImgCanvas, svg = el.dwImgSvg;
+  const dwDrawOverlay = (cv, svg, infoEl) => {
     if (!cv || !svg) return;
     const W = cv.width, H = cv.height;
 
@@ -2473,7 +2488,7 @@
     // SVG：加选区求并集轮廓（重叠区不再消失），减选区与并集求交作为洞挖除
     svg.innerHTML = '';
     if (!dwSelections.length) {
-      if (el.dwSelInfo) el.dwSelInfo.textContent = '尚未框选';
+      if (infoEl) infoEl.textContent = '尚未框选';
       return;
     }
     const toPx = (s) => ({ x: s.x * W, y: s.y * H, w: s.w * W, h: s.h * H });
@@ -2517,30 +2532,39 @@
       svg.appendChild(dp);
     }
 
-    if (el.dwSelInfo) el.dwSelInfo.textContent = `已选 ${adds.length} 加 / ${subs.length} 减`;
+    if (infoEl) infoEl.textContent = `已选 ${adds.length} 加 / ${subs.length} 减`;
   };
-  // 预览图缩放（相对适应宽度的倍数，1 = 适应窗口），放大后框选坐标按归一化计算仍准确
+
+  const dwDrawAll = () => {
+    dwDrawOverlay(el.dwImgCanvas, el.dwImgSvg, el.dwSelInfo);
+    if (!el.dwImgModal.hidden) {
+      dwDrawOverlay(el.dwModalCanvas, el.dwModalSvg, el.dwModalSelInfo);
+    }
+  };
+  // 弹窗内大图缩放（相对适应宽度的倍数，1 = 适应窗口），放大后框选坐标按归一化计算仍准确
   let dwZoom = 1;
   const dwApplyZoom = () => {
-    const img = el.dwImgPreview;
+    const img = el.dwModalImg;
     if (!img || !img.src) return;
+    // 先重置到适应尺寸，测量 fitW
     img.style.maxWidth = '100%';
-    img.style.maxHeight = '420px';
+    img.style.maxHeight = 'none';
     img.style.width = 'auto';
     const fitW = img.clientWidth || 1;
     if (dwZoom <= 1.0001) {
       dwZoom = 1;
+      img.style.width = 'auto';
     } else {
-      img.style.maxWidth = 'none';
-      img.style.maxHeight = 'none';
       img.style.width = Math.round(fitW * dwZoom) + 'px';
     }
-    if (el.dwZoomLabel) el.dwZoomLabel.textContent = Math.round(dwZoom * 100) + '%';
-    dwResizeCanvas();
+    if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = Math.round(dwZoom * 100) + '%';
+    dwResizeAll();
+    dwDrawAll();
   };
 
-  const dwNormFromEvent = (clientX, clientY) => {
-    const img = el.dwImgPreview, rect = img.getBoundingClientRect();
+  const dwNormFromEvent = (img, clientX, clientY) => {
+    if (!img) return [0, 0];
+    const rect = img.getBoundingClientRect();
     const nx = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
     const ny = Math.min(Math.max((clientY - rect.top) / rect.height, 0), 1);
     return [nx, ny];
@@ -2551,44 +2575,55 @@
     if (!f) return;
     const url = URL.createObjectURL(f);
     el.dwImgPreview.src = url;
-    el.dwImgPreview.onload = () => { URL.revokeObjectURL(url); dwZoom = 1; if (el.dwZoomLabel) el.dwZoomLabel.textContent = '100%'; dwResizeCanvas(); };
-    // 滚轮缩放 / 双击在 100%↔200% 间切换（放大后便于精确框选）
-    el.dwImgPreview.addEventListener('wheel', (e) => {
-      if (!el.dwImgPreview.src) return;
-      e.preventDefault();
-      dwZoom = e.deltaY < 0 ? Math.min(5, dwZoom + 0.2) : Math.max(1, dwZoom - 0.2);
-      dwApplyZoom();
-    }, { passive: false });
-    el.dwImgPreview.addEventListener('dblclick', (e) => {
-      if (!el.dwImgPreview.src) return;
-      dwZoom = dwZoom > 1.0001 ? 1 : 2;
-      dwApplyZoom();
-      e.preventDefault();
-    });
+    el.dwModalImg.src = url;
+    const onload = () => {
+      URL.revokeObjectURL(url);
+      dwZoom = 1;
+      if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
+      dwResizeAll();
+      dwDrawAll();
+    };
+    el.dwImgPreview.onload = onload;
+    el.dwModalImg.onload = onload;
     dwSelections = [];
     dwCur = null;
-    dwDrawCanvas();
+    dwDrawAll();
     el.dwImgResult.hidden = true;
     el.dwImgStatus.textContent = '';
   });
 
-  el.dwImgPreview.addEventListener('mousedown', (e) => {
-    if (!el.dwImgPreview.src) return;
+  // 弹窗内交互：滚轮缩放 / 双击切换 / 拖拽框选
+  const dwModalImg = el.dwModalImg, dwModalCanvas = el.dwModalCanvas;
+  dwModalImg.addEventListener('wheel', (e) => {
+    if (!dwModalImg.src) return;
+    e.preventDefault();
+    dwZoom = e.deltaY < 0 ? Math.min(5, dwZoom + 0.2) : Math.max(1, dwZoom - 0.2);
+    dwApplyZoom();
+  }, { passive: false });
+  dwModalImg.addEventListener('dblclick', (e) => {
+    if (!dwModalImg.src) return;
+    dwZoom = dwZoom > 1.0001 ? 1 : 2;
+    dwApplyZoom();
+    e.preventDefault();
+  });
+
+  dwModalCanvas.addEventListener('mousedown', (e) => {
+    if (!dwModalImg.src) return;
     dwDragging = true;
-    const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
+    const [nx, ny] = dwNormFromEvent(dwModalImg, e.clientX, e.clientY);
     dwStartX = nx; dwStartY = ny;
     dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
-    dwDrawCanvas();
+    dwDrawAll();
     e.preventDefault();
   });
   window.addEventListener('mousemove', (e) => {
     if (!dwDragging || !dwCur) return;
-    const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
+    const [nx, ny] = dwNormFromEvent(dwModalImg, e.clientX, e.clientY);
     dwCur.x = Math.min(dwStartX, nx);
     dwCur.y = Math.min(dwStartY, ny);
     dwCur.w = Math.abs(nx - dwStartX);
     dwCur.h = Math.abs(ny - dwStartY);
-    dwDrawCanvas();
+    dwDrawAll();
   });
   window.addEventListener('mouseup', () => {
     if (!dwDragging) return;
@@ -2598,32 +2633,62 @@
       if (dwCur.w > 0.004 && dwCur.h > 0.004) dwSelections.push(dwCur);
       dwCur = null;
     }
-    dwDrawCanvas();
+    dwDrawAll();
   });
-  window.addEventListener('resize', dwResizeCanvas);
+  window.addEventListener('resize', () => { dwResizeAll(); dwDrawAll(); });
 
-  // 选区工具按钮（新建/加选/减选/撤销/清空）
+  // 同步所有模式按钮的高亮状态
+  const dwSyncModeButtons = () => {
+    document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b.dataset.mode === dwDrawMode));
+  };
+
+  // 选区工具按钮（新建/加选/减选/撤销/清空）—— 同时作用于缩略图区和弹窗区
   (document.querySelectorAll('.dw-mode') || []).forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.mode) {
         dwDrawMode = btn.dataset.mode;
         if (dwDrawMode === 'new') dwSelections = [];
-        document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b === btn));
-        dwDrawCanvas();
+        dwSyncModeButtons();
+        dwDrawAll();
       } else if (btn.dataset.act === 'undo') {
         dwSelections.pop();
-        dwDrawCanvas();
+        dwDrawAll();
       } else if (btn.dataset.act === 'clear') {
         dwSelections = [];
-        dwDrawCanvas();
+        dwDrawAll();
       }
     });
   });
 
-  // 缩放按钮
-  if (el.dwZoomIn) el.dwZoomIn.addEventListener('click', () => { dwZoom = Math.min(5, dwZoom + 0.25); dwApplyZoom(); });
-  if (el.dwZoomOut) el.dwZoomOut.addEventListener('click', () => { dwZoom = Math.max(1, dwZoom - 0.25); dwApplyZoom(); });
-  if (el.dwZoomFit) el.dwZoomFit.addEventListener('click', () => { dwZoom = 1; dwApplyZoom(); });
+  // 弹窗缩放按钮
+  if (el.dwModalZoomIn) el.dwModalZoomIn.addEventListener('click', () => { dwZoom = Math.min(5, dwZoom + 0.25); dwApplyZoom(); });
+  if (el.dwModalZoomOut) el.dwModalZoomOut.addEventListener('click', () => { dwZoom = Math.max(1, dwZoom - 0.25); dwApplyZoom(); });
+  if (el.dwModalZoomFit) el.dwModalZoomFit.addEventListener('click', () => { dwZoom = 1; dwApplyZoom(); });
+
+  // 打开 / 关闭弹窗
+  const dwOpenModal = () => {
+    if (!el.dwImgFile.files[0]) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
+    el.dwImgModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    dwZoom = 1;
+    if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
+    // 同步模式按钮高亮
+    dwSyncModeButtons();
+    // 等布局稳定后重绘
+    requestAnimationFrame(() => { dwResizeAll(); dwDrawAll(); });
+  };
+  const dwCloseModal = () => {
+    el.dwImgModal.hidden = true;
+    document.body.style.overflow = '';
+    dwResizeAll();
+    dwDrawAll();
+  };
+  el.dwExpandBtn.addEventListener('click', dwOpenModal);
+  el.dwExpandBtn2.addEventListener('click', dwOpenModal);
+  el.dwImgPreview.addEventListener('click', dwOpenModal);
+  el.dwModalClose.addEventListener('click', dwCloseModal);
+  el.dwModalDone.addEventListener('click', dwCloseModal);
+  el.dwImgModal.addEventListener('click', (e) => { if (e.target === el.dwImgModal || e.target.classList.contains('dw-modal-backdrop')) dwCloseModal(); });
 
   const startDwImage = async () => {
     const file = el.dwImgFile.files[0];
