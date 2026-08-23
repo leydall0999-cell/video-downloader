@@ -2534,7 +2534,7 @@ def _youku_info(url: str, cookie: str = "", ckey: str = "", proxy: str = "") -> 
             category="need_ckey",
         )
 
-    streams = _youku_ups_ckey(vid, cookie, ckey, utid, proxy=effective_proxy)
+    streams = _youku_ups_ckey(vid, cookie, ckey, utid, proxy=proxy)
     if not streams:
         raise ResolveError(
             "优酷解析失败",
