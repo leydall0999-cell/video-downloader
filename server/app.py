@@ -1428,7 +1428,7 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key"],
+    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key", "X-Device-Id"],
 )
 
 

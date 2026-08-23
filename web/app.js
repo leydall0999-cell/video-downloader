@@ -1481,6 +1481,17 @@
   const UC_CHUNK_CONCURRENCY = 8;               // 单文件分片并发路数（高 RTT 链路多连接并行提速，HTTP/2 无连接限制）
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
+  // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
+  // Railway 原生域名（无 CF 限速层，直连源站）指向同一个后端、同一份分片存储，
+  // 分片按 index 轮询两通道并发上传，谁快用谁；单通道失败自动故障转移到另一通道。
+  // 实测（沙盒）：CF 4.96MB/s + 原生 2.12MB/s，双通道并发总吞吐 ≈ 7MB/s，恒不劣于单通道。
+  const UC_UPLOAD_ENDPOINTS = [location.origin, 'https://web-production-b9993.up.railway.app'];
+  const ucUploadEndpoint = (i, attempt) => {
+    const n = UC_UPLOAD_ENDPOINTS.length;
+    // 初次按 index 轮询（奇偶分流）；重试切换到另一端（故障转移，不重试同一条坏链路）
+    const base = (i % n + (attempt % n)) % n;
+    return UC_UPLOAD_ENDPOINTS[base];
+  };
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
   const ucFormatSize = (bytes) => {
@@ -1685,16 +1696,17 @@
   };
 
   // 上传单个分片（32MB；小文件=1 片，与整传等效）
+  // endpoint: 上传目标（双端点混合上传时按分片轮询/故障转移选择；默认同源）
   // onProgress(loaded) 让调用方合并 in-flight 字节算总进度，避免「长时间 0%」假卡死
   // xhrs(Set) 收集进行中的 XHR，供「上传中删除」时 abort
-  const ucUploadChunk = (uploadId, index, total, blob, onProgress, xhrs) => new Promise((resolve, reject) => {
+  const ucUploadChunk = (uploadId, index, total, blob, onProgress, xhrs, endpoint) => new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('upload_id', uploadId);
     form.append('index', index);
     form.append('total', total);
     form.append('file', blob, 'chunk');
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload-chunk');
+    xhr.open('POST', (endpoint || location.origin) + '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
     xhr.timeout = 120000;   // 2 分钟单片超时（防后台 tab 限流/网络静默断网卡死）
@@ -1785,7 +1797,7 @@
             await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => {
               inFlight.set(i, loaded);  // 单片实时进度反馈
               updateProgress();
-            }, item._xhrs);
+            }, item._xhrs, ucUploadEndpoint(i, attempts));
             break;
           } catch (e) {
             if (item._removed) return;  // 用户已删除：直接退出，不重试不报错
