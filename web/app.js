@@ -2555,19 +2555,33 @@
     const img = isModal ? el.dwModalImg : el.dwImgPreview;
     const label = isModal ? el.dwModalZoomLabel : el.dwZoomLabel;
     const z = isModal ? dwModalZoom : dwZoom;
-    if (!img || !img.src) return;
-    // 先重置到适应尺寸，测量 fitW
-    img.style.maxWidth = '100%';
-    img.style.maxHeight = isModal ? 'none' : '420px';
-    img.style.width = 'auto';
-    const fitW = img.clientWidth || 1;
-    if (z <= 1.0001) {
-      if (isModal) dwModalZoom = 1; else dwZoom = 1;
-      img.style.width = 'auto';
+    if (!img || !img.src || !img.naturalWidth) return;
+    if (isModal) {
+      // 弹窗：先按可用区域 contain 适配（zoom=1 即完整显示），再按倍数放大
+      const body = el.dwModalPreviewWrap.closest('.dw-modal-body') || el.dwModalPreviewWrap.parentElement;
+      const pad = 32; // body padding 1rem*2
+      const availW = Math.max(50, (body.clientWidth || img.naturalWidth) - pad);
+      const availH = Math.max(50, (body.clientHeight || img.naturalHeight) - pad);
+      const fitScale = Math.min(availW / img.naturalWidth, availH / img.naturalHeight, 1);
+      const scale = fitScale * z;
+      img.style.maxWidth = 'none';
+      img.style.maxHeight = 'none';
+      img.style.width = Math.max(1, Math.round(img.naturalWidth * scale)) + 'px';
+      img.style.height = Math.max(1, Math.round(img.naturalHeight * scale)) + 'px';
     } else {
-      img.style.width = Math.round(fitW * z) + 'px';
+      // 先重置到适应尺寸，测量 fitW
+      img.style.maxWidth = '100%';
+      img.style.maxHeight = '420px';
+      img.style.width = 'auto';
+      const fitW = img.clientWidth || 1;
+      if (z <= 1.0001) {
+        dwZoom = 1;
+        img.style.width = 'auto';
+      } else {
+        img.style.width = Math.round(fitW * z) + 'px';
+      }
     }
-    if (label) label.textContent = Math.round((isModal ? dwModalZoom : dwZoom) * 100) + '%';
+    if (label) label.textContent = Math.round(z * 100) + '%';
     dwResizeAll();
     dwDrawAll();
   };
@@ -2637,7 +2651,11 @@
 
   // 滚动时叠加层必须重新跟随图片位置，否则选区会“跑”
   if (el.dwPreviewWrap) el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
-  if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  if (el.dwModalPreviewWrap) {
+    // 弹窗真正的滚动容器是 .dw-modal-body（wrap 本身 overflow:visible 不滚动）
+    const modalBody = el.dwModalPreviewWrap.closest('.dw-modal-body');
+    if (modalBody) modalBody.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  }
 
   window.addEventListener('mousemove', (e) => {
     if (!dwDragging || !dwCur || !dwDragTarget) return;
@@ -2660,7 +2678,11 @@
     }
     dwDrawAll();
   });
-  window.addEventListener('resize', () => { dwResizeAll(); dwDrawAll(); });
+  window.addEventListener('resize', () => {
+    dwResizeAll();
+    dwDrawAll();
+    if (!el.dwImgModal.hidden) dwApplyZoom('modal');
+  });
 
   // 同步所有模式按钮的高亮状态
   const dwSyncModeButtons = () => {
@@ -2703,8 +2725,8 @@
     if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
     // 同步模式按钮高亮
     dwSyncModeButtons();
-    // 等布局稳定后重绘
-    requestAnimationFrame(() => { dwResizeAll(); dwDrawAll(); });
+    // 等布局稳定后按可用区域适配（否则弹窗以原图自然尺寸显示，过大无法编辑）
+    requestAnimationFrame(() => requestAnimationFrame(() => dwApplyZoom('modal')));
   };
   const dwCloseModal = () => {
     el.dwImgModal.hidden = true;
