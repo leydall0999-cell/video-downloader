@@ -2363,6 +2363,7 @@
   let dwSelections = [];   // [{x,y,w,h,op}] 归一化 0..1，op: 'add' | 'subtract'
   let dwDrawMode = 'new';  // 'new' | 'add' | 'subtract'
   let dwDragging = false, dwStartX = 0, dwStartY = 0, dwCur = null;
+  let dwPanning = false, dwPanLastX = 0, dwPanLastY = 0, dwPanX = 0, dwPanY = 0;
 
   const dwResizeOverlay = (wrap, img, cv, svg) => {
     if (!wrap || !img || !cv || !svg || !img.clientWidth) return;
@@ -2558,6 +2559,9 @@
     const z = isModal ? dwModalZoom : dwZoom;
     if (!img || !img.src || !img.naturalWidth) return;
     if (isModal) {
+      // 缩放变化时重置平移，避免叠加错位
+      dwPanX = 0; dwPanY = 0;
+      if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.style.transform = 'translate(0px, 0px)';
       // 弹窗：先按可用区域 contain 适配（zoom=1 即完整显示），再按倍数放大
       const body = el.dwModalPreviewWrap.closest('.dw-modal-body') || el.dwModalPreviewWrap.parentElement;
       const pad = 24; // body padding .75rem*2
@@ -2638,6 +2642,26 @@
     });
     cv.addEventListener('mousedown', (e) => {
       if (!img.src) return;
+      // 弹窗放大后：✋移动模式 或 起点落在已有加选区内 → 平移图片（不画框）
+      let startPan = false;
+      if (target === 'modal') {
+        const z = dwModalZoom;
+        if (dwDrawMode === 'pan') startPan = true;
+        else if (z > 1.0001) {
+          const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
+          if (dwSelections.some((s) => !s.op || s.op === 'add' && nx >= s.x && nx <= s.x + s.w && ny >= s.y && ny <= s.y + s.h)) {
+            startPan = true;
+          }
+        }
+      }
+      if (startPan) {
+        dwPanning = true;
+        dwDragTarget = 'modal';
+        dwPanLastX = e.clientX;
+        dwPanLastY = e.clientY;
+        e.preventDefault();
+        return;
+      }
       dwDragging = true;
       dwDragTarget = target;
       const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
@@ -2659,6 +2683,14 @@
   }
 
   window.addEventListener('mousemove', (e) => {
+    if (dwPanning && dwDragTarget === 'modal') {
+      dwPanX += e.clientX - dwPanLastX;
+      dwPanY += e.clientY - dwPanLastY;
+      dwPanLastX = e.clientX;
+      dwPanLastY = e.clientY;
+      if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.style.transform = `translate(${dwPanX}px, ${dwPanY}px)`;
+      return;
+    }
     if (!dwDragging || !dwCur || !dwDragTarget) return;
     const img = dwDragTarget === 'modal' ? el.dwModalImg : el.dwImgPreview;
     const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
@@ -2669,6 +2701,11 @@
     dwDrawAll();
   });
   window.addEventListener('mouseup', () => {
+    if (dwPanning) {
+      dwPanning = false;
+      dwDragTarget = null;
+      return;
+    }
     if (!dwDragging) return;
     dwDragging = false;
     dwDragTarget = null;
@@ -2690,11 +2727,12 @@
     document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b.dataset.mode === dwDrawMode));
   };
 
-  // 选区工具按钮（新建/加选/减选/撤销/清空）—— 同时作用于缩略图区和弹窗区
+  // 选区工具按钮（新建/加选/减选/移动/撤销/清空）—— 同时作用于缩略图区和弹窗区
   (document.querySelectorAll('.dw-mode') || []).forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.mode) {
         dwDrawMode = btn.dataset.mode;
+        // 仅“新选区”会清空当前选区；移动/加选/减选保留
         if (dwDrawMode === 'new') dwSelections = [];
         dwSyncModeButtons();
         dwDrawAll();
