@@ -1476,8 +1476,9 @@
   // 2026-08-24 上传提速：单文件分片并发（32MB/片 × 4 路，单片失败重试 2 次），
   // 文件级并发 2（避免多文件抢占带宽），大文件总连接数 = 2×4 = 8，HTTP/1.1 排队 HTTP/2 全并发。
   const UC_MAX_CONCURRENT = 2; // 文件级上传并发
-  const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB
-  const UC_CHUNK_CONCURRENCY = 4;               // 单文件分片并发路数
+  const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB（默认）
+  const UC_BIG_CHUNK_SIZE = 64 * 1024 * 1024;   // >2GB 文件单片 64MB（减少请求数，后端上限 64MB）
+  const UC_CHUNK_CONCURRENCY = 8;               // 单文件分片并发路数（高 RTT 链路多连接并行提速，HTTP/2 无连接限制）
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
@@ -1727,7 +1728,9 @@
     item._xhrs = new Set();           // 进行中的分片 XHR（删除时 abort）
     renderUcList();
     const file = item.file;
-    const totalChunks = Math.max(1, Math.ceil(file.size / UC_CHUNK_SIZE));
+    // >2GB 大文件用 64MB 分片（减少请求数）；否则 32MB
+    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
     const uploadId = item._uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0;          // 已成功分片的累计字节
     const done = new Set();          // 已成功分片 index（重试去重）
@@ -1771,8 +1774,8 @@
       while (idx < totalChunks) {
         if (item._removed || item.status === 'failed') return;
         const i = idx++;
-        const start = i * UC_CHUNK_SIZE;
-        const end = Math.min(start + UC_CHUNK_SIZE, file.size);
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
         const blob = file.slice(start, end);
         let attempts = 0;
         for (;;) {
