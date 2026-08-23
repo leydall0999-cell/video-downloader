@@ -2431,7 +2431,7 @@ def _youku_vid(url: str) -> str:
     return ""
 
 
-def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
+def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str, proxy: str = "") -> list[dict]:
     """直接打 UPS 接口（带 ckey），返回 stream 列表。失败抛 ResolveError。"""
     import json as _json
     import ssl as _ssl
@@ -2440,10 +2440,9 @@ def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
     cctx.check_hostname = False
     cctx.verify_mode = _ssl.CERT_NONE
     # 优酷对境外服务器出口 IP 有地域风控（UPS 返回空 stream）。
-    # 允许通过环境变量走代理（境内出口）：VDL_YOUKU_PROXY 优先，否则通用 HTTPS_PROXY/http_proxy。
-    _proxy = os.environ.get("VDL_YOUKU_PROXY") or os.environ.get("HTTPS_PROXY") \
-        or os.environ.get("https_proxy") or os.environ.get("HTTP_PROXY") \
-        or os.environ.get("http_proxy") or ""
+    # 优先用调用方传入的 proxy（probe 已通过 _resolve_proxy 算出国内站 cn_proxy），
+    # 否则落回 _cn_proxy_url()（Railway 上自动指向 127.0.0.1:18889 国内隧道）。
+    _proxy = (proxy or "").strip() or _cn_proxy_url()
     _handlers = {}
     if _proxy:
         _handlers["http"] = _proxy
@@ -2535,7 +2534,7 @@ def _youku_info(url: str, cookie: str = "", ckey: str = "") -> dict[str, Any]:
             category="need_ckey",
         )
 
-    streams = _youku_ups_ckey(vid, cookie, ckey, utid)
+    streams = _youku_ups_ckey(vid, cookie, ckey, utid, proxy=effective_proxy)
     if not streams:
         raise ResolveError(
             "优酷解析失败",
