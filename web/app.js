@@ -1697,6 +1697,7 @@
     xhr.open('POST', '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    xhr.timeout = 120000;   // 2 分钟单片超时（防后台 tab 限流/网络静默断网卡死）
     if (xhrs) xhrs.add(xhr);
     const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
     if (onProgress) {
@@ -1714,6 +1715,7 @@
       }
     });
     xhr.addEventListener('error', () => { cleanup(); reject(new Error('网络错误')); });
+    xhr.addEventListener('timeout', () => { cleanup(); reject(new Error('分片超时（2 分钟无响应，可能是网络断/后台 tab 限流）')); });
     xhr.addEventListener('abort', () => { cleanup(); reject(new Error('已取消')); });
     xhr.send(form);
   });
@@ -1790,7 +1792,9 @@
             attempts++;
             if (attempts > UC_CHUNK_RETRIES) {
               item.status = 'failed';
-              item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}`;
+              // 区分超时（2 分钟无响应，多为后台 tab 限流或网络静默断）：建议刷新后保持前台重传
+              const hint = /超时/.test(e.message) ? '（建议保持上传页面在前台后重传）' : '';
+              item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}${hint}`;
               item.speedText = ''; item.uploadedText = '';
               renderUcList();
               reject(new Error(item.errorMsg));
@@ -1851,10 +1855,15 @@
           resolve(data);
         } else {
           item.status = 'failed';
-          item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
+          let msg = data.detail || data.error || ('HTTP ' + xhr.status);
+          if (/分片不完整|分片参数|文件超过|合并/.test(msg)) {
+            // finish 是一次性操作（合并时已 unlink 部分 parts），分片无法服务端重试，只能重传
+            msg += '（请移除此行后重新添加文件上传）';
+          }
+          item.errorMsg = msg;
           item.speedText = ''; item.uploadedText = '';
           renderUcList();
-          reject(new Error(item.errorMsg));
+          reject(new Error(msg));
         }
       } catch (e) {
         // responseText 非 JSON（HTML 错误页/空响应/被代理截断）—— 通常是 Cloudflare↔Railway 链路抖动，
