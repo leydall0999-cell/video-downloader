@@ -635,7 +635,7 @@ img { max-width: 100%; display: block; }
   border-radius: 999px; cursor: pointer; font-size: .88rem; color: var(--text-mute);
 }
 .dw-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); }
-.uc-subtabs { display: flex; gap: .6rem; margin: 2rem 0 1rem; flex-wrap: wrap; }
+.uc-subtabs { display: flex; gap: .6rem; margin: 3rem 0 1rem; flex-wrap: wrap; }
 .uc-sub {
   padding: .45rem 1rem; border: 1px solid var(--line); background: #e7eefe;
   border-radius: 999px; cursor: pointer; font-size: .9rem; font-weight: 500;
