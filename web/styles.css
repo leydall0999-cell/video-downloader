@@ -635,12 +635,14 @@ img { max-width: 100%; display: block; }
   border-radius: 999px; cursor: pointer; font-size: .88rem; color: var(--text-mute);
 }
 .dw-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); }
-.uc-subtabs { display: flex; gap: .5rem; margin: .5rem 0 1rem; flex-wrap: wrap; }
+.uc-subtabs { display: flex; gap: .75rem; margin: 0 0 1rem; flex-wrap: wrap; }
 .uc-sub {
-  padding: .4rem .9rem; border: 1px solid var(--line); background: var(--surface);
-  border-radius: 999px; cursor: pointer; font-size: .9rem; color: var(--text-mute);
+  padding: .65rem 1.2rem; border: 1px solid var(--line); background: var(--surface);
+  border-radius: 999px; cursor: pointer; font-size: 1rem; font-weight: 500;
+  color: var(--text-mute); transition: transform .08s ease, box-shadow .15s ease, background .15s ease;
 }
-.uc-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); }
+.uc-sub:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.uc-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; box-shadow: 0 4px 12px rgba(79,70,229,.28); }
 .dw-preview-wrap {
   position: relative; display: inline-block; max-width: 100%;
   border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; margin: .4rem 0;
