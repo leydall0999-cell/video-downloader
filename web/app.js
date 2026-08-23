@@ -2560,7 +2560,7 @@
     if (isModal) {
       // 弹窗：先按可用区域 contain 适配（zoom=1 即完整显示），再按倍数放大
       const body = el.dwModalPreviewWrap.closest('.dw-modal-body') || el.dwModalPreviewWrap.parentElement;
-      const pad = 32; // body padding 1rem*2
+      const pad = 24; // body padding .75rem*2
       const availW = Math.max(50, (body.clientWidth || img.naturalWidth) - pad);
       const availH = Math.max(50, (body.clientHeight || img.naturalHeight) - pad);
       const fitScale = Math.min(availW / img.naturalWidth, availH / img.naturalHeight, 1);

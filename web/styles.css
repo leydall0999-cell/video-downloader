@@ -729,10 +729,11 @@ img { max-width: 100%; display: block; }
 }
 .dw-modal-toolbar .dw-mode { padding: .32rem .55rem; font-size: .85rem; }
 .dw-modal-toolbar .dw-zoomlabel { font-size: .78rem; min-width: 3rem; }
-.dw-modal-body { flex: 1; overflow: auto; padding: .75rem; background: #0b0d12; }
+.dw-modal-body { flex: 1; overflow: auto; padding: .75rem; background: #0b0d12; display: flex; justify-content: center; align-items: center; }
 .dw-modal-preview {
+  position: relative; display: inline-flex; justify-content: center; align-items: center;
   min-width: min-content; min-height: min-content;
-  margin: 0 auto; border: 0; border-radius: var(--radius-md); overflow: visible;
+  border: 0; border-radius: var(--radius-md); overflow: visible;
   background: transparent;
 }
 .dw-modal-preview img { max-width: none; max-height: none; cursor: crosshair; }
