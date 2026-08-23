@@ -627,6 +627,8 @@ img { max-width: 100%; display: block; }
 .commentary-status { margin-top: .5rem; font-size: .8rem; color: var(--brand-strong); }
 
 /* ---- 去水印（需求文档模块二） ---- */
+/* 去水印视图比整站更窄并居中，避免图片预览区被拉得过宽 */
+#dwView { max-width: 720px; margin: 0 auto 1rem; }
 .dw-tip { color: var(--text-mute); font-size: .9rem; margin: .25rem 0 1rem; line-height: 1.5; }
 .dw-tip b { color: var(--brand-strong); }
 .dw-tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
