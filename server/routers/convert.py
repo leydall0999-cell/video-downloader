@@ -186,8 +186,10 @@ def upload_chunk(
     request: app.Request = None,
 ) -> dict:
     """分片上传：单块（32MB）落盘 up_{id}.p{index}，支持并发。
-    累计字节超 UPLOAD_MAX_BYTES 即 413 并清理该 upload 全部已传分片。"""
-    app._check_rate_limit(request)
+    累计字节超 UPLOAD_MAX_BYTES 即 413 并清理该 upload 全部已传分片。
+
+    注意：分片接口本身**不走**全局限流；finish/convert 等低频入口仍受限流保护，
+    避免大文件几十个分片瞬间耗尽每小时 30 次的公共额度。"""
     if not _UPLOAD_ID_RE.match(upload_id) or total <= 0 or index < 0 or index >= total:
         raise app.HTTPException(status_code=400, detail="分片参数非法")
     part_path = app.UPLOAD_TMP / f"up_{upload_id}.p{index:04d}"

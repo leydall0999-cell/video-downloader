@@ -476,7 +476,7 @@ def _check_rate_limit(request: Request) -> None:
             _rate_log[ip] = hits
             raise HTTPException(
                 status_code=429,
-                detail=f"下载太频繁了，本实例每小时限 {RATE_LIMIT_PER_HOUR} 次，请 {wait} 分钟后再试；"
+                detail=f"操作太频繁了，本实例每小时限 {RATE_LIMIT_PER_HOUR} 次，请 {wait} 分钟后再试；"
                        "需要更高额度可以自己部署一份（见项目 README）",
             )
         hits.append(now)
