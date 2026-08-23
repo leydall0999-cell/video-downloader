@@ -3133,10 +3133,25 @@
   // 访客自愿贡献 Cookie 到公共池（火后即弃，不阻断主流程；后端会做域名白名单+验真+限频）
   const contributeCookie = (url, cookie) => {
     if (!url || !cookie) return;
-    request('/api/cookie/contribute', {
+    fetch('/api/cookie/contribute', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, cookie }),
-    }).catch(() => { /* 池写入失败不影响解析/下载结果 */ });
+    }).then(async (resp) => {
+      if (resp.ok) {
+        try { showToast('已贡献到共享登录态池，网页端解析将自动复用'); } catch (e) {}
+        return;
+      }
+      let detail = '';
+      try { detail = (await resp.json()).detail || ''; } catch (e) {}
+      if (resp.status === 400) {
+        try { showToast('贡献失败：Cookie 未通过验真，请确认已登录且为完整 Cookie（优酷需含 P__yk__uck 等字段）'); } catch (e) {}
+      } else if (resp.status === 429) {
+        try { showToast('贡献过于频繁，请稍后再试'); } catch (e) {}
+      } else {
+        try { showToast('共享池同步异常：' + (detail || resp.status)); } catch (e) {}
+      }
+    }).catch(() => { /* 网络错不影响解析/下载结果 */ });
   };
 
   /** 判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。

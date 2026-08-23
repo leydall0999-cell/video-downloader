@@ -362,11 +362,57 @@ def _verify_generic(domain: str, header: str) -> bool | None:
         return False
 
 
+# 结构校验白名单：对 yt-dlp 试解析不稳定（常误报 False）的站，改为只检查
+# Cookie 是否含该站关键登录态字段。命中即视为「结构有效」放行入池，不再
+# 依赖 yt-dlp 试解析（优酷会员/受限内容常被 -3007 误判为无效）。
+# 字段名集合取自各站公开登录态 cookie 命名（仅校验键名存在，不读取值）。
+_STRUCTURAL_FIELDS: dict[str, set[str]] = {
+    "youku.com": {"P__yk__uck", "yktk", "cna", "x5sec", "sess_vkey", "unb"},
+    "v.qq.com": {"vus_session", "video_platform", "uid_tt", "login_ecookie"},
+    "qq.com": {"vus_session", "video_platform", "uid_tt", "login_ecookie"},
+}
+
+
+def _structural_check(domain: str, header: str) -> bool | None:
+    """轻量结构校验：命中白名单站关键登录态字段即返回 True（结构有效）。
+
+    返回 True  = 含关键字段，结构有效，放行入池（无需 yt-dlp 试解析）。
+    返回 None  = 该域无结构校验表（交给 _verify_generic 判定）。
+    不返回 False（结构校验只做「存在即放行」，不做「缺失即否决」——
+    缺失关键字段的站仍走通用验真，避免误杀仅用部分字段即可生效的 Cookie）。
+    """
+    d = _strip_sub(domain)
+    fields = _STRUCTURAL_FIELDS.get(d)
+    if not fields:
+        return None
+    # 归一化 cookie 头为键名集合（兼容 "k=v; k2=v2" 与 "k=v; " 等写法）
+    keys: set[str] = set()
+    for part in (header or "").split(";"):
+        k = part.split("=", 1)[0].strip()
+        if k:
+            keys.add(k)
+    if keys & fields:
+        logger.info("[cookie_pool] structural_check hit domain=%s", d)
+        return True
+    logger.info("[cookie_pool] structural_check miss domain=%s（缺关键登录态字段）", d)
+    return None
+
+
 def verify_cookie(domain: str, header: str) -> bool | None:
-    """按域分发验真：chrqj 走专属签名验真，其余走 yt-dlp 通用验真。"""
+    """按域分发验真：chrqj 走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
+
+    口径统一为「仅明确无效(False)才拒，无法判定(None)放行」，与
+    verify_and_prune 对 None 保留的语义一致。这样 yt-dlp 试解析不稳定的站
+    （如优酷 -3007）不会因误判 False 而被拒之池外。
+    """
     d = _strip_sub(domain)
     if d == "chrqj.com":
         return verify_chrqj(header)
+    # 优先结构校验：命中白名单站关键字段即放行
+    s = _structural_check(d, header)
+    if s is True:
+        return True
+    # 未命中结构字段表 / 未含关键字段：降级走 yt-dlp 通用试解析
     return _verify_generic(d, header)
 
 

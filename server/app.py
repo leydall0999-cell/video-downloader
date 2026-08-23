@@ -3224,7 +3224,11 @@ def cookie_sync(payload: dict, request: Request) -> dict:
         raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
     ok = verify_cookie(domain, cookie)
     if ok is False:
-        raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
+        raise HTTPException(
+            status_code=400,
+            detail="Cookie 无效，未能通过目标站验真（请确认已登录且为完整 Cookie；"
+                   "优酷/腾讯视频等站需含登录态字段如 P__yk__uck / vus_session）",
+        )
     added = add_cookie(domain, cookie, source="sync")
     return {"ok": True, "added": added, "verified": (ok is True)}
 
@@ -3257,7 +3261,11 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
         raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
     ok = verify_cookie(domain, cookie)
     if ok is False:
-        raise HTTPException(status_code=400, detail="Cookie 无效，未能通过目标站验真")
+        raise HTTPException(
+            status_code=400,
+            detail="Cookie 无效，未能通过目标站验真（请确认已登录且为完整 Cookie；"
+                   "优酷/腾讯视频等站需含登录态字段如 P__yk__uck / vus_session）",
+        )
     added = add_cookie(domain, cookie, source="contrib")
     logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s", domain, ip, added)
     return {"ok": True, "added": added, "verified": (ok is True)}
