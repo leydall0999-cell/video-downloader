@@ -2472,8 +2472,22 @@ def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
             f"请在已登录浏览器重新「Copy as cURL」贡献后重试。",
             category="parse_failed",
         )
-    streams = data.get("data", {}).get("stream") or []
-    return streams
+    d = data.get("data", {}) or {}
+    # 优酷完整可播放流在 streams 字段（会员/有权限内容才有）；stream 是含试看的混合字段。
+    # 优先 streams，避免拿试看流当完整片（会下到 6 分钟残片）。
+    full = d.get("streams") or []
+    if full:
+        return full
+    # 无完整流：判断是否会员专享受限
+    pay = d.get("pay") or {}
+    if isinstance(pay, dict) and pay.get("can_play") is False:
+        raise ResolveError(
+            "优酷视频需会员/付费权限",
+            "该优酷视频为 VIP/付费专享，当前共享池账号无播放权限，仅能试看。"
+            "请用会员账号的 Cookie+ckey 重新贡献，或更换免费视频。",
+            category="need_vip",
+        )
+    return d.get("stream") or []
 
 
 def _youku_info(url: str, cookie: str = "", ckey: str = "") -> dict[str, Any]:
