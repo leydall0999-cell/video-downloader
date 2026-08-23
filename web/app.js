@@ -2377,6 +2377,8 @@
     svg.setAttribute('width', img.clientWidth);
     svg.setAttribute('height', img.clientHeight);
     svg.setAttribute('viewBox', `0 0 ${img.clientWidth} ${img.clientHeight}`);
+    svg.style.width = img.clientWidth + 'px';
+    svg.style.height = img.clientHeight + 'px';
     svg.style.left = left + 'px';
     svg.style.top = top + 'px';
   };
