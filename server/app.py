@@ -2992,6 +2992,45 @@ def cookie_sync_to_cloud(request: Request) -> dict:
     return {"ok": True, "pushed": pushed, "total": len(results), "results": results}
 
 
+@app.post("/api/cookie/contribute")
+def cookie_contribute(payload: dict, request: Request) -> dict:
+    """访客自愿把本次登录态贡献到公共池（需前端显式勾选 + 后端验真）。
+
+    仅白名单域名；单 IP 限频；verify_cookie 验真（明确无效才拒，网络不可达放行）。
+    优酷等站可一并贡献 ckey（播放签名），供 UPS 专用通道使用。
+    """
+    from urllib.parse import urlparse
+    url = (payload or {}).get("url", "")
+    cookie = (payload or {}).get("cookie", "")
+    ckey = (payload or {}).get("ckey", "")
+    host = urlparse(url).netloc if url else ""
+    from cookie_pool import add_cookie, add_ckey, is_allowed, verify_cookie, _norm_domain, _strip_sub
+    domain = _strip_sub(_norm_domain(host))
+    if not domain or not is_allowed(domain):
+        raise HTTPException(status_code=400, detail="该平台暂不支持公共池贡献")
+    cookie = (cookie or "").strip()
+    if not cookie:
+        raise HTTPException(status_code=400, detail="缺少 cookie")
+    if domain == "bilibili.com" and "=" not in cookie:
+        cookie = f"SESSDATA={cookie}"
+    ip = (request.client.host if request.client else "") or ""
+    if not _sync_rate_ok(ip):
+        raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+    ok = verify_cookie(domain, cookie)
+    if ok is False:
+        raise HTTPException(
+            status_code=400,
+            detail="Cookie 无效，未能通过目标站验真（请确认已登录且为完整 Cookie；"
+                   "优酷需含登录态字段）",
+        )
+    added = add_cookie(domain, cookie, source="contrib")
+    if ckey:
+        add_ckey(domain, ckey, source="contrib")
+        added = True
+    logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s ckey=%s", domain, ip, added, bool(ckey))
+    return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
+
+
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:
     """查询某链接是否需要 Cookie、本机浏览器是否已有可用登录态、以及公共池新鲜度。"""

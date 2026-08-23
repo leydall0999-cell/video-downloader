@@ -173,8 +173,18 @@ def _save(domain: str, cookies: list) -> None:
         else:
             item["header"] = header
         payload.append(item)
+    # 保留既有 ckey 字段（优酷等站需播放签名 ckey，不应被 cookie 同步清掉）
+    _existing_ckey = ""
+    try:
+        _ed = json.loads(_pool_file(domain).read_text())
+        _existing_ckey = _ed.get("ckey", "")
+    except Exception:
+        pass
+    _out = {"cookies": payload}
+    if _existing_ckey:
+        _out["ckey"] = _existing_ckey
     f = _pool_file(domain)
-    f.write_text(json.dumps({"cookies": payload}, ensure_ascii=False))
+    f.write_text(json.dumps(_out, ensure_ascii=False))
     try:
         os.chmod(f, 0o600)
     except Exception:
@@ -195,6 +205,47 @@ def get_cookie(domain: str) -> str | None:
                 header = _decrypt_item(c)
                 if header:
                     return header
+        except Exception:
+            continue
+    return None
+
+
+def add_ckey(domain: str, ckey: str, source: str = "sync") -> bool:
+    """优酷等站需要播放签名 ckey（来自用户 Copy as cURL）。单独存于同一池文件。"""
+    domain = _norm_domain(domain)
+    ckey = (ckey or "").strip()
+    if not ckey:
+        return False
+    with _LOCK:
+        f = _pool_file(domain)
+        data = {"cookies": [], "ckey": ckey, "ckey_ts": int(time.time()), "ckey_source": source}
+        if f.exists():
+            try:
+                _old = json.loads(f.read_text())
+                data["cookies"] = _old.get("cookies", [])
+            except Exception:
+                pass
+        _POOL_DIR.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, ensure_ascii=False))
+        try:
+            os.chmod(f, 0o600)
+        except Exception:
+            pass
+    return True
+
+
+def get_ckey(domain: str) -> str | None:
+    """返回该域已贡献的 ckey（未过期）；无则返回 None。"""
+    for d in _candidates(domain):
+        f = _pool_file(d)
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+            ckey = data.get("ckey")
+            ts = data.get("ckey_ts", 0)
+            if ckey and time.time() - ts <= _TTL:
+                return ckey
         except Exception:
             continue
     return None
