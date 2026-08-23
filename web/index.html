@@ -336,13 +336,14 @@
   </div><!-- /#downloadView -->
 
   <!-- 视频处理视图（含「视频格式转换」与「视频拼接」两个并列子模块） -->
-  <section id="uploadConvertView" class="panel" hidden>
-    <!-- 子模块切换：同一层级，顶部醒目切换 -->
+  <section id="uploadConvertView" hidden>
+    <!-- 子模块切换：同一层级，在白色卡片外 -->
     <div class="uc-subtabs" id="ucSubTabs">
       <button type="button" class="uc-sub is-active" id="ucSubFormat">🎬 视频格式转换</button>
       <button type="button" class="uc-sub" id="ucSubMerge">🔗 视频拼接</button>
     </div>
 
+    <div class="panel">
     <!-- 子模块一：视频格式转换 -->
     <div id="ucPane">
     <p class="uc-tip" id="ucLimitTip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
@@ -454,7 +455,8 @@
       </div>
       <span class="convert-status" id="mcStatus" aria-live="polite"></span>
     </div><!-- /mcPane -->
-  </section>
+  </div><!-- /panel -->
+</section>
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
   <section id="dwView" class="panel" hidden aria-labelledby="dwTitle">
