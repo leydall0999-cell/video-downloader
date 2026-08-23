@@ -866,12 +866,25 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     url = _normalize_share_url(url)
-    # 优酷：走专用 UPS + ckey 通道（yt-dlp 内置 YoukuIE 不生成 ckey 会报 -3007）。
+    # 优酷：零门槛优先走「本机真实浏览器引擎」拦截 ups 自动拿 ckey+m3u8。
     if _host_of(url).endswith("youku.com"):
+        # 主路径：浏览器引擎（用户粘贴链接即可，无需任何手动操作）
+        try:
+            from youku_browser import resolve_via_browser, browser_available
+            if browser_available():
+                _info = resolve_via_browser(_host_of(url) if False else url)
+                if _info:
+                    return _info
+        except Exception as _be:
+            # 浏览器引擎失败（无登录态/被风控/无 playwright），回退手动通道
+            _browser_err = str(_be)
+        else:
+            _browser_err = "浏览器引擎不可用（playwright 未装或缺少优酷登录 profile）"
+
+        # 回退路径：本机 ckey（youku_local）/ 公共池（cookie_pool）
         _yk_cookie = cookie
         _yk_ckey = ""
         if not _yk_cookie:
-            # 桌面端自治优先：读本机浏览器自取的 ckey（不依赖公共池、不出本机）。
             try:
                 from youku_local import get_local_ckey as _glk
                 _lk, _lc = _glk()
@@ -880,7 +893,6 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                     _yk_cookie = _yk_cookie or _lc
             except Exception:
                 pass
-            # 回退：公共池（网页版共享登录态）
             if not _yk_ckey:
                 try:
                     from cookie_pool import get_cookie as _gpc, get_ckey as _gpk
@@ -888,15 +900,24 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                     _yk_ckey = _gpk("youku.com") or ""
                 except Exception:
                     pass
-        _yk_proxy = proxy or _resolve_proxy("v.youku.com")
-        try:
-            return _youku_info(url, _yk_cookie, _yk_ckey, proxy=_yk_proxy)
-        except ResolveError:
-            raise
-        except Exception as _e:
-            raise ResolveError(
-                "优酷解析失败", f"UPS 通道异常：{type(_e).__name__} {_e}", category="parse_failed"
-            ) from None
+        if _yk_ckey:
+            _yk_proxy = proxy or _resolve_proxy("v.youku.com")
+            try:
+                return _youku_info(url, _yk_cookie, _yk_ckey, proxy=_yk_proxy)
+            except ResolveError:
+                raise
+            except Exception as _e:
+                raise ResolveError(
+                    "优酷解析失败", f"UPS 通道异常：{type(_e).__name__} {_e}", category="parse_failed"
+                ) from None
+        # 两条路都不通，给出可读提示
+        raise ResolveError(
+            "优酷解析失败",
+            "浏览器引擎未能拿到播放地址（%s）。请确认：本机已安装 Google Chrome 且"
+            "优酷登录 profile 有效（首次需在已登录优酷的浏览器里用本 App 的「优酷登录」"
+            "卡片完成一次授权）。" % _browser_err,
+            category="parse_failed",
+        ) from None
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)
