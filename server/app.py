@@ -1531,6 +1531,40 @@ def _require_task(task_id: str, device_id: str = ""):
 
 
 
+# 各目标格式默认使用的视频/音频编码器（供自动无损直转判断：源编码一致时 -c copy 零重编码）
+_TARGET_VIDEO_CODEC = {
+    "mp4": "h264", "mov": "h264", "mkv": "h264", "avi": "h264", "flv": "h264",
+    "ts": "h264", "m4v": "h264", "3gp": "h264", "hevc": "hevc",
+    "webm": "vp9", "ogv": "vp8", "wmv": "wmv2", "mpeg": "mpeg2video",
+}
+_TARGET_AUDIO_CODEC = {
+    "mp4": "aac", "mov": "aac", "mkv": "aac", "avi": "aac", "flv": "aac",
+    "ts": "aac", "m4v": "aac", "3gp": "aac", "hevc": "aac",
+    "mp3": "mp3", "m4a": "aac", "aac": "aac", "wma": "wmav2", "mp2": "mp2",
+    "wav": "pcm_s16le", "flac": "flac", "ogg": "opus", "opus": "opus",
+    "webm": "opus", "ogv": "opus",
+}
+
+
+def _probe_src_codecs(src: str) -> tuple:
+    """ffprobe 探测源文件首个视频/音频流的 codec_name（失败返回 ('', '')）。"""
+    try:
+        fb = str(Path(FFMPEG_BIN).with_name("ffprobe")) if FFMPEG_BIN else ""
+        if not fb or not Path(fb).exists():
+            fb = shutil.which("ffprobe") or "ffprobe"
+        r = subprocess.run([fb, "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=codec_name", "-of", "csv=p=0", src],
+                           capture_output=True, text=True, timeout=20)
+        v = r.stdout.strip()
+        r2 = subprocess.run([fb, "-v", "error", "-select_streams", "a:0",
+                             "-show_entries", "stream=codec_name", "-of", "csv=p=0", src],
+                            capture_output=True, text=True, timeout=20)
+        a = r2.stdout.strip()
+        return v, a
+    except Exception:
+        return "", ""
+
+
 def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 bitrate: str = "", audio: bool = True, rotate: int = 0,
                 remux: bool = False, src_is_temp: bool = False) -> None:
@@ -1551,10 +1585,18 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
         cmd = [FFMPEG_BIN, "-y", "-err_detect", "ignore_err", "-fflags", "+discardcorrupt",
                "-analyzeduration", "10M", "-probesize", "10M", "-i", src]
         audio_only = target in ("mp3", "m4a")
+        # 自动无损直转：源视频/音频编码与目标格式默认编码一致 → -c copy 零重编码（毫秒级），
+        # 规避 Railway 容器 libx264 1080p 重编码资源受限（rc=9 frame=0/0 立即退出）
+        vcodec, acodec = _probe_src_codecs(src)
+        want_v = _TARGET_VIDEO_CODEC.get(target, "")
+        want_a = _TARGET_AUDIO_CODEC.get(target, "")
+        auto_copy = bool(want_v and vcodec and vcodec == want_v
+                         and want_a and acodec and acodec == want_a
+                         and rotate == 0 and resolution == "original" and not bitrate and audio)
         if target == "gif":
             cmd += CONVERT_TARGETS["gif"]
-        elif remux and rotate == 0:
-            # 仅换容器无损复制，忽略码率/分辨率/旋转（旋转需滤镜，与 -c copy 不兼容）
+        elif (remux or auto_copy) and rotate == 0:
+            # 仅换容器无损复制 / 编码一致自动直转：忽略码率/分辨率/旋转（旋转需滤镜，与 -c copy 不兼容）
             cmd += ["-c", "copy"]
         else:
             cmd += CONVERT_TARGETS[target]
@@ -1574,7 +1616,7 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 if not audio:
                     cmd += ["-an"]
         cmd.append(str(out))
-        job["stage"] = "转码中"
+        job["stage"] = "无损直转" if auto_copy else "转码中"
         job["progress"] = 0
         # 流式读取 ffmpeg stderr，解析总时长与当前进度，实时回写进度百分比
         _re_dur = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")

@@ -1548,7 +1548,7 @@
       const statusText = {
         pending: '未开始',
         uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
-        running: it.progress ? `转码中 ${it.progress}%` : '转码中…',
+        running: it.stage === '无损直转' ? '无损直转中…' : (it.progress ? `转码中 ${it.progress}%` : '转码中…'),
         completed: '完成 ✅',
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
@@ -1880,6 +1880,7 @@
           const p = typeof st.progress === 'number' ? st.progress : 0;
           // 转码进度 30% → 100%
           it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
+          it.stage = st.stage || '';   // 无损直转时显示快速路径
           renderUcList();
         } else if (st.status === 'completed') {
           it.status = 'completed';
