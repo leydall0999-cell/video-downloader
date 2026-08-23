@@ -2363,21 +2363,28 @@
   let dwDrawMode = 'new';  // 'new' | 'add' | 'subtract'
   let dwDragging = false, dwStartX = 0, dwStartY = 0, dwCur = null;
 
-  const dwResizeOverlay = (img, cv, svg) => {
-    if (!img || !cv || !svg || !img.clientWidth) return;
+  const dwResizeOverlay = (wrap, img, cv, svg) => {
+    if (!wrap || !img || !cv || !svg || !img.clientWidth) return;
+    // canvas/svg 必须紧跟 img 的实际位置（含滚动偏移/居中偏移），否则放大或滚动后会错位
+    const left = img.offsetLeft;
+    const top = img.offsetTop;
     cv.width = img.clientWidth;
     cv.height = img.clientHeight;
     cv.style.width = img.clientWidth + 'px';
     cv.style.height = img.clientHeight + 'px';
+    cv.style.left = left + 'px';
+    cv.style.top = top + 'px';
     svg.setAttribute('width', img.clientWidth);
     svg.setAttribute('height', img.clientHeight);
     svg.setAttribute('viewBox', `0 0 ${img.clientWidth} ${img.clientHeight}`);
+    svg.style.left = left + 'px';
+    svg.style.top = top + 'px';
   };
 
   const dwResizeAll = () => {
-    dwResizeOverlay(el.dwImgPreview, el.dwImgCanvas, el.dwImgSvg);
+    dwResizeOverlay(el.dwPreviewWrap, el.dwImgPreview, el.dwImgCanvas, el.dwImgSvg);
     if (!el.dwImgModal.hidden) {
-      dwResizeOverlay(el.dwModalImg, el.dwModalCanvas, el.dwModalSvg);
+      dwResizeOverlay(el.dwModalPreviewWrap, el.dwModalImg, el.dwModalCanvas, el.dwModalSvg);
     }
   };
 
@@ -2579,6 +2586,10 @@
   };
   dwBindView(el.dwImgPreview, el.dwImgCanvas, { get value() { return dwZoom; }, set value(v) { dwZoom = v; } }, 'preview');
   dwBindView(el.dwModalImg, el.dwModalCanvas, { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }, 'modal');
+
+  // 滚动时叠加层必须重新跟随图片位置，否则选区会“跑”
+  if (el.dwPreviewWrap) el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
 
   window.addEventListener('mousemove', (e) => {
     if (!dwDragging || !dwCur || !dwDragTarget) return;
