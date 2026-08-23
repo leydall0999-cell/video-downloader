@@ -38,8 +38,7 @@
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary" hidden>📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary" hidden>🎬 视频解说</button>
-    <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
-    <button type="button" class="tab" data-view="merge" id="tabMerge">🔗 视频拼接</button>
+    <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频处理</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe" hidden>🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -336,10 +335,19 @@
 
   </div><!-- /#downloadView -->
 
-  <!-- 上传转换视图（多文件批量：参考 DataTool 风格，每个文件单独一行 + 独立输出格式） -->
+  <!-- 视频处理视图（含「视频格式转换」与「视频拼接」两个并列子模块） -->
   <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle">
-    <h2 id="ucTitle" class="guide-title">视频格式转换</h2>
-    <p class="uc-tip">添加多个本地视频，批量转码为指定格式。每个文件单独成行，可独立设置输出格式。</p>
+    <h2 id="ucTitle" class="guide-title">视频处理</h2>
+    <p class="uc-tip">添加多个本地视频，批量转码为指定格式；或把多个片段无损合并为一个文件。</p>
+
+    <!-- 子模块切换：同一层级，上方按钮切换 -->
+    <div class="uc-subtabs" id="ucSubTabs">
+      <button type="button" class="uc-sub is-active" id="ucSubFormat">🎬 视频格式转换</button>
+      <button type="button" class="uc-sub" id="ucSubMerge">🔗 视频拼接</button>
+    </div>
+
+    <!-- 子模块一：视频格式转换 -->
+    <div id="ucPane">
     <p class="uc-tip" id="ucLimitTip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
       单个文件最大 10GB（大文件自动分片并发上传提速）；超过上限建议先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。
     </p>
@@ -413,42 +421,42 @@
     </div>
 
     <span class="convert-status" id="ucStatus" aria-live="polite"></span>
-  </section>
+    </div><!-- /ucPane -->
 
-  <!-- 视频拼接（简单无损合并）：与「视频格式转换」同级的独立模块，复用分片上传与上传提速 -->
-  <section id="mergeView" class="panel" hidden aria-labelledby="mcTitle">
-    <h2 id="mcTitle" class="guide-title">视频拼接</h2>
-    <p class="uc-tip">添加多个视频片段，自动上传后按顺序排列合并为一个文件（无损 -c copy，无需重编码）。更完善的转场/对齐拼接将在桌面 App 版提供。</p>
-    <div class="uc-toolbar">
-      <button type="button" class="btn btn-primary" id="mcAddBtn">添加片段</button>
-      <input type="file" id="mcFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv" multiple hidden />
-      <button type="button" class="btn btn-ghost" id="mcClearBtn" hidden>清空</button>
-      <span class="uc-count" id="mcCount">尚未添加片段</span>
-    </div>
-    <ul class="uc-list" id="mcList" aria-live="polite"></ul>
-    <div class="uc-bulk" id="mcActions">
-      <label class="uc-field">
-        <span class="uc-label">输出格式</span>
-        <select id="mcOutFormat">
-          <option value="mp4">MP4</option>
-          <option value="mov">MOV</option>
-          <option value="mkv">MKV</option>
-          <option value="m4v">M4V</option>
-          <option value="ts">TS</option>
-          <option value="flv">FLV</option>
-          <option value="webm">WebM</option>
-        </select>
-      </label>
-      <label class="uc-field">
-        <span class="uc-label">输出文件名</span>
-        <input type="text" id="mcOutName" placeholder="合并结果" />
-      </label>
-      <label class="uc-field uc-check">
-        <input type="checkbox" id="mcLibrary" /> <span class="uc-label">存入媒体库</span>
-      </label>
-      <button type="button" class="btn btn-primary" id="mcMergeBtn">开始拼接</button>
-    </div>
-    <span class="convert-status" id="mcStatus" aria-live="polite"></span>
+    <!-- 子模块二：视频拼接 -->
+    <div id="mcPane" hidden>
+      <p class="uc-tip">添加多个视频片段，自动上传后按顺序排列合并为一个文件（无损 -c copy，无需重编码）。更完善的转场/对齐拼接将在桌面 App 版提供。</p>
+      <div class="uc-toolbar">
+        <button type="button" class="btn btn-primary" id="mcAddBtn">添加片段</button>
+        <input type="file" id="mcFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv" multiple hidden />
+        <button type="button" class="btn btn-ghost" id="mcClearBtn" hidden>清空</button>
+        <span class="uc-count" id="mcCount">尚未添加片段</span>
+      </div>
+      <ul class="uc-list" id="mcList" aria-live="polite"></ul>
+      <div class="uc-bulk" id="mcActions">
+        <label class="uc-field">
+          <span class="uc-label">输出格式</span>
+          <select id="mcOutFormat">
+            <option value="mp4">MP4</option>
+            <option value="mov">MOV</option>
+            <option value="mkv">MKV</option>
+            <option value="m4v">M4V</option>
+            <option value="ts">TS</option>
+            <option value="flv">FLV</option>
+            <option value="webm">WebM</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">输出文件名</span>
+          <input type="text" id="mcOutName" placeholder="合并结果" />
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="mcLibrary" /> <span class="uc-label">存入媒体库</span>
+        </label>
+        <button type="button" class="btn btn-primary" id="mcMergeBtn">开始拼接</button>
+      </div>
+      <span class="convert-status" id="mcStatus" aria-live="polite"></span>
+    </div><!-- /mcPane -->
   </section>
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
