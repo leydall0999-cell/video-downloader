@@ -123,6 +123,7 @@ CONVERT_DIR.mkdir(parents=True, exist_ok=True)
 CONVERT_JOBS: dict[str, dict] = {}
 CONVERT_LOCK = threading.Lock()
 FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/opt/homebrew/bin/ffmpeg" if sys.platform == "darwin" else "")
+FFPROBE_BIN = os.environ.get("VDL_FFPROBE_BIN") or shutil.which("ffprobe") or ("/opt/homebrew/bin/ffprobe" if sys.platform == "darwin" else "")
 # 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
 # （2026-08-23 扩充：+avi/flv/ts/m4v/wmv/mpeg/3gp/ogv 视频 + aac/wav/flac/ogg/opus 音频）
 # （2026-08-24 再扩充：+hevc(H.265/MP4) 视频 + wma/mp2 音频，共 23 种）
@@ -1618,24 +1619,56 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
         cmd.append(str(out))
         job["stage"] = "无损直转" if auto_copy else "转码中"
         job["progress"] = 0
-        # 流式读取 ffmpeg stderr，解析总时长与当前进度，实时回写进度百分比
-        _re_dur = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
-        _re_time = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+
+        # 2026-08-23 进度实时修复：原方案依赖 stderr 的 `Duration:` 行解析 total_dur，
+        # 但 ffmpeg 在 Railway 容器资源紧张/异常退出时可能未打 Duration 就被卡住，
+        # 导致 progress 永远 0、前端卡 30% 给用户「卡死」感。
+        # 改为：①ffprobe 独立预探测总时长（稳定可靠，独立于 ffmpeg 转码进程）；
+        #      ②ffmpeg 加 -nostats -progress pipe:1 让 stdout 持续输出 `out_time_us=`
+        #        （结构化 key=value，默认每 ~0.5s 一组，比 stderr 的 `time=` 更可靠），
+        #        主线程读 stdout 算百分比；独立 daemon 线程读 stderr 保留诊断 tail。
         total_dur = 0.0
-        stderr_tail: list = []     # 保留尾部 30 行 stderr；转码失败时拼进 error 提示便于排查（源格式/编解码/文件损坏等）
-        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, bufsize=1, text=True)
-        for line in proc.stderr:
-            if not total_dur:
-                m = _re_dur.search(line)
-                if m:
-                    total_dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-            m = _re_time.search(line)
+        try:
+            pp = subprocess.run(
+                [FFPROBE_BIN, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
+                capture_output=True, text=True, timeout=30,
+            )
+            if pp.returncode == 0 and pp.stdout.strip():
+                total_dur = float(pp.stdout.strip())
+        except Exception:
+            pass
+
+        stderr_tail: list = []     # 保留尾部 80 行 stderr；转码失败时拼进 error 便于排查
+        proc = subprocess.Popen(
+            cmd + ["-nostats", "-progress", "pipe:1"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            bufsize=0, text=True,
+        )
+        # 独立线程读 stderr：保留诊断 tail；主线程专注解析 -progress，避免 stdout/stderr I/O 互相阻塞
+        def _drain_stderr():
+            try:
+                for line in proc.stderr:
+                    stderr_tail.append(line.rstrip())
+                    if len(stderr_tail) > 80:
+                        stderr_tail.pop(0)
+            except Exception:
+                pass
+        threading.Thread(target=_drain_stderr, daemon=True).start()
+
+        # 主线程读 stdout 解析 -progress 输出（默认每 ~0.5s 一组 key=value：frame/fps/out_time_us/progress=continue|end）
+        _re_out_time_us = re.compile(r"^out_time_us=(-?\d+)")
+        for line in proc.stdout:
+            line = line.strip()
+            m = _re_out_time_us.match(line)
             if m and total_dur > 0:
-                cur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-                job["progress"] = int(min(100, max(0, cur / total_dur * 100)))
-            stderr_tail.append(line.rstrip())
-            if len(stderr_tail) > 80:
-                stderr_tail.pop(0)
+                try:
+                    cur_s = int(m.group(1)) / 1_000_000
+                    pct = max(0, min(99, int(cur_s / total_dur * 100)))
+                    if pct > job.get("progress", 0):
+                        job["progress"] = pct   # 进度只升不降，避免 ffmpeg 估算波动导致回弹
+                except (ValueError, OverflowError):
+                    pass
         proc.wait(timeout=1800)
         if proc.returncode != 0:
             # 过滤 ffmpeg 头部无诊断价值的版本/configuration 行，保留真正的错误/输入/输出信息
