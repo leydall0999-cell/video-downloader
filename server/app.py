@@ -1546,7 +1546,10 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
     out = None
     try:
         out = Path(job["out_path"])
-        cmd = [FFMPEG_BIN, "-y", "-i", src]
+        # 2026-08-23：用户 YouTube 1080p H.264+AAC MP4 触发 ffmpeg frame=0/0 立即退出（疑似容器资源受限
+        # 让 libx264 init 异常），加 err_detect/fflags 容错（跳过坏帧）+ analyzeduration 充分探测
+        cmd = [FFMPEG_BIN, "-y", "-err_detect", "ignore_err", "-fflags", "+discardcorrupt",
+               "-analyzeduration", "10M", "-probesize", "10M", "-i", src]
         audio_only = target in ("mp3", "m4a")
         if target == "gif":
             cmd += CONVERT_TARGETS["gif"]
