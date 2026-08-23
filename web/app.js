@@ -2108,7 +2108,7 @@
         const fill = li.querySelector('.progress-fill');
         if (fill) fill.style.width = `${item.progress || 0}%`;
         const st = li.querySelector('.uc-item-status');
-        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`;
+        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
       }
     };
     let idx = 0; const workers = [];
