@@ -1483,14 +1483,38 @@
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
   // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
   // Railway 原生域名（无 CF 限速层，直连源站）指向同一个后端、同一份分片存储，
-  // 分片按 index 轮询两通道并发上传，谁快用谁；单通道失败自动故障转移到另一通道。
-  // 实测（沙盒）：CF 4.96MB/s + 原生 2.12MB/s，双通道并发总吞吐 ≈ 7MB/s，恒不劣于单通道。
+  // 动态选路：每片发出前按两通道「最近 3 次成功分片平均吞吐」实时选更快通道，
+  // 慢通道（跨境抖动/掉速）自然少被选中，不再拖累整体；单通道失败重试自动故障转移到另一通道。
   const UC_UPLOAD_ENDPOINTS = [location.origin, 'https://web-production-b9993.up.railway.app'];
-  const ucUploadEndpoint = (i, attempt) => {
+  // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于动态选路
+  const ucChStats = () => ({
+    samples: [[], []],
+    total: 0,
+    add(ci, bytes, ms) {
+      const arr = this.samples[ci];
+      arr.push({ bytes, ms });
+      if (arr.length > 3) arr.shift();
+      this.total++;
+    },
+    avg(ci) {
+      const arr = this.samples[ci];
+      if (!arr.length) return 0;
+      let sb = 0, sm = 0;
+      for (const s of arr) { sb += s.bytes; sm += s.ms; }
+      return sm > 0 ? sb / sm : 0;
+    },
+  });
+  // 动态选路：样本不足（<4 片）先按奇偶分流顺便采集；样本充足后 80% 走更快通道、
+  // 20% 探索另一条（防抖动瞬间误判后锁死慢通道，让其有机会恢复并被重新采样）。
+  // 重试（attempt>0）固定切到另一条通道（故障转移，不重试同一条坏链路）。
+  const ucPickEndpoint = (item, i, attempt) => {
     const n = UC_UPLOAD_ENDPOINTS.length;
-    // 初次按 index 轮询（奇偶分流）；重试切换到另一端（故障转移，不重试同一条坏链路）
-    const base = (i % n + (attempt % n)) % n;
-    return UC_UPLOAD_ENDPOINTS[base];
+    if (attempt > 0) return UC_UPLOAD_ENDPOINTS[(i + 1) % n];
+    const st = item._chStats;
+    if (!st || st.total < 4) return UC_UPLOAD_ENDPOINTS[i % n];
+    const faster = st.avg(0) >= st.avg(1) ? 0 : 1;
+    if (Math.random() < 0.8) return UC_UPLOAD_ENDPOINTS[faster];
+    return UC_UPLOAD_ENDPOINTS[1 - faster];
   };
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
@@ -1740,6 +1764,7 @@
     item.uploadedText = '';
     item._removed = false;            // 上传中删除标记（abort 后不再重试/不再 finish）
     item._xhrs = new Set();           // 进行中的分片 XHR（删除时 abort）
+    item._chStats = ucChStats();      // 双通道质量统计（动态选路用）
     renderUcList();
     const file = item.file;
     // >2GB 大文件用 64MB 分片（减少请求数）；否则 32MB
@@ -1794,10 +1819,16 @@
         let attempts = 0;
         for (;;) {
           try {
+            const ep = ucPickEndpoint(item, i, attempts);   // 动态选路（快通道优先，重试换端）
+            const stT = performance.now();
             await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => {
               inFlight.set(i, loaded);  // 单片实时进度反馈
               updateProgress();
-            }, item._xhrs, ucUploadEndpoint(i, attempts));
+            }, item._xhrs, ep);
+            const elT = performance.now();
+            // 记录该通道最近一次成功分片的吞吐样本（bytes/ms），供后续分片选路
+            item._chStats.total++;
+            item._chStats.add(UC_UPLOAD_ENDPOINTS.indexOf(ep), end - start, elT - stT);
             break;
           } catch (e) {
             if (item._removed) return;  // 用户已删除：直接退出，不重试不报错
