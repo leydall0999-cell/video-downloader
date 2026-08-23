@@ -2439,6 +2439,16 @@ def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
     cctx = _ssl.create_default_context()
     cctx.check_hostname = False
     cctx.verify_mode = _ssl.CERT_NONE
+    # 优酷对境外服务器出口 IP 有地域风控（UPS 返回空 stream）。
+    # 允许通过环境变量走代理（境内出口）：VDL_YOUKU_PROXY 优先，否则通用 HTTPS_PROXY/http_proxy。
+    _proxy = os.environ.get("VDL_YOUKU_PROXY") or os.environ.get("HTTPS_PROXY") \
+        or os.environ.get("https_proxy") or os.environ.get("HTTP_PROXY") \
+        or os.environ.get("http_proxy") or ""
+    _handlers = {}
+    if _proxy:
+        _handlers["http"] = _proxy
+        _handlers["https"] = _proxy
+    _opener = urllib.request.build_opener(urllib.request.ProxyHandler(_handlers)) if _handlers else None
     params = (
         f"vid={vid}&ccode=0501&client_ip=0.0.0.0&app_ver=1.0.75&client_ts=1787502724"
         f"&fu=0&vr=0&rst=mp4&dq=mp4&os=android&bt=phone&bd=&tict=0&d=0&needbf=1"
@@ -2456,8 +2466,12 @@ def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=20, context=cctx) as resp:
-            data = _json.loads(resp.read().decode("utf-8", "replace"))
+        if _opener:
+            with _opener.open(req, timeout=20) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
+        else:
+            with urllib.request.urlopen(req, timeout=20, context=cctx) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
     except Exception as e:  # noqa: BLE001
         raise ResolveError(
             "优酷解析失败",
