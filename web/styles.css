@@ -648,8 +648,8 @@ img { max-width: 100%; display: block; }
   border: 1px solid var(--line); border-radius: var(--radius-md); overflow: auto; margin: .4rem 0;
   line-height: 0; background: #f3f4f7;
 }
-.dw-preview-wrap img { max-width: 100%; max-height: 420px; display: block; cursor: pointer; }
-.dw-preview-wrap .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: none; z-index: 2; }
+.dw-preview-wrap img { max-width: 100%; max-height: 420px; display: block; cursor: crosshair; }
+.dw-preview-wrap .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: auto; z-index: 2; }
 .dw-expand {
   position: absolute; right: 10px; bottom: 10px;
   padding: .35rem .8rem; border: 0; border-radius: 999px;
@@ -697,10 +697,6 @@ img { max-width: 100%; display: block; }
 .dw-hint { color: var(--text-mute); font-size: .82rem; margin: .2rem 0 .6rem; line-height: 1.5; }
 .dw-zoomlabel { font-size: .82rem; color: var(--text-mute); min-width: 3.2rem; text-align: center; user-select: none; }
 .dw-zoomgroup .dw-mode { padding: .35rem .55rem; }
-
-/* 缩略图工具栏：仅显示选区计数 + 放大按钮 */
-.dw-thumbbar { justify-content: space-between; background: transparent; border: 0; padding: .3rem 0; margin: .2rem 0 .3rem; }
-.dw-thumbbar .dw-selinfo { margin-left: 0; }
 
 /* 图片去水印灯箱弹窗 */
 .dw-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }

@@ -399,6 +399,10 @@
     dwExpandBtn: $('dwExpandBtn'),
     dwExpandBtn2: $('dwExpandBtn2'),
     dwSelInfo: $('dwSelInfo'),
+    dwZoomIn: $('dwZoomIn'),
+    dwZoomOut: $('dwZoomOut'),
+    dwZoomFit: $('dwZoomFit'),
+    dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
     // 去水印放大弹窗
     dwImgModal: $('dwImgModal'),
@@ -2541,23 +2545,27 @@
       dwDrawOverlay(el.dwModalCanvas, el.dwModalSvg, el.dwModalSelInfo);
     }
   };
-  // 弹窗内大图缩放（相对适应宽度的倍数，1 = 适应窗口），放大后框选坐标按归一化计算仍准确
-  let dwZoom = 1;
-  const dwApplyZoom = () => {
-    const img = el.dwModalImg;
+  // 缩放：主预览区与弹窗各自独立（相对各自容器适应宽度的倍数，1 = 适应）
+  let dwZoom = 1;       // 主预览区
+  let dwModalZoom = 1;  // 弹窗
+  const dwApplyZoom = (target) => {
+    const isModal = target === 'modal';
+    const img = isModal ? el.dwModalImg : el.dwImgPreview;
+    const label = isModal ? el.dwModalZoomLabel : el.dwZoomLabel;
+    const z = isModal ? dwModalZoom : dwZoom;
     if (!img || !img.src) return;
     // 先重置到适应尺寸，测量 fitW
     img.style.maxWidth = '100%';
-    img.style.maxHeight = 'none';
+    img.style.maxHeight = isModal ? 'none' : '420px';
     img.style.width = 'auto';
     const fitW = img.clientWidth || 1;
-    if (dwZoom <= 1.0001) {
-      dwZoom = 1;
+    if (z <= 1.0001) {
+      if (isModal) dwModalZoom = 1; else dwZoom = 1;
       img.style.width = 'auto';
     } else {
-      img.style.width = Math.round(fitW * dwZoom) + 'px';
+      img.style.width = Math.round(fitW * z) + 'px';
     }
-    if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = Math.round(dwZoom * 100) + '%';
+    if (label) label.textContent = Math.round((isModal ? dwModalZoom : dwZoom) * 100) + '%';
     dwResizeAll();
     dwDrawAll();
   };
@@ -2579,6 +2587,8 @@
     const onload = () => {
       URL.revokeObjectURL(url);
       dwZoom = 1;
+      dwModalZoom = 1;
+      if (el.dwZoomLabel) el.dwZoomLabel.textContent = '100%';
       if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
       dwResizeAll();
       dwDrawAll();
@@ -2592,33 +2602,41 @@
     el.dwImgStatus.textContent = '';
   });
 
-  // 弹窗内交互：滚轮缩放 / 双击切换 / 拖拽框选
-  const dwModalImg = el.dwModalImg, dwModalCanvas = el.dwModalCanvas;
-  dwModalImg.addEventListener('wheel', (e) => {
-    if (!dwModalImg.src) return;
-    e.preventDefault();
-    dwZoom = e.deltaY < 0 ? Math.min(5, dwZoom + 0.2) : Math.max(1, dwZoom - 0.2);
-    dwApplyZoom();
-  }, { passive: false });
-  dwModalImg.addEventListener('dblclick', (e) => {
-    if (!dwModalImg.src) return;
-    dwZoom = dwZoom > 1.0001 ? 1 : 2;
-    dwApplyZoom();
-    e.preventDefault();
-  });
+  // 当前拖拽目标：'preview' | 'modal'，用于全局 mousemove/mouseup 知道该用哪张图
+  let dwDragTarget = null;
 
-  dwModalCanvas.addEventListener('mousedown', (e) => {
-    if (!dwModalImg.src) return;
-    dwDragging = true;
-    const [nx, ny] = dwNormFromEvent(dwModalImg, e.clientX, e.clientY);
-    dwStartX = nx; dwStartY = ny;
-    dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
-    dwDrawAll();
-    e.preventDefault();
-  });
+  // 通用：给某个视图绑定滚轮缩放 / 双击切换 / 拖拽框选
+  const dwBindView = (img, cv, zObj, target) => {
+    img.addEventListener('wheel', (e) => {
+      if (!img.src) return;
+      e.preventDefault();
+      zObj.value = e.deltaY < 0 ? Math.min(5, zObj.value + 0.2) : Math.max(1, zObj.value - 0.2);
+      dwApplyZoom(target);
+    }, { passive: false });
+    img.addEventListener('dblclick', (e) => {
+      if (!img.src) return;
+      zObj.value = zObj.value > 1.0001 ? 1 : 2;
+      dwApplyZoom(target);
+      e.preventDefault();
+    });
+    cv.addEventListener('mousedown', (e) => {
+      if (!img.src) return;
+      dwDragging = true;
+      dwDragTarget = target;
+      const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
+      dwStartX = nx; dwStartY = ny;
+      dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
+      dwDrawAll();
+      e.preventDefault();
+    });
+  };
+  dwBindView(el.dwImgPreview, el.dwImgCanvas, { get value() { return dwZoom; }, set value(v) { dwZoom = v; } }, 'preview');
+  dwBindView(el.dwModalImg, el.dwModalCanvas, { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }, 'modal');
+
   window.addEventListener('mousemove', (e) => {
-    if (!dwDragging || !dwCur) return;
-    const [nx, ny] = dwNormFromEvent(dwModalImg, e.clientX, e.clientY);
+    if (!dwDragging || !dwCur || !dwDragTarget) return;
+    const img = dwDragTarget === 'modal' ? el.dwModalImg : el.dwImgPreview;
+    const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
     dwCur.x = Math.min(dwStartX, nx);
     dwCur.y = Math.min(dwStartY, ny);
     dwCur.w = Math.abs(nx - dwStartX);
@@ -2628,6 +2646,7 @@
   window.addEventListener('mouseup', () => {
     if (!dwDragging) return;
     dwDragging = false;
+    dwDragTarget = null;
     if (dwCur) {
       // 误点（区域过小）则丢弃
       if (dwCur.w > 0.004 && dwCur.h > 0.004) dwSelections.push(dwCur);
@@ -2660,17 +2679,21 @@
     });
   });
 
+  // 主预览区缩放按钮
+  if (el.dwZoomIn) el.dwZoomIn.addEventListener('click', () => { dwZoom = Math.min(5, dwZoom + 0.25); dwApplyZoom('preview'); });
+  if (el.dwZoomOut) el.dwZoomOut.addEventListener('click', () => { dwZoom = Math.max(1, dwZoom - 0.25); dwApplyZoom('preview'); });
+  if (el.dwZoomFit) el.dwZoomFit.addEventListener('click', () => { dwZoom = 1; dwApplyZoom('preview'); });
   // 弹窗缩放按钮
-  if (el.dwModalZoomIn) el.dwModalZoomIn.addEventListener('click', () => { dwZoom = Math.min(5, dwZoom + 0.25); dwApplyZoom(); });
-  if (el.dwModalZoomOut) el.dwModalZoomOut.addEventListener('click', () => { dwZoom = Math.max(1, dwZoom - 0.25); dwApplyZoom(); });
-  if (el.dwModalZoomFit) el.dwModalZoomFit.addEventListener('click', () => { dwZoom = 1; dwApplyZoom(); });
+  if (el.dwModalZoomIn) el.dwModalZoomIn.addEventListener('click', () => { dwModalZoom = Math.min(5, dwModalZoom + 0.25); dwApplyZoom('modal'); });
+  if (el.dwModalZoomOut) el.dwModalZoomOut.addEventListener('click', () => { dwModalZoom = Math.max(1, dwModalZoom - 0.25); dwApplyZoom('modal'); });
+  if (el.dwModalZoomFit) el.dwModalZoomFit.addEventListener('click', () => { dwModalZoom = 1; dwApplyZoom('modal'); });
 
   // 打开 / 关闭弹窗
   const dwOpenModal = () => {
     if (!el.dwImgFile.files[0]) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
     el.dwImgModal.hidden = false;
     document.body.style.overflow = 'hidden';
-    dwZoom = 1;
+    dwModalZoom = 1;
     if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
     // 同步模式按钮高亮
     dwSyncModeButtons();
@@ -2685,7 +2708,6 @@
   };
   el.dwExpandBtn.addEventListener('click', dwOpenModal);
   el.dwExpandBtn2.addEventListener('click', dwOpenModal);
-  el.dwImgPreview.addEventListener('click', dwOpenModal);
   el.dwModalClose.addEventListener('click', dwCloseModal);
   el.dwModalDone.addEventListener('click', dwCloseModal);
   el.dwImgModal.addEventListener('click', (e) => { if (e.target === el.dwImgModal || e.target.classList.contains('dw-modal-backdrop')) dwCloseModal(); });
