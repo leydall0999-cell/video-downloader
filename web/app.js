@@ -396,6 +396,10 @@
     dwImgSvg: $('dwImgSvg'),
     dwImgCanvas: $('dwImgCanvas'),
     dwSelInfo: $('dwSelInfo'),
+    dwZoomIn: $('dwZoomIn'),
+    dwZoomOut: $('dwZoomOut'),
+    dwZoomFit: $('dwZoomFit'),
+    dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
@@ -2515,6 +2519,26 @@
 
     if (el.dwSelInfo) el.dwSelInfo.textContent = `已选 ${adds.length} 加 / ${subs.length} 减`;
   };
+  // 预览图缩放（相对适应宽度的倍数，1 = 适应窗口），放大后框选坐标按归一化计算仍准确
+  let dwZoom = 1;
+  const dwApplyZoom = () => {
+    const img = el.dwImgPreview;
+    if (!img || !img.src) return;
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '420px';
+    img.style.width = 'auto';
+    const fitW = img.clientWidth || 1;
+    if (dwZoom <= 1.0001) {
+      dwZoom = 1;
+    } else {
+      img.style.maxWidth = 'none';
+      img.style.maxHeight = 'none';
+      img.style.width = Math.round(fitW * dwZoom) + 'px';
+    }
+    if (el.dwZoomLabel) el.dwZoomLabel.textContent = Math.round(dwZoom * 100) + '%';
+    dwResizeCanvas();
+  };
+
   const dwNormFromEvent = (clientX, clientY) => {
     const img = el.dwImgPreview, rect = img.getBoundingClientRect();
     const nx = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
@@ -2527,7 +2551,20 @@
     if (!f) return;
     const url = URL.createObjectURL(f);
     el.dwImgPreview.src = url;
-    el.dwImgPreview.onload = () => { URL.revokeObjectURL(url); dwResizeCanvas(); };
+    el.dwImgPreview.onload = () => { URL.revokeObjectURL(url); dwZoom = 1; if (el.dwZoomLabel) el.dwZoomLabel.textContent = '100%'; dwResizeCanvas(); };
+    // 滚轮缩放 / 双击在 100%↔200% 间切换（放大后便于精确框选）
+    el.dwImgPreview.addEventListener('wheel', (e) => {
+      if (!el.dwImgPreview.src) return;
+      e.preventDefault();
+      dwZoom = e.deltaY < 0 ? Math.min(5, dwZoom + 0.2) : Math.max(1, dwZoom - 0.2);
+      dwApplyZoom();
+    }, { passive: false });
+    el.dwImgPreview.addEventListener('dblclick', (e) => {
+      if (!el.dwImgPreview.src) return;
+      dwZoom = dwZoom > 1.0001 ? 1 : 2;
+      dwApplyZoom();
+      e.preventDefault();
+    });
     dwSelections = [];
     dwCur = null;
     dwDrawCanvas();
@@ -2582,6 +2619,11 @@
       }
     });
   });
+
+  // 缩放按钮
+  if (el.dwZoomIn) el.dwZoomIn.addEventListener('click', () => { dwZoom = Math.min(5, dwZoom + 0.25); dwApplyZoom(); });
+  if (el.dwZoomOut) el.dwZoomOut.addEventListener('click', () => { dwZoom = Math.max(1, dwZoom - 0.25); dwApplyZoom(); });
+  if (el.dwZoomFit) el.dwZoomFit.addEventListener('click', () => { dwZoom = 1; dwApplyZoom(); });
 
   const startDwImage = async () => {
     const file = el.dwImgFile.files[0];

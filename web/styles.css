@@ -644,9 +644,9 @@ img { max-width: 100%; display: block; }
 .uc-sub:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.08); background: #d6e4fd; }
 .uc-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; box-shadow: 0 4px 12px rgba(79,70,229,.28); }
 .dw-preview-wrap {
-  position: relative; display: inline-block; max-width: 100%;
-  border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; margin: .4rem 0;
-  line-height: 0;
+  position: relative; display: block; width: 100%; max-width: 100%;
+  border: 1px solid var(--line); border-radius: var(--radius-md); overflow: auto; margin: .4rem 0;
+  line-height: 0; background: #f3f4f7;
 }
 .dw-preview-wrap img { max-width: 100%; max-height: 420px; display: block; cursor: crosshair; }
 .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: none; z-index: 2; }
@@ -686,6 +686,8 @@ img { max-width: 100%; display: block; }
 .dw-sep { width: 1px; height: 1.2rem; background: var(--line); margin: 0 .15rem; }
 .dw-selinfo { font-size: .8rem; color: var(--text-mute); margin-left: .3rem; }
 .dw-hint { color: var(--text-mute); font-size: .82rem; margin: .2rem 0 .6rem; line-height: 1.5; }
+.dw-zoomlabel { font-size: .82rem; color: var(--text-mute); min-width: 3.2rem; text-align: center; user-select: none; }
+.dw-zoomgroup .dw-mode { padding: .35rem .55rem; }
 
 /* 图片模式两栏布局 */
 .dw-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 1.2rem; align-items: start; }
