@@ -2908,6 +2908,11 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "下载单个音频请打开具体集数的播放页链接。",
         )
     url = _norm_for_check
+    # 优酷链接归一化：当前主流为 www.youku.com，而 yt-dlp 内置 YoukuIE 仅匹配
+    # v/play/player.youku.com，否则会落 generic 提取 → Unsupported URL（pending_extractor）。
+    # 归一化到 v.youku.com 让 YoukuIE 接管（[5] 已把共享池 Cookie 注入 http_headers）。
+    if _host_of(url) == "www.youku.com":
+        url = url.replace("www.youku.com", "v.youku.com", 1)
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)
