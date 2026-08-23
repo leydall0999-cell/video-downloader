@@ -3067,6 +3067,116 @@ def youku_bookmarklet() -> dict:
     return {"ok": True, "bookmarklet": _YOUKU_BOOKMARKLET}
 
 
+def _youku_profile_dir() -> str:
+    """与 youku_browser 一致的 profile 目录（桌面端默认用户目录）。"""
+    try:
+        from youku_browser import _profile_default
+        return _profile_default()
+    except Exception:
+        import os
+        return os.path.join(os.path.expanduser("~"), "Library",
+                            "Application Support", "VDL", "youku_profile")
+
+
+@app.post("/api/youku/login")
+def youku_login_headful() -> dict:
+    """首次引导：起一个『有头』浏览器打开优酷登录页，用户扫码/输密登录后落地 profile。
+
+    这是『零门槛』的前提：浏览器引擎需要已登录的 profile 才能自动拿 ckey。
+    只需在装好 app 后做一次；登录态过期后再点一次即可。非每次解析都需操作。
+    """
+    import os
+    import time
+    profile_dir = _youku_profile_dir()
+    os.makedirs(profile_dir, exist_ok=True)
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return {"ok": False, "detail": "服务端未安装 playwright，无法引导登录"}
+    pw = None
+    browser = None
+    try:
+        pw = sync_playwright().start()
+        launch_kwargs = {
+            "user_data_dir": profile_dir,
+            "headless": False,  # 有头：用户能看到窗口并操作登录
+            "args": ["--no-sandbox", "--disable-dev-shm-usage",
+                     "--disable-gpu", "--mute-audio"],
+        }
+        try:
+            browser = pw.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception:
+            launch_kwargs["channel"] = "chrome"
+            browser = pw.chromium.launch_persistent_context(**launch_kwargs)
+        page = browser.new_page()
+        page.goto("https://www.youku.com", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
+        # 提示用户登录
+        page.evaluate("() => { try { document.title='【VDL】请在此窗口登录优酷，登录后关闭即可'; } catch(e){} }")
+        # 轮询登录态（最多 180s，给用户充足时间扫码/输密）
+        deadline = time.time() + 180
+        logged = False
+        while time.time() < deadline:
+            try:
+                still = page.get_by_text("登录", exact=False).first.is_visible(timeout=500)
+            except Exception:
+                still = False
+            cookies = browser.cookies()
+            yk = [c for c in cookies if "youku.com" in c.get("domain", "")]
+            if not still and yk:
+                logged = True
+                break
+            if any(c["name"] == "P__yk__uck" for c in yk):
+                logged = True
+                break
+            time.sleep(1)
+        if logged:
+            return {"ok": True, "detail": "优酷登录成功，浏览器引擎已就绪"}
+        return {"ok": False, "detail": "180s 内未完成登录（可重试）"}
+    except Exception as e:
+        return {"ok": False, "detail": "引导登录异常：%s" % str(e)[:160]}
+    finally:
+        try:
+            if browser:
+                browser.close()
+        except Exception:
+            pass
+        try:
+            if pw:
+                pw.stop()
+        except Exception:
+            pass
+
+
+@app.get("/api/youku/engine-status")
+def youku_engine_status() -> dict:
+    """返回浏览器引擎就绪状态（playwright 可用 + profile 是否已登录）。"""
+    try:
+        from youku_browser import browser_available
+        ready = browser_available()
+    except Exception:
+        ready = False
+    # 进一步判断 profile 内是否有登录票据
+    logged_in = False
+    try:
+        from playwright.sync_api import sync_playwright
+        pd = _youku_profile_dir()
+        if os.path.isdir(pd):
+            pw = sync_playwright().start()
+            try:
+                b = pw.chromium.launch_persistent_context(user_data_dir=pd, headless=True,
+                                                          args=["--no-sandbox", "--disable-dev-shm-usage"])
+                cs = b.cookies()
+                b.close()
+                logged_in = any(c["name"] in ("P__yk__uck", "ykus_utid", "cna")
+                                and "youku.com" in c.get("domain", "") for c in cs)
+            finally:
+                pw.stop()
+    except Exception:
+        logged_in = False
+    return {"ok": True, "playwright": ready, "profile_logged_in": logged_in}
+
+
 @app.get("/api/youku/local-ckey")
 def youku_local_ckey_get() -> dict:
     """返回本机优酷 ckey 状态。"""
