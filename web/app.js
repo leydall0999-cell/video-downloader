@@ -393,6 +393,7 @@
     dwImgPane: $('dwImgPane'),
     dwImgFile: $('dwImgFile'),
     dwImgPreview: $('dwImgPreview'),
+    dwImgSvg: $('dwImgSvg'),
     dwImgCanvas: $('dwImgCanvas'),
     dwSelInfo: $('dwSelInfo'),
     dwImgMethod: $('dwImgMethod'),
@@ -2344,36 +2345,78 @@
   let dwDragging = false, dwStartX = 0, dwStartY = 0, dwCur = null;
 
   const dwResizeCanvas = () => {
-    const img = el.dwImgPreview, cv = el.dwImgCanvas;
-    if (!img || !cv || !img.clientWidth) return;
+    const img = el.dwImgPreview, cv = el.dwImgCanvas, svg = el.dwImgSvg;
+    if (!img || !cv || !svg || !img.clientWidth) return;
     cv.width = img.clientWidth;
     cv.height = img.clientHeight;
     cv.style.width = img.clientWidth + 'px';
     cv.style.height = img.clientHeight + 'px';
+    svg.setAttribute('width', img.clientWidth);
+    svg.setAttribute('height', img.clientHeight);
+    svg.setAttribute('viewBox', `0 0 ${img.clientWidth} ${img.clientHeight}`);
     dwDrawCanvas();
   };
+
+  const dwRectPath = (s, W, H) => {
+    const x = s.x * W, y = s.y * H, w = s.w * W, h = s.h * H;
+    return `M${x},${y} h${w} v${h} h${-w} z`;
+  };
+
   const dwDrawCanvas = () => {
-    const cv = el.dwImgCanvas;
-    if (!cv) return;
+    const cv = el.dwImgCanvas, svg = el.dwImgSvg;
+    if (!cv || !svg) return;
+    const W = cv.width, H = cv.height;
+
+    // Canvas 仅用于实时拖拽框
     const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    const draw = (s, active) => {
-      const add = !s.op || s.op === 'add';
-      const x = s.x * cv.width, y = s.y * cv.height;
-      const w = s.w * cv.width, h = s.h * cv.height;
+    ctx.clearRect(0, 0, W, H);
+    if (dwCur) {
+      const add = !dwCur.op || dwCur.op === 'add';
+      const x = dwCur.x * W, y = dwCur.y * H;
+      const w = dwCur.w * W, h = dwCur.h * H;
       ctx.lineWidth = 2;
-      ctx.setLineDash(active ? [6, 4] : []);
+      ctx.setLineDash([6, 4]);
       ctx.strokeStyle = add ? '#2ecc71' : '#e74c3c';
-      ctx.fillStyle = add ? 'rgba(46,204,113,.18)' : 'rgba(231,76,60,.18)';
-      ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
-    };
-    dwSelections.forEach((s) => draw(s, false));
-    if (dwCur) draw(dwCur, true);
-    ctx.setLineDash([]);
-    const adds = dwSelections.filter((s) => !s.op || s.op === 'add').length;
-    const subs = dwSelections.filter((s) => s.op === 'subtract').length;
-    if (el.dwSelInfo) el.dwSelInfo.textContent = dwSelections.length ? `已选 ${adds} 加 / ${subs} 减` : '尚未框选';
+      ctx.setLineDash([]);
+    }
+
+    // SVG 用 evenodd 做真正的加减选区合并
+    svg.innerHTML = '';
+    if (!dwSelections.length) {
+      const adds = 0, subs = 0;
+      if (el.dwSelInfo) el.dwSelInfo.textContent = '尚未框选';
+      return;
+    }
+    const adds = dwSelections.filter((s) => !s.op || s.op === 'add');
+    const subs = dwSelections.filter((s) => s.op === 'subtract');
+
+    // 合并保留区（add 并集，subtract 抠洞）
+    const unionD = [...adds, ...subs].map((s) => dwRectPath(s, W, H)).join(' ');
+    if (unionD) {
+      const unionPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      unionPath.setAttribute('d', unionD);
+      unionPath.setAttribute('fill', 'rgba(46,204,113,.22)');
+      unionPath.setAttribute('fill-rule', 'evenodd');
+      unionPath.setAttribute('stroke', '#2ecc71');
+      unionPath.setAttribute('stroke-width', '2');
+      unionPath.setAttribute('stroke-dasharray', '6,4');
+      svg.appendChild(unionPath);
+    }
+
+    // 减区叠加显示（让用户看清被抠除的位置）
+    if (subs.length) {
+      const subD = subs.map((s) => dwRectPath(s, W, H)).join(' ');
+      const subPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      subPath.setAttribute('d', subD);
+      subPath.setAttribute('fill', 'rgba(231,76,60,.22)');
+      subPath.setAttribute('stroke', '#e74c3c');
+      subPath.setAttribute('stroke-width', '2');
+      subPath.setAttribute('stroke-dasharray', '6,4');
+      svg.appendChild(subPath);
+    }
+
+    if (el.dwSelInfo) el.dwSelInfo.textContent = `已选 ${adds.length} 加 / ${subs.length} 减`;
   };
   const dwNormFromEvent = (clientX, clientY) => {
     const img = el.dwImgPreview, rect = img.getBoundingClientRect();
