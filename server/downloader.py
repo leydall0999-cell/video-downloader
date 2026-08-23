@@ -3068,7 +3068,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         url = url.replace("www.youku.com", "v.youku.com", 1)
     # 优酷：yt-dlp 内置 YoukuIE 不生成 ckey 播放签名 → -3007。改走专用 UPS 通道
     # （带共享池 Cookie + ckey 直接拿 m3u8）。[2026-08-24] 用户 Copy as cURL 贡献 ckey。
-    if _host_of(url) in ("youku.com",):
+    if (_host_of(url).endswith("youku.com")):
         _yk_cookie = cookie
         _yk_ckey = ""
         if not _yk_cookie:
