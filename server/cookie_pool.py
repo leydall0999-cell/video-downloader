@@ -210,7 +210,17 @@ def _save(domain: str, cookies: list) -> bool:
                         item["header_enc"] = enc
             payload.append(item)
         f = _pool_file(domain)
-        text = json.dumps({"cookies": payload}, ensure_ascii=False)
+        # 保留既有 ckey 字段（add_cookie/add 同步写入时不能把已贡献的 ckey 清掉）
+        prev_ckey = None
+        try:
+            _prev = json.loads(f.read_text()) if f.exists() else {}
+            prev_ckey = _prev.get("ckey")
+        except Exception:
+            prev_ckey = None
+        out = {"cookies": payload}
+        if prev_ckey:
+            out["ckey"] = prev_ckey
+        text = json.dumps(out, ensure_ascii=False)
         # 原子写：先写同目录临时文件再 os.replace，避免跨进程并发（VPS 推送 / Railway prune / 读取）
         # 读到「写一半」的撕裂文件（之前诡异 65 字节空条目的根因之一）。
         tmp = f.with_suffix(f.suffix + ".tmp")
