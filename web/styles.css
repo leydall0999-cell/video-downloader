@@ -706,7 +706,7 @@ img { max-width: 100%; display: block; }
 .dw-modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.72); backdrop-filter: blur(2px); }
 .dw-modal-content {
   position: relative; z-index: 1;
-  width: min(94vw, 1400px); height: min(92vh, 900px);
+  width: min(92vw, 760px); height: min(90vh, 820px);
   background: var(--surface, #fff); border-radius: var(--radius-lg, 12px);
   box-shadow: 0 20px 60px rgba(0,0,0,.35);
   display: flex; flex-direction: column; overflow: hidden;
@@ -723,11 +723,13 @@ img { max-width: 100%; display: block; }
 }
 .dw-modal-close:hover { background: #e5e7eb; color: var(--text); }
 .dw-modal-toolbar {
-  display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
-  padding: .6rem 1rem; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: .35rem; flex-wrap: wrap;
+  padding: .55rem .75rem; border-bottom: 1px solid var(--line);
   background: #f6f7fb;
 }
-.dw-modal-body { flex: 1; overflow: auto; padding: 1rem; background: #0b0d12; }
+.dw-modal-toolbar .dw-mode { padding: .32rem .55rem; font-size: .85rem; }
+.dw-modal-toolbar .dw-zoomlabel { font-size: .78rem; min-width: 3rem; }
+.dw-modal-body { flex: 1; overflow: auto; padding: .75rem; background: #0b0d12; }
 .dw-modal-preview {
   min-width: min-content; min-height: min-content;
   margin: 0 auto; border: 0; border-radius: var(--radius-md); overflow: visible;
