@@ -2394,13 +2394,15 @@
   const dwRectsUnionOutline = (rects) => {
     if (!rects.length) return [];
     const EPS = 1e-4;
+    const TOL = 1e-6;   // inside 判定容差（必须远小于探测步长）
+    const GAP = 1e-3;   // 向外探测的步长（必须远大于 TOL，否则边界点被误判为内部）
     const round = (v) => Math.round(v / EPS) * EPS;
 
     const xs = [...new Set(rects.flatMap((r) => [round(r.x), round(r.x + r.w)]))].sort((a, b) => a - b);
     const ys = [...new Set(rects.flatMap((r) => [round(r.y), round(r.y + r.h)]))].sort((a, b) => a - b);
     if (xs.length < 2 || ys.length < 2) return [];
 
-    const inside = (x, y) => rects.some((r) => x >= r.x - EPS && x <= r.x + r.w + EPS && y >= r.y - EPS && y <= r.y + r.h + EPS);
+    const inside = (x, y) => rects.some((r) => x > r.x - TOL && x < r.x + r.w + TOL && y > r.y - TOL && y < r.y + r.h + TOL);
 
     // 分别收集水平/垂直边界边，再合并共线小边，避免连接多边形失败导致轮廓破碎
     const hLines = new Map(); // y -> [[x1,x2], ...]
@@ -2413,10 +2415,10 @@
         const cx = (xs[i] + xs[i + 1]) / 2;
         const cy = (ys[j] + ys[j + 1]) / 2;
         if (!inside(cx, cy)) continue;
-        if (!inside(xs[i] - EPS, cy)) addV(xs[i], ys[j], ys[j + 1]);
-        if (!inside(xs[i + 1] + EPS, cy)) addV(xs[i + 1], ys[j], ys[j + 1]);
-        if (!inside(cx, ys[j] - EPS)) addH(ys[j], xs[i], xs[i + 1]);
-        if (!inside(cx, ys[j + 1] + EPS)) addH(ys[j + 1], xs[i], xs[i + 1]);
+        if (!inside(xs[i] - GAP, cy)) addV(xs[i], ys[j], ys[j + 1]);
+        if (!inside(xs[i + 1] + GAP, cy)) addV(xs[i + 1], ys[j], ys[j + 1]);
+        if (!inside(cx, ys[j] - GAP)) addH(ys[j], xs[i], xs[i + 1]);
+        if (!inside(cx, ys[j + 1] + GAP)) addH(ys[j + 1], xs[i], xs[i + 1]);
       }
     }
 
