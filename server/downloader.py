@@ -871,12 +871,23 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         _yk_cookie = cookie
         _yk_ckey = ""
         if not _yk_cookie:
+            # 桌面端自治优先：读本机浏览器自取的 ckey（不依赖公共池、不出本机）。
             try:
-                from cookie_pool import get_cookie as _gpc, get_ckey as _gpk
-                _yk_cookie = _gpc("youku.com") or ""
-                _yk_ckey = _gpk("youku.com") or ""
+                from youku_local import get_local_ckey as _glk
+                _lk, _lc = _glk()
+                if _lk:
+                    _yk_ckey = _lk
+                    _yk_cookie = _yk_cookie or _lc
             except Exception:
                 pass
+            # 回退：公共池（网页版共享登录态）
+            if not _yk_ckey:
+                try:
+                    from cookie_pool import get_cookie as _gpc, get_ckey as _gpk
+                    _yk_cookie = _yk_cookie or (_gpc("youku.com") or "")
+                    _yk_ckey = _gpk("youku.com") or ""
+                except Exception:
+                    pass
         _yk_proxy = proxy or _resolve_proxy("v.youku.com")
         try:
             return _youku_info(url, _yk_cookie, _yk_ckey, proxy=_yk_proxy)

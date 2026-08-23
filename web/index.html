@@ -121,6 +121,30 @@
       </div>
     </form>
 
+    <!-- 优酷本机登录（仅桌面端显示）：从本机已登录浏览器自取新鲜 ckey，不依赖公共池、不出本机 -->
+    <div class="youku-local-card" id="youkuLocalCard" hidden>
+      <div class="youku-local-head">
+        <span class="youku-local-title">🎬 优酷本机登录（ckey 自治）</span>
+        <span class="youku-local-status" id="youkuLocalStatus"></span>
+      </div>
+      <p class="youku-local-tip">
+        优酷需登录态播放签名（ckey，约 35 分钟有效）。本机已登录优酷的浏览器可<b>自己取</b>，
+        不必发给我、也不进公共池。
+      </p>
+      <ol class="youku-local-steps">
+        <li>点「复制书签」→ 在浏览器书签栏添加一个书签，网址粘贴为书签内容。</li>
+        <li>打开并登录优酷播放页，点一下该书签 → 按提示刷新页面触发请求 → ckey 自动回传本机。</li>
+        <li>兜底：也可直接粘贴「Copy as cURL」到下方文本框保存。</li>
+      </ol>
+      <div class="youku-local-actions">
+        <button type="button" id="youkuCopyBookmarklet" class="btn btn-sm">复制书签</button>
+        <button type="button" id="youkuOpenPage" class="btn btn-sm">打开优酷播放页</button>
+        <button type="button" id="youkuSaveCurl" class="btn btn-sm btn-primary">用 cURL 保存</button>
+      </div>
+      <textarea id="youkuCurlInput" class="adv-textarea" rows="2" spellcheck="false"
+        placeholder="兜底：粘贴优酷 ups 请求的 Copy as cURL（bash）到此处"></textarea>
+    </div>
+
     <!-- LLM 服务商选择器：统一配置解说与翻译所需的 Key / 提供商 / 模型 -->
     <details class="adv" id="llmSettings">
       <summary class="adv-summary">LLM 设置（解说 & 翻译共用）</summary>

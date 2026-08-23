@@ -3031,6 +3031,75 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
     return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
 
 
+# ---------------------------------------------------------------------------
+# 优酷本机 ckey（桌面端自治）：不进公共池、不出本机。
+# bookmarklet 从本机已登录优酷页面把新鲜 ckey 回传这里；或用户粘贴 cURL 兜底。
+# ---------------------------------------------------------------------------
+_YOUKU_BOOKMARKLET = (
+    "javascript:(function(){"
+    "var P=[8321,8322,8323,8324,8325,8326,8327,8328,8329,8330,8331,8332,8333,8334,8335,8365];"
+    "function findCkey(){var m=(location.search||'').match(/[?&]ckey=([^&]+)/);"
+    "if(m)return decodeURIComponent(m[1]);"
+    "var els=document.querySelectorAll('script,link,meta');return null;}"
+    "var captured=null;"
+    "function hook(){var oXHR=window.XMLHttpRequest;if(oXHR&&!oXHR.__hk){oXHR.__hk=1;"
+    "var _open=oXHR.prototype.open;oXHR.prototype.open=function(m,u){if(/ups\\.youku\\.com/.test(u||'')){"
+    "var mm=String(u).match(/ckey=([^&]+)/);if(mm)captured=decodeURIComponent(mm[1]);}"
+    "return _open.apply(this,arguments);};}"
+    "var oF=window.fetch;if(oF&&!window.__hf){window.__hf=1;window.fetch=function(u,o){"
+    "if(/ups\\.youku\\.com/.test(u||'')){var mm=String(u).match(/ckey=([^&]+)/);if(mm)captured=decodeURIComponent(mm[1]);}"
+    "return oF.apply(this,arguments);};}}"
+    "function sendCkey(port){var c=captured||findCkey();if(!c){alert('未捕获到 ckey：请先刷新优酷播放页触发 ups 请求，再点书签');return;}"
+    "fetch('http://127.0.0.1:'+port+'/api/youku/local-ckey',{method:'POST',"
+    "headers:{'Content-Type':'application/json'},body:JSON.stringify({ckey:c,cookie:document.cookie})})"
+    ".then(function(r){return r.json();}).then(function(d){alert(d.ok?'✅ 优酷本机 ckey 已刷新（'+(d.remaining_min||0)+'分钟有效）':'❌ 保存失败：'+(d.detail||''));})"
+    ".catch(function(e){alert('回传失败：确认桌面 app 已启动且端口为 '+port+'\\n'+e);});}"
+    "hook();"
+    "if(captured){var p=parseInt(prompt('桌面 app 本地端口（默认8321，端口被占用会顺延）','8321'),10);if(p)sendCkey(p);}"
+    "else{alert('第一步：书签已就绪。\\n请点一下优酷播放页的「刷新/重播」触发 ups 请求，然后再次点击此书签即可自动回传 ckey。');}"
+    "})();"
+)
+
+
+@app.get("/api/youku/bookmarklet")
+def youku_bookmarklet() -> dict:
+    """返回可复制的 bookmarklet 源码（含本机端口探测/手动输入）。"""
+    return {"ok": True, "bookmarklet": _YOUKU_BOOKMARKLET}
+
+
+@app.get("/api/youku/local-ckey")
+def youku_local_ckey_get() -> dict:
+    """返回本机优酷 ckey 状态。"""
+    from youku_local import local_ckey_status
+    return {"ok": True, **local_ckey_status()}
+
+
+@app.post("/api/youku/local-ckey")
+def youku_local_ckey_post(payload: dict) -> dict:
+    """保存本机优酷 ckey。
+
+    两种来源：
+    - {ckey, cookie}: 来自 bookmarklet 回传（本机浏览器已登录态直接给）。
+    - {curl}: 用户粘贴的「Copy as cURL」兜底（从 ups 请求解析 ckey+cookie）。
+    """
+    from youku_local import save_local_ckey, extract_ckey_from_curl, local_ckey_status
+
+    ckey = (payload or {}).get("ckey", "")
+    cookie = (payload or {}).get("cookie", "")
+    curl = (payload or {}).get("curl", "")
+    source = "bookmarklet"
+    if not ckey and curl:
+        ckey, cookie = extract_ckey_from_curl(curl)
+        source = "curl"
+    if not ckey:
+        raise HTTPException(status_code=400, detail="缺少 ckey（bookmarklet 未捕获到，或粘贴的 cURL 解析不到 ckey）")
+    ok = save_local_ckey(ckey, cookie, source=source)
+    if not ok:
+        raise HTTPException(status_code=400, detail="保存失败")
+    st = local_ckey_status()
+    return {"ok": True, "source": source, "remaining_min": st.get("remaining_min", 0)}
+
+
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:
     """查询某链接是否需要 Cookie、本机浏览器是否已有可用登录态、以及公共池新鲜度。"""

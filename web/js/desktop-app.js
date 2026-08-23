@@ -134,4 +134,81 @@
     }
     setInterval(() => syncToCloud(false), 30 * 60 * 1000);
   })();
+
+  // 「优酷本机登录」：桌面端自治取 ckey（不依赖公共池、不出本机）。
+  // 仅桌面端（pywebview）显示卡片；纯 web 环境卡片保持 hidden。
+  (function initYoukuLocal() {
+    const card = document.getElementById('youkuLocalCard');
+    if (!card) return;
+    card.hidden = false;
+
+    const statusEl = document.getElementById('youkuLocalStatus');
+    const copyBtn = document.getElementById('youkuCopyBookmarklet');
+    const openBtn = document.getElementById('youkuOpenPage');
+    const saveBtn = document.getElementById('youkuSaveCurl');
+    const curlInput = document.getElementById('youkuCurlInput');
+
+    const YK_TEST_URL = 'https://v.youku.com/v_show/id_XMjQ0ODk0NTAw.html';
+
+    async function refreshStatus() {
+      try {
+        const r = await window.VDL.request('/api/youku/local-ckey');
+        const d = r || {};
+        if (d.ok && d.has && !d.expired) {
+          statusEl.textContent = `● 本机 ckey 有效（约 ${d.remaining_min} 分钟）`;
+          statusEl.style.color = '#2e8b57';
+        } else if (d.has && d.expired) {
+          statusEl.textContent = '● 本机 ckey 已过期，请刷新';
+          statusEl.style.color = '#e64340';
+        } else {
+          statusEl.textContent = '○ 尚未获取优酷 ckey';
+          statusEl.style.color = '#888';
+        }
+      } catch (e) {
+        statusEl.textContent = '状态获取失败';
+        statusEl.style.color = '#e64340';
+      }
+    }
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        const r = await window.VDL.request('/api/youku/bookmarklet');
+        const bm = (r && r.bookmarklet) || '';
+        if (!bm) { window.alert('获取书签失败'); return; }
+        await navigator.clipboard.writeText(bm);
+        window.alert('已复制书签内容。\n\n请：① 在浏览器书签栏「添加书签」，把名称随意、网址粘贴为刚才复制的内容；\n② 打开并登录优酷播放页，点该书签 → 按提示刷新页面触发 ups 请求 → ckey 自动回传本机。');
+      } catch (e) {
+        window.alert('复制失败：' + e.message);
+      }
+    });
+
+    openBtn.addEventListener('click', () => {
+      window.VDL.desktop.openExternal(YK_TEST_URL);
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      const curl = (curlInput.value || '').trim();
+      if (!curl) { window.alert('请先粘贴优酷 ups 请求的 Copy as cURL'); return; }
+      try {
+        const r = await window.VDL.request('/api/youku/local-ckey', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ curl }),
+        });
+        if (r && r.ok) {
+          window.alert('✅ 已用 cURL 保存本机 ckey（约 ' + (r.remaining_min || 0) + ' 分钟有效）');
+          curlInput.value = '';
+          refreshStatus();
+        } else {
+          window.alert('❌ 保存失败：' + ((r && r.detail) || '未知错误'));
+        }
+      } catch (e) {
+        window.alert('保存出错：' + e.message);
+      }
+    });
+
+    refreshStatus();
+    // 每 60 秒刷新一次状态，让用户看到 ckey 倒计时
+    setInterval(refreshStatus, 60 * 1000);
+  })();
 })();
