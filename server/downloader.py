@@ -2511,7 +2511,7 @@ def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str, proxy: str = ""
     )
 
 
-def _youku_info(url: str, cookie: str = "", ckey: str = "") -> dict[str, Any]:
+def _youku_info(url: str, cookie: str = "", ckey: str = "", proxy: str = "") -> dict[str, Any]:
     """优酷专用解析：UPS + ckey 拿 m3u8。返回 yt-dlp 兼容 info dict。"""
     vid = _youku_vid(url)
     if not vid:
@@ -3115,7 +3115,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             except Exception:
                 pass
         try:
-            return _youku_info(url, _yk_cookie, _yk_ckey)
+            return _youku_info(url, _yk_cookie, _yk_ckey, proxy=effective_proxy)
         except ResolveError:
             raise
         except Exception as _e:
