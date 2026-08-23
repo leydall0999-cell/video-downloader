@@ -3293,8 +3293,9 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
     from urllib.parse import urlparse
     url = (payload or {}).get("url", "")
     cookie = (payload or {}).get("cookie", "")
+    ckey = (payload or {}).get("ckey", "")
     host = urlparse(url).netloc if url else ""
-    from cookie_pool import add_cookie, is_allowed, verify_cookie, _norm_domain, _strip_sub
+    from cookie_pool import add_cookie, add_ckey, is_allowed, verify_cookie, _norm_domain, _strip_sub
     domain = _strip_sub(_norm_domain(host))
     if not domain or not is_allowed(domain):
         raise HTTPException(status_code=400, detail="该平台暂不支持公共池贡献")
@@ -3315,8 +3316,11 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
                    "优酷/腾讯视频等站需含登录态字段如 P__yk__uck / vus_session）",
         )
     added = add_cookie(domain, cookie, source="contrib")
-    logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s", domain, ip, added)
-    return {"ok": True, "added": added, "verified": (ok is True)}
+    if ckey:
+        add_ckey(domain, ckey, source="contrib")
+        added = True
+    logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s ckey=%s", domain, ip, added, bool(ckey))
+    return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
 
 
 @app.post("/api/cookie/sync/from-local")

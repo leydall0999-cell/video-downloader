@@ -2409,6 +2409,159 @@ _RUMBLE_UA = (
 )
 
 
+# ---------------------------------------------------------------------------
+# 优酷：yt-dlp 内置 YoukuIE 不生成 ckey 播放签名，缺则 UPS 返回 -3007。
+# 这里走专用 UPS 通道：带 Cookie（来自共享池）+ ckey（来自共享池）直接拿 m3u8。
+# ckey 由用户从已登录浏览器「Copy as cURL」贡献（有时效，过期重新贡献即可）。
+# ---------------------------------------------------------------------------
+_YOUKU_M_UA = (
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36"
+)
+
+
+def _youku_vid(url: str) -> str:
+    m = re.search(r"id_([A-Za-z0-9]+)", url)
+    if m:
+        return m.group(1)
+    # player.youku.com 形态
+    m = re.search(r"vid=([A-Za-z0-9]+)", url)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
+    """直接打 UPS 接口（带 ckey），返回 stream 列表。失败抛 ResolveError。"""
+    import json as _json
+    import ssl as _ssl
+
+    cctx = _ssl.create_default_context()
+    cctx.check_hostname = False
+    cctx.verify_mode = _ssl.CERT_NONE
+    params = (
+        f"vid={vid}&ccode=0501&client_ip=0.0.0.0&app_ver=1.0.75&client_ts=1787502724"
+        f"&fu=0&vr=0&rst=mp4&dq=mp4&os=android&bt=phone&bd=&tict=0&d=0&needbf=1"
+        f"&site=1&aw=w&vs=1.0&pver=1&wintype=xplayer_m3u8&play_ability=1024"
+        f"&utid={utid}&ckey={ckey}"
+    )
+    api = f"https://ups.youku.com/ups/get.json?{params}"
+    req = urllib.request.Request(
+        api,
+        headers={
+            "User-Agent": _YOUKU_M_UA,
+            "Referer": "https://m.youku.com/",
+            "Origin": "https://m.youku.com",
+            "Cookie": cookie or "",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=cctx) as resp:
+            data = _json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001
+        raise ResolveError(
+            "优酷解析失败",
+            f"无法连接优酷 UPS 接口（{type(e).__name__}）。",
+            category="parse_failed",
+        )
+    code = data.get("code")
+    if code not in (None, 0, "0", 200) and "stream" not in data.get("data", {}):
+        raise ResolveError(
+            "优酷解析失败",
+            f"UPS 返回错误码 {code}：{data.get('msg')}。常见为 ckey 过期或 Cookie 失效，"
+            f"请在已登录浏览器重新「Copy as cURL」贡献后重试。",
+            category="parse_failed",
+        )
+    streams = data.get("data", {}).get("stream") or []
+    return streams
+
+
+def _youku_info(url: str, cookie: str = "", ckey: str = "") -> dict[str, Any]:
+    """优酷专用解析：UPS + ckey 拿 m3u8。返回 yt-dlp 兼容 info dict。"""
+    vid = _youku_vid(url)
+    if not vid:
+        raise ResolveError("优酷解析失败", "无法从链接识别视频 ID。", category="parse_failed")
+
+    # utid = cna cookie 值（UPS 必需）
+    utid = ""
+    for part in (cookie or "").split(";"):
+        k, _, v = part.partition("=")
+        if k.strip() == "cna":
+            utid = v.strip()
+            break
+
+    if not ckey:
+        raise ResolveError(
+            "优酷需要播放签名(ckey)",
+            "该优酷视频需登录态播放签名(ckey)，当前公共池没有有效 ckey。"
+            "请在已登录优酷的浏览器中：F12 → Network → 过滤 ups → 刷新 → 右键 "
+            "该请求 Copy as cURL，把内容发给我即可自动贡献。",
+            category="need_ckey",
+        )
+
+    streams = _youku_ups_ckey(vid, cookie, ckey, utid)
+    if not streams:
+        raise ResolveError(
+            "优酷解析失败",
+            "UPS 未返回可播放流（stream 为空）。可能是 ckey 过期或账号无权限，"
+            "请重新贡献最新的 ckey。",
+            category="parse_failed",
+        )
+
+    # 选最高清晰度（按 height 排序）
+    def _h(s: dict) -> int:
+        return int(s.get("height") or 0)
+
+    streams_sorted = sorted(streams, key=_h, reverse=True)
+    best = streams_sorted[0]
+    m3u8 = best.get("m3u8_url") or best.get("playurl") or ""
+    if not m3u8:
+        # 退而求其次：任意含 url 的字段
+        for k, v in best.items():
+            if "url" in k.lower() and isinstance(v, str) and v.startswith("http"):
+                m3u8 = v
+                break
+    if not m3u8:
+        raise ResolveError("优酷解析失败", "UPS 返回的流缺少 m3u8 地址。", category="parse_failed")
+
+    # 标题：优先从网页 <title> 取，失败用 video id
+    title = f"优酷视频_{vid}"
+    try:
+        import requests as _req
+
+        r = _req.get(
+            url,
+            headers={"User-Agent": _YOUKU_M_UA},
+            timeout=10,
+            cookies={k.strip(): v.strip() for k, _, v in (p.partition("=") for p in (cookie or "").split(";") if "=" in p)},
+        )
+        mt = re.search(r"<title>(.*?)</title>", r.text, re.S)
+        if mt:
+            title = re.sub(r"[_-]?优酷.*$", "", mt.group(1)).strip() or title
+    except Exception:
+        pass
+
+    return {
+        "id": vid,
+        "title": title,
+        "webpage_url": url,
+        "extractor_key": "YoukuCkey",
+        "extractor": "youku",
+        "ext": "mp4",
+        "direct": True,
+        "url": m3u8,
+        "protocol": "m3u8_native",
+        "http_headers": {
+            "User-Agent": _YOUKU_M_UA,
+            "Referer": "https://m.youku.com/",
+            "Cookie": cookie or "",
+            "Origin": "https://m.youku.com",
+        },
+        # 标记优酷 m3u8 直连（下载时用 ffmpeg/yt-dlp 带 header 拉）
+        "_youku_m3u8": True,
+    }
+
+
 def _rumble_info(url: str, cookie: str = "") -> dict[str, Any]:
     import json as _json
 
@@ -2913,6 +3066,27 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 归一化到 v.youku.com 让 YoukuIE 接管（[5] 已把共享池 Cookie 注入 http_headers）。
     if "www.youku.com" in url:
         url = url.replace("www.youku.com", "v.youku.com", 1)
+    # 优酷：yt-dlp 内置 YoukuIE 不生成 ckey 播放签名 → -3007。改走专用 UPS 通道
+    # （带共享池 Cookie + ckey 直接拿 m3u8）。[2026-08-24] 用户 Copy as cURL 贡献 ckey。
+    if _host_of(url) in ("youku.com",):
+        _yk_cookie = cookie
+        _yk_ckey = ""
+        if not _yk_cookie:
+            try:
+                from cookie_pool import get_cookie as _pool_get, get_ckey as _pool_ckey
+
+                _yk_cookie = _pool_get("youku.com") or ""
+                _yk_ckey = _pool_ckey("youku.com") or ""
+            except Exception:
+                pass
+        try:
+            return _youku_info(url, _yk_cookie, _yk_ckey)
+        except ResolveError:
+            raise
+        except Exception as _e:
+            raise ResolveError(
+                "优酷解析失败", f"UPS 通道异常：{type(_e).__name__} {_e}", category="parse_failed"
+            ) from None
     # 用户手动粘贴的 Cookie 持久化缓存：本次解析成功后写盘，
     # 后续同站点解析/下载自动复用，免去每次重粘。
     host = _host_of(url)

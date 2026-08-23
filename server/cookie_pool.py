@@ -398,6 +398,67 @@ def _structural_check(domain: str, header: str) -> bool | None:
     return None
 
 
+def add_ckey(domain: str, ckey: str, source: str = "contrib") -> bool:
+    """存优酷 ckey 播放签名（与 Cookie 同域存储，独立时效）。
+
+    ckey 是优酷 UPS 接口必需的播放签名参数（YoukuIE 不会生成，缺则 -3007）。
+    它有时效（数小时~1天），过期需用户重新 Copy as cURL 贡献。
+    """
+    domain = _norm_domain(domain)
+    if not is_allowed(domain):
+        logger.warning("[cookie_pool] add_ckey 非白名单域=%s 拒绝", domain)
+        return False
+    ckey = (ckey or "").strip()
+    if not ckey:
+        return False
+    with _LOCK:
+        f = _pool_file(domain)
+        data = {}
+        if f.exists():
+            try:
+                data = json.loads(f.read_text())
+            except Exception:
+                data = {}
+        data["ckey"] = {"ckey": ckey, "ts": int(time.time()), "source": source}
+        try:
+            _POOL_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_suffix(f.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False))
+            os.replace(tmp, f)
+            try:
+                os.chmod(f, 0o600)
+            except Exception:
+                pass
+            logger.info("[cookie_pool] add_ckey ok domain=%s len=%s", domain, len(ckey))
+            return True
+        except Exception as e:
+            logger.error("[cookie_pool] add_ckey failed domain=%s err=%s", domain, e)
+            return False
+
+
+def get_ckey(domain: str) -> str | None:
+    """读取该域最新有效的 ckey（最近贡献优先）；无/过期则返回 None。"""
+    for d in _candidates(domain):
+        f = _pool_file(d)
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+            item = data.get("ckey")
+            if not item:
+                continue
+            if time.time() - item.get("ts", 0) > _TTL:
+                continue
+            ck = item.get("ckey")
+            if ck:
+                logger.info("[cookie_pool] get_ckey hit domain=%s candidate=%s len=%s", domain, d, len(ck))
+                return ck
+        except Exception as e:
+            logger.warning("[cookie_pool] get_ckey read error domain=%s: %s", d, e)
+    logger.info("[cookie_pool] get_ckey miss domain=%s", domain)
+    return None
+
+
 def verify_cookie(domain: str, header: str) -> bool | None:
     """按域分发验真：chrqj 走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
 
