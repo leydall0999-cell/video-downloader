@@ -361,6 +361,9 @@
     // 上传转换（需求文档模块一）
     tabUploadConvert: $('tabUploadConvert'),
     uploadConvertView: $('uploadConvertView'),
+    // 视频拼接（与「视频格式转换」同级的独立模块）
+    tabMerge: $('tabMerge'),
+    mergeView: $('mergeView'),
     // ---- 上传转换视图（多文件批量）----
     ucAddBtn: $('ucAddBtn'),
     ucFileInput: $('ucFileInput'),
@@ -5821,20 +5824,23 @@
     const isTor = view === 'torrent';
     const isCom = view === 'commentary';
     const isUp = view === 'uploadconvert';
+    const isMerge = view === 'merge';
     const isDw = view === 'dw';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isMerge || isDw;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
     el.commentaryView.hidden = !isCom;
     el.uploadConvertView.hidden = !isUp;
+    el.mergeView.hidden = !isMerge;
     el.dwView.hidden = !isDw;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw);
+    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isMerge && !isDw);
     el.tabLibrary.classList.toggle('is-active', isLib);
     el.tabSubscribe.classList.toggle('is-active', isSub);
     el.tabTorrent.classList.toggle('is-active', isTor);
     el.tabCommentary.classList.toggle('is-active', isCom);
     el.tabUploadConvert.classList.toggle('is-active', isUp);
+    el.tabMerge.classList.toggle('is-active', isMerge);
     el.tabDw.classList.toggle('is-active', isDw);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();

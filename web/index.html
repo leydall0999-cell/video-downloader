@@ -39,6 +39,7 @@
     <button type="button" class="tab" data-view="library" id="tabLibrary" hidden>📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary" hidden>🎬 视频解说</button>
     <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
+    <button type="button" class="tab" data-view="merge" id="tabMerge">🔗 视频拼接</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe" hidden>🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -412,42 +413,42 @@
     </div>
 
     <span class="convert-status" id="ucStatus" aria-live="polite"></span>
+  </section>
 
-    <!-- 视频拼接（简单无损合并）：独立模块，复用分片上传与上传提速 -->
-    <div class="uc-concat" id="mcPanel" style="margin-top:18px;border-top:1px dashed var(--border,#e5e7eb);padding-top:16px;">
-      <h3 class="card-title">视频拼接（简单合并）</h3>
-      <p class="uc-tip">添加多个视频片段，自动上传后按顺序排列合并为一个文件（无损 -c copy，无需重编码）。更完善的转场/对齐拼接将在桌面 App 版提供。</p>
-      <div class="uc-toolbar">
-        <button type="button" class="btn btn-primary" id="mcAddBtn">添加片段</button>
-        <input type="file" id="mcFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv" multiple hidden />
-        <button type="button" class="btn btn-ghost" id="mcClearBtn" hidden>清空</button>
-        <span class="uc-count" id="mcCount">尚未添加片段</span>
-      </div>
-      <ul class="uc-list" id="mcList" aria-live="polite"></ul>
-      <div class="uc-bulk" id="mcActions">
-        <label class="uc-field">
-          <span class="uc-label">输出格式</span>
-          <select id="mcOutFormat">
-            <option value="mp4">MP4</option>
-            <option value="mov">MOV</option>
-            <option value="mkv">MKV</option>
-            <option value="m4v">M4V</option>
-            <option value="ts">TS</option>
-            <option value="flv">FLV</option>
-            <option value="webm">WebM</option>
-          </select>
-        </label>
-        <label class="uc-field">
-          <span class="uc-label">输出文件名</span>
-          <input type="text" id="mcOutName" placeholder="合并结果" />
-        </label>
-        <label class="uc-field uc-check">
-          <input type="checkbox" id="mcLibrary" /> <span class="uc-label">存入媒体库</span>
-        </label>
-        <button type="button" class="btn btn-primary" id="mcMergeBtn">开始拼接</button>
-      </div>
-      <span class="convert-status" id="mcStatus" aria-live="polite"></span>
+  <!-- 视频拼接（简单无损合并）：与「视频格式转换」同级的独立模块，复用分片上传与上传提速 -->
+  <section id="mergeView" class="panel" hidden aria-labelledby="mcTitle">
+    <h2 id="mcTitle" class="guide-title">视频拼接</h2>
+    <p class="uc-tip">添加多个视频片段，自动上传后按顺序排列合并为一个文件（无损 -c copy，无需重编码）。更完善的转场/对齐拼接将在桌面 App 版提供。</p>
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="mcAddBtn">添加片段</button>
+      <input type="file" id="mcFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="mcClearBtn" hidden>清空</button>
+      <span class="uc-count" id="mcCount">尚未添加片段</span>
     </div>
+    <ul class="uc-list" id="mcList" aria-live="polite"></ul>
+    <div class="uc-bulk" id="mcActions">
+      <label class="uc-field">
+        <span class="uc-label">输出格式</span>
+        <select id="mcOutFormat">
+          <option value="mp4">MP4</option>
+          <option value="mov">MOV</option>
+          <option value="mkv">MKV</option>
+          <option value="m4v">M4V</option>
+          <option value="ts">TS</option>
+          <option value="flv">FLV</option>
+          <option value="webm">WebM</option>
+        </select>
+      </label>
+      <label class="uc-field">
+        <span class="uc-label">输出文件名</span>
+        <input type="text" id="mcOutName" placeholder="合并结果" />
+      </label>
+      <label class="uc-field uc-check">
+        <input type="checkbox" id="mcLibrary" /> <span class="uc-label">存入媒体库</span>
+      </label>
+      <button type="button" class="btn btn-primary" id="mcMergeBtn">开始拼接</button>
+    </div>
+    <span class="convert-status" id="mcStatus" aria-live="polite"></span>
   </section>
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
