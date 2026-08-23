@@ -1561,6 +1561,9 @@
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
       const targetDisabled = (it.status === 'running' || it.status === 'uploading' || it.status === 'completed') ? 'disabled' : '';
+      // 已完成冻结：提示用户重新上传才能改格式（避免误以为下拉坏了）
+      const targetTitle = it.status === 'completed' ? '已完成：格式已固定，如需其他格式请移除后重新添加'
+                         : (targetDisabled ? '上传/转码中不可修改' : '修改此行的目标格式');
       return `
         <li class="uc-item ${statusCls}" data-id="${it.id}">
           <div class="uc-item-main">
@@ -1576,7 +1579,7 @@
           </div>
           <div class="uc-item-side">
             <label class="sr-only" for="ucItemTarget-${it.id}">输出格式</label>
-            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled}>${fmtOptions(it.target)}</select>
+            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled} title="${targetTitle}">${fmtOptions(it.target)}</select>
             ${downloadHtml}
             <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
           </div>
