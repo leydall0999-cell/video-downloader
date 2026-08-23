@@ -2476,12 +2476,11 @@
     const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, W, H);
     if (dwCur) {
-      const add = !dwCur.op || dwCur.op === 'add';
       const x = dwCur.x * W, y = dwCur.y * H;
       const w = dwCur.w * W, h = dwCur.h * H;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.strokeStyle = add ? '#2ecc71' : '#e74c3c';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeStyle = '#2ecc71';
       ctx.strokeRect(x, y, w, h);
       ctx.setLineDash([]);
     }
@@ -2550,22 +2549,22 @@
       p.setAttribute('d', d);
       p.setAttribute('fill', 'none');
       p.setAttribute('stroke', '#2ecc71');
-      p.setAttribute('stroke-width', '2');
-      p.setAttribute('stroke-dasharray', '6,4');
+      p.setAttribute('stroke-width', '1');
+      p.setAttribute('stroke-dasharray', '5,3');
       svg.appendChild(p);
     }
 
-    // 减选区红色显示（让用户看清被抠除的位置）
+    // 减选区绿色虚线（与加选区同色，仅边框，内部由 mask 挖洞显示原图）
     subs.forEach((s) => {
       const r = document.createElementNS(NS, 'rect');
       r.setAttribute('x', s.x);
       r.setAttribute('y', s.y);
       r.setAttribute('width', s.w);
       r.setAttribute('height', s.h);
-      r.setAttribute('fill', 'rgba(231,76,60,.22)');
-      r.setAttribute('stroke', '#e74c3c');
-      r.setAttribute('stroke-width', '2');
-      r.setAttribute('stroke-dasharray', '6,4');
+      r.setAttribute('fill', 'none');
+      r.setAttribute('stroke', '#2ecc71');
+      r.setAttribute('stroke-width', '1');
+      r.setAttribute('stroke-dasharray', '5,3');
       svg.appendChild(r);
     });
 
