@@ -637,11 +637,11 @@ img { max-width: 100%; display: block; }
 .dw-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); }
 .uc-subtabs { display: flex; gap: .6rem; margin: 1.25rem 0 1rem; flex-wrap: wrap; }
 .uc-sub {
-  padding: .45rem 1rem; border: 1px solid var(--line); background: #f1f2f5;
+  padding: .45rem 1rem; border: 1px solid var(--line); background: #e7eefe;
   border-radius: 999px; cursor: pointer; font-size: .9rem; font-weight: 500;
-  color: var(--text-mute); transition: transform .08s ease, box-shadow .15s ease, background .15s ease;
+  color: #3b5bdb; transition: transform .08s ease, box-shadow .15s ease, background .15s ease;
 }
-.uc-sub:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.08); background: #e6e8ec; }
+.uc-sub:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.08); background: #d6e4fd; }
 .uc-sub.is-active { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; box-shadow: 0 4px 12px rgba(79,70,229,.28); }
 .dw-preview-wrap {
   position: relative; display: inline-block; max-width: 100%;
