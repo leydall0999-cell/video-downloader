@@ -1648,10 +1648,12 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
             raise RuntimeError("ffmpeg 未产出有效文件")
         # 可选：存入媒体库（DOWNLOAD_DIR 磁盘目录，scan_library 会自动收录）
         if job.get("to_library"):
-            dest = DOWNLOAD_DIR / out.name
+            # 媒体库文件名带参数前缀：`[格式]原名.目标扩展名`，方便识别来源与参数
+            src_stem = Path(job.get("src_name") or out.name).stem or "converted"
+            dest_name = f"[{target.upper()}]{src_stem}{out.suffix}"
+            dest = DOWNLOAD_DIR / dest_name
             if dest.exists() and dest.resolve() != out.resolve():
-                stem = out.stem + f"_{uuid.uuid4().hex[:6]}"
-                dest = DOWNLOAD_DIR / f"{stem}{out.suffix}"
+                dest = DOWNLOAD_DIR / f"{dest.stem}_{uuid.uuid4().hex[:6]}{out.suffix}"
             shutil.copy2(out, dest)
             try:
                 job["library_id"] = library_mod.encode_id(

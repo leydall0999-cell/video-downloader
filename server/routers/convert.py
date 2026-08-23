@@ -119,6 +119,8 @@ def create_upload_convert(
             "out_path": str(out_path),
             "error": "",
             "filename": out_path.name,
+            "src_name": file.filename or "",   # 原始上传文件名（媒体库命名用）
+            "stage": "排队中",
             "to_library": to_library,
             "library_id": "",
             "device_id": _device_of(request),   # 设备隔离：上传转换文件仅创建者可见
@@ -143,7 +145,7 @@ def _upload_parts(upload_id: str):
 
 
 def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, remux,
-                        to_library, device_id) -> tuple:
+                        to_library, device_id, src_name="") -> tuple:
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
@@ -154,6 +156,8 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
             "out_path": str(out_path),
             "error": "",
             "filename": out_path.name,
+            "src_name": src_name,        # 原始上传文件名（用于媒体库命名 [格式]原名.ext）
+            "stage": "排队中",            # 前端据此显示「排队中…」（转码线程繁忙时）
             "to_library": to_library,
             "library_id": "",
             "device_id": device_id,   # 设备隔离：上传转换文件仅创建者可见
@@ -267,7 +271,7 @@ def finish_upload_chunk(
         raise app.HTTPException(status_code=500, detail=f"合并上传文件失败：{e}")
     job_id, out_name = _submit_convert_job(
         save_path, target, resolution, bitrate, audio, rotate, remux,
-        to_library, _device_of(request))
+        to_library, _device_of(request), src_name=filename)
     return {
         "job_id": job_id,
         "status": "running",

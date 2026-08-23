@@ -1479,6 +1479,7 @@
   const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB
   const UC_CHUNK_CONCURRENCY = 4;               // 单文件分片并发路数
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
+  const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
   const ucFormatSize = (bytes) => {
@@ -1493,6 +1494,22 @@
     if (!bps || bps <= 0) return '';
     if (bps > 1024 * 1024) return (bps / 1024 / 1024).toFixed(1) + ' MB/s';
     return (bps / 1024).toFixed(0) + ' KB/s';
+  };
+
+  // 转换产物文件名：`[格式]原文件名.扩展名`（目标扩展名映射）
+  const UC_EXT_OF = { mp4:'mp4', mov:'mov', mkv:'mkv', webm:'webm', avi:'avi', flv:'flv', ts:'ts',
+                      m4v:'m4v', wmv:'wmv', mpeg:'mpg', '3gp':'3gp', ogv:'ogv', hevc:'mp4',
+                      mp3:'mp3', m4a:'m4a', aac:'aac', wav:'wav', flac:'flac', ogg:'ogg',
+                      opus:'opus', wma:'wma', mp2:'mp2', gif:'gif' };
+  const ucBuildOutputName = (it) => {
+    const stem = ((it.file && it.file.name) || '').replace(/\.[^.]+$/, '') || 'converted';
+    const ext = UC_EXT_OF[it.target] || it.target;
+    return `[${it.target.toUpperCase()}]${stem}.${ext}`;
+  };
+
+  // 确保转码轮询在跑（批量/单行开始后立即启动，不等上传回调）
+  const ucEnsurePolling = () => {
+    if (!ucState.polling) ucState.polling = setInterval(ucPollAll, UC_POLL_INTERVAL);
   };
 
   const ucReadBulk = () => ({
@@ -1549,7 +1566,9 @@
         pending: '未开始',
         uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
         uploaded: '已上传，待转码',
-        running: it.stage === '无损直转' ? '无损直转中…' : (it.progress ? `转码中 ${it.progress}%` : '转码中…'),
+        running: it.stage === '无损直转' ? '无损直转中…'
+               : it.stage === '排队中' ? '排队中…'
+               : (it.progress ? `转码中 ${it.progress}%` : '转码中…'),
         completed: '完成 ✅',
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
@@ -1874,7 +1893,7 @@
     // 启停轮询定时器：没有 running 任务就停
     const hasRunning = ucState.list.some(x => x.status === 'running');
     if (hasRunning && !ucState.polling) {
-      ucState.polling = setInterval(ucPollAll, 3000);
+      ucState.polling = setInterval(ucPollAll, UC_POLL_INTERVAL);
     } else if (!hasRunning && ucState.polling) {
       clearInterval(ucState.polling);
       ucState.polling = null;
@@ -1901,12 +1920,12 @@
           const p = typeof st.progress === 'number' ? st.progress : 0;
           // 转码进度 30% → 100%
           it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
-          it.stage = st.stage || '';   // 无损直转时显示快速路径
+          it.stage = st.stage || '排队中';   // 排队/无损直转/转码中 区分显示
           renderUcList();
         } else if (st.status === 'completed') {
           it.status = 'completed';
           it.progress = 100;
-          it.outputName = st.filename || 'converted';
+          it.outputName = ucBuildOutputName(it);   // `[格式]原文件名.扩展名`，一眼可辨参数与来源
           it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
           it.libraryId = st.library_id || null;
           renderUcList();
@@ -1948,6 +1967,7 @@
       const it = ucState.list.find(x => x.id === +li.dataset.id);
       if (it && it.status === 'uploaded') {
         el.ucStatus.textContent = `开始转码：${it.file.name}`;
+        ucEnsurePolling();   // 立即启动轮询，进度实时可见
         ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
       }
     }
@@ -1959,6 +1979,7 @@
     const wait = ucState.list.filter(x => x.status === 'uploaded');
     if (!wait.length) { el.ucStatus.textContent = '没有已上传待转码的项（先添加文件上传）'; return; }
     el.ucStatus.textContent = `批量转换中…（${wait.length} 个）`;
+    ucEnsurePolling();   // 立即启动轮询，各进度实时可见
     wait.forEach(it => {
       ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
     });
