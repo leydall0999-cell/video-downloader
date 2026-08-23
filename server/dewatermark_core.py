@@ -116,18 +116,23 @@ def normalize_regions(regions) -> list:
 def _build_region_mask(regions, w: int, h: int):
     """把多区域合并为单张二值 mask（uint8）。
 
-    add 区域填 255；subtract 区域置 0（从已选区域抠除，优先级高于 add）。
+    先收集所有 add 区域为 255（重叠自然并集），再统一用 subtract 区域置 0 挖洞。
+    subtract 始终从加选并集中扣除，不受 regions 传入顺序影响。
     任一区域像素矩形为空则跳过。返回全 0 表示没有有效加选区域。
     """
     mask = _np.zeros((h, w), dtype=_np.uint8)
     for r in regions:
-        x, y, rw, rh = _region_to_px(r, w, h)
-        if rw <= 0 or rh <= 0:
-            continue
-        if r.get("op") == "subtract":
-            mask[y:y + rh, x:x + rw] = 0
-        else:
+        if r.get("op") != "subtract":
+            x, y, rw, rh = _region_to_px(r, w, h)
+            if rw <= 0 or rh <= 0:
+                continue
             mask[y:y + rh, x:x + rw] = 255
+    for r in regions:
+        if r.get("op") == "subtract":
+            x, y, rw, rh = _region_to_px(r, w, h)
+            if rw <= 0 or rh <= 0:
+                continue
+            mask[y:y + rh, x:x + rw] = 0
     return mask
 
 
