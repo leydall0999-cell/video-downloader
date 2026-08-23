@@ -1993,6 +1993,279 @@
     }));
   };
 
+  // ===== 视频拼接（简单无损合并）：复用分片上传，独立面板 =====
+  const MC_MAX_CONCURRENT = 2;
+  const mcState = { list: [], nextId: 1, active: 0, polling: null };
+  const mcListEl = document.getElementById('mcList');
+  const mcCountEl = document.getElementById('mcCount');
+  const mcStatusEl = document.getElementById('mcStatus');
+  const mcAddBtn = document.getElementById('mcAddBtn');
+  const mcFileInput = document.getElementById('mcFileInput');
+  const mcClearBtn = document.getElementById('mcClearBtn');
+  const mcOutFormat = document.getElementById('mcOutFormat');
+  const mcOutName = document.getElementById('mcOutName');
+  const mcLibrary = document.getElementById('mcLibrary');
+  const mcMergeBtn = document.getElementById('mcMergeBtn');
+  const mcFormatSize = ucFormatSize;
+
+  const mcRender = () => {
+    const segs = mcState.list.filter(x => !x.isResult);
+    mcCountEl.textContent = segs.length ? `已添加 ${segs.length} 个片段` : '尚未添加片段';
+    mcClearBtn.hidden = mcState.list.length === 0;
+    const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult).length;
+    mcMergeBtn.disabled = ready < 2;
+    if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
+    mcListEl.innerHTML = mcState.list.map((it, idx) => {
+      const name = it.file ? it.file.name : it.label;
+      const statusText = it.isResult
+        ? (it.status === 'running'
+             ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
+             : it.status === 'completed' ? '完成 ✅' : '失败：' + (it.errorMsg || ''))
+        : (it.status === 'uploading'
+             ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
+             : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
+      const cls = it.status === 'pending' ? '' : ('is-' + it.status.replace('uploading', 'running'));
+      const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
+      const progressHtml = (it.status === 'running' || it.status === 'uploading')
+        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+      const downloadHtml = it.status === 'completed' && it.downloadUrl
+        ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'merged'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}` : '';
+      const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
+      const downDisabled = (it.isResult || idx === mcState.list.length - 1) ? 'disabled' : '';
+      return `
+        <li class="uc-item ${cls}" data-id="${it.id}">
+          <div class="uc-item-main">
+            <div class="uc-item-name" title="${name}">${idx + 1}. ${name}</div>
+            ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>` : ''}
+            ${progressHtml}
+            <div class="uc-item-status">${statusText}</div>
+          </div>
+          <div class="uc-item-side">
+            ${it.isResult ? '' : `<button type="button" class="uc-item-start" data-act="up" ${upDisabled} title="上移">↑</button><button type="button" class="uc-item-start" data-act="down" ${downDisabled} title="下移">↓</button>`}
+            ${downloadHtml}
+            <button type="button" class="uc-item-remove" data-act="remove" ${disabled}>×</button>
+          </div>
+        </li>`;
+    }).join('');
+  };
+
+  const mcCancelUpload = (it) => {
+    it._removed = true;
+    if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (e) { /* ignore */ } });
+    if (it._uploadId) {
+      const fd = new FormData();
+      fd.append('upload_id', it._uploadId);
+      fetch('/api/upload-chunk/abort', { method: 'POST', body: fd, headers: { 'X-Device-Id': deviceId() } }).catch(() => { /* ignore */ });
+    }
+  };
+
+  const mcRemoveItem = (id) => {
+    const it = mcState.list.find(x => x.id === id);
+    if (!it) return;
+    if (it.status === 'running') { mcStatusEl.textContent = '任务进行中，暂无法移除'; return; }
+    if (it.status === 'uploading' || it.status === 'uploaded') {
+      mcCancelUpload(it);
+      mcState.list = mcState.list.filter(x => x.id !== id);
+      if (it.status === 'uploading') mcState.active = Math.max(0, mcState.active - 1);
+      mcRender();
+      mcStatusEl.textContent = '已移除';
+      mcPump();
+      return;
+    }
+    mcState.list = mcState.list.filter(x => x.id !== id);
+    mcRender();
+  };
+
+  const mcAddFiles = (fileList) => {
+    Array.from(fileList).forEach(f => {
+      mcState.list.push({ id: mcState.nextId++, file: f, status: 'pending', segName: null,
+        progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
+    });
+    mcRender();
+    mcStatusEl.textContent = `已添加 ${mcState.list.filter(x => !x.isResult).length} 个片段，自动上传…`;
+    mcPump();
+  };
+
+  // 上传单个片段（复用 ucUploadChunk）；末尾用 finish(mode=store) 落地为拼接素材
+  const mcUploadOne = (item) => new Promise((resolve) => {
+    item.status = 'uploading'; item.progress = 0; item.speedText = ''; item.uploadedText = '';
+    item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
+    mcRender();
+    const file = item.file;
+    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    const uploadId = item._uploadId = 'mc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
+    const t0 = performance.now(); let lastBytes = 0, lastT = t0;
+    const totalUploaded = () => { let t = uploadedBytes; for (const v of inFlight.values()) t += v; return t; };
+    const updateProgress = () => {
+      const now = performance.now(); const tot = totalUploaded(); const dt = (now - lastT) / 1000;
+      if (dt > 0.4) { item.speedText = ucFormatSpeed((tot - lastBytes) / dt); lastBytes = tot; lastT = now; }
+      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
+      item.progress = Math.round(tot / file.size * 30);
+      const li = mcListEl.querySelector(`.uc-item[data-id="${item.id}"]`);
+      if (li) {
+        const fill = li.querySelector('.progress-fill');
+        if (fill) fill.style.width = `${item.progress || 0}%`;
+        const st = li.querySelector('.uc-item-status');
+        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`;
+      }
+    };
+    let idx = 0; const workers = [];
+    const worker = async () => {
+      while (idx < totalChunks) {
+        if (item._removed || item.status === 'failed') return;
+        const i = idx++;
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const blob = file.slice(start, end);
+        let attempts = 0;
+        for (;;) {
+          try {
+            const ep = ucPickEndpoint(item, i, attempts);
+            const stT = performance.now();
+            await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => { inFlight.set(i, loaded); updateProgress(); }, item._xhrs, ep);
+            const elT = performance.now();
+            item._chStats.total++;
+            item._chStats.add(UC_UPLOAD_ENDPOINTS.indexOf(ep), end - start, elT - stT);
+            break;
+          } catch (e) {
+            if (item._removed) return;
+            attempts++;
+            if (attempts > UC_CHUNK_RETRIES) {
+              item.status = 'failed';
+              const hint = /超时/.test(e.message) ? '（建议保持上传页面在前台后重传）' : '';
+              item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}${hint}`;
+              item.speedText = ''; item.uploadedText = ''; mcRender();
+              resolve(); return;
+            }
+          }
+        }
+        inFlight.delete(i);
+        if (!done.has(i)) { done.add(i); uploadedBytes += (end - start); }
+        updateProgress();
+      }
+    };
+    for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
+    Promise.allSettled(workers).then(() => {
+      if (item._removed || item.status === 'failed') return;
+      const form = new FormData();
+      form.append('upload_id', uploadId);
+      form.append('total', totalChunks);
+      form.append('filename', item.file.name);
+      form.append('target', 'mp4');     // store 模式不转码，target 仅占位
+      form.append('mode', 'store');
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload-chunk/finish');
+      xhr.setRequestHeader('X-Device-Id', deviceId());
+      xhr.timeout = 120000;
+      xhr.addEventListener('load', () => {
+        try {
+          const data = JSON.parse(xhr.responseText || '{}');
+          if (xhr.status >= 200 && xhr.status < 300 && data.seg_id) {
+            item.segName = data.seg_name;
+            item.status = 'uploaded'; item.progress = 30; item.speedText = ''; item.uploadedText = '';
+            mcRender();
+          } else {
+            item.status = 'failed';
+            let msg = data.detail || data.error || ('HTTP ' + xhr.status);
+            if (/分片不完整|分片参数|文件超过|合并/.test(msg)) msg += '（请移除后重新添加）';
+            item.errorMsg = msg;
+          }
+        } catch (e) {
+          item.status = 'failed'; item.errorMsg = '服务器响应异常，请移除后重新添加';
+        }
+        mcRender();
+        resolve();
+      });
+      xhr.addEventListener('error', () => { item.status = 'failed'; item.errorMsg = '网络错误'; mcRender(); resolve(); });
+      xhr.addEventListener('timeout', () => { item.status = 'failed'; item.errorMsg = '上传超时，请移除后重新添加'; mcRender(); resolve(); });
+      xhr.send(form);
+    });
+  });
+
+  const mcPoll = async () => {
+    const running = mcState.list.filter(x => x.isResult && x.status === 'running' && x.jobId);
+    await Promise.all(running.map(async (it) => {
+      try {
+        const st = await request('/api/convert/' + it.jobId);
+        if (st.status === 'running') {
+          const p = typeof st.progress === 'number' ? st.progress : 0;
+          it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
+          it.stage = st.stage || '';
+          mcRender();
+        } else if (st.status === 'completed') {
+          it.status = 'completed'; it.progress = 100;
+          it.outputName = `[${mcOutFormat.value.toUpperCase()}]${mcOutName.value || 'merged'}.${UC_EXT_OF[mcOutFormat.value] || mcOutFormat.value}`;
+          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
+          it.libraryId = st.library_id || null;
+          mcRender();
+        } else if (st.status === 'failed') {
+          it.status = 'failed'; it.errorMsg = st.error || '未知错误';
+          mcRender();
+        }
+      } catch (_e) { /* 忽略 */ }
+    }));
+  };
+
+  const mcPump = () => {
+    while (mcState.active < MC_MAX_CONCURRENT) {
+      const next = mcState.list.find(x => !x.isResult && x.status === 'pending');
+      if (!next) break;
+      mcState.active++;
+      mcUploadOne(next).catch(() => { /* 失败已标记 */ }).finally(() => { mcState.active--; mcPump(); });
+    }
+  };
+
+  mcAddBtn.addEventListener('click', () => mcFileInput.click());
+  mcFileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length) mcAddFiles(e.target.files);
+    e.target.value = '';
+  });
+  mcClearBtn.addEventListener('click', () => {
+    if (mcState.list.some(x => x.status === 'running')) { mcStatusEl.textContent = '有任务进行中，请等待完成后再清空'; return; }
+    mcState.list.filter(x => x.status === 'uploading' || x.status === 'uploaded').forEach(mcCancelUpload);
+    mcState.active = 0; mcState.list = []; mcRender(); mcStatusEl.textContent = '已清空'; mcPump();
+  });
+  mcListEl.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act]');
+    if (!t) return;
+    const li = t.closest('.uc-item');
+    const it = mcState.list.find(x => x.id === +li.dataset.id);
+    if (!it || it.isResult) return;
+    const act = t.dataset.act;
+    if (act === 'remove') mcRemoveItem(it.id);
+    else if (act === 'up' || act === 'down') {
+      const idx = mcState.list.indexOf(it);
+      const ni = act === 'up' ? idx - 1 : idx + 1;
+      const swap = mcState.list[ni];
+      if (swap && !swap.isResult) { mcState.list[idx] = swap; mcState.list[ni] = it; mcRender(); }
+    }
+  });
+  mcMergeBtn.addEventListener('click', () => {
+    const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult);
+    if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的片段'; return; }
+    const body = {
+      segments: ready.map(x => x.segName),
+      out_format: mcOutFormat.value,
+      out_name: mcOutName.value || 'merged',
+      to_library: mcLibrary.checked,
+    };
+    request('/api/concat', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
+      .then(data => {
+        if (data.job_id) {
+          mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果', status: 'running',
+            jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null });
+          mcState.polling = setInterval(mcPoll, UC_POLL_INTERVAL);
+          mcStatusEl.textContent = '拼接中…';
+          mcRender();
+        } else {
+          mcStatusEl.textContent = data.detail || data.error || '拼接失败';
+        }
+      })
+      .catch(() => { mcStatusEl.textContent = '拼接请求失败，请重试'; });
+  });
+
   // 事件绑定
   el.ucAddBtn.addEventListener('click', () => el.ucFileInput.click());
   el.ucFileInput.addEventListener('change', () => {

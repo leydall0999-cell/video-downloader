@@ -245,9 +245,12 @@ def finish_upload_chunk(
     rotate: int = app.Form(0),
     remux: bool = app.Form(False),
     to_library: bool = app.Form(False),
+    mode: str = app.Form("convert"),
     request: app.Request = None,
 ) -> dict:
-    """分片上传收尾：校验分片齐全 → 顺序合并 → 精确校验总大小 → 提交转码 job。"""
+    """分片上传收尾：校验分片齐全 → 顺序合并 → 精确校验总大小 → 提交转码 job。
+
+    mode='store' 时仅把合并后的文件落地为「拼接素材」（不转码），供 /api/concat 使用。"""
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if not _UPLOAD_ID_RE.match(upload_id) or total <= 0:
@@ -281,6 +284,23 @@ def finish_upload_chunk(
         for p in _upload_parts(upload_id):
             p.unlink(missing_ok=True)
         raise app.HTTPException(status_code=500, detail=f"合并上传文件失败：{e}")
+
+    # mode='store'：仅落地为「拼接素材」，不转码（供 /api/concat 使用）
+    if mode == "store":
+        seg_id = app.uuid.uuid4().hex[:12]
+        seg_name = f"seg_{seg_id}{suffix}"
+        seg_path = app.UPLOAD_TMP / seg_name
+        try:
+            save_path.rename(seg_path)   # 同目录重命名，原子且快
+        except Exception as e:
+            raise app.HTTPException(status_code=500, detail=f"保存拼接素材失败：{e}")
+        return {
+            "ok": True, "mode": "store",
+            "seg_id": seg_id, "seg_name": seg_name,
+            "name": filename,
+            "size": seg_path.stat().st_size,
+        }
+
     job_id, out_name = _submit_convert_job(
         save_path, target, resolution, bitrate, audio, rotate, remux,
         to_library, _device_of(request), src_name=filename)
@@ -291,3 +311,108 @@ def finish_upload_chunk(
         "filename": out_name,
         "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
     }
+
+
+# ---- 视频拼接（网页版「简单拼接」：无损合并，无转场）----
+# 前端先把每个片段经分片上传 + finish(mode=store) 落地为 seg_{id}.ext，
+# 再提交本接口按列表顺序合并。复用 CONVERT_JOBS 进度与下载机制。
+from pydantic import BaseModel
+
+class ConcatRequest(BaseModel):
+    segments: list          # 已落地素材文件名列表（seg_{id}.ext），按拼接顺序
+    out_format: str = "mp4"
+    out_name: str = "merged"
+    to_library: bool = False
+
+
+def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library):
+    """顺序无损合并多个片段（ffmpeg concat copy）。编码不一致时会失败并提示。"""
+    import subprocess, re as _re
+    job = app.CONVERT_JOBS[job_id]
+    ext = app.CONVERT_EXT.get(out_format, out_format)
+    out_path = app.CONVERT_DIR / f"concat_{job_id}.{ext}"
+    list_path = app.UPLOAD_TMP / f"concat_{job_id}.txt"
+    seg_paths = []
+    for name in seg_names:
+        p = app.UPLOAD_TMP / name
+        if not p.exists():
+            job["status"] = "failed"; job["error"] = f"素材缺失：{name}（可能已过期，请重新添加）"; return
+        seg_paths.append(p)
+    # ffprobe 预探测各段时长，求和得总时长（进度基准）
+    total_dur = 0.0
+    for p in seg_paths:
+        try:
+            pp = subprocess.run([app.FFPROBE_BIN, "-v", "error", "-show_entries", "format=duration",
+                                 "-of", "default=noprint_wrappers=1:nokey=1", str(p)],
+                                capture_output=True, text=True, timeout=30)
+            total_dur += float(pp.stdout.strip() or 0)
+        except Exception:
+            pass
+    with list_path.open("w", encoding="utf-8") as fh:
+        for p in seg_paths:
+            fh.write(f"file '{p}'\n")
+    job["stage"] = "拼接中"
+    job["progress"] = 0
+    cmd = [app.FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+           "-c", "copy", str(out_path)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            bufsize=0, text=True)
+    _re_out = _re.compile(r"^out_time_us=(-?\d+)")
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            m = _re_out.match(line)
+            if m and total_dur > 0:
+                cur = int(m.group(1)) / 1_000_000
+                job["progress"] = int(min(99, max(0, cur / total_dur * 100)))
+    finally:
+        proc.wait()
+        list_path.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        out_path.unlink(missing_ok=True)
+        job["status"] = "failed"
+        job["error"] = "拼接失败：片段编码/分辨率不一致时无法无损合并，请改用相同编码的片段，或直接「转换」先统一格式再见"
+        return
+    # 可选存入媒体库（与转换产物命名一致：[格式]原名.ext）
+    if to_library:
+        dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{out_name}.{ext}"
+        if dest.exists() and dest.resolve() != out_path.resolve():
+            dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{out_name}_{app.uuid.uuid4().hex[:6]}.{ext}"
+        app.shutil.copy2(out_path, dest)
+    job["status"] = "completed"
+    job["progress"] = 100
+
+
+@router.post("/api/concat")
+def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
+    """视频拼接：接收已落地的片段列表，按顺序无损合并为单个文件。"""
+    app._check_rate_limit(request)
+    out_format = payload.out_format
+    if out_format not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的输出格式")
+    segs = payload.segments or []
+    if len(segs) < 2:
+        raise app.HTTPException(status_code=400, detail="至少需要 2 个视频片段")
+    # 校验素材存在性（防止无效引用）
+    for name in segs:
+        if not (app.UPLOAD_TMP / name).exists():
+            raise app.HTTPException(status_code=400, detail=f"素材不存在或已过期：{name}")
+    job_id = app.uuid.uuid4().hex[:12]
+    ext = app.CONVERT_EXT.get(out_format, out_format)
+    out_path = app.CONVERT_DIR / f"concat_{job_id}.{ext}"
+    with app.CONVERT_LOCK:
+        app.CONVERT_JOBS[job_id] = {
+            "status": "running",
+            "out_path": str(out_path),
+            "error": "",
+            "filename": out_path.name,
+            "src_name": payload.out_name or "merged",
+            "target": out_format,           # 下载文件名 [格式]原名.ext 用
+            "stage": "排队中",
+            "to_library": payload.to_library,
+            "library_id": "",
+            "device_id": _device_of(request),
+        }
+    app.executor.submit(_run_concat, job_id, segs, out_format, payload.out_name or "merged",
+                        _device_of(request), payload.to_library)
+    return {"job_id": job_id, "status": "running"}
