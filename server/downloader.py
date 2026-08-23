@@ -2487,7 +2487,15 @@ def _youku_ups_ckey(vid: str, cookie: str, ckey: str, utid: str) -> list[dict]:
             "请用会员账号的 Cookie+ckey 重新贡献，或更换免费视频。",
             category="need_vip",
         )
-    return d.get("stream") or []
+    # 兜底诊断：把 UPS 原始返回片段带上，便于定位（境外 IP 风控 / ckey 失效等）
+    _ec = (d.get("e") or {}).get("code")
+    _has_stream = bool(d.get("stream"))
+    raise ResolveError(
+        "优酷解析失败",
+        f"UPS 未返回可播放流。诊断：e.code={_ec}, stream={_has_stream}, "
+        f"ckey_len={len(ckey)}, 可能为 ckey 失效或服务器出口 IP 被优酷地域限制。",
+        category="parse_failed",
+    )
 
 
 def _youku_info(url: str, cookie: str = "", ckey: str = "") -> dict[str, Any]:
@@ -2517,8 +2525,8 @@ def _youku_info(url: str, cookie: str = "", ckey: str = "") -> dict[str, Any]:
     if not streams:
         raise ResolveError(
             "优酷解析失败",
-            "UPS 未返回可播放流（stream 为空）。可能是 ckey 过期或账号无权限，"
-            "请重新贡献最新的 ckey。",
+            f"UPS 通道未拿到可播放流。ckey_len={len(ckey)}, cookie_len={len(cookie)}, "
+            "可能为 ckey 失效或服务器出口 IP 被优酷地域限制。",
             category="parse_failed",
         )
 
