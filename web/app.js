@@ -2357,10 +2357,95 @@
     dwDrawCanvas();
   };
 
-  const dwRectPath = (s, W, H) => {
-    const x = s.x * W, y = s.y * H, w = s.w * W, h = s.h * H;
-    return `M${x},${y} h${w} v${h} h${-w} z`;
+  // 轴对齐矩形并集轮廓（用于加选区真正合并，重叠不再消失）
+  const dwRectsUnion = (rects) => {
+    if (!rects.length) return [];
+    const EPS = 1e-7;
+    const b = rects.map((r) => ({ L: r.x, T: r.y, R: r.x + r.w, B: r.y + r.h }));
+    const edges = [];
+    rects.forEach((r, ri) => {
+      const { L, T, R, B } = b[ri];
+      edges.push({ type: 'h', at: T, a: L, b: R, out: 'up', ri });
+      edges.push({ type: 'h', at: B, a: L, b: R, out: 'down', ri });
+      edges.push({ type: 'v', at: L, a: T, b: B, out: 'left', ri });
+      edges.push({ type: 'v', at: R, a: T, b: B, out: 'right', ri });
+    });
+    const segs = [];
+    const subtract = (intervals, s, t) => {
+      if (t <= s) return intervals;
+      const out = [];
+      for (const [a, c] of intervals) {
+        if (c <= s || a >= t) { out.push([a, c]); continue; }
+        if (a < s) out.push([a, s]);
+        if (c > t) out.push([t, c]);
+      }
+      return out;
+    };
+    edges.forEach((e) => {
+      let intervals = [[e.a, e.b]];
+      edges.forEach((o) => {
+        if (o.ri === e.ri) return;
+        const ob = b[o.ri];
+        let s = null, t = null;
+        if (e.type === 'h') {
+          const y = e.at;
+          if (e.out === 'up' && ob.T < y - EPS && ob.B >= y - EPS) { s = Math.max(e.a, ob.L); t = Math.min(e.b, ob.R); }
+          else if (e.out === 'down' && ob.B > y + EPS && ob.T <= y + EPS) { s = Math.max(e.a, ob.L); t = Math.min(e.b, ob.R); }
+        } else {
+          const x = e.at;
+          if (e.out === 'left' && ob.L < x - EPS && ob.R >= x - EPS) { s = Math.max(e.a, ob.T); t = Math.min(e.b, ob.B); }
+          else if (e.out === 'right' && ob.R > x + EPS && ob.L <= x + EPS) { s = Math.max(e.a, ob.T); t = Math.min(e.b, ob.B); }
+        }
+        if (s !== null && t > s) intervals = subtract(intervals, s, t);
+      });
+      for (const [s, t] of intervals) {
+        if (t > s + EPS) {
+          if (e.type === 'h') segs.push({ x1: s, y1: e.at, x2: t, y2: e.at });
+          else segs.push({ x1: e.at, y1: s, x2: e.at, y2: t });
+        }
+      }
+    });
+    const E2 = 1e-4;
+    const used = new Array(segs.length).fill(false);
+    const polys = [];
+    for (let i = 0; i < segs.length; i++) {
+      if (used[i]) continue;
+      const start = { x: segs[i].x1, y: segs[i].y1 };
+      let other = { x: segs[i].x2, y: segs[i].y2 };
+      used[i] = true;
+      const poly = [start];
+      let guard = 0;
+      while (guard++ < segs.length + 2) {
+        poly.push(other);
+        if (Math.abs(other.x - start.x) < E2 && Math.abs(other.y - start.y) < E2) break;
+        let found = -1;
+        for (let j = 0; j < segs.length; j++) {
+          if (used[j]) continue;
+          const sg = segs[j];
+          const m1 = Math.abs(sg.x1 - other.x) < E2 && Math.abs(sg.y1 - other.y) < E2;
+          const m2 = Math.abs(sg.x2 - other.x) < E2 && Math.abs(sg.y2 - other.y) < E2;
+          if (m1 || m2) { found = j; break; }
+        }
+        if (found < 0) break;
+        used[found] = true;
+        const sg = segs[found];
+        other = (Math.abs(sg.x1 - other.x) < E2 && Math.abs(sg.y1 - other.y) < E2)
+          ? { x: sg.x2, y: sg.y2 } : { x: sg.x1, y: sg.y1 };
+      }
+      if (poly.length > 2) polys.push(poly);
+    }
+    return polys;
   };
+
+  const dwRectIntersect = (a, c) => {
+    const L = Math.max(a.x, c.x), T = Math.max(a.y, c.y);
+    const R = Math.min(a.x + a.w, c.x + c.w), B = Math.min(a.y + a.h, c.y + c.h);
+    if (R <= L || B <= T) return null;
+    return { x: L, y: T, w: R - L, h: B - T };
+  };
+
+  const dwPolysToPath = (polys) =>
+    polys.map((poly) => 'M' + poly.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L') + ' Z').join(' ');
 
   const dwDrawCanvas = () => {
     const cv = el.dwImgCanvas, svg = el.dwImgSvg;
@@ -2381,39 +2466,51 @@
       ctx.setLineDash([]);
     }
 
-    // SVG 用 evenodd 做真正的加减选区合并
+    // SVG：加选区求并集轮廓（重叠区不再消失），减选区与并集求交作为洞挖除
     svg.innerHTML = '';
     if (!dwSelections.length) {
-      const adds = 0, subs = 0;
       if (el.dwSelInfo) el.dwSelInfo.textContent = '尚未框选';
       return;
     }
-    const adds = dwSelections.filter((s) => !s.op || s.op === 'add');
-    const subs = dwSelections.filter((s) => s.op === 'subtract');
+    const toPx = (s) => ({ x: s.x * W, y: s.y * H, w: s.w * W, h: s.h * H });
+    const adds = dwSelections.filter((s) => !s.op || s.op === 'add').map(toPx);
+    const subs = dwSelections.filter((s) => s.op === 'subtract').map(toPx);
 
-    // 合并保留区（add 并集，subtract 抠洞）
-    const unionD = [...adds, ...subs].map((s) => dwRectPath(s, W, H)).join(' ');
-    if (unionD) {
-      const unionPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      unionPath.setAttribute('d', unionD);
-      unionPath.setAttribute('fill', 'rgba(46,204,113,.22)');
-      unionPath.setAttribute('fill-rule', 'evenodd');
-      unionPath.setAttribute('stroke', '#2ecc71');
-      unionPath.setAttribute('stroke-width', '2');
-      unionPath.setAttribute('stroke-dasharray', '6,4');
-      svg.appendChild(unionPath);
+    const outerPolys = dwRectsUnion(adds);
+
+    // 减选洞：sub 与每个 add 求交，收集后再求并集（避免重叠洞相互抵消）
+    let holes = [];
+    if (subs.length) {
+      subs.forEach((s) => adds.forEach((a) => {
+        const it = dwRectIntersect(s, a);
+        if (it) holes.push(it);
+      }));
+    }
+    const holePolys = dwRectsUnion(holes);
+
+    // 绿色保留区：外轮廓 + 洞（evenodd 挖洞，重叠加选区已包进外轮廓不会消失）
+    if (outerPolys.length) {
+      let d = dwPolysToPath(outerPolys);
+      if (holePolys.length) d += ' ' + dwPolysToPath(holePolys);
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', d);
+      p.setAttribute('fill', 'rgba(46,204,113,.22)');
+      p.setAttribute('fill-rule', 'evenodd');
+      p.setAttribute('stroke', '#2ecc71');
+      p.setAttribute('stroke-width', '2');
+      p.setAttribute('stroke-dasharray', '6,4');
+      svg.appendChild(p);
     }
 
-    // 减区叠加显示（让用户看清被抠除的位置）
-    if (subs.length) {
-      const subD = subs.map((s) => dwRectPath(s, W, H)).join(' ');
-      const subPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      subPath.setAttribute('d', subD);
-      subPath.setAttribute('fill', 'rgba(231,76,60,.22)');
-      subPath.setAttribute('stroke', '#e74c3c');
-      subPath.setAttribute('stroke-width', '2');
-      subPath.setAttribute('stroke-dasharray', '6,4');
-      svg.appendChild(subPath);
+    // 减选区红色显示（让用户看清被抠除的位置）
+    if (holePolys.length) {
+      const dp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      dp.setAttribute('d', dwPolysToPath(holePolys));
+      dp.setAttribute('fill', 'rgba(231,76,60,.22)');
+      dp.setAttribute('stroke', '#e74c3c');
+      dp.setAttribute('stroke-width', '2');
+      dp.setAttribute('stroke-dasharray', '6,4');
+      svg.appendChild(dp);
     }
 
     if (el.dwSelInfo) el.dwSelInfo.textContent = `已选 ${adds.length} 加 / ${subs.length} 减`;
@@ -2443,7 +2540,6 @@
     dwDragging = true;
     const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
     dwStartX = nx; dwStartY = ny;
-    if (dwDrawMode === 'new') dwSelections = [];
     dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
     dwDrawCanvas();
     e.preventDefault();
@@ -2474,7 +2570,9 @@
     btn.addEventListener('click', () => {
       if (btn.dataset.mode) {
         dwDrawMode = btn.dataset.mode;
+        if (dwDrawMode === 'new') dwSelections = [];
         document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        dwDrawCanvas();
       } else if (btn.dataset.act === 'undo') {
         dwSelections.pop();
         dwDrawCanvas();
