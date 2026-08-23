@@ -355,11 +355,11 @@
     <ul class="uc-list" id="ucList" aria-live="polite"></ul>
 
     <!-- 空状态提示 -->
-    <div class="uc-empty" id="ucEmpty">点击「添加文件」选择 1 个或多个视频，可同时设置不同输出格式；添加后自动开始上传转码。</div>
+    <div class="uc-empty" id="ucEmpty">点击「添加文件」选择 1 个或多个视频，可同时设置不同输出格式；添加后自动上传，上传完选好格式点「开始转码」即可。</div>
 
-    <!-- 批量参数 + 操作区（常显：先设条件再添加文件，添加即自动上传转码） -->
+    <!-- 批量参数 + 操作区（常显：先设条件再添加文件；添加后自动上传，上传完点「开始批量转换」统一转码） -->
     <div class="uc-bulk" id="ucBulk">
-      <h3 class="card-title">批量参数（可应用到所有未开始的项；添加文件后自动开始上传）</h3>
+      <h3 class="card-title">批量参数（默认值，不影响已添加的行；每行可单独设格式）</h3>
       <div class="uc-form">
         <label class="uc-field">
           <span class="uc-label">默认输出格式</span>
@@ -407,7 +407,7 @@
       </div>
       <div class="uc-bulk-actions">
         <button type="button" class="btn btn-ghost" id="ucBulkApplyBtn" title="把当前批量参数覆盖到所有未开始的项">应用到未开始</button>
-        <button type="button" class="btn btn-primary" id="ucStartAllBtn" hidden>开始批量转换</button>
+        <button type="button" class="btn btn-primary" id="ucStartAllBtn" title="所有「已上传·待转码」项统一开始转码（每行用各自已设置的格式）">开始批量转换</button>
       </div>
     </div>
 

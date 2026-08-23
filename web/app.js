@@ -1527,9 +1527,9 @@
     const list = ucState.list;
     el.ucCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
     el.ucClearBtn.hidden = list.length === 0;
-    // 批量参数区常显：允许在添加文件前先设好转换条件（2026-08-23）
-    el.ucStartAllBtn.hidden = true; // 已自动开始，按钮不再需要
-    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'pending');
+    // 批量参数区常显；「开始批量转换」按钮：有已上传待转码项才可用（2026-08-23 批量统一开始）
+    el.ucStartAllBtn.hidden = false;
+    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'uploaded');
     // 批量「默认输出格式」下拉只填充一次（避免每次渲染重建导致选中/焦点被打断而闪烁）
     if (el.ucBulkTarget && !el.ucBulkTarget.dataset.inited) {
       el.ucBulkTarget.dataset.inited = '1';
@@ -1548,22 +1548,28 @@
       const statusText = {
         pending: '未开始',
         uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
+        uploaded: '已上传，待转码',
         running: it.stage === '无损直转' ? '无损直转中…' : (it.progress ? `转码中 ${it.progress}%` : '转码中…'),
         completed: '完成 ✅',
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status.replace('uploading','running');
-      // 移除按钮：pending/failed/uploading 可移除（上传中=取消上传）；转码中禁用
-      const disabled = it.status !== 'pending' && it.status !== 'failed' && it.status !== 'uploading' ? 'disabled' : '';
+      // 移除按钮：pending/failed/uploading/uploaded 可移除（上传/待转码=取消+清分片）；转码中禁用
+      const disabled = !['pending','failed','uploading','uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress||0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
-      const targetDisabled = (it.status === 'running' || it.status === 'uploading' || it.status === 'completed') ? 'disabled' : '';
-      // 已完成冻结：提示用户重新上传才能改格式（避免误以为下拉坏了）
+      // 待转码行：独立「开始转码」按钮（用该行格式单独开始，不影响批量）
+      const startHtml = it.status === 'uploaded'
+        ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
+        : '';
+      // 格式可改：uploading/uploaded 也能改（finish 提交时用最新值）；running/completed 锁定
+      const targetDisabled = (it.status === 'running' || it.status === 'completed') ? 'disabled' : '';
       const targetTitle = it.status === 'completed' ? '已完成：格式已固定，如需其他格式请移除后重新添加'
-                         : (targetDisabled ? '上传/转码中不可修改' : '修改此行的目标格式');
+                         : it.status === 'running' ? '转码中不可修改'
+                         : '修改此行的目标格式（开始转码时生效）';
       return `
         <li class="uc-item ${statusCls}" data-id="${it.id}">
           <div class="uc-item-main">
@@ -1580,6 +1586,7 @@
           <div class="uc-item-side">
             <label class="sr-only" for="ucItemTarget-${it.id}">输出格式</label>
             <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled} title="${targetTitle}">${fmtOptions(it.target)}</select>
+            ${startHtml}
             ${downloadHtml}
             <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
           </div>
@@ -1601,9 +1608,8 @@
       });
     });
     renderUcList();
-    // 2026-08-23 自动开始：添加文件即自动排队上传（受并发限制），无需手动点「开始转码」，
-    // 上传完成自动提交转码；排队中的项仍可改批量参数并「应用到未开始」。
-    el.ucStatus.textContent = `已添加 ${ucState.list.length} 个文件，自动开始上传转码…`;
+    // 自动开始上传（2026-08-23）；上传完成后停在「待转码」，可逐行设格式再点开始转码（单行/批量）
+    el.ucStatus.textContent = `已添加 ${ucState.list.length} 个文件，自动开始上传…`;
     ucPump();
   };
 
@@ -1625,13 +1631,15 @@
       el.ucStatus.textContent = '该项正在转码中，无法移除（请等待完成或失败）';
       return;
     }
-    if (it.status === 'uploading') {
-      ucCancelUpload(it);
+    if (it.status === 'uploading' || it.status === 'uploaded') {
+      ucCancelUpload(it);   // 取消/待转码：abort 分片（如有）+ 通知后端清理已传分片
       ucState.list = ucState.list.filter(x => x.id !== id);
-      ucState.active = Math.max(0, ucState.active - 1);  // 释放并发槽（ucUploadOne 不会 resolve）
+      if (it.status === 'uploading') {
+        ucState.active = Math.max(0, ucState.active - 1);  // uploading 时 promise 未结束，手动释放槽
+      }
       renderUcList();
-      el.ucStatus.textContent = '已取消上传并移除';
-      ucPump();  // 拉下一个 pending
+      el.ucStatus.textContent = '已取消并移除';
+      ucPump();  // 拉下一个 pending / 刷新批量按钮状态
       return;
     }
     ucState.list = ucState.list.filter(x => x.id !== id);
@@ -1644,13 +1652,15 @@
       el.ucStatus.textContent = `有 ${running} 个任务正在转码，请等待完成后再清空`;
       return;
     }
-    // 取消所有上传中项，再清空
+    // 取消所有上传中 + 待转码项（清理分片），再清空
     const uploading = ucState.list.filter(x => x.status === 'uploading');
-    uploading.forEach(ucCancelUpload);
-    ucState.active = Math.max(0, ucState.active - uploading.length);
+    const uploaded = ucState.list.filter(x => x.status === 'uploaded');
+    uploading.concat(uploaded).forEach(ucCancelUpload);
+    ucState.active = Math.max(0, ucState.active - uploading.length);  // 仅 uploading 占用并发槽
     ucState.list = [];
     renderUcList();
-    el.ucStatus.textContent = uploading.length ? `已取消 ${uploading.length} 个上传并清空列表` : '已清空列表';
+    const n = uploading.length + uploaded.length;
+    el.ucStatus.textContent = n ? `已取消 ${n} 个任务并清空列表` : '已清空列表';
     ucPump();
   };
 
@@ -1773,73 +1783,79 @@
     };
     for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
 
-    // 全部分片完成 → finish 合并并提交转码 job
-    Promise.allSettled(workers).then(async () => {
+    // 全部分片上传完成 → 停在「已上传·待转码」，等用户点开始转码（单行或批量）
+    Promise.allSettled(workers).then(() => {
       if (item._removed || item.status === 'failed') return;
+      item.status = 'uploaded';       // 已上传·待转码（新状态）
+      item.progress = 30;
+      item.speedText = ''; item.uploadedText = '';
+      item._totalChunks = totalChunks; // 供 ucFinishOne 提交转码时使用
+      renderUcList();
+      resolve({ status: 'uploaded' });
+    });
+  });
+
+  // 提交转码：调 finish 合并分片 + 启动 job（用该行最新设置的格式/参数；finish 一次性，失败需重传）
+  const ucFinishOne = (item) => new Promise((resolve, reject) => {
+    if (!item || item.status !== 'uploaded') { reject(new Error('状态不允许开始转码')); return; }
+    item.status = 'running';
+    item.progress = 30;
+    item.stage = '';
+    renderUcList();
+    const form = new FormData();
+    form.append('upload_id', item._uploadId);
+    form.append('total', item._totalChunks || 1);
+    form.append('filename', item.file.name);
+    form.append('target', item.target);
+    form.append('resolution', item.res);
+    form.append('bitrate', item.bitrate || '');
+    form.append('audio', item.audio ? 'true' : 'false');
+    form.append('rotate', item.rotate);
+    form.append('remux', item.remux ? 'true' : 'false');
+    form.append('to_library', item.toLibrary ? 'true' : 'false');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-chunk/finish');
+    xhr.setRequestHeader('X-Device-Id', deviceId());
+    xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
+    xhr.addEventListener('load', () => {
       try {
-        const form = new FormData();
-        form.append('upload_id', uploadId);
-        form.append('total', totalChunks);
-        form.append('filename', file.name);
-        form.append('target', item.target);
-        form.append('resolution', item.res);
-        form.append('bitrate', item.bitrate || '');
-        form.append('audio', item.audio ? 'true' : 'false');
-        form.append('rotate', item.rotate);
-        form.append('remux', item.remux ? 'true' : 'false');
-        form.append('to_library', item.toLibrary ? 'true' : 'false');
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/upload-chunk/finish');
-        xhr.setRequestHeader('X-Device-Id', deviceId());
-        xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
-        xhr.addEventListener('load', () => {
-          try {
-            const data = JSON.parse(xhr.responseText || '{}');
-            if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
-              item.jobId = data.job_id;
-              item.status = 'running';
-              item.progress = 30;
-              item.speedText = ''; item.uploadedText = '';
-              renderUcList();
-              resolve(data);
-            } else {
-              item.status = 'failed';
-              item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
-              item.speedText = ''; item.uploadedText = '';
-              renderUcList();
-              reject(new Error(item.errorMsg));
-            }
-          } catch (e) {
-            // responseText 非 JSON（HTML 错误页/空响应/被代理截断）—— 通常是 Cloudflare↔Railway 链路抖动，
-            // 提示用户重新上传（finish 是合并+提交转码一次性操作，无法重试，只能重传）
-            item.status = 'failed';
-            item.errorMsg = '服务器响应中断（可能是网络/代理超时），请重新上传文件';
-            renderUcList();
-            reject(e);
-          }
-        });
-        xhr.addEventListener('error', () => {
-          item.status = 'failed';
-          item.errorMsg = '网络错误（请重新上传文件）';
+        const data = JSON.parse(xhr.responseText || '{}');
+        if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
+          item.jobId = data.job_id;
+          item.status = 'running';
+          item.progress = 30;
+          item.speedText = ''; item.uploadedText = '';
           renderUcList();
-          reject(new Error('network'));
-        });
-        xhr.addEventListener('timeout', () => {
+          resolve(data);
+        } else {
           item.status = 'failed';
-          item.errorMsg = '上传完成但响应超时（请重新上传文件）';
+          item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
+          item.speedText = ''; item.uploadedText = '';
           renderUcList();
-          reject(new Error('finish timeout'));
-        });
-        xhr.send(form);
-      } catch (e) {
-        if (item.status !== 'failed') {
-          item.status = 'failed';
-          item.errorMsg = e.message || '上传失败';
-          renderUcList();
-          reject(e);
+          reject(new Error(item.errorMsg));
         }
+      } catch (e) {
+        // responseText 非 JSON（HTML 错误页/空响应/被代理截断）—— 通常是 Cloudflare↔Railway 链路抖动，
+        // 提示用户重新上传（finish 是合并+提交转码一次性操作，无法重试，只能重传）
+        item.status = 'failed';
+        item.errorMsg = '服务器响应中断（可能是网络/代理超时），请重新上传文件';
+        renderUcList();
+        reject(e);
       }
     });
+    xhr.addEventListener('error', () => {
+      item.status = 'failed';
+      item.errorMsg = '网络错误（请重新上传文件）';
+      renderUcList();
+      reject(new Error('network'));
+    });
+    xhr.addEventListener('timeout', () => {
+      item.status = 'failed';
+      item.errorMsg = '上传完成但响应超时（请重新上传文件）';
+      renderUcList();
+      reject(new Error('finish timeout'));
+    });
+    xhr.send(form);
   });
 
   // 启动下一个 pending 任务（受并发限制）
@@ -1865,9 +1881,11 @@
       const done = ucState.list.filter(x => x.status === 'completed').length;
       const fail = ucState.list.filter(x => x.status === 'failed').length;
       const remain = ucState.list.filter(x => x.status === 'pending').length;
+      const wait = ucState.list.filter(x => x.status === 'uploaded').length;
       const parts = [];
       if (done) parts.push(`${done} 完成`);
       if (fail) parts.push(`${fail} 失败`);
+      if (wait) parts.push(`${wait} 待转码`);
       if (remain) parts.push(`${remain} 未开始`);
       el.ucStatus.textContent = parts.length ? `批量结束：${parts.join('，')}` : '批量结束';
     }
@@ -1924,15 +1942,26 @@
     if (t.dataset.act === 'remove') {
       const li = t.closest('.uc-item');
       ucRemoveItem(+li.dataset.id);
+    } else if (t.dataset.act === 'start') {
+      // 单行「开始转码」：用该行最新设置的格式单独开始，不影响其他行
+      const li = t.closest('.uc-item');
+      const it = ucState.list.find(x => x.id === +li.dataset.id);
+      if (it && it.status === 'uploaded') {
+        el.ucStatus.textContent = `开始转码：${it.file.name}`;
+        ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
+      }
     }
   });
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   el.ucStartAllBtn.addEventListener('click', () => {
-    const hasPending = ucState.list.some(x => x.status === 'pending');
-    if (!hasPending) { el.ucStatus.textContent = '没有可开始的项'; return; }
-    el.ucStatus.textContent = '批量转换中…';
-    ucPump();
+    // 批量开始转码：所有「已上传·待转码」行统一提交（每行用各自已设置的格式）
+    const wait = ucState.list.filter(x => x.status === 'uploaded');
+    if (!wait.length) { el.ucStatus.textContent = '没有已上传待转码的项（先添加文件上传）'; return; }
+    el.ucStatus.textContent = `批量转换中…（${wait.length} 个）`;
+    wait.forEach(it => {
+      ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
+    });
   });
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）

@@ -559,6 +559,15 @@ img { max-width: 100%; display: block; }
 }
 .uc-item-download:hover { background: #cffafe; text-decoration: none; }
 
+/* 单行「开始转码」按钮（已上传·待转码状态显示） */
+.uc-item-start {
+  font-size: .8rem; font-weight: 500; color: #166534;
+  padding: .25rem .6rem; border-radius: 8px; background: #dcfce7;
+  border: 1px solid #86efac; cursor: pointer; white-space: nowrap;
+  transition: background .15s;
+}
+.uc-item-start:hover { background: #bbf7d0; }
+
 /* 空状态 */
 .uc-empty {
   background: #f5f6fa; border: 1px dashed var(--line);
