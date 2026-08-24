@@ -5337,7 +5337,7 @@
   let currentBaiduPath = '/';
   const baiduDlPollers = {};  // tid -> interval
 
-  el.tabBaidu.addEventListener('click', () => {
+  if (el.tabBaidu) el.tabBaidu.addEventListener('click', () => {
     if (!node.baiduAvailable) { el.baiduDriveHint.textContent = '该实例未配置百度网盘凭据'; return; }
     baiduModalOpen = true;
     restoreBaiduToken();
@@ -6190,14 +6190,14 @@
     el.uploadConvertView.hidden = !isUp;
     el.dwView.hidden = !isDw;
     el.appIntroView.hidden = !isAppIntro;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro);
-    el.tabLibrary.classList.toggle('is-active', isLib);
-    el.tabSubscribe.classList.toggle('is-active', isSub);
-    el.tabTorrent.classList.toggle('is-active', isTor);
-    el.tabCommentary.classList.toggle('is-active', isCom);
-    el.tabUploadConvert.classList.toggle('is-active', isUp);
-    el.tabDw.classList.toggle('is-active', isDw);
-    el.tabAppIntro.classList.toggle('is-active', isAppIntro);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro);
+    if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
+    if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
+    if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
+    if (el.tabCommentary) el.tabCommentary.classList.toggle('is-active', isCom);
+    if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
+    if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
+    if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -6623,8 +6623,8 @@
   };
 
   el.tabDownload.addEventListener('click', () => switchView('download'));
-  el.tabLibrary.addEventListener('click', () => switchView('library'));
-  el.tabCommentary.addEventListener('click', () => switchView('commentary'));
+  if (el.tabLibrary) el.tabLibrary.addEventListener('click', () => switchView('library'));
+  if (el.tabCommentary) el.tabCommentary.addEventListener('click', () => switchView('commentary'));
   el.tabUploadConvert.addEventListener('click', () => switchView('uploadconvert'));
   // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换
   const ucSwitchSub = (which) => {
@@ -6638,8 +6638,8 @@
   el.ucSubMerge.addEventListener('click', () => ucSwitchSub('merge'));
   el.tabDw.addEventListener('click', () => switchView('dw'));
   el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
-  el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
-  el.tabTorrent.addEventListener('click', () => switchView('torrent'));
+  if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
+  if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {
@@ -8023,7 +8023,6 @@
       node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
       node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
       node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
-      el.tabBaidu.hidden = !node.baiduAvailable;
       node.libraryEnabled = !!(library && library.enabled);
       node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
       node.retentionEnabled = !!(retention && retention.enabled);
