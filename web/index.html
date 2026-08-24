@@ -340,7 +340,18 @@
   <!-- 上传转换视图（多文件批量：参考 DataTool 风格，每个文件单独一行 + 独立输出格式） -->
   <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle">
     <h2 id="ucTitle" class="guide-title">视频格式转换</h2>
-    <p class="uc-tip">添加多个本地视频，批量转码为指定格式。每个文件单独成行，可独立设置输出格式。</p>
+
+    <!-- 子模块切换：格式转换 / 视频拼接 -->
+    <div class="uc-subtabs" id="ucSubTabs">
+      <button type="button" class="uc-sub is-active" id="ucSubFormat">🎬 视频格式转换</button>
+      <button type="button" class="uc-sub" id="ucSubMerge">🔗 视频拼接</button>
+    </div>
+
+    <!-- 子模块一：视频格式转换 -->
+    <div id="ucPane">
+    <p class="uc-tip" id="ucLimitTip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      单个文件最大 10GB（大文件自动分片并发上传提速）；超过上限建议先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。
+    </p>
 
     <!-- 工具栏：添加 / 清空 / 计数 -->
     <div class="uc-toolbar">
@@ -357,7 +368,7 @@
     <div class="uc-empty" id="ucEmpty">点击「添加文件」选择 1 个或多个视频，可同时设置不同输出格式。</div>
 
     <!-- 批量参数 + 操作区（仅当有文件时显示） -->
-    <div class="uc-bulk" id="ucBulk" hidden>
+    <div class="uc-bulk" id="ucBulk">
       <h3 class="card-title">批量参数（可应用到所有未开始的项）</h3>
       <div class="uc-form">
         <label class="uc-field">
@@ -411,6 +422,42 @@
     </div>
 
     <span class="convert-status" id="ucStatus" aria-live="polite"></span>
+    </div><!-- /ucPane -->
+
+    <!-- 子模块二：视频拼接（多文件无损合并） -->
+    <div id="mcPane" hidden>
+      <p class="uc-tip">添加多个视频片段，自动上传后按顺序排列合并为一个文件（无损 -c copy，无需重编码）。更完善的转场/对齐拼接将在桌面 App 版提供。</p>
+      <div class="uc-toolbar">
+        <button type="button" class="btn btn-primary" id="mcAddBtn">添加片段</button>
+        <input type="file" id="mcFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv" multiple hidden />
+        <button type="button" class="btn btn-ghost" id="mcClearBtn" hidden>清空</button>
+        <span class="uc-count" id="mcCount">尚未添加片段</span>
+      </div>
+      <ul class="uc-list" id="mcList" aria-live="polite"></ul>
+      <div class="uc-bulk" id="mcActions">
+        <label class="uc-field">
+          <span class="uc-label">输出格式</span>
+          <select id="mcOutFormat">
+            <option value="mp4">MP4</option>
+            <option value="mov">MOV</option>
+            <option value="mkv">MKV</option>
+            <option value="m4v">M4V</option>
+            <option value="ts">TS</option>
+            <option value="flv">FLV</option>
+            <option value="webm">WebM</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">输出文件名</span>
+          <input type="text" id="mcOutName" placeholder="合并结果" />
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="mcLibrary" /> <span class="uc-label">存入媒体库</span>
+        </label>
+        <button type="button" class="btn btn-primary" id="mcMergeBtn">开始拼接</button>
+      </div>
+      <span class="convert-status" id="mcStatus" aria-live="polite"></span>
+    </div><!-- /mcPane -->
   </section>
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
@@ -430,15 +477,24 @@
             <span class="uc-label">图片文件</span>
             <input type="file" id="dwImgFile" accept="image/*" />
           </label>
-          <div class="dw-preview-wrap">
+          <div class="dw-preview-wrap" id="dwPreviewWrap">
             <img id="dwImgPreview" alt="预览" />
+            <svg id="dwImgSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg"></svg>
             <canvas id="dwImgCanvas" class="dw-canvas"></canvas>
+            <button type="button" class="dw-expand" id="dwExpandBtn" title="放大编辑">🔍 放大编辑</button>
           </div>
           <div class="dw-toolbar">
             <div class="dw-toolgroup dw-seg" role="group" aria-label="选区模式">
-              <button type="button" class="dw-mode is-active" data-mode="new" title="替换已有选区，重新框选"><span class="dw-ico">🆕</span>新建</button>
+              <button type="button" class="dw-mode is-active" data-mode="new" title="清空当前选区，重新开始框选"><span class="dw-ico">🆕</span>新选区</button>
               <button type="button" class="dw-mode" data-mode="add" title="在已有选区上叠加新区域"><span class="dw-ico">➕</span>加选</button>
               <button type="button" class="dw-mode" data-mode="subtract" title="从已选区域中抠除"><span class="dw-ico">➖</span>减选</button>
+            </div>
+            <span class="dw-tooldiv" aria-hidden="true"></span>
+            <div class="dw-toolgroup dw-zoomgroup" role="group" aria-label="缩放">
+              <button type="button" class="dw-mode" id="dwZoomOut" title="缩小"><span class="dw-ico">🔍−</span></button>
+              <span class="dw-zoomlabel" id="dwZoomLabel">100%</span>
+              <button type="button" class="dw-mode" id="dwZoomIn" title="放大"><span class="dw-ico">🔍+</span></button>
+              <button type="button" class="dw-mode" id="dwZoomFit" title="适应窗口"><span class="dw-ico">⤢</span>适应</button>
             </div>
             <span class="dw-tooldiv" aria-hidden="true"></span>
             <div class="dw-toolgroup" role="group" aria-label="选区操作">
@@ -446,8 +502,9 @@
               <button type="button" class="dw-mode" data-act="clear" title="清空所有选区"><span class="dw-ico">🗑</span>清空</button>
             </div>
             <span class="dw-selinfo" id="dwSelInfo">尚未框选</span>
+            <button type="button" class="dw-mode" id="dwExpandBtn2" title="放大编辑"><span class="dw-ico">🔍</span>放大</button>
           </div>
-          <p class="dw-hint">在预览图上<b>拖拽框选</b>。🆕 新建替换选区；➕ 加选叠加；➖ 减选抠除（绿框=保留，红框=抠除）。</p>
+          <p class="dw-hint">在预览图上<b>拖拽框选</b>，或点击「🔍 放大」打开大图编辑。🆕 新选区（清空重来）；➕ 加选（多块可叠加合并为一个绿色区域）；➖ 减选（在绿色区域内抠除，显示红色）。</p>
         </div>
         <aside class="dw-side">
           <div class="dw-card">
@@ -476,6 +533,47 @@
           <div><span class="dw-cap">处理后</span><img id="dwImgOut" alt="处理后" /></div>
         </div>
         <a class="btn btn-accent btn-sm" id="dwImgDownload" download>下载结果</a>
+      </div>
+
+      <!-- 图片去水印放大弹窗（灯箱） -->
+      <div id="dwImgModal" class="dw-modal" hidden>
+        <div class="dw-modal-backdrop"></div>
+        <div class="dw-modal-content">
+          <div class="dw-modal-header">
+            <h3>框选去水印区域</h3>
+            <button type="button" class="dw-modal-close" id="dwModalClose" aria-label="关闭">✕</button>
+          </div>
+          <div class="dw-modal-toolbar">
+            <div class="dw-toolgroup dw-seg" role="group" aria-label="选区模式">
+              <button type="button" class="dw-mode is-active" data-mode="new" title="清空当前选区，重新开始框选"><span class="dw-ico">🆕</span>新选区</button>
+              <button type="button" class="dw-mode" data-mode="add" title="在已有选区上叠加新区域"><span class="dw-ico">➕</span>加选</button>
+              <button type="button" class="dw-mode" data-mode="subtract" title="从已选区域中抠除"><span class="dw-ico">➖</span>减选</button>
+              <button type="button" class="dw-mode" data-mode="pan" title="移动工具：放大后长按拖动平移图片"><span class="dw-ico">✋</span>移动</button>
+            </div>
+            <span class="dw-tooldiv" aria-hidden="true"></span>
+            <div class="dw-toolgroup dw-zoomgroup" role="group" aria-label="缩放">
+              <button type="button" class="dw-mode" id="dwModalZoomOut" title="缩小"><span class="dw-ico">🔍−</span></button>
+              <span class="dw-zoomlabel" id="dwModalZoomLabel">100%</span>
+              <button type="button" class="dw-mode" id="dwModalZoomIn" title="放大"><span class="dw-ico">🔍+</span></button>
+              <button type="button" class="dw-mode" id="dwModalZoomFit" title="适应窗口"><span class="dw-ico">⤢</span>适应</button>
+            </div>
+            <span class="dw-tooldiv" aria-hidden="true"></span>
+            <div class="dw-toolgroup" role="group" aria-label="选区操作">
+              <button type="button" class="dw-mode" data-act="undo" title="撤销最后一个选区"><span class="dw-ico">↩</span>撤销</button>
+            </div>
+          </div>
+          <div class="dw-modal-body">
+            <div class="dw-preview-wrap dw-modal-preview" id="dwModalPreviewWrap">
+              <img id="dwModalImg" alt="放大预览" />
+              <svg id="dwModalSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+              <canvas id="dwModalCanvas" class="dw-canvas"></canvas>
+            </div>
+          </div>
+          <div class="dw-modal-footer">
+            <span class="dw-selinfo" id="dwModalSelInfo">尚未框选</span>
+            <button type="button" class="btn btn-primary" id="dwModalDone">完成编辑</button>
+          </div>
+        </div>
       </div>
     </div>
 

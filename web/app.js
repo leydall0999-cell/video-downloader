@@ -31,9 +31,10 @@
       }
     } catch (_) {}
   });
-  // 默认展示「已生成成片」列表：用 setTimeout 异步兜底，即使后续初始化同步抛错，
-  // 事件循环也会执行本回调切到解说视图，不再依赖 IIFE 末尾是否跑到。
-  setTimeout(() => { try { switchView('commentary'); } catch (_) {} }, 0);
+  // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
+  // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
+  let bootViewSet = false;
+  setTimeout(() => { try { if (!bootViewSet) switchView('download'); } catch (_) {} }, 0);
 
   // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
   try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
@@ -66,11 +67,12 @@
     input: $('urlInput'),
     clearBtn: $('clearBtn'),
     resolveBtn: $('resolveBtn'),
-    chips: $('platformChips'),
     alert: $('alertBox'),
+    alertIcon: $('alertIcon'),
     alertBody: $('alertBody'),
     alertTitle: $('alertTitle'),
     alertHint: $('alertHint'),
+    alertAction: $('alertAction'),
     alertDetail: $('alertDetail'),
     alertToggle: $('alertToggle'),
     resultPanel: $('resultPanel'),
@@ -103,6 +105,7 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
+    cookieContribute: $('cookieContribute'),
     proxyInput: $('proxyInput'),
     concurrentInput: $('concurrentInput'),
     downloaderSelect: $('downloaderSelect'),
@@ -110,6 +113,12 @@
     extractSelect: $('extractSelect'),
     directHint: $('directHint'),
     serverFallbackBtn: $('serverFallbackBtn'),
+    playlistPanel: $('playlistPanel'),
+    playlistTitle: $('playlistTitle'),
+    playlistMeta: $('playlistMeta'),
+    playlistList: $('playlistList'),
+    playlistDownloadBtn: $('playlistDownloadBtn'),
+    playlistProgress: $('playlistProgress'),
     cookieHelp: $('cookieHelp'),
     cookieHelpCopy: $('cookieHelpCopy'),
     nodeBar: $('nodeBar'),
@@ -352,6 +361,11 @@
     // 上传转换（需求文档模块一）
     tabUploadConvert: $('tabUploadConvert'),
     uploadConvertView: $('uploadConvertView'),
+    // 视频处理板块内的子模块切换（格式转换 / 拼接）
+    ucSubFormat: $('ucSubFormat'),
+    ucSubMerge: $('ucSubMerge'),
+    ucPane: $('ucPane'),
+    mcPane: $('mcPane'),
     // ---- 上传转换视图（多文件批量）----
     ucAddBtn: $('ucAddBtn'),
     ucFileInput: $('ucFileInput'),
@@ -374,14 +388,37 @@
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
     dwView: $('dwView'),
+    tabAppIntro: $('tabAppIntro'),
+    appIntroView: $('appIntroView'),
     dwModeImg: $('dwModeImg'),
     dwModePdf: $('dwModePdf'),
     dwImgPane: $('dwImgPane'),
     dwImgFile: $('dwImgFile'),
+    dwPreviewWrap: $('dwPreviewWrap'),
     dwImgPreview: $('dwImgPreview'),
+    dwImgSvg: $('dwImgSvg'),
     dwImgCanvas: $('dwImgCanvas'),
+    dwExpandBtn: $('dwExpandBtn'),
+    dwExpandBtn2: $('dwExpandBtn2'),
     dwSelInfo: $('dwSelInfo'),
+    dwZoomIn: $('dwZoomIn'),
+    dwZoomOut: $('dwZoomOut'),
+    dwZoomFit: $('dwZoomFit'),
+    dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
+    // 去水印放大弹窗
+    dwImgModal: $('dwImgModal'),
+    dwModalClose: $('dwModalClose'),
+    dwModalDone: $('dwModalDone'),
+    dwModalImg: $('dwModalImg'),
+    dwModalSvg: $('dwModalSvg'),
+    dwModalCanvas: $('dwModalCanvas'),
+    dwModalZoomIn: $('dwModalZoomIn'),
+    dwModalZoomOut: $('dwModalZoomOut'),
+    dwModalZoomFit: $('dwModalZoomFit'),
+    dwModalZoomLabel: $('dwModalZoomLabel'),
+    dwModalSelInfo: $('dwModalSelInfo'),
+    dwModalPreviewWrap: $('dwModalPreviewWrap'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
     dwImgStatus: $('dwImgStatus'),
@@ -445,6 +482,15 @@
     torList: $('torList'),
     torStatus: $('torStatus'),
   };
+
+  // 记忆用户粘贴过的会话 Cookie（localStorage 本机存储，免每次重粘）。
+  // 注意：只存用户自己主动粘贴的 Cookie；「贡献公共池」的共享逻辑不受影响。
+  try {
+    const savedCookie = localStorage.getItem('vdl_cookie');
+    if (savedCookie && el.cookieInput && !el.cookieInput.value) {
+      el.cookieInput.value = savedCookie;
+    }
+  } catch (e) { /* localStorage 不可用（隐私模式等）时静默跳过 */ }
 
   // 解说裁剪状态
   let comTrimStart = 0;        // 裁剪起点（秒）
@@ -536,11 +582,27 @@
   const _parseResponse = async (response) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '' };
+      const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '', category: payload.category || '' };
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
       throw err;
     }
     return payload;
+  };
+
+  /** 设备隔离 ID：sessionStorage 级（标签页独立，刷新保留，新标签页/新设备是新 ID）。
+   *  同浏览器开两个标签页 = 两个互不可见的任务空间；手机与电脑自然隔离。 */
+  const deviceId = () => {
+    let id = '';
+    try { id = sessionStorage.getItem('vdl_device_id') || ''; } catch (e) { /* 隐私模式可能抛错 */ }
+    if (!id) {
+      try {
+        id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+      } catch (e) {
+        id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+      }
+      try { sessionStorage.setItem('vdl_device_id', id); } catch (e) { /* 忽略 */ }
+    }
+    return id;
   };
 
   const request = async (path, options = {}, base = '') => {
@@ -549,6 +611,9 @@
     if (subKey) headers['X-Subscription-Key'] = subKey;
     const apiToken = localStorage.getItem('vdl_api_token');
     if (apiToken) headers['X-Api-Key'] = apiToken;
+    // 设备隔离（2026-08-22）：每标签页独立 device_id（sessionStorage），
+    // 后端据此只返回本页面创建的任务——手机/其他页面完全看不到本页任务。
+    headers['X-Device-Id'] = deviceId();
     // FormData（multipart 上传）不强制 Content-Type，交给浏览器设 boundary；
     // 其余默认 JSON。options.headers 仅做增强、不覆盖（避免丢失 token）。
     const isForm = options.body instanceof FormData;
@@ -559,18 +624,39 @@
     // file:// 模式下相对路径会解析到 file:// 协议（无法请求后端），
     // 此时使用 launcher 通过 evaluate_js 注入的 window.VDL_API_BASE（绝对 http 地址）。
     const apiBase = base || window.VDL_API_BASE || '';
-    const doFetch = () => fetch(apiBase + path, { ...options, headers: merged });
-    let response = await doFetch();
-    if (response.status === 401) {
-      // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
-      const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
-      if (t && t.trim()) {
-        localStorage.setItem('vdl_api_token', t.trim());
-        merged['X-Api-Key'] = t.trim();
-        response = await doFetch();
+    // fetch 超时保护（2026-08-24）：默认 120s（覆盖 VPS worker 85s 上限 + 余量），
+    // 防止后端挂起时前端无限等待。大文件上传/下载可传 options.timeout=0 关闭
+    // 或传更大值；请求超时抛可读错误而非静默卡死。
+    const fetchTimeout = (options && options.timeout) || 120000;
+    const doFetch = () => {
+      if (!fetchTimeout) return fetch(apiBase + path, { ...options, headers: merged });
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      if (!ctrl) return fetch(apiBase + path, { ...options, headers: merged });
+      const timer = setTimeout(() => ctrl.abort(), fetchTimeout);
+      return fetch(apiBase + path, { ...options, headers: merged, signal: ctrl.signal })
+        .finally(() => clearTimeout(timer));
+    };
+    let response;
+    try {
+      response = await doFetch();
+      if (response.status === 401) {
+        // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
+        const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
+        if (t && t.trim()) {
+          localStorage.setItem('vdl_api_token', t.trim());
+          merged['X-Api-Key'] = t.trim();
+          response = await doFetch();
+        }
       }
+      return await _parseResponse(response);
+    } catch (e) {
+      // fetch 超时（AbortError）→ 转成可读提示；DOMException 在部分浏览器无 name
+      if (e && (e.name === 'AbortError' || e.code === 20 || String(e.message || '').includes('aborted'))) {
+        const secs = Math.round(fetchTimeout / 1000) || 120;
+        throw { message: '请求超时（超过 ' + secs + 's），请重试或检查网络', hint: '解析服务较慢或网络不稳定，稍后重试。', category: 'timeout' };
+      }
+      throw e;
     }
-    return await _parseResponse(response);
   };
 
   const formatBytes = (bytes) => {
@@ -753,13 +839,50 @@
     return null;
   };
 
-  const showError = (message, hint = '', detail = '') => {
+  const showError = (message, hint = '', detail = '', category = '') => {
     let msg = String(message || '').trim();
     let h = String(hint || '').trim();
     if (!msg) { clearError(); return; }
     // 网络层原始错误 → 友好提示
     const net = _friendlyNetworkError(msg);
     if (net) { msg = net.message; h = h || net.hint; }
+
+    // —— 按错误分类做视觉区分 + 针对性行动建议 ——
+    // category 由后端 _friendly_error 产出（cookie_required / cdn_forbidden /
+    // network / restricted / unknown 等），让同一个横幅对不同错误给出不同引导，
+    // 而不是千篇一律的「解析失败」。
+    const cat = String(category || '').trim();
+    const ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐' };
+    const ACCENT = { cookie_required: '#e0a33a', cookie_invalid_or_expired: '#e0a33a', cdn_forbidden: '#e2554f', restricted: '#9aa0a6', network: '#4a90d9' };
+    // 先重置上一次的分类样式，避免串台
+    el.alert.className = 'alert';
+    el.alert.style.borderLeftColor = '';
+    if (el.alertIcon) el.alertIcon.textContent = ICON[cat] || '!';
+    if (ACCENT[cat]) el.alert.style.borderLeftColor = ACCENT[cat];
+    // cookie 类错误：给一个「去粘贴 Cookie」按钮，一键展开高级选项并聚焦输入框
+    if (el.alertAction) {
+      const isCookie = cat === 'cookie_required' || cat === 'cookie_invalid_or_expired';
+      if (isCookie) {
+        // 登录态已失效 → 清掉本机记忆的 Cookie，避免下次继续带着失效值重试
+        if (cat === 'cookie_invalid_or_expired') {
+          try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
+        }
+        el.alertAction.textContent = '去粘贴 Cookie';
+        el.alertAction.hidden = false;
+        el.alertAction.style.cssText = 'margin-top:.5rem;padding:.35rem .7rem;border:none;border-radius:6px;background:#e0a33a;color:#1b1b1b;font-size:12px;font-weight:600;cursor:pointer;';
+        el.alertAction.onclick = () => {
+          const adv = document.getElementById('advToggle');
+          if (adv) adv.open = true;
+          if (el.cookieInput) {
+            try { el.cookieInput.focus(); el.cookieInput.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+          }
+        };
+      } else {
+        el.alertAction.hidden = true;
+        el.alertAction.onclick = null;
+      }
+    }
+
     el.alertTitle.textContent = msg;
     el.alertHint.textContent = h;
     el.alertHint.hidden = !h;
@@ -778,6 +901,11 @@
     el.alert.hidden = true;
     if (el.alertDetail) { el.alertDetail.hidden = true; el.alertDetail.textContent = ''; }
     if (el.alertToggle) el.alertToggle.hidden = true;
+    // 一并重置分类样式/行动按钮，避免下次非分类错误仍残留旧样式
+    el.alert.className = 'alert';
+    el.alert.style.borderLeftColor = '';
+    if (el.alertIcon) el.alertIcon.textContent = '!';
+    if (el.alertAction) { el.alertAction.hidden = true; el.alertAction.onclick = null; }
   };
   document.getElementById('alertClose').addEventListener('click', clearError);
   // 点击横幅主体（除关闭按钮外）切换错误详情展开/收起。
@@ -805,20 +933,23 @@
 
   const renderPlatforms = (platforms) => {
     allPlatforms = platforms;
-    el.chips.replaceChildren();
-    platforms.slice(0, MAX_VISIBLE_PLATFORMS).forEach(({ name, icon }) => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.textContent = (icon ? icon + ' ' : '') + name;
-      el.chips.appendChild(chip);
-    });
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'chip chip-more';
-    more.textContent = `查看全部 ${platforms.length} 个平台 →`;
-    more.setAttribute('aria-haspopup', 'dialog');
-    more.addEventListener('click', () => openPlatformModal(platforms));
-    el.chips.appendChild(more);
+    // 平台列表只保留 header 徽章入口（engineBadge 弹窗），输入区 chips 已移除
+    if (el.chips) {
+      el.chips.replaceChildren();
+      platforms.slice(0, MAX_VISIBLE_PLATFORMS).forEach(({ name, icon }) => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = (icon ? icon + ' ' : '') + name;
+        el.chips.appendChild(chip);
+      });
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'chip chip-more';
+      more.textContent = `查看全部 ${platforms.length} 个平台 →`;
+      more.setAttribute('aria-haspopup', 'dialog');
+      more.addEventListener('click', () => openPlatformModal(platforms));
+      el.chips.appendChild(more);
+    }
     el.badge.textContent = `支持 ${platforms.length} 个平台`;
   };
 
@@ -1040,6 +1171,8 @@
     refs.platform.textContent = meta.platform;
     el.taskList.prepend(node);
     el.tasksPanel.hidden = false;
+    // 新任务卡滚动到可见区，用户点击「开始下载」后立即看到进度
+    try { node.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* 忽略 */ }
     return refs;
   };
 
@@ -1094,7 +1227,25 @@
 
     const failed = task.status === 'failed';
     refs.error.hidden = !failed;
-    refs.error.textContent = failed ? [task.error, task.hint].filter(Boolean).join(' — ') : '';
+    if (failed) {
+      // 按错误分类给出图标 + 一句行动建议，让用户一看就知道下一步该干嘛
+      // （cookie 类→去粘贴 Cookie；403→登录/会员/地区；网络→重试；受限→官方渠道）
+      const cat = task.category || '';
+      const CAT_ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐' };
+      const CAT_TIP = {
+        cookie_required: '需在「高级选项」粘贴该平台 Cookie 后重试',
+        cookie_invalid_or_expired: 'Cookie 已失效，请重新登录并在「高级选项」粘贴后重试',
+        cdn_forbidden: '服务器拒绝（403）：多为需登录 / 会员 / 地区限制',
+        restricted: '该内容受版权或地区保护，无法下载',
+        network: '网络不稳定，可点「重试 / 继续下载」再试一次',
+      };
+      const icon = CAT_ICON[cat] || '⚠️';
+      const base = [task.error, task.hint].filter(Boolean).join(' — ');
+      const tip = CAT_TIP[cat] ? `（${CAT_TIP[cat]}）` : '';
+      refs.error.textContent = `${icon} ${base}${tip}`;
+    } else {
+      refs.error.textContent = '';
+    }
 
 
     // 在线观看：任务面板也显示观看按钮（解析结果里的播放地址存入任务后可在此直接打开）
@@ -1170,7 +1321,7 @@
     }
     refs.save.hidden = false;
     // 任务在哪个节点跑，文件就从哪个节点取
-    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1`;
+    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1&device=${encodeURIComponent(deviceId())}`;
     refs.save.setAttribute('download', task.filename || '');
     refs.save.textContent = '保存到本机 ⬇';
     refs.status.textContent = autoSave
@@ -1342,7 +1493,7 @@
               if (refs.convertProgressFill) refs.convertProgressFill.style.width = '100%';
               setTimeout(() => { refs.convertProgress.hidden = true; }, 400);
             }
-            refs.convertFile.href = `${base || window.VDL_API_BASE || ''}/api/convert/${jobId}/file`;
+            refs.convertFile.href = `${base || window.VDL_API_BASE || ''}/api/convert/${jobId}/file?device=${encodeURIComponent(deviceId())}`;
             refs.convertFile.setAttribute('download', st.filename || 'converted');
             refs.convertFile.hidden = false;
             refs.convertStatus.textContent = '转换完成 ✅';
@@ -1384,7 +1535,49 @@
   // ------------------------------------------------------------------ 上传视频直接转码（多文件批量：每个文件独立一行 + 独立输出格式）
   // 设计：前端模拟批量，后端复用单文件 /api/upload-convert。状态用 pending/uploading/running/completed/failed。
   // 并发：最大 2 个同时转码（普通 ffmpeg 重任务，避免 CPU/带宽占满）。
-  const UC_MAX_CONCURRENT = 2;
+  // 2026-08-24 上传提速：单文件分片并发（32MB/片 × 4 路，单片失败重试 2 次），
+  // 文件级并发 2（避免多文件抢占带宽），大文件总连接数 = 2×4 = 8，HTTP/1.1 排队 HTTP/2 全并发。
+  const UC_MAX_CONCURRENT = 2; // 文件级上传并发
+  const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB（默认）
+  const UC_BIG_CHUNK_SIZE = 64 * 1024 * 1024;   // >2GB 文件单片 64MB（减少请求数，后端上限 64MB）
+  const UC_CHUNK_CONCURRENCY = 8;               // 单文件分片并发路数（高 RTT 链路多连接并行提速，HTTP/2 无连接限制）
+  const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
+  const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
+  // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
+  // Railway 原生域名（无 CF 限速层，直连源站）指向同一个后端、同一份分片存储，
+  // 动态选路：每片发出前按两通道「最近 3 次成功分片平均吞吐」实时选更快通道，
+  // 慢通道（跨境抖动/掉速）自然少被选中，不再拖累整体；单通道失败重试自动故障转移到另一通道。
+  const UC_UPLOAD_ENDPOINTS = [location.origin, 'https://web-production-b9993.up.railway.app'];
+  // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于动态选路
+  const ucChStats = () => ({
+    samples: [[], []],
+    total: 0,
+    add(ci, bytes, ms) {
+      const arr = this.samples[ci];
+      arr.push({ bytes, ms });
+      if (arr.length > 3) arr.shift();
+      this.total++;
+    },
+    avg(ci) {
+      const arr = this.samples[ci];
+      if (!arr.length) return 0;
+      let sb = 0, sm = 0;
+      for (const s of arr) { sb += s.bytes; sm += s.ms; }
+      return sm > 0 ? sb / sm : 0;
+    },
+  });
+  // 动态选路：样本不足（<4 片）先按奇偶分流顺便采集；样本充足后 80% 走更快通道、
+  // 20% 探索另一条（防抖动瞬间误判后锁死慢通道，让其有机会恢复并被重新采样）。
+  // 重试（attempt>0）固定切到另一条通道（故障转移，不重试同一条坏链路）。
+  const ucPickEndpoint = (item, i, attempt) => {
+    const n = UC_UPLOAD_ENDPOINTS.length;
+    if (attempt > 0) return UC_UPLOAD_ENDPOINTS[(i + 1) % n];
+    const st = item._chStats;
+    if (!st || st.total < 4) return UC_UPLOAD_ENDPOINTS[i % n];
+    const faster = st.avg(0) >= st.avg(1) ? 0 : 1;
+    if (Math.random() < 0.8) return UC_UPLOAD_ENDPOINTS[faster];
+    return UC_UPLOAD_ENDPOINTS[1 - faster];
+  };
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
   const ucFormatSize = (bytes) => {
@@ -1393,6 +1586,28 @@
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + ' MB';
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  };
+
+  const ucFormatSpeed = (bps) => {
+    if (!bps || bps <= 0) return '';
+    if (bps > 1024 * 1024) return (bps / 1024 / 1024).toFixed(1) + ' MB/s';
+    return (bps / 1024).toFixed(0) + ' KB/s';
+  };
+
+  // 转换产物文件名：`[格式]原文件名.扩展名`（目标扩展名映射）
+  const UC_EXT_OF = { mp4:'mp4', mov:'mov', mkv:'mkv', webm:'webm', avi:'avi', flv:'flv', ts:'ts',
+                      m4v:'m4v', wmv:'wmv', mpeg:'mpg', '3gp':'3gp', ogv:'ogv', hevc:'mp4',
+                      mp3:'mp3', m4a:'m4a', aac:'aac', wav:'wav', flac:'flac', ogg:'ogg',
+                      opus:'opus', wma:'wma', mp2:'mp2', gif:'gif' };
+  const ucBuildOutputName = (it) => {
+    const stem = ((it.file && it.file.name) || '').replace(/\.[^.]+$/, '') || 'converted';
+    const ext = UC_EXT_OF[it.target] || it.target;
+    return `[${it.target.toUpperCase()}]${stem}.${ext}`;
+  };
+
+  // 确保转码轮询在跑（批量/单行开始后立即启动，不等上传回调）
+  const ucEnsurePolling = () => {
+    if (!ucState.polling) ucState.polling = setInterval(ucPollAll, UC_POLL_INTERVAL);
   };
 
   const ucReadBulk = () => ({
@@ -1417,35 +1632,61 @@
     el.ucStatus.textContent = n ? `已把批量参数应用到 ${n} 个未开始项` : '没有可应用的项（所有项都已开始/完成）';
   };
 
+  // 输出格式下拉选项（格式列表来自节点配置，缺省回退硬编码；音频类标注「仅音频」）
+  const AUDIO_ONLY_FMTS = ['mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2'];
+  const fmtOptions = (val) => (node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','hevc','mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2','gif'])
+    .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${AUDIO_ONLY_FMTS.includes(v)?'（仅音频）':''}${v==='gif'?'（前5秒）':''}${v==='hevc'?'（H.265 省空间）':''}</option>`)
+    .join('');
+
   const renderUcList = () => {
     const list = ucState.list;
     el.ucCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
     el.ucClearBtn.hidden = list.length === 0;
-    el.ucBulk.hidden = list.length === 0;
-    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'pending');
+    // 批量参数区常显；「开始批量转换」按钮：有已上传待转码项才可用（2026-08-23 批量统一开始）
+    el.ucStartAllBtn.hidden = false;
+    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'uploaded');
+    // 批量「默认输出格式」下拉只填充一次（避免每次渲染重建导致选中/焦点被打断而闪烁）
+    if (el.ucBulkTarget && !el.ucBulkTarget.dataset.inited) {
+      el.ucBulkTarget.dataset.inited = '1';
+      el.ucBulkTarget.innerHTML = fmtOptions(el.ucBulkTarget.value || 'mp4');
+    }
+    // 大小上限提示（来自节点配置；默认 10GB）
+    if (el.ucLimitTip) {
+      const mb = node.convertMaxUpload || 0;
+      const gb = mb > 0 ? (mb / 1024 / 1024 / 1024).toFixed(1) : '10.0';
+      el.ucLimitTip.textContent = `单个文件最大 ${gb}GB（大文件已自动分片并发上传提速）；超过上限请先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。`;
+    }
 
     if (!list.length) { el.ucList.innerHTML = ''; return; }
-
-    const fmtOptions = (val) => ['mp4','mov','mkv','webm','mp3','m4a','gif']
-      .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${v==='mp3'||v==='m4a'?'（仅音频）':''}${v==='gif'?'（前5秒）':''}</option>`)
-      .join('');
 
     el.ucList.innerHTML = list.map(it => {
       const statusText = {
         pending: '未开始',
-        uploading: '上传中…',
-        running: it.progress ? `转码中 ${it.progress}%` : '转码中…',
+        uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
+        uploaded: '已上传，待转码',
+        running: it.stage === '无损直转' ? '无损直转中…'
+               : it.stage === '排队中' ? '排队中…'
+               : (it.progress ? `转码中 ${it.progress}%` : '转码中…'),
         completed: '完成 ✅',
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status.replace('uploading','running');
-      const disabled = it.status !== 'pending' && it.status !== 'failed' ? 'disabled' : '';
+      // 移除按钮：pending/failed/uploading/uploaded 可移除（上传/待转码=取消+清分片）；转码中禁用
+      const disabled = !['pending','failed','uploading','uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress||0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
-      const targetDisabled = (it.status === 'running' || it.status === 'uploading' || it.status === 'completed') ? 'disabled' : '';
+      // 待转码行：独立「开始转码」按钮（用该行格式单独开始，不影响批量）
+      const startHtml = it.status === 'uploaded'
+        ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
+        : '';
+      // 格式可改：uploading/uploaded 也能改（finish 提交时用最新值）；running/completed 锁定
+      const targetDisabled = (it.status === 'running' || it.status === 'completed') ? 'disabled' : '';
+      const targetTitle = it.status === 'completed' ? '已完成：格式已固定，如需其他格式请移除后重新添加'
+                         : it.status === 'running' ? '转码中不可修改'
+                         : '修改此行的目标格式（开始转码时生效）';
       return `
         <li class="uc-item ${statusCls}" data-id="${it.id}">
           <div class="uc-item-main">
@@ -1461,7 +1702,8 @@
           </div>
           <div class="uc-item-side">
             <label class="sr-only" for="ucItemTarget-${it.id}">输出格式</label>
-            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled}>${fmtOptions(it.target)}</select>
+            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled} title="${targetTitle}">${fmtOptions(it.target)}</select>
+            ${startHtml}
             ${downloadHtml}
             <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
           </div>
@@ -1483,13 +1725,38 @@
       });
     });
     renderUcList();
+    // 自动开始上传（2026-08-23）；上传完成后停在「待转码」，可逐行设格式再点开始转码（单行/批量）
+    el.ucStatus.textContent = `已添加 ${ucState.list.length} 个文件，自动开始上传…`;
+    ucPump();
+  };
+
+  // 取消单个上传中任务：abort 分片 XHR + 通知后端清理已传分片 + 释放并发槽
+  const ucCancelUpload = (it) => {
+    it._removed = true;
+    if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (e) { /* ignore */ } });
+    if (it._uploadId) {
+      const fd = new FormData();
+      fd.append('upload_id', it._uploadId);
+      fetch('/api/upload-chunk/abort', { method: 'POST', body: fd, headers: { 'X-Device-Id': deviceId() } }).catch(() => { /* 失败靠 24h 孤儿清理兜底 */ });
+    }
   };
 
   const ucRemoveItem = (id) => {
     const it = ucState.list.find(x => x.id === id);
     if (!it) return;
-    if (it.status === 'running' || it.status === 'uploading') {
+    if (it.status === 'running') {
       el.ucStatus.textContent = '该项正在转码中，无法移除（请等待完成或失败）';
+      return;
+    }
+    if (it.status === 'uploading' || it.status === 'uploaded') {
+      ucCancelUpload(it);   // 取消/待转码：abort 分片（如有）+ 通知后端清理已传分片
+      ucState.list = ucState.list.filter(x => x.id !== id);
+      if (it.status === 'uploading') {
+        ucState.active = Math.max(0, ucState.active - 1);  // uploading 时 promise 未结束，手动释放槽
+      }
+      renderUcList();
+      el.ucStatus.textContent = '已取消并移除';
+      ucPump();  // 拉下一个 pending / 刷新批量按钮状态
       return;
     }
     ucState.list = ucState.list.filter(x => x.id !== id);
@@ -1497,23 +1764,179 @@
   };
 
   const ucClearAll = () => {
-    const running = ucState.list.filter(x => x.status === 'running' || x.status === 'uploading').length;
+    const running = ucState.list.filter(x => x.status === 'running').length;
     if (running) {
-      el.ucStatus.textContent = `有 ${running} 个任务正在进行，请等待完成后再清空`;
+      el.ucStatus.textContent = `有 ${running} 个任务正在转码，请等待完成后再清空`;
       return;
     }
+    // 取消所有上传中 + 待转码项（清理分片），再清空
+    const uploading = ucState.list.filter(x => x.status === 'uploading');
+    const uploaded = ucState.list.filter(x => x.status === 'uploaded');
+    uploading.concat(uploaded).forEach(ucCancelUpload);
+    ucState.active = Math.max(0, ucState.active - uploading.length);  // 仅 uploading 占用并发槽
     ucState.list = [];
     renderUcList();
-    el.ucStatus.textContent = '已清空列表';
+    const n = uploading.length + uploaded.length;
+    el.ucStatus.textContent = n ? `已取消 ${n} 个任务并清空列表` : '已清空列表';
+    ucPump();
   };
 
-  // 上传 + 启动单个 job（用 XHR 拿到上传进度；jobId 返回时切换为 running）
+  // 上传单个分片（32MB；小文件=1 片，与整传等效）
+  // endpoint: 上传目标（双端点混合上传时按分片轮询/故障转移选择；默认同源）
+  // onProgress(loaded) 让调用方合并 in-flight 字节算总进度，避免「长时间 0%」假卡死
+  // xhrs(Set) 收集进行中的 XHR，供「上传中删除」时 abort
+  const ucUploadChunk = (uploadId, index, total, blob, onProgress, xhrs, endpoint) => new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('upload_id', uploadId);
+    form.append('index', index);
+    form.append('total', total);
+    form.append('file', blob, 'chunk');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', (endpoint || location.origin) + '/api/upload-chunk');
+    // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
+    xhr.setRequestHeader('X-Device-Id', deviceId());
+    xhr.timeout = 120000;   // 2 分钟单片超时（防后台 tab 限流/网络静默断网卡死）
+    if (xhrs) xhrs.add(xhr);
+    const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (ev.lengthComputable) onProgress(ev.loaded);
+      });
+    }
+    xhr.addEventListener('load', () => {
+      cleanup();
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else {
+        let msg = '分片上传失败 HTTP ' + xhr.status;
+        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) msg = d.detail; } catch (e) { /* ignore */ }
+        reject(new Error(msg));
+      }
+    });
+    xhr.addEventListener('error', () => { cleanup(); reject(new Error('网络错误')); });
+    xhr.addEventListener('timeout', () => { cleanup(); reject(new Error('分片超时（2 分钟无响应，可能是网络断/后台 tab 限流）')); });
+    xhr.addEventListener('abort', () => { cleanup(); reject(new Error('已取消')); });
+    xhr.send(form);
+  });
+
+  // 上传 + 启动单个 job：32MB 分片 × 4 路并发，进度占 30%（转码从 30% 累加），实时速度显示
   const ucUploadOne = (item) => new Promise((resolve, reject) => {
     item.status = 'uploading';
     item.progress = 0;
+    item.speedText = '';
+    item.uploadedText = '';
+    item._removed = false;            // 上传中删除标记（abort 后不再重试/不再 finish）
+    item._xhrs = new Set();           // 进行中的分片 XHR（删除时 abort）
+    item._chStats = ucChStats();      // 双通道质量统计（动态选路用）
+    renderUcList();
+    const file = item.file;
+    // >2GB 大文件用 64MB 分片（减少请求数）；否则 32MB
+    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    const uploadId = item._uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    let uploadedBytes = 0;          // 已成功分片的累计字节
+    const done = new Set();          // 已成功分片 index（重试去重）
+    const inFlight = new Map();      // 正在上传分片 index → 当前 loaded 字节（合并算进度，避免「长时间 0%」）
+    const t0 = performance.now();
+    let lastBytes = 0, lastT = t0;
+
+    // 计算总已上传字节 = 已完成分片 + 所有 in-flight 分片当前 loaded
+    const totalUploaded = () => {
+      let t = uploadedBytes;
+      for (const v of inFlight.values()) t += v;
+      return t;
+    };
+
+    const updateProgress = () => {
+      const now = performance.now();
+      const tot = totalUploaded();
+      const dt = (now - lastT) / 1000;
+      if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度
+        item.speedText = ucFormatSpeed((tot - lastBytes) / dt);
+        lastBytes = tot;
+        lastT = now;
+      }
+      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
+      item.progress = Math.round(tot / file.size * 30);
+      // 定向更新该行 DOM（进度条 + 状态文字），不重建整个列表——
+      // 否则高频渲染会反复重建下拉/卡片导致闪烁与焦点丢失
+      const li = document.querySelector(`.uc-item[data-id="${item.id}"]`);
+      if (li) {
+        const fill = li.querySelector('.progress-fill');
+        if (fill) fill.style.width = `${item.progress || 0}%`;
+        const st = li.querySelector('.uc-item-status');
+        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+      }
+    };
+
+    // 分片并发 worker 池：每片失败重试 UC_CHUNK_RETRIES 次，耗尽则整个文件失败
+    let idx = 0;
+    const workers = [];
+    const worker = async () => {
+      while (idx < totalChunks) {
+        if (item._removed || item.status === 'failed') return;
+        const i = idx++;
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const blob = file.slice(start, end);
+        let attempts = 0;
+        for (;;) {
+          try {
+            const ep = ucPickEndpoint(item, i, attempts);   // 动态选路（快通道优先，重试换端）
+            const stT = performance.now();
+            await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => {
+              inFlight.set(i, loaded);  // 单片实时进度反馈
+              updateProgress();
+            }, item._xhrs, ep);
+            const elT = performance.now();
+            // 记录该通道最近一次成功分片的吞吐样本（bytes/ms），供后续分片选路
+            item._chStats.total++;
+            item._chStats.add(UC_UPLOAD_ENDPOINTS.indexOf(ep), end - start, elT - stT);
+            break;
+          } catch (e) {
+            if (item._removed) return;  // 用户已删除：直接退出，不重试不报错
+            attempts++;
+            if (attempts > UC_CHUNK_RETRIES) {
+              item.status = 'failed';
+              // 区分超时（2 分钟无响应，多为后台 tab 限流或网络静默断）：建议刷新后保持前台重传
+              const hint = /超时/.test(e.message) ? '（建议保持上传页面在前台后重传）' : '';
+              item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}${hint}`;
+              item.speedText = ''; item.uploadedText = '';
+              renderUcList();
+              reject(new Error(item.errorMsg));
+              return;
+            }
+          }
+        }
+        inFlight.delete(i);
+        if (!done.has(i)) { done.add(i); uploadedBytes += (end - start); }
+        updateProgress();
+      }
+    };
+    for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
+
+    // 全部分片上传完成 → 停在「已上传·待转码」，等用户点开始转码（单行或批量）
+    Promise.allSettled(workers).then(() => {
+      if (item._removed || item.status === 'failed') return;
+      item.status = 'uploaded';       // 已上传·待转码（新状态）
+      item.progress = 30;
+      item.speedText = ''; item.uploadedText = '';
+      item._totalChunks = totalChunks; // 供 ucFinishOne 提交转码时使用
+      renderUcList();
+      resolve({ status: 'uploaded' });
+    });
+  });
+
+  // 提交转码：调 finish 合并分片 + 启动 job（用该行最新设置的格式/参数；finish 一次性，失败需重传）
+  const ucFinishOne = (item) => new Promise((resolve, reject) => {
+    if (!item || item.status !== 'uploaded') { reject(new Error('状态不允许开始转码')); return; }
+    item.status = 'running';
+    item.progress = 30;
+    item.stage = '';
     renderUcList();
     const form = new FormData();
-    form.append('file', item.file);
+    form.append('upload_id', item._uploadId);
+    form.append('total', item._totalChunks || 1);
+    form.append('filename', item.file.name);
     form.append('target', item.target);
     form.append('resolution', item.res);
     form.append('bitrate', item.bitrate || '');
@@ -1522,14 +1945,9 @@
     form.append('remux', item.remux ? 'true' : 'false');
     form.append('to_library', item.toLibrary ? 'true' : 'false');
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload-convert');
-    xhr.upload.addEventListener('progress', (ev) => {
-      if (ev.lengthComputable) {
-        // 上传阶段最多占 30%，转码从 30% 开始累加
-        item.progress = Math.round(ev.loaded / ev.total * 30);
-        renderUcList();
-      }
-    });
+    xhr.open('POST', '/api/upload-chunk/finish');
+    xhr.setRequestHeader('X-Device-Id', deviceId());
+    xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
     xhr.addEventListener('load', () => {
       try {
         const data = JSON.parse(xhr.responseText || '{}');
@@ -1537,26 +1955,41 @@
           item.jobId = data.job_id;
           item.status = 'running';
           item.progress = 30;
+          item.speedText = ''; item.uploadedText = '';
           renderUcList();
           resolve(data);
         } else {
           item.status = 'failed';
-          item.errorMsg = data.error || ('HTTP ' + xhr.status);
+          let msg = data.detail || data.error || ('HTTP ' + xhr.status);
+          if (/分片不完整|分片参数|文件超过|合并/.test(msg)) {
+            // finish 是一次性操作（合并时已 unlink 部分 parts），分片无法服务端重试，只能重传
+            msg += '（请移除此行后重新添加文件上传）';
+          }
+          item.errorMsg = msg;
+          item.speedText = ''; item.uploadedText = '';
           renderUcList();
-          reject(new Error(item.errorMsg));
+          reject(new Error(msg));
         }
       } catch (e) {
+        // responseText 非 JSON（HTML 错误页/空响应/被代理截断）—— 通常是 Cloudflare↔Railway 链路抖动，
+        // 提示用户重新上传（finish 是合并+提交转码一次性操作，无法重试，只能重传）
         item.status = 'failed';
-        item.errorMsg = '响应解析失败';
+        item.errorMsg = '服务器响应中断（可能是网络/代理超时），请重新上传文件';
         renderUcList();
         reject(e);
       }
     });
     xhr.addEventListener('error', () => {
       item.status = 'failed';
-      item.errorMsg = '网络错误';
+      item.errorMsg = '网络错误（请重新上传文件）';
       renderUcList();
       reject(new Error('network'));
+    });
+    xhr.addEventListener('timeout', () => {
+      item.status = 'failed';
+      item.errorMsg = '上传完成但响应超时（请重新上传文件）';
+      renderUcList();
+      reject(new Error('finish timeout'));
     });
     xhr.send(form);
   });
@@ -1577,16 +2010,18 @@
     // 启停轮询定时器：没有 running 任务就停
     const hasRunning = ucState.list.some(x => x.status === 'running');
     if (hasRunning && !ucState.polling) {
-      ucState.polling = setInterval(ucPollAll, 3000);
+      ucState.polling = setInterval(ucPollAll, UC_POLL_INTERVAL);
     } else if (!hasRunning && ucState.polling) {
       clearInterval(ucState.polling);
       ucState.polling = null;
       const done = ucState.list.filter(x => x.status === 'completed').length;
       const fail = ucState.list.filter(x => x.status === 'failed').length;
       const remain = ucState.list.filter(x => x.status === 'pending').length;
+      const wait = ucState.list.filter(x => x.status === 'uploaded').length;
       const parts = [];
       if (done) parts.push(`${done} 完成`);
       if (fail) parts.push(`${fail} 失败`);
+      if (wait) parts.push(`${wait} 待转码`);
       if (remain) parts.push(`${remain} 未开始`);
       el.ucStatus.textContent = parts.length ? `批量结束：${parts.join('，')}` : '批量结束';
     }
@@ -1602,12 +2037,13 @@
           const p = typeof st.progress === 'number' ? st.progress : 0;
           // 转码进度 30% → 100%
           it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
+          it.stage = st.stage || '排队中';   // 排队/无损直转/转码中 区分显示
           renderUcList();
         } else if (st.status === 'completed') {
           it.status = 'completed';
           it.progress = 100;
-          it.outputName = st.filename || 'converted';
-          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file`;
+          it.outputName = ucBuildOutputName(it);   // `[格式]原文件名.扩展名`，一眼可辨参数与来源
+          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
           it.libraryId = st.library_id || null;
           renderUcList();
         } else if (st.status === 'failed') {
@@ -1618,6 +2054,279 @@
       } catch (_e) { /* 单个轮询失败忽略 */ }
     }));
   };
+
+  // ===== 视频拼接（简单无损合并）：复用分片上传，独立面板 =====
+  const MC_MAX_CONCURRENT = 2;
+  const mcState = { list: [], nextId: 1, active: 0, polling: null };
+  const mcListEl = document.getElementById('mcList');
+  const mcCountEl = document.getElementById('mcCount');
+  const mcStatusEl = document.getElementById('mcStatus');
+  const mcAddBtn = document.getElementById('mcAddBtn');
+  const mcFileInput = document.getElementById('mcFileInput');
+  const mcClearBtn = document.getElementById('mcClearBtn');
+  const mcOutFormat = document.getElementById('mcOutFormat');
+  const mcOutName = document.getElementById('mcOutName');
+  const mcLibrary = document.getElementById('mcLibrary');
+  const mcMergeBtn = document.getElementById('mcMergeBtn');
+  const mcFormatSize = ucFormatSize;
+
+  const mcRender = () => {
+    const segs = mcState.list.filter(x => !x.isResult);
+    mcCountEl.textContent = segs.length ? `已添加 ${segs.length} 个片段` : '尚未添加片段';
+    mcClearBtn.hidden = mcState.list.length === 0;
+    const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult).length;
+    mcMergeBtn.disabled = ready < 2;
+    if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
+    mcListEl.innerHTML = mcState.list.map((it, idx) => {
+      const name = it.file ? it.file.name : it.label;
+      const statusText = it.isResult
+        ? (it.status === 'running'
+             ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
+             : it.status === 'completed' ? '完成 ✅' : '失败：' + (it.errorMsg || ''))
+        : (it.status === 'uploading'
+             ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
+             : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
+      const cls = it.status === 'pending' ? '' : ('is-' + it.status.replace('uploading', 'running'));
+      const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
+      const progressHtml = (it.status === 'running' || it.status === 'uploading')
+        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+      const downloadHtml = it.status === 'completed' && it.downloadUrl
+        ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'merged'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}` : '';
+      const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
+      const downDisabled = (it.isResult || idx === mcState.list.length - 1) ? 'disabled' : '';
+      return `
+        <li class="uc-item ${cls}" data-id="${it.id}">
+          <div class="uc-item-main">
+            <div class="uc-item-name" title="${name}">${idx + 1}. ${name}</div>
+            ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>` : ''}
+            ${progressHtml}
+            <div class="uc-item-status">${statusText}</div>
+          </div>
+          <div class="uc-item-side">
+            ${it.isResult ? '' : `<button type="button" class="uc-item-start" data-act="up" ${upDisabled} title="上移">↑</button><button type="button" class="uc-item-start" data-act="down" ${downDisabled} title="下移">↓</button>`}
+            ${downloadHtml}
+            <button type="button" class="uc-item-remove" data-act="remove" ${disabled}>×</button>
+          </div>
+        </li>`;
+    }).join('');
+  };
+
+  const mcCancelUpload = (it) => {
+    it._removed = true;
+    if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (e) { /* ignore */ } });
+    if (it._uploadId) {
+      const fd = new FormData();
+      fd.append('upload_id', it._uploadId);
+      fetch('/api/upload-chunk/abort', { method: 'POST', body: fd, headers: { 'X-Device-Id': deviceId() } }).catch(() => { /* ignore */ });
+    }
+  };
+
+  const mcRemoveItem = (id) => {
+    const it = mcState.list.find(x => x.id === id);
+    if (!it) return;
+    if (it.status === 'running') { mcStatusEl.textContent = '任务进行中，暂无法移除'; return; }
+    if (it.status === 'uploading' || it.status === 'uploaded') {
+      mcCancelUpload(it);
+      mcState.list = mcState.list.filter(x => x.id !== id);
+      if (it.status === 'uploading') mcState.active = Math.max(0, mcState.active - 1);
+      mcRender();
+      mcStatusEl.textContent = '已移除';
+      mcPump();
+      return;
+    }
+    mcState.list = mcState.list.filter(x => x.id !== id);
+    mcRender();
+  };
+
+  const mcAddFiles = (fileList) => {
+    Array.from(fileList).forEach(f => {
+      mcState.list.push({ id: mcState.nextId++, file: f, status: 'pending', segName: null,
+        progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
+    });
+    mcRender();
+    mcStatusEl.textContent = `已添加 ${mcState.list.filter(x => !x.isResult).length} 个片段，自动上传…`;
+    mcPump();
+  };
+
+  // 上传单个片段（复用 ucUploadChunk）；末尾用 finish(mode=store) 落地为拼接素材
+  const mcUploadOne = (item) => new Promise((resolve) => {
+    item.status = 'uploading'; item.progress = 0; item.speedText = ''; item.uploadedText = '';
+    item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
+    mcRender();
+    const file = item.file;
+    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    const uploadId = item._uploadId = 'mc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
+    const t0 = performance.now(); let lastBytes = 0, lastT = t0;
+    const totalUploaded = () => { let t = uploadedBytes; for (const v of inFlight.values()) t += v; return t; };
+    const updateProgress = () => {
+      const now = performance.now(); const tot = totalUploaded(); const dt = (now - lastT) / 1000;
+      if (dt > 0.4) { item.speedText = ucFormatSpeed((tot - lastBytes) / dt); lastBytes = tot; lastT = now; }
+      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
+      item.progress = Math.round(tot / file.size * 30);
+      const li = mcListEl.querySelector(`.uc-item[data-id="${item.id}"]`);
+      if (li) {
+        const fill = li.querySelector('.progress-fill');
+        if (fill) fill.style.width = `${item.progress || 0}%`;
+        const st = li.querySelector('.uc-item-status');
+        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+      }
+    };
+    let idx = 0; const workers = [];
+    const worker = async () => {
+      while (idx < totalChunks) {
+        if (item._removed || item.status === 'failed') return;
+        const i = idx++;
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const blob = file.slice(start, end);
+        let attempts = 0;
+        for (;;) {
+          try {
+            const ep = ucPickEndpoint(item, i, attempts);
+            const stT = performance.now();
+            await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => { inFlight.set(i, loaded); updateProgress(); }, item._xhrs, ep);
+            const elT = performance.now();
+            item._chStats.total++;
+            item._chStats.add(UC_UPLOAD_ENDPOINTS.indexOf(ep), end - start, elT - stT);
+            break;
+          } catch (e) {
+            if (item._removed) return;
+            attempts++;
+            if (attempts > UC_CHUNK_RETRIES) {
+              item.status = 'failed';
+              const hint = /超时/.test(e.message) ? '（建议保持上传页面在前台后重传）' : '';
+              item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}${hint}`;
+              item.speedText = ''; item.uploadedText = ''; mcRender();
+              resolve(); return;
+            }
+          }
+        }
+        inFlight.delete(i);
+        if (!done.has(i)) { done.add(i); uploadedBytes += (end - start); }
+        updateProgress();
+      }
+    };
+    for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
+    Promise.allSettled(workers).then(() => {
+      if (item._removed || item.status === 'failed') return;
+      const form = new FormData();
+      form.append('upload_id', uploadId);
+      form.append('total', totalChunks);
+      form.append('filename', item.file.name);
+      form.append('target', 'mp4');     // store 模式不转码，target 仅占位
+      form.append('mode', 'store');
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload-chunk/finish');
+      xhr.setRequestHeader('X-Device-Id', deviceId());
+      xhr.timeout = 120000;
+      xhr.addEventListener('load', () => {
+        try {
+          const data = JSON.parse(xhr.responseText || '{}');
+          if (xhr.status >= 200 && xhr.status < 300 && data.seg_id) {
+            item.segName = data.seg_name;
+            item.status = 'uploaded'; item.progress = 30; item.speedText = ''; item.uploadedText = '';
+            mcRender();
+          } else {
+            item.status = 'failed';
+            let msg = data.detail || data.error || ('HTTP ' + xhr.status);
+            if (/分片不完整|分片参数|文件超过|合并/.test(msg)) msg += '（请移除后重新添加）';
+            item.errorMsg = msg;
+          }
+        } catch (e) {
+          item.status = 'failed'; item.errorMsg = '服务器响应异常，请移除后重新添加';
+        }
+        mcRender();
+        resolve();
+      });
+      xhr.addEventListener('error', () => { item.status = 'failed'; item.errorMsg = '网络错误'; mcRender(); resolve(); });
+      xhr.addEventListener('timeout', () => { item.status = 'failed'; item.errorMsg = '上传超时，请移除后重新添加'; mcRender(); resolve(); });
+      xhr.send(form);
+    });
+  });
+
+  const mcPoll = async () => {
+    const running = mcState.list.filter(x => x.isResult && x.status === 'running' && x.jobId);
+    await Promise.all(running.map(async (it) => {
+      try {
+        const st = await request('/api/convert/' + it.jobId);
+        if (st.status === 'running') {
+          const p = typeof st.progress === 'number' ? st.progress : 0;
+          it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
+          it.stage = st.stage || '';
+          mcRender();
+        } else if (st.status === 'completed') {
+          it.status = 'completed'; it.progress = 100;
+          it.outputName = `[${mcOutFormat.value.toUpperCase()}]${mcOutName.value || 'merged'}.${UC_EXT_OF[mcOutFormat.value] || mcOutFormat.value}`;
+          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
+          it.libraryId = st.library_id || null;
+          mcRender();
+        } else if (st.status === 'failed') {
+          it.status = 'failed'; it.errorMsg = st.error || '未知错误';
+          mcRender();
+        }
+      } catch (_e) { /* 忽略 */ }
+    }));
+  };
+
+  const mcPump = () => {
+    while (mcState.active < MC_MAX_CONCURRENT) {
+      const next = mcState.list.find(x => !x.isResult && x.status === 'pending');
+      if (!next) break;
+      mcState.active++;
+      mcUploadOne(next).catch(() => { /* 失败已标记 */ }).finally(() => { mcState.active--; mcPump(); });
+    }
+  };
+
+  mcAddBtn.addEventListener('click', () => mcFileInput.click());
+  mcFileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length) mcAddFiles(e.target.files);
+    e.target.value = '';
+  });
+  mcClearBtn.addEventListener('click', () => {
+    if (mcState.list.some(x => x.status === 'running')) { mcStatusEl.textContent = '有任务进行中，请等待完成后再清空'; return; }
+    mcState.list.filter(x => x.status === 'uploading' || x.status === 'uploaded').forEach(mcCancelUpload);
+    mcState.active = 0; mcState.list = []; mcRender(); mcStatusEl.textContent = '已清空'; mcPump();
+  });
+  mcListEl.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act]');
+    if (!t) return;
+    const li = t.closest('.uc-item');
+    const it = mcState.list.find(x => x.id === +li.dataset.id);
+    if (!it || it.isResult) return;
+    const act = t.dataset.act;
+    if (act === 'remove') mcRemoveItem(it.id);
+    else if (act === 'up' || act === 'down') {
+      const idx = mcState.list.indexOf(it);
+      const ni = act === 'up' ? idx - 1 : idx + 1;
+      const swap = mcState.list[ni];
+      if (swap && !swap.isResult) { mcState.list[idx] = swap; mcState.list[ni] = it; mcRender(); }
+    }
+  });
+  mcMergeBtn.addEventListener('click', () => {
+    const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult);
+    if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的片段'; return; }
+    const body = {
+      segments: ready.map(x => x.segName),
+      out_format: mcOutFormat.value,
+      out_name: mcOutName.value || 'merged',
+      to_library: mcLibrary.checked,
+    };
+    request('/api/concat', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
+      .then(data => {
+        if (data.job_id) {
+          mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果', status: 'running',
+            jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null });
+          mcState.polling = setInterval(mcPoll, UC_POLL_INTERVAL);
+          mcStatusEl.textContent = '拼接中…';
+          mcRender();
+        } else {
+          mcStatusEl.textContent = data.detail || data.error || '拼接失败';
+        }
+      })
+      .catch(() => { mcStatusEl.textContent = '拼接请求失败，请重试'; });
+  });
 
   // 事件绑定
   el.ucAddBtn.addEventListener('click', () => el.ucFileInput.click());
@@ -1642,15 +2351,28 @@
     if (t.dataset.act === 'remove') {
       const li = t.closest('.uc-item');
       ucRemoveItem(+li.dataset.id);
+    } else if (t.dataset.act === 'start') {
+      // 单行「开始转码」：用该行最新设置的格式单独开始，不影响其他行
+      const li = t.closest('.uc-item');
+      const it = ucState.list.find(x => x.id === +li.dataset.id);
+      if (it && it.status === 'uploaded') {
+        el.ucStatus.textContent = `开始转码：${it.file.name}`;
+        ucEnsurePolling();   // 立即启动轮询，进度实时可见
+        ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
+      }
     }
   });
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   el.ucStartAllBtn.addEventListener('click', () => {
-    const hasPending = ucState.list.some(x => x.status === 'pending');
-    if (!hasPending) { el.ucStatus.textContent = '没有可开始的项'; return; }
-    el.ucStatus.textContent = '批量转换中…';
-    ucPump();
+    // 批量开始转码：所有「已上传·待转码」行统一提交（每行用各自已设置的格式）
+    const wait = ucState.list.filter(x => x.status === 'uploaded');
+    if (!wait.length) { el.ucStatus.textContent = '没有已上传待转码的项（先添加文件上传）'; return; }
+    el.ucStatus.textContent = `批量转换中…（${wait.length} 个）`;
+    ucEnsurePolling();   // 立即启动轮询，各进度实时可见
+    wait.forEach(it => {
+      ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
+    });
   });
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
@@ -1677,41 +2399,237 @@
   let dwSelections = [];   // [{x,y,w,h,op}] 归一化 0..1，op: 'add' | 'subtract'
   let dwDrawMode = 'new';  // 'new' | 'add' | 'subtract'
   let dwDragging = false, dwStartX = 0, dwStartY = 0, dwCur = null;
+  let dwPanning = false, dwPanLastX = 0, dwPanLastY = 0, dwPanX = 0, dwPanY = 0;
 
-  const dwResizeCanvas = () => {
-    const img = el.dwImgPreview, cv = el.dwImgCanvas;
-    if (!img || !cv || !img.clientWidth) return;
+  const dwResizeOverlay = (wrap, img, cv, svg) => {
+    if (!wrap || !img || !cv || !svg || !img.clientWidth) return;
+    // canvas/svg 必须紧跟 img 的实际位置（含滚动偏移/居中偏移），否则放大或滚动后会错位
+    const left = img.offsetLeft;
+    const top = img.offsetTop;
     cv.width = img.clientWidth;
     cv.height = img.clientHeight;
     cv.style.width = img.clientWidth + 'px';
     cv.style.height = img.clientHeight + 'px';
-    dwDrawCanvas();
+    cv.style.left = left + 'px';
+    cv.style.top = top + 'px';
+    svg.setAttribute('width', img.clientWidth);
+    svg.setAttribute('height', img.clientHeight);
+    svg.setAttribute('viewBox', `0 0 ${img.clientWidth} ${img.clientHeight}`);
+    svg.style.width = img.clientWidth + 'px';
+    svg.style.height = img.clientHeight + 'px';
+    svg.style.left = left + 'px';
+    svg.style.top = top + 'px';
   };
-  const dwDrawCanvas = () => {
-    const cv = el.dwImgCanvas;
-    if (!cv) return;
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    const draw = (s, active) => {
-      const add = !s.op || s.op === 'add';
-      const x = s.x * cv.width, y = s.y * cv.height;
-      const w = s.w * cv.width, h = s.h * cv.height;
-      ctx.lineWidth = 2;
-      ctx.setLineDash(active ? [6, 4] : []);
-      ctx.strokeStyle = add ? '#2ecc71' : '#e74c3c';
-      ctx.fillStyle = add ? 'rgba(46,204,113,.18)' : 'rgba(231,76,60,.18)';
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeRect(x, y, w, h);
+
+  const dwResizeAll = () => {
+    dwResizeOverlay(el.dwPreviewWrap, el.dwImgPreview, el.dwImgCanvas, el.dwImgSvg);
+    if (!el.dwImgModal.hidden) {
+      dwResizeOverlay(el.dwModalPreviewWrap, el.dwModalImg, el.dwModalCanvas, el.dwModalSvg);
+    }
+  };
+
+  // 轴对齐矩形并集外轮廓线段（仅用于描边，填充仍走 SVG mask）
+  const dwRectsUnionOutline = (rects) => {
+    if (!rects.length) return [];
+    const EPS = 1e-4;
+    const TOL = 1e-6;   // inside 判定容差（必须远小于探测步长）
+    const GAP = 1e-3;   // 向外探测的步长（必须远大于 TOL，否则边界点被误判为内部）
+    const round = (v) => Math.round(v / EPS) * EPS;
+
+    const xs = [...new Set(rects.flatMap((r) => [round(r.x), round(r.x + r.w)]))].sort((a, b) => a - b);
+    const ys = [...new Set(rects.flatMap((r) => [round(r.y), round(r.y + r.h)]))].sort((a, b) => a - b);
+    if (xs.length < 2 || ys.length < 2) return [];
+
+    const inside = (x, y) => rects.some((r) => x > r.x - TOL && x < r.x + r.w + TOL && y > r.y - TOL && y < r.y + r.h + TOL);
+
+    // 分别收集水平/垂直边界边，再合并共线小边，避免连接多边形失败导致轮廓破碎
+    const hLines = new Map(); // y -> [[x1,x2], ...]
+    const vLines = new Map(); // x -> [[y1,y2], ...]
+    const addH = (y, x1, x2) => { if (!hLines.has(y)) hLines.set(y, []); hLines.get(y).push([x1, x2]); };
+    const addV = (x, y1, y2) => { if (!vLines.has(x)) vLines.set(x, []); vLines.get(x).push([y1, y2]); };
+
+    for (let i = 0; i < xs.length - 1; i++) {
+      for (let j = 0; j < ys.length - 1; j++) {
+        const cx = (xs[i] + xs[i + 1]) / 2;
+        const cy = (ys[j] + ys[j + 1]) / 2;
+        if (!inside(cx, cy)) continue;
+        if (!inside(xs[i] - GAP, cy)) addV(xs[i], ys[j], ys[j + 1]);
+        if (!inside(xs[i + 1] + GAP, cy)) addV(xs[i + 1], ys[j], ys[j + 1]);
+        if (!inside(cx, ys[j] - GAP)) addH(ys[j], xs[i], xs[i + 1]);
+        if (!inside(cx, ys[j + 1] + GAP)) addH(ys[j + 1], xs[i], xs[i + 1]);
+      }
+    }
+
+    const merge = (intervals) => {
+      intervals.sort((a, b) => a[0] - b[0]);
+      const out = [];
+      for (const [s, e] of intervals) {
+        if (!out.length || s > out[out.length - 1][1] + EPS) out.push([s, e]);
+        else out[out.length - 1][1] = Math.max(out[out.length - 1][1], e);
+      }
+      return out;
     };
-    dwSelections.forEach((s) => draw(s, false));
-    if (dwCur) draw(dwCur, true);
-    ctx.setLineDash([]);
-    const adds = dwSelections.filter((s) => !s.op || s.op === 'add').length;
-    const subs = dwSelections.filter((s) => s.op === 'subtract').length;
-    if (el.dwSelInfo) el.dwSelInfo.textContent = dwSelections.length ? `已选 ${adds} 加 / ${subs} 减` : '尚未框选';
+
+    const segs = [];
+    hLines.forEach((intervals, y) => merge(intervals).forEach(([x1, x2]) => segs.push({ x1, y1: y, x2, y2: y })));
+    vLines.forEach((intervals, x) => merge(intervals).forEach(([y1, y2]) => segs.push({ x1: x, y1, x2: x, y2: y2 })));
+    return segs;
   };
-  const dwNormFromEvent = (clientX, clientY) => {
-    const img = el.dwImgPreview, rect = img.getBoundingClientRect();
+
+  const dwDrawOverlay = (cv, svg, infoEl) => {
+    if (!cv || !svg) return;
+    const W = cv.width, H = cv.height;
+
+    // Canvas 仅用于实时拖拽框
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    if (dwCur) {
+      const x = dwCur.x * W, y = dwCur.y * H;
+      const w = dwCur.w * W, h = dwCur.h * H;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeStyle = '#2ecc71';
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+    }
+
+    // SVG：加选区求并集轮廓（重叠区不再消失），减选区与并集求交作为洞挖除
+    svg.innerHTML = '';
+    if (!dwSelections.length) {
+      if (infoEl) infoEl.textContent = '尚未框选';
+      return;
+    }
+    const toPx = (s) => ({ x: s.x * W, y: s.y * H, w: s.w * W, h: s.h * H });
+    const adds = dwSelections.filter((s) => !s.op || s.op === 'add').map(toPx);
+    const subs = dwSelections.filter((s) => s.op === 'subtract').map(toPx);
+
+    const isModal = svg === el.dwModalSvg;
+    const maskId = isModal ? 'dwMaskModal' : 'dwMaskMain';
+    const NS = 'http://www.w3.org/2000/svg';
+
+    // SVG mask：加选区填白（保留），减选区填黑（挖洞），天然实现布尔并/差
+    const defs = document.createElementNS(NS, 'defs');
+    const mask = document.createElementNS(NS, 'mask');
+    mask.setAttribute('id', maskId);
+    const maskBg = document.createElementNS(NS, 'rect');
+    maskBg.setAttribute('x', 0);
+    maskBg.setAttribute('y', 0);
+    maskBg.setAttribute('width', W);
+    maskBg.setAttribute('height', H);
+    maskBg.setAttribute('fill', 'black');
+    mask.appendChild(maskBg);
+    adds.forEach((s) => {
+      const r = document.createElementNS(NS, 'rect');
+      r.setAttribute('x', s.x);
+      r.setAttribute('y', s.y);
+      r.setAttribute('width', s.w);
+      r.setAttribute('height', s.h);
+      r.setAttribute('fill', 'white');
+      mask.appendChild(r);
+    });
+    subs.forEach((s) => {
+      const r = document.createElementNS(NS, 'rect');
+      r.setAttribute('x', s.x);
+      r.setAttribute('y', s.y);
+      r.setAttribute('width', s.w);
+      r.setAttribute('height', s.h);
+      r.setAttribute('fill', 'black');
+      mask.appendChild(r);
+    });
+    defs.appendChild(mask);
+    svg.appendChild(defs);
+
+    // 绿色填充：只显示 mask 白区（加选并集），黑区被挖洞
+    const fill = document.createElementNS(NS, 'rect');
+    fill.setAttribute('x', 0);
+    fill.setAttribute('y', 0);
+    fill.setAttribute('width', W);
+    fill.setAttribute('height', H);
+    fill.setAttribute('fill', 'rgba(46,204,113,.22)');
+    fill.setAttribute('mask', `url(#${maskId})`);
+    svg.appendChild(fill);
+
+    // 加选区外轮廓虚线：重叠后只保留合并外边框，内部不再有多余虚线
+    const outline = dwRectsUnionOutline(adds);
+    if (outline.length) {
+      const d = outline.map((s) => `M${s.x1.toFixed(2)},${s.y1.toFixed(2)} L${s.x2.toFixed(2)},${s.y2.toFixed(2)}`).join(' ');
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      p.setAttribute('fill', 'none');
+      p.setAttribute('stroke', '#2ecc71');
+      p.setAttribute('stroke-width', '1');
+      p.setAttribute('stroke-dasharray', '5,3');
+      svg.appendChild(p);
+    }
+
+    // 减选区绿色虚线（与加选区同色，仅边框，内部由 mask 挖洞显示原图）
+    subs.forEach((s) => {
+      const r = document.createElementNS(NS, 'rect');
+      r.setAttribute('x', s.x);
+      r.setAttribute('y', s.y);
+      r.setAttribute('width', s.w);
+      r.setAttribute('height', s.h);
+      r.setAttribute('fill', 'none');
+      r.setAttribute('stroke', '#2ecc71');
+      r.setAttribute('stroke-width', '1');
+      r.setAttribute('stroke-dasharray', '5,3');
+      svg.appendChild(r);
+    });
+
+    if (infoEl) infoEl.textContent = `已选 ${adds.length} 加 / ${subs.length} 减`;
+  };
+
+  const dwDrawAll = () => {
+    dwDrawOverlay(el.dwImgCanvas, el.dwImgSvg, el.dwSelInfo);
+    if (!el.dwImgModal.hidden) {
+      dwDrawOverlay(el.dwModalCanvas, el.dwModalSvg, el.dwModalSelInfo);
+    }
+  };
+  // 缩放：主预览区与弹窗各自独立（相对各自容器适应宽度的倍数，1 = 适应）
+  let dwZoom = 1;       // 主预览区
+  let dwModalZoom = 1;  // 弹窗
+  const dwApplyZoom = (target) => {
+    const isModal = target === 'modal';
+    const img = isModal ? el.dwModalImg : el.dwImgPreview;
+    const label = isModal ? el.dwModalZoomLabel : el.dwZoomLabel;
+    const z = isModal ? dwModalZoom : dwZoom;
+    if (!img || !img.src || !img.naturalWidth) return;
+    if (isModal) {
+      // 缩放变化时重置平移，避免叠加错位
+      dwPanX = 0; dwPanY = 0;
+      if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.style.transform = 'translate(0px, 0px)';
+      // 弹窗：先按可用区域 contain 适配（zoom=1 即完整显示），再按倍数放大
+      const body = el.dwModalPreviewWrap.closest('.dw-modal-body') || el.dwModalPreviewWrap.parentElement;
+      const pad = 24; // body padding .75rem*2
+      const availW = Math.max(50, (body.clientWidth || img.naturalWidth) - pad);
+      const availH = Math.max(50, (body.clientHeight || img.naturalHeight) - pad);
+      const fitScale = Math.min(availW / img.naturalWidth, availH / img.naturalHeight, 1);
+      const scale = fitScale * z;
+      img.style.maxWidth = 'none';
+      img.style.maxHeight = 'none';
+      img.style.width = Math.max(1, Math.round(img.naturalWidth * scale)) + 'px';
+      img.style.height = Math.max(1, Math.round(img.naturalHeight * scale)) + 'px';
+    } else {
+      // 先重置到适应尺寸，测量 fitW
+      img.style.maxWidth = '100%';
+      img.style.maxHeight = '420px';
+      img.style.width = 'auto';
+      const fitW = img.clientWidth || 1;
+      if (z <= 1.0001) {
+        dwZoom = 1;
+        img.style.width = 'auto';
+      } else {
+        img.style.width = Math.round(fitW * z) + 'px';
+      }
+    }
+    if (label) label.textContent = Math.round(z * 100) + '%';
+    dwResizeAll();
+    dwDrawAll();
+  };
+
+  const dwNormFromEvent = (img, clientX, clientY) => {
+    if (!img) return [0, 0];
+    const rect = img.getBoundingClientRect();
     const nx = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
     const ny = Math.min(Math.max((clientY - rect.top) / rect.height, 0), 1);
     return [nx, ny];
@@ -1722,60 +2640,180 @@
     if (!f) return;
     const url = URL.createObjectURL(f);
     el.dwImgPreview.src = url;
-    el.dwImgPreview.onload = () => { URL.revokeObjectURL(url); dwResizeCanvas(); };
+    el.dwModalImg.src = url;
+    const onload = () => {
+      URL.revokeObjectURL(url);
+      dwZoom = 1;
+      dwModalZoom = 1;
+      if (el.dwZoomLabel) el.dwZoomLabel.textContent = '100%';
+      if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
+      dwResizeAll();
+      dwDrawAll();
+    };
+    el.dwImgPreview.onload = onload;
+    el.dwModalImg.onload = onload;
     dwSelections = [];
     dwCur = null;
-    dwDrawCanvas();
+    dwDrawAll();
     el.dwImgResult.hidden = true;
     el.dwImgStatus.textContent = '';
   });
 
-  el.dwImgPreview.addEventListener('mousedown', (e) => {
-    if (!el.dwImgPreview.src) return;
-    dwDragging = true;
-    const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
-    dwStartX = nx; dwStartY = ny;
-    if (dwDrawMode === 'new') dwSelections = [];
-    dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
-    dwDrawCanvas();
-    e.preventDefault();
-  });
+  // 当前拖拽目标：'preview' | 'modal'，用于全局 mousemove/mouseup 知道该用哪张图
+  let dwDragTarget = null;
+
+  // 通用：给某个视图绑定滚轮缩放 / 双击切换 / 拖拽框选
+  const dwBindView = (img, cv, zObj, target) => {
+    img.addEventListener('wheel', (e) => {
+      if (!img.src) return;
+      e.preventDefault();
+      zObj.value = e.deltaY < 0 ? Math.min(5, zObj.value + 0.2) : Math.max(1, zObj.value - 0.2);
+      dwApplyZoom(target);
+    }, { passive: false });
+    img.addEventListener('dblclick', (e) => {
+      if (!img.src) return;
+      zObj.value = zObj.value > 1.0001 ? 1 : 2;
+      dwApplyZoom(target);
+      e.preventDefault();
+    });
+    cv.addEventListener('mousedown', (e) => {
+      if (!img.src) return;
+      // 弹窗放大后：✋移动模式 或 起点落在已有加选区内 → 平移图片（不画框）
+      let startPan = false;
+      if (target === 'modal') {
+        const z = dwModalZoom;
+        if (dwDrawMode === 'pan') startPan = true;
+        else if (z > 1.0001) {
+          const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
+          if (dwSelections.some((s) => !s.op || s.op === 'add' && nx >= s.x && nx <= s.x + s.w && ny >= s.y && ny <= s.y + s.h)) {
+            startPan = true;
+          }
+        }
+      }
+      if (startPan) {
+        dwPanning = true;
+        dwDragTarget = 'modal';
+        dwPanLastX = e.clientX;
+        dwPanLastY = e.clientY;
+        e.preventDefault();
+        return;
+      }
+      dwDragging = true;
+      dwDragTarget = target;
+      const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
+      dwStartX = nx; dwStartY = ny;
+      dwCur = { x: nx, y: ny, w: 0, h: 0, op: dwDrawMode === 'subtract' ? 'subtract' : 'add' };
+      dwDrawAll();
+      e.preventDefault();
+    });
+  };
+  dwBindView(el.dwImgPreview, el.dwImgCanvas, { get value() { return dwZoom; }, set value(v) { dwZoom = v; } }, 'preview');
+  dwBindView(el.dwModalImg, el.dwModalCanvas, { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }, 'modal');
+
+  // 滚动时叠加层必须重新跟随图片位置，否则选区会“跑”
+  if (el.dwPreviewWrap) el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  if (el.dwModalPreviewWrap) {
+    // 弹窗真正的滚动容器是 .dw-modal-body（wrap 本身 overflow:visible 不滚动）
+    const modalBody = el.dwModalPreviewWrap.closest('.dw-modal-body');
+    if (modalBody) modalBody.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  }
+
   window.addEventListener('mousemove', (e) => {
-    if (!dwDragging || !dwCur) return;
-    const [nx, ny] = dwNormFromEvent(e.clientX, e.clientY);
+    if (dwPanning && dwDragTarget === 'modal') {
+      dwPanX += e.clientX - dwPanLastX;
+      dwPanY += e.clientY - dwPanLastY;
+      dwPanLastX = e.clientX;
+      dwPanLastY = e.clientY;
+      if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.style.transform = `translate(${dwPanX}px, ${dwPanY}px)`;
+      return;
+    }
+    if (!dwDragging || !dwCur || !dwDragTarget) return;
+    const img = dwDragTarget === 'modal' ? el.dwModalImg : el.dwImgPreview;
+    const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
     dwCur.x = Math.min(dwStartX, nx);
     dwCur.y = Math.min(dwStartY, ny);
     dwCur.w = Math.abs(nx - dwStartX);
     dwCur.h = Math.abs(ny - dwStartY);
-    dwDrawCanvas();
+    dwDrawAll();
   });
   window.addEventListener('mouseup', () => {
+    if (dwPanning) {
+      dwPanning = false;
+      dwDragTarget = null;
+      return;
+    }
     if (!dwDragging) return;
     dwDragging = false;
+    dwDragTarget = null;
     if (dwCur) {
       // 误点（区域过小）则丢弃
       if (dwCur.w > 0.004 && dwCur.h > 0.004) dwSelections.push(dwCur);
       dwCur = null;
     }
-    dwDrawCanvas();
+    dwDrawAll();
   });
-  window.addEventListener('resize', dwResizeCanvas);
+  window.addEventListener('resize', () => {
+    dwResizeAll();
+    dwDrawAll();
+    if (!el.dwImgModal.hidden) dwApplyZoom('modal');
+  });
 
-  // 选区工具按钮（新建/加选/减选/撤销/清空）
+  // 同步所有模式按钮的高亮状态
+  const dwSyncModeButtons = () => {
+    document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b.dataset.mode === dwDrawMode));
+  };
+
+  // 选区工具按钮（新建/加选/减选/移动/撤销/清空）—— 同时作用于缩略图区和弹窗区
   (document.querySelectorAll('.dw-mode') || []).forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.mode) {
         dwDrawMode = btn.dataset.mode;
-        document.querySelectorAll('.dw-mode[data-mode]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        // 仅“新选区”会清空当前选区；移动/加选/减选保留
+        if (dwDrawMode === 'new') dwSelections = [];
+        dwSyncModeButtons();
+        dwDrawAll();
       } else if (btn.dataset.act === 'undo') {
         dwSelections.pop();
-        dwDrawCanvas();
+        dwDrawAll();
       } else if (btn.dataset.act === 'clear') {
         dwSelections = [];
-        dwDrawCanvas();
+        dwDrawAll();
       }
     });
   });
+
+  // 主预览区缩放按钮
+  if (el.dwZoomIn) el.dwZoomIn.addEventListener('click', () => { dwZoom = Math.min(5, dwZoom + 0.25); dwApplyZoom('preview'); });
+  if (el.dwZoomOut) el.dwZoomOut.addEventListener('click', () => { dwZoom = Math.max(1, dwZoom - 0.25); dwApplyZoom('preview'); });
+  if (el.dwZoomFit) el.dwZoomFit.addEventListener('click', () => { dwZoom = 1; dwApplyZoom('preview'); });
+  // 弹窗缩放按钮
+  if (el.dwModalZoomIn) el.dwModalZoomIn.addEventListener('click', () => { dwModalZoom = Math.min(5, dwModalZoom + 0.25); dwApplyZoom('modal'); });
+  if (el.dwModalZoomOut) el.dwModalZoomOut.addEventListener('click', () => { dwModalZoom = Math.max(1, dwModalZoom - 0.25); dwApplyZoom('modal'); });
+  if (el.dwModalZoomFit) el.dwModalZoomFit.addEventListener('click', () => { dwModalZoom = 1; dwApplyZoom('modal'); });
+
+  // 打开 / 关闭弹窗
+  const dwOpenModal = () => {
+    if (!el.dwImgFile.files[0]) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
+    el.dwImgModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    dwModalZoom = 1;
+    if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
+    // 同步模式按钮高亮
+    dwSyncModeButtons();
+    // 等布局稳定后按可用区域适配（否则弹窗以原图自然尺寸显示，过大无法编辑）
+    requestAnimationFrame(() => requestAnimationFrame(() => dwApplyZoom('modal')));
+  };
+  const dwCloseModal = () => {
+    el.dwImgModal.hidden = true;
+    document.body.style.overflow = '';
+    dwResizeAll();
+    dwDrawAll();
+  };
+  el.dwExpandBtn.addEventListener('click', dwOpenModal);
+  el.dwExpandBtn2.addEventListener('click', dwOpenModal);
+  el.dwModalClose.addEventListener('click', dwCloseModal);
+  el.dwModalDone.addEventListener('click', dwCloseModal);
+  el.dwImgModal.addEventListener('click', (e) => { if (e.target === el.dwImgModal || e.target.classList.contains('dw-modal-backdrop')) dwCloseModal(); });
 
   const startDwImage = async () => {
     const file = el.dwImgFile.files[0];
@@ -2035,6 +3073,9 @@
         const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
         trackTask(tid, refs, '');
       });
+      if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
+        urls.forEach((u) => contributeCookie(u, cookie));
+      }
     } catch (error) {
       if (error.subscribe) {
         promptSubscribe();
@@ -2076,7 +3117,7 @@
       }
     }, POLL_FALLBACK_MS);
 
-    const source = new EventSource(`${base || window.VDL_API_BASE || ''}/api/tasks/${taskId}/events`);
+    const source = new EventSource(`${base || window.VDL_API_BASE || ''}/api/tasks/${taskId}/events?device=${encodeURIComponent(deviceId())}`);
     source.onmessage = (event) => handle(JSON.parse(event.data));
     source.onerror = () => source.close();
 
@@ -2105,7 +3146,227 @@
         merged.push(t);
       }
     }
-    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u));
+    return merged.filter((u) => /\.[a-z]{2,}\/|:\/\/[^/]+\//.test(u)).map(_normalize_url);
+  };
+
+  /** 短链归一化：去掉分享时 App 拼在短码后的尾巴（"/Vlp/..." 等分享参数），
+   * 否则后端解析会拿到非视频页（如 v.douyin.com/ZcevbN5jP8/Vlp/E@u.fO:4pm）。
+   * 仅对已知短链平台截断到短码。 */
+  const _normalize_url = (url) => {
+    if (!url) return url;
+    // 抖音短链：v.douyin.com / iesdouyin.com / m.douyin.com / www.douyin.com 的短链形式
+    let m = url.match(/^https?:\/\/(?:[a-z0-9-]*\.)?douyin\.com\/([A-Za-z0-9_-]{8,18})(\/.*)?$/i);
+    if (m && m[1]) return `https://v.douyin.com/${m[1]}/`;
+    // 快手短链
+    m = url.match(/^https?:\/\/(?:[a-z0-9-]*\.)?kuaishou\.com\/(?:short-video|f|video)\/([A-Za-z0-9_-]{6,20})(\/.*)?$/i);
+    if (m && m[1]) return `https://www.kuaishou.com/short-video/${m[1]}`;
+    // t.cn 微博短链：截到第一个非合法短码字符前（短码通常 7-10 位）
+    m = url.match(/^https?:\/\/t\.cn\/([A-Za-z0-9_-]{6,12})/i);
+    if (m && m[1]) return `https://t.cn/${m[1]}`;
+    return url;
+  };
+
+  // 访客自愿贡献 Cookie 到公共池（火后即弃，不阻断主流程；后端会做域名白名单+验真+限频）
+  const contributeCookie = (url, cookie) => {
+    if (!url || !cookie) return;
+    fetch('/api/cookie/contribute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, cookie }),
+    }).then(async (resp) => {
+      if (resp.ok) {
+        try { showToast('已贡献到共享登录态池，网页端解析将自动复用'); } catch (e) {}
+        return;
+      }
+      let detail = '';
+      try { detail = (await resp.json()).detail || ''; } catch (e) {}
+      if (resp.status === 400) {
+        try { showToast('贡献失败：Cookie 未通过验真，请确认已登录且为完整 Cookie（优酷需含 P__yk__uck 等字段）'); } catch (e) {}
+      } else if (resp.status === 429) {
+        try { showToast('贡献过于频繁，请稍后再试'); } catch (e) {}
+      } else {
+        try { showToast('共享池同步异常：' + (detail || resp.status)); } catch (e) {}
+      }
+    }).catch(() => { /* 网络错不影响解析/下载结果 */ });
+  };
+
+  /** 判断链接是否是「歌单/专辑」（网易云歌单、榜单、喜马拉雅专辑）。
+   * 注意：网易云分享链接常带 # 锚点（如 https://music.163.com/#/playlist?id=xx），
+   * new URL() 会把 # 后归到 hash 不算 pathname——这里把 hash 拼到 path 一起查。 */
+  const isPlaylistUrl = (url) => {
+    try {
+      const u = new URL(url);
+      const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
+      const pathAndHash = u.pathname + (u.hash || '');
+      if (host === 'music.163.com' || host === 'y.music.163.com') {
+        return pathAndHash.includes('/playlist') || pathAndHash.includes('/discover/toplist');
+      }
+      if (host === 'ximalaya.com') {
+        return u.pathname.includes('/album/');
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /** 解析歌单/专辑并渲染列表（替代单视频 renderVideo）。 */
+  const handlePlaylist = async (url, base, cookie, proxy) => {
+    try {
+      const data = await request('/api/playlist', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
+      data.base = base;
+      renderPlaylist(data);
+    } catch (error) {
+      resolved = null;
+      showError(error.message || '歌单解析失败', error.hint);
+    }
+  };
+
+  /** 渲染歌单/专辑列表 + 批量下载入口。 */
+  const renderPlaylist = (data) => {
+    const items = data.items || [];
+    const free = items.filter((i) => i.url && !i.is_paid).length;
+    const paid = items.length - free;
+    el.playlistTitle.textContent = `${data.platform?.name || '歌单'}：${data.title || '(未命名)'}`;
+    el.playlistMeta.textContent =
+      `共 ${data.count || items.length} 集` +
+      (paid > 0 ? `（其中会员 ${paid} 集，按合规要求不支持下载）` : '') +
+      `。每集右侧有「下载」按钮可单独下，或点「批量下载全部」。`;
+    el.playlistList.replaceChildren();
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'playlist-item';
+      row.dataset.url = item.url || '';
+      const idx = document.createElement('span');
+      idx.className = 'pl-idx';
+      idx.textContent = item.index || '';
+      const t = document.createElement('span');
+      t.className = 'pl-title';
+      t.textContent = item.title || '(无标题)';
+      row.appendChild(idx);
+      row.appendChild(t);
+      if (item.duration) {
+        const d = document.createElement('span');
+        d.className = 'pl-dur';
+        d.textContent = formatDuration(item.duration);
+        row.appendChild(d);
+      }
+      if (item.is_paid) {
+        // 付费项：合规红线，不提供下载（标注会员并禁用）
+        const p = document.createElement('span');
+        p.className = 'pl-paid';
+        p.textContent = '会员';
+        p.title = '会员/付费内容按合规要求不支持下载';
+        row.appendChild(p);
+      } else if (item.url) {
+        // 免费项：单曲下载按钮
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost pl-btn';
+        btn.textContent = '下载';
+        btn.title = '只下载这一集';
+        btn.onclick = async (ev) => {
+          ev.stopPropagation();
+          if (btn.disabled) return;
+          if (!(await ensureConsent())) return;
+          btn.disabled = true;
+          btn.textContent = '创建中…';
+          try {
+            item.platformName = item.platformName || data.platform?.name || '歌单';
+            await createSingleDownload(item, data.base || '');
+            btn.textContent = '已创建 ✓';
+            row.classList.add('done');
+          } catch (e) {
+            btn.textContent = '失败';
+            row.classList.add('fail');
+            showError('创建下载任务失败', e.message || e.hint);
+          }
+        };
+        row.appendChild(btn);
+      }
+      el.playlistList.appendChild(row);
+    });
+    // 隐藏单视频面板区块，只展示歌单
+    el.qualityBlock.hidden = true;
+    el.downloadBtn.hidden = true;
+    el.watchRow.hidden = true;
+    el.directHint.hidden = true;
+    el.serverFallbackBtn.hidden = true;
+    ['extractBlock', 'speedBlock'].forEach((id) => {
+      const n = document.getElementById(id);
+      if (n) n.hidden = true;
+    });
+    el.playlistPanel.hidden = false;
+    el.playlistProgress.textContent = '';
+    el.playlistDownloadBtn.disabled = false;
+    el.playlistDownloadBtn.onclick = () => batchDownload(data);
+    el.resultPanel.hidden = false;
+  };
+
+  /** 为歌单中的单曲创建一个下载任务（不依赖 resolved，独立 URL）。 */
+  const createSingleDownload = async (item, base) => {
+    const data = await request('/api/download', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: item.url,
+        quality: 'best',
+        cookie: '',
+        proxy: '',
+        extract_script: el.extractSelect ? el.extractSelect.value || '' : '',
+        format_id: '',
+        concurrent_fragments: 0,
+        downloader: 'native',
+        play_url: '',
+        watch_options: [],
+        is_hls: false,
+      }),
+    }, base);
+    const taskId = data.task_id;
+    if (data.quota) {
+      node.downloadFreeUsed = data.quota.free_used || 0;
+      if (node.downloadSubRequired) refreshSubModalText();
+    }
+    const refs = createTaskCard(taskId, {
+      title: item.title || '(无标题)',
+      platform: (item.platformName || '歌单'),
+    });
+    refs.base = base;
+    trackTask(taskId, refs, base);
+    return taskId;
+  };
+
+  /** 批量下载歌单（逐个创建任务，付费项跳过；间隔 150ms 防瞬时打爆）。 */
+  const batchDownload = async (data) => {
+    const base = data.base || '';
+    const items = (data.items || []).filter((i) => i.url && !i.is_paid);
+    if (!items.length) {
+      showError('没有可下载的免费内容', '该歌单/专辑可能全部为付费内容');
+      return;
+    }
+    if (!(await ensureConsent())) return;
+    const platformName = data.platform?.name || '歌单';
+    items.forEach((i) => { i.platformName = platformName; });
+    el.playlistDownloadBtn.disabled = true;
+    let done = 0, failed = 0;
+    el.playlistProgress.textContent = `正在创建任务 0/${items.length}…`;
+    for (const item of items) {
+      try {
+        await createSingleDownload(item, base);
+        done++;
+        const row = [...el.playlistList.children].find((r) => r.dataset.url === item.url);
+        if (row) row.classList.add('done');
+      } catch (e) {
+        failed++;
+        const row = [...el.playlistList.children].find((r) => r.dataset.url === item.url);
+        if (row) row.classList.add('fail');
+      }
+      el.playlistProgress.textContent = `已创建 ${done}/${items.length} 个任务${failed ? `，失败 ${failed}` : ''}…`;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    el.playlistProgress.textContent = failed
+      ? `完成：成功创建 ${done} 个，失败 ${failed} 个（失败项已标红）`
+      : `完成：已创建 ${done} 个下载任务`;
+    el.playlistDownloadBtn.disabled = false;
   };
 
   const handleResolve = async (event) => {
@@ -2113,6 +3374,12 @@
     const raw = el.input.value.trim();
     const cookie = el.cookieInput.value.trim();
     const proxy = el.proxyInput.value.trim();
+    // 记忆本次粘贴的 Cookie（用户主动输入才覆盖，保证「清了输入框=不用了」语义）
+    if (cookie) {
+      try { localStorage.setItem('vdl_cookie', cookie); } catch (e) {}
+    } else {
+      try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
+    }
     if (!raw) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
       return;
@@ -2136,15 +3403,24 @@
     el.resultPanel.hidden = true;
     el.hqTip.hidden = true;   // 每次重新解析时重置「更高分辨率」提示，避免残留
     const base = baseFor(url);
+    // 歌单/专辑链接 → 走 /api/playlist 列出全部曲目（网易云歌单/榜单、喜马拉雅专辑）
+    if (isPlaylistUrl(url)) {
+      await handlePlaylist(url, base, cookie, proxy);
+      setLoading(false);
+      return;
+    }
     try {
       resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
       resolved.cookie = cookie;
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
+      if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
+        contributeCookie(url, cookie);
+      }
     } catch (error) {
       resolved = null;
-      showError(error.message || '解析失败', error.hint);
+      showError(error.message || '解析失败', error.hint, '', error.category);
     } finally {
       setLoading(false);
     }
@@ -2211,12 +3487,26 @@
     el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。若源站拒绝直连，请用上方「改用服务器下载」。';
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (resolved?.video?.direct_url) {
+      // 直链直存：浏览器从源站拉文件，瞬时响应，无需 loading 态
       triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
       return;
     }
-    startDownload(selectedQuality);
+    // 服务器下载：loading 态防重复点击（连点会建多个任务）；后端 90s 内命中
+    // 解析缓存，「解析视频信息」步骤 <1s，这里反馈也要跟上。
+    if (el.downloadBtn.dataset.submitting === '1') return;
+    el.downloadBtn.dataset.submitting = '1';
+    el.downloadBtn.disabled = true;
+    const origLabel = el.downloadBtn.lastChild.textContent;
+    el.downloadBtn.lastChild.textContent = '创建任务中…';
+    try {
+      await startDownload(selectedQuality);
+    } finally {
+      el.downloadBtn.dataset.submitting = '';
+      el.downloadBtn.disabled = false;
+      el.downloadBtn.lastChild.textContent = origLabel;
+    }
   };
 
   const cancelTask = async (taskId, base = '') => {
@@ -4087,7 +5377,7 @@
   let currentBaiduPath = '/';
   const baiduDlPollers = {};  // tid -> interval
 
-  el.tabBaidu.addEventListener('click', () => {
+  if (el.tabBaidu) el.tabBaidu.addEventListener('click', () => {
     if (!node.baiduAvailable) { el.baiduDriveHint.textContent = '该实例未配置百度网盘凭据'; return; }
     baiduModalOpen = true;
     restoreBaiduToken();
@@ -4455,7 +5745,8 @@
     return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  document.getElementById('tabPcs').addEventListener('click', () => {
+  const tabPcsEl = document.getElementById('tabPcs');
+  if (tabPcsEl) tabPcsEl.addEventListener('click', () => {
     if (typeof pcsModal.showModal === 'function') pcsModal.showModal();
     else pcsModal.setAttribute('open', '');
     pcsRefreshStatus();
@@ -4931,20 +6222,23 @@
     const isCom = view === 'commentary';
     const isUp = view === 'uploadconvert';
     const isDw = view === 'dw';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw;
+    const isAppIntro = view === 'appIntro';
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
     el.commentaryView.hidden = !isCom;
     el.uploadConvertView.hidden = !isUp;
     el.dwView.hidden = !isDw;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw);
-    el.tabLibrary.classList.toggle('is-active', isLib);
-    el.tabSubscribe.classList.toggle('is-active', isSub);
-    el.tabTorrent.classList.toggle('is-active', isTor);
-    el.tabCommentary.classList.toggle('is-active', isCom);
-    el.tabUploadConvert.classList.toggle('is-active', isUp);
-    el.tabDw.classList.toggle('is-active', isDw);
+    if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro);
+    if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
+    if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
+    if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
+    if (el.tabCommentary) el.tabCommentary.classList.toggle('is-active', isCom);
+    if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
+    if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
+    if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -5370,12 +6664,23 @@
   };
 
   el.tabDownload.addEventListener('click', () => switchView('download'));
-  el.tabLibrary.addEventListener('click', () => switchView('library'));
-  el.tabCommentary.addEventListener('click', () => switchView('commentary'));
+  if (el.tabLibrary) el.tabLibrary.addEventListener('click', () => switchView('library'));
+  if (el.tabCommentary) el.tabCommentary.addEventListener('click', () => switchView('commentary'));
   el.tabUploadConvert.addEventListener('click', () => switchView('uploadconvert'));
+  // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换
+  const ucSwitchSub = (which) => {
+    const fmt = which === 'format';
+    el.ucPane.hidden = !fmt;
+    el.mcPane.hidden = fmt;
+    el.ucSubFormat.classList.toggle('is-active', fmt);
+    el.ucSubMerge.classList.toggle('is-active', !fmt);
+  };
+  el.ucSubFormat.addEventListener('click', () => ucSwitchSub('format'));
+  el.ucSubMerge.addEventListener('click', () => ucSwitchSub('merge'));
   el.tabDw.addEventListener('click', () => switchView('dw'));
-  el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
-  el.tabTorrent.addEventListener('click', () => switchView('torrent'));
+  if (el.tabAppIntro) el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
+  if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
+  if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {
@@ -6747,6 +8052,9 @@
       el.adsSlot.hidden = !node.adsEnabled;
       node.convertSubRequired = !!(convert && convert.subscription_required);
       node.convertFreeDaily = (convert && convert.free_daily) || 3;
+      node.convertMaxUpload = (convert && convert.max_upload_bytes) || 0;
+      node.convertTargets = (convert && Array.isArray(convert.targets) && convert.targets.length)
+        ? convert.targets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'];
       node.downloadSubRequired = !!(download && download.subscription_required);
       node.downloadFreeDaily = (download && download.free_daily) || 10;
       const cloudInfo = cloud || {};
@@ -6756,7 +8064,6 @@
       node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
       node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
       node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
-      el.tabBaidu.hidden = !node.baiduAvailable;
       node.libraryEnabled = !!(library && library.enabled);
       node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
       node.retentionEnabled = !!(retention && retention.enabled);
@@ -6769,6 +8076,7 @@
       node.cryptoLocked = !!(crypto && crypto.locked);
       node.torrentEnabled = !!(torrent && torrent.enabled);
       node.torrentAvailable = !!(torrent && torrent.available);
+      node.aiDewatermarkEnabled = !!(ai_dewatermark && ai_dewatermark.enabled);
       node.aiDewatermarkGpu = !!(ai_dewatermark && ai_dewatermark.gpu);
       // 有 GPU → 标签显示加速；没有 → 提示 CPU 模式
       if (PROCESS_OPS.ai_dewatermark) {
@@ -6781,14 +8089,20 @@
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       node.profile = profile;
-      // —— Route B：网页精简版（profile=web）按 profile 隐藏 App 专属 tab ——
+      // —— Route B：按 profile 双态控制 App 专属 tab ——
+      // web 精简版（profile=web）：固定只保留四大入口（下载/视频处理/去水印/更多功能介绍）
+      // app 桌面版（profile=app）：9 tab 全量，按能力精细控制显隐
       if (profile === 'web') {
-        // 网页端保留：下载(核心) / 视频转换 / 去水印；隐藏其余 App 专属入口。
-        // （convert / dewatermark router 已在 web-dev 挂载；缺依赖时优雅返回 503，不会 404）
-        ['tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent', 'tabBaidu', 'tabPcs']
-          .forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
+        [
+          'tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent',
+          'tabBaidu', 'tabPcs'
+        ].forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
+        if (el.tabDownload) el.tabDownload.hidden = false;
+        if (el.tabUploadConvert) el.tabUploadConvert.hidden = false;
+        if (el.tabDw) el.tabDw.hidden = false;
+        if (el.tabAppIntro) el.tabAppIntro.hidden = false;
       } else {
-        // App 端：沿用能力精细控制（修掉之前漏隐藏 library/subscribe/pcs 的 bug）
+        // App 端：能力精细控制（tabTorrent/tabBaidu/tabCommentary/tabDw/tabLibrary/tabSubscribe/tabPcs）
         if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
         if (el.tabBaidu) el.tabBaidu.hidden = !node.baiduAvailable;
         if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
@@ -6797,18 +8111,65 @@
         if (el.tabLibrary) el.tabLibrary.hidden = !node.libraryEnabled;
         if (el.tabSubscribe) el.tabSubscribe.hidden = !node.subscriptionsEnabled;
         if (el.tabPcs) el.tabPcs.hidden = !node.baiduAvailable;
+        if (el.tabAppIntro) el.tabAppIntro.hidden = false; // 更多功能介绍桌面端也显示
       }
-      el.tabs.hidden = false; // 至少有下载 tab，导航栏始终显示
-      // 默认视图：网页精简版停在下载，App 端停在解说成片
-      switchView(profile === 'web' ? 'download' : 'commentary');
+      el.tabs.hidden = false; // 导航栏始终显示
+      // 默认视图：始终停在下载
+      switchView('download');
+      bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
   // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
-  try { switchView('download'); } catch (_) {}
+  try { switchView('download'); bootViewSet = true; } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
+
+  // ------------------------------------------------------------------ 留言反馈（2026-08-23）
+  // 右下角悬浮按钮 → 弹窗 → POST /api/feedback（request 自动带 X-Device-Id）
+  const initFeedback = () => {
+    const fab = document.getElementById('feedbackFab');
+    const dlg = document.getElementById('feedbackDialog');
+    const form = document.getElementById('feedbackForm');
+    if (!fab || !dlg || !form) return;
+    const content = document.getElementById('feedbackContent');
+    const contact = document.getElementById('feedbackContact');
+    const status = document.getElementById('feedbackStatus');
+    const cancelBtn = document.getElementById('feedbackCancel');
+    const submitBtn = document.getElementById('feedbackSubmit');
+    const closeDlg = () => { try { dlg.close(); } catch (e) { dlg.removeAttribute('open'); } };
+    const openDlg = () => { status.hidden = true; try { dlg.showModal(); } catch (e) { dlg.setAttribute('open', ''); } };
+    fab.addEventListener('click', openDlg);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeDlg);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = (content.value || '').trim();
+      if (!text) {
+        status.textContent = '请先填写反馈内容';
+        status.className = 'feedback-status err'; status.hidden = false;
+        return;
+      }
+      if (submitBtn) submitBtn.disabled = true;
+      status.className = 'feedback-status'; status.textContent = '提交中…'; status.hidden = false;
+      try {
+        await request('/api/feedback', {
+          method: 'POST',
+          body: JSON.stringify({ content: text, contact: (contact.value || '').trim() }),
+        });
+        status.className = 'feedback-status ok';
+        status.textContent = '✅ 已收到你的反馈，感谢！';
+        content.value = ''; contact.value = '';
+        setTimeout(closeDlg, 1200);
+      } catch (err) {
+        status.className = 'feedback-status err';
+        status.textContent = '提交失败：' + (err.message || '请稍后重试');
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    });
+  };
+  try { initFeedback(); } catch (_) { /* 反馈组件缺失不影响主流程 */ }
 
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。

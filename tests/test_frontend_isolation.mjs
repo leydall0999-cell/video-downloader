@@ -28,7 +28,25 @@ function runDesktop(win, doc) {
 }
 
 function mkEl() {
-  return { hidden: true, _h: {}, addEventListener(ev, h) { this._h[ev] = h; } };
+  return {
+    hidden: true, _h: {}, textContent: '', style: {}, disabled: false,
+    appendChild() {}, addEventListener(ev, h) { this._h[ev] = h; },
+  };
+}
+
+// desktop-app.js 的 initSyncButton 需要 document.createElement / document.body；
+// initYoukuLocal 通过 getElementById('youkuLocalCard') 判空（测试返回 null 使其安全跳过）
+function mkDoc() {
+  const doc = {
+    _h: {}, body: mkEl(),
+    createElement() { return mkEl(); },
+    querySelector(sel) { return sel === 'header' ? mkEl() : null; },
+    getElementById() { return null; },
+    addEventListener(ev, fn) {
+      (this._h[ev] = this._h[ev] || []).push(fn); // 收集全部 listener，避免互相覆盖
+    },
+  };
+  return doc;
 }
 
 // ===== 1. index.html 不得无条件加载 desktop-app.js =====
@@ -57,7 +75,7 @@ for (const key of ['el', 'request', 'showError', 'switchView', 'createTaskCard']
     pywebview: { api: { quit_app() {}, hide_to_desktop() {} } },
     confirm: () => true,
   };
-  const doc = { addEventListener() {} };
+  const doc = mkDoc();
   runDesktop(win, doc);
   assert.equal(els.quitAppBtn.hidden, false, '桌面模式：退出按钮应显示');
   assert.equal(els.hideToDesktopBtn.hidden, false, '桌面模式：返回桌面按钮应显示');
@@ -68,18 +86,16 @@ for (const key of ['el', 'request', 'showError', 'switchView', 'createTaskCard']
 // ===== 3b. web 模式(无 pywebview)：按钮保持隐藏，仅注册 pywebviewready 监听 =====
 {
   const els = { quitAppBtn: mkEl(), hideToDesktopBtn: mkEl() };
-  let readyFn = null;
+  const doc = mkDoc();
   const win = { VDL: { el: els }, pywebview: undefined, confirm: () => true };
-  const doc = {
-    addEventListener(ev, fn) { if (ev === 'pywebviewready') readyFn = fn; },
-  };
   runDesktop(win, doc);
   assert.equal(els.quitAppBtn.hidden, true, 'web 模式：退出按钮应保持隐藏');
   assert.equal(els.hideToDesktopBtn.hidden, true, 'web 模式：返回桌面按钮应保持隐藏');
-  assert.ok(readyFn, 'web 模式：应注册 pywebviewready 监听以等待桌面环境就绪');
-  // 模拟 pywebview 稍后就绪
+  const readyFns = doc._h.pywebviewready || [];
+  assert.ok(readyFns.length > 0, 'web 模式：应注册 pywebviewready 监听以等待桌面环境就绪');
+  // 模拟 pywebview 稍后就绪：所有已注册 listener 都应执行
   win.pywebview = { api: { quit_app() {}, hide_to_desktop() {} } };
-  readyFn();
+  readyFns.forEach((fn) => fn());
   assert.equal(els.quitAppBtn.hidden, false, 'pywebview 就绪后：退出按钮应显示');
   assert.equal(els.hideToDesktopBtn.hidden, false, 'pywebview 就绪后：返回桌面按钮应显示');
 }
@@ -88,9 +104,10 @@ for (const key of ['el', 'request', 'showError', 'switchView', 'createTaskCard']
 {
   const els = { quitAppBtn: mkEl(), hideToDesktopBtn: mkEl() };
   const win = { VDL: undefined, pywebview: { api: {} } };
-  const doc = { addEventListener() {} };
+  const doc = mkDoc();
   assert.doesNotThrow(() => runDesktop(win, doc), 'window.VDL 缺失时不应抛错');
   assert.equal(els.quitAppBtn.hidden, true, 'VDL 缺失时按钮应保持隐藏');
 }
 
 console.log('test_frontend_isolation: ALL PASSED');
+process.exit(0); // initSyncButton 的 setInterval 会阻止 Node 自然退出
