@@ -76,7 +76,7 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("bestv", "百视TV", ("bestv.com.cn",), "📺"),
     Platform("wasu", "华数TV", ("wasu.com.cn", "wasu.cn"), "🏞️"),
     Platform("xinpianchang", "新片场", ("xinpianchang.com",), "🎞️"),
-    Platform("hongguo", "红果短剧", ("hongguoduanju.com",), "🍎"),
+    Platform("hongguo", "红果短剧", ("hongguoduanju.com", "novelquickapp.com"), "🍎"),
     Platform("vcinema", "南瓜电影", ("vcinema.cn",), "🎃"),
     Platform("yy", "YY直播", ("yy.com",), "🎤"),
     Platform("neteasecc", "网易CC直播", ("cc.163.com",), "🎙️"),

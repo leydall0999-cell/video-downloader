@@ -21,9 +21,10 @@ UA = (
 )
 REFERER = "https://www.hongguoduanju.com/"
 
-# 字节系 CDN：*.qznovelvod.com 的 /video/tos/cn/ 链接；也兜底 .mp4/.m3u8
+# 字节系 CDN：*.qznovelvod.com 与 v3-share.qznovel.com（分享页）的 /video/tos/cn/ 链接；
+# 也兜底 .mp4/.m3u8
 _STREAM_RE = re.compile(
-    r"qznovelvod\.com|/video/tos/|\.mp4(\?|$)|/play/\w+\.m3u8|\.m3u8(\?|$)"
+    r"qznovelvod\.com|qznovel\.com|/video/tos/|\.mp4(\?|$)|/play/\w+\.m3u8|\.m3u8(\?|$)"
 )
 # 详情页 series_id / 单集 id（episode_id）提取
 _SERIES_RE = re.compile(r"series_id=(\d+)", re.I)
@@ -137,8 +138,8 @@ def resolve(url, timeout=45):
             f"title={page_meta.get('title') or '?'}"
         )
 
-    # 优先 qznovelvod.com 的真流，否则取最后一个捕获的媒体
-    hg = [u for u in streams if "qznovelvod.com" in u]
+    # 优先 qznovelvod.com / qznovel.com 的真流，否则取最后一个捕获的媒体
+    hg = [u for u in streams if "qznovelvod.com" in u or "qznovel.com" in u]
     stream_url = (hg or streams)[-1]
     ext = "m3u8" if ".m3u8" in stream_url else "mp4"
     return {
@@ -152,7 +153,20 @@ def resolve(url, timeout=45):
         "video_url": stream_url,
         "ext": ext,
         "is_live": False,
+        # 字节 CDN 校验 Referer 域名（novelquickapp.com 分享页流的 referer 必须是
+        # novelquickapp.com/，写死 hongguoduanju.com 会 403），带页面 origin 供下载器用
+        "referer": f"https://{_host_of_page(url)}/" if url else "",
     }
+
+
+def _host_of_page(url: str) -> str:
+    """提取页面域名（如 novelquickapp.com），供 referer 构造。"""
+    from urllib.parse import urlparse
+    try:
+        h = (urlparse(url).hostname or "").lower()
+        return h.removeprefix("www.") if h else ""
+    except Exception:
+        return ""
 
 
 if __name__ == "__main__":

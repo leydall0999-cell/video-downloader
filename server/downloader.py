@@ -2258,6 +2258,9 @@ def _hongguo_info(url: str) -> dict[str, Any]:
     """调 VPS worker 拿红果短剧真流，构造成 yt-dlp 兼容的 info dict。"""
     data = _call_vps_worker("hongguo", url)
     video_url = data.get("video_url") or ""
+    # 字节 CDN 校验 Referer 域名：分享页(novelquickapp.com)流必须带同域 referer，
+    # 写死 hongguoduanju.com 会 403。worker 已回传页面真实 referer，优先使用。
+    referer = data.get("referer") or "https://www.hongguoduanju.com/"
     return {
         "id": data.get("video_id") or "",
         "title": data.get("title") or "红果短剧",
@@ -2271,7 +2274,7 @@ def _hongguo_info(url: str) -> dict[str, Any]:
         "direct": True,
         "url": video_url,
         "protocol": "https",
-        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": "https://www.hongguoduanju.com/"},
+        "http_headers": {"User-Agent": _DOUYIN_UA, "Referer": referer},
     }
 
 
@@ -3532,7 +3535,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     if "bestv.com.cn" in (host or ""):
         return _bestv_info(url)
     # 红果短剧：字节系 CDN 流需真实浏览器点开播放器捕获，走 VPS Playwright 解析
-    if "hongguoduanju.com" in (host or ""):
+    if ("hongguoduanju.com" in (host or "")) or ("novelquickapp.com" in (host or "")):
         return _hongguo_info(url)
     # 映客直播/回放：公开接口拿昵称+状态，流地址规律化构造，走 VPS worker
     if "inke.cn" in (host or ""):
@@ -4373,7 +4376,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "bestv.com.cn" in (_task_host or ""):
                 # 百视TV：wasm 签名，VPS Playwright 解析出 m3u8 直链
                 info = _bestv_info(task.url)
-            elif "hongguoduanju.com" in (_task_host or ""):
+            elif ("hongguoduanju.com" in (_task_host or "")) or ("novelquickapp.com" in (_task_host or "")):
                 # 红果短剧：字节 CDN 流，VPS Playwright 点开播放器捕获真流直链
                 info = _hongguo_info(task.url)
             elif "inke.cn" in (_task_host or ""):
