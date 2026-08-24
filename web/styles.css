@@ -1988,6 +1988,7 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   margin-bottom: 1.5rem;
 }
 .app-intro-card {
+  position: relative;
   background: var(--card-bg, #fff);
   border: 1px solid var(--border, #e5e7eb);
   border-radius: .85rem;
@@ -1996,6 +1997,14 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   transition: transform .15s ease, box-shadow .15s ease;
 }
 .app-intro-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px var(--shadow, rgba(0,0,0,.08)); }
+.app-intro-soon {
+  position: absolute; top: .6rem; right: .6rem;
+  font-size: .68rem; line-height: 1; padding: .28rem .5rem;
+  background: color-mix(in srgb, var(--accent, #4f46e5) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #4f46e5) 32%, transparent);
+  color: var(--accent, #4f46e5);
+  border-radius: .5rem; font-weight: 600; letter-spacing: .02em;
+}
 .app-intro-ico { font-size: 1.6rem; margin-bottom: .5rem; }
 .app-intro-card h3 { font-size: 1.05rem; margin: 0 0 .4rem; color: var(--text, #111827); }
 .app-intro-card p { margin: 0; color: var(--text-mute); font-size: .9rem; line-height: 1.55; }
