@@ -81,9 +81,10 @@ def test_bilibili_short_link_403_has_bilibili_hint():
 
 
 def test_non_403_private_video_keeps_unknown_category():
+    # web 版语义：private/members-only 归为 cookie_required（私密=需访问权限，引导提供 Cookie）
     exc = _FakeExc("This video is private")
     err = downloader._friendly_error(exc)
-    assert err.category == "unknown"
+    assert err.category == "cookie_required"
     assert "私密" in err.message or "登录" in err.message
 
 

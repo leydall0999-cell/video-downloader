@@ -2796,7 +2796,15 @@ def _sync_rate_ok(ip: str) -> bool:
         return True
 
 
+_COOKIE_ALERT_TS: dict[str, float] = {}
+
+
 def _cookie_pool_alert(domain: str) -> None:
+    # 节流：同域 1 小时内只告警一次，避免每次 resolve 刷屏（正常空池是常态噪音）
+    _now = time.time()
+    if _now - _COOKIE_ALERT_TS.get(domain, 0) < 3600:
+        return
+    _COOKIE_ALERT_TS[domain] = _now
     msg = (f"[cookie_pool] 域名 {domain} 公共 Cookie 池已空/全部失效，"
            f"网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）")
     logger.warning(msg)

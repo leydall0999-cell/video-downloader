@@ -1816,6 +1816,24 @@ def _resolve_cache_put(key: str, data: dict[str, Any]) -> None:
         _RESOLVE_CACHE[key] = (time.time(), data)
 
 
+def _maybe_refresh_vps_token() -> str:
+    """403/401 自愈：桌面端经线上 /v1/resolve 转发时，若 cloud_sync.json 的
+    token 已更新（_ensure_vps_env 只在启动注入一次），重读并刷新 env，
+    返回新 token（供 _call_vps_worker 重建 endpoint 重试一次）。"""
+    try:
+        cfg = Path.home() / ".videodownloader" / "cloud_sync.json"
+        if not cfg.exists():
+            return ""
+        d = json.loads(cfg.read_text(encoding="utf-8"))
+        tok = (d.get("token") or "").strip()
+        if tok and tok != os.environ.get("VDL_COOKIE_SYNC_TOKEN", ""):
+            os.environ["VDL_COOKIE_SYNC_TOKEN"] = tok
+            return tok
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any]:
     """调用 VPS Playwright 解析 worker（/v1/resolve?platform=xx），返回真实流元数据。
 
@@ -1868,14 +1886,19 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
     if _cached is not None:
         logger.info("[worker cache] hit %s %s", platform, url[:80])
         return _cached
-    endpoint = (
-        worker_base.rstrip("/") + "/v1/resolve?token="
-        + urllib.parse.quote(token, safe="")
-        + "&platform=" + urllib.parse.quote(platform, safe="")
-        + "&url=" + urllib.parse.quote(url, safe="")
-    )
-    if cookie:
-        endpoint += "&cookie=" + urllib.parse.quote(cookie, safe="")
+
+    def _build_endpoint(_tok: str) -> str:
+        _ep = (
+            worker_base.rstrip("/") + "/v1/resolve?token="
+            + urllib.parse.quote(_tok, safe="")
+            + "&platform=" + urllib.parse.quote(platform, safe="")
+            + "&url=" + urllib.parse.quote(url, safe="")
+        )
+        if cookie:
+            _ep += "&cookie=" + urllib.parse.quote(cookie, safe="")
+        return _ep
+
+    endpoint = _build_endpoint(token)
     # 显式指定代理并覆盖环境变量代理，确保本地隧道/内网请求不被外部 http_proxy 截获
     proxies = {"http": worker_proxy, "https": worker_proxy} if worker_proxy else None
     try:
@@ -1890,6 +1913,18 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
             proxies=proxies,
             timeout=90,
         )
+        # 403 自愈（桌面端经线上转发）：cloud_sync.json 的 token 更新后，运行中的
+        # app 无需重启即可刷新（_ensure_vps_env 只在启动时注入一次）
+        if r.status_code == 403 and "127.0.0.1" not in worker_base:
+            _new_tok = _maybe_refresh_vps_token()
+            if _new_tok and _new_tok != token:
+                logger.info("[worker] token 刷新重试 %s %s", platform, url[:60])
+                r = _worker_http.get(
+                    _build_endpoint(_new_tok),
+                    headers={"User-Agent": "vdl-platform-resolve"},
+                    proxies=proxies,
+                    timeout=90,
+                )
         r.raise_for_status()
         data = r.json()
     except Exception as e:
