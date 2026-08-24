@@ -1371,7 +1371,8 @@ class ConvertRequest(BaseModel):
     resolution: str = "original"
 
 
-def _require_task(task_id: str):
+def _require_task(task_id: str, device_id: str = ""):
+    """取任务。桌面单机无设备隔离，device_id 参数仅为兼容 web 版调用签名保留。"""
     task = store.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
