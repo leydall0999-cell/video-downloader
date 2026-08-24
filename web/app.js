@@ -624,18 +624,39 @@
     // file:// 模式下相对路径会解析到 file:// 协议（无法请求后端），
     // 此时使用 launcher 通过 evaluate_js 注入的 window.VDL_API_BASE（绝对 http 地址）。
     const apiBase = base || window.VDL_API_BASE || '';
-    const doFetch = () => fetch(apiBase + path, { ...options, headers: merged });
-    let response = await doFetch();
-    if (response.status === 401) {
-      // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
-      const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
-      if (t && t.trim()) {
-        localStorage.setItem('vdl_api_token', t.trim());
-        merged['X-Api-Key'] = t.trim();
-        response = await doFetch();
+    // fetch 超时保护（2026-08-24）：默认 120s（覆盖 VPS worker 85s 上限 + 余量），
+    // 防止后端挂起时前端无限等待。大文件上传/下载可传 options.timeout=0 关闭
+    // 或传更大值；请求超时抛可读错误而非静默卡死。
+    const fetchTimeout = (options && options.timeout) || 120000;
+    const doFetch = () => {
+      if (!fetchTimeout) return fetch(apiBase + path, { ...options, headers: merged });
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      if (!ctrl) return fetch(apiBase + path, { ...options, headers: merged });
+      const timer = setTimeout(() => ctrl.abort(), fetchTimeout);
+      return fetch(apiBase + path, { ...options, headers: merged, signal: ctrl.signal })
+        .finally(() => clearTimeout(timer));
+    };
+    let response;
+    try {
+      response = await doFetch();
+      if (response.status === 401) {
+        // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
+        const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
+        if (t && t.trim()) {
+          localStorage.setItem('vdl_api_token', t.trim());
+          merged['X-Api-Key'] = t.trim();
+          response = await doFetch();
+        }
       }
+      return await _parseResponse(response);
+    } catch (e) {
+      // fetch 超时（AbortError）→ 转成可读提示；DOMException 在部分浏览器无 name
+      if (e && (e.name === 'AbortError' || e.code === 20 || String(e.message || '').includes('aborted'))) {
+        const secs = Math.round(fetchTimeout / 1000) || 120;
+        throw { message: '请求超时（超过 ' + secs + 's），请重试或检查网络', hint: '解析服务较慢或网络不稳定，稍后重试。', category: 'timeout' };
+      }
+      throw e;
     }
-    return await _parseResponse(response);
   };
 
   const formatBytes = (bytes) => {
