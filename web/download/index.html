@@ -22,6 +22,8 @@
       border-radius: var(--radius, .55rem); padding: .65rem .9rem;
       font-size: .9rem; cursor: not-allowed;
     }
+    .dl-top-bar { display: flex; justify-content: flex-end; align-items: center; margin-bottom: .8rem; }
+    .dl-top-bar .btn-ghost { font-size: .85rem; padding: .45rem .7rem; }
     .dl-back { text-align: center; margin-top: 2rem; }
     .dl-note { text-align:center; color: var(--text-mute); font-size: .82rem; margin-top: 1.4rem; }
     @media (max-width: 640px){ .dl-grid{ grid-template-columns:1fr; } }
@@ -29,6 +31,9 @@
 </head>
 <body>
   <main class="wrap dl-page">
+    <div class="dl-top-bar">
+      <a class="btn btn-ghost" href="/">返回首页</a>
+    </div>
     <section class="dl-hero">
       <h1>下载客户端</h1>
       <p>支持 macOS / Windows / Android / iOS，安装后即可解锁全部桌面端能力。</p>
@@ -63,9 +68,6 @@
 
     <p class="dl-note">安装包托管于 GitHub Releases，点击按钮前往最新版本下载。</p>
 
-    <div class="dl-back">
-      <a class="btn btn-ghost" href="/">← 返回首页</a>
-    </div>
   </main>
 </body>
 </html>
