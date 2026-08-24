@@ -1974,3 +1974,31 @@ img { max-width: 100%; display: block; }
 .feedback-status.ok { color: var(--success, #16a34a); }
 .feedback-status.err { color: var(--danger, #dc2626); }
 .feedback-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
+/* app 版功能介绍 */
+.app-intro-head { text-align: center; margin-bottom: 1.4rem; }
+.app-intro-head .guide-title { margin-bottom: .35rem; }
+.app-intro-sub { color: var(--text-mute); font-size: .95rem; margin: 0; }
+.app-intro-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.app-intro-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: .85rem;
+  padding: 1.1rem;
+  box-shadow: 0 1px 3px var(--shadow, rgba(0,0,0,.05));
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.app-intro-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px var(--shadow, rgba(0,0,0,.08)); }
+.app-intro-ico { font-size: 1.6rem; margin-bottom: .5rem; }
+.app-intro-card h3 { font-size: 1.05rem; margin: 0 0 .4rem; color: var(--text, #111827); }
+.app-intro-card p { margin: 0; color: var(--text-mute); font-size: .9rem; line-height: 1.55; }
+.app-intro-cta { text-align: center; color: var(--text-mute); font-size: .9rem; line-height: 1.7; }
+.app-intro-cta p { margin: .15rem 0; }
+@media (max-width: 640px) {
+  .app-intro-grid { grid-template-columns: 1fr; }
+}

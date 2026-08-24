@@ -388,6 +388,8 @@
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
     dwView: $('dwView'),
+    tabAppIntro: $('tabAppIntro'),
+    appIntroView: $('appIntroView'),
     dwModeImg: $('dwModeImg'),
     dwModePdf: $('dwModePdf'),
     dwImgPane: $('dwImgPane'),
@@ -6179,20 +6181,23 @@
     const isCom = view === 'commentary';
     const isUp = view === 'uploadconvert';
     const isDw = view === 'dw';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw;
+    const isAppIntro = view === 'appIntro';
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
     el.commentaryView.hidden = !isCom;
     el.uploadConvertView.hidden = !isUp;
     el.dwView.hidden = !isDw;
-    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw);
+    el.appIntroView.hidden = !isAppIntro;
+    el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro);
     el.tabLibrary.classList.toggle('is-active', isLib);
     el.tabSubscribe.classList.toggle('is-active', isSub);
     el.tabTorrent.classList.toggle('is-active', isTor);
     el.tabCommentary.classList.toggle('is-active', isCom);
     el.tabUploadConvert.classList.toggle('is-active', isUp);
     el.tabDw.classList.toggle('is-active', isDw);
+    el.tabAppIntro.classList.toggle('is-active', isAppIntro);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -6632,6 +6637,7 @@
   el.ucSubFormat.addEventListener('click', () => ucSwitchSub('format'));
   el.ucSubMerge.addEventListener('click', () => ucSwitchSub('merge'));
   el.tabDw.addEventListener('click', () => switchView('dw'));
+  el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
   el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
