@@ -16,6 +16,12 @@
     .dl-card h3 { margin: .6rem 0 .3rem; }
     .dl-card p { color: var(--text-mute); font-size: .9rem; min-height: 2.6em; }
     .dl-card .btn { margin-top: .8rem; }
+    .btn-soon {
+      display: inline-block; width: 100%; box-sizing: border-box;
+      background: #f3f4f6; color: #6b7280; border: 1px dashed #d1d5db;
+      border-radius: var(--radius, .55rem); padding: .65rem .9rem;
+      font-size: .9rem; cursor: not-allowed;
+    }
     .dl-back { text-align: center; margin-top: 2rem; }
     .dl-note { text-align:center; color: var(--text-mute); font-size: .82rem; margin-top: 1.4rem; }
     @media (max-width: 640px){ .dl-grid{ grid-template-columns:1fr; } }
@@ -24,7 +30,7 @@
 <body>
   <main class="wrap dl-page">
     <section class="dl-hero">
-      <h1>下载桌面客户端</h1>
+      <h1>下载客户端</h1>
       <p>支持 macOS / Windows / Android / iOS，安装后即可解锁全部桌面端能力。</p>
     </section>
 
@@ -40,6 +46,18 @@
         <h3>Windows</h3>
         <p>适用于 Windows 10 / 11（64 位）。</p>
         <a class="btn btn-primary btn-block" href="https://github.com/leydall0999-cell/video-downloader/releases" target="_blank" rel="noopener">下载 .exe</a>
+      </div>
+      <div class="dl-card dl-card-soon">
+        <div class="dl-ico">🤖</div>
+        <h3>Android</h3>
+        <p>适用于 Android 8+ 手机与平板。</p>
+        <span class="btn btn-block btn-soon">加急开发中，敬待开放</span>
+      </div>
+      <div class="dl-card dl-card-soon">
+        <div class="dl-ico">🍎</div>
+        <h3>iOS</h3>
+        <p>适用于 iPhone / iPad，支持 iOS 14+。</p>
+        <span class="btn btn-block btn-soon">加急开发中，敬待开放</span>
       </div>
     </div>
 
