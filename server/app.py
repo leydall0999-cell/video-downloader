@@ -1350,6 +1350,43 @@ def _purge_conversions_dir(max_age: float = 7 * 24 * 3600) -> int:
     return n
 
 
+async def _auto_update_ytdlp() -> None:
+    """后台自动更新 yt-dlp 解析器（带 7 天冷却，避免每次部署都拉 PyPI）。
+
+    平台反爬频繁改版，固定版本会逐步失效；此任务在启动后异步下载最新版
+    yt-dlp 到 ~/.videodownloader/yt_dlp（bootstrap 下次启动优先使用），
+    更新仅替换解析逻辑、不触碰登录态。失败静默（不影响主服务）。
+    """
+    import asyncio as _asyncio
+    import random as _random
+    try:
+        # 冷却标记：~/.videodownloader/ytdlp_last_check 记录上次成功更新的日期
+        _mark = Path.home() / ".videodownloader" / "ytdlp_last_check"
+        try:
+            if _mark.exists():
+                age_days = (time.time() - _mark.stat().st_mtime) / 86400
+                if age_days < 7:
+                    return  # 7 天内已检查过
+        except OSError:
+            pass
+        # 启动后延迟 60~180s（随机抖动，避开冷启动高峰）
+        await _asyncio.sleep(_random.randint(60, 180))
+        # 用线程跑阻塞的 PyPI 下载（requests 同步）
+        result = await _asyncio.to_thread(ydlp_update.update)
+        if result.get("updated"):
+            logger.info("[ytdlp] 自动更新成功 -> %s（重启后生效）", result.get("version"))
+            try:
+                _mark.write_text(str(time.time()))
+            except OSError:
+                pass
+        elif result.get("error"):
+            logger.warning("[ytdlp] 自动更新失败: %s", result.get("error"))
+        else:
+            logger.info("[ytdlp] 已是最新版本 %s", result.get("version"))
+    except Exception as e:  # noqa: BLE001
+        logger.info("[ytdlp] 自动更新跳过: %s", str(e)[:100])
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     # 启动即打印运行实例的真实代码版本，便于在 Railway Deploy Logs 首行确认
@@ -1405,6 +1442,13 @@ async def lifespan(_: FastAPI):
         _start_cookie_pull_from_vps()
     except Exception:
         logger.exception("启动 Cookie 隧道拉取任务失败")
+    # yt-dlp 解析器自动更新（后台，7 天冷却）：平台反爬天天变，固定版本会逐步失效。
+    # 更新后需重启才生效（bootstrap 已加载的旧版无法热替换），因此这里只下载新版
+    # 到 ~/.videodownloader/yt_dlp，下次部署/重启时 bootstrap 自动优先使用。
+    try:
+        asyncio.create_task(_auto_update_ytdlp())
+    except Exception:
+        logger.exception("启动 yt-dlp 自动更新任务失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
