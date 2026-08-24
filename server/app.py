@@ -3161,8 +3161,27 @@ def _warm_cookie_pool() -> None:
         logger.exception("公共池启动预热异常")
 
 
+# /v1/resolve 转发限流：按 IP 每 10 分钟最多 60 次（token 泄漏/滥用保护）
+_VPS_RL: dict[str, list[float]] = {}
+_VPS_RL_WINDOW = 600
+_VPS_RL_MAX = 60
+_VPS_RL_LOCK = threading.Lock()
+
+
+def _vps_rate_ok(client_ip: str) -> bool:
+    _now = time.time()
+    with _VPS_RL_LOCK:
+        q = _VPS_RL.setdefault(client_ip, [])
+        while q and _now - q[0] > _VPS_RL_WINDOW:
+            q.pop(0)
+        if len(q) >= _VPS_RL_MAX:
+            return False
+        q.append(_now)
+        return True
+
+
 @app.get("/v1/resolve")
-def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = "") -> dict:
+def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = "", request: Request = None) -> dict:
     """App 桌面端解析转发端点：/v1/resolve → 反向隧道 → VPS daemon（18731）。
 
     桌面 App 没有本地隧道，配 `VDL_WORKER_URL=https://hanyuxz.top` +
@@ -3176,6 +3195,9 @@ def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = ""
     ).strip()
     if not expected or token != expected:
         raise HTTPException(status_code=403, detail="无效令牌")
+    _ip = (request.client.host if request and request.client else "") or ""
+    if _ip and not _vps_rate_ok(_ip):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
     try:
         return downloader._call_vps_worker(platform, url, cookie=cookie)
     except downloader.ResolveError as e:
