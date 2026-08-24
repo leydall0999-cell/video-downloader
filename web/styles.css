@@ -92,12 +92,6 @@ img { max-width: 100%; display: block; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .hero p { margin-top: .6rem; color: var(--text-mute); font-size: .95rem; }
-.hero-note {
-  display: inline-block; max-width: 40rem; margin: .85rem auto 0; padding: .5rem .9rem;
-  background: color-mix(in srgb, var(--accent, #4f46e5) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent, #4f46e5) 28%, transparent);
-  border-radius: .6rem; font-size: .9rem; line-height: 1.5; text-align: left;
-}
 
 /* ---------------- panels ---------------- */
 .panel {
