@@ -3292,7 +3292,50 @@ def _weishi_info(url: str, proxy: str = "") -> dict[str, Any]:
     )
 
 
-def _yy_info(url: str, proxy: str = "") -> dict[str, Any]:
+def _finder_info(url: str, proxy: str = "") -> dict[str, Any]:
+    """微信视频号（weixin.qq.com/sph/* → channels.weixin.qq.com/finder-preview/*）。
+
+    视频号的播放地址由微信客户端/网页登录态签名生成，游客态（无微信会话 Cookie）
+    打开分享链接只会看到「请在微信中打开」的壳，拿不到真实视频流。必须用带微信
+    登录态的浏览器会话才能加载播放器并请求 CDN 流。
+
+    解析策略（2026-08-24 接入 VPS worker）：
+    1) 必须走 VPS worker（finder_resolve）：worker 注入微信登录态 Cookie 后真实
+       浏览器抓流。无 worker 配置 → 直接诚实报错（不伪装 best-effort，因为游客态
+       真的拿不到）。
+    2) worker 解析失败（无 Cookie / Cookie 过期 / 链接失效）→ 透传真实原因。
+    """
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    if token:
+        try:
+            data = _call_vps_worker("finder", url)
+            return {
+                "id": data.get("video_id", ""),
+                "title": data.get("title") or "微信视频号视频",
+                "duration": data.get("duration"),
+                "webpage_url": data.get("webpage_url") or url,
+                "extractor_key": "WeiXinFinder",
+                "extractor": "finder",
+                "ext": data.get("ext") or "mp4",
+                "direct": True,
+                "url": data.get("video_url"),
+                "protocol": "https",
+                "thumbnail": data.get("thumbnail", ""),
+                "http_headers": {"User-Agent": _NE_UA, "Referer": "https://channels.weixin.qq.com/"},
+            }
+        except ResolveError:
+            raise  # 透传 worker 真实错误（无登录态/链接失效/被风控等）
+
+    # 未配置 worker：视频号游客态无论如何拿不到流，诚实告知
+    raise ResolveError(
+        "微信视频号暂不支持解析",
+        "微信视频号的播放地址需微信登录态签名，无登录态时网页只返回"
+        "「请在微信中打开」的壳，无法提取视频流。\n"
+        "① 请在微信内打开该视频，确认可正常播放；\n"
+        "② 本服务已支持经 VPS 解析节点解析视频号，但需先配置微信登录态 Cookie"
+        "（在已登录微信的浏览器复制 channels.weixin.qq.com 的 Cookie 粘贴给运维即可）。",
+        category="pending_extractor",
+    )
     """YY 直播（yy.com / h.yy.com）：直播流地址需 App 端签名，公开 web 接口拿不到直链。
     best-effort：尝试从播放页/公开 API 提取，失败明确告知。
     """
@@ -3472,6 +3515,9 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 微视 / YY 直播：腾讯/YY 签名流，best-effort + 清晰提示
     if "weishi.qq.com" in (host or ""):
         return _weishi_info(url, proxy=proxy)
+    # 微信视频号：weixin.qq.com/sph/* 短链 或 channels.weixin.qq.com 直链
+    if ("weixin.qq.com" in (host or "")) or ("channels.weixin.qq.com" in (host or "")):
+        return _finder_info(url, proxy=proxy)
     if "yy.com" in (host or ""):
         return _yy_info(url, proxy=proxy)
     # Disney+ Hotstar / KinoPoisk：yt-dlp 已有提取器，显式放行走末尾通用解析，

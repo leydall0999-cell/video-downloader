@@ -45,6 +45,7 @@ from hongguo_resolve import resolve as hongguo_resolve  # noqa: E402
 from inke_resolve import resolve as inke_resolve  # noqa: E402
 from cc_resolve import resolve as cc_resolve  # noqa: E402
 from weishi_resolve import resolve as weishi_resolve  # noqa: E402
+from finder_resolve import resolve as finder_resolve  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
@@ -111,6 +112,7 @@ _RESOLVERS = {
     "inke": inke_resolve,
     "cc": cc_resolve,
     "weishi": weishi_resolve,
+    "finder": finder_resolve,
 }
 
 
