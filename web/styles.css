@@ -941,8 +941,8 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   .hero h1 { font-size: clamp(1.25rem, 5.5vw, 1.6rem); }
   .hero p { font-size: .88rem; }
   .hero-note { display: block; width: 100%; font-size: .82rem; padding: .45rem .7rem; }
-  .tabs { width: 100%; gap: .45rem; margin-top: .8rem; }
-  .tab { flex: 1 1 0; min-width: 0; height: 42px; min-height: 42px; padding: 0 .3rem; font-size: .72rem; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; width: 100%; margin-top: .8rem; overflow: visible; padding-bottom: 0; }
+  .tab { flex: none; min-width: 0; height: 44px; min-height: 44px; padding: 0 .6rem; font-size: .85rem; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; }
   .input-row #resolveBtn { width: 100%; height: 48px; }
