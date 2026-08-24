@@ -8049,25 +8049,18 @@
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       node.profile = profile;
       // —— Route B：网页精简版（profile=web）按 profile 隐藏 App 专属 tab ——
-      if (profile === 'web') {
-        // 网页端保留：下载(核心) / 视频转换 / 去水印；隐藏其余 App 专属入口。
-        // （convert / dewatermark router 已在 web-dev 挂载；缺依赖时优雅返回 503，不会 404）
-        ['tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent', 'tabBaidu', 'tabPcs']
-          .forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
-      } else {
-        // App 端：沿用能力精细控制（修掉之前漏隐藏 library/subscribe/pcs 的 bug）
-        if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
-        if (el.tabBaidu) el.tabBaidu.hidden = !node.baiduAvailable;
-        if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
-        if (el.tabUploadConvert) el.tabUploadConvert.hidden = false; // 本地核心能力
-        if (el.tabDw) el.tabDw.hidden = !node.aiDewatermarkEnabled;  // 依赖 AI 去水印能力
-        if (el.tabLibrary) el.tabLibrary.hidden = !node.libraryEnabled;
-        if (el.tabSubscribe) el.tabSubscribe.hidden = !node.subscriptionsEnabled;
-        if (el.tabPcs) el.tabPcs.hidden = !node.baiduAvailable;
-      }
-      el.tabs.hidden = false; // 至少有下载 tab，导航栏始终显示
-      // 默认视图：网页精简版停在下载，App 端停在解说成片
-      switchView(profile === 'web' ? 'download' : 'commentary');
+      // 网页版固定只保留四大入口，其余 App 专属 tab 永久隐藏，不受后端 profile 影响。
+      [
+        'tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent',
+        'tabBaidu', 'tabPcs'
+      ].forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
+      if (el.tabDownload) el.tabDownload.hidden = false;
+      if (el.tabUploadConvert) el.tabUploadConvert.hidden = false;
+      if (el.tabDw) el.tabDw.hidden = false;
+      if (el.tabAppIntro) el.tabAppIntro.hidden = false;
+      el.tabs.hidden = false; // 导航栏始终显示
+      // 默认视图：始终停在下载
+      switchView('download');
       bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
       paintNodeBar();
