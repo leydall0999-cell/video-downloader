@@ -216,9 +216,13 @@ def _kill_all_chromium():
         pass
 
 
-def do_resolve(platform, url):
+def do_resolve(platform, url, cookie=""):
     """用 Playwright 解析指定平台视频。用 _resolve_lock 串行化 Chromium，
-    与推送锁独立，避免被云端推送的网络抖动饿死。"""
+    与推送锁独立，避免被云端推送的网络抖动饿死。
+
+    ``cookie``：可选登录态 Cookie，仅透传给支持该参数的平台（如 finder 微信
+    视频号 worker 用其注入浏览器会话）；其余平台 resolver 不接受该参数，传空串。
+    """
     resolver = _RESOLVERS.get(platform)
     if resolver is None:
         return False, "不支持的平台: %s" % platform
@@ -232,7 +236,11 @@ def do_resolve(platform, url):
         # 可能显著变慢（>90s），超出 Railway 限时。这里强制 85s 上限，超时杀
         # chromium 并返回干净错误，避免请求堆积在 _resolve_lock 后饿死后续请求。
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        fut = ex.submit(resolver, url)
+        # 仅 finder 平台透传 cookie（其余 resolver 无 cookie 参数，避免 TypeError）
+        if platform == "finder" and cookie:
+            fut = ex.submit(resolver, url, cookie=cookie)
+        else:
+            fut = ex.submit(resolver, url)
         try:
             result = fut.result(timeout=85)
             ex.shutdown(wait=False)
@@ -327,7 +335,9 @@ class _Handler(BaseHTTPRequestHandler):
             if not url:
                 self._send(400, {"error": "missing url"})
                 return
-            ok, result = do_resolve(platform, url)
+            # 可选登录态 Cookie（如微信视频号 finder 需要）；其余平台忽略
+            cookie = q.get("cookie", [""])[0]
+            ok, result = do_resolve(platform, url, cookie=cookie)
             if not ok:
                 # 业务失败（链接无效/需登录/视频删除/未开播等）返回 200 + ok:false，
                 # 让 Railway 端 _call_vps_worker 透传真实业务原因；只有解析器
