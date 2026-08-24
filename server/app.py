@@ -3161,6 +3161,29 @@ def _warm_cookie_pool() -> None:
         logger.exception("公共池启动预热异常")
 
 
+@app.get("/v1/resolve")
+def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = "") -> dict:
+    """App 桌面端解析转发端点：/v1/resolve → 反向隧道 → VPS daemon（18731）。
+
+    桌面 App 没有本地隧道，配 `VDL_WORKER_URL=https://hanyuxz.top` +
+    `VDL_WORKER_PROXY=""` 后，其 downloader._call_vps_worker 会请求本端点
+    （token 用 VDL_COOKIE_SYNC_TOKEN）。本端点校验 token 后复用与 web 相同的
+    `_call_vps_worker` 隧道链路转发 VPS 解析，返回与 daemon 一致的 JSON
+    （ok/video_url/title/error…），App 端零改动消费。
+    """
+    expected = (
+        os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    ).strip()
+    if not expected or token != expected:
+        raise HTTPException(status_code=403, detail="无效令牌")
+    try:
+        return downloader._call_vps_worker(platform, url, cookie=cookie)
+    except downloader.ResolveError as e:
+        return {"ok": False, "error": str(e), "hint": getattr(e, "hint", "")}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"转发失败: {type(e).__name__} {e}"}
+
+
 @app.get("/api/cookie/pull-diag")
 def cookie_pull_diag() -> dict:
     """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
