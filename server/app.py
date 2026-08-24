@@ -2906,6 +2906,33 @@ def _cloud_sync_config() -> tuple[str, str]:
     return url, token
 
 
+def _ensure_vps_env() -> None:
+    """桌面 App 启动时注入 VPS 解析配置：经线上转发端点复用 VPS worker。
+
+    桌面端无本地隧道，若未显式配置 VDL_WORKER_URL，则复用 cloud_sync 配置
+    （~/.videodownloader/cloud_sync.json 的 url/token，即推送用的线上地址）：
+      - VDL_WORKER_URL    = <线上地址>（如 https://hanyuxz.top）
+      - VDL_WORKER_PROXY  = "off"（直连线上，禁用 18889 本地隧道默认代理）
+      - VDL_COOKIE_SYNC_TOKEN = <token>（/v1/resolve 转发端点校验用）
+    这样 downloader._call_vps_worker 对 14 个 VPS 平台（抖音/快手/微博/爱奇艺/
+    红果/微视/1905…）自动走线上转发，桌面 App 零额外配置获得 VPS 解析能力。
+    """
+    if os.environ.get("VDL_WORKER_URL"):
+        return  # 已显式配置，不覆盖
+    url, token = _cloud_sync_config()
+    if not url:
+        return
+    if not os.environ.get("VDL_WORKER_PROXY"):
+        os.environ["VDL_WORKER_PROXY"] = "off"
+    if not os.environ.get("VDL_COOKIE_SYNC_TOKEN") and token:
+        os.environ["VDL_COOKIE_SYNC_TOKEN"] = token
+    os.environ["VDL_WORKER_URL"] = url.rstrip("/")
+    logger.info("[vps] 桌面端注入 VPS 转发配置: %s", os.environ["VDL_WORKER_URL"])
+
+
+_ensure_vps_env()
+
+
 def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dict:
     """把单站 Cookie 推送到云端公共池（POST /api/cookie/sync）。
 

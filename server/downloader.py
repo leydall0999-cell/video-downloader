@@ -1832,7 +1832,13 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
       3. 默认值 http://127.0.0.1:18731 经 http://127.0.0.1:18889 隧道代理
     """
     worker_base = os.environ.get("VDL_WORKER_URL") or os.environ.get("VDL_COOKIE_REFILL_URL", "")
-    worker_proxy = os.environ.get("VDL_WORKER_PROXY") or os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    _wp_env = (os.environ.get("VDL_WORKER_PROXY") or "").strip()
+    if _wp_env.lower() in ("none", "off", "disable"):
+        # 显式禁用代理：桌面 App 直连线上转发端点（https://hanyuxz.top/v1/resolve），
+        # 无本地隧道，绝不能走 18889 默认代理（会连接拒绝）
+        worker_proxy = None
+    else:
+        worker_proxy = _wp_env or os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
     if not worker_base:
         worker_base = "http://127.0.0.1:18731"
     # 兼容旧配置：若把隧道代理地址错填成 worker 目标，自动纠正为 daemon 目标
@@ -1845,7 +1851,7 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
     if ":18888" in worker_base:
         worker_base = "http://127.0.0.1:18731"
         worker_proxy = "http://127.0.0.1:18889"
-    if ":18888" in worker_proxy:
+    if worker_proxy and ":18888" in worker_proxy:
         worker_proxy = "http://127.0.0.1:18889"
 
     token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
