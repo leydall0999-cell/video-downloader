@@ -11,6 +11,7 @@ sys.path 最前优先使用，从而在不重新打包的前提下获得最新�
 """
 from __future__ import annotations
 
+import os
 import sys
 import zipfile
 from io import BytesIO
@@ -18,7 +19,26 @@ from pathlib import Path
 
 import requests
 
-VDL_YTDLP_DIR = Path.home() / ".videodownloader" / "yt_dlp"
+
+def _resolve_ytdlp_dir() -> Path:
+    """优先用 Railway 持久卷（部署重启不丢），否则回退本机 home（桌面端）。
+
+    Railway ephemeral 容器每次部署重建，home 下的文件会清空；而自动更新的
+    yt-dlp 若随部署丢失就白更新了。持久卷（RAILWAY_VOLUME_MOUNT_PATH）与
+    cookie 池共用，重启后 bootstrap 仍能拿到最新解析器。
+    """
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    if mount:
+        try:
+            p = Path(mount) / "yt_dlp"
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except OSError:
+            pass
+    return Path.home() / ".videodownloader" / "yt_dlp"
+
+
+VDL_YTDLP_DIR = _resolve_ytdlp_dir()
 _VERSION_FILE = VDL_YTDLP_DIR / "version.txt"
 _PYPI_JSON = "https://pypi.org/pypi/yt-dlp/json"
 _PYPI_TIMEOUT = 20
