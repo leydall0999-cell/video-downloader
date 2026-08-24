@@ -2018,9 +2018,16 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   margin-top: .7rem; text-align: center; font-size: .95rem;
   color: var(--text-mute, #6b7280); font-weight: 600; letter-spacing: .02em;
 }
-.app-intro-more {
-  margin-top: auto; padding-top: .8rem; text-align: center; font-size: .85rem;
-  color: var(--text-mute, #6b7280); opacity: .85;
+.app-intro-split { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center; height: 100%; }
+.app-intro-split-left p { text-align: left; }
+.app-intro-split-right {
+  display: flex; align-items: center; justify-content: center;
+  padding-left: .8rem; border-left: 1px dashed var(--border, #e5e7eb);
+  color: var(--text-mute, #6b7280); font-size: .9rem; white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .app-intro-split { grid-template-columns: 1fr; }
+  .app-intro-split-right { padding-left: 0; padding-top: .6rem; border-left: none; border-top: 1px dashed var(--border, #e5e7eb); justify-content: flex-start; }
 }
 .app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
