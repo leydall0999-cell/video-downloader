@@ -272,6 +272,11 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
     logger.info("[cookie_pool] add domain=%s allowed=%s source=%s len=%s", domain, allowed, source, len(header or ""))
     if not allowed:
         return False
+    # 统一存根域：weixin.qq.com → qq.com，使 channels.weixin.qq.com 等子域
+    # 经 _candidates 回退能读到（候选含 root=qq.com）；bilibili/youku 根域不变。
+    root = _strip_sub(domain)
+    if root:
+        domain = root
     header = (header or "").strip()
     if not header:
         return False
