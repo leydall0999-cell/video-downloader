@@ -2018,16 +2018,18 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   margin-top: .7rem; text-align: center; font-size: .95rem;
   color: var(--text-mute, #6b7280); font-weight: 600; letter-spacing: .02em;
 }
-.app-intro-split { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center; height: 100%; }
-.app-intro-split-left p { text-align: left; }
-.app-intro-split-right {
+.app-intro-soon-card {
+  grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: center;
-  padding-left: .8rem; border-left: 1px dashed var(--border, #e5e7eb);
-  color: var(--text-mute, #6b7280); font-size: .9rem; white-space: nowrap;
+  min-height: 5.5rem;
 }
-@media (max-width: 520px) {
-  .app-intro-split { grid-template-columns: 1fr; }
-  .app-intro-split-right { padding-left: 0; padding-top: .6rem; border-left: none; border-top: 1px dashed var(--border, #e5e7eb); justify-content: flex-start; }
+.app-intro-soon-card p {
+  margin: 0; font-size: 1.25rem; color: var(--text-mute, #6b7280);
+  letter-spacing: .05em; opacity: .9;
+}
+@media (max-width: 640px) {
+  .app-intro-soon-card { grid-column: auto; min-height: 4rem; }
+  .app-intro-soon-card p { font-size: 1rem; }
 }
 .app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
