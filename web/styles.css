@@ -2018,18 +2018,15 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   margin-top: .7rem; text-align: center; font-size: .95rem;
   color: var(--text-mute, #6b7280); font-weight: 600; letter-spacing: .02em;
 }
-.app-intro-soon-card {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; justify-content: center;
-  min-height: 5.5rem;
+.app-intro-split { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center; height: 100%; }
+.app-intro-split-left p { text-align: left; }
+.app-intro-split-right {
+  display: flex; align-items: center; justify-content: flex-end;
+  color: var(--text-mute, #6b7280); font-size: .95rem; opacity: .9;
 }
-.app-intro-soon-card p {
-  margin: 0; font-size: 1.25rem; color: var(--text-mute, #6b7280);
-  letter-spacing: .05em; opacity: .9;
-}
-@media (max-width: 640px) {
-  .app-intro-soon-card { grid-column: auto; min-height: 4rem; }
-  .app-intro-soon-card p { font-size: 1rem; }
+@media (max-width: 520px) {
+  .app-intro-split { grid-template-columns: 1fr; }
+  .app-intro-split-right { justify-content: flex-start; }
 }
 .app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
