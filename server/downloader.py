@@ -3363,6 +3363,7 @@ def _finder_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         "（在已登录微信的浏览器复制 channels.weixin.qq.com 的 Cookie 粘贴给运维即可）。",
         category="pending_extractor",
     )
+def _yy_info(url: str, proxy: str = "") -> dict[str, Any]:
     """YY 直播（yy.com / h.yy.com）：直播流地址需 App 端签名，公开 web 接口拿不到直链。
     best-effort：尝试从播放页/公开 API 提取，失败明确告知。
     """
