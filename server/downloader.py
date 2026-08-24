@@ -366,8 +366,9 @@ def _expand_iqiyi_short_url(url: str, proxy: str = "") -> str:
     return url
 
 
-def _expand_generic_302(url: str, proxy: str = "", allowed_hosts: tuple[str, ...] = ()) -> str:
-    """通用短链 302 展开（如 shturl.cc → inke.cn），带目标域名白名单校验。
+def _expand_generic_302(url: str, proxy: str = "", allowed_hosts: tuple[str, ...] = (),
+                        referer: str = "") -> str:
+    """通用短链 302 展开（如 shturl.cc → inke.cn、xhslink.cn → xiaohongshu.com），带目标域名白名单校验。
 
     与 _expand_iqiyi_short_url 同思路：yt-dlp 的 InkeIE 只认 inke.cn 域，
     shturl.cc 短链会落 [generic] 失败，需先 HEAD/GET 跟随 302 展开。
@@ -378,12 +379,13 @@ def _expand_generic_302(url: str, proxy: str = "", allowed_hosts: tuple[str, ...
     import requests as _requests
 
     host = _host_of(url) or ""
-    if not any(h in host for h in allowed_hosts):
+    # 原始 URL 已在目标域内（非短链域）→ 无需展开，直接返回
+    if any(h in host for h in allowed_hosts):
         return url
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-        "Referer": "https://www.inke.cn/",
+        "Referer": referer or ("https://www." + (allowed_hosts[0] if allowed_hosts else "") + "/"),
     }
     proxies = {"http": proxy, "https": proxy} if proxy else None
     try:
@@ -394,7 +396,7 @@ def _expand_generic_302(url: str, proxy: str = "", allowed_hosts: tuple[str, ...
         if any(h in final_host for h in allowed_hosts):
             return final
     except Exception as e:  # noqa: BLE001
-        logger.info("[shturl expand] %s failed: %s", url, str(e)[:120])
+        logger.info("[short expand] %s failed: %s", url, str(e)[:120])
     return url
 
 
@@ -497,6 +499,18 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     # （yt-dlp InkeIE 只认 inke.cn 域，shturl.cc 会落 generic 失败）
     if "shturl.cc" in url:
         expanded = _expand_generic_302(url, proxy=proxy, allowed_hosts=("inke.cn",))
+        if expanded != url:
+            logger.info("[normalize] %s -> %s", url, expanded)
+            return expanded
+        return _strip_tracking_params(url)
+
+    # 小红书短链 xhslink.cn / xhslink.com/o/xxx：302 展开为 xiaohongshu.com 详情页
+    # （yt-dlp XiaohongshuIE 只认 xiaohongshu.com 域，短链会落 generic 失败；
+    #  展开后的 xsec_token / share_id 等参数由 yt-dlp 自行处理，保留不剥离）
+    if "xhslink.cn" in url or "xhslink.com" in url:
+        expanded = _expand_generic_302(url, proxy=proxy,
+                                       allowed_hosts=("xiaohongshu.com",),
+                                       referer="https://www.xiaohongshu.com/")
         if expanded != url:
             logger.info("[normalize] %s -> %s", url, expanded)
             return expanded
@@ -1210,7 +1224,7 @@ class DownloadPaused(Exception):
 _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
     "douyin.com", "iesdouyin.com",
     "kuaishou.com", "chenzhongtech.com", "gifshow.com",
-    "xiaohongshu.com", "xhslink.com",
+    "xiaohongshu.com", "xhslink.com", "xhslink.cn",
     "tiktok.com", "instagram.com",
     # 腾讯视频：限免/会员视频走另一套播放 API，需要登录态 cookie；
     # 加入后 app 会自动从本机浏览器读 cookie 并注入请求，提示用户粘贴。

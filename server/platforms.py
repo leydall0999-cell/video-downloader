@@ -49,7 +49,7 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("bilibili", "哔哩哔哩", ("bilibili.com", "b23.tv", "bilibili.tv"), "📺"),
     Platform("douyin", "抖音", ("douyin.com", "iesdouyin.com"), "🎵"),
     Platform("kuaishou", "快手", ("kuaishou.com", "chenzhongtech.com", "gifshow.com"), "⚡"),
-    Platform("xiaohongshu", "小红书", ("xiaohongshu.com", "xhslink.com"), "📕"),
+    Platform("xiaohongshu", "小红书", ("xiaohongshu.com", "xhslink.com", "xhslink.cn"), "📕"),
     Platform("weibo", "微博", ("weibo.com", "weibo.cn", "video.weibo.com"), "🐦"),
     Platform("xigua", "西瓜视频", ("ixigua.com",), "🍉"),
     Platform("acfun", "AcFun", ("acfun.cn",), "🟢"),
