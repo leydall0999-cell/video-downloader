@@ -1802,8 +1802,11 @@ def _resolve_cache_put(key: str, data: dict[str, Any]) -> None:
         _RESOLVE_CACHE[key] = (time.time(), data)
 
 
-def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
+def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any]:
     """调用 VPS Playwright 解析 worker（/v1/resolve?platform=xx），返回真实流元数据。
+
+    ``cookie``：可选的用户登录态 Cookie，原样透传给 VPS worker（如微信视频号
+    finder worker 用其注入浏览器会话；为空则 worker 回退 VPS 本地共享 Cookie）。
 
     默认经反向隧道访问 VPS 本机 daemon：Railway 侧连 127.0.0.1:18889 隧道代理，
     转发到 ECS 127.0.0.1:18731。通过显式 ``proxies`` 参数覆盖 Railway 环境变量中的
@@ -1838,7 +1841,9 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
             "该平台下载依赖 VPS 解析节点，请配置 VDL_COOKIE_REFILL_URL / VDL_COOKIE_REFILL_TOKEN 或 VDL_COOKIE_SYNC_TOKEN",
         )
     # 命中缓存：probe() 刚解析过（90s 内），下载阶段直接复用，跳过二次 Playwright
-    _ckey = platform + "|" + url
+    # ⚠️ cookie 参与缓存 key：带用户登录态的解析结果不能与无登录态共享，
+    #    否则「无 Cookie 用户命中带 Cookie 用户解析出的直链」会绕过登录态语义。
+    _ckey = platform + "|" + url + ("|ck" if cookie else "")
     _cached = _resolve_cache_get(_ckey)
     if _cached is not None:
         logger.info("[worker cache] hit %s %s", platform, url[:80])
@@ -1849,6 +1854,8 @@ def _call_vps_worker(platform: str, url: str) -> dict[str, Any]:
         + "&platform=" + urllib.parse.quote(platform, safe="")
         + "&url=" + urllib.parse.quote(url, safe="")
     )
+    if cookie:
+        endpoint += "&cookie=" + urllib.parse.quote(cookie, safe="")
     # 显式指定代理并覆盖环境变量代理，确保本地隧道/内网请求不被外部 http_proxy 截获
     proxies = {"http": worker_proxy, "https": worker_proxy} if worker_proxy else None
     try:
@@ -3292,23 +3299,35 @@ def _weishi_info(url: str, proxy: str = "") -> dict[str, Any]:
     )
 
 
-def _finder_info(url: str, proxy: str = "") -> dict[str, Any]:
+def _finder_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """微信视频号（weixin.qq.com/sph/* → channels.weixin.qq.com/finder-preview/*）。
 
     视频号的播放地址由微信客户端/网页登录态签名生成，游客态（无微信会话 Cookie）
     打开分享链接只会看到「请在微信中打开」的壳，拿不到真实视频流。必须用带微信
     登录态的浏览器会话才能加载播放器并请求 CDN 流。
 
-    解析策略（2026-08-24 接入 VPS worker）：
+    解析策略（2026-08-24 接入 VPS worker + 用户自带 Cookie）：
     1) 必须走 VPS worker（finder_resolve）：worker 注入微信登录态 Cookie 后真实
        浏览器抓流。无 worker 配置 → 直接诚实报错（不伪装 best-effort，因为游客态
        真的拿不到）。
-    2) worker 解析失败（无 Cookie / Cookie 过期 / 链接失效）→ 透传真实原因。
+    2) 登录态来源优先级：
+       a. 用户手动粘贴的微信 Cookie（cookie 参数，最高优先，随请求透传 worker）；
+       b. 云端共享池 weixin.qq.com Cookie（其他用户/贡献者上报的兜底）；
+       c. VPS 本地 /opt/vdl-worker/cookies/weixin.txt（worker 内部兜底）。
+    3) worker 解析失败（Cookie 过期 / 链接失效）→ 透传真实原因。
     """
     token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
     if token:
+        # 用户没自带 Cookie 时，先试云端共享池兜底（weixin.qq.com 域）
+        effective_cookie = (cookie or "").strip()
+        if not effective_cookie:
+            try:
+                from cookie_pool import get_cookie as _pool_get
+                effective_cookie = _pool_get("weixin.qq.com") or ""
+            except Exception:
+                effective_cookie = ""
         try:
-            data = _call_vps_worker("finder", url)
+            data = _call_vps_worker("finder", url, cookie=effective_cookie)
             return {
                 "id": data.get("video_id", ""),
                 "title": data.get("title") or "微信视频号视频",
@@ -3517,7 +3536,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         return _weishi_info(url, proxy=proxy)
     # 微信视频号：weixin.qq.com/sph/* 短链 或 channels.weixin.qq.com 直链
     if ("weixin.qq.com" in (host or "")) or ("channels.weixin.qq.com" in (host or "")):
-        return _finder_info(url, proxy=proxy)
+        return _finder_info(url, cookie=cookie, proxy=proxy)
     if "yy.com" in (host or ""):
         return _yy_info(url, proxy=proxy)
     # Disney+ Hotstar / KinoPoisk：yt-dlp 已有提取器，显式放行走末尾通用解析，
@@ -4348,6 +4367,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 info = _iqiyi_info(task.url, cookie=cookie)
                 if info is None:
                     info = ydl.extract_info(task.url, download=False) or {}
+            elif ("weixin.qq.com" in (_task_host or "")) or ("channels.weixin.qq.com" in (_task_host or "")):
+                # 微信视频号：必须微信登录态，用户自带 Cookie 优先，共享池兜底
+                info = _finder_info(task.url, cookie=cookie)
             elif _is_youtube_host(_task_host):
                 # YouTube：自动降级（免 Cookie + PO Token → Cookie 源自动切换）
                 info = _resolve_youtube(task.url, user_cookie=cookie, proxy=effective_proxy)

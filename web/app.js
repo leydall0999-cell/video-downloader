@@ -483,6 +483,15 @@
     torStatus: $('torStatus'),
   };
 
+  // 记忆用户粘贴过的会话 Cookie（localStorage 本机存储，免每次重粘）。
+  // 注意：只存用户自己主动粘贴的 Cookie；「贡献公共池」的共享逻辑不受影响。
+  try {
+    const savedCookie = localStorage.getItem('vdl_cookie');
+    if (savedCookie && el.cookieInput && !el.cookieInput.value) {
+      el.cookieInput.value = savedCookie;
+    }
+  } catch (e) { /* localStorage 不可用（隐私模式等）时静默跳过 */ }
+
   // 解说裁剪状态
   let comTrimStart = 0;        // 裁剪起点（秒）
   let comTrimEnd = 0;          // 裁剪终点（秒）
@@ -833,6 +842,10 @@
     if (el.alertAction) {
       const isCookie = cat === 'cookie_required' || cat === 'cookie_invalid_or_expired';
       if (isCookie) {
+        // 登录态已失效 → 清掉本机记忆的 Cookie，避免下次继续带着失效值重试
+        if (cat === 'cookie_invalid_or_expired') {
+          try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
+        }
         el.alertAction.textContent = '去粘贴 Cookie';
         el.alertAction.hidden = false;
         el.alertAction.style.cssText = 'margin-top:.5rem;padding:.35rem .7rem;border:none;border-radius:6px;background:#e0a33a;color:#1b1b1b;font-size:12px;font-weight:600;cursor:pointer;';
@@ -3340,6 +3353,12 @@
     const raw = el.input.value.trim();
     const cookie = el.cookieInput.value.trim();
     const proxy = el.proxyInput.value.trim();
+    // 记忆本次粘贴的 Cookie（用户主动输入才覆盖，保证「清了输入框=不用了」语义）
+    if (cookie) {
+      try { localStorage.setItem('vdl_cookie', cookie); } catch (e) {}
+    } else {
+      try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
+    }
     if (!raw) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
       return;

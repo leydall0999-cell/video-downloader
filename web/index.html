@@ -104,7 +104,7 @@
           <div class="adv-body">
             <label class="adv-label" for="cookieInput">会话 Cookie（可选）</label>
             <textarea id="cookieInput" class="adv-textarea" rows="3" spellcheck="false"
-              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员等。粘贴浏览器复制的完整 Cookie 字符串。B站 直接粘贴 DevTools 里 SESSDATA 那一格的裸值即可（无需 SESSDATA= 前缀，后端会自动补）。"></textarea>
+              placeholder="需要登录态的平台都建议填：腾讯视频（限免/会员）、抖音、快手、小红书、B站大会员、微信视频号等。粘贴浏览器复制的完整 Cookie 字符串。B站 直接粘贴 DevTools 里 SESSDATA 那一格的裸值即可（无需 SESSDATA= 前缀，后端会自动补）。微信视频号：PC 微信播放视频号视频，按 ⌘⌥I 打开开发者工具 → Network 筛选 finder → 复制 channels.weixin.qq.com 请求的 Cookie 粘贴此处。"></textarea>
             <details class="cookie-help" id="cookieHelp">
               <summary class="cookie-help-summary">如何获取 / 复制浏览器 Cookie？</summary>
               <div class="cookie-help-body">
@@ -116,6 +116,7 @@
                   <li>按 <code>F12</code>（Mac：<code>⌘+⌥+I</code>）打开开发者工具 → <b>Application（应用）</b> → 左侧 <b>Cookies</b> → 选站点域名 → 复制整列 Cookie 值；
                     <br>或切到 <b>Console（控制台）</b> 输入 <code>document.cookie</code> 复制整串。</li>
                   <li>把复制到的字符串粘贴到上方「会话 Cookie」文本框。</li>
+                  <li><b>微信视频号专用</b>（网页浏览器拿不到，需用 PC 微信）：打开 <b>Mac 微信</b>（或 Windows 微信）播放视频号视频 → 按 <code>⌘⌥I</code>（Windows：<code>Ctrl+Shift+I</code>）打开内置开发者工具 → <b>Network</b> 面板筛选 <code>finder</code> → 刷新/重播视频 → 点开任意 <code>channels.weixin.qq.com</code> 请求 → 复制 <b>Request Headers</b> 里的 Cookie 整串，粘贴到上方文本框即可（微信视频号必须微信登录态才能解析）。</li>
                 </ol>
                 <p class="cookie-help-note">Cookie 默认会贡献到公共池、供其他访客共享复用（仅登录态、不含密码）；不想共享可在上方取消「贡献 Cookie 到公共池」勾选，则仅用于本次请求、不保存。VIP 账号需保持订阅有效才能拿到高画质。</p>
                 <button type="button" id="cookieHelpCopy" class="cookie-help-copy">复制操作指引</button>

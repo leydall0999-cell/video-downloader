@@ -57,7 +57,10 @@ _LOCK = threading.Lock()
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
 # 这样「哪些站允许上报登录态」不再写死 chrqj，加站只需改清单/配 env。
-_BASE_DOMAINS = {"chrqj.com", "bilibili.com", "youku.com"}
+# 注意：weixin.qq.com 经 _strip_sub 归一化为 qq.com（腾讯系登录态都是 qq.com 级
+# Cookie，微信视频号 wap_sid2 / 微视 / 腾讯视频 vus_session 同域），故白名单实际
+# 放行整个腾讯系——与 _STRUCTURAL_FIELDS 里已有的 qq.com 条目语义一致。
+_BASE_DOMAINS = {"chrqj.com", "bilibili.com", "youku.com", "weixin.qq.com"}
 
 logger = logging.getLogger(__name__)
 
@@ -379,7 +382,11 @@ def _verify_generic(domain: str, header: str) -> bool | None:
 _STRUCTURAL_FIELDS: dict[str, set[str]] = {
     "youku.com": {"P__yk__uck", "yktk", "cna", "x5sec", "sess_vkey", "unb"},
     "v.qq.com": {"vus_session", "video_platform", "uid_tt", "login_ecookie"},
-    "qq.com": {"vus_session", "video_platform", "uid_tt", "login_ecookie"},
+    "qq.com": {
+        "vus_session", "video_platform", "uid_tt", "login_ecookie",
+        # 微信视频号登录态关键字段（channels.weixin.qq.com / finder 会话）
+        "wap_sid2", "pass_ticket", "appmsg_token", "wxuin", "wxsid", "skey",
+    },
 }
 
 
