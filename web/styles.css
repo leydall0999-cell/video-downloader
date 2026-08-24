@@ -2015,8 +2015,8 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .app-intro-cta p { margin: .15rem 0; }
 .app-intro-cta-card { display: flex; flex-direction: column; }
 .app-intro-foot {
-  margin-top: .7rem; text-align: center; font-size: .72rem;
-  color: var(--accent, #4f46e5); font-weight: 600; letter-spacing: .02em;
+  margin-top: .7rem; text-align: center; font-size: .95rem;
+  color: var(--text-mute, #6b7280); font-weight: 600; letter-spacing: .02em;
 }
 .app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
