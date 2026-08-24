@@ -2018,6 +2018,10 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   margin-top: .7rem; text-align: center; font-size: .95rem;
   color: var(--text-mute, #6b7280); font-weight: 600; letter-spacing: .02em;
 }
+.app-intro-more {
+  margin-top: auto; padding-top: .8rem; text-align: center; font-size: .85rem;
+  color: var(--text-mute, #6b7280); opacity: .85;
+}
 .app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
   .app-intro-grid { grid-template-columns: 1fr; }
