@@ -3369,23 +3369,41 @@ def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dic
     """把单站 Cookie 推送到云端公共池（POST /api/cookie/sync）。
 
     带浏览器 User-Agent 以绕过 Cloudflare 对 Python-urllib 的拦截（error 1010）。
+    对 429/5xx 做有限指数退避重试，降低连发导致的限流（与 app-dev 同步加固）。
     """
+    import time
+    import urllib.request
+    import urllib.error
+
     target = url.rstrip("/") + "/api/cookie/sync"
     body = json.dumps({"token": token, "domain": domain, "cookie": header}).encode()
-    req = urllib.request.Request(
-        target,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-            ),
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode() or "{}")
+    last_err: Exception | None = None
+    for attempt in range(3):
+        req = urllib.request.Request(
+            target,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                ),
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except Exception as e:
+            last_err = e
+            raise
+    raise last_err or RuntimeError("推送 Cookie 到云端失败")
 
 
 @app.post("/api/cookie/sync/to-cloud")
