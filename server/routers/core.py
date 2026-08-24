@@ -9,6 +9,16 @@ import app
 from fastapi import APIRouter
 router = APIRouter()
 
+
+def _device_of(request: app.Request) -> str:
+    """取设备 ID：优先请求头 X-Device-Id（fetch 请求），其次 query device=
+    （EventSource / <a href> 文件下载无法带自定义 header，走 query）。"""
+    dev = (request.headers.get("X-Device-Id") or "").strip()
+    if not dev:
+        dev = (request.query_params.get("device") or "").strip()
+    return dev[:64]
+
+
 @router.get('/api/platforms')
 def list_platforms() -> dict:
     return {'platforms': app.platform_catalog()}
