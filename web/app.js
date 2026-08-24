@@ -5705,7 +5705,8 @@
     return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  document.getElementById('tabPcs').addEventListener('click', () => {
+  const tabPcsEl = document.getElementById('tabPcs');
+  if (tabPcsEl) tabPcsEl.addEventListener('click', () => {
     if (typeof pcsModal.showModal === 'function') pcsModal.showModal();
     else pcsModal.setAttribute('open', '');
     pcsRefreshStatus();
