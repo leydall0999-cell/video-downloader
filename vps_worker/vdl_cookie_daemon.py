@@ -28,6 +28,10 @@ import threading
 import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from pathlib import Path
+import logging
+
+logger = logging.getLogger("vdl-daemon")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bilibili_ecs_cookie import push_once, _collect_cookies, _push_to_cloud  # noqa: E402
@@ -216,6 +220,67 @@ def _kill_all_chromium():
         pass
 
 
+def _prune_profile_caches(max_age_hours: float = 48.0) -> int:
+    """清理各 Playwright profile 目录下的 Chromium 缓存（保留登录态数据）。
+
+    背景：bili_profile 等持久 profile 是「登录态持久化」设计（删了要重新扫码），
+    但其中 Default/Cache、Code Cache、GPUCache 等纯缓存目录会无限膨胀
+    （实测 bili_profile 1.1G 里 1004M 是 Cache）。这里只删缓存目录，
+    不动 Cookies/IndexedDB/Local Storage 等登录态数据；超时超过 max_age_hours
+    的文件才删（避免删到正在运行的浏览器刚写的新缓存）。
+    """
+    import shutil
+    root = Path(__file__).resolve().parent
+    n = 0
+    freed = 0
+    try:
+        for prof in root.glob("*_profile"):
+            if not prof.is_dir():
+                continue
+            for cache_dir in ("Default/Cache", "Default/Code Cache", "Default/GPUCache",
+                              "Default/DawnWebGPUCache", "Default/Service Worker/CacheStorage",
+                              "Default/Service Worker/ScriptCache"):
+                p = prof / cache_dir
+                if not p.exists():
+                    continue
+                # 只删 48h 前写入的缓存文件；目录本身保留
+                try:
+                    for f in p.rglob("*"):
+                        if f.is_file():
+                            try:
+                                if time.time() - f.stat().st_mtime > max_age_hours * 3600:
+                                    sz = f.stat().st_size
+                                    f.unlink(missing_ok=True)
+                                    freed += sz
+                                    n += 1
+                            except OSError:
+                                pass
+                    # 清完后把空的深层目录也清掉
+                    for d in sorted(p.rglob("*"), key=lambda x: -len(str(x))):
+                        if d.is_dir() and not any(d.iterdir()):
+                            try:
+                                d.rmdir()
+                            except OSError:
+                                pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if n:
+        logger.info("[prune] profile caches: removed %s files, freed %s MB", n, int(freed / 1024 / 1024))
+    return n
+
+
+def _prune_loop():
+    """每 12 小时清一次 profile 缓存；启动先跑一次。"""
+    while True:
+        try:
+            _prune_profile_caches()
+        except Exception:
+            pass
+        time.sleep(12 * 3600)
+
+
 def do_resolve(platform, url, cookie=""):
     """用 Playwright 解析指定平台视频。用 _resolve_lock 串行化 Chromium，
     与推送锁独立，避免被云端推送的网络抖动饿死。
@@ -370,6 +435,9 @@ class _Handler(BaseHTTPRequestHandler):
 def main():
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
+    # profile 缓存清理（12h 周期）：防持久 profile 的 Chromium 缓存无限膨胀撑爆 VPS 磁盘
+    tp = threading.Thread(target=_prune_loop, daemon=True)
+    tp.start()
     srv = ThreadingHTTPServer(("0.0.0.0", API_PORT), _Handler)
     print(f"✅ cookie daemon up: loop={INTERVAL}s api=0.0.0.0:{API_PORT}", flush=True)
     srv.serve_forever()
