@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import json
+import base64
 import time
 import threading
 from pathlib import Path
@@ -38,6 +39,14 @@ try:
     import requests as _requests
 except Exception:  # pragma: no cover
     _requests = None  # type: ignore[assignment]
+
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.padding import PKCS7
+    _CRYPTO_OK = True
+except Exception:  # pragma: no cover
+    Cipher = algorithms = modes = PKCS7 = None  # type: ignore[assignment]
+    _CRYPTO_OK = False
 
 
 def _cookie_diag(key: str, value: str = "") -> None:
@@ -1602,6 +1611,18 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
     # 页面里的 m3u8/iframe 直链、要么通知我们加 extractor。
     if isinstance(exc, UnsupportedError) or "unsupported url" in lowered:
         host = ctx.get("host", "")
+        # yt-dlp 原生支持的平台（仅因链接形态不对才落 UnsupportedError），给更精准的提示，
+        # 不误导成"暂未实现解析器"。2026-08-24 补：hotstar / kinopoisk yt-dlp 已有提取器。
+        _YTDLP_SUPPORTED = ("hotstar.com", "kinopoisk.ru", "hd.kinopoisk.ru")
+        if host and any(h == host or host.endswith("." + h) for h in _YTDLP_SUPPORTED):
+            return ResolveError(
+                f"该链接形态无法被 {host} 解析器识别",
+                "该平台 yt-dlp 已支持，但当前链接不是可解析的播放页形态。\n\n"
+                "请确认：\n"
+                "① 粘贴具体的视频/影片播放页链接（而非首页或分类页）；\n"
+                f"② {host} 多为地区限制内容，需对应支持地区网络与账号（数据中心 IP 常被 geo 拦截）。",
+                category="unsupported_url_form",
+            )
         # 已收录平台（白名单内但 yt-dlp 无 extractor）与完全未知域名区分提示，
         # 避免误报「不在支持列表」（2026-08-22 实测 yy.com/inke.cn 等已在白名单）。
         if host and any(
@@ -3070,6 +3091,236 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
     )
 
 
+# =========================================================================== #
+# B 类平台专用提取器（平台列表已收录但 yt-dlp 无原生提取器）
+#   netease（网易云 MV）/ tudou（土豆→优酷合并）/ weishi（微视）/
+#   yy（YY 直播）/ hotstar（Disney+ Hotstar）/ kinopoisk（KinoPoisk）
+# 说明：hotstar / kinopoisk 实际 yt-dlp 已有提取器，之前误报"暂未实现"是
+# 测试 URL/域名不匹配所致，这里显式分发让它们走 yt-dlp 正常解析。
+# =========================================================================== #
+
+# 网易云 MV：yt-dlp 的 NetEaseIE 对 MV 在数据中心 IP 返回 404（风控），且无稳定
+# 提取器。改走社区逆向的 weapi 加密（AES-128-ECB 两层，cryptography 库实现，
+# 不新增依赖），直连 music.163.com 官方接口拿 MV 直链（多清晰度 brs）。
+_NE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+_NE_NONCE = b"0CoJUm6Qyw8W8jud"
+_NE_SEC_KEY = b"WV9w9Bpu0rX0l3sN"
+
+
+def _ne_aes_ecb(key: bytes, data: bytes) -> bytes:
+    e = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    return e.update(data) + e.finalize()
+
+
+def _ne_weapi(obj: dict) -> tuple[str, str]:
+    """网易云 weapi 加密：明文 → AES( nonce, PKCS7 ) → AES( seckey, PKCS7 ) → base64。"""
+    text = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    padder = PKCS7(128).padder()
+    e1 = _ne_aes_ecb(_NE_NONCE, padder.update(text) + padder.finalize())
+    padder2 = PKCS7(128).padder()
+    e2 = _ne_aes_ecb(_NE_SEC_KEY, padder2.update(e1) + padder2.finalize())
+    return base64.b64encode(e2).decode(), base64.b64encode(_NE_SEC_KEY).decode()
+
+
+def _ne_http_get(url: str, proxy: str = "", headers: dict | None = None) -> str:
+    h = {"User-Agent": _NE_UA, "Accept-Language": "zh-CN,zh;q=0.9"}
+    if headers:
+        h.update(headers)
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    import requests as _req
+    r = _req.get(url, headers=h, proxies=proxies, timeout=20)
+    r.raise_for_status()
+    return r.text
+
+
+def _ne_info(url: str, proxy: str = "") -> dict[str, Any]:
+    """网易云音乐 MV 解析（music.163.com/mv?id=xxx）。"""
+    m = re.search(r"(?:/mv\?id=|/mv/|id=)(\d+)", url)
+    if not m:
+        raise ResolveError(
+            "网易云 MV 解析失败", "无法从链接中识别 MV ID（应为 music.163.com/mv?id=数字）。",
+            category="parse_failed",
+        )
+    mv_id = m.group(1)
+    params, enc_sec = _ne_weapi({"id": mv_id, "csrf_token": ""})
+    data = ("params=%s&encSecKey=%s" % (params, enc_sec)).encode()
+    try:
+        import requests as _req
+        r = _req.post(
+            "https://music.163.com/weapi/mv/detail/?csrf_token=",
+            data=data,
+            headers={
+                "User-Agent": _NE_UA,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": "https://music.163.com/",
+            },
+            proxies={"http": proxy, "https": proxy} if proxy else None,
+            timeout=20,
+        )
+        j = r.json()
+    except Exception as e:
+        raise ResolveError(
+            "网易云 MV 解析失败", f"请求网易云接口异常：{type(e).__name__} {e}", category="parse_failed"
+        ) from None
+    if j.get("code") not in (200, 0) or not j.get("data"):
+        raise ResolveError(
+            "网易云 MV 解析失败",
+            "网易云返回空数据（可能是该 MV 已下架，或当前出口 IP 被风控限流）。",
+            category="parse_failed",
+        )
+    d = j["data"]
+    # brs 为多清晰度字典 {br: url}，优先选最高清晰度（br 数值越大越清晰）
+    brs = d.get("brs") or {}
+    best_url = d.get("url") or ""
+    if not best_url and brs:
+        try:
+            _best_br = max(int(k) for k in brs.keys() if str(k).isdigit())
+            best_url = brs[str(_best_br)] or brs.get(_best_br) or ""
+        except Exception:
+            best_url = list(brs.values())[0]
+    if not best_url:
+        raise ResolveError(
+            "网易云 MV 解析失败", "未找到可用的 MV 视频流地址。", category="parse_failed"
+        )
+    return {
+        "id": mv_id,
+        "title": d.get("name") or "网易云 MV",
+        "duration": (d.get("duration") or 0) / 1000.0 if d.get("duration") else None,
+        "thumbnail": d.get("cover") or d.get("picUrl") or "",
+        "artist": (d.get("artistName") or ""),
+        "webpage_url": url,
+        "extractor_key": "NetEaseMV",
+        "extractor": "netease",
+        "ext": "mp4",
+        "direct": True,
+        "url": best_url,
+        "protocol": "https",
+        "http_headers": {"User-Agent": _NE_UA, "Referer": "https://music.163.com/"},
+    }
+
+
+def _tudou_info(url: str, proxy: str = "") -> dict[str, Any]:
+    """土豆：2016 年起已并入优酷、主站停止运营。
+
+    若用户给出的是仍能解析的旧土豆视频链接，尝试 302 展开看是否跳转到 youku，
+    是则转优酷通道复用其解析能力；否则明确告知已停运，不再误报"暂未实现解析器"。
+    """
+    try:
+        expanded = _expand_generic_302(url, proxy=proxy, allowed_hosts=("youku.com", "v.youku.com"))
+        if "youku.com" in expanded and expanded != url:
+            logger.info("[tudou] 重定向到优酷，转优酷通道: %s", expanded)
+            if expanded.endswith("youku.com"):
+                expanded = expanded.replace("www.youku.com", "v.youku.com", 1)
+            return _youku_info(expanded, "", "", proxy=proxy)
+    except Exception as e:
+        logger.info("[tudou] 展开失败: %s", str(e)[:120])
+    raise ResolveError(
+        "土豆视频已停止运营",
+        "土豆网于 2016 年并入优酷，原站视频已迁移/下线。\n"
+        "如果该视频在优酷仍有存档，请直接粘贴优酷链接（v.youku.com/...）到 VDL 解析。",
+        category="service_discontinued",
+    )
+
+
+def _weishi_info(url: str, proxy: str = "") -> dict[str, Any]:
+    """微视（weishi.qq.com）：腾讯系短视频，播放地址需 App 端签名（wskey/rticket），
+    无公开可用的直链接口。best-effort：抓取播放页看是否有内嵌视频 JSON，否则明确告知。
+    """
+    try:
+        html = _ne_http_get(url, proxy=proxy, headers={"Referer": "https://weishi.qq.com/"})
+        # 仅在播放页专属内嵌状态里找真实视频直链；首页/统计资源里的 .mp4 多为
+        # 广告/埋点（如 qzonestyle.gtimg.cn/qzact 统计图），误匹配会给出假直链，必须排除。
+        # 判定：URL 含 feedid（微视播放页特征）且内嵌 JSON 里出现 videoUrl/playUrl。
+        if "feedid" in url or "feed/" in url:
+            for pat in (r'"videoUrl"\s*:\s*"([^"]+)"', r'"playUrl"\s*:\s*"([^"]+)"',
+                        r'"video_url"\s*:\s*"([^"]+)"'):
+                m = re.search(pat, html)
+                if m:
+                    vurl = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+                    if vurl.startswith("//"):
+                        vurl = "https:" + vurl
+                    # 真实微视视频 CDN 域名（排除统计/广告资源）
+                    _ok_cdn = ("vweishi" in vurl or "weishi" in vurl or "gtimg.cn/qzone/weishi" in vurl
+                               or vurl.endswith(".mp4"))
+                    # 二次保险：统计/埋点资源域名直接拒绝
+                    _bad_cdn = ("qzact" in vurl or "act/extern" in vurl or "gtimg.cn/qzact" in vurl)
+                    if _ok_cdn and not _bad_cdn:
+                        return {
+                            "id": "", "title": "微视视频", "duration": None,
+                            "webpage_url": url, "extractor_key": "WeiShi",
+                            "extractor": "weishi", "ext": "mp4", "direct": True,
+                            "url": vurl, "protocol": "https",
+                            "http_headers": {"User-Agent": _NE_UA, "Referer": "https://weishi.qq.com/"},
+                        }
+    except Exception as e:
+        logger.info("[weishi] 抓取失败: %s", str(e)[:120])
+    raise ResolveError(
+        "微视暂不支持解析",
+        "微视的播放地址由手机 App 端签名生成，无公开网页直链接口，VDL 暂无法提取。\n"
+        "① 若原视频也发在微信/QQ 内，可尝试用腾讯视频链接（v.qq.com）解析；\n"
+        "② 页面源码里若有 .mp4 直链，可直接粘贴直链下载。",
+        category="pending_extractor",
+    )
+
+
+def _yy_info(url: str, proxy: str = "") -> dict[str, Any]:
+    """YY 直播（yy.com / h.yy.com）：直播流地址需 App 端签名，公开 web 接口拿不到直链。
+    best-effort：尝试从播放页/公开 API 提取，失败明确告知。
+    """
+    try:
+        # 公开房间信息接口（无需签名）有时能拿到 stream 相关字段，作为兜底探测
+        m = re.search(r"(?:/([a-z0-9_-]+)\.html|uid=|roomId=(\d+)|sid=(\d+))", url)
+        html = _ne_http_get(url, proxy=proxy, headers={"Referer": "https://www.yy.com/"})
+        for pat in (r'"liveUrl"\s*:\s*"([^"]+)"', r'"streamUrl"\s*:\s*"([^"]+)"',
+                    r'"hlsUrl"\s*:\s*"([^"]+)"', r'https?://[^"\'\s]+\.m3u8'):
+            mm = re.search(pat, html)
+            if mm:
+                surl = mm.group(1) if mm.groups() else mm.group(0)
+                if surl.startswith("//"):
+                    surl = "https:" + surl
+                return {
+                    "id": "", "title": "YY 直播", "duration": None,
+                    "webpage_url": url, "extractor_key": "YYLive",
+                    "extractor": "yy", "ext": "mp4", "direct": False,
+                    "protocol": "m3u8_native", "url": surl,
+                    "http_headers": {"User-Agent": _NE_UA, "Referer": "https://www.yy.com/"},
+                }
+    except Exception as e:
+        logger.info("[yy] 抓取失败: %s", str(e)[:120])
+    raise ResolveError(
+        "YY 直播暂不支持解析",
+        "YY 直播的流地址由客户端签名生成，公开接口无法获取直链，VDL 暂无法提取。\n"
+        "① 若是精彩回放且页面源码含 .m3u8 直链，可直接粘贴直链下载；\n"
+        "② 更多平台陆续支持中。",
+        category="pending_extractor",
+    )
+
+
+def _hotstar_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    """Disney+ Hotstar：yt-dlp 已有 HotstarIE 提取器，显式分发让链接走 yt-dlp 正常解析。
+    仅印度/印尼/马来西亚/泰国等支持地区 + 账号可看；数据中心 IP/非支持地区会被 geo 拦截。
+    """
+    # 直接复用 yt-dlp 通用解析流程（不在此重复实现，避免与 yt-dlp 维护脱节）
+    # 这里仅作为一个清晰的入口，返回 None 触发下方 yt-dlp 兜底路径。
+    # 真正执行在 probe() 末尾的 yt-dlp extract_info；此处不提前 return，
+    # 交由调用方在 hotstar 分发处选择：调用 _yt_dlp_fallback。
+    raise _NeedYtDlp()
+
+
+class _NeedYtDlp(Exception):
+    """标记该平台应交由 probe() 末尾的 yt-dlp 通用流程解析（已收录且 yt-dlp 支持）。"""
+
+
+def _kinopoisk_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    """KinoPoisk：yt-dlp 已有 KinoPoiskIE 提取器，显式分发走 yt-dlp 解析。
+    俄区内容，部分需登录/地区；数据中心 IP 可能 geo 限制。
+    """
+    raise _NeedYtDlp()
+
+
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
@@ -3185,6 +3436,22 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         if info is not None:
             return info
         # worker 未配置（本地桌面）且非分享页 → 回退 yt-dlp 通用流程
+    # —— B 类平台专用提取器分发（平台已收录但 yt-dlp 无原生提取器）——
+    # 网易云 MV：走自研 weapi 加密接口（yt-dlp 数据中心 IP 风控 404）
+    if "music.163.com" in (host or ""):
+        return _ne_info(url, proxy=proxy)
+    # 土豆：已并入优酷，尝试重定向或明确停运提示
+    if "tudou.com" in (host or ""):
+        return _tudou_info(url, proxy=proxy)
+    # 微视 / YY 直播：腾讯/YY 签名流，best-effort + 清晰提示
+    if "weishi.qq.com" in (host or ""):
+        return _weishi_info(url, proxy=proxy)
+    if "yy.com" in (host or ""):
+        return _yy_info(url, proxy=proxy)
+    # Disney+ Hotstar / KinoPoisk：yt-dlp 已有提取器，显式放行走末尾通用解析，
+    # 不再误报"暂未实现该站解析器"（地区/登录限制由 yt-dlp 返回明确错误）。
+    if "hotstar.com" in (host or "") or "kinopoisk" in (host or ""):
+        pass  # 落入下方 yt-dlp 通用流程
     # YouTube：自动降级（方法一免 Cookie + PO Token → 方法二 Cookie 源自动切换）
     if _is_youtube_host(host):
         return _resolve_youtube(url, user_cookie=cookie, proxy=proxy)
