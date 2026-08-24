@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -32,14 +34,35 @@ except Exception:  # pragma: no cover
     Fernet = None
 
 
-_POOL_DIR = Path.home() / ".videodownloader" / "cookie_pool"
+def _resolve_pool_dir() -> Path:
+    """解析公共池存储目录。优先级：
+    1. VDL_COOKIE_POOL_DIR —— 显式指定（已是完整目录，直接采用）
+    2. RAILWAY_VOLUME_MOUNT_PATH —— Railway 持久卷自动注入，拼 /cookie_pool
+    3. 兜底 —— ~/.videodownloader/cookie_pool（本地 / 无卷环境，向后兼容）
+    这样挂了 Railway 持久卷后，池文件自动落到卷上、跨容器重启存活。
+    """
+    custom = os.environ.get("VDL_COOKIE_POOL_DIR")
+    if custom:
+        return Path(custom)
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+    if mount:
+        return Path(mount) / "cookie_pool"
+    return Path.home() / ".videodownloader" / "cookie_pool"
+
+
+_POOL_DIR = _resolve_pool_dir()
 _TTL = 30 * 24 * 3600  # 30 天，超时视为失效
 _LOCK = threading.Lock()
 
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
 # 这样「哪些站允许上报登录态」不再写死 chrqj，加站只需改清单/配 env。
-_BASE_DOMAINS = {"chrqj.com", "bilibili.com"}
+# 注意：weixin.qq.com 经 _strip_sub 归一化为 qq.com（腾讯系登录态都是 qq.com 级
+# Cookie，微信视频号 wap_sid2 / 微视 / 腾讯视频 vus_session 同域），故白名单实际
+# 放行整个腾讯系——与 _STRUCTURAL_FIELDS 里已有的 qq.com 条目语义一致。
+_BASE_DOMAINS = {"chrqj.com", "bilibili.com", "youku.com", "weixin.qq.com"}
+
+logger = logging.getLogger(__name__)
 
 # chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
 _CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"
@@ -157,44 +180,73 @@ def _decrypt_item(c: dict) -> str:
     return ""
 
 
-def _save(domain: str, cookies: list) -> None:
-    _POOL_DIR.mkdir(parents=True, exist_ok=True)
+def _save(domain: str, cookies: list) -> bool:
     try:
-        os.chmod(_POOL_DIR, 0o700)
-    except Exception:
-        pass
-    cipher = _cipher()
-    payload = []
-    for c in cookies:
-        item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
-        header = c.get("header") or ""
-        if cipher and header:
-            item["header_enc"] = cipher.encrypt(header.encode()).decode()
-        else:
-            item["header"] = header
-        payload.append(item)
-    # 保留既有 ckey 字段（优酷等站需播放签名 ckey，不应被 cookie 同步清掉）
-    _existing_ckey = ""
-    try:
-        _ed = json.loads(_pool_file(domain).read_text())
-        _existing_ckey = _ed.get("ckey", "")
-    except Exception:
-        pass
-    _out = {"cookies": payload}
-    if _existing_ckey:
-        _out["ckey"] = _existing_ckey
-    f = _pool_file(domain)
-    f.write_text(json.dumps(_out, ensure_ascii=False))
-    try:
-        os.chmod(f, 0o600)
-    except Exception:
-        pass
+        _POOL_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(_POOL_DIR, 0o700)
+        except Exception:
+            pass
+        cipher = _cipher()
+        payload = []
+        for c in cookies:
+            item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
+            header = c.get("header") or ""
+            enc = c.get("header_enc") or ""
+            if not header and not enc:
+                # 双空条目（历史写坏/旧 bug 产物）直接丢弃，避免池文件无限膨胀
+                continue
+            if cipher:
+                # 有明文 → 加密存储；只有密文 → 原样保留
+                # （修复：旧实现用 c.get("header") 取明文，加密记录取到空串后
+                #  走 else 把已有密文重写成空明文条目，导致每次 _save 丢失历史记录）
+                item["header_enc"] = cipher.encrypt(header.encode()).decode() if header else enc
+            else:
+                if header:
+                    item["header"] = header
+                elif enc:
+                    # 无 cipher 但有密文：尝试解密回明文，失败则保留密文
+                    plain = _decrypt_item(c)
+                    if plain:
+                        item["header"] = plain
+                    else:
+                        item["header_enc"] = enc
+            payload.append(item)
+        f = _pool_file(domain)
+        # 保留既有 ckey 字段（add_cookie/add 同步写入时不能把已贡献的 ckey 清掉）
+        prev_ckey = None
+        try:
+            _prev = json.loads(f.read_text()) if f.exists() else {}
+            prev_ckey = _prev.get("ckey")
+        except Exception:
+            prev_ckey = None
+        out = {"cookies": payload}
+        if prev_ckey:
+            out["ckey"] = prev_ckey
+        text = json.dumps(out, ensure_ascii=False)
+        # 原子写：先写同目录临时文件再 os.replace，避免跨进程并发（VPS 推送 / Railway prune / 读取）
+        # 读到「写一半」的撕裂文件（之前诡异 65 字节空条目的根因之一）。
+        tmp = f.with_suffix(f.suffix + ".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, f)
+        try:
+            os.chmod(f, 0o600)
+        except Exception:
+            pass
+        logger.info("[cookie_pool] _save ok domain=%s file=%s bytes=%s", domain, f, len(text))
+        return True
+    except Exception as e:
+        logger.error("[cookie_pool] _save failed domain=%s dir=%s err=%s", domain, _POOL_DIR, e)
+        return False
 
 
 def get_cookie(domain: str) -> str | None:
     """返回该域最新有效的明文 Cookie（最近上报优先）；无则返回 None。"""
-    for d in _candidates(domain):
+    candidates = _candidates(domain)
+    logger.info("[cookie_pool] get domain=%s candidates=%s", domain, candidates)
+    for d in candidates:
         f = _pool_file(d)
+        logger.info("[cookie_pool] get file=%s exists=%s", f, f.exists())
         if not f.exists():
             continue
         try:
@@ -204,63 +256,33 @@ def get_cookie(domain: str) -> str | None:
                     continue
                 header = _decrypt_item(c)
                 if header:
+                    logger.info("[cookie_pool] get hit domain=%s candidate=%s len=%s", domain, d, len(header))
                     return header
-        except Exception:
+        except Exception as e:
+            logger.warning("[cookie_pool] get read error domain=%s file=%s: %s", domain, f, e)
             continue
-    return None
-
-
-def add_ckey(domain: str, ckey: str, source: str = "sync") -> bool:
-    """优酷等站需要播放签名 ckey（来自用户 Copy as cURL）。单独存于同一池文件。"""
-    domain = _norm_domain(domain)
-    ckey = (ckey or "").strip()
-    if not ckey:
-        return False
-    with _LOCK:
-        f = _pool_file(domain)
-        data = {"cookies": [], "ckey": ckey, "ckey_ts": int(time.time()), "ckey_source": source}
-        if f.exists():
-            try:
-                _old = json.loads(f.read_text())
-                data["cookies"] = _old.get("cookies", [])
-            except Exception:
-                pass
-        _POOL_DIR.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(data, ensure_ascii=False))
-        try:
-            os.chmod(f, 0o600)
-        except Exception:
-            pass
-    return True
-
-
-def get_ckey(domain: str) -> str | None:
-    """返回该域已贡献的 ckey（未过期）；无则返回 None。"""
-    for d in _candidates(domain):
-        f = _pool_file(d)
-        if not f.exists():
-            continue
-        try:
-            data = json.loads(f.read_text())
-            ckey = data.get("ckey")
-            ts = data.get("ckey_ts", 0)
-            if ckey and time.time() - ts <= _TTL:
-                return ckey
-        except Exception:
-            continue
+    logger.info("[cookie_pool] get miss domain=%s", domain)
     return None
 
 
 def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
     """入池。返回 True=新增 / 更新，False=重复或非法域。"""
     domain = _norm_domain(domain)
-    if not is_allowed(domain):
+    allowed = is_allowed(domain)
+    logger.info("[cookie_pool] add domain=%s allowed=%s source=%s len=%s", domain, allowed, source, len(header or ""))
+    if not allowed:
         return False
+    # 统一存根域：weixin.qq.com → qq.com，使 channels.weixin.qq.com 等子域
+    # 经 _candidates 回退能读到（候选含 root=qq.com）；bilibili/youku 根域不变。
+    root = _strip_sub(domain)
+    if root:
+        domain = root
     header = (header or "").strip()
     if not header:
         return False
     with _LOCK:
         f = _pool_file(domain)
+        logger.info("[cookie_pool] add file=%s exists=%s", f, f.exists())
         cookies = []
         if f.exists():
             try:
@@ -271,11 +293,11 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
             if _decrypt_item(c) == header:
                 c["ts"] = int(time.time())
                 c["source"] = source
-                _save(domain, cookies)
-                return True
+                return _save(domain, cookies)
         cookies.append({"header": header, "ts": int(time.time()), "source": source})
-        _save(domain, cookies)
-        return True
+        ok = _save(domain, cookies)
+        logger.info("[cookie_pool] add saved domain=%s total=%s ok=%s", domain, len(cookies), ok)
+        return ok
 
 
 def verify_chrqj(header: str) -> bool | None:
@@ -358,11 +380,122 @@ def _verify_generic(domain: str, header: str) -> bool | None:
         return False
 
 
+# 结构校验白名单：对 yt-dlp 试解析不稳定（常误报 False）的站，改为只检查
+# Cookie 是否含该站关键登录态字段。命中即视为「结构有效」放行入池，不再
+# 依赖 yt-dlp 试解析（优酷会员/受限内容常被 -3007 误判为无效）。
+# 字段名集合取自各站公开登录态 cookie 命名（仅校验键名存在，不读取值）。
+_STRUCTURAL_FIELDS: dict[str, set[str]] = {
+    "youku.com": {"P__yk__uck", "yktk", "cna", "x5sec", "sess_vkey", "unb"},
+    "v.qq.com": {"vus_session", "video_platform", "uid_tt", "login_ecookie"},
+    "qq.com": {
+        "vus_session", "video_platform", "uid_tt", "login_ecookie",
+        # 微信视频号登录态关键字段（channels.weixin.qq.com / finder 会话）
+        "wap_sid2", "pass_ticket", "appmsg_token", "wxuin", "wxsid", "skey",
+    },
+}
+
+
+def _structural_check(domain: str, header: str) -> bool | None:
+    """轻量结构校验：命中白名单站关键登录态字段即返回 True（结构有效）。
+
+    返回 True  = 含关键字段，结构有效，放行入池（无需 yt-dlp 试解析）。
+    返回 None  = 该域无结构校验表（交给 _verify_generic 判定）。
+    不返回 False（结构校验只做「存在即放行」，不做「缺失即否决」——
+    缺失关键字段的站仍走通用验真，避免误杀仅用部分字段即可生效的 Cookie）。
+    """
+    d = _strip_sub(domain)
+    fields = _STRUCTURAL_FIELDS.get(d)
+    if not fields:
+        return None
+    # 归一化 cookie 头为键名集合（兼容 "k=v; k2=v2" 与 "k=v; " 等写法）
+    keys: set[str] = set()
+    for part in (header or "").split(";"):
+        k = part.split("=", 1)[0].strip()
+        if k:
+            keys.add(k)
+    if keys & fields:
+        logger.info("[cookie_pool] structural_check hit domain=%s", d)
+        return True
+    logger.info("[cookie_pool] structural_check miss domain=%s（缺关键登录态字段）", d)
+    return None
+
+
+def add_ckey(domain: str, ckey: str, source: str = "contrib") -> bool:
+    """存优酷 ckey 播放签名（与 Cookie 同域存储，独立时效）。
+
+    ckey 是优酷 UPS 接口必需的播放签名参数（YoukuIE 不会生成，缺则 -3007）。
+    它有时效（数小时~1天），过期需用户重新 Copy as cURL 贡献。
+    """
+    domain = _norm_domain(domain)
+    if not is_allowed(domain):
+        logger.warning("[cookie_pool] add_ckey 非白名单域=%s 拒绝", domain)
+        return False
+    ckey = (ckey or "").strip()
+    if not ckey:
+        return False
+    with _LOCK:
+        f = _pool_file(domain)
+        data = {}
+        if f.exists():
+            try:
+                data = json.loads(f.read_text())
+            except Exception:
+                data = {}
+        data["ckey"] = {"ckey": ckey, "ts": int(time.time()), "source": source}
+        try:
+            _POOL_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_suffix(f.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False))
+            os.replace(tmp, f)
+            try:
+                os.chmod(f, 0o600)
+            except Exception:
+                pass
+            logger.info("[cookie_pool] add_ckey ok domain=%s len=%s", domain, len(ckey))
+            return True
+        except Exception as e:
+            logger.error("[cookie_pool] add_ckey failed domain=%s err=%s", domain, e)
+            return False
+
+
+def get_ckey(domain: str) -> str | None:
+    """读取该域最新有效的 ckey（最近贡献优先）；无/过期则返回 None。"""
+    for d in _candidates(domain):
+        f = _pool_file(d)
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+            item = data.get("ckey")
+            if not item:
+                continue
+            if time.time() - item.get("ts", 0) > _TTL:
+                continue
+            ck = item.get("ckey")
+            if ck:
+                logger.info("[cookie_pool] get_ckey hit domain=%s candidate=%s len=%s", domain, d, len(ck))
+                return ck
+        except Exception as e:
+            logger.warning("[cookie_pool] get_ckey read error domain=%s: %s", d, e)
+    logger.info("[cookie_pool] get_ckey miss domain=%s", domain)
+    return None
+
+
 def verify_cookie(domain: str, header: str) -> bool | None:
-    """按域分发验真：chrqj 走专属签名验真，其余走 yt-dlp 通用验真。"""
+    """按域分发验真：chrqj 走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
+
+    口径统一为「仅明确无效(False)才拒，无法判定(None)放行」，与
+    verify_and_prune 对 None 保留的语义一致。这样 yt-dlp 试解析不稳定的站
+    （如优酷 -3007）不会因误判 False 而被拒之池外。
+    """
     d = _strip_sub(domain)
     if d == "chrqj.com":
         return verify_chrqj(header)
+    # 优先结构校验：命中白名单站关键字段即放行
+    s = _structural_check(d, header)
+    if s is True:
+        return True
+    # 未命中结构字段表 / 未含关键字段：降级走 yt-dlp 通用试解析
     return _verify_generic(d, header)
 
 
@@ -404,3 +537,59 @@ def verify_and_prune(domain: str) -> int:
 
 def all_domains() -> list:
     return sorted(_root_domains())
+
+
+# ----------------------------------------------------------------------------
+# 按需补推（Railway -> VPS 守护进程）
+# 场景：Railway 容器重建/重启后持久卷被清空，或下载时公共池 miss。
+# 主动召唤 VPS 守护进程的 /v1/push 立即推送一次 Cookie，使池在 ~30s 内补满，
+# 不再依赖人工补推。只在配置了 VDL_COOKIE_REFILL_URL + VDL_COOKIE_REFILL_TOKEN 时生效。
+# ----------------------------------------------------------------------------
+_REFILL_COOLDOWN: dict[str, float] = {}
+
+
+def request_refill(domain: str, blocking: bool = False) -> bool:
+    """请求 VPS 守护进程立即补推一次指定域 Cookie。
+
+    - 带每域冷却（默认 60s），避免重启后请求洪峰反复触发。
+    - blocking=False 时后台线程执行（不阻塞当前请求）；True 时同步等待结果。
+    返回是否成功发起/完成。
+    """
+    domain = _norm_domain(domain)
+    if not is_allowed(domain):
+        return False
+    base = os.environ.get("VDL_COOKIE_REFILL_URL")
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN")
+    if not base or not token:
+        logger.info("[cookie_pool] request_refill skipped (未配置 REFILL_URL/TOKEN) domain=%s", domain)
+        return False
+    now = time.time()
+    last = _REFILL_COOLDOWN.get(domain, 0.0)
+    if now - last < 60:
+        return False
+    _REFILL_COOLDOWN[domain] = now
+
+    def _do():
+        try:
+            import urllib.request
+
+            url = (base.rstrip("/") + "/v1/push?token="
+                   + urllib.parse.quote(token, safe=""))
+            req = urllib.request.Request(
+                url, method="POST",
+                headers={"User-Agent": "vdl-cookie-refill"},
+            )
+            with urllib.request.urlopen(req, timeout=90) as r:
+                data = r.read().decode() or "{}"
+            ok = bool(json.loads(data).get("ok"))
+            logger.info("[cookie_pool] request_refill done domain=%s ok=%s", domain, ok)
+        except Exception as e:
+            logger.warning("[cookie_pool] request_refill failed domain=%s: %s", domain, e)
+
+    if blocking:
+        _do()
+        return True
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    return True
+

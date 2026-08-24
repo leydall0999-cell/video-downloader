@@ -49,13 +49,13 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("bilibili", "哔哩哔哩", ("bilibili.com", "b23.tv", "bilibili.tv"), "📺"),
     Platform("douyin", "抖音", ("douyin.com", "iesdouyin.com"), "🎵"),
     Platform("kuaishou", "快手", ("kuaishou.com", "chenzhongtech.com", "gifshow.com"), "⚡"),
-    Platform("xiaohongshu", "小红书", ("xiaohongshu.com", "xhslink.com"), "📕"),
+    Platform("xiaohongshu", "小红书", ("xiaohongshu.com", "xhslink.com", "xhslink.cn"), "📕"),
     Platform("weibo", "微博", ("weibo.com", "weibo.cn", "video.weibo.com"), "🐦"),
     Platform("xigua", "西瓜视频", ("ixigua.com",), "🍉"),
     Platform("acfun", "AcFun", ("acfun.cn",), "🟢"),
     Platform("tencent", "腾讯视频", ("v.qq.com",), "🐧"),
     Platform("youku", "优酷", ("youku.com",), "🟠"),
-    Platform("iqiyi", "爱奇艺", ("iqiyi.com",), "🔴"),
+    Platform("iqiyi", "爱奇艺", ("iqiyi.com", "iq.com", "iqy.net", "qy.net"), "🔴"),
     Platform("mgtv", "芒果TV", ("mgtv.com", "imgo.tv"), "🥭"),
     Platform("sohu", "搜狐视频", ("tv.sohu.com", "sohu.com"), "🐺"),
     Platform("zhihu", "知乎", ("zhihu.com",), "💡"),
@@ -68,8 +68,25 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("huya", "虎牙直播", ("huya.com",), "🎮"),
     Platform("douyu", "斗鱼直播", ("douyu.com",), "🐟"),
     Platform("yangshipin", "央视频", ("yangshipin.cn", "cntv.cn", "cctv.com"), "📡"),
+    Platform("letv", "乐视视频", ("le.com",), "🔵"),
+    Platform("migu", "咪咕视频", ("miguvideo.com", "music.migu.cn", "migu.cn"), "🎧"),
+    Platform("pptv", "PPTV聚力", ("pptv.com",), "🟣"),
+    Platform("funshion", "风行网", ("fun.tv",), "🌪️"),
+    Platform("movie1905", "1905电影网", ("1905.com",), "🎬"),
+    Platform("bestv", "百视TV", ("bestv.com.cn",), "📺"),
+    Platform("wasu", "华数TV", ("wasu.com.cn", "wasu.cn"), "🏞️"),
+    Platform("xinpianchang", "新片场", ("xinpianchang.com",), "🎞️"),
+    Platform("hongguo", "红果短剧", ("hongguoduanju.com", "novelquickapp.com"), "🍎"),
+    Platform("vcinema", "南瓜电影", ("vcinema.cn",), "🎃"),
+    Platform("yy", "YY直播", ("yy.com",), "🎤"),
+    Platform("neteasecc", "网易CC直播", ("cc.163.com",), "🎙️"),
+    Platform("huajiao", "花椒直播", ("shturl.cc",), "🌶️"),
+    Platform("inke", "映客直播", ("inke.cn",), "📱"),
+    Platform("taolive", "淘宝直播", ("taolive.taobao.com", "hudong.taobao.com"), "🛍️"),
     Platform("tudou", "土豆", ("tudou.com",), "🥔"),
     Platform("meipai", "美拍", ("meipai.com",), "📷"),
+    Platform("nivod", "泥视频", ("nivod.vip",), "🎬"),
+    Platform("pomo", "Pomo", ("pomo.mom",), "🎬"),
     # —— 国际 ——
     Platform("youtube", "YouTube", ("youtube.com", "youtu.be", "youtube-nocookie.com"), "▶️"),
     Platform("tiktok", "TikTok", ("tiktok.com", "vt.tiktok.com"), "🎵"),
@@ -100,6 +117,67 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("odysee", "Odysee", ("odysee.com",), "🔶"),
     Platform("weverse", "Weverse", ("weverse.io",), "💜"),
     Platform("line", "LINE TV", ("tv.line.me",), "🟢"),
+    # —— 国际扩列（2026-08-22：yt-dlp 有真实 extractor 的平台）——
+    Platform("kick", "Kick", ("kick.com",), "👟"),
+    Platform("curiositystream", "CuriosityStream", ("curiositystream.com",), "🔬"),
+    Platform("vevo", "VEVO", ("vevo.com",), "🎤"),
+    Platform("snapchat", "Snapchat", ("snapchat.com",), "👻"),
+    Platform("bigo", "BIGO LIVE", ("bigo.tv",), "🔴"),
+    Platform("pluto", "Pluto TV", ("pluto.tv",), "🛸"),
+    Platform("cbcgem", "CBC Gem", ("gem.cbc.ca",), "🍁"),
+    Platform("itv", "ITVX", ("itv.com",), "🇬🇧"),
+    Platform("arte", "Arte.tv", ("arte.tv",), "🟥"),
+    Platform("francetv", "France.tv", ("france.tv",), "🇫🇷"),
+    Platform("rai", "RAI Play", ("raiplay.it",), "🇮🇹"),
+    Platform("svt", "SVT Play", ("svtplay.se",), "🇸🇪"),
+    Platform("nrk", "NRK TV", ("nrk.no",), "🇳🇴"),
+    Platform("yle", "Yle Areena", ("areena.yle.fi",), "🇫🇮"),
+    Platform("rtve", "RTVE Play", ("rtve.es",), "🇪🇸"),
+    Platform("tver", "TVer", ("tver.jp",), "🇯🇵"),
+    Platform("chzzk", "CHZZK", ("chzzk.naver.com",), "🇰🇷"),
+    Platform("f1tv", "F1 TV", ("f1tv.com",), "🏎️"),
+    Platform("peertube", "PeerTube", ("joinpeertube.org", "peertube.tv"), "🗂️"),
+    Platform("redbulltv", "Red Bull TV", ("redbull.tv",), "🛡️"),
+    Platform("afreecatv", "AfreecaTV", ("afreecatv.com", "afreecatv.jp"), "🎮"),
+    Platform("sonyliv", "SonyLIV", ("sonyliv.com",), "🇮🇳"),
+    Platform("hotstar", "Disney+ Hotstar", ("hotstar.com",), "🇮🇳"),
+    Platform("iflix", "iflix", ("iflix.com",), "🌏"),
+    Platform("viu", "Viu", ("viu.com",), "🌏"),
+    Platform("mewatch", "meWATCH", ("mewatch.sg",), "🇸🇬"),
+    Platform("ivi", "IVI", ("ivi.ru",), "🇷🇺"),
+    Platform("kinopoisk", "KinoPoisk", ("kinopoisk.ru", "hd.kinopoisk.ru"), "🇷🇺"),
+    Platform("abciview", "ABC iview", ("iview.abc.net.au",), "🇦🇺"),
+    Platform("sbs", "SBS On Demand", ("sbs.com.au",), "🇦🇺"),
+    Platform("nebula", "Nebula", ("nebula.tv",), "🔮"),
+    # —— 国际 DRM / 订阅墙平台（yt-dlp KnownDRMIE 拦截，需账号+解密，合规不做）——
+    # 加入白名单仅为识别平台名，解析会返回明确的 DRM 提示而非笼统错误。
+    Platform("disneyplus", "Disney+", ("disneyplus.com",), "🏰"),
+    Platform("primevideo", "Prime Video", ("primevideo.com",), "📦"),
+    Platform("appletv", "Apple TV+", ("tv.apple.com",), "🍎"),
+    Platform("paramount", "Paramount+", ("paramountplus.com",), "⛰️"),
+    Platform("hulu", "Hulu", ("hulu.com",), "🌰"),
+    Platform("peacock", "Peacock", ("peacocktv.com",), "🦚"),
+    Platform("crunchyroll", "Crunchyroll", ("crunchyroll.com",), "🍙"),
+    Platform("mubi", "Mubi", ("mubi.com",), "🎞️"),
+    Platform("viki", "Rakuten Viki", ("viki.com",), "🌏"),
+    Platform("crackle", "Crackle", ("crackle.com",), "🔥"),
+    Platform("rtlplus", "RTL+", ("plus.rtl.de",), "🇩🇪"),
+    Platform("unext", "U-NEXT", ("unext.jp",), "🇯🇵"),
+    Platform("fod", "FOD", ("fod.fujitv.co.jp",), "🇯🇵"),
+    Platform("zee5", "ZEE5", ("zee5.com",), "🇮🇳"),
+    Platform("tvnz", "TVNZ+", ("tvnz.co.nz",), "🇳🇿"),
+    Platform("ctv", "CTV", ("ctv.ca",), "🇨🇦"),
+    # DAZN：全球体育流媒体。2026-08-22 深度评估：认证墙
+    # （authentication-prod.ar.indazn.com/v1/authenticate）+ DASH(.mpd) +
+    # Widevine DRM；VPS 中国 IP 与数据中心 IP 均 403 地区封锁 → VPS worker
+    # 不可行；合规上不破解 Widevine。加入白名单仅为识别平台名，解析返回
+    # 明确提示（需 DAZN 支持地区的网络 + 账号；免费内容同样走 DRM 管线）。
+    Platform("dazn", "DAZN", ("dazn.com",), "🥊"),
+    # Tubi：免费 AVOD（广告支持，无 DRM）。数据中心 IP 返回反爬壳页
+    # （无 window.__data，2026-08-22 实测 len=2.8KB 无 title）；VPS 中国 IP
+    # 302 gdpr 墙。_tubi_info 已实现完整解析（页面 __data → dash/hls manifest，
+    # 优先 HLS 直链），配 Tubi 支持地区（美/加/澳/新/英/墨等）住宅代理即可用。
+    Platform("tubi", "Tubi", ("tubitv.com",), "🦊"),
 )
 
 # 明显不是视频站点的域名，直接拦截并给出提示，避免无谓地请求 yt-dlp。
@@ -127,7 +205,7 @@ CHINA_DOMAINS: tuple[str, ...] = (
     "weibo.com", "weibo.cn", "video.weibo.com",
     "ixigua.com",
     "acfun.cn",
-    "v.qq.com", "youku.com", "iqiyi.com",
+    "v.qq.com", "youku.com", "iqiyi.com", "iqy.net",
     "mgtv.com", "imgo.tv",
     "tv.sohu.com", "sohu.com",
     "zhihu.com",
@@ -141,6 +219,9 @@ CHINA_DOMAINS: tuple[str, ...] = (
     "yangshipin.cn", "cntv.cn", "cctv.com",
     "tudou.com", "meipai.com",
     "le.com", "wasu.cn", "1905.com",
+    "miguvideo.com", "pptv.com", "fun.tv",
+    "bestv.com.cn", "xinpianchang.com", "hongguoduanju.com",
+    "yy.com", "cc.163.com", "inke.cn", "shturl.cc", "taolive.taobao.com",
     "chrqj.com",
 )
 
@@ -202,7 +283,8 @@ def parse_source(raw_input: str) -> tuple[str, Platform]:
     """校验输入并返回 (规范化链接, 命中的平台)。"""
     url = extract_first_url(raw_input)
     host = _hostname_of(url)
-    if host in NON_VIDEO_HOSTS:
+    # taolive.taobao.com（淘宝直播）是视频直播站，需从 taobao.com 主体拦截中放行
+    if host in NON_VIDEO_HOSTS and not host.endswith(".taobao.com"):
         raise UnsupportedPlatformError(
             f"该站点暂不支持视频下载：{host}",
             "请粘贴视频播放页链接（如 B 站、抖音、YouTube 等）",
@@ -213,5 +295,15 @@ def parse_source(raw_input: str) -> tuple[str, Platform]:
 
 
 def platform_catalog() -> list[dict[str, str]]:
-    """给前端展示的平台清单。"""
-    return [{"key": p.key, "name": p.name, "icon": p.icon} for p in SUPPORTED_PLATFORMS]
+    """给前端展示的平台清单（已下线的直播平台不展示）。"""
+    return [
+        {"key": p.key, "name": p.name, "icon": p.icon}
+        for p in SUPPORTED_PLATFORMS
+        if p.key not in DISABLED_PLATFORMS
+    ]
+
+
+# 已下线平台（2026-08-22 用户要求直播模块下线）：
+# 斗鱼直播 / 映客 / 网易CC 三个直播平台整体下线，恢复时间待定。
+# 前端列表隐藏 + probe() 拦截给出明确提示（见 downloader.py）。
+DISABLED_PLATFORMS: frozenset[str] = frozenset({"douyu", "inke", "neteasecc"})
