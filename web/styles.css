@@ -1999,6 +1999,8 @@ img { max-width: 100%; display: block; }
 .app-intro-card p { margin: 0; color: var(--text-mute); font-size: .9rem; line-height: 1.55; }
 .app-intro-cta { text-align: center; color: var(--text-mute); font-size: .9rem; line-height: 1.7; }
 .app-intro-cta p { margin: .15rem 0; }
+.app-intro-cta-card { display: flex; flex-direction: column; }
+.app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
   .app-intro-grid { grid-template-columns: 1fr; }
 }

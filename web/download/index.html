@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>下载桌面客户端 · 视频下载站</title>
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    .dl-page { padding: 3rem 0 2rem; }
+    .dl-hero { text-align: center; margin-bottom: 2rem; }
+    .dl-hero h1 { font-size: clamp(1.6rem, 4.4vw, 2.2rem); margin: 0 0 .5rem; background: linear-gradient(100deg,#1e1b4b,#4f46e5 55%,#0891b2); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    .dl-hero p { color: var(--text-mute); margin: .3rem 0; }
+    .dl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 1rem; }
+    .dl-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1.4rem; box-shadow: var(--shadow); text-align: center; }
+    .dl-card .dl-ico { font-size: 2.4rem; }
+    .dl-card h3 { margin: .6rem 0 .3rem; }
+    .dl-card p { color: var(--text-mute); font-size: .9rem; min-height: 2.6em; }
+    .dl-card .btn { margin-top: .8rem; }
+    .dl-back { text-align: center; margin-top: 2rem; }
+    .dl-note { text-align:center; color: var(--text-mute); font-size: .82rem; margin-top: 1.4rem; }
+    @media (max-width: 640px){ .dl-grid{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <main class="wrap dl-page">
+    <section class="dl-hero">
+      <h1>下载桌面客户端</h1>
+      <p>安装后即可解锁本地高速下载、全平台解析、视频处理工具箱等完整能力。</p>
+      <p>当前支持 macOS 与 Windows。</p>
+    </section>
+
+    <div class="dl-grid">
+      <div class="dl-card">
+        <div class="dl-ico">🍎</div>
+        <h3>macOS</h3>
+        <p>适用于 macOS 11+（Intel / Apple Silicon 通用版）。</p>
+        <a class="btn btn-primary btn-block" href="https://github.com/leydall0999-cell/video-downloader/releases" target="_blank" rel="noopener">下载 .dmg</a>
+      </div>
+      <div class="dl-card">
+        <div class="dl-ico">🪟</div>
+        <h3>Windows</h3>
+        <p>适用于 Windows 10 / 11（64 位）。</p>
+        <a class="btn btn-primary btn-block" href="https://github.com/leydall0999-cell/video-downloader/releases" target="_blank" rel="noopener">下载 .exe</a>
+      </div>
+    </div>
+
+    <p class="dl-note">安装包托管于 GitHub Releases，点击按钮前往最新版本下载。</p>
+
+    <div class="dl-back">
+      <a class="btn btn-ghost" href="/">← 返回首页</a>
+    </div>
+  </main>
+</body>
+</html>
