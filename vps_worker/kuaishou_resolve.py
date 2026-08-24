@@ -102,6 +102,8 @@ def resolve(url, timeout=35):
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
             # 轮询等 __APOLLO_STATE__ 里出现 mp4 直链（首访建 cookie 可能较慢）
+            # ⚠️ 2026-08 实测：快手新版签名直链（oskwai.com/ksc2/...）已不带 .mp4 后缀，
+            #    只靠 .mp4 判定会漏掉真实流。改为「CDN 域 + (含 .mp4 或含 /ksc2/ 签名)」。
             mp4s = []
             deadline = time.time() + 25
             while time.time() < deadline:
@@ -112,7 +114,8 @@ def resolve(url, timeout=35):
                         " const walk = (o, d) => {"
                         "  if (d > 20 || o == null) return;"
                         "  if (typeof o === 'string') { const low = o.toLowerCase();"
-                        "   if (low.startsWith('http') && (low.includes('kwaicdn') || low.includes('oskwai') || low.includes('ksc2')) && low.includes('.mp4')) out.push(o); return; }"
+                        "   if (low.startsWith('http') && (low.includes('kwaicdn') || low.includes('oskwai') || low.includes('ksc2'))"
+                        "       && (low.includes('.mp4') || low.includes('/ksc2/') || low.includes('v2.kwaicdn'))) out.push(o); return; }"
                         "  if (typeof o === 'object') for (const v of Object.values(o)) walk(v, d + 1);"
                         " }; walk(st, 0);"
                         " const v = document.querySelector('video');"
@@ -132,11 +135,23 @@ def resolve(url, timeout=35):
             if not mp4s:
                 raise RuntimeError("未解析到快手视频流（APOLLO_STATE 无 mp4 直链）")
 
-            # 优先选 hd 最高清的直链（hd15 > hd1），否则用 video 标签 src（合并视频）
+            # 选流策略：video 标签 src（播放器实际加载的真实流）最高优先；
+            # 无 video src 时退到 APOLLO_STATE 里 hd 最高清的直链（hd15 > hd1）。
             def _hd_rank(u):
                 m = re.search(r"_hd(\d+)", u)
                 return int(m.group(1)) if m else -1
-            best = max(mp4s, key=lambda u: (_hd_rank(u), u.startswith("https://") and "upic" in u))
+            video_src = ""
+            try:
+                video_src = page.evaluate(
+                    "() => { const v = document.querySelector('video');"
+                    " return v && (v.src || v.currentSrc) || ''; }"
+                ) or ""
+            except Exception:
+                video_src = ""
+            if video_src.startswith("http"):
+                best = video_src  # 播放器真实流（可能是无后缀签名直链）
+            else:
+                best = max(mp4s, key=lambda u: (_hd_rank(u), u.startswith("https://") and "upic" in u))
             video_url = best
 
             caption, author, thumbnail = _extract_meta(page)
