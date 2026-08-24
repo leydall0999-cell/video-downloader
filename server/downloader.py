@@ -3344,10 +3344,12 @@ def _finder_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             }
         except ResolveError as e:
             # 视频号登录态相关错误（无 Cookie / 需登录 / 登录态失效）统一归为
-            # cookie_required，让前端亮「去粘贴 Cookie」按钮引导用户自带上
+            # cookie_required，让前端亮「去粘贴 Cookie」按钮引导用户自带上。
+            # ⚠️ 注意检查 hint（worker 的真实错误文本），而非 message（多为通用
+            # 的"视频解析失败"，不含平台细节）。
             if getattr(e, "category", None) not in ("cookie_required", "cookie_invalid_or_expired"):
-                _msg = str(e)
-                if any(k in _msg for k in ("微信登录态", "请粘贴", "登录态已失效", "请在微信中打开")):
+                _msg = str(e) + "\n" + str(getattr(e, "hint", "") or "")
+                if any(k in _msg for k in ("微信登录态", "请粘贴", "登录态已失效", "请在微信中打开", "无登录态")):
                     e.category = "cookie_required"
             raise  # 透传 worker 真实错误（无登录态/链接失效/被风控等）
 
