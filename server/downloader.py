@@ -3226,14 +3226,41 @@ def _tudou_info(url: str, proxy: str = "") -> dict[str, Any]:
 
 
 def _weishi_info(url: str, proxy: str = "") -> dict[str, Any]:
-    """微视（weishi.qq.com）：腾讯系短视频，播放地址需 App 端签名（wskey/rticket），
-    无公开可用的直链接口。best-effort：抓取播放页看是否有内嵌视频 JSON，否则明确告知。
+    """微视（weishi.qq.com）：腾讯系短视频，播放地址原本需 App 端签名（wskey/rticket）。
+
+    解析策略（2026-08-24 接入 VPS worker）：
+    1) 若配置了 VPS 解析节点（VDL_COOKIE_REFILL_TOKEN 等），优先走 worker：
+       worker 先试 H5 公开接口 WSH5GetPlayPage 拿**无水印**直链（最快），失败则
+       Playwright 真实浏览器开播放页抓 <video> 真实流兜底。
+    2) 未配置 worker → best-effort 降级：抓取播放页 HTML 看是否有内嵌视频 JSON。
+    3) worker 解析失败（接口404/链接失效/无流）→ 透传真实原因，不伪装。
     """
+    # 优先走 VPS worker（能真实拿到流，含无水印直链）
+    token = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    if token:
+        try:
+            data = _call_vps_worker("weishi", url)
+            # worker 成功返回 dict（含 video_url / title / ext）
+            return {
+                "id": data.get("video_id", ""),
+                "title": data.get("title") or "微视视频",
+                "duration": data.get("duration"),
+                "webpage_url": data.get("webpage_url") or url,
+                "extractor_key": "WeiShi",
+                "extractor": "weishi",
+                "ext": data.get("ext") or "mp4",
+                "direct": True,
+                "url": data.get("video_url"),
+                "protocol": "https",
+                "thumbnail": data.get("thumbnail", ""),
+                "http_headers": {"User-Agent": _NE_UA, "Referer": "https://h5.weishi.qq.com/"},
+            }
+        except ResolveError:
+            raise  # 透传 worker 真实错误（链接失效/无流/不可达等）
+
+    # 降级 best-effort：无 worker 时抓 HTML 内嵌 JSON（多为广告/失效场景）
     try:
         html = _ne_http_get(url, proxy=proxy, headers={"Referer": "https://weishi.qq.com/"})
-        # 仅在播放页专属内嵌状态里找真实视频直链；首页/统计资源里的 .mp4 多为
-        # 广告/埋点（如 qzonestyle.gtimg.cn/qzact 统计图），误匹配会给出假直链，必须排除。
-        # 判定：URL 含 feedid（微视播放页特征）且内嵌 JSON 里出现 videoUrl/playUrl。
         if "feedid" in url or "feed/" in url:
             for pat in (r'"videoUrl"\s*:\s*"([^"]+)"', r'"playUrl"\s*:\s*"([^"]+)"',
                         r'"video_url"\s*:\s*"([^"]+)"'):
@@ -3242,10 +3269,8 @@ def _weishi_info(url: str, proxy: str = "") -> dict[str, Any]:
                     vurl = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
                     if vurl.startswith("//"):
                         vurl = "https:" + vurl
-                    # 真实微视视频 CDN 域名（排除统计/广告资源）
                     _ok_cdn = ("vweishi" in vurl or "weishi" in vurl or "gtimg.cn/qzone/weishi" in vurl
                                or vurl.endswith(".mp4"))
-                    # 二次保险：统计/埋点资源域名直接拒绝
                     _bad_cdn = ("qzact" in vurl or "act/extern" in vurl or "gtimg.cn/qzact" in vurl)
                     if _ok_cdn and not _bad_cdn:
                         return {
@@ -3261,7 +3286,8 @@ def _weishi_info(url: str, proxy: str = "") -> dict[str, Any]:
         "微视暂不支持解析",
         "微视的播放地址由手机 App 端签名生成，无公开网页直链接口，VDL 暂无法提取。\n"
         "① 若原视频也发在微信/QQ 内，可尝试用腾讯视频链接（v.qq.com）解析；\n"
-        "② 页面源码里若有 .mp4 直链，可直接粘贴直链下载。",
+        "② 页面源码里若有 .mp4 直链，可直接粘贴直链下载。\n"
+        "③ 若已配置 VPS 解析节点但仍失败，多为链接已失效（微视已收缩运营，分享页会跳404）。",
         category="pending_extractor",
     )
 
