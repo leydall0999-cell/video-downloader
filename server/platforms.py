@@ -55,7 +55,7 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("acfun", "AcFun", ("acfun.cn",), "🟢"),
     Platform("tencent", "腾讯视频", ("v.qq.com",), "🐧"),
     Platform("youku", "优酷", ("youku.com",), "🟠"),
-    Platform("iqiyi", "爱奇艺", ("iqiyi.com", "iq.com", "iqy.net"), "🔴"),
+    Platform("iqiyi", "爱奇艺", ("iqiyi.com", "iq.com", "iqy.net", "qy.net"), "🔴"),
     Platform("mgtv", "芒果TV", ("mgtv.com", "imgo.tv"), "🥭"),
     Platform("sohu", "搜狐视频", ("tv.sohu.com", "sohu.com"), "🐺"),
     Platform("zhihu", "知乎", ("zhihu.com",), "💡"),
