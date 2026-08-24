@@ -2011,6 +2011,10 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .app-intro-cta { text-align: center; color: var(--text-mute); font-size: .9rem; line-height: 1.7; }
 .app-intro-cta p { margin: .15rem 0; }
 .app-intro-cta-card { display: flex; flex-direction: column; }
+.app-intro-foot {
+  margin-top: .7rem; text-align: center; font-size: .72rem;
+  color: var(--accent, #4f46e5); font-weight: 600; letter-spacing: .02em;
+}
 .app-intro-cta-card .btn { margin-top: auto; }
 @media (max-width: 640px) {
   .app-intro-grid { grid-template-columns: 1fr; }
