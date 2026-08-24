@@ -74,21 +74,26 @@ def _resolve_real_url(short_url: str, timeout: int = 12) -> str:
         return short_url
 
 
-def _load_cookies() -> list[dict]:
-    """读取本地微信登录态 Cookie 文件，转成 Playwright 可用的 dict 列表。
+def _load_cookies(cookie_text: str = "") -> list[dict]:
+    """读取微信登录态 Cookie，转成 Playwright 可用的 dict 列表。
 
-    支持两种格式：
+    优先级：显式传入的 cookie_text（用户自带 / Railway 共享池兜底）> 本地文件
+    ``/opt/vdl-worker/cookies/weixin.txt``（运维放置）。
+
+    两种格式均支持：
       - Netscape cookie jar（# Netscape HTTP Cookie File 开头，每行 domain\tflag\tpath\tsecure\texp\tname\tvalue）
       - 纯文本 "k1=v1; k2=v2; ..."（从浏览器开发者工具复制的 Cookie 字符串）
     返回空列表表示无 Cookie（调用方应据此诚实报错）。
     """
-    if not os.path.exists(COOKIE_FILE):
-        return []
-    try:
-        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
-            raw = f.read().strip()
-    except Exception:
-        return []
+    raw = (cookie_text or "").strip()
+    from_file = False
+    if not raw and os.path.exists(COOKIE_FILE):
+        try:
+            with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+                raw = f.read().strip()
+            from_file = True
+        except Exception:
+            raw = ""
     if not raw:
         return []
 
@@ -103,14 +108,18 @@ def _load_cookies() -> list[dict]:
             parts = line.split("\t")
             if len(parts) >= 7:
                 domain, _, path, secure, exp, name, value = parts[:7]
-                cookies.append({
+                c = {
                     "name": name,
                     "value": value,
                     "domain": domain.lstrip("."),
                     "path": path or "/",
                     "secure": secure.lower() == "true",
-                    "expires": int(exp) if exp and exp.isdigit() else None,
-                })
+                }
+                # Playwright add_cookies 要求 expires 为 float 或省略；会话 cookie
+                # （exp=-1/0/空）不能带 None，直接省略该键（不设置=会话 cookie）
+                if exp and exp.isdigit() and int(exp) > 0:
+                    c["expires"] = float(exp)
+                cookies.append(c)
         if cookies:
             return cookies
 
@@ -124,14 +133,17 @@ def _load_cookies() -> list[dict]:
         v = v.strip()
         if not k:
             continue
+        # 纯文本格式无法知道过期时间 → 不设 expires（会话 cookie，Playwright 接受）
         cookies.append({
             "name": k,
             "value": v,
             "domain": ".weixin.qq.com",
             "path": "/",
             "secure": True,
-            "expires": None,
         })
+    if not cookies and from_file:
+        # 文件读取但解析为空 → 视为文件失效，返回空列表让上层提示重抓
+        return []
     return cookies
 
 
@@ -155,8 +167,11 @@ def _is_video_cdn(u: str) -> bool:
     return False
 
 
-def resolve(url, timeout=75):
+def resolve(url, timeout=75, cookie: str = ""):
     """解析微信视频号视频，返回 dict（成功）或抛 RuntimeError（失败）。
+
+    ``cookie``：可选的用户登录态 Cookie 字符串（"k=v; k2=v2" 或 Netscape 格式），
+    优先于本地 /opt/vdl-worker/cookies/weixin.txt 使用。为空则回退本地文件。
 
     失败原因可能为：无微信登录态、Cookie 过期/被风控、链接失效/视频已删。
     """
@@ -176,13 +191,13 @@ def resolve(url, timeout=75):
             "channels.weixin.qq.com/.../sph?id=<id> 形态）。"
         )
 
-    # 2) 加载微信登录态 Cookie
-    cookies = _load_cookies()
+    # 2) 加载微信登录态 Cookie（传入优先，本地文件兜底）
+    cookies = _load_cookies(cookie)
     if not cookies:
         raise RuntimeError(
-            "微信视频号需要微信登录态才能解析，当前 VPS 未配置微信 Cookie。\n"
-            "请在已登录微信的浏览器中打开 channels.weixin.qq.com，复制该域名的 "
-            "Cookie 字符串，粘贴给我写入 VPS（cookies/weixin.txt）后重试。\n"
+            "微信视频号需要微信登录态才能解析，当前没有任何可用的微信 Cookie。\n"
+            "请在网页版「高级选项 → Cookie」粘贴你的微信 Cookie（复制 channels.weixin.qq.com "
+            "请求的 Cookie，或从 PC 微信开发者工具 Network 中复制），粘贴后即可解析。\n"
             "无登录态时视频号只返回「请在微信中打开」的壳，无法提取视频流。"
         )
 
