@@ -8,6 +8,16 @@
 <title>视频下载站 · 粘贴链接即可保存</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⬇️</text></svg>" />
 <link rel="stylesheet" href="styles.css" />
+<script>
+  // 给 styles.css 加上与 app.js 同样的版本号指纹，避免浏览器强缓存导致 CSS 改动看不到
+  (function(){
+    var fp = '__BUILD_FP__';
+    var isDesktopBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
+    var v = isDesktopBuild ? fp : ('dev' + Date.now());
+    var l = document.querySelector('link[href="styles.css"]');
+    if (l) l.href = 'styles.css?v=' + encodeURIComponent(v);
+  })();
+</script>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
