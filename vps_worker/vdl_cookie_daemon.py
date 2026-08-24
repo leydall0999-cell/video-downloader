@@ -128,9 +128,12 @@ def _collect_and_cache():
     """串行起 Chromium 收集一次 B站 Cookie 并写入 _cached（不推送）。
 
     用 _resolve_lock 串行化，避免与 /v1/resolve 并发起多个 Chromium 撑爆 VPS 内存。
+    等待上限 8s：后台收集是低优先级，用户解析优先，等不到就跳过本轮（120s 后重试）。
     """
     if not _resolve_lock.acquire(blocking=False):
-        _resolve_lock.acquire()
+        if not _resolve_lock.acquire(timeout=8):
+            logger.info("[collect] 解析占用中，跳过本轮收集（120s 后重试）")
+            return None
     try:
         header, passed, hit_slider, cookies = _collect_cookies(SESSDATA)
         with _lock:
@@ -292,7 +295,10 @@ def do_resolve(platform, url, cookie=""):
     if resolver is None:
         return False, "不支持的平台: %s" % platform
     if not _resolve_lock.acquire(blocking=False):
-        _resolve_lock.acquire()  # 阻塞等待上一轮 Chromium 完成
+        # 上一轮 Chromium 还在跑：最多等 8s（避免并发请求无限排队 + 线程堆积
+        # 撑爆小内存 VPS；等不到就返回「解析忙」让 Railway 端给用户可读提示）
+        if not _resolve_lock.acquire(timeout=8):
+            return False, "解析服务正忙（上一个解析任务未完成），请稍后重试"
     try:
         # 解析前清残留 chromium：上一轮若异常退出（客户端断连/超时杀线程），
         # browser.close() 的 finally 未必执行，孤儿会占内存拖慢本轮。
