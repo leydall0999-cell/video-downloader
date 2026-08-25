@@ -21,9 +21,10 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
     src_path = app._resolve_source(payload)
 
     job_id = app.uuid.uuid4().hex[:12]
+    _title = app._commentary_title(payload, src_path)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                   "steps": [], "logs": []}
+                                   "steps": [], "logs": [], "src_path": src_path, "title": _title}
     app.executor.submit(app._commentary_run, job_id, src_path, payload.vertical, payload.voice or app.COMMENTARY_VOICE,
                     trim_start=payload.trim_start, trim_end=payload.trim_end,
                     mode=payload.mode, commentary_type=payload.commentary_type,
@@ -33,7 +34,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
                     one_click=payload.one_click,
-                    title=app._commentary_title(payload, src_path),
+                    title=_title,
                     style=payload.style)
     return {"job_id": job_id, "status": "running"}
 
@@ -78,7 +79,7 @@ def create_commentary_upload(
         final_title = "v" + _secrets.token_hex(3)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                   "steps": [], "logs": []}
+                                   "steps": [], "logs": [], "src_path": str(dest), "title": final_title}
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     title=final_title)
@@ -137,7 +138,8 @@ def create_script_only_upload(
         final_title = "v" + _secrets.token_hex(3)  # e.g. v3a8f1b
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
-                                   "progress": [], "steps": [], "logs": [], "src_path": src_path}
+                                   "progress": [], "steps": [], "logs": [], "src_path": src_path,
+                                   "title": final_title}
     app.executor.submit(app._commentary_run, job_id, src_path, vertical, voice or app.COMMENTARY_VOICE, script_only=True,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     commentary_type=commentary_type, highlight_source=highlight_source,
@@ -350,9 +352,10 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
 
     src_path = app._resolve_source(payload)
     job_id = app.uuid.uuid4().hex[:12]
+    _title = app._commentary_title(payload, src_path)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
-                                   "progress": [], "src_path": src_path}
+                                   "progress": [], "src_path": src_path, "title": _title}
     app.executor.submit(app._commentary_run, job_id, src_path, payload.vertical, payload.voice or app.COMMENTARY_VOICE,
                     script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end,
                     mode=payload.mode, commentary_type=payload.commentary_type,
@@ -362,7 +365,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
                     one_click=payload.one_click,
-                    title=app._commentary_title(payload, src_path),
+                    title=_title,
                     style=payload.style)
     return {"job_id": job_id, "status": "running"}
 
@@ -458,13 +461,25 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
     if job["status"] != "script_ready" or not job.get("script_path"):
         raise app.HTTPException(status_code=409, detail="请先生成脚本再渲染（当前状态: " + job["status"] + "）")
     script_path = job["script_path"]
-    # 从 script.json 的 segments 里找回原始视频名 + 已保存的剪辑选项
+    # 反查原始视频路径：优先用脚本任务记录的 src_path，避免按 title/job_id 在 input 目录里猜错。
+    src_path = job.get("src_path")
+    if not src_path:
+        raise app.HTTPException(status_code=410, detail="源视频路径已丢失，请重新上传")
+    # 片名前缀：取脚本生成时存的「原始 title」（用户上传时算出的 final_title，
+    # 优先于 script.json 里的 LLM 推断剧名），避免成片名是 hash/upload。
+    # 旧任务（未存 title）从 src_path 走同样的回退链重算。
+    title = (job.get("title") or "").strip()
+    if not title:
+        stem = app.Path(src_path).stem if src_path else ""
+        title = (stem if app._meaningful_stem(stem) else "") or app._probe_video_title(src_path) or ""
+        title = (title or "").strip()
+        if not title:
+            import secrets as _secrets
+            title = "v" + _secrets.token_hex(3)
     try:
         seg_data = app.json.loads(app.Path(script_path).read_text(encoding="utf-8"))
-        title = seg_data.get("title", "")
         saved = seg_data.get("options") or {}
     except Exception:
-        title = ""
         saved = {}
 
     commentary_type = saved.get("commentary_type", "deep_hl")
@@ -476,17 +491,6 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
     web = bool(saved.get("web", False))
     one_click = bool(saved.get("one_click", False))
 
-    # 反查原始视频路径：优先用脚本任务记录的 src_path，避免按 title/job_id 在 input 目录里猜错。
-    src_path = job.get("src_path")
-    if not src_path:
-        # 兼容旧任务：按 title 或 job_id 在 input 目录搜索（已不推荐）
-        base_name = title or job_id
-        in_dir = app._commentary_root("input")
-        src_candidates = list(in_dir.glob(f"{base_name}.*")) or list(in_dir.glob(f"{job_id}.*"))
-        if not src_candidates:
-            raise app.HTTPException(status_code=404, detail=f"找不到原始视频文件（input/{base_name}.* 或 input/{job_id}.*）")
-        src_path = str(src_candidates[0])
-
     # 复用父任务的裁剪参数：同一源+起止会命中确定性命名的裁剪文件，直接吃裁剪后视频渲染
     trim_start = float(job.get("trim_start", 0.0) or 0.0)
     trim_end = float(job.get("trim_end", 0.0) or 0.0)
@@ -495,14 +499,16 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
     render_job_id = app.uuid.uuid4().hex[:12]
     with app._commentary_lock:
         app.commentary_jobs[render_job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                          "parent_script_job": job_id, "steps": [], "logs": []}
+                                          "parent_script_job": job_id, "steps": [], "logs": [],
+                                          "src_path": src_path, "title": title}
     v = voice or job.get("voice", "") or app.COMMENTARY_VOICE
     app.executor.submit(app._commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path,
                     trim_start=trim_start, trim_end=trim_end,
                     commentary_type=commentary_type, highlight_source=highlight_source,
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
                     no_narrate_intro_outro=no_narrate_intro_outro,
-                    retain_pct=retain_pct, web=web, one_click=one_click)
+                    retain_pct=retain_pct, web=web, one_click=one_click,
+                    title=title)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 @router.post("/api/commentary/voice-preview")
