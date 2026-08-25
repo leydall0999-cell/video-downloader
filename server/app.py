@@ -1360,6 +1360,9 @@ class ResolveRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+    # 前端 /api/resolve 已解析出的视频标题（剧集名+单集标题），创建任务时直接写入，
+    # 避免下载完成前解说取不到 title 而 fallback 成无意义 hash/upload。
+    title: str = Field(default="", max_length=256)
     quality: str = Field(default=downloader.BEST_KEY, max_length=16)
     cookie: str = Field(default="", max_length=8192)
     proxy: str = Field(default="", max_length=256)
@@ -1667,9 +1670,29 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     if getattr(payload, "task_id", ""):
         try:
             t = _require_task(payload.task_id)
-            tt = getattr(t, "title", "") or ""
+            tt = (getattr(t, "title", "") or "").strip()
             if tt:
                 return tt
+            # 兜底 1：任务步骤里可能已记录「已获取标题《...》」，从中反解。
+            # 某些旧任务/解析路径在创建时 title 为空，但下载过程中写入了步骤详情。
+            for step in getattr(t, "steps", []) or []:
+                detail = (step.get("detail") or "").strip()
+                if detail.startswith("已获取标题《") and detail.endswith("》"):
+                    tt = detail[len("已获取标题《"):-1].strip()
+                    if tt:
+                        return tt
+            # 兜底 2：从 URL 同步轻量解析一次标题（避免 fallback 到无意义 hash）。
+            url = getattr(t, "url", "") or ""
+            if url:
+                try:
+                    info = downloader.probe(url, "", "")
+                    tt = (downloader.summarize(info).get("title") or "").strip()
+                    if tt:
+                        # 顺手回填任务，避免下次再解析
+                        store.update(t.id, title=tt)
+                        return tt
+                except Exception:
+                    pass
         except Exception:
             pass
     return Path(src_path).stem or ""

@@ -3030,18 +3030,18 @@
   });
 
   /** 直接创建下载任务（不解析、用默认 best 画质），供批量模式复用。 */
-  const enqueueDownload = async (url, { cookie = '', proxy = '', base = '' } = {}) => {
+  const enqueueDownload = async (url, { cookie = '', proxy = '', base = '', title = '' } = {}) => {
     try {
       const data = await request(
         '/api/download',
-        { method: 'POST', body: JSON.stringify({ url, quality: 'best', cookie, proxy }) },
+        { method: 'POST', body: JSON.stringify({ url, quality: 'best', title: title || '', cookie, proxy }) },
         base,
       );
       if (data.quota) {
         node.downloadFreeUsed = data.quota.free_used || 0;
         if (node.downloadSubRequired) refreshSubModalText();
       }
-      const refs = createTaskCard(data.task_id, { title: url, platform: '' });
+      const refs = createTaskCard(data.task_id, { title: title || url, platform: '' });
       refs.base = base;
       trackTask(data.task_id, refs, base);
       return data.task_id;
@@ -3312,6 +3312,7 @@
       body: JSON.stringify({
         url: item.url,
         quality: 'best',
+        title: item.title || '',
         cookie: '',
         proxy: '',
         extract_script: el.extractSelect ? el.extractSelect.value || '' : '',
@@ -3441,6 +3442,7 @@
         body: JSON.stringify({
           url,
           quality,
+          title: resolved?.video?.title || '',
           cookie: opts.cookie ?? resolved?.cookie ?? '',
           proxy: opts.proxy ?? resolved?.proxy ?? '',
           extract_script: el.extractSelect.value || '',

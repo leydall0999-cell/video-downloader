@@ -45,6 +45,7 @@ def create_commentary_upload(
     trim_start: float = app.Form(0.0),
     trim_end: float = app.Form(0.0),
     mode: str = app.Form("highlights"),
+    title: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
     if not app.COMMENTARY_ENABLED:
@@ -68,7 +69,7 @@ def create_commentary_upload(
                                    "steps": [], "logs": []}
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
-                    title=app.Path(file.filename).stem if file.filename else "")
+                    title=(title or app.Path(file.filename).stem if file.filename else ""))
     return {"job_id": job_id, "status": "running"}
 
 @router.post("/api/commentary/script-only/upload")
@@ -88,6 +89,7 @@ def create_script_only_upload(
     web: bool = app.Form(False),
     one_click: bool = app.Form(False),
     style: str = app.Form("none"),
+    title: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
     if not app.COMMENTARY_ENABLED:
@@ -118,7 +120,7 @@ def create_script_only_upload(
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
-                    title=app.Path(file.filename).stem if file.filename else "",
+                    title=(title or app.Path(file.filename).stem if file.filename else ""),
                     style=style)
     return {"job_id": job_id, "status": "running"}
 

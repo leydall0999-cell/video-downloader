@@ -259,7 +259,7 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
-    task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
+    task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}}
 
