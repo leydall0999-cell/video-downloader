@@ -995,12 +995,27 @@ img { max-width: 100%; display: block; }
 
 /* ---------------- 媒体库（桌面版功能） ---------------- */
 .tabs {
-  display: flex; gap: .75rem; margin: 1.25rem auto .35rem; width: min(900px, 100% - 2rem);
+  /* 9 个 tab 在窄屏上不再均分到字符换行；按内容自然撑开，超出则换两行 */
+  display: flex; gap: .5rem; margin: 1.25rem auto .35rem;
+  width: 100%; max-width: 1100px; padding: 0 1rem;
+  flex-wrap: wrap;                        /* 装不下时优雅换行（兜底） */
+  justify-content: center;               /* 装得下时居中排布 */
+  overflow-x: auto; overflow-y: visible;  /* 极端窄屏横向滚动兜底 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  -webkit-overflow-scrolling: touch;
 }
+.tabs::-webkit-scrollbar { height: 6px; }
+.tabs::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.tabs::-webkit-scrollbar-track { background: transparent; }
 .tab {
-  flex: 1; min-height: 46px; padding: 0 1.15rem; cursor: pointer;
+  flex: 0 0 auto;        /* 不被均分，按内容撑开 */
+  min-height: 42px;
+  padding: 0 .85rem;     /* 比原 1.15rem 缩到 .85rem，省横向空间 */
+  white-space: nowrap;   /* 禁止文字折行（关键修复） */
+  cursor: pointer;
   border: 1.5px solid var(--line); border-radius: 999px; background: #fff;
-  color: var(--text-mute); font-family: inherit; font-size: .95rem; font-weight: 700;
+  color: var(--text-mute); font-family: inherit; font-size: .92rem; font-weight: 700;
   box-shadow: 0 3px 10px rgba(15, 23, 42, .06);
   transition: border-color .16s, background .16s, color .16s, box-shadow .16s, transform .12s;
 }
