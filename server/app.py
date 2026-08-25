@@ -2448,7 +2448,11 @@ class LLMConfigRequest(BaseModel):
 
 class CommentaryConfigRequest(BaseModel):
     """解说(配音/音量)手动可调设置。"""
-    narration_loudness: Any = Field(default=-14)   # int/float(LUFS) 或字符串 "off"
+    # 数值型 LUFS（-18~-10）或字符串 "off"。不能用 Any —— 在 PEP 563
+    # （from __future__ import annotations）下，Pydantic v2 的 TypeAdapter
+    # 无法为 Any 构建完全定义的 core schema，保存端点会抛
+    # "is not fully defined; you should define" 错误。
+    narration_loudness: int | float | str = Field(default=-14)
     original_duck: float = Field(default=0.10)       # 0.05~0.30
     narration_boost: float = Field(default=1.0)      # 1.0~1.6
 

@@ -3780,10 +3780,10 @@
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
     const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
-    // 片头片尾 3 选 1：默认「保留·不解说」（绝对不解说片头片尾）
+    // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
-    const no_narrate_intro_outro = introOutroMode !== 'keep_narrate_all';
+    const no_narrate_intro_outro = true; // 两个模式都不解说片头片尾（skip 模式已剪掉）
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
       highlight_source: srcEl ? srcEl.value : 'ai',
