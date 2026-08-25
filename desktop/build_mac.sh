@@ -403,7 +403,9 @@ fi
 echo "▶ 注入构建指纹（页脚显示，便于确认是否最新版）"
 BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
-BUILD_INFO="构建 $BUILD_HASH @ $BUILD_DATE"
+# 解说管线（commentary-pipeline）独立仓库，其 SHA 也一并注入指纹，避免「改了管线但 /api/version 不反映」的错觉。
+PIPELINE_HASH="$(git -C "$COMMENTARY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_INFO="构建 $BUILD_HASH (app) / $PIPELINE_HASH (pipe) @ $BUILD_DATE"
 # 缓存 bust 用的纯数字构建戳（避免中文/@ 在 perl 替换侧被错误插值），每次构建都变化
 BUILD_STAMP="$(date +%y%m%d%H%M%S)"
 # 页脚用 .*? 而非空 span，保证重复构建也能覆盖旧指纹（之前空 span 模式在已有内容时不匹配）
