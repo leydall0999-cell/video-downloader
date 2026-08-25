@@ -441,6 +441,12 @@ echo "▶ 生成 DMG 分发包"
 rm -f "$REPO/dist/VideoDownloader.dmg"
 hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader.app" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
 
+# 去掉 DMG 自身的 quarantine 标记：用户从文件管理器双击挂载后拖出的 .app 才不会
+# 被 macOS 误判为「从互联网下载」而二次加上隔离属性（否则双击会触发 Gatekeeper 拦截）。
+xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.dmg" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null || true
+echo "   已去除 DMG / .app 的 quarantine 标记（仍需用户右键→打开 一次性放行）"
+
 # 走到这里说明构建、签名、DMG 全部成功（set -e 保证失败会提前退出），
 # 此时旧产物已无回滚价值，统一收尾，避免 dist/ 无限膨胀。
 cleanup_old_artifacts
