@@ -1304,9 +1304,15 @@ def _activate_existing_window() -> None:
             app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
             if app is not None:
                 try:
-                    raised = bool(app.activateWithOptions_(NSApplicationActivateAllWindows))
+                    # 组合 AllWindows|IgnoringOtherApps：把实例所有窗口带到前台
+                    from AppKit import NSApplicationActivateIgnoringOtherApps
+                    raised = bool(app.activateWithOptions_(
+                        NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps))
                 except Exception:
-                    raised = bool(app.activate())
+                    try:
+                        raised = bool(app.activateWithOptions_(NSApplicationActivateAllWindows))
+                    except Exception:
+                        raised = bool(app.activate())
         except Exception:
             raised = False
 
