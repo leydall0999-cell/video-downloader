@@ -35,7 +35,6 @@ function mkEl() {
 }
 
 // desktop-app.js 的 initSyncButton 需要 document.createElement / document.body；
-// initYoukuLocal 通过 getElementById('youkuLocalCard') 判空（测试返回 null 使其安全跳过）
 function mkDoc() {
   const doc = {
     _h: {}, body: mkEl(),

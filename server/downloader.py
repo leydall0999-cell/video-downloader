@@ -3504,45 +3504,22 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     url = _norm_for_check
     # 优酷链接归一化：当前主流为 www.youku.com，而 yt-dlp 内置 YoukuIE 仅匹配
     # v/play/player.youku.com，否则会落 generic 提取 → Unsupported URL（pending_extractor）。
-    # 归一化到 v.youku.com 让 YoukuIE 接管（[5] 已把共享池 Cookie 注入 http_headers）。
+    # 归一化到 v.youku.com 让 YoukuIE 接管（共享池 Cookie 已注入 http_headers）。
     if "www.youku.com" in url:
         url = url.replace("www.youku.com", "v.youku.com", 1)
     # 优酷：yt-dlp 内置 YoukuIE 不生成 ckey 播放签名 → -3007。改走专用 UPS 通道
-    # （带共享池 Cookie + ckey 直接拿 m3u8）。[2026-08-24] 用户 Copy as cURL 贡献 ckey。
+    # （带共享池 Cookie + ckey 直接拿 m3u8）。ckey 仅取公共池（用户 Copy as cURL 贡献）。
     if (_host_of(url).endswith("youku.com")):
-        # [app 桌面增强] 零门槛优先走「本机真实浏览器引擎」拦截 ups 自动拿 ckey+m3u8
-        # （youku_browser 为 app 独有模块，web 端无此文件，import 失败自动跳过）
-        try:
-            from youku_browser import resolve_via_browser, browser_available
-
-            if browser_available():
-                _info = resolve_via_browser(url)
-                if _info:
-                    return _info
-        except Exception as _be:  # noqa: BLE001
-            # 浏览器引擎不可用（无登录态/被风控/playwright 未装）→ 回退 UPS 通道
-            logger.info("[youku] browser engine unavailable: %s", str(_be)[:120])
-        # 回退路径：本机 ckey（youku_local）/ 公共池（cookie_pool）
         _yk_cookie = cookie
         _yk_ckey = ""
-        if not _yk_cookie:
+        if not _yk_cookie or True:  # 你库 ckey 一律走公共池（无本机引擎）
             try:
-                from youku_local import get_local_ckey as _glk
+                from cookie_pool import get_cookie as _pool_get, get_ckey as _pool_ckey
 
-                _lk, _lc = _glk()
-                if _lk:
-                    _yk_ckey = _lk
-                    _yk_cookie = _yk_cookie or _lc
+                _yk_cookie = _yk_cookie or (_pool_get("youku.com") or "")
+                _yk_ckey = _pool_ckey("youku.com") or ""
             except Exception:
                 pass
-            if not _yk_ckey:
-                try:
-                    from cookie_pool import get_cookie as _pool_get, get_ckey as _pool_ckey
-
-                    _yk_cookie = _yk_cookie or (_pool_get("youku.com") or "")
-                    _yk_ckey = _pool_ckey("youku.com") or ""
-                except Exception:
-                    pass
         try:
             return _youku_info(url, _yk_cookie, _yk_ckey, proxy=effective_proxy)
         except ResolveError:
