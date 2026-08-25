@@ -64,12 +64,19 @@ def create_commentary_upload(
         file.file.close()
 
     job_id = app.uuid.uuid4().hex[:12]
+    final_title = (title
+                   or app._probe_video_title(dest)
+                   or (app.Path(file.filename).stem if file.filename else ""))
+    final_title = (final_title or "").strip()
+    if not final_title or final_title.lower() == "upload":
+        import secrets as _secrets
+        final_title = "v" + _secrets.token_hex(3)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": []}
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
-                    title=(title or app.Path(file.filename).stem if file.filename else ""))
+                    title=final_title)
     return {"job_id": job_id, "status": "running"}
 
 @router.post("/api/commentary/script-only/upload")
@@ -111,6 +118,16 @@ def create_script_only_upload(
 
     job_id = app.uuid.uuid4().hex[:12]
     src_path = str(dest)
+    # 片名前缀优先级：用户/前端传的 title → ffprobe 读到的 mp4 自带标题 → 源文件名 stem
+    # 末层兜底：若仍是 "upload" / 空（源文件就叫 upload.mp4 且无 metadata title），用短码替代
+    # 避免成片名永远长成「upload-解说成片...」这种疑似 bug 的命名
+    final_title = (title
+                   or app._probe_video_title(dest)
+                   or (app.Path(file.filename).stem if file.filename else ""))
+    final_title = (final_title or "").strip()
+    if not final_title or final_title.lower() == "upload":
+        import secrets as _secrets
+        final_title = "v" + _secrets.token_hex(3)  # e.g. v3a8f1b
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "steps": [], "logs": [], "src_path": src_path}
@@ -120,7 +137,7 @@ def create_script_only_upload(
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
-                    title=(title or app.Path(file.filename).stem if file.filename else ""),
+                    title=final_title,
                     style=style)
     return {"job_id": job_id, "status": "running"}
 

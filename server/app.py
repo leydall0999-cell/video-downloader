@@ -1665,6 +1665,45 @@ def _resolve_source(payload: CommentaryRequest) -> str:
         raise HTTPException(status_code=400, detail="请提供 task_id 或 file_id")
 
 
+def _probe_video_title(src_path) -> str:
+    """用 ffprobe 读取视频 `format.tags.title`（mp4 自带的标题元数据）。
+
+    用途：用户从本地拖拽/选择视频上传时，源文件名常常是「upload.mp4」「VID_xxx.mp4」
+    这类无语义名字，导致成片名变成「upload-解说成片...」。mp4 自带的 title 标签
+    （yt-dlp/官方下载工具一般会写入）才是真正的剧名/视频标题，优先用它做片名前缀。
+
+    失败/无标签/找不到 ffprobe → 返回空串（调用方继续 fallback 到文件名）。
+    """
+    try:
+        import json as _json
+        src_str = str(src_path)
+        if not src_str or not Path(src_str).exists():
+            return ""
+        # PATH 优先解析；找不到时合并 _CommentaryRuntime 探测到的 ffmpeg_dir
+        path = os.environ.get("PATH", "") or ""
+        ffprobe_bin = shutil.which("ffprobe", path=path) or ""
+        if not ffprobe_bin:
+            try:
+                ffmpeg_dir = getattr(_COMMENTARY_RUNTIME, "ffmpeg_dir", "") or ""
+                if ffmpeg_dir:
+                    ffprobe_bin = shutil.which("ffprobe", path=ffmpeg_dir + os.pathsep + path) or ""
+            except Exception:
+                pass
+        if not ffprobe_bin:
+            return ""
+        r = subprocess.run(
+            [ffprobe_bin, "-v", "quiet", "-print_format", "json", "-show_format", src_str],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0 or not r.stdout:
+            return ""
+        data = _json.loads(r.stdout)
+        tags = ((data.get("format") or {}).get("tags") or {})
+        return (tags.get("title") or "").strip()
+    except Exception:
+        return ""
+
+
 def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     """为解说任务推导剧名锚点：优先用下载任务的标题，否则退回源文件名（下载文件名通常含剧集名）。"""
     if getattr(payload, "task_id", ""):
