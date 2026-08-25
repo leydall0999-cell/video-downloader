@@ -333,6 +333,16 @@
     comReviewActions: $('comReviewActions'),
     comOpenReview: $('comOpenReview'),
     comGenerateOneClick: $('comGenerateOneClick'),
+    comLoudness: $('comLoudness'),
+    comLoudnessVal: $('comLoudnessVal'),
+    comLoudnessOff: $('comLoudnessOff'),
+    comDuck: $('comDuck'),
+    comDuckVal: $('comDuckVal'),
+    comBoost: $('comBoost'),
+    comBoostVal: $('comBoostVal'),
+    comVolSave: $('comVolSave'),
+    comVolReset: $('comVolReset'),
+    comVolStatus: $('comVolStatus'),
     comIntroHighlight: $('comIntroHighlight'),
     comSkipIntroOutro: $('comSkipIntroOutro'),
     comKeepNoNarrate: $('comKeepNoNarrate'),
@@ -4488,6 +4498,76 @@
     }
     refreshComSource();
     refreshCommentaryDiagnostics();
+    loadVolumeConfig();
+  };
+
+  /** 加载解说(配音/音量)手动设置并回填滑块。 */
+  const loadVolumeConfig = async () => {
+    try {
+      const cfg = await request('/api/commentary/config');
+      const l = cfg.narration_loudness;
+      const off = (typeof l === 'string' && l.toLowerCase() === 'off') || l === 0;
+      if (off) {
+        el.comLoudnessOff.checked = true;
+        el.comLoudness.disabled = true;
+        el.comLoudnessVal.textContent = '已关闭';
+      } else {
+        el.comLoudnessOff.checked = false;
+        el.comLoudness.disabled = false;
+        const lv = Number(l);
+        el.comLoudness.value = lv;
+        el.comLoudnessVal.textContent = `${lv} LUFS`;
+      }
+      const duck = Number(cfg.original_duck) * 100;
+      el.comDuck.value = duck;
+      el.comDuckVal.textContent = `${Math.round(duck)}%`;
+      const boost = Number(cfg.narration_boost);
+      el.comBoost.value = boost;
+      el.comBoostVal.textContent = `${boost.toFixed(2)}×`;
+    } catch (e) {
+      // 读取失败静默：用 HTML 默认值即可
+    }
+  };
+
+  /** 保存解说(配音/音量)手动设置。 */
+  const saveVolumeConfig = async () => {
+    const off = el.comLoudnessOff.checked;
+    const payload = {
+      narration_loudness: off ? 'off' : Number(el.comLoudness.value),
+      original_duck: Number(el.comDuck.value) / 100,
+      narration_boost: Number(el.comBoost.value),
+    };
+    try {
+      await request('/api/commentary/config', { method: 'POST', body: JSON.stringify(payload) });
+      showComVolStatus('✓ 已保存，下次解说即用此设置', false);
+    } catch (e) {
+      showComVolStatus('保存失败：' + (e.message || e), true);
+    }
+  };
+
+  const showComVolStatus = (msg, isErr) => {
+    el.comVolStatus.hidden = false;
+    el.comVolStatus.textContent = msg;
+    el.comVolStatus.style.color = isErr ? 'var(--danger, #dc2626)' : 'var(--success, #16a34a)';
+  };
+
+  /** 旁白响度滑块实时显示；关闭标准化时禁用滑块。 */
+  const onLoudnessInput = () => {
+    if (el.comLoudnessOff.checked) return;
+    el.comLoudnessVal.textContent = `${el.comLoudness.value} LUFS`;
+  };
+  const onLoudnessOff = () => {
+    el.comLoudness.disabled = el.comLoudnessOff.checked;
+    el.comLoudnessVal.textContent = el.comLoudnessOff.checked ? '已关闭' : `${el.comLoudness.value} LUFS`;
+  };
+  const onDuckInput = () => { el.comDuckVal.textContent = `${el.comDuck.value}%`; };
+  const onBoostInput = () => { el.comBoostVal.textContent = `${Number(el.comBoost.value).toFixed(2)}×`; };
+  const onVolReset = () => {
+    el.comLoudnessOff.checked = false;
+    el.comLoudness.disabled = false;
+    el.comLoudness.value = -14; el.comLoudnessVal.textContent = '-14 LUFS';
+    el.comDuck.value = 10; el.comDuckVal.textContent = '10%';
+    el.comBoost.value = 1.0; el.comBoostVal.textContent = '1.00×';
   };
 
   /** 按当前视图模式与排序重新渲染成片列表 */
@@ -4943,6 +5023,14 @@
   el.comTrimReset.addEventListener('click', resetTrim);
 
   el.comRefresh.addEventListener('click', loadCommentary);
+
+  // 配音与音量：手动调节滑块 + 保存/重置
+  el.comLoudness.addEventListener('input', onLoudnessInput);
+  el.comLoudnessOff.addEventListener('change', onLoudnessOff);
+  el.comDuck.addEventListener('input', onDuckInput);
+  el.comBoost.addEventListener('input', onBoostInput);
+  el.comVolSave.addEventListener('click', saveVolumeConfig);
+  el.comVolReset.addEventListener('click', onVolReset);
 
   // 解说成片：视图模式切换
   el.comHistoryToolbar.addEventListener('click', (e) => {

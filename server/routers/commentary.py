@@ -7,6 +7,26 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
+
+@router.get("/api/commentary/config")
+def commentary_config_get() -> dict:
+    """返回当前解说(配音/音量)设置，供前端面板回填。"""
+    from commentary_config import get_commentary_config
+    return get_commentary_config()
+
+
+@router.post("/api/commentary/config")
+def commentary_config_save(req: app.CommentaryConfigRequest) -> dict:
+    """保存解说(配音/音量)手动可调设置，写入 commentary_config.json。"""
+    from commentary_config import save_commentary_config
+    normalized = save_commentary_config({
+        "narration_loudness": req.narration_loudness,
+        "original_duck": req.original_duck,
+        "narration_boost": req.narration_boost,
+    })
+    return {"ok": True, "config": normalized}
+
+
 @router.post("/api/commentary")
 def create_commentary(payload: app.CommentaryRequest) -> dict:
     if not app.COMMENTARY_ENABLED:

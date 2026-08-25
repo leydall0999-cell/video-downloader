@@ -818,6 +818,42 @@
       </div>
     </div>
 
+    <!-- 配音与音量：手动可调，保存后对所有解说任务生效 -->
+    <div class="com-opt-block com-opt-block-full" id="comVolumeBlock">
+      <div class="com-opt-title">配音与音量 <span class="com-opt-tip">（保存后对所有解说任务生效）</span></div>
+      <div class="com-vol-row">
+        <div class="com-vol-item">
+          <div class="com-vol-label">旁白响度标准化</div>
+          <div class="com-vol-ctrl">
+            <input type="range" id="comLoudness" min="-18" max="-10" step="1" value="-14" />
+            <span class="com-vol-val" id="comLoudnessVal">-14 LUFS</span>
+          </div>
+          <label class="com-vol-off"><input type="checkbox" id="comLoudnessOff" /> 关闭（仅用增益兜底）</label>
+        </div>
+        <div class="com-vol-item">
+          <div class="com-vol-label">原声压低比例</div>
+          <div class="com-vol-ctrl">
+            <input type="range" id="comDuck" min="5" max="30" step="1" value="10" />
+            <span class="com-vol-val" id="comDuckVal">10%</span>
+          </div>
+          <span class="com-vol-hint">解说期间原声压到这么低（越小越静）</span>
+        </div>
+        <div class="com-vol-item">
+          <div class="com-vol-label">旁白额外增益</div>
+          <div class="com-vol-ctrl">
+            <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" />
+            <span class="com-vol-val" id="comBoostVal">1.00×</span>
+          </div>
+          <span class="com-vol-hint">响度标准化之后再乘这个倍数（越大越响）</span>
+        </div>
+      </div>
+      <div class="com-vol-actions">
+        <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
+        <span class="com-status" id="comVolStatus" hidden></span>
+      </div>
+    </div>
+
     <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main com-oneclick" id="comGenerateOneClick">⚡ 一键生成</button>
       <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>

@@ -79,6 +79,7 @@ from clouddrive import (
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
 from llm_config import inject_llm_env, get_llm_config, save_llm_config, PROVIDER_PRESETS, DEFAULT_PROVIDER
+from commentary_config import inject_commentary_env
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vdl")
@@ -746,6 +747,8 @@ class _CommentaryRuntime:
             env["PATH"] = self.ffmpeg_dir + os.pathsep + env.get("PATH", "")
         # 统一 LLM 配置：仅 Key 非空时注入，无 Key 不污染子进程环境
         inject_llm_env(env)
+        # 解说/配音音量手动可调配置：注入旁白响度/原声压低/旁白增益
+        inject_commentary_env(env)
         return env
 
     def ready(self) -> bool:
@@ -2362,6 +2365,13 @@ class LLMConfigRequest(BaseModel):
     model: str = Field(default="", max_length=128)
     reasoning_effort: str = Field(default="low", max_length=16)
     offpeak_only: bool = Field(default=False)
+
+
+class CommentaryConfigRequest(BaseModel):
+    """解说(配音/音量)手动可调设置。"""
+    narration_loudness: Any = Field(default=-14)   # int/float(LUFS) 或字符串 "off"
+    original_duck: float = Field(default=0.10)       # 0.05~0.30
+    narration_boost: float = Field(default=1.0)      # 1.0~1.6
 
 
 

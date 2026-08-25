@@ -1824,4 +1824,18 @@ img { max-width: 100%; display: block; }
 /* 弹窗操作行（确认 / 取消按钮） */
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
 
+/* ── 配音与音量手动调节面板 ── */
+.com-vol-row { display: flex; flex-wrap: wrap; gap: 1.1rem 2rem; margin-top: .6rem; }
+.com-vol-item { display: flex; flex-direction: column; gap: .35rem; min-width: 260px; flex: 1 1 260px; }
+.com-vol-label { font-size: .85rem; font-weight: 600; color: var(--text); }
+.com-vol-ctrl { display: flex; align-items: center; gap: .7rem; }
+.com-vol-ctrl input[type="range"] { flex: 1 1 auto; accent-color: var(--accent, #2563eb); height: 4px; }
+.com-vol-val { min-width: 64px; text-align: right; font-size: .82rem; color: var(--accent, #2563eb); font-variant-numeric: tabular-nums; font-weight: 600; }
+.com-vol-off { font-size: .78rem; color: var(--text-mute); display: flex; align-items: center; gap: .35rem; cursor: pointer; }
+.com-vol-hint { font-size: .74rem; color: var(--text-mute); line-height: 1.4; }
+.com-vol-actions { display: flex; align-items: center; gap: .7rem; margin-top: .8rem; }
+.com-opt-tip { font-size: .72rem; color: var(--text-mute); font-weight: 400; }
+/* 关闭响度标准化时，弱化旁白响度滑块 */
+#comLoudness:disabled { opacity: .4; }
+
 
