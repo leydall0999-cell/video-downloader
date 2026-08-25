@@ -919,7 +919,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     return args
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none") -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -1045,7 +1045,10 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             job["src_path"] = src_path
             steps = _ensure_commentary_steps(job)
             steps[0]["status"] = "running"
-            steps[0]["detail"] = f"源视频: {Path(src_path).name}" + (
+            # 优先展示用户上传时的原始文件名，upload 端点会把磁盘文件名统一改名为 upload.<ext>
+            # 所以 src_path.basename 永远是 upload.mp4 这种占位名，用 src_filename 兜出真实名
+            display_src = (src_filename or "").strip() or Path(src_path).name
+            steps[0]["detail"] = f"源视频: {display_src}" + (
                 f"（已裁剪 {ts:.0f}~{te:.0f}s）" if use_src != src_path else "")
             steps[0]["updated_at"] = time.time()
 

@@ -77,12 +77,16 @@ def create_commentary_upload(
     if not final_title:
         import secrets as _secrets
         final_title = "v" + _secrets.token_hex(3)
+    # 保留用户上传时的原始文件名，UI「源视频: ...」优先展示它而不是 upload.mp4 这种占位名
+    src_filename = (file.filename or "").strip() or app.Path(file.filename or "upload.mp4").name
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                   "steps": [], "logs": [], "src_path": str(dest), "title": final_title}
+                                   "steps": [], "logs": [], "src_path": str(dest), "title": final_title,
+                                   "src_filename": src_filename}
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
-                    title=final_title)
+                    title=final_title,
+                    src_filename=src_filename)
     return {"job_id": job_id, "status": "running"}
 
 @router.post("/api/commentary/script-only/upload")
@@ -136,10 +140,12 @@ def create_script_only_upload(
     if not final_title:
         import secrets as _secrets
         final_title = "v" + _secrets.token_hex(3)  # e.g. v3a8f1b
+    # 保留用户上传时的原始文件名，UI「源视频: ...」优先展示它而不是 upload.mp4 这种占位名
+    src_filename = (file.filename or "").strip() or app.Path(file.filename or "upload.mp4").name
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "steps": [], "logs": [], "src_path": src_path,
-                                   "title": final_title}
+                                   "title": final_title, "src_filename": src_filename}
     app.executor.submit(app._commentary_run, job_id, src_path, vertical, voice or app.COMMENTARY_VOICE, script_only=True,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     commentary_type=commentary_type, highlight_source=highlight_source,
@@ -147,7 +153,8 @@ def create_script_only_upload(
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
                     title=final_title,
-                    style=style)
+                    style=style,
+                    src_filename=src_filename)
     return {"job_id": job_id, "status": "running"}
 
 @router.get("/api/commentary/diagnostics")
@@ -315,7 +322,8 @@ def commentary_status(job_id: str) -> dict:
               "eta_remaining": job.get("eta_remaining"),
               "eta_done_at": job.get("eta_done_at"),
               "started_at": job.get("started_at"),
-              "source_duration": job.get("source_duration")}
+              "source_duration": job.get("source_duration"),
+              "src_filename": job.get("src_filename", "")}
     if job.get("script_path"):
         result["script_path"] = job["script_path"]
     return result
@@ -497,10 +505,13 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
 
     # 用新的 job_id 提交渲染（保留原 script 关联）
     render_job_id = app.uuid.uuid4().hex[:12]
+    # 复用父任务上传时的原始文件名（render 任务不重新接收上传，沿用脚本任务的 src_filename）
+    src_filename = (job.get("src_filename") or "").strip()
     with app._commentary_lock:
         app.commentary_jobs[render_job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                           "parent_script_job": job_id, "steps": [], "logs": [],
-                                          "src_path": src_path, "title": title}
+                                          "src_path": src_path, "title": title,
+                                          "src_filename": src_filename}
     v = voice or job.get("voice", "") or app.COMMENTARY_VOICE
     app.executor.submit(app._commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path,
                     trim_start=trim_start, trim_end=trim_end,
@@ -508,7 +519,8 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
-                    title=title)
+                    title=title,
+                    src_filename=src_filename)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 @router.post("/api/commentary/voice-preview")
