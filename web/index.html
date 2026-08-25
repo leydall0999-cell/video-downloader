@@ -34,6 +34,37 @@
 
 <main id="main" class="wrap">
 
+  <aside class="sidebar" id="sidebar" aria-label="主导航">
+    <div class="sidebar-brand">
+      <span class="sidebar-brand-dot"></span>
+      <span class="sidebar-brand-name">VideoDownloader</span>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>下载同步</div>
+      <button type="button" class="sidebar-item is-active" data-view="download" id="sTabDownload"><span class="sidebar-item-icon">⬇️</span><span class="sidebar-item-label">下载</span></button>
+      <button type="button" class="sidebar-item" data-view="subscribe" id="sTabSubscribe"><span class="sidebar-item-icon">🔔</span><span class="sidebar-item-label">订阅追更</span></button>
+      <button type="button" class="sidebar-item" data-view="torrent" id="sTabTorrent" hidden><span class="sidebar-item-icon">🧲</span><span class="sidebar-item-label">种子下载</span></button>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>媒体处理</div>
+      <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary"><span class="sidebar-item-icon">📚</span><span class="sidebar-item-label">媒体库</span></button>
+      <button type="button" class="sidebar-item" data-view="commentary" id="sTabCommentary"><span class="sidebar-item-icon">🎬</span><span class="sidebar-item-label">视频解说</span></button>
+      <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert"><span class="sidebar-item-icon">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
+      <button type="button" class="sidebar-item" data-view="dw" id="sTabDw"><span class="sidebar-item-icon">🧽</span><span class="sidebar-item-label">图片 / PDF 去水印</span></button>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>云盘下载</div>
+      <button type="button" class="sidebar-item" id="sTabBaidu" hidden><span class="sidebar-item-icon">☁️</span><span class="sidebar-item-label">百度网盘</span></button>
+      <button type="button" class="sidebar-item" id="sTabPcs"><span class="sidebar-item-icon">📥</span><span class="sidebar-item-label">百度下载</span></button>
+    </div>
+
+    <div class="sidebar-footer">v1.0 · AI 自动剪辑</div>
+  </aside>
+
+  <!-- 窄屏（≤900px）回退：保留原顶部 tabs，避免侧栏挤死移动端 -->
   <nav class="tabs" id="tabs" hidden>
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>

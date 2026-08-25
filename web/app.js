@@ -185,8 +185,17 @@
     openFolderBtn: $('openFolderBtn'),
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
+    sidebar: $('sidebar'),
     tabDownload: $('tabDownload'),
-    tabLibrary: $('tabLibrary'),
+    sTabDownload: $('sTabDownload'),
+    sTabLibrary: $('sTabLibrary'),
+    sTabCommentary: $('sTabCommentary'),
+    sTabUploadConvert: $('sTabUploadConvert'),
+    sTabDw: $('sTabDw'),
+    sTabSubscribe: $('sTabSubscribe'),
+    sTabTorrent: $('sTabTorrent'),
+    sTabBaidu: $('sTabBaidu'),
+    sTabPcs: $('sTabPcs'),
     downloadView: $('downloadView'),
     libraryView: $('libraryView'),
     libRefresh: $('libRefresh'),
@@ -6373,6 +6382,15 @@
     if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
+    // 侧栏 7 个 .sidebar-item 同步激活态（百度网盘/下载无 data-view 跳过）
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro;
+    if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
+    if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
+    if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
+    if (el.sTabTorrent) el.sTabTorrent.classList.toggle('is-active', isTor);
+    if (el.sTabCommentary) el.sTabCommentary.classList.toggle('is-active', isCom);
+    if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
+    if (el.sTabDw) el.sTabDw.classList.toggle('is-active', isDw);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -6815,6 +6833,23 @@
   if (el.tabAppIntro) el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
   if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
+
+  // 侧栏（桌面端）：9 个 .sidebar-item 也触发同视图切换
+  const _sidebarPairs = [
+    [el.sTabDownload, 'download'],
+    [el.sTabLibrary, 'library'],
+    [el.sTabCommentary, 'commentary'],
+    [el.sTabUploadConvert, 'uploadconvert'],
+    [el.sTabDw, 'dw'],
+    [el.sTabSubscribe, 'subscribe'],
+    [el.sTabTorrent, 'torrent'],
+  ];
+  for (const [btn, view] of _sidebarPairs) {
+    if (btn) btn.addEventListener('click', () => switchView(view));
+  }
+  // 百度网盘 / 百度下载 是 fixed alias（无 data-view），单独绑
+  if (el.sTabBaidu) el.sTabBaidu.addEventListener('click', () => switchView('baidu'));
+  if (el.sTabPcs) el.sTabPcs.addEventListener('click', () => switchView('pcs'));
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {
@@ -8234,12 +8269,20 @@
       if (profile === 'web') {
         [
           'tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent',
-          'tabBaidu', 'tabPcs'
+          'tabBaidu', 'tabPcs',
+          'sTabLibrary', 'sTabCommentary', 'sTabSubscribe', 'sTabTorrent',
+          'sTabBaidu', 'sTabPcs',
+          // 始终保留：下载 / 格式转换 / 去水印（web 端核心 3 件 + 默认下载）
         ].forEach(id => { const t = document.getElementById(id); if (t) t.hidden = true; });
         if (el.tabDownload) el.tabDownload.hidden = false;
         if (el.tabUploadConvert) el.tabUploadConvert.hidden = false;
         if (el.tabDw) el.tabDw.hidden = false;
         if (el.tabAppIntro) el.tabAppIntro.hidden = false;
+        // 侧栏：用外层 group 隐藏实现更清晰——未启用能力的 group 整组隐藏
+        // 这里简单点：保留 sTabDownload/uploadconvert/dw 显示（默认 group 中第一项即可让侧栏可点）
+        if (el.sTabDownload) el.sTabDownload.hidden = false;
+        if (el.sTabUploadConvert) el.sTabUploadConvert.hidden = false;
+        if (el.sTabDw) el.sTabDw.hidden = false;
       } else {
         // App 端：能力精细控制（tabTorrent/tabBaidu/tabCommentary/tabDw/tabLibrary/tabSubscribe/tabPcs）
         if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
@@ -8251,6 +8294,16 @@
         if (el.tabSubscribe) el.tabSubscribe.hidden = !node.subscriptionsEnabled;
         if (el.tabPcs) el.tabPcs.hidden = !node.baiduAvailable;
         if (el.tabAppIntro) el.tabAppIntro.hidden = false; // 更多功能介绍桌面端也显示
+        // 侧栏同 toggle（保持一一对应；侧栏无 tabAppIntro 对应——因为更多功能是顶 tab 独有）
+        // 侧栏同 toggle（保持一一对应）
+        if (el.sTabTorrent) el.sTabTorrent.hidden = !node.torrentEnabled;
+        if (el.sTabBaidu) el.sTabBaidu.hidden = !node.baiduAvailable;
+        if (el.sTabCommentary) el.sTabCommentary.hidden = !node.commentaryEnabled;
+        if (el.sTabUploadConvert) el.sTabUploadConvert.hidden = false;
+        if (el.sTabDw) el.sTabDw.hidden = !node.aiDewatermarkEnabled;
+        if (el.sTabLibrary) el.sTabLibrary.hidden = !node.libraryEnabled;
+        if (el.sTabSubscribe) el.sTabSubscribe.hidden = !node.subscriptionsEnabled;
+        if (el.sTabPcs) el.sTabPcs.hidden = !node.baiduAvailable;
       }
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载

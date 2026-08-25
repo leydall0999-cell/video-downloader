@@ -993,7 +993,133 @@ img { max-width: 100%; display: block; }
 .baidu-qr-status.is-err { color: var(--danger); }
 .baidu-qr-modal .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .5rem; }
 
+/* ---------------- 侧栏（桌面 ≥901px 默认显示） ---------------- */
+.sidebar {
+  display: none;            /* 默认隐藏，媒体查询启用 */
+}
+@media (min-width: 901px) {
+  .sidebar {
+    position: fixed;
+    top: 64px; left: 0;
+    width: 240px;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+    padding: 1.2rem .85rem .8rem;
+    background: linear-gradient(180deg, #f6f7ff 0%, #ecedf9 100%);
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(99,102,241,.35) transparent;
+    z-index: 5;
+    box-shadow: inset -1px 0 0 rgba(255,255,255,.6);
+  }
+  .sidebar::-webkit-scrollbar { width: 6px; }
+  .sidebar::-webkit-scrollbar-thumb { background: rgba(99,102,241,.35); border-radius: 3px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar-brand {
+    display: flex; align-items: center; gap: .55rem;
+    padding: .35rem .6rem .85rem;
+    border-bottom: 1px dashed var(--line);
+  }
+  .sidebar-brand-dot {
+    width: 22px; height: 22px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--brand), #6366f1);
+    box-shadow: 0 4px 10px rgba(99,102,241,.35);
+  }
+  .sidebar-brand-name {
+    font-size: .95rem; font-weight: 800; color: var(--text);
+    letter-spacing: .02em;
+  }
+  .sidebar-group { display: flex; flex-direction: column; gap: .15rem; }
+  .sidebar-group-title {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .4rem .6rem .25rem;
+    font-size: .72rem; font-weight: 700; color: var(--text-mute);
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .sidebar-group-bar {
+    display: inline-block; width: 16px; height: 2px;
+    background: linear-gradient(90deg, var(--brand), transparent);
+    border-radius: 2px;
+  }
+  .sidebar-item {
+    position: relative;
+    display: flex; align-items: center; gap: .65rem;
+    width: 100%;
+    padding: .55rem .75rem .55rem .8rem;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: .92rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: background .16s, color .16s, border-color .16s, transform .12s, box-shadow .16s;
+  }
+  .sidebar-item:hover {
+    background: rgba(255,255,255,.78);
+    border-color: rgba(99,102,241,.18);
+    box-shadow: 0 4px 10px rgba(15,23,42,.05);
+  }
+  .sidebar-item:active { transform: translateY(1px); }
+  .sidebar-item-icon {
+    display: inline-grid; place-items: center;
+    width: 28px; height: 28px; min-width: 28px;
+    border-radius: 8px;
+    background: rgba(99,102,241,.08);
+    font-size: 1rem;
+    transition: background .16s, transform .12s;
+  }
+  .sidebar-item:hover .sidebar-item-icon {
+    background: rgba(99,102,241,.16);
+    transform: scale(1.04);
+  }
+  .sidebar-item-label { white-space: nowrap; }
+  .sidebar-item.is-active {
+    background: linear-gradient(135deg, var(--brand), #6366f1);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 8px 20px rgba(79,70,229,.28);
+  }
+  .sidebar-item.is-active .sidebar-item-icon {
+    background: rgba(255,255,255,.22);
+  }
+  .sidebar-item.is-active::before {
+    content: "";
+    position: absolute;
+    left: -1px; top: 8px; bottom: 8px;
+    width: 3px; border-radius: 0 3px 3px 0;
+    background: linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,.4) 100%);
+    box-shadow: 0 0 12px rgba(255,255,255,.6);
+  }
+  .sidebar-footer {
+    margin-top: auto;
+    padding: .6rem .8rem 0;
+    font-size: .7rem;
+    color: var(--text-mute);
+    border-top: 1px dashed var(--line);
+    text-align: center;
+    letter-spacing: .04em;
+  }
+  /* 让 main 整体留出 240px 给侧栏（不是 padding-left，避免 wrap 里内容溢出右边） */
+  main#main { margin-left: 240px; }
+}
+
 /* ---------------- 媒体库（桌面版功能） ---------------- */
+@media (min-width: 901px) {
+  /* 桌面端：原顶部 tabs 隐藏，避免重复占用空间 */
+  .tabs { display: none !important; }
+}
+@media (max-width: 900px) {
+  /* 移动端：保留原顶部 tabs（上一版修复），隐藏侧栏 */
+  .sidebar { display: none !important; }
+}
+
 .tabs {
   /* 9 个 tab 在窄屏上不再均分到字符换行；按内容自然撑开，超出则换两行 */
   display: flex; gap: .5rem; margin: 1.25rem auto .35rem;
