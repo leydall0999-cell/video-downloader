@@ -42,7 +42,7 @@ h1, h2, h3 { margin: 0; line-height: 1.3; }
 p { margin: 0; }
 img { max-width: 100%; display: block; }
 
-.wrap { width: min(1040px, 100% - 2rem); margin-inline: auto; }
+.wrap { width: min(880px, 100% - 2rem); margin-inline: auto; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -818,7 +818,7 @@ img { max-width: 100%; display: block; }
 
 /* ---------------- responsive ---------------- */
 @media (max-width: 640px) {
-  .wrap { width: min(1040px, 100% - 1.5rem); }
+  .wrap { width: min(880px, 100% - 1.5rem); }
   .hero { padding: 1.9rem 0 1.2rem; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; }

@@ -43,16 +43,34 @@ def test_main_margin_left_200():
     assert m, "main#main 应该给侧栏让出 200px"
 
 
-def test_wrap_max_width_1040():
+def test_wrap_max_width_880_centered():
+    """用户纠正：主面板 .wrap max-width 改回 880px 居中，让主面板在主区里有呼吸。
+
+    上一版（1040）在 1280 视口下侧栏 200 + 主区 1080，wrap 1040 占满贴右
+    被截（用户截图 2026-08-26 01:19）。880 居中后：
+      1280 视口 → 200 侧栏 + 880 wrap（主区两侧各 100px 留白）
+      1440 视口 → 200 侧栏 + 880 wrap（主区两侧各 180px 留白）
+    """
     css = _read(CSS)
-    assert re.search(r"\.wrap\s*\{\s*width:\s*min\(\s*1040px", css), \
-        ".wrap 默认 max-width 应放宽到 1040px"
+    m = re.search(r"\.wrap\s*\{\s*width:\s*min\(\s*(\d+)px", css)
+    assert m, ".wrap 必须定义 max-width"
+    v = int(m.group(1))
+    assert v == 880, f".wrap max-width 应=880px（用户纠正后定值），当前 {v}px"
+    # 显式禁止 ≥ 1000 的 wrap 残留（防止再拉大贴右）
+    for hit in re.finditer(r"\.wrap[^}]*width:\s*min\(\s*(\d+)px", css):
+        assert int(hit.group(1)) < 1000, \
+            f".wrap max-width 任何一处 ≥ 1000px 都会贴右（实际 {hit.group(1)}px）"
+    # 显式禁止 1040 旧值
+    assert "min(1040px" not in css, ".wrap 不能再用 1040px（之前贴右被截）"
 
 
-def test_wrap_max_width_1040_mobile_fallback():
+def test_wrap_max_width_880_mobile_fallback():
+    """小屏断点：@media ≤640px 兜底按 100%-1.5rem 自适应，max-width 也保持 880。"""
     css = _read(CSS)
-    assert re.search(r"\.wrap\s*\{\s*width:\s*min\(\s*1040px\s*,\s*100%\s*-\s*1\.5rem\s*\)", css), \
-        "@media ≤640px 兜底也应为 1040px（视口缩时按 100%-1.5rem 自适应）"
+    assert re.search(
+        r"@media[^{]*max-width:\s*640px[^{]*\{[^}]*\.wrap[^}]*width:\s*min\(\s*880px\s*,\s*100%\s*-\s*1\.5rem\s*\)",
+        css,
+    ), "@media ≤640px .wrap 兜底应为 880px（min() 自动收缩到视口内）"
 
 
 def test_sidebar_item_icon_size_24():
