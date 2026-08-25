@@ -331,7 +331,6 @@
     comBarFill: $('comBarFill'),
     comStatus: $('comStatus'),
     comReviewActions: $('comReviewActions'),
-    comOpenReview: $('comOpenReview'),
     comGenerateOneClick: $('comGenerateOneClick'),
     comLoudness: $('comLoudness'),
     comLoudnessVal: $('comLoudnessVal'),
@@ -4937,12 +4936,6 @@
     }
     el.comStatus.hidden = false;
     el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
-  });
-
-  el.comOpenReview.addEventListener('click', () => {
-    if (currentScriptJobId) {
-      openScriptReview(currentScriptJobId, { autoScroll: true });
-    }
   });
 
   // 解说风格切换：联动默认音色 + 更新提示文案（用户仍可在审核面板手动改音色）

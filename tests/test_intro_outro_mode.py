@@ -169,6 +169,53 @@ class TestDefaultsContract:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ⑥ 「审核 / 修改脚本」多余按钮已删除（仅保留提示文字）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewButtonRemoved:
+    """2026-08-26 用户确认该按钮多余（且重开会清空未保存修改），按方案 1 删除。
+
+    删除内容：
+      - HTML 中 id="comOpenReview" 的 button
+      - JS 中 el.comOpenReview 元素注册 + click handler
+    保留内容：
+      - comReviewActions 容器（保留提示文字「解说词已生成，审核通过后再渲染成片」）
+      - 脚本就绪时仍自动 openScriptReview() 打开审核面板
+    """
+
+    def test_com_open_review_button_removed_from_html(self):
+        html = (REPO / "web" / "index.html").read_text(encoding="utf-8")
+        assert 'id="comOpenReview"' not in html, (
+            "comOpenReview 按钮应从 HTML 删除（多余且重开会清空编辑）"
+        )
+
+    def test_com_open_review_not_referenced_in_js(self):
+        js = (REPO / "web" / "app.js").read_text(encoding="utf-8")
+        assert "comOpenReview" not in js, (
+            "app.js 不应再引用已删除的 comOpenReview 元素"
+        )
+
+    def test_review_hint_text_preserved(self):
+        html = (REPO / "web" / "index.html").read_text(encoding="utf-8")
+        assert "解说词已生成，审核通过后再渲染成片" in html, (
+            "删除按钮时应保留提示文字"
+        )
+
+    def test_review_actions_container_still_present(self):
+        html = (REPO / "web" / "index.html").read_text(encoding="utf-8")
+        assert 'id="comReviewActions"' in html, (
+            "comReviewActions 容器应保留（承载提示文字）"
+        )
+
+    def test_auto_open_script_review_on_ready_preserved(self):
+        """脚本就绪时仍自动 openScriptReview —— 保证用户仍能看到审核面板"""
+        js = (REPO / "web" / "app.js").read_text(encoding="utf-8")
+        assert "openScriptReview(job_id" in js, (
+            "脚本就绪时必须仍调用 openScriptReview 自动打开审核面板"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ④ radio 单选天然互斥 + 默认 opening 高亮测试
 # ─────────────────────────────────────────────────────────────────────────────
 
