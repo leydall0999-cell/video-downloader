@@ -149,6 +149,16 @@
         <input id="llmBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
         <label class="adv-label" for="llmModel">模型</label>
         <input id="llmModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+        <label class="adv-label" for="llmReasoningEffort">推理强度（解说省钱旋钮）</label>
+        <select id="llmReasoningEffort" class="adv-input">
+          <option value="low">低（推荐：省钱且质量够用）</option>
+          <option value="disabled">关闭（最省 token，质量略降）</option>
+          <option value="high">高（最佳质量，最贵）</option>
+        </select>
+        <label class="adv-checkbox-row">
+          <input id="llmOffpeakOnly" type="checkbox" />
+          <span>避开峰时生成（DeepSeek 工作日 09–12 / 14–18 北京时间为峰时，价格约 2 倍；开启后自动调度到闲时再生成，更省）</span>
+        </label>
         <p class="adv-note">Key 仅保存在本机 ~/.video-downloader/llm_config.json（0600 权限）。解说和翻译共用此配置，无需重复填写。</p>
         <button type="button" class="btn btn-primary btn-sm" id="llmSave">保存</button>
         <span id="llmStatus" class="sub-status" hidden></span>

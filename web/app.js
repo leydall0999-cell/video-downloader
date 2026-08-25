@@ -293,6 +293,8 @@
     llmApiKey: $('llmApiKey'),
     llmBaseUrl: $('llmBaseUrl'),
     llmModel: $('llmModel'),
+    llmReasoningEffort: $('llmReasoningEffort'),
+    llmOffpeakOnly: $('llmOffpeakOnly'),
     llmSave: $('llmSave'),
     llmStatus: $('llmStatus'),
     // 格式 / 片段加工（桌面版功能）
@@ -7469,6 +7471,9 @@
         if (el.llmApiKey) el.llmApiKey.value = cfg.api_key || '';
         if (el.llmBaseUrl) el.llmBaseUrl.value = cfg.base_url || '';
         if (el.llmModel) el.llmModel.value = cfg.model || '';
+        // 推理强度 / 避开峰时（省钱旋钮）
+        if (el.llmReasoningEffort) el.llmReasoningEffort.value = (cfg.reasoning_effort || 'low');
+        if (el.llmOffpeakOnly) el.llmOffpeakOnly.checked = !!cfg.offpeak_only;
         // 初始显示/隐藏 base_url
         if (el.llmBaseUrl) el.llmBaseUrl.style.display = (cfg.provider === 'custom') ? '' : 'none';
       }
@@ -7482,6 +7487,8 @@
           api_key: el.llmApiKey ? el.llmApiKey.value.trim() : '',
           base_url: el.llmBaseUrl ? el.llmBaseUrl.value.trim() : '',
           model: el.llmModel ? el.llmModel.value.trim() : '',
+          reasoning_effort: el.llmReasoningEffort ? el.llmReasoningEffort.value : 'low',
+          offpeak_only: el.llmOffpeakOnly ? el.llmOffpeakOnly.checked : false,
         };
         try {
           const r = await request('/api/llm/config', {

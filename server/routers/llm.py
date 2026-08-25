@@ -32,6 +32,8 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
         "model": req.model,
         "max_tokens": current.get("max_tokens", 4096),
         "temperature": current.get("temperature", 0.7),
+        "reasoning_effort": req.reasoning_effort or "low",
+        "offpeak_only": bool(req.offpeak_only),
     }
     app.save_llm_config(data)
     return {"ok": True}

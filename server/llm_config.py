@@ -57,6 +57,10 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
 DEFAULT_PROVIDER = "openai"
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
+# 推理强度：解说管线 Stage2 默认低推理（省钱且质量够用）；关闭=最省 token，高=最佳质量最贵。
+DEFAULT_REASONING_EFFORT = "low"
+# 避开峰时：北京工作日 09-12 / 14-18 为 DeepSeek 峰时（价格约 2 倍），开启后调度到闲时再生成。
+DEFAULT_OFFPEAK_ONLY = False
 
 # ── 配置文件路径 ─────────────────────────────────────────────────────────
 def _config_dir() -> Path:
@@ -90,6 +94,8 @@ def get_llm_config() -> dict[str, Any]:
         "model": "",
         "max_tokens": DEFAULT_MAX_TOKENS,
         "temperature": DEFAULT_TEMPERATURE,
+        "reasoning_effort": DEFAULT_REASONING_EFFORT,
+        "offpeak_only": DEFAULT_OFFPEAK_ONLY,
     }
 
     # 1) JSON 文件（桌面版前端持久化）
@@ -97,7 +103,8 @@ def get_llm_config() -> dict[str, Any]:
     if cp.is_file():
         try:
             saved = json.loads(cp.read_text(encoding="utf-8"))
-            for k in ("provider", "api_key", "base_url", "model", "max_tokens", "temperature"):
+            for k in ("provider", "api_key", "base_url", "model", "max_tokens",
+                      "temperature", "reasoning_effort", "offpeak_only"):
                 if k in saved:
                     cfg[k] = saved[k]
         except (json.JSONDecodeError, OSError):
@@ -119,6 +126,13 @@ def get_llm_config() -> dict[str, Any]:
             cfg["max_tokens"] = int(env_tok)
         except ValueError:
             pass
+    # 推理强度 / 避开峰时：环境变量为最终裁决（便于运维/容器覆盖 UI 设置）
+    env_re = os.environ.get("VDL_LLM_REASONING_EFFORT", "").strip()
+    if env_re:
+        cfg["reasoning_effort"] = env_re
+    env_off = os.environ.get("LLM_OFFPEAK_ONLY", "").strip()
+    if env_off and env_off.lower() in ("1", "true", "yes", "on"):
+        cfg["offpeak_only"] = True
 
     # 3) 填充缺失：从提供商预设补 base_url + model
     provider = cfg.get("provider", DEFAULT_PROVIDER)
@@ -156,5 +170,11 @@ def inject_llm_env(env: dict[str, str]) -> None:
     env["LLM_API_KEY"] = key
     env["LLM_BASE_URL"] = cfg.get("base_url", "").strip()
     env["LLM_MODEL"] = cfg.get("model", "").strip()
+    # 推理强度（省钱旋钮）：注入 VDL_LLM_REASONING_EFFORT 供 llm_script.py 读取。
+    # 默认 low，可在 UI 选 disabled(最省) / high(最佳质量)。
+    env["VDL_LLM_REASONING_EFFORT"] = cfg.get("reasoning_effort", "low")
+    # 避开峰时（省钱旋钮）：开启时注入 LLM_OFFPEAK_ONLY=1，llm_script 调度到闲时再调用。
+    if cfg.get("offpeak_only"):
+        env["LLM_OFFPEAK_ONLY"] = "1"
     # max_tokens / temperature 暂不注入——llm_script.py 有合理默认值，
     # 且这两个参数强绑定特定提示词策略，前端 UI 改可能造成脚本输出异常。

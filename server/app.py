@@ -2249,6 +2249,8 @@ class LLMConfigRequest(BaseModel):
     api_key: str = Field(default="", max_length=256)
     base_url: str = Field(default="", max_length=512)
     model: str = Field(default="", max_length=128)
+    reasoning_effort: str = Field(default="low", max_length=16)
+    offpeak_only: bool = Field(default=False)
 
 
 
