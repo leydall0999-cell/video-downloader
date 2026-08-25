@@ -25,7 +25,7 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "deepseek": {
         "name": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
-        "default_model": "deepseek-chat",
+        "default_model": "deepseek-v4-flash",
     },
     "qwen": {
         "name": "通义千问",
