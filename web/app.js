@@ -345,6 +345,7 @@
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
     comFileName: $('comFileName'),
+    comTitleInput: $('comTitleInput'),
     comFileStatus: $('comFileStatus'),
     comDropZone: $('comDropZone'),
     comTrimCard: $('comTrimCard'),
@@ -3852,6 +3853,8 @@
     try {
       const form = new FormData();
       form.append('file', file);
+      const title = (el.comTitleInput?.value || file.name.replace(/\.[^.]+$/, '')).trim();
+      if (title) form.append('title', title);
       form.append('vertical', String(resolveVertical()));
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
@@ -3922,6 +3925,8 @@
     try {
       const form = new FormData();
       form.append('file', file);
+      const title = (el.comTitleInput?.value || file.name.replace(/\.[^.]+$/, '')).trim();
+      if (title) form.append('title', title);
       form.append('vertical', String(resolveVertical()));
       form.append('trim_start', String(comTrimStart));
       form.append('trim_end', String(comTrimEnd));
@@ -4875,6 +4880,9 @@
     el.comFileName.textContent = file.name;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
+    // 默认用文件名（不含扩展名）填充片名输入框，用户可改
+    const defaultTitle = file.name.replace(/\.[^.]+$/, '').trim();
+    if (el.comTitleInput) el.comTitleInput.value = defaultTitle;
     setupComPreview(URL.createObjectURL(file));
   };
   el.comFileBtn.addEventListener('click', () => el.comFileInput.click());
