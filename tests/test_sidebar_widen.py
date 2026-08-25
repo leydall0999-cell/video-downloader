@@ -43,34 +43,34 @@ def test_main_margin_left_200():
     assert m, "main#main 应该给侧栏让出 200px"
 
 
-def test_wrap_max_width_880_centered():
-    """用户纠正：主面板 .wrap max-width 改回 880px 居中，让主面板在主区里有呼吸。
+def test_wrap_max_width_800_centered():
+    """用户 2026-08-26 01:24 继续反馈「还是有点挤」→ wrap 从 880 再收到 800px 居中。
 
-    上一版（1040）在 1280 视口下侧栏 200 + 主区 1080，wrap 1040 占满贴右
-    被截（用户截图 2026-08-26 01:19）。880 居中后：
-      1280 视口 → 200 侧栏 + 880 wrap（主区两侧各 100px 留白）
-      1440 视口 → 200 侧栏 + 880 wrap（主区两侧各 180px 留白）
+    主区净宽（视口 - 侧栏 200）：
+      1280 视口 → 主区 1080，panel 800 居中 → 两侧各 140px 留白（之前 880 只有 100）
+      1440 视口 → 主区 1240，panel 800 居中 → 两侧各 220px 留白
     """
     css = _read(CSS)
     m = re.search(r"\.wrap\s*\{\s*width:\s*min\(\s*(\d+)px", css)
     assert m, ".wrap 必须定义 max-width"
     v = int(m.group(1))
-    assert v == 880, f".wrap max-width 应=880px（用户纠正后定值），当前 {v}px"
-    # 显式禁止 ≥ 1000 的 wrap 残留（防止再拉大贴右）
+    assert v == 800, f".wrap max-width 应=800px（用户二次纠正后定值），当前 {v}px"
+    # 显式禁止 ≥ 850 的 wrap 残留（防止再拉大贴右变挤）
     for hit in re.finditer(r"\.wrap[^}]*width:\s*min\(\s*(\d+)px", css):
-        assert int(hit.group(1)) < 1000, \
-            f".wrap max-width 任何一处 ≥ 1000px 都会贴右（实际 {hit.group(1)}px）"
-    # 显式禁止 1040 旧值
+        assert int(hit.group(1)) < 850, \
+            f".wrap max-width 任何一处 ≥ 850px 都会显得挤（实际 {hit.group(1)}px）"
+    # 显式禁止 880 / 1040 旧值
+    assert "min(880px" not in css, ".wrap 不能再用 880px（用户已嫌挤）"
     assert "min(1040px" not in css, ".wrap 不能再用 1040px（之前贴右被截）"
 
 
-def test_wrap_max_width_880_mobile_fallback():
-    """小屏断点：@media ≤640px 兜底按 100%-1.5rem 自适应，max-width 也保持 880。"""
+def test_wrap_max_width_800_mobile_fallback():
+    """小屏断点：@media ≤640px 兜底按 100%-1.5rem 自适应，max-width 也保持 800。"""
     css = _read(CSS)
     assert re.search(
-        r"@media[^{]*max-width:\s*640px[^{]*\{[^}]*\.wrap[^}]*width:\s*min\(\s*880px\s*,\s*100%\s*-\s*1\.5rem\s*\)",
+        r"@media[^{]*max-width:\s*640px[^{]*\{[^}]*\.wrap[^}]*width:\s*min\(\s*800px\s*,\s*100%\s*-\s*1\.5rem\s*\)",
         css,
-    ), "@media ≤640px .wrap 兜底应为 880px（min() 自动收缩到视口内）"
+    ), "@media ≤640px .wrap 兜底应为 800px（min() 自动收缩到视口内）"
 
 
 def test_sidebar_item_icon_size_24():
@@ -114,6 +114,39 @@ def test_index_html_has_nine_tab_ids():
                    "sTabUploadConvert", "sTabDw", "sTabSubscribe",
                    "sTabTorrent", "sTabBaidu", "sTabPcs"):
         assert f'id="{tab_id}"' in html, f"缺失侧栏 item #{tab_id}"
+
+
+def test_panel_padding_spacious():
+    """用户 2026-08-26 01:24 二轮反馈「还是有点挤」→ panel padding 从 1.25rem 加到 ≥1.5rem。
+
+    主体 .panel padding 必须 ≥ 1.5rem（让内容离边框有明显距离），margin-bottom ≥ 1.2rem
+    （让相邻 panel 之间的呼吸更明显）。
+    """
+    css = _read(CSS)
+    m = re.search(r"\.panel\s*\{[^}]*padding:\s*([^;]+);[^}]*margin-bottom:\s*([^;]+);", css, re.S)
+    assert m, "未找到 .panel 的 padding + margin-bottom 声明"
+    pad_str, mb_str = m.group(1).strip(), m.group(2).strip()
+    # padding 至少 2 个值；取横向最大值
+    pad_nums = re.findall(r"[\d.]+rem", pad_str)
+    assert len(pad_nums) >= 2, f".panel padding 至少 2 个值，实际 {pad_str!r}"
+    horizontal = max(_rem_to_float(pad_nums[1]), _rem_to_float(pad_nums[3])) if len(pad_nums) == 4 else _rem_to_float(pad_nums[1])
+    assert horizontal >= 1.5, f".panel 横向 padding 必须 ≥ 1.5rem（防再改小变挤），当前 {horizontal}rem"
+    # margin-bottom 必须 ≥ 1.2rem
+    mb_val = _rem_to_float(re.findall(r"[\d.]+rem", mb_str)[0])
+    assert mb_val >= 1.2, f".panel margin-bottom 必须 ≥ 1.2rem（防再改小变挤），当前 {mb_val}rem"
+
+
+def test_hero_padding_top_spacious():
+    """hero 标题与下方主面板间距：上 padding ≥ 2.8rem、下 padding ≥ 2rem。"""
+    css = _read(CSS)
+    m = re.search(r"\.hero\s*\{\s*text-align:\s*center;\s*padding:\s*([^;]+);", css)
+    assert m, "未找到 .hero 的 padding 声明"
+    parts = m.group(1).split()
+    assert len(parts) == 3, f".hero padding 必须是 3 个值（top h bottom），实际 {m.group(1)!r}"
+    top = float(parts[0].replace("rem", "")) if "rem" in parts[0] else 0
+    bot = float(parts[2].replace("rem", "")) if "rem" in parts[2] else 0
+    assert top >= 2.8, f".hero 顶部 padding 必须 ≥ 2.8rem，当前 {parts[0]}"
+    assert bot >= 2.0, f".hero 底部 padding 必须 ≥ 2rem（让标题与 panel 距离更开），当前 {parts[2]}"
 
 
 def test_no_old_240_sidebar_width():
