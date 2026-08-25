@@ -1304,14 +1304,78 @@ def _activate_existing_window() -> None:
                 ["osascript", "-e",
                  'tell application "System Events" to set frontmost of '
                  '(every process whose name contains "VideoDownloader") to true'],
-                check=False, capture_output=True,
+                check=False, capture_output=True, timeout=3,
             )
         except Exception:
             pass
 
 
+_LAUNCH_LOG = Path.home() / ".vdl_launch.log"
+
+
+def _launch_log(msg: str) -> None:
+    """把启动关键节点写入 ~/.vdl_launch.log，便于「双击打不开」时定位。"""
+    try:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(_LAUNCH_LOG, "a") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _release_lock(f, path) -> None:
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(f, _fcntl.LOCK_UN)
+        f.close()
+    except Exception:
+        pass
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _show_error_dialog(msg: str) -> None:
+    """macOS 下用系统弹窗显示错误（不依赖 Python 包）。失败静默忽略。"""
+    if sys.platform != "darwin":
+        return
+    try:
+        safe = msg.replace('"', "'").replace("\\", "")
+        # 仅取前两行做弹窗，详情留给日志，避免 AppleScript 超长报错
+        short = "\\n".join(safe.splitlines()[:2])
+        subprocess.run(
+            ["osascript", "-e",
+             f'display dialog "{short}" with title "VideoDownloader" '
+             f'buttons {{"确定"}} default button "确定"'],
+            check=False, capture_output=True, timeout=3,
+        )
+    except Exception:
+        pass
+
+
+def _browser_fallback(server_thread) -> None:
+    """原生窗口不可用时的兜底：用系统浏览器打开本地服务并保持进程存活。"""
+    import webbrowser
+    try:
+        webbrowser.open(URL)
+    except Exception:
+        pass
+    try:
+        server_thread.join()
+    except Exception:
+        pass
+
+
 def _ensure_single_instance():
     """同一用户只保留一个 GUI 实例，且确保运行的是最新构建版本。
+
+    健壮化（修复「双击打不开 / 闪退」根因）：
+    - 用「端口是否被绑定」判定实例是否真的存活，替代 os.kill(pid,0) 的 PID 复用误判；
+    - 抢锁前不再用 open('w') 截断锁文件（旧逻辑会清空持有者已写的 PID，造成僵尸锁）；
+    - 仅在确认自己是 singleton 后才 seek(0)+truncate 重写锁；进程退出时 atexit 清理。
+    - 锁文件格式：`PID PORT BUILD_VERSION`
+   
 
     锁文件格式：`PID PORT BUILD_VERSION`
     - 拿到锁（无别的实例）→ 写自己信息，返回锁 handle，正常启动
@@ -1321,12 +1385,33 @@ def _ensure_single_instance():
           自己成为唯一实例（彻底解决「双击后仍在跑旧版」导致反复调试浪费的问题）
     """
     lock_path = Path.home() / ".vdl_instance.lock"
-    # 清理僵尸锁（上次异常退出未释放且持有进程已死）
+    self_build = _read_self_build_version()
+
+    def _read_lock():
+        try:
+            parts = lock_path.read_text().strip().split()
+        except Exception:
+            return None, None, ""
+        pid = int(parts[0]) if parts and parts[0].isdigit() else None
+        port = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else None
+        build = parts[2] if len(parts) >= 3 else ""
+        return pid, port, build
+
+    def _port_bound(port):
+        if not port:
+            return False
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                return s.connect_ex(("127.0.0.1", port)) == 0
+        except OSError:
+            return False
+
+    # 清理僵尸锁：锁存在，但对应端口未绑定且 PID 已死 → 直接删除
     try:
         if lock_path.exists():
-            old = lock_path.read_text().strip()
-            old_pid = old.split()[0] if old else ""
-            if old_pid.isdigit() and not _pid_alive(int(old_pid)):
+            opid, oport, _ = _read_lock()
+            if not _port_bound(oport) and not (opid and _pid_alive(opid)):
                 try:
                     lock_path.unlink()
                 except OSError:
@@ -1334,65 +1419,45 @@ def _ensure_single_instance():
     except Exception:
         pass
 
-    self_build = _read_self_build_version()
+    opid, oport, obuild = _read_lock() if lock_path.exists() else (None, None, "")
 
-    # 尝试拿锁；拿到说明无别的实例
-    try:
-        f = open(lock_path, "w")
-        if sys.platform == "win32":
-            import msvcrt
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    # 端口被占用 = 真的有别的实例在提供本地服务（PID 复用也不会误判）
+    if _port_bound(oport):
+        if obuild and obuild != self_build and opid and _pid_alive(opid):
+            _launch_log(f"检测到旧版本实例({obuild})在端口 {oport} 运行，自动接管并关闭")
+            _kill_process_tree(opid)
+            for _ in range(50):  # 最多等 5s 让端口释放
+                if not _port_bound(oport):
+                    break
+                time.sleep(0.1)
         else:
+            _launch_log("检测到已在运行的同版本实例，激活其窗口并退出（保持单实例）")
+            _activate_existing_window()
+            sys.exit(0)
+
+    # ── 自己是唯一实例：拿文件锁（不提前截断，避免清空持有者已写内容）──
+    try:
+        f = open(lock_path, "a+")
+        if _fcntl is not None:
             _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        f.seek(0)
+        f.truncate()
         f.write(f"{os.getpid()} {PORT} {self_build}\n")
         f.flush()
-        return f  # 调用方必须持有此对象直到退出
     except Exception:
         try:
             f.close()
         except Exception:
             pass
-
-    # ── 拿不到锁：有别的实例在跑 ──
-    old_pid = None
-    old_build = ""
-    try:
-        old = lock_path.read_text().strip().split()
-        if old and old[0].isdigit():
-            old_pid = int(old[0])
-        if len(old) >= 3:
-            old_build = old[2]
-    except Exception:
-        pass
-
-    # 旧实例版本 ≠ 当前版本（含旧格式锁文件无版本号的情况）→ 自动接管
-    if old_pid and _pid_alive(old_pid) and old_build != self_build:
-        print(
-            f"[VDL] 检测到旧版本实例({old_build or '未知'})仍在运行，"
-            f"当前已是最新({self_build})，自动接管并关闭旧实例…",
-            file=sys.stderr,
-        )
-        _kill_process_tree(old_pid)
-        # 旧进程退出后 flock 由内核自动释放；保险起见重写锁文件并占用
+        f = None
+    if f is not None:
         try:
-            lock_path.unlink()
-        except OSError:
-            pass
-        try:
-            f2 = open(lock_path, "w")
-            _fcntl.flock(f2, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-            f2.write(f"{os.getpid()} {PORT} {self_build}\n")
-            f2.flush()
-            return f2
+            import atexit
+            atexit.register(_release_lock, f, lock_path)
         except Exception:
-            try:
-                f2.close()
-            except Exception:
-                pass
-
-    # 版本相同 → 激活已有窗口并退出（保持单实例）
-    _activate_existing_window()
-    sys.exit(0)
+            pass
+        _launch_log(f"成为 singleton，已写锁 (pid={os.getpid()} port={PORT} build={self_build})")
+    return f
 
 
 def main() -> None:
@@ -1406,6 +1471,7 @@ def main() -> None:
     os.environ.setdefault("COMMENTARY_WORK_ROOT", str(_app_data_dir() / "commentary"))
 
     # 单实例：已有窗口则激活并退出，绝不创建第二个页面
+    _launch_log(f"main 启动 (pid={os.getpid()} port={PORT} frozen={getattr(sys, 'frozen', False)})")
     _lock = _ensure_single_instance()
     if _lock is None:
         _activate_existing_window()
@@ -1433,14 +1499,22 @@ def main() -> None:
         except OSError:
             time.sleep(0.2)
     else:
+        _launch_log("服务器启动超时")
         print(f"服务器启动超时，请手动访问 {URL}")
         server_thread.join()
         return
 
+    _launch_log("后端服务就绪，准备打开界面")
+
     # 开窗口 → 优先原生窗口（pywebview），回退浏览器
     try:
         import webview
+    except ImportError:
+        _launch_log("未捆绑 webview 模块，回退浏览器模式")
+        _browser_fallback(server_thread)
+        return
 
+    try:
         # ── macOS 退出语义修复：区分「红叉(Cmd+W)=返回桌面」与「Dock Quit(Cmd+Q)=彻底退出」──
         # pywebview 6.x 把两者都导向同一个 closing 事件；其 cocoa 后端中：
         #   * 红叉 / Cmd+W      → WindowDelegate.windowShouldClose_ → closing
@@ -1505,24 +1579,18 @@ def main() -> None:
         window.events.closing += _on_closing
 
         # Windows 端退出 webview 后清理资源
+        _launch_log("原生窗口已创建，启动 webview 主循环")
         webview.start()
+        _launch_log("webview 主循环结束，正常退出")
         os._exit(0)
-    except ImportError:
-        import webbrowser
-        import subprocess as _sp
-        # 桌面通知仅 macOS 支持；Windows 无 osascript，必须用 try 包裹避免崩溃
-        if sys.platform == "darwin":
-            try:
-                _sp.run(
-                    ["osascript", "-e",
-                     f'display notification "VideoDownloader 已启动" with title "{URL}"'],
-                    check=False, capture_output=True,
-                )
-            except Exception:
-                pass
-        webbrowser.open(URL)
-        # 保持进程存活直到 uvicorn 退出
-        server_thread.join()
+    except Exception as _wv_err:  # pywebview 运行期异常（如 cocoa 初始化失败）→ 绝不静默闪退
+        _launch_log(f"pywebview 运行异常({type(_wv_err).__name__})，回退浏览器模式: {_wv_err!r}")
+        _show_error_dialog(
+            "VideoDownloader 无法打开原生窗口，已自动改用浏览器打开。\n"
+            "若需要原生窗口，请把 ~/.vdl_launch.log 内容发给开发者。"
+        )
+        _browser_fallback(server_thread)
+        return
 
 
 if __name__ == "__main__":
