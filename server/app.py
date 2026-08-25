@@ -1056,6 +1056,10 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args.append("--vertical")
             if voice:
                 args += ["--voice", voice]
+            if title:
+                # 精修出片：把 title 同时传给 --title（解说锚点）和 --out-name（成片原片名），
+                # 避免成片名带 hash/安全文件名（ee6b7cf95736）
+                args += ["--title", title, "--out-name", title]
             # 审核后出片：把用户在面板上改过的剪辑选项一并传下去（覆盖脚本自带选项）
             args += extra
         else:
@@ -1068,7 +1072,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             if voice:
                 args += ["--voice", voice]
             if title:
-                args += ["--title", title]
+                # 同上：title → --title + --out-name，让成片用原片名而非 hash 名
+                args += ["--title", title, "--out-name", title]
             if script_only:
                 args.append("--script-only")
             args += extra
