@@ -1786,12 +1786,88 @@ def _safe_output_stem(title: str) -> str:
 
 # ---- 配音试听 / 预览全部 ----
 
-def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 60) -> None:
+def _commentary_ffmpeg_bin() -> str:
+    """返回解说管线可用的 ffmpeg 路径：优先用 CommentaryRuntime 探测到的捆绑 ffmpeg，
+    否则回退到全局 FFMPEG_BIN（格式转换模块同款）。"""
+    d = getattr(COMMENTARY_RT, "ffmpeg_dir", "") or ""
+    if d:
+        cand = os.path.join(d, "ffmpeg")
+        if os.path.exists(cand):
+            return cand
+    return FFMPEG_BIN
+
+
+def _build_loudness_filter(loudness: str | None, boost: str | None) -> str:
+    """构造旁白响度后处理的 ffmpeg 音频滤镜串。
+
+    - loudness="off"/空：不做响度标准化，仅用 boost 增益兜底
+    - loudness 为数字（如 "-14"）：loudnorm 标准化到该 LUFS 目标
+    - boost 额外线性增益（默认 1.0，夹取 0.5~2.0）
+    - 末尾统一加 alimiter 限幅，防止拉响导致破音
+    """
+    ln = (loudness or "").strip().lower()
+    do_loudnorm = ln not in ("", "off")
+    if do_loudnorm:
+        try:
+            lv = float(ln)
+        except ValueError:
+            raise ValueError(f"loudness 参数无效: {loudness!r}（应为 -18~-10 或 off）")
+        filt = f"loudnorm=I={lv:.1f}:TP=-1.0:LRA=11:linear=true,"
+    else:
+        filt = ""
+    bv = 1.0
+    if boost not in (None, ""):
+        try:
+            bv = float(boost)
+        except (TypeError, ValueError):
+            bv = 1.0
+    bv = max(0.5, min(2.0, bv))
+    return filt + f"volume={bv:.2f},alimiter=limit=0.98:level=disabled"
+
+
+def _apply_narration_loudness(src_mp3: Path, loudness: str | None, boost: str | None) -> None:
+    """对已有旁白 mp3 原地做响度标准化 + 增益（试听即所得，与成片 edit_ffmpeg 一致）。
+
+    失败不致命：保留原 TTS 音频，仅打印告警，不让试听整体失败。
+    """
+    ff = _commentary_ffmpeg_bin()
+    if not ff or not os.path.exists(ff):
+        print(f"  [试听] 未找到 ffmpeg（{ff}），跳过响度处理，返回原始旁白")
+        return
+    try:
+        filt = _build_loudness_filter(loudness, boost)
+    except ValueError as e:
+        print(f"  [试听] 响度参数错误，跳过后处理：{e}")
+        return
+    tmp = src_mp3.with_suffix(".loud.mp3")
+    cmd = [ff, "-y", "-i", str(src_mp3), "-af", filt, "-ar", "44100", "-ac", "2", str(tmp)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        print(f"  [试听] ffmpeg 响度处理异常，跳过：{e}")
+        if tmp.exists():
+            tmp.unlink()
+        return
+    if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 100:
+        src_mp3.unlink()
+        tmp.rename(src_mp3)
+    else:
+        msg = (proc.stderr or proc.stdout or "").strip()[-300:]
+        print(f"  [试听] ffmpeg 响度处理失败，保留原始旁白：{msg}")
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 60,
+                       loudness: str | None = None, boost: str | None = None) -> None:
     """用 edge-tts 把一段文本转成指定音色的 mp3。
 
     bundled 模式：edge_tts 已随包冻结，直接 in-process 调用，避开「subprocess 跑
     .py 脚本 vs PyInstaller frozen exe」的兼容性问题。
     dev 模式：edge_tts 装在 commentary-pipeline .venv 里，subprocess 到 COMMENTARY_RT.python。
+
+    loudness/boost（试听「配音与音量」设置用）：非 None 时对生成好的旁白再做
+    ffmpeg 响度标准化 + 增益，使试听与成片响度一致。
     """
     if not COMMENTARY_RT.ready():
         raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
@@ -1799,25 +1875,28 @@ def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 6
     # bundled 模式：桌面打包态，edge_tts 已冻结进 exe，直接 in-process 调用
     if plat.is_desktop():
         _run_voice_preview_inprocess(text, voice, output_mp3, timeout=timeout)
-        return
+    else:
+        # dev/外部：subprocess 走 commentary-pipeline 的 venv
+        if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
+            raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
+        script = COMMENTARY_DIR / "scripts" / "voice_preview.py"
+        cmd = [COMMENTARY_RT.python, str(script), text, voice, str(output_mp3)]
+        try:
+            proc = subprocess.run(cmd, cwd=str(COMMENTARY_DIR), capture_output=True,
+                                  text=True, timeout=timeout, env=COMMENTARY_RT.env())
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"edge-tts 生成超时（>{timeout}s）") from exc
+        except Exception as exc:
+            raise RuntimeError(f"edge-tts 调用失败：{exc}") from exc
+        if proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout or "无输出").strip()[:400]
+            raise RuntimeError(f"edge-tts 退出码 {proc.returncode}: {msg}")
+        if not output_mp3.exists() or output_mp3.stat().st_size < 100:
+            raise RuntimeError("edge-tts 未产出有效音频文件")
 
-    # dev/外部：subprocess 走 commentary-pipeline 的 venv
-    if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
-        raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
-    script = COMMENTARY_DIR / "scripts" / "voice_preview.py"
-    cmd = [COMMENTARY_RT.python, str(script), text, voice, str(output_mp3)]
-    try:
-        proc = subprocess.run(cmd, cwd=str(COMMENTARY_DIR), capture_output=True,
-                              text=True, timeout=timeout, env=COMMENTARY_RT.env())
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"edge-tts 生成超时（>{timeout}s）") from exc
-    except Exception as exc:
-        raise RuntimeError(f"edge-tts 调用失败：{exc}") from exc
-    if proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout or "无输出").strip()[:400]
-        raise RuntimeError(f"edge-tts 退出码 {proc.returncode}: {msg}")
-    if not output_mp3.exists() or output_mp3.stat().st_size < 100:
-        raise RuntimeError("edge-tts 未产出有效音频文件")
+    # 音量后处理（试听「配音与音量」设置时才带 loudness/boost）
+    if loudness is not None or boost is not None:
+        _apply_narration_loudness(output_mp3, loudness, boost)
 
 
 def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeout: int = 60) -> None:

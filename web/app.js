@@ -343,6 +343,7 @@
     comVolSave: $('comVolSave'),
     comVolReset: $('comVolReset'),
     comVolStatus: $('comVolStatus'),
+    comVolPreview: $('comVolPreview'),
     comIntroHighlight: $('comIntroHighlight'),
     comSkipIntroOutro: $('comSkipIntroOutro'),
     comKeepNoNarrate: $('comKeepNoNarrate'),
@@ -4267,6 +4268,48 @@
     }
   };
 
+  /** 试听当前「配音与音量」设置：把面板里的响度/增益套用到示例旁白，调参前先听效果 */
+  const previewNarration = async () => {
+    if (!commentaryEnvReady) {
+      el.comScriptStatus.hidden = false;
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = '解说环境未就绪，无法试听';
+      return;
+    }
+    const voice = el.comScriptVoice.value;
+    const loudness = el.comLoudnessOff.checked ? 'off' : String(el.comLoudness.value);
+    const boost = String(el.comBoost.value);
+    const original = el.comVolPreview.textContent;
+    el.comVolPreview.disabled = true;
+    el.comVolPreview.textContent = '⏳ 生成中…';
+    el.comScriptStatus.hidden = false;
+    el.comScriptStatus.className = 'com-script-status';
+    el.comScriptStatus.textContent = '正在用当前响度/增益生成试听…';
+    try {
+      const form = new FormData();
+      form.append('voice', voice);
+      form.append('text', '你好，我是视频解说员。这段视频的精彩内容，我来为你娓娓道来。');
+      form.append('loudness', loudness);
+      form.append('boost', boost);
+      const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.error || '生成失败');
+      }
+      const blob = await resp.blob();
+      await playAudio(blob);
+      el.comScriptStatus.className = 'com-script-status com-script-ok';
+      el.comScriptStatus.textContent = `✓ 已试听（响度 ${loudness} / 增益 ${boost}×）`;
+      setTimeout(() => { el.comScriptStatus.hidden = true; }, 2500);
+    } catch (err) {
+      el.comScriptStatus.className = 'com-script-status com-script-err';
+      el.comScriptStatus.textContent = `试听失败：${err.message}`;
+    } finally {
+      el.comVolPreview.disabled = false;
+      el.comVolPreview.textContent = original;
+    }
+  };
+
   /** 预览全部：把 script.json 前 3 段 narrations 用当前 voice 串成一段 mp3 播放 */
   const previewAllSegments = async () => {
     if (!currentScriptJobId) return;
@@ -4320,6 +4363,7 @@
   el.comScriptRender.addEventListener('click', renderFromScript);
   el.comScriptVoicePreview.addEventListener('click', previewVoice);
   el.comScriptPrevAll.addEventListener('click', previewAllSegments);
+  if (el.comVolPreview) el.comVolPreview.addEventListener('click', previewNarration);
 
   // 桌面版(pywebview)下载拦截：<a download> 在 WebKit 里不弹保存框，
   // 下载/保存解说成片。由于后端被冻结在 PyInstaller 二进制里，新增 POST 路由

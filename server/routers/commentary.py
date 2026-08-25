@@ -547,8 +547,14 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
 def voice_preview(
     voice: str = app.Form(...),
     text: str = app.Form("你好，我是视频解说员。我将为你解说这段视频。"),
+    loudness: str = app.Form(None),
+    boost: str = app.Form(None),
 ) -> app.FileResponse:
-    """配音试听：把指定文本用指定 voice 转成 mp3 返回给前端播放。"""
+    """配音试听：把指定文本用指定 voice 转成 mp3 返回给前端播放。
+
+    若带 loudness/boost（来自「配音与音量」面板的「试听当前设置」），生成的旁白会
+    再做 ffmpeg 响度标准化 + 增益，使试听与成片响度一致；不传则保持纯 TTS（音色试听）。
+    """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":
@@ -561,6 +567,21 @@ def voice_preview(
     text = (text or "").strip()[:500] if text else ""
     if not text:
         text = "你好，我是视频解说员。我将为你解说这段视频。"
+    # loudness/boost 校验（仅当显式提供时）
+    if loudness not in (None, "", "off"):
+        try:
+            lv = float(loudness)
+        except ValueError:
+            raise app.HTTPException(status_code=400, detail=f"loudness 必须为数字（-18~-10）或 off，当前: {loudness}")
+        if not (-18 <= lv <= -10):
+            raise app.HTTPException(status_code=400, detail=f"loudness 超出范围（-18~-10），当前: {loudness}")
+    if boost not in (None, ""):
+        try:
+            bv = float(boost)
+        except ValueError:
+            raise app.HTTPException(status_code=400, detail=f"boost 必须为数字（1.0~1.6），当前: {boost}")
+        if not (1.0 <= bv <= 1.6):
+            raise app.HTTPException(status_code=400, detail=f"boost 超出范围（1.0~1.6），当前: {boost}")
     # 2. 再检查资源可用性
     if not app.COMMENTARY_DIR or not (app.COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
         raise app.HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 voice_preview.py）")
@@ -569,7 +590,8 @@ def voice_preview(
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{app.uuid.uuid4().hex[:12]}.mp3"
     try:
-        app._run_voice_preview(text, voice, out_path, timeout=45)
+        app._run_voice_preview(text, voice, out_path, timeout=45,
+                               loudness=loudness, boost=boost)
     except RuntimeError as e:
         raise app.HTTPException(status_code=500, detail=f"试听生成失败：{e}")
     # 加过期清理保护：定时任务会清理 work/voice_preview/ 下超过 1 天的文件（用户本机 .cleanup）

@@ -1821,6 +1821,9 @@ img { max-width: 100%; display: block; }
 .consent-err { margin: .6rem 0 0; font-size: .82rem; color: var(--danger, #dc2626); }
 .consent-note { margin: .9rem 0 0; font-size: .75rem; color: var(--text-mute); line-height: 1.5; }
 
+/* 配音与音量：试听提示 */
+.com-vol-preview-hint { margin-top: .55rem; font-size: .76rem; color: var(--muted, #8a93a6); line-height: 1.5; }
+
 /* 弹窗操作行（确认 / 取消按钮） */
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
 
