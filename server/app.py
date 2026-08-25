@@ -1737,6 +1737,23 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     return Path(src_path).stem or ""
 
 
+def _meaningful_stem(s: str) -> bool:
+    """判断上传文件名 stem 是否「有语义、值得做片名前缀」。
+
+    用户 2026-08-25 明确：片名用「上传前的名字」。但源文件叫 upload.mp4、
+    VID_xxx、纯数字或 job_id 哈希（ee6b7cf95736）这类无语义名不能直接上，
+    需走 ffprobe/短码兜底。
+    """
+    s = (s or "").strip()
+    if not s or s.lower() == "upload":
+        return False
+    if s.isdigit():
+        return False
+    if 12 <= len(s) <= 32 and all(c in "0123456789abcdefABCDEF" for c in s):
+        return False  # 哈希形
+    return True
+
+
 def _safe_output_stem(title: str) -> str:
     """与 commentary-pipeline process._sanitize_filename 对齐的成片文件前缀清洗。
 

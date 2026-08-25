@@ -64,11 +64,16 @@ def create_commentary_upload(
         file.file.close()
 
     job_id = app.uuid.uuid4().hex[:12]
+    # 片名前缀优先级（用户 2026-08-25 明确）：显式 title → 上传前的名字(有意义时)
+    # → ffprobe 读 mp4 自带标题 → v<6hex> 短码。
+    # 保证上传《少帅.mp4》→ 片名「少帅」；源文件叫 upload.mp4 这种无语义名不会上片名。
+    stem = app.Path(file.filename).stem if file.filename else ""
     final_title = (title
+                   or (stem if app._meaningful_stem(stem) else "")
                    or app._probe_video_title(dest)
-                   or (app.Path(file.filename).stem if file.filename else ""))
+                   or "")
     final_title = (final_title or "").strip()
-    if not final_title or final_title.lower() == "upload":
+    if not final_title:
         import secrets as _secrets
         final_title = "v" + _secrets.token_hex(3)
     with app._commentary_lock:
@@ -118,14 +123,16 @@ def create_script_only_upload(
 
     job_id = app.uuid.uuid4().hex[:12]
     src_path = str(dest)
-    # 片名前缀优先级：用户/前端传的 title → ffprobe 读到的 mp4 自带标题 → 源文件名 stem
-    # 末层兜底：若仍是 "upload" / 空（源文件就叫 upload.mp4 且无 metadata title），用短码替代
-    # 避免成片名永远长成「upload-解说成片...」这种疑似 bug 的命名
+    # 片名前缀优先级（用户 2026-08-25 明确）：显式 title → 上传前的名字(有意义时)
+    # → ffprobe 读 mp4 自带标题 → v<6hex> 短码。
+    # 保证上传《少帅.mp4》→ 片名「少帅」；源文件叫 upload.mp4 这种无语义名不会上片名。
+    stem = app.Path(file.filename).stem if file.filename else ""
     final_title = (title
+                   or (stem if app._meaningful_stem(stem) else "")
                    or app._probe_video_title(dest)
-                   or (app.Path(file.filename).stem if file.filename else ""))
+                   or "")
     final_title = (final_title or "").strip()
-    if not final_title or final_title.lower() == "upload":
+    if not final_title:
         import secrets as _secrets
         final_title = "v" + _secrets.token_hex(3)  # e.g. v3a8f1b
     with app._commentary_lock:

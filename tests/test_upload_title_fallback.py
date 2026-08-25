@@ -57,5 +57,13 @@ def test_upload_title_fallback_for_uploadmp4_without_metadata():
     assert title and title.startswith("v") and len(title) == 7, f"应是 v<6hex>: got {title!r}"
 
 
+def test_upload_title_uses_meaningful_upload_name():
+    """用户核心场景（2026-08-25）：上传《少帅.mp4》→ 片名必须是「少帅」（上传前的名字优先）。"""
+    title = _run_upload_and_capture_title("少帅.mp4")
+    print(f"\n[meaningful] filename=少帅.mp4 → title={title!r}")
+    assert title == "少帅", f"上传前的名字(少帅)应优先作为片名: got {title!r}"
+
+
 if __name__ == "__main__":
     test_upload_title_fallback_for_uploadmp4_without_metadata()
+    test_upload_title_uses_meaningful_upload_name()
