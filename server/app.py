@@ -994,6 +994,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args.append("--vertical")
             if voice:
                 args += ["--voice", voice]
+            # 成片文件名用剧名/标题（而非 job_id 哈希名），与 auto 分支一致
+            if title:
+                args += ["--out-name", title]
             # 审核后出片：把用户在面板上改过的剪辑选项一并传下去（覆盖脚本自带选项）
             args += extra
         else:
@@ -1007,6 +1010,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args += ["--voice", voice]
             if title:
                 args += ["--title", title]
+            # 成片文件名用剧名/标题（而非 job_id 哈希名），避免成片名是一串无意义 hash
+            if title:
+                args += ["--out-name", title]
             if script_only:
                 args.append("--script-only")
             args += extra
@@ -1096,11 +1102,18 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 _commentary_log(job, "解说词已生成，等待人工审核后再渲染成片")
                 job.update(status="script_ready", script_path=str(script_path), output_path="")
         else:
-            # 成片命名：<base>_成片.mp4 或 <base>_竖屏成片.mp4
+            # 成片命名：优先按 --out-name（剧名/标题）清洗后的前缀查找；
+            # 找不到再退回 job_id(base) 兜底（旧任务或标题为空时）。
+            out_stem = _safe_output_stem(title) or base
             candidates = sorted(
-                (p for p in out_dir.glob(f"{base}*.mp4") if p.name != in_file.name),
+                (p for p in out_dir.glob(f"{out_stem}*.mp4") if p.name != in_file.name),
                 key=lambda p: p.stat().st_mtime, reverse=True,
             )
+            if not candidates:
+                candidates = sorted(
+                    (p for p in out_dir.glob(f"{base}*.mp4") if p.name != in_file.name),
+                    key=lambda p: p.stat().st_mtime, reverse=True,
+                )
             out = next(iter(candidates), None)
             if not out:
                 tail = "\n".join(last_lines[-20:]) or "无输出"
@@ -1660,6 +1673,22 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
         except Exception:
             pass
     return Path(src_path).stem or ""
+
+
+def _safe_output_stem(title: str) -> str:
+    """与 commentary-pipeline process._sanitize_filename 对齐的成片文件前缀清洗。
+
+    process.py 用 --out-name 的清洗结果作为 final_output_name 的前缀；app 端查找成片时
+    必须用同一规则还原该前缀，否则按 job_id 查找会落空（标题里的中文/空格/特殊字符被清洗后
+    与原始 title 不同）。
+    """
+    import re as _re
+    s = (title or "").strip()
+    s = _re.sub(r'[\\/:\*?"<>\|\x00-\x1f]', "", s)
+    s = s.rstrip(" .")
+    if not s:
+        return ""
+    return s[:100]
 
 
 
