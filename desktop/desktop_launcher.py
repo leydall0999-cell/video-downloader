@@ -1276,24 +1276,42 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
 def _activate_existing_window() -> None:
     """重复启动时把已有 VideoDownloader 窗口提到最前（macOS），并兜底打开浏览器。
 
-    关键修复：原本仅靠 System Events 的 `set frontmost`，而该操作需要「辅助功能」
-    权限，未授权时静默失败、双击看起来像「打不开」。现改为：先尽力用 System
-    Events 提窗，失败（无权限/被拒）则直接打开浏览器访问已运行的本地服务，
-    保证用户双击总能获得可用界面，绝不静默无响应。
+    提窗优先级（逐级降级，保证用户双击总能获得可用界面、绝不静默无响应）：
+      1. AppKit `NSRunningApplication.activateWithOptions_` —— 官方"把另一实例带到
+         前台"API，**无需任何「辅助功能」权限**；
+      2. osascript System Events `set frontmost` —— 需要「辅助功能」权限，未授权会失败；
+      3. 以上都失败才兜底打开浏览器访问已运行的本地服务。
+    修复背景：旧版无条件先开浏览器，导致已开着 app 再双击时每次都乱弹网页。
     """
+    pid = None
     port = None
     try:
         lp = Path.home() / ".vdl_instance.lock"
         if lp.exists():
             parts = lp.read_text().strip().split()
+            if len(parts) >= 1 and parts[0].isdigit():
+                pid = int(parts[0])
             if len(parts) >= 2 and parts[1].isdigit():
                 port = int(parts[1])
     except Exception:
         pass
-    # 先把已有原生窗口提到最前；仅当提窗失败（无「辅助功能」权限/被拒）时，
-    # 才兜底打开浏览器访问已运行的本地服务——避免每次重复双击都乱弹网页。
+
     raised = False
-    if sys.platform == "darwin":
+    # 1) AppKit 无权限提窗（首选）
+    if sys.platform == "darwin" and pid:
+        try:
+            from AppKit import NSRunningApplication, NSApplicationActivateAllWindows
+            app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            if app is not None:
+                try:
+                    raised = bool(app.activateWithOptions_(NSApplicationActivateAllWindows))
+                except Exception:
+                    raised = bool(app.activate())
+        except Exception:
+            raised = False
+
+    # 2) osascript System Events 提窗（需要「辅助功能」权限，失败静默降级）
+    if not raised and sys.platform == "darwin":
         try:
             r = subprocess.run(
                 ["osascript", "-e",
@@ -1304,6 +1322,8 @@ def _activate_existing_window() -> None:
             raised = (r.returncode == 0)
         except Exception:
             raised = False
+
+    # 3) 兜底：打开浏览器访问已运行的本地服务
     if not raised and port:
         try:
             import webbrowser
