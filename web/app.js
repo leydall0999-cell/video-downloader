@@ -345,8 +345,10 @@
     comVolStatus: $('comVolStatus'),
     comVolPreview: $('comVolPreview'),
     comIntroHighlight: $('comIntroHighlight'),
-    comSkipIntroOutro: $('comSkipIntroOutro'),
-    comKeepNoNarrate: $('comKeepNoNarrate'),
+    comIntroOutroMode: () => {
+      const v = document.querySelector('input[name="comIntroOutroMode"]:checked');
+      return v ? v.value : 'keep_no_narrate';
+    },
     comRetainPct: $('comRetainPct'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
@@ -3778,13 +3780,16 @@
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
     const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
+    // 片头片尾 3 选 1：默认「保留·不解说」（绝对不解说片头片尾）
+    const introOutroMode = el.comIntroOutroMode();
+    const skip_intro_outro = introOutroMode === 'skip';
+    const no_narrate_intro_outro = introOutroMode !== 'keep_narrate_all';
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
       highlight_source: srcEl ? srcEl.value : 'ai',
       intro_highlight: !!(el.comIntroHighlight && el.comIntroHighlight.checked),
-      skip_intro_outro: !!(el.comSkipIntroOutro && el.comSkipIntroOutro.checked),
-      // 默认保留片头片尾·不解说；若勾选「去片头片尾」则以 skip 优先（互斥，后端处理）
-      no_narrate_intro_outro: !!(el.comKeepNoNarrate && el.comKeepNoNarrate.checked),
+      skip_intro_outro,
+      no_narrate_intro_outro,
       retain_pct: rp,
       one_click: !!forceOneClick,
       style: styleEl ? styleEl.value : 'none',
