@@ -1274,25 +1274,22 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
 
 
 def _activate_existing_window() -> None:
-    """重复启动时把已有 VideoDownloader 窗口提到最前（macOS），并兜底打开浏览器。
+    """重复启动时把已有 VideoDownloader 窗口提到最前（macOS）。
 
-    提窗优先级（逐级降级，保证用户双击总能获得可用界面、绝不静默无响应）：
+    提窗优先级（**绝不自动打开浏览器**，用户明确：App 就是 App，不跳网页）：
       1. AppKit `NSRunningApplication.activateWithOptions_` —— 官方"把另一实例带到
          前台"API，**无需任何「辅助功能」权限**；
       2. osascript System Events `set frontmost` —— 需要「辅助功能」权限，未授权会失败；
-      3. 以上都失败才兜底打开浏览器访问已运行的本地服务。
+      3. 以上都失败只写日志，保持现状（提窗失败不跳浏览器）。
     修复背景：旧版无条件先开浏览器，导致已开着 app 再双击时每次都乱弹网页。
     """
     pid = None
-    port = None
     try:
         lp = Path.home() / ".vdl_instance.lock"
         if lp.exists():
             parts = lp.read_text().strip().split()
             if len(parts) >= 1 and parts[0].isdigit():
                 pid = int(parts[0])
-            if len(parts) >= 2 and parts[1].isdigit():
-                port = int(parts[1])
     except Exception:
         pass
 
@@ -1329,15 +1326,9 @@ def _activate_existing_window() -> None:
         except Exception:
             raised = False
 
-    # 3) 兜底：打开浏览器访问已运行的本地服务
-    if not raised and port:
-        try:
-            import webbrowser
-            url = f"http://127.0.0.1:{port}/"
-            _launch_log(f"提窗失败/无窗口可提，兜底打开浏览器 {url}")
-            webbrowser.open(url)
-        except Exception:
-            pass
+    # 3) 提窗失败：只写日志，绝不自动打开浏览器（用户明确：App 就是 App，不跳网页）
+    if not raised:
+        _launch_log("提窗失败（AppKit/osascript 均未生效），不打开浏览器，保持现状")
 
 
 _LAUNCH_LOG = Path.home() / ".vdl_launch.log"
@@ -1385,12 +1376,15 @@ def _show_error_dialog(msg: str) -> None:
 
 
 def _browser_fallback(server_thread) -> None:
-    """原生窗口不可用时的兜底：用系统浏览器打开本地服务并保持进程存活。"""
-    import webbrowser
-    try:
-        webbrowser.open(URL)
-    except Exception:
-        pass
+    """原生窗口不可用时的兜底：**不再自动打开浏览器**（用户明确：App 就是 App，不跳网页）。
+
+    仅弹窗告知用户 + 写日志，并保持本地服务继续运行，等用户决定（可手动访问或退出）。
+    """
+    _launch_log("原生窗口不可用，不自动跳转浏览器（用户要求），仅提示并保持服务运行")
+    _show_error_dialog(
+        "VideoDownloader 无法打开原生窗口。\n"
+        "请把 ~/.vdl_launch.log 内容发给开发者排查。"
+    )
     try:
         server_thread.join()
     except Exception:
@@ -1540,7 +1534,7 @@ def main() -> None:
     try:
         import webview
     except ImportError:
-        _launch_log("未捆绑 webview 模块，回退浏览器模式")
+        _launch_log("未捆绑 webview 模块，无法打开原生窗口（不跳浏览器，仅提示）")
         _browser_fallback(server_thread)
         return
 
@@ -1614,11 +1608,7 @@ def main() -> None:
         _launch_log("webview 主循环结束，正常退出")
         os._exit(0)
     except Exception as _wv_err:  # pywebview 运行期异常（如 cocoa 初始化失败）→ 绝不静默闪退
-        _launch_log(f"pywebview 运行异常({type(_wv_err).__name__})，回退浏览器模式: {_wv_err!r}")
-        _show_error_dialog(
-            "VideoDownloader 无法打开原生窗口，已自动改用浏览器打开。\n"
-            "若需要原生窗口，请把 ~/.vdl_launch.log 内容发给开发者。"
-        )
+        _launch_log(f"pywebview 运行异常({type(_wv_err).__name__})，无法打开原生窗口: {_wv_err!r}")
         _browser_fallback(server_thread)
         return
 
