@@ -1290,22 +1290,26 @@ def _activate_existing_window() -> None:
                 port = int(parts[1])
     except Exception:
         pass
-    # 兜底：直接打开浏览器访问已运行的本地服务（不依赖任何辅助功能权限）
-    if port:
-        try:
-            import webbrowser
-            webbrowser.open(f"http://127.0.0.1:{port}/")
-        except Exception:
-            pass
-    # 尽力把原生窗口提到最前（无权限时失败也不影响上面的浏览器兜底）
+    # 先把已有原生窗口提到最前；仅当提窗失败（无「辅助功能」权限/被拒）时，
+    # 才兜底打开浏览器访问已运行的本地服务——避免每次重复双击都乱弹网页。
+    raised = False
     if sys.platform == "darwin":
         try:
-            subprocess.run(
+            r = subprocess.run(
                 ["osascript", "-e",
                  'tell application "System Events" to set frontmost of '
                  '(every process whose name contains "VideoDownloader") to true'],
                 check=False, capture_output=True, timeout=3,
             )
+            raised = (r.returncode == 0)
+        except Exception:
+            raised = False
+    if not raised and port:
+        try:
+            import webbrowser
+            url = f"http://127.0.0.1:{port}/"
+            _launch_log(f"提窗失败/无窗口可提，兜底打开浏览器 {url}")
+            webbrowser.open(url)
         except Exception:
             pass
 
