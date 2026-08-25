@@ -158,3 +158,38 @@ def test_no_old_240_sidebar_width():
 def test_no_old_240_main_margin_left():
     css = _read(CSS)
     assert "margin-left: 240px" not in css, "main#main margin-left 还残留 240px"
+
+
+def test_main_and_wrap_are_separate_elements():
+    """用户 2026-08-26 01:34 反馈「往右挪一点,挤到一起了」根因：
+
+    旧版 <main id="main" class="wrap"> 让 main 和 .wrap 是同一个元素，
+    CSS 上 main#main { margin-left: 200px } 和 .wrap { margin-inline: auto }
+    在同一元素打架——main#main 特异性更高，margin-left 赢 200px，
+    margin-right 还是 auto，宽度 800px 被死死顶在 200px 处、右边留 280px 大空，
+    视觉上"挤到左边"。
+
+    修复：拆成 <main id="main"><div class="wrap">…</div></main>，让 main 专职给
+    固定侧栏让位（margin-left:200），div.wrap 专职在 main 内居中
+    （margin-inline:auto + width:800）。两者职责分离，居中才能真正生效。
+
+    此测试防回滚：main 不能带 wrap 类；wrap 必须是 main 的后代元素。
+    """
+    html = _read(HTML)
+    # 1) main 元素不能再带 class="wrap"
+    m = re.search(r"<main\b[^>]*>", html)
+    assert m, "未找到 <main> 元素"
+    main_tag = m.group(0)
+    assert 'class="wrap"' not in main_tag, \
+        f"main 不能带 class='wrap'（会和 main#main margin-left 打架把内容挤到左边）: {main_tag}"
+    # 2) main 内部必须有 <div class="wrap">（真正的居中容器）
+    assert re.search(r'<main\b[^>]*>\s*<div\s+class="wrap">', html), \
+        "main 内部必须包一个 <div class=\"wrap\"> 居中容器（main/wrap 必须拆开）"
+    # 3) 反向断言：HTML 里 class="wrap" 只能出现在 <div> 上，不能在 <main> 上
+    for hit in re.finditer(r'class="wrap"', html):
+        # 找到 class="wrap" 所在的标签起始位置，向前回溯最近的 '<'
+        idx = hit.start()
+        tag_start = html.rfind("<", 0, idx)
+        tag = html[tag_start:idx]
+        assert tag.lstrip("<").startswith("div"), \
+            f'class="wrap" 必须在 <div> 上，不能在 {tag!r}（会和 main margin-left 冲突）'
