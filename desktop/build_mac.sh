@@ -496,4 +496,4 @@ fi
 echo "✅ 完成"
 echo "   App : dist/VideoDownloader.app（双击即用）"
 echo "   分发: dist/VideoDownloader.dmg（拖到 应用程序 即可）"
-echo "   浏览器自动访问 http://127.0.0.1:8321（端口被占用会自动顺延）"
+echo "   启动后默认打开原生窗口（本地端口 8321，被占用自动顺延；不跳浏览器）"
