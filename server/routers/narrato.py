@@ -235,6 +235,35 @@ def _is_ready() -> bool:
         s.close()
 
 
+def _kill_port_occupant() -> None:
+    """清理占用 NARRATO_PORT 的孤儿进程（App 异常退出未杀干净时），
+    避免复用旧(英文)进程导致界面语言/配置不生效。"""
+    import signal
+
+    try:
+        out = subprocess.run(
+            ["lsof", "-tiTCP:%d" % NARRATO_PORT, "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        return
+    if not out:
+        return
+    for pid_s in out.splitlines():
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGTERM)
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+
 def ensure_start() -> dict:
     with _state["lock"]:
         narrato_dir = _resolve_dir()
@@ -247,6 +276,8 @@ def ensure_start() -> dict:
         proc = _state.get("proc")
         if proc is not None and proc.poll() is None and _is_ready():
             return {"status": "ready", "port": NARRATO_PORT}
+        # 拉起前先清理可能残留的孤儿进程（端口被占但非本模块跟踪的进程）
+        _kill_port_occupant()
         # 拉起
         try:
             cmd = _resolve_launcher(narrato_dir)
