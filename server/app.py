@@ -943,7 +943,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
                              intro_highlight: bool = False, skip_intro_outro: bool = False,
                              no_narrate_intro_outro: bool = True, retain_pct: float | None = None,
                              web: bool = False, one_click: bool = False, mode: str | None = None,
-                             style: str = "none") -> list:
+                             style: str = "none", vision: bool = False) -> list:
     """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。"""
     args = ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
     if style and style != "none":
@@ -959,6 +959,8 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args += ["--retain-pct", str(retain_pct)]
     if web:
         args.append("--web")
+    if vision:
+        args.append("--vision")
     if one_click:
         args.append("--one-click")
     if mode:  # 旧版兼容字段，仅当显式传了才带
@@ -981,7 +983,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                     skip_intro_outro=skip_intro_outro,
                                     no_narrate_intro_outro=no_narrate_intro_outro,
                                     retain_pct=retain_pct, web=web,
-                                    one_click=one_click, style=style)
+                                    one_click=one_click, vision=vision,
+                                    tts_provider=tts_provider, style=style)
     try:
         # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
         if not COMMENTARY_RT.ready():
@@ -1030,7 +1033,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         no_narrate_intro_outro=no_narrate_intro_outro,
                                         retain_pct=retain_pct, web=web,
                                         one_click=one_click, mode=mode,
-                                        style=style)
+                                        style=style, vision=vision)
         if edit_only:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker",
@@ -1063,6 +1066,11 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             if script_only:
                 args.append("--script-only")
             args += extra
+
+        run_env = COMMENTARY_RT.env()
+        if tts_provider:
+            # 语音克隆/海螺等可切换 TTS 服务商（indextts2=本地 IndexTTS2 语音克隆，需先起推理服务）
+            run_env["VDL_TTS_PROVIDER"] = tts_provider
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
@@ -1104,7 +1112,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 args, cwd=str(COMMENTARY_DIR),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
-                env=COMMENTARY_RT.env(),
+                env=run_env,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(f"解说管线无法启动：{exc}") from exc
@@ -1185,7 +1193,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         logger.exception("解说任务 %s 失败", job_id)
 
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none") -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "") -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
@@ -1238,6 +1246,8 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
                 "web": "true" if web else "false",
                 "one_click": "true" if one_click else "false",
                 "style": style or "none",
+                "vision": "true" if vision else "false",
+                "tts_provider": tts_provider or "",
             }
             if retain_pct is not None:
                 data["retain_pct"] = str(retain_pct)
@@ -1641,6 +1651,8 @@ class CommentaryRequest(BaseModel):
     web: bool = Field(default=False, description="联网搜索资料辅助发挥")
     one_click: bool = Field(default=False, description="一键生成: 全片深入解说+AI联网+片头插精彩片段")
     style: str = Field(default="none", description="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌")
+    vision: bool = Field(default=False, description="视觉理解：抽帧调多模态模型补全无声/纯画面段落（需配置 VDL_VISION_*）")
+    tts_provider: str = Field(default="", max_length=32, description="TTS 服务商: 空=默认 edge; indextts2=本地 IndexTTS2 语音克隆(需先起推理服务); minimax/siliconflow=云端")
     mode: str | None = Field(default=None,
                              description="(旧版兼容) 三选一解说模式，会被上面的新选项覆盖")
 

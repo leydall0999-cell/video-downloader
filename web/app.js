@@ -3815,6 +3815,8 @@
       retain_pct: rp,
       one_click: !!forceOneClick,
       style: styleEl ? styleEl.value : 'none',
+      vision: !!(el.comVision && el.comVision.checked),
+      tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
     };
   };
 
@@ -3902,6 +3904,8 @@
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
       form.append('one_click', String(opts.one_click));
       form.append('style', opts.style || 'none');
+      form.append('vision', String(opts.vision));
+      if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
@@ -3972,6 +3976,8 @@
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
       form.append('one_click', String(opts.one_click));
       form.append('style', opts.style || 'none');
+      form.append('vision', String(opts.vision));
+      if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);

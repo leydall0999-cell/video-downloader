@@ -53,6 +53,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     skip_intro_outro=payload.skip_intro_outro,
                     no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
+                    vision=payload.vision, tts_provider=payload.tts_provider,
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style)
@@ -66,6 +67,8 @@ def create_commentary_upload(
     trim_start: float = app.Form(0.0),
     trim_end: float = app.Form(0.0),
     mode: str = app.Form("highlights"),
+    vision: bool = app.Form(False),
+    tts_provider: str = app.Form(""),
     title: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
@@ -105,6 +108,7 @@ def create_commentary_upload(
                                    "src_filename": src_filename}
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
+                    vision=vision, tts_provider=tts_provider,
                     title=final_title,
                     src_filename=src_filename)
     return {"job_id": job_id, "status": "running"}
@@ -126,6 +130,8 @@ def create_script_only_upload(
     web: bool = app.Form(False),
     one_click: bool = app.Form(False),
     style: str = app.Form("none"),
+    vision: bool = app.Form(False),
+    tts_provider: str = app.Form(""),
     title: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
@@ -172,6 +178,7 @@ def create_script_only_upload(
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
+                    vision=vision, tts_provider=tts_provider,
                     title=final_title,
                     style=style,
                     src_filename=src_filename)
@@ -392,6 +399,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     skip_intro_outro=payload.skip_intro_outro,
                     no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
+                    vision=payload.vision, tts_provider=payload.tts_provider,
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style)

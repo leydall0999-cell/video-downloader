@@ -810,6 +810,27 @@
               <label class="com-mode-option"><input type="radio" name="comAspect" value="vertical" /><span>竖屏 9:16（抖音/视频号）</span></label>
             </div>
           </div>
+          <!-- 视觉理解（补全无声/纯画面段） -->
+          <div class="com-opt-block com-opt-block-full">
+            <div class="com-opt-title">视觉理解（实验）</div>
+            <label class="com-highlights-toggle">
+              <input type="checkbox" id="comVision" />
+              <span><b>启用视觉理解</b>（抽帧调多模态模型，补全无声/纯画面段落；需在设置中配置 VDL_VISION_*）</span>
+            </label>
+          </div>
+          <!-- 配音引擎 -->
+          <div class="com-opt-block com-opt-block-full">
+            <div class="com-opt-title">配音引擎</div>
+            <div class="com-opt-row">
+              <select id="comTtsProvider" class="com-select">
+                <option value="">默认（微软 edge-tts）</option>
+                <option value="indextts2">IndexTTS2 本地语音克隆（需先起推理服务）</option>
+                <option value="minimax">MiniMax 海螺</option>
+                <option value="siliconflow">SiliconFlow</option>
+              </select>
+              <span class="com-retain-hint">indextts2 需在终端先启动本地推理服务（start_indextts2_server.py）</span>
+            </div>
+          </div>
         </div>
       </details>
 
