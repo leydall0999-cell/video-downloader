@@ -367,7 +367,7 @@ def test_voice_preview_empty_text_falls_back_to_default(tmp_path):
     """空 text 时退回默认样例（FastAPI Form() 对空字符串的默认行为），而不是 400。
     这样用户即使前端忘填 text 也能听到声音。"""
     _setup_voice_preview_dir(tmp_path)
-    def fake_run(text, voice, output_mp3, timeout=60):
+    def fake_run(text, voice, output_mp3, timeout=60, **kwargs):
         output_mp3.write_bytes(b"ID3" + b"\x00" * 4096)
     with patch.object(m, "COMMENTARY_MODE", "local"), \
          patch.object(m, "_run_voice_preview", side_effect=fake_run) as run_mock, \
@@ -386,7 +386,7 @@ def test_voice_preview_local_success(tmp_path, monkeypatch):
     fake_mp3 = tmp_path / "preview.mp3"
     fake_mp3.write_bytes(b"ID3" + b"\x00" * 4096)  # 模拟一个 mp3
 
-    def fake_run(text, voice, output_mp3, timeout=60):
+    def fake_run(text, voice, output_mp3, timeout=60, **kwargs):
         output_mp3.write_bytes(fake_mp3.read_bytes())
 
     with patch.object(m, "COMMENTARY_MODE", "local"), \
@@ -403,7 +403,7 @@ def test_voice_preview_local_success(tmp_path, monkeypatch):
 def test_voice_preview_subprocess_failure_returns_500(tmp_path):
     """edge-tts 失败时必须 500 而不是默默 200。"""
     _setup_voice_preview_dir(tmp_path)
-    def fake_run(text, voice, output_mp3, timeout=60):
+    def fake_run(text, voice, output_mp3, timeout=60, **kwargs):
         raise RuntimeError("edge-tts 退出码 1: network unreachable")
 
     with patch.object(m, "COMMENTARY_MODE", "local"), \
@@ -441,7 +441,7 @@ def test_preview_segments_local_success(tmp_path):
         ],
     }, ensure_ascii=False), encoding="utf-8")
 
-    def fake_run(text, voice, output_mp3, timeout=60):
+    def fake_run(text, voice, output_mp3, timeout=60, **kwargs):
         output_mp3.write_bytes(b"ID3" + b"\x00" * 8192)  # 模拟生成有效音频
 
     with m._commentary_lock:
