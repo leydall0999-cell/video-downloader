@@ -112,6 +112,25 @@ def _config_path(narrato_dir: Path) -> Path:
     return narrato_dir / "config.toml"
 
 
+def _ensure_ui_language(text: str) -> str:
+    """确保 [ui] 段含 language = "zh"（中文界面）。
+
+    NarratoAI 自带 zh.json 完整中文包，但 macOS 的 locale 检测常返回 en，
+    导致界面英文。此处强制注入 language="zh"；已存在则不动，避免破坏用户配置。
+    """
+    m = re.search(
+        r'^\[ui\]\s*\n(.*?)(?=^\s*\[|\Z)',
+        text, flags=re.MULTILINE | re.DOTALL,
+    )
+    if not m:
+        # 完全没有 [ui] 段：追加
+        return text.rstrip() + '\n\n[ui]\n    language = "zh"\n'
+    if re.search(r'^\s*language\s*=', m.group(1), flags=re.MULTILINE):
+        return text  # 已有 language，尊重用户设置
+    # 在 [ui] 段首行后插入
+    return text[: m.start(1)] + '    language = "zh"\n\n' + text[m.start(1):]
+
+
 def _ensure_config(narrato_dir: Path) -> None:
     cfg = _config_path(narrato_dir)
     example = narrato_dir / "config.example.toml"
@@ -124,6 +143,9 @@ def _ensure_config(narrato_dir: Path) -> None:
             # 半成品：删除后重新生成
             cfg.unlink()
         else:
+            # 已存在且有效：仅保证界面语言为中文，不破坏用户其他配置
+            text = _ensure_ui_language(text)
+            cfg.write_text(text, encoding="utf-8")
             return  # 已存在且有效，尊重用户既有配置
     text = example.read_text(encoding="utf-8")
     # 预填 DeepSeek（OpenAI 兼容）作为文本 LLM；配音先用免费 edge_tts 跑通
@@ -143,6 +165,8 @@ def _ensure_config(narrato_dir: Path) -> None:
         'tts_engine = "edge_tts"',
         text, flags=re.MULTILINE,
     )
+    # 默认中文界面（NarratoAI 自带 zh.json，macOS locale 检测常返回英文需强制）
+    text = _ensure_ui_language(text)
     # key 留空，待用户粘贴
     cfg.write_text(text, encoding="utf-8")
 
