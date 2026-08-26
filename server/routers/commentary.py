@@ -54,6 +54,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
                     vision=payload.vision, tts_provider=payload.tts_provider,
+                    intro_sec=payload.intro_sec, outro_sec=payload.outro_sec,
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style)
@@ -126,6 +127,8 @@ def create_script_only_upload(
     intro_highlight: bool = app.Form(False),
     skip_intro_outro: bool = app.Form(False),
     no_narrate_intro_outro: bool = app.Form(True),
+    intro_sec: float = app.Form(None),
+    outro_sec: float = app.Form(None),
     retain_pct: float = app.Form(None),
     web: bool = app.Form(False),
     one_click: bool = app.Form(False),
@@ -179,6 +182,7 @@ def create_script_only_upload(
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
                     vision=vision, tts_provider=tts_provider,
+                    intro_sec=intro_sec, outro_sec=outro_sec,
                     title=final_title,
                     style=style,
                     src_filename=src_filename)
@@ -400,6 +404,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     no_narrate_intro_outro=payload.no_narrate_intro_outro,
                     retain_pct=payload.retain_pct, web=payload.web,
                     vision=payload.vision, tts_provider=payload.tts_provider,
+                    intro_sec=payload.intro_sec, outro_sec=payload.outro_sec,
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style)
@@ -524,6 +529,8 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
     skip_intro_outro = bool(saved.get("skip_intro_outro", False))
     no_narrate_intro_outro = bool(saved.get("no_narrate_intro_outro", True))
     retain_pct = saved.get("retain_pct")
+    intro_sec = saved.get("intro_sec")
+    outro_sec = saved.get("outro_sec")
     web = bool(saved.get("web", False))
     one_click = bool(saved.get("one_click", False))
 
@@ -547,6 +554,7 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     intro_highlight=intro_highlight, skip_intro_outro=skip_intro_outro,
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
+                    intro_sec=intro_sec, outro_sec=outro_sec,
                     title=title,
                     src_filename=src_filename)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}

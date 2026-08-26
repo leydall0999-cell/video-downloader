@@ -943,7 +943,8 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
                              intro_highlight: bool = False, skip_intro_outro: bool = False,
                              no_narrate_intro_outro: bool = True, retain_pct: float | None = None,
                              web: bool = False, one_click: bool = False, mode: str | None = None,
-                             style: str = "none", vision: bool = False) -> list:
+                             style: str = "none", vision: bool = False,
+                             intro_sec: float | None = None, outro_sec: float | None = None) -> list:
     """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。"""
     args = ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
     if style and style != "none":
@@ -957,6 +958,10 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args.append("--narrate-all")
     if retain_pct is not None:
         args += ["--retain-pct", str(retain_pct)]
+    if intro_sec is not None and intro_sec > 0:
+        args += ["--intro-sec", str(intro_sec)]
+    if outro_sec is not None and outro_sec > 0:
+        args += ["--outro-sec", str(outro_sec)]
     if web:
         args.append("--web")
     if vision:
@@ -968,7 +973,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     return args
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "") -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", intro_sec: float | None = None, outro_sec: float | None = None) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -984,7 +989,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                     no_narrate_intro_outro=no_narrate_intro_outro,
                                     retain_pct=retain_pct, web=web,
                                     one_click=one_click, vision=vision,
-                                    tts_provider=tts_provider, style=style)
+                                    tts_provider=tts_provider, style=style,
+                                    intro_sec=intro_sec, outro_sec=outro_sec)
     try:
         # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
         if not COMMENTARY_RT.ready():
@@ -1035,7 +1041,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         no_narrate_intro_outro=no_narrate_intro_outro,
                                         retain_pct=retain_pct, web=web,
                                         one_click=one_click, mode=mode,
-                                        style=style, vision=vision)
+                                        style=style, vision=vision,
+                                        intro_sec=intro_sec, outro_sec=outro_sec)
         if edit_only:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker",
@@ -1195,7 +1202,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         logger.exception("解说任务 %s 失败", job_id)
 
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "") -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "", intro_sec: float | None = None, outro_sec: float | None = None) -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
@@ -1253,6 +1260,10 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
             }
             if retain_pct is not None:
                 data["retain_pct"] = str(retain_pct)
+            if intro_sec is not None and intro_sec > 0:
+                data["intro_sec"] = str(intro_sec)
+            if outro_sec is not None and outro_sec > 0:
+                data["outro_sec"] = str(outro_sec)
             if mode:
                 data["mode"] = mode
             resp = requests.post(
@@ -1650,6 +1661,8 @@ class CommentaryRequest(BaseModel):
     no_narrate_intro_outro: bool = Field(default=True,
                                          description="保留片头片尾但不解说(默认开启；与 skip_intro_outro 互斥，后者优先)")
     retain_pct: float | None = Field(default=None, description="保留全片时长百分比(10~100, 不填=不裁剪)")
+    intro_sec: float | None = Field(default=None, description="手动片头秒数(优先于自动检测，直接跳过该片头时长)")
+    outro_sec: float | None = Field(default=None, description="手动片尾秒数(优先于自动检测，直接剪掉该时长的片尾)")
     web: bool = Field(default=False, description="联网搜索资料辅助发挥")
     one_click: bool = Field(default=False, description="一键生成: 全片深入解说+AI联网+片头插精彩片段")
     style: str = Field(default="none", description="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌")

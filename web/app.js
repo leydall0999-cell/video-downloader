@@ -3802,6 +3802,8 @@
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
     const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
+    const introSec = el.comIntroSec && el.comIntroSec.value ? Number(el.comIntroSec.value) : null;
+    const outroSec = el.comOutroSec && el.comOutroSec.value ? Number(el.comOutroSec.value) : null;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
@@ -3813,6 +3815,8 @@
       skip_intro_outro,
       no_narrate_intro_outro,
       retain_pct: rp,
+      intro_sec: introSec,
+      outro_sec: outroSec,
       one_click: !!forceOneClick,
       style: styleEl ? styleEl.value : 'none',
       vision: !!(el.comVision && el.comVision.checked),
@@ -3902,6 +3906,8 @@
       form.append('skip_intro_outro', String(opts.skip_intro_outro));
       form.append('no_narrate_intro_outro', String(opts.no_narrate_intro_outro));
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
+      if (opts.intro_sec != null) form.append('intro_sec', String(opts.intro_sec));
+      if (opts.outro_sec != null) form.append('outro_sec', String(opts.outro_sec));
       form.append('one_click', String(opts.one_click));
       form.append('style', opts.style || 'none');
       form.append('vision', String(opts.vision));
@@ -3974,6 +3980,8 @@
       form.append('skip_intro_outro', String(opts.skip_intro_outro));
       form.append('no_narrate_intro_outro', String(opts.no_narrate_intro_outro));
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
+      if (opts.intro_sec != null) form.append('intro_sec', String(opts.intro_sec));
+      if (opts.outro_sec != null) form.append('outro_sec', String(opts.outro_sec));
       form.append('one_click', String(opts.one_click));
       form.append('style', opts.style || 'none');
       form.append('vision', String(opts.vision));
