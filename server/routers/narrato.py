@@ -86,6 +86,8 @@ def _resolve_launcher(narrato_dir: Path) -> list[str]:
             "--server.headless=true",
             "--server.enableCORS=true",
             "--server.enableXsrfProtection=false",
+            "--server.corsAllowedOrigins=*",
+            "--client.allowedOrigins=*",
             "--browser.gatherUsageStats=false",
         ]
     # 回退：目录内已有 .venv（用户自行 uv sync / pip 装过）
@@ -98,6 +100,8 @@ def _resolve_launcher(narrato_dir: Path) -> list[str]:
             "--server.headless=true",
             "--server.enableCORS=true",
             "--server.enableXsrfProtection=false",
+            "--server.corsAllowedOrigins=*",
+            "--client.allowedOrigins=*",
             "--browser.gatherUsageStats=false",
         ]
     raise RuntimeError(
