@@ -6447,6 +6447,11 @@
   const pollNarratoReady = () => {
     if (_narratoPolling) return;
     _narratoPolling = true;
+    const fmtElapsed = (s) => {
+      if (!s) return '';
+      if (s < 60) return `${s}秒`;
+      return `${Math.floor(s / 60)}分${s % 60}秒`;
+    };
     const tick = async () => {
       try {
         const st = await request('/api/narrato/status');
@@ -6456,6 +6461,7 @@
             el.narratoFrame.hidden = false;
           }
           if (el.narratoLoading) el.narratoLoading.hidden = true;
+          if (el.narratoKeyHint) el.narratoKeyHint.textContent = '';
           _narratoPolling = false;
           return;
         }
@@ -6475,7 +6481,35 @@
           _narratoPolling = false;
           return;
         }
-        if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '正在启动 NarratoAI…（首次需安装依赖，约 1-2 分钟）'; }
+        if (st.status === 'error' || st.status === 'launch_failed') {
+          if (el.narratoLoading) {
+            let txt = '启动失败：' + (st.last_error || st.msg || '未知错误');
+            if (st.exit_code != null) txt += '（exit ' + st.exit_code + '）';
+            if (st.log_tail && st.log_tail.length) txt += '\n\n' + st.log_tail.slice(-5).join('\n');
+            el.narratoLoading.hidden = false;
+            el.narratoLoading.textContent = txt;
+          }
+          _narratoPolling = false;
+          return;
+        }
+        if (st.status === 'stopped') {
+          if (el.narratoLoading) {
+            let txt = 'NarratoAI 已停止。' + (st.last_error || '');
+            if (st.log_tail && st.log_tail.length) txt += '\n\n' + st.log_tail.slice(-5).join('\n');
+            el.narratoLoading.hidden = false;
+            el.narratoLoading.textContent = txt;
+          }
+          _narratoPolling = false;
+          return;
+        }
+        // 仍在启动中：细分 stage
+        const elapsed = fmtElapsed(st.elapsed);
+        let msg = '正在启动 NarratoAI';
+        if (st.stage === 'syncing') msg = '正在安装依赖（uv sync），首次约 1-3 分钟' + (elapsed ? '，已用时 ' + elapsed : '') + '…';
+        else if (st.stage === 'starting') msg = '依赖就绪，正在启动 Streamlit 服务' + (elapsed ? '，已用时 ' + elapsed : '') + '…';
+        else msg = '正在启动 NarratoAI' + (elapsed ? '，已用时 ' + elapsed : '') + '…';
+        if (st.log_tail && st.log_tail.length) msg += '\n\n' + st.log_tail.slice(-3).join('\n');
+        if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = msg; }
         setTimeout(tick, 2000);
       } catch (e) {
         if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '轮询失败：' + (e.message || '未知错误'); }
@@ -6490,12 +6524,18 @@
     if (!key) { if (el.narratoKeyHint) el.narratoKeyHint.textContent = '请粘贴 DeepSeek API Key'; return; }
     try {
       const r = await request('/api/narrato/key', { method: 'POST', body: JSON.stringify({ key }) });
-      if (r.ok) {
-        if (el.narratoKeyHint) el.narratoKeyHint.textContent = '已保存，正在启动 NarratoAI…';
-        ensureNarrato();
-      } else {
+      if (!r.ok) {
         if (el.narratoKeyHint) el.narratoKeyHint.textContent = '保存失败：' + (r.msg || '');
+        return;
       }
+      // 再查一次确认 key 真的落盘（防 TOML 缩进等写入异常）
+      const st = await request('/api/narrato/status');
+      if (!st.has_key) {
+        if (el.narratoKeyHint) el.narratoKeyHint.textContent = '保存异常：key 未写入本地 config.toml，请重试';
+        return;
+      }
+      if (el.narratoKeyHint) el.narratoKeyHint.textContent = '已保存，正在启动 NarratoAI…';
+      ensureNarrato();
     } catch (e) {
       if (el.narratoKeyHint) el.narratoKeyHint.textContent = '保存失败：' + (e.message || '');
     }

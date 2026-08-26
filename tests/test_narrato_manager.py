@@ -53,13 +53,35 @@ def test_ensure_config_prefills_deepseek_and_edge_tts(narrato, tmp_path):
     assert 'text_openai_api_key = ""' in cfg
 
 
-def test_has_key_and_set_key(narrato, tmp_path):
+def test_ensure_config_handles_indented_toml(narrato, tmp_path):
+    # NarratoAI 真实 config.example.toml 字段带缩进，必须能预填
+    (tmp_path / "config.example.toml").write_text(
+        "[text]\n"
+        '    text_openai_model_name = "Pro/zai-org/GLM-5"\n'
+        '    text_openai_api_key = ""\n'
+        '    text_openai_base_url = "https://api.siliconflow.cn/v1"\n'
+        "[ui]\n"
+        '    tts_engine = "indextts"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "config.toml").unlink(missing_ok=True)
     narrato._ensure_config(tmp_path)
+    cfg = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    assert 'text_openai_base_url = "https://api.deepseek.com/v1"' in cfg
+    assert 'text_openai_model_name = "deepseek-chat"' in cfg
+    assert 'tts_engine = "edge_tts"' in cfg
+
+
+def test_has_key_and_set_key(narrato, tmp_path):
+    # 用带缩进的真实 TOML 风格测试
+    (tmp_path / "config.toml").write_text(
+        "[text]\n    text_openai_api_key = \"\"\n", encoding="utf-8"
+    )
     assert narrato._has_key(tmp_path) is False
     narrato._set_key_in_config(tmp_path, "sk-test-123")
     assert narrato._has_key(tmp_path) is True
     cfg = (tmp_path / "config.toml").read_text(encoding="utf-8")
-    assert 'text_openai_api_key = "sk-test-123"' in cfg
+    assert '    text_openai_api_key = "sk-test-123"' in cfg
 
 
 def test_port_constant(narrato):
@@ -86,7 +108,7 @@ def test_ensure_start_starting_and_ready(narrato, tmp_path, monkeypatch):
     narrato._set_key_in_config(tmp_path, "sk-x")
     # 假启动器 + 假 Popen + 假就绪
     monkeypatch.setattr(narrato, "_resolve_launcher", lambda d: ["echo", "x"])
-    fake_proc = types.SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda *a, **k: None, kill=lambda: None)
+    fake_proc = types.SimpleNamespace(pid=12345, returncode=None, poll=lambda: None, terminate=lambda: None, wait=lambda *a, **k: None, kill=lambda: None, stdout=None)
     monkeypatch.setattr(narrato.subprocess, "Popen", lambda *a, **k: fake_proc)
     monkeypatch.setattr(narrato, "_is_ready", lambda: True)
     res = narrato.ensure_start()

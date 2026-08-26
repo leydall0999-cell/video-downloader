@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -33,6 +34,8 @@ _state: dict = {
     "proc": None,
     "dir": None,
     "launched": False,
+    "started_at": None,   # 最近启动时间戳
+    "last_error": None,  # 启动或运行期最后错误
     "lock": threading.Lock(),
 }
 
@@ -111,25 +114,32 @@ def _config_path(narrato_dir: Path) -> Path:
 
 def _ensure_config(narrato_dir: Path) -> None:
     cfg = _config_path(narrato_dir)
-    if cfg.exists():
-        return  # 已存在则尊重用户既有配置
     example = narrato_dir / "config.example.toml"
     if not example.exists():
         raise RuntimeError(f"缺少 config.example.toml：{example}")
+    # 如果当前 config 是我们早期错误生成的半成品（DeepSeek 未预填且 key 空），则重建
+    if cfg.exists():
+        text = cfg.read_text(encoding="utf-8")
+        if "deepseek" not in text.lower() and not _has_key(narrato_dir):
+            # 半成品：删除后重新生成
+            cfg.unlink()
+        else:
+            return  # 已存在且有效，尊重用户既有配置
     text = example.read_text(encoding="utf-8")
     # 预填 DeepSeek（OpenAI 兼容）作为文本 LLM；配音先用免费 edge_tts 跑通
+    # TOML 字段可能带缩进，正则允许行首空白
     text = re.sub(
-        r'^text_openai_base_url\s*=\s*"[^"]*"',
+        r'^\s*text_openai_base_url\s*=\s*"[^"]*"',
         'text_openai_base_url = "https://api.deepseek.com/v1"',
         text, flags=re.MULTILINE,
     )
     text = re.sub(
-        r'^text_openai_model_name\s*=\s*"[^"]*"',
+        r'^\s*text_openai_model_name\s*=\s*"[^"]*"',
         'text_openai_model_name = "deepseek-chat"',
         text, flags=re.MULTILINE,
     )
     text = re.sub(
-        r'^tts_engine\s*=\s*"[^"]*"',
+        r'^\s*tts_engine\s*=\s*"[^"]*"',
         'tts_engine = "edge_tts"',
         text, flags=re.MULTILINE,
     )
@@ -141,7 +151,11 @@ def _has_key(narrato_dir: Path) -> bool:
     cfg = _config_path(narrato_dir)
     if not cfg.exists():
         return False
-    m = re.search(r'text_openai_api_key\s*=\s*"([^"]*)"', cfg.read_text(encoding="utf-8"))
+    m = re.search(
+        r'^\s*text_openai_api_key\s*=\s*"([^"]*)"',
+        cfg.read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
     return bool(m and m.group(1).strip())
 
 
@@ -150,15 +164,39 @@ def _set_key_in_config(narrato_dir: Path, key: str) -> None:
     if not cfg.exists():
         _ensure_config(narrato_dir)
     text = cfg.read_text(encoding="utf-8")
-    if re.search(r'text_openai_api_key\s*=', text):
+    if re.search(r'^\s*text_openai_api_key\s*=', text, flags=re.MULTILINE):
         text = re.sub(
-            r'^(text_openai_api_key\s*=\s*)"[^"]*"',
+            r'^(\s*text_openai_api_key\s*=\s*)"[^"]*"',
             lambda m: f'{m.group(1)}"{key}"',
             text, flags=re.MULTILINE,
         )
     else:
         text += f'\ntext_openai_api_key = "{key}"\n'
     cfg.write_text(text, encoding="utf-8")
+
+
+def _log_tail(lines: int = 20) -> list[str]:
+    try:
+        if not NARRATO_LOG.exists():
+            return []
+        text = NARRATO_LOG.read_text(encoding="utf-8", errors="replace")
+        return text.splitlines()[-lines:] if text else []
+    except Exception:
+        return []
+
+
+def _log_reader_thread(proc: subprocess.Popen) -> None:
+    """持续把子进程 stdout/stderr 写入 narrato.log，供排查。"""
+    try:
+        with open(NARRATO_LOG, "ab") as log_f:
+            while True:
+                line = proc.stdout.readline() if proc.stdout else b""
+                if not line:
+                    break
+                log_f.write(line)
+                log_f.flush()
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -195,19 +233,30 @@ def ensure_start() -> dict:
         if ffmpeg_bin:
             env["PATH"] = ffmpeg_bin + os.pathsep + env.get("PATH", "")
         env["PYTHONUNBUFFERED"] = "1"
+        # 清空旧日志，方便本次排查
+        try:
+            NARRATO_LOG.write_text("", encoding="utf-8")
+        except Exception:
+            pass
         try:
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(narrato_dir),
                 env=env,
-                stdout=open(NARRATO_LOG, "ab"),
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                bufsize=1,
             )
         except Exception as e:  # noqa: BLE001
+            _state["last_error"] = str(e)
             return {"status": "launch_failed", "msg": str(e)}
         _state["proc"] = proc
         _state["launched"] = True
+        _state["started_at"] = int(time.time())
+        _state["last_error"] = None
+        reader = threading.Thread(target=_log_reader_thread, args=(proc,), daemon=True)
+        reader.start()
         return {"status": "starting", "port": NARRATO_PORT, "dir": str(narrato_dir)}
 
 
@@ -225,6 +274,7 @@ def stop() -> None:
                     pass
         _state["proc"] = None
         _state["launched"] = False
+        _state["started_at"] = None
 
 
 def status() -> dict:
@@ -232,15 +282,39 @@ def status() -> dict:
     with _state["lock"]:
         proc = _state.get("proc")
         alive = proc is not None and proc.poll() is None
+        ready = alive and _is_ready()
+        exit_code = None
+        pid = None
+        if proc is not None:
+            pid = proc.pid
+            if not alive:
+                exit_code = proc.returncode
+        started_at = _state.get("started_at")
+        elapsed = None
+        if started_at and (alive or ready):
+            elapsed = int(time.time()) - started_at
+        has_error = bool(_state.get("last_error"))
+        # 启动失败或已退出且 last_error 存在 → 报 error，便于前端停止轮询并展示
+        status_name = "ready" if ready else ("starting" if alive else ("error" if has_error else "stopped"))
         return {
-            "status": "ready" if (alive and _is_ready()) else (
-                "starting" if alive else "stopped"
+            "status": status_name,
+            "stage": (
+                "ready" if ready else
+                "syncing" if alive and elapsed is not None and elapsed < 180 else
+                "starting" if alive else
+                ("error" if has_error else "stopped")
             ),
             "port": NARRATO_PORT,
             "dir": str(narrato_dir),
             "dir_exists": narrato_dir.exists(),
             "has_key": _has_key(narrato_dir),
             "log": str(NARRATO_LOG),
+            "pid": pid,
+            "exit_code": exit_code,
+            "started_at": started_at,
+            "elapsed": elapsed,
+            "last_error": _state.get("last_error"),
+            "log_tail": _log_tail(20),
         }
 
 
