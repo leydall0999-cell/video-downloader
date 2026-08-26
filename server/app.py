@@ -968,7 +968,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     return args
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "") -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
