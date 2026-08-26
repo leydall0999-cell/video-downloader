@@ -44,3 +44,14 @@ commentary-pipeline
 # 构建信息产物（构建脚本在 desktop/ 生成，不入库）
 server/.build_info.json
 server/build_info.txt
+
+# 优酷本地引擎运行时数据（app 端已下架本地引擎，防再入库）
+chrome_profile_youku/
+cookies/
+
+# 优酷本地引擎运行时数据（app 端已下架本地引擎，防再入库）
+chrome_profile_youku/
+cookies/
+
+# WorkBuddy 项目数据（automations/memory）
+.workbuddy/
