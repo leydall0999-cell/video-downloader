@@ -2699,7 +2699,11 @@
       dwApplyZoom(target);
       e.preventDefault();
     });
-    cv.addEventListener('mousedown', (e) => {
+    // 注意：选区事件必须绑在 img 上，而不是 canvas。
+    // .dw-canvas / .dw-svg 都是 position:absolute + pointer-events:none，叠在 img 上
+    // 仅作展示蒙层；它们不接收事件，事件需穿透到下面的 img 才能触发框选。
+    // 若误把 mousedown 绑到 canvas，会因 pointer-events:none 而完全收不到点击。
+    img.addEventListener('mousedown', (e) => {
       if (!img.src) return;
       // 弹窗放大后：✋移动模式 或 起点落在已有加选区内 → 平移图片（不画框）
       let startPan = false;
