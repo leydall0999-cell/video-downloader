@@ -1080,6 +1080,10 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         if tts_provider:
             # 语音克隆/海螺等可切换 TTS 服务商（indextts2=本地 IndexTTS2 语音克隆，需先起推理服务）
             run_env["VDL_TTS_PROVIDER"] = tts_provider
+        if vision:
+            # 视觉理解与片头集数卡检测共用 VDL_VISION_* 配置；显式启用避免子进程因环境变量未设而跳过
+            run_env["VDL_VISION_ENABLED"] = "1"
+            run_env["VDL_INTRO_VISION_ENABLED"] = "1"
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
