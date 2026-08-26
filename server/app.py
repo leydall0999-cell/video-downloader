@@ -1339,6 +1339,11 @@ async def lifespan(_: FastAPI):
             torrent_manager.stop()
         except Exception:
             pass
+    # 关闭时终止「AI 解说体验」tab 拉起的 NarratoAI 子进程
+    try:
+        _narrato_rtr.stop()
+    except Exception:
+        pass
     executor.shutdown(wait=False, cancel_futures=True)
     prober.shutdown(wait=False, cancel_futures=True)
     cloud_executor.shutdown(wait=False, cancel_futures=True)
@@ -3039,6 +3044,8 @@ from routers import baidu_dlink as _baidu_dlink_rtr
 app.include_router(_baidu_dlink_rtr.router)
 from routers import pcs as _pcs_rtr
 app.include_router(_pcs_rtr.router)
+from routers import narrato as _narrato_rtr
+app.include_router(_narrato_rtr.router)
 
 # —— 公共 Cookie 池 + 本机 Cookie 缓存（来自 main 分支，合并时保留）——
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。
