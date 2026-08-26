@@ -115,3 +115,72 @@ def test_dw_svg_absolute_in_html_order():
     svg_idx = html.find('id="dwImgSvg"', wrap_start)
     assert wrap_start != -1 and svg_idx != -1 and svg_idx > wrap_start, \
         "dwImgSvg 必须在 dwPreviewWrap 内部"
+
+# ---------------------------------------------------------------------------
+# 2026-08-26 用户反馈：「处理完之前都不显示」
+# 截图显示 dwView 的"原图/处理后"两个黑框 + "下载结果"按钮已经露出来。
+#
+# 根因：.dw-result{display:flex} 与 UA [hidden]{display:none} 同特异性
+# (0,1,0)，作者 CSS 写在后面赢 → hidden 属性失效。dwImgResult/dwPdfResult
+# 虽然 HTML 写了 hidden，但 CSS 仍然把对比区显示出来，里面的 <img> 没 src
+# 时 background:#0b0d12 渲染成两个黑框。
+#
+# 修复：.dw-result[hidden] { display: none; }（特异性 0,2,0，必赢）。
+# ---------------------------------------------------------------------------
+
+def test_dw_result_respects_hidden_attribute():
+    """`.dw-result[hidden]` 必须 display:none，否则 HTML hidden 属性失效。"""
+    css = _read(CSS)
+    m = re.search(r"\.dw-result\[hidden\]\s*\{([^}]*)\}", css, re.S)
+    assert m, (
+        "必须存在 .dw-result[hidden] { display: none } 规则。"
+        "否则 .dw-result{display:flex} 会同特异性赢过 UA [hidden]{display:none},"
+        "导致 dwImgResult/dwPdfResult 写 hidden 也照样显示'原图/处理后'黑框。"
+    )
+    body = m.group(1)
+    assert re.search(r"display\s*:\s*none", body), \
+        f".dw-result[hidden] 必须 display:none，当前：{body.strip()}"
+
+
+def test_dw_result_html_uses_hidden_attribute():
+    """dwImgResult / dwPdfResult 在 HTML 中必须用 hidden 属性，配合 CSS 隐藏。"""
+    html = _read(HTML)
+    for elem_id in ("dwImgResult", "dwPdfResult"):
+        m = re.search(rf'<div\s+class="dw-result"\s+id="{elem_id}"[^>]*>', html)
+        assert m, f"未找到 id='{elem_id}' 的 .dw-result 容器"
+        tag = m.group(0)
+        assert re.search(rf'<div\s+class="dw-result"\s+id="{elem_id}"[^>]*\bhidden\b', html), \
+            f"id='{elem_id}' 的 div 必须带 hidden 属性（初始未处理完不显示对比）"
+
+
+def test_dw_compare_imgs_hidden_when_dwResult_hidden():
+    """HTML hidden 行为正确时，dwImgOrig/dwImgOut 必须没有显式 src。
+
+    防止后续误改：处理前 img 没有 src，避免浏览器默认空 src 行为；
+    且 img 没有 inline display 覆盖（让父级 hidden 透传生效）。
+    """
+    html = _read(HTML)
+    # 找 dw-compare 真正闭合 div（手动平衡嵌套 div，避免被第一个 </div> 截断）
+    start = html.find('class="dw-compare"')
+    assert start != -1, "未找到 .dw-compare 容器"
+    i = html.find(">", start) + 1
+    depth = 1
+    while i < len(html) and depth > 0:
+        next_open = html.find("<div", i)
+        next_close = html.find("</div>", i)
+        if next_close == -1:
+            break
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            i = next_open + 4
+        else:
+            depth -= 1
+            i = next_close + len("</div>")
+    assert depth == 0, "解析 dw-compare 嵌套失败"
+    compare_html = html[start:i]
+    # 两个 img 都在 compare 内，且都不带 src
+    for img_id in ("dwImgOrig", "dwImgOut"):
+        m = re.search(rf'<img\s+id="{img_id}"[^>]*>', compare_html)
+        assert m, f".dw-compare 内必须存在 id='{img_id}' 的 img"
+        assert "src=" not in m.group(0), \
+            f"id='{img_id}' 不应在 HTML 里写死 src（应 JS 动态注入）"

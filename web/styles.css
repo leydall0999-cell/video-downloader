@@ -653,6 +653,10 @@ img { max-width: 100%; display: block; }
 
 /* 结果对比卡片 */
 .dw-result { margin-top: .8rem; display: flex; flex-direction: column; gap: .6rem; }
+/* 修复：上面的 .dw-result{display:flex} 与 UA 的 [hidden]{display:none}
+   同特异性 (0,1,0)，作者 CSS 写在后面会赢，导致 hidden 属性失效，
+   未处理图片时仍露出"原图/处理后"两个黑框。特异性提到 (0,2,0) 必赢。 */
+.dw-result[hidden] { display: none; }
 .dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
 .dw-compare img { width: 100%; height: 260px; object-fit: contain; display: block; margin: 0 auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
