@@ -1010,7 +1010,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             src_dur = 0.0
         ts, te = float(trim_start or 0), float(trim_end or 0)
         use_src = src_path
-        if te > ts > 0 and (not src_dur or te <= src_dur + 1.0):
+        # 用户只要指定了终点（te > 0），即使起点是 0 也要裁剪——旧条件 te > ts > 0 会漏掉
+        # 「从片头裁到中间」这种 ts=0 的场景，导致 worker 拿到全片。
+        if 0 <= ts < te and (not src_dur or te <= src_dur + 1.0):
             use_src, _ = _apply_trim(src_path, in_dir, ts, te)
 
         in_file = in_dir / f"{base}.mp4"
