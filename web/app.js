@@ -6398,6 +6398,8 @@
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
+    // 「支持 N 个平台」徽章（#engineBadge）只在下载模块可见，其它功能页隐藏
+    if (el.engineBadge) el.engineBadge.hidden = !_isDefault;
   };
 
   const loadLibrary = async () => {
