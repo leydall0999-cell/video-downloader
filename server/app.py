@@ -284,6 +284,10 @@ else:
 COMMENTARY_LOCAL_OUTPUT.mkdir(parents=True, exist_ok=True)
 COMMENTARY_WORK_DIR = COMMENTARY_LOCAL_OUTPUT / "work"
 COMMENTARY_WORK_DIR.mkdir(parents=True, exist_ok=True)
+# 解说 work 目录保留天数（每个 job 是 12 位 hex 目录：upload 副本 + 中间 wav/脚本）。
+# 没有清理机制时会长年累积（实测达 21GB），这里按保留期自动清理，可用
+# VDL_COMMENTARY_WORK_RETENTION_DAYS 覆盖（默认 7 天）。
+COMMENTARY_WORK_RETENTION_DAYS = max(1, int(os.environ.get("VDL_COMMENTARY_WORK_RETENTION_DAYS", "7") or 7))
 commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
 
@@ -762,6 +766,46 @@ def _commentary_work_dir() -> Path:
     d = COMMENTARY_WORK_DIR / uuid.uuid4().hex[:12]
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _purge_commentary_work() -> int:
+    """清理解说 work 目录里超过保留期的旧 job（防无限累积）。
+
+    安全约束：
+      1. 只删 12 位 hex 命名的 job 目录（不碰其他目录/文件）；
+      2. 跳过 commentary_jobs 中仍 running 的 src_path 对应目录；
+      3. 只删 mtime 早于保留期（COMMENTARY_WORK_RETENTION_DAYS，默认 7 天）的目录。
+    返回删除数量。
+    """
+    if not COMMENTARY_WORK_DIR.exists():
+        return 0
+    cutoff = time.time() - COMMENTARY_WORK_RETENTION_DAYS * 86400
+    hex12 = re.compile(r"^[0-9a-f]{12}$")
+    running_dirs = set()
+    try:
+        with _commentary_lock:
+            for job in commentary_jobs.values():
+                sp = str(job.get("src_path") or "")
+                if sp.startswith(str(COMMENTARY_WORK_DIR)):
+                    running_dirs.add(os.path.dirname(sp))
+    except Exception:
+        pass
+    removed = 0
+    for d in COMMENTARY_WORK_DIR.iterdir():
+        try:
+            if not d.is_dir() or not hex12.match(d.name):
+                continue
+            if str(d) in running_dirs:
+                continue
+            if d.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+        except Exception:
+            continue
+    if removed:
+        logger.info("已清理 %s 个过期解说 work 目录（保留 %s 天）", removed, COMMENTARY_WORK_RETENTION_DAYS)
+    return removed
 
 
 
@@ -1259,6 +1303,11 @@ async def _cleanup_loop() -> None:
         removed = store.purge_expired()
         if removed:
             logger.info("已清理 %s 个过期任务", removed)
+        # 解说 work 目录保留期清理（防 21GB 级无限累积）
+        try:
+            await asyncio.to_thread(_purge_commentary_work)
+        except Exception:
+            logger.exception("解说 work 清理失败")
 
 
 @contextlib.asynccontextmanager
@@ -1266,6 +1315,11 @@ async def lifespan(_: FastAPI):
     orphans = store.purge_orphans()
     if orphans:
         logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)
+    # 启动即清一次解说 work 过期目录（周期清理在 _cleanup_loop 内）
+    try:
+        await asyncio.to_thread(_purge_commentary_work)
+    except Exception:
+        logger.exception("启动时解说 work 清理失败")
     # 桌面版种子下载：启动 libtorrent session（libtorrent 缺失时内部为空操作）
     if TORRENT_ENABLED and torrent_mod.available():
         try:

@@ -1515,15 +1515,16 @@ def main() -> None:
     )
     server_thread.start()
 
-    # 等服务器就绪
-    for _ in range(30):
+    # 等服务器就绪（窗口 20s：冷启动可能加载 ffmpeg/模型/baidupcs 等较慢，
+    # 6s 窗口偶发「服务器启动超时」导致首开没反应，二次双击才成功）
+    for _ in range(100):
         try:
             with socket.create_connection((HOST, PORT), timeout=0.5):
                 break
         except OSError:
             time.sleep(0.2)
     else:
-        _launch_log("服务器启动超时")
+        _launch_log("服务器启动超时（20s 内未就绪）")
         print(f"服务器启动超时，请手动访问 {URL}")
         server_thread.join()
         return
