@@ -42,7 +42,7 @@ h1, h2, h3 { margin: 0; line-height: 1.3; }
 p { margin: 0; }
 img { max-width: 100%; display: block; }
 
-.wrap { width: min(800px, 100% - 2rem); margin-inline: auto; }
+.wrap { width: min(800px, 100% - 2rem); margin-inline: auto; padding-top: 1.5rem; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -821,7 +821,7 @@ img { max-width: 100%; display: block; }
 
 /* ---------------- responsive ---------------- */
 @media (max-width: 640px) {
-  .wrap { width: min(800px, 100% - 1.5rem); }
+  .wrap { width: min(800px, 100% - 1.5rem); padding-top: 1.2rem; }
   .hero { padding: 1.9rem 0 1.2rem; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; }
@@ -1964,7 +1964,7 @@ img { max-width: 100%; display: block; }
 
 /* ---- 页脚构建指纹：便于确认跑的是不是最新版 ---- */
 .app-footer {
-  margin: 1.4rem auto .4rem; width: min(900px, 100% - 2rem);
+  margin: 1.4rem auto 1rem; width: min(900px, 100% - 2rem);
   text-align: center; font-size: .7rem; color: var(--text-mute); letter-spacing: .03em;
 }
 .build-tag::before { content: "● "; color: var(--brand); }

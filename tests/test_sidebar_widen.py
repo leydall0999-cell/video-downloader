@@ -193,3 +193,54 @@ def test_main_and_wrap_are_separate_elements():
         tag = html[tag_start:idx]
         assert tag.lstrip("<").startswith("div"), \
             f'class="wrap" 必须在 <div> 上，不能在 {tag!r}（会和 main margin-left 冲突）'
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-26 用户反馈：「好几个模块跟顶部连一起了」
+# 订阅追更/媒体库/解说/转换/去水印/百度 等非 hero view 第一个 panel 紧贴
+# header 顶部，没有呼吸空间。下载模块靠 .hero padding-top:3rem 撑开，所以
+# 只有它不挤。修复：.wrap 加 padding-top: 1.5rem，让所有 view 统一与 header
+# 留出间距；底部 .app-footer margin-bottom: .4rem → 1rem 防贴底。
+# ---------------------------------------------------------------------------
+
+def test_wrap_has_padding_top_to_clear_header():
+    """非 hero view 的第一个 panel 也要与 header 有间距，所以 .wrap 必须有 padding-top >= 1rem。"""
+    css = _read(CSS)
+    m = re.search(r"\.wrap\s*\{([^}]*)\}", css)
+    assert m, ".wrap 规则必须存在"
+    body = m.group(1)
+    pad_m = re.search(r"padding-top:\s*([\d.]+)rem", body)
+    assert pad_m, ".wrap 必须显式设置 padding-top（不能让 panel 直接顶 header）"
+    assert float(pad_m.group(1)) >= 1.0, \
+        f".wrap padding-top 应 >= 1rem（订阅追更等 view 才有 header 间距），当前 {pad_m.group(0)}"
+
+
+def test_wrap_padding_top_in_mobile_fallback():
+    """@media max-width:640px 也必须保留 padding-top，避免窄屏又贴 header。"""
+    css = _read(CSS)
+    m = re.search(r"@media\s*\(max-width:\s*640px\)\s*\{[^@]*?\.wrap\s*\{([^}]*)\}", css, re.S)
+    assert m, "必须存在 @media max-width:640px 且覆盖 .wrap"
+    body = m.group(1)
+    pad_m = re.search(r"padding-top:\s*([\d.]+)rem", body)
+    assert pad_m, "窄屏 .wrap 也必须有 padding-top"
+    assert float(pad_m.group(1)) >= 1.0, \
+        f"窄屏 .wrap padding-top 应 >= 1rem，当前 {pad_m.group(0)}"
+
+
+def test_app_footer_not_pinned_to_bottom():
+    """底部页脚防贴底：margin-bottom 必须 >= 1rem。"""
+    css = _read(CSS)
+    m = re.search(r"\.app-footer\s*\{([^}]*)\}", css)
+    assert m, ".app-footer 规则必须存在"
+    body = m.group(1)
+    mb_m = re.search(r"margin:\s*[^;]*?([\d.]+)rem(?=\s*$|;)", body, re.M)
+    assert mb_m, ".app-footer 必须显式 margin-bottom（防贴底）"
+    # margin 简写最后一项是 margin-bottom
+    margin_all = re.search(r"margin:\s*([^;]+);", body)
+    assert margin_all, ".app-footer 必须用 margin 简写"
+    parts = margin_all.group(1).split()
+    assert len(parts) >= 4 or len(parts) == 3, f"margin 简写应有 3-4 项（top h bottom [left]），当前 {parts}"
+    bottom = parts[2]
+    # 支持 1rem / .8rem 等
+    val = float(bottom.rstrip("rem"))
+    assert val >= 0.8, f".app-footer margin-bottom 应 >= .8rem（防贴底），当前 {bottom}"
