@@ -1591,7 +1591,8 @@
   // 2026-08-24 上传提速：单文件分片并发（32MB/片 × 4 路，单片失败重试 2 次），
   // 文件级并发 2（避免多文件抢占带宽），大文件总连接数 = 2×4 = 8，HTTP/1.1 排队 HTTP/2 全并发。
   // 桌面端支持直接调用系统文件框选本地路径，跳过分片上传。
-  const ucDesktopNative = !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  // 注意：desktop-app.js 在 app.js 之后才加载，不能在模块初始化时取 window.VDL.desktop，必须动态检测。
+  const ucDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const UC_MAX_CONCURRENT = 2; // 文件级上传并发
   const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB（默认）
   const UC_BIG_CHUNK_SIZE = 64 * 1024 * 1024;   // >2GB 文件单片 64MB（减少请求数，后端上限 64MB）
@@ -2188,7 +2189,8 @@
 
   // ===== 视频/音频桥接（合并）：独立面板，桌面端直接传本地路径免上传 =====
   const MC_MAX_CONCURRENT = 3;   // 同时上传/处理 3 个文件
-  const mcDesktopNative = !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  // 注意：desktop-app.js 在 app.js 之后才加载，不能在模块初始化时取 window.VDL.desktop，必须动态检测。
+  const mcDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   // 输出格式按当前模式（视频/音频）动态切换
   const mcVideoFormats = [
     { v: 'mp4', t: 'MP4' }, { v: 'mov', t: 'MOV' }, { v: 'mkv', t: 'MKV' },
@@ -2341,7 +2343,7 @@
     const localCount = mcState.list.filter(x => x.localPath && !x.isResult).length;
     const uploadCount = mcState.list.filter(x => x.file && !x.isResult).length;
     if (localCount) mcStatusEl.textContent = `已添加 ${localCount} 个本地文件，可直接开始桥接`;
-    else if (uploadCount) mcStatusEl.textContent = mcDesktopNative
+    else if (uploadCount) mcStatusEl.textContent = mcDesktopNative()
       ? `已添加 ${uploadCount} 个文件，自动上传中…（桌面端点「添加文件」按钮选本地文件可免上传）`
       : `已添加 ${uploadCount} 个文件，自动上传…`;
     mcPump();
@@ -2488,7 +2490,7 @@
   };
 
   mcAddBtn.addEventListener('click', () => {
-    if (mcDesktopNative) {
+    if (mcDesktopNative()) {
       const paths = window.VDL.desktop.chooseFiles();
       if (paths && paths.length) mcAddFiles(paths);
     } else {
@@ -2551,12 +2553,9 @@
 
   // 事件绑定
   el.ucAddBtn.addEventListener('click', () => {
-    if (ucDesktopNative) {
-      window.VDL.desktop.chooseFiles().then(list => {
-        if (list && list.length) ucAddFiles(list);
-      }).catch(e => {
-        el.ucStatus.textContent = '选择文件失败：' + ((e && e.message) || '未知错误');
-      });
+    if (ucDesktopNative()) {
+      const list = window.VDL.desktop.chooseFiles();
+      if (list && list.length) ucAddFiles(list);
     } else {
       el.ucFileInput.click();
     }
