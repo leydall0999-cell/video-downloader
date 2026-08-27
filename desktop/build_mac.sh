@@ -304,6 +304,7 @@ echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
   --collect-all fitz \
   --collect-all requests \
   --collect-all PIL \
+  --collect-all pyobjc-framework-Quartz \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   $_PCS_ADD_BINARY_ARG \

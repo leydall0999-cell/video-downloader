@@ -5,6 +5,10 @@ requests==2.32.3
 cryptography==50.0.0
 python-multipart==0.0.20
 
+# 本地 Apple Vision OCR（片头视觉检测降级路径）：macOS 原生、免 key、离线。
+# 仅 macOS 桌面构建需要；pyobjc 只有 macOS wheel，用 sys_platform 标记避免其它平台 pip 失败。
+pyobjc-framework-Quartz; sys_platform == "darwin"
+
 # YouTube bot 检测绕过（PO Token provider）：yt-dlp 插件，配合 Docker 内置的
 # bgutil PO token server（/opt/bgutil/server/build/main.js，监听 127.0.0.1:4416）
 # 自动为 YouTube 请求生成 proof-of-origin token，解决数据中心 IP 被
