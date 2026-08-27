@@ -6382,10 +6382,11 @@
   refreshBaiduLoginStatus();
 
   async function startBaiduShareDownload(item) {
-    // 无需强制 OAuth：后端 download_share 会自动按「BDUSS 直链 → transfer」多级策略选路，
-    // 本机已保存网盘 Cookie（~/.vdl/baidu_bduss.txt）即可直接下载，不弹登录窗。
+    // 自动恢复本机已存的 OAuth 令牌（之前授权过则免重复授权）；无令牌也不阻断，
+    // 后端 download_share 会按「BDUSS 直链 → transfer」多级策略选路。
+    await restoreBaiduToken();
     if (!baiduToken) {
-      el.baiduShareStatus.textContent = '未授权 OAuth，将使用本机已保存的网盘 Cookie 直链下载（无需登录）…';
+      el.baiduShareStatus.textContent = '本机未存 OAuth 令牌，将尝试用已保存的网盘 Cookie 直链（无需登录）；若失败请点「🔑 极速通道」登录一次。';
       el.baiduShareStatus.className = 'baidu-share-status';
     }
 
@@ -6435,12 +6436,14 @@
         if (info && info.ok && info.dlink) {
           return _doDownload(info.dlink);  // ★ 拿到直链 → 策略0
         }
-        // 未登录 app 内 WebView：不强制弹登录窗，直接走后端 BDUSS 直链（本机已存 Cookie 即可下载）。
-        // 用户想获得更快/更稳的极速通道，可自愿点「🔑 极速通道（可选）」登录。
+        // 未登录 app 内 WebView：get_baidu_dlink 已尝试自动拉起登录窗口；
+        // 若仍返回 NOT_LOGGED_IN / NO_LOGIN_COOKIE，说明自动登录未成功（用户未登录或登录超时）。
+        // 此时不再静默回退到后端 BDUSS 直链（该路径 2026 已被百度封堵，必败），
+        // 而是给出明确提示，引导用户用「🔑 极速通道」登录后重试。
         if (info && (info.error === 'NOT_LOGGED_IN' || info.error === 'NO_LOGIN_COOKIE')) {
-          el.baiduShareStatus.textContent = '未登录 WebView，正使用本机已保存的网盘 Cookie 直链下载（无需登录）…';
-          el.baiduShareStatus.className = 'baidu-share-status';
-          return _doDownload('');  // 兜底到后端策略2（BDUSS 直链 + aria2c）
+          el.baiduShareStatus.textContent = '⚠ ' + ((info.message) || '需要登录百度网盘') + ' 请在「🔑 极速通道（可选，登录后更快）」完成登录后重试。';
+          el.baiduShareStatus.className = 'baidu-share-status is-err';
+          return;
         }
         // 其它错误（非「未登录」）：WebView 预取失败不影响下载，回退后端 BDUSS 直链兜底
         const msg = (info && info.message) || ('WebView 获取失败：' + ((info && info.error) || '未知'));

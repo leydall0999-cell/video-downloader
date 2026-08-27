@@ -163,8 +163,9 @@ def cloud_baidu_share_download(payload: app.BaiduShareDownloadRequest):
     if not app.BAIDU_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
     token = (payload.token or "").strip() or (app.load_baidu_token() or {}).get("access_token") or ""
-    if not token:
-        raise app.HTTPException(status_code=400, detail="请先完成百度账号授权")
+    # token 非必需：无 OAuth 令牌时，后端 download_share 会自动走 BDUSS 直链兜底
+    # （本机已保存的网盘 Cookie，~/.vdl/baidu_bduss.txt），无需强制授权即可下载。
+    # 仅当 token 缺失且本机也无 BDUSS 时，download_share 内部会给出明确错误。
     if not payload.url.strip() or not payload.path:
         raise app.HTTPException(status_code=400, detail="缺少分享链接或文件路径")
     name = app._baidu_safe_name(payload.name) or app._baidu_safe_name(payload.path)

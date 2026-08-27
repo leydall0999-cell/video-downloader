@@ -292,6 +292,8 @@ def login(raw: str) -> dict:
         raw = _clean_bduss(raw)
 
         fmt = _detect_cookie_format(raw)
+        # 登录参数形式：bduss 走 -bduss=（见下方分支覆盖）；其余走 -cookies=
+        login_flag = "-cookies"
 
         # Netscape 格式（用户从 DevTools Application > Cookies 表格复制的）
         if fmt == "netscape":
@@ -311,15 +313,17 @@ def login(raw: str) -> dict:
             cookie_str = raw
         elif fmt == "bduss":
             # 纯值或已带 BDUSS= 前缀
-            if raw.upper().startswith("BDUSS="):
-                cookie_str = raw
-            else:
-                cookie_str = f"BDUSS={raw}"
+            # ★ 关键修复：BaiduPCS-Go 的 -cookies=BDUSS=xxx 在 BDUSS 含 ==(base64 填充)
+            # 时会被内部等号分割逻辑搞 panic（maniper.go index out of range），导致登录直接崩。
+            # 改用 -bduss= 最稳（实测 -bduss=<value> 可正常登录，uid 有效）。
+            cookie_str = raw[6:] if raw.upper().startswith("BDUSS=") else raw
+            login_flag = "-bduss"
         else:
-            cookie_str = f"BDUSS={raw}"
+            cookie_str = raw[6:] if raw.upper().startswith("BDUSS=") else raw
+            login_flag = "-bduss"
 
         ensure_home()
-        res = _run(["login", f"-cookies={cookie_str}"], timeout=60)
+        res = _run(["login", f"{login_flag}={cookie_str}"], timeout=60)
         combined = res.get("combined", res.get("stderr", "未知错误"))
         # 退出码 0 不代表成功：baiduPCS-Go 失败时也常返回 0，需看输出
         if res["ok"] and not _login_failed(combined):

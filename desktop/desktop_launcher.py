@@ -442,13 +442,23 @@ class VdlApi:
                 wv = getattr(self, "_baidu_wv", None)
                 if wv is None:
                     # 从未登录过（self._baidu_wv 由 baidu_login 首次创建时保存）
-                    result_holder["value"] = json.dumps({
-                        "ok": False,
-                        "error": "NOT_LOGGED_IN",
-                        "message": "百度网盘需登录后才能下载分享文件，请在弹出的窗口登录后重试。"
-                    })
-                    _log("=== NOT_LOGGED_IN (尚未登录) ===")
-                    return
+                    # ★ 2026-08-27 选项2：自动触发登录，让用户无需手动先点「极速通道」
+                    #   get_baidu_dlink 被前端调用时若发现尚未登录，直接拉起登录窗口，
+                    #   登录成功后复用同一 WKWebView 实例继续提取 sign/dlink。
+                    _log("未登录，自动触发 baidu_login() 以打开登录窗口...")
+                    try:
+                        self.baidu_login()
+                    except Exception as e_auto:
+                        _log("自动登录异常: " + str(e_auto))
+                    wv = getattr(self, "_baidu_wv", None)
+                    if wv is None:
+                        result_holder["value"] = json.dumps({
+                            "ok": False,
+                            "error": "NOT_LOGGED_IN",
+                            "message": "百度网盘需登录后才能下载分享文件，请在弹出的窗口登录后重试。"
+                        })
+                        _log("=== NOT_LOGGED_IN (自动登录后仍无窗口) ===")
+                        return
                 temp = wv
                 # 确保窗口可见（之前登录后已 hide），避免屏幕外 SPA 不渲染
                 try:
@@ -578,15 +588,19 @@ class VdlApi:
                                 yd = window.yunData || {};
                                 var shareid = yd.shareid, uk = yd.uk;
                                 if (!shareid) { setResult({ok:false, errno:-100, message:'yunData.shareid 缺失（页面未就绪）'}); return; }
-                                // 校验关键参数（body过短时 yunData 数据可能不完整）
-                                var bdstoken = yd.bdstoken || '';
-                                if (uk === 0 || uk === '0') { setResult({ok:false, errno:-101, message:'yunData.uk=0（未登录或页面未就绪）'}); return; }
-                                if (!bdstoken) { setResult({ok:false, errno:-102, message:'yunData.bdstoken 缺失（页面未完全加载）'}); return; }
-                                // 从 URL 提取 surl（pan.baidu.com/s/<surl>）
+                                // 从 URL 提取 surl（pan.baidu.com/s/<surl>）——提前提取，供下方 uk=0 分支判断
                                 var surl = '';
                                 var pm = location.pathname.match(new RegExp('/s/([A-Za-z0-9_-]+)'));
                                 if (pm) surl = pm[1];
                                 if (!surl) { var qm = location.search.match(/[?&]surl=([A-Za-z0-9_-]+)/); if (qm) surl = qm[1]; }
+                                // 校验关键参数（body过短时 yunData 数据可能不完整）
+                                var bdstoken = yd.bdstoken || '';
+                                // ★ 2026-08-27 选项2：放宽 uk=0 限制——公开分享可用 surl 方式拿 sign，
+                                //   不一定需要登录（游客态 uk=0 但 surl 存在时，仍尝试走 /share/tplconfig）。
+                                if (uk === 0 || uk === '0') {
+                                    if (!surl) { setResult({ok:false, errno:-101, message:'yunData.uk=0 且无法提取 surl（未登录或页面未就绪）'}); return; }
+                                }
+                                if (!bdstoken) { setResult({ok:false, errno:-102, message:'yunData.bdstoken 缺失（页面未完全加载）'}); return; }
                                 // tplconfig 候选 URL：surl 优先，shareid+uk 兜底
                                 var tplUrls = [];
                                 if (surl) tplUrls.push('https://pan.baidu.com/share/tplconfig?fields=sign,timestamp&view_mode=1&channel=chunlei&web=1&app_id=250528&bdstoken=&clienttype=0&surl=' + encodeURIComponent(surl));
