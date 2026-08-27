@@ -21,6 +21,20 @@ EXE="$APP/Contents/MacOS/VideoDownloader"
 
 die() { echo "❌ $1" >&2; exit 1; }
 
+# 把路径送入 ~/.Trash（与 build_mac.sh trash_path 同款，可从回收站找回）
+trash_path() {
+  local src="$1" base dest n
+  [ -e "$src" ] || return 0
+  base="$(basename "$src")"
+  dest="$HOME/.Trash/$base"
+  n=1
+  while [ -e "$dest" ]; do
+    dest="$HOME/.Trash/${base}-$n"
+    n=$((n + 1))
+  done
+  mv "$src" "$dest" 2>/dev/null && echo "   ♻️  移入回收站：$base" || echo "   ⚠️  移入回收站失败（未删除）：$src"
+}
+
 # 可选：先构建
 if [ "${1:-}" != "--no-build" ]; then
   echo "▶ 重新构建（build_mac.sh）..."
@@ -44,10 +58,20 @@ pkill -9 -f "$EXE" 2>/dev/null || true
 sleep 2
 pgrep -f "$EXE" >/dev/null && die "旧实例进程仍存活，无法安全部署（请手动检查 Activity Monitor）"
 
-# 2) 复制（先删除旧 app 再 ditto，避免新旧结构差异导致目录冲突——
-#    例如旧版含解说 collect-all 目录 tokenizers/av/onnxruntime，新版不含时 ditto 会报 Is a directory）
-echo "▶ 删除旧版本 $APP ..."
-rm -rf "$APP" || die "删除旧 app 失败"
+# 2) 先把旧 app 改名备份（万一新版本有问题可回退），备份最多保留 3 份，超出送 ~/.Trash。
+#    用 mv 而不是 rm -rf + ditto 的好处：保留旧文件，且若 ditto 拷贝中途失败仍有完整旧版可用。
+echo "▶ 备份旧版本 ..."
+if [ -e "$APP" ]; then
+  BK="$APP.backup-$(date +%Y%m%d-%H%M%S)"
+  mv "$APP" "$BK" || die "备份旧 app 失败：$BK"
+  echo "   旧版本已备份：$BK"
+  # 封顶 3 份：按修改时间新→旧，跳过最新 3 份，把更早的送回收站
+  ls -dt "$APP".backup-* 2>/dev/null | tail -n +4 | while IFS= read -r old; do
+    trash_path "$old"
+  done
+else
+  echo "   无旧版本，跳过备份"
+fi
 echo "▶ 复制新版本到 $APP ..."
 ditto "$DIST" "$APP" || die "ditto 复制失败"
 
