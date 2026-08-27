@@ -6549,8 +6549,21 @@
         try { info = JSON.parse(r); } catch { info = null; }
       }
       const ok = !!(info && (info.ok || info.logged));
-      el.baiduLoginStatus.textContent = ok ? '✓ 登录成功（已自动用于下载）' : '⚠ 登录未完成，请重试';
-      el.baiduLoginStatus.style.color = ok ? '#07c160' : '#e64340';
+      if (ok) {
+        // 续31：登录成功必须有真实动作，杜绝「假成功」。已列出文件就立即自动下载，
+        // 没列出则明确提示去粘贴链接，不再显示误导性的「已自动用于下载」。
+        if (_lastShareItems.length) {
+          el.baiduLoginStatus.textContent = '✓ 登录成功，正在自动下载已列出的文件…';
+          el.baiduLoginStatus.style.color = '#07c160';
+          setTimeout(() => downloadAllShareFiles(), 300);
+        } else {
+          el.baiduLoginStatus.textContent = '✓ 登录成功，去粘贴分享链接点「转存并下载」即可';
+          el.baiduLoginStatus.style.color = '#07c160';
+        }
+      } else {
+        el.baiduLoginStatus.textContent = '⚠ 登录未完成，请重试';
+        el.baiduLoginStatus.style.color = '#e64340';
+      }
     } catch (e) {
       el.baiduLoginStatus.textContent = '⚠ 登录出错：' + e.message;
       el.baiduLoginStatus.style.color = '#e64340';
