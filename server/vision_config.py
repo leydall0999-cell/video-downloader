@@ -184,6 +184,12 @@ def inject_vision_env(env: dict[str, str]) -> None:
     if not base_url or not model:
         return
 
+    # 本机 provider（Ollama / 自建 localhost 端点）：绕过 HTTP 代理直连，
+    # 避免子进程继承 http_proxy 后把 localhost:11434 请求发到代理导致 502。
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        env["no_proxy"] = "localhost,127.0.0.1"
+        env["NO_PROXY"] = "localhost,127.0.0.1"
+
     if provider == "ollama":
         env["VDL_VISION_API_KEY"] = key or "ollama"
         env["VDL_VISION_BASE_URL"] = base_url
