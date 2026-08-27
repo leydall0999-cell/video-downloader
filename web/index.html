@@ -873,6 +873,10 @@
                 <option value="siliconflow">SiliconFlow</option>
               </select>
               <span class="com-retain-hint">indextts_mlx 为 Apple Silicon 原生 MLX 版，需在终端先启动 IndexTTS-MLX-1.5-Pack 服务（默认 http://127.0.0.1:7866），参考音频在解说面板「全局配音」里用 indextts_mlx:/路径/参考.wav 指定</span>
+              <label class="com-checkbox-row" style="margin-top:8px;">
+                <input id="comCorrectTranscript" type="checkbox" checked />
+                <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
+              </label>
             </div>
           </div>
         </div>

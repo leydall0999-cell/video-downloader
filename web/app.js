@@ -3860,6 +3860,7 @@
       style: styleEl ? styleEl.value : 'none',
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
+      correct_transcript: !!(el.comCorrectTranscript && el.comCorrectTranscript.checked),
     };
   };
 
@@ -3953,6 +3954,7 @@
       form.append('style', opts.style || 'none');
       form.append('vision', String(opts.vision));
       if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
+      if (!opts.correct_transcript) form.append('correct_transcript', '0');
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
@@ -4029,6 +4031,7 @@
       form.append('style', opts.style || 'none');
       form.append('vision', String(opts.vision));
       if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
+      if (!opts.correct_transcript) form.append('correct_transcript', '0');
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);
