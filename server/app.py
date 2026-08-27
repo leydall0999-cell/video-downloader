@@ -1482,14 +1482,21 @@ app.add_middleware(
 )
 
 
-# 前端脚本未做版本化，pywebview/WKWebView 易缓存旧 app.js，导致修复不生效。
-# 对 HTML/JS/CSS 及首页强制 no-store，确保客户端每次都拉取最新前端。
+# 前端脚本未做版本化（CSS/JS 文件名固定），需平衡两类缓存需求：
+# - 网页版：styles.css 100KB，强制 no-store 会让每次刷新都重下 → 渲染阻塞窗口内用户
+#   看到 FOUC（短暂文字版）；改短缓存 + ETag 协商可彻底消除。
+# - 桌面 App（pywebview/WKWebView）：HTML 必须 no-store，否则旧 HTML 会引用旧 JS/CSS，
+#   导致修复不生效（这是原中间件的目的）；WKWebView 5 分钟内重启可能拉到旧 JS/CSS 可接受。
+# 综合：HTML 强制 no-store；CSS/JS 改 public, max-age=300, must-revalidate（保留服务器
+# ETag，浏览器过期后自动 304 协商，仍能拉到新版本）。
 @app.middleware("http")
 async def _no_cache_frontend(request: Request, call_next):
     resp = await call_next(request)
     path = request.url.path
-    if path == "/" or path.endswith((".js", ".html", ".css", ".htm")):
+    if path == "/" or path.endswith((".html", ".htm")):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
+    elif path.endswith((".js", ".css")):
+        resp.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
     return resp
 logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
 
