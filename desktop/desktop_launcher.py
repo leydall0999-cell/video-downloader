@@ -1054,31 +1054,11 @@ class VdlApi:
                                         _vr = temp.evaluate_js("(function(){return window.__vdl_verify_result||null;})()")
                                         if _vr: _log("  🔐 提取码验证结果: " + str(_vr))
                                     except Exception: pass
-                                    login_codes = (-6, -20, -9, 2, -101, -102)
-                                    if en in login_codes:
-                                        result_holder["value"] = json.dumps({
-                                            "ok": False,
-                                            "error": "NOT_LOGGED_IN",
-                                            "message": "百度网盘登录态已失效或需重新登录：" + err_msg
-                                        })
-                                        _log("=== NOT_LOGGED_IN (errno=" + str(en) + ") ===")
-                                        return
-                                    elif en == -12:
-                                        result_holder["value"] = json.dumps({
-                                            "ok": False,
-                                            "error": "LINK_ERR",
-                                            "message": "百度返回链接出错(errno=-12)，可能登录态不足或接口参数变化：" + err_msg
-                                        })
-                                        _log("=== LINK_ERR (errno=-12) ===")
-                                        return
-                                    else:
-                                        result_holder["value"] = json.dumps({
-                                            "ok": False,
-                                            "error": "DLINK_ERR",
-                                            "message": "获取直链失败：" + err_msg
-                                        })
-                                        _log("=== DLINK_ERR (errno=" + str(en) + ") ===")
-                                        return
+                                    # ★ 续36：只记录，不写 result_holder/不 return。
+                                    # 让 Phase-3 自然跑完→ line 1087 进入「Python curl fallback + 自动登录重试」综合路径。
+                                    _cookies = temp.evaluate_js("(document.cookie||'')")
+                                    _has_bduss = isinstance(_cookies, str) and _cookies.find('BDUSS')>=0
+                                    _log("  → Phase-3 上报失败 errno=" + str(en) + " (JS_BDUSS=" + str(_has_bduss) + ")，统一交给续36 fallback 处理")
                             except (json.JSONDecodeError, TypeError):
                                 pass
                     except Exception:
@@ -1088,6 +1068,21 @@ class VdlApi:
                     result_holder["value"] = final_result
                     _log("=== 成功 ===")
                 else:
+                    # ★ 续36：Phase-3 失败 → 先尝试 Python curl fallback
+                    # 根因：WKWebView 内 XHR 即使 withCredentials=true 也常拿不到 HttpOnly 的 BDUSS。
+                    # 但 macOS WKWebsiteDataStore 实际持有 BDUSS，用 pywebview cocoa.get_cookies(uid)
+                    # 抓出来注入 requests.Session 重放 sharedownload —— 这是最稳妥的直链路径。
+                    _log("⚠ 续36 进入 Python curl fallback（抓 webview cookie 重放 sharedownload）")
+                    try:
+                        _cur = self._baidu_dlink_via_requests(temp, share_url, fs_id, pwd, _log)
+                        if _cur and _cur.get("ok") and _cur.get("dlink"):
+                            result_holder["value"] = json.dumps({
+                                "ok": True, "dlink": _cur["dlink"], "filename": _cur.get("filename", "file")
+                            })
+                            _log("=== 成功 (续36 Python curl) ===")
+                            return
+                    except Exception as e_pc:
+                        _log("  续36 curl fallback 异常: " + str(e_pc))
                     # ★ 2026-08-28 续35：失败时自动串联登录——避免"抽签→失败→让用户点登录→再点抽签"的低效循环。
                     # 失败原因大概率是 uk=0（http cookie 未带 BDUSS），自动调登录后阻塞等 yunData.uk>0 再重试抽签。
                     _log("⚠ 续35 first-round fail，自动 _baidu_login_serial 重试")
@@ -1186,6 +1181,117 @@ class VdlApi:
         ret = result_holder.get("value") or json.dumps({"ok": False, "error": "timeout"})
         _log("=== 返回: " + ret[:200] + " ===")
         return ret
+
+    def _baidu_dlink_via_requests(self, wv, share_url: str, fs_id: int, pwd: str, _log):
+        """续36：从 WKWebView 抓 HttpOnly cookie（含 BDUSS）→ Python requests 重放 sharedownload。
+
+        绕过 webview 内 XHR cookie 不可靠的问题：WKWebsiteDataStore 持有完整 cookie，
+        用 pywebview cocoa.get_cookies(uid) 取出后注入 requests.Session 直接打百度接口拿 dlink。
+        返回 {'ok': bool, 'dlink': str, 'filename': str} 或 {'ok': False, 'errno': int, ...}。
+        """
+        import json as _json
+        import requests as _req
+        from urllib.parse import quote_plus as _q
+
+        # 1. 从 webview 抓全部 cookie（含 HttpOnly）
+        _cookies = []
+        try:
+            from webview.platforms import cocoa as _cocoa
+            _cookies = _cocoa.get_cookies(wv.uid) or []
+            _log("  续36 抓到 webview cookie 数量=" + str(len(_cookies)) +
+                 " 含BDUSS=" + str(any((getattr(c, 'name', '') == 'BDUSS') for c in _cookies)))
+        except Exception as e_gc:
+            _log("  续36 get_cookies 异常: " + str(e_gc))
+            return {"ok": False, "errno": -1, "message": "get_cookies 失败: " + str(e_gc)}
+
+        if not _cookies:
+            return {"ok": False, "errno": -1, "message": "webview 无 cookie（未登录）"}
+
+        _sess = _req.Session()
+        for _c in _cookies:
+            try:
+                _sess.cookies.set_cookie(_c)
+            except Exception:
+                try:
+                    _sess.cookies.set(getattr(_c, 'name', ''), getattr(_c, 'value', ''))
+                except Exception:
+                    pass
+        _sess.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Referer": "https://pan.baidu.com/",
+        })
+
+        # 2. 拿 shareid / uk / bdstoken（从 webview 的 yunData，更可靠）
+        try:
+            _yd = wv.evaluate_js("(function(){var y=window.yunData||{};return JSON.stringify({shareid:y.shareid||'',uk:y.uk||0,bdstoken:y.bdstoken||''});})()")
+            _yd = _json.loads(_yd) if isinstance(_yd, str) else {}
+        except Exception:
+            _yd = {}
+        _shareid = _yd.get("shareid") or ""
+        _uk = _yd.get("uk") or 0
+        _bdstoken = _yd.get("bdstoken") or ""
+
+        # 3. GET tplconfig 拿 sign/timestamp
+        _surl = ""
+        try:
+            _m = share_url.split("/s/")[-1].split("?")[0].split("#")[0]
+            _surl = _m
+        except Exception:
+            pass
+        _sign = ""
+        _ts = ""
+        try:
+            if _surl:
+                _tpl_url = ("https://pan.baidu.com/share/tplconfig?fields=sign,timestamp"
+                            "&view_mode=1&channel=chunlei&web=1&app_id=250528&bdstoken="
+                            "&clienttype=0&surl=" + _q(_surl))
+                _r = _sess.get(_tpl_url, timeout=20)
+                _j = _r.json() if _r.ok else {}
+                if _j.get("errno") == 0 and _j.get("data", {}).get("sign"):
+                    _sign = _j["data"]["sign"]
+                    _ts = str(_j["data"].get("timestamp") or "")
+                    _log("  续36 tplconfig OK sign=" + _sign[:20] + "..")
+                else:
+                    _log("  续36 tplconfig 失败: " + str(_j.get("errno")))
+            if not _sign and _shareid and _uk:
+                _tpl_url2 = ("https://pan.baidu.com/share/tplconfig?fields=sign,timestamp"
+                             "&channel=chunlei&web=1&app_id=250528&clienttype=0&shareid="
+                             + str(_shareid) + "&uk=" + str(_uk))
+                _r2 = _sess.get(_tpl_url2, timeout=20)
+                _j2 = _r2.json() if _r2.ok else {}
+                if _j2.get("errno") == 0 and _j2.get("data", {}).get("sign"):
+                    _sign = _j2["data"]["sign"]
+                    _ts = str(_j2["data"].get("timestamp") or "")
+                    _log("  续36 tplconfig(shareid) OK sign=" + _sign[:20] + "..")
+        except Exception as e_tpl:
+            _log("  续36 tplconfig 异常: " + str(e_tpl))
+
+        if not _sign:
+            return {"ok": False, "errno": -1, "message": "无法获取 sign（可能未登录或接口变化）"}
+
+        # 4. POST sharedownload 拿 dlink
+        _sdl_url = ("https://pan.baidu.com/api/sharedownload?sign=" + _q(_sign)
+                    + "&timestamp=" + _q(_ts)
+                    + "&bdstoken=" + _q(_bdstoken)
+                    + "&channel=chunlei&clienttype=0&web=1&channel_url=&product=share")
+        _body = ("encrypt=0&product=share&uk=" + str(_uk) + "&shareid=" + str(_shareid)
+                 + "&fid_list=[" + str(int(fs_id)) + "]&type=nolimit&channel=chunlei&clienttype=0&web=1")
+        if pwd:
+            _body += "&pwd=" + _q(pwd)
+        try:
+            _rp = _sess.post(_sdl_url, data=_body,
+                             headers={"Content-Type": "application/x-www-form-urlencoded"},
+                             timeout=30, allow_redirects=False)
+            _jp = _rp.json() if _rp.ok else {"errno": -1, "message": "http " + str(_rp.status_code)}
+            _log("  续36 sharedownload resp: errno=" + str(_jp.get("errno"))
+                 + " msg=" + str(_jp.get("show_msg") or _jp.get("message") or "")[:80])
+            if _jp.get("errno") == 0 and _jp.get("dlink"):
+                return {"ok": True, "dlink": _jp["dlink"],
+                        "filename": (_jp.get("list") or [{}])[0].get("filename") or "file"}
+            return {"ok": False, "errno": _jp.get("errno"), "message": _jp.get("show_msg") or str(_jp)[:160]}
+        except Exception as e_sdl:
+            _log("  续36 sharedownload 异常: " + str(e_sdl))
+            return {"ok": False, "errno": -1, "message": str(e_sdl)}
 
     def baidu_login(self) -> str:
         """打开一个可见的 WebView 窗口让用户登录百度网盘。
