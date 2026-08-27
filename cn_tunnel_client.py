@@ -21,6 +21,11 @@ RAILWAY_WS = os.environ.get("VDL_TUNNEL_URL", "wss://hanyuxz.top/ws/cn-tunnel")
 TOKEN = os.environ.get("VDL_TUNNEL_TOKEN", "")
 LOCAL_PROXY = os.environ.get("VDL_LOCAL_PROXY", "http://127.0.0.1:18888")
 RECONNECT = 5
+# WS 心跳超时改为可配置：VPS→Railway 跨境链路偶发 10~22s 尖刺，
+# 硬编码 ping_timeout=10 会把任何尖刺判死→1011 被踢→重连风暴。
+# 放宽到 45s（仍能在真死连接上靠 pong 缺失及时检测），由 VPS systemd 注入。
+PING_INTERVAL = int(os.environ.get("VDL_WS_PING_INTERVAL", "30"))
+PING_TIMEOUT = int(os.environ.get("VDL_WS_PING_TIMEOUT", "45"))
 
 _WS_URL = RAILWAY_WS + (f"?token={TOKEN}" if TOKEN else "")
 
@@ -196,8 +201,8 @@ async def tunnel_client():
             # 超时触发 websockets 库的 InvalidStateError 竞态崩溃（response.set_exception）。
             async with connect(
                 _WS_URL,
-                ping_interval=20,
-                ping_timeout=10,
+                ping_interval=PING_INTERVAL,
+                ping_timeout=PING_TIMEOUT,
                 open_timeout=30,
                 close_timeout=5,
             ) as ws:
