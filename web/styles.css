@@ -1730,7 +1730,7 @@ img { max-width: 100%; display: block; }
 /* ---- 生成按钮行（双按钮，主次分明） ---- */
 .com-generate-row {
   display: flex; gap: .75rem; margin-top: 1rem;
-  padding: 0 .9rem;
+  padding: 0 1rem;
 }
 .com-generate-row .com-generate-main {
   flex: 1; padding: .85rem 1rem; font-size: 1rem; font-weight: 700;
@@ -1756,9 +1756,9 @@ img { max-width: 100%; display: block; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   align-items: start;
-  gap: .5rem .9rem;
+  gap: .5rem 1rem;
   margin-top: .5rem;
-  padding: .65rem .9rem;
+  padding: .65rem 1rem;
   background: var(--surface);
   border: 1px solid var(--line); border-radius: var(--radius-md);
 }
@@ -1771,7 +1771,7 @@ img { max-width: 100%; display: block; }
 /* 配音与音量：独立卡片，避免与左侧贴边 */
 #comVolumeBlock {
   margin-top: .75rem;
-  padding: .75rem .9rem .9rem;
+  padding: .75rem 1rem .9rem;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -2008,8 +2008,8 @@ img { max-width: 100%; display: block; }
   .com-vol-preview-hint { max-width: none; }
 }
 @media (max-width: 720px) {
-  .com-opts { grid-template-columns: 1fr; padding: .6rem .9rem; gap: .5rem; }
-  #comVolumeBlock { padding: .6rem .9rem .75rem; }
+  .com-opts { grid-template-columns: 1fr; padding: .6rem 1rem; gap: .5rem; }
+  #comVolumeBlock { padding: .6rem 1rem .75rem; }
   .com-opts-inner { grid-template-columns: 1fr; gap: .45rem; }
   .com-opt-row-fixed > .com-mode-fixed,
   .com-opt-row-fixed > .com-retain-field { flex: 1 1 100%; }
@@ -2035,7 +2035,7 @@ img { max-width: 100%; display: block; }
   font-size: .85rem; color: var(--text-mute);
 }
 .com-oneclick-note {
-  margin: .45rem 0 0; padding: 0 .9rem;
+  margin: .45rem 0 0; padding: 0 1rem;
   font-size: .82rem; line-height: 1.6; color: var(--text-mute);
 }
 .com-style-hint {
