@@ -306,6 +306,14 @@
     llmOffpeakOnly: $('llmOffpeakOnly'),
     llmSave: $('llmSave'),
     llmStatus: $('llmStatus'),
+    // 视觉模型（片头检测 & 视觉理解共用）
+    visionProvider: $('visionProvider'),
+    visionApiKey: $('visionApiKey'),
+    visionBaseUrl: $('visionBaseUrl'),
+    visionModel: $('visionModel'),
+    visionNote: $('visionNote'),
+    visionSave: $('visionSave'),
+    visionStatus: $('visionStatus'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -7871,6 +7879,95 @@
             el.llmStatus.hidden = false;
             el.llmStatus.style.color = '#e74c3c';
             el.llmStatus.textContent = '❌ 网络错误';
+          }
+        }
+      });
+    }
+  })();
+
+  // ---- 视觉模型服务商选择器（片头检测 & 视觉理解共用） ----
+  (async () => {
+    let providers = {};
+    let defaultProvider = 'auto';
+    try {
+      const r = await request('/api/vision/providers');
+      if (r.ok) {
+        const d = await r.json();
+        providers = d.providers || {};
+        defaultProvider = d.default || 'auto';
+      }
+    } catch (e) { /* 未启用时静默退 */ }
+
+    if (el.visionProvider) {
+      el.visionProvider.innerHTML = '';
+      for (const [k, v] of Object.entries(providers)) {
+        const opt = document.createElement('option');
+        opt.value = k;
+        opt.textContent = v.name;
+        el.visionProvider.appendChild(opt);
+      }
+      // 选中预设后自动填 base_url 和 model，并显示该 provider 的说明
+      el.visionProvider.addEventListener('change', () => {
+        const sel = el.visionProvider.value;
+        const preset = providers[sel];
+        if (preset) {
+          if (preset.base_url) el.visionBaseUrl.value = preset.base_url;
+          if (preset.default_model) el.visionModel.value = preset.default_model;
+          if (el.visionNote && preset.note) el.visionNote.textContent = preset.note;
+        }
+        // Ollama / 自动 模式下 Key 非必需，隐藏占位提示差异
+        const needsKey = preset ? !!preset.needs_key : true;
+        el.visionApiKey.placeholder = needsKey ? 'sk-...（必填）' : 'sk-...（Ollama/自动模式可留空）';
+      });
+    }
+
+    // 回填已保存的配置
+    try {
+      const r = await request('/api/vision/config');
+      if (r.ok) {
+        const cfg = await r.json();
+        if (el.visionProvider) el.visionProvider.value = cfg.provider || defaultProvider;
+        if (el.visionApiKey) el.visionApiKey.value = cfg.api_key || '';
+        if (el.visionBaseUrl) el.visionBaseUrl.value = cfg.base_url || '';
+        if (el.visionModel) el.visionModel.value = cfg.model || '';
+        const preset = providers[cfg.provider || defaultProvider];
+        if (el.visionNote && preset && preset.note) el.visionNote.textContent = preset.note;
+      }
+    } catch (e) { /* */ }
+
+    // 保存按钮
+    if (el.visionSave) {
+      el.visionSave.addEventListener('click', async () => {
+        const body = {
+          provider: el.visionProvider ? el.visionProvider.value : 'auto',
+          api_key: el.visionApiKey ? el.visionApiKey.value.trim() : '',
+          base_url: el.visionBaseUrl ? el.visionBaseUrl.value.trim() : '',
+          model: el.visionModel ? el.visionModel.value.trim() : '',
+        };
+        try {
+          const r = await request('/api/vision/config', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (r.ok && d.ok) {
+            if (el.visionStatus) {
+              el.visionStatus.hidden = false;
+              el.visionStatus.textContent = '✅ 已保存';
+              setTimeout(() => { el.visionStatus.hidden = true; }, 2000);
+            }
+          } else {
+            if (el.visionStatus) {
+              el.visionStatus.hidden = false;
+              el.visionStatus.style.color = '#e74c3c';
+              el.visionStatus.textContent = '❌ 保存失败';
+            }
+          }
+        } catch (e) {
+          if (el.visionStatus) {
+            el.visionStatus.hidden = false;
+            el.visionStatus.style.color = '#e74c3c';
+            el.visionStatus.textContent = '❌ 网络错误';
           }
         }
       });

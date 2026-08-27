@@ -79,6 +79,16 @@ from clouddrive import (
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
 from llm_config import inject_llm_env, get_llm_config, save_llm_config, PROVIDER_PRESETS, DEFAULT_PROVIDER
+from vision_config import (
+    inject_vision_env, get_vision_config, save_vision_config,
+    VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER,
+)
+
+# 暴露给 routers/vision.py 访问的共享内核（镜像 PROVIDER_PRESETS 等）
+VISION_PROVIDER_PRESETS = VISION_PROVIDER_PRESETS
+VISION_DEFAULT_PROVIDER = VISION_DEFAULT_PROVIDER
+get_vision_config = get_vision_config
+save_vision_config = save_vision_config
 from commentary_config import inject_commentary_env
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -751,6 +761,9 @@ class _CommentaryRuntime:
             env["PATH"] = self.ffmpeg_dir + os.pathsep + env.get("PATH", "")
         # 统一 LLM 配置：仅 Key 非空时注入，无 Key 不污染子进程环境
         inject_llm_env(env)
+        # 统一视觉模型配置：auto 不注入（走流水线回退链）；Ollama 注入 base_url+model；
+        # 云端仅 Key 非空时注入。任何环境都不会因"没配好"而硬失败。
+        inject_vision_env(env)
         # 解说/配音音量手动可调配置：注入旁白响度/原声压低/旁白增益
         inject_commentary_env(env)
         return env
@@ -2552,6 +2565,13 @@ class LLMConfigRequest(BaseModel):
     offpeak_only: bool = Field(default=False)
 
 
+class VisionConfigRequest(BaseModel):
+    provider: str = Field(default="auto", max_length=32)
+    api_key: str = Field(default="", max_length=256)
+    base_url: str = Field(default="", max_length=512)
+    model: str = Field(default="", max_length=128)
+
+
 class CommentaryConfigRequest(BaseModel):
     """解说(配音/音量)手动可调设置。"""
     # 数值型 LUFS（-18~-10）或字符串 "off"。不能用 Any —— 在 PEP 563
@@ -3083,6 +3103,8 @@ from routers import subtitles as _subtitles_rtr
 app.include_router(_subtitles_rtr.router)
 from routers import llm as _llm_rtr
 app.include_router(_llm_rtr.router)
+from routers import vision as _vision_rtr
+app.include_router(_vision_rtr.router)
 from routers import process as _process_rtr
 app.include_router(_process_rtr.router)
 from routers import subscriptions as _subscriptions_rtr

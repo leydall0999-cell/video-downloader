@@ -183,6 +183,24 @@
       </div>
     </details>
 
+    <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->
+    <details class="adv" id="visionSettings">
+      <summary class="adv-summary">视觉模型（片头检测 &amp; 视觉理解共用）</summary>
+      <div class="adv-body">
+        <label class="adv-label" for="visionProvider">服务商</label>
+        <select id="visionProvider" class="adv-input"></select>
+        <label class="adv-label" for="visionApiKey">API Key</label>
+        <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" />
+        <label class="adv-label" for="visionBaseUrl">Base URL（自定义时填写）</label>
+        <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+        <label class="adv-label" for="visionModel">模型</label>
+        <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+        <p class="adv-note" id="visionNote">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
+        <button type="button" class="btn btn-primary btn-sm" id="visionSave">保存</button>
+        <span id="visionStatus" class="sub-status" hidden></span>
+      </div>
+    </details>
+
     <!-- 批量下载面板：一次粘贴多个链接，统一排队并发下载 -->
     <div class="batch-box" id="batchBox" hidden>
       <div class="batch-head">
