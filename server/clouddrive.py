@@ -80,7 +80,7 @@ def _aria2c_download(
         "--out", dest.name,
         "-x", str(concurrency),       # 每服务器最大连接数
         "-s", str(concurrency),       # 分片数
-        "-k", "1M",                   # 分块 1MB（便于并发+续传）
+        "-k", "4M",                   # 分块 4MB（大文件分片更粗，配合 -s 16 提升并发效率）
         "--continue=true",
         "--summary-interval=0",       # 关掉周期摘要，靠文件大小轮询进度
         "--connect-timeout=30",
@@ -416,7 +416,7 @@ class BaiduProvider:
 
         if backend in ("auto", "aria2c") and _aria2c_path() is not None:
             try:
-                return _aria2c_download(dlink, local_path, total, concurrency=8, progress=progress)
+                return _aria2c_download(dlink, local_path, total, concurrency=16, progress=progress)
             except CloudError:
                 if backend == "aria2c":
                     raise

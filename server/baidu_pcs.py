@@ -468,7 +468,9 @@ def download(remote_path: str, dest_dir: Optional[Path] = None,
     bin_path = _find_existing_binary()
     if not bin_path:
         return {"ok": False, "message": "baiduPCS-Go 未安装"}
-    cmd = [str(bin_path), "download", remote_path]
+    # 方案③提速：强制走 PCS API 不限速通道 + 单文件 16 线程分片，吃满带宽
+    # （默认 locate 模式从 Android 接口取链接可能走限速通道；pcs 模式走电脑端 PCS 接口不限速）
+    cmd = [str(bin_path), "download", "--mode", "pcs", "-p", "16", remote_path]
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(PCS_HOME), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
