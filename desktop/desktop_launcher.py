@@ -492,6 +492,19 @@ class VdlApi:
 
         def _extract():
             temp = None
+            _lock = getattr(self, "_baidu_wv_lock", None)
+            if _lock is None:
+                import threading as _th2
+                _lock = _th2.Lock()
+                self._baidu_wv_lock = _lock
+            _log("续35 dlink 等待串行锁（最多 90s）")
+            got = _lock.acquire(blocking=True, timeout=90)
+            if not got:
+                _log("⚠ 续35 dlink 拿锁超时（90s）")
+                result_holder["value"] = json.dumps({"ok": False, "error": "LOCK_TIMEOUT", "message": "另一任务占用 webview 超时（90s）"})
+                result_holder["event"].set()
+                return
+            _log("续35 dlink 已获取串行锁")
             try:
                 # ★ 2026-08-27 续23 修正：免登录优先，不再自动弹登录窗
                 #   之前会在 _baidu_wv 为 None 时自动调 baidu_login()，结果用户每次都
@@ -1075,6 +1088,75 @@ class VdlApi:
                     result_holder["value"] = final_result
                     _log("=== 成功 ===")
                 else:
+                    # ★ 2026-08-28 续35：失败时自动串联登录——避免"抽签→失败→让用户点登录→再点抽签"的低效循环。
+                    # 失败原因大概率是 uk=0（http cookie 未带 BDUSS），自动调登录后阻塞等 yunData.uk>0 再重试抽签。
+                    _log("⚠ 续35 first-round fail，自动 _baidu_login_serial 重试")
+                    try:
+                        login_result = self._baidu_login_serial(
+                            log_path=_log_path,
+                            post_login_share_url=share_url,
+                        )
+                        if login_result.get("uk", 0) > 0:
+                            _log(f"  续35 登录成功 uk={login_result['uk']}，再次抽签")
+                            # 重新 load share URL 让 SPA 用新 cookie 拉数据
+                            try:
+                                temp.load_url(share_url)
+                            except Exception as e_lu3:
+                                _log("重试 load 异常: " + str(e_lu3))
+                            _time.sleep(3)
+                            try:
+                                temp.evaluate_js("location.reload()")
+                            except Exception:
+                                pass
+                            # 复用前面的逻辑：等 yunData → 触发 __vdl_build → 等 dlink
+                            try:
+                                html2 = temp.evaluate_js("(window.yunData && window.yunData.shareid) ? 1 : 0")
+                                _log(f"  续35 重试 yunData.shareid={html2}")
+                                if html2 == 1:
+                                    # 直接构造 tplconfig + sharedownload
+                                    sdl_result2 = temp.evaluate_js("""(function(){
+                                        try {
+                                            var yd = window.yunData || {};
+                                            var shareid = yd.shareid, uk = yd.uk;
+                                            if (!shareid || (!uk && uk !== 0)) return 'NO_YUNDATA';
+                                            // 1. tplconfig
+                                            var sign = null, timestamp = null;
+                                            var xhr1 = new XMLHttpRequest();
+                                            xhr1.open('GET', '/share/tplconfig?fields=sign,timestamp&channel=chunlei&web=1&app_id=250528&clienttype=0&surl=' + (location.pathname.match(/\\/s\\/([A-Za-z0-9_-]+)/)||[])[1], false);
+                                            xhr1.send();
+                                            try {
+                                                var j1 = JSON.parse(xhr1.responseText);
+                                                if (j1 && j1.errno === 0) { sign = j1.data.sign; timestamp = j1.data.timestamp; }
+                                            } catch(e){}
+                                            if (!sign) return 'NO_SIGN';
+                                            // 2. sharedownload
+                                            var xhr2 = new XMLHttpRequest();
+                                            var body = 'encrypt=0&product=share&uk=' + uk + '&shareid=' + shareid + '&fid_list=[' + fsId + ']&type=nolimit&channel=chunlei&clienttype=0&web=1';
+                                            xhr2.open('POST', '/api/sharedownload?sign=' + encodeURIComponent(sign) + '&timestamp=' + timestamp + '&channel=chunlei&web=1&app_id=250528&clienttype=0', false);
+                                            xhr2.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                                            xhr2.send(body);
+                                            var j2 = JSON.parse(xhr2.responseText);
+                                            if (j2 && j2.errno === 0 && j2.list && j2.list[0] && j2.list[0].dlink) {
+                                                return JSON.stringify({ok:true, dlink:j2.list[0].dlink, filename:j2.list[0].filename || 'file'});
+                                            }
+                                            return JSON.stringify({ok:false, errno:j2.errno, msg:(j2.show_msg||('err '+j2.errno))});
+                                        } catch(e){ return 'EXCEPTION:' + e.message; }
+                                    })()""".replace('fsId', str(fs_id)).replace('pwd', pwd or ""))
+                                    _log(f"  续35 重试 sharedownload: {str(sdl_result2)[:200]}")
+                                    try:
+                                        rj = json.loads(sdl_result2)
+                                        if isinstance(rj, dict) and rj.get("ok"):
+                                            result_holder["value"] = json.dumps({"ok": True, "dlink": rj["dlink"], "filename": rj.get("filename","file")})
+                                            _log("✔ 续35 重试抽签成功")
+                                            return
+                                        else:
+                                            _log(f"⚠ 续35 重试失败: {rj}")
+                                    except Exception:
+                                        pass
+                            except Exception as ex_retry:
+                                _log(f"重试 evaluate_js 异常: {ex_retry}")
+                    except Exception as e_auto:
+                        _log("⚠ 续35 自动登录重试异常: " + str(e_auto))
                     result_holder["value"] = json.dumps({"ok": False, "error": "all_failed", "message": "未能获取直链（拦截未命中）。"})
                     _log("=== 全部失败 ===")
 
@@ -1091,6 +1173,11 @@ class VdlApi:
                         _log("窗口已隐藏（保留实例供下次复用）")
                     except Exception:
                         pass
+                try:
+                    _lock.release()
+                    _log("续35 dlink 已释放串行锁")
+                except Exception:
+                    pass
                 result_holder["event"].set()
 
         t = _th.Thread(target=_extract, daemon=True)
@@ -1190,107 +1277,22 @@ class VdlApi:
                 pass
 
         def _run():
-            w = None
-            login_w = None
             try:
-                # ★ 2026-08-28 续34 关键修复：创建**独立** WKWebView 登录窗，不再复用 self._baidu_wv
-                # 根因：续32b 让 baidu_login 复用了 get_baidu_dlink 的 self._baidu_wv，
-                # 两边同时 evaluate_js/load_url/reload → "Main window failed to start" 异常
-                # + yunData 读不到 + 登录窗永不 hide。彻底分离两个 webview 实例解决：
-                #  - macOS WKWebView 默认用 WKWebsiteDataStore.default() 持久化 cookie，
-                #    新实例登录后 cookie 立即同步到 default store；
-                #  - 登录成功后只需让 self._baidu_wv reload，yunData 就读到登录态。
-                try:
-                    import urllib.parse as _u
-                    login_url = (
-                        "https://passport.baidu.com/v2/?login&display=netdisk"
-                        "&u=" + _u.quote_plus("https://pan.baidu.com/disk/main", safe='')
-                    )
-                    _log("创建独立 WKWebView 登录窗 url=" + login_url[:120])
-                    login_w = _wv.create_window(
-                        title="VDL-登录百度网盘",
-                        url=login_url,
-                        width=900, height=700, min_size=(480, 600),
-                        on_top=True,
-                    )
-                    w = login_w
-                except Exception as e_w:
-                    _log("独立登录窗创建异常，回退到 self._baidu_wv 复用: " + str(e_w))
-                    w = None
-                if w is None:
-                    # 兜底：复用 self._baidu_wv（理论上不会走到）
-                    if getattr(self, "_baidu_wv", None) is None:
-                        self._baidu_wv = _wv.create_window(
-                            title="VDL-百度分享直链",
-                            url="about:blank",
-                            width=900, height=700, min_size=(480, 600),
-                        )
-                        try:
-                            self._baidu_wv.show()
-                        except Exception:
-                            pass
-                    w = self._baidu_wv
-                    try:
-                        w.load_url("https://passport.baidu.com/v2/?login&display=netdisk&u=https%3A%2F%2Fpan.baidu.com%2Fdisk%2Fmain")
-                        _log("已 load 百度登录页，等待用户扫码...")
-                    except Exception as e_load:
-                        _log("load 登录页异常: " + str(e_load))
-                # 轮询等登录完成（_is_logged_in / _yun_logged 任一成立即可）。
-                # ★ 2026-08-28 续34：现在 w 是独立 WKWebView，不会被 dlink 轮询干扰了。
-                logged = False
-                last_err = None
-                for i in range(180):  # 最多 3 分钟
-                    _t.sleep(1)
-                    try:
-                        href = w.evaluate_js("location.href") or ""
-                        if _is_logged_in(href):
-                            logged = True
-                            _log("登录完成 (URL 跳转: " + str(href)[:80] + ", s=" + str(i+1) + ")")
-                            break
-                        # 兜底：yunData.uk > 0 或 loginstate == 1（分享页 URL 不动也会触发）
-                        if _yun_logged(w):
-                            logged = True
-                            _log("登录完成 (yunData.uk>0 或 loginstate=1, s=" + str(i+1) + ", url=" + str(href)[:80] + ")")
-                            break
-                    except Exception as ex_poll:
-                        last_err = str(ex_poll)
-                        if i < 3 or i % 10 == 0:
-                            _log("  轮询第" + str(i+1) + "次异常: " + last_err[:100])
-                        continue
-                # 销毁独立登录窗
-                try:
-                    w.hide()
-                except Exception:
-                    pass
-                try:
-                    if login_w is not None:
-                        w.destroy()
-                        _log("独立登录窗已销毁（cookie 已通过 default store 同步）")
-                    else:
-                        _log("self._baidu_wv 已隐藏（保留实例）")
-                except Exception as e_d:
-                    _log("销毁登录窗异常: " + str(e_d))
-                self._baidu_login_wv = None
-                # ★ 让 self._baidu_wv reload，确保 cookie 同步后 yunData 也读得到登录态
-                existing = getattr(self, "_baidu_wv", None)
-                if logged and existing is not None and login_w is not None:
-                    try:
-                        # 让 self._baidu_wv 重新触发页面/yunData 拉取
-                        ru = existing.evaluate_js("location.href") or ""
-                        if 'pan.baidu.com' in ru or 'yun.baidu.com' in ru:
-                            existing.evaluate_js("location.reload()")
-                            _log("已触发 self._baidu_wv reload（让 yunData 重新拉取）")
-                        else:
-                            _log("self._baidu_wv URL 非网盘域，跳过 reload")
-                    except Exception as e_re:
-                        _log("self._baidu_wv reload 异常: " + str(e_re))
-                result_holder["value"] = {
-                    "ok": logged,
-                    "logged": logged,
-                    "message": "登录完成，百度网盘登录态已保存到抽签窗口。" if logged else "登录超时（3 分钟），请重试。"
-                }
+                # ★ 2026-08-28 续35：彻底回到续27 的 self._baidu_wv 单实例方案。
+                # 续34 的独立 WKWebView 在 macOS 上跨实例 cookie 同步实际不可靠。
+                # 这里复用 self._baidu_wv + 加全局锁串行化 + 内部 reload 阻塞等 yunData.uk>0。
+                _lock = getattr(self, "_baidu_wv_lock", None)
+                if _lock is None:
+                    import threading as _th2
+                    _lock = _th2.Lock()
+                    self._baidu_wv_lock = _lock
+                _log("续35 进入串行锁，开始 baidu_login_serial")
+                with _lock:
+                    result = self._baidu_login_serial(log_path=_log_path, post_login_share_url=None)
+                result_holder["value"] = result
+                _log("续35 baidu_login_serial 返回: " + str(result)[:200])
             except Exception as e:
-                _log("登录窗口异常: " + str(e))
+                _log("baidu_login 外层异常: " + str(e))
                 result_holder["value"] = {"ok": False, "error": "EXCEPTION", "message": str(e)}
             finally:
                 result_holder["event"].set()
@@ -1298,6 +1300,167 @@ class VdlApi:
         _th.Thread(target=_run, daemon=True).start()
         result_holder["event"].wait(timeout=200)
         return json.dumps(result_holder["value"])
+
+    def _baidu_login_serial(self, log_path: str, post_login_share_url: str = None) -> dict:
+        """续35 在 self._baidu_wv_lock 内串行执行：登录 + 阻塞等 yunData.uk>0。
+
+        必须在 baidu_login 或 get_baidu_dlink 的 with self._baidu_wv_lock 内调用，
+        外面整个 baidu_login/dlink 都受锁保护，evaluate_js/load_url 不会撞车。
+        """
+        import time as _t
+        import webview as _wv
+
+        def _log(msg):
+            try:
+                with open(log_path, "a") as f:
+                    f.write("[" + _t.strftime("%H:%M:%S") + "] " + msg + "\n")
+            except Exception:
+                pass
+
+        def _is_logged_in(href_text):
+            try:
+                if not isinstance(href_text, str) or not href_text:
+                    return False
+                if 'passport.baidu.com' in href_text:
+                    return False
+                in_netdisk = ('pan.baidu.com' in href_text) or ('yun.baidu.com' in href_text)
+                if in_netdisk and (('/disk' in href_text) or ('/main' in href_text) or ('/s/' in href_text)):
+                    return True
+            except Exception:
+                pass
+            return False
+
+        def _yun_logged(wv):
+            try:
+                uk = wv.evaluate_js("(window.yunData && window.yunData.uk) || 0")
+                if isinstance(uk, (int, float)) and int(uk) > 0:
+                    return True, int(uk)
+                ls = wv.evaluate_js("(window.yunData && window.yunData.loginstate) || 0")
+                if isinstance(ls, (int, float)) and int(ls) == 1:
+                    return True, 0
+            except Exception:
+                pass
+            return False, 0
+
+        existing = getattr(self, "_baidu_wv", None)
+        if existing is not None:
+            try:
+                ok, _ = _yun_logged(existing)
+                if ok:
+                    _log("续35 复用已登录 self._baidu_wv（跳过重新登录）")
+                    return {"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。", "uk": 0}
+            except Exception:
+                pass
+
+        if existing is None:
+            try:
+                if post_login_share_url:
+                    new_wv = _wv.create_window(
+                        title="VDL-百度分享直链",
+                        url="about:blank",
+                        width=900, height=700, min_size=(480, 600),
+                        hidden=True,
+                    )
+                else:
+                    new_wv = _wv.create_window(
+                        title="VDL-登录百度网盘",
+                        url="about:blank",
+                        width=900, height=700, min_size=(480, 600),
+                    )
+                self._baidu_wv = new_wv
+                existing = new_wv
+                _t.sleep(1.5)
+                _log("续35 创建新 self._baidu_wv 实例")
+            except Exception as e_w:
+                _log("续35 创建 webview 失败: " + str(e_w))
+                return {"ok": False, "error": "WEBVIEW_INIT_FAILED", "message": str(e_w)}
+        w = existing
+        try:
+            w.show()
+            _log("已 show self._baidu_wv")
+        except Exception as e_show:
+            _log("show 异常（可能已显示）: " + str(e_show))
+
+        try:
+            import urllib.parse as _u
+            login_url = (
+                "https://passport.baidu.com/v2/?login&display=netdisk"
+                "&u=" + _u.quote_plus("https://pan.baidu.com/disk/main", safe='')
+            )
+            w.load_url(login_url)
+            _log("续35 加载登录页 url=" + login_url[:100])
+        except Exception as e_load:
+            _log("load 登录页异常: " + str(e_load))
+            return {"ok": False, "error": "LOAD_FAILED", "message": str(e_load)}
+
+        logged = False
+        for i in range(180):
+            _t.sleep(1)
+            try:
+                href = w.evaluate_js("location.href") or ""
+                if _is_logged_in(href):
+                    logged = True
+                    _log(f"续35 登录完成 (URL 跳转, s={i+1}, href={href[:80]})")
+                    break
+                ok, _ = _yun_logged(w)
+                if ok:
+                    logged = True
+                    _log(f"续35 登录完成 (yunData 确认, s={i+1}, href={href[:80]})")
+                    break
+            except Exception as ex_poll:
+                if i < 3 or i % 15 == 0:
+                    _log(f"  轮询 {i+1} 异常: {str(ex_poll)[:80]}")
+                continue
+        if not logged:
+            try:
+                w.hide()
+            except Exception:
+                pass
+            _log("⚠ 续35 登录超时（3 分钟）")
+            return {"ok": False, "logged": False, "error": "TIMEOUT", "message": "登录超时（3 分钟），请重试。"}
+
+        try:
+            w.hide()
+            _log("续35 登录窗已 hide（保留实例）")
+        except Exception:
+            pass
+        target_url = post_login_share_url or "https://pan.baidu.com/disk/main"
+        try:
+            w.load_url(target_url)
+            _log(f"续35 登录后 load_url: {target_url[:100]}")
+        except Exception as e_lu2:
+            _log("登录后 load_url 异常: " + str(e_lu2))
+
+        final_uk = 0
+        for j in range(60):
+            _t.sleep(0.5)
+            try:
+                uk = w.evaluate_js("(window.yunData && window.yunData.uk) || 0")
+                if isinstance(uk, (int, float)) and int(uk) > 0:
+                    final_uk = int(uk)
+                    _log(f"  ✔ 续35 yunData.uk 刷新={final_uk}（耗时 {(j+1)*0.5:.1f}s）")
+                    break
+            except Exception:
+                pass
+        if final_uk == 0:
+            _log("⚠ 续35 uk 仍=0，强制 location.reload() 再等 15s")
+            try:
+                w.evaluate_js("location.reload()")
+            except Exception:
+                pass
+            for k in range(30):
+                _t.sleep(0.5)
+                try:
+                    uk = w.evaluate_js("(window.yunData && window.yunData.uk) || 0")
+                    if isinstance(uk, (int, float)) and int(uk) > 0:
+                        final_uk = int(uk)
+                        _log(f"  ✔ reload 后 uk={final_uk}（再等 {(k+1)*0.5:.1f}s）")
+                        break
+                except Exception:
+                    pass
+        if final_uk == 0:
+            _log("✘ 续35 30s 后 uk 仍=0——返回 logged=true 但 uk=0，前端 dlink 可能仍失败")
+        return {"ok": True, "logged": True, "message": "登录完成。", "uk": final_uk}
 
     def save_commentary_file(self, job_id: str, filename: str) -> str:
         import requests
