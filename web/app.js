@@ -6263,6 +6263,10 @@
       }
       el.baiduShareStatus.textContent = `共 ${list.length} 项`;
       el.baiduShareStatus.className = 'baidu-share-status';
+      // 提取 list 级共享数据（必须在 map 之前声明，否则 TDZ ReferenceError）
+      const _listSekey = data.sekey || '';
+      const _listShareId = data.share_id != null ? data.share_id : null;
+      const _listUk = data.uk != null ? data.uk : null;
       el.baiduShareList.innerHTML = (crumbs ? `<div class="baidu-crumbs">${crumbs}</div>` : '')
         + list.map((it) => {
             const size = it.isdir ? '文件夹' : _fmtSize(it.size);
@@ -6301,10 +6305,6 @@
         });
       });
       // 转存下载按钮
-      // 保存 list 级别的 verify 结果（sekey/share_id/uk），下载时传入后端跳过重复 verify
-      const _listSekey = data.sekey || '';
-      const _listShareId = data.share_id != null ? data.share_id : null;
-      const _listUk = data.uk != null ? data.uk : null;
       el.baiduShareList.querySelectorAll('.dl button').forEach((b) => {
         const itemFsId = b.closest('.baidu-row')?.dataset?.fsid || '';
         b.addEventListener('click', () => startBaiduShareDownload({
