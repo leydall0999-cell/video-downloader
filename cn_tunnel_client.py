@@ -47,6 +47,76 @@ async def heartbeat(ws):
         pass
 
 
+async def watchdog(ws):
+    """应用层探针：周期性直连 Railway /api/cookie/pull-diag 检查 tunnel_ready。
+
+    背景：cn_tunnel_client 的 WS 连接可能进入"半死"状态——VPS 侧 TCP 层心跳
+    send 成功（运营商/proxy 保留 TCP），但 Railway 容器侧 _TUNNEL 已空，帧未
+    到达。这种场景主循环的 async for msg in ws 永远不会触发异常，也就无法
+    自动重连——必须依赖外部 restart。
+
+    本探针用 pull-diag 作为诊断金标准：tunnel 半死时 Railway /api/cookie/pull-diag
+    会报 tunnel_ready=false。连续 N 次失败后主动 ws.close(code=4000) 让主循环
+    except 触发重连。探针走 VPS→Railway 公开 HTTPS，**不依赖 tunnel**，因此
+    当 tunnel 半死时本探针必然观察到异常。
+
+    环境变量可调：
+      VDL_WATCHDOG_URL          探针 URL（默认 Railway pull-diag）
+      VDL_WATCHDOG_INTERVAL     探针间隔秒（默认 60）
+      VDL_WATCHDOG_TIMEOUT      单次探针超时秒（默认 15）
+      VDL_WATCHDOG_MAX_FAIL     连续失败多少次后强制重连（默认 3）
+    """
+    PROBE_URL = os.environ.get(
+        "VDL_WATCHDOG_URL",
+        "https://web-production-b9993.up.railway.app/api/cookie/pull-diag",
+    )
+    INTERVAL = int(os.environ.get("VDL_WATCHDOG_INTERVAL", "60"))
+    TIMEOUT = int(os.environ.get("VDL_WATCHDOG_TIMEOUT", "15"))
+    MAX_FAIL = int(os.environ.get("VDL_WATCHDOG_MAX_FAIL", "3"))
+
+    import urllib.request
+    import urllib.error
+    import ssl
+    import json as _json
+
+    ctx = ssl.create_default_context()
+    fail_count = 0
+    while True:
+        await asyncio.sleep(INTERVAL)
+        ok = False
+        err = ""
+        try:
+            req = urllib.request.Request(PROBE_URL, headers={"User-Agent": "cn_tunnel_client/watchdog"})
+            with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
+                data = _json.loads(resp.read().decode("utf-8", errors="ignore"))
+                ok = bool(data.get("tunnel_ready"))
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            err = f"{type(e).__name__}: {str(e)[:120]}"
+        except Exception as e:  # noqa: BLE001
+            err = f"{type(e).__name__}: {str(e)[:120]}"
+        if ok:
+            if fail_count:
+                print(f"[cn_tunnel_client] watchdog: 隧道恢复（fail_count 清零）", flush=True)
+            fail_count = 0
+            continue
+        fail_count += 1
+        print(
+            f"[cn_tunnel_client] watchdog: tunnel_ready=false fail_count={fail_count}/{MAX_FAIL}"
+            + (f" err={err}" if err else ""),
+            flush=True,
+        )
+        if fail_count >= MAX_FAIL:
+            print(
+                f"[cn_tunnel_client] watchdog: 连续 {MAX_FAIL} 次失败，主动 close ws 触发主循环重连",
+                flush=True,
+            )
+            try:
+                await ws.close(code=4000, reason="watchdog: tunnel half-dead, force reconnect")
+            except Exception:
+                pass
+            return  # 主循环会在 ws.close 后走 except 触发 RECONNECT 重连
+
+
 async def tunnel_client():
     send_lock = asyncio.Lock()
     # id -> (reader, writer, up_queue, up_task)
@@ -133,6 +203,7 @@ async def tunnel_client():
             ) as ws:
                 print(f"[cn_tunnel_client] connected {_WS_URL}", flush=True)
                 hb = asyncio.create_task(heartbeat(ws))
+                wd = asyncio.create_task(watchdog(ws))
                 try:
                     async for msg in ws:
                         if isinstance(msg, str):
@@ -166,6 +237,7 @@ async def tunnel_client():
                                     pass
                 finally:
                     hb.cancel()
+                    wd.cancel()
         except Exception as e:
             print(f"[cn_tunnel_client] error: {e}, reconnect in {RECONNECT}s", flush=True)
             # 清理所有会话
