@@ -81,7 +81,7 @@ from tasks import TaskStore, TASK_ID_LENGTH
 from llm_config import inject_llm_env, get_llm_config, save_llm_config, PROVIDER_PRESETS, DEFAULT_PROVIDER
 from vision_config import (
     inject_vision_env, get_vision_config, save_vision_config,
-    VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER,
+    VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER, platform_status,
 )
 
 # 暴露给 routers/vision.py 访问的共享内核（镜像 PROVIDER_PRESETS 等）
@@ -89,6 +89,7 @@ VISION_PROVIDER_PRESETS = VISION_PROVIDER_PRESETS
 VISION_DEFAULT_PROVIDER = VISION_DEFAULT_PROVIDER
 get_vision_config = get_vision_config
 save_vision_config = save_vision_config
+platform_status = platform_status
 from commentary_config import inject_commentary_env
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

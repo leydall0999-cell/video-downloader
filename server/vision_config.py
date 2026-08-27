@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import sys
 from pathlib import Path
 from typing import Any
@@ -204,3 +205,36 @@ def inject_vision_env(env: dict[str, str]) -> None:
     env["VDL_VISION_BASE_URL"] = base_url
     env["VDL_VISION_MODEL"] = model
     env["VDL_VISION_PROVIDER"] = provider
+
+
+def platform_status() -> dict[str, Any]:
+    """返回本机平台信息，供前端决定显示哪些针对性提示。
+
+    用途：
+      - is_apple_silicon：Apple M1/M2/M3 上 Ollama 运行 qwen2.5-vl 等多模态模型会因
+        Metal 后端 bug 崩溃（GGML_ASSERT），需提示用户改用「自动」（本地 OCR）或云端 provider。
+      - has_local_ocr：当前环境是否具备 macOS Apple Vision OCR（决定「自动」模式能否免 Key 离线识别）。
+    """
+    is_mac = sys.platform == "darwin"
+    machine = ""
+    try:
+        machine = platform.machine()
+    except Exception:
+        machine = ""
+    is_apple_silicon = is_mac and machine == "arm64"
+    has_local_ocr = False
+    if is_mac:
+        try:
+            import importlib  # noqa: F401
+            importlib.import_module("Quartz")
+            has_local_ocr = True
+        except Exception:
+            has_local_ocr = False
+    return {
+        "platform": sys.platform,
+        "machine": machine,
+        "is_apple_silicon": is_apple_silicon,
+        "has_local_ocr": has_local_ocr,
+        # Apple Silicon 的 Ollama 多模态模型 Metal 崩溃是已知问题，前端据此提示
+        "ollama_vision_known_issue": is_apple_silicon,
+    }

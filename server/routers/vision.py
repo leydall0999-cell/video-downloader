@@ -22,6 +22,11 @@ def vision_config_get() -> dict:
         cfg["api_key"] = key[:4] + "****" + key[-4:]
     return cfg
 
+@router.get("/api/vision/status")
+def vision_status() -> dict:
+    """返回本机平台与本地 OCR 可用性，供前端显示针对性提示（如 Apple Silicon 的 Ollama 视觉崩溃警告）。"""
+    return app.platform_status()
+
 @router.post("/api/vision/config")
 def vision_config_save(req: app.VisionConfigRequest) -> dict:
     """保存视觉模型配置。如果前端传了脱敏的 api_key(含 ****)则沿用已有 Key 不覆盖。"""

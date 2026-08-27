@@ -312,6 +312,7 @@
     visionBaseUrl: $('visionBaseUrl'),
     visionModel: $('visionModel'),
     visionNote: $('visionNote'),
+    visionRuntime: $('visionRuntime'),
     visionSave: $('visionSave'),
     visionStatus: $('visionStatus'),
     // 格式 / 片段加工（桌面版功能）
@@ -7889,6 +7890,7 @@
   (async () => {
     let providers = {};
     let defaultProvider = 'auto';
+    let platformStatus = null;  // 本机平台/本地 OCR 状态，用于针对性提示
     try {
       const r = await request('/api/vision/providers');
       if (r.ok) {
@@ -7897,6 +7899,34 @@
         defaultProvider = d.default || 'auto';
       }
     } catch (e) { /* 未启用时静默退 */ }
+
+    // 拉取本机平台/本地 OCR 状态，渲染针对性提示（如 Apple Silicon 的 Ollama 视觉崩溃警告）
+    try {
+      const r = await request('/api/vision/status');
+      if (r.ok) platformStatus = await r.json();
+    } catch (e) { /* 忽略 */ }
+
+    // 根据当前选中的 provider + 本机状态，渲染一段友好提示
+    function renderVisionRuntime(provider) {
+      const rt = el.visionRuntime;
+      if (!rt || !platformStatus) return;
+      const st = platformStatus;
+      const parts = [];
+      if (st.has_local_ocr) {
+        parts.push('✅ 本机 Apple Vision OCR 可用：选「自动」即可免 Key、离线识别片头集数/片名卡。');
+      } else if (st.platform === 'darwin') {
+        parts.push('⚠️ 当前 Mac 未加载本地 OCR（缺少 Quartz），选「自动」将降级到音频检测；建议装 Ollama 或用云端 Key。');
+      } else {
+        parts.push('ℹ️ 非 Mac 环境无免费本地 OCR：选「自动」会降级到音频检测，建议用 Ollama 或云端 Key。');
+      }
+      // 仅当选中 Ollama 且本机是 Apple Silicon 时，强调多模态模型崩溃风险
+      if (st.ollama_vision_known_issue && provider === 'ollama') {
+        parts.push('⚠️ Apple Silicon（M1/M2/M3）上，部分 Ollama 版本运行 qwen2.5-vl 等多模态模型会因 Metal 后端崩溃（GGML_ASSERT）；若选 Ollama 失败，请改用「自动」或云端 provider。');
+      }
+      rt.textContent = parts.join(' ');
+      const warn = (st.ollama_vision_known_issue && provider === 'ollama') || !st.has_local_ocr;
+      rt.style.color = warn ? '#e67e22' : '#27ae60';
+    }
 
     if (el.visionProvider) {
       el.visionProvider.innerHTML = '';
@@ -7918,6 +7948,8 @@
         // Ollama / 自动 模式下 Key 非必需，隐藏占位提示差异
         const needsKey = preset ? !!preset.needs_key : true;
         el.visionApiKey.placeholder = needsKey ? 'sk-...（必填）' : 'sk-...（Ollama/自动模式可留空）';
+        // 切换服务商后联动提示（尤其是 Apple Silicon 选 Ollama 的崩溃警示）
+        renderVisionRuntime(sel);
       });
     }
 
@@ -7932,6 +7964,8 @@
         if (el.visionModel) el.visionModel.value = cfg.model || '';
         const preset = providers[cfg.provider || defaultProvider];
         if (el.visionNote && preset && preset.note) el.visionNote.textContent = preset.note;
+        // 用已保存的 provider 渲染提示
+        renderVisionRuntime(cfg.provider || defaultProvider);
       }
     } catch (e) { /* */ }
 
