@@ -2263,7 +2263,9 @@
     const localCount = mcState.list.filter(x => x.localPath && !x.isResult).length;
     const uploadCount = mcState.list.filter(x => x.file && !x.isResult).length;
     if (localCount) mcStatusEl.textContent = `已添加 ${localCount} 个本地文件，可直接开始桥接`;
-    else if (uploadCount) mcStatusEl.textContent = `已添加 ${uploadCount} 个文件，自动上传…`;
+    else if (uploadCount) mcStatusEl.textContent = mcDesktopNative
+      ? `已添加 ${uploadCount} 个文件，自动上传中…（桌面端点「添加文件」按钮选本地文件可免上传）`
+      : `已添加 ${uploadCount} 个文件，自动上传…`;
     mcPump();
   };
 
@@ -2273,8 +2275,9 @@
     item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
     mcRender();
     const file = item.file;
-    // 桌面端本地上传可适当加大分片，减少 HTTP 往返
-    const chunkSize = (mcDesktopNative || file.size > 2 * 1024 * 1024 * 1024) ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    // 桥接的 HTTP 上传路径：与转码上传保持一致，>2GB 才用 64MB，否则 32MB
+    // 桌面端本地文件已走 localPath 跳过上传，不会进入此函数
+    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
     const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
     const uploadId = item._uploadId = 'mc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
