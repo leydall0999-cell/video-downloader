@@ -1144,12 +1144,20 @@ class VdlApi:
                 pass
             return False
 
+        # ★ 续32 强校验：**复用已登录窗口必须** yunData 也确认登录态。
+        # 单纯 URL 在 /s/<surl> 不能当"已登录"用——游客态首次进入分享页也是这个 URL。
+        # 只有 yunData.uk > 0 才是**真正登录的用户**，复用才不会漏判游客态。
         existing = getattr(self, "_baidu_wv", None)
         if existing is not None:
             try:
                 href = existing.evaluate_js("location.href")
-                if _is_logged_in(href) or _yun_logged(existing):
-                    _log("复用已登录 self._baidu_wv（" + str(href)[:80] + "），跳过重新登录")
+                # 复用判定：URL 信号 OR（严格）yunData 信号——任一即可，但要避开"URL 在 /s/<surl> 但 yunData 全是游客态"的假阳场景
+                if _yun_logged(existing):
+                    _log("复用已登录 self._baidu_wv（yunData 已确认登录，URL=" + str(href)[:80] + "），跳过重新登录")
+                    return json.dumps({"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。"})
+                # 兜底：在 /disk/main 等网盘首页 URL 上 + URL 离开 passport → 也算登录（yunData 尚未刷新的过渡态，3 秒内必定刷新）
+                if _is_logged_in(href) and not (href and '/s/' in href):
+                    _log("复用已登录 self._baidu_wv（URL 在网盘首页，URL=" + str(href)[:80] + "），跳过重新登录")
                     return json.dumps({"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。"})
             except Exception:
                 pass
