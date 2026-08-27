@@ -784,11 +784,11 @@
       <!-- 核心：解说类型 -->
       <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">解说类型</div>
-        <div class="com-opt-row">
-          <label class="com-mode-option"><input type="radio" name="comType" value="deep_hl" checked /><span><b>高光处叠加深度解说</b></span></label>
-          <label class="com-mode-option"><input type="radio" name="comType" value="normal_hl" /><span>高光部分普通解说</span></label>
-          <label class="com-mode-option"><input type="radio" name="comType" value="full_normal" /><span>全片普通解说</span></label>
-          <label class="com-mode-option"><input type="radio" name="comType" value="full_deep" /><span>全片深入解说</span></label>
+        <div class="com-mode-cards">
+          <label class="com-mode-card"><input type="radio" name="comType" value="deep_hl" checked /><span><b>高光处叠加深度解说</b><small>精彩片段 + 深度剖析，最有冲击力</small></span></label>
+          <label class="com-mode-card"><input type="radio" name="comType" value="normal_hl" /><span><b>高光部分普通解说</b><small>精彩片段 + 轻松讲解，节奏明快</small></span></label>
+          <label class="com-mode-card"><input type="radio" name="comType" value="full_normal" /><span><b>全片普通解说</b><small>完整视频 + 平实讲述，适合长视频</small></span></label>
+          <label class="com-mode-card"><input type="radio" name="comType" value="full_deep" /><span><b>全片深入解说</b><small>完整视频 + 深度解读，信息量大</small></span></label>
         </div>
       </div>
 
@@ -953,17 +953,19 @@
         </div>
       </div>
       <div class="com-vol-actions">
-        <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
-        <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview">▶ 试听当前设置</button>
+        <span class="com-vol-preview-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
+        <div class="com-vol-buttons">
+          <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview">▶ 试听当前设置</button>
+          <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
+        </div>
         <span class="com-status" id="comVolStatus" hidden></span>
       </div>
-      <div class="com-vol-preview-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</div>
     </div>
 
     <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main com-oneclick" id="comGenerateOneClick">⚡ 一键生成</button>
-      <button type="button" class="btn btn-primary com-generate-main" id="comGenerateScript">生成脚本（可审核修改）</button>
+      <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript">生成脚本（可审核修改）</button>
     </div>
     <p class="com-oneclick-note">一键生成：AI 高度自由发挥 + 自动联网查找资料 + 全片深入解说 + 片头插入高光钩子 + 单行字幕（与原字幕同行）+ 仅羽化原字幕 + 弱化原声</p>
     <!-- 解说进度条：阶段标签 + 百分比 + 渐变填充条 -->
