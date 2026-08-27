@@ -1108,33 +1108,48 @@ class VdlApi:
         # 复用已登录的窗口实例（同一 WKWebView → cookie 在内存立即可用，无需重新登录）
         # 登录态判断用 URL（登录成功会跳 /disk，未登录停在登录页），
         # 不能用 yunData.loginstate（网盘主页没有 yunData，会误判未登录）。
-        existing = getattr(self, "_baidu_wv", None)
-        if existing is not None:
+        # ★ 2026-08-27 续32 关键修复：登录回跳目标可以是 /s/<surl>（分享页），
+        # 也可跳 /disk/main（网盘首页）。不能硬卡 /disk|/main。
+        # 已登录的多元信号，**任一成立**即视作登录成功：
+        #   ① URL 完全离开 passport.baidu.com，并进入 netdisk/yun/disk 任一 BAIDU 域
+        #   ② window.yunData.uk > 0（真实用户 ID，登录后 SPA 会刷新此值）
+        #   ③ window.yunData.loginstate == 1
+        def _is_logged_in(href_text: str) -> bool:
             try:
-                href = existing.evaluate_js("location.href")
-                if isinstance(href, str) and ('/disk' in href or '/main' in href or 'yun.baidu.com' in href):
-                    _log("复用已登录窗口，跳过重新登录")
-                    return json.dumps({"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。"})
+                if not isinstance(href_text, str) or not href_text:
+                    return False
+                if 'passport.baidu.com' in href_text:
+                    return False
+                in_baidu_netdisk = ('pan.baidu.com' in href_text) or ('yun.baidu.com' in href_text)
+                on_baidu_root = ('/disk' in href_text) or ('/main' in href_text) or ('yun.baidu.com' in href_text)
+                # ① 在百度网盘域且不在 passport（任何网盘/分享页都算 OK 信号）
+                if in_baidu_netdisk and on_baidu_root:
+                    return True
+                # ③ 分享页 /s/<surl> 也算合法登录态（登录回跳来源页）
+                if in_baidu_netdisk and '/s/' in href_text:
+                    return True
             except Exception:
                 pass
+            return False
 
-        # ★ 2026-08-27 续26：检测本地是否有已缓存的 BDUSS cookie
-        # ★ 2026-08-27 续27 重大修复：macOS WKWebView 跨实例 cookie **不共享**。
-        # 之前的「缓存灌 cookie」分支创建了一个新的 hidden WebView，把 BDUSS 灌进去，
-        # 但 get_baidu_dlink 用 self._baidu_wv（另一个 WKWebView 实例）抽签，根本读不到
-        # 那个 cookie → yunData.uk 永远是 0 → 一直失败。
-        # 真实可用方案：复用 self._baidu_wv。get_baidu_dlink 已经创建了它，
-        # 这里只要把它当登录窗用：show() + load 登录页 + 用户扫码 → 同一实例内存的
-        # cookie 自动共享给后续抽签。
+        def _yun_logged(wv) -> bool:
+            try:
+                uk = wv.evaluate_js("(window.yunData && window.yunData.uk) || 0")
+                if isinstance(uk, (int, float)) and int(uk) > 0:
+                    return True
+                ls = wv.evaluate_js("(window.yunData && window.yunData.loginstate) || 0")
+                if isinstance(ls, (int, float)) and int(ls) == 1:
+                    return True
+            except Exception:
+                pass
+            return False
+
         existing = getattr(self, "_baidu_wv", None)
         if existing is not None:
             try:
                 href = existing.evaluate_js("location.href")
-                # BDUSS HttpOnly → document.cookie 读不到；用 URL 在网盘首页作为登录态信号
-                if isinstance(href, str) and 'passport.baidu.com' not in href \
-                        and ('pan.baidu.com' in href or 'yun.baidu.com' in href) \
-                        and ('/disk' in href or '/main' in href):
-                    _log("复用已登录 self._baidu_wv（" + href[:80] + "），跳过重新登录")
+                if _is_logged_in(href) or _yun_logged(existing):
+                    _log("复用已登录 self._baidu_wv（" + str(href)[:80] + "），跳过重新登录")
                     return json.dumps({"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。"})
             except Exception:
                 pass
@@ -1179,24 +1194,21 @@ class VdlApi:
                 # ★ 2026-08-27 续30 关键修复：BDUSS 是 HttpOnly cookie，
                 # `document.cookie` 读不到 → 之前用 "'BDUSS' in ck" 永远 False，
                 # 登录后 URL 已跳到 /disk/main 但检测失败，窗口永不 hide。
-                # 正确信号：URL 从 passport.baidu.com 跳到 pan.baidu.com/yun.baidu.com 网盘首页
-                # （登录成功必跳 /disk/main 或 yun.baidu.com/disk）。
+                # ★ 2026-08-27 续32 修复：扫码登录成功后百度会**回跳来源页**（/s/<surl>），
+                # 并不总是到 /disk/main → 必须用多元登录信号判断（URL/yunData.uk/loginstate）。
                 logged = False
                 for i in range(180):  # 最多 3 分钟
                     _t.sleep(1)
                     try:
                         href = w.evaluate_js("location.href") or ""
-                        if href and 'passport.baidu.com' not in href \
-                                and ('pan.baidu.com' in href or 'yun.baidu.com' in href) \
-                                and ('/disk' in href or '/main' in href):
+                        if _is_logged_in(href):
                             logged = True
-                            _log("登录完成 (URL 跳转: " + href[:80] + ", s=" + str(i+1) + ")")
+                            _log("登录完成 (URL 跳转: " + str(href)[:80] + ", s=" + str(i+1) + ")")
                             break
-                        # 兜底：yunData.loginstate == 1（分享页等可能有）
-                        ls = w.evaluate_js("(window.yunData && window.yunData.loginstate) || 0")
-                        if isinstance(ls, (int, float)) and int(ls) == 1:
+                        # 兜底：yunData.uk > 0 或 loginstate == 1（分享页 URL 不动也会触发）
+                        if _yun_logged(w):
                             logged = True
-                            _log("登录完成 (yunData.loginstate=1, s=" + str(i+1) + ")")
+                            _log("登录完成 (yunData.uk>0 或 loginstate=1, s=" + str(i+1) + ", url=" + str(href)[:80] + ")")
                             break
                     except Exception:
                         pass
