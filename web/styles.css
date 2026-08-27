@@ -1767,6 +1767,7 @@ img { max-width: 100%; display: block; }
   padding: 0; background: none; border: none;
 }
 .com-opt-block-full { grid-column: 1 / -1; }
+.com-style-section { margin-top: .75rem; }
 
 /* 配音与音量：独立卡片，避免与左侧贴边 */
 #comVolumeBlock {
@@ -1964,24 +1965,26 @@ img { max-width: 100%; display: block; }
 .com-opt-row-styles .com-mode-option { flex: 0 0 auto; }
 .com-opt-row-styles .com-mode-option > span { text-align: center; }
 
-/* 高级剪辑：折叠区 */
+/* 高级剪辑：折叠区，视觉上与卡片标题左对齐、不额外内缩 */
 .com-opts-inner {
   display: grid;
   grid-template-columns: 1fr;
   align-items: start;
   gap: .45rem;
-  padding: .5rem .7rem .65rem;
+  padding: .45rem 0 .55rem;
+  border-top: 1px solid var(--line);
 }
 .com-advanced {
   grid-column: 1 / -1;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg) 55%, var(--surface));
-  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  margin-top: .25rem;
 }
 .com-adv-summary {
-  display: flex; align-items: baseline; gap: .5rem;
-  padding: .55rem .7rem;
+  display: inline-flex; align-items: baseline; gap: .5rem;
+  padding: .35rem 0;
   cursor: pointer;
   font-size: .82rem; font-weight: 700; color: var(--text);
   list-style: none; user-select: none;
@@ -1995,7 +1998,7 @@ img { max-width: 100%; display: block; }
   font-weight: 400; font-size: .72rem; color: var(--text-mute);
 }
 .com-advanced[open] > .com-adv-summary {
-  border-bottom: 1px solid var(--line);
+  border-bottom: none;
 }
 
 @media (max-width: 1024px) {
@@ -2039,10 +2042,9 @@ img { max-width: 100%; display: block; }
   font-size: .82rem; line-height: 1.6; color: var(--text-mute);
 }
 .com-style-hint {
-  margin: .5rem 0 0; font-size: .8rem; line-height: 1.55; color: var(--text-mute);
+  margin: .4rem 0 0; font-size: .78rem; line-height: 1.55; color: var(--text-mute);
   min-height: 1.4em;
 }
-.com-style-hint:not(:empty) { color: var(--accent); }
 .com-script-head {
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: .75rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line);
@@ -2109,16 +2111,16 @@ img { max-width: 100%; display: block; }
 .consent-note { margin: .9rem 0 0; font-size: .75rem; color: var(--text-mute); line-height: 1.5; }
 
 /* 配音与音量：试听提示 */
-.com-vol-preview-hint { margin: 0; font-size: .76rem; color: var(--text-mute); line-height: 1.5; max-width: 420px; }
+.com-vol-preview-hint { margin: 0; font-size: .76rem; color: var(--text-mute); line-height: 1.5; max-width: 380px; }
 
 /* 弹窗操作行（确认 / 取消按钮） */
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
 
 /* ── 配音与音量手动调节面板 ── */
-.com-vol-row { display: flex; flex-wrap: wrap; gap: 1.1rem 2rem; margin-top: .6rem; }
-.com-vol-item { display: flex; flex-direction: column; gap: .35rem; min-width: 260px; flex: 1 1 260px; }
+.com-vol-row { display: flex; flex-wrap: wrap; gap: .8rem 1.5rem; margin-top: .45rem; }
+.com-vol-item { display: flex; flex-direction: column; gap: .25rem; min-width: 240px; flex: 1 1 240px; }
 .com-vol-label { font-size: .85rem; font-weight: 600; color: var(--text); }
-.com-vol-ctrl { display: flex; align-items: center; gap: .7rem; }
+.com-vol-ctrl { display: flex; align-items: center; gap: .6rem; }
 .com-vol-ctrl input[type="range"] { flex: 1 1 auto; accent-color: var(--accent, #2563eb); height: 4px; }
 .com-vol-val { min-width: 64px; text-align: right; font-size: .82rem; color: var(--accent, #2563eb); font-variant-numeric: tabular-nums; font-weight: 600; }
 .com-vol-off { font-size: .78rem; color: var(--text-mute); display: flex; align-items: center; gap: .35rem; cursor: pointer; }
@@ -2126,12 +2128,12 @@ img { max-width: 100%; display: block; }
 .com-vol-actions {
   display: flex; justify-content: space-between; align-items: center;
   gap: 1rem;
-  margin-top: 1rem;
-  padding-top: .75rem;
+  margin-top: .75rem;
+  padding-top: .6rem;
   border-top: 1px solid var(--line);
 }
 .com-vol-buttons {
-  display: flex; align-items: center; gap: .6rem;
+  display: flex; align-items: center; gap: .55rem;
   flex-shrink: 0;
 }
 .com-opt-tip { font-size: .72rem; color: var(--text-mute); font-weight: 400; }
