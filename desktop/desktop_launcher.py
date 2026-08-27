@@ -469,12 +469,14 @@ class VdlApi:
                     })
                     _log("=== WEBVIEW_UNAVAILABLE ===")
                     return
-                # 确保窗口可见（之前登录后已 hide），避免屏幕外 SPA 不渲染
-                try:
-                    temp.show()  # 如果窗口之前被 hide，先显示
-                    temp.move(50, 50)  # 再移到屏幕内可见位置
-                except Exception:
-                    pass
+                # ★ 2026-08-27 续24 关键修复：抽签 WebView 自始至终隐藏，绝不 show()
+                # 之前实测用户看到的就是这个 get_baidu_dlink 创建的 WKWebView。
+                # 原始创建已 hidden=True，但下面又 temp.show() 强行弹出，等于自相矛盾
+                # —— 用户实测：弹出"VDL-百度分享直链"+百度分享页内容 + 拦截/抽签全失败。
+                # macOS WKWebView 是离屏渲染的，hidden 状态下 load_url + evaluate_js
+                # 完全可用（pywebview 设计如此），不需要 show 也能完成抽签。
+                # 用户主动登录的窗口由 baidu_login() 自己创建，那里显式可见。
+                _log("WebView 保持 hidden（后台抽签，不弹窗）")
                 # 用 native load_url + location.reload() 强制完整重新加载分享页
                 # 关键发现（Playwright 实测）：evaluate_js("location.href='分享页'")
                 # 会被百度服务端 302 重定向到 /share/init?surl=... 中间页（body=71 框架，无下载按钮）。
