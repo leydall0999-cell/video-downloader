@@ -867,11 +867,12 @@
             <div class="com-opt-row">
               <select id="comTtsProvider" class="com-select">
                 <option value="">默认（微软 edge-tts）</option>
-                <option value="indextts2">IndexTTS2 本地语音克隆（需先起推理服务）</option>
+                <option value="indextts_mlx">IndexTTS-MLX 本地语音克隆（Mac 推荐，需先起 7866 服务）</option>
+                <option value="indextts2">IndexTTS2 本地语音克隆（Mac 因依赖墙跑不起来，不推荐）</option>
                 <option value="minimax">MiniMax 海螺</option>
                 <option value="siliconflow">SiliconFlow</option>
               </select>
-              <span class="com-retain-hint">indextts2 需在终端先启动本地推理服务（start_indextts2_server.py）</span>
+              <span class="com-retain-hint">indextts_mlx 为 Apple Silicon 原生 MLX 版，需在终端先启动 IndexTTS-MLX-1.5-Pack 服务（默认 http://127.0.0.1:7866），参考音频在解说面板「全局配音」里用 indextts_mlx:/路径/参考.wav 指定</span>
             </div>
           </div>
         </div>
