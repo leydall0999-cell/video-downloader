@@ -661,7 +661,9 @@ class VdlApi:
                                 if (uk === 0 || uk === '0') {
                                     if (!surl) { setResult({ok:false, errno:-101, message:'yunData.uk=0 且无法提取 surl（未登录或页面未就绪）'}); return; }
                                 }
-                                if (!bdstoken) { setResult({ok:false, errno:-102, message:'yunData.bdstoken 缺失（页面未完全加载）'}); return; }
+                                // ★ 2026-08-27 续29：游客态 bdstoken 本就为空，不阻断。
+                                // surl 路径拿 sign 不依赖 bdstoken；sharedownload 的 bdstoken 参数游客态留空即可。
+                                if (!bdstoken) { window.__vdl_guest_no_bdstoken = true; }
                                 // tplconfig 候选 URL：surl 优先，shareid+uk 兜底
                                 var tplUrls = [];
                                 if (surl) tplUrls.push('https://pan.baidu.com/share/tplconfig?fields=sign,timestamp&view_mode=1&channel=chunlei&web=1&app_id=250528&bdstoken=&clienttype=0&surl=' + encodeURIComponent(surl));
@@ -713,7 +715,7 @@ class VdlApi:
                                 }
                                 // ★ 2026-08-27 续23：sharedownload 返回需登录 errno 时映射成 REQUIRES_LOGIN
                                 //   让前端用「立即登录」按钮明确触发，而非弹窗偷袭
-                                var LOGIN_REQUIRED_ERRNOS = [-6, -9, 112, 113, 200020, 200025];
+                                var LOGIN_REQUIRED_ERRNOS = [-6, -9, -12, 112, 113, 200020, 200025];
                                 if (sd && sd.errno === 0 && sd.dlink) {
                                     setResult({ok:true, dlink:sd.dlink, filename:(sd.list && sd.list[0] && sd.list[0].filename) || 'file'});
                                 } else if (sd && LOGIN_REQUIRED_ERRNOS.indexOf(sd.errno) !== -1) {
@@ -828,11 +830,19 @@ class VdlApi:
                         _log("  📋 yunData诊断: " + str(_diag))
                         _uk_check = temp.evaluate_js("(window.yunData && window.yunData.uk > 0) ? 1 : 0")
                         _bd_check = temp.evaluate_js("(window.yunData && window.yunData.bdstoken) ? 1 : 0")
-                        if _uk_check != 1 or _bd_check != 1:
-                            _log("  ❌ yunData 数据不完整(uk=" + str(_uk_check) + ", bdstoken=" + str(_bd_check) + ")，需等待页面完全加载")
-                        else:
-                            _log("  ★ yunData 完整(uk>0, bdstoken有值)，body较短但数据可用")
+                        # ★ 2026-08-27 续29 关键修复：游客态(uk=0/bdstoken空)是百度分享页常态，
+                        # 不代表"页面未加载"。只要 yunData 有 shareid 且 URL 含 /s/<surl>，
+                        # 就允许走游客态抽签（tplconfig 用 surl 公开拿 sign，无需登录）。
+                        # 实测：curl 游客态 /share/tplconfig?...surl=... 返回 errno=0 + sign。
+                        _surl_ok = temp.evaluate_js("!!(location.pathname.match(/\\/s\\/[A-Za-z0-9_-]+/))")
+                        if _uk_check == 1 and _bd_check == 1:
+                            _log("  ★ yunData 完整(uk>0, bdstoken有值)，登录态数据可用")
                             page_ready = True
+                        elif _surl_ok:
+                            _log("  ★ 游客态(uk=" + str(_uk_check) + ", bdstoken=" + str(_bd_check) + ")，但有 surl，允许游客态抽签(surl 路径)")
+                            page_ready = True
+                        else:
+                            _log("  ❌ yunData 数据不完整且无 surl，无法继续(uk=" + str(_uk_check) + ", bdstoken=" + str(_bd_check) + ")")
                     except Exception:
                         pass
 
