@@ -6158,6 +6158,41 @@
     }
   });
 
+  // 粘贴分享链接后自动列出文件（无需点「列出文件」，也无需登录）
+  el.baiduShareUrl.addEventListener('paste', () => {
+    setTimeout(() => {
+      const parsed = parseBaiduShareText(el.baiduShareUrl.value || '');
+      const url = parsed.url || el.baiduShareUrl.value.trim();
+      const pwd = parsed.pwd || el.baiduSharePwd.value.trim();
+      if (url && /pan\.baidu\.com\/s\//.test(url)) {
+        renderShareList(url, pwd, '', false);
+      }
+    }, 0);
+  });
+  // 提取码填好后若已贴链接，自动按新提取码重列
+  el.baiduSharePwd.addEventListener('change', () => {
+    const url = parseBaiduShareText(el.baiduShareUrl.value || '').url || el.baiduShareUrl.value.trim();
+    if (url && /pan\.baidu\.com\/s\//.test(url)) {
+      renderShareList(url, el.baiduSharePwd.value.trim(), '', false);
+    }
+  });
+
+  // 一键下载全部已列出文件（无需登录，走本机 Cookie 直链）
+  function downloadAllShareFiles() {
+    if (!_lastShareItems.length) {
+      el.baiduShareStatus.textContent = '请先粘贴链接列出文件，再下载全部';
+      el.baiduShareStatus.className = 'baidu-share-status is-err';
+      return;
+    }
+    el.baiduShareStatus.textContent = `已提交 ${_lastShareItems.length} 个文件到下载队列（无需登录，走本机 Cookie 直链）…`;
+    el.baiduShareStatus.className = 'baidu-share-status';
+    _lastShareItems.forEach((item, i) => {
+      setTimeout(() => startBaiduShareDownload(item), i * 400);
+    });
+  }
+  const baiduShareDownloadAllBtn = document.getElementById('baiduShareDownloadAllBtn');
+  if (baiduShareDownloadAllBtn) baiduShareDownloadAllBtn.addEventListener('click', downloadAllShareFiles);
+
   async function restoreBaiduToken() {
     // localStorage 优先；为空时回退本机服务端持久化的令牌（重启后免重复授权）
     if (baiduToken) return;
@@ -6178,6 +6213,8 @@
 
   // 分享当前上下文（用于文件夹展开）
   let _shareCtx = { url: '', pwd: '', dir: '' };
+  // 当前列出的可下载文件项（供「下载全部」使用）
+  let _lastShareItems = [];
 
   // 递归渲染分享列表（支持面包屑导航 + 点文件夹展开）
   async function renderShareList(url, pwd, subDir, pwdSynced) {
@@ -6217,6 +6254,7 @@
         });
       }
       if (!list.length) {
+        _lastShareItems = [];
         el.baiduShareStatus.textContent = subDir ? `${subDir} 为空` : '该分享为空或链接已失效';
         el.baiduShareStatus.className = 'baidu-share-status';
         el.baiduShareList.innerHTML = (crumbs ? `<div class="baidu-crumbs">${crumbs}</div>` : '')
@@ -6240,6 +6278,12 @@
               <span class="dl">${btn}</span>
             </div>`;
           }).join('');
+      // 记录当前列出的文件项（供「下载全部」使用）
+      _lastShareItems = list.filter((it) => !it.isdir).map((it) => ({
+        path: it.path, name: it.name, url, pwd,
+        _sekey: _listSekey, _share_id: _listShareId, _uk: _listUk,
+        fs_id: it.fs_id != null ? Number(it.fs_id) : null,
+      }));
       // 文件夹点击/展开按钮
       el.baiduShareList.querySelectorAll('.open, .name[data-open]').forEach((el_) => {
         el_.addEventListener('click', (e) => {
@@ -6338,7 +6382,12 @@
   refreshBaiduLoginStatus();
 
   async function startBaiduShareDownload(item) {
-    if (!baiduToken) { el.baiduShareStatus.textContent = '请先点「授权百度网盘」完成授权'; el.baiduShareStatus.className = 'baidu-share-status is-err'; return; }
+    // 无需强制 OAuth：后端 download_share 会自动按「BDUSS 直链 → transfer」多级策略选路，
+    // 本机已保存网盘 Cookie（~/.vdl/baidu_bduss.txt）即可直接下载，不弹登录窗。
+    if (!baiduToken) {
+      el.baiduShareStatus.textContent = '未授权 OAuth，将使用本机已保存的网盘 Cookie 直链下载（无需登录）…';
+      el.baiduShareStatus.className = 'baidu-share-status';
+    }
 
     // ★ 策略 0：通过 WebView 注入 JS 预取 dlink（最可靠，等同油猴原理）
     const _doDownload = (prefetchedDlink) => {
@@ -6386,39 +6435,22 @@
         if (info && info.ok && info.dlink) {
           return _doDownload(info.dlink);  // ★ 拿到直链 → 策略0
         }
-        // 未登录 / 登录态失效 / 无登录cookie → 静默打开 app 内登录窗口，登录成功后自动重试一次。
-        // 不显示红色错误：用户体验上等价于「下载需要先登录一次」，自动弹出窗口就好。
+        // 未登录 app 内 WebView：不强制弹登录窗，直接走后端 BDUSS 直链（本机已存 Cookie 即可下载）。
+        // 用户想获得更快/更稳的极速通道，可自愿点「🔑 极速通道（可选）」登录。
         if (info && (info.error === 'NOT_LOGGED_IN' || info.error === 'NO_LOGIN_COOKIE')) {
-          el.baiduShareStatus.textContent = info.error === 'NO_LOGIN_COOKIE'
-            ? '检测到未登录百度网盘，请在弹出的窗口完成登录…'
-            : '首次下载需登录百度网盘，请在弹出的窗口完成登录…';
+          el.baiduShareStatus.textContent = '未登录 WebView，正使用本机已保存的网盘 Cookie 直链下载（无需登录）…';
           el.baiduShareStatus.className = 'baidu-share-status';
-          let loginRes = null;
-          try { loginRes = await window.pywebview.api.baidu_login(); } catch (le) { loginRes = null; }
-          // 兼容桥接可能返回字符串：typeof + JSON.parse fallback
-          let loginInfo = loginRes;
-          if (typeof loginRes === 'string') {
-            try { loginInfo = JSON.parse(loginRes); } catch { loginInfo = null; }
-          }
-          if (loginInfo && (loginInfo.ok || loginInfo.logged)) {
-            el.baiduShareStatus.textContent = '登录成功，正在获取直链…';
-            el.baiduShareStatus.className = 'baidu-share-status';
-            const info2 = await callGetDlink();
-            if (info2 && info2.ok && info2.dlink) {
-              return _doDownload(info2.dlink);
-            }
-            info = info2 || info;
-          }
+          return _doDownload('');  // 兜底到后端策略2（BDUSS 直链 + aria2c）
         }
-        // 其它错误：提示，不再降级浏览器
+        // 其它错误（非「未登录」）：WebView 预取失败不影响下载，回退后端 BDUSS 直链兜底
         const msg = (info && info.message) || ('WebView 获取失败：' + ((info && info.error) || '未知'));
-        el.baiduShareStatus.textContent = '⚠ ' + msg;
-        el.baiduShareStatus.className = 'baidu-share-status is-err';
-        return;  // ★ 停止，绝不回退浏览器
+        el.baiduShareStatus.textContent = '⚠ WebView 预取直链失败（' + msg + '），改走本机 Cookie 直链下载…';
+        el.baiduShareStatus.className = 'baidu-share-status';
+        return _doDownload('');  // ★ 回退后端策略2（BDUSS 直链 + aria2c），绝不中断下载
       } catch (e) {
-        el.baiduShareStatus.textContent = '⚠ WebView 获取异常：' + e.message;
-        el.baiduShareStatus.className = 'baidu-share-status is-err';
-        return;
+        el.baiduShareStatus.textContent = '⚠ WebView 预取异常（' + e.message + '），改走本机 Cookie 直链下载…';
+        el.baiduShareStatus.className = 'baidu-share-status';
+        return _doDownload('');  // ★ 回退后端策略2，绝不中断下载
       }
     }
     // 回退：无 WebView / 无 fs_id → 走原有 transfer/dlink/浏览器降级链路

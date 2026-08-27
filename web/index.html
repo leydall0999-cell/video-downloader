@@ -7,7 +7,16 @@
 <meta name="theme-color" content="#4f46e5" />
 <title>视频下载站 · 粘贴链接即可保存</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⬇️</text></svg>" />
-<link rel="stylesheet" href="styles.css" />
+<script>
+  // styles.css 缓存击穿：与 app.js 同机制（dev 用时间戳、打包用构建戳），
+  // 否则 WKWebView 会缓存旧 CSS，导致改样式后界面不更新。放在 head 同步写入避免闪烁。
+  (function () {
+    var fp = '__BUILD_FP__';
+    var isBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
+    var v = isBuild ? fp : ('dev' + Date.now());
+    document.write('<link rel="stylesheet" href="styles.css?v=' + encodeURIComponent(v) + '">');
+  })();
+</script>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
@@ -1367,18 +1376,19 @@
 
     <div class="baidu-share">
       <h3 class="baidu-share-title">📎 分享链接下载</h3>
-      <p class="modal-sub baidu-share-sub">粘贴别人分享的百度网盘链接 + 提取码，登录你<strong>自己的</strong>账号后自动转存到你的网盘再下载（官方通道，速度由你账号等级决定）。</p>
+      <p class="modal-sub baidu-share-sub">粘贴别人分享的百度网盘链接 + 提取码，<strong>无需登录</strong>即可直接提取并下载（自动使用本机已保存的网盘 Cookie 走直链通道）。登录「极速通道」后速度更快，但不登录也能下。</p>
       <div class="baidu-share-row">
         <input type="text" id="baiduShareUrl" class="adv-input" placeholder="https://pan.baidu.com/s/..." />
         <input type="text" id="baiduSharePwd" class="adv-input adv-input-pwd" placeholder="提取码（可选）" />
         <button type="button" class="btn btn-primary btn-sm" id="baiduShareListBtn">列出文件</button>
+        <button type="button" class="btn btn-accent btn-sm" id="baiduShareDownloadAllBtn">下载全部</button>
       </div>
       <div class="baidu-bduss-row">
-        <button type="button" class="btn btn-primary btn-sm" id="baiduAppLoginBtn">🔑 登录百度网盘（下载分享必需）</button>
+        <button type="button" class="btn btn-primary btn-sm" id="baiduAppLoginBtn">🔑 极速通道（可选，登录后更快）</button>
         <span class="baidu-login-status" id="baiduLoginStatus"></span>
       </div>
       <p class="baidu-share-status" id="baiduShareStatus"></p>
-      <div class="baidu-list baidu-share-list" id="baiduShareList"><p class="baidu-empty">粘贴分享链接后点「列出文件」。</p></div>
+      <div class="baidu-list baidu-share-list" id="baiduShareList"><p class="baidu-empty">粘贴分享链接后自动列出，点文件名右侧按钮即可下载（无需登录）。</p></div>
 
     <!-- 扫码登录弹窗已移除：扫码登录的 BDUSS 与下载分享必需的 WebView 登录态是两回事，
          保留会让用户混淆。现在只需点「🔑 登录百度网盘」一次，登录态持久化在 app 内 WebView。 -->
