@@ -7200,8 +7200,10 @@
     if (btn) btn.addEventListener('click', () => switchView(view));
   }
   // 百度网盘 / 百度下载 是 fixed alias（无 data-view），单独绑
-  if (el.sTabBaidu) el.sTabBaidu.addEventListener('click', () => switchView('baidu'));
-  if (el.sTabPcs) el.sTabPcs.addEventListener('click', () => switchView('pcs'));
+  // 修复：原绑 switchView('baidu'/'pcs') 无效（switchView 不识别这两个 case），
+  // 改为转发到顶 tab click，复用其 modal 打开/状态刷新/扫码等完整逻辑。
+  if (el.sTabBaidu) el.sTabBaidu.addEventListener('click', () => el.tabBaidu && el.tabBaidu.click());
+  if (el.sTabPcs) el.sTabPcs.addEventListener('click', () => tabPcsEl && tabPcsEl.click());
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {
