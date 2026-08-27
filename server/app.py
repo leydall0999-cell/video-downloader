@@ -992,7 +992,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     return args
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None) -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -1016,7 +1016,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                     one_click=one_click, vision=vision,
                                     tts_provider=tts_provider, correct_transcript=correct_transcript, style=style,
                                     intro_sec=intro_sec, outro_sec=outro_sec,
-                                    drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec)
+                                    drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
+                                    export_jianying=export_jianying)
     try:
         # 调用前先确认运行环境就绪，失败直接给清晰错误，避免盲目 subprocess 后误报「执行成功」
         if not COMMENTARY_RT.ready():
@@ -1099,6 +1100,14 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             if script_only:
                 args.append("--script-only")
             args += extra
+
+        if export_jianying:
+            # 成片生成后再导出剪映可编辑草稿（视频轨+配音轨+字幕轨），供用户在剪映二次精修
+            if export_jianying == "__default__":
+                # 前端留空时，默认落到解说输出目录下的「<片名>-剪映草稿」
+                _stem = _safe_output_stem(title) or base
+                export_jianying = str(out_dir / f"{_stem}-jianying")
+            args += ["--export-jianying", export_jianying]
 
         run_env = COMMENTARY_RT.env()
         if tts_provider:
@@ -1233,7 +1242,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         logger.exception("解说任务 %s 失败", job_id)
 
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None) -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "") -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}
@@ -1289,6 +1298,7 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
             "vision": "true" if vision else "false",
             "tts_provider": tts_provider or "",
             "correct_transcript": correct_transcript or "",
+            "export_jianying": export_jianying or "",
         }
             if retain_pct is not None:
                 data["retain_pct"] = str(retain_pct)
@@ -1709,6 +1719,9 @@ class CommentaryRequest(BaseModel):
     correct_transcript: str = Field(default="", max_length=32, description="转写稿 ASR 校正: '0'=关闭(省 token); 空=默认开启(LLM 修正同音错字/专有名词)")
     mode: str | None = Field(default=None,
                              description="(旧版兼容) 三选一解说模式，会被上面的新选项覆盖")
+    export_jianying: str = Field(default="", max_length=2048,
+                                 description="导出剪映草稿目录: 非空时成片生成后再导出剪映可编辑草稿"
+                                             "(视频轨+配音轨+字幕轨), 可在剪映里二次精修; 空=不导出")
 
 
 class ScriptUpdateRequest(BaseModel):

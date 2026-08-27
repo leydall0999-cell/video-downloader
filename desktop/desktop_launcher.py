@@ -276,6 +276,27 @@ class VdlApi:
         except Exception as exc:  # 把错误回传前端展示
             return f"ERROR: {exc}"
 
+    def choose_folder(self) -> str:
+        """弹出系统文件夹选择框，返回所选目录绝对路径；用户取消或失败返回空串。
+
+        用 tkinter 原生对话框实现（Python 标准库自带，跨平台），所有异常都捕获，
+        失败仅返回空串，前端自动回退到手动输入路径，绝不影响主流程。
+        """
+        try:
+            import tkinter as _tk
+            from tkinter import filedialog as _fd
+            root = _tk.Tk()
+            root.withdraw()
+            try:
+                root.attributes("-topmost", True)
+            except Exception:
+                pass
+            path = _fd.askdirectory(title="选择剪映草稿导出目录")
+            root.destroy()
+            return path or ""
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
     def get_baidu_dlink(self, share_url: str, fs_id: int = 0, pwd: str = "") -> str:
         """复用已登录的 WebView 实例打开百度分享页，提取下载直链。
 

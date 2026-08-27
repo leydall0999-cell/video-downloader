@@ -59,6 +59,20 @@
       }
       return false; // 无原生桥接
     },
+    // 弹出系统文件夹选择框，返回所选目录绝对路径；无桥接或用户取消返回空串。
+    chooseFolder() {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.choose_folder === 'function') {
+        try {
+          const r = api.choose_folder();
+          if (typeof r === 'string') return r.startsWith('ERROR') ? '' : r;
+          return r || '';
+        } catch (e) {
+          return '';
+        }
+      }
+      return '';
+    },
   };
   window.VDL.desktop = desktop;
 

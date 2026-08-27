@@ -59,7 +59,8 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     drama_start_sec=payload.drama_start_sec, drama_end_sec=payload.drama_end_sec,
                     one_click=payload.one_click,
                     title=_title,
-                    style=payload.style)
+                    style=payload.style,
+                    export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
 
 @router.post("/api/commentary/upload")
@@ -78,6 +79,7 @@ def create_commentary_upload(
     outro_sec: float = app.Form(None),
     drama_start_sec: float = app.Form(None),
     drama_end_sec: float = app.Form(None),
+    export_jianying: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
     if not app.COMMENTARY_ENABLED:
@@ -121,7 +123,8 @@ def create_commentary_upload(
                     intro_sec=intro_sec, outro_sec=outro_sec,
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=final_title,
-                    src_filename=src_filename)
+                    src_filename=src_filename,
+                    export_jianying=export_jianying)
     return {"job_id": job_id, "status": "running"}
 
 @router.post("/api/commentary/script-only/upload")
@@ -149,6 +152,7 @@ def create_script_only_upload(
     tts_provider: str = app.Form(""),
     correct_transcript: str = app.Form(""),
     title: str = app.Form(""),
+    export_jianying: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
     if not app.COMMENTARY_ENABLED:
@@ -200,7 +204,8 @@ def create_script_only_upload(
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=final_title,
                     style=style,
-                    src_filename=src_filename)
+                    src_filename=src_filename,
+                    export_jianying=export_jianying)
     return {"job_id": job_id, "status": "running"}
 
 @router.get("/api/commentary/diagnostics")
@@ -424,7 +429,8 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     drama_start_sec=payload.drama_start_sec, drama_end_sec=payload.drama_end_sec,
                     one_click=payload.one_click,
                     title=_title,
-                    style=payload.style)
+                    style=payload.style,
+                    export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
 
 @router.get("/api/commentary/script/{job_id}")
@@ -501,7 +507,8 @@ def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
     return {"job_id": job_id, "status": "updated", "segment_count": len(payload.segments)}
 
 @router.post("/api/commentary/render/{job_id}")
-def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form("")) -> dict:
+def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form(""),
+                 export_jianying: str = app.Form("")) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
     剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
@@ -576,7 +583,8 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     intro_sec=intro_sec, outro_sec=outro_sec,
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=title,
-                    src_filename=src_filename)
+                    src_filename=src_filename,
+                    export_jianying=export_jianying)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 @router.post("/api/commentary/voice-preview")

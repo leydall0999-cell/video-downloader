@@ -378,6 +378,10 @@
     comLogs: $('comLogs'),
     comRefresh: $('comRefresh'),
     comEnvStatus: $('comEnvStatus'),
+    comExportJianying: $('comExportJianying'),
+    comExportJianyingDir: $('comExportJianyingDir'),
+    comExportJianyingDirWrap: $('comExportJianyingDirWrap'),
+    comExportJianyingPick: $('comExportJianyingPick'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
     comFileName: $('comFileName'),
@@ -3861,7 +3865,15 @@
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
       correct_transcript: !!(el.comCorrectTranscript && el.comCorrectTranscript.checked),
+      export_jianying: comGetExportJianying(),
     };
+  };
+
+  /** 导出剪映草稿目录：未勾选返回空串(后端不导出)；勾选但未填目录时返回 __default__ 让后端落到输出目录。 */
+  const comGetExportJianying = () => {
+    if (!(el.comExportJianying && el.comExportJianying.checked)) return '';
+    const dir = el.comExportJianyingDir ? el.comExportJianyingDir.value.trim() : '';
+    return dir || '__default__';
   };
 
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
@@ -3955,6 +3967,7 @@
       form.append('vision', String(opts.vision));
       if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
       if (!opts.correct_transcript) form.append('correct_transcript', '0');
+      if (opts.export_jianying) form.append('export_jianying', opts.export_jianying);
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
@@ -4032,6 +4045,7 @@
       form.append('vision', String(opts.vision));
       if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
       if (!opts.correct_transcript) form.append('correct_transcript', '0');
+      if (opts.export_jianying) form.append('export_jianying', opts.export_jianying);
       const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);
@@ -4247,6 +4261,8 @@
       const form = new FormData();
       form.append('vertical', String(resolveVertical()));
       form.append('voice', el.comScriptVoice.value);
+      const exportJy = comGetExportJianying();
+      if (exportJy) form.append('export_jianying', exportJy);
       const { job_id } = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
       });
@@ -5026,6 +5042,23 @@
     r.addEventListener('change', comApplyStyleVoice);
   });
   comApplyStyleVoice();  // 初始化提示
+
+  // 导出剪映草稿：勾选后显示目录输入行；「选择文件夹」按钮走桌面原生桥接（无桥接则聚焦输入框手动填）
+  if (el.comExportJianying) {
+    el.comExportJianying.addEventListener('change', () => {
+      if (el.comExportJianyingDirWrap) el.comExportJianyingDirWrap.hidden = !el.comExportJianying.checked;
+    });
+  }
+  if (el.comExportJianyingPick) {
+    el.comExportJianyingPick.addEventListener('click', () => {
+      try {
+        const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFolder;
+        const p = (typeof fn === 'function') ? fn() : '';
+        if (p && el.comExportJianyingDir) el.comExportJianyingDir.value = p;
+        else if (el.comExportJianyingDir) el.comExportJianyingDir.focus();
+      } catch (_) { /* 用户取消或环境不支持，忽略 */ }
+    });
+  }
 
   // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；
   // 仍走脚本审核流程（默认铁律：AI 解说词可人工审核修改）。
