@@ -89,9 +89,11 @@ class _MockHandler(BaseHTTPRequestHandler):
                 status = "2"          # 已确认
             data = {"errno": 0, "data": {"status": status}}
             # 已确认 + cookie 模式：通过 Set-Cookie 下发 BDUSS（模拟真实 passport 行为）
+            # ★ 2026-08-27 续27：必须用 150+ 字节的 mock BDUSS 模拟真实场景，
+            # 短 BDUSS（< 100 字节）会被 server/baidu_qr.py 视为 mock 残留拒绝写盘。
             cookie = None
             if status == "2" and server.qr_mode == "cookie":
-                cookie = "BDUSS=MOCKBDUSSVALUE1234567890abcdef; Path=/; HttpOnly"
+                cookie = "BDUSS=MOCK_BDUSS_PADDING_TO_PASS_LENGTH_GUARD_" + "X" * 200 + "; Path=/; HttpOnly"
             body = f"{cb}({json.dumps(data)});"
             self._send(200, body, cookie=cookie)
             return
@@ -99,7 +101,9 @@ class _MockHandler(BaseHTTPRequestHandler):
         # 4) qrcodestatus：body 模式兜底，返回含 bduss 字段的 JSON
         if path == "/v2/api/qrcodestatus":
             cb = (q.get("callback") or ["bd__cbs__00000000"])[0]
-            body = f'{cb}({{"errno":0,"data":{{"bduss":"MOCKBDUSSFROMBODY"}}}});'
+            # ★ 2026-08-27 续27：f-string 不会把 + 解释成拼接，要在 f-string 外算好
+            _mock_bduss = "MOCK_BDUSS_FROM_BODY_PADDING_" + "Z" * 180
+            body = f'{cb}({{"errno":0,"data":{{"bduss":"{_mock_bduss}"}}}});'
             self._send(200, body)
             return
 
@@ -180,7 +184,7 @@ def test_qr_flow_cookie_mode():
     gen, result, captured = _run_flow("cookie")
     assert result["status"] == "confirmed", f"未确认: {result}"
     assert result["login"]["ok"], f"login 失败: {result['login']}"
-    assert "BDUSS=MOCKBDUSSVALUE1234567890abcdef" in captured.get("cookie", ""), \
+    assert "BDUSS=MOCK_BDUSS_PADDING_TO_PASS_LENGTH_GUARD_" in captured.get("cookie", ""), \
         f"未提取到 BDUSS(cookie模式): {captured}"
     print("✅ 场景A(Set-Cookie下发BDUSS): 二维码生成→轮询→提取BDUSS→login 全链路通过")
 

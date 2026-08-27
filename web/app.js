@@ -2108,8 +2108,9 @@
     }));
   };
 
-  // ===== 视频/音频桥接（合并）：复用分片上传，独立面板 =====
-  const MC_MAX_CONCURRENT = 2;
+  // ===== 视频/音频桥接（合并）：独立面板，桌面端直接传本地路径免上传 =====
+  const MC_MAX_CONCURRENT = 3;   // 同时上传/处理 3 个文件
+  const mcDesktopNative = !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   // 输出格式按当前模式（视频/音频）动态切换
   const mcVideoFormats = [
     { v: 'mp4', t: 'MP4' }, { v: 'mov', t: 'MOV' }, { v: 'mkv', t: 'MKV' },
@@ -2121,12 +2122,13 @@
   const mcState = { list: [], nextId: 1, active: 0, polling: null, mode: 'video' };
 
   // 根据文件类型判定片段种类（video / audio）
-  const _mcKindOf = (file) => {
-    const name = (file && file.name) || '';
-    const type = (file && file.type) || '';
-    if (/^audio\//i.test(type) || /\.(mp3|m4a|aac|wav|flac|ogg|opus|oga|wma)$/i.test(name)) return 'audio';
+  const _mcKindOf = (name, type) => {
+    const n = (name || '').toLowerCase();
+    if (/^audio\//i.test(type || '')) return 'audio';
+    if (/\.(mp3|m4a|aac|wav|flac|ogg|opus|oga|wma)$/i.test(n)) return 'audio';
     return 'video';
   };
+  const _mcNameOf = (f) => (f && f.name) || f || '';
   // 按当前所有非结果项的种类推导模式：全部音频→audio，否则→video
   const _mcComputeMode = () => {
     const items = mcState.list.filter(x => !x.isResult);
@@ -2170,7 +2172,7 @@
     mcMergeBtn.disabled = ready < 2;
     if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
     mcListEl.innerHTML = mcState.list.map((it, idx) => {
-      const name = it.file ? it.file.name : it.label;
+      const name = it.name;
       const statusText = it.isResult
         ? (it.status === 'running'
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
@@ -2190,7 +2192,8 @@
         <li class="uc-item ${cls}" data-id="${it.id}">
           <div class="uc-item-main">
             <div class="uc-item-name" title="${name}">${idx + 1}. ${name}</div>
-            ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>` : ''}
+            ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>`
+        : (it.localPath ? `<div class="uc-item-meta"><span class="uc-local-badge" style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span></div>` : '')}
             ${progressHtml}
             <div class="uc-item-status">${statusText}</div>
           </div>
@@ -2230,14 +2233,37 @@
     mcRender();
   };
 
-  const mcAddFiles = (fileList) => {
-    Array.from(fileList).forEach(f => {
-      mcState.list.push({ id: mcState.nextId++, file: f, kind: _mcKindOf(f), status: 'pending', segName: null,
-        progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
+  // 添加文件：支持 FileList（网页/上传）或字符串数组本地绝对路径（桌面端免上传）
+  const mcAddFiles = (list) => {
+    const hasLocal = mcState.list.some(x => x.localPath);
+    const hasUpload = mcState.list.some(x => x.file);
+    Array.from(list).forEach(f => {
+      const isLocal = typeof f === 'string';
+      if (isLocal) {
+        if (hasUpload) return; // 忽略：不允许混合
+        const name = f.split(/[\\/]/).pop();
+        mcState.list.push({ id: mcState.nextId++, name, localPath: f, file: null,
+          kind: _mcKindOf(name), status: 'pending', segName: f,
+          progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
+      } else {
+        if (hasLocal) return; // 忽略：不允许混合
+        const name = _mcNameOf(f);
+        mcState.list.push({ id: mcState.nextId++, name, localPath: null, file: f,
+          kind: _mcKindOf(name, f.type), status: 'pending', segName: null,
+          progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
+      }
     });
+    // 如果存在混合添加被忽略，提示一次
+    if (mcState.list.some(x => x.localPath) && mcState.list.some(x => x.file)) {
+      mcStatusEl.textContent = '暂不支持同时混合本地文件与上传文件，已自动过滤后者';
+      mcState.list = mcState.list.filter(x => x.localPath || x.isResult);
+    }
     mcRender();
     mcUpdateMode();
-    mcStatusEl.textContent = `已添加 ${mcState.list.filter(x => !x.isResult).length} 个文件，自动上传…`;
+    const localCount = mcState.list.filter(x => x.localPath && !x.isResult).length;
+    const uploadCount = mcState.list.filter(x => x.file && !x.isResult).length;
+    if (localCount) mcStatusEl.textContent = `已添加 ${localCount} 个本地文件，可直接开始桥接`;
+    else if (uploadCount) mcStatusEl.textContent = `已添加 ${uploadCount} 个文件，自动上传…`;
     mcPump();
   };
 
@@ -2247,7 +2273,8 @@
     item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
     mcRender();
     const file = item.file;
-    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    // 桌面端本地上传可适当加大分片，减少 HTTP 往返
+    const chunkSize = (mcDesktopNative || file.size > 2 * 1024 * 1024 * 1024) ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
     const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
     const uploadId = item._uploadId = 'mc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
@@ -2367,12 +2394,26 @@
     while (mcState.active < MC_MAX_CONCURRENT) {
       const next = mcState.list.find(x => !x.isResult && x.status === 'pending');
       if (!next) break;
+      // 桌面端本地文件直接就绪，无需 HTTP 上传
+      if (next.localPath) {
+        next.status = 'uploaded';
+        next.progress = 30;
+        mcRender();
+        continue;
+      }
       mcState.active++;
       mcUploadOne(next).catch(() => { /* 失败已标记 */ }).finally(() => { mcState.active--; mcPump(); });
     }
   };
 
-  mcAddBtn.addEventListener('click', () => mcFileInput.click());
+  mcAddBtn.addEventListener('click', () => {
+    if (mcDesktopNative) {
+      const paths = window.VDL.desktop.chooseFiles();
+      if (paths && paths.length) mcAddFiles(paths);
+    } else {
+      mcFileInput.click();
+    }
+  });
   mcFileInput.addEventListener('change', (e) => {
     if (e.target.files && e.target.files.length) mcAddFiles(e.target.files);
     e.target.value = '';
@@ -2401,7 +2442,7 @@
   });
   mcMergeBtn.addEventListener('click', () => {
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult);
-    if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的文件'; return; }
+    if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已就绪的文件'; return; }
     const body = {
       segments: ready.map(x => x.segName),
       out_format: mcOutFormat.value,
@@ -2409,7 +2450,10 @@
       to_library: mcLibrary.checked,
       audio_only: mcState.mode === 'audio',
     };
-    request('/api/concat', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
+    // 本地路径走 /api/concat/local，跳过上传直接合并
+    const isLocal = ready.every(x => x.localPath);
+    const endpoint = isLocal ? '/api/concat/local' : '/api/concat';
+    request(endpoint, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
       .then(data => {
         if (data.job_id) {
           mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果', status: 'running',
