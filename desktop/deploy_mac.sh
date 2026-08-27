@@ -18,6 +18,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$REPO/dist/VideoDownloader.app"
 APP="${VDL_DEPLOY_TARGET:-/Applications/VideoDownloader.app}"
 EXE="$APP/Contents/MacOS/VideoDownloader"
+BACKUP_DIR="${VDL_BACKUP_DIR:-$HOME/.vdl_backups}"
+mkdir -p "$BACKUP_DIR"
 
 die() { echo "❌ $1" >&2; exit 1; }
 
@@ -58,15 +60,15 @@ pkill -9 -f "$EXE" 2>/dev/null || true
 sleep 2
 pgrep -f "$EXE" >/dev/null && die "旧实例进程仍存活，无法安全部署（请手动检查 Activity Monitor）"
 
-# 2) 先把旧 app 改名备份（万一新版本有问题可回退），备份最多保留 3 份，超出送 ~/.Trash。
+# 2) 先把旧 app 改名备份到专用目录（避免在 /Applications 里乱放文件夹）。
 #    用 mv 而不是 rm -rf + ditto 的好处：保留旧文件，且若 ditto 拷贝中途失败仍有完整旧版可用。
-echo "▶ 备份旧版本 ..."
+echo "▶ 备份旧版本到 $BACKUP_DIR ..."
 if [ -e "$APP" ]; then
-  BK="$APP.backup-$(date +%Y%m%d-%H%M%S)"
+  BK="$BACKUP_DIR/VideoDownloader.app.backup-$(date +%Y%m%d-%H%M%S)"
   mv "$APP" "$BK" || die "备份旧 app 失败：$BK"
   echo "   旧版本已备份：$BK"
   # 封顶 3 份：按修改时间新→旧，跳过最新 3 份，把更早的送回收站
-  ls -dt "$APP".backup-* 2>/dev/null | tail -n +4 | while IFS= read -r old; do
+  ls -dt "$BACKUP_DIR"/VideoDownloader.app.backup-* 2>/dev/null | tail -n +4 | while IFS= read -r old; do
     trash_path "$old"
   done
 else
