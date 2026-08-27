@@ -329,17 +329,6 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
-    def debug_bridge(self, msg: str) -> str:
-        """临时诊断用：把前端桥接链路关键值落盘到 ~/vdl_bridge_debug.log。"""
-        try:
-            import os, datetime
-            p = os.path.expanduser('~/vdl_bridge_debug.log')
-            with open(p, 'a', encoding='utf-8') as f:
-                f.write(datetime.datetime.now().isoformat() + ' ' + str(msg) + '\n')
-            return 'ok'
-        except Exception as exc:
-            return f"ERROR: {exc}"
-
     def start_indextts_mlx(self) -> dict:
         """一键开启本地语音克隆（IndexTTS-MLX）。
 

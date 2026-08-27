@@ -2490,7 +2490,8 @@
   };
 
   mcAddBtn.addEventListener('click', () => {
-    if (mcDesktopNative()) {
+    const native = mcDesktopNative();
+    if (native) {
       window.VDL.desktop.chooseFiles().then(paths => {
         if (paths && paths.length) mcAddFiles(paths);
       }).catch(() => {});
@@ -2554,7 +2555,8 @@
 
   // 事件绑定
   el.ucAddBtn.addEventListener('click', () => {
-    if (ucDesktopNative()) {
+    const native = ucDesktopNative();
+    if (native) {
       window.VDL.desktop.chooseFiles().then(list => {
         if (list && list.length) ucAddFiles(list);
       }).catch(() => {});

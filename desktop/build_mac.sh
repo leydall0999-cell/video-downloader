@@ -412,7 +412,11 @@ BUILD_STAMP="$(date +%y%m%d%H%M%S)"
 # 页脚用 .*? 而非空 span，保证重复构建也能覆盖旧指纹（之前空 span 模式在已有内容时不匹配）
 perl -0pi -e "s{<span id=\"buildTag\" class=\"build-tag\">.*?</span>}{<span id=\"buildTag\" class=\"build-tag\">$BUILD_INFO</span>}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
 # 给 app.js 注入构建戳作为缓存 bust 版本号（与页脚同源变化），避免桌面端缓存旧脚本
-perl -0pi -e "s{__BUILD_FP__}{$BUILD_STAMP}" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
+# ⚠️ 必须锚定到 `var fp = '__BUILD_FP__';` 整句并用 /g，否则只替换第一个出现（styles.css 缓存击穿那处），
+# 导致 index.html 里真正决定 isDesktopBuild 的 `var fp`（行 1687）仍是字面量 → isDesktopBuild=false →
+# desktop-app.js 只在不稳的 window.pywebview 事件里加载 → 原生文件框桥接整条链路失效。
+# 注意：不能裸用 s{__BUILD_FP__}{...}g（会把 .indexOf('__BUILD_FP__') 比较串也替换掉，反而算错）。
+perl -0pi -e "s{var fp = '__BUILD_FP__';}{var fp = '$BUILD_STAMP';}g" "$REPO/dist/VideoDownloader.app/Contents/Resources/web/index.html" 2>/dev/null || true
 # 同时把指纹写入程序可读文件，供 /api/version 自检（避免肉眼误判版本）
 # 注意：指纹必须每次构建都变化（含 BUILD_STAMP 时间戳），否则自动接管逻辑
 # 会误判"版本相同"而不接管旧实例，导致仍跑旧版。

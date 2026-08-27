@@ -77,7 +77,7 @@
     // 注意：pywebview 的 api.* 调用返回 Promise，必须 await/then 取值。
     chooseFiles() {
       const api = window.pywebview && window.pywebview.api;
-      if (!(api && typeof api.choose_files === 'function')) return Promise.resolve([]);
+      if (!(api && typeof api.choose_files === 'function')) { return Promise.resolve([]); }
       const norm = (r) => {
         if (!r) return [];
         if (typeof r === 'string') return r.startsWith('ERROR') ? [] : r.split('\n').filter(Boolean);
@@ -86,7 +86,9 @@
       };
       try {
         const r = api.choose_files();
-        if (r && typeof r.then === 'function') return r.then(norm).catch(() => []);
+        if (r && typeof r.then === 'function') {
+          return r.then(norm).catch(() => []);
+        }
         return Promise.resolve(norm(r));
       } catch (e) {
         return Promise.resolve([]);
