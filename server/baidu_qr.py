@@ -246,6 +246,15 @@ def _finish_login(sign: str) -> dict:
     if "BDUSS" not in cookies:
         res = {"ok": False, "message": "已扫码确认，但未能取到百度登录凭证（BDUSS）。\n请改用「账号密码」方式登录，或重新生成二维码再扫一次。"}
     else:
+        # ★ 2026-08-27 续27：拒绝 mock / 假 BDUSS 写到本地缓存
+        # 实际真 BDUSS 是 150+ 字节的 base64-like 串；长度 < 100 几乎都是 unit test
+        # 或测试数据残留（如 MOCKBDUSSFROMBODY 等）。
+        _bduss_value = (cookies.get("BDUSS") or "").strip()
+        if len(_bduss_value) < 100:
+            logger.warning("拒绝持久化可疑 BDUSS（长度 %d < 100），疑似 mock/测试残留", len(_bduss_value))
+            # 不写盘、也不灌 PCS，让 baidu_login 缓存复用直接进弹窗分支
+            res = {"ok": False, "message": f"二维码已确认，但 BDUSS 异常（长度仅 {len(_bduss_value)}），疑似状态污染。请重开二维码重新扫码。"}
+            return res
         cookie_str = _cookie_str(cookies)
         # ★ 2026-08-27 续26：把 BDUSS 同步写到 ~/.vdl/baidu_bduss.txt，
         #   下次 baidu_login / get_baidu_dlink 可直接读此文件复用，

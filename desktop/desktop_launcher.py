@@ -297,6 +297,38 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
+    def choose_files(self) -> list[str] | str:
+        """弹出系统多文件选择框，返回所选文件绝对路径列表；用户取消或失败返回空串。
+
+        供桌面版「视频/音频桥接」等功能使用：文件在本机，无需 HTTP 分片上传，
+        直接传绝对路径给后端本地读取合并，显著提速。
+        """
+        try:
+            import tkinter as _tk
+            from tkinter import filedialog as _fd
+            root = _tk.Tk()
+            root.withdraw()
+            try:
+                root.attributes("-topmost", True)
+            except Exception:
+                pass
+            paths = _fd.askopenfilenames(
+                title="选择要桥接的视频/音频文件（可多选）",
+                filetypes=[
+                    ("媒体文件", "*.mp4 *.mov *.mkv *.webm *.avi *.flv *.ts *.wmv *.mpeg *.mpg *.3gp *.ogv *.m4v *.mp3 *.m4a *.aac *.wav *.flac *.ogg *.opus"),
+                    ("所有文件", "*.*"),
+                ],
+            )
+            root.destroy()
+            if not paths:
+                return ""
+            # askopenfilenames 在 macOS 返回 tuple，Windows 返回 str
+            if isinstance(paths, str):
+                return paths
+            return list(paths)
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
     def start_indextts_mlx(self) -> dict:
         """一键开启本地语音克隆（IndexTTS-MLX）。
 
@@ -473,27 +505,61 @@ class VdlApi:
                 # 之前实测用户看到的就是这个 get_baidu_dlink 创建的 WKWebView。
                 # 原始创建已 hidden=True，但下面又 temp.show() 强行弹出，等于自相矛盾
                 # —— 用户实测：弹出"VDL-百度分享直链"+百度分享页内容 + 拦截/抽签全失败。
-                # macOS WKWebView 是离屏渲染的，hidden 状态下 load_url + evaluate_js
-                # 完全可用（pywebview 设计如此），不需要 show 也能完成抽签。
-                # 用户主动登录的窗口由 baidu_login() 自己创建，那里显式可见。
-                _log("WebView 保持 hidden（后台抽签，不弹窗）")
-                # 用 native load_url + location.reload() 强制完整重新加载分享页
-                # 关键发现（Playwright 实测）：evaluate_js("location.href='分享页'")
-                # 会被百度服务端 302 重定向到 /share/init?surl=... 中间页（body=71 框架，无下载按钮）。
-                # 只有 location.reload() 才能加载真正的 /s/... 分享页。
-                # load_url（pywebview native）也走 location.href 等价路径，
-                # 所以 load_url 之后必须再 reload 一次。
+                # ★ 2026-08-27 续27 关键架构变更：抽签和登录复用同一个 self._baidu_wv。
+                # 之前 baidu_login 灌 BDUSS 到一个独立 WebView，get_baidu_dlink 抽签用另一个
+                # 实例 ——macOS WKWebView 跨实例 cookie 不共享 → 永远拿不到 dlink。
+                # 现在用同一实例：self._baidu_wv 创建后，先 load 分享页试抽签；
+                # 失败若是因为未登录（yunData.loginstate==0 或 sharedownload 需登录 errno），
+                # 就把这个窗口 show() 出来加载登录页 → 让用户扫码登录 → 同一实例内存里的
+                # cookie 自动共享给后续抽签。绝不创建第二个 WebView。
+                temp = getattr(self, "_baidu_wv", None)
+                if temp is None:
+                    try:
+                        new_wv = _wv.create_window(
+                            title="VDL-百度分享直链",
+                            url=share_url,
+                            width=900, height=700,
+                            hidden=True,  # 初始隐藏；登录弹起再 show()
+                        )
+                        self._baidu_wv = new_wv
+                        _time.sleep(2)  # 等 WKWebView 初始化
+                        _log("创建新的 WebView 实例（用于抽签+登录共用）")
+                    except Exception as e_wv:
+                        _log("创建 WebView 异常: " + str(e_wv))
+                        result_holder["value"] = json.dumps({
+                            "ok": False,
+                            "error": "WEBVIEW_INIT_FAILED",
+                            "message": "创建浏览器窗口失败：{}".format(str(e_wv))
+                        })
+                        return
+                temp = getattr(self, "_baidu_wv", None)
+                if temp is None:
+                    result_holder["value"] = json.dumps({
+                        "ok": False,
+                        "error": "WEBVIEW_UNAVAILABLE",
+                        "message": "无法获取浏览器实例。"
+                    })
+                    _log("=== WEBVIEW_UNAVAILABLE ===")
+                    return
+                # 抽签窗默认就 show()（续24 删的 show 现在恢复，因为同一窗后续要登录）
+                # 用户能在 dock 看到「VDL-百度分享直链」窗口，登录后翻到。
+                # 没登录时页面会给游客态预览/登录页，本身有用，不需要隐藏。
+                try:
+                    temp.show()
+                    _log("抽签窗口已显示（同窗登录用）")
+                except Exception as e_show:
+                    _log("show() 异常（多半已经显示）: " + str(e_show))
                 try:
                     temp.load_url(share_url)
-                    _time.sleep(2)  # 等百度完成 /share/init 重定向
+                    _time.sleep(2)
                     try:
                         temp.evaluate_js("location.reload()")
-                        _log("已调用 load_url + location.reload()（应对百度 /share/init 重定向）")
+                        _log("已调用 load_url + location.reload()")
                     except Exception as e_rel:
                         _log("location.reload() 异常: " + str(e_rel))
                 except Exception as e_load:
                     _log("load_url 异常: " + str(e_load))
-                _log("已调用 load_url 加载分享页（同一实例，cookie 在内存）")
+                _log("已调用 load_url 加载分享页（同实例，cookie 在内存）")
 
                 # 4. 注入网络拦截器 + 主动构造 sharedownload 请求的函数
                 interceptor_js = """
@@ -1043,122 +1109,89 @@ class VdlApi:
                 pass
 
         # ★ 2026-08-27 续26：检测本地是否有已缓存的 BDUSS cookie
-        # 若有，直接复用 WKWebView + 手动设置 document.cookie → 不需要弹登录窗口。
-        # 这是「扫码一次复用 N 次」的核心路径。
-        cached_bduss = None
-        try:
-            _bduss_path = os.path.expanduser("~/.vdl/baidu_bduss.txt")
-            if os.path.exists(_bduss_path):
-                with open(_bduss_path, "r", encoding="utf-8") as _f:
-                    cached_bduss = _f.read().strip()
-        except Exception as e_bduss_read:
-            _log("读取本地 BDUSS 缓存失败: " + str(e_bduss_read))
-        if cached_bduss:
-            _log("检测到本地缓存 BDUSS（" + str(len(cached_bduss)) + " 字节）—— 直接复用 WKWebView 灌 cookie")
-            def _run_cached():
-                w = None
-                try:
-                    w = _wv.create_window(
-                        title="VDL-百度网盘（已登录）",
-                        url="https://pan.baidu.com/disk/main",
-                        width=900, height=700,
-                        hidden=True,
-                    )
-                    _log("缓存登录窗口已 hidden 创建（不弹窗）")
-                    self._baidu_wv = w
-                    # 等 WKWebView 加载 + cookie store 就绪
-                    for _i in range(10):
-                        _t.sleep(1)
-                        try:
-                            href = w.evaluate_js("location.href")
-                            if isinstance(href, str) and ('pan.baidu.com' in href or 'baidu.com' in href):
-                                break
-                        except Exception:
-                            pass
-                    # 把 BDUSS 灌到当前域 cookie store（pan.baidu.com）
-                    _js = (
-                        "(function(){"
-                        "  var v=" + json.dumps(cached_bduss) + ";"
-                        "  document.cookie = 'BDUSS=' + v + '; domain=.baidu.com; path=/; SameSite=None; Secure';"
-                        "  document.cookie = 'BDUSS=' + v + '; domain=.pan.baidu.com; path=/;';"
-                        "  document.cookie = 'STOKEN=' + encodeURIComponent(v) + '; domain=.baidu.com; path=/';"
-                        "  return document.cookie.indexOf('BDUSS') !== -1 ? 'set_ok' : 'set_empty';"
-                        "})()"
-                    )
-                    try:
-                        _r = w.evaluate_js(_js)
-                        _log("灌 BDUSS cookie 结果: " + str(_r))
-                    except Exception as e_set:
-                        _log("灌 BDUSS cookie 异常: " + str(e_set))
-                    # 刷一下主页让百度读新 cookie
-                    try:
-                        w.load_url("https://pan.baidu.com/disk/main")
-                        _t.sleep(2)
-                    except Exception:
-                        pass
-                    result_holder["value"] = {
-                        "ok": True,
-                        "logged": True,
-                        "reused": True,
-                        "from_cache": True,
-                        "message": "已用本地缓存的百度登录态（扫码一次、永久复用）。"
-                    }
-                except Exception as e:
-                    _log("缓存登录异常: " + str(e))
-                    result_holder["value"] = {"ok": False, "error": "EXCEPTION", "message": str(e)}
-                finally:
-                    result_holder["event"].set()
-            _th.Thread(target=_run_cached, daemon=True).start()
-            result_holder["event"].wait(timeout=20)  # 灌 cookie 最多 20 秒
-            if result_holder.get("value", {}).get("ok"):
-                return json.dumps(result_holder["value"])
-            # 否则 fallback 到下面的弹窗登录
+        # ★ 2026-08-27 续27 重大修复：macOS WKWebView 跨实例 cookie **不共享**。
+        # 之前的「缓存灌 cookie」分支创建了一个新的 hidden WebView，把 BDUSS 灌进去，
+        # 但 get_baidu_dlink 用 self._baidu_wv（另一个 WKWebView 实例）抽签，根本读不到
+        # 那个 cookie → yunData.uk 永远是 0 → 一直失败。
+        # 真实可用方案：复用 self._baidu_wv。get_baidu_dlink 已经创建了它，
+        # 这里只要把它当登录窗用：show() + load 登录页 + 用户扫码 → 同一实例内存的
+        # cookie 自动共享给后续抽签。
+        existing = getattr(self, "_baidu_wv", None)
+        if existing is not None:
+            try:
+                href = existing.evaluate_js("location.href")
+                ck = existing.evaluate_js("document.cookie || ''")
+                if isinstance(href, str) and ('/disk' in href or '/main' in href) \
+                        and isinstance(ck, str) and 'BDUSS' in ck:
+                    _log("复用已登录 self._baidu_wv（" + href[:80] + "），跳过重新登录")
+                    return json.dumps({"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。"})
+            except Exception:
+                pass
 
         def _run():
             w = None
             try:
-                w = _wv.create_window(
-                    title="VDL-登录百度网盘",
-                    # 直接加载 disk/main（而非 pan.baidu.com 欢迎页），让百度自动跳登录页
-                    # 登录页 redirecturl 参数会保证登录后跳回 /disk/main，满足我们的检测
-                    url="https://pan.baidu.com/disk/main",
-                    width=480, height=760,
-                    min_size=(420, 600),
-                    # ★ 2026-08-27 续26 修复：登录窗口必抢焦点 / 置顶。
-                    # 用户实测「卡在正在登录不动」——根因是 macOS WKWebView 新窗口
-                    # 不抢焦点/可能被主窗口挡住，根本看不见（也没有任何提示）。
-                    # on_top=True 强制浮在所有窗口之上；move(0,0) 兜底防 on_top 失效。
-                    on_top=True,
-                )
+                # ★ 2026-08-27 续27：复用 self._baidu_wv，避免创建新 WebView。
+                # macOS 跨实例 cookie 不共享——只有用同一个 WKWebView 登录和抽签，
+                # cookie 才会自然可用。
+                if getattr(self, "_baidu_wv", None) is not None:
+                    _log("复用 self._baidu_wv 作为登录窗")
+                    w = self._baidu_wv
+                    try:
+                        w.show()  # 让用户能看到登录窗
+                    except Exception:
+                        pass
+                else:
+                    # 兜底路径：用户直接调 baidu_login 而没先 get_baidu_dlink
+                    _log("self._baidu_wv 不存在，新建一个登录窗")
+                    w = _wv.create_window(
+                        title="VDL-登录百度网盘",
+                        url="https://pan.baidu.com/disk/main",
+                        width=900, height=700, min_size=(480, 600),
+                        on_top=True,
+                    )
+                    try:
+                        w.move(50, 50)
+                    except Exception:
+                        pass
+                self._baidu_wv = w
+                # 加载百度登录页（让用户扫码）
                 try:
-                    w.move(50, 50)  # 兜底：移到屏幕左上角主窗口旁
-                except Exception:
-                    pass
-                _log("登录窗口已创建（on_top=True），等待用户登录...")
+                    w.load_url(
+                        "https://passport.baidu.com/v2/?login&display=netdisk"
+                        "&u=https%3A%2F%2Fpan.baidu.com%2Fdisk%2Fmain"
+                    )
+                    _log("已 load 百度登录页，等待用户扫码...")
+                except Exception as e_load:
+                    _log("load 登录页异常: " + str(e_load))
+                # 轮询等登录完成（多信号：URL 含 /disk、cookie 含 BDUSS、yunData.loginstate=1）
                 logged = False
                 for i in range(180):  # 最多 3 分钟
                     _t.sleep(1)
                     try:
-                        href = w.evaluate_js("location.href")
-                        if isinstance(href, str) and ('/disk' in href or 'yun.baidu.com' in href or '/main' in href):
+                        href = w.evaluate_js("location.href") or ""
+                        ck = w.evaluate_js("document.cookie || ''") or ""
+                        ls = w.evaluate_js("(window.yunData && window.yunData.loginstate) || 0")
+                        if ('/disk' in href or '/main' in href) and isinstance(ck, str) and 'BDUSS' in ck:
                             logged = True
-                            _log("检测到已跳转到网盘主页，登录成功")
+                            _log("登录完成 (s=" + str(i+1) + ", href=" + href[:60] + ", has_BDUSS=" + ("yes" if 'BDUSS' in ck else 'no') + ")")
+                            break
+                        if isinstance(ls, (int, float)) and int(ls) == 1:
+                            logged = True
+                            _log("登录完成 (yunData.loginstate=1, s=" + str(i+1) + ")")
                             break
                     except Exception:
                         pass
-                # 关键修复：不要关闭窗口！保留 WebView 实例供 get_baidu_dlink 复用。
-                # 新开的 WKWebView 窗口读不到刚登录的 cookie（异步同步延迟，uk=0），
-                # 只有复用同一个实例，cookie 在内存中才立即可用。
-                self._baidu_wv = w
+                # 保留 self._baidu_wv 实例 + cookie（后续 get_baidu_dlink 必须复用）
                 try:
-                    w.hide()  # 用 native hide（比 move(-20000) 可靠），保留实例供下载复用
-                    _log("登录窗口已隐藏（保留实例供下载复用）")
+                    w.hide()
+                    _log("登录窗已隐藏（保留 self._baidu_wv 供 get_baidu_dlink 复用）")
                 except Exception:
                     pass
                 result_holder["value"] = {
-                    "ok": True,
+                    "ok": logged,
                     "logged": logged,
-                    "message": "登录完成，百度网盘登录态已保存。"
+                    "message": "登录完成，百度网盘登录态已保存到抽签窗口。" if logged else "登录超时（3 分钟），请重试。"
                 }
             except Exception as e:
                 _log("登录窗口异常: " + str(e))

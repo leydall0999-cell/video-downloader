@@ -73,6 +73,25 @@
       }
       return '';
     },
+    // 弹出系统多文件选择框，返回绝对路径数组；无桥接或用户取消返回空数组。
+    chooseFiles() {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.choose_files === 'function') {
+        try {
+          const r = api.choose_files();
+          if (typeof r === 'string') {
+            if (r.startsWith('ERROR')) return [];
+            if (!r) return [];
+            return r.split('\n').filter(Boolean);
+          }
+          if (Array.isArray(r)) return r.filter(Boolean);
+          return [];
+        } catch (e) {
+          return [];
+        }
+      }
+      return [];
+    },
     // 一键开启本地语音克隆（IndexTTS-MLX）：自动寻找并启动本地服务，返回 {ok, msg}。
     // 普通用户无需理解「端口/服务」等概念，点一下由 App 自己搞定；无桥接则回退提示。
     startIndexTts() {

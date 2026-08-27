@@ -486,25 +486,14 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
     _store_library()
 
 
-@router.post("/api/concat")
-def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
-    """视频/音频桥接：接收已落地的片段列表，按顺序合并为单个文件（无损优先，必要时转码兜底）。"""
-    app._check_rate_limit(request)
-    if payload.out_format not in app.CONVERT_TARGETS:
-        raise app.HTTPException(status_code=400, detail="不支持的输出格式")
-    segs = payload.segments or []
+def _create_concat_job(segs, out_format, out_name, to_library, audio_only, request):
+    """为 /api/concat 与 /api/concat/local 共用的 job 创建逻辑。"""
     if len(segs) < 2:
         raise app.HTTPException(status_code=400, detail="至少需要 2 个片段")
-    # 校验素材存在性（防止无效引用）
-    for name in segs:
-        if not (app.UPLOAD_TMP / name).exists():
-            raise app.HTTPException(status_code=400, detail=f"素材不存在或已过期：{name}")
-    # 探测流类型，决定是否纯音频合并
-    probes = [_probe_streams(app.UPLOAD_TMP / name) for name in segs]
-    all_audio = bool(payload.audio_only) or (not any(p["has_video"] for p in probes))
-    out_format = payload.out_format
+    probes = [_probe_streams(p) for p in segs]
+    all_audio = bool(audio_only) or (not any(p["has_video"] for p in probes))
     if all_audio and out_format not in AUDIO_REENCODE:
-        out_format = "mp3"   # 纯音频强制为音频格式
+        out_format = "mp3"
     job_id = app.uuid.uuid4().hex[:12]
     ext = app.CONVERT_EXT.get(out_format, out_format)
     out_path = app.CONVERT_DIR / f"concat_{job_id}.{ext}"
@@ -514,14 +503,64 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
             "out_path": str(out_path),
             "error": "",
             "filename": out_path.name,
-            "src_name": payload.out_name or "merged",
-            "target": out_format,           # 下载文件名 [格式]原名.ext 用
+            "src_name": out_name or "merged",
+            "target": out_format,
             "stage": "排队中",
-            "to_library": payload.to_library,
+            "to_library": to_library,
             "library_id": "",
             "device_id": _device_of(request),
             "audio": all_audio,
         }
-    app.executor.submit(_run_concat, job_id, segs, out_format, payload.out_name or "merged",
-                        _device_of(request), payload.to_library, all_audio)
-    return {"job_id": job_id, "status": "running", "audio": all_audio}
+    seg_names = [str(p) for p in segs]
+    app.executor.submit(_run_concat, job_id, seg_names, out_format, out_name or "merged",
+                        _device_of(request), to_library, all_audio)
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.post("/api/concat")
+def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
+    """视频/音频桥接：接收已落地的片段列表，按顺序合并为单个文件（无损优先，必要时转码兜底）。"""
+    app._check_rate_limit(request)
+    if payload.out_format not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的输出格式")
+    segs = payload.segments or []
+    seg_paths = []
+    for name in segs:
+        p = app.UPLOAD_TMP / name
+        if not p.exists():
+            raise app.HTTPException(status_code=400, detail=f"素材不存在或已过期：{name}")
+        seg_paths.append(p)
+    return _create_concat_job(seg_paths, payload.out_format, payload.out_name,
+                                payload.to_library, payload.audio_only, request)
+
+
+class LocalConcatRequest(app.BaseModel):
+    segments: list[str]
+    out_format: str = "mp4"
+    out_name: str = "merged"
+    to_library: bool = False
+    audio_only: bool = False
+
+
+@router.post("/api/concat/local")
+def concat_local_api(payload: LocalConcatRequest, request: app.Request) -> dict:
+    """桌面版专用：直接接收本机绝对路径列表，跳过分片上传，本地读取后合并。"""
+    app._check_rate_limit(request)
+    if payload.out_format not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的输出格式")
+    segs = payload.segments or []
+    seg_paths = []
+    for path in segs:
+        p = app.Path(path)
+        if not p.is_file():
+            raise app.HTTPException(status_code=400, detail=f"文件不存在或不是普通文件：{path}")
+        # 安全校验：拒绝明显可疑的路径（如系统根目录、父目录穿越）
+        try:
+            resolved = p.resolve()
+            if not str(resolved).startswith(("/Users/", "/home/", "/Volumes/", "C:\\\\")):
+                raise app.HTTPException(status_code=400, detail=f"路径不在用户目录下：{path}")
+        except Exception:
+            raise app.HTTPException(status_code=400, detail=f"无法解析路径：{path}")
+        seg_paths.append(resolved)
+    return _create_concat_job(seg_paths, payload.out_format, payload.out_name,
+                              payload.to_library, payload.audio_only, request)

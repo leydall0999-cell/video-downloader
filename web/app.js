@@ -192,6 +192,7 @@
     sTabCommentary: $('sTabCommentary'),
     sTabUploadConvert: $('sTabUploadConvert'),
     sTabDw: $('sTabDw'),
+    sTabBridge: $('sTabBridge'),
     sTabSubscribe: $('sTabSubscribe'),
     sTabTorrent: $('sTabTorrent'),
     sTabBaidu: $('sTabBaidu'),
@@ -406,11 +407,8 @@
     // 上传转换（需求文档模块一）
     tabUploadConvert: $('tabUploadConvert'),
     uploadConvertView: $('uploadConvertView'),
-    // 视频处理板块内的子模块切换（格式转换 / 拼接）
-    ucSubFormat: $('ucSubFormat'),
-    ucSubMerge: $('ucSubMerge'),
-    ucPane: $('ucPane'),
-    mcPane: $('mcPane'),
+    bridgeView: $('bridgeView'),
+    ucBridgeLink: $('ucBridgeLink'),
     // ---- 上传转换视图（多文件批量）----
     ucAddBtn: $('ucAddBtn'),
     ucFileInput: $('ucFileInput'),
@@ -6494,35 +6492,35 @@
                 return;
               }
               loginBtn.disabled = true;
-              const _t = loginBtn.textContent;
               loginBtn.textContent = '正在打开登录窗口…';
-              el.baiduShareStatus.textContent = '已弹登录窗口（标题：VDL-登录百度网盘，已置顶）；请在该窗口内完成登录后本处将自动重试下载…';
+              el.baiduShareStatus.innerHTML = '🪟 已在 macOS 上弹出 [VDL-百度分享直链] 窗口（与抽签窗口共用）<br>请在那个窗口里扫码 / 账号密码登录百度网盘。本处会等待登录完成，登录成功后自动重试下载。';
               el.baiduShareStatus.className = 'baidu-share-status';
               try {
-                await window.pywebview.api.baidu_login();  // 立即返回，登录窗口在后台进行
-                // 轮询重试：登录窗口可能耗时 30s~3min
-                let _success = null;
-                // ★ 2026-08-27 续26：30×2s = 60s 超时（之前 60×2s = 120s 太长用户以为卡死）。
-                // 60s 后 URL 仍停留在 pan.baidu.com 登录页就视为超时，让用户主动重试。
-                for (let _retry = 0; _retry < 30; _retry++) {
-                  await new Promise((r) => setTimeout(r, 2000));
-                  el.baiduShareStatus.textContent = `⏳ 等待 [VDL-登录百度网盘] 窗口登录完成…（${_retry * 2}s / 60s），完成后此处自动重试下载`;
-                  const _r = await callGetDlink();
-                  if (_r && _r.ok && _r.dlink) { _success = _r; break; }
-                  // 还需登录 → 继续等
-                  if (_r && (_r.error === 'REQUIRES_LOGIN' || _r.error === 'NOT_LOGGED_IN' || _r.error === 'NO_LOGIN_COOKIE')) continue;
-                  // 其它错误也暂存，后面再决定怎么显示
-                  _success = _r; break;
+                // ★ 2026-08-27 续27：baidu_login 现在复用 self._baidu_wv，会同步等扫码完成。
+                // 前端不用再 30×2s 轮询了——后端返回的就是真实结果（最多 3 分钟超时）。
+                const loginResRaw = await window.pywebview.api.baidu_login();
+                let loginRes;
+                try { loginRes = (typeof loginResRaw === 'object' && loginResRaw) ? loginResRaw : JSON.parse(loginResRaw); }
+                catch { loginRes = { ok: false, message: '解析返回失败' }; }
+                if (!(loginRes && loginRes.ok && loginRes.logged)) {
+                  el.baiduShareStatus.innerHTML = '⚠ 登录未完成：' + escapeHtml(loginRes.message || '未知原因') +
+                    ' <button type="button" class="btn btn-accent btn-sm" id="__vdl_login_retry">重试</button>';
+                  el.baiduShareStatus.className = 'baidu-share-status is-err';
+                  const retry = el.baiduShareStatus.querySelector('#__vdl_login_retry');
+                  if (retry) retry.addEventListener('click', () => startBaiduShareDownload(item));
+                  return;
                 }
-                if (_success && _success.ok && _success.dlink) {
-                  el.baiduShareStatus.textContent = '✓ 登录成功，开始下载…';
-                  el.baiduShareStatus.className = 'baidu-share-status is-ok';
-                  return _doDownload(_success.dlink);
+                el.baiduShareStatus.textContent = '✓ 登录成功（BDUSS 已自动灌入抽签窗口），重试下载…';
+                el.baiduShareStatus.className = 'baidu-share-status is-ok';
+                const r2 = await callGetDlink();
+                if (r2 && r2.ok && r2.dlink) {
+                  return _doDownload(r2.dlink);
                 }
-                el.baiduShareStatus.innerHTML = '⚠ 登录超时或失败。请确认窗口里已完成登录后再次点击「下载」。 <button type="button" class="btn btn-accent btn-sm" id="__vdl_login_retry">重试</button>';
+                el.baiduShareStatus.innerHTML = '⚠ 登录后仍拿不到直链：' + escapeHtml((r2 && r2.message) || '未知原因') +
+                  ' <button type="button" class="btn btn-accent btn-sm" id="__vdl_login_retry">重试</button>';
                 el.baiduShareStatus.className = 'baidu-share-status is-err';
-                const retry = el.baiduShareStatus.querySelector('#__vdl_login_retry');
-                if (retry) retry.addEventListener('click', () => startBaiduShareDownload(item));
+                const retry2 = el.baiduShareStatus.querySelector('#__vdl_login_retry');
+                if (retry2) retry2.addEventListener('click', () => startBaiduShareDownload(item));
               } catch (e) {
                 el.baiduShareStatus.textContent = '⚠ 登录出错：' + e.message;
                 el.baiduShareStatus.className = 'baidu-share-status is-err';
@@ -6710,13 +6708,15 @@
     const isDw = view === 'dw';
     const isAppIntro = view === 'appIntro';
     const isNarrato = view === 'narrato';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isNarrato;
+    const isBridge = view === 'bridge';
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isNarrato || isBridge;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
     el.commentaryView.hidden = !isCom;
     el.uploadConvertView.hidden = !isUp;
     el.dwView.hidden = !isDw;
+    if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.narratoView) el.narratoView.hidden = !isNarrato;
     if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isNarrato);
@@ -6728,8 +6728,8 @@
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
     if (el.tabNarrato) el.tabNarrato.classList.toggle('is-active', isNarrato);
-    // 侧栏 7 个 .sidebar-item 同步激活态（百度网盘/下载无 data-view 跳过）
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isNarrato;
+    // 侧栏 8 个 .sidebar-item 同步激活态（百度网盘/下载无 data-view 跳过）
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isNarrato && !isBridge;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -6738,6 +6738,7 @@
     if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
     if (el.sTabDw) el.sTabDw.classList.toggle('is-active', isDw);
     if (el.sTabNarrato) el.sTabNarrato.classList.toggle('is-active', isNarrato);
+    if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -7289,16 +7290,7 @@
   if (el.tabLibrary) el.tabLibrary.addEventListener('click', () => switchView('library'));
   if (el.tabCommentary) el.tabCommentary.addEventListener('click', () => switchView('commentary'));
   el.tabUploadConvert.addEventListener('click', () => switchView('uploadconvert'));
-  // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换
-  const ucSwitchSub = (which) => {
-    const fmt = which === 'format';
-    el.ucPane.hidden = !fmt;
-    el.mcPane.hidden = fmt;
-    el.ucSubFormat.classList.toggle('is-active', fmt);
-    el.ucSubMerge.classList.toggle('is-active', !fmt);
-  };
-  el.ucSubFormat.addEventListener('click', () => ucSwitchSub('format'));
-  el.ucSubMerge.addEventListener('click', () => ucSwitchSub('merge'));
+  if (el.ucBridgeLink) el.ucBridgeLink.addEventListener('click', (e) => { e.preventDefault(); switchView('bridge'); });
   el.tabDw.addEventListener('click', () => switchView('dw'));
   if (el.tabAppIntro) el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
   if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
@@ -7306,12 +7298,13 @@
   if (el.tabNarrato) el.tabNarrato.addEventListener('click', () => switchView('narrato'));
   if (el.narratoKeySave) el.narratoKeySave.addEventListener('click', saveNarratoKey);
 
-  // 侧栏（桌面端）：9 个 .sidebar-item 也触发同视图切换
+  // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
     [el.sTabDownload, 'download'],
     [el.sTabLibrary, 'library'],
     [el.sTabCommentary, 'commentary'],
     [el.sTabUploadConvert, 'uploadconvert'],
+    [el.sTabBridge, 'bridge'],
     [el.sTabDw, 'dw'],
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
