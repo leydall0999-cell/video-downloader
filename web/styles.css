@@ -1758,7 +1758,7 @@ img { max-width: 100%; display: block; }
   align-items: start;
   gap: .5rem .9rem;
   margin-top: .5rem;
-  padding: .65rem .8rem;
+  padding: .65rem .9rem;
   background: var(--surface);
   border: 1px solid var(--line); border-radius: var(--radius-md);
 }
@@ -2008,7 +2008,8 @@ img { max-width: 100%; display: block; }
   .com-vol-preview-hint { max-width: none; }
 }
 @media (max-width: 720px) {
-  .com-opts { grid-template-columns: 1fr; padding: .6rem; gap: .5rem; }
+  .com-opts { grid-template-columns: 1fr; padding: .6rem .9rem; gap: .5rem; }
+  #comVolumeBlock { padding: .6rem .9rem .75rem; }
   .com-opts-inner { grid-template-columns: 1fr; gap: .45rem; }
   .com-opt-row-fixed > .com-mode-fixed,
   .com-opt-row-fixed > .com-retain-field { flex: 1 1 100%; }
