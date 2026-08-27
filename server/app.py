@@ -3219,16 +3219,31 @@ def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = ""
 
 
 @app.get("/api/cookie/pull-diag")
-def cookie_pull_diag() -> dict:
-    """临时诊断：同步跑一次「经隧道拉取 VPS Cookie 写公共池」，返回逐环节结果。
+def cookie_pull_diag(mode: str = "full") -> dict:
+    """隧道健康/诊断接口。
 
-    仅用于排查黄灯，不含敏感内容（Cookie 只报长度不报明文）。排查完成后移除。
+    mode=quick：轻量健康探针——只返回本机状态字段（token_present / tunnel_ready /
+    vps_ok / requests_available），秒回，不做任何跨隧道网络操作。供自愈探针与周期
+    监控使用，避免「同步拉 Cookie（内部 timeout=90s）拖垮探针响应、把健康隧道误判
+    为半死、触发无谓重连/重启循环」的问题（2026-08-27 根治）。
+
+    mode=full（默认）：完整诊断——同步经隧道拉取 VPS Cookie 写公共池，返回逐环节
+    结果与候选明细（重操作，响应可能数十秒，仅人工排查时使用）。
+
+    两种模式均不含敏感内容（Cookie 只报长度不报明文）。
     """
     import cn_tunnel as _cn
     out: dict = {
         "token_present": bool(os.environ.get("VDL_COOKIE_SYNC_TOKEN") or os.environ.get("VDL_COOKIE_REFILL_TOKEN")),
         "tunnel_ready": _cn._TUNNEL_READY.is_set(),
+        "mode": mode,
     }
+    if mode == "quick":
+        # 轻量模式不做跨隧道网络操作：WS 连接存在即说明 VPS client 存活，
+        # 以 tunnel_ready 近似 vps_ok；真实回源可用性由 /api/tunnel-test 验证。
+        out["vps_ok"] = _cn._TUNNEL_READY.is_set()
+        out["requests_available"] = True
+        return out
     try:
         import requests
     except Exception as e:  # noqa: BLE001
