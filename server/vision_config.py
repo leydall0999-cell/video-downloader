@@ -49,6 +49,7 @@ VISION_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "default_model": "Qwen/Qwen2.5-VL-72B-Instruct",
         "needs_key": True,
         "note": "硅基流动控制台获取的 API Key。",
+        "signup_url": "https://cloud.siliconflow.cn/",
     },
     "gemini": {
         "name": "Google Gemini（含免费额度）",
@@ -56,6 +57,7 @@ VISION_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "default_model": "gemini-2.5-flash",
         "needs_key": True,
         "note": "Google AI Studio 免费申请 Key；有免费调用额度，超出后价格极低，视觉能力强。",
+        "signup_url": "https://aistudio.google.com/apikey",
     },
     "dashscope": {
         "name": "阿里百炼 DashScope",
@@ -63,6 +65,7 @@ VISION_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "default_model": "qwen-vl-max",
         "needs_key": True,
         "note": "阿里云百炼控制台申请 Key，有免费额度，中文 OCR 强。",
+        "signup_url": "https://dashscope.console.aliyun.com/apiKey",
     },
     "volcengine": {
         "name": "火山方舟 Volcengine",
@@ -70,6 +73,7 @@ VISION_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "default_model": "",
         "needs_key": True,
         "note": "火山方舟推理接入点 ep-xxxx，模型名填你的接入点 ID；价格低。",
+        "signup_url": "https://console.volcengine.com/ark",
     },
     "custom": {
         "name": "自定义 OpenAI 兼容端点",

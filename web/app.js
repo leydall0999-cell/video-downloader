@@ -313,6 +313,8 @@
     visionModel: $('visionModel'),
     visionNote: $('visionNote'),
     visionRuntime: $('visionRuntime'),
+    visionSignup: $('visionSignup'),
+    visionSignupWrap: $('visionSignupWrap'),
     visionSave: $('visionSave'),
     visionStatus: $('visionStatus'),
     // 格式 / 片段加工（桌面版功能）
@@ -7928,6 +7930,23 @@
       rt.style.color = warn ? '#e67e22' : '#27ae60';
     }
 
+    // 根据选中的 provider，联动显示其免费额度申请链接（仅云端 provider 有 signup_url）
+    function renderVisionSignup(provider) {
+      const wrap = el.visionSignupWrap;
+      const a = el.visionSignup;
+      if (!wrap || !a) return;
+      const preset = providers[provider];
+      if (preset && preset.signup_url) {
+        a.href = preset.signup_url;
+        // 取 provider 名中的简短中文/品牌名（去掉括号补充说明）
+        const short = (preset.name.split('（')[0].split('(')[0]).trim();
+        a.textContent = '申请 ' + short + ' 免费额度 →';
+        wrap.hidden = false;
+      } else {
+        wrap.hidden = true;
+      }
+    }
+
     if (el.visionProvider) {
       el.visionProvider.innerHTML = '';
       for (const [k, v] of Object.entries(providers)) {
@@ -7950,6 +7969,8 @@
         el.visionApiKey.placeholder = needsKey ? 'sk-...（必填）' : 'sk-...（Ollama/自动模式可留空）';
         // 切换服务商后联动提示（尤其是 Apple Silicon 选 Ollama 的崩溃警示）
         renderVisionRuntime(sel);
+        // 联动显示该服务商的免费额度申请链接
+        renderVisionSignup(sel);
       });
     }
 
@@ -7966,6 +7987,8 @@
         if (el.visionNote && preset && preset.note) el.visionNote.textContent = preset.note;
         // 用已保存的 provider 渲染提示
         renderVisionRuntime(cfg.provider || defaultProvider);
+        // 联动显示已保存服务商的免费额度申请链接
+        renderVisionSignup(cfg.provider || defaultProvider);
       }
     } catch (e) { /* */ }
 
