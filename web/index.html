@@ -872,19 +872,25 @@
                 <option value="minimax" data-base="MiniMax 海螺">MiniMax 海螺　🔴收费（需填写密钥）</option>
                 <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需填写密钥，新用户送 ¥14）</option>
               </select>
-              <button id="comStartTtsBtn" type="button" class="com-mini-btn" style="display:none;">一键开启语音克隆</button>
-              <span id="comStartTtsMsg" class="com-start-status"></span>
-              <span class="com-retain-hint">选「本地语音克隆」后，旁白会在你电脑本地生成，音色更自然、还能模仿指定声音。第一次使用点右侧「一键开启」即可，不用懂技术。</span>
-              <div class="com-price-legend">
-                <span class="com-badge com-badge-free">🟢 免费</span>
-                <span class="com-badge com-badge-paid">🔴 收费</span>
-                <span class="com-price-note">免费＝本机/公开服务无 API 计费；收费＝需第三方 API Key 充值（MiniMax 约 ¥5/万字，SiliconFlow 约 ¥1.5/万字）</span>
-              </div>
-              <label class="com-checkbox-row" style="margin-top:8px;">
-                <input id="comCorrectTranscript" type="checkbox" checked />
-                <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
-              </label>
             </div>
+            <!-- 本地语音克隆状态条：独立显式展示，避免用户找不到入口 -->
+            <div id="comTtsStatusBar" class="com-tts-status-bar" style="display:none;">
+              <span id="comTtsStatusDot" class="com-tts-status-dot"></span>
+              <span id="comTtsStatusText" class="com-tts-status-text"></span>
+              <button id="comStartTtsBtn" type="button" class="com-mini-btn">一键开启语音克隆</button>
+              <span id="comStartTtsMsg" class="com-start-status"></span>
+            </div>
+            <span class="com-retain-hint">选「本地语音克隆」后，旁白会在你电脑本地生成，音色更自然、还能模仿指定声音。第一次使用点下方「一键开启」即可，不用懂技术。</span>
+            <div class="com-price-legend">
+              <span class="com-badge com-badge-free">🟢 免费</span>
+              <span class="com-badge com-badge-paid">🔴 收费</span>
+              <span class="com-price-note">免费＝本机/公开服务不额外花钱；收费＝需第三方密钥充值（MiniMax 约 ¥5/万字，SiliconFlow 约 ¥1.5/万字）</span>
+            </div>
+            <label class="com-checkbox-row" style="margin-top:8px;">
+              <input id="comCorrectTranscript" type="checkbox" checked />
+              <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
+            </label>
+          </div>
           </div>
           <!-- 导出剪映草稿：成片生成后再导出可编辑草稿（视频轨+配音轨+字幕轨） -->
           <div class="com-opt-block com-opt-block-full">
