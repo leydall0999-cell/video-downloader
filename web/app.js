@@ -2491,8 +2491,9 @@
 
   mcAddBtn.addEventListener('click', () => {
     if (mcDesktopNative()) {
-      const paths = window.VDL.desktop.chooseFiles();
-      if (paths && paths.length) mcAddFiles(paths);
+      window.VDL.desktop.chooseFiles().then(paths => {
+        if (paths && paths.length) mcAddFiles(paths);
+      }).catch(() => {});
     } else {
       mcFileInput.click();
     }
@@ -2554,8 +2555,9 @@
   // 事件绑定
   el.ucAddBtn.addEventListener('click', () => {
     if (ucDesktopNative()) {
-      const list = window.VDL.desktop.chooseFiles();
-      if (list && list.length) ucAddFiles(list);
+      window.VDL.desktop.chooseFiles().then(list => {
+        if (list && list.length) ucAddFiles(list);
+      }).catch(() => {});
     } else {
       el.ucFileInput.click();
     }
@@ -5838,24 +5840,25 @@
     }
     // 委托桌面增强层用原生桥接在系统浏览器打开授权页；无桥接（含纯 web 端）
     // 时回退 window.open。window.VDL.desktop 仅在 desktop-app.js 加载后存在。
-    let opened = false;
-    const viaDesktop = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal(url);
-    if (viaDesktop) {
-      opened = true;
+    // 注意：openExternal 现在返回 Promise（pywebview api 调用约定），原生打开是 Python 副作用，
+    // 无需 await；这里只负责展示状态与 web 端回退。
+    if (window.VDL && window.VDL.desktop) {
+      window.VDL.desktop.openExternal(url);
+      el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
+      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
     } else {
       // web 端或原生桥接不可用：回退浏览器打开
       try {
         const w = window.open(url, '_blank');
-        opened = !!w;
-      } catch (e2) { opened = false; }
+        if (!w) { throw new Error('blocked'); }
+        el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
+        if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
+      } catch (e2) {
+        el.cloudBaiduStatus.textContent = '无法打开授权页，请用浏览器访问：' + url;
+        if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '无法打开授权页';
+        return;
+      }
     }
-    if (!opened) {
-      el.cloudBaiduStatus.textContent = '无法打开授权页，请用浏览器访问：' + url;
-      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '无法打开授权页';
-      return;
-    }
-    el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
-    if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
     // 轮询后端检测授权完成（百度回调写入 token 文件后本端点返回 logged_in）
     if (_baiduAuthPoll) clearInterval(_baiduAuthPoll);
     _baiduAuthPoll = setInterval(async () => {
@@ -6029,8 +6032,8 @@
     pcsOpenWebBtn.addEventListener('click', () => {
       const url = 'https://pan.baidu.com/';
       // 委托桌面增强层原生打开；无桥接（含 web 端）回退浏览器
-      const opened = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal(url);
-      if (!opened) window.open(url, '_blank');
+      if (window.VDL && window.VDL.desktop) window.VDL.desktop.openExternal(url);
+      else window.open(url, '_blank');
     });
   }
 
@@ -6805,8 +6808,8 @@
             link.textContent = '↗ 点击在浏览器打开百度分享页下载';
             try {
               // 委托桌面增强层原生打开；无桥接（含 web 端）回退浏览器
-              const opened = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal(t.browser_url);
-              if (!opened) window.open(t.browser_url, '_blank');  // 浏览器模式回退
+              if (window.VDL && window.VDL.desktop) window.VDL.desktop.openExternal(t.browser_url);
+              else window.open(t.browser_url, '_blank');  // 浏览器模式回退
             } catch (e) {
               // 自动打开失败不致命，用户可点上面的链接手动打开
             }

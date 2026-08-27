@@ -49,48 +49,48 @@
     // false=无原生桥接（调用方应回退到 window.open）。
     openExternal(url) {
       const api = window.pywebview && window.pywebview.api;
-      if (api && typeof api.open_external === 'function') {
-        try {
-          const r = api.open_external(url);
-          return (typeof r === 'string') ? !r.startsWith('ERROR') : true;
-        } catch (e) {
-          return false; // 桥接异常：告知调用方回退
-        }
+      if (!(api && typeof api.open_external === 'function')) return Promise.resolve(false);
+      const norm = (r) => (typeof r === 'string') ? !r.startsWith('ERROR') : true;
+      try {
+        const r = api.open_external(url);
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => false);
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve(false); // 桥接异常：告知调用方回退
       }
-      return false; // 无原生桥接
     },
     // 弹出系统文件夹选择框，返回所选目录绝对路径；无桥接或用户取消返回空串。
+    // 注意：pywebview 的 api.* 调用返回 Promise，必须 await/then 取值。
     chooseFolder() {
       const api = window.pywebview && window.pywebview.api;
-      if (api && typeof api.choose_folder === 'function') {
-        try {
-          const r = api.choose_folder();
-          if (typeof r === 'string') return r.startsWith('ERROR') ? '' : r;
-          return r || '';
-        } catch (e) {
-          return '';
-        }
+      if (!(api && typeof api.choose_folder === 'function')) return Promise.resolve('');
+      const norm = (r) => (typeof r === 'string') ? (r.startsWith('ERROR') ? '' : r) : (r || '');
+      try {
+        const r = api.choose_folder();
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => '');
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve('');
       }
-      return '';
     },
     // 弹出系统多文件选择框，返回绝对路径数组；无桥接或用户取消返回空数组。
+    // 注意：pywebview 的 api.* 调用返回 Promise，必须 await/then 取值。
     chooseFiles() {
       const api = window.pywebview && window.pywebview.api;
-      if (api && typeof api.choose_files === 'function') {
-        try {
-          const r = api.choose_files();
-          if (typeof r === 'string') {
-            if (r.startsWith('ERROR')) return [];
-            if (!r) return [];
-            return r.split('\n').filter(Boolean);
-          }
-          if (Array.isArray(r)) return r.filter(Boolean);
-          return [];
-        } catch (e) {
-          return [];
-        }
+      if (!(api && typeof api.choose_files === 'function')) return Promise.resolve([]);
+      const norm = (r) => {
+        if (!r) return [];
+        if (typeof r === 'string') return r.startsWith('ERROR') ? [] : r.split('\n').filter(Boolean);
+        if (Array.isArray(r)) return r.filter(Boolean);
+        return [];
+      };
+      try {
+        const r = api.choose_files();
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => []);
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve([]);
       }
-      return [];
     },
     // 一键开启本地语音克隆（IndexTTS-MLX）：自动寻找并启动本地服务，返回 {ok, msg}。
     // 普通用户无需理解「端口/服务」等概念，点一下由 App 自己搞定；无桥接则回退提示。
