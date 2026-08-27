@@ -329,6 +329,17 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
+    def debug_bridge(self, msg: str) -> str:
+        """临时诊断用：把前端桥接链路关键值落盘到 ~/vdl_bridge_debug.log。"""
+        try:
+            import os, datetime
+            p = os.path.expanduser('~/vdl_bridge_debug.log')
+            with open(p, 'a', encoding='utf-8') as f:
+                f.write(datetime.datetime.now().isoformat() + ' ' + str(msg) + '\n')
+            return 'ok'
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
     def start_indextts_mlx(self) -> dict:
         """一键开启本地语音克隆（IndexTTS-MLX）。
 
@@ -1130,9 +1141,10 @@ class VdlApi:
         if existing is not None:
             try:
                 href = existing.evaluate_js("location.href")
-                ck = existing.evaluate_js("document.cookie || ''")
-                if isinstance(href, str) and ('/disk' in href or '/main' in href) \
-                        and isinstance(ck, str) and 'BDUSS' in ck:
+                # BDUSS HttpOnly → document.cookie 读不到；用 URL 在网盘首页作为登录态信号
+                if isinstance(href, str) and 'passport.baidu.com' not in href \
+                        and ('pan.baidu.com' in href or 'yun.baidu.com' in href) \
+                        and ('/disk' in href or '/main' in href):
                     _log("复用已登录 self._baidu_wv（" + href[:80] + "），跳过重新登录")
                     return json.dumps({"ok": True, "logged": True, "reused": True, "message": "已登录，可直接下载。"})
             except Exception:
@@ -1174,18 +1186,25 @@ class VdlApi:
                     _log("已 load 百度登录页，等待用户扫码...")
                 except Exception as e_load:
                     _log("load 登录页异常: " + str(e_load))
-                # 轮询等登录完成（多信号：URL 含 /disk、cookie 含 BDUSS、yunData.loginstate=1）
+                # 轮询等登录完成。
+                # ★ 2026-08-27 续30 关键修复：BDUSS 是 HttpOnly cookie，
+                # `document.cookie` 读不到 → 之前用 "'BDUSS' in ck" 永远 False，
+                # 登录后 URL 已跳到 /disk/main 但检测失败，窗口永不 hide。
+                # 正确信号：URL 从 passport.baidu.com 跳到 pan.baidu.com/yun.baidu.com 网盘首页
+                # （登录成功必跳 /disk/main 或 yun.baidu.com/disk）。
                 logged = False
                 for i in range(180):  # 最多 3 分钟
                     _t.sleep(1)
                     try:
                         href = w.evaluate_js("location.href") or ""
-                        ck = w.evaluate_js("document.cookie || ''") or ""
-                        ls = w.evaluate_js("(window.yunData && window.yunData.loginstate) || 0")
-                        if ('/disk' in href or '/main' in href) and isinstance(ck, str) and 'BDUSS' in ck:
+                        if href and 'passport.baidu.com' not in href \
+                                and ('pan.baidu.com' in href or 'yun.baidu.com' in href) \
+                                and ('/disk' in href or '/main' in href):
                             logged = True
-                            _log("登录完成 (s=" + str(i+1) + ", href=" + href[:60] + ", has_BDUSS=" + ("yes" if 'BDUSS' in ck else 'no') + ")")
+                            _log("登录完成 (URL 跳转: " + href[:80] + ", s=" + str(i+1) + ")")
                             break
+                        # 兜底：yunData.loginstate == 1（分享页等可能有）
+                        ls = w.evaluate_js("(window.yunData && window.yunData.loginstate) || 0")
                         if isinstance(ls, (int, float)) and int(ls) == 1:
                             logged = True
                             _log("登录完成 (yunData.loginstate=1, s=" + str(i+1) + ")")
