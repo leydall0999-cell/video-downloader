@@ -1852,6 +1852,12 @@ img { max-width: 100%; display: block; }
 }
 .com-retain-unit { font-size: .85rem; font-weight: 600; color: var(--accent); }
 .com-retain-hint { font-size: .74rem; opacity: .75; }
+/* 配音引擎 免费/收费 图例 */
+.com-price-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.com-badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: .72rem; font-weight: 700; color: #fff; }
+.com-badge-free { background: #34C759; }
+.com-badge-paid { background: #FF3B30; }
+.com-price-note { font-size: .72rem; opacity: .7; line-height: 1.4; }
 .com-oneclick { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff7a00));
   border: none; color: #fff; }
 .com-oneclick:hover { filter: brightness(1.05); }

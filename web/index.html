@@ -866,13 +866,18 @@
             <div class="com-opt-title">配音引擎</div>
             <div class="com-opt-row">
               <select id="comTtsProvider" class="com-select">
-                <option value="">默认（微软 edge-tts）</option>
-                <option value="indextts_mlx">IndexTTS-MLX 本地语音克隆（Mac 推荐，需先起 7866 服务）</option>
-                <option value="indextts2">IndexTTS2 本地语音克隆（Mac 因依赖墙跑不起来，不推荐）</option>
-                <option value="minimax">MiniMax 海螺</option>
-                <option value="siliconflow">SiliconFlow</option>
+                <option value="" data-base="默认（微软 edge-tts）">默认（微软 edge-tts）　🟢免费</option>
+                <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆">IndexTTS-MLX 本地语音克隆（Mac 推荐，需先起 7866 服务）　🟢免费（本机）</option>
+                <option value="indextts2" data-base="IndexTTS2 本地语音克隆">IndexTTS2 本地语音克隆（Mac 因依赖墙跑不起来，不推荐）　🟢免费（本机）</option>
+                <option value="minimax" data-base="MiniMax 海螺">MiniMax 海螺　🔴收费（需 API Key）</option>
+                <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需 API Key，新用户送 ¥14）</option>
               </select>
               <span class="com-retain-hint">indextts_mlx 为 Apple Silicon 原生 MLX 版，需在终端先启动 IndexTTS-MLX-1.5-Pack 服务（默认 http://127.0.0.1:7866），参考音频在解说面板「全局配音」里用 indextts_mlx:/路径/参考.wav 指定</span>
+              <div class="com-price-legend">
+                <span class="com-badge com-badge-free">🟢 免费</span>
+                <span class="com-badge com-badge-paid">🔴 收费</span>
+                <span class="com-price-note">免费＝本机/公开服务无 API 计费；收费＝需第三方 API Key 充值（MiniMax 约 ¥5/万字，SiliconFlow 约 ¥1.5/万字）</span>
+              </div>
               <label class="com-checkbox-row" style="margin-top:8px;">
                 <input id="comCorrectTranscript" type="checkbox" checked />
                 <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>

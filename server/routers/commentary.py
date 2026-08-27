@@ -15,6 +15,56 @@ def commentary_config_get() -> dict:
     return get_commentary_config()
 
 
+@router.get("/api/commentary/tts-status")
+def commentary_tts_status() -> dict:
+    """返回 TTS 引擎相关的本机配置/就绪状态，供前端动态推荐。
+
+    - platform: darwin / win32 / linux
+    - apple_silicon: 是否为 Apple Silicon Mac（MLX 仅在此推荐）
+    - indextts_mlx_ready: 127.0.0.1:7866 是否可连接
+    - minimax_configured / siliconflow_configured: 是否已配置 API Key
+    """
+    import json
+    import os
+    import platform as _platform
+    import socket
+    import sys
+
+    _plat = sys.platform
+    machine = _platform.machine().lower()
+    apple_silicon = (_plat == "darwin") and (machine.startswith("arm") or "aarch64" in machine)
+
+    indextts_mlx_ready = False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.6)
+            s.connect(("127.0.0.1", 7866))
+            indextts_mlx_ready = True
+    except Exception:
+        indextts_mlx_ready = False
+
+    tts_cfg: dict = {}
+    try:
+        tts_path = os.path.join(os.path.expanduser("~"), ".video-downloader", "tts_config.json")
+        if os.path.exists(tts_path):
+            with open(tts_path, encoding="utf-8") as f:
+                tts_cfg = json.load(f)
+    except Exception:
+        tts_cfg = {}
+
+    minimax_key = (os.environ.get("MINIMAX_API_KEY") or tts_cfg.get("minimax_api_key") or "").strip()
+    siliconflow_key = (os.environ.get("SILICONFLOW_API_KEY") or tts_cfg.get("api_key") or "").strip()
+
+    return {
+        "platform": _plat,
+        "machine": machine,
+        "apple_silicon": apple_silicon,
+        "indextts_mlx_ready": indextts_mlx_ready,
+        "minimax_configured": bool(minimax_key),
+        "siliconflow_configured": bool(siliconflow_key),
+    }
+
+
 @router.post("/api/commentary/config")
 def commentary_config_save(req: app.CommentaryConfigRequest) -> dict:
     """保存解说(配音/音量)手动可调设置，写入 commentary_config.json。"""

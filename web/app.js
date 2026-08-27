@@ -3876,6 +3876,49 @@
     return dir || '__default__';
   };
 
+  /** 根据本机配置/服务就绪状态，动态改写配音引擎 option 的括号提示。 */
+  const comRefreshTtsStatus = async () => {
+    const sel = el.comTtsProvider;
+    if (!sel) return;
+    // 保存当前 value，改写 text 后恢复
+    const currentValue = sel.value;
+    let status = {};
+    try {
+      status = await request('/api/commentary/tts-status');
+    } catch (_e) {
+      return; // 后端未升级或网络异常时保持静态兜底文案
+    }
+    Array.from(sel.options).forEach((opt) => {
+      const base = opt.dataset.base || opt.textContent.split('　')[0];
+      if (!opt.dataset.base) opt.dataset.base = base;
+      const prov = opt.value;
+      let suffix = '';
+      if (prov === '') {
+        suffix = '　🟢免费';
+      } else if (prov === 'indextts_mlx') {
+        if (status.apple_silicon && status.indextts_mlx_ready) {
+          suffix = '　🟢免费（本机，🌟 已就绪）';
+        } else if (status.apple_silicon) {
+          suffix = '　🟢免费（本机，需先起 7866 服务）';
+        } else {
+          suffix = '　🟢免费（仅 Apple Silicon 推荐）';
+        }
+      } else if (prov === 'indextts2') {
+        suffix = '　🟢免费（本机，Mac 暂无法运行）';
+      } else if (prov === 'minimax') {
+        suffix = status.minimax_configured
+          ? '　🔴收费（API Key 已配置）'
+          : '　🔴收费（需 API Key，未配置）';
+      } else if (prov === 'siliconflow') {
+        suffix = status.siliconflow_configured
+          ? '　🔴收费（API Key 已配置，新用户送 ¥14）'
+          : '　🔴收费（需 API Key，未配置）';
+      }
+      opt.textContent = base + suffix;
+    });
+    sel.value = currentValue;
+  };
+
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
   const comGetAspect = () => {
     const aspectEl = document.querySelector('input[name="comAspect"]:checked');
@@ -4646,6 +4689,7 @@
     refreshComSource();
     refreshCommentaryDiagnostics();
     loadVolumeConfig();
+    comRefreshTtsStatus();
   };
 
   /** 加载解说(配音/音量)手动设置并回填滑块。 */
