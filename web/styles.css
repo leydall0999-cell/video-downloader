@@ -1730,6 +1730,7 @@ img { max-width: 100%; display: block; }
 /* ---- 生成按钮行（双按钮，主次分明） ---- */
 .com-generate-row {
   display: flex; gap: .75rem; margin-top: 1rem;
+  padding: 0 .9rem;
 }
 .com-generate-row .com-generate-main {
   flex: 1; padding: .85rem 1rem; font-size: 1rem; font-weight: 700;
@@ -1766,6 +1767,15 @@ img { max-width: 100%; display: block; }
   padding: 0; background: none; border: none;
 }
 .com-opt-block-full { grid-column: 1 / -1; }
+
+/* 配音与音量：独立卡片，避免与左侧贴边 */
+#comVolumeBlock {
+  margin-top: .75rem;
+  padding: .75rem .9rem .9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
 .com-opt-title {
   font-size: .72rem; font-weight: 700; letter-spacing: .02em; color: var(--accent);
 }
@@ -2024,7 +2034,8 @@ img { max-width: 100%; display: block; }
   font-size: .85rem; color: var(--text-mute);
 }
 .com-oneclick-note {
-  margin: .45rem 0 0; font-size: .82rem; line-height: 1.6; color: var(--text-mute);
+  margin: .45rem 0 0; padding: 0 .9rem;
+  font-size: .82rem; line-height: 1.6; color: var(--text-mute);
 }
 .com-style-hint {
   margin: .5rem 0 0; font-size: .8rem; line-height: 1.55; color: var(--text-mute);
