@@ -297,6 +297,92 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
+    def start_indextts_mlx(self) -> dict:
+        """一键开启本地语音克隆（IndexTTS-MLX）。
+
+        普通用户无需理解「端口/服务」等概念：本方法自动在常见位置寻找语音克隆包，
+        启动其本地服务，并返回大白话结果。找不到包或启动失败时也给出可操作的提示，
+        不会抛出未捕获异常（前端会友好展示 msg）。
+        """
+        import os
+        import subprocess
+
+        pack_dirs = [
+            os.path.expanduser("~/Downloads/IndexTTS-MLX-1.5-Pack"),
+            os.path.expanduser("~/Desktop/IndexTTS-MLX-1.5-Pack"),
+            os.path.expanduser("~/Documents/IndexTTS-MLX-1.5-Pack"),
+            os.path.expanduser("~/Applications/IndexTTS-MLX-1.5-Pack"),
+            "/Applications/IndexTTS-MLX-1.5-Pack",
+            os.path.expanduser("~/IndexTTS-MLX-1.5-Pack"),
+        ]
+        pack = next((d for d in pack_dirs if os.path.isdir(d)), None)
+        if not pack:
+            return {
+                "ok": False,
+                "msg": "还没装「语音克隆」包。请把 IndexTTS-MLX-1.5-Pack 解压到「下载」文件夹，再点一次此按钮即可。",
+            }
+
+        # 兼容不同解压结构：优先在包根目录找启动脚本，再递归向下找一层
+        launch_scripts = ["app.py", "launch.py", "demo.py", "server.py", "start.py", "main.py"]
+        target = None
+        for s in launch_scripts:
+            p = os.path.join(pack, s)
+            if os.path.isfile(p):
+                target = p
+                break
+        if target is None:
+            for root, dirs, files in os.walk(pack):
+                if "node_modules" in root or ".git" in root:
+                    continue
+                for f in files:
+                    if f in launch_scripts:
+                        target = os.path.join(root, f)
+                        break
+                if target:
+                    break
+        if target is None:
+            return {
+                "ok": False,
+                "msg": "在「语音克隆」文件夹里没找到启动脚本，请确认解压完整（不要只解压了子文件夹）。",
+            }
+
+        # 选解释器：优先用包内 venv，否则退回系统 python3
+        target_dir = os.path.dirname(target)
+        py_cands = [
+            os.path.join(pack, "venv", "bin", "python"),
+            os.path.join(target_dir, "venv", "bin", "python"),
+            os.path.join(pack, "venv", "Scripts", "python.exe"),
+            "python3",
+            "python",
+        ]
+        py = None
+        for c in py_cands:
+            if c in ("python3", "python"):
+                py = c
+                break
+            if os.path.isfile(c):
+                py = c
+                break
+        if py is None:
+            py = "python3"
+
+        try:
+            log_path = os.path.expanduser("~/.vdl_indextts.log")
+            with open(log_path, "w") as lf:
+                subprocess.Popen(
+                    [py, target],
+                    cwd=target_dir,
+                    stdout=lf,
+                    stderr=lf,
+                    start_new_session=True,
+                )
+            return {
+                "ok": True,
+                "msg": "已开始启动，约 10–30 秒后在「配音引擎」下拉里会显示「已就绪，可直接用」。",
+            }
+        except Exception as exc:  # 把错误回传前端展示
+            return {"ok": False, "msg": f"启动失败：{exc}"}
+
     def get_baidu_dlink(self, share_url: str, fs_id: int = 0, pwd: str = "") -> str:
         """复用已登录的 WebView 实例打开百度分享页，提取下载直链。
 

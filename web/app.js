@@ -382,6 +382,8 @@
     comExportJianyingDir: $('comExportJianyingDir'),
     comExportJianyingDirWrap: $('comExportJianyingDirWrap'),
     comExportJianyingPick: $('comExportJianyingPick'),
+    comStartTtsBtn: $('comStartTtsBtn'),
+    comStartTtsMsg: $('comStartTtsMsg'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
     comFileName: $('comFileName'),
@@ -3896,27 +3898,48 @@
       if (prov === '') {
         suffix = '　🟢免费';
       } else if (prov === 'indextts_mlx') {
-        if (status.apple_silicon && status.indextts_mlx_ready) {
-          suffix = '　🟢免费（本机，🌟 已就绪）';
+        if (status.indextts_mlx_ready) {
+          suffix = '　🟢免费（已就绪，可直接用）';
         } else if (status.apple_silicon) {
-          suffix = '　🟢免费（本机，需先起 7866 服务）';
+          suffix = '　🟢免费（点右侧「一键开启」）';
         } else {
-          suffix = '　🟢免费（仅 Apple Silicon 推荐）';
+          suffix = '　🟢免费（仅苹果芯片 Mac 可用）';
         }
       } else if (prov === 'indextts2') {
         suffix = '　🟢免费（本机，Mac 暂无法运行）';
       } else if (prov === 'minimax') {
         suffix = status.minimax_configured
-          ? '　🔴收费（API Key 已配置）'
-          : '　🔴收费（需 API Key，未配置）';
+          ? '　🔴收费（密钥已填写）'
+          : '　🔴收费（需填写密钥）';
       } else if (prov === 'siliconflow') {
         suffix = status.siliconflow_configured
-          ? '　🔴收费（API Key 已配置，新用户送 ¥14）'
-          : '　🔴收费（需 API Key，未配置）';
+          ? '　🔴收费（密钥已填写，新用户送 ¥14）'
+          : '　🔴收费（需填写密钥）';
       }
       opt.textContent = base + suffix;
     });
     sel.value = currentValue;
+    // 仅在「本地语音克隆」且未就绪(且是苹果芯片)时，显示「一键开启」按钮，降低普通用户操作门槛
+    const showStart = sel.value === 'indextts_mlx' && !status.indextts_mlx_ready && status.apple_silicon;
+    if (el.comStartTtsBtn) el.comStartTtsBtn.style.display = showStart ? '' : 'none';
+    if (el.comStartTtsMsg && !showStart) el.comStartTtsMsg.textContent = '';
+  };
+
+  /** 一键开启本地语音克隆：普通用户无需懂技术，点一下由 App 自动启动，失败给大白话提示。 */
+  const comStartTtsClk = async () => {
+    const msg = el.comStartTtsMsg;
+    if (msg) msg.textContent = '正在开启…';
+    let res = { ok: false, msg: '当前环境不支持自动开启，请在桌面版中使用。' };
+    try {
+      if (window.VDL && window.VDL.desktop && typeof window.VDL.desktop.startIndexTts === 'function') {
+        res = await window.VDL.desktop.startIndexTts();
+      }
+    } catch (e) {
+      res = { ok: false, msg: '开启失败：' + (e && e.message ? e.message : e) };
+    }
+    if (msg) msg.textContent = (res && res.msg) ? res.msg : (res && res.ok ? '已开启' : '开启失败');
+    // 几秒后刷新下拉状态，若已就绪会自动隐藏按钮
+    setTimeout(() => comRefreshTtsStatus(), 8000);
   };
 
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
@@ -5086,6 +5109,11 @@
     r.addEventListener('change', comApplyStyleVoice);
   });
   comApplyStyleVoice();  // 初始化提示
+
+  // 一键开启本地语音克隆：普通用户友好入口，无需理解端口/服务概念
+  if (el.comStartTtsBtn) {
+    el.comStartTtsBtn.addEventListener('click', comStartTtsClk);
+  }
 
   // 导出剪映草稿：勾选后显示目录输入行；「选择文件夹」按钮走桌面原生桥接（无桥接则聚焦输入框手动填）
   if (el.comExportJianying) {

@@ -867,12 +867,14 @@
             <div class="com-opt-row">
               <select id="comTtsProvider" class="com-select">
                 <option value="" data-base="默认（微软 edge-tts）">默认（微软 edge-tts）　🟢免费</option>
-                <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆">IndexTTS-MLX 本地语音克隆（Mac 推荐，需先起 7866 服务）　🟢免费（本机）</option>
-                <option value="indextts2" data-base="IndexTTS2 本地语音克隆">IndexTTS2 本地语音克隆（Mac 因依赖墙跑不起来，不推荐）　🟢免费（本机）</option>
-                <option value="minimax" data-base="MiniMax 海螺">MiniMax 海螺　🔴收费（需 API Key）</option>
-                <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需 API Key，新用户送 ¥14）</option>
+                <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆（更自然）">IndexTTS-MLX 本地语音克隆（更自然）　🟢免费</option>
+                <option value="indextts2" data-base="IndexTTS2 本地语音克隆">IndexTTS2 本地语音克隆（本机，Mac 暂无法运行）　🟢免费</option>
+                <option value="minimax" data-base="MiniMax 海螺">MiniMax 海螺　🔴收费（需填写密钥）</option>
+                <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需填写密钥，新用户送 ¥14）</option>
               </select>
-              <span class="com-retain-hint">indextts_mlx 为 Apple Silicon 原生 MLX 版，需在终端先启动 IndexTTS-MLX-1.5-Pack 服务（默认 http://127.0.0.1:7866），参考音频在解说面板「全局配音」里用 indextts_mlx:/路径/参考.wav 指定</span>
+              <button id="comStartTtsBtn" type="button" class="com-mini-btn" style="display:none;">一键开启语音克隆</button>
+              <span id="comStartTtsMsg" class="com-start-status"></span>
+              <span class="com-retain-hint">选「本地语音克隆」后，旁白会在你电脑本地生成，音色更自然、还能模仿指定声音。第一次使用点右侧「一键开启」即可，不用懂技术。</span>
               <div class="com-price-legend">
                 <span class="com-badge com-badge-free">🟢 免费</span>
                 <span class="com-badge com-badge-paid">🔴 收费</span>
