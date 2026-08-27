@@ -434,32 +434,41 @@ class VdlApi:
         def _extract():
             temp = None
             try:
-                # 关键修复（2026-08-16）：百度现在下载分享文件强制要求登录态。
-                # yunData.sign 由登录态生成，游客 sign 为空 → sharedownload 返回 errno=2。
-                # 而 WKWebView 跨新窗口的 Cookie 同步是异步延迟的 → 新窗口读不到刚登录
-                # 的 cookie（uk=0）。因此必须复用 baidu_login 的同一个 WebView 实例，
-                # 该实例内存中已有登录 cookie，sign 才能正常生成。
-                wv = getattr(self, "_baidu_wv", None)
-                if wv is None:
-                    # 从未登录过（self._baidu_wv 由 baidu_login 首次创建时保存）
-                    # ★ 2026-08-27 选项2：自动触发登录，让用户无需手动先点「极速通道」
-                    #   get_baidu_dlink 被前端调用时若发现尚未登录，直接拉起登录窗口，
-                    #   登录成功后复用同一 WKWebView 实例继续提取 sign/dlink。
-                    _log("未登录，自动触发 baidu_login() 以打开登录窗口...")
+                # ★ 2026-08-27 续23 修正：免登录优先，不再自动弹登录窗
+                #   之前会在 _baidu_wv 为 None 时自动调 baidu_login()，结果用户每次都
+                #   看到百度欢迎页 + "去登录" 按钮，体验极差被吐槽。
+                #   改为：直接创建/复用 hidden WebView 加载分享页，先尝试游客态抽签。
+                #   真需要登录时返回 REQUIRES_LOGIN，由前端用「立即登录」按钮明确触发。
+                import webview as _wv
+                if not hasattr(self, "_baidu_wv") or self._baidu_wv is None:
                     try:
-                        self.baidu_login()
-                    except Exception as e_auto:
-                        _log("自动登录异常: " + str(e_auto))
-                    wv = getattr(self, "_baidu_wv", None)
-                    if wv is None:
+                        new_wv = _wv.create_window(
+                            title="VDL-百度分享直链",
+                            url=share_url,
+                            width=900, height=700,
+                            hidden=True,  # 默认隐藏——只在需要登录确认时才显示
+                        )
+                        self._baidu_wv = new_wv
+                        # 等 WKWebView 初始化完成
+                        _time.sleep(2)
+                        _log("创建新的 WebView 实例并直接加载分享页（游客态）")
+                    except Exception as e_wv:
+                        _log("创建 WebView 异常: " + str(e_wv))
                         result_holder["value"] = json.dumps({
                             "ok": False,
-                            "error": "NOT_LOGGED_IN",
-                            "message": "百度网盘需登录后才能下载分享文件，请在弹出的窗口登录后重试。"
+                            "error": "WEBVIEW_INIT_FAILED",
+                            "message": "创建浏览器窗口失败：{}".format(str(e_wv))
                         })
-                        _log("=== NOT_LOGGED_IN (自动登录后仍无窗口) ===")
                         return
-                temp = wv
+                temp = getattr(self, "_baidu_wv", None)
+                if temp is None:
+                    result_holder["value"] = json.dumps({
+                        "ok": False,
+                        "error": "WEBVIEW_UNAVAILABLE",
+                        "message": "无法获取浏览器实例。"
+                    })
+                    _log("=== WEBVIEW_UNAVAILABLE ===")
+                    return
                 # 确保窗口可见（之前登录后已 hide），避免屏幕外 SPA 不渲染
                 try:
                     temp.show()  # 如果窗口之前被 hide，先显示
@@ -552,31 +561,15 @@ class VdlApi:
                                 // 密码验证完全由 sharedownload body 中的 &pwd= 参数负责。
                                 // 如果 sharedownload 返回 errno:2（密码未验证），自动重试（服务端会逐步建立 session）。
 
-                                // ★ Step 0.5: 检测登录 cookie（2026-08-16 关键修复）
-                                // errno:2 的真根因 = WebView 里没有 BDUSS/STOKEN 登录 cookie。
-                                // yunData.uk/bdstoken 是分享页自带数据（不需要登录就有），不是用户登录态。
-                                // sharedownload 必须有真实登录 cookie 才返回 dlink。
-                                // ★ 关键：WKWebView 导航后 cookie 从 WKWebsiteDataStore 异步重新加载，
-                                //   可能延迟几秒才出现在 document.cookie 中。这里轮询等待最多 10 秒，
-                                //   避免误判 NO_LOGIN_COOKIE（会导致反复弹登录窗）。
-                                var _cookieReady = false, _cookieWait = 20;
-                                while (_cookieWait-- > 0) {
-                                    try {
-                                        var _ck = (document.cookie || '');
-                                        if (_ck.indexOf('BDUSS') !== -1 || _ck.indexOf('STOKEN') !== -1 || _ck.indexOf('BAIDUID') !== -1) {
-                                            _cookieReady = true;
-                                            window.__vdl_cookie_check = {ready:true, waited:(20-_cookieWait), len:_ck.length, has_BDUSS:_ck.indexOf('BDUSS')!==-1, preview:_ck.slice(0,120)};
-                                            break;
-                                        }
-                                    } catch(ce) { window.__vdl_cookie_err = String(ce); }
-                                    await new Promise(function(r){ setTimeout(r, 500); });
-                                }
-                                if (!_cookieReady) {
-                                    var _fc = (document.cookie || '');
-                                    window.__vdl_cookie_check = {ready:false, len:_fc.length, has_BDUSS:_fc.indexOf('BDUSS')!==-1, has_STOKEN:_fc.indexOf('STOKEN')!==-1, has_BAIDUID:_fc.indexOf('BAIDUID')!==-1, preview:_fc.slice(0,120)};
-                                    setResult({ok:false, errno:'NO_LOGIN_COOKIE', message:'WebView 无百度登录cookie(BDUSS/STOKEN/BAIDUID均缺失)。需先在app内登录百度网盘。'});
-                                    return;
-                                }
+                                // ★ 2026-08-27 续23 修正：不再强制等待登录 cookie
+                                // 之前 10 秒轮询 BDUSS/STOKEN/BAIDUID，会让所有未登录访问都被判
+                                // NO_LOGIN_COOKIE，挡住游客态可下的公开/密码分享。
+                                // 改为：直接尝试 tplconfig + sharedownload；
+                                //   sharedownload 返回需登录的错误码（-6/-9/112/113 等）时再返回
+                                //   REQUIRES_LOGIN，让前端决定是否弹登录。
+                                // 仍记录 cookie 状态供诊断。
+                                var _cookies = (document.cookie || '');
+                                window.__vdl_cookie_check = {len:_cookies.length, has_BDUSS:_cookies.indexOf('BDUSS')!==-1, has_STOKEN:_cookies.indexOf('STOKEN')!==-1, has_BAIDUID:_cookies.indexOf('BAIDUID')!==-1, preview:_cookies.slice(0,120)};
 
                                 // 等待 yunData（分享数据）就绪，最多 10 秒
                                 var yd = null, waitYun = 20;
@@ -650,8 +643,14 @@ class VdlApi:
                                     // 记录重试信息
                                     window.__vdl_sdl_retry = {attempt: sdlRetry+1, errno: (sd&&sd.errno), has_pwd:!!pwd};
                                 }
+                                // ★ 2026-08-27 续23：sharedownload 返回需登录 errno 时映射成 REQUIRES_LOGIN
+                                //   让前端用「立即登录」按钮明确触发，而非弹窗偷袭
+                                var LOGIN_REQUIRED_ERRNOS = [-6, -9, 112, 113, 200020, 200025];
                                 if (sd && sd.errno === 0 && sd.dlink) {
                                     setResult({ok:true, dlink:sd.dlink, filename:(sd.list && sd.list[0] && sd.list[0].filename) || 'file'});
+                                } else if (sd && LOGIN_REQUIRED_ERRNOS.indexOf(sd.errno) !== -1) {
+                                    var _params = window.__vdl_sdl_params || {};
+                                    setResult({ok:false, error:'REQUIRES_LOGIN', errno:sd.errno, message:'此分享需要登录百度账号才能下载（errno=' + sd.errno + '）', params:{uk:_params.uk, shareid:_params.shareid, has_BDUSS:_params.has_BDUSS, body_len:_params.body_len}});
                                 } else {
                                     var _params = window.__vdl_sdl_params || {};
                                     setResult({ok:false, errno:(sd && sd.errno !== undefined) ? sd.errno : 'no_dlink', message:'sharedownload 失败: ' + JSON.stringify(sd).slice(0,200) + ' | params: uk='+_params.uk+' shareid='+_params.shareid+' bd='+_params.bdstoken+' body='+_params.body_len});

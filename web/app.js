@@ -6436,16 +6436,57 @@
         if (info && info.ok && info.dlink) {
           return _doDownload(info.dlink);  // ★ 拿到直链 → 策略0
         }
-        // 未登录 app 内 WebView：get_baidu_dlink 已尝试自动拉起登录窗口；
-        // 若仍返回 NOT_LOGGED_IN / NO_LOGIN_COOKIE，说明自动登录未成功（用户未登录或登录超时）。
-        // 此时不再静默回退到后端 BDUSS 直链（该路径 2026 已被百度封堵，必败），
-        // 而是给出明确提示，引导用户用「🔑 极速通道」登录后重试。
-        if (info && (info.error === 'NOT_LOGGED_IN' || info.error === 'NO_LOGIN_COOKIE')) {
-          el.baiduShareStatus.textContent = '⚠ ' + ((info.message) || '需要登录百度网盘') + ' 请在「🔑 极速通道（可选，登录后更快）」完成登录后重试。';
+        // ★ 2026-08-27 续23：免登录优先 — 收到 REQUIRES_LOGIN 时显示「立即登录」按钮，
+        //   用户主动点击才弹登录窗，不再被动偷袭弹窗。
+        if (info && (info.error === 'REQUIRES_LOGIN' || info.error === 'NOT_LOGGED_IN' || info.error === 'NO_LOGIN_COOKIE')) {
+          const msgText = (info.message) || '此分享需要登录百度账号才能下载';
+          el.baiduShareStatus.innerHTML = '⚠ ' + escapeHtml(msgText) +
+            ' <button type="button" class="btn btn-accent btn-sm" id="__vdl_login_now">🔑 立即登录</button>';
           el.baiduShareStatus.className = 'baidu-share-status is-err';
+          const loginBtn = el.baiduShareStatus.querySelector('#__vdl_login_now');
+          if (loginBtn) {
+            loginBtn.addEventListener('click', async () => {
+              if (!(window.pywebview && window.pywebview.api && window.pywebview.api.baidu_login)) {
+                el.baiduShareStatus.textContent = '⚠ 此功能仅在桌面版 VideoDownloader.app 内可用';
+                return;
+              }
+              loginBtn.disabled = true;
+              const _t = loginBtn.textContent;
+              loginBtn.textContent = '正在打开登录窗口…';
+              el.baiduShareStatus.textContent = '正在登录，完成后将自动重试下载…';
+              el.baiduShareStatus.className = 'baidu-share-status';
+              try {
+                await window.pywebview.api.baidu_login();  // 立即返回，登录窗口在后台进行
+                // 轮询重试：登录窗口可能耗时 30s~3min
+                let _success = null;
+                for (let _retry = 0; _retry < 60; _retry++) {
+                  await new Promise((r) => setTimeout(r, 2000));
+                  el.baiduShareStatus.textContent = `正在等待登录完成… (${_retry * 2}s / 120s)`;
+                  const _r = await callGetDlink();
+                  if (_r && _r.ok && _r.dlink) { _success = _r; break; }
+                  // 还需登录 → 继续等
+                  if (_r && (_r.error === 'REQUIRES_LOGIN' || _r.error === 'NOT_LOGGED_IN' || _r.error === 'NO_LOGIN_COOKIE')) continue;
+                  // 其它错误也暂存，后面再决定怎么显示
+                  _success = _r; break;
+                }
+                if (_success && _success.ok && _success.dlink) {
+                  el.baiduShareStatus.textContent = '✓ 登录成功，开始下载…';
+                  el.baiduShareStatus.className = 'baidu-share-status is-ok';
+                  return _doDownload(_success.dlink);
+                }
+                el.baiduShareStatus.innerHTML = '⚠ 登录超时或失败。请确认窗口里已完成登录后再次点击「下载」。 <button type="button" class="btn btn-accent btn-sm" id="__vdl_login_retry">重试</button>';
+                el.baiduShareStatus.className = 'baidu-share-status is-err';
+                const retry = el.baiduShareStatus.querySelector('#__vdl_login_retry');
+                if (retry) retry.addEventListener('click', () => startBaiduShareDownload(item));
+              } catch (e) {
+                el.baiduShareStatus.textContent = '⚠ 登录出错：' + e.message;
+                el.baiduShareStatus.className = 'baidu-share-status is-err';
+              }
+            });
+          }
           return;
         }
-        // 其它错误（非「未登录」）：WebView 预取失败不影响下载，回退后端 BDUSS 直链兜底
+        // 其它错误（非「需登录」）：WebView 预取失败不影响下载，回退后端 BDUSS 直链兜底
         const msg = (info && info.message) || ('WebView 获取失败：' + ((info && info.error) || '未知'));
         el.baiduShareStatus.textContent = '⚠ WebView 预取直链失败（' + msg + '），改走本机 Cookie 直链下载…';
         el.baiduShareStatus.className = 'baidu-share-status';
