@@ -181,7 +181,14 @@ def _run_flow(mode):
 
 def test_qr_flow_cookie_mode():
     """场景 A：BDUSS 通过 unicast 的 Set-Cookie 下发（最可能的真实行为）。"""
-    gen, result, captured = _run_flow("cookie")
+    import tempfile
+    from unittest.mock import patch
+    # ★ 2026-08-27 续28：隔离 HOME，避免 _finish_login 把 mock BDUSS 写进真实的
+    #   ~/.vdl/baidu_bduss.txt（会污染后端 fallback 路径，且每次构建都重新生成）。
+    _tmp_home = tempfile.mkdtemp(prefix="vdl_test_home_")
+    os.makedirs(os.path.join(_tmp_home, ".vdl"), exist_ok=True)
+    with patch.dict(os.environ, {"HOME": _tmp_home, "USERPROFILE": _tmp_home}):
+        gen, result, captured = _run_flow("cookie")
     assert result["status"] == "confirmed", f"未确认: {result}"
     assert result["login"]["ok"], f"login 失败: {result['login']}"
     assert "BDUSS=MOCK_BDUSS_PADDING_TO_PASS_LENGTH_GUARD_" in captured.get("cookie", ""), \
@@ -191,38 +198,45 @@ def test_qr_flow_cookie_mode():
 
 def test_qr_flow_body_mode():
     """场景 B：unicast 不下发 cookie，兜底走 qrcodestatus 从响应体提取 bduss。"""
-    with _MockServer(mode="body") as srv:
-        base = f"http://127.0.0.1:{srv.port}"
-        saved = (baidu_qr.GET_QR, baidu_qr.UNICAST, baidu_qr.QR_STATUS, baidu_qr.PCS_LOGIN)
-        baidu_qr.GET_QR = base + "/v2/api/getqrcode"
-        baidu_qr.UNICAST = base + "/channel/unicast"
-        baidu_qr.QR_STATUS = base + "/v2/api/qrcodestatus"
-        captured = {}
+    import tempfile
+    from unittest.mock import patch
+    # ★ 2026-08-27 续28：隔离 HOME，避免 _finish_login 把 mock BDUSS 写进真实的
+    #   ~/.vdl/baidu_bduss.txt（污染后端 fallback 路径，且每次构建都重新生成）。
+    _tmp_home = tempfile.mkdtemp(prefix="vdl_test_home_")
+    os.makedirs(os.path.join(_tmp_home, ".vdl"), exist_ok=True)
+    with patch.dict(os.environ, {"HOME": _tmp_home, "USERPROFILE": _tmp_home}):
+        with _MockServer(mode="body") as srv:
+            base = f"http://127.0.0.1:{srv.port}"
+            saved = (baidu_qr.GET_QR, baidu_qr.UNICAST, baidu_qr.QR_STATUS, baidu_qr.PCS_LOGIN)
+            baidu_qr.GET_QR = base + "/v2/api/getqrcode"
+            baidu_qr.UNICAST = base + "/channel/unicast"
+            baidu_qr.QR_STATUS = base + "/v2/api/qrcodestatus"
+            captured = {}
 
-        class FakePCS:
-            def login(self, cookie_str):
-                captured["cookie"] = cookie_str
-                return {"ok": True, "message": "登录成功(测试)"}
+            class FakePCS:
+                def login(self, cookie_str):
+                    captured["cookie"] = cookie_str
+                    return {"ok": True, "message": "登录成功(测试)"}
 
-        baidu_qr.PCS_LOGIN = FakePCS()
-        baidu_qr._STATE.update({"sign": None, "session": None, "gid": None,
-                                 "confirmed": False, "login_result": None})
+            baidu_qr.PCS_LOGIN = FakePCS()
+            baidu_qr._STATE.update({"sign": None, "session": None, "gid": None,
+                                     "confirmed": False, "login_result": None})
 
-        gen = baidu_qr.qr_gen()
-        assert gen.get("ok")
-        # 强制让 unicast 确认：直接调 _finish_login 走兜底（模拟 cookie 缺失）
-        # 先制造 confirmed 状态：多轮轮询到 status=2
-        result = None
-        for _ in range(10):
-            result = baidu_qr.qr_poll(srv.sign)
-            if result["status"] in ("confirmed", "expired", "error"):
-                break
-            time.sleep(0.05)
-        baidu_qr.GET_QR, baidu_qr.UNICAST, baidu_qr.QR_STATUS, baidu_qr.PCS_LOGIN = saved
-        # 在 body 模式下 unicast 不发 cookie，_finish_login 会走 QR_STATUS 兜底
-        assert result["status"] == "confirmed", f"未确认: {result}"
-        assert "bduss" in (captured.get("cookie", "").lower()) or "BDUSS" in captured.get("cookie", ""), \
-            f"body 兜底未提取到 bduss: {captured}"
+            gen = baidu_qr.qr_gen()
+            assert gen.get("ok")
+            # 强制让 unicast 确认：直接调 _finish_login 走兜底（模拟 cookie 缺失）
+            # 先制造 confirmed 状态：多轮轮询到 status=2
+            result = None
+            for _ in range(10):
+                result = baidu_qr.qr_poll(srv.sign)
+                if result["status"] in ("confirmed", "expired", "error"):
+                    break
+                time.sleep(0.05)
+            baidu_qr.GET_QR, baidu_qr.UNICAST, baidu_qr.QR_STATUS, baidu_qr.PCS_LOGIN = saved
+            # 在 body 模式下 unicast 不发 cookie，_finish_login 会走 QR_STATUS 兜底
+            assert result["status"] == "confirmed", f"未确认: {result}"
+            assert "bduss" in (captured.get("cookie", "").lower()) or "BDUSS" in captured.get("cookie", ""), \
+                f"body 兜底未提取到 bduss: {captured}"
         print("✅ 场景B(响应体兜底提取bduss): 兜底链路通过")
 
 
