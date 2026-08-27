@@ -159,7 +159,7 @@ def _upload_parts(upload_id: str):
 
 
 def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, remux,
-                        to_library, device_id, src_name="") -> tuple:
+                        to_library, device_id, src_name="", src_is_temp=True) -> tuple:
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
@@ -178,8 +178,59 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
             "device_id": device_id,   # 设备隔离：上传转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
-                        resolution, bitrate, audio, rotate, remux, src_is_temp=True)
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp)
     return job_id, out_path.name
+
+
+class LocalConvertRequest(app.BaseModel):
+    """桌面端本地文件直接转码请求。"""
+    local_path: str
+    target: str = "mp4"
+    resolution: str = "original"
+    bitrate: str = ""
+    audio: bool = True
+    rotate: int = 0
+    remux: bool = False
+    to_library: bool = False
+
+
+def _resolve_safe_local_path(path: str) -> app.Path:
+    """安全校验本地路径：必须存在、在用户目录下（/Users /home /Volumes C:\）。"""
+    p = app.Path(path)
+    if not p.is_file():
+        raise app.HTTPException(status_code=400, detail=f"文件不存在或不是普通文件：{path}")
+    try:
+        resolved = p.resolve()
+        if not str(resolved).startswith(("/Users/", "/home/", "/Volumes/", "C:\\")):
+            raise app.HTTPException(status_code=400, detail=f"路径不在用户目录下：{path}")
+        return resolved
+    except Exception:
+        raise app.HTTPException(status_code=400, detail=f"无法解析路径：{path}")
+
+
+@router.post("/api/convert/local")
+def convert_local_api(payload: LocalConvertRequest, request: app.Request) -> dict:
+    """桌面版专用：直接接收本机绝对路径，跳过分片上传，本地读取后转码。"""
+    app._check_rate_limit(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    if payload.target not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的目标格式")
+    resolved = _resolve_safe_local_path(payload.local_path)
+    suffix = resolved.suffix.lower() or ".mp4"
+    if suffix not in app.UPLOAD_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    job_id, filename = _submit_convert_job(
+        str(resolved), payload.target, payload.resolution, payload.bitrate,
+        payload.audio, payload.rotate, payload.remux, payload.to_library,
+        _device_of(request), src_name=resolved.name, src_is_temp=False,
+    )
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "target": payload.target,
+        "filename": filename,
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
 
 
 @router.post("/api/upload-chunk")

@@ -1590,6 +1590,8 @@
   // 并发：最大 2 个同时转码（普通 ffmpeg 重任务，避免 CPU/带宽占满）。
   // 2026-08-24 上传提速：单文件分片并发（32MB/片 × 4 路，单片失败重试 2 次），
   // 文件级并发 2（避免多文件抢占带宽），大文件总连接数 = 2×4 = 8，HTTP/1.1 排队 HTTP/2 全并发。
+  // 桌面端支持直接调用系统文件框选本地路径，跳过分片上传。
+  const ucDesktopNative = !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const UC_MAX_CONCURRENT = 2; // 文件级上传并发
   const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB（默认）
   const UC_BIG_CHUNK_SIZE = 64 * 1024 * 1024;   // >2GB 文件单片 64MB（减少请求数，后端上限 64MB）
@@ -1653,7 +1655,8 @@
                       mp3:'mp3', m4a:'m4a', aac:'aac', wav:'wav', flac:'flac', ogg:'ogg',
                       opus:'opus', wma:'wma', mp2:'mp2', gif:'gif' };
   const ucBuildOutputName = (it) => {
-    const stem = ((it.file && it.file.name) || '').replace(/\.[^.]+$/, '') || 'converted';
+    const name = (it.file && it.file.name) || it.name || 'converted';
+    const stem = String(name).replace(/\.[^.]+$/, '') || 'converted';
     const ext = UC_EXT_OF[it.target] || it.target;
     return `[${it.target.toUpperCase()}]${stem}.${ext}`;
   };
@@ -1740,13 +1743,16 @@
       const targetTitle = it.status === 'completed' ? '已完成：格式已固定，如需其他格式请移除后重新添加'
                          : it.status === 'running' ? '转码中不可修改'
                          : '修改此行的目标格式（开始转码时生效）';
+      const displayName = it.name || (it.file && it.file.name) || '未命名';
+      const metaSpans = it.localPath
+        ? `<span class="uc-local-badge" style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>→ ${it.target.toUpperCase()}</span>`
+        : `<span>${ucFormatSize(it.file.size)}</span><span>→ ${it.target.toUpperCase()}</span>`;
       return `
         <li class="uc-item ${statusCls}" data-id="${it.id}">
           <div class="uc-item-main">
-            <div class="uc-item-name" title="${it.file.name}">${it.file.name}</div>
+            <div class="uc-item-name" title="${displayName}">${displayName}</div>
             <div class="uc-item-meta">
-              <span>${ucFormatSize(it.file.size)}</span>
-              <span>→ ${it.target.toUpperCase()}</span>
+              ${metaSpans}
               ${it.res && it.res !== 'original' ? `<span>${it.res}p</span>` : ''}
               ${it.remux ? '<span>仅换容器</span>' : ''}
             </div>
@@ -1765,21 +1771,44 @@
     }).join('');
   };
 
-  const ucAddFiles = (fileList) => {
+  const ucAddFiles = (list) => {
     const b = ucReadBulk();
-    Array.from(fileList).forEach(f => {
-      ucState.list.push({
-        id: ucState.nextId++,
-        file: f,
-        target: b.target, res: b.res, bitrate: b.bitrate,
-        audio: b.audio, rotate: b.rotate, remux: b.remux, toLibrary: b.toLibrary,
-        status: 'pending', jobId: null, progress: 0,
-        errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
-      });
+    const hasLocal = ucState.list.some(x => x.localPath);
+    const hasUpload = ucState.list.some(x => x.file);
+    Array.from(list).forEach(f => {
+      const isLocal = typeof f === 'string';
+      if (isLocal) {
+        if (hasUpload) return;
+        const name = f.split(/[\\/]/).pop();
+        ucState.list.push({
+          id: ucState.nextId++, file: null, localPath: f, name,
+          target: b.target, res: b.res, bitrate: b.bitrate,
+          audio: b.audio, rotate: b.rotate, remux: b.remux, toLibrary: b.toLibrary,
+          status: 'pending', jobId: null, progress: 0,
+          errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
+        });
+      } else {
+        if (hasLocal) return;
+        ucState.list.push({
+          id: ucState.nextId++, file: f, localPath: null, name: f.name,
+          target: b.target, res: b.res, bitrate: b.bitrate,
+          audio: b.audio, rotate: b.rotate, remux: b.remux, toLibrary: b.toLibrary,
+          status: 'pending', jobId: null, progress: 0,
+          errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
+        });
+      }
     });
+    // 混合添加时过滤上传文件（桌面端本地优先）
+    if (ucState.list.some(x => x.localPath) && ucState.list.some(x => x.file)) {
+      el.ucStatus.textContent = '暂不支持同时混合本地文件与上传文件，已自动过滤后者';
+      ucState.list = ucState.list.filter(x => x.localPath);
+    }
     renderUcList();
-    // 自动开始上传（2026-08-23）；上传完成后停在「待转码」，可逐行设格式再点开始转码（单行/批量）
-    el.ucStatus.textContent = `已添加 ${ucState.list.length} 个文件，自动开始上传…`;
+    const localCount = ucState.list.filter(x => x.localPath).length;
+    const uploadCount = ucState.list.filter(x => x.file).length;
+    el.ucStatus.textContent = localCount
+      ? `已添加 ${localCount} 个本地文件，可直接开始转换`
+      : `已添加 ${uploadCount} 个文件，自动开始上传…`;
     ucPump();
   };
 
@@ -1872,7 +1901,17 @@
   });
 
   // 上传 + 启动单个 job：32MB 分片 × 4 路并发，进度占 30%（转码从 30% 累加），实时速度显示
+  // 桌面端本地文件直接跳过上传，状态置为 uploaded，由 ucFinishOne 调 /api/convert/local。
   const ucUploadOne = (item) => new Promise((resolve, reject) => {
+    if (item.localPath) {
+      item.status = 'uploaded';
+      item.progress = 30;
+      item.stage = '本地文件';
+      item.speedText = ''; item.uploadedText = '';
+      renderUcList();
+      resolve({ status: 'uploaded' });
+      return;
+    }
     item.status = 'uploading';
     item.progress = 0;
     item.speedText = '';
@@ -1980,12 +2019,51 @@
   });
 
   // 提交转码：调 finish 合并分片 + 启动 job（用该行最新设置的格式/参数；finish 一次性，失败需重传）
+  // 桌面端本地文件直接调 /api/convert/local，跳过分片 finish。
   const ucFinishOne = (item) => new Promise((resolve, reject) => {
     if (!item || item.status !== 'uploaded') { reject(new Error('状态不允许开始转码')); return; }
     item.status = 'running';
     item.progress = 30;
     item.stage = '';
     renderUcList();
+
+    if (item.localPath) {
+      request('/api/convert/local', {
+        method: 'POST',
+        body: JSON.stringify({
+          local_path: item.localPath,
+          target: item.target,
+          resolution: item.res,
+          bitrate: item.bitrate || '',
+          audio: item.audio,
+          rotate: +item.rotate || 0,
+          remux: item.remux,
+          to_library: item.toLibrary,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }).then(data => {
+        if (data.job_id) {
+          item.jobId = data.job_id;
+          item.status = 'running';
+          item.progress = 30;
+          item.speedText = ''; item.uploadedText = '';
+          renderUcList();
+          resolve(data);
+        } else {
+          item.status = 'failed';
+          item.errorMsg = data.detail || data.error || '本地转换请求失败';
+          renderUcList();
+          reject(new Error(item.errorMsg));
+        }
+      }).catch(err => {
+        item.status = 'failed';
+        item.errorMsg = (err && err.message) || '本地转换请求失败';
+        renderUcList();
+        reject(err);
+      });
+      return;
+    }
+
     const form = new FormData();
     form.append('upload_id', item._uploadId);
     form.append('total', item._totalChunks || 1);
@@ -2472,7 +2550,17 @@
   });
 
   // 事件绑定
-  el.ucAddBtn.addEventListener('click', () => el.ucFileInput.click());
+  el.ucAddBtn.addEventListener('click', () => {
+    if (ucDesktopNative) {
+      window.VDL.desktop.chooseFiles().then(list => {
+        if (list && list.length) ucAddFiles(list);
+      }).catch(e => {
+        el.ucStatus.textContent = '选择文件失败：' + ((e && e.message) || '未知错误');
+      });
+    } else {
+      el.ucFileInput.click();
+    }
+  });
   el.ucFileInput.addEventListener('change', () => {
     if (el.ucFileInput.files && el.ucFileInput.files.length) {
       ucAddFiles(el.ucFileInput.files);
