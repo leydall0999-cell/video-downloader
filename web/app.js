@@ -382,8 +382,6 @@
     comExportJianyingDir: $('comExportJianyingDir'),
     comExportJianyingDirWrap: $('comExportJianyingDirWrap'),
     comExportJianyingPick: $('comExportJianyingPick'),
-    comStartTtsBtn: $('comStartTtsBtn'),
-    comStartTtsMsg: $('comStartTtsMsg'),
     comTtsStatusBar: $('comTtsStatusBar'),
     comTtsStatusDot: $('comTtsStatusDot'),
     comTtsStatusText: $('comTtsStatusText'),
@@ -3881,111 +3879,110 @@
     return dir || '__default__';
   };
 
-  /** 更新本地语音克隆状态条的视觉状态。 */
-  const comSetTtsStatusBar = (state, text, showBtn) => {
+  /** 更新本地语音克隆状态条的视觉状态（只读提示，无按钮）。 */
+  const comSetTtsStatusBar = (state, text) => {
     const bar = el.comTtsStatusBar;
     const dot = el.comTtsStatusDot;
     const txt = el.comTtsStatusText;
-    const btn = el.comStartTtsBtn;
     if (!bar || !dot || !txt) return;
     bar.style.display = 'flex';
     txt.textContent = text || '';
     dot.className = 'com-tts-status-dot is-' + (state || 'gray');
-    if (btn) btn.style.display = showBtn ? '' : 'none';
   };
 
-  /** 隐藏本地语音克隆状态条（非本地语音克隆选项时）。 */
+  /** 隐藏本地语音克隆状态条（非本地语音克隆/收费项时）。 */
   const comHideTtsStatusBar = () => {
     if (el.comTtsStatusBar) el.comTtsStatusBar.style.display = 'none';
-    if (el.comStartTtsMsg) el.comStartTtsMsg.textContent = '';
   };
 
-  /** 根据本机配置/服务就绪状态，动态改写配音引擎 option 的括号提示，并刷新状态条。 */
+  /** 根据本机配置/服务就绪状态，自动识别每个配音引擎是否可用，不可用项直接置灰禁用。 */
   let _ttsStatusCache = null;
+  let _ttsAutoStartTried = false;
   const comRefreshTtsStatus = async (opts = {}) => {
     const sel = el.comTtsProvider;
     if (!sel) return;
-    const currentValue = sel.value;
-    let status = _ttsStatusCache;
-    const isIndextts = currentValue === 'indextts_mlx' || currentValue === 'indextts2';
 
+    let status = _ttsStatusCache;
     // 首次进入或强制刷新时才请求；否则直接用缓存减少闪烁
     if (!status || opts.force) {
-      if (isIndextts) comSetTtsStatusBar('yellow', '正在检测本机配置…', false);
       try {
         status = await request('/api/commentary/tts-status');
         _ttsStatusCache = status;
       } catch (_e) {
+        // 检测失败：保守起见只放行 edge-tts，其余统一置灰
+        status = { indextts_mlx_ready: false, apple_silicon: false, minimax_configured: false, siliconflow_configured: false };
         _ttsStatusCache = null;
-        if (isIndextts) {
-          comSetTtsStatusBar('red', '检测失败，请刷新页面或重启软件后重试', false);
-        }
-        return;
       }
     }
 
-    // 改写下拉选项括号提示
-    Array.from(sel.options).forEach((opt) => {
+    // 自动识别可用性并设置 option 禁用态（不可用项直接置灰、不可选中）
+    const setOpt = (val, disabled, suffix) => {
+      const opt = sel.querySelector(`option[value="${val}"]`);
+      if (!opt) return;
       const base = opt.dataset.base || opt.textContent.split('　')[0];
       if (!opt.dataset.base) opt.dataset.base = base;
-      const prov = opt.value;
-      let suffix = '';
-      if (prov === '') {
-        suffix = '　🟢免费';
-      } else if (prov === 'indextts_mlx') {
-        if (status.indextts_mlx_ready) {
-          suffix = '　🟢免费（已就绪）';
-        } else if (status.apple_silicon) {
-          suffix = '　🟢免费（需一键开启）';
-        } else {
-          suffix = '　🟢免费（仅苹果芯片 Mac）';
-        }
-      } else if (prov === 'indextts2') {
-        suffix = '　🟢免费（本机，Mac 暂无法运行）';
-      } else if (prov === 'minimax') {
-        suffix = status.minimax_configured
-          ? '　🔴收费（密钥已填写）'
-          : '　🔴收费（需填写密钥）';
-      } else if (prov === 'siliconflow') {
-        suffix = status.siliconflow_configured
-          ? '　🔴收费（密钥已填写，新用户送 ¥14）'
-          : '　🔴收费（需填写密钥）';
-      }
-      opt.textContent = base + suffix;
-    });
-    sel.value = currentValue;
+      opt.disabled = !!disabled;
+      opt.textContent = base + (suffix ? '　' + suffix : '');
+    };
 
-    // 刷新独立状态条：只在选中本地语音克隆相关选项时显示
-    if (currentValue === 'indextts_mlx') {
+    // 默认 edge-tts：始终可用
+    setOpt('', false, '🟢免费');
+    // IndexTTS-MLX：仅 Apple Silicon + 服务就绪可用，否则置灰
+    if (status.indextts_mlx_ready) {
+      setOpt('indextts_mlx', false, '🟢免费（已就绪）');
+    } else if (status.apple_silicon) {
+      setOpt('indextts_mlx', true, '🟢免费（本机未就绪，暂不可用）');
+    } else {
+      setOpt('indextts_mlx', true, '🟢免费（仅苹果芯片 Mac 可用）');
+    }
+    // IndexTTS2：本机（Mac）不可用
+    setOpt('indextts2', true, '🟢免费（本机不可用）');
+    // MiniMax / SiliconFlow：需填密钥
+    setOpt('minimax', !status.minimax_configured, status.minimax_configured ? '🔴收费（密钥已填写）' : '🔴收费（未填密钥，暂不可用）');
+    setOpt('siliconflow', !status.siliconflow_configured, status.siliconflow_configured ? '🔴收费（密钥已填写，新用户送 ¥14）' : '🔴收费（未填密钥，暂不可用）');
+
+    // 当前选中的项若已被禁用，自动回退到默认引擎
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
+      sel.value = '';
+    }
+
+    // 刷新只读状态条提示
+    const cur = sel.value;
+    if (cur === 'indextts_mlx') {
       if (status.indextts_mlx_ready) {
-        comSetTtsStatusBar('green', '本地语音克隆已就绪，可直接使用', false);
+        comSetTtsStatusBar('green', '本地语音克隆已就绪，可直接使用');
       } else if (status.apple_silicon) {
-        comSetTtsStatusBar('orange', '本地语音克隆未启动', true);
+        comSetTtsStatusBar('orange', '本地语音克隆本机已支持，正在准备运行环境…（可稍后重试）');
       } else {
-        comSetTtsStatusBar('gray', '本地语音克隆需要苹果芯片 Mac（M 系列）才能使用', false);
+        comSetTtsStatusBar('gray', '本地语音克隆需要苹果芯片 Mac（M 系列）');
       }
-    } else if (currentValue === 'indextts2') {
-      comSetTtsStatusBar('gray', '该引擎当前在 Mac 上无法运行，建议切换到「IndexTTS-MLX」', false);
+    } else if (cur === 'indextts2') {
+      comSetTtsStatusBar('gray', '该引擎当前在本机无法运行，建议用「IndexTTS-MLX」');
+    } else if (cur === 'minimax' || cur === 'siliconflow') {
+      const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
+      comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
     } else {
       comHideTtsStatusBar();
     }
+
+    // 自动识别：Apple Silicon 但服务未起时，自动后台尝试启动本地语音克隆（取代手动「一键开启」）
+    if (status.apple_silicon && !status.indextts_mlx_ready && !_ttsAutoStartTried) {
+      _ttsAutoStartTried = true;
+      comAutoStartIndexTts();
+    }
   };
 
-  /** 一键开启本地语音克隆：普通用户无需懂技术，点一下由 App 自动启动，失败给大白话提示。 */
-  const comStartTtsClk = async () => {
-    const msg = el.comStartTtsMsg;
-    if (msg) msg.textContent = '正在开启…';
-    let res = { ok: false, msg: '当前环境不支持自动开启，请在桌面版中使用。' };
+  /** 自动尝试启动本地语音克隆服务（无需用户手动点按钮，启动成功后自动刷新使选项亮起）。 */
+  const comAutoStartIndexTts = async () => {
     try {
       if (window.VDL && window.VDL.desktop && typeof window.VDL.desktop.startIndexTts === 'function') {
-        res = await window.VDL.desktop.startIndexTts();
+        await window.VDL.desktop.startIndexTts();
+        // 启动后稍等再强制刷新，让选项自动变亮
+        setTimeout(() => comRefreshTtsStatus({ force: true }), 6000);
       }
-    } catch (e) {
-      res = { ok: false, msg: '开启失败：' + (e && e.message ? e.message : e) };
+    } catch (_e) {
+      // 自动启动失败保持静默，选项维持置灰，状态条已说明
     }
-    if (msg) msg.textContent = (res && res.msg) ? res.msg : (res && res.ok ? '已开启' : '开启失败');
-    // 几秒后刷新状态，若已就绪会自动更新为绿色提示
-    setTimeout(() => comRefreshTtsStatus({ force: true }), 8000);
   };
 
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
@@ -5156,11 +5153,7 @@
   });
   comApplyStyleVoice();  // 初始化提示
 
-  // 一键开启本地语音克隆：普通用户友好入口，无需理解端口/服务概念
-  if (el.comStartTtsBtn) {
-    el.comStartTtsBtn.addEventListener('click', comStartTtsClk);
-  }
-  // 切换配音引擎时，实时刷新状态条（避免用户选回本地语音克隆后看不到提示）
+  // 切换配音引擎时，实时刷新可用性（自动识别并置灰不可用项）
   if (el.comTtsProvider) {
     el.comTtsProvider.addEventListener('change', () => comRefreshTtsStatus({ force: false }));
   }

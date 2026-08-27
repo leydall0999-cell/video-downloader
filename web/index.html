@@ -873,14 +873,12 @@
                 <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需填写密钥，新用户送 ¥14）</option>
               </select>
             </div>
-            <!-- 本地语音克隆状态条：独立显式展示，避免用户找不到入口 -->
+            <!-- 可用性自动识别：不可用引擎直接置灰禁用 -->
             <div id="comTtsStatusBar" class="com-tts-status-bar" style="display:none;">
               <span id="comTtsStatusDot" class="com-tts-status-dot"></span>
               <span id="comTtsStatusText" class="com-tts-status-text"></span>
-              <button id="comStartTtsBtn" type="button" class="com-mini-btn">一键开启语音克隆</button>
-              <span id="comStartTtsMsg" class="com-start-status"></span>
             </div>
-            <span class="com-retain-hint">选「本地语音克隆」后，旁白会在你电脑本地生成，音色更自然、还能模仿指定声音。第一次使用点下方「一键开启」即可，不用懂技术。</span>
+            <span class="com-retain-hint">可用引擎已自动识别，不可用的会标灰不可选、无需手动操作。本地语音克隆需苹果芯片 Mac 且已安装运行环境。</span>
             <div class="com-price-legend">
               <span class="com-badge com-badge-free">🟢 免费</span>
               <span class="com-badge com-badge-paid">🔴 收费</span>
