@@ -247,6 +247,26 @@ def _finish_login(sign: str) -> dict:
         res = {"ok": False, "message": "已扫码确认，但未能取到百度登录凭证（BDUSS）。\n请改用「账号密码」方式登录，或重新生成二维码再扫一次。"}
     else:
         cookie_str = _cookie_str(cookies)
+        # ★ 2026-08-27 续26：把 BDUSS 同步写到 ~/.vdl/baidu_bduss.txt，
+        #   下次 baidu_login / get_baidu_dlink 可直接读此文件复用，
+        #   避免每次都要扫码 / 弹登录窗。
+        try:
+            import os
+            _bduss_dir = os.path.expanduser("~/.vdl")
+            os.makedirs(_bduss_dir, exist_ok=True)
+            _bduss_path = os.path.join(_bduss_dir, "baidu_bduss.txt")
+            # 权限 0o600 防读取（与其他 token 文件一致）
+            tmp_path = _bduss_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as _f:
+                _f.write(cookies["BDUSS"].strip())
+            try:
+                os.chmod(tmp_path, 0o600)
+            except Exception:
+                pass
+            os.replace(tmp_path, _bduss_path)
+            logger.info("BDUSS 已持久化到 %s，长度 %d", _bduss_path, len(cookies["BDUSS"]))
+        except Exception as _e_bduss:
+            logger.warning("BDUSS 持久化失败（不影响下载）: %s", _e_bduss)
         res = PCS_LOGIN.login(cookie_str) if PCS_LOGIN else {"ok": False, "message": "baidu_pcs 未加载"}
     with _lock:
         _STATE["confirmed"] = True

@@ -143,9 +143,11 @@ CONVERT_TARGETS = {
     "webm": ["-c:v", "libvpx-vp9", "-c:a", "libopus", "-b:v", "1M"],
     "mp3":  ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
     "m4a":  ["-vn", "-c:a", "aac"],
+    "wav":  ["-vn", "-c:a", "pcm_s16le"],
+    "flac": ["-vn", "-c:a", "flac"],
     "gif":  ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
 }
-CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "mp3": "mp3", "m4a": "m4a", "gif": "gif"}
+CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "mp3": "mp3", "m4a": "m4a", "wav": "wav", "flac": "flac", "gif": "gif"}
 
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
@@ -154,6 +156,8 @@ UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
 UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
 # 允许上传的视频后缀白名单
 UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
+# 允许上传的音频后缀白名单（桥接/合并模块复用分片上传 mode=store）
+UPLOAD_AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".oga", ".wma"}
 
 # ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
 DW_DIR = DOWNLOAD_DIR / "dewatermark"

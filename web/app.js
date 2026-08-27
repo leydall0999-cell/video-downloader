@@ -2110,9 +2110,47 @@
     }));
   };
 
-  // ===== 视频拼接（简单无损合并）：复用分片上传，独立面板 =====
+  // ===== 视频/音频桥接（合并）：复用分片上传，独立面板 =====
   const MC_MAX_CONCURRENT = 2;
-  const mcState = { list: [], nextId: 1, active: 0, polling: null };
+  // 输出格式按当前模式（视频/音频）动态切换
+  const mcVideoFormats = [
+    { v: 'mp4', t: 'MP4' }, { v: 'mov', t: 'MOV' }, { v: 'mkv', t: 'MKV' },
+    { v: 'm4v', t: 'M4V' }, { v: 'ts', t: 'TS' }, { v: 'flv', t: 'FLV' }, { v: 'webm', t: 'WebM' },
+  ];
+  const mcAudioFormats = [
+    { v: 'mp3', t: 'MP3' }, { v: 'm4a', t: 'M4A' }, { v: 'wav', t: 'WAV' }, { v: 'flac', t: 'FLAC' },
+  ];
+  const mcState = { list: [], nextId: 1, active: 0, polling: null, mode: 'video' };
+
+  // 根据文件类型判定片段种类（video / audio）
+  const _mcKindOf = (file) => {
+    const name = (file && file.name) || '';
+    const type = (file && file.type) || '';
+    if (/^audio\//i.test(type) || /\.(mp3|m4a|aac|wav|flac|ogg|opus|oga|wma)$/i.test(name)) return 'audio';
+    return 'video';
+  };
+  // 按当前所有非结果项的种类推导模式：全部音频→audio，否则→video
+  const _mcComputeMode = () => {
+    const items = mcState.list.filter(x => !x.isResult);
+    if (items.length && items.every(x => x.kind === 'audio')) return 'audio';
+    return 'video';
+  };
+  // 重建输出格式下拉（保留尽可能旧选择）
+  const mcPopulateFormats = (mode) => {
+    const list = mode === 'audio' ? mcAudioFormats : mcVideoFormats;
+    const cur = mcOutFormat.value;
+    mcOutFormat.innerHTML = list.map(o => `<option value="${o.v}">${o.t}</option>`).join('');
+    if (list.some(o => o.v === cur)) mcOutFormat.value = cur;
+  };
+  // 文件集合变化后刷新模式与格式下拉
+  const mcUpdateMode = () => {
+    const mode = _mcComputeMode();
+    if (mode !== mcState.mode) {
+      mcState.mode = mode;
+      mcPopulateFormats(mode);
+      mcStatusEl.textContent = mode === 'audio' ? '已切换为「音频合并」模式（输出音频）' : '已切换为「视频合并」模式（输出视频）';
+    }
+  };
   const mcListEl = document.getElementById('mcList');
   const mcCountEl = document.getElementById('mcCount');
   const mcStatusEl = document.getElementById('mcStatus');
@@ -2127,7 +2165,8 @@
 
   const mcRender = () => {
     const segs = mcState.list.filter(x => !x.isResult);
-    mcCountEl.textContent = segs.length ? `已添加 ${segs.length} 个片段` : '尚未添加片段';
+    const modeTxt = mcState.mode === 'audio' ? '（音频模式）' : '';
+    mcCountEl.textContent = segs.length ? `已添加 ${segs.length} 个文件${modeTxt}` : '尚未添加文件';
     mcClearBtn.hidden = mcState.list.length === 0;
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult).length;
     mcMergeBtn.disabled = ready < 2;
@@ -2195,11 +2234,12 @@
 
   const mcAddFiles = (fileList) => {
     Array.from(fileList).forEach(f => {
-      mcState.list.push({ id: mcState.nextId++, file: f, status: 'pending', segName: null,
+      mcState.list.push({ id: mcState.nextId++, file: f, kind: _mcKindOf(f), status: 'pending', segName: null,
         progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
     });
     mcRender();
-    mcStatusEl.textContent = `已添加 ${mcState.list.filter(x => !x.isResult).length} 个片段，自动上传…`;
+    mcUpdateMode();
+    mcStatusEl.textContent = `已添加 ${mcState.list.filter(x => !x.isResult).length} 个文件，自动上传…`;
     mcPump();
   };
 
@@ -2339,6 +2379,8 @@
     if (e.target.files && e.target.files.length) mcAddFiles(e.target.files);
     e.target.value = '';
   });
+  // 初始化输出格式下拉（默认视频模式）
+  mcPopulateFormats('video');
   mcClearBtn.addEventListener('click', () => {
     if (mcState.list.some(x => x.status === 'running')) { mcStatusEl.textContent = '有任务进行中，请等待完成后再清空'; return; }
     mcState.list.filter(x => x.status === 'uploading' || x.status === 'uploaded').forEach(mcCancelUpload);
@@ -2361,12 +2403,13 @@
   });
   mcMergeBtn.addEventListener('click', () => {
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult);
-    if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的片段'; return; }
+    if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的文件'; return; }
     const body = {
       segments: ready.map(x => x.segName),
       out_format: mcOutFormat.value,
       out_name: mcOutName.value || 'merged',
       to_library: mcLibrary.checked,
+      audio_only: mcState.mode === 'audio',
     };
     request('/api/concat', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
       .then(data => {
@@ -6453,15 +6496,17 @@
               loginBtn.disabled = true;
               const _t = loginBtn.textContent;
               loginBtn.textContent = '正在打开登录窗口…';
-              el.baiduShareStatus.textContent = '正在登录，完成后将自动重试下载…';
+              el.baiduShareStatus.textContent = '已弹登录窗口（标题：VDL-登录百度网盘，已置顶）；请在该窗口内完成登录后本处将自动重试下载…';
               el.baiduShareStatus.className = 'baidu-share-status';
               try {
                 await window.pywebview.api.baidu_login();  // 立即返回，登录窗口在后台进行
                 // 轮询重试：登录窗口可能耗时 30s~3min
                 let _success = null;
-                for (let _retry = 0; _retry < 60; _retry++) {
+                // ★ 2026-08-27 续26：30×2s = 60s 超时（之前 60×2s = 120s 太长用户以为卡死）。
+                // 60s 后 URL 仍停留在 pan.baidu.com 登录页就视为超时，让用户主动重试。
+                for (let _retry = 0; _retry < 30; _retry++) {
                   await new Promise((r) => setTimeout(r, 2000));
-                  el.baiduShareStatus.textContent = `正在等待登录完成… (${_retry * 2}s / 120s)`;
+                  el.baiduShareStatus.textContent = `⏳ 等待 [VDL-登录百度网盘] 窗口登录完成…（${_retry * 2}s / 60s），完成后此处自动重试下载`;
                   const _r = await callGetDlink();
                   if (_r && _r.ok && _r.dlink) { _success = _r; break; }
                   // 还需登录 → 继续等

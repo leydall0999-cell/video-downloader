@@ -3,6 +3,11 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 所有 profile 均挂载，网页版行为零变化。app 端新功能只改本目录对应文件。
 """
 import app
+import json
+import os
+import shutil
+import subprocess
+import re
 from fastapi import APIRouter
 from .core import _device_of
 
@@ -258,8 +263,8 @@ def finish_upload_chunk(
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
     parts = _upload_parts(upload_id)
     if len(parts) != total:
         raise app.HTTPException(status_code=400, detail=f"分片不完整（{len(parts)}/{total}），请重试")
@@ -313,7 +318,7 @@ def finish_upload_chunk(
     }
 
 
-# ---- 视频拼接（网页版「简单拼接」：无损合并，无转场）----
+# ---- 视频/音频桥接（拼接合并）：无损优先，编码不一致时自动转码兜底 ----
 # 前端先把每个片段经分片上传 + finish(mode=store) 落地为 seg_{id}.ext，
 # 再提交本接口按列表顺序合并。复用 CONVERT_JOBS 进度与下载机制。
 from pydantic import BaseModel
@@ -323,80 +328,183 @@ class ConcatRequest(BaseModel):
     out_format: str = "mp4"
     out_name: str = "merged"
     to_library: bool = False
+    audio_only: bool = False   # 前端提示：所有素材均为音频
 
 
-def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library):
-    """顺序无损合并多个片段（ffmpeg concat copy）。编码不一致时会失败并提示。"""
-    import subprocess, re as _re
+def _ffprobe_bin():
+    """解析 ffprobe 路径（app 未定义全局 FFPROBE_BIN，这里兜底探测）。"""
+    ffmpeg = getattr(app, "FFMPEG_BIN", "") or ""
+    if ffmpeg:
+        cand = os.path.join(os.path.dirname(ffmpeg), "ffprobe")
+        if os.path.exists(cand):
+            return cand
+    return shutil.which("ffprobe") or "ffprobe"
+
+
+def _probe_streams(p):
+    """用 ffprobe 探测单文件流类型/分辨率/时长。"""
+    try:
+        pp = subprocess.run([_ffprobe_bin(), "-v", "error",
+                            "-show_entries", "stream=codec_type,width,height",
+                            "-show_entries", "format=duration", "-of", "json", str(p)],
+                           capture_output=True, text=True, timeout=30)
+        d = json.loads(pp.stdout or "{}")
+    except Exception:
+        return {"has_video": False, "has_audio": False, "width": 0, "height": 0, "duration": 0.0}
+    has_video = has_audio = False
+    w = h = 0
+    for s in d.get("streams", []):
+        ct = s.get("codec_type")
+        if ct == "video":
+            has_video = True
+            w = int(s.get("width") or 0) or w
+            h = int(s.get("height") or 0) or h
+        elif ct == "audio":
+            has_audio = True
+    dur = float((d.get("format") or {}).get("duration") or 0) or 0.0
+    return {"has_video": has_video, "has_audio": has_audio, "width": w, "height": h, "duration": dur}
+
+
+# 纯音频合并时的转码参数（按输出格式）
+AUDIO_REENCODE = {
+    "mp3":  ["-c:a", "libmp3lame", "-q:a", "4"],
+    "m4a":  ["-c:a", "aac", "-b:a", "192k"],
+    "wav":  ["-c:a", "pcm_s16le"],
+    "flac": ["-c:a", "flac"],
+}
+
+
+def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, audio_only=False):
+    """顺序合并多个片段。
+    无损优先：编码/分辨率一致时走 concat demuxer -c copy；失败时回退 concat 滤镜重新编码，
+    可处理编码/分辨率不一致、缺音轨、纯音频或音视频混合等情况。"""
     job = app.CONVERT_JOBS[job_id]
     ext = app.CONVERT_EXT.get(out_format, out_format)
     out_path = app.CONVERT_DIR / f"concat_{job_id}.{ext}"
-    list_path = app.UPLOAD_TMP / f"concat_{job_id}.txt"
     seg_paths = []
     for name in seg_names:
         p = app.UPLOAD_TMP / name
         if not p.exists():
             job["status"] = "failed"; job["error"] = f"素材缺失：{name}（可能已过期，请重新添加）"; return
         seg_paths.append(p)
-    # ffprobe 预探测各段时长，求和得总时长（进度基准）
-    total_dur = 0.0
-    for p in seg_paths:
-        try:
-            pp = subprocess.run([app.FFPROBE_BIN, "-v", "error", "-show_entries", "format=duration",
-                                 "-of", "default=noprint_wrappers=1:nokey=1", str(p)],
-                                capture_output=True, text=True, timeout=30)
-            total_dur += float(pp.stdout.strip() or 0)
-        except Exception:
-            pass
-    with list_path.open("w", encoding="utf-8") as fh:
-        for p in seg_paths:
-            fh.write(f"file '{p}'\n")
-    job["stage"] = "拼接中"
-    job["progress"] = 0
-    cmd = [app.FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
-           "-c", "copy", str(out_path)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            bufsize=0, text=True)
-    _re_out = _re.compile(r"^out_time_us=(-?\d+)")
-    try:
+
+    # 预探测各段流类型与时长
+    probes = [_probe_streams(p) for p in seg_paths]
+    total_dur = sum(p["duration"] for p in probes) or 0.0
+    has_any_video = any(p["has_video"] for p in probes)
+    all_audio = bool(audio_only) or (not has_any_video)
+
+    _re_out = re.compile(r"^out_time_us=(-?\d+)")
+
+    def _track(proc):
         for line in proc.stdout:
             line = line.strip()
             m = _re_out.match(line)
             if m and total_dur > 0:
                 cur = int(m.group(1)) / 1_000_000
                 job["progress"] = int(min(99, max(0, cur / total_dur * 100)))
-    finally:
-        proc.wait()
-        list_path.unlink(missing_ok=True)
-    if proc.returncode != 0:
-        out_path.unlink(missing_ok=True)
-        job["status"] = "failed"
-        job["error"] = "拼接失败：片段编码/分辨率不一致时无法无损合并，请改用相同编码的片段，或直接「转换」先统一格式再见"
-        return
-    # 可选存入媒体库（与转换产物命名一致：[格式]原名.ext）
-    if to_library:
+
+    def _store_library():
+        if not to_library:
+            return
         dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{out_name}.{ext}"
         if dest.exists() and dest.resolve() != out_path.resolve():
             dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{out_name}_{app.uuid.uuid4().hex[:6]}.{ext}"
         app.shutil.copy2(out_path, dest)
-    job["status"] = "completed"
-    job["progress"] = 100
+
+    # ---- 阶段1：无损合并 ----
+    job["stage"] = "拼接中"; job["progress"] = 0
+    list_path = app.UPLOAD_TMP / f"concat_{job_id}.txt"
+    with list_path.open("w", encoding="utf-8") as fh:
+        for p in seg_paths:
+            fh.write(f"file '{p}'\n")
+    copy_cmd = [app.FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+                "-c", "copy", str(out_path)]
+    proc = subprocess.Popen(copy_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            bufsize=0, text=True)
+    _track(proc)
+    proc.wait()
+    list_path.unlink(missing_ok=True)
+    if proc.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+        job["status"] = "completed"; job["progress"] = 100
+        _store_library()
+        return
+
+    # ---- 阶段2：重新编码兜底（处理编码/分辨率/缺流不一致）----
+    out_path.unlink(missing_ok=True)
+    try:
+        if all_audio:
+            n = len(seg_paths)
+            ins = []
+            for p in seg_paths:
+                ins += ["-i", str(p)]
+            filt = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[a]"
+            cmd = [app.FFMPEG_BIN, "-y"] + ins + ["-filter_complex", filt, "-map", "[a]"] \
+                  + AUDIO_REENCODE.get(out_format, AUDIO_REENCODE["mp3"]) + [str(out_path)]
+        else:
+            n = len(seg_paths)
+            max_w = max([p["width"] for p in probes if p["has_video"]] or [1280])
+            max_h = max([p["height"] for p in probes if p["has_video"]] or [720])
+            ins = []
+            for p in seg_paths:
+                ins += ["-i", str(p)]
+            extra = []   # 补足缺失流的 lavfi 源（黑画面 / 静音）
+            vrefs = []; arefs = []
+            for k, p in enumerate(seg_paths):
+                st = probes[k]
+                if st["has_video"]:
+                    vrefs.append(f"[{k}:v]")
+                else:
+                    dur = max(0.1, st["duration"] or 1)
+                    extra += ["-f", "lavfi", "-i", f"color=c=black:s={max_w}x{max_h}:r=25:d={dur}"]
+                    vrefs.append(f"[{n + len(extra) - 1}:v]")
+                if st["has_audio"]:
+                    arefs.append(f"[{k}:a]")
+                else:
+                    dur = max(0.1, st["duration"] or 1)
+                    extra += ["-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={dur}"]
+                    arefs.append(f"[{n + len(extra) - 1}:a]")
+            pairs = "".join(vrefs[i] + arefs[i] for i in range(n))
+            filt = pairs + f"concat=n={n}:v=1:a=1[v][a]"
+            cmd = [app.FFMPEG_BIN, "-y"] + ins + extra + [
+                "-filter_complex", filt, "-map", "[v]", "-map", "[a]",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "192k", str(out_path)]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                bufsize=0, text=True)
+        _track(proc)
+        proc.wait()
+    except Exception as e:
+        out_path.unlink(missing_ok=True)
+        job["status"] = "failed"; job["error"] = f"拼接失败（转码兜底异常）：{e}"; return
+    if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        out_path.unlink(missing_ok=True)
+        job["status"] = "failed"
+        job["error"] = "拼接失败：素材编码差异过大或文件损坏，请检查后重试"
+        return
+    job["status"] = "completed"; job["progress"] = 100
+    _store_library()
 
 
 @router.post("/api/concat")
 def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
-    """视频拼接：接收已落地的片段列表，按顺序无损合并为单个文件。"""
+    """视频/音频桥接：接收已落地的片段列表，按顺序合并为单个文件（无损优先，必要时转码兜底）。"""
     app._check_rate_limit(request)
-    out_format = payload.out_format
-    if out_format not in app.CONVERT_TARGETS:
+    if payload.out_format not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的输出格式")
     segs = payload.segments or []
     if len(segs) < 2:
-        raise app.HTTPException(status_code=400, detail="至少需要 2 个视频片段")
+        raise app.HTTPException(status_code=400, detail="至少需要 2 个片段")
     # 校验素材存在性（防止无效引用）
     for name in segs:
         if not (app.UPLOAD_TMP / name).exists():
             raise app.HTTPException(status_code=400, detail=f"素材不存在或已过期：{name}")
+    # 探测流类型，决定是否纯音频合并
+    probes = [_probe_streams(app.UPLOAD_TMP / name) for name in segs]
+    all_audio = bool(payload.audio_only) or (not any(p["has_video"] for p in probes))
+    out_format = payload.out_format
+    if all_audio and out_format not in AUDIO_REENCODE:
+        out_format = "mp3"   # 纯音频强制为音频格式
     job_id = app.uuid.uuid4().hex[:12]
     ext = app.CONVERT_EXT.get(out_format, out_format)
     out_path = app.CONVERT_DIR / f"concat_{job_id}.{ext}"
@@ -412,7 +520,8 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
             "to_library": payload.to_library,
             "library_id": "",
             "device_id": _device_of(request),
+            "audio": all_audio,
         }
     app.executor.submit(_run_concat, job_id, segs, out_format, payload.out_name or "merged",
-                        _device_of(request), payload.to_library)
-    return {"job_id": job_id, "status": "running"}
+                        _device_of(request), payload.to_library, all_audio)
+    return {"job_id": job_id, "status": "running", "audio": all_audio}

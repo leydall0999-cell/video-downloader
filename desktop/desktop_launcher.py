@@ -1042,6 +1042,78 @@ class VdlApi:
             except Exception:
                 pass
 
+        # ★ 2026-08-27 续26：检测本地是否有已缓存的 BDUSS cookie
+        # 若有，直接复用 WKWebView + 手动设置 document.cookie → 不需要弹登录窗口。
+        # 这是「扫码一次复用 N 次」的核心路径。
+        cached_bduss = None
+        try:
+            _bduss_path = os.path.expanduser("~/.vdl/baidu_bduss.txt")
+            if os.path.exists(_bduss_path):
+                with open(_bduss_path, "r", encoding="utf-8") as _f:
+                    cached_bduss = _f.read().strip()
+        except Exception as e_bduss_read:
+            _log("读取本地 BDUSS 缓存失败: " + str(e_bduss_read))
+        if cached_bduss:
+            _log("检测到本地缓存 BDUSS（" + str(len(cached_bduss)) + " 字节）—— 直接复用 WKWebView 灌 cookie")
+            def _run_cached():
+                w = None
+                try:
+                    w = _wv.create_window(
+                        title="VDL-百度网盘（已登录）",
+                        url="https://pan.baidu.com/disk/main",
+                        width=900, height=700,
+                        hidden=True,
+                    )
+                    _log("缓存登录窗口已 hidden 创建（不弹窗）")
+                    self._baidu_wv = w
+                    # 等 WKWebView 加载 + cookie store 就绪
+                    for _i in range(10):
+                        _t.sleep(1)
+                        try:
+                            href = w.evaluate_js("location.href")
+                            if isinstance(href, str) and ('pan.baidu.com' in href or 'baidu.com' in href):
+                                break
+                        except Exception:
+                            pass
+                    # 把 BDUSS 灌到当前域 cookie store（pan.baidu.com）
+                    _js = (
+                        "(function(){"
+                        "  var v=" + json.dumps(cached_bduss) + ";"
+                        "  document.cookie = 'BDUSS=' + v + '; domain=.baidu.com; path=/; SameSite=None; Secure';"
+                        "  document.cookie = 'BDUSS=' + v + '; domain=.pan.baidu.com; path=/;';"
+                        "  document.cookie = 'STOKEN=' + encodeURIComponent(v) + '; domain=.baidu.com; path=/';"
+                        "  return document.cookie.indexOf('BDUSS') !== -1 ? 'set_ok' : 'set_empty';"
+                        "})()"
+                    )
+                    try:
+                        _r = w.evaluate_js(_js)
+                        _log("灌 BDUSS cookie 结果: " + str(_r))
+                    except Exception as e_set:
+                        _log("灌 BDUSS cookie 异常: " + str(e_set))
+                    # 刷一下主页让百度读新 cookie
+                    try:
+                        w.load_url("https://pan.baidu.com/disk/main")
+                        _t.sleep(2)
+                    except Exception:
+                        pass
+                    result_holder["value"] = {
+                        "ok": True,
+                        "logged": True,
+                        "reused": True,
+                        "from_cache": True,
+                        "message": "已用本地缓存的百度登录态（扫码一次、永久复用）。"
+                    }
+                except Exception as e:
+                    _log("缓存登录异常: " + str(e))
+                    result_holder["value"] = {"ok": False, "error": "EXCEPTION", "message": str(e)}
+                finally:
+                    result_holder["event"].set()
+            _th.Thread(target=_run_cached, daemon=True).start()
+            result_holder["event"].wait(timeout=20)  # 灌 cookie 最多 20 秒
+            if result_holder.get("value", {}).get("ok"):
+                return json.dumps(result_holder["value"])
+            # 否则 fallback 到下面的弹窗登录
+
         def _run():
             w = None
             try:
@@ -1052,8 +1124,17 @@ class VdlApi:
                     url="https://pan.baidu.com/disk/main",
                     width=480, height=760,
                     min_size=(420, 600),
+                    # ★ 2026-08-27 续26 修复：登录窗口必抢焦点 / 置顶。
+                    # 用户实测「卡在正在登录不动」——根因是 macOS WKWebView 新窗口
+                    # 不抢焦点/可能被主窗口挡住，根本看不见（也没有任何提示）。
+                    # on_top=True 强制浮在所有窗口之上；move(0,0) 兜底防 on_top 失效。
+                    on_top=True,
                 )
-                _log("登录窗口已创建，等待用户登录...")
+                try:
+                    w.move(50, 50)  # 兜底：移到屏幕左上角主窗口旁
+                except Exception:
+                    pass
+                _log("登录窗口已创建（on_top=True），等待用户登录...")
                 logged = False
                 for i in range(180):  # 最多 3 分钟
                     _t.sleep(1)
