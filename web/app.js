@@ -358,6 +358,10 @@
       return v ? v.value : 'keep_no_narrate';
     },
     comRetainPct: $('comRetainPct'),
+    comIntroSec: $('comIntroSec'),
+    comOutroSec: $('comOutroSec'),
+    comDramaStart: $('comDramaStart'),
+    comDramaEnd: $('comDramaEnd'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
     comLogs: $('comLogs'),
@@ -3795,6 +3799,26 @@
     }
   };
 
+  /** 把「85」或「01:25」「1:25:00」转成秒数；无法解析返回 null。 */
+  const parseTimeSec = (raw) => {
+    if (raw == null || String(raw).trim() === '') return null;
+    const s = String(raw).trim();
+    // 先当纯数字秒数处理
+    const asNum = Number(s);
+    if (!Number.isNaN(asNum) && asNum > 0) return asNum;
+    // 时间格式 HH:MM:SS 或 MM:SS
+    const parts = s.split(':').map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x));
+    if (parts.length === 2) {
+      const [m, sec] = parts;
+      if (m >= 0 && sec >= 0) return m * 60 + sec;
+    }
+    if (parts.length === 3) {
+      const [h, m, sec] = parts;
+      if (h >= 0 && m >= 0 && sec >= 0) return h * 3600 + m * 60 + sec;
+    }
+    return null;
+  };
+
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
   // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关 / 保留时长 / 一键生成）
   const comGetOptions = (forceOneClick = false) => {
@@ -3804,6 +3828,8 @@
     const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
     const introSec = el.comIntroSec && el.comIntroSec.value ? Number(el.comIntroSec.value) : null;
     const outroSec = el.comOutroSec && el.comOutroSec.value ? Number(el.comOutroSec.value) : null;
+    const dramaStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
+    const dramaEnd = el.comDramaEnd && el.comDramaEnd.value ? parseTimeSec(el.comDramaEnd.value) : null;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
@@ -3817,6 +3843,8 @@
       retain_pct: rp,
       intro_sec: introSec,
       outro_sec: outroSec,
+      drama_start_sec: dramaStart,
+      drama_end_sec: dramaEnd,
       one_click: !!forceOneClick,
       style: styleEl ? styleEl.value : 'none',
       vision: !!(el.comVision && el.comVision.checked),
@@ -3908,6 +3936,8 @@
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
       if (opts.intro_sec != null) form.append('intro_sec', String(opts.intro_sec));
       if (opts.outro_sec != null) form.append('outro_sec', String(opts.outro_sec));
+      if (opts.drama_start_sec != null) form.append('drama_start_sec', String(opts.drama_start_sec));
+      if (opts.drama_end_sec != null) form.append('drama_end_sec', String(opts.drama_end_sec));
       form.append('one_click', String(opts.one_click));
       form.append('style', opts.style || 'none');
       form.append('vision', String(opts.vision));
@@ -3982,6 +4012,8 @@
       if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
       if (opts.intro_sec != null) form.append('intro_sec', String(opts.intro_sec));
       if (opts.outro_sec != null) form.append('outro_sec', String(opts.outro_sec));
+      if (opts.drama_start_sec != null) form.append('drama_start_sec', String(opts.drama_start_sec));
+      if (opts.drama_end_sec != null) form.append('drama_end_sec', String(opts.drama_end_sec));
       form.append('one_click', String(opts.one_click));
       form.append('style', opts.style || 'none');
       form.append('vision', String(opts.vision));

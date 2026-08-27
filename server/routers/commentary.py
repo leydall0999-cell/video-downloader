@@ -55,6 +55,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     retain_pct=payload.retain_pct, web=payload.web,
                     vision=payload.vision, tts_provider=payload.tts_provider,
                     intro_sec=payload.intro_sec, outro_sec=payload.outro_sec,
+                    drama_start_sec=payload.drama_start_sec, drama_end_sec=payload.drama_end_sec,
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style)
@@ -71,6 +72,10 @@ def create_commentary_upload(
     vision: bool = app.Form(False),
     tts_provider: str = app.Form(""),
     title: str = app.Form(""),
+    intro_sec: float = app.Form(None),
+    outro_sec: float = app.Form(None),
+    drama_start_sec: float = app.Form(None),
+    drama_end_sec: float = app.Form(None),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
     if not app.COMMENTARY_ENABLED:
@@ -110,6 +115,8 @@ def create_commentary_upload(
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     vision=vision, tts_provider=tts_provider,
+                    intro_sec=intro_sec, outro_sec=outro_sec,
+                    drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=final_title,
                     src_filename=src_filename)
     return {"job_id": job_id, "status": "running"}
@@ -129,6 +136,8 @@ def create_script_only_upload(
     no_narrate_intro_outro: bool = app.Form(True),
     intro_sec: float = app.Form(None),
     outro_sec: float = app.Form(None),
+    drama_start_sec: float = app.Form(None),
+    drama_end_sec: float = app.Form(None),
     retain_pct: float = app.Form(None),
     web: bool = app.Form(False),
     one_click: bool = app.Form(False),
@@ -183,6 +192,7 @@ def create_script_only_upload(
                     retain_pct=retain_pct, web=web, one_click=one_click,
                     vision=vision, tts_provider=tts_provider,
                     intro_sec=intro_sec, outro_sec=outro_sec,
+                    drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=final_title,
                     style=style,
                     src_filename=src_filename)
@@ -405,6 +415,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     retain_pct=payload.retain_pct, web=payload.web,
                     vision=payload.vision, tts_provider=payload.tts_provider,
                     intro_sec=payload.intro_sec, outro_sec=payload.outro_sec,
+                    drama_start_sec=payload.drama_start_sec, drama_end_sec=payload.drama_end_sec,
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style)
@@ -531,6 +542,8 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
     retain_pct = saved.get("retain_pct")
     intro_sec = saved.get("intro_sec")
     outro_sec = saved.get("outro_sec")
+    drama_start_sec = saved.get("drama_start_sec")
+    drama_end_sec = saved.get("drama_end_sec")
     web = bool(saved.get("web", False))
     one_click = bool(saved.get("one_click", False))
 
@@ -555,6 +568,7 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     no_narrate_intro_outro=no_narrate_intro_outro,
                     retain_pct=retain_pct, web=web, one_click=one_click,
                     intro_sec=intro_sec, outro_sec=outro_sec,
+                    drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=title,
                     src_filename=src_filename)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
