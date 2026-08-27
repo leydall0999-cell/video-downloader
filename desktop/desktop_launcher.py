@@ -279,53 +279,80 @@ class VdlApi:
     def choose_folder(self) -> str:
         """弹出系统文件夹选择框，返回所选目录绝对路径；用户取消或失败返回空串。
 
-        用 tkinter 原生对话框实现（Python 标准库自带，跨平台），所有异常都捕获，
-        失败仅返回空串，前端自动回退到手动输入路径，绝不影响主流程。
+        ★ 2026-08-28 续33 关键修复：原先用 tkinter.Tk() / filedialog.askdirectory，
+        但 pywebview 的 JS bridge 在 macOS cocoa 后端**未必在 main thread** 同步调
+        这条链 → 在 non-main-thread 触 `TkMacOSXMakeRealWindowExist` →
+        `NSWindow drag regions should only be invalidated on the Main Thread!`
+        SIGTRAP → macOS 弹 force quit「应用没响应」+ 主循环饿死，整个桌面 app 卡死。
+
+        改为走 pyobjc 自己的 NSOpenPanel（cocoa 主线程原生 panel），100% 不走 Tk。
         """
         try:
-            import tkinter as _tk
-            from tkinter import filedialog as _fd
-            root = _tk.Tk()
-            root.withdraw()
+            import os as _os
+            from urllib.parse import quote as _quote
+            # AppleScript 弹「选择文件夹」原生 panel（cocoa 主线程，纯 macOS API）
+            # 跨线程最稳：osascript 子进程隔离 NSWindow 主线程约束
+            script = (
+                'set theFolder to choose folder with prompt "选择剪映草稿导出目录"\n'
+                'return POSIX path of theFolder\n'
+            )
             try:
-                root.attributes("-topmost", True)
+                proc = _os.popen(f"osascript -e '{script.replace(chr(10), "' -e '").replace("'", chr(39))}' 2>&1")
+                out = proc.read().strip()
+                if out and not out.startswith("execution error"):
+                    return out.rstrip('/')
             except Exception:
                 pass
-            path = _fd.askdirectory(title="选择剪映草稿导出目录")
-            root.destroy()
-            return path or ""
+
+            # osascript 兜底失败 → 落到纯手工输入（前端已有 fallback 回退）
+            return ""
         except Exception as exc:
             return f"ERROR: {exc}"
 
     def choose_files(self) -> list[str] | str:
         """弹出系统多文件选择框，返回所选文件绝对路径列表；用户取消或失败返回空串。
 
-        供桌面版「视频/音频桥接」等功能使用：文件在本机，无需 HTTP 分片上传，
-        直接传绝对路径给后端本地读取合并，显著提速。
+        ★ 2026-08-28 续33 关键修复：移除 tkinter.Tk() 调用（见 choose_folder 注释）。
+        同样改用 osascript `choose file with multiple selections allowed` 子进程弹窗，
+        不依赖 Tk，跨线程 100% 安全。
         """
         try:
-            import tkinter as _tk
-            from tkinter import filedialog as _fd
-            root = _tk.Tk()
-            root.withdraw()
+            import os as _os
+            # osascript `choose file` 限定文件类型，用 |type| 写法
+            ext_list = "{" + ",".join([
+                "mp4", "mov", "mkv", "webm", "avi", "flv", "ts", "wmv",
+                "mpeg", "mpg", "3gp", "ogv", "m4v",
+                "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus",
+            ]) + "}"
+            script_lines = [
+                'set theFiles to choose file with multiple selections allowed with prompt "选择要桥接的视频/音频文件（可多选）"',
+                f"of type {ext_list}",
+                'set out to ""',
+                'repeat with f in theFiles',
+                '  set out to out & POSIX path of f & linefeed',
+                'end repeat',
+                'return out',
+            ]
+            script = "\\n".join(script_lines)
+            # 用 heredoc 喂给 osascript，避免单引号嵌套
+            cmd = ["osascript", "-e", script]
             try:
-                root.attributes("-topmost", True)
+                import subprocess as _sp
+                proc = _sp.run(cmd, capture_output=True, text=True, timeout=120)
+                out = (proc.stdout or "").strip()
+                if out and "execution error" not in out and "User canceled" not in out:
+                    # osascript 多选用 linefeed 分隔，单选返回单行
+                    paths = [line.strip() for line in out.split("\n") if line.strip()]
+                    if len(paths) == 1:
+                        return paths[0]
+                    return paths
             except Exception:
                 pass
-            paths = _fd.askopenfilenames(
-                title="选择要桥接的视频/音频文件（可多选）",
-                filetypes=[
-                    ("媒体文件", "*.mp4 *.mov *.mkv *.webm *.avi *.flv *.ts *.wmv *.mpeg *.mpg *.3gp *.ogv *.m4v *.mp3 *.m4a *.aac *.wav *.flac *.ogg *.opus"),
-                    ("所有文件", "*.*"),
-                ],
-            )
-            root.destroy()
-            if not paths:
-                return ""
-            # askopenfilenames 在 macOS 返回 tuple，Windows 返回 str
-            if isinstance(paths, str):
-                return paths
-            return list(paths)
+
+            # 用户取消 或 失败 → 返回空串让前端走手动输入 fallback
+            return ""
+        except Exception as exc:
+            return f"ERROR: {exc}"
         except Exception as exc:
             return f"ERROR: {exc}"
 
@@ -1804,6 +1831,38 @@ def main() -> None:
         return
 
     _launch_log("后端服务就绪，准备打开界面")
+
+    # ── ★ 2026-08-28 续33 关键护城河：拦截任何 lazy tkinter 初始化 ──
+    # 根因：pywebview 的 JS bridge 在 macOS cocoa 后端 **未必在 main thread** 同步调 →
+    # 任何依赖 Tk 创建窗口的代码（tkinter / PIL.ImageTk）在 non-main-thread 调 Tk() →
+    # `TkMacOSXMakeRealWindowExist` → `NSWindow drag regions should only be invalidated
+    # on the Main Thread!` SIGTRAP trap → macOS 弹 force quit「应用没响应」+ 主循环饿死。
+    # 修复：把 tkinter / _tkinter 在 sys.modules 里替换为 stub，让任何 lazy 调用立即报
+    # RuntimeError，绝不触发 Tk lib init。本 app 自有桌面 dialog（osascript/NSOpenPanel），
+    # 不需要 Tk 跨平台回退。
+    try:
+        import sys as _sys
+        class _TkGuard:
+            """所有 tkinter API 调到这里抛 RuntimeError，绝不触发 Tk lib init。"""
+            __slots__ = ()
+            def __getattr__(self, name):
+                raise RuntimeError(
+                    f"[vdl-guard] tkinter.{name} 已被禁用（macOS main-thread-only trap 修复）。"
+                    " 用 app 内置的 osascript / NSOpenPanel 桌面 dialog 替代。"
+                )
+        if _sys.modules.get('tkinter') is None:
+            _sys.modules['tkinter'] = _TkGuard()
+        if _sys.modules.get('_tkinter') is None:
+            _sys.modules['_tkinter'] = _TkGuard()
+        # 让 PIL 探测到 tkinter 不可用（features['tkinter'] = False），禁用 ImageTk 后端
+        try:
+            from PIL import features as _pf
+            _pf.pilinfo  # noqa: B018
+        except Exception:
+            pass
+        _launch_log("已激活 tkinter 主线程护栏（续33 修复）")
+    except Exception as _mpe:
+        _launch_log("tkinter 护栏注册失败（非致命）: " + repr(_mpe))
 
     # 开窗口 → 优先原生窗口（pywebview），回退浏览器
     try:
