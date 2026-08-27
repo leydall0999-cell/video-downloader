@@ -1191,47 +1191,54 @@ class VdlApi:
 
         def _run():
             w = None
+            login_w = None
             try:
-                # ★ 2026-08-27 续27：复用 self._baidu_wv，避免创建新 WebView。
-                # macOS 跨实例 cookie 不共享——只有用同一个 WKWebView 登录和抽签，
-                # cookie 才会自然可用。
-                if getattr(self, "_baidu_wv", None) is not None:
-                    _log("复用 self._baidu_wv 作为登录窗")
-                    w = self._baidu_wv
-                    try:
-                        w.show()  # 让用户能看到登录窗
-                    except Exception:
-                        pass
-                else:
-                    # 兜底路径：用户直接调 baidu_login 而没先 get_baidu_dlink
-                    _log("self._baidu_wv 不存在，新建一个登录窗")
-                    w = _wv.create_window(
+                # ★ 2026-08-28 续34 关键修复：创建**独立** WKWebView 登录窗，不再复用 self._baidu_wv
+                # 根因：续32b 让 baidu_login 复用了 get_baidu_dlink 的 self._baidu_wv，
+                # 两边同时 evaluate_js/load_url/reload → "Main window failed to start" 异常
+                # + yunData 读不到 + 登录窗永不 hide。彻底分离两个 webview 实例解决：
+                #  - macOS WKWebView 默认用 WKWebsiteDataStore.default() 持久化 cookie，
+                #    新实例登录后 cookie 立即同步到 default store；
+                #  - 登录成功后只需让 self._baidu_wv reload，yunData 就读到登录态。
+                try:
+                    import urllib.parse as _u
+                    login_url = (
+                        "https://passport.baidu.com/v2/?login&display=netdisk"
+                        "&u=" + _u.quote_plus("https://pan.baidu.com/disk/main", safe='')
+                    )
+                    _log("创建独立 WKWebView 登录窗 url=" + login_url[:120])
+                    login_w = _wv.create_window(
                         title="VDL-登录百度网盘",
-                        url="https://pan.baidu.com/disk/main",
+                        url=login_url,
                         width=900, height=700, min_size=(480, 600),
                         on_top=True,
                     )
+                    w = login_w
+                except Exception as e_w:
+                    _log("独立登录窗创建异常，回退到 self._baidu_wv 复用: " + str(e_w))
+                    w = None
+                if w is None:
+                    # 兜底：复用 self._baidu_wv（理论上不会走到）
+                    if getattr(self, "_baidu_wv", None) is None:
+                        self._baidu_wv = _wv.create_window(
+                            title="VDL-百度分享直链",
+                            url="about:blank",
+                            width=900, height=700, min_size=(480, 600),
+                        )
+                        try:
+                            self._baidu_wv.show()
+                        except Exception:
+                            pass
+                    w = self._baidu_wv
                     try:
-                        w.move(50, 50)
-                    except Exception:
-                        pass
-                self._baidu_wv = w
-                # 加载百度登录页（让用户扫码）
-                try:
-                    w.load_url(
-                        "https://passport.baidu.com/v2/?login&display=netdisk"
-                        "&u=https%3A%2F%2Fpan.baidu.com%2Fdisk%2Fmain"
-                    )
-                    _log("已 load 百度登录页，等待用户扫码...")
-                except Exception as e_load:
-                    _log("load 登录页异常: " + str(e_load))
-                # 轮询等登录完成。
-                # ★ 2026-08-27 续30 关键修复：BDUSS 是 HttpOnly cookie，
-                # `document.cookie` 读不到 → 之前用 "'BDUSS' in ck" 永远 False，
-                # 登录后 URL 已跳到 /disk/main 但检测失败，窗口永不 hide。
-                # ★ 2026-08-27 续32 修复：扫码登录成功后百度会**回跳来源页**（/s/<surl>），
-                # 并不总是到 /disk/main → 必须用多元登录信号判断（URL/yunData.uk/loginstate）。
+                        w.load_url("https://passport.baidu.com/v2/?login&display=netdisk&u=https%3A%2F%2Fpan.baidu.com%2Fdisk%2Fmain")
+                        _log("已 load 百度登录页，等待用户扫码...")
+                    except Exception as e_load:
+                        _log("load 登录页异常: " + str(e_load))
+                # 轮询等登录完成（_is_logged_in / _yun_logged 任一成立即可）。
+                # ★ 2026-08-28 续34：现在 w 是独立 WKWebView，不会被 dlink 轮询干扰了。
                 logged = False
+                last_err = None
                 for i in range(180):  # 最多 3 分钟
                     _t.sleep(1)
                     try:
@@ -1245,14 +1252,38 @@ class VdlApi:
                             logged = True
                             _log("登录完成 (yunData.uk>0 或 loginstate=1, s=" + str(i+1) + ", url=" + str(href)[:80] + ")")
                             break
-                    except Exception:
-                        pass
-                # 保留 self._baidu_wv 实例 + cookie（后续 get_baidu_dlink 必须复用）
+                    except Exception as ex_poll:
+                        last_err = str(ex_poll)
+                        if i < 3 or i % 10 == 0:
+                            _log("  轮询第" + str(i+1) + "次异常: " + last_err[:100])
+                        continue
+                # 销毁独立登录窗
                 try:
                     w.hide()
-                    _log("登录窗已隐藏（保留 self._baidu_wv 供 get_baidu_dlink 复用）")
                 except Exception:
                     pass
+                try:
+                    if login_w is not None:
+                        w.destroy()
+                        _log("独立登录窗已销毁（cookie 已通过 default store 同步）")
+                    else:
+                        _log("self._baidu_wv 已隐藏（保留实例）")
+                except Exception as e_d:
+                    _log("销毁登录窗异常: " + str(e_d))
+                self._baidu_login_wv = None
+                # ★ 让 self._baidu_wv reload，确保 cookie 同步后 yunData 也读得到登录态
+                existing = getattr(self, "_baidu_wv", None)
+                if logged and existing is not None and login_w is not None:
+                    try:
+                        # 让 self._baidu_wv 重新触发页面/yunData 拉取
+                        ru = existing.evaluate_js("location.href") or ""
+                        if 'pan.baidu.com' in ru or 'yun.baidu.com' in ru:
+                            existing.evaluate_js("location.reload()")
+                            _log("已触发 self._baidu_wv reload（让 yunData 重新拉取）")
+                        else:
+                            _log("self._baidu_wv URL 非网盘域，跳过 reload")
+                    except Exception as e_re:
+                        _log("self._baidu_wv reload 异常: " + str(e_re))
                 result_holder["value"] = {
                     "ok": logged,
                     "logged": logged,
