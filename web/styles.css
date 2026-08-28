@@ -2176,6 +2176,9 @@ img { max-width: 100%; display: block; }
 .dw-modal-close:hover { background: #e2e5ef; color: #1f2430; }
 .dw-modal-toolbar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .65rem 1.1rem; border-bottom: 1px solid var(--border, #e7e9f1); }
 .dw-modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 1rem; background: #0f172a; }
-.dw-modal-body .dw-preview-wrap { margin: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08); }
+.dw-modal-body .dw-preview-wrap { margin: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08); max-width: none; flex-shrink: 0; align-self: flex-start; }
+/* 灯箱里图片随 transform: scale 放大，必须取消主预览的 max-width/max-height 限制，否则右半/下半被截
+   另加 flex-shrink:0 防止 flex 容器默认收缩把宽图压到视口宽度 */
+.dw-modal-body .dw-preview-wrap img { max-width: none; max-height: none; width: auto; height: auto; flex-shrink: 0; }
 .dw-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.1rem; border-top: 1px solid var(--border, #e7e9f1); }
 .dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
