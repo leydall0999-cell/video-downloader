@@ -27,6 +27,7 @@ import os
 import struct
 import asyncio
 import time
+from collections import deque
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -52,6 +53,15 @@ _TUNNEL_TOKEN = (
 _PROXY_HOST = os.environ.get("VDL_TUNNEL_PROXY_HOST", "127.0.0.1")
 _PROXY_PORT = int(os.environ.get("VDL_TUNNEL_PROXY_PORT", "18889") or "18889")
 
+# ---- 只读诊断：连接生命周期事件缓冲（不影响隧道逻辑）----
+_EVENTS: "deque[tuple[float, str, str]]" = deque(maxlen=60)
+_LAST_FRAME_TS = 0.0  # 最后收到 client 帧的时间戳（限频，只更新时间戳）
+
+
+def _log_ev(kind: str, detail: str = "") -> None:
+    """记录一条隧道生命周期事件，供 /api/tunnel-diag 只读查询。"""
+    _EVENTS.append((time.time(), kind, detail))
+
 
 def _frame(typ: int, id_: int, payload: bytes = b"") -> bytes:
     return struct.pack(">BI", typ, id_) + payload
@@ -73,8 +83,11 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
         await ws.close(code=1008, reason="unauthorized")
         return
     await ws.accept()
+    if _TUNNEL is not None:
+        _log_ev("tunnel_replaced", "旧连接被新连接覆盖（client 重连）")
     _TUNNEL = ws
     _TUNNEL_READY.set()
+    _log_ev("ws_connect", f"peer={getattr(ws, 'client', None) and ws.client.host}")
     logger.info("[cn_tunnel] 反向隧道已建立（ECS client 已连接）")
     try:
         while True:
@@ -89,13 +102,16 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
             try:
                 msg = await asyncio.wait_for(ws.receive(), timeout=300)
             except asyncio.TimeoutError:
+                _log_ev("ws_idle_timeout", "300s 无任何消息，判定僵尸连接")
                 logger.warning("[cn_tunnel] WS receive 300s 无任何消息，判定僵尸连接断开")
                 break
             if msg.get("type") == "websocket.disconnect":
+                _log_ev("ws_disconnect", "client closed (disconnect msg)")
                 break
             data = msg.get("bytes")
             if not data or len(data) < 5:
                 continue
+            _LAST_FRAME_TS = time.time()
             typ = data[0]
             id_ = struct.unpack(">I", data[1:5])[0]
             payload = data[5:]
@@ -111,10 +127,13 @@ async def cn_tunnel_ws(ws: WebSocket) -> None:
             if typ == 3:
                 logger.debug("[cn_tunnel] 收到心跳 type=3 id=%s", id_)
     except WebSocketDisconnect as e:
+        _log_ev("ws_exception_disconnect", f"code={getattr(e, 'code', '?')} reason={getattr(e, 'reason', '?')}")
         logger.warning("[cn_tunnel] ECS client 断开: code=%s reason=%s", getattr(e, "code", "?"), getattr(e, "reason", "?"))
     except Exception:
+        _log_ev("ws_exception", "receive 循环异常")
         logger.exception("[cn_tunnel] 隧道接收循环异常")
     finally:
+        _log_ev("ws_cleanup", "连接清理（_TUNNEL=None）")
         _TUNNEL = None
         _TUNNEL_READY.clear()
         # 断开时把残留的 pending 代理连接全部关闭，避免它们卡到客户端超时
@@ -138,6 +157,7 @@ async def _proxy_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         # 等隧道就绪；若现有 _TUNNEL 是死连接（WS 断开但 receive 未察觉的残留），
         # 立即清掉并等新的 WS 连接，避免把 open 帧发到死连接上（yt-dlp 报 Remote end closed）。
         if _TUNNEL is None or _TUNNEL.client_state.value != 1:  # 1 = OPEN
+            _log_ev("ready_clear_proxy_check", f"tunnel_none={_TUNNEL is None} state={getattr(_TUNNEL, 'client_state', None) and _TUNNEL.client_state.value}")
             _TUNNEL_READY.clear()
             await asyncio.wait_for(_TUNNEL_READY.wait(), timeout=10)
         ws = _TUNNEL
@@ -354,6 +374,29 @@ async def tunnel_test(mode: str = "http") -> dict:
         "tunnel_ready": _TUNNEL_READY.is_set(),
         **diag,
         **extra,
+    }
+
+
+@router.get("/api/tunnel-diag")
+async def tunnel_diag() -> dict:
+    """只读诊断：服务端视角的隧道连接生命周期事件（定位周期性断连根因用）。"""
+    now = time.time()
+    state = None
+    if _TUNNEL is not None:
+        try:
+            state = _TUNNEL.client_state.value
+        except Exception:
+            state = "?error"
+    return {
+        "now": round(now, 1),
+        "tunnel_ready": _TUNNEL_READY.is_set(),
+        "tunnel_set": _TUNNEL is not None,
+        "tunnel_state": state,
+        "last_frame_ago": round(now - _LAST_FRAME_TS, 1) if _LAST_FRAME_TS else None,
+        "pending_ids": len(_PENDING),
+        "events": [
+            {"ago": round(now - e[0], 1), "k": e[1], "d": e[2]} for e in _EVENTS
+        ],
     }
 
 
