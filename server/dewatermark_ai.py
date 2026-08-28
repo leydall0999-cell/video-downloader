@@ -106,9 +106,14 @@ def _ensure_model() -> Path:
         except OSError:
             pass
     import urllib.request
+    import socket
 
     logger.info("ai_dewatermark: 下载 LaMa ONNX %s -> %s", LAMA_ONNX_URL, p)
     tmp = p.with_suffix(".tmp")
+    # 全局默认 socket 超时（URL + connect 都受此限制），桌面端 / 受限网络下避免 107MB 下载挂死
+    # 在进入下载前恢复 try/finally 内即可；下载超时即返回，由父路由转失败。
+    prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(60)
     try:
         urllib.request.urlretrieve(LAMA_ONNX_URL, tmp)
         sz = Path(tmp).stat().st_size
@@ -119,6 +124,8 @@ def _ensure_model() -> Path:
     except Exception as e:  # noqa: BLE001
         tmp.unlink(missing_ok=True)
         raise
+    finally:
+        socket.setdefaulttimeout(prev_timeout)
     logger.info("ai_dewatermark: 模型就绪 %s (%d bytes)", p, p.stat().st_size)
     return p
 
@@ -311,10 +318,17 @@ def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap
 
 
 def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
-    """AI 图片去水印（父进程入口）：内存护栏快速拒绝 + 子进程隔离推理。
+    """AI 图片去水印（父进程入口）：frozen 桌面端走 in-process；web/dev 走子进程隔离。
 
-    实际推理在独立子进程执行，避免 onnxruntime 加载 107MB 模型时的 OOM / 损坏模型原生崩溃
-    拖垮桌面 App 主进程。regions 序列化到临时 JSON 传给子进程。
+    实际推理：
+    - PyInstaller frozen 桌面 App：**同进程直接调 ai_image_inpaint_core**。
+      原因：`subprocess.run([sys.executable, ...])` 在 frozen 模式下 sys.executable
+      是 launcher 二进制而非 python 解释器，无法派发"python dewatermark_ai.py run ..."这种
+      worker 入口；硬派会跑出 launcher 整套（启 web 服务+原生窗口），子进程根本无法写出文件，
+      父进程被超时或 dst 不存在兜底导致"AI 去水印未产出有效文件"。桌面端内存充裕、无 web 共享
+      稳定性诉求，且有模型完整性校验兜底原生崩溃，可接受同进程。
+    - web/dev（Railway / Vercel / 本地裸运行）：保持现有子进程隔离：107MB LaMa 加载
+      时的 OOM / 损坏模型 SIGSEGV 只杀子进程，不拖垮共享 web 服务。
     """
     if not available():
         raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
@@ -322,6 +336,15 @@ def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int
     if not ok:
         raise RuntimeError(reason)
 
+    # PyInstaller frozen 桌面端：同进程推理，跳过子进程派发（frozen 派发不可靠）
+    if getattr(sys, "frozen", False):
+        ai_image_inpaint_core(str(src_path), str(dst_path), regions, tile, overlap)
+        out = Path(dst_path)
+        if not out.exists() or out.stat().st_size == 0:
+            raise RuntimeError("AI 去水印未产出有效文件")
+        return out
+
+    # web/dev：子进程隔离（共享 web 服务防 OOM/崩溃拖垮）
     reg_path = Path(tempfile.gettempdir()) / (f"vdl_dw_{Path(dst_path).stem}_{os.getpid()}.regions.json")
     with reg_path.open("w", encoding="utf-8") as fh:
         json.dump(regions, fh)
