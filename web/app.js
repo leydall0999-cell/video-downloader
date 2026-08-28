@@ -3244,6 +3244,7 @@
     el.dwVidEl.draggable = false;
     el.dwVidEl.addEventListener('dragstart', (e) => e.preventDefault());
     el.dwVidEl.src = url;
+    el.dwVidOrig.src = url;
     el.dwVidEl.onloadedmetadata = () => {
       dwVidResize();
       dwVidDraw();
