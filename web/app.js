@@ -2174,7 +2174,7 @@
     mcMergeBtn.disabled = ready < 2;
     if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
     mcListEl.innerHTML = mcState.list.map((it, idx) => {
-      const name = it.name;
+      const name = it.name || it.outputName || it.label || (it.isResult ? '合并结果' : '未命名文件');
       const statusText = it.isResult
         ? (it.status === 'running'
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
@@ -2384,6 +2384,7 @@
         } else if (st.status === 'completed') {
           it.status = 'completed'; it.progress = 100;
           it.outputName = `[${mcOutFormat.value.toUpperCase()}]${mcOutName.value || 'merged'}.${UC_EXT_OF[mcOutFormat.value] || mcOutFormat.value}`;
+          if (!it.name) it.name = it.outputName;
           it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
           it.libraryId = st.library_id || null;
           mcRender();
@@ -2463,7 +2464,8 @@
     request(endpoint, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
       .then(data => {
         if (data.job_id) {
-          mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果', status: 'running',
+          mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果',
+            name: mcOutName.value || '', status: 'running',
             jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null });
           mcState.polling = setInterval(mcPoll, UC_POLL_INTERVAL);
           mcStatusEl.textContent = '拼接中…';
