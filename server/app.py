@@ -3601,4 +3601,38 @@ def cookie_status(url: str = "") -> dict:
     }
 
 
+# 首页：内联 styles.css，彻底消除刷新时无样式闪烁（FOUC）。
+# 外部 styles.css 经 Cloudflare 回源美国主机往返约 1s，慢网络下浏览器可能先渲染无样式
+# 内容。内联后首屏样式随 HTML 一同到达，零外部 CSS 请求。CSS 文件变更时按 mtime 自动重读。
+import threading as _threading
+
+_index_cache = {"html": None, "mtime": 0.0}
+_index_lock = _threading.Lock()
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    idx_path = os.path.join(WEB_DIR, "index.html")
+    css_path = os.path.join(WEB_DIR, "styles.css")
+    try:
+        css_mtime = os.path.getmtime(css_path)
+    except OSError:
+        css_mtime = 0.0
+    with _index_lock:
+        cache = _index_cache
+        if cache["html"] is None or cache["mtime"] != css_mtime:
+            try:
+                html = open(idx_path, encoding="utf-8").read()
+                css = open(css_path, encoding="utf-8").read()
+                html = html.replace(
+                    '<link rel="stylesheet" href="styles.css" />',
+                    f'<style data-inline-css>{css}</style>',
+                )
+                cache["html"] = html
+                cache["mtime"] = css_mtime
+            except (OSError, FileNotFoundError):
+                cache["html"] = cache["html"] or "<!doctype html><html><body>error</body></html>"
+        return HTMLResponse(cache["html"])
+
+
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
