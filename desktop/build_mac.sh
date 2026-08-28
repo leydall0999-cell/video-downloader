@@ -254,12 +254,14 @@ echo "   ✔ 前端 JS 语法校验通过"
   --hidden-import webview \
   --hidden-import webview.platforms.cocoa \
   --hidden-import dewatermark_core \
+  --hidden-import dewatermark_ai \
   --collect-binaries cv2 \
   --collect-all pymupdf \
   --collect-all fitz \
   --collect-all requests \
   --collect-all PIL \
   --collect-all pyobjc-framework-Quartz \
+  --collect-all onnxruntime \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   $_PCS_ADD_BINARY_ARG \

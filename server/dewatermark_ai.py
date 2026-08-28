@@ -224,8 +224,11 @@ def _infer_tile(sess, img_tile, mask_tile):
     inp_mask = mask_tile.transpose(2, 0, 1)[None].astype(_np.float32)
     names = [i.name for i in sess.get_inputs()]
     feeds = {names[0]: inp_img, names[1]: inp_mask}
-    out = sess.run(None, feeds)[0][0]  # (3,512,512)
-    return _np.clip(out.transpose(1, 2, 0), 0, 1)
+    out = sess.run(None, feeds)[0][0]  # (3,512,512)，Carve/LaMa-ONNX 输出像素范围 [0,255]
+    arr = out.transpose(1, 2, 0)
+    # 重要：LaMa ONNX 输出的是 [0,255] 像素值，必须归一化到 [0,1] 再参与瓦片融合；
+    # 若直接 clip(0,1) 会把 >1 的值（如背景灰 230）压成 1.0，最终 *255 后整图变成纯白。
+    return _np.clip(arr / 255.0, 0, 1)
 
 
 def _tile_weight(th: int, tw: int, y0: int, x0: int, h: int, w: int, overlap: int):
