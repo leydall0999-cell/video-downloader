@@ -422,6 +422,10 @@ AUDIO_REENCODE = {
     "m4a":  ["-c:a", "aac", "-b:a", "192k"],
     "wav":  ["-c:a", "pcm_s16le"],
     "flac": ["-c:a", "flac"],
+    "aac":  ["-c:a", "aac", "-b:a", "192k"],
+    "opus": ["-c:a", "libopus", "-b:a", "128k"],
+    "wma":  ["-c:a", "wmav2", "-b:a", "192k"],
+    "mp2":  ["-c:a", "mp2", "-b:a", "192k"],
 }
 
 
@@ -517,10 +521,14 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
                     arefs.append(f"[{n + len(extra) - 1}:a]")
             pairs = "".join(vrefs[i] + arefs[i] for i in range(n))
             filt = pairs + f"concat=n={n}:v=1:a=1[v][a]"
+            # 按输出容器选用对应编码（avi→libmp3lame / wmv→msmpeg4+wmav2 / mpeg→mpeg2video+mp2 / hevc→libx265）；
+            # gif 不应走视频重编码兜底，退回 mp4 编码参数
+            vparams = app.CONVERT_TARGETS.get(out_format, app.CONVERT_TARGETS["mp4"])
+            if out_format == "gif":
+                vparams = ["-c:v", "libx264", "-c:a", "aac"]
             cmd = [app.FFMPEG_BIN, "-y"] + ins + extra + [
                 "-filter_complex", filt, "-map", "[v]", "-map", "[a]",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
-                "-c:a", "aac", "-b:a", "192k", str(out_path)]
+                "-pix_fmt", "yuv420p"] + vparams + [str(out_path)]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 bufsize=0, text=True)
         _track(proc)

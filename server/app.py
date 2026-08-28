@@ -121,18 +121,46 @@ CONVERT_JOBS: dict[str, dict] = {}
 CONVERT_LOCK = threading.Lock()
 FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/opt/homebrew/bin/ffmpeg" if sys.platform == "darwin" else "")
 # 允许的目标格式 -> ffmpeg 参数；resolution 可选 original/1080/720/480
+# 视频容器按容器选型（avi 用 mp3 音轨、wmv 用原生 msmpeg4/wmav2、mpeg 用 mpeg2video/mp2、hevc 用 libx265）；
+# 音频容器按编码选型（aac/opus/wma/mp2 均自带编码器）。
+# 注意：ogv/ogg/oga 因捆绑 ffmpeg 缺 libvorbis/libtheora 不支持，故不纳入。
 CONVERT_TARGETS = {
+    # ---- 视频容器 ----
     "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
-    "mov":  ["-c:v", "libx264", "-c:a", "aac"],
-    "mkv":  ["-c:v", "libx264", "-c:a", "aac"],
+    "mov":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
+    "mkv":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
     "webm": ["-c:v", "libvpx-vp9", "-c:a", "libopus", "-b:v", "1M"],
+    "avi":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "libmp3lame"],
+    "flv":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
+    "ts":   ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
+    "m4v":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
+    "wmv":  ["-c:v", "msmpeg4", "-c:a", "wmav2"],
+    "3gp":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
+    "mpeg": ["-c:v", "mpeg2video", "-c:a", "mp2"],
+    "hevc": ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac", "-tag:v", "hvc1"],
+    # ---- 音频容器 ----
     "mp3":  ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
-    "m4a":  ["-vn", "-c:a", "aac"],
+    "m4a":  ["-vn", "-c:a", "aac", "-b:a", "192k"],
     "wav":  ["-vn", "-c:a", "pcm_s16le"],
     "flac": ["-vn", "-c:a", "flac"],
+    "aac":  ["-vn", "-c:a", "aac", "-b:a", "192k"],
+    "opus": ["-vn", "-c:a", "libopus", "-b:a", "128k"],
+    "wma":  ["-vn", "-c:a", "wmav2", "-b:a", "192k"],
+    "mp2":  ["-vn", "-c:a", "mp2", "-b:a", "192k"],
+    # ---- 动图 ----
     "gif":  ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
 }
-CONVERT_EXT = {"mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm", "mp3": "mp3", "m4a": "m4a", "wav": "wav", "flac": "flac", "gif": "gif"}
+# 输出文件后缀（hevc 编码进 mp4 容器，其余与键同名）
+CONVERT_EXT = {
+    "mp4": "mp4", "mov": "mov", "mkv": "mkv", "webm": "webm",
+    "avi": "avi", "flv": "flv", "ts": "ts", "m4v": "m4v",
+    "wmv": "wmv", "3gp": "3gp", "mpeg": "mpeg", "hevc": "mp4",
+    "mp3": "mp3", "m4a": "m4a", "wav": "wav", "flac": "flac",
+    "aac": "aac", "opus": "opus", "wma": "wma", "mp2": "mp2",
+    "gif": "gif",
+}
+# 纯音频目标（跳过视频滤镜/缩放/旋转分支）
+CONVERT_AUDIO = {"mp3", "m4a", "wav", "flac", "aac", "opus", "wma", "mp2"}
 
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
@@ -1472,7 +1500,7 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
     try:
         out = Path(job["out_path"])
         cmd = [FFMPEG_BIN, "-y", "-i", src]
-        audio_only = target in ("mp3", "m4a")
+        audio_only = target in CONVERT_AUDIO
         if target == "gif":
             cmd += CONVERT_TARGETS["gif"]
         elif remux and rotate == 0:
