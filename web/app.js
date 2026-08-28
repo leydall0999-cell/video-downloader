@@ -1665,7 +1665,9 @@
       const displayName = it.name || (it.file && it.file.name) || '未命名';
       const metaSpans = it.localPath
         ? `<span class="uc-local-badge" style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>→ ${it.target.toUpperCase()}</span>`
-        : `<span>${ucFormatSize(it.file.size)}</span><span>→ ${it.target.toUpperCase()}</span>`;
+        : (it.file
+            ? `<span>${ucFormatSize(it.file.size)}</span><span>→ ${it.target.toUpperCase()}</span>`
+            : `<span>→ ${it.target.toUpperCase()}</span>`);
       return `
         <li class="uc-item ${statusCls}" data-id="${it.id}">
           <div class="uc-item-main">
@@ -2508,7 +2510,10 @@
       const li = t.closest('.uc-item');
       const it = ucState.list.find(x => x.id === +li.dataset.id);
       if (it && it.status === 'uploaded') {
-        el.ucStatus.textContent = `开始转码：${it.file.name}`;
+        // ★ 2026-08-28 兜底修复：localPath 路径项没有 it.file 对象，原代码 it.file.name 在用户
+        // 走 native chooser 选了本地路径时会抛 null.name → "启动错误: TypeError: null is not an
+        // object (evaluating 'it.file.name')"。统一走 it.name（构造时已 basename 兜底）。
+        el.ucStatus.textContent = `开始转码：${it.name || (it.file && it.file.name) || '未知文件'}`;
         ucEnsurePolling();   // 立即启动轮询，进度实时可见
         ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
       }
