@@ -271,6 +271,23 @@ cat > "$REPO/server/build_info.txt" <<BUILDINFO
 BUILDINFO
 echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
 
+# ── JS 语法门禁：防止前端语法错误（如顶层 await）导致整个 app.js 解析失败、所有按钮失效 ──
+echo "▶ JS 语法门禁 (node --check web/*.js)..."
+JS_FAIL=0
+for f in "$REPO"/web/*.js; do
+  if [ -f "$f" ]; then
+    if ! node --check "$f" 2>"$REPO"/.jscheck.err; then
+      echo "❌ JS 语法错误: $f"; cat "$REPO"/.jscheck.err; JS_FAIL=1
+    fi
+  fi
+done
+rm -f "$REPO"/.jscheck.err
+if [ "$JS_FAIL" -ne 0 ]; then
+  echo "   ❌ 前端 JS 存在语法错误，已阻断构建（避免出包后按钮全失效）" >&2
+  exit 1
+fi
+echo "   ✔ 前端 JS 语法校验通过"
+
 "$VENV/bin/pyinstaller" \
   --name VideoDownloader \
   --windowed \

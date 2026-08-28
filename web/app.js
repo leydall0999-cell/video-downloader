@@ -6600,20 +6600,22 @@
     }
   });
   // 页面加载时显示 BDUSS 是否已配置
-  try {
-    const st = await fetch('/api/baidu/bduss_status');
-    const sd = await st.json();
-    const status = document.getElementById('baiduBdussStatus');
-    if (status) {
-      if (sd.configured) {
-        status.textContent = '✓ 已配置 BDUSS，可直接下载分享链接';
-        status.style.color = '#07c160';
-      } else {
-        status.textContent = '⚠ 尚未配置 BDUSS（粘贴后点保存即可）';
-        status.style.color = '#e64340';
+  (async () => {
+    try {
+      const st = await fetch('/api/baidu/bduss_status');
+      const sd = await st.json();
+      const status = document.getElementById('baiduBdussStatus');
+      if (status) {
+        if (sd.configured) {
+          status.textContent = '✓ 已配置 BDUSS，可直接下载分享链接';
+          status.style.color = '#07c160';
+        } else {
+          status.textContent = '⚠ 尚未配置 BDUSS（粘贴后点保存即可）';
+          status.style.color = '#e64340';
+        }
       }
-    }
-  } catch (e) { /* ignore */ }
+    } catch (e) { /* ignore */ }
+  })();
 
   async function startBaiduShareDownload(item) {
     // 自动恢复本机已存的 OAuth 令牌（之前授权过则免重复授权）；无令牌也不阻断，
