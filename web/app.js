@@ -445,6 +445,7 @@
     dwVidStatus: $('dwVidStatus'),
     dwVidResult: $('dwVidResult'),
     dwVidOut: $('dwVidOut'),
+    dwVidOrig: $('dwVidOrig'),
     dwVidDownload: $('dwVidDownload'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
