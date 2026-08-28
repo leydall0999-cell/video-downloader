@@ -110,20 +110,28 @@ def _ensure_model() -> Path:
 
     logger.info("ai_dewatermark: 下载 LaMa ONNX %s -> %s", LAMA_ONNX_URL, p)
     tmp = p.with_suffix(".tmp")
-    # 全局默认 socket 超时（URL + connect 都受此限制），桌面端 / 受限网络下避免 107MB 下载挂死
-    # 在进入下载前恢复 try/finally 内即可；下载超时即返回，由父路由转失败。
+    # 全局默认 socket 超时（URL + connect 都受此限制）。107MB+ 在慢网下需要更长时间，
+    # 同时加一次重试避免单次失败。下载超时即返回，由父路由转失败。
     prev_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(60)
+    socket.setdefaulttimeout(300)  # 5 分钟
     try:
-        urllib.request.urlretrieve(LAMA_ONNX_URL, tmp)
+        last_err: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                urllib.request.urlretrieve(LAMA_ONNX_URL, tmp)
+                last_err = None
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                logger.warning("ai_dewatermark: 模型下载第 %d 次失败: %s；%s", attempt, e, "重试" if attempt == 1 else "放弃")
+                tmp.unlink(missing_ok=True)
+        if last_err is not None:
+            raise last_err
         sz = Path(tmp).stat().st_size
         if sz < EXPECTED_MODEL_MIN_BYTES:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"模型下载不完整（{sz} bytes），请重试或检查网络")
         tmp.replace(p)
-    except Exception as e:  # noqa: BLE001
-        tmp.unlink(missing_ok=True)
-        raise
     finally:
         socket.setdefaulttimeout(prev_timeout)
     logger.info("ai_dewatermark: 模型就绪 %s (%d bytes)", p, p.stat().st_size)
