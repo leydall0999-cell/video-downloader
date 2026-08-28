@@ -6574,6 +6574,47 @@
   });
   refreshBaiduLoginStatus();
 
+  // ★ 纯 curl：保存 BDUSS（写 ~/.vdl/baidu_bduss.txt，后端直链通道读取），不弹浏览器
+  const baiduBdussSaveBtn = document.getElementById('baiduBdussSaveBtn');
+  if (baiduBdussSaveBtn) baiduBdussSaveBtn.addEventListener('click', async () => {
+    const input = document.getElementById('baiduBdussInput');
+    const status = document.getElementById('baiduBdussStatus');
+    const v = (input.value || '').trim();
+    if (!v) { status.textContent = '请先粘贴 BDUSS'; status.style.color = '#e64340'; return; }
+    baiduBdussSaveBtn.disabled = true;
+    try {
+      const r = await fetch('/api/baidu/save_bduss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bduss: v }),
+      });
+      const d = await r.json();
+      status.textContent = d.ok ? d.message : ('⚠ ' + (d.message || '保存失败'));
+      status.style.color = d.ok ? '#07c160' : '#e64340';
+      if (d.ok) input.value = '';
+    } catch (e) {
+      status.textContent = '⚠ ' + e.message;
+      status.style.color = '#e64340';
+    } finally {
+      baiduBdussSaveBtn.disabled = false;
+    }
+  });
+  // 页面加载时显示 BDUSS 是否已配置
+  try {
+    const st = await fetch('/api/baidu/bduss_status');
+    const sd = await st.json();
+    const status = document.getElementById('baiduBdussStatus');
+    if (status) {
+      if (sd.configured) {
+        status.textContent = '✓ 已配置 BDUSS，可直接下载分享链接';
+        status.style.color = '#07c160';
+      } else {
+        status.textContent = '⚠ 尚未配置 BDUSS（粘贴后点保存即可）';
+        status.style.color = '#e64340';
+      }
+    }
+  } catch (e) { /* ignore */ }
+
   async function startBaiduShareDownload(item) {
     // 自动恢复本机已存的 OAuth 令牌（之前授权过则免重复授权）；无令牌也不阻断，
     // 后端 download_share 会按「BDUSS 直链 → transfer」多级策略选路。
@@ -6615,8 +6656,8 @@
       });
     };
 
-    // 尝试通过 app 内 WebView 获取直链（仅桌面版有 pywebview.api）
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_baidu_dlink && item.fs_id) {
+    // ★ 纯 curl 方案（2026-08-28）：彻底禁用 WebView 预取直链，统一走后端 BDUSS 直链通道（零 webview 依赖）
+    if (false) {
       el.baiduShareStatus.textContent = '正在通过 app 内浏览器获取下载直链…';
       try {
         const callGetDlink = async () => {

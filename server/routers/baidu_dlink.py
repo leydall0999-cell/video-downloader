@@ -39,3 +39,45 @@ def add_baidu_dlink(payload: app.BaiduDlinkRequest, request: app.Request) -> dic
     _t2 = app.threading.Thread(target=_run, name="vdl-baidu-dlink", daemon=True)
     _t2.start()
     return {"ok": True, "task_id": task_id, "dest": str(dest), "message": "已提交 aria2c 下载"}
+
+
+# --------------------------------------------------------------------------- #
+# 纯 curl 方案：BDUSS 直链通道（砍掉 WebView，零浏览器依赖）
+# 前端分享下载直接走 app.clouddrive 的「策略 A：BDUSS + /api/sharedownload」，
+# 只要本机 ~/.vdl/baidu_bduss.txt 有有效 BDUSS 即可拿直链，无需任何 WebView 登录。
+# --------------------------------------------------------------------------- #
+@router.post("/api/baidu/save_bduss")
+async def save_bduss(request: app.Request):
+    """保存用户提供的百度网盘 BDUSS（从浏览器 F12 复制），供纯 curl 直链使用。"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    bduss = (body.get("bduss") or "").strip()
+    if not bduss:
+        return {"ok": False, "message": "BDUSS 为空"}
+    # 兼容用户粘贴 "BDUSS=xxxx" 或纯值
+    if bduss.startswith("BDUSS="):
+        bduss = bduss[6:].strip()
+    # 粗略校验：真实 BDUSS 通常较长（>=40 字符）
+    if len(bduss) < 20:
+        return {"ok": False, "message": "BDUSS 过短，疑似复制不完整（应从浏览器 Cookie 复制完整值）"}
+    try:
+        app.clouddrive._save_bduss(bduss)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": "保存失败: " + str(e)}
+    return {"ok": True, "message": "✓ BDUSS 已保存，现在可直接下载百度分享链接（纯 curl 直链通道，无需 WebView 登录）"}
+
+
+@router.get("/api/baidu/bduss_status")
+def bduss_status():
+    """返回本机是否已配置 BDUSS（供前端显示）。"""
+    from pathlib import Path
+    import json
+    p = Path.home() / ".vdl" / "baidu_bduss_info.json"
+    if p.exists():
+        try:
+            return {"configured": True, "info": json.loads(p.read_text("utf-8"))}
+        except Exception:
+            pass
+    return {"configured": False}

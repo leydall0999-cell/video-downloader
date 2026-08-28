@@ -1381,6 +1381,14 @@
         <button type="button" class="btn btn-primary btn-sm" id="baiduAppLoginBtn">🔑 极速通道（可选，登录后更快）</button>
         <span class="baidu-login-status" id="baiduLoginStatus"></span>
       </div>
+      <div class="baidu-bduss-row" style="margin-top:.4rem;flex-direction:column;align-items:stretch">
+        <label class="modal-sub" style="font-size:12px;margin-bottom:.2rem">🔑 百度网盘 BDUSS（Cookie）—— 纯 curl 直链通道，<strong>不弹浏览器</strong></label>
+        <textarea id="baiduBdussInput" class="adv-textarea" rows="2" placeholder="从浏览器登录百度网盘 → F12 → Application → Cookies → 复制 BDUSS 的值（可含 BDUSS= 前缀）" style="font-size:12px"></textarea>
+        <div style="display:flex;gap:.4rem;margin-top:.3rem;align-items:center">
+          <button type="button" class="btn btn-accent btn-sm" id="baiduBdussSaveBtn">保存 BDUSS</button>
+          <span class="baidu-bduss-status" id="baiduBdussStatus"></span>
+        </div>
+      </div>
       <p class="baidu-share-status" id="baiduShareStatus"></p>
       <div class="baidu-list baidu-share-list" id="baiduShareList"><p class="baidu-empty">粘贴分享链接后自动列出，点文件名右侧按钮即可下载（无需登录）。</p></div>
 
