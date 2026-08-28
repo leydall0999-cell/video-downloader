@@ -196,8 +196,8 @@ CONVERT_TARGETS_AVAILABLE: list = (
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
 UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
-# 上传文件大小上限（字节），默认 10GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
-UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 10_000_000_000)
+# 上传文件大小上限（字节），默认 1GB（CF 免费方案对大文件并发上传限流严重，见 2026-08-28 诊断），可用 VDL_UPLOAD_MAX_BYTES 覆盖
+UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 1 * 1024 * 1024 * 1024)
 # 单次分片上传块大小上限（前端固定 32MB，留余量防超限）
 UPLOAD_CHUNK_MAX = 64 * 1024 * 1024
 # 允许上传的文件后缀白名单（2026-08-23：视频 + 音频都可上传转换）

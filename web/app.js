@@ -1540,7 +1540,7 @@
   const UC_MAX_CONCURRENT = 2; // 文件级上传并发
   const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB（默认）
   const UC_BIG_CHUNK_SIZE = 64 * 1024 * 1024;   // >2GB 文件单片 64MB（减少请求数，后端上限 64MB）
-  const UC_CHUNK_CONCURRENCY = 8;               // 单文件分片并发路数（高 RTT 链路多连接并行提速，HTTP/2 无连接限制）
+  const UC_CHUNK_CONCURRENCY = 2;               // 单文件分片并发路数（2026-08-28：CF 免费方案对 8 路并发大文件 POST 触发 Heavy Upload Limiter，每路降速到 ~200KB/s；降到 2 路绕过限流，单条 32MB 可跑 1.3MB/s）
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
   // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
@@ -1650,11 +1650,9 @@
       el.ucBulkTarget.dataset.inited = '1';
       el.ucBulkTarget.innerHTML = fmtOptions(el.ucBulkTarget.value || 'mp4');
     }
-    // 大小上限提示（来自节点配置；默认 10GB）
+    // 大小上限提示（2026-08-28：10GB → 1GB，CF 免费方案对大文件并发上传限流严重）
     if (el.ucLimitTip) {
-      const mb = node.convertMaxUpload || 0;
-      const gb = mb > 0 ? (mb / 1024 / 1024 / 1024).toFixed(1) : '10.0';
-      el.ucLimitTip.textContent = `单个文件最大 ${gb}GB（大文件已自动分片并发上传提速）；超过上限请先「解析下载」再在任务卡片里点转换，服务器直转更快，无需上传。`;
+      el.ucLimitTip.textContent = `单个文件最大 1GB（大文件已自动分片并发上传提速）；想体验更大传出文件，下载桌面端。`;
     }
 
     if (!list.length) { el.ucList.innerHTML = ''; return; }
