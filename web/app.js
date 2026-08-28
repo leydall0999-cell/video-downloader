@@ -1981,7 +1981,23 @@
           item.status = 'failed';
           let msg = data.detail || data.error || ('HTTP ' + xhr.status);
           if (/分片不完整|分片参数|文件超过|合并/.test(msg)) {
-            // finish 是一次性操作（合并时已 unlink 部分 parts），分片无法服务端重试，只能重传
+            // finish 是合并 + 启动转码的一次性操作；服务端的「分片不完整」意味着
+            // 之前那次上传因后台 tab 限流 / 2min 超时没传完所有分片，但后端按
+            // (upload_id, index) 覆盖写是幂等的 → 自动从 0 重传所有分片即可
+            // （已传的会被覆盖，不会出现拼接错位）。最多自动重试 2 次仍失败
+            // 才提示用户手动移除。
+            item._retryCount = item._retryCount || 0;
+            if (item._retryCount < 2 && item._uploadId) {
+              item._retryCount++;
+              item.status = 'pending';
+              item.errorMsg = `分片未传完（${msg.match(/（([0-9]+)\/([0-9]+)）/)?.[1] || '?'}/${msg.match(/（([0-9]+)\/([0-9]+)）/)?.[2] || '?'}），已自动重传…`;
+              item.speedText = ''; item.uploadedText = ''; item.progress = 0;
+              renderUcList();
+              // 异步重跑上传流程（保留 _uploadId，worker 池从 0 重传所有分片）
+              setTimeout(() => ucUploadOne(item), 200);
+              resolve({ status: 'retrying' });
+              return;
+            }
             msg += '（请移除此行后重新添加文件上传）';
           }
           item.errorMsg = msg;
@@ -2251,7 +2267,21 @@
           } else {
             item.status = 'failed';
             let msg = data.detail || data.error || ('HTTP ' + xhr.status);
-            if (/分片不完整|分片参数|文件超过|合并/.test(msg)) msg += '（请移除后重新添加）';
+            if (/分片不完整|分片参数|文件超过|合并/.test(msg)) {
+              // 同 ucFinishOne：服务端的「分片不完整」+ (upload_id,index) 幂等覆盖写
+              // → 自动重传所有分片，最多 2 次后仍失败才提示用户手动移除
+              item._retryCount = item._retryCount || 0;
+              if (item._retryCount < 2 && item._uploadId) {
+                item._retryCount++;
+                item.status = 'pending';
+                item.errorMsg = `分片未传完（${msg.match(/（(\d+)\/(\d+)）/)?.[1] || '?'}/${msg.match(/（(\d+)\/(\d+)）/)?.[2] || '?'}），已自动重传…`;
+                item.speedText = ''; item.uploadedText = ''; item.progress = 0;
+                mcRender();
+                setTimeout(() => mcUploadOne(item), 200);
+                return;
+              }
+              msg += '（请移除后重新添加）';
+            }
             item.errorMsg = msg;
           }
         } catch (e) {
