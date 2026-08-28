@@ -54,12 +54,13 @@ OVERLAP = 64
 EXPECTED_MODEL_MIN_BYTES = 100_000_000
 
 # 加载 107MB LaMa 模型 + onnxruntime 运行时峰值约 1.5~2GB（权重 + 图优化 + 激活）；
-# 空闲内存低于阈值则直接拒绝，避免派发必崩的子进程白白耗时。实测 Railway 免费/小实例
-# MemAvailable 即便 ~1.2GB 也会在推理期 OOM，故阈值取保守值。
-MEM_GUARD_MB = 1800.0
+# 空闲内存低于阈值则直接拒绝，避免派发必崩的子进程白白耗时、并避免瞬间拉高实例内存。
+# 实测 Railway 实例即便 MemAvailable ~1.8GB 也会在推理期 OOM，故阈值取保守值：
+# 仅 MemAvailable >= 2.5GB 或（无 MemAvailable 时）MemTotal > 3.5GB 的实例才尝试。
+MEM_GUARD_MB = 2500.0
 # 若 /proc/meminfo 无 MemAvailable 行（受限容器常见），用 MemTotal 兜底判断：
-# 物理内存本就 <= 2.5GB 的实例直接拒绝（107MB 模型 + 运行时开销峰值易吃紧）。
-MEM_TOTAL_SAFE_MB = 2560.0
+# 物理内存本就 <= 3.5GB 的实例直接拒绝（107MB 模型 + 运行时开销峰值易吃紧）。
+MEM_TOTAL_SAFE_MB = 3500.0
 
 # 子进程推理超时（秒）：覆盖首跑下载 107MB + 加载 + 推理；超时即判失败，不拖死请求。
 SUBPROC_TIMEOUT = 150
@@ -176,6 +177,8 @@ def _get_session():
         p = _ensure_model()
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # 关掉内存模式优化：牺牲少量速度换取更低峰值内存，降低小实例 OOM 概率
+        so.enable_mem_pattern = False
         # 限线程：避免 Railway 免费实例 CPU 尖峰 / 内存膨胀（单图推理本就快，无需多线程）
         so.intra_op_num_threads = 1
         so.inter_op_num_threads = 1
