@@ -1652,7 +1652,7 @@
     }
     // 大小上限提示（2026-08-28：10GB → 1GB，CF 免费方案对大文件并发上传限流严重）
     if (el.ucLimitTip) {
-      el.ucLimitTip.textContent = `单个文件最大 1GB（大文件已自动分片并发上传提速）；想体验更大传出文件，下载桌面端。`;
+      el.ucLimitTip.textContent = `单个文件最大 1GB（大文件已自动分片并发上传提速）；想体验更大文件，体验免上传,一键转换,请前往桌面版端`;
     }
 
     if (!list.length) { el.ucList.innerHTML = ''; return; }
