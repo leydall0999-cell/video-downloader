@@ -10,11 +10,22 @@
 - 大图处理：以 512 为瓦片、64px 羽化重叠分块推理后按余弦羽化权重拼接，
   LaMa 的傅里叶全局感受野让瓦片边界基本无痕。
 
+架构要点（生产环境关键）：
+- **推理跑在独立子进程**：onnxruntime 加载 107MB 模型可能因内存不足被 OOM kill，或损坏模型触发原生
+  SIGSEGV——这两类崩溃 Python 级 try/except 拦不住，会直接拖垮 web 主进程（在途任务全清、请求 404）。
+  因此 ai_image_inpaint 通过 subprocess 派生子进程跑实际推理；子进程崩了只影响该次任务，主进程永不受累。
+- 父进程在派生前先做**内存护栏**快速友好拒绝（小实例不必白等一次必然失败的子进程）；子进程内再查一遍兜底。
+- 模型下载做**完整性校验**（< 100MB 视为不完整/损坏，删掉重下），避免损坏模型导致子进程原生崩溃。
+
 依赖（onnxruntime）缺失或模型未下载时：
 - available() 返回 False，上层路由据此回退 OpenCV / 报友好错误，不阻塞进程启动。
 """
+import json
 import logging
 import os
+import subprocess
+import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -39,6 +50,19 @@ LAMA_ONNX_NAME = "lama_fp32.onnx"
 TILE = 512
 OVERLAP = 64
 
+# 模型真实大小约 107MB；低于此值视为下载不完整/损坏（此前曾因此触发 onnxruntime 原生崩溃）。
+EXPECTED_MODEL_MIN_BYTES = 100_000_000
+
+# 加载 107MB LaMa 模型 + onnxruntime 运行时需约 1GB 空闲内存；低于阈值则拒绝，
+# 避免 Railway 免费实例 OOM 被 SIGKILL 拖垮整个 web 服务（进程重启会清空在途任务）。
+MEM_GUARD_MB = 1100.0
+# 若 /proc/meminfo 无 MemAvailable 行（受限容器常见），用 MemTotal 兜底判断：
+# 物理内存本就 <= 1.5GB 的实例直接拒绝（107MB 模型 + 运行时开销必然吃紧）。
+MEM_TOTAL_SAFE_MB = 1500.0
+
+# 子进程推理超时（秒）：覆盖首跑下载 107MB + 加载 + 推理；超时即判失败，不拖死请求。
+SUBPROC_TIMEOUT = 150
+
 _SESSION = None
 _LOCK = threading.Lock()
 
@@ -52,37 +76,87 @@ def _model_dir() -> Path:
 
 
 def _ensure_model() -> Path:
-    """确保模型文件存在，缺失则从 HuggingFace 下载（首次较慢，约 100MB）。"""
+    """确保模型文件存在且完整，缺失/不完整则从 HuggingFace 下载（首次较慢，约 100MB）。
+
+    完整性：完整模型约 107MB；若已存在文件 < EXPECTED_MODEL_MIN_BYTES（多为下载中断的残片），
+    先删后重新下载，避免损坏模型进入 onnxruntime 触发原生崩溃。
+    """
     d = _model_dir()
     d.mkdir(parents=True, exist_ok=True)
     p = d / LAMA_ONNX_NAME
-    if p.exists() and p.stat().st_size > 1_000_000:
+    if p.exists() and p.stat().st_size >= EXPECTED_MODEL_MIN_BYTES:
         return p
+    if p.exists():
+        logger.warning("ai_dewatermark: 模型文件不完整（%d bytes < %d），删除重下",
+                       p.stat().st_size, EXPECTED_MODEL_MIN_BYTES)
+        try:
+            p.unlink()
+        except OSError:
+            pass
     import urllib.request
 
     logger.info("ai_dewatermark: 下载 LaMa ONNX %s -> %s", LAMA_ONNX_URL, p)
     tmp = p.with_suffix(".tmp")
-    urllib.request.urlretrieve(LAMA_ONNX_URL, tmp)
-    tmp.replace(p)
+    try:
+        urllib.request.urlretrieve(LAMA_ONNX_URL, tmp)
+        sz = Path(tmp).stat().st_size
+        if sz < EXPECTED_MODEL_MIN_BYTES:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"模型下载不完整（{sz} bytes），请重试或检查网络")
+        tmp.replace(p)
+    except Exception as e:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        raise
     logger.info("ai_dewatermark: 模型就绪 %s (%d bytes)", p, p.stat().st_size)
     return p
 
 
-def _mem_available_mb() -> float:
-    """读取 /proc/meminfo 的 MemAvailable（MB）；非 Linux / 读取失败返回 None。"""
+def _read_meminfo() -> dict:
+    """读取 /proc/meminfo 关键字段（kB）；非 Linux / 读取失败返回空 dict。"""
+    info: dict = {}
     try:
         with open("/proc/meminfo") as fh:
             for line in fh:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) / 1024.0
+                k, _, v = line.partition(":")
+                if v.strip():
+                    try:
+                        info[k.strip()] = int(v.strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
     except Exception:
-        return None
-    return None
+        return {}
+    return info
 
 
-# 加载 107MB LaMa 模型 + onnxruntime 运行时需约 1GB 空闲内存；低于阈值则拒绝，
-# 避免 Railway 免费实例 OOM 被 SIGKILL 拖垮整个 web 服务（进程重启会清空在途任务）。
-MEM_GUARD_MB = 1100.0
+def _memory_ok() -> tuple:
+    """判断当前实例是否适合加载 107MB 模型。返回 (ok: bool, reason: str)。
+
+    策略（fail-safe）：
+    - 读不到 meminfo → 拒绝（宁可不用，不能拖垮 web 服务）。
+    - 有 MemAvailable 且 < MEM_GUARD_MB → 拒绝。
+    - 无 MemAvailable 行但 MemTotal <= MEM_TOTAL_SAFE_MB → 拒绝（小实例兜底）。
+    - 其余视为可用。
+    """
+    info = _read_meminfo()
+    if not info:
+        # 非 Linux（macOS/Windows 桌面端）本就无 /proc/meminfo，且桌面内存充裕、崩溃已被子进程隔离，直接放行；
+        # 仅 Linux 下读不到 meminfo 视为异常，fail-safe 拒绝以免拖垮 web 服务。
+        if sys.platform.startswith("linux"):
+            return False, "无法读取实例内存信息，已禁用 AI 去水印以免拖垮服务；请使用桌面端或升级实例内存"
+        return True, ""
+    avail = info.get("MemAvailable")
+    total = info.get("MemTotal")
+    if avail is not None and avail / 1024.0 < MEM_GUARD_MB:
+        return False, (
+            f"AI 去水印当前实例空闲内存不足（约 {avail / 1024.0:.0f}MB < "
+            f"{MEM_GUARD_MB:.0f}MB 需求），已禁用以免拖垮服务；请使用桌面端或升级实例内存"
+        )
+    if avail is None and total is not None and total / 1024.0 <= MEM_TOTAL_SAFE_MB:
+        return False, (
+            f"AI 去水印实例物理内存较小（约 {total / 1024.0:.0f}MB），加载模型易 OOM，已禁用；"
+            "请使用桌面端或升级实例内存"
+        )
+    return True, ""
 
 
 def _get_session():
@@ -93,12 +167,9 @@ def _get_session():
     with _LOCK:
         if _SESSION is not None:
             return _SESSION
-        mem = _mem_available_mb()
-        if mem is not None and mem < MEM_GUARD_MB:
-            raise RuntimeError(
-                f"AI 去水印当前实例空闲内存不足（约 {mem:.0f}MB < {MEM_GUARD_MB:.0f}MB 需求），"
-                "已禁用以免拖垮服务；请使用桌面端或升级实例内存"
-            )
+        ok, reason = _memory_ok()
+        if not ok:
+            raise RuntimeError(reason)
         import onnxruntime as ort  # 延迟导入，缺失时不阻塞启动
 
         p = _ensure_model()
@@ -162,9 +233,11 @@ def _tile_weight(th: int, tw: int, y0: int, x0: int, h: int, w: int, overlap: in
     return _np.outer(vr * vb, hr * hb)[..., None]
 
 
-def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
-    """AI 图片去水印：LaMa ONNX 按区域 mask 推理，结果写入 dst_path。
+def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
+    """AI 图片去水印（进程内实际推理）：LaMa ONNX 按区域 mask 推理，结果写入 dst_path。
 
+    由子进程 worker 调用；父进程 ai_image_inpaint 通过 subprocess 派生子进程执行本函数，
+    以隔离可能的 OOM / 原生崩溃，保护 web 主进程。
     regions：归一化区域列表 [{"x","y","w","h","op"}]（来自 dewatermark_core.normalize_regions）。
     至少需要一个有效 add 区域；缺失或全部为减去区域则报错。
     """
@@ -221,3 +294,66 @@ def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int
     if not ok:
         raise RuntimeError("AI 去水印结果写入失败")
     return Path(dst_path)
+
+
+def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
+    """AI 图片去水印（父进程入口）：内存护栏快速拒绝 + 子进程隔离推理。
+
+    实际推理在独立子进程执行，避免 onnxruntime 加载 107MB 模型时的 OOM / 损坏模型原生崩溃
+    拖垮 web 主进程。regions 序列化到临时 JSON 传给子进程。
+    """
+    if not available():
+        raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
+    ok, reason = _memory_ok()
+    if not ok:
+        raise RuntimeError(reason)
+
+    reg_path = Path(tempfile.gettempdir()) / (f"vdl_dw_{Path(dst_path).stem}_{os.getpid()}.regions.json")
+    with reg_path.open("w", encoding="utf-8") as fh:
+        json.dump(regions, fh)
+    try:
+        proc = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "run", str(src_path), str(dst_path), str(reg_path)],
+            capture_output=True,
+            timeout=SUBPROC_TIMEOUT,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr.decode("utf-8", "replace") or proc.stdout.decode("utf-8", "replace")).strip()
+            raise RuntimeError(f"AI 去水印子进程失败：{err[:300] or '未知错误'}")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("AI 去水印超时（实例负载过高或模型下载慢），请稍后重试或使用桌面端")
+    finally:
+        try:
+            reg_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    out = Path(dst_path)
+    if not out.exists() or out.stat().st_size == 0:
+        raise RuntimeError("AI 去水印未产出有效文件")
+    return out
+
+
+def _worker_main(argv: list) -> int:
+    """子进程入口：python dewatermark_ai.py run <src> <dst> <regions.json>。"""
+    try:
+        if len(argv) < 5 or argv[1] != "run":
+            print("usage: dewatermark_ai.py run <src> <dst> <regions.json>", file=sys.stderr)
+            return 2
+        _, _mode, src, dst, regf = argv[:5]
+        with open(regf, encoding="utf-8") as fh:
+            regions = json.load(fh)
+        # 兜底内存护栏（父进程已查过，这里再查一次以防并发时序）
+        ok, reason = _memory_ok()
+        if not ok:
+            print(reason, file=sys.stderr)
+            return 3
+        ai_image_inpaint_core(src, dst, regions)
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(str(e)[:400], file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(_worker_main(sys.argv))
