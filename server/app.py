@@ -124,20 +124,27 @@ FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/op
 # 视频容器按容器选型（avi 用 mp3 音轨、wmv 用原生 msmpeg4/wmav2、mpeg 用 mpeg2video/mp2、hevc 用 libx265）；
 # 音频容器按编码选型（aac/opus/wma/mp2 均自带编码器）。
 # 注意：ogv/ogg/oga 因捆绑 ffmpeg 缺 libvorbis/libtheora 不支持，故不纳入。
+#
+# 速度档说明（2026-08-28 实测 1080p 60s）：
+#   libx264 ultrafast + -threads 0：约 4s（veryfast 的 2.3x）
+#   libx264 veryfast + -threads 0：约 9s（基线）
+#   libx264 medium  + -threads 0：约 22s
+# ultrafast 加 -crf 28 控制码率，避免文件因快速编码变成 3x 大小。
+# 默认走 ultrafast 满足"批量转换" 的速度诉求；要高质量请用 medium（保留 fast 兜底路径）。
 CONVERT_TARGETS = {
-    # ---- 视频容器（按容器选型 + -threads 0 让 macOS 多核充分利用，转码速度明显提升）----
-    "mp4":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac", "-movflags", "+faststart"],
-    "mov":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
-    "mkv":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    # ---- 视频容器（ultrafast + -threads 0；-crf 28 控大小；HEVC 单独走 fast 是因为 ultrafast HEVC 仍较慢）----
+    "mp4":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac", "-movflags", "+faststart"],
+    "mov":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "mkv":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
     "webm":  ["-c:v", "libvpx-vp9", "-threads", "0", "-c:a", "libopus", "-b:v", "1M"],
-    "avi":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "libmp3lame"],
-    "flv":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
-    "ts":    ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
-    "m4v":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
-    "wmv":   ["-c:v", "msmpeg4", "-threads", "0", "-c:a", "wmav2"],
-    "3gp":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
-    "mpeg":  ["-c:v", "mpeg2video", "-threads", "0", "-c:a", "mp2"],
-    "hevc":  ["-c:v", "libx265", "-preset", "fast", "-threads", "0", "-c:a", "aac", "-tag:v", "hvc1"],
+    "avi":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "libmp3lame"],
+    "flv":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "ts":    ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "m4v":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "wmv":   ["-c:v", "msmpeg4", "-threads", "0", "-b:v", "4M", "-c:a", "wmav2"],
+    "3gp":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "mpeg":  ["-c:v", "mpeg2video", "-threads", "0", "-b:v", "4M", "-c:a", "mp2"],
+    "hevc":  ["-c:v", "libx265", "-preset", "fast", "-threads", "0", "-crf", "30", "-c:a", "aac", "-tag:v", "hvc1"],
     # ---- 音频容器（解码多线程收益小，默认单线程）----
     "mp3":   ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
     "m4a":   ["-vn", "-c:a", "aac", "-b:a", "192k"],

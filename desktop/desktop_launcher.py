@@ -703,14 +703,36 @@ class VdlApi:
             except Exception:
                 pass
 
-        url = f"http://{HOST}:{PORT}/api/convert/{job_id}/file"
-        suggested = suggested_name or "converted.mp4"
+        _log(f"enter save_convert_file_dialog thread={_th.current_thread().name} job_id={job_id} suggested={suggested_name!r}")
+
+        # 进程内直接读 app.CONVERT_JOBS[job_id].out_path —— launcher 与 FastAPI 服务在同一进程
+        # （uvicorn.run 跑在 daemon 线程），共享同一份 `app` 模块内存。这样彻底绕开之前的
+        # `requests.get(http://127.0.0.1:PORT/api/convert/.../file)` 路径：launcher 端不携带
+        # X-Device-Id header 也不带 device= query，会被设备隔离校验判 404（2026-08-28 实测）。
+        src_path = None
+        try:
+            import app as _vdl_app
+            job = _vdl_app.CONVERT_JOBS.get(job_id) if hasattr(_vdl_app, "CONVERT_JOBS") else None
+            if job:
+                src_path = job.get("out_path")
+                _log(f"in-memory hit status={job.get('status')} out={src_path!r}")
+        except Exception as e:
+            _log(f"in-memory read error: {e!r}")
+            return f"ERROR: 读任务失败：{e}"
+
+        if not src_path:
+            return f"ERROR: 任务不存在或已过期（job_id={job_id}）"
+
+        src_path = str(src_path)
+        if not Path(src_path).exists():
+            return f"ERROR: 产物文件已丢失（{src_path}）"
+
+        suggested = (suggested_name or "").strip() or Path(src_path).name
         downloads = Path.home() / "Downloads"
         try:
             downloads.mkdir(parents=True, exist_ok=True)
         except Exception:
             downloads = Path.home()
-        _log(f"enter thread={_th.current_thread().name} job_id={job_id} suggested={suggested!r}")
 
         dest = None
         try:
@@ -751,8 +773,6 @@ class VdlApi:
 
         target = Path(dest)
         try:
-            resp = requests.get(url, timeout=(10, 600))
-            resp.raise_for_status()
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 stem, suf = target.stem, target.suffix
@@ -760,7 +780,9 @@ class VdlApi:
                 while target.exists():
                     target = target.parent / f"{stem}({i}){suf}"
                     i += 1
-            target.write_bytes(resp.content)
+            # 直接从已落盘的产物拷到目标；同进程内 read + copy，不走 HTTP，零 404 风险
+            import shutil as _sh
+            _sh.copyfile(src_path, target)
         except Exception as exc:
             _log(f"write error: {exc!r}")
             return f"ERROR: {exc}"
