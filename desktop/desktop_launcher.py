@@ -307,29 +307,36 @@ class VdlApi:
         ★ 2026-08-28 续33 关键修复：移除 tkinter.Tk() 调用（见 choose_folder 注释）。
         同样改用 osascript `choose file with multiple selections allowed` 子进程弹窗，
         不依赖 Tk，跨线程 100% 安全。
+
+        ★ 2026-08-28 续45 关键修复：原版用 "\\\\n".join(...) 把多语句压成单行再走
+        osascript -e，osascript 收不到真换行 → 整个脚本解析失败 → 前端 chooseFiles
+        返回空数组 → 「添加文件」按钮无任何反应。改为 choose_folder 同款：每条语句
+        单独 -e 喂入（真换行由 shell 拆 -e 参数实现）。
         """
         try:
-            import os as _os
-            # osascript `choose file` 限定文件类型，用 |type| 写法
-            ext_list = "{" + ",".join([
+            import subprocess as _sp
+            # AppleScript 列表必须用引号+逗号+空格：`{"mp4", "mov"}`。
+            # `of type` 是 choose file 的子句，必须与 choose file 同一行。
+            ext_list = "{" + ", ".join(f'"{e}"' for e in [
                 "mp4", "mov", "mkv", "webm", "avi", "flv", "ts", "wmv",
                 "mpeg", "mpg", "3gp", "ogv", "m4v",
                 "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus",
             ]) + "}"
+            # AppleScript 限制：choose file ... of type ... with ... 必须同一行；
+            # 后续 repeat / return 可独立 -e 喂入。
             script_lines = [
-                'set theFiles to choose file with multiple selections allowed with prompt "选择要桥接的视频/音频文件（可多选）"',
-                f"of type {ext_list}",
+                f'set theFiles to choose file of type {ext_list} with multiple selections allowed with prompt "选择要桥接的视频/音频文件（可多选）"',
                 'set out to ""',
                 'repeat with f in theFiles',
                 '  set out to out & POSIX path of f & linefeed',
                 'end repeat',
                 'return out',
             ]
-            script = "\\n".join(script_lines)
-            # 用 heredoc 喂给 osascript，避免单引号嵌套
-            cmd = ["osascript", "-e", script]
+            # 每条语句独立 -e（与 choose_folder 同款），osascript 才会按真换行解析
+            cmd = ["osascript"]
+            for line in script_lines:
+                cmd += ["-e", line]
             try:
-                import subprocess as _sp
                 proc = _sp.run(cmd, capture_output=True, text=True, timeout=120)
                 out = (proc.stdout or "").strip()
                 if out and "execution error" not in out and "User canceled" not in out:
@@ -343,8 +350,6 @@ class VdlApi:
 
             # 用户取消 或 失败 → 返回空串让前端走手动输入 fallback
             return ""
-        except Exception as exc:
-            return f"ERROR: {exc}"
         except Exception as exc:
             return f"ERROR: {exc}"
 
