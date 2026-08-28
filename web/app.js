@@ -3230,7 +3230,7 @@
         const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
         trackTask(tid, refs, '');
       });
-      if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
+      if (el.cookieContribute && el.cookieContribute.checked) {  // 仅当用户显式勾选时才贡献，默认不勾选（不共享登录态）
         urls.forEach((u) => contributeCookie(u, cookie));
       }
     } catch (error) {
@@ -3573,7 +3573,7 @@
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
-      if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
+      if (el.cookieContribute && el.cookieContribute.checked) {  // 仅当用户显式勾选时才贡献，默认不勾选（不共享登录态）
         contributeCookie(url, cookie);
       }
     } catch (error) {
