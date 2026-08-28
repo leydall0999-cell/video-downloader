@@ -1609,7 +1609,7 @@
 
   // 输出格式下拉选项（格式列表来自节点配置，缺省回退硬编码；音频类标注「仅音频」）
   const AUDIO_ONLY_FMTS = ['mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2'];
-  const fmtOptions = (val) => (node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','hevc','mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2','gif'])
+  const fmtOptions = (val) => (node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','mp3','m4a','wav','flac','gif'])
     .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${AUDIO_ONLY_FMTS.includes(v)?'（仅音频）':''}${v==='gif'?'（前5秒）':''}${v==='hevc'?'（H.265 省空间）':''}</option>`)
     .join('');
 
@@ -1619,7 +1619,7 @@
     el.ucClearBtn.hidden = list.length === 0;
     // 批量参数区常显；「开始批量转换」按钮：有已上传待转码项才可用（2026-08-23 批量统一开始）
     el.ucStartAllBtn.hidden = false;
-    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'uploaded');
+    el.ucStartAllBtn.disabled = !list.some(it => it.status === 'uploaded' || it.status === 'failed');
     // 批量「默认输出格式」下拉只填充一次（避免每次渲染重建导致选中/焦点被打断而闪烁）
     if (el.ucBulkTarget && !el.ucBulkTarget.dataset.inited) {
       el.ucBulkTarget.dataset.inited = '1';
@@ -1653,10 +1653,12 @@
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
-      // 待转码行：独立「开始转码」按钮（用该行格式单独开始，不影响批量）
+      // 待转码 / 失败行：独立「开始转码 / 重新转码」按钮（用该行格式单独开始）
       const startHtml = it.status === 'uploaded'
         ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
-        : '';
+        : it.status === 'failed'
+          ? `<button type="button" class="uc-item-start" data-act="start" title="清除错误状态，按当前格式重新转码">重新转码</button>`
+          : '';
       // 格式可改：uploading/uploaded 也能改（finish 提交时用最新值）；running/completed 锁定
       const targetDisabled = (it.status === 'running' || it.status === 'completed') ? 'disabled' : '';
       const targetTitle = it.status === 'completed' ? '已完成：格式已固定，如需其他格式请移除后重新添加'
@@ -2506,10 +2508,21 @@
       const li = t.closest('.uc-item');
       ucRemoveItem(+li.dataset.id);
     } else if (t.dataset.act === 'start') {
-      // 单行「开始转码」：用该行最新设置的格式单独开始，不影响其他行
+      // 单行「开始转码 / 重新转码」：用该行最新设置的格式单独开始，不影响其他行
       const li = t.closest('.uc-item');
       const it = ucState.list.find(x => x.id === +li.dataset.id);
-      if (it && it.status === 'uploaded') {
+      if (!it) return;
+      // 重置失败项状态 → 再走 ucFinishOne（2026-08-28：用户换格式后没法继续转的根因）
+      if (it.status === 'failed') {
+        it.status = 'uploaded';
+        it.errorMsg = '';
+        it.progress = 0;
+        it.jobId = null;
+        it.speedText = '';
+        it.uploadedText = '';
+        renderUcList();
+      }
+      if (it.status === 'uploaded') {
         // ★ 2026-08-28 兜底修复：localPath 路径项没有 it.file 对象，原代码 it.file.name 在用户
         // 走 native chooser 选了本地路径时会抛 null.name → "启动错误: TypeError: null is not an
         // object (evaluating 'it.file.name')"。统一走 it.name（构造时已 basename 兜底）。
@@ -2522,9 +2535,19 @@
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   el.ucStartAllBtn.addEventListener('click', () => {
-    // 批量开始转码：所有「已上传·待转码」行统一提交（每行用各自已设置的格式）
+    // 批量开始转码：所有「已上传·待转码 + 失败」行统一重置并提交（2026-08-28 支持失败重试）
+    const failed = ucState.list.filter(x => x.status === 'failed');
+    failed.forEach(it => {
+      it.status = 'uploaded';
+      it.errorMsg = '';
+      it.progress = 0;
+      it.jobId = null;
+      it.speedText = '';
+      it.uploadedText = '';
+    });
+    renderUcList();
     const wait = ucState.list.filter(x => x.status === 'uploaded');
-    if (!wait.length) { el.ucStatus.textContent = '没有已上传待转码的项（先添加文件上传）'; return; }
+    if (!wait.length) { el.ucStatus.textContent = '没有可重试的项（先添加文件上传）'; return; }
     el.ucStatus.textContent = `批量转换中…（${wait.length} 个）`;
     ucEnsurePolling();   // 立即启动轮询，各进度实时可见
     wait.forEach(it => {
@@ -7460,7 +7483,7 @@
       node.convertFreeDaily = (convert && convert.free_daily) || 3;
       node.convertMaxUpload = (convert && convert.max_upload_bytes) || 0;
       node.convertTargets = (convert && Array.isArray(convert.targets) && convert.targets.length)
-        ? convert.targets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'];
+        ? convert.targets : ['mp4','mov','mkv','webm','mp3','m4a','wav','flac','gif'];
       node.downloadSubRequired = !!(download && download.subscription_required);
       node.downloadFreeDaily = (download && download.free_daily) || 10;
       node.libraryEnabled = !!(library && library.enabled);
