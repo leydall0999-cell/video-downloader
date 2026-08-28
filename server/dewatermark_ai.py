@@ -207,14 +207,17 @@ def _infer_tile(sess, img_tile, mask_tile):
     """对单张 512x512 瓦片推理，返回 (512,512,3) 浮点 [0,1] 修复结果。
 
     img_tile / mask_tile：float32，[0,1]，shape (512,512,3) / (512,512,1)。
-    LaMa 输入 image 为 RGB [0,1]、mask 为 [0,1]，输出 [0,1]。
+    LaMa 输入 image 为 RGB [0,1]、mask 为 [0,1]，但输出是 [0,255] 像素值（见下方归一化）。
     """
     inp_img = img_tile.transpose(2, 0, 1)[None].astype(_np.float32)
     inp_mask = mask_tile.transpose(2, 0, 1)[None].astype(_np.float32)
     names = [i.name for i in sess.get_inputs()]
     feeds = {names[0]: inp_img, names[1]: inp_mask}
-    out = sess.run(None, feeds)[0][0]  # (3,512,512)
-    return _np.clip(out.transpose(1, 2, 0), 0, 1)
+    out = sess.run(None, feeds)[0][0]  # (3,512,512)，Carve/LaMa-ONNX 输出像素范围 [0,255]
+    arr = out.transpose(1, 2, 0)
+    # 重要：LaMa ONNX 输出的是 [0,255] 像素值，必须归一化到 [0,1] 再参与瓦片融合；
+    # 若直接 clip(0,1) 会把 >1 的值（如背景灰 230）压成 1.0，最终 *255 后整图变成纯白。
+    return _np.clip(arr / 255.0, 0, 1)
 
 
 def _tile_weight(th: int, tw: int, y0: int, x0: int, h: int, w: int, overlap: int):
