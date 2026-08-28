@@ -659,7 +659,7 @@ img { max-width: 100%; display: block; }
 .dw-result[hidden] { display: none; }
 .dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
-.dw-compare img { width: 100%; height: 260px; object-fit: contain; display: block; margin: 0 auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
+.dw-compare img { width: 100%; max-height: 60vh; height: auto; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
 .dw-cap { font-size: .78rem; color: var(--text-mute); }
 
 @media (max-width: 760px) {
