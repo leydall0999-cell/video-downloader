@@ -23,6 +23,34 @@ def _device_of(request: app.Request) -> str:
 def list_platforms() -> dict:
     return {'platforms': app.platform_catalog()}
 
+def _read_build_version() -> str:
+    """模块导入时读取一次，冻结为本进程「构建时」的真实版本。
+
+    关键修复（2026-08-28）：原先每次请求都从磁盘现读 build_version.txt。
+    当部署把新包覆盖到 /Applications 后，旧进程仍活着，却从新包的
+    build_version.txt 读到新版本号 → 报假版本，无法识别 stale 进程
+    （曾导致「修了没生效」误判、用户大怒）。
+
+    改为导入时冻结一次：旧进程始终报自己启动时的旧号，新进程报新号，
+    一眼可辨；同时让 deploy_mac.sh 的自校验真正强制重启旧进程，
+    而不是被旧进程用新盘的版本号糊弄过去。
+    """
+    candidates = []
+    exe = getattr(app.sys, 'executable', '')
+    if exe:
+        candidates.append(app.Path(exe).resolve().parent.parent / 'Resources' / 'build_version.txt')
+    candidates.append(app.Path(__file__).resolve().parent.parent / 'build_version.txt')
+    for c in candidates:
+        if c.exists():
+            return c.read_text(encoding='utf-8').strip()
+    return 'dev'
+
+
+# 导入即冻结：此后无论磁盘 build_version.txt 是否被新部署覆盖，
+# 本进程始终报告自己构建时的版本。
+BUILD_VERSION = _read_build_version()
+
+
 @router.get('/api/version')
 def api_version() -> dict:
     """返回运行实例的构建指纹 + 实际加载的可执行文件路径。
@@ -30,18 +58,11 @@ def api_version() -> dict:
     部署脚本 deploy_mac.sh 用它做自校验：只有运行中的服务返回的指纹与
     刚构建的 build_version.txt 一致、且 exe 路径确实指向目标 app 时，
     才算「部署成功」，否则直接判定失败，杜绝「装的是旧版却以为装好了」。
+
+    注意：version 在模块导入时已冻结（见 BUILD_VERSION），旧进程永远报旧号，
+    这是识别 stale 进程的关键。
     """
-    candidates = []
-    exe = getattr(app.sys, 'executable', '')
-    if exe:
-        candidates.append(app.Path(exe).resolve().parent.parent / 'Resources' / 'build_version.txt')
-    candidates.append(app.Path(__file__).resolve().parent.parent / 'build_version.txt')
-    version = 'dev'
-    for c in candidates:
-        if c.exists():
-            version = c.read_text(encoding='utf-8').strip()
-            break
-    return {'version': version, 'exe': app.sys.executable}
+    return {'version': BUILD_VERSION, 'exe': app.sys.executable}
 
 @router.get('/api/ydlp/version')
 def ydlp_version_api() -> dict:
