@@ -62,4 +62,15 @@ port = int(os.environ.get("PORT", "8080"))
 host = os.environ.get("HOST", "0.0.0.0")
 
 print(f"▶ starting uvicorn on host={host} port={port}")
-uvicorn.run("app:app", app_dir="server", host=host, port=port)
+# ws_ping_interval/ws_ping_timeout：放宽服务端 WS keepalive（默认 20/20s）。
+# VPS→Railway 跨境链路 pong 偶发 10~30s 延迟（client 侧 watchdog 探测慢窗口），
+# 默认 20s 超时会把健康连接误判踢掉（1011 keepalive ping timeout）→ 每 3 分钟
+# 断连风暴。45/60s 仍能在真死连接上及时清理，同时容忍链路尖刺。
+uvicorn.run(
+    "app:app",
+    app_dir="server",
+    host=host,
+    port=port,
+    ws_ping_interval=45,
+    ws_ping_timeout=60,
+)

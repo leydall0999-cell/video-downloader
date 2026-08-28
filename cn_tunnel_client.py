@@ -52,6 +52,29 @@ async def heartbeat(ws):
         pass
 
 
+def _probe_once(url: str, timeout: int) -> tuple[bool, str]:
+    """单次同步探针（在 to_thread 里跑，绝不阻塞 asyncio 事件循环）。
+
+    背景（2026-08-28 根治断连风暴）：旧实现直接在事件循环里同步调用
+    urllib.request.urlopen —— 隧道慢窗口时单次探测耗时可达 20~30s，
+    期间 client 无法回复服务端 uvicorn 的 keepalive ping（默认 20s 超时），
+    被服务端 1011 踢掉 → 每 ~3 分钟断连循环。此函数必须在线程中执行。
+    """
+    import urllib.request
+    import urllib.error
+    import ssl
+    import json as _json
+
+    ctx = ssl.create_default_context()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "cn_tunnel_client/watchdog"})
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            data = _json.loads(resp.read().decode("utf-8", errors="ignore"))
+            return bool(data.get("tunnel_ready")), ""
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:120]}"
+
+
 async def watchdog(ws):
     """应用层探针：周期性直连 Railway /api/cookie/pull-diag 检查 tunnel_ready。
 
@@ -79,26 +102,10 @@ async def watchdog(ws):
     TIMEOUT = int(os.environ.get("VDL_WATCHDOG_TIMEOUT", "15"))
     MAX_FAIL = int(os.environ.get("VDL_WATCHDOG_MAX_FAIL", "3"))
 
-    import urllib.request
-    import urllib.error
-    import ssl
-    import json as _json
-
-    ctx = ssl.create_default_context()
     fail_count = 0
     while True:
         await asyncio.sleep(INTERVAL)
-        ok = False
-        err = ""
-        try:
-            req = urllib.request.Request(PROBE_URL, headers={"User-Agent": "cn_tunnel_client/watchdog"})
-            with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
-                data = _json.loads(resp.read().decode("utf-8", errors="ignore"))
-                ok = bool(data.get("tunnel_ready"))
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-            err = f"{type(e).__name__}: {str(e)[:120]}"
-        except Exception as e:  # noqa: BLE001
-            err = f"{type(e).__name__}: {str(e)[:120]}"
+        ok, err = await asyncio.to_thread(_probe_once, PROBE_URL, TIMEOUT)
         if ok:
             if fail_count:
                 print(f"[cn_tunnel_client] watchdog: 隧道恢复（fail_count 清零）", flush=True)
