@@ -431,6 +431,21 @@
     dwPdfStatus: $('dwPdfStatus'),
     dwPdfResult: $('dwPdfResult'),
     dwPdfDownload: $('dwPdfDownload'),
+    // 视频去水印
+    dwModeVideo: $('dwModeVideo'),
+    dwVideoPane: $('dwVideoPane'),
+    dwVidFile: $('dwVidFile'),
+    dwVidEl: $('dwVidEl'),
+    dwVidSvg: $('dwVidSvg'),
+    dwVidSelInfo: $('dwVidSelInfo'),
+    dwVidClear: $('dwVidClear'),
+    dwVidRes: $('dwVidRes'),
+    dwVidSmooth: $('dwVidSmooth'),
+    dwVidBtn: $('dwVidBtn'),
+    dwVidStatus: $('dwVidStatus'),
+    dwVidResult: $('dwVidResult'),
+    dwVidOut: $('dwVidOut'),
+    dwVidDownload: $('dwVidDownload'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -2624,17 +2639,21 @@
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
 
-  // 图片 / PDF 子模式切换
-  const dwSwitchPane = (toImg) => {
-    el.dwImgPane.hidden = !toImg;
-    el.dwPdfPane.hidden = toImg;
-    el.dwModeImg.classList.toggle('is-active', toImg);
-    el.dwModePdf.classList.toggle('is-active', !toImg);
+  // 图片 / PDF / 视频 子模式切换
+  const dwSwitchPane = (mode) => {
+    el.dwImgPane.hidden = mode !== 'img';
+    el.dwPdfPane.hidden = mode !== 'pdf';
+    el.dwVideoPane.hidden = mode !== 'video';
+    el.dwModeImg.classList.toggle('is-active', mode === 'img');
+    el.dwModePdf.classList.toggle('is-active', mode === 'pdf');
+    el.dwModeVideo.classList.toggle('is-active', mode === 'video');
     el.dwImgStatus.textContent = '';
     el.dwPdfStatus.textContent = '';
+    el.dwVidStatus.textContent = '';
   };
-  el.dwModeImg.addEventListener('click', () => dwSwitchPane(true));
-  el.dwModePdf.addEventListener('click', () => dwSwitchPane(false));
+  el.dwModeImg.addEventListener('click', () => dwSwitchPane('img'));
+  el.dwModePdf.addEventListener('click', () => dwSwitchPane('pdf'));
+  el.dwModeVideo.addEventListener('click', () => dwSwitchPane('video'));
 
   // PDF 模式切换时展示/隐藏栅格化选项
   el.dwPdfMode.addEventListener('change', () => {
@@ -3179,6 +3198,144 @@
     }
   };
   el.dwPdfBtn.addEventListener('click', startDwPdf);
+
+  // -------------------------------------------------- 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）
+  const DWV_NS = 'http://www.w3.org/2000/svg';
+  let dwVidSel = null;  // 归一化 {x,y,w,h}（相对视频显示框）
+
+  const dwVidResize = () => {
+    const v = el.dwVidEl;
+    if (!v || !v.videoWidth) return;
+    const w = v.clientWidth, h = v.clientHeight;
+    const svg = el.dwVidSvg;
+    svg.setAttribute('width', w);
+    svg.setAttribute('height', h);
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.style.width = w + 'px';
+    svg.style.height = h + 'px';
+    svg.style.left = v.offsetLeft + 'px';
+    svg.style.top = v.offsetTop + 'px';
+  };
+
+  const dwVidDraw = () => {
+    const svg = el.dwVidSvg;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (!dwVidSel) {
+      el.dwVidSelInfo.textContent = '尚未框选';
+      return;
+    }
+    const v = el.dwVidEl;
+    const w = v.clientWidth, h = v.clientHeight;
+    const x = dwVidSel.x * w, y = dwVidSel.y * h, rw = dwVidSel.w * w, rh = dwVidSel.h * h;
+    const r = document.createElementNS(DWV_NS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', rw); r.setAttribute('height', rh);
+    r.setAttribute('fill', 'rgba(76,217,100,0.25)');
+    r.setAttribute('stroke', '#4cd964');
+    r.setAttribute('stroke-width', '2');
+    svg.appendChild(r);
+    el.dwVidSelInfo.textContent = `已框选水印区 (${Math.round(dwVidSel.x * 100)}%, ${Math.round(dwVidSel.y * 100)}%, ${Math.round(dwVidSel.w * 100)}%, ${Math.round(dwVidSel.h * 100)}%)`;
+  };
+
+  el.dwVidFile.addEventListener('change', () => {
+    const f = el.dwVidFile.files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    el.dwVidEl.draggable = false;
+    el.dwVidEl.addEventListener('dragstart', (e) => e.preventDefault());
+    el.dwVidEl.src = url;
+    el.dwVidEl.onloadedmetadata = () => {
+      dwVidResize();
+      dwVidDraw();
+    };
+    dwVidSel = null;
+    dwVidDraw();
+    el.dwVidResult.hidden = true;
+    el.dwVidStatus.textContent = '';
+  });
+
+  let dwVidDrag = false;
+  el.dwVidEl.addEventListener('mousedown', (e) => {
+    if (!el.dwVidEl.src) return;
+    dwVidDrag = true;
+    const [nx, ny] = dwNormFromEvent(el.dwVidEl, e.clientX, e.clientY);
+    dwVidSel = { x: nx, y: ny, w: 0, h: 0 };
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dwVidDrag) return;
+    const [nx, ny] = dwNormFromEvent(el.dwVidEl, e.clientX, e.clientY);
+    const x0 = Math.min(dwVidSel.x, nx), y0 = Math.min(dwVidSel.y, ny);
+    dwVidSel.x = x0;
+    dwVidSel.y = y0;
+    dwVidSel.w = Math.abs(nx - dwVidSel.x);
+    dwVidSel.h = Math.abs(ny - dwVidSel.y);
+    if (dwVidSel.w < 0.005) dwVidSel.w = 0.005;
+    if (dwVidSel.h < 0.005) dwVidSel.h = 0.005;
+    dwVidDraw();
+  });
+  document.addEventListener('mouseup', () => {
+    if (dwVidDrag && dwVidSel && (dwVidSel.w <= 0.005 || dwVidSel.h <= 0.005)) {
+      dwVidSel = null;  // 误点（几乎无面积）视为取消
+    }
+    dwVidDrag = false;
+    dwVidDraw();
+  });
+  el.dwVidClear.addEventListener('click', () => { dwVidSel = null; dwVidDraw(); });
+  window.addEventListener('resize', () => { if (!el.dwVideoPane.hidden) { dwVidResize(); dwVidDraw(); } });
+
+  const startDwVideo = async () => {
+    const file = el.dwVidFile.files[0];
+    if (!file) { el.dwVidStatus.textContent = '请先选择视频文件'; return; }
+    if (!dwVidSel || dwVidSel.w <= 0 || dwVidSel.h <= 0) {
+      el.dwVidStatus.textContent = '请在视频预览上拖拽框选水印区域'; return;
+    }
+    el.dwVidBtn.disabled = true;
+    el.dwVidStatus.textContent = '视频去水印处理中（逐帧推理，请稍候）…';
+    el.dwVidResult.hidden = true;
+    const form = new FormData();
+    form.append('file', file);
+    form.append('regions', JSON.stringify([{
+      x: +dwVidSel.x.toFixed(4), y: +dwVidSel.y.toFixed(4),
+      w: +dwVidSel.w.toFixed(4), h: +dwVidSel.h.toFixed(4), op: 'add',
+    }]));
+    form.append('resolution', el.dwVidRes.value);
+    form.append('smooth', el.dwVidSmooth.value);
+    try {
+      const data = await request('/api/dw/video', { method: 'POST', body: form });
+      const jobId = data.job_id;
+      const timer = setInterval(async () => {
+        try {
+          const st = await request('/api/dw/video/' + jobId);
+          if (st.progress) el.dwVidStatus.textContent = `去水印处理中… 已处理 ${st.progress} 帧`;
+          if (st.status === 'completed') {
+            clearInterval(timer);
+            const base = `${window.VDL_API_BASE || ''}`;
+            el.dwVidOut.src = `${base}/api/dw/video/${jobId}/file`;
+            el.dwVidDownload.href = `${base}/api/dw/video/${jobId}/file`;
+            el.dwVidDownload.dataset.jobId = jobId;
+            el.dwVidDownload.setAttribute('download', st.filename || 'dewatered.mp4');
+            el.dwVidResult.hidden = false;
+            el.dwVidStatus.textContent = '去水印完成 ✅';
+            el.dwVidBtn.disabled = false;
+            try { el.dwVidResult.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_e) {}
+          } else if (st.status === 'failed') {
+            clearInterval(timer);
+            el.dwVidStatus.textContent = '失败：' + (st.error || '未知错误');
+            el.dwVidBtn.disabled = false;
+          }
+        } catch (_e) { /* 轮询继续 */ }
+      }, 3000);
+    } catch (error) {
+      el.dwVidBtn.disabled = false;
+      el.dwVidStatus.textContent = (error && error.message) ? ('请求失败：' + error.message) : '请求失败';
+    }
+  };
+  el.dwVidBtn.addEventListener('click', startDwVideo);
+  // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
+  el.dwVidDownload.addEventListener('click', (e) => {
+    if (!el.dwVidDownload.href) e.preventDefault();
+  });
 
   // 去水印结果下载：桌面端(pywebview/WKWebView) <a download> 不弹保存框，
   // 优先调用原生 Python 桥接 save_dw_file_dialog 弹出系统保存面板，由用户自选位置/重命名；

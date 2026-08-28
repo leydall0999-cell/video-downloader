@@ -24,9 +24,12 @@
 依赖（onnxruntime）缺失或模型未下载时：
 - available() 返回 False，上层路由据此回退 OpenCV / 报友好错误，不阻塞进程启动。
 """
+import collections
+import glob as _glob
 import json
 import logging
 import os
+import shutil as _shutil
 import subprocess
 import sys
 import tempfile
@@ -265,27 +268,13 @@ def _tile_weight(th: int, tw: int, y0: int, x0: int, h: int, w: int, overlap: in
     return _np.outer(vr * vb, hr * hb)[..., None]
 
 
-def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
-    """AI 图片去水印（进程内实际推理）：LaMa ONNX 按区域 mask 推理，结果写入 dst_path。
+def _inpaint_bgr_to_bgr(img_bgr, mask, tile: int = TILE, overlap: int = OVERLAP):
+    """对单张 BGR 图按 mask（(h,w) 0/255）做 LaMa 瓦片推理，返回修复后 BGR 图。
 
-    由子进程 worker 调用；父进程 ai_image_inpaint 通过 subprocess 派生子进程执行本函数，
-    以隔离可能的 OOM / 原生崩溃，保护桌面 App 主进程。
-    regions：归一化区域列表 [{"x","y","w","h","op"}]（来自 dewatermark_core.normalize_regions）。
-    至少需要一个有效 add 区域；缺失或全部为减去区域则报错。
+    抽成独立函数：图片模式直接调用；视频模式对每帧复用（掩码整段视频套同一区域）。
     """
-    if not available():
-        raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
-    import dewatermark_core as dwc
-
-    img = _cv2.imread(str(src_path), _cv2.IMREAD_COLOR)
-    if img is None:
-        raise RuntimeError("无法读取图片，可能是损坏或格式不支持")
-    h, w = img.shape[:2]
-    mask = dwc._build_region_mask(regions, w, h)  # (h,w) 0/255
-    if not mask.any():
-        raise ValueError("未框选有效加选区域（请先框选水印，减选需依附加选）")
-
-    img_f = img[..., ::-1].astype(_np.float32) / 255.0  # BGR->RGB, [0,1]
+    h, w = img_bgr.shape[:2]
+    img_f = img_bgr[..., ::-1].astype(_np.float32) / 255.0  # BGR->RGB, [0,1]
     mask_f = (mask.astype(_np.float32) / 255.0)[..., None]  # (h,w,1) [0,1]
 
     sess = _get_session()
@@ -308,7 +297,6 @@ def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap
             y1 = min(y0 + tile, h)
             x1 = min(x0 + tile, w)
             th, tw = y1 - y0, x1 - x0
-            # 拼到 512 瓦片
             pimg = _np.zeros((tile, tile, 3), _np.float32)
             pmask = _np.zeros((tile, tile, 1), _np.float32)
             pimg[:th, :tw] = img_f[y0:y1, x0:x1]
@@ -318,10 +306,33 @@ def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap
             acc[y0:y1, x0:x1] += out * wt
             wsum[y0:y1, x0:x1] += wt
 
-    # 加权平均（重叠区融合），无覆盖区保持原图（理论上 mask 区必被覆盖）
     cov = wsum > 0
     result = _np.where(cov, acc / _np.where(wsum == 0, 1, wsum), img_f)
     out_bgr = (result * 255).clip(0, 255).astype(_np.uint8)[..., ::-1]  # RGB->BGR
+    return out_bgr
+
+
+def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
+    """AI 图片去水印（进程内实际推理）：LaMa ONNX 按区域 mask 推理，结果写入 dst_path。
+
+    由子进程 worker 调用；父进程 ai_image_inpaint 通过 subprocess 派生子进程执行本函数，
+    以隔离可能的 OOM / 原生崩溃，保护桌面 App 主进程。
+    regions：归一化区域列表 [{"x","y","w","h","op"}]（来自 dewatermark_core.normalize_regions）。
+    至少需要一个有效 add 区域；缺失或全部为减去区域则报错。
+    """
+    if not available():
+        raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
+    import dewatermark_core as dwc
+
+    img = _cv2.imread(str(src_path), _cv2.IMREAD_COLOR)
+    if img is None:
+        raise RuntimeError("无法读取图片，可能是损坏或格式不支持")
+    h, w = img.shape[:2]
+    mask = dwc._build_region_mask(regions, w, h)  # (h,w) 0/255
+    if not mask.any():
+        raise ValueError("未框选有效加选区域（请先框选水印，减选需依附加选）")
+
+    out_bgr = _inpaint_bgr_to_bgr(img, mask, tile, overlap)
     ok = _cv2.imwrite(str(dst_path), out_bgr)
     if not ok:
         raise RuntimeError("AI 去水印结果写入失败")
@@ -408,6 +419,156 @@ def _worker_main(argv: list) -> int:
     except Exception as e:  # noqa: BLE001
         print(str(e)[:400], file=sys.stderr)
         return 1
+
+
+def _run_ffmpeg(cmd):
+    """跑一条 ffmpeg 命令，非零退出抛 RuntimeError（附 stderr 末尾便于排查）。"""
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError("ffmpeg 执行失败：" + (proc.stderr or proc.stdout or "")[:400])
+
+
+def _probe_fps(ffmpeg_bin: str, src: str) -> float:
+    """探测视频帧率（fps）；ffprobe 优先，退化解析 ffmpeg -i，再退化 30。"""
+    probe = _shutil.which("ffprobe") or (os.path.join(os.path.dirname(ffmpeg_bin), "ffprobe") if ffmpeg_bin else "")
+    if probe and os.path.exists(probe):
+        try:
+            out = subprocess.run(
+                [probe, "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=r_frame_rate", "-of", "default=nk=1:nw=1", src],
+                capture_output=True, text=True,
+            )
+            val = (out.stdout or "").strip()
+            if val and "/" in val:
+                a, b = val.split("/")
+                return max(1.0, float(a) / float(b))
+        except Exception:
+            pass
+    # 退化：解析 ffmpeg -i 的 "xx fps"
+    try:
+        out = subprocess.run([ffmpeg_bin or "ffmpeg", "-i", src], capture_output=True, text=True)
+        import re
+        m = re.search(r"(\d+(?:\.\d+)?)\s*fps", out.stderr or "")
+        if m:
+            return max(1.0, float(m.group(1)))
+    except Exception:
+        pass
+    return 30.0
+
+
+def _temporal_median_smooth(proc_dir: str, final_dir: str, window: int = 2) -> None:
+    """邻帧中值平滑（Tier B 降闪烁）：对掩码修复后的帧序列做时间维中值。
+
+    用定长 deque 仅保留 2*window+1 帧，内存有界；每帧取窗口内中值覆盖自身，
+    首/尾帧窗口不足时取已有帧中值（近似）。仅帧序列本身，不依赖掩码。
+    """
+    files = sorted(_glob.glob(os.path.join(proc_dir, "*.png")))
+    if not files:
+        raise RuntimeError("视频去水印中间帧缺失，无法做时序平滑")
+    buf = collections.deque(maxlen=2 * window + 1)
+    for i, fp in enumerate(files):
+        arr = _cv2.imread(fp, _cv2.IMREAD_COLOR)
+        if arr is None:
+            raise RuntimeError(f"无法读取中间帧 {os.path.basename(fp)}")
+        buf.append(arr)
+        stack = _np.stack(list(buf), axis=0)
+        med = _np.median(stack, axis=0).astype(_np.uint8)
+        _cv2.imwrite(os.path.join(final_dir, os.path.basename(fp)), med)
+
+
+def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
+                     resolution: str = "original", smooth: bool = True, window: int = 2) -> Path:
+    """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
+
+    src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
+    ffmpeg_bin：ffmpeg 可执行路径（来自 app.FFMPEG_BIN）。
+    progress_cb(done, total)：每帧推理后回调（用于前端进度）。
+    resolution：original/720/480（降分辨率提速）。smooth：是否做时序中值平滑。
+    """
+    if not available():
+        raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
+    import dewatermark_core as dwc
+
+    ffmpeg_bin = ffmpeg_bin or "ffmpeg"
+    src = str(src_path)
+    work = tempfile.mkdtemp(prefix="vdl_dwvid_")
+    try:
+        frames_dir = os.path.join(work, "frames")
+        proc_dir = os.path.join(work, "proc")
+        final_dir = os.path.join(work, "final")
+        os.makedirs(frames_dir, exist_ok=True)
+        os.makedirs(proc_dir, exist_ok=True)
+        os.makedirs(final_dir, exist_ok=True)
+
+        # 1) 抽帧（原生 fps；可选降分辨率）
+        vf = None
+        if resolution == "720":
+            vf = "scale=-2:720"
+        elif resolution == "480":
+            vf = "scale=-2:480"
+        extract = [ffmpeg_bin, "-y", "-i", src]
+        if vf:
+            extract += ["-vf", vf]
+        extract += ["-q:v", "2", os.path.join(frames_dir, "%05d.png")]
+        _run_ffmpeg(extract)
+
+        frame_files = sorted(_glob.glob(os.path.join(frames_dir, "*.png")))
+        total = len(frame_files)
+        if total == 0:
+            raise RuntimeError("视频抽帧失败（无法读取帧，可能格式不支持或 ffmpeg 缺失）")
+        fps = _probe_fps(ffmpeg_bin, src)
+
+        # 2) 逐帧 inpaint（掩码按每帧尺寸重建，整段视频套同一归一化区域）
+        for i, fp in enumerate(frame_files):
+            img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
+            if img is None:
+                raise RuntimeError(f"无法读取第 {i + 1} 帧")
+            h, w = img.shape[:2]
+            mask = dwc._build_region_mask(regions, w, h)
+            if not mask.any():
+                raise RuntimeError("未框选有效水印区域")
+            out_bgr = _inpaint_bgr_to_bgr(img, mask)
+            _cv2.imwrite(os.path.join(proc_dir, os.path.basename(fp)), out_bgr)
+            if progress_cb:
+                try:
+                    progress_cb(i + 1, total)
+                except Exception:
+                    pass
+
+        # 3) 时序中值平滑（降闪烁）
+        src_frames = final_dir if smooth else proc_dir
+        if smooth:
+            _temporal_median_smooth(proc_dir, final_dir, window=window)
+
+        # 4) 抽音频（无音频则跳过）
+        audio_path = os.path.join(work, "audio.m4a")
+        has_audio = False
+        try:
+            _run_ffmpeg([ffmpeg_bin, "-y", "-i", src, "-vn", "-acodec", "aac", "-b:a", "192k", audio_path])
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                has_audio = True
+        except Exception:
+            has_audio = False
+
+        # 5) 重编码混音
+        cmd = [ffmpeg_bin, "-y", "-framerate", f"{fps:g}", "-i", os.path.join(src_frames, "%05d.png")]
+        if has_audio:
+            cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "192k"]
+        cmd += ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+                "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        if has_audio:
+            cmd += ["-shortest"]
+        cmd += [str(dst_path)]
+        _run_ffmpeg(cmd)
+
+        if not os.path.exists(str(dst_path)) or os.path.getsize(str(dst_path)) == 0:
+            raise RuntimeError("视频去水印重编码未产出有效文件")
+        return Path(dst_path)
+    finally:
+        try:
+            _shutil.rmtree(work, ignore_errors=True)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

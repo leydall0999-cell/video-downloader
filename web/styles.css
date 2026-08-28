@@ -603,6 +603,7 @@ img { max-width: 100%; display: block; }
   line-height: 0;
 }
 .dw-preview-wrap img { max-width: 100%; max-height: 420px; display: block; cursor: crosshair; }
+.dw-preview-wrap video { max-width: 100%; max-height: 460px; display: block; cursor: crosshair; background: #000; }
 .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: none; }
 /* SVG 选区蒙层：必须和 canvas 一样绝对定位叠在图片上，否则会作为静态元素
    占据 img.clientHeight 的流式空白（用户反馈"上传图片空余太多"的根因） */

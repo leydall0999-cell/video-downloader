@@ -245,3 +245,99 @@ def dw_pdf_file(job_id: str) -> app.FileResponse:
     if not out.exists():
         raise app.HTTPException(status_code=410, detail="结果文件已清理")
     return app.FileResponse(path=str(out), filename=out.name, media_type="application/pdf")
+
+
+# ---------------------------------------------------------------- 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）
+
+DW_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v", ".wmv"}
+
+
+def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool) -> None:
+    job = app.DW_JOBS.get(job_id)
+    if not job:
+        return
+    try:
+        if not dwc_ai.available():
+            raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
+        out_path = app.DW_DIR / f"dw_vid_{job_id}.mp4"
+        # 注意：frozen 桌面端 ai_video_inpaint 内部同进程跑（与图片模式一致），
+        # 子进程隔离在桌面端派发不可靠，故不走 subprocess。
+        dwc_ai.ai_video_inpaint(
+            app.Path(src), out_path, regions, ffmpeg_bin,
+            progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
+            resolution=resolution, smooth=smooth,
+        )
+        if not out_path.exists() or out_path.stat().st_size == 0:
+            raise RuntimeError("视频去水印未产出有效文件")
+        job["status"] = "completed"
+        job["filename"] = out_path.name
+        job["out_path"] = str(out_path)
+        app.logger.info("dw video %s done -> %s", job_id, out_path.name)
+    except Exception as e:  # noqa: BLE001
+        job["status"] = "failed"
+        job["error"] = str(e)[:400]
+        app.logger.warning("dw video %s failed: %s", job_id, e)
+
+
+@router.post("/api/dw/video")
+def create_dw_video(
+    file: app.UploadFile = app._FastAPIFile(...),
+    regions: str = app.Form(""),
+    x: float = app.Form(0.0),
+    y: float = app.Form(0.0),
+    w: float = app.Form(0.0),
+    h: float = app.Form(0.0),
+    resolution: str = app.Form("original"),
+    smooth: int = app.Form(1),
+    request: app.Request = None,
+) -> dict:
+    """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
+
+    逐帧跑 LaMa 推理 + 邻帧中值平滑降闪烁，ffmpeg 重编码混音输出 mp4。
+    """
+    if not dwc.available():
+        raise app.HTTPException(status_code=503, detail="视频去水印不可用（缺少 OpenCV 依赖）")
+    if not dwc_ai.available():
+        raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
+    if resolution not in ("original", "720", "480"):
+        raise app.HTTPException(status_code=400, detail="resolution 仅支持 original / 720 / 480")
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
+    if suffix not in DW_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件（mp4/mov/mkv/webm/avi 等）")
+    regions_list = _parse_regions(regions, x, y, w, h)
+    if not regions_list:
+        raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h 需有效）")
+    save_path = _save_upload(file, "dw_vid_up")
+    job_id = app.uuid.uuid4().hex[:12]
+    with app.DW_LOCK:
+        app.DW_JOBS[job_id] = {
+            "status": "running", "out_path": "", "error": "", "filename": "",
+            "kind": "video", "progress": "",
+        }
+    app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN, resolution, bool(int(smooth)))
+    return {"job_id": job_id, "status": "running", "kind": "video"}
+
+
+@router.get("/api/dw/video/{job_id}")
+def dw_video_status(job_id: str) -> dict:
+    job = app.DW_JOBS.get(job_id)
+    if not job or job.get("kind") != "video":
+        raise app.HTTPException(status_code=404, detail="视频去水印任务不存在")
+    return {
+        "status": job["status"], "error": job.get("error", ""),
+        "filename": job.get("filename", ""), "progress": job.get("progress", ""),
+    }
+
+
+@router.get("/api/dw/video/{job_id}/file")
+def dw_video_file(job_id: str) -> app.FileResponse:
+    job = app.DW_JOBS.get(job_id)
+    if not job or job.get("kind") != "video":
+        raise app.HTTPException(status_code=404, detail="视频去水印任务不存在")
+    if job["status"] != "completed":
+        raise app.HTTPException(status_code=409, detail="处理尚未完成")
+    out = app.Path(job["out_path"])
+    if not out.exists():
+        raise app.HTTPException(status_code=410, detail="结果文件已清理")
+    return app.FileResponse(path=str(out), filename=out.name, media_type="video/mp4")
