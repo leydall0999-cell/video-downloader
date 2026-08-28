@@ -509,13 +509,20 @@
             <h3 class="dw-card-title">处理参数</h3>
             <div class="uc-form">
               <label class="uc-field">
+                <span class="uc-label">修复引擎</span>
+                <select id="dwImgEngine">
+                  <option value="opencv">OpenCV 经典（快 / 轻量）</option>
+                  <option value="ai">🤖 AI 无痕修复（LaMa，像素级）</option>
+                </select>
+              </label>
+              <label class="uc-field" id="dwImgCvField">
                 <span class="uc-label">修复方法</span>
                 <select id="dwImgMethod">
                   <option value="telea">TELEA（快 / 边缘自然）</option>
                   <option value="ns">NS（纹理更细）</option>
                 </select>
               </label>
-              <label class="uc-field">
+              <label class="uc-field" id="dwImgRadiusField">
                 <span class="uc-label">半径 (1-20)</span>
                 <input type="number" id="dwImgRadius" value="3" min="1" max="20" />
               </label>

@@ -22,6 +22,11 @@ libtorrent==2.0.11; sys_platform == "linux"
 opencv-python-headless>=4.8.0
 pymupdf>=1.23.0
 
+# 图片 AI 去水印（LaMa ONNX，无痕像素级修复）：onnxruntime 为 CPU 版（免 torch，~50MB）。
+# 权重 lama_fp32.onnx (~107MB) 首次请求时从 HuggingFace 懒下载并缓存到 VDL_MODELS_DIR /
+# RAILWAY_VOLUME_MOUNT_PATH；缺失时不阻塞启动，available() 返回 False 由路由回退 OpenCV。
+onnxruntime>=1.17.0
+
 # Rumble 反爬绕过：curl_cffi 提供 Chrome TLS 指纹模拟（impersonate），
 # 用于 embedJS/u3 接口解析（urllib/requests 默认指纹被 Cloudflare 403）。
 curl_cffi>=0.7.0

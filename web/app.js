@@ -406,6 +406,9 @@
     dwZoomFit: $('dwZoomFit'),
     dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
+    dwImgEngine: $('dwImgEngine'),
+    dwImgCvField: $('dwImgCvField'),
+    dwImgRadiusField: $('dwImgRadiusField'),
     // 去水印放大弹窗
     dwImgModal: $('dwImgModal'),
     dwModalClose: $('dwModalClose'),
@@ -2884,6 +2887,7 @@
     }))));
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
+    form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'opencv');
     try {
       const data = await request('/api/dw/image', { method: 'POST', body: form });
       const jobId = data.job_id;
@@ -2913,6 +2917,16 @@
     }
   };
   el.dwImgBtn.addEventListener('click', startDwImage);
+  // 选 AI 引擎时隐藏 OpenCV 专属的「方法 / 半径」（AI 走 LaMa，不依赖这两个参数）
+  if (el.dwImgEngine) {
+    const dwSyncEngineUi = () => {
+      const ai = el.dwImgEngine.value === 'ai';
+      if (el.dwImgCvField) el.dwImgCvField.hidden = ai;
+      if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai;
+    };
+    el.dwImgEngine.addEventListener('change', dwSyncEngineUi);
+    dwSyncEngineUi();
+  }
 
   const startDwPdf = async () => {
     const file = el.dwPdfFile.files[0];
