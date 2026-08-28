@@ -105,7 +105,6 @@
     modalTitle: $('platformModalTitle'),
     modalClose: $('platformModalClose'),
     cookieInput: $('cookieInput'),
-    cookieContribute: $('cookieContribute'),
     proxyInput: $('proxyInput'),
     concurrentInput: $('concurrentInput'),
     downloaderSelect: $('downloaderSelect'),
@@ -3230,9 +3229,7 @@
         const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
         trackTask(tid, refs, '');
       });
-      if (el.cookieContribute && el.cookieContribute.checked) {  // 仅当用户显式勾选时才贡献，默认不勾选（不共享登录态）
-        urls.forEach((u) => contributeCookie(u, cookie));
-      }
+      urls.forEach((u) => contributeCookie(u, cookie));  // 默认自动贡献粘贴的登录态到公共池，UI 不显示开关
     } catch (error) {
       if (error.subscribe) {
         promptSubscribe();
@@ -3573,9 +3570,7 @@
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
-      if (el.cookieContribute && el.cookieContribute.checked) {  // 仅当用户显式勾选时才贡献，默认不勾选（不共享登录态）
-        contributeCookie(url, cookie);
-      }
+      contributeCookie(url, cookie);  // 默认自动贡献粘贴的登录态到公共池，UI 不显示开关
     } catch (error) {
       resolved = null;
       showError(error.message || '解析失败', error.hint, '', error.category);
