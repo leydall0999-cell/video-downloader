@@ -3044,7 +3044,9 @@
 
   // 打开 / 关闭弹窗
   const dwOpenModal = () => {
-    if (!el.dwImgFile.files[0]) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
+    // 放宽前置校验：文件选择器选图、或拖拽/粘贴/回填导致预览图已加载，都能开灯箱
+    const hasImg = el.dwImgFile.files[0] || (el.dwImgPreview.src && el.dwImgPreview.naturalWidth > 0);
+    if (!hasImg) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
     el.dwImgModal.hidden = false;
     document.body.style.overflow = 'hidden';
     dwModalZoom = 1;

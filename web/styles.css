@@ -2164,3 +2164,18 @@ img { max-width: 100%; display: block; }
 .narrato-frame[hidden] { display: none !important; }
 .narrato-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2rem; color: #c7cedb; font-size: .95rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; overflow-y: auto; }
 .narrato-loading[hidden] { display: none !important; }
+
+/* ── 图片去水印「放大编辑」灯箱（修复：原缺 .dw-modal 样式，弹窗打开后不可见/在视口外）── */
+.dw-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 2.5vh 2vw; background: rgba(15, 23, 42, .55); backdrop-filter: blur(2px); }
+.dw-modal[hidden] { display: none !important; }
+.dw-modal-backdrop { position: absolute; inset: 0; background: transparent; }
+.dw-modal-content { position: relative; z-index: 1; display: flex; flex-direction: column; width: min(960px, 96vw); max-height: 94vh; background: var(--card, #fff); color: var(--text, #1f2430); border-radius: 14px; box-shadow: 0 24px 70px rgba(0, 0, 0, .4); overflow: hidden; }
+.dw-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--border, #e7e9f1); }
+.dw-modal-header h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+.dw-modal-close { width: 34px; height: 34px; border: 0; border-radius: 8px; background: #eef0f6; color: #475069; font-size: 1.1rem; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.dw-modal-close:hover { background: #e2e5ef; color: #1f2430; }
+.dw-modal-toolbar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .65rem 1.1rem; border-bottom: 1px solid var(--border, #e7e9f1); }
+.dw-modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 1rem; background: #0f172a; }
+.dw-modal-body .dw-preview-wrap { margin: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08); }
+.dw-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.1rem; border-top: 1px solid var(--border, #e7e9f1); }
+.dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
