@@ -1781,6 +1781,26 @@
     ucPump();
   };
 
+  // 后台 tab 限流自动续传：document 切回前台时，若某个 uploading 项的 in-flight 分片
+  // 超过 8 秒没 progress（被浏览器后台压低吞吐），主动 abort 让 worker 内部重试
+  // （attempts++ 切到另一条通道：ucPickEndpoint attempt>0 切到另一端点）。
+  // 后端 /api/upload-chunk 按 (upload_id, index) 覆盖写入，abort+retry 不会产生脏数据。
+  const ucLastProgressByItem = new WeakMap();
+  if (typeof document !== 'undefined' && !window.__vdl_ucVisBound) {
+    window.__vdl_ucVisBound = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      for (const item of (ucState.list || [])) {
+        if (!item || item.status !== 'uploading' || !item._xhrs || !item._xhrs.size) continue;
+        const lastT = ucLastProgressByItem.get(item) || 0;
+        if (now - lastT > 8000) {
+          for (const xhr of item._xhrs) { try { xhr.abort(); } catch (_) {} }
+        }
+      }
+    });
+  }
+
   // 上传单个分片（32MB；小文件=1 片，与整传等效）
   // endpoint: 上传目标（双端点混合上传时按分片轮询/故障转移选择；默认同源）
   // onProgress(loaded) 让调用方合并 in-flight 字节算总进度，避免「长时间 0%」假卡死
@@ -1795,7 +1815,7 @@
     xhr.open('POST', (endpoint || location.origin) + '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
-    xhr.timeout = 120000;   // 2 分钟单片超时（防后台 tab 限流/网络静默断网卡死）
+    xhr.timeout = 300000;   // 5 分钟单片超时（防后台 tab 限流/网络静默断网卡死；后台 tab 限流可压到 ~100KB/s，32MB 分片需 5+ 分钟）
     if (xhrs) xhrs.add(xhr);
     const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
     if (onProgress) {
@@ -1813,7 +1833,7 @@
       }
     });
     xhr.addEventListener('error', () => { cleanup(); reject(new Error('网络错误')); });
-    xhr.addEventListener('timeout', () => { cleanup(); reject(new Error('分片超时（2 分钟无响应，可能是网络断/后台 tab 限流）')); });
+    xhr.addEventListener('timeout', () => { cleanup(); reject(new Error('分片超时（5 分钟无响应，可能是网络断/后台 tab 限流；切回前台后会自动续传）')); });
     xhr.addEventListener('abort', () => { cleanup(); reject(new Error('已取消')); });
     xhr.send(form);
   });
@@ -1866,6 +1886,7 @@
         const st = li.querySelector('.uc-item-status');
         if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
       }
+      ucLastProgressByItem.set(item, Date.now());  // visibilitychange 自动续传判据
     };
 
     // 分片并发 worker 池：每片失败重试 UC_CHUNK_RETRIES 次，耗尽则整个文件失败
@@ -1897,8 +1918,8 @@
             attempts++;
             if (attempts > UC_CHUNK_RETRIES) {
               item.status = 'failed';
-              // 区分超时（2 分钟无响应，多为后台 tab 限流或网络静默断）：建议刷新后保持前台重传
-              const hint = /超时/.test(e.message) ? '（建议保持上传页面在前台后重传）' : '';
+              // 区分超时（多因后台 tab 限流）：visibilitychange 切回前台会自动续传
+              const hint = /超时/.test(e.message) ? '（切回前台后分片可自动续传）' : '';
               item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}${hint}`;
               item.speedText = ''; item.uploadedText = '';
               renderUcList();
@@ -2172,6 +2193,7 @@
         const st = li.querySelector('.uc-item-status');
         if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
       }
+      ucLastProgressByItem.set(item, Date.now());  // visibilitychange 自动续传判据（与单文件转码共用）
     };
     let idx = 0; const workers = [];
     const worker = async () => {
@@ -2196,7 +2218,7 @@
             attempts++;
             if (attempts > UC_CHUNK_RETRIES) {
               item.status = 'failed';
-              const hint = /超时/.test(e.message) ? '（建议保持上传页面在前台后重传）' : '';
+              const hint = /超时/.test(e.message) ? '（切回前台后分片可自动续传）' : '';
               item.errorMsg = `分片 ${i + 1}/${totalChunks} 上传失败：${e.message}${hint}`;
               item.speedText = ''; item.uploadedText = ''; mcRender();
               resolve(); return;
