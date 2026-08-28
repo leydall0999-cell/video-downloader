@@ -28,6 +28,8 @@ PING_INTERVAL = int(os.environ.get("VDL_WS_PING_INTERVAL", "30"))
 PING_TIMEOUT = int(os.environ.get("VDL_WS_PING_TIMEOUT", "45"))
 
 _WS_URL = RAILWAY_WS + (f"?token={TOKEN}" if TOKEN else "")
+# 日志脱敏：token 属真实凭据，绝不打进 journal（防凭据泄露）。连接仍用 _WS_URL。
+_WS_URL_LOG = RAILWAY_WS + ("?token=***" if TOKEN else "")
 
 
 def _frame(typ: int, id_: int, payload: bytes = b"") -> bytes:
@@ -213,7 +215,7 @@ async def tunnel_client():
                 open_timeout=30,
                 close_timeout=5,
             ) as ws:
-                print(f"[cn_tunnel_client] connected {_WS_URL}", flush=True)
+                print(f"[cn_tunnel_client] connected {_WS_URL_LOG}", flush=True)
                 hb = asyncio.create_task(heartbeat(ws))
                 wd = asyncio.create_task(watchdog(ws))
                 try:
