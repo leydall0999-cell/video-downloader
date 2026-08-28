@@ -3102,6 +3102,9 @@
             el.dwImgResult.hidden = false;
             el.dwImgStatus.textContent = '去水印完成 ✅';
             el.dwImgBtn.disabled = false;
+            // 自动滚到结果对比块：dw-layout 是两列 grid，dw-result 在其下方
+            // 视口高度有限时（侧边栏撑满）结果区会落在视口外，手动滚避免「看不到成品」
+            try { el.dwImgResult.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_e) {}
           } else if (st.status === 'failed') {
             clearInterval(timer);
             el.dwImgStatus.textContent = '失败：' + (st.error || '未知错误');
