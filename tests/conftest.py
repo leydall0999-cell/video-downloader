@@ -34,8 +34,7 @@ os.environ["VDL_RETENTION_ENABLED"] = "1"
 os.environ["VDL_AI_DEWATERMARK_MODE"] = "http"
 os.environ["VDL_AI_DEWATERMARK_ENDPOINT"] = "http://fake-worker.local"
 
-# ---- 归档 / 解说路由测试 ----
-os.environ["VDL_ARCHIVE_ENABLED"] = "1"
+# ---- 解说路由测试 ----
 os.environ["VDL_COMMENTARY_ENABLED"] = "true"
 os.environ["VDL_COMMENTARY_MODE"] = "http"
 os.environ["VDL_COMMENTARY_ENDPOINT"] = "http://fake-worker.local"

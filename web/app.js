@@ -133,21 +133,6 @@
     subInput: $('subInput'),
     subApply: $('subApply'),
     subMsg: $('subMsg'),
-    cloudModal: $('cloudModal'),
-    cloudModalClose: $('cloudModalClose'),
-    cloudWebdavForm: $('cloudWebdavForm'),
-    cloudBaiduForm: $('cloudBaiduForm'),
-    cloudBaiduRadio: $('cloudBaiduRadio'),
-    cloudWebdavUrl: $('cloudWebdavUrl'),
-    cloudWebdavUser: $('cloudWebdavUser'),
-    cloudWebdavPass: $('cloudWebdavPass'),
-    cloudBaiduBtn: $('cloudBaiduBtn'),
-    cloudBaiduStatus: $('cloudBaiduStatus'),
-    cloudDest: $('cloudDest'),
-    cloudSave: $('cloudSave'),
-    cloudStatus: $('cloudStatus'),
-    cloudSubNote: $('cloudSubNote'),
-    // 百度网盘浏览/下载
     // 批量下载（桌面版万能下载器重点能力）
     batchToggle: $('batchToggle'),
     batchBox: $('batchBox'),
@@ -179,7 +164,6 @@
     sTabBridge: $('sTabBridge'),
     sTabSubscribe: $('sTabSubscribe'),
     sTabTorrent: $('sTabTorrent'),
-    sTabPcs: $('sTabPcs'),
     downloadView: $('downloadView'),
     libraryView: $('libraryView'),
     libRefresh: $('libRefresh'),
@@ -205,38 +189,6 @@
     cleanRun: $('cleanRun'),
     cleanStatus: $('cleanStatus'),
     cleanPreview: $('cleanPreview'),
-    // 归档网盘（桌面版功能）
-    libArchive: $('libArchive'),
-    archiveModal: $('archiveModal'),
-    archiveModalClose: $('archiveModalClose'),
-    arcBaiduRadio: $('arcBaiduRadio'),
-    arcWebdavForm: $('arcWebdavForm'),
-    arcBaiduForm: $('arcBaiduForm'),
-    arcWebdavUrl: $('arcWebdavUrl'),
-    arcWebdavUser: $('arcWebdavUser'),
-    arcWebdavPass: $('arcWebdavPass'),
-    arcBaiduBtn: $('arcBaiduBtn'),
-    arcBaiduToken: $('arcBaiduToken'),
-    arcBaiduStatus: $('arcBaiduStatus'),
-    arcTemplate: $('arcTemplate'),
-    arcTokens: $('arcTokens'),
-    arcVideo: $('arcVideo'),
-    arcAudio: $('arcAudio'),
-    arcImage: $('arcImage'),
-    arcMinAge: $('arcMinAge'),
-    arcMaxGb: $('arcMaxGb'),
-    arcDeleteAfter: $('arcDeleteAfter'),
-    arcAuto: $('arcAuto'),
-    arcInterval: $('arcInterval'),
-    arcTrashWarn: $('arcTrashWarn'),
-    arcSave: $('arcSave'),
-    arcScan: $('arcScan'),
-    arcRun: $('arcRun'),
-    arcCancel: $('arcCancel'),
-    arcStatus: $('arcStatus'),
-    arcPreview: $('arcPreview'),
-    arcRecords: $('arcRecords'),
-    arcForget: $('arcForget'),
     // 库内保险箱（桌面版功能）
     libCrypto: $('libCrypto'),
     cryptoModal: $('cryptoModal'),
@@ -556,22 +508,17 @@
   const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false,
     convertSubRequired: false, convertFreeDaily: 3,
     downloadSubRequired: false, downloadFreeDaily: 10, downloadFreeUsed: 0, subscribed: false,
-    cloudSubRequired: false, cloudFreeDaily: 5, cloudFreeUsed: 0,
-    cloudProviders: ['webdav'], baiduAvailable: false, baiduAuthUrl: '',
     libraryEnabled: false,
     subscriptionsEnabled: false,
     retentionEnabled: false,
     trashAvailable: false,
     archiveEnabled: false,
-    archiveBaiduAvailable: false,
-    archiveConfigured: false,
     cryptoEnabled: false,
     cryptoHasPass: false,
     cryptoLocked: true,
   };
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
-  /** 最近一个下载完成的任务（供交叉入口「存到网盘」定位；task 结束时 trackers 会移除，故单独留存） */
   let lastCompletedTask = null;
   let lastCompletedRefs = null;
 
@@ -1136,8 +1083,6 @@
       convertProgress: node.querySelector('[data-convert-progress]'),
       convertProgressFill: node.querySelector('[data-convert-progress] .progress-fill'),
       convertQuota: node.querySelector('[data-convert-quota]'),
-      cloud: node.querySelector('[data-cloud]'),
-      cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
       watchBtn: node.querySelector('[data-watch]'),
@@ -1258,7 +1203,6 @@
     refs.root.classList.toggle('is-active', active);
     refs.root.classList.toggle('is-done', task.status === 'completed');
     refs.root.classList.toggle('is-error', task.status === 'failed' || task.status === 'canceled');
-    // 已完成任务：折叠过程/进度条/转换等冗余信息，只留标题+核心动作（保存到本机/网盘/删除）
     refs.root.classList.toggle('is-collapsed', task.status === 'completed');
 
     const failed = task.status === 'failed';
@@ -1347,12 +1291,10 @@
     // 提取文案结果展示（下载/转写中也会显示进度）
     renderExtractedText(refs, task);
 
-    // 任务离开完成态后，必须隐藏完成态专属入口，避免重试/失败后仍显示转换/保存/存网盘
     if (task.status !== 'completed') {
       refs.save.hidden = true;
       refs.saveHint.hidden = true;
       refs.convertWrap.hidden = true;
-      refs.cloud.hidden = true;
       return;
     }
     refs.save.hidden = false;
@@ -1380,12 +1322,6 @@
     }
     if (node.convertSubRequired) updateConvertQuota(refs, null);
 
-    // 下载完成后展示「存到网盘」入口（增值能力）：把文件上传到用户自己的网盘
-    refs.cloud.hidden = false;
-    if (!refs.cloud.dataset.bound) {
-      refs.cloud.dataset.bound = '1';
-      refs.cloud.addEventListener('click', () => openCloudModal(task.task_id, refs));
-    }
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
   };
@@ -5634,17 +5570,13 @@
       const left = Math.max(0, node.downloadFreeDaily - node.downloadFreeUsed);
       parts.push(`下载每日限 ${node.downloadFreeDaily} 次（当前剩余 ${left}）`);
     }
-    if (node.cloudSubRequired) {
-      const left = Math.max(0, node.cloudFreeDaily - node.cloudFreeUsed);
-      parts.push(`存网盘每日限 ${node.cloudFreeDaily} 次（当前剩余 ${left}）`);
-    }
     el.subModalSub.textContent = parts.length
       ? `免费用户：${parts.join('；')}。订阅后全部无限使用。`
       : '订阅后解锁全部增值能力，无限使用。';
   };
 
   const initSubUI = () => {
-    if (!node.convertSubRequired && !node.downloadSubRequired && !node.cloudSubRequired) return;
+    if (!node.convertSubRequired && !node.downloadSubRequired) return;
     const key = localStorage.getItem('vdl_sub_key');
     el.subBadge.hidden = false;
     el.subBadge.textContent = key ? '已订阅 ✓' : '🔓 订阅解锁';
@@ -5681,598 +5613,6 @@
     setTimeout(() => el.subModal.close(), 900);
   });
 
-  // ------------------------------------------------------------------ 云盘存盘
-  let cloudCurrentTaskId = null;
-  let cloudCurrentRefs = null;
-  let baiduToken = localStorage.getItem('vdl_baidu_token') || '';
-
-  const syncCloudForm = () => {
-    const p = document.querySelector('input[name=cloudProvider]:checked').value;
-    el.cloudWebdavForm.hidden = p !== 'webdav';
-    el.cloudBaiduForm.hidden = p !== 'baidu';
-  };
-
-  const openCloudModal = (taskId, refs) => {
-    cloudCurrentTaskId = taskId;
-    cloudCurrentRefs = refs;
-    try {
-      const wd = JSON.parse(localStorage.getItem('vdl_webdav') || '{}');
-      el.cloudWebdavUrl.value = wd.url || '';
-      el.cloudWebdavUser.value = wd.user || '';
-      el.cloudWebdavPass.value = wd.pass || '';
-    } catch { /* 忽略损坏的本地配置 */ }
-    el.cloudDest.value = '';
-    el.cloudStatus.textContent = '';
-    el.cloudStatus.className = 'cloud-status';
-    el.cloudBaiduRadio.hidden = !node.baiduAvailable;
-    if (!node.baiduAvailable) {
-      const wdRadio = document.querySelector('input[name=cloudProvider][value=webdav]');
-      if (wdRadio) wdRadio.checked = true;
-    }
-    syncCloudForm();
-    el.cloudBaiduStatus.textContent = baiduToken ? '已授权 ✓' : '未授权';
-    if (node.cloudSubRequired) {
-      const left = Math.max(0, node.cloudFreeDaily - node.cloudFreeUsed);
-      el.cloudSubNote.hidden = false;
-      el.cloudSubNote.textContent = node.subscribed
-        ? '已订阅 · 无限存网盘 ✓'
-        : (left > 0 ? `今日免费剩余 ${left}/${node.cloudFreeDaily} 次` : '今日免费次数已用完 · 点右上角订阅解锁');
-    } else {
-      el.cloudSubNote.hidden = true;
-    }
-    if (typeof el.cloudModal.showModal === 'function') el.cloudModal.showModal();
-    else el.cloudModal.setAttribute('open', '');
-  };
-
-  const startCloudSave = async () => {
-    if (!cloudCurrentTaskId) return;
-    const provider = document.querySelector('input[name=cloudProvider]:checked').value;
-    const dest = el.cloudDest.value.trim();
-    const body = { task_id: cloudCurrentTaskId, provider, dest_path: dest };
-    if (provider === 'webdav') {
-      const wd = {
-        url: el.cloudWebdavUrl.value.trim(),
-        user: el.cloudWebdavUser.value.trim(),
-        pass: el.cloudWebdavPass.value,
-      };
-      if (!wd.url) {
-        el.cloudStatus.textContent = '请填写 WebDAV 地址';
-        el.cloudStatus.className = 'cloud-status is-err';
-        return;
-      }
-      localStorage.setItem('vdl_webdav', JSON.stringify(wd));
-      body.webdav = wd;
-    } else if (provider === 'baidu') {
-      if (!baiduToken) {
-        el.cloudStatus.textContent = '请先点「授权百度网盘」完成授权';
-        el.cloudStatus.className = 'cloud-status is-err';
-        return;
-      }
-      body.baidu = { token: baiduToken };
-    }
-    el.cloudSave.disabled = true;
-    el.cloudStatus.textContent = '上传中…';
-    el.cloudStatus.className = 'cloud-status';
-    try {
-      const { job_id: jobId, quota } = await request('/api/cloud/save', {
-        method: 'POST', body: JSON.stringify(body),
-      });
-      if (quota) {
-        if (quota.subscribed) node.subscribed = true;
-        node.cloudFreeUsed = quota.free_used || node.cloudFreeUsed;
-      }
-      pollCloud(jobId);
-    } catch (error) {
-      el.cloudSave.disabled = false;
-      const msg = (error && error.message) || '';
-      if (msg.indexOf('订阅') >= 0) {
-        promptSubscribe();
-        el.cloudStatus.textContent = '今日免费次数已用完，点右上角「订阅解锁」无限存网盘';
-      } else {
-        el.cloudStatus.textContent = '保存失败：' + msg;
-      }
-      el.cloudStatus.className = 'cloud-status is-err';
-    }
-  };
-
-  const pollCloud = (jobId) => {
-    const timer = setInterval(async () => {
-      try {
-        const st = await request('/api/cloud/status/' + jobId);
-        if (st.status === 'completed') {
-          clearInterval(timer);
-          el.cloudSave.disabled = false;
-          el.cloudStatus.textContent = '已存到网盘 ✓' + (st.remote_path ? '（' + st.remote_path + '）' : '');
-          el.cloudStatus.className = 'cloud-status is-ok';
-          if (cloudCurrentRefs) {
-            cloudCurrentRefs.cloud.hidden = false;
-            cloudCurrentRefs.cloudStatus.hidden = false;
-            cloudCurrentRefs.cloudStatus.textContent = '已存到网盘：' + (st.remote_path || '');
-          }
-        } else if (st.status === 'failed') {
-          clearInterval(timer);
-          el.cloudSave.disabled = false;
-          el.cloudStatus.textContent = '保存失败：' + (st.error || '未知错误');
-          el.cloudStatus.className = 'cloud-status is-err';
-        } else {
-          el.cloudStatus.textContent = '上传中…' + (st.progress ? ' ' + st.progress + '%' : '');
-        }
-      } catch { /* 轮询出错继续 */ }
-    }, 3000);
-  };
-
-  // 百度授权：用系统浏览器打开 OAuth 页（pywebview 不支持 window.open 弹窗）
-  let _baiduAuthPoll = null;
-  const openBaiduAuthInPage = async () => {
-    // 必须每次请求带 state 的 URL（/api/cloud/baidu/auth_url 会生成新 state 写入
-    // 服务端 _BAIDU_STATES；state=空串会让回调校验失败）。/api/version 里的
-    // baidu_auth_url 字段不带 state（仅作启用标志），不能直接拿来跳转。
-    let url = '';
-    let errMsg = '';
-    try {
-      const r = await request('/api/cloud/baidu/auth_url', {}, '');
-      if (r && r.auth_url) url = r.auth_url;
-    } catch (e) {
-      errMsg = (e && e.message) ? e.message : String(e);
-    }
-    if (!url) {
-      // 常见原因：app 没重启（env 未加载新 config）/ config 字段缺失。后端 503 会经
-      // request() 抛 {message: '该实例未配置百度网盘应用凭据'}，直接显示便于定位。
-      const tip = errMsg || '请确认 config.json 已填好 4 个百度凭据且 app 已重启';
-      el.cloudBaiduStatus.textContent = '获取百度授权链接失败：' + tip;
-      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '获取百度授权链接失败：' + tip;
-      return;
-    }
-    // 委托桌面增强层用原生桥接在系统浏览器打开授权页；无桥接（含纯 web 端）
-    // 时回退 window.open。window.VDL.desktop 仅在 desktop-app.js 加载后存在。
-    // 注意：openExternal 现在返回 Promise（pywebview api 调用约定），原生打开是 Python 副作用，
-    // 无需 await；这里只负责展示状态与 web 端回退。
-    if (window.VDL && window.VDL.desktop) {
-      window.VDL.desktop.openExternal(url);
-      el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
-      if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
-    } else {
-      // web 端或原生桥接不可用：回退浏览器打开
-      try {
-        const w = window.open(url, '_blank');
-        if (!w) { throw new Error('blocked'); }
-        el.cloudBaiduStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
-        if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '已打开系统浏览器，请完成百度账号登录…';
-      } catch (e2) {
-        el.cloudBaiduStatus.textContent = '无法打开授权页，请用浏览器访问：' + url;
-        if (el.baiduDriveStatus) el.baiduDriveStatus.textContent = '无法打开授权页';
-        return;
-      }
-    }
-    // 轮询后端检测授权完成（百度回调写入 token 文件后本端点返回 logged_in）
-    if (_baiduAuthPoll) clearInterval(_baiduAuthPoll);
-    _baiduAuthPoll = setInterval(async () => {
-      try {
-        const r = await request('/api/cloud/baidu/token', {}, '');
-        if (r && r.logged_in && r.access_token) {
-          clearInterval(_baiduAuthPoll); _baiduAuthPoll = null;
-          baiduToken = r.access_token;
-          localStorage.setItem('vdl_baidu_token', r.access_token);
-          el.cloudBaiduStatus.textContent = '已授权 ✓';
-          if (el.baiduDriveStatus) {
-            el.baiduDriveStatus.textContent = '已授权 ✓';
-            el.baiduDriveStatus.className = 'baidu-status is-ok';
-          }
-          if (baiduModalOpen) loadBaiduList(currentBaiduPath);
-        }
-      } catch (e) { /* 轮询出错忽略 */ }
-    }, 1500);
-  };
-
-  // 云盘弹窗事件绑定
-  el.cloudModalClose.addEventListener('click', () => el.cloudModal.close());
-  el.cloudModal.addEventListener('click', (e) => { if (e.target === el.cloudModal) el.cloudModal.close(); });
-  el.cloudSave.addEventListener('click', startCloudSave);
-  el.cloudModal.querySelectorAll('input[name=cloudProvider]').forEach((r) => r.addEventListener('change', syncCloudForm));
-  el.cloudBaiduBtn.addEventListener('click', () => {
-    if (!node.baiduAuthUrl) { el.cloudBaiduStatus.textContent = '该实例未启用百度网盘'; return; }
-    openBaiduAuthInPage();
-  });
-  window.addEventListener('message', (e) => {
-    if (e.origin !== location.origin) return;
-    const d = e.data || {};
-    if (d.source !== 'vdl-baidu') return;
-    if (d.token) {
-      baiduToken = d.token;
-      localStorage.setItem('vdl_baidu_token', d.token);
-      el.cloudBaiduStatus.textContent = '已授权 ✓';
-      // 同步百度网盘浏览面板状态
-      if (el.baiduDriveStatus) {
-        el.baiduDriveStatus.textContent = '已授权 ✓';
-        el.baiduDriveStatus.className = 'baidu-status is-ok';
-      }
-      // 关闭授权弹窗（回调页 1.5s 后也会自关闭）
-      if (window._baiduAuthWin && !window._baiduAuthWin.closed) {
-        try { window._baiduAuthWin.close(); } catch(e) {}
-      }
-      if (baiduModalOpen) loadBaiduList(currentBaiduPath);
-    } else if (d.error) {
-      el.cloudBaiduStatus.textContent = '授权失败：' + d.error;
-      if (el.baiduDriveStatus) {
-        el.baiduDriveStatus.textContent = '授权失败：' + d.error;
-        el.baiduDriveStatus.className = 'baidu-status is-err';
-      }
-    }
-  });
-
-  // ── 百度网盘浏览/下载面板 ──
-  let baiduModalOpen = false;
-  let currentBaiduPath = '/';
-  const baiduDlPollers = {};  // tid -> interval
-
-
-  // ── 百度网盘下载（baiduPCS-Go 适配器，独立于 OAuth 版百度面板）──
-  const pcsModal = document.getElementById('pcsModal');
-  const pcsStatusEl = document.getElementById('pcsStatus');
-  const pcsCookiesEl = document.getElementById('pcsCookies');
-  const pcsLoginBtn = document.getElementById('pcsLoginBtn');
-  const pcsWhoEl = document.getElementById('pcsWho');
-  const pcsShareUrlEl = document.getElementById('pcsShareUrl');
-  const pcsSharePwdEl = document.getElementById('pcsSharePwd');
-  const pcsTransferBtn = document.getElementById('pcsTransferBtn');
-  const pcsLsBtn = document.getElementById('pcsLsBtn');
-  const pcsShareStatusEl = document.getElementById('pcsShareStatus');
-  const pcsListEl = document.getElementById('pcsList');
-  const pcsDlListEl = document.getElementById('pcsDlList');
-  const pcsModalClose = document.getElementById('pcsModalClose');
-  const pcsQrImgEl = document.getElementById('pcsQrImg');
-  const pcsQrStatusEl = document.getElementById('pcsQrStatus');
-  const pcsQrRefreshEl = document.getElementById('pcsQrRefresh');
-  let _pcsQrTimer = null;
-  let _pcsQrSign = null;
-  let _pcsQrActive = false;
-  const _pcsPollers = {};
-
-  const pcsFetch = async (url, body) => {
-    const opt = { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' } };
-    if (body) opt.body = JSON.stringify(body);
-    try {
-      const r = await fetch(url, opt);
-      const text = await r.text();
-      // 安全解析 JSON：响应可能不是 JSON（如服务器错误返回 HTML）
-      try { return JSON.parse(text); }
-      catch (_) {
-        console.warn('[pcs] 非 JSON 响应', r.status, text.slice(0, 200));
-        return { ok: false, message: '服务器响应异常（HTTP ' + r.status + '）', _raw_slice: text.slice(0, 300) };
-      }
-    } catch (e) {
-      console.error('[pcs] fetch 失败', url, e);
-      throw e; // 向上抛给调用方 catch
-    }
-  };
-
-  async function pcsRefreshStatus() {
-    try {
-      const s = await pcsFetch('/api/pcs/status');
-      let html = '';
-      if (!s.binary_installed) {
-        html = '⚙️ baiduPCS-Go 尚未安装，即将自动下载…';
-        // 自动触发安装
-        setTimeout(() => pcsEnsure(), 500);
-      } else if (s.logged_in) {
-        html = '✅ 工具已就绪 ｜ 已登录：' + (s.who || '');
-      } else {
-        html = '✅ 工具已就绪 ｜ ⚠️ 尚未登录（请先完成第①步）';
-      }
-      pcsStatusEl.innerHTML = html;
-      pcsStatusEl.className = 'pcs-status' + (s.logged_in ? ' is-ok' : '');
-      if (s.logged_in) { pcsWhoEl.textContent = '已登录 ✓'; pcsWhoEl.style.color = '#07c160'; }
-      return s;
-    } catch (e) {
-      // 网络或解析错误时，静默提示并尝试安装（首次使用最常见的原因是二进制不存在）
-      pcsStatusEl.textContent = '正在初始化 baiduPCS-Go…';
-      pcsStatusEl.className = 'pcs-status';
-      setTimeout(() => pcsEnsure(), 800);
-      return null;
-    }
-  }
-
-  // 确保二进制已安装；未安装则先下载（带进度）
-  async function pcsEnsure() {
-    try { var s = await pcsFetch('/api/pcs/status'); } catch(e) { s = {}; }
-    if (s.binary_installed) return true;
-    pcsStatusEl.textContent = '正在下载 baiduPCS-Go（首次约 30MB，请稍候）…';
-    pcsStatusEl.className = 'pcs-status';
-    try {
-      const r = await pcsFetch('/api/pcs/install', {});
-      await pcsRefreshStatus();
-      if (!r.ok) {
-        pcsStatusEl.textContent = '安装失败：' + (r.message || '未知');
-        pcsStatusEl.className = 'pcs-status is-err';
-        return false;
-      }
-      return true;
-    } catch(e2) {
-      pcsStatusEl.textContent = '安装请求失败：' + e2.message;
-      pcsStatusEl.className = 'pcs-status is-err';
-      return false;
-    }
-  }
-
-  const pcsOpenWebBtn = document.getElementById('pcsOpenWebBtn');
-  if (pcsOpenWebBtn) {
-    pcsOpenWebBtn.addEventListener('click', () => {
-      const url = 'https://pan.baidu.com/';
-      // 委托桌面增强层原生打开；无桥接（含 web 端）回退浏览器
-      if (window.VDL && window.VDL.desktop) window.VDL.desktop.openExternal(url);
-      else window.open(url, '_blank');
-    });
-  }
-
-  // ── 扫码登录（二维码）──
-  function pcsStopQr() {
-    _pcsQrActive = false;
-    if (_pcsQrTimer) { clearTimeout(_pcsQrTimer); _pcsQrTimer = null; }
-  }
-
-  async function pcsStartQr() {
-    pcsStopQr();
-    _pcsQrSign = null;
-    _pcsQrActive = true;
-    if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '正在生成二维码…'; pcsQrStatusEl.className = 'pcs-qr-status'; }
-    if (pcsQrImgEl) pcsQrImgEl.classList.add('is-hidden');
-    try {
-      const r = await pcsFetch('/api/pcs/qr/gen');
-      if (!r.ok) {
-        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '生成失败：' + (r.message || r.error || '未知'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
-        return;
-      }
-      _pcsQrSign = r.sign;
-      if (pcsQrImgEl) { pcsQrImgEl.src = r.img; pcsQrImgEl.classList.remove('is-hidden'); }
-      if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '请用手机百度网盘 App 扫码'; pcsQrStatusEl.className = 'pcs-qr-status'; }
-      // 顺序轮询：等上一次返回后再排下一次（避免长轮询请求重叠成风暴）
-      pcsPollQr();
-    } catch (e) {
-      if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '生成二维码出错：' + e.message; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
-    }
-  }
-
-  async function pcsPollQr() {
-    if (!_pcsQrActive || !_pcsQrSign) return;
-    try {
-      const r = await pcsFetch('/api/pcs/qr/poll?sign=' + encodeURIComponent(_pcsQrSign));
-      const st = r.status;
-      // 诊断：打印每次轮询结果到控制台（排查"卡在等待扫码"问题）
-      console.log('[pcs] poll result:', JSON.stringify(r).slice(0, 300));
-      if (st === 'waiting') {
-        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '等待扫码…'; pcsQrStatusEl.className = 'pcs-qr-status'; }
-      } else if (st === 'scanned') {
-        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '已扫码，请在手机上确认'; pcsQrStatusEl.className = 'pcs-qr-status'; }
-      } else if (st === 'expired') {
-        pcsStopQr();
-        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '二维码已过期，请点「刷新二维码」'; pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
-      } else if (st === 'confirmed') {
-        pcsStopQr();
-        const login = r.login || {};
-        if (login.ok) {
-          if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '✓ 登录成功'; pcsQrStatusEl.className = 'pcs-qr-status is-ok'; }
-          if (pcsWhoEl) { pcsWhoEl.textContent = '已登录 ✓'; pcsWhoEl.style.color = '#07c160'; }
-          await pcsRefreshStatus();
-        } else {
-          if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '✗ ' + (login.message || '登录失败'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; pcsQrStatusEl.title = login.raw || ''; }
-        }
-      } else if (st === 'error') {
-        // 后端明确报错（如超时、百度接口异常）→ 显示错误但继续轮询（不停止）
-        if (pcsQrStatusEl) { pcsQrStatusEl.textContent = '⚠ ' + (r.message || '轮询异常'); pcsQrStatusEl.className = 'pcs-qr-status is-err'; }
-      } else {
-        // 兜底：status 缺失或未知值（后端返回了非预期格式、HTTP 错误、JSON 解析失败等）
-        console.warn('[pcs] poll 返回未知状态', r);
-        if (pcsQrStatusEl) {
-          pcsQrStatusEl.textContent = '⚠ 轮询异常（' + (r.message || r._raw_slice ? (r.message || '').slice(0, 60) : '无响应') + '）';
-          pcsQrStatusEl.className = 'pcs-qr-status is-err';
-        }
-      }
-    } catch (e) {
-      // 网络层完全失败（fetch 抛出异常）
-      console.error('[pcs] poll fetch 异常', e);
-      if (pcsQrStatusEl) pcsQrStatusEl.textContent = '⚠ 连接断开，重试中…';
-    } finally {
-      // 顺序轮询：上一轮结束（无论成功/失败/超时）后，间隔 1s 再发起下一轮。
-      // 关键修复：后端是 60s 长轮询，若用 setInterval 会叠加成请求风暴。
-      if (_pcsQrActive) {
-        _pcsQrTimer = setTimeout(pcsPollQr, 1000);
-      }
-    }
-  }
-
-  if (pcsQrRefreshEl) pcsQrRefreshEl.addEventListener('click', pcsStartQr);
-
-  // 新增：账号密码登录元素
-  const pcsUsernameEl = document.getElementById('pcsUsername');
-  const pcsPasswordEl = document.getElementById('pcsPassword');
-  const pcsCookieLoginBtn = document.getElementById('pcsCookieLoginBtn');
-
-  // 🔑 主登录按钮（账号密码）
-  pcsLoginBtn.addEventListener('click', async () => {
-    const username = (pcsUsernameEl && pcsUsernameEl.value) || '';
-    const password = (pcsPasswordEl && pcsPasswordEl.value) || '';
-    if (!username || !password) { pcsWhoEl.textContent = '请输入百度账号和密码'; pcsWhoEl.style.color = '#e64340'; return; }
-
-    if (!(await pcsEnsure())) return;
-    pcsLoginBtn.disabled = true;
-    pcsLoginBtn.textContent = '登录中…';
-    try {
-      const r = await pcsFetch('/api/pcs/login-password', { username, password });
-      if (r.ok) {
-        pcsWhoEl.textContent = '✓ ' + (r.message || '登录成功');
-        pcsWhoEl.style.color = '#07c160';
-        pcsWhoEl.title = '';
-      } else {
-        pcsWhoEl.textContent = '✗ ' + (r.message || '失败');
-        pcsWhoEl.style.color = '#e64340';
-        pcsWhoEl.title = r.raw || '';
-      }
-      await pcsRefreshStatus();
-    } catch (e) {
-      console.error('[pcs login] 异常:', e);
-      pcsWhoEl.textContent = '请求异常：' + (e.message || e);
-      pcsWhoEl.style.color = '#e64340';
-    } finally {
-      pcsLoginBtn.disabled = false; pcsLoginBtn.textContent = '🔑 登录';
-    }
-  });
-
-  // Cookie 登录（高级备选）
-  if (pcsCookieLoginBtn) {
-    pcsCookieLoginBtn.addEventListener('click', async () => {
-      const raw = (pcsCookiesEl && pcsCookiesEl.value.trim()) || '';
-      if (!raw) { pcsWhoEl.textContent = '请先粘贴 Cookie / BDUSS'; pcsWhoEl.style.color = '#e64340'; return; }
-      if (!(await pcsEnsure())) return;
-      pcsCookieLoginBtn.disabled = true;
-      pcsCookieLoginBtn.textContent = '登录中…';
-      try {
-        const r = await pcsFetch('/api/pcs/login', { cookies: raw });
-        if (r.ok) {
-          pcsWhoEl.textContent = '✓ ' + (r.message || '登录成功');
-          pcsWhoEl.style.color = '#07c160';
-        } else {
-          pcsWhoEl.textContent = '✗ ' + (r.message || '失败');
-          pcsWhoEl.style.color = '#e64340';
-          pcsWhoEl.title = r.raw || '';
-        }
-        await pcsRefreshStatus();
-      } catch (e) {
-        pcsWhoEl.textContent = '异常：' + e.message; pcsWhoEl.style.color = '#e64340';
-      } finally {
-        pcsCookieLoginBtn.disabled = false; pcsCookieLoginBtn.textContent = '用 Cookie 登录';
-      }
-    });
-  }
-
-  // 回车键触发登录
-  [pcsUsernameEl, pcsPasswordEl].forEach(el => {
-    if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') pcsLoginBtn.click(); });
-  });
-
-  async function pcsRenderList() {
-    const r = await pcsFetch('/api/pcs/ls', { path: '/' });
-    if (r.ok && r.items && r.items.length) {
-      pcsListEl.innerHTML = r.items.map((it) => {
-        const sz = it.size ? `（${(it.size / 1048576).toFixed(1)} MB）` : (it.is_dir ? '（目录）' : '');
-        const path = '/' + it.name;
-        return `<div class="baidu-list-item"><span class="bi-name">${it.name}${sz}</span>` +
-          `<button type="button" class="btn btn-sm pcs-dl-btn" data-path="${encodeURIComponent(path)}" data-name="${encodeURIComponent(it.name)}">下载</button></div>`;
-      }).join('');
-    } else if (r.raw) {
-      pcsListEl.innerHTML = `<pre class="pcs-raw">${pcsEscapeHtml(r.raw)}</pre>`;
-    } else {
-      pcsListEl.innerHTML = '<p class="baidu-empty">列出为空或失败。</p>';
-    }
-  }
-
-  pcsTransferBtn.addEventListener('click', async () => {
-    const url = pcsShareUrlEl.value.trim();
-    const pwd = pcsSharePwdEl.value.trim();
-    if (!url) { pcsShareStatusEl.textContent = '请先粘贴分享链接'; pcsShareStatusEl.className = 'pcs-status is-err'; return; }
-    if (!(await pcsEnsure())) return;
-    pcsTransferBtn.disabled = true; pcsTransferBtn.textContent = '转存中…';
-    pcsShareStatusEl.textContent = '正在转存到你的网盘…'; pcsShareStatusEl.className = 'pcs-status';
-    try {
-      const r = await pcsFetch('/api/pcs/share/transfer', { url, pwd });
-      if (r.ok) {
-        pcsShareStatusEl.textContent = '✓ 转存成功，正在列出文件…'; pcsShareStatusEl.className = 'pcs-status is-ok';
-        await pcsRenderList();
-      } else {
-        pcsShareStatusEl.textContent = '✗ 转存失败：' + (r.message || '未知'); pcsShareStatusEl.className = 'pcs-status is-err';
-        if (r.raw) console.log('[pcs transfer]', r.raw);
-      }
-    } catch (e) {
-      pcsShareStatusEl.textContent = '出错：' + e.message; pcsShareStatusEl.className = 'pcs-status is-err';
-    } finally {
-      pcsTransferBtn.disabled = false; pcsTransferBtn.textContent = '转存';
-    }
-  });
-
-  pcsLsBtn.addEventListener('click', () => pcsRenderList());
-
-  const pcsManualPathEl = document.getElementById('pcsManualPath');
-  const pcsManualDlBtn = document.getElementById('pcsManualDlBtn');
-  pcsManualDlBtn.addEventListener('click', () => {
-    const path = (pcsManualPathEl.value || '').trim();
-    if (!path) { pcsShareStatusEl.textContent = '请填写网盘路径'; pcsShareStatusEl.className = 'pcs-status is-err'; return; }
-    const name = path.split('/').pop() || 'pcs_file';
-    startPcsDownload(path, name, pcsManualDlBtn);
-  });
-
-  pcsListEl.addEventListener('click', (e) => {
-    const btn = e.target.closest('.pcs-dl-btn');
-    if (!btn) return;
-    const path = decodeURIComponent(btn.dataset.path);
-    const name = decodeURIComponent(btn.dataset.name);
-    startPcsDownload(path, name, btn);
-  });
-
-  function startPcsDownload(path, name, btn) {
-    pcsFetch('/api/pcs/download', { path, name }).then((r) => {
-      if (!r.ok || !r.task_id) {
-        pcsShareStatusEl.textContent = '提交下载失败：' + (r.detail || '未知'); pcsShareStatusEl.className = 'pcs-status is-err';
-        return;
-      }
-      const tid = r.task_id;
-      addPcsDlItem(tid, name);
-      pollPcsTask(tid);
-    });
-  }
-
-  function addPcsDlItem(tid, name) {
-    const empty = pcsDlListEl.querySelector('.baidu-empty');
-    if (empty) empty.remove();
-    const div = document.createElement('div');
-    div.className = 'baidu-dl-item';
-    div.id = 'pcs-dl-' + tid;
-    div.innerHTML = `<span class="di-name">${name}</span><span class="di-progress">排队中…</span>`;
-    pcsDlListEl.appendChild(div);
-  }
-
-  function pollPcsTask(tid) {
-    if (_pcsPollers[tid]) clearInterval(_pcsPollers[tid]);
-    _pcsPollers[tid] = setInterval(async () => {
-      try {
-        const t = await pcsFetch('/api/pcs/task/' + tid);
-        const div = document.getElementById('pcs-dl-' + tid);
-        if (!div) return;
-        const p = t.progress || {};
-        let txt = '';
-        if (t.status === 'downloading') txt = (p.percent ? p.percent.toFixed(1) + '% ' : '') + (p.line ? p.line.slice(0, 80) : '下载中…');
-        else if (t.status === 'done') txt = '✓ ' + (t.message || '完成');
-        else if (t.status === 'failed') txt = '✗ ' + (t.message || t.last || '失败');
-        else txt = t.status || '处理中…';
-        div.querySelector('.di-progress').textContent = txt;
-        if (t.status === 'done' || t.status === 'failed') {
-          clearInterval(_pcsPollers[tid]);
-          div.querySelector('.di-progress').style.color = t.status === 'done' ? '#07c160' : '#e64340';
-        }
-      } catch (e) { /* ignore */ }
-    }, 1000);
-  }
-
-  function pcsEscapeHtml(s) {
-    return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-
-  const tabPcsEl = document.getElementById('tabPcs');
-  if (tabPcsEl) tabPcsEl.addEventListener('click', () => {
-    if (typeof pcsModal.showModal === 'function') pcsModal.showModal();
-    else pcsModal.setAttribute('open', '');
-    pcsRefreshStatus();
-    pcsStartQr();
-    // 显示构建版本信息（防止跑错旧版）
-    pcsFetch('/api/pcs/build-info').then(bi => {
-      const el = document.getElementById('pcsBuildInfo');
-      if (el) el.textContent = `· ${bi.hash || '?'} · ${bi.time || ''}`;
-    }).catch((e) => {
-      const el = document.getElementById('pcsBuildInfo');
-      if (el) el.textContent = '· (build-info 不可用: ' + String(e).slice(0, 40) + ')';
-      console.error('[pcs] build-info fetch failed:', e);
-    });
-  });
-  pcsModalClose.addEventListener('click', () => { pcsStopQr(); pcsModal.close(); });
-  pcsModal.addEventListener('click', (e) => { if (e.target === pcsModal) pcsModal.close(); });
 
   // ------------------------------------------------------------------ 媒体库（桌面版功能）
   // 以磁盘文件为准浏览/播放/删除已下载内容；能力由 /api/nodes 的 library.enabled 控制。
@@ -6316,7 +5656,6 @@
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
     if (el.tabNarrato) el.tabNarrato.classList.toggle('is-active', isNarrato);
-    // 侧栏 8 个 .sidebar-item 同步激活态（百度网盘/下载无 data-view 跳过）
     const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isNarrato && !isBridge;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
@@ -6901,10 +6240,6 @@
   for (const [btn, view] of _sidebarPairs) {
     if (btn) btn.addEventListener('click', () => switchView(view));
   }
-  // 百度网盘 / 百度下载 是 fixed alias（无 data-view），单独绑
-  // 修复：原绑 switchView('baidu'/'pcs') 无效（switchView 不识别这两个 case），
-  // 改为转发到顶 tab click，复用其 modal 打开/状态刷新/扫码等完整逻辑。
-  if (el.sTabPcs) el.sTabPcs.addEventListener('click', () => tabPcsEl && tabPcsEl.click());
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {
@@ -7133,327 +6468,6 @@
   el.cleanSave.addEventListener('click', saveClean);
   el.cleanScan.addEventListener('click', scanClean);
   el.cleanRun.addEventListener('click', runClean);
-
-  // ================================ 归档网盘 ================================
-  const arcState = { jobId: null, pollTimer: null, items: [] };
-
-  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-  const showArcStatus = (msg, isErr = false) => {
-    el.arcStatus.textContent = msg || '';
-    el.arcStatus.classList.toggle('is-error', !!isErr);
-  };
-
-  const currentArcProvider = () =>
-    (document.querySelector('input[name="arcProvider"]:checked') || {}).value || 'webdav';
-
-  const toggleArcProviderForm = (prov) => {
-    el.arcWebdavForm.hidden = prov !== 'webdav';
-    el.arcBaiduForm.hidden = prov !== 'baidu';
-  };
-
-  const fillArcForm = (data) => {
-    const cfg = data.config || {};
-    el.arcTemplate.value = cfg.dest_template || '';
-    el.arcVideo.checked = !!cfg.include_video;
-    el.arcAudio.checked = !!cfg.include_audio;
-    el.arcImage.checked = !!cfg.include_image;
-    el.arcMinAge.value = cfg.min_age_minutes ?? 3;
-    el.arcMaxGb.value = cfg.max_file_gb ?? 10;
-    el.arcDeleteAfter.checked = !!cfg.delete_after;
-    el.arcAuto.checked = !!cfg.auto_enabled;
-    el.arcInterval.value = cfg.interval_hours ?? 6;
-    const wd = (data.creds && data.creds.webdav) || {};
-    el.arcWebdavUrl.value = wd.url || '';
-    el.arcWebdavUser.value = wd.user || '';
-    el.arcWebdavPass.value = '';
-    const bd = (data.creds && data.creds.baidu) || {};
-    el.arcBaiduStatus.textContent = bd.token_set ? '已授权' : '未授权';
-    const toks = data.tokens || {};
-    el.arcTokens.replaceChildren();
-    const tip = document.createElement('span');
-    tip.textContent = '可用占位符：';
-    el.arcTokens.appendChild(tip);
-    Object.entries(toks).forEach(([k, v], i, arr) => {
-      const code = document.createElement('code');
-      code.textContent = k;
-      code.title = v;
-      el.arcTokens.appendChild(code);
-      if (i < arr.length - 1) el.arcTokens.appendChild(document.createTextNode(' '));
-    });
-    el.arcTrashWarn.hidden = !!data.trash_available;
-    el.arcDeleteAfter.disabled = !data.trash_available;
-    if (!data.trash_available) el.arcDeleteAfter.checked = false;
-    el.arcBaiduRadio.hidden = !node.archiveBaiduAvailable;
-    const prov = cfg.provider || 'webdav';
-    const radio = document.querySelector(`input[name="arcProvider"][value="${prov}"]`);
-    if (radio) radio.checked = true;
-    toggleArcProviderForm(prov);
-  };
-
-  const renderArcRecords = (records) => {
-    el.arcRecords.replaceChildren();
-    (records || []).forEach((r) => {
-      const li = document.createElement('li');
-      const name = (r.rel || r.remote || '').split('/').pop();
-      li.textContent = `${name} → ${r.remote || ''} · ${fmtSize(r.size || 0)}`;
-      el.arcRecords.appendChild(li);
-    });
-    if (!(records || []).length) {
-      const li = document.createElement('li');
-      li.className = 'arc-records-empty';
-      li.textContent = '暂无归档记录';
-      el.arcRecords.appendChild(li);
-    }
-  };
-
-  const collectArcConfig = () => {
-    const prov = currentArcProvider();
-    const body = {
-      provider: prov,
-      dest_template: el.arcTemplate.value.trim(),
-      include_video: el.arcVideo.checked,
-      include_audio: el.arcAudio.checked,
-      include_image: el.arcImage.checked,
-      min_age_minutes: Number(el.arcMinAge.value) || 0,
-      max_file_gb: Number(el.arcMaxGb.value) || 0,
-      delete_after: el.arcDeleteAfter.checked,
-      auto_enabled: el.arcAuto.checked,
-      interval_hours: Number(el.arcInterval.value) || 6,
-    };
-    if (prov === 'webdav') {
-      body.webdav = {
-        url: el.arcWebdavUrl.value.trim(),
-        user: el.arcWebdavUser.value.trim(),
-        pass: el.arcWebdavPass.value,
-      };
-    } else if (prov === 'baidu') {
-      body.baidu = { token: el.arcBaiduToken.value.trim() };
-    }
-    return body;
-  };
-
-  const openArchiveModal = async () => {
-    arcState.jobId = null;
-    stopArcPoll();
-    el.arcPreview.hidden = true;
-    el.arcPreview.replaceChildren();
-    el.arcRun.disabled = true;
-    el.arcCancel.hidden = true;
-    showArcStatus('');
-    if (typeof el.archiveModal.showModal === 'function') el.archiveModal.showModal();
-    try {
-      const data = await request('/api/archive/config');
-      fillArcForm(data);
-      renderArcRecords(data.records);
-    } catch (err) {
-      showArcStatus(err.message || '读取归档设置失败', true);
-    }
-  };
-
-  const saveArcConfig = async () => {
-    el.arcSave.disabled = true;
-    showArcStatus('保存中…');
-    try {
-      await request('/api/archive/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(collectArcConfig()),
-      });
-      showArcStatus('配置已保存');
-      node.archiveConfigured = true;
-    } catch (err) {
-      showArcStatus(err.message || '保存失败', true);
-    } finally {
-      el.arcSave.disabled = false;
-    }
-  };
-
-  const scanArc = async () => {
-    el.arcScan.disabled = true;
-    el.arcRun.disabled = true;
-    showArcStatus('正在扫描…');
-    try {
-      const data = await request('/api/archive/scan', { method: 'POST' });
-      arcState.items = data.items || [];
-      renderArcPreview(data);
-      showArcStatus('');
-    } catch (err) {
-      showArcStatus(err.message || '扫描失败', true);
-    } finally {
-      el.arcScan.disabled = false;
-    }
-  };
-
-  const renderArcPreview = (data) => {
-    el.arcPreview.replaceChildren();
-    const items = data.items || [];
-    if (!items.length) {
-      const p = document.createElement('p');
-      p.className = 'arc-empty';
-      p.textContent = data.configured
-        ? '没有待归档的文件（全部已归档，或都不符合筛选条件）。'
-        : '尚未配置网盘凭据，请先填写上方 WebDAV / 百度网盘信息并保存。';
-      el.arcPreview.appendChild(p);
-      el.arcPreview.hidden = false;
-      el.arcRun.disabled = true;
-      return;
-    }
-    const head = document.createElement('p');
-    head.className = 'arc-total';
-    head.textContent = `共 ${data.count} 项待归档，约 ${data.size_text || fmtSize(data.size || 0)}`;
-    el.arcPreview.appendChild(head);
-    const list = document.createElement('ul');
-    list.className = 'arc-list';
-    items.forEach((it) => {
-      const li = document.createElement('li');
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = true;
-      cb.dataset.id = it.id;
-      cb.className = 'arc-item-cb';
-      const label = document.createElement('label');
-      label.className = 'arc-item';
-      const span = document.createElement('span');
-      span.innerHTML = `<strong>${escapeHtml(it.name)}</strong> → <code>${escapeHtml(it.dest)}</code> · ${fmtSize(it.size || 0)}`;
-      label.appendChild(cb);
-      label.appendChild(span);
-      li.appendChild(label);
-      list.appendChild(li);
-    });
-    el.arcPreview.appendChild(list);
-    el.arcPreview.hidden = false;
-    el.arcRun.disabled = false;
-  };
-
-  const selectedArcIds = () =>
-    Array.from(el.arcPreview.querySelectorAll('.arc-item-cb:checked')).map((cb) => cb.dataset.id);
-
-  const runArc = async () => {
-    const ids = selectedArcIds();
-    if (!ids.length) { showArcStatus('请至少勾选一个文件', true); return; }
-    el.arcRun.disabled = true;
-    el.arcScan.disabled = true;
-    el.arcCancel.hidden = false;
-    el.arcCancel.disabled = false;
-    showArcStatus('正在归档…');
-    try {
-      const res = await request('/api/archive/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lib_ids: ids }),
-      });
-      arcState.jobId = res.job_id;
-      pollArcStatus();
-    } catch (err) {
-      showArcStatus(err.message || '归档启动失败', true);
-      el.arcCancel.hidden = true;
-      el.arcRun.disabled = false;
-      el.arcScan.disabled = false;
-    }
-  };
-
-  const stopArcPoll = () => {
-    if (arcState.pollTimer) { clearTimeout(arcState.pollTimer); arcState.pollTimer = null; }
-  };
-
-  const pollArcStatus = async () => {
-    if (!arcState.jobId) return;
-    try {
-      const s = await request(`/api/archive/status/${arcState.jobId}`);
-      const total = s.total || 0;
-      const done = (s.uploaded || 0) + (s.failed || 0) + (s.skipped || 0);
-      const pct = total ? Math.round((done / total) * 100) : 100;
-      showArcStatus(
-        `归档中 ${done}/${total}（${s.uploaded || 0} 成功 / ${s.failed || 0} 失败）… `
-        + `${s.current || ''} ${Math.round(s.file_percent || 0)}%`);
-      if (s.status === 'running') {
-        arcState.pollTimer = setTimeout(pollArcStatus, 800);
-      } else {
-        finishArc(s);
-      }
-    } catch (err) {
-      showArcStatus(err.message || '查询进度失败', true);
-      el.arcCancel.hidden = true;
-      el.arcRun.disabled = false;
-      el.arcScan.disabled = false;
-    }
-  };
-
-  const finishArc = async (s) => {
-    el.arcCancel.hidden = true;
-    el.arcScan.disabled = false;
-    el.arcRun.disabled = false;
-    let text = `归档完成：成功 ${s.uploaded || 0} 个 / ${s.bytes_text || fmtSize(s.bytes || 0)}`;
-    if (s.failed) text += `，失败 ${s.failed} 个`;
-    if (s.skipped) text += `，跳过 ${s.skipped} 个`;
-    if (s.deleted) text += `，已移入回收站 ${s.deleted} 个`;
-    showArcStatus(text, !!s.failed);
-    arcState.jobId = null;
-    try {
-      const data = await request('/api/archive/config');
-      renderArcRecords(data.records);
-    } catch { /* ignore */ }
-    try {
-      const sc = await request('/api/archive/scan', { method: 'POST' });
-      arcState.items = sc.items || [];
-      renderArcPreview(sc);
-    } catch { /* ignore */ }
-  };
-
-  const cancelArc = async () => {
-    if (!arcState.jobId) return;
-    el.arcCancel.disabled = true;
-    showArcStatus('正在取消…');
-    try {
-      await request(`/api/archive/cancel/${arcState.jobId}`, { method: 'POST' });
-    } catch { /* ignore */ }
-  };
-
-  const forgetArc = async () => {
-    if (!window.confirm('确定清空归档记录吗？清空后这些文件下次会重新上传到网盘。')) return;
-    try {
-      await request('/api/archive/forget', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rel: '' }),
-      });
-      showArcStatus('归档记录已清空');
-      const sc = await request('/api/archive/scan', { method: 'POST' });
-      arcState.items = sc.items || [];
-      renderArcPreview(sc);
-    } catch (err) {
-      showArcStatus(err.message || '清空失败', true);
-    }
-  };
-
-  document.querySelectorAll('input[name="arcProvider"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      toggleArcProviderForm(r.value);
-      try {
-        request('/api/archive/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: r.value }),
-        });
-      } catch { /* ignore */ }
-    });
-  });
-  el.libArchive.addEventListener('click', openArchiveModal);
-  el.archiveModalClose.addEventListener('click', () => {
-    stopArcPoll();
-    if (typeof el.archiveModal.close === 'function') el.archiveModal.close();
-  });
-  el.archiveModal.addEventListener('click', (e) => { if (e.target === el.archiveModal) el.archiveModal.close(); });
-  el.arcSave.addEventListener('click', saveArcConfig);
-  el.arcScan.addEventListener('click', scanArc);
-  el.arcRun.addEventListener('click', runArc);
-  el.arcCancel.addEventListener('click', cancelArc);
-  el.arcForget.addEventListener('click', forgetArc);
-  if (el.arcBaiduBtn) el.arcBaiduBtn.addEventListener('click', () => {
-    if (node.baiduAuthUrl) openBaiduAuthInPage();
-  });
 
   // ---- 库内保险箱（桌面版功能） ----
   let cryptoItems = [];
@@ -8429,20 +7443,10 @@
         ? convert.targets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'];
       node.downloadSubRequired = !!(download && download.subscription_required);
       node.downloadFreeDaily = (download && download.free_daily) || 10;
-      const cloudInfo = cloud || {};
-      node.cloudSubRequired = !!(cloudInfo && cloudInfo.subscription_required);
-      node.cloudFreeDaily = (cloudInfo && cloudInfo.free_daily) || 5;
-      node.cloudFreeUsed = 0;
-      node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
-      node.baiduAvailable = !!(cloudInfo && cloudInfo.baidu_available);
-      node.baiduAuthUrl = (cloudInfo && cloudInfo.baidu_auth_url) || '';
       node.libraryEnabled = !!(library && library.enabled);
       node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
       node.retentionEnabled = !!(retention && retention.enabled);
       node.trashAvailable = !!(retention && retention.trash_available);
-      node.archiveEnabled = !!(archive && archive.enabled);
-      node.archiveBaiduAvailable = !!(archive && archive.baidu_available);
-      node.archiveConfigured = !!(archive && archive.configured);
       node.cryptoEnabled = !!(crypto && crypto.enabled);
       node.cryptoHasPass = !!(crypto && crypto.has_pass);
       node.cryptoLocked = !!(crypto && crypto.locked);
@@ -8458,7 +7462,6 @@
           : '🤖 AI 去水印（CPU，较慢但任何电脑可跑）';
       }
       if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
-      if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       node.profile = profile;
@@ -8481,14 +7484,13 @@
         if (el.sTabUploadConvert) el.sTabUploadConvert.hidden = false;
         if (el.sTabDw) el.sTabDw.hidden = false;
       } else {
-        // App 端：能力精细控制（tabTorrent/tabBaidu/tabCommentary/tabDw/tabLibrary/tabSubscribe/tabPcs）
+        // App 端：能力精细控制（tabTorrent/tabCommentary/tabDw/tabLibrary/tabSubscribe）
         if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
         if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
         if (el.tabUploadConvert) el.tabUploadConvert.hidden = false; // 本地核心能力
         if (el.tabDw) el.tabDw.hidden = !node.aiDewatermarkEnabled;  // 依赖 AI 去水印能力
         if (el.tabLibrary) el.tabLibrary.hidden = !node.libraryEnabled;
         if (el.tabSubscribe) el.tabSubscribe.hidden = !node.subscriptionsEnabled;
-        if (el.tabPcs) el.tabPcs.hidden = !node.baiduAvailable;
         if (el.tabAppIntro) el.tabAppIntro.hidden = false; // 更多功能介绍桌面端也显示
         // 侧栏同 toggle（保持一一对应；侧栏无 tabAppIntro 对应——因为更多功能是顶 tab 独有）
         // 侧栏同 toggle（保持一一对应）
@@ -8498,7 +7500,6 @@
         if (el.sTabDw) el.sTabDw.hidden = !node.aiDewatermarkEnabled;
         if (el.sTabLibrary) el.sTabLibrary.hidden = !node.libraryEnabled;
         if (el.sTabSubscribe) el.sTabSubscribe.hidden = !node.subscriptionsEnabled;
-        if (el.sTabPcs) el.sTabPcs.hidden = !node.baiduAvailable;
       }
       // AI 解说体验：仅桌面端（node.narratoEnabled）显示，网页版一律隐藏
       if (el.tabNarrato) el.tabNarrato.hidden = !node.narratoEnabled;

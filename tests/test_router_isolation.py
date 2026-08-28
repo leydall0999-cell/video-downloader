@@ -19,16 +19,12 @@ import app as app_module  # noqa: E402  (触发 app.py 全量加载，确保 app
 
 # group -> 该组内一个代表性 handler 函数名（必须只存在于路由器文件，不在 app.py）
 GROUP_HANDLERS = {
-    "archive": "archive_config_get",
-    "baidu_dlink": "baidu_dlink",
-    "cloud": "cloud_providers",
     "commentary": "commentary_list",
     "convert": "convert_create",
     "crypto": "crypto_status",
     "fs": "fs_open",
     "library": "library_list",
     "llm": "llm_providers",
-    "pcs": "pcs_status",
     "process": "process_run",
     "retention": "retention_config_get",
     "subscriptions": "subscriptions_list",

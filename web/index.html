@@ -67,10 +67,6 @@
       <button type="button" class="sidebar-item" data-view="dw" id="sTabDw"><span class="sidebar-item-icon">🧽</span><span class="sidebar-item-label">图片 / PDF 去水印</span></button>
     </div>
 
-    <div class="sidebar-group">
-      <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>云盘下载</div>
-      <button type="button" class="sidebar-item" id="sTabPcs"><span class="sidebar-item-icon">📥</span><span class="sidebar-item-label">百度下载</span></button>
-    </div>
 
     <div class="sidebar-footer">v1.0 · AI 自动剪辑</div>
   </aside>
@@ -85,7 +81,6 @@
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
-    <button type="button" class="tab" id="tabPcs">📥 百度下载</button>
   </nav>
 
   <div id="downloadView">
@@ -142,7 +137,7 @@
               <summary class="cookie-help-summary">如何获取 / 复制浏览器 Cookie？</summary>
               <div class="cookie-help-body">
                 <p class="cookie-help-step"><b>方式 A（推荐，免粘贴）：</b>在本机<b>电脑浏览器</b>（Chrome / Edge / Brave）登录目标平台（腾讯视频、快手、B站、抖音等），app 解析时会自动读取该浏览器的登录 Cookie，无需手动粘贴。</p>
-                <p class="cookie-help-step cookie-boundary"><b>重要 · 自动获取的边界：</b>自动读取的是<b>电脑浏览器</b>的登录态，与以下两者<b>互不通用</b>：① <b>手机 App 的登录态</b>（在手机上，电脑读不到）；② <b>百度网盘的登录态</b>（那是另一套账号，不能用于快手 / 抖音等视频平台）。因此<b>手机分享出来的链接</b>，需先在电脑浏览器登录对应平台（如用手机快手 App 扫码登录 kuaishou.com）后，才能自动带上 Cookie 解析成功。</p>
+                <p class="cookie-help-step cookie-boundary"><b>重要 · 自动获取的边界：</b>自动读取的是<b>电脑浏览器</b>的登录态，与以下两者<b>互不通用</b>：① <b>手机 App 的登录态</b>（在手机上，电脑读不到）；② <b>其他独立账号体系（如某些网盘 / 客户端）的登录态</b>（与视频平台账号互不相通）。因此<b>手机分享出来的链接</b>，需先在电脑浏览器登录对应平台（如用手机快手 App 扫码登录 kuaishou.com）后，才能自动带上 Cookie 解析成功。</p>
                 <p class="cookie-help-step"><b>方式 B（手动复制，用于 Safari / Firefox、指定账号、或自动读取失败）：</b></p>
                 <ol class="cookie-help-steps">
                   <li>浏览器打开并<b>登录</b>目标站点（如 v.qq.com）。</li>
@@ -626,7 +621,6 @@
       <h2 id="libTitle" class="guide-title">我的媒体库</h2>
       <div class="lib-head-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="libCleanup" hidden>🧹 自动清理</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="libArchive" hidden>☁️ 归档网盘</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libCrypto" hidden>🔐 保险箱</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libShowQueue" hidden>📋 队列</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libRefresh">刷新</button>
@@ -1232,7 +1226,6 @@
         <button type="button" class="btn btn-ghost btn-sm" data-retry hidden>重试</button>
         <button type="button" class="btn btn-ghost btn-sm task-delete" data-delete hidden title="删除这条任务记录">🗑</button>
         <a class="btn btn-success btn-sm" data-save hidden download>保存文件</a>
-        <button type="button" class="btn btn-ghost btn-sm" data-cloud hidden>☁️ 存到网盘</button>
       </span>
     </div>
     <div class="convert-box" data-convert-wrap hidden>
@@ -1259,7 +1252,6 @@
       <span class="convert-quota" data-convert-quota hidden></span>
     </div>
     <p class="save-hint" data-save-hint hidden></p>
-    <p class="cloud-status-line" data-cloud-status hidden></p>
     <div class="extract-result" data-extract-wrap hidden>
       <div class="extract-head">
         <span class="extract-title">📝 提取文案</span>
@@ -1304,108 +1296,8 @@
   </div>
 </dialog>
 
-<!-- 云盘存盘弹窗：把已下载文件上传到用户自己的网盘 -->
-<dialog id="cloudModal" class="modal" aria-labelledby="cloudModalTitle">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h2 id="cloudModalTitle">存到我的网盘</h2>
-      <button type="button" class="modal-close" id="cloudModalClose" aria-label="关闭">✕</button>
-    </div>
-    <p class="modal-sub">把已下载的文件上传到你自己的网盘。服务端仅做临时中转，不留存内容。</p>
-
-    <div class="cloud-sub" id="cloudSubNote" hidden></div>
-
-    <div class="cloud-providers">
-      <label class="cloud-radio"><input type="radio" name="cloudProvider" value="webdav" checked> WebDAV（Nextcloud / 群晖 / 自建）</label>
-      <label class="cloud-radio" id="cloudBaiduRadio" hidden><input type="radio" name="cloudProvider" value="baidu"> 百度网盘</label>
-    </div>
-
-    <div class="cloud-form" id="cloudWebdavForm">
-      <label>WebDAV 地址
-        <input type="text" id="cloudWebdavUrl" class="adv-input" placeholder="https://dav.example.com/remote.php/dav/files/用户名/" autocomplete="off" spellcheck="false">
-      </label>
-      <label>账号
-        <input type="text" id="cloudWebdavUser" class="adv-input" placeholder="用户名" autocomplete="off" spellcheck="false">
-      </label>
-      <label>密码
-        <input type="password" id="cloudWebdavPass" class="adv-input" placeholder="仅保存在本机浏览器" autocomplete="off">
-      </label>
-    </div>
-
-    <div class="cloud-form" id="cloudBaiduForm" hidden>
-      <button type="button" class="btn btn-primary btn-sm" id="cloudBaiduBtn">授权百度网盘</button>
-      <p class="cloud-baidu-status" id="cloudBaiduStatus">未授权</p>
-    </div>
-
-    <label class="cloud-dest">保存到网盘的路径（可留空，默认用文件名）
-      <input type="text" id="cloudDest" class="adv-input" placeholder="如 Videos/ 或 /Movies/foo.mp4" autocomplete="off" spellcheck="false">
-    </label>
-
-    <div class="cloud-actions">
-      <button type="button" class="btn btn-primary" id="cloudSave">开始保存</button>
-      <span class="cloud-status" id="cloudStatus"></span>
-    </div>
-    <p class="cloud-note">凭据仅保存在你本机浏览器（localStorage），只发往你配置的网盘。自托管实例下服务端会短暂读取以完成上传。</p>
-  </div>
-</dialog>
 
 
-<!-- 百度网盘下载（baiduPCS-Go 适配器）：粘贴 cookie 登录一次 → 粘贴分享链接+密码 → 转存 → 下载 -->
-<dialog id="pcsModal" class="modal" aria-labelledby="pcsModalTitle">
-  <div class="modal-card modal-wide">
-    <div class="modal-head">
-      <h2 id="pcsModalTitle">📥 百度网盘下载 <small style="font-size:12px;color:#888">（baiduPCS-Go）</small> <span id="pcsBuildInfo" style="font-size:10px;color:#aaa;font-weight:normal"></span></h2>
-      <button type="button" class="modal-close" id="pcsModalClose" aria-label="关闭">✕</button>
-    </div>
-    <p class="modal-sub">方案：用开源命令行工具 <code>baiduPCS-Go</code> 管理登录态与下载，<strong>不依赖浏览器注入、不需要百度开放平台凭据</strong>。首次使用会自动下载该工具（约 30MB）。</p>
-
-    <div class="pcs-status" id="pcsStatus">正在检查环境…</div>
-
-    <div class="pcs-block">
-      <h3>① 登录百度网盘（扫码，零门槛）</h3>
-      <p class="modal-sub">打开<strong>手机百度网盘 App</strong> → 扫下方二维码 → 手机上点「确认登录」即可。<strong>不需要记密码、不需要复制 Cookie、不需要 F12。</strong></p>
-      <div class="pcs-qr-wrap">
-        <img id="pcsQrImg" class="pcs-qr-img" alt="登录二维码" />
-        <div id="pcsQrStatus" class="pcs-qr-status">正在生成二维码…</div>
-        <button type="button" class="btn btn-sm" id="pcsQrRefresh">🔄 刷新二维码</button>
-      </div>
-      <span id="pcsWho" class="pcs-who"></span>
-      <details style="margin-top:.5rem"><summary style="font-size:12px;color:#888;cursor:pointer">其他登录方式：账号密码 / Cookie</summary>
-        <div style="display:flex;gap:.5rem;margin-top:.4rem;align-items:center">
-          <input type="text" id="pcsUsername" class="adv-input" placeholder="百度账号（手机号/邮箱/用户名）" style="flex:1" autocomplete="username" />
-          <input type="password" id="pcsPassword" class="adv-input" placeholder="密码" style="flex:1;min-width:140px" autocomplete="current-password" />
-          <button type="button" class="btn btn-primary btn-sm" id="pcsLoginBtn">🔑 登录</button>
-        </div>
-        <textarea id="pcsCookies" class="adv-textarea" rows="2" placeholder="粘贴 BDUSS 值或完整 Cookie 字符串" style="margin-top:.3rem;font-size:12px"></textarea>
-        <button type="button" class="btn btn-default btn-sm" id="pcsCookieLoginBtn" style="margin-top:.2rem">用 Cookie 登录</button>
-      </details>
-    </div>
-
-    <hr class="baidu-sep" />
-
-    <div class="pcs-block">
-      <h3>② 下载分享链接</h3>
-      <p class="modal-sub">粘贴别人分享的百度网盘链接 + 提取码，自动<strong>转存到你的网盘</strong>再下载。</p>
-      <div class="pcs-row">
-        <input type="text" id="pcsShareUrl" class="adv-input" placeholder="https://pan.baidu.com/s/..." style="flex:2" />
-        <input type="text" id="pcsSharePwd" class="adv-input" placeholder="提取码（如有）" style="flex:1;max-width:160px" />
-        <button type="button" class="btn btn-primary btn-sm" id="pcsTransferBtn">转存</button>
-        <button type="button" class="btn btn-sm" id="pcsLsBtn">列出网盘</button>
-      </div>
-      <p class="pcs-status" id="pcsShareStatus"></p>
-      <div class="baidu-list" id="pcsList"><p class="baidu-empty">转存后会自动列出文件，点「下载」即可。</p></div>
-      <div class="pcs-row" style="margin-top:.4rem">
-        <input type="text" id="pcsManualPath" class="adv-input" placeholder="或手动填网盘路径，如 /app-arm64-v8a-release.apk" style="flex:2" />
-        <button type="button" class="btn btn-sm" id="pcsManualDlBtn">按路径下载</button>
-      </div>
-    </div>
-
-    <div class="baidu-dl" style="margin-top:12px">
-      <h3 class="baidu-dl-title">本机下载进度</h3>
-      <div class="baidu-dl-list" id="pcsDlList"><p class="baidu-empty">还没有下载任务。</p></div>
-    </div>
-  </div>
-</dialog>
 
 <!-- 时效自动清理：按保留期/容量上限清理下载目录 -->
 <dialog id="cleanModal" class="modal" aria-labelledby="cleanModalTitle">
@@ -1470,81 +1362,6 @@
   </div>
 </dialog>
 
-<!-- 归档网盘：把媒体库文件按规则批量 / 定时上传到用户自己的网盘 -->
-<dialog id="archiveModal" class="modal" aria-labelledby="archiveModalTitle">
-  <div class="modal-card modal-wide">
-    <div class="modal-head">
-      <h2 id="archiveModalTitle">☁️ 归档到我的网盘</h2>
-      <button type="button" class="modal-close" id="archiveModalClose" aria-label="关闭">✕</button>
-    </div>
-    <p class="modal-sub">把本机媒体库的文件按规则批量 / 定时上传到你<strong>自己的网盘</strong>。凭据只存本机配置文件（权限 0600），接口传输一律脱敏。</p>
-
-    <div class="arc-provider-row">
-      <label class="arc-radio"><input type="radio" name="arcProvider" value="webdav" checked> WebDAV（群晖 / Nextcloud / 自建）</label>
-      <label class="arc-radio" id="arcBaiduRadio" hidden><input type="radio" name="arcProvider" value="baidu"> 百度网盘</label>
-    </div>
-
-    <div class="arc-form" id="arcWebdavForm">
-      <label class="arc-field">WebDAV 地址
-        <input type="text" id="arcWebdavUrl" class="adv-input" placeholder="https://dav.example.com/remote.php/dav/files/用户名/" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="arc-field">用户名
-        <input type="text" id="arcWebdavUser" class="adv-input" placeholder="用户名" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="arc-field">密码
-        <input type="password" id="arcWebdavPass" class="adv-input" placeholder="留空则沿用已保存" autocomplete="new-password">
-      </label>
-    </div>
-
-    <div class="arc-form" id="arcBaiduForm" hidden>
-      <button type="button" class="btn btn-primary btn-sm" id="arcBaiduBtn">授权百度网盘</button>
-      <label class="arc-field">授权后粘贴 token
-        <input type="text" id="arcBaiduToken" class="adv-input" placeholder="在回调页复制 token 粘贴到这里" autocomplete="off" spellcheck="false">
-      </label>
-      <p class="arc-baidu-status" id="arcBaiduStatus">未授权</p>
-    </div>
-
-    <label class="arc-field">远端路径模板
-      <input type="text" id="arcTemplate" class="adv-input" placeholder="VideoDownloader/{platform}/{date}/{filename}" autocomplete="off" spellcheck="false">
-    </label>
-    <p class="arc-tokens" id="arcTokens"></p>
-
-    <div class="arc-row">
-      <label class="arc-check"><input type="checkbox" id="arcVideo" checked> 视频</label>
-      <label class="arc-check"><input type="checkbox" id="arcAudio" checked> 音频</label>
-      <label class="arc-check"><input type="checkbox" id="arcImage"> 图片（抽帧 / 封面等）</label>
-    </div>
-    <div class="arc-row">
-      <label class="arc-num">静置 <input type="number" id="arcMinAge" class="adv-input" min="0" max="10080" step="1" value="3"> 分钟后再传</label>
-      <label class="arc-num">单文件上限 <input type="number" id="arcMaxGb" class="adv-input" min="0" max="1024" step="0.5" value="10"> GB</label>
-    </div>
-    <label class="arc-check arc-danger"><input type="checkbox" id="arcDeleteAfter"> 归档成功后删除本地文件（强制走系统回收站，回收站不可用则只归档不删）</label>
-
-    <div class="arc-auto">
-      <label class="arc-check"><input type="checkbox" id="arcAuto"> 开启定时自动归档</label>
-      <label class="arc-num">每 <input type="number" id="arcInterval" class="adv-input" min="0.25" max="720" step="0.25" value="6"> 小时</label>
-    </div>
-    <p class="arc-trash-warn" id="arcTrashWarn" hidden>⚠️ 当前系统没有可用的回收站通道，「归档后删除本地」已锁定 —— 不允许直接硬删你的资产。</p>
-
-    <div class="arc-actions">
-      <button type="button" class="btn btn-ghost" id="arcSave">保存配置</button>
-      <button type="button" class="btn btn-ghost" id="arcScan">扫描预览</button>
-      <button type="button" class="btn btn-primary" id="arcRun" disabled>开始归档</button>
-      <button type="button" class="btn btn-primary" id="arcCancel" hidden>取消</button>
-      <span class="arc-status" id="arcStatus"></span>
-    </div>
-
-    <div class="arc-preview" id="arcPreview" hidden></div>
-
-    <div class="arc-records">
-      <div class="arc-records-head">
-        <span>最近归档记录</span>
-        <button type="button" class="btn btn-ghost btn-sm" id="arcForget">忘记记录</button>
-      </div>
-      <ul class="arc-records-list" id="arcRecords"></ul>
-    </div>
-  </div>
-</dialog>
 
   <!-- 库内保险箱 -->
   <dialog id="cryptoModal" class="modal" aria-labelledby="cryptoModalTitle">

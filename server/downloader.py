@@ -1126,7 +1126,7 @@ _KNOWN_PLATFORM_HOSTS = {
     "bilibili.com", "b23.tv", "douyin.com", "tiktok.com", "tiktokv.com",
     "youtube.com", "youtu.be", "twitch.tv", "twitter.com", "x.com",
     "vimeo.com", "facebook.com", "instagram.com", "weibo.com", "qq.com",
-    "v.qq.com", "iqiyi.com", "youku.com", "chrqj.com", "pan.baidu.com",
+    "v.qq.com", "iqiyi.com", "youku.com", "chrqj.com",
 }
 
 

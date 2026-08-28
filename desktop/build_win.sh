@@ -93,7 +93,6 @@ fi
   --add-data "$REPO/yt_dlp_plugins;yt_dlp_plugins" \
   --hidden-import app \
   --hidden-import downloader \
-  --hidden-import clouddrive \
   --hidden-import platforms \
   --hidden-import tasks \
   --hidden-import yt_dlp_plugins \

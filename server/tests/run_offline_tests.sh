@@ -2,8 +2,7 @@
 # 离线测试运行器：在沙盒内验证 VideoDownloader 后端，不依赖任何外部网络。
 #
 # 覆盖：
-#   1. test_baidu_qr_offline.py  —— 本地 Mock 百度 passport，跑通扫码登录全链路
-#   2. test_app_smoke.py         —— FastAPI TestClient 无头冒烟所有 /api/pcs/* 路由
+#   1. test_app_smoke.py  —— FastAPI TestClient 无头冒烟核心路由
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -39,7 +38,6 @@ run_one() {
   fi
 }
 
-run_one test_baidu_qr_offline.py
 run_one test_app_smoke.py
 
 echo ""

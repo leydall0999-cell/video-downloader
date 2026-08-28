@@ -201,67 +201,8 @@ else
   echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
 fi
 
-# ── 预下载 baiduPCS-Go（在 pyinstaller 之前，以便 --add-binary 打入包）──
-_PCS_BUILD_DIR="$REPO/build/pcs_bin"
-mkdir -p "$_PCS_BUILD_DIR"
-_PCS_BINARY="$_PCS_BUILD_DIR/BaiduPCS-Go"
-if [ ! -x "$_PCS_BINARY" ]; then
-  _ARCH="${_ARCH:-$(uname -m)}"
-  _PCS_API_URL="https://api.github.com/repos/qjfoidnh/BaiduPCS-Go/releases/latest"
-  echo "▶ 预下载 baiduPCS-Go（百度网盘下载功能依赖，${_ARCH:-unknown}）…"
-  _PCS_RELEASE_JSON="$(curl -sL --max-time 30 "$_PCS_API_URL" 2>/dev/null || echo '{}')"
-  _PCS_TAG="$(echo "$_PCS_RELEASE_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || echo '')"
-  _PCS_URL=""
-  if [ -n "$_PCS_TAG" ]; then
-    # 用环境变量传 arch 进 python（避免 bash 单引号内变量不展开 + set -u 报 unbound）
-    _PCS_URL="$(export PCS_ARCH="$_ARCH"; echo "$_PCS_RELEASE_JSON" | python3 -c '
-import os,sys,json
-arch=os.environ.get("PCS_ARCH","")
-for a in json.load(sys.stdin).get("assets",[]):
-    n=a.get("name","").lower()
-    if "darwin" in n and arch in n and n.endswith(".zip"):
-        print(a.get("browser_download_url",""))
-        break
-' 2>/dev/null || echo '')"
-  fi
-  if [ -z "$_PCS_URL" ] || [ "$_PCS_URL" = "None" ]; then
-    echo "   ⚠️ 无法获取 baiduPCS-Go 下载链接（tag=$_PCS_TAG），将在运行时下载"
-    _PCS_BINARY=""
-  else
-    echo "   下载: $_PCS_URL …"
-    _PCS_ZIP="$_PCS_BUILD_DIR/pcs.zip"
-    if curl -sL --max-time 120 -o "$_PCS_ZIP" "$_PCS_URL"; then
-      python3 -c "
-import zipfile, shutil, os, stat
-z = zipfile.ZipFile('$_PCS_ZIP')
-names = z.namelist()
-bin_name = next((n for n in names if n.endswith('BaiduPCS-Go') or n.endswith('baidupcs-go')), None)
-if bin_name:
-    z.extract(bin_name, '$_PCS_BUILD_DIR')
-    extracted = os.path.join('$_PCS_BUILD_DIR', bin_name)
-    target = '$_PCS_BINARY'
-    if extracted != target:
-      if os.path.exists(target): os.unlink(target)
-      shutil.move(extracted, target)
-    os.chmod(target, os.stat(target).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    print(f'✅ {target}')
-else:
-    print(f'❌ 未找到二进制: {names[:5]}')
-z.close()
-" 2>&1 || echo "   ⚠️ 解压失败"
-      rm -f "$_PCS_ZIP"
-    else
-      echo "   ⚠️ 下载失败，将在运行时重试"; _PCS_BINARY=""
-    fi
-  fi
-fi
+# ── 百度网盘 / PCS-Go 功能已整体移除（用户要求「网盘全部不要」），不再预下载或打包 BaiduPCS-Go ──
 _PCS_ADD_BINARY_ARG=""
-if [ -n "$_PCS_BINARY" ] && [ -x "$_PCS_BINARY" ]; then
-  _PCS_ADD_BINARY_ARG="--add-binary $_PCS_BINARY:bin/BaiduPCS-Go"
-  echo "   ✔ baiduPCS-Go 将随包分发"
-else
-  echo "   ⚠️ baiduPCS-Go 未预打包（用户首次使用时从 GitHub 下载）"
-fi
 
 # ── 写入构建信息（版本号显示用）──
 _BUILD_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -304,7 +245,6 @@ echo "   ✔ 前端 JS 语法校验通过"
   --hidden-import downloader \
   --hidden-import cookie_cache \
   --hidden-import ydlp_update \
-  --hidden-import clouddrive \
   --hidden-import platforms \
   --hidden-import tasks \
   --hidden-import yt_dlp_plugins \
@@ -313,8 +253,6 @@ echo "   ✔ 前端 JS 语法校验通过"
   --hidden-import yt_dlp_plugins.extractor.kuaishou \
   --hidden-import webview \
   --hidden-import webview.platforms.cocoa \
-  --hidden-import baidu_pcs \
-  --hidden-import baidu_qr \
   --hidden-import dewatermark_core \
   --collect-binaries cv2 \
   --collect-all pymupdf \
@@ -443,19 +381,6 @@ echo "   指纹：$BUILD_INFO #$BUILD_STAMP"
 echo "▶ 打包 aria2c（种子后端随安装包自包含，脱离本机 Homebrew）"
 python3 "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader.app/Contents/Resources" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用）"
 
-echo "▶ 安装 baiduPCS-Go 到用户目录（避免 macOS .app 内执行限制）"
-_PCS_USER_BIN="$HOME/.video-downloader/baidupcs/bin/BaiduPCS-Go"
-if [ -n "$_PCS_BINARY" ] && [ -x "$_PCS_BINARY" ]; then
-  mkdir -p "$(dirname "$_PCS_USER_BIN")"
-  cp -f "$_PCS_BINARY" "$_PCS_USER_BIN"
-  chmod +x "$_PCS_USER_BIN"
-  # 清除 quarantine 属性（从下载/解压可能带隔离标记）
-  xattr -dr com.apple.quarantine "$_PCS_USER_BIN" 2>/dev/null || true
-  echo "   ✔ 已安装到 $_PCS_USER_BIN"
-else
-  echo "   ⚠️ baiduPCS-Go 未预打包，将在运行时下载到用户目录"
-fi
-
 echo "▶ 签名（ad-hoc）"
 codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
@@ -478,25 +403,7 @@ cleanup_old_artifacts
 echo "▶ 构建自验证（沙盒内可验，避免发出坏包）"
 _VERIFY_FAIL=0
 
-# 1) baiduPCS-Go 二进制必须已安装到用户目录且可执行
-_PCS_USER_BIN="$HOME/.video-downloader/baidupcs/bin/BaiduPCS-Go"
-if [ -x "$_PCS_USER_BIN" ]; then
-  echo "   ✔ 二进制就绪: $_PCS_USER_BIN"
-else
-  echo "   ❌ 二进制缺失或不可执行: $_PCS_USER_BIN"
-  _VERIFY_FAIL=1
-fi
 
-# 2) baidu_pcs / baidu_qr 模块必须已打进 .app
-_APP="$REPO/dist/VideoDownloader.app"
-for _m in baidu_pcs baidu_qr; do
-  if [ -f "$_APP/Contents/Resources/server/$_m.py" ] || [ -f "$_APP/Contents/Resources/server/$_m.pyc" ]; then
-    echo "   ✔ 模块已打包: $_m"
-  else
-    echo "   ❌ 模块未打包: $_m"
-    _VERIFY_FAIL=1
-  fi
-done
 
 # 3) 离线测试（不依赖外部网络）：扫码登录 Mock 全链路 + 后端路由冒烟
 if [ -f "$REPO/server/tests/run_offline_tests.sh" ]; then
