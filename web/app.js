@@ -3244,9 +3244,16 @@
     const url = URL.createObjectURL(f);
     el.dwVidEl.draggable = false;
     el.dwVidEl.addEventListener('dragstart', (e) => e.preventDefault());
+    el.dwVidEl.muted = true;       // 关键：muted 满足 WKWebView 自动播放策略，触发首帧解码
     el.dwVidEl.src = url;
     el.dwVidOrig.src = url;
+    el.dwVidOrig.muted = true;
     el.dwVidEl.onloadedmetadata = () => {
+      // play().then(pause()) 强制解码器渲染一帧；再把 currentTime 拨回 0 防止偏移
+      const p = el.dwVidEl.play();
+      if (p && p.then) {
+        p.then(() => { el.dwVidEl.pause(); el.dwVidEl.currentTime = 0; }).catch(() => {});
+      }
       dwVidResize();
       dwVidDraw();
     };
