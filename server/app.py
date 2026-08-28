@@ -125,30 +125,30 @@ FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/op
 # 音频容器按编码选型（aac/opus/wma/mp2 均自带编码器）。
 # 注意：ogv/ogg/oga 因捆绑 ffmpeg 缺 libvorbis/libtheora 不支持，故不纳入。
 CONVERT_TARGETS = {
-    # ---- 视频容器 ----
-    "mp4":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", "-movflags", "+faststart"],
-    "mov":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
-    "mkv":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
-    "webm": ["-c:v", "libvpx-vp9", "-c:a", "libopus", "-b:v", "1M"],
-    "avi":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "libmp3lame"],
-    "flv":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
-    "ts":   ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
-    "m4v":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
-    "wmv":  ["-c:v", "msmpeg4", "-c:a", "wmav2"],
-    "3gp":  ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"],
-    "mpeg": ["-c:v", "mpeg2video", "-c:a", "mp2"],
-    "hevc": ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac", "-tag:v", "hvc1"],
-    # ---- 音频容器 ----
-    "mp3":  ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
-    "m4a":  ["-vn", "-c:a", "aac", "-b:a", "192k"],
-    "wav":  ["-vn", "-c:a", "pcm_s16le"],
-    "flac": ["-vn", "-c:a", "flac"],
-    "aac":  ["-vn", "-c:a", "aac", "-b:a", "192k"],
-    "opus": ["-vn", "-c:a", "libopus", "-b:a", "128k"],
-    "wma":  ["-vn", "-c:a", "wmav2", "-b:a", "192k"],
-    "mp2":  ["-vn", "-c:a", "mp2", "-b:a", "192k"],
+    # ---- 视频容器（按容器选型 + -threads 0 让 macOS 多核充分利用，转码速度明显提升）----
+    "mp4":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac", "-movflags", "+faststart"],
+    "mov":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    "mkv":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    "webm":  ["-c:v", "libvpx-vp9", "-threads", "0", "-c:a", "libopus", "-b:v", "1M"],
+    "avi":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "libmp3lame"],
+    "flv":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    "ts":    ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    "m4v":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    "wmv":   ["-c:v", "msmpeg4", "-threads", "0", "-c:a", "wmav2"],
+    "3gp":   ["-c:v", "libx264", "-preset", "veryfast", "-threads", "0", "-c:a", "aac"],
+    "mpeg":  ["-c:v", "mpeg2video", "-threads", "0", "-c:a", "mp2"],
+    "hevc":  ["-c:v", "libx265", "-preset", "fast", "-threads", "0", "-c:a", "aac", "-tag:v", "hvc1"],
+    # ---- 音频容器（解码多线程收益小，默认单线程）----
+    "mp3":   ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
+    "m4a":   ["-vn", "-c:a", "aac", "-b:a", "192k"],
+    "wav":   ["-vn", "-c:a", "pcm_s16le"],
+    "flac":  ["-vn", "-c:a", "flac"],
+    "aac":   ["-vn", "-c:a", "aac", "-b:a", "192k"],
+    "opus":  ["-vn", "-c:a", "libopus", "-b:a", "128k"],
+    "wma":   ["-vn", "-c:a", "wmav2", "-b:a", "192k"],
+    "mp2":   ["-vn", "-c:a", "mp2", "-b:a", "192k"],
     # ---- 动图 ----
-    "gif":  ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
+    "gif":   ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
 }
 # 输出文件后缀（hevc 编码进 mp4 容器，其余与键同名）
 CONVERT_EXT = {

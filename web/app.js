@@ -2532,6 +2532,63 @@
       }
     }
   });
+  // 转码完成后的「下载」按钮拦截：pywebview (WKWebView) 不会弹 <a download> 保存框，
+  // 优先调用桌面原生桥接 save_convert_file_dialog 弹原生保存面板；无桥接（web/浏览器）
+  // 时再退化为 fetch + Blob + <a download>（与解说成片 wireSaveToDownloads 方案一致）。
+  el.ucList.addEventListener('click', async (e) => {
+    const link = e.target.closest && e.target.closest('.uc-item-download');
+    if (!link) return;
+    const api = window.pywebview && window.pywebview.api;
+    const href = link.getAttribute('href') || '';
+    const filename = link.getAttribute('download') || 'converted';
+    // href 形如 /api/convert/{jobId}/file?device=...
+    const mJob = href.match(/\/api\/convert\/([^/?#]+)/);
+    const jobId = mJob ? mJob[1] : '';
+    e.preventDefault();
+    if (!jobId) return;
+    const orig = link.textContent;
+
+    if (api && api.save_convert_file_dialog) {
+      // 桌面端：弹原生保存面板
+      link.textContent = '选择保存位置…';
+      try {
+        const res = await api.save_convert_file_dialog(jobId, filename);
+        if (res === 'CANCELLED') {
+          // 用户取消：恢复文案，无副作用
+        } else if (typeof res === 'string' && res.startsWith('ERROR:')) {
+          alert('保存失败：' + res.replace(/^ERROR:\s*/, ''));
+        } else {
+          link.textContent = '已保存 ✓';
+          setTimeout(() => { link.textContent = orig; }, 4000);
+          return;
+        }
+      } catch (err) {
+        alert('保存失败：' + ((err && err.message) || '桥接调用失败'));
+      }
+      link.textContent = orig;
+      return;
+    }
+    // 回退（web / 浏览器）：fetch 文件 → Blob → <a download>
+    link.textContent = '下载中…';
+    try {
+      const resp = await fetch(href, { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      link.textContent = '已触发下载 ✓';
+      setTimeout(() => { link.textContent = orig; }, 3000);
+    } catch (err) {
+      alert('下载失败：' + ((err && err.message) || '网络错误'));
+      link.textContent = orig;
+    }
+  });
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   el.ucStartAllBtn.addEventListener('click', () => {

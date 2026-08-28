@@ -679,6 +679,94 @@ class VdlApi:
         _log(f"saved -> {target}")
         return str(target)
 
+    def save_convert_file_dialog(self, job_id: str, suggested_name: str) -> str:
+        """弹出系统保存面板让用户自选「视频/音频格式转换」结果位置（桌面版原生下载）。
+
+        与 save_commentary_file_dialog / save_dw_file_dialog 同套机制：
+        用 osascript `choose file name` 子进程弹原生窗口，绕开 pywebview 主线程
+        run loop 阻塞（NSSavePanel 在主线程被同步 JS 调用卡死的问题）。取消返回
+        "CANCELLED"；osascript 不可用时退化为存「下载」文件夹。
+        """
+        import json
+        import os
+        import tempfile
+        import requests
+        import subprocess
+        import datetime as _dt
+        import threading as _th
+        from pathlib import Path
+
+        def _log(msg):
+            try:
+                with open("/tmp/vdl_convert_save.log", "a") as f:
+                    f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+            except Exception:
+                pass
+
+        url = f"http://{HOST}:{PORT}/api/convert/{job_id}/file"
+        suggested = suggested_name or "converted.mp4"
+        downloads = Path.home() / "Downloads"
+        try:
+            downloads.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads = Path.home()
+        _log(f"enter thread={_th.current_thread().name} job_id={job_id} suggested={suggested!r}")
+
+        dest = None
+        try:
+            name_json = json.dumps(suggested, ensure_ascii=False)
+            script = (
+                'set p to choose file name with prompt "保存转码结果" '
+                f'default name {name_json} '
+                'default location (path to downloads folder)\n'
+                'POSIX path of p'
+            )
+            fd, scpt = tempfile.mkstemp(suffix=".applescript")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(script)
+            try:
+                r = subprocess.run(
+                    ["osascript", scpt],
+                    capture_output=True, text=True, timeout=600,
+                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    dest = r.stdout.strip()
+                    _log(f"osascript chose: {dest}")
+                else:
+                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
+                    return "CANCELLED"
+            finally:
+                try:
+                    os.remove(scpt)
+                except Exception:
+                    pass
+        except Exception as e:
+            _log(f"osascript exception: {e!r}")
+            dest = None
+
+        if not dest:
+            _log("fallback -> ~/Downloads copy")
+            dest = str(downloads / suggested)
+
+        target = Path(dest)
+        try:
+            resp = requests.get(url, timeout=(10, 600))
+            resp.raise_for_status()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                stem, suf = target.stem, target.suffix
+                i = 1
+                while target.exists():
+                    target = target.parent / f"{stem}({i}){suf}"
+                    i += 1
+            target.write_bytes(resp.content)
+        except Exception as exc:
+            _log(f"write error: {exc!r}")
+            return f"ERROR: {exc}"
+        _log(f"saved -> {target}")
+        return str(target)
+
     # ── 窗口关闭 / 退出 行为区分（macOS 原生窗口）──
     # 设计：
     #   * 点窗口红叉 / 页面 X  → 仅「返回桌面」(最小化窗口，软件继续在后台运行)
