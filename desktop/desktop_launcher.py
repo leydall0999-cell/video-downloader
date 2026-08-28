@@ -987,19 +987,22 @@ def main() -> None:
     )
     server_thread.start()
 
-    # 等服务器就绪（窗口 20s：冷启动可能加载 ffmpeg/模型等较慢，
-    # 6s 窗口偶发「服务器启动超时」导致首开没反应，二次双击才成功）
-    for _ in range(100):
+    # 等服务器就绪（窗口 60s：cookie_pool 大量初始化+可选 ffmpeg 探测常使冷启动超过 20s；
+    # 旧 20s 窗口在 cookie_pool 满载时误杀首开，必须 60s+ 才稳。daemon 线程不 join，
+    # 即便超时 main 返回，server 线程仍随 main 进程存活直到用户主动退出/系统清理）
+    for _ in range(300):
         try:
             with socket.create_connection((HOST, PORT), timeout=0.5):
                 break
         except OSError:
             time.sleep(0.2)
     else:
-        _launch_log("服务器启动超时（20s 内未就绪）")
-        print(f"服务器启动超时，请手动访问 {URL}")
-        server_thread.join()
-        return
+        _launch_log("服务器启动超时（60s 内未就绪），但 main 不退出，server 线程继续后台尝试")
+        # 注意：不能 server_thread.join()——会让 main 阻塞直到 thread 退出，
+        # 而 thread 可能因 cookie_pool 等慢 init 永远不结束，整个 app 卡死。
+        # daemon=True 表明 main 退出时 thread 一起死，但用户不主动退就没人杀 main。
+        # 这里只警告，不阻塞 main。
+        print(f"服务器启动较慢（>60s），请稍候或手动访问 {URL}")
 
     _launch_log("后端服务就绪，准备打开界面")
 
