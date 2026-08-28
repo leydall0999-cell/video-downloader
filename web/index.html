@@ -69,7 +69,6 @@
 
     <div class="sidebar-group">
       <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>云盘下载</div>
-      <button type="button" class="sidebar-item" id="sTabBaidu" hidden><span class="sidebar-item-icon">☁️</span><span class="sidebar-item-label">百度网盘</span></button>
       <button type="button" class="sidebar-item" id="sTabPcs"><span class="sidebar-item-icon">📥</span><span class="sidebar-item-label">百度下载</span></button>
     </div>
 
@@ -86,7 +85,6 @@
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
-    <button type="button" class="tab" id="tabBaidu" hidden>☁️ 百度网盘</button>
     <button type="button" class="tab" id="tabPcs">📥 百度下载</button>
   </nav>
 
@@ -1351,66 +1349,6 @@
   </div>
 </dialog>
 
-<!-- 百度网盘浏览/下载：从用户自己的网盘把文件拉回本机（官方 PCS，速度由账号等级决定）-->
-<dialog id="baiduModal" class="modal" aria-labelledby="baiduModalTitle">
-  <div class="modal-card modal-wide">
-    <div class="modal-head">
-      <h2 id="baiduModalTitle">☁️ 百度网盘</h2>
-      <button type="button" class="modal-close" id="baiduModalClose" aria-label="关闭">✕</button>
-    </div>
-    <p class="modal-sub">从你<strong>自己的</strong>百度网盘把文件下载到本机（~/Downloads/VideoDownloader/baidu/）。走官方授权，速度由你账号等级决定；免费账号大文件可能被限速或需开通会员提速。</p>
-
-    <div class="baidu-auth-row">
-      <button type="button" class="btn btn-primary btn-sm" id="baiduDriveAuthBtn">授权百度网盘</button>
-      <span class="baidu-status" id="baiduDriveStatus">未授权</span>
-      <span class="baidu-hint" id="baiduDriveHint"></span>
-    </div>
-
-    <hr class="baidu-sep" />
-
-    <div class="baidu-share">
-      <h3 class="baidu-share-title">📎 分享链接下载</h3>
-      <p class="modal-sub baidu-share-sub">粘贴别人分享的百度网盘链接 + 提取码，<strong>无需登录</strong>即可直接提取并下载（自动使用本机已保存的网盘 Cookie 走直链通道）。登录「极速通道」后速度更快，但不登录也能下。</p>
-      <div class="baidu-share-row">
-        <input type="text" id="baiduShareUrl" class="adv-input" placeholder="https://pan.baidu.com/s/..." />
-        <input type="text" id="baiduSharePwd" class="adv-input adv-input-pwd" placeholder="提取码（可选）" />
-        <button type="button" class="btn btn-primary btn-sm" id="baiduShareListBtn">列出文件</button>
-        <button type="button" class="btn btn-accent btn-sm" id="baiduShareDownloadAllBtn">下载全部</button>
-      </div>
-      <div class="baidu-bduss-row">
-        <button type="button" class="btn btn-primary btn-sm" id="baiduAppLoginBtn">🔑 极速通道（可选，登录后更快）</button>
-        <span class="baidu-login-status" id="baiduLoginStatus"></span>
-      </div>
-      <div class="baidu-bduss-row" style="margin-top:.4rem;flex-direction:column;align-items:stretch">
-        <label class="modal-sub" style="font-size:12px;margin-bottom:.2rem">🔑 百度网盘 BDUSS（Cookie）—— 纯 curl 直链通道，<strong>不弹浏览器</strong></label>
-        <textarea id="baiduBdussInput" class="adv-textarea" rows="2" placeholder="从浏览器登录百度网盘 → F12 → Application → Cookies → 复制 BDUSS 的值（可含 BDUSS= 前缀）" style="font-size:12px"></textarea>
-        <div style="display:flex;gap:.4rem;margin-top:.3rem;align-items:center">
-          <button type="button" class="btn btn-accent btn-sm" id="baiduBdussSaveBtn">保存 BDUSS</button>
-          <span class="baidu-bduss-status" id="baiduBdussStatus"></span>
-        </div>
-      </div>
-      <p class="baidu-share-status" id="baiduShareStatus"></p>
-      <div class="baidu-list baidu-share-list" id="baiduShareList"><p class="baidu-empty">粘贴分享链接后自动列出，点文件名右侧按钮即可下载（无需登录）。</p></div>
-
-    <!-- 扫码登录弹窗已移除：扫码登录的 BDUSS 与下载分享必需的 WebView 登录态是两回事，
-         保留会让用户混淆。现在只需点「🔑 登录百度网盘」一次，登录态持久化在 app 内 WebView。 -->
-    </div>
-
-    <hr class="baidu-sep" />
-
-    <div class="baidu-breadcrumb" id="baiduBreadcrumb"></div>
-
-    <p class="baidu-hint">「我的网盘」仅支持浏览——百度限制第三方应用不能直下网盘任意文件（会报 errno=20020）。下载请用上方「📎 分享链接下载」。</p>
-
-    <div class="baidu-list" id="baiduList"><p class="baidu-empty">请先授权百度网盘。</p></div>
-
-    <div class="baidu-dl">
-      <h3 class="baidu-dl-title">本机下载进度</h3>
-      <div class="baidu-dl-list" id="baiduDlList"><p class="baidu-empty">还没有下载任务。</p></div>
-    </div>
-    <p class="cloud-note">需在配置文件中填入你自己的百度开放平台应用凭据（VDL_BAIDU_APP_KEY / VDL_BAIDU_APP_SECRET / VDL_BAIDU_REDIRECT_URI，redirect_uri 须指向本机回调地址）才会显示本功能。</p>
-  </div>
-</dialog>
 
 <!-- 百度网盘下载（baiduPCS-Go 适配器）：粘贴 cookie 登录一次 → 粘贴分享链接+密码 → 转存 → 下载 -->
 <dialog id="pcsModal" class="modal" aria-labelledby="pcsModalTitle">
