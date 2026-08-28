@@ -68,6 +68,23 @@ def _ensure_model() -> Path:
     return p
 
 
+def _mem_available_mb() -> float:
+    """读取 /proc/meminfo 的 MemAvailable（MB）；非 Linux / 读取失败返回 None。"""
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / 1024.0
+    except Exception:
+        return None
+    return None
+
+
+# 加载 107MB LaMa 模型 + onnxruntime 运行时需约 1GB 空闲内存；低于阈值则拒绝，
+# 避免 Railway 免费实例 OOM 被 SIGKILL 拖垮整个 web 服务（进程重启会清空在途任务）。
+MEM_GUARD_MB = 1100.0
+
+
 def _get_session():
     """懒加载 onnxruntime InferenceSession（进程内缓存，线程安全）。"""
     global _SESSION
@@ -76,6 +93,12 @@ def _get_session():
     with _LOCK:
         if _SESSION is not None:
             return _SESSION
+        mem = _mem_available_mb()
+        if mem is not None and mem < MEM_GUARD_MB:
+            raise RuntimeError(
+                f"AI 去水印当前实例空闲内存不足（约 {mem:.0f}MB < {MEM_GUARD_MB:.0f}MB 需求），"
+                "已禁用以免拖垮服务；请使用桌面端或升级实例内存"
+            )
         import onnxruntime as ort  # 延迟导入，缺失时不阻塞启动
 
         p = _ensure_model()
