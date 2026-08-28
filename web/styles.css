@@ -1574,6 +1574,17 @@ img { max-width: 100%; display: block; }
 .com-trim-actions {
   display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem;
 }
+.com-trim-hint {
+  margin: .55rem 0 0;
+  padding: .5rem .6rem;
+  font-size: .76rem;
+  line-height: 1.5;
+  color: var(--text-mute);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface, #fff));
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, transparent);
+  border-radius: 8px;
+}
+.com-trim-hint strong { color: var(--text); font-weight: 600; }
 @media (max-width: 560px) {
   .com-trim-timeline { grid-template-columns: 1fr; }
 }

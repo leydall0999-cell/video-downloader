@@ -3930,6 +3930,24 @@
     return null;
   };
 
+  // 顶部「起点/终点」外层裁剪 与 底部「正剧开始/片尾开始时间」绝对边界都界定正片范围，
+  // 同时填会叠加生效、可能重复裁剪。提交前提示用户确认；返回 true=允许继续，false=中止。
+  const comConfirmTrimOverlap = () => {
+    const topActive = comPreviewDuration > 0 && (comTrimStart > 0.5 || comTrimEnd < comPreviewDuration - 0.5);
+    if (!topActive) return true;
+    const dramaStart = el.comDramaStart && el.comDramaStart.value.trim();
+    const dramaEnd = el.comDramaEnd && el.comDramaEnd.value.trim();
+    if (!dramaStart && !dramaEnd) return true;
+    return window.confirm(
+      '检测到你同时设置了「起点/终点」（外层源文件裁剪）和「正剧开始/片尾开始时间」（绝对边界）。\n' +
+      '两者都会界定正片范围，会叠加生效、可能造成重复裁剪。\n\n' +
+      '建议只保留一处：\n' +
+      '· 只想处理某一段 → 用顶部「起点/终点」\n' +
+      '· 想让 AI 自动找边界、你只指定正剧起点 → 用底部「正剧开始/片尾开始时间」\n\n' +
+      '仍要同时提交吗？'
+    );
+  };
+
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
   // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关 / 保留时长 / 一键生成）
   const comGetOptions = (forceOneClick = false) => {
@@ -4105,6 +4123,7 @@
    *  用户确认后再点击「生成成片」。避免直接渲染导致无法修改。
    *  从媒体库调用时自动切到解说标签页。 */
   const createCommentary = async (source, refs, base = '', oneClick = false) => {
+    if (!comConfirmTrimOverlap()) return;
     switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
@@ -4140,6 +4159,7 @@
   };
 
   const createCommentaryFromFile = async (file, refs, oneClick = false) => {
+    if (!comConfirmTrimOverlap()) return;
     switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
