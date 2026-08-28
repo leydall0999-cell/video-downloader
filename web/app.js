@@ -393,6 +393,9 @@
     dwZoomFit: $('dwZoomFit'),
     dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
+    dwImgEngine: $('dwImgEngine'),
+    dwImgCvField: $('dwImgCvField'),
+    dwImgRadiusField: $('dwImgRadiusField'),
     // 去水印放大弹窗
     dwImgModal: $('dwImgModal'),
     dwModalClose: $('dwModalClose'),
@@ -3082,6 +3085,7 @@
     }))));
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
+    form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'opencv');
     try {
       const data = await request('/api/dw/image', { method: 'POST', body: form });
       const jobId = data.job_id;
@@ -3110,6 +3114,16 @@
       el.dwImgStatus.textContent = (error && error.message) ? ('请求失败：' + error.message) : '请求失败';
     }
   };
+  const dwSyncEngineUi = () => {
+    if (!el.dwImgEngine) return;
+    const ai = el.dwImgEngine.value === 'ai';
+    if (el.dwImgCvField) el.dwImgCvField.hidden = ai;
+    if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai;
+  };
+  if (el.dwImgEngine) {
+    el.dwImgEngine.addEventListener('change', dwSyncEngineUi);
+    dwSyncEngineUi();
+  }
   el.dwImgBtn.addEventListener('click', startDwImage);
 
   const startDwPdf = async () => {

@@ -26,6 +26,10 @@ libtorrent==2.0.11; sys_platform == "linux"
 opencv-python-headless>=4.8.0
 pymupdf>=1.23.0
 
+# 图片 AI 无痕去水印（LaMa ONNX，~107MB 权重首次惰性下载到 ~/.vdl_models）：onnxruntime 免 torch，CPU 即可跑。
+# 缺失时图片去水印自动回退 OpenCV（import 守护，不影响其余功能）。
+onnxruntime>=1.17.0
+
 # Rumble 反爬绕过：curl_cffi 提供 Chrome TLS 指纹模拟（impersonate），
 # 用于 embedJS/u3 接口解析（urllib/requests 默认指纹被 Cloudflare 403）。
 curl_cffi>=0.7.0

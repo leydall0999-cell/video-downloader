@@ -330,6 +330,15 @@ def _detect_gpu() -> bool:
 
 AI_GPU_AVAILABLE = _detect_gpu() if AI_DEWATERMARK_ENABLED else False
 
+# 图片 AI 去水印（LaMa ONNX）是否可用：需 cv2 + numpy + onnxruntime。
+# 与视频 AI 去水印（E2FGVI worker）相互独立；图片走本地 onnxruntime 推理，免 torch。
+# 桌面端不强制启动 prewarm（保持 App 启动轻盈），首次选 AI 时由 dewatermark_ai._ensure_model 惰性下载。
+try:
+    import dewatermark_ai as _dwc_ai_mod
+    dwc_ai_available = _dwc_ai_mod.available()
+except Exception:  # noqa: BLE001
+    dwc_ai_available = False
+
 # ---- 公开部署护栏：防止实例被当免费下载器薅爆带宽 ---- #
 # 设为 0 表示不限制（自托管、内部使用时可关掉）
 RATE_LIMIT_PER_HOUR = int(os.environ.get("VDL_RATE_LIMIT_PER_HOUR", "30") or 30)

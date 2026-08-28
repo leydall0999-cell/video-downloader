@@ -6,6 +6,7 @@
 import app
 import json
 import dewatermark_core as dwc
+import dewatermark_ai as dwc_ai
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -40,7 +41,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_image(job_id: str, src: str, regions, method: str, radius: int) -> None:
+def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv") -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -50,7 +51,12 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int) -> None
         if ext not in DW_IMAGE_EXTS:
             ext = ".png"
         out_path = app.DW_DIR / f"dw_img_{job_id}{ext}"
-        dwc.image_inpaint(src_path, out_path, regions, method, radius)
+        if engine == "ai":
+            if not dwc_ai.available():
+                raise RuntimeError("AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
+            dwc_ai.ai_image_inpaint(src_path, out_path, regions)
+        else:
+            dwc.image_inpaint(src_path, out_path, regions, method, radius)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("去水印未产出有效文件")
         job["status"] = "completed"
@@ -97,6 +103,7 @@ def create_dw_image(
     h: float = app.Form(0.0),
     method: str = app.Form("telea"),
     radius: int = app.Form(3),
+    engine: str = app.Form("opencv"),
     request: app.Request = None,
 ) -> dict:
     """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
@@ -105,6 +112,10 @@ def create_dw_image(
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
+    if engine not in ("opencv", "ai"):
+        raise app.HTTPException(status_code=400, detail="engine 仅支持 opencv / ai")
+    if engine == "ai" and not dwc_ai.available():
+        raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
@@ -123,7 +134,7 @@ def create_dw_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "image",
         }
-    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius)
+    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine)
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
