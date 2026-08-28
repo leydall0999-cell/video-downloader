@@ -2886,6 +2886,12 @@
     const f = el.dwImgFile.files[0];
     if (!f) return;
     const url = URL.createObjectURL(f);
+    // 阻止 <img> 浏览器原生图像拖拽——mousedown 后浏览器会启动 native image drag（看上去像「移动图片」），
+    // 必须 draggable=false + 拦截 dragstart，否则 e.preventDefault() 在 mousedown 里无效。
+    el.dwImgPreview.draggable = false;
+    el.dwModalImg.draggable = false;
+    el.dwImgPreview.addEventListener('dragstart', (e) => e.preventDefault(), { once: false });
+    el.dwModalImg.addEventListener('dragstart', (e) => e.preventDefault(), { once: false });
     el.dwImgPreview.src = url;
     el.dwModalImg.src = url;
     const onload = () => {
@@ -2929,17 +2935,12 @@
     // 若误把 mousedown 绑到 canvas，会因 pointer-events:none 而完全收不到点击。
     img.addEventListener('mousedown', (e) => {
       if (!img.src) return;
-      // 弹窗放大后：✋移动模式 或 起点落在已有加选区内 → 平移图片（不画框）
+      // 弹窗里平移图片仅在显式「移动」模式 + 已放大时生效。
+      // （旧逻辑：z>1 且起点落在已有加选区内也 pan——这会让「加选」模式下在已有选区上拖动时
+      //   误把图片平移走，而非按用户本意加画新框。现已收紧到只能显式移动模式。）
       let startPan = false;
-      if (target === 'modal') {
-        const z = dwModalZoom;
-        if (dwDrawMode === 'pan') startPan = true;
-        else if (z > 1.0001) {
-          const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
-          if (dwSelections.some((s) => !s.op || s.op === 'add' && nx >= s.x && nx <= s.x + s.w && ny >= s.y && ny <= s.y + s.h)) {
-            startPan = true;
-          }
-        }
+      if (target === 'modal' && dwDrawMode === 'pan' && dwModalZoom > 1.0001) {
+        startPan = true;
       }
       if (startPan) {
         dwPanning = true;
