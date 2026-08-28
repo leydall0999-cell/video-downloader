@@ -53,12 +53,13 @@ OVERLAP = 64
 # 模型真实大小约 107MB；低于此值视为下载不完整/损坏（此前曾因此触发 onnxruntime 原生崩溃）。
 EXPECTED_MODEL_MIN_BYTES = 100_000_000
 
-# 加载 107MB LaMa 模型 + onnxruntime 运行时需约 1GB 空闲内存；低于阈值则拒绝，
-# 避免 Railway 免费实例 OOM 被 SIGKILL 拖垮整个 web 服务（进程重启会清空在途任务）。
-MEM_GUARD_MB = 1100.0
+# 加载 107MB LaMa 模型 + onnxruntime 运行时峰值约 1.5~2GB（权重 + 图优化 + 激活）；
+# 空闲内存低于阈值则直接拒绝，避免派发必崩的子进程白白耗时。实测 Railway 免费/小实例
+# MemAvailable 即便 ~1.2GB 也会在推理期 OOM，故阈值取保守值。
+MEM_GUARD_MB = 1800.0
 # 若 /proc/meminfo 无 MemAvailable 行（受限容器常见），用 MemTotal 兜底判断：
-# 物理内存本就 <= 1.5GB 的实例直接拒绝（107MB 模型 + 运行时开销必然吃紧）。
-MEM_TOTAL_SAFE_MB = 1500.0
+# 物理内存本就 <= 2.5GB 的实例直接拒绝（107MB 模型 + 运行时开销峰值易吃紧）。
+MEM_TOTAL_SAFE_MB = 2560.0
 
 # 子进程推理超时（秒）：覆盖首跑下载 107MB + 加载 + 推理；超时即判失败，不拖死请求。
 SUBPROC_TIMEOUT = 150
@@ -318,8 +319,15 @@ def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int
             timeout=SUBPROC_TIMEOUT,
         )
         if proc.returncode != 0:
+            # 子进程被信号杀死（如 OOM SIGKILL，returncode 为负）时 stderr 往往只有无关警告，
+            # 需给出准确的内存不足提示，而非把警告当错误抛出。
+            if proc.returncode < 0:
+                raise RuntimeError(
+                    "AI 去水印因实例内存不足被系统中止（实例内存有限），已跳过以免拖垮服务；"
+                    "请使用桌面端或升级实例内存"
+                )
             err = (proc.stderr.decode("utf-8", "replace") or proc.stdout.decode("utf-8", "replace")).strip()
-            raise RuntimeError(f"AI 去水印子进程失败：{err[:300] or '未知错误'}")
+            raise RuntimeError(f"AI 去水印失败：{err[:300] or '未知错误'}")
     except subprocess.TimeoutExpired:
         raise RuntimeError("AI 去水印超时（实例负载过高或模型下载慢），请稍后重试或使用桌面端")
     finally:
