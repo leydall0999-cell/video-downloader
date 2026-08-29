@@ -436,6 +436,7 @@
     dwVideoPane: $('dwVideoPane'),
     dwVidFile: $('dwVidFile'),
     dwVidEl: $('dwVidEl'),
+    dwVidCanvas: $('dwVidCanvas'),
     dwVidSvg: $('dwVidSvg'),
     dwVidSelInfo: $('dwVidSelInfo'),
     dwVidClear: $('dwVidClear'),
@@ -3209,6 +3210,7 @@
     if (!v || !v.videoWidth) return;
     const w = v.clientWidth, h = v.clientHeight;
     const svg = el.dwVidSvg;
+    const cvs = el.dwVidCanvas;
     svg.setAttribute('width', w);
     svg.setAttribute('height', h);
     svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
@@ -3216,6 +3218,17 @@
     svg.style.height = h + 'px';
     svg.style.left = v.offsetLeft + 'px';
     svg.style.top = v.offsetTop + 'px';
+    // canvas 跟 video 同位置同尺寸（内部尺寸 = 视频原始尺寸，仅在变化时重置避免清屏）
+    if (cvs) {
+      if (cvs.width !== v.videoWidth || cvs.height !== v.videoHeight) {
+        cvs.width = v.videoWidth;
+        cvs.height = v.videoHeight;
+      }
+      cvs.style.width = w + 'px';
+      cvs.style.height = h + 'px';
+      cvs.style.left = v.offsetLeft + 'px';
+      cvs.style.top = v.offsetTop + 'px';
+    }
   };
 
   const dwVidDraw = () => {
@@ -3244,18 +3257,44 @@
     const url = URL.createObjectURL(f);
     el.dwVidEl.draggable = false;
     el.dwVidEl.addEventListener('dragstart', (e) => e.preventDefault());
-    el.dwVidEl.muted = true;       // 关键：muted 满足 WKWebView 自动播放策略，触发首帧解码
+    el.dwVidEl.muted = true;       // muted 满足 WKWebView 自动播放策略
     el.dwVidEl.src = url;
     el.dwVidOrig.src = url;
     el.dwVidOrig.muted = true;
-    el.dwVidEl.onloadedmetadata = () => {
-      // play().then(pause()) 强制解码器渲染一帧；再把 currentTime 拨回 0 防止偏移
-      const p = el.dwVidEl.play();
-      if (p && p.then) {
-        p.then(() => { el.dwVidEl.pause(); el.dwVidEl.currentTime = 0; }).catch(() => {});
-      }
-      dwVidResize();
-      dwVidDraw();
+    // 选新文件时先把旧帧画清（避免新文件加载时仍显示上一帧）
+    const cvs = el.dwVidCanvas;
+    if (cvs) { cvs.width = 0; cvs.height = 0; }
+    el.dwVidEl.onloadeddata = () => {  // onloadeddata 触发时机比 onloadedmetadata 晚，确保首帧可解码
+      const v = el.dwVidEl;
+      const p = v.play();
+      const finalize = (ok, err) => {
+        if (!ok) {
+          // play() 失败（codec 不支持 / 格式问题），给用户可见提示
+          el.dwVidStatus.textContent = '视频解码失败（可能是不支持的编码），可换 mp4 试试';
+          console.warn('video play() failed:', err);
+          return;
+        }
+        // 等两个 rAF：确保第一帧真的提交到合成器，再画到 canvas
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            try {
+              if (cvs && v.videoWidth > 0) {
+                cvs.width = v.videoWidth;
+                cvs.height = v.videoHeight;
+                cvs.getContext('2d').drawImage(v, 0, 0);
+              }
+            } catch (e) {
+              console.warn('drawImage failed:', e);
+            }
+            v.pause();
+            v.currentTime = 0;
+            dwVidResize();
+            dwVidDraw();
+          });
+        });
+      };
+      if (p && p.then) { p.then(() => finalize(true)).catch((e) => finalize(false, e)); }
+      else { finalize(true); }  // 老 WebKit 直接同步
     };
     dwVidSel = null;
     dwVidDraw();
