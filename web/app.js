@@ -441,6 +441,9 @@
     dwVidClear: $('dwVidClear'),
     dwVidStart: $('dwVidStart'),
     dwVidEnd: $('dwVidEnd'),
+    dwVidStartLabel: $('dwVidStartLabel'),
+    dwVidEndLabel: $('dwVidEndLabel'),
+    dwVidRangeHighlight: $('dwVidRangeHighlight'),
     dwVidSegTip: $('dwVidSegTip'),
     dwVidRes: $('dwVidRes'),
     dwVidSmooth: $('dwVidSmooth'),
@@ -3317,34 +3320,47 @@
   el.dwVidClear.addEventListener('click', () => { dwVidSel = null; dwVidDraw(); });
   window.addEventListener('resize', () => { if (!el.dwVideoPane.hidden) { dwVidResize(); dwVidDraw(); } });
 
-  // -------------------------------------------------- 时间分段（Segment）：实时估算推理帧数
+  // -------------------------------------------------- 时间分段（Segment）：双滑块（拖拽绿色手柄选区间）
+  // 三个元素 id 复用：dwVidStart / dwVidEnd（现在是 range）+ dwVidStartLabel / dwVidEndLabel（左右数值）
   let dwVidDuration = 0;  // 视频总时长（秒），从 dwVidOrig 的 metadata 取
+
+  const dwVidUpdateRange = (active) => {
+    if (!dwVidDuration || dwVidDuration <= 0) return;
+    let s = parseFloat(el.dwVidStart.value);
+    let e = parseFloat(el.dwVidEnd.value);
+    // 互不交叉：被拖的那个保持，挤另一个；最小 0.5s 间隔
+    const minGap = 0.5;
+    if (active === el.dwVidStart && s > e - minGap) { s = Math.max(0, e - minGap); el.dwVidStart.value = s; }
+    if (active === el.dwVidEnd && e < s + minGap) { e = Math.min(dwVidDuration, s + minGap); el.dwVidEnd.value = e; }
+    // 高亮条
+    const sPct = (s / dwVidDuration) * 100;
+    const ePct = (e / dwVidDuration) * 100;
+    el.dwVidRangeHighlight.style.left = sPct + '%';
+    el.dwVidRangeHighlight.style.width = Math.max(0, ePct - sPct) + '%';
+    // 数值标签
+    el.dwVidStartLabel.textContent = s.toFixed(1) + 's';
+    el.dwVidEndLabel.textContent = e.toFixed(1) + 's';
+    // 状态提示
+    const isFull = (s <= 0 && e >= dwVidDuration);
+    if (isFull) {
+      el.dwVidSegTip.textContent = `整段处理（共 ${dwVidDuration.toFixed(1)} 秒）`;
+    } else {
+      const pct = Math.round(((e - s) / dwVidDuration) * 100);
+      el.dwVidSegTip.textContent = `仅 ${s.toFixed(1)}s–${e.toFixed(1)}s 推理（约占全片 ${pct}%），其余帧直接复制`;
+    }
+  };
+
   el.dwVidOrig.addEventListener('loadedmetadata', () => {
     dwVidDuration = el.dwVidOrig.duration || 0;
-    dwVidUpdateSegTip();
+    el.dwVidStart.max = String(dwVidDuration);
+    el.dwVidEnd.max = String(dwVidDuration);
+    // 默认：start=0, end=duration（整段处理）；如有旧值则保留（<input type="range">的 value 在 innerHTML 重写时会重置为 max/2，所以这里手动设）
+    el.dwVidStart.value = '0';
+    el.dwVidEnd.value = String(dwVidDuration);
+    dwVidUpdateRange(null);
   });
-
-  const dwVidUpdateSegTip = () => {
-    if (!el.dwVidSegTip) return;
-    const s = parseFloat(el.dwVidStart.value) || 0;
-    const e = parseFloat(el.dwVidEnd.value) || 0;
-    if (!dwVidDuration || (s <= 0 && e <= 0)) {
-      el.dwVidSegTip.textContent = dwVidDuration
-        ? `默认整段处理（共 ${dwVidDuration.toFixed(1)} 秒）`
-        : '默认整段处理';
-      return;
-    }
-    const from = Math.max(0, s);
-    const to = (e > 0) ? Math.min(e, dwVidDuration) : dwVidDuration;
-    if (to <= from) {
-      el.dwVidSegTip.textContent = '区间为空，请检查起止时间';
-      return;
-    }
-    const pct = Math.round(((to - from) / dwVidDuration) * 100);
-    el.dwVidSegTip.textContent = `仅 ${from.toFixed(1)}s–${to.toFixed(1)}s 推理（约占全片 ${pct}%），其余帧直接复制`;
-  };
-  el.dwVidStart.addEventListener('input', dwVidUpdateSegTip);
-  el.dwVidEnd.addEventListener('input', dwVidUpdateSegTip);
+  el.dwVidStart.addEventListener('input', () => dwVidUpdateRange(el.dwVidStart));
+  el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
 
   const startDwVideo = async () => {
     const file = el.dwVidFile.files[0];

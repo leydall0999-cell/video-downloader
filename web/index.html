@@ -640,20 +640,25 @@
             </div>
             <span class="dw-selinfo" id="dwVidSelInfo">尚未框选</span>
           </div>
-          <p class="dw-hint">在视频预览上<b>拖拽框选</b>水印区域，并在右侧设置<b>水印出现的起止时间</b>。只有该时间段的帧会跑 LaMa 推理，其余帧直接复制——大幅提速。整段都有水印时把「结束」留空即可。</p>
+          <p class="dw-hint">在视频预览上<b>拖拽框选</b>水印区域，再拖动下方时间轴的<b>绿色手柄</b>选水印出现的起止时间——只有该区间的帧会跑 LaMa 推理，其余帧直接复制。</p>
         </div>
         <aside class="dw-side">
           <div class="dw-card">
             <h3 class="dw-card-title">处理参数</h3>
             <div class="uc-form">
               <div class="uc-field">
-                <span class="uc-label">水印出现时间（秒）</span>
-                <div class="dw-segrange">
-                  <input type="number" id="dwVidStart" value="0" min="0" step="0.5" placeholder="开始" title="水印开始出现的秒数" />
-                  <span class="dw-rangedash">→</span>
-                  <input type="number" id="dwVidEnd" value="" min="0" step="0.5" placeholder="结束（留空=到片尾）" title="水印消失的秒数，留空表示到片尾" />
+                <span class="uc-label">水印出现时间（拖动绿色手柄选区间）</span>
+                <div class="dw-vid-range-wrap" id="dwVidRangeWrap">
+                  <div class="dw-vid-range-track"></div>
+                  <div class="dw-vid-range-highlight" id="dwVidRangeHighlight"></div>
+                  <input type="range" id="dwVidStart" class="dw-vid-range dw-vid-range-start" min="0" max="100" value="0" step="0.1" />
+                  <input type="range" id="dwVidEnd" class="dw-vid-range dw-vid-range-end" min="0" max="100" value="100" step="0.1" />
                 </div>
-                <span class="dw-hint dw-hint-sm" id="dwVidSegTip">默认整段处理</span>
+                <div class="dw-vid-range-labels">
+                  <span id="dwVidStartLabel" class="dw-vid-range-time">0.0s</span>
+                  <span id="dwVidSegTip" class="dw-hint-sm">请先选择视频</span>
+                  <span id="dwVidEndLabel" class="dw-vid-range-time">— s</span>
+                </div>
               </div>
               <label class="uc-field">
                 <span class="uc-label">处理分辨率</span>

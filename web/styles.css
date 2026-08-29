@@ -606,10 +606,52 @@ img { max-width: 100%; display: block; }
 .dw-preview-wrap video { max-width: 100%; max-height: 460px; display: block; cursor: crosshair; background: #000; }
 /* 视频首帧：服务端 ffmpeg 抽帧返回的 PNG，用 <img> 渲染稳定可靠（绕开 WKWebView video 元素的所有坑） */
 .dw-preview-wrap .dw-vid-thumb { max-width: 100%; max-height: 460px; display: block; cursor: crosshair; background: #000; }
-/* 视频时间分段（Segment）：起止秒数横排 */
-.dw-segrange { display: flex; align-items: center; gap: .4rem; }
-.dw-segrange input { flex: 1; min-width: 0; }
-.dw-rangedash { color: var(--text-tertiary, #888780); font-size: 13px; flex-shrink: 0; }
+/* 视频时间分段（Segment）：双滑块（两个 range 叠加，绿色选区高亮） */
+.dw-vid-range-wrap {
+  position: relative; height: 32px; padding: 14px 8px;
+  background: rgba(0,0,0,.04); border-radius: 6px;
+  user-select: none; touch-action: none;
+}
+.dw-vid-range-track {
+  position: absolute; left: 8px; right: 8px; top: 50%; transform: translateY(-50%);
+  height: 4px; background: rgba(0,0,0,.18); border-radius: 2px;
+}
+.dw-vid-range-highlight {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  height: 4px; background: #4cd964; border-radius: 2px;
+  pointer-events: none; min-width: 2px;
+  left: 0; width: 100%;
+}
+.dw-vid-range {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  -webkit-appearance: none; appearance: none;
+  background: transparent; pointer-events: none;
+  margin: 0; padding: 0;
+}
+.dw-vid-range::-webkit-slider-runnable-track { background: transparent; height: 32px; }
+.dw-vid-range::-moz-range-track { background: transparent; height: 32px; }
+.dw-vid-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  pointer-events: auto; cursor: grab;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #4cd964; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3);
+  margin-top: 0;  /* 居中：32px 容器 - 18px 圆形 = 7px，自动 */
+}
+.dw-vid-range::-moz-range-thumb {
+  pointer-events: auto; cursor: grab;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #4cd964; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3);
+}
+.dw-vid-range::-webkit-slider-thumb:active { cursor: grabbing; transform: scale(1.15); }
+.dw-vid-range-start::-webkit-slider-thumb { z-index: 3; }
+.dw-vid-range-end::-webkit-slider-thumb { z-index: 4; }
+.dw-vid-range-labels {
+  display: flex; justify-content: space-between; align-items: center; margin-top: 6px;
+  font-size: 12px; color: var(--text-tertiary, #888780);
+}
+.dw-vid-range-time { color: #2C2C2A; font-variant-numeric: tabular-nums; }
 .dw-hint-sm { display: block; margin-top: .25rem; font-size: 12px; color: var(--text-tertiary, #888780); line-height: 1.5; }
 .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: none; }
 /* SVG 选区蒙层：必须和 canvas 一样绝对定位叠在图片上，否则会作为静态元素
