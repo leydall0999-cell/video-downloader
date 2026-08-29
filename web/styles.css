@@ -768,13 +768,20 @@ img { max-width: 100%; display: block; }
   position: absolute; inset: 0;
   z-index: 2;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: .4rem; text-align: center; padding: 1rem;
+  gap: .9rem; text-align: center; padding: 1rem;
   color: var(--text-mute, #8a8a8a);
   background: var(--panel-2, #f3f3f5);
   pointer-events: none;  /* 不拦截拖拽/点击文件选择 */
 }
 #dwVidPreviewWrap > .dw-vid-empty { font-size: 1.05rem; font-weight: 600; }
-#dwVidPreviewWrap > .dw-vid-empty small { font-size: .8rem; font-weight: 400; color: var(--text-tertiary, #aaa); }
+#dwVidPreviewWrap > .dw-vid-empty small {
+  display: block;            /* 小字独占一行，不再与主标题混排 */
+  margin-top: 0;             /* 用父容器的 gap 控间距，避免双倍间距 */
+  font-size: .85rem; font-weight: 400; line-height: 1.45;
+  color: var(--text-tertiary, #999);
+}
+/* 占位存在时隐藏 cap-overlay：避免两个提示同屏打架 */
+#dwVidPreviewWrap:has(> .dw-vid-empty:not([hidden])) > .dw-cap-overlay { display: none; }
 /* 转码好后让位给 video：img 隐藏（保留 src/resize 句柄在） */
 #dwVidPreviewWrap.is-playable > .dw-vid-thumb { visibility: hidden; }
 /* 「播放预览 + 设起止 + filmstrip + 提示」整体上下紧贴，节流间距 */

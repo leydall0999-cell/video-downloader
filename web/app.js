@@ -469,6 +469,7 @@
     dwVidPlayer: $('dwVidPlayer'),
     dwVidTranscoding: $('dwVidTranscoding'),
     dwVidEmpty: $('dwVidEmpty'),
+    dwVidCapOverlay: $('dwVidCapOverlay'),
     dwVidPlayerHead: $('dwVidPlayerHead'),
     dwVidFilmstripWrap: $('dwVidFilmstripWrap'),
     dwVidFsHint: $('dwVidFsHint'),
@@ -3443,6 +3444,8 @@
     if (!f) return;
     // 选中视频即隐藏「请上传视频」占位层，画布进入工作态
     if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
+    // 占位消失后 → 显示工作态 cap「原视频预览 · 在画面上拖框选水印」
+    if (el.dwVidCapOverlay) el.dwVidCapOverlay.hidden = false;
     const url = URL.createObjectURL(f);
     // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
