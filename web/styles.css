@@ -679,6 +679,8 @@ img { max-width: 100%; display: block; }
 .dw-vid-player-box { margin: .6rem 0; }
 .dw-vid-player-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; flex-wrap: wrap; }
 .dw-vid-player-box video { width: 100%; max-height: 320px; display: block; background: #000; border-radius: var(--radius-md); }
+/* [hidden] 兜底：避免被 .dw-vid-player-box video { display: block } 等显式 display 规则覆盖 */
+[hidden] { display: none !important; }
 /* 转码中提示条（转码完成后隐藏，显示 <video>） */
 .dw-vid-transcoding {
   padding: 1.2rem; text-align: center; font-size: 13px;
