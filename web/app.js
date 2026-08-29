@@ -444,6 +444,10 @@
     dwVidStartLabel: $('dwVidStartLabel'),
     dwVidEndLabel: $('dwVidEndLabel'),
     dwVidRangeHighlight: $('dwVidRangeHighlight'),
+    dwVidRangeWrap: $('dwVidRangeWrap'),
+    dwVidAddSeg: $('dwVidAddSeg'),
+    dwVidSegList: $('dwVidSegList'),
+    dwVidSegSummary: $('dwVidSegSummary'),
     dwVidSegTip: $('dwVidSegTip'),
     dwVidRes: $('dwVidRes'),
     dwVidSmooth: $('dwVidSmooth'),
@@ -3358,6 +3362,8 @@
 
   el.dwVidOrig.addEventListener('loadedmetadata', () => {
     dwVidDuration = el.dwVidOrig.duration || 0;
+    // 换视频 → 旧段的时间基准失效，清空避免与新的总时长不匹配
+    if (dwVidSegments.length) { dwVidSegments = []; dwVidRenderSegments(); }
     el.dwVidStart.max = String(dwVidDuration);
     el.dwVidEnd.max = String(dwVidDuration);
     // 默认：start=0, end=duration（整段处理）；如有旧值则保留（<input type="range">的 value 在 innerHTML 重写时会重置为 max/2，所以这里手动设）
@@ -3367,6 +3373,82 @@
   });
   el.dwVidStart.addEventListener('input', () => dwVidUpdateRange(el.dwVidStart));
   el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
+
+  // -------------------------------------------------- 多时间段（segments）管理
+  // 每段 = { start, end, regions, label }，regions 为该段时框选的归一化区域
+  let dwVidSegments = [];
+
+  const dwVidRenderSegments = () => {
+    const list = el.dwVidSegList;
+    if (!list) return;
+    list.innerHTML = '';
+    dwVidSegments.forEach((seg, i) => {
+      const li = document.createElement('li');
+      li.className = 'dw-vid-segitem';
+      const no = document.createElement('span');
+      no.className = 'seg-no';
+      no.textContent = `①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳`[i] || `${i + 1}.`;
+      const tm = document.createElement('span');
+      tm.className = 'seg-time';
+      tm.textContent = `${seg.start.toFixed(1)}s–${seg.end.toFixed(1)}s`;
+      const pos = document.createElement('span');
+      pos.className = 'seg-pos';
+      pos.textContent = seg.label || '';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'seg-del';
+      del.title = '删除该时间段';
+      del.textContent = '✕';
+      del.addEventListener('click', () => {
+        dwVidSegments.splice(i, 1);
+        dwVidRenderSegments();
+      });
+      li.append(no, tm, pos, del);
+      list.appendChild(li);
+    });
+    // 汇总
+    if (el.dwVidSegSummary) {
+      if (!dwVidSegments.length) {
+        el.dwVidSegSummary.textContent = '未标记任何时间段 → 默认整段处理';
+      } else {
+        const cover = dwVidSegments.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);
+        const pct = dwVidDuration ? Math.round((cover / dwVidDuration) * 100) : 0;
+        el.dwVidSegSummary.textContent = `已标记 ${dwVidSegments.length} 段，合计约 ${cover.toFixed(1)}s（占全片 ${pct}%）——其余帧直接复制`;
+      }
+    }
+    // 时间轴上的已标记段色块
+    const wrap = el.dwVidRangeWrap;
+    if (wrap && dwVidDuration > 0) {
+      wrap.querySelectorAll('.dw-vid-range-mark').forEach((n) => n.remove());
+      dwVidSegments.forEach((seg) => {
+        const mk = document.createElement('div');
+        mk.className = 'dw-vid-range-mark';
+        mk.style.left = (seg.start / dwVidDuration * 100) + '%';
+        mk.style.width = Math.max(0, (seg.end - seg.start) / dwVidDuration * 100) + '%';
+        wrap.appendChild(mk);
+      });
+    }
+  };
+
+  el.dwVidAddSeg.addEventListener('click', () => {
+    if (!dwVidDuration) { el.dwVidStatus.textContent = '请先选择视频文件'; return; }
+    if (!dwVidSel || dwVidSel.w <= 0 || dwVidSel.h <= 0) {
+      el.dwVidStatus.textContent = '请先在首帧预览上拖拽框选水印区域'; return;
+    }
+    const s = parseFloat(el.dwVidStart.value);
+    const e = parseFloat(el.dwVidEnd.value);
+    dwVidSegments.push({
+      start: s,
+      end: e,
+      regions: [{
+        x: +dwVidSel.x.toFixed(4), y: +dwVidSel.y.toFixed(4),
+        w: +dwVidSel.w.toFixed(4), h: +dwVidSel.h.toFixed(4), op: 'add',
+      }],
+      label: `区域(${Math.round(dwVidSel.x * 100)},${Math.round(dwVidSel.y * 100)},${Math.round(dwVidSel.w * 100)},${Math.round(dwVidSel.h * 100)})`,
+    });
+    dwVidRenderSegments();
+    el.dwVidStatus.textContent = `已添加第 ${dwVidSegments.length} 段（${s.toFixed(1)}s–${e.toFixed(1)}s）。可改框选 + 调时间轴再加下一段。`;
+  });
 
   // 播放预览 + 「设为开始/结束」：把播放器当前时刻同步到时间轴滑块
   // （对应 lama-cleaner-video-gui 的 Set Start/End = Current Frame 工作流）
@@ -3401,24 +3483,32 @@
     el.dwVidBtn.disabled = true;
     el.dwVidStatus.textContent = '视频去水印处理中（逐帧推理，请稍候）…';
     el.dwVidResult.hidden = true;
-    const form = new FormData();
-    form.append('file', file);
-    form.append('regions', JSON.stringify([{
-      x: +dwVidSel.x.toFixed(4), y: +dwVidSel.y.toFixed(4),
-      w: +dwVidSel.w.toFixed(4), h: +dwVidSel.h.toFixed(4), op: 'add',
-    }]));
-    form.append('resolution', el.dwVidRes.value);
-    form.append('smooth', el.dwVidSmooth.value);
-    // 时间分段（Segment）：只对该区间内的帧跑推理，区间外直接复制
     const startSec = parseFloat(el.dwVidStart.value) || 0;
     const endSec = parseFloat(el.dwVidEnd.value) || 0;
-    if (endSec > 0 && startSec > 0 && endSec < startSec) {
-      el.dwVidStatus.textContent = '结束时间需大于或等于开始时间';
-      el.dwVidBtn.disabled = false;
-      return;
+    const form = new FormData();
+    form.append('file', file);
+    form.append('resolution', el.dwVidRes.value);
+    form.append('smooth', el.dwVidSmooth.value);
+
+    if (dwVidSegments.length) {
+      // 多段模式：每段带自己的时间段 + 框选区域，后端按帧合并
+      form.append('segments', JSON.stringify(dwVidSegments.map((s) => ({
+        start: s.start, end: s.end, regions: s.regions,
+      }))));
+    } else {
+      // 单段回退：当前框选区域 + 时间轴区间（区间外直接复制）
+      if (endSec > 0 && startSec > 0 && endSec < startSec) {
+        el.dwVidStatus.textContent = '结束时间需大于或等于开始时间';
+        el.dwVidBtn.disabled = false;
+        return;
+      }
+      form.append('regions', JSON.stringify([{
+        x: +dwVidSel.x.toFixed(4), y: +dwVidSel.y.toFixed(4),
+        w: +dwVidSel.w.toFixed(4), h: +dwVidSel.h.toFixed(4), op: 'add',
+      }]));
+      form.append('start_sec', String(startSec));
+      form.append('end_sec', String(endSec));
     }
-    form.append('start_sec', String(startSec));
-    form.append('end_sec', String(endSec));
     try {
       const data = await request('/api/dw/video', { method: 'POST', body: form });
       const jobId = data.job_id;

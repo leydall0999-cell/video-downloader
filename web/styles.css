@@ -654,6 +654,28 @@ img { max-width: 100%; display: block; }
 .dw-vid-range-time { color: #2C2C2A; font-variant-numeric: tabular-nums; }
 .dw-hint-sm { display: block; margin-top: .25rem; font-size: 12px; color: var(--text-tertiary, #888780); line-height: 1.5; }
 /* 视频去水印：播放预览（用于定位水印出现的时间段） */
+/* 视频去水印：多时间段（segments）管理 */
+.dw-vid-seg-actions { display: flex; gap: .4rem; margin-top: .4rem; flex-wrap: wrap; }
+.dw-vid-seglist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+.dw-vid-seglist:empty { display: none; }
+.dw-vid-segitem {
+  display: flex; align-items: center; gap: .5rem; padding: .35rem .5rem;
+  background: rgba(76,217,100,.10); border: 1px solid rgba(76,217,100,.35);
+  border-radius: 6px; font-size: 12px;
+}
+.dw-vid-segitem .seg-no { font-weight: 500; color: #3B6D11; flex-shrink: 0; }
+.dw-vid-segitem .seg-time { color: #2C2C2A; font-variant-numeric: tabular-nums; }
+.dw-vid-segitem .seg-pos { color: var(--text-tertiary, #888780); font-size: 11px; }
+.dw-vid-segitem .seg-del {
+  margin-left: auto; flex-shrink: 0; cursor: pointer; border: none; background: transparent;
+  color: #A32D2D; font-size: 14px; line-height: 1; padding: 0 .2rem;
+}
+.dw-vid-segitem .seg-del:hover { opacity: .7; }
+/* 时间轴上已标记段的色块 */
+.dw-vid-range-mark {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 4px; background: rgba(76,217,100,.55); border-radius: 2px; pointer-events: none;
+}
 .dw-vid-player-box { margin: .6rem 0; }
 .dw-vid-player-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; flex-wrap: wrap; }
 .dw-vid-player-box video { width: 100%; max-height: 320px; display: block; background: #000; border-radius: var(--radius-md); }

@@ -139,6 +139,42 @@ def create_dw_image(
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
+def _parse_segments(segments_json: str):
+    """解析多段配置 `[{"start": s, "end": e, "regions": [...]}, ...]`。
+
+    每段独立 normalize 自己的 regions；任一段 regions 无效则整批失败（避免静默漏处理）。
+    返回空 list 表示调用方没传 segments（走单段回退）。
+    """
+    if not segments_json:
+        return []
+    try:
+        parsed = json.loads(segments_json)
+    except (ValueError, TypeError):
+        raise app.HTTPException(status_code=400, detail="segments 不是合法 JSON")
+    if not isinstance(parsed, list) or not parsed:
+        return []
+    if len(parsed) > 50:
+        raise app.HTTPException(status_code=400, detail="segments 最多 50 段")
+    out = []
+    for i, seg in enumerate(parsed):
+        if not isinstance(seg, dict):
+            raise app.HTTPException(status_code=400, detail=f"segments[{i}] 必须是对象")
+        try:
+            s = float(seg.get("start") or 0)
+            e = float(seg.get("end") or 0)
+        except (TypeError, ValueError):
+            raise app.HTTPException(status_code=400, detail=f"segments[{i}] 的 start/end 必须是数字")
+        if s < 0 or e < 0:
+            raise app.HTTPException(status_code=400, detail=f"segments[{i}] 的 start/end 不能为负数")
+        if e > 0 and s > 0 and e < s:
+            raise app.HTTPException(status_code=400, detail=f"segments[{i}] 的 end 需大于或等于 start")
+        regs = dwc.normalize_regions(seg.get("regions") or [])
+        if not regs:
+            raise app.HTTPException(status_code=400, detail=f"segments[{i}] 缺少有效的框选区域")
+        out.append({"start": s, "end": e, "regions": regs})
+    return out
+
+
 def _parse_regions(regions_json: str, x: float, y: float, w: float, h: float):
     """从 regions JSON 字段解析多区域；为空则回退单个 x/y/w/h。
 
@@ -254,7 +290,7 @@ DW_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v", ".wmv"
 
 
 def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool,
-               start_sec: float = 0.0, end_sec: float = 0.0) -> None:
+               start_sec: float = 0.0, end_sec: float = 0.0, segments=None) -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -268,7 +304,7 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             app.Path(src), out_path, regions, ffmpeg_bin,
             progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
             resolution=resolution, smooth=smooth,
-            start_sec=start_sec, end_sec=end_sec,
+            start_sec=start_sec, end_sec=end_sec, segments=segments,
         )
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("视频去水印未产出有效文件")
@@ -294,6 +330,7 @@ def create_dw_video(
     smooth: int = app.Form(1),
     start_sec: float = app.Form(0.0),
     end_sec: float = app.Form(0.0),
+    segments: str = app.Form(""),
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
@@ -303,6 +340,10 @@ def create_dw_video(
     **时间分段（Segment，2026-08-29 加）**：start_sec/end_sec 指定水印出现的秒数区间
     （闭区间；end_sec<=0 表示到片尾）。区间内的帧才跑推理，区间外直接复制原帧。
     10 分钟视频只有 47 秒有水印时，推理量可从 100% 降到约 5%。
+
+    **多段（segments，2026-08-29 加）**：JSON 数组
+    `[{"start": s, "end": e, "regions": [...]}, ...]`，每段可带自己独立的框选区域。
+    传了 segments 就以它为准（忽略顶层 regions/start_sec/end_sec）；不传则回退到单段参数。
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="视频去水印不可用（缺少 OpenCV 依赖）")
@@ -318,9 +359,15 @@ def create_dw_video(
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
     if suffix not in DW_VIDEO_EXTS:
         raise app.HTTPException(status_code=409, detail="请上传视频文件（mp4/mov/mkv/webm/avi 等）")
-    regions_list = _parse_regions(regions, x, y, w, h)
-    if not regions_list:
-        raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h 需有效）")
+    # 多段（segments）优先；为空则回退到单段参数
+    segments_list = _parse_segments(segments)
+    if segments_list:
+        regions_list = []      # 多段模式下顶层 regions 不参与
+        start_sec = end_sec = 0.0
+    else:
+        regions_list = _parse_regions(regions, x, y, w, h)
+        if not regions_list:
+            raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h / segments 需有效）")
     save_path = _save_upload(file, "dw_vid_up")
     job_id = app.uuid.uuid4().hex[:12]
     with app.DW_LOCK:
@@ -329,7 +376,7 @@ def create_dw_video(
             "kind": "video", "progress": "",
         }
     app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
-                        resolution, bool(int(smooth)), float(start_sec), float(end_sec))
+                        resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list)
     return {"job_id": job_id, "status": "running", "kind": "video"}
 
 

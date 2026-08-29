@@ -478,7 +478,7 @@ def _temporal_median_smooth(proc_dir: str, final_dir: str, window: int = 2) -> N
 
 def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                      resolution: str = "original", smooth: bool = True, window: int = 2,
-                     start_sec: float = 0.0, end_sec: float = 0.0) -> Path:
+                     start_sec: float = 0.0, end_sec: float = 0.0, segments=None) -> Path:
     """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
 
     src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
@@ -489,8 +489,13 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
     **时间分段（Segment，2026-08-29 加）**：start_sec/end_sec 指定水印出现的秒数区间
     （闭区间，end_sec<=0 表示到片尾）。区间内的帧才跑 LaMa 推理，**区间外的帧直接复制原帧**——
     10 分钟视频只有 47 秒有水印时，推理量从 100% 降到约 5%。参考 lama-cleaner-video-gui 的
-    segment 设计。progress_cb 的 done/total 仍按全部帧计数（进度条平滑推进），
-    实际推理帧数通过返回值无关的日志体现。
+    segment 设计。progress_cb 的 done/total 仍按全部帧计数（进度条平滑推进）。
+
+    **多段（segments，2026-08-29 加）**：segments 是
+    `[{"start": s, "end": e, "regions": [...]}, ...]`，每段可带**自己的框选区域**
+    （处理"片头 logo 在左上、片尾字幕在底部"这类位置会变的水印）。
+    同一帧被多个段覆盖时，各段的 regions 会**合并**成一张 mask。
+    segments 为空时自动回退到单一 (start_sec, end_sec, regions)，向后兼容。
     """
     if not available():
         raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
@@ -525,42 +530,60 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             raise RuntimeError("视频抽帧失败（无法读取帧，可能格式不支持或 ffmpeg 缺失）")
         fps = _probe_fps(ffmpeg_bin, src)
 
-        # 2) 时间分段（Segment）：算出需要真正推理的帧区间，区间外直接 copy 原帧
-        start_frame = 0
-        end_frame = total - 1
-        if start_sec and start_sec > 0:
-            start_frame = min(total - 1, int(round(start_sec * fps)))
-        if end_sec and end_sec > 0:
-            end_frame = min(total - 1, int(round(end_sec * fps)))
-        if end_frame < start_frame:
-            start_frame, end_frame = end_frame, start_frame  # 容错：区间写反了就交换
-        inpaint_count = max(0, end_frame - start_frame + 1)
-        logger.info("dw video segment: frames %s..%s (fps=%.3f, total=%s, 推理=%s, copy=%s)",
-                    start_frame, end_frame, fps, total, inpaint_count, total - inpaint_count)
+        # 2) 时间分段（Segment）：支持多段，每段带自己的 regions
+        #    segments = [{"start": s, "end": e, "regions": [...]}, ...]
+        #    为空时回退到单一 (start_sec, end_sec, regions)，兼容旧调用
+        if not segments:
+            segments = [{"start": float(start_sec or 0), "end": float(end_sec or 0), "regions": regions}]
 
-        # 掩码缓存：同一尺寸只构建一次（原实现每帧重建，18000 帧会重复 18000 次）
+        seg_ranges = []
+        for seg in segments:
+            s = float(seg.get("start") or 0)
+            e = float(seg.get("end") or 0)
+            sf = 0 if s <= 0 else min(total - 1, int(round(s * fps)))
+            ef = total - 1 if e <= 0 else min(total - 1, int(round(e * fps)))
+            if ef < sf:
+                sf, ef = ef, sf  # 容错：区间写反了就交换
+            seg_ranges.append((sf, ef, seg.get("regions") or []))
+
+        # 每帧 → 覆盖它的 segment 下标（预计算，避免逐帧遍历所有段）
+        frame_segs = [[] for _ in range(total)]
+        for idx, (sf, ef, _regs) in enumerate(seg_ranges):
+            for i in range(sf, ef + 1):
+                frame_segs[i].append(idx)
+
+        inpaint_count = sum(1 for segs in frame_segs if segs)
+        logger.info("dw video segments: %s 段 (fps=%.3f, total=%s 帧, 推理=%s, copy=%s)",
+                    len(seg_ranges), fps, total, inpaint_count, total - inpaint_count)
+
+        # 掩码缓存：key = (w, h, 覆盖该帧的段下标组合)
+        # （原实现每帧重建 _build_region_mask，18000 帧会重复 18000 次）
         _mask_cache = {}
 
-        def _get_mask(w, h):
-            key = (w, h)
+        def _get_mask(w, h, seg_indices):
+            key = (w, h, tuple(seg_indices))
             if key not in _mask_cache:
-                m = dwc._build_region_mask(regions, w, h)
+                merged = []
+                for idx in seg_indices:
+                    merged.extend(seg_ranges[idx][2])
+                m = dwc._build_region_mask(merged, w, h)
                 if not m.any():
                     raise RuntimeError("未框选有效水印区域")
                 _mask_cache[key] = m
             return _mask_cache[key]
 
-        # 3) 逐帧处理：区间内跑 LaMa 推理，区间外零成本复制
+        # 3) 逐帧处理：被任一段覆盖则跑 LaMa 推理，否则零成本复制
         for i, fp in enumerate(frame_files):
-            if start_frame <= i <= end_frame:
+            segs = frame_segs[i]
+            if segs:
                 img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
                 if img is None:
                     raise RuntimeError(f"无法读取第 {i + 1} 帧")
                 h, w = img.shape[:2]
-                out_bgr = _inpaint_bgr_to_bgr(img, _get_mask(w, h))
+                out_bgr = _inpaint_bgr_to_bgr(img, _get_mask(w, h, segs))
                 _cv2.imwrite(os.path.join(proc_dir, os.path.basename(fp)), out_bgr)
             else:
-                # Segment 外：直接复制原帧（不动像素，零推理成本）
+                # 无段覆盖：直接复制原帧（不动像素，零推理成本）
                 _shutil.copyfile(fp, os.path.join(proc_dir, os.path.basename(fp)))
             if progress_cb:
                 try:
