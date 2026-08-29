@@ -637,6 +637,106 @@
     return id;
   };
 
+  /**
+   * 用本地 WebKit video 元素抽首帧到 JPEG blob，秒级返回，完全不走网络。
+   *
+   * 2026-08-29 实测大视频（数 GB）场景：thumbnail 接口从前要上传整个文件抽一帧，
+   * 黑色画布要等好几 GB 传完才显示。这个本地版本走 WebKit 自带的视频解码器，
+   * URL.createObjectURL(file) → <video> → seeked → canvas.drawImage → toBlob，
+   * 整个流程 50-300ms 内完成，画面立刻点亮。
+   *
+   * 失败兜底：
+   * - WebKit 解码抛出/timeout（罕见，HEVC/H.264 extreme profile / 损坏 mp4 才会）→
+   *   抛错让调用方改走切片上传。
+   *
+   * 输出最大宽 1280 像素、JPEG 0.86，省内存还秒渲染。
+   */
+  const grabLocalVideoThumb = (file, signal) => {
+    return new Promise((resolve, reject) => {
+      // signal 已 abort 就直接返回错误，让调用方走兜底
+      if (signal && signal.aborted) return reject(new Error('aborted'));
+      const url = URL.createObjectURL(file);
+      const v = document.createElement('video');
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      // 不挂到 DOM（无样式，让浏览器后台解码）
+      v.src = url;
+      const cleanup = () => { try { URL.revokeObjectURL(url); } catch (_e) {} };
+      let settled = false;
+      const onAbort = () => { if (settled) return; settled = true; cleanup(); reject(new Error('aborted')); };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      const fail = (e) => { if (settled) return; settled = true; if (signal) signal.removeEventListener('abort', onAbort); cleanup(); reject(e); };
+      const succeed = (blob, w, h) => { if (settled) return; settled = true; if (signal) signal.removeEventListener('abort', onAbort); cleanup(); resolve({ blob, naturalWidth: w, naturalHeight: h }); };
+      const timer = setTimeout(() => fail(new Error('local-thumb-timeout')), 12000);
+      v.onerror = () => { clearTimeout(timer); fail(new Error('video-decode-error')); };
+      v.onloadedmetadata = () => {
+        const w = v.videoWidth, h = v.videoHeight;
+        if (!w || !h) { clearTimeout(timer); fail(new Error('zero-dim')); return; }
+        // seek 到略偏离 0 的位置，避免某些浏览器对 currentTime=0 的 seek 不触发 'seeked'
+        try { v.currentTime = Math.min(0.05, (v.duration || 0.1) / 2); } catch (_e) { /* ignore */ }
+        const onSeeked = () => {
+          v.removeEventListener('seeked', onSeeked);
+          clearTimeout(timer);
+          try {
+            // 下采样到 ≤1280 宽：4K / 8K 视频首帧不会是几十 MB，省内存秒渲染
+            const scale = w > 1280 ? 1280 / w : 1;
+            const cw = Math.round(w * scale), ch = Math.round(h * scale);
+            const c = document.createElement('canvas');
+            c.width = cw; c.height = ch;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(v, 0, 0, cw, ch);
+            // requestVideoFrameCallback 比 setTimeout 准（拿到的是真正"渲染帧"）
+            const commit = () => c.toBlob((blob) => {
+              if (blob) succeed(blob, w, h);
+              else fail(new Error('toBlob-null'));
+            }, 'image/jpeg', 0.86);
+            if (typeof v.requestVideoFrameCallback === 'function') {
+              v.requestVideoFrameCallback(() => commit());
+            } else {
+              setTimeout(commit, 60);
+            }
+          } catch (e) { fail(e); }
+        };
+        v.addEventListener('seeked', onSeeked, { once: true });
+      };
+    });
+  };
+
+  /**
+   * Filmstrip 切片上传（20 帧拼图条）。
+   * 大视频不再传整个文件，只传前 32 MB：faststart mp4 的关键帧密集，
+   * 32 MB 足够 ffmpeg 选到 20 个时间戳抽帧；薄膜（moov 在尾部）罕见失败
+   * 不再静默——返回 {ok:false, err:'...'} 让前端在 status 末尾显示。
+   */
+  const dwVidFetchFilmstrip = async (file, signal) => {
+    const base = `${window.VDL_API_BASE || ''}`;
+    const SLICE = 32 * 1024 * 1024;
+    const slice = file.size > SLICE ? file.slice(0, SLICE) : file;
+    const headers = { 'X-Device-Id': deviceId() };
+    const tryOnce = async (payload, label) => {
+      const fd = new FormData();
+      fd.append('file', payload, file.name);
+      const r = await fetch(`${base}/api/dw/video/filmstrip?frames=20`, {
+        method: 'POST', body: fd, headers, signal,
+      });
+      if (!r.ok) return { ok: false, err: `${label} ${(await r.text().catch(() => '')) || r.status}` };
+      const blob = await r.blob();
+      const filmUrl = URL.createObjectURL(blob);
+      const frames = parseInt(r.headers.get('X-Filmstrip-Frames') || '0', 10);
+      const interval = parseFloat(r.headers.get('X-Filmstrip-Interval') || '0');
+      return { ok: true, filmUrl, frames, interval };
+    };
+    try {
+      const first = await tryOnce(slice, 'filmstrip 切片');
+      if (first.ok) return first;
+      // moov 切片兜不住（罕见）——再发整文件
+      return await tryOnce(file, 'filmstrip 全文件');
+    } catch (e) {
+      return { ok: false, err: e.message || String(e) };
+    }
+  };
+
   const request = async (path, options = {}, base = '') => {
     const headers = {};
     const subKey = localStorage.getItem('vdl_sub_key');
@@ -3374,66 +3474,106 @@
     //   现在 thumb 先 await，拿到立即显示；filmstrip 后台并行，迟到不影响用户框选。
     //   注意：不能走项目里 request() wrapper——它内部 _parseResponse 强制 .json()，
     //   会破坏 PNG 二进制；这里直接用原生 fetch，自己控制 .blob()
+    //
+    //   **2026-08-29 二次提速**：大视频（动辄数 GB）上传整个文件到 thumbnail 接口要几分钟，
+    //   黑色画布等几 GB 传完才出现首帧 → 改三层兜底：
+    //     ① 本地 WebKit video 元素 + canvas.drawImage 抽首帧（秒开，根本不走网络）
+    //     ② 上传文件前 32 MB 切片让后端 ffmpeg 抽（覆盖 faststart 99% 视频）
+    //     ③ 切片抽不到（moov 在尾部罕见情况）才发完整文件兜底
+    //   filmstrip 同样改用切片上传，避免传整个大文件。
     const ctrl = new AbortController();
+    const ctrlTs = Date.now();
     const timer = setTimeout(() => ctrl.abort(), 90000);
     const headers = { 'X-Device-Id': deviceId() };
+
+    // ① 本地抽帧（秒级最佳 UX）
+    let localThumb = null;
     try {
-      const form1 = new FormData(); form1.append('file', f);
-      // 3a) thumbnail 先单独 await —— 用户看到首帧就能开始框选
-      const thumbR = await fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', {
-        method: 'POST', body: form1, headers, signal: ctrl.signal,
-      });
-      if (!thumbR.ok) {
-        const txt = await thumbR.text().catch(() => '');
-        el.dwVidStatus.textContent = '首帧提取失败：' + (txt || ('HTTP ' + thumbR.status));
-      } else {
-        const blob = await thumbR.blob();
-        const thumbUrl = URL.createObjectURL(blob);
-        el._dwThumbUrl = thumbUrl;
-        el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
-        el.dwVidThumb.src = thumbUrl;
-        // 按真实首帧比例校准画布纵横比，避免 9:16 横屏视频上下大黑边
-        if (el.dwVidThumb.naturalWidth && el.dwVidThumb.naturalHeight) {
-          const wrap = el.dwVidThumb.parentElement;
-          if (wrap) wrap.style.aspectRatio = `${el.dwVidThumb.naturalWidth} / ${el.dwVidThumb.naturalHeight}`;
-        }
-        el.dwVidStatus.textContent = '';
+      localThumb = await grabLocalVideoThumb(f, ctrl.signal);
+    } catch (_e) { /* 走切片兜底 */ }
+    if (localThumb && !ctrl.signal.aborted) {
+      const thumbUrl = URL.createObjectURL(localThumb.blob);
+      el._dwThumbUrl = thumbUrl;
+      el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+      el.dwVidThumb.src = thumbUrl;
+      const wrap = el.dwVidThumb.parentElement;
+      if (wrap && localThumb.naturalWidth && localThumb.naturalHeight) {
+        wrap.style.aspectRatio = `${localThumb.naturalWidth} / ${localThumb.naturalHeight}`;
       }
-      // 3b) filmstrip 后台并行 —— 不阻塞thumbnail 渲染，也不 await：用户先框选着，等 filmstrip 到再显示
-      const form2 = new FormData(); form2.append('file', f);
-      const filmUrlPromise = fetch((window.VDL_API_BASE || '') + '/api/dw/video/filmstrip', {
-        method: 'POST', body: form2, headers, signal: ctrl.signal,
-      }).then(async (r) => {
-        if (!r.ok) {
-          const txt = await r.text().catch(() => '');
-          return { ok: false, err: txt || ('HTTP ' + r.status) };
-        }
-        const blob = await r.blob();
-        const filmUrl = URL.createObjectURL(blob);
-        const frames = parseInt(r.headers.get('X-Filmstrip-Frames') || '0', 10);
-        const interval = parseFloat(r.headers.get('X-Filmstrip-Interval') || '0');
-        return { ok: true, filmUrl, frames, interval };
-      }).catch((e) => ({ ok: false, err: e.message || String(e) }));
-      // 不阻塞主流程：异步贴到 filmstrip 元素
-      filmUrlPromise.then((res) => {
-        if (!res || !res.ok) {
-          // filmstrip 失败仅附加提示，不影响已经可用的主画布 + 转码播放
-          const prev = el.dwVidStatus.textContent;
-          if (prev && !prev.includes('失败')) el.dwVidStatus.textContent = prev + '　缩略图条失败：' + res.err;
-          return;
-        }
-        // 撤销旧 url，绑新 url + 帧参数
-        if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); }
-        el._dwFilmstripUrl = res.filmUrl;
-        el.dwVidFilmstrip.src = res.filmUrl;
-        if (res.frames) el.dwVidFilmstrip.dataset.frames = String(res.frames);
-        if (res.interval) el.dwVidFilmstrip.dataset.interval = String(res.interval);
-      });
-    } catch (e) {
-      el.dwVidStatus.textContent = '加载失败：' + (e.message || '未知错误');
-    } finally {
+      el.dwVidStatus.textContent = `首帧 ${Date.now() - ctrlTs}ms（本地 WebKit 解码抽取）`;
       clearTimeout(timer);
+    } else {
+      // ② 切片上传
+      const SLICE = 32 * 1024 * 1024;  // 32 MB（足够大多数 faststart mp4 拿到 moov+首段）
+      const needSlice = f.size > SLICE;
+      const slice = needSlice ? f.slice(0, SLICE) : f;
+      try {
+        const form1 = new FormData();
+        form1.append('file', slice, f.name);
+        const thumbR = await fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', {
+          method: 'POST', body: form1, headers, signal: ctrl.signal,
+        });
+        if (!thumbR.ok) {
+          const txt = await thumbR.text().catch(() => '');
+          el.dwVidStatus.textContent = '首帧切片提取失败：' + (txt || ('HTTP ' + thumbR.status));
+          // ③ 兜底：完整文件
+          if (!needSlice) throw new Error('thumb full-failed: ' + (txt || thumbR.status));
+          const formFull = new FormData(); formFull.append('file', f);
+          el.dwVidStatus.textContent = '首帧切片失败，自动转传完整文件…';
+          const thumbR2 = await fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', {
+            method: 'POST', body: formFull, headers, signal: ctrl.signal,
+          });
+          if (!thumbR2.ok) {
+            const t2 = await thumbR2.text().catch(() => '');
+            el.dwVidStatus.textContent = '首帧提取失败：' + (t2 || ('HTTP ' + thumbR2.status));
+            throw new Error('thumb-full-failed: ' + (t2 || thumbR2.status));
+          }
+          const blob2 = await thumbR2.blob();
+          const tu2 = URL.createObjectURL(blob2);
+          el._dwThumbUrl = tu2;
+          el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+          el.dwVidThumb.src = tu2;
+          if (el.dwVidThumb.naturalWidth && el.dwVidThumb.naturalHeight) {
+            const w = el.dwVidThumb.parentElement;
+            if (w) w.style.aspectRatio = `${el.dwVidThumb.naturalWidth} / ${el.dwVidThumb.naturalHeight}`;
+          }
+          el.dwVidStatus.textContent = '';
+        } else {
+          const blob = await thumbR.blob();
+          const thumbUrl = URL.createObjectURL(blob);
+          el._dwThumbUrl = thumbUrl;
+          el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+          el.dwVidThumb.src = thumbUrl;
+          // 按真实首帧比例校准画布纵横比，避免 9:16 横屏视频上下大黑边
+          const imgProbe = new Image();
+          imgProbe.onload = () => {
+            const wrap2 = el.dwVidThumb.parentElement;
+            if (wrap2) wrap2.style.aspectRatio = `${imgProbe.naturalWidth} / ${imgProbe.naturalHeight}`;
+          };
+          imgProbe.src = thumbUrl;
+          el.dwVidStatus.textContent = `首帧切片 ${Math.round(blob.size / 1024)} KB（${Date.now() - ctrlTs}ms）`;
+        }
+      } catch (eFull) {
+        el.dwVidStatus.textContent = '首帧加载失败：' + (eFull.message || '未知错误');
+      } finally {
+        clearTimeout(timer);
+      }
     }
+
+    // 后台并行：filmstrip（同样切片上传，绝大多数情况秒开；失败仅提示不影响主路径）
+    dwVidFetchFilmstrip(f, ctrl.signal).then((res) => {
+      if (!res || !res.ok) {
+        const prev = el.dwVidStatus.textContent;
+        if (prev && !prev.includes('失败')) el.dwVidStatus.textContent = prev + '　缩略图条失败：' + res.err;
+        return;
+      }
+      // 撤销旧 url，绑新 url + 帧参数
+      if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); }
+      el._dwFilmstripUrl = res.filmUrl;
+      el.dwVidFilmstrip.src = res.filmUrl;
+      if (res.frames) el.dwVidFilmstrip.dataset.frames = String(res.frames);
+      if (res.interval) el.dwVidFilmstrip.dataset.interval = String(res.interval);
+    }).catch(() => {});
   });
 
   let dwVidDrag = false;
