@@ -439,6 +439,9 @@
     dwVidSvg: $('dwVidSvg'),
     dwVidSelInfo: $('dwVidSelInfo'),
     dwVidClear: $('dwVidClear'),
+    dwVidStart: $('dwVidStart'),
+    dwVidEnd: $('dwVidEnd'),
+    dwVidSegTip: $('dwVidSegTip'),
     dwVidRes: $('dwVidRes'),
     dwVidSmooth: $('dwVidSmooth'),
     dwVidBtn: $('dwVidBtn'),
@@ -3314,6 +3317,35 @@
   el.dwVidClear.addEventListener('click', () => { dwVidSel = null; dwVidDraw(); });
   window.addEventListener('resize', () => { if (!el.dwVideoPane.hidden) { dwVidResize(); dwVidDraw(); } });
 
+  // -------------------------------------------------- 时间分段（Segment）：实时估算推理帧数
+  let dwVidDuration = 0;  // 视频总时长（秒），从 dwVidOrig 的 metadata 取
+  el.dwVidOrig.addEventListener('loadedmetadata', () => {
+    dwVidDuration = el.dwVidOrig.duration || 0;
+    dwVidUpdateSegTip();
+  });
+
+  const dwVidUpdateSegTip = () => {
+    if (!el.dwVidSegTip) return;
+    const s = parseFloat(el.dwVidStart.value) || 0;
+    const e = parseFloat(el.dwVidEnd.value) || 0;
+    if (!dwVidDuration || (s <= 0 && e <= 0)) {
+      el.dwVidSegTip.textContent = dwVidDuration
+        ? `默认整段处理（共 ${dwVidDuration.toFixed(1)} 秒）`
+        : '默认整段处理';
+      return;
+    }
+    const from = Math.max(0, s);
+    const to = (e > 0) ? Math.min(e, dwVidDuration) : dwVidDuration;
+    if (to <= from) {
+      el.dwVidSegTip.textContent = '区间为空，请检查起止时间';
+      return;
+    }
+    const pct = Math.round(((to - from) / dwVidDuration) * 100);
+    el.dwVidSegTip.textContent = `仅 ${from.toFixed(1)}s–${to.toFixed(1)}s 推理（约占全片 ${pct}%），其余帧直接复制`;
+  };
+  el.dwVidStart.addEventListener('input', dwVidUpdateSegTip);
+  el.dwVidEnd.addEventListener('input', dwVidUpdateSegTip);
+
   const startDwVideo = async () => {
     const file = el.dwVidFile.files[0];
     if (!file) { el.dwVidStatus.textContent = '请先选择视频文件'; return; }
@@ -3331,6 +3363,16 @@
     }]));
     form.append('resolution', el.dwVidRes.value);
     form.append('smooth', el.dwVidSmooth.value);
+    // 时间分段（Segment）：只对该区间内的帧跑推理，区间外直接复制
+    const startSec = parseFloat(el.dwVidStart.value) || 0;
+    const endSec = parseFloat(el.dwVidEnd.value) || 0;
+    if (endSec > 0 && startSec > 0 && endSec < startSec) {
+      el.dwVidStatus.textContent = '结束时间需大于或等于开始时间';
+      el.dwVidBtn.disabled = false;
+      return;
+    }
+    form.append('start_sec', String(startSec));
+    form.append('end_sec', String(endSec));
     try {
       const data = await request('/api/dw/video', { method: 'POST', body: form });
       const jobId = data.job_id;

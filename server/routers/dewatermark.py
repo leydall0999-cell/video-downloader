@@ -253,7 +253,8 @@ def dw_pdf_file(job_id: str) -> app.FileResponse:
 DW_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v", ".wmv"}
 
 
-def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool) -> None:
+def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool,
+               start_sec: float = 0.0, end_sec: float = 0.0) -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -267,6 +268,7 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             app.Path(src), out_path, regions, ffmpeg_bin,
             progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
             resolution=resolution, smooth=smooth,
+            start_sec=start_sec, end_sec=end_sec,
         )
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("视频去水印未产出有效文件")
@@ -290,11 +292,17 @@ def create_dw_video(
     h: float = app.Form(0.0),
     resolution: str = app.Form("original"),
     smooth: int = app.Form(1),
+    start_sec: float = app.Form(0.0),
+    end_sec: float = app.Form(0.0),
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
 
     逐帧跑 LaMa 推理 + 邻帧中值平滑降闪烁，ffmpeg 重编码混音输出 mp4。
+
+    **时间分段（Segment，2026-08-29 加）**：start_sec/end_sec 指定水印出现的秒数区间
+    （闭区间；end_sec<=0 表示到片尾）。区间内的帧才跑推理，区间外直接复制原帧。
+    10 分钟视频只有 47 秒有水印时，推理量可从 100% 降到约 5%。
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="视频去水印不可用（缺少 OpenCV 依赖）")
@@ -302,6 +310,10 @@ def create_dw_video(
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
     if resolution not in ("original", "720", "480"):
         raise app.HTTPException(status_code=400, detail="resolution 仅支持 original / 720 / 480")
+    if start_sec < 0 or end_sec < 0:
+        raise app.HTTPException(status_code=400, detail="start_sec / end_sec 不能为负数")
+    if end_sec > 0 and start_sec > 0 and end_sec < start_sec:
+        raise app.HTTPException(status_code=400, detail="end_sec 需大于或等于 start_sec")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
     if suffix not in DW_VIDEO_EXTS:
@@ -316,7 +328,8 @@ def create_dw_video(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "video", "progress": "",
         }
-    app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN, resolution, bool(int(smooth)))
+    app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
+                        resolution, bool(int(smooth)), float(start_sec), float(end_sec))
     return {"job_id": job_id, "status": "running", "kind": "video"}
 
 

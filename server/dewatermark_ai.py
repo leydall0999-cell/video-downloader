@@ -229,7 +229,7 @@ def _infer_tile(sess, img_tile, mask_tile):
     """对单张 512x512 瓦片推理，返回 (512,512,3) 浮点 [0,1] 修复结果。
 
     img_tile / mask_tile：float32，[0,1]，shape (512,512,3) / (512,512,1)。
-    LaMa 输入 image 为 RGB [0,1]、mask 为 [0,1]，输出 [0,1]。
+    LaMa 输入 image 为 RGB [0,1]、mask 为 [0,1]，但输出是 [0,255] 像素值（见下方归一化）。
     """
     inp_img = img_tile.transpose(2, 0, 1)[None].astype(_np.float32)
     inp_mask = mask_tile.transpose(2, 0, 1)[None].astype(_np.float32)
@@ -477,13 +477,20 @@ def _temporal_median_smooth(proc_dir: str, final_dir: str, window: int = 2) -> N
 
 
 def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
-                     resolution: str = "original", smooth: bool = True, window: int = 2) -> Path:
+                     resolution: str = "original", smooth: bool = True, window: int = 2,
+                     start_sec: float = 0.0, end_sec: float = 0.0) -> Path:
     """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
 
     src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
     ffmpeg_bin：ffmpeg 可执行路径（来自 app.FFMPEG_BIN）。
-    progress_cb(done, total)：每帧推理后回调（用于前端进度）。
+    progress_cb(done, total)：每帧处理后回调（用于前端进度）。
     resolution：original/720/480（降分辨率提速）。smooth：是否做时序中值平滑。
+
+    **时间分段（Segment，2026-08-29 加）**：start_sec/end_sec 指定水印出现的秒数区间
+    （闭区间，end_sec<=0 表示到片尾）。区间内的帧才跑 LaMa 推理，**区间外的帧直接复制原帧**——
+    10 分钟视频只有 47 秒有水印时，推理量从 100% 降到约 5%。参考 lama-cleaner-video-gui 的
+    segment 设计。progress_cb 的 done/total 仍按全部帧计数（进度条平滑推进），
+    实际推理帧数通过返回值无关的日志体现。
     """
     if not available():
         raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
@@ -518,29 +525,55 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             raise RuntimeError("视频抽帧失败（无法读取帧，可能格式不支持或 ffmpeg 缺失）")
         fps = _probe_fps(ffmpeg_bin, src)
 
-        # 2) 逐帧 inpaint（掩码按每帧尺寸重建，整段视频套同一归一化区域）
+        # 2) 时间分段（Segment）：算出需要真正推理的帧区间，区间外直接 copy 原帧
+        start_frame = 0
+        end_frame = total - 1
+        if start_sec and start_sec > 0:
+            start_frame = min(total - 1, int(round(start_sec * fps)))
+        if end_sec and end_sec > 0:
+            end_frame = min(total - 1, int(round(end_sec * fps)))
+        if end_frame < start_frame:
+            start_frame, end_frame = end_frame, start_frame  # 容错：区间写反了就交换
+        inpaint_count = max(0, end_frame - start_frame + 1)
+        logger.info("dw video segment: frames %s..%s (fps=%.3f, total=%s, 推理=%s, copy=%s)",
+                    start_frame, end_frame, fps, total, inpaint_count, total - inpaint_count)
+
+        # 掩码缓存：同一尺寸只构建一次（原实现每帧重建，18000 帧会重复 18000 次）
+        _mask_cache = {}
+
+        def _get_mask(w, h):
+            key = (w, h)
+            if key not in _mask_cache:
+                m = dwc._build_region_mask(regions, w, h)
+                if not m.any():
+                    raise RuntimeError("未框选有效水印区域")
+                _mask_cache[key] = m
+            return _mask_cache[key]
+
+        # 3) 逐帧处理：区间内跑 LaMa 推理，区间外零成本复制
         for i, fp in enumerate(frame_files):
-            img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
-            if img is None:
-                raise RuntimeError(f"无法读取第 {i + 1} 帧")
-            h, w = img.shape[:2]
-            mask = dwc._build_region_mask(regions, w, h)
-            if not mask.any():
-                raise RuntimeError("未框选有效水印区域")
-            out_bgr = _inpaint_bgr_to_bgr(img, mask)
-            _cv2.imwrite(os.path.join(proc_dir, os.path.basename(fp)), out_bgr)
+            if start_frame <= i <= end_frame:
+                img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
+                if img is None:
+                    raise RuntimeError(f"无法读取第 {i + 1} 帧")
+                h, w = img.shape[:2]
+                out_bgr = _inpaint_bgr_to_bgr(img, _get_mask(w, h))
+                _cv2.imwrite(os.path.join(proc_dir, os.path.basename(fp)), out_bgr)
+            else:
+                # Segment 外：直接复制原帧（不动像素，零推理成本）
+                _shutil.copyfile(fp, os.path.join(proc_dir, os.path.basename(fp)))
             if progress_cb:
                 try:
                     progress_cb(i + 1, total)
                 except Exception:
                     pass
 
-        # 3) 时序中值平滑（降闪烁）
+        # 4) 时序中值平滑（降闪烁）
         src_frames = final_dir if smooth else proc_dir
         if smooth:
             _temporal_median_smooth(proc_dir, final_dir, window=window)
 
-        # 4) 抽音频（无音频则跳过）
+        # 5) 抽音频（无音频则跳过）
         audio_path = os.path.join(work, "audio.m4a")
         has_audio = False
         try:
@@ -550,7 +583,7 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
         except Exception:
             has_audio = False
 
-        # 5) 重编码混音
+        # 6) 重编码混音
         cmd = [ffmpeg_bin, "-y", "-framerate", f"{fps:g}", "-i", os.path.join(src_frames, "%05d.png")]
         if has_audio:
             cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "192k"]
