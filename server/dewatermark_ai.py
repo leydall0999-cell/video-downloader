@@ -990,6 +990,14 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             except Exception:  # noqa: BLE001
                 pass
 
+        # 早些切到 encoding 阶段（覆盖时序平滑 + 音频抽取 + ffmpeg 重编码），
+        # 避免「inpainting 跑完但后处理期间 phase 还停在 inpainting、前端 3s 轮询
+        # 看到 progress=2258/2258 误以为卡死」的 UX 问题（2026-08-29 修复）。
+        if phase_cb:
+            try: phase_cb("encoding")
+            except Exception:
+                pass
+
         # 4) 时序中值平滑（降闪烁）
         src_frames = final_dir if smooth else proc_dir
         if smooth:
@@ -1006,9 +1014,6 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             has_audio = False
 
         # 6) 重编码混音（VideoToolbox 硬编优先提速，无则 libx264 软编）
-        if phase_cb:
-            try: phase_cb("encoding")
-            except Exception: pass
         cmd = _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path)
         _run_ffmpeg(cmd)
 
