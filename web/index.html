@@ -633,7 +633,7 @@
             <!-- 合成画布：四层叠加，src/visibility 切换让用户感知一个视频窗口 -->
             <img id="dwVidThumb" alt="首帧预览" class="dw-vid-thumb" />
             <svg id="dwVidSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-            <div class="dw-vid-transcoding" id="dwVidTranscoding">正在转码为可播放格式…<br/><small>转码期间仍可继续框选；下方缩略图条可点击粗定位</small></div>
+            <div class="dw-vid-transcoding" id="dwVidTranscoding">转码中…<span class="dw-vid-spinner" aria-hidden="true"></span></div>
             <video id="dwVidPlayer" controls preload="metadata" playsinline hidden></video>
           </div>
           <div class="dw-toolbar">
