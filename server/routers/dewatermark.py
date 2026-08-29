@@ -5,6 +5,7 @@
 """
 import app
 import json
+import re as _re
 import subprocess as _subprocess
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
@@ -444,3 +445,63 @@ def create_dw_video_thumbnail(
         out_path.unlink(missing_ok=True)
         raise app.HTTPException(status_code=500, detail=f"首帧提取失败：{e}")
     return app.FileResponse(path=str(out_path), media_type="image/png")
+
+
+@router.post("/api/dw/video/filmstrip")
+def create_dw_video_filmstrip(
+    file: app.UploadFile = app._FastAPIFile(...),
+    frames: int = app.Form(20),
+    request: app.Request = None,
+):
+    """抽 N 帧拼成横向缩略图条（filmstrip），返回 PNG。
+
+    2026-08-29 实测：macOS WKWebView 的 `<video>` 元素对不少 mp4（H.264 high@L4 / HEVC）
+    播放/首帧都不可靠，**video 元素作预览源（包括播放）整体不可依赖**。前端改用
+    ffmpeg 抽帧拼成的静态缩略图条 + click-to-seek 完全绕开 video 元素，img 渲染稳定可靠。
+    默认抽 20 帧（4..60），返回头 `X-Filmstrip-Frames` / `X-Filmstrip-Interval` 告诉前端
+    每帧对应多少秒（前端 click 时按图宽等分定位时间）。
+    """
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
+    if suffix not in DW_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件（mp4/mov/mkv/webm/avi 等）")
+    if not (4 <= int(frames) <= 60):
+        raise app.HTTPException(status_code=400, detail="frames 需在 4..60 之间")
+    save_path = _save_upload(file, "dw_vid_film")
+    out_path = save_path.with_suffix(".png")
+    try:
+        # 1) 查时长
+        probe = _subprocess.run([app.FFMPEG_BIN, "-i", str(save_path)], capture_output=True, timeout=30)
+        m = _re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", probe.stderr.decode("utf-8", "ignore"))
+        if not m:
+            err_tail = probe.stderr.decode("utf-8", "ignore")[-300:] if probe.stderr else "unknown"
+            raise RuntimeError(f"无法解析视频时长：{err_tail or 'unknown'}")
+        hh, mm, ss = int(m.group(1)), int(m.group(2)), float(m.group(3))
+        duration = hh * 3600 + mm * 60 + ss
+        if duration <= 0:
+            raise RuntimeError("视频时长为 0 或无法解析")
+        # 2) 抽 N 帧 + 等比缩放 + 1xN 拼图
+        n = int(frames)
+        fps_value = n / duration
+        cmd = [
+            app.FFMPEG_BIN, "-y", "-i", str(save_path),
+            "-vf", f"fps={fps_value},scale=160:-1,tile=1x{n}",
+            "-frames:v", "1", "-an", str(out_path),
+        ]
+        proc = _subprocess.run(cmd, capture_output=True, timeout=60)
+        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            err_tail = proc.stderr.decode("utf-8", "ignore")[-300:] if proc.stderr else "unknown"
+            raise RuntimeError(f"ffmpeg filmstrip 失败：{err_tail or 'unknown'}")
+        save_path.unlink(missing_ok=True)
+        interval = duration / n
+    except app.HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        save_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=500, detail=f"filmstrip 抽取失败：{e}")
+
+    resp = app.FileResponse(path=str(out_path), media_type="image/png")
+    resp.headers["X-Filmstrip-Frames"] = str(int(frames))
+    resp.headers["X-Filmstrip-Interval"] = f"{interval:.3f}"
+    return resp

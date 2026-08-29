@@ -456,10 +456,11 @@
     dwVidResult: $('dwVidResult'),
     dwVidOut: $('dwVidOut'),
     dwVidOrig: $('dwVidOrig'),
-    dwVidPlayer: $('dwVidPlayer'),
     dwVidPlayerBox: $('dwVidPlayerBox'),
     dwVidSetStart: $('dwVidSetStart'),
     dwVidSetEnd: $('dwVidSetEnd'),
+    dwVidFilmstrip: $('dwVidFilmstrip'),
+    dwVidFilmstripCursor: $('dwVidFilmstripCursor'),
     dwVidDownload: $('dwVidDownload'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
@@ -3256,47 +3257,58 @@
     const f = el.dwVidFile.files[0];
     if (!f) return;
     const url = URL.createObjectURL(f);
-    // 结果区「原视频」对比框 + 播放预览用同一个 blob URL（input 视频本身就是原视频）
+    // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
     el.dwVidOrig.muted = true;
-    el.dwVidPlayer.src = url;
-    el.dwVidPlayerBox.hidden = false;
-    // 清旧选区 + 旧缩略图
+    // 清旧选区 + 旧缩略图 + 旧 filmstrip
     dwVidSel = null;
     if (el._dwThumbUrl) { URL.revokeObjectURL(el._dwThumbUrl); el._dwThumbUrl = null; }
     el.dwVidThumb.removeAttribute('src');
+    if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); el._dwFilmstripUrl = null; }
+    el.dwVidFilmstrip.removeAttribute('src');
+    el.dwVidFilmstripCursor.hidden = true;
+    el.dwVidPlayerBox.hidden = false;
     el.dwVidResult.hidden = true;
-    el.dwVidStatus.textContent = '正在抽首帧…';
-    // 上传抽首帧（绕开 WKWebView video 元素所有渲染坑，img 渲染稳定可靠）
+    el.dwVidStatus.textContent = '正在抽首帧 + 缩略图条…';
+    // 并行：抽首帧（img 框选）+ filmstrip（点击跳转时间线）
     // 注意：不能走项目里的 request() wrapper——它内部 _parseResponse 强制 .json()，会破坏 PNG 二进制
     // 这里直接用原生 fetch，保留 Response 自己控制 .blob() / .text()
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    const headers = { 'X-Device-Id': deviceId() };
     try {
-      const form = new FormData();
-      form.append('file', f);
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 60000);
-      let r;
-      try {
-        r = await fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', {
-          method: 'POST',
-          body: form,
-          headers: { 'X-Device-Id': deviceId() },  // rate limit 按设备隔离
-          signal: ctrl.signal,
-        });
-      } finally { clearTimeout(timer); }
-      if (!r.ok) {
-        const txt = await r.text().catch(() => '');
-        el.dwVidStatus.textContent = '首帧提取失败：' + (txt || ('HTTP ' + r.status));
-        return;
+      const form1 = new FormData(); form1.append('file', f);
+      const form2 = new FormData(); form2.append('file', f);
+      const [thumbR, filmR] = await Promise.all([
+        fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', { method: 'POST', body: form1, headers, signal: ctrl.signal }),
+        fetch((window.VDL_API_BASE || '') + '/api/dw/video/filmstrip',  { method: 'POST', body: form2, headers, signal: ctrl.signal }),
+      ]);
+      // 首帧
+      if (!thumbR.ok) {
+        const txt = await thumbR.text().catch(() => '');
+        el.dwVidStatus.textContent = '首帧提取失败：' + (txt || ('HTTP ' + thumbR.status));
+      } else {
+        const blob = await thumbR.blob();
+        const thumbUrl = URL.createObjectURL(blob);
+        el._dwThumbUrl = thumbUrl;
+        el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+        el.dwVidThumb.src = thumbUrl;
+        el.dwVidStatus.textContent = '';
       }
-      const blob = await r.blob();
-      const thumbUrl = URL.createObjectURL(blob);
-      el._dwThumbUrl = thumbUrl;
-      el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
-      el.dwVidThumb.src = thumbUrl;
-      el.dwVidStatus.textContent = '';
+      // filmstrip
+      if (!filmR.ok) {
+        const txt = await filmR.text().catch(() => '');
+        el.dwVidStatus.textContent = (el.dwVidStatus.textContent || '') + '　缩略图条失败：' + (txt || ('HTTP ' + filmR.status));
+      } else {
+        const blob = await filmR.blob();
+        const filmUrl = URL.createObjectURL(blob);
+        el._dwFilmstripUrl = filmUrl;
+        el.dwVidFilmstrip.src = filmUrl;
+      }
     } catch (e) {
-      el.dwVidStatus.textContent = '首帧提取失败：' + (e.message || '未知错误');
+      el.dwVidStatus.textContent = '加载失败：' + (e.message || '未知错误');
+    } finally {
+      clearTimeout(timer);
     }
   });
 
@@ -3450,13 +3462,28 @@
     el.dwVidStatus.textContent = `已添加第 ${dwVidSegments.length} 段（${s.toFixed(1)}s–${e.toFixed(1)}s）。可改框选 + 调时间轴再加下一段。`;
   });
 
-  // 播放预览 + 「设为开始/结束」：把播放器当前时刻同步到时间轴滑块
-  // （对应 lama-cleaner-video-gui 的 Set Start/End = Current Frame 工作流）
-  const dwVidSetFromPlayer = (which) => {
+  // Filmstrip 缩略图条 + 「设为开始/结束」：点击缩略图跳转 → 同步到时间轴滑块
+  // （对应 lama-cleaner-video-gui 的 Set Start/End = Current Frame 工作流，绕过 WKWebView video）
+  let dwVidSeekTime = 0;  // 当前 playhead 位置（秒），由点击 filmstrip 设置
+
+  const dwVidUpdateCursor = () => {
+    if (!dwVidDuration || !el.dwVidFilmstripCursor || !el.dwVidFilmstrip) return;
+    const pct = Math.max(0, Math.min(100, (dwVidSeekTime / dwVidDuration) * 100));
+    el.dwVidFilmstripCursor.style.left = pct + '%';
+    el.dwVidFilmstripCursor.hidden = false;
+  };
+  el.dwVidFilmstrip.addEventListener('click', (e) => {
+    if (!dwVidDuration) return;
+    const rect = el.dwVidFilmstrip.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    dwVidSeekTime = ratio * dwVidDuration;
+    dwVidUpdateCursor();
+    el.dwVidStatus.textContent = `已跳转到 ${dwVidSeekTime.toFixed(1)}s（点「设为开始 / 设为结束」同步到滑块）`;
+  });
+
+  const dwVidSetFromSeek = (which) => {
     if (!dwVidDuration) { el.dwVidStatus.textContent = '视频尚未加载完成，请稍候'; return; }
-    const t = Number(el.dwVidPlayer.currentTime || 0);
-    if (!isFinite(t)) { el.dwVidStatus.textContent = '无法读取当前播放时间'; return; }
-    const clamped = Math.max(0, Math.min(dwVidDuration, t));
+    const clamped = Math.max(0, Math.min(dwVidDuration, dwVidSeekTime));
     if (which === 'start') {
       // 开始不能晚于结束：先把结束推到 start+0.5（若被顶到则夹到片尾）
       let e = parseFloat(el.dwVidEnd.value);
@@ -3471,8 +3498,8 @@
     }
     el.dwVidStatus.textContent = `已把 ${clamped.toFixed(1)}s 设为${which === 'start' ? '开始' : '结束'}时间`;
   };
-  el.dwVidSetStart.addEventListener('click', () => dwVidSetFromPlayer('start'));
-  el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromPlayer('end'));
+  el.dwVidSetStart.addEventListener('click', () => dwVidSetFromSeek('start'));
+  el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromSeek('end'));
 
   const startDwVideo = async () => {
     const file = el.dwVidFile.files[0];
