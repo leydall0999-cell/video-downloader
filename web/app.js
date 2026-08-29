@@ -456,6 +456,8 @@
     dwVidResult: $('dwVidResult'),
     dwVidOut: $('dwVidOut'),
     dwVidOrig: $('dwVidOrig'),
+    dwVidPlayer: $('dwVidPlayer'),
+    dwVidTranscoding: $('dwVidTranscoding'),
     dwVidPlayerBox: $('dwVidPlayerBox'),
     dwVidSetStart: $('dwVidSetStart'),
     dwVidSetEnd: $('dwVidSetEnd'),
@@ -3253,6 +3255,38 @@
     el.dwVidSelInfo.textContent = `已框选水印区 (${Math.round(dwVidSel.x * 100)}%, ${Math.round(dwVidSel.y * 100)}%, ${Math.round(dwVidSel.w * 100)}%, ${Math.round(dwVidSel.h * 100)}%)`;
   };
 
+  // 转码播放源：任意格式 → 服务端 H.264+AAC → <video> 播放（绕开 WKWebView codec 限制）
+  const dwVidStartPreviewTranscode = async (f) => {
+    try {
+      const form = new FormData();
+      form.append('file', f);
+      const data = await request('/api/dw/video/preview', { method: 'POST', body: form });
+      const previewId = data.preview_id;
+      el._dwPreviewPoll = setInterval(async () => {
+        try {
+          const st = await request('/api/dw/video/preview/' + previewId + '/status');
+          if (st.status === 'completed') {
+            clearInterval(el._dwPreviewPoll);
+            el._dwPreviewPoll = null;
+            const base = `${window.VDL_API_BASE || ''}`;
+            el.dwVidPlayer.src = `${base}/api/dw/video/preview/${previewId}`;
+            el.dwVidPlayer.hidden = false;
+            el.dwVidTranscoding.hidden = true;
+            if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+          } else if (st.status === 'failed') {
+            clearInterval(el._dwPreviewPoll);
+            el._dwPreviewPoll = null;
+            el.dwVidTranscoding.hidden = true;
+            el.dwVidStatus.textContent = '播放源转码失败：' + (st.error || '未知错误');
+          }
+        } catch (_e) { /* 转码轮询继续 */ }
+      }, 1500);
+    } catch (e) {
+      el.dwVidTranscoding.hidden = true;
+      el.dwVidStatus.textContent = '播放源转码失败：' + (e.message || '未知错误');
+    }
+  };
+
   el.dwVidFile.addEventListener('change', async () => {
     const f = el.dwVidFile.files[0];
     if (!f) return;
@@ -3267,9 +3301,16 @@
     if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); el._dwFilmstripUrl = null; }
     el.dwVidFilmstrip.removeAttribute('src');
     el.dwVidFilmstripCursor.hidden = true;
+    // 播放器复位（等待新的转码）
+    el.dwVidPlayer.hidden = true;
+    el.dwVidPlayer.removeAttribute('src');
+    el.dwVidTranscoding.hidden = false;
+    if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
     el.dwVidPlayerBox.hidden = false;
     el.dwVidResult.hidden = true;
-    el.dwVidStatus.textContent = '正在抽首帧 + 缩略图条…';
+    el.dwVidStatus.textContent = '正在抽首帧 + 转码播放源…';
+    // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）
+    dwVidStartPreviewTranscode(f);
     // 并行：抽首帧（img 框选）+ filmstrip（点击跳转时间线）
     // 注意：不能走项目里的 request() wrapper——它内部 _parseResponse 强制 .json()，会破坏 PNG 二进制
     // 这里直接用原生 fetch，保留 Response 自己控制 .blob() / .text()
@@ -3483,7 +3524,13 @@
 
   const dwVidSetFromSeek = (which) => {
     if (!dwVidDuration) { el.dwVidStatus.textContent = '视频尚未加载完成，请稍候'; return; }
-    const clamped = Math.max(0, Math.min(dwVidDuration, dwVidSeekTime));
+    // 播放器可用时读 currentTime（精确到帧）；否则回退到 filmstrip 点击位置
+    let t = dwVidSeekTime;
+    if (el.dwVidPlayer && !el.dwVidPlayer.hidden && el.dwVidPlayer.src) {
+      const ct = Number(el.dwVidPlayer.currentTime || 0);
+      if (isFinite(ct)) t = ct;
+    }
+    const clamped = Math.max(0, Math.min(dwVidDuration, t));
     if (which === 'start') {
       // 开始不能晚于结束：先把结束推到 start+0.5（若被顶到则夹到片尾）
       let e = parseFloat(el.dwVidEnd.value);

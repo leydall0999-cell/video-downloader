@@ -679,6 +679,12 @@ img { max-width: 100%; display: block; }
 .dw-vid-player-box { margin: .6rem 0; }
 .dw-vid-player-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; flex-wrap: wrap; }
 .dw-vid-player-box video { width: 100%; max-height: 320px; display: block; background: #000; border-radius: var(--radius-md); }
+/* 转码中提示条（转码完成后隐藏，显示 <video>） */
+.dw-vid-transcoding {
+  padding: 1.2rem; text-align: center; font-size: 13px;
+  color: var(--text-tertiary, #888780); background: rgba(0,0,0,.04);
+  border-radius: var(--radius-md); border: 1px dashed var(--border-secondary, rgba(0,0,0,.15));
+}
 /* Filmstrip 缩略图条（横向，width:100% 自然缩放，max-height 限制高度，点击跳转 + 当前位置游标） */
 .dw-vid-filmstrip-wrap { position: relative; cursor: crosshair; background: #000; border-radius: var(--radius-md); overflow: hidden; }
 .dw-vid-filmstrip { width: 100%; height: auto; max-height: 120px; display: block; }

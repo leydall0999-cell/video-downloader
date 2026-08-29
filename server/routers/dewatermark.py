@@ -507,3 +507,92 @@ def create_dw_video_filmstrip(
     resp.headers["X-Filmstrip-Frames"] = str(int(frames))
     resp.headers["X-Filmstrip-Interval"] = f"{interval:.3f}"
     return resp
+
+
+# ---------------------------------------------------------------- 播放预览转码（让所有格式都能播）
+
+def _run_preview_transcode(preview_id: str, src: str) -> None:
+    """后台把任意格式视频转码为 WebKit 通用格式：H.264 main@L4.0 + yuv420p + AAC + faststart。
+
+    macOS WKWebView 的 `<video>` 对 HEVC / H.264 high@L4 / 10-bit / yuv444 等编码直接黑屏
+    （2026-08-29 实测）。ffmpeg 输入的任何格式先转成这套保守组合，前端就能稳定播放。
+    """
+    job = app.DW_JOBS.get(preview_id)
+    if not job:
+        return
+    try:
+        out_path = app.DW_DIR / f"dw_prev_{preview_id}.mp4"
+        cmd = [
+            app.FFMPEG_BIN, "-y", "-i", str(src),
+            "-c:v", "libx264",
+            "-profile:v", "main", "-level", "4.0",
+            "-pix_fmt", "yuv420p",
+            "-preset", "veryfast",          # 预览优先速度，画质够看即可
+            "-crf", "26",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",      # moov 前置，支持边下边播
+            str(out_path),
+        ]
+        proc = _subprocess.run(cmd, capture_output=True, timeout=1800)
+        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            err_tail = proc.stderr.decode("utf-8", "ignore")[-300:] if proc.stderr else "unknown"
+            raise RuntimeError(f"转码失败：{err_tail or 'unknown'}")
+        # 转完删除上传的原件（预览只需转码产物）
+        try:
+            app.Path(src).unlink(missing_ok=True)
+        except Exception:
+            pass
+        job["status"] = "completed"
+        job["out_path"] = str(out_path)
+        app.logger.info("dw video preview %s done -> %s", preview_id, out_path.name)
+    except Exception as e:  # noqa: BLE001
+        job["status"] = "failed"
+        job["error"] = str(e)[:400]
+        app.logger.warning("dw video preview %s failed: %s", preview_id, e)
+
+
+@router.post("/api/dw/video/preview")
+def create_dw_video_preview(
+    file: app.UploadFile = app._FastAPIFile(...),
+    request: app.Request = None,
+) -> dict:
+    """上传视频并后台转码为 WebKit 通用格式，用于前端 `<video>` 稳定播放。
+
+    返回 preview_id；前端轮询 /api/dw/video/preview/{id}/status，
+    completed 后把 <video src> 指向 /api/dw/video/preview/{id} 即可播放并拖动进度条。
+    """
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
+    if suffix not in DW_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件（mp4/mov/mkv/webm/avi 等）")
+    save_path = _save_upload(file, "dw_prev_up")
+    preview_id = app.uuid.uuid4().hex[:12]
+    with app.DW_LOCK:
+        app.DW_JOBS[preview_id] = {
+            "status": "running", "out_path": "", "error": "", "filename": "",
+            "kind": "preview",
+        }
+    app.executor.submit(_run_preview_transcode, preview_id, str(save_path))
+    return {"preview_id": preview_id, "status": "running"}
+
+
+@router.get("/api/dw/video/preview/{preview_id}/status")
+def dw_video_preview_status(preview_id: str) -> dict:
+    job = app.DW_JOBS.get(preview_id)
+    if not job or job.get("kind") != "preview":
+        raise app.HTTPException(status_code=404, detail="转码任务不存在")
+    return {"status": job["status"], "error": job.get("error", "")}
+
+
+@router.get("/api/dw/video/preview/{preview_id}")
+def dw_video_preview_file(preview_id: str) -> app.FileResponse:
+    """返回转码后的 MP4。Starlette FileResponse 原生支持 Range 请求（可拖进度条）。"""
+    job = app.DW_JOBS.get(preview_id)
+    if not job or job.get("kind") != "preview":
+        raise app.HTTPException(status_code=404, detail="转码任务不存在")
+    if job["status"] != "completed":
+        raise app.HTTPException(status_code=409, detail="转码尚未完成")
+    out = app.Path(job["out_path"])
+    if not out.exists():
+        raise app.HTTPException(status_code=410, detail="结果文件已清理")
+    return app.FileResponse(path=str(out), filename=out.name, media_type="video/mp4")
