@@ -468,6 +468,7 @@
     dwVidOrig: $('dwVidOrig'),
     dwVidPlayer: $('dwVidPlayer'),
     dwVidTranscoding: $('dwVidTranscoding'),
+    dwVidEmpty: $('dwVidEmpty'),
     dwVidPlayerHead: $('dwVidPlayerHead'),
     dwVidFilmstripWrap: $('dwVidFilmstripWrap'),
     dwVidFsHint: $('dwVidFsHint'),
@@ -3440,6 +3441,8 @@
   el.dwVidFile.addEventListener('change', async () => {
     const f = el.dwVidFile.files[0];
     if (!f) return;
+    // 选中视频即隐藏「请上传视频」占位层，画布进入工作态
+    if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
     const url = URL.createObjectURL(f);
     // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
@@ -4040,6 +4043,8 @@
     el.dwVidRunCtrls.hidden = true;
     el.dwVidStatus.textContent = '';
     el.dwVidBtn.disabled = false;
+    // 回到工作区：若之前已选视频则隐藏占位，否则仍提示「请上传视频」
+    if (el.dwVidEmpty) el.dwVidEmpty.hidden = !!el.dwVidFile.files[0];
     try { el.dwVidMain.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_e) {}
   });
   // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
