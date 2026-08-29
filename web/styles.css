@@ -694,17 +694,53 @@ img { max-width: 100%; display: block; }
   position: absolute; top: 50%; transform: translateY(-50%);
   height: 4px; background: rgba(76,217,100,.55); border-radius: 2px; pointer-events: none;
 }
-.dw-vid-player-box { margin: .6rem 0; }
-.dw-vid-player-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; flex-wrap: wrap; }
-.dw-vid-player-box video { width: 100%; max-height: 320px; display: block; background: #000; border-radius: var(--radius-md); }
+.dw-vid-player-head { display: flex; align-items: center; gap: .5rem; margin: .6rem 0 .35rem; flex-wrap: wrap; }
 /* [hidden] 兜底：避免被 .dw-vid-player-box video { display: block } 等显式 display 规则覆盖 */
 [hidden] { display: none !important; }
-/* 转码中提示条（转码完成后隐藏，显示 <video>） */
+/* 转码中提示条（转码完成后隐藏，显示 <video>）；
+   在视频合成画布里覆盖整个画布；普通面板里仍允许按原样式独立显示 */
 .dw-vid-transcoding {
   padding: 1.2rem; text-align: center; font-size: 13px;
   color: var(--text-tertiary, #888780); background: rgba(0,0,0,.04);
   border-radius: var(--radius-md); border: 1px dashed var(--border-secondary, rgba(0,0,0,.15));
 }
+/* ========== 视频合成画布（img + svg + 转码遮罩 + video 四层绝对叠放） ========== */
+/* 视频 wrap 是 .dw-preview-wrap（已 position: relative），img 的 height:auto 撑出 wrap 尺寸，
+   其余层 absolute inset:0 跟随。视频模式下整块视感是一个画布，不再上下两份。 */
+#dwVidPreviewWrap {
+  max-width: 100%;
+  /* 选中文件后会在 JS 里按 video.videoWidth/Height 动态设 aspect-ratio；此处保留 16:9 默认避免空白抖动 */
+  aspect-ratio: 16 / 9;
+}
+#dwVidPreviewWrap > .dw-vid-thumb {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  max-width: 100%; max-height: 100%;
+  object-fit: contain; background: #000; cursor: crosshair;
+}
+#dwVidPreviewWrap > .dw-svg,
+#dwVidPreviewWrap > .dw-vid-transcoding,
+#dwVidPreviewWrap > video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+}
+#dwVidPreviewWrap > video {
+  background: #000; cursor: default;
+  object-fit: contain;
+}
+#dwVidPreviewWrap > .dw-vid-transcoding {
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.62);
+  color: #f5f5f7;
+  font-size: 13px; padding: 1.2rem;
+  border: none; border-radius: 0;
+  pointer-events: none;  /* 不拦截框选事件，下方 img 继续响应 */
+}
+/* 转码好后让位给 video：img 隐藏（保留 src/resize 句柄在） */
+#dwVidPreviewWrap.is-playable > .dw-vid-thumb { visibility: hidden; }
+/* 「播放预览 + 设起止 + filmstrip + 提示」整体上下紧贴，节流间距 */
+.dw-vid-player-head + .dw-vid-filmstrip-wrap,
+.dw-vid-filmstrip-wrap + .dw-vid-fs-hint { margin-top: .35rem; }
 /* Filmstrip 缩略图条（横向，width:100% 自然缩放，max-height 限制高度，点击跳转 + 当前位置游标） */
 .dw-vid-filmstrip-wrap { position: relative; cursor: crosshair; background: #000; border-radius: var(--radius-md); overflow: hidden; }
 .dw-vid-filmstrip { width: 100%; height: auto; max-height: 120px; display: block; }

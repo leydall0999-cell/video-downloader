@@ -464,7 +464,10 @@
     dwVidOrig: $('dwVidOrig'),
     dwVidPlayer: $('dwVidPlayer'),
     dwVidTranscoding: $('dwVidTranscoding'),
-    dwVidPlayerBox: $('dwVidPlayerBox'),
+    dwVidPlayerHead: $('dwVidPlayerHead'),
+    dwVidFilmstripWrap: $('dwVidFilmstripWrap'),
+    dwVidFsHint: $('dwVidFsHint'),
+    dwVidBackToThumb: $('dwVidBackToThumb'),
     dwVidSetStart: $('dwVidSetStart'),
     dwVidSetEnd: $('dwVidSetEnd'),
     dwVidFilmstrip: $('dwVidFilmstrip'),
@@ -3267,6 +3270,28 @@
 
   // 转码播放源：任意格式 → 服务端 H.264+AAC → <video> 播放（绕开 WKWebView codec 限制）
   // 同文件（name+size）缓存 preview_id，避免重复上传与转码
+  const dwVidMarkPlayable = (url, previewId) => {
+    const base = `${window.VDL_API_BASE || ''}`;
+    el.dwVidPlayer.src = `${base}${url || '/api/dw/video/preview/' + previewId}`;
+    el.dwVidPlayer.hidden = false;
+    el.dwVidTranscoding.hidden = true;
+    // 把整个画布标记为可播放（让 img 让位给 video），同时露出底部控件 + filmstrip
+    const wrap = el.dwVidPlayer && el.dwVidPlayer.parentElement;
+    if (wrap) wrap.classList.add('is-playable');
+    if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = false;
+    if (el.dwVidFilmstripWrap) el.dwVidFilmstripWrap.hidden = false;
+    if (el.dwVidFsHint) el.dwVidFsHint.hidden = false;
+    if (el.dwVidBackToThumb) el.dwVidBackToThumb.hidden = false;
+    // video 加载好后按真实尺寸校准画布纵横比（避免 9:16 视频被 16:9 容器拉伸空白）
+    const onLoaded = () => {
+      const vw = el.dwVidPlayer.videoWidth, vh = el.dwVidPlayer.videoHeight;
+      if (vw > 0 && vh > 0 && wrap) wrap.style.aspectRatio = `${vw} / ${vh}`;
+      el.dwVidPlayer.removeEventListener('loadedmetadata', onLoaded);
+    };
+    el.dwVidPlayer.addEventListener('loadedmetadata', onLoaded);
+    if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+  };
+
   const dwVidStartPreviewTranscode = async (f) => {
     const cacheKey = `dwPrev:${f.name}:${f.size}`;
     const base0 = `${window.VDL_API_BASE || ''}`;
@@ -3276,10 +3301,7 @@
       try {
         const st = await request('/api/dw/video/preview/' + cachedId + '/status');
         if (st.status === 'completed') {
-          el.dwVidPlayer.src = `${base0}/api/dw/video/preview/${cachedId}`;
-          el.dwVidPlayer.hidden = false;
-          el.dwVidTranscoding.hidden = true;
-          if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+          dwVidMarkPlayable(`/api/dw/video/preview/${cachedId}`, cachedId);
           return;
         }
       } catch (_e) { /* 缓存失效，重新转码 */ }
@@ -3296,11 +3318,7 @@
           if (st.status === 'completed') {
             clearInterval(el._dwPreviewPoll);
             el._dwPreviewPoll = null;
-            const base = `${window.VDL_API_BASE || ''}`;
-            el.dwVidPlayer.src = `${base}/api/dw/video/preview/${previewId}`;
-            el.dwVidPlayer.hidden = false;
-            el.dwVidTranscoding.hidden = true;
-            if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+            dwVidMarkPlayable(`/api/dw/video/preview/${previewId}`, previewId);
           } else if (st.status === 'failed') {
             clearInterval(el._dwPreviewPoll);
             el._dwPreviewPoll = null;
@@ -3329,12 +3347,17 @@
     if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); el._dwFilmstripUrl = null; }
     el.dwVidFilmstrip.removeAttribute('src');
     el.dwVidFilmstripCursor.hidden = true;
-    // 播放器复位（等待新的转码）
+    // 播放器复位（等待新的转码）：画布回到「img + 转码遮罩」两态，video/底部控件全部隐藏
+    const wrap = el.dwVidThumb && el.dwVidThumb.parentElement;
+    if (wrap) wrap.classList.remove('is-playable');
+    if (wrap) wrap.style.aspectRatio = '16 / 9';
     el.dwVidPlayer.hidden = true;
     el.dwVidPlayer.removeAttribute('src');
     el.dwVidTranscoding.hidden = false;
+    if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
+    if (el.dwVidFilmstripWrap) el.dwVidFilmstripWrap.hidden = true;
+    if (el.dwVidFsHint) el.dwVidFsHint.hidden = true;
     if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
-    el.dwVidPlayerBox.hidden = false;
     el.dwVidResult.hidden = true;
     el.dwVidStatus.textContent = '正在抽首帧 + 转码播放源…';
     // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）
@@ -3362,6 +3385,11 @@
         el._dwThumbUrl = thumbUrl;
         el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
         el.dwVidThumb.src = thumbUrl;
+        // 按真实首帧比例校准画布纵横比，避免 9:16 横屏视频上下大黑边
+        if (el.dwVidThumb.naturalWidth && el.dwVidThumb.naturalHeight) {
+          const wrap = el.dwVidThumb.parentElement;
+          if (wrap) wrap.style.aspectRatio = `${el.dwVidThumb.naturalWidth} / ${el.dwVidThumb.naturalHeight}`;
+        }
         el.dwVidStatus.textContent = '';
       }
       // filmstrip
@@ -3668,6 +3696,19 @@
   };
   el.dwVidSetStart.addEventListener('click', () => dwVidSetFromSeek('start'));
   el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromSeek('end'));
+  // 转码好后把 video 接管了画面 → 想再改框选就回到首帧模式
+  el.dwVidBackToThumb.addEventListener('click', () => {
+    const wrap = el.dwVidPlayer && el.dwVidPlayer.parentElement;
+    if (!wrap) return;
+    if (el.dwVidPlayer && !el.dwVidPlayer.hidden) {
+      el.dwVidPlayer.pause();
+      el.dwVidPlayer.hidden = true;
+    }
+    wrap.classList.remove('is-playable');
+    // img 重新显示（首帧 PNG 仍在 src 里）→ 用户可继续拖拽框选
+    if (el.dwVidBackToThumb) el.dwVidBackToThumb.hidden = true;
+    el.dwVidStatus.textContent = '已回到首帧，可继续拖拽框选';
+  });
 
   const startDwVideo = async () => {
     const file = el.dwVidFile.files[0];
