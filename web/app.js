@@ -3947,20 +3947,23 @@
             el.dwVidResume.hidden = true;
             el.dwVidCancel.hidden = false;
             // 按后端 phase 给出更精确的阶段提示，消除「长时间无反馈」的假死感。
-            // inpainting 阶段优先显示 "实际要推理的帧数" (inpaint_count)，与 "全视频总帧"
-            // 区分开 —— 不让用户被全帧数吓到。区间是 6.8s/30fps 截到 204 帧时，UI 应是
-            // "已处理 X/204 帧（区间内推理）" 而非 "X/4515 帧"。
+            // inpainting 阶段同时显示「总帧进度」与「实际推理帧数」，用"·"隔开避免堆叠成
+            // "10/2258/81 帧" 那种三数字乱炖。例如：
+            //   "正在逐帧去除水印（10/2258 帧 · 81 帧需 AI 推理）"
+            //   — done/total ＝ 全视频处理进度；"X 帧需 AI" ＝ 真正花算力的子集（区间内）
             const _inpaintTotal = parseInt(st.inpaint_count || '0', 10) || 0;
-            const _inpaintText = _inpaintTotal > 0 ? `${_inpaintTotal} 帧推理` : '推理';
+            const _inferTag = _inpaintTotal > 0
+              ? ` · ${_inpaintTotal} 帧需 AI 推理`
+              : (_inpaintTotal === 0 ? ' · 全部帧 AI 推理' : '');
             const _pm = {
               loading_model: '正在加载 AI 模型（首次较慢，请稍候）…',
               extracting_frames: '正在抽取视频帧…',
-              inpainting: `正在逐帧去除水印（已处理 ${st.progress || '0'}/${_inpaintTotal || '?'} 帧 — ${_inpaintText}）`,
+              inpainting: `正在逐帧去除水印（${st.progress || '0'} 帧${_inferTag}）`,
               encoding: '正在重新编码输出视频…',
             };
             el.dwVidStatus.textContent = _pm[st.phase] || (
               st.progress
-                ? `去水印处理中… 已处理 ${st.progress} 帧${_inpaintTotal ? `/${_inpaintTotal} 帧推理` : ''}`
+                ? `去水印处理中… 已处理 ${st.progress} 帧${_inferTag}`
                 : '视频去水印处理中（逐帧推理，请稍候）…'
             );
           } else if (st.status === 'paused') {
