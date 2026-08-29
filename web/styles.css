@@ -708,8 +708,10 @@ img { max-width: 100%; display: block; }
 /* 视频 wrap 是 .dw-preview-wrap（已 position: relative），img 的 height:auto 撑出 wrap 尺寸，
    其余层 absolute inset:0 跟随。视频模式下整块视感是一个画布，不再上下两份。 */
 #dwVidPreviewWrap {
+  /* 默认占满 dw-main 主列：避免 inline-block + 全 absolute 子元素塌成 0 高 */
+  display: block;
+  width: 100%;
   max-width: 100%;
-  /* 选中文件后会在 JS 里按 video.videoWidth/Height 动态设 aspect-ratio；此处保留 16:9 默认避免空白抖动 */
   aspect-ratio: 16 / 9;
 }
 #dwVidPreviewWrap > .dw-vid-thumb {
