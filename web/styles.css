@@ -825,6 +825,9 @@ img { max-width: 100%; display: block; }
 
 /* 结果对比卡片 */
 .dw-result { margin-top: .8rem; display: flex; flex-direction: column; gap: .6rem; }
+/* 结果区顶部：标题 + 重新处理按钮 两端对齐 */
+.dw-result-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.dw-result-head .dw-cap { font-size: .92rem; font-weight: 600; color: var(--text); }
 /* 修复：上面的 .dw-result{display:flex} 与 UA 的 [hidden]{display:none}
    同特异性 (0,1,0)，作者 CSS 写在后面会赢，导致 hidden 属性失效，
    未处理图片时仍露出"原图/处理后"两个黑框。特异性提到 (0,2,0) 必赢。 */

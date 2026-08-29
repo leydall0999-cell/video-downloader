@@ -462,6 +462,8 @@
     dwVidBtn: $('dwVidBtn'),
     dwVidStatus: $('dwVidStatus'),
     dwVidResult: $('dwVidResult'),
+    dwVidMain: $('dwVidMain'),
+    dwVidRedo: $('dwVidRedo'),
     dwVidOut: $('dwVidOut'),
     dwVidOrig: $('dwVidOrig'),
     dwVidPlayer: $('dwVidPlayer'),
@@ -3986,6 +3988,9 @@
             el.dwVidDownload.dataset.jobId = jobId;
             el.dwVidDownload.setAttribute('download', st.filename || 'dewatered.mp4');
             el.dwVidResult.hidden = false;
+            // 完成后隐藏上方工作区（带水印的原视频预览 + 框选/播放/filmstrip），
+            // 避免用户再把带水印的预览当成"未处理"。结果区已含"原视频"对照卡。
+            if (el.dwVidMain) el.dwVidMain.hidden = true;
             el.dwVidStatus.textContent = '去水印完成 ✅';
             el.dwVidBtn.disabled = false;
             try { el.dwVidResult.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_e) {}
@@ -4028,6 +4033,15 @@
   });
   };
   el.dwVidBtn.addEventListener('click', startDwVideo);
+  // 重新处理：显示上方工作区（原视频预览/框选/参数），隐藏结果区，回到可重新提交的初始态。
+  if (el.dwVidRedo) el.dwVidRedo.addEventListener('click', () => {
+    if (el.dwVidMain) el.dwVidMain.hidden = false;
+    el.dwVidResult.hidden = true;
+    el.dwVidRunCtrls.hidden = true;
+    el.dwVidStatus.textContent = '';
+    el.dwVidBtn.disabled = false;
+    try { el.dwVidMain.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_e) {}
+  });
   // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
   el.dwVidDownload.addEventListener('click', (e) => {
     if (!el.dwVidDownload.href) e.preventDefault();

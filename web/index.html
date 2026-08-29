@@ -624,7 +624,7 @@
     <!-- 视频模式 -->
     <div id="dwVideoPane" hidden>
       <div class="dw-layout">
-        <div class="dw-main">
+        <div class="dw-main" id="dwVidMain">
           <label class="uc-field">
             <span class="uc-label">视频文件</span>
             <input type="file" id="dwVidFile" accept="video/*" />
@@ -746,6 +746,10 @@
         </aside>
       </div>
       <div class="dw-result" id="dwVidResult" hidden>
+        <div class="dw-result-head">
+          <span class="dw-cap">去水印结果</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="dwVidRedo" title="回到上方工作区，重新框选 / 换视频再处理">↻ 重新处理</button>
+        </div>
         <div class="dw-compare">
           <div><span class="dw-cap">原视频</span><video id="dwVidOrig" alt="原视频" controls></video></div>
           <div><span class="dw-cap">处理后</span><video id="dwVidOut" alt="处理后" controls></video></div>
