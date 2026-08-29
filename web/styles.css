@@ -1184,20 +1184,6 @@ img { max-width: 100%; display: block; }
   .sidebar::-webkit-scrollbar { width: 6px; }
   .sidebar::-webkit-scrollbar-thumb { background: rgba(99,102,241,.35); border-radius: 3px; }
   .sidebar::-webkit-scrollbar-track { background: transparent; }
-  .sidebar-brand {
-    display: flex; align-items: center; gap: .45rem;
-    padding: .25rem .45rem .65rem;
-    border-bottom: 1px dashed var(--line);
-  }
-  .sidebar-brand-dot {
-    width: 20px; height: 20px; border-radius: 6px;
-    background: linear-gradient(135deg, var(--brand), #6366f1);
-    box-shadow: 0 4px 10px rgba(99,102,241,.35);
-  }
-  .sidebar-brand-name {
-    font-size: .85rem; font-weight: 800; color: var(--text);
-    letter-spacing: .02em;
-  }
   .sidebar-group { display: flex; flex-direction: column; gap: .1rem; }
   .sidebar-group-title {
     display: flex; align-items: center; gap: .4rem;
