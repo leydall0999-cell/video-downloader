@@ -290,6 +290,115 @@ def dw_pdf_file(job_id: str) -> app.FileResponse:
 DW_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v", ".wmv"}
 
 
+# ---------------------------------------------------------------- 转码编码器选择（预览/输出提速，2026-08-29）
+def _ffprobe_bin() -> str:
+    """从 ffmpeg 同级目录找 ffprobe，找不到再退回 PATH。"""
+    fb = getattr(app, "FFMPEG_BIN", "") or ""
+    if fb:
+        cand = app.os.path.join(app.os.path.dirname(fb), "ffprobe")
+        if app.os.path.exists(cand):
+            return cand
+    return app.shutil.which("ffprobe") or "ffprobe"
+
+
+_VT_OK = None  # 缓存：本机 ffmpeg 是否带 h264_videotoolbox（macOS 桌面端有，Linux/Railway 无）
+
+
+def _videotoolbox_available() -> bool:
+    """探测 VideoToolbox 硬编是否可用（macOS 桌面端常见）。结果缓存，避免每次转码都跑。"""
+    global _VT_OK
+    if _VT_OK is None:
+        try:
+            proc = _subprocess.run(
+                [app.FFMPEG_BIN, "-hide_banner", "-encoders"],
+                capture_output=True, text=True, timeout=15,
+            )
+            _VT_OK = "h264_videotoolbox" in (proc.stdout or "")
+        except Exception:  # noqa: BLE001
+            _VT_OK = False
+    return _VT_OK
+
+
+def _probe_streams(src: str) -> dict:
+    """用 ffprobe 读取视频/音频流关键信息，用于判断是否已是 WebKit 可直接播放的格式。"""
+    info = {"v_codec": "", "v_profile": "", "v_level": 0.0,
+            "v_pixfmt": "", "v_w": 0, "v_h": 0,
+            "has_audio": False, "a_codec": ""}
+    try:
+        proc = _subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-show_entries",
+             "stream=codec_name,profile,level,pix_fmt,width,height,codec_type",
+             "-of", "json", str(src)],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(proc.stdout or "{}")
+        for s in data.get("streams", []):
+            ctype = s.get("codec_type")
+            if ctype == "video" and not info["v_codec"]:
+                info["v_codec"] = (s.get("codec_name") or "").lower()
+                info["v_profile"] = (s.get("profile") or "").lower()
+                try:
+                    info["v_level"] = float(s.get("level") or 0)
+                except (TypeError, ValueError):
+                    info["v_level"] = 0.0
+                info["v_pixfmt"] = (s.get("pix_fmt") or "").lower()
+                try:
+                    info["v_w"] = int(s.get("width") or 0)
+                    info["v_h"] = int(s.get("height") or 0)
+                except (TypeError, ValueError):
+                    info["v_w"] = info["v_h"] = 0
+            elif ctype == "audio":
+                info["has_audio"] = True
+                info["a_codec"] = (s.get("codec_name") or "").lower()
+    except Exception:  # noqa: BLE001
+        pass
+    return info
+
+
+def _webkit_playable(info: dict) -> bool:
+    """判断源是否已是 WKWebView <video> 可直接稳定播放的格式（2026-08-29 实测 main@L4.0+yuv420p 可播）。
+
+    命中则预览可「流拷贝」跳过重新编码（瞬时），否则必须转码。
+    """
+    if info["v_codec"] != "h264":
+        return False
+    if info["v_pixfmt"] != "yuv420p":
+        return False
+    if info["v_profile"] not in ("main", "baseline", "constrained baseline"):
+        return False
+    if info["v_level"] > 40.0:  # level 4.0 已验证可播；更高保守重编码
+        return False
+    if info["has_audio"] and info["a_codec"] != "aac":
+        return False
+    return True
+
+
+def _preview_bitrate(info: dict) -> str:
+    """按分辨率给预览转码一个码率上限（约束体积，便于边下边播）。"""
+    w, h = info.get("v_w", 0), info.get("v_h", 0)
+    if w >= 3000 or h >= 1500:
+        return "8000k"   # ~4K
+    if w >= 1800 or h >= 1000:
+        return "3000k"   # 1080p
+    return "1500k"       # 720p 及以下
+
+
+def _preview_encode_cmd(src: str, out: str, use_vt: bool, info: dict) -> list:
+    """构造预览转码命令：VideoToolbox 硬编（macOS）或 libx264 软编（Linux/回退）。"""
+    if use_vt:
+        return [app.FFMPEG_BIN, "-y", "-i", str(src),
+                "-c:v", "h264_videotoolbox",
+                "-profile:v", "main", "-level", "4.0",
+                "-b:v", _preview_bitrate(info),
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", str(out)]
+    return [app.FFMPEG_BIN, "-y", "-i", str(src),
+            "-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
+            "-preset", "veryfast", "-crf", "26",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", str(out)]
+
+
 def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool,
                start_sec: float = 0.0, end_sec: float = 0.0, segments=None) -> None:
     job = app.DW_JOBS.get(job_id)
@@ -515,28 +624,37 @@ def _run_preview_transcode(preview_id: str, src: str) -> None:
     """后台把任意格式视频转码为 WebKit 通用格式：H.264 main@L4.0 + yuv420p + AAC + faststart。
 
     macOS WKWebView 的 `<video>` 对 HEVC / H.264 high@L4 / 10-bit / yuv444 等编码直接黑屏
-    （2026-08-29 实测）。ffmpeg 输入的任何格式先转成这套保守组合，前端就能稳定播放。
+    （2026-08-29 实测）。优化策略（2026-08-29）：
+      1) 若源已是 WebKit 可直接播放的格式 → 仅流拷贝（瞬时，不重编码）；
+      2) 否则优先 VideoToolbox 硬件编码（macOS 近实时），无硬编环境回退 libx264 软编。
+    任选路径失败都会回退到 libx264 软编，保证鲁棒。
     """
     job = app.DW_JOBS.get(preview_id)
     if not job:
         return
     try:
         out_path = app.DW_DIR / f"dw_prev_{preview_id}.mp4"
-        cmd = [
-            app.FFMPEG_BIN, "-y", "-i", str(src),
-            "-c:v", "libx264",
-            "-profile:v", "main", "-level", "4.0",
-            "-pix_fmt", "yuv420p",
-            "-preset", "veryfast",          # 预览优先速度，画质够看即可
-            "-crf", "26",
-            "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",      # moov 前置，支持边下边播
-            str(out_path),
-        ]
+        info = _probe_streams(src)
+        if _webkit_playable(info):
+            # 已兼容：流拷贝，仅把 moov 前置以支持边下边播（瞬时）
+            cmd = [app.FFMPEG_BIN, "-y", "-i", str(src),
+                   "-c", "copy", "-movflags", "+faststart", str(out_path)]
+            tried = "copy"
+        elif _videotoolbox_available():
+            cmd = _preview_encode_cmd(src, out_path, True, info)
+            tried = "videotoolbox"
+        else:
+            cmd = _preview_encode_cmd(src, out_path, False, info)
+            tried = "libx264"
         proc = _subprocess.run(cmd, capture_output=True, timeout=1800)
         if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-            err_tail = proc.stderr.decode("utf-8", "ignore")[-300:] if proc.stderr else "unknown"
-            raise RuntimeError(f"转码失败：{err_tail or 'unknown'}")
+            # 首选路径失败 → 回退 libx264 软编（最稳妥）
+            app.logger.warning("dw preview %s 首选[%s]失败，回退 libx264", preview_id, tried)
+            cmd = _preview_encode_cmd(src, out_path, False, info)
+            proc = _subprocess.run(cmd, capture_output=True, timeout=1800)
+            if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+                err_tail = proc.stderr.decode("utf-8", "ignore")[-300:] if proc.stderr else "unknown"
+                raise RuntimeError(f"转码失败：{err_tail or 'unknown'}")
         # 转完删除上传的原件（预览只需转码产物）
         try:
             app.Path(src).unlink(missing_ok=True)

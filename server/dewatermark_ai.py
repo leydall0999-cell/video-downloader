@@ -428,6 +428,43 @@ def _run_ffmpeg(cmd):
         raise RuntimeError("ffmpeg 执行失败：" + (proc.stderr or proc.stdout or "")[:400])
 
 
+_VT_CACHE = {}
+
+
+def _videotoolbox_available(ffmpeg_bin: str) -> bool:
+    """探测 VideoToolbox 硬编是否可用（macOS 桌面端常见），结果按 ffmpeg 路径缓存。"""
+    key = ffmpeg_bin or "ffmpeg"
+    if key not in _VT_CACHE:
+        try:
+            proc = subprocess.run([key, "-hide_banner", "-encoders"],
+                                  capture_output=True, text=True, timeout=15)
+            _VT_CACHE[key] = "h264_videotoolbox" in (proc.stdout or "")
+        except Exception:  # noqa: BLE001
+            _VT_CACHE[key] = False
+    return _VT_CACHE[key]
+
+
+def _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path):
+    """构造「逐帧 PNG → H.264 mp4」命令：VideoToolbox 硬编（macOS）优先，无则 libx264 软编。
+
+    硬编用 6000k 码率上限保画质（成片交付），软编沿用原 crf20 veryfast。
+    """
+    cmd = [ffmpeg_bin, "-y", "-framerate", f"{fps:g}",
+           "-i", os.path.join(src_frames, "%05d.png")]
+    if has_audio:
+        cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "192k"]
+    if _videotoolbox_available(ffmpeg_bin):
+        cmd += ["-c:v", "h264_videotoolbox", "-profile:v", "main", "-level", "4.0",
+                "-b:v", "6000k"]
+    else:
+        cmd += ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
+    cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    if has_audio:
+        cmd += ["-shortest"]
+    cmd += [str(dst_path)]
+    return cmd
+
+
 def _probe_fps(ffmpeg_bin: str, src: str) -> float:
     """探测视频帧率（fps）；ffprobe 优先，退化解析 ffmpeg -i，再退化 30。"""
     probe = _shutil.which("ffprobe") or (os.path.join(os.path.dirname(ffmpeg_bin), "ffprobe") if ffmpeg_bin else "")
@@ -606,15 +643,8 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
         except Exception:
             has_audio = False
 
-        # 6) 重编码混音
-        cmd = [ffmpeg_bin, "-y", "-framerate", f"{fps:g}", "-i", os.path.join(src_frames, "%05d.png")]
-        if has_audio:
-            cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "192k"]
-        cmd += ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
-                "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
-        if has_audio:
-            cmd += ["-shortest"]
-        cmd += [str(dst_path)]
+        # 6) 重编码混音（VideoToolbox 硬编优先提速，无则 libx264 软编）
+        cmd = _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path)
         _run_ffmpeg(cmd)
 
         if not os.path.exists(str(dst_path)) or os.path.getsize(str(dst_path)) == 0:
