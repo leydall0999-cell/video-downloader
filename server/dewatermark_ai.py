@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 logger = logging.getLogger("vdl.dewatermark_ai")
@@ -52,6 +53,8 @@ except Exception:  # noqa: BLE001
 # LaMa ONNX 权重（fp32，固定 512x512 输入；Carve-Photos/lama 导出，Apache 2.0）
 LAMA_ONNX_URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
 LAMA_ONNX_NAME = "lama_fp32.onnx"
+# INT8 动态量化模型名（④，VDL_DW_INT8=1 时由 fp32 量化生成，缓存复用）
+LAMA_ONNX_INT8_NAME = "lama_fp32.int8.onnx"
 
 # 推理瓦片大小与羽化重叠（LaMa 推荐 512 / 32~64 重叠）
 TILE = 512
@@ -189,6 +192,27 @@ def _memory_ok() -> tuple:
     return True, ""
 
 
+def _optimal_threads() -> int:
+    """AI 去水印推理的最优线程数。
+
+    ① 线程调优（2026-08-29 wave1）：LaMa 是单一大图（傅里叶卷积），intra_op 多线程可线性加速
+    单瓦片推理。桌面端多核机器默认打满（上限 8），单核环境退 1。可用 env VDL_DW_THREADS 覆盖。
+    """
+    env = os.environ.get("VDL_DW_THREADS")
+    if env:
+        try:
+            v = int(env)
+            if v >= 1:
+                return v
+        except ValueError:
+            pass
+    try:
+        c = os.cpu_count() or 4
+    except Exception:  # noqa: BLE001
+        c = 4
+    return max(1, min(c, 8))
+
+
 def _get_session():
     """懒加载 onnxruntime InferenceSession（进程内缓存，线程安全）。"""
     global _SESSION
@@ -202,16 +226,52 @@ def _get_session():
             raise RuntimeError(reason)
         import onnxruntime as ort  # 延迟导入，缺失时不阻塞启动
 
-        p = _ensure_model()
+        # ④ INT8（wave2）：VDL_DW_INT8=1 时优先用动态量化模型，失败自动回退 fp32
+        model_path = None
+        if os.environ.get("VDL_DW_INT8"):
+            try:
+                model_path = _ensure_int8_model()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("ai_dewatermark INT8 模型准备失败，回退 fp32: %s", e)
+                model_path = None
+        if model_path is None:
+            model_path = _ensure_model()
+
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         # 关掉内存模式优化：牺牲少量速度换取更低峰值内存，降低小实例 OOM 概率
         so.enable_mem_pattern = False
-        # 限线程：避免 CPU 尖峰 / 内存膨胀（单图推理本就快，无需多线程）
-        so.intra_op_num_threads = 1
+        # ① 线程调优：intra_op 多线程加速单瓦片推理；inter_op 对单子图几乎无益，保持 1
+        so.intra_op_num_threads = _optimal_threads()
         so.inter_op_num_threads = 1
-        _SESSION = ort.InferenceSession(str(p), sess_options=so, providers=["CPUExecutionProvider"])
+        _SESSION = ort.InferenceSession(str(model_path), sess_options=so, providers=["CPUExecutionProvider"])
     return _SESSION
+
+
+def _ensure_int8_model() -> Path | None:
+    """（可选）动态 INT8 量化模型：weights-only 动态量化，CPU 上约 1.5-2× 提速。
+
+    仅在 VDL_DW_INT8=1 时启用；生成失败/不可用则回退 fp32（返回 None）。结果按 fp32 内容缓存。
+    """
+    fp32 = _ensure_model()
+    out = _model_dir() / LAMA_ONNX_INT8_NAME
+    # fp32 已完整性校验过；int8 体积约为 fp32 一半，小于此阈值视为残缺
+    if out.exists() and out.stat().st_size >= EXPECTED_MODEL_MIN_BYTES // 3:
+        return out
+    try:
+        from onnxruntime.quantization import quantize_dynamic, QuantType
+        quantize_dynamic(str(fp32), str(out), weight_type=QuantType.QInt8)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ai_dewatermark INT8 量化失败，回退 fp32: %s", e)
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    if not out.exists() or out.stat().st_size < 1_000_000:
+        return None
+    logger.info("ai_dewatermark INT8 量化完成 %s (%d bytes)", out, out.stat().st_size)
+    return out
 
 
 def available() -> bool:
@@ -573,7 +633,8 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                      resolution: str = "original", smooth: bool = True, window: int = 2,
                      start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
                      target_fps: float = 15.0,  # 默认 15 fps（2026-08-29 由 30 调到 15 — 静态水印 + 邻帧平滑足够；详见 module docstring）
-                     work_dir: str = None, cancel_check=None, phase_cb=None) -> Path:
+                     work_dir: str = None, cancel_check=None, phase_cb=None,
+                     temporal_stride: int = 4) -> Path:
     """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
 
     src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
@@ -597,6 +658,12 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
     （处理"片头 logo 在左上、片尾字幕在底部"这类位置会变的水印）。
     同一帧被多个段覆盖时，各段的 regions 会**合并**成一张 mask。
     segments 为空时自动回退到单一 (start_sec, end_sec, regions)，向后兼容。
+
+    **时间稀疏推理（Temporal Sparse，2026-08-29 wave2 ②）**：temporal_stride>1 时，
+    仅在「关键帧」（每段首帧 / 末帧 / 掩码签名变化帧 / 距上一关键帧 ≥ stride 帧）跑 LaMa，
+    关键帧之间的帧用相邻关键帧在掩码处线性插值填充——静态水印下肉眼无差，但推理量降为
+    约 1/stride（配合 bbox 裁剪已是双重提速）。stride=1 退化为逐帧（质量最优）。
+    预扫描阶段会报告 actual_inpaint（真实 AI 推理帧数）供前端预估。
     """
     if not available():
         raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
@@ -694,7 +761,12 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                 frame_segs[i].append(idx)
 
         inpaint_count = sum(1 for segs in frame_segs if segs)
-        logger.info("dw video segments: %s 段 (fps=%.3f, total=%s 帧, 推理=%s, copy=%s)",
+        # 标记每段「连续推理区」的最后一帧（用于 time-sparse 强制关键帧，保证段尾是真实推理）
+        inpaint_run_last = [False] * total
+        for i in range(total):
+            if frame_segs[i] and (i + 1 >= total or not frame_segs[i + 1]):
+                inpaint_run_last[i] = True
+        logger.info("dw video segments: %s 段 (fps=%.3f, total=%s 帧, 区间推理=%s, copy=%s)",
                     len(seg_defs), fps, total, inpaint_count, total - inpaint_count)
 
         # 关键帧插值：返回某段在全局时间 t（秒）时的 regions 列表（归一化坐标）
@@ -758,48 +830,165 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                 _mask_cache[key] = m
             return _mask_cache[key]
 
-        # 3) 逐帧处理：被任一段覆盖则跑 LaMa 推理，否则零成本复制
-        #    续跑：proc_dir 已有该帧则跳过（已完成）；帧边界检查暂停/取消信号
-        #    进度上报分两个维度——给前端更直观的预估：
-        #      · phase_cb("inpaint_count", N) 一次性给出本次"真正要推理"的帧数（copy 不算）
-        #      · progress_cb(i+1, total) 全部帧计数（含 copy），让进度条能从 0 平滑推进
-        #    这样 UI 能立即显示"处理 X/Y（实际推理帧）", 用户对工作量有数；
-        #    但进度条不会跳跃，体验稳。
+        # 3) 逐帧处理 + 时间稀疏推理（wave2 ②）+ I/O 重叠预取（wave2 ③）
+        #    time-sparse：仅对「关键帧」跑 LaMa 推理，关键帧之间的帧用相邻关键帧在掩码处
+        #    线性插值（或末尾帧最近）填充，省去大量逐帧推理（静态水印下肉眼无差）。
+        #    stride<=1 时退化为逐帧（质量最优）。
+        #    prefetch：后台预解码下一帧，重叠「解码 I/O」与「当前帧推理」。
+        #    续跑：proc_dir 已有该帧则跳过；已存在的关键帧会载入为 prev，保证 gap-fill 正确。
+        stride = max(1, int(temporal_stride or 1))
+        inpaint_mask = [bool(frame_segs[i]) for i in range(total)]
+
+        def _regs_sig_at(i):
+            """仅算掩码签名（不建大图），用于预扫描关键帧调度。"""
+            t = i / fps
+            all_regs = []
+            for idx in frame_segs[i]:
+                all_regs.extend(_regions_at(seg_defs[idx], t))
+            return _region_sig(all_regs)
+
+        # 预扫描关键帧位置 + 真实推理帧数（实际 LaMa 推理次数 = 关键帧数）
+        is_keyframe = [False] * total
+        prev_kf_idx = None
+        prev_kf_sig = None
+        actual_inpaint = 0
+        for i in range(total):
+            if not inpaint_mask[i]:
+                continue
+            sig = _regs_sig_at(i)
+            make_kf = (prev_kf_idx is None) or (sig != prev_kf_sig) \
+                or ((i - prev_kf_idx) >= stride) or inpaint_run_last[i]
+            if make_kf:
+                is_keyframe[i] = True
+                actual_inpaint += 1
+                prev_kf_idx = i
+                prev_kf_sig = sig
+
         if phase_cb:
             try: phase_cb("inpainting")
             except Exception: pass
-        # 单独发一次 inpaint_count 阶段事件（让前端在开始前就拿到"实际工作总量"）
+        # 单独发一次 inpaint_count 阶段事件（真实 AI 推理帧数，让前端预估准确）
         if phase_cb:
-            try: phase_cb(f"inpaint_count:{inpaint_count}")
+            try: phase_cb(f"inpaint_count:{actual_inpaint}")
             except Exception: pass
-        for i, fp in enumerate(frame_files):
-            out_name = os.path.join(proc_dir, os.path.basename(fp))
-            if os.path.exists(out_name):
-                pass  # 续跑：该帧已处理，跳过
-            else:
-                segs = frame_segs[i]
-                if segs:
-                    img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
-                    if img is None:
-                        raise RuntimeError(f"无法读取第 {i + 1} 帧")
+        logger.info("dw video sparse: total=%s 帧, 区间推理=%s, 关键帧(实际AI)=%s (stride=%s)",
+                    total, inpaint_count, actual_inpaint, stride)
+
+        # —— I/O 重叠预取（③）——
+        _pf_exec = ThreadPoolExecutor(max_workers=1)
+        _pf_fut = [None]
+        _pf_idx = [None]
+
+        def _prime_next(i):
+            _pf_idx[0] = None
+            _pf_fut[0] = None
+            nxt = i + 1 if i + 1 < total else None
+            if nxt is None or os.path.exists(os.path.join(proc_dir, os.path.basename(frame_files[nxt]))):
+                return
+            try:
+                _pf_fut[0] = _pf_exec.submit(_cv2.imread, frame_files[nxt], _cv2.IMREAD_COLOR)
+                _pf_idx[0] = nxt
+            except Exception:  # noqa: BLE001
+                _pf_fut[0] = None
+
+        def _read_img(idx):
+            if _pf_idx[0] == idx and _pf_fut[0] is not None:
+                try:
+                    arr = _pf_fut[0].result(timeout=30)
+                except Exception:  # noqa: BLE001
+                    arr = None
+                _pf_idx[0] = None
+                _pf_fut[0] = None
+                if arr is not None:
+                    return arr
+            arr = _cv2.imread(frame_files[idx], _cv2.IMREAD_COLOR)
+            if arr is None:
+                raise RuntimeError(f"无法读取第 {idx + 1} 帧")
+            return arr
+
+        kf_prev = None       # {"img": BGR, "idx": int}
+        pending = []         # 待 gap-fill 的中间帧 index
+
+        def _fill_gap(blend, cur=None):
+            """用 prev/cur 关键帧在掩码处插值(blend)/最近(nearest)填充 pending 中间帧。"""
+            nonlocal pending, kf_prev
+            if not pending:
+                return
+            prev = kf_prev
+            for t in pending:
+                img_t = _read_img(t)
+                h, w = img_t.shape[:2]
+                mask_t = _get_mask_for_frame(w, h, t)
+                mb = mask_t > 0
+                out = img_t.copy()
+                if blend and cur is not None and prev is not None:
+                    denom = (cur["idx"] - prev["idx"])
+                    a = (t - prev["idx"]) / denom if denom else 0.0
+                    a = max(0.0, min(1.0, a))
+                    out[mb] = ((1.0 - a) * prev["img"][mb] + a * cur["img"][mb]).astype(_np.uint8)
+                elif prev is not None:
+                    out[mb] = prev["img"][mb]
+                _cv2.imwrite(os.path.join(proc_dir, os.path.basename(frame_files[t])), out)
+            pending = []
+
+        try:
+            for i, fp in enumerate(frame_files):
+                out_name = os.path.join(proc_dir, os.path.basename(fp))
+                if os.path.exists(out_name):
+                    # 续跑：已完成帧
+                    if inpaint_mask[i] and is_keyframe[i]:
+                        arr = _cv2.imread(out_name, _cv2.IMREAD_COLOR)
+                        if arr is not None:
+                            if kf_prev is not None:
+                                _fill_gap(blend=True, cur={"img": arr, "idx": i})
+                            kf_prev = {"img": arr, "idx": i}
+                    _prime_next(i)
+                    if cancel_check:
+                        sig = cancel_check()
+                        if sig == "cancel":
+                            raise _DwCancel()
+                        if sig == "pause":
+                            raise _DwPause()
+                    if progress_cb:
+                        try:
+                            progress_cb(i + 1, total)
+                        except Exception:
+                            pass
+                    continue
+                # 新帧
+                if not inpaint_mask[i]:
+                    _shutil.copyfile(fp, out_name)   # 区间外：零推理复制
+                elif is_keyframe[i]:
+                    img = _read_img(i)
                     h, w = img.shape[:2]
                     out_bgr = _inpaint_bgr_to_bgr(img, _get_mask_for_frame(w, h, i))
                     _cv2.imwrite(out_name, out_bgr)
+                    if kf_prev is not None:
+                        _fill_gap(blend=True, cur={"img": out_bgr, "idx": i})
+                    kf_prev = {"img": out_bgr, "idx": i}
                 else:
-                    # 无段覆盖：直接复制原帧（不动像素，零推理成本）
-                    _shutil.copyfile(fp, out_name)
-            # 帧边界检查控制信号（暂停/取消）；异常由 _run_video 捕获处理
-            if cancel_check:
-                sig = cancel_check()
-                if sig == "cancel":
-                    raise _DwCancel()
-                if sig == "pause":
-                    raise _DwPause()
-            if progress_cb:
-                try:
-                    progress_cb(i + 1, total)
-                except Exception:
-                    pass
+                    pending.append(i)   # 中间帧：延迟到下一关键帧用插值填充
+                _prime_next(i)
+                # 帧边界检查控制信号（暂停/取消）；异常由 _run_video 捕获处理
+                if cancel_check:
+                    sig = cancel_check()
+                    if sig == "cancel":
+                        raise _DwCancel()
+                    if sig == "pause":
+                        raise _DwPause()
+                if progress_cb:
+                    try:
+                        progress_cb(i + 1, total)
+                    except Exception:
+                        pass
+            # 末尾 trailing 帧：用最后一个关键帧最近填充
+            if kf_prev is not None and pending:
+                _fill_gap(blend=False)
+        finally:
+            try:
+                _pf_exec.shutdown(wait=False)
+            except Exception:  # noqa: BLE001
+                pass
 
         # 4) 时序中值平滑（降闪烁）
         src_frames = final_dir if smooth else proc_dir

@@ -439,6 +439,7 @@ def _cleanup_dw_job(job_id: str, remove_out: bool = False) -> None:
 def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool,
                start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
                target_fps: float = 30.0,
+               temporal_stride: int = 4,
                work_dir: str = None) -> None:
     """后台跑视频去水印。支持暂停/取消信号（帧边界检查），可被续跑（work_dir 持久化）。
     target_fps：目标输出帧率，默认 30，0 表示按源帧率（HFR/VFR 视频推荐 30）。"""
@@ -463,6 +464,7 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             resolution=resolution, smooth=smooth,
             start_sec=start_sec, end_sec=end_sec, segments=segments,
             target_fps=target_fps,
+            temporal_stride=temporal_stride,
             work_dir=work_dir, cancel_check=_cancel_check,
             phase_cb=lambda p: (
                 job.__setitem__("phase", p) if not (isinstance(p, str) and p.startswith("inpaint_count:")) else
@@ -506,6 +508,7 @@ def create_dw_video(
     end_sec: float = app.Form(0.0),
     segments: str = app.Form(""),
     target_fps: float = app.Form(15.0),  # 默认 15 fps — 静态水印 + 邻帧平滑下肉眼无差（2026-08-29 由 30 调到 15）
+    temporal_stride: int = app.Form(4),  # 默认 4：每 4 帧推理 1 次（wave2 ② 时间稀疏）
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
@@ -537,6 +540,9 @@ def create_dw_video(
     # target_fps 范围：0=按原帧率；1..120 区间防呆
     if target_fps < 0 or target_fps > 120:
         raise app.HTTPException(status_code=400, detail="target_fps 需在 0..120（0=按原帧率）")
+    # temporal_stride 范围：1..30 区间防呆（1=逐帧，越大越快但插值时长越久）
+    if temporal_stride < 1 or temporal_stride > 30:
+        raise app.HTTPException(status_code=400, detail="temporal_stride 需在 1..30（1=逐帧，越大越快）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
     if suffix not in DW_VIDEO_EXTS:
@@ -563,10 +569,11 @@ def create_dw_video(
             "resolution": resolution, "smooth": bool(int(smooth)),
             "start_sec": float(start_sec), "end_sec": float(end_sec),
             "target_fps": float(target_fps),
+            "temporal_stride": int(temporal_stride),
         }
     app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
                         resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list,
-                        float(target_fps),
+                        float(target_fps), int(temporal_stride),
                         work_dir)
     return {"job_id": job_id, "status": "running", "kind": "video",
             "target_fps": float(target_fps)}
@@ -622,7 +629,8 @@ def dw_video_resume(job_id: str) -> dict:
     job["status"] = "running"
     app.executor.submit(_run_video, job_id, job["src_path"], job.get("regions"), app.FFMPEG_BIN,
                         job.get("resolution"), job.get("smooth"), job.get("start_sec", 0),
-                        job.get("end_sec", 0), job.get("segments"), job["work_dir"])
+                        job.get("end_sec", 0), job.get("segments"), job.get("target_fps", 15.0),
+                        job.get("temporal_stride", 4), job["work_dir"])
     return {"status": "running"}
 
 

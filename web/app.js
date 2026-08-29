@@ -457,6 +457,7 @@
     dwVidKfTip: $('dwVidKfTip'),
     dwVidRes: $('dwVidRes'),
     dwVidTargetFps: $('dwVidTargetFps'),
+    dwVidStride: $('dwVidStride'),
     dwVidSmooth: $('dwVidSmooth'),
     dwVidBtn: $('dwVidBtn'),
     dwVidStatus: $('dwVidStatus'),
@@ -3636,14 +3637,16 @@
     // 状态提示 + 预估帧数（让用户选完区间立刻知道总工作量；区间内的帧才是真正要推理的）
     const isFull = (s <= 0 && e >= dwVidDuration);
     const fps = parseFloat(el.dwVidTargetFps.value) || 30;
+    const stride = Math.max(1, parseInt(el.dwVidStride.value, 10) || 4);
     const totalEst = Math.round(dwVidDuration * fps);
     const span = isFull ? dwVidDuration : Math.max(0, e - s);
-    const inpaintEst = Math.round(span * fps);
+    // wave2 ②：时间稀疏 —— 实际 AI 推理帧 ≈ 区间内帧 / 推理间隔
+    const inpaintEst = Math.round((span * fps) / stride);
     if (isFull) {
-      el.dwVidSegTip.textContent = `整段处理：${dwVidDuration.toFixed(1)}s @ ${fps}fps ≈ ${totalEst} 帧`;
+      el.dwVidSegTip.textContent = `整段处理：${dwVidDuration.toFixed(1)}s @ ${fps}fps ≈ ${totalEst} 帧（AI 实际推理 ≈ ${inpaintEst} 帧）`;
     } else {
       const pct = Math.round((span / dwVidDuration) * 100);
-      el.dwVidSegTip.textContent = `推理 ${span.toFixed(1)}s（占全片 ${pct}%）@ ${fps}fps ≈ ${inpaintEst} 帧；其余 ${(dwVidDuration - span).toFixed(1)}s 直接复制`;
+      el.dwVidSegTip.textContent = `推理 ${span.toFixed(1)}s（占全片 ${pct}%）@ ${fps}fps，每 ${stride} 帧推理 1 次 ≈ ${inpaintEst} 帧 AI；其余 ${(dwVidDuration - span).toFixed(1)}s 直接复制`;
     }
   };
 
@@ -3662,6 +3665,7 @@
   el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
   // 输出帧率变化时也重算预估帧数（"帧数预估" 一目了然，让用户按帧数选 fps）
   el.dwVidTargetFps.addEventListener('change', () => dwVidUpdateRange(null));
+  el.dwVidStride.addEventListener('change', () => dwVidUpdateRange(null));
 
   // -------------------------------------------------- 多时间段（segments）管理
   // 每段 = { start, end, regions, label, keyframes? }，regions 为该段时框选的归一化区域
@@ -3905,6 +3909,7 @@
     form.append('file', file);
     form.append('resolution', el.dwVidRes.value);
     form.append('target_fps', el.dwVidTargetFps.value);
+    form.append('temporal_stride', el.dwVidStride.value);
     form.append('smooth', el.dwVidSmooth.value);
 
     if (dwVidSegments.length) {

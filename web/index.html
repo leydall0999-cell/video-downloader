@@ -713,6 +713,20 @@
                 </select>
               </label>
               <label class="uc-field">
+                <span class="uc-label">AI 推理间隔</span>
+                <select id="dwVidStride" title="时间稀疏推理（wave2）：每隔 N 帧才跑一次 LaMa AI 推理，中间帧用相邻关键帧在去水印处插值填充。
+·推荐 4（快约 4×，静态水印肉眼无差）
+·选 1 退化为逐帧（质量最优、最慢）
+·选越大越快，但水印位置剧烈变化时会略闪">
+                  <option value="1">1（逐帧，质量最优）</option>
+                  <option value="2">2（快 2×）</option>
+                  <option value="3">3（快 3×）</option>
+                  <option value="4">4（推荐，快 4×）</option>
+                  <option value="6">6（快 6×）</option>
+                  <option value="8">8（快 8×，运动画面慎选）</option>
+                </select>
+              </label>
+              <label class="uc-field">
                 <span class="uc-label">邻帧平滑</span>
                 <select id="dwVidSmooth">
                   <option value="1">开启（降闪烁，推荐）</option>
