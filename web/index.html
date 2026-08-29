@@ -640,7 +640,18 @@
             </div>
             <span class="dw-selinfo" id="dwVidSelInfo">尚未框选</span>
           </div>
-          <p class="dw-hint">在视频预览上<b>拖拽框选</b>水印区域，再拖动下方时间轴的<b>绿色手柄</b>选水印出现的起止时间——只有该区间的帧会跑 LaMa 推理，其余帧直接复制。</p>
+
+          <div class="dw-vid-player-box" id="dwVidPlayerBox" hidden>
+            <div class="dw-vid-player-head">
+              <span class="dw-cap">播放预览</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetStart" title="把当前播放位置设为水印开始时间">⏱ 设为开始</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetEnd" title="把当前播放位置设为水印结束时间">⏱ 设为结束</button>
+            </div>
+            <video id="dwVidPlayer" controls preload="metadata" playsinline></video>
+            <p class="dw-hint dw-hint-sm">播放视频找到水印出现/消失的时刻，暂停后点「设为开始 / 设为结束」，右侧时间轴滑块会自动同步。</p>
+          </div>
+
+          <p class="dw-hint">在首帧预览上<b>拖拽框选</b>水印区域，再定出水印出现的起止时间——只有该区间的帧会跑 LaMa 推理，其余帧直接复制。</p>
         </div>
         <aside class="dw-side">
           <div class="dw-card">

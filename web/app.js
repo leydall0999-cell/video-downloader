@@ -452,6 +452,10 @@
     dwVidResult: $('dwVidResult'),
     dwVidOut: $('dwVidOut'),
     dwVidOrig: $('dwVidOrig'),
+    dwVidPlayer: $('dwVidPlayer'),
+    dwVidPlayerBox: $('dwVidPlayerBox'),
+    dwVidSetStart: $('dwVidSetStart'),
+    dwVidSetEnd: $('dwVidSetEnd'),
     dwVidDownload: $('dwVidDownload'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
@@ -3248,9 +3252,11 @@
     const f = el.dwVidFile.files[0];
     if (!f) return;
     const url = URL.createObjectURL(f);
-    // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
+    // 结果区「原视频」对比框 + 播放预览用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
     el.dwVidOrig.muted = true;
+    el.dwVidPlayer.src = url;
+    el.dwVidPlayerBox.hidden = false;
     // 清旧选区 + 旧缩略图
     dwVidSel = null;
     if (el._dwThumbUrl) { URL.revokeObjectURL(el._dwThumbUrl); el._dwThumbUrl = null; }
@@ -3361,6 +3367,30 @@
   });
   el.dwVidStart.addEventListener('input', () => dwVidUpdateRange(el.dwVidStart));
   el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
+
+  // 播放预览 + 「设为开始/结束」：把播放器当前时刻同步到时间轴滑块
+  // （对应 lama-cleaner-video-gui 的 Set Start/End = Current Frame 工作流）
+  const dwVidSetFromPlayer = (which) => {
+    if (!dwVidDuration) { el.dwVidStatus.textContent = '视频尚未加载完成，请稍候'; return; }
+    const t = Number(el.dwVidPlayer.currentTime || 0);
+    if (!isFinite(t)) { el.dwVidStatus.textContent = '无法读取当前播放时间'; return; }
+    const clamped = Math.max(0, Math.min(dwVidDuration, t));
+    if (which === 'start') {
+      // 开始不能晚于结束：先把结束推到 start+0.5（若被顶到则夹到片尾）
+      let e = parseFloat(el.dwVidEnd.value);
+      if (clamped > e - 0.5) { e = Math.min(dwVidDuration, clamped + 0.5); el.dwVidEnd.value = String(e); }
+      el.dwVidStart.value = String(clamped);
+      dwVidUpdateRange(el.dwVidStart);
+    } else {
+      let s = parseFloat(el.dwVidStart.value);
+      if (clamped < s + 0.5) { s = Math.max(0, clamped - 0.5); el.dwVidStart.value = String(s); }
+      el.dwVidEnd.value = String(clamped);
+      dwVidUpdateRange(el.dwVidEnd);
+    }
+    el.dwVidStatus.textContent = `已把 ${clamped.toFixed(1)}s 设为${which === 'start' ? '开始' : '结束'}时间`;
+  };
+  el.dwVidSetStart.addEventListener('click', () => dwVidSetFromPlayer('start'));
+  el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromPlayer('end'));
 
   const startDwVideo = async () => {
     const file = el.dwVidFile.files[0];
