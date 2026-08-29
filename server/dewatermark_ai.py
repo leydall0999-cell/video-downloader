@@ -513,9 +513,15 @@ def _temporal_median_smooth(proc_dir: str, final_dir: str, window: int = 2) -> N
         _cv2.imwrite(os.path.join(final_dir, os.path.basename(fp)), med)
 
 
+class _DwPause(Exception):
+    """处理被用户暂停（部分完成，保留中间产物以便续跑）。"""
+class _DwCancel(Exception):
+    """处理被用户取消（清理中间产物）。"""
+
 def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                      resolution: str = "original", smooth: bool = True, window: int = 2,
-                     start_sec: float = 0.0, end_sec: float = 0.0, segments=None) -> Path:
+                     start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
+                     work_dir: str = None, cancel_check=None) -> Path:
     """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
 
     src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
@@ -540,7 +546,8 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
 
     ffmpeg_bin = ffmpeg_bin or "ffmpeg"
     src = str(src_path)
-    work = tempfile.mkdtemp(prefix="vdl_dwvid_")
+    # work_dir 由调用方提供时（暂停续跑）持久化、不自动删除；否则用临时目录
+    work = work_dir if work_dir else tempfile.mkdtemp(prefix="vdl_dwvid_")
     try:
         frames_dir = os.path.join(work, "frames")
         proc_dir = os.path.join(work, "proc")
@@ -550,30 +557,35 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
         os.makedirs(final_dir, exist_ok=True)
 
         # 1) 抽帧（原生 fps；可选降分辨率）
-        vf = None
-        if resolution == "720":
-            vf = "scale=-2:720"
-        elif resolution == "480":
-            vf = "scale=-2:480"
-        extract = [ffmpeg_bin, "-y", "-i", src]
-        if vf:
-            extract += ["-vf", vf]
-        extract += ["-q:v", "2", os.path.join(frames_dir, "%05d.png")]
-        _run_ffmpeg(extract)
-
-        frame_files = sorted(_glob.glob(os.path.join(frames_dir, "*.png")))
+        #    续跑：work_dir 内已有完整帧序列则跳过抽帧（省时，避免重复解码）
+        frame_files = sorted(_glob.glob(os.path.join(frames_dir, "*.png"))) if work_dir else []
+        if not frame_files:
+            vf = None
+            if resolution == "720":
+                vf = "scale=-2:720"
+            elif resolution == "480":
+                vf = "scale=-2:480"
+            extract = [ffmpeg_bin, "-y", "-i", src]
+            if vf:
+                extract += ["-vf", vf]
+            extract += ["-q:v", "2", os.path.join(frames_dir, "%05d.png")]
+            _run_ffmpeg(extract)
+            frame_files = sorted(_glob.glob(os.path.join(frames_dir, "*.png")))
         total = len(frame_files)
         if total == 0:
             raise RuntimeError("视频抽帧失败（无法读取帧，可能格式不支持或 ffmpeg 缺失）")
         fps = _probe_fps(ffmpeg_bin, src)
 
-        # 2) 时间分段（Segment）：支持多段，每段带自己的 regions
-        #    segments = [{"start": s, "end": e, "regions": [...]}, ...]
-        #    为空时回退到单一 (start_sec, end_sec, regions)，兼容旧调用
+        # 2) 时间分段（Segment）+ 关键帧（Keyframe，2026-08-29 加）
+        #    segments = [{"start": s, "end": e, "regions": [...](可选),
+        #                 "keyframes": [{"t": 秒, "regions": [...]}, ...](可选)}, ...]
+        #    为空时回退到单一 (start_sec, end_sec, regions)，兼容旧调用。
+        #    keyframes 存在时，该段内的水印位置按关键帧时间**线性插值**
+        #    （处理「片头左下、片尾右上」这类漂动水印）。
         if not segments:
             segments = [{"start": float(start_sec or 0), "end": float(end_sec or 0), "regions": regions}]
 
-        seg_ranges = []
+        seg_defs = []
         for seg in segments:
             s = float(seg.get("start") or 0)
             e = float(seg.get("end") or 0)
@@ -581,47 +593,117 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             ef = total - 1 if e <= 0 else min(total - 1, int(round(e * fps)))
             if ef < sf:
                 sf, ef = ef, sf  # 容错：区间写反了就交换
-            seg_ranges.append((sf, ef, seg.get("regions") or []))
+            fixed = seg.get("regions") or []   # 已归一化（来自 _parse_segments / 前端）
+            kf = None
+            if seg.get("keyframes"):
+                kf = []
+                for k in seg["keyframes"]:
+                    kt = float(k.get("t") or 0)
+                    kregs = k.get("regions") or []
+                    if kregs:
+                        kf.append((kt, kregs))
+                if kf:
+                    kf.sort(key=lambda x: x[0])
+                else:
+                    kf = None
+            seg_defs.append({"sf": sf, "ef": ef, "fixed": fixed, "kf": kf})
 
         # 每帧 → 覆盖它的 segment 下标（预计算，避免逐帧遍历所有段）
         frame_segs = [[] for _ in range(total)]
-        for idx, (sf, ef, _regs) in enumerate(seg_ranges):
-            for i in range(sf, ef + 1):
+        for idx, sd in enumerate(seg_defs):
+            for i in range(sd["sf"], sd["ef"] + 1):
                 frame_segs[i].append(idx)
 
         inpaint_count = sum(1 for segs in frame_segs if segs)
         logger.info("dw video segments: %s 段 (fps=%.3f, total=%s 帧, 推理=%s, copy=%s)",
-                    len(seg_ranges), fps, total, inpaint_count, total - inpaint_count)
+                    len(seg_defs), fps, total, inpaint_count, total - inpaint_count)
 
-        # 掩码缓存：key = (w, h, 覆盖该帧的段下标组合)
-        # （原实现每帧重建 _build_region_mask，18000 帧会重复 18000 次）
+        # 关键帧插值：返回某段在全局时间 t（秒）时的 regions 列表（归一化坐标）
+        def _regions_at(seg_def, t):
+            kf = seg_def.get("kf")
+            if not kf:
+                return seg_def.get("fixed") or []
+            if len(kf) == 1:
+                return kf[0][1]
+            ts = [k[0] for k in kf]
+            if t <= ts[0]:
+                return kf[0][1]
+            if t >= ts[-1]:
+                return kf[-1][1]
+            a = 0
+            for i in range(len(ts) - 1):
+                if ts[i] <= t < ts[i + 1]:
+                    a = i
+                    break
+            b = a + 1
+            ra, rb = kf[a][1], kf[b][1]
+            # regions 数不一致（关键帧间增删框）→ 退化为较近关键帧，避免错位
+            if len(ra) != len(rb):
+                return ra if (t - ts[a]) <= (ts[b] - t) else rb
+            frac = (t - ts[a]) / (ts[b] - ts[a])
+            out = []
+            for xr, yr in zip(ra, rb):
+                out.append({
+                    "x": xr["x"] + (yr["x"] - xr["x"]) * frac,
+                    "y": xr["y"] + (yr["y"] - xr["y"]) * frac,
+                    "w": xr["w"] + (yr["w"] - xr["w"]) * frac,
+                    "h": xr["h"] + (yr["h"] - xr["h"]) * frac,
+                })
+            return out
+
+        # 掩码缓存：key = (w, h, 该帧合并后 regions 的整化签名)
+        # 关键帧导致每帧 regions 可能不同，故按帧计算 regions 并量化签名复用，
+        # 漂动水印平滑移动时相邻多帧签名相同 → 命中率高（避免逐帧重建掩码）。
         _mask_cache = {}
 
-        def _get_mask(w, h, seg_indices):
-            key = (w, h, tuple(seg_indices))
+        def _region_sig(regs):
+            parts = []
+            for r in regs:
+                parts.append((round(r["x"] * 1000), round(r["y"] * 1000),
+                              round(r["w"] * 1000), round(r["h"] * 1000)))
+            parts.sort()
+            return tuple(parts)
+
+        def _get_mask_for_frame(w, h, frame_idx):
+            t = frame_idx / fps
+            all_regs = []
+            for idx in frame_segs[frame_idx]:
+                all_regs.extend(_regions_at(seg_defs[idx], t))
+            if not all_regs:
+                raise RuntimeError("未框选有效水印区域")
+            key = (w, h, _region_sig(all_regs))
             if key not in _mask_cache:
-                merged = []
-                for idx in seg_indices:
-                    merged.extend(seg_ranges[idx][2])
-                m = dwc._build_region_mask(merged, w, h)
+                m = dwc._build_region_mask(all_regs, w, h)
                 if not m.any():
                     raise RuntimeError("未框选有效水印区域")
                 _mask_cache[key] = m
             return _mask_cache[key]
 
         # 3) 逐帧处理：被任一段覆盖则跑 LaMa 推理，否则零成本复制
+        #    续跑：proc_dir 已有该帧则跳过（已完成）；帧边界检查暂停/取消信号
         for i, fp in enumerate(frame_files):
-            segs = frame_segs[i]
-            if segs:
-                img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
-                if img is None:
-                    raise RuntimeError(f"无法读取第 {i + 1} 帧")
-                h, w = img.shape[:2]
-                out_bgr = _inpaint_bgr_to_bgr(img, _get_mask(w, h, segs))
-                _cv2.imwrite(os.path.join(proc_dir, os.path.basename(fp)), out_bgr)
+            out_name = os.path.join(proc_dir, os.path.basename(fp))
+            if os.path.exists(out_name):
+                pass  # 续跑：该帧已处理，跳过
             else:
-                # 无段覆盖：直接复制原帧（不动像素，零推理成本）
-                _shutil.copyfile(fp, os.path.join(proc_dir, os.path.basename(fp)))
+                segs = frame_segs[i]
+                if segs:
+                    img = _cv2.imread(fp, _cv2.IMREAD_COLOR)
+                    if img is None:
+                        raise RuntimeError(f"无法读取第 {i + 1} 帧")
+                    h, w = img.shape[:2]
+                    out_bgr = _inpaint_bgr_to_bgr(img, _get_mask_for_frame(w, h, i))
+                    _cv2.imwrite(out_name, out_bgr)
+                else:
+                    # 无段覆盖：直接复制原帧（不动像素，零推理成本）
+                    _shutil.copyfile(fp, out_name)
+            # 帧边界检查控制信号（暂停/取消）；异常由 _run_video 捕获处理
+            if cancel_check:
+                sig = cancel_check()
+                if sig == "cancel":
+                    raise _DwCancel()
+                if sig == "pause":
+                    raise _DwPause()
             if progress_cb:
                 try:
                     progress_cb(i + 1, total)
@@ -651,10 +733,12 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             raise RuntimeError("视频去水印重编码未产出有效文件")
         return Path(dst_path)
     finally:
-        try:
-            _shutil.rmtree(work, ignore_errors=True)
-        except Exception:
-            pass
+        # 仅临时目录自动清理；持久化 work_dir（暂停续跑）由调用方管理生命周期
+        if not work_dir:
+            try:
+                _shutil.rmtree(work, ignore_errors=True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

@@ -172,7 +172,22 @@ def _parse_segments(segments_json: str):
         regs = dwc.normalize_regions(seg.get("regions") or [])
         if not regs:
             raise app.HTTPException(status_code=400, detail=f"segments[{i}] 缺少有效的框选区域")
-        out.append({"start": s, "end": e, "regions": regs})
+        # 关键帧（可选）：[{t: 秒, regions: [...]}, ...]；段内水印位置按时间线性插值
+        kfs = []
+        for k in (seg.get("keyframes") or []):
+            if not isinstance(k, dict):
+                raise app.HTTPException(status_code=400, detail=f"segments[{i}] 的 keyframes 项必须是对象")
+            try:
+                kt = float(k.get("t") or 0)
+            except (TypeError, ValueError):
+                raise app.HTTPException(status_code=400, detail=f"segments[{i}] keyframe.t 必须是数字")
+            kregs = dwc.normalize_regions(k.get("regions") or [])
+            if not kregs:
+                raise app.HTTPException(status_code=400, detail=f"segments[{i}] keyframe 缺少有效框选区域")
+            kfs.append({"t": kt, "regions": kregs})
+            if len(kfs) > 50:
+                raise app.HTTPException(status_code=400, detail=f"segments[{i}] 关键帧最多 50 个")
+        out.append({"start": s, "end": e, "regions": regs, "keyframes": kfs})
     return out
 
 
@@ -399,8 +414,32 @@ def _preview_encode_cmd(src: str, out: str, use_vt: bool, info: dict) -> list:
             "-movflags", "+faststart", str(out)]
 
 
+def _cleanup_dw_job(job_id: str, remove_out: bool = False) -> None:
+    """清理已暂停/取消/完成任务的磁盘中间产物（work_dir + 上传原件）。
+    remove_out=True 时连结果文件也删（取消场景）。"""
+    job = app.DW_JOBS.get(job_id, {})
+    wd = job.get("work_dir")
+    if wd and app.os.path.isdir(wd):
+        app.shutil.rmtree(wd, ignore_errors=True)
+    sp = job.get("src_path")
+    if sp and app.os.path.exists(sp):
+        try:
+            app.os.remove(sp)
+        except Exception:  # noqa: BLE001
+            pass
+    if remove_out:
+        op = job.get("out_path")
+        if op and app.os.path.exists(op):
+            try:
+                app.os.remove(op)
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool,
-               start_sec: float = 0.0, end_sec: float = 0.0, segments=None) -> None:
+               start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
+               work_dir: str = None) -> None:
+    """后台跑视频去水印。支持暂停/取消信号（帧边界检查），可被续跑（work_dir 持久化）。"""
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -408,6 +447,10 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
         if not dwc_ai.available():
             raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
         out_path = app.DW_DIR / f"dw_vid_{job_id}.mp4"
+
+        def _cancel_check():
+            return job.get("__signal__", "")
+
         # 注意：frozen 桌面端 ai_video_inpaint 内部同进程跑（与图片模式一致），
         # 子进程隔离在桌面端派发不可靠，故不走 subprocess。
         dwc_ai.ai_video_inpaint(
@@ -415,13 +458,25 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
             resolution=resolution, smooth=smooth,
             start_sec=start_sec, end_sec=end_sec, segments=segments,
+            work_dir=work_dir, cancel_check=_cancel_check,
         )
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("视频去水印未产出有效文件")
         job["status"] = "completed"
         job["filename"] = out_path.name
         job["out_path"] = str(out_path)
+        job["__signal__"] = ""
         app.logger.info("dw video %s done -> %s", job_id, out_path.name)
+        _cleanup_dw_job(job_id)  # 完成：清理中间产物与上传原件（结果保留供下载）
+    except dwc_ai._DwPause:
+        job["status"] = "paused"
+        job["error"] = ""
+        app.logger.info("dw video %s paused at %s", job_id, job.get("progress"))
+    except dwc_ai._DwCancel:
+        job["status"] = "cancelled"
+        job["error"] = ""
+        _cleanup_dw_job(job_id, remove_out=True)
+        app.logger.info("dw video %s cancelled", job_id)
     except Exception as e:  # noqa: BLE001
         job["status"] = "failed"
         job["error"] = str(e)[:400]
@@ -480,13 +535,20 @@ def create_dw_video(
             raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h / segments 需有效）")
     save_path = _save_upload(file, "dw_vid_up")
     job_id = app.uuid.uuid4().hex[:12]
+    work_dir = str(app.DW_DIR / f"dw_work_{job_id}")
     with app.DW_LOCK:
         app.DW_JOBS[job_id] = {
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "video", "progress": "",
+            # 续跑所需：上传原件路径 + 持久化工作目录 + 原始参数 + 控制信号
+            "src_path": str(save_path), "work_dir": work_dir, "__signal__": "",
+            "regions": regions_list, "segments": segments_list,
+            "resolution": resolution, "smooth": bool(int(smooth)),
+            "start_sec": float(start_sec), "end_sec": float(end_sec),
         }
     app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
-                        resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list)
+                        resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list,
+                        work_dir)
     return {"job_id": job_id, "status": "running", "kind": "video"}
 
 
@@ -499,6 +561,51 @@ def dw_video_status(job_id: str) -> dict:
         "status": job["status"], "error": job.get("error", ""),
         "filename": job.get("filename", ""), "progress": job.get("progress", ""),
     }
+
+
+@router.post("/api/dw/video/{job_id}/pause")
+def dw_video_pause(job_id: str) -> dict:
+    """请求暂停：设信号，循环在下一帧边界优雅停止并保留中间产物。"""
+    job = app.DW_JOBS.get(job_id)
+    if not job or job.get("kind") != "video":
+        raise app.HTTPException(status_code=404, detail="视频去水印任务不存在")
+    if job["status"] != "running":
+        raise app.HTTPException(status_code=409, detail="仅运行中的任务可暂停")
+    job["__signal__"] = "pause"
+    return {"status": "pausing"}
+
+
+@router.post("/api/dw/video/{job_id}/resume")
+def dw_video_resume(job_id: str) -> dict:
+    """从持久化 work_dir 续跑：跳过已完成帧，继续剩余推理。"""
+    job = app.DW_JOBS.get(job_id)
+    if not job or job.get("kind") != "video":
+        raise app.HTTPException(status_code=404, detail="视频去水印任务不存在")
+    if job["status"] != "paused":
+        raise app.HTTPException(status_code=409, detail="仅已暂停的任务可继续")
+    job["__signal__"] = ""
+    job["status"] = "running"
+    app.executor.submit(_run_video, job_id, job["src_path"], job.get("regions"), app.FFMPEG_BIN,
+                        job.get("resolution"), job.get("smooth"), job.get("start_sec", 0),
+                        job.get("end_sec", 0), job.get("segments"), job["work_dir"])
+    return {"status": "running"}
+
+
+@router.post("/api/dw/video/{job_id}/cancel")
+def dw_video_cancel(job_id: str) -> dict:
+    """取消任务：运行中设信号（帧边界清理）；已暂停则直接清理。"""
+    job = app.DW_JOBS.get(job_id)
+    if not job or job.get("kind") != "video":
+        raise app.HTTPException(status_code=404, detail="视频去水印任务不存在")
+    if job["status"] in ("completed", "cancelled"):
+        raise app.HTTPException(status_code=409, detail="任务已完成或已取消，无法取消")
+    if job["status"] == "paused":
+        job["status"] = "cancelled"
+        job["error"] = ""
+        _cleanup_dw_job(job_id, remove_out=True)
+        return {"status": "cancelled"}
+    job["__signal__"] = "cancel"
+    return {"status": "cancelling"}
 
 
 @router.get("/api/dw/video/{job_id}/file")
@@ -620,6 +727,24 @@ def create_dw_video_filmstrip(
 
 # ---------------------------------------------------------------- 播放预览转码（让所有格式都能播）
 
+def _preview_cache_key(src: str) -> str:
+    """源文件指纹：大小 + mtime + 头部 8MB sha256。
+    弱但够区分不同文件，避免全量读取大视频计算 hash。无法读则每次不同（不缓存）。"""
+    import hashlib
+    try:
+        st = app.os.stat(src)
+        h = hashlib.sha256()
+        h.update(f"{st.st_size}:{st.st_mtime:.3f}".encode("utf-8"))
+        try:
+            with open(src, "rb") as fh:
+                h.update(fh.read(8 * 1024 * 1024))
+        except Exception:  # noqa: BLE001
+            pass
+        return h.hexdigest()[:32]
+    except Exception:  # noqa: BLE001
+        return app.uuid.uuid4().hex
+
+
 def _run_preview_transcode(preview_id: str, src: str) -> None:
     """后台把任意格式视频转码为 WebKit 通用格式：H.264 main@L4.0 + yuv420p + AAC + faststart。
 
@@ -632,7 +757,24 @@ def _run_preview_transcode(preview_id: str, src: str) -> None:
     job = app.DW_JOBS.get(preview_id)
     if not job:
         return
+    cache_dir = app.DW_DIR / "preview_cache"
     try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    key = _preview_cache_key(src)
+    cached = cache_dir / f"prev_{key}.mp4"
+    try:
+        # 0) 缓存命中：同文件（指纹相同）直接复用，省去转码
+        if cached.exists() and cached.stat().st_size > 0:
+            app.logger.info("dw preview %s cache HIT (%s)", preview_id, key)
+            try:
+                app.Path(src).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+            job["status"] = "completed"
+            job["out_path"] = str(cached)
+            return
         out_path = app.DW_DIR / f"dw_prev_{preview_id}.mp4"
         info = _probe_streams(src)
         if _webkit_playable(info):
@@ -655,14 +797,19 @@ def _run_preview_transcode(preview_id: str, src: str) -> None:
             if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
                 err_tail = proc.stderr.decode("utf-8", "ignore")[-300:] if proc.stderr else "unknown"
                 raise RuntimeError(f"转码失败：{err_tail or 'unknown'}")
+        # 写入缓存供同文件复用（避免重复转码）
+        try:
+            app.shutil.copyfile(out_path, cached)
+        except Exception:  # noqa: BLE001
+            pass
         # 转完删除上传的原件（预览只需转码产物）
         try:
             app.Path(src).unlink(missing_ok=True)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         job["status"] = "completed"
         job["out_path"] = str(out_path)
-        app.logger.info("dw video preview %s done -> %s", preview_id, out_path.name)
+        app.logger.info("dw video preview %s done -> %s (cache %s)", preview_id, out_path.name, key)
     except Exception as e:  # noqa: BLE001
         job["status"] = "failed"
         job["error"] = str(e)[:400]

@@ -671,6 +671,24 @@ img { max-width: 100%; display: block; }
   color: #A32D2D; font-size: 14px; line-height: 1; padding: 0 .2rem;
 }
 .dw-vid-segitem .seg-del:hover { opacity: .7; }
+.dw-vid-segitem.seg-active {
+  background: rgba(76,217,100,.22); border-color: #3B6D11;
+  box-shadow: 0 0 0 2px rgba(76,217,100,.35); cursor: pointer;
+}
+/* 关键帧面板（漂动水印） */
+.dw-kf-panel {
+  margin-top: .5rem; padding: .5rem .6rem; border: 1px dashed rgba(76,217,100,.5);
+  border-radius: 8px; background: rgba(76,217,100,.06);
+}
+.dw-kf-panel[hidden] { display: none; }
+.dw-kf-head { display: flex; align-items: baseline; gap: .4rem; margin-bottom: .35rem; }
+.dw-kf-head strong { font-size: 12px; color: #3B6D11; }
+.dw-kf-list { list-style: none; margin: 0 0 .4rem; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
+.dw-kf-item { display: flex; align-items: center; gap: .5rem; padding: .25rem .4rem;
+  background: rgba(255,255,255,.6); border: 1px solid rgba(0,0,0,.08); border-radius: 5px; font-size: 11px; }
+.dw-kf-item .kf-t { font-weight: 600; color: #2C6E0B; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.dw-kf-item .kf-pos { color: var(--text-tertiary, #888780); }
+.dw-kf-item .seg-del { margin-left: auto; }
 /* 时间轴上已标记段的色块 */
 .dw-vid-range-mark {
   position: absolute; top: 50%; transform: translateY(-50%);

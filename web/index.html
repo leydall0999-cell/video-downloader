@@ -677,12 +677,21 @@
                 </div>
                 <div class="dw-vid-seg-actions">
                   <button type="button" class="btn btn-ghost btn-sm" id="dwVidAddSeg" title="把当前选中的区间 + 已框选区域存为一段">＋ 添加该区间</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="dwVidAddKf" title="在选中的时间段内，按当前时间轴位置 + 当前框选添加关键帧，实现漂动水印">＋ 添加关键帧</button>
                 </div>
               </div>
               <div class="uc-field">
                 <span class="uc-label">已标记的水印时间段</span>
                 <ul class="dw-vid-seglist" id="dwVidSegList"></ul>
                 <span class="dw-hint dw-hint-sm" id="dwVidSegSummary">未标记任何时间段 → 默认整段处理</span>
+                <div class="dw-kf-panel" id="dwVidKfPanel" hidden>
+                  <div class="dw-kf-head">
+                    <strong id="dwVidKfTitle">关键帧</strong>
+                    <span class="dw-hint dw-hint-sm" id="dwVidKfTip"></span>
+                  </div>
+                  <ul class="dw-kf-list" id="dwVidKfList"></ul>
+                  <button type="button" class="btn btn-ghost btn-sm" id="dwVidAddKfAt" title="把当前时间轴位置 + 当前框选存为该段的一个关键帧">＋ 在当前时间轴位置添加关键帧（用当前框）</button>
+                </div>
               </div>
               <label class="uc-field">
                 <span class="uc-label">处理分辨率</span>
@@ -701,6 +710,11 @@
               </label>
             </div>
             <button type="button" class="btn btn-primary btn-block" id="dwVidBtn">开始去水印</button>
+            <div class="dw-vid-run-controls" id="dwVidRunCtrls" hidden>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidPause" title="在当前帧边界暂停，保留进度以便续跑">⏸ 暂停</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidResume" hidden title="从暂停处继续处理">▶ 继续</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidCancel" title="取消任务并清理">⏹ 取消</button>
+            </div>
             <span class="convert-status" id="dwVidStatus"></span>
           </div>
         </aside>

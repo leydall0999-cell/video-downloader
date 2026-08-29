@@ -449,6 +449,12 @@
     dwVidSegList: $('dwVidSegList'),
     dwVidSegSummary: $('dwVidSegSummary'),
     dwVidSegTip: $('dwVidSegTip'),
+    dwVidAddKf: $('dwVidAddKf'),
+    dwVidAddKfAt: $('dwVidAddKfAt'),
+    dwVidKfPanel: $('dwVidKfPanel'),
+    dwVidKfList: $('dwVidKfList'),
+    dwVidKfTitle: $('dwVidKfTitle'),
+    dwVidKfTip: $('dwVidKfTip'),
     dwVidRes: $('dwVidRes'),
     dwVidSmooth: $('dwVidSmooth'),
     dwVidBtn: $('dwVidBtn'),
@@ -464,6 +470,10 @@
     dwVidFilmstrip: $('dwVidFilmstrip'),
     dwVidFilmstripCursor: $('dwVidFilmstripCursor'),
     dwVidDownload: $('dwVidDownload'),
+    dwVidPause: $('dwVidPause'),
+    dwVidResume: $('dwVidResume'),
+    dwVidCancel: $('dwVidCancel'),
+    dwVidRunCtrls: $('dwVidRunCtrls'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -3256,12 +3266,30 @@
   };
 
   // 转码播放源：任意格式 → 服务端 H.264+AAC → <video> 播放（绕开 WKWebView codec 限制）
+  // 同文件（name+size）缓存 preview_id，避免重复上传与转码
   const dwVidStartPreviewTranscode = async (f) => {
+    const cacheKey = `dwPrev:${f.name}:${f.size}`;
+    const base0 = `${window.VDL_API_BASE || ''}`;
+    const cachedId = (() => { try { return localStorage.getItem(cacheKey); } catch (_e) { return null; } })();
+    if (cachedId) {
+      // 缓存命中：先确认服务端该预览仍可用，可用则直接复用（跳过上传+转码）
+      try {
+        const st = await request('/api/dw/video/preview/' + cachedId + '/status');
+        if (st.status === 'completed') {
+          el.dwVidPlayer.src = `${base0}/api/dw/video/preview/${cachedId}`;
+          el.dwVidPlayer.hidden = false;
+          el.dwVidTranscoding.hidden = true;
+          if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+          return;
+        }
+      } catch (_e) { /* 缓存失效，重新转码 */ }
+    }
     try {
       const form = new FormData();
       form.append('file', f);
       const data = await request('/api/dw/video/preview', { method: 'POST', body: form });
       const previewId = data.preview_id;
+      try { localStorage.setItem(cacheKey, previewId); } catch (_e) {}  // 记下以复用
       el._dwPreviewPoll = setInterval(async () => {
         try {
           const st = await request('/api/dw/video/preview/' + previewId + '/status');
@@ -3428,8 +3456,11 @@
   el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
 
   // -------------------------------------------------- 多时间段（segments）管理
-  // 每段 = { start, end, regions, label }，regions 为该段时框选的归一化区域
+  // 每段 = { start, end, regions, label, keyframes? }，regions 为该段时框选的归一化区域
+  // keyframes = [{ t: 秒, regions: [...] }, ...]（可选）：段内水印位置按时间线性插值（漂动水印）
   let dwVidSegments = [];
+  let dwVidActiveSeg = null;  // 当前选中的段（点击段列表项设置），用于编辑关键帧
+  let dwVidCurrentJob = null; // 当前进行中的任务 job_id（暂停/继续/取消用）
 
   const dwVidRenderSegments = () => {
     const list = el.dwVidSegList;
@@ -3437,7 +3468,8 @@
     list.innerHTML = '';
     dwVidSegments.forEach((seg, i) => {
       const li = document.createElement('li');
-      li.className = 'dw-vid-segitem';
+      li.className = 'dw-vid-segitem' + (i === dwVidActiveSeg ? ' seg-active' : '');
+      li.title = '点击选中该段以编辑关键帧';
       const no = document.createElement('span');
       no.className = 'seg-no';
       no.textContent = `①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳`[i] || `${i + 1}.`;
@@ -3446,17 +3478,25 @@
       tm.textContent = `${seg.start.toFixed(1)}s–${seg.end.toFixed(1)}s`;
       const pos = document.createElement('span');
       pos.className = 'seg-pos';
-      pos.textContent = seg.label || '';
+      const kfCount = (seg.keyframes && seg.keyframes.length) || 0;
+      pos.textContent = (seg.label || '') + (kfCount ? ` · ${kfCount}关键帧` : '');
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'seg-del';
       del.title = '删除该时间段';
       del.textContent = '✕';
-      del.addEventListener('click', () => {
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
         dwVidSegments.splice(i, 1);
+        if (dwVidActiveSeg === i) dwVidActiveSeg = null;
+        else if (dwVidActiveSeg > i) dwVidActiveSeg -= 1;
         dwVidRenderSegments();
       });
       li.append(no, tm, pos, del);
+      li.addEventListener('click', () => {
+        dwVidActiveSeg = i;
+        dwVidRenderSegments();
+      });
       list.appendChild(li);
     });
     // 汇总
@@ -3481,7 +3521,87 @@
         wrap.appendChild(mk);
       });
     }
+    dwVidRenderKfPanel();
   };
+
+  // 关键帧面板：展示/编辑当前激活段的关键帧（漂动水印按时间插值）
+  const dwVidRenderKfPanel = () => {
+    const panel = el.dwVidKfPanel;
+    if (!panel) return;
+    if (dwVidActiveSeg == null || !dwVidSegments[dwVidActiveSeg]) {
+      panel.hidden = true;
+      return;
+    }
+    const seg = dwVidSegments[dwVidActiveSeg];
+    panel.hidden = false;
+    const kfs = seg.keyframes || [];
+    el.dwVidKfTitle.textContent = `段 ${dwVidActiveSeg + 1} 关键帧（${kfs.length}）`;
+    el.dwVidKfTip.textContent = kfs.length
+      ? '把时间轴/播放拖到新位置，重新框选水印，再点下方按钮追加关键帧'
+      : '该段为固定位置。要处理漂动水印：拖时间轴到目标点、重新框选，点下方按钮添加关键帧';
+    const list = el.dwVidKfList;
+    list.innerHTML = '';
+    kfs.forEach((kf, i) => {
+      const li = document.createElement('li');
+      li.className = 'dw-kf-item';
+      const t = document.createElement('span');
+      t.className = 'kf-t';
+      t.textContent = `${kf.t.toFixed(1)}s`;
+      const r = document.createElement('span');
+      r.className = 'kf-pos';
+      const reg = (kf.regions && kf.regions[0]) || {};
+      r.textContent = `(${Math.round((reg.x || 0) * 100)},${Math.round((reg.y || 0) * 100)},${Math.round((reg.w || 0) * 100)},${Math.round((reg.h || 0) * 100)})`;
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'seg-del';
+      del.title = '删除该关键帧';
+      del.textContent = '✕';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        seg.keyframes.splice(i, 1);
+        if (!seg.keyframes.length) seg.keyframes = undefined;
+        dwVidRenderKfPanel();
+        dwVidRenderSegments();
+      });
+      li.append(t, r, del);
+      list.appendChild(li);
+    });
+  };
+
+  // 添加关键帧：在激活段内，按当前时间轴位置 + 当前框选，追加一个关键帧
+  const dwVidAddKeyframe = () => {
+    if (!dwVidDuration) { el.dwVidStatus.textContent = '请先选择视频文件'; return; }
+    if (dwVidActiveSeg == null || !dwVidSegments[dwVidActiveSeg]) {
+      el.dwVidStatus.textContent = '请先点选一个时间段（或先“添加该区间”）再添加关键帧'; return;
+    }
+    if (!dwVidSel || dwVidSel.w <= 0 || dwVidSel.h <= 0) {
+      el.dwVidStatus.textContent = '请先在预览上框选水印区域'; return;
+    }
+    const seg = dwVidSegments[dwVidActiveSeg];
+    let t = dwVidSeekTime;
+    if (!(t > 0)) {
+      const s = parseFloat(el.dwVidStart.value) || 0;
+      const e = parseFloat(el.dwVidEnd.value) || 0;
+      t = (s + e) / 2;
+    }
+    t = Math.max(seg.start, Math.min(seg.end, t));  // clamp 到段区间
+    const reg = {
+      x: +dwVidSel.x.toFixed(4), y: +dwVidSel.y.toFixed(4),
+      w: +dwVidSel.w.toFixed(4), h: +dwVidSel.h.toFixed(4), op: 'add',
+    };
+    if (!seg.keyframes) seg.keyframes = [];
+    // 若原是固定位置（无关键帧）且有关键帧区起点，先把固定框转成起点关键帧，保证平滑
+    if (seg.keyframes.length === 0 && seg.regions && seg.regions.length) {
+      seg.keyframes.push({ t: +seg.start.toFixed(2), regions: seg.regions });
+    }
+    seg.keyframes.push({ t: +t.toFixed(2), regions: [reg] });
+    seg.keyframes.sort((a, b) => a.t - b.t);
+    dwVidRenderKfPanel();
+    dwVidRenderSegments();
+    el.dwVidStatus.textContent = `已在 ${t.toFixed(1)}s 为第 ${dwVidActiveSeg + 1} 段添加关键帧（共 ${seg.keyframes.length} 个）`;
+  };
+  if (el.dwVidAddKf) el.dwVidAddKf.addEventListener('click', dwVidAddKeyframe);
+  if (el.dwVidAddKfAt) el.dwVidAddKfAt.addEventListener('click', dwVidAddKeyframe);
 
   el.dwVidAddSeg.addEventListener('click', () => {
     if (!dwVidDuration) { el.dwVidStatus.textContent = '请先选择视频文件'; return; }
@@ -3499,6 +3619,7 @@
       }],
       label: `区域(${Math.round(dwVidSel.x * 100)},${Math.round(dwVidSel.y * 100)},${Math.round(dwVidSel.w * 100)},${Math.round(dwVidSel.h * 100)})`,
     });
+    dwVidActiveSeg = dwVidSegments.length - 1;  // 新建段自动激活，便于接着加关键帧
     dwVidRenderSegments();
     el.dwVidStatus.textContent = `已添加第 ${dwVidSegments.length} 段（${s.toFixed(1)}s–${e.toFixed(1)}s）。可改框选 + 调时间轴再加下一段。`;
   });
@@ -3565,10 +3686,14 @@
     form.append('smooth', el.dwVidSmooth.value);
 
     if (dwVidSegments.length) {
-      // 多段模式：每段带自己的时间段 + 框选区域，后端按帧合并
-      form.append('segments', JSON.stringify(dwVidSegments.map((s) => ({
-        start: s.start, end: s.end, regions: s.regions,
-      }))));
+      // 多段模式：每段带自己的时间段 + 框选区域（+ 可选关键帧），后端按帧合并/插值
+      form.append('segments', JSON.stringify(dwVidSegments.map((s) => {
+        const o = { start: s.start, end: s.end, regions: s.regions };
+        if (s.keyframes && s.keyframes.length) {
+          o.keyframes = s.keyframes.map((k) => ({ t: k.t, regions: k.regions }));
+        }
+        return o;
+      })));
     } else {
       // 单段回退：当前框选区域 + 时间轴区间（区间外直接复制）
       if (endSec > 0 && startSec > 0 && endSec < startSec) {
@@ -3586,12 +3711,29 @@
     try {
       const data = await request('/api/dw/video', { method: 'POST', body: form });
       const jobId = data.job_id;
+      dwVidCurrentJob = jobId;
+      el.dwVidRunCtrls.hidden = false;
+      el.dwVidPause.hidden = false;
+      el.dwVidResume.hidden = true;
+      el.dwVidCancel.hidden = false;
       const timer = setInterval(async () => {
         try {
           const st = await request('/api/dw/video/' + jobId);
-          if (st.progress) el.dwVidStatus.textContent = `去水印处理中… 已处理 ${st.progress} 帧`;
-          if (st.status === 'completed') {
+          if (st.status === 'running') {
+            el.dwVidRunCtrls.hidden = false;
+            el.dwVidPause.hidden = false;
+            el.dwVidResume.hidden = true;
+            el.dwVidCancel.hidden = false;
+            if (st.progress) el.dwVidStatus.textContent = `去水印处理中… 已处理 ${st.progress} 帧`;
+          } else if (st.status === 'paused') {
+            el.dwVidRunCtrls.hidden = false;
+            el.dwVidPause.hidden = true;
+            el.dwVidResume.hidden = false;
+            el.dwVidCancel.hidden = false;
+            el.dwVidStatus.textContent = `已暂停（${st.progress || ''} 帧）。可点「继续」恢复，或「取消」放弃。`;
+          } else if (st.status === 'completed') {
             clearInterval(timer);
+            el.dwVidRunCtrls.hidden = true;
             const base = `${window.VDL_API_BASE || ''}`;
             el.dwVidOut.src = `${base}/api/dw/video/${jobId}/file`;
             el.dwVidDownload.href = `${base}/api/dw/video/${jobId}/file`;
@@ -3601,8 +3743,14 @@
             el.dwVidStatus.textContent = '去水印完成 ✅';
             el.dwVidBtn.disabled = false;
             try { el.dwVidResult.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_e) {}
+          } else if (st.status === 'cancelled') {
+            clearInterval(timer);
+            el.dwVidRunCtrls.hidden = true;
+            el.dwVidStatus.textContent = '任务已取消';
+            el.dwVidBtn.disabled = false;
           } else if (st.status === 'failed') {
             clearInterval(timer);
+            el.dwVidRunCtrls.hidden = true;
             el.dwVidStatus.textContent = '失败：' + (st.error || '未知错误');
             el.dwVidBtn.disabled = false;
           }
@@ -3612,6 +3760,26 @@
       el.dwVidBtn.disabled = false;
       el.dwVidStatus.textContent = (error && error.message) ? ('请求失败：' + error.message) : '请求失败';
     }
+
+  // 暂停 / 继续 / 取消（长任务可控）
+  if (el.dwVidPause) el.dwVidPause.addEventListener('click', async () => {
+    if (!dwVidCurrentJob) return;
+    el.dwVidStatus.textContent = '正在暂停…（将在当前帧边界停止，保留进度）';
+    try { await request('/api/dw/video/' + dwVidCurrentJob + '/pause', { method: 'POST' }); }
+    catch (_e) { el.dwVidStatus.textContent = '暂停请求失败，请重试'; }
+  });
+  if (el.dwVidResume) el.dwVidResume.addEventListener('click', async () => {
+    if (!dwVidCurrentJob) return;
+    el.dwVidStatus.textContent = '正在继续处理…';
+    try { await request('/api/dw/video/' + dwVidCurrentJob + '/resume', { method: 'POST' }); }
+    catch (_e) { el.dwVidStatus.textContent = '继续请求失败，请重试'; }
+  });
+  if (el.dwVidCancel) el.dwVidCancel.addEventListener('click', async () => {
+    if (!dwVidCurrentJob) return;
+    el.dwVidStatus.textContent = '正在取消…';
+    try { await request('/api/dw/video/' + dwVidCurrentJob + '/cancel', { method: 'POST' }); }
+    catch (_e) { el.dwVidStatus.textContent = '取消请求失败，请重试'; }
+  });
   };
   el.dwVidBtn.addEventListener('click', startDwVideo);
   // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
