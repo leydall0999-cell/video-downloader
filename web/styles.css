@@ -719,6 +719,8 @@ img { max-width: 100%; display: block; }
   width: 100%; height: 100%;
   max-width: 100%; max-height: 100%;
   object-fit: contain; background: #000; cursor: crosshair;
+  /* z=1：最下；video 接管时由 .is-playable class → visibility:hidden 让位 */
+  z-index: 1;
 }
 #dwVidPreviewWrap > .dw-svg,
 #dwVidPreviewWrap > .dw-vid-transcoding,
@@ -729,6 +731,13 @@ img { max-width: 100%; display: block; }
 #dwVidPreviewWrap > video {
   background: #000; cursor: default;
   object-fit: contain;
+  /* z=2：转码好后覆盖 img（让 img 让位），但必须在 svg 下面 — 选框永远可见 */
+  z-index: 2;
+}
+#dwVidPreviewWrap > .dw-svg {
+  /* z=3：永远在 video 之上 → 视频接管后红色选框不被遮 */
+  z-index: 3;
+  pointer-events: none;  /* svg 只画选区，不拦截鼠标（mousedown 在 wrap 上统一处理） */
 }
 #dwVidPreviewWrap > .dw-vid-transcoding {
   display: flex; align-items: center; justify-content: center;
@@ -737,6 +746,8 @@ img { max-width: 100%; display: block; }
   font-size: 13px; padding: 1.2rem;
   border: none; border-radius: 0;
   pointer-events: none;  /* 不拦截框选事件，下方 img 继续响应 */
+  /* z=4：转码中提示条位于最上层覆盖一切（包括选框），半透明 rgba 让下方首帧仍可见 */
+  z-index: 4;
 }
 /* 转码好后让位给 video：img 隐藏（保留 src/resize 句柄在） */
 #dwVidPreviewWrap.is-playable > .dw-vid-thumb { visibility: hidden; }

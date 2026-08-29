@@ -3362,20 +3362,21 @@
     el.dwVidStatus.textContent = '正在抽首帧 + 转码播放源…';
     // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）
     dwVidStartPreviewTranscode(f);
-    // 并行：抽首帧（img 框选）+ filmstrip（点击跳转时间线）
-    // 注意：不能走项目里的 request() wrapper——它内部 _parseResponse 强制 .json()，会破坏 PNG 二进制
-    // 这里直接用原生 fetch，保留 Response 自己控制 .blob() / .text()
+    // 抽首帧（img 框选）与 filmstrip（点击跳转时间线）：
+    //   之前用 Promise.all([thumb, film]) 等齐才往下走——filmstrip 要 decode 20 帧再 tile，
+    //   通常 2-4s，卡住了 thumbnail 的 img 显示（thumbnail 只要 200-500ms）。
+    //   现在 thumb 先 await，拿到立即显示；filmstrip 后台并行，迟到不影响用户框选。
+    //   注意：不能走项目里 request() wrapper——它内部 _parseResponse 强制 .json()，
+    //   会破坏 PNG 二进制；这里直接用原生 fetch，自己控制 .blob()
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 60000);
+    const timer = setTimeout(() => ctrl.abort(), 90000);
     const headers = { 'X-Device-Id': deviceId() };
     try {
       const form1 = new FormData(); form1.append('file', f);
-      const form2 = new FormData(); form2.append('file', f);
-      const [thumbR, filmR] = await Promise.all([
-        fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', { method: 'POST', body: form1, headers, signal: ctrl.signal }),
-        fetch((window.VDL_API_BASE || '') + '/api/dw/video/filmstrip',  { method: 'POST', body: form2, headers, signal: ctrl.signal }),
-      ]);
-      // 首帧
+      // 3a) thumbnail 先单独 await —— 用户看到首帧就能开始框选
+      const thumbR = await fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', {
+        method: 'POST', body: form1, headers, signal: ctrl.signal,
+      });
       if (!thumbR.ok) {
         const txt = await thumbR.text().catch(() => '');
         el.dwVidStatus.textContent = '首帧提取失败：' + (txt || ('HTTP ' + thumbR.status));
@@ -3392,16 +3393,36 @@
         }
         el.dwVidStatus.textContent = '';
       }
-      // filmstrip
-      if (!filmR.ok) {
-        const txt = await filmR.text().catch(() => '');
-        el.dwVidStatus.textContent = (el.dwVidStatus.textContent || '') + '　缩略图条失败：' + (txt || ('HTTP ' + filmR.status));
-      } else {
-        const blob = await filmR.blob();
+      // 3b) filmstrip 后台并行 —— 不阻塞thumbnail 渲染，也不 await：用户先框选着，等 filmstrip 到再显示
+      const form2 = new FormData(); form2.append('file', f);
+      const filmUrlPromise = fetch((window.VDL_API_BASE || '') + '/api/dw/video/filmstrip', {
+        method: 'POST', body: form2, headers, signal: ctrl.signal,
+      }).then(async (r) => {
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          return { ok: false, err: txt || ('HTTP ' + r.status) };
+        }
+        const blob = await r.blob();
         const filmUrl = URL.createObjectURL(blob);
-        el._dwFilmstripUrl = filmUrl;
-        el.dwVidFilmstrip.src = filmUrl;
-      }
+        const frames = parseInt(r.headers.get('X-Filmstrip-Frames') || '0', 10);
+        const interval = parseFloat(r.headers.get('X-Filmstrip-Interval') || '0');
+        return { ok: true, filmUrl, frames, interval };
+      }).catch((e) => ({ ok: false, err: e.message || String(e) }));
+      // 不阻塞主流程：异步贴到 filmstrip 元素
+      filmUrlPromise.then((res) => {
+        if (!res || !res.ok) {
+          // filmstrip 失败仅附加提示，不影响已经可用的主画布 + 转码播放
+          const prev = el.dwVidStatus.textContent;
+          if (prev && !prev.includes('失败')) el.dwVidStatus.textContent = prev + '　缩略图条失败：' + res.err;
+          return;
+        }
+        // 撤销旧 url，绑新 url + 帧参数
+        if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); }
+        el._dwFilmstripUrl = res.filmUrl;
+        el.dwVidFilmstrip.src = res.filmUrl;
+        if (res.frames) el.dwVidFilmstrip.dataset.frames = String(res.frames);
+        if (res.interval) el.dwVidFilmstrip.dataset.interval = String(res.interval);
+      });
     } catch (e) {
       el.dwVidStatus.textContent = '加载失败：' + (e.message || '未知错误');
     } finally {
