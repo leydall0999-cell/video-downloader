@@ -3252,10 +3252,22 @@
     el.dwVidResult.hidden = true;
     el.dwVidStatus.textContent = '正在抽首帧…';
     // 上传抽首帧（绕开 WKWebView video 元素所有渲染坑，img 渲染稳定可靠）
+    // 注意：不能走项目里的 request() wrapper——它内部 _parseResponse 强制 .json()，会破坏 PNG 二进制
+    // 这里直接用原生 fetch，保留 Response 自己控制 .blob() / .text()
     try {
       const form = new FormData();
       form.append('file', f);
-      const r = await request('/api/dw/video/thumbnail', { method: 'POST', body: form });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60000);
+      let r;
+      try {
+        r = await fetch((window.VDL_API_BASE || '') + '/api/dw/video/thumbnail', {
+          method: 'POST',
+          body: form,
+          headers: { 'X-Device-Id': deviceId() },  // rate limit 按设备隔离
+          signal: ctrl.signal,
+        });
+      } finally { clearTimeout(timer); }
       if (!r.ok) {
         const txt = await r.text().catch(() => '');
         el.dwVidStatus.textContent = '首帧提取失败：' + (txt || ('HTTP ' + r.status));
