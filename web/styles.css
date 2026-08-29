@@ -749,10 +749,10 @@ img { max-width: 100%; display: block; }
   pointer-events: none;  /* svg 只画选区，不拦截鼠标（mousedown 在 wrap 上统一处理） */
 }
 #dwVidPreviewWrap > .dw-vid-transcoding {
-  /* 不再吃整画面：缩到顶部居中小横条，让下方首帧 + 选框完全可见 */
+  /* 转码中标签移到画面正中心（之前顶部居中，与 cap-overlay 角标靠得太近易误读） */
   display: inline-flex; align-items: center; justify-content: center;
-  top: .75rem; left: 50%; right: auto; bottom: auto;
-  transform: translateX(-50%);
+  top: 50%; left: 50%; right: auto; bottom: auto;
+  transform: translate(-50%, -50%);
   width: auto; max-width: calc(100% - 2rem);
   height: auto;
   background: rgba(0,0,0,0.62);
@@ -760,7 +760,7 @@ img { max-width: 100%; display: block; }
   font-size: 12.5px; padding: .35rem .85rem;
   border: none; border-radius: 999px;
   pointer-events: none;  /* 不拦截框选事件，下方 img 继续响应 */
-  /* z=4：转码中提示条位于最上层，但只占顶部小横条，不再盖中部视野 */
+  /* z=4：转码中提示条位于最上层，画面正中 */
   z-index: 4;
 }
 /* 转码好后让位给 video：img 隐藏（保留 src/resize 句柄在） */
