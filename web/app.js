@@ -3979,17 +3979,31 @@
             const _inferTag = _inpaintTotal > 0
               ? ` · ${_inpaintTotal} 帧需 AI 推理`
               : (_inpaintTotal === 0 ? ' · 全部帧 AI 推理' : '');
+            // 后端 progress 实际是 "done/total" 字符串，拆出来做 tooltip（前端只显示原样）
+            const _progStr = (st.progress || '0').toString();
+            const _done = parseInt(_progStr.split('/')[0], 10) || 0;
+            const _total = parseInt(_progStr.split('/')[1], 10) || _done;
             const _pm = {
               loading_model: '正在加载 AI 模型（首次较慢，请稍候）…',
               extracting_frames: '正在抽取视频帧…',
               inpainting: `正在逐帧去除水印（${st.progress || '0'} 帧${_inferTag}）`,
               encoding: '正在重新编码输出视频…',
             };
-            el.dwVidStatus.textContent = _pm[st.phase] || (
+            const _statusText = _pm[st.phase] || (
               st.progress
                 ? `去水印处理中… 已处理 ${st.progress} 帧${_inferTag}`
                 : '视频去水印处理中（逐帧推理，请稍候）…'
             );
+            el.dwVidStatus.textContent = _statusText;
+            // 悬停说明三段数字含义（受后端进度驱动，实时刷新）
+            const _inferLabel = _inpaintTotal > 0 ? `${_inpaintTotal}（区间内真正调用 LaMa ONNX 推理的帧数；其余由帧间插值复用前后结果）`
+              : (_inpaintTotal === 0 ? `${_total}（你选的区间内所有帧都要 AI 推理，未启用插值复用）` : '—');
+            el.dwVidStatus.title =
+              `已处理帧数：${_done}（按时间轴推进，包含 AI 推理帧与帧间插值复用帧）\n` +
+              `全视频总帧数：${_total}\n` +
+              `选中区间内真实需要 AI 推理的帧数：${_inferLabel}\n\n` +
+              `▸ 进度按 ${_done}/${_total} 帧推进，逐帧走过视频；\n` +
+              `▸ AI 算力只对区间内 ${_inpaintTotal || _total} 帧生效，小水印通常几十帧即覆盖。`;
           } else if (st.status === 'paused') {
             el.dwVidRunCtrls.hidden = false;
             el.dwVidPause.hidden = true;
