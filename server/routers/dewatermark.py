@@ -462,6 +462,7 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             start_sec=start_sec, end_sec=end_sec, segments=segments,
             target_fps=target_fps,
             work_dir=work_dir, cancel_check=_cancel_check,
+            phase_cb=lambda p: job.__setitem__("phase", p),
         )
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("视频去水印未产出有效文件")
@@ -566,6 +567,18 @@ def create_dw_video(
             "target_fps": float(target_fps)}
 
 
+@router.post("/api/dw/ai/warmup")
+def warmup_ai_engine(request: app.Request = None) -> dict:
+    """后台预热 AI 去水印模型：用户选完视频后触发，把最耗时的模型加载从点击「开始」的
+    关键路径挪到框选的空闲期，消除「点击开始后长时间 0 帧」的假死观感。
+
+    模型在进程内缓存，重复调用几乎无成本；内存不足 / 模型缺失时静默失败不影响主流程。
+    """
+    app._check_rate_limit(request)
+    app.executor.submit(dwc_ai.warmup)
+    return {"ok": True, "status": "warming"}
+
+
 @router.get("/api/dw/video/{job_id}")
 def dw_video_status(job_id: str) -> dict:
     job = app.DW_JOBS.get(job_id)
@@ -575,6 +588,7 @@ def dw_video_status(job_id: str) -> dict:
         "status": job["status"], "error": job.get("error", ""),
         "filename": job.get("filename", ""), "progress": job.get("progress", ""),
         "target_fps": float(job.get("target_fps", 30.0)),
+        "phase": job.get("phase", ""),
     }
 
 

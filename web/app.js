@@ -3363,6 +3363,11 @@
     el.dwVidStatus.textContent = '正在抽首帧 + 转码播放源…';
     // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）
     dwVidStartPreviewTranscode(f);
+    // 4) 后台预热 AI 模型：选完视频即加载（最耗时步骤），用户框选期间完成，
+    //    点击「开始去水印」时模型已在内存，不再出现「长时间 0 帧」的假死观感
+    try {
+      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST' });
+    } catch (_e) { /* 预热失败不影响主流程 */ }
     // 抽首帧（img 框选）与 filmstrip（点击跳转时间线）：
     //   之前用 Promise.all([thumb, film]) 等齐才往下走——filmstrip 要 decode 20 帧再 tile，
     //   通常 2-4s，卡住了 thumbnail 的 img 显示（thumbnail 只要 200-500ms）。
@@ -3795,7 +3800,18 @@
             el.dwVidPause.hidden = false;
             el.dwVidResume.hidden = true;
             el.dwVidCancel.hidden = false;
-            if (st.progress) el.dwVidStatus.textContent = `去水印处理中… 已处理 ${st.progress} 帧（按 ${el.dwVidTargetFps.value} fps 抽帧，原视频高帧率时被压缩）`;
+            // 按后端 phase 给出更精确的阶段提示，消除「长时间无反馈」的假死感
+            const _pm = {
+              loading_model: '正在加载 AI 模型（首次较慢，请稍候）…',
+              extracting_frames: '正在抽取视频帧…',
+              inpainting: `正在逐帧去除水印（已处理 ${st.progress || '0'} 帧，按 ${el.dwVidTargetFps.value} fps 抽帧）`,
+              encoding: '正在重新编码输出视频…',
+            };
+            el.dwVidStatus.textContent = _pm[st.phase] || (
+              st.progress
+                ? `去水印处理中… 已处理 ${st.progress} 帧（按 ${el.dwVidTargetFps.value} fps 抽帧）`
+                : '视频去水印处理中（逐帧推理，请稍候）…'
+            );
           } else if (st.status === 'paused') {
             el.dwVidRunCtrls.hidden = false;
             el.dwVidPause.hidden = true;
