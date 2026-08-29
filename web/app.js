@@ -3467,7 +3467,8 @@
     if (wrap) wrap.style.aspectRatio = '16 / 9';
     el.dwVidPlayer.hidden = true;
     el.dwVidPlayer.removeAttribute('src');
-    // 视频预览是 opt-in：默认不转码，只有用户主动勾选时才启动转码 + 显示 spinner
+    // 视频预览默认开启（WKWebView 不转码播不了，所以"开箱即播"是默认体验）；
+    // 用户取消勾选后才走"无转码"主链路：仅首帧 img 框选，无播放器。
     const wantPreview = !!(el.dwVidPreviewToggle && el.dwVidPreviewToggle.checked);
     el.dwVidTranscoding.hidden = !wantPreview;
     if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
@@ -3477,8 +3478,8 @@
     el.dwVidResult.hidden = true;
     el.dwVidStatus.textContent = wantPreview
       ? '正在抽首帧 + 转码播放源…'
-      : '正在抽首帧 + 加载时间线…（视频预览默认关闭，勾选上方「启用视频预览」才会转码）';
-    // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）—— 仅 opt-in
+      : '正在抽首帧 + 加载时间线…（视频预览默认开启，如不需转码可取消上方勾选，跳过播放器）';
+    // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）—— opt-out 走「不转码」
     if (wantPreview) dwVidStartPreviewTranscode(f);
     // 4) 后台预热 AI 模型：选完视频即加载（最耗时步骤），用户框选期间完成，
     //    点击「开始去水印」时模型已在内存，不再出现「长时间 0 帧」的假死观感
