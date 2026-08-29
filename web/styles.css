@@ -843,7 +843,12 @@ img { max-width: 100%; display: block; }
 /* 图片模式两栏布局 */
 .dw-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 1.2rem; align-items: start; }
 .dw-main { min-width: 0; }
-.dw-side { min-width: 0; }
+/* 右侧参数面板：在窗口可视高度内自滚动，避免「开始去水印」按钮被挤出可视区。
+   注：sticky 必须有非 static 的包含块；这里 .dw-layout 是 grid 已自然提供。
+   align-self:start 让 side 不被 grid 的高条目拉下；top:12 避开 tabs header。 */
+.dw-side { min-width: 0; position: sticky; top: 12px; align-self: start; max-height: calc(100vh - 24px); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.dw-side::-webkit-scrollbar { width: 6px; }
+.dw-side::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .dw-card { background: var(--surface, #fff); border: 1px solid var(--line); border-radius: var(--radius-md); padding: .9rem 1rem; box-shadow: 0 2px 8px rgba(20,24,40,.04); }
 .dw-card-title { font-size: .95rem; font-weight: 700; margin: 0 0 .7rem; color: var(--text); }
 .dw-card .uc-form { display: flex; flex-direction: column; gap: .7rem; margin: 0 0 .8rem; }
