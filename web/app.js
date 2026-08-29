@@ -435,8 +435,7 @@
     dwModeVideo: $('dwModeVideo'),
     dwVideoPane: $('dwVideoPane'),
     dwVidFile: $('dwVidFile'),
-    dwVidEl: $('dwVidEl'),
-    dwVidCanvas: $('dwVidCanvas'),
+    dwVidThumb: $('dwVidThumb'),
     dwVidSvg: $('dwVidSvg'),
     dwVidSelInfo: $('dwVidSelInfo'),
     dwVidClear: $('dwVidClear'),
@@ -3206,11 +3205,10 @@
   let dwVidSel = null;  // 归一化 {x,y,w,h}（相对视频显示框）
 
   const dwVidResize = () => {
-    const v = el.dwVidEl;
-    if (!v || !v.videoWidth) return;
+    const v = el.dwVidThumb;
+    if (!v || !v.clientWidth) return;
     const w = v.clientWidth, h = v.clientHeight;
     const svg = el.dwVidSvg;
-    const cvs = el.dwVidCanvas;
     svg.setAttribute('width', w);
     svg.setAttribute('height', h);
     svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
@@ -3218,17 +3216,6 @@
     svg.style.height = h + 'px';
     svg.style.left = v.offsetLeft + 'px';
     svg.style.top = v.offsetTop + 'px';
-    // canvas 跟 video 同位置同尺寸（内部尺寸 = 视频原始尺寸，仅在变化时重置避免清屏）
-    if (cvs) {
-      if (cvs.width !== v.videoWidth || cvs.height !== v.videoHeight) {
-        cvs.width = v.videoWidth;
-        cvs.height = v.videoHeight;
-      }
-      cvs.style.width = w + 'px';
-      cvs.style.height = h + 'px';
-      cvs.style.left = v.offsetLeft + 'px';
-      cvs.style.top = v.offsetTop + 'px';
-    }
   };
 
   const dwVidDraw = () => {
@@ -3238,7 +3225,7 @@
       el.dwVidSelInfo.textContent = '尚未框选';
       return;
     }
-    const v = el.dwVidEl;
+    const v = el.dwVidThumb;
     const w = v.clientWidth, h = v.clientHeight;
     const x = dwVidSel.x * w, y = dwVidSel.y * h, rw = dwVidSel.w * w, rh = dwVidSel.h * h;
     const r = document.createElementNS(DWV_NS, 'rect');
@@ -3251,68 +3238,51 @@
     el.dwVidSelInfo.textContent = `已框选水印区 (${Math.round(dwVidSel.x * 100)}%, ${Math.round(dwVidSel.y * 100)}%, ${Math.round(dwVidSel.w * 100)}%, ${Math.round(dwVidSel.h * 100)}%)`;
   };
 
-  el.dwVidFile.addEventListener('change', () => {
+  el.dwVidFile.addEventListener('change', async () => {
     const f = el.dwVidFile.files[0];
     if (!f) return;
     const url = URL.createObjectURL(f);
-    el.dwVidEl.draggable = false;
-    el.dwVidEl.addEventListener('dragstart', (e) => e.preventDefault());
-    el.dwVidEl.muted = true;       // muted 满足 WKWebView 自动播放策略
-    el.dwVidEl.src = url;
+    // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
     el.dwVidOrig.muted = true;
-    // 选新文件时先把旧帧画清（避免新文件加载时仍显示上一帧）
-    const cvs = el.dwVidCanvas;
-    if (cvs) { cvs.width = 0; cvs.height = 0; }
-    el.dwVidEl.onloadeddata = () => {  // onloadeddata 触发时机比 onloadedmetadata 晚，确保首帧可解码
-      const v = el.dwVidEl;
-      const p = v.play();
-      const finalize = (ok, err) => {
-        if (!ok) {
-          // play() 失败（codec 不支持 / 格式问题），给用户可见提示
-          el.dwVidStatus.textContent = '视频解码失败（可能是不支持的编码），可换 mp4 试试';
-          console.warn('video play() failed:', err);
-          return;
-        }
-        // 等两个 rAF：确保第一帧真的提交到合成器，再画到 canvas
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            try {
-              if (cvs && v.videoWidth > 0) {
-                cvs.width = v.videoWidth;
-                cvs.height = v.videoHeight;
-                cvs.getContext('2d').drawImage(v, 0, 0);
-              }
-            } catch (e) {
-              console.warn('drawImage failed:', e);
-            }
-            v.pause();
-            v.currentTime = 0;
-            dwVidResize();
-            dwVidDraw();
-          });
-        });
-      };
-      if (p && p.then) { p.then(() => finalize(true)).catch((e) => finalize(false, e)); }
-      else { finalize(true); }  // 老 WebKit 直接同步
-    };
+    // 清旧选区 + 旧缩略图
     dwVidSel = null;
-    dwVidDraw();
+    if (el._dwThumbUrl) { URL.revokeObjectURL(el._dwThumbUrl); el._dwThumbUrl = null; }
+    el.dwVidThumb.removeAttribute('src');
     el.dwVidResult.hidden = true;
-    el.dwVidStatus.textContent = '';
+    el.dwVidStatus.textContent = '正在抽首帧…';
+    // 上传抽首帧（绕开 WKWebView video 元素所有渲染坑，img 渲染稳定可靠）
+    try {
+      const form = new FormData();
+      form.append('file', f);
+      const r = await request('/api/dw/video/thumbnail', { method: 'POST', body: form });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        el.dwVidStatus.textContent = '首帧提取失败：' + (txt || ('HTTP ' + r.status));
+        return;
+      }
+      const blob = await r.blob();
+      const thumbUrl = URL.createObjectURL(blob);
+      el._dwThumbUrl = thumbUrl;
+      el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+      el.dwVidThumb.src = thumbUrl;
+      el.dwVidStatus.textContent = '';
+    } catch (e) {
+      el.dwVidStatus.textContent = '首帧提取失败：' + (e.message || '未知错误');
+    }
   });
 
   let dwVidDrag = false;
-  el.dwVidEl.addEventListener('mousedown', (e) => {
-    if (!el.dwVidEl.src) return;
+  el.dwVidThumb.addEventListener('mousedown', (e) => {
+    if (!el.dwVidThumb.src) return;
     dwVidDrag = true;
-    const [nx, ny] = dwNormFromEvent(el.dwVidEl, e.clientX, e.clientY);
+    const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
     dwVidSel = { x: nx, y: ny, w: 0, h: 0 };
     e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
     if (!dwVidDrag) return;
-    const [nx, ny] = dwNormFromEvent(el.dwVidEl, e.clientX, e.clientY);
+    const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
     const x0 = Math.min(dwVidSel.x, nx), y0 = Math.min(dwVidSel.y, ny);
     dwVidSel.x = x0;
     dwVidSel.y = y0;

@@ -604,8 +604,8 @@ img { max-width: 100%; display: block; }
 }
 .dw-preview-wrap img { max-width: 100%; max-height: 420px; display: block; cursor: crosshair; }
 .dw-preview-wrap video { max-width: 100%; max-height: 460px; display: block; cursor: crosshair; background: #000; }
-/* 视频首帧 canvas：绝对定位覆盖 video 上方，pointer-events: none 让 mousedown 穿透到 video（拖框选不受影响） */
-.dw-preview-wrap .dw-vid-canvas { position: absolute; left: 0; top: 0; max-width: 100%; max-height: 460px; display: block; pointer-events: none; background: #000; }
+/* 视频首帧：服务端 ffmpeg 抽帧返回的 PNG，用 <img> 渲染稳定可靠（绕开 WKWebView video 元素的所有坑） */
+.dw-preview-wrap .dw-vid-thumb { max-width: 100%; max-height: 460px; display: block; cursor: crosshair; background: #000; }
 .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: none; }
 /* SVG 选区蒙层：必须和 canvas 一样绝对定位叠在图片上，否则会作为静态元素
    占据 img.clientHeight 的流式空白（用户反馈"上传图片空余太多"的根因） */

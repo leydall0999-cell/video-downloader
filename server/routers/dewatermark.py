@@ -5,6 +5,7 @@
 """
 import app
 import json
+import subprocess as _subprocess
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
 from fastapi import APIRouter
@@ -341,3 +342,45 @@ def dw_video_file(job_id: str) -> app.FileResponse:
     if not out.exists():
         raise app.HTTPException(status_code=410, detail="结果文件已清理")
     return app.FileResponse(path=str(out), filename=out.name, media_type="video/mp4")
+
+
+@router.post("/api/dw/video/thumbnail")
+def create_dw_video_thumbnail(
+    file: app.UploadFile = app._FastAPIFile(...),
+    request: app.Request = None,
+) -> app.FileResponse:
+    """抽视频首帧作为 PNG 返回给前端做选区预览。
+
+    2026-08-29 实测：macOS WKWebView 的 <video> 元素在不少 mp4（含某些 H.264 high@L4
+    / HEVC）上 onloadeddata / play() 时机不可靠，canvas drawImage 拿不到有效帧。
+    **根治：服务端用 ffmpeg 抽首帧，前端用 <img> 显示**（img 渲染稳定可靠，绕开所有
+    video 元素渲染坑）。原始视频在用户提交时仍按原路径传给 /api/dw/video 走完整管线。
+    """
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
+    if suffix not in DW_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件（mp4/mov/mkv/webm/avi 等）")
+    save_path = _save_upload(file, "dw_vid_thumb")
+    out_path = save_path.with_suffix(".png")
+    try:
+        # 抽第 0 秒首帧。`-ss 0` 放 -i 前追求 seek 速度；不依赖首帧恰好是 keyframe。
+        cmd = [app.FFMPEG_BIN, "-y", "-ss", "0", "-i", str(save_path),
+               "-vframes", "1", "-f", "image2", str(out_path)]
+        proc = _subprocess.run(cmd, capture_output=True, timeout=30)
+        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            err_tail = proc.stderr.decode("utf-8", "ignore")[-300:] if proc.stderr else "unknown"
+            save_path.unlink(missing_ok=True)
+            out_path.unlink(missing_ok=True)
+            raise app.HTTPException(
+                status_code=500,
+                detail=f"ffmpeg 抽首帧失败：{err_tail or 'unknown'}"
+            )
+        # 抽完即删原视频（可能数百 MB），PNG 留给 FastAPI 读取用，响应后由系统清理
+        save_path.unlink(missing_ok=True)
+    except app.HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        save_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=500, detail=f"首帧提取失败：{e}")
+    return app.FileResponse(path=str(out_path), media_type="image/png")
