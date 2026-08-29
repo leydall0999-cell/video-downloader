@@ -455,6 +455,8 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
 
         # 注意：frozen 桌面端 ai_video_inpaint 内部同进程跑（与图片模式一致），
         # 子进程隔离在桌面端派发不可靠，故不走 subprocess。
+        # phase_cb 同时承载 inpaint_count（如 "inpaint_count:204"），前端用它区分
+        # "实际要推理的帧" vs "全视频总帧"。
         dwc_ai.ai_video_inpaint(
             app.Path(src), out_path, regions, ffmpeg_bin,
             progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
@@ -462,7 +464,10 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             start_sec=start_sec, end_sec=end_sec, segments=segments,
             target_fps=target_fps,
             work_dir=work_dir, cancel_check=_cancel_check,
-            phase_cb=lambda p: job.__setitem__("phase", p),
+            phase_cb=lambda p: (
+                job.__setitem__("phase", p) if not (isinstance(p, str) and p.startswith("inpaint_count:")) else
+                job.__setitem__("inpaint_count", int(p.split(":", 1)[1]) or 0)
+            ),
         )
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("视频去水印未产出有效文件")
@@ -500,7 +505,7 @@ def create_dw_video(
     start_sec: float = app.Form(0.0),
     end_sec: float = app.Form(0.0),
     segments: str = app.Form(""),
-    target_fps: float = app.Form(30.0),
+    target_fps: float = app.Form(15.0),  # 默认 15 fps — 静态水印 + 邻帧平滑下肉眼无差（2026-08-29 由 30 调到 15）
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
@@ -589,6 +594,7 @@ def dw_video_status(job_id: str) -> dict:
         "filename": job.get("filename", ""), "progress": job.get("progress", ""),
         "target_fps": float(job.get("target_fps", 30.0)),
         "phase": job.get("phase", ""),
+        "inpaint_count": int(job.get("inpaint_count", 0) or 0),
     }
 
 

@@ -3633,13 +3633,17 @@
     // 数值标签
     el.dwVidStartLabel.textContent = s.toFixed(1) + 's';
     el.dwVidEndLabel.textContent = e.toFixed(1) + 's';
-    // 状态提示
+    // 状态提示 + 预估帧数（让用户选完区间立刻知道总工作量；区间内的帧才是真正要推理的）
     const isFull = (s <= 0 && e >= dwVidDuration);
+    const fps = parseFloat(el.dwVidTargetFps.value) || 30;
+    const totalEst = Math.round(dwVidDuration * fps);
+    const span = isFull ? dwVidDuration : Math.max(0, e - s);
+    const inpaintEst = Math.round(span * fps);
     if (isFull) {
-      el.dwVidSegTip.textContent = `整段处理（共 ${dwVidDuration.toFixed(1)} 秒）`;
+      el.dwVidSegTip.textContent = `整段处理：${dwVidDuration.toFixed(1)}s @ ${fps}fps ≈ ${totalEst} 帧`;
     } else {
-      const pct = Math.round(((e - s) / dwVidDuration) * 100);
-      el.dwVidSegTip.textContent = `仅 ${s.toFixed(1)}s–${e.toFixed(1)}s 推理（约占全片 ${pct}%），其余帧直接复制`;
+      const pct = Math.round((span / dwVidDuration) * 100);
+      el.dwVidSegTip.textContent = `推理 ${span.toFixed(1)}s（占全片 ${pct}%）@ ${fps}fps ≈ ${inpaintEst} 帧；其余 ${(dwVidDuration - span).toFixed(1)}s 直接复制`;
     }
   };
 
@@ -3656,6 +3660,8 @@
   });
   el.dwVidStart.addEventListener('input', () => dwVidUpdateRange(el.dwVidStart));
   el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
+  // 输出帧率变化时也重算预估帧数（"帧数预估" 一目了然，让用户按帧数选 fps）
+  el.dwVidTargetFps.addEventListener('change', () => dwVidUpdateRange(null));
 
   // -------------------------------------------------- 多时间段（segments）管理
   // 每段 = { start, end, regions, label, keyframes? }，regions 为该段时框选的归一化区域
@@ -3940,16 +3946,21 @@
             el.dwVidPause.hidden = false;
             el.dwVidResume.hidden = true;
             el.dwVidCancel.hidden = false;
-            // 按后端 phase 给出更精确的阶段提示，消除「长时间无反馈」的假死感
+            // 按后端 phase 给出更精确的阶段提示，消除「长时间无反馈」的假死感。
+            // inpainting 阶段优先显示 "实际要推理的帧数" (inpaint_count)，与 "全视频总帧"
+            // 区分开 —— 不让用户被全帧数吓到。区间是 6.8s/30fps 截到 204 帧时，UI 应是
+            // "已处理 X/204 帧（区间内推理）" 而非 "X/4515 帧"。
+            const _inpaintTotal = parseInt(st.inpaint_count || '0', 10) || 0;
+            const _inpaintText = _inpaintTotal > 0 ? `${_inpaintTotal} 帧推理` : '推理';
             const _pm = {
               loading_model: '正在加载 AI 模型（首次较慢，请稍候）…',
               extracting_frames: '正在抽取视频帧…',
-              inpainting: `正在逐帧去除水印（已处理 ${st.progress || '0'} 帧，按 ${el.dwVidTargetFps.value} fps 抽帧）`,
+              inpainting: `正在逐帧去除水印（已处理 ${st.progress || '0'}/${_inpaintTotal || '?'} 帧 — ${_inpaintText}）`,
               encoding: '正在重新编码输出视频…',
             };
             el.dwVidStatus.textContent = _pm[st.phase] || (
               st.progress
-                ? `去水印处理中… 已处理 ${st.progress} 帧（按 ${el.dwVidTargetFps.value} fps 抽帧）`
+                ? `去水印处理中… 已处理 ${st.progress} 帧${_inpaintTotal ? `/${_inpaintTotal} 帧推理` : ''}`
                 : '视频去水印处理中（逐帧推理，请稍候）…'
             );
           } else if (st.status === 'paused') {

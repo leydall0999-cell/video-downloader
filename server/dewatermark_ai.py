@@ -572,7 +572,7 @@ class _DwCancel(Exception):
 def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                      resolution: str = "original", smooth: bool = True, window: int = 2,
                      start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
-                     target_fps: float = 30.0,
+                     target_fps: float = 15.0,  # 默认 15 fps（2026-08-29 由 30 调到 15 — 静态水印 + 邻帧平滑足够；详见 module docstring）
                      work_dir: str = None, cancel_check=None, phase_cb=None) -> Path:
     """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
 
@@ -760,8 +760,17 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
 
         # 3) 逐帧处理：被任一段覆盖则跑 LaMa 推理，否则零成本复制
         #    续跑：proc_dir 已有该帧则跳过（已完成）；帧边界检查暂停/取消信号
+        #    进度上报分两个维度——给前端更直观的预估：
+        #      · phase_cb("inpaint_count", N) 一次性给出本次"真正要推理"的帧数（copy 不算）
+        #      · progress_cb(i+1, total) 全部帧计数（含 copy），让进度条能从 0 平滑推进
+        #    这样 UI 能立即显示"处理 X/Y（实际推理帧）", 用户对工作量有数；
+        #    但进度条不会跳跃，体验稳。
         if phase_cb:
             try: phase_cb("inpainting")
+            except Exception: pass
+        # 单独发一次 inpaint_count 阶段事件（让前端在开始前就拿到"实际工作总量"）
+        if phase_cb:
+            try: phase_cb(f"inpaint_count:{inpaint_count}")
             except Exception: pass
         for i, fp in enumerate(frame_files):
             out_name = os.path.join(proc_dir, os.path.basename(fp))

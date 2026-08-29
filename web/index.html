@@ -702,11 +702,14 @@
               </label>
               <label class="uc-field">
                 <span class="uc-label">输出帧率</span>
-                <select id="dwVidTargetFps" title="抽帧时按此 fps 等时间抽样，避免高帧率视频被抽成几千帧；水印视觉稳定，30 fps 完全够用">
-                  <option value="30">30 fps（推荐，水印稳）</option>
+                <select id="dwVidTargetFps" title="抽帧时按此 fps 等时间抽样。水印是静态内容 + 邻帧平滑开启后，15 fps 已与 30 fps 肉眼无差；选更高只增加帧数/算力。
+·推荐 15 fps（2× 快于 30 fps，静态水印去不闪）
+·选 30 fps 仅当水印有剧烈位置变化或开启邻帧平滑后会看到跳变">
+                  <option value="15">15 fps（推荐，静态水印足够）</option>
                   <option value="24">24 fps</option>
-                  <option value="60">60 fps</option>
-                  <option value="0">按原帧率（最慢，仅特殊场景）</option>
+                  <option value="30">30 fps（高丝滑度）</option>
+                  <option value="60">60 fps（特殊场景，慢 4×）</option>
+                  <option value="0">按原帧率（最慢，仅 debug 用）</option>
                 </select>
               </label>
               <label class="uc-field">
