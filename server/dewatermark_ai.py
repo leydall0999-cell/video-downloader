@@ -521,6 +521,7 @@ class _DwCancel(Exception):
 def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                      resolution: str = "original", smooth: bool = True, window: int = 2,
                      start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
+                     target_fps: float = 30.0,
                      work_dir: str = None, cancel_check=None) -> Path:
     """AI 视频去水印（B 档：逐帧 LaMa + 邻帧中值平滑）：抽帧→逐帧 inpaint→平滑→重编码混音。
 
@@ -528,6 +529,12 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
     ffmpeg_bin：ffmpeg 可执行路径（来自 app.FFMPEG_BIN）。
     progress_cb(done, total)：每帧处理后回调（用于前端进度）。
     resolution：original/720/480（降分辨率提速）。smooth：是否做时序中值平滑。
+
+    **目标帧率（target_fps，2026-08-29 加，默认 30）**：高帧率（HFR）视频（手机慢动作、
+    录屏虚拟 fps、VFR 文件）逐帧推理会浪费大量时间——水印是视觉稳定内容，30 fps 完全够用。
+    传 target_fps>0 时，ffmpeg 用 `-vf "fps=N,fps_mode=cfr"` 对源视频做**等时间抽样**，
+    比如 5.3s 的 850 fps 视频会被抽到 159 帧（28× 提速）。传 0 则按源帧率处理（向后兼容）。
+    重编码输出帧率与抽帧一致。
 
     **时间分段（Segment，2026-08-29 加）**：start_sec/end_sec 指定水印出现的秒数区间
     （闭区间，end_sec<=0 表示到片尾）。区间内的帧才跑 LaMa 推理，**区间外的帧直接复制原帧**——
@@ -556,25 +563,36 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
         os.makedirs(proc_dir, exist_ok=True)
         os.makedirs(final_dir, exist_ok=True)
 
-        # 1) 抽帧（原生 fps；可选降分辨率）
+        # 0) 探测源帧率（仅日志用；高 fps 时给前端提示「源 X fps → 抽帧 Y fps」）
+        src_fps = _probe_fps(ffmpeg_bin, src)
+
+        # 1) 抽帧（默认 30 fps 等时间抽样；可选降分辨率；可选保留原 fps）
         #    续跑：work_dir 内已有完整帧序列则跳过抽帧（省时，避免重复解码）
         frame_files = sorted(_glob.glob(os.path.join(frames_dir, "*.png"))) if work_dir else []
         if not frame_files:
-            vf = None
+            vf_parts = []
+            # 目标帧率（target_fps>0 时限定为等时间抽样（CFR），防止 HFR/VFR 视频抽到几千帧）。
+            # 注意：fps filter 默认就是 CFR 行为，不需要再加 fps_mode（fps_mode 是 select filter 的）。
+            if target_fps and target_fps > 0:
+                vf_parts.append(f"fps={target_fps:g}")
+            # 分辨率缩放（与目标帧率可叠加，filtergraph 用逗号串接）
             if resolution == "720":
-                vf = "scale=-2:720"
+                vf_parts.append("scale=-2:720")
             elif resolution == "480":
-                vf = "scale=-2:480"
+                vf_parts.append("scale=-2:480")
             extract = [ffmpeg_bin, "-y", "-i", src]
-            if vf:
-                extract += ["-vf", vf]
+            if vf_parts:
+                extract += ["-vf", ",".join(vf_parts)]
             extract += ["-q:v", "2", os.path.join(frames_dir, "%05d.png")]
             _run_ffmpeg(extract)
             frame_files = sorted(_glob.glob(os.path.join(frames_dir, "*.png")))
         total = len(frame_files)
         if total == 0:
             raise RuntimeError("视频抽帧失败（无法读取帧，可能格式不支持或 ffmpeg 缺失）")
-        fps = _probe_fps(ffmpeg_bin, src)
+        # 抽帧后的实际 fps：target_fps>0 走目标，CFR；否则按源 nominal
+        fps = (target_fps if (target_fps and target_fps > 0) else src_fps)
+        logger.info("dw video src_fps=%.3f target_fps=%.3f actual_fps=%.3f total=%d 帧",
+                    src_fps, (target_fps or 0.0), fps, total)
 
         # 2) 时间分段（Segment）+ 关键帧（Keyframe，2026-08-29 加）
         #    segments = [{"start": s, "end": e, "regions": [...](可选),

@@ -456,6 +456,7 @@
     dwVidKfTitle: $('dwVidKfTitle'),
     dwVidKfTip: $('dwVidKfTip'),
     dwVidRes: $('dwVidRes'),
+    dwVidTargetFps: $('dwVidTargetFps'),
     dwVidSmooth: $('dwVidSmooth'),
     dwVidBtn: $('dwVidBtn'),
     dwVidStatus: $('dwVidStatus'),
@@ -3752,6 +3753,7 @@
     const form = new FormData();
     form.append('file', file);
     form.append('resolution', el.dwVidRes.value);
+    form.append('target_fps', el.dwVidTargetFps.value);
     form.append('smooth', el.dwVidSmooth.value);
 
     if (dwVidSegments.length) {
@@ -3793,7 +3795,7 @@
             el.dwVidPause.hidden = false;
             el.dwVidResume.hidden = true;
             el.dwVidCancel.hidden = false;
-            if (st.progress) el.dwVidStatus.textContent = `去水印处理中… 已处理 ${st.progress} 帧`;
+            if (st.progress) el.dwVidStatus.textContent = `去水印处理中… 已处理 ${st.progress} 帧（按 ${el.dwVidTargetFps.value} fps 抽帧，原视频高帧率时被压缩）`;
           } else if (st.status === 'paused') {
             el.dwVidRunCtrls.hidden = false;
             el.dwVidPause.hidden = true;

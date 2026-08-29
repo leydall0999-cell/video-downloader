@@ -701,6 +701,15 @@
                 </select>
               </label>
               <label class="uc-field">
+                <span class="uc-label">输出帧率</span>
+                <select id="dwVidTargetFps" title="抽帧时按此 fps 等时间抽样，避免高帧率视频被抽成几千帧；水印视觉稳定，30 fps 完全够用">
+                  <option value="30">30 fps（推荐，水印稳）</option>
+                  <option value="24">24 fps</option>
+                  <option value="60">60 fps</option>
+                  <option value="0">按原帧率（最慢，仅特殊场景）</option>
+                </select>
+              </label>
+              <label class="uc-field">
                 <span class="uc-label">邻帧平滑</span>
                 <select id="dwVidSmooth">
                   <option value="1">开启（降闪烁，推荐）</option>

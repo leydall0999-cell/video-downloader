@@ -438,8 +438,10 @@ def _cleanup_dw_job(job_id: str, remove_out: bool = False) -> None:
 
 def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str, smooth: bool,
                start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
+               target_fps: float = 30.0,
                work_dir: str = None) -> None:
-    """后台跑视频去水印。支持暂停/取消信号（帧边界检查），可被续跑（work_dir 持久化）。"""
+    """后台跑视频去水印。支持暂停/取消信号（帧边界检查），可被续跑（work_dir 持久化）。
+    target_fps：目标输出帧率，默认 30，0 表示按源帧率（HFR/VFR 视频推荐 30）。"""
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -458,6 +460,7 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
             resolution=resolution, smooth=smooth,
             start_sec=start_sec, end_sec=end_sec, segments=segments,
+            target_fps=target_fps,
             work_dir=work_dir, cancel_check=_cancel_check,
         )
         if not out_path.exists() or out_path.stat().st_size == 0:
@@ -496,11 +499,16 @@ def create_dw_video(
     start_sec: float = app.Form(0.0),
     end_sec: float = app.Form(0.0),
     segments: str = app.Form(""),
+    target_fps: float = app.Form(30.0),
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
 
     逐帧跑 LaMa 推理 + 邻帧中值平滑降闪烁，ffmpeg 重编码混音输出 mp4。
+
+    **目标帧率 target_fps（2026-08-29 加，默认 30）**：抽帧时强制按 target_fps 做等时间抽样，
+    避免 HFR（240/960fps）、VFR（可变帧率）或 metadata 异常的源视频把 5s 内容抽成几千帧。
+    水印视觉稳定 → 30 fps 完全够用。0 表示按源帧率（向后兼容）。
 
     **时间分段（Segment，2026-08-29 加）**：start_sec/end_sec 指定水印出现的秒数区间
     （闭区间；end_sec<=0 表示到片尾）。区间内的帧才跑推理，区间外直接复制原帧。
@@ -520,6 +528,9 @@ def create_dw_video(
         raise app.HTTPException(status_code=400, detail="start_sec / end_sec 不能为负数")
     if end_sec > 0 and start_sec > 0 and end_sec < start_sec:
         raise app.HTTPException(status_code=400, detail="end_sec 需大于或等于 start_sec")
+    # target_fps 范围：0=按原帧率；1..120 区间防呆
+    if target_fps < 0 or target_fps > 120:
+        raise app.HTTPException(status_code=400, detail="target_fps 需在 0..120（0=按原帧率）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
     if suffix not in DW_VIDEO_EXTS:
@@ -545,11 +556,14 @@ def create_dw_video(
             "regions": regions_list, "segments": segments_list,
             "resolution": resolution, "smooth": bool(int(smooth)),
             "start_sec": float(start_sec), "end_sec": float(end_sec),
+            "target_fps": float(target_fps),
         }
     app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
                         resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list,
+                        float(target_fps),
                         work_dir)
-    return {"job_id": job_id, "status": "running", "kind": "video"}
+    return {"job_id": job_id, "status": "running", "kind": "video",
+            "target_fps": float(target_fps)}
 
 
 @router.get("/api/dw/video/{job_id}")
@@ -560,6 +574,7 @@ def dw_video_status(job_id: str) -> dict:
     return {
         "status": job["status"], "error": job.get("error", ""),
         "filename": job.get("filename", ""), "progress": job.get("progress", ""),
+        "target_fps": float(job.get("target_fps", 30.0)),
     }
 
 
