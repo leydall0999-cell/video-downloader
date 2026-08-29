@@ -470,6 +470,8 @@
     dwVidTranscoding: $('dwVidTranscoding'),
     dwVidEmpty: $('dwVidEmpty'),
     dwVidCapOverlay: $('dwVidCapOverlay'),
+    dwVidPreviewToggle: $('dwVidPreviewToggle'),
+    dwVidPreviewToggleWrap: $('dwVidPreviewToggleWrap'),
     dwVidPlayerHead: $('dwVidPlayerHead'),
     dwVidFilmstripWrap: $('dwVidFilmstripWrap'),
     dwVidFsHint: $('dwVidFsHint'),
@@ -3442,6 +3444,8 @@
   el.dwVidFile.addEventListener('change', async () => {
     const f = el.dwVidFile.files[0];
     if (!f) return;
+    // 上传视频后，把「启用视频预览」开关展示给用户（默认未勾选 = 不转码）
+    if (el.dwVidPreviewToggleWrap) el.dwVidPreviewToggleWrap.hidden = false;
     // 选中视频即隐藏「请上传视频」占位层，画布进入工作态
     if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
     // 占位消失后 → 显示工作态 cap「原视频预览 · 在画面上拖框选水印」
@@ -3463,15 +3467,19 @@
     if (wrap) wrap.style.aspectRatio = '16 / 9';
     el.dwVidPlayer.hidden = true;
     el.dwVidPlayer.removeAttribute('src');
-    el.dwVidTranscoding.hidden = false;
+    // 视频预览是 opt-in：默认不转码，只有用户主动勾选时才启动转码 + 显示 spinner
+    const wantPreview = !!(el.dwVidPreviewToggle && el.dwVidPreviewToggle.checked);
+    el.dwVidTranscoding.hidden = !wantPreview;
     if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
     if (el.dwVidFilmstripWrap) el.dwVidFilmstripWrap.hidden = true;
     if (el.dwVidFsHint) el.dwVidFsHint.hidden = true;
     if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
     el.dwVidResult.hidden = true;
-    el.dwVidStatus.textContent = '正在抽首帧 + 转码播放源…';
-    // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）
-    dwVidStartPreviewTranscode(f);
+    el.dwVidStatus.textContent = wantPreview
+      ? '正在抽首帧 + 转码播放源…'
+      : '正在抽首帧 + 加载时间线…（视频预览默认关闭，勾选上方「启用视频预览」才会转码）';
+    // 3) 启动转码（任意格式 → H.264+AAC，让 WKWebView 都能播）—— 仅 opt-in
+    if (wantPreview) dwVidStartPreviewTranscode(f);
     // 4) 后台预热 AI 模型：选完视频即加载（最耗时步骤），用户框选期间完成，
     //    点击「开始去水印」时模型已在内存，不再出现「长时间 0 帧」的假死观感
     try {
@@ -4049,6 +4057,25 @@
     // 回到工作区：若之前已选视频则隐藏占位，否则仍提示「请上传视频」
     if (el.dwVidEmpty) el.dwVidEmpty.hidden = !!el.dwVidFile.files[0];
     try { el.dwVidMain.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_e) {}
+  });
+  // 视频预览开关：勾上 = 启动转码；取消 = 隐藏播放器（默认 OFF，常见流程不再等转码）
+  if (el.dwVidPreviewToggle) el.dwVidPreviewToggle.addEventListener('change', () => {
+    const f = el.dwVidFile && el.dwVidFile.files && el.dwVidFile.files[0];
+    if (el.dwVidPreviewToggle.checked) {
+      if (!f) return;
+      el.dwVidTranscoding.hidden = false;
+      el.dwVidStatus.textContent = '正在转码播放源（任意格式 → H.264+AAC）…';
+      dwVidStartPreviewTranscode(f);
+    } else {
+      // 关闭预览：取消轮询，隐藏 player / spinner，回到「仅首帧」静态态
+      if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
+      if (el.dwVidPlayer) { el.dwVidPlayer.hidden = true; el.dwVidPlayer.removeAttribute('src'); }
+      if (el.dwVidTranscoding) el.dwVidTranscoding.hidden = true;
+      if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
+      const wrap = el.dwVidThumb && el.dwVidThumb.parentElement;
+      if (wrap) wrap.classList.remove('is-playable');
+      if (el.dwVidStatus && el.dwVidStatus.textContent.includes('转码')) el.dwVidStatus.textContent = '';
+    }
   });
   // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
   el.dwVidDownload.addEventListener('click', (e) => {
