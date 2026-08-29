@@ -3604,6 +3604,9 @@
     // video 接管时跳过底部 ~50px（native controls 区，让 video 自己处理 play/seek）
     if (hasVideo && e.offsetY > el.dwVidPlayer.clientHeight - 50) return;
     dwVidDrag = true;
+    // 用户开始框选即隐藏 cap 角标：避免覆盖水印区（pointer-events:none 已保证不拦截，
+    // 但视觉遮挡会让用户看不清目标水印就框不准）；换视频时 change handler 会重新显示
+    if (el.dwVidCapOverlay && !el.dwVidCapOverlay.hidden) el.dwVidCapOverlay.hidden = true;
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
     dwVidSel = { x: nx, y: ny, w: 0, h: 0 };
     e.preventDefault();

@@ -861,10 +861,11 @@ img { max-width: 100%; display: block; }
 .dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
 .dw-compare img { width: 100%; max-height: 60vh; height: auto; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
 .dw-cap { font-size: .78rem; color: var(--text-mute); }
-/* 视频合成画布左上角浮动角标：明确告知"这是原视频工作区（用于框选水印）"，避免用户把它当成结果 */
+/* 视频合成画布底部角标：避开常见水印位（左上/右上），
+   配合 JS「首次框选即隐藏」保证选择全程画面无视觉遮挡。 */
 .dw-cap-overlay {
   position: absolute;
-  top: 10px;
+  bottom: 10px;
   left: 10px;
   z-index: 6;  /* 高于 .dw-vid-thumb(z=1)/.dw-svg(z=4)/.dw-vid-filmstrip(z=4)/<video>(z=5) */
   background: rgba(15, 23, 42, .82);
