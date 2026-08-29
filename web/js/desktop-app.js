@@ -117,10 +117,14 @@
     const btn = document.createElement('button');
     btn.id = 'syncCookieBtn';
     btn.textContent = '同步 Cookie 到云端';
-    btn.style.cssText = 'margin-left:8px;padding:4px 10px;cursor:pointer;';
+    btn.type = 'button';
+    // 不写内联样式 — 交给 .sidebar-cookie-sync button 类控制（padding/width/font 等）
+    // 若未来 sidebar 兜底失效落到 header/body，那时需要 inject 完整样式，目前先不写
+    btn.style.cssText = '';
     const badge = document.createElement('span');
     badge.id = 'syncCookieBadge';
-    badge.style.cssText = 'margin-left:8px;font-size:12px;color:#888;';
+    badge.textContent = '';
+    badge.style.cssText = '';
 
     async function syncToCloud(showAlert) {
       const old = btn.textContent;
@@ -164,13 +168,29 @@
       if (ok) syncToCloud(true);
     });
 
-    const header = document.querySelector('header');
-    if (header) {
-      header.appendChild(btn);
-      header.appendChild(badge);
+    // 跨端同步不是 header 装饰，而是 App 端独享的能力入口——放到侧栏「下载同步」上方。
+    // 不能 append 到 header：sidebar 是 position:fixed;top:64px，而加了按钮后 header
+    // 实际高度 ~95-100px，会出现按钮从 header「漏出来」到 sidebar 顶部边缘的视觉冲突
+    // （按钮与「下载同步」分类几乎贴在一起）。
+    // 正确归宿：作为侧栏里第一个「跨端同步」section，跟 sidebar 自身 1rem padding 节奏一致。
+    const sidebar = document.querySelector('aside.sidebar') || document.querySelector('.sidebar');
+    if (sidebar) {
+      const wrap = document.createElement('div');
+      wrap.id = 'syncCookieWrap';
+      wrap.className = 'sidebar-cookie-sync';
+      wrap.appendChild(btn);
+      wrap.appendChild(badge);
+      sidebar.insertBefore(wrap, sidebar.firstElementChild);
     } else {
-      document.body.appendChild(btn);
-      document.body.appendChild(badge);
+      // 极端兜底：sidebar 还不存在时再回退到 header（避免功能完全消失）
+      const header = document.querySelector('header');
+      if (header) {
+        header.appendChild(btn);
+        header.appendChild(badge);
+      } else {
+        document.body.appendChild(btn);
+        document.body.appendChild(badge);
+      }
     }
 
     // 桌面版就绪后自动同步一次，并每 30 分钟保活
