@@ -482,10 +482,12 @@ def create_dw_video_filmstrip(
             raise RuntimeError("视频时长为 0 或无法解析")
         # 2) 抽 N 帧 + 等比缩放 + 1xN 拼图
         n = int(frames)
+        # 2) 抽 N 帧 + 等比缩放 + Nx1 横条拼图（20 列 1 行 = 横向 filmstrip）
+        #    横向布局：time 轴从左到右，click 位置 = 时间位置
         fps_value = n / duration
         cmd = [
             app.FFMPEG_BIN, "-y", "-i", str(save_path),
-            "-vf", f"fps={fps_value},scale=160:-1,tile=1x{n}",
+            "-vf", f"fps={fps_value},scale=160:-1,tile={n}x1",
             "-frames:v", "1", "-an", str(out_path),
         ]
         proc = _subprocess.run(cmd, capture_output=True, timeout=60)
