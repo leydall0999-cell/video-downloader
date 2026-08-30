@@ -598,19 +598,31 @@ def create_dw_video(
 
 
 @router.post("/api/dw/ai/warmup")
-def warmup_ai_engine(int8: str = app.Form("1"), request: app.Request = None) -> dict:
+def warmup_ai_engine(int8: str = app.Form("1"), model: str = app.Form(""), request: app.Request = None) -> dict:
     """后台预热 AI 去水印模型：用户选完视频后触发，把最耗时的模型加载从点击「开始」的
     关键路径挪到框选的空闲期，消除「点击开始后长时间 0 帧」的假死观感。
 
     模型在进程内缓存，重复调用几乎无成本；内存不足 / 模型缺失时静默失败不影响主流程。
     int8：预热时即按此开关加载对应模型（默认开；与任务提交的 int8 保持一致可避免切换重建）。
+    model：可选，切换 AI 去水印模型（如 lama_dilated）；空字符串=沿用当前模型。
     """
     app._check_rate_limit(request)
     if int8 not in ("0", "1"):
         raise app.HTTPException(status_code=400, detail="int8 仅支持 0 / 1")
+    if model:
+        try:
+            dwc_ai.set_model(model)
+        except ValueError as e:
+            raise app.HTTPException(status_code=400, detail=str(e))
     dwc_ai.set_int8_enabled(int8 == "1")
-    app.executor.submit(dwc_ai.warmup)
-    return {"ok": True, "status": "warming"}
+    app.executor.submit(lambda: dwc_ai.warmup(model if model else None))
+    return {"ok": True, "status": "warming", "model": dwc_ai.current_model()}
+
+
+@router.get("/api/dw/ai/models")
+def list_ai_models() -> dict:
+    """返回可用的 AI 去水印模型列表与当前模型（供 UI 模型切换下拉框）。"""
+    return {"models": dwc_ai.list_models(), "current": dwc_ai.current_model()}
 
 
 @router.get("/api/dw/video/{job_id}")

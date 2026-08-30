@@ -77,8 +77,41 @@ MEM_TOTAL_SAFE_MB = 3500.0
 # 子进程推理超时（秒）：覆盖首跑下载 107MB + 加载 + 推理；超时即判失败，不拖死请求。
 SUBPROC_TIMEOUT = 300
 
-_SESSION = None
-_SESSION_INT8_MODE = None  # 已加载 session 对应的 INT8 模式；与当前开关不符时 _get_session 丢弃重建
+# —— 多模型注册表（轻量去水印模型替换的插拔基础）——
+# 每项契约：
+#   url       缺失时下载地址
+#   filename  落 ~/.vdl_models 的文件名
+#   min_bytes 完整性阈值（低于视为下载残缺/损坏，删后重下）
+#   io        "lama" = 双输入 [image, mask] 512x512 -> RGB，与现有瓦片/羽化管线完全兼容
+#   out_div   模型输出像素值除数（LaMa 系为 255.0；若某模型输出 [0,1] 则改为 1.0）
+# 默认 lama；可通过环境变量 VDL_DW_MODEL 或运行时 set_model() 切换，无需改管线。
+# lama_dilated（Qualcomm, BSD-3-Clause）作为 LaMa 的 drop-in 候选注册，
+# 供本机 benchmark 确认是否更快（研究提示其在移动 NPU/WebGPU 更快、CPU 未必）。
+MODELS = {
+    "lama": {
+        "url": LAMA_ONNX_URL,
+        "filename": LAMA_ONNX_NAME,
+        "min_bytes": EXPECTED_MODEL_MIN_BYTES,
+        "io": "lama",
+        "out_div": 255.0,
+    },
+    "lama_dilated": {
+        "url": "https://huggingface.co/pxGeniusAI/lama-dilated/resolve/main/lama_dilated.onnx",
+        "filename": "lama_dilated.onnx",
+        "min_bytes": 100_000_000,
+        "io": "lama",
+        "out_div": 255.0,
+    },
+}
+DEFAULT_MODEL = "lama"
+_MODEL_NAME = os.environ.get("VDL_DW_MODEL") or DEFAULT_MODEL
+
+
+def _resolve_model_name(name: str = None) -> str:
+    return name or _MODEL_NAME or DEFAULT_MODEL
+
+
+_SESSIONS = {}  # 模型名 -> (InferenceSession, int8_mode)，按模型分别缓存
 _LOCK = threading.Lock()
 # INT8 动态量化开关：默认开启（环境变量 VDL_DW_INT8=0 可强制关闭；UI 通过 set_int8_enabled 运行时覆盖）。
 # 量化失败会自动回退 FP32（见 _get_session），故默认开启安全。
@@ -104,20 +137,23 @@ def _model_dir() -> Path:
     return Path.home() / ".vdl_models"
 
 
-def _ensure_model() -> Path:
-    """确保模型文件存在且完整，缺失/不完整则从 HuggingFace 下载（首次较慢，约 100MB）。
+def _ensure_model(name: str = None) -> Path:
+    """确保指定模型文件存在且完整；缺失/不完整则从注册表 url 下载（首次较慢，约 100MB+）。
 
-    完整性：完整模型约 107MB；若已存在文件 < EXPECTED_MODEL_MIN_BYTES（多为下载中断的残片），
-    先删后重新下载，避免损坏模型进入 onnxruntime 触发原生崩溃。
+    完整性：完整模型 >= spec.min_bytes；若已存在文件 < min_bytes（多为下载中断残片），
+    先删后重下，避免损坏模型进入 onnxruntime 触发原生崩溃。
     """
+    name = name or _MODEL_NAME or DEFAULT_MODEL
+    spec = MODELS.get(name) or MODELS[DEFAULT_MODEL]
     d = _model_dir()
     d.mkdir(parents=True, exist_ok=True)
-    p = d / LAMA_ONNX_NAME
-    if p.exists() and p.stat().st_size >= EXPECTED_MODEL_MIN_BYTES:
+    p = d / spec["filename"]
+    min_bytes = spec.get("min_bytes", EXPECTED_MODEL_MIN_BYTES)
+    if p.exists() and p.stat().st_size >= min_bytes:
         return p
     if p.exists():
-        logger.warning("ai_dewatermark: 模型文件不完整（%d bytes < %d），删除重下",
-                       p.stat().st_size, EXPECTED_MODEL_MIN_BYTES)
+        logger.warning("ai_dewatermark[%s]: 模型文件不完整（%d bytes < %d），删除重下",
+                       name, p.stat().st_size, min_bytes)
         try:
             p.unlink()
         except OSError:
@@ -125,7 +161,7 @@ def _ensure_model() -> Path:
     import urllib.request
     import socket
 
-    logger.info("ai_dewatermark: 下载 LaMa ONNX %s -> %s", LAMA_ONNX_URL, p)
+    logger.info("ai_dewatermark[%s]: 下载 %s -> %s", name, spec["url"], p)
     tmp = p.with_suffix(".tmp")
     # 全局默认 socket 超时（URL + connect 都受此限制）。107MB+ 在慢网下需要更长时间，
     # 同时加一次重试避免单次失败。下载超时即返回，由父路由转失败。
@@ -135,23 +171,24 @@ def _ensure_model() -> Path:
         last_err: Exception | None = None
         for attempt in (1, 2):
             try:
-                urllib.request.urlretrieve(LAMA_ONNX_URL, tmp)
+                urllib.request.urlretrieve(spec["url"], tmp)
                 last_err = None
                 break
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                logger.warning("ai_dewatermark: 模型下载第 %d 次失败: %s；%s", attempt, e, "重试" if attempt == 1 else "放弃")
+                logger.warning("ai_dewatermark[%s]: 模型下载第 %d 次失败: %s；%s",
+                               name, attempt, e, "重试" if attempt == 1 else "放弃")
                 tmp.unlink(missing_ok=True)
         if last_err is not None:
             raise last_err
         sz = Path(tmp).stat().st_size
-        if sz < EXPECTED_MODEL_MIN_BYTES:
+        if sz < min_bytes:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"模型下载不完整（{sz} bytes），请重试或检查网络")
         tmp.replace(p)
     finally:
         socket.setdefaulttimeout(prev_timeout)
-    logger.info("ai_dewatermark: 模型就绪 %s (%d bytes)", p, p.stat().st_size)
+    logger.info("ai_dewatermark[%s]: 模型就绪 %s (%d bytes)", name, p, p.stat().st_size)
     return p
 
 
@@ -250,6 +287,30 @@ def set_int8_enabled(flag: bool) -> None:
     _INT8_OVERRIDE = bool(flag)
 
 
+def set_model(name: str) -> None:
+    """运行时切换 AI 去水印模型（需在任务开始前调用；下一次 _get_session 重建对应 session）。"""
+    global _MODEL_NAME
+    if name not in MODELS:
+        raise ValueError(f"未知 AI 去水印模型: {name}（可用: {', '.join(MODELS)}）")
+    _MODEL_NAME = name
+
+
+def list_models() -> list:
+    """返回已注册模型名列表（供 UI 展示可选模型）。"""
+    return list(MODELS.keys())
+
+
+def current_model() -> str:
+    """返回当前生效的模型名。"""
+    return _resolve_model_name()
+
+
+def _current_out_div() -> float:
+    """当前模型的输出像素值除数（LaMa 系为 255.0；若某模型输出 [0,1] 则改为 1.0）。"""
+    spec = MODELS.get(_resolve_model_name(), MODELS[DEFAULT_MODEL])
+    return float(spec.get("out_div", 255.0))
+
+
 def _int8_capable() -> bool:
     """本机 onnxruntime 是否真能跑 INT8 推理。
 
@@ -272,41 +333,47 @@ def _int8_capable() -> bool:
     return True
 
 
-def _get_session():
-    """懒加载 onnxruntime InferenceSession（进程内缓存，线程安全）。
+def _get_session(model_name: str = None):
+    """懒加载 onnxruntime InferenceSession（按模型名缓存，线程安全）。
 
-    INT8 模式由 _int8_enabled() 决定。若已缓存的 session 与当前开关模式不一致，
-    先丢弃再按新模式重建，确保切换即时生效（量化失败会自动回退 FP32）。
+    INT8 仅对 lama 生效（唯一我们量化生成的模型）；其他模型走 fp32。
+    模型名 / INT8 开关与已缓存 session 不符时，丢弃按新模式重建。
     """
-    global _SESSION, _SESSION_INT8_MODE
-    use_int8 = _int8_enabled()
+    global _SESSIONS
+    name = _resolve_model_name(model_name)
+    spec = MODELS.get(name) or MODELS[DEFAULT_MODEL]
+    use_int8 = (name == "lama") and _int8_enabled()
     # Apple Silicon 缺 ConvInteger，INT8 推理必败 —— 直接降级，避免白量化 30s + 任务崩溃
     if use_int8 and not _int8_capable():
         logger.info("ai_dewatermark INT8 在本平台不可用（Apple Silicon 缺 ConvInteger 实现），回退 FP32")
         use_int8 = False
-    # 模式切换：已加载 session 的 INT8 模式与当前开关不符 → 丢弃重建
-    if _SESSION is not None and _SESSION_INT8_MODE is not None and _SESSION_INT8_MODE != use_int8:
-        _SESSION = None
-    if _SESSION is not None:
-        return _SESSION
+
+    cached = _SESSIONS.get(name)
+    if cached is not None and cached[1] != use_int8:
+        _SESSIONS.pop(name, None)
+        cached = None
+    if cached is not None:
+        return cached[0]
+
     with _LOCK:
-        if _SESSION is not None:
-            return _SESSION
+        cached = _SESSIONS.get(name)
+        if cached is not None and cached[1] == use_int8:
+            return cached[0]
         ok, reason = _memory_ok()
         if not ok:
             raise RuntimeError(reason)
         import onnxruntime as ort  # 延迟导入，缺失时不阻塞启动
 
-        # ④ INT8：_int8_enabled() 时优先用动态量化模型，失败自动回退 fp32
+        # INT8：仅 lama 优先用动态量化模型，失败自动回退 fp32
         model_path = None
         if use_int8:
             try:
-                model_path = _ensure_int8_model()
+                model_path = _ensure_int8_model(name)
             except Exception as e:  # noqa: BLE001
                 logger.warning("ai_dewatermark INT8 模型准备失败，回退 fp32: %s", e)
                 model_path = None
         if model_path is None:
-            model_path = _ensure_model()
+            model_path = _ensure_model(name)
 
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -316,25 +383,26 @@ def _get_session():
         so.intra_op_num_threads = _optimal_threads()
         so.inter_op_num_threads = 1
         try:
-            _SESSION = ort.InferenceSession(str(model_path), sess_options=so, providers=["CPUExecutionProvider"])
+            _sess = ort.InferenceSession(str(model_path), sess_options=so, providers=["CPUExecutionProvider"])
             # 一次性推理探针：即便平台非 arm64，若 INT8 会话首帧就 NotImplemented/崩，永久禁用并回退
             if use_int8 and _INT8_RUNTIME_OK is None:
                 try:
-                    _probe_inputs(_SESSION)
+                    _probe_inputs(_sess)
                     _INT8_RUNTIME_OK = True
                 except Exception as e:  # noqa: BLE001
                     logger.warning("ai_dewatermark INT8 推理失败，永久回退 FP32: %s", e)
                     _INT8_RUNTIME_OK = False
-                    _SESSION = None
+                    use_int8 = False
+                    _sess = ort.InferenceSession(str(_ensure_model(name)), sess_options=so, providers=["CPUExecutionProvider"])
         except Exception as e:  # noqa: BLE001
             if use_int8:
                 logger.warning("ai_dewatermark INT8 会话构建失败，回退 fp32: %s", e)
                 use_int8 = False
-                _SESSION = ort.InferenceSession(str(_ensure_model()), sess_options=so, providers=["CPUExecutionProvider"])
+                _sess = ort.InferenceSession(str(_ensure_model(name)), sess_options=so, providers=["CPUExecutionProvider"])
             else:
                 raise
-        _SESSION_INT8_MODE = use_int8
-    return _SESSION
+        _SESSIONS[name] = (_sess, use_int8)
+    return _SESSIONS[name][0]
 
 
 def _probe_inputs(session) -> None:
@@ -351,12 +419,15 @@ def _probe_inputs(session) -> None:
     session.run(None, feeds)
 
 
-def _ensure_int8_model() -> Path | None:
-    """（可选）动态 INT8 量化模型：weights-only 动态量化，CPU 上约 1.5-2× 提速。
+def _ensure_int8_model(name: str = "lama") -> Path | None:
+    """（可选）动态 INT8 量化模型：仅 lama 有量化产物（weights-only 动态量化，CPU ~1.5-2× 提速）。
 
-    仅在 VDL_DW_INT8=1 时启用；生成失败/不可用则回退 fp32（返回 None）。结果按 fp32 内容缓存。
+    其他模型（如 lama_dilated）无量化产物，直接返回 None 走 fp32。生成失败也回退 None。
+    结果按 fp32 内容缓存。
     """
-    fp32 = _ensure_model()
+    if name != "lama":
+        return None
+    fp32 = _ensure_model("lama")
     out = _model_dir() / LAMA_ONNX_INT8_NAME
     # fp32 已完整性校验过；int8 体积约为 fp32 一半，小于此阈值视为残缺
     if out.exists() and out.stat().st_size >= EXPECTED_MODEL_MIN_BYTES // 3:
@@ -388,8 +459,8 @@ def available() -> bool:
         return False
 
 
-def warmup() -> bool:
-    """预热 AI 模型（加载 onnxruntime 会话 + 可能下载 107MB 权重）。
+def warmup(model_name: str = None) -> bool:
+    """预热 AI 模型（加载 onnxruntime 会话 + 可能下载权重）。
 
     由前端在「选择视频后、点击开始去水印前」后台触发，把最耗时的模型加载从
     关键路径挪到用户框选的空闲期，消除「点击开始后长时间 0 帧」的假死观感。
@@ -398,28 +469,28 @@ def warmup() -> bool:
     try:
         if not available():
             return False
-        _get_session()
+        _get_session(model_name)
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning("ai_dewatermark warmup 失败（不影响后续任务）: %s", e)
         return False
 
 
-def _infer_tile(sess, img_tile, mask_tile):
+def _infer_tile(sess, img_tile, mask_tile, out_div: float = 255.0):
     """对单张 512x512 瓦片推理，返回 (512,512,3) 浮点 [0,1] 修复结果。
 
     img_tile / mask_tile：float32，[0,1]，shape (512,512,3) / (512,512,1)。
-    LaMa 输入 image 为 RGB [0,1]、mask 为 [0,1]，但输出是 [0,255] 像素值（见下方归一化）。
+    LaMa 系输入 image 为 RGB [0,1]、mask 为 [0,1]，输出像素范围 [0, out_div]。
     """
     inp_img = img_tile.transpose(2, 0, 1)[None].astype(_np.float32)
     inp_mask = mask_tile.transpose(2, 0, 1)[None].astype(_np.float32)
     names = [i.name for i in sess.get_inputs()]
     feeds = {names[0]: inp_img, names[1]: inp_mask}
-    out = sess.run(None, feeds)[0][0]  # (3,512,512)，Carve/LaMa-ONNX 输出像素范围 [0,255]
+    out = sess.run(None, feeds)[0][0]  # (3,512,512)，LaMa 系输出像素范围 [0, out_div]
     arr = out.transpose(1, 2, 0)
-    # 重要：LaMa ONNX 输出的是 [0,255] 像素值，必须归一化到 [0,1] 再参与瓦片融合；
+    # 关键：模型输出的是 [0, out_div] 像素值，必须归一化到 [0,1] 再参与瓦片融合；
     # 若直接 clip(0,1) 会把 >1 的值（如背景灰 230）压成 1.0，最终 *255 后整图变成纯白。
-    return _np.clip(arr / 255.0, 0, 1)
+    return _np.clip(arr / out_div, 0, 1)
 
 
 def _tile_weight(th: int, tw: int, y0: int, x0: int, h: int, w: int, overlap: int):
@@ -478,7 +549,7 @@ def _inpaint_tiles(img_f, mask_f, tile: int = TILE, overlap: int = OVERLAP):
             pmask = _np.zeros((tile, tile, 1), _np.float32)
             pimg[:th, :tw] = img_f[y0:y1, x0:x1]
             pmask[:th, :tw] = mask_f[y0:y1, x0:x1]
-            out = _infer_tile(sess, pimg, pmask)[:th, :tw]
+            out = _infer_tile(sess, pimg, pmask, out_div=_current_out_div())[:th, :tw]
             wt = _tile_weight(th, tw, y0, x0, h, w, overlap)
             acc[y0:y1, x0:x1] += out * wt
             wsum[y0:y1, x0:x1] += wt
