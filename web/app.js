@@ -3761,8 +3761,15 @@ el.dwVidPlayer.removeAttribute('src');
     el.dwVidEnd.value = String(dwVidDuration);
     dwVidUpdateRange(null);
   });
-  el.dwVidStart.addEventListener('input', () => dwVidUpdateRange(el.dwVidStart));
-  el.dwVidEnd.addEventListener('input', () => dwVidUpdateRange(el.dwVidEnd));
+  el.dwVidStart.addEventListener('input', () => {
+    dwVidUpdateRange(el.dwVidStart);
+    // 手动拖滑块 = 已设过起点。用户后续点「设为结束」或手动 + 添加时就会触发自动添加
+    dwVidStartSet = true;
+  });
+  el.dwVidEnd.addEventListener('input', () => {
+    dwVidUpdateRange(el.dwVidEnd);
+    dwVidEndSet = true;
+  });
   // 输出帧率变化时也重算预估帧数（"帧数预估" 一目了然，让用户按帧数选 fps）
   el.dwVidTargetFps.addEventListener('change', () => dwVidUpdateRange(null));
   el.dwVidStride.addEventListener('change', () => dwVidUpdateRange(null));
@@ -3796,6 +3803,10 @@ el.dwVidPlayer.removeAttribute('src');
   let dwVidSegments = [];
   let dwVidActiveSeg = null;  // 当前选中的段（点击段列表项设置），用于编辑关键帧
   let dwVidCurrentJob = null; // 当前进行中的任务 job_id（暂停/继续/取消用）
+  // 用户是否设过 start / end（手动拖滑块或点「设为 X」均视为「设过」）。两个都为 true 且闭锁时，
+  // 自动 push 当前区间到 dwVidSegments，去掉冗余的 + 添加按钮点击
+  let dwVidStartSet = false;
+  let dwVidEndSet = false;
 
   const dwVidRenderSegments = () => {
     const list = el.dwVidSegList;
@@ -3938,13 +3949,20 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.dwVidAddKf) el.dwVidAddKf.addEventListener('click', dwVidAddKeyframe);
   if (el.dwVidAddKfAt) el.dwVidAddKfAt.addEventListener('click', dwVidAddKeyframe);
 
-  el.dwVidAddSeg.addEventListener('click', () => {
-    if (!dwVidDuration) { el.dwVidStatus.textContent = '请先选择视频文件'; return; }
+  // 把当前 start/end slider + dwVidSel 推进 dwVidSegments。auto=true 时 status 文案标「自动添加」。
+  // 供 dwVidAddSeg（手动添加）和 dwVidTryAutoAdd（自动闭锁）共用。
+  const dwVidPushSegFromSliders = (auto) => {
+    if (!dwVidDuration) { el.dwVidStatus.textContent = '请先选择视频文件'; return false; }
     if (!dwVidSel || dwVidSel.w <= 0 || dwVidSel.h <= 0) {
-      el.dwVidStatus.textContent = '请先在首帧预览上拖拽框选水印区域'; return;
+      el.dwVidStatus.textContent = '请先在首帧预览上拖拽框选水印区域';
+      return false;
     }
-    const s = parseFloat(el.dwVidStart.value);
-    const e = parseFloat(el.dwVidEnd.value);
+    const s = parseFloat(el.dwVidStart.value) || 0;
+    const e = parseFloat(el.dwVidEnd.value) || 0;
+    if (e <= s + 0.1) {
+      el.dwVidStatus.textContent = '结束需晚于开始 ≥ 0.1s';
+      return false;
+    }
     dwVidSegments.push({
       start: s,
       end: e,
@@ -3954,9 +3972,31 @@ el.dwVidPlayer.removeAttribute('src');
       }],
       label: `区域(${Math.round(dwVidSel.x * 100)},${Math.round(dwVidSel.y * 100)},${Math.round(dwVidSel.w * 100)},${Math.round(dwVidSel.h * 100)})`,
     });
-    dwVidActiveSeg = dwVidSegments.length - 1;  // 新建段自动激活，便于接着加关键帧
+    dwVidActiveSeg = dwVidSegments.length - 1;
     dwVidRenderSegments();
-    el.dwVidStatus.textContent = `已添加第 ${dwVidSegments.length} 段（${s.toFixed(1)}s–${e.toFixed(1)}s）。可改框选 + 调时间轴再加下一段。`;
+    const tag = auto ? '✓ 自动添加' : '';
+    el.dwVidStatus.textContent = `已添加第 ${dwVidSegments.length} 段（${s.toFixed(1)}s–${e.toFixed(1)}s）${tag}。可继续拖时间轴选下一段`;
+    return true;
+  };
+
+  // 自动闭锁检测：两个标志都 true + 区间合法 → push 一段 + reset 两个标志等下一段
+  const dwVidTryAutoAdd = () => {
+    if (!dwVidStartSet || !dwVidEndSet) return;
+    const before = dwVidSegments.length;
+    const ok = dwVidPushSegFromSliders(true);
+    if (ok && dwVidSegments.length > before) {
+      dwVidStartSet = false;
+      dwVidEndSet = false;
+    }
+  };
+
+  el.dwVidAddSeg.addEventListener('click', () => {
+    // 手动兜底入口（保留兼容老用户/批量脚本：仍可用）。
+    // 也走同一段 push 逻辑，并 reset dirty 防紧随其后的 setFromSeek 误触发
+    if (dwVidPushSegFromSliders(false)) {
+      dwVidStartSet = false;
+      dwVidEndSet = false;
+    }
   });
 
   // Filmstrip 缩略图条 + 「设为开始/结束」：点击缩略图跳转 → 同步到时间轴滑块
@@ -4000,6 +4040,9 @@ el.dwVidPlayer.removeAttribute('src');
       dwVidUpdateRange(el.dwVidEnd);
     }
     el.dwVidStatus.textContent = `已把 ${clamped.toFixed(1)}s 设为${which === 'start' ? '开始' : '结束'}时间`;
+    // 标记对应方向已设过 + 尝试自动闭锁添加（不依赖手动点 +）
+    if (which === 'start') dwVidStartSet = true; else dwVidEndSet = true;
+    dwVidTryAutoAdd();
   };
   el.dwVidSetStart.addEventListener('click', () => dwVidSetFromSeek('start'));
   el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromSeek('end'));
