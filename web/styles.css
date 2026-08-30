@@ -745,14 +745,21 @@ img { max-width: 100%; display: block; }
 /* 视频 wrap 是 .dw-preview-wrap（已 position: relative），img 的 height:auto 撑出 wrap 尺寸，
    其余层 absolute inset:0 跟随。视频模式下整块视感是一个画布，不再上下两份。 */
 #dwVidPreviewWrap {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   max-width: 100%;
-  /* 默认占位用 16/9：列宽 750px → 高度 ≈ 422px，避免 9/16 把占位拉成 1300+ px
-     巨型空地（用户 10:43 反馈：9/16 占位太高）。竖屏视频加载后由 JS 同步把
-     wrap.style.aspectRatio 校准成 naturalWidth/Height，object-fit: contain
-     不会变形。 */
+  /* 关键：max-height 限制画布不撑出窗口可视区（用户 11:21 反馈：竖屏视频撑成巨型空地），
+     min(viewport − 顶 header − 下余量, 视宽 × 1.45) —— 确保视频**自适应**列宽和窗口，
+     而不是按视频原始像素按整数倍撑开。 */
+  max-height: min(calc(100vh - 160px), calc(750px * 1.45));
+  min-height: 200px;
+  /* 默认占位仍用 16/9；视频加载由 JS 同步覆盖 aspectRatio。
+     容器内绝对定位子元素（img/video/svg）跟随容器实际尺寸 object-fit: contain。 */
   aspect-ratio: 16 / 9;
+  background: #000;
+  overflow: hidden;
 }
 #dwVidPreviewWrap > video::-webkit-media-controls-overlay-play-button {
   display: none !important;
