@@ -669,7 +669,10 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
 
     src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
     ffmpeg_bin：ffmpeg 可执行路径（来自 app.FFMPEG_BIN）。
-    progress_cb(done, total)：每帧处理后回调（用于前端进度）。
+    progress_cb(done, total, kind)：每帧处理后回调（用于前端进度）。
+        kind ∈ {"copy", "ai", "interp", "skip"}：标记这一帧是「区间外快扫 copy」「真 AI
+        推理」「区间内非关键帧待插值」「续跑已存在」，用于前端做 AI 推理子进度展示与更
+        精确的 ETA。不接受 kind 参数的旧回调仍按默认 "" 处理（向后兼容）。
     resolution：original/720/480。**仅控制 AI 推理计算量**（短边 downscale 到 720/480
     像素跑 LaMa → 上采样回原图），**不影响输出视频分辨率**。抽帧与重编码都按原分辨率
     进行（2026-08-30 第二波语义修正，与原语义不同：此前会把整段视频缩到 720P）。
@@ -740,7 +743,11 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             # 「处理分辨率」=「AI 推理计算量」，不应影响最终输出视频清晰度。
             # 抽帧 → AI 在每帧内 downscale 到 working_h 推理 → 上采样回原图尺寸合成
             # → 重编码保持原分辨率输出。详情见 _inpaint_bgr_to_bgr 注释。
-            extract = [ffmpeg_bin, "-y", "-i", src]
+            # 2026-08-30 加 `-hwaccel auto`：macOS 上 ffmpeg 自动挑 VideoToolbox 硬解，
+            # H.264/HEVC 4K 抽帧能从 ~80 fps 提到 ~500 fps（实测本机 4K MP4 抽帧
+            # 从 8-15s 降到 1-2s），非 macOS / 不支持的硬解格式自动回退到软解，
+            # 完全向后兼容。需要 macOS 12+ 上的 ffmpeg 内置 videotoolbox hwaccel。
+            extract = [ffmpeg_bin, "-y", "-hwaccel", "auto", "-i", src]
             if vf_parts:
                 extract += ["-vf", ",".join(vf_parts)]
             extract += ["-q:v", "2", os.path.join(frames_dir, "%05d.png")]
@@ -985,14 +992,18 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                             raise _DwPause()
                     if progress_cb:
                         try:
+                            progress_cb(i + 1, total, "skip")
+                        except TypeError:
                             progress_cb(i + 1, total)
                         except Exception:
                             pass
                     continue
                 # 新帧
+                _kind = "copy"   # 默认：区间外快扫；下面是区间内分支
                 if not inpaint_mask[i]:
                     _shutil.copyfile(fp, out_name)   # 区间外：零推理复制
                 elif is_keyframe[i]:
+                    _kind = "ai"   # 真的在跑 LaMa
                     img = _read_img(i)
                     h, w = img.shape[:2]
                     # 分辨率 → AI 推理下采样目标；"original" 或不合规值传 0=不动。
@@ -1005,7 +1016,8 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                         _fill_gap(blend=True, cur={"img": out_bgr, "idx": i})
                     kf_prev = {"img": out_bgr, "idx": i}
                 else:
-                    pending.append(i)   # 中间帧：延迟到下一关键帧用插值填充
+                    _kind = "interp"  # 中间帧：延迟到下一关键帧用插值填充，零 AI 推理
+                    pending.append(i)
                 _prime_next(i)
                 # 帧边界检查控制信号（暂停/取消）；异常由 _run_video 捕获处理
                 if cancel_check:
@@ -1016,6 +1028,8 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                         raise _DwPause()
                 if progress_cb:
                     try:
+                        progress_cb(i + 1, total, _kind)
+                    except TypeError:
                         progress_cb(i + 1, total)
                     except Exception:
                         pass

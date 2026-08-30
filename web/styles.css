@@ -566,16 +566,24 @@ img { max-width: 100%; display: block; }
 .uc-field-inline .uc-label-sub { color: var(--text-tertiary, #888); font-weight: 400; margin-left: .25rem; }
 #dwVidPreviewToggle { transform: scale(1.1); accent-color: #4a7cff; }
 
-/* 视频去水印面板：处理分辨率下拉框按文本自适应宽度、不再被最长选项撑跨半屏；
-   下方小字与其左对齐、不跟随 select 等宽拉伸 */
-#dwVidRes {
-  width: max-content;
-  max-width: 100%;
-  min-width: 220px;
+/* 视频去水印面板：处理分辨率下拉框右对齐；下方小字与 select 共左边界左对齐；
+   两者同宽同起点，select 宽度受 max-content 控制（不再撑跨侧栏），但 min-width 缩到 180px
+   避免窄列下溢出截断。容器 .dwVidResBlock 由 HTML 包裹 select+small 提供。 */
+.dwVidResBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;       /* 内部子项 stretch，与容器同宽 → 共左边界 */
+  align-self: flex-end;       /* 容器整体贴侧栏右边界 */
+  width: max-content;         /* 容器宽 = 内容里最宽（select 的 option） */
+  min-width: 180px;
+  max-width: 100%;            /* 窄列也不溢出 */
 }
-#dwVidRes + small {
-  align-self: flex-start;
-  width: max-content;
+.dwVidResBlock > #dwVidRes {
+  width: 100%;
+  max-width: 100%;
+}
+.dwVidResBlock > small {
+  width: 100%;
   max-width: 100%;
   text-align: left;
 }

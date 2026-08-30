@@ -3975,40 +3975,59 @@
             // 按后端 phase 给出更精确的阶段提示，消除「长时间无反馈」的假死感。
             // inpainting 阶段同时显示「总帧进度」与「实际推理帧数」，用"·"隔开避免堆叠成
             // "10/2258/81 帧" 那种三数字乱炖。例如：
-            //   "正在逐帧去除水印（10/2258 帧 · 81 帧需 AI 推理 · 约还需 4 分钟）"
-            //   — done/total ＝ 全视频处理进度；"X 帧需 AI" ＝ 真正花算力的子集（区间内）
-            //   ETA 用滑动平均（最近 2 个采样间隔）估算，比瞬时更稳。
+            //   "正在处理 10/2258 帧（AI 推理 1/81 · 约还需 1 分 12 秒）"
+            //   "约还需 1 分 12 秒" 用 AI 子速率（基于前后两次 ai_done 差分）算，比按
+            //   全帧推进算的 ETA 更准（区间外 copy + 帧间插值是 ms 级，不应摊薄）。
             const _inpaintTotal = parseInt(st.inpaint_count || '0', 10) || 0;
+            const _aiDone = parseInt(st.ai_done || '0', 10) || 0;
             const _inferTag = _inpaintTotal > 0
-              ? ` · ${_inpaintTotal} 帧需 AI 推理`
+              ? ` · AI 推理 ${_aiDone}/${_inpaintTotal}`
               : (_inpaintTotal === 0 ? ' · 全部帧 AI 推理' : '');
             // 后端 progress 实际是 "done/total" 字符串，拆出来做 tooltip（前端只显示原样）
             const _progStr = (st.progress || '0').toString();
             const _done = parseInt(_progStr.split('/')[0], 10) || 0;
             const _total = parseInt(_progStr.split('/')[1], 10) || _done;
-            // ETA：2 帧外的滑动平均（避免单次波动的尖刺）
+            // ETA：用「AI 推理帧数」的滑动平均算（耗时大头在 AI 推理；区间外 copy +
+            // 帧间插值复用是 ms 级，按全帧推进算 ETA 会严重高估"剩余时间"）
             const _now = Date.now();
             const _etaTag = (() => {
-              if (!_total || _done <= 0 || _done >= _total) return '';
-              if (window._dwPrev == null || window._dwPrev.done !== _done) {
-                window._dwPrev = { done: _done, t: _now, alpha: 0.6 };
-                return '';   // 第一次刚拿到 done，留一格不显示避免飘
+              if (_inpaintTotal <= 0 || _aiDone <= 0 || _aiDone >= _inpaintTotal) {
+                // 无 AI 推理信息时退化为全帧 ETA（旧行为）
+                if (!_total || _done <= 0 || _done >= _total) return '';
+                if (window._dwPrev == null || window._dwPrev.done !== _done) {
+                  window._dwPrev = { done: _done, t: _now };
+                  return '';
+                }
+                const dt = (_now - window._dwPrev.t) / 1000;
+                if (dt < 0.5) return '';
+                const rate = (_done - window._dwPrev.done) / dt;
+                if (rate <= 0) return '';
+                const sec = Math.round((_total - _done) / rate);
+                window._dwPrev = { done: _done, t: _now, rate };
+                if (sec < 5) return ' · 即将完成';
+                if (sec < 60) return ` · 约还需 ${sec} 秒`;
+                return ` · 约还需 ${Math.ceil(sec / 60)} 分钟`;
               }
-              const dt = (_now - window._dwPrev.t) / 1000;
-              if (dt < 0.5) return '';   // < 0.5s 的采样太抖
-              const rate = (_done - window._dwPrev.done) / dt;   // frames/s
+              if (window._dwPrevAi == null || window._dwPrevAi.ai_done !== _aiDone) {
+                window._dwPrevAi = { ai_done: _aiDone, t: _now };
+                return '';   // 第一次拿到 AI done，留一格不显示避免飘
+              }
+              const dt = (_now - window._dwPrevAi.t) / 1000;
+              if (dt < 0.5) return '';
+              const rate = (_aiDone - window._dwPrevAi.ai_done) / dt;   // AI fps
               if (rate <= 0) return '';
-              const remain = Math.max(0, _total - _done);
-              const sec = Math.round(remain / rate);
-              window._dwPrev = { done: _done, t: _now, rate };
+              const sec = Math.round((_inpaintTotal - _aiDone) / rate);
+              window._dwPrevAi = { ai_done: _aiDone, t: _now, rate };
               if (sec < 5) return ' · 即将完成';
               if (sec < 60) return ` · 约还需 ${sec} 秒`;
-              return ` · 约还需 ${Math.ceil(sec / 60)} 分钟`;
+              const m = Math.floor(sec / 60), s = sec % 60;
+              if (s === 0) return ` · 约还需 ${m} 分钟`;
+              return ` · 约还需 ${m} 分 ${s} 秒`;
             })();
             const _pm = {
               loading_model: '正在加载 AI 模型（首次较慢，请稍候）…',
               extracting_frames: '正在抽取视频帧…',
-              inpainting: `正在逐帧去除水印（${st.progress || '0'} 帧${_inferTag}${_etaTag}）`,
+              inpainting: `正在处理 ${st.progress || '0'} 帧${_inferTag}${_etaTag}`,
               encoding: '正在重新编码输出视频…',
             };
             const _statusText = _pm[st.phase] || (
@@ -4017,15 +4036,18 @@
                 : '视频去水印处理中（逐帧推理，请稍候）…'
             );
             el.dwVidStatus.textContent = _statusText;
-            // 悬停说明三段数字含义（受后端进度驱动，实时刷新）
-            const _inferLabel = _inpaintTotal > 0 ? `${_inpaintTotal}（区间内真正调用 LaMa ONNX 推理的帧数；其余由帧间插值复用前后结果）`
-              : (_inpaintTotal === 0 ? `${_total}（你选的区间内所有帧都要 AI 推理，未启用插值复用）` : '—');
+            // 悬停说明：四段数字 + AI 子速率 ETA 含义
+            const _copyOrInterp = _total - _inpaintTotal > 0
+              ? `其余 ${_total - _inpaintTotal} 帧由「区间外 copy」+「帧间插值」复用，ms 级完成，不耗算力`
+              : '视频全长都在 AI 推理范围内（无 copy / 帧间插值复用）';
             el.dwVidStatus.title =
-              `已处理帧数：${_done}（按时间轴推进，包含 AI 推理帧与帧间插值复用帧）\n` +
+              `处理进度：${_done}/${_total} 帧（按时间轴推进，包含 AI 推理帧 + 帧间插值 + 区间外快扫 copy）\n` +
               `全视频总帧数：${_total}\n` +
-              `选中区间内真实需要 AI 推理的帧数：${_inferLabel}\n\n` +
-              `▸ 进度按 ${_done}/${_total} 帧推进，逐帧走过视频；\n` +
-              `▸ AI 算力只对区间内 ${_inpaintTotal || _total} 帧生效，小水印通常几十帧即覆盖。`;
+              `区间内需 AI 推理总帧数：${_inpaintTotal || '—'}\n` +
+              `已完成的 AI 推理帧数：${_aiDone}${_inpaintTotal > 0 ? ` / ${_inpaintTotal}` : ''}\n\n` +
+              `▸ ${_copyOrInterp}；\n` +
+              `▸ 进度按 ${_done}/${_total} 帧推进是为了进度条平滑，最终文件帧数与原视频一致；\n` +
+              `▸ ETA 用 AI 子速率算（区间外快扫无算力，不能摊到 ETA 里）。`;
           } else if (st.status === 'paused') {
             el.dwVidRunCtrls.hidden = false;
             el.dwVidPause.hidden = true;

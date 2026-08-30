@@ -458,9 +458,15 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
         # 子进程隔离在桌面端派发不可靠，故不走 subprocess。
         # phase_cb 同时承载 inpaint_count（如 "inpaint_count:204"），前端用它区分
         # "实际要推理的帧" vs "全视频总帧"。
+        # progress 第三参数 kind ∈ {ai, copy, interp, skip}：用于前端做 AI 推理子进度
+        # 与更准确的 ETA（区间外 / 插值复用帧不进 ai_done 计数）。
+        def _on_progress(done, total, kind=""):
+            job.__setitem__("progress", f"{done}/{total}")
+            if kind == "ai":
+                job["ai_done"] = int(job.get("ai_done", 0) or 0) + 1
         dwc_ai.ai_video_inpaint(
             app.Path(src), out_path, regions, ffmpeg_bin,
-            progress_cb=lambda done, total: job.__setitem__("progress", f"{done}/{total}"),
+            progress_cb=_on_progress,
             resolution=resolution, smooth=smooth,
             start_sec=start_sec, end_sec=end_sec, segments=segments,
             target_fps=target_fps,
@@ -563,6 +569,7 @@ def create_dw_video(
         app.DW_JOBS[job_id] = {
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "video", "progress": "",
+            "ai_done": 0,
             # 续跑所需：上传原件路径 + 持久化工作目录 + 原始参数 + 控制信号
             "src_path": str(save_path), "work_dir": work_dir, "__signal__": "",
             "regions": regions_list, "segments": segments_list,
@@ -602,6 +609,7 @@ def dw_video_status(job_id: str) -> dict:
         "target_fps": float(job.get("target_fps", 30.0)),
         "phase": job.get("phase", ""),
         "inpaint_count": int(job.get("inpaint_count", 0) or 0),
+        "ai_done": int(job.get("ai_done", 0) or 0),
     }
 
 
