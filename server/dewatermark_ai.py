@@ -52,10 +52,14 @@ except Exception:  # noqa: BLE001
 
 
 # LaMa ONNX 权重（fp32，固定 512x512 输入；Carve-Photos/lama 导出，Apache 2.0）
-LAMA_ONNX_URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
+# 国内默认走 hf-mirror.com（huggingface.co 偶发被卡 60s 超时），已下载到 ~/.vdl_models 的用户不受影响（缓存命中）；
+# 需要切回原站可通过 VDL_DW_MODEL_URL_LAMA 环境变量改写。
+LAMA_ONNX_URL = "https://hf-mirror.com/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
 LAMA_ONNX_NAME = "lama_fp32.onnx"
 # INT8 动态量化模型名（④，VDL_DW_INT8=1 时由 fp32 量化生成，缓存复用）
 LAMA_ONNX_INT8_NAME = "lama_fp32.int8.onnx"
+# LaMa-Dilated 候选（Qualcomm, BSD-3-Clause），固定 512x512 同 lama 双输入契约
+LAMA_DILATED_URL = "https://hf-mirror.com/pxGeniusAI/lama-dilated/resolve/main/lama_dilated.onnx"
 
 # 推理瓦片大小与羽化重叠（LaMa 推荐 512 / 32~64 重叠）
 TILE = 512
@@ -89,14 +93,14 @@ SUBPROC_TIMEOUT = 300
 # 供本机 benchmark 确认是否更快（研究提示其在移动 NPU/WebGPU 更快、CPU 未必）。
 MODELS = {
     "lama": {
-        "url": LAMA_ONNX_URL,
+        "url": os.environ.get("VDL_DW_MODEL_URL_LAMA") or LAMA_ONNX_URL,
         "filename": LAMA_ONNX_NAME,
         "min_bytes": EXPECTED_MODEL_MIN_BYTES,
         "io": "lama",
         "out_div": 255.0,
     },
     "lama_dilated": {
-        "url": "https://huggingface.co/pxGeniusAI/lama-dilated/resolve/main/lama_dilated.onnx",
+        "url": os.environ.get("VDL_DW_MODEL_URL_LAMA_DILATED") or LAMA_DILATED_URL,
         "filename": "lama_dilated.onnx",
         "min_bytes": 100_000_000,
         "io": "lama",
@@ -166,7 +170,12 @@ def _ensure_model(name: str = None) -> Path:
     # 全局默认 socket 超时（URL + connect 都受此限制）。107MB+ 在慢网下需要更长时间，
     # 同时加一次重试避免单次失败。下载超时即返回，由父路由转失败。
     prev_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(300)  # 5 分钟
+    # 单次下载超时（秒），可被环境变量 VDL_DW_DOWNLOAD_TIMEOUT 覆盖；hf-mirror 在国内偶发卡顿，10 分钟更稳。
+    try:
+        download_timeout = int(os.environ.get("VDL_DW_DOWNLOAD_TIMEOUT", "600"))
+    except ValueError:
+        download_timeout = 600
+    socket.setdefaulttimeout(download_timeout)
     try:
         last_err: Exception | None = None
         for attempt in (1, 2):
