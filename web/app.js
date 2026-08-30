@@ -396,6 +396,10 @@
     dwImgEngine: $('dwImgEngine'),
     dwImgCvField: $('dwImgCvField'),
     dwImgRadiusField: $('dwImgRadiusField'),
+    dwImgModelField: $('dwImgModelField'),
+    dwImgInt8Field: $('dwImgInt8Field'),
+    dwImgModel: $('dwImgModel'),
+    dwImgInt8: $('dwImgInt8'),
     // 去水印放大弹窗
     dwImgModal: $('dwImgModal'),
     dwModalClose: $('dwModalClose'),
@@ -459,6 +463,7 @@
     dwVidTargetFps: $('dwVidTargetFps'),
     dwVidStride: $('dwVidStride'),
     dwVidSmooth: $('dwVidSmooth'),
+    dwVidModel: $('dwVidModel'),
     dwVidInt8: $('dwVidInt8'),
     dwVidBtn: $('dwVidBtn'),
     dwVidStatus: $('dwVidStatus'),
@@ -3248,6 +3253,11 @@
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
     form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'opencv');
+    // AI 模型可选项（仅当 engine=ai 时才有意义）；INT8 也只在 ai 引擎下生效
+    if (form.get('engine') === 'ai') {
+      if (el.dwImgModel) form.append('model', el.dwImgModel.value || 'lama');
+      if (el.dwImgInt8) form.append('int8', el.dwImgInt8.checked ? '1' : '0');
+    }
     try {
       const data = await request('/api/dw/image', { method: 'POST', body: form });
       const jobId = data.job_id;
@@ -3284,11 +3294,37 @@
     const ai = el.dwImgEngine.value === 'ai';
     if (el.dwImgCvField) el.dwImgCvField.hidden = ai;
     if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai;
+    if (el.dwImgModelField) el.dwImgModelField.hidden = !ai;
+    if (el.dwImgInt8Field) el.dwImgInt8Field.hidden = !ai;
   };
   if (el.dwImgEngine) {
     el.dwImgEngine.addEventListener('change', dwSyncEngineUi);
     dwSyncEngineUi();
   }
+  // AI 模型 + INT8 持久化（与视频面板同一规则：跨会话保留用户选择）
+  const DW_MODEL_KEY = 'vdl_dw_model';
+  const DW_INT8_KEY_IMG = 'vdl_dw_int8_img';
+  try {
+    const saved = localStorage.getItem(DW_MODEL_KEY);
+    if (saved && el.dwImgModel && Array.from(el.dwImgModel.options).some(o => o.value === saved)) {
+      el.dwImgModel.value = saved;
+    }
+  } catch (_e) {}
+  if (el.dwImgModel) {
+    el.dwImgModel.addEventListener('change', () => {
+      try { localStorage.setItem(DW_MODEL_KEY, el.dwImgModel.value); } catch (_e) {}
+    });
+  }
+  // 视频面板 INT8 持久化（同已有 key 'vdl_dw_int8'），图片面板单独 key 避免彼此覆盖
+  try {
+    if (el.dwImgInt8) {
+      const savedImg = localStorage.getItem(DW_INT8_KEY_IMG);
+      if (savedImg !== null) el.dwImgInt8.checked = (savedImg === '1');
+      el.dwImgInt8.addEventListener('change', () => {
+        try { localStorage.setItem(DW_INT8_KEY_IMG, el.dwImgInt8.checked ? '1' : '0'); } catch (_e) {}
+      });
+    }
+  } catch (_e) {}
   el.dwImgBtn.addEventListener('click', startDwImage);
 
   const startDwPdf = async () => {
@@ -3499,10 +3535,11 @@ el.dwVidPlayer.removeAttribute('src');
     if (wantPreview) dwVidStartPreviewTranscode(f);
     // 4) 后台预热 AI 模型：选完视频即加载（最耗时步骤），用户框选期间完成，
     //    点击「开始去水印」时模型已在内存，不再出现「长时间 0 帧」的假死观感
-    //    预热即按当前 INT8 开关加载对应模型，与任务提交模式一致可避免切换重建
+    //    预热即按当前 INT8 开关 + 模型选择加载对应模型，与任务提交模式一致可避免切换重建
     try {
       const wf = new FormData();
       wf.append('int8', el.dwVidInt8.checked ? '1' : '0');
+      if (el.dwVidModel) wf.append('model', el.dwVidModel.value || 'lama');
       fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST', body: wf });
     } catch (_e) { /* 预热失败不影响主流程 */ }
     // 抽首帧（img 框选）与 filmstrip（点击跳转时间线）：
@@ -3723,6 +3760,7 @@ el.dwVidPlayer.removeAttribute('src');
 
   // INT8 动态量化开关：本地持久化（默认开，与后端默认一致），跨会话保留用户选择
   const DW_INT8_KEY = 'vdl_dw_int8';
+  const DW_MODEL_KEY_VID = 'vdl_dw_model_vid';
   try {
     const savedInt8 = localStorage.getItem(DW_INT8_KEY);
     if (savedInt8 !== null) el.dwVidInt8.checked = (savedInt8 === '1');
@@ -3730,6 +3768,18 @@ el.dwVidPlayer.removeAttribute('src');
   el.dwVidInt8.addEventListener('change', () => {
     try { localStorage.setItem(DW_INT8_KEY, el.dwVidInt8.checked ? '1' : '0'); } catch (_e) {}
   });
+  // 视频面板 AI 模型选择持久化（与图片面板独立 key）
+  try {
+    if (el.dwVidModel) {
+      const savedV = localStorage.getItem(DW_MODEL_KEY_VID);
+      if (savedV && Array.from(el.dwVidModel.options).some(o => o.value === savedV)) {
+        el.dwVidModel.value = savedV;
+      }
+      el.dwVidModel.addEventListener('change', () => {
+        try { localStorage.setItem(DW_MODEL_KEY_VID, el.dwVidModel.value); } catch (_e) {}
+      });
+    }
+  } catch (_e) {}
 
   // -------------------------------------------------- 多时间段（segments）管理
   // 每段 = { start, end, regions, label, keyframes? }，regions 为该段时框选的归一化区域
@@ -3976,6 +4026,7 @@ el.dwVidPlayer.removeAttribute('src');
     form.append('temporal_stride', el.dwVidStride.value);
     form.append('smooth', el.dwVidSmooth.value);
     form.append('int8', el.dwVidInt8.checked ? '1' : '0');
+    if (el.dwVidModel) form.append('model', el.dwVidModel.value || 'lama');
 
     if (dwVidSegments.length) {
       // 多段模式：每段带自己的时间段 + 框选区域（+ 可选关键帧），后端按帧合并/插值

@@ -7,7 +7,7 @@
 
 用法（在 video-downloader-app 目录下）:
   .build_venv/bin/python bench_models.py
-  .build_venv/bin/python bench_models.py --models lama,lama_dilated --runs 30
+  .build_venv/bin/python bench_models.py --models lama --runs 30
   .build_venv/bin/python bench_models.py --image ~/watermarked.jpg --mask ~/mask.png   # 真实图粗检
 
 判读:
@@ -101,7 +101,7 @@ def real_image_check(image: str, mask: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--models", default="lama,lama_dilated")
+    ap.add_argument("--models", default="lama")
     ap.add_argument("--runs", type=int, default=20)
     ap.add_argument("--image", default="")
     ap.add_argument("--mask", default="")

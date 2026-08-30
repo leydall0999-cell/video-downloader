@@ -58,8 +58,6 @@ LAMA_ONNX_URL = "https://hf-mirror.com/Carve/LaMa-ONNX/resolve/main/lama_fp32.on
 LAMA_ONNX_NAME = "lama_fp32.onnx"
 # INT8 动态量化模型名（④，VDL_DW_INT8=1 时由 fp32 量化生成，缓存复用）
 LAMA_ONNX_INT8_NAME = "lama_fp32.int8.onnx"
-# LaMa-Dilated 候选（Qualcomm, BSD-3-Clause），固定 512x512 同 lama 双输入契约
-LAMA_DILATED_URL = "https://hf-mirror.com/pxGeniusAI/lama-dilated/resolve/main/lama_dilated.onnx"
 
 # 推理瓦片大小与羽化重叠（LaMa 推荐 512 / 32~64 重叠）
 TILE = 512
@@ -89,20 +87,14 @@ SUBPROC_TIMEOUT = 300
 #   io        "lama" = 双输入 [image, mask] 512x512 -> RGB，与现有瓦片/羽化管线完全兼容
 #   out_div   模型输出像素值除数（LaMa 系为 255.0；若某模型输出 [0,1] 则改为 1.0）
 # 默认 lama；可通过环境变量 VDL_DW_MODEL 或运行时 set_model() 切换，无需改管线。
-# lama_dilated（Qualcomm, BSD-3-Clause）作为 LaMa 的 drop-in 候选注册，
-# 供本机 benchmark 确认是否更快（研究提示其在移动 NPU/WebGPU 更快、CPU 未必）。
+# 当前仅注册 lama（Apache-2.0，CPU 友好、无伪影坍缩）。
+# 轻量/更快候选（lama_dilated 经实测有「塞人脸」模式坍缩，已出局）调研见任务 #134；
+# 后续确认干净的 drop-in 模型（如 RETHINED / 干净的 LaMa-Dilated 变体）再加回此处。
 MODELS = {
     "lama": {
         "url": os.environ.get("VDL_DW_MODEL_URL_LAMA") or LAMA_ONNX_URL,
         "filename": LAMA_ONNX_NAME,
         "min_bytes": EXPECTED_MODEL_MIN_BYTES,
-        "io": "lama",
-        "out_div": 255.0,
-    },
-    "lama_dilated": {
-        "url": os.environ.get("VDL_DW_MODEL_URL_LAMA_DILATED") or LAMA_DILATED_URL,
-        "filename": "lama_dilated.onnx",
-        "min_bytes": 100_000_000,
         "io": "lama",
         "out_div": 255.0,
     },
@@ -694,9 +686,14 @@ def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int
     reg_path = Path(tempfile.gettempdir()) / (f"vdl_dw_{Path(dst_path).stem}_{os.getpid()}.regions.json")
     with reg_path.open("w", encoding="utf-8") as fh:
         json.dump(regions, fh)
+    # 子进程是新进程，需把当前模型名传过去（--model 走 set_model 改子进程 _MODEL_NAME，
+    # 否则子进程默认加载 lama，UI 后续若加其他模型也靠 --model 才能生效）。
+    sub_argv = [sys.executable, os.path.abspath(__file__),
+                "run", str(src_path), str(dst_path), str(reg_path),
+                f"--model={current_model()}"]
     try:
         proc = subprocess.run(
-            [sys.executable, os.path.abspath(__file__), "run", str(src_path), str(dst_path), str(reg_path)],
+            sub_argv,
             capture_output=True,
             timeout=SUBPROC_TIMEOUT,
         )
@@ -725,10 +722,19 @@ def ai_image_inpaint(src_path, dst_path, regions, tile: int = TILE, overlap: int
 
 
 def _worker_main(argv: list) -> int:
-    """子进程入口：python dewatermark_ai.py run <src> <dst> <regions.json>。"""
+    """子进程入口：python dewatermark_ai.py run <src> <dst> <regions.json> [--model=NAME]。
+
+    --model 在 _worker_main 入口**最先**应用：必须早于 available() / ai_image_inpaint_core()，
+    才能让子进程加载对应模型的 session（默认 lama）。
+    """
     try:
+        # 解析 --model=NAME（必须最先应用，控子进程 _MODEL_NAME）
+        for a in argv[1:]:
+            if isinstance(a, str) and a.startswith("--model="):
+                set_model(a[len("--model="):])
+                break
         if len(argv) < 5 or argv[1] != "run":
-            print("usage: dewatermark_ai.py run <src> <dst> <regions.json>", file=sys.stderr)
+            print("usage: dewatermark_ai.py run <src> <dst> <regions.json> [--model=NAME]", file=sys.stderr)
             return 2
         _, _mode, src, dst, regf = argv[:5]
         with open(regf, encoding="utf-8") as fh:

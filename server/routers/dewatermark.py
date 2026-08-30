@@ -43,7 +43,8 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv", int8: bool = True) -> None:
+def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv",
+               int8: bool = True, model: str = "") -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -58,6 +59,12 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
                 raise RuntimeError("AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
             # 应用 INT8 开关（UI 勾选框）：与已加载 session 模式不符时 _get_session 会自动重建
             dwc_ai.set_int8_enabled(int8)
+            # 多模型切换（AI UI 下拉）：仅在用户显式传入非空 model 时切换，避免 unset 误毁默认 lama session
+            if model and model != dwc_ai.current_model():
+                try:
+                    dwc_ai.set_model(model)
+                except ValueError as e:
+                    raise RuntimeError(str(e))
             dwc_ai.ai_image_inpaint(src_path, out_path, regions)
         else:
             dwc.image_inpaint(src_path, out_path, regions, method, radius)
@@ -109,6 +116,7 @@ def create_dw_image(
     radius: int = app.Form(3),
     engine: str = app.Form("opencv"),
     int8: str = app.Form("1"),  # INT8 动态量化开关（默认开）
+    model: str = app.Form(""),   # AI 模型（当前仅 lama；仅 engine=ai 时生效），为空保持当前
     request: app.Request = None,
 ) -> dict:
     """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
@@ -134,6 +142,8 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="radius 需在 1..20 之间")
     if int8 not in ("0", "1"):
         raise app.HTTPException(status_code=400, detail="int8 仅支持 0 / 1")
+    if model and model not in dwc_ai.list_models():
+        raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
     save_path = _save_upload(file, "dw_up")
     job_id = app.uuid.uuid4().hex[:12]
     with app.DW_LOCK:
@@ -141,7 +151,7 @@ def create_dw_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "image",
         }
-    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine, bool(int(int8)))
+    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine, bool(int(int8)), model)
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
@@ -446,10 +456,12 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
                target_fps: float = 30.0,
                temporal_stride: int = 4,
                work_dir: str = None,
-               int8: bool = True) -> None:
+               int8: bool = True,
+               model: str = "") -> None:
     """后台跑视频去水印。支持暂停/取消信号（帧边界检查），可被续跑（work_dir 持久化）。
     target_fps：目标输出帧率，默认 30，0 表示按源帧率（HFR/VFR 视频推荐 30）。
-    int8：是否启用 INT8 动态量化（省内存/提速，量化失败自动回退 FP32）。"""
+    int8：是否启用 INT8 动态量化（省内存/提速，量化失败自动回退 FP32）。
+    model：AI 模型名（当前仅 lama），为空保持当前模型不变。"""
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -458,6 +470,12 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
             raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
         # 应用 INT8 开关（UI 勾选框）：与已加载 session 模式不符时 _get_session 会自动重建
         dwc_ai.set_int8_enabled(int8)
+        # 多模型切换：UI 选了非当前模型时换模型（空串保持）
+        if model and model != dwc_ai.current_model():
+            try:
+                dwc_ai.set_model(model)
+            except ValueError as e:
+                raise RuntimeError(str(e))
         out_path = app.DW_DIR / f"dw_vid_{job_id}.mp4"
 
         def _cancel_check():
@@ -525,6 +543,7 @@ def create_dw_video(
     target_fps: float = app.Form(15.0),  # 默认 15 fps — 静态水印 + 邻帧平滑下肉眼无差（2026-08-29 由 30 调到 15）
     temporal_stride: int = app.Form(4),  # 默认 4：每 4 帧推理 1 次（wave2 ② 时间稀疏）
     int8: str = app.Form("1"),  # INT8 动态量化开关（默认开；"0"=关，走 FP32 全精度）
+    model: str = app.Form(""),   # AI 模型（当前仅 lama；为空保持当前）
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
@@ -559,6 +578,8 @@ def create_dw_video(
     # temporal_stride 范围：1..30 区间防呆（1=逐帧，越大越快但插值时长越久）
     if temporal_stride < 1 or temporal_stride > 30:
         raise app.HTTPException(status_code=400, detail="temporal_stride 需在 1..30（1=逐帧，越大越快）")
+    if model and model not in dwc_ai.list_models():
+        raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower()
     if suffix not in DW_VIDEO_EXTS:
@@ -588,11 +609,12 @@ def create_dw_video(
             "target_fps": float(target_fps),
             "temporal_stride": int(temporal_stride),
             "int8": bool(int(int8)),
+            "model": model,
         }
     app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
                         resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list,
                         float(target_fps), int(temporal_stride),
-                        work_dir, bool(int(int8)))
+                        work_dir, bool(int(int8)), model)
     return {"job_id": job_id, "status": "running", "kind": "video",
             "target_fps": float(target_fps)}
 
@@ -604,7 +626,7 @@ def warmup_ai_engine(int8: str = app.Form("1"), model: str = app.Form(""), reque
 
     模型在进程内缓存，重复调用几乎无成本；内存不足 / 模型缺失时静默失败不影响主流程。
     int8：预热时即按此开关加载对应模型（默认开；与任务提交的 int8 保持一致可避免切换重建）。
-    model：可选，切换 AI 去水印模型（如 lama_dilated）；空字符串=沿用当前模型。
+    model：可选，切换 AI 去水印模型（当前仅 lama）；空字符串=沿用当前模型。
     """
     app._check_rate_limit(request)
     if int8 not in ("0", "1"):

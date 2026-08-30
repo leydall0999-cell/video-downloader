@@ -557,6 +557,16 @@
                 <span class="uc-label">半径 (1-20)</span>
                 <input type="number" id="dwImgRadius" value="3" min="1" max="20" />
               </label>
+              <label class="uc-field" id="dwImgModelField" hidden>
+                <span class="uc-label">AI 模型</span>
+                <select id="dwImgModel" data-default="lama">
+                  <option value="lama">lama — LaMa（标准）</option>
+                </select>
+              </label>
+              <label class="uc-field uc-check" id="dwImgInt8Field" hidden>
+                <input type="checkbox" id="dwImgInt8" checked />
+                <span class="uc-label">INT8 动态量化<small class="uc-hint-block">开启后约 1.5–2× 提速（CPU 量化，量化失败自动回退全精度）</small></span>
+              </label>
             </div>
             <button type="button" class="btn btn-primary btn-block" id="dwImgBtn">开始去水印</button>
             <span class="convert-status" id="dwImgStatus"></span>
@@ -816,6 +826,12 @@
                   <select id="dwVidSmooth">
                     <option value="1">开启（降闪烁，推荐）</option>
                     <option value="0">关闭</option>
+                  </select>
+                </label>
+                <label class="uc-field">
+                  <span class="uc-label">AI 模型</span>
+                  <select id="dwVidModel" data-default="lama">
+                    <option value="lama">lama — LaMa（标准）</option>
                   </select>
                 </label>
                 <label class="uc-field uc-check">
