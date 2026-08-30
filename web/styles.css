@@ -805,28 +805,25 @@ img { max-width: 100%; display: block; }
 }
 #dwVidPreviewWrap > .dw-vid-shroud-play {
   /* 「点击播放」文字按钮 — 居中显示，不抢画面视觉。
-     不用圆形大 ▶ 是因为：1) 任何中央按钮都会被框选覆盖 2) 视觉上「文字提示」更克制 */
+     不用圆形大 ▶ 是因为：1) 任何中央按钮都会被框选覆盖 2) 视觉上「文字提示」更克制。
+     关键：用 inline-block（不是 inline-flex）+ 显式 nowrap + svg vertical-align:middle
+     —— 不依赖任何 flex layout。最稳最广兼容。 */
   position: absolute;
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  display: inline-flex; align-items: center; gap: .4rem;
-  padding: .6rem 1.1rem;
+  display: inline-block;
+  padding: .55rem 1.05rem;
   border: 0;
   border-radius: 999px;
   background: rgba(0, 0, 0, .65);
   color: #fff;
   font: inherit; font-size: .85rem; font-weight: 600;
+  white-space: nowrap;       /* 强制按钮内文字不换行 */
   cursor: pointer;
   outline: none;
   backdrop-filter: blur(4px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
   transition: background .15s ease, transform .12s ease;
-  /* 关键：display:inline-flex + position:absolute 组合下，浏览器会把 button 宽度
-     shrink 到只够一个汉字，导致文字竖排。强制 white-space:nowrap + width:max-content
-     让 button 宽度由内容自然撑开（横向展示「点击播放」+ icon）。 */
-  white-space: nowrap;
-  width: max-content;
-  max-width: calc(100% - 1.2rem);
   /* 不抢画面四周 click — 只在按钮自身 bounding box 接收 click，让用户仍能拖框选 */
   pointer-events: auto;
 }
@@ -838,8 +835,9 @@ img { max-width: 100%; display: block; }
   transform: translate(-50%, -50%) scale(0.97);
 }
 #dwVidPreviewWrap > .dw-vid-shroud-play svg {
-  flex-shrink: 0;
-  display: block;
+  display: inline-block;
+  vertical-align: -3px;       /* 跟中文基线对齐 */
+  margin-right: .35rem;       /* 跟文字之间间距 */
 }
 #dwVidPreviewWrap > .dw-svg {
   /* z=3：永远在 video 之上 → 视频接管后红色选框不被遮 */
