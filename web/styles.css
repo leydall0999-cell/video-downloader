@@ -821,6 +821,12 @@ img { max-width: 100%; display: block; }
   backdrop-filter: blur(4px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
   transition: background .15s ease, transform .12s ease;
+  /* 关键：display:inline-flex + position:absolute 组合下，浏览器会把 button 宽度
+     shrink 到只够一个汉字，导致文字竖排。强制 white-space:nowrap + width:max-content
+     让 button 宽度由内容自然撑开（横向展示「点击播放」+ icon）。 */
+  white-space: nowrap;
+  width: max-content;
+  max-width: calc(100% - 1.2rem);
   /* 不抢画面四周 click — 只在按钮自身 bounding box 接收 click，让用户仍能拖框选 */
   pointer-events: auto;
 }
