@@ -748,7 +748,11 @@ img { max-width: 100%; display: block; }
   display: block;
   width: 100%;
   max-width: 100%;
-  aspect-ratio: 9 / 16;
+  /* 默认占位用 16/9：列宽 750px → 高度 ≈ 422px，避免 9/16 把占位拉成 1300+ px
+     巨型空地（用户 10:43 反馈：9/16 占位太高）。竖屏视频加载后由 JS 同步把
+     wrap.style.aspectRatio 校准成 naturalWidth/Height，object-fit: contain
+     不会变形。 */
+  aspect-ratio: 16 / 9;
 }
 #dwVidPreviewWrap > video::-webkit-media-controls-overlay-play-button {
   display: none !important;
