@@ -3380,6 +3380,13 @@
   // 同文件（name+size）缓存 preview_id，避免重复上传与转码
   const dwVidMarkPlayable = (url, previewId) => {
     const base = `${window.VDL_API_BASE || ''}`;
+    // 把已渲出来的首帧图（dwVidThumb 引用同一 blob，blob URL 在 DW_JOBS 续跑前都有效）
+    // 同步作为 <video poster>：转码完成但浏览器元数据/首帧未解码时显示这张图，
+    // 而不是默认的「黑底+ ▶ 按钮占位控件」，视觉上连贯、首帧静止。
+    const thumbSrc = el.dwVidThumb && el.dwVidThumb.src;
+    if (thumbSrc && !el.dwVidPlayer.poster) {
+      el.dwVidPlayer.poster = thumbSrc;
+    }
     el.dwVidPlayer.src = `${base}${url || '/api/dw/video/preview/' + previewId}`;
     el.dwVidPlayer.hidden = false;
     el.dwVidTranscoding.hidden = true;
@@ -3458,6 +3465,8 @@
     dwVidSel = null;
     if (el._dwThumbUrl) { URL.revokeObjectURL(el._dwThumbUrl); el._dwThumbUrl = null; }
     el.dwVidThumb.removeAttribute('src');
+    // 同步清掉上一段视频可能留存的 poster——避免换视频后首段缩略图错位到新视频
+    if (el.dwVidPlayer) el.dwVidPlayer.removeAttribute('poster');
     if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); el._dwFilmstripUrl = null; }
     el.dwVidFilmstrip.removeAttribute('src');
     el.dwVidFilmstripCursor.hidden = true;
