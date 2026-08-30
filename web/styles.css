@@ -566,6 +566,20 @@ img { max-width: 100%; display: block; }
 .uc-field-inline .uc-label-sub { color: var(--text-tertiary, #888); font-weight: 400; margin-left: .25rem; }
 #dwVidPreviewToggle { transform: scale(1.1); accent-color: #4a7cff; }
 
+/* 视频去水印面板：处理分辨率下拉框按文本自适应宽度、不再被最长选项撑跨半屏；
+   下方小字与其左对齐、不跟随 select 等宽拉伸 */
+#dwVidRes {
+  width: max-content;
+  max-width: 100%;
+  min-width: 220px;
+}
+#dwVidRes + small {
+  align-self: flex-start;
+  width: max-content;
+  max-width: 100%;
+  text-align: left;
+}
+
 .uc-check { flex-direction: row; align-items: center; gap: .4rem; }
 .uc-check .uc-label { color: var(--text); font-size: .85rem; }
 .uc-result { display: flex; flex-direction: column; gap: .7rem; margin-top: .8rem; }
