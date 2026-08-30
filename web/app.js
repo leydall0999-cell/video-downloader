@@ -3406,16 +3406,44 @@
     };
     el.dwVidPlayer.addEventListener('loadedmetadata', onLoaded);
     if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
-    // 显式钉死在首帧：WKWebView/macOS 在用户激活后可能自动尝试播放 <video>，
-    // 但用户在画面上拖框选水印时需要视频静止——画框时画面动，框根本对不准。
-    // 这里强制 pause + currentTime=0；同时显示自定义中央 ▶ 覆盖层（挡住 WKWebView
-    // paused 状态的原生 ▶ overlay — CSS 选择器在 macOS WKWebView 几乎从不响应）。
+    // —— macOS WKWebView 中央 ▶ overlay 解决方案 ——
+    // 直接 pause() + currentTime=0 会让 WKWebView 在画面中央强制显示一个 native ▶
+    // overlay（CSS selector ::-webkit-media-controls-overlay-play-button { display:none!important }
+    // 几乎从不响应）。macOS Safari/WKWebView 的标准 trick：muted autoplay → 立即 pause +
+    // currentTime=0，引擎会认为「已播过」，paused 状态不再触发中央 ▶ overlay。
+    // mute 是 autoplay 必需条件（系统偏好若关 muted autoplay 则 play() 会 reject），
+    // WKWebView 默认允许 muted autoplay，无需用户手势。
+    //
+    // 失败兜底：若 autoplay 被拒 → 强制 pause + 显示 e0f2d0c 阶段引入的自定义 overlay
+    // 按钮（用户点击 → video.play()）。
     try {
-      el.dwVidPlayer.pause();
-      el.dwVidPlayer.currentTime = 0;
-    } catch (_e) { /* 元数据未到，忽略 */ }
-    // 默认 paused → 显示自定义 ▶ 按钮
-    if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = false;
+      el.dwVidPlayer.muted = true;
+      // 默认隐藏 overlay（如果 autoplay 成功，不需要它挡 native ▶）
+      if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = true;
+      const p = el.dwVidPlayer.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          // autoplay 成功 → 立即 pause + 回到首帧 — wkwebview 将不显示中央 ▶ overlay
+          try {
+            el.dwVidPlayer.pause();
+            el.dwVidPlayer.currentTime = 0;
+          } catch (_e2) { /* noop */ }
+        }).catch(() => {
+          // muted autoplay 被拒（极少见；系统在「不允许自动播放」被设置）→ 兜底显示 overlay
+          try { el.dwVidPlayer.pause(); el.dwVidPlayer.currentTime = 0; } catch (_e3) { /* */ }
+          if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = false;
+        });
+      } else {
+        // 极老浏览器没 Promise — 同步播放完成后强制暂停
+        setTimeout(() => {
+          try { el.dwVidPlayer.pause(); el.dwVidPlayer.currentTime = 0; } catch (_e4) { /* */ }
+        }, 50);
+      }
+    } catch (_e) {
+      // 进入 paused 兜底
+      try { el.dwVidPlayer.pause(); el.dwVidPlayer.currentTime = 0; } catch (_e5) { /* */ }
+      if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = false;
+    }
   };
 
   // 「play / pause / ended」同步 overlay 显示状态 — 只绑一次（element static）
