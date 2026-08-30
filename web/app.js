@@ -3379,69 +3379,78 @@
     el.dwVidSelInfo.textContent = `已框选水印区 (${Math.round(dwVidSel.x * 100)}%, ${Math.round(dwVidSel.y * 100)}%, ${Math.round(dwVidSel.w * 100)}%, ${Math.round(dwVidSel.h * 100)}%)`;
   };
 
-  // 转码播放源：任意格式 → 服务端 H.264+AAC → <video> 播放（绕开 WKWebView codec 限制）
+  // 转码播放源：任意格式 → 服务端 H.264+AAC → 视频预览。
   // 同文件（name+size）缓存 preview_id，避免重复上传与转码
   //
-  // paused 状态策略（取代之前的 muted autoplay trick + e0f2d0c overlay button）：
-  //   video 元素不带 controls 属性 → wkwebview 不渲染 native UI（中央 ▶ 巨三角不会存在）
-  //   paused 状态：video.hidden=true → 整个 video 不绘制
-  //                    shroud div 显示（满铺 wrap + 首帧图 + 中央 64×64 紫底 ▶）
-  //                    click shroud ▶ → video.play() → video.hidden=false / shroud.hidden=true
-  //   playing 状态：video 显示，shroud 隐藏
-  //   pause / ended → 回到 shroud 模式
-  const dwVidMarkPlayable = (url, previewId) => {
-    const base = `${window.VDL_API_BASE || ''}`;
+  // 预览策略（2026-08-30 第三次定稿，彻底解决 wkwebview video 元素 UI 渲染问题）：
+  //   wkwebview <video> 元素即使 controls=false 也会渲染 right edge PiP 控件
+  //   （macOS Safari 设计，hidden attribute 也拦不住），所以**video.src 永远不设**，
+  //   video 元素 hidden=true 永远不显示。
+  //
+  //   转码完成后视觉上由 shroud div 接管：满铺 wrap + 首帧图 + 居中「点击播放」文字按钮
+  //   → 点击调后端 /api/dw/video/preview/{id}/open → macOS 系统默认播放器
+  //   （QuickTime / IINA / VLC）打开 preview.mp4。macOS 标准行为，跳出 app 看视频。
+  //
+  //   其他代码（filmstrip seek / status 计算）仍可安全引用 video 元素（hidden=true
+  //   不影响 DOM 引用，但 video.currentTime 永远为 0——filmstrip seek 用 dwVidSeekTime
+  //   独立维护，不依赖 video）。
+  const dwVidMarkPlayable = (previewId) => {
     const thumbSrc = el.dwVidThumb && el.dwVidThumb.src;
-    el.dwVidPlayer.src = `${base}${url || '/api/dw/video/preview/' + previewId}`;
-    // paused 状态：完全隐藏 video，让 shroud div 接管画面。
-    // 用户点 shroud ▶ 按钮 → play() → wired handler 把 video hidden=false。
+    // video 元素 src 永远不设：避免 wkwebview 渲染 right edge PiP 控件
+    el.dwVidPlayer.removeAttribute('src');
     el.dwVidPlayer.hidden = true;
+    // shroud 显示首帧图 + 「点击播放」文字按钮
     if (el.dwVidShroud) {
       el.dwVidShroud.hidden = false;
       if (el.dwVidShroudImg && thumbSrc) el.dwVidShroudImg.src = thumbSrc;
     }
     el.dwVidTranscoding.hidden = true;
-    // 把整个画布标记为可播放（让 img 让位给 video / shroud），同时露出 filmstrip
+    // 把整个画布标记为可播放（让 img 让位给 shroud），同时露出 filmstrip
     const wrap = el.dwVidPlayer && el.dwVidPlayer.parentElement;
     if (wrap) wrap.classList.add('is-playable');
     if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = false;
     if (el.dwVidFilmstripWrap) el.dwVidFilmstripWrap.hidden = false;
     if (el.dwVidFsHint) el.dwVidFsHint.hidden = false;
     if (el.dwVidBackToThumb) el.dwVidBackToThumb.hidden = false;
-    // video 加载好后按真实尺寸校准画布纵横比（避免 9:16 视频被 16:9 容器拉伸空白）
-    const onLoaded = () => {
-      const vw = el.dwVidPlayer.videoWidth, vh = el.dwVidPlayer.videoHeight;
-      if (vw > 0 && vh > 0 && wrap) wrap.style.aspectRatio = `${vw} / ${vh}`;
-      el.dwVidPlayer.removeEventListener('loadedmetadata', onLoaded);
-    };
-    el.dwVidPlayer.addEventListener('loadedmetadata', onLoaded);
     if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+    // 缓存当前 preview_id 给 shroud click handler 用
+    el.dwVidPlayer.dataset.previewId = previewId || '';
   };
 
-  // shroud / video 状态切换：play → video 显示；pause/ended → video 隐藏、shroud 显示
-  // 用户点 shroud 中央 ▶ → video.play()
-  if (el.dwVidPlayer && el.dwVidShroud && !el.dwVidPlayer._vdShroudWired) {
-    const v = el.dwVidPlayer;
-    const shroud = el.dwVidShroud;
-    if (el.dwVidShroudPlay) {
-      el.dwVidShroudPlay.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        try { v.play(); } catch (_e) { /* 用户尚未手势等 */ }
-      });
-    }
-    v.addEventListener('play', () => {
-      v.hidden = false;
-      if (shroud) shroud.hidden = true;
+  // shroud play 按钮 → 调后端 endpoint 调 macOS 系统播放器
+  if (el.dwVidShroudPlay && !el.dwVidShroudPlay._wired) {
+    el.dwVidShroudPlay.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const previewId = el.dwVidPlayer && el.dwVidPlayer.dataset && el.dwVidPlayer.dataset.previewId;
+      if (!previewId) {
+        if (el.dwVidStatus) el.dwVidStatus.textContent = 'preview_id 缺失，无法打开视频';
+        return;
+      }
+      // 防止用户连点：短暂 disable 按钮
+      el.dwVidShroudPlay.disabled = true;
+      const orig = el.dwVidShroudPlay.innerHTML;
+      el.dwVidShroudPlay.innerHTML = '打开中…';
+      try {
+        const r = await fetch(`/api/dw/video/preview/${previewId}/open`, { method: 'POST' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          // 非 macOS 或打开失败：降级 — 提示用户手动复制链接到 QuickTime 打开
+          if (el.dwVidStatus) {
+            el.dwVidStatus.textContent = `系统播放器打开失败（${r.status}）：${data.detail || ''} — 可手动复制 /api/dw/video/preview/${previewId} 到 QuickTime`;
+          }
+        }
+        // 成功不需要提示，macOS 系统播放器会自己弹出窗口
+      } catch (err) {
+        if (el.dwVidStatus) el.dwVidStatus.textContent = '打开失败：' + err.message;
+      } finally {
+        // 2s 后恢复按钮（系统播放器可能瞬间已打开）
+        setTimeout(() => {
+          el.dwVidShroudPlay.disabled = false;
+          el.dwVidShroudPlay.innerHTML = orig;
+        }, 2000);
+      }
     });
-    v.addEventListener('pause', () => {
-      v.hidden = true;
-      if (shroud) shroud.hidden = false;
-    });
-    v.addEventListener('ended', () => {
-      v.hidden = true;
-      if (shroud) shroud.hidden = false;
-    });
-    el.dwVidPlayer._vdShroudWired = true;
+    el.dwVidShroudPlay._wired = true;
   }
 
   const dwVidStartPreviewTranscode = async (f) => {
@@ -3453,7 +3462,7 @@
       try {
         const st = await request('/api/dw/video/preview/' + cachedId + '/status');
         if (st.status === 'completed') {
-          dwVidMarkPlayable(`/api/dw/video/preview/${cachedId}`, cachedId);
+          dwVidMarkPlayable(cachedId);
           return;
         }
       } catch (_e) { /* 缓存失效，重新转码 */ }
@@ -3470,7 +3479,7 @@
           if (st.status === 'completed') {
             clearInterval(el._dwPreviewPoll);
             el._dwPreviewPoll = null;
-            dwVidMarkPlayable(`/api/dw/video/preview/${previewId}`, previewId);
+            dwVidMarkPlayable(previewId);
           } else if (st.status === 'failed') {
             clearInterval(el._dwPreviewPoll);
             el._dwPreviewPoll = null;

@@ -912,3 +912,38 @@ def dw_video_preview_file(preview_id: str) -> app.FileResponse:
     if not out.exists():
         raise app.HTTPException(status_code=410, detail="结果文件已清理")
     return app.FileResponse(path=str(out), filename=out.name, media_type="video/mp4")
+
+
+@router.post("/api/dw/video/preview/{preview_id}/open")
+def dw_video_preview_open(preview_id: str) -> dict:
+    """调 macOS 系统默认播放器（QuickTime / IINA / VLC…）打开转码后的 MP4。
+
+    背景：app 端 WKWebView <video> 元素即使 controls=false 也会渲染 right edge PiP
+    控件（macOS Safari 设计，CSS / hidden 属性都拦不住），无法在 app 内静默预览。
+    退而求其次：用户在 app 内「点击播放」→ 调系统播放器跳出 app 看视频（macOS 标准
+    行为），回到 app 继续框选。
+
+    仅在 macOS 下生效；其他平台返回 501 让前端降级到 window.open。
+    """
+    job = app.DW_JOBS.get(preview_id)
+    if not job or job.get("kind") != "preview":
+        raise app.HTTPException(status_code=404, detail="转码任务不存在")
+    if job["status"] != "completed":
+        raise app.HTTPException(status_code=409, detail="转码尚未完成")
+    out = app.Path(job["out_path"])
+    if not out.exists():
+        raise app.HTTPException(status_code=410, detail="结果文件已清理")
+    if app.sys.platform != "darwin":
+        raise app.HTTPException(status_code=501, detail="仅 macOS 支持此端点")
+    try:
+        # `open <file>` 用系统默认 app 打开（QuickTime 默认；用户装了 IINA/VLC 会接管）
+        # 不阻塞 — Popen 后立即返回，让前端不卡
+        _subprocess.Popen(
+            ["open", str(out.resolve())],
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            start_new_session=True,  # 独立进程组，关闭 app 不影响播放器
+        )
+    except Exception as e:
+        raise app.HTTPException(status_code=500, detail=f"打开失败：{e}")
+    return {"opened": True, "path": str(out.resolve()), "platform": "darwin"}

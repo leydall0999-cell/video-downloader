@@ -788,13 +788,13 @@ img { max-width: 100%; display: block; }
 /* 自定义 ▶ 覆盖层：浮在 video(z=2) 之上、svg(z=3) 之下，挡住 WKWebView paused
    中央 ▶ overlay (CSS 隐藏不掉)。点击 → video.play()。显示条件：JS 在
    dwVidMarkPlayable 中显式控制 [hidden]，仅在 paused + 已转码好时出现。 */
-/* 删除了 #dwVidPreviewWrap > .dw-vid-play-overlay：shroud 替代方案里不再需要。
-   wkwebview paused 中央 ▶ 巨三角：video 不带 controls 属性 + paused 状态 video hidden=true
-   → wkwebview 不渲染任何 native UI。中央 ▶ 由 .dw-vid-shroud-play 替代。 */
-/* shroud：paused 状态完全替代 video 显示。满铺 wrap、内含首帧图 + 中央 64×64 紫色 ▶ 按钮。 */
+/* shroud：转码完成后替代 video 视觉显示。满铺 wrap + 显示首帧图 + 居中「点击播放」文字按钮。
+   关键：video 元素 src 永远不设（wkwebview video 元素即使 controls=false 也会渲染 right edge
+   PiP 控件，macOS Safari 设计，hidden 都拦不住），所以视频预览完全交给 shroud。
+   点击文字按钮 → 后端 endpoint 调 macOS 系统默认播放器（QuickTime/IINA/VLC）打开 preview.mp4。 */
 #dwVidPreviewWrap > .dw-vid-shroud {
   position: absolute; inset: 0;
-  z-index: 3;  /* img(1) < svg(2) < shroud(3) 选框永远可见；video(2-b) 在 shroud 之下 */
+  z-index: 3;  /* img(1) < svg(2) < shroud(3) 选框永远可见 */
   background: #000;
   display: flex; align-items: center; justify-content: center;
   cursor: default;
@@ -804,28 +804,36 @@ img { max-width: 100%; display: block; }
   object-fit: contain;
 }
 #dwVidPreviewWrap > .dw-vid-shroud-play {
-  /* 让中央按钮只吸中央 ▶ bounding box 的 click，四周透过到 shroud img 让用户能拖框选 */
+  /* 「点击播放」文字按钮 — 居中显示，不抢画面视觉。
+     不用圆形大 ▶ 是因为：1) 任何中央按钮都会被框选覆盖 2) 视觉上「文字提示」更克制 */
   position: absolute;
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  width: 64px; height: 64px;
-  border: 0; padding: 0;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, .55);
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .6rem 1.1rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .65);
   color: #fff;
+  font: inherit; font-size: .85rem; font-weight: 600;
   cursor: pointer;
-  display: grid; place-items: center;
   outline: none;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(4px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
   transition: background .15s ease, transform .12s ease;
+  /* 不抢画面四周 click — 只在按钮自身 bounding box 接收 click，让用户仍能拖框选 */
+  pointer-events: auto;
 }
 #dwVidPreviewWrap > .dw-vid-shroud-play:hover {
   background: rgba(99, 102, 241, .92);
-  transform: translate(-50%, -50%) scale(1.06);
+  transform: translate(-50%, -50%) scale(1.04);
 }
 #dwVidPreviewWrap > .dw-vid-shroud-play:active {
-  transform: translate(-50%, -50%) scale(0.96);
+  transform: translate(-50%, -50%) scale(0.97);
+}
+#dwVidPreviewWrap > .dw-vid-shroud-play svg {
+  flex-shrink: 0;
+  display: block;
 }
 #dwVidPreviewWrap > .dw-svg {
   /* z=3：永远在 video 之上 → 视频接管后红色选框不被遮 */
