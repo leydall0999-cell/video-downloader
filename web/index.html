@@ -49,21 +49,56 @@
          app 名已在 macOS 顶菜单/Dock/窗口 title/主面板区头共 4 处展示，
          侧栏职责是导航，不是品牌展示，重复占用 50-60px 高度无价值 -->
 
+    <!-- 2026-08-30 重排：方案 C（5 组精细派）+ 微调升级视觉。
+         组名采用 emoji + 英文 caps + 中文辅标的三段式，让分组层级一眼可辨。
+         9 个功能 tab 全部保留，分类规则：
+         - Download（首屏核心）
+         - Subscribe（异步抓取：订阅追更 + 种子下载）
+         - Manage（媒体管理：媒体库）
+         - Create（创作工具：视频解说 + AI 解说体验）
+         - Edit（视频加工：格式转换 + 桥接 + 去水印） -->
     <div class="sidebar-group">
-      <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>下载同步</div>
-      <button type="button" class="sidebar-item is-active" data-view="download" id="sTabDownload"><span class="sidebar-item-icon">⬇️</span><span class="sidebar-item-label">下载</span></button>
-      <button type="button" class="sidebar-item" data-view="subscribe" id="sTabSubscribe"><span class="sidebar-item-icon">🔔</span><span class="sidebar-item-label">订阅追更</span></button>
-      <button type="button" class="sidebar-item" data-view="torrent" id="sTabTorrent" hidden><span class="sidebar-item-icon">🧲</span><span class="sidebar-item-label">种子下载</span></button>
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">⬇</span>
+        <span class="sidebar-group-en">Download</span>
+      </div>
+      <button type="button" class="sidebar-item is-active" data-view="download" id="sTabDownload" title="下载"><span class="sidebar-item-icon" aria-hidden="true">⬇️</span><span class="sidebar-item-label">下载</span></button>
     </div>
 
     <div class="sidebar-group">
-      <div class="sidebar-group-title"><span class="sidebar-group-bar"></span>媒体处理</div>
-      <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary"><span class="sidebar-item-icon">📚</span><span class="sidebar-item-label">媒体库</span></button>
-      <button type="button" class="sidebar-item" data-view="commentary" id="sTabCommentary"><span class="sidebar-item-icon">🎬</span><span class="sidebar-item-label">视频解说</span></button>
-      <button type="button" class="sidebar-item" data-view="narrato" id="sTabNarrato" hidden><span class="sidebar-item-icon">🤖</span><span class="sidebar-item-label">AI 解说体验</span></button>
-      <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert"><span class="sidebar-item-icon">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
-      <button type="button" class="sidebar-item" data-view="bridge" id="sTabBridge"><span class="sidebar-item-icon">🔗</span><span class="sidebar-item-label">视频 / 音频桥接</span></button>
-      <button type="button" class="sidebar-item" data-view="dw" id="sTabDw"><span class="sidebar-item-icon">🧽</span><span class="sidebar-item-label">图片 / PDF 去水印</span></button>
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">📡</span>
+        <span class="sidebar-group-en">Subscribe</span>
+      </div>
+      <button type="button" class="sidebar-item" data-view="subscribe" id="sTabSubscribe" title="订阅追更"><span class="sidebar-item-icon" aria-hidden="true">🔔</span><span class="sidebar-item-label">订阅追更</span></button>
+      <button type="button" class="sidebar-item" data-view="torrent" id="sTabTorrent" hidden title="种子下载"><span class="sidebar-item-icon" aria-hidden="true">🧲</span><span class="sidebar-item-label">种子下载</span></button>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">🗂</span>
+        <span class="sidebar-group-en">Manage</span>
+      </div>
+      <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary" title="媒体库"><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">媒体库</span></button>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">🎨</span>
+        <span class="sidebar-group-en">Create</span>
+      </div>
+      <button type="button" class="sidebar-item" data-view="commentary" id="sTabCommentary" title="视频解说"><span class="sidebar-item-icon" aria-hidden="true">🎬</span><span class="sidebar-item-label">视频解说</span></button>
+      <button type="button" class="sidebar-item" data-view="narrato" id="sTabNarrato" hidden title="AI 解说体验"><span class="sidebar-item-icon" aria-hidden="true">🤖</span><span class="sidebar-item-label">AI 解说体验</span></button>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">🔧</span>
+        <span class="sidebar-group-en">Edit</span>
+      </div>
+      <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert" title="视频格式转换"><span class="sidebar-item-icon" aria-hidden="true">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
+      <button type="button" class="sidebar-item" data-view="bridge" id="sTabBridge" title="视频 / 音频桥接"><span class="sidebar-item-icon" aria-hidden="true">🔗</span><span class="sidebar-item-label">视频/音频桥接</span></button>
+      <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
     </div>
 
 
