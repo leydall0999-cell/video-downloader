@@ -713,6 +713,17 @@
           <p class="dw-hint dw-hint-sm dw-vid-fs-hint" id="dwVidFsHint" hidden>原视频先由服务端 ffmpeg 转码为 H.264+AAC 通用格式（WebKit 必支持），因此<b>任意格式都能播放</b>并拖动进度条。播放到精确位置后点「设为开始 / 设为结束」同步到右侧滑块；下方缩略图条可点击粗定位。</p>
 
           <p class="dw-hint">在首帧预览上<b>拖拽框选</b>水印区域，再定出水印出现的起止时间——只有该区间的帧会跑 LaMa 推理，其余帧直接复制。</p>
+          <div class="dw-result" id="dwVidResult" hidden>
+            <div class="dw-result-head">
+              <span class="dw-cap">去水印结果</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidRedo" title="回到上方工作区，重新框选 / 换视频再处理">↻ 重新处理</button>
+            </div>
+            <div class="dw-compare">
+              <div><span class="dw-cap">原视频</span><video id="dwVidOrig" alt="原视频" controls></video></div>
+              <div><span class="dw-cap">处理后</span><video id="dwVidOut" alt="处理后" controls></video></div>
+            </div>
+            <a class="btn btn-accent btn-sm" id="dwVidDownload" download>下载结果</a>
+          </div>
         </div>
         <aside class="dw-side">
           <div class="dw-card">
@@ -855,17 +866,6 @@
             </section>
           </div>
         </aside>
-      </div>
-      <div class="dw-result" id="dwVidResult" hidden>
-        <div class="dw-result-head">
-          <span class="dw-cap">去水印结果</span>
-          <button type="button" class="btn btn-ghost btn-sm" id="dwVidRedo" title="回到上方工作区，重新框选 / 换视频再处理">↻ 重新处理</button>
-        </div>
-        <div class="dw-compare">
-          <div><span class="dw-cap">原视频</span><video id="dwVidOrig" alt="原视频" controls></video></div>
-          <div><span class="dw-cap">处理后</span><video id="dwVidOut" alt="处理后" controls></video></div>
-        </div>
-        <a class="btn btn-accent btn-sm" id="dwVidDownload" download>下载结果</a>
       </div>
     </div>
   </section>
