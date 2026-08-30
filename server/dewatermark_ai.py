@@ -1008,7 +1008,7 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                     h, w = img.shape[:2]
                     # 分辨率 → AI 推理下采样目标；"original" 或不合规值传 0=不动。
                     # 抽帧已按原分辨率抽（输出保持原分辨率），downscale 只影响 AI 计算量。
-                    ds_t = 720 if resolution == "720" else (480 if resolution == "480" else 0)
+                    ds_t = {"720": 720, "1080": 1080, "480": 480}.get(resolution, 0)
                     out_bgr = _inpaint_bgr_to_bgr(img, _get_mask_for_frame(w, h, i),
                                                    downscale_target=ds_t)
                     _cv2.imwrite(out_name, out_bgr)

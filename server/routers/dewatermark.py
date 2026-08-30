@@ -537,8 +537,8 @@ def create_dw_video(
         raise app.HTTPException(status_code=503, detail="视频去水印不可用（缺少 OpenCV 依赖）")
     if not dwc_ai.available():
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
-    if resolution not in ("original", "720", "480"):
-        raise app.HTTPException(status_code=400, detail="resolution 仅支持 original / 720 / 480")
+    if resolution not in ("original", "720", "1080", "480"):
+        raise app.HTTPException(status_code=400, detail="resolution 仅支持 original / 720 / 1080 / 480")
     if start_sec < 0 or end_sec < 0:
         raise app.HTTPException(status_code=400, detail="start_sec / end_sec 不能为负数")
     if end_sec > 0 and start_sec > 0 and end_sec < start_sec:
