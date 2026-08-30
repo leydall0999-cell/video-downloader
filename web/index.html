@@ -670,6 +670,7 @@
     <div id="dwVideoPane" hidden>
       <div class="dw-layout">
         <div class="dw-main" id="dwVidMain">
+          <div class="dw-vid-work" id="dwVidWork">
           <label class="uc-field">
             <span class="uc-label">视频文件</span>
             <input type="file" id="dwVidFile" accept="video/*" />
@@ -713,6 +714,7 @@
           <p class="dw-hint dw-hint-sm dw-vid-fs-hint" id="dwVidFsHint" hidden>原视频先由服务端 ffmpeg 转码为 H.264+AAC 通用格式（WebKit 必支持），因此<b>任意格式都能播放</b>并拖动进度条。播放到精确位置后点「设为开始 / 设为结束」同步到右侧滑块；下方缩略图条可点击粗定位。</p>
 
           <p class="dw-hint">在首帧预览上<b>拖拽框选</b>水印区域，再定出水印出现的起止时间——只有该区间的帧会跑 LaMa 推理，其余帧直接复制。</p>
+          </div>
           <div class="dw-result" id="dwVidResult" hidden>
             <div class="dw-result-head">
               <span class="dw-cap">去水印结果</span>
