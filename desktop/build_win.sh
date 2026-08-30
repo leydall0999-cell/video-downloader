@@ -105,6 +105,7 @@ fi
   --collect-binaries cv2 \
   --collect-all pymupdf \
   --collect-all fitz \
+  --collect-all onnx \
   --collect-submodules yt_dlp \
   "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"

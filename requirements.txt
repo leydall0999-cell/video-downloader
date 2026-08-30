@@ -29,6 +29,9 @@ pymupdf>=1.23.0
 # 图片 AI 无痕去水印（LaMa ONNX，~107MB 权重首次惰性下载到 ~/.vdl_models）：onnxruntime 免 torch，CPU 即可跑。
 # 缺失时图片去水印自动回退 OpenCV（import 守护，不影响其余功能）。
 onnxruntime>=1.17.0
+# INT8 动态量化（VDL_DW_INT8=1，onnxruntime.quantization.quantize_dynamic 依赖此独立 onnx 包）：
+# 用于把 LaMa fp32 权重动态量化为 int8，CPU 上约 1.5-2× 提速。缺失时 INT8 分支静默回退 fp32。
+onnx>=1.15.0
 
 # Rumble 反爬绕过：curl_cffi 提供 Chrome TLS 指纹模拟（impersonate），
 # 用于 embedJS/u3 接口解析（urllib/requests 默认指纹被 Cloudflare 403）。

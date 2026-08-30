@@ -264,6 +264,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --collect-all PIL \
   --collect-all pyobjc-framework-Quartz \
   --collect-all onnxruntime \
+  --collect-all onnx \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   $_PCS_ADD_BINARY_ARG \
