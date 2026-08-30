@@ -3994,17 +3994,19 @@ el.dwVidPlayer.removeAttribute('src');
   };
   el.dwVidSetStart.addEventListener('click', () => dwVidSetFromSeek('start'));
   el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromSeek('end'));
-  // 转码好后把 video 接管了画面 → 想再改框选就回到首帧模式
+  // 转码好后 video 接管画面 → 用户想再改框选就点这个回到首帧模式
+  // ⚠️ 关键：不要把按钮自己 hidden 掉——用户可能多次"回到首帧"（反复调整框选位置）
   el.dwVidBackToThumb.addEventListener('click', () => {
     const wrap = el.dwVidPlayer && el.dwVidPlayer.parentElement;
     if (!wrap) return;
     if (el.dwVidPlayer && !el.dwVidPlayer.hidden) {
       el.dwVidPlayer.pause();
+      // 把 video 真的跳回 0 秒：下次从 filmstrip 切回可播放模式时直接显示首帧
+      try { el.dwVidPlayer.currentTime = 0; } catch (_e) {}
       el.dwVidPlayer.hidden = true;
     }
     wrap.classList.remove('is-playable');
     // img 重新显示（首帧 PNG 仍在 src 里）→ 用户可继续拖拽框选
-    if (el.dwVidBackToThumb) el.dwVidBackToThumb.hidden = true;
     el.dwVidStatus.textContent = '已回到首帧，可继续拖拽框选';
   });
 
