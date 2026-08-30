@@ -785,60 +785,10 @@ img { max-width: 100%; display: block; }
   /* z=2：转码好后覆盖 img（让 img 让位），但必须在 svg 下面 — 选框永远可见 */
   z-index: 2;
 }
-/* 自定义 ▶ 覆盖层：浮在 video(z=2) 之上、svg(z=3) 之下，挡住 WKWebView paused
-   中央 ▶ overlay (CSS 隐藏不掉)。点击 → video.play()。显示条件：JS 在
-   dwVidMarkPlayable 中显式控制 [hidden]，仅在 paused + 已转码好时出现。 */
-/* shroud：转码完成后替代 video 视觉显示。满铺 wrap + 显示首帧图 + 居中「点击播放」文字按钮。
-   关键：video 元素 src 永远不设（wkwebview video 元素即使 controls=false 也会渲染 right edge
-   PiP 控件，macOS Safari 设计，hidden 都拦不住），所以视频预览完全交给 shroud。
-   点击文字按钮 → 后端 endpoint 调 macOS 系统默认播放器（QuickTime/IINA/VLC）打开 preview.mp4。 */
-#dwVidPreviewWrap > .dw-vid-shroud {
-  position: absolute; inset: 0;
-  z-index: 3;  /* img(1) < svg(2) < shroud(3) 选框永远可见 */
-  background: #000;
-  display: flex; align-items: center; justify-content: center;
-  cursor: default;
-}
-#dwVidPreviewWrap > .dw-vid-shroud > img {
-  max-width: 100%; max-height: 100%;
-  object-fit: contain;
-}
-#dwVidPreviewWrap > .dw-vid-shroud-play {
-  /* 「点击播放」文字按钮 — 居中显示，不抢画面视觉。
-     不用圆形大 ▶ 是因为：1) 任何中央按钮都会被框选覆盖 2) 视觉上「文字提示」更克制。
-     关键：用 inline-block（不是 inline-flex）+ 显式 nowrap + svg vertical-align:middle
-     —— 不依赖任何 flex layout。最稳最广兼容。 */
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  display: inline-block;
-  padding: .55rem 1.05rem;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, .65);
-  color: #fff;
-  font: inherit; font-size: .85rem; font-weight: 600;
-  white-space: nowrap;       /* 强制按钮内文字不换行 */
-  cursor: pointer;
-  outline: none;
-  backdrop-filter: blur(4px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
-  transition: background .15s ease, transform .12s ease;
-  /* 不抢画面四周 click — 只在按钮自身 bounding box 接收 click，让用户仍能拖框选 */
-  pointer-events: auto;
-}
-#dwVidPreviewWrap > .dw-vid-shroud-play:hover {
-  background: rgba(99, 102, 241, .92);
-  transform: translate(-50%, -50%) scale(1.04);
-}
-#dwVidPreviewWrap > .dw-vid-shroud-play:active {
-  transform: translate(-50%, -50%) scale(0.97);
-}
-#dwVidPreviewWrap > .dw-vid-shroud-play svg {
-  display: inline-block;
-  vertical-align: -3px;       /* 跟中文基线对齐 */
-  margin-right: .35rem;       /* 跟文字之间间距 */
-}
+/* 2026-08-30 用户明确：「这是我要的导入素材未编辑前的效果」—— wkwebview <video controls>
+   默认渲染（底部 15s± / ▶ / 进度 / 音量 / 全屏 底栏）就是用户要的。删除了之前所有
+   shroud div / 自定义 ▶ 覆盖层 / display:inline-flex 居中 / system open 跳转方案的 CSS。
+   video 元素 + controls 属性 + src = 用户原始想要的方案。 */
 #dwVidPreviewWrap > .dw-svg {
   /* z=3：永远在 video 之上 → 视频接管后红色选框不被遮 */
   z-index: 3;

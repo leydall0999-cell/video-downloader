@@ -675,21 +675,11 @@
             <img id="dwVidThumb" alt="首帧预览" class="dw-vid-thumb" />
             <svg id="dwVidSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg"></svg>
             <div class="dw-vid-transcoding" id="dwVidTranscoding" hidden>转码中…<span class="dw-vid-spinner" aria-hidden="true"></span></div>
-            <!-- 视频预览：完全静默设计 — wkwebview <video> 元素即使 controls=false 也会渲染
-                 right edge PiP 控件（macOS Safari 设计，连 hidden 都拦不住），
-                 所以视频元素**src 永远不设**，视觉上完全不参与预览。
-
-                 用户视觉上只看到首帧图 + 「点击播放」文字按钮。点击 → 调 macOS
-                 系统默认播放器（QuickTime / IINA / VLC）打开 preview.mp4 文件。
-                 这是 macOS 标准行为，跳出 app 去看视频。
-
-                 video 元素仍保留在 DOM（hidden 状态）供其他代码（filmstrip seek
-                 / status 计算）安全引用，但永远不显示。 -->
-            <div class="dw-vid-shroud" id="dwVidShroud" hidden>
-              <img id="dwVidShroudImg" alt="视频首帧" />
-              <button type="button" class="dw-vid-shroud-play" id="dwVidShroudPlay" aria-label="在系统播放器中打开"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z" fill="currentColor"></path></svg>点击播放</button>
-            </div>
-            <video id="dwVidPlayer" preload="metadata" playsinline hidden></video>
+            <!-- 视频预览：wkwebview <video controls> 默认渲染。底部 controls 底栏（15s± / ▶ / 进度 / 音量 / 全屏）
+                 是用户从一开始就要的，2026-08-30 用户明确：「这是我要的导入素材未编辑前的效果」——
+                 完全不画蛇添足，video 元素 + controls 属性 + src 即可。
+                 src 设转码后的 preview.mp4（任意格式 → 服务端 H.264+AAC 后才能在 WKWebView 播放）。 -->
+            <video id="dwVidPlayer" controls preload="metadata" playsinline hidden></video>
           </div>
           <div class="dw-toolbar">
             <div class="dw-toolgroup" role="group" aria-label="选区操作">
