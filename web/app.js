@@ -3460,10 +3460,10 @@
     if (!f) return;
     // 上传视频后，把「启用视频预览」开关展示给用户（默认未勾选 = 不转码）
     if (el.dwVidPreviewToggleWrap) el.dwVidPreviewToggleWrap.hidden = false;
-    // 选中视频即隐藏「请上传视频」占位层，画布进入工作态
-    if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
-    // 占位消失后 → 显示工作态 cap「原视频预览 · 在画面上拖框选水印」
-    if (el.dwVidCapOverlay) el.dwVidCapOverlay.hidden = false;
+// 选中视频即隐藏「请上传视频」占位层，画布进入工作态。
+// cap-overlay 默认 hidden 不再显示（之前 9acbb8c 是「首次拖框即隐藏」，2026-08-30 改为永不显示，
+// 与「画框后无遮挡」状态视觉完全一致，避免用户上传后目光被角标分走）。
+if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
     const url = URL.createObjectURL(f);
     // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
@@ -3477,12 +3477,14 @@
     if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); el._dwFilmstripUrl = null; }
     el.dwVidFilmstrip.removeAttribute('src');
     el.dwVidFilmstripCursor.hidden = true;
-    // 播放器复位（等待新的转码）：画布回到「img + 转码遮罩」两态，video/底部控件全部隐藏
-    const wrap = el.dwVidThumb && el.dwVidThumb.parentElement;
-    if (wrap) wrap.classList.remove('is-playable');
-    if (wrap) wrap.style.aspectRatio = '16 / 9';
-    el.dwVidPlayer.hidden = true;
-    el.dwVidPlayer.removeAttribute('src');
+// 播放器复位（等待新的转码）：画布回到「img + 转码遮罩」两态，video/底部控件全部隐藏。
+// wrap 不再强制 16/9：清空内联 aspectRatio 让 thumb 一加载就同步覆盖为真实比例，
+// 避免 9:16 视频被 16/9 容器拉宽；占位 9/16 由 CSS 默认撑出。
+const wrap = el.dwVidThumb && el.dwVidThumb.parentElement;
+if (wrap) wrap.classList.remove('is-playable');
+wrap.style.aspectRatio = '';
+el.dwVidPlayer.hidden = true;
+el.dwVidPlayer.removeAttribute('src');
     // 视频预览默认开启（WKWebView 不转码播不了，所以"开箱即播"是默认体验）；
     // 用户取消勾选后才走"无转码"主链路：仅首帧 img 框选，无播放器。
     const wantPreview = !!(el.dwVidPreviewToggle && el.dwVidPreviewToggle.checked);
@@ -3528,12 +3530,16 @@
     if (localThumb && !ctrl.signal.aborted) {
       const thumbUrl = URL.createObjectURL(localThumb.blob);
       el._dwThumbUrl = thumbUrl;
-      el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+      // thumb.onload 触发时 naturalWidth/Height 已有值 → 同步校准 wrap 比例，避免先 9/16 后 9/16 的闪
+      el.dwVidThumb.onload = () => {
+        const w = el.dwVidThumb.naturalWidth, h = el.dwVidThumb.naturalHeight;
+        if (w > 0 && h > 0) {
+          const wwrap = el.dwVidThumb.parentElement;
+          if (wwrap) wwrap.style.aspectRatio = `${w} / ${h}`;
+        }
+        dwVidResize(); dwVidDraw();
+      };
       el.dwVidThumb.src = thumbUrl;
-      const wrap = el.dwVidThumb.parentElement;
-      if (wrap && localThumb.naturalWidth && localThumb.naturalHeight) {
-        wrap.style.aspectRatio = `${localThumb.naturalWidth} / ${localThumb.naturalHeight}`;
-      }
       el.dwVidStatus.textContent = `首帧 ${Date.now() - ctrlTs}ms（本地 WebKit 解码抽取）`;
       clearTimeout(timer);
     } else {
@@ -3565,26 +3571,30 @@
           const blob2 = await thumbR2.blob();
           const tu2 = URL.createObjectURL(blob2);
           el._dwThumbUrl = tu2;
-          el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
+          el.dwVidThumb.onload = () => {
+            const w = el.dwVidThumb.naturalWidth, h = el.dwVidThumb.naturalHeight;
+            if (w > 0 && h > 0) {
+              const wwrap = el.dwVidThumb.parentElement;
+              if (wwrap) wwrap.style.aspectRatio = `${w} / ${h}`;
+            }
+            dwVidResize(); dwVidDraw();
+          };
           el.dwVidThumb.src = tu2;
-          if (el.dwVidThumb.naturalWidth && el.dwVidThumb.naturalHeight) {
-            const w = el.dwVidThumb.parentElement;
-            if (w) w.style.aspectRatio = `${el.dwVidThumb.naturalWidth} / ${el.dwVidThumb.naturalHeight}`;
-          }
           el.dwVidStatus.textContent = '';
         } else {
           const blob = await thumbR.blob();
           const thumbUrl = URL.createObjectURL(blob);
           el._dwThumbUrl = thumbUrl;
-          el.dwVidThumb.onload = () => { dwVidResize(); dwVidDraw(); };
-          el.dwVidThumb.src = thumbUrl;
-          // 按真实首帧比例校准画布纵横比，避免 9:16 横屏视频上下大黑边
-          const imgProbe = new Image();
-          imgProbe.onload = () => {
-            const wrap2 = el.dwVidThumb.parentElement;
-            if (wrap2) wrap2.style.aspectRatio = `${imgProbe.naturalWidth} / ${imgProbe.naturalHeight}`;
+          // 同源 thumb URL，imgProbe 没必要额外探测；直接在 <img> onload 里同步校准
+          el.dwVidThumb.onload = () => {
+            const w = el.dwVidThumb.naturalWidth, h = el.dwVidThumb.naturalHeight;
+            if (w > 0 && h > 0) {
+              const wwrap = el.dwVidThumb.parentElement;
+              if (wwrap) wwrap.style.aspectRatio = `${w} / ${h}`;
+            }
+            dwVidResize(); dwVidDraw();
           };
-          imgProbe.src = thumbUrl;
+          el.dwVidThumb.src = thumbUrl;
           el.dwVidStatus.textContent = `首帧切片 ${Math.round(blob.size / 1024)} KB（${Date.now() - ctrlTs}ms）`;
         }
       } catch (eFull) {
