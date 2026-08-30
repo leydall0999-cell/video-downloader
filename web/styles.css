@@ -723,6 +723,9 @@ img { max-width: 100%; display: block; }
   height: 4px; background: rgba(76,217,100,.55); border-radius: 2px; pointer-events: none;
 }
 .dw-vid-player-head { display: flex; align-items: center; gap: .5rem; margin: .6rem 0 .35rem; flex-wrap: wrap; }
+/* 视频预览播放控件：第 1 行「设为开始 + 设为结束」并排；第 2 行「回到首帧」独占一行。
+   用户 2026-08-30 反馈：把「设为结束」往上移跟「设为开始」放一行，去掉中间 cap 文字。 */
+.dw-vid-player-head-set { display: inline-flex; align-items: center; gap: .5rem; }
 /* [hidden] 兜底：避免被 .dw-vid-player-box video { display: block } 等显式 display 规则覆盖 */
 [hidden] { display: none !important; }
 /* 转码中提示条（转码完成后隐藏，显示 <video>）；
