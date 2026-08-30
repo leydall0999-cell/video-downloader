@@ -700,10 +700,20 @@
         </div>
         <aside class="dw-side">
           <div class="dw-card">
-            <h3 class="dw-card-title">处理参数</h3>
-            <div class="uc-form">
+            <div class="dw-card-head">
+              <span class="sidebar-group-emoji">🎬</span>
+              <h3 class="dw-card-title">视频去水印</h3>
+            </div>
+
+            <!-- ===== SECTION 1 · INTERVAL（时间区间：双滑块 + 添加按钮） ===== -->
+            <section class="dw-section">
+              <header class="dw-section-head">
+                <span class="sidebar-group-emoji">⏱</span>
+                <span class="sidebar-group-en">INTERVAL</span>
+                <span class="sidebar-group-cn">时间区间</span>
+              </header>
               <div class="uc-field">
-                <span class="uc-label">水印出现时间（拖动绿色手柄选区间）</span>
+                <span class="uc-label">拖动绿色手柄选水印出现区间</span>
                 <div class="dw-vid-range-wrap" id="dwVidRangeWrap">
                   <div class="dw-vid-range-track"></div>
                   <div class="dw-vid-range-highlight" id="dwVidRangeHighlight"></div>
@@ -712,7 +722,7 @@
                 </div>
                 <div class="dw-vid-range-labels">
                   <span id="dwVidStartLabel" class="dw-vid-range-time">0.0s</span>
-                  <span id="dwVidSegTip" class="dw-hint-sm">请先选择视频</span>
+                  <span id="dwVidSegTip" class="dw-hint-sm" title="">请先选择视频</span>
                   <span id="dwVidEndLabel" class="dw-vid-range-time">— s</span>
                 </div>
                 <div class="dw-vid-seg-actions">
@@ -720,8 +730,18 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="dwVidAddKf" title="在选中的时间段内，按当前时间轴位置 + 当前框选添加关键帧，实现漂动水印">＋ 添加关键帧</button>
                 </div>
               </div>
+            </section>
+
+            <hr class="dw-section-sep" />
+
+            <!-- ===== SECTION 2 · SEGMENTS（已选时间段：segment 列表 + 关键帧面板） ===== -->
+            <section class="dw-section">
+              <header class="dw-section-head">
+                <span class="sidebar-group-emoji">📋</span>
+                <span class="sidebar-group-en">SEGMENTS</span>
+                <span class="sidebar-group-cn">已选时间段</span>
+              </header>
               <div class="uc-field">
-                <span class="uc-label">已标记的水印时间段</span>
                 <ul class="dw-vid-seglist" id="dwVidSegList"></ul>
                 <span class="dw-hint dw-hint-sm" id="dwVidSegSummary">未标记任何时间段 → 默认整段处理</span>
                 <div class="dw-kf-panel" id="dwVidKfPanel" hidden>
@@ -733,61 +753,80 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="dwVidAddKfAt" title="把当前时间轴位置 + 当前框选存为该段的一个关键帧">＋ 在当前时间轴位置添加关键帧（用当前框）</button>
                 </div>
               </div>
-              <label class="uc-field">
-                <span class="uc-label">处理分辨率</span>
-                <div class="dwVidResBlock">
-                <select id="dwVidRes">
-<option value="720" selected>720P · 提速 ≈4×（推荐）</option>
-<option value="1080">1080P · 提速 ≈2×（保留细节）</option>
-<option value="480">480P · 提速 ≈9×（极速）</option>
-<option value="original">原始分辨率（无提速）</option>
-                </select>
-                <small style="display:block;color:var(--muted);margin-top:4px;">
-                  仅控制 AI 推理计算量，输出视频保持原分辨率。
-                </small>
-                </div>
-              </label>
-              <label class="uc-field">
-                <span class="uc-label">输出帧率</span>
-                <select id="dwVidTargetFps" title="抽帧时按此 fps 等时间抽样。水印是静态内容 + 邻帧平滑开启后，15 fps 已与 30 fps 肉眼无差；选更高只增加帧数/算力。
+            </section>
+
+            <hr class="dw-section-sep" />
+
+            <!-- ===== SECTION 3 · PROCESSING（处理参数：4 个 select） ===== -->
+            <section class="dw-section">
+              <header class="dw-section-head">
+                <span class="sidebar-group-emoji">⚙</span>
+                <span class="sidebar-group-en">PROCESSING</span>
+                <span class="sidebar-group-cn">处理参数</span>
+              </header>
+              <div class="uc-form">
+                <label class="uc-field">
+                  <span class="uc-label">处理分辨率</span>
+                  <div class="dwVidResBlock">
+                    <select id="dwVidRes">
+                      <option value="720" selected>720P · 提速 ≈4×（推荐）</option>
+                      <option value="1080">1080P · 提速 ≈2×（保留细节）</option>
+                      <option value="480">480P · 提速 ≈9×（极速）</option>
+                      <option value="original">原始分辨率（无提速）</option>
+                    </select>
+                    <small class="uc-hint-block">
+                      仅控制 AI 推理计算量，输出视频保持原分辨率。
+                    </small>
+                  </div>
+                </label>
+                <label class="uc-field">
+                  <span class="uc-label">输出帧率</span>
+                  <select id="dwVidTargetFps" title="抽帧时按此 fps 等时间抽样。水印是静态内容 + 邻帧平滑开启后，15 fps 已与 30 fps 肉眼无差；选更高只增加帧数/算力。
 ·推荐 15 fps（2× 快于 30 fps，静态水印去不闪）
 ·选 30 fps 仅当水印有剧烈位置变化或开启邻帧平滑后会看到跳变">
-                  <option value="15">15 fps（推荐，静态水印足够）</option>
-                  <option value="24">24 fps</option>
-                  <option value="30">30 fps（高丝滑度）</option>
-                  <option value="60">60 fps（特殊场景，慢 4×）</option>
-                  <option value="0">按原帧率（最慢，仅 debug 用）</option>
-                </select>
-              </label>
-              <label class="uc-field">
-                <span class="uc-label">AI 推理间隔</span>
-                <select id="dwVidStride" title="时间稀疏推理（wave2）：每隔 N 帧才跑一次 LaMa AI 推理，中间帧用相邻关键帧在去水印处插值填充。
+                    <option value="15">15 fps（推荐，静态水印足够）</option>
+                    <option value="24">24 fps</option>
+                    <option value="30">30 fps（高丝滑度）</option>
+                    <option value="60">60 fps（特殊场景，慢 4×）</option>
+                    <option value="0">按原帧率（最慢，仅 debug 用）</option>
+                  </select>
+                </label>
+                <label class="uc-field">
+                  <span class="uc-label">AI 推理间隔</span>
+                  <select id="dwVidStride" title="时间稀疏推理（wave2）：每隔 N 帧才跑一次 LaMa AI 推理，中间帧用相邻关键帧在去水印处插值填充。
 ·推荐 4（快约 4×，静态水印肉眼无差）
 ·选 1 退化为逐帧（质量最优、最慢）
 ·选越大越快，但水印位置剧烈变化时会略闪">
-                  <option value="1">1（逐帧，质量最优）</option>
-                  <option value="2">2（快 2×）</option>
-                  <option value="3">3（快 3×）</option>
-                  <option value="4">4（推荐，快 4×）</option>
-                  <option value="6">6（快 6×）</option>
-                  <option value="8">8（快 8×，运动画面慎选）</option>
-                </select>
-              </label>
-              <label class="uc-field">
-                <span class="uc-label">邻帧平滑</span>
-                <select id="dwVidSmooth">
-                  <option value="1">开启（降闪烁，推荐）</option>
-                  <option value="0">关闭</option>
-                </select>
-              </label>
-            </div>
-            <button type="button" class="btn btn-primary btn-block" id="dwVidBtn">开始去水印</button>
-            <div class="dw-vid-run-controls" id="dwVidRunCtrls" hidden>
-              <button type="button" class="btn btn-ghost btn-sm" id="dwVidPause" title="在当前帧边界暂停，保留进度以便续跑">⏸ 暂停</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="dwVidResume" hidden title="从暂停处继续处理">▶ 继续</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="dwVidCancel" title="取消任务并清理">⏹ 取消</button>
-            </div>
-            <span class="convert-status" id="dwVidStatus" title="鼠标悬停查看每段数字说明">视频去水印处理中…</span>
+                    <option value="1">1（逐帧，质量最优）</option>
+                    <option value="2">2（快 2×）</option>
+                    <option value="3">3（快 3×）</option>
+                    <option value="4">4（推荐，快 4×）</option>
+                    <option value="6">6（快 6×）</option>
+                    <option value="8">8（快 8×，运动画面慎选）</option>
+                  </select>
+                </label>
+                <label class="uc-field">
+                  <span class="uc-label">邻帧平滑</span>
+                  <select id="dwVidSmooth">
+                    <option value="1">开启（降闪烁，推荐）</option>
+                    <option value="0">关闭</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <hr class="dw-section-sep" />
+
+            <!-- ===== ACTION · 开始按钮 + 进度 ===== -->
+            <section class="dw-section dw-section-action">
+              <button type="button" class="btn btn-primary btn-block" id="dwVidBtn">开始去水印</button>
+              <div class="dw-vid-run-controls" id="dwVidRunCtrls" hidden>
+                <button type="button" class="btn btn-ghost btn-sm" id="dwVidPause" title="在当前帧边界暂停，保留进度以便续跑">⏸ 暂停</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="dwVidResume" hidden title="从暂停处继续处理">▶ 继续</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="dwVidCancel" title="取消任务并清理">⏹ 取消</button>
+              </div>
+              <span class="convert-status" id="dwVidStatus" title="鼠标悬停查看每段数字说明">视频去水印处理中…</span>
+            </section>
           </div>
         </aside>
       </div>

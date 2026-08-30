@@ -877,7 +877,7 @@ img { max-width: 100%; display: block; }
 .dw-hint { color: var(--text-mute); font-size: .82rem; margin: .2rem 0 .6rem; line-height: 1.5; }
 
 /* 图片模式两栏布局 */
-.dw-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 1.2rem; align-items: start; }
+.dw-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1.2rem; align-items: start; }
 .dw-main { min-width: 0; }
 /* 右侧参数面板：在窗口可视高度内自滚动，避免「开始去水印」按钮被挤出可视区。
    注：sticky 必须有非 static 的包含块；这里 .dw-layout 是 grid 已自然提供。
@@ -886,8 +886,65 @@ img { max-width: 100%; display: block; }
 .dw-side::-webkit-scrollbar { width: 6px; }
 .dw-side::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .dw-card { background: var(--surface, #fff); border: 1px solid var(--line); border-radius: var(--radius-md); padding: .9rem 1rem; box-shadow: 0 2px 8px rgba(20,24,40,.04); }
-.dw-card-title { font-size: .95rem; font-weight: 700; margin: 0 0 .7rem; color: var(--text); }
+.dw-card-title { font-size: .95rem; font-weight: 700; margin: 0; color: var(--text); line-height: 1; }
+/* 卡片顶部：emoji pill + 主标题  与 sidebar 三段式一致 */
+.dw-card-head {
+  display: flex; align-items: center; gap: .5rem;
+  padding-bottom: .75rem;
+  margin-bottom: .15rem;
+  border-bottom: 1px dashed rgba(99,102,241,.18);
+}
+.dw-card-head .sidebar-group-emoji { width: 26px; height: 26px; font-size: .92rem; border-radius: 7px; }
+/* ----- 三段式 section（视频去水印右栏） -----
+   把原来一个 .uc-form 6 个 flat field 拆成 INTERVAL/SEGMENTS/PROCESSING/ACTION 4 个
+   视觉分组，每组独立 .dw-section；组间 1px 紫色 dashed 分隔。
+   视觉对齐 sidebar 三段式 (emoji pill + EN caps + CN 标签)。 */
+.dw-section { padding: .65rem 0 .15rem; display: flex; flex-direction: column; gap: .45rem; }
+.dw-section:first-of-type { padding-top: .35rem; }
+.dw-section:last-of-type { padding-bottom: .35rem; }
+.dw-section-head {
+  display: flex; align-items: center; gap: .45rem;
+  margin-bottom: .15rem;
+}
+.dw-section-head .sidebar-group-en { font-size: .66rem; }
+.dw-section-head .sidebar-group-cn {
+  font-size: .82rem; font-weight: 700; color: var(--text); line-height: 1;
+}
+.dw-section-sep {
+  border: 0;
+  border-top: 1px dashed rgba(99,102,241,.18);
+  margin: 0;
+}
+/* 旧版单卡 layout（UC 上传转换等仍用）保留 */
 .dw-card .uc-form { display: flex; flex-direction: column; gap: .7rem; margin: 0 0 .8rem; }
+/* 新版：PROCESSING section 内 uc-form 收紧上下间距 */
+.dw-section .uc-form { display: flex; flex-direction: column; gap: .55rem; margin: 0; }
+/* 替代原来内联 style 的 small 提示 */
+.uc-hint-block { display: block; color: var(--muted, #8a8a8a); margin-top: 4px; font-size: 12px; line-height: 1.5; }
+/* ACTION 区：开始按钮 + 进度贴合 */
+.dw-section-action { gap: .35rem; padding-top: .55rem; }
+.dw-section-action .btn-primary { padding: .55rem 1rem; font-size: .92rem; font-weight: 700; }
+/* 进度条 status：稍偏上，跟按钮同行视觉关联 */
+.dw-section-action .convert-status {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .25rem .55rem;
+  font-size: .78rem;
+  color: var(--brand-strong);
+  background: rgba(99,102,241,.06);
+  border: 1px solid rgba(99,102,241,.18);
+  border-radius: var(--radius-sm, 6px);
+  min-height: 1.5em;
+}
+.dw-section-action .convert-status:empty { display: none; }
+/* 滑块状态三段 detail 文字（dwVidSegTip）紧凑 1 行：
+   旧的 detail="推理 8.4s(占全片 6%) @ 0.0s 15fps, 每 1 帧推理 1 次 ≈ 126 帧 8.4s AI; 其余 142.1s 直接复制"
+   太长没换行；现在改用 font-size:.74rem + line-height 1.4 + 自动 ellipsis 单行（最后一行的 8.4s/AI 是关键），
+   完整版挪到 title hover tooltip。 */
+.dw-vid-range-labels .dw-hint-sm {
+  font-size: .73rem; line-height: 1.35;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-align: center; flex: 1;
+}
 
 /* 结果对比卡片 */
 .dw-result { margin-top: .8rem; display: flex; flex-direction: column; gap: .6rem; }

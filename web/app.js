@@ -3689,10 +3689,17 @@ el.dwVidPlayer.removeAttribute('src');
     // wave2 ②：时间稀疏 —— 实际 AI 推理帧 ≈ 区间内帧 / 推理间隔
     const inpaintEst = Math.round((span * fps) / stride);
     if (isFull) {
-      el.dwVidSegTip.textContent = `整段处理：${dwVidDuration.toFixed(1)}s @ ${fps}fps ≈ ${totalEst} 帧（AI 实际推理 ≈ ${inpaintEst} 帧）`;
+      // 紧凑 1 行（避免在 320px 侧栏里换行成 4 行） + title tooltip 看完整版
+      el.dwVidSegTip.textContent = `整段 ${dwVidDuration.toFixed(1)}s @ ${fps}fps · ≈AI ${inpaintEst} 帧`;
+      el.dwVidSegTip.title = `整段处理：${dwVidDuration.toFixed(1)}s @ ${fps}fps ≈ ${totalEst} 帧（AI 实际推理 ≈ ${inpaintEst} 帧，按${stride}倍间隔）`;
     } else {
       const pct = Math.round((span / dwVidDuration) * 100);
-      el.dwVidSegTip.textContent = `推理 ${span.toFixed(1)}s（占全片 ${pct}%）@ ${fps}fps，每 ${stride} 帧推理 1 次 ≈ ${inpaintEst} 帧 AI；其余 ${(dwVidDuration - span).toFixed(1)}s 直接复制`;
+      // 紧凑 1 行：分别给关键数字，但用 · 分隔避免在窄栏里堆成多行
+      el.dwVidSegTip.textContent =
+        `${span.toFixed(1)}s · 占 ${pct}% · ≈AI ${inpaintEst} 帧 · 余 ${(dwVidDuration - span).toFixed(1)}s 复制`;
+      el.dwVidSegTip.title =
+        `推理 ${span.toFixed(1)}s（占全片 ${pct}%）@ ${fps}fps，每 ${stride} 帧推理 1 次 ≈ ${inpaintEst} 帧 AI；` +
+        `其余 ${(dwVidDuration - span).toFixed(1)}s 由「区间外 copy」+「帧间插值」复用，ms 级完成，不耗算力`;
     }
   };
 
