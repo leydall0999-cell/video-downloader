@@ -3406,6 +3406,9 @@
     };
     el.dwVidPlayer.addEventListener('loadedmetadata', onLoaded);
     if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+    // 设计意图（2026-08-30 用户明确要求）：**不自动 play**。video 元素默认 paused，
+    // 用户必须手动点底栏 ▶ 才会开始播放。转码完成 / 选框 / filmstrip seek 都不触发 play。
+    // 这样用户在画面上拖框选水印时画面是静止的（first frame），框能精准对齐水印位置。
   };
 
   const dwVidStartPreviewTranscode = async (f) => {
