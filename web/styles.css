@@ -963,6 +963,8 @@ img { max-width: 100%; display: block; }
    未处理图片时仍露出"原图/处理后"两个黑框。特异性提到 (0,2,0) 必赢。 */
 .dw-result[hidden] { display: none; }
 .dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+/* 视频去水印结果：原视频/处理后上下堆叠（默认就是用户要的左下角竖排布局） */
+#dwVidResult .dw-compare { grid-template-columns: 1fr; }
 .dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
 .dw-compare img, .dw-compare video {
   width: 100%; max-height: 60vh; height: auto; max-width: 100%;
