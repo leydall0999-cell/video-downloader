@@ -3510,8 +3510,9 @@ if (el.dwVidCapOverlay) el.dwVidCapOverlay.hidden = false;
     // 同步清掉上一段视频可能留存的 poster——避免换视频后首段缩略图错位到新视频
     if (el.dwVidPlayer) el.dwVidPlayer.removeAttribute('poster');
     if (el._dwFilmstripUrl) { URL.revokeObjectURL(el._dwFilmstripUrl); el._dwFilmstripUrl = null; }
-    el.dwVidFilmstrip.removeAttribute('src');
-    el.dwVidFilmstripCursor.hidden = true;
+    // filmstrip 缩略图条已移除（2026-08-31）：元素不存在时整段跳过，避免 null 报错
+    if (el.dwVidFilmstrip) el.dwVidFilmstrip.removeAttribute('src');
+    if (el.dwVidFilmstripCursor) el.dwVidFilmstripCursor.hidden = true;
 // 播放器复位（等待新的转码）：画布回到「img + 转码遮罩」两态，video/底部控件全部隐藏。
 // wrap 不再强制 16/9：清空内联 aspectRatio 让 thumb 一加载就同步覆盖为真实比例，
 // 避免 9:16 视频被 16/9 容器拉宽；占位 9/16 由 CSS 默认撑出。
@@ -3646,6 +3647,8 @@ el.dwVidPlayer.removeAttribute('src');
     }
 
     // 后台并行：filmstrip（同样切片上传，绝大多数情况秒开；失败仅提示不影响主路径）
+    // 2026-08-31：缩略图条已从 UI 移除 → 元素不存在就完全不发请求，省服务端 20 帧解码 + 切片上传
+    if (!el.dwVidFilmstrip) return;
     dwVidFetchFilmstrip(f, ctrl.signal).then((res) => {
       if (!res || !res.ok) {
         const prev = el.dwVidStatus.textContent;
@@ -4010,7 +4013,9 @@ el.dwVidPlayer.removeAttribute('src');
     el.dwVidFilmstripCursor.style.left = pct + '%';
     el.dwVidFilmstripCursor.hidden = false;
   };
-  el.dwVidFilmstrip.addEventListener('click', (e) => {
+  // filmstrip 缩略图条已移除（2026-08-31）：元素不存在时不绑 click，避免 null 报错。
+  // 定位改由 video 原生进度条完成；「设为开始 / 设为结束」优先读 video.currentTime（精确到帧）。
+  if (el.dwVidFilmstrip) el.dwVidFilmstrip.addEventListener('click', (e) => {
     if (!dwVidDuration) return;
     const rect = el.dwVidFilmstrip.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
