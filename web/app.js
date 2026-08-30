@@ -3461,9 +3461,9 @@
     // 上传视频后，把「启用视频预览」开关展示给用户（默认未勾选 = 不转码）
     if (el.dwVidPreviewToggleWrap) el.dwVidPreviewToggleWrap.hidden = false;
 // 选中视频即隐藏「请上传视频」占位层，画布进入工作态。
-// cap-overlay 默认 hidden 不再显示（之前 9acbb8c 是「首次拖框即隐藏」，2026-08-30 改为永不显示，
-// 与「画框后无遮挡」状态视觉完全一致，避免用户上传后目光被角标分走）。
+// 显示工作态 cap「原视频预览 · 在画面上拖框选水印」（默认 hidden，mousedown 拖框即隐藏）。
 if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
+if (el.dwVidCapOverlay) el.dwVidCapOverlay.hidden = false;
     const url = URL.createObjectURL(f);
     // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
