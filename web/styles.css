@@ -857,6 +857,10 @@ img { max-width: 100%; display: block; }
   background: #f6f7fb; border: 1px solid var(--line);
   border-radius: var(--radius-md); padding: .5rem .55rem; margin: .6rem 0 .3rem;
 }
+/* 视频去水印两行布局：状态行（左 selinfo / 右 回到首帧）+ 控制行（左 player head / 右 清空框选） */
+.dw-vid-row-status .dw-selinfo { margin-left: 0; }
+.dw-vid-row-status #dwVidBackToThumb { margin-left: auto; }
+.dw-vid-row-ctrl #dwVidClear { margin-left: auto; }
 .dw-toolgroup { display: inline-flex; gap: .3rem; align-items: center; }
 .dw-toolgroup.dw-seg { background: #eceef5; border-radius: 10px; padding: 3px; gap: 2px; }
 .dw-tooldiv { width: 1px; align-self: stretch; background: var(--line); margin: 0 .12rem; }

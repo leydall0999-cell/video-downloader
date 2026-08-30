@@ -691,28 +691,26 @@
                  src 设转码后的 preview.mp4（任意格式 → 服务端 H.264+AAC 后才能在 WKWebView 播放）。 -->
             <video id="dwVidPlayer" controls preload="metadata" playsinline hidden></video>
           </div>
-          <div class="dw-toolbar">
-            <div class="dw-toolgroup" role="group" aria-label="选区操作">
-              <button type="button" class="dw-mode" id="dwVidClear" title="清空框选"><span class="dw-ico">🗑</span>清空框选</button>
-            </div>
+          <!-- 状态行：框选状态 + 回到首帧 -->
+          <div class="dw-toolbar dw-vid-row-status">
             <span class="dw-selinfo" id="dwVidSelInfo">尚未框选</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="dwVidBackToThumb" hidden title="回到首帧继续框选">📐 回到首帧重新框选</button>
           </div>
 
-          <div class="dw-vid-player-head" id="dwVidPlayerHead" hidden>
-            <span class="dw-cap">播放预览</span>
-            <div class="dw-vid-player-head-set">
+          <!-- 控制行：播放预览 + 设起止（条件显示）+ 清空框选 -->
+          <div class="dw-toolbar dw-vid-row-ctrl">
+            <div class="dw-vid-player-head" id="dwVidPlayerHead" hidden>
+              <span class="dw-cap">播放预览</span>
               <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetStart" title="把当前播放位置设为水印开始时间">⏱ 设为开始</button>
               <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetEnd" title="把当前播放位置设为水印结束时间">⏱ 设为结束</button>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" id="dwVidBackToThumb" hidden title="回到首帧继续框选">📐 回到首帧重新框选</button>
+            <button type="button" class="dw-mode" id="dwVidClear" title="清空框选"><span class="dw-ico">🗑</span>清空框选</button>
           </div>
+
           <div class="dw-vid-filmstrip-wrap" id="dwVidFilmstripWrap" hidden>
             <img id="dwVidFilmstrip" class="dw-vid-filmstrip" alt="视频时间线" />
             <div class="dw-vid-filmstrip-cursor" id="dwVidFilmstripCursor" hidden></div>
           </div>
-          <p class="dw-hint dw-hint-sm dw-vid-fs-hint" id="dwVidFsHint" hidden>原视频先由服务端 ffmpeg 转码为 H.264+AAC 通用格式（WebKit 必支持），因此<b>任意格式都能播放</b>并拖动进度条。播放到精确位置后点「设为开始 / 设为结束」同步到右侧滑块；下方缩略图条可点击粗定位。</p>
-
-          <p class="dw-hint">在首帧预览上<b>拖拽框选</b>水印区域，再定出水印出现的起止时间——只有该区间的帧会跑 LaMa 推理，其余帧直接复制。</p>
           </div>
           <div class="dw-result" id="dwVidResult" hidden>
             <div class="dw-result-head">
