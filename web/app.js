@@ -3405,6 +3405,13 @@
     };
     el.dwVidPlayer.addEventListener('loadedmetadata', onLoaded);
     if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
+    // 显式钉死在首帧：WKWebView/macOS 在用户激活后可能自动尝试播放 <video>，
+    // 但用户在画面上拖框选水印时需要视频静止——画框时画面动，框根本对不准。
+    // 这里强制 pause + currentTime=0，并把 paused 状态交给浏览器原生控件的 ▶ 按钮去恢复。
+    try {
+      el.dwVidPlayer.pause();
+      el.dwVidPlayer.currentTime = 0;
+    } catch (_e) { /* 元数据未到，忽略 */ }
   };
 
   const dwVidStartPreviewTranscode = async (f) => {
