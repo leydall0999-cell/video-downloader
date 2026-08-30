@@ -29,6 +29,7 @@ import glob as _glob
 import json
 import logging
 import os
+import platform
 import shutil as _shutil
 import subprocess
 import sys
@@ -82,6 +83,12 @@ _LOCK = threading.Lock()
 # INT8 动态量化开关：默认开启（环境变量 VDL_DW_INT8=0 可强制关闭；UI 通过 set_int8_enabled 运行时覆盖）。
 # 量化失败会自动回退 FP32（见 _get_session），故默认开启安全。
 _INT8_OVERRIDE = None
+# INT8 推理能力探测：Apple Silicon (arm64) 的 onnxruntime 缺 ConvInteger 实现，
+# 量化(quantize_dynamic)能成但推理必 NotImplemented → 直接判不可用，避免无谓量化+任务崩溃。
+# 设为 False 后 _get_session 跳过 INT8；x86_64（Mac/Win）仍走 INT8 提速。
+_INT8_CAPABLE = None
+# 一次性推理探针结果：即便平台非 arm64，若某次 INT8 会话构建/首帧推理抛错也永久禁用 INT8。
+_INT8_RUNTIME_OK = None
 
 
 def _model_dir() -> Path:
@@ -210,6 +217,16 @@ def _optimal_threads() -> int:
                 return v
         except ValueError:
             pass
+    # Apple Silicon：性能核数（hw.perflevel0）优于打满 —— M1 实测 4 线程 3436ms < 8 线程 4627ms
+    # （能效核参与反而因争用拖慢）。非 Apple 平台仍打满物理核（上限 8）。
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        try:
+            pcores = int(subprocess.check_output(
+                ["sysctl", "-n", "hw.perflevel0.physicalcpu"]).decode().strip())
+            if pcores >= 1:
+                return max(1, min(pcores, 8))
+        except Exception:  # noqa: BLE001
+            pass
     try:
         c = os.cpu_count() or 4
     except Exception:  # noqa: BLE001
@@ -233,6 +250,28 @@ def set_int8_enabled(flag: bool) -> None:
     _INT8_OVERRIDE = bool(flag)
 
 
+def _int8_capable() -> bool:
+    """本机 onnxruntime 是否真能跑 INT8 推理。
+
+    关键坑（2026-08-30 实测，onnxruntime 1.23.2 / Apple M1 arm64）：
+    quantize_dynamic 能生成 lama_fp32.int8.onnx，但推理时
+    'Could not find an implementation for ConvInteger(10)' —— arm64 CPU EP 无整数卷积内核，
+    CoreML EP 同样兜不住（FFC 的 convl2l 量化后仍落回 CPU ConvInteger）。
+    故 Apple Silicon 一律判不可用，直接走 FP32；x86_64 才有 INT8 提速。
+    """
+    global _INT8_CAPABLE
+    if _INT8_CAPABLE is not None:
+        return _INT8_CAPABLE
+    try:
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            _INT8_CAPABLE = False
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    _INT8_CAPABLE = True
+    return True
+
+
 def _get_session():
     """懒加载 onnxruntime InferenceSession（进程内缓存，线程安全）。
 
@@ -241,6 +280,10 @@ def _get_session():
     """
     global _SESSION, _SESSION_INT8_MODE
     use_int8 = _int8_enabled()
+    # Apple Silicon 缺 ConvInteger，INT8 推理必败 —— 直接降级，避免白量化 30s + 任务崩溃
+    if use_int8 and not _int8_capable():
+        logger.info("ai_dewatermark INT8 在本平台不可用（Apple Silicon 缺 ConvInteger 实现），回退 FP32")
+        use_int8 = False
     # 模式切换：已加载 session 的 INT8 模式与当前开关不符 → 丢弃重建
     if _SESSION is not None and _SESSION_INT8_MODE is not None and _SESSION_INT8_MODE != use_int8:
         _SESSION = None
@@ -272,9 +315,40 @@ def _get_session():
         # ① 线程调优：intra_op 多线程加速单瓦片推理；inter_op 对单子图几乎无益，保持 1
         so.intra_op_num_threads = _optimal_threads()
         so.inter_op_num_threads = 1
-        _SESSION = ort.InferenceSession(str(model_path), sess_options=so, providers=["CPUExecutionProvider"])
+        try:
+            _SESSION = ort.InferenceSession(str(model_path), sess_options=so, providers=["CPUExecutionProvider"])
+            # 一次性推理探针：即便平台非 arm64，若 INT8 会话首帧就 NotImplemented/崩，永久禁用并回退
+            if use_int8 and _INT8_RUNTIME_OK is None:
+                try:
+                    _probe_inputs(_SESSION)
+                    _INT8_RUNTIME_OK = True
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("ai_dewatermark INT8 推理失败，永久回退 FP32: %s", e)
+                    _INT8_RUNTIME_OK = False
+                    _SESSION = None
+        except Exception as e:  # noqa: BLE001
+            if use_int8:
+                logger.warning("ai_dewatermark INT8 会话构建失败，回退 fp32: %s", e)
+                use_int8 = False
+                _SESSION = ort.InferenceSession(str(_ensure_model()), sess_options=so, providers=["CPUExecutionProvider"])
+            else:
+                raise
         _SESSION_INT8_MODE = use_int8
     return _SESSION
+
+
+def _probe_inputs(session) -> None:
+    """用固定 512x512 随机输入跑一次 INT8 会话，验证 ConvInteger 等内核可用（失败即抛）。"""
+    import numpy as _np
+    ins = [i.name for i in session.get_inputs()]
+    feeds = {}
+    for i in session.get_inputs():
+        if i.shape and len(i.shape) == 4 and i.shape[1] in (1, 3):
+            c = i.shape[1]
+            feeds[i.name] = _np.random.randn(1, c, 512, 512).astype(_np.float32)
+        else:
+            feeds[i.name] = _np.random.randn(1, 1, 512, 512).astype(_np.float32)
+    session.run(None, feeds)
 
 
 def _ensure_int8_model() -> Path | None:
