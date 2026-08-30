@@ -3662,6 +3662,10 @@ el.dwVidPlayer.removeAttribute('src');
 
   let dwVidDrag = false;
   // mousedown 监听移到共享 wrap 上：img 占主导 / video 接管后都能框选
+  // ⚠️ 用 capture 阶段（先于 <video>）拦截 mousedown，再 stopPropagation。
+  //    否则 video 上收到 mousedown 会触发 WKWebView 原生「点画面 → toggle play/pause」，
+  //    用户每点一次选框都会把 video 播放状态切一次（点一次暂停、再点一次播放…）。
+  //    跳过 video 底部 ~50px（controls 区）的点击 → 让 ▶/⏸ 按钮仍可手动操作。
   const dwVidWrap = el.dwVidThumb.parentElement;
   dwVidWrap.addEventListener('mousedown', (e) => {
     // 必须有可视内容（img.src 或 video.src 之一存在且 video 显示中）
@@ -3669,7 +3673,10 @@ el.dwVidPlayer.removeAttribute('src');
     const hasVideo = !!(el.dwVidPlayer && el.dwVidPlayer.src && !el.dwVidPlayer.hidden);
     if (!hasThumb && !hasVideo) return;
     // video 接管时跳过底部 ~50px（native controls 区，让 video 自己处理 play/seek）
-    if (hasVideo && e.offsetY > el.dwVidPlayer.clientHeight - 50) return;
+    const inControls = hasVideo && e.offsetY > el.dwVidPlayer.clientHeight - 50;
+    if (inControls) return;
+    // 拦下事件，video 收不到 mousedown 就不会触发 click toggle（同时保留下面的拖框逻辑）
+    e.stopPropagation();
     dwVidDrag = true;
     // 用户开始框选即隐藏 cap 角标：避免覆盖水印区（pointer-events:none 已保证不拦截，
     // 但视觉遮挡会让用户看不清目标水印就框不准）；换视频时 change handler 会重新显示
@@ -3677,7 +3684,7 @@ el.dwVidPlayer.removeAttribute('src');
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
     dwVidSel = { x: nx, y: ny, w: 0, h: 0 };
     e.preventDefault();
-  });
+  }, { capture: true });
   document.addEventListener('mousemove', (e) => {
     if (!dwVidDrag) return;
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
