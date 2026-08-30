@@ -3524,6 +3524,8 @@ el.dwVidPlayer.removeAttribute('src');
     const wantPreview = !!(el.dwVidPreviewToggle && el.dwVidPreviewToggle.checked);
     el.dwVidTranscoding.hidden = !wantPreview;
     if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
+    // 复位切换按钮文案：重新选视频后回到初始「回到首帧」语义（防止停在「▷ 播放预览」错位）
+    if (el.dwVidBackToThumb) el.dwVidBackToThumb.textContent = '📐 回到首帧重新框选';
     if (el.dwVidFilmstripWrap) el.dwVidFilmstripWrap.hidden = true;
     if (el.dwVidFsHint) el.dwVidFsHint.hidden = true;
     if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
@@ -3994,20 +3996,28 @@ el.dwVidPlayer.removeAttribute('src');
   };
   el.dwVidSetStart.addEventListener('click', () => dwVidSetFromSeek('start'));
   el.dwVidSetEnd.addEventListener('click', () => dwVidSetFromSeek('end'));
-  // 转码好后 video 接管画面 → 用户想再改框选就点这个回到首帧模式
-  // ⚠️ 关键：不要把按钮自己 hidden 掉——用户可能多次"回到首帧"（反复调整框选位置）
+  // 转码好后 video 接管画面 → 这个按钮是「视频预览 ⇄ 首帧框选」的双向切换开关
+  // ⚠️ 不要把按钮自己 hidden 掉——用户可能多次来回切换（反复调整框选位置）
+  // ⚠️ 也不能只做单向（仅回到首帧）——那样 video 的进度条/暂停会消失且无法恢复（用户已踩坑）
   el.dwVidBackToThumb.addEventListener('click', () => {
     const wrap = el.dwVidPlayer && el.dwVidPlayer.parentElement;
     if (!wrap) return;
-    if (el.dwVidPlayer && !el.dwVidPlayer.hidden) {
+    const inPlayable = !el.dwVidPlayer.hidden && !!el.dwVidPlayer.src;
+    if (inPlayable) {
+      // 当前是「视频预览」→ 切到「首帧框选」：隐藏 video，露出首帧 PNG，可拖拽框选
       el.dwVidPlayer.pause();
-      // 把 video 真的跳回 0 秒：下次从 filmstrip 切回可播放模式时直接显示首帧
-      try { el.dwVidPlayer.currentTime = 0; } catch (_e) {}
+      try { el.dwVidPlayer.currentTime = 0; } catch (_e) {}  // 回到 0 秒，下次切回直接显示首帧
       el.dwVidPlayer.hidden = true;
+      wrap.classList.remove('is-playable');
+      if (el.dwVidBackToThumb) el.dwVidBackToThumb.textContent = '▷ 播放预览';
+      el.dwVidStatus.textContent = '已回到首帧，可继续拖拽框选';
+    } else {
+      // 当前是「首帧框选」→ 切回「视频预览」：video 的 src 仍在，直接显示即带进度条/暂停
+      el.dwVidPlayer.hidden = false;
+      wrap.classList.add('is-playable');
+      if (el.dwVidBackToThumb) el.dwVidBackToThumb.textContent = '📐 回到首帧重新框选';
+      el.dwVidStatus.textContent = '';
     }
-    wrap.classList.remove('is-playable');
-    // img 重新显示（首帧 PNG 仍在 src 里）→ 用户可继续拖拽框选
-    el.dwVidStatus.textContent = '已回到首帧，可继续拖拽框选';
   });
 
   const startDwVideo = async () => {
