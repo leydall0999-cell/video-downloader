@@ -43,7 +43,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv") -> None:
+def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv", int8: bool = True) -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -56,6 +56,8 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
         if engine == "ai":
             if not dwc_ai.available():
                 raise RuntimeError("AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
+            # 应用 INT8 开关（UI 勾选框）：与已加载 session 模式不符时 _get_session 会自动重建
+            dwc_ai.set_int8_enabled(int8)
             dwc_ai.ai_image_inpaint(src_path, out_path, regions)
         else:
             dwc.image_inpaint(src_path, out_path, regions, method, radius)
@@ -106,6 +108,7 @@ def create_dw_image(
     method: str = app.Form("telea"),
     radius: int = app.Form(3),
     engine: str = app.Form("opencv"),
+    int8: str = app.Form("1"),  # INT8 动态量化开关（默认开）
     request: app.Request = None,
 ) -> dict:
     """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
@@ -129,6 +132,8 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="method 仅支持 telea / ns")
     if not (1 <= radius <= 20):
         raise app.HTTPException(status_code=400, detail="radius 需在 1..20 之间")
+    if int8 not in ("0", "1"):
+        raise app.HTTPException(status_code=400, detail="int8 仅支持 0 / 1")
     save_path = _save_upload(file, "dw_up")
     job_id = app.uuid.uuid4().hex[:12]
     with app.DW_LOCK:
@@ -136,7 +141,7 @@ def create_dw_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "image",
         }
-    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine)
+    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine, bool(int(int8)))
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
@@ -440,15 +445,19 @@ def _run_video(job_id: str, src: str, regions, ffmpeg_bin: str, resolution: str,
                start_sec: float = 0.0, end_sec: float = 0.0, segments=None,
                target_fps: float = 30.0,
                temporal_stride: int = 4,
-               work_dir: str = None) -> None:
+               work_dir: str = None,
+               int8: bool = True) -> None:
     """后台跑视频去水印。支持暂停/取消信号（帧边界检查），可被续跑（work_dir 持久化）。
-    target_fps：目标输出帧率，默认 30，0 表示按源帧率（HFR/VFR 视频推荐 30）。"""
+    target_fps：目标输出帧率，默认 30，0 表示按源帧率（HFR/VFR 视频推荐 30）。
+    int8：是否启用 INT8 动态量化（省内存/提速，量化失败自动回退 FP32）。"""
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
     try:
         if not dwc_ai.available():
             raise RuntimeError("AI 去水印不可用（缺少 onnxruntime 依赖或模型未下载）")
+        # 应用 INT8 开关（UI 勾选框）：与已加载 session 模式不符时 _get_session 会自动重建
+        dwc_ai.set_int8_enabled(int8)
         out_path = app.DW_DIR / f"dw_vid_{job_id}.mp4"
 
         def _cancel_check():
@@ -515,6 +524,7 @@ def create_dw_video(
     segments: str = app.Form(""),
     target_fps: float = app.Form(15.0),  # 默认 15 fps — 静态水印 + 邻帧平滑下肉眼无差（2026-08-29 由 30 调到 15）
     temporal_stride: int = app.Form(4),  # 默认 4：每 4 帧推理 1 次（wave2 ② 时间稀疏）
+    int8: str = app.Form("1"),  # INT8 动态量化开关（默认开；"0"=关，走 FP32 全精度）
     request: app.Request = None,
 ) -> dict:
     """视频去水印：上传视频 + 多选区 regions（归一化，整段视频套同一掩码）。
@@ -577,23 +587,28 @@ def create_dw_video(
             "start_sec": float(start_sec), "end_sec": float(end_sec),
             "target_fps": float(target_fps),
             "temporal_stride": int(temporal_stride),
+            "int8": bool(int(int8)),
         }
     app.executor.submit(_run_video, job_id, str(save_path), regions_list, app.FFMPEG_BIN,
                         resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list,
                         float(target_fps), int(temporal_stride),
-                        work_dir)
+                        work_dir, bool(int(int8)))
     return {"job_id": job_id, "status": "running", "kind": "video",
             "target_fps": float(target_fps)}
 
 
 @router.post("/api/dw/ai/warmup")
-def warmup_ai_engine(request: app.Request = None) -> dict:
+def warmup_ai_engine(int8: str = app.Form("1"), request: app.Request = None) -> dict:
     """后台预热 AI 去水印模型：用户选完视频后触发，把最耗时的模型加载从点击「开始」的
     关键路径挪到框选的空闲期，消除「点击开始后长时间 0 帧」的假死观感。
 
     模型在进程内缓存，重复调用几乎无成本；内存不足 / 模型缺失时静默失败不影响主流程。
+    int8：预热时即按此开关加载对应模型（默认开；与任务提交的 int8 保持一致可避免切换重建）。
     """
     app._check_rate_limit(request)
+    if int8 not in ("0", "1"):
+        raise app.HTTPException(status_code=400, detail="int8 仅支持 0 / 1")
+    dwc_ai.set_int8_enabled(int8 == "1")
     app.executor.submit(dwc_ai.warmup)
     return {"ok": True, "status": "warming"}
 
@@ -638,7 +653,7 @@ def dw_video_resume(job_id: str) -> dict:
     app.executor.submit(_run_video, job_id, job["src_path"], job.get("regions"), app.FFMPEG_BIN,
                         job.get("resolution"), job.get("smooth"), job.get("start_sec", 0),
                         job.get("end_sec", 0), job.get("segments"), job.get("target_fps", 15.0),
-                        job.get("temporal_stride", 4), job["work_dir"])
+                        job.get("temporal_stride", 4), job["work_dir"], job.get("int8", True))
     return {"status": "running"}
 
 

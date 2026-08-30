@@ -459,6 +459,7 @@
     dwVidTargetFps: $('dwVidTargetFps'),
     dwVidStride: $('dwVidStride'),
     dwVidSmooth: $('dwVidSmooth'),
+    dwVidInt8: $('dwVidInt8'),
     dwVidBtn: $('dwVidBtn'),
     dwVidStatus: $('dwVidStatus'),
     dwVidResult: $('dwVidResult'),
@@ -3498,8 +3499,11 @@ el.dwVidPlayer.removeAttribute('src');
     if (wantPreview) dwVidStartPreviewTranscode(f);
     // 4) 后台预热 AI 模型：选完视频即加载（最耗时步骤），用户框选期间完成，
     //    点击「开始去水印」时模型已在内存，不再出现「长时间 0 帧」的假死观感
+    //    预热即按当前 INT8 开关加载对应模型，与任务提交模式一致可避免切换重建
     try {
-      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST' });
+      const wf = new FormData();
+      wf.append('int8', el.dwVidInt8.checked ? '1' : '0');
+      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST', body: wf });
     } catch (_e) { /* 预热失败不影响主流程 */ }
     // 抽首帧（img 框选）与 filmstrip（点击跳转时间线）：
     //   之前用 Promise.all([thumb, film]) 等齐才往下走——filmstrip 要 decode 20 帧再 tile，
@@ -3716,6 +3720,16 @@ el.dwVidPlayer.removeAttribute('src');
   // 输出帧率变化时也重算预估帧数（"帧数预估" 一目了然，让用户按帧数选 fps）
   el.dwVidTargetFps.addEventListener('change', () => dwVidUpdateRange(null));
   el.dwVidStride.addEventListener('change', () => dwVidUpdateRange(null));
+
+  // INT8 动态量化开关：本地持久化（默认开，与后端默认一致），跨会话保留用户选择
+  const DW_INT8_KEY = 'vdl_dw_int8';
+  try {
+    const savedInt8 = localStorage.getItem(DW_INT8_KEY);
+    if (savedInt8 !== null) el.dwVidInt8.checked = (savedInt8 === '1');
+  } catch (_e) { /* localStorage 不可用则沿用 HTML 默认（checked） */ }
+  el.dwVidInt8.addEventListener('change', () => {
+    try { localStorage.setItem(DW_INT8_KEY, el.dwVidInt8.checked ? '1' : '0'); } catch (_e) {}
+  });
 
   // -------------------------------------------------- 多时间段（segments）管理
   // 每段 = { start, end, regions, label, keyframes? }，regions 为该段时框选的归一化区域
@@ -3961,6 +3975,7 @@ el.dwVidPlayer.removeAttribute('src');
     form.append('target_fps', el.dwVidTargetFps.value);
     form.append('temporal_stride', el.dwVidStride.value);
     form.append('smooth', el.dwVidSmooth.value);
+    form.append('int8', el.dwVidInt8.checked ? '1' : '0');
 
     if (dwVidSegments.length) {
       // 多段模式：每段带自己的时间段 + 框选区域（+ 可选关键帧），后端按帧合并/插值

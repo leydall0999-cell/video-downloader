@@ -77,7 +77,11 @@ MEM_TOTAL_SAFE_MB = 3500.0
 SUBPROC_TIMEOUT = 300
 
 _SESSION = None
+_SESSION_INT8_MODE = None  # 已加载 session 对应的 INT8 模式；与当前开关不符时 _get_session 丢弃重建
 _LOCK = threading.Lock()
+# INT8 动态量化开关：默认开启（环境变量 VDL_DW_INT8=0 可强制关闭；UI 通过 set_int8_enabled 运行时覆盖）。
+# 量化失败会自动回退 FP32（见 _get_session），故默认开启安全。
+_INT8_OVERRIDE = None
 
 
 def _model_dir() -> Path:
@@ -213,9 +217,33 @@ def _optimal_threads() -> int:
     return max(1, min(c, 8))
 
 
+def _int8_enabled() -> bool:
+    """INT8 量化当前是否启用：UI 运行时覆盖(_INT8_OVERRIDE) > 环境变量 VDL_DW_INT8。
+
+    默认开启（VDL_DW_INT8 未设或任意非空值=开；显式 "0" 才关）。量化失败会自动回退 FP32。
+    """
+    if _INT8_OVERRIDE is not None:
+        return _INT8_OVERRIDE
+    return os.environ.get("VDL_DW_INT8") != "0"
+
+
+def set_int8_enabled(flag: bool) -> None:
+    """UI 勾选框运行时切换 INT8 开关；下次 _get_session 会按新模式重建 session。"""
+    global _INT8_OVERRIDE
+    _INT8_OVERRIDE = bool(flag)
+
+
 def _get_session():
-    """懒加载 onnxruntime InferenceSession（进程内缓存，线程安全）。"""
-    global _SESSION
+    """懒加载 onnxruntime InferenceSession（进程内缓存，线程安全）。
+
+    INT8 模式由 _int8_enabled() 决定。若已缓存的 session 与当前开关模式不一致，
+    先丢弃再按新模式重建，确保切换即时生效（量化失败会自动回退 FP32）。
+    """
+    global _SESSION, _SESSION_INT8_MODE
+    use_int8 = _int8_enabled()
+    # 模式切换：已加载 session 的 INT8 模式与当前开关不符 → 丢弃重建
+    if _SESSION is not None and _SESSION_INT8_MODE is not None and _SESSION_INT8_MODE != use_int8:
+        _SESSION = None
     if _SESSION is not None:
         return _SESSION
     with _LOCK:
@@ -226,9 +254,9 @@ def _get_session():
             raise RuntimeError(reason)
         import onnxruntime as ort  # 延迟导入，缺失时不阻塞启动
 
-        # ④ INT8（wave2）：VDL_DW_INT8=1 时优先用动态量化模型，失败自动回退 fp32
+        # ④ INT8：_int8_enabled() 时优先用动态量化模型，失败自动回退 fp32
         model_path = None
-        if os.environ.get("VDL_DW_INT8"):
+        if use_int8:
             try:
                 model_path = _ensure_int8_model()
             except Exception as e:  # noqa: BLE001
@@ -245,6 +273,7 @@ def _get_session():
         so.intra_op_num_threads = _optimal_threads()
         so.inter_op_num_threads = 1
         _SESSION = ort.InferenceSession(str(model_path), sess_options=so, providers=["CPUExecutionProvider"])
+        _SESSION_INT8_MODE = use_int8
     return _SESSION
 
 
