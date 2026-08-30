@@ -467,6 +467,7 @@
     dwVidOut: $('dwVidOut'),
     dwVidOrig: $('dwVidOrig'),
     dwVidPlayer: $('dwVidPlayer'),
+    dwVidPlayOverlay: $('dwVidPlayOverlay'),
     dwVidTranscoding: $('dwVidTranscoding'),
     dwVidEmpty: $('dwVidEmpty'),
     dwVidCapOverlay: $('dwVidCapOverlay'),
@@ -3407,12 +3408,32 @@
     if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
     // 显式钉死在首帧：WKWebView/macOS 在用户激活后可能自动尝试播放 <video>，
     // 但用户在画面上拖框选水印时需要视频静止——画框时画面动，框根本对不准。
-    // 这里强制 pause + currentTime=0，并把 paused 状态交给浏览器原生控件的 ▶ 按钮去恢复。
+    // 这里强制 pause + currentTime=0；同时显示自定义中央 ▶ 覆盖层（挡住 WKWebView
+    // paused 状态的原生 ▶ overlay — CSS 选择器在 macOS WKWebView 几乎从不响应）。
     try {
       el.dwVidPlayer.pause();
       el.dwVidPlayer.currentTime = 0;
     } catch (_e) { /* 元数据未到，忽略 */ }
+    // 默认 paused → 显示自定义 ▶ 按钮
+    if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = false;
   };
+
+  // 「play / pause / ended」同步 overlay 显示状态 — 只绑一次（element static）
+  if (el.dwVidPlayer && el.dwVidPlayOverlay && !el.dwVidPlayer._vdOverlayWired) {
+    const overlay = el.dwVidPlayOverlay;
+    const v = el.dwVidPlayer;
+    v.addEventListener('play', () => { overlay.hidden = true; });
+    v.addEventListener('pause', () => {
+      // ended / seeking 暂停时也把 ▶ 露出来，等用户主动触发再 play
+      overlay.hidden = false;
+    });
+    v.addEventListener('ended', () => { overlay.hidden = false; });
+    overlay.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      try { v.play(); } catch (_e) { /* 用户尚未手势等 */ }
+    });
+    el.dwVidPlayer._vdOverlayWired = true;
+  }
 
   const dwVidStartPreviewTranscode = async (f) => {
     const cacheKey = `dwPrev:${f.name}:${f.size}`;

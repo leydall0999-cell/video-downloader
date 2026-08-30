@@ -785,6 +785,37 @@ img { max-width: 100%; display: block; }
   /* z=2：转码好后覆盖 img（让 img 让位），但必须在 svg 下面 — 选框永远可见 */
   z-index: 2;
 }
+/* 自定义 ▶ 覆盖层：浮在 video(z=2) 之上、svg(z=3) 之下，挡住 WKWebView paused
+   中央 ▶ overlay (CSS 隐藏不掉)。点击 → video.play()。显示条件：JS 在
+   dwVidMarkPlayable 中显式控制 [hidden]，仅在 paused + 已转码好时出现。 */
+#dwVidPreviewWrap > .dw-vid-play-overlay {
+  position: absolute; inset: 0;
+  z-index: 4;  /* video(2) 之上、svg(3) 之下偏下用 4；实际 scroll 不冲突 */
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 0; padding: 0; margin: 0;
+  cursor: pointer; outline: none;
+  /* 不吸所有 pointer — 只点中央 ▶ 图标区；inset:0 + transparent 仍只点 ▶ 的 bounding box 由 SVG 给出 */
+  /* 但 inset:0 会吞 wrap 内所有 click，所以把 pointer-events 限制在 svg 自身大小 */
+  pointer-events: none;
+}
+#dwVidPreviewWrap > .dw-vid-play-overlay > svg {
+  pointer-events: auto;  /* 让 ▶ 图标自身可点击 */
+  padding: 22px;
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .55);
+  fill: #fff;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .35);
+  transition: transform .15s ease, background .15s ease;
+  backdrop-filter: blur(2px);
+}
+#dwVidPreviewWrap > .dw-vid-play-overlay:hover > svg {
+  transform: scale(1.06);
+  background: rgba(99, 102, 241, .85);
+}
+#dwVidPreviewWrap > .dw-vid-play-overlay[hidden] {
+  display: none !important;
+}
 #dwVidPreviewWrap > .dw-svg {
   /* z=3：永远在 video 之上 → 视频接管后红色选框不被遮 */
   z-index: 3;
