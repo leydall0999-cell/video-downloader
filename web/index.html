@@ -691,6 +691,10 @@
                  src 设转码后的 preview.mp4（任意格式 → 服务端 H.264+AAC 后才能在 WKWebView 播放）。 -->
             <video id="dwVidPlayer" controls preload="metadata" playsinline hidden></video>
           </div>
+          <div class="dw-vid-filmstrip-wrap" id="dwVidFilmstripWrap" hidden>
+            <img id="dwVidFilmstrip" class="dw-vid-filmstrip" alt="视频时间线" />
+            <div class="dw-vid-filmstrip-cursor" id="dwVidFilmstripCursor" hidden></div>
+          </div>
           <!-- 状态行：框选状态 + 回到首帧 -->
           <div class="dw-toolbar dw-vid-row-status">
             <span class="dw-selinfo" id="dwVidSelInfo">尚未框选</span>
@@ -705,11 +709,6 @@
               <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetEnd" title="把当前播放位置设为水印结束时间">⏱ 设为结束</button>
             </div>
             <button type="button" class="dw-mode" id="dwVidClear" title="清空框选"><span class="dw-ico">🗑</span>清空框选</button>
-          </div>
-
-          <div class="dw-vid-filmstrip-wrap" id="dwVidFilmstripWrap" hidden>
-            <img id="dwVidFilmstrip" class="dw-vid-filmstrip" alt="视频时间线" />
-            <div class="dw-vid-filmstrip-cursor" id="dwVidFilmstripCursor" hidden></div>
           </div>
           </div>
           <div class="dw-result" id="dwVidResult" hidden>
