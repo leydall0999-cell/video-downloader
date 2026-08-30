@@ -467,7 +467,9 @@
     dwVidOut: $('dwVidOut'),
     dwVidOrig: $('dwVidOrig'),
     dwVidPlayer: $('dwVidPlayer'),
-    dwVidPlayOverlay: $('dwVidPlayOverlay'),
+    dwVidShroud: $('dwVidShroud'),
+    dwVidShroudImg: $('dwVidShroudImg'),
+    dwVidShroudPlay: $('dwVidShroudPlay'),
     dwVidTranscoding: $('dwVidTranscoding'),
     dwVidEmpty: $('dwVidEmpty'),
     dwVidCapOverlay: $('dwVidCapOverlay'),
@@ -3379,19 +3381,27 @@
 
   // 转码播放源：任意格式 → 服务端 H.264+AAC → <video> 播放（绕开 WKWebView codec 限制）
   // 同文件（name+size）缓存 preview_id，避免重复上传与转码
+  //
+  // paused 状态策略（取代之前的 muted autoplay trick + e0f2d0c overlay button）：
+  //   video 元素不带 controls 属性 → wkwebview 不渲染 native UI（中央 ▶ 巨三角不会存在）
+  //   paused 状态：video.hidden=true → 整个 video 不绘制
+  //                    shroud div 显示（满铺 wrap + 首帧图 + 中央 64×64 紫底 ▶）
+  //                    click shroud ▶ → video.play() → video.hidden=false / shroud.hidden=true
+  //   playing 状态：video 显示，shroud 隐藏
+  //   pause / ended → 回到 shroud 模式
   const dwVidMarkPlayable = (url, previewId) => {
     const base = `${window.VDL_API_BASE || ''}`;
-    // 把已渲出来的首帧图（dwVidThumb 引用同一 blob，blob URL 在 DW_JOBS 续跑前都有效）
-    // 同步作为 <video poster>：转码完成但浏览器元数据/首帧未解码时显示这张图，
-    // 而不是默认的「黑底+ ▶ 按钮占位控件」，视觉上连贯、首帧静止。
     const thumbSrc = el.dwVidThumb && el.dwVidThumb.src;
-    if (thumbSrc && !el.dwVidPlayer.poster) {
-      el.dwVidPlayer.poster = thumbSrc;
-    }
     el.dwVidPlayer.src = `${base}${url || '/api/dw/video/preview/' + previewId}`;
-    el.dwVidPlayer.hidden = false;
+    // paused 状态：完全隐藏 video，让 shroud div 接管画面。
+    // 用户点 shroud ▶ 按钮 → play() → wired handler 把 video hidden=false。
+    el.dwVidPlayer.hidden = true;
+    if (el.dwVidShroud) {
+      el.dwVidShroud.hidden = false;
+      if (el.dwVidShroudImg && thumbSrc) el.dwVidShroudImg.src = thumbSrc;
+    }
     el.dwVidTranscoding.hidden = true;
-    // 把整个画布标记为可播放（让 img 让位给 video），同时露出底部控件 + filmstrip
+    // 把整个画布标记为可播放（让 img 让位给 video / shroud），同时露出 filmstrip
     const wrap = el.dwVidPlayer && el.dwVidPlayer.parentElement;
     if (wrap) wrap.classList.add('is-playable');
     if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = false;
@@ -3406,61 +3416,32 @@
     };
     el.dwVidPlayer.addEventListener('loadedmetadata', onLoaded);
     if (!el.dwVidStatus.textContent.includes('失败')) el.dwVidStatus.textContent = '';
-    // —— macOS WKWebView 中央 ▶ overlay 解决方案 ——
-    // 直接 pause() + currentTime=0 会让 WKWebView 在画面中央强制显示一个 native ▶
-    // overlay（CSS selector ::-webkit-media-controls-overlay-play-button { display:none!important }
-    // 几乎从不响应）。macOS Safari/WKWebView 的标准 trick：muted autoplay → 立即 pause +
-    // currentTime=0，引擎会认为「已播过」，paused 状态不再触发中央 ▶ overlay。
-    // mute 是 autoplay 必需条件（系统偏好若关 muted autoplay 则 play() 会 reject），
-    // WKWebView 默认允许 muted autoplay，无需用户手势。
-    //
-    // 失败兜底：若 autoplay 被拒 → 强制 pause + 显示 e0f2d0c 阶段引入的自定义 overlay
-    // 按钮（用户点击 → video.play()）。
-    try {
-      el.dwVidPlayer.muted = true;
-      // 默认隐藏 overlay（如果 autoplay 成功，不需要它挡 native ▶）
-      if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = true;
-      const p = el.dwVidPlayer.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          // autoplay 成功 → 立即 pause + 回到首帧 — wkwebview 将不显示中央 ▶ overlay
-          try {
-            el.dwVidPlayer.pause();
-            el.dwVidPlayer.currentTime = 0;
-          } catch (_e2) { /* noop */ }
-        }).catch(() => {
-          // muted autoplay 被拒（极少见；系统在「不允许自动播放」被设置）→ 兜底显示 overlay
-          try { el.dwVidPlayer.pause(); el.dwVidPlayer.currentTime = 0; } catch (_e3) { /* */ }
-          if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = false;
-        });
-      } else {
-        // 极老浏览器没 Promise — 同步播放完成后强制暂停
-        setTimeout(() => {
-          try { el.dwVidPlayer.pause(); el.dwVidPlayer.currentTime = 0; } catch (_e4) { /* */ }
-        }, 50);
-      }
-    } catch (_e) {
-      // 进入 paused 兜底
-      try { el.dwVidPlayer.pause(); el.dwVidPlayer.currentTime = 0; } catch (_e5) { /* */ }
-      if (el.dwVidPlayOverlay) el.dwVidPlayOverlay.hidden = false;
-    }
   };
 
-  // 「play / pause / ended」同步 overlay 显示状态 — 只绑一次（element static）
-  if (el.dwVidPlayer && el.dwVidPlayOverlay && !el.dwVidPlayer._vdOverlayWired) {
-    const overlay = el.dwVidPlayOverlay;
+  // shroud / video 状态切换：play → video 显示；pause/ended → video 隐藏、shroud 显示
+  // 用户点 shroud 中央 ▶ → video.play()
+  if (el.dwVidPlayer && el.dwVidShroud && !el.dwVidPlayer._vdShroudWired) {
     const v = el.dwVidPlayer;
-    v.addEventListener('play', () => { overlay.hidden = true; });
+    const shroud = el.dwVidShroud;
+    if (el.dwVidShroudPlay) {
+      el.dwVidShroudPlay.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        try { v.play(); } catch (_e) { /* 用户尚未手势等 */ }
+      });
+    }
+    v.addEventListener('play', () => {
+      v.hidden = false;
+      if (shroud) shroud.hidden = true;
+    });
     v.addEventListener('pause', () => {
-      // ended / seeking 暂停时也把 ▶ 露出来，等用户主动触发再 play
-      overlay.hidden = false;
+      v.hidden = true;
+      if (shroud) shroud.hidden = false;
     });
-    v.addEventListener('ended', () => { overlay.hidden = false; });
-    overlay.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      try { v.play(); } catch (_e) { /* 用户尚未手势等 */ }
+    v.addEventListener('ended', () => {
+      v.hidden = true;
+      if (shroud) shroud.hidden = false;
     });
-    el.dwVidPlayer._vdOverlayWired = true;
+    el.dwVidPlayer._vdShroudWired = true;
   }
 
   const dwVidStartPreviewTranscode = async (f) => {

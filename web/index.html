@@ -675,12 +675,18 @@
             <img id="dwVidThumb" alt="首帧预览" class="dw-vid-thumb" />
             <svg id="dwVidSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg"></svg>
             <div class="dw-vid-transcoding" id="dwVidTranscoding" hidden>转码中…<span class="dw-vid-spinner" aria-hidden="true"></span></div>
-            <video id="dwVidPlayer" controls preload="metadata" playsinline hidden></video>
-            <!-- 自定义 ▶ 覆盖层：盖住 WKWebView paused 状态原生的中央 ▶ overlay（CSS 选择器
-                 在 macOS WKWebView 几乎从不响应 display:none !important）。自定义 div 用
-                 z-index 10 浮在 video 之上，click → video.play()。需要「再点暂停」时
-                 视频原生控件底栏 ▶/⏸ 仍在，控件底栏不受此 overlay 影响。 -->
-            <button type="button" class="dw-vid-play-overlay" id="dwVidPlayOverlay" hidden aria-label="播放预览"><svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"></path></svg></button>
+            <!-- 核心：video 不带 controls 属性（带 controls 时 wkwebview paused 会强制显示
+                 中央 ▶ 巨三角，CSS 选择器 hide 无效，muted autoplay trick 在 macOS 不稳定）。
+                 不带 controls → wkwebview 不渲染任何 native UI，巨三角彻底不会出现。
+
+                 paused 状态完全由 shroud div 接管：满铺 wrap + 显示首帧图 + 中央 ▶ 按钮。
+                 playing 时 video 显示、shroud 隐藏。pause/ended 回到 shroud。
+                 由 JS 在 dwVidMarkPlayable 中切换两组元素的 hidden。 -->
+            <video id="dwVidPlayer" preload="metadata" playsinline hidden></video>
+            <div class="dw-vid-shroud" id="dwVidShroud" hidden>
+              <img id="dwVidShroudImg" alt="视频首帧" />
+              <button type="button" class="dw-vid-shroud-play" id="dwVidShroudPlay" aria-label="播放预览"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"></path></svg></button>
+            </div>
           </div>
           <div class="dw-toolbar">
             <div class="dw-toolgroup" role="group" aria-label="选区操作">
