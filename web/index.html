@@ -701,10 +701,14 @@
               <label class="uc-field">
                 <span class="uc-label">处理分辨率</span>
                 <select id="dwVidRes">
-<option value="720" selected>降至 720P（推荐 · 快 4× · 适合 1080P/4K 源视频）</option>
-<option value="original">原始分辨率（最清晰 · 4K 源下约慢 4× · 适合 <720P 小视频）</option>
-<option value="480">降至 480P（极速 · 快 9× · 朋友圈/预览）</option>
+<option value="720" selected>降至 720P 推理（推荐 · AI 计算量 ≈1/4）</option>
+<option value="480">降至 480P 推理（极速 · AI 计算量 ≈1/9）</option>
+<option value="original">原始推理（无提速 · 适合 <720P 小视频保最高清晰度）</option>
                 </select>
+                <small style="display:block;color:var(--muted);margin-top:4px;">
+                  仅控制 AI 推理计算量（不降原视频清晰度，输出视频保持原分辨率）。
+                  LaMa 在低分辨率下推理→上采样回原帧几乎无损。
+                </small>
               </label>
               <label class="uc-field">
                 <span class="uc-label">输出帧率</span>

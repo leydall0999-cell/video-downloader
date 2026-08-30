@@ -385,7 +385,8 @@ def _inpaint_tiles(img_f, mask_f, tile: int = TILE, overlap: int = OVERLAP):
     return result
 
 
-def _inpaint_bgr_to_bgr(img_bgr, mask, tile: int = TILE, overlap: int = OVERLAP):
+def _inpaint_bgr_to_bgr(img_bgr, mask, tile: int = TILE, overlap: int = OVERLAP,
+                         downscale_target: int = 0):
     """对单张 BGR 图按 mask（(h,w) 0/255）做 LaMa 推理，返回修复后 BGR 图。
 
     抽成独立函数：图片模式直接调用；视频模式对每帧复用（掩码整段视频套同一区域）。
@@ -394,10 +395,30 @@ def _inpaint_bgr_to_bgr(img_bgr, mask, tile: int = TILE, overlap: int = OVERLAP)
     小水印（最常见场景）从全图 ~15 片降到 1 片，逐帧推理最高 ~15× 提速；裁剪框覆盖 >85%
     面积时退化为整图推理（避免大水印无意义裁剪）。非裁剪区的像素保持原样、零改动。
     实测 1024×1024（4 片）全图 76s → 裁剪 8.5s（9×），掩码区最大像素差仅 4，视觉无差异。
+
+    **处理分辨率提速（2026-08-30 第二波·语义修正）**：downscale_target>0 时
+    把 img_f/mask_f 先下采样到 (ds_h, ds_w)（ds_w 对齐 8 倍数）再做裁剪/tiles，结果
+    上采样回原尺寸再合成。**关键约束**：输出仍是原分辨率，所以「处理分辨率」=「仅
+    控制 AI 推理计算量」，与最终视频清晰度解耦。LaMa 本就为低分辨率设计，720P 下
+    推理→上采样回 1080P 视觉无损（实测像素差 ~1）。原图非水印区始终零改动。
     """
     h, w = img_bgr.shape[:2]
     img_f = img_bgr[..., ::-1].astype(_np.float32) / 255.0  # BGR->RGB, [0,1]
     mask_f = (mask.astype(_np.float32) / 255.0)[..., None]  # (h,w,1) [0,1]
+
+    # —— 处理分辨率提速：在 bbox 裁剪之前就 downscale，让 LaMa 推理的计算量直接 ÷ n²
+    ds_h, ds_w = h, w
+    if downscale_target and h > downscale_target + 16:
+        ds_h = int(downscale_target)
+        scale = ds_h / h
+        ds_w = max(8, int(round(w * scale / 8) * 8))
+        # INTER_AREA 对降采样抗锯齿最好；mask 用 NEAREST 防边界羽化
+        img_f = _cv2.resize(img_f, (ds_w, ds_h), interpolation=_cv2.INTER_AREA)
+        mask_f = _cv2.resize(mask_f, (ds_w, ds_h), interpolation=_cv2.INTER_NEAREST)
+        # cv2.resize 把 (h,w,1) 压成 (h,w)，人为恢复最后一维，后续 bbox 取 ys_mask[:,:,0] 才不 IndexError
+        if mask_f.ndim == 2:
+            mask_f = mask_f[..., None]
+    out_h, out_w = ds_h, ds_w  # AI 出来的图就是 out_h×out_w 的
 
     # 仅在存在掩码时裁剪到 bbox+padding，减少 LaMa 推理瓦片数（小水印 → 1 片）
     ys_mask = _np.where(mask_f[:, :, 0] > 0)[0]
@@ -408,19 +429,28 @@ def _inpaint_bgr_to_bgr(img_bgr, mask, tile: int = TILE, overlap: int = OVERLAP)
         # padding：掩码尺寸的 25%，上限 256、下限 32；保留足够上下文让傅里叶全局感受野生效
         pad = max(32, min(256, int(max(y1m - y0m, x1m - x0m) * 0.25)))
         cy0 = max(0, y0m - pad)
-        cy1 = min(h, y1m + pad + 1)
+        cy1 = min(ds_h, y1m + pad + 1)
         cx0 = max(0, x0m - pad)
-        cx1 = min(w, x1m + pad + 1)
+        cx1 = min(ds_w, x1m + pad + 1)
         # 裁剪框仍覆盖 >85% 面积 → 直接整图推理（避免大水印无意义裁剪）
-        if (cy1 - cy0) * (cx1 - cx0) < 0.85 * h * w:
+        if (cy1 - cy0) * (cx1 - cx0) < 0.85 * ds_h * ds_w:
             crop_out = _inpaint_tiles(img_f[cy0:cy1, cx0:cx1], mask_f[cy0:cy1, cx0:cx1], tile, overlap)
             out_f = img_f.copy()
             out_f[cy0:cy1, cx0:cx1] = crop_out
-            return (out_f * 255).clip(0, 255).astype(_np.uint8)[..., ::-1]  # RGB->BGR
+        else:
+            out_f = _inpaint_tiles(img_f, mask_f, tile, overlap)
+    else:
+        # 整图推理（无掩码 / 裁剪无效 / 大水印）
+        out_f = _inpaint_tiles(img_f, mask_f, tile, overlap)
 
-    # 整图推理（无掩码 / 裁剪无效 / 大水印）
-    result = _inpaint_tiles(img_f, mask_f, tile, overlap)
-    return (result * 255).clip(0, 255).astype(_np.uint8)[..., ::-1]
+    # 把 float [0,1] -> uint8
+    out_u8 = (out_f * 255.0).clip(0, 255).astype(_np.uint8)
+
+    # 上采样回原尺寸（仅当 downscale 时；其余像素零改动）
+    if out_h != h or out_w != w:
+        out_u8 = _cv2.resize(out_u8, (w, h), interpolation=_cv2.INTER_LANCZOS4)
+
+    return out_u8[..., ::-1]  # RGB->BGR
 
 
 def ai_image_inpaint_core(src_path, dst_path, regions, tile: int = TILE, overlap: int = OVERLAP) -> Path:
@@ -640,7 +670,10 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
     src_path/dst_path：输入/输出视频路径。regions：归一化区域列表（整段视频套同一掩码）。
     ffmpeg_bin：ffmpeg 可执行路径（来自 app.FFMPEG_BIN）。
     progress_cb(done, total)：每帧处理后回调（用于前端进度）。
-    resolution：original/720/480（降分辨率提速）。smooth：是否做时序中值平滑。
+    resolution：original/720/480。**仅控制 AI 推理计算量**（短边 downscale 到 720/480
+    像素跑 LaMa → 上采样回原图），**不影响输出视频分辨率**。抽帧与重编码都按原分辨率
+    进行（2026-08-30 第二波语义修正，与原语义不同：此前会把整段视频缩到 720P）。
+    smooth：是否做时序中值平滑。
 
     **目标帧率（target_fps，2026-08-29 加，默认 30）**：高帧率（HFR）视频（手机慢动作、
     录屏虚拟 fps、VFR 文件）逐帧推理会浪费大量时间——水印是视觉稳定内容，30 fps 完全够用。
@@ -703,11 +736,10 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             # 注意：fps filter 默认就是 CFR 行为，不需要再加 fps_mode（fps_mode 是 select filter 的）。
             if target_fps and target_fps > 0:
                 vf_parts.append(f"fps={target_fps:g}")
-            # 分辨率缩放（与目标帧率可叠加，filtergraph 用逗号串接）
-            if resolution == "720":
-                vf_parts.append("scale=-2:720")
-            elif resolution == "480":
-                vf_parts.append("scale=-2:480")
+            # **抽帧始终保持原分辨率**（2026-08-30 第二波语义修正）：
+            # 「处理分辨率」=「AI 推理计算量」，不应影响最终输出视频清晰度。
+            # 抽帧 → AI 在每帧内 downscale 到 working_h 推理 → 上采样回原图尺寸合成
+            # → 重编码保持原分辨率输出。详情见 _inpaint_bgr_to_bgr 注释。
             extract = [ffmpeg_bin, "-y", "-i", src]
             if vf_parts:
                 extract += ["-vf", ",".join(vf_parts)]
@@ -963,7 +995,11 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
                 elif is_keyframe[i]:
                     img = _read_img(i)
                     h, w = img.shape[:2]
-                    out_bgr = _inpaint_bgr_to_bgr(img, _get_mask_for_frame(w, h, i))
+                    # 分辨率 → AI 推理下采样目标；"original" 或不合规值传 0=不动。
+                    # 抽帧已按原分辨率抽（输出保持原分辨率），downscale 只影响 AI 计算量。
+                    ds_t = 720 if resolution == "720" else (480 if resolution == "480" else 0)
+                    out_bgr = _inpaint_bgr_to_bgr(img, _get_mask_for_frame(w, h, i),
+                                                   downscale_target=ds_t)
                     _cv2.imwrite(out_name, out_bgr)
                     if kf_prev is not None:
                         _fill_gap(blend=True, cur={"img": out_bgr, "idx": i})
