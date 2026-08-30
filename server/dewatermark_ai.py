@@ -808,10 +808,12 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
         _mask_cache = {}
 
         def _region_sig(regs):
+            # 量化到 1% 步长（而非 0.1%）：相邻帧 bbox 漂移 <0.5% 视为相同，触发关键帧的概率大幅下降，
+            # 飘动水印（最常见场景）能真正享受 stride 间隔 4× 提速。否则每帧 sig 不同 → 全部成关键帧 → 没有稀疏。
             parts = []
             for r in regs:
-                parts.append((round(r["x"] * 1000), round(r["y"] * 1000),
-                              round(r["w"] * 1000), round(r["h"] * 1000)))
+                parts.append((round(r["x"] * 100), round(r["y"] * 100),
+                              round(r["w"] * 100), round(r["h"] * 100)))
             parts.sort()
             return tuple(parts)
 

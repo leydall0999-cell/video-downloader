@@ -3959,6 +3959,7 @@
       const data = await request('/api/dw/video', { method: 'POST', body: form });
       const jobId = data.job_id;
       dwVidCurrentJob = jobId;
+      window._dwPrev = null;  // 重置 ETA 滑窗
       el.dwVidRunCtrls.hidden = false;
       el.dwVidPause.hidden = false;
       el.dwVidResume.hidden = true;
@@ -3974,8 +3975,9 @@
             // 按后端 phase 给出更精确的阶段提示，消除「长时间无反馈」的假死感。
             // inpainting 阶段同时显示「总帧进度」与「实际推理帧数」，用"·"隔开避免堆叠成
             // "10/2258/81 帧" 那种三数字乱炖。例如：
-            //   "正在逐帧去除水印（10/2258 帧 · 81 帧需 AI 推理）"
+            //   "正在逐帧去除水印（10/2258 帧 · 81 帧需 AI 推理 · 约还需 4 分钟）"
             //   — done/total ＝ 全视频处理进度；"X 帧需 AI" ＝ 真正花算力的子集（区间内）
+            //   ETA 用滑动平均（最近 2 个采样间隔）估算，比瞬时更稳。
             const _inpaintTotal = parseInt(st.inpaint_count || '0', 10) || 0;
             const _inferTag = _inpaintTotal > 0
               ? ` · ${_inpaintTotal} 帧需 AI 推理`
@@ -3984,15 +3986,34 @@
             const _progStr = (st.progress || '0').toString();
             const _done = parseInt(_progStr.split('/')[0], 10) || 0;
             const _total = parseInt(_progStr.split('/')[1], 10) || _done;
+            // ETA：2 帧外的滑动平均（避免单次波动的尖刺）
+            const _now = Date.now();
+            const _etaTag = (() => {
+              if (!_total || _done <= 0 || _done >= _total) return '';
+              if (window._dwPrev == null || window._dwPrev.done !== _done) {
+                window._dwPrev = { done: _done, t: _now, alpha: 0.6 };
+                return '';   // 第一次刚拿到 done，留一格不显示避免飘
+              }
+              const dt = (_now - window._dwPrev.t) / 1000;
+              if (dt < 0.5) return '';   // < 0.5s 的采样太抖
+              const rate = (_done - window._dwPrev.done) / dt;   // frames/s
+              if (rate <= 0) return '';
+              const remain = Math.max(0, _total - _done);
+              const sec = Math.round(remain / rate);
+              window._dwPrev = { done: _done, t: _now, rate };
+              if (sec < 5) return ' · 即将完成';
+              if (sec < 60) return ` · 约还需 ${sec} 秒`;
+              return ` · 约还需 ${Math.ceil(sec / 60)} 分钟`;
+            })();
             const _pm = {
               loading_model: '正在加载 AI 模型（首次较慢，请稍候）…',
               extracting_frames: '正在抽取视频帧…',
-              inpainting: `正在逐帧去除水印（${st.progress || '0'} 帧${_inferTag}）`,
+              inpainting: `正在逐帧去除水印（${st.progress || '0'} 帧${_inferTag}${_etaTag}）`,
               encoding: '正在重新编码输出视频…',
             };
             const _statusText = _pm[st.phase] || (
               st.progress
-                ? `去水印处理中… 已处理 ${st.progress} 帧${_inferTag}`
+                ? `去水印处理中… 已处理 ${st.progress} 帧${_inferTag}${_etaTag}`
                 : '视频去水印处理中（逐帧推理，请稍候）…'
             );
             el.dwVidStatus.textContent = _statusText;
@@ -4053,6 +4074,7 @@
   });
   if (el.dwVidResume) el.dwVidResume.addEventListener('click', async () => {
     if (!dwVidCurrentJob) return;
+    window._dwPrev = null;  // 续跑后 ETA 滑窗重置（剩余时间按续跑后重算）
     el.dwVidStatus.textContent = '正在继续处理…';
     try { await request('/api/dw/video/' + dwVidCurrentJob + '/resume', { method: 'POST' }); }
     catch (_e) { el.dwVidStatus.textContent = '继续请求失败，请重试'; }
