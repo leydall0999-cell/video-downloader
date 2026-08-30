@@ -20,6 +20,26 @@ if ! mkdir "$BUILD_LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$BUILD_LOCK" 2>/dev/null || true' EXIT
 
+# 找 node：先 PATH，再 workbuddy 托管（按版本号取最新），最后常见位置。
+# 不在脚本里硬写绝对路径，跨机器/跨用户都能跑；找不到则明确报错而不是静默回退。
+NODE=""
+NODE="$(command -v node 2>/dev/null || true)"
+if [ -z "$NODE" ] && [ -d "$HOME/.workbuddy/binaries/node/versions" ]; then
+  for d in $(ls -1 "$HOME/.workbuddy/binaries/node/versions" 2>/dev/null | sort -V); do
+    cand="$HOME/.workbuddy/binaries/node/versions/$d/bin/node"
+    [ -x "$cand" ] && NODE="$cand" && break
+  done
+fi
+if [ -z "$NODE" ]; then
+  for cand in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+    [ -x "$cand" ] && NODE="$cand" && break
+  done
+fi
+if [ -z "$NODE" ]; then
+  echo "❌ 找不到 node，JS 语法门禁无法执行。请安装 node 或将 node 加入 PATH 后重试。" >&2
+  exit 1
+fi
+
 PIP_INDEX="https://mirrors.aliyun.com/pypi/simple/"
 VENV="$REPO/.build_venv"
 
@@ -218,7 +238,7 @@ echo "▶ JS 语法门禁 (node --check web/*.js)..."
 JS_FAIL=0
 for f in "$REPO"/web/*.js; do
   if [ -f "$f" ]; then
-    if ! node --check "$f" 2>"$REPO"/.jscheck.err; then
+    if ! "$NODE" --check "$f" 2>"$REPO"/.jscheck.err; then
       echo "❌ JS 语法错误: $f"; cat "$REPO"/.jscheck.err; JS_FAIL=1
     fi
   fi
