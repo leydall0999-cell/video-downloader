@@ -2357,29 +2357,30 @@ img { max-width: 100%; display: block; }
 
 /* 解说类型：卡片式四选一，信息更醒目 */
 /* 解说类型：自定义下拉（紫色粗边圆角 + 展开堆叠列表） */
-.com-mode-dropdown { position: relative; margin-top: .35rem; }
+.com-mode-dropdown { position: relative; margin-top: .35rem; max-width: 380px; }
 .com-mode-dropdown-toggle {
   display: flex; align-items: center; justify-content: space-between; gap: .6rem;
-  width: 100%; min-height: 42px; padding: .55rem 1rem;
+  width: 100%; min-height: 40px; padding: .5rem .75rem;
   background: #fff;
-  border: 1.5px solid var(--brand); border-radius: 999px;
-  font-size: .95rem; font-weight: 600; color: var(--brand-strong);
+  border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+  font-size: .92rem; font-weight: 500; color: var(--text);
   cursor: pointer; text-align: left;
   transition: border-color .18s, box-shadow .18s, background .18s;
 }
-.com-mode-dropdown-toggle:hover { background: var(--brand-soft, #eef2ff); }
+.com-mode-dropdown-toggle:hover { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
 .com-mode-dropdown-toggle[aria-expanded="true"] {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
   background: #fff;
 }
 .com-mode-dropdown-toggle[aria-expanded="true"] .com-mode-dropdown-caret { transform: rotate(180deg); }
-.com-mode-dropdown-caret { font-size: .8rem; transition: transform .18s; color: var(--brand-strong); }
+.com-mode-dropdown-caret { font-size: .8rem; transition: transform .18s; color: var(--text-mute); }
 .com-mode-dropdown-panel {
   position: absolute; left: 0; right: 0; top: calc(100% + .4rem); z-index: 50;
-  background: #fff; border: 1.5px solid var(--brand); border-radius: var(--radius-md);
-  box-shadow: 0 6px 20px rgba(79, 70, 229, .15);
+  background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .12);
   padding: .35rem; max-height: 320px; overflow-y: auto;
+  max-width: 380px;
 }
 /* 原生 radio/checkbox 组已转下拉，原生控件仅保留在 DOM 供兼容读取 */
 .com-native-hidden { display: none !important; }
