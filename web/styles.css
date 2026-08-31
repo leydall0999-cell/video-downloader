@@ -2171,6 +2171,16 @@ img { max-width: 100%; display: block; }
 }
 .com-opt-row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
 
+/* 成片增强区块内部控件（BGM / 字幕样式 / 解说长度） */
+.com-bgm-vol { display: inline-flex; align-items: center; gap: .35rem; }
+.com-bgm-vol input[type="range"] { width: 120px; }
+.com-opt-row-sub { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center; }
+.com-sub-item { display: inline-flex; align-items: center; gap: .3rem; font-size: .82rem; color: var(--text-2, #555); }
+.com-sub-item input[type="range"] { width: 96px; }
+.com-sub-item input[type="color"] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
+.com-sub-pos { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--text-2, #555); }
+.com-sub-pos label { display: inline-flex; align-items: center; gap: .2rem; }
+
 /* 分段（胶囊）控件：radio 透明铺满，span 承载视觉 */
 .com-opts .com-mode-option {
   position: relative; display: inline-block; flex: 0 0 auto; cursor: pointer;

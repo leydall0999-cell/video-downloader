@@ -930,7 +930,11 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
                              web: bool = False, one_click: bool = False, mode: str | None = None,
                              style: str = "none", vision: bool = False,
                              intro_sec: float | None = None, outro_sec: float | None = None,
-                             drama_start_sec: float | None = None, drama_end_sec: float | None = None) -> list:
+                             drama_start_sec: float | None = None, drama_end_sec: float | None = None,
+                             bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18,
+                             subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF",
+                             subtitle_border: float = 1.0, subtitle_pos: str = "bottom",
+                             max_chars: int = 0) -> list:
     """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。"""
     args = ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
     if style and style != "none":
@@ -960,6 +964,24 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args.append("--one-click")
     if mode:  # 旧版兼容字段，仅当显式传了才带
         args += ["--mode", mode]
+    # ===== 吸收 NarratoAI：BGM 配乐 / 字幕样式 / 解说字数 =====
+    if bgm and bgm != "off":
+        if bgm == "user" and bgm_file:
+            args += ["--bgm", "user", "--bgm-file", bgm_file]
+        elif bgm in ("soft", "light", "epic"):
+            args += ["--bgm", bgm]
+            if bgm_volume and abs(bgm_volume - 0.18) > 1e-6:
+                args += ["--bgm-volume", str(bgm_volume)]
+    if subtitle_size and abs(subtitle_size - 1.0) > 1e-6:
+        args += ["--subtitle-size", str(subtitle_size)]
+    if subtitle_color and subtitle_color.upper() != "FFFFFF":
+        args += ["--subtitle-color", subtitle_color]
+    if subtitle_border and abs(subtitle_border - 1.0) > 1e-6:
+        args += ["--subtitle-border", str(subtitle_border)]
+    if subtitle_pos and subtitle_pos != "bottom":
+        args += ["--subtitle-pos", subtitle_pos]
+    if max_chars and max_chars > 0:
+        args += ["--max-chars", str(max_chars)]
     return args
 
 
@@ -1038,7 +1060,11 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         one_click=one_click, mode=mode,
                                         style=style, vision=vision,
                                         intro_sec=intro_sec, outro_sec=outro_sec,
-                                        drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec)
+                                        drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
+                                        bgm=bgm, bgm_file=bgm_file, bgm_volume=bgm_volume,
+                                        subtitle_size=subtitle_size, subtitle_color=subtitle_color,
+                                        subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
+                                        max_chars=max_chars)
         if edit_only:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker",
@@ -1683,7 +1709,7 @@ class CommentaryRequest(BaseModel):
     drama_end_sec: float | None = Field(default=None, description="片尾开始时间秒数(绝对时间，优先级高于outro_sec)")
     web: bool = Field(default=False, description="联网搜索资料辅助发挥")
     one_click: bool = Field(default=False, description="一键生成: 全片深入解说+AI联网+片头插精彩片段")
-    style: str = Field(default="none", description="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌")
+    style: str = Field(default="none", description="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌; short_drama=短剧解说(网感快节奏); movie=影视深度解说")
     vision: bool = Field(default=False, description="视觉理解：抽帧调多模态模型补全无声/纯画面段落（需配置 VDL_VISION_*）")
     tts_provider: str = Field(default="", max_length=32, description="TTS 服务商: 空=默认 edge; indextts2=本地 IndexTTS2 语音克隆(需先起推理服务); minimax/siliconflow=云端")
     correct_transcript: str = Field(default="", max_length=32, description="转写稿 ASR 校正: '0'=关闭(省 token); 空=默认开启(LLM 修正同音错字/专有名词)")
@@ -1692,6 +1718,15 @@ class CommentaryRequest(BaseModel):
     export_jianying: str = Field(default="", max_length=2048,
                                  description="导出剪映草稿目录: 非空时成片生成后再导出剪映可编辑草稿"
                                              "(视频轨+配音轨+字幕轨), 可在剪映里二次精修; 空=不导出")
+    # ===== 吸收 NarratoAI 优点的增强项 =====
+    bgm: str = Field(default="off", description="BGM 自动配乐: off=关闭; soft=柔和氛围; light=轻快; epic=恢弘; user=本地文件(配 bgm_file)")
+    bgm_file: str = Field(default="", max_length=2048, description="user 模式下的本地 BGM 文件路径(mp3/wav)")
+    bgm_volume: float = Field(default=0.18, ge=0.02, le=0.6, description="BGM 音量 0.02~0.6")
+    subtitle_size: float = Field(default=1.0, ge=0.6, le=1.6, description="字幕字号倍率 0.6~1.6")
+    subtitle_color: str = Field(default="FFFFFF", description="字幕颜色 hex(如 FFFFFF 白 / FFD700 金 / FF4500 橙)")
+    subtitle_border: float = Field(default=1.0, ge=0.3, le=3.0, description="字幕描边粗细倍率 0.3~3.0")
+    subtitle_pos: str = Field(default="bottom", description="字幕位置: bottom=底部; center=画面中部")
+    max_chars: int = Field(default=0, ge=0, description="解说稿总长度上限(字)，0=不限制")
 
 
 class ScriptUpdateRequest(BaseModel):

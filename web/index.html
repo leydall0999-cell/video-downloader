@@ -1163,8 +1163,51 @@
           <label class="com-mode-option"><input type="radio" name="comStyle" value="suspense" /><span>悬疑</span></label>
           <label class="com-mode-option"><input type="radio" name="comStyle" value="healing" /><span>治愈</span></label>
           <label class="com-mode-option"><input type="radio" name="comStyle" value="sarcastic" /><span>毒舌</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="short_drama" /><span>短剧解说</span></label>
+          <label class="com-mode-option"><input type="radio" name="comStyle" value="movie" /><span>影视深度</span></label>
         </div>
         <p class="com-style-hint" id="comStyleHint">默认风格：音色由下方「全局配音」决定。</p>
+      </div>
+    </div>
+
+    <!-- 成片增强：吸收 AI 解说体验优点（BGM / 字幕样式 / 解说长度） -->
+    <div class="com-opts com-enhance-section">
+      <div class="com-opt-block com-opt-block-full">
+        <div class="com-opt-title">BGM 自动配乐</div>
+        <div class="com-opt-row">
+          <select id="comBgm" class="com-select">
+            <option value="off">关闭</option>
+            <option value="soft">柔和氛围</option>
+            <option value="light">轻快</option>
+            <option value="epic">恢弘</option>
+          </select>
+          <div class="com-bgm-vol" id="comBgmVolWrap" hidden>
+            <input type="range" id="comBgmVolume" min="0.02" max="0.6" step="0.01" value="0.18" />
+            <span class="com-vol-val" id="comBgmVolumeVal">18%</span>
+          </div>
+        </div>
+        <span class="com-retain-hint">自动铺一层氛围音乐，音量压低不抢旁白（自包含合成，无需素材）</span>
+      </div>
+      <div class="com-opt-block com-opt-block-full">
+        <div class="com-opt-title">字幕样式</div>
+        <div class="com-opt-row com-opt-row-sub">
+          <label class="com-sub-item">字号 <input type="range" id="comSubSize" min="0.6" max="1.6" step="0.05" value="1.0" /><span id="comSubSizeVal">1.0×</span></label>
+          <label class="com-sub-item">描边 <input type="range" id="comSubBorder" min="0.3" max="3.0" step="0.1" value="1.0" /><span id="comSubBorderVal">1.0×</span></label>
+          <label class="com-sub-item">颜色 <input type="color" id="comSubColor" value="#FFFFFF" /></label>
+          <span class="com-sub-pos">位置
+            <label><input type="radio" name="comSubPos" value="bottom" checked />底部</label>
+            <label><input type="radio" name="comSubPos" value="center" />居中</label>
+          </span>
+        </div>
+        <span class="com-retain-hint">调字号/描边/颜色/位置（竖屏短视频建议「居中」避免越界）</span>
+      </div>
+      <div class="com-opt-block com-opt-block-full">
+        <div class="com-opt-title">解说长度（字数上限）</div>
+        <div class="com-opt-row">
+          <input type="range" id="comMaxChars" min="0" max="3000" step="100" value="0" />
+          <span class="com-vol-val" id="comMaxCharsVal">不限</span>
+        </div>
+        <span class="com-retain-hint">0=不限制；短视频想短就调小（如 600），课程想长就调大</span>
       </div>
     </div>
 

@@ -110,6 +110,10 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style,
+                    bgm=payload.bgm, bgm_file=payload.bgm_file, bgm_volume=payload.bgm_volume,
+                    subtitle_size=payload.subtitle_size, subtitle_color=payload.subtitle_color,
+                    subtitle_border=payload.subtitle_border, subtitle_pos=payload.subtitle_pos,
+                    max_chars=payload.max_chars,
                     export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
 
@@ -480,6 +484,10 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style,
+                    bgm=payload.bgm, bgm_file=payload.bgm_file, bgm_volume=payload.bgm_volume,
+                    subtitle_size=payload.subtitle_size, subtitle_color=payload.subtitle_color,
+                    subtitle_border=payload.subtitle_border, subtitle_pos=payload.subtitle_pos,
+                    max_chars=payload.max_chars,
                     export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
 
@@ -558,7 +566,11 @@ def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
 
 @router.post("/api/commentary/render/{job_id}")
 def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form(""),
-                 export_jianying: str = app.Form("")) -> dict:
+                 export_jianying: str = app.Form(""),
+                 bgm: str = app.Form("off"), bgm_volume: float = app.Form(0.18),
+                 subtitle_size: float = app.Form(1.0), subtitle_color: str = app.Form("FFFFFF"),
+                 subtitle_border: float = app.Form(1.0), subtitle_pos: str = app.Form("bottom"),
+                 max_chars: int = app.Form(0)) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
     剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
@@ -634,6 +646,10 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=title,
                     src_filename=src_filename,
+                    bgm=bgm, bgm_file="", bgm_volume=bgm_volume,
+                    subtitle_size=subtitle_size, subtitle_color=subtitle_color,
+                    subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
+                    max_chars=max_chars,
                     export_jianying=export_jianying)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 

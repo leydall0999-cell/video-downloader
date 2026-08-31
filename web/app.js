@@ -320,6 +320,16 @@
     comTtsStatusBar: $('comTtsStatusBar'),
     comTtsStatusDot: $('comTtsStatusDot'),
     comTtsStatusText: $('comTtsStatusText'),
+    comBgm: $('comBgm'),
+    comBgmVolume: $('comBgmVolume'),
+    comBgmVolWrap: $('comBgmVolWrap'),
+    comSubSize: $('comSubSize'),
+    comSubSizeVal: $('comSubSizeVal'),
+    comSubBorder: $('comSubBorder'),
+    comSubBorderVal: $('comSubBorderVal'),
+    comSubColor: $('comSubColor'),
+    comMaxChars: $('comMaxChars'),
+    comMaxCharsVal: $('comMaxCharsVal'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
     comFileName: $('comFileName'),
@@ -5221,6 +5231,13 @@ el.dwVidPlayer.removeAttribute('src');
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
       correct_transcript: !!(el.comCorrectTranscript && el.comCorrectTranscript.checked),
       export_jianying: comGetExportJianying(),
+      bgm: el.comBgm ? el.comBgm.value : 'off',
+      bgm_volume: el.comBgmVolume ? Number(el.comBgmVolume.value) : 0.18,
+      subtitle_size: el.comSubSize ? Number(el.comSubSize.value) : 1.0,
+      subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
+      subtitle_border: el.comSubBorder ? Number(el.comSubBorder.value) : 1.0,
+      subtitle_pos: (document.querySelector('input[name="comSubPos"]:checked') || {}).value || 'bottom',
+      max_chars: el.comMaxChars ? Number(el.comMaxChars.value) : 0,
     };
   };
 
@@ -5726,6 +5743,14 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('voice', el.comScriptVoice.value);
       const exportJy = comGetExportJianying();
       if (exportJy) form.append('export_jianying', exportJy);
+      const _opts = comGetOptions();
+      if (_opts.bgm && _opts.bgm !== 'off') form.append('bgm', _opts.bgm);
+      form.append('bgm_volume', String(_opts.bgm_volume));
+      form.append('subtitle_size', String(_opts.subtitle_size));
+      form.append('subtitle_color', _opts.subtitle_color);
+      form.append('subtitle_border', String(_opts.subtitle_border));
+      form.append('subtitle_pos', _opts.subtitle_pos);
+      form.append('max_chars', String(_opts.max_chars));
       const { job_id } = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
       });
@@ -6528,6 +6553,39 @@ el.dwVidPlayer.removeAttribute('src');
       } catch (_) { /* 用户取消或环境不支持，忽略 */ }
     });
   }
+
+  // === 成片增强控件事件绑定（BGM / 字幕样式 / 解说长度）===
+  if (el.comBgm) {
+    el.comBgm.addEventListener('change', () => {
+      if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (el.comBgm.value === 'off');
+    });
+  }
+  if (el.comBgmVolume) {
+    el.comBgmVolume.addEventListener('input', () => {
+      if (el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
+    });
+  }
+  if (el.comSubSize) {
+    el.comSubSize.addEventListener('input', () => {
+      if (el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
+    });
+  }
+  if (el.comSubBorder) {
+    el.comSubBorder.addEventListener('input', () => {
+      if (el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
+    });
+  }
+  if (el.comMaxChars) {
+    el.comMaxChars.addEventListener('input', () => {
+      if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
+    });
+  }
+  // 初始化：根据默认值同步显隐与回显
+  if (el.comBgm && el.comBgmVolWrap) el.comBgmVolWrap.hidden = (el.comBgm.value === 'off');
+  if (el.comBgmVolume && el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
+  if (el.comSubSize && el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
+  if (el.comSubBorder && el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
+  if (el.comMaxChars && el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
 
   // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；
   // 仍走脚本审核流程（默认铁律：AI 解说词可人工审核修改）。
