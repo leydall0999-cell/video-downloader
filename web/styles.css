@@ -2283,7 +2283,7 @@ img { max-width: 100%; display: block; }
 /* 标题左对齐固定宽度，控件 / 下拉 / select 在右并自适应占余 */
 .com-opt-block > .com-opt-title { flex: 0 0 auto; min-width: 5em; margin: 0; }
 .com-mode-dropdown > .com-mode-dropdown { flex: 1 1 320px; max-width: 420px; }
-.com-opt-block > .com-mode-dropdown { flex: 0 1 auto; max-width: 220px; }
+.com-opt-block > .com-mode-dropdown { flex: 0 1 auto; max-width: none; min-width: 0; }
 .com-opt-block > .com-opt-row { flex: 1 1 auto; align-items: center; gap: .35rem; }
 .com-opt-block > .com-highlights-toggle { flex: 0 1 auto; }
 .com-opt-block > .com-select { flex: 1 1 280px; max-width: 360px; }
@@ -2370,7 +2370,7 @@ img { max-width: 100%; display: block; }
 
 /* 解说类型：卡片式四选一，信息更醒目 */
 /* 解说类型：自定义下拉（紫色粗边圆角 + 展开堆叠列表） */
-.com-mode-dropdown { position: relative; margin-top: .35rem; display: inline-block; max-width: 220px; }
+.com-mode-dropdown { position: relative; margin-top: .35rem; display: inline-block; max-width: none; }
 .com-mode-dropdown-toggle {
   display: inline-flex; align-items: center; justify-content: space-between; gap: .6rem;
   width: auto; min-height: 40px; padding: .5rem .75rem;
@@ -2720,7 +2720,7 @@ img { max-width: 100%; display: block; }
 /* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） ===== */
 #commentaryView .com-workspace {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr) 330px;
+  grid-template-columns: 240px minmax(0, 1fr) minmax(420px, 480px);
   gap: 12px;
   align-items: start;
   margin-top: .6rem;
@@ -2753,7 +2753,17 @@ img { max-width: 100%; display: block; }
 }
 .com-col-right > .com-opts { margin-top: 0; }
 /* 右栏内下拉胶囊贴左（列内空间窄，贴左更协调） */
-.com-col-right .com-opt-block[data-com-select] { justify-content: flex-start; }
+/* 右栏内 5 个下拉 trigger 横排成一行（图二风格）：
+   - 整个 com-opts 用 flex-wrap 让 trigger 与 retain-field 自然分行
+   - 各 .com-opt-block[data-com-select] 用 display:contents 让 trigger 直接成为 flex 子项（5 trigger 横排、retain-field 自动换行） */
+.com-col-right .com-opts {
+  display: flex !important; flex-wrap: wrap; align-items: flex-start;
+  gap: .4rem .75rem; padding: 0; background: none; border: none;
+}
+.com-col-right .com-opts#comOpts > .com-opt-block,
+.com-col-right .com-opts#comOpts .com-opts-inner { display: contents; }
+.com-col-right .com-opts#comOpts .com-opt-title { display: none; }
+.com-col-right .com-opts .com-retain-field { flex: 0 0 100%; }
 /* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
 .com-bottom {
   position: sticky; bottom: 0; z-index: 30;
