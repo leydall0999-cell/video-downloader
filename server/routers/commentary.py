@@ -567,7 +567,8 @@ def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
 @router.post("/api/commentary/render/{job_id}")
 def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form(""),
                  export_jianying: str = app.Form(""),
-                 bgm: str = app.Form("off"), bgm_volume: float = app.Form(0.18),
+                 bgm: str = app.Form("off"), bgm_file: str = app.Form(""),
+                 bgm_volume: float = app.Form(0.18),
                  subtitle_size: float = app.Form(1.0), subtitle_color: str = app.Form("FFFFFF"),
                  subtitle_border: float = app.Form(1.0), subtitle_pos: str = app.Form("bottom"),
                  max_chars: int = app.Form(0)) -> dict:
@@ -646,7 +647,7 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=title,
                     src_filename=src_filename,
-                    bgm=bgm, bgm_file="", bgm_volume=bgm_volume,
+                    bgm=bgm, bgm_file=bgm_file, bgm_volume=bgm_volume,
                     subtitle_size=subtitle_size, subtitle_color=subtitle_color,
                     subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
                     max_chars=max_chars,

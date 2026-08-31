@@ -323,11 +323,15 @@
     comBgm: $('comBgm'),
     comBgmVolume: $('comBgmVolume'),
     comBgmVolWrap: $('comBgmVolWrap'),
+    comBgmFileWrap: $('comBgmFileWrap'),
+    comBgmFile: $('comBgmFile'),
+    comBgmFilePick: $('comBgmFilePick'),
     comSubSize: $('comSubSize'),
     comSubSizeVal: $('comSubSizeVal'),
     comSubBorder: $('comSubBorder'),
     comSubBorderVal: $('comSubBorderVal'),
     comSubColor: $('comSubColor'),
+    comSubPreview: $('comSubPreview'),
     comMaxChars: $('comMaxChars'),
     comMaxCharsVal: $('comMaxCharsVal'),
     comFileInput: $('comFileInput'),
@@ -5232,6 +5236,7 @@ el.dwVidPlayer.removeAttribute('src');
       correct_transcript: !!(el.comCorrectTranscript && el.comCorrectTranscript.checked),
       export_jianying: comGetExportJianying(),
       bgm: el.comBgm ? el.comBgm.value : 'off',
+      bgm_file: el.comBgmFile ? el.comBgmFile.value : '',
       bgm_volume: el.comBgmVolume ? Number(el.comBgmVolume.value) : 0.18,
       subtitle_size: el.comSubSize ? Number(el.comSubSize.value) : 1.0,
       subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
@@ -5745,6 +5750,7 @@ el.dwVidPlayer.removeAttribute('src');
       if (exportJy) form.append('export_jianying', exportJy);
       const _opts = comGetOptions();
       if (_opts.bgm && _opts.bgm !== 'off') form.append('bgm', _opts.bgm);
+      if (_opts.bgm === 'user' && _opts.bgm_file) form.append('bgm_file', _opts.bgm_file);
       form.append('bgm_volume', String(_opts.bgm_volume));
       form.append('subtitle_size', String(_opts.subtitle_size));
       form.append('subtitle_color', _opts.subtitle_color);
@@ -6554,10 +6560,71 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
+  // === 字幕样式实时预览（用 canvas 模拟成片字幕渲染：白字+黑描边+阴影）===
+  function comRenderSubtitlePreview() {
+    const cv = el.comSubPreview;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const w = cv.width, h = cv.height;
+    ctx.clearRect(0, 0, w, h);
+    // 背景：暗色模拟视频画面
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#2a2a30');
+    grad.addColorStop(1, '#0e0e10');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    // 文本：与成片同字号基准（成片基准~64px；预览按比例缩到 320 宽画布）
+    const sizeRatio = el.comSubSize ? Number(el.comSubSize.value) : 1.0;
+    const fontPx = Math.max(10, Math.round(28 * sizeRatio));
+    const borderRatio = el.comSubBorder ? Number(el.comSubBorder.value) : 1.0;
+    const borderPx = Math.max(1, Math.round(3 * borderRatio));
+    const color = (el.comSubColor ? el.comSubColor.value : '#FFFFFF') || '#FFFFFF';
+    const posEl = document.querySelector('input[name="comSubPos"]:checked');
+    const pos = posEl ? posEl.value : 'bottom';
+    const text = '这是字幕预览示例';
+    ctx.font = `bold ${fontPx}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const y = (pos === 'center') ? h * 0.5 : h * 0.78;
+    // 阴影（贴近 _render_subtitle_png 的效果）
+    ctx.shadowColor = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = borderPx * 2;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 1;
+    // 描边
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = borderPx;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(text, w / 2, y);
+    // 填充
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fillStyle = color;
+    ctx.fillText(text, w / 2, y);
+  }
+
   // === 成片增强控件事件绑定（BGM / 字幕样式 / 解说长度）===
   if (el.comBgm) {
     el.comBgm.addEventListener('change', () => {
-      if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (el.comBgm.value === 'off');
+      const v = el.comBgm.value;
+      if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (v === 'off');
+      if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (v !== 'user');
+    });
+  }
+  // 本地音乐选择：走 pywebview 桌面桥 chooseFiles（无桥接回退为聚焦输入框）
+  if (el.comBgmFilePick) {
+    el.comBgmFilePick.addEventListener('click', async () => {
+      try {
+        const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFiles;
+        let p = '';
+        if (typeof fn === 'function') {
+          const arr = await fn();
+          p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
+        }
+        if (p && el.comBgmFile) el.comBgmFile.value = p;
+        else if (el.comBgmFile) el.comBgmFile.placeholder = '请把 mp3/wav 路径粘到这里';
+      } catch (_) { /* 用户取消或环境不支持，忽略 */ }
     });
   }
   if (el.comBgmVolume) {
@@ -6568,24 +6635,35 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comSubSize) {
     el.comSubSize.addEventListener('input', () => {
       if (el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
+      comRenderSubtitlePreview();
     });
   }
   if (el.comSubBorder) {
     el.comSubBorder.addEventListener('input', () => {
       if (el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
+      comRenderSubtitlePreview();
     });
   }
+  if (el.comSubColor) {
+    el.comSubColor.addEventListener('input', comRenderSubtitlePreview);
+  }
+  document.querySelectorAll('input[name="comSubPos"]').forEach((r) => {
+    r.addEventListener('change', comRenderSubtitlePreview);
+  });
   if (el.comMaxChars) {
     el.comMaxChars.addEventListener('input', () => {
       if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
     });
   }
   // 初始化：根据默认值同步显隐与回显
-  if (el.comBgm && el.comBgmVolWrap) el.comBgmVolWrap.hidden = (el.comBgm.value === 'off');
+  const _initBgm = el.comBgm ? el.comBgm.value : 'off';
+  if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (_initBgm === 'off');
+  if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (_initBgm !== 'user');
   if (el.comBgmVolume && el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
   if (el.comSubSize && el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
   if (el.comSubBorder && el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
   if (el.comMaxChars && el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
+  comRenderSubtitlePreview();
 
   // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；
   // 仍走脚本审核流程（默认铁律：AI 解说词可人工审核修改）。

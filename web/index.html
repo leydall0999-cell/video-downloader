@@ -1180,13 +1180,18 @@
             <option value="soft">柔和氛围</option>
             <option value="light">轻快</option>
             <option value="epic">恢弘</option>
+            <option value="user">本地音乐…</option>
           </select>
           <div class="com-bgm-vol" id="comBgmVolWrap" hidden>
             <input type="range" id="comBgmVolume" min="0.02" max="0.6" step="0.01" value="0.18" />
             <span class="com-vol-val" id="comBgmVolumeVal">18%</span>
           </div>
+          <div class="com-bgm-file" id="comBgmFileWrap" hidden>
+            <input type="text" id="comBgmFile" placeholder="未选择文件" readonly />
+            <button type="button" id="comBgmFilePick" class="com-pick-btn">选文件…</button>
+          </div>
         </div>
-        <span class="com-retain-hint">自动铺一层氛围音乐，音量压低不抢旁白（自包含合成，无需素材）</span>
+        <span class="com-retain-hint">氛围音由 ffmpeg 实时合成（正弦波三和弦）；选「本地音乐」可用自己 mp3/wav</span>
       </div>
       <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">字幕样式</div>
@@ -1199,7 +1204,8 @@
             <label><input type="radio" name="comSubPos" value="center" />居中</label>
           </span>
         </div>
-        <span class="com-retain-hint">调字号/描边/颜色/位置（竖屏短视频建议「居中」避免越界）</span>
+        <canvas id="comSubPreview" class="com-sub-preview" width="320" height="72"></canvas>
+        <span class="com-retain-hint">实时预览（白字+黑描边+阴影，下方为成片画面的相对位置）</span>
       </div>
       <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">解说长度（字数上限）</div>
