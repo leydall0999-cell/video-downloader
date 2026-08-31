@@ -1898,7 +1898,7 @@ img { max-width: 100%; display: block; }
   border: 1px solid var(--line); border-radius: var(--radius-md);
   background: #fbfbfe;
   /* 两个折叠入口收起时并排一行；任一展开即独占全宽（.adv[open] 通配 flex:1 1 100%） */
-  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem;
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem .75rem;
 }
 .com-ai-config .com-section-title { margin: 0 0 .15rem; flex: 1 1 100%; }
 .com-ai-config .adv { flex: 1 1 320px; min-width: 0; background: #fff; }
