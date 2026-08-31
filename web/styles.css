@@ -2279,6 +2279,8 @@ img { max-width: 100%; display: block; }
 }
 /* 标题被下拉 trigger 取代；data-com-select 块的左侧蓝字标题隐藏（视觉理解/配音引擎等保留） */
 .com-opt-block[data-com-select] > .com-opt-title { display: none; }
+/* 下拉 trigger 靠右排，利用右侧空白；保留 checkbox 标题左对齐 */
+.com-opt-block[data-com-select] { justify-content: flex-end; }
 /* 标题左对齐固定宽度，控件 / 下拉 / select 在右并自适应占余 */
 .com-opt-block > .com-opt-title { flex: 0 0 auto; min-width: 5em; margin: 0; }
 .com-mode-dropdown > .com-mode-dropdown { flex: 1 1 320px; max-width: 420px; }
