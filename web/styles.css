@@ -2264,8 +2264,7 @@ img { max-width: 100%; display: block; }
 }
 /* ---- 剪辑选项面板（六类方案·紧凑分段控件） ---- */
 .com-opts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  display: block;
   align-items: start;
   gap: .5rem 1rem;
   margin-top: .5rem;
@@ -2284,7 +2283,7 @@ img { max-width: 100%; display: block; }
 /* 标题左对齐固定宽度，控件 / 下拉 / select 在右并自适应占余 */
 .com-opt-block > .com-opt-title { flex: 0 0 auto; min-width: 5em; margin: 0; }
 .com-mode-dropdown > .com-mode-dropdown { flex: 1 1 320px; max-width: 420px; }
-.com-opt-block > .com-mode-dropdown { flex: 1 1 220px; max-width: 240px; }
+.com-opt-block > .com-mode-dropdown { flex: 0 1 auto; max-width: 220px; }
 .com-opt-block > .com-opt-row { flex: 1 1 auto; align-items: center; gap: .35rem; }
 .com-opt-block > .com-highlights-toggle { flex: 0 1 auto; }
 .com-opt-block > .com-select { flex: 1 1 280px; max-width: 360px; }
@@ -2371,14 +2370,14 @@ img { max-width: 100%; display: block; }
 
 /* 解说类型：卡片式四选一，信息更醒目 */
 /* 解说类型：自定义下拉（紫色粗边圆角 + 展开堆叠列表） */
-.com-mode-dropdown { position: relative; margin-top: .35rem; max-width: 280px; }
+.com-mode-dropdown { position: relative; margin-top: .35rem; display: inline-block; max-width: 220px; }
 .com-mode-dropdown-toggle {
-  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
-  width: 100%; min-height: 40px; padding: .5rem .75rem;
+  display: inline-flex; align-items: center; justify-content: space-between; gap: .6rem;
+  width: auto; min-height: 40px; padding: .5rem .75rem;
   background: #fff;
   border: 1.5px solid var(--line); border-radius: var(--radius-sm);
   font-size: .92rem; font-weight: 500; color: var(--text);
-  cursor: pointer; text-align: left;
+  cursor: pointer; text-align: left; white-space: nowrap;
   transition: border-color .18s, box-shadow .18s, background .18s;
 }
 .com-mode-dropdown-toggle:hover { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
