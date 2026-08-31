@@ -261,6 +261,7 @@
     commentaryView: $('commentaryView'),
     comResults: $('comResults'),
     comEmpty: $('comEmpty'),
+    comGrid: $('comGrid'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comSortBtn: $('comSortBtn'),
     comSortMenu: $('comSortMenu'),
