@@ -1057,24 +1057,24 @@
       <details class="com-advanced" id="comAdvanced">
         <summary class="com-adv-summary">高级剪辑选项<small>开头钩子 · 画幅 · 固定裁剪 · 高光来源</small></summary>
         <div class="com-opts-inner">
-          <!-- 自动挑高光 -->
-          <div class="com-opt-block">
+          <!-- 自动挑高光（转下拉） -->
+          <div class="com-opt-block" data-com-select="comHlSource">
             <div class="com-opt-title">自动挑高光</div>
             <div class="com-opt-row">
               <label class="com-mode-option"><input type="radio" name="comHlSource" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
               <label class="com-mode-option"><input type="radio" name="comHlSource" value="manual" /><span>人工在审核面板挑选</span></label>
             </div>
           </div>
-          <!-- 开头加高光 -->
-          <div class="com-opt-block">
+          <!-- 开头加高光（转下拉） -->
+          <div class="com-opt-block" data-com-select="comIntroHighlight">
             <div class="com-opt-title">开头加高光</div>
             <label class="com-highlights-toggle">
               <input type="checkbox" id="comIntroHighlight" />
               <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
             </label>
           </div>
-          <!-- 固定选择项 -->
-          <div class="com-opt-block com-opt-block-full">
+          <!-- 固定选择项（转下拉，去解释文字） -->
+          <div class="com-opt-block com-opt-block-full" data-com-select="comIntroOutroMode">
             <div class="com-opt-title">固定选择项</div>
             <div class="com-opt-row com-opt-row-fixed">
               <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
@@ -1105,8 +1105,8 @@
               </div>
             </div>
           </div>
-          <!-- 画幅 -->
-          <div class="com-opt-block">
+          <!-- 画幅（转下拉） -->
+          <div class="com-opt-block" data-com-select="comAspect">
             <div class="com-opt-title">画幅</div>
             <div class="com-opt-row">
               <label class="com-mode-option"><input type="radio" name="comAspect" value="auto" checked /><span><b>自动（跟视频走）</b></span></label>
@@ -1170,8 +1170,7 @@
 
     <!-- 核心：解说风格（联动音色） -->
     <div class="com-opts com-style-section">
-      <div class="com-opt-block com-opt-block-full">
-        <div class="com-opt-title">解说风格（联动音色）</div>
+      <div class="com-opt-block com-opt-block-full" data-com-select="comStyle">
         <div class="com-opt-row com-opt-row-styles">
           <label class="com-mode-option"><input type="radio" name="comStyle" value="none" checked /><span><b>默认</b></span></label>
           <label class="com-mode-option"><input type="radio" name="comStyle" value="funny" /><span>搞笑</span></label>

@@ -6842,6 +6842,143 @@ el.dwVidPlayer.removeAttribute('src');
     }
   }
 
+  // ---- 通用下拉：把标记了 data-com-select 的单选组/开关统一转成下拉 ----
+  // 原生 radio/checkbox 保留在 DOM（仅隐藏），comGetOptions 与既有 change 监听照常生效。
+  const COM_SELECT_DEFS = {
+    comHlSource: {
+      kind: 'radio',
+      hide: '.com-opt-row',
+      options: [['ai', 'AI 自动挑选高光'], ['manual', '人工在审核面板挑选']],
+    },
+    comIntroHighlight: {
+      kind: 'checkbox',
+      hide: '.com-highlights-toggle',
+      options: [['on', '片头插入精彩片段'], ['off', '不插入']],
+    },
+    comIntroOutroMode: {
+      kind: 'radio',
+      hide: '.com-mode-fixed',
+      options: [['keep_no_narrate', '保留片头片尾·不解说'], ['skip', '去片头片尾']],
+    },
+    comAspect: {
+      kind: 'radio',
+      hide: '.com-opt-row',
+      options: [['auto', '自动（跟视频走）'], ['landscape', '横屏 16:9'], ['vertical', '竖屏 9:16']],
+    },
+    comStyle: {
+      kind: 'radio',
+      hide: '.com-opt-row-styles',
+      options: [
+        ['none', '默认'], ['funny', '搞笑'], ['serious', '严肃'], ['domineering', '霸道'],
+        ['angry', '愤青'], ['suspense', '悬疑'], ['healing', '治愈'], ['sarcastic', '毒舌'],
+        ['short_drama', '短剧解说'], ['movie', '影视深度'],
+      ],
+    },
+  };
+
+  /** 读取原生控件当前值：radio 取 checked 的 value，checkbox 返回 on/off。 */
+  const comSelectRead = (def, key) => {
+    if (def.kind === 'checkbox') {
+      const box = document.getElementById(key);
+      return box && box.checked ? 'on' : 'off';
+    }
+    const r = document.querySelector(`input[name="${key}"]:checked`);
+    return r ? r.getAttribute('value') : (def.options[0] || [''])[0];
+  };
+
+  /** 写回原生控件并派发 change，保证既有联动（如风格→音色）继续生效。 */
+  const comSelectWrite = (def, key, val) => {
+    if (def.kind === 'checkbox') {
+      const box = document.getElementById(key);
+      if (box) {
+        box.checked = (val === 'on');
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return;
+    }
+    const r = document.querySelector(`input[name="${key}"][value="${val}"]`);
+    if (r) {
+      r.checked = true;
+      r.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+
+  const initComSelect = (block) => {
+    const key = block.getAttribute('data-com-select');
+    const def = COM_SELECT_DEFS[key];
+    if (!def) return;
+    // 隐藏原生控件
+    if (def.hide) {
+      block.querySelectorAll(def.hide).forEach((n) => n.classList.add('com-native-hidden'));
+    }
+    const title = block.querySelector('.com-opt-title');
+    if (!title) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'com-mode-dropdown';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'com-mode-dropdown-toggle';
+    btn.setAttribute('aria-haspopup', 'listbox');
+    btn.setAttribute('aria-expanded', 'false');
+    const label = document.createElement('span');
+    label.className = 'com-mode-dropdown-label';
+    const caret = document.createElement('span');
+    caret.className = 'com-mode-dropdown-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = '▾';
+    btn.append(label, caret);
+
+    const panel = document.createElement('div');
+    panel.className = 'com-mode-dropdown-panel';
+    panel.setAttribute('role', 'listbox');
+    panel.hidden = true;
+    def.options.forEach(([val, text]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'com-mode-dropdown-option';
+      b.setAttribute('role', 'option');
+      b.setAttribute('data-value', val);
+      const strong = document.createElement('b');
+      strong.textContent = text;
+      b.appendChild(strong);
+      panel.appendChild(b);
+    });
+
+    wrap.append(btn, panel);
+    title.insertAdjacentElement('afterend', wrap);
+
+    const close = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    const syncUI = () => {
+      const cur = comSelectRead(def, key);
+      const match = def.options.find(([v]) => v === cur) || def.options[0];
+      label.textContent = match ? match[1] : '';
+      panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
+        b.classList.toggle('is-selected', b.getAttribute('data-value') === cur);
+      });
+    };
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (panel.hidden) { panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); }
+      else close();
+    });
+    panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
+      b.addEventListener('click', () => {
+        comSelectWrite(def, key, b.getAttribute('data-value'));
+        syncUI();
+        close();
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (wrap.contains(e.target)) return;
+      close();
+    });
+    syncUI();
+  };
+
+  document.querySelectorAll('[data-com-select]').forEach(initComSelect);
+
   // 裁剪控件事件
   el.comTrimStartRange.addEventListener('input', () => {
     comTrimStart = parseFloat(el.comTrimStartRange.value) || 0;

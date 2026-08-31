@@ -2381,6 +2381,8 @@ img { max-width: 100%; display: block; }
   box-shadow: 0 6px 20px rgba(79, 70, 229, .15);
   padding: .35rem; max-height: 320px; overflow-y: auto;
 }
+/* 原生 radio/checkbox 组已转下拉，原生控件仅保留在 DOM 供兼容读取 */
+.com-native-hidden { display: none !important; }
 .com-mode-dropdown-option {
   display: flex; flex-direction: column; gap: .2rem;
   width: 100%; text-align: left; padding: .55rem .75rem;
