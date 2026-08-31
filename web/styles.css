@@ -2064,6 +2064,40 @@ img { max-width: 100%; display: block; }
 .com-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem;
 }
+
+/* 双区容器：待加配乐 + 已成片 共用一套视图/排序 */
+.com-results { margin-top: 1.5rem; }
+.com-results-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  margin-bottom: 1rem; padding: .75rem 1rem;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: var(--shadow);
+  flex-wrap: wrap;
+}
+.com-section {
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+}
+.com-section-draft {
+  border-style: dashed;       /* 待加配乐 = 半成品，虚线边框 */
+  border-color: var(--brand, #6366f1);
+  background: linear-gradient(0deg, var(--brand-soft, rgba(99,102,241,.05)) 0%, var(--surface) 60%);
+}
+.com-section-head {
+  display: flex; align-items: center; gap: .5rem;
+  margin-bottom: .85rem; padding-bottom: .65rem;
+  border-bottom: 1px solid var(--line);
+}
+.com-section-head h3 { margin: 0; font-size: 1rem; color: var(--text); }
+.com-section-count {
+  font-size: .75rem; color: var(--text-mute);
+  background: var(--bg-soft, #f3f4f6); padding: .15rem .5rem; border-radius: 999px;
+}
+.com-section-draft .com-section-head h3::before { content: "🕓 "; }
 .com-card {
   background: var(--surface); border-radius: var(--radius-md); overflow: hidden;
   border: 1px solid var(--line); box-shadow: var(--shadow);

@@ -284,7 +284,12 @@ def commentary_diagnostics() -> dict:
 
 @router.get("/api/commentary/list")
 def commentary_list() -> dict:
-    """按修改时间倒序列出所有已生成的解说成片。"""
+    """按修改时间倒序列出所有已生成的解说成片。
+
+    每条返回 `bgm_state`：{"bgm": "off|soft|light|epic|user", "volume": float, "source": "render|remux", "ts": int}
+    缺失 manifest 视为待加配乐（draft）；bgm != "off" 视为已成片（final）。
+    前端据此把成片拆成「已渲染/待加配乐」和「已生成成片」两个分区。
+    """
     items = []
     seen: set[str] = set()
     for root in app._commentary_roots():
@@ -296,11 +301,18 @@ def commentary_list() -> dict:
                 continue
             seen.add(key)
             cid = app.base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii")
+            state = app._read_bgm_state(p) or {}
             items.append({
                 "id": cid,
                 "name": p.name,
                 "size": p.stat().st_size,
                 "mtime": int(p.stat().st_mtime),
+                "bgm_state": {
+                    "bgm": state.get("bgm", "off"),
+                    "volume": float(state.get("volume", 0.18) or 0.18),
+                    "source": state.get("source", ""),
+                    "ts": int(state.get("ts", 0) or 0),
+                },
             })
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return {"items": items}
@@ -709,6 +721,12 @@ def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str, bgm
             parent = rj.get("parent_render_job") if rj else None
             if parent and parent in app.commentary_jobs:
                 app.commentary_jobs[parent].update(remuxed_bgm=bgm, remux_job=remux_id, status="completed")
+        # 写 BGM 状态 manifest：bgm=off 视为"已移除配乐"=已成片(无配乐版)，bgm!=off 视为"已加配乐"=已成片
+        # 即只要走过 remux 流程，无论 on/off 都算 final（用户主动确认过配乐决策）
+        try:
+            app._write_bgm_state(output_path, bgm=bgm, volume=bgm_volume, source="remux")
+        except Exception:
+            app.logger.exception("写 remux BGM manifest 失败：%s", output_path)
     except Exception as exc:  # noqa: BLE001
         with app._commentary_lock:
             j = app.commentary_jobs.setdefault(remux_id, {})

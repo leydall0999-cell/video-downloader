@@ -828,6 +828,42 @@ def _commentary_log(job: dict, line: str) -> None:
         job["logs"][:] = job["logs"][-200:]
 
 
+# ====== BGM 状态 manifest：成片文件是否已加配乐的真相源 ======
+# 文件名约定：<video>.bgm.json，与无音乐 sidecar（.nomusic.mp4）解耦。文件可丢、可重建，
+# 不影响成片本体。bgm != "off" 视为「已成片」(final)，bgm == "off" 或无 manifest 视为「待加配乐」(draft)。
+def _bgm_state_path(out_path: str | Path) -> Path:
+    p = Path(out_path)
+    return p.with_suffix(p.suffix + ".bgm.json") if p.suffix else Path(str(p) + ".bgm.json")
+
+
+def _read_bgm_state(out_path: str | Path) -> dict | None:
+    """读取 BGM 状态 manifest；不存在或损坏返回 None（按 draft 处理）。"""
+    try:
+        meta_p = _bgm_state_path(out_path)
+        if not meta_p.is_file():
+            return None
+        return json.loads(meta_p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_bgm_state(out_path: str | Path, *, bgm: str, volume: float = 0.18, source: str = "render", extra: dict | None = None) -> None:
+    """写入 BGM 状态 manifest。bgm="off" 也写，便于区分「无 BGM」与「manifest 缺失」。"""
+    try:
+        meta_p = _bgm_state_path(out_path)
+        payload: dict = {
+            "bgm": bgm or "off",
+            "volume": float(volume) if volume is not None else 0.18,
+            "source": source,
+            "ts": int(time.time()),
+        }
+        if extra:
+            payload.update(extra)
+        meta_p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.exception("写 BGM manifest 失败：%s", out_path)
+
+
 def _update_commentary_steps(job: dict, line: str) -> None:
     """根据 process.py 输出关键词自动推进步骤状态。"""
     steps = _ensure_commentary_steps(job)
@@ -985,7 +1021,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     return args
 
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "") -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_pos: str = "bottom", max_chars: int = 0) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -1231,6 +1267,11 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                         s["status"] = "done"
                         s["updated_at"] = now
                 job.update(status="completed", output_path=str(out))
+            # 写入 BGM 状态 manifest：bgm=off 视为待配乐（draft），否则视为已成片（final）
+            try:
+                _write_bgm_state(str(out), bgm=bgm or "off", volume=bgm_volume, source="render")
+            except Exception:
+                logger.exception("写 BGM 状态 manifest 失败：%s", out)
     except Exception as exc:  # noqa: BLE001
         _commentary_mark_error(job_id, str(exc))
         with _commentary_lock:

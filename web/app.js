@@ -259,12 +259,15 @@
     libCommentaryFile: $('libCommentaryFile'),
     // 解说成片独立标签页
     commentaryView: $('commentaryView'),
-    comGrid: $('comGrid'),
+    comResults: $('comResults'),
     comEmpty: $('comEmpty'),
-    comHistory: $('comHistory'),
-    comHistoryCount: $('comHistoryCount'),
+    comDraftSection: $('comDraftSection'),
+    comDraftGrid: $('comDraftGrid'),
+    comDraftCount: $('comDraftCount'),
+    comFinalSection: $('comFinalSection'),
+    comFinalGrid: $('comFinalGrid'),
+    comFinalCount: $('comFinalCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
-    comGrid: $('comGrid'),
     comSortBtn: $('comSortBtn'),
     comSortMenu: $('comSortMenu'),
     comSortLabel: $('comSortLabel'),
@@ -6213,7 +6216,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comBoost.value = 1.0; el.comBoostVal.textContent = '1.00×';
   };
 
-  /** 按当前视图模式与排序重新渲染成片列表 */
+  /** 按当前视图模式与排序重新渲染成片列表（按 BGM 状态拆成「待加配乐 / 已成片」两区） */
   const renderCommentaryList = () => {
     const items = commentaryItems.slice();
     const [sortKey, sortOrder] = commentarySort.split('-');
@@ -6227,49 +6230,67 @@ el.dwVidPlayer.removeAttribute('src');
       return 0;
     });
 
-    el.comGrid.className = 'com-grid com-view-' + commentaryViewMode;
-    el.comGrid.replaceChildren();
+    // 拆 draft（无配乐） vs final（已成片）。bgm_state 缺失/空/=off 都算 draft。
+    const isFinal = (it) => {
+      const bgm = it && it.bgm_state && it.bgm_state.bgm;
+      return typeof bgm === 'string' && bgm && bgm !== 'off';
+    };
+    const draftItems = items.filter((it) => !isFinal(it));
+    const finalItems = items.filter(isFinal);
+
+    // 空状态
     el.comEmpty.hidden = items.length > 0;
-    el.comHistory.hidden = items.length === 0;
+    el.comResults.hidden = items.length === 0;
+
+    // 两区可见性 + 计数
+    el.comDraftSection.hidden = draftItems.length === 0;
+    el.comFinalSection.hidden = finalItems.length === 0;
+    el.comDraftCount.textContent = draftItems.length ? `${draftItems.length} 个` : '';
+    el.comFinalCount.textContent = finalItems.length ? `${finalItems.length} 个` : '';
+
+    // 应用视图类名 + 清空两区
+    const viewClass = 'com-grid com-view-' + commentaryViewMode;
+    el.comDraftGrid.className = viewClass;
+    el.comFinalGrid.className = viewClass;
+    el.comDraftGrid.replaceChildren();
+    el.comFinalGrid.replaceChildren();
 
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
     } else {
-      el.comHistoryCount.textContent = `${items.length} 个`;
-      if (commentaryViewMode === 'timeline') {
-        renderComTimeline(items);
-      } else if (commentaryViewMode === 'gallery') {
-        renderComGallery(items);
-      } else {
-        items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
-      }
+      // 两区分别按当前视图模式渲染
+      renderComIntoGrid(el.comDraftGrid, draftItems, 'draft');
+      renderComIntoGrid(el.comFinalGrid, finalItems, 'final');
     }
   };
 
-  /** 时间线视图：按日期分组 */
-  const renderComTimeline = (items) => {
-    const groups = {};
-    items.forEach((it) => {
-      const d = new Date(it.mtime * 1000).toLocaleDateString();
-      (groups[d] = groups[d] || []).push(it);
-    });
-    Object.keys(groups).sort((a, b) => {
+  /** 把一组 items 按当前视图模式渲染到指定 grid 容器；state 决定是否带配乐面板 */
+  const renderComIntoGrid = (grid, items, state) => {
+    if (items.length === 0) return;
+    if (commentaryViewMode === 'timeline') {
+      // 时间线视图：按日期分组
+      const groups = {};
+      items.forEach((it) => {
+        const d = new Date(it.mtime * 1000).toLocaleDateString();
+        (groups[d] = groups[d] || []).push(it);
+      });
       const desc = commentarySort === 'mtime-desc';
-      const da = new Date(a).getTime();
-      const db = new Date(b).getTime();
-      return desc ? db - da : da - db;
-    }).forEach((date) => {
-      const h = document.createElement('div');
-      h.className = 'com-timeline-date';
-      h.textContent = date;
-      el.comGrid.appendChild(h);
-      groups[date].forEach((it) => el.comGrid.appendChild(createComCard(it)));
-    });
-  };
-
-  /** 画廊视图：只放视频大图，隐藏元信息 */
-  const renderComGallery = (items) => {
-    items.forEach((it) => el.comGrid.appendChild(createComCard(it, true)));
+      Object.keys(groups).sort((a, b) => {
+        const da = new Date(a).getTime();
+        const db = new Date(b).getTime();
+        return desc ? db - da : da - db;
+      }).forEach((date) => {
+        const h = document.createElement('div');
+        h.className = 'com-timeline-date';
+        h.textContent = date;
+        grid.appendChild(h);
+        groups[date].forEach((it) => grid.appendChild(createComCard(it, false, state)));
+      });
+    } else if (commentaryViewMode === 'gallery') {
+      items.forEach((it) => grid.appendChild(createComCard(it, true, state)));
+    } else {
+      items.forEach((it) => grid.appendChild(createComCard(it, false, state)));
+    }
   };
 
   const refreshComSource = async () => {
@@ -6408,6 +6429,8 @@ el.dwVidPlayer.removeAttribute('src');
               try { video.load(); } catch (_) { /* 部分 WebView 不支持 load，src 变更已触发重载 */ }
             }
             apply.disabled = false;
+            // 走过 remux 流程的文件 = 已成片，应从 draft 区搬到 final 区。重拉一次列表。
+            try { await loadCommentary(); } catch (_) { /* 列表刷新失败不影响本地状态 */ }
           } else if (st.status === 'failed') {
             clearInterval(poll);
             status.className = 'com-music-status com-music-err';
@@ -6421,9 +6444,9 @@ el.dwVidPlayer.removeAttribute('src');
     })();
   };
 
-  const createComCard = (it, gallery = false) => {
+  const createComCard = (it, gallery = false, state = 'draft') => {
     const card = document.createElement('div');
-    card.className = 'com-card' + (gallery ? ' com-card-gallery' : '');
+    card.className = 'com-card' + (gallery ? ' com-card-gallery' : '') + ' com-card-' + state;
     card.dataset.id = it.id;
 
     const url = `/api/commentary/file/${encodeURIComponent(it.id)}`;
@@ -6472,6 +6495,11 @@ el.dwVidPlayer.removeAttribute('src');
     card.appendChild(video);
     card.appendChild(meta);
     card.appendChild(actions);
+
+    // 配乐面板只挂在「待加配乐」卡上 — 已成片是终态，再改配乐要回 draft 区重走流程
+    if (state !== 'draft') {
+      return card;
+    }
 
     // 渲染后换/加/移除配乐面板：成品就地替换，秒级 amix，不重渲成片。
     // build() 已始终保留无音乐 sidecar，故可在 off/soft/light/epic/user 间自由切换。
