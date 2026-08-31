@@ -332,6 +332,7 @@
     comSubBorderVal: $('comSubBorderVal'),
     comSubColor: $('comSubColor'),
     comSubPreview: $('comSubPreview'),
+    comSubAspectHint: $('comSubAspectHint'),
     comMaxChars: $('comMaxChars'),
     comMaxCharsVal: $('comMaxCharsVal'),
     comFileInput: $('comFileInput'),
@@ -6561,11 +6562,25 @@ el.dwVidPlayer.removeAttribute('src');
   }
 
   // === 字幕样式实时预览（用 canvas 模拟成片字幕渲染：白字+黑描边+阴影）===
+  // 预览画布随「成片比例」切换整体框：横屏 16:9 / 竖屏 9:16，字幕落在画面的相对位置真实可见
   function comRenderSubtitlePreview() {
     const cv = el.comSubPreview;
     if (!cv) return;
     const ctx = cv.getContext('2d');
     if (!ctx) return;
+    // 1) 读取当前成片比例（默认横屏）
+    const aspectEl = document.querySelector('input[name="comAspect"]:checked');
+    const isVertical = aspectEl ? (aspectEl.value === 'vertical') : false;
+    // 2) 画布内部分辨率（landscape 480×270、vertical 270×480），CSS 用 aspect-ratio 等比缩放显示
+    const W = isVertical ? 270 : 480;
+    const H = isVertical ? 480 : 270;
+    if (cv.width !== W) cv.width = W;
+    if (cv.height !== H) cv.height = H;
+    cv.style.aspectRatio = W + ' / ' + H;
+    // 3) 更新比例提示
+    if (el.comSubAspectHint) {
+      el.comSubAspectHint.textContent = isVertical ? '竖屏 9:16 预览（抖音/视频号）' : '横屏 16:9 预览';
+    }
     const w = cv.width, h = cv.height;
     ctx.clearRect(0, 0, w, h);
     // 背景：暗色模拟视频画面
@@ -6574,11 +6589,11 @@ el.dwVidPlayer.removeAttribute('src');
     grad.addColorStop(1, '#0e0e10');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
-    // 文本：与成片同字号基准（成片基准~64px；预览按比例缩到 320 宽画布）
+    // 文本：字号按画布宽度比例（成片基准 ≈ 宽度 9%；与 _render_subtitle_png 视觉一致）
     const sizeRatio = el.comSubSize ? Number(el.comSubSize.value) : 1.0;
-    const fontPx = Math.max(10, Math.round(28 * sizeRatio));
+    const fontPx = Math.max(12, Math.round(w * 0.09 * sizeRatio));
     const borderRatio = el.comSubBorder ? Number(el.comSubBorder.value) : 1.0;
-    const borderPx = Math.max(1, Math.round(3 * borderRatio));
+    const borderPx = Math.max(1, Math.round(w * 0.012 * borderRatio));
     const color = (el.comSubColor ? el.comSubColor.value : '#FFFFFF') || '#FFFFFF';
     const posEl = document.querySelector('input[name="comSubPos"]:checked');
     const pos = posEl ? posEl.value : 'bottom';
@@ -6586,7 +6601,7 @@ el.dwVidPlayer.removeAttribute('src');
     ctx.font = `bold ${fontPx}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const y = (pos === 'center') ? h * 0.5 : h * 0.78;
+    const y = (pos === 'center') ? h * 0.5 : h * 0.82;
     // 阴影（贴近 _render_subtitle_png 的效果）
     ctx.shadowColor = 'rgba(0,0,0,0.85)';
     ctx.shadowBlur = borderPx * 2;
@@ -6648,6 +6663,10 @@ el.dwVidPlayer.removeAttribute('src');
     el.comSubColor.addEventListener('input', comRenderSubtitlePreview);
   }
   document.querySelectorAll('input[name="comSubPos"]').forEach((r) => {
+    r.addEventListener('change', comRenderSubtitlePreview);
+  });
+  // 成片比例切换时，重绘预览（横屏/竖屏框型不同）
+  document.querySelectorAll('input[name="comAspect"]').forEach((r) => {
     r.addEventListener('change', comRenderSubtitlePreview);
   });
   if (el.comMaxChars) {
