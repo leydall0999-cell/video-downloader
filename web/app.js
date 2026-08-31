@@ -242,8 +242,6 @@
     llmModel: $('llmModel'),
     llmReasoningEffort: $('llmReasoningEffort'),
     llmOffpeakOnly: $('llmOffpeakOnly'),
-    llmSave: $('llmSave'),
-    llmStatus: $('llmStatus'),
     // 视觉模型（片头检测 & 视觉理解共用）
     visionProvider: $('visionProvider'),
     visionApiKey: $('visionApiKey'),
@@ -253,8 +251,9 @@
     visionRuntime: $('visionRuntime'),
     visionSignup: $('visionSignup'),
     visionSignupWrap: $('visionSignupWrap'),
-    visionSave: $('visionSave'),
-    visionStatus: $('visionStatus'),
+    // LLM 与视觉模型共用一个保存按钮（合并 llmSave / visionSave）
+    aiSave: $('aiSave'),
+    aiStatus: $('aiStatus'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -8144,10 +8143,19 @@ el.dwVidPlayer.removeAttribute('src');
       }
     } catch (e) { /* */ }
 
-    // 保存按钮
-    if (el.llmSave) {
-      el.llmSave.addEventListener('click', async () => {
-        const body = {
+    // 统一保存按钮：同时把 LLM 与视觉模型两组配置打到后端
+    if (el.aiSave) {
+      el.aiSave.addEventListener('click', async () => {
+        if (el.aiStatus) el.aiStatus.style.color = '';
+        if (el.aiSave) { el.aiSave.disabled = true; }
+        const show = (txt, isErr) => {
+          if (!el.aiStatus) return;
+          el.aiStatus.hidden = false;
+          el.aiStatus.textContent = txt;
+          el.aiStatus.style.color = isErr ? '#e74c3c' : '';
+        };
+        // 两组 POST 并行，整体跑完后再提示
+        const llmBody = {
           provider: el.llmProvider ? el.llmProvider.value : 'openai',
           api_key: el.llmApiKey ? el.llmApiKey.value.trim() : '',
           base_url: el.llmBaseUrl ? el.llmBaseUrl.value.trim() : '',
@@ -8155,31 +8163,42 @@ el.dwVidPlayer.removeAttribute('src');
           reasoning_effort: el.llmReasoningEffort ? el.llmReasoningEffort.value : 'low',
           offpeak_only: el.llmOffpeakOnly ? el.llmOffpeakOnly.checked : false,
         };
+        const visionBody = {
+          provider: el.visionProvider ? el.visionProvider.value : 'auto',
+          api_key: el.visionApiKey ? el.visionApiKey.value.trim() : '',
+          base_url: el.visionBaseUrl ? el.visionBaseUrl.value.trim() : '',
+          model: el.visionModel ? el.visionModel.value.trim() : '',
+        };
+        show('正在保存…', false);
         try {
-          const r = await request('/api/llm/config', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-          const d = await r.json();
-          if (r.ok && d.ok) {
-            if (el.llmStatus) {
-              el.llmStatus.hidden = false;
-              el.llmStatus.textContent = '✅ 已保存';
-              setTimeout(() => { el.llmStatus.hidden = true; }, 2000);
-            }
+          const [lr, vr] = await Promise.all([
+            request('/api/llm/config', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(llmBody),
+            }),
+            request('/api/vision/config', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(visionBody),
+            }),
+          ]);
+          const ld = await lr.json().catch(() => ({}));
+          const vd = await vr.json().catch(() => ({}));
+          const llmOk = lr.ok && ld.ok;
+          const visOk = vr.ok && vd.ok;
+          if (llmOk && visOk) {
+            show('✅ 已保存（LLM + 视觉模型）', false);
+          } else if (llmOk && !visOk) {
+            show('⚠️ LLM 已保存，视觉模型失败', true);
+          } else if (!llmOk && visOk) {
+            show('⚠️ 视觉模型已保存，LLM 失败', true);
           } else {
-            if (el.llmStatus) {
-              el.llmStatus.hidden = false;
-              el.llmStatus.style.color = '#e74c3c';
-              el.llmStatus.textContent = '❌ 保存失败';
-            }
+            show('❌ 保存失败（LLM + 视觉模型）', true);
           }
         } catch (e) {
-          if (el.llmStatus) {
-            el.llmStatus.hidden = false;
-            el.llmStatus.style.color = '#e74c3c';
-            el.llmStatus.textContent = '❌ 网络错误';
-          }
+          show('❌ 网络错误：' + (e.message || ''), true);
+        } finally {
+          if (el.aiSave) el.aiSave.disabled = false;
+          if (el.aiStatus) setTimeout(() => { el.aiStatus.hidden = true; }, 2500);
         }
       });
     }
@@ -8289,43 +8308,7 @@ el.dwVidPlayer.removeAttribute('src');
       }
     } catch (e) { /* */ }
 
-    // 保存按钮
-    if (el.visionSave) {
-      el.visionSave.addEventListener('click', async () => {
-        const body = {
-          provider: el.visionProvider ? el.visionProvider.value : 'auto',
-          api_key: el.visionApiKey ? el.visionApiKey.value.trim() : '',
-          base_url: el.visionBaseUrl ? el.visionBaseUrl.value.trim() : '',
-          model: el.visionModel ? el.visionModel.value.trim() : '',
-        };
-        try {
-          const r = await request('/api/vision/config', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-          const d = await r.json();
-          if (r.ok && d.ok) {
-            if (el.visionStatus) {
-              el.visionStatus.hidden = false;
-              el.visionStatus.textContent = '✅ 已保存';
-              setTimeout(() => { el.visionStatus.hidden = true; }, 2000);
-            }
-          } else {
-            if (el.visionStatus) {
-              el.visionStatus.hidden = false;
-              el.visionStatus.style.color = '#e74c3c';
-              el.visionStatus.textContent = '❌ 保存失败';
-            }
-          }
-        } catch (e) {
-          if (el.visionStatus) {
-            el.visionStatus.hidden = false;
-            el.visionStatus.style.color = '#e74c3c';
-            el.visionStatus.textContent = '❌ 网络错误';
-          }
-        }
-      });
-    }
+    // LLM 与视觉模型共用一个保存按钮（见上方 aiSave 处理器）
   })();
 
   // ---- 格式 / 片段加工（桌面版功能） ----

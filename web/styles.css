@@ -1897,13 +1897,15 @@ img { max-width: 100%; display: block; }
   margin: .4rem 0 1.3rem; padding: .9rem 1rem 1rem;
   border: 1px solid var(--line); border-radius: var(--radius-md);
   background: #fbfbfe;
-  /* 两个折叠入口收起时并排一行；任一展开即独占全宽（.adv[open] 通配 flex:1 1 100%） */
-  display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem .75rem;
 }
-.com-ai-config .com-section-title { margin: 0 0 .15rem; flex: 1 1 100%; }
-.com-ai-config .adv { flex: 1 1 320px; min-width: 0; background: #fff; }
-.com-ai-config .adv[open] { flex: 1 1 calc(50% - .375rem); }
-.com-section-title { font-size: .95rem; font-weight: 700; color: var(--text); }
+.com-ai-config .adv { background: #fff; }
+.com-ai-config .adv[open] { border-radius: var(--radius-md); }
+/* 内部两列：LLM + 视觉模型分组，底部横线 + 单个保存按钮 */
+.com-ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; align-items: start; }
+.com-ai-col { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.com-ai-subtitle { font-size: .82rem; font-weight: 700; color: var(--text); margin: 0 0 .1rem; }
+.com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .5rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
+@media (max-width: 720px) { .com-ai-grid { grid-template-columns: 1fr; } }
 .com-entry-card select.adv-input { width: 100%; display: block; }
 /* 「选择本地视频」按钮与左侧「选择视频」下拉同款外观：全宽+细边框+白底 */
 .com-entry-card #comFileBtn {

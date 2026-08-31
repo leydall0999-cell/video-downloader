@@ -920,56 +920,58 @@
     <!-- 解说运行环境状态条：绿=就绪，黄/红=缺依赖 —— 方便排查 python/ffprobe 问题 -->
     <div id="comEnvStatus" class="com-env-status" hidden></div>
 
-    <!-- AI 能力与密钥配置：解说脚本(LLM) 与 片头检测/视觉理解(视觉模型) 统一在此设置，归属视频解说模块 -->
+    <!-- AI 能力与密钥配置：单开关展开 LLM + 视觉模型两组设置，共用一个保存按钮 -->
     <div class="com-ai-config" id="comAiConfig">
-      <h3 class="com-section-title">⚙️ AI 能力与密钥配置</h3>
+      <details class="adv com-ai-details" id="aiSettings" open>
+        <summary class="adv-summary">⚙️ AI 能力与密钥配置</summary>
+        <div class="adv-body com-ai-grid">
 
-      <!-- LLM 服务商选择器：统一配置解说与翻译所需的 Key / 提供商 / 模型 -->
-      <details class="adv" id="llmSettings">
-        <summary class="adv-summary">LLM 设置（解说 & 翻译共用）</summary>
-        <div class="adv-body">
-          <label class="adv-label" for="llmProvider">服务商</label>
-          <select id="llmProvider" class="adv-input"></select>
-          <label class="adv-label" for="llmApiKey">API Key</label>
-          <input id="llmApiKey" class="adv-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-          <label class="adv-label" for="llmBaseUrl">Base URL（自定义时填写）</label>
-          <input id="llmBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
-          <label class="adv-label" for="llmModel">模型</label>
-          <input id="llmModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
-          <label class="adv-label" for="llmReasoningEffort">推理强度（解说省钱旋钮）</label>
-          <select id="llmReasoningEffort" class="adv-input">
-            <option value="low">低（推荐：省钱且质量够用）</option>
-            <option value="disabled">关闭（最省 token，质量略降）</option>
-            <option value="high">高（最佳质量，最贵）</option>
-          </select>
-          <label class="adv-checkbox-row">
-            <input id="llmOffpeakOnly" type="checkbox" />
-            <span>避开峰时生成</span>
-          </label>
-          <button type="button" class="btn btn-primary btn-sm" id="llmSave">保存</button>
-          <span id="llmStatus" class="sub-status" hidden></span>
-        </div>
-      </details>
+          <!-- LLM 服务商选择器：统一配置解说与翻译所需的 Key / 提供商 / 模型 -->
+          <section class="com-ai-col">
+            <h4 class="com-ai-subtitle">LLM 设置（解说 &amp; 翻译共用）</h4>
+            <label class="adv-label" for="llmProvider">服务商</label>
+            <select id="llmProvider" class="adv-input"></select>
+            <label class="adv-label" for="llmApiKey">API Key</label>
+            <input id="llmApiKey" class="adv-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+            <label class="adv-label" for="llmBaseUrl">Base URL（自定义时填写）</label>
+            <input id="llmBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+            <label class="adv-label" for="llmModel">模型</label>
+            <input id="llmModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+            <label class="adv-label" for="llmReasoningEffort">推理强度（解说省钱旋钮）</label>
+            <select id="llmReasoningEffort" class="adv-input">
+              <option value="low">低（推荐：省钱且质量够用）</option>
+              <option value="disabled">关闭（最省 token，质量略降）</option>
+              <option value="high">高（最佳质量，最贵）</option>
+            </select>
+            <label class="adv-checkbox-row">
+              <input id="llmOffpeakOnly" type="checkbox" />
+              <span>避开峰时生成</span>
+            </label>
+          </section>
 
-      <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->
-      <details class="adv" id="visionSettings">
-        <summary class="adv-summary">视觉模型（片头检测 &amp; 视觉理解共用）</summary>
-        <div class="adv-body">
-          <label class="adv-label" for="visionProvider">服务商</label>
-          <select id="visionProvider" class="adv-input"></select>
-          <div id="visionSignupWrap" hidden style="margin:-2px 0 8px;">
-            <a id="visionSignup" href="#" target="_blank" rel="noopener noreferrer" style="color:#2d7ef7;text-decoration:underline;font-size:13px;">申请免费额度 →</a>
+          <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->
+          <section class="com-ai-col">
+            <h4 class="com-ai-subtitle">视觉模型（片头检测 &amp; 视觉理解共用）</h4>
+            <label class="adv-label" for="visionProvider">服务商</label>
+            <select id="visionProvider" class="adv-input"></select>
+            <div id="visionSignupWrap" hidden style="margin:-2px 0 8px;">
+              <a id="visionSignup" href="#" target="_blank" rel="noopener noreferrer" style="color:#2d7ef7;text-decoration:underline;font-size:13px;">申请免费额度 →</a>
+            </div>
+            <label class="adv-label" for="visionApiKey">API Key</label>
+            <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" />
+            <label class="adv-label" for="visionBaseUrl">Base URL（自定义时填写）</label>
+            <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+            <label class="adv-label" for="visionModel">模型</label>
+            <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
+            <p class="adv-note" id="visionNote">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
+            <div id="visionRuntime" class="adv-note"></div>
+          </section>
+
+          <!-- 共用一个保存按钮（同时保存 LLM 与视觉模型两组配置） -->
+          <div class="com-ai-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="aiSave">保存</button>
+            <span id="aiStatus" class="sub-status" hidden></span>
           </div>
-          <label class="adv-label" for="visionApiKey">API Key</label>
-          <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" />
-          <label class="adv-label" for="visionBaseUrl">Base URL（自定义时填写）</label>
-          <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
-          <label class="adv-label" for="visionModel">模型</label>
-          <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
-          <p class="adv-note" id="visionNote">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
-          <div id="visionRuntime" class="adv-note"></div>
-          <button type="button" class="btn btn-primary btn-sm" id="visionSave">保存</button>
-          <span id="visionStatus" class="sub-status" hidden></span>
         </div>
       </details>
     </div>
