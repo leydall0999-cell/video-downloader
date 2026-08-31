@@ -2716,3 +2716,61 @@ img { max-width: 100%; display: block; }
 .dw-modal-body .dw-preview-wrap img { max-width: none; max-height: none; width: auto; height: auto; flex-shrink: 0; }
 .dw-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.1rem; border-top: 1px solid var(--border, #e7e9f1); }
 .dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
+
+/* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） ===== */
+#commentaryView .com-workspace {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 330px;
+  gap: 12px;
+  align-items: start;
+  margin-top: .6rem;
+}
+.com-col { min-width: 0; }
+/* 左栏：成片历史（独立滚动；历史列表无下拉浮层，可安全 overflow） */
+.com-col-left {
+  position: sticky; top: 12px;
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: .7rem .8rem;
+}
+.com-col-left .com-results { margin-top: 0; }
+/* 右栏：解说参数（sticky 跟随，不加 overflow，保证下拉浮层不被裁剪） */
+.com-col-right {
+  position: sticky; top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: .7rem .8rem;
+}
+/* 右栏内部各参数块去重复卡片外观，统一由列容器作卡片 */
+.com-col-right > .com-opts,
+.com-col-right > .com-ai-config {
+  background: none; border: none; box-shadow: none;
+  margin: 0 0 .9rem; padding: 0;
+}
+.com-col-right > .com-opts { margin-top: 0; }
+/* 右栏内下拉胶囊贴左（列内空间窄，贴左更协调） */
+.com-col-right .com-opt-block[data-com-select] { justify-content: flex-start; }
+/* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
+.com-bottom {
+  position: sticky; bottom: 0; z-index: 30;
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: .7rem .9rem;
+  box-shadow: 0 -2px 14px rgba(30, 41, 59, .07);
+}
+.com-bottom .com-generate-row { margin-top: 0; padding: 0; }
+.com-bottom .com-script-panel,
+.com-bottom .com-review-actions,
+.com-bottom .com-steps-panel { margin-top: .7rem; }
+/* 窄屏回退单列 */
+@media (max-width: 1180px) {
+  #commentaryView .com-workspace { grid-template-columns: 1fr; }
+  .com-col-left, .com-col-right { position: static; max-height: none; overflow: visible; }
+  .com-bottom { position: static; }
+}

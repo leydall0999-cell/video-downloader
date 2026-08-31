@@ -916,12 +916,97 @@
         <button type="button" class="btn btn-ghost btn-sm" id="comRefresh">刷新</button>
       </div>
     </div>
+    <div class="com-workspace">
+        <div class="com-col com-col-left">
+                <div class="com-results" id="comResults" hidden>
+      <div class="com-history" id="comHistory">
+        <div class="com-history-head">
+          <div class="com-history-title-wrap">
+            <h3>📂 解说历史 <span id="comHistoryCount" class="com-history-count">0 个</span></h3>
+          </div>
+          <div class="com-history-toolbar">
+            <div class="com-view-toggle" id="comHistoryToolbar">
+          <button type="button" class="com-view-btn active" data-mode="list" title="列表">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="5" width="16" height="2" rx="1"/><rect x="2" y="9" width="16" height="2" rx="1"/><rect x="2" y="13" width="16" height="2" rx="1"/></svg>
+          </button>
+          <button type="button" class="com-view-btn" data-mode="grid" title="图标网格">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
+          </button>
+          <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="3.4" height="14" rx="1.2"/><rect x="8.3" y="3" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="3" width="3.4" height="14" rx="1.2"/></svg>
+          </button>
+          <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="9" r="1.8"/><path d="M4 14l3.5-3.5 2.5 2.5 3-3 3 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="com-sort">
+          <button type="button" class="com-sort-btn" id="comSortBtn" aria-haspopup="true" aria-expanded="false">
+            <span class="com-sort-label" id="comSortLabel">时间：最新在前</span>
+            <svg class="com-sort-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <ul class="com-sort-menu" id="comSortMenu" role="menu">
+            <li role="menuitem" data-value="mtime-desc">时间：最新在前</li>
+            <li role="menuitem" data-value="mtime-asc">时间：最早在前</li>
+            <li role="menuitem" data-value="size-desc">大小：从大到小</li>
+            <li role="menuitem" data-value="size-asc">大小：从小到大</li>
+            <li role="menuitem" data-value="name-asc">名称：A-Z</li>
+            <li role="menuitem" data-value="name-desc">名称：Z-A</li>
+          </ul>
+          </div>
+          </div>
+        </div>
+        <div class="com-grid" id="comGrid"></div>
+      </div>
+    </div>
+        </div>
+        <div class="com-col com-col-center">
+                <div id="comEnvStatus" class="com-env-status" hidden></div>
 
-    <!-- 解说运行环境状态条：绿=就绪，黄/红=缺依赖 —— 方便排查 python/ffprobe 问题 -->
-    <div id="comEnvStatus" class="com-env-status" hidden></div>
+                <div class="com-entry-grid">
+      <!-- 入口 1：从下载历史库（媒体库）生成 -->
+      <div class="com-entry-card">
+        <h3 class="com-entry-title">📚 从下载历史库生成</h3>
+        <select id="comSource" class="adv-input"><option value="">选择视频…</option></select>
+      </div>
 
-    <!-- AI 能力与密钥配置：单开关展开 LLM + 视觉模型两组设置，共用一个保存按钮 -->
-    <div class="com-ai-config" id="comAiConfig">
+      <!-- 入口 2：拖入本地文件 -->
+      <div class="com-entry-card" id="comDropZone">
+        <h3 class="com-entry-title">📁 从本地文件生成</h3>
+        <input id="comFileInput" type="file" accept="video/*" hidden />
+        <button type="button" class="btn btn-secondary" id="comFileBtn">选择本地视频</button>
+        <span class="com-status" id="comFileStatus" hidden></span>
+      </div>
+    </div>
+                <div class="com-trim-card" id="comTrimCard" hidden>
+      <div class="com-trim-head">
+        <h3>✂️ 预览与裁剪</h3>
+        <span class="com-trim-title" id="comTrimTitle" hidden></span>
+        <span class="com-trim-dur" id="comTrimDuration">裁剪后时长：--</span>
+      </div>
+      <video id="comPreview" class="com-preview" controls preload="metadata"></video>
+      <div class="com-trim-timeline">
+        <label class="com-trim-field">
+          <span class="com-trim-label">起点</span>
+          <input type="range" id="comTrimStartRange" class="com-range" min="0" max="100" step="0.1" value="0" />
+          <input type="text" id="comTrimStart" class="com-time-input" value="00:00:00" inputmode="numeric" />
+        </label>
+        <label class="com-trim-field">
+          <span class="com-trim-label">终点</span>
+          <input type="range" id="comTrimEndRange" class="com-range" min="0" max="100" step="0.1" value="100" />
+          <input type="text" id="comTrimEnd" class="com-time-input" value="00:00:00" inputmode="numeric" />
+        </label>
+      </div>
+      <div class="com-trim-actions">
+        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetStart">↩ 用播放位置设起点</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetEnd">↪ 用播放位置设终点</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="comTrimPreview">▶ 预览裁剪片段</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset">重置为整段</button>
+      </div>
+      <p class="com-trim-hint">此为<strong>外层源文件裁剪</strong>：会先把整段视频切到你选的起止范围，再交给解说流程。若下方「固定选择项」也填了正剧/片头片尾时间，<strong>两者会叠加生效、可能重复裁剪，建议只填一处</strong>。</p>
+    </div>
+        </div>
+        <div class="com-col com-col-right">
+                <div class="com-ai-config" id="comAiConfig">
       <details class="adv com-ai-details" id="aiSettings">
         <summary class="adv-summary">⚙️ AI 能力与密钥配置</summary>
         <div class="adv-body com-ai-grid">
@@ -975,54 +1060,7 @@
         </div>
       </details>
     </div>
-
-    <div class="com-entry-grid">
-      <!-- 入口 1：从下载历史库（媒体库）生成 -->
-      <div class="com-entry-card">
-        <h3 class="com-entry-title">📚 从下载历史库生成</h3>
-        <select id="comSource" class="adv-input"><option value="">选择视频…</option></select>
-      </div>
-
-      <!-- 入口 2：拖入本地文件 -->
-      <div class="com-entry-card" id="comDropZone">
-        <h3 class="com-entry-title">📁 从本地文件生成</h3>
-        <input id="comFileInput" type="file" accept="video/*" hidden />
-        <button type="button" class="btn btn-secondary" id="comFileBtn">选择本地视频</button>
-        <span class="com-status" id="comFileStatus" hidden></span>
-      </div>
-    </div>
-
-    <!-- 预览与裁剪：选好源视频后出现，可手动选起止时间裁剪 -->
-    <div class="com-trim-card" id="comTrimCard" hidden>
-      <div class="com-trim-head">
-        <h3>✂️ 预览与裁剪</h3>
-        <span class="com-trim-title" id="comTrimTitle" hidden></span>
-        <span class="com-trim-dur" id="comTrimDuration">裁剪后时长：--</span>
-      </div>
-      <video id="comPreview" class="com-preview" controls preload="metadata"></video>
-      <div class="com-trim-timeline">
-        <label class="com-trim-field">
-          <span class="com-trim-label">起点</span>
-          <input type="range" id="comTrimStartRange" class="com-range" min="0" max="100" step="0.1" value="0" />
-          <input type="text" id="comTrimStart" class="com-time-input" value="00:00:00" inputmode="numeric" />
-        </label>
-        <label class="com-trim-field">
-          <span class="com-trim-label">终点</span>
-          <input type="range" id="comTrimEndRange" class="com-range" min="0" max="100" step="0.1" value="100" />
-          <input type="text" id="comTrimEnd" class="com-time-input" value="00:00:00" inputmode="numeric" />
-        </label>
-      </div>
-      <div class="com-trim-actions">
-        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetStart">↩ 用播放位置设起点</button>
-        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetEnd">↪ 用播放位置设终点</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="comTrimPreview">▶ 预览裁剪片段</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset">重置为整段</button>
-      </div>
-      <p class="com-trim-hint">此为<strong>外层源文件裁剪</strong>：会先把整段视频切到你选的起止范围，再交给解说流程。若下方「固定选择项」也填了正剧/片头片尾时间，<strong>两者会叠加生效、可能重复裁剪，建议只填一处</strong>。</p>
-    </div>
-
-    <!-- 剪辑选项：核心选风格即可，其余收进高级折叠区 -->
-    <div class="com-opts" id="comOpts">
+                <div class="com-opts" id="comOpts">
       <!-- 核心：解说类型（自定义下拉） -->
       <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">解说类型</div>
@@ -1158,9 +1196,7 @@
           </div>
 
     </div>
-
-    <!-- 核心：解说风格（联动音色） -->
-    <div class="com-opts com-style-section">
+                <div class="com-opts com-style-section">
       <div class="com-opt-block com-opt-block-full" data-com-select="comStyle">
         <div class="com-opt-row com-opt-row-styles">
           <label class="com-mode-option"><input type="radio" name="comStyle" value="none" checked /><span><b>默认</b></span></label>
@@ -1177,9 +1213,7 @@
         <p class="com-style-hint" id="comStyleHint">默认风格：音色由下方「全局配音」决定。</p>
       </div>
     </div>
-
-    <!-- 成片增强：吸收 AI 解说体验优点（BGM / 字幕样式 / 解说长度） -->
-    <div class="com-opts com-enhance-section">
+                <div class="com-opts com-enhance-section">
       <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">BGM 自动配乐</div>
         <div class="com-opt-row">
@@ -1231,9 +1265,7 @@
         <span class="com-retain-hint">0=不限制；短视频想短就调小（如 600），课程想长就调大</span>
       </div>
     </div>
-
-    <!-- 配音与音量：手动可调，保存后对所有解说任务生效 -->
-    <div class="com-opt-block com-opt-block-full" id="comVolumeBlock">
+                <div class="com-opt-block com-opt-block-full" id="comVolumeBlock">
       <div class="com-opt-title">配音与音量 <span class="com-opt-tip">（保存后对所有解说任务生效）</span></div>
       <div class="com-vol-row">
         <div class="com-vol-item">
@@ -1272,14 +1304,14 @@
         </div>
       </div>
     </div>
-
-    <div class="com-generate-row">
+        </div>
+    </div>
+    <div class="com-bottom">
+            <div class="com-generate-row">
       <button type="button" class="btn btn-primary com-generate-main com-oneclick" id="comGenerateOneClick">⚡ 一键生成</button>
       <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript">生成脚本（可审核修改）</button>
     </div>
-    <p class="com-oneclick-note">一键生成：AI 高度自由发挥 + 自动联网查找资料 + 全片深入解说 + 片头插入高光钩子 + 单行字幕（与原字幕同行）+ 仅羽化原字幕 + 弱化原声</p>
-    <!-- 解说进度条：阶段标签 + 百分比 + 渐变填充条 -->
-    <div id="comProgress" hidden>
+            <div id="comProgress" hidden>
       <div class="com-progress-head">
         <span id="comPhase" class="com-phase-tag">转写中</span>
         <span id="comPercent" class="com-percent">0%</span>
@@ -1289,22 +1321,17 @@
         <div id="comBarFill" class="com-bar-fill" style="width:0%"></div>
       </div>
     </div>
-    <span class="com-status" id="comStatus" hidden></span>
-    <div id="comReviewActions" class="com-review-actions" hidden>
+            <div id="comReviewActions" class="com-review-actions" hidden>
       <span class="com-review-hint">解说词已生成，审核通过后再渲染成片</span>
     </div>
-
-    <!-- 解说过程时间线：步骤 + 日志 -->
-    <div id="comStepsPanel" class="com-steps-panel" hidden>
+            <div id="comStepsPanel" class="com-steps-panel" hidden>
       <div id="comStepsList" class="com-steps"></div>
       <details class="com-logs-wrap">
         <summary>运行日志</summary>
         <pre id="comLogs" class="com-logs"></pre>
       </details>
     </div>
-
-    <!-- 脚本审核编辑面板：生成脚本后展示，可逐段修改解说词 + 选配音 -->
-    <div id="comScriptPanel" hidden>
+            <div id="comScriptPanel" hidden>
       <div class="com-script-head">
         <h3>✏️ 解说词审核</h3>
         <div class="com-script-head-actions">
@@ -1325,47 +1352,6 @@
         <span id="comScriptStatus" class="com-script-status" hidden></span>
       </div>
     </div>
-
-    <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
-    <div class="com-results" id="comResults" hidden>
-      <div class="com-history" id="comHistory">
-        <div class="com-history-head">
-          <div class="com-history-title-wrap">
-            <h3>📂 解说历史 <span id="comHistoryCount" class="com-history-count">0 个</span></h3>
-          </div>
-          <div class="com-history-toolbar">
-            <div class="com-view-toggle" id="comHistoryToolbar">
-          <button type="button" class="com-view-btn active" data-mode="list" title="列表">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="5" width="16" height="2" rx="1"/><rect x="2" y="9" width="16" height="2" rx="1"/><rect x="2" y="13" width="16" height="2" rx="1"/></svg>
-          </button>
-          <button type="button" class="com-view-btn" data-mode="grid" title="图标网格">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
-          </button>
-          <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="3.4" height="14" rx="1.2"/><rect x="8.3" y="3" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="3" width="3.4" height="14" rx="1.2"/></svg>
-          </button>
-          <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="9" r="1.8"/><path d="M4 14l3.5-3.5 2.5 2.5 3-3 3 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-        </div>
-        <div class="com-sort">
-          <button type="button" class="com-sort-btn" id="comSortBtn" aria-haspopup="true" aria-expanded="false">
-            <span class="com-sort-label" id="comSortLabel">时间：最新在前</span>
-            <svg class="com-sort-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <ul class="com-sort-menu" id="comSortMenu" role="menu">
-            <li role="menuitem" data-value="mtime-desc">时间：最新在前</li>
-            <li role="menuitem" data-value="mtime-asc">时间：最早在前</li>
-            <li role="menuitem" data-value="size-desc">大小：从大到小</li>
-            <li role="menuitem" data-value="size-asc">大小：从小到大</li>
-            <li role="menuitem" data-value="name-asc">名称：A-Z</li>
-            <li role="menuitem" data-value="name-desc">名称：Z-A</li>
-          </ul>
-          </div>
-          </div>
-        </div>
-        <div class="com-grid" id="comGrid"></div>
-      </div>
     </div>
   </section>
 
