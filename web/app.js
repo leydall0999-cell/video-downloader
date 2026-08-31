@@ -261,12 +261,6 @@
     commentaryView: $('commentaryView'),
     comResults: $('comResults'),
     comEmpty: $('comEmpty'),
-    comDraftSection: $('comDraftSection'),
-    comDraftGrid: $('comDraftGrid'),
-    comDraftCount: $('comDraftCount'),
-    comFinalSection: $('comFinalSection'),
-    comFinalGrid: $('comFinalGrid'),
-    comFinalCount: $('comFinalCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comSortBtn: $('comSortBtn'),
     comSortMenu: $('comSortMenu'),
@@ -6216,7 +6210,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comBoost.value = 1.0; el.comBoostVal.textContent = '1.00×';
   };
 
-  /** 按当前视图模式与排序重新渲染成片列表（按 BGM 状态拆成「待加配乐 / 已成片」两区） */
+  /** 按当前视图模式与排序重新渲染成片列表（单区，每张卡自带配乐面板） */
   const renderCommentaryList = () => {
     const items = commentaryItems.slice();
     const [sortKey, sortOrder] = commentarySort.split('-');
@@ -6230,66 +6224,39 @@ el.dwVidPlayer.removeAttribute('src');
       return 0;
     });
 
-    // 拆 draft（无配乐） vs final（已成片）。bgm_state 缺失/空/=off 都算 draft。
-    const isFinal = (it) => {
-      const bgm = it && it.bgm_state && it.bgm_state.bgm;
-      return typeof bgm === 'string' && bgm && bgm !== 'off';
-    };
-    const draftItems = items.filter((it) => !isFinal(it));
-    const finalItems = items.filter(isFinal);
-
-    // 空状态
+    // 单区：每张成片卡都默认带配乐面板，无草稿/成片之分（用户截图要求）
+    el.comGrid.className = 'com-grid com-view-' + commentaryViewMode;
+    el.comGrid.replaceChildren();
     el.comEmpty.hidden = items.length > 0;
-    el.comResults.hidden = items.length === 0;
-
-    // 两区可见性 + 计数
-    el.comDraftSection.hidden = draftItems.length === 0;
-    el.comFinalSection.hidden = finalItems.length === 0;
-    el.comDraftCount.textContent = draftItems.length ? `${draftItems.length} 个` : '';
-    el.comFinalCount.textContent = finalItems.length ? `${finalItems.length} 个` : '';
-
-    // 应用视图类名 + 清空两区
-    const viewClass = 'com-grid com-view-' + commentaryViewMode;
-    el.comDraftGrid.className = viewClass;
-    el.comFinalGrid.className = viewClass;
-    el.comDraftGrid.replaceChildren();
-    el.comFinalGrid.replaceChildren();
+    el.comHistory.hidden = items.length === 0;
 
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
     } else {
-      // 两区分别按当前视图模式渲染
-      renderComIntoGrid(el.comDraftGrid, draftItems, 'draft');
-      renderComIntoGrid(el.comFinalGrid, finalItems, 'final');
-    }
-  };
-
-  /** 把一组 items 按当前视图模式渲染到指定 grid 容器；state 决定是否带配乐面板 */
-  const renderComIntoGrid = (grid, items, state) => {
-    if (items.length === 0) return;
-    if (commentaryViewMode === 'timeline') {
-      // 时间线视图：按日期分组
-      const groups = {};
-      items.forEach((it) => {
-        const d = new Date(it.mtime * 1000).toLocaleDateString();
-        (groups[d] = groups[d] || []).push(it);
-      });
-      const desc = commentarySort === 'mtime-desc';
-      Object.keys(groups).sort((a, b) => {
-        const da = new Date(a).getTime();
-        const db = new Date(b).getTime();
-        return desc ? db - da : da - db;
-      }).forEach((date) => {
-        const h = document.createElement('div');
-        h.className = 'com-timeline-date';
-        h.textContent = date;
-        grid.appendChild(h);
-        groups[date].forEach((it) => grid.appendChild(createComCard(it, false, state)));
-      });
-    } else if (commentaryViewMode === 'gallery') {
-      items.forEach((it) => grid.appendChild(createComCard(it, true, state)));
-    } else {
-      items.forEach((it) => grid.appendChild(createComCard(it, false, state)));
+      el.comHistoryCount.textContent = `${items.length} 个`;
+      if (commentaryViewMode === 'timeline') {
+        const groups = {};
+        items.forEach((it) => {
+          const d = new Date(it.mtime * 1000).toLocaleDateString();
+          (groups[d] = groups[d] || []).push(it);
+        });
+        Object.keys(groups).sort((a, b) => {
+          const desc = commentarySort === 'mtime-desc';
+          const da = new Date(a).getTime();
+          const db = new Date(b).getTime();
+          return desc ? db - da : da - db;
+        }).forEach((date) => {
+          const h = document.createElement('div');
+          h.className = 'com-timeline-date';
+          h.textContent = date;
+          el.comGrid.appendChild(h);
+          groups[date].forEach((it) => el.comGrid.appendChild(createComCard(it)));
+        });
+      } else if (commentaryViewMode === 'gallery') {
+        items.forEach((it) => el.comGrid.appendChild(createComCard(it, true)));
+      } else {
+        items.forEach((it) => el.comGrid.appendChild(createComCard(it)));
+      }
     }
   };
 
@@ -6386,7 +6353,7 @@ el.dwVidPlayer.removeAttribute('src');
 
   /** 渲染后给某张成片卡换/加/移除配乐（轻量 amix，秒级，成品就地替换）。 */
   const comRemuxCardBgm = (it, opts, refs) => {
-    const { bgm, bgm_volume, bgm_file } = opts;
+    const { bgm, bgm_volume, bgm_file, bgm_clip_start, bgm_clip_end } = opts;
     const { video, status, apply, cur } = refs;
     const label = (b) => ({ off: '关闭配乐', soft: '柔和氛围', light: '轻快', epic: '恢弘', user: '本地音乐' }[b] || b);
     if (bgm === 'user' && !bgm_file) {
@@ -6403,6 +6370,12 @@ el.dwVidPlayer.removeAttribute('src');
     form.append('bgm', bgm);
     form.append('bgm_volume', String(bgm_volume));
     if (bgm === 'user' && bgm_file) form.append('bgm_file', bgm_file);
+    if (bgm_clip_start !== null && bgm_clip_start !== undefined) {
+      form.append('bgm_clip_start', String(bgm_clip_start));
+    }
+    if (bgm_clip_end !== null && bgm_clip_end !== undefined) {
+      form.append('bgm_clip_end', String(bgm_clip_end));
+    }
     (async () => {
       let remuxId;
       try {
@@ -6421,7 +6394,13 @@ el.dwVidPlayer.removeAttribute('src');
             clearInterval(poll);
             status.className = 'com-music-status com-music-ok';
             status.textContent = `已应用：${label(bgm)}`;
-            if (cur) cur.textContent = `当前：${bgm === 'off' ? '无配乐' : label(bgm)}`;
+            if (cur) {
+              const volPct = Math.round((opts.bgm_volume || 0.18) * 100);
+              const clipStr = (opts.bgm_clip_start !== null && opts.bgm_clip_start !== undefined
+                  && opts.bgm_clip_end !== null && opts.bgm_clip_end !== undefined)
+                  ? ` 片段 ${opts.bgm_clip_start.toFixed(1)}s→${opts.bgm_clip_end.toFixed(1)}s` : '';
+              cur.textContent = `当前：${label(bgm)}（${volPct}%${clipStr}）`;
+            }
             if (video) {
               const u = new URL(video.src, location.href);
               u.searchParams.set('_', String(Date.now()));
@@ -6429,7 +6408,7 @@ el.dwVidPlayer.removeAttribute('src');
               try { video.load(); } catch (_) { /* 部分 WebView 不支持 load，src 变更已触发重载 */ }
             }
             apply.disabled = false;
-            // 走过 remux 流程的文件 = 已成片，应从 draft 区搬到 final 区。重拉一次列表。
+            // 重新拉列表更新 bgm_state 标记（无 region 切换；只是刷新"当前"和manifest）
             try { await loadCommentary(); } catch (_) { /* 列表刷新失败不影响本地状态 */ }
           } else if (st.status === 'failed') {
             clearInterval(poll);
@@ -6444,9 +6423,9 @@ el.dwVidPlayer.removeAttribute('src');
     })();
   };
 
-  const createComCard = (it, gallery = false, state = 'draft') => {
+  const createComCard = (it, gallery = false) => {
     const card = document.createElement('div');
-    card.className = 'com-card' + (gallery ? ' com-card-gallery' : '') + ' com-card-' + state;
+    card.className = 'com-card' + (gallery ? ' com-card-gallery' : '');
     card.dataset.id = it.id;
 
     const url = `/api/commentary/file/${encodeURIComponent(it.id)}`;
@@ -6496,13 +6475,7 @@ el.dwVidPlayer.removeAttribute('src');
     card.appendChild(meta);
     card.appendChild(actions);
 
-    // 配乐面板只挂在「待加配乐」卡上 — 已成片是终态，再改配乐要回 draft 区重走流程
-    if (state !== 'draft') {
-      return card;
-    }
-
-    // 渲染后换/加/移除配乐面板：成品就地替换，秒级 amix，不重渲成片。
-    // build() 已始终保留无音乐 sidecar，故可在 off/soft/light/epic/user 间自由切换。
+    // 配乐面板（默认每张成片卡都挂）：选曲→试听→双 slider 选片段→应用换乐
     const music = document.createElement('div');
     music.className = 'com-music';
     music.innerHTML = `
@@ -6521,8 +6494,25 @@ el.dwVidPlayer.removeAttribute('src');
         <input type="range" class="com-music-vol" data-role="vol" min="0.02" max="0.6" step="0.01" value="0.18" />
         <span class="com-music-volval" data-role="volval">18%</span>
       </div>
+      <div class="com-music-audio-wrap">
+        <audio class="com-music-audio" data-role="audio" controls preload="none"></audio>
+        <span class="com-music-dur" data-role="dur">未试听</span>
+      </div>
+      <div class="com-music-clip-info" data-role="clip-info">
+        <span>片段：</span>
+        <span data-role="clip-start-label">0.0</span>s
+        <span> — </span>
+        <span data-role="clip-end-label">0.0</span>s
+        <span class="com-music-clip-len" data-role="clip-len"></span>
+      </div>
+      <div class="com-music-clip" data-role="clip-wrap" hidden>
+        <div class="com-music-clip-track"></div>
+        <div class="com-music-clip-fill" data-role="clip-fill"></div>
+        <input type="range" class="com-music-clip-input com-music-clip-begin" data-role="clip-begin" min="0" max="100" step="0.1" value="0" aria-label="片段起点" />
+        <input type="range" class="com-music-clip-input com-music-clip-end" data-role="clip-end" min="0" max="100" step="0.1" value="100" aria-label="片段终点" />
+      </div>
       <div class="com-music-file" data-role="filewrap" hidden>
-        <input type="text" class="com-music-fileval" data-role="fileval" placeholder="未选择文件" readonly />
+        <input type="text" class="com-music-fileval" data-role="fileval" placeholder="未选择本地音乐" readonly />
         <button type="button" class="com-music-pick" data-role="pick">选文件…</button>
       </div>
       <div class="com-music-actions">
@@ -6532,14 +6522,125 @@ el.dwVidPlayer.removeAttribute('src');
     const sel = music.querySelector('[data-role="sel"]');
     const vol = music.querySelector('[data-role="vol"]');
     const volval = music.querySelector('[data-role="volval"]');
+    const audio = music.querySelector('[data-role="audio"]');
+    const dur = music.querySelector('[data-role="dur"]');
+    const clipBegin = music.querySelector('[data-role="clip-begin"]');
+    const clipEnd = music.querySelector('[data-role="clip-end"]');
+    const clipFill = music.querySelector('[data-role="clip-fill"]');
+    const clipStartLabel = music.querySelector('[data-role="clip-start-label"]');
+    const clipEndLabel = music.querySelector('[data-role="clip-end-label"]');
+    const clipLen = music.querySelector('[data-role="clip-len"]');
+    const clipWrap = music.querySelector('[data-role="clip-wrap"]');
+    const clipInfo = music.querySelector('[data-role="clip-info"]');
     const filewrap = music.querySelector('[data-role="filewrap"]');
     const fileval = music.querySelector('[data-role="fileval"]');
     const pick = music.querySelector('[data-role="pick"]');
     const apply = music.querySelector('[data-role="apply"]');
     const status = music.querySelector('[data-role="status"]');
     const cur = music.querySelector('[data-role="cur"]');
-    vol.addEventListener('input', () => { volval.textContent = Math.round(Number(vol.value) * 100) + '%'; });
-    sel.addEventListener('change', () => { filewrap.hidden = sel.value !== 'user'; });
+
+    let currentDur = 0;  // 当前 BGM 文件秒数（0=未加载）
+
+    const refreshClipUI = () => {
+      const b = Number(clipBegin.value), e = Number(clipEnd.value);
+      clipFill.style.left = b + '%';
+      clipFill.style.width = Math.max(0, e - b) + '%';
+      const s = (b / 100) * currentDur;
+      const ed = (e / 100) * currentDur;
+      clipStartLabel.textContent = currentDur > 0 ? s.toFixed(1) : '0.0';
+      clipEndLabel.textContent = currentDur > 0 ? ed.toFixed(1) : currentDur > 0 ? currentDur.toFixed(1) : '0.0';
+      if (currentDur > 0) {
+        clipInfo.hidden = false;
+        const len = Math.max(0, ed - s);
+        clipLen.textContent = len > 0 ? `（${len.toFixed(1)}s）` : '';
+      } else {
+        clipInfo.hidden = true;
+      }
+    };
+
+    const setAudioSource = (kind, file) => {
+      if (!kind || kind === 'off') {
+        audio.removeAttribute('src');
+        audio.load();
+        currentDur = 0;
+        dur.textContent = '未试听';
+        clipWrap.hidden = true;
+        clipInfo.hidden = true;
+        return;
+      }
+      if (kind === 'user') {
+        if (!file) {
+          audio.removeAttribute('src');
+          audio.load();
+          currentDur = 0;
+          dur.textContent = '请先选本地音乐';
+          clipWrap.hidden = true;
+          return;
+        }
+        audio.src = `/api/commentary/audio-preview?path=${encodeURIComponent(file)}`;
+      } else {
+        // 内置 soft/light/epic 拉后端 preview mp3 sidecar（build 时已落）
+        audio.src = `/api/commentary/bgm-preview/${encodeURIComponent(it.id)}/${kind}`;
+        currentDur = 8.0;  // 已知 preview 是 8s
+      }
+      try { audio.load(); } catch (_) { /* WebView 兼容 */ }
+    };
+
+    const onLoadedMeta = () => {
+      const d = audio.duration;
+      if (Number.isFinite(d) && d > 0) {
+        currentDur = d;
+        dur.textContent = `试听 ${d.toFixed(1)}s`;
+        clipWrap.hidden = false;
+        // 整条
+        clipBegin.value = 0;
+        clipEnd.value = 100;
+        refreshClipUI();
+      }
+    };
+
+    audio.addEventListener('loadedmetadata', onLoadedMeta);
+    audio.addEventListener('error', () => {
+      dur.textContent = '加载失败';
+      clipWrap.hidden = true;
+      currentDur = 0;
+    });
+
+    clipBegin.addEventListener('input', () => {
+      // 起点不能超过终点
+      const b = Number(clipBegin.value), e = Number(clipEnd.value);
+      if (b > e) { clipBegin.value = e; }
+      refreshClipUI();
+    });
+    clipEnd.addEventListener('input', () => {
+      const b = Number(clipBegin.value), e = Number(clipEnd.value);
+      if (e < b) { clipEnd.value = b; }
+      refreshClipUI();
+    });
+
+    vol.addEventListener('input', () => {
+      volval.textContent = Math.round(Number(vol.value) * 100) + '%';
+    });
+
+    sel.addEventListener('change', () => {
+      const v = sel.value;
+      filewrap.hidden = v !== 'user';
+      // 若开启 user 但没选文件，不切 src
+      if (v === 'user') {
+        if (fileval.value) {
+          setAudioSource('user', fileval.value);
+        } else {
+          audio.removeAttribute('src');
+          audio.load();
+          currentDur = 0;
+          dur.textContent = '请先选本地音乐';
+          clipWrap.hidden = true;
+        }
+      } else {
+        setAudioSource(v, '');
+      }
+    });
+
     pick.addEventListener('click', async (e) => {
       e.preventDefault(); e.stopPropagation();
       try {
@@ -6549,13 +6650,55 @@ el.dwVidPlayer.removeAttribute('src');
           const arr = await fn();
           p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
         }
-        if (p) fileval.value = p;
+        if (p) {
+          fileval.value = p;
+          if (sel.value === 'user') {
+            setAudioSource('user', p);
+          }
+        }
       } catch (_) { /* 用户取消或环境不支持，忽略 */ }
     });
+
+    // 上次状态预填（如果 list 端点给了 bgm_state）
+    const prevState = (it && it.bgm_state) || {};
+    if (prevState.bgm && ['soft', 'light', 'epic', 'user'].includes(prevState.bgm)) {
+      sel.value = prevState.bgm;
+      vol.value = String(prevState.volume || 0.18);
+      volval.textContent = Math.round(Number(vol.value) * 100) + '%';
+      if (prevState.bgm === 'user') {
+        filewrap.hidden = false;
+      }
+      // 触发 sel.change 加载 preview
+      sel.dispatchEvent(new Event('change'));
+    }
+    if (prevState.bgm) {
+      const labelMap = { off: '无配乐', soft: '柔和氛围', light: '轻快', epic: '恢弘', user: '本地音乐' };
+      cur.textContent = `当前：${labelMap[prevState.bgm] || prevState.bgm}（${Math.round((prevState.volume || 0.18) * 100)}%）`;
+    } else {
+      cur.textContent = '当前：无配乐';
+    }
+
     apply.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
-      comRemuxCardBgm(it, { bgm: sel.value, bgm_volume: Number(vol.value), bgm_file: fileval.value },
-                      { video, status, apply, cur });
+      // 收集 clip 秒数（无 clip 时不传）
+      let clipStart = null, clipEnd2 = null;
+      if (currentDur > 0 && sel.value !== 'off') {
+        const b = (Number(clipBegin.value) / 100) * currentDur;
+        const ed = (Number(clipEnd.value) / 100) * currentDur;
+        // 仅当用户主动拖过（非 [0, dur] 整条）才传，避免无意义的[0, dur]
+        const isWhole = b <= 0.05 && Math.abs(ed - currentDur) <= 0.1;
+        if (!isWhole && ed > b + 0.05) {
+          clipStart = b;
+          clipEnd2 = ed;
+        }
+      }
+      comRemuxCardBgm(it, {
+        bgm: sel.value,
+        bgm_volume: Number(vol.value),
+        bgm_file: fileval.value,
+        bgm_clip_start: clipStart,
+        bgm_clip_end: clipEnd2,
+      }, { video, status, apply, cur });
     });
     card.appendChild(music);
     return card;

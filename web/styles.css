@@ -2074,30 +2074,9 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius-md); box-shadow: var(--shadow);
   flex-wrap: wrap;
 }
-.com-section {
-  margin-bottom: 1.25rem;
-  padding: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow);
-}
-.com-section-draft {
-  border-style: dashed;       /* 待加配乐 = 半成品，虚线边框 */
-  border-color: var(--brand, #6366f1);
-  background: linear-gradient(0deg, var(--brand-soft, rgba(99,102,241,.05)) 0%, var(--surface) 60%);
-}
-.com-section-head {
-  display: flex; align-items: center; gap: .5rem;
-  margin-bottom: .85rem; padding-bottom: .65rem;
-  border-bottom: 1px solid var(--line);
-}
-.com-section-head h3 { margin: 0; font-size: 1rem; color: var(--text); }
-.com-section-count {
-  font-size: .75rem; color: var(--text-mute);
-  background: var(--bg-soft, #f3f4f6); padding: .15rem .5rem; border-radius: 999px;
-}
-.com-section-draft .com-section-head h3::before { content: "🕓 "; }
+.com-section-draft { display: none; }   /* 已回滚到单区，旧草案式隐藏 */
+.com-section-head { display: none; }   /* 同上 */
+.com-section-count { display: none; }
 .com-card {
   background: var(--surface); border-radius: var(--radius-md); overflow: hidden;
   border: 1px solid var(--line); box-shadow: var(--shadow);
@@ -2144,6 +2123,70 @@ img { max-width: 100%; display: block; }
 .com-music-status { font-size: .76rem; color: var(--text-mute); }
 .com-music-status.com-music-ok { color: var(--success, #1a9d54); }
 .com-music-status.com-music-err { color: var(--danger, #d23); }
+
+/* 试听 audio + 时长显示 */
+.com-music-audio-wrap { display: flex; align-items: center; gap: .5rem; }
+.com-music-audio {
+  flex: 1 1 0; min-width: 0; height: 30px;
+}
+.com-music-dur {
+  flex: 0 0 auto; font-size: .74rem; color: var(--text-mute);
+  padding: .15rem .45rem; border-radius: 4px; background: var(--surface, rgba(0,0,0,.04));
+  min-width: 60px; text-align: right;
+}
+
+/* 片段信息行 */
+.com-music-clip-info {
+  display: flex; align-items: baseline; gap: .25rem; font-size: .78rem;
+  color: var(--text, #333); flex-wrap: wrap;
+}
+.com-music-clip-info[data-hidden="1"] { display: none; }
+.com-music-clip-len { color: var(--text-mute); margin-left: .25rem; }
+
+/* 双 slider：一条轨道 + 一个高亮填充区 + 两个 <input type=range> 叠上去 */
+.com-music-clip {
+  position: relative; height: 26px; padding: 0;
+  /* 让两个 range 输入完全覆盖 */
+}
+.com-music-clip-track {
+  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+  height: 4px; background: var(--line, #d8d8d8); border-radius: 2px;
+}
+.com-music-clip-fill {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 4px; background: var(--primary, #6366f1); border-radius: 2px;
+  pointer-events: none;
+}
+.com-music-clip-input {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  -webkit-appearance: none; appearance: none;
+  background: transparent; pointer-events: none;
+  margin: 0; padding: 0;
+}
+.com-music-clip-input::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--primary, #6366f1);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--line, #ccc);
+  cursor: pointer;
+  pointer-events: auto;
+  margin-top: 0;
+}
+.com-music-clip-input::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--primary, #6366f1);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--line, #ccc);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.com-music-clip-input::-webkit-slider-runnable-track { background: transparent; height: 100%; }
+.com-music-clip-input::-moz-range-track { background: transparent; height: 100%; }
+/* 让 end 输入的滑块在视觉上覆盖在 begin 之上 */
+.com-music-clip-end { z-index: 2; }
+/* 在 begin 端隐藏 begin 滑块的右半部分重叠，避免视觉错位 */
+.com-music-clip-begin { z-index: 1; }
 
 /* 列表视图 */
 .com-view-list { grid-template-columns: 1fr; }

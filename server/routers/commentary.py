@@ -286,10 +286,14 @@ def commentary_diagnostics() -> dict:
 def commentary_list() -> dict:
     """按修改时间倒序列出所有已生成的解说成片。
 
-    每条返回 `bgm_state`：{"bgm": "off|soft|light|epic|user", "volume": float, "source": "render|remux", "ts": int}
-    缺失 manifest 视为待加配乐（draft）；bgm != "off" 视为已成片（final）。
-    前端据此把成片拆成「已渲染/待加配乐」和「已生成成片」两个分区。
+    每条返回：
+    - id / name / size / mtime：成片元数据
+    - bgm_state: {bgm, volume, source, ts}（manifest 缺失视为空 → 走默认 off）
+    - bgm_previews: ["soft","light","epic"] 的子集 — 仅返回实际存在的预览 mp3
+      （build() 渲染时已落 sidecar；旧版渲染可能为空）
+    前端按 bgm_state 拆 draft/final；预览/试听通过 /api/commentary/bgm-preview/{cid}/{kind}。
     """
+    import pathlib as _pl
     items = []
     seen: set[str] = set()
     for root in app._commentary_roots():
@@ -302,6 +306,18 @@ def commentary_list() -> dict:
             seen.add(key)
             cid = app.base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii")
             state = app._read_bgm_state(p) or {}
+            # 哪些内置风格的 preview mp3 实际存在
+            previews = []
+            try:
+                base = _pl.Path(key)
+                stem = base.stem  # 去后缀的 basename（同名 .previews）
+                previews_dir = base.parent / (stem + ".previews")
+                if previews_dir.is_dir():
+                    for kind in ("soft", "light", "epic"):
+                        if (previews_dir / f"{kind}.mp3").is_file():
+                            previews.append(kind)
+            except Exception:
+                pass
             items.append({
                 "id": cid,
                 "name": p.name,
@@ -313,6 +329,7 @@ def commentary_list() -> dict:
                     "source": state.get("source", ""),
                     "ts": int(state.get("ts", 0) or 0),
                 },
+                "bgm_previews": previews,
             })
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return {"items": items}
@@ -670,10 +687,12 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
 
 
-def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str, bgm_volume: float) -> None:
+def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str,
+                   bgm_volume: float, bgm_clip_start=None, bgm_clip_end=None) -> None:
     """后台轻量换/加/移除 BGM：复用 _commentary_run 的同款子进程机制跑 process.py remux-bgm。
 
     不重渲成片，只跑 amix（秒级），成品就地替换（build 时已存无音乐 sidecar）。
+    bgm_clip_start/end (秒)：锁住 BGM 文件片段——通过 ffmpeg atrim 完成。
     """
     last: list[str] = []
 
@@ -698,6 +717,10 @@ def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str, bgm
         args += ["--bgm", bgm, "--bgm-volume", str(bgm_volume)]
         if bgm == "user" and bgm_file:
             args += ["--bgm-file", bgm_file]
+        if bgm_clip_start is not None:
+            args += ["--bgm-clip-start", str(float(bgm_clip_start))]
+        if bgm_clip_end is not None:
+            args += ["--bgm-clip-end", str(float(bgm_clip_end))]
         run_env = app.COMMENTARY_RT.env()
         with app._commentary_lock:
             app.commentary_jobs.setdefault(remux_id, {})["status"] = "remuxing"
@@ -737,13 +760,22 @@ def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str, bgm
 
 @router.post("/api/commentary/remux-bgm/{cid}")
 def remux_bgm(cid: str, bgm: str = app.Form("off"), bgm_file: str = app.Form(""),
-             bgm_volume: float = app.Form(0.18)) -> dict:
+             bgm_volume: float = app.Form(0.18),
+             bgm_clip_start: float = app.Form(None),
+             bgm_clip_end: float = app.Form(None)) -> dict:
     """渲染后单独换/加/移除 BGM（轻量 amix，不重渲成片）。
 
     用成片文件 id（与列表/下载/删除接口同款 cid）定位成片，避免依赖内存中的
     渲染任务（可能被清理）。返回独立 remux_id 供前端轮询进度；成品就地替换，
-    output_path 不变。build() 已始终保留无音乐 sidecar，故可随时在 off/soft/
-    light/epic/user 间自由切换。
+    output_path 不变。build() 已始终保留无音乐 sidecar + 三种内置预览 mp3，
+    故可随时在 off/soft/light/epic/user 间自由切换；同时支持 bgm_clip_start/end
+    锁定 BGM 文件的片段（ffmpeg atrim）。
+
+    字段：
+    - bgm: "off" 移除配乐；"soft"/"light"/"epic" 内置和弦；"user" 本地文件
+    - bgm_file: bgm=user 时为本地音乐绝对路径
+    - bgm_volume: BGM 音量(0.02~0.6, 默认 0.18)
+    - bgm_clip_start/end: BGM 文件秒级片段（None = 用整条）
     """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
@@ -758,8 +790,71 @@ def remux_bgm(cid: str, bgm: str = app.Form("off"), bgm_file: str = app.Form("")
         app.commentary_jobs[remux_id] = {"status": "remuxing", "error": "", "output_path": output_path,
                                           "progress": [], "parent_render_job": "", "logs": [],
                                           "remuxed_bgm": ""}
-    app.executor.submit(_run_remux_bgm, remux_id, output_path, bgm, bgm_file, bgm_volume)
+    app.executor.submit(_run_remux_bgm, remux_id, output_path, bgm, bgm_file,
+                         bgm_volume, bgm_clip_start, bgm_clip_end)
     return {"job_id": remux_id, "status": "remuxing", "render_job": cid}
+
+
+def _bgm_preview_mp3_path(mp4_path: "pathlib.Path", kind: str) -> "pathlib.Path | None":
+    """返回 `<mp4>.previews/<kind>.mp3` 路径（若不存在则 None）。"""
+    try:
+        import pathlib as _pl
+        p = _pl.Path(str(mp4_path))
+        base = p.with_suffix("") if p.suffix else _pl.Path(str(p))
+        previews_dir = base.parent / (base.name + ".previews")
+        candidate = previews_dir / f"{kind}.mp3"
+        return candidate if candidate.is_file() else None
+    except Exception:
+        return None
+
+
+@router.get("/api/commentary/bgm-preview/{cid}/{kind}")
+def commentary_bgm_preview(cid: str, kind: str):
+    """返回成片（cid）对三种内置 BGM 风格的试听 mp3（build() 时已落 sidecar）。
+
+    kind ∈ {"soft", "light", "epic"}。返回 audio/mpeg 流；找不到 404。
+    """
+    if kind not in ("soft", "light", "epic"):
+        raise app.HTTPException(status_code=400, detail="kind 必须为 soft/light/epic")
+    p = app._decode_commentary_id(cid)
+    if not p or not p.is_file():
+        raise app.HTTPException(status_code=404, detail="成片不存在，无法提供试听")
+    mp3 = _bgm_preview_mp3_path(p, kind)
+    if not mp3:
+        raise app.HTTPException(status_code=404,
+                                detail=f"该成片缺少 {kind} 风格试听（可能是旧版渲染，请重新渲染）")
+    return app.FileResponse(path=str(mp3), filename=f"{kind}.mp3", media_type="audio/mpeg")
+
+
+@router.get("/api/commentary/audio-preview")
+def commentary_audio_preview(path: str):
+    """提供本地音乐试听流（用户在桌面桥选完文件后，前端调本端点拉 mp3 进 <audio>）。
+
+    安全：路径必须
+    - 以 / 开头（绝对路径）
+    - 位于当前用户家目录下（避免误读到系统目录）
+    - 文件存在且扩展名在允许的音频列表（mp3/m4a/wav/aac/flac/ogg）
+    """
+    import pathlib as _pl
+    if not path or not path.startswith("/"):
+        raise app.HTTPException(status_code=400, detail="path 必须为绝对路径")
+    home = _pl.Path.home()
+    try:
+        ap = _pl.Path(path).resolve()
+        ap.relative_to(home)  # 必须在家目录下
+    except ValueError:
+        raise app.HTTPException(status_code=400, detail="path 必须在用户家目录下")
+    except OSError:
+        raise app.HTTPException(status_code=400, detail="path 无法解析")
+    if not ap.is_file():
+        raise app.HTTPException(status_code=404, detail="文件不存在")
+    if ap.suffix.lower() not in (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"):
+        raise app.HTTPException(status_code=400, detail=f"不支持的音频扩展名 {ap.suffix}")
+    media = {
+        ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
+        ".aac": "audio/aac", ".flac": "audio/flac", ".ogg": "audio/ogg",
+    }[ap.suffix.lower()]
+    return app.FileResponse(path=str(ap), filename=ap.name, media_type=media)
 
 
 @router.post("/api/commentary/voice-preview")
