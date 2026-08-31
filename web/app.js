@@ -5442,32 +5442,24 @@ el.dwVidPlayer.removeAttribute('src');
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在上传视频并生成解说词，生成后可在下方审核修改…';
     try {
-      const form = new FormData();
-      form.append('file', file);
-      form.append('vertical', String(resolveVertical()));
-      form.append('trim_start', String(comTrimStart));
-      form.append('trim_end', String(comTrimEnd));
+      // 第一步：把本地视频 cache-by-hash 落到本机接收站。重复跑同一视频 0 字节上传。
+      // （详 server COMMENTARY_STASH_DIR + routers/api/commentary/stash）
+      const stashId = await stashLocalFile(file, (msg) => { el.comStatus.textContent = msg; });
+      // 第二步：拿 stash_id 走 JSON 路径（与下载库 file_id 等价），后续 trim/换音都不会重传
       const opts = comGetOptions(oneClick);
-      form.append('commentary_type', opts.commentary_type);
-      form.append('highlight_source', opts.highlight_source);
-      form.append('intro_highlight', String(opts.intro_highlight));
-      form.append('skip_intro_outro', String(opts.skip_intro_outro));
-      form.append('no_narrate_intro_outro', String(opts.no_narrate_intro_outro));
-      if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
-      if (opts.intro_sec != null) form.append('intro_sec', String(opts.intro_sec));
-      if (opts.outro_sec != null) form.append('outro_sec', String(opts.outro_sec));
-      if (opts.drama_start_sec != null) form.append('drama_start_sec', String(opts.drama_start_sec));
-      if (opts.drama_end_sec != null) form.append('drama_end_sec', String(opts.drama_end_sec));
-      form.append('one_click', String(opts.one_click));
-      form.append('style', opts.style || 'none');
-      form.append('vision', String(opts.vision));
-      if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
-      if (!opts.correct_transcript) form.append('correct_transcript', '0');
-      if (opts.export_jianying) form.append('export_jianying', opts.export_jianying);
-      const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
+      const body = {
+        file_id: stashId,
+        vertical: resolveVertical(),
+        trim_start: comTrimStart,
+        trim_end: comTrimEnd,
+        ...opts,
+      };
+      const { job_id } = await request('/api/commentary/script-only', {
+        method: 'POST', body: JSON.stringify(body),
+      });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
-      el.comGenerateScript.textContent = '正在上传+生成解说词…';
+      el.comGenerateScript.textContent = '正在转写+生成解说词…';
       el.comScriptPanel.hidden = true;
       el.comReviewActions.hidden = true;
       pollScriptJob(job_id);
@@ -5481,6 +5473,28 @@ el.dwVidPlayer.removeAttribute('src');
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     }
+  };
+
+  /**
+   * 把本地视频上传一次到 server 的 cache-by-hash 接收站，返回 stash:<sha> id。
+   * 命中缓存（from_cache=true）→ 完全 0 字节传输，启动立刻；
+   * 第一次传 → 服务器按 sha256 落盘，下次同视频自动复用。
+   * 注意：浏览器 fetch 上传 body 拿不到原生 onprogress，这里只在状态文字上提示，
+   * 让用户对耗时心里有数；后端拿 sha 走流式 hash 算 + 磁盘同步写，磁盘就是瓶颈。
+   */
+  const stashLocalFile = async (file, setStatus) => {
+    setStatus(`正在把视频保存到本机（${formatBytes(file.size)}，只此一次）…`);
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const t0 = Date.now();
+    const res = await request('/api/commentary/stash', { method: 'POST', body: fd });
+    const dt = Date.now() - t0;
+    if (res && res.from_cache) {
+      setStatus(`本机已缓存该视频（${formatBytes(res.size)}），直接复用，0 字节上传`);
+    } else {
+      setStatus(`视频已保存到本机（${formatBytes(res.size)}，${(dt / 1000).toFixed(1)}s），开始转写…`);
+    }
+    return res.id;
   };
 
   // ---- 脚本审核模式 ----
@@ -5520,29 +5534,20 @@ el.dwVidPlayer.removeAttribute('src');
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在上传视频并生成AI解说词（不渲染成片）…';
     try {
-      const form = new FormData();
-      form.append('file', file);
-      form.append('vertical', String(resolveVertical()));
-      form.append('trim_start', String(comTrimStart));
-      form.append('trim_end', String(comTrimEnd));
+      // 第一步：cache-by-hash，重复跑同视频 0 字节传输（详 stashLocalFile + server stash 路由）
+      const stashId = await stashLocalFile(file, (msg) => { el.comStatus.textContent = msg; });
+      // 第二步：拿 stash_id 走 JSON 路径，跟下载库 file_id 完全等价
       const opts = comGetOptions();
-      form.append('commentary_type', opts.commentary_type);
-      form.append('highlight_source', opts.highlight_source);
-      form.append('intro_highlight', String(opts.intro_highlight));
-      form.append('skip_intro_outro', String(opts.skip_intro_outro));
-      form.append('no_narrate_intro_outro', String(opts.no_narrate_intro_outro));
-      if (opts.retain_pct != null) form.append('retain_pct', String(opts.retain_pct));
-      if (opts.intro_sec != null) form.append('intro_sec', String(opts.intro_sec));
-      if (opts.outro_sec != null) form.append('outro_sec', String(opts.outro_sec));
-      if (opts.drama_start_sec != null) form.append('drama_start_sec', String(opts.drama_start_sec));
-      if (opts.drama_end_sec != null) form.append('drama_end_sec', String(opts.drama_end_sec));
-      form.append('one_click', String(opts.one_click));
-      form.append('style', opts.style || 'none');
-      form.append('vision', String(opts.vision));
-      if (opts.tts_provider) form.append('tts_provider', opts.tts_provider);
-      if (!opts.correct_transcript) form.append('correct_transcript', '0');
-      if (opts.export_jianying) form.append('export_jianying', opts.export_jianying);
-      const { job_id } = await request('/api/commentary/script-only/upload', { method: 'POST', body: form });
+      const body = {
+        file_id: stashId,
+        vertical: resolveVertical(),
+        trim_start: comTrimStart,
+        trim_end: comTrimEnd,
+        ...opts,
+      };
+      const { job_id } = await request('/api/commentary/script-only', {
+        method: 'POST', body: JSON.stringify(body),
+      });
       currentScriptJobId = job_id;
       pollScriptJob(job_id);
     } catch (err) {

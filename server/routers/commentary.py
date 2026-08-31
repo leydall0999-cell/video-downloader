@@ -68,6 +68,69 @@ def commentary_tts_status() -> dict:
     }
 
 
+@router.post("/api/commentary/stash")
+async def create_commentary_stash(
+    file: app.UploadFile = app._FastAPIFile(...),
+) -> dict:
+    """上传本地视频到本机「接收站」(cache-by-hash)：按 sha256(前 16 位) 去重，
+    相同内容 0 字节传输。返回 {id: "stash:<sha>", size, from_cache}。
+
+    前端拿到 id 后用 JSON 提交（不再 multipart），worker 通过 _resolve_source
+    识别 stash: 前缀 → 取真路径 → 跑流水线。"""
+    if not app.COMMENTARY_ENABLED:
+        raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in app._STASH_VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    name = (file.filename or "").strip() or "upload.mp4"
+    sha = app.hashlib.sha256()
+    # 流式落盘到 .part 文件：同名 dest 已存在就提前 return(from_cache)
+    # 我们故意先把 dest 路径算出来，存在=可能命中（按大小兜底校验）
+    try:
+        await file.seek(0)
+    except Exception:
+        pass
+    # 同一进程可能并发多份 stash 文件，每个 stash 用独立临时名（按 hash 占位）
+    placeholder_ext = suffix
+    tmp = app.COMMENTARY_STASH_DIR / f".part-{app.uuid.uuid4().hex[:12]}{placeholder_ext}"
+    try:
+        with tmp.open("wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                sha.update(chunk)
+                fh.write(chunk)
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+    sha_hex = sha.hexdigest()[:16]
+    dest = app._stash_path_for(sha_hex, placeholder_ext)
+    if dest.exists():
+        # 内容哈希已落盘，删临时文件
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        from_cache = True
+    else:
+        try:
+            tmp.rename(dest)
+        except OSError:
+            # 极端情况：另一进程刚刚才落盘——以 dest 为准
+            tmp.unlink(missing_ok=True)
+        from_cache = False
+    stash_id = app._stash_register(sha_hex, placeholder_ext, name)
+    return {
+        "id": stash_id,
+        "size": dest.stat().st_size if dest.exists() else 0,
+        "name": name,
+        "from_cache": from_cache,
+    }
+
+
 @router.post("/api/commentary/config")
 def commentary_config_save(req: app.CommentaryConfigRequest) -> dict:
     """保存解说(配音/音量)手动可调设置，写入 commentary_config.json。"""

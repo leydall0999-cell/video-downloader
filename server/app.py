@@ -304,6 +304,102 @@ commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
 
 
+# ---- 解说视频「接收站」 cache-by-hash：让用户拖过的本地视频不再重复上传 ----
+# 把 upload 端点的视频流按 sha256(前 16 位) 落到本目录；重复上传同视频时直接复用
+# 这份磁盘文件，0 字节传输。前端拿到 stash_id 后继续走 JSON 提交（不再 multipart）。
+# 设计取舍：
+#   • 与 _commentary_work_dir 隔离：work 是 job 临时产物（中间 wav/脚本），stash 是用户
+#     源视频的「冷缓存」，二者生命周期不同、清理策略不同。
+#   • id 形态 `stash:<16hex>`：与 library_mod.encode_id 形状互不冲突，前端 payload
+#     完全不变，后端 _resolve_source 看到前缀后转查 stash 索引即可。
+#   • 16 位 = 64 bit 哈希 → 误撞概率可忽略（每天累计 GB 级视频）；磁盘按单文件存。
+COMMENTARY_STASH_DIR = COMMENTARY_LOCAL_OUTPUT / "stash"
+COMMENTARY_STASH_DIR.mkdir(parents=True, exist_ok=True)
+COMMENTARY_STASH_RETENTION_DAYS = max(
+    1, int(os.environ.get("VDL_COMMENTARY_STASH_RETENTION_DAYS", "14") or 14)
+)
+_commentary_stash_lock = threading.Lock()
+_commentary_stash: dict[str, dict] = {}  # sha16 → {path, size, mtime, name, ext}
+
+
+_STASH_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
+                     ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
+
+
+def _stash_path_for(sha: str, ext: str) -> Path:
+    safe_ext = ext.lower() if ext.lower() in _STASH_VIDEO_EXTS else ".mp4"
+    # 进一步保险：限制 sha 只含 hex，避免任意路径在后续 _resolve_safe 误读
+    safe_sha = "".join(c for c in sha if c in "0123456789abcdef")[:16].ljust(16, "0")
+    return COMMENTARY_STASH_DIR / f"{safe_sha}{safe_ext}"
+
+
+def _stash_register(sha: str, ext: str, src_name: str = "") -> str:
+    """注册一份已落盘的 stash；存在则只刷 mtime。返回 'stash:<sha>'。"""
+    p = _stash_path_for(sha, ext)
+    if not p.exists():
+        raise RuntimeError(f"stash 文件不存在：{p}")
+    with _commentary_stash_lock:
+        _commentary_stash[sha] = {
+            "path": str(p),
+            "size": p.stat().st_size,
+            "mtime": time.time(),
+            "name": src_name,
+            "ext": p.suffix.lower(),
+        }
+    return f"stash:{sha}"
+
+
+def _stash_lookup(sha: str) -> dict | None:
+    """查 stash 索引并续命中时间；磁盘文件丢失自动注销。"""
+    with _commentary_stash_lock:
+        m = _commentary_stash.get(sha)
+    if not m:
+        # 进程重启后内存索引为空——尝试按 sha 直接在磁盘上找，命中同样回写索引
+        for ext in _STASH_VIDEO_EXTS:
+            cand = COMMENTARY_STASH_DIR / f"{sha}{ext}"
+            if cand.exists():
+                m = {
+                    "path": str(cand),
+                    "size": cand.stat().st_size,
+                    "mtime": cand.stat().st_mtime,
+                    "name": "",
+                    "ext": ext,
+                }
+                with _commentary_stash_lock:
+                    _commentary_stash[sha] = m
+                break
+    if not m:
+        return None
+    if not Path(m["path"]).exists():
+        with _commentary_stash_lock:
+            _commentary_stash.pop(sha, None)
+        return None
+    with _commentary_stash_lock:
+        _commentary_stash[sha]["mtime"] = time.time()
+    return m
+
+
+def _purge_commentary_stash(now: float | None = None) -> int:
+    """按 mtime 删除超期 stash 文件 + 同步内存索引。返回删除条数。"""
+    now = now or time.time()
+    cutoff = now - COMMENTARY_STASH_RETENTION_DAYS * 86400
+    removed = 0
+    if COMMENTARY_STASH_DIR.exists():
+        for f in list(COMMENTARY_STASH_DIR.iterdir()):
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+                    removed += 1
+            except OSError:
+                pass
+    with _commentary_stash_lock:
+        for k in list(_commentary_stash.keys()):
+            p = Path(_commentary_stash[k]["path"])
+            if not p.exists():
+                _commentary_stash.pop(k, None)
+    return removed
+
+
 
 # ---- AI 去水印（E2FGVI worker，桌面版可选）：local subprocess 或 http worker ----
 AI_DEWATERMARK_ENABLED = bool(
@@ -1835,8 +1931,18 @@ class CommentaryRenameReq(BaseModel):
 # ---- 脚本审核专用路由 ----
 
 def _resolve_source(payload: CommentaryRequest) -> str:
-    """解析视频来源（task_id 或 file_id），返回绝对路径。"""
+    """解析视频来源（task_id 或 file_id / stash:id），返回绝对路径。"""
     if payload.file_id:
+        # stash: 前缀 → 本机接收站缓存（去重命中时 0 字节传输）
+        if payload.file_id.startswith("stash:"):
+            sha = payload.file_id[len("stash:"):]
+            m = _stash_lookup(sha)
+            if not m:
+                raise HTTPException(
+                    status_code=404,
+                    detail="缓存的视频已过期或不存在，请重新上传（stash cache miss）",
+                )
+            return m["path"]
         p = library_mod._resolve_safe(DOWNLOAD_DIR, payload.file_id)
         if not p:
             raise HTTPException(status_code=404, detail="媒体库文件不存在")
