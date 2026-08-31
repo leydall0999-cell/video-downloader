@@ -6363,6 +6363,64 @@ el.dwVidPlayer.removeAttribute('src');
     syncTrimInputs();
   };
 
+  /** 渲染后给某张成片卡换/加/移除配乐（轻量 amix，秒级，成品就地替换）。 */
+  const comRemuxCardBgm = (it, opts, refs) => {
+    const { bgm, bgm_volume, bgm_file } = opts;
+    const { video, status, apply, cur } = refs;
+    const label = (b) => ({ off: '关闭配乐', soft: '柔和氛围', light: '轻快', epic: '恢弘', user: '本地音乐' }[b] || b);
+    if (bgm === 'user' && !bgm_file) {
+      status.hidden = false;
+      status.className = 'com-music-status com-music-err';
+      status.textContent = '请先选择本地音乐文件';
+      return;
+    }
+    apply.disabled = true;
+    status.hidden = false;
+    status.className = 'com-music-status';
+    status.textContent = '正在混音…';
+    const form = new FormData();
+    form.append('bgm', bgm);
+    form.append('bgm_volume', String(bgm_volume));
+    if (bgm === 'user' && bgm_file) form.append('bgm_file', bgm_file);
+    (async () => {
+      let remuxId;
+      try {
+        const r = await request(`/api/commentary/remux-bgm/${encodeURIComponent(it.id)}`, { method: 'POST', body: form });
+        remuxId = r.job_id;
+      } catch (err) {
+        status.className = 'com-music-status com-music-err';
+        status.textContent = `启动失败：${err.message || '未知错误'}`;
+        apply.disabled = false;
+        return;
+      }
+      const poll = setInterval(async () => {
+        try {
+          const st = await request(`/api/commentary/${remuxId}`);
+          if (st.status === 'completed') {
+            clearInterval(poll);
+            status.className = 'com-music-status com-music-ok';
+            status.textContent = `已应用：${label(bgm)}`;
+            if (cur) cur.textContent = `当前：${bgm === 'off' ? '无配乐' : label(bgm)}`;
+            if (video) {
+              const u = new URL(video.src, location.href);
+              u.searchParams.set('_', String(Date.now()));
+              video.src = u.pathname + u.search;
+              try { video.load(); } catch (_) { /* 部分 WebView 不支持 load，src 变更已触发重载 */ }
+            }
+            apply.disabled = false;
+          } else if (st.status === 'failed') {
+            clearInterval(poll);
+            status.className = 'com-music-status com-music-err';
+            status.textContent = `换乐失败：${st.error || '未知错误'}`;
+            apply.disabled = false;
+          }
+        } catch {
+          /* 静默重试，下一轮轮询补上 */
+        }
+      }, 1000);
+    })();
+  };
+
   const createComCard = (it, gallery = false) => {
     const card = document.createElement('div');
     card.className = 'com-card' + (gallery ? ' com-card-gallery' : '');
@@ -6414,6 +6472,64 @@ el.dwVidPlayer.removeAttribute('src');
     card.appendChild(video);
     card.appendChild(meta);
     card.appendChild(actions);
+
+    // 渲染后换/加/移除配乐面板：成品就地替换，秒级 amix，不重渲成片。
+    // build() 已始终保留无音乐 sidecar，故可在 off/soft/light/epic/user 间自由切换。
+    const music = document.createElement('div');
+    music.className = 'com-music';
+    music.innerHTML = `
+      <div class="com-music-head">
+        <span class="com-music-title">🎵 配乐</span>
+        <span class="com-music-cur" data-role="cur"></span>
+      </div>
+      <div class="com-music-row">
+        <select class="com-music-sel" data-role="sel">
+          <option value="off">关闭</option>
+          <option value="soft">柔和氛围</option>
+          <option value="light">轻快</option>
+          <option value="epic">恢弘</option>
+          <option value="user">本地音乐…</option>
+        </select>
+        <input type="range" class="com-music-vol" data-role="vol" min="0.02" max="0.6" step="0.01" value="0.18" />
+        <span class="com-music-volval" data-role="volval">18%</span>
+      </div>
+      <div class="com-music-file" data-role="filewrap" hidden>
+        <input type="text" class="com-music-fileval" data-role="fileval" placeholder="未选择文件" readonly />
+        <button type="button" class="com-music-pick" data-role="pick">选文件…</button>
+      </div>
+      <div class="com-music-actions">
+        <button type="button" class="btn btn-sm btn-primary" data-role="apply">应用换乐</button>
+        <span class="com-music-status" data-role="status" hidden></span>
+      </div>`;
+    const sel = music.querySelector('[data-role="sel"]');
+    const vol = music.querySelector('[data-role="vol"]');
+    const volval = music.querySelector('[data-role="volval"]');
+    const filewrap = music.querySelector('[data-role="filewrap"]');
+    const fileval = music.querySelector('[data-role="fileval"]');
+    const pick = music.querySelector('[data-role="pick"]');
+    const apply = music.querySelector('[data-role="apply"]');
+    const status = music.querySelector('[data-role="status"]');
+    const cur = music.querySelector('[data-role="cur"]');
+    vol.addEventListener('input', () => { volval.textContent = Math.round(Number(vol.value) * 100) + '%'; });
+    sel.addEventListener('change', () => { filewrap.hidden = sel.value !== 'user'; });
+    pick.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      try {
+        const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFiles;
+        let p = '';
+        if (typeof fn === 'function') {
+          const arr = await fn();
+          p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
+        }
+        if (p) fileval.value = p;
+      } catch (_) { /* 用户取消或环境不支持，忽略 */ }
+    });
+    apply.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      comRemuxCardBgm(it, { bgm: sel.value, bgm_volume: Number(vol.value), bgm_file: fileval.value },
+                      { video, status, apply, cur });
+    });
+    card.appendChild(music);
     return card;
   };
 

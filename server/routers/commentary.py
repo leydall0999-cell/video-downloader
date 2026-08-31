@@ -3,6 +3,9 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 所有 profile 均挂载，网页版行为零变化。app 端新功能只改本目录对应文件。
 """
 import app
+import os
+import sys
+import subprocess
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -653,6 +656,93 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     max_chars=max_chars,
                     export_jianying=export_jianying)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id}
+
+
+def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str, bgm_volume: float) -> None:
+    """后台轻量换/加/移除 BGM：复用 _commentary_run 的同款子进程机制跑 process.py remux-bgm。
+
+    不重渲成片，只跑 amix（秒级），成品就地替换（build 时已存无音乐 sidecar）。
+    """
+    last: list[str] = []
+
+    def _append(line: str) -> None:
+        line = (line or "").rstrip("\n")
+        if not line:
+            return
+        last.append(line)
+        if len(last) > 60:
+            del last[: len(last) - 60]
+        with app._commentary_lock:
+            j = app.commentary_jobs.setdefault(remux_id, {})
+            j["progress"] = list(last)
+            app._commentary_log(j, line)
+
+    try:
+        _bundled = app._commentary_is_bundled()
+        if _bundled:
+            args = [sys.executable, "--vdl-commentary-worker", "remux-bgm", "--out", output_path]
+        else:
+            args = [app.COMMENTARY_RT.python, "-u", "process.py", "remux-bgm", "--out", output_path]
+        args += ["--bgm", bgm, "--bgm-volume", str(bgm_volume)]
+        if bgm == "user" and bgm_file:
+            args += ["--bgm-file", bgm_file]
+        run_env = app.COMMENTARY_RT.env()
+        with app._commentary_lock:
+            app.commentary_jobs.setdefault(remux_id, {})["status"] = "remuxing"
+        proc = subprocess.Popen(
+            args, cwd=str(app.COMMENTARY_DIR),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1, env=run_env,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            _append(line)
+        ret = proc.wait(timeout=300)
+        if ret != 0:
+            tail = "\n".join(last[-20:]) or "无输出"
+            raise RuntimeError(f"换音乐退出码 {ret}：\n{tail}")
+        with app._commentary_lock:
+            rj = app.commentary_jobs.get(remux_id)
+            if rj:
+                rj.update(status="completed", output_path=output_path, remuxed_bgm=bgm)
+            # 同步原渲染任务，方便前端仅凭 render_job 轮询即可感知换音乐完成
+            parent = rj.get("parent_render_job") if rj else None
+            if parent and parent in app.commentary_jobs:
+                app.commentary_jobs[parent].update(remuxed_bgm=bgm, remux_job=remux_id, status="completed")
+    except Exception as exc:  # noqa: BLE001
+        with app._commentary_lock:
+            j = app.commentary_jobs.setdefault(remux_id, {})
+            j["status"] = "failed"
+            j["error"] = str(exc)[:800]
+        app.logger.exception("换音乐任务 %s 失败", remux_id)
+
+
+@router.post("/api/commentary/remux-bgm/{cid}")
+def remux_bgm(cid: str, bgm: str = app.Form("off"), bgm_file: str = app.Form(""),
+             bgm_volume: float = app.Form(0.18)) -> dict:
+    """渲染后单独换/加/移除 BGM（轻量 amix，不重渲成片）。
+
+    用成片文件 id（与列表/下载/删除接口同款 cid）定位成片，避免依赖内存中的
+    渲染任务（可能被清理）。返回独立 remux_id 供前端轮询进度；成品就地替换，
+    output_path 不变。build() 已始终保留无音乐 sidecar，故可随时在 off/soft/
+    light/epic/user 间自由切换。
+    """
+    if not app.COMMENTARY_ENABLED:
+        raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    if app.COMMENTARY_MODE == "http":
+        raise app.HTTPException(status_code=400, detail="换音乐暂不支持 HTTP worker 模式，请使用 local 模式")
+    p = app._decode_commentary_id(cid)
+    if not p or not p.is_file():
+        raise app.HTTPException(status_code=404, detail="成片文件不存在")
+    output_path = str(p)
+    remux_id = app.uuid.uuid4().hex[:12]
+    with app._commentary_lock:
+        app.commentary_jobs[remux_id] = {"status": "remuxing", "error": "", "output_path": output_path,
+                                          "progress": [], "parent_render_job": "", "logs": [],
+                                          "remuxed_bgm": ""}
+    app.executor.submit(_run_remux_bgm, remux_id, output_path, bgm, bgm_file, bgm_volume)
+    return {"job_id": remux_id, "status": "remuxing", "render_job": cid}
+
 
 @router.post("/api/commentary/voice-preview")
 def voice_preview(

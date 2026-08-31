@@ -2082,6 +2082,35 @@ img { max-width: 100%; display: block; }
 .com-size { font-size: .75rem; color: var(--text-mute); }
 .com-actions { padding: .7rem .9rem; display: flex; gap: .5rem; justify-content: flex-end; }
 
+/* 成片卡「渲染后换配乐」面板 */
+.com-music {
+  padding: .6rem .9rem .8rem; display: flex; flex-direction: column; gap: .5rem;
+  border-top: 1px dashed var(--line); background: var(--surface-2, rgba(0,0,0,.02));
+}
+.com-music-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.com-music-title { font-weight: 600; font-size: .85rem; color: var(--text); }
+.com-music-cur { font-size: .74rem; color: var(--text-mute); }
+.com-music-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.com-music-sel {
+  flex: 1 1 120px; min-width: 96px; padding: .3rem .45rem; font-size: .82rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg, #fafafa); color: var(--text, #333);
+}
+.com-music-vol { flex: 1 1 100px; min-width: 80px; }
+.com-music-volval { font-size: .76rem; color: var(--text-mute); min-width: 34px; text-align: right; }
+.com-music-file { display: inline-flex; align-items: center; gap: .35rem; width: 100%; }
+.com-music-file .com-music-fileval {
+  flex: 1 1 0; min-width: 0; padding: .28rem .5rem; font-size: .8rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg, #fafafa); color: var(--text, #333);
+}
+.com-music-file .com-music-pick {
+  flex: 0 0 auto; padding: .28rem .6rem; font-size: .8rem; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text);
+}
+.com-music-actions { display: flex; align-items: center; gap: .6rem; }
+.com-music-status { font-size: .76rem; color: var(--text-mute); }
+.com-music-status.com-music-ok { color: var(--success, #1a9d54); }
+.com-music-status.com-music-err { color: var(--danger, #d23); }
+
 /* 列表视图 */
 .com-view-list { grid-template-columns: 1fr; }
 .com-view-list .com-card {
