@@ -353,6 +353,7 @@
     comTrimStart: $('comTrimStart'),
     comTrimEnd: $('comTrimEnd'),
     comTrimDuration: $('comTrimDuration'),
+    comTrimTitle: $('comTrimTitle'),
     comTrimSetStart: $('comTrimSetStart'),
     comTrimSetEnd: $('comTrimSetEnd'),
     comTrimPreview: $('comTrimPreview'),
@@ -6320,19 +6321,30 @@ el.dwVidPlayer.removeAttribute('src');
     comPreviewUrl = null;
   };
 
-  const setupComPreview = (url) => {
+  const setupComPreview = (url, title) => {
     if (!url) {
       el.comTrimCard.hidden = true;
       releaseComPreview();
       comTrimStart = 0;
       comTrimEnd = 0;
       comPreviewDuration = 0;
+      if (el.comTrimTitle) { el.comTrimTitle.hidden = true; el.comTrimTitle.textContent = ''; }
       return;
     }
     releaseComPreview();
     comPreviewUrl = url;
     el.comTrimCard.hidden = false;
     el.comPreview.src = url;
+    if (el.comTrimTitle) {
+      if (title) {
+        el.comTrimTitle.textContent = title;
+        el.comTrimTitle.title = title;  // 悬停看完整
+        el.comTrimTitle.hidden = false;
+      } else {
+        el.comTrimTitle.hidden = true;
+        el.comTrimTitle.textContent = '';
+      }
+    }
     el.comPreview.load();
     el.comPreview.onloadedmetadata = () => {
       comPreviewDuration = el.comPreview.duration || 0;
@@ -6737,7 +6749,8 @@ el.dwVidPlayer.removeAttribute('src');
       selectedLocalFile = null;
       el.comFileName.textContent = '';
       el.comFileStatus.hidden = true;
-      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`);
+      const opt = el.comSource.options[el.comSource.selectedIndex];
+      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`, opt ? opt.textContent : '');
     } else {
       setupComPreview(null);
     }
@@ -6754,7 +6767,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comFileName.textContent = file.name;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
-    setupComPreview(URL.createObjectURL(file));
+    setupComPreview(URL.createObjectURL(file), file.name);
   };
   el.comFileBtn.addEventListener('click', () => el.comFileInput.click());
   el.comFileInput.addEventListener('change', () => {
@@ -8076,7 +8089,7 @@ el.dwVidPlayer.removeAttribute('src');
   el.libCommentary.addEventListener('click', () => {
     if (!currentLibItem) return;
     // 预加载预览元数据，让「自动」画幅能拿到视频宽高判断横竖
-    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}`);
+    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}`, currentLibItem.name || currentLibItem.id);
     createCommentary(
       { fileId: currentLibItem.id },
       { commentary: el.libCommentary, commentaryStatus: el.libCommentaryStatus, commentaryFile: el.libCommentaryFile },

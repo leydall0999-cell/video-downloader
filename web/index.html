@@ -922,7 +922,7 @@
 
     <!-- AI 能力与密钥配置：单开关展开 LLM + 视觉模型两组设置，共用一个保存按钮 -->
     <div class="com-ai-config" id="comAiConfig">
-      <details class="adv com-ai-details" id="aiSettings" open>
+      <details class="adv com-ai-details" id="aiSettings">
         <summary class="adv-summary">⚙️ AI 能力与密钥配置</summary>
         <div class="adv-body com-ai-grid">
 
@@ -997,6 +997,7 @@
     <div class="com-trim-card" id="comTrimCard" hidden>
       <div class="com-trim-head">
         <h3>✂️ 预览与裁剪</h3>
+        <span class="com-trim-title" id="comTrimTitle" hidden></span>
         <span class="com-trim-dur" id="comTrimDuration">裁剪后时长：--</span>
       </div>
       <video id="comPreview" class="com-preview" controls preload="metadata"></video>

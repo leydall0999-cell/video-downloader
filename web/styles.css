@@ -1904,7 +1904,9 @@ img { max-width: 100%; display: block; }
 .com-ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; align-items: start; }
 .com-ai-col { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
 .com-ai-subtitle { font-size: .82rem; font-weight: 700; color: var(--text); margin: 0 0 .1rem; }
-.com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .5rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
+.com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
+/* 「保存」按钮加大 + 加粗（合并后只此一个保存按钮，给足视觉权重） */
+#aiSave { padding: .55rem 1.4rem; font-size: .95rem; font-weight: 700; }
 @media (max-width: 720px) { .com-ai-grid { grid-template-columns: 1fr; } }
 .com-entry-card select.adv-input { width: 100%; display: block; }
 /* 「选择本地视频」按钮与左侧「选择视频」下拉同款外观：全宽+细边框+白底 */
@@ -1936,11 +1938,12 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius-md); box-shadow: var(--shadow);
 }
 .com-trim-head {
-  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  display: flex; align-items: center; gap: .5rem 1rem;
   margin-bottom: .65rem;
 }
-.com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); }
-.com-trim-dur { font-size: .78rem; color: var(--brand); font-weight: 600; }
+.com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); flex: 0 0 auto; }
+.com-trim-title { flex: 1 1 auto; min-width: 0; font-size: .82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.com-trim-dur { flex: 0 0 auto; font-size: .78rem; color: var(--brand); font-weight: 600; }
 .com-preview {
   width: 100%; max-height: 320px; background: #000; border-radius: 6px; display: block;
 }
