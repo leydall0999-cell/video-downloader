@@ -1897,11 +1897,13 @@ img { max-width: 100%; display: block; }
   margin: .4rem 0 1.3rem; padding: .9rem 1rem 1rem;
   border: 1px solid var(--line); border-radius: var(--radius-md);
   background: #fbfbfe;
-  display: flex; flex-direction: column; gap: .6rem;
+  /* 两个折叠入口收起时并排一行；任一展开即独占全宽（.adv[open] 通配 flex:1 1 100%） */
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem;
 }
-.com-ai-config .com-section-title { margin: 0 0 .15rem; }
+.com-ai-config .com-section-title { margin: 0 0 .15rem; flex: 1 1 100%; }
+.com-ai-config .adv { flex: 1 1 320px; min-width: 0; background: #fff; }
+.com-ai-config .adv[open] { flex: 1 1 100%; }
 .com-section-title { font-size: .95rem; font-weight: 700; color: var(--text); }
-.com-ai-config .adv { background: #fff; }
 .com-entry-card select.adv-input { width: 100%; display: block; }
 .com-generate-main { width: 100%; margin-top: .75rem; padding: .85rem; font-size: 1.05rem; font-weight: 700; }
 /* ---- 解说进度条 ---- */
