@@ -2091,7 +2091,7 @@ img { max-width: 100%; display: block; }
   padding: .75rem .9rem; display: flex; flex-direction: column; gap: .2rem;
   border-bottom: 1px solid var(--line);
 }
-.com-name { font-weight: 600; font-size: .88rem; word-break: break-all; color: var(--text); }
+.com-name { font-weight: 600; font-size: .88rem; overflow-wrap: anywhere; word-break: break-word; color: var(--text); }
 .com-size { font-size: .75rem; color: var(--text-mute); }
 .com-actions { padding: .7rem .9rem; display: flex; gap: .5rem; justify-content: flex-end; }
 
@@ -2100,9 +2100,9 @@ img { max-width: 100%; display: block; }
   padding: .6rem .9rem .8rem; display: flex; flex-direction: column; gap: .5rem;
   border-top: 1px dashed var(--line); background: var(--surface-2, rgba(0,0,0,.02));
 }
-.com-music-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.com-music-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-width: 0; }
 .com-music-title { font-weight: 600; font-size: .85rem; color: var(--text); }
-.com-music-cur { font-size: .74rem; color: var(--text-mute); }
+.com-music-cur { font-size: .74rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .com-music-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .com-music-sel {
   flex: 1 1 120px; min-width: 96px; padding: .3rem .45rem; font-size: .82rem;
@@ -2188,14 +2188,18 @@ img { max-width: 100%; display: block; }
 /* 在 begin 端隐藏 begin 滑块的右半部分重叠，避免视觉错位 */
 .com-music-clip-begin { z-index: 1; }
 
-/* 列表视图 */
+/* 列表视图：上行=视频+文件名+操作，下行=配乐面板独占全宽（避免挤压文件名竖排） */
 .com-view-list { grid-template-columns: 1fr; }
 .com-view-list .com-card {
-  flex-direction: row; align-items: stretch; gap: 0;
+  flex-direction: row; flex-wrap: wrap; align-items: stretch; gap: 0;
 }
 .com-view-list .com-video { width: 180px; min-width: 180px; aspect-ratio: 16/10; }
-.com-view-list .com-meta { flex: 1; border-bottom: none; border-right: 1px solid var(--line); justify-content: center; }
-.com-view-list .com-actions { width: auto; min-width: 170px; align-items: center; }
+.com-view-list .com-meta {
+  flex: 1 1 260px; min-width: 220px;
+  border-bottom: none; border-right: 1px solid var(--line); justify-content: center;
+}
+.com-view-list .com-actions { width: auto; min-width: 150px; align-items: center; border-right: 1px solid var(--line); }
+.com-view-list .com-music { flex: 1 1 100%; min-width: 0; }
 
 /* 时间线视图 */
 .com-view-timeline { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
