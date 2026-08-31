@@ -2263,6 +2263,36 @@ img { max-width: 100%; display: block; }
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 /* ---- 剪辑选项面板（六类方案·紧凑分段控件） ---- */
+/* 视频解说 tab：两列布局（左 = 成片历史，右 = 其余）。CSS-only 重排，JS/HTML 不动。 */
+#commentaryView {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+#commentaryView > .lib-head { grid-column: 1 / -1; }
+/* 成片历史 + 空状态挪到左栏 */
+#commentaryView > #comEmpty,
+#commentaryView > #comResults {
+  grid-column: 1;
+  position: sticky; top: 8px;
+  max-height: calc(100vh - 40px); overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 10px;
+}
+/* 其余所有直接子元素（env 状态 / AI 配置 / 视频来源 / 预览裁剪 / 解说参数 / 进度 / 审核 等）→ 右栏主区 */
+#commentaryView > *:not(.lib-head):not(#comEmpty):not(#comResults) {
+  grid-column: 2; min-width: 0;
+}
+#commentaryView > #comEmpty { margin: 0; }
+#commentaryView > #comResults[hidden] + * { display: revert; }  /* 不影响 — hidden 已 none */
+/* 窄屏：单列堆叠 */
+@media (max-width: 900px) {
+  #commentaryView { grid-template-columns: 1fr; }
+  #commentaryView > * { grid-column: 1 !important; position: static !important; max-height: none !important; }
+}
+
 .com-opts {
   display: block;
   align-items: start;
