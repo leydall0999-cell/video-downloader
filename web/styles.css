@@ -1905,6 +1905,12 @@ img { max-width: 100%; display: block; }
 .com-ai-config .adv[open] { flex: 1 1 calc(50% - .375rem); }
 .com-section-title { font-size: .95rem; font-weight: 700; color: var(--text); }
 .com-entry-card select.adv-input { width: 100%; display: block; }
+/* 「选择本地视频」按钮与左侧「选择视频」下拉同款外观：全宽+细边框+白底 */
+.com-entry-card #comFileBtn {
+  width: 100%; min-height: 0; padding: .55rem .7rem;
+  border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+  background: #fff; color: var(--text); font-size: 13px; font-weight: 500;
+}
 .com-generate-main { width: 100%; margin-top: .75rem; padding: .85rem; font-size: 1.05rem; font-weight: 700; }
 /* ---- 解说进度条 ---- */
 #comProgress { margin-top: .75rem; }
