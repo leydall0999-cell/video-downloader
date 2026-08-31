@@ -6246,6 +6246,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comGrid.className = 'com-grid com-view-' + commentaryViewMode;
     el.comGrid.replaceChildren();
     el.comEmpty.hidden = items.length > 0;
+    el.comResults.hidden = items.length === 0;
     el.comHistory.hidden = items.length === 0;
 
     if (items.length === 0) {
