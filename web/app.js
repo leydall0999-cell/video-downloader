@@ -271,6 +271,11 @@
     comSortMenu: $('comSortMenu'),
     comSortLabel: $('comSortLabel'),
     comSource: $('comSource'),
+    // 解说类型自定义下拉
+    comTypeDropdown: $('comTypeDropdown'),
+    comTypeBtn: $('comTypeBtn'),
+    comTypeBtnLabel: $('comTypeBtnLabel'),
+    comTypePanel: $('comTypePanel'),
     comGenerateScript: $('comGenerateScript'),
     comScriptPanel: $('comScriptPanel'),
     comScriptVoice: $('comScriptVoice'),
@@ -6786,6 +6791,56 @@ el.dwVidPlayer.removeAttribute('src');
     const file = e.dataTransfer.files[0];
     if (file) setLocalFile(file);
   });
+
+  // 解说类型自定义下拉：点开/点外面收起；点选项更新 label + 隐藏 radio + 关 panel
+  if (el.comTypeBtn && el.comTypePanel) {
+    const closeTypeDropdown = () => {
+      el.comTypePanel.hidden = true;
+      el.comTypeBtn.setAttribute('aria-expanded', 'false');
+    };
+    const openTypeDropdown = () => {
+      el.comTypePanel.hidden = false;
+      el.comTypeBtn.setAttribute('aria-expanded', 'true');
+    };
+    el.comTypeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (el.comTypePanel.hidden) openTypeDropdown(); else closeTypeDropdown();
+    });
+    el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const val = btn.getAttribute('data-value');
+        // 同步隐藏 radio
+        const radio = document.querySelector(`input[name="comType"][value="${val}"]`);
+        if (radio) radio.checked = true;
+        // 更新 label 与选中样式
+        const titleEl = btn.querySelector('b');
+        if (titleEl && el.comTypeBtnLabel) el.comTypeBtnLabel.textContent = titleEl.textContent;
+        el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((b2) => {
+          b2.classList.toggle('is-selected', b2 === btn);
+        });
+        closeTypeDropdown();
+      });
+    });
+    // 点外面收起
+    document.addEventListener('click', (e) => {
+      if (!el.comTypeDropdown) return;
+      if (el.comTypeDropdown.contains(e.target)) return;
+      closeTypeDropdown();
+    });
+    // 初始化：按当前 checked radio 同步 label + 高亮
+    const initChecked = document.querySelector('input[name="comType"]:checked');
+    if (initChecked) {
+      const val = initChecked.getAttribute('value');
+      const opt = el.comTypePanel.querySelector(`.com-mode-dropdown-option[data-value="${val}"]`);
+      if (opt) {
+        const titleEl = opt.querySelector('b');
+        if (titleEl && el.comTypeBtnLabel) el.comTypeBtnLabel.textContent = titleEl.textContent;
+        el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((b2) => {
+          b2.classList.toggle('is-selected', b2 === opt);
+        });
+      }
+    }
+  }
 
   // 裁剪控件事件
   el.comTrimStartRange.addEventListener('input', () => {

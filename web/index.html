@@ -1023,14 +1023,33 @@
 
     <!-- 剪辑选项：核心选风格即可，其余收进高级折叠区 -->
     <div class="com-opts" id="comOpts">
-      <!-- 核心：解说类型 -->
+      <!-- 核心：解说类型（自定义下拉） -->
       <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">解说类型</div>
-        <div class="com-mode-cards">
-          <label class="com-mode-card"><input type="radio" name="comType" value="deep_hl" checked /><span><b>高光处叠加深度解说</b><small>精彩片段 + 深度剖析，最有冲击力</small></span></label>
-          <label class="com-mode-card"><input type="radio" name="comType" value="normal_hl" /><span><b>高光部分普通解说</b><small>精彩片段 + 轻松讲解，节奏明快</small></span></label>
-          <label class="com-mode-card"><input type="radio" name="comType" value="full_normal" /><span><b>全片普通解说</b><small>完整视频 + 平实讲述，适合长视频</small></span></label>
-          <label class="com-mode-card"><input type="radio" name="comType" value="full_deep" /><span><b>全片深入解说</b><small>完整视频 + 深度解读，信息量大</small></span></label>
+        <div class="com-mode-dropdown" id="comTypeDropdown">
+          <button type="button" class="com-mode-dropdown-toggle" id="comTypeBtn" aria-haspopup="listbox" aria-expanded="false">
+            <span class="com-mode-dropdown-label" id="comTypeBtnLabel">高光处叠加深度解说</span>
+            <span class="com-mode-dropdown-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="com-mode-dropdown-panel" id="comTypePanel" role="listbox" hidden>
+            <button type="button" class="com-mode-dropdown-option is-selected" data-value="deep_hl" role="option">
+              <b>高光处叠加深度解说</b><small>精彩片段 + 深度剖析，最有冲击力</small>
+            </button>
+            <button type="button" class="com-mode-dropdown-option" data-value="normal_hl" role="option">
+              <b>高光部分普通解说</b><small>精彩片段 + 轻松讲解，节奏明快</small>
+            </button>
+            <button type="button" class="com-mode-dropdown-option" data-value="full_normal" role="option">
+              <b>全片普通解说</b><small>完整视频 + 平实讲述，适合长视频</small>
+            </button>
+            <button type="button" class="com-mode-dropdown-option" data-value="full_deep" role="option">
+              <b>全片深入解说</b><small>完整视频 + 深度解读，信息量大</small>
+            </button>
+          </div>
+          <!-- 隐藏 radios 保留向后兼容（comGetOptions 仍走 document.querySelector('input[name="comType"]:checked').value） -->
+          <input type="radio" name="comType" value="deep_hl" checked hidden />
+          <input type="radio" name="comType" value="normal_hl" hidden />
+          <input type="radio" name="comType" value="full_normal" hidden />
+          <input type="radio" name="comType" value="full_deep" hidden />
         </div>
       </div>
 
