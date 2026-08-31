@@ -343,7 +343,6 @@
     comMaxCharsVal: $('comMaxCharsVal'),
     comFileInput: $('comFileInput'),
     comFileBtn: $('comFileBtn'),
-    comFileName: $('comFileName'),
     comFileStatus: $('comFileStatus'),
     comDropZone: $('comDropZone'),
     comTrimCard: $('comTrimCard'),
@@ -6150,7 +6149,6 @@ el.dwVidPlayer.removeAttribute('src');
     el.comEta.hidden = true;
     el.comSource.value = '';
     selectedLocalFile = null;
-    el.comFileName.textContent = '';
     setupComPreview(null);
 
     try {
@@ -6747,7 +6745,6 @@ el.dwVidPlayer.removeAttribute('src');
   el.comSource.addEventListener('change', () => {
     if (el.comSource.value) {
       selectedLocalFile = null;
-      el.comFileName.textContent = '';
       el.comFileStatus.hidden = true;
       const opt = el.comSource.options[el.comSource.selectedIndex];
       setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`, opt ? opt.textContent : '');
@@ -6764,7 +6761,6 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
     selectedLocalFile = file;
-    el.comFileName.textContent = file.name;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
     setupComPreview(URL.createObjectURL(file), file.name);

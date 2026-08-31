@@ -1980,7 +1980,6 @@ img { max-width: 100%; display: block; }
   .com-trim-timeline { grid-template-columns: 1fr; }
 }
 /* ---- 文件选择 ---- */
-.com-file-name { display: block; margin-top: .5rem; font-size: .8rem; color: var(--text-mute); word-break: break-all; }
 #comDropZone { cursor: pointer; }
 #comDropZone:hover { border-color: var(--brand); }
 /* ---- 解说状态文本 ---- */
