@@ -6812,9 +6812,7 @@ el.dwVidPlayer.removeAttribute('src');
         // 同步隐藏 radio
         const radio = document.querySelector(`input[name="comType"][value="${val}"]`);
         if (radio) radio.checked = true;
-        // 更新 label 与选中样式
-        const titleEl = btn.querySelector('b');
-        if (titleEl && el.comTypeBtnLabel) el.comTypeBtnLabel.textContent = titleEl.textContent;
+        // trigger label 固定显示「解说类型」，不随选项变；仅同步高亮
         el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((b2) => {
           b2.classList.toggle('is-selected', b2 === btn);
         });
@@ -6827,14 +6825,12 @@ el.dwVidPlayer.removeAttribute('src');
       if (el.comTypeDropdown.contains(e.target)) return;
       closeTypeDropdown();
     });
-    // 初始化：按当前 checked radio 同步 label + 高亮
+    // 初始化：仅同步高亮（trigger label 固定显示「解说类型」组名，不跟随选项）
     const initChecked = document.querySelector('input[name="comType"]:checked');
     if (initChecked) {
       const val = initChecked.getAttribute('value');
       const opt = el.comTypePanel.querySelector(`.com-mode-dropdown-option[data-value="${val}"]`);
       if (opt) {
-        const titleEl = opt.querySelector('b');
-        if (titleEl && el.comTypeBtnLabel) el.comTypeBtnLabel.textContent = titleEl.textContent;
         el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((b2) => {
           b2.classList.toggle('is-selected', b2 === opt);
         });
@@ -6847,26 +6843,31 @@ el.dwVidPlayer.removeAttribute('src');
   const COM_SELECT_DEFS = {
     comHlSource: {
       kind: 'radio',
+      title: '自动挑高光',
       hide: '.com-opt-row',
       options: [['ai', 'AI 自动挑选高光'], ['manual', '人工在审核面板挑选']],
     },
     comIntroHighlight: {
       kind: 'checkbox',
+      title: '开头加高光',
       hide: '.com-highlights-toggle',
       options: [['on', '片头插入精彩片段'], ['off', '不插入']],
     },
     comIntroOutroMode: {
       kind: 'radio',
+      title: '固定选择项',
       hide: '.com-mode-fixed',
       options: [['keep_no_narrate', '保留片头片尾·不解说'], ['skip', '去片头片尾']],
     },
     comAspect: {
       kind: 'radio',
+      title: '画幅',
       hide: '.com-opt-row',
       options: [['auto', '自动（跟视频走）'], ['landscape', '横屏 16:9'], ['vertical', '竖屏 9:16']],
     },
     comStyle: {
       kind: 'radio',
+      title: '解说风格',
       hide: '.com-opt-row-styles',
       options: [
         ['none', '默认'], ['funny', '搞笑'], ['serious', '严肃'], ['domineering', '霸道'],
@@ -6951,8 +6952,8 @@ el.dwVidPlayer.removeAttribute('src');
     const close = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
     const syncUI = () => {
       const cur = comSelectRead(def, key);
-      const match = def.options.find(([v]) => v === cur) || def.options[0];
-      label.textContent = match ? match[1] : '';
+      // trigger 始终显示组名（功能标题），不跟随选项变更；当前选中项在 panel 里高亮
+      label.textContent = def.title || '';
       panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
         b.classList.toggle('is-selected', b.getAttribute('data-value') === cur);
       });

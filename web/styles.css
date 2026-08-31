@@ -2274,13 +2274,15 @@ img { max-width: 100%; display: block; }
   border: 1px solid var(--line); border-radius: var(--radius-md);
 }
 .com-opt-block {
-  display: flex; flex-wrap: wrap; align-items: center; gap: .55rem .8rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .8rem;
   padding: 0; background: none; border: none;
 }
+/* 标题被下拉 trigger 取代；data-com-select 块的左侧蓝字标题隐藏（视觉理解/配音引擎等保留） */
+.com-opt-block[data-com-select] > .com-opt-title { display: none; }
 /* 标题左对齐固定宽度，控件 / 下拉 / select 在右并自适应占余 */
 .com-opt-block > .com-opt-title { flex: 0 0 auto; min-width: 5em; margin: 0; }
 .com-mode-dropdown > .com-mode-dropdown { flex: 1 1 320px; max-width: 420px; }
-.com-opt-block > .com-mode-dropdown { flex: 1 1 240px; max-width: 280px; }
+.com-opt-block > .com-mode-dropdown { flex: 1 1 220px; max-width: 240px; }
 .com-opt-block > .com-opt-row { flex: 1 1 auto; align-items: center; gap: .35rem; }
 .com-opt-block > .com-highlights-toggle { flex: 0 1 auto; }
 .com-opt-block > .com-select { flex: 1 1 280px; max-width: 360px; }
