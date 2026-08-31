@@ -1902,7 +1902,7 @@ img { max-width: 100%; display: block; }
 }
 .com-ai-config .com-section-title { margin: 0 0 .15rem; flex: 1 1 100%; }
 .com-ai-config .adv { flex: 1 1 320px; min-width: 0; background: #fff; }
-.com-ai-config .adv[open] { flex: 1 1 100%; }
+.com-ai-config .adv[open] { flex: 1 1 calc(50% - .375rem); }
 .com-section-title { font-size: .95rem; font-weight: 700; color: var(--text); }
 .com-entry-card select.adv-input { width: 100%; display: block; }
 .com-generate-main { width: 100%; margin-top: .75rem; padding: .85rem; font-size: 1.05rem; font-weight: 700; }
