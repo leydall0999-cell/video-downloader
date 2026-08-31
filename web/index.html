@@ -1260,15 +1260,16 @@
           </div>
           <span class="com-vol-hint">响度标准化之后再乘这个倍数（越大越响）</span>
         </div>
-      </div>
-      <div class="com-vol-actions">
-        <span class="com-vol-preview-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
-        <div class="com-vol-buttons">
-          <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
-          <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview">▶ 试听当前设置</button>
-          <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
+        <div class="com-vol-item com-vol-actions-item">
+          <div class="com-vol-label">试听设置</div>
+          <div class="com-vol-buttons">
+            <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview">▶ 试听当前设置</button>
+            <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
+          </div>
+          <span class="com-vol-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
+          <span class="com-status" id="comVolStatus" hidden></span>
         </div>
-        <span class="com-status" id="comVolStatus" hidden></span>
       </div>
     </div>
 

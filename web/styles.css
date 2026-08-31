@@ -2666,26 +2666,21 @@ img { max-width: 100%; display: block; }
 /* 弹窗操作行（确认 / 取消按钮） */
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
 
-/* ── 配音与音量手动调节面板 ── */
-.com-vol-row { display: flex; flex-wrap: wrap; gap: .8rem 1.5rem; margin-top: .45rem; }
-.com-vol-item { display: flex; flex-direction: column; gap: .25rem; min-width: 240px; flex: 1 1 240px; }
+/* ── 配音与音量手动调节面板：4 项 2×2 网格 ── */
+.com-vol-row { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1.5rem; margin-top: .45rem; }
+.com-vol-item { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+@media (max-width: 760px) { .com-vol-row { grid-template-columns: 1fr; } }
 .com-vol-label { font-size: .85rem; font-weight: 600; color: var(--text); }
 .com-vol-ctrl { display: flex; align-items: center; gap: .6rem; }
 .com-vol-ctrl input[type="range"] { flex: 1 1 auto; accent-color: var(--accent, #2563eb); height: 4px; }
 .com-vol-val { min-width: 64px; text-align: right; font-size: .82rem; color: var(--accent, #2563eb); font-variant-numeric: tabular-nums; font-weight: 600; }
 .com-vol-off { font-size: .78rem; color: var(--text-mute); display: flex; align-items: center; gap: .35rem; cursor: pointer; }
 .com-vol-hint { font-size: .74rem; color: var(--text-mute); line-height: 1.4; }
-.com-vol-actions {
-  display: flex; justify-content: space-between; align-items: center;
-  gap: 1rem;
-  margin-top: .75rem;
-  padding-top: .6rem;
-  border-top: 1px solid var(--line);
+/* 「试听设置」格：标题 + 按钮行（自动换行防止按钮挤）+ 状态提示 */
+.com-vol-actions-item .com-vol-buttons {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
 }
-.com-vol-buttons {
-  display: flex; align-items: center; gap: .55rem;
-  flex-shrink: 0;
-}
+.com-vol-actions-item .com-vol-buttons .btn { flex: 0 0 auto; }
 .com-opt-tip { font-size: .72rem; color: var(--text-mute); font-weight: 400; }
 /* 关闭响度标准化时，弱化旁白响度滑块 */
 #comLoudness:disabled { opacity: .4; }
