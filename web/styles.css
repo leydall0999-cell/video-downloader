@@ -2279,10 +2279,11 @@ img { max-width: 100%; display: block; }
 }
 /* 标题左对齐固定宽度，控件 / 下拉 / select 在右并自适应占余 */
 .com-opt-block > .com-opt-title { flex: 0 0 auto; min-width: 5em; margin: 0; }
-.com-opt-block > .com-mode-dropdown { flex: 1 1 320px; max-width: 420px; }
+.com-mode-dropdown > .com-mode-dropdown { flex: 1 1 320px; max-width: 420px; }
+.com-opt-block > .com-mode-dropdown { flex: 1 1 240px; max-width: 280px; }
 .com-opt-block > .com-opt-row { flex: 1 1 auto; align-items: center; gap: .35rem; }
 .com-opt-block > .com-highlights-toggle { flex: 0 1 auto; }
-.com-opt-block > .com-select { flex: 1 1 320px; max-width: 460px; }
+.com-opt-block > .com-select { flex: 1 1 280px; max-width: 360px; }
 /* 固定选择项下的 3 个保留字段、配音引擎的状态条/价格对照：占满整行 */
 .com-opt-block > .com-retain-field,
 .com-opt-block > #comTtsStatusBar { flex: 1 1 100%; }
@@ -2366,7 +2367,7 @@ img { max-width: 100%; display: block; }
 
 /* 解说类型：卡片式四选一，信息更醒目 */
 /* 解说类型：自定义下拉（紫色粗边圆角 + 展开堆叠列表） */
-.com-mode-dropdown { position: relative; margin-top: .35rem; max-width: 380px; }
+.com-mode-dropdown { position: relative; margin-top: .35rem; max-width: 280px; }
 .com-mode-dropdown-toggle {
   display: flex; align-items: center; justify-content: space-between; gap: .6rem;
   width: 100%; min-height: 40px; padding: .5rem .75rem;
@@ -2389,7 +2390,7 @@ img { max-width: 100%; display: block; }
   background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius-md);
   box-shadow: 0 6px 20px rgba(0, 0, 0, .12);
   padding: .35rem; max-height: 320px; overflow-y: auto;
-  max-width: 380px;
+  max-width: 280px;
 }
 /* 原生 radio/checkbox 组已转下拉，原生控件仅保留在 DOM 供兼容读取 */
 .com-native-hidden { display: none !important; }
