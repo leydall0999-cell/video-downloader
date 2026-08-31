@@ -653,7 +653,14 @@
   const _parseResponse = async (response) => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '', category: payload.category || '' };
+      // detail 可能是字符串、FastAPI 422 校验错误数组 [{loc,msg,type}] 或对象——统一压成人话
+      let msg = payload.error || payload.detail || '请求失败，请稍后重试';
+      if (Array.isArray(msg)) {
+        msg = msg.map((d) => `${(d.loc || []).filter((p) => p !== 'body').join('.')}: ${d.msg}`).join('；');
+      } else if (msg && typeof msg === 'object') {
+        msg = msg.message || JSON.stringify(msg);
+      }
+      const err = { message: msg, hint: payload.hint || '', category: payload.category || '' };
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
       throw err;
     }
@@ -5244,7 +5251,8 @@ el.dwVidPlayer.removeAttribute('src');
       style: styleEl ? styleEl.value : 'none',
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
-      correct_transcript: !!(el.comCorrectTranscript && el.comCorrectTranscript.checked),
+      // 后端 CommentaryRequest.correct_transcript 是 str('0'=关/''=开)，勿发布尔（bool 会 422）
+      correct_transcript: !(el.comCorrectTranscript && el.comCorrectTranscript.checked) ? '0' : '',
       export_jianying: comGetExportJianying(),
       bgm: el.comBgm ? el.comBgm.value : 'off',
       bgm_file: el.comBgmFile ? el.comBgmFile.value : '',
