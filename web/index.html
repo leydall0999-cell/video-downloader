@@ -1123,7 +1123,7 @@
                 </div>
                 <span class="com-retain-hint">10~100，留空不裁剪</span>
               </div>
-              <div class="com-retain-field">
+              <div class="com-retain-field com-retain-half">
                 <label class="com-retain-label">片头/片尾秒数</label>
                 <div class="com-retain-input">
                   <input type="number" id="comIntroSec" min="0" max="3600" step="1" placeholder="片头秒" />
@@ -1131,7 +1131,7 @@
                 </div>
                 <span class="com-retain-hint">留空=自动检测；填了直接覆盖边界</span>
               </div>
-              <div class="com-retain-field">
+              <div class="com-retain-field com-retain-half">
                 <label class="com-retain-label">正剧开始/片尾开始时间</label>
                 <div class="com-retain-input">
                   <input type="text" id="comDramaStart" placeholder="01:25 或 85" />
@@ -1186,13 +1186,12 @@
             <div class="com-opt-title">导出剪映草稿（可选）</div>
             <label class="com-checkbox-row" style="margin-bottom:8px;">
               <input id="comExportJianying" type="checkbox" />
-              <span>生成成片后，额外导出剪映可编辑草稿（视频轨 + 配音轨 + 字幕轨），可在剪映里二次精修再导出</span>
+              <span>成片生成后，额外导出剪映可编辑草稿（视频轨 + 配音轨 + 字幕轨）</span>
             </label>
             <div class="com-opt-row" id="comExportJianyingDirWrap" hidden>
-              <input id="comExportJianyingDir" type="text" class="adv-input" placeholder="导出目录，例如 /Users/你的用户名/Movies/剪映导出" autocomplete="off" spellcheck="false" />
+              <input id="comExportJianyingDir" type="text" class="adv-input" placeholder="导出目录（留空用默认）" autocomplete="off" spellcheck="false" />
               <button type="button" class="btn btn-sm btn-secondary" id="comExportJianyingPick">选择文件夹</button>
             </div>
-            <p class="com-retain-hint">留空则默认导出到解说输出目录下的「&lt;片名&gt;-剪映草稿」文件夹。勾选后，渲染成片时会一并生成草稿，可在剪映中打开继续编辑。</p>
           </div>
 
     </div>
