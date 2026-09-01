@@ -265,6 +265,7 @@
     comEmpty: $('comEmpty'),
     comGrid: $('comGrid'),
     comHistory: $('comHistory'),
+    comColLeft: $('comColLeft'),
     comHistoryCount: $('comHistoryCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comSortBtn: $('comSortBtn'),
@@ -6244,6 +6245,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comEmpty.hidden = items.length > 0;
     el.comResults.hidden = items.length === 0;
     el.comHistory.hidden = items.length === 0;
+    el.comColLeft.hidden = items.length === 0;
 
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';

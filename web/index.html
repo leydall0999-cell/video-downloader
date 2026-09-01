@@ -915,7 +915,7 @@
       </div>
     </div>
     <div class="com-workspace">
-        <div class="com-col com-col-left">
+        <div class="com-col com-col-left" id="comColLeft">
                 <div class="com-results" id="comResults" hidden>
       <div class="com-history" id="comHistory">
         <div class="com-history-head">
@@ -1136,7 +1136,7 @@
         <div class="com-cell com-cell-r2-asr">
           <label class="com-checkbox-row">
             <input id="comCorrectTranscript" type="checkbox" checked />
-            <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
+            <span>转写稿 ASR 校正（修正同音错字/专有名词；关闭省 token）</span>
           </label>
         </div>
       </div>
@@ -1234,13 +1234,12 @@
           <div class="com-opt-title">导出剪映草稿（可选）</div>
           <label class="com-checkbox-row" style="margin-bottom:8px;">
             <input id="comExportJianying" type="checkbox" />
-            <span>生成成片后，额外导出剪映可编辑草稿（视频轨 + 配音轨 + 字幕轨），可在剪映里二次精修再导出</span>
+            <span>生成成片后，额外导出剪映可编辑草稿</span>
           </label>
           <div class="com-opt-row" id="comExportJianyingDirWrap" hidden>
             <input id="comExportJianyingDir" type="text" class="adv-input" placeholder="导出目录，例如 /Users/你的用户名/Movies/剪映导出" autocomplete="off" spellcheck="false" />
             <button type="button" class="btn btn-sm btn-secondary" id="comExportJianyingPick">选择文件夹</button>
           </div>
-          <p class="com-retain-hint">留空则默认导出到解说输出目录下的「&lt;片名&gt;-剪映草稿」文件夹。勾选后，渲染成片时会一并生成草稿，可在剪映中打开继续编辑。</p>
         </div>
       </div>
                 </div>
