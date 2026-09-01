@@ -2867,8 +2867,9 @@
         (d.models || []).forEach(m => {
           const o = document.createElement('option');
           o.value = m.name;
+          const tag = m.recommended ? ' · 推荐' : '';
           // 已下载的标注「已就绪」，未下载的标注体积，帮用户判断要不要等
-          o.textContent = m.downloaded ? `${m.desc} · 已就绪` : `${m.desc} · 需下载 ${m.size_mb}MB`;
+          o.textContent = m.downloaded ? `${m.desc} · 已就绪${tag}` : `${m.desc} · 需下载 ${m.size_mb}MB${tag}`;
           el.matModel.appendChild(o);
         });
         el.matModel.value = d.default;
@@ -3140,6 +3141,10 @@
       el.matResult.hidden = true;
       const fd = new FormData();
       fd.append('file', file);
+      // 指定本次用的模型（前端下拉选中的；后端未知名字会回退默认）
+      if (el.matModel && el.matModel.value) {
+        fd.append('model', el.matModel.value);
+      }
       // 手动框选了主体区域 → 把归一化 [x,y,w,h] 一起提交，后端只抠框内
       if (el.matBoxToggle && el.matBoxToggle.checked && matBox) {
         fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));

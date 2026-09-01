@@ -1,6 +1,6 @@
 """server/matting_ai.py — 一键抠图（图片去背景）AI 引擎。
 
-用 BiRefNet ONNX 做显著性抠图，输出带 alpha 通道的透明 PNG。
+用 RMBG-2.0 / BiRefNet 等显著性抠图 ONNX 模型，输出带 alpha 通道的透明 PNG。
 
 为什么不用 rembg 库：
     rembg 会连带引入 scipy / scikit-image / numba / pooch 等重型科学计算栈，
@@ -25,9 +25,10 @@
         让光晕以约 0.4~0.6 alpha 保留在结果里。
 
 模型：
-    默认 birefnet-general-lite（213 MB，质量接近完整版、内存/速度友好）；
-    可切 birefnet-general（927 MB，质量最高）。首次使用时惰性下载到
-    ~/.vdl_models（或 VDL_MODELS_DIR），下载进度可通过 download_progress() 轮询。
+    默认 rmbg-2.0（176 MB，BRIA 训练，专为电商/图形/文字/Logo 优化，
+    对海报、文字、装饰元素的边界判定远优于 BiRefNet-general，多抠少扣明显减少）。
+    备选 birefnet-general-lite（213 MB）/ birefnet-general（927 MB，质量最高）。
+    首次使用时惰性下载到 ~/.vdl_models（或 VDL_MODELS_DIR），进度可轮询。
 
 License 注意：
     BiRefNet 权重多为「非商业用途」授权，个人自用 / 内部分发一般可接受；
@@ -45,12 +46,28 @@ from pathlib import Path
 
 # size_mb 用于前端「首次下载约 xxx MB」提示；input_size 是 ONNX 输入分辨率。
 MODELS: dict[str, dict] = {
+    "rmbg-2.0": {
+        "filename": "rmbg-2.0.onnx",
+        "size_mb": 176,
+        "input_size": (1024, 1024),
+        "norm": "255",  # RMBG-2.0 标准前处理：÷255 后 ImageNet 归一化
+        "desc": "RMBG-2.0 · 176MB · 图形/文字最佳（推荐）",
+        # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
+        "urls": [
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
+        ],
+    },
     "birefnet-general-lite": {
         "filename": "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
         "size_mb": 213,
         "input_size": (1024, 1024),
+        "norm": "max",  # BiRefNet（rembg 风格）：÷全图最大像素值后 ImageNet 归一化
         "md5": "4fab47adc4ff364be1713e97b7e66334",
-        "desc": "轻量版 · 213MB · 推荐",
+        "desc": "BiRefNet 轻量版 · 213MB",
         # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
@@ -69,8 +86,9 @@ MODELS: dict[str, dict] = {
         "filename": "BiRefNet-general-epoch_244.onnx",
         "size_mb": 927,
         "input_size": (1024, 1024),
+        "norm": "max",
         "md5": "7a35a0141cbbc80de11d9c9a28f52697",
-        "desc": "完整版 · 927MB · 质量最高",
+        "desc": "BiRefNet 完整版 · 927MB · 质量最高",
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-epoch_244.onnx",
@@ -86,7 +104,7 @@ MODELS: dict[str, dict] = {
     },
 }
 
-DEFAULT_MODEL = "birefnet-general-lite"
+DEFAULT_MODEL = "rmbg-2.0"
 
 # 归一化常量（ImageNet，与 rembg 一致）
 _MEAN = (0.485, 0.456, 0.406)
@@ -95,8 +113,8 @@ _STD = (0.229, 0.224, 0.225)
 # ---------------------------------------------------------------- 运行时状态
 
 _MODEL_NAME = os.environ.get("VDL_MAT_MODEL") or DEFAULT_MODEL
-_SESSION = None
-_SESSION_NAME = ""
+# 按模型名缓存 session（切模型不必丢弃已建 session，来回切换不重复初始化）
+_SESSIONS: dict = {}
 _LOCK = threading.Lock()
 
 # 下载进度快照（供 /api/matting/models 轮询，前端显示「首次下载 xx%」）
@@ -123,17 +141,14 @@ def current_model() -> str:
 
 
 def set_model(name: str) -> None:
-    """切换模型（清空已缓存 session，下次推理重建）。未知名字回退默认。"""
-    global _MODEL_NAME, _SESSION, _SESSION_NAME
+    """切换默认模型（仅改全局默认；已缓存的各模型 session 保留）。未知名字回退默认。"""
+    global _MODEL_NAME
     with _LOCK:
         _MODEL_NAME = name if name in MODELS else DEFAULT_MODEL
-        if _SESSION_NAME != _MODEL_NAME:
-            _SESSION = None
-            _SESSION_NAME = ""
 
 
 def list_models() -> list[dict]:
-    """返回模型元信息（含已下载标记），供前端下拉/提示使用。"""
+    """返回模型元信息（含已下载标记 + 推荐标记），供前端下拉/提示使用。"""
     out = []
     for name, meta in MODELS.items():
         p = _local_path(name)
@@ -144,6 +159,7 @@ def list_models() -> list[dict]:
                 "size_mb": meta["size_mb"],
                 "downloaded": _valid_cached(name),
                 "active": name == _MODEL_NAME,
+                "recommended": name == DEFAULT_MODEL,
             }
         )
     return out
@@ -283,23 +299,27 @@ def _http_get(url: str, tmp: Path, name: str) -> None:
 # ---------------------------------------------------------------- 推理
 
 
-def _get_session():
-    """懒加载 ONNX session（首次调用会触发模型下载）。"""
-    global _SESSION, _SESSION_NAME
+def _get_session(name: str | None = None):
+    """懒加载 ONNX session（首次调用会触发模型下载）。
+
+    name 缺省用全局 _MODEL_NAME；每个模型独立缓存，切换模型不丢弃已建 session。
+    """
+    name = name or _MODEL_NAME
     with _LOCK:
-        if _SESSION is not None and _SESSION_NAME == _MODEL_NAME:
-            return _SESSION
+        sess = _SESSIONS.get(name)
+        if sess is not None:
+            return sess
 
         import onnxruntime as ort
 
-        path = _download(_MODEL_NAME)
+        path = _download(name)
         so = ort.SessionOptions()
         # 抠图是单张串行任务，图优化已足够；不开并行避免与下载线程抢核
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         # CPU 是唯一稳定 EP（BiRefNet 含傅里叶类 op，CoreML EP 会 OOM，与 LaMa 同理）
-        _SESSION = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
-        _SESSION_NAME = _MODEL_NAME
-        return _SESSION
+        sess = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
+        _SESSIONS[name] = sess
+        return sess
 
 
 def warmup() -> None:
@@ -321,13 +341,20 @@ def _lanczos():
     return getattr(Image, "Resampling", Image).LANCZOS
 
 
-def _preprocess(img, size: tuple[int, int]):
-    """RGB → 归一化 CHW float32 张量（对齐 rembg BaseSession.normalize）。"""
+def _preprocess(img, size: tuple[int, int], norm: str = "max"):
+    """RGB → 归一化 CHW float32 张量（对齐各模型官方前处理）。
+
+    norm="max"：÷全图最大像素值（BiRefNet / rembg 风格）；
+    norm="255"：÷255（RMBG-2.0 标准 ImageNet 前处理）。
+    """
     import numpy as np
 
     im = img.convert("RGB").resize(size, _lanczos())
     ary = np.array(im).astype(np.float32)
-    ary = ary / max(float(np.max(ary)), 1e-6)
+    if norm == "255":
+        ary = ary / 255.0
+    else:
+        ary = ary / max(float(np.max(ary)), 1e-6)
 
     tmp = np.zeros((ary.shape[0], ary.shape[1], 3), dtype=np.float32)
     tmp[:, :, 0] = (ary[:, :, 0] - _MEAN[0]) / _STD[0]
@@ -343,10 +370,15 @@ def _sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def predict_mask(img):
+def predict_mask(img, model: str | None = None):
     """对 PIL 图像推理，返回原图尺寸的 L 模式 alpha 蒙版。
 
+    model：指定用哪个模型（缺省用全局 _MODEL_NAME）。
+
     关键改进：
+    - **输出 sigmoid 自动探测**：BiRefNet 的 ONNX 输出是原始 logits（需 sigmoid）；
+      RMBG-2.0 多数导出已含 sigmoid（输出直接是 [0,1]）。用「最大值 > 1」判定：
+      是 logits 就补 sigmoid，否则直接用——同一套后处理兼容两种模型，不挑导出格式。
     - **软阈值替代 min-max 归一化**：原 rembg 流程把 sigmoid 概率硬拉伸到 [0,1]，
       会把"小白光晕/浅描边/3D 阴影"等软 alpha 区间（softmax 0.2~0.5）压缩到接近 0，
       抠图结果就是"光晕没了、只剩硬切的字符"。
@@ -354,21 +386,26 @@ def predict_mask(img):
       光晕以约 0.4~0.6 alpha 出现在结果里（贴纸风抠图的视觉预期）。
     - **轻 GaussianBlur (r=0.8)**：alpha 边缘羽化，避免硬阶梯。
     - **LANCZOS 缩回原图尺寸**：保持平滑过渡。
-
-    边界情况：单色图（hi<lo）→ 退化回原 sigmoid 输出，避免除零。
     """
     import numpy as np
     from PIL import Image, ImageFilter
 
-    sess = _get_session()
-    meta = MODELS[_MODEL_NAME]
-    feed = _preprocess(img, meta["input_size"])
+    sess = _get_session(model)
+    meta = MODELS[model or _MODEL_NAME]
+    feed = _preprocess(img, meta["input_size"], meta.get("norm", "max"))
 
     input_name = sess.get_inputs()[0].name
     outs = sess.run(None, {input_name: feed})
 
-    pred = _sigmoid(outs[0][:, 0, :, :])
-    pred = np.squeeze(pred)
+    # 取单通道 alpha 并展平为 [H, W]
+    raw = np.squeeze(outs[0][:, 0, :, :])
+    # sigmoid 自动探测：BiRefNet 输出 logits（max 可远超 1）→ 需 sigmoid；
+    # RMBG-2.0 多数导出已含 sigmoid（输出已在 [0,1]）→ 直接当概率用。
+    if float(np.max(raw)) > 1.0:
+        pred = _sigmoid(raw)
+    else:
+        pred = raw
+    pred = np.clip(pred, 0.0, 1.0)
 
     # 软阈值替换 min-max：保留中间置信为软 alpha
     threshold_lo, threshold_hi = 0.05, 0.5
@@ -397,7 +434,7 @@ def predict_mask(img):
     return mask_img
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -421,7 +458,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         box_px = _normalize_box(box, W, H)
         if box_px is None:
             # 未框选：整图推理
-            mask = predict_mask(rgb)
+            mask = predict_mask(rgb, model=model)
         else:
             x0, y0, x1, y1 = box_px
             bw, bh = x1 - x0, y1 - y0
@@ -437,7 +474,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             x1p = min(W, x1 + pad_w)
             y1p = min(H, y1 + pad_h)
             crop = rgb.crop((x0p, y0p, x1p, y1p))
-            crop_mask = predict_mask(crop)
+            crop_mask = predict_mask(crop, model=model)
             # 输出 mask 严格按用户原框；外扩区是被模型"看到"但被舍弃的上下文。
             # 取交集：把外扩裁切的 mask 中属于原框的部分贴回原图坐标。
             import numpy as _np
