@@ -2372,11 +2372,11 @@ img { max-width: 100%; display: block; }
 /* 解说类型：自定义下拉（紫色粗边圆角 + 展开堆叠列表） */
 .com-mode-dropdown { position: relative; margin-top: .35rem; display: inline-block; max-width: none; }
 .com-mode-dropdown-toggle {
-  display: inline-flex; align-items: center; justify-content: space-between; gap: .6rem;
-  width: auto; min-height: 40px; padding: .5rem .75rem;
+  display: inline-flex; align-items: center; justify-content: space-between; gap: .5rem;
+  width: auto; min-height: 38px; padding: .4rem .6rem;
   background: #fff;
   border: 1.5px solid var(--line); border-radius: var(--radius-sm);
-  font-size: .92rem; font-weight: 500; color: var(--text);
+  font-size: .86rem; font-weight: 500; color: var(--text);
   cursor: pointer; text-align: left; white-space: nowrap;
   transition: border-color .18s, box-shadow .18s, background .18s;
 }
@@ -2720,7 +2720,7 @@ img { max-width: 100%; display: block; }
 /* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） ===== */
 #commentaryView .com-workspace {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) minmax(420px, 480px);
+  grid-template-columns: 240px minmax(0, 1fr) minmax(620px, 720px);
   gap: 12px;
   align-items: start;
   margin-top: .6rem;
