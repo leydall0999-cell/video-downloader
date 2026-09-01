@@ -3045,7 +3045,9 @@
       try { el.matImgPreview.setPointerCapture(ev.pointerId); } catch (_) { /* 老浏览器忽略 */ }
       matBoxRedraw();
     });
-    el.matImgPreview.addEventListener('pointermove', (ev) => {
+    // move/up 挂到 window：即便 setPointerCapture 在个别 WebView 失效，
+    // 拖动超出图片范围也能继续更新框，不会"拖一半框卡住 / 消失"。
+    window.addEventListener('pointermove', (ev) => {
       if (!matBoxDrawing || !matBoxStart) return;
       const p = matBoxPoint(ev);
       if (!p) return;
@@ -3066,8 +3068,8 @@
       try { el.matImgPreview.releasePointerCapture(ev.pointerId); } catch (_) { /* 忽略 */ }
       matBoxRedraw();
     };
-    el.matImgPreview.addEventListener('pointerup', matBoxEnd);
-    el.matImgPreview.addEventListener('pointercancel', matBoxEnd);
+    window.addEventListener('pointerup', matBoxEnd);
+    window.addEventListener('pointercancel', matBoxEnd);
     // 窗口尺寸变化后图片显示尺寸变了，重绘保持框贴合
     window.addEventListener('resize', () => {
       if (el.matBoxToggle && el.matBoxToggle.checked) matBoxRedraw();
