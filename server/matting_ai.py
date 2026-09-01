@@ -25,7 +25,7 @@
         让光晕以约 0.4~0.6 alpha 保留在结果里。
 
 模型：
-    默认 rmbg-2.0（176 MB，BRIA 训练，专为电商/图形/文字/Logo 优化，
+    默认 rmbg-2.0（**FP32 约 977 MB**，BRIA 训练，专为电商/图形/文字/Logo 优化，
     对海报、文字、装饰元素的边界判定远优于 BiRefNet-general，多抠少扣明显减少）。
     备选 birefnet-general-lite（213 MB）/ birefnet-general（927 MB，质量最高）。
     首次使用时惰性下载到 ~/.vdl_models（或 VDL_MODELS_DIR），进度可轮询。
@@ -47,18 +47,24 @@ from pathlib import Path
 # size_mb 用于前端「首次下载约 xxx MB」提示；input_size 是 ONNX 输入分辨率。
 MODELS: dict[str, dict] = {
     "rmbg-2.0": {
-        "filename": "rmbg-2.0.onnx",
-        "size_mb": 176,
+        # 真实文件名是 bria-rmbg-2.0.onnx（rembg v0.0.0 release 的命名约定：
+        # 「bria」前缀 + 模型正式名）。官方 SHA256 (rembg 2.0.81 bria_rmbg.py 注释)：
+        #   sha256:5b486f08200f513f460da46dd702db5fbb47d79b4be4b708a19444bcd4e79958
+        "filename": "bria-rmbg-2.0.onnx",
+        # RMBG-2.0 FP32 版官方 977 MB（briaai/RMBG-2.0 onnx/model.onnx）。
+        # 下载前若用户知情：约 1 GB，会花 30s~3min，耐心等。FP16 量化版仅 514 MB，
+        # 但 rembg v0.0.0 release 没托管此版本，要换下载源就先不动。
+        "size_mb": 977,
         "input_size": (1024, 1024),
         "norm": "255",  # RMBG-2.0 标准前处理：÷255 后 ImageNet 归一化
-        "desc": "RMBG-2.0 · 176MB · 图形/文字最佳（推荐）",
+        "desc": "RMBG-2.0 · 977MB · 图形/文字最佳（推荐）",
         # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
         "urls": [
-            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
-            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
-            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
-            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
-            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/rmbg-2.0.onnx",
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
         ],
     },
     "birefnet-general-lite": {
