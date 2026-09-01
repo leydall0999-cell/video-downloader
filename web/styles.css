@@ -2313,13 +2313,6 @@ img { max-width: 100%; display: block; }
 .com-bgm-file input[type="text"] { flex: 1 1 0; min-width: 0; padding: .28rem .5rem; font-size: .82rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg, #fafafa); color: var(--text, #333); }
 .com-pick-btn { padding: .28rem .65rem; font-size: .82rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--accent, #2563eb); cursor: pointer; }
 .com-pick-btn:hover { background: var(--accent, #2563eb); color: #fff; border-color: var(--accent, #2563eb); }
-.com-sub-preview { display: block; border: 1px solid var(--line); border-radius: 8px; background: #1a1a1a; max-width: 360px; max-height: 360px; width: auto; height: auto; }
-.com-sub-layout { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
-.com-sub-layout-left { flex: 1 1 320px; min-width: 280px; }
-.com-sub-layout-left .com-opt-row-sub { margin-top: .25rem; }
-.com-sub-layout-right { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: .35rem; }
-.com-sub-aspect-hint { font-size: .72rem; opacity: .6; }
-.com-opt-row-sub { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center; }
 .com-sub-item { display: inline-flex; align-items: center; gap: .3rem; font-size: .82rem; color: var(--text-2, #555); }
 .com-sub-item input[type="range"] { width: 96px; }
 .com-sub-item input[type="color"] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
@@ -2790,11 +2783,9 @@ img { max-width: 100%; display: block; }
 .com-cell-full { grid-column: 1 / -1; }
 /* 标题仅隐藏 trigger 单元格内的（下拉按钮已显示组名）；导出剪映等真实标题保留显示 */
 .com-col-right .com-opts#comOpts .com-cell-trigger > .com-opt-title { display: none; }
-/* 字幕位置实时预览画布自适应单元格宽度 */
-.com-sub-preview-cell .com-sub-preview { width: 100%; max-width: 100%; height: auto; }
-.com-sub-preview-head { font-size: .8rem; font-weight: 600; color: var(--text); margin-bottom: .35rem; }
-.com-sub-style-row { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin-bottom: .3rem; }
-.com-sub-color-item { margin-top: .15rem; }
+/* 字幕样式行：单行多控件；颜色 picker 自动行内 */
+.com-sub-style-row { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: center; }
+.com-sub-pos-cell .com-retain-hint { display: block; margin-top: .35rem; }
 /* 窄屏回退：网格单列、第 1 行换行 */
 @media (max-width: 720px) {
   .com-row-1 { flex-wrap: wrap; }

@@ -1145,7 +1145,7 @@
 
       <!-- ===== 第 3-7 行：2 列网格 ===== -->
       <div class="com-grid">
-        <!-- 第 3 行：片头片尾矫正 | 字号描边+颜色 -->
+        <!-- 第 3 行：片头片尾矫正 | 字号 -->
         <div class="com-cell com-cell-half com-retain-field">
           <label class="com-retain-label">片头/片尾秒数</label>
           <div class="com-retain-input">
@@ -1155,14 +1155,10 @@
           <span class="com-retain-hint">留空=自动检测；填了直接覆盖边界</span>
         </div>
         <div class="com-cell com-cell-half com-sub-style-cell">
-          <div class="com-sub-style-row">
-            <label class="com-sub-item">字号 <input type="range" id="comSubSize" min="0.6" max="1.6" step="0.05" value="1.0" /><span id="comSubSizeVal">1.0×</span></label>
-            <label class="com-sub-item">描边 <input type="range" id="comSubBorder" min="0.3" max="3.0" step="0.1" value="1.0" /><span id="comSubBorderVal">1.0×</span></label>
-          </div>
-          <label class="com-sub-item com-sub-color-item">颜色 <input type="color" id="comSubColor" value="#FFFFFF" /></label>
+          <label class="com-sub-item">字号 <input type="range" id="comSubSize" min="0.6" max="1.6" step="0.05" value="1.0" /><span id="comSubSizeVal">1.00×</span></label>
         </div>
 
-        <!-- 第 4 行：正剧开始/片尾开始时间 | 位置 -->
+        <!-- 第 4 行：正剧开始/片尾开始时间 | 描边+颜色 -->
         <div class="com-cell com-cell-half com-retain-field">
           <label class="com-retain-label">正剧开始/片尾开始时间</label>
           <div class="com-retain-input">
@@ -1171,22 +1167,24 @@
           </div>
           <span class="com-retain-hint">绝对时间，优先于上方秒数；留空=自动检测</span>
         </div>
+        <div class="com-cell com-cell-half com-sub-style-cell">
+          <div class="com-sub-style-row">
+            <label class="com-sub-item">描边 <input type="range" id="comSubBorder" min="0.3" max="3.0" step="0.1" value="1.0" /><span id="comSubBorderVal">1.0×</span></label>
+            <label class="com-sub-item">颜色 <input type="color" id="comSubColor" value="#FFFFFF" /></label>
+          </div>
+        </div>
+
+        <!-- 第 5 行：配音与音量 | 位置（+ 实时预览提示） -->
+        <div class="com-cell com-cell-half com-vol-title-cell">
+          <div class="com-vol-label">配音与音量</div>
+          <span class="com-vol-hint">（保存后对所有解说任务生效）</span>
+        </div>
         <div class="com-cell com-cell-half com-sub-pos-cell">
           <span class="com-sub-pos">位置
             <label><input type="radio" name="comSubPos" value="bottom" checked />底部</label>
             <label><input type="radio" name="comSubPos" value="center" />居中</label>
           </span>
-        </div>
-
-        <!-- 第 5 行：配音与音量 | 字幕位置实时预览 -->
-        <div class="com-cell com-cell-half com-vol-title-cell">
-          <div class="com-vol-label">配音与音量</div>
-          <span class="com-vol-hint">（保存后对所有解说任务生效）</span>
-        </div>
-        <div class="com-cell com-cell-half com-sub-preview-cell">
-          <div class="com-sub-preview-head">字幕位置实时预览</div>
-          <canvas id="comSubPreview" class="com-sub-preview" width="480" height="270"></canvas>
-          <span id="comSubAspectHint" class="com-retain-hint">横屏 16:9 预览</span>
+          <span class="com-retain-hint">实时预览 [白字+黑描边+阴影，字幕落在画面的相对位置]</span>
         </div>
 
         <!-- 第 6 行：旁白响度标准化 | 原声压低比例 -->
