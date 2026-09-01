@@ -5515,7 +5515,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comProgress.hidden = false;
     el.comPhase.textContent = '转写+生成解说词';
     el.comPercent.textContent = '...';
-    el.comEmpty.hidden = true;
+    if (el.comEmpty) el.comEmpty.hidden = true;
     currentScriptJobId = job_id;
     let shownProgress = 0;
     const poll = setInterval(async () => {
@@ -5577,7 +5577,7 @@ el.dwVidPlayer.removeAttribute('src');
    *  即使拉取失败也保留面板可见，并给出重试按钮，避免用户看不到任何反馈。 */
   const openScriptReview = (job_id, opts = {}) => {
     el.comScriptPanel.hidden = false;
-    el.comEmpty.hidden = true;
+    if (el.comEmpty) el.comEmpty.hidden = true;
     el.comScriptSegments.replaceChildren();
     el.comScriptStatus.hidden = false;
     el.comScriptStatus.className = 'com-script-status';
@@ -6102,8 +6102,10 @@ el.dwVidPlayer.removeAttribute('src');
       commentaryItems = data.items || [];
       renderCommentaryList();
     } catch (e) {
-      el.comEmpty.hidden = false;
-      el.comEmpty.textContent = '读取解说成片失败：' + (e.message || '未知错误');
+      if (el.comEmpty) {
+        el.comEmpty.hidden = false;
+        el.comEmpty.textContent = '读取解说成片失败：' + (e.message || '未知错误');
+      }
     }
     refreshComSource();
     refreshCommentaryDiagnostics();
@@ -6197,15 +6199,8 @@ el.dwVidPlayer.removeAttribute('src');
     // 单区：每张成片卡都默认带配乐面板，无草稿/成片之分（用户截图要求）
     el.comGrid.className = 'com-grid com-view-' + commentaryViewMode;
     el.comGrid.replaceChildren();
-    el.comEmpty.hidden = items.length > 0;
-    el.comResults.hidden = items.length === 0;
-    el.comHistory.hidden = items.length === 0;
-    el.comColLeft.hidden = items.length === 0;
-    // 三列布局 vs 两列布局：有历史时插入 240px 左栏；否则 com-col com-col-left
-    // 通过 CSS hidden 不释放 grid track（max-content 仍算 padding/border，48px 残留），
-    // 用 .has-left class 切换 grid-template-columns，从根上躲开空白占位条
-    const ws = document.querySelector('.com-workspace');
-    if (ws) ws.classList.toggle('has-left', items.length > 0);
+    // 左栏始终显示 comHistory（标题 + 视图切换 + 排序）；空状态用 comEmpty 占位文本填充
+    if (el.comEmpty) el.comEmpty.hidden = items.length > 0;
 
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';

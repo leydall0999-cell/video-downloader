@@ -2685,18 +2685,24 @@ img { max-width: 100%; display: block; }
 .dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
 
 /* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） =====
-   默认 2 列（middle + right）。左列仅当 has-left class（loadCommentary 有历史时设置）才插入 240px。 */
+   固定 3 列布局（左 240 + 中 1fr + 右 620-720）。空状态左栏用 comEmpty 占位文本填充，不会留空白圆角条。 */
 #commentaryView .com-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(620px, 720px);
+  grid-template-columns: 240px minmax(0, 1fr) minmax(620px, 720px);
   gap: 12px;
   align-items: start;
   margin-top: .6rem;
 }
-#commentaryView .com-workspace.has-left {
-  grid-template-columns: 240px minmax(0, 1fr) minmax(620px, 720px);
-}
 .com-col { min-width: 0; }
+/* 左栏空状态占位文本：避免留 240×24 空白圆角条 */
+.com-history .com-empty {
+  color: var(--text-soft, #94a3b8);
+  font-size: .82rem;
+  line-height: 1.5;
+  padding: .6rem .15rem;
+  margin: 0;
+  text-align: left;
+}
 /* 左栏：成片历史（独立滚动；历史列表无下拉浮层，可安全 overflow） */
 .com-col-left {
   position: sticky; top: 12px;
