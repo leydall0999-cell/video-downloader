@@ -493,6 +493,7 @@
       <button type="button" class="dw-sub is-active" id="dwModeImg">🖼️ 图片去水印</button>
       <button type="button" class="dw-sub" id="dwModePdf">📄 PDF 去水印</button>
       <button type="button" class="dw-sub" id="dwModeVideo">🎬 视频去水印</button>
+      <button type="button" class="dw-sub" id="dwModeMatting">✂️ 一键抠图</button>
     </div>
 
     <!-- 图片模式 -->
@@ -858,6 +859,37 @@
             </section>
           </div>
         </aside>
+      </div>
+    </div>
+    <!-- 一键抠图模式（AI 去背景，输出透明 PNG） -->
+    <div id="dwMattingPane" hidden>
+      <div class="dw-layout">
+        <div class="dw-main">
+          <label class="uc-field">
+            <span class="uc-label">选择图片</span>
+            <input type="file" id="matFile" accept="image/*" />
+          </label>
+          <label class="uc-field">
+            <span class="uc-label">抠图模型</span>
+            <select id="matModel" aria-label="抠图模型"></select>
+          </label>
+          <span class="dw-hint">AI 自动识别主体并去除背景，输出带透明通道的 PNG（可直接换背景 / 合成）。
+            首次使用需下载模型：轻量版 213MB、完整版 927MB，仅下一次，之后离线可用；下载进度会在按钮旁实时显示。</span>
+          <div class="dw-preview-wrap" id="matPreviewWrap">
+            <img id="matImgPreview" alt="预览" />
+          </div>
+          <div class="dw-toolbar">
+            <button type="button" class="btn btn-primary" id="matBtn">开始抠图</button>
+            <span class="convert-status" id="matStatus"></span>
+          </div>
+          <div class="dw-result" id="matResult" hidden>
+            <div class="dw-compare">
+              <div><span class="dw-cap">原图</span><img id="matOrig" alt="原图" /></div>
+              <div><span class="dw-cap">抠图结果（灰格＝透明）</span><img id="matOut" class="mat-canvas" alt="抠图结果" /></div>
+            </div>
+            <a class="btn btn-accent btn-sm" id="matDownload" download>下载透明 PNG</a>
+          </div>
+        </div>
       </div>
     </div>
   </section>

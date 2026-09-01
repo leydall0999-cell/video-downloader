@@ -277,6 +277,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --hidden-import webview.platforms.cocoa \
   --hidden-import dewatermark_core \
   --hidden-import dewatermark_ai \
+  --hidden-import matting_ai \
   --collect-binaries cv2 \
   --collect-all pymupdf \
   --collect-all fitz \

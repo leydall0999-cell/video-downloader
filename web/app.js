@@ -503,6 +503,18 @@
     dwVidResume: $('dwVidResume'),
     dwVidCancel: $('dwVidCancel'),
     dwVidRunCtrls: $('dwVidRunCtrls'),
+    // 一键抠图
+    dwModeMatting: $('dwModeMatting'),
+    dwMattingPane: $('dwMattingPane'),
+    matFile: $('matFile'),
+    matModel: $('matModel'),
+    matImgPreview: $('matImgPreview'),
+    matBtn: $('matBtn'),
+    matStatus: $('matStatus'),
+    matResult: $('matResult'),
+    matOrig: $('matOrig'),
+    matOut: $('matOut'),
+    matDownload: $('matDownload'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -2806,21 +2818,142 @@
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
 
-  // 图片 / PDF / 视频 子模式切换
+  // 图片 / PDF / 视频 / 一键抠图 子模式切换
   const dwSwitchPane = (mode) => {
     el.dwImgPane.hidden = mode !== 'img';
     el.dwPdfPane.hidden = mode !== 'pdf';
     el.dwVideoPane.hidden = mode !== 'video';
+    el.dwMattingPane.hidden = mode !== 'matting';
     el.dwModeImg.classList.toggle('is-active', mode === 'img');
     el.dwModePdf.classList.toggle('is-active', mode === 'pdf');
     el.dwModeVideo.classList.toggle('is-active', mode === 'video');
+    el.dwModeMatting.classList.toggle('is-active', mode === 'matting');
     el.dwImgStatus.textContent = '';
     el.dwPdfStatus.textContent = '';
     el.dwVidStatus.textContent = '';
+    if (el.matStatus) el.matStatus.textContent = '';
   };
   el.dwModeImg.addEventListener('click', () => dwSwitchPane('img'));
   el.dwModePdf.addEventListener('click', () => dwSwitchPane('pdf'));
   el.dwModeVideo.addEventListener('click', () => dwSwitchPane('video'));
+  el.dwModeMatting.addEventListener('click', () => dwSwitchPane('matting'));
+
+  // ---- 一键抠图（图片去背景，输出透明 PNG）----
+  let matJobId = null;
+  let matTimer = null;
+  let matBusy = false;   // 轮询期间禁止重复提交
+
+  // 模型下拉：首次进入时拉一次列表，标出「已下载 / 需下载 xxxMB」
+  const matLoadModels = () => {
+    if (!el.matModel) return;
+    fetch('/api/matting/models')
+      .then(r => r.json())
+      .then(d => {
+        el.matModel.innerHTML = '';
+        (d.models || []).forEach(m => {
+          const o = document.createElement('option');
+          o.value = m.name;
+          // 已下载的标注「已就绪」，未下载的标注体积，帮用户判断要不要等
+          o.textContent = m.downloaded ? `${m.desc} · 已就绪` : `${m.desc} · 需下载 ${m.size_mb}MB`;
+          el.matModel.appendChild(o);
+        });
+        el.matModel.value = d.default;
+        el.matModel.disabled = !(d.models || []).length;
+      })
+      .catch(() => { /* 列表拉取失败不阻塞主流程，按钮仍可用（后端有默认模型） */ });
+  };
+  matLoadModels();
+
+  if (el.matModel) {
+    el.matModel.addEventListener('change', () => {
+      fetch('/api/matting/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: el.matModel.value }),
+      })
+        .then(r => r.json())
+        .then(() => { if (el.matStatus) el.matStatus.textContent = '已切换模型'; })
+        .catch(() => { if (el.matStatus) el.matStatus.textContent = '切换模型失败'; });
+    });
+  }
+
+  // 首次使用会下载 213MB/927MB 权重，必须显式给百分比，否则用户以为卡死
+  const matFmtDownload = (dl) => {
+    if (!dl || !dl.active) return '';
+    if (dl.total_mb > 0) {
+      return `首次下载模型 ${dl.pct}%（${dl.done_mb}/${dl.total_mb} MB）`;
+    }
+    return '首次下载模型…';
+  };
+
+  const matPreview = (file) => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    el.matImgPreview.src = url;
+    el.matImgPreview.onload = () => URL.revokeObjectURL(url);
+  };
+
+  const matPoll = () => {
+    if (!matJobId) return;
+    fetch(`/api/matting/image/${matJobId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.status === 'completed') {
+          if (matTimer) { clearInterval(matTimer); matTimer = null; }
+          const outUrl = `/api/matting/image/${matJobId}/file?t=${Date.now()}`;
+          el.matOut.src = outUrl;
+          el.matDownload.href = outUrl;
+          el.matOrig.src = el.matImgPreview.src;
+          el.matResult.hidden = false;
+          el.matStatus.textContent = '抠图完成 ✅';
+          el.matBtn.disabled = false;
+          matBusy = false;
+          matJobId = null;
+        } else if (d.status === 'failed') {
+          if (matTimer) { clearInterval(matTimer); matTimer = null; }
+          const dlErr = (d.download && d.download.error) ? `（模型下载失败：${d.download.error}）` : '';
+          el.matStatus.textContent = '抠图失败：' + (d.error || '未知错误') + dlErr;
+          el.matBtn.disabled = false;
+          matBusy = false;
+          matJobId = null;
+        } else {
+          // running：优先显示模型下载进度，其次才是「抠图中」
+          const dl = matFmtDownload(d.download);
+          el.matStatus.textContent = dl || '抠图中…';
+        }
+      })
+      .catch(() => { /* 网络抖动，下一轮再试 */ });
+  };
+
+  if (el.matFile) {
+    el.matFile.addEventListener('change', () => matPreview(el.matFile.files[0]));
+  }
+  if (el.matBtn) {
+    el.matBtn.addEventListener('click', () => {
+      if (matBusy) return;
+      const file = el.matFile && el.matFile.files && el.matFile.files[0];
+      if (!file) { el.matStatus.textContent = '请先选择一张图片'; return; }
+      matBusy = true;
+      el.matBtn.disabled = true;
+      el.matStatus.textContent = '上传中…';
+      el.matResult.hidden = true;
+      const fd = new FormData();
+      fd.append('file', file);
+      fetch('/api/matting/image', { method: 'POST', body: fd })
+        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
+        .then(d => {
+          matJobId = d.job_id;
+          el.matStatus.textContent = '准备中…（首次需下载模型，会显示进度）';
+          if (matTimer) clearInterval(matTimer);
+          matTimer = setInterval(matPoll, 1500);
+        })
+        .catch(e => {
+          matBusy = false;
+          el.matBtn.disabled = false;
+          el.matStatus.textContent = '提交失败：' + (e && e.detail ? e.detail : '未知错误');
+        });
+    });
+  }
 
   // PDF 模式切换时展示/隐藏栅格化选项
   el.dwPdfMode.addEventListener('change', () => {

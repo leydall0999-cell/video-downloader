@@ -33,6 +33,11 @@ onnxruntime>=1.17.0
 # 用于把 LaMa fp32 权重动态量化为 int8，CPU 上约 1.5-2× 提速。缺失时 INT8 分支静默回退 fp32。
 onnx>=1.15.0
 
+# 一键抠图（图片去背景，「编辑」下新增子标签）：无需新增依赖。
+# server/matting_ai.py 直接用上面的 onnxruntime + numpy + Pillow 跑 BiRefNet ONNX
+# （刻意不引入 rembg：它会连带 scipy/scikit-image/numba/pooch，让安装包暴涨数百 MB）。
+# ONNX 权重在首次使用时惰性下载到 ~/.vdl_models（默认轻量版 213MB，完整版 927MB）。
+
 # Rumble 反爬绕过：curl_cffi 提供 Chrome TLS 指纹模拟（impersonate），
 # 用于 embedJS/u3 接口解析（urllib/requests 默认指纹被 Cloudflare 403）。
 curl_cffi>=0.7.0

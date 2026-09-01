@@ -2942,6 +2942,8 @@ from routers import convert as _convert_rtr
 app.include_router(_convert_rtr.router)
 from routers import dewatermark as _dewatermark_rtr
 app.include_router(_dewatermark_rtr.router)
+from routers import matting as _matting_rtr
+app.include_router(_matting_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
 from routers import commentary as _commentary_rtr

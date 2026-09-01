@@ -976,6 +976,18 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius-sm); background: #0b0d12;
 }
 .dw-cap { font-size: .78rem; color: var(--text-mute); }
+
+/* 一键抠图：透明 PNG 用灰白棋盘格衬底，否则透明区在 .dw-compare 的
+   深色 background(#0b0d12) 上会被误看成黑色、分不出「透明」还是「黑底」。 */
+.mat-canvas {
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d7d7dc 25%, transparent 25%, transparent 75%, #d7d7dc 75%),
+    linear-gradient(45deg, #d7d7dc 25%, transparent 25%, transparent 75%, #d7d7dc 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+.dw-compare img.mat-canvas { background-color: #fff; }
 /* 视频合成画布底部角标：避开常见水印位（左上/右上），
    配合 JS「首次框选即隐藏」保证选择全程画面无视觉遮挡。 */
 .dw-cap-overlay {
