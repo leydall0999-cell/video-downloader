@@ -1182,7 +1182,7 @@
         </div>
       </div>
 
-      <!-- ===== 配音与音量整卡（独立整体，合并自原 5/6/7 行） ===== -->
+      <!-- ===== 配音与音量整卡（合并含试听按钮） ===== -->
       <div class="com-vol-card">
         <div class="com-vol-card-head">
           <div class="com-vol-label">配音与音量</div>
@@ -1214,12 +1214,7 @@
           </div>
           <span class="com-vol-hint">响度标准化之后再乘这个倍数（越大越响）</span>
         </div>
-      </div>
-
-      <!-- ===== 试听设置 + 导出剪映草稿（保留在 .com-grid 之外的整行卡片） ===== -->
-      <div class="com-grid com-grid-tail">
-        <!-- 试听设置（整行） -->
-        <div class="com-cell com-cell-full com-vol-actions-item">
+        <div class="com-vol-cell com-vol-cell-full com-vol-actions">
           <span class="com-vol-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
           <div class="com-vol-buttons">
             <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
@@ -1228,7 +1223,10 @@
           </div>
           <span class="com-status" id="comVolStatus" hidden></span>
         </div>
+      </div>
 
+      <!-- ===== 导出剪映草稿（保留在 .com-grid 之外的整行卡片） ===== -->
+      <div class="com-grid com-grid-tail">
         <!-- 导出剪映草稿（整行） -->
         <div class="com-cell com-cell-full com-export-cell">
           <div class="com-opt-title">导出剪映草稿（可选）</div>
@@ -1295,7 +1293,6 @@
     </div>
     <div class="com-bottom">
             <div class="com-generate-row">
-      <button type="button" class="btn btn-primary com-generate-main com-oneclick" id="comGenerateOneClick">⚡ 一键生成</button>
       <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript">生成脚本（可审核修改）</button>
     </div>
             <div id="comProgress" hidden>

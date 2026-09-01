@@ -294,7 +294,6 @@
     comBarFill: $('comBarFill'),
     comStatus: $('comStatus'),
     comReviewActions: $('comReviewActions'),
-    comGenerateOneClick: $('comGenerateOneClick'),
     comLoudness: $('comLoudness'),
     comLoudnessVal: $('comLoudnessVal'),
     comLoudnessOff: $('comLoudnessOff'),
@@ -5214,8 +5213,8 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
-  // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关 / 一键生成）
-  const comGetOptions = (forceOneClick = false) => {
+  // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关）
+  const comGetOptions = () => {
     const typeEl = document.querySelector('input[name="comType"]:checked');
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
@@ -5237,7 +5236,6 @@ el.dwVidPlayer.removeAttribute('src');
       outro_sec: outroSec,
       drama_start_sec: dramaStart,
       drama_end_sec: dramaEnd,
-      one_click: !!forceOneClick,
       style: styleEl ? styleEl.value : 'none',
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
@@ -5394,7 +5392,7 @@ el.dwVidPlayer.removeAttribute('src');
   /** 统一的「生成解说」入口：统一先走 script-only，打开人工审核面板，
    *  用户确认后再点击「生成成片」。避免直接渲染导致无法修改。
    *  从媒体库调用时自动切到解说标签页。 */
-  const createCommentary = async (source, refs, base = '', oneClick = false) => {
+  const createCommentary = async (source, refs, base = '') => {
     if (!comConfirmTrimOverlap()) return;
     switchView('commentary');
     if (refs.commentary) {
@@ -5404,7 +5402,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comStatus.hidden = false;
     el.comStatus.textContent = '正在生成解说词，生成后可在下方审核修改…';
     try {
-      const opts = comGetOptions(oneClick);
+      const opts = comGetOptions();
       const body = source.taskId
         ? { task_id: source.taskId, vertical: resolveVertical(), trim_start: comTrimStart, trim_end: comTrimEnd, ...opts }
         : { file_id: source.fileId, vertical: resolveVertical(), trim_start: comTrimStart, trim_end: comTrimEnd, ...opts };
@@ -5412,49 +5410,6 @@ el.dwVidPlayer.removeAttribute('src');
         method: 'POST',
         body: JSON.stringify(body),
       }, base);
-      currentScriptJobId = job_id;
-      el.comGenerateScript.disabled = true;
-      el.comGenerateScript.textContent = '正在转写+生成解说词…';
-      el.comScriptPanel.hidden = true;
-      el.comReviewActions.hidden = true;
-      pollScriptJob(job_id);
-    } catch (err) {
-      el.comStatus.hidden = false;
-      el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
-      if (refs.commentary) {
-        refs.commentary.disabled = false;
-        refs.commentary.textContent = comButtonOriginalText(refs.commentary);
-      }
-      el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
-    }
-  };
-
-  const createCommentaryFromFile = async (file, refs, oneClick = false) => {
-    if (!comConfirmTrimOverlap()) return;
-    switchView('commentary');
-    if (refs.commentary) {
-      refs.commentary.disabled = true;
-      refs.commentary.textContent = '生成脚本中…';
-    }
-    el.comStatus.hidden = false;
-    el.comStatus.textContent = '正在上传视频并生成解说词，生成后可在下方审核修改…';
-    try {
-      // 第一步：把本地视频 cache-by-hash 落到本机接收站。重复跑同一视频 0 字节上传。
-      // （详 server COMMENTARY_STASH_DIR + routers/api/commentary/stash）
-      const stashId = await stashLocalFile(file, (msg) => { el.comStatus.textContent = msg; });
-      // 第二步：拿 stash_id 走 JSON 路径（与下载库 file_id 等价），后续 trim/换音都不会重传
-      const opts = comGetOptions(oneClick);
-      const body = {
-        file_id: stashId,
-        vertical: resolveVertical(),
-        trim_start: comTrimStart,
-        trim_end: comTrimEnd,
-        ...opts,
-      };
-      const { job_id } = await request('/api/commentary/script-only', {
-        method: 'POST', body: JSON.stringify(body),
-      });
       currentScriptJobId = job_id;
       el.comGenerateScript.disabled = true;
       el.comGenerateScript.textContent = '正在转写+生成解说词…';
@@ -6631,36 +6586,6 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comSubSize && el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
   if (el.comSubBorder && el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
   if (el.comMaxChars && el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
-
-  // 一键生成：强制「全片深入解说 + 联网找资料 + 片头插精彩片段」，其余沿用用户选择；
-  // 仍走脚本审核流程（默认铁律：AI 解说词可人工审核修改）。
-  el.comGenerateOneClick.addEventListener('click', () => {
-    if (!commentaryEnvReady) {
-      el.comStatus.hidden = false;
-      el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
-      return;
-    }
-    const fileId = el.comSource.value;
-    if (fileId) {
-      createCommentary(
-        { fileId },
-        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
-        '',
-        true,
-      );
-      return;
-    }
-    if (selectedLocalFile) {
-      createCommentaryFromFile(
-        selectedLocalFile,
-        { commentary: el.comGenerateOneClick, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
-        true,
-      );
-      return;
-    }
-    el.comStatus.hidden = false;
-    el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
-  });
 
   // 来源互斥：选了下拉就清空本地文件
   el.comSource.addEventListener('change', () => {

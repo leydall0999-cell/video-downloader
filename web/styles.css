@@ -2247,11 +2247,6 @@ img { max-width: 100%; display: block; }
   flex: 1; padding: .85rem 1rem; font-size: 1rem; font-weight: 700;
   border-radius: var(--radius-md);
 }
-.com-generate-row .com-generate-main.com-oneclick {
-  flex: 1.6;
-  padding: 1rem 1.2rem;
-  font-size: 1.1rem;
-}
 .com-generate-row .com-generate-secondary {
   background: var(--surface);
   color: var(--text);
@@ -2498,9 +2493,6 @@ img { max-width: 100%; display: block; }
 .com-badge-free { background: #34C759; }
 .com-badge-paid { background: #FF3B30; }
 .com-price-note { font-size: .72rem; opacity: .7; line-height: 1.4; }
-.com-oneclick { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #ff7a00));
-  border: none; color: #fff; }
-.com-oneclick:hover { filter: brightness(1.05); }
 
 /* ⑥ 解说风格：胶囊换行 */
 .com-opt-row-styles { display: flex; flex-wrap: wrap; gap: .35rem; }
@@ -2560,7 +2552,6 @@ img { max-width: 100%; display: block; }
   .com-opt-row-fixed > .com-retain-field { flex: 1 1 100%; }
   .com-mode-cards { grid-template-columns: 1fr; }
   .com-generate-row { flex-direction: column; }
-  .com-generate-row .com-generate-main.com-oneclick,
   .com-generate-row .com-generate-main { flex: none; width: 100%; }
 }
 
@@ -2578,10 +2569,6 @@ img { max-width: 100%; display: block; }
 }
 .com-review-hint {
   font-size: .85rem; color: var(--text-mute);
-}
-.com-oneclick-note {
-  margin: .45rem 0 0; padding: 0 1rem;
-  font-size: .82rem; line-height: 1.6; color: var(--text-mute);
 }
 .com-style-hint {
   margin: .4rem 0 0; font-size: .78rem; line-height: 1.55; color: var(--text-mute);
@@ -2669,10 +2656,10 @@ img { max-width: 100%; display: block; }
 .com-vol-off { font-size: .78rem; color: var(--text-mute); display: flex; align-items: center; gap: .35rem; cursor: pointer; }
 .com-vol-hint { font-size: .74rem; color: var(--text-mute); line-height: 1.4; }
 /* 「试听设置」格：标题 + 按钮行（自动换行防止按钮挤）+ 状态提示 */
-.com-vol-actions-item .com-vol-buttons {
+.com-vol-actions .com-vol-buttons {
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
 }
-.com-vol-actions-item .com-vol-buttons .btn { flex: 0 0 auto; }
+.com-vol-actions .com-vol-buttons .btn { flex: 0 0 auto; }
 .com-opt-tip { font-size: .72rem; color: var(--text-mute); font-weight: 400; }
 /* 关闭响度标准化时，弱化旁白响度滑块 */
 #comLoudness:disabled { opacity: .4; }
@@ -2830,11 +2817,11 @@ img { max-width: 100%; display: block; }
 .com-bottom {
   position: sticky; bottom: 0; z-index: 30;
   margin-top: 12px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: .7rem .9rem;
-  box-shadow: 0 -2px 14px rgba(30, 41, 59, .07);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: .7rem 0;
+  box-shadow: none;
 }
 .com-bottom .com-generate-row { margin-top: 0; padding: 0; }
 .com-bottom .com-script-panel,
