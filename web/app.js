@@ -6739,6 +6739,14 @@ el.dwVidPlayer.removeAttribute('src');
       if (el.comTypeDropdown.contains(e.target)) return;
       closeTypeDropdown();
     });
+    // 鼠标离开 trigger + panel 整体时自动折起
+    let _typeLeaveTimer = null;
+    el.comTypeDropdown.addEventListener('mouseleave', () => {
+      _typeLeaveTimer = setTimeout(closeTypeDropdown, 120);
+    });
+    el.comTypeDropdown.addEventListener('mouseenter', () => {
+      if (_typeLeaveTimer) { clearTimeout(_typeLeaveTimer); _typeLeaveTimer = null; }
+    });
     // 初始化：仅同步高亮（trigger label 固定显示「解说类型」组名，不跟随选项）
     const initChecked = document.querySelector('input[name="comType"]:checked');
     if (initChecked) {
@@ -6888,6 +6896,14 @@ el.dwVidPlayer.removeAttribute('src');
     document.addEventListener('click', (e) => {
       if (wrap.contains(e.target)) return;
       close();
+    });
+    // 鼠标离开 trigger + panel 整体时自动折起
+    let _leaveTimer = null;
+    wrap.addEventListener('mouseleave', () => {
+      _leaveTimer = setTimeout(close, 120);
+    });
+    wrap.addEventListener('mouseenter', () => {
+      if (_leaveTimer) { clearTimeout(_leaveTimer); _leaveTimer = null; }
     });
     syncUI();
   };
