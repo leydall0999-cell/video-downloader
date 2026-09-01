@@ -45,15 +45,12 @@ NODE_GROUPS = (
     "crypto",
     "torrent",
     "ai_dewatermark",
-    "narrato",
 )
 
 # 各平台默认暴露的功能组。初始：所有平台 = 完整集（网页版行为零变化）。
 # 今后 App / 移动端专属功能：只加入对应平台集合、不加入 WEB，即可实现
 # 「App 加功能不波及网页版」的隔离。
 _PLATFORM_NODE_CAPS: dict[Platform, set[str]] = {p: set(NODE_GROUPS) for p in Platform}
-# 「AI 解说体验」（NarratoAI 本地子进程）仅桌面 App 有，网页版不暴露
-_PLATFORM_NODE_CAPS[Platform.WEB].discard("narrato")
 
 
 def is_frozen_binary() -> bool:

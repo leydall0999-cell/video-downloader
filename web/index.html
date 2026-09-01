@@ -55,7 +55,7 @@
          - Download（首屏核心）
          - Subscribe（异步抓取：订阅追更 + 种子下载）
          - Manage（媒体管理：媒体库）
-         - Create（创作工具：视频解说 + AI 解说体验）
+         - Create（创作工具：视频解说）
          - Edit（视频加工：格式转换 + 桥接 + 去水印） -->
     <div class="sidebar-group">
       <div class="sidebar-group-title">
@@ -88,8 +88,7 @@
         <span class="sidebar-group-en">Create</span>
       </div>
       <button type="button" class="sidebar-item" data-view="commentary" id="sTabCommentary" title="视频解说"><span class="sidebar-item-icon" aria-hidden="true">🎬</span><span class="sidebar-item-label">视频解说</span></button>
-      <button type="button" class="sidebar-item" data-view="narrato" id="sTabNarrato" hidden title="AI 解说体验"><span class="sidebar-item-icon" aria-hidden="true">🤖</span><span class="sidebar-item-label">AI 解说体验</span></button>
-    </div>
+          </div>
 
     <div class="sidebar-group">
       <div class="sidebar-group-title">
@@ -110,8 +109,7 @@
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
-    <button type="button" class="tab" data-view="narrato" id="tabNarrato" hidden>🤖 AI 解说体验</button>
-    <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
+        <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -1465,24 +1463,7 @@
     </div>
   </aside>
 
-  <!-- AI 解说体验：本地拉起 NarratoAI，iframe 嵌入（桌面 App 独占，不跳浏览器） -->
-  <section id="narratoView" class="panel" hidden aria-labelledby="narratoTitle">
-    <h2 id="narratoTitle">AI 解说体验（NarratoAI）</h2>
-    <p class="narrato-tip">本 tab 在本地启动开源解说工具 NarratoAI，方便你先体验。首次启动会联网安装依赖（约 1-2 分钟），请耐心等待。</p>
-    <div id="narratoKeyBox" hidden>
-      <label class="narrato-key-label" for="narratoKeyInput">DeepSeek API Key（仅存本地，用于生成解说文案）</label>
-      <div class="narrato-key-row">
-        <input id="narratoKeyInput" type="password" class="adv-input" placeholder="粘贴 DeepSeek API Key" autocomplete="off" />
-        <button type="button" class="btn btn-primary btn-sm" id="narratoKeySave">保存并启动</button>
-      </div>
-      <p class="narrato-status" id="narratoKeyHint"></p>
     </div>
-    <div class="narrato-frame-wrap">
-      <div id="narratoLoading" class="narrato-loading">正在启动 NarratoAI…（首次需安装依赖，约 1-2 分钟）</div>
-      <iframe id="narratoFrame" src="about:blank" title="NarratoAI" class="narrato-frame" hidden></iframe>
-    </div>
-  </section>
-  </div>
 </main>
 
 <!-- 支持平台全量列表弹窗 -->

@@ -390,16 +390,6 @@
     dwView: $('dwView'),
     tabAppIntro: $('tabAppIntro'),
     appIntroView: $('appIntroView'),
-    // AI 解说体验（NarratoAI 本地子进程 + iframe）
-    tabNarrato: $('tabNarrato'),
-    sTabNarrato: $('sTabNarrato'),
-    narratoView: $('narratoView'),
-    narratoFrame: $('narratoFrame'),
-    narratoLoading: $('narratoLoading'),
-    narratoKeyBox: $('narratoKeyBox'),
-    narratoKeyInput: $('narratoKeyInput'),
-    narratoKeySave: $('narratoKeySave'),
-    narratoKeyHint: $('narratoKeyHint'),
     dwModeImg: $('dwModeImg'),
     dwModePdf: $('dwModePdf'),
     dwImgPane: $('dwImgPane'),
@@ -7189,9 +7179,8 @@ el.dwVidPlayer.removeAttribute('src');
     const isUp = view === 'uploadconvert';
     const isDw = view === 'dw';
     const isAppIntro = view === 'appIntro';
-    const isNarrato = view === 'narrato';
     const isBridge = view === 'bridge';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isNarrato || isBridge;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isBridge;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -7200,8 +7189,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
-    if (el.narratoView) el.narratoView.hidden = !isNarrato;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isNarrato);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -7209,8 +7197,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    if (el.tabNarrato) el.tabNarrato.classList.toggle('is-active', isNarrato);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isNarrato && !isBridge;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isBridge;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -7218,7 +7205,6 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabCommentary) el.sTabCommentary.classList.toggle('is-active', isCom);
     if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
     if (el.sTabDw) el.sTabDw.classList.toggle('is-active', isDw);
-    if (el.sTabNarrato) el.sTabNarrato.classList.toggle('is-active', isNarrato);
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
@@ -7227,130 +7213,10 @@ el.dwVidPlayer.removeAttribute('src');
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
-    if (isNarrato) ensureNarrato();
     // 「支持 N 个平台」徽章（#engineBadge）只在下载模块可见，其它功能页隐藏
     if (el.engineBadge) el.engineBadge.hidden = !_isDefault;
   };
 
-  // —— AI 解说体验（NarratoAI 本地子进程 + iframe）——
-  let _narratoPolling = false;
-  const ensureNarrato = async () => {
-    try {
-      const st = await request('/api/narrato/status');
-      // 无 key 先让用户输入
-      if (!st.has_key) {
-        if (el.narratoKeyBox) el.narratoKeyBox.hidden = false;
-        if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '请先粘贴 DeepSeek API Key 并保存，再启动 NarratoAI。'; }
-        if (el.narratoFrame) el.narratoFrame.hidden = true;
-        return;
-      }
-      if (el.narratoKeyBox) el.narratoKeyBox.hidden = true;
-      // 未就绪则触发启动
-      if (st.status !== 'ready') {
-        await request('/api/narrato/ensure', { method: 'POST' });
-      }
-      pollNarratoReady();
-    } catch (e) {
-      if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '无法连接本地服务：' + (e.message || '未知错误'); }
-    }
-  };
-
-  const pollNarratoReady = () => {
-    if (_narratoPolling) return;
-    _narratoPolling = true;
-    const fmtElapsed = (s) => {
-      if (!s) return '';
-      if (s < 60) return `${s}秒`;
-      return `${Math.floor(s / 60)}分${s % 60}秒`;
-    };
-    const tick = async () => {
-      try {
-        const st = await request('/api/narrato/status');
-        if (st.status === 'ready') {
-          if (el.narratoFrame) {
-            el.narratoFrame.src = `http://${'127.0.0.1'}:${st.port}/`;
-            el.narratoFrame.hidden = false;
-          }
-          if (el.narratoLoading) el.narratoLoading.hidden = true;
-          if (el.narratoKeyHint) el.narratoKeyHint.textContent = '';
-          _narratoPolling = false;
-          return;
-        }
-        if (st.status === 'need_key') {
-          if (el.narratoKeyBox) el.narratoKeyBox.hidden = false;
-          if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '需要 DeepSeek API Key，请粘贴保存后重试。'; }
-          _narratoPolling = false;
-          return;
-        }
-        if (st.status === 'missing_dir') {
-          if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '未找到 NarratoAI 目录：' + st.dir + '（可设 VDL_NARRATOAI_DIR 环境变量）'; }
-          _narratoPolling = false;
-          return;
-        }
-        if (st.status === 'need_uv') {
-          if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = st.msg || '需要安装 uv 启动器'; }
-          _narratoPolling = false;
-          return;
-        }
-        if (st.status === 'error' || st.status === 'launch_failed') {
-          if (el.narratoLoading) {
-            let txt = '启动失败：' + (st.last_error || st.msg || '未知错误');
-            if (st.exit_code != null) txt += '（exit ' + st.exit_code + '）';
-            if (st.log_tail && st.log_tail.length) txt += '\n\n' + st.log_tail.slice(-5).join('\n');
-            el.narratoLoading.hidden = false;
-            el.narratoLoading.textContent = txt;
-          }
-          _narratoPolling = false;
-          return;
-        }
-        if (st.status === 'stopped') {
-          if (el.narratoLoading) {
-            let txt = 'NarratoAI 已停止。' + (st.last_error || '');
-            if (st.log_tail && st.log_tail.length) txt += '\n\n' + st.log_tail.slice(-5).join('\n');
-            el.narratoLoading.hidden = false;
-            el.narratoLoading.textContent = txt;
-          }
-          _narratoPolling = false;
-          return;
-        }
-        // 仍在启动中：细分 stage
-        const elapsed = fmtElapsed(st.elapsed);
-        let msg = '正在启动 NarratoAI';
-        if (st.stage === 'syncing') msg = '正在安装依赖（uv sync），首次约 1-3 分钟' + (elapsed ? '，已用时 ' + elapsed : '') + '…';
-        else if (st.stage === 'starting') msg = '依赖就绪，正在启动 Streamlit 服务' + (elapsed ? '，已用时 ' + elapsed : '') + '…';
-        else msg = '正在启动 NarratoAI' + (elapsed ? '，已用时 ' + elapsed : '') + '…';
-        if (st.log_tail && st.log_tail.length) msg += '\n\n' + st.log_tail.slice(-3).join('\n');
-        if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = msg; }
-        setTimeout(tick, 2000);
-      } catch (e) {
-        if (el.narratoLoading) { el.narratoLoading.hidden = false; el.narratoLoading.textContent = '轮询失败：' + (e.message || '未知错误'); }
-        _narratoPolling = false;
-      }
-    };
-    tick();
-  };
-
-  const saveNarratoKey = async () => {
-    const key = (el.narratoKeyInput.value || '').trim();
-    if (!key) { if (el.narratoKeyHint) el.narratoKeyHint.textContent = '请粘贴 DeepSeek API Key'; return; }
-    try {
-      const r = await request('/api/narrato/key', { method: 'POST', body: JSON.stringify({ key }) });
-      if (!r.ok) {
-        if (el.narratoKeyHint) el.narratoKeyHint.textContent = '保存失败：' + (r.msg || '');
-        return;
-      }
-      // 再查一次确认 key 真的落盘（防 TOML 缩进等写入异常）
-      const st = await request('/api/narrato/status');
-      if (!st.has_key) {
-        if (el.narratoKeyHint) el.narratoKeyHint.textContent = '保存异常：key 未写入本地 config.toml，请重试';
-        return;
-      }
-      if (el.narratoKeyHint) el.narratoKeyHint.textContent = '已保存，正在启动 NarratoAI…';
-      ensureNarrato();
-    } catch (e) {
-      if (el.narratoKeyHint) el.narratoKeyHint.textContent = '保存失败：' + (e.message || '');
-    }
-  };
 
   const loadLibrary = async () => {
     const params = new URLSearchParams();
@@ -7776,10 +7642,8 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.tabAppIntro) el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
   if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
-  if (el.tabNarrato) el.tabNarrato.addEventListener('click', () => switchView('narrato'));
-  if (el.narratoKeySave) el.narratoKeySave.addEventListener('click', saveNarratoKey);
 
-  // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
+// 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
     [el.sTabDownload, 'download'],
     [el.sTabLibrary, 'library'],
@@ -7789,7 +7653,6 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabDw, 'dw'],
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
-    [el.sTabNarrato, 'narrato'],
   ];
   for (const [btn, view] of _sidebarPairs) {
     if (btn) btn.addEventListener('click', () => switchView(view));
@@ -8962,7 +8825,7 @@ el.dwVidPlayer.removeAttribute('src');
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
   request('/api/nodes')
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, narrato, authRequired, profile }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, authRequired, profile }) => {
       node.authRequired = !!authRequired;
       if (node.authRequired && !localStorage.getItem('vdl_api_token')) {
         const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
@@ -8992,7 +8855,6 @@ el.dwVidPlayer.removeAttribute('src');
       node.torrentAvailable = !!(torrent && torrent.available);
       node.aiDewatermarkEnabled = !!(ai_dewatermark && ai_dewatermark.enabled);
       node.aiDewatermarkGpu = !!(ai_dewatermark && ai_dewatermark.gpu);
-      node.narratoEnabled = !!(narrato && narrato.enabled);
       // 有 GPU → 标签显示加速；没有 → 提示 CPU 模式
       if (PROCESS_OPS.ai_dewatermark) {
         PROCESS_OPS.ai_dewatermark.label = node.aiDewatermarkGpu
@@ -9039,9 +8901,6 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.sTabLibrary) el.sTabLibrary.hidden = !node.libraryEnabled;
         if (el.sTabSubscribe) el.sTabSubscribe.hidden = !node.subscriptionsEnabled;
       }
-      // AI 解说体验：仅桌面端（node.narratoEnabled）显示，网页版一律隐藏
-      if (el.tabNarrato) el.tabNarrato.hidden = !node.narratoEnabled;
-      if (el.sTabNarrato) el.sTabNarrato.hidden = !node.narratoEnabled;
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载
       switchView('download');

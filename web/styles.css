@@ -2681,18 +2681,6 @@ img { max-width: 100%; display: block; }
 
 
 
-/* ── AI 解说体验（NarratoAI 本地 iframe）── */
-.narrato-tip { font-size: .82rem; color: var(--text-mute, #8a93a6); line-height: 1.5; margin: .2rem 0 1rem; }
-.narrato-key-label { display: block; font-size: .85rem; font-weight: 600; color: var(--text); margin-bottom: .45rem; }
-.narrato-key-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-.narrato-key-row .adv-input { flex: 1 1 320px; max-width: 460px; }
-.narrato-status { font-size: .8rem; color: var(--accent, #2563eb); margin: .5rem 0 0; min-height: 1rem; }
-.narrato-frame-wrap { position: relative; margin-top: 1rem; border-radius: 12px; overflow: hidden; background: #0f1115; border: 1px solid var(--border, #2a2f3a); }
-.narrato-frame { width: 100%; height: 78vh; min-height: 520px; border: 0; display: block; background: #fff; }
-.narrato-frame[hidden] { display: none !important; }
-.narrato-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2rem; color: #c7cedb; font-size: .95rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; overflow-y: auto; }
-.narrato-loading[hidden] { display: none !important; }
-
 /* ── 图片去水印「放大编辑」灯箱（修复：原缺 .dw-modal 样式，弹窗打开后不可见/在视口外）── */
 .dw-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 2.5vh 2vw; background: rgba(15, 23, 42, .55); backdrop-filter: blur(2px); }
 .dw-modal[hidden] { display: none !important; }

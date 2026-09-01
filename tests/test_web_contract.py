@@ -29,10 +29,7 @@ import platform_model as plat  # noqa: E402
 client = TestClient(m.app)
 
 # 网页版当前暴露的全部功能组（与 platform_model.NODE_GROUPS 一致）。
-# 「AI 解说体验」（narrato）是桌面 App 独占能力，网页版不暴露——属有意为之的收窄，
-# 此处显式排除；今后若要为网页版收窄其它能力，必须是有意为之并同步更新此处断言。
-DESKTOP_ONLY_GROUPS = {"narrato"}
-EXPECTED_NODE_GROUPS = set(plat.NODE_GROUPS) - DESKTOP_ONLY_GROUPS
+EXPECTED_NODE_GROUPS = set(plat.NODE_GROUPS)
 SCALAR_FIELDS = {"region", "peer", "china_domains", "commentary_enabled", "ads_enabled", "authRequired"}
 
 
@@ -40,7 +37,7 @@ def test_web_profile_is_not_desktop():
     """网页版必须运行在 WEB profile 下——本测试其余断言都依赖此前提。"""
     assert plat.current_platform() == plat.Platform.WEB
     assert plat.is_desktop() is False
-    # 网页版能力集 = 完整功能组减去桌面独占组（narrato）；收窄需有意为之。
+    # 网页版能力集 = 当前完整功能组；今后若要为网页版收窄其它能力，必须是有意为之并同步更新。
     assert plat.node_capabilities(plat.Platform.WEB) == EXPECTED_NODE_GROUPS
 
 
