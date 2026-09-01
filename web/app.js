@@ -261,11 +261,9 @@
     libCommentaryFile: $('libCommentaryFile'),
     // 解说成片独立标签页
     commentaryView: $('commentaryView'),
-    comResults: $('comResults'),
     comEmpty: $('comEmpty'),
     comGrid: $('comGrid'),
     comHistory: $('comHistory'),
-    comColLeft: $('comColLeft'),
     comHistoryCount: $('comHistoryCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comSortBtn: $('comSortBtn'),

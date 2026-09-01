@@ -1994,7 +1994,7 @@ img { max-width: 100%; display: block; }
   background: var(--surface); border-radius: var(--radius-md); border: 1px dashed var(--line);
 }
 .com-history {
-  margin-top: 1.5rem;
+  margin-top: 1rem;
   padding: 1rem;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -2684,11 +2684,11 @@ img { max-width: 100%; display: block; }
 .dw-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.1rem; border-top: 1px solid var(--border, #e7e9f1); }
 .dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
 
-/* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） =====
-   固定 3 列布局（左 240 + 中 1fr + 右 620-720）。空状态左栏用 comEmpty 占位文本填充，不会留空白圆角条。 */
+/* ===== 视频解说工作区（剪映式骨架：中素材预览 / 右参数 / 底操作条+成片历史） =====
+   2 列布局（中 1fr + 右 620-720）。成片历史（comHistory）已移至 com-bottom 内、生成脚本按钮下方。 */
 #commentaryView .com-workspace {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) minmax(620px, 720px);
+  grid-template-columns: minmax(0, 1fr) minmax(620px, 720px);
   gap: 12px;
   align-items: start;
   margin-top: .6rem;

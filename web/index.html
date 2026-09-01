@@ -915,49 +915,6 @@
       </div>
     </div>
     <div class="com-workspace">
-        <div class="com-col com-col-left" id="comColLeft">
-                <div class="com-results" id="comResults">
-      <div class="com-history" id="comHistory">
-        <div class="com-grid" id="comGrid"></div>
-        <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
-        <div class="com-history-head">
-          <div class="com-history-title-wrap">
-            <h3>📂 解说历史 <span id="comHistoryCount" class="com-history-count">0 个</span></h3>
-          </div>
-          <div class="com-history-toolbar">
-            <div class="com-view-toggle" id="comHistoryToolbar">
-          <button type="button" class="com-view-btn active" data-mode="list" title="列表">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="5" width="16" height="2" rx="1"/><rect x="2" y="9" width="16" height="2" rx="1"/><rect x="2" y="13" width="16" height="2" rx="1"/></svg>
-          </button>
-          <button type="button" class="com-view-btn" data-mode="grid" title="图标网格">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
-          </button>
-          <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="3.4" height="14" rx="1.2"/><rect x="8.3" y="3" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="3" width="3.4" height="14" rx="1.2"/></svg>
-          </button>
-          <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="9" r="1.8"/><path d="M4 14l3.5-3.5 2.5 2.5 3-3 3 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-        </div>
-        <div class="com-sort">
-          <button type="button" class="com-sort-btn" id="comSortBtn" aria-haspopup="true" aria-expanded="false">
-            <span class="com-sort-label" id="comSortLabel">时间：最新在前</span>
-            <svg class="com-sort-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <ul class="com-sort-menu" id="comSortMenu" role="menu">
-            <li role="menuitem" data-value="mtime-desc">时间：最新在前</li>
-            <li role="menuitem" data-value="mtime-asc">时间：最早在前</li>
-            <li role="menuitem" data-value="size-desc">大小：从大到小</li>
-            <li role="menuitem" data-value="size-asc">大小：从小到大</li>
-            <li role="menuitem" data-value="name-asc">名称：A-Z</li>
-            <li role="menuitem" data-value="name-desc">名称：Z-A</li>
-          </ul>
-          </div>
-          </div>
-        </div>
-      </div>
-    </div>
-        </div>
         <div class="com-col com-col-center">
                 <div id="comEnvStatus" class="com-env-status" hidden></div>
 
@@ -1296,6 +1253,45 @@
             <div class="com-generate-row">
       <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript">生成脚本（可审核修改）</button>
     </div>
+            <div class="com-history" id="comHistory">
+        <div class="com-grid" id="comGrid"></div>
+        <p class="com-empty" id="comEmpty" hidden>还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
+        <div class="com-history-head">
+          <div class="com-history-title-wrap">
+            <h3>📂 解说历史 <span id="comHistoryCount" class="com-history-count">0 个</span></h3>
+          </div>
+          <div class="com-history-toolbar">
+            <div class="com-view-toggle" id="comHistoryToolbar">
+          <button type="button" class="com-view-btn active" data-mode="list" title="列表">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="5" width="16" height="2" rx="1"/><rect x="2" y="9" width="16" height="2" rx="1"/><rect x="2" y="13" width="16" height="2" rx="1"/></svg>
+          </button>
+          <button type="button" class="com-view-btn" data-mode="grid" title="图标网格">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>
+          </button>
+          <button type="button" class="com-view-btn" data-mode="timeline" title="时间线">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="3.4" height="14" rx="1.2"/><rect x="8.3" y="3" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="3" width="3.4" height="14" rx="1.2"/></svg>
+          </button>
+          <button type="button" class="com-view-btn" data-mode="gallery" title="画廊">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="9" r="1.8"/><path d="M4 14l3.5-3.5 2.5 2.5 3-3 3 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="com-sort">
+          <button type="button" class="com-sort-btn" id="comSortBtn" aria-haspopup="true" aria-expanded="false">
+            <span class="com-sort-label" id="comSortLabel">时间：最新在前</span>
+            <svg class="com-sort-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <ul class="com-sort-menu" id="comSortMenu" role="menu">
+            <li role="menuitem" data-value="mtime-desc">时间：最新在前</li>
+            <li role="menuitem" data-value="mtime-asc">时间：最早在前</li>
+            <li role="menuitem" data-value="size-desc">大小：从大到小</li>
+            <li role="menuitem" data-value="size-asc">大小：从小到大</li>
+            <li role="menuitem" data-value="name-asc">名称：A-Z</li>
+            <li role="menuitem" data-value="name-desc">名称：Z-A</li>
+          </ul>
+          </div>
+          </div>
+        </div>
+      </div>
             <div id="comProgress" hidden>
       <div class="com-progress-head">
         <span id="comPhase" class="com-phase-tag">转写中</span>
