@@ -2760,10 +2760,12 @@ img { max-width: 100%; display: block; }
   display: flex !important; flex-wrap: wrap; align-items: flex-start;
   gap: .4rem .75rem; padding: 0; background: none; border: none;
 }
-.com-col-right .com-opts#comOpts > .com-opt-block,
+.com-col-right .com-opts#comOpts .com-opt-block,
 .com-col-right .com-opts#comOpts .com-opts-inner { display: contents; }
 .com-col-right .com-opts#comOpts .com-opt-title { display: none; }
-.com-col-right .com-opts .com-retain-field { flex: 0 0 100%; }
+/* 5 trigger 排前，3 retain-field 紧随其后各占满整行；视觉理解/配音/ASR 默认 order 0 排最末 */
+.com-col-right .com-opts#comOpts .com-mode-dropdown { order: 1; }
+.com-col-right .com-opts#comOpts .com-retain-field { order: 2; flex: 0 0 100%; }
 /* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
 .com-bottom {
   position: sticky; bottom: 0; z-index: 30;
