@@ -515,6 +515,7 @@
     matUploadStatus: $('matUploadStatus'),
     matManualHint: $('matManualHint'),
     matBtn: $('matBtn'),
+    matVision: $('matVision'),
     matStatus: $('matStatus'),
     matResult: $('matResult'),
     matOrig: $('matOrig'),
@@ -3104,7 +3105,14 @@
           el.matDownload.href = outUrl;
           el.matOrig.src = el.matImgPreview.src;
           el.matResult.hidden = false;
-          el.matStatus.textContent = '抠图完成 ✅';
+          // 🤖 AI 视觉定位结果提示：成功显示主体标签，未生效解释原因并说明已回退
+          if (d.vision_used) {
+            el.matStatus.textContent = '抠图完成 ✅（🤖 AI 视觉定位已生效：' + (d.vision_label || '主体') + '）';
+          } else {
+            el.matStatus.textContent = d.vision_error
+              ? '抠图完成（⚠️ AI 视觉定位未生效：' + d.vision_error + '，已用基础抠图）'
+              : '抠图完成 ✅';
+          }
           el.matBtn.disabled = false;
           matBusy = false;
           matJobId = null;
@@ -3152,6 +3160,10 @@
       // 手动框选了主体区域 → 把归一化 [x,y,w,h] 一起提交，后端只抠框内
       if (el.matBoxToggle && el.matBoxToggle.checked && matBox) {
         fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
+      }
+      // 🤖 AI 视觉定位：开启时让后端先调 VLM 看懂图、自动框出主体再抠
+      if (el.matVision && el.matVision.checked) {
+        fd.append('vision_guide', '1');
       }
       fetch('/api/matting/image', { method: 'POST', body: fd })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })

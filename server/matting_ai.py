@@ -540,7 +540,7 @@ def predict_mask(img, model: str | None = None):
     return mask_img
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -550,6 +550,10 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
       这样模型会把框内内容当成整张图来找显著主体——
       照片里有多个人/物时，框谁就抠谁，比全图推理精确得多。
       框外一律透明。
+    vision_box（可选）：VLM 视觉定位给出的主体边界框，归一化 [x1,y1,x2,y2] ∈ [0,1]。
+      给定时用「AI 视觉定位」引导抠图（见 vision_guided_mask）——VLM 看懂图、
+      明确框出主体（如主标题），框外（副标题/装饰/背景）强制透明，专治"同色系
+      包围下主字 vs 副字分不清"的难题。优先级高于手动 box：两者都给时以 VLM 为准。
     """
     from PIL import Image
 
@@ -561,41 +565,48 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        box_px = _normalize_box(box, W, H)
-        if box_px is None:
+        if vision_box:
+            # VLM 视觉定位引导：VLM 已看懂图、框出主体，框外强制透明
+            mask = vision_guided_mask(rgb, vision_box, model=model)
+        elif box is None:
             # 未框选：整图推理
             mask = predict_mask(rgb, model=model)
         else:
-            x0, y0, x1, y1 = box_px
-            bw, bh = x1 - x0, y1 - y0
-            # **推理上下文外扩 10%**：用户框选通常只罩住主体（如字符本体），
-            # 但软元素（白色光晕 / 3D 阴影 / 描边）紧贴主体外侧。
-            # 推理时多看 10% 上下文，模型就能把这些软元素纳入 alpha，
-            # 输出仍严格按用户原框裁切——视觉效果是"框内 + 自动扩展的软边缘"。
-            # 不外扩会出现"光晕/阴影丢失"问题（用户最常见的反馈）。
-            pad_w = max(int(bw * 0.10), 4)
-            pad_h = max(int(bh * 0.10), 4)
-            x0p = max(0, x0 - pad_w)
-            y0p = max(0, y0 - pad_h)
-            x1p = min(W, x1 + pad_w)
-            y1p = min(H, y1 + pad_h)
-            crop = rgb.crop((x0p, y0p, x1p, y1p))
-            crop_mask = predict_mask(crop, model=model)
-            # 输出 mask 严格按用户原框；外扩区是被模型"看到"但被舍弃的上下文。
-            # 取交集：把外扩裁切的 mask 中属于原框的部分贴回原图坐标。
-            import numpy as _np
-            out_arr = _np.zeros((H, W), dtype=_np.uint8)
-            crop_w_p, crop_h_p = crop_mask.size
-            # 用户原框在外扩 crop 内的位置（裁切不超出 crop 范围）
-            sx0 = max(0, x0 - x0p)
-            sy0 = max(0, y0 - y0p)
-            sx1 = min(crop_w_p, x1 - x0p)
-            sy1 = min(crop_h_p, y1 - y0p)
-            if sx1 > sx0 and sy1 > sy0:
-                region = _np.array(crop_mask, dtype=_np.uint8)[sy0:sy1, sx0:sx1]
-                paste_w, paste_h = sx1 - sx0, sy1 - sy0
-                out_arr[y0:y0 + paste_h, x0:x0 + paste_w] = region
-            mask = Image.fromarray(out_arr, mode="L")
+            box_px = _normalize_box(box, W, H)
+            if box_px is None:
+                # 框选无效（过小/越界）：退回整图推理
+                mask = predict_mask(rgb, model=model)
+            else:
+                x0, y0, x1, y1 = box_px
+                bw, bh = x1 - x0, y1 - y0
+                # **推理上下文外扩 10%**：用户框选通常只罩住主体（如字符本体），
+                # 但软元素（白色光晕 / 3D 阴影 / 描边）紧贴主体外侧。
+                # 推理时多看 10% 上下文，模型就能把这些软元素纳入 alpha，
+                # 输出仍严格按用户原框裁切——视觉效果是"框内 + 自动扩展的软边缘"。
+                # 不外扩会出现"光晕/阴影丢失"问题（用户最常见的反馈）。
+                pad_w = max(int(bw * 0.10), 4)
+                pad_h = max(int(bh * 0.10), 4)
+                x0p = max(0, x0 - pad_w)
+                y0p = max(0, y0 - pad_h)
+                x1p = min(W, x1 + pad_w)
+                y1p = min(H, y1 + pad_h)
+                crop = rgb.crop((x0p, y0p, x1p, y1p))
+                crop_mask = predict_mask(crop, model=model)
+                # 输出 mask 严格按用户原框；外扩区是被模型"看到"但被舍弃的上下文。
+                # 取交集：把外扩裁切的 mask 中属于原框的部分贴回原图坐标。
+                import numpy as _np
+                out_arr = _np.zeros((H, W), dtype=_np.uint8)
+                crop_w_p, crop_h_p = crop_mask.size
+                # 用户原框在外扩 crop 内的位置（裁切不超出 crop 范围）
+                sx0 = max(0, x0 - x0p)
+                sy0 = max(0, y0 - y0p)
+                sx1 = min(crop_w_p, x1 - x0p)
+                sy1 = min(crop_h_p, y1 - y0p)
+                if sx1 > sx0 and sy1 > sy0:
+                    region = _np.array(crop_mask, dtype=_np.uint8)[sy0:sy1, sx0:sx1]
+                    paste_w, paste_h = sx1 - sx0, sy1 - sy0
+                    out_arr[y0:y0 + paste_h, x0:x0 + paste_w] = region
+                mask = Image.fromarray(out_arr, mode="L")
 
         rgba = rgb.convert("RGBA")
         rgba.putalpha(mask)
@@ -603,6 +614,48 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def vision_guided_mask(img, vision_box, model: str | None = None, expand: float = 0.12):
+    """用 VLM 给出的主体 box 引导 BiRefNet 抠图，专治"主字 vs 紧贴副标题/装饰"难题。
+
+    vision_box: 归一化 [x1, y1, x2, y2] ∈ [0,1]（VLM 定位的主体边界框）。
+    返回原图尺寸 L 模式 alpha 蒙版，box 外强制透明。
+
+    为什么需要 VLM 引导：
+        单靠 BiRefNet 显著性图 + 阈值 + BFS 连通性，永远分不清「同色系包围」下
+        的主字与副字——它们显著性置信度几乎一致。但 VLM 能"看懂"图，明确知道
+        主标题是哪些字、副标题是哪些字，给出准确的语义边界框。
+        本函数：
+          1. 整图跑 BiRefNet 得基础 mask（保留光晕/阴影等软元素的细节）
+          2. 把 VLM box 适度外扩（默认 12%，涵盖光晕/阴影外延，避免硬切框边）
+          3. box 外强制透明（guide 乘法）——这是"副标题/装饰被精准剔除"的关键
+          4. box 内再做 BFS 连通核心，避免 box 内夹带的孤立小碎块残留
+    """
+    import numpy as np
+    from PIL import Image
+
+    base = predict_mask(img, model=model)  # 原图尺寸 L 模式
+    W, H = base.size
+    x1, y1, x2, y2 = vision_box
+    # 适度外扩，涵盖主体外侧的光晕/阴影/描边
+    bw, bh = x2 - x1, y2 - y1
+    x1 = max(0.0, x1 - bw * expand)
+    x2 = min(1.0, x2 + bw * expand)
+    y1 = max(0.0, y1 - bh * expand)
+    y2 = min(1.0, y2 + bh * expand)
+    base_arr = np.array(base).astype(np.float32) / 255.0
+    # 构造引导图：box 内为 1，外为 0
+    guide = np.zeros_like(base_arr)
+    gx0, gy0 = int(round(x1 * W)), int(round(y1 * H))
+    gx1, gy1 = int(round(x2 * W)), int(round(y2 * H))
+    if gx1 > gx0 and gy1 > gy0:
+        guide[gy0:gy1, gx0:gx1] = 1.0
+    guided = base_arr * guide  # box 外强制透明
+    # box 内再做 BFS 连通核心：剔除 box 内"与主体不连通"的孤立小碎块
+    guided = _keep_connected_to_core(guided, core_thresh=0.3, ground_thresh=0.05)
+    out_arr = np.clip(guided * 255.0, 0, 255).astype("uint8")
+    return Image.fromarray(out_arr, mode="L")
 
 
 def _normalize_box(box, W: int, H: int):

@@ -881,6 +881,11 @@
             <span class="uc-label">手动框选要抠的部分</span>
           </label>
           <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上拖出一个框，框住你想抠的主体。照片里有多个人/物时用它指定抠哪一个；不框则自动抠全图主体。</span>
+          <label class="uc-field uc-check mat-vision-toggle">
+            <input type="checkbox" id="matVision" />
+            <span class="uc-label">🤖 AI 视觉定位（看懂图·只抠主体）</span>
+          </label>
+          <span class="dw-hint" id="matVisionHint">开启后 AI 会先"看懂"图片、自动框出主体再抠图，能精准剔除紧贴的副标题 / 装饰，比纯几何抠图更智能。需先在「设置 → 视觉模型」选 DashScope 并填 Key；未配置时自动回退普通抠图。</span>
           <div class="dw-preview-wrap" id="matPreviewWrap">
             <img id="matImgPreview" alt="预览" />
             <div id="matBoxSvg" class="mat-box-svg" hidden>

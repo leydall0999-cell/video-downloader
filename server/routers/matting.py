@@ -13,6 +13,7 @@ import threading
 
 import app
 import matting_ai as mat
+import vision_client
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -53,20 +54,35 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: str, box: list | None = None, model: str | None = None) -> None:
+def _run_matting(job_id: str, src: str, box: list | None = None, model: str | None = None, vision_guide: bool = False) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
     try:
         src_path = app.Path(src)
         out_path = app.DW_DIR / f"mat_{job_id}.png"
-        mat.matting_image(src_path, out_path, box=box, model=model)
+        vision_box = None
+        vision_used = False
+        if vision_guide:
+            try:
+                det = vision_client.detect_subject(str(src_path))
+                vb = det["subject"]["box"]
+                vision_box = [float(v) for v in vb[:4]]
+                vision_used = True
+                job["vision_label"] = det["subject"].get("label", "")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("vision_guide 失败，回退基础抠图: %s", e)
+                vision_box = None
+                vision_used = False
+                job["vision_error"] = str(e)[:200]
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
         job["filename"] = out_path.name
         job["out_path"] = str(out_path)
-        app.logger.info("matting %s done -> %s", job_id, out_path.name)
+        job["vision_used"] = vision_used
+        app.logger.info("matting %s done -> %s (vision_used=%s)", job_id, out_path.name, vision_used)
     except Exception as e:  # noqa: BLE001
         job["status"] = "failed"
         job["error"] = str(e)[:500]
@@ -92,6 +108,7 @@ def create_matting_image(
     file: app.UploadFile = app._FastAPIFile(...),
     box: str = app.Form(None),
     model: str = app.Form(None),
+    vision_guide: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
@@ -122,6 +139,8 @@ def create_matting_image(
 
     # 校验模型名（未知名字退回全局默认，不报错）
     sel_model = model if (model and model in mat.MODELS) else None
+    # 🤖 AI 视觉定位开关：开启时后端先调 VLM 看懂图、自动框出主体再抠
+    vg = (vision_guide or "").strip().lower() in ("1", "true", "yes", "on")
 
     save_path = _save_upload(file, "mat_up")
     job_id = app.uuid.uuid4().hex[:12]
@@ -130,8 +149,8 @@ def create_matting_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "matting",
         }
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model)
-    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model}
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg)
+    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg}
 
 
 @router.get("/api/matting/image/{job_id}")
@@ -145,6 +164,10 @@ def matting_image_status(job_id: str) -> dict:
         "filename": job.get("filename", ""),
         # 首次使用会在这段时间下载模型权重，前端据此显示百分比
         "download": _dl_snapshot(),
+        # 🤖 AI 视觉定位结果：未配置/出错时自动回退基础抠图，前端据此提示
+        "vision_used": job.get("vision_used", False),
+        "vision_label": job.get("vision_label", ""),
+        "vision_error": job.get("vision_error", ""),
     }
 
 
