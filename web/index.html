@@ -1109,36 +1109,12 @@
               <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
             </label>
           </div>
-          <!-- 固定选择项（转下拉，去解释文字） -->
+          <!-- 固定选择项（转下拉，去解释文字 + 三个裁剪字段挪到下方独立分组） -->
           <div class="com-opt-block com-opt-block-full" data-com-select="comIntroOutroMode">
             <div class="com-opt-title">固定选择项</div>
             <div class="com-opt-row com-opt-row-fixed">
               <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
               <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾（自动检测后剪掉）</span></label>
-              <div class="com-retain-field">
-                <label class="com-retain-label" for="comRetainPct">保留全片时长</label>
-                <div class="com-retain-input">
-                  <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
-                  <span class="com-retain-unit">%</span>
-                </div>
-                <span class="com-retain-hint">10~100，留空不裁剪</span>
-              </div>
-              <div class="com-retain-field">
-                <label class="com-retain-label">片头/片尾秒数</label>
-                <div class="com-retain-input">
-                  <input type="number" id="comIntroSec" min="0" max="3600" step="1" placeholder="片头秒" />
-                  <input type="number" id="comOutroSec" min="0" max="3600" step="1" placeholder="片尾秒" />
-                </div>
-                <span class="com-retain-hint">留空=自动检测；填了直接覆盖边界</span>
-              </div>
-              <div class="com-retain-field">
-                <label class="com-retain-label">正剧开始/片尾开始时间</label>
-                <div class="com-retain-input">
-                  <input type="text" id="comDramaStart" placeholder="01:25 或 85" />
-                  <input type="text" id="comDramaEnd" placeholder="44:00 或 2640" />
-                </div>
-                <span class="com-retain-hint">绝对时间，优先于上方秒数；留空=自动检测</span>
-              </div>
             </div>
           </div>
           <!-- 画幅（转下拉） -->
@@ -1179,6 +1155,33 @@
               <input id="comCorrectTranscript" type="checkbox" checked />
               <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
             </label>
+          </div>
+          <!-- 时间裁剪（保留全片时长/片头片尾秒数/正剧开始-片尾开始时间）— 整体挪到右栏底部，固定选择项 trigger 之上不再混入此组 -->
+          <div class="com-retain-group">
+            <div class="com-retain-field">
+              <label class="com-retain-label" for="comRetainPct">保留全片时长</label>
+              <div class="com-retain-input">
+                <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
+                <span class="com-retain-unit">%</span>
+              </div>
+              <span class="com-retain-hint">10~100，留空不裁剪</span>
+            </div>
+            <div class="com-retain-field">
+              <label class="com-retain-label">片头/片尾秒数</label>
+              <div class="com-retain-input">
+                <input type="number" id="comIntroSec" min="0" max="3600" step="1" placeholder="片头秒" />
+                <input type="number" id="comOutroSec" min="0" max="3600" step="1" placeholder="片尾秒" />
+              </div>
+              <span class="com-retain-hint">留空=自动检测；填了直接覆盖边界</span>
+            </div>
+            <div class="com-retain-field">
+              <label class="com-retain-label">正剧开始/片尾开始时间</label>
+              <div class="com-retain-input">
+                <input type="text" id="comDramaStart" placeholder="01:25 或 85" />
+                <input type="text" id="comDramaEnd" placeholder="44:00 或 2640" />
+              </div>
+              <span class="com-retain-hint">绝对时间，优先于上方秒数；留空=自动检测</span>
+            </div>
           </div>
           </div>
           <!-- 导出剪映草稿：成片生成后再导出可编辑草稿（视频轨+配音轨+字幕轨） -->

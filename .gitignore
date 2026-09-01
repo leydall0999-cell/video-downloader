@@ -44,3 +44,8 @@ commentary-pipeline
 # 构建信息产物（构建脚本在 desktop/ 生成，不入库）
 server/.build_info.json
 server/build_info.txt
+
+# node --check 临时错误备份（hook 误触产生，已修复不再生成）
+.jscheck.err.bak.*
+# build_mac.sh 残留备份
+*.spec.bak.*

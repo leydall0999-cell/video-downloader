@@ -2443,9 +2443,6 @@ img { max-width: 100%; display: block; }
 }
 .com-opt-row-fixed > .com-mode-fixed:hover > span { background: none; border: none; }
 .com-opt-row-fixed > .com-mode-fixed input:checked + span b { color: var(--accent); }
-.com-opt-row-fixed > .com-retain-field {
-  flex: 1 1 100%;
-}
 
 .com-retain-field {
   display: flex; flex-wrap: wrap; align-items: center;
@@ -2454,6 +2451,11 @@ img { max-width: 100%; display: block; }
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
   border-radius: var(--radius-sm);
+}
+/* 时间裁剪分组：3 个 retain-field 垂直堆叠，整体放右栏最底（与 5 trigger 互不混排） */
+.com-retain-group {
+  display: flex; flex-direction: column; gap: .35rem;
+  flex: 0 0 100%;
 }
 .com-retain-label { font-size: .8rem; font-weight: 600; color: var(--text); }
 .com-retain-input { display: flex; align-items: center; gap: .25rem; }
@@ -2766,13 +2768,14 @@ img { max-width: 100%; display: block; }
 .com-col-right .com-opts#comOpts .com-opt-block,
 .com-col-right .com-opts#comOpts .com-opts-inner { display: contents; }
 .com-col-right .com-opts#comOpts .com-opt-title { display: none; }
-/* 5 trigger 排前；视觉理解/配音 select/ASR/导出剪映 checkbox 排在 retain-field 上方；retain-field 排最末各占满整行 */
-.com-col-right .com-opts#comOpts .com-mode-dropdown { order: 1; flex: 0 0 calc((100% - 3rem) / 5); min-width: 0; max-width: none; }
+/* 5 trigger + 视觉理解 排第 1 行同排（6 等分）；配音 select/ASR/导出剪映 checkbox/开头加高光 排 2+ 行；retain-group 排最末整段占满 */
+.com-col-right .com-opts#comOpts .com-mode-dropdown { order: 1; flex: 0 0 calc((100% - 3.75rem) / 6); min-width: 0; max-width: none; }
+.com-col-right .com-opts#comOpts label.com-highlights-toggle:has(#comVision) { order: 1; flex: 0 1 calc((100% - 3.75rem) / 6); display: flex; align-items: center; justify-content: center; gap: .35rem; white-space: nowrap; padding: .35rem .5rem; border: 1.5px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
 .com-col-right .com-opts#comOpts .com-highlights-toggle,
 .com-col-right .com-opts#comOpts .com-select,
 .com-col-right .com-opts#comOpts .com-checkbox-row,
 .com-col-right .com-opts#comOpts .com-tts-status-bar { order: 2; flex: 0 1 auto; }
-.com-col-right .com-opts#comOpts .com-retain-field { order: 9; flex: 0 0 100%; }
+.com-col-right .com-opts#comOpts .com-retain-group { order: 9; }
 /* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
 .com-bottom {
   position: sticky; bottom: 0; z-index: 30;
