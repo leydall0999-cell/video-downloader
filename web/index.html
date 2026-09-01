@@ -1061,145 +1061,189 @@
       </details>
     </div>
                 <div class="com-opts" id="comOpts">
-      <!-- 核心：解说类型（自定义下拉） -->
-      <div class="com-opt-block com-opt-block-full">
-        <div class="com-opt-title">解说类型</div>
-        <div class="com-mode-dropdown" id="comTypeDropdown">
-          <button type="button" class="com-mode-dropdown-toggle" id="comTypeBtn" aria-haspopup="listbox" aria-expanded="false">
-            <span class="com-mode-dropdown-label" id="comTypeBtnLabel">解说类型</span>
-            <span class="com-mode-dropdown-caret" aria-hidden="true">▾</span>
-          </button>
-          <div class="com-mode-dropdown-panel" id="comTypePanel" role="listbox" hidden>
-            <button type="button" class="com-mode-dropdown-option is-selected" data-value="deep_hl" role="option">
-              <b>高光处叠加深度解说</b><small>精彩片段 + 深度剖析，最有冲击力</small>
+      <!-- ===== 第 1 行：5 个下拉 trigger 横排 ===== -->
+      <div class="com-row com-row-1">
+        <!-- 解说类型（自定义下拉） -->
+        <div class="com-cell com-cell-trigger">
+          <div class="com-opt-title">解说类型</div>
+          <div class="com-mode-dropdown" id="comTypeDropdown">
+            <button type="button" class="com-mode-dropdown-toggle" id="comTypeBtn" aria-haspopup="listbox" aria-expanded="false">
+              <span class="com-mode-dropdown-label" id="comTypeBtnLabel">解说类型</span>
+              <span class="com-mode-dropdown-caret" aria-hidden="true">▾</span>
             </button>
-            <button type="button" class="com-mode-dropdown-option" data-value="normal_hl" role="option">
-              <b>高光部分普通解说</b><small>精彩片段 + 轻松讲解，节奏明快</small>
-            </button>
-            <button type="button" class="com-mode-dropdown-option" data-value="full_normal" role="option">
-              <b>全片普通解说</b><small>完整视频 + 平实讲述，适合长视频</small>
-            </button>
-            <button type="button" class="com-mode-dropdown-option" data-value="full_deep" role="option">
-              <b>全片深入解说</b><small>完整视频 + 深度解读，信息量大</small>
-            </button>
+            <div class="com-mode-dropdown-panel" id="comTypePanel" role="listbox" hidden>
+              <button type="button" class="com-mode-dropdown-option is-selected" data-value="deep_hl" role="option"><b>高光处叠加深度解说</b><small>精彩片段 + 深度剖析，最有冲击力</small></button>
+              <button type="button" class="com-mode-dropdown-option" data-value="normal_hl" role="option"><b>高光部分普通解说</b><small>精彩片段 + 轻松讲解，节奏明快</small></button>
+              <button type="button" class="com-mode-dropdown-option" data-value="full_normal" role="option"><b>全片普通解说</b><small>完整视频 + 平实讲述，适合长视频</small></button>
+              <button type="button" class="com-mode-dropdown-option" data-value="full_deep" role="option"><b>全片深入解说</b><small>完整视频 + 深度解读，信息量大</small></button>
+            </div>
+            <input type="radio" name="comType" value="deep_hl" checked hidden />
+            <input type="radio" name="comType" value="normal_hl" hidden />
+            <input type="radio" name="comType" value="full_normal" hidden />
+            <input type="radio" name="comType" value="full_deep" hidden />
           </div>
-          <!-- 隐藏 radios 保留向后兼容（comGetOptions 仍走 document.querySelector('input[name="comType"]:checked').value） -->
-          <input type="radio" name="comType" value="deep_hl" checked hidden />
-          <input type="radio" name="comType" value="normal_hl" hidden />
-          <input type="radio" name="comType" value="full_normal" hidden />
-          <input type="radio" name="comType" value="full_deep" hidden />
+        </div>
+        <div class="com-cell com-cell-trigger" data-com-select="comHlSource">
+          <div class="com-opt-title">自动挑高光</div>
+          <div class="com-opt-row">
+            <label class="com-mode-option"><input type="radio" name="comHlSource" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
+            <label class="com-mode-option"><input type="radio" name="comHlSource" value="manual" /><span>人工在审核面板挑选</span></label>
+          </div>
+        </div>
+        <div class="com-cell com-cell-trigger" data-com-select="comIntroHighlight">
+          <div class="com-opt-title">开头加高光</div>
+          <label class="com-highlights-toggle">
+            <input type="checkbox" id="comIntroHighlight" />
+            <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
+          </label>
+        </div>
+        <div class="com-cell com-cell-trigger" data-com-select="comIntroOutroMode">
+          <div class="com-opt-title">固定选择项</div>
+          <div class="com-opt-row com-opt-row-fixed">
+            <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
+            <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾（自动检测后剪掉）</span></label>
+          </div>
+        </div>
+        <div class="com-cell com-cell-trigger" data-com-select="comAspect">
+          <div class="com-opt-title">画幅</div>
+          <div class="com-opt-row">
+            <label class="com-mode-option"><input type="radio" name="comAspect" value="auto" checked /><span><b>自动（跟视频走）</b></span></label>
+            <label class="com-mode-option"><input type="radio" name="comAspect" value="landscape" /><span>横屏 16:9</span></label>
+            <label class="com-mode-option"><input type="radio" name="comAspect" value="vertical" /><span>竖屏 9:16（抖音/视频号）</span></label>
+          </div>
         </div>
       </div>
 
-      <!-- 高级剪辑：去折叠，整体展开（每块 trigger 自带功能名） -->
-      <div class="com-opts-inner">
-          <!-- 自动挑高光（转下拉） -->
-          <div class="com-opt-block" data-com-select="comHlSource">
-            <div class="com-opt-title">自动挑高光</div>
-            <div class="com-opt-row">
-              <label class="com-mode-option"><input type="radio" name="comHlSource" value="ai" checked /><span><b>AI 自动挑选高光</b></span></label>
-              <label class="com-mode-option"><input type="radio" name="comHlSource" value="manual" /><span>人工在审核面板挑选</span></label>
-            </div>
+      <!-- ===== 第 2 行：启用视觉理解 | 配音引擎 | 转写稿 ASR 校正 ===== -->
+      <div class="com-row com-row-2">
+        <div class="com-cell com-cell-r2-vision">
+          <label class="com-highlights-toggle">
+            <input type="checkbox" id="comVision" checked />
+            <span><b>启用视觉理解</b></span>
+          </label>
+        </div>
+        <div class="com-cell com-cell-r2-tts">
+          <select id="comTtsProvider" class="com-select">
+            <option value="" data-base="默认（微软 edge-tts）">默认（微软 edge-tts）　🟢免费</option>
+            <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆（更自然）">IndexTTS-MLX 本地语音克隆（更自然）　🟢免费</option>
+            <option value="indextts2" data-base="IndexTTS2 本地语音克隆">IndexTTS2 本地语音克隆（本机，Mac 暂无法运行）　🟢免费</option>
+            <option value="minimax" data-base="MiniMax 海螺">MiniMax 海螺　🔴收费（需填写密钥）</option>
+            <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需填写密钥，新用户送 ¥14）</option>
+          </select>
+          <div id="comTtsStatusBar" class="com-tts-status-bar" style="display:none;">
+            <span id="comTtsStatusDot" class="com-tts-status-dot"></span>
+            <span id="comTtsStatusText" class="com-tts-status-text"></span>
           </div>
-          <!-- 开头加高光（转下拉） -->
-          <div class="com-opt-block" data-com-select="comIntroHighlight">
-            <div class="com-opt-title">开头加高光</div>
-            <label class="com-highlights-toggle">
-              <input type="checkbox" id="comIntroHighlight" />
-              <span><b>片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
-            </label>
-          </div>
-          <!-- 固定选择项（转下拉，去解释文字 + 三个裁剪字段挪到下方独立分组） -->
-          <div class="com-opt-block com-opt-block-full" data-com-select="comIntroOutroMode">
-            <div class="com-opt-title">固定选择项</div>
-            <div class="com-opt-row com-opt-row-fixed">
-              <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
-              <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾（自动检测后剪掉）</span></label>
-            </div>
-          </div>
-          <!-- 画幅（转下拉） -->
-          <div class="com-opt-block" data-com-select="comAspect">
-            <div class="com-opt-title">画幅</div>
-            <div class="com-opt-row">
-              <label class="com-mode-option"><input type="radio" name="comAspect" value="auto" checked /><span><b>自动（跟视频走）</b></span></label>
-              <label class="com-mode-option"><input type="radio" name="comAspect" value="landscape" /><span>横屏 16:9</span></label>
-              <label class="com-mode-option"><input type="radio" name="comAspect" value="vertical" /><span>竖屏 9:16（抖音/视频号）</span></label>
-            </div>
-          </div>
-          <!-- 视觉理解（默认启用） -->
-          <div class="com-opt-block com-opt-block-full">
-            <div class="com-opt-title">视觉理解</div>
-            <label class="com-highlights-toggle">
-              <input type="checkbox" id="comVision" checked />
-              <span><b>启用视觉理解</b></span>
-            </label>
-          </div>
-          <!-- 配音引擎 -->
-          <div class="com-opt-block com-opt-block-full">
-            <div class="com-opt-title">配音引擎</div>
-            <div class="com-opt-row">
-              <select id="comTtsProvider" class="com-select">
-                <option value="" data-base="默认（微软 edge-tts）">默认（微软 edge-tts）　🟢免费</option>
-                <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆（更自然）">IndexTTS-MLX 本地语音克隆（更自然）　🟢免费</option>
-                <option value="indextts2" data-base="IndexTTS2 本地语音克隆">IndexTTS2 本地语音克隆（本机，Mac 暂无法运行）　🟢免费</option>
-                <option value="minimax" data-base="MiniMax 海螺">MiniMax 海螺　🔴收费（需填写密钥）</option>
-                <option value="siliconflow" data-base="SiliconFlow">SiliconFlow　🔴收费（需填写密钥，新用户送 ¥14）</option>
-              </select>
-            </div>
-            <!-- 可用性自动识别：不可用引擎直接置灰禁用 -->
-            <div id="comTtsStatusBar" class="com-tts-status-bar" style="display:none;">
-              <span id="comTtsStatusDot" class="com-tts-status-dot"></span>
-              <span id="comTtsStatusText" class="com-tts-status-text"></span>
-            </div>
-            <label class="com-checkbox-row" style="margin-top:8px;">
-              <input id="comCorrectTranscript" type="checkbox" checked />
-              <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
-            </label>
-          </div>
-          <!-- 时间裁剪（保留全片时长/片头片尾秒数/正剧开始-片尾开始时间）— 整体挪到右栏底部，固定选择项 trigger 之上不再混入此组 -->
-          <div class="com-retain-group">
-            <div class="com-retain-field">
-              <label class="com-retain-label" for="comRetainPct">保留全片时长</label>
-              <div class="com-retain-input">
-                <input type="number" id="comRetainPct" min="10" max="100" step="1" placeholder="例如 100" />
-                <span class="com-retain-unit">%</span>
-              </div>
-              <span class="com-retain-hint">10~100，留空不裁剪</span>
-            </div>
-            <div class="com-retain-field">
-              <label class="com-retain-label">片头/片尾秒数</label>
-              <div class="com-retain-input">
-                <input type="number" id="comIntroSec" min="0" max="3600" step="1" placeholder="片头秒" />
-                <input type="number" id="comOutroSec" min="0" max="3600" step="1" placeholder="片尾秒" />
-              </div>
-              <span class="com-retain-hint">留空=自动检测；填了直接覆盖边界</span>
-            </div>
-            <div class="com-retain-field">
-              <label class="com-retain-label">正剧开始/片尾开始时间</label>
-              <div class="com-retain-input">
-                <input type="text" id="comDramaStart" placeholder="01:25 或 85" />
-                <input type="text" id="comDramaEnd" placeholder="44:00 或 2640" />
-              </div>
-              <span class="com-retain-hint">绝对时间，优先于上方秒数；留空=自动检测</span>
-            </div>
-          </div>
-          </div>
-          <!-- 导出剪映草稿：成片生成后再导出可编辑草稿（视频轨+配音轨+字幕轨） -->
-          <div class="com-opt-block com-opt-block-full">
-            <div class="com-opt-title">导出剪映草稿（可选）</div>
-            <label class="com-checkbox-row" style="margin-bottom:8px;">
-              <input id="comExportJianying" type="checkbox" />
-              <span>生成成片后，额外导出剪映可编辑草稿（视频轨 + 配音轨 + 字幕轨），可在剪映里二次精修再导出</span>
-            </label>
-            <div class="com-opt-row" id="comExportJianyingDirWrap" hidden>
-              <input id="comExportJianyingDir" type="text" class="adv-input" placeholder="导出目录，例如 /Users/你的用户名/Movies/剪映导出" autocomplete="off" spellcheck="false" />
-              <button type="button" class="btn btn-sm btn-secondary" id="comExportJianyingPick">选择文件夹</button>
-            </div>
-            <p class="com-retain-hint">留空则默认导出到解说输出目录下的「&lt;片名&gt;-剪映草稿」文件夹。勾选后，渲染成片时会一并生成草稿，可在剪映中打开继续编辑。</p>
-          </div>
+        </div>
+        <div class="com-cell com-cell-r2-asr">
+          <label class="com-checkbox-row">
+            <input id="comCorrectTranscript" type="checkbox" checked />
+            <span>转写稿 ASR 校正（LLM 修正同音错字/专有名词，提升解说与字幕准确率；关闭可省 token）</span>
+          </label>
+        </div>
+      </div>
 
-    </div>
-                <div class="com-opts com-style-section">
+      <!-- ===== 第 3-7 行：2 列网格 ===== -->
+      <div class="com-grid">
+        <!-- 第 3 行：片头片尾矫正 | 字号描边+颜色 -->
+        <div class="com-cell com-cell-half com-retain-field">
+          <label class="com-retain-label">片头/片尾秒数</label>
+          <div class="com-retain-input">
+            <input type="number" id="comIntroSec" min="0" max="3600" step="1" placeholder="片头秒" />
+            <input type="number" id="comOutroSec" min="0" max="3600" step="1" placeholder="片尾秒" />
+          </div>
+          <span class="com-retain-hint">留空=自动检测；填了直接覆盖边界</span>
+        </div>
+        <div class="com-cell com-cell-half com-sub-style-cell">
+          <div class="com-sub-style-row">
+            <label class="com-sub-item">字号 <input type="range" id="comSubSize" min="0.6" max="1.6" step="0.05" value="1.0" /><span id="comSubSizeVal">1.0×</span></label>
+            <label class="com-sub-item">描边 <input type="range" id="comSubBorder" min="0.3" max="3.0" step="0.1" value="1.0" /><span id="comSubBorderVal">1.0×</span></label>
+          </div>
+          <label class="com-sub-item com-sub-color-item">颜色 <input type="color" id="comSubColor" value="#FFFFFF" /></label>
+        </div>
+
+        <!-- 第 4 行：正剧开始/片尾开始时间 | 位置 -->
+        <div class="com-cell com-cell-half com-retain-field">
+          <label class="com-retain-label">正剧开始/片尾开始时间</label>
+          <div class="com-retain-input">
+            <input type="text" id="comDramaStart" placeholder="01:25 或 85" />
+            <input type="text" id="comDramaEnd" placeholder="44:00 或 2640" />
+          </div>
+          <span class="com-retain-hint">绝对时间，优先于上方秒数；留空=自动检测</span>
+        </div>
+        <div class="com-cell com-cell-half com-sub-pos-cell">
+          <span class="com-sub-pos">位置
+            <label><input type="radio" name="comSubPos" value="bottom" checked />底部</label>
+            <label><input type="radio" name="comSubPos" value="center" />居中</label>
+          </span>
+        </div>
+
+        <!-- 第 5 行：配音与音量 | 字幕位置实时预览 -->
+        <div class="com-cell com-cell-half com-vol-title-cell">
+          <div class="com-vol-label">配音与音量</div>
+          <span class="com-vol-hint">（保存后对所有解说任务生效）</span>
+        </div>
+        <div class="com-cell com-cell-half com-sub-preview-cell">
+          <div class="com-sub-preview-head">字幕位置实时预览</div>
+          <canvas id="comSubPreview" class="com-sub-preview" width="480" height="270"></canvas>
+          <span id="comSubAspectHint" class="com-retain-hint">横屏 16:9 预览</span>
+        </div>
+
+        <!-- 第 6 行：旁白响度标准化 | 原声压低比例 -->
+        <div class="com-cell com-cell-half com-vol-item">
+          <div class="com-vol-label">旁白响度标准化</div>
+          <div class="com-vol-ctrl">
+            <input type="range" id="comLoudness" min="-18" max="-10" step="1" value="-14" />
+            <span class="com-vol-val" id="comLoudnessVal">-14 LUFS</span>
+          </div>
+          <label class="com-vol-off"><input type="checkbox" id="comLoudnessOff" /> 关闭（仅用增益兜底）</label>
+        </div>
+        <div class="com-cell com-cell-half com-vol-item">
+          <div class="com-vol-label">原声压低比例</div>
+          <div class="com-vol-ctrl">
+            <input type="range" id="comDuck" min="5" max="30" step="1" value="10" />
+            <span class="com-vol-val" id="comDuckVal">10%</span>
+          </div>
+          <span class="com-vol-hint">解说期间原声压到这么低（越小越静）</span>
+        </div>
+
+        <!-- 第 7 行：旁白额外增益（整行） -->
+        <div class="com-cell com-cell-full com-vol-item">
+          <div class="com-vol-label">旁白额外增益</div>
+          <div class="com-vol-ctrl">
+            <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" />
+            <span class="com-vol-val" id="comBoostVal">1.00×</span>
+          </div>
+          <span class="com-vol-hint">响度标准化之后再乘这个倍数（越大越响）</span>
+        </div>
+
+        <!-- 试听设置（整行） -->
+        <div class="com-cell com-cell-full com-vol-actions-item">
+          <span class="com-vol-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
+          <div class="com-vol-buttons">
+            <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview">▶ 试听当前设置</button>
+            <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
+          </div>
+          <span class="com-status" id="comVolStatus" hidden></span>
+        </div>
+
+        <!-- 导出剪映草稿（整行） -->
+        <div class="com-cell com-cell-full com-export-cell">
+          <div class="com-opt-title">导出剪映草稿（可选）</div>
+          <label class="com-checkbox-row" style="margin-bottom:8px;">
+            <input id="comExportJianying" type="checkbox" />
+            <span>生成成片后，额外导出剪映可编辑草稿（视频轨 + 配音轨 + 字幕轨），可在剪映里二次精修再导出</span>
+          </label>
+          <div class="com-opt-row" id="comExportJianyingDirWrap" hidden>
+            <input id="comExportJianyingDir" type="text" class="adv-input" placeholder="导出目录，例如 /Users/你的用户名/Movies/剪映导出" autocomplete="off" spellcheck="false" />
+            <button type="button" class="btn btn-sm btn-secondary" id="comExportJianyingPick">选择文件夹</button>
+          </div>
+          <p class="com-retain-hint">留空则默认导出到解说输出目录下的「&lt;片名&gt;-剪映草稿」文件夹。勾选后，渲染成片时会一并生成草稿，可在剪映中打开继续编辑。</p>
+        </div>
+      </div>
+                </div>
+<div class="com-opts com-style-section">
       <div class="com-opt-block com-opt-block-full" data-com-select="comStyle">
         <div class="com-opt-row com-opt-row-styles">
           <label class="com-mode-option"><input type="radio" name="comStyle" value="none" checked /><span><b>默认</b></span></label>
@@ -1239,72 +1283,12 @@
         <span class="com-retain-hint">氛围音由 ffmpeg 实时合成（正弦波三和弦）；选「本地音乐」可用自己 mp3/wav</span>
       </div>
       <div class="com-opt-block com-opt-block-full">
-        <div class="com-opt-title">字幕样式</div>
-        <div class="com-sub-layout">
-          <div class="com-sub-layout-left">
-            <div class="com-opt-row com-opt-row-sub">
-              <label class="com-sub-item">字号 <input type="range" id="comSubSize" min="0.6" max="1.6" step="0.05" value="1.0" /><span id="comSubSizeVal">1.0×</span></label>
-              <label class="com-sub-item">描边 <input type="range" id="comSubBorder" min="0.3" max="3.0" step="0.1" value="1.0" /><span id="comSubBorderVal">1.0×</span></label>
-              <label class="com-sub-item">颜色 <input type="color" id="comSubColor" value="#FFFFFF" /></label>
-              <span class="com-sub-pos">位置
-                <label><input type="radio" name="comSubPos" value="bottom" checked />底部</label>
-                <label><input type="radio" name="comSubPos" value="center" />居中</label>
-              </span>
-            </div>
-            <span class="com-retain-hint">实时预览（白字+黑描边+阴影，字幕落在画面的相对位置）</span>
-          </div>
-          <div class="com-sub-layout-right">
-            <canvas id="comSubPreview" class="com-sub-preview" width="480" height="270"></canvas>
-            <span class="com-retain-hint com-sub-aspect-hint" id="comSubAspectHint">横屏 16:9 预览</span>
-          </div>
-        </div>
-      </div>
-      <div class="com-opt-block com-opt-block-full">
         <div class="com-opt-title">解说长度（字数上限）</div>
         <div class="com-opt-row">
           <input type="range" id="comMaxChars" min="0" max="3000" step="100" value="0" />
           <span class="com-vol-val" id="comMaxCharsVal">不限</span>
         </div>
         <span class="com-retain-hint">0=不限制；短视频想短就调小（如 600），课程想长就调大</span>
-      </div>
-    </div>
-                <div class="com-opt-block com-opt-block-full" id="comVolumeBlock">
-      <div class="com-opt-title">配音与音量 <span class="com-opt-tip">（保存后对所有解说任务生效）</span></div>
-      <div class="com-vol-row">
-        <div class="com-vol-item">
-          <div class="com-vol-label">旁白响度标准化</div>
-          <div class="com-vol-ctrl">
-            <input type="range" id="comLoudness" min="-18" max="-10" step="1" value="-14" />
-            <span class="com-vol-val" id="comLoudnessVal">-14 LUFS</span>
-          </div>
-          <label class="com-vol-off"><input type="checkbox" id="comLoudnessOff" /> 关闭（仅用增益兜底）</label>
-        </div>
-        <div class="com-vol-item">
-          <div class="com-vol-label">原声压低比例</div>
-          <div class="com-vol-ctrl">
-            <input type="range" id="comDuck" min="5" max="30" step="1" value="10" />
-            <span class="com-vol-val" id="comDuckVal">10%</span>
-          </div>
-          <span class="com-vol-hint">解说期间原声压到这么低（越小越静）</span>
-        </div>
-        <div class="com-vol-item">
-          <div class="com-vol-label">旁白额外增益</div>
-          <div class="com-vol-ctrl">
-            <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" />
-            <span class="com-vol-val" id="comBoostVal">1.00×</span>
-          </div>
-          <span class="com-vol-hint">响度标准化之后再乘这个倍数（越大越响）</span>
-        </div>
-        <div class="com-vol-item com-vol-actions-item">
-          <div class="com-vol-label">试听设置</div>
-          <div class="com-vol-buttons">
-            <button type="button" class="btn btn-sm btn-ghost" id="comVolReset">恢复默认</button>
-            <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview">▶ 试听当前设置</button>
-            <button type="button" class="btn btn-sm btn-primary" id="comVolSave">💾 保存设置</button>
-          </div>
-          <span class="com-vol-hint">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
-          <span class="com-status" id="comVolStatus" hidden></span>
-        </div>
       </div>
     </div>
         </div>

@@ -310,7 +310,6 @@
       const v = document.querySelector('input[name="comIntroOutroMode"]:checked');
       return v ? v.value : 'keep_no_narrate';
     },
-    comRetainPct: $('comRetainPct'),
     comIntroSec: $('comIntroSec'),
     comOutroSec: $('comOutroSec'),
     comDramaStart: $('comDramaStart'),
@@ -5226,12 +5225,11 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
-  // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关 / 保留时长 / 一键生成）
+  // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关 / 一键生成）
   const comGetOptions = (forceOneClick = false) => {
     const typeEl = document.querySelector('input[name="comType"]:checked');
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
-    const rp = el.comRetainPct && el.comRetainPct.value ? Number(el.comRetainPct.value) : null;
     const introSec = el.comIntroSec && el.comIntroSec.value ? Number(el.comIntroSec.value) : null;
     const outroSec = el.comOutroSec && el.comOutroSec.value ? Number(el.comOutroSec.value) : null;
     const dramaStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
@@ -5246,7 +5244,6 @@ el.dwVidPlayer.removeAttribute('src');
       intro_highlight: !!(el.comIntroHighlight && el.comIntroHighlight.checked),
       skip_intro_outro,
       no_narrate_intro_outro,
-      retain_pct: rp,
       intro_sec: introSec,
       outro_sec: outroSec,
       drama_start_sec: dramaStart,

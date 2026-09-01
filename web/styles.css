@@ -2447,10 +2447,6 @@ img { max-width: 100%; display: block; }
 .com-retain-field {
   display: flex; flex-wrap: wrap; align-items: center;
   gap: .25rem .55rem;
-  padding: .3rem .5rem;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
-  border-radius: var(--radius-sm);
 }
 /* 时间裁剪分组：3 个 retain-field 垂直堆叠，整体放右栏最底（与 5 trigger 互不混排） */
 .com-retain-group {
@@ -2761,21 +2757,50 @@ img { max-width: 100%; display: block; }
 /* 右栏内 5 个下拉 trigger 横排成一行（图二风格）：
    - 整个 com-opts 用 flex-wrap 让 trigger 与 retain-field 自然分行
    - 各 .com-opt-block[data-com-select] 用 display:contents 让 trigger 直接成为 flex 子项（5 trigger 横排、retain-field 自动换行） */
-.com-col-right .com-opts {
-  display: flex !important; flex-wrap: wrap; align-items: flex-start;
-  gap: .4rem .75rem; padding: 0; background: none; border: none;
+.com-col-right .com-opts#comOpts {
+  display: block; padding: 0; background: none; border: none;
 }
-.com-col-right .com-opts#comOpts .com-opt-block,
-.com-col-right .com-opts#comOpts .com-opts-inner { display: contents; }
-.com-col-right .com-opts#comOpts .com-opt-title { display: none; }
-/* 5 trigger + 视觉理解 排第 1 行同排（6 等分）；配音 select/ASR/导出剪映 checkbox/开头加高光 排 2+ 行；retain-group 排最末整段占满 */
-.com-col-right .com-opts#comOpts .com-mode-dropdown { order: 1; flex: 0 0 calc((100% - 3.75rem) / 6); min-width: 0; max-width: none; }
-.com-col-right .com-opts#comOpts label.com-highlights-toggle:has(#comVision) { order: 1; flex: 0 1 calc((100% - 3.75rem) / 6); display: flex; align-items: center; justify-content: center; gap: .35rem; white-space: nowrap; padding: .35rem .5rem; border: 1.5px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
-.com-col-right .com-opts#comOpts .com-highlights-toggle,
-.com-col-right .com-opts#comOpts .com-select,
-.com-col-right .com-opts#comOpts .com-checkbox-row,
-.com-col-right .com-opts#comOpts .com-tts-status-bar { order: 2; flex: 0 1 auto; }
-.com-col-right .com-opts#comOpts .com-retain-group { order: 9; }
+/* 第 1 行：5 个下拉 trigger 等宽横排成一行 */
+.com-row-1 {
+  display: flex; flex-wrap: nowrap; gap: .45rem; align-items: stretch;
+}
+.com-row-1 > .com-cell-trigger { flex: 1 1 0; min-width: 0; }
+.com-row-1 .com-mode-dropdown,
+.com-row-1 .com-mode-dropdown-toggle { width: 100%; }
+/* 第 2 行：启用视觉理解 | 配音引擎 | 转写稿 ASR 校正 */
+.com-row-2 {
+  display: flex; flex-wrap: wrap; gap: .5rem .7rem; align-items: center;
+  margin-top: .55rem;
+}
+.com-row-2 > .com-cell-r2-vision { flex: 0 0 auto; }
+.com-row-2 > .com-cell-r2-tts { flex: 1 1 200px; min-width: 0; }
+.com-row-2 > .com-cell-r2-asr { flex: 1 1 320px; min-width: 0; }
+.com-checkbox-row { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; line-height: 1.3; }
+/* 第 3-7 行：2 列网格 */
+.com-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: .55rem .8rem; margin-top: .6rem; align-items: start;
+}
+.com-grid > .com-cell {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  padding: .55rem .65rem; min-width: 0;
+}
+.com-cell-full { grid-column: 1 / -1; }
+/* 标题仅隐藏 trigger 单元格内的（下拉按钮已显示组名）；导出剪映等真实标题保留显示 */
+.com-col-right .com-opts#comOpts .com-cell-trigger > .com-opt-title { display: none; }
+/* 字幕位置实时预览画布自适应单元格宽度 */
+.com-sub-preview-cell .com-sub-preview { width: 100%; max-width: 100%; height: auto; }
+.com-sub-preview-head { font-size: .8rem; font-weight: 600; color: var(--text); margin-bottom: .35rem; }
+.com-sub-style-row { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin-bottom: .3rem; }
+.com-sub-color-item { margin-top: .15rem; }
+/* 窄屏回退：网格单列、第 1 行换行 */
+@media (max-width: 720px) {
+  .com-row-1 { flex-wrap: wrap; }
+  .com-row-1 > .com-cell-trigger { flex: 1 1 calc(50% - .45rem); }
+  .com-grid { grid-template-columns: 1fr; }
+}
 /* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
 .com-bottom {
   position: sticky; bottom: 0; z-index: 30;

@@ -49,3 +49,5 @@ server/build_info.txt
 .jscheck.err.bak.*
 # build_mac.sh 残留备份
 *.spec.bak.*
+# 桌面图标构建备份（desktop/build_mac.sh 生成）
+desktop/icon.icns.bak.*
