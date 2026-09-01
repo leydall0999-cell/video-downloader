@@ -8402,17 +8402,30 @@ el.dwVidPlayer.removeAttribute('src');
 
   // ---- LLM 服务商选择器 ----
   (async () => {
+    // 硬编码兜底：与 server/llm_config.py 的 PROVIDER_PRESETS 镜像。
+    // fetch 失败时仍能保证下拉框非空、用户可手动选 DeepSeek 等。
+    const FALLBACK_LLM_PROVIDERS = {
+      openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', default_model: 'gpt-4o-mini' },
+      deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', default_model: 'deepseek-chat' },
+      qwen: { name: '通义千问', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', default_model: 'qwen-plus' },
+      zhipu: { name: '智谱 GLM', base_url: 'https://open.bigmodel.cn/api/paas/v4', default_model: 'glm-4-flash' },
+      moonshot: { name: 'Moonshot (Kimi)', base_url: 'https://api.moonshot.cn/v1', default_model: 'moonshot-v1-8k' },
+      ollama: { name: 'Ollama (本机)', base_url: 'http://localhost:11434/v1', default_model: '' },
+      custom: { name: '你的托管中转', base_url: '', default_model: '' },
+    };
     // 加载提供商预设列表
-    let providers = {};
+    let providers = JSON.parse(JSON.stringify(FALLBACK_LLM_PROVIDERS));
     let defaultProvider = 'openai';
     try {
       const r = await request('/api/llm/providers');
       if (r.ok) {
         const d = await r.json();
-        providers = d.providers || {};
+        if (d.providers && typeof d.providers === 'object' && Object.keys(d.providers).length > 0) {
+          providers = d.providers;
+        }
         defaultProvider = d.default || 'openai';
       }
-    } catch (e) { /* 未启用时静默退 */ }
+    } catch (e) { /* fetch 失败时用 FALLBACK 兜底，保证下拉非空 */ }
     // 填充下拉菜单
     if (el.llmProvider) {
       el.llmProvider.innerHTML = '';
@@ -8514,17 +8527,31 @@ el.dwVidPlayer.removeAttribute('src');
 
   // ---- 视觉模型服务商选择器（片头检测 & 视觉理解共用） ----
   (async () => {
-    let providers = {};
+    // 硬编码兜底：与 server/vision_config.py 的 VISION_PROVIDER_PRESETS 镜像。
+    // 用途：webview 内 fetch 偶发被代理/CSP 拦截静默失败时，至少保证下拉框可点、能选 DashScope。
+    // 后端 /api/vision/providers 成功返回时仍以返回值为准（如果后端新增 provider 而前端未更新，至少后端为新）。
+    const FALLBACK_PROVIDERS = {
+      auto: { name: '自动（推荐：Mac 用本机 OCR，其他平台自动降级）', base_url: '', default_model: '', needs_key: false, note: '不依赖任何云端 Key。macOS 走本机 Apple Vision 离线识别；Windows/Linux 若无 Ollama 则降级到音频检测。' },
+      ollama: { name: '本机 Ollama（免费 · 跨平台）', base_url: 'http://localhost:11434/v1', default_model: 'qwen2.5vl:7b', needs_key: false, note: '需先安装 Ollama 并 pull 视觉模型（如 ollama pull qwen2.5vl:7b）。完全本地运行，零成本、隐私。' },
+      siliconflow: { name: '硅基流动 SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', default_model: 'Qwen/Qwen2.5-VL-72B-Instruct', needs_key: true, note: '硅基流动控制台获取的 API Key。' },
+      gemini: { name: 'Google Gemini（含免费额度）', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/', default_model: 'gemini-2.5-flash', needs_key: true, note: 'Google AI Studio 免费申请 Key；有免费调用额度，超出后价格极低，视觉能力强。' },
+      dashscope: { name: '阿里百炼 DashScope', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', default_model: 'qwen-vl-max', needs_key: true, note: '阿里云百炼控制台申请 Key，有免费额度，中文 OCR 强。' },
+      volcengine: { name: '火山方舟 Volcengine', base_url: 'https://ark.cn-beijing.volces.com/api/v3', default_model: '', needs_key: true, note: '火山方舟推理接入点 ep-xxxx，模型名填你的接入点 ID；价格低。' },
+      custom: { name: '自定义 OpenAI 兼容端点', base_url: '', default_model: '', needs_key: true, note: '任意暴露 /v1/chat/completions 的兼容服务（中转/自建均可用）。' },
+    };
+    let providers = JSON.parse(JSON.stringify(FALLBACK_PROVIDERS));
     let defaultProvider = 'auto';
     let platformStatus = null;  // 本机平台/本地 OCR 状态，用于针对性提示
     try {
       const r = await request('/api/vision/providers');
       if (r.ok) {
         const d = await r.json();
-        providers = d.providers || {};
+        if (d.providers && typeof d.providers === 'object' && Object.keys(d.providers).length > 0) {
+          providers = d.providers;
+        }
         defaultProvider = d.default || 'auto';
       }
-    } catch (e) { /* 未启用时静默退 */ }
+    } catch (e) { /* fetch 失败时用 FALLBACK_PROVIDERS 兜底，保证下拉非空 */ }
 
     // 拉取本机平台/本地 OCR 状态，渲染针对性提示（如 Apple Silicon 的 Ollama 视觉崩溃警告）
     try {
