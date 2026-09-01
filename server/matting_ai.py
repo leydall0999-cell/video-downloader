@@ -42,8 +42,13 @@ MODELS: dict[str, dict] = {
         "input_size": (1024, 1024),
         "md5": "4fab47adc4ff364be1713e97b7e66334",
         "desc": "轻量版 · 213MB · 推荐",
+        # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
         ],
     },
@@ -55,6 +60,10 @@ MODELS: dict[str, dict] = {
         "desc": "完整版 · 927MB · 质量最高",
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-epoch_244.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-epoch_244.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-epoch_244.onnx",
         ],
     },
@@ -212,8 +221,9 @@ def _download(name: str) -> Path:
             continue
 
     raise RuntimeError(
-        f"抠图模型下载失败：{last_err or '未知错误'}。"
-        f"可手动下载 {meta['filename']} 后放到 {_model_dir()}"
+        f"抠图模型下载失败（已尝试 {len(meta['urls'])} 个源）：{last_err or '未知错误'}。"
+        f"可手动从以下任一源下载 {meta['filename']} 到 {_model_dir()}："
+        + " / ".join(meta["urls"])
     )
 
 
