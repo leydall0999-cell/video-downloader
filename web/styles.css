@@ -2371,6 +2371,9 @@ img { max-width: 100%; display: block; }
 /* 解说类型：卡片式四选一，信息更醒目 */
 /* 解说类型：自定义下拉（紫色粗边圆角 + 展开堆叠列表） */
 .com-mode-dropdown { position: relative; margin-top: .35rem; display: inline-block; max-width: none; }
+/* 右栏内 trigger 用 block 让 flex grow 能扩展占满行（5 trigger 撑满一行后 checkbox 自然换到第 2 行） */
+.com-col-right .com-mode-dropdown { display: block !important; }
+.com-col-right .com-mode-dropdown-toggle { display: flex !important; width: 100% !important; min-width: 0 !important; }
 .com-mode-dropdown-toggle {
   display: inline-flex; align-items: center; justify-content: space-between; gap: .5rem;
   width: auto; min-height: 38px; padding: .4rem .6rem;
@@ -2764,11 +2767,11 @@ img { max-width: 100%; display: block; }
 .com-col-right .com-opts#comOpts .com-opts-inner { display: contents; }
 .com-col-right .com-opts#comOpts .com-opt-title { display: none; }
 /* 5 trigger 排前；视觉理解/配音 select/ASR/导出剪映 checkbox 排在 retain-field 上方；retain-field 排最末各占满整行 */
-.com-col-right .com-opts#comOpts .com-mode-dropdown { order: 1; }
+.com-col-right .com-opts#comOpts .com-mode-dropdown { order: 1; flex: 0 0 calc((100% - 3rem) / 5); min-width: 0; max-width: none; }
 .com-col-right .com-opts#comOpts .com-highlights-toggle,
 .com-col-right .com-opts#comOpts .com-select,
 .com-col-right .com-opts#comOpts .com-checkbox-row,
-.com-col-right .com-opts#comOpts .com-tts-status-bar { order: 2; }
+.com-col-right .com-opts#comOpts .com-tts-status-bar { order: 2; flex: 0 1 auto; }
 .com-col-right .com-opts#comOpts .com-retain-field { order: 9; flex: 0 0 100%; }
 /* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
 .com-bottom {
