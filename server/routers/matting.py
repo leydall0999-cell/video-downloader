@@ -19,6 +19,7 @@ router = APIRouter()
 logger = logging.getLogger("matting")
 
 MAT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+MAT_MODEL_EXTS = {".onnx"}
 
 # 独立 job 存储（与去水印 DW_JOBS 隔离，避免 key 冲突）
 MAT_JOBS: dict[str, dict] = {}
@@ -143,12 +144,21 @@ def matting_image_file(job_id: str) -> app.FileResponse:
 
 @router.get("/api/matting/models")
 def matting_models() -> dict:
-    """模型列表（含是否已下载）+ 当前下载进度。"""
+    """模型列表（含是否已下载）+ 当前下载进度 + 当前模型的备用下载 URL。
+
+    当自动下载失败时，前端用 `download_urls` 给用户展示可手动打开的镜像链接。
+    """
+    cur = mat.current_model()
+    meta = mat.MODELS.get(cur, {})
     return {
-        "default": mat.current_model(),
+        "default": cur,
         "models": mat.list_models(),
         "download": _dl_snapshot(),
         "available": mat.available(),
+        "download_urls": list(meta.get("urls", [])),
+        "model_filename": meta.get("filename", ""),
+        "model_dir": str(mat._model_dir()),
+        "model_size_mb": meta.get("size_mb", 0),
     }
 
 
@@ -176,3 +186,72 @@ def matting_warmup() -> dict:
 
     threading.Thread(target=_go, name="matting-warmup", daemon=True).start()
     return {"ok": True, "model": mat.current_model(), "started": True}
+
+
+@router.post("/api/matting/upload-model")
+def matting_upload_model(
+    file: app.UploadFile = app._FastAPIFile(...),
+    payload: str = app.Form(None),
+) -> dict:
+    """用户在浏览器手动下载到本地后，从 App 内上传到正确目录（不再走命令行）。
+
+    query/form: model=<name>（不指定则用当前选中的模型）
+    form:     file=<下载的 .onnx>
+    """
+    target_name = ""
+    if payload:
+        try:
+            import json as _json
+            target_name = (_json.loads(payload) or {}).get("model", "") or ""
+        except Exception:  # noqa: BLE001
+            pass
+    if not target_name:
+        target_name = mat.current_model()
+    if target_name not in mat.MODELS:
+        raise app.HTTPException(status_code=400, detail=f"未知模型：{target_name}")
+
+    # 文件名直接用 MODELS 里注册的标准名（避免用户下载时重命名）
+    target_filename = mat.MODELS[target_name]["filename"]
+    suffix = app.Path(file.filename or target_filename).suffix.lower() or ".onnx"
+    if suffix not in MAT_MODEL_EXTS:
+        raise app.HTTPException(status_code=409, detail=f"请上传 .onnx 文件（当前是 {suffix}）")
+
+    dest = app.Path(mat._model_dir()) / target_filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".upload")
+
+    written = 0
+    try:
+        with tmp.open("wb") as fh:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > app.UPLOAD_MAX_BYTES:
+                    fh.close()
+                    tmp.unlink(missing_ok=True)
+                    raise app.HTTPException(status_code=413, detail="文件超过上传大小上限")
+                fh.write(chunk)
+    except app.HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
+    finally:
+        file.file.close()
+
+    if written == 0:
+        tmp.unlink(missing_ok=True)
+        raise app.HTTPException(status_code=411, detail="上传文件为空")
+
+    tmp.replace(dest)  # 原子落盘；下次 _get_session 自动命中
+    mat.set_model(target_name)  # 切换到刚上传的模型
+    app.logger.info("matting user-uploaded model %s -> %s (%d bytes)", target_name, dest.name, written)
+    return {
+        "ok": True,
+        "model": target_name,
+        "path": str(dest),
+        "size_bytes": written,
+        "size_mb": round(written / 1024 / 1024, 1),
+    }

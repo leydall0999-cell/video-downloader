@@ -50,6 +50,10 @@ MODELS: dict[str, dict] = {
             "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
             "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
         ],
     },
     "birefnet-general": {
@@ -64,6 +68,10 @@ MODELS: dict[str, dict] = {
             "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-epoch_244.onnx",
             "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-epoch_244.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-epoch_244.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-epoch_244.onnx",
         ],
     },
@@ -222,8 +230,7 @@ def _download(name: str) -> Path:
 
     raise RuntimeError(
         f"抠图模型下载失败（已尝试 {len(meta['urls'])} 个源）：{last_err or '未知错误'}。"
-        f"可手动从以下任一源下载 {meta['filename']} 到 {_model_dir()}："
-        + " / ".join(meta["urls"])
+        f"请在浏览器打开下方任一链接手动下载 {meta['filename']}，再从本应用上传到 {_model_dir()}。"
     )
 
 

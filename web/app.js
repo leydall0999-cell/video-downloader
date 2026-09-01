@@ -509,6 +509,11 @@
     matFile: $('matFile'),
     matModel: $('matModel'),
     matImgPreview: $('matImgPreview'),
+    matManual: $('matManual'),
+    matUrlList: $('matUrlList'),
+    matUploadFile: $('matUploadFile'),
+    matUploadStatus: $('matUploadStatus'),
+    matManualHint: $('matManualHint'),
     matBtn: $('matBtn'),
     matStatus: $('matStatus'),
     matResult: $('matResult'),
@@ -2886,6 +2891,77 @@
     return '首次下载模型…';
   };
 
+  // 自动下载失败时展示「手动下载链接 + 上传文件」兜底区。
+  // 每条 URL 一行：[域名缩写] [完整 URL 缩写] [打开按钮]，方便用户一眼选能用的镜像。
+  const matShowManual = () => {
+    if (!el.matManual) return;
+    fetch('/api/matting/models')
+      .then(r => r.json())
+      .then(d => {
+        const urls = d.download_urls || [];
+        const filename = d.model_filename || '';
+        const dir = d.model_dir || '';
+        const sizeMB = d.model_size_mb || 0;
+        // 填充链接列表
+        if (el.matUrlList) {
+          el.matUrlList.innerHTML = '';
+          urls.forEach(u => {
+            let host = '';
+            try { host = new URL(u).host.replace(/^https?:\/\//, ''); } catch (_) { host = u; }
+            const li = document.createElement('li');
+            const hostSpan = document.createElement('span');
+            hostSpan.className = 'mat-url-host';
+            hostSpan.textContent = host;
+            const a = document.createElement('a');
+            a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer';
+            // URL 过长截断显示，但仍可点击打开完整链接
+            a.textContent = u.length > 70 ? u.slice(0, 67) + '…' : u;
+            a.title = u;
+            const btn = document.createElement('a');
+            btn.className = 'btn btn-outline btn-sm';
+            btn.href = u; btn.target = '_blank'; btn.rel = 'noopener noreferrer';
+            btn.textContent = '↗ 在浏览器打开';
+            li.appendChild(hostSpan); li.appendChild(a); li.appendChild(btn);
+            el.matUrlList.appendChild(li);
+          });
+        }
+        if (el.matManualHint) {
+          el.matManualHint.textContent = filename
+            ? `下载后无需改名，文件名应为 ${filename}（约 ${sizeMB} MB）。上传按钮选这个文件即可。`
+            : '';
+        }
+        el.matManual.hidden = false;
+      })
+      .catch(() => { /* 拉 URL 列表失败不阻塞主流程 */ });
+  };
+
+  // 用户上传本地已下载的模型（覆盖默认下载路径）
+  if (el.matUploadFile) {
+    el.matUploadFile.addEventListener('change', () => {
+      const file = el.matUploadFile.files && el.matUploadFile.files[0];
+      if (!file) return;
+      if (el.matUploadStatus) el.matUploadStatus.textContent = '上传中…';
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('payload', JSON.stringify({ model: el.matModel && el.matModel.value }));
+      fetch('/api/matting/upload-model', { method: 'POST', body: fd })
+        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
+        .then(d => {
+          if (el.matUploadStatus) el.matUploadStatus.textContent = `✅ 上传成功（${d.size_mb} MB），已可直接抠图`;
+          if (el.matManual) el.matManual.hidden = true;
+          // 重新拉模型列表刷新「已就绪」标记
+          fetch('/api/matting/models').then(r => r.json()).then(list => matLoadModels()).catch(() => {});
+          // 自动跑一次抠图，省一次手动点
+          if (file) {
+            setTimeout(() => el.matBtn && el.matBtn.click(), 300);
+          }
+        })
+        .catch(e => {
+          if (el.matUploadStatus) el.matUploadStatus.textContent = '上传失败：' + (e && e.detail ? e.detail : '未知错误');
+        });
+    });
+  }
+
   const matPreview = (file) => {
     if (!file) return;
     const url = URL.createObjectURL(file);
@@ -2911,8 +2987,15 @@
           matJobId = null;
         } else if (d.status === 'failed') {
           if (matTimer) { clearInterval(matTimer); matTimer = null; }
-          const dlErr = (d.download && d.download.error) ? `（模型下载失败：${d.download.error}）` : '';
-          el.matStatus.textContent = '抠图失败：' + (d.error || '未知错误') + dlErr;
+          const isDlFail = /下载失败|download|timed out|urlopen/i.test(d.error || '');
+          if (isDlFail) {
+            // 模型下载类失败：显示手动下载 + 上传区块，让用户彻底脱离命令行
+            el.matStatus.textContent = '❌ 模型自动下载失败，请用下方手动下载';
+            matShowManual();
+          } else {
+            // 业务错误（如推理失败）：不要弹出手动下载
+            el.matStatus.textContent = '抠图失败：' + (d.error || '未知错误');
+          }
           el.matBtn.disabled = false;
           matBusy = false;
           matJobId = null;

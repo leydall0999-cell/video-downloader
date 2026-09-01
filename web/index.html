@@ -882,6 +882,16 @@
             <button type="button" class="btn btn-primary" id="matBtn">开始抠图</button>
             <span class="convert-status" id="matStatus"></span>
           </div>
+          <div class="mat-manual" id="matManual" hidden>
+            <div class="mat-manual-head">自动下载失败（你的网络下不到 GitHub release）。在浏览器打开下方任一链接手动下载，再从下面上传即可：</div>
+            <ul class="mat-url-list" id="matUrlList"></ul>
+            <div class="mat-upload-row">
+              <label class="btn btn-outline btn-sm" for="matUploadFile">📁 上传已下载的模型</label>
+              <input type="file" id="matUploadFile" accept=".onnx" hidden />
+              <span class="convert-status" id="matUploadStatus"></span>
+            </div>
+            <div class="mat-manual-hint" id="matManualHint"></div>
+          </div>
           <div class="dw-result" id="matResult" hidden>
             <div class="dw-compare">
               <div><span class="dw-cap">原图</span><img id="matOrig" alt="原图" /></div>

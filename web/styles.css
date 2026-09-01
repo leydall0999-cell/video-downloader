@@ -988,6 +988,39 @@ img { max-width: 100%; display: block; }
   background-position: 0 0, 8px 8px;
 }
 .dw-compare img.mat-canvas { background-color: #fff; }
+
+/* 一键抠图：自动下载失败时的「手动下载 + 上传」兜底区 */
+.mat-manual {
+  margin-top: .6rem; padding: .8rem; border: 1px dashed var(--line);
+  border-radius: var(--radius-md); background: var(--color-background-secondary);
+}
+.mat-manual[hidden] { display: none; }
+.mat-manual-head {
+  font-size: .85rem; color: var(--text); margin-bottom: .6rem; line-height: 1.5;
+}
+.mat-url-list {
+  list-style: none; padding: 0; margin: 0 0 .6rem;
+  display: flex; flex-direction: column; gap: .35rem; font-size: .82rem;
+}
+.mat-url-list li {
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+}
+.mat-url-list .mat-url-host {
+  font-weight: 600; color: var(--brand-strong); min-width: 8em;
+}
+.mat-url-list a {
+  color: var(--text-secondary); word-break: break-all; flex: 1; min-width: 0;
+  text-decoration: none; border-bottom: 1px dotted var(--text-secondary);
+}
+.mat-url-list a:hover { color: var(--brand); border-bottom-color: var(--brand); }
+.mat-url-list .btn-sm { padding: .15rem .55rem; font-size: .75rem; }
+.mat-upload-row {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  padding-top: .5rem; border-top: 1px solid var(--line);
+}
+.mat-manual-hint {
+  margin-top: .4rem; font-size: .75rem; color: var(--text-tertiary);
+}
 /* 视频合成画布底部角标：避开常见水印位（左上/右上），
    配合 JS「首次框选即隐藏」保证选择全程画面无视觉遮挡。 */
 .dw-cap-overlay {
