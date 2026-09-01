@@ -6264,6 +6264,15 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   // ---- 预览与裁剪逻辑 ----
+  const resetComPreviewElement = () => {
+    // 清空 video 元素内部状态（避免残留已 revoke 的旧 blob src 触发 race 性 onerror）
+    try {
+      el.comPreview.pause();
+      el.comPreview.removeAttribute('src');
+      el.comPreview.load();
+    } catch (e) { /* swallow */ }
+  };
+
   const releaseComPreview = () => {
     if (comPreviewUrl && comPreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(comPreviewUrl);
@@ -6274,6 +6283,7 @@ el.dwVidPlayer.removeAttribute('src');
   const setupComPreview = (url, title) => {
     if (!url) {
       el.comTrimCard.hidden = true;
+      resetComPreviewElement();
       releaseComPreview();
       comTrimStart = 0;
       comTrimEnd = 0;
@@ -6281,10 +6291,11 @@ el.dwVidPlayer.removeAttribute('src');
       if (el.comTrimTitle) { el.comTrimTitle.hidden = true; el.comTrimTitle.textContent = ''; }
       return;
     }
+    // 切到新 src 之前先把 video 元素内部状态清零，避免 onerror race 触发导致首次没显示
+    resetComPreviewElement();
     releaseComPreview();
     comPreviewUrl = url;
     el.comTrimCard.hidden = false;
-    el.comPreview.src = url;
     if (el.comTrimTitle) {
       if (title) {
         el.comTrimTitle.textContent = title;
@@ -6295,7 +6306,6 @@ el.dwVidPlayer.removeAttribute('src');
         el.comTrimTitle.textContent = '';
       }
     }
-    el.comPreview.load();
     el.comPreview.onloadedmetadata = () => {
       comPreviewDuration = el.comPreview.duration || 0;
       comPreviewW = el.comPreview.videoWidth || 0;
@@ -6304,7 +6314,16 @@ el.dwVidPlayer.removeAttribute('src');
       el.comTrimEndRange.max = String(comPreviewDuration || 100);
       resetTrim();
     };
-    el.comPreview.onerror = () => { el.comTrimCard.hidden = true; };
+    // 加载失败不再硬藏卡片 —— 让用户能继续操作，错误提示放在状态栏
+    el.comPreview.onerror = () => {
+      console.warn('[comPreview] load failed for url=', url);
+      if (el.comFileStatus) {
+        el.comFileStatus.hidden = false;
+        el.comFileStatus.textContent = '视频加载失败，请重新选择';
+      }
+    };
+    el.comPreview.src = url;
+    el.comPreview.load();
   };
 
   const resetTrim = () => {
