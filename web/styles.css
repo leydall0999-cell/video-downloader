@@ -2684,13 +2684,17 @@ img { max-width: 100%; display: block; }
 .dw-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.1rem; border-top: 1px solid var(--border, #e7e9f1); }
 .dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
 
-/* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） ===== */
+/* ===== 视频解说三列工作区（剪映式骨架：左成片历史 / 中素材预览 / 右参数 / 底操作条） =====
+   默认 2 列（middle + right）。左列仅当 has-left class（loadCommentary 有历史时设置）才插入 240px。 */
 #commentaryView .com-workspace {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) minmax(620px, 720px);
+  grid-template-columns: minmax(0, 1fr) minmax(620px, 720px);
   gap: 12px;
   align-items: start;
   margin-top: .6rem;
+}
+#commentaryView .com-workspace.has-left {
+  grid-template-columns: 240px minmax(0, 1fr) minmax(620px, 720px);
 }
 .com-col { min-width: 0; }
 /* 左栏：成片历史（独立滚动；历史列表无下拉浮层，可安全 overflow） */

@@ -6201,6 +6201,11 @@ el.dwVidPlayer.removeAttribute('src');
     el.comResults.hidden = items.length === 0;
     el.comHistory.hidden = items.length === 0;
     el.comColLeft.hidden = items.length === 0;
+    // 三列布局 vs 两列布局：有历史时插入 240px 左栏；否则 com-col com-col-left
+    // 通过 CSS hidden 不释放 grid track（max-content 仍算 padding/border，48px 残留），
+    // 用 .has-left class 切换 grid-template-columns，从根上躲开空白占位条
+    const ws = document.querySelector('.com-workspace');
+    if (ws) ws.classList.toggle('has-left', items.length > 0);
 
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
