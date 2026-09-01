@@ -2868,8 +2868,12 @@
           const o = document.createElement('option');
           o.value = m.name;
           const tag = m.recommended ? ' · 推荐' : '';
+          // ⚠️ 非商用模型显式打标：CC BY-NC 4.0 不允许作商业分发，
+          // 仅提供给做个人/非商用研究的用户显式选择，且不作为默认。
+          const nc = m.commercial === 'non-commercial' ? ' · 【⚠️ 仅非商用】' : '';
           // 已下载的标注「已就绪」，未下载的标注体积，帮用户判断要不要等
-          o.textContent = m.downloaded ? `${m.desc} · 已就绪${tag}` : `${m.desc} · 需下载 ${m.size_mb}MB${tag}`;
+          o.textContent = m.downloaded ? `${m.desc} · 已就绪${tag}${nc}` : `${m.desc} · 需下载 ${m.size_mb}MB${tag}${nc}`;
+          if (m.commercial === 'non-commercial') o.style.color = '#d97706';
           el.matModel.appendChild(o);
         });
         el.matModel.value = d.default;

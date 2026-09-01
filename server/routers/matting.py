@@ -3,8 +3,8 @@
 照 routers/dewatermark.py 的图片链路：上传图片 → 异步 job（executor 提交）
 → 轮询状态 → 下载透明 PNG。独立 job 存储，不与去水印混用。
 
-模型权重首次使用时才下载（默认 213MB），状态接口会带上下载进度，
-前端据此显示「首次下载模型 xx%」，避免长任务看起来像卡死。
+模型权重首次使用时才下载（默认 birefnet-general · 927MB，MIT 可商用），
+状态接口会带上下载进度，前端据此显示「首次下载模型 xx%」，避免长任务看起来像卡死。
 
 依赖（onnxruntime/numpy/Pillow，App 内已打包）缺失时返回 503，优雅降级。
 """
@@ -98,8 +98,9 @@ def create_matting_image(
 
     box（可选）：JSON 字符串 "[x, y, w, h]"，归一化 0~1，表示用户手动框选的
     主体区域。给定时只抠框内主体（照片里有多个物体时可指定抠哪一个）。
-    model（可选）：模型名（rmbg-2.0 / birefnet-general-lite / birefnet-general）。
-    给定时用指定模型，否则用全局默认（当前 rmbg-2.0）。
+    model（可选）：模型名（birefnet-general / birefnet-general-lite / rmbg-2.0）。
+    给定时用指定模型，否则用全局默认（当前 birefnet-general，MIT 可商用）。
+    rmbg-2.0 为 CC BY-NC 4.0 仅非商用，仅限个人 / 非商业场景显式选用。
     """
     if not mat.available():
         raise app.HTTPException(status_code=503, detail="一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")

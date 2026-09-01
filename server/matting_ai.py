@@ -25,14 +25,18 @@
         让光晕以约 0.4~0.6 alpha 保留在结果里。
 
 模型：
-    默认 rmbg-2.0（**FP32 约 977 MB**，BRIA 训练，专为电商/图形/文字/Logo 优化，
-    对海报、文字、装饰元素的边界判定远优于 BiRefNet-general，多抠少扣明显减少）。
-    备选 birefnet-general-lite（213 MB）/ birefnet-general（927 MB，质量最高）。
+    默认 birefnet-general（**MIT 许可，可商用**，927 MB，质量最高）。
+    备选 birefnet-general-lite（213 MB，MIT）。
+    可选 rmbg-2.0（**CC BY-NC 4.0，仅限非商业用途**，977 MB，图形/文字边界最佳）；
+    因授权限制**不做默认**，仅作「非商用」场景的显式 opt-in。
     首次使用时惰性下载到 ~/.vdl_models（或 VDL_MODELS_DIR），进度可轮询。
 
-License 注意：
-    BiRefNet 权重多为「非商业用途」授权，个人自用 / 内部分发一般可接受；
-    若需对外商业分发，请改用 MIT 友好的模型。前端说明区已告知用户。
+License 注意（重要）：
+    - **BiRefNet（birefnet-general / -lite）= MIT 许可**：可商用 / 修改 / 再分发，
+      只需保留版权声明 → 作为产品默认引擎安全。
+    - **RMBG-2.0（rmbg-2.0）= CC BY-NC 4.0**：权重仅限非商业用途开放，
+      商业用途须与 BRIA 签商业授权协议。**绝不可作为商业分发产品的默认模型**；
+      前端下拉已标注「⚠️ 仅非商用」，仅提供给做个人 / 非商用研究的用户显式选择。
 """
 from __future__ import annotations
 
@@ -57,7 +61,11 @@ MODELS: dict[str, dict] = {
         "size_mb": 977,
         "input_size": (1024, 1024),
         "norm": "255",  # RMBG-2.0 标准前处理：÷255 后 ImageNet 归一化
-        "desc": "RMBG-2.0 · 977MB · 图形/文字最佳（推荐）",
+        # ⚠️ 授权：CC BY-NC 4.0，仅限非商业用途。commercial="non-commercial"
+        # 让前端明确打标，且本模型不作为默认引擎。
+        "license": "CC BY-NC 4.0",
+        "commercial": "non-commercial",
+        "desc": "RMBG-2.0 · 977MB · 图形/文字最佳（⚠️ 仅非商用）",
         # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
@@ -73,7 +81,10 @@ MODELS: dict[str, dict] = {
         "input_size": (1024, 1024),
         "norm": "max",  # BiRefNet（rembg 风格）：÷全图最大像素值后 ImageNet 归一化
         "md5": "4fab47adc4ff364be1713e97b7e66334",
-        "desc": "BiRefNet 轻量版 · 213MB",
+        # MIT 许可，可商用
+        "license": "MIT",
+        "commercial": "yes",
+        "desc": "BiRefNet 轻量版 · 213MB · MIT 可商用",
         # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
@@ -94,7 +105,10 @@ MODELS: dict[str, dict] = {
         "input_size": (1024, 1024),
         "norm": "max",
         "md5": "7a35a0141cbbc80de11d9c9a28f52697",
-        "desc": "BiRefNet 完整版 · 927MB · 质量最高",
+        # MIT 许可，可商用 → 作为默认引擎
+        "license": "MIT",
+        "commercial": "yes",
+        "desc": "BiRefNet 完整版 · 927MB · 质量最高（推荐·MIT可商用）",
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-epoch_244.onnx",
@@ -110,7 +124,7 @@ MODELS: dict[str, dict] = {
     },
 }
 
-DEFAULT_MODEL = "rmbg-2.0"
+DEFAULT_MODEL = "birefnet-general"
 
 # 归一化常量（ImageNet，与 rembg 一致）
 _MEAN = (0.485, 0.456, 0.406)
@@ -166,6 +180,8 @@ def list_models() -> list[dict]:
                 "downloaded": _valid_cached(name),
                 "active": name == _MODEL_NAME,
                 "recommended": name == DEFAULT_MODEL,
+                "license": meta.get("license", ""),
+                "commercial": meta.get("commercial", ""),
             }
         )
     return out
