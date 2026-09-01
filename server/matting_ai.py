@@ -401,11 +401,14 @@ def predict_mask(img, model: str | None = None):
     - **输出 sigmoid 自动探测**：BiRefNet 的 ONNX 输出是原始 logits（需 sigmoid）；
       RMBG-2.0 多数导出已含 sigmoid（输出直接是 [0,1]）。用「最大值 > 1」判定：
       是 logits 就补 sigmoid，否则直接用——同一套后处理兼容两种模型，不挑导出格式。
-    - **软阈值替代 min-max 归一化**：原 rembg 流程把 sigmoid 概率硬拉伸到 [0,1]，
-      会把"小白光晕/浅描边/3D 阴影"等软 alpha 区间（softmax 0.2~0.5）压缩到接近 0，
-      抠图结果就是"光晕没了、只剩硬切的字符"。
-      改为软阈值 [0.05, 0.5]：之外直接 0/1，之内保留原始梯度，
-      光晕以约 0.4~0.6 alpha 出现在结果里（贴纸风抠图的视觉预期）。
+    - **软阈值替代 min-max 归一化** + **非线性锐化**：原 rembg 流程把 sigmoid 概率
+      硬拉伸到 [0,1]，会把"小白光晕/浅描边/3D 阴影"等软 alpha 区间（softmax 0.2~0.5）
+      压缩到接近 0，抠图结果就是"光晕没了、只剩硬切的字符"——
+      改为软阈值 [0.05, 0.5] 后问题变"反向"：远处黑色 slogan 这种 0.1~0.35 置信
+      区被映射成 30~70% 半透明，叠加到原图就是"黑色没抠掉"。
+      现升级阈值到 [0.20, 0.75]（更陡）+ mask 经 power(1.8) 非线性锐化
+      （中间区加速跌落到 0）+ < 0.04 强制透——主体高置信区保留满 alpha
+      软光晕，过渡区快速衰减，远端小字/小斑块基本全归 0。
     - **轻 GaussianBlur (r=0.8)**：alpha 边缘羽化，避免硬阶梯。
     - **LANCZOS 缩回原图尺寸**：保持平滑过渡。
     """
@@ -429,11 +432,18 @@ def predict_mask(img, model: str | None = None):
         pred = raw
     pred = np.clip(pred, 0.0, 1.0)
 
-    # 软阈值替换 min-max：保留中间置信为软 alpha
-    threshold_lo, threshold_hi = 0.05, 0.5
+    # 软阈值 + 非线性锐化（v2）：
+    # 阈值改陡 [0.20, 0.75]：主体高置信 (>0.75) 满 alpha；远端小字/小斑块（<0.20）
+    # 直接透；中间区按原始比例给软 alpha（保留光晕/描边/阴影）。
+    # 非线性锐化 power(1.8)：让 mask 中段（≈0.3~0.5 概率）加速跌落到 0——
+    # 解决「远处黑色 slogan 这种 0.10~0.35 置信区被映射成 30~70% 半透明」
+    # 这类「远端半透碎块没抠掉」的问题。
+    # mask < 0.04 强制 0：消除微小孤立 alpha 噪点（远离主体的细小颗粒、
+    # 噪声纹理，跟主图风格"贴纸抠图"毫不相关的细节）。
+    threshold_lo, threshold_hi = 0.20, 0.75
     span = threshold_hi - threshold_lo
     if span > 1e-8:
-        mask = np.where(
+        mask_linear = np.where(
             pred >= threshold_hi,
             1.0,
             np.where(
@@ -443,7 +453,11 @@ def predict_mask(img, model: str | None = None):
             ),
         )
     else:
-        mask = pred  # 退化：原 sigmoid
+        mask_linear = pred  # 退化：原 sigmoid
+    # 非线性锐化：中间区加速跌落
+    mask = np.power(np.clip(mask_linear, 0.0, 1.0), 1.8)
+    # 抗噪：极低概率噪点强制透
+    mask = np.where(mask < 0.04, 0.0, mask)
 
     # 轻 GaussianBlur：mask 边缘羽化（让光晕边缘更自然）
     mask_arr = np.clip(mask * 255.0, 0, 255).astype("uint8")
