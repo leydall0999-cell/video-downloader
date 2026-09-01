@@ -2003,8 +2003,8 @@ img { max-width: 100%; display: block; }
 }
 .com-history-head {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
-  margin-bottom: .85rem; padding-bottom: .65rem;
-  border-bottom: 1px solid var(--line);
+  margin-top: .85rem; padding-top: .65rem;
+  border-top: 1px solid var(--line);
   flex-wrap: wrap;
 }
 .com-history-title-wrap {
