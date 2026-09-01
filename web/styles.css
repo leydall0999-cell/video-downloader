@@ -2786,11 +2786,59 @@ img { max-width: 100%; display: block; }
 /* 字幕样式行：单行多控件；颜色 picker 自动行内 */
 .com-sub-style-row { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: center; }
 .com-sub-pos-cell .com-retain-hint { display: block; margin-top: .35rem; }
+/* 字幕整卡：跨 3 行单卡，3 项以分割线串成整体 */
+.com-sub-card {
+  grid-column: 2;
+  grid-row: span 3 / 4;
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  padding: 0; overflow: hidden;
+  display: flex; flex-direction: column; min-width: 0;
+}
+.com-sub-card > .com-sub-row {
+  padding: .55rem .65rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+}
+.com-sub-card > .com-sub-row:last-child { border-bottom: none; }
+
+/* 配音与音量整卡：独立整体块（4 项以分割线串成一片） */
+.com-vol-card {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  margin-top: .55rem;
+  overflow: hidden;
+}
+.com-vol-card-head {
+  padding: .55rem .65rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+  display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+}
+.com-vol-card-head .com-vol-label { font-size: .9rem; }
+.com-vol-card-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+}
+.com-vol-card-pair > .com-vol-cell:not(:last-child) {
+  border-right: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+}
+.com-vol-card .com-vol-cell {
+  padding: .55rem .65rem;
+  display: flex; flex-direction: column; gap: .35rem;
+}
+.com-vol-card .com-vol-cell-full { padding: .55rem .65rem; }
+
 /* 窄屏回退：网格单列、第 1 行换行 */
 @media (max-width: 720px) {
   .com-row-1 { flex-wrap: wrap; }
   .com-row-1 > .com-cell-trigger { flex: 1 1 calc(50% - .45rem); }
   .com-grid { grid-template-columns: 1fr; }
+  .com-sub-card { grid-column: 1; grid-row: auto; }
+  .com-vol-card-pair { grid-template-columns: 1fr; }
+  .com-vol-card-pair > .com-vol-cell:not(:last-child) { border-right: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line)); }
 }
 /* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
 .com-bottom {
