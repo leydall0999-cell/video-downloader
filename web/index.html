@@ -882,7 +882,14 @@
           <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上拖出一个框，框住你想抠的主体。照片里有多个人/物时用它指定抠哪一个；不框则自动抠全图主体。</span>
           <div class="dw-preview-wrap" id="matPreviewWrap">
             <img id="matImgPreview" alt="预览" />
-            <svg id="matBoxSvg" class="mat-box-svg" xmlns="http://www.w3.org/2000/svg" hidden></svg>
+            <div id="matBoxSvg" class="mat-box-svg" hidden>
+              <div id="matBoxRect" class="mat-box-rect">
+                <span class="mat-h mat-h-nw"></span>
+                <span class="mat-h mat-h-ne"></span>
+                <span class="mat-h mat-h-sw"></span>
+                <span class="mat-h mat-h-se"></span>
+              </div>
+            </div>
           </div>
           <div class="mat-box-actions" id="matBoxActions" hidden>
             <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除框选</button>

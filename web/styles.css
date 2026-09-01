@@ -990,20 +990,18 @@ img { max-width: 100%; display: block; }
 .dw-compare img.mat-canvas { background-color: #fff; }
 
 /* 一键抠图：手动框选主体（可选）。开启后在预览图上拖一个框，
-   后端只把框内区域送进模型——照片里有多个物体时可指定抠哪一个。 */
+   后端只把框内区域送进模型——照片里有多个物体时可指定抠哪一个。
+   用 div 而非 svg 画框：WKWebView 对 inline <svg> 的 viewBox / non-scaling-stroke /
+   width=0 fallback 有一堆坑（选框塌成 0 高、整图变蓝），div 边框 + 百分比定位
+   在所有 WebView 里都 100% 可靠。 */
 .mat-box-toggle { margin-top: .2rem; }
 .mat-box-svg {
-  /* 必须 display:block —— .dw-preview-wrap 是 inline-block + line-height:0，
-     内联 SVG 在这种父容器下会被压成 0 高，导致选框看不见。 */
-  display: block;
-  position: absolute; left: 0; top: 0;
-  /* 用 JS 写死 style.width/height（按图片实际像素），不靠 100% ——
-     万一 wrap 比图大，SVG 也不会扩展到 wrap 范围污染视觉。 */
+  /* 绝对铺满预览区（与图片同尺寸），作为选框的承载层；本身不接收事件 */
+  position: absolute; left: 0; top: 0; right: 0; bottom: 0;
   pointer-events: none; z-index: 2;
   overflow: visible;
 }
 .mat-box-svg[hidden] { display: none; }
-.mat-box-svg.is-drawing { pointer-events: none; }
 /* 可框选时给预览图一个提示光标。同时压住浏览器对 img 的「拖选整图」默认行为——
    否则在 macOS Safari/WKWebView 上，鼠标拖动会触发「拉蓝框选中图片」的系统级高亮，
    跟我们的选框视觉叠加，整张图看起来就是一片蓝、看不到自己的选框。 */
@@ -1018,27 +1016,29 @@ img { max-width: 100%; display: block; }
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .4rem;
 }
 .mat-box-actions[hidden] { display: none; }
-/* 框体三层：薄填充（背景感）+ 实色描边（边界感）+ 四角把手（视觉锚点）。
-   即使在浅色图片上，配合高对比度的实色描边也完全不会"消失"。
-   viewBox 恒为 0 0 1 1，所有坐标都是归一化的 0~1，无需 viewBox-像素换算。 */
-.mat-box-fill {
-  fill: rgba(99, 102, 241, .12);
-  stroke: none;
+/* 选框本体：用百分比定位（相对于铺满的承载层 = 图片），实色描边 + 薄填充 + 内白晕。
+   即使浅色图也一眼可见；公共变量 --brand 缺失时回退靛蓝 #6366f1。 */
+.mat-box-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2.5px solid var(--brand, #6366f1);
+  background: rgba(99, 102, 241, .14);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .65) inset;
 }
-.mat-box-stroke {
-  fill: none;
-  stroke: var(--brand, #6366f1);
-  stroke-width: 0.006;       /* 归一化坐标：约 0.6% 宽，跨分辨率都稳定 */
-  vector-effect: non-scaling-stroke;  /* 渲染时按 SVG 实际像素，不被 viewBox 压扁 */
-  paint-order: stroke fill;
-  filter: drop-shadow(0 0 2px rgba(255, 255, 255, .85));  /* 描边外白晕，浅色图也清晰 */
+.mat-box-rect[hidden] { display: none; }
+/* 四角把手：小白块带靛蓝边，作视觉锚点，怎么也不会"消失" */
+.mat-h {
+  position: absolute;
+  width: 11px; height: 11px;
+  background: #fff;
+  border: 2px solid var(--brand, #6366f1);
+  box-sizing: border-box;
+  border-radius: 1px;
 }
-.mat-box-handle {
-  fill: #fff;
-  stroke: var(--brand, #6366f1);
-  stroke-width: 0.0035;
-  vector-effect: non-scaling-stroke;
-}
+.mat-h-nw { left: -6px; top: -6px; }
+.mat-h-ne { right: -6px; top: -6px; }
+.mat-h-sw { left: -6px; bottom: -6px; }
+.mat-h-se { right: -6px; bottom: -6px; }
 .mat-manual {
   margin-top: .6rem; padding: .8rem; border: 1px dashed var(--line);
   border-radius: var(--radius-md); background: var(--color-background-secondary);
