@@ -8,12 +8,21 @@
     BiRefNet 的前/后处理本身不到 40 行，这里直接用 App 已打包的
     onnxruntime + numpy + Pillow 实现，效果等价、依赖零增长。
 
-算法（对齐 rembg 2.x 的 BiRefNetSessionGeneral，保证输出一致）：
+算法（基于 rembg 2.x 的 BiRefNetSessionGeneral，但修补了 alpha 质量）：
     前处理 RGB → LANCZOS 缩到 1024×1024 → 除以全图最大像素值 →
     按 ImageNet mean/std 归一化 → HWC→CHW → 扩 batch 维 → float32
     推理   ort.InferenceSession.run(None, {input_name: tensor})
-    后处理 取 out[0][:, 0, :, :] → sigmoid → min-max 拉伸到 [0,1] →
-    ×255 转 uint8 灰度 → LANCZOS 放大回原图尺寸 → 作为 alpha 通道合成 RGBA
+    后处理 取 out[0][:, 0, :, :] → sigmoid → **软阈值 [0.05, 0.5] 替代 min-max**
+              → 中间置信保留为软 alpha（光晕/浅描边/3D 阴影关键）→
+              轻 GaussianBlur (r=0.8) 羽化边缘 → ×255 uint8 → LANCZOS 放大
+              回原图尺寸 → 作为 alpha 通道合成 RGBA
+
+    为何弃用 min-max 归一化：
+        原 rembg 把整个 sigmoid 概率图硬拉伸到 [0,1]（(x-min)/(max-min)）。
+        对于贴纸/标题风格图像，模型对"白色光晕"的置信大约在 0.2~0.5，
+        min-max 后会被压到 ≈ 0.1，肉眼几乎不可见——表现为"光晕丢了"。
+        改为软阈值：[lo, hi] 内按原始比例映射、之外直接 0/1，
+        让光晕以约 0.4~0.6 alpha 保留在结果里。
 
 模型：
     默认 birefnet-general-lite（213 MB，质量接近完整版、内存/速度友好）；
@@ -335,9 +344,21 @@ def _sigmoid(x):
 
 
 def predict_mask(img):
-    """对 PIL 图像推理，返回原图尺寸的 L 模式 alpha 蒙版。"""
+    """对 PIL 图像推理，返回原图尺寸的 L 模式 alpha 蒙版。
+
+    关键改进：
+    - **软阈值替代 min-max 归一化**：原 rembg 流程把 sigmoid 概率硬拉伸到 [0,1]，
+      会把"小白光晕/浅描边/3D 阴影"等软 alpha 区间（softmax 0.2~0.5）压缩到接近 0，
+      抠图结果就是"光晕没了、只剩硬切的字符"。
+      改为软阈值 [0.05, 0.5]：之外直接 0/1，之内保留原始梯度，
+      光晕以约 0.4~0.6 alpha 出现在结果里（贴纸风抠图的视觉预期）。
+    - **轻 GaussianBlur (r=0.8)**：alpha 边缘羽化，避免硬阶梯。
+    - **LANCZOS 缩回原图尺寸**：保持平滑过渡。
+
+    边界情况：单色图（hi<lo）→ 退化回原 sigmoid 输出，避免除零。
+    """
     import numpy as np
-    from PIL import Image
+    from PIL import Image, ImageFilter
 
     sess = _get_session()
     meta = MODELS[_MODEL_NAME]
@@ -347,16 +368,33 @@ def predict_mask(img):
     outs = sess.run(None, {input_name: feed})
 
     pred = _sigmoid(outs[0][:, 0, :, :])
-    ma = float(np.max(pred))
-    mi = float(np.min(pred))
-    if ma - mi > 1e-8:
-        pred = (pred - mi) / (ma - mi)
     pred = np.squeeze(pred)
 
-    mask = Image.fromarray((np.clip(pred, 0.0, 1.0) * 255).astype("uint8"), mode="L")
-    if mask.size != img.size:
-        mask = mask.resize(img.size, _lanczos())
-    return mask
+    # 软阈值替换 min-max：保留中间置信为软 alpha
+    threshold_lo, threshold_hi = 0.05, 0.5
+    span = threshold_hi - threshold_lo
+    if span > 1e-8:
+        mask = np.where(
+            pred >= threshold_hi,
+            1.0,
+            np.where(
+                pred <= threshold_lo,
+                0.0,
+                (pred - threshold_lo) / span,
+            ),
+        )
+    else:
+        mask = pred  # 退化：原 sigmoid
+
+    # 轻 GaussianBlur：mask 边缘羽化（让光晕边缘更自然）
+    mask_arr = np.clip(mask * 255.0, 0, 255).astype("uint8")
+    mask_img = Image.fromarray(mask_arr, mode="L")
+    mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=0.8))
+
+    if mask_img.size != img.size:
+        mask_img = mask_img.resize(img.size, _lanczos())
+
+    return mask_img
 
 
 def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None) -> None:
@@ -386,12 +424,35 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             mask = predict_mask(rgb)
         else:
             x0, y0, x1, y1 = box_px
-            crop = rgb.crop((x0, y0, x1, y1))
+            bw, bh = x1 - x0, y1 - y0
+            # **推理上下文外扩 10%**：用户框选通常只罩住主体（如字符本体），
+            # 但软元素（白色光晕 / 3D 阴影 / 描边）紧贴主体外侧。
+            # 推理时多看 10% 上下文，模型就能把这些软元素纳入 alpha，
+            # 输出仍严格按用户原框裁切——视觉效果是"框内 + 自动扩展的软边缘"。
+            # 不外扩会出现"光晕/阴影丢失"问题（用户最常见的反馈）。
+            pad_w = max(int(bw * 0.10), 4)
+            pad_h = max(int(bh * 0.10), 4)
+            x0p = max(0, x0 - pad_w)
+            y0p = max(0, y0 - pad_h)
+            x1p = min(W, x1 + pad_w)
+            y1p = min(H, y1 + pad_h)
+            crop = rgb.crop((x0p, y0p, x1p, y1p))
             crop_mask = predict_mask(crop)
-            # 把裁剪区域的蒙版贴回原图尺寸，框外填 0（透明）
-            full = Image.new("L", (W, H), 0)
-            full.paste(crop_mask, (x0, y0))
-            mask = full
+            # 输出 mask 严格按用户原框；外扩区是被模型"看到"但被舍弃的上下文。
+            # 取交集：把外扩裁切的 mask 中属于原框的部分贴回原图坐标。
+            import numpy as _np
+            out_arr = _np.zeros((H, W), dtype=_np.uint8)
+            crop_w_p, crop_h_p = crop_mask.size
+            # 用户原框在外扩 crop 内的位置（裁切不超出 crop 范围）
+            sx0 = max(0, x0 - x0p)
+            sy0 = max(0, y0 - y0p)
+            sx1 = min(crop_w_p, x1 - x0p)
+            sy1 = min(crop_h_p, y1 - y0p)
+            if sx1 > sx0 and sy1 > sy0:
+                region = _np.array(crop_mask, dtype=_np.uint8)[sy0:sy1, sx0:sx1]
+                paste_w, paste_h = sx1 - sx0, sy1 - sy0
+                out_arr[y0:y0 + paste_h, x0:x0 + paste_w] = region
+            mask = Image.fromarray(out_arr, mode="L")
 
         rgba = rgb.convert("RGBA")
         rgba.putalpha(mask)
