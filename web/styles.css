@@ -997,24 +997,46 @@ img { max-width: 100%; display: block; }
      内联 SVG 在这种父容器下会被压成 0 高，导致选框看不见。 */
   display: block;
   position: absolute; left: 0; top: 0;
-  width: 100%; height: 100%;
+  /* 用 JS 写死 style.width/height（按图片实际像素），不靠 100% ——
+     万一 wrap 比图大，SVG 也不会扩展到 wrap 范围污染视觉。 */
   pointer-events: none; z-index: 2;
+  overflow: visible;
 }
 .mat-box-svg[hidden] { display: none; }
 .mat-box-svg.is-drawing { pointer-events: none; }
-/* 可框选时给预览图一个提示光标 */
-.dw-preview-wrap.mat-boxable img { cursor: crosshair; }
+/* 可框选时给预览图一个提示光标。同时压住浏览器对 img 的「拖选整图」默认行为——
+   否则在 macOS Safari/WKWebView 上，鼠标拖动会触发「拉蓝框选中图片」的系统级高亮，
+   跟我们的选框视觉叠加，整张图看起来就是一片蓝、看不到自己的选框。 */
+.dw-preview-wrap.mat-boxable img {
+  cursor: crosshair;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
 .dw-preview-wrap.mat-boxable { touch-action: none; }
 .mat-box-actions {
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .4rem;
 }
 .mat-box-actions[hidden] { display: none; }
-/* 框体：虚线 + 半透明填充，跟去水印的选区视觉保持一致。
-   描边稍粗 + 填充更明显，确保在浅色图片上不会被忽略。 */
-.mat-box-rect {
-  fill: rgba(99, 102, 241, .18);
+/* 框体三层：薄填充（背景感）+ 实色描边（边界感）+ 四角把手（视觉锚点）。
+   即使在浅色图片上，配合高对比度的实色描边也完全不会"消失"。
+   viewBox 恒为 0 0 1 1，所有坐标都是归一化的 0~1，无需 viewBox-像素换算。 */
+.mat-box-fill {
+  fill: rgba(99, 102, 241, .12);
+  stroke: none;
+}
+.mat-box-stroke {
+  fill: none;
   stroke: var(--brand, #6366f1);
-  stroke-width: 3; stroke-dasharray: 6 4;
+  stroke-width: 0.006;       /* 归一化坐标：约 0.6% 宽，跨分辨率都稳定 */
+  vector-effect: non-scaling-stroke;  /* 渲染时按 SVG 实际像素，不被 viewBox 压扁 */
+  paint-order: stroke fill;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, .85));  /* 描边外白晕，浅色图也清晰 */
+}
+.mat-box-handle {
+  fill: #fff;
+  stroke: var(--brand, #6366f1);
+  stroke-width: 0.0035;
   vector-effect: non-scaling-stroke;
 }
 .mat-manual {

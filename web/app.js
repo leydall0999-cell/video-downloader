@@ -2976,34 +2976,58 @@
   let matBoxDrawing = false;
   let matBoxStart = null;
 
-  // SVG 用图片的 CSS 显示尺寸作 viewBox，这样矩形坐标就是显示像素，无需换算
+  // SVG viewBox 恒为 0 0 1 1，矩形坐标直接用归一化 0~1——避免任何像素/viewBox 失配。
+  // 重要：跳过 w/h<0.005 的框。WKWebView <rect width="0"> 会 fallback 到 100% viewport，
+  // 整张图片会被 indigo 蒙上一层变蓝（用户看到的「拉选、变蓝、没有选框」就是这个）。
   const matBoxRedraw = () => {
     if (!el.matBoxSvg || !el.matImgPreview) return;
-    // 用 getBoundingClientRect 比 clientWidth/clientHeight 更稳——
-    // 后者在图片未渲染或内联 SVG 父容器有怪癖时可能返 0
+    // 让 SVG 跟随图片显示尺寸——用 image 的实际 box 长宽作 CSS 尺寸基准
     const r = el.matImgPreview.getBoundingClientRect();
-    const w = Math.round(r.width);
-    const h = Math.round(r.height);
-    if (!w || !h) return;
-    // 显式给 SVG 写 width/height 属性（不只靠 CSS 100%），
-    // 配合 display:block + preserveAspectRatio="none"，杜绝内联 SVG
-    // 在 inline-block 父容器下被压成 0 高的浏览器怪癖。
-    el.matBoxSvg.setAttribute('width', String(w));
-    el.matBoxSvg.setAttribute('height', String(h));
-    el.matBoxSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    const dispW = Math.round(r.width), dispH = Math.round(r.height);
+    if (!dispW || !dispH) return;
+    el.matBoxSvg.style.width = `${dispW}px`;
+    el.matBoxSvg.style.height = `${dispH}px`;
+    el.matBoxSvg.setAttribute('viewBox', '0 0 1 1');
     el.matBoxSvg.setAttribute('preserveAspectRatio', 'none');
-    el.matBoxSvg.innerHTML = '';
+    // 关键清空：每次重画先擦掉上次的 rect，否则会和本次叠加
+    while (el.matBoxSvg.firstChild) el.matBoxSvg.removeChild(el.matBoxSvg.firstChild);
     if (!matBox) {
       if (el.matBoxInfo) el.matBoxInfo.textContent = '';
       return;
     }
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('class', 'mat-box-rect');
-    rect.setAttribute('x', String(Math.round(matBox.x * w)));
-    rect.setAttribute('y', String(Math.round(matBox.y * h)));
-    rect.setAttribute('width', String(Math.round(Math.max(0, matBox.w) * w)));
-    rect.setAttribute('height', String(Math.round(Math.max(0, matBox.h) * h)));
-    el.matBoxSvg.appendChild(rect);
+    // 太小（按下还没拖 / 抖动）就不画——避免 width=0/height=0 的兜底陷阱
+    if (matBox.w < 0.005 || matBox.h < 0.005) {
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '拖动鼠标框选主体区域…';
+      return;
+    }
+    const x = matBox.x, y = matBox.y, w = matBox.w, h = matBox.h;
+    // 1) 半透明填充（极薄，确保不掩盖图片内容）
+    const fill = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    fill.setAttribute('class', 'mat-box-fill');
+    fill.setAttribute('x', String(x));
+    fill.setAttribute('y', String(y));
+    fill.setAttribute('width', String(w));
+    fill.setAttribute('height', String(h));
+    el.matBoxSvg.appendChild(fill);
+    // 2) 实色描边（无填充），用 solid 不用 dashed，确保颜色反差强
+    const stroke = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    stroke.setAttribute('class', 'mat-box-stroke');
+    stroke.setAttribute('x', String(x));
+    stroke.setAttribute('y', String(y));
+    stroke.setAttribute('width', String(w));
+    stroke.setAttribute('height', String(h));
+    el.matBoxSvg.appendChild(stroke);
+    // 3) 四角把手——4 个小白边方块，怎么也不会认错框的位置
+    const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]];
+    corners.forEach(([cx, cy]) => {
+      const handle = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      handle.setAttribute('class', 'mat-box-handle');
+      handle.setAttribute('x', String(cx - 0.012));
+      handle.setAttribute('y', String(cy - 0.012));
+      handle.setAttribute('width', '0.024');
+      handle.setAttribute('height', '0.024');
+      el.matBoxSvg.appendChild(handle);
+    });
     if (el.matBoxInfo) {
       el.matBoxInfo.textContent = `已框选 ${Math.round(matBox.w * 100)}% × ${Math.round(matBox.h * 100)}%`;
     }
