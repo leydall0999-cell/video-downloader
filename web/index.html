@@ -875,8 +875,18 @@
           </label>
           <span class="dw-hint">AI 自动识别主体并去除背景，输出带透明通道的 PNG（可直接换背景 / 合成）。
             首次使用需下载模型：轻量版 213MB、完整版 927MB，仅下一次，之后离线可用；下载进度会在按钮旁实时显示。</span>
+          <label class="uc-field uc-check mat-box-toggle">
+            <input type="checkbox" id="matBoxToggle" />
+            <span class="uc-label">手动框选要抠的部分</span>
+          </label>
+          <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上拖出一个框，框住你想抠的主体。照片里有多个人/物时用它指定抠哪一个；不框则自动抠全图主体。</span>
           <div class="dw-preview-wrap" id="matPreviewWrap">
             <img id="matImgPreview" alt="预览" />
+            <svg id="matBoxSvg" class="mat-box-svg" xmlns="http://www.w3.org/2000/svg" hidden></svg>
+          </div>
+          <div class="mat-box-actions" id="matBoxActions" hidden>
+            <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除框选</button>
+            <span class="convert-status" id="matBoxInfo"></span>
           </div>
           <div class="dw-toolbar">
             <button type="button" class="btn btn-primary" id="matBtn">开始抠图</button>

@@ -359,10 +359,16 @@ def predict_mask(img):
     return mask
 
 
-def matting_image(src: str | Path, out: str | Path) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
+
+    box（可选）：用户手动框选的主体区域，归一化 (x, y, w, h)，取值 0~1。
+      给定时**只把框内区域送进模型推理**（而不是全图推理后再裁），
+      这样模型会把框内内容当成整张图来找显著主体——
+      照片里有多个人/物时，框谁就抠谁，比全图推理精确得多。
+      框外一律透明。
     """
     from PIL import Image
 
@@ -372,10 +378,52 @@ def matting_image(src: str | Path, out: str | Path) -> None:
     with Image.open(src) as im:
         im.load()
         rgb = im.convert("RGB")
-        mask = predict_mask(rgb)
+        W, H = rgb.size
+
+        box_px = _normalize_box(box, W, H)
+        if box_px is None:
+            # 未框选：整图推理
+            mask = predict_mask(rgb)
+        else:
+            x0, y0, x1, y1 = box_px
+            crop = rgb.crop((x0, y0, x1, y1))
+            crop_mask = predict_mask(crop)
+            # 把裁剪区域的蒙版贴回原图尺寸，框外填 0（透明）
+            full = Image.new("L", (W, H), 0)
+            full.paste(crop_mask, (x0, y0))
+            mask = full
+
         rgba = rgb.convert("RGBA")
         rgba.putalpha(mask)
 
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def _normalize_box(box, W: int, H: int):
+    """把归一化 box (x,y,w,h) 转成像素坐标 (x0,y0,x1,y1)，并夹紧到图像范围内。
+
+    返回 None 表示「未框选 / 框无效」（面积过小或越界），走整图推理。
+    """
+    if not box:
+        return None
+    try:
+        bx, by, bw, bh = [float(v) for v in box[:4]]
+    except Exception:  # noqa: BLE001
+        return None
+    if not (0.0 <= bx < 1.0 and 0.0 <= by < 1.0):
+        return None
+    if bw <= 0 or bh <= 0:
+        return None
+    # 太小的框（可能是误点）视为无效，避免用户随手一点就变成抠一小块
+    if bw * bh < 0.001:
+        return None
+
+    x0 = max(0, min(W, int(round(bx * W))))
+    y0 = max(0, min(H, int(round(by * H))))
+    x1 = max(0, min(W, int(round((bx + bw) * W))))
+    y1 = max(0, min(H, int(round((by + bh) * H))))
+    if x1 - x0 < 8 or y1 - y0 < 8:  # 小于 8px 模型也糊，直接放弃框选
+        return None
+    return (x0, y0, x1, y1)

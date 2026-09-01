@@ -520,6 +520,14 @@
     matOrig: $('matOrig'),
     matOut: $('matOut'),
     matDownload: $('matDownload'),
+    // 抠图手动框选
+    matBoxToggle: $('matBoxToggle'),
+    matBoxSvg: $('matBoxSvg'),
+    matBoxHint: $('matBoxHint'),
+    matPreviewWrap: $('matPreviewWrap'),
+    matBoxActions: $('matBoxActions'),
+    matBoxClear: $('matBoxClear'),
+    matBoxInfo: $('matBoxInfo'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -2962,11 +2970,111 @@
     });
   }
 
+  // ---- 手动框选主体（可选）：在预览图上拖一个框，只抠框内主体 ----
+  // 归一化 {x, y, w, h}，null = 未框选（走整图自动抠图）
+  let matBox = null;
+  let matBoxDrawing = false;
+  let matBoxStart = null;
+
+  // SVG 用图片的 CSS 显示尺寸作 viewBox，这样矩形坐标就是显示像素，无需换算
+  const matBoxRedraw = () => {
+    if (!el.matBoxSvg || !el.matImgPreview) return;
+    const w = el.matImgPreview.clientWidth;
+    const h = el.matImgPreview.clientHeight;
+    if (!w || !h) return;
+    el.matBoxSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    el.matBoxSvg.innerHTML = '';
+    if (!matBox) {
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '';
+      return;
+    }
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('class', 'mat-box-rect');
+    rect.setAttribute('x', String(matBox.x * w));
+    rect.setAttribute('y', String(matBox.y * h));
+    rect.setAttribute('width', String(Math.max(0, matBox.w * w)));
+    rect.setAttribute('height', String(Math.max(0, matBox.h * h)));
+    el.matBoxSvg.appendChild(rect);
+    if (el.matBoxInfo) {
+      el.matBoxInfo.textContent = `已框选 ${Math.round(matBox.w * 100)}% × ${Math.round(matBox.h * 100)}%`;
+    }
+  };
+
+  // 把鼠标/触摸位置转成图片内的归一化坐标（超出边界自动夹紧）
+  const matBoxPoint = (ev) => {
+    const r = el.matImgPreview.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return {
+      x: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)),
+    };
+  };
+
+  const matBoxSetEnabled = (on) => {
+    if (el.matBoxSvg) el.matBoxSvg.hidden = !on;
+    if (el.matBoxHint) el.matBoxHint.hidden = !on;
+    if (el.matBoxActions) el.matBoxActions.hidden = !on;
+    if (el.matPreviewWrap) el.matPreviewWrap.classList.toggle('mat-boxable', !!on);
+    if (!on) { matBox = null; matBoxRedraw(); }
+  };
+
+  if (el.matBoxToggle) {
+    el.matBoxToggle.addEventListener('change', () => matBoxSetEnabled(el.matBoxToggle.checked));
+  }
+  if (el.matBoxClear) {
+    el.matBoxClear.addEventListener('click', () => { matBox = null; matBoxRedraw(); });
+  }
+
+  if (el.matImgPreview) {
+    el.matImgPreview.addEventListener('pointerdown', (ev) => {
+      if (!el.matBoxToggle || !el.matBoxToggle.checked) return;
+      const p = matBoxPoint(ev);
+      if (!p) return;
+      ev.preventDefault();
+      matBoxDrawing = true;
+      matBoxStart = p;
+      matBox = { x: p.x, y: p.y, w: 0, h: 0 };
+      try { el.matImgPreview.setPointerCapture(ev.pointerId); } catch (_) { /* 老浏览器忽略 */ }
+      matBoxRedraw();
+    });
+    el.matImgPreview.addEventListener('pointermove', (ev) => {
+      if (!matBoxDrawing || !matBoxStart) return;
+      const p = matBoxPoint(ev);
+      if (!p) return;
+      matBox = {
+        x: Math.min(matBoxStart.x, p.x),
+        y: Math.min(matBoxStart.y, p.y),
+        w: Math.abs(p.x - matBoxStart.x),
+        h: Math.abs(p.y - matBoxStart.y),
+      };
+      matBoxRedraw();
+    });
+    const matBoxEnd = (ev) => {
+      if (!matBoxDrawing) return;
+      matBoxDrawing = false;
+      // 太小的框（误点）当作没框，退回整图抠图
+      if (matBox && (matBox.w < 0.005 || matBox.h < 0.005)) matBox = null;
+      matBoxStart = null;
+      try { el.matImgPreview.releasePointerCapture(ev.pointerId); } catch (_) { /* 忽略 */ }
+      matBoxRedraw();
+    };
+    el.matImgPreview.addEventListener('pointerup', matBoxEnd);
+    el.matImgPreview.addEventListener('pointercancel', matBoxEnd);
+    // 窗口尺寸变化后图片显示尺寸变了，重绘保持框贴合
+    window.addEventListener('resize', () => {
+      if (el.matBoxToggle && el.matBoxToggle.checked) matBoxRedraw();
+    });
+  }
+
   const matPreview = (file) => {
     if (!file) return;
     const url = URL.createObjectURL(file);
     el.matImgPreview.src = url;
-    el.matImgPreview.onload = () => URL.revokeObjectURL(url);
+    el.matImgPreview.onload = () => {
+      URL.revokeObjectURL(url);
+      matBox = null;   // 换图后清掉旧框，避免框错图
+      matBoxRedraw();
+    };
   };
 
   const matPoll = () => {
@@ -3022,6 +3130,10 @@
       el.matResult.hidden = true;
       const fd = new FormData();
       fd.append('file', file);
+      // 手动框选了主体区域 → 把归一化 [x,y,w,h] 一起提交，后端只抠框内
+      if (el.matBoxToggle && el.matBoxToggle.checked && matBox) {
+        fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
+      }
       fetch('/api/matting/image', { method: 'POST', body: fd })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {

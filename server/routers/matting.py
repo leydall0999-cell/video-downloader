@@ -53,14 +53,14 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: str) -> None:
+def _run_matting(job_id: str, src: str, box: list | None = None) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
     try:
         src_path = app.Path(src)
         out_path = app.DW_DIR / f"mat_{job_id}.png"
-        mat.matting_image(src_path, out_path)
+        mat.matting_image(src_path, out_path, box=box)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
@@ -90,15 +90,32 @@ def _dl_snapshot() -> dict:
 @router.post("/api/matting/image")
 def create_matting_image(
     file: app.UploadFile = app._FastAPIFile(...),
+    box: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
-    """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。"""
+    """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
+
+    box（可选）：JSON 字符串 "[x, y, w, h]"，归一化 0~1，表示用户手动框选的
+    主体区域。给定时只抠框内主体（照片里有多个物体时可指定抠哪一个）。
+    """
     if not mat.available():
         raise app.HTTPException(status_code=503, detail="一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in MAT_IMAGE_EXTS:
         raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
+
+    parsed_box = None
+    if box:
+        try:
+            import json as _json
+
+            raw = _json.loads(box)
+            if isinstance(raw, (list, tuple)) and len(raw) >= 4:
+                parsed_box = [float(v) for v in raw[:4]]
+        except Exception:  # noqa: BLE001
+            parsed_box = None  # 解析失败就退回整图抠图，不报错
+
     save_path = _save_upload(file, "mat_up")
     job_id = app.uuid.uuid4().hex[:12]
     with MAT_LOCK:
@@ -106,8 +123,8 @@ def create_matting_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "matting",
         }
-    app.executor.submit(_run_matting, job_id, str(save_path))
-    return {"job_id": job_id, "status": "running", "kind": "matting"}
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box)
+    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box}
 
 
 @router.get("/api/matting/image/{job_id}")
