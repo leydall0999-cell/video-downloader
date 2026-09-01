@@ -2979,10 +2979,19 @@
   // SVG 用图片的 CSS 显示尺寸作 viewBox，这样矩形坐标就是显示像素，无需换算
   const matBoxRedraw = () => {
     if (!el.matBoxSvg || !el.matImgPreview) return;
-    const w = el.matImgPreview.clientWidth;
-    const h = el.matImgPreview.clientHeight;
+    // 用 getBoundingClientRect 比 clientWidth/clientHeight 更稳——
+    // 后者在图片未渲染或内联 SVG 父容器有怪癖时可能返 0
+    const r = el.matImgPreview.getBoundingClientRect();
+    const w = Math.round(r.width);
+    const h = Math.round(r.height);
     if (!w || !h) return;
+    // 显式给 SVG 写 width/height 属性（不只靠 CSS 100%），
+    // 配合 display:block + preserveAspectRatio="none"，杜绝内联 SVG
+    // 在 inline-block 父容器下被压成 0 高的浏览器怪癖。
+    el.matBoxSvg.setAttribute('width', String(w));
+    el.matBoxSvg.setAttribute('height', String(h));
     el.matBoxSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    el.matBoxSvg.setAttribute('preserveAspectRatio', 'none');
     el.matBoxSvg.innerHTML = '';
     if (!matBox) {
       if (el.matBoxInfo) el.matBoxInfo.textContent = '';
@@ -2990,15 +2999,25 @@
     }
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     rect.setAttribute('class', 'mat-box-rect');
-    rect.setAttribute('x', String(matBox.x * w));
-    rect.setAttribute('y', String(matBox.y * h));
-    rect.setAttribute('width', String(Math.max(0, matBox.w * w)));
-    rect.setAttribute('height', String(Math.max(0, matBox.h * h)));
+    rect.setAttribute('x', String(Math.round(matBox.x * w)));
+    rect.setAttribute('y', String(Math.round(matBox.y * h)));
+    rect.setAttribute('width', String(Math.round(Math.max(0, matBox.w) * w)));
+    rect.setAttribute('height', String(Math.round(Math.max(0, matBox.h) * h)));
     el.matBoxSvg.appendChild(rect);
     if (el.matBoxInfo) {
       el.matBoxInfo.textContent = `已框选 ${Math.round(matBox.w * 100)}% × ${Math.round(matBox.h * 100)}%`;
     }
   };
+
+  // 窗口 / 容器尺寸变化时重画选框（图片 max-width 100% 会随主区收放重排）
+  if (typeof window !== 'undefined') {
+    let _rszT = null;
+    window.addEventListener('resize', () => {
+      if (!_rszT && el.matBoxToggle && el.matBoxToggle.checked) {
+        _rszT = setTimeout(() => { _rszT = null; matBoxRedraw(); }, 80);
+      }
+    });
+  }
 
   // 把鼠标/触摸位置转成图片内的归一化坐标（超出边界自动夹紧）
   const matBoxPoint = (ev) => {

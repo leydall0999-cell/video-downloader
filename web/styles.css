@@ -993,7 +993,11 @@ img { max-width: 100%; display: block; }
    后端只把框内区域送进模型——照片里有多个物体时可指定抠哪一个。 */
 .mat-box-toggle { margin-top: .2rem; }
 .mat-box-svg {
-  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  /* 必须 display:block —— .dw-preview-wrap 是 inline-block + line-height:0，
+     内联 SVG 在这种父容器下会被压成 0 高，导致选框看不见。 */
+  display: block;
+  position: absolute; left: 0; top: 0;
+  width: 100%; height: 100%;
   pointer-events: none; z-index: 2;
 }
 .mat-box-svg[hidden] { display: none; }
@@ -1005,11 +1009,12 @@ img { max-width: 100%; display: block; }
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .4rem;
 }
 .mat-box-actions[hidden] { display: none; }
-/* 框体：虚线 + 半透明填充，跟去水印的选区视觉保持一致 */
+/* 框体：虚线 + 半透明填充，跟去水印的选区视觉保持一致。
+   描边稍粗 + 填充更明显，确保在浅色图片上不会被忽略。 */
 .mat-box-rect {
-  fill: rgba(99, 102, 241, .12);
+  fill: rgba(99, 102, 241, .18);
   stroke: var(--brand, #6366f1);
-  stroke-width: 2; stroke-dasharray: 6 4;
+  stroke-width: 3; stroke-dasharray: 6 4;
   vector-effect: non-scaling-stroke;
 }
 .mat-manual {
