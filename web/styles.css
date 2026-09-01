@@ -2369,10 +2369,10 @@ img { max-width: 100%; display: block; }
 .com-col-right .com-mode-dropdown-toggle { display: flex !important; width: 100% !important; min-width: 0 !important; }
 .com-mode-dropdown-toggle {
   display: inline-flex; align-items: center; justify-content: space-between; gap: .5rem;
-  width: auto; min-height: 38px; padding: .4rem .6rem;
+  width: auto; min-height: 34px; padding: .35rem .55rem;
   background: #fff;
   border: 1.5px solid var(--line); border-radius: var(--radius-sm);
-  font-size: .86rem; font-weight: 500; color: var(--text);
+  font-size: .78rem; font-weight: 500; color: var(--text);
   cursor: pointer; text-align: left; white-space: nowrap;
   transition: border-color .18s, box-shadow .18s, background .18s;
 }
@@ -2383,7 +2383,7 @@ img { max-width: 100%; display: block; }
   background: #fff;
 }
 .com-mode-dropdown-toggle[aria-expanded="true"] .com-mode-dropdown-caret { transform: rotate(180deg); }
-.com-mode-dropdown-caret { font-size: .8rem; transition: transform .18s; color: var(--text-mute); }
+.com-mode-dropdown-caret { font-size: .72rem; transition: transform .18s; color: var(--text-mute); }
 .com-mode-dropdown-panel {
   position: absolute; left: 0; right: 0; top: calc(100% + .4rem); z-index: 50;
   background: #fff; border: 1.5px solid var(--line); border-radius: var(--radius-md);
@@ -2462,13 +2462,13 @@ img { max-width: 100%; display: block; }
 
 /* 下拉项置灰（不可用项直接灰显不可选） */
 .com-select option:disabled { color: #b0b0b0; }
-.com-select option { font-size: .86rem; }
-/* 配音引擎 select：与入口卡片同款高度（紧凑大按钮） */
+.com-select option { font-size: .78rem; }
+/* 配音引擎 select：与 trigger 视觉一致（紧凑小按钮） */
 .com-select {
-  width: 100%; min-height: 42px; padding: .55rem .7rem;
+  width: 100%; min-height: 34px; padding: .35rem .55rem;
   border: 1.5px solid var(--line); border-radius: var(--radius-sm);
   background: #fff; color: var(--text);
-  font-size: .95rem; font-weight: 600; font-family: inherit;
+  font-size: .78rem; font-weight: 500; font-family: inherit;
   outline: none; transition: border-color .18s, box-shadow .18s;
 }
 .com-select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79, 70, 229, .12); }

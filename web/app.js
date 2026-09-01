@@ -5308,20 +5308,20 @@ el.dwVidPlayer.removeAttribute('src');
     };
 
     // 默认 edge-tts：始终可用
-    setOpt('', false, '🟢免费');
+    setOpt('', false, '免费');
     // IndexTTS-MLX：仅 Apple Silicon + 服务就绪可用，否则置灰
     if (status.indextts_mlx_ready) {
-      setOpt('indextts_mlx', false, '🟢免费（已就绪）');
+      setOpt('indextts_mlx', false, '免费（已就绪）');
     } else if (status.apple_silicon) {
-      setOpt('indextts_mlx', true, '🟢免费（本机未就绪，暂不可用）');
+      setOpt('indextts_mlx', true, '免费（本机未就绪，暂不可用）');
     } else {
-      setOpt('indextts_mlx', true, '🟢免费（仅苹果芯片 Mac 可用）');
+      setOpt('indextts_mlx', true, '免费（仅苹果芯片 Mac 可用）');
     }
     // IndexTTS2：本机（Mac）不可用
-    setOpt('indextts2', true, '🟢免费（本机不可用）');
+    setOpt('indextts2', true, '免费（本机不可用）');
     // MiniMax / SiliconFlow：需填密钥
-    setOpt('minimax', !status.minimax_configured, status.minimax_configured ? '🔴收费（密钥已填写）' : '🔴收费（未填密钥，暂不可用）');
-    setOpt('siliconflow', !status.siliconflow_configured, status.siliconflow_configured ? '🔴收费（密钥已填写，新用户送 ¥14）' : '🔴收费（未填密钥，暂不可用）');
+    setOpt('minimax', !status.minimax_configured, status.minimax_configured ? '收费（密钥已填写）' : '收费（未填密钥，暂不可用）');
+    setOpt('siliconflow', !status.siliconflow_configured, status.siliconflow_configured ? '收费（密钥已填写，新用户送 ¥14）' : '收费（未填密钥，暂不可用）');
 
     // 当前选中的项若已被禁用，自动回退到默认引擎
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
