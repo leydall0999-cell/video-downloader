@@ -540,10 +540,22 @@ def predict_mask(img, model: str | None = None):
     return mask_img
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None) -> None:
+def _save_out(rgba, out) -> None:
+    """原子写透明 PNG（RGBA → out 路径）。"""
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    rgba.save(out_path, "PNG")
+
+
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
+
+    sam_refine（可选，默认 False）：🔬 精细边缘——用户给了语义选区
+      （套索 polygon / 矩形 box / AI 视觉定位 vision_box / 点选 click）且开启时，
+      改用 MobileSAM（像素级语义分割）直接出主体 mask，边缘远优于显著性模型；
+      无选区（自动整图）或 blocks 多块时不适用，保持 BiRefNet。任何失败自动回退。
 
     blocks（可选）：**🧲 智能魔棒多选**——用户 hover 高亮智能元素块、点击选中多个
       不相邻的块（如主标题 + 右上角图案），值 = 每个选中块的归一化轮廓点列表
@@ -576,6 +588,34 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         im.load()
         rgb = im.convert("RGB")
         W, H = rgb.size
+
+        # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（套索/框/
+        # AI视觉定位/点选，blocks 多块除外）→ 优先走 SAM 像素级分割。
+        # SAM 靠 prompt 切主体、边缘远精于显著性；失败自动回退下方 BiRefNet 分支。
+        if sam_refine and not blocks:
+            try:
+                sprompt = None
+                if polygon:
+                    sprompt = {"type": "poly", "poly": [[float(p[0]), float(p[1])] for p in polygon]}
+                elif click:
+                    sprompt = {"type": "point", "pt": [float(click[0]), float(click[1])]}
+                elif vision_box is not None:
+                    sprompt = {"type": "box", "norm": [float(v) for v in vision_box[:4]]}
+                elif box:
+                    from PIL import Image as _Im
+                    bp = _normalize_box(box, W, H)
+                    if bp is not None:
+                        sprompt = {"type": "box", "norm": [bp[0] / W, bp[1] / H, bp[2] / W, bp[3] / H]}
+                if sprompt:
+                    sam_mask = sam_refine_mask(rgb, sprompt, W, H)
+                    if sam_mask is not None:
+                        rgba = rgb.convert("RGBA")
+                        rgba.putalpha(_edge_soften_mask(sam_mask))
+                        _save_out(rgba, out)
+                        return
+            except Exception as _e:  # noqa: BLE001  任何异常 → 回退显著性流程
+                import logging as _lg
+                _lg.getLogger("matting_ai").warning("sam_refine 回退 BiRefNet: %s", _e)
 
         if blocks:
             # 🧲 智能魔棒多选：用户 hover 高亮 + 点击选中的多个元素块（并集）一起抠
@@ -652,9 +692,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         mask = _edge_soften_mask(mask)
         rgba.putalpha(mask)
 
-    out_path = Path(out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    rgba.save(out_path, "PNG")
+    _save_out(rgba, out)
 
 
 def _edge_soften_mask(mask, radius: int = 2, sigma: float = 1.2):
@@ -684,6 +722,151 @@ def _edge_soften_mask(mask, radius: int = 2, sigma: float = 1.2):
     out = arr.copy().astype(np.float32)
     out[band] = blur[band]
     return _PIL_Img.fromarray(np.clip(out, 0, 255).astype(np.uint8), mode="L")
+
+
+# ===== 🔬 SAM（MobileSAM-Tiny ONNX，MIT）像素级精修引擎 =====
+# 权重来自 huggingface.co/Acly/MobileSAM（MIT，可商用——项目「内置 AI 默认须 MIT/Apache/BSD」
+# 铁律满足）。两个 onnx：
+#   - mobile_sam_image_encoder.onnx：输入 input_image [H,W,3] float32 **raw 0-255**，
+#     图内自带 resize(长边1024等比)+ImageNet归一化+pad1024 前处理；
+#     输出 image_embeddings [1,256,64,64]。
+#   - sam_mask_decoder_single.onnx：标准 SAM 六输入（embeddings/points/labels/
+#     mask_input/has_mask/orig_im_size）→ 单 mask [1,1,1024,1024]（1024 空间）。
+# SAM 靠 prompt（box/point）分割，无 prompt 无意义 → 只在用户给了选区/AI定位时启用。
+_SAM_FILES = {
+    "enc": ("mobilesam_encoder.onnx",
+            ["https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx"]),
+    "dec": ("mobilesam_decoder_single.onnx",
+            ["https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx"]),
+}
+_SAM_SESSIONS: dict = {}
+_SAM_SESS_LOCK = threading.Lock()
+
+
+def _sam_download(kind: str) -> Path:
+    """下载 SAM 权重到 ~/.vdl_models（复用断点续传/进度/原子落盘）。"""
+    fname, urls = _SAM_FILES[kind]
+    dest = _model_dir() / fname
+    if dest.exists() and dest.stat().st_size > _MIN_CACHE_BYTES:
+        return dest
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    last_err = ""
+    for url in urls:
+        try:
+            _set_dl(active=True, model="mobilesam-" + kind, done=0, total=0, pct=0.0, error="")
+            _http_get(url, tmp, "mobilesam-" + kind)
+            if not tmp.exists() or tmp.stat().st_size == 0:
+                raise RuntimeError("下载结果为空")
+            tmp.replace(dest)
+            _set_dl(active=False, pct=100.0)
+            return dest
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)[:300]
+            tmp.unlink(missing_ok=True)
+            _set_dl(active=False, error=last_err)
+            continue
+    raise RuntimeError(f"MobileSAM 模型下载失败：{last_err}")
+
+
+def _sam_session(kind: str):
+    """懒加载 SAM encoder/decoder onnx session。kind: 'enc' | 'dec'"""
+    with _SAM_SESS_LOCK:
+        sess = _SAM_SESSIONS.get(kind)
+        if sess is not None:
+            return sess
+        import onnxruntime as ort
+
+        path = _sam_download(kind)
+        so = ort.SessionOptions()
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
+        _SAM_SESSIONS[kind] = sess
+        return sess
+
+
+def sam_refine_mask(rgb, prompt: dict, W: int, H: int):
+    """🔬 SAM 像素级精修：prompt 给 box/point 语义，返回原图尺寸 L 模式 alpha。
+
+    prompt:
+      {"type": "box",  "norm": [x1,y1,x2,y2]}      —— 手动框 / AI视觉定位框
+      {"type": "poly", "poly": [[x,y],...]}        —— 套索（取其 bbox 作 prompt，
+                                                    输出再乘用户多边形硬边界）
+      {"type": "point","pt":  [x,y]}               —— 点图抠图
+    任何一步失败抛 RuntimeError（调用方回退 BiRefNet，绝不崩）。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    enc = _sam_session("enc")
+    dec = _sam_session("dec")
+
+    # ---------- 1) encoder：resize 长边 1024 等比 → raw 0-255 HWC → embed ----------
+    w0, h0 = rgb.size
+    scale = 1024.0 / max(w0, h0)
+    nw, nh = max(1, int(round(w0 * scale))), max(1, int(round(h0 * scale)))
+    simg = rgb.resize((nw, nh), Image.LANCZOS)
+    arr = np.asarray(simg, dtype=np.float32)  # [nh, nw, 3] 0-255
+    in_name = enc.get_inputs()[0].name
+    embed = enc.run(None, {in_name: arr})[0]  # [1,256,64,64]
+
+    # ---------- 2) prompt 坐标 → 1024 空间（scale=1024/max(orig)）----------
+    def _px(v: float, dim: int) -> float:
+        return v * dim * scale  # 归一化 → 原图像素 → 1024 空间
+
+    pts = []
+    labels = []
+    if prompt.get("type") in ("box", "poly"):
+        if prompt.get("type") == "box":
+            x1, y1, x2, y2 = prompt["norm"]
+        else:
+            xs = [p[0] for p in prompt["poly"]]
+            ys = [p[1] for p in prompt["poly"]]
+            x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+        # box → 左上(2) 右下(3)
+        pts = [[_px(x1, w0), _px(y1, h0)], [_px(x2, w0), _px(y2, h0)]]
+        labels = [2.0, 3.0]
+    else:  # point
+        px, py = prompt["pt"]
+        pts = [[_px(px, w0), _px(py, h0)]]
+        labels = [1.0]
+
+    # ---------- 3) decoder ----------
+    feeds = {}
+    for i in dec.get_inputs():
+        feeds[i.name] = i  # 记录（宽松匹配名字）
+    in_names = {i.name: i for i in dec.get_inputs()}
+    feed = {
+        "image_embeddings": embed,
+        "point_coords": np.array(pts, dtype=np.float32)[None, :, :],
+        "point_labels": np.array(labels, dtype=np.float32)[None, :],
+        "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
+        "has_mask_input": np.array([0.0], dtype=np.float32),
+        "orig_im_size": np.array([h0, w0], dtype=np.int64),
+    }
+    out = dec.run(None, feed)
+    raw = out[0]  # [1,1,1024,1024]（single）或 [1,4,...]（若模型为 multi 兼容）
+    m = np.squeeze(raw, axis=0)
+    if m.ndim == 3:
+        m = m[0]
+    elif m.ndim != 2:
+        m = m.reshape(-1)[:1024 * 1024].reshape(1024, 1024)
+    if float(m.max()) > 2.0:  # logits → sigmoid（与 predict_mask 同法探测）
+        m = 1.0 / (1.0 + np.exp(-m))
+    m = np.clip(m, 0.0, 1.0)
+    # 1024 空间 → 原图（等比缩放；SAM 内部 pad 区在边缘，故用原图坐标裁剪映射）
+    pimg = Image.fromarray((m * 255.0).astype(np.uint8), mode="L")
+    # 对应到 (nw,nh) 内的区域（pad 在右下）
+    pimg = pimg.crop((0, 0, nw, nh)).resize((w0, h0), Image.LANCZOS)
+    out_mask = np.asarray(pimg, dtype=np.float32) / 255.0
+
+    # ---------- 4) prompt 硬边界（套索多边形/矩形框外强制透明）----------
+    if prompt.get("type") == "poly":
+        poly_img = Image.new("L", (w0, h0), 0)
+        ImageDraw.Draw(poly_img).polygon(
+            [(p[0] * w0, p[1] * h0) for p in prompt["poly"]], fill=255)
+        out_mask = out_mask * (np.asarray(poly_img, dtype=np.float32) / 255.0)
+    return Image.fromarray(np.clip(out_mask * 255.0, 0, 255).astype(np.uint8), mode="L")
+
 
 
 def analyze_blocks(rgb, model: str | None = None, min_area_ratio: float = 0.0006, max_blocks: int = 60):

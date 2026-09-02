@@ -516,6 +516,7 @@
     matManualHint: $('matManualHint'),
     matBtn: $('matBtn'),
     matVision: $('matVision'),
+    matSamRefine: $('matSamRefine'),
     matStatus: $('matStatus'),
     matResult: $('matResult'),
     matOrig: $('matOrig'),
@@ -3620,8 +3621,10 @@
           el.matDownload.href = outUrl;
           el.matOrig.src = el.matImgPreview.src;
           el.matResult.hidden = false;
-          // 🤖 AI 视觉定位结果提示：成功显示主体标签，未生效解释原因并说明已回退
-          if (d.vision_used) {
+          // 🔬 SAM 精细抠图成功 → 最优先提示（像素级语义分割已生效）
+          if (d.sam_used) {
+            el.matStatus.textContent = '抠图完成 ✅（🔬 SAM 像素级精抠，边缘最贴轮廓）';
+          } else if (d.vision_used) {
             el.matStatus.textContent = '抠图完成 ✅（🤖 AI 视觉定位已生效：' + (d.vision_label || '主体') + '）';
           } else if (d.mode === 'lasso') {
             const bbox = d.polygon_bbox ? `[${d.polygon_bbox.map(v => (v * 100).toFixed(1) + '%').join(', ')}]` : '';
@@ -3707,6 +3710,8 @@
       el.matResult.hidden = true;
       const fd = new FormData();
       fd.append('file', file);
+      // 🔬 SAM 精细抠图：勾选且本次带选区时后端用 SAM 像素级精抠
+      if (el.matSamRefine && el.matSamRefine.checked) fd.append('sam_refine', '1');
       // 指定本次用的模型（前端下拉选中的；后端未知名字会回退默认）
       if (el.matModel && el.matModel.value) {
         fd.append('model', el.matModel.value);

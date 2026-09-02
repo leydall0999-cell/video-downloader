@@ -73,7 +73,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -82,13 +82,14 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         out_path = app.DW_DIR / f"mat_{job_id}.png"
         # 诊断日志：记录选区原始参数，便于排查"圈了但结果不对"
         app.logger.info(
-            "matting %s start: box=%s polygon=%s click=%s blocks=%s vision_guide=%s model=%s",
+            "matting %s start: box=%s polygon=%s click=%s blocks=%s vision_guide=%s sam=%s model=%s",
             job_id,
             box,
             f"{len(polygon)}pts" if polygon else None,
             click,
             f"{len(blocks)}blk" if blocks else None,
             vision_guide,
+            sam_refine,
             model,
         )
         vision_box = None
@@ -105,7 +106,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
@@ -114,6 +115,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         job["vision_used"] = vision_used
         # 记录本次实际使用的选区模式（魔棒多块 > 点图 > 多边形 > AI 视觉 > 矩形框 > 自动）
         job["mode"] = "blocks" if blocks else ("click" if click else ("lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto"))))
+        job["sam_used"] = sam_refine and not blocks and bool(polygon or click or vision_box or box)
         # 把 polygon 的 bbox 也记下来，方便和用户画的圈对照
         if polygon:
             xs = [p[0] for p in polygon]
@@ -150,6 +152,7 @@ def create_matting_image(
     polygon: str = app.Form(None),
     click_point: str = app.Form(None),
     blocks: str = app.Form(None),
+    sam_refine: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
@@ -162,6 +165,8 @@ def create_matting_image(
     click_point（可选）：JSON 字符串 "[x,y]"（归一化 0~1），**点图抠图**——
     用户直接在预览图上单击某个元素（主标题/图案/按钮等），后端跑全图显著性，
     找到点击处所属的连通显著块并只抠那一块。优先级最高（用户点哪抠哪）。
+    sam_refine（可选）：1/true 时若本次有语义选区（polygon/box/click/vision_guide），
+    用 🔬 MobileSAM 像素级分割精抠（边缘远优于显著性）；无选区/多块自动回退。
     model（可选）：模型名（birefnet-general / birefnet-general-lite / rmbg-2.0）。
     给定时用指定模型，否则用全局默认（当前 birefnet-general，MIT 可商用）。
     rmbg-2.0 为 CC BY-NC 4.0 仅非商用，仅限个人 / 非商业场景显式选用。
@@ -253,8 +258,9 @@ def create_matting_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "matting",
         }
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks)
-    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks)}
+    sr = (sam_refine or "").strip().lower() in ("1", "true", "yes", "on")
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr)
+    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 
 
 @router.post("/api/matting/analyze")
@@ -415,6 +421,8 @@ def matting_image_status(job_id: str) -> dict:
         "vision_used": job.get("vision_used", False),
         "vision_label": job.get("vision_label", ""),
         "vision_error": job.get("vision_error", ""),
+        # 🔬 SAM 精细抠图是否被本次任务请求（有选区且勾选；自动模式/多块不适用）
+        "sam_used": job.get("sam_used", False),
     }
 
 

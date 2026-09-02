@@ -896,6 +896,11 @@
             <span class="uc-label">🤖 AI 视觉定位（看懂图·只抠主体）</span>
           </label>
           <span class="dw-hint" id="matVisionHint">开启后：① 直接单击预览图上的任意元素（主标题/图案/按钮/logo），立即抠出那个元素，点哪抠哪；② 不点而直接「开始抠图」则由 AI 看懂图、自动框出主体再抠。能精准剔除紧贴的副标题 / 装饰。需先到「视频解说」标签页 → 右侧「⚙️ AI 能力与密钥配置」(展开) → 「视觉模型」栏选 DashScope 并填 Key（配置一次全局生效）；未配置时自动回退普通抠图。</span>
+          <label class="uc-field uc-check mat-vision-toggle">
+            <input type="checkbox" id="matSamRefine" checked />
+            <span class="uc-label">🔬 精细抠图（SAM 像素级）</span>
+          </label>
+          <span class="dw-hint">勾选并画了选区（框选 / 套索 / 点选 / AI 视觉定位）时，用 SAM 语义分割像素级精抠，发丝 / 衣边 / 字边更贴轮廓；首次使用自动下载约 60MB 模型（MIT 可商用）。自动整图 / 智能选块多选 不适用。</span>
           <div class="dw-preview-wrap" id="matPreviewWrap">
             <div class="mat-zoom-stage" id="matZoomStage">
               <img id="matImgPreview" alt="预览" />
