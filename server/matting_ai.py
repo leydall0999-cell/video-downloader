@@ -671,21 +671,35 @@ def _click_mask(rgb, click, W: int, H: int, model: str | None = None):
     if m[cy, cx] < 0.20:
         raise ValueError("点到背景了，请在画面上的元素（标题/图案/按钮）上单击")
 
-    # 从点击点扩散，只保留"点击处所属的连通显著块"
-    visited = np.zeros((H, W), dtype=bool)
+    # 两阶段连通：核心（高置信）+ 1 步邻接弱边缘。
+    # 避免单纯 ground>0.20 BFS 把"与点击元素相邻的其他显著主体"一起带走
+    # （典型：主标题与小标题紧贴时连成一片，传统 BFS 跨过去连带抠出小标题）。
+    # 阶段1: alpha > 0.45 的高置信核心——BFS 严格在用户点的元素内
+    # 阶段2: 核心紧邻 1 步的 alpha > 0.15 区——保留软光晕/描边
+    #         中间过渡（0.15-0.45）因为不在核心的 4-邻接而不被扩展 → 屏障
+    core = np.zeros((H, W), dtype=bool)
     q = deque([(cy, cx)])
-    visited[cy, cx] = True
-    ground = m > 0.20
+    core[cy, cx] = True
+    core_ground = m > 0.45
     while q:
         y, x = q.popleft()
         for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             ny, nx = y + dy, x + dx
-            if 0 <= ny < H and 0 <= nx < W and not visited[ny, nx] and ground[ny, nx]:
-                visited[ny, nx] = True
+            if 0 <= ny < H and 0 <= nx < W and not core[ny, nx] and core_ground[ny, nx]:
+                core[ny, nx] = True
                 q.append((ny, nx))
 
+    # 核心紧邻 1 步的弱边缘（向量化）
+    core_dilated = np.zeros_like(core)
+    core_dilated[1:-1, 1:-1] = (
+        core[1:-1, 1:-1] | core[:-2, 1:-1] | core[2:, 1:-1]
+        | core[1:-1, :-2] | core[1:-1, 2:]
+    )
+    weak_edge = core_dilated & ~core & (m > 0.15)
+
+    kept = core | weak_edge
     out = m.copy()
-    out[~visited] = 0.0
+    out[~kept] = 0.0
     return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8), mode="L")
 
 
