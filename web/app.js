@@ -3409,6 +3409,9 @@
   if (el.matImgPreview) {
     el.matImgPreview.addEventListener('click', (ev) => {
       if (!el.matVision || !el.matVision.checked) return;   // 仅在 AI 视觉定位开启时
+      // 用户勾了「手动框选」= 明确要画选区（矩形/套索）——单击是画选区动作，
+      // 绝不触发"点选抠图"，否则两者打架（用户画套索点一下就变成直接抠图）。
+      if (el.matBoxToggle && el.matBoxToggle.checked) return;
       if (matBusy) return;
       const file = el.matFile && el.matFile.files && el.matFile.files[0];
       if (!file) { if (el.matStatus) el.matStatus.textContent = '请先选择一张图片'; return; }
