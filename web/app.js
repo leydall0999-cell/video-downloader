@@ -3174,6 +3174,12 @@
     matLassoCursor = null;
     matPolygon = matLassoNorm.map(pt => [pt[0], pt[1]]);
     matLassoRedraw();
+    // 清掉上一轮"抠图完成 ✅"残留文本 + SAM 语义提示
+    if (el.matStatus) {
+      el.matStatus.textContent = el.matSamRefine && el.matSamRefine.checked
+        ? '已确定选区 🔬 SAM 会抠框内最显著的 1 个连通主体（套索圈范围较大时，可能只抠某个字/笔触而非整段）'
+        : '已确定选区，点击「开始抠图」';
+    }
     if (el.matBoxInfo) el.matBoxInfo.textContent = `已确定选区 ✏️（${matPolygon.length} 个顶点）— 点「开始抠图」只抠圈内`;
     if (el.matLassoUndo) el.matLassoUndo.disabled = false;  // 撤销=回到画中继续改
   };
@@ -3534,6 +3540,38 @@
   if (el.matBoxToggle) {
     el.matBoxToggle.addEventListener('change', () => matBoxSetEnabled(el.matBoxToggle.checked));
   }
+  // 抠图方式单选（🪄 智能 / ⬜ 手动 / 🔬 精细）——一次只做一件事，内部开关自动联动
+  const matApplyMode = (mode) => {
+    const box = el.matBoxToggle, vis = el.matVision, sam = el.matSamRefine;
+    if (mode === 'smart') {
+      // 智能：AI 视觉定位自动找主体（默认关手动选区），点图可临时点选
+      if (sam) sam.checked = false;
+      if (vis) vis.checked = true;
+      if (box && box.checked) { box.checked = false; box.dispatchEvent(new Event('change')); }
+    } else if (mode === 'manual') {
+      // 手动：BiRefNet 工具（矩形/套索/智能选块）
+      if (vis) vis.checked = false;
+      if (sam) sam.checked = false;
+      if (box && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change')); }
+    } else if (mode === 'fine') {
+      // 精细：SAM 像素级（需画框/圈，勾选 sam_refine）
+      if (vis) vis.checked = false;
+      if (sam) sam.checked = true;
+      if (box && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change')); }
+    }
+    // 切换模式清理残留（选区/状态文本/上轮结果提示）
+    matClick = null;
+    if (el.matStatus) el.matStatus.textContent = '';
+    if (el.matBoxInfo) el.matBoxInfo.textContent = '';
+  };
+  const matModeNow = () => {
+    const r = document.querySelector('input[name="matMode"]:checked');
+    return r ? r.value : 'smart';
+  };
+  document.querySelectorAll('input[name="matMode"]').forEach(rd => {
+    rd.addEventListener('change', () => { if (rd.checked) matApplyMode(rd.value); });
+  });
+  if (document.querySelector('#matModeRow')) matApplyMode(matModeNow());   // 初始默认 🪄 智能
   if (el.matBoxClear) {
     el.matBoxClear.addEventListener('click', () => {
       matBox = null; matBoxRedraw();
@@ -3578,6 +3616,14 @@
       matBoxStart = null;
       try { el.matImgPreview.releasePointerCapture(ev.pointerId); } catch (_) { /* 忽略 */ }
       matBoxRedraw();
+      // 新框选结束 → 清掉上一轮"抠图完成 ✅"残留文本，并给一句 SAM 语义提示
+      if (el.matStatus) {
+        el.matStatus.textContent = matBox
+          ? (el.matSamRefine && el.matSamRefine.checked
+              ? '已框选 🔬 SAM 会抠框内最显著的 1 个连通主体（单字/单物体精准；整段文字可能只抠一笔）'
+              : '已框选主体区域，点击「开始抠图」')
+          : '';
+      }
     };
     window.addEventListener('pointerup', matBoxEnd);
     window.addEventListener('pointercancel', matBoxEnd);
@@ -3618,7 +3664,27 @@
           if (matTimer) { clearInterval(matTimer); matTimer = null; }
           const outUrl = `/api/matting/image/${matJobId}/file?t=${Date.now()}`;
           el.matOut.src = outUrl;
-          el.matDownload.href = outUrl;
+          // 下载按钮：fetch → blob → 临时 a[download] click（绕开 WKWebView 对 inline 头
+          // + <a download> 的 quirk，确保真正触发 PNG 下载而不是"在主窗口打开预览"）
+          if (el.matDownload) {
+            el.matDownload.onclick = (e) => {
+              e.preventDefault();
+              const filename = (d.filename || (outUrl.split('/').pop() || 'matting.png'));
+              fetch(outUrl).then(r => r.blob()).then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 500);
+              }).catch(() => {
+                // 兜底：浏览器原生 a[download] click
+                window.location.assign(outUrl);
+              });
+            };
+          }
           el.matOrig.src = el.matImgPreview.src;
           el.matResult.hidden = false;
           // 🔬 SAM 精细抠图成功 → 最优先提示（像素级语义分割已生效）
