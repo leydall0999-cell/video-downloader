@@ -693,7 +693,87 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
     ImageDraw.Draw(poly_img).polygon(pts, fill=255)
     m = _np.array(mask).astype(_np.float32) / 255.0
     p = _np.array(poly_img).astype(_np.float32) / 255.0
-    return Image.fromarray(_np.clip(m * p * 255.0, 0, 255).astype(_np.uint8), mode="L")
+    m = m * p
+    # 套索圈内主色聚类提纯：BiRefNet 按显著性抠图会把圈内「紧贴主体的黑色笔触/
+    # 深色装饰」当同一显著性物体保留。聚类按颜色把前景分组，剔除与主体主色
+    # 差异大且整体偏暗的杂质簇（不会误伤橙底白字这类多色主体的浅色部分）。
+    rgb_arr = _np.array(rgb).astype(_np.float32) / 255.0
+    m = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
+    return Image.fromarray(_np.clip(m * 255.0, 0, 255).astype(_np.uint8), mode="L")
+
+
+def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
+    """套索圈内主色聚类提纯：把圈内模型前景按颜色聚成多簇，
+    剔除「与主体主色差异大且整体偏暗」的杂质簇（黑色笔触/墨渍/深色装饰）。
+
+    为什么需要它：BiRefNet 按显著性抠图，会把圈内「紧贴主体的黑色笔触/副标题」
+    与主体当同一个显著性物体整体保留（显著性无法区分"相连的不同颜色区域"）。
+    但这类杂质有个稳定特征：**颜色离主体主色远，且自身亮度极低（黑色/深棕）**。
+    聚类后整簇判定，比像素级判定稳定得多，且不会误伤主体内的浅色多色
+    （如"橙底+白字"：白字亮度高，不会被当暗杂质剔除）。
+
+    实现：
+        1. 取 polygon 内 mask>0.3 的像素，k-means(k=4) 按 RGB 聚类；
+        2. 面积最大簇 = 主体主色；
+        3. 某簇「距最大簇色距 > 0.45 且簇内平均亮度 < 0.30」→ 整簇判为暗杂质，
+           对应像素 alpha 强制 0；
+        4. 其余保留（含白字等浅色簇）。
+
+    安全：聚类/计算失败时回退原 mask。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    # polygon 内有效像素
+    poly_img = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(poly_img).polygon(polygon_pts, fill=255)
+    poly_arr = np.array(poly_img).astype(bool)
+
+    reliable = (mask_arr > 0.30) & poly_arr
+    n_fg = int(reliable.sum())
+    if n_fg < 64:
+        return mask_arr  # 前景太少，跳过
+
+    pix = rgb_arr[reliable]
+    k = 4 if n_fg >= 2000 else 3
+
+    # k-means（纯 numpy 向量化）
+    try:
+        rng = np.random.default_rng(1)
+        centers = pix[rng.choice(n_fg, size=k, replace=False)].copy()
+        for _ in range(12):
+            d = np.linalg.norm(pix[:, None, :] - centers[None, :, :], axis=2)
+            lab = d.argmin(axis=1)
+            for c in range(k):
+                sel_c = pix[lab == c]
+                if len(sel_c):
+                    centers[c] = sel_c.mean(axis=0)
+    except Exception:  # noqa: BLE001
+        return mask_arr
+
+    sizes = np.bincount(lab, minlength=k)
+    big = int(np.argmax(sizes))
+    main_color = centers[big]
+
+    # 判定各簇是否为暗杂质
+    drop = np.zeros(k, dtype=bool)
+    for c in range(k):
+        if c == big:
+            continue
+        dist = float(np.linalg.norm(centers[c] - main_color))
+        lum = float(centers[c].max())
+        if dist > 0.45 and lum < 0.30:
+            drop[c] = True
+
+    if not drop.any():
+        return mask_arr
+
+    # 被判杂质的簇像素在原图位置 alpha 置 0，其余保持原样
+    out = mask_arr.copy()
+    ys, xs = np.where(reliable)
+    drop_px = drop[lab]
+    out[ys[drop_px], xs[drop_px]] = 0.0
+    return out
 
 
 def _box_crop_mask(rgb, box_px, W: int, H: int, model: str | None = None):
