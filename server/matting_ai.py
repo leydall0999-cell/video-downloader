@@ -674,18 +674,23 @@ def _click_mask(rgb, click, W: int, H: int, model: str | None = None):
     # 两阶段连通：核心（高置信）+ 1 步邻接弱边缘。
     # 避免单纯 ground>0.20 BFS 把"与点击元素相邻的其他显著主体"一起带走
     # （典型：主标题与小标题紧贴时连成一片，传统 BFS 跨过去连带抠出小标题）。
-    # 阶段1: alpha > 0.45 的高置信核心——BFS 严格在用户点的元素内
+    # 阶段1: alpha > 0.45 的高置信核心——BFS 严格在用户点的元素内；
+    #         同时加 **m 梯度跌落判定**：邻居 alpha 比当前低 > 0.25 → 视为元素边界（即使中间没
+    #         明显的 alpha gap，跨过主标题边缘到小标题这类急剧变化也会停止）。
     # 阶段2: 核心紧邻 1 步的 alpha > 0.15 区——保留软光晕/描边
-    #         中间过渡（0.15-0.45）因为不在核心的 4-邻接而不被扩展 → 屏障
     core = np.zeros((H, W), dtype=bool)
     q = deque([(cy, cx)])
     core[cy, cx] = True
     core_ground = m > 0.45
     while q:
         y, x = q.popleft()
+        cur_m = m[y, x]
         for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             ny, nx = y + dy, x + dx
             if 0 <= ny < H and 0 <= nx < W and not core[ny, nx] and core_ground[ny, nx]:
+                # 防跨边界：邻居 alpha 急剧下降 → 视为元素边界（不连）
+                if m[ny, nx] < cur_m - 0.25:
+                    continue
                 core[ny, nx] = True
                 q.append((ny, nx))
 
