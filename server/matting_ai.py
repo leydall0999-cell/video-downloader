@@ -859,11 +859,17 @@ def sam_refine_mask(rgb, prompt: dict, W: int, H: int):
     pimg = pimg.crop((0, 0, nw, nh)).resize((w0, h0), Image.LANCZOS)
     out_mask = np.asarray(pimg, dtype=np.float32) / 255.0
 
-    # ---------- 4) prompt 硬边界（套索多边形/矩形框外强制透明）----------
-    if prompt.get("type") == "poly":
+    # ---------- 4) prompt 硬边界（套索多边形/用户框外强制透明，绝不越界）----------
+    # SAM box prompt 语义是"分割框内主体"，但主体紧贴延伸物（如标题下方装饰）会随
+    # mask 溢出框外——必须按用户框硬裁，守住「框住什么就是什么」。
+    if prompt.get("type") in ("poly", "box"):
         poly_img = Image.new("L", (w0, h0), 0)
-        ImageDraw.Draw(poly_img).polygon(
-            [(p[0] * w0, p[1] * h0) for p in prompt["poly"]], fill=255)
+        dr = ImageDraw.Draw(poly_img)
+        if prompt.get("type") == "poly":
+            dr.polygon([(p[0] * w0, p[1] * h0) for p in prompt["poly"]], fill=255)
+        else:
+            x1, y1, x2, y2 = prompt["norm"]
+            dr.rectangle([x1 * w0, y1 * h0, x2 * w0, y2 * h0], fill=255)
         out_mask = out_mask * (np.asarray(poly_img, dtype=np.float32) / 255.0)
     return Image.fromarray(np.clip(out_mask * 255.0, 0, 255).astype(np.uint8), mode="L")
 
