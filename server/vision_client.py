@@ -26,16 +26,21 @@ import urllib.request
 from vision_config import get_vision_config
 
 _PROMPT = (
-    "你是一个精确的图像要素定位助手。请分析这张图，识别其中主要的文字或图形主体"
-    "（通常是视觉上最突出的标题、logo、主要角色/物体）。\n\n"
+    "你是一个精确的图像要素定位助手。请分析这张图，识别图中的文字和图形要素。\n\n"
     "请只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
     "{\n"
     '  "blocks": [\n'
-    '    {"label": "<该要素的简短描述，如 主标题/副标题/logo/角色>", "bbox": [x1, y1, x2, y2]}\n'
+    '    {"label": "<主标题|副标题|logo|装饰|背景>", "bbox": [x1, y1, x2, y2]}\n'
     "  ]\n"
     "}\n"
+    "label 命名约定：\n"
+    '  - 主标题 = 图中最突出的核心文字标题（通常是字号最大、最显眼的那一行文字）\n'
+    '  - 副标题 = 主标题下方/旁边的较小辅助文字、说明性文字\n'
+    '  - logo/装饰 = 图形、图标、装饰元素\n'
+    '  - 背景 = 大面积背景色块\n'
     "bbox 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]。\n"
-    "请尽可能列出图中所有显著文字/图形要素（主标题、副标题、logo 等各一个 bbox）。"
+    "**重要约束**：主标题的 bbox 必须**只包含主标题文字本身**，不要包含紧贴的副标题、"
+    "装饰、笔触、涂鸦、阴影或文字描边。同理副标题/装饰也只框各自本身，不要相互包含。"
 )
 
 _SYSTEM = "你是一个严谨的图像分析助手，只输出要求的 JSON，不做任何额外解释。"
@@ -139,6 +144,14 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
         )
 
     b64 = _compress_to_b64(image_path, max_side)
+    # 读原图尺寸：qwen-vl-max 有时会按原图像素坐标返回 bbox（>1024），
+    # 而不是归一化坐标（[0,1]）；检测后按 (W, H) 归一化统一处理。
+    try:
+        from PIL import Image as _PIL
+        with _PIL.open(image_path) as _im:
+            _imgW, _imgH = _im.size
+    except Exception:
+        _imgW, _imgH = None, None
     url = base_url + "/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -186,26 +199,65 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
     for b in blocks_raw:
         if not isinstance(b, dict):
             continue
-        # 兼容多种 bbox 字段名：box / bbox / bbox_2d / bounding_box（qwen-vl-max 习惯用 bbox_2d）
-        raw_box = b.get("box") or b.get("bbox") or b.get("bbox_2d") or b.get("bounding_box")
+        # 兼容多种 bbox 字段名：box / bbox / bbox_2d / bounding_box / boundingBox /
+        # region / rect / coordinates / location / area / detections（各家 VLM 命名习惯不同）
+        raw_box = (
+            b.get("box") or b.get("bbox") or b.get("bbox_2d") or b.get("bounding_box")
+            or b.get("boundingBox") or b.get("region") or b.get("rect")
+            or b.get("coordinates") or b.get("location") or b.get("area")
+        )
         if raw_box is None and isinstance(b.get("boxes"), (list, tuple)) and len(b["boxes"]) >= 4:
             raw_box = list(b["boxes"])[:4]
-        box = _parse_box(raw_box)
+        # 兜底：单值字段（x1/y1/x2/y2 散在）或 polygon points 取 bbox
+        if raw_box is None:
+            pts = b.get("points") or b.get("polygon")
+            if isinstance(pts, (list, tuple)) and len(pts) >= 2:
+                xs, ys = [], []
+                for p in pts:
+                    if isinstance(p, (list, tuple)) and len(p) >= 2:
+                        xs.append(float(p[0])); ys.append(float(p[1]))
+                if xs and ys:
+                    raw_box = [min(xs), min(ys), max(xs), max(ys)]
+        if raw_box is None:
+            continue
+        # **坐标自动归一化**：qwen-vl-max 有时按原图像素坐标（>1024）返回，
+        # 有时按归一化坐标（[0,1]）返回。如果任何坐标 > 1.5 当作像素坐标，
+        # 按 (W, H) 归一化到 [0,1]，避免被 _parse_box 当作越界夹紧退化掉。
+        try:
+            _vals = [float(v) for v in raw_box[:4]]
+        except Exception:  # noqa: BLE001
+            continue
+        if max(_vals) > 1.5 and _imgW and _imgH:
+            _vals = [_vals[0] / _imgW, _vals[1] / _imgH, _vals[2] / _imgW, _vals[3] / _imgH]
+        box = _parse_box(_vals)
         if not box:
             continue
-        # 拿到的 bbox 字段名（用于诊断）
         blocks.append({"label": str(b.get("label", "")), "box": box})
 
     if not blocks:
-        raise RuntimeError("视觉模型未识别出任何主体")
+        # 诊断：把 qwen 原始回复写到错误信息里，便于排查字段命名
+        snippet = (content or "")[:300].replace("\n", " ")
+        raise RuntimeError(f"视觉模型未识别出任何主体｜原始回复: {snippet}")
 
     def _area(b):
         x1, y1, x2, y2 = b["box"]
         return (x2 - x1) * (y2 - y1)
 
     blocks_sorted = sorted(blocks, key=_area, reverse=True)
+
+    # **V10.2 主标题优先匹配**：qwen 可能返回多个 blocks（含主/副/装饰），
+    # 之前用面积最大的——但"主+副+装饰"组合框面积也很大，反而把副标题/装饰框进去了。
+    # 现在优先取 label 含"主标题"/"title"/"main"的 block；只有"装饰/副/logo"标签时才
+    # 退回面积最大，避免"qwen 把整个中央区域标成主标题"时把不要的副标题/装饰一起带进来。
+    _PRIMARY_KEYS = ("主标题", "main title", "title", "main")
+    primary = next(
+        (b for b in blocks_sorted
+         if any(k in b.get("label", "").lower() for k in _PRIMARY_KEYS)),
+        None,
+    )
+    subject = primary or blocks_sorted[0]
     return {
-        "subject": blocks_sorted[0],
+        "subject": subject,
         "all": blocks_sorted,
         "model": model,
         "provider": provider,
