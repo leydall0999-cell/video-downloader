@@ -694,12 +694,66 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
     m = _np.array(mask).astype(_np.float32) / 255.0
     p = _np.array(poly_img).astype(_np.float32) / 255.0
     m = m * p
+    # 中心连通性过滤：从 mask 最高点（=主标题最显眼字符的核心）4-邻接 BFS，
+    # 只走 alpha > 0.20 的像素。主标题与下方副标题/远端装饰之间是白色背景，
+    # mask 几乎为 0，BFS 自然跨不过去，整条副标题条会被一次性剔掉。
+    # （这一刀是 dominant filter 之前的"硬骨架"——dominant 处理"近处小杂簇"，
+    #  center-keep 处理"远处异色连体区"。）
+    m = _polygon_center_keep(m)
     # 套索圈内主色聚类提纯：BiRefNet 按显著性抠图会把圈内「紧贴主体的黑色笔触/
     # 深色装饰」当同一显著性物体保留。聚类按颜色把前景分组，剔除与主体主色
     # 差异大且整体偏暗的杂质簇（不会误伤橙底白字这类多色主体的浅色部分）。
     rgb_arr = _np.array(rgb).astype(_np.float32) / 255.0
     m = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
     return Image.fromarray(_np.clip(m * 255.0, 0, 255).astype(_np.uint8), mode="L")
+
+
+def _polygon_center_keep(mask_arr, ground_thresh: float = 0.20):
+    """套索圈内中心连通性过滤：从 mask 最高点 4-邻接 BFS，只保留与最高点
+    连通的区域。
+
+    为什么需要它：
+        dominant filter 按颜色聚类，但「与主体颜色相近但空间上离主体很远」
+        的整片区域（如下方整条副标题条"转发集赞｜好友同行｜报名砸金蛋"）
+        会被 kmeans 归入主色簇保留下来——用户根本不想要它。
+        用中心连通性做硬切：从 mask 最高点（=主标题最显眼字符核心）出发
+        4-邻接 BFS，只走 alpha > ground_thresh 的像素。主标题和下方副标题
+        之间是白色背景，mask 几乎为 0，BFS 自然跨不过去，副标题条
+        被一次性剔除。
+
+    参数：
+        mask_arr: 已乘 polygon 后的 float [0,1] 数组
+        ground_thresh: BFS 可走的最低 mask 值（默认 0.20）
+            主体边缘/阴影通常 mask > 0.20；白色背景 < 0.20，自然形成"屏障"。
+
+    返回：与 mask 最高点连通的 mask 区域保留；其余置 0。
+    """
+    import numpy as np
+    from collections import deque
+
+    H, W = mask_arr.shape
+    # 起点：mask 最高点
+    flat_idx = int(np.argmax(mask_arr))
+    if mask_arr.flat[flat_idx] < 0.30:
+        return mask_arr  # mask 太低，说明主体没检出，不做切除
+    sy, sx = divmod(flat_idx, W)
+
+    visited = np.zeros((H, W), dtype=bool)
+    q = deque([(sy, sx)])
+    visited[sy, sx] = True
+    ground = mask_arr > ground_thresh
+
+    while q:
+        y, x = q.popleft()
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W and not visited[ny, nx] and ground[ny, nx]:
+                visited[ny, nx] = True
+                q.append((ny, nx))
+
+    out = mask_arr.copy()
+    out[~visited] = 0.0
+    return out
 
 
 def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
