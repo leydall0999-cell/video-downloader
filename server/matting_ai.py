@@ -646,11 +646,44 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 mask = _box_crop_mask(rgb, box_px, W, H, model=model)
 
         rgba = rgb.convert("RGBA")
+        # 🔬 全局边缘软化（像素级）：所有路径（自动/点选/框选/套索/魔棒多块）统一经过。
+        # BiRefNet 输出经阈值+power 后基本是 0/255 二值，边缘锯齿硬切；此处只在
+        # 前景/背景交界 2px 环带内对 alpha 做高斯平滑，让头发丝/衣边/文字边缘自然过渡。
+        mask = _edge_soften_mask(mask)
         rgba.putalpha(mask)
 
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def _edge_soften_mask(mask, radius: int = 2, sigma: float = 1.2):
+    """🔬 alpha 边缘软化：只在前景/背景交界 ±radius 环带内平滑，其余保持。
+
+    BiRefNet/后处理常把 alpha 推到 0/255 两极 → 输出边缘是一像素级硬切（毛糙/锯齿）。
+    这里用形态学找到边缘环带（dilate - erode），带内 alpha 用高斯模糊版本替换：
+     - 硬边变成 2-3px 自然半透明过渡（视觉=柔和发丝/衣边）
+     - 前景内部与背景深处原样保留（不影响主体细节）
+    mask: PIL L 模式 0-255。返回同尺寸 PIL L。
+    """
+    import numpy as np
+    from PIL import Image as _PIL_Img
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        return mask
+    arr = np.array(mask, dtype=np.uint8)
+    fg = (arr > 127).astype(np.uint8)
+    struct = np.ones((2 * radius + 1, 2 * radius + 1), dtype=np.uint8)
+    dil = cv2.dilate(fg, struct, iterations=1)
+    ero = cv2.erode(fg, struct, iterations=1)
+    band = (dil - ero).astype(bool)  # 边界环带
+    if not band.any():
+        return mask
+    blur = cv2.GaussianBlur(arr.astype(np.float32), (7, 7), sigma)
+    out = arr.copy().astype(np.float32)
+    out[band] = blur[band]
+    return _PIL_Img.fromarray(np.clip(out, 0, 255).astype(np.uint8), mode="L")
 
 
 def analyze_blocks(rgb, model: str | None = None, min_area_ratio: float = 0.0006, max_blocks: int = 60):
