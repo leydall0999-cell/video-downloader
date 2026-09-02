@@ -54,7 +54,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -63,10 +63,11 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         out_path = app.DW_DIR / f"mat_{job_id}.png"
         # 诊断日志：记录选区原始参数，便于排查"圈了但结果不对"
         app.logger.info(
-            "matting %s start: box=%s polygon=%s vision_guide=%s model=%s",
+            "matting %s start: box=%s polygon=%s click=%s vision_guide=%s model=%s",
             job_id,
             box,
             f"{len(polygon)}pts" if polygon else None,
+            click,
             vision_guide,
             model,
         )
@@ -84,15 +85,15 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
         job["filename"] = out_path.name
         job["out_path"] = str(out_path)
         job["vision_used"] = vision_used
-        # 记录本次实际使用的选区模式（多边形 > AI 视觉 > 矩形框 > 自动），供前端状态展示
-        job["mode"] = "lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto"))
+        # 记录本次实际使用的选区模式（点图 > 多边形 > AI 视觉 > 矩形框 > 自动），供前端状态展示
+        job["mode"] = "click" if click else ("lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto")))
         # 把 polygon 的 bbox 也记下来，方便和用户画的圈对照
         if polygon:
             xs = [p[0] for p in polygon]
@@ -127,6 +128,7 @@ def create_matting_image(
     model: str = app.Form(None),
     vision_guide: str = app.Form(None),
     polygon: str = app.Form(None),
+    click_point: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
@@ -136,6 +138,9 @@ def create_matting_image(
     polygon（可选）：JSON 字符串 "[[x,y],[x,y],...]"（≥3 点，归一化 0~1），
     表示用户用**套索工具**自由圈出的多边形。比矩形框精确得多，能贴合不规则主体
     （如只圈主标题、避开紧贴的副标题/装饰）。给了 polygon 就以它为准。
+    click_point（可选）：JSON 字符串 "[x,y]"（归一化 0~1），**点图抠图**——
+    用户直接在预览图上单击某个元素（主标题/图案/按钮等），后端跑全图显著性，
+    找到点击处所属的连通显著块并只抠那一块。优先级最高（用户点哪抠哪）。
     model（可选）：模型名（birefnet-general / birefnet-general-lite / rmbg-2.0）。
     给定时用指定模型，否则用全局默认（当前 birefnet-general，MIT 可商用）。
     rmbg-2.0 为 CC BY-NC 4.0 仅非商用，仅限个人 / 非商业场景显式选用。
@@ -177,6 +182,20 @@ def create_matting_image(
     # 🤖 AI 视觉定位开关：开启时后端先调 VLM 看懂图、自动框出主体再抠
     vg = (vision_guide or "").strip().lower() in ("1", "true", "yes", "on")
 
+    # 👆 点图抠图：点击预览图上的元素（归一化 [x,y]），抠点击处所在显著块
+    parsed_click = None
+    if click_point:
+        try:
+            import json as _json3
+
+            c = _json3.loads(click_point)
+            if isinstance(c, (list, tuple)) and len(c) >= 2:
+                fx, fy = float(c[0]), float(c[1])
+                if 0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0:
+                    parsed_click = [fx, fy]
+        except Exception:  # noqa: BLE001
+            parsed_click = None  # 解析失败忽略，退回其它选区
+
     save_path = _save_upload(file, "mat_up")
     job_id = app.uuid.uuid4().hex[:12]
     with MAT_LOCK:
@@ -184,8 +203,8 @@ def create_matting_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "matting",
         }
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon)
-    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon)}
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click)
+    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click}
 
 
 @router.get("/api/matting/image/{job_id}")

@@ -540,10 +540,15 @@ def predict_mask(img, model: str | None = None):
     return mask_img
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
+
+    click（可选）：**[x,y] 归一化 0~1**，点图抠图——用户直接在预览图上
+      单击想要的主体（主标题/图案/按钮等），后端跑全图显著性，
+      从点击点 BFS 扩散找到"点击处所属的那个元素"（连通显著块）只抠它。
+      用户点哪抠哪——"要抠的东西不固定"由用户随手决定。
 
     box（可选）：用户手动框选的主体区域，归一化 (x, y, w, h)，取值 0~1。
       给定时**只把框内区域送进模型推理**（而不是全图推理后再裁），
@@ -569,7 +574,10 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        if polygon:
+        if click:
+            # 👆 点图抠图：用户点哪抠哪（点击处所在连通显著块）
+            mask = _click_mask(rgb, click, W, H, model=model)
+        elif polygon:
             if vision_box is not None:
                 # **套索 + AI 视觉定位 同时勾选** → 交集模式：
                 # AI 先按 VLM box 整图抠主体（主标题，box 外强制透明），
@@ -637,6 +645,48 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def _click_mask(rgb, click, W: int, H: int, model: str | None = None):
+    """点图抠图（👆 用户点哪抠哪）。
+
+    click: 归一化 [x, y] ∈ [0,1]——用户直接在预览图上单击想要的主体
+    （主标题 / 图案 / 按钮 / logo 等，"抠什么"由用户随手决定，不写死）。
+    实现：
+      1. 全图 BiRefNet 得 alpha（含 predict_mask 的软阈值/连通/羽化后处理）
+      2. 点击处 alpha < 0.20 → 点到了背景 → raise 提示（用户可改点别的元素）
+      3. 从点击点 4-邻接 BFS，只走 alpha > 0.20 的区域 → 得到"点击处所属元素"
+      4. 输出该元素连通块（保留原 alpha 值）
+    典型：海报上主标题/颜料盘/铅笔各自独立成显著块，点谁抠谁。
+    """
+    import numpy as np
+    from collections import deque
+    from PIL import Image
+
+    cx = int(np.clip(round(float(click[0]) * W), 0, W - 1))
+    cy = int(np.clip(round(float(click[1]) * H), 0, H - 1))
+
+    mask_img = predict_mask(rgb, model=model)  # 原图尺寸 L 模式 0-255
+    m = np.array(mask_img).astype(np.float32) / 255.0
+    if m[cy, cx] < 0.20:
+        raise ValueError("点到背景了，请在画面上的元素（标题/图案/按钮）上单击")
+
+    # 从点击点扩散，只保留"点击处所属的连通显著块"
+    visited = np.zeros((H, W), dtype=bool)
+    q = deque([(cy, cx)])
+    visited[cy, cx] = True
+    ground = m > 0.20
+    while q:
+        y, x = q.popleft()
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W and not visited[ny, nx] and ground[ny, nx]:
+                visited[ny, nx] = True
+                q.append((ny, nx))
+
+    out = m.copy()
+    out[~visited] = 0.0
+    return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8), mode="L")
 
 
 def _polygon_vision_intersect(rgb, polygon, vision_box, W: int, H: int, model: str | None = None):

@@ -2986,6 +2986,8 @@
   let matBox = null;
   let matBoxDrawing = false;
   let matBoxStart = null;
+  // 👆 点图抠图：用户单击预览图上的元素坐标 [x, y]（归一化 0~1），null = 未点选
+  let matClick = null;
 
   // ===== 套索圈选（自由描轮廓，比矩形框精准） =====
   let matPolygon = null;          // [[x,y], ...] 归一化 0~1，提交后端做多边形抠图
@@ -3276,8 +3278,27 @@
   if (el.matFile) {
     el.matFile.addEventListener('change', () => matPreview(el.matFile.files[0]));
   }
+  // 👆 点图抠图：AI 视觉定位开启时，直接在预览图上单击想要的主体
+  // （主标题 / 图案 / 按钮…，抠什么由用户随手决定）→ 立即抠点击处元素
+  if (el.matImgPreview) {
+    el.matImgPreview.addEventListener('click', (ev) => {
+      if (!el.matVision || !el.matVision.checked) return;   // 仅在 AI 视觉定位开启时
+      if (matBusy) return;
+      const file = el.matFile && el.matFile.files && el.matFile.files[0];
+      if (!file) { if (el.matStatus) el.matStatus.textContent = '请先选择一张图片'; return; }
+      const p = matBoxPoint(ev); if (!p) return;
+      // 点选优先：清掉手动画的选区/套索，避免状态混淆
+      matBox = null; matBoxRedraw();
+      matPolygon = null; matLassoNorm = []; matLassoRedraw();
+      matClick = [p.x, p.y];
+      matSubmit();
+    });
+  }
   if (el.matBtn) {
-    el.matBtn.addEventListener('click', () => {
+    el.matBtn.addEventListener('click', () => { if (!matBusy) matSubmit(); });
+  }
+
+  const matSubmit = () => {
       if (matBusy) return;
       const file = el.matFile && el.matFile.files && el.matFile.files[0];
       if (!file) { el.matStatus.textContent = '请先选择一张图片'; return; }
@@ -3292,7 +3313,12 @@
         fd.append('model', el.matModel.value);
       }
       // 手动框选了主体区域 → 套索优先（多边形），其次矩形框 [x,y,w,h]
-      if (el.matBoxToggle && el.matBoxToggle.checked) {
+      if (matClick) {
+        // 👆 点图抠图：用户点了预览图上的元素 → 只抠点击处所在主体
+        fd.append('click_point', JSON.stringify(matClick));
+        el.matStatus.textContent = `点选抠图（${Math.round(matClick[0] * 100)}%, ${Math.round(matClick[1] * 100)}%）— 只抠该元素`;
+        matClick = null;
+      } else if (el.matBoxToggle && el.matBoxToggle.checked) {
         if (matTool === 'lasso') {
           // 提交前强制对齐 canvas 尺寸，避免图片加载/窗口变化后坐标映射错误
           matLassoResize();
@@ -3324,8 +3350,7 @@
           el.matBtn.disabled = false;
           el.matStatus.textContent = '提交失败：' + (e && e.detail ? e.detail : '未知错误');
         });
-    });
-  }
+  };
 
   // PDF 模式切换时展示/隐藏栅格化选项
   el.dwPdfMode.addEventListener('change', () => {
