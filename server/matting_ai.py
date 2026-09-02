@@ -809,11 +809,22 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
     big = int(np.argmax(sizes))
     main_color = centers[big]
 
+    # 构造每簇二值图 + 主簇图，用于"连通性豁免"判定
+    # （主簇 = 主标题主体；与主簇 4-邻接连通的异色簇视为"主体的一部分"
+    #  ——典型：主标题内的黑色飞白/描边/阴影，应保留）
+    ys, xs = np.where(reliable)
+    cluster_masks = np.zeros((k, H, W), dtype=bool)
+    for c in range(k):
+        cluster_masks[c] = np.zeros((H, W), dtype=bool)
+        cluster_masks[c][ys, xs] = (lab == c)
+    main_mask = cluster_masks[big]
+
     # 判定各簇是否需要剔除：
     #   条件 1（暗异色大杂质）：色距 > 0.40 且簇亮度 < 0.30 — 黑色笔触/墨渍
     #   条件 2（异色小杂簇）：色距 > 0.40 且亮度 < 0.85 且面积 < 主簇 18%
     #      ——主标题旁的浅色小三角/斜线笔触/零星点等装饰碎块
     #   保护（不被误剔）：
+    #     - **与主簇 4-邻接连通**的异色簇豁免（视为"主体的一部分"——飞白/描边）
     #     - 高亮异色簇（lum >= 0.85，如白字/亮黄装饰）即使面积小也保留
     #     - 异色但面积较大的簇（>= 主簇 18%）保留——可能是主标题的多色描边
     drop = np.zeros(k, dtype=bool)
@@ -822,6 +833,18 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
             continue
         dist = float(np.linalg.norm(centers[c] - main_color))
         lum = float(centers[c].max())
+        # 连通性豁免：簇 c 是否与主簇 4-邻接连通？
+        # 4-邻接检查：c 像素的上/下/左/右 4 个邻居中是否有 main_mask
+        mc = cluster_masks[c]
+        adj_to_main = (
+            (mc[1:, :] & main_mask[:-1, :]).any() or    # c 上邻接 main
+            (mc[:-1, :] & main_mask[1:, :]).any() or   # c 下邻接 main
+            (mc[:, 1:] & main_mask[:, :-1]).any() or   # c 左邻接 main
+            (mc[:, :-1] & main_mask[:, 1:]).any()      # c 右邻接 main
+        )
+        if adj_to_main:
+            # 与主体贴着的异色簇 = 飞白/描边/阴影，应保留
+            continue
         # 暗异色（黑色笔触）：色距 + 暗度
         if dist > 0.40 and lum < 0.30:
             drop[c] = True
