@@ -841,12 +841,34 @@ def _blocks_mask(rgb, blocks, W: int, H: int, model: str | None = None):
         except Exception:  # noqa: BLE001
             continue
 
-    # ---- union：全部选中块轮廓 fill → OR（块间隙 / 块外强制透明） ----
+    # ---- text 块 mask 阈值清理：仅在 text bbox 内 alpha<0.40 强制 0 ----
+    # 阻止"字外被 VLM bbox 包进去的白底/卡片底/装饰"被当前景带出——这些像素 BiRefNet
+    # 通常给 0.0~0.3 弱 alpha，没到 0.40 的位置清透，让前景仅保留真正的"字像素"。
+    # text bbox 之外不走阈值（可能 VLM 框比字紧一点 + 软边缘越界）。
+    if text_items:
+        text_bbox_union = np.zeros((H, W), dtype=bool)
+        for ti in text_items:
+            xs = [p[0] * W for p in ti["contour"]]; ys = [p[1] * H for p in ti["contour"]]
+            tx0, ty0 = max(0, int(min(xs))), max(0, int(min(ys)))
+            tx1, ty1 = min(W, int(max(xs))), min(H, int(max(ys)))
+            if tx1 > tx0 and ty1 > ty0:
+                text_bbox_union[ty0:ty1, tx0:tx1] = True
+        out = np.where(text_bbox_union & (out < 0.40), 0.0, out)
+
+    # ---- union：全部块二值多边形 → GaussianBlur 软化（5x5 sigma=1.0）——
+    # 硬 0/1 矩形乘 mask 会产生"卡片硬边"，软化后 alpha 边缘自然过渡，像素级。
+    # 中心区域被 *1.3 重映射确保仍是接近 1（不丢失前景不透明度）。
     union = Image.new("L", (W, H), 0)
     ud = ImageDraw.Draw(union)
     for poly in norm_all:
         ud.polygon([(float(p[0]) * W, float(p[1]) * H) for p in poly], fill=255)
-    u = np.array(union).astype(np.float32) / 255.0
+    try:
+        import cv2 as _cv2_feather
+        u_raw = np.array(union, dtype=np.float32)
+        u_soft = _cv2_feather.GaussianBlur(u_raw, (5, 5), 1.0)
+        u = np.clip(u_soft / 255.0 * 1.3, 0.0, 1.0)
+    except Exception:  # noqa: BLE001
+        u = np.array(union).astype(np.float32) / 255.0
     out = out * u
     return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8), mode="L")
 
