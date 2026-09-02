@@ -1016,6 +1016,28 @@ img { max-width: 100%; display: block; }
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .4rem;
 }
 .mat-box-actions[hidden] { display: none; }
+/* 框选下的「矩形 / 套索」工具切换：两段式按钮组 */
+.mat-tool-seg {
+  display: inline-flex; gap: 0; margin: .35rem 0 .1rem;
+  border: 1px solid var(--line, #d4d4e0); border-radius: 8px; overflow: hidden;
+}
+.mat-tool-seg[hidden] { display: none; }
+.mat-tool-btn {
+  appearance: none; border: none; background: transparent; cursor: pointer;
+  padding: .32rem .8rem; font-size: .82rem; color: var(--text-secondary, #555);
+  transition: background .12s, color .12s;
+}
+.mat-tool-btn + .mat-tool-btn { border-left: 1px solid var(--line, #d4d4e0); }
+.mat-tool-btn.active {
+  background: var(--brand, #6366f1); color: #fff; font-weight: 600;
+}
+/* 套索 canvas：绝对铺满预览图（与图片同尺寸），仅套索模式收事件 */
+.mat-lasso-canvas {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  z-index: 3; pointer-events: none; touch-action: none;
+}
+.mat-lasso-canvas[hidden] { display: none; }
+.dw-preview-wrap.mat-boxable .mat-lasso-canvas { cursor: crosshair; }
 /* 选框本体：用百分比定位（相对于铺满的承载层 = 图片），实色描边 + 薄填充 + 内白晕。
    即使浅色图也一眼可见；公共变量 --brand 缺失时回退靛蓝 #6366f1。 */
 .mat-box-rect {

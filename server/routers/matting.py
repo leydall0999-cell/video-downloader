@@ -54,7 +54,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: str, box: list | None = None, model: str | None = None, vision_guide: bool = False) -> None:
+def _run_matting(job_id: str, src: str, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -75,13 +75,15 @@ def _run_matting(job_id: str, src: str, box: list | None = None, model: str | No
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
         job["filename"] = out_path.name
         job["out_path"] = str(out_path)
         job["vision_used"] = vision_used
+        # 记录本次实际使用的选区模式（多边形 > AI 视觉 > 矩形框 > 自动），供前端状态展示
+        job["mode"] = "lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto"))
         app.logger.info("matting %s done -> %s (vision_used=%s)", job_id, out_path.name, vision_used)
     except Exception as e:  # noqa: BLE001
         job["status"] = "failed"
@@ -109,12 +111,16 @@ def create_matting_image(
     box: str = app.Form(None),
     model: str = app.Form(None),
     vision_guide: str = app.Form(None),
+    polygon: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
 
     box（可选）：JSON 字符串 "[x, y, w, h]"，归一化 0~1，表示用户手动框选的
     主体区域。给定时只抠框内主体（照片里有多个物体时可指定抠哪一个）。
+    polygon（可选）：JSON 字符串 "[[x,y],[x,y],...]"（≥3 点，归一化 0~1），
+    表示用户用**套索工具**自由圈出的多边形。比矩形框精确得多，能贴合不规则主体
+    （如只圈主标题、避开紧贴的副标题/装饰）。给了 polygon 就以它为准。
     model（可选）：模型名（birefnet-general / birefnet-general-lite / rmbg-2.0）。
     给定时用指定模型，否则用全局默认（当前 birefnet-general，MIT 可商用）。
     rmbg-2.0 为 CC BY-NC 4.0 仅非商用，仅限个人 / 非商业场景显式选用。
@@ -137,6 +143,20 @@ def create_matting_image(
         except Exception:  # noqa: BLE001
             parsed_box = None  # 解析失败就退回整图抠图，不报错
 
+    # 🪢 套索选区：[[x,y],...] 归一化点列表，≥3 点才有效（无效则忽略）
+    parsed_polygon = None
+    if polygon:
+        try:
+            import json as _json2
+
+            praw = _json2.loads(polygon)
+            if isinstance(praw, list) and len(praw) >= 3:
+                pts = [[float(p[0]), float(p[1])] for p in praw if isinstance(p, (list, tuple)) and len(p) >= 2]
+                if len(pts) >= 3:
+                    parsed_polygon = pts
+        except Exception:  # noqa: BLE001
+            parsed_polygon = None  # 解析失败就忽略套索，退回框选/整图
+
     # 校验模型名（未知名字退回全局默认，不报错）
     sel_model = model if (model and model in mat.MODELS) else None
     # 🤖 AI 视觉定位开关：开启时后端先调 VLM 看懂图、自动框出主体再抠
@@ -149,8 +169,8 @@ def create_matting_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "matting",
         }
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg)
-    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg}
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon)
+    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon)}
 
 
 @router.get("/api/matting/image/{job_id}")

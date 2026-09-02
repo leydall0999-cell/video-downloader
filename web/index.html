@@ -880,7 +880,11 @@
             <input type="checkbox" id="matBoxToggle" />
             <span class="uc-label">手动框选要抠的部分</span>
           </label>
-          <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上拖出一个框，框住你想抠的主体。照片里有多个人/物时用它指定抠哪一个；不框则自动抠全图主体。</span>
+          <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上标出你想抠的主体。两种工具：<b>矩形框选</b>拖一个框；<b>套索圈选</b>沿主体轮廓自由描一圈（贴合不规则主体、避开紧贴的副标题/装饰更精准）。不框则自动抠全图主体。</span>
+          <div class="mat-tool-seg" id="matToolSeg" hidden>
+            <button type="button" class="mat-tool-btn active" id="matToolRect">▭ 矩形框选</button>
+            <button type="button" class="mat-tool-btn" id="matToolLasso">✏️ 套索圈选</button>
+          </div>
           <label class="uc-field uc-check mat-vision-toggle">
             <input type="checkbox" id="matVision" />
             <span class="uc-label">🤖 AI 视觉定位（看懂图·只抠主体）</span>
@@ -896,9 +900,10 @@
                 <span class="mat-h mat-h-se"></span>
               </div>
             </div>
+            <canvas id="matLassoCanvas" class="mat-lasso-canvas" hidden></canvas>
           </div>
           <div class="mat-box-actions" id="matBoxActions" hidden>
-            <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除框选</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除选区</button>
             <span class="convert-status" id="matBoxInfo"></span>
           </div>
           <div class="dw-toolbar">

@@ -540,7 +540,7 @@ def predict_mask(img, model: str | None = None):
     return mask_img
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -550,10 +550,14 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
       这样模型会把框内内容当成整张图来找显著主体——
       照片里有多个人/物时，框谁就抠谁，比全图推理精确得多。
       框外一律透明。
+    polygon（可选）：用户**套索工具**自由圈出的多边形，归一化点列表
+      [[x1,y1], [x2,y2], ...]（≥3 点）。比矩形框精确得多——能贴合不规则主体
+      （如只圈主标题文字、避开紧贴的副标题/装饰）。优先级最高：给了 polygon
+      就以它为准（套索内保留、套索外强制透明），box/vision_box 作为上下文提示。
     vision_box（可选）：VLM 视觉定位给出的主体边界框，归一化 [x1,y1,x2,y2] ∈ [0,1]。
       给定时用「AI 视觉定位」引导抠图（见 vision_guided_mask）——VLM 看懂图、
       明确框出主体（如主标题），框外（副标题/装饰/背景）强制透明，专治"同色系
-      包围下主字 vs 副字分不清"的难题。优先级高于手动 box：两者都给时以 VLM 为准。
+      包围下主字 vs 副字分不清"的难题。与 box 同给时取交集（手动框为硬边界）。
     """
     from PIL import Image
 
@@ -565,7 +569,10 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        if vision_box and box is not None:
+        if polygon:
+            # 套索（最精确的用户意图）→ 优先级最高
+            mask = _polygon_mask(rgb, polygon, W, H, model=model)
+        elif vision_box and box is not None:
             # **手动框选 + AI 视觉定位 同时给出**：手动框是用户的明确意图，必须作为
             # 硬边界（「框住什么就是什么」），VLM 只在用户框**内部**再做语义精修。
             # 两者取交集：既尊重用户框选，又用 VLM 剔除框内夹带的副标题/装饰。
@@ -620,6 +627,73 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
+    """套索抠图：用户自由圈出的多边形区域，套索内保留、套索外强制透明。
+
+    polygon: 归一化点列表 [[x, y], ...]（≥3 点），取值 0~1。
+
+    为什么套索比矩形框精准得多：
+        矩形框必然把"框内但不属于主体"的部分（紧贴的副标题、装饰、笔触）一起框进来，
+        模型只会把这些也当前景保留。套索能贴合主体的真实轮廓——比如沿着主标题的
+        橙色描边画一圈，把下方紧贴的黑色笔触副标题留在外面，抠出来就是干净的标题。
+
+    实现：
+        1. 归一化点 → 像素点；算出多边形 bbox
+        2. 按 bbox + 10% 外扩裁切送进模型（保留光晕/阴影等软元素的上下文）
+        3. 构造多边形 mask（PIL ImageDraw.polygon 填充）
+        4. 推理 mask × 多边形 mask → 套索外一律 0
+    """
+    import numpy as _np
+    from PIL import Image, ImageDraw
+
+    if not polygon or len(polygon) < 3:
+        return None  # 无效套索，调用方回退
+
+    try:
+        pts = [(float(p[0]) * W, float(p[1]) * H) for p in polygon if len(p) >= 2]
+    except Exception:  # noqa: BLE001
+        return None
+    if len(pts) < 3:
+        return None
+
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
+    x1, y1 = min(W, int(max(xs))), min(H, int(max(ys)))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None  # 太小，模型也糊
+
+    # 推理上下文外扩 10%（同矩形框选，保留光晕/描边/阴影软元素）
+    bw, bh = x1 - x0, y1 - y0
+    pad_w = max(int(bw * 0.10), 4)
+    pad_h = max(int(bh * 0.10), 4)
+    x0p, y0p = max(0, x0 - pad_w), max(0, y0 - pad_h)
+    x1p, y1p = min(W, x1 + pad_w), min(H, y1 + pad_h)
+
+    crop = rgb.crop((x0p, y0p, x1p, y1p))
+    crop_mask = predict_mask(crop, model=model)
+
+    # 把裁切推理结果贴回原图坐标（只取多边形 bbox 范围）
+    out_arr = _np.zeros((H, W), dtype=_np.uint8)
+    crop_w_p, crop_h_p = crop_mask.size
+    sx0 = max(0, x0 - x0p)
+    sy0 = max(0, y0 - y0p)
+    sx1 = min(crop_w_p, x1 - x0p)
+    sy1 = min(crop_h_p, y1 - y0p)
+    if sx1 > sx0 and sy1 > sy0:
+        region = _np.array(crop_mask, dtype=_np.uint8)[sy0:sy1, sx0:sx1]
+        paste_w, paste_h = sx1 - sx0, sy1 - sy0
+        out_arr[y0:y0 + paste_h, x0:x0 + paste_w] = region
+    mask = Image.fromarray(out_arr, mode="L")
+
+    # 构造多边形 mask，与推理 mask 相乘 → 套索外强制透明
+    poly_img = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(poly_img).polygon(pts, fill=255)
+    m = _np.array(mask).astype(_np.float32) / 255.0
+    p = _np.array(poly_img).astype(_np.float32) / 255.0
+    return Image.fromarray(_np.clip(m * p * 255.0, 0, 255).astype(_np.uint8), mode="L")
 
 
 def _box_crop_mask(rgb, box_px, W: int, H: int, model: str | None = None):

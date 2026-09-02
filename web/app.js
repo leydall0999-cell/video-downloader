@@ -2983,6 +2983,12 @@
   let matBoxDrawing = false;
   let matBoxStart = null;
 
+  // ===== 套索圈选（自由描轮廓，比矩形框精准） =====
+  let matPolygon = null;          // [[x,y], ...] 归一化 0~1，提交后端做多边形抠图
+  let matLassoNorm = [];          // 绘制用：归一化点序列（暂存，pointerup 后定稿为 matPolygon）
+  let matTool = 'rect';           // 'rect' | 'lasso'
+  let matLassoDrawing = false;
+
   // 选框用 div（#matBoxRect）承载层 #matBoxSvg 内的百分比定位——WKWebView 对 inline svg 的
   // viewBox / non-scaling-stroke / width=0 fallback 有一堆坑，div 边框 100% 可靠。
   // matBox 是归一化 0~1，直接 ×100 变百分比即可，无需任何像素换算。
@@ -3009,7 +3015,7 @@
     let _rszT = null;
     window.addEventListener('resize', () => {
       if (!_rszT && el.matBoxToggle && el.matBoxToggle.checked) {
-        _rszT = setTimeout(() => { _rszT = null; matBoxRedraw(); }, 80);
+        _rszT = setTimeout(() => { _rszT = null; matBoxRedraw(); if (matTool === 'lasso') matLassoResize(); }, 80);
       }
     });
   }
@@ -3025,18 +3031,125 @@
   };
 
   const matBoxSetEnabled = (on) => {
-    if (el.matBoxSvg) el.matBoxSvg.hidden = !on;
+    if (el.matBoxSvg) el.matBoxSvg.hidden = !(on && matTool === 'rect');
     if (el.matBoxHint) el.matBoxHint.hidden = !on;
     if (el.matBoxActions) el.matBoxActions.hidden = !on;
+    if (el.matToolSeg) el.matToolSeg.hidden = !on;
+    if (el.matLassoCanvas) {
+      el.matLassoCanvas.hidden = !(on && matTool === 'lasso');
+      el.matLassoCanvas.style.pointerEvents = (on && matTool === 'lasso') ? 'auto' : 'none';
+    }
     if (el.matPreviewWrap) el.matPreviewWrap.classList.toggle('mat-boxable', !!on);
-    if (!on) { matBox = null; matBoxRedraw(); }
+    if (!on) { matBox = null; matBoxRedraw(); matPolygon = null; matLassoNorm = []; matLassoRedraw(); }
   };
+
+  // 套索 canvas 尺寸对齐预览图（CSS 像素 × dpr，保证高清描边）
+  const matLassoResize = () => {
+    const cv = el.matLassoCanvas; if (!cv) return;
+    const img = el.matImgPreview; if (!img || !img.clientWidth) return;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(img.clientWidth * dpr);
+    cv.height = Math.round(img.clientHeight * dpr);
+    cv.style.left = img.offsetLeft + 'px';
+    cv.style.top = img.offsetTop + 'px';
+    matLassoRedraw();
+  };
+
+  const matLassoRedraw = () => {
+    const cv = el.matLassoCanvas; if (!cv) return;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!matLassoNorm || matLassoNorm.length < 2) return;
+    const w = cv.width, h = cv.height;
+    ctx.lineWidth = 2.5 * (window.devicePixelRatio || 1);
+    ctx.strokeStyle = '#6366f1';
+    ctx.fillStyle = 'rgba(99, 102, 241, .14)';
+    ctx.beginPath();
+    ctx.moveTo(matLassoNorm[0][0] * w, matLassoNorm[0][1] * h);
+    for (let i = 1; i < matLassoNorm.length; i++) ctx.lineTo(matLassoNorm[i][0] * w, matLassoNorm[i][1] * h);
+    if (!matLassoDrawing) ctx.closePath();   // 描完闭合，套索内填充
+    ctx.fill();
+    ctx.stroke();
+  };
+
+  const matLassoPoint = (ev) => {
+    const cv = el.matLassoCanvas; if (!cv) return null;
+    const r = cv.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
+  };
+
+  const setMatTool = (t) => {
+    matTool = t;
+    if (el.matToolRect) el.matToolRect.classList.toggle('active', t === 'rect');
+    if (el.matToolLasso) el.matToolLasso.classList.toggle('active', t === 'lasso');
+    // 切工具时清掉另一种选区，避免混淆
+    if (t === 'lasso') { matBox = null; matBoxRedraw(); }
+    else { matPolygon = null; matLassoNorm = []; matLassoRedraw(); }
+    if (el.matBoxSvg) el.matBoxSvg.hidden = matTool !== 'rect';
+    if (el.matLassoCanvas) {
+      el.matLassoCanvas.hidden = matTool !== 'lasso';
+      el.matLassoCanvas.style.pointerEvents = matTool === 'lasso' ? 'auto' : 'none';
+    }
+    if (t === 'lasso') matLassoResize();
+  };
+
+  if (el.matToolRect && el.matToolLasso) {
+    el.matToolRect.addEventListener('click', () => setMatTool('rect'));
+    el.matToolLasso.addEventListener('click', () => setMatTool('lasso'));
+  }
+
+  if (el.matLassoCanvas) {
+    const cv = el.matLassoCanvas;
+    cv.addEventListener('pointerdown', (ev) => {
+      if (matTool !== 'lasso') return;
+      const p = matLassoPoint(ev); if (!p) return;
+      ev.preventDefault();
+      matLassoDrawing = true;
+      matLassoNorm = [[p.x, p.y]];
+      try { cv.setPointerCapture(ev.pointerId); } catch (_) { /* 老浏览器忽略 */ }
+      matLassoRedraw();
+    });
+    // move/up 也走 canvas 自身（setPointerCapture 已保证拖出范围也连续）
+    cv.addEventListener('pointermove', (ev) => {
+      if (!matLassoDrawing || matTool !== 'lasso') return;
+      const p = matLassoPoint(ev); if (!p) return;
+      const last = matLassoNorm[matLassoNorm.length - 1];
+      if (Math.hypot(p.x - last[0], p.y - last[1]) > 0.004) {
+        matLassoNorm.push([p.x, p.y]);
+        matLassoRedraw();
+      }
+    });
+    const lassoEnd = (ev) => {
+      if (!matLassoDrawing) return;
+      matLassoDrawing = false;
+      try { cv.releasePointerCapture(ev.pointerId); } catch (_) { /* 忽略 */ }
+      matLassoNorm = matLassoNorm.filter(pt => pt && pt.length === 2);
+      if (matLassoNorm.length >= 3) {
+        matPolygon = matLassoNorm.map(pt => [pt[0], pt[1]]);
+      } else {
+        matPolygon = null;
+      }
+      matLassoRedraw();
+      if (el.matBoxInfo) {
+        el.matBoxInfo.textContent = matPolygon
+          ? `已圈选 ✏️（${matPolygon.length} 个顶点）— 点「开始抠图」只抠圈内`
+          : '线条太短，请重新沿主体描一圈';
+      }
+    };
+    cv.addEventListener('pointerup', lassoEnd);
+    cv.addEventListener('pointercancel', lassoEnd);
+  }
 
   if (el.matBoxToggle) {
     el.matBoxToggle.addEventListener('change', () => matBoxSetEnabled(el.matBoxToggle.checked));
   }
   if (el.matBoxClear) {
-    el.matBoxClear.addEventListener('click', () => { matBox = null; matBoxRedraw(); });
+    el.matBoxClear.addEventListener('click', () => {
+      matBox = null; matBoxRedraw();
+      matPolygon = null; matLassoNorm = []; matLassoRedraw();
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '';
+    });
   }
 
   if (el.matImgPreview) {
@@ -3079,6 +3192,7 @@
     // 窗口尺寸变化后图片显示尺寸变了，重绘保持框贴合
     window.addEventListener('resize', () => {
       if (el.matBoxToggle && el.matBoxToggle.checked) matBoxRedraw();
+      if (el.matBoxToggle && el.matBoxToggle.checked && matTool === 'lasso') matLassoResize();
     });
   }
 
@@ -3093,6 +3207,8 @@
     el.matImgPreview.onload = () => {
       matBox = null;   // 换图后清掉旧框，避免框错图
       matBoxRedraw();
+      matPolygon = null; matLassoNorm = []; matLassoRedraw();
+      if (matTool === 'lasso') matLassoResize();   // 图片尺寸变了，重新对齐 canvas
     };
   };
 
@@ -3111,6 +3227,10 @@
           // 🤖 AI 视觉定位结果提示：成功显示主体标签，未生效解释原因并说明已回退
           if (d.vision_used) {
             el.matStatus.textContent = '抠图完成 ✅（🤖 AI 视觉定位已生效：' + (d.vision_label || '主体') + '）';
+          } else if (d.mode === 'lasso') {
+            el.matStatus.textContent = '抠图完成 ✅（✏️ 套索圈选，只抠你描的区域）';
+          } else if (d.mode === 'box') {
+            el.matStatus.textContent = '抠图完成 ✅（▭ 矩形框选，只抠框内）';
           } else {
             el.matStatus.textContent = d.vision_error
               ? '抠图完成（⚠️ AI 视觉定位未生效：' + d.vision_error + '，已用基础抠图）'
@@ -3160,9 +3280,13 @@
       if (el.matModel && el.matModel.value) {
         fd.append('model', el.matModel.value);
       }
-      // 手动框选了主体区域 → 把归一化 [x,y,w,h] 一起提交，后端只抠框内
-      if (el.matBoxToggle && el.matBoxToggle.checked && matBox) {
-        fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
+      // 手动框选了主体区域 → 套索优先（多边形），其次矩形框 [x,y,w,h]
+      if (el.matBoxToggle && el.matBoxToggle.checked) {
+        if (matTool === 'lasso' && matPolygon) {
+          fd.append('polygon', JSON.stringify(matPolygon));
+        } else if (matBox) {
+          fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
+        }
       }
       // 🤖 AI 视觉定位：开启时让后端先调 VLM 看懂图、自动框出主体再抠
       if (el.matVision && el.matVision.checked) {
