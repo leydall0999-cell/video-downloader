@@ -26,6 +26,25 @@ MAT_MODEL_EXTS = {".onnx"}
 MAT_JOBS: dict[str, dict] = {}
 MAT_LOCK = threading.Lock()
 
+# 🧲 智能选块 analyze 结果缓存：同图(内容 hash)+同参数 10 分钟内秒回，
+# 避免用户切「📝 文字检测」开关 / 重复切工具时每次都重跑 13s BiRefNet + VLM。
+_ANALYZE_CACHE: dict[str, dict] = {}
+_ANALYZE_CACHE_TTL = 600.0
+_ANALYZE_CACHE_LOCK = threading.Lock()
+
+
+def _analyze_cache_key(path, model: str, with_text: bool) -> str:
+    try:
+        import hashlib as _hl
+
+        h = _hl.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return f"{h.hexdigest()[:24]}|{model}|{1 if with_text else 0}"
+    except Exception:  # noqa: BLE001
+        return ""
+
 
 def _save_upload(file, prefix: str) -> app.Path:
     """流式落盘上传文件到 DW_DIR，返回保存路径。"""
@@ -265,23 +284,34 @@ def matting_analyze(
         with Image.open(save_path) as im:
             im.load()
             rgb = im.convert("RGB")
+        wt = (with_text or "").strip().lower() in ("1", "true", "yes", "on")
+
+        # 缓存命中直接秒回（同图重分析 / 切文字检测开关不再等十几秒）
+        ckey = _analyze_cache_key(str(save_path), sel_model, wt) if save_path else ""
+        if ckey:
+            import time as _t
+
+            with _ANALYZE_CACHE_LOCK:
+                hit = _ANALYZE_CACHE.get(ckey)
+                if hit and _t.time() - hit.get("ts", 0) < _ANALYZE_CACHE_TTL:
+                    return {"ok": True, "blocks": hit["blocks"], "model": sel_model,
+                            "total": len(hit["blocks"]), "text_used": hit["text_used"],
+                            "text_total": hit["text_total"], "cached": True}
+
         blocks = mat.analyze_blocks(rgb, model=sel_model)
         text_used = False
         text_total = 0
-        wt = (with_text or "").strip().lower() in ("1", "true", "yes", "on")
         if wt:
-            try:
-                import vision_client as _vc
+            # BiRefNet 块 + VLM 文字检测并行跑，总耗时 ≈ max(13s, VLM) 而非串行 26s
+            from concurrent.futures import ThreadPoolExecutor
 
-                tb = _vc.detect_text_blocks(str(save_path), timeout=45)
+            def _vlm_blocks():
+                tb = vision_client.detect_text_blocks(str(save_path), timeout=45)
                 W, H = rgb.size
                 vblocks = []
                 for i, b in enumerate(tb):
                     x1, y1, x2, y2 = b["box"]
-                    # 文字块转矩形轮廓（tag=text），hover/点选/提交同普通块
-                    contour = [
-                        [x1, y1], [x2, y1], [x2, y2], [x1, y2],
-                    ]
+                    contour = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
                     vblocks.append({
                         "id": -1 - i,
                         "bbox": [x1, y1, x2, y2],
@@ -290,18 +320,36 @@ def matting_analyze(
                         "tag": "text",
                         "label": b.get("label", "文字"),
                     })
-                if vblocks:
-                    # 文字块插最前：hover 优先命中、一眼可选中主标题
-                    blocks = vblocks + blocks
+                return vblocks
+
+            try:
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fut_blocks = ex.submit(mat.analyze_blocks, rgb, model=sel_model)
+                    try:
+                        vb = _vlm_blocks()
+                    except Exception:  # noqa: BLE001  未配 Key / VLM 失败 → 降级
+                        vb = []
+                    blocks = fut_blocks.result()
+                if vb:
+                    blocks = vb + blocks
                     text_used = True
-                    text_total = len(vblocks)
-            except Exception:  # noqa: BLE001  未配 Key / VLM 失败 → 静默降级
+                    text_total = len(vb)
+            except Exception:  # noqa: BLE001
                 pass
         # 重排 id（文字块在前的整体序号），避免负 id / 冲突
         for i, b in enumerate(blocks):
             b["id"] = i
-        return {"ok": True, "blocks": blocks, "model": sel_model, "total": len(blocks),
-                "text_used": text_used, "text_total": text_total}
+        out = {"ok": True, "blocks": blocks, "model": sel_model, "total": len(blocks),
+               "text_used": text_used, "text_total": text_total}
+        if ckey:
+            with _ANALYZE_CACHE_LOCK:
+                _ANALYZE_CACHE[ckey] = {
+                    "ts": __import__("time").time(),
+                    "blocks": blocks,
+                    "text_used": text_used,
+                    "text_total": text_total,
+                }
+        return out
     except Exception as e:  # noqa: BLE001
         raise app.HTTPException(status_code=500, detail=f"元素分析失败：{e}")
 

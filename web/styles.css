@@ -1012,6 +1012,24 @@ img { max-width: 100%; display: block; }
   user-select: none;
 }
 .dw-preview-wrap.mat-boxable { touch-action: none; }
+/* 🔍 抠图预览缩放舞台：img + 选框 SVG + 套索 canvas 同层 transform 放大。
+   归一化坐标 = 位置占比，整层放大不改变占比 → hover/点选/描边坐标自动正确。 */
+.mat-zoom-stage {
+  position: relative; display: inline-block;
+  transform-origin: 0 0; transform: scale(1);
+  line-height: 0;
+}
+.mat-zoom-stage img { vertical-align: top; }
+.dw-preview-wrap.zoomed { overflow: auto; }
+.dw-preview-wrap.zoomed .mat-zoom-stage { cursor: grab; }
+.mat-zoom-bar {
+  display: flex; align-items: center; gap: .35rem; margin: .25rem 0 .1rem;
+  font-size: .8rem;
+}
+.mat-zoom-bar[hidden] { display: none; }
+.mat-zoom-label { min-width: 3.2em; text-align: center; color: var(--text, #333); font-weight: 600; }
+.mat-zoom-tip { color: var(--text-secondary, #888); font-size: .72rem; margin-left: .2rem; }
+.mat-zoom-tip::before { content: '｜'; margin-right: .3rem; opacity: .5; }
 .mat-box-actions {
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .4rem;
 }

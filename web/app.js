@@ -532,6 +532,12 @@
     matToolBlocks: $('matToolBlocks'),
     matTextWrap: $('matTextWrap'),
     matTextDetect: $('matTextDetect'),
+    matZoomStage: $('matZoomStage'),
+    matZoomBar: $('matZoomBar'),
+    matZoomLabel: $('matZoomLabel'),
+    matZoomIn: $('matZoomIn'),
+    matZoomOut: $('matZoomOut'),
+    matZoomFit: $('matZoomFit'),
     matPreviewWrap: $('matPreviewWrap'),
     matLassoCanvas: $('matLassoCanvas'),
     matBoxActions: $('matBoxActions'),
@@ -3003,6 +3009,25 @@
   let matLassoCursor = null;      // 光标当前归一化位置（未闭合时画橡皮筋预览）
   let matLassoDown = null;        // pointerdown 按下位置（区分单击加锚点 vs 拖拽描边）
 
+  // ===== 🔍 抠图预览缩放（stage transform: scale(z)，整层放大）
+  // 归一化坐标 = 位置占比，(clientX-rect.left)/rect.width 在缩放后仍成立，
+  // 所以 hover/点选/描边的坐标逻辑零改动；仅 canvas 线宽按 1/z 补偿视觉粗细。
+  let matZoomLevel = 1;           // 1 = 适应；>1 放大（可精细点选小元素）
+  const matZoomMax = 8, matZoomMin = 0.4;
+  const matZoomApply = () => {
+    const z = matZoomLevel;
+    if (el.matZoomStage) el.matZoomStage.style.transform = `scale(${z})`;
+    if (el.matPreviewWrap) el.matPreviewWrap.classList.toggle('zoomed', z > 1);
+    if (el.matZoomLabel) el.matZoomLabel.textContent = Math.round(z * 100) + '%';
+    // 放大态重绘一次选区（线宽按 z 补偿）
+    if (matTool === 'lasso') matLassoRedraw();
+    else if (matTool === 'blocks') matBlockRedraw();
+  };
+  const matZoomSet = (z, ev) => {
+    matZoomLevel = Math.min(matZoomMax, Math.max(matZoomMin, z));
+    matZoomApply();
+  };
+
   // 选框用 div（#matBoxRect）承载层 #matBoxSvg 内的百分比定位——WKWebView 对 inline svg 的
   // viewBox / non-scaling-stroke / width=0 fallback 有一堆坑，div 边框 100% 可靠。
   // matBox 是归一化 0~1，直接 ×100 变百分比即可，无需任何像素换算。
@@ -3106,7 +3131,7 @@
       ctx.fillStyle = 'rgba(99, 102, 241, .18)';
       ctx.fill();
       ctx.strokeStyle = drawing ? 'rgba(99,102,241,.9)' : '#6366f1';
-      ctx.lineWidth = 2.2 * dpr;
+      ctx.lineWidth = (2.2 * dpr) / matZoomLevel;
       ctx.setLineDash([]);
       ctx.stroke();
     }
@@ -3124,8 +3149,8 @@
       ctx.moveTo(lx * w, ly * h);
       ctx.lineTo(cursor.x * w, cursor.y * h);
       ctx.strokeStyle = 'rgba(99, 102, 241, .75)';
-      ctx.lineWidth = 2 * dpr;
-      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.lineWidth = (2 * dpr) / matZoomLevel;
+      ctx.setLineDash([6 * dpr / matZoomLevel, 5 * dpr / matZoomLevel]);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -3215,7 +3240,7 @@
       ctx.closePath();
       if (fill) { ctx.fillStyle = fill; ctx.fill(); }
       ctx.strokeStyle = stroke;
-      ctx.lineWidth = lw * dpr;
+      ctx.lineWidth = (lw * dpr) / matZoomLevel;
       ctx.setLineDash([]);
       ctx.stroke();
     };
@@ -3575,6 +3600,9 @@
       matBoxRedraw();
       matPolygon = null; matLassoNorm = []; matLassoRedraw();
       matBlockList = []; matBlockSel.clear(); matBlockHover = null;
+      matZoomLevel = 1;              // 换图复位缩放
+      matZoomApply();
+      if (el.matZoomBar) el.matZoomBar.hidden = false;   // 有图后显示放大工具栏
       if (matTool === 'lasso' || matTool === 'blocks') matLassoResize();   // 图片尺寸变了，重新对齐 canvas
       if (matTool === 'blocks' && el.matBoxToggle && el.matBoxToggle.checked) matBlocksAnalyze();
     };
@@ -3633,6 +3661,18 @@
 
   if (el.matFile) {
     el.matFile.addEventListener('change', () => matPreview(el.matFile.files[0]));
+  }
+  // 🔍 缩放控制：按钮 +（Ctrl/⌘ + 滚轮 / 触控板捏合）缩放
+  const matZoomBy = (f) => matZoomSet(matZoomLevel * f);
+  if (el.matZoomIn) el.matZoomIn.addEventListener('click', () => matZoomBy(1.25));
+  if (el.matZoomOut) el.matZoomOut.addEventListener('click', () => matZoomBy(0.8));
+  if (el.matZoomFit) el.matZoomFit.addEventListener('click', () => matZoomSet(1));
+  if (el.matPreviewWrap) {
+    el.matPreviewWrap.addEventListener('wheel', (ev) => {
+      if (!ev.ctrlKey && !ev.metaKey) return;   // 普通滚轮=平移（放大态容器滚动）
+      ev.preventDefault();
+      matZoomBy(ev.deltaY < 0 ? 1.18 : 1 / 1.18);
+    }, { passive: false });
   }
   // 👆 点图抠图：AI 视觉定位开启时，直接在预览图上单击想要的主体
   // （主标题 / 图案 / 按钮…，抠什么由用户随手决定）→ 立即抠点击处元素
