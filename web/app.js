@@ -3040,8 +3040,10 @@
     if (el.matBoxActions) el.matBoxActions.hidden = !on;
     if (el.matToolSeg) el.matToolSeg.hidden = !on;
     if (el.matLassoCanvas) {
-      el.matLassoCanvas.hidden = !(on && matTool === 'lasso');
-      el.matLassoCanvas.style.pointerEvents = (on && matTool === 'lasso') ? 'auto' : 'none';
+      const showLasso = on && matTool === 'lasso';
+      el.matLassoCanvas.hidden = !showLasso;
+      el.matLassoCanvas.style.pointerEvents = showLasso ? 'auto' : 'none';
+      if (showLasso) matLassoResize();
     }
     if (el.matPreviewWrap) el.matPreviewWrap.classList.toggle('mat-boxable', !!on);
     if (!on) { matBox = null; matBoxRedraw(); matPolygon = null; matLassoNorm = []; matLassoRedraw(); }
@@ -3052,10 +3054,14 @@
     const cv = el.matLassoCanvas; if (!cv) return;
     const img = el.matImgPreview; if (!img || !img.clientWidth) return;
     const dpr = window.devicePixelRatio || 1;
-    cv.width = Math.round(img.clientWidth * dpr);
-    cv.height = Math.round(img.clientHeight * dpr);
+    // 明确指定 CSS 尺寸 = 图片显示尺寸，覆盖 styles.css 里 width:100%/height:100%，
+    // 避免父容器与图片不同大时坐标映射错误。
+    cv.style.width = img.clientWidth + 'px';
+    cv.style.height = img.clientHeight + 'px';
     cv.style.left = img.offsetLeft + 'px';
     cv.style.top = img.offsetTop + 'px';
+    cv.width = Math.round(img.clientWidth * dpr);
+    cv.height = Math.round(img.clientHeight * dpr);
     matLassoRedraw();
   };
 
@@ -3232,7 +3238,8 @@
           if (d.vision_used) {
             el.matStatus.textContent = '抠图完成 ✅（🤖 AI 视觉定位已生效：' + (d.vision_label || '主体') + '）';
           } else if (d.mode === 'lasso') {
-            el.matStatus.textContent = '抠图完成 ✅（✏️ 套索圈选，只抠你描的区域）';
+            const bbox = d.polygon_bbox ? `[${d.polygon_bbox.map(v => (v * 100).toFixed(1) + '%').join(', ')}]` : '';
+            el.matStatus.textContent = `抠图完成 ✅（✏️ 套索圈选 ${d.polygon_pts || 0} 点，bbox ${bbox}）`;
           } else if (d.mode === 'box') {
             el.matStatus.textContent = '抠图完成 ✅（▭ 矩形框选，只抠框内）';
           } else {
@@ -3286,10 +3293,18 @@
       }
       // 手动框选了主体区域 → 套索优先（多边形），其次矩形框 [x,y,w,h]
       if (el.matBoxToggle && el.matBoxToggle.checked) {
-        if (matTool === 'lasso' && matPolygon) {
-          fd.append('polygon', JSON.stringify(matPolygon));
+        if (matTool === 'lasso') {
+          // 提交前强制对齐 canvas 尺寸，避免图片加载/窗口变化后坐标映射错误
+          matLassoResize();
+          if (matPolygon && matPolygon.length >= 3) {
+            fd.append('polygon', JSON.stringify(matPolygon));
+            el.matStatus.textContent = `上传中…（套索 ${matPolygon.length} 个顶点）`;
+          } else {
+            el.matStatus.textContent = '上传中…（套索未闭合，忽略选区）';
+          }
         } else if (matBox) {
           fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
+          el.matStatus.textContent = '上传中…（矩形框选）';
         }
       }
       // 🤖 AI 视觉定位：开启时让后端先调 VLM 看懂图、自动框出主体再抠

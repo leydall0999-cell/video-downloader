@@ -54,13 +54,22 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: str, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
     try:
         src_path = app.Path(src)
         out_path = app.DW_DIR / f"mat_{job_id}.png"
+        # 诊断日志：记录选区原始参数，便于排查"圈了但结果不对"
+        app.logger.info(
+            "matting %s start: box=%s polygon=%s vision_guide=%s model=%s",
+            job_id,
+            box,
+            f"{len(polygon)}pts" if polygon else None,
+            vision_guide,
+            model,
+        )
         vision_box = None
         vision_used = False
         if vision_guide:
@@ -84,7 +93,13 @@ def _run_matting(job_id: str, src: str, box: list | None = None, model: str | No
         job["vision_used"] = vision_used
         # 记录本次实际使用的选区模式（多边形 > AI 视觉 > 矩形框 > 自动），供前端状态展示
         job["mode"] = "lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto"))
-        app.logger.info("matting %s done -> %s (vision_used=%s)", job_id, out_path.name, vision_used)
+        # 把 polygon 的 bbox 也记下来，方便和用户画的圈对照
+        if polygon:
+            xs = [p[0] for p in polygon]
+            ys = [p[1] for p in polygon]
+            job["polygon_bbox"] = [min(xs), min(ys), max(xs), max(ys)]
+            job["polygon_pts"] = len(polygon)
+        app.logger.info("matting %s done -> %s (mode=%s vision_used=%s)", job_id, out_path.name, job["mode"], vision_used)
     except Exception as e:  # noqa: BLE001
         job["status"] = "failed"
         job["error"] = str(e)[:500]
@@ -184,6 +199,10 @@ def matting_image_status(job_id: str) -> dict:
         "filename": job.get("filename", ""),
         # 首次使用会在这段时间下载模型权重，前端据此显示百分比
         "download": _dl_snapshot(),
+        # 选区模式与诊断：套索/矩形/AI/自动，以及套索 bbox（便于核对坐标）
+        "mode": job.get("mode", "auto"),
+        "polygon_bbox": job.get("polygon_bbox"),
+        "polygon_pts": job.get("polygon_pts"),
         # 🤖 AI 视觉定位结果：未配置/出错时自动回退基础抠图，前端据此提示
         "vision_used": job.get("vision_used", False),
         "vision_label": job.get("vision_label", ""),
