@@ -735,7 +735,7 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
         return mask_arr  # 前景太少，跳过
 
     pix = rgb_arr[reliable]
-    k = 4 if n_fg >= 2000 else 3
+    k = 5 if n_fg >= 4000 else 4  # k=5 让浅色装饰能自成簇与白字区分
 
     # k-means（纯 numpy 向量化）
     try:
@@ -755,14 +755,25 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
     big = int(np.argmax(sizes))
     main_color = centers[big]
 
-    # 判定各簇是否为暗杂质
+    # 判定各簇是否需要剔除：
+    #   条件 1（暗异色大杂质）：色距 > 0.40 且簇亮度 < 0.30 — 黑色笔触/墨渍
+    #   条件 2（异色小杂簇）：色距 > 0.40 且亮度 < 0.85 且面积 < 主簇 18%
+    #      ——主标题旁的浅色小三角/斜线笔触/零星点等装饰碎块
+    #   保护（不被误剔）：
+    #     - 高亮异色簇（lum >= 0.85，如白字/亮黄装饰）即使面积小也保留
+    #     - 异色但面积较大的簇（>= 主簇 18%）保留——可能是主标题的多色描边
     drop = np.zeros(k, dtype=bool)
     for c in range(k):
         if c == big:
             continue
         dist = float(np.linalg.norm(centers[c] - main_color))
         lum = float(centers[c].max())
-        if dist > 0.45 and lum < 0.30:
+        # 暗异色（黑色笔触）：色距 + 暗度
+        if dist > 0.40 and lum < 0.30:
+            drop[c] = True
+            continue
+        # 异色小杂簇（浅色装饰）：色距 + 不够亮 + 面积小
+        if dist > 0.40 and lum < 0.85 and sizes[c] < sizes[big] * 0.18:
             drop[c] = True
 
     if not drop.any():
