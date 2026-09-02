@@ -440,7 +440,14 @@ def matting_image_file(job_id: str) -> app.FileResponse:
         path=str(out),
         filename=out.name,
         media_type="image/png",
-        headers={"Content-Disposition": f'attachment; filename="{out.name}"'},
+        # 用 inline（不是 attachment）—— 否则 WKWebView 收到 attachment 头的 PNG 会
+        # 把响应当下载而不是图片，结果区 img 元素静默加载失败（只显灰底）。
+        # 浏览器看图渲染，下载按钮 matDownload 仍带 download 属性也能正常下载。
+        headers={
+            "Content-Disposition": f'inline; filename="{out.name}"',
+            # 透明 PNG 缓存，避免反复请求（抠图结果 ID 唯一，不重复）
+            "Cache-Control": "private, max-age=86400",
+        },
     )
 
 
