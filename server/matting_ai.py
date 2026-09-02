@@ -570,8 +570,18 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         W, H = rgb.size
 
         if polygon:
-            # 套索（最精确的用户意图）→ 优先级最高
-            mask = _polygon_mask(rgb, polygon, W, H, model=model)
+            if vision_box is not None:
+                # **套索 + AI 视觉定位 同时勾选** → 交集模式：
+                # AI 先按 VLM box 整图抠主体（主标题，box 外强制透明），
+                # 再乘套索 polygon（用户圈的范围边界）取交集。
+                # 语义：用户粗圈整张海报也没关系，AI 会在圈内锁定主标题抠，
+                # 圈外的副标题/装饰/卡片全透明。VLM 定位异常时回退纯套索。
+                mask = _polygon_vision_intersect(rgb, polygon, vision_box, W, H, model=model)
+                if mask is None:
+                    mask = _polygon_mask(rgb, polygon, W, H, model=model)
+            else:
+                # 套索（最精确的用户意图）→ 优先级最高（无 AI 时）
+                mask = _polygon_mask(rgb, polygon, W, H, model=model)
         elif vision_box and box is not None:
             # **手动框选 + AI 视觉定位 同时给出**：手动框是用户的明确意图，必须作为
             # 硬边界（「框住什么就是什么」），VLM 只在用户框**内部**再做语义精修。
@@ -627,6 +637,40 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def _polygon_vision_intersect(rgb, polygon, vision_box, W: int, H: int, model: str | None = None):
+    """套索 + AI 视觉定位 交集抠图。
+
+    背景：单独用套索时，用户必须画得足够贴合（圈太大则抠出圈内所有内容）；
+    单独用 AI 视觉定位时，VLM 可能把范围框大/框偏。两者**同时勾选**时
+    取交集——AI 按 VLM box 整图抠出主体（主标题），再乘套索 polygon
+    （用户圈的范围边界）。粗圈整张海报也能用：AI 在圈内锁定主标题抠，
+    圈外的副标题/装饰/卡片全透明。
+
+    失败（VLM 异常等）返回 None → 调用方回退纯套索 _polygon_mask。
+    """
+    try:
+        import numpy as np
+        from PIL import Image, ImageDraw
+
+        guided = vision_guided_mask(rgb, vision_box, model=model)  # 原图尺寸 L 模式
+        g = np.array(guided).astype(np.float32) / 255.0
+        pts = [(float(p[0]) * W, float(p[1]) * H) for p in polygon if len(p) >= 2]
+        if len(pts) < 3:
+            return None
+        # 套索二值图（用户圈的范围 = 硬边界）
+        poly_img = Image.new("L", (W, H), 0)
+        ImageDraw.Draw(poly_img).polygon(pts, fill=255)
+        p = np.array(poly_img).astype(np.float32) / 255.0
+        m = g * p  # AI 主体 ∩ 用户圈选
+        # 与套索同款后处理：中心连通 + 主色聚类（防 AI box 边缘杂质）
+        m = _polygon_center_keep(m)
+        rgb_arr = np.array(rgb).astype(np.float32) / 255.0
+        m = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
+        return Image.fromarray(np.clip(m * 255.0, 0, 255).astype(np.uint8), mode="L")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
