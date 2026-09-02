@@ -534,6 +534,8 @@
     matBoxActions: $('matBoxActions'),
     matBoxClear: $('matBoxClear'),
     matBoxInfo: $('matBoxInfo'),
+    matLassoUndo: $('matLassoUndo'),
+    matLassoDone: $('matLassoDone'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -2989,11 +2991,13 @@
   // 👆 点图抠图：用户单击预览图上的元素坐标 [x, y]（归一化 0~1），null = 未点选
   let matClick = null;
 
-  // ===== 套索圈选（自由描轮廓，比矩形框精准） =====
-  let matPolygon = null;          // [[x,y], ...] 归一化 0~1，提交后端做多边形抠图
-  let matLassoNorm = [];          // 绘制用：归一化点序列（暂存，pointerup 后定稿为 matPolygon）
+  // ===== 套索圈选（单击加锚点 · 移动实时预览 · 双击/回车确定，PS 风格） =====
+  let matPolygon = null;          // [[x,y], ...] 归一化 0~1，提交后端做多边形抠图（确定后的选区）
+  let matLassoNorm = [];          // 锚点列表（画中态顶点）
   let matTool = 'rect';           // 'rect' | 'lasso'
-  let matLassoDrawing = false;
+  let matLassoDrawing = false;    // 画中（有锚点未确定）
+  let matLassoCursor = null;      // 光标当前归一化位置（未闭合时画橡皮筋预览）
+  let matLassoDown = null;        // pointerdown 按下位置（区分单击加锚点 vs 拖拽描边）
 
   // 选框用 div（#matBoxRect）承载层 #matBoxSvg 内的百分比定位——WKWebView 对 inline svg 的
   // viewBox / non-scaling-stroke / width=0 fallback 有一堆坑，div 边框 100% 可靠。
@@ -3048,7 +3052,7 @@
       if (showLasso) matLassoResize();
     }
     if (el.matPreviewWrap) el.matPreviewWrap.classList.toggle('mat-boxable', !!on);
-    if (!on) { matBox = null; matBoxRedraw(); matPolygon = null; matLassoNorm = []; matLassoRedraw(); }
+    if (!on) { matBox = null; matBoxRedraw(); matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null; matLassoDown = null; matLassoRedraw(); }
   };
 
   // 套索 canvas 尺寸对齐预览图（CSS 像素 × dpr，保证高清描边）
@@ -3067,21 +3071,54 @@
     matLassoRedraw();
   };
 
+  // 套索实时预览绘制：锚点 + 未闭合时随光标橡皮筋围出的半透明区域——
+  // 用户移动鼠标就能看到"现在闭合会选中什么"，确定前所见即所得。
   const matLassoRedraw = () => {
     const cv = el.matLassoCanvas; if (!cv) return;
     const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, cv.width, cv.height);
-    if (!matLassoNorm || matLassoNorm.length < 2) return;
     const w = cv.width, h = cv.height;
-    ctx.lineWidth = 2.5 * (window.devicePixelRatio || 1);
-    ctx.strokeStyle = '#6366f1';
-    ctx.fillStyle = 'rgba(99, 102, 241, .14)';
-    ctx.beginPath();
-    ctx.moveTo(matLassoNorm[0][0] * w, matLassoNorm[0][1] * h);
-    for (let i = 1; i < matLassoNorm.length; i++) ctx.lineTo(matLassoNorm[i][0] * w, matLassoNorm[i][1] * h);
-    if (!matLassoDrawing) ctx.closePath();   // 描完闭合，套索内填充
-    ctx.fill();
-    ctx.stroke();
+    const dpr = window.devicePixelRatio || 1;
+    const pts = matLassoNorm || [];
+    if (!pts.length) return;
+    const cursor = matLassoCursor;
+    const drawing = matLassoDrawing && !matPolygon;   // 正在画（未确定选区）
+    // 参与绘制的顶点 = 锚点 +（画中）光标
+    const poly = pts.map(p => [p[0] * w, p[1] * h]);
+    if (drawing && cursor) poly.push([cursor.x * w, cursor.y * h]);
+
+    // 半透明填充预览（≥3 点才成面）
+    if (poly.length >= 3) {
+      ctx.beginPath();
+      ctx.moveTo(poly[0][0], poly[0][1]);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(99, 102, 241, .18)';
+      ctx.fill();
+      ctx.strokeStyle = drawing ? 'rgba(99,102,241,.9)' : '#6366f1';
+      ctx.lineWidth = 2.2 * dpr;
+      ctx.setLineDash([]);
+      ctx.stroke();
+    }
+    // 锚点小圆点
+    for (const [x, y] of pts.map(p => [p[0] * w, p[1] * h])) {
+      ctx.beginPath();
+      ctx.arc(x, y, 2.8 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = '#6366f1';
+      ctx.fill();
+    }
+    // 画中：橡皮筋虚线（最后锚点 → 光标）
+    if (drawing && cursor && pts.length) {
+      const [lx, ly] = pts[pts.length - 1];
+      ctx.beginPath();
+      ctx.moveTo(lx * w, ly * h);
+      ctx.lineTo(cursor.x * w, cursor.y * h);
+      ctx.strokeStyle = 'rgba(99, 102, 241, .75)';
+      ctx.lineWidth = 2 * dpr;
+      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   };
 
   const matLassoPoint = (ev) => {
@@ -3091,13 +3128,53 @@
     return { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
   };
 
+  // 确定当前套索选区（双击 / 回车 / 点「完成选区」触发）
+  const matLassoClose = () => {
+    if (!matLassoNorm || matLassoNorm.length < 3) {
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '至少点 3 个锚点才能成选区，继续点击添加';
+      return;
+    }
+    matLassoDrawing = false;
+    matLassoCursor = null;
+    matPolygon = matLassoNorm.map(pt => [pt[0], pt[1]]);
+    matLassoRedraw();
+    if (el.matBoxInfo) el.matBoxInfo.textContent = `已确定选区 ✏️（${matPolygon.length} 个顶点）— 点「开始抠图」只抠圈内`;
+    if (el.matLassoUndo) el.matLassoUndo.disabled = false;  // 撤销=回到画中继续改
+  };
+
+  // 撤销最后一个锚点（或撤销已确定选区回画中态）
+  const matLassoUndoLast = () => {
+    if (matPolygon) {
+      // 已确定 → 回到画中态，可继续加点微调
+      matPolygon = null;
+      matLassoDrawing = matLassoNorm.length >= 1;
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '已回到编辑：可继续单击加点，双击/回车完成';
+    } else if (matLassoNorm.length) {
+      matLassoNorm.pop();
+      matLassoRedraw();
+      if (el.matBoxInfo) el.matBoxInfo.textContent = matLassoNorm.length
+        ? `↩ 已撤销，剩 ${matLassoNorm.length} 点` : '选区已清空，单击开始画';
+    }
+    if (el.matLassoUndo) el.matLassoUndo.disabled = !matLassoNorm.length;
+  };
+
   const setMatTool = (t) => {
     matTool = t;
     if (el.matToolRect) el.matToolRect.classList.toggle('active', t === 'rect');
     if (el.matToolLasso) el.matToolLasso.classList.toggle('active', t === 'lasso');
     // 切工具时清掉另一种选区，避免混淆
-    if (t === 'lasso') { matBox = null; matBoxRedraw(); }
-    else { matPolygon = null; matLassoNorm = []; matLassoRedraw(); }
+    if (t === 'lasso') {
+      matBox = null; matBoxRedraw();
+      if (el.matLassoUndo) el.matLassoUndo.hidden = false;
+      if (el.matLassoDone) el.matLassoDone.hidden = false;
+      // 恢复画中提示（默认清空态）
+      if (!matLassoNorm.length && el.matBoxInfo) el.matBoxInfo.textContent = '单击加锚点 · 移动预览 · 双击或回车确定 · Backspace/右键撤销';
+    } else {
+      matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null;
+      matLassoRedraw();
+      if (el.matLassoUndo) el.matLassoUndo.hidden = true;
+      if (el.matLassoDone) el.matLassoDone.hidden = true;
+    }
     if (el.matBoxSvg) el.matBoxSvg.hidden = matTool !== 'rect';
     if (el.matLassoCanvas) {
       el.matLassoCanvas.hidden = matTool !== 'lasso';
@@ -3110,47 +3187,95 @@
     el.matToolRect.addEventListener('click', () => setMatTool('rect'));
     el.matToolLasso.addEventListener('click', () => setMatTool('lasso'));
   }
+  if (el.matLassoUndo) el.matLassoUndo.addEventListener('click', matLassoUndoLast);
+  if (el.matLassoDone) el.matLassoDone.addEventListener('click', matLassoClose);
+  // Backspace / Delete / 右键 = 撤销上一点（右键先阻止系统菜单）
+  document.addEventListener('keydown', (e) => {
+    if (matTool !== 'lasso') return;
+    if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); matLassoUndoLast(); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); matLassoClose(); }
+  });
+  if (el.matLassoCanvas) {
+    el.matLassoCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); matLassoUndoLast(); });
+  }
 
   if (el.matLassoCanvas) {
     const cv = el.matLassoCanvas;
+    // 单击 = 加锚点；拖动 = 连续描点；双击/点首点附近 = 闭合确定
     cv.addEventListener('pointerdown', (ev) => {
       if (matTool !== 'lasso') return;
       const p = matLassoPoint(ev); if (!p) return;
       ev.preventDefault();
-      matLassoDrawing = true;
-      matLassoNorm = [[p.x, p.y]];
+      // 已确定选区后再次按下 = 开始画新选区（清掉旧的）
+      if (matPolygon) {
+        matPolygon = null; matLassoNorm = []; matLassoDrawing = false;
+      }
+      matLassoDown = p;
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '继续单击加点 / 松开闭合（双击或回车确定）';
       try { cv.setPointerCapture(ev.pointerId); } catch (_) { /* 老浏览器忽略 */ }
       matLassoRedraw();
     });
-    // move/up 也走 canvas 自身（setPointerCapture 已保证拖出范围也连续）
     cv.addEventListener('pointermove', (ev) => {
-      if (!matLassoDrawing || matTool !== 'lasso') return;
+      if (matTool !== 'lasso') return;
       const p = matLassoPoint(ev); if (!p) return;
-      const last = matLassoNorm[matLassoNorm.length - 1];
-      if (Math.hypot(p.x - last[0], p.y - last[1]) > 0.004) {
-        matLassoNorm.push([p.x, p.y]);
-        matLassoRedraw();
+      const down = matLassoDown;
+      if (down) {
+        // 按住拖动 → 连续描点（抽稀）
+        const last = matLassoNorm[matLassoNorm.length - 1] || down;
+        if (Math.hypot(p.x - last[0], p.y - last[1]) > 0.004) {
+          matLassoNorm.push([p.x, p.y]);
+          matLassoDrawing = true;
+          matLassoCursor = p;
+          matLassoRedraw();
+        }
+      } else {
+        // 悬停移动 → 只更新光标预览
+        matLassoCursor = p;
+        if (matLassoDrawing || matLassoNorm.length) matLassoRedraw();
       }
     });
-    const lassoEnd = (ev) => {
-      if (!matLassoDrawing) return;
-      matLassoDrawing = false;
+    const lassoUp = (ev) => {
+      if (matTool !== 'lasso') return;
       try { cv.releasePointerCapture(ev.pointerId); } catch (_) { /* 忽略 */ }
-      matLassoNorm = matLassoNorm.filter(pt => pt && pt.length === 2);
-      if (matLassoNorm.length >= 3) {
-        matPolygon = matLassoNorm.map(pt => [pt[0], pt[1]]);
+      const p = matLassoPoint(ev);
+      const down = matLassoDown;
+      matLassoDown = null;
+      if (!p) return;
+      if (matPolygon) return;  // 已确定，忽略（下次按下开新选区）
+      const moved = down && Math.hypot(p.x - down.x, p.y - down.y);
+      if (!moved || moved < 0.005) {
+        // ============ 单击 = 加一个锚点 ============
+        const last = matLassoNorm[matLassoNorm.length - 1];
+        if (!last || Math.hypot(p.x - last[0], p.y - last[1]) > 0.002) {
+          matLassoNorm.push([p.x, p.y]);
+          matLassoDrawing = true;
+        }
+        // 点回首点附近（且 ≥3 点）→ 自动闭合确定
+        if (matLassoNorm.length >= 3) {
+          const first = matLassoNorm[0];
+          if (Math.hypot(p.x - first[0], p.y - first[1]) < 0.025) { matLassoClose(); return; }
+        }
       } else {
-        matPolygon = null;
+        // ============ 拖拽描边结束：保留已描点（不闭合，可继续） ============
+        if (matLassoNorm.length && !matLassoNorm.some(pt => Math.hypot(pt[0]-p.x, pt[1]-p.y) < 0.01)) {
+          matLassoNorm.push([p.x, p.y]);
+        }
+        matLassoDrawing = matLassoNorm.length >= 1;
       }
+      matLassoCursor = null;
       matLassoRedraw();
-      if (el.matBoxInfo) {
-        el.matBoxInfo.textContent = matPolygon
-          ? `已圈选 ✏️（${matPolygon.length} 个顶点）— 点「开始抠图」只抠圈内`
-          : '线条太短，请重新沿主体描一圈';
+      if (el.matBoxInfo && matLassoNorm.length >= 1) {
+        el.matBoxInfo.textContent = `✏️ ${matLassoNorm.length} 个点 — 移动可预览，双击/回车确定`;
       }
     };
-    cv.addEventListener('pointerup', lassoEnd);
-    cv.addEventListener('pointercancel', lassoEnd);
+    cv.addEventListener('pointerup', lassoUp);
+    cv.addEventListener('pointercancel', lassoUp);
+    // 双击 = 确定选区
+    cv.addEventListener('dblclick', (ev) => {
+      if (matTool !== 'lasso') return;
+      ev.preventDefault();
+      matLassoClose();
+    });
   }
 
   if (el.matBoxToggle) {
@@ -3159,7 +3284,8 @@
   if (el.matBoxClear) {
     el.matBoxClear.addEventListener('click', () => {
       matBox = null; matBoxRedraw();
-      matPolygon = null; matLassoNorm = []; matLassoRedraw();
+      matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null; matLassoDown = null;
+      matLassoRedraw();
       if (el.matBoxInfo) el.matBoxInfo.textContent = '';
     });
   }
