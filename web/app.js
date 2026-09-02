@@ -3082,12 +3082,15 @@
     });
   }
 
+  // 保留 blob URL 不 revoke：matPoll 完成时 matOrig.src = matImgPreview.src 会再用到这个 URL，
+  // 一旦 revoke，下一次 src 加载会 broken image（2026-09-02 实战：原图区黑底 + 蓝色 ? 占位）
+  let matPreviewBlobUrl = null;
   const matPreview = (file) => {
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    el.matImgPreview.src = url;
+    if (matPreviewBlobUrl) URL.revokeObjectURL(matPreviewBlobUrl);
+    matPreviewBlobUrl = URL.createObjectURL(file);
+    el.matImgPreview.src = matPreviewBlobUrl;
     el.matImgPreview.onload = () => {
-      URL.revokeObjectURL(url);
       matBox = null;   // 换图后清掉旧框，避免框错图
       matBoxRedraw();
     };
@@ -8418,12 +8421,11 @@ el.dwVidPlayer.removeAttribute('src');
     let defaultProvider = 'openai';
     try {
       const r = await request('/api/llm/providers');
-      if (r.ok) {
-        const d = await r.json();
-        if (d.providers && typeof d.providers === 'object' && Object.keys(d.providers).length > 0) {
-          providers = d.providers;
+      if (r && r.ok) {
+        if (r.providers && typeof r.providers === 'object' && Object.keys(r.providers).length > 0) {
+          providers = r.providers;
         }
-        defaultProvider = d.default || 'openai';
+        defaultProvider = r.default || 'openai';
       }
     } catch (e) { /* fetch 失败时用 FALLBACK 兜底，保证下拉非空 */ }
     // 填充下拉菜单
@@ -8450,17 +8452,16 @@ el.dwVidPlayer.removeAttribute('src');
     // 回填已保存的配置
     try {
       const r = await request('/api/llm/config');
-      if (r.ok) {
-        const cfg = await r.json();
-        if (el.llmProvider) el.llmProvider.value = cfg.provider || defaultProvider;
-        if (el.llmApiKey) el.llmApiKey.value = cfg.api_key || '';
-        if (el.llmBaseUrl) el.llmBaseUrl.value = cfg.base_url || '';
-        if (el.llmModel) el.llmModel.value = cfg.model || '';
+      if (r && r.ok) {
+        if (el.llmProvider) el.llmProvider.value = r.provider || defaultProvider;
+        if (el.llmApiKey) el.llmApiKey.value = r.api_key || '';
+        if (el.llmBaseUrl) el.llmBaseUrl.value = r.base_url || '';
+        if (el.llmModel) el.llmModel.value = r.model || '';
         // 推理强度 / 避开峰时（省钱旋钮）
-        if (el.llmReasoningEffort) el.llmReasoningEffort.value = (cfg.reasoning_effort || 'low');
-        if (el.llmOffpeakOnly) el.llmOffpeakOnly.checked = !!cfg.offpeak_only;
+        if (el.llmReasoningEffort) el.llmReasoningEffort.value = (r.reasoning_effort || 'low');
+        if (el.llmOffpeakOnly) el.llmOffpeakOnly.checked = !!r.offpeak_only;
         // 初始显示/隐藏 base_url
-        if (el.llmBaseUrl) el.llmBaseUrl.style.display = (cfg.provider === 'custom') ? '' : 'none';
+        if (el.llmBaseUrl) el.llmBaseUrl.style.display = (r.provider === 'custom') ? '' : 'none';
       }
     } catch (e) { /* */ }
 
@@ -8502,10 +8503,10 @@ el.dwVidPlayer.removeAttribute('src');
               body: JSON.stringify(visionBody),
             }),
           ]);
-          const ld = await lr.json().catch(() => ({}));
-          const vd = await vr.json().catch(() => ({}));
-          const llmOk = lr.ok && ld.ok;
-          const visOk = vr.ok && vd.ok;
+          const ld = lr || {};
+          const vd = vr || {};
+          const llmOk = !!(ld && ld.ok);
+          const visOk = !!(vd && vd.ok);
           if (llmOk && visOk) {
             show('✅ 已保存（LLM + 视觉模型）', false);
           } else if (llmOk && !visOk) {
@@ -8544,19 +8545,18 @@ el.dwVidPlayer.removeAttribute('src');
     let platformStatus = null;  // 本机平台/本地 OCR 状态，用于针对性提示
     try {
       const r = await request('/api/vision/providers');
-      if (r.ok) {
-        const d = await r.json();
-        if (d.providers && typeof d.providers === 'object' && Object.keys(d.providers).length > 0) {
-          providers = d.providers;
+      if (r && r.ok) {
+        if (r.providers && typeof r.providers === 'object' && Object.keys(r.providers).length > 0) {
+          providers = r.providers;
         }
-        defaultProvider = d.default || 'auto';
+        defaultProvider = r.default || 'auto';
       }
     } catch (e) { /* fetch 失败时用 FALLBACK_PROVIDERS 兜底，保证下拉非空 */ }
 
     // 拉取本机平台/本地 OCR 状态，渲染针对性提示（如 Apple Silicon 的 Ollama 视觉崩溃警告）
     try {
       const r = await request('/api/vision/status');
-      if (r.ok) platformStatus = await r.json();
+      if (r && r.ok) platformStatus = r;
     } catch (e) { /* 忽略 */ }
 
     // 根据当前选中的 provider + 本机状态，渲染一段友好提示
@@ -8628,12 +8628,11 @@ el.dwVidPlayer.removeAttribute('src');
     // 回填已保存的配置
     try {
       const r = await request('/api/vision/config');
-      if (r.ok) {
-        const cfg = await r.json();
-        if (el.visionProvider) el.visionProvider.value = cfg.provider || defaultProvider;
-        if (el.visionApiKey) el.visionApiKey.value = cfg.api_key || '';
-        if (el.visionBaseUrl) el.visionBaseUrl.value = cfg.base_url || '';
-        if (el.visionModel) el.visionModel.value = cfg.model || '';
+      if (r && r.ok) {
+        if (el.visionProvider) el.visionProvider.value = r.provider || defaultProvider;
+        if (el.visionApiKey) el.visionApiKey.value = r.api_key || '';
+        if (el.visionBaseUrl) el.visionBaseUrl.value = r.base_url || '';
+        if (el.visionModel) el.visionModel.value = r.model || '';
         const preset = providers[cfg.provider || defaultProvider];
         if (el.visionNote && preset && preset.note) el.visionNote.textContent = preset.note;
         // 用已保存的 provider 渲染提示

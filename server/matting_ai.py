@@ -565,7 +565,42 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        if vision_box:
+        if vision_box and box is not None:
+            # **手动框选 + AI 视觉定位 同时给出**：手动框是用户的明确意图，必须作为
+            # 硬边界（「框住什么就是什么」），VLM 只在用户框**内部**再做语义精修。
+            # 两者取交集：既尊重用户框选，又用 VLM 剔除框内夹带的副标题/装饰。
+            # 若 VLM box 与用户框无重叠（VLM 理解偏差），退化为用户框，绝不越界。
+            box_px = _normalize_box(box, W, H)
+            if box_px is None:
+                # 用户框无效（过小/越界）→ 只用 VLM
+                mask = vision_guided_mask(rgb, vision_box, model=model)
+            else:
+                ux1, uy1 = box_px[0] / W, box_px[1] / H
+                ux2, uy2 = box_px[2] / W, box_px[3] / H
+                vx1, vy1, vx2, vy2 = [float(v) for v in vision_box[:4]]
+                ix1, iy1 = max(ux1, vx1), max(uy1, vy1)
+                ix2, iy2 = min(ux2, vx2), min(uy2, vy2)
+                if ix2 - ix1 > 1e-4 and iy2 - iy1 > 1e-4:
+                    mask = vision_guided_mask(rgb, [ix1, iy1, ix2, iy2], model=model)
+                    # 硬夹紧到用户框：vision_guided_mask 内部还有 12% 外扩（保留光晕/
+                    # 阴影软元素），可能让 alpha 略微溢出用户框。这里再与用户框相乘，
+                    # 保证「框住什么就是什么」——用户框外一律 0，绝不越界。
+                    import numpy as _np
+                    from PIL import Image as _Image
+
+                    _arr = _np.array(mask).astype(_np.float32)
+                    _ux0, _uy0 = int(round(ux1 * W)), int(round(uy1 * H))
+                    _ux1, _uy1 = int(round(ux2 * W)), int(round(uy2 * H))
+                    _g = _np.zeros_like(_arr)
+                    if _ux1 > _ux0 and _uy1 > _uy0:
+                        _g[_uy0:_uy1, _ux0:_ux1] = 1.0
+                    mask = _Image.fromarray(
+                        _np.clip(_arr * _g, 0, 255).astype(_np.uint8), mode="L"
+                    )
+                else:
+                    # 无交集（VLM 框到了框外）→ 退化为用户框，用框内裁切推理
+                    mask = _box_crop_mask(rgb, box_px, W, H, model=model)
+        elif vision_box:
             # VLM 视觉定位引导：VLM 已看懂图、框出主体，框外强制透明
             mask = vision_guided_mask(rgb, vision_box, model=model)
         elif box is None:
@@ -577,36 +612,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 # 框选无效（过小/越界）：退回整图推理
                 mask = predict_mask(rgb, model=model)
             else:
-                x0, y0, x1, y1 = box_px
-                bw, bh = x1 - x0, y1 - y0
-                # **推理上下文外扩 10%**：用户框选通常只罩住主体（如字符本体），
-                # 但软元素（白色光晕 / 3D 阴影 / 描边）紧贴主体外侧。
-                # 推理时多看 10% 上下文，模型就能把这些软元素纳入 alpha，
-                # 输出仍严格按用户原框裁切——视觉效果是"框内 + 自动扩展的软边缘"。
-                # 不外扩会出现"光晕/阴影丢失"问题（用户最常见的反馈）。
-                pad_w = max(int(bw * 0.10), 4)
-                pad_h = max(int(bh * 0.10), 4)
-                x0p = max(0, x0 - pad_w)
-                y0p = max(0, y0 - pad_h)
-                x1p = min(W, x1 + pad_w)
-                y1p = min(H, y1 + pad_h)
-                crop = rgb.crop((x0p, y0p, x1p, y1p))
-                crop_mask = predict_mask(crop, model=model)
-                # 输出 mask 严格按用户原框；外扩区是被模型"看到"但被舍弃的上下文。
-                # 取交集：把外扩裁切的 mask 中属于原框的部分贴回原图坐标。
-                import numpy as _np
-                out_arr = _np.zeros((H, W), dtype=_np.uint8)
-                crop_w_p, crop_h_p = crop_mask.size
-                # 用户原框在外扩 crop 内的位置（裁切不超出 crop 范围）
-                sx0 = max(0, x0 - x0p)
-                sy0 = max(0, y0 - y0p)
-                sx1 = min(crop_w_p, x1 - x0p)
-                sy1 = min(crop_h_p, y1 - y0p)
-                if sx1 > sx0 and sy1 > sy0:
-                    region = _np.array(crop_mask, dtype=_np.uint8)[sy0:sy1, sx0:sx1]
-                    paste_w, paste_h = sx1 - sx0, sy1 - sy0
-                    out_arr[y0:y0 + paste_h, x0:x0 + paste_w] = region
-                mask = Image.fromarray(out_arr, mode="L")
+                mask = _box_crop_mask(rgb, box_px, W, H, model=model)
 
         rgba = rgb.convert("RGBA")
         rgba.putalpha(mask)
@@ -614,6 +620,45 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def _box_crop_mask(rgb, box_px, W: int, H: int, model: str | None = None):
+    """手动框选抠图：只把框内（+外扩上下文）送进模型，输出严格按原框，框外全透明。
+
+    box_px: 像素坐标 (x0, y0, x1, y1)（已由 _normalize_box 归一化 + 夹紧）。
+    保持「框住什么就是什么」语义——输出 alpha 只在用户原框内可能非零。
+    """
+    import numpy as _np
+    from PIL import Image
+
+    x0, y0, x1, y1 = box_px
+    bw, bh = x1 - x0, y1 - y0
+    # **推理上下文外扩 10%**：用户框选通常只罩住主体（如字符本体），
+    # 但软元素（白色光晕 / 3D 阴影 / 描边）紧贴主体外侧。
+    # 推理时多看 10% 上下文，模型就能把这些软元素纳入 alpha，
+    # 输出仍严格按用户原框裁切——视觉效果是"框内 + 自动扩展的软边缘"。
+    # 不外扩会出现"光晕/阴影丢失"问题（用户最常见的反馈）。
+    pad_w = max(int(bw * 0.10), 4)
+    pad_h = max(int(bh * 0.10), 4)
+    x0p = max(0, x0 - pad_w)
+    y0p = max(0, y0 - pad_h)
+    x1p = min(W, x1 + pad_w)
+    y1p = min(H, y1 + pad_h)
+    crop = rgb.crop((x0p, y0p, x1p, y1p))
+    crop_mask = predict_mask(crop, model=model)
+    # 输出 mask 严格按用户原框；外扩区是被模型"看到"但被舍弃的上下文。
+    out_arr = _np.zeros((H, W), dtype=_np.uint8)
+    crop_w_p, crop_h_p = crop_mask.size
+    # 用户原框在外扩 crop 内的位置（裁切不超出 crop 范围）
+    sx0 = max(0, x0 - x0p)
+    sy0 = max(0, y0 - y0p)
+    sx1 = min(crop_w_p, x1 - x0p)
+    sy1 = min(crop_h_p, y1 - y0p)
+    if sx1 > sx0 and sy1 > sy0:
+        region = _np.array(crop_mask, dtype=_np.uint8)[sy0:sy1, sx0:sx1]
+        paste_w, paste_h = sx1 - sx0, sy1 - sy0
+        out_arr[y0:y0 + paste_h, x0:x0 + paste_w] = region
+    return Image.fromarray(out_arr, mode="L")
 
 
 def vision_guided_mask(img, vision_box, model: str | None = None, expand: float = 0.12):

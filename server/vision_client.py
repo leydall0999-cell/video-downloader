@@ -31,11 +31,11 @@ _PROMPT = (
     "请只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
     "{\n"
     '  "blocks": [\n'
-    '    {"label": "<该要素的简短描述，如 主标题/副标题/logo/角色>", "box": [x1, y1, x2, y2]}\n'
+    '    {"label": "<该要素的简短描述，如 主标题/副标题/logo/角色>", "bbox": [x1, y1, x2, y2]}\n'
     "  ]\n"
     "}\n"
-    "box 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]。\n"
-    "请尽可能列出图中所有显著文字/图形要素（主标题、副标题、logo 等各一个 box）。"
+    "bbox 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]。\n"
+    "请尽可能列出图中所有显著文字/图形要素（主标题、副标题、logo 等各一个 bbox）。"
 )
 
 _SYSTEM = "你是一个严谨的图像分析助手，只输出要求的 JSON，不做任何额外解释。"
@@ -172,22 +172,28 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
 
     parsed = _extract_json(content)
     # 兼容多种 VLM 输出结构：
-    #   {"blocks": [{"label","box"}]}  ← 主格式（prompt 要求）
-    #   [{"label","box"}]              ← 直接数组
-    #   {"label","box"}                ← 单个对象（裸返回）
+    #   {"blocks": [{"label","bbox"}]}  ← 主格式（prompt 要求）
+    #   {"blocks": [{"label","box"}]}   ← 老格式兜底
+    #   [{"label","bbox"}]              ← 直接数组
+    #   {"label","bbox"}                ← 单个对象（裸返回）
     if isinstance(parsed, list):
         blocks_raw = parsed
     else:
         blocks_raw = parsed.get("blocks") or []
-        if not blocks_raw and "box" in parsed:
+        if not blocks_raw and "bbox" in parsed:
             blocks_raw = [parsed]
     blocks = []
     for b in blocks_raw:
         if not isinstance(b, dict):
             continue
-        box = _parse_box(b.get("box"))
+        # 兼容多种 bbox 字段名：box / bbox / bbox_2d / bounding_box（qwen-vl-max 习惯用 bbox_2d）
+        raw_box = b.get("box") or b.get("bbox") or b.get("bbox_2d") or b.get("bounding_box")
+        if raw_box is None and isinstance(b.get("boxes"), (list, tuple)) and len(b["boxes"]) >= 4:
+            raw_box = list(b["boxes"])[:4]
+        box = _parse_box(raw_box)
         if not box:
             continue
+        # 拿到的 bbox 字段名（用于诊断）
         blocks.append({"label": str(b.get("label", "")), "box": box})
 
     if not blocks:
