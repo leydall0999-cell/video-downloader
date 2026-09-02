@@ -54,7 +54,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -63,11 +63,12 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         out_path = app.DW_DIR / f"mat_{job_id}.png"
         # 诊断日志：记录选区原始参数，便于排查"圈了但结果不对"
         app.logger.info(
-            "matting %s start: box=%s polygon=%s click=%s vision_guide=%s model=%s",
+            "matting %s start: box=%s polygon=%s click=%s blocks=%s vision_guide=%s model=%s",
             job_id,
             box,
             f"{len(polygon)}pts" if polygon else None,
             click,
+            f"{len(blocks)}blk" if blocks else None,
             vision_guide,
             model,
         )
@@ -85,15 +86,15 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
         job["filename"] = out_path.name
         job["out_path"] = str(out_path)
         job["vision_used"] = vision_used
-        # 记录本次实际使用的选区模式（点图 > 多边形 > AI 视觉 > 矩形框 > 自动），供前端状态展示
-        job["mode"] = "click" if click else ("lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto")))
+        # 记录本次实际使用的选区模式（魔棒多块 > 点图 > 多边形 > AI 视觉 > 矩形框 > 自动）
+        job["mode"] = "blocks" if blocks else ("click" if click else ("lasso" if polygon else ("vision" if vision_box else ("box" if box else "auto"))))
         # 把 polygon 的 bbox 也记下来，方便和用户画的圈对照
         if polygon:
             xs = [p[0] for p in polygon]
@@ -129,6 +130,7 @@ def create_matting_image(
     vision_guide: str = app.Form(None),
     polygon: str = app.Form(None),
     click_point: str = app.Form(None),
+    blocks: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
@@ -196,6 +198,30 @@ def create_matting_image(
         except Exception:  # noqa: BLE001
             parsed_click = None  # 解析失败忽略，退回其它选区
 
+    # 🧲 智能魔棒多选：用户选中的多个元素块轮廓（[[[x,y]...], ...] 归一化）
+    parsed_blocks = None
+    if blocks:
+        try:
+            import json as _json4
+
+            braw = _json4.loads(blocks)
+            if isinstance(braw, list) and len(braw) >= 1:
+                out_blk = []
+                for blk in braw:
+                    pts = None
+                    if isinstance(blk, dict):
+                        pts = blk.get("contour") or blk.get("polygon")
+                    elif isinstance(blk, list):
+                        pts = blk
+                    if isinstance(pts, list) and len(pts) >= 3:
+                        clean = [[float(p[0]), float(p[1])] for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
+                        if len(clean) >= 3:
+                            out_blk.append(clean)
+                if out_blk:
+                    parsed_blocks = out_blk
+        except Exception:  # noqa: BLE001
+            parsed_blocks = None
+
     save_path = _save_upload(file, "mat_up")
     job_id = app.uuid.uuid4().hex[:12]
     with MAT_LOCK:
@@ -203,8 +229,79 @@ def create_matting_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "matting",
         }
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click)
-    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click}
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks)
+    return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks)}
+
+
+@router.post("/api/matting/analyze")
+def matting_analyze(
+    file: app.UploadFile = app._FastAPIFile(...),
+    model: str = app.Form(None),
+    request: app.Request = None,
+) -> dict:
+    """🧲 智能元素块分析：上传图 → 全图显著性 → 返回元素块清单。
+    前端 hover 高亮 + 点击选块用。分析用轻量模型，速度快。
+    """
+    if not mat.available():
+        raise app.HTTPException(status_code=503, detail="一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.png").suffix.lower()
+    if suffix not in MAT_IMAGE_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
+    sel_model = model if (model and model in mat.MODELS) else "birefnet-general-lite"
+    save_path = _save_upload(file, "mat_anl")
+    try:
+        from PIL import Image
+
+        with Image.open(save_path) as im:
+            im.load()
+            rgb = im.convert("RGB")
+        blocks = mat.analyze_blocks(rgb, model=sel_model)
+        return {"ok": True, "blocks": blocks, "model": sel_model, "total": len(blocks)}
+    except Exception as e:  # noqa: BLE001
+        raise app.HTTPException(status_code=500, detail=f"元素分析失败：{e}")
+
+
+@router.post("/api/matting/blocks/split")
+def matting_split_block(
+    file: app.UploadFile = app._FastAPIFile(...),
+    block: str = app.Form(None),
+    model: str = app.Form(None),
+    request: app.Request = None,
+) -> dict:
+    """🧲 块细分：把 hover/选中的一块（如连片的主标题+小标题）按颜色聚类拆子块。"""
+    if not mat.available():
+        raise app.HTTPException(status_code=503, detail="一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.png").suffix.lower()
+    if suffix not in MAT_IMAGE_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
+    parsed_blk = None
+    if block:
+        try:
+            import json as _json5
+
+            b = _json5.loads(block)
+            if isinstance(b, dict):
+                parsed_blk = b
+            elif isinstance(b, list) and len(b) >= 3:
+                parsed_blk = {"contour": b}
+        except Exception:  # noqa: BLE001
+            parsed_blk = None
+    if not parsed_blk:
+        raise app.HTTPException(status_code=400, detail="缺少待细分的块轮廓")
+    sel_model = model if (model and model in mat.MODELS) else "birefnet-general-lite"
+    save_path = _save_upload(file, "mat_spl")
+    try:
+        from PIL import Image
+
+        with Image.open(save_path) as im:
+            im.load()
+            rgb = im.convert("RGB")
+        sub_blocks = mat.split_block(rgb, parsed_blk, model=sel_model)
+        return {"ok": True, "blocks": sub_blocks, "total": len(sub_blocks)}
+    except Exception as e:  # noqa: BLE001
+        raise app.HTTPException(status_code=500, detail=f"块细分失败：{e}")
 
 
 @router.get("/api/matting/image/{job_id}")

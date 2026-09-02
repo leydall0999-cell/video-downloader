@@ -540,11 +540,14 @@ def predict_mask(img, model: str | None = None):
     return mask_img
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
 
+    blocks（可选）：**🧲 智能魔棒多选**——用户 hover 高亮智能元素块、点击选中多个
+      不相邻的块（如主标题 + 右上角图案），值 = 每个选中块的归一化轮廓点列表
+      [[[x,y]...], ...]（analyze_blocks 返回的 contour）。后端把它们作并集一次抠出。
     click（可选）：**[x,y] 归一化 0~1**，点图抠图——用户直接在预览图上
       单击想要的主体（主标题/图案/按钮等），后端跑全图显著性，
       从点击点 BFS 扩散找到"点击处所属的那个元素"（连通显著块）只抠它。
@@ -574,7 +577,10 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        if click:
+        if blocks:
+            # 🧲 智能魔棒多选：用户 hover 高亮 + 点击选中的多个元素块（并集）一起抠
+            mask = _blocks_mask(rgb, blocks, W, H, model=model)
+        elif click:
             # 👆 点图抠图：用户点哪抠哪（点击处所在连通显著块）
             mask = _click_mask(rgb, click, W, H, model=model)
         elif polygon:
@@ -645,6 +651,173 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rgba.save(out_path, "PNG")
+
+
+def analyze_blocks(rgb, model: str | None = None, min_area_ratio: float = 0.0006, max_blocks: int = 60):
+    """🧲 智能元素块分析：跑全图显著性，把图切分为独立的"元素块"。
+
+    返回块清单（供前端 hover 高亮 + 点击选块）：
+      [{"id": int, "bbox": [x1,y1,x2,y2] 归一化, "contour": [[x,y]...] 归一化轮廓点, "area": 像素数}]
+    典型：海报 → 标题一块、颜料盘一块、铅笔一块、按钮一块…各自独立成块。
+    """
+    import numpy as np
+    import cv2
+
+    mask_img = predict_mask(rgb, model=model)
+    arr = np.array(mask_img)
+    H, W = arr.shape
+    binm = (arr > 45).astype(np.uint8)  # alpha > ~0.18
+    contours, _ = cv2.findContours(binm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = min_area_ratio * H * W
+    blocks = []
+    for i, c in enumerate(contours):
+        area = float(cv2.contourArea(c))
+        if area < min_area:
+            continue
+        # 轮廓简化（Douglas-Peucker），控制前端绘制量
+        epsilon = 0.006 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, epsilon, True).reshape(-1, 2)
+        if len(approx) < 3:
+            continue
+        norm = [[round(float(x) / W, 4), round(float(y) / H, 4)] for x, y in approx]
+        xs = [p[0] for p in norm]
+        ys = [p[1] for p in norm]
+        blocks.append({
+            "id": i,
+            "bbox": [min(xs), min(ys), max(xs), max(ys)],
+            "contour": norm,
+            "area": int(area),
+        })
+        if len(blocks) >= max_blocks:
+            break
+    # 按面积降序（大块优先命中）
+    blocks.sort(key=lambda b: b["area"], reverse=True)
+    return blocks
+
+
+def split_block(rgb, block, model: str | None = None, k: int = 3):
+    """🧲 块细分：把 hover/选中的一块（可能含主标题+小标题等连片内容）
+    按颜色聚类进一步拆成若干子块，返回与 analyze_blocks 同构的块清单。
+
+    连片问题：BiRefNet 常把紧贴的主标题+小标题连成一大块；但两者颜色差异大
+    （橙底白字 vs 黑底黄字），块内 k-means 颜色聚类能把它们分开。
+    """
+    import numpy as np
+    import cv2
+
+    W, H = rgb.size
+    contour = block.get("contour") if isinstance(block, dict) else block
+    if not contour or len(contour) < 3:
+        return []
+    poly = np.array([[float(p[0]) * W, float(p[1]) * H] for p in contour], dtype=np.float32).astype(np.int32)
+    msk = np.zeros((H, W), dtype=np.uint8)
+    cv2.fillPoly(msk, [poly], 255)
+    rgb_arr = np.array(rgb).astype(np.float32) / 255.0
+    ys, xs = np.where(msk > 0)
+    if len(ys) < 64:
+        return []
+    pix = rgb_arr[ys, xs]
+    kk = max(2, min(k, len(pix) // 50))
+    rng = np.random.default_rng(7)
+    try:
+        centers = pix[rng.choice(len(pix), size=kk, replace=False)].copy()
+    except Exception:  # noqa: BLE001
+        return []
+    for _ in range(10):
+        d = np.linalg.norm(pix[:, None, :] - centers[None, :, :], axis=2)
+        lab = d.argmin(axis=1)
+        for c in range(kk):
+            s = pix[lab == c]
+            if len(s):
+                centers[c] = s.mean(axis=0)
+
+    sub_blocks = []
+    for c in range(kk):
+        sub = np.zeros((H, W), dtype=np.uint8)
+        sel = lab == c
+        sub[ys[sel], xs[sel]] = 255
+        sub_contours, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for sc in sub_contours:
+            if cv2.contourArea(sc) < 60:
+                continue
+            ep = 0.006 * cv2.arcLength(sc, True)
+            ap = cv2.approxPolyDP(sc, ep, True).reshape(-1, 2)
+            if len(ap) < 3:
+                continue
+            norm = [[round(float(x) / W, 4), round(float(y) / H, 4)] for x, y in ap]
+            xs2 = [p[0] for p in norm]
+            ys2 = [p[1] for p in norm]
+            sub_blocks.append({
+                "id": f"sub{c}_{len(sub_blocks)}",
+                "bbox": [min(xs2), min(ys2), max(xs2), max(ys2)],
+                "contour": norm,
+                "area": int(cv2.contourArea(sc)),
+            })
+    sub_blocks.sort(key=lambda b: b["area"], reverse=True)
+    return sub_blocks
+
+
+def _blocks_mask(rgb, blocks, W: int, H: int, model: str | None = None):
+    """🧲 智能魔棒多选抠图：把用户 hover+点击选中的多个元素块（并集）一起抠。
+
+    blocks: 每个选中块的归一化轮廓点 [[[x,y]...], ...]（analyze_blocks 的 contour）。
+    实现：
+      1. 各块轮廓并集 bbox（含 10% 外扩）裁切推理一次（模型看得到块间上下文）
+      2. 各块轮廓 fill OR 成 union 二值 mask（=用户选中范围，块间隙透明）
+      3. 推理 alpha × union mask → 输出
+    不跑 center_keep/dominant——多块并集是用户明确意图，块间差异由 union 硬切保证。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    if not blocks:
+        return None
+    norm_all = []
+    for blk in blocks:
+        if isinstance(blk, dict):
+            blk = blk.get("contour") or blk.get("polygon") or blk
+        if isinstance(blk, (list, tuple)) and len(blk) >= 3:
+            norm_all.append([[float(p[0]), float(p[1])] for p in blk])
+    if not norm_all:
+        return None
+
+    # 各块像素 bbox 的并集
+    all_pts = [p for poly in norm_all for p in poly]
+    xs = [p[0] * W for p in all_pts]
+    ys = [p[1] * H for p in all_pts]
+    x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
+    x1, y1 = min(W, int(max(xs))), min(H, int(max(ys)))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None
+
+    bw, bh = x1 - x0, y1 - y0
+    pad_w = max(int(bw * 0.10), 4)
+    pad_h = max(int(bh * 0.10), 4)
+    x0p, y0p = max(0, x0 - pad_w), max(0, y0 - pad_h)
+    x1p, y1p = min(W, x1 + pad_w), min(H, y1 + pad_h)
+
+    crop = rgb.crop((x0p, y0p, x1p, y1p))
+    crop_mask = predict_mask(crop, model=model)
+
+    out_arr = np.zeros((H, W), dtype=np.uint8)
+    cw, ch = crop_mask.size
+    sx0 = max(0, x0 - x0p)
+    sy0 = max(0, y0 - y0p)
+    sx1 = min(cw, x1 - x0p)
+    sy1 = min(ch, y1 - y0p)
+    if sx1 > sx0 and sy1 > sy0:
+        region = np.array(crop_mask, dtype=np.uint8)[sy0:sy1, sx0:sx1]
+        out_arr[y0:y0 + sy1 - sy0, x0:x0 + sx1 - sx0] = region
+
+    # union mask：各选中块轮廓 fill → OR
+    union = Image.new("L", (W, H), 0)
+    ud = ImageDraw.Draw(union)
+    for poly in norm_all:
+        ud.polygon([(float(p[0]) * W, float(p[1]) * H) for p in poly], fill=255)
+    u = np.array(union).astype(np.float32) / 255.0
+    m = np.array(out_arr).astype(np.float32) / 255.0
+    m = m * u
+    return Image.fromarray(np.clip(m * 255.0, 0, 255).astype(np.uint8), mode="L")
 
 
 def _click_mask(rgb, click, W: int, H: int, model: str | None = None):

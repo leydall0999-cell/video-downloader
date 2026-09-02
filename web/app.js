@@ -529,6 +529,7 @@
     matToolSeg: $('matToolSeg'),
     matToolRect: $('matToolRect'),
     matToolLasso: $('matToolLasso'),
+    matToolBlocks: $('matToolBlocks'),
     matPreviewWrap: $('matPreviewWrap'),
     matLassoCanvas: $('matLassoCanvas'),
     matBoxActions: $('matBoxActions'),
@@ -536,6 +537,7 @@
     matBoxInfo: $('matBoxInfo'),
     matLassoUndo: $('matLassoUndo'),
     matLassoDone: $('matLassoDone'),
+    matBlocksSplit: $('matBlocksSplit'),
     processPanel: $('processPanel'),
     processPanelClose: $('processPanelClose'),
     processOp: $('processOp'),
@@ -3046,13 +3048,17 @@
     if (el.matBoxActions) el.matBoxActions.hidden = !on;
     if (el.matToolSeg) el.matToolSeg.hidden = !on;
     if (el.matLassoCanvas) {
-      const showLasso = on && matTool === 'lasso';
-      el.matLassoCanvas.hidden = !showLasso;
-      el.matLassoCanvas.style.pointerEvents = showLasso ? 'auto' : 'none';
-      if (showLasso) matLassoResize();
+      const showCv = on && (matTool === 'lasso' || matTool === 'blocks');
+      el.matLassoCanvas.hidden = !showCv;
+      el.matLassoCanvas.style.pointerEvents = showCv ? 'auto' : 'none';
+      if (showCv) matLassoResize();
     }
     if (el.matPreviewWrap) el.matPreviewWrap.classList.toggle('mat-boxable', !!on);
-    if (!on) { matBox = null; matBoxRedraw(); matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null; matLassoDown = null; matLassoRedraw(); }
+    if (!on) {
+      matBox = null; matBoxRedraw();
+      matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null; matLassoDown = null; matLassoRedraw();
+      matBlockList = []; matBlockSel.clear(); matBlockHover = null; matBlockRedraw();
+    }
   };
 
   // 套索 canvas 尺寸对齐预览图（CSS 像素 × dpr，保证高清描边）
@@ -3068,7 +3074,8 @@
     cv.style.top = img.offsetTop + 'px';
     cv.width = Math.round(img.clientWidth * dpr);
     cv.height = Math.round(img.clientHeight * dpr);
-    matLassoRedraw();
+    if (matTool === 'blocks') matBlockRedraw();
+    else matLassoRedraw();
   };
 
   // 套索实时预览绘制：锚点 + 未闭合时随光标橡皮筋围出的半透明区域——
@@ -3158,35 +3165,192 @@
     if (el.matLassoUndo) el.matLassoUndo.disabled = !matLassoNorm.length;
   };
 
+  // 🧲 智能选块（魔棒）状态
+  let matBlockList = [];       // analyze_blocks 返回：[{id,bbox,contour,area}]
+  let matBlockHover = null;    // 当前 hover 块 id
+  const matBlockSel = new Set(); // 已选中块 id（可多选）
+  let matBlockBusy = false;    // analyze/split 请求中
+  let matBlockVersion = 0;     // 候选块列表版本（split 后 +1 触发重绘）
+
+  const matBlockPoint = (ev) => {
+    const cv = el.matLassoCanvas; if (!cv) return null;
+    const r = cv.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
+  };
+
+  // 点在哪个块内（bbox 粗筛 + ray casting 精判）
+  const matBlockHit = (p) => {
+    if (!p || !matBlockList.length) return null;
+    for (let i = matBlockList.length - 1; i >= 0; i--) {
+      const b = matBlockList[i];
+      const bb = b.bbox;
+      if (p.x < bb[0] || p.x > bb[2] || p.y < bb[1] || p.y > bb[3]) continue;
+      const c = b.contour;
+      let inside = false;
+      for (let j = 0, k = c.length - 1; j < c.length; k = j++) {
+        const xi = c[j][0], yi = c[j][1], xj = c[k][0], yj = c[k][1];
+        if ((yi > p.y) !== (yj > p.y) && p.x < ((xj - xi) * (p.y - yi)) / ((yj - yi) || 1e-9) + xi) inside = !inside;
+      }
+      if (inside) return b;
+    }
+    return null;
+  };
+
+  const matBlockRedraw = () => {
+    const cv = el.matLassoCanvas; if (!cv) return;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const w = cv.width, h = cv.height;
+    const dpr = window.devicePixelRatio || 1;
+    const drawPoly = (b, fill, stroke, lw) => {
+      const c = b.contour;
+      if (!c || c.length < 3) return;
+      ctx.beginPath();
+      ctx.moveTo(c[0][0] * w, c[0][1] * h);
+      for (let i = 1; i < c.length; i++) ctx.lineTo(c[i][0] * w, c[i][1] * h);
+      ctx.closePath();
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = lw * dpr;
+      ctx.setLineDash([]);
+      ctx.stroke();
+    };
+    // 背景：全部候选块细线（未选）
+    for (const b of matBlockList) {
+      if (matBlockSel.has(b.id) || (matBlockHover && matBlockHover.id === b.id)) continue;
+      drawPoly(b, null, 'rgba(140,140,180,.55)', 1.1);
+    }
+    // hover 块
+    if (matBlockHover && !matBlockSel.has(matBlockHover.id)) {
+      drawPoly(matBlockHover, 'rgba(99,102,241,.16)', '#6366f1', 2);
+    }
+    // 已选块（绿 + 序号）
+    let n = 0;
+    for (const b of matBlockList) {
+      if (!matBlockSel.has(b.id)) continue;
+      n++;
+      drawPoly(b, 'rgba(76,175,80,.28)', '#2e7d32', 2.2);
+      const bb = b.bbox;
+      const cx = (bb[0] + bb[2]) / 2 * w, cy = (bb[1] + bb[3]) / 2 * h;
+      ctx.beginPath(); ctx.arc(cx, cy, 9 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = '#2e7d32'; ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = `${Math.round(11 * dpr)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(n), cx, cy + 0.5 * dpr);
+    }
+  };
+
+  // 分析整图元素块
+  const matBlocksAnalyze = async () => {
+    const file = el.matFile && el.matFile.files && el.matFile.files[0];
+    if (!file || matBlockBusy) return;
+    matBlockBusy = true;
+    if (el.matBoxInfo) el.matBoxInfo.textContent = '🧲 正在识别图上的元素…';
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch('/api/matting/analyze', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d && d.blocks) {
+        matBlockList = d.blocks;
+        matBlockSel.clear();
+        matBlockHover = null;
+        matBlockVersion++;
+        if (el.matBoxInfo) el.matBoxInfo.textContent = `🧲 识别出 ${matBlockList.length} 个元素 — 鼠标滑过高亮，单击选中（可多选），对选中块点「✂️ 细分」拆开主/副标题`;
+      } else {
+        if (el.matBoxInfo) el.matBoxInfo.textContent = '🧲 未识别到元素，试试其他工具';
+      }
+    } catch (e) {
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '🧲 分析失败：' + (e && e.message ? e.message : '未知错误');
+    } finally {
+      matBlockBusy = false;
+      matBlockRedraw();
+    }
+  };
+
+  // 细分当前 hover/选中的块（拆连片主+副标题）
+  const matBlockSplit = async () => {
+    const file = el.matFile && el.matFile.files && el.matFile.files[0];
+    const target = matBlockHover || (matBlockList.find(b => matBlockSel.has(b.id)));
+    if (!file || !target || matBlockBusy) {
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '先移动鼠标指向想细分的块';
+      return;
+    }
+    matBlockBusy = true;
+    if (el.matBoxInfo) el.matBoxInfo.textContent = '✂️ 正在细分…';
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('block', JSON.stringify({ contour: target.contour }));
+      const r = await fetch('/api/matting/blocks/split', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d && d.blocks && d.blocks.length) {
+        // 父块移除，子块加入候选（不自动选中）
+        matBlockList = matBlockList.filter(b => b.id !== target.id);
+        for (const sb of d.blocks) matBlockList.push(sb);
+        matBlockSel.delete(target.id);
+        matBlockHover = null;
+        matBlockVersion++;
+        if (el.matBoxInfo) el.matBoxInfo.textContent = `✂️ 已拆成 ${d.blocks.length} 个子块 — 滑过/单击选想要的`;
+      } else {
+        if (el.matBoxInfo) el.matBoxInfo.textContent = '该块无法细分（内容单一）';
+      }
+    } catch (e) {
+      if (el.matBoxInfo) el.matBoxInfo.textContent = '✂️ 细分失败：' + (e && e.message ? e.message : '');
+    } finally {
+      matBlockBusy = false;
+      matBlockRedraw();
+    }
+  };
+
   const setMatTool = (t) => {
     matTool = t;
     if (el.matToolRect) el.matToolRect.classList.toggle('active', t === 'rect');
     if (el.matToolLasso) el.matToolLasso.classList.toggle('active', t === 'lasso');
+    if (el.matToolBlocks) el.matToolBlocks.classList.toggle('active', t === 'blocks');
     // 切工具时清掉另一种选区，避免混淆
     if (t === 'lasso') {
       matBox = null; matBoxRedraw();
+      matBlockList = []; matBlockSel.clear(); matBlockHover = null; matBlockRedraw();
       if (el.matLassoUndo) el.matLassoUndo.hidden = false;
       if (el.matLassoDone) el.matLassoDone.hidden = false;
-      // 恢复画中提示（默认清空态）
+      if (el.matBlocksSplit) el.matBlocksSplit.hidden = true;
       if (!matLassoNorm.length && el.matBoxInfo) el.matBoxInfo.textContent = '单击加锚点 · 移动预览 · 双击或回车确定 · Backspace/右键撤销';
-    } else {
+    } else if (t === 'blocks') {
+      matBox = null; matBoxRedraw();
       matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null;
       matLassoRedraw();
       if (el.matLassoUndo) el.matLassoUndo.hidden = true;
       if (el.matLassoDone) el.matLassoDone.hidden = true;
+      if (el.matBlocksSplit) el.matBlocksSplit.hidden = false;
+      if (!matBlockList.length && el.matBoxInfo) el.matBoxInfo.textContent = '🧲 智能选块：正在分析元素…';
+      matBlocksAnalyze();   // 首次切进来自动分析
+    } else {
+      matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null;
+      matLassoRedraw();
+      matBlockList = []; matBlockSel.clear(); matBlockHover = null; matBlockRedraw();
+      if (el.matLassoUndo) el.matLassoUndo.hidden = true;
+      if (el.matLassoDone) el.matLassoDone.hidden = true;
+      if (el.matBlocksSplit) el.matBlocksSplit.hidden = true;
     }
     if (el.matBoxSvg) el.matBoxSvg.hidden = matTool !== 'rect';
     if (el.matLassoCanvas) {
-      el.matLassoCanvas.hidden = matTool !== 'lasso';
-      el.matLassoCanvas.style.pointerEvents = matTool === 'lasso' ? 'auto' : 'none';
+      const useCv = matTool === 'lasso' || matTool === 'blocks';
+      el.matLassoCanvas.hidden = !useCv;
+      el.matLassoCanvas.style.pointerEvents = useCv ? 'auto' : 'none';
+      if (useCv) matLassoResize();
     }
-    if (t === 'lasso') matLassoResize();
   };
 
   if (el.matToolRect && el.matToolLasso) {
     el.matToolRect.addEventListener('click', () => setMatTool('rect'));
     el.matToolLasso.addEventListener('click', () => setMatTool('lasso'));
+    if (el.matToolBlocks) el.matToolBlocks.addEventListener('click', () => setMatTool('blocks'));
   }
+  if (el.matBlocksSplit) el.matBlocksSplit.addEventListener('click', matBlockSplit);
+
   if (el.matLassoUndo) el.matLassoUndo.addEventListener('click', matLassoUndoLast);
   if (el.matLassoDone) el.matLassoDone.addEventListener('click', matLassoClose);
   // Backspace / Delete / 右键 = 撤销上一点（右键先阻止系统菜单）
@@ -3196,13 +3360,39 @@
     else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); matLassoClose(); }
   });
   if (el.matLassoCanvas) {
-    el.matLassoCanvas.addEventListener('contextmenu', (e) => { e.preventDefault(); matLassoUndoLast(); });
+    el.matLassoCanvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (matTool === 'blocks') {
+        // 右键 = 取消最近一个选块
+        if (matBlockSel.size) {
+          const last = [...matBlockSel][matBlockSel.size - 1];
+          matBlockSel.delete(last);
+          matBlockRedraw();
+          if (el.matBoxInfo) el.matBoxInfo.textContent = `🧲 已取消一个，剩 ${matBlockSel.size} 个选中`;
+        }
+      } else {
+        matLassoUndoLast();
+      }
+    });
   }
 
   if (el.matLassoCanvas) {
     const cv = el.matLassoCanvas;
     // 单击 = 加锚点；拖动 = 连续描点；双击/点首点附近 = 闭合确定
     cv.addEventListener('pointerdown', (ev) => {
+      // 🧲 智能选块：单击 = 选中/取消该元素块（可多选累加）
+      if (matTool === 'blocks') {
+        const p = matBlockPoint(ev); if (!p) return;
+        const hit = matBlockHit(p);
+        if (hit) {
+          if (matBlockSel.has(hit.id)) matBlockSel.delete(hit.id);
+          else matBlockSel.add(hit.id);
+          matBlockHover = hit;
+          if (el.matBoxInfo) el.matBoxInfo.textContent = `🧲 已选 ${matBlockSel.size} 个元素 — 再点可取消/加点，点「开始抠图」把选中的一起抠`;
+        }
+        matBlockRedraw();
+        return;
+      }
       if (matTool !== 'lasso') return;
       const p = matLassoPoint(ev); if (!p) return;
       ev.preventDefault();
@@ -3216,6 +3406,15 @@
       matLassoRedraw();
     });
     cv.addEventListener('pointermove', (ev) => {
+      // 🧲 智能选块：滑过元素即时高亮（无点击，纯 hover）
+      if (matTool === 'blocks') {
+        const p = matBlockPoint(ev); if (!p) return;
+        const hit = matBlockHit(p);
+        const hid = hit ? hit.id : null;
+        const prev = matBlockHover ? matBlockHover.id : null;
+        if (hid !== prev) { matBlockHover = hit; matBlockRedraw(); }
+        return;
+      }
       if (matTool !== 'lasso') return;
       const p = matLassoPoint(ev); if (!p) return;
       const down = matLassoDown;
@@ -3286,6 +3485,7 @@
       matBox = null; matBoxRedraw();
       matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null; matLassoDown = null;
       matLassoRedraw();
+      matBlockSel.clear(); matBlockHover = null; matBlockRedraw();
       if (el.matBoxInfo) el.matBoxInfo.textContent = '';
     });
   }
@@ -3330,7 +3530,7 @@
     // 窗口尺寸变化后图片显示尺寸变了，重绘保持框贴合
     window.addEventListener('resize', () => {
       if (el.matBoxToggle && el.matBoxToggle.checked) matBoxRedraw();
-      if (el.matBoxToggle && el.matBoxToggle.checked && matTool === 'lasso') matLassoResize();
+      if (el.matBoxToggle && el.matBoxToggle.checked && (matTool === 'lasso' || matTool === 'blocks')) matLassoResize();
     });
   }
 
@@ -3346,7 +3546,9 @@
       matBox = null;   // 换图后清掉旧框，避免框错图
       matBoxRedraw();
       matPolygon = null; matLassoNorm = []; matLassoRedraw();
-      if (matTool === 'lasso') matLassoResize();   // 图片尺寸变了，重新对齐 canvas
+      matBlockList = []; matBlockSel.clear(); matBlockHover = null;
+      if (matTool === 'lasso' || matTool === 'blocks') matLassoResize();   // 图片尺寸变了，重新对齐 canvas
+      if (matTool === 'blocks' && el.matBoxToggle && el.matBoxToggle.checked) matBlocksAnalyze();
     };
   };
 
@@ -3441,14 +3643,23 @@
       if (el.matModel && el.matModel.value) {
         fd.append('model', el.matModel.value);
       }
-      // 手动框选了主体区域 → 套索优先（多边形），其次矩形框 [x,y,w,h]
+      // 手动框选了主体区域 → 🧲 智能选块 > 点选 > 套索 > 矩形框
       if (matClick) {
         // 👆 点图抠图：用户点了预览图上的元素 → 只抠点击处所在主体
         fd.append('click_point', JSON.stringify(matClick));
         el.matStatus.textContent = `点选抠图（${Math.round(matClick[0] * 100)}%, ${Math.round(matClick[1] * 100)}%）— 只抠该元素`;
         matClick = null;
       } else if (el.matBoxToggle && el.matBoxToggle.checked) {
-        if (matTool === 'lasso') {
+        if (matTool === 'blocks') {
+          // 🧲 智能选块：多个选中块的轮廓并集一起提交
+          const selBlk = matBlockList.filter(b => matBlockSel.has(b.id));
+          if (selBlk.length) {
+            fd.append('blocks', JSON.stringify(selBlk.map(b => b.contour)));
+            el.matStatus.textContent = `上传中…（🧲 ${selBlk.length} 个选中元素一起抠）`;
+          } else {
+            el.matStatus.textContent = '请先在图上点击选中要抠的元素（可多选）';
+          }
+        } else if (matTool === 'lasso') {
           // 提交前强制对齐 canvas 尺寸，避免图片加载/窗口变化后坐标映射错误
           matLassoResize();
           if (matPolygon && matPolygon.length >= 3) {
