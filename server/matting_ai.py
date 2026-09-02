@@ -760,64 +760,95 @@ def split_block(rgb, block, model: str | None = None, k: int = 3):
 def _blocks_mask(rgb, blocks, W: int, H: int, model: str | None = None):
     """🧲 智能魔棒多选抠图：把用户 hover+点击选中的多个元素块（并集）一起抠。
 
-    blocks: 每个选中块的归一化轮廓点 [[[x,y]...], ...]（analyze_blocks 的 contour）。
+    blocks: 每个元素可为归一化轮廓 [[x,y]...] 或 dict {"contour":[...], "tag": ...}
+      tag='text' → 📝 VLM 文字块（如装饰风主标题）。BiRefNet 显著性对这类字整图
+      几乎无响应（零星 alpha<45 不成块），若按普通块乘显著性会抠空。改为对文字块
+      bbox 做**局部裁切推理**（_box_crop_mask，模型在局部把字当显著主体），
+      单块实测 alpha>160 像素从全图的 63 提升到 6846——字被真正挖出来。
+      tag='auto'/其它 → 普通显著性块（原逻辑：并集 bbox 裁切推理 × union mask）。
     实现：
-      1. 各块轮廓并集 bbox（含 10% 外扩）裁切推理一次（模型看得到块间上下文）
-      2. 各块轮廓 fill OR 成 union 二值 mask（=用户选中范围，块间隙透明）
-      3. 推理 alpha × union mask → 输出
-    不跑 center_keep/dominant——多块并集是用户明确意图，块间差异由 union 硬切保证。
+      1. 各块轮廓 union 二值 mask（=用户选中范围，块间隙透明）
+      2. tag=auto 块：并集 bbox(+10% pad) 裁切推理一次，alpha × union
+      3. tag=text 块：各自 bbox 局部裁切推理，直接取 alpha（块内即其轮廓范围）
+      4. 各路 alpha 取逐像素 max 合成，整体 × union 保证块间隙/块外透明
     """
     import numpy as np
     from PIL import Image, ImageDraw
 
     if not blocks:
         return None
-    norm_all = []
+    items = []  # {"contour": norm, "tag": "auto"|"text"}
     for blk in blocks:
+        tag = "auto"
         if isinstance(blk, dict):
-            blk = blk.get("contour") or blk.get("polygon") or blk
-        if isinstance(blk, (list, tuple)) and len(blk) >= 3:
-            norm_all.append([[float(p[0]), float(p[1])] for p in blk])
-    if not norm_all:
+            contour = blk.get("contour") or blk.get("polygon") or blk
+            tag = str(blk.get("tag") or "auto")
+        else:
+            contour = blk
+        if isinstance(contour, (list, tuple)) and len(contour) >= 3:
+            clean = [[float(p[0]), float(p[1])] for p in contour
+                     if isinstance(p, (list, tuple)) and len(p) >= 2]
+            if len(clean) >= 3:
+                items.append({"contour": clean, "tag": tag})
+    if not items:
         return None
 
-    # 各块像素 bbox 的并集
-    all_pts = [p for poly in norm_all for p in poly]
-    xs = [p[0] * W for p in all_pts]
-    ys = [p[1] * H for p in all_pts]
-    x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
-    x1, y1 = min(W, int(max(xs))), min(H, int(max(ys)))
-    if x1 - x0 < 8 or y1 - y0 < 8:
-        return None
+    norm_all = [it["contour"] for it in items]
+    text_items = [it for it in items if it["tag"] == "text"]
+    auto_items = [it for it in items if it["tag"] != "text"]
 
-    bw, bh = x1 - x0, y1 - y0
-    pad_w = max(int(bw * 0.10), 4)
-    pad_h = max(int(bh * 0.10), 4)
-    x0p, y0p = max(0, x0 - pad_w), max(0, y0 - pad_h)
-    x1p, y1p = min(W, x1 + pad_w), min(H, y1 + pad_h)
+    out = np.zeros((H, W), dtype=np.float32)
 
-    crop = rgb.crop((x0p, y0p, x1p, y1p))
-    crop_mask = predict_mask(crop, model=model)
+    # ---- tag=auto 块：并集 bbox 裁切推理 × union（原逻辑） ----
+    if auto_items:
+        all_pts = [p for poly in (it["contour"] for it in auto_items) for p in poly]
+        xs = [p[0] * W for p in all_pts]
+        ys = [p[1] * H for p in all_pts]
+        x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
+        x1, y1 = min(W, int(max(xs))), min(H, int(max(ys)))
+        if x1 - x0 >= 8 and y1 - y0 >= 8:
+            bw, bh = x1 - x0, y1 - y0
+            pad_w = max(int(bw * 0.10), 4)
+            pad_h = max(int(bh * 0.10), 4)
+            x0p, y0p = max(0, x0 - pad_w), max(0, y0 - pad_h)
+            x1p, y1p = min(W, x1 + pad_w), min(H, y1 + pad_h)
+            crop = rgb.crop((x0p, y0p, x1p, y1p))
+            crop_mask = predict_mask(crop, model=model)
+            cw, ch = crop_mask.size
+            sx0 = max(0, x0 - x0p)
+            sy0 = max(0, y0 - y0p)
+            sx1 = min(cw, x1 - x0p)
+            sy1 = min(ch, y1 - y0p)
+            if sx1 > sx0 and sy1 > sy0:
+                region = np.array(crop_mask, dtype=np.uint8)[sy0:sy1, sx0:sx1]
+                m = region.astype(np.float32) / 255.0
+                out[y0:y0 + sy1 - sy0, x0:x0 + sx1 - sx0] = np.maximum(
+                    out[y0:y0 + sy1 - sy0, x0:x0 + sx1 - sx0], m)
 
-    out_arr = np.zeros((H, W), dtype=np.uint8)
-    cw, ch = crop_mask.size
-    sx0 = max(0, x0 - x0p)
-    sy0 = max(0, y0 - y0p)
-    sx1 = min(cw, x1 - x0p)
-    sy1 = min(ch, y1 - y0p)
-    if sx1 > sx0 and sy1 > sy0:
-        region = np.array(crop_mask, dtype=np.uint8)[sy0:sy1, sx0:sx1]
-        out_arr[y0:y0 + sy1 - sy0, x0:x0 + sx1 - sx0] = region
+    # ---- tag=text 块：各自 bbox 局部裁切推理（把弱显著文字在局部显出来） ----
+    for it in text_items:
+        poly = it["contour"]
+        xs = [p[0] * W for p in poly]
+        ys = [p[1] * H for p in poly]
+        x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
+        x1, y1 = min(W, int(max(xs))), min(H, int(max(ys)))
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            continue
+        try:
+            lm = _box_crop_mask(rgb, (x0, y0, x1, y1), W, H, model=model)
+            la = np.array(lm).astype(np.float32) / 255.0
+            out = np.maximum(out, la)
+        except Exception:  # noqa: BLE001
+            continue
 
-    # union mask：各选中块轮廓 fill → OR
+    # ---- union：全部选中块轮廓 fill → OR（块间隙 / 块外强制透明） ----
     union = Image.new("L", (W, H), 0)
     ud = ImageDraw.Draw(union)
     for poly in norm_all:
         ud.polygon([(float(p[0]) * W, float(p[1]) * H) for p in poly], fill=255)
     u = np.array(union).astype(np.float32) / 255.0
-    m = np.array(out_arr).astype(np.float32) / 255.0
-    m = m * u
-    return Image.fromarray(np.clip(m * 255.0, 0, 255).astype(np.uint8), mode="L")
+    out = out * u
+    return Image.fromarray(np.clip(out * 255.0, 0, 255).astype(np.uint8), mode="L")
 
 
 def _click_mask(rgb, click, W: int, H: int, model: str | None = None):

@@ -198,7 +198,9 @@ def create_matting_image(
         except Exception:  # noqa: BLE001
             parsed_click = None  # 解析失败忽略，退回其它选区
 
-    # 🧲 智能魔棒多选：用户选中的多个元素块轮廓（[[[x,y]...], ...] 归一化）
+    # 🧲 智能魔棒多选：用户选中的多个元素块。元素可为纯轮廓数组 [[[x,y]...], ...]
+    # 或带标记对象 [{"contour": [[x,y]...], "tag": "auto"|"text"}, ...]（tag=text 表示
+    # 📝 VLM 文字块——显著性弱，抠图时需走局部裁切推理才能把字显出来）。
     parsed_blocks = None
     if blocks:
         try:
@@ -208,15 +210,18 @@ def create_matting_image(
             if isinstance(braw, list) and len(braw) >= 1:
                 out_blk = []
                 for blk in braw:
-                    pts = None
+                    tag = "auto"
                     if isinstance(blk, dict):
                         pts = blk.get("contour") or blk.get("polygon")
+                        tag = str(blk.get("tag") or "auto")
                     elif isinstance(blk, list):
                         pts = blk
+                    else:
+                        pts = None
                     if isinstance(pts, list) and len(pts) >= 3:
                         clean = [[float(p[0]), float(p[1])] for p in pts if isinstance(p, (list, tuple)) and len(p) >= 2]
                         if len(clean) >= 3:
-                            out_blk.append(clean)
+                            out_blk.append({"contour": clean, "tag": tag})
                 if out_blk:
                     parsed_blocks = out_blk
         except Exception:  # noqa: BLE001
@@ -237,10 +242,14 @@ def create_matting_image(
 def matting_analyze(
     file: app.UploadFile = app._FastAPIFile(...),
     model: str = app.Form(None),
+    with_text: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """🧲 智能元素块分析：上传图 → 全图显著性 → 返回元素块清单。
     前端 hover 高亮 + 点击选块用。分析用轻量模型，速度快。
+    with_text=1 时并行调 VLM 文字检测，把「主标题/按钮文字」等显著性弱、
+    BiRefNet 成不了块的文字元素也作为 tag=text 的块插入最前（补足候选，
+    让装饰风字体可 hover/选中）。VLM 未配置/失败自动降级只返回 BiRefNet 块。
     """
     if not mat.available():
         raise app.HTTPException(status_code=503, detail="一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
@@ -257,7 +266,42 @@ def matting_analyze(
             im.load()
             rgb = im.convert("RGB")
         blocks = mat.analyze_blocks(rgb, model=sel_model)
-        return {"ok": True, "blocks": blocks, "model": sel_model, "total": len(blocks)}
+        text_used = False
+        text_total = 0
+        wt = (with_text or "").strip().lower() in ("1", "true", "yes", "on")
+        if wt:
+            try:
+                import vision_client as _vc
+
+                tb = _vc.detect_text_blocks(str(save_path), timeout=45)
+                W, H = rgb.size
+                vblocks = []
+                for i, b in enumerate(tb):
+                    x1, y1, x2, y2 = b["box"]
+                    # 文字块转矩形轮廓（tag=text），hover/点选/提交同普通块
+                    contour = [
+                        [x1, y1], [x2, y1], [x2, y2], [x1, y2],
+                    ]
+                    vblocks.append({
+                        "id": -1 - i,
+                        "bbox": [x1, y1, x2, y2],
+                        "contour": contour,
+                        "area": int((x2 - x1) * (y2 - y1) * W * H),
+                        "tag": "text",
+                        "label": b.get("label", "文字"),
+                    })
+                if vblocks:
+                    # 文字块插最前：hover 优先命中、一眼可选中主标题
+                    blocks = vblocks + blocks
+                    text_used = True
+                    text_total = len(vblocks)
+            except Exception:  # noqa: BLE001  未配 Key / VLM 失败 → 静默降级
+                pass
+        # 重排 id（文字块在前的整体序号），避免负 id / 冲突
+        for i, b in enumerate(blocks):
+            b["id"] = i
+        return {"ok": True, "blocks": blocks, "model": sel_model, "total": len(blocks),
+                "text_used": text_used, "text_total": text_total}
     except Exception as e:  # noqa: BLE001
         raise app.HTTPException(status_code=500, detail=f"元素分析失败：{e}")
 

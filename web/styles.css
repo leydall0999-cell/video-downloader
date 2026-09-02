@@ -1031,6 +1031,14 @@ img { max-width: 100%; display: block; }
 .mat-tool-btn.active {
   background: var(--brand, #6366f1); color: #fff; font-weight: 600;
 }
+/* 📝 文字检测开关（🧲 智能选块专属选项） */
+.mat-text-wrap {
+  display: flex; align-items: center; gap: 6px; margin: .2rem 0 0;
+  font-size: .8rem; color: var(--text, #333); cursor: pointer; user-select: none;
+}
+.mat-text-wrap[hidden] { display: none; }
+.mat-text-wrap input { accent-color: var(--brand, #6366f1); }
+.mat-text-tip { color: var(--text-secondary, #888); font-size: .74rem; }
 /* 套索 canvas：绝对铺满预览图（与图片同尺寸），仅套索模式收事件 */
 .mat-lasso-canvas {
   position: absolute; left: 0; top: 0; width: 100%; height: 100%;

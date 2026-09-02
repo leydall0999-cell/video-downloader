@@ -530,6 +530,8 @@
     matToolRect: $('matToolRect'),
     matToolLasso: $('matToolLasso'),
     matToolBlocks: $('matToolBlocks'),
+    matTextWrap: $('matTextWrap'),
+    matTextDetect: $('matTextDetect'),
     matPreviewWrap: $('matPreviewWrap'),
     matLassoCanvas: $('matLassoCanvas'),
     matBoxActions: $('matBoxActions'),
@@ -3047,6 +3049,7 @@
     if (el.matBoxHint) el.matBoxHint.hidden = !on;
     if (el.matBoxActions) el.matBoxActions.hidden = !on;
     if (el.matToolSeg) el.matToolSeg.hidden = !on;
+    if (el.matTextWrap) el.matTextWrap.hidden = !(on && matTool === 'blocks');
     if (el.matLassoCanvas) {
       const showCv = on && (matTool === 'lasso' || matTool === 'blocks');
       el.matLassoCanvas.hidden = !showCv;
@@ -3216,14 +3219,14 @@
       ctx.setLineDash([]);
       ctx.stroke();
     };
-    // 背景：全部候选块细线（未选）
+    // 背景：全部候选块细线（未选）；📝 文字块用橙色描边便于一眼识别
     for (const b of matBlockList) {
       if (matBlockSel.has(b.id) || (matBlockHover && matBlockHover.id === b.id)) continue;
-      drawPoly(b, null, 'rgba(140,140,180,.55)', 1.1);
+      drawPoly(b, null, b.tag === 'text' ? 'rgba(230,126,34,.9)' : 'rgba(140,140,180,.55)', b.tag === 'text' ? 1.4 : 1.1);
     }
     // hover 块
     if (matBlockHover && !matBlockSel.has(matBlockHover.id)) {
-      drawPoly(matBlockHover, 'rgba(99,102,241,.16)', '#6366f1', 2);
+      drawPoly(matBlockHover, 'rgba(99,102,241,.16)', matBlockHover.tag === 'text' ? '#e67e22' : '#6366f1', 2);
     }
     // 已选块（绿 + 序号）
     let n = 0;
@@ -3251,6 +3254,7 @@
     try {
       const fd = new FormData();
       fd.append('file', file);
+      if (el.matTextDetect && el.matTextDetect.checked) fd.append('with_text', '1');
       const r = await fetch('/api/matting/analyze', { method: 'POST', body: fd });
       const d = await r.json();
       if (d && d.blocks) {
@@ -3258,7 +3262,8 @@
         matBlockSel.clear();
         matBlockHover = null;
         matBlockVersion++;
-        if (el.matBoxInfo) el.matBoxInfo.textContent = `🧲 识别出 ${matBlockList.length} 个元素 — 鼠标滑过高亮，单击选中（可多选），对选中块点「✂️ 细分」拆开主/副标题`;
+        const nText = d.text_total || 0;
+        if (el.matBoxInfo) el.matBoxInfo.textContent = `🧲 识别出 ${matBlockList.length} 个元素${nText ? `（含 📝 ${nText} 个文字元素）` : ''} — 鼠标滑过高亮，单击选中（可多选），对选中块点「✂️ 细分」拆开主/副标题`;
       } else {
         if (el.matBoxInfo) el.matBoxInfo.textContent = '🧲 未识别到元素，试试其他工具';
       }
@@ -3325,12 +3330,14 @@
       if (el.matLassoUndo) el.matLassoUndo.hidden = true;
       if (el.matLassoDone) el.matLassoDone.hidden = true;
       if (el.matBlocksSplit) el.matBlocksSplit.hidden = false;
+      if (el.matTextWrap) el.matTextWrap.hidden = false;   // 📝 文字检测开关（仅智能选块）
       if (!matBlockList.length && el.matBoxInfo) el.matBoxInfo.textContent = '🧲 智能选块：正在分析元素…';
       matBlocksAnalyze();   // 首次切进来自动分析
     } else {
       matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null;
       matLassoRedraw();
       matBlockList = []; matBlockSel.clear(); matBlockHover = null; matBlockRedraw();
+      if (el.matTextWrap) el.matTextWrap.hidden = true;
       if (el.matLassoUndo) el.matLassoUndo.hidden = true;
       if (el.matLassoDone) el.matLassoDone.hidden = true;
       if (el.matBlocksSplit) el.matBlocksSplit.hidden = true;
@@ -3350,6 +3357,16 @@
     if (el.matToolBlocks) el.matToolBlocks.addEventListener('click', () => setMatTool('blocks'));
   }
   if (el.matBlocksSplit) el.matBlocksSplit.addEventListener('click', matBlockSplit);
+  // 📝 文字检测开关变化 → 若正在智能选块且有图，重新分析（热更新候选块）
+  if (el.matTextDetect) {
+    el.matTextDetect.addEventListener('change', () => {
+      if (matTool === 'blocks') {
+        matBlockList = [];
+        matBlockSel.clear(); matBlockHover = null;
+        matBlocksAnalyze();
+      }
+    });
+  }
 
   if (el.matLassoUndo) el.matLassoUndo.addEventListener('click', matLassoUndoLast);
   if (el.matLassoDone) el.matLassoDone.addEventListener('click', matLassoClose);
@@ -3412,7 +3429,18 @@
         const hit = matBlockHit(p);
         const hid = hit ? hit.id : null;
         const prev = matBlockHover ? matBlockHover.id : null;
-        if (hid !== prev) { matBlockHover = hit; matBlockRedraw(); }
+        if (hid !== prev) {
+          matBlockHover = hit;
+          // hover 命中提示：文字块显示 📝 label，一眼知道这是"可选的文字"
+          if (el.matBoxInfo) {
+            if (hit && hit.tag === 'text') {
+              el.matBoxInfo.textContent = `📝 命中文字块「${hit.label || '文字'}」— 单击选中，可再点其它元素多选`;
+            } else if (hit) {
+              el.matBoxInfo.textContent = '命中元素 — 单击选中，可再点其它元素多选';
+            }
+          }
+          matBlockRedraw();
+        }
         return;
       }
       if (matTool !== 'lasso') return;
@@ -3651,10 +3679,11 @@
         matClick = null;
       } else if (el.matBoxToggle && el.matBoxToggle.checked) {
         if (matTool === 'blocks') {
-          // 🧲 智能选块：多个选中块的轮廓并集一起提交
+          // 🧲 智能选块：多个选中块的轮廓并集一起提交。
+          // 文字块（tag=text，VLM 识别的主标题等）带标记，后端走局部推理把字挖出来
           const selBlk = matBlockList.filter(b => matBlockSel.has(b.id));
           if (selBlk.length) {
-            fd.append('blocks', JSON.stringify(selBlk.map(b => b.contour)));
+            fd.append('blocks', JSON.stringify(selBlk.map(b => ({ contour: b.contour, tag: b.tag === 'text' ? 'text' : 'auto' }))));
             el.matStatus.textContent = `上传中…（🧲 ${selBlk.length} 个选中元素一起抠）`;
           } else {
             el.matStatus.textContent = '请先在图上点击选中要抠的元素（可多选）';

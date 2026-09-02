@@ -45,6 +45,22 @@ _PROMPT = (
 
 _SYSTEM = "你是一个严谨的图像分析助手，只输出要求的 JSON，不做任何额外解释。"
 
+# 📝 文字检测 prompt：找图中所有独立文字元素（含主/副标题、按钮文字、贴纸/卡片内文字）
+_TEXT_PROMPT = (
+    "你是一个海报/图片文字定位助手。请找出图中**所有独立成组的文字元素**："
+    "大字标题、副标题、按钮/贴纸/卡片内的字、徽标字等，逐条列出。\n\n"
+    "请只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
+    "{\n"
+    '  "blocks": [\n'
+    '    {"label": "<该组文字的用途或内容，如 主标题/副标题/立即解锁按钮/卡片标题>", "bbox": [x1, y1, x2, y2]}\n'
+    "  ]\n"
+    "}\n"
+    "bbox 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]，\n"
+    "**只框文字本身的区域**（可含其底/背景框，但不要跨到别的文字组）。\n"
+    "若主标题明显，把它列在 blocks 的第一条。找不到任何文字时返回 {\"blocks\": []}。"
+)
+
+
 
 def _compress_to_b64(image_path: str, max_side: int = 1024) -> str:
     """读图、等比缩到 max_side 以内、转 PNG base64（减小 VLM 请求体积、加速推理）。"""
@@ -262,3 +278,93 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
         "model": model,
         "provider": provider,
     }
+
+
+def detect_text_blocks(image_path: str, max_side: int = 1024, timeout: int = 60) -> list[dict]:
+    """📝 文字检测：调 VLM 找出图中所有独立文字元素，返回
+    [{"label": "...", "box": [x1,y1,x2,y2] 归一化}, ...]（面积降序）。
+
+    用途：🧲 智能选块 hover/选中的文字候选——BiRefNet 显著性对"装饰风字体
+    （白字+描边+半透明投影）"天然漏识别（整图 alpha<45 零星不连通、不成块），
+    VLM 却能一眼定位"主标题/按钮文字"，补足元素块列表让主标题可选。
+    未配置视觉模型 / 调用失败 → 抛 RuntimeError（调用方自行降级，不影响 BiRefNet 块）。
+    """
+    cfg = get_vision_config()
+    key = (cfg.get("api_key") or "").strip()
+    base_url = (cfg.get("base_url") or "").strip().rstrip("/")
+    model = (cfg.get("model") or "").strip()
+
+    if not key or not base_url or not model:
+        raise RuntimeError("视觉模型未配置")
+
+    b64 = _compress_to_b64(image_path, max_side)
+    try:
+        from PIL import Image as _PIL
+        with _PIL.open(image_path) as _im:
+            _imgW, _imgH = _im.size
+    except Exception:
+        _imgW, _imgH = None, None
+    url = base_url + "/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key}",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _TEXT_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            },
+        ],
+        "temperature": 0.1,
+    }
+    try:
+        resp = _post_json(url, headers, payload, timeout=timeout)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"文字检测调用失败：{e}") from e
+    try:
+        content = resp["choices"][0]["message"]["content"]
+    except Exception:  # noqa: BLE001
+        raise RuntimeError(f"文字检测返回格式异常：{str(resp)[:200]}")
+
+    parsed = _extract_json(content)
+    if isinstance(parsed, list):
+        blocks_raw = parsed
+    else:
+        blocks_raw = parsed.get("blocks") or []
+    blocks = []
+    for b in blocks_raw:
+        if not isinstance(b, dict):
+            continue
+        raw_box = (
+            b.get("box") or b.get("bbox") or b.get("bbox_2d") or b.get("bounding_box")
+            or b.get("boundingBox") or b.get("region") or b.get("rect")
+            or b.get("coordinates") or b.get("location") or b.get("area")
+        )
+        if raw_box is None and isinstance(b.get("boxes"), (list, tuple)) and len(b["boxes"]) >= 4:
+            raw_box = list(b["boxes"])[:4]
+        if raw_box is None:
+            continue
+        try:
+            _vals = [float(v) for v in raw_box[:4]]
+        except Exception:  # noqa: BLE001
+            continue
+        if max(_vals) > 1.5 and _imgW and _imgH:
+            _vals = [_vals[0] / _imgW, _vals[1] / _imgH, _vals[2] / _imgW, _vals[3] / _imgH]
+        box = _parse_box(_vals)
+        if not box:
+            continue
+        blocks.append({"label": str(b.get("label", "")).strip() or "文字", "box": box})
+
+    def _area(b):
+        x1, y1, x2, y2 = b["box"]
+        return (x2 - x1) * (y2 - y1)
+
+    blocks.sort(key=_area, reverse=True)
+    return blocks
+
