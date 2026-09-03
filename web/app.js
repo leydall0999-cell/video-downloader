@@ -3664,12 +3664,24 @@
           if (matTimer) { clearInterval(matTimer); matTimer = null; }
           const outUrl = `/api/matting/image/${matJobId}/file?t=${Date.now()}`;
           el.matOut.src = outUrl;
-          // 下载按钮：fetch → blob → 临时 a[download] click（绕开 WKWebView 对 inline 头
-          // + <a download> 的 quirk，确保真正触发 PNG 下载而不是"在主窗口打开预览"）
+          // 下载按钮：桌面版走原生保存面板（WKWebView 无法触发 <a download>），
+          // 网页版/无桥接时回退 fetch → blob → 临时 a[download] click。
           if (el.matDownload) {
             el.matDownload.onclick = (e) => {
               e.preventDefault();
               const filename = (d.filename || (outUrl.split('/').pop() || 'matting.png'));
+              const nativeSave = window.VDL && window.VDL.desktop && window.VDL.desktop.saveMattingFile;
+              if (typeof nativeSave === 'function') {
+                nativeSave(matJobId, filename).then((res) => {
+                  if (!res) return;
+                  if (res.startsWith('ERROR:')) {
+                    window.alert('保存失败：' + res.slice(6));
+                  } else if (res !== 'CANCELLED') {
+                    window.alert('已保存到：' + res);
+                  }
+                });
+                return;
+              }
               fetch(outUrl).then(r => r.blob()).then(blob => {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');

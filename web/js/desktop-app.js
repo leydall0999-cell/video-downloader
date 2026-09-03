@@ -94,6 +94,20 @@
         return Promise.resolve([]);
       }
     },
+    // 保存抠图结果：弹系统保存面板，用户自选透明 PNG 位置；取消返回 "CANCELLED"，
+    // 失败返回 "ERROR: ..."。无桥接时返回空串让调用方走 <a download> 兜底。
+    saveMattingFile(jobId, suggestedName) {
+      const api = window.pywebview && window.pywebview.api;
+      if (!(api && typeof api.save_matting_file_dialog === 'function')) return Promise.resolve('');
+      const norm = (r) => (typeof r === 'string') ? r : (r || '');
+      try {
+        const r = api.save_matting_file_dialog(jobId, suggestedName || 'matting.png');
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => '');
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve('');
+      }
+    },
     // 一键开启本地语音克隆（IndexTTS-MLX）：自动寻找并启动本地服务，返回 {ok, msg}。
     // 普通用户无需理解「端口/服务」等概念，点一下由 App 自己搞定；无桥接则回退提示。
     startIndexTts() {
