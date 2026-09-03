@@ -566,12 +566,29 @@ def _largest_fg_bbox(mask, W: int, H: int):
     return [max(0.0, x / W), max(0.0, y / H), min(1.0, (x + w) / W), min(1.0, (y + h) / H)]
 
 
+def _fg_component_count(mask) -> int:
+    """前景连通块数量（alpha>45 的 4-邻接连通域个数）。"""
+    import numpy as np
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        return 1
+    arr = np.array(mask)
+    binm = (arr > 45).astype(np.uint8)
+    n, _ = cv2.connectedComponents(binm)
+    return max(0, n - 1)
+
+
 def _sam_refine_or_keep(rgb, mask, prompt, W: int, H: int, model=None):
     """🪄 SAM 像素级精修（引导式）：SAM 可用且成功 → SAM mask；否则原样返回 BiRefNet mask。
 
-    与显式 sam_refine（用户选区=硬边界）不同，这里是「智能自动」——无用户选区，
-    box 仅作 SAM 引导（外扩 12%），最终轮廓由 SAM 语义决定（可能略微超出显著性框）。
+    **关键启发式**：SAM 是「单连通主体」语义分割——对整行装饰字（6 个分离字块）这类
+    **多连通主体**，它只会挑其中 1 块（实测只抠出 321px 的一小截笔画，主体全丢）。
+    因此：前景连通块 > 1 时**跳过 SAM**，保留 BiRefNet（它能把框内所有字块都抠出来）；
+    单连通主体（人物 / 单个物件）——SAM 边缘明显更贴，才交给 SAM 精修。
     """
+    if _fg_component_count(mask) > 1:
+        return mask  # 多主体（文字行/多元素）→ 不用 SAM，避免只抠一块
     try:
         p = dict(prompt)
         if p.get("type") == "box":
