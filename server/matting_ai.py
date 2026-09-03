@@ -1366,50 +1366,74 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
 
 
 def _polygon_center_keep(mask_arr, ground_thresh: float = 0.20):
-    """套索圈内中心连通性过滤：从 mask 最高点 4-邻接 BFS，只保留与最高点
-    连通的区域。
+    """套索圈内同行连通性过滤：保留最大前景块 + 与其同一水平带的块，剔除其余。
 
     为什么需要它：
         dominant filter 按颜色聚类，但「与主体颜色相近但空间上离主体很远」
         的整片区域（如下方整条副标题条"转发集赞｜好友同行｜报名砸金蛋"）
         会被 kmeans 归入主色簇保留下来——用户根本不想要它。
-        用中心连通性做硬切：从 mask 最高点（=主标题最显眼字符核心）出发
-        4-邻接 BFS，只走 alpha > ground_thresh 的像素。主标题和下方副标题
-        之间是白色背景，mask 几乎为 0，BFS 自然跨不过去，副标题条
-        被一次性剔除。
+        用水平带做硬切：只保留与最大前景块垂直方向重叠的连通块（同一行文字），
+        下方副标题条与主标题之间是白色背景且不在同一行，被一次性剔除。
+
+    为什么不能用「从 mask 最高点 BFS 只留单一连通块」（旧实现）：
+        整行标题 = 6 个互不相连的字符块，字符间隙的背景 mask≈0，BFS 跨不过去；
+        且 argmax（行优先第一个 1.0 像素）常落在标题上方的细碎装饰（彩带/星点）
+        上——结果只留一颗碎屑、整行标题全被杀（用户截图：抠图结果全空）。
+
+    保留策略：
+        1. 对 mask > ground_thresh 做 4-邻接连通域标记（cv2，毫秒级）；
+        2. 最大面积块 = 主体核心，必留；
+        3. 其余块：与任一已保留块的垂直重叠 ≥ 较矮者高度的 35% → 同一行，保留
+           （传递扩散，整行字符全保）；无重叠 → 不同行（副标题条/远处装饰），剔除；
+        4. 面积 < 64px 的孤立小碎块不参与保留判定（直接随非保留块剔除，
+           但整体前景过小时回退原 mask，避免误杀）。
 
     参数：
         mask_arr: 已乘 polygon 后的 float [0,1] 数组
-        ground_thresh: BFS 可走的最低 mask 值（默认 0.20）
-            主体边缘/阴影通常 mask > 0.20；白色背景 < 0.20，自然形成"屏障"。
+        ground_thresh: 前景判定最低 mask 值（默认 0.20）
 
-    返回：与 mask 最高点连通的 mask 区域保留；其余置 0。
+    返回：仅保留主体同行块的 mask；其余置 0。
     """
     import numpy as np
-    from collections import deque
+    import cv2
 
     H, W = mask_arr.shape
-    # 起点：mask 最高点
-    flat_idx = int(np.argmax(mask_arr))
-    if mask_arr.flat[flat_idx] < 0.30:
+    if mask_arr.max() < 0.30:
         return mask_arr  # mask 太低，说明主体没检出，不做切除
-    sy, sx = divmod(flat_idx, W)
 
-    visited = np.zeros((H, W), dtype=bool)
-    q = deque([(sy, sx)])
-    visited[sy, sx] = True
-    ground = mask_arr > ground_thresh
+    ground = (mask_arr > ground_thresh).astype(np.uint8)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(ground, connectivity=4)
+    if num <= 2:  # 只有背景（+至多一块前景），无需过滤
+        return mask_arr
 
-    while q:
-        y, x = q.popleft()
-        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < H and 0 <= nx < W and not visited[ny, nx] and ground[ny, nx]:
-                visited[ny, nx] = True
-                q.append((ny, nx))
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    if int(areas.max()) < 64:
+        return mask_arr  # 前景过小，不判切除
+
+    main = 1 + int(np.argmax(areas))
+    keep = np.zeros(num, dtype=bool)
+    keep[main] = True
+
+    tops = stats[:, cv2.CC_STAT_TOP].astype(np.int64)
+    hts = stats[:, cv2.CC_STAT_HEIGHT].astype(np.int64)
+    changed = True
+    while changed:
+        changed = False
+        for c in range(1, num):
+            if keep[c] or stats[c, cv2.CC_STAT_AREA] < 64:
+                continue
+            # 与任一已保留块垂直重叠 ≥ 较矮者 35% → 同一水平行
+            for k in range(1, num):
+                if not keep[k]:
+                    continue
+                ov = min(tops[c] + hts[c], tops[k] + hts[k]) - max(tops[c], tops[k])
+                if ov >= 0.35 * min(hts[c], hts[k]):
+                    keep[c] = True
+                    changed = True
+                    break
 
     out = mask_arr.copy()
-    out[~visited] = 0.0
+    out[~keep[labels]] = 0.0
     return out
 
 
@@ -1485,14 +1509,39 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
     #     - 高亮异色簇（lum >= 0.85，如白字/亮黄装饰）即使面积小也保留
     #     - 异色但面积较大的簇（>= 主簇 18%）保留——可能是主标题的多色描边
     drop = np.zeros(k, dtype=bool)
+    drop_extra = np.zeros((H, W), dtype=bool)  # 暗簇大块 bbox 域像素级剔除
+    dark_rects = []  # 暗簇大块的 bbox（用于孤岛清理）
     for c in range(k):
         if c == big:
             continue
         dist = float(np.linalg.norm(centers[c] - main_color))
         lum = float(centers[c].max())
+        mc = cluster_masks[c]
+        # 暗异色簇（黑色笔触/墨渍/贴条）：**不再因邻接豁免**——紧贴主体的大块
+        # 暗色元素（如标题正下方的黑色副标题条，与主体经光晕连体）也要剔除。
+        # 按连通子块判定：只剔面积 ≥ max(2000, 主簇 1.5%) 的大块；
+        # 主体内的小块黑飞白/描边/阴影（面积小）保留。
+        # 大块整体 bbox 矩形域内的**非主簇**像素一并剔除（黑条上贴的白字/黄字
+        # 与暗色像素反锯齿相连、不构成封闭孔洞，只能按 bbox 域连字一起剔），
+        # 主簇像素保护豁免。
+        if dist > 0.40 and lum < 0.30:
+            import cv2
+            n2, lab2, st2, _ = cv2.connectedComponentsWithStats(
+                mc.astype(np.uint8), connectivity=4
+            )
+            min_area = max(2000, int(sizes[big] * 0.015))
+            for c2 in range(1, n2):
+                if st2[c2, cv2.CC_STAT_AREA] < min_area:
+                    continue
+                rx, ry = st2[c2, cv2.CC_STAT_LEFT], st2[c2, cv2.CC_STAT_TOP]
+                rw, rh = st2[c2, cv2.CC_STAT_WIDTH], st2[c2, cv2.CC_STAT_HEIGHT]
+                rect = np.zeros((H, W), dtype=bool)
+                rect[ry:ry + rh, rx:rx + rw] = True
+                drop_extra |= rect & (~main_mask)
+                dark_rects.append((rx, ry, rw, rh))
+            continue
         # 连通性豁免：簇 c 是否与主簇 4-邻接连通？
         # 4-邻接检查：c 像素的上/下/左/右 4 个邻居中是否有 main_mask
-        mc = cluster_masks[c]
         adj_to_main = (
             (mc[1:, :] & main_mask[:-1, :]).any() or    # c 上邻接 main
             (mc[:-1, :] & main_mask[1:, :]).any() or   # c 下邻接 main
@@ -1500,17 +1549,13 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
             (mc[:, :-1] & main_mask[:, 1:]).any()      # c 右邻接 main
         )
         if adj_to_main:
-            # 与主体贴着的异色簇 = 飞白/描边/阴影，应保留
-            continue
-        # 暗异色（黑色笔触）：色距 + 暗度
-        if dist > 0.40 and lum < 0.30:
-            drop[c] = True
+            # 与主体贴着的浅色/彩色异色簇 = 飞白/描边/阴影，应保留
             continue
         # 异色小杂簇（浅色装饰）：色距 + 不够亮 + 面积小
         if dist > 0.40 and lum < 0.85 and sizes[c] < sizes[big] * 0.18:
             drop[c] = True
 
-    if not drop.any():
+    if not drop.any() and not dark_rects:
         return mask_arr
 
     # 被判杂质的簇像素在原图位置 alpha 置 0，其余保持原样
@@ -1518,6 +1563,20 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
     ys, xs = np.where(reliable)
     drop_px = drop[lab]
     out[ys[drop_px], xs[drop_px]] = 0.0
+    out[drop_extra] = 0.0
+
+    # 暗块 bbox 内的残留孤岛清理：bbox 域剔除后，黑条上的白字/黄字若与主簇
+    # 同色系（被 main_mask 保护）会成为孤立小块——凡不触及暗块顶行（即不与
+    # 上方主体连通）的残留组件一律剔净。
+    if dark_rects:
+        import cv2
+        for (rx, ry, rw, rh) in dark_rects:
+            sub = (out[ry:ry + rh, rx:rx + rw] > 0.2).astype(np.uint8)
+            n3, lab3, _, _ = cv2.connectedComponentsWithStats(sub, connectivity=4)
+            for c3 in range(1, n3):
+                if (lab3[0, :] == c3).any():
+                    continue  # 触及顶行 = 与上方主体连通，保留
+                out[ry:ry + rh, rx:rx + rw][lab3 == c3] = 0.0
     return out
 
 

@@ -3544,7 +3544,7 @@
   const matApplyMode = (mode) => {
     const box = el.matBoxToggle, vis = el.matVision, sam = el.matSamRefine;
     if (mode === 'smart') {
-      // 智能：AI 视觉定位自动找主体（默认关手动选区），点图可临时点选
+      // 智能：AI 视觉定位自动找主体（关手动选区），点图可临时点选（辅助手段，非默认）
       if (sam) sam.checked = false;
       if (vis) vis.checked = true;
       if (box && box.checked) { box.checked = false; box.dispatchEvent(new Event('change')); }
@@ -3566,12 +3566,12 @@
   };
   const matModeNow = () => {
     const r = document.querySelector('input[name="matMode"]:checked');
-    return r ? r.value : 'smart';
+    return r ? r.value : 'manual';
   };
   document.querySelectorAll('input[name="matMode"]').forEach(rd => {
     rd.addEventListener('change', () => { if (rd.checked) matApplyMode(rd.value); });
   });
-  if (document.querySelector('#matModeRow')) matApplyMode(matModeNow());   // 初始默认 🪄 智能
+  if (document.querySelector('#matModeRow')) matApplyMode(matModeNow());   // 初始默认 ⬜ 手动选区
   if (el.matBoxClear) {
     el.matBoxClear.addEventListener('click', () => {
       matBox = null; matBoxRedraw();

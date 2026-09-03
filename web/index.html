@@ -878,11 +878,11 @@
             <b style="color:#b45309">授权提示：</b>默认 BiRefNet 为 MIT 可商用；下拉里的 <b>RMBG-2.0 是 CC BY-NC 4.0，仅限非商业用途</b>，仅建议个人 / 非商业场景显式选用，请勿用于对外分发产品。</span>
           <div class="mat-mode-row" id="matModeRow">
             <span class="mat-mode-cap">抠图方式</span>
-            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeSmart" value="smart" checked /><span>🪄 智能抠图</span></label>
-            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeManual" value="manual" /><span>⬜ 手动选区</span></label>
+            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeManual" value="manual" checked /><span>⬜ 手动选区</span></label>
             <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeFine" value="fine" /><span>🔬 精细抠图</span></label>
+            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeSmart" value="smart" /><span>🪄 智能抠图</span></label>
           </div>
-          <span class="dw-hint" id="matModeHint">🪄 <b>智能</b>：直接点「开始抠图」，AI 自动找出最显著的主体抠掉背景。⬜ <b>手动</b>：先在图上圈出想要的部分（矩形 / 套索 / 智能选块）再抠。🔬 <b>精细</b>：像素级精抠（发丝 / 衣边），画个框 / 圈住目标后自动用 SAM；首次自动下载约 60MB 模型。</span>
+          <span class="dw-hint" id="matModeHint">⬜ <b>手动选区（最常用、最可控）</b>：先在图上圈出想要的部分（矩形 / 套索 / 智能选块）再抠，结果只保留你圈中的内容。🔬 <b>精细抠图</b>：像素级精抠（发丝 / 衣边），画个框 / 圈住目标后自动用 SAM；首次自动下载约 60MB 模型。🪄 <b>智能抠图（辅助）</b>：直接点「开始抠图」让 AI 自动找最显著主体；复杂图建议先用「手动选区」圈好再抠，更稳更准。</span>
           <!-- 内部控件：由上方「抠图方式」自动控制，不再向用户展示独立开关 -->
           <label class="uc-field uc-check mat-box-toggle" hidden>
             <input type="checkbox" id="matBoxToggle" />
