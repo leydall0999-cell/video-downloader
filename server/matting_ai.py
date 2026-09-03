@@ -547,6 +547,49 @@ def _save_out(rgba, out) -> None:
     rgba.save(out_path, "PNG")
 
 
+def _largest_fg_bbox(mask, W: int, H: int):
+    """从显著性 mask 找最大连通前景块的 bbox（归一化 [x1,y1,x2,y2]），无显著返回 None。"""
+    import numpy as np
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        return None
+    arr = np.array(mask)
+    binm = (arr > 45).astype(np.uint8)
+    cnts, _ = cv2.findContours(binm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    big = max(cnts, key=cv2.contourArea)
+    if cv2.contourArea(big) < 0.003 * H * W:
+        return None  # 太小不视为主体（可能全是背景噪声）
+    x, y, w, h = cv2.boundingRect(big)
+    return [max(0.0, x / W), max(0.0, y / H), min(1.0, (x + w) / W), min(1.0, (y + h) / H)]
+
+
+def _sam_refine_or_keep(rgb, mask, prompt, W: int, H: int, model=None):
+    """🪄 SAM 像素级精修（引导式）：SAM 可用且成功 → SAM mask；否则原样返回 BiRefNet mask。
+
+    与显式 sam_refine（用户选区=硬边界）不同，这里是「智能自动」——无用户选区，
+    box 仅作 SAM 引导（外扩 12%），最终轮廓由 SAM 语义决定（可能略微超出显著性框）。
+    """
+    try:
+        p = dict(prompt)
+        if p.get("type") == "box":
+            x1, y1, x2, y2 = p["norm"]
+            bw, bh = x2 - x1, y2 - y1
+            p["norm"] = [
+                max(0.0, x1 - 0.12 * bw), max(0.0, y1 - 0.12 * bh),
+                min(1.0, x2 + 0.12 * bw), min(1.0, y2 + 0.12 * bh),
+            ]
+        sm = sam_refine_mask(rgb, p, W, H)
+        if sm is not None:
+            return sm
+    except Exception:  # noqa: BLE001  SAM 权重未下/推理失败 → 用 BiRefNet 结果
+        pass
+    return mask
+
+
+
 def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
@@ -674,9 +717,14 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         elif vision_box:
             # VLM 视觉定位引导：VLM 已看懂图、框出主体，框外强制透明
             mask = vision_guided_mask(rgb, vision_box, model=model)
+            # 🪄 智能精修：用 VLM 的框作 SAM prompt，像素级贴主体
+            mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": [float(v) for v in vision_box[:4]]}, W, H, model)
         elif box is None:
-            # 未框选：整图推理
+            # 未框选：🪄 智能自动——显著性整图 → 取最大连通主体块 bbox → SAM 像素级精修
             mask = predict_mask(rgb, model=model)
+            pb = _largest_fg_bbox(mask, W, H)
+            if pb is not None:
+                mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": pb}, W, H, model)
         else:
             box_px = _normalize_box(box, W, H)
             if box_px is None:
