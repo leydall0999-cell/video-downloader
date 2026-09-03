@@ -1275,7 +1275,7 @@ def _polygon_vision_intersect(rgb, polygon, vision_box, W: int, H: int, model: s
         # 与套索同款后处理：中心连通 + 主色聚类（防 AI box 边缘杂质）
         m = _polygon_center_keep(m)
         rgb_arr = np.array(rgb).astype(np.float32) / 255.0
-        m = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
+        m, _ = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
         return Image.fromarray(np.clip(m * 255.0, 0, 255).astype(np.uint8), mode="L")
     except Exception:  # noqa: BLE001
         return None
@@ -1361,7 +1361,7 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
     # 深色装饰」当同一显著性物体保留。聚类按颜色把前景分组，剔除与主体主色
     # 差异大且整体偏暗的杂质簇（不会误伤橙底白字这类多色主体的浅色部分）。
     rgb_arr = _np.array(rgb).astype(_np.float32) / 255.0
-    m = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
+    m, drop_extra = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
     # 轻度收尾（小幅修整，不过度）：
     # 1) 开运算（5x5）去掉细小挂絮/低 alpha 孤点——剔黑条后边界上残留的
     #    碎屑与撕裂细丝；主体笔画宽度远大于 5px，不受影响。
@@ -1373,6 +1373,20 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
         _np.ones((5, 5), _np.uint8),
     )
     m = m * _opened
+    # 3) 橙色立体阴影补全：标题的半透明深橙阴影层模型响应弱（alpha 斑驳
+    #    0.2~0.4、部分成块缺失），视觉上"阴影不完整"。仅对满足以下全部条件
+    #    的像素补实到 0.75：贴纸主体 20px 邻域内 + 颜色属橙棕阴影家族
+    #    （奶油背景/白字/黑条/黄蛋均不满足该色域）+ 不在黑条剔除域 + 圈内。
+    _main_bin = (m > 0.45).astype(_np.uint8)
+    _near = _cv2_feather.dilate(_main_bin, _np.ones((41, 41), _np.uint8)) > 0
+    _r, _g, _b = rgb_arr[..., 0], rgb_arr[..., 1], rgb_arr[..., 2]
+    _fam = (
+        (_r > 0.60) & ((_r - _b) > 0.22) & (_g > 0.28) & (_g < 0.70)
+        & (rgb_arr.max(axis=2) < 0.82)
+    )
+    _poly_in = _np.array(poly_img) > 127
+    _boost = _near & _fam & (m < 0.55) & (~drop_extra) & _poly_in
+    m[_boost] = _np.maximum(m[_boost], 0.75)
     _dist = _cv2_feather.distanceTransform(
         (_np.array(poly_img) > 127).astype(_np.uint8), _cv2_feather.DIST_L2, 3
     )
@@ -1482,7 +1496,7 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
     reliable = (mask_arr > 0.30) & poly_arr
     n_fg = int(reliable.sum())
     if n_fg < 64:
-        return mask_arr  # 前景太少，跳过
+        return mask_arr, np.zeros_like(mask_arr)  # 前景太少，跳过
 
     pix = rgb_arr[reliable]
     k = 5 if n_fg >= 4000 else 4  # k=5 让浅色装饰能自成簇与白字区分
@@ -1499,7 +1513,7 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
                 if len(sel_c):
                     centers[c] = sel_c.mean(axis=0)
     except Exception:  # noqa: BLE001
-        return mask_arr
+        return mask_arr, np.zeros_like(mask_arr)
 
     sizes = np.bincount(lab, minlength=k)
     big = int(np.argmax(sizes))
@@ -1592,7 +1606,7 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
             drop[c] = True
 
     if not drop.any() and not dark_rects:
-        return mask_arr
+        return mask_arr, drop_extra
 
     # 被判杂质的簇像素在原图位置 alpha 置 0，其余保持原样
     out = mask_arr.copy()
@@ -1613,7 +1627,7 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
                 if (lab3[0, :] == c3).any():
                     continue  # 触及顶行 = 与上方主体连通，保留
                 out[ry:ry + rh, rx:rx + rw][lab3 == c3] = 0.0
-    return out
+    return out, drop_extra
 
 
 def _box_crop_mask(rgb, box_px, W: int, H: int, model: str | None = None):
