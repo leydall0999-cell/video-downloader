@@ -1254,10 +1254,12 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
     ImageDraw.Draw(poly_img).polygon(pts, fill=255)
     m = _np.array(mask).astype(_np.float32) / 255.0
     p = _np.array(poly_img).astype(_np.float32) / 255.0
-    # alpha 阈值清理（仅套索内）：去掉被圈进来的弱显著背景/光晕（alpha<0.40）
-    # — 用户套索紧贴主体描边时，常把"橙底/米色底/光晕"等弱显著区一起圈进来，
-    # 它们在抠图里显得是"卡片杂质"。主体（高对比字/描边）alpha 通常 >0.50 不受影响。
-    m = _np.where(p > 0, _np.where(m >= 0.40, m, 0.0), 0.0) * p
+    m = m * p
+    # 弱 alpha 杂点清理：仅清理"圈进 poly 但与主体 BFS 不连通"的弱 alpha 杂点。
+    # 主体（高 alpha / BFS 连通区域内的低 alpha 如字/描边/阴影）一律保留。
+    # 此前硬性 alpha<0.40 全清会把装饰风字体（橙描边+白字普遍 alpha<0.40）误杀。
+    core_alpha = _polygon_center_keep(m)
+    m = _np.where((m < 0.40) & (core_alpha < 0.05), 0.0, m)
     # 中心连通性过滤：从 mask 最高点（=主标题最显眼字符的核心）4-邻接 BFS，
     # 只走 alpha > 0.20 的像素。主标题与下方副标题/远端装饰之间是白色背景，
     # mask 几乎为 0，BFS 自然跨不过去，整条副标题条会被一次性剔掉。
