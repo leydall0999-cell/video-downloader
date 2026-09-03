@@ -92,6 +92,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
             sam_refine,
             model,
         )
+        job["prompt"] = prompt or ""
         vision_box = None
         vision_used = False
         if vision_guide:
