@@ -147,6 +147,17 @@ MODELS: dict[str, dict] = {
             "modnet_photographic_portrait_matting.onnx",
         ],
     },
+    "chroma-key": {
+        # 纯色背景色度键（chroma key）：无 ML 权重，纯算法（边缘洪泛 + 去溢色 despill）。
+        # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色底）是「正解」——这类输入对 BiRefNet/
+        # MODNet 等自然照片训练的人像模型是 OOD，会反复给出高 alpha 把背景留住；而色度键
+        # 从画面边缘洪泛定位背景、直接透明，远比 ML 模型稳。algorithm=True 表示无需下载权重。
+        "algorithm": True,
+        "size_mb": 0,
+        "desc": "纯色背景色度键 · 算法内置 · 绿幕/橙幕/纯色底专用（推荐）",
+        "license": "内置算法",
+        "commercial": "yes",
+    },
 }
 
 DEFAULT_MODEL = "birefnet-general"
@@ -196,13 +207,13 @@ def list_models() -> list[dict]:
     """返回模型元信息（含已下载标记 + 推荐标记），供前端下拉/提示使用。"""
     out = []
     for name, meta in MODELS.items():
-        p = _local_path(name)
+        is_algo = meta.get("algorithm", False)
         out.append(
             {
                 "name": name,
                 "desc": meta["desc"],
-                "size_mb": meta["size_mb"],
-                "downloaded": _valid_cached(name),
+                "size_mb": meta.get("size_mb", 0),
+                "downloaded": True if is_algo else _valid_cached(name),
                 "active": name == _MODEL_NAME,
                 "recommended": name == DEFAULT_MODEL,
                 "license": meta.get("license", ""),
@@ -250,6 +261,8 @@ _MIN_CACHE_BYTES = 1024 * 1024  # 1 MB
 
 def _valid_cached(name: str) -> bool:
     """本地是否已有可直接使用的模型缓存。"""
+    if MODELS.get(name, {}).get("algorithm"):
+        return True  # 算法内置模型无需下载
     p = _local_path(name)
     return p.exists() and p.stat().st_size > _MIN_CACHE_BYTES
 
@@ -263,6 +276,10 @@ def _download(name: str) -> Path:
     """下载模型到 ~/.vdl_models，返回本地路径。带进度回显 + 断点续传 + 原子落盘。"""
     meta = MODELS[name]
     dest = _local_path(name)
+
+    # 算法内置模型（无权重）→ 无需下载，直接返回占位路径
+    if meta.get("algorithm"):
+        return _model_dir() / "__algorithm__"
 
     # 已有可用缓存 → 直接命中
     if _valid_cached(name):
@@ -793,6 +810,119 @@ def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5
     return F
 
 
+def _detect_solid_background(rgb, edge_frac: float = 0.06, tol: float = 0.12, min_frac: float = 0.85):
+    """判断图像是否为「纯色/近似纯色背景」（如绿幕/橙幕/摄影棚纯色底）。
+
+    方法：取画面边缘像素（上下左右各 edge_frac 条），算它们到中位色的颜色距离；
+    若 >= min_frac 比例的边缘像素都和中位色足够近（距离 < tol），则判定为纯色背景。
+
+    返回 (is_solid, key_color)，key_color 为边缘中位色（归一化 [0,1] RGB）。
+    纯色背景对 BiRefNet/MODNet 等自然照片训练模型是 OOD，应改走色度键而非 matting。
+    """
+    import numpy as np
+
+    arr = np.array(rgb, dtype=np.float64) / 255.0
+    H, W = arr.shape[:2]
+    e = max(4, int(min(H, W) * edge_frac))
+    border = np.concatenate([
+        arr[:e].reshape(-1, 3),
+        arr[H - e:].reshape(-1, 3),
+        arr[:, :e].reshape(-1, 3),
+        arr[:, W - e:].reshape(-1, 3),
+    ], axis=0)
+    key = np.median(border, axis=0)
+    d = np.linalg.norm(border - key, axis=1)
+    frac = float(np.mean(d < tol))
+    return frac >= min_frac, key
+
+
+def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=None):
+    """纯色/近似纯色背景抠图（色度键 chroma key）——MODNet/BiRefNet 的「正解」替代方案。
+
+    为什么比人像 matting 模型更合适：
+        纯色背景（绿幕/橙幕/摄影棚纯色）对人像 matting 模型是 OOD 输入——模型训练于
+        自然照片，会把整片纯色背景也输出成高 alpha 而「去不掉」。这类问题本质是色度键
+        问题，用经典算法即可稳健解决，无需 ML。
+
+    算法：
+        1. 背景色 key：取画面边缘像素中位数（纯色背景下边缘即背景）。
+        2. 每像素到 key 的颜色距离 d。
+        3. 背景「可通过」图：d < tol 的像素视为背景候选。
+        4. 连通域洪泛：保留「与画面边缘连通」的候选块 = 真实背景；主体内部颜色（哪怕
+           也是橙色衣服）因不连到边缘而被保留——这是比朴素阈值更稳的关键。
+        5. 软边：对背景做距离变换，边界处 alpha 从 0 渐入到 1（edge_px 像素羽化）。
+        6. 去溢色 despill：按合成公式 I = αF + (1−α)B 反推 F，去除边缘残留的橙色渗色。
+        7. 应用用户选区（套索/框/AI 框）作为硬边界。
+
+    局限：若主体衣物与背景同色且连到画面边缘，会被一并键掉（所有色度键的通病，绿幕同理）。
+    """
+    import numpy as np
+    import cv2
+    from PIL import Image, ImageDraw
+
+    img = np.array(rgb, dtype=np.float64) / 255.0  # HxWx3 in [0,1]
+
+    # 1) 背景色估计：边缘像素中位数
+    e = max(4, int(min(H, W) * 0.06))
+    border = np.concatenate([
+        img[:e].reshape(-1, 3),
+        img[H - e:].reshape(-1, 3),
+        img[:, :e].reshape(-1, 3),
+        img[:, W - e:].reshape(-1, 3),
+    ], axis=0)
+    key = np.median(border, axis=0)
+
+    # 2) 颜色距离 + 3) 背景可通过图
+    d = np.linalg.norm(img - key, axis=2)
+    tol = 0.12
+    passable = (d < tol).astype(np.uint8)
+
+    # 4) 连通域洪泛：保留与边缘连通的块 = 背景
+    num_labels, labels = cv2.connectedComponents(passable, connectivity=8)
+    border_mask = np.zeros((H, W), dtype=bool)
+    border_mask[0, :] = border_mask[-1, :] = True
+    border_mask[:, 0] = border_mask[:, -1] = True
+    touching = np.unique(labels[border_mask & (labels > 0)])
+    bg = np.isin(labels, touching)
+
+    # 5) 软边：前景像素到最近背景像素的距离 → 边界处 alpha 渐入
+    edge_px = max(3, int(min(H, W) * 0.004))
+    dist = cv2.distanceTransform((~bg).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    alpha = np.clip(dist / edge_px, 0.0, 1.0)
+    # 背景区 dist=0 → alpha=0；前景内部 dist 大 → alpha=1；边界平滑过渡。
+
+    # 6) 去溢色 despill：F = (I - (1-α)·key) / max(α, eps)
+    a3 = alpha[..., None]
+    eps = 0.08
+    F = (img - (1.0 - a3) * key[None, None, :]) / np.maximum(a3, eps)
+    F = np.clip(F, 0.0, 1.0)
+
+    # 7) 用户选区作为硬边界
+    if polygon and len(polygon) >= 3:
+        sel = Image.new("L", (W, H), 0)
+        pts = [(float(p[0]) * W, float(p[1]) * H) for p in polygon if len(p) >= 2]
+        if len(pts) >= 3:
+            ImageDraw.Draw(sel).polygon(pts, fill=255)
+            s = np.array(sel, dtype=np.float32) / 255.0
+            alpha = alpha * s
+    elif box is not None:
+        bp = _normalize_box(box, W, H)
+        if bp:
+            x0, y0, x1, y1 = bp
+            g = np.zeros((H, W), dtype=np.float32)
+            g[y0:y1, x0:x1] = 1.0
+            alpha = alpha * g
+    elif vision_box is not None:
+        vx0, vy0, vx1, vy1 = [float(v) for v in vision_box[:4]]
+        g = np.zeros((H, W), dtype=np.float32)
+        g[int(vy0 * H):int(vy1 * H), int(vx0 * W):int(vx1 * W)] = 1.0
+        alpha = alpha * g
+
+    out = np.dstack([F, alpha])
+    out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return Image.fromarray(out, mode="RGBA")
+
+
 def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None, model: str | None = None):
     """MODNet 人像抠图专用路径：输出 RGBA（含连续 alpha 与去污染前景色）。
 
@@ -807,6 +937,17 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     """
     import numpy as np
     from PIL import Image, ImageDraw
+
+    # 🚀 纯色背景优先走色度键（chroma key）：MODNet 是为自然照片人像训练的，遇到整片
+    # 纯色背景（橙/绿/蓝幕）会 OOD 失效、把背景也输出成高 alpha 而「去不掉」。这类输入
+    # 本质是色度键问题，从画面边缘洪泛定位背景直接透明，远比 ML 模型稳。
+    # 自动检测：边缘颜色近似一致即视为纯色背景，改走 _matting_chroma_key。
+    try:
+        solid, _ = _detect_solid_background(rgb)
+        if solid:
+            return _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
+    except Exception:  # noqa: BLE001
+        pass  # 检测异常则继续原 MODNet 流程
 
     sel = Image.new("L", (W, H), 255)
     crop_px = (0, 0, W, H)
@@ -941,12 +1082,19 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     if not available():
         raise RuntimeError("一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
 
-    with Image.open(src) as im:
-        im.load()
-        rgb = im.convert("RGB")
-        W, H = rgb.size
+        with Image.open(src) as im:
+            im.load()
+            rgb = im.convert("RGB")
+            W, H = rgb.size
 
-        # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（框/
+            # 🎨 纯色背景色度键（chroma key）引擎：用户显式选择时强制走，不依赖 ML 模型。
+            # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）是「正解」，远稳于人像 matting。
+            if (model or _MODEL_NAME) == "chroma-key":
+                rgba = _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
+                _save_out(rgba, out)
+                return
+
+            # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（框/
         # AI视觉定位/点选，blocks 多块除外）→ 优先走 SAM 像素级分割。
         # SAM 靠 prompt 切主体、边缘远精于显著性；失败自动回退下方 BiRefNet 分支。
         #
