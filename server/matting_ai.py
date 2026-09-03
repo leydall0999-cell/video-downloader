@@ -704,11 +704,12 @@ def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5
                     use_anchor = True
 
     # 反推去污染：F = I + (I - B) * (1-α)/α。
-    # 低 alpha 区 (I-B) 很小，cap 从 2.0 提到 4.0 才能充分去除绿底渗色；
-    # 同时用 F_anchor 做 soft anchor，避免结果偏暗。
+    # 低 alpha 区 (I-B) 很小，cap 从 2.0 提到 4.0 才充分去除绿底渗色；
+    # 但 cap 过高会让白边/浅色背景在边缘留下过亮条纹，反而显粗糙。
+    # 降到 3.0 保留去污染能力同时抑制过曝，配合 F_anchor 避免结果偏暗。
     eps = 0.01
     scale = (1.0 - alpha) / np.maximum(alpha, eps)
-    scale = np.minimum(scale, 4.0)
+    scale = np.minimum(scale, 3.0)
     scale3 = scale[..., None]
     F_decon = rgb + (rgb - B) * scale3
     F_decon = np.clip(F_decon, 0.0, 1.0)
@@ -785,12 +786,18 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
         bi_soft = np.array(bi_mask, dtype=np.float32) / 255.0
         # BiRefNet 本质是 0/1 粗 mask，直接相乘会截断 MODNet 的发丝软边，
         # 让结果看起来边缘硬/粗糙。对门控 mask 做高斯羽化，把硬边界展宽成连续
-        # 过渡带：背景区仍被可靠压透，前景内保留 MODNet 自然软 alpha。
+        # 过渡带；并且改用「背景硬清零 + 前景完全信任」策略：
+        #   - bi_soft < 0.05 视为确定背景 → alpha 强制 0（绝对不漏背景）；
+        #   - 0.05 ~ 0.30 为过渡带 → gate 从 0 线性升到 1；
+        #   - bi_soft > 0.30 视为确定前景 → gate=1，完整保留 MODNet 软 alpha。
+        # 这样背景仍然透明，但发丝级软边不再被 BiRefNet 硬边界截断。
         import cv2
 
-        sigma = max(2.5, min(W, H) / 700.0)
+        sigma = max(8.0, min(W, H) / 400.0)
         bi_soft = cv2.GaussianBlur(bi_soft, (0, 0), sigmaX=sigma)
-        gated = mod_alpha * bi_soft
+        gate = np.clip((bi_soft - 0.05) / 0.25, 0.0, 1.0)
+        gated = mod_alpha * gate
+        gated[bi_soft < 0.05] = 0.0
         # 防呆：若门控把前景几乎全抹掉（BiRefNet 异常判空），回退纯 MODNet，避免误清空
         if float(gated.mean()) > 1e-3:
             mod_alpha = gated
