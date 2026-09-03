@@ -767,7 +767,17 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 # 框选无效（过小/越界）：退回整图推理
                 mask = predict_mask(rgb, model=model)
             else:
-                mask = _box_crop_mask(rgb, box_px, W, H, model=model)
+                # 矩形框选 = 4 点多边形，复用套索同款后处理（中心连通保留、
+                # 主色聚类去黑条、橙色阴影补全）。单纯 _box_crop_mask 局部裁切
+                # 不剔除框内杂质，框稍大就会连带黑条/背景一起抠出。
+                _bx0, _by0, _bx1, _by1 = box_px
+                poly_box = [
+                    [_bx0 / W, _by0 / H],
+                    [_bx1 / W, _by0 / H],
+                    [_bx1 / W, _by1 / H],
+                    [_bx0 / W, _by1 / H],
+                ]
+                mask = _polygon_mask(rgb, poly_box, W, H, model=model)
 
         rgba = rgb.convert("RGBA")
         # 🔬 全局边缘软化（像素级）：所有路径（自动/点选/框选/套索/魔棒多块）统一经过。
