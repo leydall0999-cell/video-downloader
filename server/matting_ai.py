@@ -1362,6 +1362,21 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
     # 差异大且整体偏暗的杂质簇（不会误伤橙底白字这类多色主体的浅色部分）。
     rgb_arr = _np.array(rgb).astype(_np.float32) / 255.0
     m = _polygon_dominant_filter(rgb_arr, m, pts, W, H)
+    # 轻度收尾（小幅修整，不过度）：
+    # 1) 开运算（5x5）去掉细小挂絮/低 alpha 孤点——剔黑条后边界上残留的
+    #    碎屑与撕裂细丝；主体笔画宽度远大于 5px，不受影响。
+    # 2) 多边形边界 6px 线性渐变羽化——套索边界硬切（如切过星星/装饰一半）
+    #    变成柔和过渡，视觉上不再生硬。
+    import cv2 as _cv2_feather
+    _opened = _cv2_feather.morphologyEx(
+        (m > 0.08).astype(_np.uint8), _cv2_feather.MORPH_OPEN,
+        _np.ones((5, 5), _np.uint8),
+    )
+    m = m * _opened
+    _dist = _cv2_feather.distanceTransform(
+        (_np.array(poly_img) > 127).astype(_np.uint8), _cv2_feather.DIST_L2, 3
+    )
+    m = m * _np.clip(_dist / 6.0, 0.0, 1.0)
     return Image.fromarray(_np.clip(m * 255.0, 0, 255).astype(_np.uint8), mode="L")
 
 
@@ -1530,6 +1545,7 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
                 mc.astype(np.uint8), connectivity=4
             )
             min_area = max(2000, int(sizes[big] * 0.015))
+            big_rect = None
             for c2 in range(1, n2):
                 if st2[c2, cv2.CC_STAT_AREA] < min_area:
                     continue
@@ -1539,6 +1555,26 @@ def _polygon_dominant_filter(rgb_arr, mask_arr, polygon_pts, W: int, H: int):
                 rect[ry:ry + rh, rx:rx + rw] = True
                 drop_extra |= rect & (~main_mask)
                 dark_rects.append((rx, ry, rw, rh))
+                if big_rect is None:
+                    big_rect = (rx, ry, rw, rh)
+            # 黑条贴纸的配套物：散落在主暗块周围的小黑装饰短线/撕裂碎块
+            # （面积 < min_area 逃过上面的剔除，视觉上"底部还带黑色"）。
+            # 与最大暗块 bbox 外扩域相交的暗簇小块（面积 ≥60px）一并剔除；
+            # 标题内部的黑飞白/阴影远离该域，不受影响。
+            if big_rect is not None:
+                bx, by, bw2, bh2 = big_rect
+                mx = max(int(bw2 * 0.03), 30)
+                my = max(int(bh2 * 0.25), 40)
+                ex0, ey0 = max(0, bx - mx), max(0, by - my)
+                ex1, ey1 = min(W, bx + bw2 + mx), min(H, by + bh2 + my)
+                for c2 in range(1, n2):
+                    a2 = int(st2[c2, cv2.CC_STAT_AREA])
+                    if a2 < 60 or a2 >= min_area:
+                        continue
+                    x2_, y2_ = st2[c2, cv2.CC_STAT_LEFT], st2[c2, cv2.CC_STAT_TOP]
+                    w2_, h2_ = st2[c2, cv2.CC_STAT_WIDTH], st2[c2, cv2.CC_STAT_HEIGHT]
+                    if x2_ < ex1 and x2_ + w2_ > ex0 and y2_ < ey1 and y2_ + h2_ > ey0:
+                        drop_extra |= lab2 == c2
             continue
         # 连通性豁免：簇 c 是否与主簇 4-邻接连通？
         # 4-邻接检查：c 像素的上/下/左/右 4 个邻居中是否有 main_mask
