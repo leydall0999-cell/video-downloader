@@ -1375,18 +1375,21 @@ def _polygon_mask(rgb, polygon, W: int, H: int, model: str | None = None):
     m = m * _opened
     # 3) 橙色立体阴影补全：标题的半透明深橙阴影层模型响应弱（alpha 斑驳
     #    0.2~0.4、部分成块缺失），视觉上"阴影不完整"。仅对满足以下全部条件
-    #    的像素补实到 0.75：贴纸主体 20px 邻域内 + 颜色属橙棕阴影家族
+    #    的像素补实到 0.65：贴纸主体 ~15px 邻域内 + 颜色属橙棕阴影家族
     #    （奶油背景/白字/黑条/黄蛋均不满足该色域）+ 不在黑条剔除域 + 圈内。
+    #    参数已小幅收紧（半径 41->31、亮度上限 0.82->0.72、绿色通道上限
+    #    0.70->0.62），避免浅色奶油/描边白边被误补成阴影外延。
     _main_bin = (m > 0.45).astype(_np.uint8)
-    _near = _cv2_feather.dilate(_main_bin, _np.ones((41, 41), _np.uint8)) > 0
+    _near = _cv2_feather.dilate(_main_bin, _np.ones((31, 31), _np.uint8)) > 0
     _r, _g, _b = rgb_arr[..., 0], rgb_arr[..., 1], rgb_arr[..., 2]
+    _lum = 0.299 * _r + 0.587 * _g + 0.114 * _b
     _fam = (
-        (_r > 0.60) & ((_r - _b) > 0.22) & (_g > 0.28) & (_g < 0.70)
-        & (rgb_arr.max(axis=2) < 0.82)
+        (_r > 0.60) & ((_r - _b) > 0.22) & (_g > 0.30) & (_g < 0.62)
+        & (rgb_arr.max(axis=2) < 0.72) & (_lum < 0.72)
     )
     _poly_in = _np.array(poly_img) > 127
     _boost = _near & _fam & (m < 0.55) & (~drop_extra) & _poly_in
-    m[_boost] = _np.maximum(m[_boost], 0.75)
+    m[_boost] = _np.maximum(m[_boost], 0.65)
     _dist = _cv2_feather.distanceTransform(
         (_np.array(poly_img) > 127).astype(_np.uint8), _cv2_feather.DIST_L2, 3
     )
