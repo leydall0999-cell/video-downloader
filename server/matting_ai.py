@@ -683,14 +683,45 @@ def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5
                                        flags=cv2.INPAINT_TELEA).astype(np.float64) / 255.0
         B = cv2.resize(Bs, (W, H), interpolation=cv2.INTER_CUBIC)
 
-    # 直接解 F = (I - (1-α)B)/α 会把低 alpha 区的微小色差过度放大并削顶，
-    # 在深色背景上出现彩边。把放大系数 (1-α)/max(α,eps) 上限锁在 2.0：
-    # α>1/3 时完全精确；α<=1/3 时最多以 2 倍强度去除背景色，避免伪色。
-    scale = (1.0 - alpha) / np.maximum(alpha, 0.02)
-    scale = np.minimum(scale, 2.0)
+    # 前景锚定：从 solid-foreground（alpha>0.95）取最亮的 top-10% 像素作为
+    # “真实前景色”参考（如白发、白衣服）。在低 alpha 发丝/边缘区，单纯反推
+    # F = (I-(1-α)B)/α 会因 α 过小、信号弱而偏暗/偏色；用 F_anchor 做 soft
+    # anchor 可让半透明边缘保持前景应有的亮度，而不是残留背景色。
+    fg_mask = alpha > 0.95
+    n_fg = int(fg_mask.sum())
+    use_anchor = False
+    F_anchor = np.array([1.0, 1.0, 1.0])
+    if n_fg >= 100:
+        fg_pixels = rgb[fg_mask]
+        lum = fg_pixels.mean(axis=1)
+        if lum.size:
+            top_thresh = np.percentile(lum, 90)
+            top_pixels = fg_pixels[lum >= top_thresh]
+            if len(top_pixels):
+                cand = top_pixels.mean(axis=0)
+                if cand.mean() >= 0.45:  # 仅对亮前景启用 anchor（人像白发/白衣）
+                    F_anchor = cand
+                    use_anchor = True
+
+    # 反推去污染：F = I + (I - B) * (1-α)/α。
+    # 低 alpha 区 (I-B) 很小，cap 从 2.0 提到 4.0 才能充分去除绿底渗色；
+    # 同时用 F_anchor 做 soft anchor，避免结果偏暗。
+    eps = 0.01
+    scale = (1.0 - alpha) / np.maximum(alpha, eps)
+    scale = np.minimum(scale, 4.0)
     scale3 = scale[..., None]
-    F = rgb + (rgb - B) * scale3
-    F = np.clip(F, 0.0, 1.0)
+    F_decon = rgb + (rgb - B) * scale3
+    F_decon = np.clip(F_decon, 0.0, 1.0)
+
+    if use_anchor:
+        # α<0.03 完全用 anchor；α>0.33 完全用去污染结果；中间平滑过渡。
+        blend = np.clip((alpha - 0.03) / 0.30, 0.0, 1.0)
+        blend3 = blend[..., None]
+        F = blend3 * F_decon + (1.0 - blend3) * F_anchor
+        F = np.clip(F, 0.0, 1.0)
+    else:
+        F = F_decon
+
     # alpha=0 时 RGB 不可见，统一置为背景色避免存储异常值
     F = np.where(alpha3 == 0.0, B, F)
     return F
