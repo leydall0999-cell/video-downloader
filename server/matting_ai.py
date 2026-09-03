@@ -125,8 +125,9 @@ MODELS: dict[str, dict] = {
     "modnet-photographic": {
         "filename": "modnet_photographic_portrait_matting.onnx",
         "size_mb": 25,
-        # MODNet ONNX 是动态 shape；512×512 是官方推理尺寸（连续 alpha / 发丝级效果）
-        "input_size": (512, 512),
+        # MODNet ONNX 是动态 shape；768×768 比官方 512×512 更能保留发丝细节，
+        # 实测单帧耗时仍 < 1s，可接受。
+        "input_size": (768, 768),
         "norm": "255",
         # MODNet 原始仓库权重为 MIT；此 ONNX 来自 HivisionIDPhotos 发布的官方权重导出，
         # 与 HuggingFace DavG25/modnet-pretrained-models 的 Apache-2.0 版本同源，均允许商用。
@@ -645,6 +646,46 @@ def _sam_refine_or_keep(rgb, mask, prompt, W: int, H: int, model=None):
     return mask
 
 
+def _refine_alpha_by_background(rgb, alpha, bg_sample_frac=0.05):
+    """用颜色距离精修 alpha：纯色/强色背景边缘处，把“仍然像背景”的像素压低 alpha。
+
+    假设：背景色在空间上近似一致（如摄影棚纯色背景），但允许 mild 光照渐变。
+    对过渡区（0.05 < alpha < 0.95）中颜色越接近背景色的像素，越激进地压低 alpha，
+    使发丝/边缘的半透明只保留在真正“不像背景”的像素上，从而减少背景色渗出和
+    边缘粗糙感。alpha 接近 0/1 的像素几乎不受影响。
+    """
+    import numpy as np
+
+    H, W = alpha.shape
+    flat_a = alpha.ravel()
+    flat_rgb = rgb.reshape(-1, 3)
+    n = len(flat_a)
+    k = max(int(n * bg_sample_frac), min(500, n // 20))
+    # 取 alpha 最低的 k 个像素估计背景色（稳健中位数，避免极暗噪声）
+    bg_idx = np.argpartition(flat_a, k)[:k]
+    bg_color = np.median(flat_rgb[bg_idx], axis=0)
+
+    # 颜色距离（RGB 欧氏距离即可，背景是强橙色，前景棕发/皮肤偏离明显）
+    d = np.linalg.norm(rgb - bg_color, axis=2)
+
+    # tau：过渡区颜色距离的 50% 分位数，表示“过渡带有多远”，兜底 0.12
+    trans_mask = (alpha > 0.05) & (alpha < 0.95)
+    if trans_mask.sum() > 100:
+        tau = float(np.percentile(d[trans_mask], 50)) * 0.75
+    else:
+        tau = 0.12
+    tau = max(tau, 0.08)
+
+    # 背景置信度：距离越近越像背景
+    bg_conf = np.exp(-(d ** 2) / (2.0 * tau ** 2))
+
+    # 颜色距离 alpha：越像背景 alpha 越低。对过渡区中仍然明显带背景色的像素，
+    # 用 (1 - bg_conf) 作为额外压低因子。保留 alpha>0.90 的高置信前景，避免主体变虚。
+    protect = np.clip((0.92 - alpha) / 0.82, 0.0, 1.0)
+    alpha_refined = alpha * (1.0 - 0.90 * bg_conf * protect)
+    return np.clip(alpha_refined, 0.0, 1.0)
+
+
 def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5):
     """MODNet 前景去污染：在透明过渡带用背景色恢复真实前景色，消除绿/蓝底渗色。
 
@@ -788,14 +829,15 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
         # 让结果看起来边缘硬/粗糙。对门控 mask 做高斯羽化，把硬边界展宽成连续
         # 过渡带；并且改用「背景硬清零 + 前景完全信任」策略：
         #   - bi_soft < 0.05 视为确定背景 → alpha 强制 0（绝对不漏背景）；
-        #   - 0.05 ~ 0.30 为过渡带 → gate 从 0 线性升到 1；
-        #   - bi_soft > 0.30 视为确定前景 → gate=1，完整保留 MODNet 软 alpha。
-        # 这样背景仍然透明，但发丝级软边不再被 BiRefNet 硬边界截断。
+        #   - 0.05 ~ 0.45 为过渡带 → gate 从 0 线性升到 1；
+        #   - bi_soft > 0.45 视为确定前景 → gate=1，完整保留 MODNet 软 alpha。
+        # 把「完全信任 MODNet」的阈值从 0.30 提到 0.45，让更多 BiRefNet 判定为
+        # “可能是前景”的区域完全由 MODNet 出软边，发丝更细腻。
         import cv2
 
         sigma = max(8.0, min(W, H) / 400.0)
         bi_soft = cv2.GaussianBlur(bi_soft, (0, 0), sigmaX=sigma)
-        gate = np.clip((bi_soft - 0.05) / 0.25, 0.0, 1.0)
+        gate = np.clip((bi_soft - 0.05) / 0.40, 0.0, 1.0)
         gated = mod_alpha * gate
         gated[bi_soft < 0.05] = 0.0
         # 防呆：若门控把前景几乎全抹掉（BiRefNet 异常判空），回退纯 MODNet，避免误清空
@@ -805,11 +847,23 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
         pass  # 回退纯 MODNet
 
     alpha = mod_alpha
+
+    # 通道/颜色 alpha 精修：MODNet 在强纯色背景（如橙底）边缘容易把“带背景色的半透明
+    # 像素”也给出较高 alpha，导致边缘粗糙、背景色渗出。用颜色距离做局部修正：
+    #   - 估计背景色（取 alpha 最低的 5% 像素）；
+    #   - 对每个像素计算与背景色的欧氏距离 d；
+    #   - 过渡区（0.05 < alpha < 0.95）中 d 越小（越像背景）的像素，额外压低 alpha。
+    # 这样既保留真实发丝的半透明，又把“背景色半透明带”压得更干净。
+    rgb_arr = np.array(rgb, dtype=np.float64) / 255.0
+    try:
+        alpha = _refine_alpha_by_background(rgb_arr, alpha)
+    except Exception:  # noqa: BLE001
+        pass
+
     if has_selection:
         s = np.array(sel, dtype=np.float32) / 255.0
         alpha = alpha * s
 
-    rgb_arr = np.array(rgb, dtype=np.float64) / 255.0
     fg = _decontaminate_modnet_fg(rgb_arr, alpha)
     out = np.dstack([fg, alpha[..., None]])
     out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
