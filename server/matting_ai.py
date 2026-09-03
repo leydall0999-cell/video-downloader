@@ -646,15 +646,15 @@ def _sam_refine_or_keep(rgb, mask, prompt, W: int, H: int, model=None):
     return mask
 
 
-def _refine_alpha_by_background(rgb, alpha, bg_sample_frac=0.05, strength=0.60):
-    """用颜色距离精修 alpha：纯色/强色背景边缘处，把“仍然像背景”的像素压低 alpha。
+def _refine_alpha_by_background(rgb, alpha, bg_sample_frac=0.05, strength=0.85):
+    """用颜色距离精修 alpha：纯色/强色背景边缘处，把"仍然像背景"的像素压低 alpha。
 
     假设：背景色在空间上近似一致（如摄影棚纯色背景），但允许 mild 光照渐变。
-    对非高置信前景（alpha < 0.95）中颜色越接近背景色的像素，温和地压低 alpha，
-    使发丝/边缘的半透明只保留在真正“不像背景”的像素上，从而减少背景色渗出和
+    对非高置信前景（alpha < 0.90）中颜色越接近背景色的像素，温和地压低 alpha，
+    使发丝/边缘的半透明只保留在真正"不像背景"的像素上，从而减少背景色渗出和
     边缘粗糙感。alpha 接近 0/1 的像素几乎不受影响。
 
-    strength：修正强度，默认 0.60（温和）；取值 0~1，越大对“像背景”的像素压得越狠。
+    strength：修正强度，默认 0.85（较强）；取值 0~1，越大对"像背景"的像素压得越狠。
     """
     import numpy as np
 
@@ -683,8 +683,8 @@ def _refine_alpha_by_background(rgb, alpha, bg_sample_frac=0.05, strength=0.60):
 
     # 颜色距离 alpha：越像背景 alpha 越低。对非高置信前景（alpha<0.95）中仍然
     # 明显带背景色的像素，用 (1 - bg_conf) 作为额外压低因子，强度由 strength 控制。
-    # alpha>0.95 的高置信前景完全保护，避免主体变虚。
-    protect = np.clip((0.95 - alpha) / 0.90, 0.0, 1.0)
+    # alpha>0.90 的高置信前景完全保护，避免主体变虚；0.90~0.00 之间线性衰减保护。
+    protect = np.clip((0.90 - alpha) / 0.85, 0.0, 1.0)
     alpha_refined = alpha * (1.0 - strength * bg_conf * protect)
     return np.clip(alpha_refined, 0.0, 1.0)
 
@@ -820,16 +820,23 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
 
     mod_alpha = np.array(mask, dtype=np.float32) / 255.0
 
+    # 计算手动选区面积比例，用于判断用户是否只是"粗线圈了整图"。
+    selection_area_ratio = 1.0
+    if has_selection:
+        s_arr = np.array(sel, dtype=np.uint8)
+        selection_area_ratio = float(s_arr.sum()) / (255.0 * W * H)
+
     # 🛡️ 稳健化（修复「背景没去掉」）：MODNet 是**人像** matting，遇到非标准照片 /
     # 强色背景（如整片橙底）时会把整片选区都输出 alpha≈1，背景完全没被分离出来。
-    # 对「无手动选区」的整图自动抠图，用 BiRefNet 显著性粗 mask 作「全局前景门控」：
-    # 只保留 BiRefNet 判定为前景的区域，MODNet 的连续软 alpha 仅在前景内生效
-    # → 背景必然透明，同时保留 MODNet 的发丝级软边。
-    # ⚠️ 用户给了 polygon/box 等手动选区时，以用户选区为硬边界，不再用 BiRefNet
+    # 对「无手动选区」或「手动选区几乎覆盖全图（面积>85%）」的场景，用 BiRefNet
+    # 显著性粗 mask 作「全局前景门控」：只保留 BiRefNet 判定为前景的区域，MODNet
+    # 的连续软 alpha 仅在前景内生效 → 背景必然透明，同时保留 MODNet 的发丝级软边。
+    # ⚠️ 小范围精确选区（box/polygon 面积<85%）时，以用户选区为硬边界，不再用 BiRefNet
     # 门控去裁剪选区内部——否则 BiRefNet 对特殊构图/竖图识别异常时，会误把
     # 用户明确圈出的主体也压掉。
     # BiRefNet 不可用时（未下载/异常/内存不足）回退纯 MODNet。
-    if not has_selection:
+    gate_enabled = (not has_selection) or (selection_area_ratio > 0.85)
+    if gate_enabled:
         try:
             bi_mask = predict_mask(rgb, model="birefnet-general")
             bi_soft = np.array(bi_mask, dtype=np.float32) / 255.0
@@ -858,15 +865,15 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
         s = np.array(sel, dtype=np.float32) / 255.0
         alpha = alpha * s
 
-    # 通道/颜色 alpha 精修：MODNet 在强纯色背景（如橙底）边缘容易把“带背景色的半透明
-    # 像素”也给出较高 alpha，导致边缘粗糙、背景色渗出。用颜色距离做局部修正：
+    # 通道/颜色 alpha 精修：MODNet 在强纯色背景（如橙底）边缘容易把"带背景色的半透明
+    # 像素"也给出较高 alpha，导致边缘粗糙、背景色渗出。用颜色距离做局部修正：
     #   - 估计背景色（取 alpha 最低的 5% 像素）；
     #   - 对每个像素计算与背景色的欧氏距离 d；
-    #   - 非高置信前景区（alpha < 0.95）中 d 越小（越像背景）的像素，温和压低 alpha。
-    # 这样只处理残留的“背景色半透明带”，高置信主体几乎不受影响。
+    #   - 非高置信前景区（alpha < 0.90）中 d 越小（越像背景）的像素，较强地压低 alpha。
+    # 这样只处理残留的"背景色半透明带"，高置信主体几乎不受影响。
     rgb_arr = np.array(rgb, dtype=np.float64) / 255.0
     try:
-        alpha = _refine_alpha_by_background(rgb_arr, alpha, strength=0.60)
+        alpha = _refine_alpha_by_background(rgb_arr, alpha, strength=0.85)
     except Exception:  # noqa: BLE001
         pass
 
