@@ -773,7 +773,24 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     else:
         mask = _box_crop_mask(rgb, crop_px, W, H, model=model)
 
-    alpha = np.array(mask, dtype=np.float32) / 255.0
+    mod_alpha = np.array(mask, dtype=np.float32) / 255.0
+
+    # 🛡️ 稳健化（修复「背景没去掉」）：MODNet 是**人像** matting，遇到非标准照片 /
+    # 强色背景（如整片橙底）时会把整片选区都输出 alpha≈1，背景完全没被分离出来。
+    # 用 BiRefNet 显著性粗 mask 作「全局前景门控」：只保留 BiRefNet 判定为前景的区域，
+    # MODNet 的连续软 alpha 仅在前景内生效 → 背景必然透明，同时保留 MODNet 的发丝级软边。
+    # BiRefNet 不可用时（未下载/异常/内存不足）回退纯 MODNet，不影响既有行为。
+    try:
+        bi_mask = predict_mask(rgb, model="birefnet-general")
+        bi_soft = np.array(bi_mask, dtype=np.float32) / 255.0
+        gated = mod_alpha * bi_soft
+        # 防呆：若门控把前景几乎全抹掉（BiRefNet 异常判空），回退纯 MODNet，避免误清空
+        if float(gated.mean()) > 1e-3:
+            mod_alpha = gated
+    except Exception:  # noqa: BLE001
+        pass  # 回退纯 MODNet
+
+    alpha = mod_alpha
     if has_selection:
         s = np.array(sel, dtype=np.float32) / 255.0
         alpha = alpha * s
