@@ -1100,7 +1100,14 @@ def _is_person_label(label: str | None) -> bool:
     keys = ("人", "人物", "人像", "肖像", "person", "people", "portrait", "man",
             "woman", "child", "baby", "boy", "girl", "face", "头", "脸", "男", "女",
             "小孩", "婴儿", "老")
-    return any(x in k for x in keys)
+    result = any(x in k for x in keys)
+    # 临时调试：把判定结果写到文件，因为 App 重定向了 stdout
+    try:
+        with open('/tmp/vdl_is_person.log', 'a') as f:
+            f.write(f'label={label!r} k={k!r} result={result}\n')
+    except Exception:
+        pass
+    return result
 
 
 def _norm_box_from_inputs(vision_box, polygon, box):
@@ -1176,6 +1183,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             _is_person_label(vision_label)
             or _is_person_label((meta or {}).get("prompt", ""))
         )
+        print(f"[CLOUD_DEBUG] model={model!r} _MODEL_NAME={_MODEL_NAME!r} vision_label={vision_label!r} prompt={(meta or {}).get('prompt', '')!r} skip={_skip_cloud_for_person} ready={is_cloud_matting_ready()}", flush=True)
         if (model or _MODEL_NAME) in _cloud_models and is_cloud_matting_ready() and not _skip_cloud_for_person:
             try:
                 from cloud_matting import cloud_matting_rgba
