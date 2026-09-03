@@ -826,11 +826,17 @@ def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5
     return F
 
 
-def _detect_solid_background(rgb, edge_frac: float = 0.06, tol: float = 0.12, min_frac: float = 0.85):
+def _detect_solid_background(rgb, edge_frac: float = 0.06, tol: float = 0.12,
+                              min_frac: float = 0.85, edge_tol: float = 0.10,
+                              std_tol: float = 0.06):
     """判断图像是否为「纯色/近似纯色背景」（如绿幕/橙幕/摄影棚纯色底）。
 
-    方法：取画面边缘像素（上下左右各 edge_frac 条），算它们到中位色的颜色距离；
-    若 >= min_frac 比例的边缘像素都和中位色足够近（距离 < tol），则判定为纯色背景。
+    方法：
+      1. 取画面四边边缘像素，分别计算每边中位色；若任意两边中位色差异明显
+         （距离 >= edge_tol），说明是渐变/分区背景，不是纯色。
+      2. 四边合并后算到中位色的颜色距离；若 >= min_frac 比例的边缘像素都
+         和中位色足够近（距离 < tol），且 RGB 标准差足够小（< std_tol），
+         才判定为纯色背景。
 
     返回 (is_solid, key_color)，key_color 为边缘中位色（归一化 [0,1] RGB）。
     纯色背景对 BiRefNet/MODNet 等自然照片训练模型是 OOD，应改走色度键而非 matting。
@@ -840,16 +846,27 @@ def _detect_solid_background(rgb, edge_frac: float = 0.06, tol: float = 0.12, mi
     arr = np.array(rgb, dtype=np.float64) / 255.0
     H, W = arr.shape[:2]
     e = max(4, int(min(H, W) * edge_frac))
-    border = np.concatenate([
-        arr[:e].reshape(-1, 3),
-        arr[H - e:].reshape(-1, 3),
-        arr[:, :e].reshape(-1, 3),
-        arr[:, W - e:].reshape(-1, 3),
-    ], axis=0)
+
+    # 四边分别采样，防止渐变/分区背景被整体中位色「平均」掉
+    edges = {
+        "top": arr[:e].reshape(-1, 3),
+        "bottom": arr[H - e:].reshape(-1, 3),
+        "left": arr[:, :e].reshape(-1, 3),
+        "right": arr[:, W - e:].reshape(-1, 3),
+    }
+    edge_medians = np.array([np.median(v, axis=0) for v in edges.values()])
+    # 任意两边中位色差距大 → 非纯色（渐变/分区背景）
+    pairwise = np.linalg.norm(edge_medians[:, None, :] - edge_medians[None, :, :], axis=2)
+    if np.max(pairwise) >= edge_tol:
+        return False, edge_medians.mean(axis=0)
+
+    border = np.concatenate(list(edges.values()), axis=0)
     key = np.median(border, axis=0)
     d = np.linalg.norm(border - key, axis=1)
     frac = float(np.mean(d < tol))
-    return frac >= min_frac, key
+    # 边缘颜色分散度也要小（避免低对比度自然场景被误判）
+    rgb_std = float(border.std(axis=0).mean())
+    return (frac >= min_frac and rgb_std < std_tol), key
 
 
 def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=None):

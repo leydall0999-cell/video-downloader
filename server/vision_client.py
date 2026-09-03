@@ -49,6 +49,23 @@ _PROMPT = (
 
 _SYSTEM = "你是一个严谨的图像分析助手，只输出要求的 JSON，不做任何额外解释。"
 
+# 🎯 通用主体定位 prompt（抠图用）：同时支持人像/物品/文字主体。
+_SUBJECT_PROMPT = (
+    "你是一个图像主体定位助手。请分析这张图，找出用户最想一键抠出的主体。\n\n"
+    "主体通常是图中最显眼、最突出的元素，例如：\n"
+    "  - 人像（含全身/半身/大头照，包括头发、四肢外缘）\n"
+    "  - 物品/产品（如商品、logo、图标、装饰元素）\n"
+    "  - 文字标题（如海报主标题、一行醒目标语）\n\n"
+    "请只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
+    "{\n"
+    '  "subject": {"label": "<人像/物品/文字/主体>", "box": [x1, y1, x2, y2]}\n'
+    "}\n\n"
+    "bbox 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]。\n"
+    "**紧贴外缘**：bbox 必须紧贴主体的最外缘像素，不要包含大面积背景空白。"
+    "例如人像要框到头发梢、指尖，但不要多留背景；文字要框到笔画外缘。\n"
+    "**返回唯一主体**：只返回一个最主要的主体（面积最大或视觉上最突出的那个）。"
+)
+
 # 📝 文字检测 prompt：找图中所有独立文字元素（含主/副标题、按钮文字、贴纸/卡片内文字）
 _TEXT_PROMPT = (
     "你是一个海报/图片文字定位助手。请找出图中**所有独立成组的文字元素**："
@@ -185,7 +202,7 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": _PROMPT},
+                    {"type": "text", "text": _SUBJECT_PROMPT},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
                 ],
             },
@@ -206,11 +223,37 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
 
     parsed = _extract_json(content)
     # 兼容多种 VLM 输出结构：
-    #   {"blocks": [{"label","bbox"}]}  ← 主格式（prompt 要求）
+    #   {"subject": {"label","box"}}    ← 新主体定位格式（detect_subject 主格式）
+    #   {"blocks": [{"label","bbox"}]}  ← 旧文字/元素定位格式（兼容兜底）
     #   {"blocks": [{"label","box"}]}   ← 老格式兜底
     #   [{"label","bbox"}]              ← 直接数组
     #   {"label","bbox"}                ← 单个对象（裸返回）
-    if isinstance(parsed, list):
+    if isinstance(parsed, dict) and "subject" in parsed:
+        # 新格式：直接提取 subject，并把它放进 all 列表
+        subj = parsed["subject"]
+        raw_box = (
+            subj.get("box") or subj.get("bbox") or subj.get("bbox_2d")
+            or subj.get("bounding_box") or subj.get("boundingBox")
+            or subj.get("region") or subj.get("rect")
+            or subj.get("coordinates") or subj.get("location")
+            or subj.get("area")
+        )
+        if raw_box:
+            try:
+                _vals = [float(v) for v in raw_box[:4]]
+            except Exception:
+                _vals = []
+            if _vals:
+                if max(_vals) > 1.5 and _imgW and _imgH:
+                    _vals = [_vals[0] / _imgW, _vals[1] / _imgH, _vals[2] / _imgW, _vals[3] / _imgH]
+                box = _parse_box(_vals)
+                if box:
+                    label = str(subj.get("label", "主体"))
+                    return {"subject": {"label": label, "box": box},
+                            "all": [{"label": label, "box": box}],
+                            "model": model, "provider": provider}
+        blocks_raw = []
+    elif isinstance(parsed, list):
         blocks_raw = parsed
     else:
         blocks_raw = parsed.get("blocks") or []
