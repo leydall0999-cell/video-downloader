@@ -3667,12 +3667,15 @@
           // 下载按钮：桌面版走原生保存面板（WKWebView 无法触发 <a download>），
           // 网页版/无桥接时回退 fetch → blob → 临时 a[download] click。
           if (el.matDownload) {
+            // 完成回调里会清空 matJobId，所以点击保存时必须用本次任务的 id
+            const currentJobId = matJobId;
+            const currentFilename = (d.filename || (outUrl.split('/').pop() || 'matting.png'));
+            const currentOutUrl = outUrl;
             el.matDownload.onclick = (e) => {
               e.preventDefault();
-              const filename = (d.filename || (outUrl.split('/').pop() || 'matting.png'));
               const nativeSave = window.VDL && window.VDL.desktop && window.VDL.desktop.saveMattingFile;
               if (typeof nativeSave === 'function') {
-                nativeSave(matJobId, filename).then((res) => {
+                nativeSave(currentJobId, currentFilename).then((res) => {
                   if (!res) return;
                   if (res.startsWith('ERROR:')) {
                     window.alert('保存失败：' + res.slice(6));
@@ -3682,7 +3685,7 @@
                 });
                 return;
               }
-              fetch(outUrl).then(r => r.blob()).then(blob => {
+              fetch(currentOutUrl).then(r => r.blob()).then(blob => {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;

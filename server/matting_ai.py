@@ -783,6 +783,13 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     try:
         bi_mask = predict_mask(rgb, model="birefnet-general")
         bi_soft = np.array(bi_mask, dtype=np.float32) / 255.0
+        # BiRefNet 本质是 0/1 粗 mask，直接相乘会截断 MODNet 的发丝软边，
+        # 让结果看起来边缘硬/粗糙。对门控 mask 做高斯羽化，把硬边界展宽成连续
+        # 过渡带：背景区仍被可靠压透，前景内保留 MODNet 自然软 alpha。
+        import cv2
+
+        sigma = max(2.5, min(W, H) / 700.0)
+        bi_soft = cv2.GaussianBlur(bi_soft, (0, 0), sigmaX=sigma)
         gated = mod_alpha * bi_soft
         # 防呆：若门控把前景几乎全抹掉（BiRefNet 异常判空），回退纯 MODNet，避免误清空
         if float(gated.mean()) > 1e-3:
