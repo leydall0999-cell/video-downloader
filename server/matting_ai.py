@@ -647,12 +647,18 @@ def _sam_refine_or_keep(rgb, mask, prompt, W: int, H: int, model=None):
 
 
 def _refine_alpha_by_background(rgb, alpha, bg_sample_frac=0.05, strength=0.85):
-    """用颜色距离精修 alpha：纯色/强色背景边缘处，把"仍然像背景"的像素压低 alpha。
+    """颜色/色度键精修 alpha：纯色背景人像中，用前景-背景颜色距离重新校正过渡区。
 
-    假设：背景色在空间上近似一致（如摄影棚纯色背景），但允许 mild 光照渐变。
-    对非高置信前景（alpha < 0.90）中颜色越接近背景色的像素，温和地压低 alpha，
-    使发丝/边缘的半透明只保留在真正"不像背景"的像素上，从而减少背景色渗出和
-    边缘粗糙感。alpha 接近 0/1 的像素几乎不受影响。
+    对摄影棚纯色背景（橙/绿/蓝底），MODNet 在硬边处经常给出 0.7~0.9 的中间 alpha，
+    导致身体轮廓残留背景色。本函数把问题反建模为经典合成方程 I = alpha*F + (1-alpha)*B：
+      - 从 alpha 最低/最高的像素分别稳健估计背景色 B 与前景色 F；
+      - 对每个像素反解 alpha_lin = ((I-B)·(F-B)) / |F-B|^2；
+      - 在过渡区（0.05 < alpha < 0.95）用 alpha_lin 主导替换原 alpha，
+        使身体硬边直接拉高到接近 1，发丝半透明区按颜色比例自然过渡；
+      - 最后对仍明显带背景色的残留像素再温和压低。
+
+    高置信前景（alpha>0.95）与几乎透明（alpha<0.05）区域基本不动，避免主体变虚或
+    发丝被过度削掉。
 
     strength：修正强度，默认 0.85（较强）；取值 0~1，越大对"像背景"的像素压得越狠。
     """
@@ -663,29 +669,44 @@ def _refine_alpha_by_background(rgb, alpha, bg_sample_frac=0.05, strength=0.85):
     flat_rgb = rgb.reshape(-1, 3)
     n = len(flat_a)
     k = max(int(n * bg_sample_frac), min(500, n // 20))
-    # 取 alpha 最低的 k 个像素估计背景色（稳健中位数，避免极暗噪声）
+    # 背景色 B：取 alpha 最低的 k 个像素中位数
     bg_idx = np.argpartition(flat_a, k)[:k]
-    bg_color = np.median(flat_rgb[bg_idx], axis=0)
+    B = np.median(flat_rgb[bg_idx], axis=0)
 
-    # 颜色距离（RGB 欧氏距离即可，背景是强橙色，前景棕发/皮肤偏离明显）
-    d = np.linalg.norm(rgb - bg_color, axis=2)
+    # 前景色 F：取 alpha 最高的 k 个像素中位数
+    fg_idx = np.argpartition(flat_a, n - k)[-k:]
+    F = np.median(flat_rgb[fg_idx], axis=0)
 
-    # tau：过渡区颜色距离的 50% 分位数，表示“过渡带有多远”，兜底 0.12
+    # 颜色距离
+    d_bg = np.linalg.norm(rgb - B, axis=2)
+
+    # tau：过渡区颜色距离 50% 分位数，兜底 0.12
     trans_mask = (alpha > 0.05) & (alpha < 0.95)
     if trans_mask.sum() > 100:
-        tau = float(np.percentile(d[trans_mask], 50)) * 0.75
+        tau = float(np.percentile(d_bg[trans_mask], 50)) * 0.75
     else:
         tau = 0.12
     tau = max(tau, 0.08)
 
-    # 背景置信度：距离越近越像背景
-    bg_conf = np.exp(-(d ** 2) / (2.0 * tau ** 2))
+    # 线性混合反解 alpha（色度键思想）：颜色越像前景 alpha_lin 越接近 1，
+    # 颜色越像背景 alpha_lin 越接近 0。对纯色背景人像，能把身体硬边拉到 1。
+    diff_BF = F - B
+    denom = np.dot(diff_BF, diff_BF) + 1e-6
+    alpha_lin = np.clip(((rgb - B) * diff_BF).sum(axis=2) / denom, 0.0, 1.0)
 
-    # 颜色距离 alpha：越像背景 alpha 越低。对非高置信前景（alpha<0.95）中仍然
-    # 明显带背景色的像素，用 (1 - bg_conf) 作为额外压低因子，强度由 strength 控制。
-    # alpha>0.90 的高置信前景完全保护，避免主体变虚；0.90~0.00 之间线性衰减保护。
-    protect = np.clip((0.90 - alpha) / 0.85, 0.0, 1.0)
-    alpha_refined = alpha * (1.0 - strength * bg_conf * protect)
+    # 过渡区权重：alpha 0.05~0.20 渐入，0.20~0.80 完全用 alpha_lin，0.80~0.95 渐出。
+    # 硬边（alpha~0.85+）会被 alpha_lin 修正到接近 1；发丝（alpha~0.1~0.5）
+    # 按颜色比例自然过渡；alpha<0.05 的确定透明区不受噪声干扰。
+    blend_low = np.clip((alpha - 0.05) / 0.15, 0.0, 1.0)
+    blend_high = np.clip((0.95 - alpha) / 0.15, 0.0, 1.0)
+    blend = blend_low * blend_high
+
+    alpha_refined = alpha * (1.0 - blend) + alpha_lin * blend
+
+    # 额外压低：过渡区里仍明显带背景色的像素（如发丝尖端粘的橙粉）再压一点
+    bg_conf = np.exp(-(d_bg ** 2) / (2.0 * tau ** 2))
+    alpha_refined = alpha_refined * (1.0 - strength * bg_conf * blend)
+
     return np.clip(alpha_refined, 0.0, 1.0)
 
 
