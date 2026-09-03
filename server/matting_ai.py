@@ -649,15 +649,19 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（套索/框/
+        # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（框/
         # AI视觉定位/点选，blocks 多块除外）→ 优先走 SAM 像素级分割。
         # SAM 靠 prompt 切主体、边缘远精于显著性；失败自动回退下方 BiRefNet 分支。
-        if sam_refine and not blocks:
+        #
+        # 注意：**套索(polygon)不走 SAM**。SAM 对 polygon 只取外接矩形当 box prompt，
+        # 输出是粗粒度二值 mask——会吞掉细笔画（如「醒」右侧）且完全丢失半透明区域
+        # （橙色立体阴影、发丝）。而 BiRefNet 套索路径（_polygon_mask）已带中心连通保留
+        # + 主色聚类去杂质 + 橙色阴影补全 + 6px 羽化，对文字/阴影/毛发类主体远优于
+        # SAM 的二值剪影。故套索一律走 BiRefNet，SAM 仅保留给框选/自动/点选等实心物体。
+        if sam_refine and not blocks and not polygon:
             try:
                 sprompt = None
-                if polygon:
-                    sprompt = {"type": "poly", "poly": [[float(p[0]), float(p[1])] for p in polygon]}
-                elif click:
+                if click:
                     sprompt = {"type": "point", "pt": [float(click[0]), float(click[1])]}
                 elif vision_box is not None:
                     sprompt = {"type": "box", "norm": [float(v) for v in vision_box[:4]]}
