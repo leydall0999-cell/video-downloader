@@ -168,8 +168,37 @@ def _parse_box(b) -> list[float] | None:
     return [x1, y1, x2, y2]
 
 
-def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> dict:
-    """调 VLM 定位主体，返回 {subject, all, model, provider}。失败抛 RuntimeError。"""
+def _grounding_prompt(user_prompt: str) -> str:
+    """把用户的自然语言描述（「说扣什么」）转成 VLM 定位指令。
+
+    让 VLM 不找「主主体」，而是**按描述定位那个特定对象**——这是豆包式
+    「说扣什么就抠什么」的本地等价实现（云端 VLM 当作轻量 Grounding 用）。
+    """
+    p = (user_prompt or "").strip()
+    if not p:
+        return _SUBJECT_PROMPT
+    return (
+        "你是一个精确的图像主体定位助手。用户想从这张图里抠出的对象是：\n"
+        f"「{p}」\n\n"
+        "请在这张图中**定位这个特定对象**（而不是默认找最大的主体），"
+        "返回它紧贴最外缘（头发梢/指尖/笔画边缘）的边界框。\n\n"
+        "请只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
+        "{\n"
+        '  "subject": {"label": "<用一句话描述你框住的对象，含用户意图>", "box": [x1, y1, x2, y2]}\n'
+        "}\n\n"
+        "bbox 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]。\n"
+        "**紧贴外缘**：bbox 必须紧贴该对象的像素外缘，不要包含大面积背景空白；"
+        "对象含多个人时只框用户描述的那一个。若图中找不到该对象，返回 "
+        '{"subject": null}。'
+    )
+
+
+def detect_subject(image_path: str, prompt: str | None = None, max_side: int = 1024, timeout: int = 60) -> dict:
+    """调 VLM 定位主体，返回 {subject, all, model, provider}。失败抛 RuntimeError。
+
+    prompt：用户自然语言描述（「说扣什么」）。给定时 VLM 按描述定位特定对象，
+        而非默认的主主体；为空则定位画面主主体。
+    """
     cfg = get_vision_config()
     key = (cfg.get("api_key") or "").strip()
     base_url = (cfg.get("base_url") or "").strip().rstrip("/")
@@ -195,6 +224,7 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
         "Content-Type": "application/json",
         "Authorization": f"Bearer {key}",
     }
+    user_text = _grounding_prompt(prompt) if (prompt or "").strip() else _SUBJECT_PROMPT
     payload = {
         "model": model,
         "messages": [
@@ -202,7 +232,7 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": _SUBJECT_PROMPT},
+                    {"type": "text", "text": user_text},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
                 ],
             },
@@ -231,6 +261,11 @@ def detect_subject(image_path: str, max_side: int = 1024, timeout: int = 60) -> 
     if isinstance(parsed, dict) and "subject" in parsed:
         # 新格式：直接提取 subject，并把它放进 all 列表
         subj = parsed["subject"]
+        if not subj or not isinstance(subj, dict):
+            # 描述性定位（「说扣什么」）时 VLM 可能返回 {"subject": null} 表示没找到该对象
+            raise RuntimeError(
+                f"视觉模型未找到你描述的对象「{(prompt or '')[:40]}」｜原始回复: {content[:200]}"
+            )
         raw_box = (
             subj.get("box") or subj.get("bbox") or subj.get("bbox_2d")
             or subj.get("bounding_box") or subj.get("boundingBox")

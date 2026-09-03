@@ -73,7 +73,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, prompt: str | None = None) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -96,7 +96,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         vision_used = False
         if vision_guide:
             try:
-                det = vision_client.detect_subject(str(src_path))
+                det = vision_client.detect_subject(str(src_path), prompt=(prompt or "").strip() or None)
                 vb = det["subject"]["box"]
                 vision_box = [float(v) for v in vb[:4]]
                 vision_used = True
@@ -106,7 +106,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine, vision_label=job.get("vision_label", ""), meta=job)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
@@ -149,6 +149,7 @@ def create_matting_image(
     box: str = app.Form(None),
     model: str = app.Form(None),
     vision_guide: str = app.Form(None),
+    prompt: str = app.Form(None),
     polygon: str = app.Form(None),
     click_point: str = app.Form(None),
     blocks: str = app.Form(None),
@@ -259,7 +260,8 @@ def create_matting_image(
             "kind": "matting",
         }
     sr = (sam_refine or "").strip().lower() in ("1", "true", "yes", "on")
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr)
+    prompt_text = (prompt or "").strip()
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text)
     return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 
 
@@ -423,6 +425,10 @@ def matting_image_status(job_id: str) -> dict:
         "vision_error": job.get("vision_error", ""),
         # 🔬 SAM 精细抠图是否被本次任务请求（有选区且勾选；自动模式/多块不适用）
         "sam_used": job.get("sam_used", False),
+        # ☁️ 云端抠图（火山视觉智能，豆包级）：是否实际走了云端，以及失败原因
+        "cloud_used": job.get("cloud_used", False),
+        "cloud_provider": job.get("cloud_provider", ""),
+        "cloud_error": job.get("cloud_error", ""),
     }
 
 

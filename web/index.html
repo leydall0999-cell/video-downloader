@@ -873,6 +873,11 @@
             <span class="uc-label">抠图模型</span>
             <select id="matModel" aria-label="抠图模型"></select>
           </label>
+          <label class="uc-field mat-prompt-wrap" id="matPromptWrap">
+            <span class="uc-label">🗣️ 说扣什么（自然语言描述主体）</span>
+            <input type="text" id="matPrompt" class="mat-prompt-input" placeholder="例如：左边穿红衣服的人 / 中间的猫 / 标题那行字" autocomplete="off" />
+          </label>
+          <span class="dw-hint" id="matPromptHint">描述你想抠的对象，AI 会按描述自动定位并抠出（需开启 AI 视觉定位且已配 DashScope Key）。留空则自动抠主主体。有描述时以描述为准（可叠加框选/套索作为辅助）。</span>
           <span class="dw-hint">AI 自动识别主体并去除背景，输出带透明通道的 PNG（可直接换背景 / 合成）。
             首次使用需下载模型：轻量版 213MB、完整版 927MB，仅下一次，之后离线可用；下载进度会在按钮旁实时显示。
             <b style="color:#b45309">授权提示：</b>默认 BiRefNet 为 MIT 可商用；下拉里的 <b>RMBG-2.0 是 CC BY-NC 4.0，仅限非商业用途</b>，仅建议个人 / 非商业场景显式选用，请勿用于对外分发产品。</span>
@@ -1106,6 +1111,24 @@
             <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
             <p class="adv-note" id="visionNote">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
             <div id="visionRuntime" class="adv-note"></div>
+          </section>
+
+          <!-- 云端抠图（火山引擎视觉智能）：豆包级「说扣什么就抠什么」像素抠图后端 -->
+          <section class="com-ai-col">
+            <h4 class="com-ai-subtitle">云端抠图（火山引擎 · 豆包级）</h4>
+            <label class="adv-toggle-row">
+              <input type="checkbox" id="cloudMattingEnabled" />
+              <span>启用云端抠图（说扣什么走火山像素级，未启用则本地 SAM/MODNet 兜底）</span>
+            </label>
+            <label class="adv-label" for="cloudAk">Access Key ID</label>
+            <input id="cloudAk" class="adv-input" type="text" placeholder="火山引擎访问控制 → 访问密钥 AK" autocomplete="off" spellcheck="false" />
+            <label class="adv-label" for="cloudSk">Secret Access Key</label>
+            <input id="cloudSk" class="adv-input" type="password" placeholder="火山引擎 Secret Key（SK）" autocomplete="off" spellcheck="false" />
+            <p class="adv-note">「说扣什么」的像素级质量来自云端（火山即豆包视觉后端）。需单独申请火山视觉智能 AK/SK，且与上方 DashScope 视觉 Key 互不影响。未配置/断网时自动回退本地抠图，不报错。</p>
+            <div class="com-ai-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="cloudMattingSave">保存云端抠图配置</button>
+              <span id="cloudMattingStatus" class="sub-status" hidden></span>
+            </div>
           </section>
 
           <!-- 共用一个保存按钮（同时保存 LLM 与视觉模型两组配置） -->

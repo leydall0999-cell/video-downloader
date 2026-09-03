@@ -46,6 +46,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from cloud_matting_config import is_cloud_matting_ready
+
 # ---------------------------------------------------------------- 模型注册表
 
 # size_mb 用于前端「首次下载约 xxx MB」提示；input_size 是 ONNX 输入分辨率。
@@ -168,6 +170,18 @@ MODELS: dict[str, dict] = {
         "size_mb": 0,
         "desc": "纯色背景色度键 · 算法内置 · 绿幕/橙幕/纯色底专用（推荐）",
         "license": "内置算法",
+        "commercial": "yes",
+    },
+    "sam-matting": {
+        # 🪄 SAM 像素级分割 + 导向滤波软抠像（连续 alpha，发丝级）。
+        # 思路：MobileSAM 给像素级二值 mask（边界精确到像素）→ 腐蚀/膨胀生成
+        # 三值 trimap（确定前景 / 未知带 / 确定背景）→ 用原图颜色作引导的导向滤波
+        # 在未知带内解出连续 alpha（发丝/婚纱呈半透明）。免 scipy，依赖仅 numpy/opencv，
+        # 不增加安装包体积。相比 BiRefNet 默认路径：边缘是连续半透明、不发丝硬切。
+        "algorithm": True,
+        "size_mb": 0,
+        "desc": "SAM 软抠像 · 像素级 + 连续 alpha 发丝（推荐·人像/物体）",
+        "license": "MIT（MobileSAM）+ 内置算法",
         "commercial": "yes",
     },
 }
@@ -1078,7 +1092,36 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     return Image.fromarray(out, mode="RGBA")
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False) -> None:
+def _is_person_label(label: str | None) -> bool:
+    """判断 VLM 返回的主体标签是否为人像（用于路由到 MODNet 真连续 alpha）。"""
+    if not label:
+        return False
+    k = (label or "").lower()
+    keys = ("人", "人物", "人像", "肖像", "person", "people", "portrait", "man",
+            "woman", "child", "baby", "boy", "girl", "face", "头", "脸", "男", "女",
+            "小孩", "婴儿", "老")
+    return any(x in k for x in keys)
+
+
+def _norm_box_from_inputs(vision_box, polygon, box):
+    """从 VLM 框 / 套索 / 矩形框 推导归一化 [x1,y1,x2,y2]，供云端抠图定位用。
+
+    优先级：VLM 视觉框（说扣什么目标）> 套索多边形 > 矩形框。都无则返回 None（抠全图主主体）。
+    """
+    if vision_box and len(vision_box) == 4:
+        x1, y1, x2, y2 = [float(v) for v in vision_box[:4]]
+        return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+    if polygon and len(polygon) >= 3:
+        xs = [float(p[0]) for p in polygon]
+        ys = [float(p[1]) for p in polygon]
+        return [min(xs), min(ys), max(xs), max(ys)]
+    if box and len(box) == 4:
+        x, y, w, h = [float(v) for v in box[:4]]
+        return [x, y, x + w, y + h]
+    return None
+
+
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -1120,6 +1163,29 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
+        # ☁️ 云端抠图优先（火山视觉智能，豆包级像素质量）；失败回退下方本地链路。
+        # 仅对「默认/智能/像素级」意图启用云端优先；用户显式选了本地特殊引擎
+        # （色度键=纯色专用、modnet=本地人像）时尊重本地选择，不覆盖。
+        if meta is not None:
+            meta.setdefault("cloud_used", False)
+        _cloud_models = ("auto", "birefnet-general", "sam-matting")
+        if (model or _MODEL_NAME) in _cloud_models and is_cloud_matting_ready():
+            try:
+                from cloud_matting import cloud_matting_rgba
+                _cb = _norm_box_from_inputs(vision_box, polygon, box)
+                rgba = cloud_matting_rgba(rgb, box=_cb, timeout=60)
+                if meta is not None:
+                    meta["cloud_used"] = True
+                    meta["cloud_provider"] = "volcengine"
+                _save_out(rgba, out)
+                return
+            except Exception as _ce:  # noqa: BLE001
+                import logging as _lg
+
+                _lg.getLogger("matting_ai").warning("云端抠图失败，回退本地: %s", _ce)
+                if meta is not None:
+                    meta["cloud_error"] = str(_ce)[:200]
+
         # 🤖 智能自动路由（auto / 默认引擎）：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
         #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（flood-fill 洪泛，硬边干净、零 ML 权重），
         #     远比硬刚 MODNet/BiRefNet 稳（纯色对自然照片训练模型是 OOD，会反复给背景高 alpha）；
@@ -1139,6 +1205,19 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 )
                 _save_out(rgba, out)
                 return
+            # 复杂/非纯色背景 + 人像 → MODNet 真连续 alpha（发丝级半透），优于 BiRefNet 硬分割
+            if _is_person_label(vision_label):
+                try:
+                    rgba = _matting_modnet(
+                        rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
+                        model="modnet-photographic",
+                    )
+                    _save_out(rgba, out)
+                    return
+                except Exception as _e:  # noqa: BLE001
+                    import logging as _lg
+
+                    _lg.getLogger("matting_ai").warning("auto 人像路由 MODNet 失败回退: %s", _e)
             # 复杂/非纯色背景 → 强制底层引擎为 BiRefNet 通用分割，复用下方选区逻辑。
             model = "birefnet-general"
 
@@ -1148,6 +1227,30 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             rgba = _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
             _save_out(rgba, out)
             return
+
+        # 🪄 SAM 软抠像：像素级分割 + 导向滤波连续 alpha（发丝/婚纱半透，到像素级）。
+        # 不依赖 scipy，全分辨率实时；任何失败自动回退下方 BiRefNet 分支。
+        if (model or _MODEL_NAME) == "sam-matting":
+            try:
+                # 人像 → MODNet 真连续 alpha（发丝半透），比 SAM 软抠像更自然
+                if _is_person_label(vision_label):
+                    rgba = _matting_modnet(
+                        rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
+                        model="modnet-photographic",
+                    )
+                    _save_out(rgba, out)
+                    return
+                rgba = _matting_sam_trimap(
+                    rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, click=click
+                )
+                _save_out(rgba, out)
+                return
+            except Exception as _e:  # noqa: BLE001
+                import logging as _lg
+
+                _lg.getLogger("matting_ai").warning("sam-matting 回退 BiRefNet: %s", _e)
+                # 落到下方默认 BiRefNet 流程继续处理（重置 model 避免后续 _get_session('sam-matting') 崩）
+                model = "birefnet-general"
 
         # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（框/
     # AI视觉定位/点选，blocks 多块除外）→ 优先走 SAM 像素级分割。
@@ -1331,6 +1434,141 @@ def _edge_soften_mask(mask, radius: int = 2, sigma: float = 1.2):
     return _PIL_Img.fromarray(np.clip(out, 0, 255).astype(np.uint8), mode="L")
 
 
+# ===== 🪄 SAM 软抠像（像素级分割 + 导向滤波连续 alpha）=====
+def _guided_filter_matting(rgb_pil, p, radius: int = 10, eps: float = 1e-3):
+    """导向滤波软抠像：把二值/近二值 trimap `p` 在未知带内解成连续 alpha。
+
+    用原图颜色作引导（guided filter），让 alpha 的过渡沿颜色边缘对齐——
+    发丝/婚纱这类半透明区域会按「更像前景还是背景」得到 0~1 之间的连续透明度。
+    免 scipy，只需 numpy + opencv（boxFilter），O(N) 全分辨率实时可跑。
+
+    rgb_pil: PIL RGB 原图；p: float32 [H,W] 0~1（确定前景=1 / 确定背景=0 / 未知=初值）。
+    返回 float32 [H,W] 0~1 连续 alpha。
+    """
+    import numpy as np
+
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        # 没 opencv 就退化成高斯模糊软边，至少不崩
+        from PIL import Image, ImageFilter
+
+        tmp = Image.fromarray(np.clip(p * 255.0, 0, 255).astype(np.uint8), mode="L")
+        return np.asarray(tmp.filter(ImageFilter.GaussianBlur(radius=2)), dtype=np.float32) / 255.0
+
+    I = np.asarray(rgb_pil, dtype=np.float64) / 255.0  # [H,W,3]
+    H, W, _ = I.shape
+    p = p.astype(np.float64)
+
+    def _box(x):
+        k = 2 * radius + 1
+        if x.ndim == 2:
+            return cv2.boxFilter(x, -1, (k, k), borderType=cv2.BORDER_REFLECT)
+        return cv2.boxFilter(x, -1, (k, k), borderType=cv2.BORDER_REFLECT)
+
+    mean_I = _box(I)                       # [H,W,3]
+    mean_p = _box(p)                       # [H,W]
+    mean_Ip = np.stack([_box(I[:, :, c] * p) for c in range(3)], axis=2)  # [H,W,3]
+    cov_Ip = mean_Ip - mean_I * mean_p[:, :, None]                        # [H,W,3]
+    mean_II = np.stack([_box(I[:, :, c] * I[:, :, c]) for c in range(3)], axis=2)  # [H,W,3]
+    var_I = mean_II - mean_I * mean_I                                   # 对角协方差 [H,W,3]
+    # 对角协方差近似的 color guided filter（快速、稳）
+    a = cov_Ip / (var_I + eps)           # [H,W,3]
+    b = mean_p - np.sum(a * mean_I, axis=2)  # [H,W]
+    mean_a = _box(a)                     # [H,W,3]
+    mean_b = _box(b)                     # [H,W]
+    q = np.clip(np.sum(mean_a * I, axis=2) + mean_b, 0.0, 1.0)  # [H,W]
+    return q.astype(np.float32)
+
+
+def _matting_sam_trimap(rgb, W: int, H: int, box=None, polygon=None,
+                        vision_box=None, click=None, model=None):
+    """SAM 像素级分割 → trimap → 导向滤波连续 alpha 的软抠像引擎。
+
+    兼容所有选区模式：
+      - click：点选 → SAM point prompt
+      - vision_box：AI 视觉定位框 → SAM box prompt
+      - box：用户矩形框 → SAM box prompt（框外强制透明由 sam_refine_mask 保证）
+      - polygon：套索 → SAM 取 bbox 当 prompt，输出乘多边形硬边界
+      - 无选区（auto）：BiRefNet 最大主体 bbox → SAM box prompt
+    任何一步失败都回退到 BiRefNet 基础抠图，绝不崩。
+    """
+    import numpy as np
+    from PIL import Image
+
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        cv2 = None
+
+    # ---------- 1) 决定 SAM prompt ----------
+    sprompt = None
+    if click:
+        sprompt = {"type": "point", "pt": [float(click[0]), float(click[1])]}
+    elif vision_box is not None:
+        sprompt = {"type": "box", "norm": [float(v) for v in vision_box[:4]]}
+    elif box:
+        bp = _normalize_box(box, W, H)
+        if bp is not None:
+            sprompt = {"type": "box", "norm": [bp[0] / W, bp[1] / H, bp[2] / W, bp[3] / H]}
+    elif polygon:
+        sprompt = {"type": "poly", "poly": [[float(p[0]), float(p[1])] for p in polygon]}
+
+    if sprompt is None:
+        # auto：BiRefNet 最大主体 bbox 当 SAM 提示
+        try:
+            base = predict_mask(rgb, model="birefnet-general")
+            pb = _largest_fg_bbox(base, W, H)
+            if pb is not None:
+                sprompt = {"type": "box", "norm": pb}
+        except Exception:  # noqa: BLE001
+            sprompt = None
+
+    # ---------- 2) SAM 像素级 mask ----------
+    if sprompt is None:
+        # 彻底没提示：退化 BiRefNet 整图
+        base = predict_mask(rgb, model="birefnet-general")
+        rgba = rgb.convert("RGBA")
+        rgba.putalpha(_edge_soften_mask(base))
+        return rgba
+
+    sam = sam_refine_mask(rgb, sprompt, W, H)  # L 0~255
+    m = np.asarray(sam, dtype=np.float32) / 255.0
+
+    # ---------- 3) trimap：确定前景/未知带/确定背景 ----------
+    fg = (m > 0.85).astype(np.uint8)
+    bg = (m < 0.15).astype(np.uint8)
+    if cv2 is not None:
+        fge = cv2.erode(fg, np.ones((7, 7), np.uint8), iterations=1)   # k_fg=3
+        bge = cv2.dilate(bg, np.ones((9, 9), np.uint8), iterations=1)  # k_bg=4
+    else:
+        # cv2 缺失（极端情况）退化：直接以 0.85/0.15 阈值当确定区，导向滤波仍能软化
+        fge, bge = fg, bg
+    trimap = np.zeros((H, W), np.float32)
+    trimap[fge > 0] = 1.0
+    trimap[bge > 0] = 0.0
+    unk = (fge == 0) & (bge == 0)
+    trimap[unk] = m[unk]  # 未知带用 SAM 软值作初值
+
+    # ---------- 4) 导向滤波软抠像 ----------
+    alpha = _guided_filter_matting(rgb, trimap, radius=10, eps=1e-3)
+    # 强制确定像素（导向滤波可能轻微越界）
+    if fge is not None:
+        alpha[fge > 0] = 1.0
+        alpha[bge > 0] = 0.0
+
+    # ---------- 5) 前景去污染（消除背景色渗色）----------
+    rgb_arr = np.asarray(rgb, dtype=np.float64) / 255.0
+    try:
+        F = _decontaminate_modnet_fg(rgb_arr, alpha)
+    except Exception:  # noqa: BLE001
+        F = rgb_arr
+    out = np.zeros((H, W, 4), np.float64)
+    out[:, :, :3] = F
+    out[:, :, 3] = alpha
+    return Image.fromarray((np.clip(out, 0, 1) * 255.0).astype(np.uint8), mode="RGBA")
+
+
 # ===== 🔬 SAM（MobileSAM-Tiny ONNX，MIT）像素级精修引擎 =====
 # 权重来自 huggingface.co/Acly/MobileSAM（MIT，可商用——项目「内置 AI 默认须 MIT/Apache/BSD」
 # 铁律满足）。两个 onnx：
@@ -1391,6 +1629,72 @@ def _sam_session(kind: str):
         return sess
 
 
+def _sam_mask_cropped(rgb, norm_box, W: int, H: int):
+    """SAM 精度升级：把框选/AI 定位的主体区域 crop 出来（带 padding）单独编码到 1024，
+    让主体占满编码分辨率 → 边缘像素级更细。返回原图尺寸 PIL L 掩码；不适用时返回 None。
+
+    适用：主体占据画面较小（如 30%）时，整图缩到 1024 主体仅 ~300px 很粗；crop 后
+    主体占满 1024 → 发丝/细物边缘明显更精细。框外区域强制为 0（不在 crop 内）。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    x1, y1, x2, y2 = [float(v) for v in norm_box[:4]]
+    px0, py0, px1, py1 = x1 * W, y1 * H, x2 * W, y2 * H
+    bw, bh = px1 - px0, py1 - py0
+    if bw <= 0 or bh <= 0:
+        return None
+    pad = 0.12
+    cx0 = max(0, int(round(px0 - bw * pad)))
+    cy0 = max(0, int(round(py0 - bh * pad)))
+    cx1 = min(W, int(round(px1 + bw * pad)))
+    cy1 = min(H, int(round(py1 + bh * pad)))
+    cw, ch = cx1 - cx0, cy1 - cy0
+    # crop 太小或几乎等于全图 → 用整图路径更稳
+    if cw < W * 0.35 or ch < H * 0.35 or (cw * ch) > (W * H * 0.92):
+        return None
+
+    crop = rgb.crop((cx0, cy0, cx1, cy1))
+    cwi, chi = crop.size
+    scale = 1024.0 / max(cwi, chi)
+    nw, nh = max(1, int(round(cwi * scale))), max(1, int(round(chi * scale)))
+    simg = crop.resize((nw, nh), Image.LANCZOS)
+    arr = np.asarray(simg, dtype=np.float32)
+    enc = _sam_session("enc")
+    dec = _sam_session("dec")
+    in_name = enc.get_inputs()[0].name
+    embed = enc.run(None, {in_name: arr})[0]
+
+    # 整张 crop 当前景 → box prompt 覆盖 crop 全部（归一化 [0,0,1,1]）
+    pts = [[0.0, 0.0], [1.0, 1.0]]
+    labels = [2.0, 3.0]
+    ppts = [[v * dim * scale for v, dim in zip(p, (cwi, chi))] for p in pts]
+    feed = {
+        "image_embeddings": embed,
+        "point_coords": np.array(ppts, dtype=np.float32)[None, :, :],
+        "point_labels": np.array(labels, dtype=np.float32)[None, :],
+        "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
+        "has_mask_input": np.array([0.0], dtype=np.float32),
+        "orig_im_size": np.array([chi, cwi], dtype=np.int64),
+    }
+    out = dec.run(None, feed)
+    raw = out[0]
+    m = np.squeeze(raw, axis=0)
+    if m.ndim == 3:
+        m = m[0]
+    elif m.ndim != 2:
+        m = m.reshape(-1)[:1024 * 1024].reshape(1024, 1024)
+    if float(m.max()) > 2.0:
+        m = 1.0 / (1.0 + np.exp(-m))
+    m = np.clip(m, 0.0, 1.0)
+    pimg = Image.fromarray((m * 255.0).astype(np.uint8), mode="L")
+    pimg = pimg.crop((0, 0, nw, nh)).resize((cwi, chi), Image.LANCZOS)
+    # 贴回全图（crop 外强制 0）
+    full = Image.new("L", (W, H), 0)
+    full.paste(pimg, (cx0, cy0))
+    return full
+
+
 def sam_refine_mask(rgb, prompt: dict, W: int, H: int):
     """🔬 SAM 像素级精修：prompt 给 box/point 语义，返回原图尺寸 L 模式 alpha。
 
@@ -1401,6 +1705,19 @@ def sam_refine_mask(rgb, prompt: dict, W: int, H: int):
       {"type": "point","pt":  [x,y]}               —— 点图抠图
     任何一步失败抛 RuntimeError（调用方回退 BiRefNet，绝不崩）。
     """
+    # 框选/AI 定位 → 优先用 crop 到 1024 的高精度路径（主体占满编码分辨率，边缘更细）
+    if prompt.get("type") == "box":
+        try:
+            cm = _sam_mask_cropped(rgb, prompt["norm"], W, H)
+            if cm is not None:
+                return cm
+        except Exception:  # noqa: BLE001
+            pass
+    return _sam_mask_whole(rgb, prompt, W, H)
+
+
+def _sam_mask_whole(rgb, prompt: dict, W: int, H: int):
+    """🔬 SAM 整图像素级精修（crop 高精度路径的回退）：prompt 给 box/point 语义，返回原图尺寸 L。"""
     import numpy as np
     from PIL import Image, ImageDraw
 

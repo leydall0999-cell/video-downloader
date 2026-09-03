@@ -5,6 +5,9 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 """
 import app
 from fastapi import APIRouter
+from pydantic import BaseModel
+
+import cloud_matting_config as _cm
 
 router = APIRouter()
 
@@ -39,3 +42,51 @@ def vision_config_save(req: app.VisionConfigRequest) -> dict:
     }
     app.save_vision_config(data)
     return {"ok": True}
+
+
+# ───────────────────────────── 云端抠图（火山引擎）配置 ─────────────────────────────
+class CloudMattingConfigRequest(BaseModel):
+    access_key: str = ""
+    secret_key: str = ""
+    enabled: bool = False
+
+
+def _mask_key(k: str) -> str:
+    if len(k) > 8:
+        return k[:4] + "****" + k[-4:]
+    return k
+
+
+@router.get("/api/cloud-matting/config")
+def cloud_matting_config_get() -> dict:
+    """返回云端抠图配置（AK/SK 脱敏，仅显示首尾各 4 位）。"""
+    cfg = _cm.get_cloud_matting_config()
+    return {
+        "provider": cfg.get("provider", "volcengine"),
+        "access_key": _mask_key(cfg.get("access_key", "")),
+        "secret_key": _mask_key(cfg.get("secret_key", "")),
+        "enabled": bool(cfg.get("enabled", False)),
+        "ready": _cm.is_cloud_matting_ready(),
+    }
+
+
+@router.get("/api/cloud-matting/status")
+def cloud_matting_status() -> dict:
+    """返回云端抠图可用性（是否已配置可用）。"""
+    return {"ready": _cm.is_cloud_matting_ready()}
+
+
+@router.post("/api/cloud-matting/config")
+def cloud_matting_config_save(req: CloudMattingConfigRequest) -> dict:
+    """保存云端抠图配置。AK/SK 若传脱敏值（含 ****）则沿用已有 Key 不覆盖。"""
+    current = _cm.get_cloud_matting_config()
+    ak = req.access_key if "****" not in (req.access_key or "") else current.get("access_key", "")
+    sk = req.secret_key if "****" not in (req.secret_key or "") else current.get("secret_key", "")
+    data = {
+        "provider": "volcengine",
+        "access_key": ak,
+        "secret_key": sk,
+        "enabled": bool(req.enabled),
+    }
+    _cm.save_cloud_matting_config(data)
+    return {"ok": True, "ready": _cm.is_cloud_matting_ready()}

@@ -254,6 +254,12 @@
     // LLM 与视觉模型共用一个保存按钮（合并 llmSave / visionSave）
     aiSave: $('aiSave'),
     aiStatus: $('aiStatus'),
+    // 云端抠图（火山引擎）配置
+    cloudMattingEnabled: $('cloudMattingEnabled'),
+    cloudAk: $('cloudAk'),
+    cloudSk: $('cloudSk'),
+    cloudMattingSave: $('cloudMattingSave'),
+    cloudMattingStatus: $('cloudMattingStatus'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -508,6 +514,7 @@
     dwMattingPane: $('dwMattingPane'),
     matFile: $('matFile'),
     matModel: $('matModel'),
+    matPrompt: $('matPrompt'),
     matImgPreview: $('matImgPreview'),
     matManual: $('matManual'),
     matUrlList: $('matUrlList'),
@@ -3543,20 +3550,30 @@
   // 抠图方式单选（🪄 智能 / ⬜ 手动 / 🔬 精细）——一次只做一件事，内部开关自动联动
   const matApplyMode = (mode) => {
     const box = el.matBoxToggle, vis = el.matVision, sam = el.matSamRefine;
+    const visWrap = vis ? vis.closest('.mat-vision-toggle') : null;
+    const samWrap = sam ? sam.closest('.mat-vision-toggle') : null;
+    const visHint = document.getElementById('matVisionHint');
+    const samHint = document.getElementById('matSamHint');
+    // 🤖 AI 视觉定位：默认在「所有模式」都可见、默认开启。
+    // 行为由 matSubmit 按「有无手动画选区」自动裁决：不画选区时自动调 VLM 定位主体；
+    // 画了框/套索/智能选块/点选后提交时自动关闭，以用户选区为准（不做交集、绝不误切）。
+    if (samWrap) samWrap.hidden = true;
+    if (samHint) samHint.hidden = true;
+    if (visWrap) visWrap.hidden = false;
+    if (visHint) visHint.hidden = false;
+    if (vis) vis.checked = true;
     if (mode === 'smart') {
       // 智能：AI 视觉定位自动找主体（关手动选区），点图可临时点选（辅助手段，非默认）
       if (sam) sam.checked = false;
-      if (vis) vis.checked = true;
       if (box && box.checked) { box.checked = false; box.dispatchEvent(new Event('change')); }
     } else if (mode === 'manual') {
       // 手动：BiRefNet 工具（矩形/套索/智能选块）
-      if (vis) vis.checked = false;
       if (sam) sam.checked = false;
       if (box && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change')); }
     } else if (mode === 'fine') {
       // 精细：SAM 像素级（需画框/圈，勾选 sam_refine）
-      if (vis) vis.checked = false;
-      if (sam) sam.checked = true;
+      if (sam) { sam.checked = true; if (samWrap) samWrap.hidden = false; }  // 🔧 显示 SAM 精细开关
+      if (samHint) samHint.hidden = false;
       if (box && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change')); }
     }
     // 切换模式清理残留（选区/状态文本/上轮结果提示）
@@ -3702,8 +3719,14 @@
           }
           el.matOrig.src = el.matImgPreview.src;
           el.matResult.hidden = false;
+          // ☁️ 云端抠图（火山·豆包级）成功 → 最高优先提示，让用户明确知道走了云端
+          if (d.cloud_used) {
+            el.matStatus.textContent = '抠图完成 ✅（☁️ 云端抠图 · 火山豆包级像素级：' + (d.vision_label || '主体') + '）';
+          } else if (d.cloud_error) {
+            el.matStatus.textContent = '抠图完成（⚠️ 云端抠图未生效：' + d.cloud_error + '，已回退本地）';
+          }
           // 🔬 SAM 精细抠图成功 → 最优先提示（像素级语义分割已生效）
-          if (d.sam_used) {
+          else if (d.sam_used) {
             el.matStatus.textContent = '抠图完成 ✅（🔬 SAM 像素级精抠，边缘最贴轮廓）';
           } else if (d.vision_used) {
             el.matStatus.textContent = '抠图完成 ✅（🤖 AI 视觉定位已生效：' + (d.vision_label || '主体') + '）';
@@ -3828,9 +3851,46 @@
           el.matStatus.textContent = '上传中…（矩形框选）';
         }
       }
-      // 🤖 AI 视觉定位：开启时让后端先调 VLM 看懂图、自动框出主体再抠
-      if (el.matVision && el.matVision.checked) {
+      // 🗣️ 说扣什么（自然语言描述主体）：有描述时以描述为准，强制开启 AI 视觉定位，
+      // 让 VLM 按描述定位那个特定对象（豆包式「说扣什么就抠什么」）。框选/套索仅作辅助。
+      const promptText = ((el.matPrompt && el.matPrompt.value) || '').trim();
+      // 🤖 AI 视觉定位：默认「不画选区时自动开，画了选区就以选区为准」
+      // 用户画了框/套索/智能选块/点选 → 用选区，不调 VLM（避免 AI 误切 + 省调用成本）
+      // 没画选区 → 自动调 VLM 定位主体（等价于智能模式，但不依赖「🪄 智能抠图」模式）
+      const hasSelection = !!(
+        matClick ||
+        (matTool === 'blocks' && matBlockList.some(b => matBlockSel.has(b.id))) ||
+        (matPolygon && matPolygon.length >= 3) ||
+        matBox
+      );
+      if (promptText) {
+        // 有描述：以描述为定位依据，强制开启 AI 视觉定位
+        fd.append('prompt', promptText);
         fd.append('vision_guide', '1');
+        if (el.matVision) el.matVision.checked = true;
+        // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
+        const vp = (el.visionProvider && el.visionProvider.value) || '';
+        const vk = (el.visionApiKey && el.visionApiKey.value) || '';
+        if (!vp || !vk) {
+          el.matStatus.textContent = '⚠️ AI 视觉定位已启用（说扣什么：' + promptText + '），但未配置视觉模型 Key（视频解说 → ⚙️ AI 能力与密钥配置 → 视觉模型栏选 DashScope 并填 Key），将回退普通抠图';
+        } else {
+          el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '）';
+        }
+      } else if (hasSelection) {
+        // 有手动选区：尊重用户选区，关闭 AI 视觉定位（后端不做交集，绝不误切）
+        if (el.matVision) el.matVision.checked = false;
+      } else {
+        // 无选区：自动启用 AI 视觉定位（需配视觉模型 Key）
+        if (el.matVision) el.matVision.checked = true;
+        fd.append('vision_guide', '1');
+        // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
+        const vp = (el.visionProvider && el.visionProvider.value) || '';
+        const vk = (el.visionApiKey && el.visionApiKey.value) || '';
+        if (!vp || !vk) {
+          el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置视觉模型 Key（视频解说 → ⚙️ AI 能力与密钥配置 → 视觉模型栏选 DashScope 并填 Key），将回退普通抠图';
+        } else {
+          el.matStatus.textContent = '上传中…（🤖 AI 视觉定位：先让模型看懂图再抠主体）';
+        }
       }
       fetch('/api/matting/image', { method: 'POST', body: fd })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
@@ -9305,8 +9365,44 @@ el.dwVidPlayer.removeAttribute('src');
       }
     } catch (e) { /* */ }
 
+    // 回填云端抠图（火山引擎）配置
+    try {
+      const r2 = await request('/api/cloud-matting/config');
+      if (r2 && r2.ok) {
+        if (el.cloudMattingEnabled) el.cloudMattingEnabled.checked = !!r2.enabled;
+        if (el.cloudAk) el.cloudAk.value = r2.access_key || '';
+        if (el.cloudSk) el.cloudSk.value = r2.secret_key || '';
+      }
+    } catch (e) { /* */ }
+
     // LLM 与视觉模型共用一个保存按钮（见上方 aiSave 处理器）
   })();
+
+  // 云端抠图（火山引擎）配置保存
+  if (el.cloudMattingSave) {
+    el.cloudMattingSave.addEventListener('click', async () => {
+      const show = (msg, isErr) => {
+        if (el.cloudMattingStatus) {
+          el.cloudMattingStatus.hidden = false;
+          el.cloudMattingStatus.textContent = msg;
+          el.cloudMattingStatus.style.color = isErr ? '#e5484d' : '#1a9e57';
+        }
+      };
+      try {
+        const r = await request('/api/cloud-matting/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key: el.cloudAk ? el.cloudAk.value.trim() : '',
+            secret_key: el.cloudSk ? el.cloudSk.value.trim() : '',
+            enabled: el.cloudMattingEnabled ? el.cloudMattingEnabled.checked : false,
+          }),
+        });
+        if (r && r.ok) show(r.ready ? '✅ 云端抠图已启用（说扣什么将走火山像素级）' : '✅ 已保存（云端未启用或无完整 AK/SK，仍走本地兜底）', false);
+        else show('❌ 保存失败', true);
+      } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
+    });
+  }
 
   // ---- 格式 / 片段加工（桌面版功能） ----
   // 操作类型定义：label 显示名、kinds 适用媒体类型、params 动态表单字段。
