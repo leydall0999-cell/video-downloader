@@ -50,6 +50,18 @@ from pathlib import Path
 
 # size_mb 用于前端「首次下载约 xxx MB」提示；input_size 是 ONNX 输入分辨率。
 MODELS: dict[str, dict] = {
+    "auto": {
+        # 🤖 智能自动路由：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
+        #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（flood-fill 洪泛，硬边干净、零 ML）；
+        #   - 复杂/非纯色背景（花纹/渐变/真实场景）→ BiRefNet 通用语义分割（软边羽化）。
+        # 作为默认引擎，开箱即用、通吃两类背景——纯色不再受 ML 模型 OOD 之苦，
+        # 复杂不再受色度键局限。
+        "algorithm": True,
+        "size_mb": 0,
+        "desc": "智能自动 · 自动识别纯色/复杂背景（默认推荐）",
+        "license": "内置算法 + MIT",
+        "commercial": "yes",
+    },
     "rmbg-2.0": {
         # 真实文件名是 bria-rmbg-2.0.onnx（rembg v0.0.0 release 的命名约定：
         # 「bria」前缀 + 模型正式名）。官方 SHA256 (rembg 2.0.81 bria_rmbg.py 注释)：
@@ -160,7 +172,7 @@ MODELS: dict[str, dict] = {
     },
 }
 
-DEFAULT_MODEL = "birefnet-general"
+DEFAULT_MODEL = "auto"
 
 # 归一化常量（ImageNet，与 rembg 一致）
 _MEAN = (0.485, 0.456, 0.406)
@@ -515,6 +527,10 @@ def predict_mask(img, model: str | None = None):
     """
     import numpy as np
     from PIL import Image, ImageFilter
+
+    # 🤖 auto 是路由标签而非真实引擎：解析为默认实际引擎，避免下游 MODELS[auto] 缺 input_size 等字段崩溃。
+    if (model or _MODEL_NAME) == "auto":
+        model = "birefnet-general"
 
     sess = _get_session(model)
     meta = MODELS[model or _MODEL_NAME]
@@ -1082,167 +1098,189 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
     if not available():
         raise RuntimeError("一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
 
-        with Image.open(src) as im:
-            im.load()
-            rgb = im.convert("RGB")
-            W, H = rgb.size
+    with Image.open(src) as im:
+        im.load()
+        rgb = im.convert("RGB")
+        W, H = rgb.size
 
-            # 🎨 纯色背景色度键（chroma key）引擎：用户显式选择时强制走，不依赖 ML 模型。
-            # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）是「正解」，远稳于人像 matting。
-            if (model or _MODEL_NAME) == "chroma-key":
-                rgba = _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
+        # 🤖 智能自动路由（auto / 默认引擎）：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
+        #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（flood-fill 洪泛，硬边干净、零 ML 权重），
+        #     远比硬刚 MODNet/BiRefNet 稳（纯色对自然照片训练模型是 OOD，会反复给背景高 alpha）；
+        #   - 复杂/非纯色背景（花纹/渐变/真实场景）→ BiRefNet 通用语义分割（软边羽化）。
+        # 这样「无论背景纯不纯」都通吃：纯色不再受 ML 模型 OOD 之苦，复杂不再受色度键局限。
+        #   · 检测到纯色时（无论有无用户选区）整图/带选区都走色度键（内部会按选区做硬边界）；
+        #   · 复杂背景时把底层引擎强制为 BiRefNet，继续走下方完整选区逻辑（blocks/click/套索/框/AI 框）。
+        if (model or _MODEL_NAME) == "auto":
+            is_solid = False
+            try:
+                is_solid, _ = _detect_solid_background(rgb)
+            except Exception:  # noqa: BLE001
+                is_solid = False
+            if is_solid:
+                rgba = _matting_chroma_key(
+                    rgb, W, H, box=box, polygon=polygon, vision_box=vision_box
+                )
                 _save_out(rgba, out)
                 return
+            # 复杂/非纯色背景 → 强制底层引擎为 BiRefNet 通用分割，复用下方选区逻辑。
+            model = "birefnet-general"
 
-            # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（框/
-        # AI视觉定位/点选，blocks 多块除外）→ 优先走 SAM 像素级分割。
-        # SAM 靠 prompt 切主体、边缘远精于显著性；失败自动回退下方 BiRefNet 分支。
-        #
-        # 注意：**套索(polygon)不走 SAM**。SAM 对 polygon 只取外接矩形当 box prompt，
-        # 输出是粗粒度二值 mask——会吞掉细笔画（如「醒」右侧）且完全丢失半透明区域
-        # （橙色立体阴影、发丝）。而 BiRefNet 套索路径（_polygon_mask）已带中心连通保留
-        # + 主色聚类去杂质 + 橙色阴影补全 + 6px 羽化，对文字/阴影/毛发类主体远优于
-        # SAM 的二值剪影。故套索一律走 BiRefNet，SAM 仅保留给框选/自动/点选等实心物体。
-        if sam_refine and not blocks and not polygon:
-            try:
-                sprompt = None
-                if click:
-                    sprompt = {"type": "point", "pt": [float(click[0]), float(click[1])]}
-                elif vision_box is not None:
-                    sprompt = {"type": "box", "norm": [float(v) for v in vision_box[:4]]}
-                elif box:
-                    from PIL import Image as _Im
-                    bp = _normalize_box(box, W, H)
-                    if bp is not None:
-                        sprompt = {"type": "box", "norm": [bp[0] / W, bp[1] / H, bp[2] / W, bp[3] / H]}
-                if sprompt:
-                    sam_mask = sam_refine_mask(rgb, sprompt, W, H)
-                    if sam_mask is not None:
-                        rgba = rgb.convert("RGBA")
-                        rgba.putalpha(_edge_soften_mask(sam_mask))
-                        _save_out(rgba, out)
-                        return
-            except Exception as _e:  # noqa: BLE001  任何异常 → 回退显著性流程
-                import logging as _lg
-                _lg.getLogger("matting_ai").warning("sam_refine 回退 BiRefNet: %s", _e)
-
-        # 🎭 MODNet 人像 matting：连续 alpha / 发丝级精修（可选引擎）。
-        # 跳过 BiRefNet 的阈值/power/BFS/橙色阴影补全/边缘羽化，直接保留模型原生 alpha，
-        # 并做前景色去污染消除背景色渗色。输出已是 RGBA，无需再 putalpha。
-        # 点选/魔棒是多选专用 BiRefNet 能力，MODNet 不支持 → 此场景回退 BiRefNet 路径。
-        if (model or _MODEL_NAME).startswith("modnet") and not blocks and not click:
-            rgba = _matting_modnet(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, model=model)
+        # 🎨 纯色背景色度键（chroma key）引擎：用户显式选择时强制走，不依赖 ML 模型。
+        # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）是「正解」，远稳于人像 matting。
+        if (model or _MODEL_NAME) == "chroma-key":
+            rgba = _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
             _save_out(rgba, out)
             return
 
-        if blocks:
-            # 🧲 智能魔棒多选：用户 hover 高亮 + 点击选中的多个元素块（并集）一起抠
-            mask = _blocks_mask(rgb, blocks, W, H, model=model)
-        elif click:
-            # 👆 点图抠图：用户点哪抠哪（点击处所在连通显著块）
-            mask = _click_mask(rgb, click, W, H, model=model)
-        elif polygon:
-            if vision_box is not None:
-                # **套索 + AI 视觉定位 同时勾选** → 交集模式：
-                # AI 先按 VLM box 整图抠主体（主标题，box 外强制透明），
-                # 再乘套索 polygon（用户圈的范围边界）取交集。
-                # 语义：用户粗圈整张海报也没关系，AI 会在圈内锁定主标题抠，
-                # 圈外的副标题/装饰/卡片全透明。VLM 定位异常时回退纯套索。
-                mask = _polygon_vision_intersect(rgb, polygon, vision_box, W, H, model=model)
-                if mask is None:
-                    mask = _polygon_mask(rgb, polygon, W, H, model=model)
-            else:
-                # 套索（最精确的用户意图）→ 优先级最高（无 AI 时）
+        # 🔬 SAM 精细抠图前置：用户勾了「精细边缘」且给了语义 prompt（框/
+    # AI视觉定位/点选，blocks 多块除外）→ 优先走 SAM 像素级分割。
+    # SAM 靠 prompt 切主体、边缘远精于显著性；失败自动回退下方 BiRefNet 分支。
+    #
+    # 注意：**套索(polygon)不走 SAM**。SAM 对 polygon 只取外接矩形当 box prompt，
+    # 输出是粗粒度二值 mask——会吞掉细笔画（如「醒」右侧）且完全丢失半透明区域
+    # （橙色立体阴影、发丝）。而 BiRefNet 套索路径（_polygon_mask）已带中心连通保留
+    # + 主色聚类去杂质 + 橙色阴影补全 + 6px 羽化，对文字/阴影/毛发类主体远优于
+    # SAM 的二值剪影。故套索一律走 BiRefNet，SAM 仅保留给框选/自动/点选等实心物体。
+    if sam_refine and not blocks and not polygon:
+        try:
+            sprompt = None
+            if click:
+                sprompt = {"type": "point", "pt": [float(click[0]), float(click[1])]}
+            elif vision_box is not None:
+                sprompt = {"type": "box", "norm": [float(v) for v in vision_box[:4]]}
+            elif box:
+                from PIL import Image as _Im
+                bp = _normalize_box(box, W, H)
+                if bp is not None:
+                    sprompt = {"type": "box", "norm": [bp[0] / W, bp[1] / H, bp[2] / W, bp[3] / H]}
+            if sprompt:
+                sam_mask = sam_refine_mask(rgb, sprompt, W, H)
+                if sam_mask is not None:
+                    rgba = rgb.convert("RGBA")
+                    rgba.putalpha(_edge_soften_mask(sam_mask))
+                    _save_out(rgba, out)
+                    return
+        except Exception as _e:  # noqa: BLE001  任何异常 → 回退显著性流程
+            import logging as _lg
+            _lg.getLogger("matting_ai").warning("sam_refine 回退 BiRefNet: %s", _e)
+
+    # 🎭 MODNet 人像 matting：连续 alpha / 发丝级精修（可选引擎）。
+    # 跳过 BiRefNet 的阈值/power/BFS/橙色阴影补全/边缘羽化，直接保留模型原生 alpha，
+    # 并做前景色去污染消除背景色渗色。输出已是 RGBA，无需再 putalpha。
+    # 点选/魔棒是多选专用 BiRefNet 能力，MODNet 不支持 → 此场景回退 BiRefNet 路径。
+    if (model or _MODEL_NAME).startswith("modnet") and not blocks and not click:
+        rgba = _matting_modnet(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, model=model)
+        _save_out(rgba, out)
+        return
+
+    if blocks:
+        # 🧲 智能魔棒多选：用户 hover 高亮 + 点击选中的多个元素块（并集）一起抠
+        mask = _blocks_mask(rgb, blocks, W, H, model=model)
+    elif click:
+        # 👆 点图抠图：用户点哪抠哪（点击处所在连通显著块）
+        mask = _click_mask(rgb, click, W, H, model=model)
+    elif polygon:
+        if vision_box is not None:
+            # **套索 + AI 视觉定位 同时勾选** → 交集模式：
+            # AI 先按 VLM box 整图抠主体（主标题，box 外强制透明），
+            # 再乘套索 polygon（用户圈的范围边界）取交集。
+            # 语义：用户粗圈整张海报也没关系，AI 会在圈内锁定主标题抠，
+            # 圈外的副标题/装饰/卡片全透明。VLM 定位异常时回退纯套索。
+            mask = _polygon_vision_intersect(rgb, polygon, vision_box, W, H, model=model)
+            if mask is None:
                 mask = _polygon_mask(rgb, polygon, W, H, model=model)
-        elif vision_box and box is not None:
-            # **手动框选 + AI 视觉定位 同时给出**：手动框是用户的明确意图，必须作为
-            # 硬边界（「框住什么就是什么」），VLM 只在用户框**内部**再做语义精修。
-            # 两者取交集：既尊重用户框选，又用 VLM 剔除框内夹带的副标题/装饰。
-            # 若 VLM box 与用户框无重叠（VLM 理解偏差），退化为用户框，绝不越界。
-            box_px = _normalize_box(box, W, H)
-            if box_px is None:
-                # 用户框无效（过小/越界）→ 只用 VLM（局部裁切推理，修复装饰字盲区）
-                _vx0, _vy0, _vx1, _vy1 = [float(v) for v in vision_box[:4]]
-                _vbw, _vbh = _vx1 - _vx0, _vy1 - _vy0
-                _ex0, _ey0 = max(0.0, _vx0 - _vbw * 0.12), max(0.0, _vy0 - _vbh * 0.12)
-                _ex1, _ey1 = min(1.0, _vx1 + _vbw * 0.12), min(1.0, _vy1 + _vbh * 0.12)
-                _vbpx = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
-                mask = _box_crop_mask(rgb, _vbpx, W, H, model=model)
-            else:
-                ux1, uy1 = box_px[0] / W, box_px[1] / H
-                ux2, uy2 = box_px[2] / W, box_px[3] / H
-                vx1, vy1, vx2, vy2 = [float(v) for v in vision_box[:4]]
-                ix1, iy1 = max(ux1, vx1), max(uy1, vy1)
-                ix2, iy2 = min(ux2, vx2), min(uy2, vy2)
-                if ix2 - ix1 > 1e-4 and iy2 - iy1 > 1e-4:
-                    # 局部裁切推理（修复整图 BiRefNet 对装饰风字盲区）；
-                    # 框外强制透明由下方「硬夹紧到用户框」再保证一次。
-                    _ix_px = (int(round(ix1 * W)), int(round(iy1 * H)), int(round(ix2 * W)), int(round(iy2 * H)))
-                    mask = _box_crop_mask(rgb, _ix_px, W, H, model=model)
-                    # 硬夹紧到用户框：vision_guided_mask 内部还有 12% 外扩（保留光晕/
-                    # 阴影软元素），可能让 alpha 略微溢出用户框。这里再与用户框相乘，
-                    # 保证「框住什么就是什么」——用户框外一律 0，绝不越界。
-                    import numpy as _np
-                    from PIL import Image as _Image
-
-                    _arr = _np.array(mask).astype(_np.float32)
-                    _ux0, _uy0 = int(round(ux1 * W)), int(round(uy1 * H))
-                    _ux1, _uy1 = int(round(ux2 * W)), int(round(uy2 * H))
-                    _g = _np.zeros_like(_arr)
-                    if _ux1 > _ux0 and _uy1 > _uy0:
-                        _g[_uy0:_uy1, _ux0:_ux1] = 1.0
-                    mask = _Image.fromarray(
-                        _np.clip(_arr * _g, 0, 255).astype(_np.uint8), mode="L"
-                    )
-                else:
-                    # 无交集（VLM 框到了框外）→ 退化为用户框，用框内裁切推理
-                    mask = _box_crop_mask(rgb, box_px, W, H, model=model)
-        elif vision_box:
-            # 🪄 VLM 视觉定位引导抠图（**局部裁切推理**，非整图推理再裁）：
-            # 装饰风字体（白字+描边+半透明投影）在整图显著性图上几乎全黑（BiRefNet 盲区），
-            # 但把 VLM 框定的主体区域**局部裁切**后单独送模型，弱信号文字会在局部显成显著主体——
-            # 这是「VLM 框住主标题 → 抠出整行清晰字形」的关键修复。
-            # 先将 VLM box 外扩 12% 涵盖主体外侧光晕/阴影（与旧 vision_guided_mask 的 expand 一致），
-            # 再交 _box_crop_mask（内部 10% 上下文 + 严格限制回原框，框外强制透明）。
-            vx0, vy0, vx1, vy1 = [float(v) for v in vision_box[:4]]
-            _bw, _bh = vx1 - vx0, vy1 - vy0
-            _ex0, _ey0 = max(0.0, vx0 - _bw * 0.12), max(0.0, vy0 - _bh * 0.12)
-            _ex1, _ey1 = min(1.0, vx1 + _bw * 0.12), min(1.0, vy1 + _bh * 0.12)
-            _vb_px = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
-            mask = _box_crop_mask(rgb, _vb_px, W, H, model=model)
-            # 🪄 智能精修：VLM 框内若是单连通主体（人物/物件）→ SAM 像素级贴边；
-            # 多连通（整行文字）保持局部裁切的 BiRefNet 结果（SAM 只切一块会丢字）。
-            mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": [vx0, vy0, vx1, vy1]}, W, H, model)
-        elif box is None:
-            # 未框选：🪄 智能自动——显著性整图 → 取最大连通主体块 bbox → SAM 像素级精修
-            mask = predict_mask(rgb, model=model)
-            pb = _largest_fg_bbox(mask, W, H)
-            if pb is not None:
-                mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": pb}, W, H, model)
         else:
-            box_px = _normalize_box(box, W, H)
-            if box_px is None:
-                # 框选无效（过小/越界）：退回整图推理
-                mask = predict_mask(rgb, model=model)
-            else:
-                # 矩形框选 = 4 点多边形，复用套索同款后处理（中心连通保留、
-                # 主色聚类去黑条、橙色阴影补全）。单纯 _box_crop_mask 局部裁切
-                # 不剔除框内杂质，框稍大就会连带黑条/背景一起抠出。
-                _bx0, _by0, _bx1, _by1 = box_px
-                poly_box = [
-                    [_bx0 / W, _by0 / H],
-                    [_bx1 / W, _by0 / H],
-                    [_bx1 / W, _by1 / H],
-                    [_bx0 / W, _by1 / H],
-                ]
-                mask = _polygon_mask(rgb, poly_box, W, H, model=model)
+            # 套索（最精确的用户意图）→ 优先级最高（无 AI 时）
+            mask = _polygon_mask(rgb, polygon, W, H, model=model)
+    elif vision_box and box is not None:
+        # **手动框选 + AI 视觉定位 同时给出**：手动框是用户的明确意图，必须作为
+        # 硬边界（「框住什么就是什么」），VLM 只在用户框**内部**再做语义精修。
+        # 两者取交集：既尊重用户框选，又用 VLM 剔除框内夹带的副标题/装饰。
+        # 若 VLM box 与用户框无重叠（VLM 理解偏差），退化为用户框，绝不越界。
+        box_px = _normalize_box(box, W, H)
+        if box_px is None:
+            # 用户框无效（过小/越界）→ 只用 VLM（局部裁切推理，修复装饰字盲区）
+            _vx0, _vy0, _vx1, _vy1 = [float(v) for v in vision_box[:4]]
+            _vbw, _vbh = _vx1 - _vx0, _vy1 - _vy0
+            _ex0, _ey0 = max(0.0, _vx0 - _vbw * 0.12), max(0.0, _vy0 - _vbh * 0.12)
+            _ex1, _ey1 = min(1.0, _vx1 + _vbw * 0.12), min(1.0, _vy1 + _vbh * 0.12)
+            _vbpx = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
+            mask = _box_crop_mask(rgb, _vbpx, W, H, model=model)
+        else:
+            ux1, uy1 = box_px[0] / W, box_px[1] / H
+            ux2, uy2 = box_px[2] / W, box_px[3] / H
+            vx1, vy1, vx2, vy2 = [float(v) for v in vision_box[:4]]
+            ix1, iy1 = max(ux1, vx1), max(uy1, vy1)
+            ix2, iy2 = min(ux2, vx2), min(uy2, vy2)
+            if ix2 - ix1 > 1e-4 and iy2 - iy1 > 1e-4:
+                # 局部裁切推理（修复整图 BiRefNet 对装饰风字盲区）；
+                # 框外强制透明由下方「硬夹紧到用户框」再保证一次。
+                _ix_px = (int(round(ix1 * W)), int(round(iy1 * H)), int(round(ix2 * W)), int(round(iy2 * H)))
+                mask = _box_crop_mask(rgb, _ix_px, W, H, model=model)
+                # 硬夹紧到用户框：vision_guided_mask 内部还有 12% 外扩（保留光晕/
+                # 阴影软元素），可能让 alpha 略微溢出用户框。这里再与用户框相乘，
+                # 保证「框住什么就是什么」——用户框外一律 0，绝不越界。
+                import numpy as _np
+                from PIL import Image as _Image
 
-        rgba = rgb.convert("RGBA")
-        # 🔬 全局边缘软化（像素级）：所有路径（自动/点选/框选/套索/魔棒多块）统一经过。
-        # BiRefNet 输出经阈值+power 后基本是 0/255 二值，边缘锯齿硬切；此处只在
-        # 前景/背景交界 2px 环带内对 alpha 做高斯平滑，让头发丝/衣边/文字边缘自然过渡。
-        mask = _edge_soften_mask(mask)
-        rgba.putalpha(mask)
+                _arr = _np.array(mask).astype(_np.float32)
+                _ux0, _uy0 = int(round(ux1 * W)), int(round(uy1 * H))
+                _ux1, _uy1 = int(round(ux2 * W)), int(round(uy2 * H))
+                _g = _np.zeros_like(_arr)
+                if _ux1 > _ux0 and _uy1 > _uy0:
+                    _g[_uy0:_uy1, _ux0:_ux1] = 1.0
+                mask = _Image.fromarray(
+                    _np.clip(_arr * _g, 0, 255).astype(_np.uint8), mode="L"
+                )
+            else:
+                # 无交集（VLM 框到了框外）→ 退化为用户框，用框内裁切推理
+                mask = _box_crop_mask(rgb, box_px, W, H, model=model)
+    elif vision_box:
+        # 🪄 VLM 视觉定位引导抠图（**局部裁切推理**，非整图推理再裁）：
+        # 装饰风字体（白字+描边+半透明投影）在整图显著性图上几乎全黑（BiRefNet 盲区），
+        # 但把 VLM 框定的主体区域**局部裁切**后单独送模型，弱信号文字会在局部显成显著主体——
+        # 这是「VLM 框住主标题 → 抠出整行清晰字形」的关键修复。
+        # 先将 VLM box 外扩 12% 涵盖主体外侧光晕/阴影（与旧 vision_guided_mask 的 expand 一致），
+        # 再交 _box_crop_mask（内部 10% 上下文 + 严格限制回原框，框外强制透明）。
+        vx0, vy0, vx1, vy1 = [float(v) for v in vision_box[:4]]
+        _bw, _bh = vx1 - vx0, vy1 - vy0
+        _ex0, _ey0 = max(0.0, vx0 - _bw * 0.12), max(0.0, vy0 - _bh * 0.12)
+        _ex1, _ey1 = min(1.0, vx1 + _bw * 0.12), min(1.0, vy1 + _bh * 0.12)
+        _vb_px = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
+        mask = _box_crop_mask(rgb, _vb_px, W, H, model=model)
+        # 🪄 智能精修：VLM 框内若是单连通主体（人物/物件）→ SAM 像素级贴边；
+        # 多连通（整行文字）保持局部裁切的 BiRefNet 结果（SAM 只切一块会丢字）。
+        mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": [vx0, vy0, vx1, vy1]}, W, H, model)
+    elif box is None:
+        # 未框选：🪄 智能自动——显著性整图 → 取最大连通主体块 bbox → SAM 像素级精修
+        mask = predict_mask(rgb, model=model)
+        pb = _largest_fg_bbox(mask, W, H)
+        if pb is not None:
+            mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": pb}, W, H, model)
+    else:
+        box_px = _normalize_box(box, W, H)
+        if box_px is None:
+            # 框选无效（过小/越界）：退回整图推理
+            mask = predict_mask(rgb, model=model)
+        else:
+            # 矩形框选 = 4 点多边形，复用套索同款后处理（中心连通保留、
+            # 主色聚类去黑条、橙色阴影补全）。单纯 _box_crop_mask 局部裁切
+            # 不剔除框内杂质，框稍大就会连带黑条/背景一起抠出。
+            _bx0, _by0, _bx1, _by1 = box_px
+            poly_box = [
+                [_bx0 / W, _by0 / H],
+                [_bx1 / W, _by0 / H],
+                [_bx1 / W, _by1 / H],
+                [_bx0 / W, _by1 / H],
+            ]
+            mask = _polygon_mask(rgb, poly_box, W, H, model=model)
+
+    rgba = rgb.convert("RGBA")
+    # 🔬 全局边缘软化（像素级）：所有路径（自动/点选/框选/套索/魔棒多块）统一经过。
+    # BiRefNet 输出经阈值+power 后基本是 0/255 二值，边缘锯齿硬切；此处只在
+    # 前景/背景交界 2px 环带内对 alpha 做高斯平滑，让头发丝/衣边/文字边缘自然过渡。
+    mask = _edge_soften_mask(mask)
+    rgba.putalpha(mask)
 
     _save_out(rgba, out)
 
