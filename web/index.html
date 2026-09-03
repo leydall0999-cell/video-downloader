@@ -876,31 +876,38 @@
           <span class="dw-hint">AI 自动识别主体并去除背景，输出带透明通道的 PNG（可直接换背景 / 合成）。
             首次使用需下载模型：轻量版 213MB、完整版 927MB，仅下一次，之后离线可用；下载进度会在按钮旁实时显示。
             <b style="color:#b45309">授权提示：</b>默认 BiRefNet 为 MIT 可商用；下拉里的 <b>RMBG-2.0 是 CC BY-NC 4.0，仅限非商业用途</b>，仅建议个人 / 非商业场景显式选用，请勿用于对外分发产品。</span>
-          <label class="uc-field uc-check mat-box-toggle">
+          <div class="mat-mode-row" id="matModeRow">
+            <span class="mat-mode-cap">抠图方式</span>
+            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeSmart" value="smart" checked /><span>🪄 智能抠图</span></label>
+            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeManual" value="manual" /><span>⬜ 手动选区</span></label>
+            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeFine" value="fine" /><span>🔬 精细抠图</span></label>
+          </div>
+          <span class="dw-hint" id="matModeHint">🪄 <b>智能</b>：直接点「开始抠图」，AI 自动找出最显著的主体抠掉背景。⬜ <b>手动</b>：先在图上圈出想要的部分（矩形 / 套索 / 智能选块）再抠。🔬 <b>精细</b>：像素级精抠（发丝 / 衣边），画个框 / 圈住目标后自动用 SAM；首次自动下载约 60MB 模型。</span>
+          <!-- 内部控件：由上方「抠图方式」自动控制，不再向用户展示独立开关 -->
+          <label class="uc-field uc-check mat-box-toggle" hidden>
             <input type="checkbox" id="matBoxToggle" />
             <span class="uc-label">手动框选要抠的部分</span>
           </label>
-          <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上标出你想抠的主体。两种工具：<b>矩形框选</b>拖一个框；<b>套索圈选</b>沿主体轮廓自由描一圈（贴合不规则主体、避开紧贴的副标题/装饰更精准）。不框则自动抠全图主体。</span>
+          <label class="mat-text-wrap" id="matTextWrap" hidden>
+            <input type="checkbox" id="matTextDetect" checked />
+            <span>📝 文字检测</span>
+          </label>
+          <label class="uc-field uc-check mat-vision-toggle" hidden>
+            <input type="checkbox" id="matVision" />
+            <span class="uc-label">🤖 AI 视觉定位（看懂图·只抠主体）</span>
+          </label>
+          <span class="dw-hint" id="matVisionHint" hidden>开启后：① 直接单击预览图上的任意元素（主标题/图案/按钮/logo），立即抠出那个元素，点哪抠哪；② 不点而直接「开始抠图」则由 AI 看懂图、自动框出主体再抠。能精准剔除紧贴的副标题 / 装饰。需先到「视频解说」标签页 → 右侧「⚙️ AI 能力与密钥配置」(展开) → 「视觉模型」栏选 DashScope 并填 Key（配置一次全局生效）；未配置时自动回退普通抠图。</span>
+          <label class="uc-field uc-check mat-vision-toggle" hidden>
+            <input type="checkbox" id="matSamRefine" checked />
+            <span class="uc-label">🔬 精细抠图（SAM 像素级）</span>
+          </label>
+          <span class="dw-hint" id="matSamHint" hidden>勾选并画了选区（框选 / 套索 / 点选 / AI 视觉定位）时，用 SAM 语义分割像素级精抠，发丝 / 衣边 / 字边更贴轮廓；首次使用自动下载约 60MB 模型（MIT 可商用）。自动整图 / 智能选块多选 不适用。</span>
           <div class="mat-tool-seg" id="matToolSeg" hidden>
             <button type="button" class="mat-tool-btn active" id="matToolRect">▭ 矩形框选</button>
             <button type="button" class="mat-tool-btn" id="matToolLasso">✏️ 套索圈选</button>
             <button type="button" class="mat-tool-btn" id="matToolBlocks">🧲 智能选块</button>
           </div>
-          <label class="mat-text-wrap" id="matTextWrap" hidden>
-            <input type="checkbox" id="matTextDetect" checked />
-            <span>📝 文字检测</span>
-            <span class="mat-text-tip">找主标题/按钮等文字块（AI 识别；未配视觉模型自动跳过）</span>
-          </label>
-          <label class="uc-field uc-check mat-vision-toggle">
-            <input type="checkbox" id="matVision" />
-            <span class="uc-label">🤖 AI 视觉定位（看懂图·只抠主体）</span>
-          </label>
-          <span class="dw-hint" id="matVisionHint">开启后：① 直接单击预览图上的任意元素（主标题/图案/按钮/logo），立即抠出那个元素，点哪抠哪；② 不点而直接「开始抠图」则由 AI 看懂图、自动框出主体再抠。能精准剔除紧贴的副标题 / 装饰。需先到「视频解说」标签页 → 右侧「⚙️ AI 能力与密钥配置」(展开) → 「视觉模型」栏选 DashScope 并填 Key（配置一次全局生效）；未配置时自动回退普通抠图。</span>
-          <label class="uc-field uc-check mat-vision-toggle">
-            <input type="checkbox" id="matSamRefine" checked />
-            <span class="uc-label">🔬 精细抠图（SAM 像素级）</span>
-          </label>
-          <span class="dw-hint">勾选并画了选区（框选 / 套索 / 点选 / AI 视觉定位）时，用 SAM 语义分割像素级精抠，发丝 / 衣边 / 字边更贴轮廓；首次使用自动下载约 60MB 模型（MIT 可商用）。自动整图 / 智能选块多选 不适用。</span>
+          <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上标出你想抠的主体。两种工具：<b>矩形框选</b>拖一个框；<b>套索圈选</b>沿主体轮廓自由描一圈（贴合不规则主体、避开紧贴的副标题/装饰更精准）。不框则自动抠全图主体。</span>
           <div class="dw-preview-wrap" id="matPreviewWrap">
             <div class="mat-zoom-stage" id="matZoomStage">
               <img id="matImgPreview" alt="预览" />

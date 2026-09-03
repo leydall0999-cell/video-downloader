@@ -703,8 +703,13 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             # 若 VLM box 与用户框无重叠（VLM 理解偏差），退化为用户框，绝不越界。
             box_px = _normalize_box(box, W, H)
             if box_px is None:
-                # 用户框无效（过小/越界）→ 只用 VLM
-                mask = vision_guided_mask(rgb, vision_box, model=model)
+                # 用户框无效（过小/越界）→ 只用 VLM（局部裁切推理，修复装饰字盲区）
+                _vx0, _vy0, _vx1, _vy1 = [float(v) for v in vision_box[:4]]
+                _vbw, _vbh = _vx1 - _vx0, _vy1 - _vy0
+                _ex0, _ey0 = max(0.0, _vx0 - _vbw * 0.12), max(0.0, _vy0 - _vbh * 0.12)
+                _ex1, _ey1 = min(1.0, _vx1 + _vbw * 0.12), min(1.0, _vy1 + _vbh * 0.12)
+                _vbpx = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
+                mask = _box_crop_mask(rgb, _vbpx, W, H, model=model)
             else:
                 ux1, uy1 = box_px[0] / W, box_px[1] / H
                 ux2, uy2 = box_px[2] / W, box_px[3] / H
@@ -712,7 +717,10 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 ix1, iy1 = max(ux1, vx1), max(uy1, vy1)
                 ix2, iy2 = min(ux2, vx2), min(uy2, vy2)
                 if ix2 - ix1 > 1e-4 and iy2 - iy1 > 1e-4:
-                    mask = vision_guided_mask(rgb, [ix1, iy1, ix2, iy2], model=model)
+                    # 局部裁切推理（修复整图 BiRefNet 对装饰风字盲区）；
+                    # 框外强制透明由下方「硬夹紧到用户框」再保证一次。
+                    _ix_px = (int(round(ix1 * W)), int(round(iy1 * H)), int(round(ix2 * W)), int(round(iy2 * H)))
+                    mask = _box_crop_mask(rgb, _ix_px, W, H, model=model)
                     # 硬夹紧到用户框：vision_guided_mask 内部还有 12% 外扩（保留光晕/
                     # 阴影软元素），可能让 alpha 略微溢出用户框。这里再与用户框相乘，
                     # 保证「框住什么就是什么」——用户框外一律 0，绝不越界。
@@ -732,10 +740,21 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     # 无交集（VLM 框到了框外）→ 退化为用户框，用框内裁切推理
                     mask = _box_crop_mask(rgb, box_px, W, H, model=model)
         elif vision_box:
-            # VLM 视觉定位引导：VLM 已看懂图、框出主体，框外强制透明
-            mask = vision_guided_mask(rgb, vision_box, model=model)
-            # 🪄 智能精修：用 VLM 的框作 SAM prompt，像素级贴主体
-            mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": [float(v) for v in vision_box[:4]]}, W, H, model)
+            # 🪄 VLM 视觉定位引导抠图（**局部裁切推理**，非整图推理再裁）：
+            # 装饰风字体（白字+描边+半透明投影）在整图显著性图上几乎全黑（BiRefNet 盲区），
+            # 但把 VLM 框定的主体区域**局部裁切**后单独送模型，弱信号文字会在局部显成显著主体——
+            # 这是「VLM 框住主标题 → 抠出整行清晰字形」的关键修复。
+            # 先将 VLM box 外扩 12% 涵盖主体外侧光晕/阴影（与旧 vision_guided_mask 的 expand 一致），
+            # 再交 _box_crop_mask（内部 10% 上下文 + 严格限制回原框，框外强制透明）。
+            vx0, vy0, vx1, vy1 = [float(v) for v in vision_box[:4]]
+            _bw, _bh = vx1 - vx0, vy1 - vy0
+            _ex0, _ey0 = max(0.0, vx0 - _bw * 0.12), max(0.0, vy0 - _bh * 0.12)
+            _ex1, _ey1 = min(1.0, vx1 + _bw * 0.12), min(1.0, vy1 + _bh * 0.12)
+            _vb_px = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
+            mask = _box_crop_mask(rgb, _vb_px, W, H, model=model)
+            # 🪄 智能精修：VLM 框内若是单连通主体（人物/物件）→ SAM 像素级贴边；
+            # 多连通（整行文字）保持局部裁切的 BiRefNet 结果（SAM 只切一块会丢字）。
+            mask = _sam_refine_or_keep(rgb, mask, {"type": "box", "norm": [vx0, vy0, vx1, vy1]}, W, H, model)
         elif box is None:
             # 未框选：🪄 智能自动——显著性整图 → 取最大连通主体块 bbox → SAM 像素级精修
             mask = predict_mask(rgb, model=model)
@@ -1236,7 +1255,14 @@ def _polygon_vision_intersect(rgb, polygon, vision_box, W: int, H: int, model: s
         import numpy as np
         from PIL import Image, ImageDraw
 
-        guided = vision_guided_mask(rgb, vision_box, model=model)  # 原图尺寸 L 模式
+        # 局部裁切推理（修复整图 BiRefNet 对装饰风字盲区）：VLM 框外扩 12% 涵盖
+        # 光晕/阴影，再 _box_crop_mask（框外强制透明）。之后与套索 polygon 取交集。
+        _vx0, _vy0, _vx1, _vy1 = [float(v) for v in vision_box[:4]]
+        _vbw, _vbh = _vx1 - _vx0, _vy1 - _vy0
+        _ex0, _ey0 = max(0.0, _vx0 - _vbw * 0.12), max(0.0, _vy0 - _vbh * 0.12)
+        _ex1, _ey1 = min(1.0, _vx1 + _vbw * 0.12), min(1.0, _vy1 + _vbh * 0.12)
+        _vbpx = (int(round(_ex0 * W)), int(round(_ey0 * H)), int(round(_ex1 * W)), int(round(_ey1 * H)))
+        guided = _box_crop_mask(rgb, _vbpx, W, H, model=model)  # 原图尺寸 L 模式
         g = np.array(guided).astype(np.float32) / 255.0
         pts = [(float(p[0]) * W, float(p[1]) * H) for p in polygon if len(p) >= 2]
         if len(pts) < 3:
