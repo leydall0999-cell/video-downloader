@@ -122,6 +122,30 @@ MODELS: dict[str, dict] = {
             "BiRefNet-general-epoch_244.onnx",
         ],
     },
+    "modnet-photographic": {
+        "filename": "modnet_photographic_portrait_matting.onnx",
+        "size_mb": 25,
+        # MODNet ONNX 是动态 shape；512×512 是官方推理尺寸（连续 alpha / 发丝级效果）
+        "input_size": (512, 512),
+        "norm": "255",
+        # MODNet 原始仓库权重为 MIT；此 ONNX 来自 HivisionIDPhotos 发布的官方权重导出，
+        # 与 HuggingFace DavG25/modnet-pretrained-models 的 Apache-2.0 版本同源，均允许商用。
+        "license": "MIT / Apache-2.0",
+        "commercial": "yes",
+        "desc": "MODNet 人像抠图 · 25MB · 发丝级连续 alpha（MIT/Apache-2.0 可商用）",
+        "urls": [
+            "https://github.com/Zeyi-Lin/HivisionIDPhotos/releases/download/pretrained-model/"
+            "modnet_photographic_portrait_matting.onnx",
+            "https://ghfast.top/https://github.com/Zeyi-Lin/HivisionIDPhotos/releases/download/pretrained-model/"
+            "modnet_photographic_portrait_matting.onnx",
+            "https://mirror.ghproxy.com/https://github.com/Zeyi-Lin/HivisionIDPhotos/releases/download/pretrained-model/"
+            "modnet_photographic_portrait_matting.onnx",
+            "https://gh-proxy.com/https://github.com/Zeyi-Lin/HivisionIDPhotos/releases/download/pretrained-model/"
+            "modnet_photographic_portrait_matting.onnx",
+            "https://github.moeyy.dev/https://github.com/Zeyi-Lin/HivisionIDPhotos/releases/download/pretrained-model/"
+            "modnet_photographic_portrait_matting.onnx",
+        ],
+    },
 }
 
 DEFAULT_MODEL = "birefnet-general"
@@ -491,6 +515,17 @@ def predict_mask(img, model: str | None = None):
         pred = raw
     pred = np.clip(pred, 0.0, 1.0)
 
+    # MODNet 是 trimap-free 人像 matting 模型，输出本身就是连续 alpha；
+    # 不需要 BiRefNet 那套阈值/power/BFS/高斯羽化，直接缩回原图尺寸返回。
+    if (model or _MODEL_NAME).startswith("modnet"):
+        from PIL import Image
+
+        mod_mask = (pred * 255.0).astype("uint8")
+        mask_img = Image.fromarray(mod_mask, mode="L")
+        if mask_img.size != img.size:
+            mask_img = mask_img.resize(img.size, Image.BILINEAR)
+        return mask_img
+
     # 软阈值 + 非线性锐化（v2）：
     # 阈值改陡 [0.20, 0.75]：主体高置信 (>0.75) 满 alpha；远端小字/小斑块（<0.20）
     # 直接透；中间区按原始比例给软 alpha（保留光晕/描边/阴影）。
@@ -529,7 +564,11 @@ def predict_mask(img, model: str | None = None):
     # 抗噪：极低概率噪点强制透
     mask = np.where(mask < 0.04, 0.0, mask)
 
-    # 轻 GaussianBlur：mask 边缘羽化（让光晕边缘更自然）
+    # 边缘羽化：高斯模糊把 0/1 硬边界展宽为连续 alpha 过渡带（发丝/阴影边缘更自然）。
+    # 注：BiRefNet/RMBG-2.0 在 1024 固定输入下输出本质是 0/1 粗 mask，亚像素连续
+    # alpha 无法由后处理凭空生成；高斯羽化是目前在不换模型前提下最稳定的软边手段。
+    # 之前试过基于颜色的引导滤波（_guided_soften）——实测反而把边界推得更锐（硬边率升高），
+    # 故不采用。
     mask_arr = np.clip(mask * 255.0, 0, 255).astype("uint8")
     mask_img = Image.fromarray(mask_arr, mode="L")
     mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=0.8))
@@ -606,6 +645,114 @@ def _sam_refine_or_keep(rgb, mask, prompt, W: int, H: int, model=None):
     return mask
 
 
+def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5):
+    """MODNet 前景去污染：在透明过渡带用背景色恢复真实前景色，消除绿/蓝底渗色。
+
+    MODNet 输出连续 alpha，但 RGB 仍是原图，导致半透明边缘会把原背景色带出来（如
+    绿底人像头发边缘发绿）。按合成公式 I = α·F + (1−α)·B，已知 I 和 α 后反推 F：
+        F = (I − (1−α)·B_est) / max(α, eps)
+    其中 B_est 用已知背景（alpha<bg_thr）像素估计。
+
+    策略：
+      - 纯色/均匀背景：用已知背景的中位数颜色作为全局 B_est，最快且最稳；
+      - 非均匀背景/主体占满画面：降级为 cv2.inpaint（缩 4x 提速）从边界背景像素
+        向内填充得到空间变化 B_est。
+    """
+    import cv2
+    import numpy as np
+
+    H, W, _ = rgb.shape
+    alpha3 = alpha[..., None]
+    bg_mask = alpha < bg_thr
+    n_bg = int(bg_mask.sum())
+
+    if n_bg >= min_bg_frac * H * W:
+        # 纯色/均匀背景：全局中位数背景估计
+        bg_pixels = rgb[bg_mask] if n_bg > 0 else rgb.reshape(-1, 3)
+        B = np.broadcast_to(np.median(bg_pixels, axis=0), (H, W, 3)).copy()
+    else:
+        # 非均匀背景：从已知背景向内 inpaint，缩 4x 加速
+        holes = (255.0 * (~bg_mask)).astype(np.uint8)
+        s = 4
+        small = cv2.resize(rgb, (W // s, H // s), interpolation=cv2.INTER_AREA)
+        sm_holes = cv2.resize(holes, (W // s, H // s), interpolation=cv2.INTER_NEAREST)
+        Bs = np.zeros_like(small)
+        for c in range(3):
+            src = (small[:, :, c] * 255.0).astype(np.uint8)
+            Bs[:, :, c] = cv2.inpaint(src, sm_holes, inpaintRadius=radius,
+                                       flags=cv2.INPAINT_TELEA).astype(np.float64) / 255.0
+        B = cv2.resize(Bs, (W, H), interpolation=cv2.INTER_CUBIC)
+
+    # 直接解 F = (I - (1-α)B)/α 会把低 alpha 区的微小色差过度放大并削顶，
+    # 在深色背景上出现彩边。把放大系数 (1-α)/max(α,eps) 上限锁在 2.0：
+    # α>1/3 时完全精确；α<=1/3 时最多以 2 倍强度去除背景色，避免伪色。
+    scale = (1.0 - alpha) / np.maximum(alpha, 0.02)
+    scale = np.minimum(scale, 2.0)
+    scale3 = scale[..., None]
+    F = rgb + (rgb - B) * scale3
+    F = np.clip(F, 0.0, 1.0)
+    # alpha=0 时 RGB 不可见，统一置为背景色避免存储异常值
+    F = np.where(alpha3 == 0.0, B, F)
+    return F
+
+
+def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None, model: str | None = None):
+    """MODNet 人像抠图专用路径：输出 RGBA（含连续 alpha 与去污染前景色）。
+
+    MODNet 是 trimap-free 人像 matting，对人物/发丝给出自然半透明 alpha。
+    非人像场景效果差，因此作为可选引擎由用户显式选择。
+
+    处理逻辑：
+      - 无选区：整图跑 MODNet；
+      - 矩形框/套索/VLM 框：以该框为裁切区域跑 MODNet（保留上下文），
+        再把框/套索外区域强制透明。框选复用 _box_crop_mask 的裁切贴回逻辑；
+      - 最后做前景色去污染，消除彩色背景在发丝/边缘的渗色。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    sel = Image.new("L", (W, H), 255)
+    crop_px = (0, 0, W, H)
+    has_selection = False
+
+    if polygon and len(polygon) >= 3:
+        pts = [(float(p[0]) * W, float(p[1]) * H) for p in polygon if len(p) >= 2]
+        if len(pts) >= 3:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x0, y0, x1, y1 = int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))
+            crop_px = (x0, y0, x1, y1)
+            ImageDraw.Draw(sel).polygon(pts, fill=255)
+            has_selection = True
+    elif box is not None:
+        bp = _normalize_box(box, W, H)
+        if bp:
+            crop_px = bp
+            x0, y0, x1, y1 = bp
+            ImageDraw.Draw(sel).rectangle([x0, y0, x1, y1], fill=255)
+            has_selection = True
+    elif vision_box is not None:
+        vx0, vy0, vx1, vy1 = [float(v) for v in vision_box[:4]]
+        crop_px = (int(round(vx0 * W)), int(round(vy0 * H)), int(round(vx1 * W)), int(round(vy1 * H)))
+        ImageDraw.Draw(sel).rectangle(crop_px, fill=255)
+        has_selection = True
+
+    if crop_px == (0, 0, W, H):
+        mask = predict_mask(rgb, model=model)
+    else:
+        mask = _box_crop_mask(rgb, crop_px, W, H, model=model)
+
+    alpha = np.array(mask, dtype=np.float32) / 255.0
+    if has_selection:
+        s = np.array(sel, dtype=np.float32) / 255.0
+        alpha = alpha * s
+
+    rgb_arr = np.array(rgb, dtype=np.float64) / 255.0
+    fg = _decontaminate_modnet_fg(rgb_arr, alpha)
+    out = np.dstack([fg, alpha[..., None]])
+    out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return Image.fromarray(out, mode="RGBA")
+
 
 def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
@@ -680,6 +827,15 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             except Exception as _e:  # noqa: BLE001  任何异常 → 回退显著性流程
                 import logging as _lg
                 _lg.getLogger("matting_ai").warning("sam_refine 回退 BiRefNet: %s", _e)
+
+        # 🎭 MODNet 人像 matting：连续 alpha / 发丝级精修（可选引擎）。
+        # 跳过 BiRefNet 的阈值/power/BFS/橙色阴影补全/边缘羽化，直接保留模型原生 alpha，
+        # 并做前景色去污染消除背景色渗色。输出已是 RGBA，无需再 putalpha。
+        # 点选/魔棒是多选专用 BiRefNet 能力，MODNet 不支持 → 此场景回退 BiRefNet 路径。
+        if (model or _MODEL_NAME).startswith("modnet") and not blocks and not click:
+            rgba = _matting_modnet(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, model=model)
+            _save_out(rgba, out)
+            return
 
         if blocks:
             # 🧲 智能魔棒多选：用户 hover 高亮 + 点击选中的多个元素块（并集）一起抠
