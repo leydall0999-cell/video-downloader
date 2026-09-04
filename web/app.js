@@ -261,6 +261,7 @@
     cloudMattingSave: $('cloudMattingSave'),
     cloudMattingStatus: $('cloudMattingStatus'),
     cloudMk: $('cloudMk'),
+    matLassoKeepAll: $('matLassoKeepAll'),
     cloudEnhance: $('cloudEnhance'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
@@ -3867,7 +3868,12 @@
           matLassoResize();
           if (matPolygon && matPolygon.length >= 3) {
             fd.append('polygon', JSON.stringify(matPolygon));
-            el.matStatus.textContent = `上传中…（套索 ${matPolygon.length} 个顶点）`;
+            if (el.matLassoKeepAll && el.matLassoKeepAll.checked) {
+              fd.append('keep_lasso_all', '1');
+              el.matStatus.textContent = `上传中…（套索原样保留：圈内 ${matPolygon.length} 点区域一比一保留）`;
+            } else {
+              el.matStatus.textContent = `上传中…（套索 ${matPolygon.length} 个顶点）`;
+            }
           } else {
             el.matStatus.textContent = '上传中…（套索未闭合，忽略选区）';
           }

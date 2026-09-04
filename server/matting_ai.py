@@ -1229,7 +1229,7 @@ def _norm_box_from_inputs(vision_box, polygon, box):
     return None
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None, keep_lasso_all: bool = False) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -1270,6 +1270,21 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         im.load()
         rgb = im.convert("RGB")
         W, H = rgb.size
+
+        # 套索原样保留模式：圈内像素一比一保留（不做任何 AI 筛选/增强），
+        # 圈外透明。用户画了什么圈就得到什么——绝对完整，零意外。
+        if keep_lasso_all and polygon and len(polygon) >= 3:
+            from PIL import ImageDraw as _kdraw, ImageFilter as _kfilter
+            _pm = Image.new("L", rgb.size, 0)
+            _kdraw.Draw(_pm).polygon(
+                [(float(p[0]) * W, float(p[1]) * H) for p in polygon], fill=255)
+            _pm = _pm.filter(_kfilter.GaussianBlur(1.2))
+            _out = rgb.copy().convert("RGBA")
+            _out.putalpha(_pm)
+            if meta is not None:
+                meta["lasso_keep_all"] = True
+            _save_out(_out, out)
+            return
 
         # ☁️ 云端抠图优先（火山，豆包级像素质量）；失败回退下方本地链路。
         # 仅对「默认/智能/像素级」意图启用云端优先；用户显式选了本地特殊引擎

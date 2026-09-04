@@ -73,7 +73,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, prompt: str | None = None) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, prompt: str | None = None, keep_lasso_all: bool = False) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -97,7 +97,10 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         vision_used = False
         if vision_guide:
             try:
-                det = vision_client.detect_subject(str(src_path), prompt=(prompt or "").strip() or None)
+                # 带验证的定位：定位后裁片自检「框的是不是用户要的」，框错则
+                # 强调方位词重试一次（qwen-vl 对方位词+特定物体描述会框错位置）
+                _fn = getattr(vision_client, "detect_subject_checked", vision_client.detect_subject)
+                det = _fn(str(src_path), prompt=(prompt or "").strip() or None)
                 vb = det["subject"]["box"]
                 vision_box = [float(v) for v in vb[:4]]
                 vision_used = True
@@ -107,7 +110,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine, vision_label=job.get("vision_label", ""), meta=job)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine, vision_label=job.get("vision_label", ""), meta=job, keep_lasso_all=keep_lasso_all)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
@@ -155,6 +158,7 @@ def create_matting_image(
     click_point: str = app.Form(None),
     blocks: str = app.Form(None),
     sam_refine: str = app.Form(None),
+    keep_lasso_all: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
@@ -209,6 +213,7 @@ def create_matting_image(
     sel_model = model if (model and model in mat.MODELS) else None
     # 🤖 AI 视觉定位开关：开启时后端先调 VLM 看懂图、自动框出主体再抠
     vg = (vision_guide or "").strip().lower() in ("1", "true", "yes", "on")
+    kla = (keep_lasso_all or "").strip().lower() in ("1", "true", "yes", "on")
 
     # 👆 点图抠图：点击预览图上的元素（归一化 [x,y]），抠点击处所在显著块
     parsed_click = None
@@ -262,7 +267,7 @@ def create_matting_image(
         }
     sr = (sam_refine or "").strip().lower() in ("1", "true", "yes", "on")
     prompt_text = (prompt or "").strip()
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text)
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla)
     return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 
 
