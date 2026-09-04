@@ -86,15 +86,18 @@ def _download(url: str, timeout: int) -> Image.Image:
 
 
 def _refine_alpha(a: np.ndarray) -> np.ndarray:
-    """清理 alpha 通道噪声并轻微平滑边缘。
+    """清理 alpha 通道噪声、平滑过渡带，再做受控的边缘锐化。
 
     云端返回的 alpha 在背景处可能带极低值噪点，在高 alpha 主体内部
     可能有细小孔洞。本函数：
     - α < 0.03 的像素强制置 0（彻底清背景）；
     - α > 0.97 的像素强制置 1（填实主体）；
-    - 对 0.03~0.97 过渡区做轻微高斯平滑，使发丝/边缘更自然。
+    - 对 0.03~0.97 过渡区做轻微高斯平滑，使发丝/边缘更自然；
+    - 再用 Unsharp Mask 在过渡带轻微锐化（σ=1.5, amount=0.40），让单根发丝更分明。
     整个操作很轻，避免吞掉真正的半透明发丝。
     """
+    import cv2
+
     a = a.copy()
     a[a < 0.03] = 0.0
     a[a > 0.97] = 1.0
@@ -102,9 +105,15 @@ def _refine_alpha(a: np.ndarray) -> np.ndarray:
     edge = (a > 0.03) & (a < 0.97)
     if np.any(edge):
         a_pil = Image.fromarray((a * 255.0).astype(np.uint8), mode="L")
+        # 平滑：让发丝过渡更自然（仅 20% 混合，保留模型细节）
         a_blur = np.array(a_pil.filter(ImageFilter.GaussianBlur(radius=0.5))).astype(np.float32) / 255.0
-        # 只在过渡区混合少量平滑结果，保留模型原本细节
         a[edge] = 0.80 * a[edge] + 0.20 * a_blur[edge]
+
+        # 锐化（Unsharp Mask）：让过渡带的发丝边缘更分明
+        # σ=1.5 增强细发丝且不放大过多噪声；amount=0.40 保守
+        a_blur2 = cv2.GaussianBlur(a, (0, 0), 1.5)
+        a_sharp = np.clip(a + 0.40 * (a - a_blur2), 0.0, 1.0)
+        a[edge] = a_sharp[edge]
 
     return np.clip(a, 0.0, 1.0)
 
