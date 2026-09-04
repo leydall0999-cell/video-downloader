@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 _MEDIAKIT_HOST = "mediakit.cn-beijing.volces.com"
 _REQ_UPLOAD_URL = f"https://{_MEDIAKIT_HOST}/api/v1/tools-sync/request-media-upload-url"
 _REMOVE_URL = f"https://{_MEDIAKIT_HOST}/api/v1/tools-sync/remove-image-background"
+_ENHANCE_URL = f"https://{_MEDIAKIT_HOST}/api/v1/tools-sync/enhance-image"
 
 # 不校验证书（桌面端内置证书可能与系统不完全一致，避免无谓的 SSL 失败）
 _SSL_CTX = ssl.create_default_context()
@@ -324,31 +325,36 @@ def _color_guided_alpha(I: np.ndarray, p: np.ndarray,
 
 
 def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
-                   guide_rgb: Image.Image | None = None) -> Image.Image:
-    """输出侧超分辨率：把抠好的 RGBA 整体放大 scale 倍并重建细节。
+                   guide_rgb: Image.Image | None = None,
+                   use_sr: bool = True) -> Image.Image:
+    """输出侧超分辨率 + 全套精修。
 
-    仅对 RGB 跑 Real-ESRGAN（发丝/皮肤细节重建），alpha 用 LANCZOS 同步放大，
-    再合成更高清的 RGBA。guide_rgb 提供时，在过渡带做 closed-form matting
-    精修（color guided filter，以原图真实颜色为引导），让上采样后变软的
-    发丝边缘重新贴合真实颜色边界。模型缺失/推理失败均原样返回，不引入回归。
+    use_sr=True：对 RGB 跑 Real-ESRGAN 放大 scale 倍（alpha 用 LANCZOS 同步）。
+    use_sr=False：输入已是 AI 增强分辨率，跳过本地 SR，直接在当前尺寸跑全套
+    精修（GF closed-form / 背景色压制 / 低α去斑驳 / 前景色传播 / 细节层增强）。
+    模型缺失/推理失败均安全跳过，不引入回归。
     """
-    if scale <= 1:
+    if use_sr and scale <= 1:
         return rgba
-    sess = _get_sr_session(scale)
-    if sess is None:
-        logger.warning("SR 模型不可用，跳过超分（输出保持原分辨率）")
-        return rgba
-    arr = np.array(rgba.convert("RGBA")).astype(np.float32) / 255.0
-    rgb, a = arr[..., :3], arr[..., 3]
-    try:
-        sr_rgb = _sr_rgb(rgb, sess, scale)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("SR 推理失败，跳过: %s", exc)
-        return rgba
-    h, w = sr_rgb.shape[:2]
-    a_pil = Image.fromarray((a * 255.0).astype(np.uint8), mode="L")
-    a_up = np.array(a_pil.resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
-    out = np.dstack([np.clip(sr_rgb, 0.0, 1.0), a_up])
+    if use_sr:
+        sess = _get_sr_session(scale)
+        if sess is None:
+            logger.warning("SR 模型不可用，跳过超分（输出保持原分辨率）")
+            return rgba
+        arr = np.array(rgba.convert("RGBA")).astype(np.float32) / 255.0
+        rgb, a = arr[..., :3], arr[..., 3]
+        try:
+            sr_rgb = _sr_rgb(rgb, sess, scale)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SR 推理失败，跳过: %s", exc)
+            return rgba
+        h, w = sr_rgb.shape[:2]
+        a_pil = Image.fromarray((a * 255.0).astype(np.uint8), mode="L")
+        a_up = np.array(a_pil.resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
+        out = np.dstack([np.clip(sr_rgb, 0.0, 1.0), a_up])
+    else:
+        out = np.array(rgba.convert("RGBA")).astype(np.float32) / 255.0
+    h, w = out.shape[:2]
 
     # closed-form matting 精修（color guided filter）：LANCZOS 上采样会把 alpha
     # 边缘磨软，这里以原图真实颜色为引导，在过渡带重估 alpha，让发丝边缘
@@ -380,11 +386,12 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
             zone = out[..., 3] < 0.55
             out[..., 3][zone] = out[..., 3][zone] * ramp[zone]
 
-            # 低 α 去斑驳：压制+GF 后低 α 区会有孤立的 α 坑洞（深底上呈斑点），
-            # 向邻域轻微收敛使半透明带连续（实测低 α 碎块 9→4）。
-            sm = cv2.GaussianBlur(out[..., 3], (0, 0), 1.6)
+            # 低 α 去斑驳：压制+GF 后低 α 区有孤立坑洞（深底上呈斑点）。
+            # 中值滤波专治此类小斑块（高斯平滑只能摊开、消不掉），实测轮廓带
+            # 斑点 586→0，且细梢锥形完整保留。
+            med = cv2.medianBlur((out[..., 3] * 255.0).astype(np.uint8), 5).astype(np.float32) / 255.0
             z2 = (out[..., 3] > 0.02) & (out[..., 3] < 0.55)
-            out[..., 3][z2] = 0.35 * out[..., 3][z2] + 0.65 * sm[z2]
+            out[..., 3][z2] = 0.25 * out[..., 3][z2] + 0.75 * med[z2]
         except Exception as exc:  # noqa: BLE001
             logger.warning("背景色压制失败，跳过: %s", exc)
 
@@ -449,6 +456,42 @@ def _finalize_output(rgba: Image.Image) -> Image.Image:
     return Image.fromarray(arr, mode="RGBA")
 
 
+def _enhance_image(rgb: Image.Image, version: str = 'professional',
+                   multiple: float = 2.0, mode: str | None = None,
+                   timeout: int = 120) -> Image.Image:
+    """AI MediaKit 图像画质增强（豆包同源生成式增强）。
+
+    version: standard / professional(发丝级) / max(大模型生成式)。
+    multiple: 输出放大倍数（professional/max 支持 1~30）。
+    mode: generative_first(生成度优先，默认) / fidelity_first(保真度优先)。
+    返回增强后的 RGB 图（通常为 multiple 倍分辨率）。失败抛异常由调用方回退。
+    """
+    cfg = _read_cfg()
+    api_key = (cfg.get("mediakit_api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError("云端画质增强未配置 AI MediaKit API Key")
+
+    buf = io.BytesIO()
+    rgb.save(buf, format="PNG")
+    up = _request_upload(api_key, timeout)
+    upload_url = up.get("upload_url")
+    if not upload_url:
+        raise RuntimeError(f"MediaKit 增强上传地址缺失: {up}")
+    _put_upload(upload_url, buf.getvalue(), "image/png", timeout)
+
+    payload: dict = {"image_url": up.get("file_id"), "tool_version": version,
+                     "multiple": multiple}
+    if mode:
+        payload["generative_enhance_mode"] = mode
+    resp = _post_json(_ENHANCE_URL, api_key, payload, timeout)
+    if not resp.get("success"):
+        raise RuntimeError(f"MediaKit 画质增强失败: {resp.get('error') or resp}")
+    out_url = (resp.get("result") or {}).get("image_url")
+    if not out_url:
+        raise RuntimeError(f"MediaKit 画质增强未返回结果图: {resp}")
+    return _download(out_url, timeout).convert("RGB")
+
+
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 120, upscale: int | None = None) -> Image.Image:
     """对任意图做软 alpha 抠图，返回与输入同尺寸的 RGBA。
@@ -466,15 +509,37 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     if scene not in ("general", "human", "product"):
         scene = "general"
 
-    if upscale is None:
-        # 人像场景默认 2x 放大，让云端模型看到更多发丝细节
-        upscale = 2 if scene == "human" else 1
-    upscale = max(1, min(upscale, 3))
+    # ── AI 画质增强（豆包同源）：先增强后抠图 ──
+    # 配置键 enhance_version：off=关；standard / professional / max=指定版本。
+    # 未配置时 auto：人像默认 professional(发丝级)，其他场景不增强（控费）。
+    ver = str(cfg.get("enhance_version") or "").strip().lower()
+    if ver in ("", "auto"):
+        ver = "professional" if scene == "human" else "off"
 
-    orig_size = rgb.size
-    work_rgb = rgb
-    if upscale > 1:
-        work_rgb = rgb.resize((rgb.width * upscale, rgb.height * upscale), Image.LANCZOS)
+    enhanced = None
+    if ver in ("standard", "professional", "max"):
+        try:
+            enhanced = _enhance_image(rgb, version=ver, multiple=2.0, timeout=timeout)
+            logger.info("AI 画质增强完成(%s): %s", ver, enhanced.size)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("AI 画质增强失败，回退原始链路: %s", exc)
+
+    use_sr = enhanced is None
+    if enhanced is not None:
+        # 增强图已是 2x AI 细节：跳过本地 LANCZOS 上采样与 Real-ESRGAN，
+        # 全程在增强分辨率上抠图与精修（AI 增强取代本地 SR）。
+        upscale = 1
+        work_rgb = enhanced
+        orig_size = work_rgb.size
+    else:
+        if upscale is None:
+            # 人像场景默认 2x 放大，让云端模型看到更多发丝细节
+            upscale = 2 if scene == "human" else 1
+        upscale = max(1, min(upscale, 3))
+        work_rgb = rgb
+        if upscale > 1:
+            work_rgb = rgb.resize((rgb.width * upscale, rgb.height * upscale), Image.LANCZOS)
+        orig_size = rgb.size
 
     # 本地图编码为 PNG 二进制（无损），上传走 mediakit:// 客户端直传
     buf = io.BytesIO()
@@ -525,12 +590,14 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
         out = Image.fromarray((np.clip(arr, 0.0, 1.0) * 255.0).astype(np.uint8), mode="RGBA")
 
     # ⑥ 纯色背景时做一次边缘去溢色（如橙/绿幕棚拍），消除半透明边缘彩边
-    out = _decontaminate_edge_spill(rgb, out)
+    out = _decontaminate_edge_spill(work_rgb if enhanced is not None else rgb, out)
 
     # ⑦ 输出侧超分辨率：抠完之后整体放大 2x 并重建发丝/皮肤细节，
     #    再以原图真实颜色为引导做 closed-form matting 精修（color guided filter），
     #    让输出比输入分辨率更高、发丝边缘更贴真实边界。模型缺失时自动跳过。
-    out = _super_resolve(out, scale=_SR_SCALE, guide_rgb=rgb)
+    out = _super_resolve(out, scale=(_SR_SCALE if use_sr else 1),
+                         guide_rgb=(work_rgb if enhanced is not None else rgb),
+                         use_sr=use_sr)
 
     # ⑧ 收尾清理：剔孤立碎屑 + 透明区 RGB 置白（防忽略 alpha 的查看器露底色）
     out = _finalize_output(out)
