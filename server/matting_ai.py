@@ -54,7 +54,7 @@ from cloud_matting_config import is_cloud_matting_ready
 MODELS: dict[str, dict] = {
     "auto": {
         # 🤖 智能自动路由：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
-        #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（flood-fill 洪泛，硬边干净、零 ML）；
+        #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（颜色距离遮罩 + 强去溢色，硬边干净、零 ML）；
         #   - 复杂/非纯色背景（花纹/渐变/真实场景）→ BiRefNet 通用语义分割（软边羽化）。
         # 作为默认引擎，开箱即用、通吃两类背景——纯色不再受 ML 模型 OOD 之苦，
         # 复杂不再受色度键局限。
@@ -840,47 +840,94 @@ def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5
     return F
 
 
-def _detect_solid_background(rgb, edge_frac: float = 0.06, tol: float = 0.12,
-                              min_frac: float = 0.85, edge_tol: float = 0.10,
-                              std_tol: float = 0.06):
+def _detect_solid_background(rgb, band_frac: float = 0.06, tol: float = 0.14,
+                              min_cover: float = 0.25, min_border_frac: float = 0.55):
     """判断图像是否为「纯色/近似纯色背景」（如绿幕/橙幕/摄影棚纯色底）。
 
-    方法：
-      1. 取画面四边边缘像素，分别计算每边中位色；若任意两边中位色差异明显
-         （距离 >= edge_tol），说明是渐变/分区背景，不是纯色。
-      2. 四边合并后算到中位色的颜色距离；若 >= min_frac 比例的边缘像素都
-         和中位色足够近（距离 < tol），且 RGB 标准差足够小（< std_tol），
-         才判定为纯色背景。
+    改进（2026-09-04）：主体常贴边（人像头顶/头发触顶、肩膀触侧边），旧实现按「四边各自
+    中位数」比对会因某边是深色主体而误判非纯色，导致纯色背景走了 ML 模型（OOD、留橙边）。
+    新版更稳健：
+      1. 取四边色带（band_frac 宽）像素，中位数估计背景主色 key（对 <50% 主体污染稳健）；
+      2. 若边缘色带中 >= min_border_frac 比例像素与 key 同色 → 边缘基本纯色；
+      3. flood-fill 从四边洪泛定位与 key 同色且连通边缘的区块=真实背景，
+         覆盖面积 >= min_cover 才认定纯色（避免四角同色但中间花哨的误判）。
 
-    返回 (is_solid, key_color)，key_color 为边缘中位色（归一化 [0,1] RGB）。
+    返回 (is_solid, key_color)，key_color 为归一化 [0,1] RGB。
     纯色背景对 BiRefNet/MODNet 等自然照片训练模型是 OOD，应改走色度键而非 matting。
     """
     import numpy as np
 
     arr = np.array(rgb, dtype=np.float64) / 255.0
     H, W = arr.shape[:2]
-    e = max(4, int(min(H, W) * edge_frac))
+    e = max(4, int(min(H, W) * band_frac))
 
-    # 四边分别采样，防止渐变/分区背景被整体中位色「平均」掉
-    edges = {
-        "top": arr[:e].reshape(-1, 3),
-        "bottom": arr[H - e:].reshape(-1, 3),
-        "left": arr[:, :e].reshape(-1, 3),
-        "right": arr[:, W - e:].reshape(-1, 3),
-    }
-    edge_medians = np.array([np.median(v, axis=0) for v in edges.values()])
-    # 任意两边中位色差距大 → 非纯色（渐变/分区背景）
-    pairwise = np.linalg.norm(edge_medians[:, None, :] - edge_medians[None, :, :], axis=2)
-    if np.max(pairwise) >= edge_tol:
-        return False, edge_medians.mean(axis=0)
-
-    border = np.concatenate(list(edges.values()), axis=0)
+    border = np.concatenate([
+        arr[:e].reshape(-1, 3),
+        arr[H - e:].reshape(-1, 3),
+        arr[:, :e].reshape(-1, 3),
+        arr[:, W - e:].reshape(-1, 3),
+    ], axis=0)
+    # 中位数对 <50% 主体贴边污染稳健（主体占少数时 key 仍是背景色）
     key = np.median(border, axis=0)
-    d = np.linalg.norm(border - key, axis=1)
-    frac = float(np.mean(d < tol))
-    # 边缘颜色分散度也要小（避免低对比度自然场景被误判）
-    rgb_std = float(border.std(axis=0).mean())
-    return (frac >= min_frac and rgb_std < std_tol), key
+    bd = np.linalg.norm(border - key, axis=1)
+    border_frac = float(np.mean(bd < tol))
+    if border_frac < min_border_frac:
+        return False, key
+
+    # 二次确认：flood-fill 覆盖面积足够大才认纯色背景
+    try:
+        import cv2
+        d = np.linalg.norm(arr - key, axis=2)
+        passable = (d < tol).astype(np.uint8)
+        num, labels = cv2.connectedComponents(passable, connectivity=8)
+        if num <= 1:
+            return False, key
+        bmask = np.zeros((H, W), dtype=bool)
+        bmask[0, :] = bmask[-1, :] = True
+        bmask[:, 0] = bmask[:, -1] = True
+        touching = np.unique(labels[bmask & (labels > 0)])
+        bg = np.isin(labels, touching)
+        if float(bg.mean()) < min_cover:
+            return False, key
+    except Exception:  # noqa: BLE001
+        pass
+    return True, key
+
+
+def _estimate_bg_color(rgb):
+    """从四边边缘像素估计背景主色（归一化 [0,1] RGB），供去溢色使用。"""
+    import numpy as np
+
+    arr = np.array(rgb, dtype=np.float64) / 255.0
+    H, W = arr.shape[:2]
+    e = max(4, int(min(H, W) * 0.06))
+    border = np.concatenate([
+        arr[:e].reshape(-1, 3),
+        arr[H - e:].reshape(-1, 3),
+        arr[:, :e].reshape(-1, 3),
+        arr[:, W - e:].reshape(-1, 3),
+    ], axis=0)
+    return np.median(border, axis=0)
+
+
+def _despill_strong(rgb_norm, alpha, B, bg_close: float = 0.10):
+    """强去溢色（纯色背景专用）：按合成方程 I=αF+(1-α)B 反推真实前景 F，
+    并消除半透明过渡带里仍贴近背景色的残留像素（这些本质是背景溢出，应透明）。
+
+    rgb_norm: 归一化 [0,1] HxWx3；alpha: [0,1] HxW；B: 背景主色。
+    返回 (F, alpha2)：alpha2 在「反推后 F 仍极近背景色」处强制 0，彻底清除彩边。
+    """
+    import numpy as np
+
+    a = alpha.astype(np.float64)
+    a0 = np.maximum(a, 0.15)
+    F = (rgb_norm - (1.0 - a0)[..., None] * B[None, None, :]) / a0[..., None]
+    F = np.clip(F, 0.0, 1.0)
+    # 反推后若 F 仍极近背景色 → 该像素本就是背景溢出 → alpha 归零（清除彩边）
+    diff = np.linalg.norm(F - B[None, None, :], axis=2)
+    kill = (diff < bg_close) & (a < 0.85)
+    a2 = np.where(kill, 0.0, a)
+    return F, a2
 
 
 def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=None):
@@ -895,9 +942,10 @@ def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=
         1. 背景色 key：取画面边缘像素中位数（纯色背景下边缘即背景）。
         2. 每像素到 key 的颜色距离 d。
         3. 背景「可通过」图：d < tol 的像素视为背景候选。
-        4. 连通域洪泛：保留「与画面边缘连通」的候选块 = 真实背景；主体内部颜色（哪怕
-           也是橙色衣服）因不连到边缘而被保留——这是比朴素阈值更稳的关键。
-        5. 软边：对背景做距离变换，边界处 alpha 从 0 渐入到 1（edge_px 像素羽化）。
+        4. 颜色距离遮罩（关键改进）：直接按「颜色与 key 的相似度」判定背景——
+           纯色背景像素颜色都≈key，主体（人/物）颜色明显不同；这比连通域洪泛稳健：
+           主体贴边、把背景切断成不连通块时，洪泛会漏掉橙色，颜色阈值不会。
+        5. 软边：颜色过渡带内 alpha 从 0 渐入到 1（轻高斯羽化，沿颜色梯度跟随轮廓）。
         6. 去溢色 despill：按合成公式 I = αF + (1−α)B 反推 F，去除边缘残留的橙色渗色。
         7. 应用用户选区（套索/框/AI 框）作为硬边界。
 
@@ -919,30 +967,19 @@ def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=
     ], axis=0)
     key = np.median(border, axis=0)
 
-    # 2) 颜色距离 + 3) 背景可通过图
+    # 2) 颜色距离 → 直接按「与背景色的相似度」判定背景，不依赖连通域/洪泛。
+    #    纯色背景的核心特征就是「背景像素颜色都≈key」；主体（人/物）颜色与 key 明显不同。
+    #    主体贴边、把背景切断成不连通块时，洪泛会漏掉橙色 → 颜色阈值对贴边稳健得多。
     d = np.linalg.norm(img - key, axis=2)
-    tol = 0.12
-    passable = (d < tol).astype(np.uint8)
-
-    # 4) 连通域洪泛：保留与边缘连通的块 = 背景
-    num_labels, labels = cv2.connectedComponents(passable, connectivity=8)
-    border_mask = np.zeros((H, W), dtype=bool)
-    border_mask[0, :] = border_mask[-1, :] = True
-    border_mask[:, 0] = border_mask[:, -1] = True
-    touching = np.unique(labels[border_mask & (labels > 0)])
-    bg = np.isin(labels, touching)
-
-    # 5) 软边：前景像素到最近背景像素的距离 → 边界处 alpha 渐入
+    tol = 0.12           # 背景阈值：d<tol 视为纯背景 → alpha=0
+    tol_hi = 0.30        # 过渡带上限：d>tol_hi 视为纯前景 → alpha=1
+    alpha = np.clip((d - tol) / (tol_hi - tol), 0.0, 1.0)
+    # 轻微高斯羽化（沿颜色梯度，自然跟随主体轮廓，不靠洪水填充）
     edge_px = max(3, int(min(H, W) * 0.004))
-    dist = cv2.distanceTransform((~bg).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
-    alpha = np.clip(dist / edge_px, 0.0, 1.0)
-    # 背景区 dist=0 → alpha=0；前景内部 dist 大 → alpha=1；边界平滑过渡。
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(0.6, edge_px * 0.4))
 
-    # 6) 去溢色 despill：F = (I - (1-α)·key) / max(α, eps)
-    a3 = alpha[..., None]
-    eps = 0.08
-    F = (img - (1.0 - a3) * key[None, None, :]) / np.maximum(a3, eps)
-    F = np.clip(F, 0.0, 1.0)
+    # 3) 强去溢色（按合成方程 I=αF+(1-α)B 反推前景 + 清除仍贴近背景色的残留）
+    F, alpha = _despill_strong(img, alpha, key)
 
     # 7) 用户选区作为硬边界
     if polygon and len(polygon) >= 3:
@@ -971,7 +1008,25 @@ def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=
 
 
 def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None, model: str | None = None):
-    """MODNet 人像抠图专用路径：输出 RGBA（含连续 alpha 与去污染前景色）。
+    """MODNet 人像抠图（自动路由入口）。
+
+    纯色背景（橙/绿/蓝幕）对 MODNet 是 OOD，直接跑会留背景色溢出。故检测到纯色背景时
+    改走 _matting_solid_person_hybrid（色度键保干净轮廓 + MODNet 保发丝半透 + 强去溢色）；
+    复杂背景走 _matting_modnet_core。
+    """
+    try:
+        solid, _ = _detect_solid_background(rgb)
+        if solid:
+            return _matting_solid_person_hybrid(
+                rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, model=model)
+    except Exception:  # noqa: BLE001
+        pass  # 检测异常则继续原 MODNet 流程
+    return _matting_modnet_core(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, model=model)
+
+
+def _matting_modnet_core(rgb, W: int, H: int, box=None, polygon=None, vision_box=None,
+                         model: str | None = None, skip_gate: bool = False):
+    """MODNet 人像抠图核心（不含纯色背景检测）。
 
     MODNet 是 trimap-free 人像 matting，对人物/发丝给出自然半透明 alpha。
     非人像场景效果差，因此作为可选引擎由用户显式选择。
@@ -979,22 +1034,12 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     处理逻辑：
       - 无选区：整图跑 MODNet；
       - 矩形框/套索/VLM 框：以该框为裁切区域跑 MODNet（保留上下文），
-        再把框/套索外区域强制透明。框选复用 _box_crop_mask 的裁切贴回逻辑；
+        再把框/套索外区域强制透明；
       - 最后做前景色去污染，消除彩色背景在发丝/边缘的渗色。
+    skip_gate：纯色背景混合路径已自带 chroma 门控，无需再跑 BiRefNet 门控（省 927MB 加载）。
     """
     import numpy as np
     from PIL import Image, ImageDraw
-
-    # 🚀 纯色背景优先走色度键（chroma key）：MODNet 是为自然照片人像训练的，遇到整片
-    # 纯色背景（橙/绿/蓝幕）会 OOD 失效、把背景也输出成高 alpha 而「去不掉」。这类输入
-    # 本质是色度键问题，从画面边缘洪泛定位背景直接透明，远比 ML 模型稳。
-    # 自动检测：边缘颜色近似一致即视为纯色背景，改走 _matting_chroma_key。
-    try:
-        solid, _ = _detect_solid_background(rgb)
-        if solid:
-            return _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
-    except Exception:  # noqa: BLE001
-        pass  # 检测异常则继续原 MODNet 流程
 
     sel = Image.new("L", (W, H), 255)
     crop_px = (0, 0, W, H)
@@ -1045,7 +1090,7 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     # 用户明确圈出的主体也压掉。
     # BiRefNet 不可用时（未下载/异常/内存不足）回退纯 MODNet。
     gate_enabled = (not has_selection) or (selection_area_ratio > 0.85)
-    if gate_enabled:
+    if gate_enabled and not skip_gate:
         try:
             bi_mask = predict_mask(rgb, model="birefnet-general")
             bi_soft = np.array(bi_mask, dtype=np.float32) / 255.0
@@ -1088,6 +1133,52 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
 
     fg = _decontaminate_modnet_fg(rgb_arr, alpha)
     out = np.dstack([fg, alpha[..., None]])
+    out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return Image.fromarray(out, mode="RGBA")
+
+
+def _matting_solid_person_hybrid(rgb, W: int, H: int, box=None, polygon=None, vision_box=None,
+                                 model: str | None = None):
+    """纯色背景 + 人像混合抠图：MODNet 保发丝半透，颜色距离背景清零 + 强去溢色。
+
+    为什么不直接用色度键：色度键对纯色背景是「正解」，但会对「与背景同色的发丝」直接
+    一刀切掉，丢失细发丝。为什么不直接用 MODNet：MODNet 对纯色背景是 OOD，半透明边缘
+    会漏出背景色（橙/绿边）。本函数把两者优点结合：
+      - MODNet 给出「发丝级连续 alpha」（保留细发丝 wisps）；
+      - 颜色距离背景清零：纯色背景下「颜色≈背景」的像素就是背景 → 直接透明，
+        彻底解决 MODNet 把橙/绿底半透明漏出的彩边（不依赖洪水填充，主体贴边也稳）；
+      - 过渡带保留 MODNet 软 alpha（它知道这里有发丝）；
+      - 按合成方程 I=αF+(1-α)B 强去溢色，仍贴近背景色的残留像素直接透明 → 彻底无彩边。
+    """
+    import numpy as np
+    import cv2
+    from PIL import Image
+
+    rgb_arr = np.array(rgb, dtype=np.float64) / 255.0
+    B = _estimate_bg_color(rgb)
+
+    # 1) MODNet 软 alpha（发丝级连续 alpha）；本路径自带颜色背景清零，无需 BiRefNet 门控
+    try:
+        mod_rgba = _matting_modnet_core(
+            rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
+            model=model or "modnet-photographic", skip_gate=True)
+        mod_a = np.array(mod_rgba.split()[-1], dtype=np.float64) / 255.0
+    except Exception:  # noqa: BLE001
+        # MODNet 失败：退回纯色度键（颜色距离遮罩 + 去溢色），仍远优于裸 MODNet
+        return _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
+
+    # 2) 颜色距离驱动 alpha：纯色背景下「颜色与背景 B 的相似度」直接决定透明度，
+    #    比 MODNet 的 OOD 软 alpha 干净得多——背景像素(颜色≈B)必然透明，彻底无彩边；
+    #    过渡带内用颜色梯度给出平滑边缘，前景内用 MODNet 补发丝级软细节。
+    d = np.linalg.norm(rgb_arr - B[None, None, :], axis=2)
+    t_lo, t_hi = 0.12, 0.30
+    color_a = np.clip((d - t_lo) / (t_hi - t_lo), 0.0, 1.0)
+    # 过渡带(d<t_hi)完全由颜色距离决定（干净、不漏橙边）；前景(d>=t_hi)取颜色/MODNet 较大者
+    final_a = np.where(d < t_hi, color_a, np.maximum(color_a, mod_a))
+
+    # 3) 强去溢色：对仍贴近背景色的半透明残留像素直接透明，彻底无彩边
+    F, final_a = _despill_strong(rgb_arr, final_a, B)
+    out = np.dstack([F, final_a[..., None]])
     out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
     return Image.fromarray(out, mode="RGBA")
 
@@ -1194,7 +1285,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     meta["cloud_error"] = str(_ce)[:200]
 
         # 🤖 智能自动路由（auto / 默认引擎）：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
-        #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（flood-fill 洪泛，硬边干净、零 ML 权重），
+        #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（颜色距离遮罩 + 强去溢色，硬边干净、零 ML 权重），
         #     远比硬刚 MODNet/BiRefNet 稳（纯色对自然照片训练模型是 OOD，会反复给背景高 alpha）；
         #   - 复杂/非纯色背景（花纹/渐变/真实场景）→ BiRefNet 通用语义分割（软边羽化）。
         # 这样「无论背景纯不纯」都通吃：纯色不再受 ML 模型 OOD 之苦，复杂不再受色度键局限。
@@ -1207,13 +1298,30 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             except Exception:  # noqa: BLE001
                 is_solid = False
             if is_solid:
+                # 纯色背景 + 人像：色度键保干净轮廓 + MODNet 保发丝半透 + 强去溢色，
+                # 远优于二者单独使用（色度键丢发丝、MODNet 漏橙/绿边）。
+                _person = _is_person_label(vision_label) or _is_person_label(
+                    (meta or {}).get("prompt", ""))
+                if _person:
+                    try:
+                        rgba = _matting_solid_person_hybrid(
+                            rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
+                            model="modnet-photographic",
+                        )
+                        _save_out(rgba, out)
+                        return
+                    except Exception as _e:  # noqa: BLE001
+                        import logging as _lg
+
+                        _lg.getLogger("matting_ai").warning(
+                            "auto 纯色人像混合路由失败回退色度键: %s", _e)
                 rgba = _matting_chroma_key(
                     rgb, W, H, box=box, polygon=polygon, vision_box=vision_box
                 )
                 _save_out(rgba, out)
                 return
             # 复杂/非纯色背景 + 人像 → MODNet 真连续 alpha（发丝级半透），优于 BiRefNet 硬分割
-            if _is_person_label(vision_label):
+            if _is_person_label(vision_label) or _is_person_label((meta or {}).get("prompt", "")):
                 try:
                     rgba = _matting_modnet(
                         rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
