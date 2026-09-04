@@ -180,10 +180,14 @@ def _grounding_prompt(user_prompt: str) -> str:
     return (
         "你是一个精确的图像主体定位助手。用户想从这张图里抠出的对象是：\n"
         f"「{p}」\n\n"
-        "请在这张图中**定位这个特定对象**（而不是默认找最大的主体），"
-        "返回它紧贴最外缘（头发梢/指尖/笔画边缘）的边界框。\n\n"
+        "请按以下步骤定位：\n"
+        "1. 先理解描述里的**方位词**（左下角/右上角/中间/左边等）——它们指画面的对应区域，"
+        "目标一定在那个区域里；\n"
+        "2. 在该区域里找到最符合描述的**较大完整物体**（排除小星星、圆点、装饰碎屑）；\n"
+        "3. 返回它紧贴最外缘的边界框。\n\n"
         "请只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
         "{\n"
+        '  "reason": "<一句话：目标在画面哪个区域、旁边有什么参照物>",\n'
         '  "subject": {"label": "<用一句话描述你框住的对象，含用户意图>", "box": [x1, y1, x2, y2]}\n'
         "}\n\n"
         "bbox 是边界框，坐标为归一化值 0~1，格式 [左上x, 左上y, 右下x, 右下y]。\n"
@@ -191,6 +195,41 @@ def _grounding_prompt(user_prompt: str) -> str:
         "对象含多个人时只框用户描述的那一个。若图中找不到该对象，返回 "
         '{"subject": null}。'
     )
+
+
+def _verify_prompt(user_prompt: str) -> str:
+    """验证红框内容是否就是用户描述的对象（整图+红框标注，保留空间上下文）。"""
+    return (
+        f"用户想从这张图里抠出的对象是：「{user_prompt}」。\n"
+        "图中用**红色矩形**标出了一个定位框。请判断：红框里的内容是否就是用户描述的对象？\n"
+        "注意：① 描述里的方位词（左下角/右上角等）必须与红框在画面中的实际位置吻合；\n"
+        "② 红框内的内容必须是描述的那个物体本体，而不是小星星/装饰图案。\n"
+        "只返回 JSON，不要额外文字：\n"
+        '{"match": true} 或 {"match": false, "reason": "<一句话说明红框里实际是什么、位置在哪>"}'
+    )
+
+
+# 方位词 → 归一化区域约束（重试时显式注入，绕开 VLM 的方位理解短板）
+_REGION_HINTS: list[tuple[tuple[str, ...], tuple[float, float, float, float]]] = [
+    (("左下", "左下角"), (0.0, 0.5, 0.45, 1.0)),
+    (("右下", "右下角"), (0.55, 0.5, 1.0, 1.0)),
+    (("左上", "左上角"), (0.0, 0.0, 0.45, 0.5)),
+    (("右上", "右上角"), (0.55, 0.0, 1.0, 0.5)),
+    (("左", ), (0.0, 0.0, 0.4, 1.0)),
+    (("右", ), (0.6, 0.0, 1.0, 1.0)),
+    (("顶部", "上方", "上边"), (0.0, 0.0, 1.0, 0.4)),
+    (("底部", "下方", "下边"), (0.0, 0.6, 1.0, 1.0)),
+    (("中间", "中央", "中心"), (0.25, 0.25, 0.75, 0.75)),
+]
+
+
+def _region_hint(prompt: str) -> tuple[float, float, float, float] | None:
+    """从用户描述解析方位词，返回归一化区域 [x1,y1,x2,y2]；无方位词返回 None。"""
+    p = prompt or ""
+    for keys, region in _REGION_HINTS:
+        if any(k in p for k in keys):
+            return region
+    return None
 
 
 def detect_subject(image_path: str, prompt: str | None = None, max_side: int = 1024, timeout: int = 60) -> dict:
@@ -361,6 +400,92 @@ def detect_subject(image_path: str, prompt: str | None = None, max_side: int = 1
         "model": model,
         "provider": provider,
     }
+
+
+def detect_subject_checked(image_path: str, prompt: str | None = None,
+                           max_side: int = 1024, timeout: int = 60,
+                           max_retries: int = 1) -> dict:
+    """带验证的「说扣什么」定位：定位 → 裁片验证 → 不匹配则强调方位词重试。
+
+    背景：qwen-vl 对「左下角的画架」这类**方位词+特定物体**描述会框错位置
+    （实测把左下角画架框到了中部红星星）。本函数在定位后把框内裁片再喂给
+    VLM 自检「这是不是用户要的对象」，不匹配则带更强方位提示重试一次。
+    裁片验证调用很小（512px），成本可忽略；定位失败时行为与 detect_subject 一致。
+    """
+    import base64 as _b64mod
+    import io as _io
+    from PIL import Image as _PIL
+
+    det = detect_subject(image_path, prompt, max_side=max_side, timeout=timeout)
+    p = (prompt or "").strip()
+    if not p:
+        return det
+
+    for attempt in range(max_retries + 1):
+        box = det["subject"]["box"]
+        # 验证方式：整图缩到 768px + 红框标注（保留空间上下文，VLM 才能判断
+        # 方位词是否吻合；裸裁片没有位置信息，VLM 会胡乱放行）
+        try:
+            with _PIL.open(image_path) as im:
+                im.load()
+                W, H = im.size
+                x1, y1, x2, y2 = box
+                vis = im.convert("RGB").copy()
+                vis.thumbnail((768, 768))
+                from PIL import ImageDraw as _ID
+                sc = vis.width / W
+                _ID.Draw(vis).rectangle(
+                    [int(x1 * W * sc), int(y1 * H * sc), int(x2 * W * sc), int(y2 * H * sc)],
+                    outline=(255, 0, 0), width=max(3, vis.width // 200),
+                )
+        except Exception:
+            return det
+        buf = _io.BytesIO()
+        vis.save(buf, format="PNG")
+        cb64 = _b64mod.b64encode(buf.getvalue()).decode()
+
+        cfg = get_vision_config()
+        url = (cfg.get("base_url") or "").strip().rstrip("/") + "/chat/completions"
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {(cfg.get('api_key') or '').strip()}"}
+        payload = {
+            "model": (cfg.get("model") or "").strip(),
+            "messages": [
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": [
+                    {"type": "text", "text": _verify_prompt(p)},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{cb64}"}},
+                ]},
+            ],
+            "temperature": 0.0,
+        }
+        matched = True
+        reason = ""
+        try:
+            resp = _post_json(url, headers, payload, timeout=timeout)
+            content = resp["choices"][0]["message"]["content"]
+            parsed = _extract_json(content)
+            if isinstance(parsed, dict) and parsed.get("match") is False:
+                matched = False
+                reason = str(parsed.get("reason", ""))[:120]
+        except Exception:
+            matched = True  # 验证失败不阻塞主流程
+
+        if matched:
+            return det
+        if attempt < max_retries:
+            # 重试：把方位词解析成显式坐标范围注入（绕开 VLM 方位理解短板）
+            region = _region_hint(p)
+            extra = f"（注意：「{p}」中的方位词指画面对应区域；目标是该区域里较大的完整物体，不是小星星/圆点等装饰。上一次定位框错了对象：{reason}）"
+            if region:
+                extra += (f" 显式约束：目标边界框必须完全落在归一化区域 "
+                          f"x∈[{region[0]:.2f},{region[2]:.2f}]、y∈[{region[1]:.2f},{region[3]:.2f}] 内，"
+                          "区域之外的一切物体一律忽略。")
+            try:
+                det = detect_subject(image_path, p + extra, max_side=max_side, timeout=timeout)
+            except Exception:
+                return det
+    return det
 
 
 def detect_text_blocks(image_path: str, max_side: int = 1024, timeout: int = 60) -> list[dict]:

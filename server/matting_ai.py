@@ -1306,19 +1306,25 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                         _cx1, _cy1 = min(W, _bx1 + _pad_x), min(H, _by1 + _pad_y)
                         if _cx1 - _cx0 >= 16 and _cy1 - _cy0 >= 16:
                             _crop = rgb.crop((_cx0, _cy0, _cx1, _cy1))
-                            # 文字/标题/logo 类目标：general 场景会把文字当背景抠掉
-                            # （实测标题裁片仅留 2%），product 场景把文字当前景层
-                            # 完整保留（实测 60%）。关键词命中直接走 product。
+                            # 场景自适应：general 会把文字/浅色设计元素（标题、浅木
+                            # 画架等）当背景抠掉（实测分别只留 2%/5%），product 把
+                            # 它们当前景层完整保留（60%/45%）。策略：按关键词或
+                            # 优先场景先试；实心覆盖率<20% 视为场景误判，换场景重试，
+                            # 两次结果取覆盖率更高者（云端按次计费极低，重试成本可忽略）。
                             _kw = ((meta or {}).get("prompt", "") or "") + (vision_label or "")
                             _text_like = any(k in _kw for k in ("文字", "标题", "字", "logo", "Logo", "LOGO", "题字", "标语"))
+                            import numpy as _np
                             _crgba = None
+                            _best_cov = -1.0
                             for _sc in (("product", _scene) if _text_like else (_scene, "product")):
-                                _crgba = mediakit_remove_bg(_crop, scene=_sc, timeout=90)
-                                import numpy as _np
-                                if (_np.asarray(_crgba.split()[3]) > 40).mean() >= 0.02:
+                                _r = mediakit_remove_bg(_crop, scene=_sc, timeout=90, suppress_bg=False)
+                                _cov = float((_np.asarray(_r.split()[3]) > 100).mean())
+                                if _cov > _best_cov:
+                                    _best_cov = _cov
+                                    _crgba = _r
+                                if _cov >= 0.20:
                                     break
                                 # 裁片内几乎没留住主体（场景误判）→ 换下一场景重试
-                            _crgba = _crgba if _crgba is not None else mediakit_remove_bg(_crop, scene=_scene, timeout=90)
                             # 增强开启时云端返回 2x 裁片；贴回全图前必须缩回裁片尺寸，
                             # 否则画布只装得下左上 1/4（表现为主体被切掉大半）
                             if _crgba.size != _crop.size:

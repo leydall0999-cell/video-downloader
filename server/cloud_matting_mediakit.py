@@ -326,12 +326,15 @@ def _color_guided_alpha(I: np.ndarray, p: np.ndarray,
 
 def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
                    guide_rgb: Image.Image | None = None,
-                   use_sr: bool = True) -> Image.Image:
+                   use_sr: bool = True,
+                   suppress_bg: bool = True) -> Image.Image:
     """输出侧超分辨率 + 全套精修。
 
     use_sr=True：对 RGB 跑 Real-ESRGAN 放大 scale 倍（alpha 用 LANCZOS 同步）。
     use_sr=False：输入已是 AI 增强分辨率，跳过本地 SR，直接在当前尺寸跑全套
     精修（GF closed-form / 背景色压制 / 低α去斑驳 / 前景色传播 / 细节层增强）。
+    suppress_bg=False：跳过背景色压制+去斑驳（裁剪定位模式用——裁片背景色与
+    浅色目标可能极近，压制会洗白目标；框外清洁由调用方的羽化框遮罩负责）。
     模型缺失/推理失败均安全跳过，不引入回归。
     """
     if use_sr and scale <= 1:
@@ -375,25 +378,29 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         # 两个关键约束（离线调参实测）：
         #   ① 只压低 α 区（α<0.55）——深色头发 α0.7~0.9 的像素若被压会啃出碎边；
         #   ② ramp 场先做 σ=2 高斯平滑——逐像素噪声 ramp 会把边缘打碎（连通域 49→89）。
-        try:
-            known = out[..., 3] < 0.01  # MediaKit 高置信背景（含 refine 后）
-            wgt = known.astype(np.float32)
-            k = 121  # 大核把背景色场传播到主体周边（兼容渐变背景）
-            Bf = cv2.blur(guide * wgt[..., None], (k, k)) / (cv2.blur(wgt, (k, k))[..., None] + 1e-6)
-            dist = np.linalg.norm(guide - Bf, axis=-1)
-            ramp = np.clip((dist - 0.07) / 0.09, 0.0, 1.0)
-            ramp = cv2.GaussianBlur(ramp, (0, 0), 2.0)
-            zone = out[..., 3] < 0.55
-            out[..., 3][zone] = out[..., 3][zone] * ramp[zone]
+        # suppress_bg=False（裁剪定位模式）时整段跳过：裁片背景色与浅色目标
+        # （如米色纸上的浅木画架）可能极近，压制会洗白目标；框外清洁由调用方的
+        # 羽化框遮罩负责，压制在裁剪模式下冗余且有害。
+        if suppress_bg:
+            try:
+                known = out[..., 3] < 0.01  # MediaKit 高置信背景（含 refine 后）
+                wgt = known.astype(np.float32)
+                k = 121  # 大核把背景色场传播到主体周边（兼容渐变背景）
+                Bf = cv2.blur(guide * wgt[..., None], (k, k)) / (cv2.blur(wgt, (k, k))[..., None] + 1e-6)
+                dist = np.linalg.norm(guide - Bf, axis=-1)
+                ramp = np.clip((dist - 0.07) / 0.09, 0.0, 1.0)
+                ramp = cv2.GaussianBlur(ramp, (0, 0), 2.0)
+                zone = out[..., 3] < 0.55
+                out[..., 3][zone] = out[..., 3][zone] * ramp[zone]
 
-            # 低 α 去斑驳：压制+GF 后低 α 区有孤立坑洞（深底上呈斑点）。
-            # 中值滤波专治此类小斑块（高斯平滑只能摊开、消不掉），实测轮廓带
-            # 斑点 586→0，且细梢锥形完整保留。
-            med = cv2.medianBlur((out[..., 3] * 255.0).astype(np.uint8), 5).astype(np.float32) / 255.0
-            z2 = (out[..., 3] > 0.02) & (out[..., 3] < 0.55)
-            out[..., 3][z2] = 0.25 * out[..., 3][z2] + 0.75 * med[z2]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("背景色压制失败，跳过: %s", exc)
+                # 低 α 去斑驳：压制+GF 后低 α 区有孤立坑洞（深底上呈斑点）。
+                # 中值滤波专治此类小斑块（高斯平滑只能摊开、消不掉），实测轮廓带
+                # 斑点 586→0，且细梢锥形完整保留。
+                med = cv2.medianBlur((out[..., 3] * 255.0).astype(np.uint8), 5).astype(np.float32) / 255.0
+                z2 = (out[..., 3] > 0.02) & (out[..., 3] < 0.55)
+                out[..., 3][z2] = 0.25 * out[..., 3][z2] + 0.75 * med[z2]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("背景色压制失败，跳过: %s", exc)
 
     # 前景色传播（foreground estimation）：半透明细梢的 RGB 来自 despill 反推，
     # α 越低噪声放大越狠（×1/α）。把实心区(α>0.85)的发色按就近尺度传播过来，
@@ -493,12 +500,15 @@ def _enhance_image(rgb: Image.Image, version: str = 'professional',
 
 
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
-                       timeout: int = 120, upscale: int | None = None) -> Image.Image:
+                       timeout: int = 120, upscale: int | None = None,
+                       suppress_bg: bool = True) -> Image.Image:
     """对任意图做软 alpha 抠图，返回与输入同尺寸的 RGBA。
 
     scene: general（未知主体，自动检测）/ human（人像，发丝更精）/ product（商品，自动裁背景）。
     upscale: 输入放大倍数。None 时按场景自动：human→2（补发丝细节），其他→1。
              放大后调用云端模型，再把 alpha 缩回原尺寸，既保留发丝又不让输出变糊。
+    suppress_bg=False：跳过背景色压制+去斑驳（裁剪定位模式专用——裁片背景色与
+             浅色目标可能极近，压制会洗白目标；框外清洁由调用方的羽化框遮罩负责）。
     任一环节失败都抛异常，由调用方回退本地链路。
     """
     cfg = _read_cfg()
@@ -597,7 +607,7 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     #    让输出比输入分辨率更高、发丝边缘更贴真实边界。模型缺失时自动跳过。
     out = _super_resolve(out, scale=(_SR_SCALE if use_sr else 1),
                          guide_rgb=(work_rgb if enhanced is not None else rgb),
-                         use_sr=use_sr)
+                         use_sr=use_sr, suppress_bg=suppress_bg)
 
     # ⑧ 收尾清理：剔孤立碎屑 + 透明区 RGB 置白（防忽略 alpha 的查看器露底色）
     out = _finalize_output(out)
