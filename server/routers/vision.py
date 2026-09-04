@@ -49,6 +49,8 @@ class CloudMattingConfigRequest(BaseModel):
     access_key: str = ""
     secret_key: str = ""
     enabled: bool = False
+    mediakit_api_key: str = ""
+    enhance_version: str = ""  # ""=auto / off / standard / professional / max
 
 
 def _mask_key(k: str) -> str:
@@ -57,14 +59,19 @@ def _mask_key(k: str) -> str:
     return k
 
 
+_ENHANCE_VERSIONS = ("", "auto", "off", "standard", "professional", "max")
+
+
 @router.get("/api/cloud-matting/config")
 def cloud_matting_config_get() -> dict:
-    """返回云端抠图配置（AK/SK 脱敏，仅显示首尾各 4 位）。"""
+    """返回云端抠图配置（AK/SK / MediaKit Key 脱敏，仅显示首尾各 4 位）。"""
     cfg = _cm.get_cloud_matting_config()
     return {
         "provider": cfg.get("provider", "volcengine"),
         "access_key": _mask_key(cfg.get("access_key", "")),
         "secret_key": _mask_key(cfg.get("secret_key", "")),
+        "mediakit_api_key": _mask_key(cfg.get("mediakit_api_key", "")),
+        "enhance_version": cfg.get("enhance_version", ""),
         "enabled": bool(cfg.get("enabled", False)),
         "ready": _cm.is_cloud_matting_ready(),
     }
@@ -78,14 +85,28 @@ def cloud_matting_status() -> dict:
 
 @router.post("/api/cloud-matting/config")
 def cloud_matting_config_save(req: CloudMattingConfigRequest) -> dict:
-    """保存云端抠图配置。AK/SK 若传脱敏值（含 ****）则沿用已有 Key 不覆盖。"""
+    """保存云端抠图配置。
+
+    Key 类字段若传脱敏值（含 ****）或为空则沿用已有值不覆盖；
+    必须以 current 为基底合并，否则会把未在表单里的字段（如 mediakit_api_key）抹掉。
+    """
     current = _cm.get_cloud_matting_config()
-    ak = req.access_key if "****" not in (req.access_key or "") else current.get("access_key", "")
-    sk = req.secret_key if "****" not in (req.secret_key or "") else current.get("secret_key", "")
+
+    def _merge(new_val: str, key: str) -> str:
+        v = (new_val or "").strip()
+        if "****" in v or not v:
+            return current.get(key, "")
+        return v
+
+    ev = (req.enhance_version or "").strip().lower()
+    if ev not in _ENHANCE_VERSIONS:
+        ev = ""
     data = {
         "provider": "volcengine",
-        "access_key": ak,
-        "secret_key": sk,
+        "access_key": _merge(req.access_key, "access_key"),
+        "secret_key": _merge(req.secret_key, "secret_key"),
+        "mediakit_api_key": _merge(req.mediakit_api_key, "mediakit_api_key"),
+        "enhance_version": ev,
         "enabled": bool(req.enabled),
     }
     _cm.save_cloud_matting_config(data)

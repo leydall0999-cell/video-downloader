@@ -260,6 +260,8 @@
     cloudSk: $('cloudSk'),
     cloudMattingSave: $('cloudMattingSave'),
     cloudMattingStatus: $('cloudMattingStatus'),
+    cloudMk: $('cloudMk'),
+    cloudEnhance: $('cloudEnhance'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -9395,6 +9397,8 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.cloudMattingEnabled) el.cloudMattingEnabled.checked = !!r2.enabled;
         if (el.cloudAk) el.cloudAk.value = r2.access_key || '';
         if (el.cloudSk) el.cloudSk.value = r2.secret_key || '';
+        if (el.cloudMk) el.cloudMk.value = r2.mediakit_api_key || '';
+        if (el.cloudEnhance) el.cloudEnhance.value = r2.enhance_version || '';
       }
     } catch (e) { /* */ }
 
@@ -9418,6 +9422,8 @@ el.dwVidPlayer.removeAttribute('src');
           body: JSON.stringify({
             access_key: el.cloudAk ? el.cloudAk.value.trim() : '',
             secret_key: el.cloudSk ? el.cloudSk.value.trim() : '',
+            mediakit_api_key: el.cloudMk ? el.cloudMk.value.trim() : '',
+            enhance_version: el.cloudEnhance ? el.cloudEnhance.value : '',
             enabled: el.cloudMattingEnabled ? el.cloudMattingEnabled.checked : false,
           }),
         });
