@@ -389,6 +389,12 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
                 Bf = cv2.blur(guide * wgt[..., None], (k, k)) / (cv2.blur(wgt, (k, k))[..., None] + 1e-6)
                 dist = np.linalg.norm(guide - Bf, axis=-1)
                 ramp = np.clip((dist - 0.07) / 0.09, 0.0, 1.0)
+                # 饱和度自适应：压制只对「高饱和彩色背景」有意义（橙/绿幕的彩晕）。
+                # 低饱和背景（米色/白/浅灰）彩晕本不可见，压制反而会洗白颜色相近的
+                # 浅色目标（实测米色纸上的浅木画架被洗白）。按背景饱和度线性淡出。
+                _sat = (Bf.max(-1) - Bf.min(-1))
+                _sfac = np.clip(_sat / 0.25, 0.0, 1.0)
+                ramp = ramp * _sfac
                 ramp = cv2.GaussianBlur(ramp, (0, 0), 2.0)
                 zone = out[..., 3] < 0.55
                 out[..., 3][zone] = out[..., 3][zone] * ramp[zone]

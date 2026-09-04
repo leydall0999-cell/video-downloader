@@ -1332,7 +1332,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             _crgba = None
                             _best_cov = -1.0
                             for _sc in (("product", _scene) if _text_like else (_scene, "product")):
-                                _r = mediakit_remove_bg(_crop, scene=_sc, timeout=90, suppress_bg=False)
+                                _r = mediakit_remove_bg(_crop, scene=_sc, timeout=90)
                                 _cov = float((_np.asarray(_r.split()[3]) > 100).mean())
                                 if _cov > _best_cov:
                                     _best_cov = _cov
