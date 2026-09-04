@@ -1462,13 +1462,14 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                                             if _fn >= 2:
                                                 _main = 1 + int(_np.argmax(_fst[1:, 4]))
                                                 _marea = _fst[_main, 4]
-                                                _drop = np.zeros(_fb.shape, bool)
+                                                _keep_m = (_flab == _main)
                                                 for _fi in range(1, _fn):
-                                                    if _fi != _main and _fst[_fi, 4] < 0.08 * _marea:
-                                                        _drop[_flab == _fi] = True
-                                                if _drop.any():
-                                                    _fa[_drop] = 0
-                                                    rgba = Image.fromarray(_fa.astype("uint8"), "RGBA")
+                                                    if _fi != _main and _fst[_fi, 4] >= 0.08 * _marea:
+                                                        _keep_m |= (_flab == _fi)
+                                                # 只保留主部件及大部件（含其全部 alpha，
+                                                # 低 alpha 残影也一并清除）
+                                                _fa[_keep_m == 0] = 0
+                                                rgba = Image.fromarray(_fa.astype("uint8"), "RGBA")
                                         except Exception:
                                             pass
                                         if meta is not None:
