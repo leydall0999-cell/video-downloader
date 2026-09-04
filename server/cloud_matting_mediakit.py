@@ -22,6 +22,8 @@ import urllib.request
 
 from PIL import Image
 
+import numpy as np
+
 _MEDIAKIT_HOST = "mediakit.cn-beijing.volces.com"
 _REQ_UPLOAD_URL = f"https://{_MEDIAKIT_HOST}/api/v1/tools-sync/request-media-upload-url"
 _REMOVE_URL = f"https://{_MEDIAKIT_HOST}/api/v1/tools-sync/remove-image-background"
@@ -77,6 +79,66 @@ def _download(url: str, timeout: int) -> Image.Image:
     return Image.open(io.BytesIO(data)).convert("RGBA")
 
 
+def _decontaminate_edge_spill(rgb: Image.Image, rgba: Image.Image,
+                              var_threshold: float = 0.008) -> Image.Image:
+    """对纯色背景场景的云端结果做边缘去溢色。
+
+    MediaKit 等云端抠图返回的 RGB 仍是原图颜色（I = αF + (1-α)B）。
+    半透明边缘像素会残留背景色（如橙幕棚拍时头发边缘发橙）。
+    本函数从原图边缘 + alpha≈0 区域估计背景色 B，若判定为纯色背景
+    则对半透明像素反推真实前景色 F = (I - (1-α)B) / α。
+    复杂背景（方差大）时跳过，避免误伤。
+    """
+    src = np.array(rgb.convert("RGB")).astype(np.float32) / 255.0
+    out = np.array(rgba.convert("RGBA")).astype(np.float32) / 255.0
+    rgb_arr, a = out[..., :3], out[..., 3]
+    h, w = src.shape[:2]
+
+    # 1) 背景样本：MediaKit 已判为背景（alpha<0.03）且位于原图边缘 18% 区域
+    border_mask = np.zeros((h, w), dtype=bool)
+    bh = max(1, int(h * 0.18))
+    bw = max(1, int(w * 0.18))
+    border_mask[:bh, :] = True
+    border_mask[-bh:, :] = True
+    border_mask[:, :bw] = True
+    border_mask[:, -bw:] = True
+    bg_mask = (a < 0.03) & border_mask
+
+    # 兜底：若主体占满画面导致边缘无 alpha=0，则直接取最外围条带
+    if np.sum(bg_mask) < 100:
+        border_mask = np.zeros((h, w), dtype=bool)
+        border_mask[:max(1, h // 12), :] = True
+        border_mask[-max(1, h // 12):, :] = True
+        border_mask[:, :max(1, w // 12)] = True
+        border_mask[:, -max(1, w // 12):] = True
+        bg_mask = border_mask
+
+    candidates = src[bg_mask]
+    if len(candidates) == 0:
+        return rgba
+
+    B = np.median(candidates, axis=0)
+    var = float(np.mean(np.var(candidates, axis=0)))
+    if var > var_threshold:
+        # 复杂背景：不执行去溢色
+        return rgba
+
+    # 2) 仅对半透明边缘（0.04 < α < 0.96）反推前景色
+    edge = (a > 0.04) & (a < 0.96)
+    eps = 1e-6
+    F = rgb_arr.copy()
+    F[edge] = (rgb_arr[edge] - (1.0 - a[edge, None]) * B[None, :]) / np.maximum(a[edge, None], eps)
+    F = np.clip(F, 0.0, 1.0)
+
+    # 极低 alpha 区直接置为背景色，避免残留杂点
+    near_transparent = a < 0.10
+    F[near_transparent] = B
+
+    out[..., :3] = F
+    out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return Image.fromarray(out, mode="RGBA")
+
+
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 90) -> Image.Image:
     """对任意图做软 alpha 抠图，返回与输入同尺寸的 RGBA。
@@ -122,4 +184,7 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     out = _download(out_url, timeout)
     if out.size != rgb.size:
         out = out.resize(rgb.size, Image.LANCZOS)
+
+    # ⑤ 纯色背景时做一次边缘去溢色（如橙/绿幕棚拍），消除半透明边缘彩边
+    out = _decontaminate_edge_spill(rgb, out)
     return out
