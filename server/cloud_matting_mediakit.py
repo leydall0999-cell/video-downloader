@@ -411,6 +411,16 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
             out[..., :3] = np.where(band[..., None], Fnew, rgb_f)
     except Exception as exc:  # noqa: BLE001
         logger.warning("前景色传播失败，跳过: %s", exc)
+
+    # 细节层增强：原图发丝本身偏软（对照豆包确认为其生成增强所致），
+    # 用保边分解把中频（波纹/发丝组）与高频（细梢）对比拉起来，观感更精致。
+    try:
+        rgb_e = out[..., :3]
+        base = cv2.GaussianBlur(rgb_e, (0, 0), 6.0)
+        mid = cv2.GaussianBlur(rgb_e, (0, 0), 1.2)
+        out[..., :3] = np.clip(rgb_e + 0.9 * (mid - base) + 0.6 * (rgb_e - mid), 0.0, 1.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("细节层增强失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
