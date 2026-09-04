@@ -26,6 +26,7 @@ from typing import Any
 
 from PIL import Image, ImageFilter
 
+import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -272,11 +273,64 @@ def _sr_rgb(rgb: np.ndarray, sess, scale: int, tile: int = 512, overlap: int = 1
     return out
 
 
-def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE) -> Image.Image:
+def _color_guided_alpha(I: np.ndarray, p: np.ndarray,
+                        r: int = 8, eps: float = 1e-5, step: int = 512) -> np.ndarray:
+    """He et al. guided filter——Levin closed-form matting 的 O(N) 快解。
+
+    closed-form matting（Levin 2007）假设前景/背景颜色在局部窗口内线性，
+    据此重估 alpha；guided filter 论文证明其局部线性模型与 matting Laplacian
+    同构，用 box filter 即可 O(N) 求解，无需解稀疏线性系统。
+    I：引导图 = 带背景的原图 RGB（真实前景/背景颜色，局部模型的关键）；
+    p：待精修 alpha（云端输出上采样后的软边缘）。
+    只在过渡带使用（调用方控制），逐行分块解 3x3 线性系统以控制内存。
+    """
+    def bf(x: np.ndarray) -> np.ndarray:
+        return cv2.boxFilter(x, -1, (2 * r + 1, 2 * r + 1),
+                             normalize=True, borderType=cv2.BORDER_REPLICATE)
+
+    I = I.astype(np.float32)
+    p = p.astype(np.float32)
+    mean_I = bf(I)
+    mean_p = bf(p)
+    prods = {}
+    for i in range(3):
+        prods[(i, i)] = bf(I[..., i] * I[..., i])
+    for i, j in ((0, 1), (0, 2), (1, 2)):
+        prods[(i, j)] = bf(I[..., i] * I[..., j])
+    Ip = [bf(I[..., k] * p) for k in range(3)]
+
+    h, w = p.shape
+    a_coef = np.empty((h, w, 3), np.float32)
+    b_coef = np.empty((h, w), np.float32)
+    eps_i = (eps * np.eye(3, dtype=np.float32))
+    for y0 in range(0, h, step):
+        y1 = min(h, y0 + step)
+        sl = slice(y0, y1)
+        var = np.empty((y1 - y0, w, 3, 3), np.float32)
+        for i in range(3):
+            for j in range(3):
+                ii, jj = min(i, j), max(i, j)
+                v = prods[(ii, jj)][sl] - mean_I[sl, :, i] * mean_I[sl, :, j]
+                var[..., i, j] = v
+                var[..., j, i] = v
+        cov = np.stack([Ip[k][sl] - mean_I[sl, :, k] * mean_p[sl] for k in range(3)], axis=-1)
+        sol = np.linalg.solve(var + eps_i, cov[..., None])[..., 0]
+        a_coef[sl] = sol
+        b_coef[sl] = mean_p[sl] - np.sum(sol * mean_I[sl], axis=-1)
+
+    mean_a = np.stack([bf(a_coef[..., k]) for k in range(3)], axis=-1)
+    mean_b = bf(b_coef)
+    return np.clip(np.sum(mean_a * I, axis=-1) + mean_b, 0.0, 1.0)
+
+
+def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
+                   guide_rgb: Image.Image | None = None) -> Image.Image:
     """输出侧超分辨率：把抠好的 RGBA 整体放大 scale 倍并重建细节。
 
     仅对 RGB 跑 Real-ESRGAN（发丝/皮肤细节重建），alpha 用 LANCZOS 同步放大，
-    再合成更高清的 RGBA。模型缺失/推理失败均原样返回，不引入回归。
+    再合成更高清的 RGBA。guide_rgb 提供时，在过渡带做 closed-form matting
+    精修（color guided filter，以原图真实颜色为引导），让上采样后变软的
+    发丝边缘重新贴合真实颜色边界。模型缺失/推理失败均原样返回，不引入回归。
     """
     if scale <= 1:
         return rgba
@@ -295,6 +349,18 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE) -> Image.Image:
     a_pil = Image.fromarray((a * 255.0).astype(np.uint8), mode="L")
     a_up = np.array(a_pil.resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
     out = np.dstack([np.clip(sr_rgb, 0.0, 1.0), a_up])
+
+    # closed-form matting 精修（color guided filter）：LANCZOS 上采样会把 alpha
+    # 边缘磨软，这里以原图真实颜色为引导，在过渡带重估 alpha，让发丝边缘
+    # 重新贴合真实颜色边界。失败则跳过，不影响主流程。
+    if guide_rgb is not None:
+        try:
+            guide = np.array(guide_rgb.convert("RGB").resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
+            a_ref = _color_guided_alpha(guide, out[..., 3])
+            band = (out[..., 3] > 0.02) & (out[..., 3] < 0.98)
+            out[..., 3][band] = a_ref[band]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("closed-form 精修失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
@@ -377,6 +443,7 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     out = _decontaminate_edge_spill(rgb, out)
 
     # ⑦ 输出侧超分辨率：抠完之后整体放大 2x 并重建发丝/皮肤细节，
-    #    让输出比输入分辨率更高、更清晰（对齐豆包观感）。模型缺失时自动跳过。
-    out = _super_resolve(out, scale=_SR_SCALE)
+    #    再以原图真实颜色为引导做 closed-form matting 精修（color guided filter），
+    #    让输出比输入分辨率更高、发丝边缘更贴真实边界。模型缺失时自动跳过。
+    out = _super_resolve(out, scale=_SR_SCALE, guide_rgb=rgb)
     return out
