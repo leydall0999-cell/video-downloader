@@ -488,6 +488,102 @@ def detect_subject_checked(image_path: str, prompt: str | None = None,
     return det
 
 
+def tight_box_on_composite(sheet_png_b64: str, user_prompt: str,
+                           timeout: int = 60) -> list[float] | None:
+    """二次紧贴框：在白底抠图成品上给出「只含用户描述对象本体」的归一化框。
+
+    背景：横幅/装饰可能与目标物理相连（连通域拆不开），矩形定位框也无法排除
+    框内邻居。此步让 VLM 在干净的成品图上做纯语义+几何判断。
+    失败返回 None（调用方保留原结果）。
+    """
+    try:
+        cfg = get_vision_config()
+        url = (cfg.get("base_url") or "").strip().rstrip("/") + "/chat/completions"
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {(cfg.get('api_key') or '').strip()}"}
+        text = (
+            f"用户想抠出的对象是：「{user_prompt}」。\n"
+            "这张白底图是抠图结果，里面除了目标本体，可能还混有相邻的其他元素"
+            "（如黑底小标题横幅、星星装饰等）。\n"
+            "请给出**只属于目标本体**（含其描边、外轮廓、投影）的紧贴边界框，"
+            "排除其他一切元素。坐标为归一化 0~1，[左上x, 左上y, 右下x, 右下y]。\n"
+            '只返回 JSON：{"box": [x1,y1,x2,y2]}；找不到则 {"box": null}'
+        )
+        payload = {
+            "model": (cfg.get("model") or "").strip(),
+            "messages": [
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": [
+                    {"type": "text", "text": text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{sheet_png_b64}"}},
+                ]},
+            ],
+            "temperature": 0.0,
+        }
+        resp = _post_json(url, headers, payload, timeout=timeout)
+        content = resp["choices"][0]["message"]["content"]
+        parsed = _extract_json(content)
+        if isinstance(parsed, dict) and parsed.get("box"):
+            vals = [float(v) for v in list(parsed["box"])[:4]]
+            if all(0.0 <= v <= 1.0 for v in vals) and vals[2] > vals[0] and vals[3] > vals[1]:
+                return vals
+    except Exception:
+        return None
+    return None
+
+
+def select_matching_components(sheet_png_b64: str, user_prompt: str, count: int,
+                               timeout: int = 60) -> list[int]:
+    """部件选择：给编号部件拼图，让 VLM 选出匹配用户描述的部件编号。
+
+    背景：矩形定位框+云端抠图都无法区分「大标题 vs 紧挨的小标题横幅」——
+    框内它们是连片前景。按连通域拆部件后让 VLM 做部件级选择。
+    任何异常返回 []（调用方保留原结果，不引入回归）。
+    """
+    if count < 2:
+        return []
+    try:
+        cfg = get_vision_config()
+        url = (cfg.get("base_url") or "").strip().rstrip("/") + "/chat/completions"
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {(cfg.get('api_key') or '').strip()}"}
+        text = (
+            f"用户想抠出的对象是：「{user_prompt}」。\n"
+            f"这张拼图里有 {count} 个从定位框内拆出的独立部件，每个左上角有红色编号 1~{count}。\n"
+            "请判断哪些编号的部件属于用户要抠的对象（语义和范围都要符合，"
+            "比如「文字大标题」不包括黑色小标题横幅条、不包括星星装饰）。\n"
+            "只返回 JSON，不要额外文字：\n"
+            '{"keep": [编号, ...]}'
+        )
+        payload = {
+            "model": (cfg.get("model") or "").strip(),
+            "messages": [
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": [
+                    {"type": "text", "text": text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{sheet_png_b64}"}},
+                ]},
+            ],
+            "temperature": 0.0,
+        }
+        resp = _post_json(url, headers, payload, timeout=timeout)
+        content = resp["choices"][0]["message"]["content"]
+        parsed = _extract_json(content)
+        if isinstance(parsed, dict) and isinstance(parsed.get("keep"), list):
+            out = []
+            for v in parsed["keep"]:
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= iv <= count:
+                    out.append(iv)
+            return out
+    except Exception:
+        return []
+    return []
+
+
 def detect_text_blocks(image_path: str, max_side: int = 1024, timeout: int = 60) -> list[dict]:
     """📝 文字检测：调 VLM 找出图中所有独立文字元素，返回
     [{"label": "...", "box": [x1,y1,x2,y2] 归一化}, ...]（面积降序）。

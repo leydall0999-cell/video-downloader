@@ -1341,6 +1341,103 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             _arr = _npm.asarray(rgba).astype(_npm.float32)
                             _arr[..., 3] = _arr[..., 3] * (_npm.asarray(_am, dtype=_npm.float32) / 255.0)
                             rgba = Image.fromarray(_arr.astype("uint8"), "RGBA")
+                            # 部件级语义筛选（文字/标题/logo 类）：矩形框与云端抠图都
+                            # 无法区分「大标题 vs 紧挨的小标题横幅/装饰」——框内它们
+                            # 是连片前景。按连通域拆部件、编号拼图让 VLM 选「哪些属于
+                            # 用户要的对象」，未选中部件清除。VLM 失败保留原结果。
+                            if _text_like:
+                                try:
+                                    import cv2 as _cv2
+                                    import io as _io
+                                    import base64 as _b64m
+                                    import vision_client as _vc
+                                    _crgb = rgba.crop((_cx0, _cy0, _cx1, _cy1))
+                                    _ca = _np.asarray(_crgb.split()[3])
+                                    _binm = (_ca > 90).astype(_np.uint8)
+                                    _cn, _clab, _cst, _cct = _cv2.connectedComponentsWithStats(_binm, connectivity=8)
+                                    _minarea = max(40, int(0.0015 * _crgba.size[0] * _crgba.size[1]))
+                                    _comps = [i for i in range(1, _cn) if _cst[i][4] >= _minarea]
+                                    if len(_comps) >= 2:
+                                        # 编号拼图：每个部件白底渲染 + 红色大号编号
+                                        _tiles = []
+                                        for _idx, _ci in enumerate(_comps, start=1):
+                                            _sx, _sy, _sw, _sh = _cst[_ci, 0], _cst[_ci, 1], _cst[_ci, 2], _cst[_ci, 3]
+                                            _pad = 8
+                                            _tile = _crgb.crop((max(0, _sx - _pad), max(0, _sy - _pad),
+                                                                min(_crgb.width, _sx + _sw + _pad),
+                                                                min(_crgb.height, _sy + _sh + _pad)))
+                                            _cell = Image.new("RGB", (_tile.width + 24, _tile.height + 44), (255, 255, 255))
+                                            _cell.paste(_tile, (12, 40), _tile)
+                                            _d = _IDraw.Draw(_cell)
+                                            _d.rectangle([0, 0, 34, 32], fill=(220, 30, 30))
+                                            _d.text((9, 6), str(_idx), fill=(255, 255, 255))
+                                            _tiles.append(_cell)
+                                        _cols = 2
+                                        _rows = (_tiles.__len__() + _cols - 1) // _cols
+                                        _cw = max(t.width for t in _tiles)
+                                        _ch = max(t.height for t in _tiles)
+                                        _sheet = Image.new("RGB", (_cols * _cw + 12, _rows * _ch + 12), (230, 230, 230))
+                                        for _i2, _t in enumerate(_tiles):
+                                            _sheet.paste(_t, (6 + (_i2 % _cols) * _cw, 6 + (_i2 // _cols) * _ch))
+                                        _buf2 = _io.BytesIO()
+                                        _sheet.save(_buf2, format="PNG")
+                                        _uprompt = ((meta or {}).get("prompt", "") or "").strip()
+                                        _keep = _vc.select_matching_components(
+                                            _b64m.b64encode(_buf2.getvalue()).decode(), _uprompt, len(_comps))
+                                        if _keep:
+                                            _keepset = set(_keep)
+                                            _kmask = _np.zeros(_binm.shape, _np.uint8)
+                                            for _idx, _ci in enumerate(_comps, start=1):
+                                                if _idx in _keepset:
+                                                    _kmask[_clab == _ci] = 255
+                                            _km = Image.fromarray(_kmask, "L").filter(_IFilter.GaussianBlur(1.5))
+                                            _arr2 = _npm.asarray(rgba).astype(_npm.float32)
+                                            _arr2[..., 3] *= (_np.asarray(_km, dtype=_np.float32) / 255.0)
+                                            rgba = Image.fromarray(_arr2.astype("uint8"), "RGBA")
+                                            if meta is not None:
+                                                meta["component_filter"] = {"total": len(_comps), "keep": _keep}
+                                except Exception as _cf_exc:  # noqa: BLE001
+                                    import logging as _lg2
+                                    _lg2.getLogger("matting_ai").warning("部件筛选失败，保留原结果: %s", _cf_exc)
+                            # 二次紧贴框精修（文字/标题/logo 类）：横幅等邻居可能与目标
+                            # 物理相连（连通域拆不开），让 VLM 在白底成品上给出「只含
+                            # 目标本体」的紧贴框，羽化后保留——把框内混进的小标题横幅/
+                            # 装饰清掉。VLM 失败保留原结果。
+                            if _text_like:
+                                try:
+                                    import base64 as _b64m2
+                                    import vision_client as _vc2
+                                    _crgb2 = rgba.crop((_cx0, _cy0, _cx1, _cy1))
+                                    _comp2 = Image.new("RGB", _crgb2.size, (255, 255, 255))
+                                    _comp2.paste(_crgb2, mask=_crgb2.split()[3])
+                                    _comp2.thumbnail((1024, 1024))
+                                    _buf3 = _io.BytesIO()
+                                    _comp2.save(_buf3, format="PNG")
+                                    _up2 = ((meta or {}).get("prompt", "") or "").strip()
+                                    _tb = _vc2.tight_box_on_composite(
+                                        _b64m2.b64encode(_buf3.getvalue()).decode(), _up2)
+                                    if _tb:
+                                        _TW, _TH = _crgb2.size
+                                        _tx1, _ty1, _tx2, _ty2 = _tb
+                                        _mgx = int((_tx2 - _tx1) * _TW * 0.12)
+                                        _mgy = int((_ty2 - _ty1) * _TH * 0.12)
+                                        _kx0 = max(0, int(_tx1 * _TW) - _mgx)
+                                        _ky0 = max(0, int(_ty1 * _TH) - _mgy)
+                                        _kx1 = min(_TW, int(_tx2 * _TW) + _mgx)
+                                        _ky1 = min(_TH, int(_ty2 * _TH) + _mgy)
+                                        _tm = Image.new("L", rgb.size, 0)
+                                        _IDraw.Draw(_tm).rectangle(
+                                            [_cx0 + _kx0, _cy0 + _ky0, _cx0 + _kx1 - 1, _cy0 + _ky1 - 1],
+                                            fill=255)
+                                        _tm = _tm.filter(_IFilter.GaussianBlur(4))
+                                        _arr3 = _npm.asarray(rgba).astype(_npm.float32)
+                                        _arr3[..., 3] *= (_np.asarray(_tm, dtype=_np.float32) / 255.0)
+                                        rgba = Image.fromarray(_arr3.astype("uint8"), "RGBA")
+                                        if meta is not None:
+                                            meta["tight_box"] = [_tx1, _ty1, _tx2, _ty2]
+                                except Exception as _tb_exc:  # noqa: BLE001
+                                    import logging as _lg3
+                                    _lg3.getLogger("matting_ai").warning("紧贴框精修失败，保留原结果: %s", _tb_exc)
                             if meta is not None:
                                 meta["cloud_crop"] = [_cx0, _cy0, _cx1, _cy1]
                         else:
