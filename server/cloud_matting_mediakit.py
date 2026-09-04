@@ -17,12 +17,18 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
+import os
 import ssl
 import urllib.request
+from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageFilter
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 _MEDIAKIT_HOST = "mediakit.cn-beijing.volces.com"
 _REQ_UPLOAD_URL = f"https://{_MEDIAKIT_HOST}/api/v1/tools-sync/request-media-upload-url"
@@ -163,6 +169,126 @@ def _decontaminate_edge_spill(rgb: Image.Image, rgba: Image.Image,
     return Image.fromarray(out, mode="RGBA")
 
 
+# ---------------------------------------------------------------------------
+# 输出侧超分辨率（对齐豆包：输出比输入更高清）
+# ---------------------------------------------------------------------------
+# 抠完图之后，对主体跑 ONNX 版 Real-ESRGAN（RRDBNet，BSD-3-Clause）整体放大 2x
+# 并重建发丝/皮肤细节，从而输出比输入分辨率更高、更清晰的结果。
+# 模型来源：HuggingFace SceneWorks/real-esrgan-onnx（与 xinntao/Real-ESRGAN 权重 1:1 导出）。
+_SR_SCALE = 2  # 输出放大倍数（2 = 输入 2x；4 亦可但文件/耗时显著增大）
+_SR_MODEL_FILES = {2: "real_esrgan_x2.onnx", 4: "real_esrgan_x4.onnx"}
+_SR_BASE_URLS = [
+    "https://huggingface.co/SceneWorks/real-esrgan-onnx/resolve/main/",
+    "https://hf-mirror.com/SceneWorks/real-esrgan-onnx/resolve/main/",
+]
+_SR_CACHE_DIR = Path(os.path.expanduser("~/.video-downloader/models/sr"))
+_SESSIONS: dict[int, Any] = {}
+
+
+def _ensure_sr_model(scale: int) -> Path | None:
+    """下载并返回 Real-ESRGAN ONNX 模型路径；失败返回 None（不阻塞主流程）。"""
+    fname = _SR_MODEL_FILES.get(scale)
+    if not fname:
+        return None
+    path = _SR_CACHE_DIR / fname
+    if path.exists() and path.stat().st_size > 5_000_000:
+        return path
+    _SR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for base in _SR_BASE_URLS:
+        url = base + fname
+        try:
+            with urllib.request.urlopen(url, timeout=180, context=_SSL_CTX) as r:
+                data = r.read()
+            path.write_bytes(data)
+            if path.stat().st_size > 5_000_000:
+                logger.info("SR 模型已下载: %s (%d bytes)", path, path.stat().st_size)
+                return path
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SR 模型下载失败 %s: %s", url, exc)
+    return None
+
+
+def _get_sr_session(scale: int):
+    """加载（并缓存）Real-ESRGAN 推理会话；优先 CoreML(苹果加速)，回退 CPU。"""
+    if scale in _SESSIONS:
+        return _SESSIONS[scale]
+    path = _ensure_sr_model(scale)
+    if not path:
+        return None
+    import onnxruntime as ort
+
+    sess: Any = None
+    for provs in (["CoreMLExecutionProvider", "CPUExecutionProvider"], ["CPUExecutionProvider"]):
+        try:
+            sess = ort.InferenceSession(str(path), providers=provs)
+            break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SR 会话创建失败 %s: %s", provs, exc)
+    if sess is None:
+        return None
+    _SESSIONS[scale] = sess
+    return sess
+
+
+def _sr_once(rgb: np.ndarray, sess, scale: int) -> np.ndarray:
+    inp = rgb.transpose(2, 0, 1)[None].astype(np.float32)
+    out = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
+    return np.clip(out, 0.0, 1.0).transpose(1, 2, 0)
+
+
+def _sr_rgb(rgb: np.ndarray, sess, scale: int, tile: int = 512, overlap: int = 16) -> np.ndarray:
+    """对 RGB 跑 Real-ESRGAN；大图分块推理后拼接，避免一次占满内存。"""
+    h, w = rgb.shape[:2]
+    if h <= tile and w <= tile:
+        return _sr_once(rgb, sess, scale)
+    out_h, out_w = h * scale, w * scale
+    out = np.zeros((out_h, out_w, 3), dtype=np.float32)
+    weight = np.zeros((out_h, out_w, 1), dtype=np.float32)
+    for y in range(0, h, tile - overlap):
+        for x in range(0, w, tile - overlap):
+            y2 = min(y + tile, h)
+            x2 = min(x + tile, w)
+            ph, pw = y2 - y, x2 - x
+            if ph < tile or pw < tile:
+                pad = np.zeros((tile, tile, 3), dtype=np.float32)
+                pad[:ph, :pw] = rgb[y:y2, x:x2]
+                tiled = _sr_once(pad, sess, scale)[: ph * scale, : pw * scale]
+            else:
+                tiled = _sr_once(rgb[y:y2, x:x2], sess, scale)
+            oy, ox = y * scale, x * scale
+            oh, ow = tiled.shape[:2]
+            out[oy:oy + oh, ox:ox + ow] += tiled
+            weight[oy:oy + oh, ox:ox + ow] += 1.0
+    out /= np.maximum(weight, 1e-6)
+    return out
+
+
+def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE) -> Image.Image:
+    """输出侧超分辨率：把抠好的 RGBA 整体放大 scale 倍并重建细节。
+
+    仅对 RGB 跑 Real-ESRGAN（发丝/皮肤细节重建），alpha 用 LANCZOS 同步放大，
+    再合成更高清的 RGBA。模型缺失/推理失败均原样返回，不引入回归。
+    """
+    if scale <= 1:
+        return rgba
+    sess = _get_sr_session(scale)
+    if sess is None:
+        logger.warning("SR 模型不可用，跳过超分（输出保持原分辨率）")
+        return rgba
+    arr = np.array(rgba.convert("RGBA")).astype(np.float32) / 255.0
+    rgb, a = arr[..., :3], arr[..., 3]
+    try:
+        sr_rgb = _sr_rgb(rgb, sess, scale)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SR 推理失败，跳过: %s", exc)
+        return rgba
+    h, w = sr_rgb.shape[:2]
+    a_pil = Image.fromarray((a * 255.0).astype(np.uint8), mode="L")
+    a_up = np.array(a_pil.resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
+    out = np.dstack([np.clip(sr_rgb, 0.0, 1.0), a_up])
+    return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
+
+
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 120, upscale: int | None = None) -> Image.Image:
     """对任意图做软 alpha 抠图，返回与输入同尺寸的 RGBA。
@@ -240,4 +366,8 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
 
     # ⑥ 纯色背景时做一次边缘去溢色（如橙/绿幕棚拍），消除半透明边缘彩边
     out = _decontaminate_edge_spill(rgb, out)
+
+    # ⑦ 输出侧超分辨率：抠完之后整体放大 2x 并重建发丝/皮肤细节，
+    #    让输出比输入分辨率更高、更清晰（对齐豆包观感）。模型缺失时自动跳过。
+    out = _super_resolve(out, scale=_SR_SCALE)
     return out
