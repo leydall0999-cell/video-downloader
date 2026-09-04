@@ -1262,6 +1262,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
       包围下主字 vs 副字分不清"的难题。与 box 同给时取交集（手动框为硬边界）。
     """
     from PIL import Image
+    import numpy as np
 
     if not available():
         raise RuntimeError("一键抠图不可用（缺少 onnxruntime / numpy / Pillow 依赖）")
@@ -1301,17 +1302,23 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         )
         if (model or _MODEL_NAME) in _cloud_models:
             _cb = _norm_box_from_inputs(vision_box, polygon, box)
+            # 定位框面积占比：大圈（≥40% 画面，如套索框住整个人像）→ 全图直抠
+            # （分辨率/场景与智能抠图同级，质量不缩水），套索仅作边界蒙版；
+            # 小圈（<40%，如海报标题贴纸）→ 裁剪隔离（目标非显著主体时必须）。
+            _cb_frac = 0.0
+            if _cb is not None:
+                _cb_frac = max(0.0, min(1.0, (_cb[2] - _cb[0]) * (_cb[3] - _cb[1])))
             # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
             if is_cloud_matting_mediakit_ready():
                 try:
                     from cloud_matting_mediakit import mediakit_remove_bg
                     _scene = "human" if _is_person else "general"
-                    # 有定位框（AI 视觉定位「说扣什么」/ 手动框选/套索）时：
+                    # 有定位框（AI 视觉定位「说扣什么」/ 手动框选/套索）且框较小：
                     # 先裁出目标区域再云端抠，结果贴回全图（框外强制透明）。
                     # MediaKit 只做显著主体分割、不接受文本 prompt——全图直抠会
                     # 选错主体（如海报上选了显著性最高的画笔而不是用户要的标题）；
                     # 裁剪让目标成为裁片内的唯一显著主体，文字描述才能真正生效。
-                    if _cb is not None:
+                    if _cb is not None and _cb_frac < 0.40:
                         _px = [min(max(_cb[0], 0.0), 1.0), min(max(_cb[1], 0.0), 1.0),
                                min(max(_cb[2], 0.0), 1.0), min(max(_cb[3], 0.0), 1.0)]
                         _bx0, _by0, _bx1, _by1 = int(_px[0] * W), int(_px[1] * H), int(_px[2] * W), int(_px[3] * H)
@@ -1540,9 +1547,48 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
                     else:
                         rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
+                    # 大圈模式：全图直抠后按「连通域选择」保留——与套索相交的
+                    # 主体整体保留（延伸出圈外也不硬切），与套索无关的散落元素剔除。
+                    # 质量与智能抠图同级（同一全图云端链路），套索只决定「留哪些部件」。
+                    if _cb is not None and _cb_frac >= 0.40:
+                        import cv2 as _bcv2
+                        from PIL import ImageDraw as _bdraw
+                        _ba = np.asarray(rgba.split()[3]).astype(np.float32) / 255.0
+                        _fc, _fl, _fs, _fct = _bcv2.connectedComponentsWithStats(
+                            (_ba > 0.3).astype(np.uint8), connectivity=8)
+                        _small = Image.new("L", (max(2, _ba.shape[1] // 4), max(2, _ba.shape[0] // 4)), 0)
+                        _bdraw.Draw(_small).polygon(
+                            [(float(p[0]) * _small.width, float(p[1]) * _small.height)
+                             for p in (polygon or [])], fill=255)
+                        _ps = np.asarray(_small) > 0
+                        _sh, _sw = _ps.shape
+
+                        def _touches(fi):
+                            x0, y0, w0, h0, area = _fs[fi]
+                            if area < 0.0005 * _ba.size:
+                                return False
+                            sub = _ps[max(0, y0 // 4):min(_sh, (y0 + h0) // 4 + 1),
+                                      max(0, x0 // 4):min(_sw, (x0 + w0) // 4 + 1)]
+                            if sub.size and sub.any():
+                                return True
+                            cx, cy = _fct[fi]
+                            gy, gx = min(_sh - 1, int(cy) // 4), min(_sw - 1, int(cx) // 4)
+                            return bool(_ps[gy, gx])
+
+                        _touch_ids = [fi for fi in range(1, _fc) if _touches(fi)]
+                        if _touch_ids and _fc >= 2:
+                            _keep = np.zeros(_ba.shape, dtype=bool)
+                            for _fi in _touch_ids:
+                                _keep |= (_fl == _fi)
+                            _ba[~_keep] = 0
+                            rgba = Image.fromarray(
+                                np.dstack([np.asarray(rgba.convert("RGB")),
+                                           (_ba * 255.0).astype(np.uint8)]), "RGBA")
                     if meta is not None:
                         meta["cloud_used"] = True
                         meta["cloud_provider"] = "volcengine-mediakit"
+                        if _cb is not None and _cb_frac >= 0.40:
+                            meta["full_image_masked"] = True
                     _save_out(rgba, out)
                     return
                 except Exception as _ce:  # noqa: BLE001
