@@ -1391,8 +1391,11 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                                                 if _idx in _keepset:
                                                     _kmask[_clab == _ci] = 255
                                             _km = Image.fromarray(_kmask, "L").filter(_IFilter.GaussianBlur(1.5))
+                                            # 蒙版在裁片坐标系，先转全图画布坐标再相乘
+                                            _kmfull = Image.new("L", rgb.size, 0)
+                                            _kmfull.paste(_km, (_cx0, _cy0))
                                             _arr2 = _npm.asarray(rgba).astype(_npm.float32)
-                                            _arr2[..., 3] *= (_np.asarray(_km, dtype=_np.float32) / 255.0)
+                                            _arr2[..., 3] *= (_np.asarray(_kmfull, dtype=_np.float32) / 255.0)
                                             rgba = Image.fromarray(_arr2.astype("uint8"), "RGBA")
                                             if meta is not None:
                                                 meta["component_filter"] = {"total": len(_comps), "keep": _keep}
@@ -1425,6 +1428,22 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                                         _ky0 = max(0, int(_ty1 * _TH) - _mgy)
                                         _kx1 = min(_TW, int(_tx2 * _TW) + _mgx)
                                         _ky1 = min(_TH, int(_ty2 * _TH) + _mgy)
+                                        # 顶边内容感知外扩：VLM 紧贴框常低于文字真实顶部，
+                                        # 固定容差补不够（实测字顶被平切 50px）。沿列窗口
+                                        # 向上逐行走，行内仍有内容就继续包进来，遇到空行
+                                        # 即停（上限 160px 防跑到无关元素）。
+                                        _aa = _np.asarray(rgba.split()[3])
+                                        _walk_lim = min(160, int((_ty2 - _ty1) * _TH * 0.6))
+                                        _wy = _cy0 + _ky0
+                                        _walked = 0
+                                        while _wy - 1 >= 0 and _walked < _walk_lim:
+                                            _band = _aa[_wy - 1, _cx0 + _kx0:_cx0 + _kx1]
+                                            if (_band > 0.3).mean() > 0.005:
+                                                _wy -= 1
+                                                _walked += 1
+                                            else:
+                                                break
+                                        _ky0 = max(0, _wy - _cy0)
                                         _tm = Image.new("L", rgb.size, 0)
                                         _IDraw.Draw(_tm).rectangle(
                                             [_cx0 + _kx0, _cy0 + _ky0, _cx0 + _kx1 - 1, _cy0 + _ky1 - 1],
@@ -1433,6 +1452,25 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                                         _arr3 = _npm.asarray(rgba).astype(_npm.float32)
                                         _arr3[..., 3] *= (_np.asarray(_tm, dtype=_np.float32) / 255.0)
                                         rgba = Image.fromarray(_arr3.astype("uint8"), "RGBA")
+                                        # 碎屑清理：顶边外扩可能带进角落的星星碎片。
+                                        # 保留面积 ≥ 主部件 8% 的连通域，小碎屑清除
+                                        # （文字主体通常连成一个大部件，碎屑远小于此）。
+                                        try:
+                                            _fa = _np.asarray(rgba.split()[3])
+                                            _fb = (_fa > 60).astype(np.uint8)
+                                            _fn, _flab, _fst, _fct = _cv2.connectedComponentsWithStats(_fb, connectivity=8)
+                                            if _fn >= 2:
+                                                _main = 1 + int(_np.argmax(_fst[1:, 4]))
+                                                _marea = _fst[_main, 4]
+                                                _drop = np.zeros(_fb.shape, bool)
+                                                for _fi in range(1, _fn):
+                                                    if _fi != _main and _fst[_fi, 4] < 0.08 * _marea:
+                                                        _drop[_flab == _fi] = True
+                                                if _drop.any():
+                                                    _fa[_drop] = 0
+                                                    rgba = Image.fromarray(_fa.astype("uint8"), "RGBA")
+                                        except Exception:
+                                            pass
                                         if meta is not None:
                                             meta["tight_box"] = [_tx1, _ty1, _tx2, _ty2]
                                 except Exception as _tb_exc:  # noqa: BLE001
