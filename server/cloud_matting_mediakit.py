@@ -366,15 +366,19 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         # 背景色压制：模型对部分纯背景像素会高估 alpha（此类像素 I≈背景色 B，
         # despill 公式 F=(I-(1-α)B)/α 只会还原出 B 本身，形成彩色光晕，无解）。
         # 用原图颜色判断「这像素本来就是背景」，按颜色距离只降不升地衰减 alpha。
+        # 两个关键约束（离线调参实测）：
+        #   ① 只压低 α 区（α<0.55）——深色头发 α0.7~0.9 的像素若被压会啃出碎边；
+        #   ② ramp 场先做 σ=2 高斯平滑——逐像素噪声 ramp 会把边缘打碎（连通域 49→89）。
         try:
             known = out[..., 3] < 0.01  # MediaKit 高置信背景（含 refine 后）
             wgt = known.astype(np.float32)
             k = 121  # 大核把背景色场传播到主体周边（兼容渐变背景）
             Bf = cv2.blur(guide * wgt[..., None], (k, k)) / (cv2.blur(wgt, (k, k))[..., None] + 1e-6)
             dist = np.linalg.norm(guide - Bf, axis=-1)
-            ramp = np.clip((dist - 0.07) / (0.16 - 0.07), 0.0, 1.0)
-            keep = out[..., 3] < 0.95  # 不动实心主体
-            out[..., 3] = np.where(keep, out[..., 3] * ramp, out[..., 3])
+            ramp = np.clip((dist - 0.07) / 0.09, 0.0, 1.0)
+            ramp = cv2.GaussianBlur(ramp, (0, 0), 2.0)
+            zone = out[..., 3] < 0.55
+            out[..., 3][zone] = out[..., 3][zone] * ramp[zone]
         except Exception as exc:  # noqa: BLE001
             logger.warning("背景色压制失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
