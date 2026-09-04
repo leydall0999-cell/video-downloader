@@ -910,11 +910,13 @@ def _estimate_bg_color(rgb):
     return np.median(border, axis=0)
 
 
-def _despill_strong(rgb_norm, alpha, B, bg_close: float = 0.10):
+def _despill_strong(rgb_norm, alpha, B, bg_close: float = 0.10, max_alpha_kill: float = 0.55):
     """强去溢色（纯色背景专用）：按合成方程 I=αF+(1-α)B 反推真实前景 F，
     并消除半透明过渡带里仍贴近背景色的残留像素（这些本质是背景溢出，应透明）。
 
     rgb_norm: 归一化 [0,1] HxWx3；alpha: [0,1] HxW；B: 背景主色。
+    max_alpha_kill: 仅对 alpha 低于此阈值的像素执行 kill。默认 0.55，避免误杀
+        肤色等「颜色≈背景」的实体前景（其 alpha 通常>0.55），只清除真正的半透明边缘溢色。
     返回 (F, alpha2)：alpha2 在「反推后 F 仍极近背景色」处强制 0，彻底清除彩边。
     """
     import numpy as np
@@ -925,7 +927,7 @@ def _despill_strong(rgb_norm, alpha, B, bg_close: float = 0.10):
     F = np.clip(F, 0.0, 1.0)
     # 反推后若 F 仍极近背景色 → 该像素本就是背景溢出 → alpha 归零（清除彩边）
     diff = np.linalg.norm(F - B[None, None, :], axis=2)
-    kill = (diff < bg_close) & (a < 0.85)
+    kill = (diff < bg_close) & (a < max_alpha_kill)
     a2 = np.where(kill, 0.0, a)
     return F, a2
 
@@ -1170,14 +1172,29 @@ def _matting_solid_person_hybrid(rgb, W: int, H: int, box=None, polygon=None, vi
     # 2) 颜色距离驱动 alpha：纯色背景下「颜色与背景 B 的相似度」直接决定透明度，
     #    比 MODNet 的 OOD 软 alpha 干净得多——背景像素(颜色≈B)必然透明，彻底无彩边；
     #    过渡带内用颜色梯度给出平滑边缘，前景内用 MODNet 补发丝级软细节。
+    #
+    # 关键修复（2026-09-04）：旧实现「d<t_hi 完全由 color_a 接管」会误伤肤色——
+    # 橙幕前的人脸皮肤颜色与背景橙相近，d 落在 0.12~0.30 之间，被 color_a 压成半透明，
+    # 随后 _despill_strong 又因「反推 F≈B」把皮肤 kill 成透明窟窿。
+    # 新版以 MODNet alpha 为基，只在 MODNet 不置信或明确背景处用颜色距离压制：
+    #   - d < t_lo：强制背景透明（纯色背景核心区域，不受 MODNet OOD 影响）；
+    #   - t_lo <= d < t_hi：MODNet 高置信前景（a>0.85）保持，其余用 min(mod_a, color_a) 抑制；
+    #   - d >= t_hi：完全前景，保留 MODNet alpha（发丝 wisps 不丢）。
     d = np.linalg.norm(rgb_arr - B[None, None, :], axis=2)
-    t_lo, t_hi = 0.12, 0.30
+    t_lo, t_hi = 0.10, 0.28
     color_a = np.clip((d - t_lo) / (t_hi - t_lo), 0.0, 1.0)
-    # 过渡带(d<t_hi)完全由颜色距离决定（干净、不漏橙边）；前景(d>=t_hi)取颜色/MODNet 较大者
-    final_a = np.where(d < t_hi, color_a, np.maximum(color_a, mod_a))
 
-    # 3) 强去溢色：对仍贴近背景色的半透明残留像素直接透明，彻底无彩边
-    F, final_a = _despill_strong(rgb_arr, final_a, B)
+    final_a = mod_a.copy()
+    # 明确背景色域：强制透明
+    final_a[d < t_lo] = 0.0
+    # 过渡带：保护 MODNet 高置信前景（a>0.85），其余按颜色距离收紧（消除 OOD 背景/彩边）。
+    transition = (d >= t_lo) & (d < t_hi)
+    confident_fg = mod_a > 0.85
+    uncertain = transition & ~confident_fg
+    final_a[uncertain] = np.minimum(final_a[uncertain], color_a[uncertain])
+
+    # 3) 强去溢色：只清理真正的半透明边缘溢色，不杀高 alpha 实体前景（防止皮肤被抠）
+    F, final_a = _despill_strong(rgb_arr, final_a, B, max_alpha_kill=0.55)
     out = np.dstack([F, final_a[..., None]])
     out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
     return Image.fromarray(out, mode="RGBA")
