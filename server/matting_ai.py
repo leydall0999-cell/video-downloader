@@ -1474,6 +1474,48 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                                             pass
                                         if meta is not None:
                                             meta["tight_box"] = [_tx1, _ty1, _tx2, _ty2]
+                                        # 白描边回填：白色外描边贴浅色背景时对比度过低，
+                                        # 云端 alpha≈0（实测均值 0.001），任何框/外扩都救
+                                        # 不回不存在的内容。以 blob 为种子做颜色门控洪泛：
+                                        # 30px 内、颜色贴近白边中位色的像素回填 alpha=1
+                                        # 并取原图 RGB（浅黄背景色距 0.207 被拒）。
+                                        try:
+                                            _origc = rgb.crop((_cx0, _cy0, _cx1, _cy1))
+                                            _oc = _np.asarray(_origc).astype(_np.float32) / 255.0
+                                            _alp = _np.asarray(rgba.crop((_cx0, _cy0, _cx1, _cy1)).split()[3]).astype(_np.float32) / 255.0
+                                            _solid = _alp > 0.6
+                                            _dt = _cv2.distanceTransform((~_solid).astype(_np.uint8), _cv2.DIST_L2, 3)
+                                            _ring = (_dt <= 25) & (_dt >= 1)
+                                            _rc = _oc[_ring]
+                                            if _rc.shape[0] > 200:
+                                                _rmx, _rmn = _rc.max(-1), _rc.min(-1)
+                                                _nl = (_rmn > 0.72) & ((_rmx - _rmn) < 0.20)
+                                                if _nl.sum() > 200:
+                                                    _rim = _np.median(_rc[_nl], axis=0)
+                                                    _cd = _np.linalg.norm(_oc - _rim[None, None], axis=-1)
+                                                    _kept = _solid.copy()
+                                                    for _ in range(30):
+                                                        _grow = (_cv2.dilate(_kept.astype(_np.uint8), _np.ones((3, 3), _np.uint8)) > 0) & (~_kept) & (_dt <= 30)
+                                                        if not _grow.any():
+                                                            break
+                                                        _ok = _grow & (_cd < 0.12)
+                                                        if not _ok.any():
+                                                            break
+                                                        _kept |= _ok
+                                                    _newpx = _kept & ~_solid
+                                                    if _newpx.any():
+                                                        _mk = _kept.astype(_np.float32)
+                                                        _mk = _cv2.GaussianBlur(_mk, (0, 0), 0.8)
+                                                        _full = _np.asarray(rgba).astype(_np.float32)
+                                                        _region = _full[_cy0:_cy1, _cx0:_cx1]
+                                                        _backfill = _np.dstack([_oc, _mk])
+                                                        _full[_cy0:_cy1, _cx0:_cx1] = _np.where(_newpx[..., None], _backfill, _region)
+                                                        rgba = Image.fromarray(_full.astype("uint8"), "RGBA")
+                                                        if meta is not None:
+                                                            meta["rim_backfill"] = int(_newpx.sum())
+                                        except Exception as _rb_exc:  # noqa: BLE001
+                                            import logging as _lg4
+                                            _lg4.getLogger("matting_ai").warning("白边回填失败，保留原结果: %s", _rb_exc)
                                 except Exception as _tb_exc:  # noqa: BLE001
                                     import logging as _lg3
                                     _lg3.getLogger("matting_ai").warning("紧贴框精修失败，保留原结果: %s", _tb_exc)
