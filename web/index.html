@@ -956,11 +956,15 @@
             <div class="mat-manual-hint" id="matManualHint"></div>
           </div>
           <div class="dw-result" id="matResult" hidden>
-            <div class="dw-compare">
+            <div class="dw-compare" id="matResultCompare">
               <div><span class="dw-cap">原图</span><img id="matOrig" alt="原图" /></div>
               <div><span class="dw-cap">抠图结果（灰格＝透明）</span><img id="matOut" class="mat-canvas" alt="抠图结果" /></div>
             </div>
-            <a class="btn btn-accent btn-sm" id="matDownload" download>下载透明 PNG</a>
+            <div class="mat-result-actions">
+              <a class="btn btn-accent btn-sm" id="matDownload" download>下载透明 PNG</a>
+              <button type="button" class="btn btn-ghost btn-sm" id="matResultActual" title="按原始分辨率查看，可平移检查发丝细节">🔍 1:1 查看</button>
+              <span class="convert-status" id="matResultSizeTip"></span>
+            </div>
           </div>
         </div>
       </div>

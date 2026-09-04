@@ -989,6 +989,19 @@ img { max-width: 100%; display: block; }
 }
 .dw-compare img.mat-canvas { background-color: #fff; }
 
+/* 一键抠图：结果区 1:1 原始分辨率查看。
+   默认预览被 .dw-compare 两列格 + max-height:60vh 缩到几百 px（2048×3072 输出≈缩 4~7 倍），
+   发丝级细节全被浏览器平均掉，用户无法评估质量。开启后按原始像素显示、容器内滚动平移。 */
+.mat-result-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.mat-result-actions .mat-result-tip { font-size: .78rem; color: var(--text-mute); }
+.dw-result { overflow: auto; }
+.dw-compare.actual-size { grid-template-columns: 1fr; }
+.dw-compare.actual-size img {
+  width: auto; max-width: none; max-height: none;
+  object-fit: unset; margin: 0;
+  cursor: zoom-out;
+}
+
 /* 一键抠图：手动框选主体（可选）。开启后在预览图上拖一个框，
    后端只把框内区域送进模型——照片里有多个物体时可指定抠哪一个。
    用 div 而非 svg 画框：WKWebView 对 inline <svg> 的 viewBox / non-scaling-stroke /
