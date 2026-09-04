@@ -379,8 +379,38 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
             ramp = cv2.GaussianBlur(ramp, (0, 0), 2.0)
             zone = out[..., 3] < 0.55
             out[..., 3][zone] = out[..., 3][zone] * ramp[zone]
+
+            # 低 α 去斑驳：压制+GF 后低 α 区会有孤立的 α 坑洞（深底上呈斑点），
+            # 向邻域轻微收敛使半透明带连续（实测低 α 碎块 9→4）。
+            sm = cv2.GaussianBlur(out[..., 3], (0, 0), 1.6)
+            z2 = (out[..., 3] > 0.02) & (out[..., 3] < 0.55)
+            out[..., 3][z2] = 0.35 * out[..., 3][z2] + 0.65 * sm[z2]
         except Exception as exc:  # noqa: BLE001
             logger.warning("背景色压制失败，跳过: %s", exc)
+
+    # 前景色传播（foreground estimation）：半透明细梢的 RGB 来自 despill 反推，
+    # α 越低噪声放大越狠（×1/α）。把实心区(α>0.85)的发色按就近尺度传播过来，
+    # 梢部呈现顺滑的真实发色而非颗粒状混色。优先取最小覆盖尺度（多色主体不混色）。
+    try:
+        a_f = out[..., 3]
+        solid = (a_f > 0.85).astype(np.float32)
+        if solid.mean() > 0.02:
+            rgb_f = out[..., :3]
+            prop = np.zeros_like(rgb_f)
+            have = np.zeros(a_f.shape, dtype=bool)
+            for k in (24, 64, 144):
+                num = cv2.blur(rgb_f * solid[..., None], (k, k))
+                den = cv2.blur(solid, (k, k))
+                ok = (den > 1e-4) & (~have)
+                pr = num / np.maximum(den, 1e-6)[..., None]
+                prop[ok] = pr[ok]
+                have |= ok
+            wt = np.clip((0.85 - a_f) / 0.85, 0.0, 1.0)
+            band = a_f > 0.02
+            Fnew = rgb_f * (1 - wt[..., None]) + prop * wt[..., None]
+            out[..., :3] = np.where(band[..., None], Fnew, rgb_f)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("前景色传播失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
