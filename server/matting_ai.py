@@ -1308,6 +1308,19 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             _cb_frac = 0.0
             if _cb is not None:
                 _cb_frac = max(0.0, min(1.0, (_cb[2] - _cb[0]) * (_cb[3] - _cb[1])))
+            # 套索/框选没配文字时无法从描述判断人像 → 本地 MODNet（免费、~2s）
+            # 做人像检测：检出即升级 human 场景（发丝精度远高于 general，
+            # 否则半透明发丝带的是背景橙色——白底下橙晕极其明显）
+            if _cb is not None and not _is_person:
+                try:
+                    _pa = _matting_modnet_core(rgb, W, H)
+                    _pc = float((np.asarray(_pa.split()[3]) > 128).mean())
+                    if _pc > 0.12:
+                        _is_person = True
+                        if meta is not None:
+                            meta["person_detected_local"] = round(_pc, 3)
+                except Exception:
+                    pass
             # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
             if is_cloud_matting_mediakit_ready():
                 try:
