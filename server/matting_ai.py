@@ -1352,7 +1352,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             _crgba = None
                             _best_cov = -1.0
                             for _sc in (("product", _scene) if _text_like else (_scene, "product")):
-                                _r = mediakit_remove_bg(_crop, scene=_sc, timeout=90)
+                                _r = mediakit_remove_bg(_crop, scene=_sc, timeout=90, soft_fade=bool(_is_person))
                                 _cov = float((_np.asarray(_r.split()[3]) > 100).mean())
                                 if _cov > _best_cov:
                                     _best_cov = _cov
@@ -1557,9 +1557,9 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             if meta is not None:
                                 meta["cloud_crop"] = [_cx0, _cy0, _cx1, _cy1]
                         else:
-                            rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
+                            rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90, soft_fade=bool(_is_person))
                     else:
-                        rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
+                        rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90, soft_fade=bool(_is_person))
                     # 大圈模式：全图直抠后按「连通域选择」保留——与套索相交的
                     # 主体整体保留（延伸出圈外也不硬切），与套索无关的散落元素剔除。
                     # 质量与智能抠图同级（同一全图云端链路），套索只决定「留哪些部件」。

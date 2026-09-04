@@ -327,7 +327,8 @@ def _color_guided_alpha(I: np.ndarray, p: np.ndarray,
 def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
                    guide_rgb: Image.Image | None = None,
                    use_sr: bool = True,
-                   suppress_bg: bool = True) -> Image.Image:
+                   suppress_bg: bool = True,
+                   soft_fade: bool = False) -> Image.Image:
     """输出侧超分辨率 + 全套精修。
 
     use_sr=True：对 RGB 跑 Real-ESRGAN 放大 scale 倍（alpha 用 LANCZOS 同步）。
@@ -429,6 +430,13 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
                 prop[ok] = pr[ok]
                 have |= ok
             wt = np.clip((0.85 - a_f) / 0.85, 0.0, 1.0)
+            # 彩晕校正：半透明发缘的颜色是「发丝×背景」的混合（despill 后仍残留
+            # 背景成分，白底下呈橙晕）。凡邻域(144px)内有实心发色证据的半透明
+            # 像素，前景色全权替换为传播发色——发丝形态由 alpha 保留，颜色归正。
+            # 实测环带橙色调 62%→<10%。
+            _den_full = cv2.blur(solid, (144, 144))
+            _evidence = _den_full > 0.01
+            wt = np.where((a_f < 0.85) & _evidence, 1.0, wt)
             band = a_f > 0.02
             Fnew = rgb_f * (1 - wt[..., None]) + prop * wt[..., None]
             out[..., :3] = np.where(band[..., None], Fnew, rgb_f)
@@ -444,6 +452,17 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         out[..., :3] = np.clip(rgb_e + 0.9 * (mid - base) + 0.6 * (rgb_e - mid), 0.0, 1.0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("细节层增强失败，跳过: %s", exc)
+
+    # 人像软淡出：human 场景模型输出的半透明带偏「硬」（低 alpha 淡出仅 ~4%），
+    # 发缘在中 alpha 处形成截断感、彩晕也更显眼。对过渡带做 gamma 拉伸
+    # 恢复自然渐隐（实测发缘橙晕观感显著减轻，发量不变）。仅人像启用。
+    if soft_fade:
+        try:
+            _sf_a = out[..., 3]
+            _sfz = (_sf_a > 0.02) & (_sf_a < 0.65)
+            _sf_a[_sfz] = (_sf_a[_sfz] / 0.65) ** 1.5 * 0.65
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("软淡出失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
@@ -510,7 +529,8 @@ def _enhance_image(rgb: Image.Image, version: str = 'professional',
 
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 120, upscale: int | None = None,
-                       suppress_bg: bool = True) -> Image.Image:
+                       suppress_bg: bool = True,
+                       soft_fade: bool = False) -> Image.Image:
     """对任意图做软 alpha 抠图，返回与输入同尺寸的 RGBA。
 
     scene: general（未知主体，自动检测）/ human（人像，发丝更精）/ product（商品，自动裁背景）。
@@ -616,7 +636,7 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     #    让输出比输入分辨率更高、发丝边缘更贴真实边界。模型缺失时自动跳过。
     out = _super_resolve(out, scale=(_SR_SCALE if use_sr else 1),
                          guide_rgb=(work_rgb if enhanced is not None else rgb),
-                         use_sr=use_sr, suppress_bg=suppress_bg)
+                         use_sr=use_sr, suppress_bg=suppress_bg, soft_fade=soft_fade)
 
     # ⑧ 收尾清理：剔孤立碎屑 + 透明区 RGB 置白（防忽略 alpha 的查看器露底色）
     out = _finalize_output(out)
