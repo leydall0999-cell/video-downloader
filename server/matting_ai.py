@@ -1291,7 +1291,56 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 try:
                     from cloud_matting_mediakit import mediakit_remove_bg
                     _scene = "human" if _is_person else "general"
-                    rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
+                    # 有定位框（AI 视觉定位「说扣什么」/ 手动框选/套索）时：
+                    # 先裁出目标区域再云端抠，结果贴回全图（框外强制透明）。
+                    # MediaKit 只做显著主体分割、不接受文本 prompt——全图直抠会
+                    # 选错主体（如海报上选了显著性最高的画笔而不是用户要的标题）；
+                    # 裁剪让目标成为裁片内的唯一显著主体，文字描述才能真正生效。
+                    if _cb is not None:
+                        _px = [min(max(_cb[0], 0.0), 1.0), min(max(_cb[1], 0.0), 1.0),
+                               min(max(_cb[2], 0.0), 1.0), min(max(_cb[3], 0.0), 1.0)]
+                        _bx0, _by0, _bx1, _by1 = int(_px[0] * W), int(_px[1] * H), int(_px[2] * W), int(_px[3] * H)
+                        _pad_x = max(8, int((_bx1 - _bx0) * 0.12))
+                        _pad_y = max(8, int((_by1 - _by0) * 0.12))
+                        _cx0, _cy0 = max(0, _bx0 - _pad_x), max(0, _by0 - _pad_y)
+                        _cx1, _cy1 = min(W, _bx1 + _pad_x), min(H, _by1 + _pad_y)
+                        if _cx1 - _cx0 >= 16 and _cy1 - _cy0 >= 16:
+                            _crop = rgb.crop((_cx0, _cy0, _cx1, _cy1))
+                            # 文字/标题/logo 类目标：general 场景会把文字当背景抠掉
+                            # （实测标题裁片仅留 2%），product 场景把文字当前景层
+                            # 完整保留（实测 60%）。关键词命中直接走 product。
+                            _kw = ((meta or {}).get("prompt", "") or "") + (vision_label or "")
+                            _text_like = any(k in _kw for k in ("文字", "标题", "字", "logo", "Logo", "LOGO", "题字", "标语"))
+                            _crgba = None
+                            for _sc in (("product", _scene) if _text_like else (_scene, "product")):
+                                _crgba = mediakit_remove_bg(_crop, scene=_sc, timeout=90)
+                                import numpy as _np
+                                if (_np.asarray(_crgba.split()[3]) > 40).mean() >= 0.02:
+                                    break
+                                # 裁片内几乎没留住主体（场景误判）→ 换下一场景重试
+                            _crgba = _crgba if _crgba is not None else mediakit_remove_bg(_crop, scene=_scene, timeout=90)
+                            # 增强开启时云端返回 2x 裁片；贴回全图前必须缩回裁片尺寸，
+                            # 否则画布只装得下左上 1/4（表现为主体被切掉大半）
+                            if _crgba.size != _crop.size:
+                                _crgba = _crgba.resize(_crop.size, Image.LANCZOS)
+                            rgba = Image.new("RGBA", rgb.size, (0, 0, 0, 0))
+                            rgba.paste(_crgba, (_cx0, _cy0))
+                            # 框外强制透明（羽化 8px 软边）：「说扣什么」的语义是只要
+                            # 框内目标——裁片 padding 区带进来的副标题/装饰一律清除
+                            import numpy as _npm
+                            from PIL import ImageDraw as _IDraw, ImageFilter as _IFilter
+                            _am = Image.new("L", rgb.size, 0)
+                            _IDraw.Draw(_am).rectangle([_bx0, _by0, _bx1 - 1, _by1 - 1], fill=255)
+                            _am = _am.filter(_IFilter.GaussianBlur(8))
+                            _arr = _npm.asarray(rgba).astype(_npm.float32)
+                            _arr[..., 3] = _arr[..., 3] * (_npm.asarray(_am, dtype=_npm.float32) / 255.0)
+                            rgba = Image.fromarray(_arr.astype("uint8"), "RGBA")
+                            if meta is not None:
+                                meta["cloud_crop"] = [_cx0, _cy0, _cx1, _cy1]
+                        else:
+                            rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
+                    else:
+                        rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
                     if meta is not None:
                         meta["cloud_used"] = True
                         meta["cloud_provider"] = "volcengine-mediakit"
