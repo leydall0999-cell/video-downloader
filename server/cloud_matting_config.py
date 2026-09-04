@@ -37,12 +37,13 @@ def get_cloud_matting_config() -> dict[str, Any]:
         "access_key": "",
         "secret_key": "",
         "enabled": False,
+        "mediakit_api_key": "",
     }
     cp = _config_path()
     if cp.is_file():
         try:
             saved = json.loads(cp.read_text(encoding="utf-8"))
-            for k in ("provider", "access_key", "secret_key", "enabled"):
+            for k in ("provider", "access_key", "secret_key", "enabled", "mediakit_api_key"):
                 if k in saved:
                     cfg[k] = saved[k]
         except (json.JSONDecodeError, OSError):
@@ -54,6 +55,9 @@ def get_cloud_matting_config() -> dict[str, Any]:
     sk = os.environ.get("VDL_CLOUD_MAT_SK", "").strip()
     if sk:
         cfg["secret_key"] = sk
+    mk = os.environ.get("VDL_CLOUD_MAT_MEDIAKIT_KEY", "").strip()
+    if mk:
+        cfg["mediakit_api_key"] = mk
     en = os.environ.get("VDL_CLOUD_MAT_ENABLED", "").strip().lower()
     if en in ("1", "true", "yes", "on"):
         cfg["enabled"] = True
@@ -77,3 +81,9 @@ def is_cloud_matting_ready() -> bool:
     """是否已配置可用的云端抠图（开关开 + AK/SK 非空）。"""
     cfg = get_cloud_matting_config()
     return bool(cfg.get("enabled")) and bool(cfg.get("access_key")) and bool(cfg.get("secret_key"))
+
+
+def is_cloud_matting_mediakit_ready() -> bool:
+    """是否已配置 AI MediaKit Bearer Key（通用软 alpha 抠图，豆包级）。"""
+    cfg = get_cloud_matting_config()
+    return bool((cfg.get("mediakit_api_key") or "").strip())

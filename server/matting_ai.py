@@ -46,7 +46,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from cloud_matting_config import is_cloud_matting_ready
+from cloud_matting_config import is_cloud_matting_ready, is_cloud_matting_mediakit_ready
 
 # ---------------------------------------------------------------- 模型注册表
 
@@ -1271,11 +1271,12 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         rgb = im.convert("RGB")
         W, H = rgb.size
 
-        # ☁️ 云端抠图优先（火山视觉智能，豆包级像素质量）；失败回退下方本地链路。
+        # ☁️ 云端抠图优先（火山，豆包级像素质量）；失败回退下方本地链路。
         # 仅对「默认/智能/像素级」意图启用云端优先；用户显式选了本地特殊引擎
         # （色度键=纯色专用、modnet=本地人像）时尊重本地选择，不覆盖。
-        # 人像场景现在也优先走云端 HumanSegment（专用「人像抠图」，软 alpha + 边缘精细，
-        # 发丝/皮肤质量远优于本地 MODNet）；本地 MODNet 仅作无网/无 Key 兜底。
+        # 优先级：① AI MediaKit 智能抠图（通用软 alpha，任意主体，豆包级）>
+        #         ② cv 视觉智能 GeneralSegment/HumanSegment（硬分割，物体可用）>
+        #         ③ 本地 BiRefNet/MODNet/色度键 兜底。
         if meta is not None:
             meta.setdefault("cloud_used", False)
         _cloud_models = ("auto", "birefnet-general", "sam-matting")
@@ -1283,22 +1284,39 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             _is_person_label(vision_label)
             or _is_person_label((meta or {}).get("prompt", ""))
         )
-        if (model or _MODEL_NAME) in _cloud_models and is_cloud_matting_ready():
-            try:
-                from cloud_matting import cloud_matting_rgba
-                _cb = _norm_box_from_inputs(vision_box, polygon, box)
-                rgba = cloud_matting_rgba(rgb, box=_cb, person=_is_person, timeout=60)
-                if meta is not None:
-                    meta["cloud_used"] = True
-                    meta["cloud_provider"] = "volcengine"
-                _save_out(rgba, out)
-                return
-            except Exception as _ce:  # noqa: BLE001
-                import logging as _lg
-
-                _lg.getLogger("matting_ai").warning("云端抠图失败，回退本地: %s", _ce)
-                if meta is not None:
-                    meta["cloud_error"] = str(_ce)[:200]
+        if (model or _MODEL_NAME) in _cloud_models:
+            _cb = _norm_box_from_inputs(vision_box, polygon, box)
+            # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
+            if is_cloud_matting_mediakit_ready():
+                try:
+                    from cloud_matting_mediakit import mediakit_remove_bg
+                    _scene = "human" if _is_person else "general"
+                    rgba = mediakit_remove_bg(rgb, scene=_scene, timeout=90)
+                    if meta is not None:
+                        meta["cloud_used"] = True
+                        meta["cloud_provider"] = "volcengine-mediakit"
+                    _save_out(rgba, out)
+                    return
+                except Exception as _ce:  # noqa: BLE001
+                    import logging as _lg
+                    _lg.getLogger("matting_ai").warning("MediaKit 抠图失败，回退: %s", _ce)
+                    if meta is not None:
+                        meta["cloud_error"] = str(_ce)[:200]
+            # ② cv 视觉智能（SigV4 AK/SK）：物体走 GeneralSegment，人像走 HumanSegment
+            if is_cloud_matting_ready():
+                try:
+                    from cloud_matting import cloud_matting_rgba
+                    rgba = cloud_matting_rgba(rgb, box=_cb, person=_is_person, timeout=60)
+                    if meta is not None:
+                        meta["cloud_used"] = True
+                        meta["cloud_provider"] = "volcengine"
+                    _save_out(rgba, out)
+                    return
+                except Exception as _ce:  # noqa: BLE001
+                    import logging as _lg
+                    _lg.getLogger("matting_ai").warning("云端抠图失败，回退本地: %s", _ce)
+                    if meta is not None:
+                        meta["cloud_error"] = str(_ce)[:200]
 
         # 🤖 智能自动路由（auto / 默认引擎）：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
         #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（颜色距离遮罩 + 强去溢色，硬边干净、零 ML 权重），
