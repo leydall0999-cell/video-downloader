@@ -1274,21 +1274,20 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         # ☁️ 云端抠图优先（火山视觉智能，豆包级像素质量）；失败回退下方本地链路。
         # 仅对「默认/智能/像素级」意图启用云端优先；用户显式选了本地特殊引擎
         # （色度键=纯色专用、modnet=本地人像）时尊重本地选择，不覆盖。
-        # 额外例外：VLM 识别到人像时，本地 MODNet 对发丝/半透 wisps 的连续 alpha
-        # 质量优于云端 GeneralSegment 的硬边 mask，故人像场景一律优先本地 MODNet，
-        # 不因用户选了 auto/SAM/BiRefNet 等通用模型而被云端覆盖。
+        # 人像场景现在也优先走云端 HumanSegment（专用「人像抠图」，软 alpha + 边缘精细，
+        # 发丝/皮肤质量远优于本地 MODNet）；本地 MODNet 仅作无网/无 Key 兜底。
         if meta is not None:
             meta.setdefault("cloud_used", False)
         _cloud_models = ("auto", "birefnet-general", "sam-matting")
-        _skip_cloud_for_person = (
+        _is_person = (
             _is_person_label(vision_label)
             or _is_person_label((meta or {}).get("prompt", ""))
         )
-        if (model or _MODEL_NAME) in _cloud_models and is_cloud_matting_ready() and not _skip_cloud_for_person:
+        if (model or _MODEL_NAME) in _cloud_models and is_cloud_matting_ready():
             try:
                 from cloud_matting import cloud_matting_rgba
                 _cb = _norm_box_from_inputs(vision_box, polygon, box)
-                rgba = cloud_matting_rgba(rgb, box=_cb, timeout=60)
+                rgba = cloud_matting_rgba(rgb, box=_cb, person=_is_person, timeout=60)
                 if meta is not None:
                     meta["cloud_used"] = True
                     meta["cloud_provider"] = "volcengine"

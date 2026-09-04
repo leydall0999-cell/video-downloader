@@ -5,10 +5,13 @@
 设计要点：
   - 签名：火山 OpenAPI 用 AWS SigV4 变体（algorithm=HMAC-SHA256），纯标准库实现，
     无需 volcengine SDK，不给瘦身包加依赖。
-  - 主接口 _volc_general_segment(rgb) 调 GeneralSegment，返回 RGBA 透明 PNG。
+  - 主入口 cloud_matting_rgba(rgb)：按主体类型选火山接口——
+      人像 → HumanSegment（专用「人像抠图」：豆包级软 alpha + refine 边缘精细，
+              发丝/皮肤质量远优于通用分割）；其它主体 → GeneralSegment（通用图像分割）。
+    两者均返回 RGBA 透明 PNG。
   - 「说扣什么就抠哪」技巧：VLM 给出描述对象的 bbox 时，先把图 crop 到该框（带 padding），
-    对 crop 调 GeneralSegment（crop 内主主体=描述对象），结果贴回原图。
-    这样只用文档最清楚的 GeneralSegment，无需 EntitySegment 的多实体解析，鲁棒且可测。
+    对 crop 调对应接口（crop 内主主体=描述对象），结果贴回原图。
+    统一复用 SigV4 签名，无需 EntitySegment 多实体解析，鲁棒且可测。
   - 云端优先、本地兜底：matting_ai 在可用时优先调用；任何异常按类型决定回退还是抛出。
   - 全程用 urllib（stdlib），不引入 requests。
 """
@@ -144,30 +147,52 @@ def _decode_foreground(parsed: dict) -> Image.Image:
     raise RuntimeError(f"火山抠图响应缺少 foreground/mask 字段: {str(data)[:200]}")
 
 
-def _general_segment(rgb: Image.Image, ak: str, sk: str, timeout: int = 60) -> Image.Image:
-    """对单张 RGB 调 GeneralSegment，返回 RGBA 透明前景图。"""
+def _segment_call(action: str, rgb: Image.Image, ak: str, sk: str, timeout: int = 60) -> Image.Image:
+    """调火山视觉智能分割/抠图接口（GeneralSegment / HumanSegment 等），返回 RGBA 前景图。
+
+    action: 接口名（"GeneralSegment" / "HumanSegment"）。
+    统一参数：image_base64 + return_foreground_image=1（返回透明前景 PNG）+ refine=1（边缘精细）。
+    """
     b64 = _to_b64_png(rgb)
     # form-urlencoded：value 整体 percent-encode，避免 base64 的 + / = 被误解析
     import urllib.parse
     body = ("image_base64=" + urllib.parse.quote(b64, safe="")
             + "&return_foreground_image=1&refine=1").encode("utf-8")
-    parsed = _volc_post("GeneralSegment", body, "application/x-www-form-urlencoded", ak, sk, timeout)
+    parsed = _volc_post(action, body, "application/x-www-form-urlencoded", ak, sk, timeout)
     return _decode_foreground(parsed)
+
+
+def _general_segment(rgb: Image.Image, ak: str, sk: str, timeout: int = 60) -> Image.Image:
+    """通用物体分割（非人像），返回 RGBA 透明前景图。"""
+    return _segment_call("GeneralSegment", rgb, ak, sk, timeout)
+
+
+def _human_segment(rgb: Image.Image, ak: str, sk: str, timeout: int = 60) -> Image.Image:
+    """专用人像抠图（HumanSegment）：豆包级软 alpha + refine 边缘精细，发丝/皮肤远优于通用分割。
+
+    人像场景一律走此接口而非 GeneralSegment——后者对人物只出硬边 mask，
+    前者是火山「人像抠图」专用服务，返回带连续 alpha 的透明人像。
+    """
+    return _segment_call("HumanSegment", rgb, ak, sk, timeout)
 
 
 # ───────────────────────────── 对外入口 ─────────────────────────────
 def cloud_matting_rgba(rgb: Image.Image, box: list | None = None,
-                       timeout: int = 60) -> Image.Image:
+                       person: bool = False, timeout: int = 60) -> Image.Image:
     """云端抠图，返回与 rgb 同尺寸的 RGBA。
 
     box: 归一化 [x1,y1,x2,y2]（VLM 定位到的描述对象）。给定时 crop 到 box 再抠，
          结果贴回 → 实现「说扣什么就抠哪」；为 None 时抠全图主主体。
+    person: 主体是否为人像。True → HumanSegment（豆包级软 alpha 人像抠图），
+            False → GeneralSegment（通用物体分割）。
     """
     cfg = get_cloud_matting_config()
     ak = (cfg.get("access_key") or "").strip()
     sk = (cfg.get("secret_key") or "").strip()
     if not ak or not sk:
         raise RuntimeError("云端抠图未配置火山 AK/SK（设置→视觉模型栏→云端抠图）")
+    orig_w, orig_h = rgb.size
+    _seg = _human_segment if person else _general_segment
 
     if box and len(box) == 4:
         x1, y1, x2, y2 = [float(v) for v in box[:4]]
@@ -184,9 +209,12 @@ def cloud_matting_rgba(rgb: Image.Image, box: list | None = None,
         cy1 = min(H, int(round(y2 * H + bh * H * pad)))
         if cx1 > cx0 and cy1 > cy0:
             crop = rgb.crop((cx0, cy0, cx1, cy1))
-            crop_rgba = _general_segment(crop, ak, sk, timeout)
+            crop_rgba = _seg(crop, ak, sk, timeout)
             full = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             full.paste(crop_rgba, (cx0, cy0))
             return full
-    # 无 box 或 crop 非法 → 全图主主体
-    return _general_segment(rgb, ak, sk, timeout)
+    # 无 box 或 crop 非法 → 全图主主体（对齐原图尺寸，消除 ≤1280 缩放偏差）
+    res = _seg(rgb, ak, sk, timeout)
+    if res.size != (orig_w, orig_h):
+        res = res.resize((orig_w, orig_h), Image.LANCZOS)
+    return res
