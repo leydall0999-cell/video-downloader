@@ -364,6 +364,31 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
+def _finalize_output(rgba: Image.Image) -> Image.Image:
+    """抠图收尾清理（保守，只做两件事）：
+
+    ① 剔除与主体**完全不连通**、且无任何实心像素(α≥0.5)的孤立低 α 碎屑
+       （云端偶发的飞点）。贴着主体轮廓的细发梢与主体属同一连通域，不受影响。
+    ② 全透明区(α<0.01)的 RGB 置白。alpha=0 本身不可见，但部分查看器/编辑器
+       忽略 alpha 直读 RGB，会把透明区存的原始背景色（如橙幕的橙棕）整个
+       显示出来，让用户误以为背景没抠掉。
+    """
+    arr = np.array(rgba.convert("RGBA"))
+    a = arr[..., 3].astype(np.float32) / 255.0
+    mask = (a > 0.02).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n > 2:
+        main = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        for i in range(1, n):
+            if i == main:
+                continue
+            comp = labels == i
+            if a[comp].max() < 0.5 and stats[i, cv2.CC_STAT_AREA] < 0.02 * a.size:
+                arr[..., 3][comp] = 0
+    arr[..., :3][a < 0.01] = 255
+    return Image.fromarray(arr, mode="RGBA")
+
+
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 120, upscale: int | None = None) -> Image.Image:
     """对任意图做软 alpha 抠图，返回与输入同尺寸的 RGBA。
@@ -446,4 +471,7 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     #    再以原图真实颜色为引导做 closed-form matting 精修（color guided filter），
     #    让输出比输入分辨率更高、发丝边缘更贴真实边界。模型缺失时自动跳过。
     out = _super_resolve(out, scale=_SR_SCALE, guide_rgb=rgb)
+
+    # ⑧ 收尾清理：剔孤立碎屑 + 透明区 RGB 置白（防忽略 alpha 的查看器露底色）
+    out = _finalize_output(out)
     return out
