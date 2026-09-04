@@ -354,6 +354,7 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
     # 边缘磨软，这里以原图真实颜色为引导，在过渡带重估 alpha，让发丝边缘
     # 重新贴合真实颜色边界。失败则跳过，不影响主流程。
     if guide_rgb is not None:
+        guide = None
         try:
             guide = np.array(guide_rgb.convert("RGB").resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
             a_ref = _color_guided_alpha(guide, out[..., 3])
@@ -361,6 +362,21 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
             out[..., 3][band] = a_ref[band]
         except Exception as exc:  # noqa: BLE001
             logger.warning("closed-form 精修失败，跳过: %s", exc)
+
+        # 背景色压制：模型对部分纯背景像素会高估 alpha（此类像素 I≈背景色 B，
+        # despill 公式 F=(I-(1-α)B)/α 只会还原出 B 本身，形成彩色光晕，无解）。
+        # 用原图颜色判断「这像素本来就是背景」，按颜色距离只降不升地衰减 alpha。
+        try:
+            known = out[..., 3] < 0.01  # MediaKit 高置信背景（含 refine 后）
+            wgt = known.astype(np.float32)
+            k = 121  # 大核把背景色场传播到主体周边（兼容渐变背景）
+            Bf = cv2.blur(guide * wgt[..., None], (k, k)) / (cv2.blur(wgt, (k, k))[..., None] + 1e-6)
+            dist = np.linalg.norm(guide - Bf, axis=-1)
+            ramp = np.clip((dist - 0.07) / (0.16 - 0.07), 0.0, 1.0)
+            keep = out[..., 3] < 0.95  # 不动实心主体
+            out[..., 3] = np.where(keep, out[..., 3] * ramp, out[..., 3])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("背景色压制失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
