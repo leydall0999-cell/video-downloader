@@ -26,17 +26,18 @@
 
 模型：
     默认 birefnet-general（**MIT 许可，可商用**，927 MB，质量最高）。
-    备选 birefnet-general-lite（213 MB，MIT）。
-    可选 rmbg-2.0（**CC BY-NC 4.0，仅限非商业用途**，977 MB，图形/文字边界最佳）；
-    因授权限制**不做默认**，仅作「非商用」场景的显式 opt-in。
+    外挂 modnet-photographic（人像本地检测）、SAM（框选/点选精抠）、chroma-key（纯色背景算法）。
     首次使用时惰性下载到 ~/.vdl_models（或 VDL_MODELS_DIR），进度可轮询。
 
+    已下线（2026-09-05，用户确认删除）：
+      · rmbg-2.0（CC BY-NC 4.0，仅非商用）；
+      · birefnet-general-lite（与完整版同源且无自动路由调度，纯冗余）。
+
 License 注意（重要）：
-    - **BiRefNet（birefnet-general / -lite）= MIT 许可**：可商用 / 修改 / 再分发，
+    - **BiRefNet（birefnet-general）= MIT 许可**：可商用 / 修改 / 再分发，
       只需保留版权声明 → 作为产品默认引擎安全。
-    - **RMBG-2.0（rmbg-2.0）= CC BY-NC 4.0**：权重仅限非商业用途开放，
-      商业用途须与 BRIA 签商业授权协议。**绝不可作为商业分发产品的默认模型**；
-      前端下拉已标注「⚠️ 仅非商用」，仅提供给做个人 / 非商用研究的用户显式选择。
+    - **内置引擎一律要求 MIT / Apache / BSD 等可商用许可**；CC BY-NC 类模型
+      （如 RMBG-2.0）不作为内置选项，避免商用分发风险。
 """
 from __future__ import annotations
 
@@ -64,55 +65,11 @@ MODELS: dict[str, dict] = {
         "license": "内置算法 + MIT",
         "commercial": "yes",
     },
-    "rmbg-2.0": {
-        # 真实文件名是 bria-rmbg-2.0.onnx（rembg v0.0.0 release 的命名约定：
-        # 「bria」前缀 + 模型正式名）。官方 SHA256 (rembg 2.0.81 bria_rmbg.py 注释)：
-        #   sha256:5b486f08200f513f460da46dd702db5fbb47d79b4be4b708a19444bcd4e79958
-        "filename": "bria-rmbg-2.0.onnx",
-        # RMBG-2.0 FP32 版官方 977 MB（briaai/RMBG-2.0 onnx/model.onnx）。
-        # 下载前若用户知情：约 1 GB，会花 30s~3min，耐心等。FP16 量化版仅 514 MB，
-        # 但 rembg v0.0.0 release 没托管此版本，要换下载源就先不动。
-        "size_mb": 977,
-        "input_size": (1024, 1024),
-        "norm": "255",  # RMBG-2.0 标准前处理：÷255 后 ImageNet 归一化
-        # ⚠️ 授权：CC BY-NC 4.0，仅限非商业用途。commercial="non-commercial"
-        # 让前端明确打标，且本模型不作为默认引擎。
-        "license": "CC BY-NC 4.0",
-        "commercial": "non-commercial",
-        "desc": "RMBG-2.0 · 977MB · 图形/文字最佳（⚠️ 仅非商用）",
-        # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
-        "urls": [
-            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
-            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
-            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
-            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
-            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
-        ],
-    },
-    "birefnet-general-lite": {
-        "filename": "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-        "size_mb": 213,
-        "input_size": (1024, 1024),
-        "norm": "max",  # BiRefNet（rembg 风格）：÷全图最大像素值后 ImageNet 归一化
-        "md5": "4fab47adc4ff364be1713e97b7e66334",
-        # MIT 许可，可商用
-        "license": "MIT",
-        "commercial": "yes",
-        "desc": "BiRefNet 轻量版 · 213MB · MIT 可商用",
-        # 国内/国外多个源依次尝试，覆盖 GitHub release 在某些网络下不可达的情况
-        "urls": [
-            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
-            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
-            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
-            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
-            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
-            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-        ],
-    },
+    # 已下线（2026-09-05 用户确认删除）：
+    #   · rmbg-2.0 —— CC BY-NC 4.0 仅非商用，与「内置默认必须 MIT/Apache/BSD 可商用」冲突。
+    #   · birefnet-general-lite —— 与完整版同源，且没有任何自动路由会调度它（纯冗余）。
+    # 两者均已从 MODELS 移除；前端在 matLoadModels 里也做了同名过滤，
+    # 保证未重打包的旧二进制不会把它们列出来。
     "birefnet-general": {
         "filename": "BiRefNet-general-epoch_244.onnx",
         "size_mb": 927,

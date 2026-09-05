@@ -2894,7 +2894,12 @@
       .then(r => r.json())
       .then(d => {
         el.matModel.innerHTML = '';
-        (d.models || []).forEach(m => {
+        // 已下线的引擎（不再向用户暴露）：
+        //  · rmbg-2.0 —— CC BY-NC 4.0 仅非商用，与「内置默认必须 MIT/Apache/BSD 可商用」冲突
+        //  · birefnet-general-lite —— 与完整版同源，且没有任何自动路由会调度它（纯冗余）
+        // 服务端已同步移除；这里再过滤一层，保证未重打包的旧二进制也不会把它们列出来。
+        const MAT_RETIRED = ['rmbg-2.0', 'birefnet-general-lite'];
+        (d.models || []).filter(m => !MAT_RETIRED.includes(m.name)).forEach(m => {
           const o = document.createElement('option');
           o.value = m.name;
           const tag = m.recommended ? ' · 推荐' : '';
