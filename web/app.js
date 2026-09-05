@@ -976,6 +976,13 @@
     }, ms);
   };
 
+  // 生成「保存为文本」的默认文件名：清洗非法字符并强制 .txt 后缀
+  const _extractFileName = (title) => {
+    const raw = (title || '').toString().trim().replace(/\s+/g, '_');
+    const safe = raw.replace(/[\\/:*?"<>|]/g, '').slice(0, 60);
+    const base = safe || '提取文案';
+    return base.endsWith('.txt') ? base : base + '.txt';
+  };
 
   const formatDuration = (seconds) => {
     if (!seconds || seconds <= 0) return '';
@@ -1359,6 +1366,7 @@
       extractWrap: node.querySelector('[data-extract-wrap]'),
       extractBody: node.querySelector('[data-extract-text]'),
       extractCopy: node.querySelector('[data-extract-copy]'),
+      extractSave: node.querySelector('[data-extract-save]'),
       extractRetry: node.querySelector('[data-extract-retry]'),
     };
     refs.cancel.addEventListener('click', () => cancelTask(taskId, refs.base || ''));
@@ -1401,6 +1409,43 @@
         setTimeout(() => { refs.extractCopy.textContent = old; }, 1500);
       });
     });
+    // 保存文案为 .txt：桌面版走原生保存面板（pywebview 桥接），
+    // 纯浏览器环境退化用 Blob 下载（WKWebView 拦截 <a download>，故必须优先桥接）
+    if (refs.extractSave) {
+      refs.extractSave.addEventListener('click', async () => {
+        const text = refs.extractBody.textContent || '';
+        if (!text) return;
+        const name = _extractFileName(refs.title && refs.title.textContent);
+        const old = refs.extractSave.textContent;
+        try {
+          const api = window.pywebview && window.pywebview.api;
+          if (api && typeof api.save_text_file_dialog === 'function') {
+            const res = await api.save_text_file_dialog(text, name);
+            if (res === 'CANCELLED') return;
+            if (typeof res === 'string' && res.startsWith('ERROR:')) {
+              showToast('保存失败：' + res.slice(6).trim());
+              return;
+            }
+            showToast('已保存到：' + res);
+          } else {
+            // 浏览器兜底
+            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+            showToast('已开始下载：' + name);
+          }
+          refs.extractSave.textContent = '已保存 ✓';
+          setTimeout(() => { refs.extractSave.textContent = old; }, 1500);
+        } catch (e) {
+          showToast('保存失败：' + ((e && e.message) || '未知错误'));
+        }
+      });
+    }
     refs.extractRetry.addEventListener('click', () => {
       if (!refs.extractRetry.dataset.running) {
         refs.extractRetry.dataset.running = '1';
@@ -1663,6 +1708,7 @@
       refs.extractWrap.hidden = false;
       refs.extractBody.textContent = '正在提取文案…';
       refs.extractCopy.hidden = true;
+      if (refs.extractSave) refs.extractSave.hidden = true;
       refs.extractRetry.hidden = true;
       return;
     }
@@ -1673,6 +1719,7 @@
       if (spoken.error) errs.push(`口播文案：${spoken.error}`);
       refs.extractBody.textContent = '提取失败\n' + errs.join('\n');
       refs.extractCopy.hidden = true;
+      if (refs.extractSave) refs.extractSave.hidden = true;
       refs.extractRetry.hidden = false;
       return;
     }
@@ -1686,6 +1733,7 @@
       }
       refs.extractBody.textContent = parts.join('\n');
       refs.extractCopy.hidden = false;
+      if (refs.extractSave) refs.extractSave.hidden = false;
       refs.extractRetry.hidden = task.status !== 'completed';
       return;
     }
