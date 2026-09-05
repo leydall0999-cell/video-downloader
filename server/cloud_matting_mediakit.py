@@ -164,8 +164,12 @@ def _decontaminate_edge_spill(rgb: Image.Image, rgba: Image.Image,
         # 复杂背景：不执行去溢色
         return rgba
 
-    # 2) 对更宽的半透明边缘（0.02 < α < 0.98）反推前景色
-    edge = (a > 0.02) & (a < 0.98)
+    # 2) 只对低 α 半透明边缘（0.02 < α < 0.55）反推前景色。
+    #    MediaKit 返回的 RGB 本身就是前景色估计（直通 alpha）；对近不透明
+    #    像素(α≥0.55)再做背景减除属于二次校正，会把颜色压暗发灰（实测
+    #    α0.8~0.95 的发丝被减暗 30%，白底下呈灰霜）。背景污染只显著存在
+    #    于低 α 区，高 α 区的颜色是可信的。
+    edge = (a > 0.02) & (a < 0.55)
     eps = 1e-6
     F = rgb_arr.copy()
     F[edge] = (rgb_arr[edge] - (1.0 - a[edge, None]) * B[None, :]) / np.maximum(a[edge, None], eps)
@@ -367,9 +371,42 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         guide = None
         try:
             guide = np.array(guide_rgb.convert("RGB").resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
-            a_ref = _color_guided_alpha(guide, out[..., 3])
-            band = (out[..., 3] > 0.02) & (out[..., 3] < 0.98)
-            out[..., 3][band] = a_ref[band]
+            # 人像边缘净化（三步）——必须在 GF/传播改动颜色**之前**跑，
+            # 此时半透明像素还保留模型原始混色，背景场反解才有效：
+            # ① 背景样像素清除：模型给部分纯背景像素误发小 α，其颜色≈局部
+            #    背景场，反解会得到近黑前景（渲染成灰霜）——按 ||C-Bf||<0.10
+            #    直接 α=0（实测头顶霜带 9k 像素全清）。
+            # ② 去混色：其余半透明 C=F·α+B·(1-α)，大核(384)背景场反解
+            #    F=(C-(1-α)Bf)/α，覆盖宽淡出带（环带橙色调 77%→12%）。
+            # ③ 纱雾截止：α<0.12 残余纱雾 smoothstep(0.12→0.24) 清除，
+            #    中 α 发丝 wisps 保留。
+            if soft_fade:
+                try:
+                    _kn = (out[..., 3] < 0.01).astype(np.float32)
+                    _k2 = 384
+                    _Bf = cv2.blur(guide * _kn[..., None], (_k2, _k2)) / (
+                        cv2.blur(_kn, (_k2, _k2))[..., None] + 1e-6)
+                    _den2 = cv2.blur(_kn, (_k2, _k2))
+                    _d = np.linalg.norm(out[..., :3] - _Bf, axis=-1)
+                    _semi = (out[..., 3] > 0.02) & (out[..., 3] < 0.60) & (_den2 > 0.02)
+                    out[..., 3][_semi & (_d < 0.10)] = 0.0
+                    _fg = _semi & (_d >= 0.10)
+                    _un = np.clip(
+                        (out[..., :3] - (1.0 - out[..., 3])[..., None] * _Bf) /
+                        np.maximum(out[..., 3], 0.12)[..., None], 0.0, 1.0)
+                    out[..., :3] = np.where(_fg[..., None], _un, out[..., :3])
+                    _a2 = out[..., 3]
+                    _t = np.clip((_a2 - 0.12) / 0.12, 0.0, 1.0)
+                    _t = _t * _t * (3.0 - 2.0 * _t)
+                    out[..., 3] = np.where(_a2 <= 0.12, 0.0, _t * np.maximum(_a2, 0.24))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("边缘净化失败，跳过: %s", exc)
+            # 人像净化路径：跳过 GF 重估（GF 会按颜色把发缘内部半透化——
+            # 深色半透在白底即灰霜；模型原始 alpha 已足够好）
+            if not soft_fade:
+                a_ref = _color_guided_alpha(guide, out[..., 3])
+                band = (out[..., 3] > 0.02) & (out[..., 3] < 0.98)
+                out[..., 3][band] = a_ref[band]
         except Exception as exc:  # noqa: BLE001
             logger.warning("closed-form 精修失败，跳过: %s", exc)
 
@@ -382,7 +419,10 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         # suppress_bg=False（裁剪定位模式）时整段跳过：裁片背景色与浅色目标
         # （如米色纸上的浅木画架）可能极近，压制会洗白目标；框外清洁由调用方的
         # 羽化框遮罩负责，压制在裁剪模式下冗余且有害。
-        if suppress_bg:
+        # suppress_bg 且非人像净化路径才跑旧压制：人像的 edge-clean(背景样
+        # 清除+去混色)已接管其职责，旧压制会把颜色接近暖背景的发缘内部压成
+        # 半透明白斑（实测橙幕人像发缘霜化）。
+        if suppress_bg and not soft_fade:
             try:
                 known = out[..., 3] < 0.01  # MediaKit 高置信背景（含 refine 后）
                 wgt = known.astype(np.float32)
@@ -415,7 +455,10 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
     # 前景色传播（foreground estimation）：半透明细梢的 RGB 来自 despill 反推，
     # α 越低噪声放大越狠（×1/α）。把实心区(α>0.85)的发色按就近尺度传播过来，
     # 梢部呈现顺滑的真实发色而非颗粒状混色。优先取最小覆盖尺度（多色主体不混色）。
-    try:
+    # 人像净化路径跳过：传播的全权颜色替换会把发缘内部色彩抹平（发色发闷），
+    # 且其彩晕校正职责已由 edge-clean 的去混色承担。
+    if not soft_fade:
+      try:
         a_f = out[..., 3]
         solid = (a_f > 0.85).astype(np.float32)
         if solid.mean() > 0.02:
@@ -440,7 +483,7 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
             band = a_f > 0.02
             Fnew = rgb_f * (1 - wt[..., None]) + prop * wt[..., None]
             out[..., :3] = np.where(band[..., None], Fnew, rgb_f)
-    except Exception as exc:  # noqa: BLE001
+      except Exception as exc:  # noqa: BLE001
         logger.warning("前景色传播失败，跳过: %s", exc)
 
     # 细节层增强：原图发丝本身偏软（对照豆包确认为其生成增强所致），
@@ -453,16 +496,6 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
     except Exception as exc:  # noqa: BLE001
         logger.warning("细节层增强失败，跳过: %s", exc)
 
-    # 人像软淡出：human 场景模型输出的半透明带偏「硬」（低 alpha 淡出仅 ~4%），
-    # 发缘在中 alpha 处形成截断感、彩晕也更显眼。对过渡带做 gamma 拉伸
-    # 恢复自然渐隐（实测发缘橙晕观感显著减轻，发量不变）。仅人像启用。
-    if soft_fade:
-        try:
-            _sf_a = out[..., 3]
-            _sfz = (_sf_a > 0.02) & (_sf_a < 0.65)
-            _sf_a[_sfz] = (_sf_a[_sfz] / 0.65) ** 1.5 * 0.65
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("软淡出失败，跳过: %s", exc)
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
 
@@ -628,8 +661,11 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
         arr[..., 3] = _refine_alpha(arr[..., 3])
         out = Image.fromarray((np.clip(arr, 0.0, 1.0) * 255.0).astype(np.uint8), mode="RGBA")
 
-    # ⑥ 纯色背景时做一次边缘去溢色（如橙/绿幕棚拍），消除半透明边缘彩边
-    out = _decontaminate_edge_spill(work_rgb if enhanced is not None else rgb, out)
+    # ⑥ 纯色背景时做一次边缘去溢色（如橙/绿幕棚拍），消除半透明边缘彩边。
+    #    人像净化路径跳过：despill 的全域背景减除对近不透明像素属于二次
+    #    校正（MediaKit 返回的 RGB 已是前景色估计），会把发丝减暗发灰。
+    if not soft_fade:
+        out = _decontaminate_edge_spill(work_rgb if enhanced is not None else rgb, out)
 
     # ⑦ 输出侧超分辨率：抠完之后整体放大 2x 并重建发丝/皮肤细节，
     #    再以原图真实颜色为引导做 closed-form matting 精修（color guided filter），

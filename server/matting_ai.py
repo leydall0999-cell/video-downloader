@@ -1308,10 +1308,11 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             _cb_frac = 0.0
             if _cb is not None:
                 _cb_frac = max(0.0, min(1.0, (_cb[2] - _cb[0]) * (_cb[3] - _cb[1])))
-            # 套索/框选没配文字时无法从描述判断人像 → 本地 MODNet（免费、~2s）
+            # 无文字描述时无法从文案判断人像 → 本地 MODNet（免费、~2s）
             # 做人像检测：检出即升级 human 场景（发丝精度远高于 general，
-            # 否则半透明发丝带的是背景橙色——白底下橙晕极其明显）
-            if _cb is not None and not _is_person:
+            # 否则半透明发丝带的是背景橙色——白底下橙晕极其明显）。
+            # 全图路径（_cb=None）同样需要——智能自动抠人像是最高频场景。
+            if not _is_person:
                 try:
                     _pa = _matting_modnet_core(rgb, W, H)
                     _pc = float((np.asarray(_pa.split()[3]) > 128).mean())
