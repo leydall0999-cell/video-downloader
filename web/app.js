@@ -541,6 +541,7 @@
     matLightboxStage: $('matLightboxStage'),
     matLightboxImg: $('matLightboxImg'),
     matLightboxClose: $('matLightboxClose'),
+    matLightboxTools: $('matLightboxTools'),
     // 抠图手动框选
     matBoxToggle: $('matBoxToggle'),
     matBoxSvg: $('matBoxSvg'),
@@ -3829,6 +3830,20 @@
       el.matLightboxImg.removeAttribute('src');
       document.body.style.overflow = '';
     };
+    // 放大层背景切换：棋盘格 / 白底 / 黑底，便于核对透明区完整性
+    if (el.matLightboxTools) {
+      el.matLightboxTools.querySelectorAll('button[data-bg]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const bg = btn.getAttribute('data-bg');
+          const stage = el.matLightboxStage;
+          stage.classList.remove('bg-checker', 'bg-white', 'bg-black');
+          stage.classList.add('bg-' + bg);
+          el.matLightboxTools.querySelectorAll('button[data-bg]').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+      });
+    }
     el.matOut.addEventListener('click', openLightbox);
     if (el.matLightboxClose) el.matLightboxClose.addEventListener('click', closeLightbox);
     // 点空白处关闭：lightbox 遮罩本身 / stage 容器留白区域；点击图片本身不关闭

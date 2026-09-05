@@ -103,6 +103,16 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 det = _fn(str(src_path), prompt=(prompt or "").strip() or None)
                 vb = det["subject"]["box"]
                 vision_box = [float(v) for v in vb[:4]]
+                # 外扩 bbox：VLM 给的框通常只框「主体核心」（如文字笔画），不含底板/投影
+                # 外延。直接用它会把阴影/外延切掉（实测「带底板+投影的设计图」主体 3/4 丢失）。
+                # 向四周外扩 ~15%（贴边的封顶到 0/1），让框包住完整元素再抠。
+                vx0, vy0, vx1, vy1 = vision_box
+                ex = (vx1 - vx0) * 0.15
+                ey = (vy1 - vy0) * 0.15
+                vision_box = [
+                    max(0.0, vx0 - ex), max(0.0, vy0 - ey),
+                    min(1.0, vx1 + ex), min(1.0, vy1 + ey),
+                ]
                 vision_used = True
                 job["vision_label"] = det["subject"].get("label", "")
             except Exception as e:  # noqa: BLE001
@@ -110,6 +120,14 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
                 vision_box = None
                 vision_used = False
                 job["vision_error"] = str(e)[:200]
+        # 🤖 自动模式（无描述、无手动选区）下，VLM 的硬裁剪框语义是「框外强制透明」，
+        # 而 VLM 通常只框住文字笔画，会把底板/投影/外延当框外裁掉 → 主体大面积缺失
+        # （实测「带底板+投影的设计图」3/4 丢失）。此时放弃裁剪框，退化为云端整图
+        # 抠图——云端本身就能完整抠出含阴影的主体。
+        # 「说扣什么」(prompt 非空) 或任何手动选区场景下仍保留 VLM 定位。
+        if vision_box is not None and not prompt and not (box or polygon or click or blocks):
+            logger.info("auto 模式放弃 VLM 裁剪框，退化为云端整图（避免切掉底板/阴影）")
+            vision_box = None
         mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine, vision_label=job.get("vision_label", ""), meta=job, keep_lasso_all=keep_lasso_all)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")

@@ -1033,10 +1033,16 @@
     <!-- 🔍 点击抠图结果缩略图的全屏放大层（在页面中央显示原始像素） -->
     <div class="mat-lightbox" id="matLightbox" hidden role="dialog" aria-label="抠图结果放大查看">
       <button type="button" class="mat-lightbox-close" id="matLightboxClose" aria-label="关闭">×</button>
-      <div class="mat-lightbox-stage" id="matLightboxStage">
+      <div class="mat-lightbox-stage bg-checker" id="matLightboxStage">
         <img id="matLightboxImg" alt="抠图结果" />
       </div>
-      <span class="mat-lightbox-tip">灰格表示透明区域 · 点击空白处或按 Esc 关闭</span>
+      <div class="mat-lightbox-tools" id="matLightboxTools">
+        <span class="mat-lb-tool-cap">背景</span>
+        <button type="button" data-bg="checker" class="active">棋盘格</button>
+        <button type="button" data-bg="white">白底</button>
+        <button type="button" data-bg="black">黑底</button>
+      </div>
+      <span class="mat-lightbox-tip">透明区域在「白底/黑底」下最易看清完整性 · 点击空白处或按 Esc 关闭</span>
     </div>
     </div>
   </section>

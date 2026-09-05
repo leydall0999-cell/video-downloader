@@ -112,11 +112,15 @@ def _refine_alpha(a: np.ndarray) -> np.ndarray:
         a_blur = np.array(a_pil.filter(ImageFilter.GaussianBlur(radius=0.5))).astype(np.float32) / 255.0
         a[edge] = 0.80 * a[edge] + 0.20 * a_blur[edge]
 
-        # 锐化（Unsharp Mask）：让过渡带的发丝边缘更分明
-        # σ=1.5 增强细发丝且不放大过多噪声；amount=0.40 保守
-        a_blur2 = cv2.GaussianBlur(a, (0, 0), 1.5)
-        a_sharp = np.clip(a + 0.40 * (a - a_blur2), 0.0, 1.0)
-        a[edge] = a_sharp[edge]
+        # 锐化（Unsharp Mask）：只作用于高 α 主体边缘（α≥0.4），让单根发丝更分明。
+        # 关键：半透明尾端（α<0.4，如文字/阴影底部的软渐变）绝不走锐化——否则
+        # Unsharp Mask 会把 α≈0.1 的软边缘下压到 <0.03 被强制清零，造成文字/阴影
+        # 底部缺角。尾端只保留上面的轻度平滑，维持软过渡的完整。
+        sharp_region = (a > 0.4) & (a < 0.97)
+        if np.any(sharp_region):
+            a_blur2 = cv2.GaussianBlur(a, (0, 0), 1.5)
+            a_sharp = np.clip(a + 0.40 * (a - a_blur2), 0.0, 1.0)
+            a[sharp_region] = a_sharp[sharp_region]
 
     return np.clip(a, 0.0, 1.0)
 
