@@ -877,6 +877,17 @@
                 <select id="matModel" aria-label="抠图模型"></select>
               </label>
               <span class="dw-hint">默认「智能自动」已包含全部引擎并自动调度。只有自动结果不满意时才手动强制某个引擎重抠；全部免费（RMBG-2.0 除外——仅限非商用）。</span>
+              <label class="uc-field" style="margin-top:10px">
+                <span class="uc-label">画质增强档位（人像发丝质量，云端）</span>
+                <select id="cloudEnhance" class="adv-input">
+                  <option value="">自动（人像=大模型版，其他场景不增强）</option>
+                  <option value="max">大模型版 · 极致（约 0.24 元/张，稍慢，默认）</option>
+                  <option value="professional">专业版 · 发丝级（约 0.037 元/张）</option>
+                  <option value="standard">标准版 · 省钱（约 0.007 元/张）</option>
+                  <option value="off">关闭增强</option>
+                </select>
+              </label>
+              <span class="dw-hint" id="cloudEnhanceStatus">改档位即时保存生效，下次抠图起按新档位计费。</span>
             </div>
           </details>
           <label class="uc-field mat-prompt-wrap" id="matPromptWrap">
@@ -1138,15 +1149,7 @@
             <input id="cloudSk" class="adv-input" type="password" placeholder="火山引擎 Secret Key（SK）" autocomplete="off" spellcheck="false" />
             <label class="adv-label" for="cloudMk">AI MediaKit API Key（豆包级软 alpha 抠图，推荐）</label>
             <input id="cloudMk" class="adv-input" type="password" placeholder="火山 AI MediaKit Bearer Key（火山引擎控制台 → AI MediaKit）" autocomplete="off" spellcheck="false" />
-            <label class="adv-label" for="cloudEnhance">画质增强档位（人像抠图先增强后抠图，发丝质量）</label>
-            <select id="cloudEnhance" class="adv-input">
-              <option value="">自动（人像=专业版，其他场景不增强）</option>
-              <option value="professional">专业版 · 发丝级（约 0.037 元/张）</option>
-              <option value="max">大模型版 · 极致（约 0.24 元/张，稍慢）</option>
-              <option value="standard">标准版 · 省钱（约 0.007 元/张）</option>
-              <option value="off">关闭增强</option>
-            </select>
-            <p class="adv-note">「说扣什么」的像素级质量来自云端（火山即豆包视觉后端）。需单独申请火山视觉智能 AK/SK，且与上方 DashScope 视觉 Key 互不影响。未配置/断网时自动回退本地抠图，不报错。增强失败自动回退不增强，不中断抠图。</p>
+            <p class="adv-note">「说扣什么」的像素级质量来自云端（火山即豆包视觉后端）。需单独申请火山视觉智能 AK/SK，且与上方 DashScope 视觉 Key 互不影响。未配置/断网时自动回退本地抠图，不报错。增强失败自动回退不增强，不中断抠图。画质增强档位在「一键抠图」面板的 ⚙️ 高级选项里。</p>
             <div class="com-ai-actions">
               <button type="button" class="btn btn-primary btn-sm" id="cloudMattingSave">保存云端抠图配置</button>
               <span id="cloudMattingStatus" class="sub-status" hidden></span>

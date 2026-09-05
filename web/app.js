@@ -9439,6 +9439,34 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
+  // ---- 抠图面板内的画质增强档位（即改即存） ----
+  if (el.cloudEnhance) {
+    // 启动时回填当前档位
+    request('/api/cloud-matting/config').then(r => {
+      if (r && r.ok) el.cloudEnhance.value = r.enhance_version || '';
+    }).catch(() => {});
+    el.cloudEnhance.addEventListener('change', async () => {
+      const st = $('cloudEnhanceStatus');
+      const show = (msg, err) => { if (st) { st.textContent = msg; st.style.color = err ? '#e5484d' : '#1a9e57'; } };
+      try {
+        show('保存中…', false);
+        const cur = await request('/api/cloud-matting/config');
+        const r = await request('/api/cloud-matting/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key: (cur && cur.access_key) || '',
+            secret_key: (cur && cur.secret_key) || '',
+            mediakit_api_key: '',
+            enhance_version: el.cloudEnhance.value,
+            enabled: !!(cur && cur.enabled),
+          }),
+        });
+        show(r && r.ok ? '✅ 已保存，下次抠图生效' : '❌ 保存失败', !(r && r.ok));
+      } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
+    });
+  }
+
   // ---- 格式 / 片段加工（桌面版功能） ----
   // 操作类型定义：label 显示名、kinds 适用媒体类型、params 动态表单字段。
   const PROCESS_OPS = {
