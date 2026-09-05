@@ -263,6 +263,7 @@
     cloudMk: $('cloudMk'),
     matLassoKeepAll: $('matLassoKeepAll'),
     cloudEnhance: $('cloudEnhance'),
+    matOutputHd: $('matOutputHd'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -9413,6 +9414,7 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.cloudSk) el.cloudSk.value = r2.secret_key || '';
         if (el.cloudMk) el.cloudMk.value = r2.mediakit_api_key || '';
         if (el.cloudEnhance) el.cloudEnhance.value = r2.enhance_version || '';
+        if (el.matOutputHd) el.matOutputHd.checked = !!r2.mat_output_hd;
       }
     } catch (e) { /* */ }
 
@@ -9438,6 +9440,7 @@ el.dwVidPlayer.removeAttribute('src');
             secret_key: el.cloudSk ? el.cloudSk.value.trim() : '',
             mediakit_api_key: el.cloudMk ? el.cloudMk.value.trim() : '',
             enhance_version: el.cloudEnhance ? el.cloudEnhance.value : '',
+            mat_output_hd: el.matOutputHd ? el.matOutputHd.checked : false,
             enabled: el.cloudMattingEnabled ? el.cloudMattingEnabled.checked : false,
           }),
         });
@@ -9471,6 +9474,31 @@ el.dwVidPlayer.removeAttribute('src');
           }),
         });
         show(r && r.ok ? '✅ 已保存，下次抠图生效' : '❌ 保存失败', !(r && r.ok));
+      } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
+    });
+  }
+
+  // ---- 抠图面板内的「高清输出（2x 超分）」开关（即改即存） ----
+  if (el.matOutputHd) {
+    el.matOutputHd.addEventListener('change', async () => {
+      const st = $('cloudEnhanceStatus');
+      const show = (msg, err) => { if (st) { st.textContent = msg; st.style.color = err ? '#e5484d' : '#1a9e57'; } };
+      try {
+        show('保存中…', false);
+        const cur = await request('/api/cloud-matting/config');
+        const r = await request('/api/cloud-matting/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key: (cur && cur.access_key) || '',
+            secret_key: (cur && cur.secret_key) || '',
+            mediakit_api_key: '',
+            enhance_version: (cur && cur.enhance_version) || '',
+            mat_output_hd: el.matOutputHd.checked,
+            enabled: !!(cur && cur.enabled),
+          }),
+        });
+        show(r && r.ok ? (el.matOutputHd.checked ? '✅ 已开启高清输出（更清晰但更慢）' : '✅ 已关闭高清输出（速度优先）') : '❌ 保存失败', !(r && r.ok));
       } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
     });
   }

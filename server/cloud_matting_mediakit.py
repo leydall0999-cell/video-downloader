@@ -646,7 +646,13 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
         except Exception as exc:  # noqa: BLE001
             logger.warning("AI 画质增强失败(含1次重试)，回退原始链路: %s", exc)
 
-    use_sr = enhanced is None
+    # 本地 Real-ESRGAN 2x 超分是云端抠图最重的本地 CPU 步骤（1.6MP 图约 30~40s，
+    # 12MP 图可达数分钟），且会把输出放大为输入的 2 倍（文件也更大）。
+    # 默认关闭（mat_output_hd=False）走「快模式」：依赖云端 MediaKit 原生分辨率 +
+    # 轻量边缘精修（closed-form / 去溢色 / 前景传播，仅 ~1s），速度提升一个数量级。
+    # 仅当用户显式开启「高清输出」时才跑本地 2x 超分（对齐豆包更高清的输出）。
+    # 人像场景因走云端 enhance 2x（已是 2x 且为云端快链路），不受此开关影响。
+    use_sr = (enhanced is None) and bool(cfg.get("mat_output_hd", False))
     if enhanced is not None:
         # 增强图已是 2x AI 细节：跳过本地 LANCZOS 上采样与 Real-ESRGAN，
         # 全程在增强分辨率上抠图与精修（AI 增强取代本地 SR）。

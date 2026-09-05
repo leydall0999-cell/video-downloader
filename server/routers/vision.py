@@ -51,6 +51,7 @@ class CloudMattingConfigRequest(BaseModel):
     enabled: bool = False
     mediakit_api_key: str = ""
     enhance_version: str = ""  # ""=auto / off / standard / professional / max
+    mat_output_hd: bool = False  # 高清输出：本地 2x 超分（更清晰但更慢）
 
 
 def _mask_key(k: str) -> str:
@@ -72,6 +73,7 @@ def cloud_matting_config_get() -> dict:
         "secret_key": _mask_key(cfg.get("secret_key", "")),
         "mediakit_api_key": _mask_key(cfg.get("mediakit_api_key", "")),
         "enhance_version": cfg.get("enhance_version", ""),
+        "mat_output_hd": bool(cfg.get("mat_output_hd", False)),
         "enabled": bool(cfg.get("enabled", False)),
         "ready": _cm.is_cloud_matting_ready(),
     }
@@ -107,6 +109,7 @@ def cloud_matting_config_save(req: CloudMattingConfigRequest) -> dict:
         "secret_key": _merge(req.secret_key, "secret_key"),
         "mediakit_api_key": _merge(req.mediakit_api_key, "mediakit_api_key"),
         "enhance_version": ev,
+        "mat_output_hd": bool(req.mat_output_hd),
         "enabled": bool(req.enabled),
     }
     _cm.save_cloud_matting_config(data)
