@@ -3882,18 +3882,20 @@ def _video_size_at(formats: list[dict], height: int) -> int:
 
 
 def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
-    """把 yt-dlp 冗长的 format 列表压缩成几个用户看得懂的选项。"""
+    """把 yt-dlp 的 format 列表压缩成用户可选的清晰度档（2026-09-06 优化）。
+
+    变更：去掉首位「最佳画质（自动）」聚合项；改为把解析到的**所有真实清晰度**
+    逐档平铺（含抖音等 VPS 平台——不再走单档特例），每档可直接选择。
+    只列 formats 中实际存在的高度（视频只有 720 就不再虚构 480/360 假档）。
+    """
     formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
-    heights = sorted({f["height"] for f in formats if f.get("height")}, reverse=True)
+    heights = sorted({
+        int(f["height"]) for f in formats
+        if f.get("height") and 0 < int(f["height"]) <= 4320
+    }, reverse=True)
     audio_size = _best_audio_size(formats)
 
-    # 抖音（VPS 解析）只有单一视频档位，避免展示 480P/360P 等不存在的选项导致下载失败
-    if info.get("extractor_key") == "Douyin":
-        return [
-            {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
-        ]
-
-    # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示 4K/1080P 等视频画质选项
+    # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示画质档
     if not heights:
         audio_ex = {str(f.get("ext") or "").lower() for f in formats}
         audio_opts: list[dict[str, Any]] = []
@@ -3905,18 +3907,14 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
             {"key": BEST_KEY, "label": "最佳音质（自动）", "note": "自动选择最高音质", "approx_size": audio_size},
         ] + audio_opts
 
-    options: list[dict[str, Any]] = [
-        {"key": BEST_KEY, "label": "最佳画质（自动）", "note": "视频+音频自动合并", "approx_size": 0}
-    ]
-    max_height = heights[0] if heights else 0
-    for height, label in QUALITY_PRESETS:
-        if max_height and height > max_height:
-            continue
+    preset = dict(QUALITY_PRESETS)
+    options: list[dict[str, Any]] = []
+    for height in heights:
         video_size = _video_size_at(formats, height)
         options.append(
             {
                 "key": str(height),
-                "label": label,
+                "label": preset.get(height, f"{height}P"),
                 "note": "MP4",
                 "approx_size": (video_size + audio_size) if video_size else 0,
             }
@@ -3960,9 +3958,14 @@ def _format_selector(quality_key: str) -> str:
 
 
 def is_valid_quality(quality_key: str) -> bool:
-    return quality_key in (BEST_KEY, AUDIO_KEY, WEBM_KEY, M4A_KEY) or quality_key in {
-        str(h) for h, _ in QUALITY_PRESETS
-    }
+    # 常量档（最佳/仅音频/WebM/M4A）或任意 1..4320 真实清晰度档（2026-09-06 全档平铺后放开）
+    if quality_key in (BEST_KEY, AUDIO_KEY, WEBM_KEY, M4A_KEY):
+        return True
+    try:
+        h = int(quality_key)
+    except (TypeError, ValueError):
+        return False
+    return 0 < h <= 4320
 
 
 def quality_label(quality_key: str) -> str:
