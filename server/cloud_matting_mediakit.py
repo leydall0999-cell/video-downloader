@@ -624,13 +624,13 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
         scene = "general"
 
     # ── AI 画质增强（豆包同源）：先增强后抠图 ──
-    # 配置键 enhance_version：off=关；standard / professional / max=指定版本。
-    # 未配置时 auto：人像默认 max(大模型版，发丝重绘最干净，约0.24元/张)，
-    # 其他场景不增强（控费）。质量对比实测 max 显著优于 professional
-    # （细碎发丝成缕、轮廓碎块消失）；要控费可在配置面板切回 professional。
+    # 配置键 enhance_version：off=关（所有场景不增强）；auto=智能（人像增强·其他不增强）；
+    # standard / professional / max=指定版本（所有场景按该档增强）。
+    # 未配置时 auto：人像默认 professional(发丝级，约0.037元/张，比 max 快且便宜)，
+    # 其他场景不增强（控费）。如需更极致发丝可手动选 max。
     ver = str(cfg.get("enhance_version") or "").strip().lower()
     if ver in ("", "auto"):
-        ver = "max" if scene == "human" else "off"
+        ver = "professional" if scene == "human" else "off"
 
     enhanced = None
     if ver in ("standard", "professional", "max"):

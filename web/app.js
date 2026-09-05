@@ -263,6 +263,7 @@
     cloudMk: $('cloudMk'),
     matLassoKeepAll: $('matLassoKeepAll'),
     cloudEnhance: $('cloudEnhance'),
+    matEnhanceToggle: $('matEnhanceToggle'),
     matOutputHd: $('matOutputHd'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
@@ -9453,7 +9454,11 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.cloudAk) el.cloudAk.value = r2.access_key || '';
         if (el.cloudSk) el.cloudSk.value = r2.secret_key || '';
         if (el.cloudMk) el.cloudMk.value = r2.mediakit_api_key || '';
-        if (el.cloudEnhance) el.cloudEnhance.value = r2.enhance_version || '';
+        if (el.matEnhanceToggle) {
+          const ev = (r2.enhance_version || '').trim();
+          el.matEnhanceToggle.checked = ev !== 'off';
+          if (el.cloudEnhance) el.cloudEnhance.value = (ev === 'off' || ev === '') ? 'auto' : ev;
+        }
         if (el.matOutputHd) el.matOutputHd.checked = !!r2.mat_output_hd;
       }
     } catch (e) { /* */ }
@@ -9479,7 +9484,7 @@ el.dwVidPlayer.removeAttribute('src');
             access_key: el.cloudAk ? el.cloudAk.value.trim() : '',
             secret_key: el.cloudSk ? el.cloudSk.value.trim() : '',
             mediakit_api_key: el.cloudMk ? el.cloudMk.value.trim() : '',
-            enhance_version: el.cloudEnhance ? el.cloudEnhance.value : '',
+            enhance_version: (el.matEnhanceToggle && !el.matEnhanceToggle.checked) ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : ''),
             mat_output_hd: el.matOutputHd ? el.matOutputHd.checked : false,
             enabled: el.cloudMattingEnabled ? el.cloudMattingEnabled.checked : false,
           }),
@@ -9490,18 +9495,16 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
-  // ---- 抠图面板内的画质增强档位（即改即存） ----
-  if (el.cloudEnhance) {
-    // 启动时回填当前档位
-    request('/api/cloud-matting/config').then(r => {
-      if (r && r.ok) el.cloudEnhance.value = r.enhance_version || '';
-    }).catch(() => {});
-    el.cloudEnhance.addEventListener('change', async () => {
+  // ---- 抠图面板内的「AI 画质增强」开关 + 档位（即改即存） ----
+  if (el.matEnhanceToggle) {
+    const saveEnhance = async () => {
       const st = $('cloudEnhanceStatus');
       const show = (msg, err) => { if (st) { st.textContent = msg; st.style.color = err ? '#e5484d' : '#1a9e57'; } };
       try {
         show('保存中…', false);
         const cur = await request('/api/cloud-matting/config');
+        const off = !el.matEnhanceToggle.checked;
+        if (off && el.cloudEnhance) el.cloudEnhance.value = 'auto'; // 关时回填默认档位，下次开仍是智能
         const r = await request('/api/cloud-matting/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -9509,13 +9512,20 @@ el.dwVidPlayer.removeAttribute('src');
             access_key: (cur && cur.access_key) || '',
             secret_key: (cur && cur.secret_key) || '',
             mediakit_api_key: '',
-            enhance_version: el.cloudEnhance.value,
+            enhance_version: off ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : 'auto'),
             enabled: !!(cur && cur.enabled),
           }),
         });
-        show(r && r.ok ? '✅ 已保存，下次抠图生效' : '❌ 保存失败', !(r && r.ok));
+        show(r && r.ok ? (off ? '✅ 已关闭增强（最快最省）' : '✅ 已保存，下次抠图生效') : '❌ 保存失败', !(r && r.ok));
       } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
-    });
+    };
+    // 开关切换：关时禁用档位下拉避免误导
+    const syncEnhanceUI = () => { if (el.cloudEnhance) el.cloudEnhance.disabled = !el.matEnhanceToggle.checked; };
+    el.matEnhanceToggle.addEventListener('change', () => { syncEnhanceUI(); saveEnhance(); });
+    if (el.cloudEnhance) {
+      el.cloudEnhance.addEventListener('change', saveEnhance);
+      syncEnhanceUI();
+    }
   }
 
   // ---- 抠图面板内的「高清输出（2x 超分）」开关（即改即存） ----
