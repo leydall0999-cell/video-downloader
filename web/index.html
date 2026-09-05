@@ -876,7 +876,7 @@
                 <span class="uc-label">引擎</span>
                 <select id="matModel" aria-label="抠图模型"></select>
               </label>
-              <span class="dw-hint">默认「智能自动」已包含全部引擎并自动调度。只有自动结果不满意时才手动强制某个引擎重抠；全部免费（RMBG-2.0 除外——仅限非商用）。</span>
+              <span class="dw-hint">默认智能自动已调度全部引擎；仅自动结果不满意时才需手动指定。</span>
               <label class="uc-field" style="margin-top:10px">
                 <span class="uc-label">画质增强档位（人像发丝质量，云端）</span>
                 <select id="cloudEnhance" class="adv-input">
@@ -894,15 +894,14 @@
             <span class="uc-label">🗣️ 说扣什么（自然语言描述主体）</span>
             <input type="text" id="matPrompt" class="mat-prompt-input" placeholder="例如：左边穿红衣服的人 / 中间的猫 / 标题那行字" autocomplete="off" />
           </label>
-          <span class="dw-hint" id="matPromptHint">描述你想抠的对象，AI 会按描述自动定位并抠出（需开启 AI 视觉定位且已配 DashScope Key）。留空则自动抠主主体。有描述时以描述为准（可叠加框选/套索作为辅助）。</span>
-          <span class="dw-hint">AI 自动识别主体并去背景，输出透明 PNG（可直接换背景 / 合成）。本地模型首次使用自动下载一次，之后离线可用。<b style="color:#b45309">授权：默认引擎 MIT 可商用；仅 RMBG-2.0（高级里）限非商用。</b></span>
+          <span class="dw-hint" id="matPromptHint">留空＝自动抠主体；填写描述则按描述抠。</span>
           <div class="mat-mode-row" id="matModeRow">
             <span class="mat-mode-cap">抠图方式</span>
             <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeManual" value="manual" checked /><span>⬜ 手动选区</span></label>
             <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeFine" value="fine" /><span>🔬 精细抠图</span></label>
             <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeSmart" value="smart" /><span>🪄 智能抠图</span></label>
           </div>
-          <span class="dw-hint" id="matModeHint">⬜ <b>手动选区（最常用、最可控）</b>：先在图上圈出想要的部分（矩形 / 套索 / 智能选块）再抠，结果只保留你圈中的内容。🔬 <b>精细抠图</b>：像素级精抠（发丝 / 衣边），画个框 / 圈住目标后自动用 SAM；首次自动下载约 60MB 模型。🪄 <b>智能抠图（辅助）</b>：直接点「开始抠图」让 AI 自动找最显著主体；复杂图建议先用「手动选区」圈好再抠，更稳更准。</span>
+          <span class="dw-hint" id="matModeHint">手动选区：圈哪里抠哪里（最常用）；智能抠图：自动找主体；精细抠图：像素级发丝。</span>
           <!-- 内部控件：由上方「抠图方式」自动控制，不再向用户展示独立开关 -->
           <label class="uc-field uc-check mat-box-toggle" hidden>
             <input type="checkbox" id="matBoxToggle" />
@@ -916,18 +915,18 @@
             <input type="checkbox" id="matVision" />
             <span class="uc-label">🤖 AI 视觉定位（看懂图·只抠主体）</span>
           </label>
-          <span class="dw-hint" id="matVisionHint" hidden>开启后：① 直接单击预览图上的任意元素（主标题/图案/按钮/logo），立即抠出那个元素，点哪抠哪；② 不点而直接「开始抠图」则由 AI 看懂图、自动框出主体再抠。能精准剔除紧贴的副标题 / 装饰。需先到「视频解说」标签页 → 右侧「⚙️ AI 能力与密钥配置」(展开) → 「视觉模型」栏选 DashScope 并填 Key（配置一次全局生效）；未配置时自动回退普通抠图。</span>
+          <span class="dw-hint" id="matVisionHint" hidden>点预览图上的元素＝点哪抠哪；不点则按描述自动定位。需已配 DashScope Key，未配置自动回退普通抠图。</span>
           <label class="uc-field uc-check mat-vision-toggle" hidden>
             <input type="checkbox" id="matSamRefine" checked />
             <span class="uc-label">🔬 精细抠图（SAM 像素级）</span>
           </label>
-          <span class="dw-hint" id="matSamHint" hidden>勾选并画了选区（框选 / 套索 / 点选 / AI 视觉定位）时，用 SAM 语义分割像素级精抠，发丝 / 衣边 / 字边更贴轮廓；首次使用自动下载约 60MB 模型（MIT 可商用）。自动整图 / 智能选块多选 不适用。</span>
+          <span class="dw-hint" id="matSamHint" hidden>画了选区时用 SAM 像素级精抠，发丝/衣边更贴轮廓；首次自动下载约 60MB 模型。</span>
           <div class="mat-tool-seg" id="matToolSeg" hidden>
             <button type="button" class="mat-tool-btn active" id="matToolRect">▭ 矩形框选</button>
             <button type="button" class="mat-tool-btn" id="matToolLasso">✏️ 套索圈选</button>
             <button type="button" class="mat-tool-btn" id="matToolBlocks">🧲 智能选块</button>
           </div>
-          <span class="dw-hint" id="matBoxHint" hidden>在下方预览图上标出你想抠的主体。两种工具：<b>矩形框选</b>拖一个框；<b>套索圈选</b>沿主体轮廓自由描一圈（贴合不规则主体、避开紧贴的副标题/装饰更精准）。不框则自动抠全图主体。</span>
+          <span class="dw-hint" id="matBoxHint" hidden><b>矩形框选</b>拖一个框；<b>套索圈选</b>沿轮廓描一圈（更精准）。不选区则自动抠主体。</span>
           <div class="dw-preview-wrap" id="matPreviewWrap">
             <div class="mat-zoom-stage" id="matZoomStage">
               <img id="matImgPreview" alt="预览" />
@@ -951,7 +950,7 @@
               <input type="checkbox" id="matLassoKeepAll" />
               <span>🧷 圈内原样全保留（不做 AI 筛选）</span>
             </label>
-            <span class="convert-status mat-zoom-tip">放大后点选/描边更精准，选区坐标自动按比例换算</span>
+            <span class="convert-status mat-zoom-tip">放大后选区更精准</span>
           </div>
           <div class="mat-box-actions" id="matBoxActions" hidden>
             <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除选区</button>
