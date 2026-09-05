@@ -40,6 +40,7 @@ run_one() {
 
 run_one test_app_smoke.py
 run_one test_membership.py
+run_one test_member_quota_e2e.py
 
 echo ""
 echo "========================================="

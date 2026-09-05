@@ -89,10 +89,14 @@ def node_info() -> dict:
 async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
     # 会员配额（2026-09-05 接入）：免费 resolve 10 次/日；下载/AI 会员 1000 次/日。
-    # 超限返回 402 + 业务前缀 MEMBER_QUOTA|，前端据此弹会员中心对应档位。
-    _mq = app.member_store.use_daily('resolve', 1)
-    if not _mq.get('ok'):
-        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _mq.get('error', '今日免费解析额度已用尽'))
+    # 设计：先查配额（不足早退 402），解析成功后才实际扣减 —— 解析失败/超时不烧次数。
+    _qs = app.member_store.quota_state('resolve')
+    if not _qs.get('allowed'):
+        if _qs.get('tier') == 'free':
+            _tip = f"今日免费解析额度已用尽（{_qs.get('limit', 10)}/日）— 开通下载会员可解锁 {_qs.get('member_limit') or 1000} 次/日"
+        else:
+            _tip = f"今日解析配额已用尽（{_qs.get('limit')}/日）"
+        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _tip)
     app._assert_safe_url(payload.url)
     url, platform = app.parse_source(payload.url)
     host = app._host_of(url)
@@ -116,6 +120,11 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         else:
             detail = f'解析超时（超过 {timeout} 秒）。常见原因：①视频本身受限（限免/会员专享/付费/地区限制，这类通常需登录 cookie 才能拿到真实流，请到右上角「高级选项」粘贴浏览器 Cookie 后重试）；②当前网络无法访问该平台（可尝试在「高级选项」设置代理）'
         raise app.HTTPException(status_code=504, detail=detail) from None
+    # 解析成功才计费（2026-09-05 语义：失败/超时不烧免费额度）
+    try:
+        app.member_store.use_daily('resolve', 1)
+    except Exception:
+        pass  # 计费失败不阻塞解析结果
     return {'url': url, 'platform': {'key': platform.key, 'name': platform.name}, 'video': app.downloader.summarize(info), 'qualities': app.downloader.build_quality_options(info), 'sources': []}
 
 def _stream_referer(host: str) -> str:
