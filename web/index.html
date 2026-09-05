@@ -916,19 +916,30 @@
               </div>
             </div>
           </details>
-          <label class="uc-field mat-prompt-wrap" id="matPromptWrap">
-            <span class="uc-label">🗣️ 说扣什么（自然语言描述主体）</span>
-            <input type="text" id="matPrompt" class="mat-prompt-input" placeholder="例如：左边穿红衣服的人 / 中间的猫 / 标题那行字" autocomplete="off" />
-          </label>
-          <span class="dw-hint" id="matPromptHint">留空＝自动抠主体；填写描述则按描述抠。</span>
-          <div class="mat-mode-row" id="matModeRow">
-            <span class="mat-mode-cap">抠图方式</span>
-            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeManual" value="manual" checked /><span>⬜ 手动选区</span></label>
-            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeFine" value="fine" /><span>🔬 精细抠图</span></label>
-            <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeSmart" value="smart" /><span>🪄 智能抠图</span></label>
+          <!-- 顶层二选一：说扣什么 vs 手动抠图 —— 先让用户明确选一种方法，再出现对应控件 -->
+          <div class="mat-approach-row" id="matApproachRow">
+            <label class="mat-approach-pill"><input type="radio" name="matApproach" id="matApproachPrompt" value="prompt" /><span>🗣️ 说扣什么</span></label>
+            <label class="mat-approach-pill"><input type="radio" name="matApproach" id="matApproachManual" value="manual" checked /><span>⬜ 手动抠图</span></label>
           </div>
-          <span class="dw-hint" id="matModeHint">手动选区：圈哪里抠哪里（最常用）；智能抠图：自动找主体；精细抠图：像素级发丝。</span>
-          <!-- 内部控件：由上方「抠图方式」自动控制，不再向用户展示独立开关 -->
+          <span class="dw-hint" id="matApproachHint">二选一：输入文字描述主体，或手动选择抠图方式。</span>
+
+          <div id="matPromptPanel" hidden>
+            <label class="uc-field mat-prompt-wrap" id="matPromptWrap">
+              <span class="uc-label">🗣️ 说扣什么（自然语言描述主体）</span>
+              <input type="text" id="matPrompt" class="mat-prompt-input" placeholder="例如：左边穿红衣服的人 / 中间的猫 / 标题那行字" autocomplete="off" />
+            </label>
+            <span class="dw-hint" id="matPromptHint">输入文字描述要抠的主体，点击「开始抠图」即可。</span>
+          </div>
+
+          <div id="matManualPanel">
+            <div class="mat-mode-row" id="matModeRow">
+              <span class="mat-mode-cap">抠图方式</span>
+              <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeManual" value="manual" checked /><span>⬜ 手动选区</span></label>
+              <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeFine" value="fine" /><span>🔬 精细抠图</span></label>
+              <label class="mat-mode-pill"><input type="radio" name="matMode" id="matModeSmart" value="smart" /><span>🪄 智能抠图</span></label>
+            </div>
+            <span class="dw-hint" id="matModeHint">手动选区：圈哪里抠哪里（最常用）；智能抠图：自动找主体；精细抠图：像素级发丝。</span>
+            <!-- 内部控件：由上方「抠图方式」自动控制，不再向用户展示独立开关 -->
           <label class="uc-field uc-check mat-box-toggle" hidden>
             <input type="checkbox" id="matBoxToggle" />
             <span class="uc-label">手动框选要抠的部分</span>
@@ -959,6 +970,7 @@
             <button type="button" class="btn btn-ghost btn-sm" id="matLassoDone" hidden>✔ 完成选区</button>
             <button type="button" class="btn btn-ghost btn-sm" id="matBlocksSplit" hidden>✂️ 细分选中块</button>
             <span class="convert-status" id="matBoxInfo"></span>
+          </div>
           </div>
           <div class="dw-toolbar">
             <button type="button" class="btn btn-primary" id="matBtn">开始抠图</button>

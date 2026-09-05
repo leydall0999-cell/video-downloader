@@ -519,6 +519,10 @@
     matFile: $('matFile'),
     matModel: $('matModel'),
     matPrompt: $('matPrompt'),
+    matApproachPrompt: $('matApproachPrompt'),
+    matApproachManual: $('matApproachManual'),
+    matPromptPanel: $('matPromptPanel'),
+    matManualPanel: $('matManualPanel'),
     matImgPreview: $('matImgPreview'),
     matManual: $('matManual'),
     matUrlList: $('matUrlList'),
@@ -3558,6 +3562,33 @@
   if (el.matBoxToggle) {
     el.matBoxToggle.addEventListener('change', () => matBoxSetEnabled(el.matBoxToggle.checked));
   }
+  // 抠图方法顶层二选一：🗣️ 说扣什么 / ⬜ 手动抠图
+  const matApproachNow = () => {
+    const r = document.querySelector('input[name="matApproach"]:checked');
+    return r ? r.value : 'manual';
+  };
+  const matApplyApproach = (approach) => {
+    if (approach === 'prompt') {
+      if (el.matPromptPanel) el.matPromptPanel.hidden = false;
+      if (el.matManualPanel) el.matManualPanel.hidden = true;
+      // 切到「说扣什么」时清掉手动选区/点选，避免残留状态误导用户
+      matBox = null; matBoxRedraw();
+      matPolygon = null; matLassoNorm = []; matLassoDrawing = false; matLassoCursor = null; matLassoDown = null; matLassoRedraw();
+      matBlockList = []; matBlockSel.clear(); matBlockHover = null; matBlockRedraw();
+      matClick = null;
+    } else {
+      if (el.matPromptPanel) el.matPromptPanel.hidden = true;
+      if (el.matManualPanel) el.matManualPanel.hidden = false;
+      // 回到手动模式时恢复当前 mode 的控件状态
+      matApplyMode(matModeNow());
+    }
+    if (el.matStatus) el.matStatus.textContent = '';
+    if (el.matBoxInfo) el.matBoxInfo.textContent = '';
+  };
+  document.querySelectorAll('input[name="matApproach"]').forEach(rd => {
+    rd.addEventListener('change', () => { if (rd.checked) matApplyApproach(rd.value); });
+  });
+
   // 抠图方式单选（🪄 智能 / ⬜ 手动 / 🔬 精细）——一次只做一件事，内部开关自动联动
   const matApplyMode = (mode) => {
     const box = el.matBoxToggle, vis = el.matVision, sam = el.matSamRefine;
@@ -3599,7 +3630,8 @@
   document.querySelectorAll('input[name="matMode"]').forEach(rd => {
     rd.addEventListener('change', () => { if (rd.checked) matApplyMode(rd.value); });
   });
-  if (document.querySelector('#matModeRow')) matApplyMode(matModeNow());   // 初始默认 ⬜ 手动选区
+  if (document.querySelector('#matApproachRow')) matApplyApproach(matApproachNow());   // 初始默认 ⬜ 手动抠图
+  if (document.querySelector('#matModeRow')) matApplyMode(matModeNow());
   if (el.matBoxClear) {
     el.matBoxClear.addEventListener('click', () => {
       matBox = null; matBoxRedraw();
@@ -3843,68 +3875,24 @@
       if (matBusy) return;
       const file = el.matFile && el.matFile.files && el.matFile.files[0];
       if (!file) { el.matStatus.textContent = '请先选择一张图片'; return; }
+      const approach = matApproachNow();
+      const promptText = ((el.matPrompt && el.matPrompt.value) || '').trim();
+
       matBusy = true;
       el.matBtn.disabled = true;
       el.matStatus.textContent = '上传中…';
       el.matResult.hidden = true;
       const fd = new FormData();
       fd.append('file', file);
-      // 🔬 SAM 精细抠图：勾选且本次带选区时后端用 SAM 像素级精抠
-      if (el.matSamRefine && el.matSamRefine.checked) fd.append('sam_refine', '1');
-      // 指定本次用的模型（前端下拉选中的；后端未知名字会回退默认）
-      if (el.matModel && el.matModel.value) {
-        fd.append('model', el.matModel.value);
-      }
-      // 手动框选了主体区域 → 🧲 智能选块 > 点选 > 套索 > 矩形框
-      if (matClick) {
-        // 👆 点图抠图：用户点了预览图上的元素 → 只抠点击处所在主体
-        fd.append('click_point', JSON.stringify(matClick));
-        el.matStatus.textContent = `点选抠图（${Math.round(matClick[0] * 100)}%, ${Math.round(matClick[1] * 100)}%）— 只抠该元素`;
-        matClick = null;
-      } else if (el.matBoxToggle && el.matBoxToggle.checked) {
-        if (matTool === 'blocks') {
-          // 🧲 智能选块：多个选中块的轮廓并集一起提交。
-          // 文字块（tag=text，VLM 识别的主标题等）带标记，后端走局部推理把字挖出来
-          const selBlk = matBlockList.filter(b => matBlockSel.has(b.id));
-          if (selBlk.length) {
-            fd.append('blocks', JSON.stringify(selBlk.map(b => ({ contour: b.contour, tag: b.tag === 'text' ? 'text' : 'auto' }))));
-            el.matStatus.textContent = `上传中…（🧲 ${selBlk.length} 个选中元素一起抠）`;
-          } else {
-            el.matStatus.textContent = '请先在图上点击选中要抠的元素（可多选）';
-          }
-        } else if (matTool === 'lasso') {
-          // 提交前强制对齐 canvas 尺寸，避免图片加载/窗口变化后坐标映射错误
-          matLassoResize();
-          if (matPolygon && matPolygon.length >= 3) {
-            fd.append('polygon', JSON.stringify(matPolygon));
-            if (el.matLassoKeepAll && el.matLassoKeepAll.checked) {
-              fd.append('keep_lasso_all', '1');
-              el.matStatus.textContent = `上传中…（套索原样保留：圈内 ${matPolygon.length} 点区域一比一保留）`;
-            } else {
-              el.matStatus.textContent = `上传中…（套索 ${matPolygon.length} 个顶点）`;
-            }
-          } else {
-            el.matStatus.textContent = '上传中…（套索未闭合，忽略选区）';
-          }
-        } else if (matBox) {
-          fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
-          el.matStatus.textContent = '上传中…（矩形框选）';
+
+      if (approach === 'prompt') {
+        // 🗣️ 说扣什么：只认文字描述，不走任何手动选区/模型参数
+        if (!promptText) {
+          el.matStatus.textContent = '请输入要抠的主体描述';
+          matBusy = false;
+          el.matBtn.disabled = false;
+          return;
         }
-      }
-      // 🗣️ 说扣什么（自然语言描述主体）：有描述时以描述为准，强制开启 AI 视觉定位，
-      // 让 VLM 按描述定位那个特定对象（豆包式「说扣什么就抠什么」）。框选/套索仅作辅助。
-      const promptText = ((el.matPrompt && el.matPrompt.value) || '').trim();
-      // 🤖 AI 视觉定位：默认「不画选区时自动开，画了选区就以选区为准」
-      // 用户画了框/套索/智能选块/点选 → 用选区，不调 VLM（避免 AI 误切 + 省调用成本）
-      // 没画选区 → 自动调 VLM 定位主体（等价于智能模式，但不依赖「🪄 智能抠图」模式）
-      const hasSelection = !!(
-        matClick ||
-        (matTool === 'blocks' && matBlockList.some(b => matBlockSel.has(b.id))) ||
-        (matPolygon && matPolygon.length >= 3) ||
-        matBox
-      );
-      if (promptText) {
-        // 有描述：以描述为定位依据，强制开启 AI 视觉定位
         fd.append('prompt', promptText);
         fd.append('vision_guide', '1');
         if (el.matVision) el.matVision.checked = true;
@@ -3916,20 +3904,72 @@
         } else {
           el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '）';
         }
-      } else if (hasSelection) {
-        // 有手动选区：尊重用户选区，关闭 AI 视觉定位（后端不做交集，绝不误切）
-        if (el.matVision) el.matVision.checked = false;
       } else {
-        // 无选区：自动启用 AI 视觉定位（需配视觉模型 Key）
-        if (el.matVision) el.matVision.checked = true;
-        fd.append('vision_guide', '1');
-        // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
-        const vp = (el.visionProvider && el.visionProvider.value) || '';
-        const vk = (el.visionApiKey && el.visionApiKey.value) || '';
-        if (!vp || !vk) {
-          el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置视觉模型 Key（视频解说 → ⚙️ AI 能力与密钥配置 → 视觉模型栏选 DashScope 并填 Key），将回退普通抠图';
+        // ⬜ 手动抠图：按选区/智能/精细方式走，忽略 prompt 输入框内容
+        // 🔬 SAM 精细抠图：勾选且本次带选区时后端用 SAM 像素级精抠
+        if (el.matSamRefine && el.matSamRefine.checked) fd.append('sam_refine', '1');
+        // 指定本次用的模型（前端下拉选中的；后端未知名字会回退默认）
+        if (el.matModel && el.matModel.value) fd.append('model', el.matModel.value);
+        // 手动框选了主体区域 → 🧲 智能选块 > 点选 > 套索 > 矩形框
+        if (matClick) {
+          // 👆 点图抠图：用户点了预览图上的元素 → 只抠点击处所在主体
+          fd.append('click_point', JSON.stringify(matClick));
+          el.matStatus.textContent = `点选抠图（${Math.round(matClick[0] * 100)}%, ${Math.round(matClick[1] * 100)}%）— 只抠该元素`;
+          matClick = null;
+        } else if (el.matBoxToggle && el.matBoxToggle.checked) {
+          if (matTool === 'blocks') {
+            // 🧲 智能选块：多个选中块的轮廓并集一起提交。
+            // 文字块（tag=text，VLM 识别的主标题等）带标记，后端走局部推理把字挖出来
+            const selBlk = matBlockList.filter(b => matBlockSel.has(b.id));
+            if (selBlk.length) {
+              fd.append('blocks', JSON.stringify(selBlk.map(b => ({ contour: b.contour, tag: b.tag === 'text' ? 'text' : 'auto' }))));
+              el.matStatus.textContent = `上传中…（🧲 ${selBlk.length} 个选中元素一起抠）`;
+            } else {
+              el.matStatus.textContent = '请先在图上点击选中要抠的元素（可多选）';
+            }
+          } else if (matTool === 'lasso') {
+            // 提交前强制对齐 canvas 尺寸，避免图片加载/窗口变化后坐标映射错误
+            matLassoResize();
+            if (matPolygon && matPolygon.length >= 3) {
+              fd.append('polygon', JSON.stringify(matPolygon));
+              if (el.matLassoKeepAll && el.matLassoKeepAll.checked) {
+                fd.append('keep_lasso_all', '1');
+                el.matStatus.textContent = `上传中…（套索原样保留：圈内 ${matPolygon.length} 点区域一比一保留）`;
+              } else {
+                el.matStatus.textContent = `上传中…（套索 ${matPolygon.length} 个顶点）`;
+              }
+            } else {
+              el.matStatus.textContent = '上传中…（套索未闭合，忽略选区）';
+            }
+          } else if (matBox) {
+            fd.append('box', JSON.stringify([matBox.x, matBox.y, matBox.w, matBox.h]));
+            el.matStatus.textContent = '上传中…（矩形框选）';
+          }
+        }
+        // 🤖 AI 视觉定位：默认「不画选区时自动开，画了选区就以选区为准」
+        // 用户画了框/套索/智能选块/点选 → 用选区，不调 VLM（避免 AI 误切 + 省调用成本）
+        // 没画选区 → 自动调 VLM 定位主体（等价于智能模式，但不依赖「🪄 智能抠图」模式）
+        const hasSelection = !!(
+          matClick ||
+          (matTool === 'blocks' && matBlockList.some(b => matBlockSel.has(b.id))) ||
+          (matPolygon && matPolygon.length >= 3) ||
+          matBox
+        );
+        if (hasSelection) {
+          // 有手动选区：尊重用户选区，关闭 AI 视觉定位（后端不做交集，绝不误切）
+          if (el.matVision) el.matVision.checked = false;
         } else {
-          el.matStatus.textContent = '上传中…（🤖 AI 视觉定位：先让模型看懂图再抠主体）';
+          // 无选区：自动启用 AI 视觉定位（需配视觉模型 Key）
+          if (el.matVision) el.matVision.checked = true;
+          fd.append('vision_guide', '1');
+          // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
+          const vp = (el.visionProvider && el.visionProvider.value) || '';
+          const vk = (el.visionApiKey && el.visionApiKey.value) || '';
+          if (!vp || !vk) {
+            el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置视觉模型 Key（视频解说 → ⚙️ AI 能力与密钥配置 → 视觉模型栏选 DashScope 并填 Key），将回退普通抠图';
+          } else {
+            el.matStatus.textContent = '上传中…（🤖 AI 视觉定位：先让模型看懂图再抠主体）';
+          }
         }
       }
       fetch('/api/matting/image', { method: 'POST', body: fd })

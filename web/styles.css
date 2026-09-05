@@ -1123,6 +1123,19 @@ img { max-width: 100%; display: block; }
 .mat-text-wrap[hidden] { display: none; }
 .mat-text-wrap input { accent-color: var(--brand, #6366f1); }
 .mat-text-tip { color: var(--text-secondary, #888); font-size: .74rem; }
+/* 抠图方法顶层二选一：说扣什么 / 手动抠图 */
+.mat-approach-row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .25rem 0 .15rem; }
+.mat-approach-pill {
+  display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; user-select: none;
+  padding: .35rem .9rem; border: 1.5px solid var(--line, #d4d4e0); border-radius: 999px;
+  font-size: .9rem; color: var(--text, #333); background: transparent; transition: all .12s;
+}
+.mat-approach-pill input { accent-color: var(--brand, #6366f1); }
+.mat-approach-pill:has(input:checked) {
+  background: var(--brand, #6366f1); border-color: var(--brand, #6366f1);
+  color: #fff; font-weight: 600;
+}
+#matPromptPanel[hidden], #matManualPanel[hidden] { display: none; }
 /* 抠图方式单选（智能/手动/精细 三选一）——简单化：一次只选一种 */
 .mat-mode-row { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; margin: .15rem 0 .2rem; }
 .mat-mode-cap { font-size: .82rem; color: var(--text-secondary, #777); margin-right: .15rem; }
