@@ -53,14 +53,14 @@ CREDIT_PACKS: dict[str, dict[str, Any]] = {
 
 # 下载类权益的每日配额上限（会员档；免费档见 FREE_DAILY_LIMITS）
 DAILY_QUOTA_LIMITS: dict[str, int] = {
-    "resolve": 1000,          # 视频解析 / 日（会员）
-    "original": 100,          # 插件原画解析 / 日（会员）
-    "batch_material": 1000,   # 素材批量 / 日（会员）
+    "download": 1000,         # 下载任务 / 日（会员）—— 2026-09-06 起配额墙在「点清晰度下载」处
+    "original": 100,          # 原画/4K 直链下载 / 日（会员，未接入）
+    "batch_material": 1000,   # 批量下载 / 日（会员，未接入）
     # 评论 / 数据 / 字幕批量：不限（不进 daily_usage 计配额）
 }
-# 免费档每日配额（2026-09-05 定稿：免费 resolve 10/日，原画/批量不开放）
+# 免费档每日配额（2026-09-06 定稿：免费下载 10 次/日；原画/批量不开放）
 FREE_DAILY_LIMITS: dict[str, int] = {
-    "resolve": 10,
+    "download": 10,
     "original": 0,            # 免费不开放原画
     "batch_material": 0,      # 免费不开放批量
 }
@@ -91,7 +91,7 @@ def _empty_state() -> dict[str, Any]:
         "ai_member": {"active": False, "plan": None, "expire_at": 0.0,
                       "grant_credits": 0, "credits_left": 0},
         "permanent_credits": {"total": 0, "packs": []},
-        "daily_usage": {"date": "", "resolve": 0, "original": 0, "batch_material": 0},
+        "daily_usage": {"date": "", "download": 0, "original": 0, "batch_material": 0},
         "meta": {"activated_at": 0.0, "history": []},
     }
 
@@ -206,7 +206,7 @@ class MembershipStore:
             "download_member": {
                 "plans": DOWNLOAD_PLANS,
                 "benefits": [
-                    {"key": "resolve", "text": "视频解析 1000 次/日"},
+                    {"key": "download", "text": "下载任务 1000 次/日"},
                     {"key": "original", "text": "原画解析 100 次/日"},
                     {"key": "batch_material", "text": "批量下载素材 1000 条/日"},
                     {"key": "unlimited", "text": "评论/数据/字幕批量：不限"},
@@ -316,7 +316,7 @@ class MembershipStore:
         du = self._state["daily_usage"]
         if du.get("date") != day:
             du["date"] = day
-            du["resolve"] = 0
+            du["download"] = 0
             du["original"] = 0
             du["batch_material"] = 0
 

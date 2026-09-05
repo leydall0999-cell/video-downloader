@@ -47,7 +47,7 @@ def test_plans_structure():
     assert set(CREDIT_PACKS) == {"credits_5000", "credits_15000"}
     # 权益文案含日配额
     texts = [b["text"] for b in p["download_member"]["benefits"]]
-    assert any("1000" in t and "解析" in t for t in texts)
+    assert any("1000" in t and "下载" in t for t in texts)
     print("✅ plans 结构正确")
 
 
@@ -144,36 +144,36 @@ def test_permanent_credits_survive_expiry():
 
 
 def test_free_quota_10_then_blocked():
-    """免费档：resolve 10 次/日，第 11 次被拒并带 MEMBER_QUOTA 码。"""
+    """免费档：download 10 次/日，第 11 次被拒并带 MEMBER_QUOTA 码。"""
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
     for i in range(10):
-        assert st.use_daily("resolve")["ok"] is True, f"第 {i+1} 次免费解析应放行"
-    r = st.use_daily("resolve")
+        assert st.use_daily("download")["ok"] is True, f"第 {i+1} 次免费解析应放行"
+    r = st.use_daily("download")
     assert r["ok"] is False
     assert r.get("code") == "MEMBER_QUOTA"
     assert "免费" in r["error"] and "开通下载会员" in r["error"]
-    q = st.quota_state("resolve")
+    q = st.quota_state("download")
     assert q["tier"] == "free" and q["limit"] == 10 and q["used"] == 10
     # 免费不开放原画/批量
     assert st.quota_state("original")["allowed"] is False
     assert st.quota_state("batch_material")["allowed"] is False
-    print("✅ 免费档 resolve 10/日，超限带 MEMBER_QUOTA；原画/批量免费不开放")
+    print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；原画/批量免费不开放")
 
 
 def test_member_quota_upgrade_after_activation():
-    """开通下载会员后 resolve 额度升到 1000/日，当日已用计数延续。"""
+    """开通下载会员后 download 额度升到 1000/日，当日已用计数延续。"""
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
     for _ in range(10):
-        assert st.use_daily("resolve")["ok"] is True
+        assert st.use_daily("download")["ok"] is True
     st.activate("download_month")
-    q = st.quota_state("resolve")
+    q = st.quota_state("download")
     assert q["tier"] == "member"
-    assert q["limit"] == DAILY_QUOTA_LIMITS["resolve"]
+    assert q["limit"] == DAILY_QUOTA_LIMITS["download"]
     assert q["used"] == 10  # 已用计数保留
-    assert q["remaining"] == DAILY_QUOTA_LIMITS["resolve"] - 10
-    assert st.use_daily("resolve")["ok"] is True
+    assert q["remaining"] == DAILY_QUOTA_LIMITS["download"] - 10
+    assert st.use_daily("download")["ok"] is True
     # 原画/批量随会员解锁
     assert st.quota_state("original")["allowed"] is True
     assert st.quota_state("batch_material")["allowed"] is True
@@ -195,12 +195,12 @@ def test_daily_quota_reset_on_new_day():
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
     st.activate("download_month")
-    st.use_daily("resolve", n=7)
-    assert st.quota_state("resolve")["used"] == 7
+    st.use_daily("download", n=7)
+    assert st.quota_state("download")["used"] == 7
     cur[0] = T0 + 86400  # 第二天
-    q = st.quota_state("resolve")
+    q = st.quota_state("download")
     assert q["used"] == 0
-    assert q["remaining"] == DAILY_QUOTA_LIMITS["resolve"]
+    assert q["remaining"] == DAILY_QUOTA_LIMITS["download"]
     print("✅ 日配额跨日惰性重置")
 
 

@@ -6091,7 +6091,13 @@ el.dwVidPlayer.removeAttribute('src');
       trackTask(taskId, refs, base);
       return taskId;
     } catch (error) {
-      if (error.subscribe) {
+      const _msg2 = (error && error.message) || '';
+      if (_msg2.indexOf('MEMBER_QUOTA|') === 0) {
+        // 会员下载配额超限（2026-09-06）：弹会员中心 + 引导
+        const tip = _msg2.split('|').slice(1).join('|') || '今日免费下载次数已用尽';
+        try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+        showError(tip, '开通下载会员即可继续下载（免费额度每日 24:00 刷新）');
+      } else if (error.subscribe) {
         promptSubscribe();
         showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
       } else {
