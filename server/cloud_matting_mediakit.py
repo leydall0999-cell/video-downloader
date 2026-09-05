@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import ssl
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -634,10 +635,16 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     enhanced = None
     if ver in ("standard", "professional", "max"):
         try:
-            enhanced = _enhance_image(rgb, version=ver, multiple=2.0, timeout=timeout)
+            # 增强是计费步骤，重试仅在失败时发生（失败不扣费或已失败无产出）；
+            # 瞬时网络/服务抖动直接回退会损失整条云端链路质量，故重试 1 次。
+            try:
+                enhanced = _enhance_image(rgb, version=ver, multiple=2.0, timeout=timeout)
+            except Exception:
+                time.sleep(2.0)
+                enhanced = _enhance_image(rgb, version=ver, multiple=2.0, timeout=timeout)
             logger.info("AI 画质增强完成(%s): %s", ver, enhanced.size)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("AI 画质增强失败，回退原始链路: %s", exc)
+            logger.warning("AI 画质增强失败(含1次重试)，回退原始链路: %s", exc)
 
     use_sr = enhanced is None
     if enhanced is not None:
@@ -671,18 +678,29 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     # ② PUT 上传
     _put_upload(upload_url, img_bytes, "image/png", timeout)
 
-    # ③ 提交抠图
+    # ③ 提交抠图 + ④ 下载（瞬时抖动重试 1 次：提交/查询阶段失败不产出、
+    # 不重复计费——file_id 复用，避免一次网络抖动就掉到低质量本地兜底）
     payload = {"image_url": file_id, "scene": scene}
-    resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
-    if not resp.get("success"):
-        raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
-    result = resp.get("result") or {}
-    out_url = result.get("image_url")
-    if not out_url:
-        raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
-
-    # ④ 下载透明 PNG
-    out = _download(out_url, timeout)
+    try:
+        resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
+        if not resp.get("success"):
+            raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
+        result = resp.get("result") or {}
+        out_url = result.get("image_url")
+        if not out_url:
+            raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
+        out = _download(out_url, timeout)
+    except Exception:
+        logger.warning("MediaKit 抠图请求失败，2s 后重试 1 次")
+        time.sleep(2.0)
+        resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
+        if not resp.get("success"):
+            raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
+        result = resp.get("result") or {}
+        out_url = result.get("image_url")
+        if not out_url:
+            raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
+        out = _download(out_url, timeout)
 
     # ⑤ 若做了放大，只把 alpha 缩回原尺寸再贴回原图 RGB，保持原图清晰度
     if upscale > 1:
