@@ -39,6 +39,7 @@ run_one() {
 }
 
 run_one test_app_smoke.py
+run_one test_membership.py
 
 echo ""
 echo "========================================="

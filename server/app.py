@@ -2964,6 +2964,8 @@ from routers import process as _process_rtr
 app.include_router(_process_rtr.router)
 from routers import subscriptions as _subscriptions_rtr
 app.include_router(_subscriptions_rtr.router)
+from routers import membership as _membership_rtr
+app.include_router(_membership_rtr.router)
 
 # —— 公共 Cookie 池 + 本机 Cookie 缓存（来自 main 分支，合并时保留）——
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。
@@ -3287,5 +3289,8 @@ def cookie_status(url: str = "") -> dict:
         "pool_updated_at": pool_ts,
     }
 
+
+from routers import voice_studio as _voice_studio_rtr
+app.include_router(_voice_studio_rtr.router)
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
