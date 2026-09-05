@@ -2914,7 +2914,9 @@
           // 仅提供给做个人/非商用研究的用户显式选择，且不作为默认。
           const nc = m.commercial === 'non-commercial' ? ' · 【⚠️ 仅非商用】' : '';
           // 已下载的标注「已就绪」，未下载的标注体积，帮用户判断要不要等
-          o.textContent = m.downloaded ? `${m.desc} · 已就绪${tag}${nc}` : `${m.desc} · 需下载 ${m.size_mb}MB${tag}${nc}`;
+          // 防御性去掉服务端旧文案里的「可商用」字样（2026-09-05 用户要求去掉）
+          const cleanDesc = (m.desc || '').replace(/可商用/g, '');
+          o.textContent = m.downloaded ? `${cleanDesc} · 已就绪${tag}${nc}` : `${cleanDesc} · 需下载 ${m.size_mb}MB${tag}${nc}`;
           if (m.commercial === 'non-commercial') o.style.color = '#d97706';
           el.matModel.appendChild(o);
         });

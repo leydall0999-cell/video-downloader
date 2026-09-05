@@ -885,13 +885,13 @@
               <label class="uc-field" style="margin-top:6px" id="matEnhanceVerWrap">
                 <span class="uc-label">增强档位</span>
                 <select id="cloudEnhance" class="adv-input">
-                  <option value="auto">智能（人像增强·其他不增强，推荐）</option>
-                  <option value="professional">专业版 · 发丝级（约 0.037 元/张）</option>
+                  <option value="professional" selected>专业版 · 发丝级（约 0.037 元/张，推荐）</option>
+                  <option value="auto">智能（人像增强·其他不增强）</option>
                   <option value="max">大模型版 · 极致（约 0.24 元/张，稍慢）</option>
                   <option value="standard">标准版 · 省钱（约 0.007 元/张）</option>
                 </select>
               </label>
-              <span class="dw-hint" id="cloudEnhanceStatus">关闭增强＝所有场景都不增强（最快最省）；开启后默认「智能」仅人像增强、其他不增强，选具体档位则所有场景都增强。改即时保存生效。</span>
+              <span class="dw-hint" id="cloudEnhanceStatus">关闭增强＝所有场景都不增强（最快最省）；开启后默认「专业版」所有场景都发丝级增强，选「智能」则仅人像增强、其他不增强。改即时保存生效。</span>
               <label class="adv-toggle-row" style="margin-top:6px">
                 <input type="checkbox" id="matOutputHd" />
                 <span>高清输出（2x 超分，更清晰但慢很多；默认关，关掉也保留边缘精修）</span>

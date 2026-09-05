@@ -38,7 +38,7 @@ def get_cloud_matting_config() -> dict[str, Any]:
         "secret_key": "",
         "enabled": False,
         "mediakit_api_key": "",
-        "enhance_version": "",
+        "enhance_version": "professional",
         "mat_output_hd": False,
     }
     cp = _config_path()

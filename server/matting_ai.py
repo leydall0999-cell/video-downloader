@@ -79,7 +79,7 @@ MODELS: dict[str, dict] = {
         # MIT 许可，可商用 → 作为默认引擎
         "license": "MIT",
         "commercial": "yes",
-        "desc": "BiRefNet 完整版 · 927MB · 质量最高（推荐·MIT可商用）",
+        "desc": "BiRefNet 完整版 · 927MB · 质量最高（推荐·MIT）",
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
             "BiRefNet-general-epoch_244.onnx",
@@ -104,7 +104,7 @@ MODELS: dict[str, dict] = {
         # 与 HuggingFace DavG25/modnet-pretrained-models 的 Apache-2.0 版本同源，均允许商用。
         "license": "MIT / Apache-2.0",
         "commercial": "yes",
-        "desc": "MODNet 人像抠图 · 25MB · 发丝级连续 alpha（MIT/Apache-2.0 可商用）",
+        "desc": "MODNet 人像抠图 · 25MB · 发丝级连续 alpha（MIT/Apache-2.0）",
         "urls": [
             "https://github.com/Zeyi-Lin/HivisionIDPhotos/releases/download/pretrained-model/"
             "modnet_photographic_portrait_matting.onnx",
