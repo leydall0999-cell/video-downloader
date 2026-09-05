@@ -371,15 +371,17 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         guide = None
         try:
             guide = np.array(guide_rgb.convert("RGB").resize((w, h), Image.LANCZOS)).astype(np.float32) / 255.0
-            # 人像边缘净化（三步）——必须在 GF/传播改动颜色**之前**跑，
-            # 此时半透明像素还保留模型原始混色，背景场反解才有效：
-            # ① 背景样像素清除：模型给部分纯背景像素误发小 α，其颜色≈局部
-            #    背景场，反解会得到近黑前景（渲染成灰霜）——按 ||C-Bf||<0.10
-            #    直接 α=0（实测头顶霜带 9k 像素全清）。
-            # ② 去混色：其余半透明 C=F·α+B·(1-α)，大核(384)背景场反解
-            #    F=(C-(1-α)Bf)/α，覆盖宽淡出带（环带橙色调 77%→12%）。
-            # ③ 纱雾截止：α<0.12 残余纱雾 smoothstep(0.12→0.24) 清除，
-            #    中 α 发丝 wisps 保留。
+            # 人像边缘净化 v3（四步）——必须在 GF/传播改动颜色**之前**跑，
+            # 此时半透明像素还保留模型原始混色：
+            # ① 背景样清除（限低α）：模型给纯背景误发小 α，颜色≈局部背景场
+            #    （||C-Bf||<0.10）→ α=0。限 α<0.30 防误杀暖棕发丝（棕发高光
+            #    与橙幕色距可低至 0.07）。
+            # ② 低α段传播发色替换：半透明发丝的颜色是「发丝×背景」混合，
+            #    α≤0.2 全权用传播发色，0.2→0.45 渐退——中 α 发丝保留原色
+            #    （unmix 除以小 α 会把暖棕推成冷灰蓝，弃用）。
+            # ③ 纱雾截止：α<0.12 残余纱雾 smoothstep(0.12→0.24) 清除。
+            # ④ 轻量引导滤波（r9, blend 0.6）：抹掉模型 alpha 的锯齿台阶轮廓
+            #    （碎边），保边不等同磨边——发丝方向由 RGB 引导保留。
             if soft_fade:
                 try:
                     _kn = (out[..., 3] < 0.01).astype(np.float32)
@@ -388,17 +390,37 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
                         cv2.blur(_kn, (_k2, _k2))[..., None] + 1e-6)
                     _den2 = cv2.blur(_kn, (_k2, _k2))
                     _d = np.linalg.norm(out[..., :3] - _Bf, axis=-1)
-                    _semi = (out[..., 3] > 0.02) & (out[..., 3] < 0.60) & (_den2 > 0.02)
+                    _semi = (out[..., 3] > 0.02) & (out[..., 3] < 0.30) & (_den2 > 0.02)
                     out[..., 3][_semi & (_d < 0.10)] = 0.0
-                    _fg = _semi & (_d >= 0.10)
-                    _un = np.clip(
-                        (out[..., :3] - (1.0 - out[..., 3])[..., None] * _Bf) /
-                        np.maximum(out[..., 3], 0.12)[..., None], 0.0, 1.0)
-                    out[..., :3] = np.where(_fg[..., None], _un, out[..., :3])
+
+                    _a1 = out[..., 3]
+                    _solid = (_a1 > 0.85).astype(np.float32)
+                    if _solid.mean() > 0.02:
+                        _rgb_f = out[..., :3]
+                        _prop = np.zeros_like(_rgb_f)
+                        _have = np.zeros(_a1.shape, dtype=bool)
+                        for _k in (24, 64, 144):
+                            _num = cv2.blur(_rgb_f * _solid[..., None], (_k, _k))
+                            _den3 = cv2.blur(_solid, (_k, _k))
+                            _ok = (_den3 > 1e-4) & (~_have)
+                            _pr = _num / np.maximum(_den3, 1e-6)[..., None]
+                            _prop[_ok] = _pr[_ok]
+                            _have |= _ok
+                        _ev = cv2.blur(_solid, (144, 144)) > 0.01
+                        _wt = np.clip((0.45 - _a1) / 0.25, 0.0, 1.0)
+                        _wt = np.where(_ev & (_a1 < 0.45), _wt, 0.0)
+                        _Fnew = _rgb_f * (1 - _wt[..., None]) + _prop * _wt[..., None]
+                        out[..., :3] = np.where((_a1 > 0.02)[..., None], _Fnew, _rgb_f)
+
                     _a2 = out[..., 3]
                     _t = np.clip((_a2 - 0.12) / 0.12, 0.0, 1.0)
                     _t = _t * _t * (3.0 - 2.0 * _t)
                     out[..., 3] = np.where(_a2 <= 0.12, 0.0, _t * np.maximum(_a2, 0.24))
+
+                    _q = _guided_filter_rgb(
+                        (guide * 255.0).clip(0, 255).astype(np.uint8), out[..., 3], 9, 1e-6)
+                    _band = (out[..., 3] > 0.03) & (out[..., 3] < 0.97)
+                    out[..., 3][_band] = out[..., 3][_band] * 0.4 + _q[_band] * 0.6
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("边缘净化失败，跳过: %s", exc)
             # 人像净化路径：跳过 GF 重估（GF 会按颜色把发缘内部半透化——
@@ -497,6 +519,25 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
         logger.warning("细节层增强失败，跳过: %s", exc)
 
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
+
+
+def _guided_filter_rgb(I: np.ndarray, p: np.ndarray, r: int, eps: float) -> np.ndarray:
+    """经典引导滤波（box filter 实现）。I:(H,W,3) 引导图, p:(H,W) 目标 → (H,W)。"""
+    I = I.astype(np.float32)
+    p = p.astype(np.float32)
+    mean_I = cv2.boxFilter(I, -1, (r, r))
+    mean_p = cv2.boxFilter(p, -1, (r, r))
+    cov = np.zeros((p.shape[0], p.shape[1], 3), np.float32)
+    for c in range(3):
+        cov[..., c] = cv2.boxFilter(I[:, :, c] * p, -1, (r, r)) - mean_I[:, :, c] * mean_p
+    var = np.zeros_like(cov)
+    for c in range(3):
+        var[:, :, c] = cv2.boxFilter(I[:, :, c] * I[:, :, c], -1, (r, r)) - mean_I[:, :, c] ** 2
+    a_ = cov / (np.sum(var, -1)[..., None] + eps)
+    b_ = mean_p - np.sum(a_ * mean_I, -1)
+    mean_a = cv2.boxFilter(a_, -1, (r, r))
+    mean_b = cv2.boxFilter(b_, -1, (r, r))
+    return np.sum(mean_a * I, -1) + mean_b
 
 
 def _finalize_output(rgba: Image.Image) -> Image.Image:
