@@ -2934,6 +2934,8 @@ if RETENTION_ENABLED:
 #   公共 Cookie 池：代码内联于本文件后部，含接收端 /api/cookie/sync、
 #     本机 from-local、查询 status、清理 cache/clear 及后台探测 watchdog。
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
+from membership import MembershipStore as _MembershipStore
+member_store = _MembershipStore()  # 会员引擎共享单例（/api/member + 功能配额判定共用同一状态文件）
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
 from routers import fs as _fs_rtr

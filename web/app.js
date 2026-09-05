@@ -6035,6 +6035,14 @@ el.dwVidPlayer.removeAttribute('src');
       contributeCookie(url, cookie);  // 默认自动贡献粘贴的登录态到公共池，UI 不显示开关
     } catch (error) {
       resolved = null;
+      const msg = (error && error.message) || '';
+      // 会员配额超限（2026-09-05）：detail 带 MEMBER_QUOTA| 前缀 → 提示并弹会员中心
+      if (msg.indexOf('MEMBER_QUOTA|') === 0) {
+        const tip = msg.split('|').slice(1).join('|') || '今日免费解析额度已用尽';
+        try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+        showError(tip, '开通下载会员即可继续解析（免费额度每日 24:00 刷新）');
+        return;
+      }
       showError(error.message || '解析失败', error.hint, '', error.category);
     } finally {
       setLoading(false);

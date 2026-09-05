@@ -13,22 +13,25 @@ from typing import Any
 
 from fastapi import APIRouter, Body
 
-from membership import MembershipStore
-
 router = APIRouter()
-store = MembershipStore()
+
+
+def _store():
+    """共享会员引擎单例（app.py 定义的 app.member_store），与 core 等模块同一状态文件。"""
+    import app
+    return app.member_store
 
 
 @router.get("/api/member/plans")
 def member_plans() -> dict[str, Any]:
     """套餐与权益表（供购买中心展示）。"""
-    return store.plans()
+    return _store().plans()
 
 
 @router.get("/api/member/status")
 def member_status() -> dict[str, Any]:
     """当前会员状态：下载/AI 双轨、积分余额、今日配额用量。"""
-    return store.status()
+    return _store().status()
 
 
 @router.post("/api/member/activate")
@@ -38,7 +41,7 @@ def member_activate(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     via = str(payload.get("via") or "test").strip() or "test"
     if not code:
         return {"ok": False, "error": "缺少 code"}
-    return store.activate(code, via=via)
+    return _store().activate(code, via=via)
 
 
 @router.post("/api/member/credits/spend")
@@ -49,19 +52,19 @@ def credits_spend(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {"ok": False, "error": "amount 必须为整数"}
     reason = str(payload.get("reason") or "ai_usage")
-    return store.spend_credits(amount, reason=reason)
+    return _store().spend_credits(amount, reason=reason)
 
 
 @router.get("/api/member/credits/balance")
 def credits_balance() -> dict[str, Any]:
     """积分余额（AI 订阅积分 / 永久积分 / 合计）。"""
-    return store.credits_balance()
+    return _store().credits_balance()
 
 
 @router.get("/api/member/quota/{resource}")
 def quota_state(resource: str) -> dict[str, Any]:
     """查询某下载类资源当日配额用量与剩余。"""
-    return store.quota_state(resource)
+    return _store().quota_state(resource)
 
 
 @router.post("/api/member/quota/use")
@@ -74,4 +77,4 @@ def quota_use(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         n = int(payload.get("n", 1))
     except (TypeError, ValueError):
         return {"ok": False, "error": "n 必须为整数"}
-    return store.use_daily(resource, n=n)
+    return _store().use_daily(resource, n=n)

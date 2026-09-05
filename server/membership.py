@@ -51,12 +51,18 @@ CREDIT_PACKS: dict[str, dict[str, Any]] = {
     "credits_15000": {"price_cny": 99.00, "credits": 15000, "label": "15000 积分包", "best": True},
 }
 
-# 下载类权益的每日配额上限（download member 生效；免费用户 V1 不设卡）
+# 下载类权益的每日配额上限（会员档；免费档见 FREE_DAILY_LIMITS）
 DAILY_QUOTA_LIMITS: dict[str, int] = {
-    "resolve": 1000,          # 视频解析 / 日
-    "original": 100,          # 插件原画解析 / 日
-    "batch_material": 1000,   # 素材批量 / 日
+    "resolve": 1000,          # 视频解析 / 日（会员）
+    "original": 100,          # 插件原画解析 / 日（会员）
+    "batch_material": 1000,   # 素材批量 / 日（会员）
     # 评论 / 数据 / 字幕批量：不限（不进 daily_usage 计配额）
+}
+# 免费档每日配额（2026-09-05 定稿：免费 resolve 10/日，原画/批量不开放）
+FREE_DAILY_LIMITS: dict[str, int] = {
+    "resolve": 10,
+    "original": 0,            # 免费不开放原画
+    "batch_material": 0,      # 免费不开放批量
 }
 UNLIMITED_QUOTA = ("comment", "data", "subtitle")
 
@@ -300,6 +306,11 @@ class MembershipStore:
                 "total": s["credits_total"]}
 
     # ---- 每日配额 ----
+    def _is_download_active(self) -> bool:
+        """下载权益是否活跃（独立下载会员或 AI 会员捆绑）。"""
+        st = self._state
+        return bool(st["download_member"].get("active")) or bool(st["ai_member"].get("active"))
+
     def _roll_daily(self, now: float) -> None:
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         du = self._state["daily_usage"]
@@ -310,37 +321,46 @@ class MembershipStore:
             du["batch_material"] = 0
 
     def quota_state(self, resource: str) -> dict[str, Any]:
-        """查询某资源的当日用量/上限。unlimited 资源恒放行。"""
+        """查询某资源的当日用量/上限（按当前档位：免费 or 会员）。unlimited 恒放行。"""
         self._ensure_loaded()
         self._roll_daily(self._now())
         if resource in UNLIMITED_QUOTA:
             return {"resource": resource, "allowed": True, "unlimited": True}
-        limit = DAILY_QUOTA_LIMITS.get(resource)
-        if limit is None:
+        is_member = self._is_download_active()
+        limit_map = DAILY_QUOTA_LIMITS if is_member else FREE_DAILY_LIMITS
+        limit = limit_map.get(resource)
+        if limit is None and DAILY_QUOTA_LIMITS.get(resource) is None:
             # 未知资源：V1 不设卡（保守默认放行，避免误伤功能）
             return {"resource": resource, "allowed": True, "unknown": True}
+        if limit is None:
+            # 免费表未覆盖但会员表有（原画/批量）→ 免费额度为 0
+            limit = 0
         used = int(self._state["daily_usage"].get(resource, 0))
         return {"resource": resource, "limit": limit, "used": used,
                 "remaining": max(0, limit - used),
                 "allowed": used < limit,
-                "member_only": True}  # 需活跃下载/AI 会员
+                "tier": "member" if is_member else "free",
+                "member_limit": DAILY_QUOTA_LIMITS.get(resource),
+                "free_limit": FREE_DAILY_LIMITS.get(resource, 0)}
 
     def use_daily(self, resource: str, n: int = 1) -> dict[str, Any]:
-        """消耗下载类配额（须有活跃下载/AI 会员）。返回剩余量。"""
+        """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。"""
         if n <= 0:
             return {"ok": False, "error": "n 必须为正"}
         q = self.quota_state(resource)
         if q.get("unlimited") or q.get("unknown"):
             return {"ok": True, "resource": resource, "unlimited": q.get("unlimited", False)}
-        if not self.status()["download_member"]["active"]:
-            return {"ok": False, "error": "需要下载会员或 AI 会员", "resource": resource}
         if not q["allowed"]:
-            return {"ok": False, "error": f"{resource} 今日配额已用尽", "resource": resource}
+            if q.get("tier") == "free":
+                return {"ok": False, "error": f"今日免费解析额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
+                        "resource": resource, "code": "MEMBER_QUOTA"}
+            return {"ok": False, "error": f"{resource} 今日配额已用尽（{q['limit']}/日）", "resource": resource,
+                    "code": "MEMBER_QUOTA"}
         used = int(self._state["daily_usage"].get(resource, 0))
         new_used = used + n
         if new_used > q["limit"]:
             return {"ok": False, "error": f"超出 {resource} 日配额上限 {q['limit']}",
-                    "resource": resource}
+                    "resource": resource, "code": "MEMBER_QUOTA"}
         self._state["daily_usage"][resource] = new_used
         self._persist()
         return {"ok": True, "resource": resource, "used": new_used,

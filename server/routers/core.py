@@ -88,6 +88,11 @@ def node_info() -> dict:
 @router.post('/api/resolve')
 async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
+    # 会员配额（2026-09-05 接入）：免费 resolve 10 次/日；下载/AI 会员 1000 次/日。
+    # 超限返回 402 + 业务前缀 MEMBER_QUOTA|，前端据此弹会员中心对应档位。
+    _mq = app.member_store.use_daily('resolve', 1)
+    if not _mq.get('ok'):
+        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _mq.get('error', '今日免费解析额度已用尽'))
     app._assert_safe_url(payload.url)
     url, platform = app.parse_source(payload.url)
     host = app._host_of(url)

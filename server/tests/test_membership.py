@@ -143,25 +143,52 @@ def test_permanent_credits_survive_expiry():
     print("✅ 永久积分包过期不清零")
 
 
-def test_daily_quota_member_gate_and_limit():
+def test_free_quota_10_then_blocked():
+    """免费档：resolve 10 次/日，第 11 次被拒并带 MEMBER_QUOTA 码。"""
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
-    # 非会员：resolve 配额拦截
-    r0 = st.use_daily("resolve")
-    assert r0["ok"] is False and "会员" in r0["error"]
-    # 开下载会员
-    st.activate("download_month")
-    for _ in range(3):
-        assert st.use_daily("resolve")["ok"] is True
+    for i in range(10):
+        assert st.use_daily("resolve")["ok"] is True, f"第 {i+1} 次免费解析应放行"
+    r = st.use_daily("resolve")
+    assert r["ok"] is False
+    assert r.get("code") == "MEMBER_QUOTA"
+    assert "免费" in r["error"] and "开通下载会员" in r["error"]
     q = st.quota_state("resolve")
-    assert q["used"] == 3
-    assert q["remaining"] == DAILY_QUOTA_LIMITS["resolve"] - 3
+    assert q["tier"] == "free" and q["limit"] == 10 and q["used"] == 10
+    # 免费不开放原画/批量
+    assert st.quota_state("original")["allowed"] is False
+    assert st.quota_state("batch_material")["allowed"] is False
+    print("✅ 免费档 resolve 10/日，超限带 MEMBER_QUOTA；原画/批量免费不开放")
+
+
+def test_member_quota_upgrade_after_activation():
+    """开通下载会员后 resolve 额度升到 1000/日，当日已用计数延续。"""
+    cur = [T0]
+    st = _mkstore(tempfile.mkdtemp(), cur)
+    for _ in range(10):
+        assert st.use_daily("resolve")["ok"] is True
+    st.activate("download_month")
+    q = st.quota_state("resolve")
+    assert q["tier"] == "member"
+    assert q["limit"] == DAILY_QUOTA_LIMITS["resolve"]
+    assert q["used"] == 10  # 已用计数保留
+    assert q["remaining"] == DAILY_QUOTA_LIMITS["resolve"] - 10
+    assert st.use_daily("resolve")["ok"] is True
+    # 原画/批量随会员解锁
+    assert st.quota_state("original")["allowed"] is True
+    assert st.quota_state("batch_material")["allowed"] is True
+    print("✅ 会员激活后 resolve 升 1000/日、原画/批量解锁、计数延续")
+
+
+def test_daily_quota_unlimited_and_unknown():
+    cur = [T0]
+    st = _mkstore(tempfile.mkdtemp(), cur)
     # unlimited 资源恒放行
     assert st.quota_state("comment")["unlimited"] is True
     assert st.use_daily("comment")["unlimited"] is True
     # unknown 资源保守放行
     assert st.quota_state("whatever_future")["unknown"] is True
-    print("✅ 日配额：会员门禁 / 计数 / unlimited / unknown 保守放行")
+    print("✅ 日配额：unlimited / unknown 保守放行")
 
 
 def test_daily_quota_reset_on_new_day():
@@ -210,7 +237,9 @@ if __name__ == "__main__":
         test_credit_spend_order_ai_first,
         test_credit_spend_insufficient,
         test_permanent_credits_survive_expiry,
-        test_daily_quota_member_gate_and_limit,
+        test_free_quota_10_then_blocked,
+        test_member_quota_upgrade_after_activation,
+        test_daily_quota_unlimited_and_unknown,
         test_daily_quota_reset_on_new_day,
         test_state_persists_across_instances,
         test_history_capped,
