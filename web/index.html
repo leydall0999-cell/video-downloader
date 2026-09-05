@@ -889,6 +889,27 @@
                 </select>
               </label>
               <span class="dw-hint" id="cloudEnhanceStatus">改档位即时保存生效，下次抠图起按新档位计费。</span>
+
+              <!-- ☁️ 云端抠图（火山引擎 · 豆包级）：原在「视频解说」密钥配置里，
+                   已整体搬到抠图面板，避免两处配置不一致互相覆盖。 -->
+              <div class="mat-cloud-cfg">
+                <span class="uc-label">☁️ 云端抠图（火山引擎 · 豆包级）</span>
+                <label class="adv-toggle-row">
+                  <input type="checkbox" id="cloudMattingEnabled" />
+                  <span>启用云端抠图（说扣什么走火山像素级，未启用则本地 SAM/MODNet 兜底）</span>
+                </label>
+                <label class="adv-label" for="cloudMk">AI MediaKit API Key（豆包级软 alpha 抠图，推荐）</label>
+                <input id="cloudMk" class="adv-input" type="password" placeholder="火山 AI MediaKit Bearer Key（火山引擎控制台 → AI MediaKit）" autocomplete="off" spellcheck="false" />
+                <label class="adv-label" for="cloudAk">Access Key ID（cv 兜底，可选）</label>
+                <input id="cloudAk" class="adv-input" type="text" placeholder="火山引擎访问控制 → 访问密钥 AK" autocomplete="off" spellcheck="false" />
+                <label class="adv-label" for="cloudSk">Secret Access Key（cv 兜底，可选）</label>
+                <input id="cloudSk" class="adv-input" type="password" placeholder="火山引擎 Secret Key（SK）" autocomplete="off" spellcheck="false" />
+                <span class="dw-hint">未配置 / 断网自动回退本地抠图，不报错。增强失败自动回退不增强，不中断抠图。</span>
+                <div class="mat-cloud-actions">
+                  <button type="button" class="btn btn-primary btn-sm" id="cloudMattingSave">保存云端抠图配置</button>
+                  <span id="cloudMattingStatus" class="sub-status" hidden></span>
+                </div>
+              </div>
             </div>
           </details>
           <label class="uc-field mat-prompt-wrap" id="matPromptWrap">
@@ -1145,25 +1166,7 @@
             <div id="visionRuntime" class="adv-note"></div>
           </section>
 
-          <!-- 云端抠图（火山引擎视觉智能）：豆包级「说扣什么就抠什么」像素抠图后端 -->
-          <section class="com-ai-col">
-            <h4 class="com-ai-subtitle">云端抠图（火山引擎 · 豆包级）</h4>
-            <label class="adv-toggle-row">
-              <input type="checkbox" id="cloudMattingEnabled" />
-              <span>启用云端抠图（说扣什么走火山像素级，未启用则本地 SAM/MODNet 兜底）</span>
-            </label>
-            <label class="adv-label" for="cloudAk">Access Key ID</label>
-            <input id="cloudAk" class="adv-input" type="text" placeholder="火山引擎访问控制 → 访问密钥 AK" autocomplete="off" spellcheck="false" />
-            <label class="adv-label" for="cloudSk">Secret Access Key</label>
-            <input id="cloudSk" class="adv-input" type="password" placeholder="火山引擎 Secret Key（SK）" autocomplete="off" spellcheck="false" />
-            <label class="adv-label" for="cloudMk">AI MediaKit API Key（豆包级软 alpha 抠图，推荐）</label>
-            <input id="cloudMk" class="adv-input" type="password" placeholder="火山 AI MediaKit Bearer Key（火山引擎控制台 → AI MediaKit）" autocomplete="off" spellcheck="false" />
-            <p class="adv-note">「说扣什么」的像素级质量来自云端（火山即豆包视觉后端）。需单独申请火山视觉智能 AK/SK，且与上方 DashScope 视觉 Key 互不影响。未配置/断网时自动回退本地抠图，不报错。增强失败自动回退不增强，不中断抠图。画质增强档位在「一键抠图」面板的 ⚙️ 高级选项里。</p>
-            <div class="com-ai-actions">
-              <button type="button" class="btn btn-primary btn-sm" id="cloudMattingSave">保存云端抠图配置</button>
-              <span id="cloudMattingStatus" class="sub-status" hidden></span>
-            </div>
-          </section>
+          <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
 
           <!-- 共用一个保存按钮（同时保存 LLM 与视觉模型两组配置） -->
           <div class="com-ai-actions">

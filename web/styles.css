@@ -590,6 +590,20 @@ img { max-width: 100%; display: block; }
 
 .uc-check { flex-direction: row; align-items: center; gap: .4rem; }
 .uc-check .uc-label { color: var(--text); font-size: .85rem; }
+
+/* 抠图面板 ⚙️高级 内的云端配置块：与「引擎 / 档位」做视觉分隔 */
+.mat-cloud-cfg {
+  display: flex; flex-direction: column; gap: .3rem;
+  margin-top: .7rem; padding-top: .7rem;
+  border-top: 1px dashed var(--line);
+}
+.mat-cloud-cfg > .uc-label { font-weight: 600; color: var(--text); }
+.mat-cloud-cfg .adv-label { font-size: .78rem; color: var(--text-mute); margin-top: .35rem; }
+.mat-cloud-cfg .adv-toggle-row {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .82rem; color: var(--text-2, #666); margin: .2rem 0 .3rem;
+}
+.mat-cloud-actions { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; }
 .uc-result { display: flex; flex-direction: column; gap: .7rem; margin-top: .8rem; }
 /* 转换结果预览：视频/音频/GIF 内嵌播放，带深色画框并限制尺寸 */
 .uc-preview { margin: 0; }
