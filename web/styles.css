@@ -3014,3 +3014,15 @@ img { max-width: 100%; display: block; }
   .com-col-left, .com-col-right { position: static; max-height: none; overflow: visible; }
   .com-bottom { position: static; }
 }
+
+/* 一键抠图双栏：左=控制区，右=预览+结果（预览顶部与「选择图片」对齐） */
+.mat-two-col { display: flex; flex-wrap: wrap; gap: 1.4rem; align-items: flex-start; }
+.mat-col-l { flex: 1 1 300px; min-width: 270px; max-width: 420px; }
+.mat-col-r { flex: 1 1 320px; min-width: 300px; }
+.mat-col-r .dw-preview-wrap { display: block; width: max-content; max-width: 100%; margin: .4rem 0 .6rem; }
+.mat-col-r .dw-preview-wrap img { width: auto; height: auto; max-height: 520px; }
+.mat-col-r .dw-result { margin-top: .8rem; }
+@media (max-width: 900px) {
+  .mat-two-col { flex-direction: column; }
+  .mat-col-l { flex: none; width: 100%; }
+}

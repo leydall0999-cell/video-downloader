@@ -3664,6 +3664,7 @@
     if (matPreviewBlobUrl) URL.revokeObjectURL(matPreviewBlobUrl);
     matPreviewBlobUrl = URL.createObjectURL(file);
     el.matImgPreview.src = matPreviewBlobUrl;
+    if (el.matPreviewWrap) el.matPreviewWrap.hidden = false;
     el.matImgPreview.onload = () => {
       matBox = null;   // 换图后清掉旧框，避免框错图
       matBoxRedraw();

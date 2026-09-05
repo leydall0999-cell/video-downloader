@@ -865,6 +865,8 @@
     <div id="dwMattingPane" hidden>
       <div class="dw-layout">
         <div class="dw-main">
+        <div class="mat-two-col">
+        <div class="mat-col-l">
           <label class="uc-field">
             <span class="uc-label">选择图片</span>
             <input type="file" id="matFile" accept="image/*" />
@@ -927,7 +929,30 @@
             <button type="button" class="mat-tool-btn" id="matToolBlocks">🧲 智能选块</button>
           </div>
           <span class="dw-hint" id="matBoxHint" hidden><b>矩形框选</b>拖一个框；<b>套索圈选</b>沿轮廓描一圈（更精准）。不选区则自动抠主体。</span>
-          <div class="dw-preview-wrap" id="matPreviewWrap">
+          <div class="mat-box-actions" id="matBoxActions" hidden>
+            <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除选区</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="matLassoUndo" hidden>↩️ 撤销一点</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="matLassoDone" hidden>✔ 完成选区</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="matBlocksSplit" hidden>✂️ 细分选中块</button>
+            <span class="convert-status" id="matBoxInfo"></span>
+          </div>
+          <div class="dw-toolbar">
+            <button type="button" class="btn btn-primary" id="matBtn">开始抠图</button>
+            <span class="convert-status" id="matStatus"></span>
+          </div>
+          <div class="mat-manual" id="matManual" hidden>
+            <div class="mat-manual-head">自动下载失败（你的网络下不到 GitHub release）。在浏览器打开下方任一链接手动下载，再从下面上传即可：</div>
+            <ul class="mat-url-list" id="matUrlList"></ul>
+            <div class="mat-upload-row">
+              <label class="btn btn-outline btn-sm" for="matUploadFile">📁 上传已下载的模型</label>
+              <input type="file" id="matUploadFile" accept=".onnx" hidden />
+              <span class="convert-status" id="matUploadStatus"></span>
+            </div>
+            <div class="mat-manual-hint" id="matManualHint"></div>
+          </div>
+        </div>
+        <div class="mat-col-r">
+          <div class="dw-preview-wrap" id="matPreviewWrap" hidden>
             <div class="mat-zoom-stage" id="matZoomStage">
               <img id="matImgPreview" alt="预览" />
               <div id="matBoxSvg" class="mat-box-svg" hidden>
@@ -952,27 +977,6 @@
             </label>
             <span class="convert-status mat-zoom-tip">放大后选区更精准</span>
           </div>
-          <div class="mat-box-actions" id="matBoxActions" hidden>
-            <button type="button" class="btn btn-ghost btn-sm" id="matBoxClear">清除选区</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="matLassoUndo" hidden>↩️ 撤销一点</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="matLassoDone" hidden>✔ 完成选区</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="matBlocksSplit" hidden>✂️ 细分选中块</button>
-            <span class="convert-status" id="matBoxInfo"></span>
-          </div>
-          <div class="dw-toolbar">
-            <button type="button" class="btn btn-primary" id="matBtn">开始抠图</button>
-            <span class="convert-status" id="matStatus"></span>
-          </div>
-          <div class="mat-manual" id="matManual" hidden>
-            <div class="mat-manual-head">自动下载失败（你的网络下不到 GitHub release）。在浏览器打开下方任一链接手动下载，再从下面上传即可：</div>
-            <ul class="mat-url-list" id="matUrlList"></ul>
-            <div class="mat-upload-row">
-              <label class="btn btn-outline btn-sm" for="matUploadFile">📁 上传已下载的模型</label>
-              <input type="file" id="matUploadFile" accept=".onnx" hidden />
-              <span class="convert-status" id="matUploadStatus"></span>
-            </div>
-            <div class="mat-manual-hint" id="matManualHint"></div>
-          </div>
           <div class="dw-result" id="matResult" hidden>
             <div class="dw-compare" id="matResultCompare">
               <div><span class="dw-cap">原图</span><img id="matOrig" alt="原图" /></div>
@@ -984,6 +988,8 @@
               <span class="convert-status" id="matResultSizeTip"></span>
             </div>
           </div>
+        </div>
+        </div>
         </div>
       </div>
     </div>
