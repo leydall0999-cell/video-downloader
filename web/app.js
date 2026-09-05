@@ -529,11 +529,11 @@
     matSamRefine: $('matSamRefine'),
     matStatus: $('matStatus'),
     matResult: $('matResult'),
-    matOrig: $('matOrig'),
     matOut: $('matOut'),
     matDownload: $('matDownload'),
-    matResultCompare: $('matResultCompare'),
-    matResultActual: $('matResultActual'),
+    matLightbox: $('matLightbox'),
+    matLightboxImg: $('matLightboxImg'),
+    matLightboxClose: $('matLightboxClose'),
     // 抠图手动框选
     matBoxToggle: $('matBoxToggle'),
     matBoxSvg: $('matBoxSvg'),
@@ -3687,9 +3687,6 @@
           if (matTimer) { clearInterval(matTimer); matTimer = null; }
           const outUrl = `/api/matting/image/${matJobId}/file?t=${Date.now()}`;
           el.matOut.src = outUrl;
-          // 结果区恢复适应模式（若上次停在 1:1，这次新结果先回到全局预览）
-          if (el.matResultCompare) el.matResultCompare.classList.remove('actual-size');
-          if (el.matResultActual) el.matResultActual.textContent = '🔍 1:1 查看';
           // 下载按钮：桌面版走原生保存面板（WKWebView 无法触发 <a download>），
           // 网页版/无桥接时回退 fetch → blob → 临时 a[download] click。
           if (el.matDownload) {
@@ -3726,7 +3723,6 @@
               });
             };
           }
-          el.matOrig.src = el.matImgPreview.src;
           el.matResult.hidden = false;
           // ☁️ 云端抠图（火山·豆包级）成功 → 最高优先提示，让用户明确知道走了云端
           if (d.cloud_used) {
@@ -3778,22 +3774,28 @@
   if (el.matFile) {
     el.matFile.addEventListener('change', () => matPreview(el.matFile.files[0]));
   }
-  // 🔍 结果区 1:1 查看：默认预览被两列格缩到几百 px（2048×3072≈缩 4~7 倍），
-  // 发丝级细节全被平均掉。开启后按原始像素显示、容器内滚动平移；再点一次（或点图）返回。
-  if (el.matResultActual && el.matResultCompare) {
-    const setActual = (on) => {
-      el.matResultCompare.classList.toggle('actual-size', on);
-      el.matResultActual.textContent = on ? '◱ 适应窗口' : '🔍 1:1 查看';
+  // 🔍 结果区点击放大：默认预览被 max-height:320 缩 4~7 倍，发丝级细节全被平均掉。
+  // 单张成品缩略图，点击即在页面中央以原始像素全屏显示；点空白/×/Esc 关闭。
+  if (el.matOut && el.matLightbox && el.matLightboxImg) {
+    const openLightbox = () => {
+      el.matLightboxImg.src = el.matOut.src;
+      el.matLightbox.hidden = false;
+      document.body.style.overflow = 'hidden';        // 锁页面滚动
     };
-    el.matResultActual.addEventListener('click', () => {
-      setActual(!el.matResultCompare.classList.contains('actual-size'));
+    const closeLightbox = () => {
+      el.matLightbox.hidden = true;
+      // 释放内存：blob URL 清掉比保留更省；下次点击会重新赋 src 重新加载
+      el.matLightboxImg.removeAttribute('src');
+      document.body.style.overflow = '';
+    };
+    el.matOut.addEventListener('click', openLightbox);
+    if (el.matLightboxClose) el.matLightboxClose.addEventListener('click', closeLightbox);
+    // 点空白（lightbox 本身，不是图片）关闭；图片上的点击不冒泡触发关闭
+    el.matLightbox.addEventListener('click', (ev) => {
+      if (ev.target === el.matLightbox) closeLightbox();
     });
-    // 1:1 态下点图直接退出（大图上找按钮麻烦）
-    [el.matOut, el.matOrig].forEach((img) => {
-      if (!img) return;
-      img.addEventListener('click', () => {
-        if (el.matResultCompare.classList.contains('actual-size')) setActual(false);
-      });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !el.matLightbox.hidden) closeLightbox();
     });
   }
   // 🔍 缩放控制：按钮 +（Ctrl/⌘ + 滚轮 / 触控板捏合）缩放

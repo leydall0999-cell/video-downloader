@@ -977,19 +977,25 @@
             <span class="convert-status mat-zoom-tip">放大后选区更精准</span>
           </div>
           <div class="dw-result" id="matResult" hidden>
-            <div class="dw-compare" id="matResultCompare">
-              <div><span class="dw-cap">原图</span><img id="matOrig" alt="原图" /></div>
-              <div><span class="dw-cap">抠图结果（灰格＝透明）</span><img id="matOut" class="mat-canvas" alt="抠图结果" /></div>
+            <div class="mat-out-wrap">
+              <span class="dw-cap">抠图结果（灰格＝透明）</span>
+              <img id="matOut" class="mat-canvas" alt="抠图结果" />
+              <span class="mat-zoom-hint">点击放大查看</span>
             </div>
             <div class="mat-result-actions">
               <a class="btn btn-accent btn-sm" id="matDownload" download>下载透明 PNG</a>
-              <button type="button" class="btn btn-ghost btn-sm" id="matResultActual" title="按原始分辨率查看，可平移检查发丝细节">🔍 1:1 查看</button>
               <span class="convert-status" id="matResultSizeTip"></span>
             </div>
           </div>
         </div>
-        </div>
       </div>
+    </div>
+    <!-- 🔍 点击抠图结果缩略图的全屏放大层（在页面中央显示原始像素） -->
+    <div class="mat-lightbox" id="matLightbox" hidden role="dialog" aria-label="抠图结果放大查看">
+      <button type="button" class="mat-lightbox-close" id="matLightboxClose" aria-label="关闭">×</button>
+      <img id="matLightboxImg" alt="抠图结果" />
+      <span class="mat-lightbox-tip">点击空白处或按 Esc 关闭</span>
+    </div>
     </div>
   </section>
 

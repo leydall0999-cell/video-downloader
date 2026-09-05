@@ -995,11 +995,50 @@ img { max-width: 100%; display: block; }
 .mat-result-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .mat-result-actions .mat-result-tip { font-size: .78rem; color: var(--text-mute); }
 .dw-result { overflow: auto; }
-.dw-compare.actual-size { grid-template-columns: 1fr; }
-.dw-compare.actual-size img {
-  width: auto; max-width: none; max-height: none;
-  object-fit: unset; margin: 0;
+
+/* 一键抠图：单张成品缩略图。点击 → 全屏放大层 */
+.mat-out-wrap {
+  display: inline-flex; flex-direction: column; gap: .35rem;
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: .55rem; max-width: 320px;
+}
+.mat-out-wrap img {
+  display: block; width: 100%; max-height: 320px; object-fit: contain;
+  cursor: zoom-in;
+}
+.mat-out-wrap .mat-zoom-hint {
+  font-size: .76rem; color: var(--text-mute); text-align: center;
+}
+.mat-canvas.mat-canvas { /* override base mat-canvas width for thumbnail */
+  background-color: #fff;
+}
+
+/* 🔍 全屏放大层：固定定位、居中显示原始像素 */
+.mat-lightbox {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(11, 13, 18, 0.88);
+  display: flex; align-items: center; justify-content: center;
   cursor: zoom-out;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.mat-lightbox[hidden] { display: none; }
+.mat-lightbox img {
+  max-width: 92vw; max-height: 90vh; object-fit: contain;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+.mat-lightbox-close {
+  position: absolute; top: 16px; right: 20px;
+  background: rgba(255, 255, 255, 0.12); border: 0; color: #fff;
+  font-size: 26px; width: 40px; height: 40px; border-radius: 50%;
+  cursor: pointer; line-height: 1; display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.mat-lightbox-close:hover { background: rgba(255, 255, 255, 0.24); }
+.mat-lightbox-tip {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: rgba(255, 255, 255, 0.65);
 }
 
 /* 一键抠图：手动框选主体（可选）。开启后在预览图上拖一个框，
