@@ -538,6 +538,7 @@
     matOut: $('matOut'),
     matDownload: $('matDownload'),
     matLightbox: $('matLightbox'),
+    matLightboxStage: $('matLightboxStage'),
     matLightboxImg: $('matLightboxImg'),
     matLightboxClose: $('matLightboxClose'),
     // 抠图手动框选
@@ -3828,9 +3829,12 @@
     };
     el.matOut.addEventListener('click', openLightbox);
     if (el.matLightboxClose) el.matLightboxClose.addEventListener('click', closeLightbox);
-    // 点空白（lightbox 本身，不是图片）关闭；图片上的点击不冒泡触发关闭
+    // 点空白处关闭：lightbox 遮罩本身 / stage 容器留白区域；点击图片本身不关闭
     el.matLightbox.addEventListener('click', (ev) => {
-      if (ev.target === el.matLightbox) closeLightbox();
+      const stage = el.matLightboxStage;
+      const onBackdrop = ev.target === el.matLightbox;
+      const onStagePadding = stage && ev.target === stage;
+      if (onBackdrop || onStagePadding) closeLightbox();
     });
     document.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape' && !el.matLightbox.hidden) closeLightbox();
