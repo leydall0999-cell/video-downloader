@@ -1601,7 +1601,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     # 大圈模式：全图直抠后按「连通域选择」保留——与套索相交的
                     # 主体整体保留（延伸出圈外也不硬切），与套索无关的散落元素剔除。
                     # 质量与智能抠图同级（同一全图云端链路），套索只决定「留哪些部件」。
-                    if _cb is not None and _cb_frac >= 0.40:
+                    if _cb is not None and _cb_frac >= 0.40 and polygon and len(polygon) >= 3:
                         import cv2 as _bcv2
                         from PIL import ImageDraw as _bdraw
                         _ba = np.asarray(rgba.split()[3]).astype(np.float32) / 255.0
@@ -1646,7 +1646,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     import logging as _lg
                     _lg.getLogger("matting_ai").warning("MediaKit 抠图失败，回退: %s", _ce)
                     if meta is not None:
-                        meta["cloud_error"] = str(_ce)[:200]
+                        meta["cloud_error"] = "MediaKit失败: " + str(_ce)[:300]
             # ② cv 视觉智能（SigV4 AK/SK）：物体走 GeneralSegment，人像走 HumanSegment
             if is_cloud_matting_ready():
                 try:
@@ -1661,7 +1661,8 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     import logging as _lg
                     _lg.getLogger("matting_ai").warning("云端抠图失败，回退本地: %s", _ce)
                     if meta is not None:
-                        meta["cloud_error"] = str(_ce)[:200]
+                        _prev = meta.get("cloud_error", "")
+                        meta["cloud_error"] = (_prev + " | " if _prev else "") + "cv兜底: " + str(_ce)[:200]
 
         # 🤖 智能自动路由（auto / 默认引擎）：根据背景类型自动选最优引擎，用户无需判断背景纯不纯。
         #   - 纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）→ 色度键（颜色距离遮罩 + 强去溢色，硬边干净、零 ML 权重），
