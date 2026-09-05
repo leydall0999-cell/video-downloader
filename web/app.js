@@ -152,6 +152,20 @@
     queueBar: $('queueBar'),
     cancelAllBtn: $('cancelAllBtn'),
     openFolderBtn: $('openFolderBtn'),
+    // 会员中心（VDL 三轨会员：下载 / AI / 永久积分包）
+    sTabMember: $('sTabMember'),
+    memberModal: $('memberModal'),
+    memberModalClose: $('memberModalClose'),
+    memberStatus: $('memberStatus'),
+    memberTabDl: $('memberTabDl'),
+    memberTabAi: $('memberTabAi'),
+    memberTabPacks: $('memberTabPacks'),
+    memberPaneDl: $('memberPaneDl'),
+    memberPaneAi: $('memberPaneAi'),
+    memberPanePacks: $('memberPanePacks'),
+    memberCode: $('memberCode'),
+    memberActivateBtn: $('memberActivateBtn'),
+    memberActMsg: $('memberActMsg'),
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
     sidebar: $('sidebar'),
@@ -9205,6 +9219,141 @@ el.dwVidPlayer.removeAttribute('src');
   el.libKind.addEventListener('change', loadLibrary);
   el.libModalClose.addEventListener('click', () => el.libModal.close());
   el.libModal.addEventListener('click', (e) => { if (e.target === el.libModal) el.libModal.close(); });
+
+  // ============ 会员中心（VDL 三轨会员：下载 / AI / 永久积分包） ============
+  function _memberFmtDate(ts) {
+    if (!ts) return '--';
+    try { return new Date(ts * 1000).toLocaleDateString('zh-CN'); } catch (_) { return String(ts); }
+  }
+  function _memberMsg(text, isErr) {
+    if (!el.memberActMsg) return;
+    el.memberActMsg.textContent = text || '';
+    el.memberActMsg.hidden = !text;
+    el.memberActMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
+  }
+  function _memberCard(plan, code, extra) {
+    const saving = plan.saving ? `<span class="member-badge member-badge-saving">省 ${Math.round(plan.saving * 100)}%</span>` : '';
+    const best = plan.best ? `<span class="member-badge member-badge-best">最受双迎</span>` : '';
+    const price = (Number(plan.price_cny) || 0).toFixed(2);
+    const foot = extra && extra.foot ? `<div class="member-card-foot">${extra.foot}</div>` : '';
+    return `
+      <div class="member-plan${plan.best ? ' member-plan-best' : ''}">
+        <div class="member-plan-head">${saving}${best}<div class="member-plan-name">${plan.label || code}</div>
+          <div class="member-plan-price"><span class="member-ccy">¥</span>${price}</div>
+          ${extra && extra.meta ? `<div class="member-plan-meta">${extra.meta}</div>` : ''}
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm member-buy" data-code="${code}">立即开通（测试期即时生效）</button>
+        ${foot}
+      </div>`;
+  }
+  function switchMemberTab(key) {
+    const map = [['dl', el.memberTabDl, el.memberPaneDl], ['ai', el.memberTabAi, el.memberPaneAi], ['packs', el.memberTabPacks, el.memberPanePacks]];
+    for (const [k, b, p] of map) {
+      if (!b || !p) continue;
+      const on = k === key;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      p.hidden = !on;
+    }
+    if (el.memberActMsg) el.memberActMsg.hidden = true;
+  }
+  async function renderMemberStatus() {
+    if (!el.memberStatus) return;
+    try {
+      const s = await request('/api/member/status');
+      const chips = [];
+      const dl = s.download_member || {};
+      const ai = s.ai_member || {};
+      if (dl.active) {
+        const src = dl.source === 'ai_bundle' ? '（随 AI 会员）' : '';
+        chips.push(`<span class="member-chip member-chip-dl">👑 下载会员${src} 至 ${_memberFmtDate(dl.expire_at)}</span>`);
+      }
+      if (ai.active) {
+        chips.push(`<span class="member-chip member-chip-ai">🤖 AI 会员 至 ${_memberFmtDate(ai.expire_at)} · 积分 ${ai.credits_left || 0}${ai.grant_credits ? '/' + ai.grant_credits : ''}</span>`);
+      }
+      const perm = Number(s.permanent_credits || 0);
+      if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}</span>`);
+      el.memberStatus.innerHTML = chips.length
+        ? `<div class="member-status-inner">${chips.join('')}<span class="member-total">可用积分合计 ${Number(s.credits_total || 0)}</span></div>`
+        : `<div class="member-status-inner member-status-empty">尚未开通会员 — 下方选择套餐（V1 测试期激活即时生效）</div>`;
+      el.memberStatus.hidden = false;
+    } catch (_) { /* 后端未就绪时静默，保持面板可开 */ }
+  }
+  async function renderMemberPlans() {
+    try {
+      const p = await request('/api/member/plans');
+      const dlPlans = (p.download_member && p.download_member.plans) || {};
+      const aiPlans = (p.ai_member && p.ai_member.plans) || {};
+      const packs = (p.credit_packs) || {};
+      const dlBenefits = (p.download_member && p.download_member.benefits) || [];
+      // 下载会员（3 档）+ 共享权益清单
+      const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
+        _memberCard(plan, code, { meta: plan.days ? `${plan.days} 天` : '' })).join('');
+      const dlList = dlBenefits.map(b => `<li>${b.text}</li>`).join('');
+      el.memberPaneDl.innerHTML = `
+        <div class="member-benefits member-benefits-top">${dlList ? `<ul class="member-benefits-list">${dlList}</ul>` : ''}</div>
+        <div class="member-plans">${dlCards}</div>`;
+      // AI 会员（2 档，捆绑下载权益）
+      const aiNote = p.ai_member && p.ai_member.bundle_note ? `<div class="member-bundle-note">🔗 ${p.ai_member.bundle_note}</div>` : '';
+      const aiCards = Object.entries(aiPlans).map(([code, plan]) =>
+        _memberCard(plan, code, {
+          meta: `30 天 · 一次性到账 ${plan.credits} 积分`,
+          foot: `<div class="member-card-foot">含下载会员权益 · AI 积分随会员到期清零</div>`,
+        })).join('');
+      el.memberPaneAi.innerHTML = `${aiNote}<div class="member-plans">${aiCards}</div>`;
+      // 永久积分包
+      const packCards = Object.entries(packs).map(([code, plan]) =>
+        _memberCard(plan, code, { meta: `一次性到账 ${plan.credits} 积分`, foot: `<div class="member-card-foot">永久有效 · 不随订阅过期</div>` })).join('');
+      el.memberPanePacks.innerHTML = `<div class="member-plans">${packCards}</div>`;
+      // 卡片「开通」→ 激活
+      el.memberModal.querySelectorAll('.member-buy').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const code = btn.getAttribute('data-code');
+          if (code) activateMember(code);
+        });
+      });
+    } catch (_) { /* 静默 */ }
+  }
+  async function activateMember(code) {
+    if (!el.memberActivateBtn) return;
+    el.memberActivateBtn.disabled = true;
+    _memberMsg('激活中…');
+    try {
+      const r = await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
+      if (r && r.ok) {
+        showToast('会员激活成功');
+        _memberMsg('✅ 激活成功' + (r.kind ? `（${r.kind}）` : ''));
+        if (el.memberCode) el.memberCode.value = '';
+        await renderMemberStatus();
+        if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
+      } else {
+        _memberMsg('❌ ' + ((r && r.error) || '激活失败'), true);
+      }
+    } catch (e) {
+      _memberMsg('❌ ' + ((e && (e.message || e.hint)) || '激活失败'), true);
+    } finally {
+      el.memberActivateBtn.disabled = false;
+    }
+  }
+  async function openMemberCenter() {
+    if (!el.memberModal) return;
+    try { el.memberModal.showModal(); } catch (_) { el.memberModal.setAttribute('open', ''); }
+    switchMemberTab('dl');
+    if (el.memberActMsg) el.memberActMsg.hidden = true;
+    await Promise.all([renderMemberStatus(), renderMemberPlans()]);
+  }
+  if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
+  if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
+  if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
+  const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
+  for (const [b, k] of _memberTabs) { if (b) b.addEventListener('click', () => switchMemberTab(k)); }
+  if (el.memberActivateBtn) el.memberActivateBtn.addEventListener('click', () => {
+    const code = (el.memberCode && el.memberCode.value || '').trim();
+    if (!code) { _memberMsg('请输入套餐 code 或激活码', true); return; }
+    activateMember(code);
+  });
+  if (el.memberCode) el.memberCode.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.memberActivateBtn) el.memberActivateBtn.click(); });
+  // ============ /会员中心 ============
   el.libDelete.addEventListener('click', deleteLibItem);
   el.libSubtitle.addEventListener('click', toggleSubPanel);
   el.subPanelClose.addEventListener('click', () => { el.subPanel.hidden = true; });

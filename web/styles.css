@@ -3127,3 +3127,68 @@ img { max-width: 100%; display: block; }
   .mat-two-col { flex-direction: column; }
   .mat-col-l { flex: none; width: 100%; }
 }
+
+/* ================ 会员中心（VDL 三轨会员） ================ */
+.member-modal.modal { width: min(680px, 100% - 2rem); max-width: 680px; }
+.member-card .modal-head { margin-bottom: .85rem; }
+.member-status { margin-bottom: .85rem; }
+.member-status-inner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
+  padding: .55rem .7rem; border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: #f8f9ff; font-size: .82rem;
+}
+.member-status-empty { color: var(--text-mute); background: #fbfbfe; }
+.member-chip {
+  display: inline-flex; align-items: center; gap: .3rem; padding: .22rem .6rem;
+  border-radius: 999px; font-size: .78rem; white-space: nowrap;
+}
+.member-chip-dl { background: var(--brand-soft); color: var(--brand-strong); }
+.member-chip-ai { background: #ecfeff; color: #0e7490; }
+.member-chip-perm { background: var(--success-soft); color: #15803d; }
+.member-total { margin-left: auto; color: var(--text-mute); font-size: .78rem; }
+.member-tabs {
+  display: flex; gap: .35rem; margin-bottom: .8rem; padding: .25rem;
+  background: #f1f2f7; border-radius: var(--radius-md); width: fit-content;
+}
+.member-tab {
+  border: 0; background: transparent; color: var(--text-mute); cursor: pointer;
+  padding: .34rem .85rem; border-radius: calc(var(--radius-md) - 4px);
+  font-size: .84rem; touch-action: manipulation;
+}
+.member-tab.is-active { background: var(--surface); color: var(--brand-strong); font-weight: 600; box-shadow: 0 1px 3px rgba(15,23,42,.12); }
+.member-plans {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: .6rem; margin: .2rem 0 .3rem;
+}
+.member-plan {
+  display: flex; flex-direction: column; gap: .55rem;
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: .8rem .8rem .75rem; background: #fbfbfe; position: relative;
+}
+.member-plan-best { border-color: var(--brand); background: var(--brand-soft); }
+.member-plan-name { font-size: .86rem; font-weight: 600; padding-right: 3.4rem; }
+.member-badge {
+  position: absolute; top: .5rem; right: .5rem; font-size: .68rem;
+  padding: .1rem .42rem; border-radius: 999px; white-space: nowrap;
+}
+.member-badge-saving { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+.member-badge-best { background: var(--brand); color: #fff; }
+.member-plan-price { font-size: 1.45rem; font-weight: 700; color: var(--text); }
+.member-ccy { font-size: .8rem; font-weight: 500; color: var(--text-mute); margin-right: 1px; }
+.member-plan-meta { font-size: .76rem; color: var(--text-mute); margin-top: -0.4rem; }
+.member-buy { align-self: flex-start; margin-top: auto; }
+.member-card-foot { font-size: .72rem; color: var(--text-mute); margin-top: .25rem; line-height: 1.45; }
+.member-benefits-list {
+  margin: 0; padding: 0; list-style: none;
+  display: flex; flex-wrap: wrap; gap: .25rem .7rem;
+  font-size: .76rem; color: var(--text-mute);
+}
+.member-benefits-list li::before { content: '✓ '; color: var(--success); }
+.member-bundle-note {
+  padding: .4rem .7rem; border: 1px dashed #99f6e4; background: #f0fdfa;
+  color: #0f766e; border-radius: var(--radius-sm); font-size: .8rem; margin-bottom: .6rem;
+}
+.member-activate {
+  display: flex; gap: .5rem; margin-top: .7rem;
+}
+.member-activate .adv-input { flex: 1; }

@@ -100,6 +100,13 @@
       <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
     </div>
 
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">👑</span>
+        <span class="sidebar-group-en">Member</span>
+      </div>
+      <button type="button" class="sidebar-item" id="sTabMember" title="会员中心"><span class="sidebar-item-icon" aria-hidden="true">👑</span><span class="sidebar-item-label">会员中心</span></button>
+    </div>
 
     <div class="sidebar-footer">v1.0 · AI 自动剪辑</div>
   </aside>
@@ -1892,6 +1899,36 @@
       <button type="button" class="btn btn-primary" id="consentConfirm">确认并继续</button>
     </div>
     <p class="consent-note">选择会保存在你的本机浏览器，可在上方「正版素材库」卡片里随时修改。</p>
+  </div>
+</dialog>
+
+<!-- 会员中心：三轨会员（下载会员 / AI 会员 / 永久积分包），引擎 server/membership.py -->
+<dialog id="memberModal" class="modal" aria-labelledby="memberModalTitle">
+  <div class="modal-card member-card">
+    <div class="modal-head">
+      <h2 id="memberModalTitle">👑 会员中心</h2>
+      <button type="button" class="modal-close" id="memberModalClose" aria-label="关闭">✕</button>
+    </div>
+
+    <!-- 当前会员状态：下载 / AI 双轨 + 积分余额 -->
+    <div class="member-status" id="memberStatus" hidden></div>
+
+    <!-- 三轨切换 -->
+    <div class="member-tabs" role="tablist" aria-label="会员类型">
+      <button type="button" class="member-tab is-active" id="memberTabDl" role="tab">下载会员</button>
+      <button type="button" class="member-tab" id="memberTabAi" role="tab">AI 会员</button>
+      <button type="button" class="member-tab" id="memberTabPacks" role="tab">积分包</button>
+    </div>
+    <div class="member-pane" id="memberPaneDl" role="tabpanel"></div>
+    <div class="member-pane" id="memberPaneAi" role="tabpanel" hidden></div>
+    <div class="member-pane" id="memberPanePacks" role="tabpanel" hidden></div>
+
+    <div class="member-activate">
+      <input id="memberCode" class="adv-input" placeholder="V1 测试期：输入套餐 code（如 download_year / ai_15000 / credits_5000）或激活码" autocomplete="off" />
+      <button type="button" class="btn btn-ghost btn-sm" id="memberActivateBtn">激活</button>
+    </div>
+    <p class="arc-msg" id="memberActMsg" hidden></p>
+    <p class="consent-note">V1 未接入支付，测试期激活即时生效；下载 / AI 会员到期自动失效，AI 订阅积分随到期清零，永久积分包不过期。</p>
   </div>
 </dialog>
 
