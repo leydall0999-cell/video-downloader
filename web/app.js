@@ -3597,13 +3597,12 @@
     const samWrap = sam ? sam.closest('.mat-vision-toggle') : null;
     const visHint = document.getElementById('matVisionHint');
     const samHint = document.getElementById('matSamHint');
-    // 🤖 AI 视觉定位：默认在「所有模式」都可见、默认开启。
+    // 🤖 AI 视觉定位：默认开启（提交时自动走 VLM 定位），但界面不再显示该开关。
     // 行为由 matSubmit 按「有无手动画选区」自动裁决：不画选区时自动调 VLM 定位主体；
     // 画了框/套索/智能选块/点选后提交时自动关闭，以用户选区为准（不做交集、绝不误切）。
     if (samWrap) samWrap.hidden = true;
     if (samHint) samHint.hidden = true;
-    if (visWrap) visWrap.hidden = false;
-    if (visHint) visHint.hidden = false;
+    // 不主动 unhide visWrap/visHint（保留 HTML 的 hidden），实现「默认开启但不显示开关」
     if (vis) vis.checked = true;
     if (mode === 'smart') {
       // 智能：AI 视觉定位自动找主体（关手动选区），点图可临时点选（辅助手段，非默认）
