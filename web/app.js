@@ -587,7 +587,6 @@
     processParams: $('processParams'),
     processRun: $('processRun'),
     processStatus: $('processStatus'),
-    chips: $('platformChips'),
     tabLibrary: $('tabLibrary'),
     ucLimitTip: $('ucLimitTip'),
     // 批量处理 + 加工队列
@@ -1181,27 +1180,9 @@
 
   // ------------------------------------------------------------------ 渲染
 
-  const MAX_VISIBLE_PLATFORMS = 16;
-
   const renderPlatforms = (platforms) => {
     allPlatforms = platforms;
-    // 平台列表只保留 header 徽章入口（engineBadge 弹窗），输入区 chips 已移除
-    if (el.chips) {
-      el.chips.replaceChildren();
-      platforms.slice(0, MAX_VISIBLE_PLATFORMS).forEach(({ name, icon }) => {
-        const chip = document.createElement('span');
-        chip.className = 'chip';
-        chip.textContent = (icon ? icon + ' ' : '') + name;
-        el.chips.appendChild(chip);
-      });
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'chip chip-more';
-      more.textContent = `查看全部 ${platforms.length} 个平台 →`;
-      more.setAttribute('aria-haspopup', 'dialog');
-      more.addEventListener('click', () => openPlatformModal(platforms));
-      el.chips.appendChild(more);
-    }
+    // 平台列表只保留 header 徽章入口（engineBadge 弹窗），输入区 chips 已移除（顶部已有平台展示，避免重复）
     el.badge.textContent = `支持 ${platforms.length} 个平台`;
   };
 
