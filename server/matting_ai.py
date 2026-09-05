@@ -1322,6 +1322,43 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             meta["person_detected_local"] = round(_pc, 3)
                 except Exception:
                     pass
+            # 标准绿/蓝幕直通色度键：均匀高饱和绿/蓝底是色度键的数学主场——
+            # 免费、秒级、零重绘（云端生成式增强反而可能改写素材细节、且按次计费）。
+            # 仅限「边缘纯色达标 + 背景色高饱和 + 色相在绿~青~蓝区间(70~165°)」；
+            # 橙幕（色相约 25°）/灰白底/复杂背景一律不命中，仍走云端。
+            if is_cloud_matting_mediakit_ready():
+                try:
+                    _is_solid_bg, _bg_rgb = _detect_solid_background(rgb)
+                except Exception:  # noqa: BLE001
+                    _is_solid_bg = False
+                if _is_solid_bg:
+                    try:
+                        import colorsys as _cs
+                        _r, _g, _b = (float(_bg_rgb[0]), float(_bg_rgb[1]), float(_bg_rgb[2]))
+                        _mx, _mn = max(_r, _g, _b), min(_r, _g, _b)
+                        _sat = 0.0 if _mx <= 0 else (_mx - _mn) / _mx
+                        _hue = _cs.rgb_to_hsv(_r, _g, _b)[0] * 360.0
+                        if _sat > 0.45 and 70.0 <= _hue <= 165.0:
+                            _fast = False
+                            if _is_person:
+                                try:
+                                    rgba = _matting_solid_person_hybrid(
+                                        rgb, W, H, box=box, polygon=polygon,
+                                        vision_box=vision_box, model="modnet-photographic")
+                                    if meta is not None:
+                                        meta["chroma_fastpath"] = "hybrid"
+                                    _save_out(rgba, out)
+                                    return
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            rgba = _matting_chroma_key(
+                                rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
+                            if meta is not None:
+                                meta["chroma_fastpath"] = "chroma"
+                            _save_out(rgba, out)
+                            return
+                    except Exception:  # noqa: BLE001
+                        pass  # 直通路由任何异常 → 继续走云端
             # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
             if is_cloud_matting_mediakit_ready():
                 try:
