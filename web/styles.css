@@ -247,13 +247,14 @@ img { max-width: 100%; display: block; }
 .node-switch:hover { border-color: var(--brand); background: #f5f3ff; }
 
 /* ---------------- advanced options ---------------- */
-.adv { border: 1px solid var(--line); border-radius: 999px; padding: .45rem .9rem; background: #fbfbfe; }
+.adv { border: 1px solid var(--line); border-radius: 999px; padding: 0; background: #fbfbfe; }
 .adv[open] { flex: 1 1 100%; border-radius: var(--radius-md); }
-.adv-summary { cursor: pointer; font-size: .82rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
+/* padding 放在 summary 上：整个药丸（含空白区）都是开合热区，点文字旁边也有反应 */
+.adv-summary { display: block; padding: .45rem .9rem; cursor: pointer; font-size: .82rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
 .adv-summary::-webkit-details-marker { display: none; }
 .adv-summary::before { content: "\25B8  "; }
 .adv[open] .adv-summary::before { content: "\25BE  "; }
-.adv-body { margin-top: .7rem; display: flex; flex-direction: column; gap: .5rem; }
+.adv-body { margin: .7rem .9rem .45rem; display: flex; flex-direction: column; gap: .5rem; }
 .adv-label { font-size: .78rem; color: var(--text-mute); font-weight: 600; }
 .adv-textarea, .adv-input {
   width: 100%; border: 1.5px solid var(--line); border-radius: var(--radius-sm);
@@ -265,12 +266,13 @@ img { max-width: 100%; display: block; }
 .adv-note { font-size: .76rem; color: #94a0b4; line-height: 1.5; }
 
 /* Cookie 操作指引 */
-.cookie-help { margin-top: .6rem; border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: .3rem .7rem; }
-.cookie-help-summary { cursor: pointer; font-size: .8rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
+.cookie-help { margin-top: .6rem; border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: 0; }
+/* 同 .adv：padding 移到 summary/body，热区铺满整条虚线框 */
+.cookie-help-summary { display: block; padding: .3rem .7rem; cursor: pointer; font-size: .8rem; font-weight: 600; color: var(--brand-strong); list-style: none; user-select: none; }
 .cookie-help-summary::-webkit-details-marker { display: none; }
 .cookie-help-summary::before { content: "\25B8  "; }
 .cookie-help[open] .cookie-help-summary::before { content: "\25BE  "; }
-.cookie-help-body { margin-top: .5rem; font-size: .8rem; color: var(--text-mute); line-height: 1.6; }
+.cookie-help-body { margin: .5rem .7rem .3rem; font-size: .8rem; color: var(--text-mute); line-height: 1.6; }
 .cookie-help-step { margin: .3rem 0; }
 .cookie-help-steps { margin: .3rem 0 .3rem 1.1rem; padding: 0; }
 .cookie-help-steps li { margin: .25rem 0; }
