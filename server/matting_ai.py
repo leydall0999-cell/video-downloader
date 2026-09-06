@@ -798,7 +798,7 @@ def _decontaminate_modnet_fg(rgb, alpha, bg_thr=0.10, min_bg_frac=0.02, radius=5
 
 
 def _detect_solid_background(rgb, band_frac: float = 0.06, tol: float = 0.14,
-                              min_cover: float = 0.25, min_border_frac: float = 0.55):
+                              min_cover: float = 0.25, min_border_frac: float = 0.38):
     """判断图像是否为「纯色/近似纯色背景」（如绿幕/橙幕/摄影棚纯色底）。
 
     改进（2026-09-04）：主体常贴边（人像头顶/头发触顶、肩膀触侧边），旧实现按「四边各自
@@ -930,8 +930,8 @@ def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=
     #    纯色背景的核心特征就是「背景像素颜色都≈key」；主体（人/物）颜色与 key 明显不同。
     #    主体贴边、把背景切断成不连通块时，洪泛会漏掉橙色 → 颜色阈值对贴边稳健得多。
     d = np.linalg.norm(img - key, axis=2)
-    tol = 0.12           # 背景阈值：d<tol 视为纯背景 → alpha=0
-    tol_hi = 0.30        # 过渡带上限：d>tol_hi 视为纯前景 → alpha=1
+    tol = 0.16           # 背景阈值：d<tol 视为纯背景 → alpha=0（2026-09-07 放宽：原 0.12 对光照不均橙幕偏紧，偏亮橙区逃逸）
+    tol_hi = 0.36        # 过渡带上限：d>tol_hi 视为纯前景 → alpha=1（原 0.30，同步放宽匹配更宽背景检测）
     alpha = np.clip((d - tol) / (tol_hi - tol), 0.0, 1.0)
     # 轻微高斯羽化（沿颜色梯度，自然跟随主体轮廓，不靠洪水填充）
     edge_px = max(3, int(min(H, W) * 0.004))
@@ -974,7 +974,20 @@ def _matting_modnet(rgb, W: int, H: int, box=None, polygon=None, vision_box=None
     复杂背景走 _matting_modnet_core。
     """
     try:
-        solid, _ = _detect_solid_background(rgb)
+        solid, _bg_key = _detect_solid_background(rgb)
+        if not solid:
+            # fallback：人物贴边（头发触顶/肩膀触侧边）时，_detect_solid_background 的
+            # border_frac 阈值仍可能漏判纯色背景 → 裸 MODNet 跑出橙/绿边。用其返回的
+            # 边缘中位数色 _bg_key 做全局颜色占比二次判定：画面中与该色相近的像素占比
+            # 足够高时仍视为纯色背景，转 hybrid（chroma 预处理净底色 + MODNet 发丝）。
+            try:
+                import numpy as np
+                _arr = np.array(rgb, dtype=np.float64) / 255.0
+                _d = np.linalg.norm(_arr - _bg_key[None, None, :], axis=2)
+                if float((_d < 0.14).mean()) > 0.30:
+                    solid = True
+            except Exception:  # noqa: BLE001
+                pass
         if solid:
             return _matting_solid_person_hybrid(
                 rgb, W, H, box=box, polygon=polygon, vision_box=vision_box, model=model)
@@ -1138,7 +1151,7 @@ def _matting_solid_person_hybrid(rgb, W: int, H: int, box=None, polygon=None, vi
     #   - t_lo <= d < t_hi：MODNet 高置信前景（a>0.85）保持，其余用 min(mod_a, color_a) 抑制；
     #   - d >= t_hi：完全前景，保留 MODNet alpha（发丝 wisps 不丢）。
     d = np.linalg.norm(rgb_arr - B[None, None, :], axis=2)
-    t_lo, t_hi = 0.10, 0.28
+    t_lo, t_hi = 0.14, 0.34   # (2026-09-07 放宽：原 0.10/0.28 对光照不均橙幕偏紧，左侧偏亮橙区逃逸；肤色 d≈0.50 远不受影响)
     color_a = np.clip((d - t_lo) / (t_hi - t_lo), 0.0, 1.0)
 
     final_a = mod_a.copy()
@@ -1150,8 +1163,8 @@ def _matting_solid_person_hybrid(rgb, W: int, H: int, box=None, polygon=None, vi
     uncertain = transition & ~confident_fg
     final_a[uncertain] = np.minimum(final_a[uncertain], color_a[uncertain])
 
-    # 3) 强去溢色：只清理真正的半透明边缘溢色，不杀高 alpha 实体前景（防止皮肤被抠）
-    F, final_a = _despill_strong(rgb_arr, final_a, B, max_alpha_kill=0.55)
+    # 3) 强去溢色：清理半透明边缘溢色（纯色背景场景可更激进，max_alpha_kill 提到 0.72 避免半透橙残留）
+    F, final_a = _despill_strong(rgb_arr, final_a, B, max_alpha_kill=0.72)
     out = np.dstack([F, final_a[..., None]])
     out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
     return Image.fromarray(out, mode="RGBA")
@@ -1288,6 +1301,30 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     _is_solid_bg, _bg_rgb = _detect_solid_background(rgb)
                 except Exception:  # noqa: BLE001
                     _is_solid_bg = False
+                # 人像 + 云端可用：优先云端 MediaKit human（最靠近豆包、橙幕去除优于本地
+                # chroma-hybrid；单色 key 对光照不均橙幕会漏判留下彩边）。本地 hybrid/MODNet
+                # 仅作断网/无 Key 兜底。2026-09-07 修正：此前人像在 1316 被本地 hybrid 截胡
+                # return，云端 human 路从未被走到 → 橙幕人像反而比改前(云端)更差。
+                if (_is_person or _is_person_label(vision_label)
+                        or _is_person_label((meta or {}).get("prompt", ""))) \
+                        and is_cloud_matting_mediakit_ready():
+                    try:
+                        from cloud_matting_mediakit import mediakit_remove_bg
+                        rgba = mediakit_remove_bg(rgb, scene="human", timeout=90, soft_fade=True)
+                        # 空蒙版兜底（与通用/cv 路径一致）：云端对非真实人像/装饰元素可能返回全透明，
+                        # 此时 raise 触发下方 except → 自动回退本地 hybrid，不再存出空白图。
+                        import numpy as _np4
+                        if _np4.asarray(rgba)[:, :, 3].mean() < 3.0:
+                            raise ValueError("MediaKit human 返回空蒙版")
+                        if meta is not None:
+                            meta["person_cloud_mediakit"] = True
+                            meta["cloud_used"] = True
+                        _save_out(rgba, out)
+                        return
+                    except Exception as _ce:  # noqa: BLE001
+                        if meta is not None:
+                            meta["cloud_error"] = f"MediaKit human: {_ce}"
+                        pass  # 云端失败 → 落本地 hybrid/chroma
                 if _is_solid_bg:
                     try:
                         import colorsys as _cs
@@ -1295,7 +1332,10 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                         _mx, _mn = max(_r, _g, _b), min(_r, _g, _b)
                         _sat = 0.0 if _mx <= 0 else (_mx - _mn) / _mx
                         _hue = _cs.rgb_to_hsv(_r, _g, _b)[0] * 360.0
-                        if _sat > 0.45 and 70.0 <= _hue <= 165.0:
+                        # 原仅允许绿/青幕(70-165°)走 chroma/hybrid；现扩展为任意高饱和
+                        # 纯色幕（橙/红/黄/绿/青/蓝/紫）都走——_matting_chroma_key 用颜色
+                        # 距离判定、不限色相，橙幕此前被排除会落 MediaKit 粗边（见 1285 注释）。
+                        if _sat > 0.45:
                             _fast = False
                             if _is_person:
                                 try:
@@ -1316,6 +1356,20 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             return
                     except Exception:  # noqa: BLE001
                         pass  # 直通路由任何异常 → 继续走云端
+            # 人像（复杂/非纯色背景）→ 优先本地 MODNet 真连续 alpha（发丝级），
+            # 优于 MediaKit 云端 human 场景的粗硬边，且免费离线、不出云、不计费。
+            if _is_person or _is_person_label(vision_label) or _is_person_label((meta or {}).get("prompt", "")):
+                try:
+                    rgba = _matting_modnet(
+                        rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
+                        model="modnet-photographic",
+                    )
+                    if meta is not None:
+                        meta["person_local_modnet"] = True
+                    _save_out(rgba, out)
+                    return
+                except Exception:  # noqa: BLE001
+                    pass  # MODNet 失败 → 继续走云端兜底
             # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
             if is_cloud_matting_mediakit_ready():
                 try:
@@ -1592,6 +1646,21 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             rgba = Image.fromarray(
                                 np.dstack([np.asarray(rgba.convert("RGB")),
                                            (_ba * 255.0).astype(np.uint8)]), "RGBA")
+                    # —— 空蒙版兜底（修复「云端调用成功却出全透明空图还照常计费」）
+                    # MediaKit 的 remove-image-background 是「显著主体分割器」，对
+                    # 「白字+描边+投影」等装饰文字/元素海报常返回空蒙版。若不拦截，
+                    # 会存出一张空白透明图并照常计费。累计 alpha>30 的像素占比低于
+                    # 0.5% 视为空结果，抛异常复用下方 except 回退到本地 BiRefNet。
+                    try:
+                        import numpy as _nc
+                        _na = _nc.asarray(rgba.split()[3]).astype(_nc.float32) / 255.0
+                        _cov = float((_na > 0.12).mean())
+                    except Exception:
+                        _cov = 1.0
+                    if _cov < 0.005:
+                        raise RuntimeError(
+                            "MediaKit返回空蒙版(覆盖率%.2f%%<0.5%%)，" % (100 * _cov)
+                            + "已回退本地BiRefNet")
                     if meta is not None:
                         meta["cloud_used"] = True
                         meta["cloud_provider"] = "volcengine-mediakit"
@@ -1609,6 +1678,17 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 try:
                     from cloud_matting import cloud_matting_rgba
                     rgba = cloud_matting_rgba(rgb, box=_cb, person=_is_person, timeout=60)
+                    # 同上：cv 兜底路径也可能返回空蒙版，统一拦截后回退本地
+                    try:
+                        import numpy as _nc2
+                        _na2 = _nc2.asarray(rgba.split()[3]).astype(_nc2.float32) / 255.0
+                        _cov2 = float((_na2 > 0.12).mean())
+                    except Exception:
+                        _cov2 = 1.0
+                    if _cov2 < 0.005:
+                        raise RuntimeError(
+                            "cv返回空蒙版(覆盖率%.2f%%<0.5%%)，" % (100 * _cov2)
+                            + "已回退本地BiRefNet")
                     if meta is not None:
                         meta["cloud_used"] = True
                         meta["cloud_provider"] = "volcengine"
