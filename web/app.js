@@ -6562,6 +6562,10 @@ el.dwVidPlayer.removeAttribute('src');
     // MiniMax / SiliconFlow：需填密钥
     setOpt('minimax', !status.minimax_configured, status.minimax_configured ? '收费（密钥已填写）' : '收费（未填密钥，暂不可用）');
     setOpt('siliconflow', !status.siliconflow_configured, status.siliconflow_configured ? '收费（密钥已填写，新用户送 ¥14）' : '收费（未填密钥，暂不可用）');
+    // Qwen3-TTS：本地服务就绪可用；未启动仍可选中（选中后服务不可达会自动回退 edge）
+    setOpt('qwen3tts', false, status.qwen3tts_ready ? '免费（已就绪）' : '免费（本机服务未启动，选中后自动回退 edge）');
+    // edge-tts：始终可用兜底
+    setOpt('edge', false, '免费（兜底）');
 
     // 当前选中的项若已被禁用，自动回退到默认引擎
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
@@ -6583,6 +6587,12 @@ el.dwVidPlayer.removeAttribute('src');
     } else if (cur === 'minimax' || cur === 'siliconflow') {
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
       comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
+    } else if (cur === 'qwen3tts' || cur === '') {
+      if (status.qwen3tts_ready) {
+        comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
+      } else {
+        comSetTtsStatusBar('orange', '本机 Qwen3-TTS 服务(7871)未启动：选中后将自动回退 edge-tts，或先启动本机服务再用');
+      }
     } else {
       comHideTtsStatusBar();
     }

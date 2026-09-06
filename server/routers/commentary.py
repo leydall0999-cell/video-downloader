@@ -25,6 +25,7 @@ def commentary_tts_status() -> dict:
     - platform: darwin / win32 / linux
     - apple_silicon: 是否为 Apple Silicon Mac（MLX 仅在此推荐）
     - indextts_mlx_ready: 127.0.0.1:7866 是否可连接
+    - qwen3tts_ready: 127.0.0.1:7871 是否可连接（Qwen3-TTS 本地语音克隆）
     - minimax_configured / siliconflow_configured: 是否已配置 API Key
     """
     import json
@@ -46,6 +47,15 @@ def commentary_tts_status() -> dict:
     except Exception:
         indextts_mlx_ready = False
 
+    qwen3tts_ready = False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.6)
+            s.connect(("127.0.0.1", 7871))
+            qwen3tts_ready = True
+    except Exception:
+        qwen3tts_ready = False
+
     tts_cfg: dict = {}
     try:
         tts_path = os.path.join(os.path.expanduser("~"), ".video-downloader", "tts_config.json")
@@ -63,6 +73,7 @@ def commentary_tts_status() -> dict:
         "machine": machine,
         "apple_silicon": apple_silicon,
         "indextts_mlx_ready": indextts_mlx_ready,
+        "qwen3tts_ready": qwen3tts_ready,
         "minimax_configured": bool(minimax_key),
         "siliconflow_configured": bool(siliconflow_key),
     }
