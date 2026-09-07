@@ -73,6 +73,7 @@
         <span class="sidebar-group-en">Create</span>
       </div>
       <button type="button" class="sidebar-item" data-view="commentary" id="sTabCommentary" title="视频解说"><span class="sidebar-item-icon" aria-hidden="true">🎬</span><span class="sidebar-item-label">视频解说</span></button>
+      <button type="button" class="sidebar-item" data-view="subtitle" id="sTabSubtitle" title="本地视频字幕提取"><span class="sidebar-item-icon" aria-hidden="true">📝</span><span class="sidebar-item-label">字幕提取</span></button>
           </div>
 
     <div class="sidebar-group">
@@ -91,9 +92,11 @@
         <span class="sidebar-group-en">Tools</span>
       </div>
       <button type="button" class="sidebar-item" data-view="bridge" id="sTabBridge" title="视频 / 音频桥接"><span class="sidebar-item-icon" aria-hidden="true">🔗</span><span class="sidebar-item-label">视频/音频桥接</span></button>
-      <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
-      <!-- 2026-09-08 视频去水印从 dw 视图子模式拎出独立入口：进入 dw 视图并自动切视频子面板 -->
+      <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片去水印</span></button>
+      <button type="button" class="sidebar-item" data-view="dwpdf" id="sTabDwPdf" title="PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">📄</span><span class="sidebar-item-label">PDF 去水印</span></button>
+      <!-- 2026-09-08 视频去水印 / 一键抠图从 dw 视图子模式拎出独立入口：进入 dw 视图并自动切对应子面板 -->
       <button type="button" class="sidebar-item" data-view="dwvideo" id="sTabDwVideo" title="视频去水印"><span class="sidebar-item-icon" aria-hidden="true">🎞️</span><span class="sidebar-item-label">视频去水印</span></button>
+      <button type="button" class="sidebar-item" data-view="matting" id="sTabMatting" title="一键抠图"><span class="sidebar-item-icon" aria-hidden="true">✂️</span><span class="sidebar-item-label">一键抠图</span></button>
     </div>
 
     <!-- 2026-09-08 媒体库移到侧栏最后（用户要求） -->
@@ -632,15 +635,63 @@
     <span class="convert-status" id="mcStatus" aria-live="polite"></span>
   </section>
 
-  <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
+  <!-- 本地视频字幕提取（faster-whisper ASR，MIT 可商用；VAD 逐句精准分段，输出 SRT/TXT） -->
+  <section id="subtitleView" class="panel" hidden aria-labelledby="sbTitle">
+    <h2 id="sbTitle" class="guide-title">📝 本地视频字幕提取</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      本地 AI 语音识别，把视频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
+      全程本地完成，不上传云端；识别模型首次使用会自动下载（base≈75MB / small≈250MB）。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="sbPickBtn">选取视频</button>
+      <input type="file" id="sbFileInput" accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v" hidden />
+      <span class="uc-count" id="sbFileLabel">尚未选择视频</span>
+    </div>
+
+    <div class="uc-bulk">
+      <h3 class="card-title">识别设置</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">识别模型</span>
+          <select id="sbModel">
+            <option value="base">base（最快，准确度一般）</option>
+            <option value="small" selected>small（推荐，速度与准确均衡）</option>
+            <option value="medium">medium（更准，较慢）</option>
+            <option value="large-v3">large-v3（最准，CPU 很慢）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">语言</span>
+          <select id="sbLang">
+            <option value="" selected>自动检测</option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-primary" id="sbStartBtn" disabled>开始提取</button>
+      </div>
+    </div>
+
+    <div class="progress" id="sbProgressWrap" hidden><div class="progress-fill" id="sbProgressFill" style="width:0%"></div></div>
+    <span class="convert-status" id="sbStatus" aria-live="polite"></span>
+
+    <div class="uc-bulk" id="sbResult" hidden>
+      <h3 class="card-title">提取完成 ✅ <span class="uc-count" id="sbMeta"></span></h3>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-primary" id="sbDlSrt">下载 SRT 字幕</button>
+        <button type="button" class="btn btn-ghost" id="sbDlTxt">下载 TXT 纯文本</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 去水印视图（需求文档模块二：图片/PDF/视频去水印 + 一键抠图）。
+       2026-09-08 子模式全部拎到侧栏独立入口（图片/PDF/视频/抠图），
+       视图内 dw-tabs 切换按钮行已按用户要求删除 -->
   <section id="dwView" class="panel" hidden aria-labelledby="dwTitle">
     <h2 id="dwTitle" class="guide-title">图片 / PDF / 视频 去水印</h2>
-    <div class="dw-tabs">
-      <button type="button" class="dw-sub is-active" id="dwModeImg">🖼️ 图片去水印</button>
-      <button type="button" class="dw-sub" id="dwModePdf">📄 PDF 去水印</button>
-      <button type="button" class="dw-sub" id="dwModeVideo">🎬 视频去水印</button>
-      <button type="button" class="dw-sub" id="dwModeMatting">✂️ 一键抠图</button>
-    </div>
 
     <!-- 图片模式 -->
     <div id="dwImgPane">

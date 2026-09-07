@@ -311,6 +311,9 @@ UPLOAD_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", 
 # ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
 DW_DIR = DOWNLOAD_DIR / "dewatermark"
 DW_DIR.mkdir(parents=True, exist_ok=True)
+# ---- 本地视频字幕提取（faster-whisper ASR，MIT）：SRT/TXT 产物目录 ----
+SUBTITLE_DIR = DOWNLOAD_DIR / "subtitles"
+SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
 DW_JOBS: dict[str, dict] = {}
 DW_LOCK = threading.Lock()
 
@@ -2829,6 +2832,8 @@ from routers import dewatermark as _dewatermark_rtr
 app.include_router(_dewatermark_rtr.router)
 from routers import matting as _matting_rtr
 app.include_router(_matting_rtr.router)
+from routers import subtitle as _subtitle_rtr
+app.include_router(_subtitle_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
 from routers import commentary as _commentary_rtr

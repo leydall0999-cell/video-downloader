@@ -451,10 +451,29 @@
     imgStartAllBtn: $('imgStartAllBtn'),
     imgStatus: $('imgStatus'),
 
+    // 本地视频字幕提取（faster-whisper ASR）
+    sbPickBtn: $('sbPickBtn'),
+    sbFileInput: $('sbFileInput'),
+    sbFileLabel: $('sbFileLabel'),
+    sbModel: $('sbModel'),
+    sbLang: $('sbLang'),
+    sbStartBtn: $('sbStartBtn'),
+    sbProgressWrap: $('sbProgressWrap'),
+    sbProgressFill: $('sbProgressFill'),
+    sbStatus: $('sbStatus'),
+    sbResult: $('sbResult'),
+    sbMeta: $('sbMeta'),
+    sbDlSrt: $('sbDlSrt'),
+    sbDlTxt: $('sbDlTxt'),
+
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
     dwView: $('dwView'),
     sTabDwVideo: $('sTabDwVideo'),
+    sTabDwPdf: $('sTabDwPdf'),
+    sTabMatting: $('sTabMatting'),
+    sTabSubtitle: $('sTabSubtitle'),
+    subtitleView: $('subtitleView'),
     tabAppIntro: $('tabAppIntro'),
     appIntroView: $('appIntroView'),
     dwModeImg: $('dwModeImg'),
@@ -3625,27 +3644,126 @@
     });
   });
 
+  // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
+  const sbDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '' };
+  const sbSetStatus = (text) => { el.sbStatus.textContent = text; };
+  const sbStopPolling = () => { if (sbState.timer) { clearInterval(sbState.timer); sbState.timer = null; } };
+
+  const sbSetFile = (pathOrName) => {
+    // 仅接受桌面 chooseFiles 返回的本地绝对路径（ASR 直接读本机文件，免上传）
+    if (typeof pathOrName !== 'string' || !pathOrName) return;
+    sbState.path = pathOrName;
+    sbState.name = pathOrName.split(/[\\/]/).pop();
+    sbState.jobId = null;
+    el.sbFileLabel.textContent = sbState.name;
+    el.sbStartBtn.disabled = false;
+    el.sbResult.hidden = true;
+    sbSetStatus('');
+  };
+
+  const sbPoll = async () => {
+    if (!sbState.jobId) return;
+    try {
+      const st = await request('/api/subtitle/' + sbState.jobId);
+      if (st.status === 'running') {
+        el.sbProgressWrap.hidden = false;
+        el.sbProgressFill.style.width = (st.progress || 0) + '%';
+        sbSetStatus(`${st.stage || '处理中'} ${st.progress || 0}%`);
+      } else if (st.status === 'completed') {
+        sbStopPolling();
+        el.sbProgressWrap.hidden = true;
+        el.sbProgressFill.style.width = '100%';
+        sbState.srtName = st.srt_name || 'subtitle.srt';
+        sbState.txtName = st.txt_name || 'subtitle.txt';
+        el.sbMeta.textContent = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'}`;
+        el.sbResult.hidden = false;
+        sbSetStatus('完成 ✅');
+      } else if (st.status === 'failed') {
+        sbStopPolling();
+        el.sbProgressWrap.hidden = true;
+        sbSetStatus('失败：' + (st.error || '未知错误'));
+      }
+    } catch (_e) { /* 单次轮询失败忽略 */ }
+  };
+
+  // 桌面端走原生保存面板（WKWebView 拦截 <a download>）；网页端降级 blob
+  const sbSave = async (kind) => {
+    if (!sbState.jobId) return;
+    const base = (kind === 'srt' ? sbState.srtName : sbState.txtName) || ('subtitle.' + kind);
+    const suggested = base.replace(/\.[^.]+$/, '') + '.' + kind;
+    try {
+      const resp = await fetch(`${window.VDL_API_BASE || ''}/api/subtitle/${sbState.jobId}/file?kind=${kind}`);
+      if (!resp.ok) { sbSetStatus('下载失败：HTTP ' + resp.status); return; }
+      const text = await resp.text();
+      if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file_dialog === 'function') {
+        await window.pywebview.api.save_text_file_dialog(text, suggested);
+      } else {
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = suggested;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }
+    } catch (e) { sbSetStatus('下载失败：' + (e && e.message || e)); }
+  };
+
+  el.sbPickBtn.addEventListener('click', () => {
+    if (sbDesktopNative()) {
+      window.VDL.desktop.chooseFiles().then(list => {
+        if (list && list.length) sbSetFile(list[0]);
+      }).catch(() => {});
+    } else {
+      el.sbFileInput.click();
+    }
+  });
+  el.sbFileInput.addEventListener('change', () => {
+    const f = el.sbFileInput.files && el.sbFileInput.files[0];
+    if (f) { el.sbFileLabel.textContent = f.name + '（网页模式暂不支持，请在桌面版使用）'; el.sbStartBtn.disabled = true; }
+  });
+  el.sbStartBtn.addEventListener('click', () => {
+    if (!sbState.path) return;
+    el.sbResult.hidden = true;
+    el.sbProgressWrap.hidden = false;
+    el.sbProgressFill.style.width = '0%';
+    sbSetStatus('提交中…');
+    request('/api/subtitle/extract', {
+      method: 'POST',
+      body: JSON.stringify({
+        local_path: sbState.path,
+        model_size: el.sbModel.value || 'small',
+        language: el.sbLang.value || '',
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(data => {
+      sbState.jobId = data.job_id;
+      sbSetStatus('排队中…');
+      if (sbState.timer) clearInterval(sbState.timer);
+      sbState.timer = setInterval(sbPoll, 2000);
+    }).catch(err => sbSetStatus('提交失败：' + (err && err.message || err)));
+  });
+  el.sbDlSrt.addEventListener('click', () => sbSave('srt'));
+  el.sbDlTxt.addEventListener('click', () => sbSave('txt'));
+
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
 
   // 图片 / PDF / 视频 / 一键抠图 子模式切换
+  // 2026-09-08 视图内 dw-tabs 按钮行已删（子模式由侧栏入口直达），dwMode* 元素不存在，做防御式处理
   const dwSwitchPane = (mode) => {
     el.dwImgPane.hidden = mode !== 'img';
     el.dwPdfPane.hidden = mode !== 'pdf';
     el.dwVideoPane.hidden = mode !== 'video';
     el.dwMattingPane.hidden = mode !== 'matting';
-    el.dwModeImg.classList.toggle('is-active', mode === 'img');
-    el.dwModePdf.classList.toggle('is-active', mode === 'pdf');
-    el.dwModeVideo.classList.toggle('is-active', mode === 'video');
-    el.dwModeMatting.classList.toggle('is-active', mode === 'matting');
+    for (const [elRef, m] of [[el.dwModeImg, 'img'], [el.dwModePdf, 'pdf'], [el.dwModeVideo, 'video'], [el.dwModeMatting, 'matting']]) {
+      if (elRef) elRef.classList.toggle('is-active', mode === m);
+    }
     el.dwImgStatus.textContent = '';
     el.dwPdfStatus.textContent = '';
     el.dwVidStatus.textContent = '';
     if (el.matStatus) el.matStatus.textContent = '';
   };
-  el.dwModeImg.addEventListener('click', () => dwSwitchPane('img'));
-  el.dwModePdf.addEventListener('click', () => dwSwitchPane('pdf'));
-  el.dwModeVideo.addEventListener('click', () => dwSwitchPane('video'));
-  el.dwModeMatting.addEventListener('click', () => dwSwitchPane('matting'));
+  // 2026-09-08 dwMode* 按钮已从视图删除（子模式经侧栏入口直达），原 4 行 click 绑定一并移除
 
   // ---- 一键抠图（图片去背景，输出透明 PNG）----
   let matJobId = null;
@@ -9246,12 +9364,13 @@ el.dwVidPlayer.removeAttribute('src');
     const isTor = view === 'torrent';
     const isCom = view === 'commentary';
     const isUp = view === 'uploadconvert';
-    const isDw = view === 'dw' || view === 'dwvideo';   // dwvideo：侧栏「视频去水印」入口，同 dw 视图但自动切视频子面板
+    const isDw = ['dw', 'dwpdf', 'dwvideo', 'matting'].includes(view);   // dw 系侧栏入口：图片/PDF/视频去水印 + 一键抠图，共用 dwView，进入时自动切对应子面板
     const isMusic = view === 'musicconvert';
     const isImage = view === 'imageconvert';
+    const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isAppIntro || isBridge;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isSt || isAppIntro || isBridge;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -9259,6 +9378,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.uploadConvertView.hidden = !isUp;
     el.musicConvertView.hidden = !isMusic;
     el.imageConvertView.hidden = !isImage;
+    el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
@@ -9270,9 +9390,10 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
     if (el.tabMusicConvert) el.tabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
+    if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isAppIntro && !isBridge;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isSt && !isAppIntro && !isBridge;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -9282,14 +9403,18 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabMusicConvert) el.sTabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
     if (el.sTabDw) el.sTabDw.classList.toggle('is-active', view === 'dw');
+    if (el.sTabDwPdf) el.sTabDwPdf.classList.toggle('is-active', view === 'dwpdf');
     if (el.sTabDwVideo) el.sTabDwVideo.classList.toggle('is-active', view === 'dwvideo');
+    if (el.sTabMatting) el.sTabMatting.classList.toggle('is-active', view === 'matting');
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
-    if (view === 'dwvideo' && typeof dwSwitchPane === 'function') dwSwitchPane('video');  // 「视频去水印」入口直达视频子面板
+    // dw 系侧栏入口直达对应子面板（视图内 dw-tabs 按钮行已删，切换只经侧栏）
+    const _dwPaneOf = { dw: 'img', dwpdf: 'pdf', dwvideo: 'video', matting: 'matting' };
+    if (_dwPaneOf[view] && typeof dwSwitchPane === 'function') dwSwitchPane(_dwPaneOf[view]);
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
     // 「支持 N 个平台」徽章（#engineBadge）只在下载模块可见，其它功能页隐藏
@@ -9732,11 +9857,14 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabUploadConvert, 'uploadconvert'],
     [el.sTabBridge, 'bridge'],
     [el.sTabDw, 'dw'],
+    [el.sTabDwPdf, 'dwpdf'],
     [el.sTabDwVideo, 'dwvideo'],
+    [el.sTabMatting, 'matting'],
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
     [el.sTabMusicConvert, 'musicconvert'],
     [el.sTabImageConvert, 'imageconvert'],
+    [el.sTabSubtitle, 'subtitle'],
   ];
   for (const [btn, view] of _sidebarPairs) {
     if (btn) btn.addEventListener('click', () => switchView(view));
