@@ -2651,6 +2651,7 @@ img { max-width: 100%; display: block; }
   background: #fff;
 }
 .com-mode-dropdown-toggle[aria-expanded="true"] .com-mode-dropdown-caret { transform: rotate(180deg); }
+.com-mode-dropdown-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .com-mode-dropdown-caret { font-size: .72rem; transition: transform .18s; color: var(--text-mute); }
 .com-mode-dropdown-panel {
   position: absolute; left: 0; right: 0; top: calc(100% + .4rem); z-index: 50;

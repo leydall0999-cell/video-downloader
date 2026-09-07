@@ -3473,8 +3473,18 @@
   if (el.matLassoUndo) el.matLassoUndo.addEventListener('click', matLassoUndoLast);
   if (el.matLassoDone) el.matLassoDone.addEventListener('click', matLassoClose);
   // Backspace / Delete / 右键 = 撤销上一点（右键先阻止系统菜单）
+  // 当焦点在可编辑输入框（如「说抠什么」prompt）内时，不要拦截退格/删除/回车/空格，让输入框正常编辑。
+  const isEditingText = () => {
+    const active = document.activeElement;
+    if (!active) return false;
+    const tag = active.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+    if (active.isContentEditable || active.getAttribute('contenteditable') === 'true') return true;
+    return false;
+  };
   document.addEventListener('keydown', (e) => {
     if (matTool !== 'lasso') return;
+    if (isEditingText()) return; // 输入框内不拦截快捷键
     if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); matLassoUndoLast(); }
     else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); matLassoClose(); }
   });
@@ -6287,6 +6297,11 @@ el.dwVidPlayer.removeAttribute('src');
   // → 用户确认后调 commentary-pipeline/process.py --edit-only 渲染成片。
   // 解说算力由独立 worker 承担，UI 只负责触发与轮询，不感知具体渲染过程。
 
+  // 解说参数下拉（解说类型 / data-com-select）的 reset 函数注册表。
+  // 选择后按钮显示具体参数，成片生成完成后统一恢复为标题/默认值。
+  const comSelectResetters = [];
+  const resetComSelects = () => { comSelectResetters.forEach((fn) => fn()); };
+
   // 通用轮询：拿到 job_id 后定时查状态，更新 refs（commentary 按钮 / status / file 链接）。
   const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {
     refs.commentaryStatus.hidden = false;
@@ -6310,6 +6325,7 @@ el.dwVidPlayer.removeAttribute('src');
           el.comProgress.hidden = true;
           el.comEta.hidden = true;
           if (typeof onCompleted === 'function') onCompleted();
+          resetComSelects();
         } else if (st.status === 'failed') {
           clearInterval(poll);
           refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
@@ -7905,6 +7921,9 @@ el.dwVidPlayer.removeAttribute('src');
 
   // 解说类型自定义下拉：点开/点外面收起；点选项更新 label + 隐藏 radio + 关 panel
   if (el.comTypeBtn && el.comTypePanel) {
+    let comTypeDirty = false;
+    const comTypeTitle = '解说类型';
+    const comTypeDefault = 'deep_hl';
     const closeTypeDropdown = () => {
       el.comTypePanel.hidden = true;
       el.comTypeBtn.setAttribute('aria-expanded', 'false');
@@ -7913,6 +7932,29 @@ el.dwVidPlayer.removeAttribute('src');
       el.comTypePanel.hidden = false;
       el.comTypeBtn.setAttribute('aria-expanded', 'true');
     };
+    const syncTypeLabel = () => {
+      if (!comTypeDirty) {
+        if (el.comTypeBtnLabel) el.comTypeBtnLabel.textContent = comTypeTitle;
+        return;
+      }
+      const checked = document.querySelector('input[name="comType"]:checked');
+      const val = checked ? checked.getAttribute('value') : comTypeDefault;
+      const opt = el.comTypePanel.querySelector(`.com-mode-dropdown-option[data-value="${val}"]`);
+      if (opt && el.comTypeBtnLabel) el.comTypeBtnLabel.textContent = opt.textContent.trim() || comTypeTitle;
+    };
+    const resetComType = () => {
+      comTypeDirty = false;
+      const radio = document.querySelector(`input[name="comType"][value="${comTypeDefault}"]`);
+      if (radio) radio.checked = true;
+      const opt = el.comTypePanel.querySelector(`.com-mode-dropdown-option[data-value="${comTypeDefault}"]`);
+      if (opt) {
+        el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((b2) => {
+          b2.classList.toggle('is-selected', b2 === opt);
+        });
+      }
+      syncTypeLabel();
+    };
+    comSelectResetters.push(resetComType);
     el.comTypeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (el.comTypePanel.hidden) openTypeDropdown(); else closeTypeDropdown();
@@ -7923,7 +7965,9 @@ el.dwVidPlayer.removeAttribute('src');
         // 同步隐藏 radio
         const radio = document.querySelector(`input[name="comType"][value="${val}"]`);
         if (radio) radio.checked = true;
-        // trigger label 固定显示「解说类型」，不随选项变；仅同步高亮
+        // 选中后按钮显示参数，成片完成后 resetComType() 恢复标题
+        comTypeDirty = true;
+        syncTypeLabel();
         el.comTypePanel.querySelectorAll('.com-mode-dropdown-option').forEach((b2) => {
           b2.classList.toggle('is-selected', b2 === btn);
         });
@@ -7944,7 +7988,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comTypeDropdown.addEventListener('mouseenter', () => {
       if (_typeLeaveTimer) { clearTimeout(_typeLeaveTimer); _typeLeaveTimer = null; }
     });
-    // 初始化：仅同步高亮（trigger label 固定显示「解说类型」组名，不跟随选项）
+    // 初始化：默认显示组名，高亮当前 radio
     const initChecked = document.querySelector('input[name="comType"]:checked');
     if (initChecked) {
       const val = initChecked.getAttribute('value');
@@ -7955,6 +7999,7 @@ el.dwVidPlayer.removeAttribute('src');
         });
       }
     }
+    syncTypeLabel();
   }
 
   // ---- 通用下拉：把标记了 data-com-select 的单选组/开关统一转成下拉 ----
@@ -8053,6 +8098,7 @@ el.dwVidPlayer.removeAttribute('src');
     panel.className = 'com-mode-dropdown-panel';
     panel.setAttribute('role', 'listbox');
     panel.hidden = true;
+    const optionTextMap = new Map();
     def.options.forEach(([val, text]) => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -8063,20 +8109,30 @@ el.dwVidPlayer.removeAttribute('src');
       strong.textContent = text;
       b.appendChild(strong);
       panel.appendChild(b);
+      optionTextMap.set(val, text);
     });
 
     wrap.append(btn, panel);
     title.insertAdjacentElement('afterend', wrap);
 
+    let dirty = false;
+    const defaultVal = def.kind === 'checkbox' ? 'off' : (def.options[0] || [''])[0];
     const close = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
     const syncUI = () => {
       const cur = comSelectRead(def, key);
-      // trigger 始终显示组名（功能标题），不跟随选项变更；当前选中项在 panel 里高亮
-      label.textContent = def.title || '';
+      // 用户未选择时显示组名（功能标题），选择后显示具体参数；
+      // 成片生成完成后 reset() 恢复标题 + 默认值。
+      label.textContent = dirty ? (optionTextMap.get(cur) || def.title || '') : (def.title || '');
       panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
         b.classList.toggle('is-selected', b.getAttribute('data-value') === cur);
       });
     };
+    const reset = () => {
+      dirty = false;
+      comSelectWrite(def, key, defaultVal);
+      syncUI();
+    };
+    comSelectResetters.push(reset);
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -8085,6 +8141,7 @@ el.dwVidPlayer.removeAttribute('src');
     });
     panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
       b.addEventListener('click', () => {
+        dirty = true;
         comSelectWrite(def, key, b.getAttribute('data-value'));
         syncUI();
         close();
