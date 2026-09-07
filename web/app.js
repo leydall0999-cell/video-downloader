@@ -454,6 +454,7 @@
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
     dwView: $('dwView'),
+    sTabDwVideo: $('sTabDwVideo'),
     tabAppIntro: $('tabAppIntro'),
     appIntroView: $('appIntroView'),
     dwModeImg: $('dwModeImg'),
@@ -9245,7 +9246,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isTor = view === 'torrent';
     const isCom = view === 'commentary';
     const isUp = view === 'uploadconvert';
-    const isDw = view === 'dw';
+    const isDw = view === 'dw' || view === 'dwvideo';   // dwvideo：侧栏「视频去水印」入口，同 dw 视图但自动切视频子面板
     const isMusic = view === 'musicconvert';
     const isImage = view === 'imageconvert';
     const isAppIntro = view === 'appIntro';
@@ -9280,13 +9281,15 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
     if (el.sTabMusicConvert) el.sTabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
-    if (el.sTabDw) el.sTabDw.classList.toggle('is-active', isDw);
+    if (el.sTabDw) el.sTabDw.classList.toggle('is-active', view === 'dw');
+    if (el.sTabDwVideo) el.sTabDwVideo.classList.toggle('is-active', view === 'dwvideo');
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
+    if (view === 'dwvideo' && typeof dwSwitchPane === 'function') dwSwitchPane('video');  // 「视频去水印」入口直达视频子面板
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
     // 「支持 N 个平台」徽章（#engineBadge）只在下载模块可见，其它功能页隐藏
@@ -9729,6 +9732,7 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabUploadConvert, 'uploadconvert'],
     [el.sTabBridge, 'bridge'],
     [el.sTabDw, 'dw'],
+    [el.sTabDwVideo, 'dwvideo'],
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
     [el.sTabMusicConvert, 'musicconvert'],

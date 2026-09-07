@@ -69,14 +69,6 @@
 
     <div class="sidebar-group">
       <div class="sidebar-group-title">
-        <span class="sidebar-group-emoji" aria-hidden="true">🗂</span>
-        <span class="sidebar-group-en">Manage</span>
-      </div>
-      <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary" title="媒体库"><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">媒体库</span></button>
-    </div>
-
-    <div class="sidebar-group">
-      <div class="sidebar-group-title">
         <span class="sidebar-group-emoji" aria-hidden="true">🎨</span>
         <span class="sidebar-group-en">Create</span>
       </div>
@@ -100,6 +92,17 @@
       </div>
       <button type="button" class="sidebar-item" data-view="bridge" id="sTabBridge" title="视频 / 音频桥接"><span class="sidebar-item-icon" aria-hidden="true">🔗</span><span class="sidebar-item-label">视频/音频桥接</span></button>
       <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
+      <!-- 2026-09-08 视频去水印从 dw 视图子模式拎出独立入口：进入 dw 视图并自动切视频子面板 -->
+      <button type="button" class="sidebar-item" data-view="dwvideo" id="sTabDwVideo" title="视频去水印"><span class="sidebar-item-icon" aria-hidden="true">🎞️</span><span class="sidebar-item-label">视频去水印</span></button>
+    </div>
+
+    <!-- 2026-09-08 媒体库移到侧栏最后（用户要求） -->
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">🗂</span>
+        <span class="sidebar-group-en">Manage</span>
+      </div>
+      <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary" title="媒体库"><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">媒体库</span></button>
     </div>
 
     <!-- 2026-09-08 会员中心移出侧栏：改为右上角 header 常驻按钮 #memberBadge
