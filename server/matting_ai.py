@@ -709,6 +709,52 @@ def _local_is_simple(alpha, category) -> bool:
     return band < 0.04 and 0.03 < cov < 0.97
 
 
+def _local_quality_ok(alpha, rgba, W: int, H: int, category) -> tuple[bool, str]:
+    """本地结果质量自检：是否「明显失败、需要升级云端精修」。
+
+    只捕捉**确定性高**的失败模式，避免误升云端增加成本；其余「抠得一般但不崩」的
+    情况交给 UI「☁️ 升级云端精修」手动按钮兜底（双保险）：
+      · 前景碎片化：alpha>0.5 的连通块过多且最大块占比过小 → 杂点喷溅/碎屑
+      · 内部破洞：主体内部出现大块背景空洞（被抠穿）→ 内陆被当背景切掉
+    返回 (ok, reason)。cv2 不可用时返回 (True, 'cv2-missing')——不自动升级，交手动按钮。
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:  # noqa: BLE001
+        return True, "cv2-missing"
+    fg = (alpha > 0.5).astype(np.uint8)
+    total_fg = int(fg.sum())
+    if total_fg < 0.005 * W * H:
+        # 近全透明/近全不透明已由退化 guard 处理，这里不重复判
+        return True, "fg-too-small"
+    # 连通块分析：碎片化检测
+    num, labels = cv2.connectedComponents(fg, connectivity=8)
+    comps = max(0, num - 1)
+    if comps > 0:
+        counts = np.bincount(labels.ravel())[1:]  # 去掉背景(标签0)
+        largest_ratio = float(counts.max()) / max(1, total_fg)
+    else:
+        largest_ratio = 0.0
+    if comps > 60 and largest_ratio < 0.5:
+        return False, f"fragmented(comps={comps},largest={largest_ratio:.2f})"
+    # 内部破洞检测：四周补一圈背景后从外角 floodfill 标记「外部背景」，
+    # 未标记背景像素即主体内部空洞。
+    bg = (alpha <= 0.5).astype(np.uint8)
+    pad = np.pad(bg, 1, mode="constant", constant_values=1)
+    fill = pad.copy().astype(np.int32)
+    try:
+        cv2.floodFill(fill, np.zeros((H + 4, W + 4), np.uint8), (0, 0), 2)
+    except Exception:  # noqa: BLE001
+        return True, "floodfill-skip"
+    external = (fill[1:-1, 1:-1] == 2)
+    hole_px = int((bg & (~external)).sum())
+    hole_ratio = hole_px / max(1, total_fg)
+    if hole_ratio > 0.4:
+        return False, f"hole-punched(hole={hole_ratio:.2f})"
+    return True, "ok"
+
+
 def _save_out(rgba, out) -> None:
     """原子写透明 PNG（RGBA → out 路径）。"""
     out_path = Path(out)
@@ -1324,7 +1370,7 @@ def _norm_box_from_inputs(vision_box, polygon, box):
     return None
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None, keep_lasso_all: bool = False, auto_vlm: bool | None = None) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None, keep_lasso_all: bool = False, auto_vlm: bool | None = None, force_cloud: bool = False) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -1425,9 +1471,11 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         # 本地质量因改用 birefnet-matting/portrait 变体而提升。
         # 注意：不把 VLM 自动生成的 vision_label 当「用户输入」——否则 auto+VLM 分类会被
         # 误判为有输入而跳过本地预检，重新回到云端优先。仅真正的手动选区/prompt 才跳过。
-        _auto_preeligible = (model in (None, "auto")) and not (
+        _auto_preeligible = (model in (None, "auto")) and not force_cloud and not (
             box or polygon or click or blocks or vision_box or (meta or {}).get("prompt")
         )
+        if force_cloud and meta is not None:
+            meta["forced_cloud"] = True
         if _auto_preeligible:
             try:
                 _lp = _local_first_pass(rgb, W, H, _auto_cat)
@@ -1437,15 +1485,39 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     _lp_degenerate = _lp_cov < 0.01 or _lp_cov > 0.99
                     _lp_simple = _local_is_simple(_lp["alpha"], _auto_cat)
                     _lp_cloud = is_cloud_matting_mediakit_ready()
-                    if (_lp_simple or not _lp_cloud) and not _lp_degenerate:
-                        _save_out(_lp["rgba"], out)
-                        if meta is not None:
-                            meta["local_first"] = True
-                            meta["local_engine"] = _lp["engine"]
-                            meta["cloud_used"] = False
-                            meta["local_simple"] = _lp_simple
-                        return
-                    # 复杂 + 云端可用 → 落下方云端链路升级（失败再回退本地）
+                    if not _lp_degenerate:
+                        _lp_ok, _lp_q_reason = _local_quality_ok(_lp["alpha"], _lp["rgba"], W, H, _auto_cat)
+                        if not _lp_ok:
+                            # 本地结果明显失败（碎片化/破洞）→ 有云端就升级，无云端则 best-effort 返回本地
+                            if meta is not None:
+                                meta["local_quality_bad"] = True
+                                meta["local_quality_reason"] = _lp_q_reason
+                            if _lp_cloud:
+                                if meta is not None:
+                                    meta["local_auto_escalated"] = True
+                                # 落入下方云端链路升级（不 return）
+                            else:
+                                _save_out(_lp["rgba"], out)
+                                if meta is not None:
+                                    meta["local_first"] = True
+                                    meta["local_engine"] = _lp["engine"]
+                                    meta["cloud_used"] = False
+                                    meta["local_simple"] = _lp_simple
+                                    meta["local_quality_ok"] = False
+                                return
+                        else:
+                            # 本地质量 OK：简单图或没云端 → 直接本地出图（免费）
+                            if (_lp_simple or not _lp_cloud):
+                                _save_out(_lp["rgba"], out)
+                                if meta is not None:
+                                    meta["local_first"] = True
+                                    meta["local_engine"] = _lp["engine"]
+                                    meta["cloud_used"] = False
+                                    meta["local_simple"] = _lp_simple
+                                    meta["local_quality_ok"] = True
+                                    meta["local_quality_reason"] = _lp_q_reason
+                                return
+                            # 复杂 + 云端可用 → 落下方云端链路升级（失败再回退本地）
             except Exception as _lpe:  # noqa: BLE001
                 import logging as _lpl
 
@@ -1459,6 +1531,9 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         #         ③ 本地 BiRefNet/MODNet/色度键 兜底。
         if meta is not None:
             meta.setdefault("cloud_used", False)
+        # 升级意图：显式 force_cloud，或本地预检已判定「本地明显失败需升级」。
+        # 一旦成立，下方 skip_cloud_for_text 等跳过优化全部失效，强制走云端 MediaKit。
+        _force_cloud = bool(force_cloud) or bool((meta or {}).get("local_auto_escalated"))
         _cloud_models = ("auto", "birefnet-general", "sam-matting")
         _is_person = (
             _is_person_label(vision_label)
@@ -1526,7 +1601,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 except Exception:  # noqa: BLE001
                     pass
                 if (_skip_txt_on and _cb is None and not _explicit_person
-                        and _pc_val <= _pthr):
+                        and _pc_val <= _pthr and not _force_cloud):
                     if meta is not None:
                         meta["skip_cloud_for_text"] = True
                         meta["cloud_error"] = (
@@ -1610,7 +1685,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 pass
             _no_person_here = not (_is_person or _is_person_label(vision_label)
                                    or _is_person_label((meta or {}).get("prompt", "")))
-            if _skip_cloud_for_text and _no_person_here and _cb is None:
+            if _skip_cloud_for_text and _no_person_here and _cb is None and not _force_cloud:
                 if meta is not None:
                     meta["skip_cloud_for_text"] = True
                     meta["cloud_error"] = "已跳过云端(整图非人像)，直接走本地"

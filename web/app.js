@@ -553,6 +553,7 @@
     matResult: $('matResult'),
     matOut: $('matOut'),
     matDownload: $('matDownload'),
+    matUpgradeCloud: $('matUpgradeCloud'),
     matLightbox: $('matLightbox'),
     matLightboxStage: $('matLightboxStage'),
     matLightboxImg: $('matLightboxImg'),
@@ -3828,7 +3829,13 @@
           el.matResult.hidden = false;
           // ☁️ 云端抠图（火山·豆包级）成功 → 最高优先提示，让用户明确知道走了云端
           if (d.cloud_used) {
-            el.matStatus.textContent = '抠图完成 ✅（☁️ 云端抠图 · 火山豆包级像素级：' + (d.vision_label || '主体') + '）';
+            if (d.forced_cloud) {
+              el.matStatus.textContent = '☁️ 云端精修完成 ✅（火山豆包级像素级：' + (d.vision_label || '主体') + '）';
+            } else if (d.local_auto_escalated) {
+              el.matStatus.textContent = '本地抠图效果差，已自动升级云端精修 ✅（' + (d.vision_label || '主体') + '）';
+            } else {
+              el.matStatus.textContent = '抠图完成 ✅（☁️ 云端抠图 · 火山豆包级像素级：' + (d.vision_label || '主体') + '）';
+            }
           } else if (d.cloud_error) {
             el.matStatus.textContent = '抠图完成（⚠️ 云端抠图未生效：' + d.cloud_error + '，已回退本地）';
           }
@@ -3842,10 +3849,20 @@
             el.matStatus.textContent = `抠图完成 ✅（✏️ 套索圈选 ${d.polygon_pts || 0} 点，bbox ${bbox}）`;
           } else if (d.mode === 'box') {
             el.matStatus.textContent = '抠图完成 ✅（▭ 矩形框选，只抠框内）';
+          } else if (d.local_quality_bad) {
+            el.matStatus.textContent = '抠图完成（⚠️ 本地效果可能不佳，可点「☁️ 升级云端精修」）';
           } else {
             el.matStatus.textContent = d.vision_error
               ? '抠图完成（⚠️ AI 视觉定位未生效：' + d.vision_error + '，已用基础抠图）'
               : '抠图完成 ✅';
+          }
+          // 🛡️ 双保险：本地结果（无论质量好坏）→ 提供「升级云端精修」手动兜底入口；
+          // 云端结果（含自动升级/手动升级）则隐藏该按钮。
+          if (el.matUpgradeCloud) {
+            const isLocal = (d.cloud_used === false || d.cloud_used === undefined) && !d.forced_cloud;
+            el.matUpgradeCloud.hidden = !isLocal;
+            el.matUpgradeCloud.disabled = false;
+            if (isLocal) el.matUpgradeCloud.onclick = () => matUpgradeCloud();
           }
           el.matBtn.disabled = false;
           matBusy = false;
@@ -4106,6 +4123,36 @@
           el.matBtn.disabled = false;
           el.matStatus.textContent = '提交失败：' + (e && e.detail ? e.detail : '未知错误');
         });
+  };
+
+  // 🛡️ 双保险·手动兜底：本地结果若抠得不好，用同一张源图重新走云端精修（force_cloud=1）。
+  // 不依赖任何 UI 选区/模型下拉，直接对原图发起云端抠图。
+  const matUpgradeCloud = () => {
+    if (matBusy) return;
+    const file = matSourceFile || (el.matFile && el.matFile.files && el.matFile.files[0]);
+    if (!file) { el.matStatus.textContent = '请先选择一张图片'; return; }
+    matBusy = true;
+    el.matBtn.disabled = true;
+    if (el.matUpgradeCloud) el.matUpgradeCloud.disabled = true;
+    el.matStatus.textContent = '☁️ 升级云端精修中…';
+    el.matResult.hidden = true;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('force_cloud', '1');
+    fetch('/api/matting/image', { method: 'POST', body: fd })
+      .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
+      .then(d => {
+        matJobId = d.job_id;
+        el.matStatus.textContent = '准备中…（☁️ 云端精修）';
+        if (matTimer) clearInterval(matTimer);
+        matTimer = setInterval(matPoll, 1500);
+      })
+      .catch(e => {
+        matBusy = false;
+        el.matBtn.disabled = false;
+        if (el.matUpgradeCloud) el.matUpgradeCloud.disabled = false;
+        el.matStatus.textContent = '升级失败：' + (e && e.detail ? e.detail : '未知错误');
+      });
   };
 
   // PDF 模式切换时展示/隐藏栅格化选项

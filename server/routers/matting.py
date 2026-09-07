@@ -73,7 +73,7 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
-def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, prompt: str | None = None, keep_lasso_all: bool = False) -> None:
+def _run_matting(job_id: str, src: list | None = None, box: list | None = None, model: str | None = None, vision_guide: bool = False, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, prompt: str | None = None, keep_lasso_all: bool = False, force_cloud: bool = False) -> None:
     job = MAT_JOBS.get(job_id)
     if not job:
         return
@@ -128,7 +128,7 @@ def _run_matting(job_id: str, src: list | None = None, box: list | None = None, 
         if vision_box is not None and not prompt and not (box or polygon or click or blocks):
             logger.info("auto 模式放弃 VLM 裁剪框，退化为云端整图（避免切掉底板/阴影）")
             vision_box = None
-        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine, vision_label=job.get("vision_label", ""), meta=job, keep_lasso_all=keep_lasso_all)
+        mat.matting_image(src_path, out_path, box=box, model=model, vision_box=vision_box, polygon=polygon, click=click, blocks=blocks, sam_refine=sam_refine, vision_label=job.get("vision_label", ""), meta=job, keep_lasso_all=keep_lasso_all, force_cloud=force_cloud)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效文件")
         job["status"] = "completed"
@@ -177,6 +177,7 @@ def create_matting_image(
     blocks: str = app.Form(None),
     sam_refine: str = app.Form(None),
     keep_lasso_all: str = app.Form(None),
+    force_cloud: str = app.Form(None),
     request: app.Request = None,
 ) -> dict:
     """一键抠图：上传图片，返回 job_id；轮询 /api/matting/image/{job_id} 拿状态。
@@ -285,7 +286,8 @@ def create_matting_image(
         }
     sr = (sam_refine or "").strip().lower() in ("1", "true", "yes", "on")
     prompt_text = (prompt or "").strip()
-    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla)
+    fc = (force_cloud or "").strip().lower() in ("1", "true", "yes", "on")
+    app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla, fc)
     return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 
 
