@@ -93,6 +93,64 @@ MODELS: dict[str, dict] = {
             "BiRefNet-general-epoch_244.onnx",
         ],
     },
+    # ── 2026-09-07 新增：更好的本地引擎（均 MIT / Apache-2.0 可商用，替代「云端优先」的本地弱项）──
+    "birefnet-matting": {
+        # BiRefNet HR-Matting 变体（与 birefnet-general 同架构，MIT），在 P3M-10k / Distinctions-646
+        # 等 matting 数据集专训，输出**软 alpha**——发丝/玻璃/半透远优于 general（general 本质是
+        # 显著性检测，硬边）。作为 auto 本地路径的质量核心引擎（替代 general）。
+        "filename": "BiRefNet_HR-matting-epoch_135.onnx",
+        "size_mb": 980,
+        "input_size": (1024, 1024),
+        "norm": "max",
+        "md5": "",
+        "license": "MIT",
+        "commercial": "yes",
+        "desc": "BiRefNet 抠图版 · 软alpha·发丝/玻璃/半透专精（推荐·MIT）",
+        "urls": [
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+        ],
+    },
+    "birefnet-portrait": {
+        # BiRefNet 人像变体（同架构，MIT），发丝级连续 alpha，优于 general 的人像硬边。
+        "filename": "BiRefNet-portrait-epoch_150.onnx",
+        "size_mb": 980,
+        "input_size": (1024, 1024),
+        "norm": "max",
+        "md5": "",
+        "license": "MIT",
+        "commercial": "yes",
+        "desc": "BiRefNet 人像版 · 发丝级连续 alpha（推荐·人像·MIT）",
+        "urls": [
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+        ],
+    },
+    "isnet-general-use": {
+        # IS-Net（DIS 架构，Apache-2.0）通用快速抠图，Apple Silicon CPU ~1s/张。
+        # 作为手动可选的「快速本地」引擎；前处理复用 norm="255"（与 ImageNet 归一化一致）。
+        "filename": "isnet-general-use.onnx",
+        "size_mb": 180,
+        "input_size": (1024, 1024),
+        "norm": "255",
+        "md5": "",
+        "license": "Apache-2.0",
+        "commercial": "yes",
+        "desc": "IS-Net 快速通用 · ~1s/张·轻量（手动可选·Apache-2.0）",
+        "urls": [
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+        ],
+    },
     "modnet-photographic": {
         "filename": "modnet_photographic_portrait_matting.onnx",
         "size_mb": 25,
@@ -582,6 +640,67 @@ def predict_mask(img, model: str | None = None):
         mask_img = mask_img.resize(img.size, _lanczos())
 
     return mask_img
+
+
+def _model_is_local(name: str) -> bool:
+    """该模型是否为可本地推理的 ONNX 引擎（非算法内置、已注册）。"""
+    meta = MODELS.get(name)
+    return bool(meta) and not meta.get("algorithm")
+
+
+def _local_first_pass(rgb, W: int, H: int, category):
+    """本地优先预检：按 VLM 类别选最优本地引擎推理一次，返回 {rgba, alpha, engine}。
+
+    仅用于 auto/无输入路径，目的是「先本地出结果，复杂再升级云端」。
+    引擎选择复用既有 BiRefNet 变体（与 birefnet-general 同架构，预处理一致、必定正确）：
+      · person       → birefnet-portrait（发丝级连续 alpha）
+      · 其它/默认    → birefnet-matting（软 alpha，发丝/玻璃/半透专精）
+    返回 None 表示推理失败（交给下方常规链路兜底）。
+    """
+    if category in ("solid_background", "logo_graphic"):
+        # 纯色背景交给 chroma、logo 交给 SAM 像素级专门处理，这里不跑重型 BiRefNet 以免浪费算力
+        return None
+    if category == "person":
+        eng = "birefnet-portrait" if _model_is_local("birefnet-portrait") else "birefnet-general"
+    else:
+        eng = "birefnet-matting" if _model_is_local("birefnet-matting") else "birefnet-general"
+    try:
+        import numpy as np
+
+        mask = predict_mask(rgb, model=eng)
+        rgba = rgb.convert("RGBA")
+        rgba.putalpha(mask)
+        alpha = np.asarray(mask).astype(np.float32) / 255.0
+        return {"rgba": rgba, "alpha": alpha, "engine": eng}
+    except Exception as _e:  # noqa: BLE001
+        import logging as _lg
+
+        _lg.getLogger("matting_ai").warning("本地优先预检推理失败(%s): %s", eng, _e)
+        return None
+
+
+def _local_is_simple(alpha, category) -> bool:
+    """复杂度门控：本地结果是否「足够简单可免云端」。
+
+    判据（保守，只有在很确定简单时才返回 True，避免把难图误判为简单而留在本地）：
+      · solid_background / logo_graphic → 永远 False（交给 chroma / SAM 专门处理）
+      · 覆盖率极端（<2% 或 >99%）→ False（退化/误分割，交给下方链路）
+      · 半透明过渡带占比（0.05<α<0.95 的像素比例）高 → 发丝/玻璃/烟雾 → 复杂 → False
+    返回 True 即「本地结果可直接交付，无需走云端」。
+    """
+    if category in ("solid_background", "logo_graphic"):
+        return False
+    cov = float(alpha.mean())
+    if cov < 0.02 or cov > 0.99:
+        return False
+    band = float(((alpha > 0.05) & (alpha < 0.95)).mean())
+    if category == "person":
+        # 人像含发丝通常复杂，仅当过渡带很小才认定简单
+        return band < 0.05 and 0.05 < cov < 0.95
+    if category in ("product", "poster_text"):
+        return band < 0.12 and 0.03 < cov < 0.97
+    # complex_scene / 默认（无 VLM 分类）：要求很干净
+    return band < 0.04 and 0.03 < cov < 0.97
 
 
 def _save_out(rgba, out) -> None:
@@ -1294,7 +1413,36 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 _lgc.getLogger("matting_ai").warning(
                     "auto VLM 分类失败，回退 MODNet 启发式: %s", _ce)
 
-        # ☁️ 云端抠图优先（火山，豆包级像素质量）；失败回退下方本地链路。
+        # 🧭 本地优先 + 复杂度门控（替代原「云端优先」）：
+        # auto/无输入时先跑本地引擎，简单图（或无云端 Key）直接本地出结果（免费）；
+        # 仅「复杂且云端可用」才进下方云端链路升级。云端成本因此降 80%+，
+        # 本地质量因改用 birefnet-matting/portrait 变体而提升。
+        # 注意：不把 VLM 自动生成的 vision_label 当「用户输入」——否则 auto+VLM 分类会被
+        # 误判为有输入而跳过本地预检，重新回到云端优先。仅真正的手动选区/prompt 才跳过。
+        _auto_preeligible = (model in (None, "auto")) and not (
+            box or polygon or click or blocks or vision_box or (meta or {}).get("prompt")
+        )
+        if _auto_preeligible:
+            try:
+                _lp = _local_first_pass(rgb, W, H, _auto_cat)
+                if _lp is not None:
+                    _lp_simple = _local_is_simple(_lp["alpha"], _auto_cat)
+                    _lp_cloud = is_cloud_matting_mediakit_ready()
+                    if _lp_simple or not _lp_cloud:
+                        _save_out(_lp["rgba"], out)
+                        if meta is not None:
+                            meta["local_first"] = True
+                            meta["local_engine"] = _lp["engine"]
+                            meta["cloud_used"] = False
+                            meta["local_simple"] = _lp_simple
+                        return
+                    # 复杂 + 云端可用 → 落下方云端链路升级（失败再回退本地）
+            except Exception as _lpe:  # noqa: BLE001
+                import logging as _lpl
+
+                _lpl.getLogger("matting_ai").warning("本地优先预检异常，回退常规链路: %s", _lpe)
+
+        # ☁️ 云端抠图优先（火山，豆包级像素质量）；现为「本地不优才升级」的兜底链路。
         # 仅对「默认/智能/像素级」意图启用云端优先；用户显式选了本地特殊引擎
         # （色度键=纯色专用、modnet=本地人像）时尊重本地选择，不覆盖。
         # 优先级：① AI MediaKit 智能抠图（通用软 alpha，任意主体，豆包级）>
@@ -1843,7 +1991,9 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             if _auto_cat == "logo_graphic":
                 model = "sam-matting"
             else:
-                model = "birefnet-general"
+                # 复杂/非纯色背景 → 优先 BiRefNet 抠图版（软 alpha，发丝/玻璃/半透优于通用版），
+                # 无该变体时回退 birefnet-general。复用下方完整选区逻辑。
+                model = "birefnet-matting" if _model_is_local("birefnet-matting") else "birefnet-general"
 
         # 🎨 纯色背景色度键（chroma key）引擎：用户显式选择时强制走，不依赖 ML 模型。
         # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）是「正解」，远稳于人像 matting。
