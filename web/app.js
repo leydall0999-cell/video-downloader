@@ -9830,7 +9830,7 @@ el.dwVidPlayer.removeAttribute('src');
           body: JSON.stringify({
             access_key: (cur && cur.access_key) || '',
             secret_key: (cur && cur.secret_key) || '',
-            mediakit_api_key: '',
+            mediakit_api_key: (cur && cur.mediakit_api_key) || '',
             enhance_version: off ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : 'auto'),
             enabled: !!(cur && cur.enabled),
           }),
@@ -9861,7 +9861,7 @@ el.dwVidPlayer.removeAttribute('src');
           body: JSON.stringify({
             access_key: (cur && cur.access_key) || '',
             secret_key: (cur && cur.secret_key) || '',
-            mediakit_api_key: '',
+            mediakit_api_key: (cur && cur.mediakit_api_key) || '',
             enhance_version: (cur && cur.enhance_version) || '',
             mat_output_hd: el.matOutputHd.checked,
             enabled: !!(cur && cur.enabled),
