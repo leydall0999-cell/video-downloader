@@ -19,11 +19,9 @@ from pathlib import Path
 _COOKIE_CACHE_DIR = Path.home() / ".videodownloader" / "cookies"
 _COOKIE_TTL = 30 * 24 * 3600  # 秒；超时自动重新解密浏览器，避免用到失效 Cookie
 
-
 def _cache_file(host: str) -> Path:
     safe = (host or "unknown").replace("/", "_").replace("\\", "_").replace(":", "_")
     return _COOKIE_CACHE_DIR / f"{safe}.json"
-
 
 def get_cached_cookie_header(host: str) -> str | None:
     """返回缓存的 Cookie 请求头；缺失 / 过期 / 解密失败则返回 None。"""
@@ -46,7 +44,6 @@ def get_cached_cookie_header(host: str) -> str | None:
         pass
     return None
 
-
 def _save(host: str, header: str) -> None:
     try:
         _COOKIE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,7 +54,6 @@ def _save(host: str, header: str) -> None:
         os.chmod(f, 0o600)  # 仅当前用户可读写，保护登录凭证
     except Exception:
         pass
-
 
 def clear_cookie_cache() -> int:
     """清除全部缓存，返回删除的文件数。"""
@@ -75,11 +71,3 @@ def clear_cookie_cache() -> int:
     except Exception:
         return 0
 
-
-def refresh_cookie(host: str) -> str | None:
-    """强制重新解密该站点 Cookie 并刷新缓存。"""
-    try:
-        _cache_file(host).unlink(missing_ok=True)
-    except Exception:
-        pass
-    return get_cached_cookie_header(host)

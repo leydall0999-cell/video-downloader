@@ -22,7 +22,6 @@ import os
 import sys
 from enum import Enum
 
-
 class Platform(Enum):
     WEB = "web"
     MACOS = "macos"
@@ -30,7 +29,6 @@ class Platform(Enum):
     LINUX = "linux"
     ANDROID = "android"
     IOS = "ios"
-
 
 # /api/nodes 顶层「功能组」键。标量字段（region / peer / china_domains /
 # commentary_enabled / ads_enabled / authRequired）始终返回，不在此列。
@@ -52,11 +50,9 @@ NODE_GROUPS = (
 # 「App 加功能不波及网页版」的隔离。
 _PLATFORM_NODE_CAPS: dict[Platform, set[str]] = {p: set(NODE_GROUPS) for p in Platform}
 
-
 def is_frozen_binary() -> bool:
     """PyInstaller 打包态：用于资源/路径解析，严格看 sys.frozen。"""
     return bool(getattr(sys, "frozen", False))
-
 
 def _infer_from_binary() -> Platform:
     """未显式覆盖时，由运行环境推断平台。"""
@@ -68,7 +64,6 @@ def _infer_from_binary() -> Platform:
         return Platform.MACOS
     return Platform.LINUX
 
-
 def current_platform() -> Platform:
     """功能/能力画像用的当前平台。可被 VDL_PLATFORM 显式覆盖（测试/特殊部署）。"""
     override = os.environ.get("VDL_PLATFORM", "").strip().lower()
@@ -79,15 +74,9 @@ def current_platform() -> Platform:
             pass
     return _infer_from_binary()
 
-
-def is_web() -> bool:
-    return current_platform() == Platform.WEB
-
-
 def is_desktop() -> bool:
     """是否桌面 App 打包态（功能画像层面）。普通运行下等价旧逻辑 getattr(sys,'frozen',False)。"""
     return current_platform() != Platform.WEB
-
 
 def node_capabilities(platform: Platform | None = None) -> set[str]:
     """该平台在 /api/nodes 中暴露的功能组集合。"""

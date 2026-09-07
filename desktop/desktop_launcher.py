@@ -43,7 +43,6 @@ PLUGINS_DIR = BASE / "yt_dlp_plugins"
 # 提前把 server 目录注入路径，供 _detect_commentary 直接 import commentary_locate
 sys.path.insert(0, str(SERVER_DIR))
 
-
 def _detect_ffmpeg() -> str | None:
     exe = ".exe" if sys.platform == "win32" else ""
     candidates = []
@@ -55,13 +54,11 @@ def _detect_ffmpeg() -> str | None:
             return str(c)
     return None
 
-
 def _venv_python(root: Path) -> Path:
     """跨平台返回某 venv 的解释器路径（Win: .venv\\Scripts\\python.exe / POSIX: .venv/bin/python）。"""
     if sys.platform == "win32":
         return root / ".venv" / "Scripts" / "python.exe"
     return root / ".venv" / "bin" / "python"
-
 
 def _detect_commentary() -> tuple[str | None, str | None]:
     """定位 commentary-pipeline 目录及其解释器；找不到时返回 (None, None)。
@@ -74,7 +71,6 @@ def _detect_commentary() -> tuple[str | None, str | None]:
     if not loc:
         return None, None
     return str(loc.root), (None if loc.bundled else loc.python)
-
 
 _ff = _detect_ffmpeg()
 if _ff:
@@ -140,12 +136,10 @@ def _load_external_config() -> dict:
         return data  # 命中第一个存在的配置文件即止
     return {}
 
-
 _load_external_config()
 
 if PLUGINS_DIR.exists():
     sys.path.insert(0, str(BASE))
-
 
 # ---- 单二进制双角色：解说管线 worker 重入 ----
 def _app_data_dir() -> Path:
@@ -155,7 +149,6 @@ def _app_data_dir() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "VideoDownloader"
     return Path.home() / ".local" / "share" / "videodownloader"
-
 
 def _rebind_std_streams() -> None:
     """Windows windowed(.exe 无控制台)下，重绑标准流到 nul，避免 ffmpeg/print 写已关闭 fd 崩溃。"""
@@ -167,7 +160,6 @@ def _rebind_std_streams() -> None:
             os.dup2(dn.fileno(), 0)
     except Exception:
         pass
-
 
 def _run_commentary_worker(argv: list[str]) -> int:
     """以 --vdl-commentary-worker 重入自身时，把主程序当作解说管线 worker 运行。
@@ -223,14 +215,12 @@ def _run_commentary_worker(argv: list[str]) -> int:
         return int(e.code) if isinstance(e.code, int) else 0
     return 0
 
-
 def _find_free_port(start: int = 8321, tries: int = 80) -> int:
     for p in range(start, start + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if s.connect_ex(("127.0.0.1", p)) != 0:
                 return p
     return start
-
 
 _env_port = (os.environ.get("VDL_PORT") or "").strip()
 PORT = int(_env_port) if _env_port else _find_free_port()
@@ -241,11 +231,9 @@ API_URL = f"http://{HOST}:{PORT}"          # 后端 FastAPI 地址（API 调用�
 # 解决 Karing 等 NE 在网卡层劫持 WKWebView 导致的 "Load failed"。
 URL = f"http://{HOST}:{PORT}"
 
-
 # Dock Quit / Cmd+Q 退出标记：AppDelegate.applicationShouldTerminate_ 被调用时置 True，
 # 使窗口 closing 拦截放行；红叉（windowShouldClose）不置此标记 → 仍最小化返回桌面。
 _app_terminating = False
-
 
 class VdlApi:
     """暴露给前端 JS 的桥接 API（仅 pywebview 桌面模式生效）。
@@ -281,7 +269,6 @@ class VdlApi:
         """
         try:
             import os as _os
-            from urllib.parse import quote as _quote
             # AppleScript 弹「选择文件夹」原生 panel（cocoa 主线程，纯 macOS API）
             # 跨线程最稳：osascript 子进程隔离 NSWindow 主线程约束
             script = (
@@ -446,36 +433,6 @@ class VdlApi:
         downloads = Path.home() / "Downloads"
         downloads.mkdir(parents=True, exist_ok=True)
         name = filename or "解说成片.mp4"
-        dest = downloads / name
-        # 避免覆盖已有文件
-        if dest.exists():
-            stem, suf = dest.stem, dest.suffix
-            i = 1
-            while dest.exists():
-                dest = downloads / f"{stem}({i}){suf}"
-                i += 1
-        try:
-            r = requests.get(url, timeout=(10, 600))
-            r.raise_for_status()
-            dest.write_bytes(r.content)
-        except Exception as exc:  # 把错误回传前端展示
-            return f"ERROR: {exc}"
-        return str(dest)
-
-    def save_dw_file(self, job_id: str, kind: str, filename: str) -> str:
-        """去水印结果写盘（桌面版原生下载，绕开 WKWebView 的 <a download> 限制）。
-
-        kind: 'image' | 'pdf'；请求 /api/dw/{kind}/{job_id}/file，存到「下载」文件夹。
-        返回保存路径或 "ERROR: ..."。
-        """
-        import requests
-        from pathlib import Path
-        if kind not in ("image", "pdf"):
-            return "ERROR: 未知的去水印类型"
-        url = f"http://{HOST}:{PORT}/api/dw/{kind}/{job_id}/file"
-        downloads = Path.home() / "Downloads"
-        downloads.mkdir(parents=True, exist_ok=True)
-        name = filename or ("dewatered.png" if kind == "image" else "dewatered.pdf")
         dest = downloads / name
         # 避免覆盖已有文件
         if dest.exists():
@@ -980,10 +937,8 @@ class VdlApi:
         _quitting = True  # 标记正在退出，让 closing 拦截器放行
         os._exit(0)       # 强制退出（不经过 closing 事件循环）
 
-
 def _handle_exit(*_args) -> None:
     os._exit(0)
-
 
 def _pid_alive(pid: int) -> bool:
     try:
@@ -991,7 +946,6 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
-
 
 def _read_self_build_version() -> str:
     """读取当前 .app 的构建指纹（由 build_mac.sh 写入 Resources/build_version.txt）。
@@ -1006,7 +960,6 @@ def _read_self_build_version() -> str:
     except Exception:
         pass
     return ""
-
 
 def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
     """向目标进程发 SIGTERM，等待其退出；超时则 SIGKILL。返回是否成功终止。"""
@@ -1025,7 +978,6 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
     except OSError:
         pass
     return not _pid_alive(pid)
-
 
 def _activate_existing_window() -> None:
     """重复启动时把已有 VideoDownloader 窗口提到最前（macOS）。
@@ -1084,9 +1036,7 @@ def _activate_existing_window() -> None:
     if not raised:
         _launch_log("提窗失败（AppKit/osascript 均未生效），不打开浏览器，保持现状")
 
-
 _LAUNCH_LOG = Path.home() / ".vdl_launch.log"
-
 
 def _launch_log(msg: str) -> None:
     """把启动关键节点写入 ~/.vdl_launch.log，便于「双击打不开」时定位。"""
@@ -1096,7 +1046,6 @@ def _launch_log(msg: str) -> None:
             f.write(f"[{ts}] {msg}\n")
     except Exception:
         pass
-
 
 def _release_lock(f, path) -> None:
     try:
@@ -1109,7 +1058,6 @@ def _release_lock(f, path) -> None:
         path.unlink(missing_ok=True)
     except Exception:
         pass
-
 
 def _show_error_dialog(msg: str) -> None:
     """macOS 下用系统弹窗显示错误（不依赖 Python 包）。失败静默忽略。"""
@@ -1128,7 +1076,6 @@ def _show_error_dialog(msg: str) -> None:
     except Exception:
         pass
 
-
 def _browser_fallback(server_thread) -> None:
     """原生窗口不可用时的兜底：**不再自动打开浏览器**（用户明确：App 就是 App，不跳网页）。
 
@@ -1143,7 +1090,6 @@ def _browser_fallback(server_thread) -> None:
         server_thread.join()
     except Exception:
         pass
-
 
 def _ensure_single_instance():
     """同一用户只保留一个 GUI 实例，且确保运行的是最新构建版本。
@@ -1236,7 +1182,6 @@ def _ensure_single_instance():
             pass
         _launch_log(f"成为 singleton，已写锁 (pid={os.getpid()} port={PORT} build={self_build})")
     return f
-
 
 def main() -> None:
     import uvicorn
@@ -1401,7 +1346,6 @@ def main() -> None:
         _launch_log(f"pywebview 运行异常({type(_wv_err).__name__})，无法打开原生窗口: {_wv_err!r}")
         _browser_fallback(server_thread)
         return
-
 
 if __name__ == "__main__":
     if "--vdl-commentary-worker" in sys.argv:

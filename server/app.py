@@ -30,7 +30,6 @@ import threading
 import urllib.request
 import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
 import time
-import secrets
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,7 +38,7 @@ import platform_model as plat
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import File as _FastAPIFile, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
@@ -223,10 +222,8 @@ if not _COMMENTARY_EXPLICIT and plat.is_desktop():
             # 包内捆绑走 worker 重入(#198 实现)；外部/显式走 local 子进程
             os.environ["VDL_COMMENTARY_MODE"] = "bundled" if _loc.bundled else "local"
 
-
 # 解说运行环境探测已集中到 _CommentaryRuntime（见下方 _commentary_work_dir 之前的定义），
 # 模块加载时一次性解析解释器与工具链，并暴露清晰的诊断信息，避免打包后路径截断导致静默失败。
-
 
 # 广告位开关：默认关闭。下载站属广告平台高风险类目，默认不挂广告，
 # 待流量稳定、确定接入合规广告源后再开。前端据此决定是否渲染广告位容器。
@@ -265,11 +262,9 @@ COMMENTARY_ENDPOINT = os.environ.get("VDL_COMMENTARY_ENDPOINT", "").strip().rstr
 COMMENTARY_TOKEN = os.environ.get("VDL_COMMENTARY_TOKEN", "").strip()  # 与 worker 的 WORKER_TOKEN 对应
 _HERE = Path(__file__).resolve().parent
 
-
 def _commentary_is_bundled() -> bool:
     """是否走「单二进制双角色」包内捆绑模式（worker 重入自身，依赖随包内置）。"""
     return os.environ.get("VDL_COMMENTARY_BUNDLED") == "1" or COMMENTARY_MODE == "bundled"
-
 
 def _commentary_root(sub: str) -> Path:
     """解说管线工作目录(input/output/work)；bundled 模式重定向到可写目录(COMMENTARY_WORK_ROOT)。"""
@@ -283,7 +278,6 @@ def _user_data_dir() -> Path:
     if sys.platform == "win32" and getattr(sys, "frozen", False):
         return Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
     return Path.home() / ".video-downloader"
-
 
 if _COMMENTARY_OUT_RAW:
     COMMENTARY_LOCAL_OUTPUT = Path(_COMMENTARY_OUT_RAW)
@@ -303,7 +297,6 @@ COMMENTARY_WORK_RETENTION_DAYS = max(1, int(os.environ.get("VDL_COMMENTARY_WORK_
 commentary_jobs: dict[str, dict] = {}
 _commentary_lock = threading.Lock()
 
-
 # ---- 解说视频「接收站」 cache-by-hash：让用户拖过的本地视频不再重复上传 ----
 # 把 upload 端点的视频流按 sha256(前 16 位) 落到本目录；重复上传同视频时直接复用
 # 这份磁盘文件，0 字节传输。前端拿到 stash_id 后继续走 JSON 提交（不再 multipart）。
@@ -321,17 +314,14 @@ COMMENTARY_STASH_RETENTION_DAYS = max(
 _commentary_stash_lock = threading.Lock()
 _commentary_stash: dict[str, dict] = {}  # sha16 → {path, size, mtime, name, ext}
 
-
 _STASH_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
                      ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
-
 
 def _stash_path_for(sha: str, ext: str) -> Path:
     safe_ext = ext.lower() if ext.lower() in _STASH_VIDEO_EXTS else ".mp4"
     # 进一步保险：限制 sha 只含 hex，避免任意路径在后续 _resolve_safe 误读
     safe_sha = "".join(c for c in sha if c in "0123456789abcdef")[:16].ljust(16, "0")
     return COMMENTARY_STASH_DIR / f"{safe_sha}{safe_ext}"
-
 
 def _stash_register(sha: str, ext: str, src_name: str = "") -> str:
     """注册一份已落盘的 stash；存在则只刷 mtime。返回 'stash:<sha>'。"""
@@ -347,7 +337,6 @@ def _stash_register(sha: str, ext: str, src_name: str = "") -> str:
             "ext": p.suffix.lower(),
         }
     return f"stash:{sha}"
-
 
 def _stash_lookup(sha: str) -> dict | None:
     """查 stash 索引并续命中时间；磁盘文件丢失自动注销。"""
@@ -378,7 +367,6 @@ def _stash_lookup(sha: str) -> dict | None:
         _commentary_stash[sha]["mtime"] = time.time()
     return m
 
-
 def _purge_commentary_stash(now: float | None = None) -> int:
     """按 mtime 删除超期 stash 文件 + 同步内存索引。返回删除条数。"""
     now = now or time.time()
@@ -398,8 +386,6 @@ def _purge_commentary_stash(now: float | None = None) -> int:
             if not p.exists():
                 _commentary_stash.pop(k, None)
     return removed
-
-
 
 # ---- AI 去水印（E2FGVI worker，桌面版可选）：local subprocess 或 http worker ----
 AI_DEWATERMARK_ENABLED = bool(
@@ -442,7 +428,6 @@ RATE_LIMIT_WINDOW = 3600
 _rate_log: dict[str, list[float]] = {}
 _rate_lock = threading.Lock()
 
-
 def _client_ip(request: Request) -> str:
     """取真实客户端 IP，避免伪造 X-Forwarded-For 头绕过限流。
 
@@ -458,7 +443,6 @@ def _client_ip(request: Request) -> str:
         return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
-
 # ---- SSRF 防护：拒绝指向内网 / 环回 / 链路本地 / 云元数据的链接 ----
 # 视频站都是公网域名；攻击者若传入内网地址（如 169.254.169.254 云元数据），
 # 服务器会去请求并可能泄露凭据，或被当成跳板。入口强制只允许公网可达地址。
@@ -469,7 +453,6 @@ _PRIVATE_NETS = [
         "::1/128", "fc00::/7", "fe80::/10",
     )
 ]
-
 
 def _assert_safe_url(url: str) -> None:
     """SSRF 护栏：解析主机名，拒绝落在私有 / 环回 / 链路本地 / 保留网段的地址。"""
@@ -507,7 +490,6 @@ def _assert_safe_url(url: str) -> None:
             "只允许下载公开可访问的视频；内网 / 本地 / 云元数据地址不可用",
         )
 
-
 def _check_rate_limit(request: Request) -> None:
     """滑动窗口限流。超限抛 429，并告知还要等多久。"""
     if RATE_LIMIT_PER_HOUR <= 0:
@@ -530,11 +512,9 @@ def _check_rate_limit(request: Request) -> None:
             for key in [k for k, v in _rate_log.items() if not v or now - v[-1] > RATE_LIMIT_WINDOW]:
                 _rate_log.pop(key, None)
 
-
 def _today_str() -> str:
     """当前服务器本地日期 YYYY-MM-DD，用于按自然日重置免费额度。"""
     return time.strftime("%Y-%m-%d", time.localtime())
-
 
 def _subscription_quota(request, *, enabled, sub_key, free_daily, quota_store, quota_lock, label):
     """通用订阅 / 限次校验（格式转换、下载等增值 / 受限能力共用此一处）。
@@ -565,7 +545,6 @@ def _subscription_quota(request, *, enabled, sub_key, free_daily, quota_store, q
         rec["count"] += 1
         return (False, rec["count"], free_daily)
 
-
 def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
     """格式转换订阅 / 限次校验（复用通用 _subscription_quota）。"""
     return _subscription_quota(
@@ -573,16 +552,6 @@ def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
         free_daily=CONVERT_FREE_DAILY, quota_store=_convert_quota,
         quota_lock=_convert_quota_lock, label="转换",
     )
-
-
-def _check_download_quota(request: Request) -> tuple[bool, int, int]:
-    """下载订阅 / 限次校验（freemium：免费每日限次，订阅无限）。"""
-    return _subscription_quota(
-        request, enabled=DOWNLOAD_SUB_ENABLED, sub_key=CONVERT_SUB_KEY,
-        free_daily=DOWNLOAD_FREE_DAILY, quota_store=_download_quota,
-        quota_lock=_download_quota_lock, label="下载",
-    )
-
 
 def _host_of(url: str) -> str:
     """从链接取出主机名（去掉 www./m. 前缀），解析失败返回空串。"""
@@ -614,7 +583,6 @@ RETENTION_ENABLED = (
 )
 retention_store = retention_mod.RetentionStore(DOWNLOAD_DIR / ".retention.json")
 
-
 # ---- 库内保险箱（桌面版功能）：选中文件就地 AES 加密为 .vdlenc，播放前临时解密 ----
 # 与媒体库同一开关。内存密钥 VAULT_KEY 为 None 即「锁定」态；vault.json 只存 salt+verify，
 # 绝不存明文密码或密钥（见 crypto_vault.new_vault / unlock_key）。
@@ -644,7 +612,6 @@ TORRENT_ENABLED = (
 )
 torrent_manager = torrent_mod.get_manager(DOWNLOAD_DIR)
 
-
 def _vault_load() -> dict | None:
     try:
         if VAULT_PATH.exists():
@@ -652,7 +619,6 @@ def _vault_load() -> dict | None:
     except Exception:
         pass
     return None
-
 
 def _chmod_600(path: Path) -> None:
     """跨平台收紧文件权限到仅当前用户可读写。Windows 的 os.chmod 只切只读位、不控 ACL，
@@ -671,7 +637,6 @@ def _chmod_600(path: Path) -> None:
     except OSError:
         pass
 
-
 def _vault_save(vault: dict) -> None:
     VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = VAULT_PATH.with_suffix(".tmp")
@@ -680,30 +645,13 @@ def _vault_save(vault: dict) -> None:
     tmp.replace(VAULT_PATH)
     _chmod_600(VAULT_PATH)
 
-
 def _vault_tmp_for(lib_id: str) -> Path:
     VAULT_TMP.mkdir(parents=True, exist_ok=True)
     return VAULT_TMP / (lib_id + ".dec")
 
-
-def _prune_vault_tmp(max_age_seconds: int = 1800) -> None:
-    """清理解密播放的临时文件（超过 30 分钟），避免明文长期留盘。"""
-    try:
-        now = time.time()
-        for f in VAULT_TMP.iterdir():
-            if f.is_file() and now - f.stat().st_mtime > max_age_seconds:
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
-    except Exception:
-        pass
-
-
 # --------------------------------------------------------------------------- #
 # 自动解说（松耦合桥接 commentary-pipeline/process.py，不重写解说逻辑）
 # --------------------------------------------------------------------------- #
-
 
 class _CommentaryRuntime:
     """模块加载时一次性探测解说运行环境，集中管理解释器与工具链。
@@ -839,15 +787,12 @@ class _CommentaryRuntime:
     def ready(self) -> bool:
         return not self.issues
 
-
 COMMENTARY_RT = _CommentaryRuntime()
-
 
 def _commentary_work_dir() -> Path:
     d = COMMENTARY_WORK_DIR / uuid.uuid4().hex[:12]
     d.mkdir(parents=True, exist_ok=True)
     return d
-
 
 def _purge_commentary_work() -> int:
     """清理解说 work 目录里超过保留期的旧 job（防无限累积）。
@@ -888,10 +833,6 @@ def _purge_commentary_work() -> int:
         logger.info("已清理 %s 个过期解说 work 目录（保留 %s 天）", removed, COMMENTARY_WORK_RETENTION_DAYS)
     return removed
 
-
-
-
-
 # 解说任务过程展示：阶段名 + 匹配日志关键词（不区分大小写）
 _COMMENTARY_STEP_KEYWORDS = [
     ("准备输入文件", ["准备", "复制", "软链", "输入文件", "symlink", "copy file", "save upload"]),
@@ -901,7 +842,6 @@ _COMMENTARY_STEP_KEYWORDS = [
     ("渲染成片", ["剪辑成片", "edit_ffmpeg", "edit.py", "ffmpeg", "渲染", "合并", "concat", "build", "成片"]),
     ("完成", ["全部完成", "成片在", "completed", "done"]),
 ]
-
 
 def _ensure_commentary_steps(job: dict) -> list[dict]:
     """初始化或返回解说任务的步骤时间线。"""
@@ -913,7 +853,6 @@ def _ensure_commentary_steps(job: dict) -> list[dict]:
         ]
     return job["steps"]
 
-
 def _commentary_log(job: dict, line: str) -> None:
     """给解说任务追加一行带时间戳的运行日志。"""
     if not line:
@@ -923,14 +862,12 @@ def _commentary_log(job: dict, line: str) -> None:
     if len(job.get("logs", [])) > 200:
         job["logs"][:] = job["logs"][-200:]
 
-
 # ====== BGM 状态 manifest：成片文件是否已加配乐的真相源 ======
 # 文件名约定：<video>.bgm.json，与无音乐 sidecar（.nomusic.mp4）解耦。文件可丢、可重建，
 # 不影响成片本体。bgm != "off" 视为「已成片」(final)，bgm == "off" 或无 manifest 视为「待加配乐」(draft)。
 def _bgm_state_path(out_path: str | Path) -> Path:
     p = Path(out_path)
     return p.with_suffix(p.suffix + ".bgm.json") if p.suffix else Path(str(p) + ".bgm.json")
-
 
 def _read_bgm_state(out_path: str | Path) -> dict | None:
     """读取 BGM 状态 manifest；不存在或损坏返回 None（按 draft 处理）。"""
@@ -941,7 +878,6 @@ def _read_bgm_state(out_path: str | Path) -> dict | None:
         return json.loads(meta_p.read_text(encoding="utf-8"))
     except Exception:
         return None
-
 
 def _write_bgm_state(out_path: str | Path, *, bgm: str, volume: float = 0.18, source: str = "render", extra: dict | None = None) -> None:
     """写入 BGM 状态 manifest。bgm="off" 也写，便于区分「无 BGM」与「manifest 缺失」。"""
@@ -958,7 +894,6 @@ def _write_bgm_state(out_path: str | Path, *, bgm: str, volume: float = 0.18, so
         meta_p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except Exception:
         logger.exception("写 BGM manifest 失败：%s", out_path)
-
 
 def _update_commentary_steps(job: dict, line: str) -> None:
     """根据 process.py 输出关键词自动推进步骤状态。"""
@@ -981,7 +916,6 @@ def _update_commentary_steps(job: dict, line: str) -> None:
     cur["detail"] = line[:200]
     cur["updated_at"] = now
 
-
 def _commentary_mark_error(job_id: str, detail: str) -> None:
     """把当前 running 的步骤标为 error。"""
     with _commentary_lock:
@@ -996,7 +930,6 @@ def _commentary_mark_error(job_id: str, detail: str) -> None:
                 s["detail"] = detail[:200]
                 s["updated_at"] = now
                 break
-
 
 def _apply_trim(src_path: str, in_dir: Path, start: float, end: float):
     """服务端预处理裁剪：同一源+起止始终产出同名文件，便于 script-only 与后续 render 复用。
@@ -1019,7 +952,6 @@ def _apply_trim(src_path: str, in_dir: Path, start: float, end: float):
     if not (trim_out.exists() and trim_out.stat().st_size > 0):
         return src_path, 0.0
     return str(trim_out), dur
-
 
 def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
     """从子进程进度行推算 ETA，写入 job['eta_remaining']（剩余秒）/ eta_done_at（绝对时间戳）。"""
@@ -1054,7 +986,6 @@ def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
         rem = max(0, int(coarse - elapsed))
         job["eta_remaining"] = rem
         job["eta_done_at"] = int(now + rem)
-
 
 def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_source: str = "ai",
                              intro_highlight: bool = False, skip_intro_outro: bool = False,
@@ -1115,7 +1046,6 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
     if max_chars and max_chars > 0:
         args += ["--max-chars", str(max_chars)]
     return args
-
 
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_pos: str = "bottom", max_chars: int = 0) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
@@ -1375,7 +1305,6 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             commentary_jobs[job_id]["error"] = str(exc)[:800]
         logger.exception("解说任务 %s 失败", job_id)
 
-
 def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "") -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
@@ -1499,7 +1428,6 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
             commentary_jobs[job_id]["error"] = str(exc)[:800]
         logger.exception("解说任务 %s 失败(http 模式)", job_id)
 
-
 async def _cleanup_loop() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -1511,7 +1439,6 @@ async def _cleanup_loop() -> None:
             await asyncio.to_thread(_purge_commentary_work)
         except Exception:
             logger.exception("解说 work 清理失败")
-
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -1545,7 +1472,6 @@ async def lifespan(_: FastAPI):
     executor.shutdown(wait=False, cancel_futures=True)
     prober.shutdown(wait=False, cancel_futures=True)
 
-
 app = FastAPI(title="视频下载站", version="1.0.0", lifespan=lifespan)
 
 # 跨域 CORS：公开站默认允许所有来源（allow_credentials=False，不携凭证，安全）。
@@ -1561,7 +1487,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key"],
 )
 
-
 # 前端脚本未做版本化，pywebview/WKWebView 易缓存旧 app.js，导致修复不生效。
 # 对 HTML/JS/CSS 及首页强制 no-store，确保客户端每次都拉取最新前端。
 @app.middleware("http")
@@ -1573,7 +1498,6 @@ async def _no_cache_frontend(request: Request, call_next):
     return resp
 logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
 
-
 # --------------------------------------------------------------------------- #
 # 可选 API 鉴权（对外给用户使用时建议开启）
 # 设置 VDL_API_TOKEN 后，除 /api/nodes（前端要先拿到 authRequired 才能引导输入 token）
@@ -1583,7 +1507,6 @@ logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
 # --------------------------------------------------------------------------- #
 API_TOKEN = (os.environ.get("VDL_API_TOKEN") or "").strip()
 AUTH_REQUIRED = bool(API_TOKEN)
-
 
 class _ApiTokenMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -1606,9 +1529,7 @@ class _ApiTokenMiddleware(BaseHTTPMiddleware):
             content={"error": "缺少或错误的 API Token", "hint": "服务端已启用 VDL_API_TOKEN，请输入访问令牌"},
         )
 
-
 app.add_middleware(_ApiTokenMiddleware)
-
 
 # --------------------------------------------------------------------------- #
 # 请求模型 & 错误处理
@@ -1618,7 +1539,6 @@ class ResolveRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     cookie: str = Field(default="", max_length=8192)
     proxy: str = Field(default="", max_length=256)
-
 
 class DownloadRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
@@ -1641,13 +1561,11 @@ class DownloadRequest(BaseModel):
     watch_options: list[dict] = Field(default_factory=list)
     is_hls: bool = False
 
-
 class ConvertRequest(BaseModel):
     """格式转换请求（与 routers/convert.py 共享，故保留在 app.py 公开契约层，不迁入 core）。"""
     task_id: str
     target: str
     resolution: str = "original"
-
 
 def _require_task(task_id: str, device_id: str = ""):
     """取任务。桌面单机无设备隔离，device_id 参数仅为兼容 web 版调用签名保留。"""
@@ -1655,8 +1573,6 @@ def _require_task(task_id: str, device_id: str = ""):
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return task
-
-
 
 def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 bitrate: str = "", audio: bool = True, rotate: int = 0,
@@ -1747,8 +1663,6 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
             except Exception:
                 logger.warning("convert %s cleanup temp src failed: %s", job_id, src)
 
-
-
 @app.exception_handler(Exception)
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """兜底：任何未被具体 handler 覆盖的异常，向前端返回可读的错误原因。
@@ -1773,7 +1687,6 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
         },
     )
 
-
 @app.exception_handler(LinkError)
 async def handle_link_error(_: Request, exc: LinkError) -> JSONResponse:
     status = 415 if isinstance(exc, UnsupportedPlatformError) else 400
@@ -1793,15 +1706,12 @@ async def handle_link_error(_: Request, exc: LinkError) -> JSONResponse:
         }
     return JSONResponse(status_code=status, content=content)
 
-
 @app.exception_handler(downloader.ResolveRestricted)
 async def handle_restricted(_: Request, exc: "downloader.ResolveRestricted") -> JSONResponse:
     # 受限内容属于"确认无解"，用 422 与网络/解析异常区分开
     content = {"error": exc.message, "hint": exc.hint}
     content["category"] = getattr(exc, "category", None) or "restricted"
     return JSONResponse(status_code=422, content=content)
-
-
 
 # --------------------------------------------------------------------------- #
 # 文件系统辅助（桌面版便捷入口）
@@ -1810,9 +1720,6 @@ async def handle_restricted(_: Request, exc: "downloader.ResolveRestricted") -> 
 class OpenPathRequest(BaseModel):
     """打开本地目录/文件。仅允许白名单路径（下载目录及其子项）。"""
     path: str = Field(default="", max_length=4096)
-
-
-
 
 # --------------------------------------------------------------------------- #
 # 自动解说（增值功能）：下载完 → 一键生成解说成片。壳，逻辑全在 commentary-pipeline
@@ -1860,19 +1767,11 @@ class CommentaryRequest(BaseModel):
     subtitle_pos: str = Field(default="bottom", description="字幕位置: bottom=底部; center=画面中部")
     max_chars: int = Field(default=0, ge=0, description="解说稿总长度上限(字)，0=不限制")
 
-
 class ScriptUpdateRequest(BaseModel):
     """PUT /api/commentary/script/{job_id}：提交人工修改后的解说词与全局配音。"""
     title: str = Field(default="", max_length=256)
     voice: str = Field(default="", max_length=64)
     segments: list = Field(default_factory=list)  # [{start, end, narration, note, voice?}, ...]
-
-
-
-
-
-
-
 
 # 独立「解说成片」标签页：列出所有已生成成片，并支持按 id 直接下载/播放。
 # id 为成片绝对路径的 urlsafe base64，便于无状态回查且防止路径穿越。
@@ -1888,7 +1787,6 @@ def _commentary_roots() -> list[Path]:
             roots.append(d)
     return roots
 
-
 def _decode_commentary_id(cid: str) -> Path:
     try:
         raw = base64.urlsafe_b64decode(cid.encode("ascii")).decode("utf-8")
@@ -1902,26 +1800,8 @@ def _decode_commentary_id(cid: str) -> Path:
         raise HTTPException(status_code=404, detail="成片不存在或已被清理")
     return p
 
-
-
-
-
-
-
-
-
-
 class CommentaryRenameReq(BaseModel):
     name: str
-
-
-
-
-
-
-
-
-
 
 # ---- 脚本审核专用路由 ----
 
@@ -1954,7 +1834,6 @@ def _resolve_source(payload: CommentaryRequest) -> str:
         return str(task.filepath)
     else:
         raise HTTPException(status_code=400, detail="请提供 task_id 或 file_id")
-
 
 def _probe_video_title(src_path) -> str:
     """用 ffprobe 读取视频 `format.tags.title`（mp4 自带的标题元数据）。
@@ -1994,7 +1873,6 @@ def _probe_video_title(src_path) -> str:
     except Exception:
         return ""
 
-
 def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     """为解说任务推导剧名锚点：优先用下载任务的标题，否则退回源文件名（下载文件名通常含剧集名）。"""
     if getattr(payload, "task_id", ""):
@@ -2027,7 +1905,6 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
             pass
     return Path(src_path).stem or ""
 
-
 def _meaningful_stem(s: str) -> bool:
     """判断上传文件名 stem 是否「有语义、值得做片名前缀」。
 
@@ -2044,7 +1921,6 @@ def _meaningful_stem(s: str) -> bool:
         return False  # 哈希形
     return True
 
-
 def _safe_output_stem(title: str) -> str:
     """与 commentary-pipeline process._sanitize_filename 对齐的成片文件前缀清洗。
 
@@ -2060,15 +1936,6 @@ def _safe_output_stem(title: str) -> str:
         return ""
     return s[:100]
 
-
-
-
-
-
-
-
-
-
 # ---- 配音试听 / 预览全部 ----
 
 def _commentary_ffmpeg_bin() -> str:
@@ -2080,7 +1947,6 @@ def _commentary_ffmpeg_bin() -> str:
         if os.path.exists(cand):
             return cand
     return FFMPEG_BIN
-
 
 def _build_loudness_filter(loudness: str | None, boost: str | None) -> str:
     """构造旁白响度后处理的 ffmpeg 音频滤镜串。
@@ -2108,7 +1974,6 @@ def _build_loudness_filter(loudness: str | None, boost: str | None) -> str:
             bv = 1.0
     bv = max(0.5, min(2.0, bv))
     return filt + f"volume={bv:.2f},alimiter=limit=0.98:level=disabled"
-
 
 def _apply_narration_loudness(src_mp3: Path, loudness: str | None, boost: str | None) -> None:
     """对已有旁白 mp3 原地做响度标准化 + 增益（试听即所得，与成片 edit_ffmpeg 一致）。
@@ -2141,7 +2006,6 @@ def _apply_narration_loudness(src_mp3: Path, loudness: str | None, boost: str | 
         print(f"  [试听] ffmpeg 响度处理失败，保留原始旁白：{msg}")
         if tmp.exists():
             tmp.unlink()
-
 
 def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 60,
                        loudness: str | None = None, boost: str | None = None) -> None:
@@ -2182,7 +2046,6 @@ def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 6
     # 音量后处理（试听「配音与音量」设置时才带 loudness/boost）
     if loudness is not None or boost is not None:
         _apply_narration_loudness(output_mp3, loudness, boost)
-
 
 def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeout: int = 60) -> None:
     """bundled 模式：in-process 调 edge_tts 合成 mp3，省去 PyInstaller frozen exe 跑 .py 脚本的兼容坑。"""
@@ -2225,19 +2088,7 @@ def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeou
     if not output_mp3.exists() or output_mp3.stat().st_size < 100:
         raise RuntimeError("edge-tts 未产出有效音频文件")
 
-
-
-
-
-
 # ---- 本地媒体库（桌面版功能）：浏览 / 播放 / 删除已下载的媒体文件 ----
-
-
-
-
-
-
-
 
 # ---- 时效自动清理：按保留期/容量上限清理下载目录（预览 → 执行，媒体走回收站） ----
 
@@ -2256,24 +2107,13 @@ class RetentionConfigRequest(BaseModel):
     quota_gb: float | None = Field(default=None, ge=1, le=100000)
     media_use_trash: bool | None = None
 
-
 class RetentionRunRequest(BaseModel):
     # 只清指定档位；留空=按当前配置全清。前端「预览后执行」会带上用户勾选的档位。
     categories: list[str] | None = None
 
-
 def _require_retention() -> None:
     if not RETENTION_ENABLED:
         raise HTTPException(status_code=404, detail="自动清理仅桌面版可用")
-
-
-
-
-
-
-
-
-
 
 # --------------------------------------------------------------------------- #
 # 库内保险箱：选中文件就地 AES 加密 / 解密 + 解密播放
@@ -2283,24 +2123,19 @@ class CryptoSetPassRequest(BaseModel):
     confirm: str = Field(default="", max_length=512)
     old: str = Field(default="", max_length=512)
 
-
 class CryptoUnlockRequest(BaseModel):
     passwd: str = Field(min_length=1, max_length=512)
 
-
 class CryptoIdsRequest(BaseModel):
     lib_ids: list[str] = Field(default_factory=list)
-
 
 def _require_crypto() -> None:
     if not CRYPTO_ENABLED:
         raise HTTPException(status_code=404, detail="保险箱功能未启用")
 
-
 def _require_unlocked() -> None:
     if VAULT_KEY is None:
         raise HTTPException(status_code=423, detail="保险箱已锁定，请先解锁")
-
 
 def _crypto_job_status(job_id: str) -> dict:
     with CRYPTO_LOCK:
@@ -2309,7 +2144,6 @@ def _crypto_job_status(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
 
-
 def _kind_of(path: Path) -> str:
     suf = path.suffix.lower()
     if suf in library_mod.AUDIO_EXTS:
@@ -2317,7 +2151,6 @@ def _kind_of(path: Path) -> str:
     if suf in library_mod.IMAGE_EXTS:
         return "image"
     return "video"
-
 
 def _run_crypto_job(job_id: str, lib_ids: list[str], mode: str) -> None:
     """mode = 'encrypt' | 'decrypt'。加密把原件移回收站保底；解密还原原名并删除 .vdlenc。"""
@@ -2382,7 +2215,6 @@ def _run_crypto_job(job_id: str, lib_ids: list[str], mode: str) -> None:
             job["status"] = "completed"
             job["errors"] = errors
 
-
 def _prune_crypto_jobs() -> None:
     if len(CRYPTO_JOBS) <= 200:
         return
@@ -2392,9 +2224,6 @@ def _prune_crypto_jobs() -> None:
         for jid in (done[:-50] if len(done) > 50 else []):
             CRYPTO_JOBS.pop(jid, None)
 
-
-
-
 # ---- 桌面版种子下载（libtorrent 集成）：magnet/.torrent → 本地媒体库 ----
 class TorrentAddRequest(BaseModel):
     uri: str = Field(min_length=1, max_length=8192)
@@ -2403,35 +2232,15 @@ class TorrentAddRequest(BaseModel):
     save_path: str = Field(default="", max_length=4096)  # 相对 DOWNLOAD_DIR 的子目录；留空=根
     file_priorities: dict[int, int] = Field(default_factory=dict)  # {文件下标: 优先级(0=跳过)}
 
-
 class TorrentRemoveRequest(BaseModel):
     delete_files: bool = False
-
 
 class TorrentFilesRequest(BaseModel):
     priorities: dict[int, int] = Field(default_factory=dict)  # {文件下标: 优先级(0=跳过)}
 
-
 def _require_torrent() -> None:
     if not (TORRENT_ENABLED and torrent_mod.available() and torrent_manager is not None):
         raise HTTPException(status_code=404, detail="种子下载功能未启用（需桌面版并安装 libtorrent 或 aria2）")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ---- 字幕处理：在线字幕提取 / 内嵌字幕抽取 / 硬字幕烧录 / 可选 LLM 翻译 ----
 
@@ -2439,17 +2248,14 @@ class SubListRequest(BaseModel):
     lib_id: str = Field(min_length=1)
     cookie: str = Field(default="", max_length=8192)
 
-
 class SubExtractRequest(BaseModel):
     lib_id: str = Field(min_length=1)
     lang: str = Field(min_length=1, max_length=16)
     cookie: str = Field(default="", max_length=8192)
 
-
 class SubBurnRequest(BaseModel):
     lib_id: str = Field(min_length=1)
     sub_rel: str = Field(min_length=1, max_length=256)  # 相对视频目录的字幕文件名
-
 
 class SubTranslateRequest(BaseModel):
     lib_id: str = Field(min_length=1)
@@ -2459,21 +2265,11 @@ class SubTranslateRequest(BaseModel):
     model: str = Field(default="", max_length=128)
     target: str = Field(default="简体中文", max_length=32)
 
-
 def _resolve_lib_video(lib_id: str) -> Path:
     p = library_mod._resolve_safe(DOWNLOAD_DIR, lib_id)
     if not p or p.suffix.lower() not in library_mod.VIDEO_EXTS:
         raise HTTPException(status_code=404, detail="视频文件不存在")
     return p
-
-
-
-
-
-
-
-
-
 
 # ---- LLM 服务商选择器 API（统一配置，前端面板持久化）----
 
@@ -2485,13 +2281,11 @@ class LLMConfigRequest(BaseModel):
     reasoning_effort: str = Field(default="low", max_length=16)
     offpeak_only: bool = Field(default=False)
 
-
 class VisionConfigRequest(BaseModel):
     provider: str = Field(default="auto", max_length=32)
     api_key: str = Field(default="", max_length=256)
     base_url: str = Field(default="", max_length=512)
     model: str = Field(default="", max_length=128)
-
 
 class CommentaryConfigRequest(BaseModel):
     """解说(配音/音量)手动可调设置。"""
@@ -2503,13 +2297,6 @@ class CommentaryConfigRequest(BaseModel):
     original_duck: float = Field(default=0.10)       # 0.05~0.30
     narration_boost: float = Field(default=1.0)      # 1.0~1.6
 
-
-
-
-
-
-
-
 # ---- 格式 / 片段增强：对已下载媒体做本地 ffmpeg 加工（转音频 / GIF / 裁剪 / 压缩 / 放大）----
 # 与字幕处理同源（基于 lib_id）；产物落源目录并写侧车 → 媒体库自动可见。
 
@@ -2520,15 +2307,6 @@ class ProcessRequest(BaseModel):
     lib_ids: list[str] = Field(default_factory=list)
     op: str = Field(min_length=1, max_length=16)
     params: dict = Field(default_factory=dict)
-
-
-
-
-
-
-
-
-
 
 def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
     """AI 去水印：调 watermark-removal worker（HTTP 或本地 subprocess），轮询完成。"""
@@ -2619,7 +2397,6 @@ def _run_ai_dewatermark(job_id: str, src: str, params: dict) -> None:
             process_queue.jobs[job_id]["error"] = str(e)[:400]
         logger.warning("ai_dewatermark %s failed: %s", job_id, e)
 
-
 def _process_log(job_id: str, line: str) -> None:
     if not line:
         return
@@ -2631,7 +2408,6 @@ def _process_log(job_id: str, line: str) -> None:
         job.setdefault("logs", []).append(f"{ts}  {line.strip()}")
         if len(job.get("logs", [])) > 200:
             job["logs"][:] = job["logs"][-200:]
-
 
 def _process_set_step(job_id: str, idx: int, status: str, detail: str = "") -> None:
     with process_queue.lock:
@@ -2648,7 +2424,6 @@ def _process_set_step(job_id: str, idx: int, status: str, detail: str = "") -> N
             steps[idx]["status"] = status
             steps[idx]["detail"] = detail[:200]
             steps[idx]["updated_at"] = now
-
 
 def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
     """后台线程：按 op 调用 ffmpeg_tools，产物落源目录并写侧车，更新 process_queue.jobs。"""
@@ -2787,7 +2562,6 @@ def _run_process(job_id: str, src: str, op: str, params: dict) -> None:
             job["error"] = str(e)[:400]
         logger.warning("process %s (%s) failed: %s", job_id, op, e)
 
-
 # ---- 订阅监控：关注频道/UP 主，自动下载新发布的视频 ----
 
 def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
@@ -2825,7 +2599,6 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
     sub_store.update(sub.id, last_video_ids=new_baseline[:200], last_checked=time.time())
     return {"sub_id": sub.id, "checked": len(items), "new_videos": fresh, "task_ids": task_ids, "failed": failed}
 
-
 class SubscribeRequest(BaseModel):
     url: str = Field(min_length=4, max_length=8192)
     name: str = Field(default="", max_length=128)
@@ -2833,15 +2606,6 @@ class SubscribeRequest(BaseModel):
     cookie: str = Field(default="", max_length=8192)
     proxy: str = Field(default="", max_length=256)
     auto_check: bool = True
-
-
-
-
-
-
-
-
-
 
 def _subscription_watchdog() -> None:
     """后台常驻：周期性对开启 auto_check 的订阅探查新视频并下载。"""
@@ -2858,11 +2622,9 @@ def _subscription_watchdog() -> None:
         except Exception:
             logger.exception("订阅 watchpod 异常")
 
-
 if SUB_ENABLED:
     _sub_watchdog = threading.Thread(target=_subscription_watchdog, name="vdl-sub-watchdog", daemon=True)
     _sub_watchdog.start()
-
 
 def _retention_watchdog() -> None:
     """后台常驻：按 interval_hours 周期执行时效清理。
@@ -2889,41 +2651,9 @@ def _retention_watchdog() -> None:
             logger.exception("自动清理执行异常")
         time.sleep(interval)
 
-
 if RETENTION_ENABLED:
     _ret_watchdog = threading.Thread(target=_retention_watchdog, name="vdl-retention", daemon=True)
     _ret_watchdog.start()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # --------------------------------------------------------------------------- #
 # App 完整版路由（app-dev）：挂载全部业务模块
@@ -2973,7 +2703,6 @@ app.include_router(_membership_rtr.router)
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。
 _SYNC_RL = {"ts": {}, "lock": threading.Lock()}
 
-
 def _sync_rate_ok(ip: str) -> bool:
     """单 IP 30 秒内至多一次，防滥用。"""
     now = time.time()
@@ -2984,9 +2713,7 @@ def _sync_rate_ok(ip: str) -> bool:
         _SYNC_RL["ts"][ip] = now
         return True
 
-
 _COOKIE_ALERT_TS: dict[str, float] = {}
-
 
 def _cookie_pool_alert(domain: str) -> None:
     # 节流：同域 1 小时内只告警一次，避免每次 resolve 刷屏（正常空池是常态噪音）
@@ -3009,7 +2736,6 @@ def _cookie_pool_alert(domain: str) -> None:
         except Exception:
             pass
 
-
 def _cookie_pool_watchdog() -> None:
     while True:
         try:
@@ -3024,11 +2750,9 @@ def _cookie_pool_watchdog() -> None:
             pass
         time.sleep(1800)  # 30 分钟一轮
 
-
 def _start_cookie_pool_watchdog() -> None:
     t = threading.Thread(target=_cookie_pool_watchdog, daemon=True)
     t.start()
-
 
 @app.post("/api/cookie/cache/clear")
 def cookie_cache_clear() -> dict:
@@ -3036,7 +2760,6 @@ def cookie_cache_clear() -> dict:
     from cookie_cache import clear_cookie_cache
     n = clear_cookie_cache()
     return {"ok": True, "cleared": n}
-
 
 @app.post("/api/cookie/sync")
 def cookie_sync(payload: dict, request: Request) -> dict:
@@ -3061,7 +2784,6 @@ def cookie_sync(payload: dict, request: Request) -> dict:
     added = add_cookie(domain, cookie, source="sync")
     return {"ok": True, "added": added, "verified": (ok is True)}
 
-
 @app.post("/api/cookie/sync/from-local")
 def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     """仅本机(App 端)调用：读取本机浏览器指定站点登录态并上报到公共池。"""
@@ -3084,7 +2806,6 @@ def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     added = add_cookie(domain, header, source="local")
     return {"ok": True, "added": added, "verified": (ok is True)}
 
-
 def _cloud_sync_config() -> tuple[str, str]:
     """返回 (sync_url, token)。优先读 env，其次读本机配置文件。
 
@@ -3102,7 +2823,6 @@ def _cloud_sync_config() -> tuple[str, str]:
         except Exception:
             pass
     return url, token
-
 
 def _ensure_vps_env() -> None:
     """桌面 App 启动时注入 VPS 解析配置：经线上转发端点复用 VPS worker。
@@ -3127,9 +2847,7 @@ def _ensure_vps_env() -> None:
     os.environ["VDL_WORKER_URL"] = url.rstrip("/")
     logger.info("[vps] 桌面端注入 VPS 转发配置: %s", os.environ["VDL_WORKER_URL"])
 
-
 _ensure_vps_env()
-
 
 def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dict:
     """把单站 Cookie 推送到云端公共池（POST /api/cookie/sync）。
@@ -3170,7 +2888,6 @@ def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dic
             last_err = e
             raise
     raise last_err or RuntimeError("推送 Cookie 到云端失败")
-
 
 @app.post("/api/cookie/sync/to-cloud")
 def cookie_sync_to_cloud(request: Request) -> dict:
@@ -3216,7 +2933,6 @@ def cookie_sync_to_cloud(request: Request) -> dict:
     pushed = sum(1 for r in results if r.get("pushed"))
     return {"ok": True, "pushed": pushed, "total": len(results), "results": results}
 
-
 @app.post("/api/cookie/contribute")
 def cookie_contribute(payload: dict, request: Request) -> dict:
     """访客自愿把本次登录态贡献到公共池（需前端显式勾选 + 后端验真）。
@@ -3255,7 +2971,6 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
     logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s ckey=%s", domain, ip, added, bool(ckey))
     return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
 
-
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:
     """查询某链接是否需要 Cookie、本机浏览器是否已有可用登录态、以及公共池新鲜度。"""
@@ -3290,7 +3005,6 @@ def cookie_status(url: str = "") -> dict:
         "profile": info["profile"],
         "pool_updated_at": pool_ts,
     }
-
 
 from routers import voice_studio as _voice_studio_rtr
 app.include_router(_voice_studio_rtr.router)

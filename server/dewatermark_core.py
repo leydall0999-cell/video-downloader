@@ -30,16 +30,13 @@ try:
 except Exception:  # noqa: BLE001
     _fitz = None
 
-
 def available() -> bool:
     """图片去水印是否可用（需要 cv2 + numpy）。"""
     return _cv2 is not None and _np is not None
 
-
 def pdf_available() -> bool:
     """PDF 去水印是否可用（需要 fitz）。"""
     return _fitz is not None
-
 
 # ------------------------------------------------------------------ 纯逻辑（不依赖原生库，可独立单测）
 
@@ -74,7 +71,6 @@ def normalize_region(region) -> dict:
         return None
     return {"x": x, "y": y, "w": w, "h": h}
 
-
 def _region_to_px(region: dict, w: int, h: int):
     """把归一化区域换算为像素矩形 (x, y, rw, rh)，并夹到图像边界内。"""
     x = max(0, int(round(region["x"] * w)))
@@ -86,7 +82,6 @@ def _region_to_px(region: dict, w: int, h: int):
     if y + rh > h:
         rh = h - y
     return x, y, rw, rh
-
 
 def normalize_regions(regions) -> list:
     """校验并归一化多区域列表。
@@ -112,7 +107,6 @@ def normalize_regions(regions) -> list:
         return None
     return out
 
-
 def _build_region_mask(regions, w: int, h: int):
     """把多区域合并为单张二值 mask（uint8）。
 
@@ -135,22 +129,10 @@ def _build_region_mask(regions, w: int, h: int):
             mask[y:y + rh, x:x + rw] = 0
     return mask
 
-
 def _inpaint_from_mask(img, mask, method: str, radius: float):
     """对一张 BGR numpy 数组按给定 mask 做 inpaint，返回同形状数组。"""
     flag = _cv2.INPAINT_TELEA if method == "telea" else _cv2.INPAINT_NS
     return _cv2.inpaint(img, mask, float(radius), flag)
-
-
-def _inpaint_array(img, region: dict, w: int, h: int, method: str, radius: float):
-    """对一张 BGR numpy 数组做区域 inpaint，返回同形状数组。"""
-    x, y, rw, rh = _region_to_px(region, w, h)
-    if rw <= 0 or rh <= 0:
-        raise ValueError("水印区域无效")
-    mask = _np.zeros((h, w), dtype=_np.uint8)
-    mask[y:y + rh, x:x + rw] = 255
-    return _inpaint_from_mask(img, mask, method, radius)
-
 
 # ------------------------------------------------------------------ 图片去水印
 
@@ -181,7 +163,6 @@ def image_inpaint(src_path, dst_path, regions, method: str = "telea", radius: in
         raise RuntimeError("去水印结果写入失败")
     return Path(dst_path)
 
-
 # ------------------------------------------------------------------ PDF 去水印
 
 def pdf_remove_annotations(src_path, dst_path) -> int:
@@ -201,7 +182,6 @@ def pdf_remove_annotations(src_path, dst_path) -> int:
     finally:
         doc.close()
     return removed
-
 
 def pdf_raster_remove(src_path, dst_path, regions, method: str = "telea",
                       radius: int = 3, dpi: int = 150) -> Path:

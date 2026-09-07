@@ -11,11 +11,9 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
-
 
 @dataclass
 class Subscription:
@@ -34,7 +32,6 @@ class Subscription:
 
     def to_public_dict(self) -> dict:
         return asdict(self)
-
 
 class SubscriptionStore:
     """本地 JSON 持久化的订阅源仓库（线程安全）。"""
@@ -106,7 +103,6 @@ class SubscriptionStore:
             self._save()
             return sub
 
-
 def probe_channel(url: str, cookie: str = "", proxy: str = "", limit: int = 100) -> list[dict]:
     """用 yt-dlp extract_flat 探查频道/播放列表条目（仅元数据，不下载）。
 
@@ -155,7 +151,6 @@ def probe_channel(url: str, cookie: str = "", proxy: str = "", limit: int = 100)
     except Exception:
         return []
     return items[:limit]
-
 
 def new_videos(sub: Subscription, limit: int = 100) -> tuple[list[dict], int]:
     """探查频道，返回 (新视频列表, 探查到的视频总数)。新视频 = id 不在已知基线内。"""

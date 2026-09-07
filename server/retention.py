@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -65,7 +65,6 @@ CATEGORY_LABELS = {
     "media": "媒体文件（超过保留期）",
     "quota": "媒体文件（超出容量上限）",
 }
-
 
 # --------------------------------------------------------------------------- #
 # 配置
@@ -109,7 +108,6 @@ class RetentionConfig:
     def to_dict(self) -> dict:
         return asdict(self)
 
-
 class RetentionStore:
     """本地 JSON 持久化的清理策略（线程安全）。"""
 
@@ -151,7 +149,6 @@ class RetentionStore:
             self._save()
             return RetentionConfig(**self._cfg.to_dict())
 
-
 # --------------------------------------------------------------------------- #
 # 回收站（跨平台）
 # --------------------------------------------------------------------------- #
@@ -163,7 +160,6 @@ _TRASH_AVAILABLE: bool | None = None
 #   典型假阳性：UI 告诉用户「回收站可用、放心开媒体清理」，实际一条都删不掉。
 #   所以这里改成多级兜底，并且可用性检测走「回收站目录真的可写」而不是查命令存在。
 
-
 def _mount_point(path: Path) -> Path | None:
     """向上找到 path 所在卷的挂载点。"""
     try:
@@ -174,7 +170,6 @@ def _mount_point(path: Path) -> Path | None:
         return p
     except OSError:
         return None
-
 
 def _trash_dir_for(path: Path) -> Path | None:
     """返回该路径应该进的回收站目录（同卷优先，避免跨卷复制几十 GB）。"""
@@ -200,7 +195,6 @@ def _trash_dir_for(path: Path) -> Path | None:
         return None                      # Windows 走 PowerShell API
     base = Path(os.environ.get("XDG_DATA_HOME") or (home / ".local" / "share")) / "Trash"
     return base / "files"
-
 
 def _manual_trash(path: Path) -> bool:
     """零依赖兜底：手动移入回收站目录（重名自动加序号）。文件仍可从回收站找回。"""
@@ -229,7 +223,6 @@ def _manual_trash(path: Path) -> bool:
     except Exception:
         return False
 
-
 def trash_available() -> bool:
     """回收站通道是否真的可用（结果缓存）。检测的是「能不能写进回收站目录」。"""
     global _TRASH_AVAILABLE
@@ -251,7 +244,6 @@ def trash_available() -> bool:
         ok = shutil.which("gio") is not None or shutil.which("trash-put") is not None
     _TRASH_AVAILABLE = ok
     return _TRASH_AVAILABLE
-
 
 def move_to_trash(path: Path) -> bool:
     """把文件/目录移入系统回收站。多级兜底，全失败返回 False（调用方须跳过删除，绝不硬删）。"""
@@ -315,7 +307,6 @@ def move_to_trash(path: Path) -> bool:
                 pass
     return _manual_trash(path)
 
-
 # --------------------------------------------------------------------------- #
 # 工具
 # --------------------------------------------------------------------------- #
@@ -327,7 +318,6 @@ def _safe_inside(root: Path, target: Path) -> bool:
     except Exception:
         return False
     return t != r and r in t.parents
-
 
 def _dir_size(path: Path) -> int:
     total = 0
@@ -341,7 +331,6 @@ def _dir_size(path: Path) -> int:
     except Exception:
         pass
     return total
-
 
 def _dir_mtime(path: Path) -> float:
     """目录时间基准 = 目录内最新文件的 mtime（空目录退化为目录自身 mtime）。"""
@@ -362,17 +351,14 @@ def _dir_mtime(path: Path) -> float:
     except OSError:
         return time.time()
 
-
 def _age_days(mtime: float, now: float) -> float:
     return max(0.0, (now - mtime) / 86400.0)
-
 
 def _is_temp(path: Path) -> bool:
     name = path.name.lower()
     if any(name.endswith(s) for s in TEMP_SUFFIXES):
         return True
     return ".part-frag" in name or name.endswith(".tmp.jpg")
-
 
 def _sidecars_of(path: Path) -> list[Path]:
     """媒体主文件的伴生文件（元信息 / 字幕），跟随主文件一起清理。"""
@@ -392,7 +378,6 @@ def _sidecars_of(path: Path) -> list[Path]:
         pass
     return out
 
-
 def _entry(path: Path, root: Path, category: str, size: int, mtime: float, now: float) -> dict:
     try:
         rel = path.relative_to(root).as_posix()
@@ -406,7 +391,6 @@ def _entry(path: Path, root: Path, category: str, size: int, mtime: float, now: 
         "size": size,
         "age_days": round(_age_days(mtime, now), 1),
     }
-
 
 # --------------------------------------------------------------------------- #
 # 扫描（dry run）
@@ -509,13 +493,11 @@ def scan(download_dir: Path, cfg: RetentionConfig) -> dict[str, Any]:
         "scanned_at": now,
     }
 
-
 def _safe_size(p: Path) -> int:
     try:
         return p.stat().st_size
     except OSError:
         return 0
-
 
 # --------------------------------------------------------------------------- #
 # 执行
@@ -578,7 +560,6 @@ def run(download_dir: Path, cfg: RetentionConfig, categories: Iterable[str] | No
         "ran_at": time.time(),
     }
 
-
 def _prune_empty_frame_dirs(root: Path) -> None:
     try:
         for d in root.rglob("*"):
@@ -595,7 +576,6 @@ def _prune_empty_frame_dirs(root: Path) -> None:
     except Exception:
         pass
 
-
 def disk_usage(download_dir: Path) -> dict[str, Any]:
     """下载目录占用 + 所在磁盘剩余空间，给前端展示决策依据。"""
     root = Path(download_dir)
@@ -606,7 +586,6 @@ def disk_usage(download_dir: Path) -> dict[str, Any]:
     except Exception:
         pass
     return {"dir_size": used, "disk_free": free, "path": str(root)}
-
 
 def human_size(n: int) -> str:
     step = 1024.0

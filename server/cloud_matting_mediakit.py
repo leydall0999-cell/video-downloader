@@ -42,18 +42,10 @@ _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
-
 def _read_cfg() -> dict:
     from cloud_matting_config import get_cloud_matting_config
 
     return get_cloud_matting_config()
-
-
-def is_mediakit_ready() -> bool:
-    """是否已配置 MediaKit Bearer Key。"""
-    key = (_read_cfg().get("mediakit_api_key") or "").strip()
-    return bool(key)
-
 
 def _post_json(url: str, api_key: str, payload: dict, timeout: int) -> dict:
     data = json.dumps(payload).encode("utf-8")
@@ -64,14 +56,12 @@ def _post_json(url: str, api_key: str, payload: dict, timeout: int) -> dict:
         body = r.read().decode("utf-8")
     return json.loads(body)
 
-
 def _request_upload(api_key: str, timeout: int) -> dict:
     """返回 {file_id, method, upload_url, upload_headers}。"""
     resp = _post_json(_REQ_UPLOAD_URL, api_key, {}, timeout)
     if not resp.get("success"):
         raise RuntimeError(f"MediaKit 申请上传地址失败: {resp.get('error') or resp}")
     return resp["result"]
-
 
 def _put_upload(upload_url: str, img_bytes: bytes, content_type: str, timeout: int) -> None:
     req = urllib.request.Request(upload_url, data=img_bytes, method="PUT")
@@ -80,13 +70,11 @@ def _put_upload(upload_url: str, img_bytes: bytes, content_type: str, timeout: i
         if r.status >= 300:
             raise RuntimeError(f"MediaKit 上传返回 HTTP {r.status}")
 
-
 def _download(url: str, timeout: int) -> Image.Image:
     req = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as r:
         data = r.read()
     return Image.open(io.BytesIO(data)).convert("RGBA")
-
 
 def _refine_alpha(a: np.ndarray) -> np.ndarray:
     """清理 alpha 通道噪声、平滑过渡带，再做受控的边缘锐化。
@@ -123,7 +111,6 @@ def _refine_alpha(a: np.ndarray) -> np.ndarray:
             a[sharp_region] = a_sharp[sharp_region]
 
     return np.clip(a, 0.0, 1.0)
-
 
 def _decontaminate_edge_spill(rgb: Image.Image, rgba: Image.Image,
                               var_threshold: float = 0.015) -> Image.Image:
@@ -188,7 +175,6 @@ def _decontaminate_edge_spill(rgb: Image.Image, rgba: Image.Image,
     out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
     return Image.fromarray(out, mode="RGBA")
 
-
 # ---------------------------------------------------------------------------
 # 输出侧超分辨率（对齐豆包：输出比输入更高清）
 # ---------------------------------------------------------------------------
@@ -203,7 +189,6 @@ _SR_BASE_URLS = [
 ]
 _SR_CACHE_DIR = Path(os.path.expanduser("~/.video-downloader/models/sr"))
 _SESSIONS: dict[int, Any] = {}
-
 
 def _ensure_sr_model(scale: int) -> Path | None:
     """下载并返回 Real-ESRGAN ONNX 模型路径；失败返回 None（不阻塞主流程）。"""
@@ -227,7 +212,6 @@ def _ensure_sr_model(scale: int) -> Path | None:
             logger.warning("SR 模型下载失败 %s: %s", url, exc)
     return None
 
-
 def _get_sr_session(scale: int):
     """加载（并缓存）Real-ESRGAN 推理会话；优先 CoreML(苹果加速)，回退 CPU。"""
     if scale in _SESSIONS:
@@ -249,12 +233,10 @@ def _get_sr_session(scale: int):
     _SESSIONS[scale] = sess
     return sess
 
-
 def _sr_once(rgb: np.ndarray, sess, scale: int) -> np.ndarray:
     inp = rgb.transpose(2, 0, 1)[None].astype(np.float32)
     out = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0]
     return np.clip(out, 0.0, 1.0).transpose(1, 2, 0)
-
 
 def _sr_rgb(rgb: np.ndarray, sess, scale: int, tile: int = 512, overlap: int = 16) -> np.ndarray:
     """对 RGB 跑 Real-ESRGAN；大图分块推理后拼接，避免一次占满内存。"""
@@ -281,7 +263,6 @@ def _sr_rgb(rgb: np.ndarray, sess, scale: int, tile: int = 512, overlap: int = 1
             weight[oy:oy + oh, ox:ox + ow] += 1.0
     out /= np.maximum(weight, 1e-6)
     return out
-
 
 def _color_guided_alpha(I: np.ndarray, p: np.ndarray,
                         r: int = 8, eps: float = 1e-5, step: int = 512) -> np.ndarray:
@@ -331,7 +312,6 @@ def _color_guided_alpha(I: np.ndarray, p: np.ndarray,
     mean_a = np.stack([bf(a_coef[..., k]) for k in range(3)], axis=-1)
     mean_b = bf(b_coef)
     return np.clip(np.sum(mean_a * I, axis=-1) + mean_b, 0.0, 1.0)
-
 
 def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
                    guide_rgb: Image.Image | None = None,
@@ -525,7 +505,6 @@ def _super_resolve(rgba: Image.Image, scale: int = _SR_SCALE,
 
     return Image.fromarray((out * 255.0).astype(np.uint8), mode="RGBA")
 
-
 def _guided_filter_rgb(I: np.ndarray, p: np.ndarray, r: int, eps: float) -> np.ndarray:
     """经典引导滤波（box filter 实现）。I:(H,W,3) 引导图, p:(H,W) 目标 → (H,W)。"""
     I = I.astype(np.float32)
@@ -543,7 +522,6 @@ def _guided_filter_rgb(I: np.ndarray, p: np.ndarray, r: int, eps: float) -> np.n
     mean_a = cv2.boxFilter(a_, -1, (r, r))
     mean_b = cv2.boxFilter(b_, -1, (r, r))
     return np.sum(mean_a * I, -1) + mean_b
-
 
 def _finalize_output(rgba: Image.Image) -> Image.Image:
     """抠图收尾清理（保守，只做两件事）：
@@ -568,7 +546,6 @@ def _finalize_output(rgba: Image.Image) -> Image.Image:
                 arr[..., 3][comp] = 0
     arr[..., :3][a < 0.01] = 255
     return Image.fromarray(arr, mode="RGBA")
-
 
 def _enhance_image(rgb: Image.Image, version: str = 'professional',
                    multiple: float = 2.0, mode: str | None = None,
@@ -604,7 +581,6 @@ def _enhance_image(rgb: Image.Image, version: str = 'professional',
     if not out_url:
         raise RuntimeError(f"MediaKit 画质增强未返回结果图: {resp}")
     return _download(out_url, timeout).convert("RGB")
-
 
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 120, upscale: int | None = None,

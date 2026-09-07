@@ -24,7 +24,6 @@
 """
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
@@ -50,10 +49,8 @@ _SRC_CANDIDATES_MAC = [
     "/usr/local/bin/aria2c",
 ]
 
-
 def _log(msg: str) -> None:
     print(f"   [aria2] {msg}")
-
 
 # --------------------------------------------------------------------------- #
 # macOS：本地 brew -> 改写 rpath -> 自包含
@@ -67,7 +64,6 @@ def _otool_deps(path: Path) -> list[str]:
         if m:
             deps.append(m.group(1))
     return deps
-
 
 def _collect_brew_deps(main: Path) -> set[str]:
     found: set[str] = set()
@@ -84,7 +80,6 @@ def _collect_brew_deps(main: Path) -> set[str]:
                 if d not in seen:
                     queue.append(Path(d))
     return found
-
 
 def _bundle_local_mac(bin_dir: Path) -> bool:
     src = next((Path(c) for c in _SRC_CANDIDATES_MAC if Path(c).exists()), None)
@@ -120,7 +115,6 @@ def _bundle_local_mac(bin_dir: Path) -> bool:
     _log(f"已用本机 brew aria2c 打包 + {len(brew_deps)} 个 dylib（@loader_path 自包含）")
     return True
 
-
 # --------------------------------------------------------------------------- #
 # Windows / Linux：下载官方 release -> 平铺解压
 # --------------------------------------------------------------------------- #
@@ -134,7 +128,6 @@ def _download(url: str, dest: Path) -> bool:
     except Exception as e:  # noqa: BLE001 - 任何下载失败都优雅降级
         _log(f"⚠️ 下载失败：{e}")
         return False
-
 
 def _extract_flat(archive: Path, kind: str, bin_dir: Path) -> None:
     """解压并把文件平铺到 bin_dir（去掉压缩包内的顶层目录）。"""
@@ -157,14 +150,12 @@ def _extract_flat(archive: Path, kind: str, bin_dir: Path) -> None:
                     continue
                 _spill(t.extractfile(m), bin_dir / rel)
 
-
 def _spill(src, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "wb") as dst:
         shutil.copyfileobj(src, dst)
     if target.name in ("aria2c", "aria2c.exe"):
         target.chmod(0o755)
-
 
 def _bundle_download(platform_key: str, bin_dir: Path) -> bool:
     fname, kind = _DOWNLOAD[platform_key]
@@ -175,7 +166,6 @@ def _bundle_download(platform_key: str, bin_dir: Path) -> bool:
             return False
         _extract_flat(archive, kind, bin_dir)
     return True
-
 
 # --------------------------------------------------------------------------- #
 # 入口
@@ -200,7 +190,6 @@ def bundle(resources_dir: Path) -> bool:
 
     _log("⚠️ 打包失败（无本地 brew 且未能下载官方二进制），种子功能将运行时禁用")
     return False
-
 
 def _selfcheck(bin_dir: Path, exe: str) -> bool:
     exe_path = bin_dir / exe
@@ -228,7 +217,6 @@ def _selfcheck(bin_dir: Path, exe: str) -> bool:
         return False
     _log(f"已打包 aria2c 到 {bin_dir}（自包含校验通过）")
     return True
-
 
 if __name__ == "__main__":
     default = Path(__file__).resolve().parent.parent / "dist" / "VideoDownloader.app" / "Contents" / "Resources"
