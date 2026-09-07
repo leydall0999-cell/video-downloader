@@ -35,6 +35,7 @@
       </div>
     </div>
     <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 15+ 平台</button>
+    <button type="button" class="badge" id="memberBadge" title="会员中心（下载会员 / AI 会员 / 积分包）">👑 会员中心</button>
     <button type="button" class="badge" id="subBadge" hidden aria-haspopup="dialog" title="订阅解锁无限格式转换">🔓 订阅解锁</button>
     <button type="button" class="badge" id="hideToDesktopBtn" hidden title="最小化到 Dock（软件继续后台运行）">返回桌面</button>
     <button type="button" class="badge" id="quitAppBtn" hidden title="退出 VideoDownloader（仅此按钮会真正退出软件）">退出</button>
@@ -102,13 +103,8 @@
       <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
     </div>
 
-    <div class="sidebar-group">
-      <div class="sidebar-group-title">
-        <span class="sidebar-group-emoji" aria-hidden="true">👑</span>
-        <span class="sidebar-group-en">Member</span>
-      </div>
-      <button type="button" class="sidebar-item" id="sTabMember" title="会员中心"><span class="sidebar-item-icon" aria-hidden="true">👑</span><span class="sidebar-item-label">会员中心</span></button>
-    </div>
+    <!-- 2026-09-08 会员中心移出侧栏：改为右上角 header 常驻按钮 #memberBadge
+         （支持平台按钮右边，所有视图可见），点击打开 #memberModal 弹窗 -->
 
     <div class="sidebar-footer">v1.0 · AI 自动剪辑</div>
   </aside>

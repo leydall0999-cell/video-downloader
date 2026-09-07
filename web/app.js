@@ -153,7 +153,9 @@
     cancelAllBtn: $('cancelAllBtn'),
     openFolderBtn: $('openFolderBtn'),
     // 会员中心（VDL 三轨会员：下载 / AI / 永久积分包）
+    // 2026-09-08 会员中心从侧栏移到右上角 header 常驻按钮 memberBadge（sTabMember 已删，引用保留兜底）
     sTabMember: $('sTabMember'),
+    memberBadge: $('memberBadge'),
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
     memberStatus: $('memberStatus'),
@@ -10261,6 +10263,8 @@ el.dwVidPlayer.removeAttribute('src');
     await Promise.all([renderMemberStatus(), renderMemberPlans()]);
   }
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
+  // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
+  if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
   if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
@@ -11254,22 +11258,22 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.sTabUploadConvert) el.sTabUploadConvert.hidden = false;
         if (el.sTabDw) el.sTabDw.hidden = false;
       } else {
-        // App 端：能力精细控制（tabTorrent/tabCommentary/tabDw/tabLibrary/tabSubscribe）
-        if (el.tabTorrent) el.tabTorrent.hidden = !node.torrentEnabled;
-        if (el.tabCommentary) el.tabCommentary.hidden = !node.commentaryEnabled;
-        if (el.tabUploadConvert) el.tabUploadConvert.hidden = false; // 本地核心能力
-        if (el.tabDw) el.tabDw.hidden = !node.aiDewatermarkEnabled;  // 依赖 AI 去水印能力
-        if (el.tabLibrary) el.tabLibrary.hidden = !node.libraryEnabled;
-        if (el.tabSubscribe) el.tabSubscribe.hidden = !node.subscriptionsEnabled;
+        // App 端：2026-09-08 用户要求「所有栏显示」——取消能力门控隐藏，全部常驻
+        // （torrent/commentary/dw/library/subscribe 原按 node.*Enabled 门控，现强制显示）
+        if (el.tabTorrent) el.tabTorrent.hidden = false;
+        if (el.tabCommentary) el.tabCommentary.hidden = false;
+        if (el.tabUploadConvert) el.tabUploadConvert.hidden = false;
+        if (el.tabDw) el.tabDw.hidden = false;
+        if (el.tabLibrary) el.tabLibrary.hidden = false;
+        if (el.tabSubscribe) el.tabSubscribe.hidden = false;
         if (el.tabAppIntro) el.tabAppIntro.hidden = false; // 更多功能介绍桌面端也显示
-        // 侧栏同 toggle（保持一一对应；侧栏无 tabAppIntro 对应——因为更多功能是顶 tab 独有）
         // 侧栏同 toggle（保持一一对应）
-        if (el.sTabTorrent) el.sTabTorrent.hidden = !node.torrentEnabled;
-        if (el.sTabCommentary) el.sTabCommentary.hidden = !node.commentaryEnabled;
+        if (el.sTabTorrent) el.sTabTorrent.hidden = false;
+        if (el.sTabCommentary) el.sTabCommentary.hidden = false;
         if (el.sTabUploadConvert) el.sTabUploadConvert.hidden = false;
-        if (el.sTabDw) el.sTabDw.hidden = !node.aiDewatermarkEnabled;
-        if (el.sTabLibrary) el.sTabLibrary.hidden = !node.libraryEnabled;
-        if (el.sTabSubscribe) el.sTabSubscribe.hidden = !node.subscriptionsEnabled;
+        if (el.sTabDw) el.sTabDw.hidden = false;
+        if (el.sTabLibrary) el.sTabLibrary.hidden = false;
+        if (el.sTabSubscribe) el.sTabSubscribe.hidden = false;
       }
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载
