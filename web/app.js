@@ -2950,7 +2950,10 @@
         //  · rmbg-2.0 —— CC BY-NC 4.0 仅非商用，与「内置默认必须 MIT/Apache/BSD 可商用」冲突
         //  · birefnet-general-lite —— 与完整版同源，且没有任何自动路由会调度它（纯冗余）
         // 服务端已同步移除；这里再过滤一层，保证未重打包的旧二进制也不会把它们列出来。
-        const MAT_RETIRED = ['rmbg-2.0', 'birefnet-general-lite'];
+        // modnet-photographic：虽已从手动引擎下拉隐藏（避免与 SAM 在人像场景重复），
+        // 但「智能自动」人像路由仍内部调用它（matting_ai.py 硬编码 model="modnet-photographic"），
+        // 故此处仅隐藏菜单项、不删除 MODELS 条目，保证人像自动抠图能力不回归。
+        const MAT_RETIRED = ['rmbg-2.0', 'birefnet-general-lite', 'modnet-photographic'];
         (d.models || []).filter(m => !MAT_RETIRED.includes(m.name)).forEach(m => {
           const o = document.createElement('option');
           o.value = m.name;
@@ -6616,13 +6619,9 @@ el.dwVidPlayer.removeAttribute('src');
     } else {
       setOpt('indextts_mlx', true, '免费（仅苹果芯片 Mac 可用）');
     }
-    // IndexTTS2：本机（Mac）不可用
-    setOpt('indextts2', true, '免费（本机不可用）');
     // MiniMax / SiliconFlow：需填密钥
     setOpt('minimax', !status.minimax_configured, status.minimax_configured ? '收费（密钥已填写）' : '收费（未填密钥，暂不可用）');
     setOpt('siliconflow', !status.siliconflow_configured, status.siliconflow_configured ? '收费（密钥已填写，新用户送 ¥14）' : '收费（未填密钥，暂不可用）');
-    // Qwen3-TTS：本地服务就绪可用；未启动仍可选中（选中后服务不可达会自动回退 edge）
-    setOpt('qwen3tts', false, status.qwen3tts_ready ? '免费（已就绪）' : '免费（本机服务未启动，选中后自动回退 edge）');
     // edge-tts：始终可用兜底
     setOpt('edge', false, '免费（兜底）');
 
@@ -6641,12 +6640,10 @@ el.dwVidPlayer.removeAttribute('src');
       } else {
         comSetTtsStatusBar('gray', '本地语音克隆需要苹果芯片 Mac（M 系列）');
       }
-    } else if (cur === 'indextts2') {
-      comSetTtsStatusBar('gray', '该引擎当前在本机无法运行，建议用「IndexTTS-MLX」');
     } else if (cur === 'minimax' || cur === 'siliconflow') {
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
       comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
-    } else if (cur === 'qwen3tts' || cur === '') {
+    } else if (cur === '') {
       if (status.qwen3tts_ready) {
         comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
       } else {
@@ -7326,7 +7323,7 @@ el.dwVidPlayer.removeAttribute('src');
   ];
 
   /** 解说风格 → 默认联动音色（选择风格时自动套用，用户仍可在审核面板手动改）。
-   *  key 与后端 commentary-worker/scripts/llm_script.py 的 STYLE_CONFIG 保持一致。 */
+   *  key 与后端解说管线 scripts/llm_script.py 的 STYLE_CONFIG 保持一致。 */
   const STYLE_VOICE = {
     none:        'zh-CN-XiaoxiaoNeural',  // 默认：温柔女声
     funny:       'zh-CN-YunxiaNeural',    // 搞笑：青年男声（年轻活泼）

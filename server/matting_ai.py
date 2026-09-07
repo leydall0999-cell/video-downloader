@@ -1296,6 +1296,13 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             # 免费、秒级、零重绘（云端生成式增强反而可能改写素材细节、且按次计费）。
             # 仅限「边缘纯色达标 + 背景色高饱和 + 色相在绿~青~蓝区间(70~165°)」；
             # 橙幕（色相约 25°）/灰白底/复杂背景一律不命中，仍走云端。
+            # 试验开关「整图非人像跳过云端」：一次读取，供下方人像/通用云端判定共用。
+            _skip_txt_on = True  # 缺省开启（配置显式 false 才关闭）
+            try:
+                from cloud_matting_config import get_cloud_matting_config as _gc0
+                _skip_txt_on = bool(_gc0().get("skip_cloud_for_text", True))
+            except Exception:  # noqa: BLE001
+                pass
             if is_cloud_matting_mediakit_ready():
                 try:
                     _is_solid_bg, _bg_rgb = _detect_solid_background(rgb)
@@ -1305,7 +1312,33 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 # chroma-hybrid；单色 key 对光照不均橙幕会漏判留下彩边）。本地 hybrid/MODNet
                 # 仅作断网/无 Key 兜底。2026-09-07 修正：此前人像在 1316 被本地 hybrid 截胡
                 # return，云端 human 路从未被走到 → 橙幕人像反而比改前(云端)更差。
-                if (_is_person or _is_person_label(vision_label)
+                # ── 试验开关：整图(无裁片) + 无人像文字描述 + 弱人像信号 → 跳过云端走本地 ──
+                # 2026-09-07 实测发现：装饰海报常被 MODNet 弱检测(_pc 仅略高于 0.12) 误判为
+                # 人像 → 进 human 云端 → 必返回空蒙版（无效却按成功计费）。故不能用
+                # 「非人像」做条件（海报已被判为人像），改用**信号强度**区分：
+                # _pc > person_detect_threshold(默认0.30) 才认定真人像走云端；弱信号视为
+                # 可能误判 → 走本地。有裁片(_cb)的「说扣什么」路径云端有效，绝不跳过。
+                _pc_val = 0.0
+                try:
+                    _pc_val = float((meta or {}).get("person_detected_local") or 0.0)
+                except Exception:  # noqa: BLE001
+                    _pc_val = 0.0
+                _explicit_person = (_is_person_label(vision_label)
+                                    or _is_person_label((meta or {}).get("prompt", "")))
+                _pthr = 0.30
+                try:
+                    from cloud_matting_config import get_cloud_matting_config as _gc2
+                    _pthr = float(_gc2().get("person_detect_threshold", 0.30))
+                except Exception:  # noqa: BLE001
+                    pass
+                if (_skip_txt_on and _cb is None and not _explicit_person
+                        and _pc_val <= _pthr):
+                    if meta is not None:
+                        meta["skip_cloud_for_text"] = True
+                        meta["cloud_error"] = (
+                            "已跳过云端(整图·弱人像信号 pc=%.3f<=%.2f)，直接走本地"
+                            % (_pc_val, _pthr))
+                elif (_is_person or _is_person_label(vision_label)
                         or _is_person_label((meta or {}).get("prompt", ""))) \
                         and is_cloud_matting_mediakit_ready():
                     try:
@@ -1370,8 +1403,25 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     return
                 except Exception:  # noqa: BLE001
                     pass  # MODNet 失败 → 继续走云端兜底
+            # ── 试验开关：整图非人像（文字/海报类）跳过云端，直接走本地 ──
+            # 依据 2026-09-07 实测：整图装饰海报走 MediaKit 必返回空蒙版（全透明、无效却
+            # 仍按「成功处理次数」计费）。本地 BiRefNet 对文字同为盲区，但可省掉一次无效
+            # 云端往返与等待。仅作用于「整图自动」——「说扣什么」/框选/套索有裁片(_cb)时
+            # 云端有效，绝不能跳过（那是海报唯一有效路径）。人像亦不受影响。
+            _skip_cloud_for_text = True  # 缺省开启（配置显式 false 才关闭）
+            try:
+                from cloud_matting_config import get_cloud_matting_config as _get_cc
+                _skip_cloud_for_text = bool(_get_cc().get("skip_cloud_for_text", True))
+            except Exception:  # noqa: BLE001
+                pass
+            _no_person_here = not (_is_person or _is_person_label(vision_label)
+                                   or _is_person_label((meta or {}).get("prompt", "")))
+            if _skip_cloud_for_text and _no_person_here and _cb is None:
+                if meta is not None:
+                    meta["skip_cloud_for_text"] = True
+                    meta["cloud_error"] = "已跳过云端(整图非人像)，直接走本地"
             # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
-            if is_cloud_matting_mediakit_ready():
+            elif is_cloud_matting_mediakit_ready():
                 try:
                     from cloud_matting_mediakit import mediakit_remove_bg
                     _scene = "human" if _is_person else "general"
