@@ -2948,9 +2948,10 @@
       }
     });
   }
-  // 单一来源：转码列表 + 桥接列表（mcListEl）两处都挂同一份拦截委托
+  // 单一来源：转码列表 + 桥接列表 + 音乐转换列表 都挂同一份拦截委托
   wireSaveConvertDownload(el.ucList);
   wireSaveConvertDownload(mcListEl);
+  wireSaveConvertDownload(el.musList);
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   if (el.ucAudioOnly) el.ucAudioOnly.addEventListener('change', toggleAudioMode);
