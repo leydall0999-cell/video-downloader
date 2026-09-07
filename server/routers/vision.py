@@ -52,6 +52,7 @@ class CloudMattingConfigRequest(BaseModel):
     mediakit_api_key: str = ""
     enhance_version: str = ""  # ""=auto / off / standard / professional / max
     mat_output_hd: bool = False  # 高清输出：本地 2x 超分（更清晰但更慢）
+    auto_vlm_classify: bool = True  # 自动模式 VLM 看图分类选引擎（默认开）
 
 
 def _mask_key(k: str) -> str:
@@ -74,6 +75,7 @@ def cloud_matting_config_get() -> dict:
         "mediakit_api_key": _mask_key(cfg.get("mediakit_api_key", "")),
         "enhance_version": cfg.get("enhance_version", ""),
         "mat_output_hd": bool(cfg.get("mat_output_hd", False)),
+        "auto_vlm_classify": bool(cfg.get("auto_vlm_classify", True)),
         "enabled": bool(cfg.get("enabled", False)),
         "ready": _cm.is_cloud_matting_ready(),
     }
@@ -110,6 +112,7 @@ def cloud_matting_config_save(req: CloudMattingConfigRequest) -> dict:
         "mediakit_api_key": _merge(req.mediakit_api_key, "mediakit_api_key"),
         "enhance_version": ev,
         "mat_output_hd": bool(req.mat_output_hd),
+        "auto_vlm_classify": bool(req.auto_vlm_classify),
         "enabled": bool(req.enabled),
     }
     _cm.save_cloud_matting_config(data)

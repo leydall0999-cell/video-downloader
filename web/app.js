@@ -279,6 +279,7 @@
     cloudEnhance: $('cloudEnhance'),
     matEnhanceToggle: $('matEnhanceToggle'),
     matOutputHd: $('matOutputHd'),
+    autoVlmClassify: $('autoVlmClassify'),
     // 格式 / 片段加工（桌面版功能）
     libProcess: $('libProcess'),
     libCommentary: $('libCommentary'),
@@ -9779,6 +9780,7 @@ el.dwVidPlayer.removeAttribute('src');
           if (el.cloudEnhance) el.cloudEnhance.value = (ev === 'off' || ev === '') ? 'auto' : ev;
         }
         if (el.matOutputHd) el.matOutputHd.checked = !!r2.mat_output_hd;
+        if (el.autoVlmClassify) el.autoVlmClassify.checked = (r2.auto_vlm_classify !== false);
       }
     } catch (e) { /* */ }
 
@@ -9805,6 +9807,7 @@ el.dwVidPlayer.removeAttribute('src');
             mediakit_api_key: el.cloudMk ? el.cloudMk.value.trim() : '',
             enhance_version: (el.matEnhanceToggle && !el.matEnhanceToggle.checked) ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : ''),
             mat_output_hd: el.matOutputHd ? el.matOutputHd.checked : false,
+            auto_vlm_classify: el.autoVlmClassify ? el.autoVlmClassify.checked : true,
             enabled: el.cloudMattingEnabled ? el.cloudMattingEnabled.checked : false,
           }),
         });
@@ -9832,6 +9835,7 @@ el.dwVidPlayer.removeAttribute('src');
             secret_key: (cur && cur.secret_key) || '',
             mediakit_api_key: (cur && cur.mediakit_api_key) || '',
             enhance_version: off ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : 'auto'),
+            auto_vlm_classify: el.autoVlmClassify ? el.autoVlmClassify.checked : true,
             enabled: !!(cur && cur.enabled),
           }),
         });
@@ -9864,10 +9868,37 @@ el.dwVidPlayer.removeAttribute('src');
             mediakit_api_key: (cur && cur.mediakit_api_key) || '',
             enhance_version: (cur && cur.enhance_version) || '',
             mat_output_hd: el.matOutputHd.checked,
+            auto_vlm_classify: el.autoVlmClassify ? el.autoVlmClassify.checked : true,
             enabled: !!(cur && cur.enabled),
           }),
         });
         show(r && r.ok ? (el.matOutputHd.checked ? '✅ 已开启高清输出（更清晰但更慢）' : '✅ 已关闭高清输出（速度优先）') : '❌ 保存失败', !(r && r.ok));
+      } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
+    });
+  }
+
+  // ---- 抠图面板内的「AI 智能识别图片类型（自动模式）」开关（即改即存） ----
+  if (el.autoVlmClassify) {
+    el.autoVlmClassify.addEventListener('change', async () => {
+      const st = $('cloudEnhanceStatus');
+      const show = (msg, err) => { if (st) { st.textContent = msg; st.style.color = err ? '#e5484d' : '#1a9e57'; } };
+      try {
+        show('保存中…', false);
+        const cur = await request('/api/cloud-matting/config');
+        const r = await request('/api/cloud-matting/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key: (cur && cur.access_key) || '',
+            secret_key: (cur && cur.secret_key) || '',
+            mediakit_api_key: (cur && cur.mediakit_api_key) || '',
+            enhance_version: (cur && cur.enhance_version) || '',
+            mat_output_hd: !!(cur && cur.mat_output_hd),
+            auto_vlm_classify: el.autoVlmClassify.checked,
+            enabled: !!(cur && cur.enabled),
+          }),
+        });
+        show(r && r.ok ? (el.autoVlmClassify.checked ? '✅ 已开启 AI 智能识别（自动模式先看图再选引擎）' : '✅ 已关闭 AI 智能识别（退回 MODNet 启发式）') : '❌ 保存失败', !(r && r.ok));
       } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
     });
   }

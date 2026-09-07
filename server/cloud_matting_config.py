@@ -40,12 +40,13 @@ def get_cloud_matting_config() -> dict[str, Any]:
         "mediakit_api_key": "",
         "enhance_version": "professional",
         "mat_output_hd": False,
+        "auto_vlm_classify": True,
     }
     cp = _config_path()
     if cp.is_file():
         try:
             saved = json.loads(cp.read_text(encoding="utf-8"))
-            for k in ("provider", "access_key", "secret_key", "enabled", "mediakit_api_key", "enhance_version", "mat_output_hd"):
+            for k in ("provider", "access_key", "secret_key", "enabled", "mediakit_api_key", "enhance_version", "mat_output_hd", "auto_vlm_classify"):
                 if k in saved:
                     cfg[k] = saved[k]
         except (json.JSONDecodeError, OSError):

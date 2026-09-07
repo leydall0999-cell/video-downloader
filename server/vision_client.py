@@ -584,6 +584,96 @@ def select_matching_components(sheet_png_b64: str, user_prompt: str, count: int,
     return []
 
 
+# 🤖 图像类型分类 prompt（自动模式智能选引擎用）
+_CLASSIFY_PROMPT = (
+    "你是一个图像类型分类与主体定位助手。请判断这张图最适合用哪种抠图方式，"
+    "并框出最想被抠出的主体。\n\n"
+    "只返回一个 JSON 对象，不要任何额外文字、不要 markdown 代码块：\n"
+    "{\n"
+    '  "category": "<person|product|poster_text|logo_graphic|solid_background|complex_scene>",\n'
+    '  "label": "<一句话中文描述，如 人像/商品手机/海报主标题/品牌logo/纯色背景人物/风景照片>",\n'
+    '  "box": [x1, y1, x2, y2]\n'
+    "}\n\n"
+    "类别定义：\n"
+    "  - person：真人照片/自拍/大头照/含真实人物的图（不是插画卡通）\n"
+    "  - product：实物商品/物体/动物/食物等带真实背景的单一主体\n"
+    "  - poster_text：海报/封面/banner/含大标题文字+装饰的设计图（主体包含文字）\n"
+    "  - logo_graphic：扁平 logo/图标/插画/矢量图形/卡通形象（边缘锐利、非照片）\n"
+    "  - solid_background：主体位于纯色或近似纯色背景上（绿幕/蓝幕/摄影棚纯色）\n"
+    "  - complex_scene：复杂实景/风景/多元素照片（无明确单一主体）\n\n"
+    "box 是归一化坐标 0~1，格式 [左上x, 左上y, 右下x, 右下y]，紧贴主体外缘；"
+    "若整图就是主体（如纯色背景上的人像）可返回接近全图的 [0.02,0.02,0.98,0.98]。"
+)
+
+
+def classify_image(image_path: str, max_side: int = 1024, timeout: int = 60) -> dict | None:
+    """🤖 自动模式智能分类：调 VLM 判断图像类别 + 主体框，返回
+    {"category": str, "label": str, "box": [x1,y1,x2,y2]|None}；失败返回 None。
+
+    用途：自动抠图时先「看一眼图」决定走哪个引擎（人像→人像云/MODNet、
+    海报→本地+框引导、logo→SAM、纯色→色度键、复杂→BiRefNet），避免单一
+    MODNet 人像启发式把海报/科技图形误判成人像而走进 human 云端返回空蒙版。
+    未配置视觉模型 / 调用失败 → 返回 None（调用方回退到原 MODNet 启发式）。
+    """
+    try:
+        cfg = get_vision_config()
+    except Exception:  # noqa: BLE001
+        return None
+    key = (cfg.get("api_key") or "").strip()
+    base_url = (cfg.get("base_url") or "").strip().rstrip("/")
+    model = (cfg.get("model") or "").strip()
+    if not key or not base_url or not model:
+        return None
+
+    try:
+        b64 = _compress_to_b64(image_path, max_side)
+        try:
+            from PIL import Image as _PIL
+            with _PIL.open(image_path) as _im:
+                _imgW, _imgH = _im.size
+        except Exception:
+            _imgW, _imgH = None, None
+        url = base_url + "/chat/completions"
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {key}"}
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": [
+                    {"type": "text", "text": _CLASSIFY_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]},
+            ],
+            "temperature": 0.1,
+        }
+        resp = _post_json(url, headers, payload, timeout=timeout)
+        content = resp["choices"][0]["message"]["content"]
+        parsed = _extract_json(content)
+        if not isinstance(parsed, dict):
+            return None
+        cat = str(parsed.get("category", "")).strip().lower()
+        if cat not in ("person", "product", "poster_text", "logo_graphic",
+                       "solid_background", "complex_scene"):
+            # 宽容：未知类别当作复杂场景（走 BiRefNet 全图）
+            cat = "complex_scene"
+        label = str(parsed.get("label", "")).strip()
+        raw_box = parsed.get("box") or parsed.get("bbox")
+        box = None
+        if raw_box:
+            try:
+                vals = [float(v) for v in raw_box[:4]]
+                if max(vals) > 1.5 and _imgW and _imgH:
+                    vals = [vals[0] / _imgW, vals[1] / _imgH,
+                            vals[2] / _imgW, vals[3] / _imgH]
+                box = _parse_box(vals)
+            except Exception:  # noqa: BLE001
+                box = None
+        return {"category": cat, "label": label, "box": box}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def detect_text_blocks(image_path: str, max_side: int = 1024, timeout: int = 60) -> list[dict]:
     """📝 文字检测：调 VLM 找出图中所有独立文字元素，返回
     [{"label": "...", "box": [x1,y1,x2,y2] 归一化}, ...]（面积降序）。

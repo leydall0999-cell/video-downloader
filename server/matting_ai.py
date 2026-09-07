@@ -1199,7 +1199,7 @@ def _norm_box_from_inputs(vision_box, polygon, box):
     return None
 
 
-def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None, keep_lasso_all: bool = False) -> None:
+def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = None, model: str | None = None, vision_box: tuple | list | None = None, polygon: list | None = None, click: list | None = None, blocks: list | None = None, sam_refine: bool = False, vision_label: str = "", meta: dict | None = None, keep_lasso_all: bool = False, auto_vlm: bool | None = None) -> None:
     """对单张图片做一键抠图，输出 RGBA 透明 PNG 到 out。
 
     src/out 为路径（str 或 Path）。透明 PNG 可直接用于合成 / 换背景。
@@ -1256,6 +1256,43 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 meta["lasso_keep_all"] = True
             _save_out(_out, out)
             return
+
+        # 🤖 自动模式「AI 智能识别图片类型」：纯自动（无手动选区、无「说扣什么」
+        # 描述、无 AI 视觉定位框）时，先让 VLM 看一眼图、判断类别（人像/商品/
+        # 海报/logo/纯色背景/复杂场景）并给出主体语义标签，喂给下方路由——
+        # 海报/科技图形会被判成 poster_text 而非误判人像，不再被推进 human 云端
+        # 返回空蒙版。受配置 auto_vlm_classify（默认 True，前端「AI 智能识别」开关）
+        # 控制；无 VLM Key 或调用失败时静默回退到原 MODNet 启发式，零回归。
+        # 仅做类别路由、不传裁剪框：纯自动模式 VLM 框只框主体核心易切掉底板/阴影
+        # （worker 也会在自动模式丢弃定位框），故这里只用类别/语义标签驱动路由。
+        _auto_cat = None
+        _auto_vlm_on = auto_vlm
+        if _auto_vlm_on is None:
+            try:
+                from cloud_matting_config import get_cloud_matting_config as _gcav
+                _auto_vlm_on = bool(_gcav().get("auto_vlm_classify", True))
+            except Exception:  # noqa: BLE001
+                _auto_vlm_on = True
+        _has_user_input = bool(
+            box or polygon or click or blocks or vision_box
+            or vision_label or (meta or {}).get("prompt")
+        )
+        if _auto_vlm_on and (model in (None, "auto")) and not _has_user_input:
+            try:
+                import vision_client as _vc_cls
+                _cls = _vc_cls.classify_image(str(src), timeout=45)
+                if _cls and _cls.get("category"):
+                    _auto_cat = _cls["category"]
+                    _lbl = (_cls.get("label") or "").strip()
+                    if _lbl:
+                        vision_label = _lbl
+                    if meta is not None:
+                        meta["auto_classified"] = _auto_cat
+                        meta["auto_vlm_used"] = True
+            except Exception as _ce:  # noqa: BLE001
+                import logging as _lgc
+                _lgc.getLogger("matting_ai").warning(
+                    "auto VLM 分类失败，回退 MODNet 启发式: %s", _ce)
 
         # ☁️ 云端抠图优先（火山，豆包级像素质量）；失败回退下方本地链路。
         # 仅对「默认/智能/像素级」意图启用云端优先；用户显式选了本地特殊引擎
@@ -1801,7 +1838,12 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
 
                     _lg.getLogger("matting_ai").warning("auto 人像路由 MODNet 失败回退: %s", _e)
             # 复杂/非纯色背景 → 强制底层引擎为 BiRefNet 通用分割，复用下方选区逻辑。
-            model = "birefnet-general"
+            # logo/图标类（边缘锐利的扁平图形）：SAM 像素级分割远优于 BiRefNet 显著性
+            # （后者对 logo 易糊边）。SAM 失败自动回退 BiRefNet（下方 sam-matting 分支）。
+            if _auto_cat == "logo_graphic":
+                model = "sam-matting"
+            else:
+                model = "birefnet-general"
 
         # 🎨 纯色背景色度键（chroma key）引擎：用户显式选择时强制走，不依赖 ML 模型。
         # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）是「正解」，远稳于人像 matting。
