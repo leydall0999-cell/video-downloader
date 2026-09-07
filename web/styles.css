@@ -63,10 +63,12 @@ img { max-width: 100%; display: block; }
   border-bottom: 1px solid var(--line);
 }
 .header-inner {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 1rem; min-height: 60px;
+  display: flex; align-items: center;
+  /* 2026-09-08 用户要求：支持平台与会员中心两个按钮挨近；不用 space-between
+     （三元素会被均分拉开），改为 brand 推左、按钮组贴右紧挨 */
+  gap: .5rem; min-height: 60px;
 }
-.brand { display: flex; align-items: center; gap: .7rem; }
+.brand { display: flex; align-items: center; gap: .7rem; margin-right: auto; }
 .brand-mark {
   display: grid; place-items: center; width: 38px; height: 38px;
   border-radius: 11px; color: #fff;
@@ -1768,6 +1770,9 @@ img { max-width: 100%; display: block; }
   }
   /* 让 main 整体留出 200px 给侧栏（不是 padding-left，避免 wrap 里内容溢出右边） */
   main#main { margin-left: 200px; }
+  /* 2026-09-08 header 同步偏移 200px：header 的 .wrap 与 main 的 .wrap 必须同基准居中，
+     否则右上角「会员中心」按钮右缘与下方卡片右缘错开 ~100px（main 有 margin-left 而 header 没有） */
+  .site-header { padding-left: 200px; }
 }
 
 /* ---------------- 媒体库（桌面版功能） ---------------- */
