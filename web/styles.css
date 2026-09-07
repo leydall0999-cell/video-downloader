@@ -982,6 +982,8 @@ img { max-width: 100%; display: block; }
    同特异性 (0,1,0)，作者 CSS 写在后面会赢，导致 hidden 属性失效，
    未处理图片时仍露出"原图/处理后"两个黑框。特异性提到 (0,2,0) 必赢。 */
 .dw-result[hidden] { display: none; }
+/* 去水印结果底部操作行：下载 + 「丢到抠图区」并排对齐 */
+.dw-result-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .2rem; }
 .dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 /* 视频去水印结果：原视频/处理后上下堆叠（默认就是用户要的左下角竖排布局） */
 #dwVidResult .dw-compare { grid-template-columns: 1fr; }

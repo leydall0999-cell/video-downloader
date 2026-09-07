@@ -456,6 +456,7 @@
     dwImgOrig: $('dwImgOrig'),
     dwImgOut: $('dwImgOut'),
     dwImgDownload: $('dwImgDownload'),
+    dwImgToMatting: $('dwImgToMatting'),
     dwPdfPane: $('dwPdfPane'),
     dwPdfFile: $('dwPdfFile'),
     dwPdfMode: $('dwPdfMode'),
@@ -3349,7 +3350,7 @@
 
   // 分析整图元素块
   const matBlocksAnalyze = async () => {
-    const file = el.matFile && el.matFile.files && el.matFile.files[0];
+    const file = matSourceFile || (el.matFile && el.matFile.files && el.matFile.files[0]);
     if (!file || matBlockBusy) return;
     matBlockBusy = true;
     if (el.matBoxInfo) el.matBoxInfo.textContent = '🧲 正在识别图上的元素…';
@@ -3379,7 +3380,7 @@
 
   // 细分当前 hover/选中的块（拆连片主+副标题）
   const matBlockSplit = async () => {
-    const file = el.matFile && el.matFile.files && el.matFile.files[0];
+    const file = matSourceFile || (el.matFile && el.matFile.files && el.matFile.files[0]);
     const target = matBlockHover || (matBlockList.find(b => matBlockSel.has(b.id)));
     if (!file || !target || matBlockBusy) {
       if (el.matBoxInfo) el.matBoxInfo.textContent = '先移动鼠标指向想细分的块';
@@ -3754,8 +3755,10 @@
   // 保留 blob URL 不 revoke：matPoll 完成时 matOrig.src = matImgPreview.src 会再用到这个 URL，
   // 一旦 revoke，下一次 src 加载会 broken image（2026-09-02 实战：原图区黑底 + 蓝色 ? 占位）
   let matPreviewBlobUrl = null;
+  let matSourceFile = null;   // 抠图源文件：文件选择器 / 「去水印→抠图」按钮都经 matPreview 写入，matSubmit 优先读它
   const matPreview = (file) => {
     if (!file) return;
+    matSourceFile = file;
     if (matPreviewBlobUrl) URL.revokeObjectURL(matPreviewBlobUrl);
     matPreviewBlobUrl = URL.createObjectURL(file);
     el.matImgPreview.src = matPreviewBlobUrl;
@@ -3931,7 +3934,7 @@
       // 绝不触发"点选抠图"，否则两者打架（用户画套索点一下就变成直接抠图）。
       if (el.matBoxToggle && el.matBoxToggle.checked) return;
       if (matBusy) return;
-      const file = el.matFile && el.matFile.files && el.matFile.files[0];
+      const file = matSourceFile || (el.matFile && el.matFile.files && el.matFile.files[0]);
       if (!file) { if (el.matStatus) el.matStatus.textContent = '请先选择一张图片'; return; }
       const p = matBoxPoint(ev); if (!p) return;
       // 点选优先：清掉手动画的选区/套索，避免状态混淆
@@ -3945,9 +3948,49 @@
     el.matBtn.addEventListener('click', () => { if (!matBusy) matSubmit(); });
   }
 
+  // 去水印 → 抠图：把图片去水印结果直接送进抠图区（同一 dw 视图内的「一键抠图」子 tab）
+  if (el.dwImgToMatting) {
+    el.dwImgToMatting.addEventListener('click', async () => {
+      const src = el.dwImgOut && el.dwImgOut.src;
+      if (!src) { window.alert('请先完成图片去水印，再送进抠图区'); return; }
+      const btn = el.dwImgToMatting;
+      const origText = btn.textContent;
+      btn.disabled = true; btn.textContent = '传送中…';
+      try {
+        let file;
+        try {
+          // 优先取后端原图字节（最高保真）
+          const resp = await fetch(src);
+          if (!resp.ok) throw new Error('fetch ' + resp.status);
+          const blob = await resp.blob();
+          file = new File([blob], 'dewatered.png', { type: blob.type || 'image/png' });
+        } catch (_e) {
+          // 回退：用已解码像素在 canvas 重绘（同源/鉴权异常时仍可用）
+          const img = el.dwImgOut;
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth || img.width;
+          c.height = img.naturalHeight || img.height;
+          c.getContext('2d').drawImage(img, 0, 0);
+          const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+          file = new File([blob], 'dewatered.png', { type: 'image/png' });
+        }
+        // 写入抠图源（matPreview 会同步 matSourceFile，matSubmit 优先读它）
+        matPreview(file);
+        dwSwitchPane('matting');
+        if (el.matStatus) el.matStatus.textContent = '已载入去水印结果，选好抠图方式后点「开始抠图」';
+        btn.textContent = '已送入 ✅';
+      } catch (e) {
+        console.error('去水印→抠图 失败', e);
+        btn.textContent = '传送失败';
+      } finally {
+        setTimeout(() => { btn.disabled = false; btn.textContent = origText; }, 1500);
+      }
+    });
+  }
+
   const matSubmit = () => {
       if (matBusy) return;
-      const file = el.matFile && el.matFile.files && el.matFile.files[0];
+      const file = matSourceFile || (el.matFile && el.matFile.files && el.matFile.files[0]);
       if (!file) { el.matStatus.textContent = '请先选择一张图片'; return; }
       const approach = matApproachNow();
       const promptText = ((el.matPrompt && el.matPrompt.value) || '').trim();
