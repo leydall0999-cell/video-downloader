@@ -29,6 +29,7 @@ __all__ = [
     "h264_args",
     "hevc_args",
     "delogo_filter",
+    "audio_encode_args",
     "probe_encoder",
     "available_h264",
 ]
@@ -133,3 +134,37 @@ def delogo_filter(x: int, y: int, w: int, h: int, band: int = 10) -> str:
         f"[wm]crop={w}:{h}:{x}:{y},gblur=sigma={sigma}[blur];"
         f"[base][blur]overlay={x}:{y}"
     )
+
+
+# 有损音频格式：这些支持 -b:a 码率档位；flac/wav 为无损，忽略码率
+LOSSY_AUDIO = {"mp3", "m4a", "aac", "opus", "wma", "mp2"}
+
+
+def audio_encode_args(target: str, bitrate: str = "") -> list[str] | None:
+    """按目标音频格式 + 音质档位生成编码参数（LGPL 安全）。
+
+    音乐/音频转换专用：比 ``CONVERT_TARGETS`` 的固定参数多一个码率档位，
+    让用户可选 128k / 192k / 256k / 320k。无损格式（flac / wav）忽略码率。
+
+    :param target: 目标格式键（mp3 / m4a / aac / opus / flac / wav / wma / mp2）
+    :param bitrate: 音质档位字符串，如 ``"320k"``；留空则用各格式的默认档
+    :return: ffmpeg 参数列表；非音频格式返回 ``None``
+    """
+    t = (target or "").strip().lower()
+    br = (bitrate or "").strip()
+    if t == "mp3":
+        # 指定码率走 CBR（音乐场景更直观），否则用 VBR -q:a 4
+        return ["-vn", "-c:a", "libmp3lame"] + (["-b:a", br] if br else ["-q:a", "4"])
+    if t in ("m4a", "aac"):
+        return ["-vn", "-c:a", "aac", "-b:a", br or "192k"]
+    if t == "opus":
+        return ["-vn", "-c:a", "libopus", "-b:a", br or "128k"]
+    if t == "wma":
+        return ["-vn", "-c:a", "wmav2", "-b:a", br or "192k"]
+    if t == "mp2":
+        return ["-vn", "-c:a", "mp2", "-b:a", br or "192k"]
+    if t == "flac":
+        return ["-vn", "-c:a", "flac"]            # 无损，码率无效
+    if t == "wav":
+        return ["-vn", "-c:a", "pcm_s16le"]       # 无损，码率无效
+    return None

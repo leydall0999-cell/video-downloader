@@ -222,6 +222,9 @@ UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
 UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
 # 上传文件大小上限（字节），默认 2GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
 UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
+# 单个分片大小上限（字节），前端大文件用 64MB 分片、常规 32MB；超过即 413 拒绝。
+# 注意：convert.py 的 upload_chunk 路由引用此常量，缺省会令所有分片上传 500（含音乐 tab / 视频转换 tab 的网页上传路径）。
+UPLOAD_CHUNK_MAX = 64 * 1024 * 1024
 # 允许上传的视频后缀白名单
 UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
 # 允许上传的音频后缀白名单（桥接/合并模块复用分片上传 mode=store）
