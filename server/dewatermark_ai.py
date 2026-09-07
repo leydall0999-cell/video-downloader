@@ -38,6 +38,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from codec_utils import h264_args
+
 logger = logging.getLogger("vdl.dewatermark_ai")
 
 try:
@@ -775,9 +777,9 @@ def _videotoolbox_available(ffmpeg_bin: str) -> bool:
 
 
 def _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path):
-    """构造「逐帧 PNG → H.264 mp4」命令：VideoToolbox 硬编（macOS）优先，无则 libx264 软编。
+    """构造「逐帧 PNG → H.264 mp4」命令：VideoToolbox 硬编（macOS）优先，无则 libopenh264 软编。
 
-    硬编用 6000k 码率上限保画质（成片交付），软编沿用原 crf20 veryfast。
+    硬编用 6000k 码率上限保画质（成片交付），软编走 high 档（LGPL 构建无 libx264）。
     """
     cmd = [ffmpeg_bin, "-y", "-framerate", f"{fps:g}",
            "-i", os.path.join(src_frames, "%05d.png")]
@@ -787,7 +789,7 @@ def _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_pa
         cmd += ["-c:v", "h264_videotoolbox", "-profile:v", "main", "-level", "4.0",
                 "-b:v", "6000k"]
     else:
-        cmd += ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
+        cmd += h264_args(ffmpeg_bin, "high")
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
     if has_audio:
         cmd += ["-shortest"]
@@ -1254,7 +1256,7 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
         except Exception:
             has_audio = False
 
-        # 6) 重编码混音（VideoToolbox 硬编优先提速，无则 libx264 软编）
+        # 6) 重编码混音（VideoToolbox 硬编优先提速，无则 libopenh264 软编）
         cmd = _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path)
         _run_ffmpeg(cmd)
 

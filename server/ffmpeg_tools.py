@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from codec_utils import delogo_filter, h264_args
+
 
 def _safe_title(title: str) -> str:
     """清理文件名非法字符（给侧车标题用）。"""
@@ -160,8 +162,9 @@ def trim_video(video: Path, out_dir: Path | None = None, start: float = 0.0,
     s = max(0.0, float(start))
     cmd = [ffmpeg_bin, "-y", "-ss", f"{s}", "-i", str(video)]
     if reencode:
-        cmd += ["-c:v", "libx264", "-preset", "veryfast",
-                "-c:a", "aac", "-movflags", "+faststart"]
+        # LGPL 构建无 libx264：改由 codec_utils 选 VideoToolbox 硬编 / libopenh264 软编
+        cmd += h264_args(ffmpeg_bin, "balanced") + [
+            "-c:a", "aac", "-movflags", "+faststart"]
     else:
         cmd += ["-c", "copy"]
     if end and float(end) > s:
@@ -191,7 +194,7 @@ def crop_video(video: Path, out_dir: Path | None = None, crop_expr: str = "",
     ext = video.suffix.lstrip(".") or "mp4"
     out = _unique_out(video, "裁剪", ext)
     cmd = [ffmpeg_bin, "-y", "-i", str(video), "-vf", f"crop={_escape(crop_expr.strip())}",
-           "-c:v", "libx264", "-preset", "veryfast", "-c:a", "copy", str(out)]
+           *h264_args(ffmpeg_bin, "fast"), "-c:a", "copy", str(out)]
     try:
         _run(cmd)
     except Exception:
@@ -208,7 +211,7 @@ def compress_video(video: Path, out_dir: Path | None = None, scale_h: int = 720,
     out_dir = out_dir or video.parent
     out = _unique_out(video, f"压缩{int(scale_h)}p", "mp4")
     cmd = [ffmpeg_bin, "-y", "-i", str(video), "-vf", f"scale=-2:{int(scale_h)}",
-           "-c:v", "libx264", "-preset", "medium", "-crf", str(int(crf)),
+           *h264_args(ffmpeg_bin, "fast"),
            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
     try:
         _run(cmd)
@@ -230,7 +233,7 @@ def upscale_video(video: Path, out_dir: Path | None = None, factor: float = 2.0,
     if sharpen:
         vf += ",unsharp=5:5:1.0:5:5:0.0"
     cmd = [ffmpeg_bin, "-y", "-i", str(video), "-vf", vf,
-           "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+           *h264_args(ffmpeg_bin, "high"),
            "-c:a", "copy", str(out)]
     try:
         _run(cmd)
@@ -409,7 +412,8 @@ def remove_watermark(src: Path, out_dir: Path | None = None,
     if show:
         vf = f"drawbox=x={xv}:y={yv}:w={wv}:h={hv}:color=green@0.5:t=3"
     else:
-        vf = f"delogo=x={xv}:y={yv}:w={wv}:h={hv}:band={bv}"
+        # delogo 是 GPL 滤镜，LGPL 构建下不可用 → 用 crop+gblur+overlay 等价实现
+        vf = delogo_filter(xv, yv, wv, hv, bv)
     cmd = [ffmpeg_bin, "-y", "-i", str(src), "-vf", vf, "-c:a", "copy"]
     cmd.append(str(out))
     try:

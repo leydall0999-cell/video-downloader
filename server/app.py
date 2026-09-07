@@ -36,6 +36,8 @@ from pathlib import Path
 
 import platform_model as plat
 
+from codec_utils import h264_args as _h264_args, hevc_args as _hevc_args
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -130,20 +132,25 @@ FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/op
 #   libx264 medium  + -threads 0：约 22s
 # ultrafast 加 -crf 28 控制码率，避免文件因快速编码变成 3x 大小。
 # 默认走 ultrafast 满足"批量转换" 的速度诉求；要高质量请用 medium（保留 fast 兜底路径）。
+# LGPL 构建不含 libx264 / libx265（均属 GPL 库），改由 codec_utils 选择
+# VideoToolbox 硬件编码优先、libopenh264（BSD）软编回退。macOS 硬编比原
+# libx264 ultrafast 更快，故速度档继续沿用偏快的 "fast"。
+_H264_FAST = _h264_args(FFMPEG_BIN, "fast")
+_HEVC_FAST = _hevc_args(FFMPEG_BIN, "fast")
 CONVERT_TARGETS = {
-    # ---- 视频容器（ultrafast + -threads 0；-crf 28 控大小；HEVC 单独走 fast 是因为 ultrafast HEVC 仍较慢）----
-    "mp4":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac", "-movflags", "+faststart"],
-    "mov":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
-    "mkv":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    # ---- 视频容器（H.264 走 VideoToolbox 硬编；-threads 0 对硬编无效但无害，保留兼容）----
+    "mp4":   _H264_FAST + ["-threads", "0", "-c:a", "aac", "-movflags", "+faststart"],
+    "mov":   _H264_FAST + ["-threads", "0", "-c:a", "aac"],
+    "mkv":   _H264_FAST + ["-threads", "0", "-c:a", "aac"],
     "webm":  ["-c:v", "libvpx-vp9", "-threads", "0", "-c:a", "libopus", "-b:v", "1M"],
-    "avi":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "libmp3lame"],
-    "flv":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
-    "ts":    ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
-    "m4v":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "avi":   _H264_FAST + ["-threads", "0", "-c:a", "libmp3lame"],
+    "flv":   _H264_FAST + ["-threads", "0", "-c:a", "aac"],
+    "ts":    _H264_FAST + ["-threads", "0", "-c:a", "aac"],
+    "m4v":   _H264_FAST + ["-threads", "0", "-c:a", "aac"],
     "wmv":   ["-c:v", "msmpeg4", "-threads", "0", "-b:v", "4M", "-c:a", "wmav2"],
-    "3gp":   ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "0", "-c:a", "aac"],
+    "3gp":   _H264_FAST + ["-threads", "0", "-c:a", "aac"],
     "mpeg":  ["-c:v", "mpeg2video", "-threads", "0", "-b:v", "4M", "-c:a", "mp2"],
-    "hevc":  ["-c:v", "libx265", "-preset", "fast", "-threads", "0", "-crf", "30", "-c:a", "aac", "-tag:v", "hvc1"],
+    "hevc":  _HEVC_FAST + ["-threads", "0", "-c:a", "aac", "-tag:v", "hvc1"],
     # ---- 音频容器（解码多线程收益小，默认单线程）----
     "mp3":   ["-vn", "-c:a", "libmp3lame", "-q:a", "4"],
     "m4a":   ["-vn", "-c:a", "aac", "-b:a", "192k"],
@@ -942,7 +949,7 @@ def _apply_trim(src_path: str, in_dir: Path, start: float, end: float):
     try:
         subprocess.run(
             [FFMPEG_BIN, "-y", "-ss", f"{start:.3f}", "-i", str(src_path),
-             "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+             "-t", f"{dur:.3f}", *_h264_args(FFMPEG_BIN, "fast"),
              "-c:a", "aac", "-movflags", "+faststart", str(trim_out)],
             capture_output=True, text=True, timeout=1800,
         )

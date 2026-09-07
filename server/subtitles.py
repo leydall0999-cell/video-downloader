@@ -18,6 +18,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from codec_utils import h264_args
+
 
 # --------------------------------------------------------------------------- #
 # 工具
@@ -169,7 +171,8 @@ def burn_subtitle(video_path: Path, sub_path: Path, ffmpeg_bin: str = "ffmpeg") 
     cmd = [
         ffmpeg_bin, "-y", "-i", str(video_path),
         "-vf", vf,
-        "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
+        # LGPL 构建无 libx264：改用 VideoToolbox 硬编 / libopenh264 软编（烧字幕需 yuv420p）
+        *h264_args(ffmpeg_bin, "balanced", pix_fmt="yuv420p"),
         "-c:a", "copy",
         str(out_path),
     ]

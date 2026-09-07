@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import re
+from codec_utils import h264_args
 from fastapi import APIRouter
 from .core import _device_of
 
@@ -525,7 +526,7 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
             # gif 不应走视频重编码兜底，退回 mp4 编码参数
             vparams = app.CONVERT_TARGETS.get(out_format, app.CONVERT_TARGETS["mp4"])
             if out_format == "gif":
-                vparams = ["-c:v", "libx264", "-c:a", "aac"]
+                vparams = h264_args(app.FFMPEG_BIN, "balanced") + ["-c:a", "aac"]
             cmd = [app.FFMPEG_BIN, "-y"] + ins + extra + [
                 "-filter_complex", filt, "-map", "[v]", "-map", "[a]",
                 "-pix_fmt", "yuv420p"] + vparams + [str(out_path)]

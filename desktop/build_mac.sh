@@ -382,8 +382,27 @@ plutil -convert binary1 "$LPROJ/Localizable.strings"
 echo "   已注入 zh-Hans.lproj（Quit→退出 / Hide→隐藏 / About→关于 等，二进制格式）"
 
 echo "▶ 捆绑 ffmpeg + ffprobe"
-FF="$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)"
-FFPROBE="$(command -v ffprobe || echo /opt/homebrew/bin/ffprobe)"
+# ⚠️ 合规：必须捆绑 **LGPL 构建**（configure 不带 --enable-gpl）。
+# Homebrew 默认 ffmpeg 带 --enable-gpl + libx264/libx265，会令整个 ffmpeg 转为
+# GPL v2+，与「内置组件必须可商用」冲突。故优先取自编译的 LGPL 构建。
+# 先取环境变量，其次用户目录（/opt 常无写权限），最后 /opt
+LGPL_FF_DIR="${VDL_FFMPEG_LGPL_DIR:-$HOME/vdl-ffmpeg-lgpl}"
+[ -x "$LGPL_FF_DIR/bin/ffmpeg" ] || LGPL_FF_DIR="/opt/vdl-ffmpeg-lgpl"
+if [ -x "$LGPL_FF_DIR/bin/ffmpeg" ]; then
+  FF="$LGPL_FF_DIR/bin/ffmpeg"
+  FFPROBE="$LGPL_FF_DIR/bin/ffprobe"
+  echo "   使用 LGPL 构建：$FF"
+else
+  FF="$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)"
+  FFPROBE="$(command -v ffprobe || echo /opt/homebrew/bin/ffprobe)"
+  echo "   ⚠️  未找到 LGPL 构建（$LGPL_FF_DIR），回退系统 ffmpeg：$FF"
+fi
+# 硬校验：捆绑的二进制绝不能是 GPL 构建
+if "$FF" -version 2>/dev/null | grep -q -- "--enable-gpl"; then
+  echo "   ⚠️  警告：$FF 是 GPL 构建（含 libx264/libx265），商用分发有授权风险！"
+else
+  echo "   ✅ 已确认 LGPL 构建（无 --enable-gpl）"
+fi
 APP_BIN="$REPO/dist/VideoDownloader.app/Contents/MacOS"
 mkdir -p "$APP_BIN/bin"
 cp "$FF" "$APP_BIN/bin/ffmpeg"

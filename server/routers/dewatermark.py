@@ -9,6 +9,7 @@ import re as _re
 import subprocess as _subprocess
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
+from codec_utils import h264_args
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -414,7 +415,10 @@ def _preview_bitrate(info: dict) -> str:
 
 
 def _preview_encode_cmd(src: str, out: str, use_vt: bool, info: dict) -> list:
-    """构造预览转码命令：VideoToolbox 硬编（macOS）或 libx264 软编（Linux/回退）。"""
+    """构造预览转码命令：VideoToolbox 硬编（macOS）或 libopenh264 软编（回退）。
+
+    LGPL 构建下无 libx264，软编回退改用 libopenh264（BSD-2-Clause）。
+    """
     if use_vt:
         return [app.FFMPEG_BIN, "-y", "-i", str(src),
                 "-c:v", "h264_videotoolbox",
@@ -423,8 +427,7 @@ def _preview_encode_cmd(src: str, out: str, use_vt: bool, info: dict) -> list:
                 "-c:a", "aac", "-b:a", "128k",
                 "-movflags", "+faststart", str(out)]
     return [app.FFMPEG_BIN, "-y", "-i", str(src),
-            "-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
-            "-preset", "veryfast", "-crf", "26",
+            *h264_args(app.FFMPEG_BIN, "balanced"),
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart", str(out)]
 
@@ -851,8 +854,8 @@ def _run_preview_transcode(preview_id: str, src: str) -> None:
     macOS WKWebView 的 `<video>` 对 HEVC / H.264 high@L4 / 10-bit / yuv444 等编码直接黑屏
     （2026-08-29 实测）。优化策略（2026-08-29）：
       1) 若源已是 WebKit 可直接播放的格式 → 仅流拷贝（瞬时，不重编码）；
-      2) 否则优先 VideoToolbox 硬件编码（macOS 近实时），无硬编环境回退 libx264 软编。
-    任选路径失败都会回退到 libx264 软编，保证鲁棒。
+      2) 否则优先 VideoToolbox 硬件编码（macOS 近实时），无硬编环境回退 libopenh264 软编（BSD）。
+    任选路径失败都会回退到 libopenh264 软编，保证鲁棒。
     """
     job = app.DW_JOBS.get(preview_id)
     if not job:
@@ -887,11 +890,11 @@ def _run_preview_transcode(preview_id: str, src: str) -> None:
             tried = "videotoolbox"
         else:
             cmd = _preview_encode_cmd(src, out_path, False, info)
-            tried = "libx264"
+            tried = "软编(libopenh264)"
         proc = _subprocess.run(cmd, capture_output=True, timeout=1800)
         if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-            # 首选路径失败 → 回退 libx264 软编（最稳妥）
-            app.logger.warning("dw preview %s 首选[%s]失败，回退 libx264", preview_id, tried)
+            # 首选路径失败 → 回退 libopenh264 软编（最稳妥）
+            app.logger.warning("dw preview %s 首选[%s]失败，回退 libopenh264 软编", preview_id, tried)
             cmd = _preview_encode_cmd(src, out_path, False, info)
             proc = _subprocess.run(cmd, capture_output=True, timeout=1800)
             if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
