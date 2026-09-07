@@ -222,6 +222,62 @@ def _find_free_port(start: int = 8321, tries: int = 80) -> int:
                 return p
     return start
 
+def _update_active_port(p: int, lock_file=None) -> None:
+    """绑定成功后回写实际端口到全局变量与单实例锁文件，
+    保证原生窗口、connect 轮询、VdlApi 保存对话框全部指向真实监听端口。"""
+    global PORT, API_URL, URL
+    PORT = p
+    API_URL = f"http://{HOST}:{PORT}"
+    URL = f"http://{HOST}:{PORT}"
+    if lock_file is not None:
+        try:
+            lock_file.seek(0)
+            cur = lock_file.read().strip()
+            parts = cur.split()
+            pid = parts[0] if parts else os.getpid()
+            build = parts[2] if len(parts) >= 3 else ""
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.write(f"{pid} {PORT} {build}\n")
+            lock_file.flush()
+        except Exception:
+            pass
+
+def _run_server_with_retry(start_port: int, host: str, app_dir: str, lock_file=None) -> None:
+    """启动 uvicorn；若首端口绑定失败（EADDRINUSE 等），自动顺延到下一端口重试，
+    最多尝试 12 个端口，彻底消除“kill 旧实例后立刻启动新实例”的端口竞态导致的假启动。"""
+    import uvicorn
+    max_off = 12
+    last_err = None
+    for off in range(max_off):
+        p = start_port + off
+        try:
+            _update_active_port(p, lock_file)
+            _launch_log(f"尝试在端口 {p} 启动后端服务...")
+            uvicorn.run("app:app", app_dir=app_dir, host=host, port=p, log_level="info")
+            return
+        except OSError as e:
+            last_err = e
+            _launch_log(f"端口 {p} 绑定失败（{e}），自动重试下一端口 {p+1}")
+            continue
+        except SystemExit as e:
+            # 冻结版 uvicorn 在 bind 失败时抛 SystemExit(非0)，需当作可重试的绑定失败；
+            # 仅 code==0 视为干净退出，不再重试。
+            code = getattr(e, "code", 1) or 1
+            if code == 0:
+                return
+            last_err = e
+            _launch_log(f"端口 {p} 启动进程异常退出(code={code})，自动重试下一端口 {p+1}")
+            continue
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).lower()
+            if "address already in use" in msg or "bind" in msg:
+                last_err = e
+                _launch_log(f"端口 {p} 启动失败（{e}），自动重试下一端口 {p+1}")
+                continue
+            raise
+    _launch_log(f"所有候选端口({start_port}..{start_port+max_off-1})均绑定失败，后端无法启动: {last_err}")
+
 _env_port = (os.environ.get("VDL_PORT") or "").strip()
 PORT = int(_env_port) if _env_port else _find_free_port()
 HOST = "127.0.0.1"
@@ -1200,16 +1256,11 @@ def main() -> None:
         _activate_existing_window()
         sys.exit(0)
 
-    # 后台启动 FastAPI 服务
+    # 后台启动 FastAPI 服务（带 bind 失败自动顺延端口的兜底重试）
+    _app_dir = str(BASE) if getattr(sys, "frozen", False) else str(SERVER_DIR)
     server_thread = threading.Thread(
-        target=uvicorn.run,
-        kwargs={
-            "app": "app:app",
-            "app_dir": str(BASE) if getattr(sys, "frozen", False) else str(SERVER_DIR),
-            "host": HOST,
-            "port": PORT,
-            "log_level": "info",
-        },
+        target=_run_server_with_retry,
+        args=(PORT, HOST, _app_dir, _lock),
         daemon=True,
     )
     server_thread.start()
