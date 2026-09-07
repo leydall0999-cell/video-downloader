@@ -174,7 +174,16 @@ _stage_commentary() {
       ! -name '*.log' \
       -exec cp -R {} "$staging/scripts/" \;
   fi
-  [ -d "$src/models" ] && cp -R "$src/models" "$staging/"
+  # 2026-09-07: 不再随包预置 whisper 模型(改为首次按需下载, 省 ~141MB)。
+  # 只复制 models/ 下除 whisper-base 外的其它内容(若有)。
+  if [ -d "$src/models" ]; then
+    mkdir -p "$staging/models"
+    for _m in "$src/models"/*; do
+      [ -e "$_m" ] || continue
+      [ "$(basename "$_m")" = "whisper-base" ] && continue
+      cp -R "$_m" "$staging/models/"
+    done
+  fi
   [ -d "$src/assets" ] && cp -R "$src/assets" "$staging/"
   # 字幕自包含铁律：确保随包 assets/fonts 有真实中文字体，否则 PIPL 在打包机上字幕中文
   # 会回落到系统字体（用户机器缺中文字体时直接不显示 -> 用户看到的「没有字幕」）。
