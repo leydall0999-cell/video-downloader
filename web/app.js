@@ -9335,6 +9335,7 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.tabAppIntro) el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
   if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
+  if (el.tabMusicConvert) el.tabMusicConvert.addEventListener('click', () => switchView('musicconvert'));
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
@@ -9346,6 +9347,7 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabDw, 'dw'],
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
+    [el.sTabMusicConvert, 'musicconvert'],
   ];
   for (const [btn, view] of _sidebarPairs) {
     if (btn) btn.addEventListener('click', () => switchView(view));
