@@ -421,6 +421,20 @@
             <option value="gif">GIF（前5秒）</option>
           </select>
         </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="ucAudioOnly" /> <span class="uc-label">仅音频模式（各大平台下载音乐转格式）</span>
+        </label>
+        <label class="uc-field" id="ucAudioBitrateField" hidden>
+          <span class="uc-label">音质</span>
+          <select id="ucBulkAudioBitrate">
+            <option value="">默认（按格式）</option>
+            <option value="320k">320k 无损级（推荐）</option>
+            <option value="256k">256k 高</option>
+            <option value="192k">192k 标准</option>
+            <option value="128k">128k 省空间</option>
+            <option value="96k">96k 极低</option>
+          </select>
+        </label>
         <label class="uc-field">
           <span class="uc-label">分辨率</span>
           <select id="ucBulkRes">

@@ -36,7 +36,8 @@ from pathlib import Path
 
 import platform_model as plat
 
-from codec_utils import h264_args as _h264_args, hevc_args as _hevc_args
+from codec_utils import h264_args as _h264_args, hevc_args as _hevc_args, \
+    audio_encode_args as _audio_encode_args
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -174,6 +175,47 @@ CONVERT_EXT = {
 }
 # 纯音频目标（跳过视频滤镜/缩放/旋转分支）
 CONVERT_AUDIO = {"mp3", "m4a", "wav", "flac", "aac", "opus", "wma", "mp2"}
+
+# 音频目标支持的音质档位（音乐转换用；无损格式忽略码率）
+_AUDIO_BITRATE_PRESETS = {"320k", "256k", "192k", "128k", "96k"}
+
+# 音频编码器的固定前缀（无损格式不在此列，直接用 CONVERT_TARGETS）
+_AUDIO_ENC_PREFIX = {
+    "mp3": ["-vn", "-c:a", "libmp3lame"],
+    "m4a": ["-vn", "-c:a", "aac"],
+    "aac": ["-vn", "-c:a", "aac"],
+    "opus": ["-vn", "-c:a", "libopus"],
+    "wma": ["-vn", "-c:a", "wmav2"],
+    "mp2": ["-vn", "-c:a", "mp2"],
+}
+
+
+def _audio_encode_args(target: str, audio_bitrate: str) -> list:
+    """构造音频目标的编码参数（支持音质档位）。
+
+    返回空列表表示无有效档位，调用方应回退到 CONVERT_TARGETS[target]。
+    无损格式（wav/flac）忽略码率，直接返回固定表。
+    """
+    if target in ("wav", "flac"):
+        return CONVERT_TARGETS[target]
+    br = (audio_bitrate or "").strip().lower()
+    if not br:
+        return []
+    enc = _AUDIO_ENC_PREFIX.get(target)
+    if not enc:
+        return []
+    # 码率规范化：支持 "320k" / "320" / "2M"
+    try:
+        if br.endswith("m"):
+            kbps = int(float(br[:-1]) * 1000)
+        elif br.endswith("k"):
+            kbps = int(br[:-1])
+        else:
+            kbps = int(br)
+    except (ValueError, TypeError):
+        return []
+    kbps = max(32, min(512, kbps))
+    return enc + ["-b:a", f"{kbps}k"]
 
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
@@ -1583,10 +1625,12 @@ def _require_task(task_id: str, device_id: str = ""):
 
 def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 bitrate: str = "", audio: bool = True, rotate: int = 0,
-                remux: bool = False, src_is_temp: bool = False) -> None:
+                remux: bool = False, src_is_temp: bool = False,
+                audio_bitrate: str = "") -> None:
     """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。
     新增参数（上传转码用）：bitrate 视频码率、audio 是否保留音轨、
     rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损(-c copy)。
+    audio_bitrate：音频目标的音质档位（如 "320k"），支持音乐转换选码率。
     src_is_temp：src 是否为上传落盘的临时文件，True 时转码结束（成败都）
     清理，避免 UPLOAD_TMP 无限堆积；task 模式（已下载文件）必须为 False。
     """
@@ -1604,7 +1648,9 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
             # 仅换容器无损复制，忽略码率/分辨率/旋转（旋转需滤镜，与 -c copy 不兼容）
             cmd += ["-c", "copy"]
         else:
-            cmd += CONVERT_TARGETS[target]
+            # 音频目标 + 指定音质档位 → 动态参数覆盖固定表（128k/192k/256k/320k）
+            _aargs = _audio_encode_args(target, audio_bitrate) if audio_only else None
+            cmd += _aargs if _aargs else CONVERT_TARGETS[target]
             if not audio_only:
                 vf = []
                 if resolution != "original":

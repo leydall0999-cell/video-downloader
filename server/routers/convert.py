@@ -85,6 +85,7 @@ def create_upload_convert(
     resolution: str = app.Form("original"),
     bitrate: str = app.Form(""),
     audio: bool = app.Form(True),
+    audio_bitrate: str = app.Form(""),
     rotate: int = app.Form(0),
     remux: bool = app.Form(False),
     to_library: bool = app.Form(False),
@@ -99,8 +100,8 @@ def create_upload_convert(
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
     # 流式落盘并限制大小
     save_path = app.UPLOAD_TMP / f"up_{app.uuid.uuid4().hex[:12]}{suffix}"
     written = 0
@@ -141,7 +142,8 @@ def create_upload_convert(
             "device_id": _device_of(request),   # 设备隔离：上传转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
-                        resolution, bitrate, audio, rotate, remux, src_is_temp=True)
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=True,
+                        audio_bitrate=audio_bitrate)
     return {
         "job_id": job_id,
         "status": "running",
@@ -160,7 +162,8 @@ def _upload_parts(upload_id: str):
 
 
 def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, remux,
-                        to_library, device_id, src_name="", src_is_temp=True) -> tuple:
+                        to_library, device_id, src_name="", src_is_temp=True,
+                        audio_bitrate: str = "") -> tuple:
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
@@ -179,7 +182,8 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
             "device_id": device_id,   # 设备隔离：上传转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
-                        resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp)
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp,
+                        audio_bitrate=audio_bitrate)
     return job_id, out_path.name
 
 
@@ -190,6 +194,7 @@ class LocalConvertRequest(app.BaseModel):
     resolution: str = "original"
     bitrate: str = ""
     audio: bool = True
+    audio_bitrate: str = ""
     rotate: int = 0
     remux: bool = False
     to_library: bool = False
@@ -218,12 +223,13 @@ def convert_local_api(payload: LocalConvertRequest, request: app.Request) -> dic
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     resolved = _resolve_safe_local_path(payload.local_path)
     suffix = resolved.suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
     job_id, filename = _submit_convert_job(
         str(resolved), payload.target, payload.resolution, payload.bitrate,
         payload.audio, payload.rotate, payload.remux, payload.to_library,
         _device_of(request), src_name=resolved.name, src_is_temp=False,
+        audio_bitrate=payload.audio_bitrate,
     )
     return {
         "job_id": job_id,
@@ -299,6 +305,7 @@ def finish_upload_chunk(
     resolution: str = app.Form("original"),
     bitrate: str = app.Form(""),
     audio: bool = app.Form(True),
+    audio_bitrate: str = app.Form(""),
     rotate: int = app.Form(0),
     remux: bool = app.Form(False),
     to_library: bool = app.Form(False),
@@ -360,7 +367,8 @@ def finish_upload_chunk(
 
     job_id, out_name = _submit_convert_job(
         save_path, target, resolution, bitrate, audio, rotate, remux,
-        to_library, _device_of(request), src_name=filename)
+        to_library, _device_of(request), src_name=filename,
+        audio_bitrate=audio_bitrate)
     return {
         "job_id": job_id,
         "status": "running",

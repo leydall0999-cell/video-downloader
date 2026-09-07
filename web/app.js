@@ -405,6 +405,10 @@
     ucBulkRotate: $('ucBulkRotate'),
     ucBulkRemux: $('ucBulkRemux'),
     ucBulkLibrary: $('ucBulkLibrary'),
+    ucAudioOnly: $('ucAudioOnly'),
+    ucBulkAudioBitrate: $('ucBulkAudioBitrate'),
+    ucAudioBitrateField: $('ucAudioBitrateField'),
+    ucTitle: $('ucTitle'),
     ucBulkApplyBtn: $('ucBulkApplyBtn'),
     ucStartAllBtn: $('ucStartAllBtn'),
     ucStatus: $('ucStatus'),
@@ -1888,14 +1892,42 @@
     rotate: el.ucBulkRotate.value,
     remux: el.ucBulkRemux.checked,
     toLibrary: el.ucBulkLibrary.checked,
+    audio_bitrate: el.ucBulkAudioBitrate.value.trim(),
   });
+
+  // 仅音频模式开关：切换时重建输出格式下拉（音频格式专属）、显隐音质与视频参数
+  const toggleAudioMode = () => {
+    const on = el.ucAudioOnly.checked;
+    if (on) {
+      // 记住视频模式上次选中的格式，切回时恢复
+      if (!AUDIO_MODE_FMTS.includes(el.ucBulkTarget.value)) {
+        el.ucBulkTarget.dataset.prevVideo = el.ucBulkTarget.value;
+      }
+      el.ucBulkTarget.innerHTML = fmtOptions('mp3', true);
+    } else {
+      const prev = el.ucBulkTarget.dataset.prevVideo || 'mp4';
+      el.ucBulkTarget.innerHTML = fmtOptions(prev, false);
+    }
+    el.ucAudioBitrateField.hidden = !on;
+    // 视频专属参数（分辨率/码率/旋转/保留音轨/仅换容器）在音频模式下隐藏
+    [el.ucBulkRes, el.ucBulkBitrate, el.ucBulkRotate, el.ucBulkAudio, el.ucBulkRemux].forEach(c => {
+      const f = c.closest('.uc-field');
+      if (f) f.hidden = on;
+    });
+    if (el.ucTitle) el.ucTitle.textContent = on ? '音乐格式转换（仅音频）' : '视频格式转换';
+    el.ucStatus.textContent = on
+      ? '已切到「仅音频」：选输出格式 + 音质即可转各大平台下载的音乐'
+      : '';
+  };
 
   const ucApplyBulk = () => {
     const b = ucReadBulk();
     let n = 0;
     ucState.list.forEach(it => {
       if (it.status === 'pending') {
-        Object.assign(it, b); n++;
+        Object.assign(it, b);
+        it.audio_bitrate = b.audio_bitrate;
+        n++;
       }
     });
     renderUcList();
@@ -1904,9 +1936,16 @@
 
   // 输出格式下拉选项（格式列表来自节点配置，缺省回退硬编码；音频类标注「仅音频」）
   const AUDIO_ONLY_FMTS = ['mp3','m4a','aac','wav','flac','ogg','opus','wma','mp2'];
-  const fmtOptions = (val) => (node.convertTargets && node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','3gp','mpeg','hevc','mp3','m4a','wav','flac','aac','opus','wma','mp2','gif'])
-    .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${AUDIO_ONLY_FMTS.includes(v)?'（仅音频）':''}${v==='gif'?'（前5秒）':''}${v==='hevc'?'（H.265 省空间）':''}</option>`)
-    .join('');
+  // 仅音频模式可选格式（与后端 CONVERT_AUDIO 严格一致，不含 ogg 等未支持格式）
+  const AUDIO_MODE_FMTS = ['mp3','m4a','wav','flac','aac','opus','wma','mp2'];
+  const fmtOptions = (val, audioOnly=false) => {
+    const base = audioOnly
+      ? AUDIO_MODE_FMTS
+      : (node.convertTargets && node.convertTargets.length ? node.convertTargets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','3gp','mpeg','hevc','mp3','m4a','wav','flac','aac','opus','wma','mp2','gif']);
+    return base
+      .map(v => `<option value="${v}"${v===val?' selected':''}>${v.toUpperCase()}${AUDIO_ONLY_FMTS.includes(v)?'（仅音频）':''}${v==='gif'?'（前5秒）':''}${v==='hevc'?'（H.265 省空间）':''}</option>`)
+      .join('');
+  };
 
   const renderUcList = () => {
     const list = ucState.list;
@@ -1979,7 +2018,7 @@
           </div>
           <div class="uc-item-side">
             <label class="sr-only" for="ucItemTarget-${it.id}">输出格式</label>
-            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled} title="${targetTitle}">${fmtOptions(it.target)}</select>
+            <select id="ucItemTarget-${it.id}" data-act="target" ${targetDisabled} title="${targetTitle}">${fmtOptions(it.target, el.ucAudioOnly.checked)}</select>
             ${startHtml}
             ${downloadHtml}
             <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
@@ -2002,6 +2041,7 @@
           id: ucState.nextId++, file: null, localPath: f, name,
           target: b.target, res: b.res, bitrate: b.bitrate,
           audio: b.audio, rotate: b.rotate, remux: b.remux, toLibrary: b.toLibrary,
+          audio_bitrate: b.audio_bitrate,
           status: 'pending', jobId: null, progress: 0,
           errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
         });
@@ -2011,6 +2051,7 @@
           id: ucState.nextId++, file: f, localPath: null, name: f.name,
           target: b.target, res: b.res, bitrate: b.bitrate,
           audio: b.audio, rotate: b.rotate, remux: b.remux, toLibrary: b.toLibrary,
+          audio_bitrate: b.audio_bitrate,
           status: 'pending', jobId: null, progress: 0,
           errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
         });
@@ -2257,6 +2298,7 @@
           rotate: +item.rotate || 0,
           remux: item.remux,
           to_library: item.toLibrary,
+          audio_bitrate: item.audio_bitrate || '',
         }),
         headers: { 'Content-Type': 'application/json' },
       }).then(data => {
@@ -2293,6 +2335,7 @@
     form.append('rotate', item.rotate);
     form.append('remux', item.remux ? 'true' : 'false');
     form.append('to_library', item.toLibrary ? 'true' : 'false');
+    form.append('audio_bitrate', item.audio_bitrate || '');
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
@@ -2893,6 +2936,7 @@
   wireSaveConvertDownload(mcListEl);
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
+  if (el.ucAudioOnly) el.ucAudioOnly.addEventListener('change', toggleAudioMode);
   el.ucStartAllBtn.addEventListener('click', () => {
     // 批量开始转码：所有「已上传·待转码 + 失败」行统一重置并提交（2026-08-28 支持失败重试）
     const failed = ucState.list.filter(x => x.status === 'failed');
