@@ -455,6 +455,15 @@ def matting_image_status(job_id: str) -> dict:
         "cloud_used": job.get("cloud_used", False),
         "cloud_provider": job.get("cloud_provider", ""),
         "cloud_error": job.get("cloud_error", ""),
+        # 🛡️ 双保险（本地优先 + 质量自检）诊断字段：前端据此显示提示 / 自动升级状态 / 手动升级按钮
+        "local_first": job.get("local_first", False),
+        "local_engine": job.get("local_engine", ""),
+        "local_simple": job.get("local_simple", False),
+        "local_quality_ok": job.get("local_quality_ok", None),
+        "local_quality_bad": job.get("local_quality_bad", False),
+        "local_quality_reason": job.get("local_quality_reason", ""),
+        "local_auto_escalated": job.get("local_auto_escalated", False),
+        "forced_cloud": job.get("forced_cloud", False),
     }
 
 
