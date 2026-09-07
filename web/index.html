@@ -97,6 +97,7 @@
       </div>
       <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert" title="视频格式转换"><span class="sidebar-item-icon" aria-hidden="true">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
       <button type="button" class="sidebar-item" data-view="musicconvert" id="sTabMusicConvert" title="音乐格式转换"><span class="sidebar-item-icon" aria-hidden="true">🎵</span><span class="sidebar-item-label">音乐转换</span></button>
+      <button type="button" class="sidebar-item" data-view="imageconvert" id="sTabImageConvert" title="图片格式转换"><span class="sidebar-item-icon" aria-hidden="true">🖼️</span><span class="sidebar-item-label">图片转换</span></button>
       <button type="button" class="sidebar-item" data-view="bridge" id="sTabBridge" title="视频 / 音频桥接"><span class="sidebar-item-icon" aria-hidden="true">🔗</span><span class="sidebar-item-label">视频/音频桥接</span></button>
       <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
     </div>
@@ -119,6 +120,7 @@
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
+        <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">🖼️ 图片转换</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -533,6 +535,74 @@
     </div>
 
     <span class="convert-status" id="musStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- 图片格式转换视图（独立 tab；LGPL ffmpeg 单帧转码，PNG/JPG/WebP/BMP/TIFF/GIF） -->
+  <section id="imageConvertView" class="panel" hidden aria-labelledby="imgTitle">
+    <h2 id="imgTitle" class="guide-title">🖼️ 图片格式转换</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      在 PNG / JPG / WebP / BMP / TIFF / GIF 之间互转。可调质量、按长边缩放；
+      转 JPG/BMP 时透明区自动填白底（可关）。本地完成，不上传云端。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="imgAddBtn">添加图片</button>
+      <input type="file" id="imgFileInput" accept="image/*,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="imgClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="imgCount">尚未添加图片</span>
+    </div>
+
+    <ul class="uc-list" id="imgList" aria-live="polite"></ul>
+
+    <div class="uc-bulk" id="imgBulk">
+      <h3 class="card-title">默认输出（应用到所有未开始项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">输出格式</span>
+          <select id="imgBulkTarget">
+            <option value="png">PNG（无损·透明）</option>
+            <option value="jpg">JPG（通用）</option>
+            <option value="webp">WebP（更小）</option>
+            <option value="bmp">BMP</option>
+            <option value="tiff">TIFF</option>
+            <option value="gif">GIF</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">质量（JPG/WebP）</span>
+          <select id="imgBulkQuality">
+            <option value="">默认（按格式）</option>
+            <option value="100">100（最高）</option>
+            <option value="90">90（推荐）</option>
+            <option value="80">80（更小）</option>
+            <option value="70">70（最小）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">尺寸（长边像素）</span>
+          <select id="imgBulkResize">
+            <option value="0">保持原尺寸</option>
+            <option value="3840">3840（4K）</option>
+            <option value="2560">2560（2K）</option>
+            <option value="1920">1920（1080P）</option>
+            <option value="1280">1280</option>
+            <option value="800">800（缩略图）</option>
+          </select>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="imgBulkFlatten" checked /> <span class="uc-label">JPG/BMP 透明区填白底</span>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="imgBulkLibrary" /> <span class="uc-label">完成后存入媒体库</span>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="imgBulkApplyBtn">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="imgStartAllBtn">开始转换</button>
+      </div>
+    </div>
+
+    <span class="convert-status" id="imgStatus" aria-live="polite"></span>
   </section>
 
   <!-- 视频/音频桥接视图（桌面端独立入口；网页端也能从视频格式转换页进入） -->

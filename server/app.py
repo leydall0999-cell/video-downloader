@@ -163,6 +163,13 @@ CONVERT_TARGETS = {
     "mp2":   ["-vn", "-c:a", "mp2", "-b:a", "192k"],
     # ---- 动图 ----
     "gif":   ["-t", "5", "-vf", "fps=10,scale=480:-1:flags=lanczos"],
+    # ---- 图片（单帧；jpg/webp 质量档由 _image_encode_args 覆盖）----
+    "png":   [],
+    "jpg":   ["-q:v", "5"],
+    "jpeg":  ["-q:v", "5"],
+    "webp":  ["-q:v", "80"],
+    "bmp":   [],
+    "tiff":  [],
 }
 # 输出文件后缀（hevc 编码进 mp4 容器，其余与键同名）
 CONVERT_EXT = {
@@ -172,9 +179,15 @@ CONVERT_EXT = {
     "mp3": "mp3", "m4a": "m4a", "wav": "wav", "flac": "flac",
     "aac": "aac", "opus": "opus", "wma": "wma", "mp2": "mp2",
     "gif": "gif",
+    "png": "png", "jpg": "jpg", "jpeg": "jpg",
+    "webp": "webp", "bmp": "bmp", "tiff": "tiff",
 }
 # 纯音频目标（跳过视频滤镜/缩放/旋转分支）
 CONVERT_AUDIO = {"mp3", "m4a", "wav", "flac", "aac", "opus", "wma", "mp2"}
+# 纯图片目标（图片转换 tab；单帧输出，无音轨）
+CONVERT_IMAGE = {"png", "jpg", "jpeg", "webp", "bmp", "tiff"}
+# 不支持 alpha 透明的图片目标（转码时需白底合成，避免透明区变黑）
+IMAGE_NO_ALPHA = {"jpg", "jpeg", "bmp"}
 
 # 音频目标支持的音质档位（音乐转换用；无损格式忽略码率）
 _AUDIO_BITRATE_PRESETS = {"320k", "256k", "192k", "128k", "96k"}
@@ -217,6 +230,69 @@ def _audio_encode_args(target: str, audio_bitrate: str) -> list:
     kbps = max(32, min(512, kbps))
     return enc + ["-b:a", f"{kbps}k"]
 
+
+def _image_encode_args(target: str, quality: int = 0, resize: int = 0,
+                       flatten_alpha: bool = True) -> list:
+    """构造图片目标的 ffmpeg 参数（图片转换 tab 用）。
+
+    - quality：0-100 质量档，仅 jpg(mjpeg -q:v 2~31 反向映射) 与 webp(libwebp 直接用) 生效；
+      png/bmp/tiff 无损，忽略。
+    - resize：长边像素（>0 时较长边缩到该值、短边等比 -1），0=保持原尺寸。
+    - flatten_alpha：jpg/bmp 不支持透明，把 RGBA 白底合成（drawbox 白底 + overlay），
+      避免透明区默认变黑；png/webp/tiff 保留 alpha。
+    返回插入到输出路径之前的参数列表（含 -vf / -filter_complex）。
+    """
+    target = "jpg" if target == "jpeg" else target
+    try:
+        quality = int(quality or 0)
+    except (TypeError, ValueError):
+        quality = 0
+    try:
+        resize = int(resize or 0)
+    except (TypeError, ValueError):
+        resize = 0
+    args: list = []
+    scale_expr = ""
+    if resize > 0:
+        # 长边缩放（只缩不放）：横图缩宽、竖图缩高，min() 保证原图更小时保持原尺寸
+        scale_expr = (f"scale='if(gt(iw,ih),min({resize},iw),-1)':'if(gt(ih,iw),min({resize},ih),-1)'")
+    if target in IMAGE_NO_ALPHA and flatten_alpha:
+        # 白底合成（filter_complex 带 label，不能用 -vf 链）：scale 后 split 出
+        # 背景 drawbox 填白，再把带 alpha 的前景 overlay 回去
+        graph = ("[0:v]" + (scale_expr + "," if scale_expr else "")
+                 + "format=rgba,split=2[fg][bg];"
+                 "[bg]drawbox=t=fill:c=white[bgw];"
+                 "[bgw][fg]overlay=format=auto[out]")
+        args += ["-filter_complex", graph, "-map", "[out]"]
+    elif scale_expr:
+        args += ["-vf", scale_expr]
+    if target == "jpg":
+        if quality > 0:
+            # UI 质量 100→最好，mjpeg -q:v 1(最好)~31(最差)：线性反向映射，钳到 [2,31]
+            qscale = max(2, min(31, round(31 - (quality / 100.0) * 30)))
+            args += ["-q:v", str(qscale)]
+    return args
+
+
+def _convert_image_webp(src: str, out: "Path", quality: int = 0, resize: int = 0) -> None:
+    """WebP 转码（图片转换 tab）：捆绑的 LGPL ffmpeg 没有 libwebp 编码器，
+    用 Pillow（MIT-CMU 许可，可商用，已随包捆绑）直接编码。保留 alpha 透明。"""
+    from PIL import Image
+    img = Image.open(src)
+    try:
+        resize = int(resize or 0)
+    except (TypeError, ValueError):
+        resize = 0
+    if resize > 0 and max(img.size) > resize:
+        scale = resize / float(max(img.size))   # 只缩不放
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+                         Image.LANCZOS)
+    try:
+        quality = int(quality or 0)
+    except (TypeError, ValueError):
+        quality = 0
+    img.save(out, "WEBP", quality=max(1, min(100, quality or 80)), method=4)
+
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
 UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
@@ -229,6 +305,8 @@ UPLOAD_CHUNK_MAX = 64 * 1024 * 1024
 UPLOAD_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".m4v", ".ts", ".wmv", ".mpeg", ".mpg"}
 # 允许上传的音频后缀白名单（桥接/合并模块复用分片上传 mode=store）
 UPLOAD_AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".oga", ".wma"}
+# 允许上传的图片后缀白名单（图片转换 tab；.gif 同时可作图片输入）
+UPLOAD_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 
 # ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
 DW_DIR = DOWNLOAD_DIR / "dewatermark"
@@ -1629,11 +1707,17 @@ def _require_task(task_id: str, device_id: str = ""):
 def _run_convert(job_id: str, src: str, target: str, resolution: str,
                 bitrate: str = "", audio: bool = True, rotate: int = 0,
                 remux: bool = False, src_is_temp: bool = False,
-                audio_bitrate: str = "") -> None:
+                audio_bitrate: str = "", image_quality: int = 0,
+                resize: int = 0, flatten_alpha: bool = True,
+                is_image: bool = False) -> None:
     """后台线程：ffmpeg 转码，更新 CONVERT_JOBS 状态。
     新增参数（上传转码用）：bitrate 视频码率、audio 是否保留音轨、
     rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损(-c copy)。
     audio_bitrate：音频目标的音质档位（如 "320k"），支持音乐转换选码率。
+    image_quality/resize/flatten_alpha：图片目标（CONVERT_IMAGE）的质量档、
+    长边像素缩放、不支持 alpha 的目标是否白底合成（图片转换 tab 用）。
+    is_image：图片转换 tab 显式标记（gif 同名目标在视频 tab 是"视频→动图"、
+    在图片 tab 是"图片→gif"，二者参数不同，必须靠此标志分流）。
     src_is_temp：src 是否为上传落盘的临时文件，True 时转码结束（成败都）
     清理，避免 UPLOAD_TMP 无限堆积；task 模式（已下载文件）必须为 False。
     """
@@ -1643,54 +1727,66 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
     out = None
     try:
         out = Path(job["out_path"])
-        cmd = [FFMPEG_BIN, "-y", "-i", src]
         audio_only = target in CONVERT_AUDIO
-        if target == "gif":
-            cmd += CONVERT_TARGETS["gif"]
-        elif remux and rotate == 0:
-            # 仅换容器无损复制，忽略码率/分辨率/旋转（旋转需滤镜，与 -c copy 不兼容）
-            cmd += ["-c", "copy"]
+        if target == "webp" and (is_image or target in CONVERT_IMAGE):
+            # WebP 特例：捆绑的 LGPL ffmpeg 无 libwebp 编码器，改用 Pillow（MIT，已随包捆绑）
+            # 直接出图（保留 alpha、等比只缩不放），不走 ffmpeg。
+            job["stage"] = "转码中"
+            job["progress"] = 60
+            _convert_image_webp(src, out, image_quality, resize)
+            if not out.exists() or out.stat().st_size == 0:
+                raise RuntimeError("WebP 转换未产出有效文件")
         else:
-            # 音频目标 + 指定音质档位 → 动态参数覆盖固定表（128k/192k/256k/320k）
-            _aargs = _audio_encode_args(target, audio_bitrate) if audio_only else None
-            cmd += _aargs if _aargs else CONVERT_TARGETS[target]
-            if not audio_only:
-                vf = []
-                if resolution != "original":
-                    h = {"1080": "1080", "720": "720", "480": "480"}.get(resolution)
-                    if h:
-                        vf.append(f"scale=-2:{h}")
-                if rotate in (90, 180, 270):
-                    tf = {90: "transpose=1", 180: "transpose=3", 270: "transpose=2"}[rotate]
-                    vf.append(tf)
-                if vf:
-                    cmd += ["-vf", ",".join(vf)]
-                if bitrate:
-                    cmd += ["-b:v", str(bitrate)]
-                if not audio:
-                    cmd += ["-an"]
-        cmd.append(str(out))
-        job["stage"] = "转码中"
-        job["progress"] = 0
-        # 流式读取 ffmpeg stderr，解析总时长与当前进度，实时回写进度百分比
-        _re_dur = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
-        _re_time = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
-        total_dur = 0.0
-        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, bufsize=1, text=True)
-        for line in proc.stderr:
-            if not total_dur:
-                m = _re_dur.search(line)
-                if m:
-                    total_dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-            m = _re_time.search(line)
-            if m and total_dur > 0:
-                cur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-                job["progress"] = int(min(100, max(0, cur / total_dur * 100)))
-        proc.wait(timeout=1800)
-        if proc.returncode != 0:
-            raise RuntimeError("ffmpeg 执行失败")
-        if not out.exists() or out.stat().st_size == 0:
-            raise RuntimeError("ffmpeg 未产出有效文件")
+            cmd = [FFMPEG_BIN, "-y", "-i", src]
+            if target in CONVERT_IMAGE or (is_image and target == "gif"):
+                # 图片：单帧输出，无音轨；质量/缩放/白底合成见 _image_encode_args
+                cmd += _image_encode_args(target, image_quality, resize, flatten_alpha)
+            elif target == "gif":
+                cmd += CONVERT_TARGETS["gif"]
+            elif remux and rotate == 0:
+                # 仅换容器无损复制，忽略码率/分辨率/旋转（旋转需滤镜，与 -c copy 不兼容）
+                cmd += ["-c", "copy"]
+            else:
+                # 音频目标 + 指定音质档位 → 动态参数覆盖固定表（128k/192k/256k/320k）
+                _aargs = _audio_encode_args(target, audio_bitrate) if audio_only else None
+                cmd += _aargs if _aargs else CONVERT_TARGETS[target]
+                if not audio_only:
+                    vf = []
+                    if resolution != "original":
+                        h = {"1080": "1080", "720": "720", "480": "480"}.get(resolution)
+                        if h:
+                            vf.append(f"scale=-2:{h}")
+                    if rotate in (90, 180, 270):
+                        tf = {90: "transpose=1", 180: "transpose=3", 270: "transpose=2"}[rotate]
+                        vf.append(tf)
+                    if vf:
+                        cmd += ["-vf", ",".join(vf)]
+                    if bitrate:
+                        cmd += ["-b:v", str(bitrate)]
+                    if not audio:
+                        cmd += ["-an"]
+            cmd.append(str(out))
+            job["stage"] = "转码中"
+            job["progress"] = 0
+            # 流式读取 ffmpeg stderr，解析总时长与当前进度，实时回写进度百分比
+            _re_dur = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+            _re_time = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+            total_dur = 0.0
+            proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, bufsize=1, text=True)
+            for line in proc.stderr:
+                if not total_dur:
+                    m = _re_dur.search(line)
+                    if m:
+                        total_dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                m = _re_time.search(line)
+                if m and total_dur > 0:
+                    cur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                    job["progress"] = int(min(100, max(0, cur / total_dur * 100)))
+            proc.wait(timeout=1800)
+            if proc.returncode != 0:
+                raise RuntimeError("ffmpeg 执行失败")
+            if not out.exists() or out.stat().st_size == 0:
+                raise RuntimeError("ffmpeg 未产出有效文件")
         # 可选：存入媒体库（DOWNLOAD_DIR 磁盘目录，scan_library 会自动收录）
         if job.get("to_library"):
             dest = DOWNLOAD_DIR / out.name
@@ -1704,6 +1800,7 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
             except Exception:
                 job["library_id"] = ""
         job["status"] = "completed"
+        job["progress"] = 100
         logger.info("convert %s done -> %s", job_id, out.name)
     except Exception as e:
         job["status"] = "failed"

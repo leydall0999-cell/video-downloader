@@ -89,19 +89,25 @@ def create_upload_convert(
     rotate: int = app.Form(0),
     remux: bool = app.Form(False),
     to_library: bool = app.Form(False),
+    image_quality: int = app.Form(0),
+    resize: int = app.Form(0),
+    flatten_alpha: bool = app.Form(True),
+    is_image: bool = app.Form(False),
     request: app.Request = None,
 ) -> dict:
     """上传本地视频 → 直接转码（复用 ffmpeg 管线），无需先下载。
     参数：target 目标格式、resolution 分辨率、bitrate 视频码率、audio 是否保留音轨、
     rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损、to_library 完成后存入媒体库。
+    图片目标（png/jpg/webp/bmp/tiff）另用 image_quality/resize/flatten_alpha。
     """
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
+    if (suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS
+            and suffix not in app.UPLOAD_IMAGE_EXTS):
+        raise app.HTTPException(status_code=409, detail="请上传视频、音频或图片文件")
     # 流式落盘并限制大小
     save_path = app.UPLOAD_TMP / f"up_{app.uuid.uuid4().hex[:12]}{suffix}"
     written = 0
@@ -143,7 +149,8 @@ def create_upload_convert(
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
                         resolution, bitrate, audio, rotate, remux, src_is_temp=True,
-                        audio_bitrate=audio_bitrate)
+                        audio_bitrate=audio_bitrate, image_quality=image_quality,
+                        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return {
         "job_id": job_id,
         "status": "running",
@@ -163,7 +170,9 @@ def _upload_parts(upload_id: str):
 
 def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, remux,
                         to_library, device_id, src_name="", src_is_temp=True,
-                        audio_bitrate: str = "") -> tuple:
+                        audio_bitrate: str = "", image_quality: int = 0,
+                        resize: int = 0, flatten_alpha: bool = True,
+                        is_image: bool = False) -> tuple:
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
@@ -183,7 +192,8 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
                         resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp,
-                        audio_bitrate=audio_bitrate)
+                        audio_bitrate=audio_bitrate, image_quality=image_quality,
+                        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return job_id, out_path.name
 
 
@@ -198,6 +208,11 @@ class LocalConvertRequest(app.BaseModel):
     rotate: int = 0
     remux: bool = False
     to_library: bool = False
+    # 图片目标专用：质量档(0-100)、长边像素(0=原尺寸)、jpg/bmp 是否白底合成
+    image_quality: int = 0
+    resize: int = 0
+    flatten_alpha: bool = True
+    is_image: bool = False
 
 
 def _resolve_safe_local_path(path: str) -> app.Path:
@@ -223,13 +238,16 @@ def convert_local_api(payload: LocalConvertRequest, request: app.Request) -> dic
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     resolved = _resolve_safe_local_path(payload.local_path)
     suffix = resolved.suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
+    if (suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS
+            and suffix not in app.UPLOAD_IMAGE_EXTS):
+        raise app.HTTPException(status_code=409, detail="请上传视频、音频或图片文件")
     job_id, filename = _submit_convert_job(
         str(resolved), payload.target, payload.resolution, payload.bitrate,
         payload.audio, payload.rotate, payload.remux, payload.to_library,
         _device_of(request), src_name=resolved.name, src_is_temp=False,
-        audio_bitrate=payload.audio_bitrate,
+        audio_bitrate=payload.audio_bitrate, image_quality=payload.image_quality,
+        resize=payload.resize, flatten_alpha=payload.flatten_alpha,
+        is_image=payload.is_image,
     )
     return {
         "job_id": job_id,
@@ -310,6 +328,10 @@ def finish_upload_chunk(
     remux: bool = app.Form(False),
     to_library: bool = app.Form(False),
     mode: str = app.Form("convert"),
+    image_quality: int = app.Form(0),
+    resize: int = app.Form(0),
+    flatten_alpha: bool = app.Form(True),
+    is_image: bool = app.Form(False),
     request: app.Request = None,
 ) -> dict:
     """分片上传收尾：校验分片齐全 → 顺序合并 → 精确校验总大小 → 提交转码 job。
@@ -322,8 +344,9 @@ def finish_upload_chunk(
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
+    if (suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS
+            and suffix not in app.UPLOAD_IMAGE_EXTS):
+        raise app.HTTPException(status_code=409, detail="请上传视频、音频或图片文件")
     parts = _upload_parts(upload_id)
     if len(parts) != total:
         raise app.HTTPException(status_code=400, detail=f"分片不完整（{len(parts)}/{total}），请重试")
@@ -368,7 +391,8 @@ def finish_upload_chunk(
     job_id, out_name = _submit_convert_job(
         save_path, target, resolution, bitrate, audio, rotate, remux,
         to_library, _device_of(request), src_name=filename,
-        audio_bitrate=audio_bitrate)
+        audio_bitrate=audio_bitrate, image_quality=image_quality,
+        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return {
         "job_id": job_id,
         "status": "running",
