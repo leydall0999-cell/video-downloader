@@ -95,11 +95,12 @@ MODELS: dict[str, dict] = {
     },
     # ── 2026-09-07 新增：更好的本地引擎（均 MIT / Apache-2.0 可商用，替代「云端优先」的本地弱项）──
     "birefnet-matting": {
-        # BiRefNet HR-Matting 变体（与 birefnet-general 同架构，MIT），在 P3M-10k / Distinctions-646
+        # BiRefNet Matting 变体（与 birefnet-general 同架构，MIT），在 P3M-10k / Distinctions-646
         # 等 matting 数据集专训，输出**软 alpha**——发丝/玻璃/半透远优于 general（general 本质是
         # 显著性检测，硬边）。作为 auto 本地路径的质量核心引擎（替代 general）。
-        "filename": "BiRefNet_HR-matting-epoch_135.onnx",
-        "size_mb": 980,
+        # 标准 1024 版（非 HR），CPU 友好；HR 2048 版实测在本地 CPU 上 OOM/超时，故用 1024。
+        "filename": "BiRefNet-matting-epoch_100.onnx",
+        "size_mb": 927,
         "input_size": (1024, 1024),
         "norm": "max",
         "md5": "",
@@ -107,17 +108,18 @@ MODELS: dict[str, dict] = {
         "commercial": "yes",
         "desc": "BiRefNet 抠图版 · 软alpha·发丝/玻璃/半透专精（推荐·MIT）",
         "urls": [
-            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
-            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
-            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
-            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
-            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-matting-epoch_100.onnx",
+            "https://ghfast.top/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-matting-epoch_100.onnx",
+            "https://mirror.ghproxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-matting-epoch_100.onnx",
+            "https://gh-proxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-matting-epoch_100.onnx",
+            "https://github.moeyy.dev/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-matting-epoch_100.onnx",
         ],
     },
     "birefnet-portrait": {
         # BiRefNet 人像变体（同架构，MIT），发丝级连续 alpha，优于 general 的人像硬边。
+        # 标准 1024 版（非 HR），CPU 友好；源用官方 ZhengPeng7/BiRefNet v1（rembg 镜像对 portrait 偶发 502）。
         "filename": "BiRefNet-portrait-epoch_150.onnx",
-        "size_mb": 980,
+        "size_mb": 927,
         "input_size": (1024, 1024),
         "norm": "max",
         "md5": "",
@@ -125,11 +127,11 @@ MODELS: dict[str, dict] = {
         "commercial": "yes",
         "desc": "BiRefNet 人像版 · 发丝级连续 alpha（推荐·人像·MIT）",
         "urls": [
-            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
-            "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
-            "https://mirror.ghproxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
-            "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
-            "https://github.moeyy.dev/https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+            "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
+            "https://ghfast.top/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
+            "https://mirror.ghproxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
+            "https://gh-proxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
+            "https://github.moeyy.dev/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
         ],
     },
     "isnet-general-use": {
@@ -662,6 +664,10 @@ def _local_first_pass(rgb, W: int, H: int, category):
         return None
     if category == "person":
         eng = "birefnet-portrait" if _model_is_local("birefnet-portrait") else "birefnet-general"
+    elif category == "poster_text":
+        # 海报/文字/图形：用显著性模型(birefnet-general)而非 matting——
+        # matting(P3M 训练)对纯图形文字不敏感，会输出全背景(整图透明)；general 显著性更对路。
+        eng = "birefnet-general"
     else:
         eng = "birefnet-matting" if _model_is_local("birefnet-matting") else "birefnet-general"
     try:
@@ -1426,9 +1432,12 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             try:
                 _lp = _local_first_pass(rgb, W, H, _auto_cat)
                 if _lp is not None:
+                    _lp_cov = float(_lp["alpha"].mean())
+                    # 模型跑空（近全透明/全不透明）→ 视为退化，不采用本地结果，回退常规路径
+                    _lp_degenerate = _lp_cov < 0.01 or _lp_cov > 0.99
                     _lp_simple = _local_is_simple(_lp["alpha"], _auto_cat)
                     _lp_cloud = is_cloud_matting_mediakit_ready()
-                    if _lp_simple or not _lp_cloud:
+                    if (_lp_simple or not _lp_cloud) and not _lp_degenerate:
                         _save_out(_lp["rgba"], out)
                         if meta is not None:
                             meta["local_first"] = True
@@ -1990,6 +1999,9 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
             # （后者对 logo 易糊边）。SAM 失败自动回退 BiRefNet（下方 sam-matting 分支）。
             if _auto_cat == "logo_graphic":
                 model = "sam-matting"
+            elif _auto_cat == "poster_text":
+                # 海报/文字/图形：显著性模型(birefnet-general)比 matting 更对路（matting 对纯图形不敏感）
+                model = "birefnet-general"
             else:
                 # 复杂/非纯色背景 → 优先 BiRefNet 抠图版（软 alpha，发丝/玻璃/半透优于通用版），
                 # 无该变体时回退 birefnet-general。复用下方完整选区逻辑。
