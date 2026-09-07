@@ -161,9 +161,19 @@ _stage_commentary() {
     [ -e "$_old" ] && trash_path "$_old" >&2
   done
   mkdir -p "$staging"
-  # 白名单精选管线核心文件（排除 .git/work/input/output/.venv/__pycache__ 等 3.5G 垃圾）
+  # 白名单精选管线核心文件（排除 .git/work/input/output/.venv/.venv_qwen3tts/__pycache__ 等 3.5G+ 垃圾）
   cp "$src/process.py" "$staging/" 2>/dev/null || true
-  [ -d "$src/scripts" ] && cp -R "$src/scripts" "$staging/"
+  if [ -d "$src/scripts" ]; then
+    mkdir -p "$staging/scripts"
+    # 排除 Qwen3-TTS 专用虚拟环境（本机外部服务，端口 7871，不应随 App 分发）
+    # 同时排除 __pycache__、日志、.DS_Store 等构建/调试残留
+    find "$src/scripts" -mindepth 1 -maxdepth 1 \
+      ! -name '.venv*' \
+      ! -name '__pycache__' \
+      ! -name '.DS_Store' \
+      ! -name '*.log' \
+      -exec cp -R {} "$staging/scripts/" \;
+  fi
   [ -d "$src/models" ] && cp -R "$src/models" "$staging/"
   [ -d "$src/assets" ] && cp -R "$src/assets" "$staging/"
   # 字幕自包含铁律：确保随包 assets/fonts 有真实中文字体，否则 PIPL 在打包机上字幕中文
