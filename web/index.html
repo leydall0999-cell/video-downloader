@@ -96,6 +96,7 @@
         <span class="sidebar-group-en">Edit</span>
       </div>
       <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert" title="视频格式转换"><span class="sidebar-item-icon" aria-hidden="true">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
+      <button type="button" class="sidebar-item" data-view="musicconvert" id="sTabMusicConvert" title="音乐格式转换"><span class="sidebar-item-icon" aria-hidden="true">🎵</span><span class="sidebar-item-label">音乐转换</span></button>
       <button type="button" class="sidebar-item" data-view="bridge" id="sTabBridge" title="视频 / 音频桥接"><span class="sidebar-item-icon" aria-hidden="true">🔗</span><span class="sidebar-item-label">视频/音频桥接</span></button>
       <button type="button" class="sidebar-item" data-view="dw" id="sTabDw" title="图片 / PDF 去水印"><span class="sidebar-item-icon" aria-hidden="true">🧽</span><span class="sidebar-item-label">图片/PDF 去水印</span></button>
     </div>
@@ -117,6 +118,7 @@
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
+        <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -474,6 +476,63 @@
     </div>
 
     <span class="convert-status" id="ucStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- 音乐格式转换视图（独立 tab；复用后端音频转码，支持各平台下载音乐转格式） -->
+  <section id="musicConvertView" class="panel" hidden aria-labelledby="musTitle">
+    <h2 id="musTitle" class="guide-title">🎵 音乐格式转换</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      把下载的各平台音乐（或视频里的音轨）转成你想要的格式与音质。本地完成，不上传云端。
+      支持 MP3 / FLAC / M4A / WAV / AAC / Opus / WMA / MP2。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="musAddBtn">添加文件</button>
+      <input type="file" id="musFileInput" accept="audio/*,video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="musClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="musCount">尚未添加文件</span>
+    </div>
+
+    <ul class="uc-list" id="musList" aria-live="polite"></ul>
+
+    <div class="uc-bulk" id="musBulk">
+      <h3 class="card-title">默认输出（应用到所有未开始项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">输出格式</span>
+          <select id="musBulkTarget">
+            <option value="mp3">MP3（通用）</option>
+            <option value="flac">FLAC（无损）</option>
+            <option value="m4a">M4A（AAC）</option>
+            <option value="wav">WAV（无损）</option>
+            <option value="aac">AAC</option>
+            <option value="opus">Opus</option>
+            <option value="wma">WMA</option>
+            <option value="mp2">MP2</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">音质</span>
+          <select id="musBulkBitrate">
+            <option value="">默认（按格式）</option>
+            <option value="320k">320 kbps（高，推荐）</option>
+            <option value="256k">256 kbps</option>
+            <option value="192k">192 kbps（标准）</option>
+            <option value="128k">128 kbps（省空间）</option>
+            <option value="96k">96 kbps（极低）</option>
+          </select>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="musBulkLibrary" /> <span class="uc-label">完成后存入媒体库</span>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="musBulkApplyBtn">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="musStartAllBtn">开始转换</button>
+      </div>
+    </div>
+
+    <span class="convert-status" id="musStatus" aria-live="polite"></span>
   </section>
 
   <!-- 视频/音频桥接视图（桌面端独立入口；网页端也能从视频格式转换页进入） -->

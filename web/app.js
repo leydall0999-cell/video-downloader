@@ -413,6 +413,23 @@
     ucStartAllBtn: $('ucStartAllBtn'),
     ucStatus: $('ucStatus'),
 
+    // ---- 音乐格式转换视图（独立 tab，复用音频转码后端）----
+    tabMusicConvert: $('tabMusicConvert'),
+    sTabMusicConvert: $('sTabMusicConvert'),
+    musicConvertView: $('musicConvertView'),
+    musAddBtn: $('musAddBtn'),
+    musFileInput: $('musFileInput'),
+    musClearBtn: $('musClearBtn'),
+    musCount: $('musCount'),
+    musList: $('musList'),
+    musBulk: $('musBulk'),
+    musBulkTarget: $('musBulkTarget'),
+    musBulkBitrate: $('musBulkBitrate'),
+    musBulkLibrary: $('musBulkLibrary'),
+    musBulkApplyBtn: $('musBulkApplyBtn'),
+    musStartAllBtn: $('musStartAllBtn'),
+    musStatus: $('musStatus'),
+
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
     dwView: $('dwView'),
@@ -2955,6 +2972,276 @@
     ucEnsurePolling();   // 立即启动轮询，各进度实时可见
     wait.forEach(it => {
       ucFinishOne(it).catch(() => { /* 失败已在 ucFinishOne 标记 */ }).finally(() => ucPump());
+    });
+  });
+
+  // ===== 音乐格式转换（独立 tab，复用音频转码后端 /api/upload-chunk + /api/convert）=====
+  const MUS_AUDIO_FMTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'opus', 'wma', 'mp2'];
+  const MUS_CHUNK_SIZE = 32 * 1024 * 1024;
+  const MUS_BIG_CHUNK_SIZE = 64 * 1024 * 1024;
+  const musState = { list: [], nextId: 1, pollTimer: null };
+
+  const musDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  const musFormatSize = (b) => {
+    if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    if (b >= 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+    return b + ' B';
+  };
+  const musBuildOutputName = (it) => {
+    const base = (it.name || (it.file && it.file.name) || 'audio').replace(/\.[^.]+$/, '');
+    return `[${it.target}]${base}.${it.target}`;
+  };
+  const musEnsurePolling = () => {
+    if (musState.pollTimer) return;
+    musState.pollTimer = setInterval(musPollAll, UC_POLL_INTERVAL || 1500);
+  };
+  const musStopPolling = () => { if (musState.pollTimer) { clearInterval(musState.pollTimer); musState.pollTimer = null; } };
+
+  const musRender = () => {
+    const list = musState.list;
+    el.musCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
+    el.musClearBtn.hidden = list.length === 0;
+    el.musStartAllBtn.disabled = !list.some(it => it.status === 'uploaded' || it.status === 'failed' || it.status === 'pending');
+    if (!list.length) { el.musList.innerHTML = ''; return; }
+    el.musList.innerHTML = list.map(it => {
+      const statusText = {
+        pending: '未开始',
+        uploading: `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
+        uploaded: '已上传，待转码',
+        running: it.stage === '无损直转' ? '无损直转中…' : it.stage === '排队中' ? '排队中…' : (it.progress ? `转码中 ${it.progress}%` : '转码中…'),
+        completed: '完成 ✅',
+        failed: '失败：' + (it.errorMsg || ''),
+      }[it.status] || it.status;
+      const statusCls = it.status === 'pending' ? '' : 'is-' + it.status.replace('uploading', 'running');
+      const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
+      const progressHtml = (it.status === 'running' || it.status === 'uploading')
+        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+      const downloadHtml = it.status === 'completed' && it.downloadUrl
+        ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
+        : '';
+      const startHtml = it.status === 'uploaded'
+        ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
+        : it.status === 'failed'
+          ? `<button type="button" class="uc-item-start" data-act="start" title="清除错误状态，按当前格式重新转码">重新转码</button>`
+          : '';
+      const targetDisabled = (it.status === 'running' || it.status === 'completed') ? 'disabled' : '';
+      const displayName = it.name || (it.file && it.file.name) || '未命名';
+      const metaSpans = it.localPath
+        ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>→ ${it.target.toUpperCase()}</span>`
+        : (it.file ? `<span>${musFormatSize(it.file.size)}</span><span>→ ${it.target.toUpperCase()}</span>` : `<span>→ ${it.target.toUpperCase()}</span>`);
+      const opts = MUS_AUDIO_FMTS.map(v => `<option value="${v}"${v === it.target ? ' selected' : ''}>${v.toUpperCase()}</option>`).join('');
+      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
+        <div class="uc-item-main">
+          <div class="uc-item-name" title="${displayName}">${displayName}</div>
+          <div class="uc-item-meta">${metaSpans}</div>
+          ${progressHtml}
+          <div class="uc-item-status">${statusText}</div>
+        </div>
+        <div class="uc-item-side">
+          <label class="sr-only" for="musItemTarget-${it.id}">输出格式</label>
+          <select id="musItemTarget-${it.id}" data-act="target" ${targetDisabled} title="修改此行的目标格式（开始转码时生效）">${opts}</select>
+          ${startHtml}
+          ${downloadHtml}
+          <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
+        </div>
+      </li>`;
+    }).join('');
+  };
+
+  const musAddFiles = (list) => {
+    const b = { target: el.musBulkTarget.value || 'mp3', audio_bitrate: el.musBulkBitrate.value || '', toLibrary: el.musBulkLibrary.checked };
+    Array.from(list || []).forEach(f => {
+      const isLocal = typeof f === 'string';
+      musState.list.push({
+        id: musState.nextId++,
+        file: isLocal ? null : f,
+        localPath: isLocal ? f : null,
+        name: isLocal ? (f.split(/[\\/]/).pop()) : f.name,
+        target: b.target, audio_bitrate: b.audio_bitrate, toLibrary: b.toLibrary,
+        status: isLocal ? 'uploaded' : 'pending',
+        jobId: null, progress: isLocal ? 30 : 0, stage: isLocal ? '本地文件' : '',
+        errorMsg: '', downloadUrl: '', outputName: '', libraryId: null,
+        speedText: '', uploadedText: '', _removed: false, _xhrs: null, _uploadId: null,
+      });
+    });
+    musRender();
+    const localCount = musState.list.filter(x => x.localPath).length;
+    const uploadCount = musState.list.filter(x => x.file).length;
+    el.musStatus.textContent = localCount
+      ? `已添加 ${localCount} 个本地文件，可直接开始转换`
+      : `已添加 ${uploadCount} 个文件，点「开始转换」上传并转码`;
+  };
+
+  // 上传单个文件（32MB 分片，复用 ucUploadChunk）；本地文件跳过上传
+  const musUploadOne = (item) => new Promise((resolve, reject) => {
+    if (item.localPath) { item.status = 'uploaded'; item.progress = 30; item.stage = '本地文件'; musRender(); resolve(); return; }
+    item.status = 'uploading'; item.progress = 0; item._removed = false; item._xhrs = new Set(); musRender();
+    const file = item.file;
+    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? MUS_BIG_CHUNK_SIZE : MUS_CHUNK_SIZE;
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    const uploadId = item._uploadId = 'mus' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const done = new Set();
+    const xhrs = item._xhrs;
+    let uploadedBytes = 0;
+    const pump = async () => {
+      for (let idx = 0; idx < totalChunks; idx++) {
+        if (done.has(idx) || item._removed) continue;
+        const start = idx * chunkSize, end = Math.min(start + chunkSize, file.size);
+        const blob = file.slice(start, end);
+        try {
+          await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs);
+        } catch (e1) {
+          if (item._removed) { reject(new Error('已取消')); return; }
+          try { await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs); }
+          catch (e2) { item.status = 'failed'; item.errorMsg = '上传失败：' + (e2 && e2.message || '网络错误'); musRender(); reject(e2); return; }
+        }
+        done.add(idx);
+        uploadedBytes += (end - start);
+        item.progress = Math.min(99, Math.round(uploadedBytes / file.size * 100));
+        item.uploadedText = `${done.size}/${totalChunks}`;
+        musRender();
+      }
+      if (item._removed) { reject(new Error('已取消')); return; }
+      item.status = 'uploaded'; item.progress = 30; item.stage = '已上传'; item.uploadedText = ''; musRender(); resolve();
+    };
+    pump();
+  });
+
+  // 提交转码：finish 合并分片 + 启动 job（音乐转换强制 audio=true + audio_bitrate）
+  const musFinishOne = (item) => new Promise((resolve, reject) => {
+    if (!item || item.status !== 'uploaded') { reject(new Error('状态不允许开始转码')); return; }
+    item.status = 'running'; item.progress = 30; item.stage = ''; musRender();
+    const form = new FormData();
+    form.append('upload_id', item._uploadId);
+    form.append('total', item._totalChunks || 1);
+    form.append('filename', item.file ? item.file.name : (item.name || 'audio'));
+    form.append('target', item.target);
+    form.append('audio', 'true');           // 音乐转换：强制仅音频
+    form.append('audio_bitrate', item.audio_bitrate || '');
+    form.append('resolution', '');
+    form.append('bitrate', '');
+    form.append('rotate', '0');
+    form.append('remux', 'false');
+    form.append('to_library', item.toLibrary ? 'true' : 'false');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-chunk/finish');
+    xhr.setRequestHeader('X-Device-Id', deviceId());
+    xhr.timeout = 120000;
+    xhr.addEventListener('load', () => {
+      try {
+        const data = JSON.parse(xhr.responseText || '{}');
+        if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; musRender(); resolve(data);
+        } else {
+          item.status = 'failed';
+          item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
+          musRender(); reject(new Error(item.errorMsg));
+        }
+      } catch (e) {
+        item.status = 'failed'; item.errorMsg = '服务器响应异常（可能是网络/代理超时）'; musRender(); reject(e);
+      }
+    });
+    xhr.addEventListener('error', () => { item.status = 'failed'; item.errorMsg = '网络错误'; musRender(); reject(new Error('network')); });
+    xhr.addEventListener('timeout', () => { item.status = 'failed'; item.errorMsg = '响应超时（请重试）'; musRender(); reject(new Error('timeout')); });
+    xhr.send(form);
+  });
+
+  const musPollAll = async () => {
+    const running = musState.list.filter(x => x.status === 'running' && x.jobId);
+    if (!running.length) { musStopPolling(); return; }
+    await Promise.all(running.map(async (it) => {
+      try {
+        const st = await request('/api/convert/' + it.jobId);
+        if (st.status === 'running') {
+          const p = typeof st.progress === 'number' ? st.progress : 0;
+          it.progress = Math.max(30, Math.min(100, Math.round(30 + p * 0.7)));
+          it.stage = st.stage || '排队中';
+          musRender();
+        } else if (st.status === 'completed') {
+          it.status = 'completed'; it.progress = 100;
+          it.outputName = musBuildOutputName(it);
+          it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
+          it.libraryId = st.library_id || null;
+          musRender();
+        } else if (st.status === 'failed') {
+          it.status = 'failed'; it.errorMsg = st.error || '未知错误'; musRender();
+        }
+      } catch (_e) { /* 单个轮询失败忽略 */ }
+    }));
+  };
+
+  const musCancelUpload = (it) => {
+    it._removed = true;
+    if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (e) { /* ignore */ } });
+    if (it._uploadId) {
+      const fd = new FormData();
+      fd.append('upload_id', it._uploadId);
+      fetch('/api/upload-chunk/abort', { method: 'POST', body: fd, headers: { 'X-Device-Id': deviceId() } }).catch(() => { /* 失败靠 24h 孤儿清理兜底 */ });
+    }
+  };
+
+  // 事件绑定
+  el.musAddBtn.addEventListener('click', () => {
+    if (musDesktopNative()) {
+      window.VDL.desktop.chooseFiles().then(list => { if (list && list.length) musAddFiles(list); }).catch(() => {});
+    } else {
+      el.musFileInput.click();
+    }
+  });
+  el.musFileInput.addEventListener('change', () => {
+    if (el.musFileInput.files && el.musFileInput.files.length) { musAddFiles(el.musFileInput.files); el.musFileInput.value = ''; }
+  });
+  el.musList.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.act === 'target') {
+      const li = t.closest('.uc-item'); const id = +li.dataset.id;
+      const it = musState.list.find(x => x.id === id);
+      if (it) { it.target = t.value; musRender(); }
+    }
+  });
+  el.musList.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const li = btn.closest('.uc-item'); const id = +li.dataset.id;
+    const it = musState.list.find(x => x.id === id); if (!it) return;
+    const act = btn.dataset.act;
+    if (act === 'remove') {
+      musCancelUpload(it);
+      musState.list = musState.list.filter(x => x.id !== id);
+      musRender();
+    } else if (act === 'start') {
+      if (it.status === 'failed') { it.status = 'uploaded'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
+      musEnsurePolling();
+      musFinishOne(it).catch(() => {});
+    }
+  });
+  el.musClearBtn.addEventListener('click', () => {
+    musState.list.forEach(it => musCancelUpload(it));
+    musState.list = []; musRender(); el.musStatus.textContent = '';
+  });
+  el.musBulkApplyBtn.addEventListener('click', () => {
+    const b = { target: el.musBulkTarget.value || 'mp3', audio_bitrate: el.musBulkBitrate.value || '', toLibrary: el.musBulkLibrary.checked };
+    let n = 0;
+    musState.list.forEach(it => {
+      if (['pending', 'uploaded', 'failed'].includes(it.status)) { it.target = b.target; it.audio_bitrate = b.audio_bitrate; it.toLibrary = b.toLibrary; n++; }
+    });
+    musRender();
+    el.musStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项（所有项都已开始/完成）';
+  });
+  el.musStartAllBtn.addEventListener('click', () => {
+    musState.list.forEach(it => { if (it.status === 'failed') { it.status = 'uploaded'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
+    const wait = musState.list.filter(x => x.status === 'uploaded' || x.status === 'pending');
+    if (!wait.length) { el.musStatus.textContent = '没有可开始的项（先添加文件）'; return; }
+    el.musStatus.textContent = `批量转换中…（${wait.length} 个）`;
+    musEnsurePolling();
+    wait.forEach(it => {
+      if (it.localPath) {
+        musFinishOne(it).catch(() => {});            // 本地文件免上传
+      } else if (it.status === 'uploaded') {
+        musFinishOne(it).catch(() => {});            // 已上传（如重新转码）
+      } else {
+        musUploadOne(it).then(() => musFinishOne(it)).catch(() => {});  // 网页文件：先上传再 finish
+      }
     });
   });
 
@@ -8580,14 +8867,16 @@ el.dwVidPlayer.removeAttribute('src');
     const isCom = view === 'commentary';
     const isUp = view === 'uploadconvert';
     const isDw = view === 'dw';
+    const isMusic = view === 'musicconvert';
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isBridge;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isAppIntro || isBridge;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
     el.commentaryView.hidden = !isCom;
     el.uploadConvertView.hidden = !isUp;
+    el.musicConvertView.hidden = !isMusic;
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
@@ -8597,15 +8886,17 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
     if (el.tabCommentary) el.tabCommentary.classList.toggle('is-active', isCom);
     if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
+    if (el.tabMusicConvert) el.tabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isBridge;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isAppIntro && !isBridge;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
     if (el.sTabTorrent) el.sTabTorrent.classList.toggle('is-active', isTor);
     if (el.sTabCommentary) el.sTabCommentary.classList.toggle('is-active', isCom);
     if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
+    if (el.sTabMusicConvert) el.sTabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.sTabDw) el.sTabDw.classList.toggle('is-active', isDw);
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
