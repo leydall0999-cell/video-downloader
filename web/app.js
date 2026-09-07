@@ -3109,9 +3109,38 @@
   });
 
   // 提交转码：finish 合并分片 + 启动 job（音乐转换强制 audio=true + audio_bitrate）
+  // 桌面端本地文件直接调 /api/convert/local，跳过分片 finish（避免 upload_id/total 校验失败）。
   const musFinishOne = (item) => new Promise((resolve, reject) => {
     if (!item || item.status !== 'uploaded') { reject(new Error('状态不允许开始转码')); return; }
     item.status = 'running'; item.progress = 30; item.stage = ''; musRender();
+
+    if (item.localPath) {
+      request('/api/convert/local', {
+        method: 'POST',
+        body: JSON.stringify({
+          local_path: item.localPath,
+          target: item.target,
+          resolution: '',
+          bitrate: '',
+          audio: true,
+          rotate: 0,
+          remux: false,
+          to_library: !!item.toLibrary,
+          audio_bitrate: item.audio_bitrate || '',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }).then(data => {
+        if (data.job_id) {
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; musRender(); resolve(data);
+        } else {
+          item.status = 'failed'; item.errorMsg = data.detail || data.error || '本地转换请求失败'; musRender(); reject(new Error(item.errorMsg));
+        }
+      }).catch(err => {
+        item.status = 'failed'; item.errorMsg = (err && err.message) || '本地转换请求失败'; musRender(); reject(err);
+      });
+      return;
+    }
+
     const form = new FormData();
     form.append('upload_id', item._uploadId);
     form.append('total', item._totalChunks || 1);
