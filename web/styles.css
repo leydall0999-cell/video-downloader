@@ -3188,6 +3188,7 @@ img { max-width: 100%; display: block; }
   width: min(400px, 100% - 2rem);
   max-width: 400px;
   padding: 2.7rem 2.2rem 2.1rem;
+  margin: 0 auto;
   position: relative;
   border-radius: var(--radius-lg, 16px);
 }
