@@ -3749,13 +3749,17 @@
   });
   el.sbDlSrt.addEventListener('click', () => sbSave('srt'));
   el.sbDlTxt.addEventListener('click', () => sbSave('txt'));
-  // 右上角「?」：展开/收起 SRT 与 TXT 的区别说明
+  // 右上角「?」：悬停即显示 SRT/TXT 区别说明（移开即收；滑入说明框可继续阅读）
   if (el.sbHelpBtn && el.sbHelpText) {
-    el.sbHelpBtn.addEventListener('click', () => {
-      const open = el.sbHelpText.hidden;
-      el.sbHelpText.hidden = !open;
-      el.sbHelpBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
+    let sbHelpTimer = null;
+    const sbHelpShow = (show) => {
+      el.sbHelpText.hidden = !show;
+      el.sbHelpBtn.setAttribute('aria-expanded', show ? 'true' : 'false');
+    };
+    el.sbHelpBtn.addEventListener('mouseenter', () => { clearTimeout(sbHelpTimer); sbHelpShow(true); });
+    el.sbHelpBtn.addEventListener('mouseleave', () => { sbHelpTimer = setTimeout(() => sbHelpShow(false), 250); });
+    el.sbHelpText.addEventListener('mouseenter', () => clearTimeout(sbHelpTimer));
+    el.sbHelpText.addEventListener('mouseleave', () => sbHelpShow(false));
   }
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
