@@ -10535,7 +10535,13 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.authFieldPw2) el.authFieldPw2.hidden = !isReg;
     if (el.authPwStrength) el.authPwStrength.hidden = !isReg;
     _updatePwStrength('');
+    // 切换登录/注册时清空已填账号密码，避免互显（重新输入）
+    if (el.authIdent) el.authIdent.value = '';
+    if (el.authPw) { el.authPw.value = ''; el.authPw.type = 'password'; }
     if (el.authPw2) el.authPw2.value = '';
+    const openEye = el.authPwToggle && el.authPwToggle.querySelector('#authEyeOpen');
+    const closedEye = el.authPwToggle && el.authPwToggle.querySelector('#authEyeClosed');
+    if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
     if (el.authFootLogin) el.authFootLogin.hidden = isReg;
     if (el.authFootReg) el.authFootReg.hidden = !isReg;
     _authMsg('');
