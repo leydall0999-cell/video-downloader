@@ -10544,7 +10544,9 @@ el.dwVidPlayer.removeAttribute('src');
     if (!el.authPw || !el.authPwToggle) return;
     const isPw = el.authPw.type === 'password';
     el.authPw.type = isPw ? 'text' : 'password';
-    el.authPwToggle.textContent = isPw ? '🙈' : '👁';
+    const openEye = el.authPwToggle.querySelector('#authEyeOpen');
+    const closedEye = el.authPwToggle.querySelector('#authEyeClosed');
+    if (openEye && closedEye) { openEye.hidden = !isPw; closedEye.hidden = isPw; }
     el.authPwToggle.setAttribute('aria-label', isPw ? '隐藏密码' : '显示密码');
   }
   async function openAuthModal() {
@@ -10552,7 +10554,9 @@ el.dwVidPlayer.removeAttribute('src');
     setAuthMode('login');
     if (el.authIdent) el.authIdent.value = '';
     if (el.authPw) { el.authPw.value = ''; el.authPw.type = 'password'; }
-    if (el.authPwToggle) el.authPwToggle.textContent = '👁';
+    const openEye = el.authPwToggle && el.authPwToggle.querySelector('#authEyeOpen');
+    const closedEye = el.authPwToggle && el.authPwToggle.querySelector('#authEyeClosed');
+    if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
     if (el.authTermsCheck) el.authTermsCheck.checked = false;
     _authMsg('');
     try { el.authModal.showModal(); } catch (_) { el.authModal.setAttribute('open', ''); }
