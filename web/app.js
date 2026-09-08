@@ -175,7 +175,7 @@
     legalModal: $('legalModal'),
     legalModalTitle: $('legalModalTitle'),
     legalModalClose: $('legalModalClose'),
-    legalFrame: $('legalFrame'),
+    legalContent: $('legalContent'),
     authMsg: $('authMsg'),
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
@@ -10600,11 +10600,15 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.authModal) el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { try { el.authModal.close(); } catch (_) {} } });
   // 法律条款弹窗（服务条款 / 隐私政策）
   function openLegalModal(doc) {
-    if (!el.legalModal || !el.legalFrame) return;
+    if (!el.legalModal || !el.legalContent) return;
     const title = doc === 'privacy' ? '隐私政策' : '服务条款';
-    const src = doc === 'privacy' ? 'privacy.html' : 'terms.html';
+    const tplId = doc === 'privacy' ? 'legalPrivacyTpl' : 'legalTermsTpl';
+    const tpl = document.getElementById(tplId);
+    if (!tpl) return;
     if (el.legalModalTitle) el.legalModalTitle.textContent = title;
-    el.legalFrame.src = src;
+    el.legalContent.innerHTML = '';
+    const clone = tpl.content.cloneNode(true);
+    el.legalContent.appendChild(clone);
     try { el.legalModal.showModal(); } catch (_) { el.legalModal.setAttribute('open', ''); }
   }
   if (el.legalModalClose) el.legalModalClose.addEventListener('click', () => { try { el.legalModal.close(); } catch (_) {} });
