@@ -3180,32 +3180,21 @@ img { max-width: 100%; display: block; }
 /* ================ 会员中心（VDL 三轨会员） ================ */
 .member-modal.modal { width: min(680px, 100% - 2rem); max-width: 680px; }
 .member-card .modal-head { margin-bottom: .85rem; }
-/* 会员中心主体：左侧状态/套餐，右侧账号（登录/注册） */
-.member-body {
-  display: flex; gap: 1rem; align-items: flex-start;
+/* 会员中心主体：单列展示状态/套餐/激活码 */
+.member-body { display: block; }
+.member-main { width: 100%; }
+/* 独立登录/注册弹窗 */
+.auth-card { width: min(360px, 100% - 2rem); max-width: 360px; }
+.auth-card .member-auth {
+  display: flex; flex-direction: column; align-items: stretch; gap: .6rem;
 }
-.member-main {
-  flex: 1 1 0; min-width: 0;
-}
-.member-side {
-  flex: 0 0 240px; align-self: flex-start;
-}
-@media (max-width: 620px) {
-  .member-body { flex-direction: column; }
-  .member-side { flex: 1 1 auto; width: 100%; }
-}
+.auth-card .member-auth .adv-input { width: 100%; min-width: 0; }
+.auth-card .member-auth .btn { align-self: flex-start; }
+.auth-card .consent-note { margin-top: .8rem; }
 /* 账号区（A1 本地账号） */
-.member-account {
-  padding: .55rem .7rem; border: 1px solid rgba(99,102,241,.22);
-  border-radius: 10px; background: var(--brand-soft, #eef0ff);
-}
 .member-auth { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .member-auth .adv-input { flex: 1 1 150px; min-width: 120px; }
 .member-auth .arc-msg { flex-basis: 100%; font-size: .78rem; }
-/* 右侧窄栏内登录表单一列堆叠 */
-.member-side .member-auth { flex-direction: column; align-items: stretch; }
-.member-side .member-auth .adv-input { flex: none; width: 100%; min-width: 0; }
-.member-side .member-auth .btn { align-self: flex-start; }
 .member-account-info { display: flex; align-items: center; gap: .5rem; font-size: .84rem; }
 .member-acc-chip { display: inline-flex; align-items: center; gap: .3rem; padding: .25rem .6rem;
   border-radius: 999px; background: #fff; border: 1px solid var(--line); color: var(--brand-strong, #4338ca); font-weight: 600; }

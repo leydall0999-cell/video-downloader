@@ -2155,21 +2155,25 @@
         <p class="arc-msg" id="memberActMsg" hidden></p>
         <p class="consent-note">V1 未接入支付，测试期激活即时生效；下载 / AI 会员到期自动失效，AI 订阅积分随到期清零，永久积分包不过期。</p>
       </div>
-
-      <!-- 账号区：登录 / 注册（A1 本地账号，会员归属按账号隔离） -->
-      <div class="member-side">
-        <div class="member-account" id="memberAccount">
-          <div id="memberAccountInfo" class="member-account-info" hidden></div>
-          <div id="memberAuthBox" class="member-auth">
-            <input id="authIdent" class="adv-input" placeholder="邮箱或手机号" autocomplete="username" />
-            <input id="authPw" class="adv-input" type="password" placeholder="密码（≥6位）" autocomplete="current-password" />
-            <button type="button" class="btn btn-primary btn-sm" id="authLogin">登录</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="authReg">注册</button>
-            <span class="arc-msg" id="authMsg" hidden></span>
-          </div>
-        </div>
-      </div>
     </div>
+  </div>
+</dialog>
+
+<!-- 登录 / 注册弹窗：与会员中心分离（A1 本地账号，会员归属按账号隔离） -->
+<dialog id="authModal" class="modal" aria-labelledby="authModalTitle">
+  <div class="modal-card auth-card">
+    <div class="modal-head">
+      <h2 id="authModalTitle">🔐 登录 / 注册</h2>
+      <button type="button" class="modal-close" id="authModalClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="member-auth">
+      <input id="authIdent" class="adv-input" placeholder="邮箱或手机号" autocomplete="username" />
+      <input id="authPw" class="adv-input" type="password" placeholder="密码（≥6位）" autocomplete="current-password" />
+      <button type="button" class="btn btn-primary" id="authLogin">登录</button>
+      <button type="button" class="btn btn-ghost" id="authReg">注册</button>
+      <span class="arc-msg" id="authMsg" hidden></span>
+    </div>
+    <p class="consent-note">登录后会员权益将绑定到该账号；未登录时使用设备级匿名权益。</p>
   </div>
 </dialog>
 

@@ -157,6 +157,14 @@
     sTabMember: $('sTabMember'),
     memberBadge: $('memberBadge'),
     authHeaderBtn: $('authHeaderBtn'),
+    authModal: $('authModal'),
+    authModalClose: $('authModalClose'),
+    authModalTitle: $('authModalTitle'),
+    authIdent: $('authIdent'),
+    authPw: $('authPw'),
+    authLogin: $('authLogin'),
+    authReg: $('authReg'),
+    authMsg: $('authMsg'),
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
     memberStatus: $('memberStatus'),
@@ -169,15 +177,7 @@
     memberCode: $('memberCode'),
     memberActivateBtn: $('memberActivateBtn'),
     memberActMsg: $('memberActMsg'),
-    // 账号区（A1 本地账号）
-    memberAccount: $('memberAccount'),
-    memberAccountInfo: $('memberAccountInfo'),
-    memberAuthBox: $('memberAuthBox'),
-    authIdent: $('authIdent'),
-    authPw: $('authPw'),
-    authLogin: $('authLogin'),
-    authReg: $('authReg'),
-    authMsg: $('authMsg'),
+    // 账号区（A1 本地账号）元素已上移，保持统一定义
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
     sidebar: $('sidebar'),
@@ -10439,8 +10439,7 @@ el.dwVidPlayer.removeAttribute('src');
         await renderMemberStatus();
         if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
       } else if (r && r.code === 'NO_AUTH') {
-        _memberMsg('请先登录账号后再激活（上方登录/注册）', true);
-        await renderAccount();
+        _memberMsg('请先登录账号后再激活（右上角登录/注册）', true);
       } else {
         _memberMsg('❌ ' + ((r && r.error) || '激活失败'), true);
       }
@@ -10472,36 +10471,18 @@ el.dwVidPlayer.removeAttribute('src');
     el.authHeaderBtn.classList.add('is-logged');
   }
   async function renderAccount() {
-    if (!el.memberAccount) return;
     const tok = authToken();
-    if (!tok) {
-      if (el.memberAccountInfo) el.memberAccountInfo.hidden = true;
-      if (el.memberAuthBox) el.memberAuthBox.hidden = false;
-      _renderAuthHeader();
-      return;
-    }
+    _renderAuthHeader();
+    if (!tok) return;
     try {
       const me = await request('/api/auth/me');
       if (!me || !me.ok) { logoutAccount(); return; }
-      if (el.memberAuthBox) el.memberAuthBox.hidden = true;
-      if (el.memberAccountInfo) {
-        el.memberAccountInfo.hidden = false;
-        const ident = (me.identifier || me.user_id || '').replace(/^(.{3}).*(@.*)$/, '$1***$2');
-        el.memberAccountInfo.innerHTML =
-          `<span class="member-acc-chip">👤 ${ident}</span>` +
-          `<button type="button" class="btn btn-ghost btn-sm" id="authLogout">退出登录</button>`;
-        const lo = el.memberAccountInfo.querySelector('#authLogout');
-        if (lo) lo.addEventListener('click', logoutAccount);
-      }
-      _renderAuthHeader();
     } catch (_) {
       logoutAccount();
     }
   }
   function logoutAccount() {
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
-    if (el.memberAuthBox) el.memberAuthBox.hidden = false;
-    if (el.memberAccountInfo) { el.memberAccountInfo.hidden = true; el.memberAccountInfo.innerHTML = ''; }
     _renderAuthHeader();
   }
   async function authAction(isReg) {
@@ -10518,7 +10499,8 @@ el.dwVidPlayer.removeAttribute('src');
         localStorage.setItem('vdl_auth_token', r.token);
         _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
         if (el.authPw) el.authPw.value = '';
-        await Promise.all([renderAccount(), renderMemberStatus()]);
+        await renderMemberStatus();
+        setTimeout(() => { try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); } }, 400);
       } else {
         _authMsg('❌ ' + ((r && r.error) || (isReg ? '注册失败' : '登录失败')), true);
       }
@@ -10526,18 +10508,26 @@ el.dwVidPlayer.removeAttribute('src');
       _authMsg('❌ ' + ((e && (e.message || e.hint)) || '网络错误'), true);
     }
   }
+  async function openAuthModal() {
+    if (!el.authModal) return;
+    _authMsg('');
+    if (el.authIdent) el.authIdent.value = '';
+    if (el.authPw) el.authPw.value = '';
+    try { el.authModal.showModal(); } catch (_) { el.authModal.setAttribute('open', ''); }
+    setTimeout(() => { if (el.authIdent) el.authIdent.focus(); }, 60);
+  }
 
   async function openMemberCenter() {
     if (!el.memberModal) return;
     try { el.memberModal.showModal(); } catch (_) { el.memberModal.setAttribute('open', ''); }
     switchMemberTab('dl');
     if (el.memberActMsg) el.memberActMsg.hidden = true;
-    await Promise.all([renderAccount(), renderMemberStatus(), renderMemberPlans()]);
+    await Promise.all([renderMemberStatus(), renderMemberPlans()]);
   }
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
   if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
-  // 右上角「登录 / 注册」常驻入口：会员中心右侧，未登录点击打开会员中心并聚焦账号区；已登录点击退出
+  // 右上角「登录 / 注册」常驻入口：未登录打开独立登录弹窗；已登录点击退出
   if (el.authHeaderBtn) {
     _renderAuthHeader();
     el.authHeaderBtn.addEventListener('click', () => {
@@ -10545,15 +10535,17 @@ el.dwVidPlayer.removeAttribute('src');
       if (tok) {
         if (confirm('确定退出当前账号？')) logoutAccount();
       } else {
-        openMemberCenter();
-        if (el.authIdent) setTimeout(() => el.authIdent.focus(), 60);
+        openAuthModal();
       }
     });
   }
-  // 账号区：登录 / 注册 / 回车提交
+  // 登录 / 注册弹窗：登录 / 注册 / 回车提交 / 关闭
   if (el.authLogin) el.authLogin.addEventListener('click', () => authAction(false));
   if (el.authReg) el.authReg.addEventListener('click', () => authAction(true));
   if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authLogin) el.authLogin.click(); });
+  if (el.authIdent) el.authIdent.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authPw) el.authPw.focus(); });
+  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { try { el.authModal.close(); } catch (_) {} });
+  if (el.authModal) el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { try { el.authModal.close(); } catch (_) {} } });
   if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
