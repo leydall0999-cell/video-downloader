@@ -12,9 +12,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -240,3 +242,77 @@ def reset_password(identifier: str, new_password: str) -> bool:
     user["updated_at"] = int(time.time())
     _save_users(data)
     return True
+
+
+# --------------------------------------------------------------------------- #
+# 找回密码：邮箱/手机验证码（V1 用 dev 模式本地投递，后续可切真实网关）
+# --------------------------------------------------------------------------- #
+RESET_CODE_TTL = 5 * 60  # 5 分钟有效
+_RESEND_COOLDOWN = 60    # 重发冷却（秒）
+_RESET_CODES: dict[str, dict] = {}   # ident -> {"code": str, "exp": float, "last": float}
+_RESET_LOCK = threading.Lock()
+
+
+def _send_mode() -> str:
+    """验证码投递模式：dev=本地测试（日志+返回 dev_code）；smtp/sms=真实网关（待接入）。"""
+    return os.environ.get("VDL_SEND_MODE", "dev").lower()
+
+
+def generate_reset_code(identifier: str) -> Optional[str]:
+    """为存在的账号生成 6 位验证码；账号不存在返回 None。V1 不暴露账号是否真实存在。"""
+    ident = _normalize(identifier)
+    data = _load_users()
+    if ident not in data["by_identifier"]:
+        return None
+    import secrets as _s
+    code = f"{_s.randbelow(1_000_000):06d}"
+    now = time.time()
+    with _RESET_LOCK:
+        _RESET_CODES[ident] = {"code": code, "exp": now + RESET_CODE_TTL, "last": now}
+    return code
+
+
+def reset_code_cooldown_ok(identifier: str) -> bool:
+    """是否可发送（冷却期内不可）。"""
+    ident = _normalize(identifier)
+    with _RESET_LOCK:
+        rec = _RESET_CODES.get(ident)
+        if not rec:
+            return True
+        return (time.time() - rec.get("last", 0)) >= _RESEND_COOLDOWN
+
+
+def verify_reset_code(identifier: str, code: str) -> bool:
+    """校验验证码；正确则一次性作废（防重放）。"""
+    ident = _normalize(identifier)
+    with _RESET_LOCK:
+        rec = _RESET_CODES.get(ident)
+        if not rec:
+            return False
+        if time.time() > rec["exp"]:
+            _RESET_CODES.pop(ident, None)
+            return False
+        ok = hmac.compare_digest(rec["code"], (code or "").strip())
+        if ok:
+            _RESET_CODES.pop(ident, None)  # 一次性
+        return ok
+
+
+def deliver_reset_code(identifier: str, code: str) -> None:
+    """投递验证码。V1 仅本地调试展示（日志 + 写文件）；接入真实邮件/SMS 时替换此函数。"""
+    mode = _send_mode()
+    if mode == "dev":
+        logging.getLogger("vdl.auth").info("V1 dev 验证码 for %s: %s", identifier, code)
+        try:
+            with open(_base_dir() / "reset_code.dev.log", "a", encoding="utf-8") as f:
+                f.write(f"{int(time.time())} {identifier} {code}\n")
+        except OSError:
+            pass
+    elif mode == "smtp":
+        # TODO: 真实邮件投递（SMTP / SendGrid / Resend）
+        raise NotImplementedError("SMTP 投递未接入")
+    elif mode == "sms":
+        # TODO: 真实短信投递（Twilio / 阿里云短信 / 火山短信）
+        raise NotImplementedError("SMS 投递未接入")
+    else:
+        raise NotImplementedError(f"未知投递模式: {mode}")

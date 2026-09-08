@@ -181,6 +181,9 @@
     forgetModal: $('forgetModal'),
     forgetModalClose: $('forgetModalClose'),
     forgetIdent: $('forgetIdent'),
+    forgetCode: $('forgetCode'),
+    forgetSendCode: $('forgetSendCode'),
+    forgetDevNote: $('forgetDevNote'),
     forgetPw: $('forgetPw'),
     forgetPwToggle: $('forgetPwToggle'),
     forgetPw2: $('forgetPw2'),
@@ -10661,18 +10664,64 @@ el.dwVidPlayer.removeAttribute('src');
     el.forgetPwToggle.setAttribute('aria-label', isPw ? '隐藏密码' : '显示密码');
     el.forgetPwToggle.setAttribute('title', isPw ? '隐藏密码' : '显示密码');
   }
+  let _forgetCdTimer = null;
   async function openForgetModal() {
     if (!el.forgetModal) return;
     try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); }
     if (el.forgetIdent) el.forgetIdent.value = '';
+    if (el.forgetCode) el.forgetCode.value = '';
     if (el.forgetPw) { el.forgetPw.value = ''; el.forgetPw.type = 'password'; }
     if (el.forgetPw2) el.forgetPw2.value = '';
     const openEye = el.forgetPwToggle && el.forgetPwToggle.querySelector('#forgetEyeOpen');
     const closedEye = el.forgetPwToggle && el.forgetPwToggle.querySelector('#forgetEyeClosed');
     if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
+    if (el.forgetDevNote) { el.forgetDevNote.hidden = true; el.forgetDevNote.textContent = ''; }
     _forgetMsg('');
+    if (el.forgetSendCode) { el.forgetSendCode.disabled = false; el.forgetSendCode.textContent = '获取验证码'; }
+    if (_forgetCdTimer) { clearInterval(_forgetCdTimer); _forgetCdTimer = null; }
     try { el.forgetModal.showModal(); } catch (_) { el.forgetModal.setAttribute('open', ''); }
     setTimeout(() => { if (el.forgetIdent) el.forgetIdent.focus(); }, 60);
+  }
+  function _forgetStartCountdown(sec) {
+    if (!el.forgetSendCode) return;
+    let left = sec;
+    el.forgetSendCode.disabled = true;
+    el.forgetSendCode.textContent = left + ' 秒后重发';
+    _forgetCdTimer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(_forgetCdTimer); _forgetCdTimer = null;
+        el.forgetSendCode.disabled = false;
+        el.forgetSendCode.textContent = '获取验证码';
+      } else {
+        el.forgetSendCode.textContent = left + ' 秒后重发';
+      }
+    }, 1000);
+  }
+  async function sendForgetCode() {
+    if (!el.forgetIdent) return;
+    const ident = (el.forgetIdent.value || '').trim();
+    if (!ident) { _forgetMsg('请输入邮箱或手机号', true); if (el.forgetIdent) el.forgetIdent.focus(); return; }
+    if (!/@/.test(ident) && !ident.startsWith('+')) { _forgetMsg('账号需为邮箱（含@）或手机号（以+开头）', true); return; }
+    _forgetMsg('发送中…');
+    try {
+      const r = await request('/api/auth/reset-code', {
+        method: 'POST', body: JSON.stringify({ identifier: ident }),
+      });
+      if (r && r.ok) {
+        _forgetMsg('验证码已发送，请查收邮箱/手机');
+        if (r.dev_code && el.forgetDevNote) {
+          el.forgetDevNote.hidden = false;
+          el.forgetDevNote.textContent = '（测试模式）验证码：' + r.dev_code + '（接入真实网关后将不再显示）';
+        }
+        if (el.forgetCode) el.forgetCode.focus();
+        _forgetStartCountdown((r.expires_in && r.expires_in > 60) ? 60 : 60);
+      } else {
+        _forgetMsg('❌ ' + ((r && r.error) || '发送失败'), true);
+      }
+    } catch (e) {
+      _forgetMsg('❌ ' + ((e && (e.message || e.hint)) || '网络错误'), true);
+    }
   }
   function backToLogin() {
     try { el.forgetModal.close(); } catch (_) { el.forgetModal.removeAttribute('open'); }
@@ -10681,19 +10730,23 @@ el.dwVidPlayer.removeAttribute('src');
   async function forgetAction() {
     if (!el.forgetIdent || !el.forgetPw) return;
     const ident = (el.forgetIdent.value || '').trim();
+    const code = (el.forgetCode ? el.forgetCode.value : '').trim();
     const pw = el.forgetPw.value || '';
     const pw2 = el.forgetPw2 ? el.forgetPw2.value : '';
     if (!ident || pw.length < 6) { _forgetMsg('请输入账号，新密码至少 6 位', true); return; }
+    if (!code) { _forgetMsg('请先获取并输入验证码', true); if (el.forgetCode) el.forgetCode.focus(); return; }
     if (pw !== pw2) { _forgetMsg('两次输入的新密码不一致', true); return; }
+    if (el.forgetSubmitBtn) el.forgetSubmitBtn.disabled = true;
     _forgetMsg('处理中…');
     try {
       const r = await request('/api/auth/reset', {
-        method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+        method: 'POST', body: JSON.stringify({ identifier: ident, code: code, password: pw }),
       });
       if (r && r.ok) {
         _forgetMsg('✅ 密码已重置，请用新密码登录');
         if (el.forgetPw) el.forgetPw.value = '';
         if (el.forgetPw2) el.forgetPw2.value = '';
+        if (el.forgetCode) el.forgetCode.value = '';
         setTimeout(() => {
           try { el.forgetModal.close(); } catch (_) { el.forgetModal.removeAttribute('open'); }
           openAuthModal();
@@ -10703,6 +10756,8 @@ el.dwVidPlayer.removeAttribute('src');
       }
     } catch (e) {
       _forgetMsg('❌ ' + ((e && (e.message || e.hint)) || '网络错误'), true);
+    } finally {
+      if (el.forgetSubmitBtn) el.forgetSubmitBtn.disabled = false;
     }
   }
 
@@ -10742,6 +10797,9 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.forgetPw2) el.forgetPw2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.forgetSubmitBtn) el.forgetSubmitBtn.click(); });
   if (el.forgetPwToggle) el.forgetPwToggle.addEventListener('click', toggleForgetPwVisible);
   if (el.forgetBackLogin) el.forgetBackLogin.addEventListener('click', (e) => { e.preventDefault(); backToLogin(); });
+  if (el.forgetSendCode) el.forgetSendCode.addEventListener('click', sendForgetCode);
+  if (el.forgetCode) el.forgetCode.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.forgetSubmitBtn) el.forgetSubmitBtn.click(); });
+  if (el.forgetIdent) el.forgetIdent.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.forgetCode) el.forgetCode.focus(); });
   if (el.forgetModalClose) el.forgetModalClose.addEventListener('click', () => { try { el.forgetModal.close(); } catch (_) {} });
   if (el.forgetModal) el.forgetModal.addEventListener('click', (e) => { if (e.target === el.forgetModal) { try { el.forgetModal.close(); } catch (_) {} } });
   function _authLoading() { return !!(el.authActionBtn && el.authActionBtn.classList.contains('is-loading')); }
