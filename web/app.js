@@ -9887,6 +9887,16 @@ el.dwVidPlayer.removeAttribute('src');
   for (const [btn, view] of _sidebarPairs) {
     if (btn) btn.addEventListener('click', () => switchView(view));
   }
+  // 侧栏分组折叠：点组标题展开/收起该组（2026-09-08 用户要求）
+  {
+    const _sb = document.getElementById('sidebar');
+    if (_sb) _sb.addEventListener('click', (e) => {
+      const title = e.target.closest('.sidebar-group-title');
+      if (!title) return;
+      const group = title.closest('.sidebar-group');
+      if (group) group.classList.toggle('collapsed');
+    });
+  }
   el.subAddBtn.addEventListener('click', addSubscription);
   // ---- 时效自动清理：预览 → 确认 → 执行。媒体档强制二次确认 + 回收站 ----
   const CLEAN_LABELS = {

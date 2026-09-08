@@ -3216,3 +3216,20 @@ img { max-width: 100%; display: block; }
 .sb-help-text { margin-top: .5rem; font-size: .8rem; line-height: 1.6; color: var(--text, #374151);
   background: var(--brand-soft, #eef2ff); border: 1px solid #dfe3ff; border-radius: 8px; padding: .6rem .8rem; }
 .sb-help-text p { margin: .2rem 0; }
+
+/* ---------------- 2026-09-08 侧栏改版：中文组标题 + 分组折叠 + 子项去图标 ---------------- */
+/* 子项不显示 emoji 图标（纯文字更干净）；display:none 不参与布局，不留空位 */
+.sidebar-item-icon { display: none !important; }
+/* 组标题可点击折叠：箭头随收起/展开切换 */
+.sidebar-group-title {
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+}
+.sidebar-group-title::after {
+  content: "▾"; margin-left: auto;
+  color: var(--text-mute, #9ca3af); font-size: .6rem;
+  transition: transform .15s ease;
+}
+.sidebar-group.collapsed .sidebar-group-title::after { content: "▸"; }
+.sidebar-group.collapsed .sidebar-item { display: none; }
+/* 中文组标题字距（原 .14em 为英文 caps 设计） */
+.sidebar-group-en { letter-spacing: .3em; font-size: .7rem; }
