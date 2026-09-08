@@ -156,6 +156,7 @@
     // 2026-09-08 会员中心从侧栏移到右上角 header 常驻按钮 memberBadge（sTabMember 已删，引用保留兜底）
     sTabMember: $('sTabMember'),
     memberBadge: $('memberBadge'),
+    authHeaderBtn: $('authHeaderBtn'),
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
     memberStatus: $('memberStatus'),
@@ -10457,12 +10458,26 @@ el.dwVidPlayer.removeAttribute('src');
     el.authMsg.hidden = !text;
     el.authMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
   }
+  function _renderAuthHeader() {
+    if (!el.authHeaderBtn) return;
+    const tok = authToken();
+    if (!tok) {
+      el.authHeaderBtn.textContent = '登录 / 注册';
+      el.authHeaderBtn.title = '登录 / 注册账号';
+      el.authHeaderBtn.classList.remove('is-logged');
+      return;
+    }
+    el.authHeaderBtn.textContent = '👤 账号';
+    el.authHeaderBtn.title = '已登录，点击退出';
+    el.authHeaderBtn.classList.add('is-logged');
+  }
   async function renderAccount() {
     if (!el.memberAccount) return;
     const tok = authToken();
     if (!tok) {
       if (el.memberAccountInfo) el.memberAccountInfo.hidden = true;
       if (el.memberAuthBox) el.memberAuthBox.hidden = false;
+      _renderAuthHeader();
       return;
     }
     try {
@@ -10478,6 +10493,7 @@ el.dwVidPlayer.removeAttribute('src');
         const lo = el.memberAccountInfo.querySelector('#authLogout');
         if (lo) lo.addEventListener('click', logoutAccount);
       }
+      _renderAuthHeader();
     } catch (_) {
       logoutAccount();
     }
@@ -10486,6 +10502,7 @@ el.dwVidPlayer.removeAttribute('src');
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
     if (el.memberAuthBox) el.memberAuthBox.hidden = false;
     if (el.memberAccountInfo) { el.memberAccountInfo.hidden = true; el.memberAccountInfo.innerHTML = ''; }
+    _renderAuthHeader();
   }
   async function authAction(isReg) {
     if (!el.authIdent || !el.authPw) return;
@@ -10520,6 +10537,19 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
   if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
+  // 右上角「登录 / 注册」常驻入口：会员中心右侧，未登录点击打开会员中心并聚焦账号区；已登录点击退出
+  if (el.authHeaderBtn) {
+    _renderAuthHeader();
+    el.authHeaderBtn.addEventListener('click', () => {
+      const tok = authToken();
+      if (tok) {
+        if (confirm('确定退出当前账号？')) logoutAccount();
+      } else {
+        openMemberCenter();
+        if (el.authIdent) setTimeout(() => el.authIdent.focus(), 60);
+      }
+    });
+  }
   // 账号区：登录 / 注册 / 回车提交
   if (el.authLogin) el.authLogin.addEventListener('click', () => authAction(false));
   if (el.authReg) el.authReg.addEventListener('click', () => authAction(true));
