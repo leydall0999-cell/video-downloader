@@ -168,6 +168,15 @@
     memberCode: $('memberCode'),
     memberActivateBtn: $('memberActivateBtn'),
     memberActMsg: $('memberActMsg'),
+    // 账号区（A1 本地账号）
+    memberAccount: $('memberAccount'),
+    memberAccountInfo: $('memberAccountInfo'),
+    memberAuthBox: $('memberAuthBox'),
+    authIdent: $('authIdent'),
+    authPw: $('authPw'),
+    authLogin: $('authLogin'),
+    authReg: $('authReg'),
+    authMsg: $('authMsg'),
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
     sidebar: $('sidebar'),
@@ -923,6 +932,9 @@
     if (subKey) headers['X-Subscription-Key'] = subKey;
     const apiToken = localStorage.getItem('vdl_api_token');
     if (apiToken) headers['X-Api-Key'] = apiToken;
+    // 本地账号系统（A1）：Bearer token 经 Authorization 头携带，标识当前会员归属
+    const authToken = localStorage.getItem('vdl_auth_token');
+    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
     // 设备隔离（2026-08-22）：每标签页独立 device_id（sessionStorage），
     // 后端据此只返回本页面创建的任务——手机/其他页面完全看不到本页任务。
     headers['X-Device-Id'] = deviceId();
@@ -9437,6 +9449,12 @@ el.dwVidPlayer.removeAttribute('src');
     else stopTorPoll();
     // 「支持 N 个平台」徽章（#engineBadge）只在下载模块可见，其它功能页隐藏
     if (el.engineBadge) el.engineBadge.hidden = !_isDefault;
+    // 侧栏分组：展开当前激活项所在分组（其余保持原状），避免默认折起时激活项被隐藏
+    const activeSbItem = document.querySelector('.sidebar-item.is-active');
+    if (activeSbItem) {
+      const activeSbGroup = activeSbItem.closest('.sidebar-group');
+      if (activeSbGroup) activeSbGroup.classList.remove('collapsed');
+    }
   };
 
 
@@ -10406,6 +10424,9 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.memberCode) el.memberCode.value = '';
         await renderMemberStatus();
         if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
+      } else if (r && r.code === 'NO_AUTH') {
+        _memberMsg('请先登录账号后再激活（上方登录/注册）', true);
+        await renderAccount();
       } else {
         _memberMsg('❌ ' + ((r && r.error) || '激活失败'), true);
       }
@@ -10415,16 +10436,81 @@ el.dwVidPlayer.removeAttribute('src');
       el.memberActivateBtn.disabled = false;
     }
   }
+  // ---- 账号区（A1 本地账号：登录 / 注册 / 登出） ----
+  function authToken() { try { return localStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
+  function _authMsg(text, isErr) {
+    if (!el.authMsg) return;
+    el.authMsg.textContent = text || '';
+    el.authMsg.hidden = !text;
+    el.authMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
+  }
+  async function renderAccount() {
+    if (!el.memberAccount) return;
+    const tok = authToken();
+    if (!tok) {
+      if (el.memberAccountInfo) el.memberAccountInfo.hidden = true;
+      if (el.memberAuthBox) el.memberAuthBox.hidden = false;
+      return;
+    }
+    try {
+      const me = await request('/api/auth/me');
+      if (!me || !me.ok) { logoutAccount(); return; }
+      if (el.memberAuthBox) el.memberAuthBox.hidden = true;
+      if (el.memberAccountInfo) {
+        el.memberAccountInfo.hidden = false;
+        const ident = (me.identifier || me.user_id || '').replace(/^(.{3}).*(@.*)$/, '$1***$2');
+        el.memberAccountInfo.innerHTML =
+          `<span class="member-acc-chip">👤 ${ident}</span>` +
+          `<button type="button" class="btn btn-ghost btn-sm" id="authLogout">退出登录</button>`;
+        const lo = el.memberAccountInfo.querySelector('#authLogout');
+        if (lo) lo.addEventListener('click', logoutAccount);
+      }
+    } catch (_) {
+      logoutAccount();
+    }
+  }
+  function logoutAccount() {
+    try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
+    if (el.memberAuthBox) el.memberAuthBox.hidden = false;
+    if (el.memberAccountInfo) { el.memberAccountInfo.hidden = true; el.memberAccountInfo.innerHTML = ''; }
+  }
+  async function authAction(isReg) {
+    if (!el.authIdent || !el.authPw) return;
+    const ident = (el.authIdent.value || '').trim();
+    const pw = el.authPw.value || '';
+    if (!ident || pw.length < 6) { _authMsg('请输入账号，密码至少 6 位', true); return; }
+    _authMsg('处理中…');
+    try {
+      const r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+      });
+      if (r && r.ok && r.token) {
+        localStorage.setItem('vdl_auth_token', r.token);
+        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
+        if (el.authPw) el.authPw.value = '';
+        await Promise.all([renderAccount(), renderMemberStatus()]);
+      } else {
+        _authMsg('❌ ' + ((r && r.error) || (isReg ? '注册失败' : '登录失败')), true);
+      }
+    } catch (e) {
+      _authMsg('❌ ' + ((e && (e.message || e.hint)) || '网络错误'), true);
+    }
+  }
+
   async function openMemberCenter() {
     if (!el.memberModal) return;
     try { el.memberModal.showModal(); } catch (_) { el.memberModal.setAttribute('open', ''); }
     switchMemberTab('dl');
     if (el.memberActMsg) el.memberActMsg.hidden = true;
-    await Promise.all([renderMemberStatus(), renderMemberPlans()]);
+    await Promise.all([renderAccount(), renderMemberStatus(), renderMemberPlans()]);
   }
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
   if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
+  // 账号区：登录 / 注册 / 回车提交
+  if (el.authLogin) el.authLogin.addEventListener('click', () => authAction(false));
+  if (el.authReg) el.authReg.addEventListener('click', () => authAction(true));
+  if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authLogin) el.authLogin.click(); });
   if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];

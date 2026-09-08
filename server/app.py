@@ -2856,6 +2856,11 @@ from routers import subscriptions as _subscriptions_rtr
 app.include_router(_subscriptions_rtr.router)
 from routers import membership as _membership_rtr
 app.include_router(_membership_rtr.router)
+from routers import auth as _auth_rtr
+app.include_router(_auth_rtr.router)
+# 账号 / per-user 会员解析（A1+B2）：供各路由经 request 取当前用户态 store。
+# 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
+from user_membership import get_current_user_id, current_member_store
 
 # —— 公共 Cookie 池 + 本机 Cookie 缓存（来自 main 分支，合并时保留）——
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。

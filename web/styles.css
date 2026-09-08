@@ -94,6 +94,24 @@ img { max-width: 100%; display: block; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .hero p { margin-top: .6rem; color: var(--text-mute); font-size: .95rem; }
+/* 下载视图 Hero 下方「直接提取字幕」链接：与小字同级、居中 */
+.hero-link-wrap { margin: .35rem 0 0; display: flex; align-items: center; justify-content: center; gap: .5rem; flex-wrap: wrap; }
+.hero-note {
+  color: var(--brand, #4f46e5);
+  font-size: .95rem;              /* 与上方 hero p 小字同级 */
+  font-weight: 600;
+}
+.hero-sep { color: var(--text-mute, #9ca3af); font-size: .95rem; }
+.hero-link {
+  display: inline-block;
+  color: var(--brand, #4f46e5);
+  font-size: .95rem;              /* 与上方 hero p 小字同级 */
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(79,70,229,.45);
+  transition: color .15s ease, border-color .15s ease;
+}
+.hero-link:hover { color: var(--brand-strong, #4338ca); border-bottom-style: solid; }
 
 /* ---------------- panels ---------------- */
 .panel {
@@ -1636,9 +1654,11 @@ img { max-width: 100%; display: block; }
   .sidebar::-webkit-scrollbar-thumb { background: rgba(99,102,241,.35); border-radius: 3px; }
   .sidebar::-webkit-scrollbar-track { background: transparent; }
   .sidebar-group {
-    display: flex; flex-direction: column; gap: .08rem;
-    padding: 0 .15rem;
+    display: flex; flex-direction: column; gap: .1rem;
+    padding: 0 .3rem;
+    margin-top: .5rem;
   }
+  .sidebar-group:first-of-type { margin-top: 0; }
   /* 跨端同步按钮区：作为 sidebar 第一个 section，与下面分组用 sidebar 自身
      padding 节奏分开（1rem 顶部 padding），不另塞额外 margin 避免视觉拥挤 */
   .sidebar-cookie-sync {
@@ -1664,45 +1684,56 @@ img { max-width: 100%; display: block; }
   /* 2026-08-30 升级为「emoji pill + 英文字标」三段式分组标题
      —— 相比旧版单色灰字+左侧渐变短杠，更明确的层级符号 */
   .sidebar-group-title {
-    display: flex; align-items: center; gap: .45rem;
-    padding: .55rem .45rem .3rem;
-    margin-top: .15rem;
-    border-top: 1px solid rgba(99,102,241,.10);
+    position: relative;
+    display: flex; align-items: center; gap: .5rem;
+    padding: .55rem .4rem .45rem .6rem;
+    margin-top: .2rem;
+    border-top: 1px solid rgba(99,102,241,.20);   /* 分组之间更明显的分隔 */
+    cursor: pointer; user-select: none; -webkit-user-select: none;
+  }
+  /* 主目录左侧 accent 竖条：强层级符号 */
+  .sidebar-group-title::before {
+    content: ""; position: absolute; left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 3px; height: 18px; border-radius: 2px;
+    background: linear-gradient(180deg, var(--brand), #6366f1);
   }
   .sidebar-group:first-of-type .sidebar-group-title {
     border-top: 0;     /* 第一组不画顶部分隔，与 sidebar 顶部 padding 自然衔接 */
-    padding-top: .25rem;
+    padding-top: .3rem;
   }
   .sidebar-group-emoji {
     display: inline-grid; place-items: center;
-    width: 22px; height: 22px;
-    border-radius: 6px;
-    background: linear-gradient(135deg, rgba(99,102,241,.16), rgba(99,102,241,.06));
+    width: 26px; height: 26px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(99,102,241,.22), rgba(99,102,241,.12));
     color: var(--brand);
-    font-size: .82rem;
+    font-size: 1.05rem;
     line-height: 1;
-    box-shadow: inset 0 0 0 .5px rgba(99,102,241,.18);
+    box-shadow: 0 2px 6px rgba(79,70,229,.18), inset 0 0 0 .5px rgba(99,102,241,.25);
   }
   .sidebar-group-en {
-    font-size: .68rem; font-weight: 700;
+    font-size: .88rem; font-weight: 800;
     color: var(--brand);
-    letter-spacing: .14em; text-transform: uppercase;
+    letter-spacing: .02em; text-transform: none;   /* 中文组名：不加宽、不转大写 */
     line-height: 1;
   }
   /* 兼容：旧版 .sidebar-group-bar 标记保留不报错（如有遗留） */
   .sidebar-group-bar { display: none; }
   .sidebar-item {
     position: relative;
-    display: flex; align-items: center; gap: .55rem;
+    display: flex; align-items: center; gap: .5rem;
     width: 100%;
-    padding: .42rem .5rem .42rem .65rem;
+    /* 子项文字左缘 = 组标题 emoji 之后（.6rem 标题左距 + 26px emoji + .5rem 间距），
+       与主目录文字左对齐，形成「主目录文字 / 子项文字」同列层级 */
+    padding: .4rem .5rem .4rem calc(.6rem + 26px + .5rem);
     border: 1px solid transparent;
-    border-radius: 9px;
+    border-radius: 8px;
     background: transparent;
     color: var(--text);
     font-family: inherit;
-    font-size: .84rem;
-    font-weight: 600;
+    font-size: .76rem;
+    font-weight: 500;            /* 弱于主目录，拉开主次 */
     text-align: left;
     cursor: pointer;
     transition: background .18s ease, color .18s ease,
@@ -1711,6 +1742,13 @@ img { max-width: 100%; display: block; }
                 box-shadow .18s ease;
     overflow: hidden;            /* 容许 label 省略号生效 */
   }
+  /* 子项左侧 indent 引导竖线：树状隶属感，对齐到主目录 accent 竖条正下方 */
+  .sidebar-item::after {
+    content: ""; position: absolute; left: 1px; top: 0; bottom: 0;
+    width: 1px; background: rgba(99,102,241,.18);
+    pointer-events: none;
+  }
+  .sidebar-item:last-child::after { bottom: 50%; }   /* 末端收口，不穿底 */
   /* hover 微动效：向右轻移 2px + 浅紫底，强化「可点」暗示 */
   .sidebar-item:hover {
     background: rgba(255,255,255,.85);
@@ -1745,6 +1783,7 @@ img { max-width: 100%; display: block; }
     border-color: transparent;
     box-shadow: 0 8px 20px rgba(79,70,229,.28);
   }
+  .sidebar-item.is-active::after { display: none; }   /* 激活态隐藏 indent 竖线 */
   .sidebar-item.is-active .sidebar-item-icon {
     background: rgba(255,255,255,.22);
   }
@@ -3141,6 +3180,17 @@ img { max-width: 100%; display: block; }
 /* ================ 会员中心（VDL 三轨会员） ================ */
 .member-modal.modal { width: min(680px, 100% - 2rem); max-width: 680px; }
 .member-card .modal-head { margin-bottom: .85rem; }
+/* 账号区（A1 本地账号） */
+.member-account {
+  margin-bottom: .85rem; padding: .55rem .7rem; border: 1px solid rgba(99,102,241,.22);
+  border-radius: 10px; background: var(--brand-soft, #eef0ff);
+}
+.member-auth { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.member-auth .adv-input { flex: 1 1 150px; min-width: 120px; }
+.member-auth .arc-msg { flex-basis: 100%; font-size: .78rem; }
+.member-account-info { display: flex; align-items: center; gap: .5rem; font-size: .84rem; }
+.member-acc-chip { display: inline-flex; align-items: center; gap: .3rem; padding: .25rem .6rem;
+  border-radius: 999px; background: #fff; border: 1px solid var(--line); color: var(--brand-strong, #4338ca); font-weight: 600; }
 .member-status { margin-bottom: .85rem; }
 .member-status-inner {
   display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
@@ -3220,16 +3270,13 @@ img { max-width: 100%; display: block; }
 /* ---------------- 2026-09-08 侧栏改版：中文组标题 + 分组折叠 + 子项去图标 ---------------- */
 /* 子项不显示 emoji 图标（纯文字更干净）；display:none 不参与布局，不留空位 */
 .sidebar-item-icon { display: none !important; }
-/* 组标题可点击折叠：箭头随收起/展开切换 */
-.sidebar-group-title {
-  cursor: pointer; user-select: none; -webkit-user-select: none;
-}
+/* 组标题折叠箭头：用品牌色更醒目；cursor / pointer 已在主定义区设置 */
 .sidebar-group-title::after {
   content: "▾"; margin-left: auto;
-  color: var(--text-mute, #9ca3af); font-size: .6rem;
+  color: var(--brand); font-size: 1rem; font-weight: 700; opacity: .65;
   transition: transform .15s ease;
 }
 .sidebar-group.collapsed .sidebar-group-title::after { content: "▸"; }
 .sidebar-group.collapsed .sidebar-item { display: none; }
-/* 中文组标题字距（原 .14em 为英文 caps 设计） */
-.sidebar-group-en { letter-spacing: .3em; font-size: .7rem; }
+/* 中文组标题字距（覆盖主定义，保持紧凑可读） */
+.sidebar-group-en { letter-spacing: .02em; }

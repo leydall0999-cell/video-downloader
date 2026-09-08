@@ -114,9 +114,10 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=504, detail=detail) from None
     return {'url': url, 'platform': {'key': platform.key, 'name': platform.name}, 'video': app.downloader.summarize(info), 'qualities': app.downloader.build_quality_options(info), 'sources': []}
 
-def _download_gate_error() -> str | None:
-    """下载配额门（2026-09-06）：免费 10 次/日 → 会员 1000 次/日。放行返回 None，否则返回引导文案。"""
-    qs = app.member_store.quota_state('download')
+def _download_gate_error(request) -> str | None:
+    """下载配额门（2026-09-06）：免费 10 次/日 → 会员 1000 次/日。放行返回 None，否则返回引导文案。
+    按请求用户态取 store（登录用户用其自身会员；匿名用全局免费档）。"""
+    qs = app.current_member_store(request).quota_state('download')
     if qs.get('allowed'):
         return None
     if qs.get('tier') == 'free':
@@ -286,7 +287,7 @@ def _valid_extract_mode(value: str) -> str:
 def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
     # 会员下载配额（2026-09-06）：免费 10 次/日 → 会员 1000 次/日；不足 402 + MEMBER_QUOTA|
-    _err = _download_gate_error()
+    _err = _download_gate_error(request)
     if _err:
         raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _err)
     url, platform = app.parse_source(payload.url)
@@ -296,8 +297,8 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
-    _charged = app.member_store.use_daily('download', 1)
-    _qs = app.member_store.quota_state('download')
+    _charged = app.current_member_store(request).use_daily('download', 1)
+    _qs = app.current_member_store(request).quota_state('download')
     return {'task_id': task.id, 'status': task.status,
             'quota': {'subscribed': _qs.get('tier') == 'member',
                       'free_used': _charged.get('used', _qs.get('used', 0)),
@@ -328,7 +329,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     skipped = 0
     quota_exhausted = False
     for u in urls:
-        _err = _download_gate_error()
+        _err = _download_gate_error(request)
         if _err:
             quota_exhausted = True
             break
@@ -339,11 +340,11 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
             continue
         task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode)
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
-        app.member_store.use_daily('download', 1)  # 每个成功创建的任务计 1 次下载配额
+        app.current_member_store(request).use_daily('download', 1)  # 每个成功创建的任务计 1 次下载配额
         task_ids.append(task.id)
     if not task_ids:
         if quota_exhausted:
-            raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + (_download_gate_error() or '今日免费下载次数已用尽 — 开通下载会员可解锁'))
+            raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + (_download_gate_error(request) or '今日免费下载次数已用尽 — 开通下载会员可解锁'))
         raise app.HTTPException(status_code=400, detail='链接均无法识别，请确认是视频播放页链接')
     return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted}
 

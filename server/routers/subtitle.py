@@ -212,9 +212,9 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
     if suffix not in app.UPLOAD_VIDEO_EXTS:
         raise app.HTTPException(status_code=409, detail="请选择视频文件")
     model_size = payload.model_size if payload.model_size in ALLOWED_MODELS else _DEFAULT_MODEL
-    # 会员权益：下载/AI 会员（含捆绑）满核提取；免费版固定 4 线程
+    # 会员权益：下载/AI 会员（含捆绑）满核提取；免费版固定 4 线程（按请求用户态判定，C2）
     try:
-        is_member = bool(app.member_store.status()["download_member"]["active"])
+        is_member = bool(app.current_member_store(request).status()["download_member"]["active"])
     except Exception:
         is_member = False
     full_threads = max(4, os.cpu_count() or 4)
