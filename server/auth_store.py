@@ -262,7 +262,7 @@ def _send_mode() -> str:
     env = os.environ.get("VDL_SEND_MODE")
     if env:
         return env.lower()
-    if _smtp_config() is not None:
+    if _smtp_accounts() is not None:
         return "smtp"
     return "dev"
 
@@ -307,34 +307,66 @@ def verify_reset_code(identifier: str, code: str) -> bool:
         return ok
 
 
-def _smtp_config() -> Optional[dict]:
-    """读取 SMTP 配置（~/.video-downloader/smtp.json，0600）。缺文件返回 None。"""
+def _smtp_accounts() -> Optional[list]:
+    """读取 SMTP 账户配置（~/.video-downloader/smtp.json，0600）。缺文件返回 None。
+
+    支持两种格式（自动兼容）：
+    1. 单账户（旧）：直接是 {host, user, ...} 对象 → 当作唯一账户（default）。
+    2. 多账户（新）：{"accounts": [ {...}, {...} ]}，每个账户可选
+       match_domains（收件域路由，如 ["qq.com","foxmail.com"]）与 default（兜底）。
+    非 dict 或无可解析账户返回 None。
+    """
     p = _base_dir() / "smtp.json"
     if not p.exists():
         return None
     try:
         with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
+    if "accounts" in data and isinstance(data["accounts"], list):
+        return [a for a in data["accounts"]
+                if isinstance(a, dict) and a.get("host") and a.get("user")]
+    # 单账户兼容
+    if data.get("host") and data.get("user"):
+        return [data]
+    return None
+
+
+def _select_smtp_account(to_email: str) -> Optional[dict]:
+    """按收件人域名选择 SMTP 账户。优先 match_domains 命中，其次 default，否则第一个。"""
+    accounts = _smtp_accounts()
+    if not accounts:
+        return None
+    domain = ""
+    if to_email and "@" in to_email:
+        domain = to_email.split("@", 1)[1].strip().lower()
+    for acc in accounts:
+        doms = acc.get("match_domains") or []
+        doms = [d.strip().lower() for d in doms]
+        if domain and domain in doms:
+            return acc
+    for acc in accounts:
+        if acc.get("default"):
+            return acc
+    return accounts[0]
 
 
 def _send_smtp(to_email: str, code: str) -> None:
     """通过 SMTP 发送验证码邮件（仅标准库，无第三方依赖）。
 
-    配置来自 ~/.video-downloader/smtp.json，结构：
-      {"host": "smtp.qq.com", "port": 465, "user": "me@qq.com",
-       "pass": "<授权码>", "from": "me@qq.com", "from_name": "VideoDownloader",
-       "use_ssl": true, "use_tls": false}
-    QQ 邮箱用 465+SSL 或 587+STARTTLS；Gmail 用 465+SSL 或 587+STARTTLS。
+    按收件人域名自动选择对应 SMTP 账户（QQ 收件→QQ 发件、Gmail 收件→Gmail 发件等）。
+    多账户配置见 ~/.video-downloader/smtp.json（{"accounts": [...]}，每个账户可带 match_domains）。
     """
     import smtplib
     from email.mime.text import MIMEText
     from email.utils import formataddr, formatdate
 
-    cfg = _smtp_config()
+    cfg = _select_smtp_account(to_email)
     if not cfg or not cfg.get("host") or not cfg.get("user"):
-        raise RuntimeError("SMTP 未配置：缺少 ~/.video-downloader/smtp.json")
+        raise RuntimeError("SMTP 未配置：缺少 ~/.video-downloader/smtp.json 或对应账户")
     host = cfg["host"]
     use_ssl = bool(cfg.get("use_ssl", int(cfg.get("port", 0)) == 465))
     port = int(cfg.get("port", 465 if use_ssl else 587))
