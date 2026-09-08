@@ -87,7 +87,7 @@ def _get_model(model_size: str):
             if model is None:
                 raise RuntimeError(
                     f"识别模型（{model_size}）加载/下载失败（已重试 3 次）：{last_err}。"
-                    "首次使用需联网下载模型（base≈75MB / small≈250MB / medium≈1.5GB），"
+                    "首次使用需联网下载模型（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB），"
                     "请检查网络或代理后重试；网络不稳可先换 base 模型。"
                 )
             _SUBTITLE_MODELS[model_size] = model
