@@ -172,6 +172,17 @@
     authTermsCheck: $('authTermsCheck'),
     authFootLogin: $('authFootLogin'),
     authFootReg: $('authFootReg'),
+    authPw2: $('authPw2'),
+    authFieldPw2: $('authFieldPw2'),
+    forgetModal: $('forgetModal'),
+    forgetModalClose: $('forgetModalClose'),
+    forgetIdent: $('forgetIdent'),
+    forgetPw: $('forgetPw'),
+    forgetPwToggle: $('forgetPwToggle'),
+    forgetPw2: $('forgetPw2'),
+    forgetSubmitBtn: $('forgetSubmitBtn'),
+    forgetMsg: $('forgetMsg'),
+    forgetBackLogin: $('forgetBackLogin'),
     legalModal: $('legalModal'),
     legalModalTitle: $('legalModalTitle'),
     legalModalClose: $('legalModalClose'),
@@ -10512,6 +10523,8 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.authActionBtn) el.authActionBtn.textContent = isReg ? '注册' : '登录';
     if (el.authOptionsLogin) el.authOptionsLogin.hidden = isReg;
     if (el.authTerms) el.authTerms.hidden = !isReg;
+    if (el.authFieldPw2) el.authFieldPw2.hidden = !isReg;
+    if (el.authPw2) el.authPw2.value = '';
     if (el.authFootLogin) el.authFootLogin.hidden = isReg;
     if (el.authFootReg) el.authFootReg.hidden = !isReg;
     _authMsg('');
@@ -10521,8 +10534,12 @@ el.dwVidPlayer.removeAttribute('src');
     const ident = (el.authIdent.value || '').trim();
     const pw = el.authPw.value || '';
     if (!ident || pw.length < 6) { _authMsg('请输入账号，密码至少 6 位', true); return; }
-    if (authMode === 'register' && el.authTermsCheck && !el.authTermsCheck.checked) {
-      _authMsg('请先勾选同意服务条款与隐私政策', true); return;
+    if (authMode === 'register') {
+      const pw2 = el.authPw2 ? el.authPw2.value : '';
+      if (pw !== pw2) { _authMsg('两次输入的密码不一致', true); return; }
+      if (el.authTermsCheck && !el.authTermsCheck.checked) {
+        _authMsg('请先勾选同意服务条款与隐私政策', true); return;
+      }
     }
     _authMsg('处理中…');
     try {
@@ -10567,6 +10584,66 @@ el.dwVidPlayer.removeAttribute('src');
     try { el.authModal.showModal(); } catch (_) { el.authModal.setAttribute('open', ''); }
     setTimeout(() => { if (el.authIdent) el.authIdent.focus(); }, 60);
   }
+  function _forgetMsg(text, isErr) {
+    if (!el.forgetMsg) return;
+    el.forgetMsg.textContent = text || '';
+    el.forgetMsg.hidden = !text;
+    el.forgetMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
+  }
+  function toggleForgetPwVisible() {
+    if (!el.forgetPw || !el.forgetPwToggle) return;
+    const isPw = el.forgetPw.type === 'password';
+    el.forgetPw.type = isPw ? 'text' : 'password';
+    const openEye = el.forgetPwToggle.querySelector('#forgetEyeOpen');
+    const closedEye = el.forgetPwToggle.querySelector('#forgetEyeClosed');
+    if (openEye && closedEye) { openEye.hidden = !isPw; closedEye.hidden = isPw; }
+    el.forgetPwToggle.setAttribute('aria-label', isPw ? '隐藏密码' : '显示密码');
+    el.forgetPwToggle.setAttribute('title', isPw ? '隐藏密码' : '显示密码');
+  }
+  async function openForgetModal() {
+    if (!el.forgetModal) return;
+    try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); }
+    if (el.forgetIdent) el.forgetIdent.value = '';
+    if (el.forgetPw) { el.forgetPw.value = ''; el.forgetPw.type = 'password'; }
+    if (el.forgetPw2) el.forgetPw2.value = '';
+    const openEye = el.forgetPwToggle && el.forgetPwToggle.querySelector('#forgetEyeOpen');
+    const closedEye = el.forgetPwToggle && el.forgetPwToggle.querySelector('#forgetEyeClosed');
+    if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
+    _forgetMsg('');
+    try { el.forgetModal.showModal(); } catch (_) { el.forgetModal.setAttribute('open', ''); }
+    setTimeout(() => { if (el.forgetIdent) el.forgetIdent.focus(); }, 60);
+  }
+  function backToLogin() {
+    try { el.forgetModal.close(); } catch (_) { el.forgetModal.removeAttribute('open'); }
+    openAuthModal();
+  }
+  async function forgetAction() {
+    if (!el.forgetIdent || !el.forgetPw) return;
+    const ident = (el.forgetIdent.value || '').trim();
+    const pw = el.forgetPw.value || '';
+    const pw2 = el.forgetPw2 ? el.forgetPw2.value : '';
+    if (!ident || pw.length < 6) { _forgetMsg('请输入账号，新密码至少 6 位', true); return; }
+    if (pw !== pw2) { _forgetMsg('两次输入的新密码不一致', true); return; }
+    _forgetMsg('处理中…');
+    try {
+      const r = await request('/api/auth/reset', {
+        method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+      });
+      if (r && r.ok) {
+        _forgetMsg('✅ 密码已重置，请用新密码登录');
+        if (el.forgetPw) el.forgetPw.value = '';
+        if (el.forgetPw2) el.forgetPw2.value = '';
+        setTimeout(() => {
+          try { el.forgetModal.close(); } catch (_) { el.forgetModal.removeAttribute('open'); }
+          openAuthModal();
+        }, 900);
+      } else {
+        _forgetMsg('❌ ' + ((r && r.error) || '重置失败'), true);
+      }
+    } catch (e) {
+      _forgetMsg('❌ ' + ((e && (e.message || e.hint)) || '网络错误'), true);
+    }
+  }
 
   async function openMemberCenter() {
     if (!el.memberModal) return;
@@ -10595,7 +10672,16 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authActionBtn) el.authActionBtn.click(); });
   if (el.authIdent) el.authIdent.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authPw) el.authPw.focus(); });
   if (el.authPwToggle) el.authPwToggle.addEventListener('click', toggleAuthPwVisible);
-  if (el.authForgot) el.authForgot.addEventListener('click', (e) => { e.preventDefault(); _authMsg('测试期暂未开放密码找回，请重新注册或记录好密码', true); });
+  if (el.authForgot) el.authForgot.addEventListener('click', (e) => { e.preventDefault(); openForgetModal(); });
+  // 忘记密码弹窗：重置 / 切换密码可见 / 返回登录 / 关闭
+  if (el.forgetSubmitBtn) el.forgetSubmitBtn.addEventListener('click', forgetAction);
+  if (el.forgetPw) el.forgetPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.forgetSubmitBtn) el.forgetSubmitBtn.click(); });
+  if (el.forgetIdent) el.forgetIdent.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.forgetPw) el.forgetPw.focus(); });
+  if (el.forgetPw2) el.forgetPw2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.forgetSubmitBtn) el.forgetSubmitBtn.click(); });
+  if (el.forgetPwToggle) el.forgetPwToggle.addEventListener('click', toggleForgetPwVisible);
+  if (el.forgetBackLogin) el.forgetBackLogin.addEventListener('click', (e) => { e.preventDefault(); backToLogin(); });
+  if (el.forgetModalClose) el.forgetModalClose.addEventListener('click', () => { try { el.forgetModal.close(); } catch (_) {} });
+  if (el.forgetModal) el.forgetModal.addEventListener('click', (e) => { if (e.target === el.forgetModal) { try { el.forgetModal.close(); } catch (_) {} } });
   if (el.authModalClose) el.authModalClose.addEventListener('click', () => { try { el.authModal.close(); } catch (_) {} });
   if (el.authModal) el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { try { el.authModal.close(); } catch (_) {} } });
   // 法律条款弹窗（服务条款 / 隐私政策）

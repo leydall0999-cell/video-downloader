@@ -220,3 +220,23 @@ def user_identifier(user_id: str) -> Optional[str]:
     data = _load_users()
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)
     return user["identifier"] if user else None
+
+
+def reset_password(identifier: str, new_password: str) -> bool:
+    """本地重置密码（无邮箱验证，本机自助）。成功返回 True，账号不存在/密码过短返回 False。"""
+    if not new_password or len(new_password) < 6:
+        return False
+    ident = _normalize(identifier)
+    data = _load_users()
+    user_id = data["by_identifier"].get(ident)
+    if not user_id:
+        return False
+    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+    if not user:
+        return False
+    salt, pw_hash = hash_password(new_password)
+    user["salt"] = salt
+    user["pw_hash"] = pw_hash
+    user["updated_at"] = int(time.time())
+    _save_users(data)
+    return True

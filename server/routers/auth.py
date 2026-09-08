@@ -1,9 +1,9 @@
 """server/routers/auth.py — VDL 本地账号（/api/auth/*，A1）。
 
-注册/登录/查询当前用户。token 为 HMAC 签名的无状态 Bearer，前端存于
+注册/登录/查询当前用户/本地重置密码。token 为 HMAC 签名的无状态 Bearer，前端存于
 localStorage('vdl_auth_token')，后续请求经 Authorization: Bearer <token> 携带。
 
-V1 不做邮箱/手机验证、不做密码找回（本地账号，凭据本机可控）。
+V1 不做邮箱/手机验证；密码找回为本地自助重置（输入账号+新密码直接改密）。
 """
 from __future__ import annotations
 
@@ -60,3 +60,19 @@ def auth_me(request: Request) -> dict[str, Any]:
         return {"ok": False, "error": "未登录", "code": "NO_AUTH"}
     from auth_store import user_identifier
     return {"ok": True, "user_id": uid, "identifier": user_identifier(uid) or uid}
+
+
+@router.post("/api/auth/reset")
+def auth_reset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    ident = str(payload.get("identifier") or "").strip().lower()
+    pw = str(payload.get("password") or "")
+    if not ident:
+        return {"ok": False, "error": "请输入邮箱或手机号"}
+    if "@" not in ident and not ident.startswith("+"):
+        return {"ok": False, "error": "账号需为邮箱（含@）或手机号（以+开头）"}
+    if len(pw) < 6:
+        return {"ok": False, "error": "新密码至少 6 位"}
+    from auth_store import reset_password
+    if not reset_password(ident, pw):
+        return {"ok": False, "error": "该账号不存在，无法重置"}
+    return {"ok": True}
