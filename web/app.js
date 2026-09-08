@@ -3679,7 +3679,7 @@
         el.sbProgressFill.style.width = '100%';
         sbState.srtName = st.srt_name || 'subtitle.srt';
         sbState.txtName = st.txt_name || 'subtitle.txt';
-        el.sbMeta.textContent = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'}`;
+        el.sbMeta.textContent = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'} · ${st.cpu_threads || 4} 线程`;
         el.sbResult.hidden = false;
         sbSetStatus('完成 ✅');
       } else if (st.status === 'failed') {

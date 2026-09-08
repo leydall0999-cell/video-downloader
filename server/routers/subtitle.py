@@ -54,9 +54,10 @@ def _resolve_safe_local_path(path: str) -> _Path:
         raise app.HTTPException(status_code=400, detail=f"无法解析路径：{path}")
 
 
-def _get_model(model_size: str):
+def _get_model(model_size: str, cpu_threads: int = 4):
     """进程级模型缓存：首次加载/下载耗时，之后秒级。
 
+    cpu_threads 按会员状态区分（免费 4 / 会员满核），模型实例按「模型:线程数」缓存。
     鲁棒性：HF 镜像强制覆盖（huggingface_hub 若已被提前 import，模块级
     constants 会固化默认端点，故同时改环境变量与 constants）；加载/下载
     失败自动重试 3 次，第 3 次回退本地缓存离线加载（之前下载过就能救回）。
@@ -69,17 +70,17 @@ def _get_model(model_size: str):
     except Exception:
         pass
 
+    cache_key = f"{model_size}:{cpu_threads}"
     with _SUBTITLE_LOCK:
-        model = _SUBTITLE_MODELS.get(model_size)
+        model = _SUBTITLE_MODELS.get(cache_key)
         if model is None:
             from faster_whisper import WhisperModel
             last_err: Exception | None = None
             for attempt in range(1, 4):
                 local_only = attempt >= 3   # 第 3 次尝试纯离线（命中本地缓存即成功）
                 try:
-                    # cpu_threads 默认 4，吃不满 M 系列多核（本机 8 核）——设满全核
                     model = WhisperModel(model_size, device="cpu", compute_type="int8",
-                                         cpu_threads=max(4, os.cpu_count() or 4),
+                                         cpu_threads=cpu_threads,
                                          local_files_only=local_only)
                     break
                 except Exception as e:
@@ -93,7 +94,7 @@ def _get_model(model_size: str):
                     "首次使用需联网下载模型（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB），"
                     "请检查网络或代理后重试；网络不稳可先换 base 模型。"
                 )
-            _SUBTITLE_MODELS[model_size] = model
+            _SUBTITLE_MODELS[cache_key] = model
         return model
 
 
@@ -107,8 +108,9 @@ def _fmt_ts(seconds: float) -> str:
 
 
 def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_library: bool,
-                  fast: bool = False) -> None:
-    """后台线程：抽音频 → ASR → SRT/TXT，更新 SUBTITLE_JOBS。"""
+                  fast: bool = False, cpu_threads: int = 4) -> None:
+    """后台线程：抽音频 → ASR → SRT/TXT，更新 SUBTITLE_JOBS。
+    cpu_threads：免费 4 / 会员满核（extract 端点按会员状态决定）。"""
     job = SUBTITLE_JOBS.get(job_id)
     if not job:
         return
@@ -132,9 +134,9 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
             raise RuntimeError(f"音频提取失败：{(proc.stderr or '')[-300:]}")
         job["progress"] = 15
 
-        # 2) 加载模型（首次含下载，可能数分钟）
-        job["stage"] = f"加载模型（{model_size}，首次需下载）"
-        model = _get_model(model_size)
+        # 2) 加载模型（首次含下载，可能数分钟）；线程数按会员状态（免费 4 / 会员满核）
+        job["stage"] = f"加载模型（{model_size} · {cpu_threads} 线程，首次需下载）"
+        model = _get_model(model_size, cpu_threads)
 
         # 3) 转写：VAD 句级分段，逐句输出（对话切换处自然断句）
         job["stage"] = "识别中" + ("（快速模式）" if fast else "")
@@ -210,18 +212,26 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
     if suffix not in app.UPLOAD_VIDEO_EXTS:
         raise app.HTTPException(status_code=409, detail="请选择视频文件")
     model_size = payload.model_size if payload.model_size in ALLOWED_MODELS else _DEFAULT_MODEL
+    # 会员权益：下载/AI 会员（含捆绑）满核提取；免费版固定 4 线程
+    try:
+        is_member = bool(app.member_store.status()["download_member"]["active"])
+    except Exception:
+        is_member = False
+    full_threads = max(4, os.cpu_count() or 4)
+    cpu_threads = full_threads if is_member else 4
     job_id = app.uuid.uuid4().hex[:12]
     with _SUBTITLE_LOCK:
         SUBTITLE_JOBS[job_id] = {
             "status": "running", "stage": "排队中", "progress": 0, "error": "",
             "srt_file": "", "txt_file": "", "srt_name": "", "txt_name": "",
-            "lines": 0, "language": "",
+            "lines": 0, "language": "", "cpu_threads": cpu_threads,
             "device_id": _device_of_req(request),
         }
     app.executor.submit(_run_subtitle, job_id, str(resolved), model_size,
                         (payload.language or "").strip(), bool(payload.to_library),
-                        bool(payload.fast))
-    return {"job_id": job_id, "status": "running", "model": model_size}
+                        bool(payload.fast), cpu_threads)
+    return {"job_id": job_id, "status": "running", "model": model_size,
+            "cpu_threads": cpu_threads, "member": is_member}
 
 
 @router.get("/api/subtitle/{job_id}")
@@ -232,7 +242,7 @@ def subtitle_status(job_id: str, request: app.Request) -> dict:
     return {"status": job["status"], "stage": job.get("stage", ""), "progress": job.get("progress", 0),
             "error": job.get("error", ""), "srt_name": job.get("srt_name", ""),
             "txt_name": job.get("txt_name", ""), "lines": job.get("lines", 0),
-            "language": job.get("language", "")}
+            "language": job.get("language", ""), "cpu_threads": job.get("cpu_threads", 4)}
 
 
 def _subtitle_file(job_id: str, kind: str, request: app.Request) -> _Path:
