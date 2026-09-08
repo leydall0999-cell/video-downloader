@@ -10408,8 +10408,8 @@ el.dwVidPlayer.removeAttribute('src');
       const aiNote = p.ai_member && p.ai_member.bundle_note ? `<div class="member-bundle-note">🔗 ${p.ai_member.bundle_note}</div>` : '';
       const aiCards = Object.entries(aiPlans).map(([code, plan]) =>
         _memberCard(plan, code, {
-          meta: `30 天 · 一次性到账 ${plan.credits} 积分`,
-          foot: `<div class="member-card-foot">含下载会员权益 · AI 积分随会员到期清零</div>`,
+          meta: `月赠 ${plan.credits} 积分（30 天有效）`,
+          foot: `<div class="member-card-foot">含下载会员权益 · 积分 30 天有效</div>`,
         })).join('');
       el.memberPaneAi.innerHTML = `${aiNote}<div class="member-plans">${aiCards}</div>`;
       // 永久积分包
