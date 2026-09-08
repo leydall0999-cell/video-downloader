@@ -2183,13 +2183,24 @@
       </div>
       <label class="auth-terms" id="authTerms" hidden>
         <input type="checkbox" id="authTermsCheck" />
-        <span>我已仔细阅读并同意<a href="#" class="auth-link">《服务条款》</a>和<a href="#" class="auth-link">《隐私政策》</a></span>
+        <span>我已仔细阅读并同意<a href="terms.html" class="auth-link legal-link" data-legal="terms">《服务条款》</a>和<a href="privacy.html" class="auth-link legal-link" data-legal="privacy">《隐私政策》</a></span>
       </label>
       <button type="button" class="btn btn-primary auth-submit" id="authActionBtn">登录</button>
       <span class="auth-msg" id="authMsg" hidden></span>
-      <p class="auth-foot" id="authFootLogin">登录即表示您同意<a href="#" class="auth-link">《服务条款》</a>和<a href="#" class="auth-link">《隐私政策》</a></p>
-      <p class="auth-foot" id="authFootReg" hidden>注册即表示您同意<a href="#" class="auth-link">《服务条款》</a>和<a href="#" class="auth-link">《隐私政策》</a></p>
+      <p class="auth-foot" id="authFootLogin">登录即表示您同意<a href="terms.html" class="auth-link legal-link" data-legal="terms">《服务条款》</a>和<a href="privacy.html" class="auth-link legal-link" data-legal="privacy">《隐私政策》</a></p>
+      <p class="auth-foot" id="authFootReg" hidden>注册即表示您同意<a href="terms.html" class="auth-link legal-link" data-legal="terms">《服务条款》</a>和<a href="privacy.html" class="auth-link legal-link" data-legal="privacy">《隐私政策》</a></p>
     </div>
+  </div>
+</dialog>
+
+<!-- 法律条款弹窗：服务条款 / 隐私政策 -->
+<dialog id="legalModal" class="modal" aria-labelledby="legalModalTitle">
+  <div class="modal-card legal-card">
+    <div class="modal-head">
+      <h2 id="legalModalTitle">服务条款</h2>
+      <button type="button" class="modal-close" id="legalModalClose" aria-label="关闭">✕</button>
+    </div>
+    <iframe id="legalFrame" class="legal-frame" src="terms.html" title="法律条款"></iframe>
   </div>
 </dialog>
 

@@ -172,6 +172,10 @@
     authTermsCheck: $('authTermsCheck'),
     authFootLogin: $('authFootLogin'),
     authFootReg: $('authFootReg'),
+    legalModal: $('legalModal'),
+    legalModalTitle: $('legalModalTitle'),
+    legalModalClose: $('legalModalClose'),
+    legalFrame: $('legalFrame'),
     authMsg: $('authMsg'),
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
@@ -10594,6 +10598,23 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.authForgot) el.authForgot.addEventListener('click', (e) => { e.preventDefault(); _authMsg('测试期暂未开放密码找回，请重新注册或记录好密码', true); });
   if (el.authModalClose) el.authModalClose.addEventListener('click', () => { try { el.authModal.close(); } catch (_) {} });
   if (el.authModal) el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { try { el.authModal.close(); } catch (_) {} } });
+  // 法律条款弹窗（服务条款 / 隐私政策）
+  function openLegalModal(doc) {
+    if (!el.legalModal || !el.legalFrame) return;
+    const title = doc === 'privacy' ? '隐私政策' : '服务条款';
+    const src = doc === 'privacy' ? 'privacy.html' : 'terms.html';
+    if (el.legalModalTitle) el.legalModalTitle.textContent = title;
+    el.legalFrame.src = src;
+    try { el.legalModal.showModal(); } catch (_) { el.legalModal.setAttribute('open', ''); }
+  }
+  if (el.legalModalClose) el.legalModalClose.addEventListener('click', () => { try { el.legalModal.close(); } catch (_) {} });
+  if (el.legalModal) el.legalModal.addEventListener('click', (e) => { if (e.target === el.legalModal) { try { el.legalModal.close(); } catch (_) {} } });
+  document.querySelectorAll('.legal-link').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      openLegalModal(a.getAttribute('data-legal') || 'terms');
+    });
+  });
   if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
