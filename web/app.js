@@ -457,6 +457,7 @@
     sbFileLabel: $('sbFileLabel'),
     sbModel: $('sbModel'),
     sbLang: $('sbLang'),
+    sbFast: $('sbFast'),
     sbStartBtn: $('sbStartBtn'),
     sbProgressWrap: $('sbProgressWrap'),
     sbProgressFill: $('sbProgressFill'),
@@ -3738,6 +3739,7 @@
         local_path: sbState.path,
         model_size: el.sbModel.value || 'small',
         language: el.sbLang.value || '',
+        fast: !!(el.sbFast && el.sbFast.checked),
       }),
       headers: { 'Content-Type': 'application/json' },
     }).then(data => {

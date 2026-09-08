@@ -36,6 +36,7 @@ class SubtitleRequest(app.BaseModel):
     model_size: str = "small"        # base / small / medium / large-v3
     language: str = ""               # ""=自动检测 / "zh" / "en"
     to_library: bool = False
+    fast: bool = False               # 快速模式：贪心解码，约快 2~3 倍，准确度略降
 
 
 def _resolve_safe_local_path(path: str) -> _Path:
@@ -76,7 +77,9 @@ def _get_model(model_size: str):
             for attempt in range(1, 4):
                 local_only = attempt >= 3   # 第 3 次尝试纯离线（命中本地缓存即成功）
                 try:
+                    # cpu_threads 默认 4，吃不满 M 系列多核（本机 8 核）——设满全核
                     model = WhisperModel(model_size, device="cpu", compute_type="int8",
+                                         cpu_threads=max(4, os.cpu_count() or 4),
                                          local_files_only=local_only)
                     break
                 except Exception as e:
@@ -103,7 +106,8 @@ def _fmt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_library: bool) -> None:
+def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_library: bool,
+                  fast: bool = False) -> None:
     """后台线程：抽音频 → ASR → SRT/TXT，更新 SUBTITLE_JOBS。"""
     job = SUBTITLE_JOBS.get(job_id)
     if not job:
@@ -133,14 +137,17 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
         model = _get_model(model_size)
 
         # 3) 转写：VAD 句级分段，逐句输出（对话切换处自然断句）
-        job["stage"] = "识别中"
-        segments, info = model.transcribe(
-            str(wav_path),
+        job["stage"] = "识别中" + ("（快速模式）" if fast else "")
+        # 快速模式：贪心解码(beam=1) + 不继承前文——解码开销降约 2~3 倍；
+        # condition_on_previous_text=False 还能避免长音频复读/幻觉连锁，准确度略降
+        transcribe_kwargs = dict(
             language=language or None,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 350},
-            beam_size=5,
+            beam_size=1 if fast else 5,
+            condition_on_previous_text=not fast,
         )
+        segments, info = model.transcribe(str(wav_path), **transcribe_kwargs)
         rows = []            # (start, end, text)
         total = info.duration or 0.0
         for seg in segments:
@@ -212,7 +219,8 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
             "device_id": _device_of_req(request),
         }
     app.executor.submit(_run_subtitle, job_id, str(resolved), model_size,
-                        (payload.language or "").strip(), bool(payload.to_library))
+                        (payload.language or "").strip(), bool(payload.to_library),
+                        bool(payload.fast))
     return {"job_id": job_id, "status": "running", "model": model_size}
 
 
