@@ -10517,6 +10517,11 @@ el.dwVidPlayer.removeAttribute('src');
     try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
     _renderAuthHeader();
   }
+  function _isValidIdentifier(ident) {
+    if (!ident) return false;
+    if (ident.includes('@')) return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ident);
+    return /^1[3-9]\d{9}$/.test(ident) || /^\+[1-9]\d{1,14}$/.test(ident);
+  }
   function setAuthMode(mode) {
     authMode = mode === 'register' ? 'register' : 'login';
     const isReg = authMode === 'register';
@@ -10577,7 +10582,9 @@ el.dwVidPlayer.removeAttribute('src');
     if (!el.authIdent || !el.authPw) return;
     const ident = (el.authIdent.value || '').trim();
     const pw = el.authPw.value || '';
-    if (!ident || pw.length < 6) { _authMsg('请输入账号，密码至少 6 位', true); return; }
+    if (!ident) { _authMsg('请输入邮箱或手机号', true); return; }
+    if (!_isValidIdentifier(ident)) { _authMsg('账号需为有效邮箱或手机号', true); return; }
+    if (pw.length < 6) { _authMsg('密码至少 6 位', true); return; }
     if (authMode === 'register') {
       const pw2 = el.authPw2 ? el.authPw2.value : '';
       if (pw !== pw2) { _authMsg('两次输入的密码不一致', true); return; }
@@ -10708,7 +10715,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (!el.forgetIdent) return;
     const ident = (el.forgetIdent.value || '').trim();
     if (!ident) { _forgetMsg('请输入邮箱或手机号', true); if (el.forgetIdent) el.forgetIdent.focus(); return; }
-    if (!/@/.test(ident) && !ident.startsWith('+')) { _forgetMsg('账号需为邮箱（含@）或手机号（以+开头）', true); return; }
+    if (!_isValidIdentifier(ident)) { _forgetMsg('账号需为有效邮箱或手机号', true); return; }
     _forgetMsg('发送中…');
     try {
       const r = await request('/api/auth/reset-code', {

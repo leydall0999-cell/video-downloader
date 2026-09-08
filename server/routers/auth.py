@@ -8,11 +8,25 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
+
+# 邮箱：包含 @ 即可（简单校验，完整校验交由前端/用户输入）
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# 手机号：支持中国大陆 11 位（1[3-9]...）或 E.164 国际格式（+ 开头）
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+_E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
+
+
+def _is_valid_identifier(ident: str) -> bool:
+    """账号为邮箱或有效手机号（不强求 + 开头）。"""
+    if "@" in ident:
+        return bool(_EMAIL_RE.match(ident))
+    return bool(_PHONE_RE.match(ident) or _E164_RE.match(ident))
 
 
 def _auth_user_id(request: Request) -> Optional[str]:
@@ -30,8 +44,8 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     pw = str(payload.get("password") or "")
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
-    if "@" not in ident and not ident.startswith("+"):
-        return {"ok": False, "error": "账号需为邮箱（含@）或手机号（以+开头）"}
+    if not _is_valid_identifier(ident):
+        return {"ok": False, "error": "账号需为有效邮箱或手机号"}
     if len(pw) < 6:
         return {"ok": False, "error": "密码至少 6 位"}
     from auth_store import create_user, issue_token
@@ -68,8 +82,8 @@ def auth_reset_code(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     ident = str(payload.get("identifier") or "").strip().lower()
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
-    if "@" not in ident and not ident.startswith("+"):
-        return {"ok": False, "error": "账号需为邮箱（含@）或手机号（以+开头）"}
+    if not _is_valid_identifier(ident):
+        return {"ok": False, "error": "账号需为有效邮箱或手机号"}
     from auth_store import (
         generate_reset_code,
         reset_code_cooldown_ok,
@@ -93,8 +107,8 @@ def auth_reset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     code = str(payload.get("code") or "").strip()
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
-    if "@" not in ident and not ident.startswith("+"):
-        return {"ok": False, "error": "账号需为邮箱（含@）或手机号（以+开头）"}
+    if not _is_valid_identifier(ident):
+        return {"ok": False, "error": "账号需为有效邮箱或手机号"}
     if not code:
         return {"ok": False, "error": "请输入验证码"}
     if len(pw) < 6:
