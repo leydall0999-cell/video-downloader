@@ -4980,7 +4980,14 @@
         .catch(e => {
           matBusy = false;
           el.matBtn.disabled = false;
-          el.matStatus.textContent = '提交失败：' + (e && e.detail ? e.detail : '未知错误');
+          const _d = (e && e.detail) || '';
+          if (_d.indexOf('积分不足') >= 0) {
+            // AI 积分不足：引导开通 AI 会员 / 购买积分包
+            try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+            el.matStatus.textContent = '提交失败：' + _d;
+          } else {
+            el.matStatus.textContent = '提交失败：' + (_d || '未知错误');
+          }
         });
   };
 
@@ -4998,20 +5005,26 @@
     const fd = new FormData();
     fd.append('file', file);
     fd.append('force_cloud', '1');
-    fetch('/api/matting/image', { method: 'POST', body: fd })
-      .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
-      .then(d => {
-        matJobId = d.job_id;
-        el.matStatus.textContent = '准备中…（☁️ 云端精修）';
-        if (matTimer) clearInterval(matTimer);
-        matTimer = setInterval(matPoll, 1500);
-      })
-      .catch(e => {
-        matBusy = false;
-        el.matBtn.disabled = false;
-        if (el.matUpgradeCloud) el.matUpgradeCloud.disabled = false;
-        el.matStatus.textContent = '升级失败：' + (e && e.detail ? e.detail : '未知错误');
-      });
+      fetch('/api/matting/image', { method: 'POST', body: fd })
+        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
+        .then(d => {
+          matJobId = d.job_id;
+          el.matStatus.textContent = '准备中…（☁️ 云端精修）';
+          if (matTimer) clearInterval(matTimer);
+          matTimer = setInterval(matPoll, 1500);
+        })
+        .catch(e => {
+          matBusy = false;
+          el.matBtn.disabled = false;
+          if (el.matUpgradeCloud) el.matUpgradeCloud.disabled = false;
+          const _d = (e && e.detail) || '';
+          if (_d.indexOf('积分不足') >= 0) {
+            try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+            el.matStatus.textContent = '升级失败：' + _d;
+          } else {
+            el.matStatus.textContent = '升级失败：' + (_d || '未知错误');
+          }
+        });
   };
 
   // PDF 模式切换时展示/隐藏栅格化选项

@@ -72,6 +72,60 @@ AI_FEATURES: list[str] = [
 ]
 
 # --------------------------------------------------------------------------- #
+# AI 积分成本表（每次 AI 算力调用的扣费，集中定义便于调价）
+# --------------------------------------------------------------------------- #
+# 字幕提取：按模型算力差异定价（base 最轻 → large-v3 最重）
+SUBTITLE_CREDIT_COST: dict[str, int] = {
+    "base": 50, "small": 100, "medium": 200, "large-v3": 400, "default": 100,
+}
+# AI 去水印（LaMa）单张图
+DW_AI_CREDIT_COST: int = 30
+# 云端抠图（火山 MediaKit，真实服务端算力）单次
+MATTING_CLOUD_CREDIT_COST: int = 50
+
+
+def credit_cost(op: str, sub: str | None = None) -> int:
+    """查询某次 AI 操作的积分成本。未知 op 返回 0（不扣费）。"""
+    if op == "subtitle":
+        return int(SUBTITLE_CREDIT_COST.get(sub or "default", SUBTITLE_CREDIT_COST["default"]))
+    if op == "dw_ai":
+        return int(DW_AI_CREDIT_COST)
+    if op == "matting_cloud":
+        return int(MATTING_CLOUD_CREDIT_COST)
+    return 0
+
+
+def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
+              reason: str | None = None) -> dict[str, Any]:
+    """按成本扣 AI 积分。返回 spend_credits 的结果 dict（ok/error）。
+
+    成本 <=0 视为免费操作，直接返回 ok=True（不污染积分池）。
+    """
+    cost = credit_cost(op, sub)
+    if cost <= 0:
+        return {"ok": True, "spent": 0, "free": True, "credits_left": store.status()["credits_total"]}
+    return store.spend_credits(cost, reason=reason or op)
+
+
+def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
+                 reason: str | None = None) -> str | None:
+    """扣积分并产出拦截原因：None=放行；非 None=「积分不足」原因字符串（供 402 detail）。
+
+    成本 <=0 视为免费放行；spend 系统异常时降级放行（记日志），不阻断主流程。
+    """
+    cost = credit_cost(op, sub)
+    if cost <= 0:
+        return None
+    try:
+        res = store.spend_credits(cost, reason=reason or op)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("membership").warning("credit gate error op=%s: %s", op, e)
+        return None
+    if res.get("ok"):
+        return None
+    return f"AI 积分不足：本次操作需 {cost} 积分，当前 {res.get('credits_left', 0)}（请开通 AI 会员或购买积分包）"
+
+# --------------------------------------------------------------------------- #
 # 状态文件
 # --------------------------------------------------------------------------- #
 

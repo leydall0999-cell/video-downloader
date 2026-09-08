@@ -12,12 +12,19 @@ import logging
 import threading
 
 import app
+import membership as _mem
 import matting_ai as mat
 import vision_client
 from fastapi import APIRouter
 
 router = APIRouter()
 logger = logging.getLogger("matting")
+
+
+def _credit_gate(request, op: str, sub: str | None = None, reason: str | None = None) -> str | None:
+    """AI 积分门禁：按成本扣费，None=放行，字符串=拦截原因（供 402 detail）。"""
+    store = app.current_member_store(request)
+    return _mem.gate_message(store, op, sub, reason)
 
 MAT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 MAT_MODEL_EXTS = {".onnx"}
@@ -287,6 +294,12 @@ def create_matting_image(
     sr = (sam_refine or "").strip().lower() in ("1", "true", "yes", "on")
     prompt_text = (prompt or "").strip()
     fc = (force_cloud or "").strip().lower() in ("1", "true", "yes", "on")
+    # C2 门禁：云端抠图（火山 MediaKit，真实服务端算力）按次扣 AI 积分（不足拦截）；
+    # 本地 BiRefNet 为用户本机免费算力，不计费。
+    if fc:
+        _gate = _credit_gate(request, "matting_cloud", reason="cloud_matting")
+        if _gate:
+            raise app.HTTPException(status_code=402, detail=_gate)
     app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla, fc)
     return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 

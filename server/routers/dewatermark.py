@@ -7,6 +7,7 @@ import app
 import json
 import re as _re
 import subprocess as _subprocess
+import membership as _mem
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
 from codec_utils import h264_args
@@ -15,6 +16,12 @@ from fastapi import APIRouter
 router = APIRouter()
 
 DW_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def _credit_gate(request, op: str, sub: str | None = None, reason: str | None = None) -> str | None:
+    """AI 积分门禁：按成本扣费，None=放行，字符串=拦截原因（供 402 detail）。"""
+    store = app.current_member_store(request)
+    return _mem.gate_message(store, op, sub, reason)
 
 
 def _save_upload(file, prefix: str) -> app.Path:
@@ -145,6 +152,11 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="int8 仅支持 0 / 1")
     if model and model not in dwc_ai.list_models():
         raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
+    # C2 门禁：AI 去水印（LaMa）按次扣 AI 积分（不足拦截）；opencv 引擎免费
+    if engine == "ai":
+        _gate = _credit_gate(request, "dw_ai", reason="ai_dewatermark")
+        if _gate:
+            raise app.HTTPException(status_code=402, detail=_gate)
     save_path = _save_upload(file, "dw_up")
     job_id = app.uuid.uuid4().hex[:12]
     with app.DW_LOCK:

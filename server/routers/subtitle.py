@@ -17,8 +17,15 @@ from pathlib import Path as _Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 from .core import _device_of
+import membership as _mem
 
 router = APIRouter()
+
+
+def _credit_gate(request, op: str, sub: str | None = None, reason: str | None = None) -> str | None:
+    """AI 积分门禁：按成本扣费，None=放行，字符串=拦截原因（供 402 detail）。"""
+    store = app.current_member_store(request)
+    return _mem.gate_message(store, op, sub, reason)
 
 # 国内加速：faster-whisper 模型走 hf-mirror（huggingface_hub 每次下载时读环境变量）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -217,6 +224,10 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
         is_member = bool(app.current_member_store(request).status()["download_member"]["active"])
     except Exception:
         is_member = False
+    # C2 门禁：字幕提取按次扣 AI 积分（不足则拦截，402 引导订阅）
+    _gate = _credit_gate(request, "subtitle", model_size, reason="subtitle_extract")
+    if _gate:
+        raise app.HTTPException(status_code=402, detail=_gate)
     full_threads = max(4, os.cpu_count() or 4)
     cpu_threads = full_threads if is_member else 4
     job_id = app.uuid.uuid4().hex[:12]
