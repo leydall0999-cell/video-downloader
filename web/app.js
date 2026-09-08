@@ -169,6 +169,7 @@
     authOptionsLogin: $('authOptionsLogin'),
     authForgot: $('authForgot'),
     authRemember: $('authRemember'),
+    authRememberRow: $('authRememberRow'),
     authTerms: $('authTerms'),
     authTermsCheck: $('authTermsCheck'),
     authFootLogin: $('authFootLogin'),
@@ -10525,6 +10526,7 @@ el.dwVidPlayer.removeAttribute('src');
       if (toggle) toggle.addEventListener('click', (e) => { e.preventDefault(); setAuthMode(isReg ? 'login' : 'register'); });
     }
     if (el.authActionBtn) el.authActionBtn.textContent = isReg ? '创建账户' : '登录';
+    if (el.authRememberRow) el.authRememberRow.hidden = false;
     if (el.authOptionsLogin) el.authOptionsLogin.hidden = isReg;
     if (el.authTerms) el.authTerms.hidden = !isReg;
     if (el.authFieldPw2) el.authFieldPw2.hidden = !isReg;
@@ -10575,30 +10577,27 @@ el.dwVidPlayer.removeAttribute('src');
       }
     }
     const isReg = authMode === 'register';
-    // loading 态：禁用按钮 + 转圈 + 文案
+    // loading 态：禁用按钮 + 转圈 + 文案 + 禁止关闭弹窗
     if (el.authActionBtn) {
       el.authActionBtn.disabled = true;
       el.authActionBtn.classList.add('is-loading');
       el.authActionBtn.dataset.label = el.authActionBtn.textContent;
       el.authActionBtn.textContent = isReg ? '创建中…' : '登录中…';
     }
+    if (el.authModalClose) el.authModalClose.disabled = true;
     _authMsg('处理中…');
     try {
       const r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
         method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
       });
       if (r && r.ok && r.token) {
-        if (isReg) {
-          // 注册即创建账户，默认持久记住
+        const remember = el.authRemember ? el.authRemember.checked : true;
+        if (remember) {
+          // 勾选「记住我」：持久登录（重启 App 仍有效）
           try { localStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
         } else {
-          const remember = el.authRemember ? el.authRemember.checked : true;
-          if (remember) {
-            try { localStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
-          } else {
-            // 不勾选「记住我」：仅本次会话（App 退出即失效）
-            try { sessionStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
-          }
+          // 未勾选「记住我」：仅本次会话（App 退出即失效）
+          try { sessionStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
         }
         _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
         if (el.authPw) el.authPw.value = '';
@@ -10616,6 +10615,7 @@ el.dwVidPlayer.removeAttribute('src');
         el.authActionBtn.classList.remove('is-loading');
         if (el.authActionBtn.dataset.label) el.authActionBtn.textContent = el.authActionBtn.dataset.label;
       }
+      if (el.authModalClose) el.authModalClose.disabled = false;
     }
   }
   function toggleAuthPwVisible() {
@@ -10638,6 +10638,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
     if (el.authTermsCheck) el.authTermsCheck.checked = false;
     if (el.authActionBtn) { el.authActionBtn.disabled = false; el.authActionBtn.classList.remove('is-loading'); }
+    if (el.authModalClose) el.authModalClose.disabled = false;
     if (el.authPwStrength) el.authPwStrength.hidden = true;
     _updatePwStrength('');
     _authMsg('');
@@ -10743,8 +10744,12 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.forgetBackLogin) el.forgetBackLogin.addEventListener('click', (e) => { e.preventDefault(); backToLogin(); });
   if (el.forgetModalClose) el.forgetModalClose.addEventListener('click', () => { try { el.forgetModal.close(); } catch (_) {} });
   if (el.forgetModal) el.forgetModal.addEventListener('click', (e) => { if (e.target === el.forgetModal) { try { el.forgetModal.close(); } catch (_) {} } });
-  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { try { el.authModal.close(); } catch (_) {} });
-  if (el.authModal) el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { try { el.authModal.close(); } catch (_) {} } });
+  function _authLoading() { return !!(el.authActionBtn && el.authActionBtn.classList.contains('is-loading')); }
+  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { el.authModal.close(); } catch (_) {} });
+  if (el.authModal) {
+    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { el.authModal.close(); } catch (_) {} } });
+    el.authModal.addEventListener('cancel', (e) => { if (_authLoading()) e.preventDefault(); });
+  }
   // 法律条款弹窗（服务条款 / 隐私政策）
   function openLegalModal(doc) {
     if (!el.legalModal || !el.legalContent) return;

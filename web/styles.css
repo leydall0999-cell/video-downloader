@@ -3208,6 +3208,7 @@ img { max-width: 100%; display: block; }
   transition: background .15s, color .15s;
 }
 .auth-card .modal-close:hover { background: #e5e7eb; color: var(--text); }
+.auth-card .modal-close:disabled { opacity: .35; cursor: not-allowed; background: transparent; }
 .auth-head {
   text-align: center;
   margin: 0 auto 1.85rem;
@@ -3329,6 +3330,7 @@ img { max-width: 100%; display: block; }
   color: var(--text-mute);
   cursor: pointer;
   user-select: none;
+  margin-top: .25rem;
 }
 .auth-remember input[type="checkbox"] {
   width: 15px;
