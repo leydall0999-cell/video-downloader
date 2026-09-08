@@ -2423,7 +2423,43 @@
           <div class="admin-table-wrap"><table class="admin-table" id="adminStatsTable"></table></div>
         </section>
         <section class="admin-view" data-admin-view="config" id="adminViewConfig" hidden>
-          <div id="adminConfigBox" class="admin-config"></div>
+          <!-- SMTP 发件账户 -->
+          <div class="admin-cfg-section">
+            <div class="admin-cfg-head">
+              <h3>SMTP 发件账户</h3>
+              <span class="admin-cfg-hint">找回密码验证码由此发送；按收件域名自动选账户</span>
+            </div>
+            <div id="adminSmtpList" class="admin-table-wrap"></div>
+            <button type="button" id="adminSmtpAdd" class="admin-btn admin-btn-primary admin-btn-sm">+ 添加账户</button>
+            <form id="adminSmtpForm" class="admin-inline-form admin-smtp-form" hidden>
+              <input class="admin-input admin-input-sm" id="smtpHost" placeholder="smtp.qq.com" />
+              <input class="admin-input admin-input-sm" id="smtpPort" placeholder="465" type="number" />
+              <input class="admin-input admin-input-sm" id="smtpUser" placeholder="账号/邮箱" />
+              <input class="admin-input admin-input-sm" id="smtpPass" type="password" placeholder="授权码/密码" autocomplete="off" />
+              <input class="admin-input admin-input-sm" id="smtpFromName" placeholder="发件人名称" />
+              <input class="admin-input admin-input-sm" id="smtpDomains" placeholder="匹配域名，逗号分隔 qq.com,foxmail.com" />
+              <label class="admin-check"><input type="checkbox" id="smtpSsl" checked /> SSL</label>
+              <label class="admin-check"><input type="checkbox" id="smtpDefault" /> 默认</label>
+              <button type="button" id="smtpSave" class="admin-btn admin-btn-primary admin-btn-sm">保存</button>
+              <button type="button" id="smtpCancel" class="admin-btn admin-btn-sm">取消</button>
+            </form>
+            <p id="adminSmtpMsg" class="admin-msg"></p>
+          </div>
+          <!-- 套餐与积分成本 -->
+          <div class="admin-cfg-section">
+            <div class="admin-cfg-head">
+              <h3>套餐与积分成本</h3>
+              <span class="admin-cfg-hint">修改即时生效，写回 plans.json 覆盖层（默认值不丢）</span>
+            </div>
+            <div id="adminPlansBox"></div>
+            <button type="button" id="adminPlansSave" class="admin-btn admin-btn-primary admin-btn-sm">保存套餐配置</button>
+            <p id="adminPlansMsg" class="admin-msg"></p>
+          </div>
+          <!-- 管理口令 -->
+          <div class="admin-cfg-section">
+            <div class="admin-cfg-head"><h3>管理口令</h3></div>
+            <button type="button" id="adminCfgChangePw" class="admin-btn admin-btn-sm">修改管理口令</button>
+          </div>
         </section>
       </div>
     </div>

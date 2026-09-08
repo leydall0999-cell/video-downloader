@@ -11939,7 +11939,18 @@ el.dwVidPlayer.removeAttribute('src');
     const statsSummary = $('adminStatsSummary');
     const statsTable = $('adminStatsTable');
     const statsResetBtn = $('adminStatsResetBtn');
-    const configBox = $('adminConfigBox');
+    const smtpList = $('adminSmtpList');
+    const smtpForm = $('adminSmtpForm');
+    const smtpAddBtn = $('adminSmtpAdd');
+    const smtpSaveBtn = $('adminSmtpSave');
+    const smtpCancelBtn = $('adminSmtpCancel');
+    const smtpMsg = $('adminSmtpMsg');
+    const plansBox = $('adminPlansBox');
+    const plansSaveBtn = $('adminPlansSave');
+    const plansMsg = $('adminPlansMsg');
+    const cfgChangePwBtn = $('adminCfgChangePw');
+    let lastConfig = null;
+    let editingSmtpIdx = null;
 
     const pwModal = $('adminPwModal');
     const oldPwInput = $('adminOldPw');
@@ -12154,21 +12165,142 @@ el.dwVidPlayer.removeAttribute('src');
       try {
         const r = await adminRequest('/api/admin/config');
         if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
-        renderConfig(r);
+        lastConfig = r;
+        renderSmtpList(r);
+        renderPlansForm(r);
       } catch (e) { /* 静默 */ }
     };
-    const renderConfig = (cfg) => {
-      if (!configBox) return;
-      const smtp = cfg.smtp || {};
-      const accs = (smtp.accounts || []).map((a) => `${esc(a.user)}（${esc(a.host)}）`).join('、') || '未配置';
-      const costs = Object.keys(cfg.credit_costs || {}).map((k) => `${esc(k)}: ${cfg.credit_costs[k]}`).join('，') || '—';
-      configBox.innerHTML =
-        `<div class="admin-config-row"><span class="admin-config-k">SMTP 邮件</span><span class="admin-config-v">${smtp.configured ? '✅ 已配置（' + accs + '）' : '❌ 未配置'}</span></div>`
-        + `<div class="admin-config-row"><span class="admin-config-k">AI 积分成本</span><span class="admin-config-v">${esc(costs)}</span></div>`
-        + `<div class="admin-config-row"><span class="admin-config-k">管理员口令</span><span class="admin-config-v">${cfg.admin_default_password_set ? '⚠️ 仍使用默认口令（建议修改）' : '✅ 已自定义'}</span></div>`
-        + `<div class="admin-config-row"><span class="admin-config-k">套餐·下载会员</span><span class="admin-config-v">${Object.keys((cfg.plans.download_member && cfg.plans.download_member.plans) || {}).length} 档</span></div>`
-        + `<div class="admin-config-row"><span class="admin-config-k">套餐·AI会员</span><span class="admin-config-v">${Object.keys((cfg.plans.ai_member && cfg.plans.ai_member.plans) || {}).length} 档</span></div>`
-        + `<div class="admin-config-row"><span class="admin-config-k">套餐·积分包</span><span class="admin-config-v">${Object.keys(cfg.plans.credit_packs || {}).length} 档</span></div>`;
+
+    // SMTP 账户列表
+    const renderSmtpList = (cfg) => {
+      if (!smtpList) return;
+      const accs = (cfg.smtp && cfg.smtp.accounts) || [];
+      if (!accs.length) {
+        smtpList.innerHTML = '<div class="admin-empty">未配置 SMTP 账户</div>';
+        return;
+      }
+      const head = '<thead><tr><th>发件账户</th><th>SMTP</th><th>匹配域名</th><th>默认</th><th>操作</th></tr></thead>';
+      const rows = accs.map((a, i) => `<tr>
+        <td>${esc(a.user)}</td>
+        <td>${esc(a.host)}:${esc(a.port)}</td>
+        <td>${(a.match_domains || []).join(', ') || '—'}</td>
+        <td>${a.default ? '✅' : ''}</td>
+        <td class="admin-ops">
+          <button class="admin-btn admin-btn-sm" data-smtp-edit="${i}">编辑</button>
+          <button class="admin-btn admin-btn-sm" data-smtp-del="${i}">删除</button>
+        </td>
+      </tr>`).join('');
+      smtpList.innerHTML = head + '<tbody>' + rows + '</tbody>';
+    };
+
+    // SMTP 表单：idx=null 新增，否则编辑第 idx 个
+    const showSmtpForm = (idx) => {
+      editingSmtpIdx = (idx == null) ? null : idx;
+      if (smtpForm) smtpForm.hidden = false;
+      if (smtpMsg) _adminMsg(smtpMsg, '');
+      const accs = (lastConfig && lastConfig.smtp && lastConfig.smtp.accounts) || [];
+      const a = (idx != null) ? accs[idx] : null;
+      $('smtpHost').value = a ? (a.host || '') : '';
+      $('smtpPort').value = a ? (a.port || 465) : 465;
+      $('smtpUser').value = a ? (a.user || '') : '';
+      $('smtpPass').value = a ? (a.pass || '') : '';
+      $('smtpFromName').value = a ? (a.from_name || '') : '';
+      $('smtpDomains').value = a ? (a.match_domains || []).join(', ') : '';
+      $('smtpSsl').checked = a ? !!a.use_ssl : true;
+      $('smtpDefault').checked = a ? !!a.default : false;
+    };
+    const collectSmtpForm = () => ({
+      host: $('smtpHost').value.trim(),
+      port: parseInt($('smtpPort').value, 10) || 465,
+      user: $('smtpUser').value.trim(),
+      pass: $('smtpPass').value,
+      from_name: $('smtpFromName').value.trim() || 'VideoDownloader',
+      match_domains: $('smtpDomains').value.split(',').map((s) => s.trim()).filter(Boolean),
+      use_ssl: $('smtpSsl').checked,
+      default: $('smtpDefault').checked,
+    });
+    const saveSmtp = async () => {
+      const accs = (lastConfig && lastConfig.smtp && lastConfig.smtp.accounts) ? lastConfig.smtp.accounts.slice() : [];
+      const entry = collectSmtpForm();
+      if (!entry.host || !entry.user) { _adminMsg(smtpMsg, 'host 和账号必填', true); return; }
+      if (editingSmtpIdx != null) accs[editingSmtpIdx] = entry; else accs.push(entry);
+      try {
+        const r = await adminRequest('/api/admin/config/smtp', {
+          method: 'POST', body: JSON.stringify({ accounts: accs }),
+        });
+        if (r && r.ok) { if (smtpForm) smtpForm.hidden = true; loadConfig(); _adminMsg(smtpMsg, 'SMTP 已保存', false); }
+        else _adminMsg(smtpMsg, (r && r.error) || '保存失败', true);
+      } catch (e) { _adminMsg(smtpMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true); }
+    };
+
+    // 套餐与积分成本表单
+    const renderPlansForm = (cfg) => {
+      if (!plansBox) return;
+      const plans = cfg.plans || {};
+      const dl = (plans.download_member && plans.download_member.plans) || {};
+      const ai = (plans.ai_member && plans.ai_member.plans) || {};
+      const cp = plans.credit_packs || {};
+      const costs = cfg.credit_costs || {};
+      const planBlock = (title, obj, kind) => {
+        let h = `<div class="admin-plan-group"><h4>${title}</h4>`;
+        Object.keys(obj).forEach((k) => {
+          const p = obj[k] || {};
+          const extra = kind === 'days'
+            ? `<label>天数<input class="admin-input admin-input-sm plan-days" data-plan="${esc(k)}" value="${esc(p.days)}" type="number"></label>`
+            : `<label>积分<input class="admin-input admin-input-sm plan-credits" data-plan="${esc(k)}" value="${esc(p.credits)}" type="number"></label>`;
+          h += `<div class="admin-plan-row" data-plan="${esc(k)}">
+            <span class="admin-plan-name">${esc(p.label || k)}</span>
+            <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
+            ${extra}
+          </div>`;
+        });
+        return h + '</div>';
+      };
+      let html = planBlock('下载会员套餐', dl, 'days');
+      html += planBlock('AI 会员套餐', ai, 'credits');
+      html += planBlock('积分包', cp, 'credits');
+      html += '<div class="admin-plan-group"><h4>AI 积分成本（每次操作消耗积分）</h4>';
+      Object.keys(costs).forEach((k) => {
+        html += `<div class="admin-plan-row" data-cost="${esc(k)}">
+          <span class="admin-plan-name">${esc(k)}</span>
+          <label>成本<input class="admin-input admin-input-sm cost-val" data-cost="${esc(k)}" value="${esc(costs[k])}" type="number"></label>
+        </div>`;
+      });
+      html += '</div>';
+      plansBox.innerHTML = html;
+    };
+    const savePlans = async () => {
+      const cfg = lastConfig || {};
+      const plans = cfg.plans || {};
+      const buildCat = (obj) => {
+        const out = {};
+        Object.keys(obj).forEach((k) => {
+          out[k] = Object.assign({}, obj[k]);
+          const priceEl = plansBox.querySelector(`.plan-price[data-plan="${k}"]`);
+          const daysEl = plansBox.querySelector(`.plan-days[data-plan="${k}"]`);
+          const creditsEl = plansBox.querySelector(`.plan-credits[data-plan="${k}"]`);
+          if (priceEl) out[k].price_cny = parseFloat(priceEl.value) || 0;
+          if (daysEl && out[k].days != null) out[k].days = parseInt(daysEl.value, 10) || 0;
+          if (creditsEl && out[k].credits != null) out[k].credits = parseInt(creditsEl.value, 10) || 0;
+        });
+        return out;
+      };
+      const dl = buildCat((plans.download_member && plans.download_member.plans) || {});
+      const ai = buildCat((plans.ai_member && plans.ai_member.plans) || {});
+      const cp = buildCat(plans.credit_packs || {});
+      const costs = {};
+      Object.keys(cfg.credit_costs || {}).forEach((k) => {
+        const el = plansBox.querySelector(`.cost-val[data-cost="${k}"]`);
+        costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
+      });
+      const payload = { download_plans: dl, ai_plans: ai, credit_packs: cp, credit_costs: costs };
+      try {
+        const r = await adminRequest('/api/admin/config/plans', {
+          method: 'POST', body: JSON.stringify(payload),
+        });
+        if (r && r.ok) { loadConfig(); _adminMsg(plansMsg, '套餐配置已保存', false); }
+        else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
+      } catch (e) { _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true); }
     };
 
     const _needLogin = (msg) => {
@@ -12276,6 +12408,34 @@ el.dwVidPlayer.removeAttribute('src');
           _adminMsg(pwMsg, (r && r.error) || '修改失败', true);
         }
       } catch (e) { _adminMsg(pwMsg, '修改失败：' + (e && e.message ? e.message : '网络错误'), true); }
+    });
+
+    // 配置面板：SMTP 增删改 + 套餐编辑
+    if (smtpAddBtn) smtpAddBtn.addEventListener('click', () => showSmtpForm(null));
+    if (smtpSaveBtn) smtpSaveBtn.addEventListener('click', saveSmtp);
+    if (smtpCancelBtn) smtpCancelBtn.addEventListener('click', () => { if (smtpForm) smtpForm.hidden = true; });
+    if (plansSaveBtn) plansSaveBtn.addEventListener('click', savePlans);
+    if (cfgChangePwBtn) cfgChangePwBtn.addEventListener('click', () => {
+      if (pwModal) pwModal.hidden = false;
+      _adminMsg(pwMsg, '');
+      if (oldPwInput) oldPwInput.value = '';
+      if (newPwInput) newPwInput.value = '';
+    });
+    if (smtpList) smtpList.addEventListener('click', async (e) => {
+      const editBtn = e.target.closest('[data-smtp-edit]');
+      const delBtn = e.target.closest('[data-smtp-del]');
+      if (editBtn) { showSmtpForm(parseInt(editBtn.dataset.smtpEdit, 10)); return; }
+      if (delBtn) {
+        if (!(typeof confirm === 'function') || !confirm('确定删除该 SMTP 账户？')) return;
+        const idx = parseInt(delBtn.dataset.smtpDel, 10);
+        const accs = (lastConfig && lastConfig.smtp && lastConfig.smtp.accounts) ? lastConfig.smtp.accounts.slice() : [];
+        accs.splice(idx, 1);
+        try {
+          const r = await adminRequest('/api/admin/config/smtp', { method: 'POST', body: JSON.stringify({ accounts: accs }) });
+          if (r && r.ok) { loadConfig(); _adminMsg(smtpMsg, '已删除', false); }
+          else _adminMsg(smtpMsg, (r && r.error) || '删除失败', true);
+        } catch (err) { _adminMsg(smtpMsg, '删除失败：' + (err && err.message ? err.message : '网络错误'), true); }
+      }
     });
 
     // 初次进入若已有 token，预加载一次（面板会在 openAdmin 中加载，这里仅保险）

@@ -351,26 +351,106 @@ def usage_stats() -> dict[str, Any]:
 
 
 def system_config() -> dict[str, Any]:
-    """套餐、成本、SMTP 状态（不暴露密码/密钥）。"""
-    from membership import MembershipStore, MATTING_CLOUD_CREDIT_COST
+    """套餐、成本、SMTP 状态（admin 专属；含 SMTP 密码以便编辑，仅带 token 可见）。"""
+    from membership import MembershipStore, MATTING_CLOUD_CREDIT_COST, load_plan_overrides
     from auth_store import _smtp_accounts
     cfg: dict[str, Any] = {
         "plans": MembershipStore().plans(),
         "credit_costs": {"matting_cloud": MATTING_CLOUD_CREDIT_COST},
         "smtp": {"configured": False, "accounts": []},
         "admin_default_password_set": (not bool(os.environ.get("VDL_ADMIN_PASSWORD"))),
+        "has_plan_overrides": False,
     }
+    try:
+        ov = load_plan_overrides()
+        cfg["has_plan_overrides"] = bool(ov)
+        if "credit_costs" in ov:
+            cfg["credit_costs"] = ov["credit_costs"]
+    except Exception:
+        pass
     try:
         accounts = _smtp_accounts() or []
         cfg["smtp"]["configured"] = len(accounts) > 0
+        # admin 专属：返回完整账户（含 pass）以便前端编辑；仅带 token 可见
         cfg["smtp"]["accounts"] = [
-            {"host": a.get("host"), "user": a.get("user"),
-             "from_name": a.get("from_name"), "match_domains": a.get("match_domains")}
+            {"host": a.get("host"), "port": a.get("port"), "user": a.get("user"),
+             "pass": a.get("pass"), "from": a.get("from"),
+             "from_name": a.get("from_name"), "use_ssl": a.get("use_ssl"),
+             "match_domains": a.get("match_domains"), "default": a.get("default")}
             for a in accounts
         ]
     except Exception:
         pass
     return cfg
+
+
+# --------------------------------------------------------------------------- #
+# 配置写回（后台管理面板「系统配置」可编辑）
+# --------------------------------------------------------------------------- #
+def save_smtp_accounts(accounts: Any) -> dict[str, Any]:
+    """保存 SMTP 多账户配置到 ~/.video-downloader/smtp.json（0600）。
+
+    accounts: list[dict]，字段 host/port/user/pass/from/from_name/use_ssl/
+    match_domains/default。pass 为空字符串时回退保留同索引已有密码（便于只改
+    非密码字段）；否则使用传入值。无账户标记 default 时自动设第一个为默认。
+    """
+    if not isinstance(accounts, list):
+        return {"ok": False, "error": "accounts 必须为数组"}
+    from auth_store import _smtp_accounts
+    existing = _smtp_accounts() or []
+    cleaned: list[dict[str, Any]] = []
+    for i, a in enumerate(accounts):
+        if not isinstance(a, dict):
+            return {"ok": False, "error": f"第 {i + 1} 个账户格式错误"}
+        host = str(a.get("host") or "").strip()
+        user = str(a.get("user") or "").strip()
+        if not host or not user:
+            return {"ok": False, "error": f"第 {i + 1} 个账户缺少 host 或 user"}
+        pw = a.get("pass")
+        if not pw:
+            pw = (existing[i].get("pass") if i < len(existing) else None) or ""
+        if not pw:
+            return {"ok": False, "error": f"第 {i + 1} 个账户缺少密码"}
+        try:
+            port = int(a.get("port") or 465)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"第 {i + 1} 个账户端口非法"}
+        cleaned.append({
+            "host": host,
+            "port": port,
+            "user": user,
+            "pass": str(pw),
+            "from": str(a.get("from") or user),
+            "from_name": str(a.get("from_name") or "VideoDownloader"),
+            "use_ssl": bool(a.get("use_ssl", True)),
+            "match_domains": [str(d).strip().lower() for d in (a.get("match_domains") or []) if str(d).strip()],
+            "default": bool(a.get("default", False)),
+        })
+    if cleaned and not any(c.get("default") for c in cleaned):
+        cleaned[0]["default"] = True
+    p = _base_dir() / "smtp.json"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"accounts": cleaned}, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(p)
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+    except OSError as e:  # noqa: BLE001
+        return {"ok": False, "error": f"写入失败：{e}"}
+    return {"ok": True, "count": len(cleaned)}
+
+
+def save_plan_overrides(data: Any) -> dict[str, Any]:
+    """写回套餐/成本覆盖到 plans.json（委托 membership.save_plan_overrides）。"""
+    from membership import save_plan_overrides as _save
+    try:
+        result = _save(data or {})
+        return {"ok": True, "overrides": result}
+    except OSError as e:  # noqa: BLE001
+        return {"ok": False, "error": f"写入失败：{e}"}
 
 
 def reset_stats(path: Optional[Path] = None) -> dict[str, Any]:

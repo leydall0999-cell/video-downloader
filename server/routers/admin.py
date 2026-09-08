@@ -28,6 +28,8 @@ from admin_store import (
     usage_stats,
     system_config,
     reset_stats,
+    save_smtp_accounts,
+    save_plan_overrides,
 )
 
 
@@ -130,3 +132,18 @@ def admin_stats_reset(request: Request = None) -> dict[str, Any]:
 def admin_config(request: Request = None) -> dict[str, Any]:
     require_admin(request)
     return {"ok": True, **system_config()}
+
+
+@router.post("/api/admin/config/smtp")
+def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
+    require_admin(request)
+    accounts = payload.get("accounts")
+    if not isinstance(accounts, list):
+        return {"ok": False, "error": "accounts 必须为数组"}
+    return save_smtp_accounts(accounts)
+
+
+@router.post("/api/admin/config/plans")
+def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
+    require_admin(request)
+    return save_plan_overrides(payload or {})

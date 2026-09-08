@@ -81,11 +81,88 @@ AI_FEATURES: list[str] = [
 MATTING_CLOUD_CREDIT_COST: int = 50
 
 
+# --------------------------------------------------------------------------- #
+# 套餐 / 成本运行时覆盖层（~/.video-downloader/plans.json）
+# 仅作「覆盖层」：未覆盖的键回退到上方代码常量，默认值永不丢失。
+# 后台管理面板可经 /api/admin/config/plans 写回。
+# --------------------------------------------------------------------------- #
+import threading as _threading
+
+_PLAN_OVERRIDE_LOCK = _threading.Lock()
+_PLAN_OVERRIDE_CACHE: Optional[tuple[int, dict[str, Any]]] = None
+
+
+def plan_override_path() -> Path:
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
+    else:
+        base = Path.home() / ".video-downloader"
+    return base / "plans.json"
+
+
+def load_plan_overrides() -> dict[str, Any]:
+    """读取 plans.json 覆盖（mtime 缓存）。无文件 / 损坏 → 空 dict。"""
+    global _PLAN_OVERRIDE_CACHE
+    p = plan_override_path()
+    try:
+        if not p.exists():
+            _PLAN_OVERRIDE_CACHE = None
+            return {}
+        mtime = p.stat().st_mtime_ns
+        cached = _PLAN_OVERRIDE_CACHE
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        data = json.loads(p.read_text(encoding="utf-8") or "{}")
+        if not isinstance(data, dict):
+            data = {}
+        _PLAN_OVERRIDE_CACHE = (mtime, data)
+        return data
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    """写入 plans.json（0600）。与现有覆盖做 overlay 合并；传 null 的键视为删除。
+
+    接受结构：
+      { "download_plans": {...}, "ai_plans": {...}, "credit_packs": {...},
+        "credit_costs": {...} }
+    任意键可缺省；返回写盘后的完整覆盖 dict。失败抛 OSError。
+    """
+    global _PLAN_OVERRIDE_CACHE
+    with _PLAN_OVERRIDE_LOCK:
+        existing = load_plan_overrides()
+        for k, v in (data or {}).items():
+            if v is None:
+                existing.pop(k, None)
+            else:
+                existing[k] = v
+        p = plan_override_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(p)
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+        _PLAN_OVERRIDE_CACHE = (p.stat().st_mtime_ns, existing)
+        return existing
+
+
 def credit_cost(op: str, sub: str | None = None) -> int:
     """查询某次 AI 操作的积分成本。未知 op 或本地算力返回 0（不扣费）。
 
     仅 matting_cloud（火山云端）计费；字幕提取 / AI 去水印 LaMa 等本地算力均免费。
+    优先级：plans.json 覆盖层 → 代码常量。
     """
+    ov = load_plan_overrides()
+    costs = ov.get("credit_costs") or {}
+    if op in costs:
+        try:
+            return int(costs[op])
+        except (TypeError, ValueError):
+            pass
     if op == "matting_cloud":
         return int(MATTING_CLOUD_CREDIT_COST)
     return 0
@@ -251,10 +328,17 @@ class MembershipStore:
         }
 
     def plans(self) -> dict[str, Any]:
-        """套餐表（价格/时长/权益），供前端购买中心展示。"""
+        """套餐表（价格/时长/权益），供前端购买中心展示。
+
+        优先级：plans.json 覆盖层（整段替换三张套餐表）→ 代码常量默认值。
+        """
+        ov = load_plan_overrides()
+        dl = ov.get("download_plans", DOWNLOAD_PLANS)
+        ai = ov.get("ai_plans", AI_PLANS)
+        cp = ov.get("credit_packs", CREDIT_PACKS)
         return {
             "download_member": {
-                "plans": DOWNLOAD_PLANS,
+                "plans": dl,
                 "benefits": [
                     {"key": "download", "text": "下载任务 1000 次/日"},
                     {"key": "original", "text": "原画解析 100 次/日"},
@@ -265,11 +349,11 @@ class MembershipStore:
                 ],
             },
             "ai_member": {
-                "plans": AI_PLANS,
+                "plans": ai,
                 "bundle_note": "包含下载会员全部权益",
                 "features": AI_FEATURES,
             },
-            "credit_packs": CREDIT_PACKS,
+            "credit_packs": cp,
             "currency": "CNY",
         }
 

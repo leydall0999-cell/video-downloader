@@ -3690,3 +3690,18 @@ img { max-width: 100%; display: block; }
   .admin-config-row { flex-direction: column; gap: .2rem; }
   .admin-config-k { width: auto; }
 }
+
+/* 系统配置可编辑区（2026-09-09） */
+.admin-cfg-section { margin-bottom: 1.4rem; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 1rem 1.1rem; }
+.admin-cfg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.admin-cfg-head h3 { font-size: .98rem; margin: 0; }
+.admin-cfg-hint { color: var(--text-mute); font-size: .78rem; }
+.admin-smtp-form { margin-top: .8rem; gap: .5rem; align-items: flex-end; }
+.admin-smtp-form input[type="number"] { width: 70px; }
+.admin-check { font-size: .82rem; color: var(--text-mute); display: inline-flex; align-items: center; gap: .25rem; }
+.admin-plan-group { margin-bottom: .9rem; }
+.admin-plan-group h4 { font-size: .88rem; margin: 0 0 .5rem; color: var(--text-mute); }
+.admin-plan-row { display: flex; align-items: center; gap: .8rem; padding: .35rem 0; flex-wrap: wrap; }
+.admin-plan-row label { font-size: .8rem; color: var(--text-mute); display: inline-flex; align-items: center; gap: .25rem; }
+.admin-plan-name { min-width: 140px; font-size: .88rem; }
+.admin-plan-row .admin-input-sm { width: 90px; }
