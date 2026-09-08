@@ -254,8 +254,17 @@ _RESET_LOCK = threading.Lock()
 
 
 def _send_mode() -> str:
-    """验证码投递模式：dev=本地测试（日志+返回 dev_code）；smtp/sms=真实网关（待接入）。"""
-    return os.environ.get("VDL_SEND_MODE", "dev").lower()
+    """验证码投递模式：显式 VDL_SEND_MODE 优先；未设置时存在 smtp.json 即自动切 smtp，否则 dev。
+
+    - dev：本地测试（日志 + 返回 dev_code）
+    - smtp：真实邮件投递（已接入，依赖 ~/.video-downloader/smtp.json）
+    """
+    env = os.environ.get("VDL_SEND_MODE")
+    if env:
+        return env.lower()
+    if _smtp_config() is not None:
+        return "smtp"
+    return "dev"
 
 
 def generate_reset_code(identifier: str) -> Optional[str]:
@@ -298,8 +307,74 @@ def verify_reset_code(identifier: str, code: str) -> bool:
         return ok
 
 
+def _smtp_config() -> Optional[dict]:
+    """读取 SMTP 配置（~/.video-downloader/smtp.json，0600）。缺文件返回 None。"""
+    p = _base_dir() / "smtp.json"
+    if not p.exists():
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _send_smtp(to_email: str, code: str) -> None:
+    """通过 SMTP 发送验证码邮件（仅标准库，无第三方依赖）。
+
+    配置来自 ~/.video-downloader/smtp.json，结构：
+      {"host": "smtp.qq.com", "port": 465, "user": "me@qq.com",
+       "pass": "<授权码>", "from": "me@qq.com", "from_name": "VideoDownloader",
+       "use_ssl": true, "use_tls": false}
+    QQ 邮箱用 465+SSL 或 587+STARTTLS；Gmail 用 465+SSL 或 587+STARTTLS。
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.utils import formataddr, formatdate
+
+    cfg = _smtp_config()
+    if not cfg or not cfg.get("host") or not cfg.get("user"):
+        raise RuntimeError("SMTP 未配置：缺少 ~/.video-downloader/smtp.json")
+    host = cfg["host"]
+    use_ssl = bool(cfg.get("use_ssl", int(cfg.get("port", 0)) == 465))
+    port = int(cfg.get("port", 465 if use_ssl else 587))
+    user = cfg["user"]
+    password = cfg.get("pass", "")
+    from_addr = cfg.get("from") or user
+    from_name = cfg.get("from_name") or "VideoDownloader"
+    use_tls = bool(cfg.get("use_tls", not use_ssl))
+
+    subject = "VideoDownloader 密码重置验证码"
+    body = (
+        "您正在重置 VideoDownloader 账号密码。\n\n"
+        f"验证码：{code}\n"
+        "该验证码 5 分钟内有效，且仅可使用一次。\n\n"
+        "若非本人操作，请忽略此邮件。"
+    )
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["From"] = formataddr((from_name, from_addr))
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)
+
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=15) as s:
+                s.login(user, password)
+                s.sendmail(from_addr, [to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as s:
+                if use_tls:
+                    s.starttls()
+                s.login(user, password)
+                s.sendmail(from_addr, [to_email], msg.as_string())
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("vdl.auth").error("SMTP 发送失败 to=%s: %s", to_email, e)
+        raise
+
+
 def deliver_reset_code(identifier: str, code: str) -> None:
-    """投递验证码。V1 仅本地调试展示（日志 + 写文件）；接入真实邮件/SMS 时替换此函数。"""
+    """投递验证码。dev=本地调试展示（日志 + 写文件）；smtp=真实邮件投递。"""
     mode = _send_mode()
     if mode == "dev":
         logging.getLogger("vdl.auth").info("V1 dev 验证码 for %s: %s", identifier, code)
@@ -309,8 +384,7 @@ def deliver_reset_code(identifier: str, code: str) -> None:
         except OSError:
             pass
     elif mode == "smtp":
-        # TODO: 真实邮件投递（SMTP / SendGrid / Resend）
-        raise NotImplementedError("SMTP 投递未接入")
+        _send_smtp(identifier, code)
     elif mode == "sms":
         # TODO: 真实短信投递（Twilio / 阿里云短信 / 火山短信）
         raise NotImplementedError("SMS 投递未接入")

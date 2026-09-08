@@ -3,7 +3,7 @@
 注册/登录/查询当前用户/本地重置密码（验证码流程）。token 为 HMAC 签名的无状态 Bearer，
 前端存于 localStorage('vdl_auth_token')，后续请求经 Authorization: Bearer <token> 携带。
 
-找回密码流程（V1）：先 POST /api/auth/reset-code 获取验证码（dev 模式本地展示），
+找回密码流程：先 POST /api/auth/reset-code 获取验证码（dev 模式本地展示 / smtp 真实投递），
 再 POST /api/auth/reset 携带 code 完成改密。V1 验证码投递为 dev 模式，后续可切 smtp/sms。
 """
 from __future__ import annotations
@@ -96,7 +96,11 @@ def auth_reset_code(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return {"ok": False, "error": "验证码已发送，请稍后再试（60 秒冷却）"}
     code = generate_reset_code(ident)
     if code:
-        deliver_reset_code(ident, code)
+        try:
+            deliver_reset_code(ident, code)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("vdl.auth").error("投递验证码失败: %s", e)
+            return {"ok": False, "error": "验证码发送失败，请检查邮件服务配置"}
     # 无论账号是否存在都返回 ok（防账号枚举）；dev 模式附带 dev_code 便于本地测试
     dev_code = code if _send_mode() == "dev" else None
     return {"ok": True, "dev_code": dev_code, "expires_in": 300}
