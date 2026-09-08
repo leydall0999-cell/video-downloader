@@ -3585,3 +3585,108 @@ img { max-width: 100%; display: block; }
   .legal-content { padding: 1rem; }
   .legal-content .legal-card-body { padding: 1.1rem; }
 }
+
+/* ===========================================================================
+   后台管理面板（2026-09-08）：口令解锁 + 四模块
+   =========================================================================== */
+.admin-overlay {
+  position: fixed; inset: 0; z-index: 8000;
+  background: rgba(15, 23, 42, .45); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1.2rem;
+}
+.admin-overlay[hidden] { display: none; }
+.admin-shell {
+  width: min(960px, 100%); max-height: 90vh; display: flex; flex-direction: column;
+  background: var(--surface); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow); overflow: hidden;
+}
+/* 解锁屏 */
+.admin-unlock { display: flex; align-items: center; justify-content: center; min-height: 360px; }
+.admin-unlock-card {
+  width: min(360px, 100%); text-align: center; padding: 2rem 1.6rem;
+}
+.admin-unlock-card h2 { font-size: 1.25rem; margin-bottom: .4rem; }
+.admin-unlock-sub { color: var(--text-mute); font-size: .85rem; margin-bottom: 1.2rem; }
+.admin-input {
+  width: 100%; padding: .7rem .9rem; margin-bottom: .8rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: .95rem; background: #fff; color: var(--text); outline: none;
+}
+.admin-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.admin-input-sm { width: auto; padding: .45rem .7rem; margin-bottom: 0; font-size: .85rem; }
+.admin-btn {
+  border: 1px solid var(--line); background: #fff; color: var(--text);
+  padding: .6rem 1.1rem; border-radius: var(--radius-sm); font-size: .9rem;
+  cursor: pointer; transition: background .15s, border-color .15s; min-height: var(--tap);
+}
+.admin-btn:hover { background: #f3f4f8; }
+.admin-btn-sm { padding: .4rem .8rem; min-height: 34px; font-size: .82rem; }
+.admin-btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.admin-btn-primary:hover { background: var(--brand-strong); }
+.admin-btn-ghost { background: transparent; }
+.admin-link {
+  background: none; border: none; color: var(--text-mute); font-size: .82rem;
+  margin-top: .6rem; cursor: pointer; text-decoration: underline;
+}
+.admin-msg { font-size: .82rem; margin-top: .5rem; min-height: 1.1em; }
+.admin-msg.is-err { color: var(--danger); }
+.admin-msg.is-ok { color: var(--success); }
+
+/* 面板屏 */
+.admin-panel { display: flex; flex-direction: column; min-height: 0; }
+.admin-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .9rem 1.2rem; border-bottom: 1px solid var(--line); gap: 1rem;
+}
+.admin-header h2 { font-size: 1.05rem; }
+.admin-header-actions { display: flex; gap: .5rem; }
+.admin-tabs { display: flex; gap: .3rem; padding: .6rem 1.2rem 0; border-bottom: 1px solid var(--line); }
+.admin-tab {
+  border: none; background: none; padding: .55rem .9rem; cursor: pointer;
+  font-size: .9rem; color: var(--text-mute); border-bottom: 2px solid transparent;
+}
+.admin-tab.is-active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+.admin-body { padding: 1rem 1.2rem 1.4rem; overflow: auto; }
+.admin-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.admin-count { color: var(--text-mute); font-size: .85rem; }
+.admin-inline-form { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.admin-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.admin-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.admin-table th, .admin-table td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.admin-table th { background: #f8f9fc; color: var(--text-mute); font-weight: 600; position: sticky; top: 0; }
+.admin-table tr:last-child td { border-bottom: none; }
+.admin-ops { display: flex; gap: .4rem; flex-wrap: wrap; }
+.admin-empty { text-align: center; color: var(--text-mute); padding: 1.5rem; }
+.admin-tag { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; }
+.admin-tag-ok { background: var(--success-soft); color: var(--success); }
+.admin-tag-warn { background: var(--danger-soft); color: var(--danger); }
+
+/* 统计卡片 */
+.admin-stats-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.admin-stat-card { background: #f8f9fc; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .9rem 1rem; display: flex; flex-direction: column; gap: .2rem; }
+.admin-stat-card b { font-size: 1.15rem; color: var(--brand); }
+.admin-stat-card span { font-size: .78rem; color: var(--text-mute); }
+
+/* 系统配置 */
+.admin-config { display: flex; flex-direction: column; gap: .1rem; }
+.admin-config-row { display: flex; gap: 1rem; padding: .7rem .2rem; border-bottom: 1px solid var(--line); font-size: .88rem; }
+.admin-config-k { width: 130px; flex-shrink: 0; color: var(--text-mute); }
+.admin-config-v { color: var(--text); }
+
+/* 修改口令弹层 */
+.admin-pwmodal {
+  position: absolute; inset: 0; z-index: 10;
+  background: rgba(15, 23, 42, .35);
+  display: flex; align-items: center; justify-content: center;
+}
+.admin-pwmodal[hidden] { display: none; }
+.admin-pwmodal-card { width: min(320px, 90%); background: #fff; border-radius: var(--radius-md); padding: 1.2rem; box-shadow: var(--shadow); }
+.admin-pwmodal-card h3 { font-size: 1rem; margin-bottom: .8rem; }
+.admin-modal-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .8rem; }
+
+@media (max-width: 640px) {
+  .admin-shell { max-height: 95vh; }
+  .admin-config-row { flex-direction: column; gap: .2rem; }
+  .admin-config-k { width: auto; }
+}

@@ -17,6 +17,7 @@ from pathlib import Path as _Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 from .core import _device_of
+from stats import record_event
 
 router = APIRouter()
 
@@ -231,6 +232,7 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
     app.executor.submit(_run_subtitle, job_id, str(resolved), model_size,
                         (payload.language or "").strip(), bool(payload.to_library),
                         bool(payload.fast), cpu_threads)
+    record_event("subtitle", {"model": model_size, "member": is_member})
     return {"job_id": job_id, "status": "running", "model": model_size,
             "cpu_threads": cpu_threads, "member": is_member}
 

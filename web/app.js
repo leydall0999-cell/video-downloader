@@ -11911,6 +11911,378 @@ el.dwVidPlayer.removeAttribute('src');
   };
   try { initFeedback(); } catch (_) { /* 反馈组件缺失不影响主流程 */ }
 
+  // ===========================================================================
+  // 后台管理面板（2026-09-08）：口令解锁 + 四模块（用户/会员/统计/配置）
+  // 独立全屏 overlay，不接入 switchView 主视图栈（用户点开前停留原视图）。
+  // ===========================================================================
+  const initAdmin = () => {
+    const sTabAdmin = $('sTabAdmin');
+    const overlay = $('adminOverlay');
+    if (!sTabAdmin || !overlay) return;
+
+    const unlock = $('adminUnlock');
+    const panel = $('adminPanel');
+    const pwInput = $('adminPw');
+    const loginBtn = $('adminLoginBtn');
+    const unlockMsg = $('adminUnlockMsg');
+    const unlockClose = $('adminUnlockClose');
+    const logoutBtn = $('adminLogoutBtn');
+    const changePwBtn = $('adminChangePwBtn');
+
+    const userTable = $('adminUserTable');
+    const userCount = $('adminUserCount');
+    const memberTable = $('adminMemberTable');
+    const memberCount = $('adminMemberCount');
+    const grantUserSel = $('adminGrantUser');
+    const grantCodeSel = $('adminGrantCode');
+    const grantBtn = $('adminGrantBtn');
+    const statsSummary = $('adminStatsSummary');
+    const statsTable = $('adminStatsTable');
+    const statsResetBtn = $('adminStatsResetBtn');
+    const configBox = $('adminConfigBox');
+
+    const pwModal = $('adminPwModal');
+    const oldPwInput = $('adminOldPw');
+    const newPwInput = $('adminNewPw');
+    const pwSave = $('adminPwSave');
+    const pwCancel = $('adminPwCancel');
+    const pwMsg = $('adminPwMsg');
+
+    const ADMIN_TOKEN_KEY = 'vdl_admin_token';
+    let lastUsers = [];
+    let lastMembers = [];
+
+    const adminToken = () => localStorage.getItem(ADMIN_TOKEN_KEY) || '';
+    const _adminMsg = (el, text, isErr) => {
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = 'admin-msg' + (isErr ? ' is-err' : (text ? ' is-ok' : ''));
+    };
+    const adminRequest = async (path, opts = {}) => {
+      const tok = adminToken();
+      const headers = Object.assign({}, opts.headers || {}, tok ? { Authorization: 'Bearer ' + tok } : {});
+      return request(path, Object.assign({}, opts, { headers }));
+    };
+    const esc = (s) => (s == null ? '' : String(s));
+
+    const openAdmin = () => {
+      overlay.hidden = false;
+      document.body.style.overflow = 'hidden';
+      if (adminToken()) {
+        showPanel();
+        loadAll();
+      } else {
+        showUnlock();
+      }
+    };
+    const closeAdmin = () => {
+      overlay.hidden = true;
+      document.body.style.overflow = '';
+    };
+    const showUnlock = () => {
+      unlock.hidden = false;
+      panel.hidden = true;
+      pwModal.hidden = true;
+      _adminMsg(unlockMsg, '');
+      if (pwInput) pwInput.value = '';
+      if (pwInput) setTimeout(() => pwInput.focus(), 50);
+    };
+    const showPanel = () => {
+      unlock.hidden = true;
+      panel.hidden = false;
+      pwModal.hidden = true;
+    };
+
+    const adminLogin = async () => {
+      const pw = (pwInput && pwInput.value) || '';
+      if (!pw) { _adminMsg(unlockMsg, '请输入口令', true); return; }
+      if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '验证中…'; }
+      try {
+        const r = await request('/api/admin/login', {
+          method: 'POST',
+          body: JSON.stringify({ password: pw }),
+        });
+        if (r && r.ok && r.admin_token) {
+          localStorage.setItem(ADMIN_TOKEN_KEY, r.admin_token);
+          showPanel();
+          loadAll();
+        } else {
+          _adminMsg(unlockMsg, (r && r.error) || '口令错误', true);
+        }
+      } catch (e) {
+        _adminMsg(unlockMsg, '登录失败：' + (e && e.message ? e.message : '网络错误'), true);
+      } finally {
+        if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = '进入'; }
+      }
+    };
+
+    const switchAdminView = (name) => {
+      document.querySelectorAll('.admin-tab').forEach((t) => {
+        t.classList.toggle('is-active', t.dataset.adminView === name);
+      });
+      document.querySelectorAll('.admin-view').forEach((v) => {
+        v.hidden = v.dataset.adminView !== name;
+      });
+      if (name === 'users') loadUsers();
+      else if (name === 'members') loadMembers();
+      else if (name === 'stats') loadStats();
+      else if (name === 'config') loadConfig();
+    };
+
+    const loadAll = () => {
+      loadUsers();
+      loadMembers();
+      loadStats();
+      loadConfig();
+    };
+
+    // ---- 用户管理 ----
+    const loadUsers = async () => {
+      try {
+        const r = await adminRequest('/api/admin/users');
+        if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
+        lastUsers = r.users || [];
+        if (userCount) userCount.textContent = `共 ${lastUsers.length} 个用户`;
+        renderUserTable();
+      } catch (e) { /* 网络错误静默 */ }
+    };
+    const renderUserTable = () => {
+      if (!userTable) return;
+      const head = '<thead><tr><th>账号</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>操作</th></tr></thead>';
+      const rows = lastUsers.map((u) => {
+        const m = u.membership || {};
+        const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
+        const cred = (m.credits_total != null) ? m.credits_total : '—';
+        const disabled = !!u.disabled;
+        const ops = disabled
+          ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
+          : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
+            + `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`;
+        return `<tr>
+          <td>${esc(u.identifier)}</td>
+          <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
+          <td>${mem}</td>
+          <td>${cred}</td>
+          <td>${disabled ? '<span class="admin-tag admin-tag-warn">已禁用</span>' : '<span class="admin-tag admin-tag-ok">正常</span>'}</td>
+          <td class="admin-ops">${ops}</td>
+        </tr>`;
+      }).join('');
+      userTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="6" class="admin-empty">暂无用户</td></tr>') + '</tbody>';
+    };
+
+    // ---- 会员管理 ----
+    const loadMembers = async () => {
+      try {
+        const r = await adminRequest('/api/admin/memberships');
+        if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
+        lastMembers = r.memberships || [];
+        if (memberCount) memberCount.textContent = `共 ${lastMembers.length} 条会员记录`;
+        renderMemberTable();
+        fillGrantSelects();
+      } catch (e) { /* 静默 */ }
+    };
+    const renderMemberTable = () => {
+      if (!memberTable) return;
+      const head = '<thead><tr><th>账号</th><th>下载会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
+      const rows = lastMembers.map((m) => {
+        const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
+        const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
+        const ops = `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`;
+        return `<tr>
+          <td>${esc(m.identifier)}</td>
+          <td>${dl}</td>
+          <td>${ai}</td>
+          <td>${m.ai_credits_left != null ? m.ai_credits_left : '—'}</td>
+          <td>${m.permanent_credits != null ? m.permanent_credits : '—'}</td>
+          <td>${m.credits_total != null ? m.credits_total : '—'}</td>
+          <td class="admin-ops">${ops}</td>
+        </tr>`;
+      }).join('');
+      memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="7" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
+    };
+    const fillGrantSelects = () => {
+      if (grantUserSel) {
+        grantUserSel.innerHTML = lastMembers.map((m) => `<option value="${esc(m.user_id)}">${esc(m.identifier)}</option>`).join('');
+      }
+      if (grantCodeSel && grantCodeSel.options.length === 0) {
+        // 套餐 code 取系统配置（下载/AI/积分包）
+        adminRequest('/api/admin/config').then((cfg) => {
+          if (!cfg || !cfg.ok) return;
+          const plans = cfg.plans || {};
+          const opts = [];
+          const add = (obj, prefix) => {
+            if (!obj) return;
+            Object.keys(obj).forEach((k) => { if (obj[k] && obj[k].label) opts.push(`<option value="${k}">${prefix}${esc(obj[k].label)}</option>`); });
+          };
+          add(plans.download_member && plans.download_member.plans, '下载·');
+          add(plans.ai_member && plans.ai_member.plans, 'AI·');
+          add(plans.credit_packs, '积分·');
+          if (opts.length) grantCodeSel.innerHTML = opts.join('');
+        }).catch(() => {});
+      }
+    };
+
+    // ---- 使用统计 ----
+    const loadStats = async () => {
+      try {
+        const r = await adminRequest('/api/admin/stats');
+        if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
+        renderStats(r);
+      } catch (e) { /* 静默 */ }
+    };
+    const renderStats = (s) => {
+      if (statsSummary) {
+        const total = s.total || 0;
+        const first = s.first_at ? new Date(s.first_at * 1000).toLocaleString() : '—';
+        const last = s.last_at ? new Date(s.last_at * 1000).toLocaleString() : '—';
+        statsSummary.innerHTML = `<div class="admin-stat-card"><b>${total}</b><span>累计事件</span></div>`
+          + `<div class="admin-stat-card"><b>${Object.keys(s.by_kind || {}).length}</b><span>功能类型</span></div>`
+          + `<div class="admin-stat-card"><b>${first}</b><span>首次使用</span></div>`
+          + `<div class="admin-stat-card"><b>${last}</b><span>最近使用</span></div>`;
+      }
+      if (statsTable) {
+        const byKind = s.by_kind || {};
+        const head = '<thead><tr><th>功能</th><th>次数</th></tr></thead>';
+        const rows = Object.keys(byKind).sort((a, b) => byKind[b] - byKind[a]).map((k) =>
+          `<tr><td>${esc(k)}</td><td>${byKind[k]}</td></tr>`).join('');
+        statsTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="2" class="admin-empty">暂无统计数据</td></tr>') + '</tbody>';
+      }
+    };
+
+    // ---- 系统配置 ----
+    const loadConfig = async () => {
+      try {
+        const r = await adminRequest('/api/admin/config');
+        if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
+        renderConfig(r);
+      } catch (e) { /* 静默 */ }
+    };
+    const renderConfig = (cfg) => {
+      if (!configBox) return;
+      const smtp = cfg.smtp || {};
+      const accs = (smtp.accounts || []).map((a) => `${esc(a.user)}（${esc(a.host)}）`).join('、') || '未配置';
+      const costs = Object.keys(cfg.credit_costs || {}).map((k) => `${esc(k)}: ${cfg.credit_costs[k]}`).join('，') || '—';
+      configBox.innerHTML =
+        `<div class="admin-config-row"><span class="admin-config-k">SMTP 邮件</span><span class="admin-config-v">${smtp.configured ? '✅ 已配置（' + accs + '）' : '❌ 未配置'}</span></div>`
+        + `<div class="admin-config-row"><span class="admin-config-k">AI 积分成本</span><span class="admin-config-v">${esc(costs)}</span></div>`
+        + `<div class="admin-config-row"><span class="admin-config-k">管理员口令</span><span class="admin-config-v">${cfg.admin_default_password_set ? '⚠️ 仍使用默认口令（建议修改）' : '✅ 已自定义'}</span></div>`
+        + `<div class="admin-config-row"><span class="admin-config-k">套餐·下载会员</span><span class="admin-config-v">${Object.keys((cfg.plans.download_member && cfg.plans.download_member.plans) || {}).length} 档</span></div>`
+        + `<div class="admin-config-row"><span class="admin-config-k">套餐·AI会员</span><span class="admin-config-v">${Object.keys((cfg.plans.ai_member && cfg.plans.ai_member.plans) || {}).length} 档</span></div>`
+        + `<div class="admin-config-row"><span class="admin-config-k">套餐·积分包</span><span class="admin-config-v">${Object.keys(cfg.plans.credit_packs || {}).length} 档</span></div>`;
+    };
+
+    const _needLogin = (msg) => {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+      showUnlock();
+      _adminMsg(unlockMsg, msg || '登录已失效，请重新输入口令', true);
+    };
+
+    // 表格操作（事件委托）
+    const onTableClick = async (e) => {
+      const btn = e.target.closest('button[data-uid]');
+      if (!btn) return;
+      const uid = btn.dataset.uid;
+      const act = btn.dataset.act;
+      try {
+        if (act === 'disable' || act === 'enable') {
+          const r = await adminRequest(`/api/admin/users/${uid}/${act}`, { method: 'POST' });
+          if (r && r.ok) { loadUsers(); }
+          else _adminMsg(unlockMsg, (r && r.error) || '操作失败', true);
+        } else if (act === 'reset') {
+          const npw = (typeof prompt === 'function') ? prompt('为该用户设置新密码（≥6位）：') : null;
+          if (!npw) return;
+          const r = await adminRequest(`/api/admin/users/${uid}/reset-password`, {
+            method: 'POST', body: JSON.stringify({ new_password: npw }),
+          });
+          if (r && r.ok) { loadUsers(); }
+          else alert((r && r.error) || '重置失败');
+        } else if (act === 'credit') {
+          const d = (typeof prompt === 'function') ? prompt('调整积分（正=充值，负=扣减，如 100 / -50）：') : null;
+          if (d == null || d.trim() === '') return;
+          const delta = parseInt(d.trim(), 10);
+          if (isNaN(delta)) { alert('请输入整数'); return; }
+          const r = await adminRequest('/api/admin/memberships/credits', {
+            method: 'POST', body: JSON.stringify({ user_id: uid, delta }),
+          });
+          if (r && r.ok) { loadMembers(); }
+          else alert((r && r.error) || '调分失败');
+        }
+      } catch (err) {
+        alert('操作失败：' + (err && err.message ? err.message : '网络错误'));
+      }
+    };
+    if (userTable) userTable.addEventListener('click', onTableClick);
+    if (memberTable) memberTable.addEventListener('click', onTableClick);
+
+    // 赠送会员
+    if (grantBtn) grantBtn.addEventListener('click', async () => {
+      const uid = grantUserSel && grantUserSel.value;
+      const code = grantCodeSel && grantCodeSel.value;
+      if (!uid || !code) return;
+      try {
+        const r = await adminRequest('/api/admin/memberships/grant', {
+          method: 'POST', body: JSON.stringify({ user_id: uid, code }),
+        });
+        if (r && r.ok) { loadMembers(); }
+        else alert((r && r.error) || '赠送失败');
+      } catch (e) { alert('赠送失败：' + (e && e.message ? e.message : '网络错误')); }
+    });
+
+    // 重置统计
+    if (statsResetBtn) statsResetBtn.addEventListener('click', async () => {
+      if (!(typeof confirm === 'function') || !confirm('确定清空所有使用统计数据？')) return;
+      try {
+        const r = await adminRequest('/api/admin/stats/reset', { method: 'POST' });
+        if (r && r.ok) loadStats();
+      } catch (e) { /* 静默 */ }
+    });
+
+    // 子标签切换
+    document.querySelectorAll('.admin-tab').forEach((t) => {
+      t.addEventListener('click', () => switchAdminView(t.dataset.adminView));
+    });
+
+    // 解锁 / 关闭 / 退出
+    if (loginBtn) loginBtn.addEventListener('click', adminLogin);
+    if (pwInput) pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') adminLogin(); });
+    if (unlockClose) unlockClose.addEventListener('click', closeAdmin);
+    if (logoutBtn) logoutBtn.addEventListener('click', () => {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+      closeAdmin();
+    });
+    if (sTabAdmin) sTabAdmin.addEventListener('click', openAdmin);
+    if (overlay) overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAdmin(); });
+
+    // 修改口令
+    if (changePwBtn) changePwBtn.addEventListener('click', () => {
+      pwModal.hidden = false;
+      _adminMsg(pwMsg, '');
+      if (oldPwInput) oldPwInput.value = '';
+      if (newPwInput) newPwInput.value = '';
+    });
+    if (pwCancel) pwCancel.addEventListener('click', () => { pwModal.hidden = true; });
+    if (pwSave) pwSave.addEventListener('click', async () => {
+      const oldP = (oldPwInput && oldPwInput.value) || '';
+      const newP = (newPwInput && newPwInput.value) || '';
+      if (newP.length < 6) { _adminMsg(pwMsg, '新口令至少 6 位', true); return; }
+      try {
+        const r = await adminRequest('/api/admin/change-password', {
+          method: 'POST', body: JSON.stringify({ old_password: oldP, new_password: newP }),
+        });
+        if (r && r.ok) {
+          _adminMsg(pwMsg, '口令已更新', false);
+          setTimeout(() => { pwModal.hidden = true; }, 800);
+        } else {
+          _adminMsg(pwMsg, (r && r.error) || '修改失败', true);
+        }
+      } catch (e) { _adminMsg(pwMsg, '修改失败：' + (e && e.message ? e.message : '网络错误'), true); }
+    });
+
+    // 初次进入若已有 token，预加载一次（面板会在 openAdmin 中加载，这里仅保险）
+    if (adminToken()) { /* loadAll 在 openAdmin 内触发 */ }
+  };
+  try { initAdmin(); } catch (_) { /* 后台面板缺失不影响主流程 */ }
+
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。
   window.VDL = Object.assign(window.VDL || {}, {

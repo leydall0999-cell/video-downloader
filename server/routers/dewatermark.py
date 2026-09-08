@@ -11,6 +11,7 @@ import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
 from codec_utils import h264_args
 from fastapi import APIRouter
+from stats import record_event
 
 router = APIRouter()
 
@@ -155,6 +156,7 @@ def create_dw_image(
             "kind": "image",
         }
     app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine, bool(int(int8)), model)
+    record_event("dewatermark", {"kind": "image", "engine": engine})
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 

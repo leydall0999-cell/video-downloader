@@ -349,6 +349,36 @@ class MembershipStore:
         return {"ok": True, "spent": amount, "reason": reason,
                 "credits_left": self.status()["credits_total"]}
 
+    def add_credits(self, delta: int, reason: str = "admin_adjust") -> dict[str, Any]:
+        """管理员调整积分：正=充值（永久积分池，不过期），负=扣减（先 AI 订阅后永久）。
+
+        负 delta 直接扣减，不受正常「积分不足拒绝」限制（管理员强扣）。返回最新余额。
+        """
+        self._ensure_loaded()
+        st = self._state
+        if delta >= 0:
+            st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + delta
+        else:
+            amount = -delta
+            ai = st["ai_member"]
+            ai_left = int(ai.get("credits_left", 0)) if ai.get("active") else 0
+            perm_total = int(st["permanent_credits"].get("total", 0))
+            # 先扣 AI 订阅积分，再扣永久积分（可能扣成负数，管理员强扣允许透支由前端提示）
+            remaining = amount
+            if remaining > 0 and ai_left > 0:
+                take = min(ai_left, remaining)
+                ai["credits_left"] = ai_left - take
+                remaining -= take
+            if remaining > 0:
+                perm_total -= remaining
+                st["permanent_credits"]["total"] = perm_total
+        st["meta"].setdefault("history", []).append({
+            "code": f"admin_adjust:{delta}", "via": reason, "at": self._now(),
+        })
+        st["meta"]["history"] = st["meta"]["history"][-200:]
+        self._persist()
+        return {"ok": True, "delta": delta, "credits_total": self.status()["credits_total"]}
+
     def credits_balance(self) -> dict[str, int]:
         s = self.status()
         return {"ai_subscription": s["ai_member"]["credits_left"],

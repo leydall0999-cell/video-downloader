@@ -2858,6 +2858,8 @@ from routers import membership as _membership_rtr
 app.include_router(_membership_rtr.router)
 from routers import auth as _auth_rtr
 app.include_router(_auth_rtr.router)
+from routers import admin as _admin_rtr
+app.include_router(_admin_rtr.router)
 # 账号 / per-user 会员解析（A1+B2）：供各路由经 request 取当前用户态 store。
 # 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
 from user_membership import get_current_user_id, current_member_store

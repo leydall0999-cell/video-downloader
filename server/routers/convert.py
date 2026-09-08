@@ -11,6 +11,7 @@ import re
 from codec_utils import h264_args
 from fastapi import APIRouter
 from .core import _device_of
+from stats import record_event
 
 router = APIRouter()
 
@@ -36,6 +37,7 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
             "device_id": _device_of(request),   # 设备隔离：转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
+    record_event("convert", {"target": target})
     return {
         "job_id": job_id,
         "status": "running",

@@ -8,6 +8,7 @@ handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在
 import app
 from fastapi import APIRouter
 router = APIRouter()
+from stats import record_event
 
 
 def _device_of(request: app.Request) -> str:
@@ -299,6 +300,7 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     # 任务创建成功才计费（失败/被拒不烧免费额度）
     _charged = app.current_member_store(request).use_daily('download', 1)
     _qs = app.current_member_store(request).quota_state('download')
+    record_event('download', {'platform': platform.name, 'quality': payload.quality})
     return {'task_id': task.id, 'status': task.status,
             'quota': {'subscribed': _qs.get('tier') == 'member',
                       'free_used': _charged.get('used', _qs.get('used', 0)),

@@ -15,6 +15,8 @@ from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
 
+from stats import record_event
+
 # 邮箱：标准格式校验，支持 QQ 邮箱（@qq.com/@foxmail.com）、Google 邮箱
 # （@gmail.com/@googlemail.com）及其常见变体（用户名含 . + % - 等）。
 # 不限制特定域名，所有合法邮箱均可通过。
@@ -54,6 +56,7 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     uid = create_user(ident, pw)
     if not uid:
         return {"ok": False, "error": "该账号已注册，请直接登录"}
+    record_event("register", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident}
 
 
@@ -67,6 +70,7 @@ def auth_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     uid = authenticate(ident, pw)
     if not uid:
         return {"ok": False, "error": "账号或密码错误"}
+    record_event("login", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident}
 
 
@@ -124,4 +128,5 @@ def auth_reset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return {"ok": False, "error": "验证码错误或已过期"}
     if not reset_password(ident, pw):
         return {"ok": False, "error": "该账号不存在，无法重置"}
+    record_event("reset_pw", {"identifier": ident})
     return {"ok": True}

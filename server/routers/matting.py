@@ -16,6 +16,7 @@ import membership as _mem
 import matting_ai as mat
 import vision_client
 from fastapi import APIRouter
+from stats import record_event
 
 router = APIRouter()
 logger = logging.getLogger("matting")
@@ -301,6 +302,10 @@ def create_matting_image(
         if _gate:
             raise app.HTTPException(status_code=402, detail=_gate)
     app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla, fc)
+    if fc:
+        record_event("matting_cloud", {"model": sel_model})
+    else:
+        record_event("matting", {"model": sel_model})
     return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 
 
