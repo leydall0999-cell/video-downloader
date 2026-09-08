@@ -72,24 +72,20 @@ AI_FEATURES: list[str] = [
 ]
 
 # --------------------------------------------------------------------------- #
-# AI 积分成本表（每次 AI 算力调用的扣费，集中定义便于调价）
+# AI 积分成本表（计费原则：仅「云端/服务端算力」计费；本地算力一律免费）
 # --------------------------------------------------------------------------- #
-# 字幕提取：按模型算力差异定价（base 最轻 → large-v3 最重）
-SUBTITLE_CREDIT_COST: dict[str, int] = {
-    "base": 50, "small": 100, "medium": 200, "large-v3": 400, "default": 100,
-}
-# AI 去水印（LaMa）单张图
-DW_AI_CREDIT_COST: int = 30
+# 2026-09-08 定稿：本地推理（字幕 faster-whisper、LaMa 去水印、BiRefNet 抠图、
+# opencv 去水印）均跑在用户本机，不计费；只有真实服务端/云端算力（火山 MediaKit
+# 云端抠图）才按次扣 AI 积分。故以下仅保留云端抠图一项成本。
 # 云端抠图（火山 MediaKit，真实服务端算力）单次
 MATTING_CLOUD_CREDIT_COST: int = 50
 
 
 def credit_cost(op: str, sub: str | None = None) -> int:
-    """查询某次 AI 操作的积分成本。未知 op 返回 0（不扣费）。"""
-    if op == "subtitle":
-        return int(SUBTITLE_CREDIT_COST.get(sub or "default", SUBTITLE_CREDIT_COST["default"]))
-    if op == "dw_ai":
-        return int(DW_AI_CREDIT_COST)
+    """查询某次 AI 操作的积分成本。未知 op 或本地算力返回 0（不扣费）。
+
+    仅 matting_cloud（火山云端）计费；字幕提取 / AI 去水印 LaMa 等本地算力均免费。
+    """
     if op == "matting_cloud":
         return int(MATTING_CLOUD_CREDIT_COST)
     return 0
