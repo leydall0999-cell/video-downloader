@@ -10548,6 +10548,7 @@ el.dwVidPlayer.removeAttribute('src');
     const closedEye = el.authPwToggle.querySelector('#authEyeClosed');
     if (openEye && closedEye) { openEye.hidden = !isPw; closedEye.hidden = isPw; }
     el.authPwToggle.setAttribute('aria-label', isPw ? '隐藏密码' : '显示密码');
+    el.authPwToggle.setAttribute('title', isPw ? '隐藏密码' : '显示密码');
   }
   async function openAuthModal() {
     if (!el.authModal) return;
