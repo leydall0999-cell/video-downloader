@@ -3185,10 +3185,9 @@ img { max-width: 100%; display: block; }
 .member-main { width: 100%; }
 /* 独立登录/注册弹窗（参考图二/图三风格） */
 .auth-card {
-  width: min(400px, 100% - 2rem);
-  max-width: 400px;
+  width: 100%;
+  max-width: 100%;
   padding: 2.7rem 2.2rem 2.1rem;
-  margin: 0 auto;
   position: relative;
   border-radius: var(--radius-lg, 16px);
 }
@@ -3209,7 +3208,11 @@ img { max-width: 100%; display: block; }
   transition: background .15s, color .15s;
 }
 .auth-card .modal-close:hover { background: #e5e7eb; color: var(--text); }
-.auth-head { text-align: center; margin-bottom: 1.85rem; }
+.auth-head {
+  text-align: center;
+  margin: 0 auto 1.85rem;
+  max-width: 400px;
+}
 .auth-head h2 {
   font-size: 1.85rem;
   font-weight: 800;
@@ -3229,7 +3232,13 @@ img { max-width: 100%; display: block; }
   margin-left: .25rem;
 }
 .auth-sub a:hover { text-decoration: underline; }
-.auth-form { display: flex; flex-direction: column; gap: 1.05rem; }
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.05rem;
+  max-width: 400px;
+  margin: 0 auto;
+}
 .auth-field { position: relative; }
 .auth-input {
   width: 100%;
