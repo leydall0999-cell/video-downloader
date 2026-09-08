@@ -465,6 +465,8 @@
     sbMeta: $('sbMeta'),
     sbDlSrt: $('sbDlSrt'),
     sbDlTxt: $('sbDlTxt'),
+    sbHelpBtn: $('sbHelpBtn'),
+    sbHelpText: $('sbHelpText'),
 
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
@@ -3747,6 +3749,14 @@
   });
   el.sbDlSrt.addEventListener('click', () => sbSave('srt'));
   el.sbDlTxt.addEventListener('click', () => sbSave('txt'));
+  // 右上角「?」：展开/收起 SRT 与 TXT 的区别说明
+  if (el.sbHelpBtn && el.sbHelpText) {
+    el.sbHelpBtn.addEventListener('click', () => {
+      const open = el.sbHelpText.hidden;
+      el.sbHelpText.hidden = !open;
+      el.sbHelpBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
 

@@ -679,7 +679,17 @@
     <span class="convert-status" id="sbStatus" aria-live="polite"></span>
 
     <div class="uc-bulk" id="sbResult" hidden>
-      <h3 class="card-title">提取完成 ✅ <span class="uc-count" id="sbMeta"></span></h3>
+      <h3 class="card-title" style="display:flex;align-items:center;gap:.4rem;">
+        <span>提取完成 ✅</span>
+        <span class="uc-count" id="sbMeta"></span>
+        <!-- 右上角问号：点击展开 SRT/TXT 区别说明 -->
+        <button type="button" class="sb-help" id="sbHelpBtn" title="SRT 和 TXT 的区别？点击查看" style="margin-left:auto;" aria-expanded="false">?</button>
+      </h3>
+      <div id="sbHelpText" class="sb-help-text" hidden>
+        <p><b>下载 SRT 字幕</b>：带时间轴（每句话标注从第几秒显示到第几秒）。可拖进播放器自动加载字幕、改名与视频同名放同目录、或导入剪映 / Premiere 做字幕轨。</p>
+        <p><b>下载 TXT 纯文本</b>：只有台词本身，一行一句、没有时间。适合阅读整理、做笔记，或复制给其它工具二次加工。</p>
+        <p style="color:var(--text-mute,#6b7280);">两次识别内容一致，按用途选择即可。</p>
+      </div>
       <div class="uc-bulk-actions">
         <button type="button" class="btn btn-primary" id="sbDlSrt">下载 SRT 字幕</button>
         <button type="button" class="btn btn-ghost" id="sbDlTxt">下载 TXT 纯文本</button>
