@@ -15,15 +15,17 @@ from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
 
-# 邮箱：包含 @ 即可（简单校验，完整校验交由前端/用户输入）
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# 邮箱：标准格式校验，支持 QQ 邮箱（@qq.com/@foxmail.com）、Google 邮箱
+# （@gmail.com/@googlemail.com）及其常见变体（用户名含 . + % - 等）。
+# 不限制特定域名，所有合法邮箱均可通过。
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 # 手机号：支持中国大陆 11 位（1[3-9]...）或 E.164 国际格式（+ 开头）
 _PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 _E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
 
 
 def _is_valid_identifier(ident: str) -> bool:
-    """账号为邮箱或有效手机号（不强求 + 开头）。"""
+    """账号为合法邮箱（支持 QQ/Google 等）或有效手机号（不强求 + 开头）。"""
     if "@" in ident:
         return bool(_EMAIL_RE.match(ident))
     return bool(_PHONE_RE.match(ident) or _E164_RE.match(ident))
@@ -45,7 +47,7 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
     if not _is_valid_identifier(ident):
-        return {"ok": False, "error": "账号需为有效邮箱或手机号"}
+        return {"ok": False, "error": "账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号"}
     if len(pw) < 6:
         return {"ok": False, "error": "密码至少 6 位"}
     from auth_store import create_user, issue_token
@@ -83,7 +85,7 @@ def auth_reset_code(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
     if not _is_valid_identifier(ident):
-        return {"ok": False, "error": "账号需为有效邮箱或手机号"}
+        return {"ok": False, "error": "账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号"}
     from auth_store import (
         generate_reset_code,
         reset_code_cooldown_ok,
@@ -108,7 +110,7 @@ def auth_reset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
     if not _is_valid_identifier(ident):
-        return {"ok": False, "error": "账号需为有效邮箱或手机号"}
+        return {"ok": False, "error": "账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号"}
     if not code:
         return {"ok": False, "error": "请输入验证码"}
     if len(pw) < 6:

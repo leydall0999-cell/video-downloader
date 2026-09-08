@@ -10519,7 +10519,8 @@ el.dwVidPlayer.removeAttribute('src');
   }
   function _isValidIdentifier(ident) {
     if (!ident) return false;
-    if (ident.includes('@')) return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ident);
+    // 邮箱：标准格式，支持 QQ(@qq.com/@foxmail.com)、Google(@gmail.com/@googlemail.com) 等
+    if (ident.includes('@')) return /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(ident);
     return /^1[3-9]\d{9}$/.test(ident) || /^\+[1-9]\d{1,14}$/.test(ident);
   }
   function setAuthMode(mode) {
@@ -10583,7 +10584,7 @@ el.dwVidPlayer.removeAttribute('src');
     const ident = (el.authIdent.value || '').trim();
     const pw = el.authPw.value || '';
     if (!ident) { _authMsg('请输入邮箱或手机号', true); return; }
-    if (!_isValidIdentifier(ident)) { _authMsg('账号需为有效邮箱或手机号', true); return; }
+    if (!_isValidIdentifier(ident)) { _authMsg('账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号', true); return; }
     if (pw.length < 6) { _authMsg('密码至少 6 位', true); return; }
     if (authMode === 'register') {
       const pw2 = el.authPw2 ? el.authPw2.value : '';
@@ -10715,7 +10716,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (!el.forgetIdent) return;
     const ident = (el.forgetIdent.value || '').trim();
     if (!ident) { _forgetMsg('请输入邮箱或手机号', true); if (el.forgetIdent) el.forgetIdent.focus(); return; }
-    if (!_isValidIdentifier(ident)) { _forgetMsg('账号需为有效邮箱或手机号', true); return; }
+    if (!_isValidIdentifier(ident)) { _forgetMsg('账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号', true); return; }
     _forgetMsg('发送中…');
     try {
       const r = await request('/api/auth/reset-code', {
