@@ -168,6 +168,7 @@
     authModeToggle: $('authModeToggle'),
     authOptionsLogin: $('authOptionsLogin'),
     authForgot: $('authForgot'),
+    authRemember: $('authRemember'),
     authTerms: $('authTerms'),
     authTermsCheck: $('authTermsCheck'),
     authFootLogin: $('authFootLogin'),
@@ -10476,7 +10477,7 @@ el.dwVidPlayer.removeAttribute('src');
   }
   // ---- 账号区（A1 本地账号：登录 / 注册 / 登出） ----
   let authMode = 'login';
-  function authToken() { try { return localStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
+  function authToken() { try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
   function _authMsg(text, isErr) {
     if (!el.authMsg) return;
     el.authMsg.textContent = text || '';
@@ -10509,6 +10510,7 @@ el.dwVidPlayer.removeAttribute('src');
   }
   function logoutAccount() {
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
+    try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
     _renderAuthHeader();
   }
   function setAuthMode(mode) {
@@ -10572,14 +10574,32 @@ el.dwVidPlayer.removeAttribute('src');
         _authMsg('请先勾选同意服务条款与隐私政策', true); return;
       }
     }
+    const isReg = authMode === 'register';
+    // loading 态：禁用按钮 + 转圈 + 文案
+    if (el.authActionBtn) {
+      el.authActionBtn.disabled = true;
+      el.authActionBtn.classList.add('is-loading');
+      el.authActionBtn.dataset.label = el.authActionBtn.textContent;
+      el.authActionBtn.textContent = isReg ? '创建中…' : '登录中…';
+    }
     _authMsg('处理中…');
     try {
-      const isReg = authMode === 'register';
       const r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
         method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
       });
       if (r && r.ok && r.token) {
-        localStorage.setItem('vdl_auth_token', r.token);
+        if (isReg) {
+          // 注册即创建账户，默认持久记住
+          try { localStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
+        } else {
+          const remember = el.authRemember ? el.authRemember.checked : true;
+          if (remember) {
+            try { localStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
+          } else {
+            // 不勾选「记住我」：仅本次会话（App 退出即失效）
+            try { sessionStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
+          }
+        }
         _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
@@ -10590,6 +10610,12 @@ el.dwVidPlayer.removeAttribute('src');
       }
     } catch (e) {
       _authMsg('❌ ' + ((e && (e.message || e.hint)) || '网络错误'), true);
+    } finally {
+      if (el.authActionBtn) {
+        el.authActionBtn.disabled = false;
+        el.authActionBtn.classList.remove('is-loading');
+        if (el.authActionBtn.dataset.label) el.authActionBtn.textContent = el.authActionBtn.dataset.label;
+      }
     }
   }
   function toggleAuthPwVisible() {
@@ -10611,6 +10637,7 @@ el.dwVidPlayer.removeAttribute('src');
     const closedEye = el.authPwToggle && el.authPwToggle.querySelector('#authEyeClosed');
     if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
     if (el.authTermsCheck) el.authTermsCheck.checked = false;
+    if (el.authActionBtn) { el.authActionBtn.disabled = false; el.authActionBtn.classList.remove('is-loading'); }
     if (el.authPwStrength) el.authPwStrength.hidden = true;
     _updatePwStrength('');
     _authMsg('');

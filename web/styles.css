@@ -3317,8 +3317,24 @@ img { max-width: 100%; display: block; }
 .auth-pw-strength-label.lv5 { color: #15803d; }
 .auth-options {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   margin-top: -.35rem;
+}
+.auth-remember {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .82rem;
+  color: var(--text-mute);
+  cursor: pointer;
+  user-select: none;
+}
+.auth-remember input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+  cursor: pointer;
 }
 .auth-link {
   color: var(--brand);
@@ -3354,6 +3370,25 @@ img { max-width: 100%; display: block; }
   transition: transform .08s, box-shadow .15s;
 }
 .auth-submit:active { transform: translateY(1px); box-shadow: 0 2px 8px rgba(79, 70, 229, .22); }
+.auth-submit.is-loading {
+  color: transparent !important;
+  pointer-events: none;
+  position: relative;
+}
+.auth-submit.is-loading::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, .45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: auth-spin .6s linear infinite;
+}
+@keyframes auth-spin { to { transform: rotate(360deg); } }
 .auth-msg {
   text-align: center;
   font-size: .84rem;
