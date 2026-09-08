@@ -174,6 +174,8 @@
     authFootReg: $('authFootReg'),
     authPw2: $('authPw2'),
     authFieldPw2: $('authFieldPw2'),
+    authPwStrength: $('authPwStrength'),
+    authPwStrengthLabel: $('authPwStrengthLabel'),
     forgetModal: $('forgetModal'),
     forgetModalClose: $('forgetModalClose'),
     forgetIdent: $('forgetIdent'),
@@ -10520,14 +10522,43 @@ el.dwVidPlayer.removeAttribute('src');
       const toggle = el.authSub.querySelector('#authModeToggle');
       if (toggle) toggle.addEventListener('click', (e) => { e.preventDefault(); setAuthMode(isReg ? 'login' : 'register'); });
     }
-    if (el.authActionBtn) el.authActionBtn.textContent = isReg ? '注册' : '登录';
+    if (el.authActionBtn) el.authActionBtn.textContent = isReg ? '创建账户' : '登录';
     if (el.authOptionsLogin) el.authOptionsLogin.hidden = isReg;
     if (el.authTerms) el.authTerms.hidden = !isReg;
     if (el.authFieldPw2) el.authFieldPw2.hidden = !isReg;
+    if (el.authPwStrength) el.authPwStrength.hidden = !isReg;
+    _updatePwStrength('');
     if (el.authPw2) el.authPw2.value = '';
     if (el.authFootLogin) el.authFootLogin.hidden = isReg;
     if (el.authFootReg) el.authFootReg.hidden = !isReg;
     _authMsg('');
+  }
+  function _calcPwStrength(pw) {
+    if (!pw) return 0;
+    let score = 0;
+    if (pw.length >= 6) score++;
+    if (pw.length >= 10) score++;
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++;
+    if (/\d/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+    return score; // 0..5
+  }
+  function _updatePwStrength(pw) {
+    if (!el.authPwStrength || !el.authPwStrengthLabel) return;
+    const bars = el.authPwStrength.querySelectorAll('.auth-pw-strength-bars i');
+    const score = _calcPwStrength(pw);
+    const levels = [
+      { cls: '', text: '' },
+      { cls: 'lv1', text: '弱' },
+      { cls: 'lv2', text: '较弱' },
+      { cls: 'lv3', text: '中' },
+      { cls: 'lv4', text: '强' },
+      { cls: 'lv5', text: '很强' },
+    ];
+    const lv = levels[score] || levels[0];
+    bars.forEach((b, i) => { b.className = i < score ? lv.cls : ''; });
+    el.authPwStrengthLabel.textContent = lv.text ? '密码强度：' + lv.text : '';
+    el.authPwStrengthLabel.className = 'auth-pw-strength-label ' + lv.cls;
   }
   async function authAction() {
     if (!el.authIdent || !el.authPw) return;
@@ -10580,6 +10611,8 @@ el.dwVidPlayer.removeAttribute('src');
     const closedEye = el.authPwToggle && el.authPwToggle.querySelector('#authEyeClosed');
     if (openEye && closedEye) { openEye.hidden = false; closedEye.hidden = true; }
     if (el.authTermsCheck) el.authTermsCheck.checked = false;
+    if (el.authPwStrength) el.authPwStrength.hidden = true;
+    _updatePwStrength('');
     _authMsg('');
     try { el.authModal.showModal(); } catch (_) { el.authModal.setAttribute('open', ''); }
     setTimeout(() => { if (el.authIdent) el.authIdent.focus(); }, 60);
@@ -10671,6 +10704,7 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.authActionBtn) el.authActionBtn.addEventListener('click', authAction);
   if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authActionBtn) el.authActionBtn.click(); });
   if (el.authIdent) el.authIdent.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authPw) el.authPw.focus(); });
+  if (el.authPw) el.authPw.addEventListener('input', () => _updatePwStrength(el.authPw.value));
   if (el.authPwToggle) el.authPwToggle.addEventListener('click', toggleAuthPwVisible);
   if (el.authForgot) el.authForgot.addEventListener('click', (e) => { e.preventDefault(); openForgetModal(); });
   // 忘记密码弹窗：重置 / 切换密码可见 / 返回登录 / 关闭

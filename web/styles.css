@@ -3280,6 +3280,41 @@ img { max-width: 100%; display: block; }
 .auth-pw-toggle:hover { color: var(--brand); background: rgba(79,70,229,.08); }
 .auth-pw-toggle:active { transform: translateY(-50%) scale(.92); }
 .auth-pw-toggle .auth-eye { display: block; }
+.auth-pw-strength {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-top: -.35rem;
+}
+.auth-pw-strength-bars {
+  display: flex;
+  gap: .3rem;
+  flex: 1;
+}
+.auth-pw-strength-bars i {
+  height: 4px;
+  flex: 1;
+  border-radius: 2px;
+  background: #e4e7ec;
+  transition: background .2s ease;
+}
+.auth-pw-strength-bars i.lv1 { background: #ef4444; }
+.auth-pw-strength-bars i.lv2 { background: #f97316; }
+.auth-pw-strength-bars i.lv3 { background: #eab308; }
+.auth-pw-strength-bars i.lv4 { background: #22c55e; }
+.auth-pw-strength-bars i.lv5 { background: #16a34a; }
+.auth-pw-strength-label {
+  font-size: .72rem;
+  color: #8b92a0;
+  white-space: nowrap;
+  min-width: 6em;
+  text-align: right;
+}
+.auth-pw-strength-label.lv1 { color: #ef4444; }
+.auth-pw-strength-label.lv2 { color: #f97316; }
+.auth-pw-strength-label.lv3 { color: #ca8a04; }
+.auth-pw-strength-label.lv4 { color: #16a34a; }
+.auth-pw-strength-label.lv5 { color: #15803d; }
 .auth-options {
   display: flex;
   justify-content: flex-end;
