@@ -54,12 +54,42 @@ def _resolve_safe_local_path(path: str) -> _Path:
 
 
 def _get_model(model_size: str):
-    """进程级模型缓存：首次加载/下载耗时，之后秒级。"""
-    from faster_whisper import WhisperModel
+    """进程级模型缓存：首次加载/下载耗时，之后秒级。
+
+    鲁棒性：HF 镜像强制覆盖（huggingface_hub 若已被提前 import，模块级
+    constants 会固化默认端点，故同时改环境变量与 constants）；加载/下载
+    失败自动重试 3 次，第 3 次回退本地缓存离线加载（之前下载过就能救回）。
+    """
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+    try:
+        from huggingface_hub import constants as _hf_const
+        if getattr(_hf_const, "ENDPOINT", "") != "https://hf-mirror.com":
+            _hf_const.ENDPOINT = "https://hf-mirror.com"
+    except Exception:
+        pass
+
     with _SUBTITLE_LOCK:
         model = _SUBTITLE_MODELS.get(model_size)
         if model is None:
-            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            from faster_whisper import WhisperModel
+            last_err: Exception | None = None
+            for attempt in range(1, 4):
+                local_only = attempt >= 3   # 第 3 次尝试纯离线（命中本地缓存即成功）
+                try:
+                    model = WhisperModel(model_size, device="cpu", compute_type="int8",
+                                         local_files_only=local_only)
+                    break
+                except Exception as e:
+                    last_err = e
+                    app.logger.warning("subtitle model %s load attempt %d failed: %s",
+                                       model_size, attempt, e)
+                    time.sleep(2 * attempt)
+            if model is None:
+                raise RuntimeError(
+                    f"识别模型（{model_size}）加载/下载失败（已重试 3 次）：{last_err}。"
+                    "首次使用需联网下载模型（base≈75MB / small≈250MB / medium≈1.5GB），"
+                    "请检查网络或代理后重试；网络不稳可先换 base 模型。"
+                )
             _SUBTITLE_MODELS[model_size] = model
         return model
 
