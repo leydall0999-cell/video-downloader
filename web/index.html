@@ -2162,18 +2162,31 @@
 <!-- 登录 / 注册弹窗：与会员中心分离（A1 本地账号，会员归属按账号隔离） -->
 <dialog id="authModal" class="modal" aria-labelledby="authModalTitle">
   <div class="modal-card auth-card">
-    <div class="modal-head">
-      <h2 id="authModalTitle">🔐 登录 / 注册</h2>
-      <button type="button" class="modal-close" id="authModalClose" aria-label="关闭">✕</button>
+    <button type="button" class="modal-close" id="authModalClose" aria-label="关闭">✕</button>
+    <div class="auth-head">
+      <h2 id="authModalTitle">登录</h2>
+      <p class="auth-sub" id="authSub">还没有账户？<a href="#" id="authModeToggle">注册</a></p>
     </div>
-    <div class="member-auth">
-      <input id="authIdent" class="adv-input" placeholder="邮箱或手机号" autocomplete="username" />
-      <input id="authPw" class="adv-input" type="password" placeholder="密码（≥6位）" autocomplete="current-password" />
-      <button type="button" class="btn btn-primary" id="authLogin">登录</button>
-      <button type="button" class="btn btn-ghost" id="authReg">注册</button>
-      <span class="arc-msg" id="authMsg" hidden></span>
+    <div class="auth-form">
+      <div class="auth-field">
+        <input id="authIdent" class="auth-input" placeholder="邮箱或手机号" autocomplete="username" />
+      </div>
+      <div class="auth-field">
+        <input id="authPw" class="auth-input" type="password" placeholder="密码（≥6位）" autocomplete="current-password" />
+        <button type="button" class="auth-pw-toggle" id="authPwToggle" aria-label="显示密码">👁</button>
+      </div>
+      <div class="auth-options" id="authOptionsLogin">
+        <a href="#" class="auth-link" id="authForgot">忘记密码？</a>
+      </div>
+      <label class="auth-terms" id="authTerms" hidden>
+        <input type="checkbox" id="authTermsCheck" />
+        <span>我已仔细阅读并同意<a href="#" class="auth-link">《服务条款》</a>和<a href="#" class="auth-link">《隐私政策》</a></span>
+      </label>
+      <button type="button" class="btn btn-primary auth-submit" id="authActionBtn">登录</button>
+      <span class="auth-msg" id="authMsg" hidden></span>
+      <p class="auth-foot" id="authFootLogin">登录即表示您同意<a href="#" class="auth-link">《服务条款》</a>和<a href="#" class="auth-link">《隐私政策》</a></p>
+      <p class="auth-foot" id="authFootReg" hidden>注册即表示您同意<a href="#" class="auth-link">《服务条款》</a>和<a href="#" class="auth-link">《隐私政策》</a></p>
     </div>
-    <p class="consent-note">登录后会员权益将绑定到该账号；未登录时使用设备级匿名权益。</p>
   </div>
 </dialog>
 
