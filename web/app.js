@@ -3693,7 +3693,9 @@
     const base = (kind === 'srt' ? sbState.srtName : sbState.txtName) || ('subtitle.' + kind);
     const suggested = base.replace(/\.[^.]+$/, '') + '.' + kind;
     try {
-      const resp = await fetch(`${window.VDL_API_BASE || ''}/api/subtitle/${sbState.jobId}/file?kind=${kind}`);
+      // 设备隔离：必须带 X-Device-Id（与提交时一致），否则后端 404「任务不存在」
+      const resp = await fetch(`${window.VDL_API_BASE || ''}/api/subtitle/${sbState.jobId}/file?kind=${kind}&device=${encodeURIComponent(deviceId())}`,
+        { headers: { 'X-Device-Id': deviceId() } });
       if (!resp.ok) { sbSetStatus('下载失败：HTTP ' + resp.status); return; }
       const text = await resp.text();
       if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file_dialog === 'function') {
