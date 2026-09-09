@@ -198,6 +198,17 @@
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
     memberStatus: $('memberStatus'),
+    // 用户资料卡：点击右上「👤 账号」打开
+    userMenuModal: $('userMenuModal'),
+    userMenuClose: $('userMenuClose'),
+    userMenuIdentifier: $('userMenuIdentifier'),
+    userMenuUid: $('userMenuUid'),
+    userMenuMember: $('userMenuMember'),
+    userMenuCredits: $('userMenuCredits'),
+    userMenuRole: $('userMenuRole'),
+    userMenuName: $('userMenuTitle'),
+    userMenuTag: $('userMenuTag'),
+    userMenuLogout: $('userMenuLogout'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
@@ -10508,7 +10519,7 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
     el.authHeaderBtn.textContent = '👤 账号';
-    el.authHeaderBtn.title = '已登录，点击退出';
+    el.authHeaderBtn.title = '已登录，点击查看账号详情';
     el.authHeaderBtn.classList.add('is-logged');
   }
   async function renderAccount() {
@@ -10803,18 +10814,86 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
   if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
-  // 右上角「登录 / 注册」常驻入口：未登录打开独立登录弹窗；已登录点击退出
+  // 右上角「👤 账号」常驻入口：未登录打开登录弹窗；已登录打开用户资料卡（不再直跳退出确认）
   if (el.authHeaderBtn) {
     _renderAuthHeader();
     el.authHeaderBtn.addEventListener('click', () => {
-      const tok = authToken();
-      if (tok) {
-        if (confirm('确定退出当前账号？')) logoutAccount();
+      if (authToken()) {
+        openUserMenu();
       } else {
         openAuthModal();
       }
     });
   }
+  // 用户资料卡：拉 /api/auth/me + /api/member/status，填好后弹窗
+  async function openUserMenu() {
+    if (!el.userMenuModal) return;
+    // 填充占位（避免拉取途中用户看到空值）
+    const setTxt = (node, txt) => { if (node) node.textContent = txt; };
+    setTxt(el.userMenuName, '加载中…');
+    setTxt(el.userMenuIdentifier, '—');
+    setTxt(el.userMenuUid, '—');
+    setTxt(el.userMenuMember, '加载中…');
+    setTxt(el.userMenuCredits, '—');
+    setTxt(el.userMenuRole, '—');
+    if (el.userMenuTag) { el.userMenuTag.classList.remove('is-admin'); el.userMenuTag.textContent = '加载中…'; }
+    try { el.userMenuModal.showModal(); } catch (_) { el.userMenuModal.setAttribute('open', ''); }
+    // 并发拉账号态 + 会员/积分
+    let me = null, ms = null;
+    try { me = await request('/api/auth/me'); } catch (_) { /* 忽略 */ }
+    try { ms = await request('/api/member/status'); } catch (_) { /* 忽略 */ }
+    if (!me || !me.ok) {
+      // token 失效：关弹窗，触发清理
+      try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
+      logoutAccount();
+      openAuthModal();
+      return;
+    }
+    setTxt(el.userMenuName, me.identifier || '已登录');
+    setTxt(el.userMenuIdentifier, me.identifier || '—');
+    setTxt(el.userMenuUid, me.user_id || '—');
+    // 角色 + 标签
+    const isAdmin = !!me.is_admin;
+    if (el.userMenuTag) {
+      el.userMenuTag.textContent = isAdmin ? '👑 超级管理员' : '普通用户';
+      el.userMenuTag.classList.toggle('is-admin', isAdmin);
+    }
+    setTxt(el.userMenuRole, isAdmin ? '超级管理员' : '普通用户');
+    // 会员状态 / 积分
+    if (ms) {
+      const dl = ms.download_member || {};
+      const ai = ms.ai_member || {};
+      const memberBits = [];
+      if (dl.active) memberBits.push(`下载会员 至 ${_memberFmtDate(dl.expire_at)}`);
+      if (ai.active) memberBits.push(`AI会员 至 ${_memberFmtDate(ai.expire_at)}`);
+      setTxt(el.userMenuMember, memberBits.length ? memberBits.join(' · ') : '免费用户');
+      const creditsTotal = Number(ms.credits_total || 0);
+      const creditsBreakdown = [];
+      if (ai.credits_left != null) creditsBreakdown.push(`AI 池 ${ai.credits_left}`);
+      const perm = Number(ms.permanent_credits || 0);
+      if (perm > 0) creditsBreakdown.push(`永久 ${perm}`);
+      setTxt(el.userMenuCredits, creditsTotal
+        ? `${creditsTotal}${creditsBreakdown.length ? '（' + creditsBreakdown.join(' + ') + '）' : ''}`
+        : '0');
+    } else {
+      setTxt(el.userMenuMember, '—');
+      setTxt(el.userMenuCredits, '—');
+    }
+  }
+  // 关闭 / 退出按钮
+  if (el.userMenuClose) el.userMenuClose.addEventListener('click', () => {
+    try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
+  });
+  if (el.userMenuModal) el.userMenuModal.addEventListener('click', (e) => {
+    if (e.target === el.userMenuModal) {
+      try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
+    }
+  });
+  if (el.userMenuLogout) el.userMenuLogout.addEventListener('click', () => {
+    if (!confirm('确定退出当前账号？')) return;
+    try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
+    logoutAccount();
+  });
   // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
   // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。
   renderAccount();

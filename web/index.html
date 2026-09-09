@@ -2210,7 +2210,44 @@
   </div>
 </dialog>
 
-<!-- 忘记密码 / 本地重置弹窗 -->
+<!-- 用户资料卡（点击右上「👤 账号」打开）：非超管看自己状态，超管看👑 标记；底部放退出登录 -->
+<dialog id="userMenuModal" class="modal" aria-labelledby="userMenuTitle">
+  <div class="modal-card user-menu-card">
+    <button type="button" class="modal-close" id="userMenuClose" aria-label="关闭">✕</button>
+    <div class="user-menu-head">
+      <div class="user-menu-avatar" aria-hidden="true">👤</div>
+      <div class="user-menu-head-text">
+        <h2 id="userMenuTitle" class="user-menu-name">—</h2>
+        <span class="user-menu-tag" id="userMenuTag">普通用户</span>
+      </div>
+    </div>
+    <div class="user-menu-body">
+      <div class="user-menu-row">
+        <span class="user-menu-label">账号</span>
+        <span class="user-menu-value" id="userMenuIdentifier">—</span>
+      </div>
+      <div class="user-menu-row">
+        <span class="user-menu-label">用户ID</span>
+        <span class="user-menu-value user-menu-mono" id="userMenuUid">—</span>
+      </div>
+      <div class="user-menu-row">
+        <span class="user-menu-label">会员状态</span>
+        <span class="user-menu-value" id="userMenuMember">—</span>
+      </div>
+      <div class="user-menu-row">
+        <span class="user-menu-label">积分余额</span>
+        <span class="user-menu-value" id="userMenuCredits">—</span>
+      </div>
+      <div class="user-menu-row">
+        <span class="user-menu-label">角色</span>
+        <span class="user-menu-value" id="userMenuRole">—</span>
+      </div>
+    </div>
+    <div class="user-menu-actions">
+      <button type="button" id="userMenuLogout" class="user-menu-btn user-menu-btn-danger">退出登录</button>
+    </div>
+  </div>
+</dialog>
 <dialog id="forgetModal" class="modal" aria-labelledby="forgetModalTitle">
   <div class="modal-card auth-card auth-forget">
     <button type="button" class="modal-close" id="forgetModalClose" aria-label="关闭">✕</button>
