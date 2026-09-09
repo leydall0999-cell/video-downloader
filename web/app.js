@@ -10484,8 +10484,12 @@ el.dwVidPlayer.removeAttribute('src');
   // 超级用户标记（后台管理面板可见性依据）：登录/me 后由后端 is_admin 写入
   let _vdlIsAdmin = false;
   function updateAdminTabVisibility() {
+    // 整个「🛡️ 后台」组随权限显隐：非超管连组标题都不露，避免空组占位。
+    const show = !!(authToken() && _vdlIsAdmin);
+    const g = $('adminSidebarGroup');
+    if (g) g.hidden = !show;
     const t = $('sTabAdmin');
-    if (t) t.hidden = !(authToken() && _vdlIsAdmin);
+    if (t) t.hidden = !show;
   }
   function authToken() { try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
   function _authMsg(text, isErr) {
@@ -10811,6 +10815,9 @@ el.dwVidPlayer.removeAttribute('src');
       }
     });
   }
+  // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
+  // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。
+  renderAccount();
   // 登录 / 注册弹窗：登录 / 注册 / 回车提交 / 关闭
   if (el.authActionBtn) el.authActionBtn.addEventListener('click', authAction);
   if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authActionBtn) el.authActionBtn.click(); });
