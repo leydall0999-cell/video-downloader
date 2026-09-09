@@ -12046,6 +12046,7 @@ el.dwVidPlayer.removeAttribute('src');
 
     const userTable = $('adminUserTable');
     const userCount = $('adminUserCount');
+    const userSearch = $('adminUserSearch');
     const memberTable = $('adminMemberTable');
     const memberCount = $('adminMemberCount');
     const grantUserSel = $('adminGrantUser');
@@ -12144,14 +12145,23 @@ el.dwVidPlayer.removeAttribute('src');
         const r = await adminRequest('/api/admin/users');
         if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
         lastUsers = r.users || [];
-        if (userCount) userCount.textContent = `共 ${lastUsers.length} 个用户`;
         renderUserTable();
       } catch (e) { /* 网络错误静默 */ }
     };
     const renderUserTable = () => {
       if (!userTable) return;
+      const q = (userSearch && userSearch.value || '').trim().toLowerCase();
+      const list = !q ? lastUsers : lastUsers.filter((u) => {
+        const m = u.membership || {};
+        const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
+        const identifier = esc(u.identifier).toLowerCase();
+        const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
+        const memStr = mem.toLowerCase();
+        return identifier.includes(q) || created.includes(q) || memStr.includes(q);
+      });
+      if (userCount) userCount.textContent = q ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
       const head = '<thead><tr><th>账号</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
-      const rows = lastUsers.map((u) => {
+      const rows = list.map((u) => {
         const m = u.membership || {};
         const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const cred = (m.credits_total != null) ? m.credits_total : '—';
@@ -12176,7 +12186,8 @@ el.dwVidPlayer.removeAttribute('src');
           <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');
-      userTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="7" class="admin-empty">暂无用户</td></tr>') + '</tbody>';
+      const emptyMsg = q ? '无匹配用户' : '暂无用户';
+      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="7" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
     };
 
     // ---- 会员管理 ----
@@ -12449,6 +12460,7 @@ el.dwVidPlayer.removeAttribute('src');
     };
     if (userTable) userTable.addEventListener('click', onTableClick);
     if (memberTable) memberTable.addEventListener('click', onTableClick);
+    if (userSearch) userSearch.addEventListener('input', renderUserTable);
 
     // 赠送会员
     if (grantBtn) grantBtn.addEventListener('click', async () => {
