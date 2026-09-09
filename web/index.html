@@ -1299,34 +1299,60 @@
   <!-- 个人中心视图（左侧 tab 栏入口，整页承载记录/改密） -->
   <section id="profileView" class="panel profile-panel" hidden aria-labelledby="profileTitle">
     <div class="profile-body">
-      <!-- 个人资料总览：头像/注册时间/会员/积分只在这里显示 -->
+      <!-- 个人资料总览：卡片式展示会员 / 积分 / 今日使用（参考权益资产页布局） -->
       <div class="um-panel" id="profileOverviewPanel">
-        <div class="profile-head">
-          <div class="profile-avatar" aria-hidden="true">👤</div>
-          <div class="profile-head-text">
-            <h1 id="profileTitle" class="profile-name">—</h1>
-            <span class="profile-tag" id="profileTag">普通用户</span>
-          </div>
-          <div class="profile-summary" id="profileSummary">
-            <div class="profile-summary-item">
-              <span class="profile-summary-label">注册时间</span>
-              <span class="profile-summary-value" id="profCreated">—</span>
+        <div class="pf-ov">
+          <div class="pf-ov-head">
+            <div class="profile-avatar" aria-hidden="true">👤</div>
+            <div class="profile-head-text">
+              <h1 id="profileTitle" class="profile-name">—</h1>
+              <span class="profile-tag" id="profileTag">普通用户</span>
             </div>
-            <div class="profile-summary-item">
-              <span class="profile-summary-label">会员状态</span>
-              <span class="profile-summary-value" id="profMember">—</span>
-            </div>
-            <div class="profile-summary-item">
-              <span class="profile-summary-label">积分余额</span>
-              <span class="profile-summary-value" id="profCredits">—</span>
+            <div class="pf-ov-actions">
+              <button type="button" class="pf-ov-btn" id="profGoBuy">前往购买</button>
+              <button type="button" class="pf-ov-btn ghost" data-goto="profile_purchases">查看订单</button>
+              <button type="button" class="pf-ov-btn ghost" data-goto="profile_credits">积分流水</button>
             </div>
           </div>
+
+          <p class="pf-ov-desc">查看当前会员、积分等权益；购买记录、积分流水、账号安全请在左侧子菜单查看。</p>
+
+          <div class="pf-card-grid">
+            <div class="pf-card">
+              <div class="pf-card-h">
+                <span class="pf-card-ic" aria-hidden="true">★</span>
+                <span class="pf-card-t">会员状态</span>
+              </div>
+              <div class="pf-card-c" id="profMemberCard">
+                <p class="pf-card-muted" id="profMemberNone">暂无有效会员</p>
+                <a href="#" class="pf-card-link" id="profMemberLink">前往购买 ›</a>
+                <div id="profMemberList" hidden></div>
+              </div>
+            </div>
+
+            <div class="pf-card">
+              <div class="pf-card-h">
+                <span class="pf-card-ic" aria-hidden="true">◆</span>
+                <span class="pf-card-t">积分</span>
+              </div>
+              <div class="pf-card-c" id="profCreditsCard">
+                <div class="pf-row"><span>当前可用</span><strong id="profCreditsTotal">0</strong></div>
+                <div class="pf-row"><span>AI 会员积分</span><span id="profCreditsAi">0</span></div>
+                <div class="pf-row"><span>永久积分</span><span id="profCreditsPerm">0</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pf-card pf-card-wide">
+            <div class="pf-card-h">
+              <span class="pf-card-ic" aria-hidden="true">📊</span>
+              <span class="pf-card-t">今日使用</span>
+            </div>
+            <div class="pf-card-c" id="profUsage">—</div>
+          </div>
+
+          <div class="pf-ov-foot">注册时间：<span id="profCreated">—</span></div>
         </div>
-        <div class="um-sec">
-          <div class="um-sec-title">今日使用</div>
-          <div class="um-record" id="profUsage">—</div>
-        </div>
-        <p class="profile-hint">购买记录、积分流水、账号安全请在左侧子菜单查看。</p>
       </div>
       <!-- 购买记录 -->
       <div class="um-panel" id="profilePurchasesPanel" hidden>

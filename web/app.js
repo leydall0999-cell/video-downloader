@@ -227,7 +227,16 @@
     profTag: $('profileTag'),
     profCreated: $('profCreated'),
     profMember: $('profMember'),
+    profMemberCard: $('profMemberCard'),
+    profMemberNone: $('profMemberNone'),
+    profMemberLink: $('profMemberLink'),
+    profMemberList: $('profMemberList'),
+    profGoBuy: $('profGoBuy'),
     profCredits: $('profCredits'),
+    profCreditsCard: $('profCreditsCard'),
+    profCreditsTotal: $('profCreditsTotal'),
+    profCreditsAi: $('profCreditsAi'),
+    profCreditsPerm: $('profCreditsPerm'),
     profUsage: $('profUsage'),
     profPurchases: $('profPurchases'),
     profPurchasesFilter: $('profPurchasesFilter'),
@@ -11046,6 +11055,18 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
+  // 个人资料卡片：前往购买 / 会员卡片链接 → 会员中心弹窗；data-goto → 切换子视图
+  if (el.profGoBuy) el.profGoBuy.addEventListener('click', openMemberCenter);
+  if (el.profMemberLink) el.profMemberLink.addEventListener('click', (e) => { e.preventDefault(); openMemberCenter(); });
+  if (el.profileOverviewPanel) {
+    el.profileOverviewPanel.querySelectorAll('[data-goto]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const v = btn.getAttribute('data-goto');
+        if (v) switchView(v);
+      });
+    });
+  }
+
   function _creditDelta(h) {
     if (h.type === 'spend') return -Number(h.amount || 0);
     if (h.type === 'admin_adjust') {
@@ -11143,25 +11164,35 @@ el.dwVidPlayer.removeAttribute('src');
     // 注册时间
     const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
     setTxt(el.profCreated, ct ? _memberFmtDate(ct, true) : '—');
-    // 会员状态 / 积分
+    // 会员状态 / 积分（卡片式）
     if (ms) {
       const dl = ms.download_member || {};
       const ai = ms.ai_member || {};
-      const memberBits = [];
-      if (dl.active) memberBits.push(`下载会员 至 ${_memberFmtDate(dl.expire_at)}`);
-      if (ai.active) memberBits.push(`AI会员 至 ${_memberFmtDate(ai.expire_at)}`);
-      setTxt(el.profMember, memberBits.length ? memberBits.join(' · ') : '免费用户');
+      const memberRows = [];
+      if (dl.active) memberRows.push(`<div class="pf-row"><span>下载会员</span><span>${esc('至 ' + _memberFmtDate(dl.expire_at))}</span></div>`);
+      if (ai.active) memberRows.push(`<div class="pf-row"><span>AI 会员</span><span>${esc('至 ' + _memberFmtDate(ai.expire_at))}</span></div>`);
+      if (memberRows.length) {
+        if (el.profMemberList) { el.profMemberList.innerHTML = memberRows.join(''); el.profMemberList.hidden = false; }
+        if (el.profMemberNone) el.profMemberNone.hidden = true;
+        if (el.profMemberLink) el.profMemberLink.hidden = true;
+      } else {
+        if (el.profMemberList) el.profMemberList.hidden = true;
+        if (el.profMemberNone) el.profMemberNone.hidden = false;
+        if (el.profMemberLink) el.profMemberLink.hidden = false;
+      }
       const creditsTotal = Number(ms.credits_total || 0);
-      const creditsBreakdown = [];
-      if (ai.credits_left != null) creditsBreakdown.push(`AI 池 ${ai.credits_left}`);
+      const aiLeft = Number(ai.credits_left != null ? ai.credits_left : 0);
       const perm = Number(ms.permanent_credits || 0);
-      if (perm > 0) creditsBreakdown.push(`永久 ${perm}`);
-      setTxt(el.profCredits, creditsTotal
-        ? `${creditsTotal}${creditsBreakdown.length ? '（' + creditsBreakdown.join(' + ') + '）' : ''}`
-        : '0');
+      if (el.profCreditsTotal) el.profCreditsTotal.textContent = creditsTotal;
+      if (el.profCreditsAi) el.profCreditsAi.textContent = aiLeft;
+      if (el.profCreditsPerm) el.profCreditsPerm.textContent = perm;
     } else {
-      setTxt(el.profMember, '—');
-      setTxt(el.profCredits, '—');
+      if (el.profMemberList) el.profMemberList.hidden = true;
+      if (el.profMemberNone) el.profMemberNone.hidden = false;
+      if (el.profMemberLink) el.profMemberLink.hidden = false;
+      if (el.profCreditsTotal) el.profCreditsTotal.textContent = '—';
+      if (el.profCreditsAi) el.profCreditsAi.textContent = '—';
+      if (el.profCreditsPerm) el.profCreditsPerm.textContent = '—';
     }
     // 记录（即便 prof 请求失败也渲染空态表格，避免空白面板）
     const credits = (prof && prof.credit_history) || [];
