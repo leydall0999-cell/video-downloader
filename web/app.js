@@ -203,6 +203,9 @@
     // 用户资料卡（基础信息，点击右上「👤 账号」打开，详细记录在左侧「个人中心」整页）
     userMenuModal: $('userMenuModal'),
     userMenuClose: $('userMenuClose'),
+    userMenuAvatar: $('userMenuAvatar'),
+    userMenuAvatarImg: $('userMenuAvatarImg'),
+    userMenuAvatarFallback: $('userMenuAvatarFallback'),
     userMenuUid: $('userMenuUid'),
     userMenuMember: $('userMenuMember'),
     userMenuCredits: $('userMenuCredits'),
@@ -225,6 +228,10 @@
     profileSecurityPanel: $('profileSecurityPanel'),
     profName: $('profileTitle'),
     profTag: $('profileTag'),
+    profAvatar: $('profAvatar'),
+    profAvatarImg: $('profAvatarImg'),
+    profAvatarFallback: $('profAvatarFallback'),
+    profAvatarInput: $('profAvatarInput'),
     profCreated: $('profCreated'),
     profMember: $('profMember'),
     profMemberCard: $('profMemberCard'),
@@ -10621,6 +10628,67 @@ el.dwVidPlayer.removeAttribute('src');
     _chatRefresh();
   }
 
+  // ===== 头像渲染与上传 =====
+  function _renderAvatar(url) {
+    const apply = (imgEl, fallbackEl) => {
+      if (!imgEl || !fallbackEl) return;
+      if (url) {
+        imgEl.src = url;
+        imgEl.hidden = false;
+        fallbackEl.hidden = true;
+      } else {
+        imgEl.src = '';
+        imgEl.hidden = true;
+        fallbackEl.hidden = false;
+      }
+    };
+    apply(el.profAvatarImg, el.profAvatarFallback);
+    apply(el.userMenuAvatarImg, el.userMenuAvatarFallback);
+  }
+  async function _uploadAvatar(file) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showError('请选择图片文件（PNG/JPG/WebP）'); return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showError('头像文件过大，请压缩至 2MB 以内'); return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      try {
+        const r = await request('/api/account/avatar', {
+          method: 'POST',
+          body: JSON.stringify({ image: dataUrl }),
+          timeout: 30000,
+        });
+        if (!r || !r.ok) {
+          showError((r && r.error) || '上传失败'); return;
+        }
+        // 刷新个人资料以同步 avatar_url
+        await loadProfile();
+        // 同时刷新右上角用户资料卡
+        await openUserMenu();
+      } catch (err) {
+        showError((err && err.message) || '上传失败，请重试');
+      }
+    };
+    reader.onerror = () => showError('读取图片失败');
+    reader.readAsDataURL(file);
+  }
+  function _initAvatarUpload() {
+    if (!el.profAvatar || !el.profAvatarInput) return;
+    el.profAvatar.addEventListener('click', () => { el.profAvatarInput.click(); });
+    el.profAvatar.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.profAvatarInput.click(); }
+    });
+    el.profAvatarInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) _uploadAvatar(file);
+      e.target.value = ''; // 允许重复选同一张图
+    });
+  }
+
   // ===== 在线客服悬浮窗 =====
   const _chat = {
     open: false,
@@ -11266,6 +11334,7 @@ el.dwVidPlayer.removeAttribute('src');
     }
     setTxt(el.userMenuName, me.identifier || '已登录');
     setTxt(el.userMenuUid, me.user_id || '—');
+    _renderAvatar(prof && prof.avatar_url);
     // 角色标签（顶部 tag 唯一展示角色，不再单独一行）
     const isAdmin = !!me.is_admin;
     if (el.userMenuTag) {
@@ -11478,6 +11547,7 @@ el.dwVidPlayer.removeAttribute('src');
     }
     setTxt(el.profName, me.identifier || '已登录');
     setTxt(el.profTag, me.is_admin ? '👑 超级管理员' : '普通用户');
+    _renderAvatar(prof && prof.avatar_url);
     // 注册时间
     const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
     setTxt(el.profCreated, ct ? _memberFmtDate(ct, true) : '—');
@@ -11564,6 +11634,7 @@ el.dwVidPlayer.removeAttribute('src');
   // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。
   renderAccount();
   _initChat();
+  _initAvatarUpload();
   // 登录 / 注册弹窗：登录 / 注册 / 回车提交 / 关闭
   if (el.authActionBtn) el.authActionBtn.addEventListener('click', authAction);
   if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authActionBtn) el.authActionBtn.click(); });

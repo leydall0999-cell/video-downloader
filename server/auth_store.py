@@ -45,6 +45,14 @@ def _secret_path() -> Path:
     return _base_dir() / ".auth_secret"
 
 
+def _avatar_dir() -> Path:
+    return _base_dir() / "avatars"
+
+
+def _avatar_path(user_id: str) -> Path:
+    return _avatar_dir() / f"{user_id}.png"
+
+
 # --------------------------------------------------------------------------- #
 # 签名密钥（每机一份，丢失即全部旧 token 失效，但账号仍在）
 # --------------------------------------------------------------------------- #
@@ -252,6 +260,42 @@ def user_identifier(user_id: str) -> Optional[str]:
     data = _load_users()
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)
     return user["identifier"] if user else None
+
+
+def user_avatar_url(user_id: str) -> Optional[str]:
+    """返回用户头像相对/绝对 URL；未设置返回 None。"""
+    p = _avatar_path(user_id)
+    if not p.exists():
+        return None
+    return f"/api/account/avatar/{user_id}?t={int(p.stat().st_mtime)}"
+
+
+def set_user_avatar(user_id: str, image_bytes: bytes) -> dict[str, Any]:
+    """保存用户头像（bytes 应为 PNG/JPG 等图片二进制）。成功返回 ok=True 与 url。"""
+    if len(image_bytes) > 2 * 1024 * 1024:
+        return {"ok": False, "error": "头像文件过大，请压缩至 2MB 以内"}
+    # 简单魔数校验：至少识别 PNG/JPEG/WebP 三种常见格式
+    header = image_bytes[:12]
+    is_png = header.startswith(b"\x89PNG\r\n\x1a\n")
+    is_jpg = header[:2] == b"\xff\xd8"
+    is_webp = header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    if not (is_png or is_jpg or is_webp):
+        return {"ok": False, "error": "仅支持 PNG、JPG、WebP 格式图片"}
+    try:
+        _avatar_dir().mkdir(parents=True, exist_ok=True)
+        p = _avatar_path(user_id)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_bytes(image_bytes)
+        tmp.replace(p)
+        # 记录更新时间在 users.json 中，便于前端感知变更
+        data = _load_users()
+        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+        if user:
+            user["avatar_updated_at"] = int(time.time())
+            _save_users(data)
+        return {"ok": True, "url": user_avatar_url(user_id)}
+    except OSError as e:
+        return {"ok": False, "error": f"保存头像失败: {e}"}
 
 
 def reset_password(identifier: str, new_password: str) -> bool:

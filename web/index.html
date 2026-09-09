@@ -1303,7 +1303,11 @@
       <div class="um-panel" id="profileOverviewPanel">
         <div class="pf-ov">
           <div class="pf-ov-head">
-            <div class="profile-avatar" aria-hidden="true">👤</div>
+            <div class="profile-avatar" id="profAvatar" title="点击更换头像" role="button" tabindex="0">
+              <img id="profAvatarImg" src="" alt="头像" hidden>
+              <span id="profAvatarFallback" aria-hidden="true">👤</span>
+            </div>
+            <input type="file" id="profAvatarInput" accept="image/png,image/jpeg,image/webp" hidden>
             <div class="profile-head-text">
               <h1 id="profileTitle" class="profile-name">—</h1>
               <span class="profile-tag" id="profileTag">普通用户</span>
@@ -2331,7 +2335,10 @@
   <div class="modal-card user-menu-card">
     <button type="button" class="modal-close user-menu-close" id="userMenuClose" aria-label="关闭">✕</button>
     <div class="user-menu-head">
-      <div class="user-menu-avatar" aria-hidden="true">👤</div>
+      <div class="user-menu-avatar" id="userMenuAvatar">
+        <img id="userMenuAvatarImg" src="" alt="头像" hidden>
+        <span id="userMenuAvatarFallback" aria-hidden="true">👤</span>
+      </div>
       <div class="user-menu-head-text">
         <h2 id="userMenuTitle" class="user-menu-name">—</h2>
         <span class="user-menu-tag" id="userMenuTag">普通用户</span>

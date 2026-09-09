@@ -3236,7 +3236,12 @@ img { max-width: 100%; display: block; }
   display: grid; place-items: center;
   background: linear-gradient(135deg, #eef2ff, #e0e7ff);
   color: #4338ca; font-size: 1.65rem; flex: 0 0 auto;
+  overflow: hidden;
 }
+.user-menu-avatar img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.user-menu-avatar [hidden] { display: none; }
 .user-menu-head-text { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
 .user-menu-name { margin: 0; font-size: 1.02rem; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-menu-tag {
@@ -3306,7 +3311,14 @@ img { max-width: 100%; display: block; }
   width: 56px; height: 56px; border-radius: 50%;
   background: var(--brand-soft, #eef0ff); color: var(--brand, #4f46e5);
   display: grid; place-items: center; font-size: 1.6rem; flex: none;
+  overflow: hidden; position: relative; cursor: pointer;
+  border: 2px solid transparent; transition: border-color .15s, box-shadow .15s;
 }
+.profile-avatar:hover { border-color: var(--brand, #4f46e5); box-shadow: 0 0 0 3px var(--brand-soft, #eef0ff); }
+.profile-avatar img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.profile-avatar [hidden] { display: none; }
 .profile-head-text { display: flex; flex-direction: column; gap: .2rem; }
 .profile-name { font-size: 1.25rem; font-weight: 800; margin: 0; color: var(--text, #1f2937); }
 .profile-tag { font-size: .8rem; font-weight: 600; color: var(--text-mute, #6b7280); }

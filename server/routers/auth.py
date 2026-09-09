@@ -17,6 +17,12 @@ router = APIRouter()
 
 from stats import record_event
 
+
+# 头像上传/读取相关依赖（懒加载，避免模块顶层循环 import）
+def _avatar_helpers():
+    from auth_store import set_user_avatar, user_avatar_url, _avatar_path
+    return set_user_avatar, user_avatar_url, _avatar_path
+
 # 邮箱：标准格式校验，支持 QQ 邮箱（@qq.com/@foxmail.com）、Google 邮箱
 # （@gmail.com/@googlemail.com）及其常见变体（用户名含 . + % - 等）。
 # 不限制特定域名，所有合法邮箱均可通过。
@@ -138,17 +144,54 @@ def account_profile(request: Request) -> dict[str, Any]:
     u = next((x for x in data.get("users", []) if x.get("user_id") == uid), None)
     if u:
         created_at = u.get("created_at")
+    from auth_store import user_avatar_url
     return {
         "ok": True,
         "user_id": uid,
         "identifier": ident,
         "is_admin": bool(user_is_admin(uid)),
         "created_at": created_at,
+        "avatar_url": user_avatar_url(uid),
         "membership": st,
         "purchases": purchases,
         "credit_history": credits,
         "usage": st.get("daily_usage", {}),
     }
+
+
+@router.post("/api/account/avatar")
+def account_avatar_upload(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """上传/更新当前用户头像。payload 支持 base64 data URL 或纯 base64 字符串。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录", "code": "NO_AUTH"}
+    raw = payload.get("image") or ""
+    if not raw:
+        return {"ok": False, "error": "请选择图片"}
+    import base64
+    data = raw
+    if "," in raw:
+        data = raw.split(",", 1)[1]
+    try:
+        image_bytes = base64.b64decode(data)
+    except Exception:
+        return {"ok": False, "error": "图片解码失败，请重新选择"}
+    set_user_avatar, _, _ = _avatar_helpers()
+    return set_user_avatar(uid, image_bytes)
+
+
+@router.get("/api/account/avatar/{user_id}")
+def account_avatar_get(request: Request, user_id: str) -> Any:
+    """读取指定用户头像。允许任何人读取（头像为公开资源），但文件必须存在。"""
+    import base64
+    import mimetypes
+    from fastapi.responses import FileResponse
+    _, _, _avatar_path = _avatar_helpers()
+    p = _avatar_path(user_id)
+    if not p.exists():
+        return {"ok": False, "error": "未设置头像", "code": "NOT_FOUND"}
+    ctype = mimetypes.guess_type(str(p))[0] or "image/png"
+    return FileResponse(str(p), media_type=ctype)
 
 
 @router.post("/api/auth/change-password")
