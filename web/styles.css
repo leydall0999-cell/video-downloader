@@ -3286,6 +3286,12 @@ img { max-width: 100%; display: block; }
   margin-left: .25rem;
 }
 .auth-sub a:hover { text-decoration: underline; }
+.auth-hint {
+  font-size: .82rem;
+  color: var(--text-mute);
+  margin: -.5rem 0 0;
+  line-height: 1.4;
+}
 .auth-form {
   display: flex;
   flex-direction: column;
