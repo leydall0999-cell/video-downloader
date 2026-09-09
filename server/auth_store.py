@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # --------------------------------------------------------------------------- #
 # 路径
@@ -182,8 +182,11 @@ def _normalize(identifier: str) -> str:
     return identifier.strip().lower()
 
 
-def create_user(identifier: str, password: str) -> Optional[str]:
-    """注册。成功返回 user_id，账号已存在返回 None。"""
+def create_user(identifier: str, password: str, is_admin: bool = False) -> Optional[str]:
+    """注册。成功返回 user_id，账号已存在返回 None。
+
+    is_admin 仅经后台显式提权（set_user_admin / ensure_superusers），常规自注册恒为 False。
+    """
     ident = _normalize(identifier)
     data = _load_users()
     if ident in data["by_identifier"]:
@@ -197,6 +200,7 @@ def create_user(identifier: str, password: str) -> Optional[str]:
         "salt": salt,
         "pw_hash": pw_hash,
         "created_at": int(time.time()),
+        "is_admin": bool(is_admin),
     })
     data["by_identifier"][ident] = user_id
     _save_users(data)
@@ -242,6 +246,87 @@ def reset_password(identifier: str, new_password: str) -> bool:
     user["updated_at"] = int(time.time())
     _save_users(data)
     return True
+
+
+# --------------------------------------------------------------------------- #
+# 超级用户（is_admin）：后台管理面板访问授权
+# --------------------------------------------------------------------------- #
+_SUPERUSER_CACHE: dict[str, Any] = {"ts": 0.0}
+
+
+def user_is_admin(user_id: str) -> bool:
+    """该账号是否被标记为超级用户（后台管理权限）。"""
+    data = _load_users()
+    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+    return bool(user.get("is_admin", False)) if user else False
+
+
+def set_user_admin(user_id: str, flag: bool) -> dict[str, Any]:
+    """后台面板提权/降权。成功返回 ok=True 与当前 is_admin。"""
+    data = _load_users()
+    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+    if not user:
+        return {"ok": False, "error": "用户不存在"}
+    user["is_admin"] = bool(flag)
+    user["updated_at"] = int(time.time())
+    _save_users(data)
+    return {"ok": True, "is_admin": bool(flag)}
+
+
+def ensure_superusers() -> None:
+    """Bootstrap 超级用户（幂等，带 60s 缓存避免频繁扫盘）。
+
+    - 显式名单：~/.video-downloader/admin.json 的 admin_identifiers（列表），或环境变量
+      VDL_ADMIN_IDENTIFIER（逗号分隔）。名单内账号登录后标记为 is_admin=True。
+    - 无显式名单且当前无任何 is_admin 账号时，把最早注册的账号提升为超级用户
+      （避免首次启动锁定；桌面端单机即机主本人）。
+
+    提权为单向：本函数永不降级，降级须经后台面板 /api/admin/users/{id}/set-admin。
+    """
+    import json as _json
+    now = time.time()
+    data = _load_users()
+    has_admin = any(u.get("is_admin", False) for u in data["users"])
+    # 已有超管：60s 内不重复扫盘（显式名单变更最迟 60s 后生效，可接受）
+    if has_admin and (now - _SUPERUSER_CACHE["ts"] < 60):
+        return
+
+    idents: list[str] = []
+    env_ids = os.environ.get("VDL_ADMIN_IDENTIFIER", "")
+    if env_ids:
+        for x in env_ids.split(","):
+            x = x.strip().lower()
+            if x:
+                idents.append(x)
+    try:
+        p = _base_dir() / "admin.json"
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                cfg = _json.load(f)
+            if isinstance(cfg, dict):
+                for x in (cfg.get("admin_identifiers") or []):
+                    x = str(x).strip().lower()
+                    if x:
+                        idents.append(x)
+    except Exception:
+        pass
+
+    explicit = bool(idents)
+    changed = False
+    if explicit:
+        for u in data["users"]:
+            if u.get("identifier", "").strip().lower() in idents and not u.get("is_admin", False):
+                u["is_admin"] = True
+                changed = True
+    else:
+        # 无显式名单：尚无任何超管时，提升最早注册账号
+        if data["users"] and not has_admin:
+            earliest = min(data["users"], key=lambda u: u.get("created_at", 0))
+            earliest["is_admin"] = True
+            changed = True
+    if changed:
+        _save_users(data)
+    _SUPERUSER_CACHE["ts"] = now
 
 
 # --------------------------------------------------------------------------- #

@@ -1595,6 +1595,12 @@ async def lifespan(_: FastAPI):
         _start_cookie_pool_watchdog()
     except Exception:
         logger.exception("启动公共 Cookie 池探测失败")
+    # 启动即确保超级用户标记（后台管理面板授权：admin.json / VDL_ADMIN_IDENTIFIER / 首个注册账号）
+    try:
+        from auth_store import ensure_superusers
+        ensure_superusers()
+    except Exception:
+        logger.exception("确保超级用户失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:

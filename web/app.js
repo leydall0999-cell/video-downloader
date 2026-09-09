@@ -10481,6 +10481,12 @@ el.dwVidPlayer.removeAttribute('src');
   }
   // ---- 账号区（A1 本地账号：登录 / 注册 / 登出） ----
   let authMode = 'login';
+  // 超级用户标记（后台管理面板可见性依据）：登录/me 后由后端 is_admin 写入
+  let _vdlIsAdmin = false;
+  function updateAdminTabVisibility() {
+    const t = $('sTabAdmin');
+    if (t) t.hidden = !(authToken() && _vdlIsAdmin);
+  }
   function authToken() { try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
   function _authMsg(text, isErr) {
     if (!el.authMsg) return;
@@ -10504,10 +10510,12 @@ el.dwVidPlayer.removeAttribute('src');
   async function renderAccount() {
     const tok = authToken();
     _renderAuthHeader();
-    if (!tok) return;
+    if (!tok) { _vdlIsAdmin = false; updateAdminTabVisibility(); return; }
     try {
       const me = await request('/api/auth/me');
       if (!me || !me.ok) { logoutAccount(); return; }
+      _vdlIsAdmin = !!me.is_admin;
+      updateAdminTabVisibility();
     } catch (_) {
       logoutAccount();
     }
@@ -10515,6 +10523,8 @@ el.dwVidPlayer.removeAttribute('src');
   function logoutAccount() {
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
     try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
+    _vdlIsAdmin = false;
+    updateAdminTabVisibility();
     _renderAuthHeader();
   }
   function _isValidIdentifier(ident) {
@@ -10616,6 +10626,9 @@ el.dwVidPlayer.removeAttribute('src');
           // 未勾选「记住我」：仅本次会话（App 退出即失效）
           try { sessionStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
         }
+        // 同步超级用户标记（后端在登录/注册响应中返回 is_admin）
+        _vdlIsAdmin = !!r.is_admin;
+        updateAdminTabVisibility();
         _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
@@ -11920,14 +11933,12 @@ el.dwVidPlayer.removeAttribute('src');
     const overlay = $('adminOverlay');
     if (!sTabAdmin || !overlay) return;
 
-    const unlock = $('adminUnlock');
     const panel = $('adminPanel');
-    const pwInput = $('adminPw');
-    const loginBtn = $('adminLoginBtn');
-    const unlockMsg = $('adminUnlockMsg');
-    const unlockClose = $('adminUnlockClose');
+    const gate = $('adminGate');
+    const gateTitle = $('adminGateTitle');
+    const gateMsg = $('adminGateMsg');
+    const gateClose = $('adminGateClose');
     const logoutBtn = $('adminLogoutBtn');
-    const changePwBtn = $('adminChangePwBtn');
 
     const userTable = $('adminUserTable');
     const userCount = $('adminUserCount');
@@ -11948,83 +11959,59 @@ el.dwVidPlayer.removeAttribute('src');
     const plansBox = $('adminPlansBox');
     const plansSaveBtn = $('adminPlansSave');
     const plansMsg = $('adminPlansMsg');
-    const cfgChangePwBtn = $('adminCfgChangePw');
     let lastConfig = null;
     let editingSmtpIdx = null;
 
-    const pwModal = $('adminPwModal');
-    const oldPwInput = $('adminOldPw');
-    const newPwInput = $('adminNewPw');
-    const pwSave = $('adminPwSave');
-    const pwCancel = $('adminPwCancel');
-    const pwMsg = $('adminPwMsg');
-
-    const ADMIN_TOKEN_KEY = 'vdl_admin_token';
+    let _currentUid = null;
     let lastUsers = [];
     let lastMembers = [];
 
-    const adminToken = () => localStorage.getItem(ADMIN_TOKEN_KEY) || '';
+    const adminToken = () => authToken();
     const _adminMsg = (el, text, isErr) => {
       if (!el) return;
       el.textContent = text || '';
       el.className = 'admin-msg' + (isErr ? ' is-err' : (text ? ' is-ok' : ''));
     };
     const adminRequest = async (path, opts = {}) => {
-      const tok = adminToken();
+      const tok = authToken();
       const headers = Object.assign({}, opts.headers || {}, tok ? { Authorization: 'Bearer ' + tok } : {});
       return request(path, Object.assign({}, opts, { headers }));
     };
     const esc = (s) => (s == null ? '' : String(s));
 
-    const openAdmin = () => {
+    const openAdmin = async () => {
       overlay.hidden = false;
       document.body.style.overflow = 'hidden';
-      if (adminToken()) {
-        showPanel();
-        loadAll();
-      } else {
-        showUnlock();
+      const tok = authToken();
+      if (!tok) {
+        showGate('需要登录', '请先登录账号后再进入后台管理面板。', true);
+        return;
       }
+      if (!_vdlIsAdmin) {
+        showGate('无权限', '当前账号不是超级用户，无法访问后台管理面板。', false);
+        return;
+      }
+      try {
+        const me = await request('/api/auth/me');
+        if (me && me.ok) _currentUid = me.user_id;
+      } catch (_) { /* 不影响进入 */ }
+      showPanel();
+      loadAll();
     };
     const closeAdmin = () => {
       overlay.hidden = true;
       document.body.style.overflow = '';
     };
-    const showUnlock = () => {
-      unlock.hidden = false;
+    const showGate = (title, msg, canLogin) => {
       panel.hidden = true;
-      pwModal.hidden = true;
-      _adminMsg(unlockMsg, '');
-      if (pwInput) pwInput.value = '';
-      if (pwInput) setTimeout(() => pwInput.focus(), 50);
+      gate.hidden = false;
+      if (gateTitle) gateTitle.textContent = title || '提示';
+      _adminMsg(gateMsg, msg || '');
+      gate.dataset.canLogin = canLogin ? '1' : '0';
     };
     const showPanel = () => {
-      unlock.hidden = true;
+      gate.hidden = true;
       panel.hidden = false;
-      pwModal.hidden = true;
-    };
-
-    const adminLogin = async () => {
-      const pw = (pwInput && pwInput.value) || '';
-      if (!pw) { _adminMsg(unlockMsg, '请输入口令', true); return; }
-      if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '验证中…'; }
-      try {
-        const r = await request('/api/admin/login', {
-          method: 'POST',
-          body: JSON.stringify({ password: pw }),
-        });
-        if (r && r.ok && r.admin_token) {
-          localStorage.setItem(ADMIN_TOKEN_KEY, r.admin_token);
-          showPanel();
-          loadAll();
-        } else {
-          _adminMsg(unlockMsg, (r && r.error) || '口令错误', true);
-        }
-      } catch (e) {
-        _adminMsg(unlockMsg, '登录失败：' + (e && e.message ? e.message : '网络错误'), true);
-      } finally {
-        if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = '进入'; }
-      }
     };
 
     const switchAdminView = (name) => {
@@ -12059,12 +12046,18 @@ el.dwVidPlayer.removeAttribute('src');
     };
     const renderUserTable = () => {
       if (!userTable) return;
-      const head = '<thead><tr><th>账号</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
       const rows = lastUsers.map((u) => {
         const m = u.membership || {};
         const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const cred = (m.credits_total != null) ? m.credits_total : '—';
         const disabled = !!u.disabled;
+        const isAdmin = !!u.is_admin;
+        const self = u.user_id === _currentUid;
+        const adminOp = isAdmin
+          ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
+                  : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
+          : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
         const ops = disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
           : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
@@ -12075,10 +12068,11 @@ el.dwVidPlayer.removeAttribute('src');
           <td>${mem}</td>
           <td>${cred}</td>
           <td>${disabled ? '<span class="admin-tag admin-tag-warn">已禁用</span>' : '<span class="admin-tag admin-tag-ok">正常</span>'}</td>
-          <td class="admin-ops">${ops}</td>
+          <td>${isAdmin ? '<span class="admin-tag admin-tag-ok">👑 是</span>' : '否'}</td>
+          <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');
-      userTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="6" class="admin-empty">暂无用户</td></tr>') + '</tbody>';
+      userTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="7" class="admin-empty">暂无用户</td></tr>') + '</tbody>';
     };
 
     // ---- 会员管理 ----
@@ -12304,9 +12298,8 @@ el.dwVidPlayer.removeAttribute('src');
     };
 
     const _needLogin = (msg) => {
-      localStorage.removeItem(ADMIN_TOKEN_KEY);
-      showUnlock();
-      _adminMsg(unlockMsg, msg || '登录已失效，请重新输入口令', true);
+      closeAdmin();
+      if (msg) alert(msg);
     };
 
     // 表格操作（事件委托）
@@ -12319,7 +12312,7 @@ el.dwVidPlayer.removeAttribute('src');
         if (act === 'disable' || act === 'enable') {
           const r = await adminRequest(`/api/admin/users/${uid}/${act}`, { method: 'POST' });
           if (r && r.ok) { loadUsers(); }
-          else _adminMsg(unlockMsg, (r && r.error) || '操作失败', true);
+          else alert((r && r.error) || '操作失败');
         } else if (act === 'reset') {
           const npw = (typeof prompt === 'function') ? prompt('为该用户设置新密码（≥6位）：') : null;
           if (!npw) return;
@@ -12328,6 +12321,13 @@ el.dwVidPlayer.removeAttribute('src');
           });
           if (r && r.ok) { loadUsers(); }
           else alert((r && r.error) || '重置失败');
+        } else if (act === 'admin' || act === 'unadmin') {
+          const flag = act === 'admin';
+          const r = await adminRequest(`/api/admin/users/${uid}/set-admin`, {
+            method: 'POST', body: JSON.stringify({ is_admin: flag }),
+          });
+          if (r && r.ok) { loadUsers(); }
+          else alert((r && r.error) || '操作失败');
         } else if (act === 'credit') {
           const d = (typeof prompt === 'function') ? prompt('调整积分（正=充值，负=扣减，如 100 / -50）：') : null;
           if (d == null || d.trim() === '') return;
@@ -12374,40 +12374,14 @@ el.dwVidPlayer.removeAttribute('src');
       t.addEventListener('click', () => switchAdminView(t.dataset.adminView));
     });
 
-    // 解锁 / 关闭 / 退出
-    if (loginBtn) loginBtn.addEventListener('click', adminLogin);
-    if (pwInput) pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') adminLogin(); });
-    if (unlockClose) unlockClose.addEventListener('click', closeAdmin);
-    if (logoutBtn) logoutBtn.addEventListener('click', () => {
-      localStorage.removeItem(ADMIN_TOKEN_KEY);
-      closeAdmin();
-    });
+    // 关闭 / 退出（后台使用登录态 user token，退出仅关闭面板，不清除登录）
+    if (logoutBtn) logoutBtn.addEventListener('click', closeAdmin);
+    if (gateClose) gateClose.addEventListener('click', closeAdmin);
     if (sTabAdmin) sTabAdmin.addEventListener('click', openAdmin);
     if (overlay) overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAdmin(); });
-
-    // 修改口令
-    if (changePwBtn) changePwBtn.addEventListener('click', () => {
-      pwModal.hidden = false;
-      _adminMsg(pwMsg, '');
-      if (oldPwInput) oldPwInput.value = '';
-      if (newPwInput) newPwInput.value = '';
-    });
-    if (pwCancel) pwCancel.addEventListener('click', () => { pwModal.hidden = true; });
-    if (pwSave) pwSave.addEventListener('click', async () => {
-      const oldP = (oldPwInput && oldPwInput.value) || '';
-      const newP = (newPwInput && newPwInput.value) || '';
-      if (newP.length < 6) { _adminMsg(pwMsg, '新口令至少 6 位', true); return; }
-      try {
-        const r = await adminRequest('/api/admin/change-password', {
-          method: 'POST', body: JSON.stringify({ old_password: oldP, new_password: newP }),
-        });
-        if (r && r.ok) {
-          _adminMsg(pwMsg, '口令已更新', false);
-          setTimeout(() => { pwModal.hidden = true; }, 800);
-        } else {
-          _adminMsg(pwMsg, (r && r.error) || '修改失败', true);
-        }
-      } catch (e) { _adminMsg(pwMsg, '修改失败：' + (e && e.message ? e.message : '网络错误'), true); }
+    // 网关「去登录」：未登录时点击进入登录弹窗
+    if (gate) gate.addEventListener('click', (e) => {
+      if (e.target === gate && gate.dataset.canLogin === '1') { closeAdmin(); try { openAuthModal(); } catch (_) {} }
     });
 
     // 配置面板：SMTP 增删改 + 套餐编辑
@@ -12415,12 +12389,6 @@ el.dwVidPlayer.removeAttribute('src');
     if (smtpSaveBtn) smtpSaveBtn.addEventListener('click', saveSmtp);
     if (smtpCancelBtn) smtpCancelBtn.addEventListener('click', () => { if (smtpForm) smtpForm.hidden = true; });
     if (plansSaveBtn) plansSaveBtn.addEventListener('click', savePlans);
-    if (cfgChangePwBtn) cfgChangePwBtn.addEventListener('click', () => {
-      if (pwModal) pwModal.hidden = false;
-      _adminMsg(pwMsg, '');
-      if (oldPwInput) oldPwInput.value = '';
-      if (newPwInput) newPwInput.value = '';
-    });
     if (smtpList) smtpList.addEventListener('click', async (e) => {
       const editBtn = e.target.closest('[data-smtp-edit]');
       const delBtn = e.target.closest('[data-smtp-del]');

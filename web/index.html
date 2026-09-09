@@ -109,13 +109,13 @@
       <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary" title="媒体库"><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">媒体库</span></button>
     </div>
 
-    <!-- 后台管理面板（2026-09-08）：口令解锁后进入，非普通视图切换 -->
+    <!-- 后台管理面板（2026-09-08）：超级用户专属，登录且 is_admin 才显示，非普通视图切换 -->
     <div class="sidebar-group collapsed">
       <div class="sidebar-group-title">
         <span class="sidebar-group-emoji" aria-hidden="true">🛡️</span>
         <span class="sidebar-group-en">后台</span>
       </div>
-      <button type="button" class="sidebar-item" id="sTabAdmin" title="后台管理面板（需管理员口令）"><span class="sidebar-item-icon" aria-hidden="true">⚙️</span><span class="sidebar-item-label">后台管理</span></button>
+      <button type="button" class="sidebar-item" id="sTabAdmin" title="后台管理面板（仅超级用户）" hidden><span class="sidebar-item-icon" aria-hidden="true">⚙️</span><span class="sidebar-item-label">后台管理</span></button>
     </div>
 
     <!-- 2026-09-08 会员中心移出侧栏：改为右上角 header 常驻按钮 #memberBadge
@@ -2368,26 +2368,14 @@
 </template>
 
 <footer class="app-footer"><span id="buildTag" class="build-tag"></span></footer>
-<!-- 后台管理面板（2026-09-08）：口令解锁 + 四模块（用户/会员/统计/配置） -->
+<!-- 后台管理面板（2026-09-08）：超级用户专属，登录且 is_admin 可见，无需独立口令 -->
 <div id="adminOverlay" class="admin-overlay" hidden>
   <div class="admin-shell">
-    <!-- 解锁屏 -->
-    <div id="adminUnlock" class="admin-unlock">
-      <div class="admin-unlock-card">
-        <h2>🔐 后台管理</h2>
-        <p class="admin-unlock-sub">请输入管理员口令以进入管理面板</p>
-        <input type="password" id="adminPw" class="admin-input" placeholder="管理员口令" autocomplete="off" />
-        <button type="button" id="adminLoginBtn" class="admin-btn admin-btn-primary">进入</button>
-        <p id="adminUnlockMsg" class="admin-msg"></p>
-        <button type="button" id="adminUnlockClose" class="admin-link">返回</button>
-      </div>
-    </div>
-    <!-- 面板屏 -->
-    <div id="adminPanel" class="admin-panel" hidden>
+    <!-- 面板屏（仅超级用户可见） -->
+    <div id="adminPanel" class="admin-panel">
       <header class="admin-header">
         <h2>⚙️ 后台管理面板</h2>
         <div class="admin-header-actions">
-          <button type="button" id="adminChangePwBtn" class="admin-btn admin-btn-ghost admin-btn-sm">修改口令</button>
           <button type="button" id="adminLogoutBtn" class="admin-btn admin-btn-ghost admin-btn-sm">退出</button>
         </div>
       </header>
@@ -2455,26 +2443,16 @@
             <button type="button" id="adminPlansSave" class="admin-btn admin-btn-primary admin-btn-sm">保存套餐配置</button>
             <p id="adminPlansMsg" class="admin-msg"></p>
           </div>
-          <!-- 管理口令 -->
-          <div class="admin-cfg-section">
-            <div class="admin-cfg-head"><h3>管理口令</h3></div>
-            <button type="button" id="adminCfgChangePw" class="admin-btn admin-btn-sm">修改管理口令</button>
-          </div>
         </section>
       </div>
     </div>
-  </div>
-  <!-- 修改口令弹层 -->
-  <div id="adminPwModal" class="admin-pwmodal" hidden>
-    <div class="admin-pwmodal-card">
-      <h3>修改管理员口令</h3>
-      <input type="password" id="adminOldPw" class="admin-input" placeholder="原口令" autocomplete="off" />
-      <input type="password" id="adminNewPw" class="admin-input" placeholder="新口令（≥6位）" autocomplete="off" />
-      <div class="admin-modal-actions">
-        <button type="button" id="adminPwSave" class="admin-btn admin-btn-primary admin-btn-sm">保存</button>
-        <button type="button" id="adminPwCancel" class="admin-btn admin-btn-ghost admin-btn-sm">取消</button>
+    <!-- 无权限 / 未登录 网关提示 -->
+    <div id="adminGate" class="admin-gate" hidden>
+      <div class="admin-gate-card">
+        <h3 id="adminGateTitle">需要登录</h3>
+        <p id="adminGateMsg" class="admin-msg"></p>
+        <button type="button" id="adminGateClose" class="admin-btn admin-btn-ghost admin-btn-sm">返回</button>
       </div>
-      <p id="adminPwMsg" class="admin-msg"></p>
     </div>
   </div>
 </div>

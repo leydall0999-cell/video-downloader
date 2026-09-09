@@ -1,25 +1,22 @@
 """VDL 后台管理面板数据层（server/admin_store.py）。
 
 职责：
-  - 管理员口令校验 / 改密 / admin token 签发与校验（独立于用户账号体系）。
-  - 用户管理：列表（含会员态、禁用标记）、禁用/启用、重置密码。
+  - 用户管理：列表（含会员态、禁用标记、is_admin 超级用户标记）、禁用/启用、重置密码。
   - 会员管理：列表、按 code 赠送会员、按 delta 调整积分。
   - 使用统计：聚合 stats.json。
   - 系统配置：套餐/成本/SMTP 状态（不暴露任何密码/密钥）。
 
-纯本机、零外部依赖。管理员口令默认取环境变量 VDL_ADMIN_PASSWORD，未设置则
-回退内置默认值（首次启动写入 ~/.video-downloader/admin.json）。建议正式使用前
-在面板里修改口令，或部署时通过 VDL_ADMIN_PASSWORD 注入。
+超级用户（is_admin）的授权名单由 server/auth_store.ensure_superusers 维护
+（admin.json 的 admin_identifiers 或环境变量 VDL_ADMIN_IDENTIFIER；无配置时首个
+注册账号自动成为超级用户），后台内可经 /api/admin/users/{id}/set-admin 提权/降权。
+
+纯本机、零外部依赖。
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
-import secrets
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -35,166 +32,8 @@ def _base_dir() -> Path:
     return base
 
 
-def _admin_path() -> Path:
-    return _base_dir() / "admin.json"
-
-
-def _admin_secret_path() -> Path:
-    return _base_dir() / ".admin_secret"
-
-
 def _users_path() -> Path:
     return _base_dir() / "users.json"
-
-
-# --------------------------------------------------------------------------- #
-# 管理员签名密钥（独立于用户 auth secret）
-# --------------------------------------------------------------------------- #
-def _load_admin_secret() -> bytes:
-    p = _admin_secret_path()
-    if p.exists():
-        try:
-            return p.read_bytes()
-        except OSError:
-            pass
-    secret = secrets.token_bytes(32)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_bytes(secret)
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        pass
-    return secret
-
-
-_ADMIN_SECRET = _load_admin_secret()
-ADMIN_TOKEN_TTL = 60 * 60 * 12  # 12 小时
-
-
-# --------------------------------------------------------------------------- #
-# 口令哈希（复用 auth_store 的 PBKDF2 方案）
-# --------------------------------------------------------------------------- #
-def _hash_password(password: str) -> tuple[str, str]:
-    from auth_store import hash_password
-    return hash_password(password)
-
-
-def _verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
-    from auth_store import verify_password
-    return verify_password(password, salt_hex, hash_hex)
-
-
-def _default_admin_password() -> str:
-    return os.environ.get("VDL_ADMIN_PASSWORD") or "admin123"
-
-
-def _load_admin() -> dict[str, Any]:
-    p = _admin_path()
-    if not p.exists():
-        return {"salt": None, "pw_hash": None, "updated_at": 0.0, "init": False}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8") or "{}")
-    except (json.JSONDecodeError, OSError):
-        return {"salt": None, "pw_hash": None, "updated_at": 0.0, "init": False}
-    data.setdefault("salt", None)
-    data.setdefault("pw_hash", None)
-    data.setdefault("updated_at", 0.0)
-    data.setdefault("init", False)
-    return data
-
-
-def _save_admin(data: dict[str, Any]) -> None:
-    p = _admin_path()
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        pass
-
-
-def _ensure_initialized() -> dict[str, Any]:
-    """首次启动：若未初始化，用默认口令（或环境变量）落库。"""
-    data = _load_admin()
-    if not data.get("init") or not data.get("salt") or not data.get("pw_hash"):
-        pw = _default_admin_password()
-        salt, pw_hash = _hash_password(pw)
-        data = {"salt": salt, "pw_hash": pw_hash,
-                "updated_at": time.time(), "init": True,
-                "from_env": bool(os.environ.get("VDL_ADMIN_PASSWORD"))}
-        _save_admin(data)
-    return data
-
-
-def verify_admin_password(password: str) -> bool:
-    data = _ensure_initialized()
-    if not password:
-        return False
-    return _verify_password(password, data["salt"], data["pw_hash"])
-
-
-def change_admin_password(old_password: str, new_password: str) -> dict[str, Any]:
-    """改密：校验旧口令，新口令至少 6 位。成功返回 ok=True。"""
-    if not verify_admin_password(old_password):
-        return {"ok": False, "error": "原口令错误"}
-    if not new_password or len(new_password) < 6:
-        return {"ok": False, "error": "新口令至少 6 位"}
-    salt, pw_hash = _hash_password(new_password)
-    data = _load_admin()
-    data.update({"salt": salt, "pw_hash": pw_hash, "updated_at": time.time(), "init": True})
-    _save_admin(data)
-    return {"ok": True}
-
-
-# --------------------------------------------------------------------------- #
-# Admin token（HMAC 签名，无状态；前缀 'admin' 与用户 token 区分）
-# --------------------------------------------------------------------------- #
-def _b64url(b: bytes) -> str:
-    import base64
-    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
-
-
-def _b64d(s: str) -> bytes:
-    import base64
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
-
-
-def issue_admin_token() -> str:
-    iat = int(time.time())
-    exp = iat + ADMIN_TOKEN_TTL
-    payload = _b64url(f"admin.{iat}.{exp}".encode("utf-8"))
-    sig = hmac.new(_ADMIN_SECRET, f"admin.{payload}".encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"admin.{payload}.{sig}"
-
-
-def verify_admin_token(token: str) -> bool:
-    if not token or token.count(".") != 2:
-        return False
-    marker, payload, sig = token.split(".")
-    if marker != "admin":
-        return False
-    expected = hmac.new(_ADMIN_SECRET, f"admin.{payload}".encode("utf-8"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, sig):
-        return False
-    try:
-        decoded = _b64d(payload).decode("utf-8")
-        exp = int(decoded.split(".")[2])
-    except Exception:
-        return False
-    if int(time.time()) > exp:
-        return False
-    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +79,7 @@ def list_users() -> list[dict[str, Any]]:
             "identifier": u.get("identifier"),
             "created_at": u.get("created_at"),
             "disabled": bool(u.get("disabled", False)),
+            "is_admin": bool(u.get("is_admin", False)),
         }
         try:
             st = get_user_store(uid).status()
@@ -351,14 +191,19 @@ def usage_stats() -> dict[str, Any]:
 
 
 def system_config() -> dict[str, Any]:
-    """套餐、成本、SMTP 状态（admin 专属；含 SMTP 密码以便编辑，仅带 token 可见）。"""
+    """套餐、成本、SMTP 状态（超级用户专属；含 SMTP 密码以便编辑，仅带 user token 可见）。
+
+    返回 has_superuser 标记是否存在任一 is_admin 账号，供面板提示超级用户引导。
+    """
     from membership import MembershipStore, MATTING_CLOUD_CREDIT_COST, load_plan_overrides
-    from auth_store import _smtp_accounts
+    from auth_store import _smtp_accounts, _load_users
+    data = _load_users()
+    has_superuser = any(u.get("is_admin", False) for u in data.get("users", []))
     cfg: dict[str, Any] = {
         "plans": MembershipStore().plans(),
         "credit_costs": {"matting_cloud": MATTING_CLOUD_CREDIT_COST},
         "smtp": {"configured": False, "accounts": []},
-        "admin_default_password_set": (not bool(os.environ.get("VDL_ADMIN_PASSWORD"))),
+        "has_superuser": bool(has_superuser),
         "has_plan_overrides": False,
     }
     try:

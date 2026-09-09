@@ -1,10 +1,14 @@
 """server/routers/admin.py — 后台管理面板 API（/api/admin/*）。
 
-全部接口需管理员 token（POST /api/admin/login 获取的 admin token），经
-Authorization: Bearer <admin_token> 携带。无 token / token 失效返回 401。
+全部接口需「已登录 + 超级用户」权限：经 Authorization: Bearer <user_token> 携带
+用户 token，并由 users.json 中 is_admin=True 的账号放行。非超级用户或缺失 token
+一律 401。
+
+超级用户名单由 server/auth_store.ensure_superusers 维护：admin.json 的 admin_identifiers
+或环境变量 VDL_ADMIN_IDENTIFIER；两者均未配置时，首个注册的账号自动成为超级用户。
+后台内可经 /api/admin/users/{id}/set-admin 提权 / 降权其他账号。
 
 功能模块：用户管理 / 会员管理 / 使用统计 / 系统配置。
-底层数据见 server/admin_store.py（独立于用户账号体系，口令单独存储于 admin.json）。
 """
 from __future__ import annotations
 
@@ -15,10 +19,6 @@ from fastapi import APIRouter, Body, Request
 router = APIRouter()
 
 from admin_store import (
-    verify_admin_password,
-    issue_admin_token,
-    verify_admin_token,
-    change_admin_password,
     list_users,
     set_user_disabled,
     reset_user_password,
@@ -31,42 +31,28 @@ from admin_store import (
     save_smtp_accounts,
     save_plan_overrides,
 )
-
-
-def _admin_token(request: Request) -> Optional[str]:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return None
-    return auth[7:].strip() or None
+from user_membership import get_current_user_id
+from auth_store import user_is_admin, set_user_admin
 
 
 def require_admin(request: Request) -> None:
-    tok = _admin_token(request)
-    if not tok or not verify_admin_token(tok):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=401, detail="未授权：需要管理员登录")
-
-
-@router.post("/api/admin/login")
-def admin_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    pw = str(payload.get("password") or "")
-    if not verify_admin_password(pw):
-        return {"ok": False, "error": "管理员口令错误"}
-    return {"ok": True, "admin_token": issue_admin_token()}
-
-
-@router.post("/api/admin/change-password")
-def admin_change_password(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
-    old_pw = str(payload.get("old_password") or "")
-    new_pw = str(payload.get("new_password") or "")
-    return change_admin_password(old_pw, new_pw)
+    from fastapi import HTTPException
+    uid = get_current_user_id(request)
+    if not uid or not user_is_admin(uid):
+        raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")
 
 
 @router.get("/api/admin/users")
 def admin_list_users(request: Request = None) -> dict[str, Any]:
     require_admin(request)
     return {"ok": True, "users": list_users(), "total": len(list_users())}
+
+
+@router.post("/api/admin/users/{user_id}/set-admin")
+def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
+    require_admin(request)
+    flag = bool(payload.get("is_admin", False))
+    return set_user_admin(user_id, flag)
 
 
 @router.post("/api/admin/users/{user_id}/disable")

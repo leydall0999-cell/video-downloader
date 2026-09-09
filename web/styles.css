@@ -3608,6 +3608,13 @@ img { max-width: 100%; display: block; }
 }
 .admin-unlock-card h2 { font-size: 1.25rem; margin-bottom: .4rem; }
 .admin-unlock-sub { color: var(--text-mute); font-size: .85rem; margin-bottom: 1.2rem; }
+/* 网关提示屏（未登录 / 无权限） */
+.admin-gate { display: flex; align-items: center; justify-content: center; min-height: 360px; }
+.admin-gate-card {
+  width: min(380px, 100%); text-align: center; padding: 2rem 1.6rem;
+}
+.admin-gate-card h3 { font-size: 1.15rem; margin-bottom: .6rem; }
+.admin-gate-card .admin-msg { margin-bottom: 1.2rem; }
 .admin-input {
   width: 100%; padding: .7rem .9rem; margin-bottom: .8rem;
   border: 1px solid var(--line); border-radius: var(--radius-sm);

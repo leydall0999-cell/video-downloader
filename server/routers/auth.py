@@ -52,12 +52,14 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return {"ok": False, "error": "账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号"}
     if len(pw) < 6:
         return {"ok": False, "error": "密码至少 6 位"}
-    from auth_store import create_user, issue_token
+    from auth_store import create_user, issue_token, ensure_superusers, user_is_admin
     uid = create_user(ident, pw)
     if not uid:
         return {"ok": False, "error": "该账号已注册，请直接登录"}
+    ensure_superusers()
     record_event("register", {"identifier": ident})
-    return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident}
+    return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
+            "is_admin": bool(user_is_admin(uid))}
 
 
 @router.post("/api/auth/login")
@@ -66,12 +68,14 @@ def auth_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     pw = str(payload.get("password") or "")
     if not ident or not pw:
         return {"ok": False, "error": "请输入账号和密码"}
-    from auth_store import authenticate, issue_token
+    from auth_store import authenticate, issue_token, ensure_superusers, user_is_admin
     uid = authenticate(ident, pw)
     if not uid:
         return {"ok": False, "error": "账号或密码错误"}
+    ensure_superusers()
     record_event("login", {"identifier": ident})
-    return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident}
+    return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
+            "is_admin": bool(user_is_admin(uid))}
 
 
 @router.get("/api/auth/me")
@@ -79,8 +83,9 @@ def auth_me(request: Request) -> dict[str, Any]:
     uid = _bearer(request)
     if not uid:
         return {"ok": False, "error": "未登录", "code": "NO_AUTH"}
-    from auth_store import user_identifier
-    return {"ok": True, "user_id": uid, "identifier": user_identifier(uid) or uid}
+    from auth_store import user_identifier, user_is_admin
+    return {"ok": True, "user_id": uid, "identifier": user_identifier(uid) or uid,
+            "is_admin": bool(user_is_admin(uid))}
 
 
 @router.post("/api/auth/reset-code")
