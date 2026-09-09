@@ -245,6 +245,7 @@
     profCreditsAi: $('profCreditsAi'),
     profCreditsPerm: $('profCreditsPerm'),
     profUsage: $('profUsage'),
+    profUsageTable: $('profUsageTable'),
     profPurchases: $('profPurchases'),
     profPurchasesFilter: $('profPurchasesFilter'),
     profCreditsLog: $('profCreditsLog'),
