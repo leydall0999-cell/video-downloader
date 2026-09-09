@@ -10606,6 +10606,7 @@ el.dwVidPlayer.removeAttribute('src');
       _vdlIsAdmin = !!me.is_admin;
       updateAdminTabVisibility();
       _updateProfileSidebarLock();
+      _chatRefresh();
     } catch (_) {
       logoutAccount();
     }
@@ -10617,6 +10618,215 @@ el.dwVidPlayer.removeAttribute('src');
     updateAdminTabVisibility();
     _renderAuthHeader();
     _updateProfileSidebarLock();
+    _chatRefresh();
+  }
+
+  // ===== 在线客服悬浮窗 =====
+  const _chat = {
+    open: false,
+    adminMode: false,   // 超管视角：查看全部会话
+    activeThread: null, // 当前打开的会话 id（用户或超管）
+    userThreads: [],    // 用户自己的会话列表
+    adminThreads: [],   // 超管看到的全部会话
+    pollTimer: null,
+  };
+  function _chatEl(id) { return document.getElementById(id); }
+  function _chatFmt(ts) {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return `${p(d.getHours())}:${p(d.getMinutes())}`;
+    return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function _chatBubble(m) {
+    const who = m.role === 'admin' ? 'admin' : 'user';
+    const name = m.sender_identifier ? `（${esc(m.sender_identifier)}）` : '';
+    return `<div class="chat-msg ${who}">
+      <div class="chat-bubble">${esc(m.text)}</div>
+      <div class="chat-meta">${esc(_chatFmt(m.ts))}${who === 'admin' ? name : ''}</div>
+    </div>`;
+  }
+  async function _chatLoadUserThreads() {
+    try {
+      const r = await request('/api/support/threads');
+      if (r && r.ok) {
+        _chat.userThreads = r.threads || [];
+        if (!_chat.activeThread && _chat.userThreads.length) {
+          _chat.activeThread = _chat.userThreads[0].id;
+        }
+      }
+    } catch (_) { /* 忽略 */ }
+  }
+  async function _chatLoadAdminThreads() {
+    try {
+      const r = await request('/api/support/threads');
+      if (r && r.ok) { _chat.adminThreads = r.threads || []; }
+    } catch (_) { /* 忽略 */ }
+  }
+  async function _chatRender() {
+    const panel = _chatEl('chatPanel');
+    if (!panel) return;
+    if (!_chat.open) return;
+    const body = _chatEl('chatBody');
+    const footer = _chatEl('chatFooter');
+    const adminToggle = _chatEl('chatAdminToggle');
+    const sendBtn = _chatEl('chatSend');
+    const input = _chatEl('chatInput');
+    const tok = authToken();
+    if (!tok) {
+      adminToggle.hidden = true;
+      body.innerHTML = `<div class="chat-login-hint">请先登录账号后使用在线客服。<br>
+        <button id="chatGoLogin">去登录</button></div>`;
+      const go = _chatEl('chatGoLogin');
+      if (go) go.onclick = () => { if (typeof openAuthModal === 'function') openAuthModal(); };
+      footer.hidden = true;
+      return;
+    }
+    footer.hidden = false;
+    adminToggle.hidden = !_vdlIsAdmin;
+    adminToggle.classList.toggle('active', _chat.adminMode);
+
+    if (_chat.adminMode) {
+      // 超管：会话列表
+      if (_chat.activeThread) {
+        await _chatRenderThread(_chat.activeThread, true);
+        return;
+      }
+      await _chatLoadAdminThreads();
+      if (!_chat.adminThreads.length) {
+        body.innerHTML = `<div class="chat-empty">暂无用户反馈</div>`;
+        return;
+      }
+      body.innerHTML = _chat.adminThreads.map((t) => {
+        const badge = t.status === 'resolved'
+          ? `<span class="chat-badge resolved">已解决</span>`
+          : `<span class="chat-badge">处理中</span>`;
+        const who = t.user_identifier ? esc(t.user_identifier) : '未知用户';
+        const prev = t.last_message ? esc(t.last_message) : '（无消息）';
+        const when = esc(_chatFmt(t.updated_at));
+        return `<div class="chat-thread-row" data-tid="${esc(t.id)}">
+          <div class="chat-thread-top"><span class="chat-thread-user">${who}</span>${badge}</div>
+          <div class="chat-thread-preview">${prev}</div>
+          <div class="chat-meta">${when} · ${t.msg_count} 条</div>
+        </div>`;
+      }).join('');
+      body.querySelectorAll('.chat-thread-row').forEach((row) => {
+        row.onclick = () => { _chat.activeThread = row.dataset.tid; _chatRender(); };
+      });
+      return;
+    }
+
+    // 普通用户：自己的会话
+    await _chatLoadUserThreads();
+    if (_chat.activeThread) {
+      await _chatRenderThread(_chat.activeThread, false);
+      return;
+    }
+    if (!_chat.userThreads.length) {
+      body.innerHTML = `<div class="chat-empty">有什么问题？在下方直接告诉我们，管理员会尽快回复。</div>`;
+      if (input) input.placeholder = '请输入您的问题…';
+      if (sendBtn) sendBtn.textContent = '发送';
+      return;
+    }
+    await _chatRenderThread(_chat.userThreads[0].id, false);
+  }
+  async function _chatRenderThread(tid, isAdmin) {
+    const body = _chatEl('chatBody');
+    const input = _chatEl('chatInput');
+    const sendBtn = _chatEl('chatSend');
+    try {
+      const r = await request('/api/support/thread/' + tid);
+      if (!r || !r.ok) { body.innerHTML = `<div class="chat-empty">${esc((r && r.error) || '加载失败')}</div>`; return; }
+      const t = r.thread;
+      let html = '';
+      if (isAdmin) html += `<button class="chat-back" id="chatBack">← 返回列表</button>`;
+      html += (t.messages || []).map(_chatBubble).join('') ||
+        `<div class="chat-empty">暂无消息</div>`;
+      body.innerHTML = html;
+      body.scrollTop = body.scrollHeight;
+      const back = _chatEl('chatBack');
+      if (back) back.onclick = () => { _chat.activeThread = null; _chatRender(); };
+      if (input) input.placeholder = isAdmin ? '以管理员身份回复…' : '继续补充…';
+      if (sendBtn) sendBtn.textContent = isAdmin ? '回复' : '发送';
+    } catch (_) {
+      body.innerHTML = `<div class="chat-empty">加载失败</div>`;
+    }
+  }
+  async function _chatSend() {
+    const input = _chatEl('chatInput');
+    const sendBtn = _chatEl('chatSend');
+    if (!input || !input.value.trim() || !sendBtn || sendBtn.disabled) return;
+    const text = input.value.trim();
+    sendBtn.disabled = true;
+    try {
+      if (_chat.adminMode && _chat.activeThread) {
+        const r = await request('/api/support/thread/' + _chat.activeThread + '/reply', {
+          method: 'POST', body: JSON.stringify({ text }),
+        });
+        if (!r || !r.ok) throw new Error((r && r.error) || '回复失败');
+      } else {
+        const r = await request('/api/support/message', {
+          method: 'POST', body: JSON.stringify({ text, thread_id: _chat.activeThread || '' }),
+        });
+        if (!r || !r.ok) throw new Error((r && r.error) || '发送失败');
+        if (r.thread_id) _chat.activeThread = r.thread_id;
+      }
+      input.value = '';
+      await _chatRender();
+    } catch (e) {
+      const body = _chatEl('chatBody');
+      if (body) {
+        const tip = document.createElement('div');
+        tip.className = 'chat-meta';
+        tip.style.color = '#c0392b';
+        tip.textContent = '⚠️ ' + ((e && e.message) || '操作失败');
+        body.appendChild(tip);
+        body.scrollTop = body.scrollHeight;
+      }
+    } finally {
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  }
+  function _chatPoll() {
+    if (!_chat.open) return;
+    if (_chat.adminMode) { _chatLoadAdminThreads(); }
+    else if (_chat.activeThread) { _chatRenderThread(_chat.activeThread, false); }
+  }
+  function _chatRefresh() {
+    if (_chat.open) _chatRender();
+  }
+  function _initChat() {
+    const fab = _chatEl('chatFab');
+    const panel = _chatEl('chatPanel');
+    const close = _chatEl('chatClose');
+    const adminToggle = _chatEl('chatAdminToggle');
+    const send = _chatEl('chatSend');
+    const input = _chatEl('chatInput');
+    if (!fab || !panel) return;
+    fab.onclick = () => {
+      _chat.open = !_chat.open;
+      panel.hidden = !_chat.open;
+      fab.style.display = _chat.open ? 'none' : '';
+      if (_chat.open) { _chat.activeThread = null; _chatRender(); _chat.pollTimer = setInterval(_chatPoll, 5000); }
+      else if (_chat.pollTimer) { clearInterval(_chat.pollTimer); _chat.pollTimer = null; }
+    };
+    close.onclick = () => {
+      _chat.open = false; panel.hidden = true; fab.style.display = '';
+      if (_chat.pollTimer) { clearInterval(_chat.pollTimer); _chat.pollTimer = null; }
+    };
+    adminToggle.onclick = () => {
+      _chat.adminMode = !_chat.adminMode;
+      _chat.activeThread = null;
+      _chatRender();
+    };
+    send.onclick = _chatSend;
+    if (input) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _chatSend(); }
+      });
+    }
   }
 
   // 个人中心侧栏：未登录时强制折叠并禁用点击；已登录时展开。
@@ -11246,6 +11456,7 @@ el.dwVidPlayer.removeAttribute('src');
   // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
   // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。
   renderAccount();
+  _initChat();
   // 登录 / 注册弹窗：登录 / 注册 / 回车提交 / 关闭
   if (el.authActionBtn) el.authActionBtn.addEventListener('click', authAction);
   if (el.authPw) el.authPw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.authActionBtn) el.authActionBtn.click(); });
