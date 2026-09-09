@@ -256,6 +256,12 @@
     profNewPw2: $('profNewPw2'),
     profChangeMsg: $('profChangeMsg'),
     profChangePwBtn: $('profChangePwBtn'),
+    profSecurityEmail: $('profSecurityEmail'),
+    profForgotPwBtn: $('profForgotPwBtn'),
+    profToggleChangePwBtn: $('profToggleChangePwBtn'),
+    profCancelChangePwBtn: $('profCancelChangePwBtn'),
+    profChangePwForm: $('profChangePwForm'),
+    profDeactivateBtn: $('profDeactivateBtn'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
@@ -11531,6 +11537,24 @@ el.dwVidPlayer.removeAttribute('src');
     el.profCreditsLog.innerHTML = `${HEAD}<tbody>${rows}</tbody></table>`;
   }
 
+  // 账号/邮箱/手机号脱敏显示（匹配截图：183***612@qq.com）
+  function _maskIdentifier(s) {
+    if (!s || s === '—') return '—';
+    if (s.includes('@')) {
+      const [local, domain] = s.split('@');
+      if (local.length <= 3) return local.replace(/./g, '*') + '@' + domain;
+      const head = local.slice(0, 3);
+      const tail = local.slice(-3);
+      const stars = '*'.repeat(Math.max(3, local.length - 6));
+      return head + stars + tail + '@' + domain;
+    }
+    // 手机号：保留前 3 后 4
+    if (s.length >= 8) {
+      return s.slice(0, 3) + '****' + s.slice(-4);
+    }
+    return s.slice(0, 2) + '***' + (s.length > 2 ? s.slice(-2) : '');
+  }
+
   // 套餐 code → 可读名称（与 membership.py 套餐表对应）
   function _planName(code) {
     const MAP = {
@@ -11601,6 +11625,10 @@ el.dwVidPlayer.removeAttribute('src');
     // 注册时间
     const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
     setTxt(el.profCreated, ct ? _memberFmtDate(ct, true) : '—');
+    // 账号安全页：电子邮箱（部分脱敏）
+    if (el.profSecurityEmail) {
+      el.profSecurityEmail.textContent = _maskIdentifier(me.identifier || '—');
+    }
     // 会员状态 / 积分（卡片式）
     if (ms) {
       const dl = ms.download_member || {};
@@ -11648,6 +11676,22 @@ el.dwVidPlayer.removeAttribute('src');
     try { _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   }
+  // 账号安全：忘记密码 → 打开找回密码弹窗
+  if (el.profForgotPwBtn) el.profForgotPwBtn.addEventListener('click', () => openForgetModal());
+  // 账号安全：切换「更改密码」表单
+  function _toggleChangePwForm(show) {
+    if (!el.profChangePwForm) return;
+    el.profChangePwForm.hidden = !show;
+    if (el.profToggleChangePwBtn) el.profToggleChangePwBtn.textContent = show ? '收起' : '更改密码';
+    if (!show) {
+      if (el.profCurPw) el.profCurPw.value = '';
+      if (el.profNewPw) el.profNewPw.value = '';
+      if (el.profNewPw2) el.profNewPw2.value = '';
+      if (el.profChangeMsg) { el.profChangeMsg.textContent = ''; el.profChangeMsg.hidden = true; }
+    }
+  }
+  if (el.profToggleChangePwBtn) el.profToggleChangePwBtn.addEventListener('click', () => _toggleChangePwForm(el.profChangePwForm && el.profChangePwForm.hidden));
+  if (el.profCancelChangePwBtn) el.profCancelChangePwBtn.addEventListener('click', () => _toggleChangePwForm(false));
   // 修改密码（个人中心整页）
   if (el.profChangePwBtn) el.profChangePwBtn.addEventListener('click', async () => {
     const cur = (el.profCurPw && el.profCurPw.value || '').trim();
@@ -11665,19 +11709,47 @@ el.dwVidPlayer.removeAttribute('src');
     msg('提交中…', false);
     el.profChangePwBtn.disabled = true;
     try {
-      await request('/api/auth/change-password', {
+      const r = await request('/api/auth/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_password: cur, new_password: np }),
       });
-      msg('密码已修改，下次登录请使用新密码', false);
-      if (el.profCurPw) el.profCurPw.value = '';
-      if (el.profNewPw) el.profNewPw.value = '';
-      if (el.profNewPw2) el.profNewPw2.value = '';
+      if (r && r.ok) {
+        msg('✅ 密码已修改，下次登录请使用新密码', false);
+        if (el.profCurPw) el.profCurPw.value = '';
+        if (el.profNewPw) el.profNewPw.value = '';
+        if (el.profNewPw2) el.profNewPw2.value = '';
+        setTimeout(() => _toggleChangePwForm(false), 1200);
+      } else {
+        msg((r && r.error) || '修改失败，请重试', true);
+      }
     } catch (e) {
       msg((e && e.message) || '修改失败，请重试', true);
     } finally {
       el.profChangePwBtn.disabled = false;
+    }
+  });
+  // 账号安全：注销账号
+  if (el.profDeactivateBtn) el.profDeactivateBtn.addEventListener('click', async () => {
+    if (!confirm('⚠️ 注销后该账号将不可用，且无法使用同一邮箱/手机号重新注册。\n\n确定继续注销？')) return;
+    el.profDeactivateBtn.disabled = true;
+    try {
+      const r = await request('/api/account/deactivate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (r && r.ok) {
+        alert('账号已注销');
+        logoutAccount();
+        switchView('download');
+      } else {
+        alert((r && r.error) || '注销失败，请重试');
+      }
+    } catch (e) {
+      alert((e && e.message) || '注销失败，请重试');
+    } finally {
+      if (el.profDeactivateBtn) el.profDeactivateBtn.disabled = false;
     }
   });
   // 个人中心：使用统计周期切换

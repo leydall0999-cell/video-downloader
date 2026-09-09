@@ -1391,9 +1391,33 @@
       </div>
       <!-- 账号安全 -->
       <div class="um-panel" id="profileSecurityPanel" hidden>
-        <div class="um-sec">
-          <div class="um-sec-title">修改密码</div>
-          <div class="um-form">
+        <div class="pf-sec-list">
+          <!-- 电子邮箱 -->
+          <div class="pf-sec-item">
+            <div class="pf-sec-ic" aria-hidden="true">✉</div>
+            <div class="pf-sec-main">
+              <div class="pf-sec-title">电子邮件</div>
+              <div class="pf-sec-sub">使用您的电子邮件和密码登录</div>
+              <div class="pf-sec-val" id="profSecurityEmail">—</div>
+            </div>
+          </div>
+
+          <!-- 密码 -->
+          <div class="pf-sec-item">
+            <div class="pf-sec-ic" aria-hidden="true">✱</div>
+            <div class="pf-sec-main">
+              <div class="pf-sec-title">密码</div>
+              <div class="pf-sec-sub">当前密码</div>
+              <div class="pf-sec-val pf-sec-dots">••••••••</div>
+              <div class="pf-sec-actions">
+                <button type="button" class="pf-sec-btn" id="profForgotPwBtn">忘记密码？</button>
+                <button type="button" class="pf-sec-btn primary" id="profToggleChangePwBtn">更改密码</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 更改密码表单（默认折叠） -->
+          <div class="pf-sec-form" id="profChangePwForm" hidden>
             <label class="um-field">
               <span>当前密码</span>
               <input id="profCurPw" type="password" class="um-input" autocomplete="current-password" />
@@ -1407,7 +1431,22 @@
               <input id="profNewPw2" type="password" class="um-input" autocomplete="new-password" />
             </label>
             <p class="um-msg" id="profChangeMsg" hidden></p>
-            <button type="button" id="profChangePwBtn" class="user-menu-btn">修改密码</button>
+            <div class="pf-sec-form-actions">
+              <button type="button" class="user-menu-btn ghost" id="profCancelChangePwBtn">取消</button>
+              <button type="button" class="user-menu-btn" id="profChangePwBtn">保存新密码</button>
+            </div>
+          </div>
+
+          <!-- 注销账号 -->
+          <div class="pf-sec-item pf-sec-danger">
+            <div class="pf-sec-ic" aria-hidden="true">⛔</div>
+            <div class="pf-sec-main">
+              <div class="pf-sec-title">注销账号</div>
+              <div class="pf-sec-sub">注销后将无法使用该邮箱登录或重新注册</div>
+              <div class="pf-sec-actions">
+                <button type="button" class="pf-sec-btn danger" id="profDeactivateBtn">注销账号</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

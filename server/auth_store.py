@@ -217,13 +217,16 @@ def _normalize(identifier: str) -> str:
 
 
 def create_user(identifier: str, password: str, is_admin: bool = False) -> Optional[str]:
-    """注册。成功返回 user_id，账号已存在返回 None。
+    """注册。成功返回 user_id，账号已存在或已注销返回 None。
 
     is_admin 仅经后台显式提权（set_user_admin / ensure_superusers），常规自注册恒为 False。
     """
     ident = _normalize(identifier)
     data = _load_users()
     if ident in data["by_identifier"]:
+        return None
+    # 已注销账号不可重新注册
+    if any(u.get("identifier") == ident and u.get("deleted_at") for u in data["users"]):
         return None
     import uuid
     user_id = "u_" + uuid.uuid4().hex[:16]
@@ -249,7 +252,7 @@ def authenticate(identifier: str, password: str) -> Optional[str]:
     if not user_id:
         return None
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)
-    if not user:
+    if not user or user.get("deleted_at"):
         return None
     if verify_password(password, user["salt"], user["pw_hash"]):
         return user_id
@@ -316,6 +319,24 @@ def reset_password(identifier: str, new_password: str) -> bool:
     user["updated_at"] = int(time.time())
     _save_users(data)
     return True
+
+
+def deactivate_user(user_id: str) -> dict[str, Any]:
+    """注销当前账号（软删除）：标记 deleted_at，清除索引，使该 identifier 不可再登录/注册。"""
+    data = _load_users()
+    user = next((u for u in data["users"] if u.get("user_id") == user_id), None)
+    if not user:
+        return {"ok": False, "error": "用户不存在"}
+    if user.get("deleted_at"):
+        return {"ok": False, "error": "账号已注销"}
+    ident = user.get("identifier", "")
+    user["deleted_at"] = int(time.time())
+    user["updated_at"] = int(time.time())
+    # 清除索引，防止再次登录/注册
+    if ident and ident in data["by_identifier"]:
+        del data["by_identifier"][ident]
+    _save_users(data)
+    return {"ok": True}
 
 
 # --------------------------------------------------------------------------- #

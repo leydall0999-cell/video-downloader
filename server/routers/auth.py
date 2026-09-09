@@ -225,6 +225,20 @@ def auth_change_password(request: Request, payload: dict[str, Any] = Body(...)) 
     return {"ok": True}
 
 
+@router.post("/api/account/deactivate")
+def account_deactivate(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """注销当前登录账号（软删除），注销后不可再用该邮箱/手机号登录或重新注册。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录", "code": "NO_AUTH"}
+    from auth_store import user_identifier, deactivate_user
+    ident = user_identifier(uid)
+    result = deactivate_user(uid)
+    if result.get("ok"):
+        record_event("deactivate", {"identifier": ident})
+    return result
+
+
 @router.post("/api/auth/reset-code")
 def auth_reset_code(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     ident = str(payload.get("identifier") or "").strip().lower()

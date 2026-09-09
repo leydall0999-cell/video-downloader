@@ -3301,6 +3301,45 @@ img { max-width: 100%; display: block; }
 .um-msg.is-err { color: #c0392b; }
 .um-msg:not(.is-err) { color: #1d9e75; }
 
+/* ---- 账号安全：条目列表（参考截图：邮箱 / 密码 / 注销账号）---- */
+.pf-sec-list { display: flex; flex-direction: column; gap: .9rem; }
+.pf-sec-item {
+  display: flex; align-items: flex-start; gap: .9rem;
+  padding: 1rem 1.1rem; background: var(--bg, #fff); border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.03);
+}
+.pf-sec-ic {
+  width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  border-radius: 10px; background: var(--bg-soft, #f3f4f6);
+  color: var(--text, #1f2937); font-size: 1rem; flex-shrink: 0;
+}
+.pf-sec-main { flex: 1; min-width: 0; }
+.pf-sec-title { font-size: .95rem; font-weight: 600; color: var(--text, #1f2937); margin-bottom: .15rem; }
+.pf-sec-sub { font-size: .8rem; color: var(--text-mute, #6b7280); margin-bottom: .35rem; }
+.pf-sec-val { font-size: .9rem; color: var(--text, #1f2937); word-break: break-all; }
+.pf-sec-dots { letter-spacing: 2px; }
+.pf-sec-actions { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: .75rem; }
+.pf-sec-btn {
+  padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--border, #d1d5db);
+  background: var(--bg, #fff); color: var(--text, #1f2937); font-size: .85rem; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.pf-sec-btn:hover { background: var(--bg-soft, #f9fafb); border-color: var(--brand, #4f46e5); color: var(--brand, #4f46e5); }
+.pf-sec-btn.primary { border-color: var(--brand, #4f46e5); color: var(--brand, #4f46e5); }
+.pf-sec-btn.primary:hover { background: var(--brand-soft, #eef2ff); }
+.pf-sec-btn.danger { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+.pf-sec-btn.danger:hover { background: #fee2e2; }
+.pf-sec-btn:disabled { opacity: .55; cursor: not-allowed; }
+.pf-sec-item.pf-sec-danger { border-color: #fecaca; background: #fffafa; }
+.pf-sec-item.pf-sec-danger .pf-sec-title { color: #b91c1c; }
+.pf-sec-form {
+  padding: 1rem 1.1rem; background: var(--bg-soft, #f9fafb);
+  border: 1px dashed var(--border, #d1d5db); border-radius: 12px;
+}
+.pf-sec-form-actions { display: flex; gap: .6rem; margin-top: .2rem; }
+.user-menu-btn.ghost { background: var(--bg, #fff); color: var(--text, #1f2937); border: 1px solid var(--border, #d1d5db); }
+.user-menu-btn.ghost:hover { background: var(--bg-soft, #f9fafb); }
+
 /* 个人中心整页 */
 .profile-panel { max-width: 920px; }
 .profile-head {
