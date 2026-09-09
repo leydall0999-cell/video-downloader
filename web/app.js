@@ -7218,6 +7218,13 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   const handleDownload = async () => {
+    if (!authToken()) {
+      // 未登录：引导登录/注册，成功后可自动继续下载
+      try { window._pendingDownload = true; } catch (_) {}
+      _authMsg('请先登录或注册账号，即可开始下载', true);
+      openAuthModal();
+      return;
+    }
     if (resolved?.video?.direct_url) {
       // 直链直存：浏览器从源站拉文件，瞬时响应，无需 loading 态
       triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
@@ -11141,7 +11148,14 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
         await renderMemberStatus();
-        setTimeout(() => { try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); } }, 400);
+        setTimeout(() => {
+          try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); }
+          // 登录/注册前有点击下载的待办，成功后自动继续
+          if (window._pendingDownload) {
+            window._pendingDownload = false;
+            setTimeout(() => { try { handleDownload(); } catch (_) {} }, 120);
+          }
+        }, 400);
       } else {
         _authMsg('❌ ' + ((r && r.error) || (isReg ? '注册失败' : '登录失败')), true);
       }
@@ -11789,9 +11803,9 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.forgetModalClose) el.forgetModalClose.addEventListener('click', () => { try { el.forgetModal.close(); } catch (_) {} });
   if (el.forgetModal) el.forgetModal.addEventListener('click', (e) => { if (e.target === el.forgetModal) { try { el.forgetModal.close(); } catch (_) {} } });
   function _authLoading() { return !!(el.authActionBtn && el.authActionBtn.classList.contains('is-loading')); }
-  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { el.authModal.close(); } catch (_) {} });
+  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { window._pendingDownload = false; el.authModal.close(); } catch (_) {} });
   if (el.authModal) {
-    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { el.authModal.close(); } catch (_) {} } });
+    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { window._pendingDownload = false; el.authModal.close(); } catch (_) {} } });
     el.authModal.addEventListener('cancel', (e) => { if (_authLoading()) e.preventDefault(); });
   }
   // 法律条款弹窗（服务条款 / 隐私政策）
