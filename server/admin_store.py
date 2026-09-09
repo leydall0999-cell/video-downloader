@@ -25,6 +25,10 @@ from typing import Any, Callable, Optional
 # 路径
 # --------------------------------------------------------------------------- #
 def _base_dir() -> Path:
+    # 覆盖位：与 server/auth_store._base_dir 保持一致（VDL_DATA_DIR 优先）。
+    override = os.environ.get("VDL_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
     if sys.platform == "win32" and getattr(sys, "frozen", False):
         base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
     else:

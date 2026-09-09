@@ -25,6 +25,11 @@ from typing import Any, Optional
 # 路径
 # --------------------------------------------------------------------------- #
 def _base_dir() -> Path:
+    # 覆盖位：smoke / E2E 测本进程可能用 PyInstaller 冻结，Path.home() 不一定
+    # 跟随 HOME，因此提供 VDL_DATA_DIR 显式隔离数据目录（不设置则走平台默认）。
+    override = os.environ.get("VDL_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
     if sys.platform == "win32" and getattr(sys, "frozen", False):
         base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
     else:
