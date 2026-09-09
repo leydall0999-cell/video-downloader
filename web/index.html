@@ -2643,7 +2643,7 @@
 </script>
 
 <!-- 在线客服悬浮窗 -->
-<button id="chatFab" class="chat-fab" title="在线客服" aria-label="在线客服">💬</button>
+<button id="chatFab" class="chat-fab" title="在线客服" aria-label="在线客服">💬<span id="chatFabBadge" class="chat-fab-badge" hidden></span></button>
 <div id="chatPanel" class="chat-panel" hidden>
   <div class="chat-head">
     <div class="chat-head-left">
@@ -2652,6 +2652,7 @@
     </div>
     <button id="chatClose" class="chat-close" aria-label="关闭">×</button>
   </div>
+  <div class="chat-tabs" id="chatTabs" hidden></div>
   <div class="chat-body" id="chatBody"></div>
   <div class="chat-footer" id="chatFooter">
     <textarea id="chatInput" class="chat-input" placeholder="请输入您的问题…" rows="2"></textarea>

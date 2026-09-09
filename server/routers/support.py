@@ -70,6 +70,14 @@ def _is_admin(uid: str) -> bool:
     return bool(user_is_admin(uid))
 
 
+def _unread_for(thread: dict, uid: str, admin: bool) -> int:
+    """当前查看者视角下，对方发来且晚于自己上次已读时间戳的消息条数。"""
+    msgs = thread.get("messages", []) or []
+    base = (thread.get("admin_read_ts") if admin else thread.get("user_read_ts")) or 0
+    other = "user" if admin else "admin"
+    return sum(1 for m in msgs if m.get("role") == other and (m.get("ts") or 0) > base)
+
+
 def _append(threads: list[dict], thread: dict, msg: dict, status: str = "open") -> None:
     thread["messages"].append(msg)
     thread["updated_at"] = msg["ts"]
@@ -105,6 +113,8 @@ def support_message(request: Request, payload: dict[str, Any] = Body(...)) -> di
                 "status": "open",
                 "created_at": int(time.time()),
                 "updated_at": int(time.time()),
+                "user_read_ts": int(time.time()),
+                "admin_read_ts": 0,
                 "messages": [],
             }
             threads.append(thread)
@@ -121,7 +131,11 @@ def support_message(request: Request, payload: dict[str, Any] = Body(...)) -> di
 
 @router.get("/api/support/threads")
 def support_threads(request: Request) -> dict[str, Any]:
-    """会话列表。超管看全部（含提交者账号），普通用户只看自己的。"""
+    """会话列表。超管看全部（含提交者账号），普通用户只看自己的。
+
+    每个会话附带 unread（对方发来且自己未读的消息数）；顶层 total_unread_threads
+    为含未读的会话数，供前端悬浮气泡红点使用。
+    """
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
@@ -130,9 +144,13 @@ def support_threads(request: Request) -> dict[str, Any]:
     items = threads if admin else [t for t in threads if t.get("user_id") == uid]
     items = sorted(items, key=lambda t: t.get("updated_at", 0), reverse=True)
     out = []
+    unread_total = 0
     for t in items:
         msgs = t.get("messages", [])
         last = msgs[-1] if msgs else None
+        unread = _unread_for(t, uid, admin)
+        if unread:
+            unread_total += 1
         out.append(
             {
                 "id": t["id"],
@@ -143,10 +161,11 @@ def support_threads(request: Request) -> dict[str, Any]:
                 "msg_count": len(msgs),
                 "last_message": (last or {}).get("text", ""),
                 "last_role": (last or {}).get("role"),
+                "unread": unread,
                 "mine": t.get("user_id") == uid,
             }
         )
-    return {"ok": True, "is_admin": admin, "threads": out}
+    return {"ok": True, "is_admin": admin, "threads": out, "total_unread_threads": unread_total}
 
 
 @router.get("/api/support/thread/{tid}")
@@ -221,3 +240,27 @@ def support_status(tid: str, request: Request, payload: dict[str, Any] = Body(..
         thread["updated_at"] = int(time.time())
         _write_threads(threads)
     return {"ok": True, "status": st}
+
+
+@router.post("/api/support/thread/{tid}/read")
+def support_mark_read(tid: str, request: Request) -> dict[str, Any]:
+    """标记会话为已读（按当前角色更新 user_read_ts / admin_read_ts）。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    admin = _is_admin(uid)
+    with _lock:
+        threads = _read_threads()
+        thread = next((t for t in threads if t.get("id") == tid), None)
+        if not thread:
+            return {"ok": False, "error": "会话不存在"}
+        if not admin and thread.get("user_id") != uid:
+            return {"ok": False, "error": "无权访问", "code": "FORBIDDEN"}
+        msgs = thread.get("messages", []) or []
+        latest = max((m.get("ts") or 0) for m in msgs) or int(time.time())
+        if admin:
+            thread["admin_read_ts"] = max(thread.get("admin_read_ts") or 0, latest)
+        else:
+            thread["user_read_ts"] = max(thread.get("user_read_ts") or 0, latest)
+        _write_threads(threads)
+    return {"ok": True}

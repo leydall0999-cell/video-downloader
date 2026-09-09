@@ -10626,9 +10626,12 @@ el.dwVidPlayer.removeAttribute('src');
     open: false,
     adminMode: false,   // 超管视角：查看全部会话
     activeThread: null, // 当前打开的会话 id（用户或超管）
+    composing: false,   // 用户正在新建会话（未选任何已有会话）
     userThreads: [],    // 用户自己的会话列表
     adminThreads: [],   // 超管看到的全部会话
     pollTimer: null,
+    notifyTimer: null,
+    notified: new Set(),// 已弹过通知的 (tid:updated_at) 集合，避免重复
   };
   function _chatEl(id) { return document.getElementById(id); }
   function _chatFmt(ts) {
@@ -10651,12 +10654,7 @@ el.dwVidPlayer.removeAttribute('src');
   async function _chatLoadUserThreads() {
     try {
       const r = await request('/api/support/threads');
-      if (r && r.ok) {
-        _chat.userThreads = r.threads || [];
-        if (!_chat.activeThread && _chat.userThreads.length) {
-          _chat.activeThread = _chat.userThreads[0].id;
-        }
-      }
+      if (r && r.ok) { _chat.userThreads = r.threads || []; }
     } catch (_) { /* 忽略 */ }
   }
   async function _chatLoadAdminThreads() {
@@ -10664,6 +10662,93 @@ el.dwVidPlayer.removeAttribute('src');
       const r = await request('/api/support/threads');
       if (r && r.ok) { _chat.adminThreads = r.threads || []; }
     } catch (_) { /* 忽略 */ }
+  }
+  // 标记某会话为已读（best-effort，不阻塞渲染）
+  function _chatMarkRead(tid) {
+    if (!tid) return;
+    try { request('/api/support/thread/' + tid + '/read', { method: 'POST' }).catch(() => {}); }
+    catch (_) { /* 忽略 */ }
+  }
+  // 悬浮气泡红点：传入未读会话数
+  function _chatUpdateFab(n) {
+    const fab = _chatEl('chatFab');
+    const badge = _chatEl('chatFabBadge');
+    if (!fab || !badge) return;
+    n = Number(n) || 0;
+    if (n > 0) { badge.hidden = false; badge.textContent = n > 99 ? '99+' : String(n); }
+    else { badge.hidden = true; }
+  }
+  // 管理员回复后的桌面端 toast 通知
+  function _chatToast(title, text, tid) {
+    let host = _chatEl('chatToastHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'chatToastHost';
+      host.className = 'chat-toast-host';
+      document.body.appendChild(host);
+    }
+    const el = document.createElement('div');
+    el.className = 'chat-toast';
+    el.innerHTML = `<div class="chat-toast-title">${esc(title)}</div>` +
+      (text ? `<div class="chat-toast-body">${esc(text)}</div>` : '');
+    el.onclick = () => {
+      _chat.adminMode = false;
+      _chat.composing = false;
+      _chat.activeThread = tid || null;
+      if (!_chat.open) {
+        _chat.open = true;
+        const p = _chatEl('chatPanel'); if (p) p.hidden = false;
+        const f = _chatEl('chatFab'); if (f) f.style.display = 'none';
+        if (!_chat.pollTimer) _chat.pollTimer = setInterval(_chatPoll, 5000);
+      }
+      _chatRender();
+      el.remove();
+    };
+    host.appendChild(el);
+    setTimeout(() => { el.classList.add('hide'); setTimeout(() => el.remove(), 300); }, 6000);
+  }
+  // 后台轮询：更新红点 + 弹通知（面板关闭时也工作）
+  async function _chatNotifyPoll() {
+    if (!authToken()) { _chatUpdateFab(0); return; }
+    try {
+      const r = await request('/api/support/threads');
+      if (!r || !r.ok) return;
+      const threads = r.threads || [];
+      const unread = threads.filter((t) => (t.unread || 0) > 0);
+      _chatUpdateFab(unread.length);
+      for (const t of unread) {
+        const key = t.id + ':' + (t.updated_at || 0);
+        if (_chat.notified.has(key)) continue;
+        _chat.notified.add(key);
+        if (t.last_role === 'admin') {
+          _chatToast('管理员回复了你', t.last_message, t.id);
+        }
+      }
+    } catch (_) { /* 忽略 */ }
+  }
+  // 用户多会话标签条
+  function _chatRenderTabs() {
+    const tabs = _chatEl('chatTabs');
+    if (!tabs) return;
+    if (_chat.adminMode || !_chat.open) { tabs.hidden = true; tabs.innerHTML = ''; return; }
+    tabs.hidden = false;
+    const list = _chat.userThreads || [];
+    let html = list.map((t) => {
+      const active = t.id === _chat.activeThread ? ' active' : '';
+      const dot = (t.unread > 0) ? `<span class="chat-tab-dot">${t.unread > 1 ? t.unread : ''}</span>` : '';
+      const tick = t.status === 'resolved' ? ' ✓' : '';
+      const label = (t.last_message ? t.last_message : '新会话').slice(0, 10);
+      return `<div class="chat-tab${active}" data-tid="${esc(t.id)}">${esc(label)}${tick}${dot}</div>`;
+    }).join('');
+    html += `<div class="chat-tab chat-tab-new" data-new="1">＋</div>`;
+    tabs.innerHTML = html;
+    tabs.querySelectorAll('.chat-tab').forEach((tab) => {
+      tab.onclick = () => {
+        if (tab.dataset.new) { _chat.composing = true; _chat.activeThread = null; }
+        else { _chat.composing = false; _chat.activeThread = tab.dataset.tid; }
+        _chatRender();
+      };
+    });
   }
   async function _chatRender() {
     const panel = _chatEl('chatPanel');
@@ -10690,6 +10775,7 @@ el.dwVidPlayer.removeAttribute('src');
 
     if (_chat.adminMode) {
       // 超管：会话列表
+      _chatRenderTabs();
       if (_chat.activeThread) {
         await _chatRenderThread(_chat.activeThread, true);
         return;
@@ -10706,8 +10792,9 @@ el.dwVidPlayer.removeAttribute('src');
         const who = t.user_identifier ? esc(t.user_identifier) : '未知用户';
         const prev = t.last_message ? esc(t.last_message) : '（无消息）';
         const when = esc(_chatFmt(t.updated_at));
+        const dot = (t.unread > 0) ? `<span class="chat-thread-dot" title="有未读消息"></span>` : '';
         return `<div class="chat-thread-row" data-tid="${esc(t.id)}">
-          <div class="chat-thread-top"><span class="chat-thread-user">${who}</span>${badge}</div>
+          <div class="chat-thread-top"><span class="chat-thread-user">${who}</span>${badge}${dot}</div>
           <div class="chat-thread-preview">${prev}</div>
           <div class="chat-meta">${when} · ${t.msg_count} 条</div>
         </div>`;
@@ -10718,8 +10805,15 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
 
-    // 普通用户：自己的会话
+    // 普通用户：自己的会话（多会话标签切换）
     await _chatLoadUserThreads();
+    _chatRenderTabs();
+    if (_chat.composing) {
+      body.innerHTML = `<div class="chat-empty">开始一个新会话，描述你的问题：</div>`;
+      if (input) input.placeholder = '请输入您的问题…';
+      if (sendBtn) sendBtn.textContent = '发送';
+      return;
+    }
     if (_chat.activeThread) {
       await _chatRenderThread(_chat.activeThread, false);
       return;
@@ -10730,7 +10824,8 @@ el.dwVidPlayer.removeAttribute('src');
       if (sendBtn) sendBtn.textContent = '发送';
       return;
     }
-    await _chatRenderThread(_chat.userThreads[0].id, false);
+    _chat.activeThread = _chat.userThreads[0].id;
+    await _chatRenderThread(_chat.activeThread, false);
   }
   async function _chatRenderThread(tid, isAdmin) {
     const body = _chatEl('chatBody');
@@ -10740,6 +10835,7 @@ el.dwVidPlayer.removeAttribute('src');
       const r = await request('/api/support/thread/' + tid);
       if (!r || !r.ok) { body.innerHTML = `<div class="chat-empty">${esc((r && r.error) || '加载失败')}</div>`; return; }
       const t = r.thread;
+      _chatMarkRead(tid);
       let html = '';
       if (isAdmin) html += `<button class="chat-back" id="chatBack">← 返回列表</button>`;
       html += (t.messages || []).map(_chatBubble).join('') ||
@@ -10771,7 +10867,7 @@ el.dwVidPlayer.removeAttribute('src');
           method: 'POST', body: JSON.stringify({ text, thread_id: _chat.activeThread || '' }),
         });
         if (!r || !r.ok) throw new Error((r && r.error) || '发送失败');
-        if (r.thread_id) _chat.activeThread = r.thread_id;
+        if (r.thread_id) { _chat.activeThread = r.thread_id; _chat.composing = false; }
       }
       input.value = '';
       await _chatRender();
@@ -10791,11 +10887,19 @@ el.dwVidPlayer.removeAttribute('src');
   }
   function _chatPoll() {
     if (!_chat.open) return;
-    if (_chat.adminMode) { _chatLoadAdminThreads(); }
-    else if (_chat.activeThread) { _chatRenderThread(_chat.activeThread, false); }
+    if (_chat.adminMode) {
+      _chatLoadAdminThreads().then(() => {
+        _chatUpdateFab((_chat.adminThreads || []).filter((t) => (t.unread || 0) > 0).length);
+      });
+    } else if (_chat.activeThread) {
+      _chatRenderThread(_chat.activeThread, false).then(() => {
+        _chatUpdateFab((_chat.userThreads || []).filter((t) => (t.unread || 0) > 0).length);
+      });
+    }
   }
   function _chatRefresh() {
     if (_chat.open) _chatRender();
+    _chatNotifyPoll();
   }
   function _initChat() {
     const fab = _chatEl('chatFab');
@@ -10809,7 +10913,7 @@ el.dwVidPlayer.removeAttribute('src');
       _chat.open = !_chat.open;
       panel.hidden = !_chat.open;
       fab.style.display = _chat.open ? 'none' : '';
-      if (_chat.open) { _chat.activeThread = null; _chatRender(); _chat.pollTimer = setInterval(_chatPoll, 5000); }
+      if (_chat.open) { _chat.activeThread = null; _chat.composing = false; _chatRender(); _chat.pollTimer = setInterval(_chatPoll, 5000); }
       else if (_chat.pollTimer) { clearInterval(_chat.pollTimer); _chat.pollTimer = null; }
     };
     close.onclick = () => {
@@ -10827,6 +10931,9 @@ el.dwVidPlayer.removeAttribute('src');
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _chatSend(); }
       });
     }
+    // 后台轮询：即使面板关闭也更新红点 + 弹通知
+    _chat.notifyTimer = setInterval(_chatNotifyPoll, 15000);
+    _chatNotifyPoll();
   }
 
   // 个人中心侧栏：未登录时强制折叠并禁用点击；已登录时展开。
