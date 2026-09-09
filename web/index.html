@@ -109,6 +109,17 @@
       <button type="button" class="sidebar-item" data-view="library" id="sTabLibrary" title="媒体库"><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">媒体库</span></button>
     </div>
 
+    <!-- 个人中心：置底独立分组（用户要求），承载账号资料/记录/改密整页 -->
+    <div class="sidebar-group collapsed">
+      <div class="sidebar-group-title">
+        <span class="sidebar-group-emoji" aria-hidden="true">👤</span>
+        <span class="sidebar-group-en">个人中心</span>
+      </div>
+
+      <button type="button" class="sidebar-item" data-view="profile" id="sTabProfile" title="个人中心"><span class="sidebar-item-icon" aria-hidden="true">👤</span><span class="sidebar-item-label">个人中心</span></button>
+
+    </div>
+
     <!-- 后台管理面板（2026-09-08）：超级用户专属，登录且 is_admin 才显示，非普通视图切换；整个组随权限显隐 -->
     <div class="sidebar-group" id="adminSidebarGroup" hidden>
       <div class="sidebar-group-title">
@@ -135,6 +146,7 @@
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
+    <button type="button" class="tab" data-view="profile" id="tabProfile">👤 个人中心</button>
   </nav>
 
   <div id="downloadView">
@@ -1283,6 +1295,73 @@
     </div>
   </section>
 
+  <!-- 个人中心视图（左侧 tab 栏入口，整页承载记录/改密） -->
+  <section id="profileView" class="panel profile-panel" hidden aria-labelledby="profileTitle">
+    <div class="profile-head">
+      <div class="profile-avatar" aria-hidden="true">👤</div>
+      <div class="profile-head-text">
+        <h1 id="profileTitle" class="profile-name">—</h1>
+        <span class="profile-tag" id="profileTag">普通用户</span>
+      </div>
+      <div class="profile-summary" id="profileSummary">
+        <div class="profile-summary-item">
+          <span class="profile-summary-label">注册时间</span>
+          <span class="profile-summary-value" id="profCreated">—</span>
+        </div>
+        <div class="profile-summary-item">
+          <span class="profile-summary-label">会员状态</span>
+          <span class="profile-summary-value" id="profMember">—</span>
+        </div>
+        <div class="profile-summary-item">
+          <span class="profile-summary-label">积分余额</span>
+          <span class="profile-summary-value" id="profCredits">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="profile-tabs">
+      <button type="button" class="um-tab is-active" data-pf-tab="records">我的记录</button>
+      <button type="button" class="um-tab" data-pf-tab="security">账号安全</button>
+    </div>
+
+    <div class="profile-body">
+      <!-- 我的记录 -->
+      <div class="um-panel" data-pf-panel="records">
+        <div class="um-sec">
+          <div class="um-sec-title">使用记录（今日）</div>
+          <div class="um-record" id="profUsage">—</div>
+        </div>
+        <div class="um-sec">
+          <div class="um-sec-title">购买记录</div>
+          <div class="um-record-list" id="profPurchases"><div class="um-empty">暂无购买记录</div></div>
+        </div>
+        <div class="um-sec">
+          <div class="um-sec-title">积分消耗记录</div>
+          <div class="um-record-list" id="profCreditsLog"><div class="um-empty">暂无消耗记录</div></div>
+        </div>
+      </div>
+      <!-- 账号安全 -->
+      <div class="um-panel" data-pf-panel="security" hidden>
+        <div class="um-form">
+          <label class="um-field">
+            <span>当前密码</span>
+            <input id="profCurPw" type="password" class="um-input" autocomplete="current-password" />
+          </label>
+          <label class="um-field">
+            <span>新密码（≥6 位）</span>
+            <input id="profNewPw" type="password" class="um-input" autocomplete="new-password" />
+          </label>
+          <label class="um-field">
+            <span>确认新密码</span>
+            <input id="profNewPw2" type="password" class="um-input" autocomplete="new-password" />
+          </label>
+          <p class="um-msg" id="profChangeMsg" hidden></p>
+          <button type="button" id="profChangePwBtn" class="user-menu-btn">修改密码</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- 媒体库视图（桌面版功能） -->
   <section id="libraryView" class="panel" hidden aria-labelledby="libTitle">
     <div class="lib-head">
@@ -2221,65 +2300,28 @@
         <span class="user-menu-tag" id="userMenuTag">普通用户</span>
       </div>
     </div>
-    <div class="user-menu-tabs">
-      <button type="button" class="um-tab is-active" data-um-tab="records">我的记录</button>
-      <button type="button" class="um-tab" data-um-tab="security">账号安全</button>
-    </div>
     <div class="user-menu-body">
-      <!-- 我的记录 -->
-      <div class="um-panel" data-um-panel="records">
-        <div class="user-menu-row">
-          <span class="user-menu-label">注册时间</span>
-          <span class="user-menu-value" id="userMenuCreated">—</span>
-        </div>
-        <div class="user-menu-row">
-          <span class="user-menu-label">会员状态</span>
-          <span class="user-menu-value" id="userMenuMember">—</span>
-        </div>
-        <div class="user-menu-row">
-          <span class="user-menu-label">积分余额</span>
-          <span class="user-menu-value" id="userMenuCredits">—</span>
-        </div>
-        <div class="user-menu-row user-menu-row-uid">
-          <span class="user-menu-label">用户ID</span>
-          <span class="user-menu-value-wrap">
-            <span class="user-menu-mono" id="userMenuUid">—</span>
-            <button type="button" id="userMenuCopyUid" class="user-menu-copy" title="复制用户ID" aria-label="复制用户ID">复制</button>
-          </span>
-        </div>
-
-        <div class="um-sec">
-          <div class="um-sec-title">使用记录（今日）</div>
-          <div class="um-record" id="userMenuUsage">—</div>
-        </div>
-        <div class="um-sec">
-          <div class="um-sec-title">购买记录</div>
-          <div class="um-record-list" id="userMenuPurchases"><div class="um-empty">暂无购买记录</div></div>
-        </div>
-        <div class="um-sec">
-          <div class="um-sec-title">积分消耗记录</div>
-          <div class="um-record-list" id="userMenuCreditsLog"><div class="um-empty">暂无消耗记录</div></div>
-        </div>
+      <!-- 基础资料（详细记录见左侧「个人中心」整页） -->
+      <div class="user-menu-row">
+        <span class="user-menu-label">注册时间</span>
+        <span class="user-menu-value" id="userMenuCreated">—</span>
       </div>
-      <!-- 账号安全 -->
-      <div class="um-panel" data-um-panel="security" hidden>
-        <div class="um-form">
-          <label class="um-field">
-            <span>当前密码</span>
-            <input id="umCurPw" type="password" class="um-input" autocomplete="current-password" />
-          </label>
-          <label class="um-field">
-            <span>新密码（≥6 位）</span>
-            <input id="umNewPw" type="password" class="um-input" autocomplete="new-password" />
-          </label>
-          <label class="um-field">
-            <span>确认新密码</span>
-            <input id="umNewPw2" type="password" class="um-input" autocomplete="new-password" />
-          </label>
-          <p class="um-msg" id="umChangeMsg" hidden></p>
-          <button type="button" id="umChangePwBtn" class="user-menu-btn">修改密码</button>
-        </div>
+      <div class="user-menu-row">
+        <span class="user-menu-label">会员状态</span>
+        <span class="user-menu-value" id="userMenuMember">—</span>
       </div>
+      <div class="user-menu-row">
+        <span class="user-menu-label">积分余额</span>
+        <span class="user-menu-value" id="userMenuCredits">—</span>
+      </div>
+      <div class="user-menu-row user-menu-row-uid">
+        <span class="user-menu-label">用户ID</span>
+        <span class="user-menu-value-wrap">
+          <span class="user-menu-mono" id="userMenuUid">—</span>
+          <button type="button" id="userMenuCopyUid" class="user-menu-copy" title="复制用户ID" aria-label="复制用户ID">复制</button>
+        </span>
+      </div>
+      <p class="user-menu-hint">查看使用记录、购买记录、积分流水与修改密码，请打开左侧「👤 个人中心」。</p>
     </div>
     <div class="user-menu-actions">
       <button type="button" id="userMenuLogout" class="user-menu-btn user-menu-btn-danger">退出登录</button>

@@ -3288,6 +3288,35 @@ img { max-width: 100%; display: block; }
 .um-msg { font-size: .82rem; margin: 0; }
 .um-msg.is-err { color: #c0392b; }
 .um-msg:not(.is-err) { color: #1d9e75; }
+
+/* 个人中心整页 */
+.profile-panel { max-width: 920px; }
+.profile-head {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding-bottom: 1.1rem; border-bottom: 1px solid var(--line, #eceef2); margin-bottom: 1.1rem;
+}
+.profile-avatar {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: var(--brand-soft, #eef0ff); color: var(--brand, #4f46e5);
+  display: grid; place-items: center; font-size: 1.6rem; flex: none;
+}
+.profile-head-text { display: flex; flex-direction: column; gap: .2rem; }
+.profile-name { font-size: 1.25rem; font-weight: 800; margin: 0; color: var(--text, #1f2937); }
+.profile-tag { font-size: .8rem; font-weight: 600; color: var(--text-mute, #6b7280); }
+.profile-summary { display: flex; gap: 1.6rem; margin-left: auto; flex-wrap: wrap; }
+.profile-summary-item { display: flex; flex-direction: column; gap: .25rem; }
+.profile-summary-label { font-size: .74rem; color: var(--text-mute, #9ca3af); }
+.profile-summary-value { font-size: .95rem; font-weight: 600; color: var(--text, #1f2937); }
+.profile-tabs {
+  display: flex; gap: 1.4rem; border-bottom: 1px solid var(--line, #eceef2);
+  margin-bottom: 1.1rem;
+}
+.profile-body { min-height: 200px; }
+.user-menu-hint {
+  font-size: .8rem; color: var(--text-mute, #9ca3af); line-height: 1.5;
+  margin: .9rem 0 0; padding: .7rem .85rem; background: var(--bg-soft, #f8fafc);
+  border-radius: 8px; border: 1px dashed var(--border, #e5e7eb);
+}
 .auth-head {
   text-align: center;
   margin: 0 auto 1.85rem;

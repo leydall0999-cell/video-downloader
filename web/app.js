@@ -198,7 +198,7 @@
     memberModal: $('memberModal'),
     memberModalClose: $('memberModalClose'),
     memberStatus: $('memberStatus'),
-    // 用户资料卡：点击右上「👤 账号」打开
+    // 用户资料卡（基础信息，点击右上「👤 账号」打开，详细记录在左侧「个人中心」整页）
     userMenuModal: $('userMenuModal'),
     userMenuClose: $('userMenuClose'),
     userMenuUid: $('userMenuUid'),
@@ -209,14 +209,23 @@
     userMenuLogout: $('userMenuLogout'),
     userMenuCopyUid: $('userMenuCopyUid'),
     userMenuCreated: $('userMenuCreated'),
-    userMenuUsage: $('userMenuUsage'),
-    userMenuPurchases: $('userMenuPurchases'),
-    userMenuCreditsLog: $('userMenuCreditsLog'),
-    umCurPw: $('umCurPw'),
-    umNewPw: $('umNewPw'),
-    umNewPw2: $('umNewPw2'),
-    umChangeMsg: $('umChangeMsg'),
-    umChangePwBtn: $('umChangePwBtn'),
+    // 个人中心整页（左侧 tab 栏入口）
+    sTabProfile: $('sTabProfile'),
+    tabProfile: $('tabProfile'),
+    profileView: $('profileView'),
+    profName: $('profileTitle'),
+    profTag: $('profileTag'),
+    profCreated: $('profCreated'),
+    profMember: $('profMember'),
+    profCredits: $('profCredits'),
+    profUsage: $('profUsage'),
+    profPurchases: $('profPurchases'),
+    profCreditsLog: $('profCreditsLog'),
+    profCurPw: $('profCurPw'),
+    profNewPw: $('profNewPw'),
+    profNewPw2: $('profNewPw2'),
+    profChangeMsg: $('profChangeMsg'),
+    profChangePwBtn: $('profChangePwBtn'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
@@ -9463,7 +9472,8 @@ el.dwVidPlayer.removeAttribute('src');
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isSt || isAppIntro || isBridge;
+    const isProfile = view === 'profile';   // 个人中心整页（左侧 tab 栏入口）
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isSt || isAppIntro || isBridge || isProfile;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -9475,6 +9485,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
+    if (el.profileView) el.profileView.hidden = !isProfile;
     if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
@@ -9483,10 +9494,11 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
     if (el.tabMusicConvert) el.tabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
+    if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isSt && !isAppIntro && !isBridge;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isSt && !isAppIntro && !isBridge && !isProfile;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -9495,6 +9507,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
     if (el.sTabMusicConvert) el.sTabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
+    if (el.sTabProfile) el.sTabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabDw) el.sTabDw.classList.toggle('is-active', view === 'dw');
     if (el.sTabDwPdf) el.sTabDwPdf.classList.toggle('is-active', view === 'dwpdf');
     if (el.sTabDwVideo) el.sTabDwVideo.classList.toggle('is-active', view === 'dwvideo');
@@ -9504,6 +9517,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
+    if (isProfile) loadProfile();
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     // dw 系侧栏入口直达对应子面板（视图内 dw-tabs 按钮行已删，切换只经侧栏）
     const _dwPaneOf = { dw: 'img', dwpdf: 'pdf', dwvideo: 'video', matting: 'matting' };
@@ -10897,30 +10911,25 @@ el.dwVidPlayer.removeAttribute('src');
       setTxt(el.userMenuMember, '—');
       setTxt(el.userMenuCredits, '—');
     }
-    // 个人中心记录
-    if (prof && prof.ok) {
-      _renderUserUsage(prof.usage);
-      _renderUserPurchases(prof.purchases);
-      _renderUserCreditsLog(prof.credit_history);
-    }
+    // 详细记录（使用/购买/积分流水）已移至左侧「个人中心」整页，这里只留基础信息
   }
 
   // 个人中心：今日使用记录
   function _renderUserUsage(usage) {
-    if (!el.userMenuUsage) return;
-    if (!usage) { el.userMenuUsage.textContent = '—'; return; }
+    if (!el.profUsage) return;
+    if (!usage) { el.profUsage.textContent = '—'; return; }
     const parts = [];
     if (usage.download) parts.push(`下载 ${usage.download} 次`);
     if (usage.original) parts.push(`原画解析 ${usage.original} 次`);
     if (usage.batch_material) parts.push(`批量素材 ${usage.batch_material} 条`);
-    el.userMenuUsage.textContent = parts.length ? parts.join(' · ') : '今日暂无使用';
+    el.profUsage.textContent = parts.length ? parts.join(' · ') : '今日暂无使用';
   }
 
   // 个人中心：购买记录
   function _renderUserPurchases(list) {
-    if (!el.userMenuPurchases) return;
-    if (!list || !list.length) { el.userMenuPurchases.innerHTML = '<div class="um-empty">暂无购买记录</div>'; return; }
-    el.userMenuPurchases.innerHTML = list.map((h) => {
+    if (!el.profPurchases) return;
+    if (!list || !list.length) { el.profPurchases.innerHTML = '<div class="um-empty">暂无购买记录</div>'; return; }
+    el.profPurchases.innerHTML = list.map((h) => {
       const name = _planName(h.code);
       const via = h.via === 'ui_test' ? '激活码' : (h.via || '');
       const t = h.at ? _memberFmtDate(h.at, true) : '';
@@ -10930,9 +10939,9 @@ el.dwVidPlayer.removeAttribute('src');
 
   // 个人中心：积分消耗记录
   function _renderUserCreditsLog(list) {
-    if (!el.userMenuCreditsLog) return;
-    if (!list || !list.length) { el.userMenuCreditsLog.innerHTML = '<div class="um-empty">暂无消耗记录</div>'; return; }
-    el.userMenuCreditsLog.innerHTML = list.map((h) => {
+    if (!el.profCreditsLog) return;
+    if (!list || !list.length) { el.profCreditsLog.innerHTML = '<div class="um-empty">暂无消耗记录</div>'; return; }
+    el.profCreditsLog.innerHTML = list.map((h) => {
       if (h.type === 'spend') {
         const t = h.at ? _memberFmtDate(h.at, true) : '';
         const r = h.reason ? `（${h.reason}）` : '';
@@ -10989,30 +10998,76 @@ el.dwVidPlayer.removeAttribute('src');
       el.userMenuCopyUid.textContent = '复制';
     }, 1500);
   });
-  // 资料卡 tab 切换（我的记录 / 账号安全）
-  function switchUserMenuTab(k) {
-    document.querySelectorAll('.um-tab').forEach((b) => b.classList.toggle('is-active', b.dataset.umTab === k));
-    document.querySelectorAll('.um-panel').forEach((p) => { p.hidden = p.dataset.umPanel !== k; });
+  // 个人中心整页 tab 切换（我的记录 / 账号安全）
+  function switchProfileTab(k) {
+    document.querySelectorAll('.um-tab[data-pf-tab]').forEach((b) => b.classList.toggle('is-active', b.dataset.pfTab === k));
+    document.querySelectorAll('.um-panel[data-pf-panel]').forEach((p) => { p.hidden = p.dataset.pfPanel !== k; });
   }
-  document.querySelectorAll('.um-tab').forEach((b) => {
-    b.addEventListener('click', () => switchUserMenuTab(b.dataset.umTab));
+  document.querySelectorAll('.um-tab[data-pf-tab]').forEach((b) => {
+    b.addEventListener('click', () => switchProfileTab(b.dataset.pfTab));
   });
-  // 修改密码
-  if (el.umChangePwBtn) el.umChangePwBtn.addEventListener('click', async () => {
-    const cur = (el.umCurPw && el.umCurPw.value || '').trim();
-    const np = (el.umNewPw && el.umNewPw.value || '').trim();
-    const np2 = (el.umNewPw2 && el.umNewPw2.value || '').trim();
+
+  // 个人中心整页：拉取资料 + 记录并填充
+  async function loadProfile() {
+    if (!el.profileView) return;
+    const setTxt = (node, txt) => { if (node) node.textContent = txt; };
+    let me = null, ms = null, prof = null;
+    try { me = await request('/api/auth/me'); } catch (_) { /* 忽略 */ }
+    try { ms = await request('/api/member/status'); } catch (_) { /* 忽略 */ }
+    try { prof = await request('/api/account/profile'); } catch (_) { /* 忽略 */ }
+    if (!me || !me.ok) {
+      // 未登录：跳登录
+      openAuthModal();
+      return;
+    }
+    setTxt(el.profName, me.identifier || '已登录');
+    setTxt(el.profTag, me.is_admin ? '👑 超级管理员' : '普通用户');
+    // 注册时间
+    const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
+    setTxt(el.profCreated, ct ? _memberFmtDate(ct, true) : '—');
+    // 会员状态 / 积分
+    if (ms) {
+      const dl = ms.download_member || {};
+      const ai = ms.ai_member || {};
+      const memberBits = [];
+      if (dl.active) memberBits.push(`下载会员 至 ${_memberFmtDate(dl.expire_at)}`);
+      if (ai.active) memberBits.push(`AI会员 至 ${_memberFmtDate(ai.expire_at)}`);
+      setTxt(el.profMember, memberBits.length ? memberBits.join(' · ') : '免费用户');
+      const creditsTotal = Number(ms.credits_total || 0);
+      const creditsBreakdown = [];
+      if (ai.credits_left != null) creditsBreakdown.push(`AI 池 ${ai.credits_left}`);
+      const perm = Number(ms.permanent_credits || 0);
+      if (perm > 0) creditsBreakdown.push(`永久 ${perm}`);
+      setTxt(el.profCredits, creditsTotal
+        ? `${creditsTotal}${creditsBreakdown.length ? '（' + creditsBreakdown.join(' + ') + '）' : ''}`
+        : '0');
+    } else {
+      setTxt(el.profMember, '—');
+      setTxt(el.profCredits, '—');
+    }
+    // 记录
+    if (prof && prof.ok) {
+      _renderUserUsage(prof.usage);
+      _renderUserPurchases(prof.purchases);
+      _renderUserCreditsLog(prof.credit_history);
+    }
+  }
+  // 修改密码（个人中心整页）
+  if (el.profChangePwBtn) el.profChangePwBtn.addEventListener('click', async () => {
+    const cur = (el.profCurPw && el.profCurPw.value || '').trim();
+    const np = (el.profNewPw && el.profNewPw.value || '').trim();
+    const np2 = (el.profNewPw2 && el.profNewPw2.value || '').trim();
     const msg = (txt, err) => {
-      if (!el.umChangeMsg) return;
-      el.umChangeMsg.textContent = txt || '';
-      el.umChangeMsg.hidden = !txt;
-      el.umChangeMsg.classList.toggle('is-err', !!err);
+      if (!el.profChangeMsg) return;
+      el.profChangeMsg.textContent = txt || '';
+      el.profChangeMsg.hidden = !txt;
+      el.profChangeMsg.classList.toggle('is-err', !!err);
     };
     if (!cur || !np) { msg('请输入当前密码和新密码', true); return; }
     if (np.length < 6) { msg('新密码至少 6 位', true); return; }
     if (np !== np2) { msg('两次输入的新密码不一致', true); return; }
     msg('提交中…', false);
-    el.umChangePwBtn.disabled = true;
+    el.profChangePwBtn.disabled = true;
     try {
       await request('/api/auth/change-password', {
         method: 'POST',
@@ -11020,13 +11075,13 @@ el.dwVidPlayer.removeAttribute('src');
         body: JSON.stringify({ current_password: cur, new_password: np }),
       });
       msg('密码已修改，下次登录请使用新密码', false);
-      if (el.umCurPw) el.umCurPw.value = '';
-      if (el.umNewPw) el.umNewPw.value = '';
-      if (el.umNewPw2) el.umNewPw2.value = '';
+      if (el.profCurPw) el.profCurPw.value = '';
+      if (el.profNewPw) el.profNewPw.value = '';
+      if (el.profNewPw2) el.profNewPw2.value = '';
     } catch (e) {
       msg((e && e.message) || '修改失败，请重试', true);
     } finally {
-      el.umChangePwBtn.disabled = false;
+      el.profChangePwBtn.disabled = false;
     }
   });
   // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
