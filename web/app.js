@@ -246,6 +246,8 @@
     profCreditsPerm: $('profCreditsPerm'),
     profUsage: $('profUsage'),
     profUsageTable: $('profUsageTable'),
+    profUsageQuotaHeader: $('profUsageQuotaHeader'),
+    profUsageFilter: $('profUsageFilter'),
     profPurchases: $('profPurchases'),
     profPurchasesFilter: $('profPurchasesFilter'),
     profCreditsLog: $('profCreditsLog'),
@@ -11325,7 +11327,7 @@ el.dwVidPlayer.removeAttribute('src');
     let me = null, ms = null, prof = null;
     try { me = await request('/api/auth/me'); } catch (_) { /* 忽略 */ }
     try { ms = await request('/api/member/status'); } catch (_) { /* 忽略 */ }
-    try { prof = await request('/api/account/profile'); } catch (_) { /* 忽略 */ }
+    try { prof = await request('/api/account/profile?usage_period=' + encodeURIComponent(_profileUsagePeriod || 'today')); } catch (_) { /* 忽略 */ }
     if (!me || !me.ok) {
       // token 失效：关弹窗，触发清理
       try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
@@ -11370,10 +11372,20 @@ el.dwVidPlayer.removeAttribute('src');
     // 详细记录（使用/购买/积分流水）已移至左侧「个人中心」整页，这里只留基础信息
   }
 
-  // 个人中心：今日使用记录（表格：功能 / 体验剩余 / 权益余额 / 积分单价）
-  function _renderUserUsage(usage, features) {
+  // 个人中心：使用统计（表格：功能 / 体验(周期)剩余 / 权益余额 / 积分单价）
+  let _profileUsagePeriod = 'today';
+  function _renderUserUsage(usage, features, period) {
     const table = el.profUsageTable;
     if (!el.profUsage) return;
+    if (el.profUsageQuotaHeader) {
+      const headers = { today: '体验剩余', '3d': '近三日使用', '7d': '近七日使用', month: '本月使用' };
+      el.profUsageQuotaHeader.textContent = headers[period] || headers.today;
+    }
+    if (el.profUsageFilter) {
+      el.profUsageFilter.querySelectorAll('.pf-chip').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.pfperiod === period);
+      });
+    }
     if (!table) {
       // 兼容旧 DOM：兜底文本渲染
       if (!usage) { el.profUsage.textContent = '—'; return; }
@@ -11386,18 +11398,22 @@ el.dwVidPlayer.removeAttribute('src');
     }
     const list = Array.isArray(features) && features.length ? features : [];
     if (!list.length) {
-      table.querySelector('tbody').innerHTML = '<tr><td colspan="4" class="pf-empty-cell">今日暂无使用</td></tr>';
+      table.querySelector('tbody').innerHTML = '<tr><td colspan="4" class="pf-empty-cell">暂无使用</td></tr>';
       return;
     }
+    const isPeriod = period !== 'today';
     const rows = list.map((f) => {
       const name = esc(f.name || f.key || '—');
       const unit = esc(f.unit || '');
-      let trial = '—';
+      let quota = '—';
       if (f.unlimited) {
-        trial = '<span class="pu-tag pu-tag-unlimited">不限</span>';
+        quota = '<span class="pu-tag pu-tag-unlimited">不限</span>';
+      } else if (isPeriod) {
+        const used = Number(f.period_used || 0);
+        quota = `<span class="pu-num">${used} ${unit}</span>`;
       } else if (f.daily_limit != null && f.daily_limit >= 0) {
         const rem = f.daily_remaining != null ? f.daily_remaining : Math.max(0, f.daily_limit - (f.daily_used || 0));
-        trial = `<span class="pu-tag">今日剩余</span><span class="pu-num">${rem} / ${f.daily_limit} ${unit}</span>`;
+        quota = `<span class="pu-tag">今日剩余</span><span class="pu-num">${rem} / ${f.daily_limit} ${unit}</span>`;
       }
       let balance = '—';
       if (f.balance != null) {
@@ -11409,7 +11425,7 @@ el.dwVidPlayer.removeAttribute('src');
       } else if (!f.unlimited && f.credit_cost === 0) {
         cost = '<span class="pu-tag pu-tag-free">免费</span>';
       }
-      return `<tr><td>${name}</td><td>${trial}</td><td>${balance}</td><td>${cost}</td></tr>`;
+      return `<tr><td>${name}</td><td>${quota}</td><td>${balance}</td><td>${cost}</td></tr>`;
     }).join('');
     table.querySelector('tbody').innerHTML = rows;
   }
@@ -11573,7 +11589,7 @@ el.dwVidPlayer.removeAttribute('src');
     let me = null, ms = null, prof = null;
     try { me = await request('/api/auth/me'); } catch (_) { /* 忽略 */ }
     try { ms = await request('/api/member/status'); } catch (_) { /* 忽略 */ }
-    try { prof = await request('/api/account/profile'); } catch (_) { /* 忽略 */ }
+    try { prof = await request('/api/account/profile?usage_period=' + encodeURIComponent(_profileUsagePeriod || 'today')); } catch (_) { /* 忽略 */ }
     if (!me || !me.ok) {
       // 未登录：跳登录
       openAuthModal();
@@ -11628,7 +11644,7 @@ el.dwVidPlayer.removeAttribute('src');
     }
     _profileMemberStatus = ms || null;
     _profilePurchasesCache = (prof && prof.purchases) || [];
-    try { _renderUserUsage(prof && prof.usage, prof && prof.usage_features); } catch (e) { console.error('[profile] usage render failed', e); }
+    try { _renderUserUsage(prof && prof.usage, prof && prof.usage_features, prof && prof.usage_period || _profileUsagePeriod || 'today'); } catch (e) { console.error('[profile] usage render failed', e); }
     try { _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   }
@@ -11664,6 +11680,18 @@ el.dwVidPlayer.removeAttribute('src');
       el.profChangePwBtn.disabled = false;
     }
   });
+  // 个人中心：使用统计周期切换
+  if (el.profUsageFilter) {
+    el.profUsageFilter.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-pfperiod]');
+      if (!btn) return;
+      const p = btn.dataset.pfperiod || 'today';
+      if (p === _profileUsagePeriod) return;
+      _profileUsagePeriod = p;
+      loadProfile();
+    });
+  }
+
   // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
   // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。
   renderAccount();

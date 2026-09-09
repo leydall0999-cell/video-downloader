@@ -238,6 +238,7 @@ def _empty_state() -> dict[str, Any]:
         "daily_usage": {"date": "", "download": 0, "original": 0, "batch_material": 0,
                         "ai_subtitle": 0, "subtitle": 0, "subtitle_batch": 0,
                         "image_translate": 0},
+        "usage_history": {},
         "meta": {"activated_at": 0.0, "history": []},
     }
 
@@ -251,7 +252,7 @@ def _load_state(path: Path) -> dict[str, Any]:
         return _empty_state()
     st = _empty_state()
     # 逐键合并，容忍旧/缺字段
-    for k in ("download_member", "ai_member", "permanent_credits", "daily_usage", "meta"):
+    for k in ("download_member", "ai_member", "permanent_credits", "daily_usage", "usage_history", "meta"):
         if isinstance(data.get(k), dict):
             st[k].update(data[k])
     return st
@@ -507,7 +508,18 @@ class MembershipStore:
     def _roll_daily(self, now: float) -> None:
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         du = self._state["daily_usage"]
-        if du.get("date") != day:
+        old_day = du.get("date")
+        if old_day != day:
+            # 归档旧一天的数据（如果存在且尚未归档）
+            if old_day and old_day != "":
+                hist = self._state.setdefault("usage_history", {})
+                hist[old_day] = {k: int(v) for k, v in du.items() if k != "date"}
+                # 只保留最近 90 天，避免无限增长
+                cutoff = time.strftime("%Y-%m-%d", time.localtime(now - 90 * 86400))
+                for k in list(hist.keys()):
+                    if k < cutoff:
+                        del hist[k]
+                self._persist()
             du["date"] = day
             du["download"] = 0
             du["original"] = 0
@@ -564,16 +576,64 @@ class MembershipStore:
                 "remaining": q["limit"] - new_used}
 
 
-def feature_usage_status(store: MembershipStore) -> list[dict[str, Any]]:
-    """生成个人中心「今日使用」表格所需的每行数据。
+def _date_range_days(period: str, now: float) -> list[str]:
+    """根据周期返回应包含的 YYYY-MM-DD 日期列表（含今天）。"""
+    today = time.strftime("%Y-%m-%d", time.localtime(now))
+    if period in ("3d", "7d"):
+        days = 3 if period == "3d" else 7
+        return [time.strftime("%Y-%m-%d", time.localtime(now - i * 86400)) for i in range(days - 1, -1, -1)]
+    if period == "month":
+        # 本月 1 日到今天
+        tm = time.localtime(now)
+        year, month = tm.tm_year, tm.tm_mon
+        start = time.mktime((year, month, 1, 0, 0, 0, 0, 0, -1))
+        dates: list[str] = []
+        cur = start
+        while time.strftime("%Y-%m-%d", time.localtime(cur)) <= today:
+            dates.append(time.strftime("%Y-%m-%d", time.localtime(cur)))
+            cur += 86400
+        return dates
+    return [today]
 
+
+def usage_summary(store: MembershipStore, period: str = "today") -> dict[str, int]:
+    """汇总指定周期内各 resource 的累计用量。
+
+    period: today | 3d | 7d | month
+    """
+    st = store.status()
+    now = store._now()
+    dates = _date_range_days(period, now)
+    hist = st.get("usage_history", {})
+    du = st.get("daily_usage", {})
+    totals: dict[str, int] = {}
+    for d in dates:
+        if d == du.get("date"):
+            src = du
+        else:
+            src = hist.get(d, {})
+        for k, v in src.items():
+            if k == "date":
+                continue
+            try:
+                totals[k] = totals.get(k, 0) + int(v)
+            except (TypeError, ValueError):
+                continue
+    return totals
+
+
+def feature_usage_status(store: MembershipStore, period: str = "today") -> list[dict[str, Any]]:
+    """生成个人中心「使用统计」表格所需的每行数据。
+
+    period: today | 3d | 7d | month
     返回字段：key, name, unit, daily_used, daily_limit, daily_remaining,
-              unlimited, balance, credit_cost。
+              period_used, unlimited, balance, credit_cost。
     """
     st = store.status()
     ai = st["ai_member"]
     fc = ai.get("feature_credits") or {} if ai.get("active") else {}
     daily = st.get("daily_usage", {})
+    period_totals = usage_summary(store, period)
     is_member = st["download_member"].get("active", False)
     rows: list[dict[str, Any]] = []
     for d in FEATURE_USAGE_DEFS:
@@ -587,6 +647,7 @@ def feature_usage_status(store: MembershipStore) -> list[dict[str, Any]]:
                 "daily_used": 0,
                 "daily_limit": -1,
                 "daily_remaining": -1,
+                "period_used": 0,
                 "unlimited": True,
                 "balance": None,
                 "credit_cost": int(d.get("credit_cost", 0)),
@@ -604,6 +665,7 @@ def feature_usage_status(store: MembershipStore) -> list[dict[str, Any]]:
             "daily_used": used,
             "daily_limit": limit,
             "daily_remaining": remaining,
+            "period_used": period_totals.get(d["resource"], 0),
             "unlimited": False,
             "balance": balance,
             "credit_cost": int(d.get("credit_cost", 0)),

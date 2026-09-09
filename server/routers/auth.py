@@ -101,11 +101,16 @@ def auth_me(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/account/profile")
-def account_profile(request: Request) -> dict[str, Any]:
-    """个人中心聚合数据：身份信息 + 会员有效时间 + 使用记录 + 购买记录 + 积分消耗记录。"""
+def account_profile(request: Request, usage_period: str = "today") -> dict[str, Any]:
+    """个人中心聚合数据：身份信息 + 会员有效时间 + 使用记录 + 购买记录 + 积分消耗记录。
+
+    usage_period: today | 3d | 7d | month
+    """
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录", "code": "NO_AUTH"}
+    if usage_period not in ("today", "3d", "7d", "month"):
+        usage_period = "today"
     import user_membership
     from auth_store import user_identifier, user_is_admin, _load_users
     ident = user_identifier(uid) or uid
@@ -157,7 +162,8 @@ def account_profile(request: Request) -> dict[str, Any]:
         "purchases": purchases,
         "credit_history": credits,
         "usage": st.get("daily_usage", {}),
-        "usage_features": feature_usage_status(store),
+        "usage_period": usage_period,
+        "usage_features": feature_usage_status(store, period=usage_period),
     }
 
 
