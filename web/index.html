@@ -1332,6 +1332,12 @@
       <div class="um-panel" id="profilePurchasesPanel" hidden>
         <div class="um-sec">
           <div class="um-sec-title">购买记录</div>
+          <div class="pf-filter" id="profPurchasesFilter">
+            <button type="button" class="pf-chip is-active" data-pfilter="all">全部</button>
+            <button type="button" class="pf-chip" data-pfilter="download">会员订单</button>
+            <button type="button" class="pf-chip" data-pfilter="ai">AI 会员</button>
+            <button type="button" class="pf-chip" data-pfilter="credits">积分订单</button>
+          </div>
           <div class="pf-table-wrap" id="profPurchases"></div>
         </div>
       </div>

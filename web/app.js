@@ -230,6 +230,7 @@
     profCredits: $('profCredits'),
     profUsage: $('profUsage'),
     profPurchases: $('profPurchases'),
+    profPurchasesFilter: $('profPurchasesFilter'),
     profCreditsLog: $('profCreditsLog'),
     profCurPw: $('profCurPw'),
     profNewPw: $('profNewPw'),
@@ -10984,14 +10985,39 @@ el.dwVidPlayer.removeAttribute('src');
     el.profUsage.textContent = parts.length ? parts.join(' · ') : '今日暂无使用';
   }
 
-  // 个人中心：购买记录（表格样式）
+  // 个人中心：购买记录筛选状态
+  let _profilePurchasesFilter = 'all';
+  let _profilePurchasesCache = [];
+  let _profileMemberStatus = null;
+
+  function _purchaseFilterMatch(h, filter) {
+    if (filter === 'all') return true;
+    const code = h.code || '';
+    if (filter === 'download') return code.startsWith('download_');
+    if (filter === 'ai') return code.startsWith('ai_');
+    if (filter === 'credits') return code.startsWith('credits_');
+    return true;
+  }
+
+  // 个人中心：购买记录（表格样式 + 类型筛选）
   function _renderUserPurchases(list, ms) {
     if (!el.profPurchases) return;
+    const filter = _profilePurchasesFilter || 'all';
+    if (el.profPurchasesFilter) {
+      el.profPurchasesFilter.querySelectorAll('.pf-chip').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.pfilter === filter);
+      });
+    }
+    const filtered = (list || []).filter((h) => _purchaseFilterMatch(h, filter));
     const HEAD = '<table class="pf-table"><thead><tr><th>时间</th><th>商品名称</th><th>类型</th><th>权益到期</th><th>来源</th></tr></thead>';
-    if (!list || !list.length) { el.profPurchases.innerHTML = `${HEAD}<tbody><tr><td colspan="5" class="pf-empty-cell">暂无订单记录</td></tr></tbody></table>`; return; }
+    if (!filtered.length) {
+      const emptyMsg = (list && list.length) ? '没有符合条件的订单' : '暂无订单记录';
+      el.profPurchases.innerHTML = `${HEAD}<tbody><tr><td colspan="5" class="pf-empty-cell">${esc(emptyMsg)}</td></tr></tbody></table>`;
+      return;
+    }
     const dl = (ms && ms.download_member) || {};
     const ai = (ms && ms.ai_member) || {};
-    const rows = list.map((h) => {
+    const rows = filtered.map((h) => {
       const t = h.at ? _memberFmtDate(h.at, true) : '—';
       const name = esc(_planName(h.code));
       const kind = esc(_purchaseType(h.code));
@@ -11007,6 +11033,17 @@ el.dwVidPlayer.removeAttribute('src');
       return `<tr><td>${esc(t)}</td><td>${name}</td><td>${kind}</td><td>${esc(expire)}</td><td>${via}</td></tr>`;
     }).join('');
     el.profPurchases.innerHTML = `${HEAD}<tbody>${rows}</tbody></table>`;
+  }
+
+  if (el.profPurchasesFilter) {
+    el.profPurchasesFilter.addEventListener('click', (e) => {
+      const btn = e.target.closest('.pf-chip');
+      if (!btn) return;
+      const f = btn.dataset.pfilter;
+      if (!f || f === _profilePurchasesFilter) return;
+      _profilePurchasesFilter = f;
+      _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus);
+    });
   }
 
   function _creditDelta(h) {
@@ -11137,8 +11174,10 @@ el.dwVidPlayer.removeAttribute('src');
         running -= _creditDelta(h);
       }
     }
+    _profileMemberStatus = ms || null;
+    _profilePurchasesCache = (prof && prof.purchases) || [];
     try { _renderUserUsage(prof && prof.usage); } catch (e) { console.error('[profile] usage render failed', e); }
-    try { _renderUserPurchases(prof && prof.purchases, ms); } catch (e) { console.error('[profile] purchases render failed', e); }
+    try { _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   }
   // 修改密码（个人中心整页）

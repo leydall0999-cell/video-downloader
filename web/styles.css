@@ -3320,6 +3320,25 @@ img { max-width: 100%; display: block; }
   margin: .2rem 0 0; padding: .7rem .85rem; background: var(--bg-soft, #f8fafc);
   border-radius: 8px; border: 1px dashed var(--border, #e5e7eb);
 }
+.pf-filter {
+  display: flex; flex-wrap: wrap; gap: .55rem;
+  margin: .7rem 0 .9rem;
+}
+.pf-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 34px; padding: 0 .9rem;
+  font-size: .85rem; font-weight: 500; font-family: inherit;
+  color: var(--text-mute, #6b7280); background: #fff;
+  border: 1px solid var(--line, #e5e7eb); border-radius: 999px;
+  cursor: pointer; white-space: nowrap;
+  transition: color .15s, border-color .15s, background .15s, box-shadow .15s;
+}
+.pf-chip:hover { color: var(--brand, #4f46e5); border-color: #c7d2fe; }
+.pf-chip.is-active {
+  color: var(--brand, #4f46e5); background: #eef2ff;
+  border-color: var(--brand, #4f46e5);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, .12);
+}
 .pf-table-wrap { overflow-x: auto; }
 .pf-table {
   width: 100%; border-collapse: collapse; font-size: .85rem;
