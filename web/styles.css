@@ -3629,9 +3629,14 @@ img { max-width: 100%; display: block; }
 .auth-pw-strength-label.lv5 { color: #15803d; }
 .auth-options {
   display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+.auth-row {
+  display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: -.35rem;
+  margin-top: .25rem;
 }
 .auth-remember {
   display: flex;
@@ -3641,7 +3646,6 @@ img { max-width: 100%; display: block; }
   color: var(--text-mute);
   cursor: pointer;
   user-select: none;
-  margin-top: .25rem;
 }
 .auth-remember input[type="checkbox"] {
   width: 15px;
