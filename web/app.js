@@ -11369,15 +11369,48 @@ el.dwVidPlayer.removeAttribute('src');
     // 详细记录（使用/购买/积分流水）已移至左侧「个人中心」整页，这里只留基础信息
   }
 
-  // 个人中心：今日使用记录
-  function _renderUserUsage(usage) {
+  // 个人中心：今日使用记录（表格：功能 / 体验剩余 / 权益余额 / 积分单价）
+  function _renderUserUsage(usage, features) {
+    const table = el.profUsageTable;
     if (!el.profUsage) return;
-    if (!usage) { el.profUsage.textContent = '—'; return; }
-    const parts = [];
-    if (usage.download) parts.push(`下载 ${usage.download} 次`);
-    if (usage.original) parts.push(`原画解析 ${usage.original} 次`);
-    if (usage.batch_material) parts.push(`批量素材 ${usage.batch_material} 条`);
-    el.profUsage.textContent = parts.length ? parts.join(' · ') : '今日暂无使用';
+    if (!table) {
+      // 兼容旧 DOM：兜底文本渲染
+      if (!usage) { el.profUsage.textContent = '—'; return; }
+      const parts = [];
+      if (usage.download) parts.push(`下载 ${usage.download} 次`);
+      if (usage.original) parts.push(`原画解析 ${usage.original} 次`);
+      if (usage.batch_material) parts.push(`批量素材 ${usage.batch_material} 条`);
+      el.profUsage.textContent = parts.length ? parts.join(' · ') : '今日暂无使用';
+      return;
+    }
+    const list = Array.isArray(features) && features.length ? features : [];
+    if (!list.length) {
+      table.querySelector('tbody').innerHTML = '<tr><td colspan="4" class="pf-empty-cell">今日暂无使用</td></tr>';
+      return;
+    }
+    const rows = list.map((f) => {
+      const name = esc(f.name || f.key || '—');
+      const unit = esc(f.unit || '');
+      let trial = '—';
+      if (f.unlimited) {
+        trial = '<span class="pu-tag pu-tag-unlimited">不限</span>';
+      } else if (f.daily_limit != null && f.daily_limit >= 0) {
+        const rem = f.daily_remaining != null ? f.daily_remaining : Math.max(0, f.daily_limit - (f.daily_used || 0));
+        trial = `<span class="pu-tag">今日剩余</span><span class="pu-num">${rem} / ${f.daily_limit} ${unit}</span>`;
+      }
+      let balance = '—';
+      if (f.balance != null) {
+        balance = `<span class="pu-num">${f.balance} ${unit}</span>`;
+      }
+      let cost = '—';
+      if (f.credit_cost != null && f.credit_cost > 0) {
+        cost = `<span class="pu-num">${f.credit_cost}</span> 积分/${unit}`;
+      } else if (!f.unlimited && f.credit_cost === 0) {
+        cost = '<span class="pu-tag pu-tag-free">免费</span>';
+      }
+      return `<tr><td>${name}</td><td>${trial}</td><td>${balance}</td><td>${cost}</td></tr>`;
+    }).join('');
+    table.querySelector('tbody').innerHTML = rows;
   }
 
   // 个人中心：购买记录筛选状态
@@ -11594,7 +11627,7 @@ el.dwVidPlayer.removeAttribute('src');
     }
     _profileMemberStatus = ms || null;
     _profilePurchasesCache = (prof && prof.purchases) || [];
-    try { _renderUserUsage(prof && prof.usage); } catch (e) { console.error('[profile] usage render failed', e); }
+    try { _renderUserUsage(prof && prof.usage, prof && prof.usage_features); } catch (e) { console.error('[profile] usage render failed', e); }
     try { _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   }

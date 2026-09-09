@@ -145,6 +145,7 @@ def account_profile(request: Request) -> dict[str, Any]:
     if u:
         created_at = u.get("created_at")
     from auth_store import user_avatar_url
+    from membership import feature_usage_status
     return {
         "ok": True,
         "user_id": uid,
@@ -156,6 +157,7 @@ def account_profile(request: Request) -> dict[str, Any]:
         "purchases": purchases,
         "credit_history": credits,
         "usage": st.get("daily_usage", {}),
+        "usage_features": feature_usage_status(store),
     }
 
 

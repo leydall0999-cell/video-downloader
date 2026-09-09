@@ -3416,6 +3416,34 @@ img { max-width: 100%; display: block; }
   text-align: center; color: var(--text-mute, #9ca3af);
   padding: 2.2rem .7rem; font-size: .9rem;
 }
+.pf-card-c-pad { padding: 0; }
+.pf-usage-table {
+  width: 100%; border-collapse: collapse; font-size: .85rem;
+  background: #fff; border-radius: 8px;
+}
+.pf-usage-table thead th {
+  text-align: left; padding: .55rem .85rem;
+  background: #f8fafc; color: var(--text-mute, #6b7280);
+  font-weight: 600; border-bottom: 1px solid var(--line, #eceef2);
+  white-space: nowrap;
+}
+.pf-usage-table tbody td {
+  padding: .7rem .85rem; border-bottom: 1px solid var(--line, #eceef2);
+  color: var(--text, #1f2937); text-align: left; vertical-align: middle;
+}
+.pf-usage-table tbody tr:last-child td { border-bottom: none; }
+.pf-usage-table .pu-tag {
+  display: inline-block; font-size: .7rem; font-weight: 600;
+  padding: .12rem .4rem; border-radius: 4px;
+  background: #eef2ff; color: var(--brand, #4f46e5); margin-right: .35rem;
+}
+.pf-usage-table .pu-tag-unlimited { background: #f3f4f6; color: var(--text-mute, #6b7280); }
+.pf-usage-table .pu-tag-free { background: #ecfdf5; color: #059669; }
+.pf-usage-table .pu-num { font-variant-numeric: tabular-nums; font-weight: 700; }
+@media (max-width: 640px) {
+  .pf-usage-table { font-size: .78rem; }
+  .pf-usage-table thead th, .pf-usage-table tbody td { padding: .55rem .5rem; }
+}
 .user-menu-hint {
   font-size: .8rem; color: var(--text-mute, #9ca3af); line-height: 1.5;
   margin: .9rem 0 0; padding: .7rem .85rem; background: var(--bg-soft, #f8fafc);

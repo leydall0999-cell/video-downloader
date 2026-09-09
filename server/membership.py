@@ -71,6 +71,23 @@ AI_FEATURES: list[str] = [
     "AI 字幕识别", "字幕提取", "视频总结", "图片翻译体验", "更多 AI 权益持续新增",
 ]
 
+# 个人中心「今日使用」功能配额表（与前端表格四列对应：功能/体验剩余/权益余额/积分单价）
+# - resource: 关联的 daily_usage 资源键（unlimited 资源不计日配额）
+# - free_limit / member_limit: 每日体验配额（-1 表示不限）
+# - ai_bonus: AI 会员周期内赠送额度（按 unit 单位）
+# - credit_cost: 权益不足时按量扣积分单价（0 表示免费）
+FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
+    {"key": "video_parse",       "name": "视频解析",         "resource": "download", "unit": "次",   "free_limit": 10,  "member_limit": 1000, "ai_bonus": 0,  "credit_cost": 0},
+    {"key": "plugin_original",   "name": "插件原画解析",     "resource": "original", "unit": "次",   "free_limit": 0,   "member_limit": 100,  "ai_bonus": 0,  "credit_cost": 0},
+    {"key": "ai_subtitle",       "name": "AI字幕识别",       "resource": "ai_subtitle", "unit": "分钟", "free_limit": 0, "member_limit": 0, "ai_bonus": 30, "credit_cost": 5},
+    {"key": "subtitle_extract",  "name": "字幕提取",         "resource": "subtitle", "unit": "次",   "free_limit": 0, "member_limit": 0, "ai_bonus": 5,  "credit_cost": 5},
+    {"key": "batch_material",    "name": "插件批量下载素材", "resource": "batch_material", "unit": "条", "free_limit": 0, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "batch_comment",     "name": "插件批量下载评论", "resource": "comment",  "unit": "条",   "free_limit": -1,  "member_limit": -1,   "ai_bonus": 0,  "credit_cost": 0, "unlimited": True},
+    {"key": "batch_data",        "name": "插件批量下载数据", "resource": "data",     "unit": "条",   "free_limit": -1,  "member_limit": -1,   "ai_bonus": 0,  "credit_cost": 0, "unlimited": True},
+    {"key": "batch_subtitle",    "name": "插件批量下载字幕", "resource": "subtitle_batch", "unit": "条", "free_limit": -1, "member_limit": -1, "ai_bonus": 0, "credit_cost": 0, "unlimited": True},
+    {"key": "image_translate",   "name": "图片翻译",         "resource": "image_translate", "unit": "张", "free_limit": 0, "member_limit": 0, "ai_bonus": 0, "credit_cost": 10},
+]
+
 # --------------------------------------------------------------------------- #
 # AI 积分成本表（计费原则：仅「云端/服务端算力」计费；本地算力一律免费）
 # --------------------------------------------------------------------------- #
@@ -216,9 +233,11 @@ def _empty_state() -> dict[str, Any]:
     return {
         "download_member": {"active": False, "plan": None, "expire_at": 0.0},
         "ai_member": {"active": False, "plan": None, "expire_at": 0.0,
-                      "grant_credits": 0, "credits_left": 0},
+                      "grant_credits": 0, "credits_left": 0, "feature_credits": {}},
         "permanent_credits": {"total": 0, "packs": []},
-        "daily_usage": {"date": "", "download": 0, "original": 0, "batch_material": 0},
+        "daily_usage": {"date": "", "download": 0, "original": 0, "batch_material": 0,
+                        "ai_subtitle": 0, "subtitle": 0, "subtitle_batch": 0,
+                        "image_translate": 0},
         "meta": {"activated_at": 0.0, "history": []},
     }
 
@@ -375,9 +394,15 @@ class MembershipStore:
             info = AI_PLANS[code]
             cur = float(st["ai_member"].get("expire_at", 0) or 0)
             new_exp = max(now, cur) + info["days"] * 86400
+            # AI 会员按功能赠送额度：续费时不足上限则补齐，不浪费已用剩余
+            fc = dict(st["ai_member"].get("feature_credits") or {})
+            for d in FEATURE_USAGE_DEFS:
+                if d.get("ai_bonus", 0) > 0:
+                    fc[d["key"]] = max(int(fc.get(d["key"], 0)), int(d["ai_bonus"]))
             st["ai_member"].update({
                 "active": True, "plan": code, "expire_at": new_exp,
                 "grant_credits": int(info["credits"]), "credits_left": int(info["credits"]),
+                "feature_credits": fc,
             })
             # 捆绑：下载权益覆盖到 AI 到期（不置 active 标志，status 负责推导 source）
             dl_exp = float(st["download_member"].get("expire_at", 0) or 0)
@@ -487,6 +512,10 @@ class MembershipStore:
             du["download"] = 0
             du["original"] = 0
             du["batch_material"] = 0
+            du["ai_subtitle"] = 0
+            du["subtitle"] = 0
+            du["subtitle_batch"] = 0
+            du["image_translate"] = 0
 
     def quota_state(self, resource: str) -> dict[str, Any]:
         """查询某资源的当日用量/上限（按当前档位：免费 or 会员）。unlimited 恒放行。"""
@@ -533,3 +562,50 @@ class MembershipStore:
         self._persist()
         return {"ok": True, "resource": resource, "used": new_used,
                 "remaining": q["limit"] - new_used}
+
+
+def feature_usage_status(store: MembershipStore) -> list[dict[str, Any]]:
+    """生成个人中心「今日使用」表格所需的每行数据。
+
+    返回字段：key, name, unit, daily_used, daily_limit, daily_remaining,
+              unlimited, balance, credit_cost。
+    """
+    st = store.status()
+    ai = st["ai_member"]
+    fc = ai.get("feature_credits") or {} if ai.get("active") else {}
+    daily = st.get("daily_usage", {})
+    is_member = st["download_member"].get("active", False)
+    rows: list[dict[str, Any]] = []
+    for d in FEATURE_USAGE_DEFS:
+        key = d["key"]
+        unlimited = bool(d.get("unlimited", False))
+        if unlimited:
+            rows.append({
+                "key": key,
+                "name": d["name"],
+                "unit": d["unit"],
+                "daily_used": 0,
+                "daily_limit": -1,
+                "daily_remaining": -1,
+                "unlimited": True,
+                "balance": None,
+                "credit_cost": int(d.get("credit_cost", 0)),
+            })
+            continue
+        limit = int(d.get("member_limit", 0)) if is_member else int(d.get("free_limit", 0))
+        used = int(daily.get(d["resource"], 0)) if limit >= 0 else 0
+        remaining = -1 if limit < 0 else max(0, limit - used)
+        bonus = int(d.get("ai_bonus", 0))
+        balance = int(fc.get(key, 0)) if bonus > 0 and ai.get("active") else None
+        rows.append({
+            "key": key,
+            "name": d["name"],
+            "unit": d["unit"],
+            "daily_used": used,
+            "daily_limit": limit,
+            "daily_remaining": remaining,
+            "unlimited": False,
+            "balance": balance,
+            "credit_cost": int(d.get("credit_cost", 0)),
+        })
+    return rows
