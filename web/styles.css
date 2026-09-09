@@ -3262,6 +3262,32 @@ img { max-width: 100%; display: block; }
 .user-menu-btn:active { transform: scale(.98); }
 .user-menu-btn-danger { background: #fef2f2; color: #b91c1c; }
 .user-menu-btn-danger:hover { background: #fee2e2; }
+/* ---- 资料卡：双 tab（我的记录 / 账号安全）---- */
+.user-menu-tabs { display: flex; gap: .4rem; margin: .2rem 0 1rem; border-bottom: 1px solid var(--border, #e5e7eb); }
+.um-tab {
+  flex: 1; padding: .6rem .4rem; border: none; background: none; cursor: pointer;
+  font-size: .9rem; font-weight: 500; color: var(--text-mute, #6b7280);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.um-tab.is-active { color: var(--brand, #4f46e5); border-bottom-color: var(--brand, #4f46e5); }
+.user-menu-body { max-height: 52vh; overflow-y: auto; padding-right: .2rem; }
+.um-sec { margin-top: .9rem; }
+.um-sec-title { font-size: .8rem; font-weight: 600; color: var(--text-mute, #6b7280); margin-bottom: .35rem; }
+.um-record { font-size: .88rem; color: var(--text, #1f2937); }
+.um-record-list { display: flex; flex-direction: column; gap: .4rem; }
+.um-record-item { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; font-size: .86rem; padding: .45rem .6rem; background: var(--bg-soft, #f8fafc); border-radius: 7px; }
+.um-record-main { color: var(--text, #1f2937); }
+.um-record-sub { color: var(--text-mute, #9ca3af); font-size: .76rem; white-space: nowrap; }
+.um-empty { font-size: .82rem; color: var(--text-mute, #9ca3af); padding: .3rem 0; }
+/* ---- 账号安全：改密表单 ---- */
+.um-form { display: flex; flex-direction: column; gap: .85rem; margin-top: .4rem; }
+.um-field { display: flex; flex-direction: column; gap: .35rem; }
+.um-field > span { font-size: .82rem; color: var(--text-mute, #6b7280); }
+.um-input { padding: .6rem .7rem; border: 1px solid var(--border, #d1d5db); border-radius: 8px; font-size: .92rem; background: var(--bg, #fff); color: var(--text, #1f2937); }
+.um-input:focus { outline: none; border-color: var(--brand, #4f46e5); }
+.um-msg { font-size: .82rem; margin: 0; }
+.um-msg.is-err { color: #c0392b; }
+.um-msg:not(.is-err) { color: #1d9e75; }
 .auth-head {
   text-align: center;
   margin: 0 auto 1.85rem;

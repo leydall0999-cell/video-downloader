@@ -208,6 +208,15 @@
     userMenuTag: $('userMenuTag'),
     userMenuLogout: $('userMenuLogout'),
     userMenuCopyUid: $('userMenuCopyUid'),
+    userMenuCreated: $('userMenuCreated'),
+    userMenuUsage: $('userMenuUsage'),
+    userMenuPurchases: $('userMenuPurchases'),
+    userMenuCreditsLog: $('userMenuCreditsLog'),
+    umCurPw: $('umCurPw'),
+    umNewPw: $('umNewPw'),
+    umNewPw2: $('umNewPw2'),
+    umChangeMsg: $('umChangeMsg'),
+    umChangePwBtn: $('umChangePwBtn'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
@@ -10373,9 +10382,16 @@ el.dwVidPlayer.removeAttribute('src');
   el.libModal.addEventListener('click', (e) => { if (e.target === el.libModal) el.libModal.close(); });
 
   // ============ 会员中心（VDL 三轨会员：下载 / AI / 永久积分包） ============
-  function _memberFmtDate(ts) {
+  function _memberFmtDate(ts, withTime) {
     if (!ts) return '--';
-    try { return new Date(ts * 1000).toLocaleDateString('zh-CN'); } catch (_) { return String(ts); }
+    try {
+      const d = new Date(ts * 1000);
+      if (withTime) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+      return d.toLocaleDateString('zh-CN');
+    } catch (_) { return String(ts); }
   }
   function _memberMsg(text, isErr) {
     if (!el.memberActMsg) return;
@@ -10836,10 +10852,11 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.userMenuTag) { el.userMenuTag.classList.remove('is-admin'); el.userMenuTag.textContent = '加载中…'; }
     if (el.userMenuCopyUid) { el.userMenuCopyUid.classList.remove('is-copied'); el.userMenuCopyUid.textContent = '复制'; }
     try { el.userMenuModal.showModal(); } catch (_) { el.userMenuModal.setAttribute('open', ''); }
-    // 并发拉账号态 + 会员/积分
-    let me = null, ms = null;
+    // 并发拉账号态 + 会员/积分 + 个人中心聚合
+    let me = null, ms = null, prof = null;
     try { me = await request('/api/auth/me'); } catch (_) { /* 忽略 */ }
     try { ms = await request('/api/member/status'); } catch (_) { /* 忽略 */ }
+    try { prof = await request('/api/account/profile'); } catch (_) { /* 忽略 */ }
     if (!me || !me.ok) {
       // token 失效：关弹窗，触发清理
       try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
@@ -10854,6 +10871,11 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.userMenuTag) {
       el.userMenuTag.textContent = isAdmin ? '👑 超级管理员' : '普通用户';
       el.userMenuTag.classList.toggle('is-admin', isAdmin);
+    }
+    // 注册时间
+    if (el.userMenuCreated) {
+      const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
+      el.userMenuCreated.textContent = ct ? _memberFmtDate(ct, true) : '—';
     }
     // 会员状态 / 积分
     if (ms) {
@@ -10875,6 +10897,62 @@ el.dwVidPlayer.removeAttribute('src');
       setTxt(el.userMenuMember, '—');
       setTxt(el.userMenuCredits, '—');
     }
+    // 个人中心记录
+    if (prof && prof.ok) {
+      _renderUserUsage(prof.usage);
+      _renderUserPurchases(prof.purchases);
+      _renderUserCreditsLog(prof.credit_history);
+    }
+  }
+
+  // 个人中心：今日使用记录
+  function _renderUserUsage(usage) {
+    if (!el.userMenuUsage) return;
+    if (!usage) { el.userMenuUsage.textContent = '—'; return; }
+    const parts = [];
+    if (usage.download) parts.push(`下载 ${usage.download} 次`);
+    if (usage.original) parts.push(`原画解析 ${usage.original} 次`);
+    if (usage.batch_material) parts.push(`批量素材 ${usage.batch_material} 条`);
+    el.userMenuUsage.textContent = parts.length ? parts.join(' · ') : '今日暂无使用';
+  }
+
+  // 个人中心：购买记录
+  function _renderUserPurchases(list) {
+    if (!el.userMenuPurchases) return;
+    if (!list || !list.length) { el.userMenuPurchases.innerHTML = '<div class="um-empty">暂无购买记录</div>'; return; }
+    el.userMenuPurchases.innerHTML = list.map((h) => {
+      const name = _planName(h.code);
+      const via = h.via === 'ui_test' ? '激活码' : (h.via || '');
+      const t = h.at ? _memberFmtDate(h.at, true) : '';
+      return `<div class="um-record-item"><span class="um-record-main">${esc(name)}</span><span class="um-record-sub">${esc(via)} · ${esc(t)}</span></div>`;
+    }).join('');
+  }
+
+  // 个人中心：积分消耗记录
+  function _renderUserCreditsLog(list) {
+    if (!el.userMenuCreditsLog) return;
+    if (!list || !list.length) { el.userMenuCreditsLog.innerHTML = '<div class="um-empty">暂无消耗记录</div>'; return; }
+    el.userMenuCreditsLog.innerHTML = list.map((h) => {
+      if (h.type === 'spend') {
+        const t = h.at ? _memberFmtDate(h.at, true) : '';
+        const r = h.reason ? `（${h.reason}）` : '';
+        return `<div class="um-record-item"><span class="um-record-main">-${Number(h.amount || 0)} 积分${esc(r)}</span><span class="um-record-sub">${esc(t)}</span></div>`;
+      }
+      // admin_adjust
+      const t = h.at ? _memberFmtDate(h.at, true) : '';
+      const delta = (h.code || '').replace('admin_adjust:', '');
+      return `<div class="um-record-item"><span class="um-record-main">管理员调整 ${esc(delta)} 积分</span><span class="um-record-sub">${esc(t)}</span></div>`;
+    }).join('');
+  }
+
+  // 套餐 code → 可读名称（与 membership.py 套餐表对应）
+  function _planName(code) {
+    const MAP = {
+      download_month: '下载会员·月卡', download_quarter: '下载会员·季卡', download_year: '下载会员·年卡',
+      ai_15000: 'AI会员·月卡', ai_40000: 'AI会员·季卡', ai_150000: 'AI会员·年卡',
+      credits_5000: '积分包 5000', credits_15000: '积分包 15000', credits_50000: '积分包 50000',
+    };
+    return MAP[code] || code || '未知套餐';
   }
   // 关闭 / 退出 / 复制
   if (el.userMenuClose) el.userMenuClose.addEventListener('click', () => {
@@ -10910,6 +10988,46 @@ el.dwVidPlayer.removeAttribute('src');
       el.userMenuCopyUid.classList.remove('is-copied');
       el.userMenuCopyUid.textContent = '复制';
     }, 1500);
+  });
+  // 资料卡 tab 切换（我的记录 / 账号安全）
+  function switchUserMenuTab(k) {
+    document.querySelectorAll('.um-tab').forEach((b) => b.classList.toggle('is-active', b.dataset.umTab === k));
+    document.querySelectorAll('.um-panel').forEach((p) => { p.hidden = p.dataset.umPanel !== k; });
+  }
+  document.querySelectorAll('.um-tab').forEach((b) => {
+    b.addEventListener('click', () => switchUserMenuTab(b.dataset.umTab));
+  });
+  // 修改密码
+  if (el.umChangePwBtn) el.umChangePwBtn.addEventListener('click', async () => {
+    const cur = (el.umCurPw && el.umCurPw.value || '').trim();
+    const np = (el.umNewPw && el.umNewPw.value || '').trim();
+    const np2 = (el.umNewPw2 && el.umNewPw2.value || '').trim();
+    const msg = (txt, err) => {
+      if (!el.umChangeMsg) return;
+      el.umChangeMsg.textContent = txt || '';
+      el.umChangeMsg.hidden = !txt;
+      el.umChangeMsg.classList.toggle('is-err', !!err);
+    };
+    if (!cur || !np) { msg('请输入当前密码和新密码', true); return; }
+    if (np.length < 6) { msg('新密码至少 6 位', true); return; }
+    if (np !== np2) { msg('两次输入的新密码不一致', true); return; }
+    msg('提交中…', false);
+    el.umChangePwBtn.disabled = true;
+    try {
+      await request('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: cur, new_password: np }),
+      });
+      msg('密码已修改，下次登录请使用新密码', false);
+      if (el.umCurPw) el.umCurPw.value = '';
+      if (el.umNewPw) el.umNewPw.value = '';
+      if (el.umNewPw2) el.umNewPw2.value = '';
+    } catch (e) {
+      msg((e && e.message) || '修改失败，请重试', true);
+    } finally {
+      el.umChangePwBtn.disabled = false;
+    }
   });
   // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
   // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。

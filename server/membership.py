@@ -399,7 +399,7 @@ class MembershipStore:
         if not st["meta"].get("activated_at"):
             st["meta"]["activated_at"] = now
         st["meta"].setdefault("history", []).append({
-            "code": code, "via": via, "at": now,
+            "code": code, "via": via, "at": now, "type": "activate",
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]  # 只留最近 200 条
         self._persist()
@@ -429,6 +429,10 @@ class MembershipStore:
             perm_total -= remaining
             st["permanent_credits"]["total"] = perm_total
             remaining = 0
+        st["meta"].setdefault("history", []).append({
+            "type": "spend", "amount": amount, "reason": reason, "at": self._now(),
+        })
+        st["meta"]["history"] = st["meta"]["history"][-200:]
         self._persist()
         return {"ok": True, "spent": amount, "reason": reason,
                 "credits_left": self.status()["credits_total"]}
@@ -457,7 +461,7 @@ class MembershipStore:
                 perm_total -= remaining
                 st["permanent_credits"]["total"] = perm_total
         st["meta"].setdefault("history", []).append({
-            "code": f"admin_adjust:{delta}", "via": reason, "at": self._now(),
+            "code": f"admin_adjust:{delta}", "via": reason, "at": self._now(), "type": "admin_adjust",
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]
         self._persist()

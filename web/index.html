@@ -2221,21 +2221,64 @@
         <span class="user-menu-tag" id="userMenuTag">普通用户</span>
       </div>
     </div>
+    <div class="user-menu-tabs">
+      <button type="button" class="um-tab is-active" data-um-tab="records">我的记录</button>
+      <button type="button" class="um-tab" data-um-tab="security">账号安全</button>
+    </div>
     <div class="user-menu-body">
-      <div class="user-menu-row">
-        <span class="user-menu-label">会员状态</span>
-        <span class="user-menu-value" id="userMenuMember">—</span>
+      <!-- 我的记录 -->
+      <div class="um-panel" data-um-panel="records">
+        <div class="user-menu-row">
+          <span class="user-menu-label">注册时间</span>
+          <span class="user-menu-value" id="userMenuCreated">—</span>
+        </div>
+        <div class="user-menu-row">
+          <span class="user-menu-label">会员状态</span>
+          <span class="user-menu-value" id="userMenuMember">—</span>
+        </div>
+        <div class="user-menu-row">
+          <span class="user-menu-label">积分余额</span>
+          <span class="user-menu-value" id="userMenuCredits">—</span>
+        </div>
+        <div class="user-menu-row user-menu-row-uid">
+          <span class="user-menu-label">用户ID</span>
+          <span class="user-menu-value-wrap">
+            <span class="user-menu-mono" id="userMenuUid">—</span>
+            <button type="button" id="userMenuCopyUid" class="user-menu-copy" title="复制用户ID" aria-label="复制用户ID">复制</button>
+          </span>
+        </div>
+
+        <div class="um-sec">
+          <div class="um-sec-title">使用记录（今日）</div>
+          <div class="um-record" id="userMenuUsage">—</div>
+        </div>
+        <div class="um-sec">
+          <div class="um-sec-title">购买记录</div>
+          <div class="um-record-list" id="userMenuPurchases"><div class="um-empty">暂无购买记录</div></div>
+        </div>
+        <div class="um-sec">
+          <div class="um-sec-title">积分消耗记录</div>
+          <div class="um-record-list" id="userMenuCreditsLog"><div class="um-empty">暂无消耗记录</div></div>
+        </div>
       </div>
-      <div class="user-menu-row">
-        <span class="user-menu-label">积分余额</span>
-        <span class="user-menu-value" id="userMenuCredits">—</span>
-      </div>
-      <div class="user-menu-row user-menu-row-uid">
-        <span class="user-menu-label">用户ID</span>
-        <span class="user-menu-value-wrap">
-          <span class="user-menu-mono" id="userMenuUid">—</span>
-          <button type="button" id="userMenuCopyUid" class="user-menu-copy" title="复制用户ID" aria-label="复制用户ID">复制</button>
-        </span>
+      <!-- 账号安全 -->
+      <div class="um-panel" data-um-panel="security" hidden>
+        <div class="um-form">
+          <label class="um-field">
+            <span>当前密码</span>
+            <input id="umCurPw" type="password" class="um-input" autocomplete="current-password" />
+          </label>
+          <label class="um-field">
+            <span>新密码（≥6 位）</span>
+            <input id="umNewPw" type="password" class="um-input" autocomplete="new-password" />
+          </label>
+          <label class="um-field">
+            <span>确认新密码</span>
+            <input id="umNewPw2" type="password" class="um-input" autocomplete="new-password" />
+          </label>
+          <p class="um-msg" id="umChangeMsg" hidden></p>
+          <button type="button" id="umChangePwBtn" class="user-menu-btn">修改密码</button>
+        </div>
       </div>
     </div>
     <div class="user-menu-actions">

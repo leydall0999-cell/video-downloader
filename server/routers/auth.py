@@ -37,6 +37,12 @@ def _auth_user_id(request: Request) -> Optional[str]:
     return request.headers.get("Authorization", "")
 
 
+def _require_user(request: Request) -> Optional[str]:
+    """解析已登录用户 user_id（未登录返回 None）。"""
+    import app as _app
+    return _app.get_current_user_id(request)
+
+
 def _bearer(request: Request) -> Optional[str]:
     from auth_store import token_from_header
     return token_from_header(request.headers.get("Authorization"))
@@ -86,6 +92,70 @@ def auth_me(request: Request) -> dict[str, Any]:
     from auth_store import user_identifier, user_is_admin
     return {"ok": True, "user_id": uid, "identifier": user_identifier(uid) or uid,
             "is_admin": bool(user_is_admin(uid))}
+
+
+@router.get("/api/account/profile")
+def account_profile(request: Request) -> dict[str, Any]:
+    """个人中心聚合数据：身份信息 + 会员有效时间 + 使用记录 + 购买记录 + 积分消耗记录。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录", "code": "NO_AUTH"}
+    import user_membership
+    from auth_store import user_identifier, user_is_admin, _load_users
+    ident = user_identifier(uid) or uid
+    store = user_membership.get_user_store(uid)
+    st = store.status()
+    raw_hist = (store._state.get("meta", {}) or {}).get("history", [])
+    purchases: list[dict] = []
+    credits: list[dict] = []
+    for h in raw_hist:
+        t = h.get("type")
+        if t == "spend" or t == "admin_adjust":
+            credits.append(h)
+        else:  # None / "activate" → 购买/激活
+            purchases.append(h)
+    purchases.sort(key=lambda x: x.get("at", 0), reverse=True)
+    credits.sort(key=lambda x: x.get("at", 0), reverse=True)
+    # 注册时间
+    created_at = None
+    data = _load_users()
+    u = next((x for x in data.get("users", []) if x.get("user_id") == uid), None)
+    if u:
+        created_at = u.get("created_at")
+    return {
+        "ok": True,
+        "user_id": uid,
+        "identifier": ident,
+        "is_admin": bool(user_is_admin(uid)),
+        "created_at": created_at,
+        "membership": st,
+        "purchases": purchases,
+        "credit_history": credits,
+        "usage": st.get("daily_usage", {}),
+    }
+
+
+@router.post("/api/auth/change-password")
+def auth_change_password(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """本人凭当前密码修改密码（需登录）。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录", "code": "NO_AUTH"}
+    cur = str(payload.get("current_password") or "")
+    new = str(payload.get("new_password") or "")
+    if not cur or not new:
+        return {"ok": False, "error": "请输入当前密码和新密码"}
+    if len(new) < 6:
+        return {"ok": False, "error": "新密码至少 6 位"}
+    from auth_store import user_identifier, authenticate, reset_password
+    ident = user_identifier(uid)
+    if not ident:
+        return {"ok": False, "error": "账号不存在"}
+    if not authenticate(ident, cur):
+        return {"ok": False, "error": "当前密码错误"}
+    reset_password(ident, new)
+    record_event("change_pw", {"identifier": ident})
+    return {"ok": True}
 
 
 @router.post("/api/auth/reset-code")

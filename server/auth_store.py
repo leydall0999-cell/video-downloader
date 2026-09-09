@@ -155,6 +155,22 @@ def token_from_header(authorization: Optional[str]) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # 账号表
 # --------------------------------------------------------------------------- #
+def _rebuild_index(data: dict) -> dict:
+    """由 users 列表重建 by_identifier 索引，避免索引与列表不同步导致登录失败。
+
+    历史上曾因手动改文件 / 部分写入，使 by_identifier 少于 users，造成
+    '账号或密码错误'（authenticate 反查不到 user_id）。此处做自愈。
+    """
+    bi: dict[str, str] = {}
+    for u in data.get("users", []):
+        ident = u.get("identifier")
+        uid = u.get("user_id")
+        if ident and uid:
+            bi[ident] = uid
+    data["by_identifier"] = bi
+    return data
+
+
 def _load_users() -> dict:
     p = _users_path()
     if not p.exists():
@@ -165,11 +181,16 @@ def _load_users() -> dict:
         return {"users": [], "by_identifier": {}}
     data.setdefault("users", [])
     data.setdefault("by_identifier", {})
+    # 自愈：补齐缺失/陈旧的 identifier 索引
+    if len(data["by_identifier"]) != len(data["users"]):
+        _rebuild_index(data)
     return data
 
 
 def _save_users(data: dict) -> None:
     p = _users_path()
+    # 写前重建索引，保证 by_identifier 与 users 始终一致
+    _rebuild_index(data)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
