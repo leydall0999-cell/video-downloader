@@ -3211,30 +3211,49 @@ img { max-width: 100%; display: block; }
 .auth-card .modal-close:disabled { opacity: .35; cursor: not-allowed; background: transparent; }
 
 /* 用户资料卡：点击右上「👤 账号」打开；底部放退出登录 */
-.user-menu-card { width: min(380px, 92vw); padding: 1.5rem 1.4rem 1.2rem; }
-.user-menu-head { display: flex; align-items: center; gap: .85rem; margin-bottom: 1.1rem; padding-right: 1.6rem; }
+#userMenuModal { width: min(380px, calc(100% - 2rem)); }
+#userMenuModal::backdrop { background: rgba(15, 23, 42, .42); backdrop-filter: blur(2px); }
+.user-menu-card { padding: 1.5rem 1.4rem 1.2rem; position: relative; }
+.user-menu-close {
+  position: absolute; top: .8rem; right: .8rem;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #f3f4f6; color: #6b7280; border: none;
+  display: grid; place-items: center;
+  font-size: .85rem; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.user-menu-close:hover { background: #e5e7eb; color: var(--text); }
+.user-menu-head { display: flex; align-items: center; gap: .9rem; margin: 0 0 1.1rem; padding-right: 1.8rem; }
 .user-menu-avatar {
-  width: 48px; height: 48px; border-radius: 50%;
+  width: 52px; height: 52px; border-radius: 50%;
   display: grid; place-items: center;
   background: linear-gradient(135deg, #eef2ff, #e0e7ff);
-  color: #4338ca; font-size: 1.55rem; flex: 0 0 auto;
+  color: #4338ca; font-size: 1.65rem; flex: 0 0 auto;
 }
-.user-menu-head-text { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
-.user-menu-name { margin: 0; font-size: 1.05rem; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-menu-head-text { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.user-menu-name { margin: 0; font-size: 1.02rem; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-menu-tag {
   display: inline-flex; align-items: center; align-self: flex-start;
-  font-size: .72rem; padding: .18rem .55rem; border-radius: 999px;
+  font-size: .72rem; padding: .2rem .6rem; border-radius: 999px;
   background: #f3f4f6; color: #6b7280; font-weight: 500;
 }
 .user-menu-tag.is-admin { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; }
 .user-menu-body {
-  background: #f9fafb; border-radius: 10px; padding: .55rem .85rem; margin-bottom: 1.1rem;
+  background: #f9fafb; border-radius: 10px; padding: .15rem .9rem; margin-bottom: 1.1rem;
 }
-.user-menu-row { display: flex; justify-content: space-between; align-items: center; padding: .5rem 0; border-bottom: 1px solid #f3f4f6; gap: 1rem; }
+.user-menu-row { display: flex; justify-content: space-between; align-items: center; padding: .55rem 0; border-bottom: 1px solid #f1f2f5; gap: 1rem; }
 .user-menu-row:last-child { border-bottom: none; }
 .user-menu-label { font-size: .8rem; color: var(--text-mute); flex: 0 0 auto; }
-.user-menu-value { font-size: .85rem; color: var(--text); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.user-menu-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .75rem; color: var(--text-mute); }
+.user-menu-value { font-size: .85rem; color: var(--text); text-align: right; }
+.user-menu-value-wrap { display: inline-flex; align-items: center; gap: .5rem; min-width: 0; }
+.user-menu-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .75rem; color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-menu-copy {
+  flex: 0 0 auto; padding: .15rem .5rem; font-size: .7rem;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 6px;
+  color: #6b7280; cursor: pointer; transition: all .15s;
+}
+.user-menu-copy:hover { background: #eef2ff; color: #4338ca; border-color: #c7d2fe; }
+.user-menu-copy.is-copied { background: #dcfce7; color: #166534; border-color: #86efac; }
 .user-menu-actions { display: flex; gap: .6rem; }
 .user-menu-btn {
   flex: 1; padding: .65rem 1rem; border-radius: 8px; border: none; font-size: .9rem; font-weight: 500; cursor: pointer;

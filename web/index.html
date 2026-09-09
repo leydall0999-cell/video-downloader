@@ -2213,7 +2213,7 @@
 <!-- 用户资料卡（点击右上「👤 账号」打开）：非超管看自己状态，超管看👑 标记；底部放退出登录 -->
 <dialog id="userMenuModal" class="modal" aria-labelledby="userMenuTitle">
   <div class="modal-card user-menu-card">
-    <button type="button" class="modal-close" id="userMenuClose" aria-label="关闭">✕</button>
+    <button type="button" class="modal-close user-menu-close" id="userMenuClose" aria-label="关闭">✕</button>
     <div class="user-menu-head">
       <div class="user-menu-avatar" aria-hidden="true">👤</div>
       <div class="user-menu-head-text">
@@ -2223,14 +2223,6 @@
     </div>
     <div class="user-menu-body">
       <div class="user-menu-row">
-        <span class="user-menu-label">账号</span>
-        <span class="user-menu-value" id="userMenuIdentifier">—</span>
-      </div>
-      <div class="user-menu-row">
-        <span class="user-menu-label">用户ID</span>
-        <span class="user-menu-value user-menu-mono" id="userMenuUid">—</span>
-      </div>
-      <div class="user-menu-row">
         <span class="user-menu-label">会员状态</span>
         <span class="user-menu-value" id="userMenuMember">—</span>
       </div>
@@ -2238,9 +2230,12 @@
         <span class="user-menu-label">积分余额</span>
         <span class="user-menu-value" id="userMenuCredits">—</span>
       </div>
-      <div class="user-menu-row">
-        <span class="user-menu-label">角色</span>
-        <span class="user-menu-value" id="userMenuRole">—</span>
+      <div class="user-menu-row user-menu-row-uid">
+        <span class="user-menu-label">用户ID</span>
+        <span class="user-menu-value-wrap">
+          <span class="user-menu-mono" id="userMenuUid">—</span>
+          <button type="button" id="userMenuCopyUid" class="user-menu-copy" title="复制用户ID" aria-label="复制用户ID">复制</button>
+        </span>
       </div>
     </div>
     <div class="user-menu-actions">

@@ -201,14 +201,13 @@
     // 用户资料卡：点击右上「👤 账号」打开
     userMenuModal: $('userMenuModal'),
     userMenuClose: $('userMenuClose'),
-    userMenuIdentifier: $('userMenuIdentifier'),
     userMenuUid: $('userMenuUid'),
     userMenuMember: $('userMenuMember'),
     userMenuCredits: $('userMenuCredits'),
-    userMenuRole: $('userMenuRole'),
     userMenuName: $('userMenuTitle'),
     userMenuTag: $('userMenuTag'),
     userMenuLogout: $('userMenuLogout'),
+    userMenuCopyUid: $('userMenuCopyUid'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
@@ -10831,12 +10830,11 @@ el.dwVidPlayer.removeAttribute('src');
     // 填充占位（避免拉取途中用户看到空值）
     const setTxt = (node, txt) => { if (node) node.textContent = txt; };
     setTxt(el.userMenuName, '加载中…');
-    setTxt(el.userMenuIdentifier, '—');
     setTxt(el.userMenuUid, '—');
     setTxt(el.userMenuMember, '加载中…');
     setTxt(el.userMenuCredits, '—');
-    setTxt(el.userMenuRole, '—');
     if (el.userMenuTag) { el.userMenuTag.classList.remove('is-admin'); el.userMenuTag.textContent = '加载中…'; }
+    if (el.userMenuCopyUid) { el.userMenuCopyUid.classList.remove('is-copied'); el.userMenuCopyUid.textContent = '复制'; }
     try { el.userMenuModal.showModal(); } catch (_) { el.userMenuModal.setAttribute('open', ''); }
     // 并发拉账号态 + 会员/积分
     let me = null, ms = null;
@@ -10850,15 +10848,13 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
     setTxt(el.userMenuName, me.identifier || '已登录');
-    setTxt(el.userMenuIdentifier, me.identifier || '—');
     setTxt(el.userMenuUid, me.user_id || '—');
-    // 角色 + 标签
+    // 角色标签（顶部 tag 唯一展示角色，不再单独一行）
     const isAdmin = !!me.is_admin;
     if (el.userMenuTag) {
       el.userMenuTag.textContent = isAdmin ? '👑 超级管理员' : '普通用户';
       el.userMenuTag.classList.toggle('is-admin', isAdmin);
     }
-    setTxt(el.userMenuRole, isAdmin ? '超级管理员' : '普通用户');
     // 会员状态 / 积分
     if (ms) {
       const dl = ms.download_member || {};
@@ -10880,7 +10876,7 @@ el.dwVidPlayer.removeAttribute('src');
       setTxt(el.userMenuCredits, '—');
     }
   }
-  // 关闭 / 退出按钮
+  // 关闭 / 退出 / 复制
   if (el.userMenuClose) el.userMenuClose.addEventListener('click', () => {
     try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
   });
@@ -10893,6 +10889,27 @@ el.dwVidPlayer.removeAttribute('src');
     if (!confirm('确定退出当前账号？')) return;
     try { el.userMenuModal.close(); } catch (_) { el.userMenuModal.removeAttribute('open'); }
     logoutAccount();
+  });
+  if (el.userMenuCopyUid) el.userMenuCopyUid.addEventListener('click', async () => {
+    const text = (el.userMenuUid && el.userMenuUid.textContent) || '';
+    if (!text || text === '—') return;
+    const ok = await (async () => {
+      try { await navigator.clipboard.writeText(text); return true; } catch (_) { return false; }
+    })();
+    if (!ok) {
+      // 降级：临时 textarea
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+    el.userMenuCopyUid.classList.add('is-copied');
+    el.userMenuCopyUid.textContent = '已复制';
+    setTimeout(() => {
+      el.userMenuCopyUid.classList.remove('is-copied');
+      el.userMenuCopyUid.textContent = '复制';
+    }, 1500);
   });
   // 启动时同步账号态：拉 /api/auth/me 拿 is_admin，决定侧栏后台入口显隐。
   // 否则已登录的超管重启 App 后 _vdlIsAdmin 恒为 false，后台 tab 不显示。
