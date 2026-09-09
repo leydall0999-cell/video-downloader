@@ -10629,6 +10629,7 @@ el.dwVidPlayer.removeAttribute('src');
         // 同步超级用户标记（后端在登录/注册响应中返回 is_admin）
         _vdlIsAdmin = !!r.is_admin;
         updateAdminTabVisibility();
+        _renderAuthHeader();
         _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
