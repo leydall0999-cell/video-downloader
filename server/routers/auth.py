@@ -111,11 +111,27 @@ def account_profile(request: Request) -> dict[str, Any]:
     for h in raw_hist:
         t = h.get("type")
         if t == "spend" or t == "admin_adjust":
-            credits.append(h)
+            credits.append(dict(h))
         else:  # None / "activate" → 购买/激活
-            purchases.append(h)
+            purchases.append(dict(h))
     purchases.sort(key=lambda x: x.get("at", 0), reverse=True)
     credits.sort(key=lambda x: x.get("at", 0), reverse=True)
+    # 积分流水补充变动值与变动后余额（从当前余额倒推，保证与现状一致）
+    balance = int(st.get("credits_total", 0))
+    for h in credits:
+        if h.get("type") == "spend":
+            delta = -int(h.get("amount", 0))
+        elif h.get("type") == "admin_adjust":
+            code = str(h.get("code", ""))
+            try:
+                delta = int(code.split(":", 1)[1]) if ":" in code else 0
+            except ValueError:
+                delta = 0
+        else:
+            delta = 0
+        h["delta"] = delta
+        h.setdefault("balance_after", balance)
+        balance -= delta
     # 注册时间
     created_at = None
     data = _load_users()
