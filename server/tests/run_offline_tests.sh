@@ -6,6 +6,8 @@
 #   2. test_downloader_url_parsing.py —— 下载器链接解析/归一化（B站短链、追踪参数）
 #   3. test_matting_core.py           —— 抠图前处理/选区/边缘柔化 纯函数
 #   4. test_dewatermark_core.py       —— 去水印选区归一化/mask 合成/瓦片羽化权重
+#   5. test_convert_guards.py         —— 转换入口守卫（分片 id/排序、本地路径白名单）
+#   6. test_commentary_routes.py      —— 解说路由层（试听路径守卫、sidecar 推导、kind 白名单）
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -48,6 +50,8 @@ run_one test_quality_options.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
 run_one test_dewatermark_core.py
+run_one test_convert_guards.py
+run_one test_commentary_routes.py
 
 echo ""
 echo "========================================="

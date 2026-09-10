@@ -224,11 +224,11 @@ def _resolve_safe_local_path(path: str) -> app.Path:
         raise app.HTTPException(status_code=400, detail=f"文件不存在或不是普通文件：{path}")
     try:
         resolved = p.resolve()
-        if not str(resolved).startswith(("/Users/", "/home/", "/Volumes/", "C:\\")):
-            raise app.HTTPException(status_code=400, detail=f"路径不在用户目录下：{path}")
-        return resolved
     except Exception:
         raise app.HTTPException(status_code=400, detail=f"无法解析路径：{path}")
+    if not str(resolved).startswith(("/Users/", "/home/", "/Volumes/", "C:\\")):
+        raise app.HTTPException(status_code=400, detail=f"路径不在用户目录下：{path}")
+    return resolved
 
 
 @router.post("/api/convert/local")
