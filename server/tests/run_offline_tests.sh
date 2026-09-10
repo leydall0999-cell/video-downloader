@@ -5,6 +5,7 @@
 #   1. test_app_smoke.py              —— FastAPI TestClient 无头冒烟核心路由
 #   2. test_downloader_url_parsing.py —— 下载器链接解析/归一化（B站短链、追踪参数）
 #   3. test_matting_core.py           —— 抠图前处理/选区/边缘柔化 纯函数
+#   4. test_dewatermark_core.py       —— 去水印选区归一化/mask 合成/瓦片羽化权重
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -46,6 +47,7 @@ run_one test_member_quota_e2e.py
 run_one test_quality_options.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
+run_one test_dewatermark_core.py
 
 echo ""
 echo "========================================="
