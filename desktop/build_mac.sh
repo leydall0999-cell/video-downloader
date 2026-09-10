@@ -516,5 +516,9 @@ fi
 
 echo "✅ 完成"
 echo "   App : dist/VideoDownloader.app（双击即用）"
-echo "   分发: dist/VideoDownloader.dmg（拖到 应用程序 即可）"
+if [ "${VDL_BUILD_DMG:-0}" = "1" ]; then
+  echo "   分发: dist/VideoDownloader.dmg（拖到 应用程序 即可）"
+else
+  echo "   分发: 未生成 DMG（本机/热更用 .app 即可；要分发给旧版用户请设 VDL_BUILD_DMG=1 重跑）"
+fi
 echo "   启动后默认打开原生窗口（本地端口 8321，被占用自动顺延；不跳浏览器）"
