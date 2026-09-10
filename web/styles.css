@@ -4037,7 +4037,7 @@ img { max-width: 100%; display: block; }
   border: 1px solid var(--accent, #2f7df6); color: var(--accent, #2f7df6);
   background: transparent;
 }
-.chat-admin-toggle.active { background: var(--accent, #2f7df6); color: #fff; }
+.chat-admin-toggle:hover { background: var(--accent, #2f7df6); color: #fff; }
 .chat-close {
   border: none; background: transparent; font-size: 20px; line-height: 1; cursor: pointer;
   color: var(--text-mute, #9ca3af); padding: 0 4px;
@@ -4068,25 +4068,12 @@ img { max-width: 100%; display: block; }
 .chat-msg.admin .chat-bubble { background: var(--bg-soft, #f1f5f9); color: var(--text, #1f2937); border-bottom-left-radius: 3px; }
 .chat-meta { font-size: .68rem; color: var(--text-mute, #9ca3af); }
 
-/* 管理员会话列表 */
-.chat-admin-list { flex: 1 1 auto; overflow-y: auto; }
-.chat-thread-row {
-  display: flex; flex-direction: column; gap: 2px; padding: .6rem .8rem;
-  border-bottom: 1px solid var(--border, #e5e7eb); cursor: pointer;
-}
-.chat-thread-row:hover { background: var(--bg-soft, #f8fafc); }
-.chat-thread-row .chat-thread-top { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.chat-thread-user { font-weight: 600; font-size: .82rem; }
-.chat-thread-preview { color: var(--text-mute, #9ca3af); font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 会话状态徽标（用户侧悬浮窗 + 超管「客服消息」工作台共用） */
 .chat-badge {
   font-size: .66rem; padding: 1px 7px; border-radius: 999px; white-space: nowrap;
   background: #e8f0ff; color: var(--accent, #2f7df6);
 }
 .chat-badge.resolved { background: #e6f6ee; color: #1d9e75; }
-.chat-back {
-  align-self: flex-start; margin-bottom: .2rem; font-size: .76rem; cursor: pointer;
-  border: none; background: transparent; color: var(--accent, #2f7df6); padding: 0;
-}
 
 .chat-footer { display: flex; gap: .5rem; padding: .6rem; border-top: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc); }
 .chat-input {
@@ -4133,6 +4120,74 @@ img { max-width: 100%; display: block; }
   background: var(--accent, #2f7df6); color: #fff; font-weight: 600;
 }
 .chat-send:disabled { opacity: .5; cursor: default; }
+
+/* ===== 客服消息（个人中心全页工作台，仅超级管理员）===== */
+.ps-sec { margin-top: 0; }
+.ps-wrap { display: flex; gap: .9rem; height: clamp(420px, calc(100vh - 300px), 700px); min-height: 0; }
+.ps-side {
+  width: 236px; flex: none; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--bg-card, #fff);
+}
+.ps-side-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .4rem; flex: none;
+  padding: .5rem .7rem; font-size: .78rem; font-weight: 600; color: var(--text-mute, #6b7280);
+  border-bottom: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc);
+}
+.ps-side-count { font-weight: 400; }
+.ps-refresh { border: none; background: transparent; color: var(--accent, #2f7df6); font-size: .74rem; cursor: pointer; padding: 0; }
+.ps-refresh:hover { text-decoration: underline; }
+.ps-list { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.ps-list-empty { padding: 1.1rem .7rem; text-align: center; color: var(--text-mute, #9ca3af); font-size: .78rem; }
+.ps-row {
+  display: flex; flex-direction: column; gap: 2px; padding: .55rem .7rem;
+  border-bottom: 1px solid var(--border, #e5e7eb); cursor: pointer; border-left: 3px solid transparent;
+}
+.ps-row:hover { background: var(--bg-soft, #f8fafc); }
+.ps-row.active { background: #eef4ff; border-left-color: var(--accent, #2f7df6); }
+.ps-row-top { display: flex; align-items: center; gap: .35rem; }
+.ps-row-user {
+  font-weight: 600; font-size: .8rem; color: var(--text, #1f2937); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ps-row-prev {
+  font-size: .74rem; color: var(--text-mute, #9ca3af); text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ps-row-meta { font-size: .68rem; color: var(--text-mute, #9ca3af); display: flex; align-items: center; gap: .35rem; }
+.ps-row-mine { font-size: .64rem; padding: 0 5px; border-radius: 999px; background: var(--bg-soft, #f1f5f9); color: var(--text-mute, #6b7280); }
+.ps-main {
+  flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--bg-card, #fff);
+}
+.ps-main-head {
+  flex: none; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  padding: .55rem .8rem; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc);
+}
+.ps-main-title { font-size: .86rem; font-weight: 600; color: var(--text, #1f2937); }
+.ps-main-sub { font-size: .74rem; color: var(--text-mute, #9ca3af); text-align: left; }
+.ps-status-btn {
+  margin-left: auto; font-size: .74rem; padding: 2px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border, #d1d5db); background: var(--bg, #fff); color: var(--text, #1f2937);
+}
+.ps-status-btn:hover { border-color: var(--accent, #2f7df6); color: var(--accent, #2f7df6); }
+.ps-status-btn.resolved { border-color: #1d9e75; color: #1d9e75; }
+.ps-log {
+  flex: 1 1 auto; overflow-y: auto; min-height: 0; padding: .9rem;
+  display: flex; flex-direction: column; gap: .6rem; background: var(--bg, #fff);
+}
+.ps-log .chat-msg { max-width: 78%; }
+.ps-foot {
+  flex: none; display: flex; gap: .6rem; align-items: flex-end; padding: .6rem;
+  border-top: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc);
+}
+.ps-foot .chat-input { flex: 1 1 auto; resize: vertical; max-height: 140px; }
+.ps-foot .chat-send { height: 38px; }
+.ps-foot .chat-send:disabled { opacity: .45; cursor: default; }
+@media (max-width: 760px) {
+  .ps-wrap { flex-direction: column; height: auto; }
+  .ps-side { width: 100%; height: 220px; }
+  .ps-main { height: 420px; }
+}
 
 /* ---- 个人中心：关于 / 版本 / 自动更新 / 错误上报 ---- */
 .pf-about { display: flex; align-items: center; gap: .9rem; padding: .4rem 0 .9rem; }

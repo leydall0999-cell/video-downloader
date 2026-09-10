@@ -119,6 +119,8 @@
       <button type="button" class="sidebar-item" data-view="profile_purchases" id="sTabProfilePurchases" title="购买记录"><span class="sidebar-item-icon" aria-hidden="true">🧾</span><span class="sidebar-item-label">购买记录</span></button>
       <button type="button" class="sidebar-item" data-view="profile_credits" id="sTabProfileCredits" title="积分流水"><span class="sidebar-item-icon" aria-hidden="true">🪙</span><span class="sidebar-item-label">积分流水</span></button>
       <button type="button" class="sidebar-item" data-view="profile_security" id="sTabProfileSecurity" title="账号安全"><span class="sidebar-item-icon" aria-hidden="true">🔒</span><span class="sidebar-item-label">账号安全</span></button>
+      <!-- 客服消息：超级管理员专属（未登录/非超管 false 显隐由 updateAdminTabVisibility 控制） -->
+      <button type="button" class="sidebar-item" data-view="profile_support" id="sTabProfileSupport" title="客服消息（仅超级管理员）" hidden><span class="sidebar-item-icon" aria-hidden="true">💬</span><span class="sidebar-item-label">客服消息</span></button>
       <button type="button" class="sidebar-item" data-view="profile_about" id="sTabProfileAbout" title="关于"><span class="sidebar-item-icon" aria-hidden="true">ℹ️</span><span class="sidebar-item-label">关于</span></button>
     </div>
 
@@ -1451,6 +1453,32 @@
           </div>
         </div>
       </div>
+      <!-- 客服消息（仅超级管理员）：全页工单式会话管理，替代原悬浮窗「管理视角」小框 -->
+      <div class="um-panel" id="profileSupportPanel" hidden>
+        <div class="um-sec ps-sec">
+          <div class="um-sec-title">客服消息</div>
+          <div class="ps-wrap">
+            <aside class="ps-side">
+              <div class="ps-side-head">
+                <span>用户会话 <span class="ps-side-count" id="psCount">0</span></span>
+                <button type="button" class="ps-refresh" id="psRefresh" title="刷新列表">刷新</button>
+              </div>
+              <div class="ps-list" id="psList"><div class="ps-list-empty">加载中…</div></div>
+            </aside>
+            <section class="ps-main">
+              <div class="ps-main-head" id="psHead">
+                <span class="ps-main-title">请选择左侧会话</span>
+              </div>
+              <div class="ps-log" id="psLog"><div class="chat-empty">从左侧选择一个用户会话，即可查看完整聊天记录并回复。</div></div>
+              <div class="ps-foot" id="psFoot">
+                <textarea id="psInput" class="chat-input" rows="3" placeholder="以管理员身份回复…" disabled></textarea>
+                <button type="button" class="chat-send" id="psSend" disabled>回复</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
       <!-- 关于 / 版本 -->
       <div class="um-panel" id="profileAboutPanel" hidden>
         <div class="um-sec">
@@ -2763,7 +2791,7 @@
   <div class="chat-head">
     <div class="chat-head-left">
       <span class="chat-title">在线客服</span>
-      <button id="chatAdminToggle" class="chat-admin-toggle" hidden>管理视角</button>
+      <button id="chatAdminToggle" class="chat-admin-toggle" title="打开客服消息工作台（个人中心 → 客服消息）" hidden>管理视角</button>
     </div>
     <button id="chatClose" class="chat-close" aria-label="关闭">×</button>
   </div>
