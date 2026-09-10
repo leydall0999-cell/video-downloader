@@ -2,7 +2,9 @@
 # 离线测试运行器：在沙盒内验证 VideoDownloader 后端，不依赖任何外部网络。
 #
 # 覆盖：
-#   1. test_app_smoke.py  —— FastAPI TestClient 无头冒烟核心路由
+#   1. test_app_smoke.py              —— FastAPI TestClient 无头冒烟核心路由
+#   2. test_downloader_url_parsing.py —— 下载器链接解析/归一化（B站短链、追踪参数）
+#   3. test_matting_core.py           —— 抠图前处理/选区/边缘柔化 纯函数
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -42,6 +44,8 @@ run_one test_app_smoke.py
 run_one test_membership.py
 run_one test_member_quota_e2e.py
 run_one test_quality_options.py
+run_one test_downloader_url_parsing.py
+run_one test_matting_core.py
 
 echo ""
 echo "========================================="
