@@ -51,3 +51,6 @@ server/build_info.txt
 *.spec.bak.*
 # 桌面图标构建备份（desktop/build_mac.sh 生成）
 desktop/icon.icns.bak.*
+
+# 增量更新基线（每次发布生成的归一化 .app tar，体积大，不入库）
+desktop/.release_baselines/

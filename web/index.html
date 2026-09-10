@@ -119,6 +119,7 @@
       <button type="button" class="sidebar-item" data-view="profile_purchases" id="sTabProfilePurchases" title="购买记录"><span class="sidebar-item-icon" aria-hidden="true">🧾</span><span class="sidebar-item-label">购买记录</span></button>
       <button type="button" class="sidebar-item" data-view="profile_credits" id="sTabProfileCredits" title="积分流水"><span class="sidebar-item-icon" aria-hidden="true">🪙</span><span class="sidebar-item-label">积分流水</span></button>
       <button type="button" class="sidebar-item" data-view="profile_security" id="sTabProfileSecurity" title="账号安全"><span class="sidebar-item-icon" aria-hidden="true">🔒</span><span class="sidebar-item-label">账号安全</span></button>
+      <button type="button" class="sidebar-item" data-view="profile_about" id="sTabProfileAbout" title="关于"><span class="sidebar-item-icon" aria-hidden="true">ℹ️</span><span class="sidebar-item-label">关于</span></button>
     </div>
 
     <!-- 后台管理面板（2026-09-08）：超级用户专属，登录且 is_admin 才显示，非普通视图切换；整个组随权限显隐 -->
@@ -1446,6 +1447,61 @@
               <div class="pf-sec-actions">
                 <button type="button" class="pf-sec-btn danger" id="profDeactivateBtn">注销账号</button>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 关于 / 版本 -->
+      <div class="um-panel" id="profileAboutPanel" hidden>
+        <div class="um-sec">
+          <div class="um-sec-title">关于本应用</div>
+          <div class="pf-about">
+            <div class="pf-about-logo" aria-hidden="true">🎬</div>
+            <div class="pf-about-main">
+              <div class="pf-about-name">VideoDownloader</div>
+              <div class="pf-about-ver">当前版本 <strong id="profAboutVersion">—</strong></div>
+              <div class="pf-about-build" id="profAboutBuild"></div>
+            </div>
+          </div>
+
+          <!-- 更新横幅：有新版时显示 -->
+          <div class="pf-update-banner" id="profUpdateBanner" hidden>
+            <div class="pf-update-banner-ic" aria-hidden="true">⬆️</div>
+            <div class="pf-update-banner-body">
+              <div class="pf-update-banner-title">发现新版本 <strong id="profUpdateVer">—</strong></div>
+              <div class="pf-update-banner-notes" id="profUpdateNotes"></div>
+              <div class="pf-update-banner-size" id="profUpdateSize"></div>
+            </div>
+            <button type="button" class="pf-update-btn" id="profUpdateNowBtn">立即更新</button>
+          </div>
+
+          <div class="pf-about-actions">
+            <button type="button" class="user-menu-btn" id="profCheckUpdateBtn">检查更新</button>
+            <button type="button" class="user-menu-btn ghost" id="profErrorReportBtn">错误上报</button>
+          </div>
+          <p class="um-msg" id="profAboutMsg" hidden></p>
+
+          <!-- 错误上报弹窗 -->
+          <div class="pf-report-modal" id="profReportModal" hidden role="dialog" aria-label="错误上报">
+            <div class="pf-report-card">
+              <div class="pf-report-head">
+                <span>错误上报</span>
+                <button type="button" class="pf-report-close" id="profReportClose" aria-label="关闭">×</button>
+              </div>
+              <p class="pf-report-tip">请描述你遇到的问题；下列诊断信息将自动随报告发送，帮助更快定位。</p>
+              <label class="um-field">
+                <span>问题描述</span>
+                <textarea id="profReportText" class="um-textarea" rows="5" placeholder="例如：点击「一键抠图」后一直转圈，无法出图…"></textarea>
+              </label>
+              <label class="pf-report-chk">
+                <input type="checkbox" id="profReportIncludeLog" checked />
+                <span>附带启动诊断日志（~/.vdl_launch.log 尾部）</span>
+              </label>
+              <div class="pf-report-actions">
+                <button type="button" class="user-menu-btn ghost" id="profReportCancel">取消</button>
+                <button type="button" class="user-menu-btn" id="profReportSubmit">提交上报</button>
+              </div>
+              <p class="um-msg" id="profReportMsg" hidden></p>
             </div>
           </div>
         </div>

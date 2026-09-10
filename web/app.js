@@ -226,6 +226,25 @@
     profilePurchasesPanel: $('profilePurchasesPanel'),
     profileCreditsPanel: $('profileCreditsPanel'),
     profileSecurityPanel: $('profileSecurityPanel'),
+    sTabProfileAbout: $('sTabProfileAbout'),
+    profileAboutPanel: $('profileAboutPanel'),
+    profAboutVersion: $('profAboutVersion'),
+    profAboutBuild: $('profAboutBuild'),
+    profUpdateBanner: $('profUpdateBanner'),
+    profUpdateVer: $('profUpdateVer'),
+    profUpdateNotes: $('profUpdateNotes'),
+    profUpdateSize: $('profUpdateSize'),
+    profUpdateNowBtn: $('profUpdateNowBtn'),
+    profCheckUpdateBtn: $('profCheckUpdateBtn'),
+    profErrorReportBtn: $('profErrorReportBtn'),
+    profAboutMsg: $('profAboutMsg'),
+    profReportModal: $('profReportModal'),
+    profReportClose: $('profReportClose'),
+    profReportText: $('profReportText'),
+    profReportIncludeLog: $('profReportIncludeLog'),
+    profReportCancel: $('profReportCancel'),
+    profReportSubmit: $('profReportSubmit'),
+    profReportMsg: $('profReportMsg'),
     profName: $('profileTitle'),
     profTag: $('profileTag'),
     profAvatar: $('profAvatar'),
@@ -1047,12 +1066,16 @@
     // 防止后端挂起时前端无限等待。大文件上传/下载可传 options.timeout=0 关闭
     // 或传更大值；请求超时抛可读错误而非静默卡死。
     const fetchTimeout = (options && options.timeout) || 120000;
+    // ⚠️ 不要把 options 整个 spread 到 fetch init 里：自定义字段（如 timeout、retries）
+    // 会被 WebKit/部分 webview 当成未知 init 成员拒收，整次请求会报 "Load failed"。
+    // 这里只把 fetch 标准字段显式挑出来。
+    const { timeout: _t, retries: _r, ...fetchInit } = options;
     const doFetch = () => {
-      if (!fetchTimeout) return fetch(apiBase + path, { ...options, headers: merged });
+      if (!fetchTimeout) return fetch(apiBase + path, { ...fetchInit, headers: merged });
       const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-      if (!ctrl) return fetch(apiBase + path, { ...options, headers: merged });
+      if (!ctrl) return fetch(apiBase + path, { ...fetchInit, headers: merged });
       const timer = setTimeout(() => ctrl.abort(), fetchTimeout);
-      return fetch(apiBase + path, { ...options, headers: merged, signal: ctrl.signal })
+      return fetch(apiBase + path, { ...fetchInit, headers: merged, signal: ctrl.signal })
         .finally(() => clearTimeout(timer));
     };
     let response;
@@ -9519,7 +9542,8 @@ el.dwVidPlayer.removeAttribute('src');
     const isProfilePurchases = view === 'profile_purchases';
     const isProfileCredits = view === 'profile_credits';
     const isProfileSecurity = view === 'profile_security';
-    const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity;
+    const isProfileAbout = view === 'profile_about';
+    const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout;
     el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isSt || isAppIntro || isBridge || isProfileGroup;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -9537,6 +9561,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.profilePurchasesPanel) el.profilePurchasesPanel.hidden = !isProfilePurchases;
     if (el.profileCreditsPanel) el.profileCreditsPanel.hidden = !isProfileCredits;
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
+    if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isSt && !isBridge && !isProfileGroup);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
@@ -9562,6 +9587,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabProfilePurchases) el.sTabProfilePurchases.classList.toggle('is-active', isProfilePurchases);
     if (el.sTabProfileCredits) el.sTabProfileCredits.classList.toggle('is-active', isProfileCredits);
     if (el.sTabProfileSecurity) el.sTabProfileSecurity.classList.toggle('is-active', isProfileSecurity);
+    if (el.sTabProfileAbout) el.sTabProfileAbout.classList.toggle('is-active', isProfileAbout);
     if (el.sTabDw) el.sTabDw.classList.toggle('is-active', view === 'dw');
     if (el.sTabDwPdf) el.sTabDwPdf.classList.toggle('is-active', view === 'dwpdf');
     if (el.sTabDwVideo) el.sTabDwVideo.classList.toggle('is-active', view === 'dwvideo');
@@ -9572,6 +9598,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isProfileGroup) loadProfile();
+    if (isProfileAbout) loadAboutPanel();
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     // dw 系侧栏入口直达对应子面板（视图内 dw-tabs 按钮行已删，切换只经侧栏）
     const _dwPaneOf = { dw: 'img', dwpdf: 'pdf', dwvideo: 'video', matting: 'matting' };
@@ -10037,6 +10064,7 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabProfilePurchases, 'profile_purchases'],
     [el.sTabProfileCredits, 'profile_credits'],
     [el.sTabProfileSecurity, 'profile_security'],
+    [el.sTabProfileAbout, 'profile_about'],
   ];
   for (const [btn, view] of _sidebarPairs) {
     if (!btn) continue;
@@ -11690,6 +11718,229 @@ el.dwVidPlayer.removeAttribute('src');
     try { _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   }
+
+  // 个人中心：关于 / 版本 / 自动更新 / 错误上报
+  let _aboutUpdatable = true;
+  let _aboutLatest = null;
+  let _aboutCurrentVer = '';
+
+  async function loadAboutPanel() {
+    if (!el.profileAboutPanel) return;
+    let info = null;
+    try { info = await request('/api/system/info'); } catch (_) { /* 忽略 */ }
+    const ver = (info && info.version) || '—';
+    const build = (info && info.build) || '';
+    _aboutCurrentVer = ver;
+    if (el.profAboutVersion) el.profAboutVersion.textContent = ver;
+    if (el.profAboutBuild) el.profAboutBuild.textContent = build ? ('构建：' + build) : '';
+    _aboutUpdatable = !!(info && info.updatable);
+    await _checkForUpdate();
+  }
+
+  async function _checkForUpdate() {
+    if (!el.profUpdateBanner) return;
+    if (!_aboutUpdatable) { el.profUpdateBanner.hidden = true; return; }
+    let data = null;
+    try { data = await request('/api/system/latest'); } catch (_) { data = null; }
+    if (!data || !data.ok || !data.update_available) {
+      el.profUpdateBanner.hidden = true;
+      return;
+    }
+    _aboutLatest = data.latest || {};
+    if (el.profUpdateVer) el.profUpdateVer.textContent = _aboutLatest.version || '—';
+    if (el.profUpdateNotes) el.profUpdateNotes.textContent = _aboutLatest.notes || '';
+    // 增量更新提示：已装版本 == from_version 时走几 MB 差分，其余走全量
+    if (el.profUpdateSize) {
+      const inc = !!(_aboutLatest.patch_url && _aboutLatest.from_version && _aboutLatest.from_version === _aboutCurrentVer);
+      if (inc && _aboutLatest.patch_size) {
+        el.profUpdateSize.textContent = '增量更新 · 下载约 ' + _fmtMB(_aboutLatest.patch_size) + '（差异化差分，省流量）';
+      } else if (_aboutLatest.size) {
+        el.profUpdateSize.textContent = '下载约 ' + _fmtMB(_aboutLatest.size);
+      } else {
+        el.profUpdateSize.textContent = '';
+      }
+    }
+    el.profUpdateBanner.hidden = false;
+  }
+
+  function _aboutMsg(txt, err) {
+    if (!el.profAboutMsg) return;
+    el.profAboutMsg.textContent = txt || '';
+    el.profAboutMsg.hidden = !txt;
+    el.profAboutMsg.classList.toggle('is-err', !!err);
+  }
+
+  function _fmtMB(b) {
+    b = Number(b) || 0;
+    if (b < 1024 * 1024) return (b / 1024).toFixed(0) + ' KB';
+    return (b / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  // 把 WebKit fetch 的网络层英文错误翻成中文，便于排查
+  function _netErrMsg(e) {
+    const m = (e && (e.message || e.toString())) || '';
+    if (/Load failed/i.test(m)) return '网络请求失败（WebKit 偶发拦截），请重试';
+    if (/Failed to fetch/i.test(m)) return '网络请求失败（连接被拒绝），请重试';
+    if (/NetworkError/i.test(m)) return '网络异常，请重试';
+    if (/AbortError|aborted/i.test(m)) return '请求超时，请重试';
+    return null;
+  }
+
+  async function _doUpdate() {
+    if (!_aboutLatest || !_aboutLatest.version) { _aboutMsg('暂无可更新的版本', true); return; }
+    if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = true; el.profUpdateNowBtn.textContent = '更新准备中…'; }
+    _aboutMsg('正在启动更新任务…');
+
+    const api = window.pywebview && window.pywebview.api;
+    // 优先走 pywebview 原生 bridge：完全不经过 WKWebView 的 fetch，根除其偶发拦截
+    if (api && typeof api.trigger_update === 'function') {
+      let res;
+      try {
+        res = await api.trigger_update(_aboutLatest.version, authToken());
+      } catch (e) {
+        _aboutMsg('触发更新失败：' + ((e && e.message) || e), true);
+        _resetUpdateBtn();
+        return;
+      }
+      if (!res || !res.ok) {
+        _aboutMsg((res && res.error) || '触发更新失败，请重试', true);
+        _resetUpdateBtn();
+        return;
+      }
+      _pollUpdate(res.job_id, api);
+      return;
+    }
+    // 旧版兜底：仍用 fetch（带重试），防止降级后无法更新
+    _doUpdateLegacy();
+  }
+
+  function _resetUpdateBtn() {
+    if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = false; el.profUpdateNowBtn.textContent = '立即更新'; }
+  }
+
+  async function _pollUpdate(jobId, api) {
+    let status;
+    try { status = await api.update_status(jobId); } catch (e) { status = null; }
+    const s = status && status.status;
+    if (s === 'ready') {
+      _aboutMsg('更新已就绪，应用即将重启…');
+      const a = window.pywebview && window.pywebview.api;
+      if (a && typeof a.quit_app === 'function') {
+        setTimeout(() => { try { a.quit_app(); } catch (_) {} }, 800);
+      } else {
+        _aboutMsg('无法调用退出接口，请手动重启应用完成更新', true);
+        _resetUpdateBtn();
+      }
+      return;
+    }
+    if (s === 'error') {
+      _aboutMsg('更新失败：' + ((status && status.error) || '未知错误'), true);
+      _resetUpdateBtn();
+      return;
+    }
+    const pct = (status && status.progress) || 0;
+    const label = s === 'downloading' ? '下载中' : (s === 'applying' ? '准备安装中' : '排队中');
+    _aboutMsg('正在' + label + '… ' + pct + '%');
+    setTimeout(() => _pollUpdate(jobId, api), 1000);
+  }
+
+  async function _doUpdateLegacy() {
+    if (!_aboutLatest || !_aboutLatest.version) { _aboutMsg('暂无可更新的版本', true); return; }
+    if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = true; el.profUpdateNowBtn.textContent = '下载并更新中…'; }
+    _aboutMsg('正在下载更新包并准备安装…');
+
+    // WKWebView 对「页面加载后的第一个 POST + AbortController + 大 timeout」组合
+    // 会偶发报 "Load failed"（请求压根没发出去）。保险起见网络层错误自动重试最多 3 次，
+    // 并用指数退避（500ms / 1s / 2s）给 WebKit 网络栈恢复时间。
+    const payload = JSON.stringify({ version: _aboutLatest.version });
+    const doPost = () => request('/api/system/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      timeout: 1800000,
+    });
+    const _retryDelays = [500, 1000, 2000];
+    let r = null, lastErr = null;
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      try {
+        r = await doPost();
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        const isNet = _netErrMsg(e);
+        if (isNet && attempt < 4) {
+          const delay = _retryDelays[attempt - 1] || 2000;
+          _aboutMsg(isNet + '（自动重试 ' + attempt + '/3，' + delay + 'ms 后）');
+          await new Promise(res => setTimeout(res, delay));
+          continue;
+        }
+        break;
+      }
+    }
+    if (!r) {
+      const msg = _netErrMsg(lastErr) || (lastErr && lastErr.message) || '更新失败，请重试';
+      _aboutMsg(msg, true);
+      if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = false; el.profUpdateNowBtn.textContent = '立即更新'; }
+      return;
+    }
+    if (!r.ok) {
+      _aboutMsg((r && r.error) || '更新失败，请重试', true);
+      if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = false; el.profUpdateNowBtn.textContent = '立即更新'; }
+      return;
+    }
+    _aboutMsg('更新已就绪，应用即将重启…');
+    // 后端已派生「脱离父进程」的更新助手；这里触发前端退出，
+    // 助手待主进程退出后把新包 ditto 到 /Applications 并重新打开。
+    const api = window.pywebview && window.pywebview.api;
+    if (api && typeof api.quit_app === 'function') {
+      setTimeout(() => { try { api.quit_app(); } catch (_) {} }, 800);
+    } else {
+      _aboutMsg('无法调用退出接口，请手动重启应用完成更新', true);
+      if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = false; el.profUpdateNowBtn.textContent = '立即更新'; }
+    }
+  }
+
+  if (el.profCheckUpdateBtn) el.profCheckUpdateBtn.addEventListener('click', async () => {
+    _aboutMsg('正在检查更新…');
+    await _checkForUpdate();
+    if (el.profUpdateBanner && !el.profUpdateBanner.hidden) _aboutMsg('发现新版本！');
+    else _aboutMsg('已是最新版本');
+    setTimeout(() => _aboutMsg(''), 2500);
+  });
+  if (el.profUpdateNowBtn) el.profUpdateNowBtn.addEventListener('click', _doUpdate);
+  if (el.profErrorReportBtn) el.profErrorReportBtn.addEventListener('click', () => {
+    if (el.profReportModal) el.profReportModal.hidden = false;
+  });
+  if (el.profReportClose) el.profReportClose.addEventListener('click', () => { if (el.profReportModal) el.profReportModal.hidden = true; });
+  if (el.profReportCancel) el.profReportCancel.addEventListener('click', () => { if (el.profReportModal) el.profReportModal.hidden = true; });
+  if (el.profReportSubmit) el.profReportSubmit.addEventListener('click', async () => {
+    const desc = (el.profReportText && el.profReportText.value || '').trim();
+    if (!desc) { if (el.profReportMsg) { el.profReportMsg.textContent = '请填写问题描述'; el.profReportMsg.hidden = false; el.profReportMsg.classList.add('is-err'); } return; }
+    const includeLog = el.profReportIncludeLog ? el.profReportIncludeLog.checked : true;
+    const ver = (el.profAboutVersion && el.profAboutVersion.textContent) || '';
+    const plat = (navigator && navigator.userAgent) || '';
+    let text = (includeLog ? '[错误上报] ' : '[错误上报-不含诊断] ') + desc + '\n\n环境：v' + ver + ' / ' + plat;
+    el.profReportSubmit.disabled = true;
+    if (el.profReportMsg) { el.profReportMsg.textContent = '提交中…'; el.profReportMsg.hidden = false; el.profReportMsg.classList.remove('is-err'); }
+    try {
+      const r = await request('/api/support/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, thread_id: '' }),
+      });
+      if (!r || !r.ok) throw new Error((r && r.error) || '上报失败');
+      if (el.profReportModal) el.profReportModal.hidden = true;
+      if (el.profReportText) el.profReportText.value = '';
+      _aboutMsg('✅ 已收到你的上报，我们会尽快处理');
+      setTimeout(() => _aboutMsg(''), 3000);
+    } catch (e) {
+      if (el.profReportMsg) { el.profReportMsg.textContent = (e && e.message) || '上报失败，请重试'; el.profReportMsg.classList.add('is-err'); }
+    } finally {
+      el.profReportSubmit.disabled = false;
+    }
+  });
+
   // 账号安全：忘记密码 → 打开找回密码弹窗
   if (el.profForgotPwBtn) el.profForgotPwBtn.addEventListener('click', () => openForgetModal());
   // 账号安全：切换「更改密码」表单

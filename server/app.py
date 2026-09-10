@@ -2025,7 +2025,7 @@ def _probe_video_title(src_path) -> str:
         ffprobe_bin = shutil.which("ffprobe", path=path) or ""
         if not ffprobe_bin:
             try:
-                ffmpeg_dir = getattr(_COMMENTARY_RUNTIME, "ffmpeg_dir", "") or ""
+                ffmpeg_dir = getattr(COMMENTARY_RT, "ffmpeg_dir", "") or ""
                 if ffmpeg_dir:
                     ffprobe_bin = shutil.which("ffprobe", path=ffmpeg_dir + os.pathsep + path) or ""
             except Exception:
@@ -2877,6 +2877,8 @@ from routers import admin as _admin_rtr
 app.include_router(_admin_rtr.router)
 from routers import support as _support_rtr
 app.include_router(_support_rtr.router)
+from routers import system as _system_rtr
+app.include_router(_system_rtr.router)
 # 账号 / per-user 会员解析（A1+B2）：供各路由经 request 取当前用户态 store。
 # 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
 from user_membership import get_current_user_id, current_member_store

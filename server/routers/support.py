@@ -64,6 +64,20 @@ def _ident(uid: str) -> str:
     return user_identifier(uid) or uid
 
 
+def _append_diagnostics(text: str) -> str:
+    """错误上报：把启动诊断日志（~/.vdl_launch.log）尾部若干行附到消息后，便于排障。"""
+    try:
+        log = Path.home() / ".vdl_launch.log"
+        if log.exists():
+            lines = log.read_text(encoding="utf-8", errors="ignore").splitlines()
+            tail = "\n".join(lines[-60:])
+            if tail.strip():
+                text = text + "\n\n---\n诊断信息（自动附加，来自 ~/.vdl_launch.log）：\n" + tail
+    except Exception:
+        pass
+    return text
+
+
 def _is_admin(uid: str) -> bool:
     from auth_store import user_is_admin
 
@@ -96,6 +110,10 @@ def support_message(request: Request, payload: dict[str, Any] = Body(...)) -> di
         return {"ok": False, "error": "请输入内容"}
     if len(text) > _MAX_LEN:
         return {"ok": False, "error": f"内容过长（≤{_MAX_LEN}字）"}
+    # 错误上报：自动附加启动诊断日志尾部（~/.vdl_launch.log），便于排障。
+    # 仅当文案以 [错误上报] 开头且未显式「-不含诊断」时才附加。
+    if text.startswith("[错误上报]") and "-不含诊断" not in text:
+        text = _append_diagnostics(text)
     tid = str(payload.get("thread_id") or "").strip()
     with _lock:
         threads = _read_threads()

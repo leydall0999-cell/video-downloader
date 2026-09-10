@@ -425,7 +425,10 @@ BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
 # 解说管线（commentary-pipeline）独立仓库，其 SHA 也一并注入指纹，避免「改了管线但 /api/version 不反映」的错觉。
 PIPELINE_HASH="$(git -C "$COMMENTARY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-BUILD_INFO="构建 $BUILD_HASH (app) / $PIPELINE_HASH (pipe) @ $BUILD_DATE"
+# 语义化版本号：仓库根 VERSION 文件（不随构建变化，仅发版时手工 +1），供「关于/自动更新」比对。
+APP_VERSION="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]' | head -1)"
+[ -z "$APP_VERSION" ] && APP_VERSION="0.0.0"
+BUILD_INFO="v$APP_VERSION · 构建 $BUILD_HASH (app) / $PIPELINE_HASH (pipe) @ $BUILD_DATE"
 # 缓存 bust 用的纯数字构建戳（避免中文/@ 在 perl 替换侧被错误插值），每次构建都变化
 BUILD_STAMP="$(date +%y%m%d%H%M%S)"
 # 页脚用 .*? 而非空 span，保证重复构建也能覆盖旧指纹（之前空 span 模式在已有内容时不匹配）
@@ -440,7 +443,10 @@ perl -0pi -e "s{var fp = '__BUILD_FP__';}{var fp = '$BUILD_STAMP';}g" "$REPO/dis
 # 注意：指纹必须每次构建都变化（含 BUILD_STAMP 时间戳），否则自动接管逻辑
 # 会误判"版本相同"而不接管旧实例，导致仍跑旧版。
 echo "$BUILD_INFO #$BUILD_STAMP" > "$REPO/dist/VideoDownloader.app/Contents/Resources/build_version.txt"
+# 纯净语义化版本号（仅 vX.Y.Z），供 /api/system/info 与自动更新比对使用（不含构建戳/哈希）。
+echo "$APP_VERSION" > "$REPO/dist/VideoDownloader.app/Contents/Resources/version.txt"
 echo "   指纹：$BUILD_INFO #$BUILD_STAMP"
+echo "   版本：$APP_VERSION"
 
 echo "▶ 打包 aria2c（种子后端随安装包自包含，脱离本机 Homebrew）"
 python3 "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader.app/Contents/Resources" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用）"
@@ -459,6 +465,13 @@ hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.dmg" 2>/dev/null || true
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null || true
 echo "   已去除 DMG / .app 的 quarantine 标记（仍需用户右键→打开 一次性放行）"
+
+# ⚠️ 安全约定（用户明确要求）：构建**绝不**自动发布更新。
+# 自动发布会让「刚构建、尚未测试」的版本立刻对用户可见，风险极高。
+# 发布是独立的手工步骤：先部署到本机 /Applications 充分测试，确认无误后再执行
+#     bash desktop/publish_update.sh
+# 该脚本会把当前 dist/VideoDownloader.app 打成 zip、算 sha256、生成 latest.json 并上传到 VPS。
+echo "ℹ️  构建不自动发布更新；确认版本无误后手工执行：bash desktop/publish_update.sh"
 
 # 走到这里说明构建、签名、DMG 全部成功（set -e 保证失败会提前退出），
 # 此时旧产物已无回滚价值，统一收尾，避免 dist/ 无限膨胀。

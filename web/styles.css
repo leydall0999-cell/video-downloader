@@ -3297,6 +3297,8 @@ img { max-width: 100%; display: block; }
 .um-field > span { font-size: .82rem; color: var(--text-mute, #6b7280); }
 .um-input { padding: .6rem .7rem; border: 1px solid var(--border, #d1d5db); border-radius: 8px; font-size: .92rem; background: var(--bg, #fff); color: var(--text, #1f2937); }
 .um-input:focus { outline: none; border-color: var(--brand, #4f46e5); }
+.um-textarea { padding: .6rem .7rem; border: 1px solid var(--border, #d1d5db); border-radius: 8px; font-size: .92rem; font-family: inherit; resize: vertical; background: var(--bg, #fff); color: var(--text, #1f2937); }
+.um-textarea:focus { outline: none; border-color: var(--brand, #4f46e5); }
 .um-msg { font-size: .82rem; margin: 0; }
 .um-msg.is-err { color: #c0392b; }
 .um-msg:not(.is-err) { color: #1d9e75; }
@@ -4131,4 +4133,61 @@ img { max-width: 100%; display: block; }
   background: var(--accent, #2f7df6); color: #fff; font-weight: 600;
 }
 .chat-send:disabled { opacity: .5; cursor: default; }
+
+/* ---- 个人中心：关于 / 版本 / 自动更新 / 错误上报 ---- */
+.pf-about { display: flex; align-items: center; gap: .9rem; padding: .4rem 0 .9rem; }
+.pf-about-logo {
+  width: 52px; height: 52px; border-radius: 14px; flex: none;
+  display: grid; place-items: center; font-size: 1.7rem;
+  background: var(--brand-soft, #eef2ff); color: var(--brand, #4f46e5);
+}
+.pf-about-main { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.pf-about-name { font-size: 1.1rem; font-weight: 800; color: var(--text, #1f2937); }
+.pf-about-ver { font-size: .88rem; color: var(--text, #374151); }
+.pf-about-ver strong { color: var(--brand, #4f46e5); font-weight: 700; }
+.pf-about-build { font-size: .76rem; color: var(--text-mute, #9ca3af); word-break: break-all; }
+.pf-update-banner {
+  display: flex; align-items: center; gap: .8rem;
+  margin: .3rem 0 1rem; padding: .8rem .95rem; border-radius: 12px;
+  background: #eafaf0; border: 1px solid #b7ebc9;
+}
+.pf-update-banner-ic { font-size: 1.4rem; flex: none; }
+.pf-update-banner-body { flex: 1 1 auto; min-width: 0; }
+.pf-update-banner-title { font-size: .92rem; font-weight: 700; color: #137a3f; }
+.pf-update-banner-title strong { color: #0f6b35; }
+.pf-update-banner-notes {
+  font-size: .8rem; color: #2f7d4f; line-height: 1.5; margin-top: .15rem;
+  max-height: 4.5em; overflow: auto; white-space: pre-wrap;
+}
+.pf-update-banner-size {
+  font-size: .76rem; color: #1f6f43; margin-top: .1rem; font-weight: 600;
+}
+.pf-update-btn {
+  height: 36px; padding: 0 1.1rem; flex: none; font-family: inherit; font-size: .85rem; font-weight: 700;
+  color: #fff; background: #16a34a; border: 1px solid #16a34a; border-radius: 999px; cursor: pointer;
+  transition: background .15s;
+}
+.pf-update-btn:hover { background: #15803d; }
+.pf-update-btn:disabled { opacity: .6; cursor: default; }
+.pf-about-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+/* 错误上报弹窗 */
+.pf-report-modal {
+  position: fixed; inset: 0; z-index: 600;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, .45); padding: 1rem;
+}
+.pf-report-card {
+  width: min(520px, 100%); background: #fff; border-radius: 16px; padding: 1.1rem 1.2rem 1.25rem;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, .28); display: flex; flex-direction: column; gap: .7rem;
+}
+.pf-report-head { display: flex; align-items: center; justify-content: space-between; font-size: 1.02rem; font-weight: 800; color: var(--text, #1f2937); }
+.pf-report-close {
+  width: 30px; height: 30px; border: none; background: var(--bg-soft, #f3f4f6); border-radius: 8px;
+  font-size: 1.2rem; line-height: 1; cursor: pointer; color: var(--text-mute, #6b7280);
+}
+.pf-report-close:hover { background: #e5e7eb; }
+.pf-report-tip { font-size: .8rem; color: var(--text-mute, #6b7280); line-height: 1.55; margin: 0; }
+.pf-report-chk { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--text, #374151); }
+.pf-report-actions { display: flex; gap: .6rem; justify-content: flex-end; }
+.pf-report-actions .user-menu-btn { height: 36px; padding: 0 1.1rem; font-size: .85rem; }
 

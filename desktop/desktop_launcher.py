@@ -993,6 +993,40 @@ class VdlApi:
         _quitting = True  # 标记正在退出，让 closing 拦截器放行
         os._exit(0)       # 强制退出（不经过 closing 事件循环）
 
+    def trigger_update(self, version: str, token: str = None) -> dict:
+        """原生 bridge：在 Python 端（不经过 WKWebView 的 fetch）向后端发起更新。
+        后端立即返回 job_id，前端再轮询 update_status 获取进度。彻底规避 WebKit 偶发拦截。
+        token：登录态 Bearer token（前端从 localStorage 取出后透传），满足后端 _require_user 鉴权；
+        不传则后端返回 NO_AUTH，更新无法启动。"""
+        try:
+            import json as _json
+            import urllib.request as _urllib
+            url = f"http://{HOST}:{PORT}/api/system/update"
+            headers = {"Content-Type": "application/json"}
+            if token:
+                headers["Authorization"] = "Bearer " + str(token)
+            req = _urllib.Request(
+                url,
+                data=_json.dumps({"version": version}).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with _urllib.urlopen(req, timeout=60) as resp:
+                return _json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            return {"ok": False, "error": "触发更新失败：%s" % e}
+
+    def update_status(self, job_id: str) -> dict:
+        """原生 bridge：轮询更新任务进度（短 GET，不经过 WebKit fetch）。"""
+        try:
+            import json as _json
+            import urllib.request as _urllib
+            url = f"http://{HOST}:{PORT}/api/system/update/status?job={job_id}"
+            with _urllib.urlopen(url, timeout=10) as resp:
+                return _json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            return {"ok": False, "error": "查询更新状态失败：%s" % e}
+
 def _handle_exit(*_args) -> None:
     os._exit(0)
 
