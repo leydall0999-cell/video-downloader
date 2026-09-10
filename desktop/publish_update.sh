@@ -15,6 +15,7 @@
 #   bash desktop/publish_update.sh --yes              # 跳过确认
 #   bash desktop/publish_update.sh --force            # 允许发布不高于当前线上版本号的版本
 #   VDL_RELEASE_NOTES="修复 XX 问题" bash desktop/publish_update.sh
+#   VDL_KEEP_BASELINES=3 bash desktop/publish_update.sh   # 历史基线保留版数（默认 2，0=不裁剪）
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -154,6 +155,39 @@ if [ "$REMOTE_VER" != "0.0.0" ] && [ "$REMOTE_VER" != "$VERSION" ] && _ver_ge "$
   fi
 else
   echo "   首次发布或强制覆盖同版本：仅生成全量更新。"
+fi
+
+# 3.7) 裁剪历史基线（必须放在 3.6 之后，否则会删掉刚用到的 from 版本基线）
+#      每版基线是一份完整 app（约 700MB），不清理会随版本无限膨胀
+#      （2026-09-10 实测累积到 5.8GB / 7 个版本）。
+#      保留最近 N 版即可：生成 delta 只用到「线上那一版」的基线，且基线缺失时
+#      3.6 会自动从 VPS 下载上一版完整包重建。当前版与线上版永不清。
+#      VDL_KEEP_BASELINES=0 可关闭裁剪；默认保留 2 版。
+KEEP_BASES="${VDL_KEEP_BASELINES:-2}"
+if [ "$KEEP_BASES" -gt 0 ] 2>/dev/null && [ -d "$BASE_DIR" ]; then
+  # BSD sort 无 -V，用逐段数值排序代替语义化版本排序
+  _bases_all="$(ls -1 "$BASE_DIR" 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n)"
+  _bases_n="$(printf '%s\n' "$_bases_all" | grep -c . || true)"
+  if [ "$_bases_n" -gt "$KEEP_BASES" ]; then
+    _bases_drop="$(printf '%s\n' "$_bases_all" | head -n $((_bases_n - KEEP_BASES)))"
+    for _bv in $_bases_drop; do
+      # 不用 `[ -z x ] && continue` 写法：set -e 下 && 短路返回 1 的语义有歧义
+      if [ -z "$_bv" ]; then
+        continue
+      fi
+      # 保护：当前发布版本与线上版本（生成增量可能依赖后者）永不裁剪
+      if [ "$_bv" = "$VERSION" ] || { [ -n "$REMOTE_VER" ] && [ "$_bv" = "$REMOTE_VER" ]; }; then
+        continue
+      fi
+      if [ -d "$HOME/.Trash" ]; then
+        if mv "$BASE_DIR/$_bv" "$HOME/.Trash/release_baseline_${_bv}_$(date +%Y%m%d-%H%M%S)" 2>/dev/null; then
+          echo "   已裁剪历史基线 ${_bv}（移入回收站，可恢复）"
+        fi
+      elif rm -rf "$BASE_DIR/$_bv" 2>/dev/null; then
+        echo "   已裁剪历史基线 ${_bv}"
+      fi
+    done
+  fi
 fi
 
 # 4) 生成 latest.json（发布清单）
