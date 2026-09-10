@@ -234,7 +234,6 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
     --collect-all edge_tts
     --collect-all ctranslate2
     --collect-all tokenizers
-    --collect-all onnxruntime
     --collect-all av
   )
 else
@@ -270,6 +269,12 @@ if [ "$JS_FAIL" -ne 0 ]; then
 fi
 echo "   ✔ 前端 JS 语法校验通过"
 
+# ⚠️ 不要给 onnx 加 --collect-all（2026-09-10 查证：这是构建 40 分钟的主因）：
+# onnx 的 wheel 内含官方一致性测试数据集 onnx/backend/test/data（**24,209 个文件**），
+# --collect-all 会把它们全部当 data 收进包 —— 上一版包内 31,019 个文件里 25,775 个
+# （83%）来自 onnx，而 `grep onnx server/`（排除 onnxruntime）**零命中**，后端从未 import 过它。
+# 这些文件平均 1.3KB：拖慢的不是字节，而是逐文件的拷贝 + codesign 密封开销。
+# 若将来真有代码 import onnx，PyInstaller 的常规依赖分析会自动把它收进来（且不含 test data）。
 "$VENV/bin/pyinstaller" \
   --name VideoDownloader \
   --windowed \
@@ -304,7 +309,6 @@ echo "   ✔ 前端 JS 语法校验通过"
   --collect-all PIL \
   --collect-all pyobjc-framework-Quartz \
   --collect-all onnxruntime \
-  --collect-all onnx \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   $_PCS_ADD_BINARY_ARG \
@@ -457,14 +461,23 @@ xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
 echo "   签名完成：$(codesign -dv "$REPO/dist/VideoDownloader.app" 2>&1 | grep 'Signature=' | head -1)"
 
 echo "▶ 生成 DMG 分发包"
-rm -f "$REPO/dist/VideoDownloader.dmg"
-hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader.app" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
+# 默认**不生成** DMG：只有「手动装包通道」（旧版用户下载 DMG 拖进应用程序）需要它，
+# 而它要给 741MB 的 app 做一次 UDZO 压缩，每轮构建白花几分钟。
+# 需要时：VDL_BUILD_DMG=1 bash desktop/build_mac.sh
+if [ "${VDL_BUILD_DMG:-0}" = "1" ]; then
+  mv "$REPO/dist/VideoDownloader.dmg" "$REPO/dist/_old.dmg.$$" 2>/dev/null || true
+  hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader.app" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
 
-# 去掉 DMG 自身的 quarantine 标记：用户从文件管理器双击挂载后拖出的 .app 才不会
-# 被 macOS 误判为「从互联网下载」而二次加上隔离属性（否则双击会触发 Gatekeeper 拦截）。
-xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.dmg" 2>/dev/null || true
+  # 去掉 DMG 自身的 quarantine 标记：用户从文件管理器双击挂载后拖出的 .app 才不会
+  # 被 macOS 误判为「从互联网下载」而二次加上隔离属性（否则双击会触发 Gatekeeper 拦截）。
+  xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.dmg" 2>/dev/null || true
+  [ -e "$REPO/dist/_old.dmg.$$" ] && mv "$REPO/dist/_old.dmg.$$" "$HOME/.Trash/vdl_old_$$.dmg" 2>/dev/null || true
+else
+  echo "   ⏭  已跳过（DMG 仅手动装包通道需要；要生成请设 VDL_BUILD_DMG=1）"
+  [ -e "$REPO/dist/VideoDownloader.dmg" ] && echo "   ℹ️  dist 里仍留着上一次构建的 VideoDownloader.dmg（旧版本，勿当成本轮产物分发）"
+fi
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null || true
-echo "   已去除 DMG / .app 的 quarantine 标记（仍需用户右键→打开 一次性放行）"
+echo "   已去除 .app 的 quarantine 标记（DMG 若生成同样处理；用户首次打开仍需右键→打开 一次性放行）"
 
 # ⚠️ 安全约定（用户明确要求）：构建**绝不**自动发布更新。
 # 自动发布会让「刚构建、尚未测试」的版本立刻对用户可见，风险极高。
