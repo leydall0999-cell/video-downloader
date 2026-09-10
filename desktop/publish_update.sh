@@ -165,8 +165,9 @@ fi
 #      VDL_KEEP_BASELINES=0 可关闭裁剪；默认保留 2 版。
 KEEP_BASES="${VDL_KEEP_BASELINES:-2}"
 if [ "$KEEP_BASES" -gt 0 ] 2>/dev/null && [ -d "$BASE_DIR" ]; then
+  # 只把「版本号形态」的目录当候选（目录里若混入其它文件/目录，一律不碰）
   # BSD sort 无 -V，用逐段数值排序代替语义化版本排序
-  _bases_all="$(ls -1 "$BASE_DIR" 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n)"
+  _bases_all="$(ls -1 "$BASE_DIR" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+)*$' | sort -t. -k1,1n -k2,2n -k3,3n || true)"
   _bases_n="$(printf '%s\n' "$_bases_all" | grep -c . || true)"
   if [ "$_bases_n" -gt "$KEEP_BASES" ]; then
     _bases_drop="$(printf '%s\n' "$_bases_all" | head -n $((_bases_n - KEEP_BASES)))"
