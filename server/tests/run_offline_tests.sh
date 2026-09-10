@@ -8,6 +8,12 @@
 #   4. test_dewatermark_core.py       —— 去水印选区归一化/mask 合成/瓦片羽化权重
 #   5. test_convert_guards.py         —— 转换入口守卫（分片 id/排序、本地路径白名单）
 #   6. test_commentary_routes.py      —— 解说路由层（试听路径守卫、sidecar 推导、kind 白名单）
+#   7. test_codec_utils.py            —— LGPL 编码器选择（H.264/HEVC 降级链、GPL 红线）
+#   8. test_convert_pipeline.py       —— 转码管线决策 + 参数构造 + 真实转码端到端
+#   9. test_ffmpeg_tools.py           —— 媒体加工（裁剪注入防护、抽音频/封面/铃声/去水印）
+#
+# 注：7~9 含调用真实 ffmpeg 的端到端用例（合成素材，无需网络）；
+#     若构建机没有 ffmpeg，这些用例会打印「⚠️ 跳过」而非失败。
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -52,6 +58,9 @@ run_one test_matting_core.py
 run_one test_dewatermark_core.py
 run_one test_convert_guards.py
 run_one test_commentary_routes.py
+run_one test_codec_utils.py
+run_one test_convert_pipeline.py
+run_one test_ffmpeg_tools.py
 
 echo ""
 echo "========================================="

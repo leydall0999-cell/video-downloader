@@ -271,6 +271,11 @@ def _image_encode_args(target: str, quality: int = 0, resize: int = 0,
             # UI 质量 100→最好，mjpeg -q:v 1(最好)~31(最差)：线性反向映射，钳到 [2,31]
             qscale = max(2, min(31, round(31 - (quality / 100.0) * 30)))
             args += ["-q:v", str(qscale)]
+    # 图片目标必须只产出一帧（即本函数注释所称的「单帧输出」）。若源其实是多帧
+    # 视频（桌面端原生文件选择器不受 accept="image/*" 约束，可能被放进视频），
+    # 缺少此参数会让 ffmpeg 试图把多帧写进同一个文件而整体报错：第一帧虽已落盘，
+    # 任务状态却是 failed，用户反而拿不到产物。单帧图片源加与不加完全等效。
+    args += ["-frames:v", "1"]
     return args
 
 
@@ -1766,7 +1771,11 @@ def _run_convert(job_id: str, src: str, target: str, resolution: str,
                         if h:
                             vf.append(f"scale=-2:{h}")
                     if rotate in (90, 180, 270):
-                        tf = {90: "transpose=1", 180: "transpose=3", 270: "transpose=2"}[rotate]
+                        # transpose 系列全都是 90° 转置（输出宽高互换）：1=顺时针 90°，
+                        # 2=逆时针 90°（等价顺时针 270°）。180° 不能用 transpose：
+                        # 原先的 transpose=3 实为「顺时针 90°+垂直翻转」，既不是 180°
+                        # 旋转，还会把宽高错误互换——用户选 180° 会把横屏视频转成竖屏。
+                        tf = {90: "transpose=1", 180: "hflip,vflip", 270: "transpose=2"}[rotate]
                         vf.append(tf)
                     if vf:
                         cmd += ["-vf", ",".join(vf)]
