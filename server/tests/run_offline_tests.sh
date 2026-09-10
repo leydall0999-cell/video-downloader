@@ -3,7 +3,9 @@
 #
 # 覆盖：
 #   1. test_app_smoke.py              —— FastAPI TestClient 无头冒烟核心路由
-#   2. test_downloader_url_parsing.py —— 下载器链接解析/归一化（B站短链、追踪参数）
+#   2. test_static_undefined_names.py —— 静态守卫：全量扫描 server/ 的「未定义名」
+#                                        （py_compile 查不到、只在运行时炸的漏 import）
+#   3. test_downloader_url_parsing.py —— 下载器链接解析/归一化（B站短链、追踪参数）
 #   3. test_matting_core.py           —— 抠图前处理/选区/边缘柔化 纯函数
 #   4. test_dewatermark_core.py       —— 去水印选区归一化/mask 合成/瓦片羽化权重
 #   5. test_convert_guards.py         —— 转换入口守卫（分片 id/排序、本地路径白名单）
@@ -50,6 +52,7 @@ run_one() {
 }
 
 run_one test_app_smoke.py
+run_one test_static_undefined_names.py
 run_one test_membership.py
 run_one test_member_quota_e2e.py
 run_one test_quality_options.py

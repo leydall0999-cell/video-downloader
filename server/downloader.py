@@ -58,7 +58,7 @@ def _cookie_diag(key: str, value: str = "") -> None:
             f.write(f"[{ts}] {key}={value}\n")
     except Exception:
         pass
-from urllib.parse import urlparse, parse_qsl, urlencode
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode
 
 logger = logging.getLogger(__name__)
 

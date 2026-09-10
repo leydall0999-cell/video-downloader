@@ -6,6 +6,7 @@
 handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在 app.py 末尾 include。
 """
 import app
+import re
 from fastapi import APIRouter
 router = APIRouter()
 from stats import record_event

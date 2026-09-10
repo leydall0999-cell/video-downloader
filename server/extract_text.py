@@ -22,7 +22,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:  # 仅供类型标注；真实调用处（见 _whisper_transcribe_inprocess）按需延迟 import
+    from commentary_locate import CommentaryLocation
 
 # 进度回调签名：progress_cb(stage: str, detail: str) -> None
 ProgressCb = Callable[[str, str], None] | None

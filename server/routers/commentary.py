@@ -4,6 +4,7 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 """
 import app
 import os
+import pathlib
 import sys
 import subprocess
 from fastapi import APIRouter

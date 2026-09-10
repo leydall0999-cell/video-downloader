@@ -21,6 +21,7 @@ V1 明确不做：真实支付、验签、功能门禁接入。仅提供引擎 +
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
