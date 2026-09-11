@@ -2,7 +2,7 @@
 """桌面桥「选择文件」类型白名单回归测试（纯离线，不弹任何系统对话框）。
 
 背景（2026-09-11 线上问题）：
-    无损压缩视图点「添加文件」弹的是「选择要桥接的视频/音频文件」，图片全部置灰选不了
+    高效压缩视图点「添加文件」弹的是「选择要桥接的视频/音频文件」，图片全部置灰选不了
     —— 因为 `VdlApi.choose_files()` 把扩展名与提示语写死成视频/音频。
 修复：给它加 `kind` 参数（media 默认 / image / any），前端压缩传 'any'、图片转换传 'image'。
 
@@ -89,7 +89,7 @@ def main():
     check("image 不含 Pillow 开不了的 heic/avif", not ({"heic", "avif"} & set(img_exts)), img_exts)
     check("image 提示语为「图片」", "图片" in lines[0], lines[0][:60])
 
-    # 3) kind='any' → 视频+音频+可压缩图片（无损压缩视图）
+    # 3) kind='any' → 视频+音频+可压缩图片（高效压缩视图）
     _, lines = capture_script("any")
     any_exts = exts_of(lines[0])
     check("any 含视频+音频+图片", {"mp4", "mp3", "png", "jpg"} <= set(any_exts), any_exts)

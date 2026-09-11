@@ -1,4 +1,4 @@
-"""无损压缩（routers/compress.py）离线回归测试（2026-09-11 新增）。
+"""高效压缩（routers/compress.py）离线回归测试（2026-09-11 新增）。
 
 覆盖：
   1. 图片压缩核心 `_compress_image`：PNG 无损优化（像素逐字节一致）、

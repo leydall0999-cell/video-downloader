@@ -347,12 +347,12 @@ class VdlApi:
     def choose_files(self, kind: str = "media") -> list[str] | str:
         """弹出系统多文件选择框，返回所选文件绝对路径列表；用户取消或失败返回空串。
 
-        kind 决定可选扩展名与对话框标题（★ 2026-09-11 修复「无损压缩/图片转换里图片是灰的、选不了」）：
+        kind 决定可选扩展名与对话框标题（★ 2026-09-11 修复「高效压缩/图片转换里图片是灰的、选不了」）：
           - "media"（默认）：视频 + 音频（桥接/转码/字幕等原有场景，保持行为不变）
           - "image"        ：图片（图片转换视图，含 bmp/tif/gif）
           - "video"        ：纯视频（高清修复的视频档，2026-09-12 新增；
                              不含音频扩展名，避免用户选到 mp3 才被后端拒绝）
-          - "any"          ：视频 + 音频 + png/jpg/jpeg/webp（无损压缩视图；
+          - "any"          ：视频 + 音频 + png/jpg/jpeg/webp（高效压缩视图；
                              刻意不含 heic/avif/bmp/tif/gif，后端压缩不支持，避免「选得到却报错」）
         前端未传参时按 "media" 处理，向后兼容旧调用。
 
@@ -376,7 +376,7 @@ class VdlApi:
             _IMAGE_EXTS = [
                 "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif",
             ]
-            # 无损压缩视图 only 吃 png/jpg/jpeg/webp（与 server/routers/compress.py 一致）；
+            # 高效压缩视图 only 吃 png/jpg/jpeg/webp（与 server/routers/compress.py 一致）；
             # 故意不含 heic/avif/bmp/tif/gif —— 后端不处理，放进来会变成「选得到但报不支持」。
             _COMPRESS_IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"]
             _VIDEO_EXTS = [
@@ -892,7 +892,7 @@ class VdlApi:
         return str(target)
 
     def save_convert_file_dialog(self, job_id: str, suggested_name: str) -> str:
-        """弹出系统保存面板让用户自选「格式转换 / 无损压缩」结果位置（桌面版原生下载）。
+        """弹出系统保存面板让用户自选「格式转换 / 高效压缩」结果位置（桌面版原生下载）。
 
         同时服务两条链路：转换/桥接任务（app.CONVERT_JOBS）与压缩任务
         （routers.compress.COMPRESS_JOBS），按 job_id 依次查两个注册表。
@@ -925,7 +925,7 @@ class VdlApi:
         # `requests.get(http://127.0.0.1:PORT/api/convert/.../file)` 路径：launcher 端不携带
         # X-Device-Id header 也不带 device= query，会被设备隔离校验判 404（2026-08-28 实测）。
         # ⚠️ 两个注册表都要查（2026-09-11）：转换/桥接在 app.CONVERT_JOBS，压缩在
-        # routers.compress.COMPRESS_JOBS。只查前者会让「无损压缩」的下载按钮报
+        # routers.compress.COMPRESS_JOBS。只查前者会让「高效压缩」的下载按钮报
         # 「任务不存在或已过期」。
         src_path = None
         is_compress = False
