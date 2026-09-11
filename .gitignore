@@ -55,3 +55,6 @@ cookies/
 
 # WorkBuddy 项目数据（automations/memory）
 .workbuddy/
+
+# 本地测试时按需下载的 AI 模型（208MB 级，绝不入库，部署机按需自取）
+server/models/

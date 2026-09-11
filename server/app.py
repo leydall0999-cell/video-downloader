@@ -106,6 +106,10 @@ else:
     WEB_DIR = BASE_DIR / "web"
     DOWNLOAD_DIR = BASE_DIR / "downloads"
 
+# 字幕提取产物目录（faster-whisper ASR，随下载目录走）
+SUBTITLE_DIR = DOWNLOAD_DIR / "subtitles"
+SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
+
 MAX_CONCURRENT_DOWNLOADS = 3
 MAX_CONCURRENT_PROBES = 8
 # 批量下载相关环境变量（桌面版万能下载器重点能力）：
@@ -3081,6 +3085,25 @@ app.include_router(_core_rtr.router)
 # 反向 WebSocket 隧道：ECS 主动连入，把国内 cn_proxy 经隧道暴露给本机代理
 import cn_tunnel as _cn_tunnel
 app.include_router(_cn_tunnel.router)
+
+# —— 账号 / 会员 / 客服 / 后台 / AI 字幕（自 app-dev 移植，2026-09-11）——
+# A1 自建轻量账号(auth_store) + B2 per-user-ID 文件存储(membership)，
+# 与桌面端同一套引擎；subtitle 为 faster-whisper CPU 推理（本地/上传文件路径均可用）。
+from membership import MembershipStore as _MembershipStore
+member_store = _MembershipStore()  # 会员引擎共享单例（/api/member + 功能配额判定共用同一状态文件）
+from routers import membership as _membership_rtr
+app.include_router(_membership_rtr.router)
+from routers import auth as _auth_rtr
+app.include_router(_auth_rtr.router)
+from routers import admin as _admin_rtr
+app.include_router(_admin_rtr.router)
+from routers import support as _support_rtr
+app.include_router(_support_rtr.router)
+from routers import subtitle as _subtitle_rtr
+app.include_router(_subtitle_rtr.router)
+# 账号 / per-user 会员解析：供各路由经 request 取当前用户态 store。
+# 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
+from user_membership import get_current_user_id, current_member_store
 
 # —— 公共 Cookie 池 + 本机 Cookie 缓存（来自 main 分支，合并时保留）——
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。

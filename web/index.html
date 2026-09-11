@@ -41,6 +41,10 @@
     <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载</button>
     <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">图片 / PDF 去水印</button>
+    <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
+    <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">🖼️ 图片转换</button>
+    <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">📝 AI 字幕</button>
+    <button type="button" class="tab" data-view="profile" id="tabProfile">👤 个人中心</button>
     <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能介绍</button>
   </nav>
 
@@ -457,6 +461,252 @@
     </div><!-- /mcPane -->
   </div><!-- /panel -->
 </section>
+
+  <!-- ===== 2026-09-11 自 app-dev 移植：音乐转换 / 图片转换 / AI 字幕 ===== -->
+
+  <section id="musicConvertView" class="panel" hidden aria-labelledby="musTitle">
+    <h2 id="musTitle" class="guide-title">🎵 音乐格式转换</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      把下载的各平台音乐（或视频里的音轨）转成你想要的格式与音质。网页版：文件上传后由服务器转码。
+      支持 MP3 / FLAC / M4A / WAV / AAC / Opus / WMA / MP2。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="musAddBtn">添加文件</button>
+      <input type="file" id="musFileInput" accept="audio/*,video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="musClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="musCount">尚未添加文件</span>
+    </div>
+
+    <ul class="uc-list" id="musList" aria-live="polite"></ul>
+
+    <div class="uc-bulk" id="musBulk">
+      <h3 class="card-title">默认输出（应用到所有未开始项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">输出格式</span>
+          <select id="musBulkTarget">
+            <option value="mp3">MP3（通用）</option>
+            <option value="flac">FLAC（无损）</option>
+            <option value="m4a">M4A（AAC）</option>
+            <option value="wav">WAV（无损）</option>
+            <option value="aac">AAC</option>
+            <option value="opus">Opus</option>
+            <option value="wma">WMA</option>
+            <option value="mp2">MP2</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">音质</span>
+          <select id="musBulkBitrate">
+            <option value="">默认（按格式）</option>
+            <option value="320k">320 kbps（高，推荐）</option>
+            <option value="256k">256 kbps</option>
+            <option value="192k">192 kbps（标准）</option>
+            <option value="128k">128 kbps（省空间）</option>
+            <option value="96k">96 kbps（极低）</option>
+          </select>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="musBulkLibrary" /> <span class="uc-label">完成后存入媒体库</span>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="musBulkApplyBtn">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="musStartAllBtn">开始转换</button>
+      </div>
+    </div>
+
+    <span class="convert-status" id="musStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- 图片格式转换视图（独立 tab；LGPL ffmpeg 单帧转码，PNG/JPG/WebP/BMP/TIFF/GIF） -->
+  <section id="imageConvertView" class="panel" hidden aria-labelledby="imgTitle">
+    <h2 id="imgTitle" class="guide-title">🖼️ 图片格式转换</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      在 PNG / JPG / WebP / BMP / TIFF / GIF 之间互转。可调质量、按长边缩放；
+      转 JPG/BMP 时透明区自动填白底（可关）。网页版：图片上传后由服务器转换。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="imgAddBtn">添加图片</button>
+      <input type="file" id="imgFileInput" accept="image/*,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="imgClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="imgCount">尚未添加图片</span>
+    </div>
+
+    <ul class="uc-list" id="imgList" aria-live="polite"></ul>
+
+    <div class="uc-bulk" id="imgBulk">
+      <h3 class="card-title">默认输出（应用到所有未开始项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">输出格式</span>
+          <select id="imgBulkTarget">
+            <option value="png">PNG（无损·透明）</option>
+            <option value="jpg">JPG（通用）</option>
+            <option value="webp">WebP（更小）</option>
+            <option value="bmp">BMP</option>
+            <option value="tiff">TIFF</option>
+            <option value="gif">GIF</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">质量（JPG/WebP）</span>
+          <select id="imgBulkQuality">
+            <option value="">默认（按格式）</option>
+            <option value="100">100（最高）</option>
+            <option value="90">90（推荐）</option>
+            <option value="80">80（更小）</option>
+            <option value="70">70（最小）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">尺寸（长边像素）</span>
+          <select id="imgBulkResize">
+            <option value="0">保持原尺寸</option>
+            <option value="3840">3840（4K）</option>
+            <option value="2560">2560（2K）</option>
+            <option value="1920">1920（1080P）</option>
+            <option value="1280">1280</option>
+            <option value="800">800（缩略图）</option>
+          </select>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="imgBulkFlatten" checked /> <span class="uc-label">JPG/BMP 透明区填白底</span>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="imgBulkLibrary" /> <span class="uc-label">完成后存入媒体库</span>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="imgBulkApplyBtn">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="imgStartAllBtn">开始转换</button>
+      </div>
+    </div>
+
+    <span class="convert-status" id="imgStatus" aria-live="polite"></span>
+  </section>
+
+  <section id="subtitleView" class="panel" hidden aria-labelledby="sbTitle">
+    <h2 id="sbTitle" class="guide-title">📝 AI 字幕提取</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);">
+      AI 语音识别，把视频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
+      网页版：视频上传后由服务器识别（大文件自动分片上传）；服务器同一时间处理一个识别任务，超出自动排队。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="sbPickBtn">选取视频</button>
+      <input type="file" id="sbFileInput" accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v" hidden />
+      <span class="uc-count" id="sbFileLabel">尚未选择视频</span>
+    </div>
+
+    <div class="uc-bulk">
+      <h3 class="card-title">识别设置</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">识别模型</span>
+          <select id="sbModel">
+            <option value="base">base（最快，准确度一般）</option>
+            <option value="small" selected>small（推荐，速度与准确均衡）</option>
+            <option value="medium">medium（更准，较慢）</option>
+            <option value="large-v3">large-v3（最准，CPU 很慢）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">语言</span>
+          <select id="sbLang">
+            <option value="" selected>自动检测</option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <label class="uc-field uc-check">
+          <input type="checkbox" id="sbFast" /> <span class="uc-label">快速模式（快 2~3 倍，准确度略降）</span>
+        </label>
+        <p class="uc-tip" style="grid-column:1/-1;margin:.2rem 0 0;font-size:11.5px;color:var(--text-mute,#6b7280);">
+          💎 会员专享：满速提取。开通会员中心「下载会员 / AI 会员」自动满速。
+        </p>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-primary" id="sbStartBtn" disabled>开始提取</button>
+      </div>
+    </div>
+
+    <div class="progress" id="sbProgressWrap" hidden><div class="progress-fill" id="sbProgressFill" style="width:0%"></div></div>
+    <span class="convert-status" id="sbStatus" aria-live="polite"></span>
+
+    <div class="uc-bulk" id="sbResult" hidden>
+      <h3 class="card-title" style="display:flex;align-items:center;gap:.4rem;">
+        <span>提取完成 ✅</span>
+        <span class="uc-count" id="sbMeta"></span>
+        <!-- 右上角问号：点击展开 SRT/TXT 区别说明 -->
+        <button type="button" class="sb-help" id="sbHelpBtn" title="SRT 和 TXT 的区别？点击查看" style="margin-left:auto;" aria-expanded="false">?</button>
+      </h3>
+      <div id="sbHelpText" class="sb-help-text" hidden>
+        <p><b>下载 SRT 字幕</b>：带时间轴（每句话标注从第几秒显示到第几秒）。可拖进播放器自动加载字幕、改名与视频同名放同目录、或导入剪映 / Premiere 做字幕轨。</p>
+        <p><b>下载 TXT 纯文本</b>：只有台词本身，一行一句、没有时间。适合阅读整理、做笔记，或复制给其它工具二次加工。</p>
+        <p style="color:var(--text-mute,#6b7280);">两次识别内容一致，按用途选择即可。</p>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-primary" id="sbDlSrt">下载 SRT 字幕</button>
+        <button type="button" class="btn btn-ghost" id="sbDlTxt">下载 TXT 纯文本</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 激活码 ===== -->
+  <section id="profileView" class="panel" hidden aria-labelledby="pfTitle">
+    <h2 id="pfTitle" class="guide-title">👤 个人中心</h2>
+
+    <!-- 未登录：登录 / 注册 -->
+    <div id="pfAuthBox" hidden>
+      <div class="uc-bulk" style="max-width:420px;">
+        <h3 class="card-title" id="pfAuthModeTitle">登录账号</h3>
+        <div class="uc-form">
+          <label class="uc-field">
+            <span class="uc-label">邮箱 / 手机号</span>
+            <input type="text" id="pfIdentifier" placeholder="you@example.com" autocomplete="username" />
+          </label>
+          <label class="uc-field">
+            <span class="uc-label">密码</span>
+            <input type="password" id="pfPassword" placeholder="至少 6 位" autocomplete="current-password" />
+          </label>
+        </div>
+        <div class="uc-bulk-actions">
+          <button type="button" class="btn btn-primary" id="pfAuthSubmit">登录</button>
+          <button type="button" class="btn btn-ghost" id="pfAuthSwitch">没有账号？注册</button>
+        </div>
+        <span class="convert-status" id="pfAuthStatus" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <!-- 已登录：账号信息 + 会员状态 + 激活码 -->
+    <div id="pfUserBox" hidden>
+      <div class="uc-bulk" style="max-width:520px;">
+        <h3 class="card-title">账号</h3>
+        <p class="uc-tip" id="pfUserIdent" style="margin:.2rem 0;"></p>
+        <p class="uc-tip" id="pfAdminBadge" style="margin:.1rem 0;color:var(--brand);"></p>
+        <div class="uc-bulk-actions">
+          <button type="button" class="btn btn-ghost" id="pfLogoutBtn">退出登录</button>
+        </div>
+      </div>
+
+      <div class="uc-bulk" style="max-width:520px;">
+        <h3 class="card-title">会员状态</h3>
+        <ul class="uc-list" id="pfMemberList" aria-live="polite"></ul>
+        <label class="uc-field" style="margin-top:.6rem;">
+          <span class="uc-label">激活码 / 卡密</span>
+          <input type="text" id="pfActivateCode" placeholder="输入激活码开通或续费会员" />
+        </label>
+        <div class="uc-bulk-actions">
+          <button type="button" class="btn btn-primary" id="pfActivateBtn">激活</button>
+        </div>
+        <span class="convert-status" id="pfMemberStatus" aria-live="polite"></span>
+      </div>
+    </div>
+  </section>
+
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
   <section id="dwView" class="panel" hidden aria-labelledby="dwTitle">
