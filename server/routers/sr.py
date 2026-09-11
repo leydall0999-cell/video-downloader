@@ -1,9 +1,21 @@
-"""server/routers/sr.py — 图片高清修复（快速档 / AI 档）。2026-09-12 新增，桌面端优先。
+"""server/routers/sr.py — 图片/视频高清修复。2026-09-12 新增，桌面端优先。
 
-两档**完全本地**，不接任何云端 API、不需要 API Key、不产生按次费用：
+**完全本地**，不接任何云端 API、不需要 API Key、不产生按次费用。
+
+图片两档：
 
 - **快速档**：Pillow ``LANCZOS`` 放大 + ``UnsharpMask`` 锐化。秒级完成，任何 Mac 都流畅。
 - **AI 档**：Real-ESRGAN ONNX（BSD-3-Clause，合规）分块推理，CoreML 优先，真实细节重建。
+
+视频两档（2026-09-12 追加，走 ffmpeg 传统滤镜而非 AI）：
+
+- **标准档**：``scale=lanczos`` + ``cas`` 锐化 + 提码率。实测 **5× 实时**（45 分钟片约 9 分钟）。
+- **增强档**：叠加 ``atadenoise`` 时域降噪。实测 **2.5× 实时**（45 分钟片约 18 分钟）。
+  降噪默认关闭：平台压过的低码率片问题在于压缩伪影而非随机噪声，降噪反而抹细节。
+
+⚠️ LGPL 红线：发行版 ffmpeg 为自编译 LGPL，**没有 ``hqdn3d``（GPL 滤镜）**。
+可用且已实测的替代品是 ``cas``（AMD 开源，对比度自适应锐化，质量优于 unsharp）与
+``atadenoise``（时域降噪）。写滤镜前先确认 ``ffmpeg -filters`` 里有它。
 
 设计依据（均为 2026-09-12 本机实测，非估算）：
 
@@ -24,7 +36,10 @@ handler 通过 ``app.<name>`` 访问共享内核（与 compress.py 等路由约�
 from __future__ import annotations
 
 import app
+import json
 import os
+import shutil
+import subprocess
 import threading
 import time
 import urllib.request
@@ -61,6 +76,27 @@ MODES = {"fast", "ai"}
 SCALES = {2, 4}
 _DEFAULT_MODE = "fast"
 _DEFAULT_SCALE = 2
+
+# ---- 视频增强（2026-09-12 追加）-------------------------------------------- #
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".flv", ".wmv"}
+VIDEO_MODES = {"standard", "enhance"}
+_DEFAULT_VIDEO_MODE = "standard"
+# 输入短边上限（px）。超出此分辨率的片增强收益有限、产物体积却成倍上涨：
+# 720p ×2 ⇒ 1440p，按建议码率 8000k 算，45 分钟片约 2.6 GB。
+# 本功能的定位是「低清老片修复」，故只接受真正低清的输入。
+_MAX_INPUT_SHORT_SIDE = 540
+# 放大后码率上限（kbps），防止极端输入把体积拉爆
+_MAX_ENHANCE_KBPS = 8000
+# 音轨可原样复制的编码（与 compress 一致），其余统一转 AAC 160k
+_COPY_AUDIO_CODECS = {"aac", "mp3"}
+# 码率提升倍率。放大**不产生新信息**，若按目标分辨率的建议码率「满配」，
+# 480p/600k 的片放大到 960p 会被给到 4500k —— 实测产物体积涨 6.7 倍而观感几乎不变。
+# 实测 1.8 倍已足够消除放大后的糊感（提码率本身就是观感提升的一部分）。
+_BITRATE_LIFT = 1.8
+_MIN_KBPS = 200
+# 预估耗时系数（秒/秒素材，即 1 秒视频需要多少秒处理）——实测推导，用于前端报时
+_ETA_STANDARD = 0.20      # 5× 实时
+_ETA_ENHANCE = 0.40       # 2.5× 实时
 
 SR_JOBS: dict = {}
 _LOCK = threading.Lock()
@@ -292,6 +328,8 @@ def _register_job(device_id: str, src_name: str) -> str:
             "size_before": 0, "size_after": 0,
             "w_before": 0, "h_before": 0, "w_after": 0, "h_after": 0,
             "note": "", "elapsed": 0.0, "eta": 0.0,
+            "kind": "image",                    # image / video
+            "src_kbps": 0, "target_kbps": 0,    # 视频增强的码率依据（前端可展示）
         }
     return job_id
 
@@ -363,6 +401,264 @@ def _submit_sr(src: str, mode: str, scale: int, device_id: str,
     return job_id
 
 
+def _submit_sr_video(src: str, mode: str, scale: int, codec: str, device_id: str,
+                     src_name: str = "", src_is_temp: bool = False) -> str:
+    job_id = _register_job(device_id, src_name or Path(src).name)
+    with _LOCK:
+        SR_JOBS[job_id]["_t0"] = time.time()
+        SR_JOBS[job_id]["kind"] = "video"
+    app.executor.submit(_run_sr_video, job_id, src, mode, scale, codec, src_is_temp)
+    return job_id
+
+
+def _validate_video_mode(mode: str) -> str:
+    m = (mode or "").lower()
+    return m if m in VIDEO_MODES else _DEFAULT_VIDEO_MODE
+
+
+# --------------------------------------------------------------------------- #
+# 视频增强（2026-09-12 追加）
+#
+# 与图片 AI 档不同，视频走 ffmpeg 传统滤镜：实测 AI 超分在视频上不可行
+# （抽帧 1/4 下 1 分钟片仍需 29 分钟，且逐帧独立推理有帧间闪烁）。
+# 传统滤镜链路实测 5× 实时（标准档）/ 2.5× 实时（增强档），任何 Mac 都能跑完。
+
+
+def _ffprobe_bin() -> str:
+    """解析 ffprobe 路径（与 compress._ffprobe_bin 同逻辑，独立实现免耦合）。"""
+    ffmpeg = app.FFMPEG_BIN or ""
+    cand = os.path.join(os.path.dirname(ffmpeg), "ffprobe") if ffmpeg else ""
+    for p in (cand, shutil.which("ffprobe") or "",
+              "/opt/homebrew/bin/ffprobe" if app.sys.platform == "darwin" else ""):
+        if p and os.path.isfile(p):
+            return p
+    return "ffprobe"
+
+
+def _probe_video_meta(path: str) -> dict:
+    """一次 ffprobe 取视频元信息（duration / bit_rate / width / height / acodec）。
+
+    任何字段失败均降级为 0 / 空串，绝不抛错 —— 探测失败不应中断增强主流程。
+    """
+    meta = {"duration": 0.0, "bit_rate": 0, "width": 0, "height": 0, "acodec": ""}
+    try:
+        r = subprocess.run(
+            [_ffprobe_bin(), "-v", "error", "-show_entries",
+             "format=duration,bit_rate:stream=codec_type,codec_name,width,height,bit_rate",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=25)
+        data = json.loads(r.stdout or "{}")
+    except Exception:  # noqa: BLE001
+        return meta
+
+    def _num(v) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    fmt = data.get("format") or {}
+    meta["duration"] = _num(fmt.get("duration"))
+    fmt_br = _num(fmt.get("bit_rate"))
+    video_br = audio_br = 0.0
+    for st in data.get("streams") or []:
+        kind = st.get("codec_type")
+        if kind == "video" and not meta["width"]:
+            meta["width"] = int(_num(st.get("width")))
+            meta["height"] = int(_num(st.get("height")))
+            video_br = _num(st.get("bit_rate"))
+        elif kind == "audio" and not meta["acodec"]:
+            meta["acodec"] = (st.get("codec_name") or "").lower()
+            audio_br = _num(st.get("bit_rate"))
+    br = video_br or max(0.0, fmt_br - audio_br) or fmt_br
+    if br <= 0 and meta["duration"] > 0:
+        try:
+            br = Path(path).stat().st_size * 8 / meta["duration"]
+        except Exception:  # noqa: BLE001
+            br = 0.0
+    meta["bit_rate"] = int(br)
+    return meta
+
+
+def _enhance_filter(mode: str, out_w: int, out_h: int) -> str:
+    """构造 LGPL 可用的增强滤镜链。
+
+    ⚠️ 只能用发行版 ffmpeg 里真实存在的滤镜（已实测）：``cas``（AMD 开源的对比度
+    自适应锐化，质量优于 unsharp）与 ``atadenoise``（时域降噪）。``hqdn3d`` 是 GPL
+    滤镜，LGPL 构建里被裁掉了，写上去直接失败。改滤镜前先 ``ffmpeg -filters`` 确认。
+
+    尺寸用算好的偶数硬编码 —— yuv420p 下奇数宽/高会让编码直接报错。
+    """
+    chain = [f"scale={out_w}:{out_h}:flags=lanczos"]
+    if mode == "enhance":
+        chain.append("atadenoise=s=9")
+    chain.append("cas=strength=0.4")
+    return ",".join(chain)
+
+
+def _estimate_eta(duration: float, mode: str) -> float:
+    """按实测系数预估耗时（秒）。用于提交时立刻给用户预期，避免「点了才知道要多久」。
+
+    系数来自 2026-09-12 实测：标准档 5× 实时、增强档 2.5× 实时（480p / VideoToolbox）。
+    """
+    if duration <= 0:
+        return 0.0
+    k = _ETA_ENHANCE if mode == "enhance" else _ETA_STANDARD
+    return round(duration * k, 1)
+
+
+def _enhance_video(job: dict, src: str, out_path, mode: str, scale: int,
+                   codec: str = "h264") -> None:
+    """视频增强主流程：放大 + 锐化（+ 降噪）+ 提码率重编码；进度经 -progress 解析。
+
+    码率逻辑与**压缩相反**：压缩要钳制到源码率以下保证变小；增强要**提升**到目标
+    分辨率的建议码率 —— 放大后像素数翻 4 倍，沿用源码率只会把放大出来的细节压糊，
+    「提码率」本身就是观感提升的一部分。
+    """
+    meta = _probe_video_meta(src)
+    duration = meta["duration"]
+    w, h = meta["width"], meta["height"]
+    if not w or not h:
+        raise RuntimeError("无法读取视频分辨率（文件可能已损坏或不是视频）")
+    out_w = max(2, (w * scale) // 2 * 2)
+    out_h = max(2, (h * scale) // 2 * 2)
+
+    from codec_utils import res_cap_kbps, rate_controlled_args
+    src_kbps = int(meta["bit_rate"] / 1000) if meta["bit_rate"] else 0
+    # 该分辨率的合理码率上限（放大后不该超过真·该分辨率片子的水平）
+    cap = res_cap_kbps(min(out_w, out_h))
+    if (codec or "").lower() == "hevc":
+        cap = int(cap * 0.75)
+    cap = min(cap, _MAX_ENHANCE_KBPS)
+    if src_kbps > 0:
+        # 在源码率基础上提升，再用分辨率上限兜住 —— 既不浪费体积，也不变相压缩
+        target = max(int(src_kbps * _BITRATE_LIFT), int(src_kbps * 1.2))
+        target = min(target, cap)
+    else:
+        target = max(int(cap * 0.5), _MIN_KBPS)   # 探测不到码率时的兜底
+    job["src_kbps"] = src_kbps
+    job["target_kbps"] = target
+    job["eta"] = _estimate_eta(duration, mode)
+
+    cmd = [app.FFMPEG_BIN, "-y", "-nostdin", "-i", src]
+    cmd += ["-vf", _enhance_filter(mode, out_w, out_h)]
+    cmd += rate_controlled_args(app.FFMPEG_BIN, codec=codec, target_kbps=target,
+                                pix_fmt="yuv420p")
+    if (codec or "").lower() == "hevc":
+        cmd += ["-tag:v", "hvc1"]
+    cmd += ["-movflags", "+faststart"]
+    cmd += (["-c:a", "copy"] if meta["acodec"] in _COPY_AUDIO_CODECS
+            else ["-c:a", "aac", "-b:a", "160k"])
+    cmd += ["-progress", "pipe:1", "-nostats", str(out_path)]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # stderr 用独立线程抽干：既避免管道写满把 ffmpeg 卡死，又能在失败时给出真实原因
+    err_lines: list = []
+
+    def _drain(pipe) -> None:
+        try:
+            for ln in pipe:
+                err_lines.append(ln.rstrip())
+                if len(err_lines) > 60:
+                    del err_lines[:30]
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=_drain, args=(proc.stderr,), daemon=True).start()
+    job["stage"] = "增强中"
+    started = time.time()
+    try:
+        for line in proc.stdout:
+            if duration > 0 and line.startswith("out_time_us="):
+                try:
+                    cur_us = float(line.split("=", 1)[1].strip() or 0)
+                except ValueError:
+                    continue
+                if cur_us > 0:
+                    pct = min(99, int(cur_us / 1e6 / duration * 100))
+                    job["progress"] = pct
+                    el = time.time() - started
+                    job["elapsed"] = round(el, 1)
+                    # 进度 >=3% 后按当前速率外推（前期样本抖动大，不外推）
+                    if pct >= 3:
+                        job["eta"] = round(max(0.0, el * (100 - pct) / pct), 1)
+    finally:
+        rc = proc.wait()
+    if rc != 0:
+        tail = " | ".join(err_lines[-6:])[-400:]
+        raise RuntimeError(f"ffmpeg 增强失败（rc={rc}），编码={codec}，目标码率={target}k"
+                           + (f"；{tail}" if tail else ""))
+    job["w_before"], job["h_before"] = w, h
+    job["w_after"], job["h_after"] = out_w, out_h
+    job["progress"] = 100
+    job["elapsed"] = round(time.time() - started, 1)
+    job["eta"] = 0.0
+
+
+def _defer_video(delay: float, job_id: str, src: str, mode: str, scale: int,
+                 codec: str, src_is_temp: bool) -> None:
+    """延后重投视频任务（定时器线程不占线程池 worker —— 与 compress 同范式）。
+
+    等待转码名额期间绝不持有 worker：否则提交 2 个视频就能把与下载/抠图共用的
+    8 worker 池占满，其它功能全部饿死。
+    """
+    def _retry() -> None:
+        try:
+            app.executor.submit(_run_sr_video, job_id, src, mode, scale, codec, src_is_temp)
+        except RuntimeError:
+            pass                      # 线程池已关闭（应用退出中）→ 放弃重投
+
+    t = threading.Timer(max(0.05, delay), _retry)
+    t.daemon = True
+    t.start()
+
+
+def _run_sr_video(job_id: str, src: str, mode: str, scale: int, codec: str,
+                  src_is_temp: bool) -> None:
+    """后台线程：执行视频增强并回写状态。"""
+    job = SR_JOBS.get(job_id)
+    if not job:
+        return
+    job["mode"], job["scale"] = mode, scale
+    # 闸门判断放在 try 之外（compress 同款教训）：排队分支绝不能走到 finally
+    # 的临时文件清理，否则排队中就把用户上传的源文件删了。
+    try:
+        from .compress import _TRANSCODE_SEM as _sem
+    except Exception:  # noqa: BLE001
+        _sem = None
+    if _sem is not None and not _sem.acquire(blocking=False):
+        job["stage"] = "排队中"
+        _defer_video(0.5, job_id, src, mode, scale, codec, src_is_temp)
+        return
+    acquired = _sem is not None
+    try:
+        src_path = Path(src)
+        job["size_before"] = src_path.stat().st_size
+        out_path = app.CONVERT_DIR / f"sr_{job_id}.mp4"
+        _enhance_video(job, src, out_path, mode, scale, codec=codec)
+        job["size_after"] = out_path.stat().st_size
+        job["out_path"] = str(out_path)
+        job["filename"] = f"{src_path.stem}_{scale}x_enhanced.mp4"
+        job["note"] = (f"码率 {job.get('src_kbps', 0)}k → {job.get('target_kbps', 0)}k"
+                       if job.get("src_kbps") else "")
+        job["status"] = "completed"
+        job["stage"] = "完成"
+        job["progress"] = 100
+        record_event("sr_video", {"mode": mode, "scale": scale, "codec": codec})
+    except Exception as e:  # noqa: BLE001
+        job["status"] = "failed"
+        job["error"] = str(e)[:400]
+        job["stage"] = "失败"
+    finally:
+        if acquired and _sem is not None:
+            _sem.release()
+        if src_is_temp:
+            try:
+                Path(src).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+
 # --------------------------------------------------------------------------- #
 # 校验与路由
 
@@ -406,6 +702,69 @@ def sr_local(payload: LocalSrRequest, request: app.Request) -> dict:
     return {"job_id": job_id, "status": "running", "mode": mode, "scale": scale,
             "quota": {"subscribed": subscribed, "free_used": free_used,
                       "free_daily": free_daily}}
+
+
+class LocalSrVideoRequest(BaseModel):
+    """桌面端本地视频高清修复请求。"""
+    local_path: str
+    mode: str = _DEFAULT_VIDEO_MODE  # standard / enhance
+    scale: int = 2                   # 2 / 4
+    codec: str = "h264"              # h264 / hevc
+
+
+@router.post("/api/sr/video/local")
+def sr_video_local(payload: LocalSrVideoRequest, request: app.Request) -> dict:
+    """桌面版专用：本机视频绝对路径直接增强（免上传）。
+
+    **提交时先做分辨率预检**：本功能定位是「低清老片修复」，输入短边超过
+    ``_MAX_INPUT_SHORT_SIDE``（540px，即 720p 以上）直接拒绝 —— 这类片放大后
+    体积成倍上涨（720p×2 ⇒ 1440p，45 分钟约 2.6 GB）而观感提升有限。
+    与其让用户等 20 分钟拿到一个 2.6GB 的文件，不如一开始就讲清楚。
+    """
+    app._check_rate_limit(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    from .convert import _resolve_safe_local_path
+    resolved = _resolve_safe_local_path(payload.local_path)
+    if resolved.suffix.lower() not in VIDEO_EXTS:
+        raise app.HTTPException(status_code=409, detail="仅支持视频文件（MP4/MOV/MKV/WebM 等）")
+    mode = _validate_video_mode(payload.mode)
+    scale = _validate_scale(payload.scale)
+    codec = "hevc" if (payload.codec or "").lower() == "hevc" else "h264"
+
+    meta = _probe_video_meta(str(resolved))
+    short_side = min(meta["width"], meta["height"]) if (meta["width"] and meta["height"]) else 0
+    if short_side <= 0:
+        raise app.HTTPException(status_code=409, detail="无法读取视频分辨率，请确认文件未损坏")
+    if short_side > _MAX_INPUT_SHORT_SIDE:
+        raise app.HTTPException(
+            status_code=409,
+            detail=(f"该视频已是 {meta['width']}x{meta['height']}，分辨率较高。"
+                    f"本功能面向低清片修复（短边 ≤{_MAX_INPUT_SHORT_SIDE}px），"
+                    f"高分辨率片放大后体积成倍上涨而观感提升有限"))
+    if scale == 4 and short_side > 360:
+        raise app.HTTPException(
+            status_code=409,
+            detail=(f"×4 放大仅支持短边 ≤360px 的视频（当前 {short_side}px）。"
+                    f"请改用 ×2，或先用格式转换把视频缩小"))
+
+    job_id = _submit_sr_video(str(resolved), mode, scale, codec, _device_of(request),
+                              src_name=resolved.name, src_is_temp=False)
+    record_event("sr_submit", {"mode": mode, "scale": scale, "src": "local", "kind": "video"})
+    return {"job_id": job_id, "status": "running", "mode": mode, "scale": scale,
+            "eta": _estimate_eta(meta["duration"], mode),
+            "src_w": meta["width"], "src_h": meta["height"],
+            "quota": {"subscribed": subscribed, "free_used": free_used,
+                      "free_daily": free_daily}}
+
+
+@router.get("/api/sr/video/limits")
+def sr_video_limits(request: app.Request) -> dict:
+    """视频增强的能力边界（前端据此做禁用/提示，避免用户提交了才被拒）。"""
+    return {"max_input_short_side": _MAX_INPUT_SHORT_SIDE,
+            "ex4_max_short_side": 360,
+            "modes": sorted(VIDEO_MODES), "scales": sorted(SCALES),
+            "eta_per_sec": {"standard": _ETA_STANDARD, "enhance": _ETA_ENHANCE},
+            "exts": sorted(VIDEO_EXTS)}
 
 
 @router.get("/api/sr/model/status")

@@ -616,10 +616,20 @@
     srList: $('srList'),
     srBulk: $('srBulk'),
     srBulkMode: $('srBulkMode'),
+    srBulkModeVideo: $('srBulkModeVideo'),
     srBulkScale: $('srBulkScale'),
+    srBulkCodec: $('srBulkCodec'),
     srBulkApplyBtn: $('srBulkApplyBtn'),
     srStartAllBtn: $('srStartAllBtn'),
     srStatus: $('srStatus'),
+    // 图片 / 视频类型切换（2026-09-12：视频档走 ffmpeg 传统滤镜，与图片 AI 档不同）
+    srKindImage: $('srKindImage'),
+    srKindVideo: $('srKindVideo'),
+    srTipImage: $('srTipImage'),
+    srTipVideo: $('srTipVideo'),
+    srFieldModeImage: $('srFieldModeImage'),
+    srFieldModeVideo: $('srFieldModeVideo'),
+    srFieldCodec: $('srFieldCodec'),
 
     // 本地视频字幕提取（faster-whisper ASR）
     sbPickBtn: $('sbPickBtn'),
@@ -4089,7 +4099,37 @@
   // ===== 高清修复（快速档 Lanczos+锐化 / AI 档 Real-ESRGAN 超分）=====
   // 两档都**完全本地**：不上传云端、不调用任何在线接口、无按次费用（2026-09-12 新增）。
   const SR_POLL_INTERVAL = UC_POLL_INTERVAL || 1500;
-  const srState = { list: [], nextId: 1, pollTimer: null };
+  const SR_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp';
+  const SR_VIDEO_ACCEPT = 'video/*,.mp4,.mov,.mkv,.webm,.avi,.flv,.wmv,.m4v';
+  const srState = { list: [], nextId: 1, pollTimer: null, kind: 'image' };
+
+  // 当前类型的档位（图片 fast/ai，视频 standard/enhance）——两套下拉，只取激活的那个
+  const srCurrentMode = () => (srState.kind === 'video'
+    ? (el.srBulkModeVideo.value || 'standard')
+    : (el.srBulkMode.value || 'fast'));
+
+  // 切换图片 / 视频：两套档位互斥，切类型时清空列表（混着提交没有意义，
+  // 且图片档位值 'fast' 落到视频端点会被当成非法 mode 静默降级）
+  const srSetKind = (kind) => {
+    srState.kind = kind === 'video' ? 'video' : 'image';
+    const isVid = srState.kind === 'video';
+    [el.srKindImage, el.srKindVideo].forEach(b => {
+      if (!b) return;
+      const on = (isVid && b === el.srKindVideo) || (!isVid && b === el.srKindImage);
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    if (el.srTipImage) el.srTipImage.hidden = isVid;
+    if (el.srTipVideo) el.srTipVideo.hidden = !isVid;
+    if (el.srFieldModeImage) el.srFieldModeImage.hidden = isVid;
+    if (el.srFieldModeVideo) el.srFieldModeVideo.hidden = !isVid;
+    if (el.srFieldCodec) el.srFieldCodec.hidden = !isVid;
+    if (el.srAddBtn) el.srAddBtn.textContent = isVid ? '添加视频' : '添加图片';
+    if (el.srFileInput) el.srFileInput.accept = isVid ? SR_VIDEO_ACCEPT : SR_IMAGE_ACCEPT;
+    srState.list = [];
+    srRender();
+    el.srStatus.textContent = '';
+  };
   const srDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const srMmss = (sec) => {
     const s = Math.max(0, Math.round(sec || 0));
@@ -4105,7 +4145,9 @@
     el.srStartAllBtn.disabled = !list.some(it => it.status === 'pending' || it.status === 'failed');
     if (!list.length) { el.srList.innerHTML = ''; return; }
     el.srList.innerHTML = list.map(it => {
-      const modeText = it.mode === 'ai' ? 'AI 档' : '快速档';
+      const modeText = it.kind === 'video'
+        ? (it.mode === 'enhance' ? '增强档' : '标准档')
+        : (it.mode === 'ai' ? 'AI 档' : '快速档');
       let statusText = '未开始';
       if (it.status === 'running') {
         // AI 档会跑几十秒到几分钟，必须把「已用 / 约剩」显出来，否则用户以为卡死
@@ -4148,14 +4190,16 @@
   };
 
   const srAddFiles = (list) => {
-    const mode = el.srBulkMode.value || 'fast';
+    const mode = srCurrentMode();
     const scale = +(el.srBulkScale.value || 2);
+    const codec = el.srBulkCodec ? (el.srBulkCodec.value || 'h264') : 'h264';
+    const kind = srState.kind;
     Array.from(list || []).forEach(f => {
       const isLocal = typeof f === 'string';
       const name = isLocal ? f.split(/[\\/]/).pop() : f.name;
       srState.list.push({
         id: srState.nextId++, file: isLocal ? null : f, localPath: isLocal ? f : null,
-        name, mode, scale, status: 'pending', jobId: null, progress: 0, stage: '',
+        name, kind, mode, scale, codec, status: 'pending', jobId: null, progress: 0, stage: '',
         elapsed: 0, eta: 0, errorMsg: '', outputName: '', note: '',
         wBefore: 0, hBefore: 0, wAfter: 0, hAfter: 0, sizeAfter: 0,
       });
@@ -4197,14 +4241,24 @@
     item.status = 'running'; item.progress = 5; item.stage = ''; item.elapsed = 0; item.eta = 0;
     srRender();
     if (!item.localPath) {
-      item.status = 'failed'; item.errorMsg = '网页端暂不支持，请用桌面版添加本地图片';
+      item.status = 'failed';
+      item.errorMsg = item.kind === 'video'
+        ? '网页端暂不支持，请用桌面版添加本地视频'
+        : '网页端暂不支持，请用桌面版添加本地图片';
       srRender(); reject(new Error(item.errorMsg)); return;
     }
-    request('/api/sr/local', {
+    // 视频走独立端点（ffmpeg 滤镜链路，与图片 AI 超分完全不同的实现）
+    const endpoint = item.kind === 'video' ? '/api/sr/video/local' : '/api/sr/local';
+    const body = item.kind === 'video'
+      ? { local_path: item.localPath, mode: item.mode, scale: item.scale, codec: item.codec || 'h264' }
+      : { local_path: item.localPath, mode: item.mode, scale: item.scale };
+    request(endpoint, {
       method: 'POST',
-      body: JSON.stringify({ local_path: item.localPath, mode: item.mode, scale: item.scale }),
+      body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }).then(data => {
+      // 视频提交时后端已回传预估耗时，立刻显示，别让用户对着 0% 干等
+      if (data.eta) { item.eta = data.eta; item.stage = '已提交'; srRender(); }
       if (data.job_id) { item.jobId = data.job_id; item.status = 'running'; srRender(); resolve(data); }
       else { item.status = 'failed'; item.errorMsg = data.detail || '修复请求失败'; srRender(); reject(new Error(item.errorMsg)); }
     }).catch(err => {
@@ -4214,10 +4268,13 @@
 
   el.srAddBtn.addEventListener('click', () => {
     if (srDesktopNative()) {
-      // ⚠️ 必须显式传 'image'：不传默认是 media（视频+音频），图片会在系统弹窗里置灰选不了
-      window.VDL.desktop.chooseFiles('image').then(list => { if (list && list.length) srAddFiles(list); }).catch(() => {});
+      // ⚠️ 必须显式传类型：不传默认是 media（视频+音频），图片会在系统弹窗里置灰选不了
+      const kind = srState.kind === 'video' ? 'video' : 'image';
+      window.VDL.desktop.chooseFiles(kind).then(list => { if (list && list.length) srAddFiles(list); }).catch(() => {});
     } else { el.srFileInput.click(); }
   });
+  if (el.srKindImage) el.srKindImage.addEventListener('click', () => srSetKind('image'));
+  if (el.srKindVideo) el.srKindVideo.addEventListener('click', () => srSetKind('video'));
   el.srFileInput.addEventListener('change', () => {
     if (el.srFileInput.files && el.srFileInput.files.length) { srAddFiles(el.srFileInput.files); el.srFileInput.value = ''; }
   });
@@ -4236,17 +4293,28 @@
     srState.list = []; srRender(); el.srStatus.textContent = '';
   });
   el.srBulkApplyBtn.addEventListener('click', () => {
-    const mode = el.srBulkMode.value || 'fast';
+    const mode = srCurrentMode();
     const scale = +(el.srBulkScale.value || 2);
+    const codec = el.srBulkCodec ? (el.srBulkCodec.value || 'h264') : 'h264';
     let n = 0;
-    srState.list.forEach(it => { if (['pending', 'failed'].includes(it.status)) { it.mode = mode; it.scale = scale; n++; } });
+    srState.list.forEach(it => {
+      if (['pending', 'failed'].includes(it.status)) {
+        it.mode = mode; it.scale = scale;
+        if (it.kind === 'video') it.codec = codec;
+        n++;
+      }
+    });
     srRender();
     el.srStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项';
   });
   el.srStartAllBtn.addEventListener('click', () => {
     srState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
     const wait = srState.list.filter(x => x.status === 'pending');
-    if (!wait.length) { el.srStatus.textContent = '没有可开始的项（先添加图片）'; return; }
+    if (!wait.length) {
+      el.srStatus.textContent = srState.kind === 'video'
+        ? '没有可开始的项（先添加视频）' : '没有可开始的项（先添加图片）';
+      return;
+    }
     el.srStatus.textContent = `批量修复中…（${wait.length} 个）`;
     srEnsurePolling();
     wait.forEach(it => srStartOne(it).catch(() => {}));

@@ -154,6 +154,75 @@ def test_ai_real_inference_if_cached():
         check("AI 档推理未抛错", False, str(e)[:120])
 
 
+def test_video_filter_is_lgpl_safe():
+    """视频滤镜链只能用 LGPL 构建里真实存在的滤镜。
+
+    ⚠️ 红线：``hqdn3d`` 是 **GPL** 滤镜，自编译的 LGPL ffmpeg 里被裁掉了。
+    写上去不会在明处报错，而是整条命令失败、用户只看到「增强失败」四个字。
+    """
+    print("\n[8] 视频滤镜链 LGPL 安全")
+    # 只扫 _enhance_filter 函数体：docstring/注释里会提到这些名字作为反面教材，
+    # 全文件扫描会被自己的警告文字误伤（与 CoreML MLComputeUnits 同一类问题）。
+    src = (SERVER / "routers" / "sr.py").read_text(encoding="utf-8")
+    tail = src.split("def _enhance_filter")[1]
+    body = tail.split("chain = [", 1)[1].split("return")[0]   # 只取构造滤镜链的代码
+    check("滤镜构造代码不含 GPL 滤镜 hqdn3d", "hqdn3d" not in body)
+    check("滤镜构造代码不含 nlmeans（同属 GPL）", "nlmeans" not in body)
+
+    std = sr._enhance_filter("standard", 1708, 960)
+    enh = sr._enhance_filter("enhance", 1708, 960)
+    check("标准档含 lanczos 放大", "flags=lanczos" in std)
+    check("标准档含 cas 锐化", "cas=strength=" in std)
+    check("标准档不含降噪（降噪只属于增强档）", "atadenoise" not in std)
+    check("增强档在锐化前做降噪", enh.index("atadenoise") < enh.index("cas"))
+    # 偶数尺寸：yuv420p 下奇数宽/高会让编码直接失败
+    w = int(std.split("scale=")[1].split(":")[0])
+    check("输出宽度为偶数（yuv420p 要求）", w % 2 == 0, str(w))
+
+
+def test_video_bitrate_lift():
+    """码率策略：在源码率上提升，再用目标分辨率的合理上限兜住。
+
+    ⚠️ 2026-09-12 实测后修正：最初按目标分辨率「满配」码率，480p/600k 的片
+    放大到 960p 被给到 4500k，实测产物体积涨 **6.7 倍**而观感几乎不变 ——
+    放大不产生新信息，满配纯属浪费。改后同片只涨 1.6 倍（1090k）。
+    """
+    print("\n[9] 视频码率提升策略")
+    from codec_utils import res_cap_kbps
+    check("提升倍率在合理区间（1.2~3.0）", 1.2 <= sr._BITRATE_LIFT <= 3.0)
+    check("存在码率上限保护", sr._MAX_ENHANCE_KBPS > 0)
+    lifted = int(600 * sr._BITRATE_LIFT)
+    cap = res_cap_kbps(960)
+    check(f"低码率源按提升倍率而非分辨率满配（{lifted}k < {cap}k）", lifted < cap)
+    check("放大后码率确实高于源码率", lifted > 600)
+
+
+def test_video_mode_validation():
+    """档位校验：非法值静默降级到默认档，绝不把非法参数透给 ffmpeg。"""
+    print("\n[10] 视频档位校验")
+    check("standard 合法", sr._validate_video_mode("standard") == "standard")
+    check("enhance 合法", sr._validate_video_mode("enhance") == "enhance")
+    check("非法档位降级为 standard", sr._validate_video_mode("ultra") == "standard")
+    check("空值降级为 standard", sr._validate_video_mode("") == "standard")
+    check("大小写不敏感", sr._validate_video_mode("ENHANCE") == "enhance")
+    check("视频档位与图片档位不重叠", not (sr.VIDEO_MODES & sr.MODES))
+    check("输入短边上限已设定（低清片定位）", sr._MAX_INPUT_SHORT_SIDE > 0)
+    check("×4 的限制比通用上限更严", 360 < sr._MAX_INPUT_SHORT_SIDE)
+
+
+def test_video_endpoints_not_rate_limited():
+    """视频增强会跑几十分钟，轮询端点绝不能限流（否则进度条永久冻死）。"""
+    print("\n[11] 视频端点限流边界")
+    src = (SERVER / "routers" / "sr.py").read_text(encoding="utf-8")
+    for fn in ("def sr_video_local", "def sr_status", "def sr_file", "def sr_video_limits"):
+        check(f"存在 {fn}", fn in src)
+    block = src.split("def sr_video_local")[1].split("\n@router")[0]
+    check("视频提交端点限流", "app._check_rate_limit(request)" in block)
+    for name in ("def sr_status", "def sr_file"):
+        b = src.split(name)[1].split("\ndef ")[0]
+        check(f"{name} 未限流", "app._check_rate_limit(request)" not in b)
+
+
 def main():
     print("=" * 50)
     print("高清修复（sr）离线测试")
@@ -165,6 +234,10 @@ def main():
     test_coreml_no_explicit_compute_units()
     test_registry_and_output_layout()
     test_ai_real_inference_if_cached()
+    test_video_filter_is_lgpl_safe()
+    test_video_bitrate_lift()
+    test_video_mode_validation()
+    test_video_endpoints_not_rate_limited()
     print("\n" + "=" * 50)
     print(f"  通过: {PASS}   失败: {FAIL}")
     print("=" * 50)

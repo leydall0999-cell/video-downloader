@@ -350,6 +350,8 @@ class VdlApi:
         kind 决定可选扩展名与对话框标题（★ 2026-09-11 修复「无损压缩/图片转换里图片是灰的、选不了」）：
           - "media"（默认）：视频 + 音频（桥接/转码/字幕等原有场景，保持行为不变）
           - "image"        ：图片（图片转换视图，含 bmp/tif/gif）
+          - "video"        ：纯视频（高清修复的视频档，2026-09-12 新增；
+                             不含音频扩展名，避免用户选到 mp3 才被后端拒绝）
           - "any"          ：视频 + 音频 + png/jpg/jpeg/webp（无损压缩视图；
                              刻意不含 heic/avif/bmp/tif/gif，后端压缩不支持，避免「选得到却报错」）
         前端未传参时按 "media" 处理，向后兼容旧调用。
@@ -377,9 +379,13 @@ class VdlApi:
             # 无损压缩视图 only 吃 png/jpg/jpeg/webp（与 server/routers/compress.py 一致）；
             # 故意不含 heic/avif/bmp/tif/gif —— 后端不处理，放进来会变成「选得到但报不支持」。
             _COMPRESS_IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"]
+            _VIDEO_EXTS = [
+                "mp4", "mov", "mkv", "webm", "avi", "flv", "wmv", "m4v",
+            ]
             _KINDS = {
                 "media": (_MEDIA_EXTS, "选择要桥接的视频/音频文件（可多选）"),
                 "image": (_IMAGE_EXTS, "选择图片文件（可多选）"),
+                "video": (_VIDEO_EXTS, "选择要增强的视频文件（可多选）"),
                 "any": (_MEDIA_EXTS + _COMPRESS_IMAGE_EXTS, "选择视频/音频/图片文件（可多选）"),
             }
             exts, prompt = _KINDS.get(str(kind or "media").strip().lower(), _KINDS["media"])

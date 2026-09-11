@@ -703,11 +703,35 @@
   <!-- 高清修复视图（图片：快速档 Lanczos 放大+锐化；AI 档 Real-ESRGAN 超分；两档均全程本地） -->
   <section id="srView" class="panel" hidden aria-labelledby="srTitle">
     <h2 id="srTitle" class="guide-title">✨ 高清修复</h2>
-    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+
+    <style>
+      .sr-kind-tabs { display: flex; gap: 6px; margin: 8px 0 2px; }
+      .sr-kind {
+        padding: 6px 16px; border: 1px solid var(--border, #d1d5db);
+        background: transparent; color: var(--text-mute, #6b7280);
+        border-radius: 999px; font-size: 13px; cursor: pointer; transition: all .15s;
+      }
+      .sr-kind:hover { border-color: var(--brand, #2563eb); color: var(--brand, #2563eb); }
+      .sr-kind.is-active {
+        background: var(--brand, #2563eb); border-color: var(--brand, #2563eb); color: #fff;
+      }
+    </style>
+
+    <div class="sr-kind-tabs" role="tablist" aria-label="修复类型">
+      <button type="button" class="sr-kind is-active" id="srKindImage" data-kind="image" role="tab" aria-selected="true">🖼️ 图片</button>
+      <button type="button" class="sr-kind" id="srKindVideo" data-kind="video" role="tab" aria-selected="false">🎬 视频</button>
+    </div>
+
+    <p class="uc-tip" id="srTipImage" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
       把低清图片放大变清晰：<b>快速档</b> 用 Lanczos 插值 + 锐化，秒级完成、任何机型都流畅；
       <b>AI 档</b> 用 Real-ESRGAN 重建真实细节，效果更好但需等待（界面会显示实时预估）。
       两档都<b>全程本地完成，不上传云端、不调用任何在线接口</b>，也没有任何按次费用。
       <br><span style="color:var(--brand);">注：AI 档首次使用需下载约 64MB 模型（仅一次，缓存在 ~/.vdl_models）；放大后体积通常比原图大，属正常现象。</span>
+    </p>
+    <p class="uc-tip" id="srTipVideo" hidden style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      把低清视频放大变清晰：<b>标准档</b> 放大 + 锐化 + 提码率，实测约 <b>5× 实时</b>（45 分钟片约 9 分钟）；
+      <b>增强档</b> 再叠加降噪，实测约 <b>2.5× 实时</b>。同样全程本地、不上传云端。
+      <br><span style="color:var(--brand);">注：本功能面向<b>低清片修复</b>（短边 ≤540px，如 480p 及以下）。高分辨率片放大后体积成倍上涨而观感提升有限，会被拒绝；<b>降噪对平台压过的低码率片价值有限</b>（问题在压缩伪影不是噪点），一般选标准档即可。</span>
     </p>
 
     <div class="uc-toolbar">
@@ -722,11 +746,18 @@
     <div class="uc-bulk" id="srBulk">
       <h3 class="card-title">默认修复设置（应用到所有未开始项）</h3>
       <div class="uc-form">
-        <label class="uc-field">
+        <label class="uc-field" id="srFieldModeImage">
           <span class="uc-label">修复档位</span>
           <select id="srBulkMode">
             <option value="fast" selected>快速档 · 秒级（放大 + 锐化）</option>
             <option value="ai">AI 档 · 细节重建（较慢，效果更好）</option>
+          </select>
+        </label>
+        <label class="uc-field" id="srFieldModeVideo" hidden>
+          <span class="uc-label">修复档位</span>
+          <select id="srBulkModeVideo">
+            <option value="standard" selected>标准档 · 放大+锐化+提码率（约 5× 实时，推荐）</option>
+            <option value="enhance">增强档 · 再叠加降噪（约 2.5× 实时）</option>
           </select>
         </label>
         <label class="uc-field">
@@ -734,6 +765,13 @@
           <select id="srBulkScale">
             <option value="2" selected>×2（推荐）</option>
             <option value="4">×4（体积与耗时都更大）</option>
+          </select>
+        </label>
+        <label class="uc-field" id="srFieldCodec" hidden>
+          <span class="uc-label">视频编码</span>
+          <select id="srBulkCodec">
+            <option value="h264" selected>H.264（兼容性最好）</option>
+            <option value="hevc">HEVC（同画质体积约小 25%）</option>
           </select>
         </label>
       </div>
