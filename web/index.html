@@ -85,6 +85,7 @@
       <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert" title="视频格式转换"><span class="sidebar-item-icon" aria-hidden="true">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
       <button type="button" class="sidebar-item" data-view="musicconvert" id="sTabMusicConvert" title="音乐格式转换"><span class="sidebar-item-icon" aria-hidden="true">🎵</span><span class="sidebar-item-label">音乐转换</span></button>
       <button type="button" class="sidebar-item" data-view="imageconvert" id="sTabImageConvert" title="图片格式转换"><span class="sidebar-item-icon" aria-hidden="true">🖼️</span><span class="sidebar-item-label">图片转换</span></button>
+      <button type="button" class="sidebar-item" data-view="compress" id="sTabCompress" title="图片 / 视频压缩：体积变小，画质几乎不变"><span class="sidebar-item-icon" aria-hidden="true">🗜️</span><span class="sidebar-item-label">无损压缩</span></button>
     </div>
 
     <div class="sidebar-group collapsed">
@@ -147,6 +148,7 @@
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">🖼️ 图片转换</button>
+        <button type="button" class="tab" data-view="compress" id="tabCompress">🗜️ 无损压缩</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -635,6 +637,44 @@
     </div>
 
     <span class="convert-status" id="imgStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- 无损压缩视图（图片 PNG/JPG/WebP 高质量重编码；视频 H.264 CRF 重编码，音轨优先原样复制） -->
+  <section id="compressView" class="panel" hidden aria-labelledby="cpTitle">
+    <h2 id="cpTitle" class="guide-title">🗜️ 无损压缩</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      图片（PNG/JPG/WebP）与视频（mp4/mov/mkv/webm 等）一键瘦身：画质几乎不变、体积大幅变小。
+      全程本地完成，不上传云端；压缩完显示节省了多少空间，压缩后反而变大时会保留原文件。
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="cpAddBtn">添加文件</button>
+      <input type="file" id="cpFileInput" accept="video/*,image/*,.mp4,.mov,.mkv,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.png,.jpg,.jpeg,.webp" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="cpClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="cpCount">尚未添加文件</span>
+    </div>
+
+    <ul class="uc-list" id="cpList" aria-live="polite"></ul>
+
+    <div class="uc-bulk" id="cpBulk">
+      <h3 class="card-title">默认压缩强度（应用到所有未开始项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">压缩强度</span>
+          <select id="cpBulkLevel">
+            <option value="high">轻度 · 画质优先（体积减得少）</option>
+            <option value="balanced" selected>推荐 · 画质与体积均衡</option>
+            <option value="strong">极致 · 体积优先（画质有损）</option>
+          </select>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="cpBulkApplyBtn">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="cpStartAllBtn">开始压缩</button>
+      </div>
+    </div>
+
+    <span class="convert-status" id="cpStatus" aria-live="polite"></span>
   </section>
 
   <!-- 视频/音频桥接视图（桌面端独立入口；网页端也能从视频格式转换页进入） -->

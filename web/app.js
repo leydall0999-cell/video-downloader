@@ -34,7 +34,10 @@
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;
-  setTimeout(() => { try { if (!bootViewSet) switchView('download'); } catch (_) {} }, 0);
+  // #view=xxx 直达路由（与 web-dev 对齐）：支持收藏/分享指定功能页；IIFE 末尾两处
+  // switchView 会优先采用 _hashView，此 setTimeout 仅在早期抛错时兜底。
+  const _hashView = (() => { try { const m = (location.hash || '').match(/view=([a-zA-Z_]+)/); return m ? m[1] : ''; } catch (_) { return ''; } })();
+  setTimeout(() => { try { if (!bootViewSet) switchView(_hashView || 'download'); } catch (_) {} }, 0);
 
   // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
   try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
@@ -584,6 +587,21 @@
     imgBulkApplyBtn: $('imgBulkApplyBtn'),
     imgStartAllBtn: $('imgStartAllBtn'),
     imgStatus: $('imgStatus'),
+
+    // 无损压缩（cp* 前缀，独立 tab；2026-09-11 新增）
+    tabCompress: $('tabCompress'),
+    compressView: $('compressView'),
+    sTabCompress: $('sTabCompress'),
+    cpAddBtn: $('cpAddBtn'),
+    cpFileInput: $('cpFileInput'),
+    cpClearBtn: $('cpClearBtn'),
+    cpCount: $('cpCount'),
+    cpList: $('cpList'),
+    cpBulk: $('cpBulk'),
+    cpBulkLevel: $('cpBulkLevel'),
+    cpBulkApplyBtn: $('cpBulkApplyBtn'),
+    cpStartAllBtn: $('cpStartAllBtn'),
+    cpStatus: $('cpStatus'),
 
     // 本地视频字幕提取（faster-whisper ASR）
     sbPickBtn: $('sbPickBtn'),
@@ -3786,6 +3804,221 @@
         imgUploadOne(it).then(() => imgFinishOne(it)).catch(() => {});  // 网页文件：先上传再 finish
       }
     });
+  });
+
+  // ===== 无损压缩（图片 PNG/JPG/WebP + 视频 H.264 CRF；2026-09-11 新增）=====
+  const CP_POLL_INTERVAL = UC_POLL_INTERVAL || 1500;
+  const cpState = { list: [], nextId: 1, pollTimer: null };
+  const cpDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  const cpFormatSize = (b) => {
+    if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    if (b >= 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+    return b + ' B';
+  };
+  const cpEnsurePolling = () => {
+    if (cpState.pollTimer) return;
+    cpState.pollTimer = setInterval(cpPollAll, CP_POLL_INTERVAL);
+  };
+  const cpStopPolling = () => { if (cpState.pollTimer) { clearInterval(cpState.pollTimer); cpState.pollTimer = null; } };
+
+  const cpRender = () => {
+    const list = cpState.list;
+    el.cpCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
+    el.cpClearBtn.hidden = list.length === 0;
+    el.cpStartAllBtn.disabled = !list.some(it => it.status === 'pending' || it.status === 'failed');
+    if (!list.length) { el.cpList.innerHTML = ''; return; }
+    el.cpList.innerHTML = list.map(it => {
+      const statusText = {
+        pending: '未开始',
+        running: it.stage === '排队中' ? '排队中…' : (it.progress ? `压缩中 ${it.progress}%` : '压缩中…'),
+        completed: it.saving > 0
+          ? `完成 ✅ 节省 ${it.saving}%（${cpFormatSize(it.sizeBefore || 0)} → ${cpFormatSize(it.sizeAfter || 0)}）${it.note || ''}`
+          : `完成 ✅ ${it.note || '体积已足够小'}`,
+        failed: '失败：' + (it.errorMsg || ''),
+      }[it.status] || it.status;
+      const statusCls = it.status === 'pending' ? '' : 'is-' + it.status;
+      const disabled = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
+      const progressHtml = it.status === 'running'
+        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+      const downloadHtml = it.status === 'completed' && it.jobId
+        ? `<a class="uc-item-download" href="/api/compress/${it.jobId}/file" download="${it.outputName || 'compressed'}">下载</a>`
+        : '';
+      const startHtml = it.status === 'pending' || it.status === 'failed'
+        ? `<button type="button" class="uc-item-start" data-act="start" title="按当前强度压缩该文件">${it.status === 'failed' ? '重新压缩' : '开始压缩'}</button>`
+        : '';
+      const displayName = it.name || '未命名';
+      const levelText = { high: '轻度', balanced: '推荐', strong: '极致' }[it.level] || it.level;
+      const metaSpans = it.localPath
+        ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>${it.kind === 'video' ? '视频' : '图片'} · ${levelText}${it.sizeBefore ? ' · ' + cpFormatSize(it.sizeBefore) : ''}</span>`
+        : (it.file ? `<span>${cpFormatSize(it.file.size)}</span><span>${it.kind === 'video' ? '视频' : '图片'} · ${levelText}</span>` : `<span>${it.kind === 'video' ? '视频' : '图片'} · ${levelText}</span>`);
+      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
+        <div class="uc-item-main">
+          <div class="uc-item-name" title="${displayName}">${displayName}</div>
+          <div class="uc-item-meta">${metaSpans}</div>
+          ${progressHtml}
+          <div class="uc-item-status">${statusText}</div>
+        </div>
+        <div class="uc-item-side">
+          ${startHtml}
+          ${downloadHtml}
+          <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
+        </div>
+      </li>`;
+    }).join('');
+  };
+
+  const cpAddFiles = (list) => {
+    const level = el.cpBulkLevel.value || 'balanced';
+    Array.from(list || []).forEach(f => {
+      const isLocal = typeof f === 'string';
+      const name = isLocal ? f.split(/[\\/]/).pop() : f.name;
+      const ext = '.' + (name.split('.').pop() || '').toLowerCase();
+      const kind = ['.mp4', '.mov', '.mkv', '.webm', '.avi', '.flv', '.m4v', '.ts', '.wmv', '.mpeg', '.mpg', '.3gp'].includes(ext) ? 'video' : 'image';
+      cpState.list.push({
+        id: cpState.nextId++,
+        file: isLocal ? null : f,
+        localPath: isLocal ? f : null,
+        name,
+        kind, level,
+        status: isLocal ? 'pending' : 'pending',
+        jobId: null, progress: 0, stage: '',
+        errorMsg: '', outputName: '', sizeBefore: 0, sizeAfter: 0, saving: 0, note: '',
+        _removed: false, _xhrs: null, _uploadId: null, _totalChunks: 0,
+      });
+    });
+    cpRender();
+    el.cpStatus.textContent = `已添加 ${cpState.list.length} 个文件，点「开始压缩」`;
+  };
+
+  const cpPollAll = async () => {
+    const running = cpState.list.filter(x => x.status === 'running' && x.jobId);
+    if (!running.length) { cpStopPolling(); return; }
+    await Promise.all(running.map(async it => {
+      try {
+        const st = await request(`/api/compress/${it.jobId}`);
+        it.progress = st.progress || 0;
+        it.stage = st.stage || '';
+        if (st.status === 'completed') {
+          it.status = 'completed';
+          it.sizeBefore = st.size_before || 0; it.sizeAfter = st.size_after || 0;
+          it.saving = st.saving || 0; it.note = st.note || '';
+          it.outputName = st.filename || it.outputName;
+          cpRender();
+        } else if (st.status === 'failed') {
+          it.status = 'failed'; it.errorMsg = st.error || '未知错误'; cpRender();
+        } else {
+          cpRender();
+        }
+      } catch (_e) { /* 单个轮询失败忽略 */ }
+    }));
+  };
+
+  // 提交单个压缩任务（本地路径直传；网页文件先分片上传再 finish）
+  const cpStartOne = (item) => new Promise((resolve, reject) => {
+    if (!item || item.status !== 'pending') { reject(new Error('状态不允许开始压缩')); return; }
+    item.status = 'running'; item.progress = item.localPath ? 5 : 0; item.stage = ''; cpRender();
+    const finishJob = (data) => {
+      if (data.job_id) {
+        item.jobId = data.job_id; item.status = 'running'; item.progress = 5; cpRender(); resolve(data);
+      } else {
+        item.status = 'failed'; item.errorMsg = data.detail || data.error || '压缩请求失败'; cpRender(); reject(new Error(item.errorMsg));
+      }
+    };
+    if (item.localPath) {
+      request('/api/compress/local', {
+        method: 'POST',
+        body: JSON.stringify({ local_path: item.localPath, level: item.level }),
+        headers: { 'Content-Type': 'application/json' },
+      }).then(finishJob).catch(err => {
+        item.status = 'failed'; item.errorMsg = (err && err.message) || '压缩请求失败'; cpRender(); reject(err);
+      });
+      return;
+    }
+    // 网页文件：32MB 分片上传 → finish
+    const file = item.file;
+    const chunkSize = 32 * 1024 * 1024;
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    item._totalChunks = totalChunks;
+    item._uploadId = (crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Math.random().toString(36).slice(2) + Date.now().toString(36));
+    item._xhrs = new Set();
+    const uploadChunkAt = (idx) => new Promise((res, rej) => {
+      const blob = file.slice(idx * chunkSize, (idx + 1) * chunkSize);
+      ucUploadChunk(item._uploadId, idx, totalChunks, blob, (p) => {
+        item.progress = Math.min(30, Math.round((idx + p / 100) / totalChunks * 30)); cpRender();
+      }, item._xhrs).then(res).catch(rej);
+    });
+    let chain = Promise.resolve();
+    for (let i = 0; i < totalChunks; i++) {
+      chain = chain.then(() => uploadChunkAt(i));
+    }
+    chain.then(() => {
+      const form = new FormData();
+      form.append('upload_id', item._uploadId);
+      form.append('total', String(totalChunks));
+      form.append('filename', file.name);
+      form.append('level', item.level);
+      const xhr = new XMLHttpRequest();
+      item._xhrs.add(xhr);
+      xhr.open('POST', location.origin + '/api/compress/finish');
+      xhr.setRequestHeader('X-Device-Id', deviceId());
+      xhr.onload = () => {
+        try { finishJob(JSON.parse(xhr.responseText)); }
+        catch (_e) { item.status = 'failed'; item.errorMsg = '压缩请求解析失败'; cpRender(); reject(new Error(item.errorMsg)); }
+      };
+      xhr.onerror = () => { item.status = 'failed'; item.errorMsg = '网络错误'; cpRender(); reject(new Error('network')); };
+      xhr.send(form);
+    }).catch(err => {
+      item.status = 'failed'; item.errorMsg = (err && err.message) || '上传失败'; cpRender(); reject(err);
+    });
+  });
+
+  // 事件绑定
+  el.cpAddBtn.addEventListener('click', () => {
+    if (cpDesktopNative()) {
+      window.VDL.desktop.chooseFiles().then(list => { if (list && list.length) cpAddFiles(list); }).catch(() => {});
+    } else {
+      el.cpFileInput.click();
+    }
+  });
+  el.cpFileInput.addEventListener('change', () => {
+    if (el.cpFileInput.files && el.cpFileInput.files.length) { cpAddFiles(el.cpFileInput.files); el.cpFileInput.value = ''; }
+  });
+  el.cpList.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const li = btn.closest('.uc-item'); const id = +li.dataset.id;
+    const it = cpState.list.find(x => x.id === id); if (!it) return;
+    const act = btn.dataset.act;
+    if (act === 'remove') {
+      if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (err) { /* ignore */ } });
+      cpState.list = cpState.list.filter(x => x.id !== id);
+      cpRender();
+    } else if (act === 'start') {
+      if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
+      cpEnsurePolling();
+      cpStartOne(it).catch(() => {});
+    }
+  });
+  el.cpClearBtn.addEventListener('click', () => {
+    cpState.list.forEach(it => { if (it._xhrs) it._xhrs.forEach(x => { try { x.abort(); } catch (err) { /* ignore */ } }); });
+    cpState.list = []; cpRender(); el.cpStatus.textContent = '';
+  });
+  el.cpBulkApplyBtn.addEventListener('click', () => {
+    const level = el.cpBulkLevel.value || 'balanced';
+    let n = 0;
+    cpState.list.forEach(it => {
+      if (['pending', 'failed'].includes(it.status)) { it.level = level; n++; }
+    });
+    cpRender();
+    el.cpStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项（所有项都已开始/完成）';
+  });
+  el.cpStartAllBtn.addEventListener('click', () => {
+    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
+    const wait = cpState.list.filter(x => x.status === 'pending');
+    if (!wait.length) { el.cpStatus.textContent = '没有可开始的项（先添加文件）'; return; }
+    el.cpStatus.textContent = `批量压缩中…（${wait.length} 个）`;
+    cpEnsurePolling();
+    wait.forEach(it => cpStartOne(it).catch(() => {}));
   });
 
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
@@ -9546,6 +9779,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isDw = ['dw', 'dwpdf', 'dwvideo', 'matting'].includes(view);   // dw 系侧栏入口：图片/PDF/视频去水印 + 一键抠图，共用 dwView，进入时自动切对应子面板
     const isMusic = view === 'musicconvert';
     const isImage = view === 'imageconvert';
+    const isCp = view === 'compress';   // 无损压缩（2026-09-11 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
@@ -9556,7 +9790,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isSt || isAppIntro || isBridge || isProfileGroup;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSt || isAppIntro || isBridge || isProfileGroup;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -9564,6 +9798,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.uploadConvertView.hidden = !isUp;
     el.musicConvertView.hidden = !isMusic;
     el.imageConvertView.hidden = !isImage;
+    if (el.compressView) el.compressView.hidden = !isCp;
     el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
@@ -9575,7 +9810,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isSt && !isBridge && !isProfileGroup);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSt && !isBridge && !isProfileGroup);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -9583,11 +9818,12 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabUploadConvert) el.tabUploadConvert.classList.toggle('is-active', isUp);
     if (el.tabMusicConvert) el.tabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
+    if (el.tabCompress) el.tabCompress.classList.toggle('is-active', isCp);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfileGroup);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isSt && !isAppIntro && !isBridge && !isProfileGroup;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSt && !isAppIntro && !isBridge && !isProfileGroup;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -9596,6 +9832,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabUploadConvert) el.sTabUploadConvert.classList.toggle('is-active', isUp);
     if (el.sTabMusicConvert) el.sTabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
+    if (el.sTabCompress) el.sTabCompress.classList.toggle('is-active', isCp);
     if (el.sTabProfile) el.sTabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabProfilePurchases) el.sTabProfilePurchases.classList.toggle('is-active', isProfilePurchases);
     if (el.sTabProfileCredits) el.sTabProfileCredits.classList.toggle('is-active', isProfileCredits);
@@ -10058,6 +10295,7 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   if (el.tabMusicConvert) el.tabMusicConvert.addEventListener('click', () => switchView('musicconvert'));
   if (el.tabImageConvert) el.tabImageConvert.addEventListener('click', () => switchView('imageconvert'));
+  if (el.tabCompress) el.tabCompress.addEventListener('click', () => switchView('compress'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
@@ -10075,6 +10313,7 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabTorrent, 'torrent'],
     [el.sTabMusicConvert, 'musicconvert'],
     [el.sTabImageConvert, 'imageconvert'],
+    [el.sTabCompress, 'compress'],
     [el.sTabSubtitle, 'subtitle'],
     [el.sTabProfile, 'profile'],
     [el.sTabProfilePurchases, 'profile_purchases'],
@@ -13249,15 +13488,15 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.sTabProfile) el.sTabProfile.hidden = false;
       }
       el.tabs.hidden = false; // 导航栏始终显示
-      // 默认视图：始终停在下载
-      switchView('download');
+      // 默认视图：优先 #view=xxx 直达路由，否则停在下载
+      switchView(_hashView || 'download');
       bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
-  // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
-  try { switchView('download'); bootViewSet = true; } catch (_) {}
+  // 兜底默认视图（节点信息未加载时）：优先 #view=xxx 直达路由，否则停在核心下载视图。
+  try { switchView(_hashView || 'download'); bootViewSet = true; } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
 
