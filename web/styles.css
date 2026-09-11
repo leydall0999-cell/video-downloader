@@ -76,7 +76,7 @@ img { max-width: 100%; display: block; }
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
 .brand-text strong { font-size: 1rem; letter-spacing: .2px; }
-.brand-text span { font-size: .72rem; color: var(--text-mute); letter-spacing: .06em; text-transform: uppercase; }
+.brand-text span { font-size: .72rem; color: var(--text-mute); letter-spacing: .04em; }
 .badge {
   font-size: .76rem; color: var(--brand-strong); background: var(--brand-soft);
   border: 1px solid #dfe3ff; padding: .3rem .65rem; border-radius: 999px; white-space: nowrap;

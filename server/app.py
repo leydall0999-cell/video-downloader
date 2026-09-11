@@ -1,4 +1,4 @@
-"""视频下载站 · FastAPI 后端入口。
+"""视频工坊 · FastAPI 后端入口。
 
 路由一览：
     GET    /                      前端页面
@@ -1619,7 +1619,7 @@ async def lifespan(_: FastAPI):
     cloud_executor.shutdown(wait=False, cancel_futures=True)
 
 
-app = FastAPI(title="视频下载站", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="视频工坊", version="1.0.0", lifespan=lifespan)
 
 # 跨域 CORS：公开站默认允许所有来源（allow_credentials=False，不携凭证，安全）。
 # 部署者可通过 VDL_ALLOW_ORIGINS 或双节点 PEER_ENDPOINT 限定具体来源；否则回退 "*"。

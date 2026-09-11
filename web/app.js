@@ -1,4 +1,4 @@
-/* 视频下载站 · 前端逻辑（无依赖）
+/* 视频工坊 · 前端逻辑（无依赖）
  * 约定：所有动态文本一律使用 textContent 写入，杜绝 innerHTML 注入风险。 */
 (() => {
   'use strict';
@@ -6041,7 +6041,7 @@
   const baiduAppLoginBtn = document.getElementById('baiduAppLoginBtn');
   if (baiduAppLoginBtn) baiduAppLoginBtn.addEventListener('click', async () => {
     if (!(window.pywebview && window.pywebview.api && window.pywebview.api.baidu_login)) {
-      alert('此功能仅在桌面版 VideoDownloader.app 内可用'); return;
+      alert('此功能仅在视频工坊桌面版内可用'); return;
     }
     baiduAppLoginBtn.disabled = true;
     const _origText = baiduAppLoginBtn.textContent;
