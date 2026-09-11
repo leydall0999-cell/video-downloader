@@ -81,6 +81,9 @@ else
   echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
 fi
 
+# ⚠️ 不要再加 --collect-all onnx：它会把 onnx 官方的测试数据集（约 2.4 万个文件）
+#    整个打进包，属纯死重（server/ 代码零 import onnx），拖慢构建并撑大安装包。
+#    与 build_mac.sh 保持一致；真需要时 PyInstaller 的常规依赖分析会自动收进来。
 "$VENV/Scripts/pyinstaller.exe" \
   --name VideoDownloader \
   --windowed \
@@ -105,7 +108,6 @@ fi
   --collect-binaries cv2 \
   --collect-all pymupdf \
   --collect-all fitz \
-  --collect-all onnx \
   --collect-submodules yt_dlp \
   "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"
@@ -137,6 +139,21 @@ fi
 
 echo "▶ 捆绑 aria2c（种子后端随安装包自包含，从官方 GitHub release 下载 Windows 版）"
 "$VENV/Scripts/python.exe" "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用，需本机安装 aria2 或装 VC++ 运行库）"
+
+echo "▶ 写入版本身份（version.txt / build_version.txt）"
+# 语义化版本号来自仓库根 VERSION（仅发版时手工 +1），与 build_mac.sh 同一来源。
+# server/routers/system.py 的 _candidates_version_txt() 依次查找：
+#   <exe 同级>/version.txt → <_MEIPASS>/server/version.txt → <server 包>/version.txt
+# PyInstaller onedir 6.x+ 把运行期文件收进 _internal/，5.x 直接平铺在产物根，
+# 故两处都写，兼容两种布局（macOS 则是 Contents/Resources/version.txt）。
+APP_VERSION="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]' | head -1)"
+if [ -z "$APP_VERSION" ]; then APP_VERSION="0.0.0"; fi
+DIST_APP="$REPO/dist/VideoDownloader"
+if [ -d "$DIST_APP/_internal" ]; then RUN_ROOT="$DIST_APP/_internal"; else RUN_ROOT="$DIST_APP"; fi
+mkdir -p "$RUN_ROOT/server"
+echo "$APP_VERSION" > "$DIST_APP/version.txt"
+echo "$APP_VERSION" > "$RUN_ROOT/server/version.txt"
+echo "   版本：$APP_VERSION（写入 $DIST_APP/version.txt 与 $RUN_ROOT/server/version.txt）"
 
 echo "✅ 完成：dist/VideoDownloader/VideoDownloader.exe"
 echo "   双击打开即可，浏览器自动访问 http://127.0.0.1:8321（端口被占用会自动顺延）"

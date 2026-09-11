@@ -466,7 +466,20 @@ echo "▶ 生成 DMG 分发包"
 # 需要时：VDL_BUILD_DMG=1 bash desktop/build_mac.sh
 if [ "${VDL_BUILD_DMG:-0}" = "1" ]; then
   mv "$REPO/dist/VideoDownloader.dmg" "$REPO/dist/_old.dmg.$$" 2>/dev/null || true
-  hdiutil create -volname "VideoDownloader" -srcfolder "$REPO/dist/VideoDownloader.app" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
+  # 组一个 DMG 专用 staging：.app + 指向 /Applications 的软链。
+  # 少了这个软链，用户挂载后只能手动把 .app 拖进「应用程序」，步骤多、易漏步骤。
+  # 注意不能用「软链指向 app + -srcfolder」的省空间写法：hdiutil 对指向 bundle 的
+  # 软链处理不确定，改用 ditto 复制实体（与手工装包通道那份 DMG 的配方一致）。
+  DMG_STAGE="/tmp/vdl_dmg_stage.$$"
+  rm -rf "$DMG_STAGE" 2>/dev/null || true
+  mkdir -p "$DMG_STAGE"
+  ditto "$REPO/dist/VideoDownloader.app" "$DMG_STAGE/VideoDownloader.app"
+  ln -s /Applications "$DMG_STAGE/Applications"
+  hdiutil create -volname "VideoDownloader" -srcfolder "$DMG_STAGE" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
+  # 清理 staging（约 683MB 临时副本）。rm 被沙箱/审批拦下时退到回收站，避免中断整条构建。
+  if [ -d "$DMG_STAGE" ]; then
+    rm -rf "$DMG_STAGE" 2>/dev/null || mv "$DMG_STAGE" "$HOME/.Trash/vdl_dmg_stage_$(date +%s)" 2>/dev/null || true
+  fi
 
   # 去掉 DMG 自身的 quarantine 标记：用户从文件管理器双击挂载后拖出的 .app 才不会
   # 被 macOS 误判为「从互联网下载」而二次加上隔离属性（否则双击会触发 Gatekeeper 拦截）。
