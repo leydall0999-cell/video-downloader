@@ -85,7 +85,7 @@
       <button type="button" class="sidebar-item" data-view="uploadconvert" id="sTabUploadConvert" title="视频格式转换"><span class="sidebar-item-icon" aria-hidden="true">🔁</span><span class="sidebar-item-label">视频格式转换</span></button>
       <button type="button" class="sidebar-item" data-view="musicconvert" id="sTabMusicConvert" title="音乐格式转换"><span class="sidebar-item-icon" aria-hidden="true">🎵</span><span class="sidebar-item-label">音乐转换</span></button>
       <button type="button" class="sidebar-item" data-view="imageconvert" id="sTabImageConvert" title="图片格式转换"><span class="sidebar-item-icon" aria-hidden="true">🖼️</span><span class="sidebar-item-label">图片转换</span></button>
-      <button type="button" class="sidebar-item" data-view="compress" id="sTabCompress" title="图片 / 视频压缩：体积变小，画质几乎不变"><span class="sidebar-item-icon" aria-hidden="true">🗜️</span><span class="sidebar-item-label">无损压缩</span></button>
+      <button type="button" class="sidebar-item" data-view="compress" id="sTabCompress" title="图片 / 视频压缩：视觉无损档肉眼无差，极致档体积优先"><span class="sidebar-item-icon" aria-hidden="true">🗜️</span><span class="sidebar-item-label">高效压缩</span></button>
     </div>
 
     <div class="sidebar-group collapsed">
@@ -148,7 +148,7 @@
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">🖼️ 图片转换</button>
-        <button type="button" class="tab" data-view="compress" id="tabCompress">🗜️ 无损压缩</button>
+        <button type="button" class="tab" data-view="compress" id="tabCompress">🗜️ 高效压缩</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -639,14 +639,14 @@
     <span class="convert-status" id="imgStatus" aria-live="polite"></span>
   </section>
 
-  <!-- 无损压缩视图（图片 PNG/JPG/WebP 高质量重编码；视频 H.264 CRF 重编码，音轨优先原样复制） -->
+  <!-- 高效压缩视图（视觉无损档：画质肉眼无差；极致档：体积优先、画质有损） -->
   <section id="compressView" class="panel" hidden aria-labelledby="cpTitle">
-    <h2 id="cpTitle" class="guide-title">🗜️ 无损压缩</h2>
+    <h2 id="cpTitle" class="guide-title">🗜️ 高效压缩</h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
       图片（PNG/JPG/WebP/AVIF）与视频（mp4/mov/mkv/webm 等）一键瘦身：画质几乎不变、体积大幅变小。
       视频可选 <b>HEVC</b>（同画质体积再小约 30-45%、硬件加速）；图片可转 <b>WebP / AVIF</b>（比原格式更小）。
       全程本地完成，不上传云端；视频按<b>源码率上限</b>重新编码，产物一定小于原文件，不会出现越压越大。
-      <br><span style="color:var(--brand);">注：HEVC / WebP / AVIF 为「视觉无损」（肉眼难辨，像素不完全一致）；仅原格式 PNG 是严格逐字节无损。</span>
+      <br><span style="color:var(--brand);">注：轻度 / 推荐档为「视觉无损」（肉眼无差，像素不完全一致），极致档为有损压缩；仅原格式 PNG 是严格逐字节无损。</span>
     </p>
 
     <div class="uc-toolbar">
@@ -664,9 +664,13 @@
         <label class="uc-field">
           <span class="uc-label">压缩强度</span>
           <select id="cpBulkLevel">
-            <option value="high">轻度 · 画质优先（体积减得少）</option>
-            <option value="balanced" selected>推荐 · 画质与体积均衡</option>
-            <option value="strong">极致 · 体积优先（画质有损）</option>
+            <optgroup label="视觉无损 · 肉眼无差">
+              <option value="high">轻度 · 体积减得少</option>
+              <option value="balanced" selected>推荐 · 画质与体积均衡</option>
+            </optgroup>
+            <optgroup label="有损 · 体积优先">
+              <option value="strong">极致 · 体积最小，画质可见下降</option>
+            </optgroup>
           </select>
         </label>
         <label class="uc-field">
@@ -679,7 +683,7 @@
         <label class="uc-field">
           <span class="uc-label">图片输出</span>
           <select id="cpBulkFormat">
-            <option value="keep" selected>原格式（PNG 无损 / JPG 画质优先）</option>
+            <option value="keep" selected>原格式（PNG 严格无损 / JPG 视觉无损）</option>
             <option value="webp">WebP（更小·推荐）</option>
             <option value="avif">AVIF（极致压缩·较慢）</option>
           </select>

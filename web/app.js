@@ -588,7 +588,7 @@
     imgStartAllBtn: $('imgStartAllBtn'),
     imgStatus: $('imgStatus'),
 
-    // 无损压缩（cp* 前缀，独立 tab；2026-09-11 新增）
+    // 高效压缩（cp* 前缀，独立 tab；2026-09-11 新增）
     tabCompress: $('tabCompress'),
     compressView: $('compressView'),
     sTabCompress: $('sTabCompress'),
@@ -3866,7 +3866,7 @@
         ? `<button type="button" class="uc-item-start" data-act="start" title="按当前强度压缩该文件">${it.status === 'failed' ? '重新压缩' : '开始压缩'}</button>`
         : '';
       const displayName = it.name || '未命名';
-      const levelText = { high: '轻度', balanced: '推荐', strong: '极致' }[it.level] || it.level;
+      const levelText = { high: '轻度', balanced: '推荐', strong: '极致·有损' }[it.level] || it.level;
       const codecText = it.kind === 'video' ? ({ h264: 'H.264', hevc: 'HEVC' }[it.codec] || 'H.264') : '';
       const fmtText = it.kind === 'image' ? ({ keep: '原格式', webp: 'WebP', avif: 'AVIF' }[it.outputFormat] || '原格式') : '';
       const kindText = (it.kind === 'video' ? '视频' + (codecText ? ' · ' + codecText : '') : '图片' + (fmtText ? ' · ' + fmtText : ''));
@@ -9825,7 +9825,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isDw = ['dw', 'dwpdf', 'dwvideo', 'matting'].includes(view);   // dw 系侧栏入口：图片/PDF/视频去水印 + 一键抠图，共用 dwView，进入时自动切对应子面板
     const isMusic = view === 'musicconvert';
     const isImage = view === 'imageconvert';
-    const isCp = view === 'compress';   // 无损压缩（2026-09-11 新增）
+    const isCp = view === 'compress';   // 高效压缩（2026-09-11 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
