@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # VDL 海外(香港)节点一键部署 —— 在本机(Mac)运行。
-# 目标机: 阿里云/腾讯云 香港轻量, Ubuntu 22.04, 2核2G 起步。
+# 目标机: 阿里云/腾讯云 香港轻量, Ubuntu 22.04(或 24.04), 2核2G 推荐 / 2核1G 可用。
+#   1G 档靠本脚本自动加大的 4G swap 也能建成并运行，但构建与转码会走 swap（慢），
+#   且并发下载余量小 —— 预算允许仍建议 2G。
 #
 # 用法:
 #   bash desktop/deploy_hk.sh root@<IP>                 # 仅部署服务 (http://IP:8888)
@@ -24,11 +26,18 @@ PORT=8888
 echo "==> [1/7] 检查 SSH 连通性: ${HOST}"
 ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" 'echo "  ssh ok"' >/dev/null
 
-echo "==> [2/7] 创建 2G swap (2G 内存机构建镜像防 OOM)"
+echo "==> [2/7] 按内存自动定 swap (1G 机 → 4G, 否则 2G; 构建镜像 & 运行期防 OOM)"
 ssh "$HOST" 'if ! swapon --show | grep -q .; then
-  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-  echo "/swapfile none swap sw 0 0" >> /etc/fstab
-  echo "  swap 已创建"; else echo "  swap 已存在"; fi'
+  MEM_MB=$(free -m | awk "/^Mem:/{print \$2}")
+  SWAP_MB=2048
+  if [ "$MEM_MB" -le 1200 ]; then SWAP_MB=4096; fi
+  fallocate -l ${SWAP_MB}M /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  echo "  swap ${SWAP_MB}MB 已创建 (物理内存 ${MEM_MB}MB)"
+  if [ "$MEM_MB" -le 1200 ]; then
+    echo "  ⚠️ 1G 内存档: 构建与转码会走 swap, 明显变慢; 同时只跑 1-2 路下载为宜"
+  fi
+else echo "  swap 已存在"; fi'
 
 echo "==> [3/7] 上传 ${SRC_REF} 源码 → ${HOST}:${APP_DIR} (git archive, 不受本地工作树影响)"
 git -C "$REPO" archive "$SRC_REF" \
