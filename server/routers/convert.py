@@ -154,7 +154,10 @@ def _upload_parts(upload_id: str):
 
 
 def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, remux,
-                        to_library, device_id, src_name="") -> tuple:
+                        to_library, device_id, src_name="",
+                        audio_bitrate: str = "", image_quality: int = 0,
+                        resize: int = 0, flatten_alpha: bool = True,
+                        is_image: bool = False) -> tuple:
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
@@ -173,7 +176,9 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
             "device_id": device_id,   # 设备隔离：上传转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
-                        resolution, bitrate, audio, rotate, remux, src_is_temp=True)
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=True,
+                        audio_bitrate=audio_bitrate, image_quality=image_quality,
+                        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return job_id, out_path.name
 
 
@@ -242,15 +247,21 @@ def finish_upload_chunk(
     resolution: str = app.Form("original"),
     bitrate: str = app.Form(""),
     audio: bool = app.Form(True),
+    audio_bitrate: str = app.Form(""),
     rotate: int = app.Form(0),
     remux: bool = app.Form(False),
     to_library: bool = app.Form(False),
+    image_quality: int = app.Form(0),
+    resize: int = app.Form(0),
+    flatten_alpha: bool = app.Form(True),
+    is_image: bool = app.Form(False),
     mode: str = app.Form("convert"),
     request: app.Request = None,
 ) -> dict:
     """分片上传收尾：校验分片齐全 → 顺序合并 → 精确校验总大小 → 提交转码 job。
 
-    mode='store' 时仅把合并后的文件落地为「拼接素材」（不转码），供 /api/concat 使用。"""
+    mode='store' 时仅把合并后的文件落地为「拼接素材」（不转码），供 /api/concat 使用。
+    图片目标（png/jpg/webp/bmp/tiff）另用 image_quality/resize/flatten_alpha/is_image。"""
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if not _UPLOAD_ID_RE.match(upload_id) or total <= 0:
@@ -258,8 +269,9 @@ def finish_upload_chunk(
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    if (suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS
+            and suffix not in app.UPLOAD_IMAGE_EXTS):
+        raise app.HTTPException(status_code=409, detail="请上传视频、音频或图片文件")
     parts = _upload_parts(upload_id)
     if len(parts) != total:
         raise app.HTTPException(status_code=400, detail=f"分片不完整（{len(parts)}/{total}），请重试")
@@ -303,7 +315,9 @@ def finish_upload_chunk(
 
     job_id, out_name = _submit_convert_job(
         save_path, target, resolution, bitrate, audio, rotate, remux,
-        to_library, _device_of(request), src_name=filename)
+        to_library, _device_of(request), src_name=filename,
+        audio_bitrate=audio_bitrate, image_quality=image_quality,
+        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return {
         "job_id": job_id,
         "status": "running",
