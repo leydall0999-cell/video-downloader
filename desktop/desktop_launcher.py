@@ -886,7 +886,10 @@ class VdlApi:
         return str(target)
 
     def save_convert_file_dialog(self, job_id: str, suggested_name: str) -> str:
-        """弹出系统保存面板让用户自选「视频/音频格式转换」结果位置（桌面版原生下载）。
+        """弹出系统保存面板让用户自选「格式转换 / 无损压缩」结果位置（桌面版原生下载）。
+
+        同时服务两条链路：转换/桥接任务（app.CONVERT_JOBS）与压缩任务
+        （routers.compress.COMPRESS_JOBS），按 job_id 依次查两个注册表。
 
         与 save_commentary_file_dialog / save_dw_file_dialog 同套机制：
         用 osascript `choose file name` 子进程弹原生窗口，绕开 pywebview 主线程
@@ -911,17 +914,32 @@ class VdlApi:
 
         _log(f"enter save_convert_file_dialog thread={_th.current_thread().name} job_id={job_id} suggested={suggested_name!r}")
 
-        # 进程内直接读 app.CONVERT_JOBS[job_id].out_path —— launcher 与 FastAPI 服务在同一进程
-        # （uvicorn.run 跑在 daemon 线程），共享同一份 `app` 模块内存。这样彻底绕开之前的
+        # 进程内直接读任务注册表的 out_path —— launcher 与 FastAPI 服务在同一进程
+        # （uvicorn.run 跑在 daemon 线程），共享同一份模块内存。这样彻底绕开之前的
         # `requests.get(http://127.0.0.1:PORT/api/convert/.../file)` 路径：launcher 端不携带
         # X-Device-Id header 也不带 device= query，会被设备隔离校验判 404（2026-08-28 实测）。
+        # ⚠️ 两个注册表都要查（2026-09-11）：转换/桥接在 app.CONVERT_JOBS，压缩在
+        # routers.compress.COMPRESS_JOBS。只查前者会让「无损压缩」的下载按钮报
+        # 「任务不存在或已过期」。
         src_path = None
+        is_compress = False
         try:
             import app as _vdl_app
-            job = _vdl_app.CONVERT_JOBS.get(job_id) if hasattr(_vdl_app, "CONVERT_JOBS") else None
-            if job:
-                src_path = job.get("out_path")
-                _log(f"in-memory hit status={job.get('status')} out={src_path!r}")
+            registries = []
+            if hasattr(_vdl_app, "CONVERT_JOBS"):
+                registries.append(("CONVERT_JOBS", _vdl_app.CONVERT_JOBS))
+            try:
+                from routers.compress import COMPRESS_JOBS as _CJOBS
+                registries.append(("COMPRESS_JOBS", _CJOBS))
+            except Exception as _e:
+                _log(f"import COMPRESS_JOBS failed: {_e!r}")
+            for _name, _reg in registries:
+                job = _reg.get(job_id) if isinstance(_reg, dict) else None
+                if job and job.get("out_path"):
+                    src_path = job.get("out_path")
+                    is_compress = (_name == "COMPRESS_JOBS")
+                    _log(f"in-memory hit registry={_name} status={job.get('status')} out={src_path!r}")
+                    break
         except Exception as e:
             _log(f"in-memory read error: {e!r}")
             return f"ERROR: 读任务失败：{e}"
@@ -943,8 +961,9 @@ class VdlApi:
         dest = None
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
+            _prompt = "保存压缩结果" if is_compress else "保存转码结果"
             script = (
-                'set p to choose file name with prompt "保存转码结果" '
+                f'set p to choose file name with prompt "{_prompt}" '
                 f'default name {name_json} '
                 'default location (path to downloads folder)\n'
                 'POSIX path of p'

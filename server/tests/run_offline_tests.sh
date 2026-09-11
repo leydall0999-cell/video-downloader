@@ -78,6 +78,7 @@ run_one test_convert_pipeline.py
 run_one test_ffmpeg_tools.py
 run_one test_compress.py
 run_one test_desktop_bridge.py
+run_one test_download_wiring.py
 run_one test_selfupdate.py
 
 echo ""

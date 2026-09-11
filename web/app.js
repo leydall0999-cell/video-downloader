@@ -3094,12 +3094,12 @@
       }
     }
   });
-  // 转码完成后的「下载」按钮拦截：pywebview (WKWebView) 不会弹 <a download> 保存框，
-  // 「下载」按钮拦截委托（转码列表 + 桥接列表共用 .uc-item-download）
+  // 转码/压缩完成后的「下载」按钮拦截：pywebview (WKWebView) 不会弹 <a download> 保存框，
+  // 「下载」按钮拦截委托（转码列表 + 桥接列表 + 音乐/图片/压缩列表共用 .uc-item-download）
   // 优先桌面原生桥接 save_convert_file_dialog，弹原生保存面板；无桥接（web/浏览器）时
-  // 回退 fetch + Blob + <a download>。href 格式：/api/convert/{jobId}/file?device=...
+  // 回退 fetch + Blob + <a download>。href 格式：/api/{convert|compress}/{jobId}/file[?device=...]
   // 桥接（concat）任务与单文件转码任务共用同一份 app.CONVERT_JOBS（同进程内存），
-  // 所以 launcher.read CONVERT_JOBS[jobId].out_path 两种场景都直接命中。
+  // 压缩任务在 routers.compress.COMPRESS_JOBS —— launcher 按 job_id 两个注册表都查。
   function wireSaveConvertDownload(scopeEl) {
     scopeEl.addEventListener('click', async (e) => {
       const link = e.target.closest && e.target.closest('.uc-item-download');
@@ -3107,10 +3107,12 @@
       const api = window.pywebview && window.pywebview.api;
       const href = link.getAttribute('href') || '';
       const filename = link.getAttribute('download') || 'converted';
-      const mJob = href.match(/\/api\/convert\/([^/?#]+)/);
+      const mJob = href.match(/\/api\/(?:convert|compress)\/([^/?#]+)/);
       const jobId = mJob ? mJob[1] : '';
-      e.preventDefault();
+      // ⚠️ 解析不出 jobId 时**不要** preventDefault：宁可让浏览器走原生 <a download>，
+      // 也不要留下「点了没反应」的死链（2026-09-11 压缩下载正是这个死法）。
       if (!jobId) return;
+      e.preventDefault();
       const orig = link.textContent;
 
       if (api && api.save_convert_file_dialog) {
@@ -3153,11 +3155,13 @@
       }
     });
   }
-  // 单一来源：转码列表 + 桥接列表 + 音乐转换列表 都挂同一份拦截委托
+  // 单一来源：转码列表 + 桥接列表 + 音乐转换列表 + 图片转换列表 + 压缩列表 都挂同一份拦截委托
+  // ⚠️ 新增任何渲染 .uc-item-download 的列表，必须在此处一并 wire，否则 WKWebView 里点「下载」无反应。
   wireSaveConvertDownload(el.ucList);
   wireSaveConvertDownload(mcListEl);
   wireSaveConvertDownload(el.musList);
   wireSaveConvertDownload(el.imgList);
+  wireSaveConvertDownload(el.cpList);
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   if (el.ucAudioOnly) el.ucAudioOnly.addEventListener('change', toggleAudioMode);
