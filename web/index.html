@@ -33,20 +33,26 @@
       <button type="button" class="badge" id="quitAppBtn" hidden title="退出 VideoDownloader（仅此按钮会真正退出软件）">退出</button>
     </div>
   </div>
+
+  <nav class="tabs" id="tabs" hidden>
+    <div class="wrap tabs-inner">
+      <div class="tabs-left">
+        <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载视频</button>
+        <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
+        <button type="button" class="tab" data-view="dw" id="tabDw">去水印</button>
+        <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
+        <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
+        <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
+        <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能</button>
+      </div>
+      <div class="tabs-right">
+        <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
+      </div>
+    </div>
+  </nav>
 </header>
 
 <main id="main" class="wrap">
-
-  <nav class="tabs" id="tabs" hidden>
-    <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载</button>
-    <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
-    <button type="button" class="tab" data-view="dw" id="tabDw">图片 / PDF 去水印</button>
-    <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
-    <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">🖼️ 图片转换</button>
-    <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">📝 AI 字幕</button>
-    <button type="button" class="tab" data-view="profile" id="tabProfile">👤 个人中心</button>
-    <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能介绍</button>
-  </nav>
 
   <div id="downloadView">
 

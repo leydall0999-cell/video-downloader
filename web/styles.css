@@ -1092,28 +1092,31 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 
 /* ---------------- 媒体库（桌面版功能） ---------------- */
 .tabs {
-  display: flex; gap: .6rem; margin: 1.25rem auto .35rem; width: min(900px, 100% - 2rem);
+  background: rgba(255, 255, 255, .55);
+  border-bottom: 1px solid var(--line);
+}
+.tabs-inner {
+  display: flex; align-items: stretch; justify-content: space-between; gap: .5rem;
+  min-height: 42px;
+}
+.tabs-left {
+  display: flex; align-items: stretch; gap: .1rem; min-width: 0;
   overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
-  padding-bottom: .4rem;
 }
-.tabs::-webkit-scrollbar { display: none; }
+.tabs-left::-webkit-scrollbar { display: none; }
+.tabs-right { display: flex; align-items: stretch; flex: none; margin-left: auto; }
 .tab {
-  flex: 1 1 0; min-width: 0; min-height: 46px; padding: 0 1rem; cursor: pointer;
-  display: flex; align-items: center; justify-content: center; text-align: center;
-  border: 1.5px solid var(--line); border-radius: 999px; background: #fff;
-  color: var(--text-mute); font-family: inherit; font-size: .95rem; font-weight: 700;
-  box-shadow: 0 3px 10px rgba(15, 23, 42, .06);
-  transition: border-color .16s, background .16s, color .16s, box-shadow .16s, transform .12s;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  position: relative; flex: none; display: inline-flex; align-items: center;
+  padding: 0 .85rem; border: 0; background: none; cursor: pointer;
+  font-family: inherit; font-size: .84rem; font-weight: 500; color: #4b5563;
+  white-space: nowrap; transition: color .15s, background .15s;
 }
-.tab:hover {
-  border-color: var(--brand);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, .14);
-}
-.tab:active { transform: translateY(1px); }
-.tab.is-active {
-  color: #fff; background: linear-gradient(135deg, var(--brand), #6366f1);
-  border-color: transparent; box-shadow: 0 10px 24px rgba(79, 70, 229, .32);
+.tab:hover { color: var(--brand); background: rgba(79, 70, 229, .05); }
+.tab:active { transform: none; }
+.tab.is-active { color: var(--brand); font-weight: 700; }
+.tab.is-active::after {
+  content: ""; position: absolute; left: .85rem; right: .85rem; bottom: 0;
+  height: 2px; border-radius: 2px 2px 0 0; background: var(--brand);
 }
 
 .lib-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .9rem; }
@@ -2030,8 +2033,9 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   .hero h1 { font-size: clamp(1.25rem, 5.5vw, 1.6rem); }
   .hero p { font-size: .88rem; }
   .hero-note { display: block; width: 100%; font-size: .82rem; padding: .45rem .7rem; }
-  .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; width: 100%; margin-top: .8rem; overflow: visible; padding-bottom: 0; }
-  .tab { flex: none; min-width: 0; height: 44px; min-height: 44px; padding: 0 .6rem; font-size: .85rem; }
+  .tabs-inner { justify-content: flex-start; gap: 0; min-height: 40px; }
+  .tab { padding: 0 .7rem; font-size: .8rem; min-height: 40px; }
+  .tabs-right { margin-left: auto; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; }
   .input-row #resolveBtn { width: 100%; height: 48px; }
