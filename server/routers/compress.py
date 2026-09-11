@@ -6,6 +6,9 @@
 视频走 ffmpeg 重编码：
 - H.264（VideoToolbox→libopenh264→mpeg4 自动选择，LGPL 合规）；
 - HEVC/H.265（hevc_videotoolbox，同画质体积再小约 30-45%，硬件加速）。
+- **码率受控**：改用「源码率钳制 + 分辨率建议码率取小」算目标码率，再以
+  VBR 受限（-b:v / -maxrate / -bufsize）编码。恒定质量（-q:v）模式对已经压过的
+  低码率源会把体积放大 2~3 倍（实测 629kbps 源 → 284%），白等一场后只能回退原文件。
 音轨优先原样复制（aac/mp3），其余自动 AAC 160k；进度经 ``-progress pipe:1`` 实时解析。
 压缩后反而更大时保留原文件（saving=0）。
 
@@ -15,10 +18,12 @@ PNG 原格式 optimize 才是严格无损。
 handler 通过 ``app.<name>`` 访问共享内核（与 convert.py 等路由约定一致）。
 """
 import app
+import json
 import os
 import shutil
 import subprocess
 import threading
+import time
 from fastapi import APIRouter
 from pydantic import BaseModel
 from .core import _device_of
@@ -56,6 +61,13 @@ _LOCK = threading.Lock()
 
 _COPY_AUDIO_CODECS = {"aac", "mp3"}
 
+# 视频转码并发闸门（2026-09-11）
+# VideoToolbox 编码器不支持 ffmpeg 层多线程（`-h encoder=h264_videotoolbox` 显示
+# Threading capabilities: none），且底层是**共享的硬件编码引擎**。实测 3 路并发
+# 压同一个文件时每路耗时从 1.45s 涨到 4.23s（慢 2.9 倍）——多文件一起提交反而
+# 更慢。这里与下载共用的 8 worker 池隔离，限制同时转码 2 路，其余排队等待。
+_TRANSCODE_SEM = threading.Semaphore(2)
+
 
 class LocalCompressRequest(BaseModel):
     """桌面端本地文件压缩请求。"""
@@ -79,29 +91,55 @@ def _ffprobe_bin() -> str:
     return "ffprobe"
 
 
-def _probe_duration(path: str) -> float:
-    """取视频时长（秒），失败返回 0（进度退化为不确定态）。"""
+def _probe_video_meta(path: str) -> dict:
+    """一次 ffprobe 取全部视频元信息（合并探测，省一次进程开销）。
+
+    返回 ``{duration, bit_rate, width, height, acodec}``，任何字段失败均降级为
+    0 / 空串，绝不抛错 —— 压缩主流程不应因为探测失败而中断。
+
+    码率取值优先级（这决定了码率钳制是否准确）：
+    1. 视频流 ``bit_rate``（最准，不含音频）；
+    2. ``format.bit_rate - 音频流码率``（容器只给总码率时扣掉音频）；
+    3. ``文件体积 * 8 / 时长``（连容器码率都没有时按体积估算）。
+    """
+    meta = {"duration": 0.0, "bit_rate": 0, "width": 0, "height": 0, "acodec": ""}
     try:
         r = subprocess.run(
-            [_ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=20)
-        return float(r.stdout.strip() or 0)
+            [_ffprobe_bin(), "-v", "error", "-show_entries",
+             "format=duration,bit_rate:stream=codec_type,codec_name,width,height,bit_rate",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=25)
+        data = json.loads(r.stdout or "{}")
     except Exception:
-        return 0.0
+        return meta
 
+    def _num(v) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
-def _probe_audio_codec(path: str) -> str:
-    """取首条音频流编码名，失败返回空串。"""
-    try:
-        r = subprocess.run(
-            [_ffprobe_bin(), "-v", "error", "-select_streams", "a:0",
-             "-show_entries", "stream=codec_name",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=20)
-        return (r.stdout.strip().lower())
-    except Exception:
-        return ""
+    fmt = data.get("format") or {}
+    meta["duration"] = _num(fmt.get("duration"))
+    fmt_br = _num(fmt.get("bit_rate"))
+    video_br = audio_br = 0.0
+    for st in data.get("streams") or []:
+        kind = st.get("codec_type")
+        if kind == "video" and not meta["width"]:
+            meta["width"] = int(_num(st.get("width")))
+            meta["height"] = int(_num(st.get("height")))
+            video_br = _num(st.get("bit_rate"))
+        elif kind == "audio" and not meta["acodec"]:
+            meta["acodec"] = (st.get("codec_name") or "").lower()
+            audio_br = _num(st.get("bit_rate"))
+    br = video_br or max(0.0, fmt_br - audio_br) or fmt_br
+    if br <= 0 and meta["duration"] > 0:
+        try:
+            br = app.Path(path).stat().st_size * 8 / meta["duration"]
+        except Exception:
+            br = 0.0
+    meta["bit_rate"] = int(br)
+    return meta
 
 
 def _register_job(device_id: str, src_name: str) -> str:
@@ -112,6 +150,9 @@ def _register_job(device_id: str, src_name: str) -> str:
             "out_path": "", "filename": "", "src_name": src_name,
             "device_id": device_id,
             "size_before": 0, "size_after": 0, "saving": 0.0, "note": "",
+            "codec": "", "output_format": "",
+            "src_kbps": 0, "target_kbps": 0,   # 视频压缩的码率依据/目标（前端可展示）
+            "elapsed": 0.0, "eta": 0.0,        # 已用时间 / 预计剩余（秒），让等待有预期
         }
     return job_id
 
@@ -161,29 +202,49 @@ def _compress_video(job: dict, src: str, out_path: app.Path, level: str,
     """视频压缩：LGPL 安全 H.264 / HEVC 重编码，输出 MP4，音轨优先原样复制；
     进度经 ``-progress pipe:1`` 解析。
 
-    ⚠️ 发行版 ffmpeg 为 LGPL 编译、无 libx264/libx265，必须走 codec_utils 的
-    h264_args / hevc_args（VideoToolbox 系统框架，不碰被禁的 GPL 库）；
-    不支持 -crf/-preset 选项（VideoToolbox 用 -q:v 控质量）。
+    ⚠️ 发行版 ffmpeg 为 LGPL 编译、无 libx264/libx265，必须走 codec_utils
+    （VideoToolbox 系统框架，不碰被禁的 GPL 库）；不支持 -crf/-preset。
+
+    **码率受控**（2026-09-11）：目标码率 = min(分辨率建议码率, 源码率 x 钳制系数)，
+    再以 -b:v / -maxrate / -bufsize 做 VBR 受限编码。这样产物必然小于源文件，
+    避免「恒定质量模式把已压过的低码率源重编成 2~3 倍体积、白等一场」。
     """
     quality = {"high": "high", "balanced": "balanced", "strong": "fast"}.get(level, "balanced")
-    duration = _probe_duration(src)
-    acodec = _probe_audio_codec(src)
-    cmd = [app.FFMPEG_BIN, "-y", "-i", src]
+    meta = _probe_video_meta(src)
+    duration = meta["duration"]
+    acodec = meta["acodec"]
+    src_kbps = int(meta["bit_rate"] / 1000) if meta["bit_rate"] else 0
+    short_side = min(meta["width"], meta["height"]) if (meta["width"] and meta["height"]) else 0
+    from codec_utils import rate_controlled_args, target_bitrate_kbps
+    target = target_bitrate_kbps(src_kbps, short_side, quality=quality, codec=codec)
+    job["src_kbps"] = src_kbps
+    job["target_kbps"] = target
+    cmd = [app.FFMPEG_BIN, "-y", "-nostdin", "-i", src]
+    cmd += rate_controlled_args(app.FFMPEG_BIN, codec=codec, target_kbps=target,
+                                pix_fmt="yuv420p")
     if codec == "hevc":
-        from codec_utils import hevc_args
-        cmd += hevc_args(app.FFMPEG_BIN, quality=quality)
         cmd += ["-tag:v", "hvc1"]          # 广兼容标签（QuickTime/Safari/Chrome 友好）
-    else:
-        from codec_utils import h264_args
-        cmd += h264_args(app.FFMPEG_BIN, quality=quality, pix_fmt="yuv420p")
-    cmd += ["-pix_fmt", "yuv420p"] if codec == "hevc" else []
     cmd += ["-movflags", "+faststart"]
     cmd += (["-c:a", "copy"] if acodec in _COPY_AUDIO_CODECS
             else ["-c:a", "aac", "-b:a", "160k"])
     cmd += ["-progress", "pipe:1", "-nostats", str(out_path)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # stderr 用独立线程抽干：既避免管道写满把 ffmpeg 卡死，又能在失败时给出真实原因
+    # （旧版丢 DEVNULL，只报一个 rc，无从排查）
+    err_lines: list[str] = []
+
+    def _drain(pipe) -> None:
+        try:
+            for ln in pipe:
+                err_lines.append(ln.rstrip())
+                if len(err_lines) > 60:
+                    del err_lines[:30]
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, args=(proc.stderr,), daemon=True).start()
     job["stage"] = "压缩中"
+    started = time.time()
     try:
         for line in proc.stdout:
             # -progress 输出形如 out_time_us=1234567 / progress=continue / progress=end
@@ -193,12 +254,22 @@ def _compress_video(job: dict, src: str, out_path: app.Path, level: str,
                 except ValueError:
                     continue
                 if cur_us > 0:
-                    job["progress"] = min(99, int(cur_us / 1e6 / duration * 100))
+                    pct = min(99, int(cur_us / 1e6 / duration * 100))
+                    job["progress"] = pct
+                    el = time.time() - started
+                    job["elapsed"] = round(el, 1)
+                    # 进度 >=3% 后按当前速率外推剩余时间（前期样本抖动大，不外推）
+                    if pct >= 3:
+                        job["eta"] = round(max(0.0, el * (100 - pct) / pct), 1)
     finally:
         rc = proc.wait()
     if rc != 0:
-        raise RuntimeError(f"ffmpeg 压缩失败（rc={rc}），编码={codec}，音轨={acodec or '未知'}")
+        tail = " | ".join(err_lines[-6:])[-400:]
+        raise RuntimeError(f"ffmpeg 压缩失败（rc={rc}），编码={codec}，目标码率={target}k，"
+                           f"音轨={acodec or '未知'}" + (f"；{tail}" if tail else ""))
     job["progress"] = 100
+    job["elapsed"] = round(time.time() - started, 1)
+    job["eta"] = 0.0
 
 
 def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: bool,
@@ -210,7 +281,13 @@ def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: boo
     job["codec"] = codec
     job["output_format"] = output_format
     out_path = None
+    acquired = False
     try:
+        if kind == "video":
+            # 转码闸门：VideoToolbox 硬编引擎共享，多路并发互相拖慢（实测 3 路慢 2.9 倍）
+            job["stage"] = "排队中"
+            _TRANSCODE_SEM.acquire()
+            acquired = True
         src_path = app.Path(src)
         if kind == "video":
             ext = ".mp4"                       # H.264 / HEVC 均封装为 MP4
@@ -247,6 +324,8 @@ def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: boo
         job["status"] = "failed"
         job["error"] = str(e)
     finally:
+        if acquired:
+            _TRANSCODE_SEM.release()
         if src_is_temp:
             try:
                 app.Path(src).unlink(missing_ok=True)
@@ -353,7 +432,14 @@ def compress_finish(
 
 @router.get("/api/compress/{job_id}")
 def compress_status(job_id: str, request: app.Request) -> dict:
-    app._check_rate_limit(request)
+    """查询压缩进度。
+
+    ⚠️ 这里**故意不做限流**（2026-09-11 修复）：前端每 1.5s 轮询一次进度，一个
+    90 秒的转码任务约 60 次请求，而限流额度是 30 次/小时。若把轮询计入配额，
+    任务跑到一半就会被 429 掐断，进度条永久停在某个百分比（实测用户看到卡在
+    32%），表现为「压缩好慢」，实际编码早已跑完。convert / matting / dewatermark
+    等路由的状态端点本就不限流，此处与它们对齐。
+    """
     with _LOCK:
         job = COMPRESS_JOBS.get(job_id)
         if not job:
@@ -363,7 +449,7 @@ def compress_status(job_id: str, request: app.Request) -> dict:
 
 @router.get("/api/compress/{job_id}/file")
 def compress_file(job_id: str, request: app.Request) -> app.FileResponse:
-    app._check_rate_limit(request)
+    """下载压缩结果（同 status：只读取件，不计入限流配额）。"""
     with _LOCK:
         job = COMPRESS_JOBS.get(job_id)
     if not job or job.get("status") != "completed" or not job.get("out_path"):

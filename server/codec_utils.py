@@ -32,6 +32,10 @@ __all__ = [
     "audio_encode_args",
     "probe_encoder",
     "available_h264",
+    "available_hevc",
+    "res_cap_kbps",
+    "target_bitrate_kbps",
+    "rate_controlled_args",
 ]
 
 # 编码器探测结果缓存：{ffmpeg_bin: encoders 文本}
@@ -113,6 +117,103 @@ def hevc_args(ffmpeg_bin: str, quality: str = "balanced") -> list[str]:
     else:
         args = ["-c:v", "mpeg4", "-q:v", "3"]
     return args
+
+
+# --------------------------------------------------------------------------- #
+# 码率受控编码（压缩路由专用，2026-09-11）
+#
+# 为什么压缩不能沿用上面的 -q:v 恒定质量模式
+# ------------------------------------------
+# VideoToolbox 的 ``-q:v`` 是**恒定质量**语义：它按「画质」重新分配码率，完全
+# 不理会源文件原本的码率水平。对网站在线播放那种已经压过的低码率源（实测
+# 864x486 / 629 kbps / 25fps 电视剧），``-q:v 60`` 会把它重编成约 2.5 Mbps,
+# 产物达**源体积的 284%**；程序随后判定「原文件已足够小」回退输出原文件副本，
+# 用户白等一场。HEVC 档同理（215%）。
+#
+# 解决：压缩改用「平均码率 + 峰值上限」双约束（VBR 受限），目标码率同时受
+#   ① 分辨率建议码率 —— 按画面尺寸给合理预算（纯码率模式下防止高码率源被
+#      压得不够小）；
+#   ② 源码率钳制 —— 乘一个 <1 的系数，从机制上保证产物一定小于源文件。
+# 两者取小。实测同一素材 864x486/629k 在 balanced 档 → 目标 453k，产物降到
+# 源码的 72%（真实省 28%），编码速度与恒质量模式完全一致（23x realtime）。
+# --------------------------------------------------------------------------- #
+
+# 分辨率（短边像素）→ 建议码率上限（kbps）
+_RES_BITRATE = ((480, 1200), (720, 2500), (1080, 4500), (1440, 8000))
+_RES_BITRATE_MAX = 16000
+# 档位 → 相对「分辨率建议码率」的倍率（放宽/收紧画面预算）
+_LEVEL_CAP = {"fast": 0.65, "balanced": 1.0, "high": 1.3}
+# 档位 → 相对「源码率」的钳制倍率（保证产物必然小于源；实测 0.72 约省 28%）
+_LEVEL_SRC = {"fast": 0.50, "balanced": 0.72, "high": 0.90}
+# HEVC 同画质约省 25% 码率 → 目标码率同步下调，省下的体积才拿得到
+_HEVC_GAIN = 0.75
+# 保护下限：再低画面就会出现可感知的糊块
+_MIN_KBPS = 120
+
+
+def res_cap_kbps(short_side: int) -> int:
+    """按画面短边给码率预算（kbps）；短边 <=480 给 1200k，逐档上调。"""
+    try:
+        s = int(short_side or 0)
+    except (TypeError, ValueError):
+        s = 0
+    if s <= 0:
+        return _RES_BITRATE_MAX
+    for edge, cap in _RES_BITRATE:
+        if s <= edge:
+            return cap
+    return _RES_BITRATE_MAX
+
+
+def target_bitrate_kbps(src_kbps, short_side, quality: str = "balanced",
+                        codec: str = "h264") -> int:
+    """算出目标平均码率（kbps）：分辨率预算与源码率钳制取小。
+
+    :param src_kbps: 源视频平均码率（kbps）；未知传 0/None 则只用分辨率预算
+    :param short_side: 源画面短边像素（宽高中较小者）
+    :param quality: ``fast`` / ``balanced`` / ``high``
+    :param codec: ``h264`` / ``hevc``（hevc 同画质再省约 25% 码率）
+    """
+    q = quality if quality in _LEVEL_CAP else "balanced"
+    cap = res_cap_kbps(short_side) * _LEVEL_CAP[q]
+    try:
+        src = float(src_kbps or 0)
+    except (TypeError, ValueError):
+        src = 0.0
+    if src > 0:
+        cap = min(cap, src * _LEVEL_SRC[q])
+    if (codec or "").lower() == "hevc":
+        cap *= _HEVC_GAIN
+    return max(_MIN_KBPS, int(round(cap)))
+
+
+def rate_controlled_args(ffmpeg_bin: str, codec: str = "h264",
+                         target_kbps: int = 0,
+                         pix_fmt: str | None = None) -> list[str]:
+    """按目标码率生成 VideoToolbox 编码参数（VBR 受限：平均 + 峰值双约束）。
+
+    :param target_kbps: 目标平均码率（kbps）。<=0 表示没有码率依据，此时
+                        回退到恒定质量模式（h264_args / hevc_args），行为与旧版一致。
+    """
+    hevc = (codec or "").lower() == "hevc"
+    if target_kbps and target_kbps > 0:
+        t = int(target_kbps)
+        peak = max(t + 1, int(round(t * 1.3)))      # 峰值上限：给运动场景留余量
+        buf = max(peak * 2, int(round(t * 2)))      # 缓冲区 2x 峰值，避免码率抖动
+        enc = available_hevc(ffmpeg_bin) if hevc else available_h264(ffmpeg_bin)
+        if enc in ("h264_videotoolbox", "hevc_videotoolbox"):
+            args = ["-c:v", enc, "-b:v", f"{t}k", "-maxrate", f"{peak}k",
+                    "-bufsize", f"{buf}k", "-allow_sw", "1", "-realtime", "0"]
+        elif enc == "libopenh264":
+            args = ["-c:v", "libopenh264", "-b:v", f"{t}k"]
+        else:
+            args = ["-c:v", "mpeg4", "-q:v", "3"]
+        if pix_fmt:
+            args += ["-pix_fmt", pix_fmt]
+        return args
+    if hevc:
+        return hevc_args(ffmpeg_bin, quality="balanced")
+    return h264_args(ffmpeg_bin, quality="balanced", pix_fmt=pix_fmt)
 
 
 def delogo_filter(x: int, y: int, w: int, h: int, band: int = 10) -> str:

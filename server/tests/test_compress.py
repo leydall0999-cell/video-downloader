@@ -18,8 +18,10 @@ E2E 已实测（PNG 6.6% / MP4 51.6%/63.0%），此处不重复——保持离�
     cd server && python -m pytest tests/test_compress.py -v
 """
 import os
+import subprocess
 import sys
 import tempfile
+import time
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
@@ -28,12 +30,16 @@ if _SERVER_DIR not in sys.path:
 from PIL import Image, ImageDraw  # noqa: E402
 
 import app  # noqa: E402
+from codec_utils import available_h264, rate_controlled_args, target_bitrate_kbps  # noqa: E402
 from routers.compress import (  # noqa: E402
     _compress_image,
+    _probe_video_meta,
     _run_compress,
+    _submit_compress,
     _validate_level,
     _validate_codec,
     _validate_output_format,
+    _TRANSCODE_SEM,
     pillow_avif,
     COMPRESS_JOBS,
 )
@@ -257,6 +263,186 @@ def test_run_compress_hevc_video_guarded():
         COMPRESS_JOBS.pop("hev1", None)
 
 
+def _make_lowbitrate_mp4(path, seconds=3, w=640, h=360, kbps=300):
+    """生成一个「已经被压过」的低码率 H.264 源（模拟网站在线播放片源）。
+
+    这类源是码率钳制要解决的场景：恒定质量模式会把它们重编成数倍体积。
+    """
+    ffmpeg = getattr(app, "FFMPEG_BIN", "") or ""
+    if not (ffmpeg and os.path.isfile(ffmpeg)):
+        return False
+    r = subprocess.run(
+        [ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i",
+         f"testsrc2=duration={seconds}:size={w}x{h}:rate=25",
+         "-c:v", "h264_videotoolbox", "-b:v", f"{kbps}k",
+         "-pix_fmt", "yuv420p", path],
+        capture_output=True, text=True)
+    return r.returncode == 0 and os.path.isfile(path) and os.path.getsize(path) > 0
+
+
+def test_target_bitrate_clamps_to_source():
+    """目标码率 = min(分辨率建议码率, 源码率 x 钳制系数)，且档位/编码单调。"""
+    # 实测场景：864x486 / 629kbps 网站在线片源，balanced 档 0.72 → 约 453k
+    got = target_bitrate_kbps(629, 486, quality="balanced", codec="h264")
+    check("低码率源被源码率钳制（629k x 0.72 ≈ 453k）", 440 <= got <= 465, got)
+    # 高码率源应受分辨率预算约束，而不是跟着源跑到 5.7M
+    got2 = target_bitrate_kbps(8000, 1080, quality="balanced", codec="h264")
+    check("高码率源受分辨率预算约束（<= 4500k）", got2 <= 4500, got2)
+    hevc = target_bitrate_kbps(8000, 1080, quality="balanced", codec="hevc")
+    check("HEVC 目标码率约为 H.264 的 75%", abs(hevc - got2 * 0.75) <= 2, (got2, hevc))
+    strong = target_bitrate_kbps(8000, 1080, quality="fast", codec="h264")
+    high = target_bitrate_kbps(8000, 1080, quality="high", codec="h264")
+    check("档位单调（极致 < 推荐 < 轻度）", strong < got2 < high, (strong, got2, high))
+    check("源码率未知时退回分辨率预算", target_bitrate_kbps(0, 720) == 2500)
+    check("极低源码率有下限保护（>=120k）",
+          target_bitrate_kbps(80, 1080, quality="fast") >= 120)
+
+
+def test_rate_controlled_args_shape():
+    """码率受控参数：必须有 -b:v / -maxrate / -bufsize，且不用 -q:v / -crf。"""
+    ffmpeg = getattr(app, "FFMPEG_BIN", "") or ""
+    if available_h264(ffmpeg) not in ("h264_videotoolbox", "libopenh264"):
+        print("⏭️  跳过：本机 ffmpeg 无可用 H.264 编码器")
+        return
+    args = rate_controlled_args(ffmpeg, codec="h264", target_kbps=453, pix_fmt="yuv420p")
+    check("含 -b:v 目标码率", "-b:v" in args and "453k" in args, args)
+    check("含 -maxrate 峰值上限且大于目标",
+          "-maxrate" in args and int(args[args.index("-maxrate") + 1].rstrip("k")) > 453, args)
+    check("含 -bufsize 缓冲", "-bufsize" in args, args)
+    check("不使用恒定质量 -q:v（正是它把产物放大 2~3 倍）", "-q:v" not in args, args)
+    check("不使用 -crf（VideoToolbox 不支持）", "-crf" not in args, args)
+    check("强制 yuv420p（兼容性）", "yuv420p" in args, args)
+    fallback = rate_controlled_args(ffmpeg, codec="h264", target_kbps=0, pix_fmt="yuv420p")
+    check("target<=0 时回退恒定质量模式（无码率依据不静默降质）", "-q:v" in fallback, fallback)
+
+
+def test_probe_video_meta_reads_bitrate_and_resolution():
+    """一次 ffprobe 取时长/分辨率/码率，供码率钳制使用；失败必须降级不抛错。"""
+    if not _make_lowbitrate_mp4("/tmp/_vdl_unused.mp4"):
+        print("⏭️  跳过：离线环境无可用 ffmpeg")
+        return
+    try:
+        os.unlink("/tmp/_vdl_unused.mp4")
+    except OSError:
+        pass
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src.mp4")
+        if not _make_lowbitrate_mp4(src, seconds=2):
+            print("⏭️  跳过：测试源生成失败")
+            return
+        meta = _probe_video_meta(src)
+        check("探测到时长", 1.5 <= meta["duration"] <= 3.0, meta["duration"])
+        check("探测到分辨率 640x360", (meta["width"], meta["height"]) == (640, 360), meta)
+        check("探测到合理码率（300k 目标 ±120% 容差）",
+              100 <= meta["bit_rate"] / 1000 <= 700, meta["bit_rate"])
+        bad = _probe_video_meta(os.path.join(td, "nope.mp4"))
+        check("文件不存在时降级为零值而非抛错",
+              bad["duration"] == 0 and bad["bit_rate"] == 0 and bad["width"] == 0, bad)
+
+
+def test_low_bitrate_source_actually_shrinks():
+    """防回归核心：对「已压过」的低码率源，结果必须真的小于原文件。
+
+    旧实现走恒定质量（-q:v 60）：实测 629kbps 源产物达 284%，随后被「压缩后更大
+    就保留原文件」守卫回退成副本 —— 用户白等一场。本用例锁死新行为。
+    """
+    ffmpeg = getattr(app, "FFMPEG_BIN", "") or ""
+    if not (ffmpeg and os.path.isfile(ffmpeg)) or available_h264(ffmpeg) != "h264_videotoolbox":
+        print("⏭️  跳过：需要带 h264_videotoolbox 的 ffmpeg")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "low.mp4")
+        if not _make_lowbitrate_mp4(src, seconds=3, w=640, h=360, kbps=300):
+            print("⏭️  跳过：测试源生成失败")
+            return
+        before = os.path.getsize(src)
+        COMPRESS_JOBS["low1"] = {
+            "status": "running", "stage": "", "progress": 0, "error": "",
+            "out_path": "", "filename": "", "src_name": "low.mp4",
+            "device_id": "t", "size_before": 0, "size_after": 0, "saving": 0.0, "note": "",
+        }
+        _run_compress("low1", src, "video", "balanced", src_is_temp=False, codec="h264")
+        j = COMPRESS_JOBS["low1"]
+        check("低码率源压缩完成", j["status"] == "completed", j.get("error"))
+        check("产物确实小于源文件（不再回退原文件副本）",
+              0 < j["size_after"] < before, f"{before} -> {j['size_after']}")
+        check("saving 为正", j["saving"] > 0, j["saving"])
+        check("记录了源码率/目标码率（可诊断）",
+              j["src_kbps"] > 0 and j["target_kbps"] > 0, j)
+        check("目标码率不超过源码率（钳制生效）",
+              j["target_kbps"] < j["src_kbps"], (j["src_kbps"], j["target_kbps"]))
+        check("记录了已用时间（前端显示等待预期）", j["elapsed"] > 0, j["elapsed"])
+        COMPRESS_JOBS.pop("low1", None)
+
+
+def test_transcode_gate_queues_when_full():
+    """转码闸门：名额占满时新任务停在「排队中」，释放后能跑完。
+
+    背景：VideoToolbox 硬编引擎共享，实测 3 路并发每路慢 2.9 倍；转码与下载共用
+    8 worker 池，不设闸门会更慢。
+    """
+    if not _make_lowbitrate_mp4("/tmp/_vdl_unused2.mp4"):
+        print("⏭️  跳过：离线环境无可用 ffmpeg")
+        return
+    try:
+        os.unlink("/tmp/_vdl_unused2.mp4")
+    except OSError:
+        pass
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "q.mp4")
+        if not _make_lowbitrate_mp4(src, seconds=2, w=320, h=240, kbps=250):
+            print("⏭️  跳过：测试源生成失败")
+            return
+        _TRANSCODE_SEM.acquire()
+        _TRANSCODE_SEM.acquire()          # 占满名额
+        job_id = ""
+        try:
+            job_id = _submit_compress(src, "balanced", "t", src_name="q.mp4")
+            time.sleep(1.0)
+            j = COMPRESS_JOBS.get(job_id) or {}
+            check("名额占满时任务停在「排队中」（未开跑）",
+                  j.get("stage") == "排队中" and (j.get("progress") or 0) == 0, j.get("stage"))
+        finally:
+            _TRANSCODE_SEM.release()
+            _TRANSCODE_SEM.release()
+        for _ in range(100):
+            if (COMPRESS_JOBS.get(job_id) or {}).get("status") != "running":
+                break
+            time.sleep(0.1)
+        check("释放名额后任务能跑完",
+              (COMPRESS_JOBS.get(job_id) or {}).get("status") == "completed",
+              (COMPRESS_JOBS.get(job_id) or {}).get("error"))
+        COMPRESS_JOBS.pop(job_id, None)
+
+
+def test_status_endpoints_are_not_rate_limited():
+    """防回归：压缩进度轮询端点必须**免**限流，提交类端点必须**保留**限流。
+
+    背景（2026-09-11 实机故障）：compress_status / compress_file 曾被误加限流，
+    而额度只有 30 次/小时、前端每 1.5s 轮询一次 —— 一个 90 秒的转码任务需要约
+    60 次轮询，跑到一半就被 429 掐断，进度条永久停在某个百分比（用户看到卡在
+    32%），表现为「视频压缩好慢」，实际编码早已跑完。convert / matting /
+    dewatermark 的状态端点本就不限流，压缩应与它们对齐。
+    """
+    import re as _re
+    src = open(os.path.join(_SERVER_DIR, "routers", "compress.py"), encoding="utf-8").read()
+
+    def _func_body(name):
+        m = _re.search(rf"\ndef {name}\(.*?(?=\n@router|\ndef |\Z)", src, _re.S)
+        return m.group(0) if m else ""
+
+    for fn in ("compress_status", "compress_file"):
+        body = _func_body(fn)
+        check(f"{fn} 存在于 compress.py", bool(body))
+        check(f"{fn} 不调用 _check_rate_limit（轮询不计配额）",
+              bool(body) and "_check_rate_limit" not in body, body[:120])
+
+    for fn in ("compress_local", "compress_finish"):
+        body = _func_body(fn)
+        check(f"{fn} 仍保留限流（防滥用不能一起被删）",
+              bool(body) and "_check_rate_limit" in body)
+
+
 if __name__ == "__main__":
     test_png_lossless_pixel_identical()
     test_jpg_quality_downscale_size()
@@ -267,5 +453,11 @@ if __name__ == "__main__":
     test_avif_output_smaller()
     test_avif_missing_plugin_errors()
     test_run_compress_hevc_video_guarded()
+    test_target_bitrate_clamps_to_source()
+    test_rate_controlled_args_shape()
+    test_probe_video_meta_reads_bitrate_and_resolution()
+    test_low_bitrate_source_actually_shrinks()
+    test_transcode_gate_queues_when_full()
+    test_status_endpoints_are_not_rate_limited()
     print(f"\n通过: {PASS}  失败: {FAIL}")
     sys.exit(1 if FAIL else 0)

@@ -3822,6 +3822,11 @@
     if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
     return b + ' B';
   };
+  // 秒 → m:ss（压缩中显示已用时间/预计剩余，让等待有明确预期）
+  const cpMmss = (sec) => {
+    const s = Math.max(0, Math.round(sec || 0));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
   const cpEnsurePolling = () => {
     if (cpState.pollTimer) return;
     cpState.pollTimer = setInterval(cpPollAll, CP_POLL_INTERVAL);
@@ -3837,7 +3842,14 @@
     el.cpList.innerHTML = list.map(it => {
       const statusText = {
         pending: '未开始',
-        running: it.stage === '排队中' ? '排队中…' : (it.progress ? `压缩中 ${it.progress}%` : '压缩中…'),
+        running: it.stage === '排队中'
+          ? '排队中…（等待其它转码任务）'
+          : (it.progress
+            ? `压缩中 ${it.progress}%`
+              + (it.elapsed ? ` · 已用 ${cpMmss(it.elapsed)}` : '')
+              + (it.eta ? ` · 约剩 ${cpMmss(it.eta)}` : '')
+              + (it.stale ? ' · 进度刷新受阻（任务仍在进行）' : '')
+            : '压缩中…'),
         completed: it.saving > 0
           ? `完成 ✅ 节省 ${it.saving}%（${cpFormatSize(it.sizeBefore || 0)} → ${cpFormatSize(it.sizeAfter || 0)}）${it.note || ''}`
           : `完成 ✅ ${it.note || '体积已足够小'}`,
@@ -3893,7 +3905,7 @@
         name,
         kind, level, codec, outputFormat,
         status: isLocal ? 'pending' : 'pending',
-        jobId: null, progress: 0, stage: '',
+        jobId: null, progress: 0, stage: '', elapsed: 0, eta: 0,
         errorMsg: '', outputName: '', sizeBefore: 0, sizeAfter: 0, saving: 0, note: '',
         _removed: false, _xhrs: null, _uploadId: null, _totalChunks: 0,
       });
@@ -3908,8 +3920,12 @@
     await Promise.all(running.map(async it => {
       try {
         const st = await request(`/api/compress/${it.jobId}`);
+        it._pollFails = 0;
+        it.stale = false;
         it.progress = st.progress || 0;
         it.stage = st.stage || '';
+        it.elapsed = st.elapsed || 0;
+        it.eta = st.eta || 0;
         if (st.status === 'completed') {
           it.status = 'completed';
           it.sizeBefore = st.size_before || 0; it.sizeAfter = st.size_after || 0;
@@ -3921,17 +3937,24 @@
         } else {
           cpRender();
         }
-      } catch (_e) { /* 单个轮询失败忽略 */ }
+      } catch (_e) {
+        // 单次失败可忽略（后端瞬时忙），但连续失败必须让用户看见——否则进度条会
+        // 无声卡死，用户误以为「压得很慢」（2026-09-11 限流掐断轮询正是此类问题）
+        it._pollFails = (it._pollFails || 0) + 1;
+        if (it._pollFails >= 3) { it.stale = true; cpRender(); }
+      }
     }));
   };
 
   // 提交单个压缩任务（本地路径直传；网页文件先分片上传再 finish）
   const cpStartOne = (item) => new Promise((resolve, reject) => {
     if (!item || item.status !== 'pending') { reject(new Error('状态不允许开始压缩')); return; }
-    item.status = 'running'; item.progress = item.localPath ? 5 : 0; item.stage = ''; cpRender();
+    item.status = 'running'; item.progress = item.localPath ? 5 : 0; item.stage = '';
+    item.elapsed = 0; item.eta = 0; cpRender();
     const finishJob = (data) => {
       if (data.job_id) {
-        item.jobId = data.job_id; item.status = 'running'; item.progress = 5; cpRender(); resolve(data);
+        item.jobId = data.job_id; item.status = 'running'; item.progress = 5;
+        item.elapsed = 0; item.eta = 0; cpRender(); resolve(data);
       } else {
         item.status = 'failed'; item.errorMsg = data.detail || data.error || '压缩请求失败'; cpRender(); reject(new Error(item.errorMsg));
       }
@@ -4010,7 +4033,10 @@
       cpState.list = cpState.list.filter(x => x.id !== id);
       cpRender();
     } else if (act === 'start') {
-      if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
+      if (it.status === 'failed') {
+        it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null;
+        it.elapsed = 0; it.eta = 0;
+      }
       cpEnsurePolling();
       cpStartOne(it).catch(() => {});
     }
@@ -4033,7 +4059,7 @@
     el.cpStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项（所有项都已开始/完成）';
   });
   el.cpStartAllBtn.addEventListener('click', () => {
-    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
+    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.elapsed = 0; it.eta = 0; } });
     const wait = cpState.list.filter(x => x.status === 'pending');
     if (!wait.length) { el.cpStatus.textContent = '没有可开始的项（先添加文件）'; return; }
     el.cpStatus.textContent = `批量压缩中…（${wait.length} 个）`;
