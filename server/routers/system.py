@@ -54,7 +54,12 @@ def _candidates_version_txt() -> list[Path]:
     cands: list[Path] = []
     exe = getattr(sys, "executable", "")
     if exe:
-        cands.append(Path(exe).resolve().parent.parent / "Resources" / "version.txt")
+        ep = Path(exe).resolve()
+        # macOS .app：Contents/Resources/version.txt
+        cands.append(ep.parent.parent / "Resources" / "version.txt")
+        # Windows onedir（PyInstaller）等：可执行文件同级放一份，跨平台兜底。
+        # macOS 下该路径为 Contents/MacOS/version.txt（不存在，自动跳过），无副作用。
+        cands.append(ep.parent / "version.txt")
     cands.append(Path(__file__).resolve().parent.parent / "version.txt")
     return cands
 
@@ -63,7 +68,9 @@ def _candidates_build_txt() -> list[Path]:
     cands: list[Path] = []
     exe = getattr(sys, "executable", "")
     if exe:
-        cands.append(Path(exe).resolve().parent.parent / "Resources" / "build_version.txt")
+        ep = Path(exe).resolve()
+        cands.append(ep.parent.parent / "Resources" / "build_version.txt")
+        cands.append(ep.parent / "build_version.txt")
     cands.append(Path(__file__).resolve().parent.parent / "build_version.txt")
     return cands
 
@@ -296,7 +303,15 @@ def _prepare_update(data: dict, work: Path, bundle: Path, target_ver: str) -> Op
         shutil.rmtree(str(extract), ignore_errors=True)
     except Exception:
         return None
-    return staging if staging.exists() else None
+    if not staging.exists():
+        return None
+    # 全量分支的历史缺陷（2026-09-11 补）：解压成功就直接返回，未验证签名与版本号。
+    # 实测 `ditto -x -k` 会完整保留包内签名（对解压副本 codesign --verify rc=0），
+    # 故此处与增量分支对齐：签名完好 + version.txt == 目标版本，任一不过即返回 None
+    # （前端报「更新准备失败」，而不是把一个坏包交给助手去覆盖 /Applications）。
+    if not _verify_app(staging, target_ver):
+        return None
+    return staging
 
 
 # --------------------------------------------------------------------------- #

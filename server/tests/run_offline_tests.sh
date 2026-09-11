@@ -13,6 +13,8 @@
 #   7. test_codec_utils.py            —— LGPL 编码器选择（H.264/HEVC 降级链、GPL 红线）
 #   8. test_convert_pipeline.py       —— 转码管线决策 + 参数构造 + 真实转码端到端
 #   9. test_ffmpeg_tools.py           —— 媒体加工（裁剪注入防护、抽音频/封面/铃声/去水印）
+#  10. test_selfupdate.py             —— 自更新链路（全量 sha/校验闸门、增量版本门槛、
+#                                        套用后的权限保持、发布脚本排序守卫）
 #
 # 注：7~9 含调用真实 ffmpeg 的端到端用例（合成素材，无需网络）；
 #     若构建机没有 ffmpeg，这些用例会打印「⚠️ 跳过」而非失败。
@@ -64,6 +66,7 @@ run_one test_commentary_routes.py
 run_one test_codec_utils.py
 run_one test_convert_pipeline.py
 run_one test_ffmpeg_tools.py
+run_one test_selfupdate.py
 
 echo ""
 echo "========================================="
