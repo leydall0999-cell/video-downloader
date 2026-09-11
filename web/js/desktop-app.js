@@ -75,7 +75,9 @@
     },
     // 弹出系统多文件选择框，返回绝对路径数组；无桥接或用户取消返回空数组。
     // 注意：pywebview 的 api.* 调用返回 Promise，必须 await/then 取值。
-    chooseFiles() {
+    // kind: 'media'(默认，视频+音频) | 'image'(图片) | 'any'(视频+音频+图片)。
+    // 无 kind 的旧调用行为不变；旧二进制不认 kind 时按 media 处理。
+    chooseFiles(kind) {
       const api = window.pywebview && window.pywebview.api;
       if (!(api && typeof api.choose_files === 'function')) { return Promise.resolve([]); }
       const norm = (r) => {
@@ -85,7 +87,7 @@
         return [];
       };
       try {
-        const r = api.choose_files();
+        const r = kind ? api.choose_files(kind) : api.choose_files();
         if (r && typeof r.then === 'function') {
           return r.then(norm).catch(() => []);
         }

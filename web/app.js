@@ -3736,7 +3736,7 @@
   // 事件绑定
   el.imgAddBtn.addEventListener('click', () => {
     if (imgDesktopNative()) {
-      window.VDL.desktop.chooseFiles().then(list => { if (list && list.length) imgAddFiles(list); }).catch(() => {});
+      window.VDL.desktop.chooseFiles('image').then(list => { if (list && list.length) imgAddFiles(list); }).catch(() => {});
     } else {
       el.imgFileInput.click();
     }
@@ -3976,7 +3976,7 @@
   // 事件绑定
   el.cpAddBtn.addEventListener('click', () => {
     if (cpDesktopNative()) {
-      window.VDL.desktop.chooseFiles().then(list => { if (list && list.length) cpAddFiles(list); }).catch(() => {});
+      window.VDL.desktop.chooseFiles('any').then(list => { if (list && list.length) cpAddFiles(list); }).catch(() => {});
     } else {
       el.cpFileInput.click();
     }

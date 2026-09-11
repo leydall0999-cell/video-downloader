@@ -344,8 +344,15 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
-    def choose_files(self) -> list[str] | str:
+    def choose_files(self, kind: str = "media") -> list[str] | str:
         """弹出系统多文件选择框，返回所选文件绝对路径列表；用户取消或失败返回空串。
+
+        kind 决定可选扩展名与对话框标题（★ 2026-09-11 修复「无损压缩/图片转换里图片是灰的、选不了」）：
+          - "media"（默认）：视频 + 音频（桥接/转码/字幕等原有场景，保持行为不变）
+          - "image"        ：图片（图片转换视图，含 bmp/tif/gif）
+          - "any"          ：视频 + 音频 + png/jpg/jpeg/webp（无损压缩视图；
+                             刻意不含 heic/avif/bmp/tif/gif，后端压缩不支持，避免「选得到却报错」）
+        前端未传参时按 "media" 处理，向后兼容旧调用。
 
         ★ 2026-08-28 续33 关键修复：移除 tkinter.Tk() 调用（见 choose_folder 注释）。
         同样改用 osascript `choose file with multiple selections allowed` 子进程弹窗，
@@ -358,17 +365,31 @@ class VdlApi:
         """
         try:
             import subprocess as _sp
-            # AppleScript 列表必须用引号+逗号+空格：`{"mp4", "mov"}`。
-            # `of type` 是 choose file 的子句，必须与 choose file 同一行。
-            ext_list = "{" + ", ".join(f'"{e}"' for e in [
+            _MEDIA_EXTS = [
                 "mp4", "mov", "mkv", "webm", "avi", "flv", "ts", "wmv",
                 "mpeg", "mpg", "3gp", "ogv", "m4v",
                 "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus",
-            ]) + "}"
+            ]
+            # 图片转换视图（UPLOAD_IMAGE_EXTS 等同）：Pillow 原生可开的位图
+            _IMAGE_EXTS = [
+                "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif",
+            ]
+            # 无损压缩视图 only 吃 png/jpg/jpeg/webp（与 server/routers/compress.py 一致）；
+            # 故意不含 heic/avif/bmp/tif/gif —— 后端不处理，放进来会变成「选得到但报不支持」。
+            _COMPRESS_IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"]
+            _KINDS = {
+                "media": (_MEDIA_EXTS, "选择要桥接的视频/音频文件（可多选）"),
+                "image": (_IMAGE_EXTS, "选择图片文件（可多选）"),
+                "any": (_MEDIA_EXTS + _COMPRESS_IMAGE_EXTS, "选择视频/音频/图片文件（可多选）"),
+            }
+            exts, prompt = _KINDS.get(str(kind or "media").strip().lower(), _KINDS["media"])
+            # AppleScript 列表必须用引号+逗号+空格：`{"mp4", "mov"}`。
+            # `of type` 是 choose file 的子句，必须与 choose file 同一行。
+            ext_list = "{" + ", ".join(f'"{e}"' for e in exts) + "}"
             # AppleScript 限制：choose file ... of type ... with ... 必须同一行；
             # 后续 repeat / return 可独立 -e 喂入。
             script_lines = [
-                f'set theFiles to choose file of type {ext_list} with multiple selections allowed with prompt "选择要桥接的视频/音频文件（可多选）"',
+                f'set theFiles to choose file of type {ext_list} with multiple selections allowed with prompt "{prompt}"',
                 'set out to ""',
                 'repeat with f in theFiles',
                 '  set out to out & POSIX path of f & linefeed',
