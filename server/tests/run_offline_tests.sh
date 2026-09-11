@@ -65,6 +65,12 @@ run_one test_matting_core.py
 run_one test_dewatermark_core.py
 run_one test_matting_forward.py
 run_one test_dewatermark_forward.py
+#   3c. test_matting_engines_forward.py —— 其余本地 ONNX 引擎前向（modnet/isnet/birefnet-matting/portrait）
+#   3d. test_matting_chroma_key.py      —— chroma-key 纯算法前向（背景透明/主体不透明/选区硬边界）
+#   3e. test_matting_sam_forward.py     —— sam-matting 前向（假 _sam_session 注入 enc/dec）
+run_one test_matting_engines_forward.py
+run_one test_matting_chroma_key.py
+run_one test_matting_sam_forward.py
 run_one test_convert_guards.py
 run_one test_commentary_routes.py
 run_one test_codec_utils.py
