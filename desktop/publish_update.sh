@@ -14,6 +14,7 @@
 #   bash desktop/publish_update.sh                    # 交互确认后发布
 #   bash desktop/publish_update.sh --yes              # 跳过确认
 #   bash desktop/publish_update.sh --force            # 允许发布不高于当前线上版本号的版本
+#   bash desktop/publish_update.sh --full             # 强制本次仅发布全量（即使版本号升级也不生成增量补丁）
 #   VDL_RELEASE_NOTES="修复 XX 问题" bash desktop/publish_update.sh
 #   VDL_KEEP_BASELINES=3 bash desktop/publish_update.sh   # 历史基线保留版数（默认 2，0=不裁剪）
 set -euo pipefail
@@ -30,10 +31,12 @@ NOTES="${VDL_RELEASE_NOTES:-性能优化与问题修复}"
 
 ASSUME_YES=0
 FORCE=0
+FULL=0
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) ASSUME_YES=1 ;;
     --force)  FORCE=1 ;;
+    --full)   FULL=1 ;;
     *) echo "未知参数：${arg}（支持 --yes / --force）"; exit 2 ;;
   esac
 done
@@ -124,7 +127,7 @@ PATCH_URL=""
 FROM_VERSION=""
 BSDIFF_BIN="$REPO/desktop/tools/bsdiff"
 [ -x "$BSDIFF_BIN" ] || BSDIFF_BIN="$(command -v bsdiff || echo bsdiff)"
-if [ "$REMOTE_VER" != "0.0.0" ] && [ "$REMOTE_VER" != "$VERSION" ] && _ver_ge "$VERSION" "$REMOTE_VER"; then
+if [ "$FULL" != "1" ] && [ "$REMOTE_VER" != "0.0.0" ] && [ "$REMOTE_VER" != "$VERSION" ] && _ver_ge "$VERSION" "$REMOTE_VER"; then
   FROM_VERSION="$REMOTE_VER"
   OLD_BASE="$BASE_DIR/$FROM_VERSION/VideoDownloader.app"
   if [ ! -d "$OLD_BASE" ]; then
