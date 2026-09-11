@@ -933,6 +933,11 @@ class VdlApi:
                 registries.append(("COMPRESS_JOBS", _CJOBS))
             except Exception as _e:
                 _log(f"import COMPRESS_JOBS failed: {_e!r}")
+            try:
+                from routers.sr import SR_JOBS as _SJOBS
+                registries.append(("SR_JOBS", _SJOBS))
+            except Exception as _e:
+                _log(f"import SR_JOBS failed: {_e!r}")
             for _name, _reg in registries:
                 job = _reg.get(job_id) if isinstance(_reg, dict) else None
                 if job and job.get("out_path"):

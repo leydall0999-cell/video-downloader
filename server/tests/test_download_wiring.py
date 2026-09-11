@@ -40,6 +40,7 @@ os.environ["VDL_DATA_DIR"] = _TMPROOT
 
 import app  # noqa: E402
 import routers.compress as compress_mod  # noqa: E402
+import routers.sr as sr_mod  # noqa: E402
 import desktop_launcher as dl  # noqa: E402
 
 PASS = 0
@@ -109,6 +110,23 @@ def test_bridge_resolves_compress_jobs():
         compress_mod.COMPRESS_JOBS.pop("cpjob_test1", None)
 
 
+def test_bridge_resolves_sr_jobs():
+    """A3：高清修复任务（SR_JOBS）必须能被保存面板解析到（2026-09-12 新增的第三个下载入口）。"""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "sr_out.png"
+        src.write_bytes(b"upscaled-bytes-abcdefg")
+        dest = Path(td) / "saved" / "[2x]photo.png"
+        sr_mod.SR_JOBS["srjob_test1"] = {
+            "status": "completed", "out_path": str(src),
+            "filename": "[2x]photo.png",
+        }
+        rv, script = call_bridge("srjob_test1", "[2x]photo.png", dest=str(dest))
+        check("高清修复任务命中并保存成功", rv == str(dest), rv)
+        check("产物真的被拷贝", dest.is_file() and dest.read_bytes() == src.read_bytes(),
+              dest if dest.is_file() else "missing")
+        sr_mod.SR_JOBS.pop("srjob_test1", None)
+
+
 def test_bridge_still_resolves_convert_jobs():
     """A2：原有转换/桥接任务（app.CONVERT_JOBS）不能被这次改动改坏。"""
     with tempfile.TemporaryDirectory() as td:
@@ -157,6 +175,7 @@ EMITTERS = {
     "musRender": "el.musList",
     "imgRender": "el.imgList",
     "cpRender": "el.cpList",
+    "srRender": "el.srList",   # 高清修复（2026-09-12 新增）
 }
 
 
@@ -198,21 +217,29 @@ def test_frontend_wiring():
     check("el 表已注册 cpList", re.search(r"cpList:\s*\$\('cpList'\)", src) is not None)
     check("index.html 存在 id=cpList 的列表",
           'id="cpList"' in INDEX_HTML_PATH.read_text(encoding="utf-8"))
+    # 高清修复列表（第三个渲染点）
+    check("el 表已注册 srList", re.search(r"srList:\s*\$\('srList'\)", src) is not None)
+    check("index.html 存在 id=srList 的列表",
+          'id="srList"' in INDEX_HTML_PATH.read_text(encoding="utf-8"))
 
 
 def test_frontend_href_regex_covers_both():
     """B2：拦截逻辑的 href 正则必须同时认得 convert 与 compress 两类任务链接。"""
     src = APP_JS_PATH.read_text(encoding="utf-8")
-    literal = r"/\/api\/(?:convert|compress)\/([^/?#]+)/"
-    check("源码内的 href 正则同时覆盖 convert/compress", literal in src)
+    literal = r"/\/api\/(?:convert|compress|sr)\/([^/?#]+)/"
+    check("源码内的 href 正则同时覆盖 convert/compress/sr", literal in src)
 
-    pat = re.compile(r"/api/(?:convert|compress)/([^/?#]+)")
+    pat = re.compile(r"/api/(?:convert|compress|sr)/([^/?#]+)")
     check("convert 链接能解析出 jobId",
           pat.search("/api/convert/abc123/file?device=xyz").group(1) == "abc123")
     check("compress 链接能解析出 jobId",
           pat.search("/api/compress/44e782b29712/file").group(1) == "44e782b29712")
     check("旧正则（只认 convert）确实解析不出压缩链接",
           re.compile(r"/api/convert/([^/?#]+)").search("/api/compress/aa11/file") is None)
+    check("sr 链接能解析出 jobId",
+          pat.search("/api/sr/9f3c2a71b0de/file").group(1) == "9f3c2a71b0de")
+    check("漏了 sr 分支的旧正则确实解析不出高清修复链接",
+          re.compile(r"/api/(?:convert|compress)/([^/?#]+)").search("/api/sr/aa11/file") is None)
 
     # 前端调用的桥方法名必须与 Python 侧一致
     check("前端调用 save_convert_file_dialog", "save_convert_file_dialog" in src)

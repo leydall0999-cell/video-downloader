@@ -17,6 +17,8 @@
 #   9. test_ffmpeg_tools.py           —— 媒体加工（裁剪注入防护、抽音频/封面/铃声/去水印）
 #  10. test_selfupdate.py             —— 自更新链路（全量 sha/校验闸门、增量版本门槛、
 #                                        套用后的权限保持、发布脚本排序守卫）
+#  11. test_sr.py                    —— 高清修复（档位/倍率校验、AI 输入上限、
+#                                        轮询端点免限流、CoreML 不得指定计算单元）
 #
 # 注：7~9 含调用真实 ffmpeg 的端到端用例（合成素材，无需网络）；
 #     若构建机没有 ffmpeg，这些用例会打印「⚠️ 跳过」而非失败。
@@ -79,6 +81,7 @@ run_one test_ffmpeg_tools.py
 run_one test_compress.py
 run_one test_desktop_bridge.py
 run_one test_download_wiring.py
+run_one test_sr.py
 run_one test_selfupdate.py
 
 echo ""

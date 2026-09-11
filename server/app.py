@@ -2845,6 +2845,8 @@ from routers import convert as _convert_rtr
 app.include_router(_convert_rtr.router)
 from routers import compress as _compress_rtr
 app.include_router(_compress_rtr.router)
+from routers import sr as _sr_rtr
+app.include_router(_sr_rtr.router)
 from routers import dewatermark as _dewatermark_rtr
 app.include_router(_dewatermark_rtr.router)
 from routers import matting as _matting_rtr

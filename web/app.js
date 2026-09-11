@@ -605,6 +605,22 @@
     cpStartAllBtn: $('cpStartAllBtn'),
     cpStatus: $('cpStatus'),
 
+    // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
+    tabSr: $('tabSr'),
+    srView: $('srView'),
+    sTabSr: $('sTabSr'),
+    srAddBtn: $('srAddBtn'),
+    srFileInput: $('srFileInput'),
+    srClearBtn: $('srClearBtn'),
+    srCount: $('srCount'),
+    srList: $('srList'),
+    srBulk: $('srBulk'),
+    srBulkMode: $('srBulkMode'),
+    srBulkScale: $('srBulkScale'),
+    srBulkApplyBtn: $('srBulkApplyBtn'),
+    srStartAllBtn: $('srStartAllBtn'),
+    srStatus: $('srStatus'),
+
     // 本地视频字幕提取（faster-whisper ASR）
     sbPickBtn: $('sbPickBtn'),
     sbFileInput: $('sbFileInput'),
@@ -3107,7 +3123,9 @@
       const api = window.pywebview && window.pywebview.api;
       const href = link.getAttribute('href') || '';
       const filename = link.getAttribute('download') || 'converted';
-      const mJob = href.match(/\/api\/(?:convert|compress)\/([^/?#]+)/);
+      // 转码 / 压缩 / 高清修复 三类结果链接共用同一入口（新增类型必须在此加分支，
+      // 否则解析不出 jobId 会走到「不 preventDefault」的兜底，看着像点了没反应）
+      const mJob = href.match(/\/api\/(?:convert|compress|sr)\/([^/?#]+)/);
       const jobId = mJob ? mJob[1] : '';
       // ⚠️ 解析不出 jobId 时**不要** preventDefault：宁可让浏览器走原生 <a download>，
       // 也不要留下「点了没反应」的死链（2026-09-11 压缩下载正是这个死法）。
@@ -3162,6 +3180,7 @@
   wireSaveConvertDownload(el.musList);
   wireSaveConvertDownload(el.imgList);
   wireSaveConvertDownload(el.cpList);
+  wireSaveConvertDownload(el.srList);
   el.ucClearBtn.addEventListener('click', ucClearAll);
   el.ucBulkApplyBtn.addEventListener('click', ucApplyBulk);
   if (el.ucAudioOnly) el.ucAudioOnly.addEventListener('change', toggleAudioMode);
@@ -4065,6 +4084,172 @@
     el.cpStatus.textContent = `批量压缩中…（${wait.length} 个）`;
     cpEnsurePolling();
     wait.forEach(it => cpStartOne(it).catch(() => {}));
+  });
+
+  // ===== 高清修复（快速档 Lanczos+锐化 / AI 档 Real-ESRGAN 超分）=====
+  // 两档都**完全本地**：不上传云端、不调用任何在线接口、无按次费用（2026-09-12 新增）。
+  const SR_POLL_INTERVAL = UC_POLL_INTERVAL || 1500;
+  const srState = { list: [], nextId: 1, pollTimer: null };
+  const srDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  const srMmss = (sec) => {
+    const s = Math.max(0, Math.round(sec || 0));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
+  const srEnsurePolling = () => { if (!srState.pollTimer) srState.pollTimer = setInterval(srPollAll, SR_POLL_INTERVAL); };
+  const srStopPolling = () => { if (srState.pollTimer) { clearInterval(srState.pollTimer); srState.pollTimer = null; } };
+
+  const srRender = () => {
+    const list = srState.list;
+    el.srCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
+    el.srClearBtn.hidden = list.length === 0;
+    el.srStartAllBtn.disabled = !list.some(it => it.status === 'pending' || it.status === 'failed');
+    if (!list.length) { el.srList.innerHTML = ''; return; }
+    el.srList.innerHTML = list.map(it => {
+      const modeText = it.mode === 'ai' ? 'AI 档' : '快速档';
+      let statusText = '未开始';
+      if (it.status === 'running') {
+        // AI 档会跑几十秒到几分钟，必须把「已用 / 约剩」显出来，否则用户以为卡死
+        statusText = (it.progress ? `修复中 ${it.progress}%` : '修复中…')
+          + (it.elapsed ? ` · 已用 ${srMmss(it.elapsed)}` : '')
+          + (it.eta ? ` · 约剩 ${srMmss(it.eta)}` : '')
+          + (it.stage ? ` · ${escHtml(it.stage)}` : '');
+      } else if (it.status === 'completed') {
+        statusText = `完成 ✅ ${it.wBefore}×${it.hBefore} → ${it.wAfter}×${it.hAfter}`
+          + (it.sizeAfter ? ` · ${cpFormatSize(it.sizeAfter)}` : '')
+          + (it.note ? ` · ${escHtml(it.note)}` : '');
+      } else if (it.status === 'failed') {
+        statusText = '失败：' + escHtml(it.errorMsg || '');
+      }
+      const statusCls = it.status === 'pending' ? '' : 'is-' + it.status;
+      const disabled = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
+      const progressHtml = it.status === 'running'
+        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+      const downloadHtml = it.status === 'completed' && it.jobId
+        ? `<a class="uc-item-download" href="/api/sr/${it.jobId}/file" download="${escHtml(it.outputName || 'upscaled')}">下载</a>`
+        : '';
+      const startHtml = it.status === 'pending' || it.status === 'failed'
+        ? `<button type="button" class="uc-item-start" data-act="start">${it.status === 'failed' ? '重试' : '开始修复'}</button>`
+        : '';
+      const safeName = escHtml(it.name || '未命名');
+      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
+        <div class="uc-item-main">
+          <div class="uc-item-name" title="${safeName}">${safeName}</div>
+          <div class="uc-item-meta"><span>${modeText} · ×${it.scale}</span></div>
+          ${progressHtml}
+          <div class="uc-item-status">${statusText}</div>
+        </div>
+        <div class="uc-item-side">
+          ${startHtml}
+          ${downloadHtml}
+          <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
+        </div>
+      </li>`;
+    }).join('');
+  };
+
+  const srAddFiles = (list) => {
+    const mode = el.srBulkMode.value || 'fast';
+    const scale = +(el.srBulkScale.value || 2);
+    Array.from(list || []).forEach(f => {
+      const isLocal = typeof f === 'string';
+      const name = isLocal ? f.split(/[\\/]/).pop() : f.name;
+      srState.list.push({
+        id: srState.nextId++, file: isLocal ? null : f, localPath: isLocal ? f : null,
+        name, mode, scale, status: 'pending', jobId: null, progress: 0, stage: '',
+        elapsed: 0, eta: 0, errorMsg: '', outputName: '', note: '',
+        wBefore: 0, hBefore: 0, wAfter: 0, hAfter: 0, sizeAfter: 0,
+      });
+    });
+    srRender();
+    el.srStatus.textContent = `已添加 ${srState.list.length} 个文件，点「开始修复」`;
+  };
+
+  const srPollAll = async () => {
+    const running = srState.list.filter(x => x.status === 'running' && x.jobId);
+    if (!running.length) { srStopPolling(); return; }
+    await Promise.all(running.map(async it => {
+      try {
+        const st = await request(`/api/sr/${it.jobId}`);
+        it._pollFails = 0;
+        it.progress = st.progress || 0; it.stage = st.stage || '';
+        it.elapsed = st.elapsed || 0; it.eta = st.eta || 0;
+        if (st.status === 'completed') {
+          it.status = 'completed';
+          it.wBefore = st.w_before || 0; it.hBefore = st.h_before || 0;
+          it.wAfter = st.w_after || 0; it.hAfter = st.h_after || 0;
+          it.sizeAfter = st.size_after || 0; it.note = st.note || '';
+          it.outputName = st.filename || it.outputName;
+          srRender();
+        } else if (st.status === 'failed') {
+          it.status = 'failed'; it.errorMsg = st.error || '未知错误'; srRender();
+        } else { srRender(); }
+      } catch (_e) {
+        // 连续失败必须让用户看见，否则进度条无声卡死（同压缩轮询的教训）
+        it._pollFails = (it._pollFails || 0) + 1;
+        if (it._pollFails >= 3) { it.stage = '进度刷新受阻（任务仍在进行）'; srRender(); }
+      }
+    }));
+  };
+
+  // 桌面端走本地路径直传（免上传）。网页端不支持上传——本功能定位桌面优先。
+  const srStartOne = (item) => new Promise((resolve, reject) => {
+    if (!item || item.status !== 'pending') { reject(new Error('状态不允许开始')); return; }
+    item.status = 'running'; item.progress = 5; item.stage = ''; item.elapsed = 0; item.eta = 0;
+    srRender();
+    if (!item.localPath) {
+      item.status = 'failed'; item.errorMsg = '网页端暂不支持，请用桌面版添加本地图片';
+      srRender(); reject(new Error(item.errorMsg)); return;
+    }
+    request('/api/sr/local', {
+      method: 'POST',
+      body: JSON.stringify({ local_path: item.localPath, mode: item.mode, scale: item.scale }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(data => {
+      if (data.job_id) { item.jobId = data.job_id; item.status = 'running'; srRender(); resolve(data); }
+      else { item.status = 'failed'; item.errorMsg = data.detail || '修复请求失败'; srRender(); reject(new Error(item.errorMsg)); }
+    }).catch(err => {
+      item.status = 'failed'; item.errorMsg = (err && err.message) || '修复请求失败'; srRender(); reject(err);
+    });
+  });
+
+  el.srAddBtn.addEventListener('click', () => {
+    if (srDesktopNative()) {
+      // ⚠️ 必须显式传 'image'：不传默认是 media（视频+音频），图片会在系统弹窗里置灰选不了
+      window.VDL.desktop.chooseFiles('image').then(list => { if (list && list.length) srAddFiles(list); }).catch(() => {});
+    } else { el.srFileInput.click(); }
+  });
+  el.srFileInput.addEventListener('change', () => {
+    if (el.srFileInput.files && el.srFileInput.files.length) { srAddFiles(el.srFileInput.files); el.srFileInput.value = ''; }
+  });
+  el.srList.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const li = btn.closest('.uc-item'); const id = +li.dataset.id;
+    const it = srState.list.find(x => x.id === id); if (!it) return;
+    if (btn.dataset.act === 'remove') {
+      srState.list = srState.list.filter(x => x.id !== id); srRender();
+    } else if (btn.dataset.act === 'start') {
+      if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
+      srEnsurePolling(); srStartOne(it).catch(() => {});
+    }
+  });
+  el.srClearBtn.addEventListener('click', () => {
+    srState.list = []; srRender(); el.srStatus.textContent = '';
+  });
+  el.srBulkApplyBtn.addEventListener('click', () => {
+    const mode = el.srBulkMode.value || 'fast';
+    const scale = +(el.srBulkScale.value || 2);
+    let n = 0;
+    srState.list.forEach(it => { if (['pending', 'failed'].includes(it.status)) { it.mode = mode; it.scale = scale; n++; } });
+    srRender();
+    el.srStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项';
+  });
+  el.srStartAllBtn.addEventListener('click', () => {
+    srState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
+    const wait = srState.list.filter(x => x.status === 'pending');
+    if (!wait.length) { el.srStatus.textContent = '没有可开始的项（先添加图片）'; return; }
+    el.srStatus.textContent = `批量修复中…（${wait.length} 个）`;
+    srEnsurePolling();
+    wait.forEach(it => srStartOne(it).catch(() => {}));
   });
 
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
@@ -9826,6 +10011,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isMusic = view === 'musicconvert';
     const isImage = view === 'imageconvert';
     const isCp = view === 'compress';   // 高效压缩（2026-09-11 新增）
+    const isSr = view === 'sr';         // 高清修复（2026-09-12 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
@@ -9836,7 +10022,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSt || isAppIntro || isBridge || isProfileGroup;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isSt || isAppIntro || isBridge || isProfileGroup;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -9845,6 +10031,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.musicConvertView.hidden = !isMusic;
     el.imageConvertView.hidden = !isImage;
     if (el.compressView) el.compressView.hidden = !isCp;
+    if (el.srView) el.srView.hidden = !isSr;
     el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
@@ -9856,7 +10043,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSt && !isBridge && !isProfileGroup);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isSt && !isBridge && !isProfileGroup);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -9865,11 +10052,12 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabMusicConvert) el.tabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
     if (el.tabCompress) el.tabCompress.classList.toggle('is-active', isCp);
+    if (el.tabSr) el.tabSr.classList.toggle('is-active', isSr);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfileGroup);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSt && !isAppIntro && !isBridge && !isProfileGroup;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isSt && !isAppIntro && !isBridge && !isProfileGroup;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -9879,6 +10067,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabMusicConvert) el.sTabMusicConvert.classList.toggle('is-active', isMusic);
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
     if (el.sTabCompress) el.sTabCompress.classList.toggle('is-active', isCp);
+    if (el.sTabSr) el.sTabSr.classList.toggle('is-active', isSr);
     if (el.sTabProfile) el.sTabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabProfilePurchases) el.sTabProfilePurchases.classList.toggle('is-active', isProfilePurchases);
     if (el.sTabProfileCredits) el.sTabProfileCredits.classList.toggle('is-active', isProfileCredits);

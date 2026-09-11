@@ -86,6 +86,7 @@
       <button type="button" class="sidebar-item" data-view="musicconvert" id="sTabMusicConvert" title="音乐格式转换"><span class="sidebar-item-icon" aria-hidden="true">🎵</span><span class="sidebar-item-label">音乐转换</span></button>
       <button type="button" class="sidebar-item" data-view="imageconvert" id="sTabImageConvert" title="图片格式转换"><span class="sidebar-item-icon" aria-hidden="true">🖼️</span><span class="sidebar-item-label">图片转换</span></button>
       <button type="button" class="sidebar-item" data-view="compress" id="sTabCompress" title="图片 / 视频压缩：视觉无损档肉眼无差，极致档体积优先"><span class="sidebar-item-icon" aria-hidden="true">🗜️</span><span class="sidebar-item-label">高效压缩</span></button>
+      <button type="button" class="sidebar-item" data-view="sr" id="sTabSr" title="图片高清修复：快速档秒级放大，AI 档重建真实细节"><span class="sidebar-item-icon" aria-hidden="true">✨</span><span class="sidebar-item-label">高清修复</span></button>
     </div>
 
     <div class="sidebar-group collapsed">
@@ -149,6 +150,7 @@
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">🎵 音乐转换</button>
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">🖼️ 图片转换</button>
         <button type="button" class="tab" data-view="compress" id="tabCompress">🗜️ 高效压缩</button>
+        <button type="button" class="tab" data-view="sr" id="tabSr">✨ 高清修复</button>
     <button type="button" class="tab" data-view="dw" id="tabDw">🧽 图片 / PDF 去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
@@ -696,6 +698,52 @@
     </div>
 
     <span class="convert-status" id="cpStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- 高清修复视图（图片：快速档 Lanczos 放大+锐化；AI 档 Real-ESRGAN 超分；两档均全程本地） -->
+  <section id="srView" class="panel" hidden aria-labelledby="srTitle">
+    <h2 id="srTitle" class="guide-title">✨ 高清修复</h2>
+    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
+      把低清图片放大变清晰：<b>快速档</b> 用 Lanczos 插值 + 锐化，秒级完成、任何机型都流畅；
+      <b>AI 档</b> 用 Real-ESRGAN 重建真实细节，效果更好但需等待（界面会显示实时预估）。
+      两档都<b>全程本地完成，不上传云端、不调用任何在线接口</b>，也没有任何按次费用。
+      <br><span style="color:var(--brand);">注：AI 档首次使用需下载约 64MB 模型（仅一次，缓存在 ~/.vdl_models）；放大后体积通常比原图大，属正常现象。</span>
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="srAddBtn">添加图片</button>
+      <input type="file" id="srFileInput" accept="image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="srClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="srCount">尚未添加文件</span>
+    </div>
+
+    <ul class="uc-list" id="srList" aria-live="polite"></ul>
+
+    <div class="uc-bulk" id="srBulk">
+      <h3 class="card-title">默认修复设置（应用到所有未开始项）</h3>
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">修复档位</span>
+          <select id="srBulkMode">
+            <option value="fast" selected>快速档 · 秒级（放大 + 锐化）</option>
+            <option value="ai">AI 档 · 细节重建（较慢，效果更好）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">放大倍率</span>
+          <select id="srBulkScale">
+            <option value="2" selected>×2（推荐）</option>
+            <option value="4">×4（体积与耗时都更大）</option>
+          </select>
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-ghost" id="srBulkApplyBtn">应用到未开始</button>
+        <button type="button" class="btn btn-primary" id="srStartAllBtn">开始修复</button>
+      </div>
+    </div>
+
+    <span class="convert-status" id="srStatus" aria-live="polite"></span>
   </section>
 
   <!-- 视频/音频桥接视图（桌面端独立入口；网页端也能从视频格式转换页进入） -->
