@@ -65,8 +65,12 @@ _COPY_AUDIO_CODECS = {"aac", "mp3"}
 # VideoToolbox 编码器不支持 ffmpeg 层多线程（`-h encoder=h264_videotoolbox` 显示
 # Threading capabilities: none），且底层是**共享的硬件编码引擎**。实测 3 路并发
 # 压同一个文件时每路耗时从 1.45s 涨到 4.23s（慢 2.9 倍）——多文件一起提交反而
-# 更慢。这里与下载共用的 8 worker 池隔离，限制同时转码 2 路，其余排队等待。
+# 更慢。这里限制同时转码 2 路，其余排队等待。
 _TRANSCODE_SEM = threading.Semaphore(2)
+# ⚠️ 抢名额必须**非阻塞**（`acquire(blocking=False)`），抢不到就用定时器稍后重投自己。
+# 若在本函数里阻塞等名额，等待中的任务会一直占着「与下载共用的 8 worker 池」的名额：
+# 提交 8 个视频即占满整池，下载 / 格式转换 / 抠图 / 去水印全部饿死（2026-09-11 修）。
+_TRANSCODE_RETRY_SEC = 0.5
 
 
 class LocalCompressRequest(BaseModel):
@@ -272,22 +276,43 @@ def _compress_video(job: dict, src: str, out_path: app.Path, level: str,
     job["eta"] = 0.0
 
 
+def _defer_transcode(delay: float, job_id: str, src: str, kind: str, level: str,
+                     src_is_temp: bool, codec: str, output_format: str) -> None:
+    """延后重投转码任务：定时器线程只负责到点把任务重新丢回线程池。
+
+    等待转码名额期间**不占用任何线程池 worker**（这是与「阻塞等名额」的关键区别）。
+    定时器线程设为 daemon，应用退出时不会被它拖住。
+    """
+    def _retry() -> None:
+        try:
+            app.executor.submit(_run_compress, job_id, src, kind, level, src_is_temp,
+                                codec=codec, output_format=output_format)
+        except RuntimeError:
+            pass                      # 线程池已关闭（应用退出中）→ 放弃重投
+
+    t = threading.Timer(max(0.05, delay), _retry)
+    t.daemon = True
+    t.start()
+
+
 def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: bool,
                  codec: str = "h264", output_format: str = "keep") -> None:
     """后台线程：执行压缩并回写状态。"""
     job = COMPRESS_JOBS.get(job_id)
     if not job:
         return
-    job["codec"] = codec
+    job["codec"] = codec               # 排队中也让前端知道会用哪种编码
     job["output_format"] = output_format
+    # 转码闸门放在 try 之前：抢不到名额时直接延后重投，
+    # 绝不能走到 finally 的临时文件清理（否则排队中就把源文件删了）。
+    if kind == "video" and not _TRANSCODE_SEM.acquire(blocking=False):
+        job["stage"] = "排队中"
+        _defer_transcode(_TRANSCODE_RETRY_SEC, job_id, src, kind, level,
+                         src_is_temp, codec, output_format)
+        return
     out_path = None
-    acquired = False
+    acquired = kind == "video"
     try:
-        if kind == "video":
-            # 转码闸门：VideoToolbox 硬编引擎共享，多路并发互相拖慢（实测 3 路慢 2.9 倍）
-            job["stage"] = "排队中"
-            _TRANSCODE_SEM.acquire()
-            acquired = True
         src_path = app.Path(src)
         if kind == "video":
             ext = ".mp4"                       # H.264 / HEVC 均封装为 MP4

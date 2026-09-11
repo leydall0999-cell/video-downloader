@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -415,6 +416,58 @@ def test_transcode_gate_queues_when_full():
         COMPRESS_JOBS.pop(job_id, None)
 
 
+def test_queued_transcode_does_not_starve_shared_pool():
+    """防回归：排队等名额的转码任务**不得占用**与下载共用的线程池。
+
+    背景（2026-09-11 实修）：转码闸门最初写成在工作线程里 `_TRANSCODE_SEM.acquire()`
+    **阻塞**等名额。闸门只有 2 个名额，于是同时提交 8 个视频就把整池（worker 数 =
+    `VDL_BATCH_HARD_MAX` = 8）占满 —— 6 个线程白白卡在等名额上，下载 / 格式转换 /
+    抠图 / 去水印全部饿死（用户表现：「点下载没反应」）。
+    修法：非阻塞抢名额 + 定时器重投自己，等待中的任务不持有任何 worker。
+
+    断言方式：占满名额后提交「与池容量等量」的视频任务，再用一个哨兵任务证明
+    共享池仍有空闲名额 —— 旧写法下哨兵必然被饿死，测试变红。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "starve.mp4")
+        if not _make_lowbitrate_mp4(src, seconds=1, w=320, h=240, kbps=250):
+            print("⏭️  跳过：离线环境无可用 ffmpeg")
+            return
+        _TRANSCODE_SEM.acquire()
+        _TRANSCODE_SEM.acquire()                       # 占满转码名额
+        job_ids = []
+        try:
+            for _ in range(app.VDL_BATCH_HARD_MAX):    # 提交量 = 共享池容量
+                job_ids.append(_submit_compress(src, "balanced", "t",
+                                                src_name="starve.mp4"))
+            deadline = time.time() + 5.0               # 确定性等待：全部转入排队态
+            while time.time() < deadline:
+                if all((COMPRESS_JOBS.get(j) or {}).get("stage") == "排队中"
+                       for j in job_ids):
+                    break
+                time.sleep(0.05)
+            queued = [j for j in job_ids
+                      if (COMPRESS_JOBS.get(j) or {}).get("stage") == "排队中"]
+            check("转码名额占满时全部视频任务停在「排队中」",
+                  len(queued) == len(job_ids), f"{len(queued)}/{len(job_ids)}")
+            done = threading.Event()
+            app.executor.submit(lambda: done.set())
+            check("排队中的转码没有占满共享线程池（下载/转换不会被饿死）",
+                  done.wait(2.0), "哨兵任务 2 秒内未获执行 → 共享池被排队任务占满（旧写法必然如此）")
+        finally:
+            for j in job_ids:                          # 先摘登记表 → 在途重投变空操作
+                COMPRESS_JOBS.pop(j, None)
+            _TRANSCODE_SEM.release()
+            _TRANSCODE_SEM.release()
+            time.sleep(1.0)                            # 等在途重投自清
+            for j in job_ids:
+                for f in app.CONVERT_DIR.glob(f"compress_{j}.*"):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+
+
 def test_status_endpoints_are_not_rate_limited():
     """防回归：压缩进度轮询端点必须**免**限流，提交类端点必须**保留**限流。
 
@@ -458,6 +511,7 @@ if __name__ == "__main__":
     test_probe_video_meta_reads_bitrate_and_resolution()
     test_low_bitrate_source_actually_shrinks()
     test_transcode_gate_queues_when_full()
+    test_queued_transcode_does_not_starve_shared_pool()
     test_status_endpoints_are_not_rate_limited()
     print(f"\n通过: {PASS}  失败: {FAIL}")
     sys.exit(1 if FAIL else 0)
