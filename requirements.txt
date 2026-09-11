@@ -41,3 +41,8 @@ onnx>=1.15.0
 # Rumble 反爬绕过：curl_cffi 提供 Chrome TLS 指纹模拟（impersonate），
 # 用于 embedJS/u3 接口解析（urllib/requests 默认指纹被 Cloudflare 403）。
 curl_cffi>=0.7.0
+
+# 图片高效压缩（AVIF 输出，比 WebP 再小约 20-50%）：pillow-avif-plugin 提供 AVIF 编解码。
+# 缺失时压缩功能的「AVIF 输出」选项自动返回提示（compress.py import 守护），不影响其余功能。
+# 注意：Pillow 由 build_mac.sh 单独安装，这里仅列插件即可。
+pillow-avif-plugin>=1.6.0

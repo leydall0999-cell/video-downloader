@@ -32,6 +32,9 @@ from routers.compress import (  # noqa: E402
     _compress_image,
     _run_compress,
     _validate_level,
+    _validate_codec,
+    _validate_output_format,
+    pillow_avif,
     COMPRESS_JOBS,
 )
 
@@ -136,10 +139,133 @@ def test_validate_level():
     check("非法档位回退 balanced", _validate_level("ultra") == "balanced" and _validate_level("") == "balanced")
 
 
+def test_validate_codec_and_format():
+    check("视频编码：合法原样返回",
+          _validate_codec("h264") == "h264" and _validate_codec("hevc") == "hevc")
+    check("视频编码：非法回退 h264",
+          _validate_codec("av1") == "h264" and _validate_codec("") == "h264")
+    check("图片格式：合法原样返回",
+          _validate_output_format("keep") == "keep"
+          and _validate_output_format("webp") == "webp"
+          and _validate_output_format("avif") == "avif")
+    check("图片格式：非法回退 keep",
+          _validate_output_format("bmp") == "keep" and _validate_output_format("") == "keep")
+
+
+def _photo_png(path, size=512):
+    """照片型平滑渐变 PNG（WebP/AVIF 的强项场景：低频、平滑、类真实照片）。
+
+    ⚠️ 高频噪声 PNG（_noisy_png）反而会让 WebP 无损/有损膨胀——那不符合真实用途，
+    此处用平滑渐变模拟照片，才能体现转格式压缩的真实收益。
+    """
+    img = Image.new("RGB", (size, size))
+    px = img.load()
+    for y in range(size):
+        for x in range(size):
+            px[x, y] = (int(255 * x / size), int(255 * y / size),
+                        int(128 + 100 * ((x + y) / (2 * size))))
+    img.save(path, format="PNG", optimize=True)
+
+
+def test_webp_output_smaller():
+    """图片输出格式=webp：照片型素材产物应为更小且可解码的 WebP。"""
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "a.png")
+        out = os.path.join(td, "a.webp")
+        _photo_png(src, 512)
+        _compress_image({"stage": ""}, src, app.Path(out), "balanced", output_format="webp")
+        check("WebP 输出真实更小", os.path.getsize(out) < os.path.getsize(src),
+              f"{os.path.getsize(src)} -> {os.path.getsize(out)}")
+        with Image.open(out) as im:
+            check("WebP 可解码且格式正确", im.format == "WEBP", im.format)
+
+
+def test_avif_output_smaller():
+    """图片输出格式=avif：照片型素材产物应为更小且可解码的 AVIF（需 pillow_avif）。"""
+    if pillow_avif is None:
+        print("⏭️  AVIF 测试跳过：未安装 pillow-avif-plugin")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "a.png")
+        out = os.path.join(td, "a.avif")
+        _photo_png(src, 512)
+        _compress_image({"stage": ""}, src, app.Path(out), "balanced", output_format="avif")
+        check("AVIF 输出真实更小", os.path.getsize(out) < os.path.getsize(src),
+              f"{os.path.getsize(src)} -> {os.path.getsize(out)}")
+        with Image.open(out) as im:
+            check("AVIF 可解码且格式正确", im.format == "AVIF", im.format)
+
+
+def test_avif_missing_plugin_errors():
+    """未启用 AVIF 插件时，avif 输出应明确报错而非静默损坏。"""
+    # 仅当插件真的没装时才算守卫命中；装了则验证「能正常出 AVIF」已在上一个用例覆盖
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "a.png")
+        out = os.path.join(td, "a.avif")
+        _noisy_png(src, 64)
+        try:
+            _compress_image({"stage": ""}, src, app.Path(out), "balanced", output_format="avif")
+            check("AVIF 有插件：未抛错（正常）", pillow_avif is not None)
+        except RuntimeError as e:
+            check("AVIF 无插件：抛出可读错误", pillow_avif is None and "AVIF" in str(e), str(e))
+
+
+def test_run_compress_hevc_video_guarded():
+    """视频 HEVC 全链路（仅当本机 ffmpeg 支持 hevc_videotoolbox 时跑，否则跳过）。"""
+    ffmpeg = getattr(app, "FFMPEG_BIN", "") or ""
+    if not (ffmpeg and os.path.isfile(ffmpeg)):
+        print("⏭️  HEVC 视频测试跳过：离线环境无 ffmpeg")
+        return
+    try:
+        from codec_utils import available_hevc
+    except Exception:
+        print("⏭️  HEVC 视频测试跳过：无法导入 codec_utils")
+        return
+    if available_hevc(ffmpeg) != "hevc_videotoolbox":
+        print("⏭️  HEVC 视频测试跳过：ffmpeg 无 hevc_videotoolbox")
+        return
+    import subprocess
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "v.mp4")
+        rc = subprocess.run([ffmpeg, "-y", "-f", "lavfi", "-i",
+                             "testsrc=duration=2:size=320x240:rate=24", "-pix_fmt",
+                             "yuv420p", "-c:v", "mpeg4", "-q:v", "8", src],
+                            capture_output=True, text=True).returncode
+        if rc != 0:
+            print("⏭️  HEVC 视频测试跳过：测试源生成失败")
+            return
+        COMPRESS_JOBS["hev1"] = {
+            "status": "running", "stage": "", "progress": 0, "error": "",
+            "out_path": "", "filename": "", "src_name": "v.mp4",
+            "device_id": "t", "size_before": 0, "size_after": 0, "saving": 0.0, "note": "",
+        }
+        _run_compress("hev1", src, "video", "balanced", src_is_temp=False, codec="hevc")
+        j = COMPRESS_JOBS["hev1"]
+        check("HEVC 全链路 completed", j["status"] == "completed", j.get("error"))
+        check("HEVC 输出为 .mp4 且存在", j["out_path"].endswith(".mp4") and os.path.isfile(j["out_path"]),
+              j["out_path"])
+        # ffprobe 确认视频流编码为 hevc
+        try:
+            from routers.compress import _ffprobe_bin
+            vcodec = subprocess.run([_ffprobe_bin(), "-v", "error", "-select_streams",
+                                    "v:0", "-show_entries", "stream=codec_name", "-of",
+                                    "default=noprint_wrappers=1:nokey=1", j["out_path"]],
+                                   capture_output=True, text=True).stdout.strip().lower()
+            check("HEVC 输出确为 hevc 编码", vcodec == "hevc", vcodec)
+        except Exception as e:
+            check("HEVC ffprobe 验证跳过（探测失败）", False, str(e))
+        COMPRESS_JOBS.pop("hev1", None)
+
+
 if __name__ == "__main__":
     test_png_lossless_pixel_identical()
     test_jpg_quality_downscale_size()
     test_run_compress_full_chain_and_oversize_guard()
     test_validate_level()
+    test_validate_codec_and_format()
+    test_webp_output_smaller()
+    test_avif_output_smaller()
+    test_avif_missing_plugin_errors()
+    test_run_compress_hevc_video_guarded()
     print(f"\n通过: {PASS}  失败: {FAIL}")
     sys.exit(1 if FAIL else 0)

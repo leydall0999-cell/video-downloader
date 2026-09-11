@@ -643,8 +643,10 @@
   <section id="compressView" class="panel" hidden aria-labelledby="cpTitle">
     <h2 id="cpTitle" class="guide-title">🗜️ 无损压缩</h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
-      图片（PNG/JPG/WebP）与视频（mp4/mov/mkv/webm 等）一键瘦身：画质几乎不变、体积大幅变小。
+      图片（PNG/JPG/WebP/AVIF）与视频（mp4/mov/mkv/webm 等）一键瘦身：画质几乎不变、体积大幅变小。
+      视频可选 <b>HEVC</b>（同画质体积再小约 30-45%、硬件加速）；图片可转 <b>WebP / AVIF</b>（比原格式更小）。
       全程本地完成，不上传云端；压缩完显示节省了多少空间，压缩后反而变大时会保留原文件。
+      <br><span style="color:var(--brand);">注：HEVC / WebP / AVIF 为「视觉无损」（肉眼难辨，像素不完全一致）；仅原格式 PNG 是严格逐字节无损。</span>
     </p>
 
     <div class="uc-toolbar">
@@ -657,7 +659,7 @@
     <ul class="uc-list" id="cpList" aria-live="polite"></ul>
 
     <div class="uc-bulk" id="cpBulk">
-      <h3 class="card-title">默认压缩强度（应用到所有未开始项）</h3>
+      <h3 class="card-title">默认压缩设置（应用到所有未开始项）</h3>
       <div class="uc-form">
         <label class="uc-field">
           <span class="uc-label">压缩强度</span>
@@ -665,6 +667,21 @@
             <option value="high">轻度 · 画质优先（体积减得少）</option>
             <option value="balanced" selected>推荐 · 画质与体积均衡</option>
             <option value="strong">极致 · 体积优先（画质有损）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">视频编码</span>
+          <select id="cpBulkCodec">
+            <option value="h264" selected>H.264（兼容最好）</option>
+            <option value="hevc">HEVC / H.265（同画质更小·硬件加速）</option>
+          </select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">图片输出</span>
+          <select id="cpBulkFormat">
+            <option value="keep" selected>原格式（PNG 无损 / JPG 画质优先）</option>
+            <option value="webp">WebP（更小·推荐）</option>
+            <option value="avif">AVIF（极致压缩·较慢）</option>
           </select>
         </label>
       </div>

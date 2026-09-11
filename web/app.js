@@ -594,6 +594,8 @@
     sTabCompress: $('sTabCompress'),
     cpAddBtn: $('cpAddBtn'),
     cpFileInput: $('cpFileInput'),
+    cpBulkCodec: $('cpBulkCodec'),
+    cpBulkFormat: $('cpBulkFormat'),
     cpClearBtn: $('cpClearBtn'),
     cpCount: $('cpCount'),
     cpList: $('cpList'),
@@ -3806,7 +3808,7 @@
     });
   });
 
-  // ===== 无损压缩（图片 PNG/JPG/WebP + 视频 H.264 CRF；2026-09-11 新增）=====
+  // ===== 压缩（图片 原格式/WebP/AVIF + 视频 H.264/HEVC；2026-09-11 新增，2026-09-11 扩展编码/格式选项）=====
   const CP_POLL_INTERVAL = UC_POLL_INTERVAL || 1500;
   const cpState = { list: [], nextId: 1, pollTimer: null };
   const cpDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
@@ -3849,9 +3851,12 @@
         : '';
       const displayName = it.name || '未命名';
       const levelText = { high: '轻度', balanced: '推荐', strong: '极致' }[it.level] || it.level;
+      const codecText = it.kind === 'video' ? ({ h264: 'H.264', hevc: 'HEVC' }[it.codec] || 'H.264') : '';
+      const fmtText = it.kind === 'image' ? ({ keep: '原格式', webp: 'WebP', avif: 'AVIF' }[it.outputFormat] || '原格式') : '';
+      const kindText = (it.kind === 'video' ? '视频' + (codecText ? ' · ' + codecText : '') : '图片' + (fmtText ? ' · ' + fmtText : ''));
       const metaSpans = it.localPath
-        ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>${it.kind === 'video' ? '视频' : '图片'} · ${levelText}${it.sizeBefore ? ' · ' + cpFormatSize(it.sizeBefore) : ''}</span>`
-        : (it.file ? `<span>${cpFormatSize(it.file.size)}</span><span>${it.kind === 'video' ? '视频' : '图片'} · ${levelText}</span>` : `<span>${it.kind === 'video' ? '视频' : '图片'} · ${levelText}</span>`);
+        ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>${kindText} · ${levelText}${it.sizeBefore ? ' · ' + cpFormatSize(it.sizeBefore) : ''}</span>`
+        : (it.file ? `<span>${cpFormatSize(it.file.size)}</span><span>${kindText} · ${levelText}</span>` : `<span>${kindText} · ${levelText}</span>`);
       return `<li class="uc-item ${statusCls}" data-id="${it.id}">
         <div class="uc-item-main">
           <div class="uc-item-name" title="${displayName}">${displayName}</div>
@@ -3870,6 +3875,8 @@
 
   const cpAddFiles = (list) => {
     const level = el.cpBulkLevel.value || 'balanced';
+    const codec = el.cpBulkCodec.value || 'h264';
+    const outputFormat = el.cpBulkFormat.value || 'keep';
     Array.from(list || []).forEach(f => {
       const isLocal = typeof f === 'string';
       const name = isLocal ? f.split(/[\\/]/).pop() : f.name;
@@ -3880,7 +3887,7 @@
         file: isLocal ? null : f,
         localPath: isLocal ? f : null,
         name,
-        kind, level,
+        kind, level, codec, outputFormat,
         status: isLocal ? 'pending' : 'pending',
         jobId: null, progress: 0, stage: '',
         errorMsg: '', outputName: '', sizeBefore: 0, sizeAfter: 0, saving: 0, note: '',
@@ -3928,7 +3935,10 @@
     if (item.localPath) {
       request('/api/compress/local', {
         method: 'POST',
-        body: JSON.stringify({ local_path: item.localPath, level: item.level }),
+        body: JSON.stringify({
+          local_path: item.localPath, level: item.level,
+          codec: item.codec || 'h264', output_format: item.outputFormat || 'keep',
+        }),
         headers: { 'Content-Type': 'application/json' },
       }).then(finishJob).catch(err => {
         item.status = 'failed'; item.errorMsg = (err && err.message) || '压缩请求失败'; cpRender(); reject(err);
@@ -3958,6 +3968,8 @@
       form.append('total', String(totalChunks));
       form.append('filename', file.name);
       form.append('level', item.level);
+      form.append('codec', item.codec || 'h264');
+      form.append('output_format', item.outputFormat || 'keep');
       const xhr = new XMLHttpRequest();
       item._xhrs.add(xhr);
       xhr.open('POST', location.origin + '/api/compress/finish');
@@ -4005,9 +4017,13 @@
   });
   el.cpBulkApplyBtn.addEventListener('click', () => {
     const level = el.cpBulkLevel.value || 'balanced';
+    const codec = el.cpBulkCodec.value || 'h264';
+    const outputFormat = el.cpBulkFormat.value || 'keep';
     let n = 0;
     cpState.list.forEach(it => {
-      if (['pending', 'failed'].includes(it.status)) { it.level = level; n++; }
+      if (['pending', 'failed'].includes(it.status)) {
+        it.level = level; it.codec = codec; it.outputFormat = outputFormat; n++;
+      }
     });
     cpRender();
     el.cpStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项（所有项都已开始/完成）';
