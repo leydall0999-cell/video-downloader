@@ -61,6 +61,22 @@ class FakeMattingGradientSession:
         return [g]
 
 
+class FakeMattingStepSession:
+    """左半 logit=0、右半 logit=3（max=3 → 触发 sigmoid 分支）。
+
+    用于**精确**锁定 sigmoid 分支：正确代码下左半 sigmoid(0)=0.5 → 软阈值后
+    仍是中等 alpha（不透明）；若漏补 sigmoid（pred=raw），左半 raw=0 → clip→0
+    → 整片透明。两者在「左半均值」上可明确区分。"""
+
+    def get_inputs(self):
+        return [types.SimpleNamespace(name="input")]
+
+    def run(self, _, feeds):
+        step = np.zeros((1, 1, 1024, 1024), dtype=np.float32)
+        step[:, :, :, 512:] = 3.0   # 右半高 logit → 恒白
+        return [step]
+
+
 def _with_fake(session, fn):
     """临时把 _get_session 换成假 session，跑 fn，最后还原（pytest/direct 皆可）。"""
     orig = m._get_session
@@ -170,6 +186,30 @@ def test_forward_spatial_structure_passthrough():
     print("✅ 模型输出的空间渐变正确透传为 alpha 渐变")
 
 
+def test_forward_sigmoid_branch_precision():
+    """精度锁定 sigmoid 分支：左半 logit=0（max=3 触发 sigmoid 分支）。
+
+    正确代码：左半 sigmoid(0)=0.5 → 软阈值 [0.20,0.75] 得 (0.5-0.2)/0.55≈0.545
+    → 中等 alpha（不透明，均值明显 > 0）。
+    漏补 sigmoid（pred=raw）：左半 raw=0 → clip(0,1)=0 → 软阈值下限以下 → 透明（均值≈0）。
+    两者在「左半均值」上可明确区分，故本测试能真正杀死「漏补 sigmoid」变异。"""
+    fake = FakeMattingStepSession()
+    img = Image.new("RGB", (128, 128), (10, 20, 30))
+    mask = _with_fake(fake, lambda: m.predict_mask(img, "birefnet-general"))
+    arr = np.array(mask)
+    assert arr.shape == (128, 128), arr.shape
+    left_mean = float(arr[:, :64].mean())
+    right_mean = float(arr[:, 64:].mean())
+    # 右半必为满 alpha（白）
+    assert right_mean > 250, f"右半高 logit 未产生满 alpha，均值={right_mean}"
+    # 左半在正确代码下应是不透明的中等 alpha；漏补 sigmoid 时塌成 0
+    assert left_mean > 50, (
+        f"sigmoid 分支疑似失效：左半 logit=0 应 sigmoid→中等 alpha，"
+        f"实测均值={left_mean}（漏补 sigmoid 时会塌成 0）"
+    )
+    print(f"✅ sigmoid 分支精确锁定：左半(中等 alpha)均值≈{int(left_mean)}，右半(满)≈{int(right_mean)}")
+
+
 if __name__ == "__main__":
     test_forward_feed_is_normalized_1024_tensor()
     test_forward_feed_matches_canonical_preprocess()
@@ -178,4 +218,5 @@ if __name__ == "__main__":
     test_forward_low_logits_yields_transparent()
     test_forward_output_is_l_at_original_size()
     test_forward_spatial_structure_passthrough()
-    print("\n🎉 抠图 AI 推理前向链路测试全部通过（7 项）")
+    test_forward_sigmoid_branch_precision()
+    print("\n🎉 抠图 AI 推理前向链路测试全部通过（8 项）")
