@@ -51,13 +51,20 @@ def _is_apple_silicon() -> bool:
     return sys.platform == "darwin" and platform.machine() == "arm64"
 
 
-def probe_capability(lama_available: bool = False, diffusion_available: bool = False,
-                     diffusion_models: list = None) -> dict:
+def probe_capability(lama_available: bool = False, diffusion_supported: bool = False,
+                     diffusion_installed: bool = False, diffusion_models: list = None) -> dict:
     """探测运行环境能力，返回推荐引擎与说明文案。
 
     lama_available: 调用方传入 LaMa 模型是否已就绪（避免本模块反向依赖 dewatermark_ai）。
-    diffusion_available: 调用方传入扩散模型（torch+diffusers）是否就绪。
+    diffusion_supported: 调用方传入扩散档硬件是否支持（物理内存 >= 16GB）。
+    diffusion_installed: 调用方传入扩散运行库（torch+diffusers）是否已就位。
     diffusion_models: 调用方传入当前内存档次下可选扩散模型名列表（sd15/sdxl）。
+
+    设计（按需下载）：扩散档的运行库（torch/diffusers，约 2GB）不进基础包；仅在硬件支持
+    的机器上把该档在 UI 显示为可选，用户首次真正选择时才下载安装。因此：
+    - engines.diffusion = 硬件是否支持（决定选项是否可选/置灰）；
+    - recommended_engine 仅在「已安装」时才推荐 diffusion，未安装则推荐 auto（避免一打开就
+      静默触发 2GB 下载）。这与「选项可选、默认不推荐下载」一致，文案也如实说明首次下载。
     """
     ram = _total_ram_bytes()
     ram_gb = ram / (1024 ** 3)
@@ -71,15 +78,14 @@ def probe_capability(lama_available: bool = False, diffusion_available: bool = F
     else:
         tier = "low"
 
-    # 扩散档（SD-Inpainting / SDXL-Inpainting）需 torch+diffusers 且物理内存 >=16GB；
-    # 内存够 + torch 就绪才真正可用，否则仅「理论支持」但在 UI 上显示为不可用并提示升级。
+    # 扩散档（SD-Inpainting / SDXL-Inpainting）需物理内存 >=16GB。
+    # supported = 硬件支持（UI 可选）；installed = 运行库已就位（真正能跑）。
     diff_models = list(diffusion_models or [])
-    diffusion_ok = (ram_gb >= 16) and bool(diffusion_available)
+    supported = bool(diffusion_supported) and (ram_gb >= 16)
+    installed = bool(diffusion_installed)
 
     # 「智能」档对所有机型都安全：默认 OpenCV，仅难例（半透明/浅底）回落 AI（LaMa）。
-    # 注意：推荐文案必须与「能不能真的跑」一致——高内存但扩散运行库（torch/diffusers）
-    # 未就绪时，若文案仍写「推荐扩散」而 recommended_engine 却是 auto，用户会看到
-    # 「推荐某档但该档是灰的」的矛盾（2026-09-12 修正）。
+    # diffusion 推荐仅在「已安装」时给出，避免一打开就触发 2GB 下载（2026-09-12 修正）。
     recommended = "auto"
     if tier == "low":
         rec = ("检测到内存较小（约 %.1f GB）：已默认「智能」模式——普通水印走 OpenCV"
@@ -90,17 +96,17 @@ def probe_capability(lama_available: bool = False, diffusion_available: bool = F
         rec = ("检测到内存约 %.1f GB：已默认「智能」模式——日常水印用 OpenCV，"
                "难例自动切 AI（LaMa）。如需最高无痕效果可手动选「AI 无痕修复（LaMa）」。"
                "「AI 增强修复（扩散模型，质量更高）」需 16GB+ 内存，当前 8GB 暂不支持；"
-               "升级内存后可解锁该档（首次使用需下载约 4GB 权重）。") % ram_gb
-    elif not diffusion_ok:
-        # 内存够但运行库没就绪（torch/diffusers 未安装）→ 不推荐，且文案说明真实原因，
-        # 避免「文案推荐扩散、下拉里却是灰的」自相矛盾。
-        rec = ("检测到内存充裕（约 %.1f GB%s）：已默认「智能」模式——日常水印走 OpenCV，"
-               "难例自动切 AI（LaMa）。「AI 增强修复（扩散模型）」在内存上已满足，"
-               "但需额外安装增强引擎运行库（torch/diffusers，约 2GB）后才会启用"
-               "（首次使用另需下载 4~6.5GB 权重），当前未就绪，故不默认开启。") % (
+               "升级内存后可解锁该档（首次使用需下载约 2GB 运行库 + 4~6.5GB 权重）。") % ram_gb
+    elif not installed:
+        # 硬件支持但运行库未安装：选项可选（用户可主动选），但默认不推荐（避免静默下载 2GB）。
+        # 文案如实说明首次使用会下载。
+        rec = ("检测到内存充裕（约 %.1f GB%s）：可选择「AI 增强修复（扩散模型）」获得比 LaMa"
+               "更高的无痕质量——大区域、复杂背景水印修复更干净。该引擎运行库（torch/diffusers，"
+               "约 2GB）未安装，首次选择该档时会自动下载安装（另需 4~6.5GB 模型权重），请保持网络畅通。"
+               "默认仍用「智能」/「AI 无痕修复（LaMa）」即可。") % (
             ram_gb, "，Apple 芯片含神经网络引擎" if asil else "")
     elif tier == "high":
-        rec = ("检测到内存充裕（约 %.1f GB%s）：可用「AI 增强修复（扩散模型）」获得比 LaMa"
+        rec = ("检测到内存充裕（约 %.1f GB%s）：推荐用「AI 增强修复（扩散模型）」获得比 LaMa"
                "更高的无痕质量——大区域、复杂背景水印修复更干净。首次使用会自动下载约 4GB"
                "权重（SD 1.5）。也可保持「智能」让程序自动选。") % (
             ram_gb, "，Apple 芯片含神经网络引擎" if asil else "")
@@ -118,7 +124,9 @@ def probe_capability(lama_available: bool = False, diffusion_available: bool = F
         "tier": tier,
         "apple_silicon": asil,
         "lama_available": bool(lama_available),
-        "diffusion_available": diffusion_ok,
+        "diffusion_available": supported,
+        "diffusion_supported": supported,
+        "diffusion_installed": installed,
         "diffusion_models": diff_models,
         "diffusion_min_ram_gb": 16.0,
         "recommended_engine": recommended,
@@ -127,7 +135,7 @@ def probe_capability(lama_available: bool = False, diffusion_available: bool = F
             "opencv": True,
             "ai": bool(lama_available),
             "auto": True,
-            "diffusion": diffusion_ok,
+            "diffusion": supported,
         },
     }
 

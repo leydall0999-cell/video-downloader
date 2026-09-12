@@ -48,14 +48,15 @@ curl_cffi>=0.7.0
 pillow-avif-plugin>=1.6.0
 
 # 图片 AI 增强去水印（扩散模型 inpainting：SD 1.5 / SDXL-Inpainting）：
-# 【默认不打包】——torch+diffusers 栈约 2~3GB，会直接击穿 DMG <500MB 目标；
-# 且 8GB 机型受 available() 内存闸门限制根本用不了，给所有人装是纯死重。
-# 设计：扩散档为「高配机（16GB+）按需启用」的可选引擎，运行库由用户另行安装，
-# 缺失时 /api/dw/capability 把该档显示为不可用、其余功能不受影响（与 cv2/onnxruntime 降级一致）。
-# 需要启用的高配用户，在 .build_venv 里手动装：
-#   pip install "torch>=2.2.0" "diffusers>=0.27.0" "transformers>=4.38.0" \
-#               "accelerate>=0.27.0" "safetensors>=0.4.0" "huggingface-hub>=0.23.0"
-# （macOS Apple 芯片会自动选 arm64+MPS wheel；权重首次用时惰性下载到 ~/.vdl_models）
+# 【默认不打包】——torch+diffusers 栈约 2GB，会直接击穿 DMG <500MB 目标；
+# 且 8GB 机型受 diffusion_supported() 内存闸门（16GB）限制根本用不了，给所有人装是纯死重。
+# 设计：扩散档为「高配机（16GB+）按需启用」的可选引擎，运行库【首次选该档时自动下载安装】
+# 到用户目录 ~/.vdl_models/diffusion_lib/（不进 .app、不破坏签名、不拖慢低配机），详见
+# server/dewatermark_diffusion.py 的 _RUNTIME_REQUIREMENTS / ensure_diffusion_runtime()。
+# 缺失时 /api/dw/capability 仍把该档显示为「可选」（硬件支持时），但默认不推荐（避免一打开就
+# 静默触发 2GB 下载）；用户主动选择后才下载安装，其余功能不受影响（与 cv2/onnxruntime 降级一致）。
+# 基础包因此保持约 300MB；高配用户各取所需，低配用户零负担。
+# （以下依赖刻意不装：运行时由应用按本机平台从 PyPI 解析 wheel 并解压，无需开发者手动装）
 # torch>=2.2.0
 # diffusers>=0.27.0
 # transformers>=4.38.0

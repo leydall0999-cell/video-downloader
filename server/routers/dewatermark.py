@@ -73,8 +73,24 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
             job["detail"] = {"quality": "ai", "action": "repaired",
                              "engine_used": "ai", "fallback": False}
         elif engine == "diffusion":
-            if not dwc_diff.available():
-                raise RuntimeError("扩散去水印不可用（内存不足 <16GB 或缺少 torch/diffusers）")
+            if not dwc_diff.diffusion_supported():
+                raise RuntimeError("扩散去水印需 16GB+ 内存")
+            # 运行库（torch/diffusers，约 2GB）可能尚未安装 → 首次使用按需下载安装（带进度）
+            if not dwc_diff.runtime_installed():
+                job["phase"] = "安装增强引擎"
+                job["progress"] = "0%"
+
+                def _dw_progress(phase, _name, pct, msg):
+                    job["phase"] = ("安装增强引擎：" + msg) if phase in ("download", "extract") else msg
+                    job["progress"] = f"{pct}%"
+
+                try:
+                    dwc_diff.ensure_diffusion_runtime(progress_cb=_dw_progress)
+                except Exception as e:  # noqa: BLE001
+                    raise RuntimeError(
+                        f"增强引擎安装失败：{e}（请检查网络后重试，或改用「AI 无痕修复（LaMa）」）")
+            job["phase"] = ""
+            job["progress"] = ""
             # 扩散模型按 model 选 sd15/sdxl（默认 sd15）；权重首次用时按需下载
             dwc_diff.ai_image_inpaint(src_path, out_path, regions, model_size=(model or "sd15"))
             job["detail"] = {"quality": "diffusion", "action": "repaired",
@@ -180,8 +196,8 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="engine 仅支持 auto / opencv / ai / diffusion")
     if engine == "ai" and not dwc_ai.available():
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
-    if engine == "diffusion" and not dwc_diff.available():
-        raise app.HTTPException(status_code=503, detail="扩散去水印不可用（内存不足 <16GB 或缺少 torch/diffusers）")
+    if engine == "diffusion" and not dwc_diff.diffusion_supported():
+        raise app.HTTPException(status_code=503, detail="扩散去水印需 16GB+ 内存（当前设备不满足）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
@@ -214,7 +230,7 @@ def create_dw_image(
     with app.DW_LOCK:
         app.DW_JOBS[job_id] = {
             "status": "running", "out_path": "", "error": "", "filename": "",
-            "kind": "image",
+            "kind": "image", "phase": "", "progress": "",
         }
     app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine,
                         bool(int(int8)), model, quality)
@@ -231,7 +247,8 @@ def dw_capability() -> dict:
     """
     return _cap.probe_capability(
         lama_available=dwc_ai.available(),
-        diffusion_available=dwc_diff.available(),
+        diffusion_supported=dwc_diff.diffusion_supported(),
+        diffusion_installed=dwc_diff.runtime_installed(),
         diffusion_models=dwc_diff.list_diffusion_models(),
     )
 
@@ -327,7 +344,7 @@ def dw_image_status(job_id: str) -> dict:
     if not job or job.get("kind") != "image":
         raise app.HTTPException(status_code=404, detail="图片去水印任务不存在")
     return {"status": job["status"], "error": job.get("error", ""), "filename": job.get("filename", ""),
-            "detail": job.get("detail") or {}}
+            "detail": job.get("detail") or {}, "phase": job.get("phase", ""), "progress": job.get("progress", "")}
 
 
 @router.get("/api/dw/image/{job_id}/file")

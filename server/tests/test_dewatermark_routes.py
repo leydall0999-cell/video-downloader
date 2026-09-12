@@ -78,7 +78,8 @@ def test_image_engine_whitelist_rejects_unknown():
 def test_image_diffusion_model_whitelist_rejects_unknown():
     """engine=diffusion 且 model 不在可选列表 → 400（在「可用」分支下验证 model 校验）。"""
     c = _client()
-    with mock.patch.object(dwc_diff, "available", return_value=True), \
+    with mock.patch.object(dwc_diff, "diffusion_supported", return_value=True), \
+         mock.patch.object(dwc_diff, "available", return_value=True), \
          mock.patch.object(dwc_diff, "list_diffusion_models", return_value=["sd15"]):
         r = _post_dw_image(c, engine="diffusion", model="sdxl_bogus")
         assert r.status_code == 400, f"未知扩散模型未拦下: {r.status_code} {r.text[:200]}"

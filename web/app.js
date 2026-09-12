@@ -6141,7 +6141,7 @@
     // 扩散档首次使用需下载数 GB 权重（本地缓存后不再下载）：明确预告，避免用户
     // 看到长时间无响应而误判卡死（与「AI 首次下载 107MB」同一处理原则）。
     el.dwImgStatus.textContent = startEngine === 'diffusion'
-      ? '正在用 AI 增强修复（扩散模型）处理…首次使用需下载约 4GB 权重，请耐心等待（进度见下）'
+      ? '正在用 AI 增强修复（扩散模型）处理…首次使用需下载约 2GB 引擎运行库 + 4~6.5GB 权重，请耐心等待（进度见下）'
       : '去水印处理中…';
     el.dwImgResult.hidden = true;
     const form = new FormData();
@@ -6211,6 +6211,17 @@
             clearInterval(timer);
             el.dwImgStatus.textContent = '失败：' + (st.error || '未知错误');
             el.dwImgBtn.disabled = false;
+          } else if (st.status === 'running') {
+            // 运行中：展示阶段（如「安装增强引擎：下载 torch 23/190MB」）与进度百分比
+            const ph = st.phase || '';
+            const pr = st.progress || '';
+            if (ph) {
+              el.dwImgStatus.textContent = ph + (pr ? `（${pr}）` : '…');
+            } else if (pr) {
+              el.dwImgStatus.textContent = '去水印处理中… ' + pr;
+            } else {
+              el.dwImgStatus.textContent = '去水印处理中…';
+            }
           }
         } catch (_e) { /* 轮询继续 */ }
       }, 3000);
@@ -6251,10 +6262,16 @@
           .find((o) => o.value === 'diffusion');
         if (diffOpt) {
           const base = '✨ AI 增强修复（扩散模型，质量更高）';
-          diffOpt.disabled = !cap.diffusion_available;
-          diffOpt.textContent = cap.diffusion_available
-            ? base
-            : `${base} — 需 16GB+ 内存，当前不支持`;
+          const supported = !!cap.diffusion_available;
+          diffOpt.disabled = !supported;
+          if (!supported) {
+            diffOpt.textContent = `${base} — 需 16GB+ 内存，当前不支持`;
+          } else if (cap.diffusion_installed) {
+            diffOpt.textContent = base;
+          } else {
+            // 硬件支持但未安装运行库：明确告知首次会下载约 2GB（按需下载，不占基础包）
+            diffOpt.textContent = `${base}（首次使用需下载约 2GB 引擎）`;
+          }
         }
         // 兜底：当前选中的引擎在本机不可用时退回「智能」（disabled 的 option 无法被选中）
         if (!cap.diffusion_available && el.dwImgEngine.value === 'diffusion') {

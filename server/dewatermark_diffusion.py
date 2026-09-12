@@ -5,17 +5,19 @@
 - 扩散模型（SD-Inpainting / SDXL-Inpainting）是文本引导潜扩散，质量更高：大区域、语义修复、
   复杂照片背景的无痕度显著优于 LaMa。代价是需要 torch + 数 GB 权重，且内存需求高（16GB+ 统一内存）。
 
-本模块面向「高配机用户」：
-- 低配机（<16GB 统一内存）探测到内存不足 → available() 返回 False，不实际 import torch，
-  不影响启动、不拖慢低配用户。
-- 权重（SD1.5 ~4GB fp16 / SDXL ~6.5GB fp16）首次用时按需下载到 ~/.vdl_models/diffusion/，不进主打包。
+本模块面向「高配机用户」（16GB+ 统一内存）：
+- 低配机（<16GB）探测到内存不足 → diffusion_supported() 返回 False，UI 直接置灰该档，不下载、不导入。
+- **运行库（torch+diffusers 栈，约 2GB）不进基础安装包**（基础包保持 ~300MB）：仅当高配机用户
+  首次真正选择「扩散」引擎时，才按需从 PyPI 下载 wheel 并解压到用户目录 ~/.vdl_models/diffusion_lib/
+  （不触碰 .app 包体，不破坏签名），然后加入 sys.path 即用。低配机永远不会下载这 2GB。
+- 权重（SD1.5 ~4GB fp16 / SDXL ~6.5GB fp16）同样首次用时按需下载到 ~/.vdl_models/diffusion/，不进包。
 
 协议（分发必须合规，详见项目记忆铁律）：
 - SD-Inpainting (SD 1.5): CreativeML OpenRAIL-M —— 允许商用，须随应用附 LICENSE 全文 + 传递
   Attachment A 使用限制（禁违法/有害内容生成）。
 - SDXL-Inpainting: CreativeML OpenRAIL++-M —— 同上，更严格。
 - MAT（CC BY-NC 4.0 非商用）已排除，不可分发。
-- BrushNet（Apache-2.0）本期未接（需 base SD 模型 + 专用 pipeline，权重更大，留后续）。
+- BrushNet（Apache-2.0）需 base SD 模型 + 专用 pipeline，权重更大，留后续。
 - 应用内「AI 模型使用条款」入口必须展示 OpenRAIL-M 要点（见 web/ 去水印面板 / 设置）。
 
 与 LaMa 相同的架构约定：
@@ -25,13 +27,17 @@
 - prompt 策略：去水印场景不需要生成新物体，用中性修复 prompt（延续背景纹理）
   + negative（watermark/text/logo/artifact）。strength=1.0 全替换掩码区。
 """
+import hashlib
 import logging
 import os
 import platform
 import subprocess
 import sys
 import threading
+import zipfile
 from pathlib import Path
+
+import requests as _requests
 
 logger = logging.getLogger("vdl.dewatermark_diffusion")
 
@@ -77,27 +83,56 @@ DEFAULT_DIFFUSION_MODEL = "sd15"
 DIFFUSION_MIN_RAM_GB = 16.0
 
 # 中性修复 prompt（去水印场景：延续背景纹理，不生成新物体）。可用环境变量覆盖做微调。
-# 注意：prompt 只引导「掩码区应是什么」，实际修复主要靠周围图像上下文（SD inpainting 保留非掩码区）。
 _DIFFUSION_PROMPT = os.environ.get("VDL_DW_DIFF_PROMPT") or \
     "clean seamless background, photorealistic, high quality, detailed texture, no text"
 _DIFFUSION_NEGATIVE = os.environ.get("VDL_DW_DIFF_NEG") or \
     "watermark, text, logo, signature, caption, subtitle, letters, artifact, blurry, lowres, deformed"
-# 推理步数（环境变量可覆盖；SD1.5/SDXL 默认 30，降步提速但质量略降）
 _DIFFUSION_STEPS = int(os.environ.get("VDL_DW_DIFF_STEPS") or "0") or 30
-# 生成随机种子（固定以便可复现；0=随机）
 _DIFFUSION_SEED = int(os.environ.get("VDL_DW_DIFF_SEED") or "0")
 
 
-_lock = threading.Lock()
-_SESSIONS = {}  # model_size -> pipeline 对象（按模型缓存，线程安全）
+# —— 运行时按需安装（高配机首次用时下载 torch/diffusers 栈到用户目录，不进 .app）——
+# 安装目标目录：用户目录，绝不写 .app 包体，故不破坏 macOS 签名；且低配机永不触发下载。
+RUNTIME_LIB_DIR = Path.home() / ".vdl_models" / "diffusion_lib"
+if RUNTIME_LIB_DIR.is_dir() and str(RUNTIME_LIB_DIR) not in sys.path:
+    # 已安装过：每次启动把用户目录提到 sys.path 最前，使 torch/diffusers 可被后续 import 找到
+    sys.path.insert(0, str(RUNTIME_LIB_DIR))
+
+# 运行时依赖清单（pinned）。torch+diffusers 栈约 2GB。
+# 设计：基础包不含这些；仅高配机首次选「扩散」引擎时下载。
+# 注意：刻意不列 numpy —— 避免用户目录的 numpy 覆盖基础包 cv2 所用的 numpy（跨 numpy ABI 风险）；
+# torch/diffusers 复用基础包已装的 numpy 即可。
+# 可用环境变量 VDL_DIFFUSION_INDEX_URL 指定 PyPI 镜像（如国内网络慢时）。
+_RUNTIME_REQUIREMENTS = [
+    ("torch", "2.5.1"),
+    ("diffusers", "0.32.0"),
+    ("transformers", "4.46.0"),
+    ("accelerate", "1.1.0"),
+    ("safetensors", "0.4.5"),
+    ("tokenizers", "0.20.0"),
+    ("huggingface_hub", "0.26.2"),
+    ("filelock", "3.16.1"),
+    ("regex", "2024.11.6"),
+    ("tqdm", "4.67.1"),
+    ("packaging", "24.2"),
+    ("typing_extensions", "4.12.2"),
+    ("sympy", "1.13.1"),
+    ("networkx", "3.4.2"),
+    ("jinja2", "3.1.4"),
+    ("fsspec", "2024.10.0"),
+]
 
 
-def _model_dir() -> Path:
-    """扩散模型缓存目录：优先 VDL_MODELS_DIR，否则 ~/.vdl_models/diffusion。"""
-    raw = os.environ.get("VDL_MODELS_DIR")
-    if raw:
-        return Path(raw) / "vdl_models" / "diffusion"
-    return Path.home() / ".vdl_models" / "diffusion"
+def _py_tag() -> str:
+    return getattr(getattr(sys, "implementation", None), "cache_tag", None) or "cp313"
+
+
+def _plat_tag() -> str:
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return "macosx_11_0_arm64"
+    if sys.platform == "darwin":
+        return "macosx_10_9_x86_64"
+    return "linux"
 
 
 def _total_ram_gb() -> float:
@@ -129,15 +164,18 @@ def _total_ram_gb() -> float:
     return 0.0
 
 
-def available() -> bool:
-    """扩散去水印是否可用：需要 cv2 + numpy + torch + diffusers，且物理内存 >= 16GB。
+def diffusion_supported() -> bool:
+    """硬件是否支持扩散档：物理内存 >= 16GB（且 cv2/numpy 可用）。
 
-    低配机（<16GB）或 torch/diffusers 缺失时返回 False，不影响启动、不拖慢低配用户。
+    低配机（<16GB）返回 False → UI 置灰该档，且永不触发运行库下载。
     """
     if _cv2 is None or _np is None:
         return False
-    if _total_ram_gb() < DIFFUSION_MIN_RAM_GB:
-        return False
+    return _total_ram_gb() >= DIFFUSION_MIN_RAM_GB
+
+
+def runtime_installed() -> bool:
+    """torch+diffusers 是否已就位（基础包或用户目录 ~/.vdl_models/diffusion_lib）。"""
     try:
         import importlib.util
         if importlib.util.find_spec("torch") is None:
@@ -147,6 +185,14 @@ def available() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def available() -> bool:
+    """扩散去水印现在是否可用：硬件支持 且 运行库（torch+diffusers）已就位。
+
+    低配机或运行库缺失时返回 False。运行库缺失时请调用 ensure_diffusion_runtime() 按需安装。
+    """
+    return diffusion_supported() and runtime_installed()
 
 
 def _device() -> str:
@@ -169,6 +215,168 @@ def list_diffusion_models() -> list:
 def current_diffusion_model() -> str:
     """返回默认扩散模型（sd15，除非内存足够且用户曾切）。"""
     return DEFAULT_DIFFUSION_MODEL
+
+
+# —— 运行库按需下载 / 安装 ——
+def _pick_wheel(urls, py_tag, plat) -> dict:
+    """从 PyPI JSON 的 urls 列表挑出最匹配当前解释器/平台的 bdist_wheel。
+
+    评分：纯 python（py3-none-any）最优通用；平台 wheel 命中当前 py tag / 平台 tag 加分；
+    其它 OS（manylinux/win/musllinux）重罚。返回选中的 url 字典；无 wheel 返回 None。
+    """
+    cands = [u for u in urls if u.get("packagetype") == "bdist_wheel"]
+    if not cands:
+        return None
+
+    def _score(u):
+        fn = u.get("filename", "")
+        s = 0
+        if "py3-none-any" in fn:
+            s += 100
+        if py_tag in fn:
+            s += 60
+        if "abi3" in fn:
+            s += 40
+        if plat in fn:
+            s += 50
+        if "universal2" in fn:
+            s += 30
+        if any(k in fn for k in ("manylinux", "win_", "musllinux")):
+            s -= 1000
+        return s
+
+    cands.sort(key=_score, reverse=True)
+    return cands[0]
+
+
+def _resolve_wheel(name: str, version: str, index_url: str) -> dict:
+    """用 PyPI JSON API 解析某包的 wheel 真实下载地址 + sha256。"""
+    api = f"{index_url.rstrip('/')}/{name}/{version}/json"
+    resp = _requests.get(api, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    urls = data.get("urls", [])
+    pick = _pick_wheel(urls, _py_tag(), _plat_tag())
+    if not pick:
+        pick = next((u for u in urls if u.get("packagetype") == "bdist_wheel"), None)
+    if not pick:
+        raise RuntimeError(f"未找到 {name}=={version} 的可用 wheel（平台 {_plat_tag()}）")
+    sha = (pick.get("digests") or {}).get("sha256") or pick.get("sha256")
+    return {
+        "name": name,
+        "version": version,
+        "url": pick["url"],
+        "sha256": sha,
+        "filename": pick["filename"],
+        "size": pick.get("size"),
+    }
+
+
+def _sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download_wheel(meta: dict, lib: Path, progress_cb) -> Path:
+    """下载 wheel（带 sha256 校验 + 进度回调）；已缓存且校验通过则直接复用。"""
+    wheels_dir = lib / "wheels"
+    wheels_dir.mkdir(parents=True, exist_ok=True)
+    dest = wheels_dir / meta["filename"]
+    if dest.exists() and meta.get("sha256") and _sha256_of(dest) == meta["sha256"]:
+        return dest
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with _requests.get(meta["url"], stream=True, timeout=120) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length") or meta.get("size") or 0)
+        done = 0
+        with open(tmp, "wb") as fh:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                done += len(chunk)
+                if progress_cb and total:
+                    pct = done * 100 // total
+                    progress_cb("download", meta["name"], pct,
+                                f"下载 {meta['name']} {done // (1024 * 1024)}/{total // (1024 * 1024)}MB")
+    if meta.get("sha256") and _sha256_of(tmp) != meta["sha256"]:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"{meta['name']} 校验失败（sha256 不匹配），已取消安装")
+    tmp.replace(dest)
+    return dest
+
+
+def _install_wheel(wheel_path: Path, lib: Path, progress_cb) -> None:
+    """把 wheel 解压进 lib 目录（最小 wheel 安装器：不跑 pip，适配 frozen 桌面端）。
+
+    仅解包纯 python + 扩展（.so/.dylib），跳过入口脚本（库不需要）。
+    扩展文件加可执行位，保证 dyld 能加载。
+    """
+    name = wheel_path.name
+    with zipfile.ZipFile(wheel_path) as z:
+        infos = z.infolist()
+        total = len(infos)
+        for i, info in enumerate(infos):
+            if info.filename.endswith("/"):
+                (lib / info.filename).mkdir(parents=True, exist_ok=True)
+                continue
+            if ".data/scripts/" in info.filename:
+                continue  # 跳过 console_scripts 入口（库无需命令）
+            dest = lib / info.filename
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(info) as src, open(dest, "wb") as out:
+                out.write(src.read())
+            if info.filename.endswith((".so", ".dylib")):
+                os.chmod(dest, 0o755)
+            if progress_cb:
+                progress_cb("extract", name, (i + 1) * 100 // total, f"解压 {name}")
+    marker = lib / ".installed" / f"{name}-done"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok")
+
+
+def ensure_diffusion_runtime(progress_cb=None) -> bool:
+    """确保扩散运行库（torch+diffusers 栈）已就位；缺失则按需下载 + 安装到用户目录。
+
+    progress_cb(phase, name, pct, msg)：phase ∈ {resolve, download, extract}。
+    返回 True 表示已就绪；非高配机或安装失败抛 RuntimeError（由调用方转成任务失败信息）。
+    """
+    if runtime_installed():
+        return True
+    if not diffusion_supported():
+        raise RuntimeError("本机内存不足 16GB，无法使用扩散增强引擎（需 16GB+ 统一内存）")
+    index_url = os.environ.get("VDL_DIFFUSION_INDEX_URL") or "https://pypi.org/pypi"
+    lib = RUNTIME_LIB_DIR
+    lib.mkdir(parents=True, exist_ok=True)
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    for (name, version) in _RUNTIME_REQUIREMENTS:
+        marker = lib / ".installed" / f"{name}-{version}-done"
+        if marker.exists():
+            continue
+        if progress_cb:
+            progress_cb("resolve", name, 0, f"准备 {name}=={version}")
+        meta = _resolve_wheel(name, version, index_url)
+        wheel = _download_wheel(meta, lib, progress_cb)
+        _install_wheel(wheel, lib, progress_cb)
+    if not runtime_installed():
+        raise RuntimeError("增强引擎安装后仍无法导入 torch/diffusers，请查看日志")
+    return True
+
+
+_lock = threading.Lock()
+_SESSIONS = {}  # model_size -> pipeline 对象（按模型缓存，线程安全）
+
+
+def _model_dir() -> Path:
+    """扩散模型缓存目录：优先 VDL_MODELS_DIR，否则 ~/.vdl_models/diffusion。"""
+    raw = os.environ.get("VDL_MODELS_DIR")
+    if raw:
+        return Path(raw) / "vdl_models" / "diffusion"
+    return Path.home() / ".vdl_models" / "diffusion"
 
 
 def _ensure_model(model_size: str = None):
