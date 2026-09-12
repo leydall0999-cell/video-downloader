@@ -9,6 +9,7 @@ import re as _re
 import subprocess as _subprocess
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
+import dewatermark_diffusion as dwc_diff
 import capability as _cap
 from codec_utils import h264_args
 from fastapi import APIRouter
@@ -71,6 +72,13 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
             dwc_ai.ai_image_inpaint(src_path, out_path, regions)
             job["detail"] = {"quality": "ai", "action": "repaired",
                              "engine_used": "ai", "fallback": False}
+        elif engine == "diffusion":
+            if not dwc_diff.available():
+                raise RuntimeError("扩散去水印不可用（内存不足 <16GB 或缺少 torch/diffusers）")
+            # 扩散模型按 model 选 sd15/sdxl（默认 sd15）；权重首次用时按需下载
+            dwc_diff.ai_image_inpaint(src_path, out_path, regions, model_size=(model or "sd15"))
+            job["detail"] = {"quality": "diffusion", "action": "repaired",
+                             "engine_used": "diffusion", "model": model or "sd15"}
         elif engine == "auto":
             # 智能档：先 OpenCV（快、省内存），去不干净时自动回落 AI（LaMa）。
             _, detail = dwc.image_inpaint_ex(src_path, out_path, regions, method, radius, quality)
@@ -168,10 +176,12 @@ def create_dw_image(
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
-    if engine not in ("auto", "opencv", "ai"):
-        raise app.HTTPException(status_code=400, detail="engine 仅支持 auto / opencv / ai")
+    if engine not in ("auto", "opencv", "ai", "diffusion"):
+        raise app.HTTPException(status_code=400, detail="engine 仅支持 auto / opencv / ai / diffusion")
     if engine == "ai" and not dwc_ai.available():
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
+    if engine == "diffusion" and not dwc_diff.available():
+        raise app.HTTPException(status_code=503, detail="扩散去水印不可用（内存不足 <16GB 或缺少 torch/diffusers）")
     app._check_rate_limit(request)
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
@@ -187,8 +197,16 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="radius 需在 1..20 之间")
     if int8 not in ("0", "1"):
         raise app.HTTPException(status_code=400, detail="int8 仅支持 0 / 1")
-    if model and model not in dwc_ai.list_models():
-        raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
+    if model:
+        if engine == "diffusion":
+            _dm = dwc_diff.list_diffusion_models()
+            if model not in _dm:
+                raise app.HTTPException(
+                    status_code=400,
+                    detail=f"未知扩散模型: {model}（可选: {', '.join(_dm) or '无（需 16GB+ 内存）'}）")
+        elif engine == "ai":
+            if model not in dwc_ai.list_models():
+                raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
     # AI 去水印（LaMa）为本地 ONNX 推理，不扣 AI 积分；opencv 亦本地免费
     # （仅云端/服务端算力计费，见 membership.credit_cost）
     save_path = _save_upload(file, "dw_up")
@@ -211,7 +229,11 @@ def dw_capability() -> dict:
     前端在打开去水印面板时调用，自动把「修复引擎」默认选为推荐项，并展示按本机
     硬件定制的提示文案。返回纯只读建议，不影响任何强制行为（用户可随时手动覆盖）。
     """
-    return _cap.probe_capability(lama_available=dwc_ai.available())
+    return _cap.probe_capability(
+        lama_available=dwc_ai.available(),
+        diffusion_available=dwc_diff.available(),
+        diffusion_models=dwc_diff.list_diffusion_models(),
+    )
 
 
 def _parse_segments(segments_json: str):
@@ -280,6 +302,23 @@ def _parse_regions(regions_json: str, x: float, y: float, w: float, h: float):
     if not single:
         return None
     return [single]
+
+
+@router.get("/api/dw/license/diffusion")
+def dw_diffusion_license() -> app.Response:
+    """返回扩散去水印模型（SD 1.5 / SDXL Inpainting）的 CreativeML OpenRAIL-M 许可证全文。
+
+    合规要求：SD 系列 inpainting 模型采用 CreativeML OpenRAIL-M（/OpenRAIL++-M）协议，
+    允许商用，但须随分发附上许可证全文并向最终用户传递 Attachment A 使用限制。
+    应用内「AI 模型使用条款」入口指向本端点。
+    """
+    lic = app.os.path.join(app.os.path.dirname(__file__), "licenses", "OpenRAIL-M.txt")
+    try:
+        with open(lic, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        raise app.HTTPException(status_code=404, detail="许可证文件未找到")
+    return app.Response(content=text, media_type="text/plain; charset=utf-8")
 
 
 @router.get("/api/dw/image/{job_id}")

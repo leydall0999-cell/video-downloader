@@ -67,6 +67,10 @@ run_one test_matting_core.py
 run_one test_dewatermark_core.py
 run_one test_matting_forward.py
 run_one test_dewatermark_forward.py
+run_one test_dewatermark_diffusion.py
+run_one test_dewatermark_routes.py
+#   4c. test_dewatermark_routes.py     —— 去水印路由层（扩散档）：capability 暴露 / diffusion 503 / engine·model 白名单 400
+run_one test_dewatermark_routes.py
 #   3c. test_matting_engines_forward.py —— 其余本地 ONNX 引擎前向（modnet/isnet/birefnet-matting/portrait）
 #   3d. test_matting_chroma_key.py      —— chroma-key 纯算法前向（背景透明/主体不透明/选区硬边界）
 #   3e. test_matting_sam_forward.py     —— sam-matting 前向（假 _sam_session 注入 enc/dec）

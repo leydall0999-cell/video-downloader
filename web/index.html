@@ -1011,6 +1011,7 @@
                   <option value="auto" selected data-page-node-id="dwAuE1gHi2jQs7UvwXyAb07">智能（自动选引擎，推荐）</option>
                   <option value="opencv" data-page-node-id="i1xB5RXvie54xGCIeqXv3U">OpenCV 经典（快 / 轻量）</option>
                   <option value="ai" data-page-node-id="SBo5I8HTibQTJ1Q64LoOvq">🤖 AI 无痕修复（LaMa，像素级）</option>
+                  <option value="diffusion" data-page-node-id="dwDf0aZbY1cNd2Efg3HiJk4">✨ AI 增强修复（扩散模型，质量更高）</option>
                 </select>
               </label>
               <span class="dw-hint" id="dwImgEngineHint" data-page-node-id="dwHtE2fJi3kRt8VwxYzAb08"></span>
@@ -1042,6 +1043,14 @@
               <label class="uc-field uc-check" id="dwImgInt8Field" hidden data-page-node-id="3AM4vC7RFSGnzOXQIE92Gk">
                 <input type="checkbox" id="dwImgInt8" checked data-page-node-id="kkAzIkhwozWeJpxyWEMqRk" />
                 <span class="uc-label" data-page-node-id="oFQIfUnilJ4CRnIWSFORPi">INT8 动态量化<small class="uc-hint-block" data-page-node-id="mQGg9tyuNQ1xziFgu7H2OT">开启后约 1.5–2× 提速（CPU 量化，量化失败自动回退全精度）</small></span>
+              </label>
+              <label class="uc-field" id="dwDiffModelField" hidden data-page-node-id="dwDfMdlFld0123456789aB">
+                <span class="uc-label" data-page-node-id="dwDfMdlLbl0123456789aB">扩散模型（AI 增强）</span>
+                <select id="dwDiffModel" data-default="sd15" data-page-node-id="dwDfMdlSel0123456789aB">
+                  <option value="sd15" data-page-node-id="dwDfMdlsd150123456789aB">SD 1.5（512²，约 4GB 权重）</option>
+                  <option value="sdxl" data-page-node-id="dwDfMdlsdxl0123456789aB">SDXL（1024²，约 6.5GB 权重）</option>
+                </select>
+                <small class="uc-hint-block" data-page-node-id="dwDfMdlNote0123456789aB">扩散模型质量高于 LaMa，但需 16GB+ 内存；首次使用自动下载权重（数 GB）。<a href="#" id="dwDiffLicenseLink" data-page-node-id="dwDfLic01234">使用条款</a></small>
               </label>
             </div>
             <button type="button" class="btn btn-primary btn-block" id="dwImgBtn" data-page-node-id="Q0qd1LlWPhizjpREPTvP0H">开始去水印</button>

@@ -687,6 +687,9 @@
     dwImgInt8Field: $('dwImgInt8Field'),
     dwImgModel: $('dwImgModel'),
     dwImgInt8: $('dwImgInt8'),
+    dwDiffModelField: $('dwDiffModelField'),
+    dwDiffModel: $('dwDiffModel'),
+    dwDiffLicenseLink: $('dwDiffLicenseLink'),
     // 去水印放大弹窗
     dwImgModal: $('dwImgModal'),
     dwModalClose: $('dwModalClose'),
@@ -6134,7 +6137,12 @@
       el.dwImgStatus.textContent = '请在预览图上拖拽框选水印区域'; return;
     }
     el.dwImgBtn.disabled = true;
-    el.dwImgStatus.textContent = '去水印处理中…';
+    const startEngine = (el.dwImgEngine && el.dwImgEngine.value) || 'auto';
+    // 扩散档首次使用需下载数 GB 权重（本地缓存后不再下载）：明确预告，避免用户
+    // 看到长时间无响应而误判卡死（与「AI 首次下载 107MB」同一处理原则）。
+    el.dwImgStatus.textContent = startEngine === 'diffusion'
+      ? '正在用 AI 增强修复（扩散模型）处理…首次使用需下载约 4GB 权重，请耐心等待（进度见下）'
+      : '去水印处理中…';
     el.dwImgResult.hidden = true;
     const form = new FormData();
     form.append('file', file);
@@ -6154,6 +6162,10 @@
     if (form.get('engine') === 'ai') {
       if (el.dwImgModel) form.append('model', el.dwImgModel.value || 'lama');
       if (el.dwImgInt8) form.append('int8', el.dwImgInt8.checked ? '1' : '0');
+    }
+    // 扩散模型（engine=diffusion）：只传扩散子模型 sd15/sdxl，不传 INT8/LaMa 模型
+    if (form.get('engine') === 'diffusion' && el.dwDiffModel) {
+      form.append('model', el.dwDiffModel.value || 'sd15');
     }
     try {
       const data = await request('/api/dw/image', { method: 'POST', body: form });
@@ -6185,6 +6197,8 @@
                 el.dwImgStatus.textContent = '去水印完成 ✅（含半透明/难例，已自动改用 AI 引擎修复）';
               } else if (det.engine_used === 'ai') {
                 el.dwImgStatus.textContent = 'AI 无痕修复完成 ✅';
+              } else if (det.engine_used === 'diffusion') {
+                el.dwImgStatus.textContent = 'AI 增强修复（扩散模型）完成 ✅';
               } else {
                 el.dwImgStatus.textContent = '去水印完成 ✅';
               }
@@ -6208,14 +6222,18 @@
   const dwSyncEngineUi = () => {
     if (!el.dwImgEngine) return;
     const ai = el.dwImgEngine.value === 'ai';
+    const diff = el.dwImgEngine.value === 'diffusion';
     // 智能模式内部固定用实测更优的 NS（ΔPSNR +19.1 vs TELEA +17.6），无需用户再选方法；
     // 半径仍作用于笔画修复，保留可见
-    const auto = !ai && (!el.dwImgQuality || el.dwImgQuality.value === 'auto' || el.dwImgQuality.value === 'refine');
-    if (el.dwImgQualityField) el.dwImgQualityField.hidden = ai;
-    if (el.dwImgCvField) el.dwImgCvField.hidden = ai || auto;
-    if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai;
+    const auto = !ai && !diff && (!el.dwImgQuality || el.dwImgQuality.value === 'auto' || el.dwImgQuality.value === 'refine');
+    // 扩散模型：SD inpainting 自带修复语义，不暴露 method/quality/radius/INT8，
+    // 仅暴露「扩散模型子选择」（sd15/sdxl）。
+    if (el.dwImgQualityField) el.dwImgQualityField.hidden = ai || diff;
+    if (el.dwImgCvField) el.dwImgCvField.hidden = ai || diff || auto;
+    if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai || diff;
     if (el.dwImgModelField) el.dwImgModelField.hidden = !ai;
     if (el.dwImgInt8Field) el.dwImgInt8Field.hidden = !ai;
+    if (el.dwDiffModelField) el.dwDiffModelField.hidden = !diff;
   };
   // 用户是否手动改过引擎：手动改过就不再被硬件推荐覆盖默认
   let dwEngineUserTouched = false;
@@ -6226,6 +6244,34 @@
       if (cap && cap.recommendation) {
         el.dwImgEngineHint.textContent = cap.recommendation;
         el.dwImgEngineHint.hidden = false;
+        // 扩散模型（SD-Inpainting / SDXL-Inpainting）需 16GB+ 内存 + torch/diffusers。
+        // 策略：选项常驻 DOM（能力端点失败时也不至于让功能「消失」），不可用时置灰并
+        // 在文案里说明原因——用户看得见但选不了，比整个选项凭空不见更可预期。
+        const diffOpt = Array.from(el.dwImgEngine.options)
+          .find((o) => o.value === 'diffusion');
+        if (diffOpt) {
+          const base = '✨ AI 增强修复（扩散模型，质量更高）';
+          diffOpt.disabled = !cap.diffusion_available;
+          diffOpt.textContent = cap.diffusion_available
+            ? base
+            : `${base} — 需 16GB+ 内存，当前不支持`;
+        }
+        // 兜底：当前选中的引擎在本机不可用时退回「智能」（disabled 的 option 无法被选中）
+        if (!cap.diffusion_available && el.dwImgEngine.value === 'diffusion') {
+          el.dwImgEngine.value = 'auto';
+          dwSyncEngineUi();
+        }
+        // 按本机内存档填充扩散子模型下拉（sdxl 需 32GB，否则只给 sd15）
+        if (el.dwDiffModel && Array.isArray(cap.diffusion_models)) {
+          el.dwDiffModel.innerHTML = '';
+          const labels = { sd15: 'SD 1.5（512²，约 4GB 权重）', sdxl: 'SDXL（1024²，约 6.5GB 权重）' };
+          (cap.diffusion_models.length ? cap.diffusion_models : ['sd15']).forEach((m) => {
+            const o = document.createElement('option');
+            o.value = m;
+            o.textContent = labels[m] || m;
+            el.dwDiffModel.appendChild(o);
+          });
+        }
         // 仅当用户未手动选择、且推荐引擎与当前不同，才自动套用推荐
         if (!dwEngineUserTouched && cap.recommended_engine &&
             cap.recommended_engine !== el.dwImgEngine.value) {
@@ -6235,6 +6281,19 @@
       }
     } catch (_e) { /* 能力端点不可用时静默：默认智能档仍可用 */ }
   };
+  // 扩散模型使用条款（OpenRAIL-M）入口：点击打开许可证全文（随应用分发，合规要求）
+  if (el.dwDiffLicenseLink) {
+    el.dwDiffLicenseLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = `${window.VDL_API_BASE || ''}/api/dw/license/diffusion`;
+      const w = window.open(url, '_blank');
+      if (!w) {
+        alert('扩散去水印模型（SD 1.5 / SDXL Inpainting）采用 CreativeML OpenRAIL-M 开源协议，'
+          + '允许商用，但禁止用于生成违法、仇恨、色情、欺诈等有害内容。'
+          + '首次下载的权重仅供本地去水印使用，不会上传。');
+      }
+    });
+  }
   if (el.dwImgEngine) {
     el.dwImgEngine.addEventListener('change', () => {
       dwEngineUserTouched = true;

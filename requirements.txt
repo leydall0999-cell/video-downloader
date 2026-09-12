@@ -46,3 +46,19 @@ curl_cffi>=0.7.0
 # 缺失时压缩功能的「AVIF 输出」选项自动返回提示（compress.py import 守护），不影响其余功能。
 # 注意：Pillow 由 build_mac.sh 单独安装，这里仅列插件即可。
 pillow-avif-plugin>=1.6.0
+
+# 图片 AI 增强去水印（扩散模型 inpainting：SD 1.5 / SDXL-Inpainting）：
+# 【默认不打包】——torch+diffusers 栈约 2~3GB，会直接击穿 DMG <500MB 目标；
+# 且 8GB 机型受 available() 内存闸门限制根本用不了，给所有人装是纯死重。
+# 设计：扩散档为「高配机（16GB+）按需启用」的可选引擎，运行库由用户另行安装，
+# 缺失时 /api/dw/capability 把该档显示为不可用、其余功能不受影响（与 cv2/onnxruntime 降级一致）。
+# 需要启用的高配用户，在 .build_venv 里手动装：
+#   pip install "torch>=2.2.0" "diffusers>=0.27.0" "transformers>=4.38.0" \
+#               "accelerate>=0.27.0" "safetensors>=0.4.0" "huggingface-hub>=0.23.0"
+# （macOS Apple 芯片会自动选 arm64+MPS wheel；权重首次用时惰性下载到 ~/.vdl_models）
+# torch>=2.2.0
+# diffusers>=0.27.0
+# transformers>=4.38.0
+# accelerate>=0.27.0
+# safetensors>=0.4.0
+# huggingface-hub>=0.23.0

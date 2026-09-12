@@ -1,0 +1,223 @@
+CreativeML Open RAIL-M
+dated August 22, 2022
+
+NOTE / 来源说明：
+本文件为「Stable Diffusion v1.5 Inpainting」与「Stable Diffusion XL 1.0 Inpainting」所采用
+的 CreativeML Open RAIL-M（及 SDXL 的 OpenRAIL++-M）模型许可证正文。
+视频工坊（VDL）图片去水印的「AI 增强修复（扩散模型）」档使用上述模型，按本协议允许商用，
+但须随分发附上本许可证全文并向最终用户传递 Attachment A 的使用限制。
+权威原文：https://github.com/CompVis/stable-diffusion/blob/main/LICENSE
+（SDXL：https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md ）
+本文件用于随应用打包分发，保证合规可查证。
+
+================================================================================
+CreativeML Open RAIL-M
+dated August 22, 2022
+
+Section I: PREAMBLE
+
+Multimodal generative models are being widely adopted and used, and have the
+potential to transform the way artists, among other individuals, conceive and
+benefit from AI or ML technologies as a tool for content creation.
+
+Notwithstanding the current and potential benefits that these artifacts can bring
+to society at large, there are also concerns about potential misuses of them,
+either due to their technical limitations or ethical considerations.
+
+In short, this license strives for both the open and responsible downstream use of
+the accompanying model. When it comes to the open character, we took inspiration
+from open source permissive licenses regarding the grant of IP rights. Referring
+to the downstream responsible use, we added use-based restrictions not permitting
+the use of the Model in very specific scenarios, in order for the licensor to be
+able to enforce the license in case potential misuses of the Model may occur. At
+the same time, we strive to promote open and responsible research on generative
+models for art and content generation.
+
+Even though downstream derivative versions of the model could be released under
+different licensing terms, the latter will always have to include - at minimum -
+the same use-based restrictions as the ones in the original license (this license).
+We believe in the intersection between open and responsible AI development; thus,
+this License aims to strike a balance between both in order to enable responsible
+open-science in the field of AI.
+
+This License governs the use of the model (and its derivatives) and is informed by
+the model card associated with the model.
+
+NOW THEREFORE, You and Licensor agree as follows:
+
+1. Definitions
+
+- "License" means the terms and conditions for use, reproduction, and Distribution
+  as defined in this document.
+- "Data" means a collection of information and/or content extracted from the
+  dataset used with the Model, including to train, pretrain, or otherwise evaluate
+  the Model. The Data is not licensed under this License.
+- "Output" means the results of operating a Model as embodied in informational
+  content resulting therefrom.
+- "Model" means any accompanying machine-learning based assemblies (including
+  checkpoints), consisting of learnt weights, parameters (including optimizer
+  states), corresponding to the model architecture as embodied in the Complementary
+  Material, that have been trained or tuned, in whole or in part on the Data, using
+  the Complementary Material.
+- "Derivatives of the Model" means all modifications to the Model, works based on
+  the Model, or any other model which is created or initialized by transfer of
+  patterns of the weights, parameters, activations or output of the Model, to the
+  other model, in order to cause the other model to perform similarly to the Model,
+  including - but not limited to - distillation methods entailing the use of
+  intermediate data representations or methods based on the generation of synthetic
+  data by the Model for training the other model.
+- "Complementary Material" means the accompanying source code and scripts used to
+  define, run, load, benchmark or evaluate the Model, and used to prepare data for
+  training or evaluation, if any. This includes any accompanying documentation,
+  tutorials, examples, etc, if any.
+- "Distribution" means any transmission, reproduction, publication or other sharing
+  of the Model or Derivatives of the Model to a third party, including providing the
+  Model as a hosted service made available by electronic or other remote means -
+  e.g. API-based or web access.
+- "Licensor" means the copyright owner or entity authorized by the copyright owner
+  that is granting the License, including the persons or entities that may have
+  rights in the Model and/or distributing the Model.
+- "You" (or "Your") means an individual or Legal Entity exercising permissions
+  granted by this License and/or making use of the Model for whichever purpose and
+  in any field of use, including usage of the Model in an end-use application - e.g.
+  chatbot, translator, image generator.
+- "Third Parties" means individuals or legal entities that are not under common
+  control with Licensor or You.
+- "Contribution" means any work of authorship, including the original version of the
+  Model and any modifications or additions to that Model or Derivatives of the Model
+  thereof, that is intentionally submitted to Licensor for inclusion in the Model by
+  the copyright owner or by an individual or Legal Entity authorized to submit on
+  behalf of the copyright owner. For the purposes of this definition, "submitted"
+  means any form of electronic, verbal, or written communication sent to the Licensor
+  or its representatives, including but not limited to communication on electronic
+  mailing lists, source code control systems, and issue tracking systems that are
+  managed by, or on behalf of, the Licensor for the purpose of discussing and
+  improving the Model, but excluding communication that is conspicuously marked or
+  otherwise designated in writing by the copyright owner as "Not a Contribution."
+- "Contributor" means Licensor and any individual or Legal Entity on behalf of whom a
+  Contribution has been received by Licensor and subsequently incorporated within the
+  Model.
+
+2. Grant of Rights; Conditions of Usage, Distribution, and Redistribution.
+
+Section II: INTELLECTUAL PROPERTY RIGHTS
+
+Both copyright and patent grants apply to the Model, Derivatives of the Model and
+Complementary Material. The Model and Derivatives of the Model are subject to
+additional terms as described in Section III.
+
+Grant of Copyright License. Subject to the terms and conditions of this License,
+each Contributor hereby grants to You a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable copyright license to reproduce, prepare,
+publicly display, publicly perform, sublicense, and distribute the Complementary
+Material, the Model, and Derivatives of the Model.
+
+Grant of Patent License. Subject to the terms and conditions of this License, each
+Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge,
+royalty-free, irrevocable (except as stated in this section) patent license to make,
+have made, use, offer to sell, sell, import, and otherwise transfer the Model and
+Derivatives of the Model, where such license applies only to those patent claims
+licensable by such Contributor that are necessarily infringed by their Contribution(s)
+alone or by combination of their Contribution(s) with the Model or Derivatives of the
+Model. If You institute patent litigation against any entity (including a
+cross-claim or counterclaim in a lawsuit) alleging that the Model or Derivatives of
+the Model or Complementary Material infringe a patent, the patent licenses granted
+to You under this License for that Model or Derivatives of the Model shall terminate
+as of the date such litigation is filed.
+
+Section III: CONDITIONS OF USAGE, DISTRIBUTION AND REDISTRIBUTION
+
+Your exercise of any rights granted under this License is subject to the following
+additional terms:
+
+1. You shall not actively host, or make the Model or Derivatives of the Model
+   available for use by third parties, unless the conditions in paragraph 2 below
+   are met.
+2. Where You do host or make the Model or Derivatives of the Model available for
+   use by third parties, You shall: (a) provide a copy of this License to such
+   third parties; and (b) cause any third party to which You host or make available
+   the Model or Derivatives of the Model to agree to the use-based restrictions in
+   Attachment A.
+3. You shall not otherwise use the Model or Derivatives of the Model in a manner
+   that is inconsistent with the use-based restrictions in Attachment A.
+4. You shall not remove, modify, or alter any copyright, patent or other proprietary
+   notices, including those contained in the Model or Derivatives of the Model,
+   including notices of any Licensor or Contributor. You shall not modify or
+   alter the Model or Derivatives of the Model, including any notices, in a manner
+   that implies or suggests endorsement, sponsorship, or affiliation with Licensor
+   or any Contributor, unless explicitly agreed to in writing by Licensor.
+5. You shall not use the Licensor or Contributor names, logos, or trademarks, except
+   as is required for reasonable and customary use in describing and redirecting to
+   the Model and Derivatives of the Model and for the purpose of referencing the
+   Licensor or Contributor.
+
+Section IV: OTHER PROVISIONS
+
+1. DISCLAIMER OF WARRANTY. THE MODEL AND DERIVATIVES OF THE MODEL ARE PROVIDED
+   "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED.
+   THE LICENSOR DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+   LIMITED TO THE IMPLIED WARRANTIES OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY,
+   AND FITNESS FOR A PARTICULAR PURPOSE. YOU ARE SOLELY RESPONSIBLE FOR
+   DETERMINING THE APPROPRIATENESS OF USING OR REDISTRIBUTING THE MODEL AND
+   DERIVATIVES OF THE MODEL AND ASSUME ANY RISKS ASSOCIATED WITH YOUR EXERCISE OF
+   PERMISSIONS UNDER THIS LICENSE.
+2. LIMITATION OF LIABILITY. IN NO EVENT AND UNDER NO LEGAL THEORY, WHETHER IN TORT
+   (INCLUDING NEGLIGENCE), CONTRACT, OR OTHERWISE, SHALL THE LICENSOR OR ANY
+   CONTRIBUTOR BE LIABLE TO YOU FOR ANY DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR
+   CONSEQUENTIAL DAMAGES OF ANY CHARACTER ARISING AS A RESULT OF THIS LICENSE OR
+   OUT OF THE USE OR INABILITY TO USE THE MODEL OR DERIVATIVES OF THE MODEL,
+   INCLUDING WITHOUT LIMITATION ANY DAMAGES FOR LOSS OF GOODWILL, WORK STOPPAGE,
+   COMPUTER FAILURE OR MALFUNCTION, OR ANY OTHER DAMAGES OR LOSSES.
+3. TERMINATION. This License and the rights granted hereunder will terminate,
+   automatically and without notice or opportunity to cure, if You fail to comply
+   with any of the conditions in this License. Upon any such termination, You
+   agree to immediately cease using and distributing the Model and Derivatives of
+   the Model.
+4. BINDING EFFECT; SEVERABILITY. This License is binding on any person or entity
+   that receives, uses, or distributes the Model or Derivatives of the Model. If
+   any provision of this License is held to be unenforceable, such provision shall
+   be reformed only to the extent necessary to make it enforceable, and the other
+   provisions of this License shall remain in full force and effect.
+5. NO ASSIGNMENT OF IP RIGHTS. No intellectual property rights are transferred
+   under this License. The Model and Derivatives of the Model remain the property
+   of the Licensor and Contributors. This License does not grant any rights to use
+   the Model or Derivatives of the Model other than as expressly set forth herein.
+
+Attachment A: USE RESTRICTIONS
+
+You agree not to use the Model or Derivatives of the Model:
+
+1. In any way that violates any applicable national, federal, state, local or
+   international law or regulation;
+2. For the purpose of exploiting, harming or attempting to exploit or harm minors
+   in any way;
+3. To generate or disseminate verifiably false information and/or content with the
+   purpose of harming others;
+4. To generate or disseminate personal identifiable information that can be used to
+   harm an individual;
+5. To defame, disparage or otherwise harass others;
+6. For fully automated decision making that adversely impacts an individual's legal
+   rights or otherwise creates or modifies a binding, enforceable obligation;
+7. For any use intended to or which has the effect of discriminating against or
+   harming individuals or groups based on online or offline social behavior or known
+   or predicted personal or personality characteristics;
+8. To exploit any of the vulnerabilities of a specific group of persons based on
+   their age, social, physical or mental characteristics, in order to materially
+   distort the behavior of a person pertaining to that group in a manner that causes
+   or is likely to cause that person or another person physical or psychological harm;
+9. For any use intended to or which has the effect of discriminating against
+   individuals or groups based on legally protected characteristics or categories;
+10. To provide medical advice and medical results interpretation;
+11. To generate or disseminate information for the purpose to be used for
+    administration of justice, law enforcement, immigration or asylum processes, such
+    as predicting an individual will commit fraud/crime commitment.
+
+================================================================================
+补充说明（视频工坊 VDL 适用）：
+- 本应用「AI 增强修复（扩散模型）」档使用的权重（SD 1.5 Inpainting / SDXL Inpainting）
+  依据上述协议可用于商业产品，但分发时必须随附本许可证，并向最终用户传递 Attachment A
+  的使用限制（应用内「AI 模型使用条款」入口已内嵌要点提示）。
+- 权重首次由用户在本机按需下载（~4GB / ~6.5GB），存储于用户主目录 ~/.vdl_models/diffusion/，
+  应用不收集、不上传任何用户图片或生成结果。
+- 输出图片的版权按协议第 6 条（Output）归生成者所有；使用者须确保其使用不违反 Attachment A。
+================================================================================
