@@ -6145,7 +6145,7 @@
     }))));
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
-    form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'opencv');
+    form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'auto');
     // 处理模式：auto=智能分流（默认，最稳）| refine=两阶段精修（实验档，
     // 闸门兜底；30 样本均值 +0.37dB 且无回归，难例更强；普通场景与 auto 持平）
     // | legacy=整块区域修复（旧行为）
@@ -6181,7 +6181,13 @@
                 el.dwImgStatus.textContent = '未检测到明显水印，已保持原图（若确有水印，可改用 AI 引擎或「传统」模式）';
               }
             } else {
-              el.dwImgStatus.textContent = '去水印完成 ✅';
+              if (det.engine_used === 'ai' && det.fallback) {
+                el.dwImgStatus.textContent = '去水印完成 ✅（含半透明/难例，已自动改用 AI 引擎修复）';
+              } else if (det.engine_used === 'ai') {
+                el.dwImgStatus.textContent = 'AI 无痕修复完成 ✅';
+              } else {
+                el.dwImgStatus.textContent = '去水印完成 ✅';
+              }
             }
             el.dwImgBtn.disabled = false;
             // 自动滚到结果对比块：dw-layout 是两列 grid，dw-result 在其下方
@@ -6211,9 +6217,31 @@
     if (el.dwImgModelField) el.dwImgModelField.hidden = !ai;
     if (el.dwImgInt8Field) el.dwImgInt8Field.hidden = !ai;
   };
+  // 用户是否手动改过引擎：手动改过就不再被硬件推荐覆盖默认
+  let dwEngineUserTouched = false;
+  const dwLoadCapability = async () => {
+    if (!el.dwImgEngine || !el.dwImgEngineHint) return;
+    try {
+      const cap = await request('/api/dw/capability');
+      if (cap && cap.recommendation) {
+        el.dwImgEngineHint.textContent = cap.recommendation;
+        el.dwImgEngineHint.hidden = false;
+        // 仅当用户未手动选择、且推荐引擎与当前不同，才自动套用推荐
+        if (!dwEngineUserTouched && cap.recommended_engine &&
+            cap.recommended_engine !== el.dwImgEngine.value) {
+          el.dwImgEngine.value = cap.recommended_engine;
+          dwSyncEngineUi();
+        }
+      }
+    } catch (_e) { /* 能力端点不可用时静默：默认智能档仍可用 */ }
+  };
   if (el.dwImgEngine) {
-    el.dwImgEngine.addEventListener('change', dwSyncEngineUi);
+    el.dwImgEngine.addEventListener('change', () => {
+      dwEngineUserTouched = true;
+      dwSyncEngineUi();
+    });
     dwSyncEngineUi();
+    dwLoadCapability();
   }
   if (el.dwImgQuality) el.dwImgQuality.addEventListener('change', dwSyncEngineUi);
   // AI 模型 + INT8 持久化（与视频面板同一规则：跨会话保留用户选择）

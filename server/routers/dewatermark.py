@@ -9,6 +9,7 @@ import re as _re
 import subprocess as _subprocess
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
+import capability as _cap
 from codec_utils import h264_args
 from fastapi import APIRouter
 from stats import record_event
@@ -68,10 +69,40 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
                 except ValueError as e:
                     raise RuntimeError(str(e))
             dwc_ai.ai_image_inpaint(src_path, out_path, regions)
-            job["detail"] = {"quality": "ai", "action": "repaired"}
+            job["detail"] = {"quality": "ai", "action": "repaired",
+                             "engine_used": "ai", "fallback": False}
+        elif engine == "auto":
+            # 智能档：先 OpenCV（快、省内存），去不干净时自动回落 AI（LaMa）。
+            _, detail = dwc.image_inpaint_ex(src_path, out_path, regions, method, radius, quality)
+            detail = dict(detail)
+            detail["engine_used"] = "opencv"
+            detail.pop("fallback", None)
+            if dwc_ai.available():
+                out_img = dwc._cv2.imread(str(out_path))
+                orig_img = dwc._cv2.imread(str(src_path))
+                if out_img is not None and orig_img is not None and \
+                        dwc._auto_should_fallback_to_ai(orig_img, out_img, regions, detail):
+                    # OpenCV 没去干净（半透明/浅底等）→ 用原图直接走 LaMa 重跑
+                    try:
+                        dwc_ai.set_int8_enabled(int8)
+                        if model and model != dwc_ai.current_model():
+                            dwc_ai.set_model(model)
+                        dwc_ai.ai_image_inpaint(src_path, out_path, regions)
+                        detail = {"quality": "ai", "action": "repaired",
+                                  "engine_used": "ai", "fallback": True}
+                    except Exception as e:  # noqa: BLE001
+                        # LaMa 失败（极端 OOM/损坏）不致命：退回已算出的 OpenCV 结果
+                        app.logger.warning("dw image %s ai fallback failed, keep opencv: %s",
+                                           job_id, e)
+                        detail["ai_fallback_error"] = str(e)[:200]
+            else:
+                detail["ai_unavailable"] = True
+            job["detail"] = detail
         else:
             _, detail = dwc.image_inpaint_ex(src_path, out_path, regions, method, radius, quality)
             # 各区域的判定结果（stroke/solid/none）回报给前端，便于提示「未检测到水印」
+            detail = dict(detail)
+            detail["engine_used"] = "opencv"
             job["detail"] = detail
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("去水印未产出有效文件")
@@ -119,7 +150,7 @@ def create_dw_image(
     h: float = app.Form(0.0),
     method: str = app.Form("ns"),
     radius: int = app.Form(3),
-    engine: str = app.Form("opencv"),
+    engine: str = app.Form("auto"),  # auto=智能（OpenCV 先跑，难例自动回落 AI）| opencv=经典 | ai=AI 无痕（LaMa）
     quality: str = app.Form("auto"),  # auto=智能分流（默认，最稳）| refine=两阶段精修（最难水印，实验档）| legacy=整块 inpaint（旧行为）
     int8: str = app.Form("1"),  # INT8 动态量化开关（默认开）
     model: str = app.Form(""),   # AI 模型（当前仅 lama；仅 engine=ai 时生效），为空保持当前
@@ -128,17 +159,17 @@ def create_dw_image(
     """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
 
     优先解析 regions（前端多选区）；缺失时回退单个 x/y/w/h 区域（兼容旧客户端）。
-    quality=auto（默认，最稳）时逐选区检测水印形态，只修复水印笔画（背景零改动），
-    未检出可见水印的选区保持原图；
-    quality=refine 时走两阶段管线：stage1 双边滤波粗除 → stage2 bbox 智能外扩精修，
-    对浅底+半透明白字/粗笔画汉字覆盖率更高，但在复杂照片底图上可能误伤画面细节
-    （30 样本基准均值低于 auto），故不作为默认；
-    legacy 则按旧行为整块 inpaint。
+    engine=auto（默认，推荐）：先走 OpenCV 修复（快、省内存），若输出中仍检出残留水印
+    （半透明/浅底等 OpenCV 易漏或留残影的场景）则自动回落 AI（LaMa）重跑——用户无需手动切换。
+    engine=opencv：仅 OpenCV（旧行为，最快最轻）。
+    engine=ai：仅 AI 无痕修复（LaMa，像素级，约多占 1.5~2GB 内存）。
+    注：engine=auto 的 AI 回落仅在 LaMa 权重就绪时生效；未就绪则退化为纯 OpenCV，不报错。
+    quality 仅在 OpenCV 路径生效（auto/refine/legacy）；engine=ai 忽略 quality。
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
-    if engine not in ("opencv", "ai"):
-        raise app.HTTPException(status_code=400, detail="engine 仅支持 opencv / ai")
+    if engine not in ("auto", "opencv", "ai"):
+        raise app.HTTPException(status_code=400, detail="engine 仅支持 auto / opencv / ai")
     if engine == "ai" and not dwc_ai.available():
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
     app._check_rate_limit(request)
@@ -171,6 +202,16 @@ def create_dw_image(
                         bool(int(int8)), model, quality)
     record_event("dewatermark", {"kind": "image", "engine": engine, "quality": quality})
     return {"job_id": job_id, "status": "running", "kind": "image"}
+
+
+@router.get("/api/dw/capability")
+def dw_capability() -> dict:
+    """图片去水印能力探测：根据运行机器内存/芯片给出推荐引擎与说明。
+
+    前端在打开去水印面板时调用，自动把「修复引擎」默认选为推荐项，并展示按本机
+    硬件定制的提示文案。返回纯只读建议，不影响任何强制行为（用户可随时手动覆盖）。
+    """
+    return _cap.probe_capability(lama_available=dwc_ai.available())
 
 
 def _parse_segments(segments_json: str):

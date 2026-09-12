@@ -210,6 +210,12 @@ _REFINED_STAGE2_KW = {
     "sat_max": 130,
 }
 
+# 智能档（engine=auto）回落判断：从「原图」估水印不透明度，低于此值视为半透明/浅底
+# （OpenCV 易漏或留残影）→ 回落 AI（LaMa）。30 样本基准标定：实色水印 opacity 高不触发，
+# 半透明水印（α≤0.5）opacity 低触发；与 refine 的「输出重检」思路不同——后者在照片底图上
+# 会把纹理误判成残留（同 G4 翻车病因），故改为背景无关的「笔画对比度」判据。
+_AUTO_FALLBACK_OPACITY = 0.12
+
 
 def _residual_map(gray_u8):
     """多尺度中值背景的正残差图：亮于局部背景的细结构（水印笔画）会凸显。
@@ -587,6 +593,50 @@ def image_inpaint_ex(src_path, dst_path, regions, method: str = "ns", radius: in
     info.update({"action": "repaired", "changed": True,
                  "requested_method": method, "method_used": used})
     return Path(dst_path), info
+
+
+def _estimate_watermark_opacity(img, stroke_mask):
+    """估计水印不透明度（背景无关）：笔画像素与「笔画外一圈局部背景」的亮度差 / 背景亮度。
+
+    半透明水印该值低（笔画与背景对比弱，如浅底半透明白字）；实色水印该值高。
+    只用笔画周边一圈做局部背景，故不受整图底图（照片纹理/渐变）影响。
+    返回 None 表示无法估计（笔画太小/无外圈）。
+    """
+    if not stroke_mask.any() or img is None:
+        return None
+    k = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (5, 5))
+    inner = _cv2.erode(stroke_mask, k, iterations=2)
+    outer = _cv2.dilate(stroke_mask, k, iterations=4)
+    ring = outer & ~inner
+    if not ring.any():
+        return None
+    bg = img[ring > 0].astype(_np.float64).mean(axis=0)  # BGR 均值
+    stroke = img[stroke_mask > 0].astype(_np.float64)
+    diff = _np.abs(stroke - bg).mean(axis=1)  # 每像素 BGR 差
+    bg_luma = bg.mean() + 1e-3
+    return float(diff.mean()) / bg_luma
+
+
+def _auto_should_fallback_to_ai(orig_img, out_img, regions, opencv_detail) -> bool:
+    """智能档（engine=auto）回落判断：OpenCV 没去干净（半透明/浅底）时改走 AI（LaMa）。
+
+    判据（背景无关，避免照片纹理误触发）：
+    1) OpenCV 完全没检出水印（action='kept_original'）→ 多半是浅/半透明 → 回落 LaMa；
+    2) OpenCV 修过，但原图上该水印笔画与周边背景对比弱（opacity < _AUTO_FALLBACK_OPACITY，
+       即半透明）→ 回落 LaMa；实色水印对比强 → 不回落。
+    返回 True 表示应改用 AI（LaMa）重跑；False 表示 OpenCV 结果已够好。
+    """
+    if orig_img is None or not regions:
+        return False
+    if opencv_detail.get("action") == "kept_original":
+        return True
+    mask, _ = plan_image_repair(orig_img, regions, "auto")
+    if not mask.any():
+        return False
+    op = _estimate_watermark_opacity(orig_img, mask)
+    if op is None:
+        return False
+    return op < _AUTO_FALLBACK_OPACITY
 
 
 # ------------------------------------------------------------------ 图片去水印

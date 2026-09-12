@@ -760,6 +760,59 @@ def test_bilateral_residual():
     print("OK _residual_map_bilateral detects text")
 
 
+def _composite_watermark(bg_val, text_val, alpha, text="SAMPLE"):
+    """合成：浅色底图 + 半透明/实色文字水印，返回 (wm_img, exact_img, regions)。"""
+    h, w = 400, 600
+    bg = np.full((h, w, 3), bg_val, dtype=np.uint8)
+    exact = bg.copy()
+    overlay = bg.copy()
+    cv2.putText(overlay, text, (120, 230), cv2.FONT_HERSHEY_SIMPLEX, 3.0,
+                (text_val, text_val, text_val), 8, cv2.LINE_AA)
+    wm = (alpha * overlay.astype(np.float64) + (1 - alpha) * bg.astype(np.float64)
+          ).clip(0, 255).astype(np.uint8)
+    regions = [{"x": 0.12, "y": 0.42, "w": 0.78, "h": 0.32, "op": "add"}]
+    return wm, exact, regions
+
+
+def test_estimate_watermark_opacity():
+    # 半透明白字（低对比）应得到低 opacity；实色深字（高对比）应得到高 opacity
+    semi, _, rn_s = _composite_watermark(220, 255, 0.5)   # 浅底 + 半透明白字
+    solid, _, rn_d = _composite_watermark(220, 20, 1.0)   # 浅底 + 实色深字
+    mask_s, _ = dwc.plan_image_repair(semi, rn_s, "auto")
+    mask_d, _ = dwc.plan_image_repair(solid, rn_d, "auto")
+    assert mask_s.any() and mask_d.any()
+    op_semi = dwc._estimate_watermark_opacity(semi, mask_s)
+    op_solid = dwc._estimate_watermark_opacity(solid, mask_d)
+    assert op_semi is not None and op_solid is not None
+    assert op_semi < op_solid, f"半透明opacity({op_semi:.3f})应<实色({op_solid:.3f})"
+    assert op_semi < dwc._AUTO_FALLBACK_OPACITY, f"半透明应低于阈值({op_semi:.3f})"
+    print(f"OK opacity: 半透明={op_semi:.3f} < 实色={op_solid:.3f} (gate={dwc._AUTO_FALLBACK_OPACITY})")
+
+
+def test_auto_fallback_decision():
+    semi, _, rn_s = _composite_watermark(220, 255, 0.5)   # 半透明白字 → 应回落
+    solid, _, rn_d = _composite_watermark(220, 20, 1.0)   # 实色深字 → 不回落
+    src_s, src_d = _TMP / "fb_semi.png", _TMP / "fb_solid.png"
+    assert cv2.imwrite(str(src_s), semi) and cv2.imwrite(str(src_d), solid)
+
+    # 半透明：OpenCV 修过但 opacity 低 → 回落 AI
+    _, det_s = dwc.image_inpaint_ex(src_s, _TMP / "fb_semi_cv.png", rn_s, "ns", 3, "auto")
+    assert dwc._auto_should_fallback_to_ai(semi, cv2.imread(str(_TMP / "fb_semi_cv.png")), rn_s, det_s)
+
+    # 实色：OpenCV 已修干净 → 不回落
+    _, det_d = dwc.image_inpaint_ex(src_d, _TMP / "fb_solid_cv.png", rn_d, "ns", 3, "auto")
+    assert not dwc._auto_should_fallback_to_ai(solid, cv2.imread(str(_TMP / "fb_solid_cv.png")), rn_d, det_d)
+
+    # OpenCV 完全没看见（kept_original）→ 回落 AI
+    blank = _make_test_image(400, 600, 200)  # 干净图，框选区无水印
+    src_b = _TMP / "fb_blank.png"
+    assert cv2.imwrite(str(src_b), blank)
+    _, det_b = dwc.image_inpaint_ex(src_b, _TMP / "fb_blank_cv.png", rn_s, "ns", 3, "auto")
+    assert det_b.get("action") == "kept_original"
+    assert dwc._auto_should_fallback_to_ai(blank, cv2.imread(str(_TMP / "fb_blank_cv.png")), rn_s, det_b)
+    print("OK auto fallback: 半透明→回落, 实色→不回落, 空区域→回落")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -817,4 +870,8 @@ if __name__ == "__main__":
     test_refine_expand()
     test_bilateral_residual()
 
-    print("\n🎉 去水印核心测试全部通过（46 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
+    # 智能档自动回落 AI（engine=auto，2026-09-12 新增）
+    test_estimate_watermark_opacity()
+    test_auto_fallback_decision()
+
+    print("\n🎉 去水印核心测试全部通过（48 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
