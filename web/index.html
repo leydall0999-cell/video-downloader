@@ -6,7 +6,10 @@
 <meta name="description" content="粘贴链接即可下载 YouTube、哔哩哔哩等主流平台的视频" data-page-node-id="IvO89181SGJVB4NauWxnHd" />
 <meta name="theme-color" content="#4f46e5" data-page-node-id="GTvAlVVfERRmeQdtE7bCFb" />
 <title>视频工坊 · 不止是下载工具，更懂视频精修加工</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' data-page-node-id="F7BpPWKuwCe4QtVpINXJV3"><text y='26' font-size='26' data-page-node-id="35BDSznNYvH6R4TNyZrjh7">⬇️</text></svg>" />
+<!-- 2026-09-12 修复：原来的内联 SVG data URI 里混进了双引号（data-page-node-id="…"），
+     提前闭合了 href="…"，导致 <text>⬇️</text> 与 " /> 漏进 <body> 顶部渲染成乱码，
+     并把 header 整体往下顶。改为全字段百分号编码的 data URI（内部只用单引号、无裸 <>）。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%234f46e5'/%3E%3Cpath%20d='M16%207v11m0%200l-5-5m5%205l5-5M9%2025h14'%20fill='none'%20stroke='%23fff'%20stroke-width='2.4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
 <script>
   // styles.css 缓存击穿：与 app.js 同机制（dev 用时间戳、打包用构建戳），
   // 否则 WKWebView 会缓存旧 CSS，导致改样式后界面不更新。放在 head 同步写入避免闪烁。

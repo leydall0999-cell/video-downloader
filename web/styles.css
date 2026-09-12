@@ -3841,6 +3841,23 @@ img { max-width: 100%; display: block; }
 /* ---------------- 2026-09-08 侧栏改版：中文组标题 + 分组折叠 + 子项去图标 ---------------- */
 /* 子项不显示 emoji 图标（纯文字更干净）；display:none 不参与布局，不留空位 */
 .sidebar-item-icon { display: none !important; }
+
+/* 2026-09-12 首页是**顶级入口**（与下方 .sidebar-group-title 同级），不是分组子项。
+   上面那条「子项去图标」套到它身上会出 bug：padding-left 仍保留 calc(.6rem+26px+.5rem)
+   的图标位，而图标被 display:none 掉 → 左半边空出一大块、文字挤在右半边（看起来「只有一半」）。
+   这里给它补齐顶级入口的结构与节奏：恢复图标 + 左右缩进对齐分组行
+   （.sidebar-group 有 .3rem 横向内距，首页没有，必须补 margin 才能同列）。 */
+.sidebar-item.sidebar-home {
+  margin-left: .3rem;
+  margin-right: .3rem;
+  width: auto;                  /* 基础样式是 width:100%，加了左右 margin 会右溢 9.6px 被裁掉 */
+  padding-left: .6rem;          /* = .sidebar-group-title 的左内距，图标与分组 emoji 同列 */
+}
+.sidebar-item.sidebar-home .sidebar-item-icon {
+  display: inline-grid !important;   /* 覆盖「子项去图标」，需与上面的 !important 同权重+更高特异性 */
+  width: 26px; height: 26px; min-width: 26px;   /* 与 .sidebar-group-emoji 同尺寸 */
+  border-radius: 8px;
+}
 /* 组标题折叠箭头：用品牌色更醒目；cursor / pointer 已在主定义区设置 */
 .sidebar-group-title::after {
   content: "▾"; margin-left: auto;
