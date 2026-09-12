@@ -37,7 +37,7 @@
   // #view=xxx 直达路由（与 web-dev 对齐）：支持收藏/分享指定功能页；IIFE 末尾两处
   // switchView 会优先采用 _hashView，此 setTimeout 仅在早期抛错时兜底。
   const _hashView = (() => { try { const m = (location.hash || '').match(/view=([a-zA-Z_]+)/); return m ? m[1] : ''; } catch (_) { return ''; } })();
-  setTimeout(() => { try { if (!bootViewSet) switchView(_hashView || 'download'); } catch (_) {} }, 0);
+  setTimeout(() => { try { if (!bootViewSet) switchView(_hashView || 'home'); } catch (_) {} }, 0);
 
   // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
   try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
@@ -308,6 +308,9 @@
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
     sidebar: $('sidebar'),
+    homeView: $('homeView'),
+    tabHome: $('tabHome'),
+    sTabHome: $('sTabHome'),
     tabDownload: $('tabDownload'),
     sTabDownload: $('sTabDownload'),
     sTabLibrary: $('sTabLibrary'),
@@ -10083,6 +10086,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
+    const isHome = view === 'home';   // 2026-09-12 首页：产品热门功能快捷入口（默认落地页）
     const isProfile = view === 'profile';                  // 个人资料总览
     const isProfilePurchases = view === 'profile_purchases';
     const isProfileCredits = view === 'profile_credits';
@@ -10090,7 +10094,8 @@ el.dwVidPlayer.removeAttribute('src');
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isSt || isAppIntro || isBridge || isProfileGroup;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
+    if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -10123,9 +10128,11 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabSr) el.tabSr.classList.toggle('is-active', isSr);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfileGroup);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
+    if (el.tabHome) el.tabHome.classList.toggle('is-active', isHome);
+    if (el.sTabHome) el.sTabHome.classList.toggle('is-active', isHome);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isSt && !isAppIntro && !isBridge && !isProfileGroup;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -10588,6 +10595,14 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   el.tabDownload.addEventListener('click', () => switchView('download'));
+  if (el.tabHome) el.tabHome.addEventListener('click', () => switchView('home'));
+  // 首页：热门功能卡片（事件委托，卡片内嵌 span 也能正确触发）
+  if (el.homeView) {
+    el.homeView.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-view]');
+      if (btn) switchView(btn.getAttribute('data-view'));
+    });
+  }
   if (el.tabLibrary) el.tabLibrary.addEventListener('click', () => switchView('library'));
   if (el.tabCommentary) el.tabCommentary.addEventListener('click', () => switchView('commentary'));
   el.tabUploadConvert.addEventListener('click', () => switchView('uploadconvert'));
@@ -10604,6 +10619,7 @@ el.dwVidPlayer.removeAttribute('src');
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
+    [el.sTabHome, 'home'],
     [el.sTabDownload, 'download'],
     [el.sTabLibrary, 'library'],
     [el.sTabCommentary, 'commentary'],
@@ -11758,9 +11774,9 @@ el.dwVidPlayer.removeAttribute('src');
       [el.sTabProfile, el.sTabProfilePurchases, el.sTabProfileCredits, el.sTabProfileSecurity, el.sTabProfileSupport].forEach((b) => {
         if (b) b.classList.remove('is-active');
       });
-      // 如果当前在个人中心视图，切回下载页
+      // 如果当前在个人中心视图，切回首页（热门功能快捷入口）
       const inProfile = el.profileView && !el.profileView.hidden;
-      if (inProfile) switchView('download');
+      if (inProfile) switchView('home');
       return;
     }
     group.classList.remove('collapsed');
@@ -12705,7 +12721,7 @@ el.dwVidPlayer.removeAttribute('src');
       if (r && r.ok) {
         alert('账号已注销');
         logoutAccount();
-        switchView('download');
+        switchView('home');
       } else {
         alert((r && r.error) || '注销失败，请重试');
       }
@@ -13793,15 +13809,15 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.sTabProfile) el.sTabProfile.hidden = false;
       }
       el.tabs.hidden = false; // 导航栏始终显示
-      // 默认视图：优先 #view=xxx 直达路由，否则停在下载
-      switchView(_hashView || 'download');
+      // 默认视图：优先 #view=xxx 直达路由，否则停在首页（热门功能快捷入口）
+      switchView(_hashView || 'home');
       bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
       paintNodeBar();
     })
     .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
-  // 兜底默认视图（节点信息未加载时）：优先 #view=xxx 直达路由，否则停在核心下载视图。
-  try { switchView(_hashView || 'download'); bootViewSet = true; } catch (_) {}
+  // 兜底默认视图（节点信息未加载时）：优先 #view=xxx 直达路由，否则停在首页（热门功能快捷入口）。
+  try { switchView(_hashView || 'home'); bootViewSet = true; } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示
   try { clearError(); } catch (_) {}
 

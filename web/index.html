@@ -51,6 +51,9 @@
          app 名已在 macOS 顶菜单/Dock/窗口 title/主面板区头共 4 处展示，
          侧栏职责是导航，不是品牌展示，重复占用 50-60px 高度无价值 -->
 
+    <!-- 2026-09-12 首页：产品热门功能快捷入口（默认落地页，替代下载作为首屏） -->
+    <button type="button" class="sidebar-item sidebar-home is-active" data-view="home" id="sTabHome" title="首页 · 功能快捷入口"><span class="sidebar-item-icon" aria-hidden="true">🏠</span><span class="sidebar-item-label">首页</span></button>
+
     <!-- 2026-09-08 五组细分（用户选定方案）：
          - Download（获取）：下载 + 订阅追更 + 种子下载（原 Subscribe 组并入）
          - Library（媒体库）：媒体库
@@ -63,7 +66,7 @@
         <span class="sidebar-group-emoji" aria-hidden="true">⬇</span>
         <span class="sidebar-group-en">下载</span>
       </div>
-      <button type="button" class="sidebar-item is-active" data-view="download" id="sTabDownload" title="下载"><span class="sidebar-item-icon" aria-hidden="true">⬇️</span><span class="sidebar-item-label">下载</span></button>
+      <button type="button" class="sidebar-item" data-view="download" id="sTabDownload" title="下载"><span class="sidebar-item-icon" aria-hidden="true">⬇️</span><span class="sidebar-item-label">下载</span></button>
       <button type="button" class="sidebar-item" data-view="subscribe" id="sTabSubscribe" title="订阅追更"><span class="sidebar-item-icon" aria-hidden="true">🔔</span><span class="sidebar-item-label">订阅追更</span></button>
       <button type="button" class="sidebar-item" data-view="torrent" id="sTabTorrent" hidden title="种子下载"><span class="sidebar-item-icon" aria-hidden="true">🧲</span><span class="sidebar-item-label">种子下载</span></button>
     </div>
@@ -143,7 +146,8 @@
 
   <!-- 窄屏（≤900px）回退：保留原顶部 tabs，避免侧栏挤死移动端 -->
   <nav class="tabs" id="tabs" hidden>
-    <button type="button" class="tab is-active" data-view="download" id="tabDownload">⬇️ 下载</button>
+    <button type="button" class="tab" data-view="home" id="tabHome">🏠 首页</button>
+    <button type="button" class="tab" data-view="download" id="tabDownload">⬇️ 下载</button>
     <button type="button" class="tab" data-view="library" id="tabLibrary">📚 媒体库</button>
     <button type="button" class="tab" data-view="commentary" id="tabCommentary">🎬 视频解说</button>
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">🎬 视频格式转换</button>
@@ -156,6 +160,76 @@
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden>🧲 种子</button>
     <button type="button" class="tab" data-view="profile" id="tabProfile">👤 个人中心</button>
   </nav>
+
+  <section id="homeView" class="panel" hidden aria-labelledby="homeTitle">
+    <div class="home-hero">
+      <h1 class="home-title" id="homeTitle">一站式视频 / 图片处理工作台</h1>
+      <p class="home-sub">全部本地处理，不上传云端 · 点击下方功能开始</p>
+    </div>
+    <h2 class="guide-title">热门功能快捷入口</h2>
+    <div class="home-grid" id="homeGrid">
+      <button type="button" class="home-card" data-view="download">
+        <span class="home-card-icon" aria-hidden="true">⬇️</span>
+        <span class="home-card-title">视频下载</span>
+        <span class="home-card-desc">粘贴链接，一键保存到本地</span>
+      </button>
+      <button type="button" class="home-card" data-view="dw">
+        <span class="home-card-icon" aria-hidden="true">🧽</span>
+        <span class="home-card-title">图片去水印</span>
+        <span class="home-card-desc">框选水印区域，AI 智能消除</span>
+      </button>
+      <button type="button" class="home-card" data-view="dwpdf">
+        <span class="home-card-icon" aria-hidden="true">📄</span>
+        <span class="home-card-title">PDF 去水印</span>
+        <span class="home-card-desc">批量去除文档水印</span>
+      </button>
+      <button type="button" class="home-card" data-view="dwvideo">
+        <span class="home-card-icon" aria-hidden="true">🎞️</span>
+        <span class="home-card-title">视频去水印</span>
+        <span class="home-card-desc">去除视频平台水印标识</span>
+      </button>
+      <button type="button" class="home-card" data-view="matting">
+        <span class="home-card-icon" aria-hidden="true">✂️</span>
+        <span class="home-card-title">一键抠图</span>
+        <span class="home-card-desc">矩形 / 套索选区，秒级抠出主体</span>
+      </button>
+      <button type="button" class="home-card" data-view="compress">
+        <span class="home-card-icon" aria-hidden="true">🗜️</span>
+        <span class="home-card-title">高效压缩</span>
+        <span class="home-card-desc">视觉无损 / 极致档，体积更轻</span>
+      </button>
+      <button type="button" class="home-card" data-view="sr">
+        <span class="home-card-icon" aria-hidden="true">✨</span>
+        <span class="home-card-title">高清修复</span>
+        <span class="home-card-desc">快速放大 / AI 超分重建细节</span>
+      </button>
+      <button type="button" class="home-card" data-view="subtitle">
+        <span class="home-card-icon" aria-hidden="true">📝</span>
+        <span class="home-card-title">本地字幕提取</span>
+        <span class="home-card-desc">本地 AI 语音识别生成字幕</span>
+      </button>
+      <button type="button" class="home-card" data-view="uploadconvert">
+        <span class="home-card-icon" aria-hidden="true">🔁</span>
+        <span class="home-card-title">视频格式转换</span>
+        <span class="home-card-desc">MP4 / MOV / WebM 互转</span>
+      </button>
+      <button type="button" class="home-card" data-view="commentary">
+        <span class="home-card-icon" aria-hidden="true">🎬</span>
+        <span class="home-card-title">视频解说</span>
+        <span class="home-card-desc">自动转写 · 提炼解说词成片</span>
+      </button>
+      <button type="button" class="home-card" data-view="library">
+        <span class="home-card-icon" aria-hidden="true">📚</span>
+        <span class="home-card-title">媒体库</span>
+        <span class="home-card-desc">集中管理已下载 / 已处理文件</span>
+      </button>
+      <button type="button" class="home-card" data-view="subscribe">
+        <span class="home-card-icon" aria-hidden="true">🔔</span>
+        <span class="home-card-title">订阅追更</span>
+        <span class="home-card-desc">频道更新自动下载</span>
+      </button>
+    </div>
+  </section>
 
   <div id="downloadView">
 
