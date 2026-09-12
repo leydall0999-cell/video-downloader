@@ -813,6 +813,22 @@ def test_auto_fallback_decision():
     print("OK auto fallback: 半透明→回落, 实色→不回落, 空区域→回落")
 
 
+def test_auto_fallback_boundary():
+    # 回归（v1.0.17）：浅底半透明水印，opacity 略高于旧阈值 0.12 时，旧代码不回落 → OpenCV 留残影，
+    # 观感比原图还脏（复现用户「豆包AI生成」白字水印，实测原图 opacity≈0.1223 的边界）。
+    # 用合成浅底白字把 opacity 卡在 0.12~0.18 之间：旧 gate(0.12) 判「不回落」=bug，新 gate(0.18) 判回落=修复。
+    wm, _, rn = _composite_watermark(160, 250, 0.4)   # opacity≈0.122
+    src = _TMP / "fb_boundary.png"
+    assert cv2.imwrite(str(src), wm)
+    _, det = dwc.image_inpaint_ex(src, _TMP / "fb_boundary_cv.png", rn, "ns", 3, "auto")
+    mask, _ = dwc.plan_image_repair(wm, rn, "auto")
+    op = dwc._estimate_watermark_opacity(wm, mask)
+    assert op > 0.12, f"边界用例 opacity({op:.3f}) 应略高于旧阈值 0.12（即旧代码留在 OpenCV 的症结）"
+    assert dwc._auto_should_fallback_to_ai(wm, cv2.imread(str(_TMP / "fb_boundary_cv.png")), rn, det), \
+        f"opacity={op:.3f} 必须触发 LaMa 回落（新阈值 0.18），否则 OpenCV 留残影"
+    print(f"OK boundary regression: opacity={op:.3f} 触发 LaMa 回落（修复 v1.0.17）")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()

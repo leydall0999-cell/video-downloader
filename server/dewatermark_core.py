@@ -211,10 +211,11 @@ _REFINED_STAGE2_KW = {
 }
 
 # 智能档（engine=auto）回落判断：从「原图」估水印不透明度，低于此值视为半透明/浅底
-# （OpenCV 易漏或留残影）→ 回落 AI（LaMa）。30 样本基准标定：实色水印 opacity 高不触发，
-# 半透明水印（α≤0.5）opacity 低触发；与 refine 的「输出重检」思路不同——后者在照片底图上
-# 会把纹理误判成残留（同 G4 翻车病因），故改为背景无关的「笔画对比度」判据。
-_AUTO_FALLBACK_OPACITY = 0.12
+# （OpenCV 易漏或留残影）→ 回落 AI（LaMa）。背景无关「笔画对比度」判据（见 _estimate_watermark_opacity）。
+# 阈值标定：实色水印 opacity≈0.8 不触发（OpenCV 已够好，省时省内存）；但浅底半透明白字
+# （豆包/通义等 AI 生成水印）opacity 仅约 0.12，恰好卡在旧阈值 0.12 上沿 → 不回落、OpenCV 留残影、
+# 观感比原图还脏。v1.0.17 显式抬到 0.18 留足余量，让这类浅底白字稳定回落 LaMa（实测 0.1223<0.18 触发）。
+_AUTO_FALLBACK_OPACITY = 0.18
 
 
 def _residual_map(gray_u8):
