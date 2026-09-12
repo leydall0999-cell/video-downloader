@@ -156,20 +156,43 @@ def _inpaint_from_mask(img, mask, method: str, radius: float):
 #   4) 实心块内部残差≈0（中值背景被块自身抬高），据此可与「文字笔画」可靠区分
 #      （30 样本判别准确 29/30）。
 #   5) 逐像素 alpha 反解在代数上恒等于直接用背景估计，故不引入（实测标注量反解更差）。
+#   6) 100% 覆盖的 mask 会让 cv2.inpaint **静默 no-op**（原样返回）。排查/测试时若发现
+#      「处理完没变化」，先查 mask 覆盖率；也正因如此，绝不要把子图连同满 mask 一起送进去。
+#   7) 整图平铺水印（图库常见）会被误判 solid；即便用真值 mask，其 inpaint 也低于不处理
+#      （26.67 vs 28.32）→ 大框选必须拒绝整块修复（max_solid_rect）。
+#   8) 背景估计窗口受限于 scales（最大 35）：密集文字水印的**笔画内部**残差≈0
+#      （真值强水印像素 p25≈3），这是召回无法达到 100% 的物理原因，故靠外扩 1~2px 补外沿。
+#   9) 松框（用户手拖比水印大 2.5 倍）是旧链路最大杀手：PNSR 38.14→13.36；
+#      但 30 样本整体上「检测笔画」仍显著优于「整块」——不要为了单个平滑场景改回整块。
 
 _SMART = {
-    "thr_k": 0.45,        # 残差阈值 = base + thr_k*(p99.5-base)
+    "thr_k": 0.40,        # 残差阈值 = base + thr_k*(p99.5-base)
     "sat_max": 95,        # 水印多为灰白，通道差上限（抑制彩色内容误检）
     "max_fill": 0.30,     # 过检保护：候选覆盖率超此值则只保留残差最强的部分
-    "solid_inner": 0.035, # 内缩区残差密度低于此值 → 判为实心块
+    "solid_inner": 0.02,  # 内缩区残差密度低于此值 → 判为实心块。实测（2026-09-12）：
+                          # 内缩带取 max(6, 0.30*min)（且 ≤18）时分离干净 —— 实心块与
+                          # 实心 logo 全部为 0.0000，最淡的半透明笔画也有 0.041，
+                          # 阈值 0.02 居中留足余量。
+    "solid_inset": (0.30, 6, 18),  # 内缩带：比例、下限、上限（上限≈最大中值核 35 的一半，
+                                   # 否则窗口跨越块边缘会把「内部」统计污染成非零，
+                                   # 这正是旧 0.16 比例漏判实心块的根因）
+    "max_solid_rect": 0.5,  # 整块 inpaint 的前置门槛：框选面积超过全图此比例时，
+                            # 即便判为 solid 也拒绝整块修复（改判 none）。
+                            # 实测（2026-09-12）整图平铺水印（图库常见）会被误判 solid：
+                            # 真值 mask inpaint 仅 PSNR 26.67，反而低于不处理的 28.32 ——
+                            # 这种情况「不动」才是最优；真正的实心 logo 框选只占图像一小块。
     "cc_frac": 0.0004,    # 连通域最小面积（占框选面积比）
     "min_fill": 0.004,    # 最小有效覆盖率（低于此视为没检出）
     "scales": (3, 5, 9, 15, 25, 35),  # 多尺度中值背景核
-    "min_redelta": 18.0,  # 残差动态范围下限：低于此视为「无可见水印/只是纹理」。
-                          # 实测（2026-09-12）：干净但带纹理的底图 redelta≈17，
-                          # 半透明水印 a=0.25/0.45/0.60 分别为 28/65/94，实心块 185。
-                          # 取 18 可拦住纹理误检，同时保留 a≥0.25 的水印；更淡的水印
-                          # （redelta≈19 且与纹理不可分）宁可漏检不动，也不误改内容。
+    "min_redelta": 12.0,  # 残差动态范围下限：低于此视为「无可见水印/只是纹理」。
+                          # 实测（2026-09-12，30 样本基准 + 召回率实测）：18 → 12 的收益
+                          # 是「严格占优」——Δavg +8.38→+8.92、最差损伤与变差数均不变、
+                          # 改善样本 20→22。注意干净但带纹理的底图 redelta≈17 仍会被
+                          # 放入下一关，由 thr_k / min_fill / max_fill / 连通域共同拦下
+                          # （回归护栏见 test_detect_none_on_clean_textured_area）。
+    "stroke_grow": 2,     # 笔画 mask 外扩次数（3x3 椭圆）。水印抗锯齿外沿约 1px，
+                          # 不外扩会留下淡淡的字边（实测召回 0.43→0.62，
+                          # 30 样本 PSNR 29.29→33.32）。外扩过多（3 次）反而掉分。
     "min_stroke_px": 24,  # 绝对像素下限
 }
 
@@ -227,13 +250,18 @@ def detect_watermark(img, x: int, y: int, rw: int, rh: int, **kw):
     cover = float(cand.sum()) / max(1, rect_area)
     info = {"cover": round(cover, 4)}
 
-    # —— 实心块判别：内缩区（排除边缘带）残差密度低 ⇒ 是一整块不透明内容
-    ins = int(max(4, 0.16 * min(rh, rw)))
+    # —— 实心块判别：内缩区（排除边缘带）残差密度低 ⇒ 是一整块不透明内容。
+    # 内缩量必须 ≥ 最大中值核的一半，否则窗口跨越块边缘、把「内部」统计抬高成非零
+    gl_frac, gl_lo, gl_hi = kw["solid_inset"]
+    ins = int(min(gl_hi, max(gl_lo, gl_frac * min(rh, rw))))
     if rh - 2 * ins > 2 and rw - 2 * ins > 2:
         inner = (cand[ins:rh - ins, ins:rw - ins])
         inner_hit = float(inner.sum()) / float(inner.size)
         info["inner_hit"] = round(inner_hit, 4)
         if inner_hit < kw["solid_inner"]:
+            # 大框选拒整块修复：整图平铺水印会被误判 solid，而它 inpaint 只会毁图
+            if rect_area > kw["max_solid_rect"] * float(H * W):
+                return None, "none", {**info, "why": "solid-rect-too-large"}
             return None, "solid", {**info, "why": "solid-inner-flat"}
 
     # —— 过检保护：覆盖率离谱（纹理误检）时只保留残差最强的部分
@@ -257,12 +285,14 @@ def detect_watermark(img, x: int, y: int, rw: int, rh: int, **kw):
     m = keep
     if int((m > 0).sum()) < kw["min_stroke_px"]:
         return None, "none", {**info, "why": "no-component"}
-    m = _cv2.dilate(m, se3, iterations=1)
+    m = _cv2.dilate(m, se3, iterations=int(kw["stroke_grow"]))
     fill = float((m > 0).sum()) / max(1, rect_area)
     info["fill"] = round(fill, 4)
     if fill < kw["min_fill"]:
         return None, "none", {**info, "why": "fill-too-low"}
     if fill > 0.9:
+        if rect_area > kw["max_solid_rect"] * float(H * W):
+            return None, "none", {**info, "why": "solid-rect-too-large"}
         return None, "solid", {**info, "why": "fill-near-full"}
     return m, "stroke", info
 

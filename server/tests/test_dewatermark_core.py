@@ -564,6 +564,66 @@ def test_auto_never_worse_than_untouched():
     print("✅ 无可见水印时不产生任何改动（旧行为此处会糊掉一块）")
 
 
+def test_large_selection_refuses_whole_rect_inpaint():
+    """大框选 + 判为实心块时必须拒绝整块修复（改判 none）。
+
+    实测依据：整图平铺水印（图库常见）会被误判 solid，而它即便用真值 mask 做
+    inpaint 也只有 PSNR 26.67，反而低于不处理的 28.32 —— 这种情况「不动」才是最优。
+    真正的实心 logo 框选只占图像一小块，不受此护栏影响。
+    """
+    np, _ = _require_cv()
+    base = _bench_base()
+    wm = base.copy()
+    wm[60:110, 70:170] = 250                      # 同一块实心白块
+    # 小框：仍应按实心块整块修复
+    m_small, kind_small, _info = dwc.detect_watermark(wm, 64, 54, 112, 62)
+    assert kind_small == "solid", f"小框实心块应修理，实际 {kind_small}"
+    # 大框（几乎整图）：必须拒绝
+    m_big, kind_big, info_big = dwc.detect_watermark(wm, 0, 0, 240, 180)
+    assert kind_big == "none", f"大框选不应整块 inpaint，实际 {kind_big} {info_big}"
+    assert m_big is None
+    assert info_big.get("why") == "solid-rect-too-large", info_big
+    print("✅ 大框选拒绝整块 inpaint（整图平铺水印不再被糊掉）")
+
+
+def test_full_frame_selection_never_repaints_whole_image():
+    """框选整幅图时，任何情况下都不许把整幅图重绘掉。
+
+    整图平铺水印是图库常见场景：它的笔画散布全图，局部背景估计抓不准，
+    若被当成「实心块」就会整幅 inpaint 直接毁图。此测试锁死「修复面必须远小于全图」。
+    """
+    np, _ = _require_cv()
+    base = _bench_base()
+    overlay = base.astype(np.float32).copy()
+    for y0 in range(0, 180, 44):                  # 铺满整幅的稀疏小字
+        for x0 in range(0, 240, 70):
+            overlay[y0:y0 + 4, x0:min(240, x0 + 46)] = 250.0
+    wm = np.clip(overlay, 0, 255).astype(np.uint8)
+    mask, stats = dwc.plan_image_repair(
+        wm, [{"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0, "op": "add"}], "auto")
+    total = 240 * 180
+    assert "solid" not in [d.get("kind") for d in stats["details"]], stats
+    assert stats["repair_px"] < 0.6 * total, f"修复面过大，接近整图重绘：{stats}"
+    print(f"✅ 整幅框选不整图重绘：只修 {stats['repair_px']}/{total} px"
+          f"（{stats['repair_px'] / total:.1%}）")
+
+
+def test_auto_mask_stays_bounded_vs_exact():
+    """auto 的笔画 mask 允许外扩补掉抗锯齿外沿，但不得膨胀到接近整块框选。"""
+    np, _ = _require_cv()
+    base = _bench_base()
+    wm, exact, _rect = _add_text_wm(base, 0.45)
+    mask, _stats = dwc.plan_image_repair(
+        wm, [{"x": 34 / 240, "y": 40 / 180, "w": 172 / 240, "h": 100 / 180, "op": "add"}],
+        "auto")
+    exact_px = int((exact > 0).sum())
+    got_px = int((mask > 0).sum())
+    assert got_px > 0
+    assert got_px < 2.5 * exact_px, (
+        f"修复面 {got_px}px 相对真值 {exact_px}px 膨胀过多，接近整块糊图")
+    print(f"✅ 笔画 mask 外扩有界：{got_px}px / 真值 {exact_px}px = {got_px / exact_px:.2f}x")
+
+
 def test_image_inpaint_ex_keeps_original_and_writes_file(tmp_path):
     """未检出可修内容时必须仍产出文件（原图副本），不能让下游拿到空结果。"""
     np, cv2 = _require_cv()
@@ -642,5 +702,8 @@ if __name__ == "__main__":
     test_plan_auto_subtract_still_carves_hole()
     test_auto_improves_watermark_region()
     test_auto_never_worse_than_untouched()
+    test_large_selection_refuses_whole_rect_inpaint()
+    test_full_frame_selection_never_repaints_whole_image()
+    test_auto_mask_stays_bounded_vs_exact()
 
-    print("\n🎉 去水印核心测试全部通过（37 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
+    print("\n🎉 去水印核心测试全部通过（40 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")

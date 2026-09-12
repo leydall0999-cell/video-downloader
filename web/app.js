@@ -6171,7 +6171,13 @@
             if (det.action === 'kept_original') {
               // 智能档判定「框选区内没有可见水印」→ 原图未做任何改动。
               // 必须明确告知，否则用户会以为「点了没反应」而反复重试。
-              el.dwImgStatus.textContent = '未检测到明显水印，已保持原图（若确有水印，可改用 AI 引擎或「传统」模式）';
+              const why = ((det.details || [])[0] || {}).why || '';
+              if (why === 'solid-rect-too-large') {
+                // 整幅/超大框选被拒绝：整块 inpaint 会把真实画面一起糊掉
+                el.dwImgStatus.textContent = '框选范围过大，已保持原图：请把框收到水印本体大小后再试（整幅框选会被拒绝，以免糊掉整张图）';
+              } else {
+                el.dwImgStatus.textContent = '未检测到明显水印，已保持原图（若确有水印，可改用 AI 引擎或「传统」模式）';
+              }
             } else {
               el.dwImgStatus.textContent = '去水印完成 ✅';
             }
