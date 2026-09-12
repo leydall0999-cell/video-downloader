@@ -16,6 +16,7 @@ _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 import dewatermark_diffusion as dwd  # noqa: E402
+import capability as cap  # noqa: E402
 
 
 class TestDiffusionCapability(unittest.TestCase):
@@ -85,6 +86,59 @@ class TestDiffusionCapability(unittest.TestCase):
                 self.assertIn(k, spec, f"{name} 缺 {k}")
             self.assertGreater(spec["native_size"], 0)
             self.assertGreaterEqual(spec["min_ram_gb"], dwd.DIFFUSION_MIN_RAM_GB)
+
+
+class TestCapabilityDiffusionConsistency(unittest.TestCase):
+    """能力探测文案必须与「扩散档到底能不能跑」严格一致（2026-09-12 修正的真 bug 回归）。
+
+    历史 bug：高内存（>=16GB）机器无论 torch/diffusers 是否就绪，rec 文案都写
+    「可用/推荐扩散模型」，但 recommended_engine 仅在 diffusion_ok 时才为 diffusion。
+    UI 据此把扩散档设为「推荐」却又置灰 → 用户看到「推荐某档但该档是灰的」自相矛盾。
+    """
+
+    def _probe(self, ram_gb, diffusion_available, diffusion_models):
+        with mock.patch.object(cap, "_total_ram_bytes", return_value=int(ram_gb * 1024 ** 3)):
+            return cap.probe_capability(
+                lama_available=True,
+                diffusion_available=diffusion_available,
+                diffusion_models=list(diffusion_models),
+            )
+
+    def test_high_ram_diffusion_not_ready_recommends_auto(self):
+        # 16GB 但没装 torch/diffusers → 不应推荐 diffusion，文案必须说明「未就绪」。
+        c = self._probe(16.0, False, [])
+        self.assertEqual(c["tier"], "high")
+        self.assertFalse(c["diffusion_available"])
+        self.assertEqual(c["recommended_engine"], "auto")
+        self.assertFalse(c["engines"]["diffusion"])
+        self.assertIn("未就绪", c["recommendation"])
+        # 关键：绝不能出现「推荐默认」扩散的自相矛盾措辞
+        self.assertNotIn("推荐默认「AI 增强修复」", c["recommendation"])
+
+    def test_extreme_ram_diffusion_not_ready_recommends_auto(self):
+        # 32GB 同上：内存够但运行库没就绪，仍只能推荐 auto。
+        c = self._probe(32.0, False, [])
+        self.assertEqual(c["tier"], "extreme")
+        self.assertFalse(c["diffusion_available"])
+        self.assertEqual(c["recommended_engine"], "auto")
+        self.assertFalse(c["engines"]["diffusion"])
+        self.assertIn("未就绪", c["recommendation"])
+        self.assertNotIn("推荐默认「AI 增强修复」", c["recommendation"])
+
+    def test_high_ram_diffusion_ready_recommends_diffusion(self):
+        # 16GB 且 torch/diffusers 就绪 → 推荐 diffusion，sd15 可选。
+        c = self._probe(16.0, True, ["sd15"])
+        self.assertTrue(c["diffusion_available"])
+        self.assertEqual(c["recommended_engine"], "diffusion")
+        self.assertTrue(c["engines"]["diffusion"])
+        self.assertEqual(c["diffusion_models"], ["sd15"])
+
+    def test_extreme_ram_diffusion_ready_recommends_diffusion_with_sdxl(self):
+        # 32GB 且就绪 → 推荐 diffusion，sd15 + sdxl 均可选。
+        c = self._probe(32.0, True, ["sd15", "sdxl"])
+        self.assertEqual(c["recommended_engine"], "diffusion")
+        self.assertEqual(c["diffusion_models"], ["sd15", "sdxl"])
+        self.assertTrue(c["engines"]["diffusion"])
 
 
 if __name__ == "__main__":
