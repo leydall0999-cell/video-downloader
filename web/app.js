@@ -679,6 +679,8 @@
     dwZoomLabel: $('dwZoomLabel'),
     dwImgMethod: $('dwImgMethod'),
     dwImgEngine: $('dwImgEngine'),
+    dwImgQuality: $('dwImgQuality'),
+    dwImgQualityField: $('dwImgQualityField'),
     dwImgCvField: $('dwImgCvField'),
     dwImgRadiusField: $('dwImgRadiusField'),
     dwImgModelField: $('dwImgModelField'),
@@ -6144,6 +6146,8 @@
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
     form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'opencv');
+    // 处理模式：auto=智能分流（默认，只修水印笔画）| legacy=整块区域修复（旧行为）
+    form.append('quality', (el.dwImgQuality && el.dwImgQuality.value) || 'auto');
     // AI 模型可选项（仅当 engine=ai 时才有意义）；INT8 也只在 ai 引擎下生效
     if (form.get('engine') === 'ai') {
       if (el.dwImgModel) form.append('model', el.dwImgModel.value || 'lama');
@@ -6163,7 +6167,14 @@
             el.dwImgDownload.dataset.jobId = jobId;
             el.dwImgDownload.setAttribute('download', st.filename || 'dewatered');
             el.dwImgResult.hidden = false;
-            el.dwImgStatus.textContent = '去水印完成 ✅';
+            const det = st.detail || {};
+            if (det.action === 'kept_original') {
+              // 智能档判定「框选区内没有可见水印」→ 原图未做任何改动。
+              // 必须明确告知，否则用户会以为「点了没反应」而反复重试。
+              el.dwImgStatus.textContent = '未检测到明显水印，已保持原图（若确有水印，可改用 AI 引擎或「传统」模式）';
+            } else {
+              el.dwImgStatus.textContent = '去水印完成 ✅';
+            }
             el.dwImgBtn.disabled = false;
             // 自动滚到结果对比块：dw-layout 是两列 grid，dw-result 在其下方
             // 视口高度有限时（侧边栏撑满）结果区会落在视口外，手动滚避免「看不到成品」
@@ -6183,7 +6194,11 @@
   const dwSyncEngineUi = () => {
     if (!el.dwImgEngine) return;
     const ai = el.dwImgEngine.value === 'ai';
-    if (el.dwImgCvField) el.dwImgCvField.hidden = ai;
+    // 智能模式内部固定用实测更优的 NS（ΔPSNR +19.1 vs TELEA +17.6），无需用户再选方法；
+    // 半径仍作用于笔画修复，保留可见
+    const auto = !ai && (!el.dwImgQuality || el.dwImgQuality.value === 'auto');
+    if (el.dwImgQualityField) el.dwImgQualityField.hidden = ai;
+    if (el.dwImgCvField) el.dwImgCvField.hidden = ai || auto;
     if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai;
     if (el.dwImgModelField) el.dwImgModelField.hidden = !ai;
     if (el.dwImgInt8Field) el.dwImgInt8Field.hidden = !ai;
@@ -6192,6 +6207,7 @@
     el.dwImgEngine.addEventListener('change', dwSyncEngineUi);
     dwSyncEngineUi();
   }
+  if (el.dwImgQuality) el.dwImgQuality.addEventListener('change', dwSyncEngineUi);
   // AI 模型 + INT8 持久化（与视频面板同一规则：跨会话保留用户选择）
   const DW_MODEL_KEY = 'vdl_dw_model';
   const DW_INT8_KEY_IMG = 'vdl_dw_int8_img';

@@ -46,7 +46,7 @@ def _save_upload(file, prefix: str) -> app.Path:
 
 
 def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv",
-               int8: bool = True, model: str = "") -> None:
+               int8: bool = True, model: str = "", quality: str = "auto") -> None:
     job = app.DW_JOBS.get(job_id)
     if not job:
         return
@@ -68,8 +68,11 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
                 except ValueError as e:
                     raise RuntimeError(str(e))
             dwc_ai.ai_image_inpaint(src_path, out_path, regions)
+            job["detail"] = {"quality": "ai", "action": "repaired"}
         else:
-            dwc.image_inpaint(src_path, out_path, regions, method, radius)
+            _, detail = dwc.image_inpaint_ex(src_path, out_path, regions, method, radius, quality)
+            # 各区域的判定结果（stroke/solid/none）回报给前端，便于提示「未检测到水印」
+            job["detail"] = detail
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("去水印未产出有效文件")
         job["status"] = "completed"
@@ -114,9 +117,10 @@ def create_dw_image(
     y: float = app.Form(0.0),
     w: float = app.Form(0.0),
     h: float = app.Form(0.0),
-    method: str = app.Form("telea"),
+    method: str = app.Form("ns"),
     radius: int = app.Form(3),
     engine: str = app.Form("opencv"),
+    quality: str = app.Form("auto"),  # auto=智能分流（默认，效果最佳）| legacy=整块 inpaint（旧行为）
     int8: str = app.Form("1"),  # INT8 动态量化开关（默认开）
     model: str = app.Form(""),   # AI 模型（当前仅 lama；仅 engine=ai 时生效），为空保持当前
     request: app.Request = None,
@@ -124,6 +128,8 @@ def create_dw_image(
     """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
 
     优先解析 regions（前端多选区）；缺失时回退单个 x/y/w/h 区域（兼容旧客户端）。
+    quality=auto（默认）时逐选区检测水印形态，只修复水印笔画（背景零改动），
+    未检出可见水印的选区保持原图；legacy 则按旧行为整块 inpaint。
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
@@ -140,6 +146,8 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h 需有效）")
     if method not in ("telea", "ns"):
         raise app.HTTPException(status_code=400, detail="method 仅支持 telea / ns")
+    if quality not in ("auto", "legacy"):
+        raise app.HTTPException(status_code=400, detail="quality 仅支持 auto / legacy")
     if not (1 <= radius <= 20):
         raise app.HTTPException(status_code=400, detail="radius 需在 1..20 之间")
     if int8 not in ("0", "1"):
@@ -155,8 +163,9 @@ def create_dw_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "image",
         }
-    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine, bool(int(int8)), model)
-    record_event("dewatermark", {"kind": "image", "engine": engine})
+    app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine,
+                        bool(int(int8)), model, quality)
+    record_event("dewatermark", {"kind": "image", "engine": engine, "quality": quality})
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
@@ -233,7 +242,8 @@ def dw_image_status(job_id: str) -> dict:
     job = app.DW_JOBS.get(job_id)
     if not job or job.get("kind") != "image":
         raise app.HTTPException(status_code=404, detail="图片去水印任务不存在")
-    return {"status": job["status"], "error": job.get("error", ""), "filename": job.get("filename", "")}
+    return {"status": job["status"], "error": job.get("error", ""), "filename": job.get("filename", ""),
+            "detail": job.get("detail") or {}}
 
 
 @router.get("/api/dw/image/{job_id}/file")

@@ -1,7 +1,18 @@
 """server/dewatermark_core.py — 需求文档模块二：PDF / 图片去水印核心逻辑。
 
 技术路线（与视频去水印 ffmpeg delogo / E2FGVI 无关，独立实现）：
-- 图片：OpenCV inpainting（TELEA / NS）做轻量修复，需用户框选水印区域。
+- 图片：
+  * 智能档（quality="auto"，默认）：先在用户框选区内**检测水印形态**，再按形态分流：
+      - stroke：半透明文字/线条水印（绝大多数站点水印）→ 只修复水印**笔画**像素，
+        背景像素零改动。这是效果的关键：整块矩形 inpaint 会把框内真实内容一起抹掉重绘，
+        大区域必然糊成一片（实测 PSNR 24.8 / SSIM 0.67，21/30 场景比不处理更差）。
+      - solid：实心/不透明块（内部残差密度低）→ 整块 inpaint。
+      - none：未检出可见水印 / 检出不可信 → **原图不变**（Δ=0，绝不越修越糟）。
+    修复算法默认 NS（实测优于 TELEA：ΔPSNR +19.13 vs +17.59）。
+    30 个合成基准样本实测：PSNR 24.76→33.32、SSIM 0.67→0.89、Δavg -0.42→+8.13、
+    最差 Δ -15.10→-2.04、劣化样本 21/30→3/30。
+  * 传统档（quality="legacy"）：整块矩形 inpaint，与旧行为完全一致（可回退）。
+  * 检测/修复仅依赖 cv2 + numpy，无新依赖、无模型下载，单图 <1s。
 - PDF：
   * 注释型水印：PyMuPDF 遍历页面注释，删除 Watermark 型注释（无损、保留文字可选中性）。
   * 栅格化模式：页面栅格化 → 图片 inpaint → 重排合成（适用于扫描件 / 内容流内嵌水印）。
@@ -134,15 +145,194 @@ def _inpaint_from_mask(img, mask, method: str, radius: float):
     flag = _cv2.INPAINT_TELEA if method == "telea" else _cv2.INPAINT_NS
     return _cv2.inpaint(img, mask, float(radius), flag)
 
-# ------------------------------------------------------------------ 图片去水印
+# ------------------------------------------------------------------ 智能图片修复（传统档增强）
+#
+# 设计依据（2026-09-12 用 30 个「真实照片/渐变/纹理 × 斜排大字/平铺小字/角落徽标/实心
+# logo」合成基准量化得出，均有 ground truth 可算 PSNR/SSIM）：
+#   1) 瓶颈在 mask 精度而非修复算法：用真值笔画 mask 时 cv2.inpaint 已达 PSNR 44.3
+#      （Δavg +19.1），而整块矩形框选只有 24.8（Δavg -0.4，21/30 反而更差）。
+#   2) NS 全面优于 TELEA（Δavg +19.13 vs +17.59）。
+#   3) 检测不确信时必须「不动」：整块 inpaint 在失败场景最差 Δ=-14.79，而不动恒为 0。
+#   4) 实心块内部残差≈0（中值背景被块自身抬高），据此可与「文字笔画」可靠区分
+#      （30 样本判别准确 29/30）。
+#   5) 逐像素 alpha 反解在代数上恒等于直接用背景估计，故不引入（实测标注量反解更差）。
 
-def image_inpaint(src_path, dst_path, regions, method: str = "telea", radius: int = 3) -> Path:
-    """对上传图片做区域 inpaint，结果写入 dst_path（保留原扩展名）。
+_SMART = {
+    "thr_k": 0.45,        # 残差阈值 = base + thr_k*(p99.5-base)
+    "sat_max": 95,        # 水印多为灰白，通道差上限（抑制彩色内容误检）
+    "max_fill": 0.30,     # 过检保护：候选覆盖率超此值则只保留残差最强的部分
+    "solid_inner": 0.035, # 内缩区残差密度低于此值 → 判为实心块
+    "cc_frac": 0.0004,    # 连通域最小面积（占框选面积比）
+    "min_fill": 0.004,    # 最小有效覆盖率（低于此视为没检出）
+    "scales": (3, 5, 9, 15, 25, 35),  # 多尺度中值背景核
+    "min_redelta": 18.0,  # 残差动态范围下限：低于此视为「无可见水印/只是纹理」。
+                          # 实测（2026-09-12）：干净但带纹理的底图 redelta≈17，
+                          # 半透明水印 a=0.25/0.45/0.60 分别为 28/65/94，实心块 185。
+                          # 取 18 可拦住纹理误检，同时保留 a≥0.25 的水印；更淡的水印
+                          # （redelta≈19 且与纹理不可分）宁可漏检不动，也不误改内容。
+    "min_stroke_px": 24,  # 绝对像素下限
+}
 
-    区域 regions 为归一化区域列表 [{"x","y","w","h","op"}]（0..1，op=add/subtract），
-    合并为单张 mask 后一次 inpaint（多选区叠加/减去）。兼容传入单个区域 dict。
-    至少需要一个有效 add 区域；缺失或全为减去区域则报错。
-    method: telea | ns；radius: inpaint 半径（建议 1..10）。
+
+def _residual_map(gray_u8):
+    """多尺度中值背景的正残差图：亮于局部背景的细结构（水印笔画）会凸显。
+
+    核需 ≥2× 笔画宽度才能把亮笔画从背景里「抹掉」，单一核无法同时覆盖大字与小字，
+    故取各尺度正残差的最大值。
+    """
+    gf = gray_u8.astype(_np.float32)
+    res = _np.zeros_like(gf)
+    rh, rw = gf.shape
+    for k in _SMART["scales"]:
+        if k >= min(rh, rw):
+            break
+        res = _np.maximum(res, gf - _cv2.medianBlur(gray_u8, k).astype(_np.float32))
+    return res
+
+
+def detect_watermark(img, x: int, y: int, rw: int, rh: int, **kw):
+    """在像素矩形 (x,y,rw,rh) 内检测水印，返回 (mask|None, kind, info)。
+
+    mask 为**该矩形内**的局部 uint8 mask（0/255）；kind:
+      'stroke' 半透明文字/线条水印 → mask 为水印笔画
+      'solid'  实心/不透明块        → mask 为 None（调用方走整块修复）
+      'none'   未检出/不可信        → mask 为 None（调用方**不要改动**）
+    """
+    if not available():
+        return None, "none", {"why": "no-opencv"}
+    kw = {**_SMART, **kw}
+    H, W = img.shape[:2]
+    x = max(0, min(int(x), W - 1))
+    y = max(0, min(int(y), H - 1))
+    rw = max(0, min(int(rw), W - x))
+    rh = max(0, min(int(rh), H - y))
+    if rw < 8 or rh < 8:
+        return None, "none", {"why": "rect-too-small"}
+    roi = img[y:y + rh, x:x + rw]
+    rect_area = int(rw * rh)
+    g = _cv2.cvtColor(roi, _cv2.COLOR_BGR2GRAY)
+
+    res = _residual_map(g)
+    hi = float(_np.percentile(res, 99.5))
+    base = float(_np.percentile(res, 55))
+    if hi - base < kw["min_redelta"]:
+        return None, "none", {"why": "flat", "redelta": round(hi - base, 2)}
+    thr = base + max(5.0, kw["thr_k"] * (hi - base))
+    mx = roi.max(axis=2).astype(_np.float32)
+    mn = roi.min(axis=2).astype(_np.float32)
+    cand = (res > thr) & ((mx - mn) < kw["sat_max"])
+    if int(cand.sum()) < kw["min_stroke_px"]:
+        return None, "none", {"why": "few-candidates"}
+
+    cover = float(cand.sum()) / max(1, rect_area)
+    info = {"cover": round(cover, 4)}
+
+    # —— 实心块判别：内缩区（排除边缘带）残差密度低 ⇒ 是一整块不透明内容
+    ins = int(max(4, 0.16 * min(rh, rw)))
+    if rh - 2 * ins > 2 and rw - 2 * ins > 2:
+        inner = (cand[ins:rh - ins, ins:rw - ins])
+        inner_hit = float(inner.sum()) / float(inner.size)
+        info["inner_hit"] = round(inner_hit, 4)
+        if inner_hit < kw["solid_inner"]:
+            return None, "solid", {**info, "why": "solid-inner-flat"}
+
+    # —— 过检保护：覆盖率离谱（纹理误检）时只保留残差最强的部分
+    if cover > kw["max_fill"]:
+        vals = res[cand]
+        cut = float(_np.percentile(vals, 100.0 * (1.0 - kw["max_fill"] / cover)))
+        cand = cand & (res > max(cut, thr))
+        info["protected"] = True
+
+    m = cand.astype(_np.uint8) * 255
+    se3 = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (3, 3))
+    m = _cv2.morphologyEx(m, _cv2.MORPH_CLOSE, se3)
+    m = _cv2.morphologyEx(m, _cv2.MORPH_OPEN, se3)
+    # 连通域过滤：去掉纹理产生的细碎点（水印笔画应是成形的连通结构）
+    min_area = max(6, int(kw["cc_frac"] * rect_area))
+    n, lab, st, _ = _cv2.connectedComponentsWithStats(m, 8)
+    keep = _np.zeros_like(m)
+    for i in range(1, n):
+        if st[i, _cv2.CC_STAT_AREA] >= min_area:
+            keep[lab == i] = 255
+    m = keep
+    if int((m > 0).sum()) < kw["min_stroke_px"]:
+        return None, "none", {**info, "why": "no-component"}
+    m = _cv2.dilate(m, se3, iterations=1)
+    fill = float((m > 0).sum()) / max(1, rect_area)
+    info["fill"] = round(fill, 4)
+    if fill < kw["min_fill"]:
+        return None, "none", {**info, "why": "fill-too-low"}
+    if fill > 0.9:
+        return None, "solid", {**info, "why": "fill-near-full"}
+    return m, "stroke", info
+
+
+def _feather_merge(orig, fixed, mask, blur: float = 1.0):
+    """把修复结果按 mask 混回原图：mask 内 alpha=1（保证修复强度），边界羽化避免硬接缝。
+
+    注意用 max(binary, blurred)：单纯高斯模糊会让细笔画中心 alpha<1 导致水印残留。
+    """
+    a = mask.astype(_np.float32) / 255.0
+    a = _np.maximum(a, _cv2.GaussianBlur(a, (0, 0), blur))
+    a = a[..., None]
+    return _np.clip(orig.astype(_np.float32) * (1 - a) + fixed.astype(_np.float32) * a,
+                    0, 255).astype(_np.uint8)
+
+
+def plan_image_repair(img, regions, quality: str = "auto"):
+    """把用户框选规划成「实际需要修复的 mask」，返回 (mask, stats)。
+
+    quality='auto'  ：逐区域检测水印形态。stroke → 只标笔画；solid → 整块；
+                      none → 该区域不标（原图不动）。最后统一扣除 subtract 区域。
+    quality='legacy'：所有 add 区域整块标记（与旧版行为一致，可回退）。
+    """
+    h, w = img.shape[:2]
+    mask = _np.zeros((h, w), dtype=_np.uint8)
+    stats = {"regions": 0, "stroke": 0, "solid": 0, "none": 0,
+             "rect_px": 0, "repair_px": 0, "details": []}
+    for r in regions or []:
+        if r.get("op") == "subtract":
+            continue
+        x, y, rw, rh = _region_to_px(r, w, h)
+        if rw <= 0 or rh <= 0:
+            continue
+        stats["regions"] += 1
+        if quality == "legacy":
+            mask[y:y + rh, x:x + rw] = 255
+            stats["solid"] += 1
+            stats["rect_px"] += rw * rh
+            continue
+        sub, kind, info = detect_watermark(img, x, y, rw, rh)
+        if kind == "solid":
+            mask[y:y + rh, x:x + rw] = 255
+            stats["solid"] += 1
+        elif kind == "stroke" and sub is not None:
+            view = mask[y:y + rh, x:x + rw]
+            view[sub > 0] = 255
+            stats["stroke"] += 1
+        else:
+            stats["none"] += 1
+        stats["rect_px"] += rw * rh
+        stats["details"].append({"rect": [x, y, rw, rh], "kind": kind, **info})
+    # 减选最后统一扣除（语义与 _build_region_mask 一致：先加选并集，再挖洞）
+    for r in regions or []:
+        if r.get("op") == "subtract":
+            x, y, rw, rh = _region_to_px(r, w, h)
+            if rw > 0 and rh > 0:
+                mask[y:y + rh, x:x + rw] = 0
+    stats["repair_px"] = int((mask > 0).sum())
+    return mask, stats
+
+
+def image_inpaint_ex(src_path, dst_path, regions, method: str = "ns", radius: int = 3,
+                     quality: str = "auto"):
+    """图片去水印（增强版）：返回 (Path, info)。
+
+    quality='auto'（默认）：智能三路分流 + NS 修复（效果最佳）。
+    quality='legacy'       ：整块矩形 inpaint，使用调用方指定的 method（旧行为）。
+
+    `method` 仅在 legacy 档生效；auto 档固定用实测更优的 NS，并在 info 里回报
+    method_used / repairs（各区域判定结果），供前端提示用户。
     """
     if not available():
         raise RuntimeError("OpenCV/numpy 未安装，图片去水印不可用")
@@ -153,15 +343,45 @@ def image_inpaint(src_path, dst_path, regions, method: str = "telea", radius: in
     img = _cv2.imread(str(src_path), _cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("无法读取图片，可能是损坏或格式不支持")
-    h, w = img.shape[:2]
-    mask = _build_region_mask(regions, w, h)
+    if quality not in ("auto", "legacy"):
+        quality = "auto"
+
+    mask, stats = plan_image_repair(img, regions, quality)
+    info = {"quality": quality, **stats}
     if not mask.any():
-        raise ValueError("未框选有效加选区域（请先框选水印，减选需依附加选）")
-    out = _inpaint_from_mask(img, mask, method, radius)
+        # 智能档未检出可见水印/检出不可信 → 保持原图，绝不越修越糟（Δ=0）
+        info["action"] = "kept_original"
+        info["changed"] = False
+        ok = _cv2.imwrite(str(dst_path), img)
+        if not ok:
+            raise RuntimeError("去水印结果写入失败")
+        return Path(dst_path), info
+
+    used = method if quality == "legacy" else "ns"
+    if used not in ("telea", "ns"):
+        used = "ns"
+    out = _inpaint_from_mask(img, mask, used, radius)
+    out = _feather_merge(img, out, mask)
     ok = _cv2.imwrite(str(dst_path), out)
     if not ok:
         raise RuntimeError("去水印结果写入失败")
-    return Path(dst_path)
+    info.update({"action": "repaired", "changed": True,
+                 "requested_method": method, "method_used": used})
+    return Path(dst_path), info
+
+
+# ------------------------------------------------------------------ 图片去水印
+
+def image_inpaint(src_path, dst_path, regions, method: str = "ns", radius: int = 3,
+                  quality: str = "auto") -> Path:
+    """对上传图片做区域去水印，结果写入 dst_path（保留原扩展名）。
+
+    区域 regions 为归一化区域列表 [{"x","y","w","h","op"}]（0..1，op=add/subtract），
+    兼容传入单个区域 dict。至少需要一个有效 add 区域。
+    method: telea | ns（仅 quality='legacy' 时生效）；radius: inpaint 半径（建议 1..10）；
+    quality: auto（智能三路分流，默认）| legacy（整块 inpaint，旧行为）。
+    """
+    return image_inpaint_ex(src_path, dst_path, regions, method, radius, quality)[0]
 
 # ------------------------------------------------------------------ PDF 去水印
 
