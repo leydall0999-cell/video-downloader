@@ -196,12 +196,29 @@ _SMART = {
     "min_stroke_px": 24,  # 绝对像素下限
 }
 
+# refine 档 stage2 闸门：m2d 面积占 add 区域比例上限（30 样本基准最优 0.06）。
+# photo-* 会被拦（m2d_cov 0.086~1.0）、gradient-tile 仍能收益 +3.79~+7.32dB
+# （m2d_cov 0.036~0.051）；texture-* / 大面积 badge 也被拦（m2d_cov ≥ 0.40）。
+# 阈值含义：「stage2 重检若扩散到区域 X% 以上，认为是纹理误检而非真水印
+# 残影，不跑第二遍 inpaint（会抹掉真实细节）」。
+_REFINED_G4_CAP = 0.06
+
+# refine 档 stage2 重检的激进口径（在 out1 上重检用），与 _SMART 独立。
+_REFINED_STAGE2_KW = {
+    "thr_k": 0.15, "min_redelta": 3.0,
+    "min_fill": 0.002, "max_fill": 0.6,
+    "sat_max": 130,
+}
+
 
 def _residual_map(gray_u8):
     """多尺度中值背景的正残差图：亮于局部背景的细结构（水印笔画）会凸显。
 
     核需 ≥2× 笔画宽度才能把亮笔画从背景里「抹掉」，单一核无法同时覆盖大字与小字，
     故取各尺度正残差的最大值。
+
+    注意：这是 1.0.15 的「智能档」默认残差（auto 档走这条，作为单遍回退基线）。
+    双边滤波增强版见 _residual_map_bilateral（refine 档用）。
     """
     gf = gray_u8.astype(_np.float32)
     res = _np.zeros_like(gf)
@@ -213,17 +230,46 @@ def _residual_map(gray_u8):
     return res
 
 
-def detect_watermark(img, x: int, y: int, rw: int, rh: int, **kw):
+def _residual_map_bilateral(gray_u8):
+    """中值多尺度 + 双边保边背景的正残差**并集**（refine 档 / 两阶段 stage1 用）。
+
+    中值模糊在文字区会把笔画算进背景估计 → 残差≈0 → 漏检（尤其粗笔画内部，
+    真值强水印像素 p25≈3，这是单遍召回上不去的物理根因）。双边滤波保边，笔画
+    不被吃进背景估计 → 全笔画（含抗锯齿外沿）残差可测。两者取并集互补，
+    召回从 ~60% 提升到 ~86%（见 2026-09-12 实验 bf_test / twopass_v3）。
+
+    代价：bilateralFilter 比 medianBlur 慢约 3~5×，但单图仍在百毫秒级，可接受。
+    """
+    gf = gray_u8.astype(_np.float32)
+    # 中值多尺度（与 _residual_map 相同）
+    res_med = _np.zeros_like(gf)
+    rh, rw = gf.shape
+    for k in _SMART["scales"]:
+        if k >= min(rh, rw):
+            break
+        res_med = _np.maximum(res_med, gf - _cv2.medianBlur(gray_u8, k).astype(_np.float32))
+    # 双边保边背景（d=15 / sigma=100 经 bf_sizes 扫描为最佳平衡点）
+    bf = _cv2.bilateralFilter(gray_u8, 15, 100, 100).astype(_np.float32)
+    res_bf = _np.maximum(gf - bf, 0)
+    return _np.maximum(res_med, res_bf)
+
+
+def detect_watermark(img, x: int, y: int, rw: int, rh: int, residual_fn=None, **kw):
     """在像素矩形 (x,y,rw,rh) 内检测水印，返回 (mask|None, kind, info)。
 
     mask 为**该矩形内**的局部 uint8 mask（0/255）；kind:
       'stroke' 半透明文字/线条水印 → mask 为水印笔画
       'solid'  实心/不透明块        → mask 为 None（调用方走整块修复）
       'none'   未检出/不可信        → mask 为 None（调用方**不要改动**）
+
+    residual_fn: 残差图生成函数，默认 _residual_map（中值，auto 档）。
+                 refine 档传 _residual_map_bilateral 启用双边保边检测。
     """
     if not available():
         return None, "none", {"why": "no-opencv"}
     kw = {**_SMART, **kw}
+    if residual_fn is None:
+        residual_fn = _residual_map
     H, W = img.shape[:2]
     x = max(0, min(int(x), W - 1))
     y = max(0, min(int(y), H - 1))
@@ -235,7 +281,7 @@ def detect_watermark(img, x: int, y: int, rw: int, rh: int, **kw):
     rect_area = int(rw * rh)
     g = _cv2.cvtColor(roi, _cv2.COLOR_BGR2GRAY)
 
-    res = _residual_map(g)
+    res = residual_fn(g)
     hi = float(_np.percentile(res, 99.5))
     base = float(_np.percentile(res, 55))
     if hi - base < kw["min_redelta"]:
@@ -309,12 +355,18 @@ def _feather_merge(orig, fixed, mask, blur: float = 1.0):
                     0, 255).astype(_np.uint8)
 
 
-def plan_image_repair(img, regions, quality: str = "auto"):
+def plan_image_repair(img, regions, quality: str = "auto", **kw):
     """把用户框选规划成「实际需要修复的 mask」，返回 (mask, stats)。
 
     quality='auto'  ：逐区域检测水印形态。stroke → 只标笔画；solid → 整块；
                       none → 该区域不标（原图不动）。最后统一扣除 subtract 区域。
     quality='legacy'：所有 add 区域整块标记（与旧版行为一致，可回退）。
+    quality='refine'：保留 auto 行为（本函数不直接实现两阶段，由 image_inpaint_ex
+                      的 _refine_pipeline 调用；此处若误传 refine 会按 auto 规划，
+                      但 _refine_pipeline 内部会重新规划，故无副作用）。
+
+    **kw：透传给 detect_watermark（如 residual_fn=_residual_map_bilateral、
+          thr_k/min_redelta 等覆盖，供 refine 的 stage2 用更激进口径）。
     """
     h, w = img.shape[:2]
     mask = _np.zeros((h, w), dtype=_np.uint8)
@@ -332,7 +384,7 @@ def plan_image_repair(img, regions, quality: str = "auto"):
             stats["solid"] += 1
             stats["rect_px"] += rw * rh
             continue
-        sub, kind, info = detect_watermark(img, x, y, rw, rh)
+        sub, kind, info = detect_watermark(img, x, y, rw, rh, **kw)
         if kind == "solid":
             mask[y:y + rh, x:x + rw] = 255
             stats["solid"] += 1
@@ -354,15 +406,149 @@ def plan_image_repair(img, regions, quality: str = "auto"):
     return mask, stats
 
 
+def _refine_expand(mask_full, h: int, w: int):
+    """把检测到的笔画 mask 做**连通组件 bbox 智能外扩**（覆盖粗笔画内部漏检区）。
+
+    detect_watermark 能抓到笔画边缘（高对比区），但粗笔画（尤其汉字）**内部**对比度≈0
+    → 检测不到 → mask 有洞 → inpaint 不到 → 残影。本函数对每个连通组件取外接矩形，
+    四边各外扩 40%（且 ≥2px），把整字填满，自然覆盖笔画内部。
+
+    这是「二次加工」精修阶段的核心：不重新检测（首遍输出上重检对比度更低、更难），
+    而是基于首遍已确认的笔画位置做几何扩张，物理上保证整字覆盖。
+
+    返回与 mask_full 同形状的 uint8 mask（0/255）。
+    """
+    if not mask_full.any():
+        return mask_full
+    se3 = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (3, 3))
+    n, labels, stats, _ = _cv2.connectedComponentsWithStats(mask_full, 8)
+    out = _np.zeros_like(mask_full)
+    for i in range(1, n):
+        cx, cy, cw, ch, _area = stats[i]
+        pad_x = max(2, int(cw * 0.4))
+        pad_y = max(2, int(ch * 0.4))
+        x1 = max(0, int(cx - pad_x))
+        y1 = max(0, int(cy - pad_y))
+        x2 = min(w, int(cx + cw + pad_x))
+        y2 = min(h, int(cy + ch + pad_y))
+        out[y1:y2, x1:x2] = 255
+    # 轻量椭圆闭运算，让扩张后的块边缘更圆润（避免硬方角被 inpaint 看出边界）
+    out = _cv2.morphologyEx(out, _cv2.MORPH_CLOSE, se3)
+    return out
+
+
+def _refine_pipeline(img, regions, dst_path, method: str = "ns", radius: int = 3):
+    """两阶段去水印管线（refine 档）：粗除 → 精修（带闸门）。
+
+    Stage 1（粗除）：双边滤波残差检测 + NS inpaint → out1（清除对比度高的笔画/边缘）。
+
+    Stage 2（精修，仅在 G4 闸门通过时执行）：
+      - 在 out1 上用更激进口径重检残影 → mask2_det
+      - 闸门 G4：若 mask2_det 面积占 add 区域超过 ``_REFINED_G4_CAP``（6%，
+        30 样本基准最优），跳过 stage2，避免在照片纹理上把残影当水印再
+        inpaint 一次抹掉真实细节（photo-tile 全被拦、gradient-tile 仍能
+        收益 +3.79~+7.32dB）。
+      - 否则：仅以 mask2_det 为 stage2 mask（**不再** bbox 扩张，避免破
+        坏真实边缘），裁到 add ∖ subtract，在 out1 上再 NS inpaint → out2。
+
+    返回 (Path, info)，info 含 stage1_repair_px / stage2_repair_px /
+    stage2_cov_ratio / stage2_skipped 供前端提示与回归排查。
+    """
+    h, w = img.shape[:2]
+    used = "ns"
+
+    # —— Stage 1：双边滤波粗除 ——
+    mask1, stats1 = plan_image_repair(img, regions, "auto",
+                                      residual_fn=_residual_map_bilateral)
+    if not mask1.any():
+        # 首遍就没检出可见水印 → 原图不变（与 auto 的 kept_original 一致）
+        ok = _cv2.imwrite(str(dst_path), img)
+        if not ok:
+            raise RuntimeError("去水印结果写入失败")
+        return Path(dst_path), {"quality": "refine", "action": "kept_original",
+                                "changed": False, **stats1}
+
+    out1 = _inpaint_from_mask(img, mask1, used, radius)
+    out1 = _feather_merge(img, out1, mask1)
+    stage1_px = int((mask1 > 0).sum())
+
+    # 提前算 add_union / sub_mask：既给闸门打分，也给 stage2 mask 裁剪用
+    add_union = _np.zeros((h, w), dtype=_np.uint8)
+    sub_mask = _np.zeros((h, w), dtype=_np.uint8)
+    for r in regions or []:
+        x, y, rw, rh = _region_to_px(r, w, h)
+        if rw <= 0 or rh <= 0:
+            continue
+        if r.get("op") == "subtract":
+            sub_mask[y:y + rh, x:x + rw] = 255
+        else:
+            add_union[y:y + rh, x:x + rw] = 255
+    add_px = max(1, int(add_union.sum()))
+
+    # —— Stage 2：精修（需过 G4 闸门）——
+    # 2a. 在 out1 上用更激进口径重检残影（首遍输出对比度更低，故放宽阈值）
+    mask2_det, _ = plan_image_repair(
+        out1, regions, "auto", residual_fn=_residual_map_bilateral,
+        **_REFINED_STAGE2_KW)
+
+    if not mask2_det.any():
+        ok = _cv2.imwrite(str(dst_path), out1)
+        if not ok:
+            raise RuntimeError("去水印结果写入失败")
+        return Path(dst_path), {"quality": "refine", "action": "repaired",
+                                "changed": True, "stage1_repair_px": stage1_px,
+                                "stage2_repair_px": 0, "stage2_cov_ratio": 0.0,
+                                "stage2_skipped": "stage2-empty",
+                                "method_used": used}
+
+    # 2b. 闸门 G4：m2d 面积占 add 区域比例
+    m2d_cov = float(mask2_det.sum()) / add_px
+    if m2d_cov > _REFINED_G4_CAP:
+        ok = _cv2.imwrite(str(dst_path), out1)
+        if not ok:
+            raise RuntimeError("去水印结果写入失败")
+        return Path(dst_path), {"quality": "refine", "action": "repaired",
+                                "changed": True, "stage1_repair_px": stage1_px,
+                                "stage2_repair_px": 0, "stage2_cov_ratio": m2d_cov,
+                                "stage2_skipped": f"G4-cap{_REFINED_G4_CAP}",
+                                "method_used": used}
+
+    # 2c. 通过闸门：仅以 mask2_det 为 stage2 mask，裁到 add ∖ subtract
+    mask2 = mask2_det & add_union & ~sub_mask
+    if not mask2.any():
+        ok = _cv2.imwrite(str(dst_path), out1)
+        if not ok:
+            raise RuntimeError("去水印结果写入失败")
+        return Path(dst_path), {"quality": "refine", "action": "repaired",
+                                "changed": True, "stage1_repair_px": stage1_px,
+                                "stage2_repair_px": 0, "stage2_cov_ratio": m2d_cov,
+                                "stage2_skipped": "post-clip-empty",
+                                "method_used": used}
+
+    out2 = _inpaint_from_mask(out1, mask2, used, radius)
+    out2 = _feather_merge(out1, out2, mask2)
+    ok = _cv2.imwrite(str(dst_path), out2)
+    if not ok:
+        raise RuntimeError("去水印结果写入失败")
+    return Path(dst_path), {"quality": "refine", "action": "repaired",
+                            "changed": True, "stage1_repair_px": stage1_px,
+                            "stage2_repair_px": int((mask2 > 0).sum()),
+                            "stage2_cov_ratio": m2d_cov,
+                            "stage2_skipped": "no",
+                            "method_used": used}
+
+
 def image_inpaint_ex(src_path, dst_path, regions, method: str = "ns", radius: int = 3,
                      quality: str = "auto"):
     """图片去水印（增强版）：返回 (Path, info)。
 
-    quality='auto'（默认）：智能三路分流 + NS 修复（效果最佳）。
+    quality='auto'（默认）：智能三路分流 + NS 修复（单遍，作为回退基线）。
     quality='legacy'       ：整块矩形 inpaint，使用调用方指定的 method（旧行为）。
+    quality='refine'       ：两阶段管线（粗除→精修），对最难水印（浅底+半透明白字/
+                             粗笔画汉字）显著优于单遍，详见 _refine_pipeline。
 
-    `method` 仅在 legacy 档生效；auto 档固定用实测更优的 NS，并在 info 里回报
-    method_used / repairs（各区域判定结果），供前端提示用户。
+    `method` 仅在 legacy 档生效；auto / refine 档固定用实测更优的 NS，并在 info 里
+    回报 method_used / repairs（各区域判定结果），供前端提示用户。
     """
     if not available():
         raise RuntimeError("OpenCV/numpy 未安装，图片去水印不可用")
@@ -373,8 +559,11 @@ def image_inpaint_ex(src_path, dst_path, regions, method: str = "ns", radius: in
     img = _cv2.imread(str(src_path), _cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("无法读取图片，可能是损坏或格式不支持")
-    if quality not in ("auto", "legacy"):
+    if quality not in ("auto", "legacy", "refine"):
         quality = "auto"
+
+    if quality == "refine":
+        return _refine_pipeline(img, regions, dst_path, method, radius)
 
     mask, stats = plan_image_repair(img, regions, quality)
     info = {"quality": quality, **stats}

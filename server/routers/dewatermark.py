@@ -120,7 +120,7 @@ def create_dw_image(
     method: str = app.Form("ns"),
     radius: int = app.Form(3),
     engine: str = app.Form("opencv"),
-    quality: str = app.Form("auto"),  # auto=智能分流（默认，效果最佳）| legacy=整块 inpaint（旧行为）
+    quality: str = app.Form("auto"),  # auto=智能分流（默认，最稳）| refine=两阶段精修（最难水印，实验档）| legacy=整块 inpaint（旧行为）
     int8: str = app.Form("1"),  # INT8 动态量化开关（默认开）
     model: str = app.Form(""),   # AI 模型（当前仅 lama；仅 engine=ai 时生效），为空保持当前
     request: app.Request = None,
@@ -128,8 +128,12 @@ def create_dw_image(
     """图片去水印：上传图片 + 多选区 regions（归一化 x/y/w/h + op: add/subtract）。
 
     优先解析 regions（前端多选区）；缺失时回退单个 x/y/w/h 区域（兼容旧客户端）。
-    quality=auto（默认）时逐选区检测水印形态，只修复水印笔画（背景零改动），
-    未检出可见水印的选区保持原图；legacy 则按旧行为整块 inpaint。
+    quality=auto（默认，最稳）时逐选区检测水印形态，只修复水印笔画（背景零改动），
+    未检出可见水印的选区保持原图；
+    quality=refine 时走两阶段管线：stage1 双边滤波粗除 → stage2 bbox 智能外扩精修，
+    对浅底+半透明白字/粗笔画汉字覆盖率更高，但在复杂照片底图上可能误伤画面细节
+    （30 样本基准均值低于 auto），故不作为默认；
+    legacy 则按旧行为整块 inpaint。
     """
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
@@ -146,8 +150,8 @@ def create_dw_image(
         raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h 需有效）")
     if method not in ("telea", "ns"):
         raise app.HTTPException(status_code=400, detail="method 仅支持 telea / ns")
-    if quality not in ("auto", "legacy"):
-        raise app.HTTPException(status_code=400, detail="quality 仅支持 auto / legacy")
+    if quality not in ("auto", "legacy", "refine"):
+        raise app.HTTPException(status_code=400, detail="quality 仅支持 auto / legacy / refine")
     if not (1 <= radius <= 20):
         raise app.HTTPException(status_code=400, detail="radius 需在 1..20 之间")
     if int8 not in ("0", "1"):

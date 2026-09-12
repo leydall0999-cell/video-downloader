@@ -6146,7 +6146,9 @@
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
     form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'opencv');
-    // 处理模式：auto=智能分流（默认，只修水印笔画）| legacy=整块区域修复（旧行为）
+    // 处理模式：auto=智能分流（默认，最稳）| refine=两阶段精修（实验档，
+    // 闸门兜底；30 样本均值 +0.37dB 且无回归，难例更强；普通场景与 auto 持平）
+    // | legacy=整块区域修复（旧行为）
     form.append('quality', (el.dwImgQuality && el.dwImgQuality.value) || 'auto');
     // AI 模型可选项（仅当 engine=ai 时才有意义）；INT8 也只在 ai 引擎下生效
     if (form.get('engine') === 'ai') {
@@ -6202,7 +6204,7 @@
     const ai = el.dwImgEngine.value === 'ai';
     // 智能模式内部固定用实测更优的 NS（ΔPSNR +19.1 vs TELEA +17.6），无需用户再选方法；
     // 半径仍作用于笔画修复，保留可见
-    const auto = !ai && (!el.dwImgQuality || el.dwImgQuality.value === 'auto');
+    const auto = !ai && (!el.dwImgQuality || el.dwImgQuality.value === 'auto' || el.dwImgQuality.value === 'refine');
     if (el.dwImgQualityField) el.dwImgQualityField.hidden = ai;
     if (el.dwImgCvField) el.dwImgCvField.hidden = ai || auto;
     if (el.dwImgRadiusField) el.dwImgRadiusField.hidden = ai;

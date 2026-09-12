@@ -22,6 +22,7 @@
 """
 import os
 import sys
+from pathlib import Path
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
@@ -30,6 +31,9 @@ if _SERVER_DIR not in sys.path:
 import pytest  # noqa: E402
 
 import dewatermark_core as dwc  # noqa: E402
+
+import numpy as np  # noqa: E402
+import cv2  # noqa: E402
 
 
 # ---------------------------------------------------------------- 区域归一化
@@ -657,6 +661,105 @@ def test_image_inpaint_returns_path_and_honours_legacy_method(tmp_path):
     print("✅ image_inpaint 返回 Path 保持兼容；auto 档自动用 NS、legacy 档尊重入参")
 
 
+# ------------------------------------------------------------------ 两阶段精修（refine 档，2026-09-12 新增）
+
+import tempfile, os as _os
+
+_TMP = Path(tempfile.mkdtemp(prefix="dw_test_"))
+
+def _make_test_image(w=400, h=300, bg_val=128):
+    return np.full((h, w, 3), bg_val, dtype=np.uint8)
+
+
+def test_refine_basic_api_contract():
+    img = _make_test_image()
+    img[140:160, 50:350] = [200, 200, 210]
+    src = _TMP / "r_api.png"
+    dst = _TMP / "r_api_out.png"
+    assert cv2.imwrite(str(src), img)
+    regions = [{"x": 0.05, "y": 0.40, "w": 0.80, "h": 0.10, "op": "add"}]
+    p, info = dwc.image_inpaint_ex(src, dst, regions, "ns", 3, quality="refine")
+    assert p == dst and dst.exists()
+    assert info["quality"] == "refine"
+    assert info["action"] in ("repaired", "kept_original")
+    assert isinstance(info["stage1_repair_px"], int)
+    assert isinstance(info["stage2_repair_px"], int)
+    assert info.get("method_used") == "ns"
+    print("OK refine API contract")
+
+
+def test_refine_repairs_more_than_auto():
+    img = _make_test_image(600, 400, 100)
+    cv2.putText(img, "WATERMARK", (80, 210), cv2.FONT_HERSHEY_SIMPLEX,
+                1.8, (240, 240, 245), 4, cv2.LINE_AA)
+    src = _TMP / "r_more.png"
+    dst_a = _TMP / "r_more_auto.png"
+    dst_r = _TMP / "r_more_ref.png"
+    assert cv2.imwrite(str(src), img)
+    regions = [{"x": 0.05, "y": 0.42, "w": 0.85, "h": 0.22, "op": "add"}]
+    _, ia = dwc.image_inpaint_ex(src, dst_a, regions, "ns", 3, quality="auto")
+    _, ir = dwc.image_inpaint_ex(src, dst_r, regions, "ns", 3, quality="refine")
+    total = ir["stage1_repair_px"] + ir["stage2_repair_px"]
+    assert total >= ia.get("repair_px", 0)
+    print(f"OK refine {ir['stage1_repair_px']}+{ir['stage2_repair_px']} >= auto {ia.get('repair_px',0)}")
+
+
+def test_refine_keeps_clean():
+    img = _make_test_image()
+    src = _TMP / "r_clean.png"
+    dst = _TMP / "r_clean_out.png"
+    assert cv2.imwrite(str(src), img)
+    regions = [{"x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5, "op": "add"}]
+    _, info = dwc.image_inpaint_ex(src, dst, regions, "ns", 3, quality="refine")
+    assert info["action"] == "kept_original"
+    out = cv2.imread(str(dst))
+    assert np.array_equal(out, img)
+    print("OK refine keeps clean image")
+
+
+def test_refine_subtract():
+    img = _make_test_image(500, 400, 120)
+    img[180:220, 30:230] = [230, 230, 235]
+    src = _TMP / "r_sub.png"
+    dst = _TMP / "r_sub_out.png"
+    assert cv2.imwrite(str(src), img)
+    regions = [
+        {"x": 0.0, "y": 0.40, "w": 0.5, "h": 0.15, "op": "add"},
+        {"x": 0.25, "y": 0.45, "w": 0.10, "h": 0.08, "op": "subtract"},
+    ]
+    _, info = dwc.image_inpaint_ex(src, dst, regions, "ns", 3, quality="refine")
+    assert info["action"] == "repaired"
+    out = cv2.imread(str(dst))
+    sy1, sy2 = int(0.45*400), int(0.53*400)
+    sx1, sx2 = int(0.25*500), int(0.35*500)
+    diff = np.abs(out[sy1:sy2, sx1:sx2].astype(int) - img[sy1:sy2, sx1:sx2].astype(int)).mean()
+    # 羽化混合在边界处有轻微渗透，允许中心区基本不变即可
+    assert diff < 15.0, f"subtract region should be mostly unchanged (diff={diff:.1f})"
+    print("OK refine respects subtract")
+
+
+def test_refine_expand():
+    mask = np.zeros((200, 300), dtype=np.uint8)
+    mask[50:70, 20:100] = 255
+    mask[120:140, 150:250] = 255
+    exp = dwc._refine_expand(mask, 200, 300)
+    assert (exp > 0).sum() > (mask > 0).sum()
+    assert exp[50:70, 20:100].all()
+    assert exp[120:140, 150:250].all()
+    print("OK _refine_expand covers component interior")
+
+
+def test_bilateral_residual():
+    img = _make_test_image(300, 200, 80)
+    cv2.putText(img, "TEST", (60, 110), cv2.FONT_HERSHEY_SIMPLEX,
+                1.5, (220, 220, 225), 3, cv2.LINE_AA)
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    res = dwc._residual_map_bilateral(g)
+    assert res[90:130, 50:180].max() > 10
+    assert res[0:30, 0:50].mean() < 3
+    print("OK _residual_map_bilateral detects text")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -706,4 +809,12 @@ if __name__ == "__main__":
     test_full_frame_selection_never_repaints_whole_image()
     test_auto_mask_stays_bounded_vs_exact()
 
-    print("\n🎉 去水印核心测试全部通过（40 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
+    # 两阶段精修（refine 档，2026-09-12 新增）
+    test_refine_basic_api_contract()
+    test_refine_repairs_more_than_auto()
+    test_refine_keeps_clean()
+    test_refine_subtract()
+    test_refine_expand()
+    test_bilateral_residual()
+
+    print("\n🎉 去水印核心测试全部通过（46 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
