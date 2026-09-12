@@ -329,12 +329,12 @@ PLIST="$REPO/dist/VideoDownloader.app/Contents/Info.plist"
 if [ -f "$PLIST" ]; then
   # CFBundleDisplayName：Dock 悬浮提示、菜单栏应用名、About 窗口标题
   # CFBundleName：Application 菜单中 "About XXX" / "Hide XXX" / "Quit XXX" 的 XXX 部分
-  plutil -replace CFBundleDisplayName -string "视频下载器" "$PLIST"
-  plutil -replace CFBundleName -string "视频下载器" "$PLIST"
+  plutil -replace CFBundleDisplayName -string "视频工坊" "$PLIST"
+  plutil -replace CFBundleName -string "视频工坊" "$PLIST"
   # 声明支持中文本地化（否则 macOS 不加载 zh-Hans.lproj）
   plutil -replace CFBundleLocalizations -json '["zh-Hans", "en"]' "$PLIST"
   plutil -replace CFBundleDevelopmentRegion -string "zh-Hans" "$PLIST"
-  echo "   已设置中文名 + 本地化声明：视频下载器 (zh-Hans)"
+  echo "   已设置中文名 + 本地化声明：视频工坊 (zh-Hans)"
 else
   echo "   ⚠️ Info.plist 不存在，跳过"
 fi
