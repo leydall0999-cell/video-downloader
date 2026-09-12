@@ -123,15 +123,15 @@ if [ "$DEPLOY" != "1" ]; then
   exit 0
 fi
 
-TARGET="${VDL_DEPLOY_TARGET:-/Applications/VideoDownloader.app}"
-EXE="$TARGET/Contents/MacOS/VideoDownloader"
+TARGET="${VDL_DEPLOY_TARGET:-/Applications/视频工坊.app}"
+EXE="$TARGET/Contents/MacOS/视频工坊"
 step "部署到 $TARGET"
-osascript -e 'quit app "VideoDownloader"' 2>/dev/null || true
+osascript -e 'quit app "视频工坊"' 2>/dev/null || true
 for _ in $(seq 1 15); do
-  pgrep -f "VideoDownloader.app/Contents/MacOS/VideoDownloader" >/dev/null || break
+  pgrep -f "视频工坊.app/Contents/MacOS/视频工坊" >/dev/null || break
   sleep 1
 done
-pkill -9 -f "VideoDownloader.app/Contents/MacOS/VideoDownloader" 2>/dev/null || true
+pkill -9 -f "视频工坊.app/Contents/MacOS/视频工坊" 2>/dev/null || true
 sleep 1
 
 if [ -e "$TARGET" ]; then

@@ -16,8 +16,8 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$REPO/dist/VideoDownloader.app"
-APP="${VDL_DEPLOY_TARGET:-/Applications/VideoDownloader.app}"
-EXE="$APP/Contents/MacOS/VideoDownloader"
+APP="${VDL_DEPLOY_TARGET:-/Applications/视频工坊.app}"
+EXE="$APP/Contents/MacOS/视频工坊"
 BACKUP_DIR="${VDL_BACKUP_DIR:-$HOME/.vdl_backups}"
 mkdir -p "$BACKUP_DIR"
 
@@ -51,7 +51,7 @@ echo "目标版本: $EXPECTED"
 
 # 1) 退出运行中的旧实例，确保进程真的死了（不死绝不复制）
 echo "▶ 退出运行中的实例..."
-osascript -e 'quit app "VideoDownloader"' 2>/dev/null || true
+osascript -e 'quit app "视频工坊"' 2>/dev/null || true
 for _ in $(seq 1 30); do
   pgrep -f "$EXE" >/dev/null || break
   sleep 1
@@ -64,11 +64,11 @@ pgrep -f "$EXE" >/dev/null && die "旧实例进程仍存活，无法安全部署
 #    用 mv 而不是 rm -rf + ditto 的好处：保留旧文件，且若 ditto 拷贝中途失败仍有完整旧版可用。
 echo "▶ 备份旧版本到 $BACKUP_DIR ..."
 if [ -e "$APP" ]; then
-  BK="$BACKUP_DIR/VideoDownloader.app.backup-$(date +%Y%m%d-%H%M%S)"
+  BK="$BACKUP_DIR/视频工坊.app.backup-$(date +%Y%m%d-%H%M%S)"
   mv "$APP" "$BK" || die "备份旧 app 失败：$BK"
   echo "   旧版本已备份：$BK"
   # 封顶 3 份：按修改时间新→旧，跳过最新 3 份，把更早的送回收站
-  ls -dt "$BACKUP_DIR"/VideoDownloader.app.backup-* 2>/dev/null | tail -n +4 | while IFS= read -r old; do
+  ls -dt "$BACKUP_DIR"/视频工坊.app.backup-* "$BACKUP_DIR"/VideoDownloader.app.backup-* 2>/dev/null | tail -n +4 | while IFS= read -r old; do
     trash_path "$old"
   done
 else
@@ -76,6 +76,12 @@ else
 fi
 echo "▶ 复制新版本到 $APP ..."
 ditto "$DIST" "$APP" || die "ditto 复制失败"
+
+# 2.5) 重命名二进制 + 更新 CFBundleExecutable（构建产出仍为 VideoDownloader）
+if [ -f "$APP/Contents/MacOS/VideoDownloader" ]; then
+  mv "$APP/Contents/MacOS/VideoDownloader" "$APP/Contents/MacOS/视频工坊"
+  plutil -replace CFBundleExecutable -string "视频工坊" "$APP/Contents/Info.plist"
+fi
 
 # 3) 校验安装产物指纹 == 构建指纹（文件级，避免复制中途损坏/旧残留）
 GOT="$(cat "$APP/Contents/Resources/build_version.txt" 2>/dev/null || echo MISSING)"

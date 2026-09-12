@@ -329,8 +329,16 @@ PLIST="$REPO/dist/VideoDownloader.app/Contents/Info.plist"
 if [ -f "$PLIST" ]; then
   # CFBundleDisplayName：Dock 悬浮提示、菜单栏应用名、About 窗口标题
   # CFBundleName：Application 菜单中 "About XXX" / "Hide XXX" / "Quit XXX" 的 XXX 部分
+  # CFBundleExecutable：系统权限弹窗（TCC）显示的进程名，必须与真实二进制文件名一致
   plutil -replace CFBundleDisplayName -string "视频工坊" "$PLIST"
   plutil -replace CFBundleName -string "视频工坊" "$PLIST"
+  plutil -replace CFBundleExecutable -string "视频工坊" "$PLIST"
+  # 同步重命名真实二进制文件（PyInstaller --name 产出 VideoDownloader，需手动改）
+  _MACOS_DIR="$REPO/dist/VideoDownloader.app/Contents/MacOS"
+  if [ -f "$_MACOS_DIR/VideoDownloader" ]; then
+    mv "$_MACOS_DIR/VideoDownloader" "$_MACOS_DIR/视频工坊"
+    echo "   二进制已重命名：VideoDownloader → 视频工坊"
+  fi
   # 声明支持中文本地化（否则 macOS 不加载 zh-Hans.lproj）
   plutil -replace CFBundleLocalizations -json '["zh-Hans", "en"]' "$PLIST"
   plutil -replace CFBundleDevelopmentRegion -string "zh-Hans" "$PLIST"
@@ -473,9 +481,9 @@ if [ "${VDL_BUILD_DMG:-0}" = "1" ]; then
   DMG_STAGE="/tmp/vdl_dmg_stage.$$"
   rm -rf "$DMG_STAGE" 2>/dev/null || true
   mkdir -p "$DMG_STAGE"
-  ditto "$REPO/dist/VideoDownloader.app" "$DMG_STAGE/VideoDownloader.app"
+  ditto "$REPO/dist/VideoDownloader.app" "$DMG_STAGE/视频工坊.app"
   ln -s /Applications "$DMG_STAGE/Applications"
-  hdiutil create -volname "VideoDownloader" -srcfolder "$DMG_STAGE" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
+  hdiutil create -volname "视频工坊" -srcfolder "$DMG_STAGE" -ov -format UDZO "$REPO/dist/VideoDownloader.dmg" >/dev/null 2>&1 || echo "⚠️ DMG 生成失败（可忽略，.app 仍可单独分发）"
   # 清理 staging（约 683MB 临时副本）。rm 被沙箱/审批拦下时退到回收站，避免中断整条构建。
   if [ -d "$DMG_STAGE" ]; then
     rm -rf "$DMG_STAGE" 2>/dev/null || mv "$DMG_STAGE" "$HOME/.Trash/vdl_dmg_stage_$(date +%s)" 2>/dev/null || true

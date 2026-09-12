@@ -1,4 +1,4 @@
-"""VideoDownloader 桌面版启动器（由 PyInstaller 打包为 .app / .exe）。
+"""视频工坊桌面版启动器（由 PyInstaller 打包为 .app / .exe）。
 
 职责：
 1. 定位捆绑的资源（ffmpeg / server 代码 / 前端静态文件 / yt-dlp 插件）
@@ -1121,7 +1121,7 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
     return not _pid_alive(pid)
 
 def _activate_existing_window() -> None:
-    """重复启动时把已有 VideoDownloader 窗口提到最前（macOS）。
+    """重复启动时把已有 视频工坊 窗口提到最前（macOS）。
 
     提窗优先级（**绝不自动打开浏览器**，用户明确：App 就是 App，不跳网页）：
       1. AppKit `NSRunningApplication.activateWithOptions_` —— 官方"把另一实例带到
@@ -1166,7 +1166,7 @@ def _activate_existing_window() -> None:
             r = subprocess.run(
                 ["osascript", "-e",
                  'tell application "System Events" to set frontmost of '
-                 '(every process whose name contains "VideoDownloader") to true'],
+                 '(every process whose name contains "视频工坊" or name contains "VideoDownloader") to true'],
                 check=False, capture_output=True, timeout=3,
             )
             raised = (r.returncode == 0)
@@ -1210,7 +1210,7 @@ def _show_error_dialog(msg: str) -> None:
         short = "\\n".join(safe.splitlines()[:2])
         subprocess.run(
             ["osascript", "-e",
-             f'display dialog "{short}" with title "VideoDownloader" '
+             f'display dialog "{short}" with title "视频工坊" '
              f'buttons {{"确定"}} default button "确定"'],
             check=False, capture_output=True, timeout=3,
         )
@@ -1224,7 +1224,7 @@ def _browser_fallback(server_thread) -> None:
     """
     _launch_log("原生窗口不可用，不自动跳转浏览器（用户要求），仅提示并保持服务运行")
     _show_error_dialog(
-        "VideoDownloader 无法打开原生窗口。\n"
+        "视频工坊 无法打开原生窗口。\n"
         "请把 ~/.vdl_launch.log 内容发给开发者排查。"
     )
     try:
@@ -1437,7 +1437,7 @@ def main() -> None:
 
         api = VdlApi()
         window = webview.create_window(
-            title="VideoDownloader",
+            title="视频工坊",
             url=URL,
             width=1100,
             height=750,

@@ -434,7 +434,10 @@ def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     bundle = _bundle_path()
     if not bundle:
         return {"ok": False, "error": "无法确定当前 App 路径"}
-    target_app = bundle.parent / "VideoDownloader.app"
+    # ⚠️ 就地替换「当前正在运行的 bundle」本身，绝不硬编码 "VideoDownloader.app"：
+    #    .app 目录名可被改名（如「视频工坊.app」），硬编码会在 /Applications 里额外造出
+    #    第二个 app，旧的那份则永远留在原地（2026-09-12 统一改名时踩过）。
+    target_app = bundle
 
     # 改为异步：立即创建 job 并启动后台线程执行「下载/套用/派生助手」，
     # 前端（pywebview 原生 bridge）轮询 /api/system/update/status 获取进度。
