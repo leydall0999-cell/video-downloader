@@ -96,7 +96,7 @@ echo "▶ 验证运行中的服务（轮询 /api/version）..."
 PORT=""
 for _ in $(seq 1 50); do
   for p in $(seq 8321 8365); do
-    if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p/api/version" 2>/dev/null)" = "200" ]; then
+    if [ "$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p/api/version" 2>/dev/null)" = "200" ]; then
       PORT=$p; break
     fi
   done
@@ -105,7 +105,7 @@ for _ in $(seq 1 50); do
 done
 [ -n "$PORT" ] || die "服务未在 8321-8365 响应 /api/version（启动可能失败，看控制台）"
 
-RESP="$(curl -s "http://127.0.0.1:$PORT/api/version")"
+RESP="$(curl -s --noproxy '*' "http://127.0.0.1:$PORT/api/version")"
 RV="$(printf '%s' "$RESP" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 REXE="$(printf '%s' "$RESP" | sed -n 's/.*"exe"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 echo "   运行中版本: $RV"
