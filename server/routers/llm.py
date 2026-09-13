@@ -12,6 +12,25 @@ def llm_providers() -> dict:
     """返回可用的提供商预设（供前端下拉菜单）。"""
     return {"providers": app.PROVIDER_PRESETS, "default": app.DEFAULT_PROVIDER}
 
+@router.get("/api/llm/status")
+def llm_status() -> dict:
+    """返回本机 Ollama 探测结果 + 当前生效配置（本地优先开关 UI 用）。
+
+    独立探测本机端口，不污染 get_llm_config 的热路径；前端据此展示
+    Ollama 是否运行中、可用模型列表，并提示 `ollama pull <model>`。
+    """
+    det = app.detect_ollama()
+    cfg = app.get_llm_config()
+    return {
+        "ollama_running": det.get("running", False),
+        "ollama_models": det.get("models", []),
+        "ollama_error": det.get("error"),
+        "local_priority": bool(cfg.get("local_priority")),
+        "effective_provider": cfg.get("provider"),
+        "effective_base_url": cfg.get("base_url"),
+        "effective_model": cfg.get("model"),
+    }
+
 @router.get("/api/llm/config")
 def llm_config_get() -> dict:
     """返回当前 LLM 配置（前端面板回填）。api_key 脱敏返回，仅显示首尾各 4 位。"""
@@ -19,6 +38,10 @@ def llm_config_get() -> dict:
     key = cfg.get("api_key", "")
     if len(key) > 8:
         cfg["api_key"] = key[:4] + "****" + key[-4:]
+    # 补全本地优先相关字段（脱敏后可能缺，显式带上）
+    cfg.setdefault("local_priority", False)
+    cfg.setdefault("local_model", "")
+    cfg.setdefault("_ollama_running", False)
     return cfg
 
 @router.post("/api/llm/config")
@@ -34,6 +57,8 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
         "temperature": current.get("temperature", 0.7),
         "reasoning_effort": req.reasoning_effort or "low",
         "offpeak_only": bool(req.offpeak_only),
+        "local_priority": bool(req.local_priority),
+        "local_model": req.local_model or "",
     }
     app.save_llm_config(data)
     return {"ok": True}

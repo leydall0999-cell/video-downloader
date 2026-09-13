@@ -13024,8 +13024,65 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.llmOffpeakOnly) el.llmOffpeakOnly.checked = !!r.offpeak_only;
         // 初始显示/隐藏 base_url
         if (el.llmBaseUrl) el.llmBaseUrl.style.display = (r.provider === 'custom') ? '' : 'none';
+        // 本地优先开关回填
+        if (el.llmLocalPriority) el.llmLocalPriority.checked = !!r.local_priority;
+        if (el.llmLocalModel) el.llmLocalModel.value = r.local_model || '';
       }
     } catch (e) { /* */ }
+
+    // 本地优先开关：联动设置 provider=ollama、隐藏云端 Key 字段，并拉取 Ollama 状态
+    async function refreshOllamaStatus() {
+      const on = el.llmLocalPriority && el.llmLocalPriority.checked;
+      if (el.llmOllamaBox) el.llmOllamaBox.hidden = !on;
+      if (!on) return;
+      try {
+        const st = await request('/api/llm/status');
+        if (!st || !st.ok) return;
+        const models = st.ollama_models || [];
+        if (el.llmLocalModel) {
+          const cur = el.llmLocalModel.value;
+          el.llmLocalModel.innerHTML = '';
+          if (models.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = ''; opt.textContent = '（Ollama 暂无模型，请先 ollama pull）';
+            el.llmLocalModel.appendChild(opt);
+          }
+          for (const m of models) {
+            const opt = document.createElement('option');
+            opt.value = m; opt.textContent = m;
+            el.llmLocalModel.appendChild(opt);
+          }
+          if (cur) el.llmLocalModel.value = cur;
+        }
+        if (el.llmOllamaStatus) {
+          if (st.ollama_running) {
+            el.llmOllamaStatus.style.color = '#3ddc84';
+            el.llmOllamaStatus.textContent = '✅ 本机 Ollama 运行中，可用模型 ' + models.length + ' 个。列表外的模型请先 `ollama pull <模型名>`。';
+          } else {
+            el.llmOllamaStatus.style.color = '#e67e22';
+            el.llmOllamaStatus.textContent = '⚠️ 未检测到本机 Ollama（localhost:11434 无响应）。请先安装并运行 Ollama，否则将回退云端（需 Key）。';
+          }
+        }
+      } catch (e) {
+        if (el.llmOllamaStatus) {
+          el.llmOllamaStatus.style.color = '#e67e22';
+          el.llmOllamaStatus.textContent = '⚠️ 无法探测 Ollama 状态，请确认本机已安装并运行 Ollama。';
+        }
+      }
+    }
+    if (el.llmLocalPriority) {
+      el.llmLocalPriority.addEventListener('change', () => {
+        const on = el.llmLocalPriority.checked;
+        if (on) {
+          if (el.llmProvider) el.llmProvider.value = 'ollama';
+          // 选 Ollama 预设会自动填 base_url，这里再兜底一次
+          if (el.llmBaseUrl) { el.llmBaseUrl.value = 'http://localhost:11434/v1'; el.llmBaseUrl.style.display = 'none'; }
+          if (el.llmModel) el.llmModel.value = '';
+        }
+        refreshOllamaStatus();
+      });
+      refreshOllamaStatus();
+    }
 
     // 统一保存按钮：同时把 LLM 与视觉模型两组配置打到后端
     if (el.aiSave) {
@@ -13046,6 +13103,9 @@ el.dwVidPlayer.removeAttribute('src');
           model: el.llmModel ? el.llmModel.value.trim() : '',
           reasoning_effort: el.llmReasoningEffort ? el.llmReasoningEffort.value : 'low',
           offpeak_only: el.llmOffpeakOnly ? el.llmOffpeakOnly.checked : false,
+          local_priority: el.llmLocalPriority ? el.llmLocalPriority.checked : false,
+          local_model: (el.llmLocalPriority && el.llmLocalPriority.checked && el.llmLocalModel)
+            ? el.llmLocalModel.value.trim() : '',
         };
         const visionBody = {
           provider: el.visionProvider ? el.visionProvider.value : 'auto',

@@ -88,6 +88,7 @@ run_one test_desktop_bridge.py
 run_one test_download_wiring.py
 run_one test_sr.py
 run_one test_selfupdate.py
+run_one test_llm_local_priority.py
 
 echo ""
 echo "========================================="

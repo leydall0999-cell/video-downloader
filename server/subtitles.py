@@ -208,36 +208,71 @@ def _write_subtitle_sidecar(out_path: Path, source_meta: dict[str, Any]) -> None
 # --------------------------------------------------------------------------- #
 # LLM 翻译（OpenAI 兼容，可选）
 # --------------------------------------------------------------------------- #
+def _split_srt_blocks(text: str, max_chars: int) -> list[str]:
+    """按空行（字幕块边界）切分 SRT，按 max_chars 累积成片段，尽量不打断单条字幕。"""
+    blocks = text.split("\n\n")
+    chunks: list[str] = []
+    cur = ""
+    for b in blocks:
+        b = b.strip("\n")
+        if not b:
+            continue
+        if cur and len(cur) + len(b) + 2 > max_chars:
+            chunks.append(cur)
+            cur = b
+        else:
+            cur = (cur + "\n\n" + b) if cur else b
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def translate_srt(text: str, api_key: str = "", base_url: str = "", model: str = "",
-                  target_lang: str = "简体中文") -> str:
-    """调用 OpenAI 兼容接口翻译 SRT 文本。无 key 时抛 ValueError。"""
-    if not api_key:
-        api_key = ""
+                  target_lang: str = "简体中文", chunk_chars: int = 4000) -> str:
+    """调用 OpenAI 兼容接口翻译 SRT 文本。
+
+    - Ollama 本机模式（base_url 含 11434）无需 API Key；其余云端必须有 Key，否则抛 ValueError。
+    - 长字幕按空行（字幕块边界）分片，逐片翻译后重组，避免单次超大请求 / 爆上下文。
+      短字幕（< chunk_chars）仍走单次请求，向后兼容。
+    """
+    if not text.strip():
+        return text
     base_url = (base_url or "https://api.openai.com").rstrip("/")
     model = model or "gpt-4o-mini"
-    if not api_key:
-        raise ValueError("未配置 LLM API Key，无法翻译")
+    ollama = "11434" in base_url
+    if not api_key and not ollama:
+        raise ValueError("未配置 LLM API Key，无法翻译（本地 Ollama 模式无需 Key）")
     url = base_url + "/v1/chat/completions"
-    prompt = (
-        f"你是专业的字幕翻译。下面是一段 SRT 格式字幕，保持原有的序号和时间轴行（如 `1`、`00:00:01,000 --> 00:00:04,000`）"
-        f"完全不变，只把每句对白翻译成{target_lang}，不要增删条目、不要加解释。\n\n{text}"
-    )
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"翻译请求失败：{exc}") from exc
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"翻译响应解析失败：{exc}") from exc
+
+    def _translate_one(chunk: str) -> str:
+        prompt = (
+            f"你是专业的字幕翻译。下面是一段 SRT 格式字幕，保持原有的序号和时间轴行"
+            f"（如 `1`、`00:00:01,000 --> 00:00:04,000`）完全不变，只把每句对白翻译成{target_lang}，"
+            f"不要增删条目、不要加解释。\n\n{chunk}"
+        )
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"翻译请求失败：{exc}") from exc
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"翻译响应解析失败：{exc}") from exc
+
+    if chunk_chars and len(text) > chunk_chars:
+        parts = []
+        for ch in _split_srt_blocks(text, chunk_chars):
+            parts.append(_translate_one(ch))
+        return "\n\n".join(p.strip() for p in parts if p and p.strip())
+    return _translate_one(text)

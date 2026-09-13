@@ -1906,6 +1906,16 @@
               <input id="llmOffpeakOnly" type="checkbox" data-page-node-id="wUlU94mTTk526ABHo5KlaJ" />
               <span data-page-node-id="v3coXl56GUSsg5mUtvzxST">避开峰时生成</span>
             </label>
+            <hr class="adv-sep" style="margin:10px 0;border:none;border-top:1px solid #2a2f3a;" />
+            <label class="adv-checkbox-row" data-page-node-id="llmLocalPriorityRow">
+              <input id="llmLocalPriority" type="checkbox" data-page-node-id="llmLocalPriority" />
+              <span data-page-node-id="llmLocalPriorityTxt">本地优先（使用本机 Ollama，零成本）</span>
+            </label>
+            <div id="llmOllamaBox" hidden style="margin-top:4px;">
+              <div id="llmOllamaStatus" class="adv-hint" style="font-size:13px;line-height:1.5;"></div>
+              <label class="adv-label" for="llmLocalModel" data-page-node-id="llmLocalModelLbl">本机模型</label>
+              <select id="llmLocalModel" class="adv-input" data-page-node-id="llmLocalModel"></select>
+            </div>
           </section>
 
           <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->

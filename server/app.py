@@ -2451,6 +2451,8 @@ class LLMConfigRequest(BaseModel):
     model: str = Field(default="", max_length=128)
     reasoning_effort: str = Field(default="low", max_length=16)
     offpeak_only: bool = Field(default=False)
+    local_priority: bool = Field(default=False)
+    local_model: str = Field(default="", max_length=128)
 
 class VisionConfigRequest(BaseModel):
     provider: str = Field(default="auto", max_length=32)
