@@ -242,7 +242,9 @@ def translate_srt(text: str, api_key: str = "", base_url: str = "", model: str =
     ollama = "11434" in base_url
     if not api_key and not ollama:
         raise ValueError("未配置 LLM API Key，无法翻译（本地 Ollama 模式无需 Key）")
-    url = base_url + "/v1/chat/completions"
+    # 兼容 base_url 已含 /v1 的情况（如 Ollama 预设 http://localhost:11434/v1、
+    # 以及 DeepSeek/硅基等以 /v1 结尾的端点），避免拼成 /v1/v1/chat/completions 导致 404。
+    url = base_url + "/chat/completions" if base_url.endswith("/v1") else base_url + "/v1/chat/completions"
 
     def _translate_one(chunk: str) -> str:
         prompt = (
