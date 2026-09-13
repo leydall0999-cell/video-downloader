@@ -5650,7 +5650,12 @@
           matBusy = false;
           el.matBtn.disabled = false;
           const _d = (e && e.detail) || '';
-          if (_d.indexOf('积分不足') >= 0) {
+          if (_d.indexOf('MEMBER_QUOTA|') === 0) {
+            // 本地抠图日配额 / 会员专享引擎超限：弹会员中心 + 引导（与下载流一致）
+            const tip = _d.split('|').slice(1).join('|') || '今日本地抠图额度已用尽';
+            try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+            el.matStatus.textContent = '提交失败：' + tip;
+          } else if (_d.indexOf('积分不足') >= 0) {
             // AI 积分不足：引导开通 AI 会员 / 购买积分包
             try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
             el.matStatus.textContent = '提交失败：' + _d;
@@ -5687,7 +5692,11 @@
           el.matBtn.disabled = false;
           if (el.matUpgradeCloud) el.matUpgradeCloud.disabled = false;
           const _d = (e && e.detail) || '';
-          if (_d.indexOf('积分不足') >= 0) {
+          if (_d.indexOf('MEMBER_QUOTA|') === 0) {
+            const tip = _d.split('|').slice(1).join('|') || '今日本地抠图额度已用尽';
+            try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+            el.matStatus.textContent = '升级失败：' + tip;
+          } else if (_d.indexOf('积分不足') >= 0) {
             try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
             el.matStatus.textContent = '升级失败：' + _d;
           } else {

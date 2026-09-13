@@ -126,12 +126,37 @@ MODELS: dict[str, dict] = {
         "license": "MIT",
         "commercial": "yes",
         "desc": "BiRefNet 人像版 · 发丝级连续 alpha（推荐·人像·MIT）",
+        "member_only": True,
         "urls": [
             "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
             "https://ghfast.top/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
             "https://mirror.ghproxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
             "https://gh-proxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
             "https://github.moeyy.dev/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-portrait-epoch_150.onnx",
+        ],
+    },
+    "birefnet-hr-matting": {
+        # BiRefNet HR 高清发丝版（MIT，官方 epoch_135，输入固定 2048）。
+        # 比标准 1024 版多出约 1 倍有效分辨率，发丝/婚纱半透细节明显更细；
+        # 但 2048 输入内存占用高，实测本机 8GB 直接 OOM → 仅 ≥16GB 内存设备可选
+        # （/api/matting/models 按 ram_gb 自动隐藏，本机 8GB 不会出现该选项）。
+        "filename": "BiRefNet_HR-matting-epoch_135.onnx",
+        "size_mb": 1050,
+        "input_size": (2048, 2048),
+        "norm": "max",
+        "md5": "",
+        "license": "MIT",
+        "commercial": "yes",
+        "hr": True,
+        "min_ram_gb": 16,
+        "desc": "BiRefNet 高清发丝(HR·2048) · 发丝级最细·需16GB+内存（推荐·MIT）",
+        "member_only": True,
+        "urls": [
+            "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://ghfast.top/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://mirror.ghproxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://gh-proxy.com/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet_HR-matting-epoch_135.onnx",
+            "https://github.moeyy.dev/https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet_HR-matting-epoch_135.onnx",
         ],
     },
     "isnet-general-use": {
@@ -145,6 +170,7 @@ MODELS: dict[str, dict] = {
         "license": "Apache-2.0",
         "commercial": "yes",
         "desc": "IS-Net 快速通用 · ~1s/张·轻量（手动可选·Apache-2.0）",
+        "member_only": True,
         "urls": [
             "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
             "https://ghfast.top/https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
@@ -198,6 +224,7 @@ MODELS: dict[str, dict] = {
         "algorithm": True,
         "size_mb": 0,
         "desc": "SAM 软抠像 · 像素级 + 连续 alpha 发丝（推荐·人像/物体）",
+        "member_only": True,
         "license": "MIT（MobileSAM）+ 内置算法",
         "commercial": "yes",
     },
@@ -261,6 +288,9 @@ def list_models() -> list[dict]:
                 "recommended": name == DEFAULT_MODEL,
                 "license": meta.get("license", ""),
                 "commercial": meta.get("commercial", ""),
+                "hr": bool(meta.get("hr", False)),
+                "min_ram_gb": float(meta.get("min_ram_gb", 0) or 0),
+                "member_only": bool(meta.get("member_only", False)),
             }
         )
     return out
@@ -1060,6 +1090,86 @@ def _despill_strong(rgb_norm, alpha, B, bg_close: float = 0.10, max_alpha_kill: 
     return F, a2
 
 
+def _despill_safe(rgb_norm, alpha, B, bg_close: float = 0.10, max_alpha_kill: float = 0.72,
+                  min_alpha: float = 0.30):
+    """安全去溢色（防低 alpha 反解爆炸出蓝/青斑）。
+
+    与 _despill_strong 同式 F=(I-(1-α)B)/α，但把除数钳到 >=min_alpha（默认 0.30）：
+    旧 _despill_strong 用 a0=max(a,0.15)，在 α≈0.04~0.15 的半透明边缘仍被放大约
+    6.7 倍 → 手臂等低 alpha 区反解出 (0,255,255) 青色（蓝臂根因）。钳到 0.30 后
+    最大放大 ~3.3 倍，且前景(MODNet/BiRefNet 给的高 alpha)不受影响，彻底消除彩边爆炸。
+    """
+    import numpy as np
+
+    a = alpha.astype(np.float64)
+    a0 = np.maximum(a, min_alpha)
+    F = (rgb_norm - (1.0 - a0)[..., None] * B[None, None, :]) / a0[..., None]
+    F = np.clip(F, 0.0, 1.0)
+    diff = np.linalg.norm(F - B[None, None, :], axis=2)
+    kill = (diff < bg_close) & (a < max_alpha_kill)
+    a2 = np.where(kill, 0.0, a)
+    return F, a2
+
+
+def _matting_birefnet_gentle(rgb, W: int, H: int, model: str = "birefnet-matting"):
+    """BiRefNet 系温和抠图：保比例 letterbox 输入 + 不压发丝的后处理，返回 RGBA。
+
+    与 predict_mask 的区别：
+      - **保比例 letterbox**（不把竖图 squash 成 1024²，避免人物被拉伸、发丝几何压扁）；
+      - **温和后处理**：软阈值 [0.10,0.60] + 轻微 power(1.15) + BFS 连通 + 轻羽化，
+        不用 predict_mask 的 power(1.8)+[0.20,0.75]（那会把中低置信细发丝压成 0）；
+      - **安全去溢色**（仅 alpha>=0.30 做反解，防低 alpha 青斑）。
+    用于纯色人像混合发丝、以及 HR 高清发丝档（model=birefnet-hr-matting，输入 2048）。
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    meta = MODELS[model]
+    size = meta["input_size"]
+    TARGET = int(size[0])
+    # letterbox 保比例（不拉伸人物）
+    scale = min(TARGET / W, TARGET / H)
+    tw, th = int(round(W * scale)), int(round(H * scale))
+    ox, oy = (TARGET - tw) // 2, (TARGET - th) // 2
+    canvas = Image.new("RGB", (TARGET, TARGET), (128, 128, 128))
+    canvas.paste(rgb.resize((tw, th), _lanczos()), (ox, oy))
+
+    sess = _get_session(model)
+    feed = _preprocess(canvas, size, meta.get("norm", "max"))
+    outs = sess.run(None, {sess.get_inputs()[0].name: feed})
+    raw = np.squeeze(outs[0][:, 0, :, :])
+    pred = _sigmoid(raw)
+    pred = np.clip(pred, 0.0, 1.0)
+    # 裁出 letterbox 区域并缩回原尺寸
+    crop = pred[oy:oy + th, ox:ox + tw]
+    mask_small = (np.clip(crop, 0, 1) * 255).astype("uint8")
+    mask_img = Image.fromarray(mask_small, "L").resize((W, H), _lanczos())
+    pred_orig = np.array(mask_img).astype(np.float32) / 255.0
+
+    # 温和后处理（保留发丝）
+    lo, hi = 0.10, 0.60
+    mask_lin = np.where(pred_orig >= hi, 1.0,
+                        np.where(pred_orig <= lo, 0.0, (pred_orig - lo) / (hi - lo)))
+    mask_lin = _keep_connected_to_core(mask_lin, core_thresh=0.3, ground_thresh=0.05)
+    alpha = np.power(np.clip(mask_lin, 0, 1), 1.15)
+    alpha = np.where(alpha < 0.015, 0.0, alpha)
+    alpha_img = Image.fromarray((alpha * 255).clip(0, 255).astype("uint8"), "L")
+    alpha_img = alpha_img.filter(ImageFilter.GaussianBlur(radius=0.4))
+    alpha = np.array(alpha_img).astype(np.float32) / 255.0
+
+    # 安全去溢色（仅 alpha>=0.30 做反解，规避低 alpha 爆炸）
+    rgb_arr = np.array(rgb).astype(np.float64) / 255.0
+    B = _estimate_bg_color(rgb)
+    a = alpha
+    safe = (a >= 0.30) & (a < 0.96)
+    a0 = np.maximum(a, 0.30)
+    F = (rgb_arr - (1.0 - a0)[..., None] * B[None, None, :]) / a0[..., None]
+    F = np.clip(F, 0.0, 1.0)
+    rgb_clean = np.where(safe[:, :, None], (F * 255.0).astype(np.float64), rgb_arr * 255.0)
+    out = np.dstack([rgb_clean.astype(np.uint8), (alpha * 255).clip(0, 255).astype(np.uint8)])
+    return Image.fromarray(out, mode="RGBA")
+
+
 def _matting_chroma_key(rgb, W: int, H: int, box=None, polygon=None, vision_box=None):
     """纯色/近似纯色背景抠图（色度键 chroma key）——MODNet/BiRefNet 的「正解」替代方案。
 
@@ -1300,42 +1410,60 @@ def _matting_solid_person_hybrid(rgb, W: int, H: int, box=None, polygon=None, vi
     rgb_arr = np.array(rgb, dtype=np.float64) / 255.0
     B = _estimate_bg_color(rgb)
 
-    # 1) MODNet 软 alpha（发丝级连续 alpha）；本路径自带颜色背景清零，无需 BiRefNet 门控
+    # 颜色距离（供发丝提升判定 & 背景清理共用）
+    d = np.linalg.norm(rgb_arr - B[None, None, :], axis=2)
+    t_lo, t_hi = 0.14, 0.34   # (2026-09-07 放宽：光照不均橙幕；肤色 d≈0.50 远不受影响)
+    color_a = np.clip((d - t_lo) / (t_hi - t_lo), 0.0, 1.0)
+
+    # 1) 双模型：MODNet 硬边为底（皮肤实心、橙底不外溢），BiRefNet 补发丝。
+    #    MODNet 在纯色橙底会漏 alpha（把橙底判成前景），第 2 步用 chroma 修；
+    #    但 chroma 也会咬「颜色接近橙底」的皮肤——本路径用 MODNet 硬边(a>0.85 受保护)
+    #    保住皮肤，与旧 MODNet+chroma 管线一致（仅去溢色换成安全版以修复蓝臂），
+    #    再叠加 BiRefNet 发丝提升。
     try:
         mod_rgba = _matting_modnet_core(
             rgb, W, H, box=box, polygon=polygon, vision_box=vision_box,
-            model=model or "modnet-photographic", skip_gate=True)
+            model="modnet-photographic", skip_gate=True)
         mod_a = np.array(mod_rgba.split()[-1], dtype=np.float64) / 255.0
     except Exception:  # noqa: BLE001
-        # MODNet 失败：退回纯色度键（颜色距离遮罩 + 去溢色），仍远优于裸 MODNet
+        mod_a = None
+
+    try:
+        br_rgba = _matting_birefnet_gentle(rgb, W, H, model="birefnet-matting")
+        mat_a = np.array(br_rgba.split()[-1], dtype=np.float64) / 255.0
+    except Exception:  # noqa: BLE001
+        mat_a = None
+
+    if mod_a is None and mat_a is None:
         return _matting_chroma_key(rgb, W, H, box=box, polygon=polygon, vision_box=vision_box)
+    if mod_a is None:
+        base_a = mat_a
+    elif mat_a is None:
+        base_a = mod_a
+    else:
+        base_a = mod_a.copy()
 
-    # 2) 颜色距离驱动 alpha：纯色背景下「颜色与背景 B 的相似度」直接决定透明度，
-    #    比 MODNet 的 OOD 软 alpha 干净得多——背景像素(颜色≈B)必然透明，彻底无彩边；
-    #    过渡带内用颜色梯度给出平滑边缘，前景内用 MODNet 补发丝级软细节。
-    #
-    # 关键修复（2026-09-04）：旧实现「d<t_hi 完全由 color_a 接管」会误伤肤色——
-    # 橙幕前的人脸皮肤颜色与背景橙相近，d 落在 0.12~0.30 之间，被 color_a 压成半透明，
-    # 随后 _despill_strong 又因「反推 F≈B」把皮肤 kill 成透明窟窿。
-    # 新版以 MODNet alpha 为基，只在 MODNet 不置信或明确背景处用颜色距离压制：
-    #   - d < t_lo：强制背景透明（纯色背景核心区域，不受 MODNet OOD 影响）；
-    #   - t_lo <= d < t_hi：MODNet 高置信前景（a>0.85）保持，其余用 min(mod_a, color_a) 抑制；
-    #   - d >= t_hi：完全前景，保留 MODNet alpha（发丝 wisps 不丢）。
-    d = np.linalg.norm(rgb_arr - B[None, None, :], axis=2)
-    t_lo, t_hi = 0.14, 0.34   # (2026-09-07 放宽：原 0.10/0.28 对光照不均橙幕偏紧，左侧偏亮橙区逃逸；肤色 d≈0.50 远不受影响)
-    color_a = np.clip((d - t_lo) / (t_hi - t_lo), 0.0, 1.0)
-
-    final_a = mod_a.copy()
-    # 明确背景色域：强制透明
+    # 2) 颜色距离清理（修 MODNet 在纯色橙底的 alpha 漏出）：纯背景强制透明，
+    #    过渡带内对「非高置信前景」(a<=0.85) 用颜色距离收紧——纯橙底像素颜色≈B
+    #    被干净切透；高置信皮肤(a>0.85)受保护不被咬。蓝臂低 alpha 爆炸经安全去溢色修复。
+    final_a = base_a.copy()
     final_a[d < t_lo] = 0.0
-    # 过渡带：保护 MODNet 高置信前景（a>0.85），其余按颜色距离收紧（消除 OOD 背景/彩边）。
     transition = (d >= t_lo) & (d < t_hi)
-    confident_fg = mod_a > 0.85
+    confident_fg = final_a > 0.85
     uncertain = transition & ~confident_fg
     final_a[uncertain] = np.minimum(final_a[uncertain], color_a[uncertain])
 
-    # 3) 强去溢色：清理半透明边缘溢色（纯色背景场景可更激进，max_alpha_kill 提到 0.72 避免半透橙残留）
-    F, final_a = _despill_strong(rgb_arr, final_a, B, max_alpha_kill=0.72)
+    # 3) BiRefNet 发丝提升：用 birefnet 补 MODNet 漏掉的细发丝。
+    #    关键：发丝细丝恰长在橙底背景上(color_a≈0)，故不能加 color_a>0.5 限制，
+    #    否则 boost 永不触发、发丝补不上。此处只判「birefnet 比 chroma 后的结果更透
+    #    明且为前景」即补——纯橙底处 birefnet 本身≈0 不会溢出成橙晕；橙晕来自 MODNet
+    #    的高 alpha 橙漏，但第 2 步 chroma 已将其杀掉，boost 只叠加 birefnet 的半透发丝。
+    if mat_a is not None:
+        boost = mat_a > final_a
+        final_a[boost] = np.maximum(final_a[boost], mat_a[boost])
+
+    # 4) 安全去溢色：divisor 钳 0.30，规避低 alpha 反解爆炸（旧 _despill_strong 出蓝臂）。
+    F, final_a = _despill_safe(rgb_arr, final_a, B, max_alpha_kill=0.72)
     out = np.dstack([F, final_a[..., None]])
     out = (np.clip(out, 0.0, 1.0) * 255.0).astype(np.uint8)
     return Image.fromarray(out, mode="RGBA")
@@ -2081,6 +2209,12 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 # 复杂/非纯色背景 → 优先 BiRefNet 抠图版（软 alpha，发丝/玻璃/半透优于通用版），
                 # 无该变体时回退 birefnet-general。复用下方完整选区逻辑。
                 model = "birefnet-matting" if _model_is_local("birefnet-matting") else "birefnet-general"
+
+        # 🔬 BiRefNet HR 高清发丝（需 ≥16GB 内存，仅用户显式选择；auto/纯色混合均不触发）。
+        if (model or _MODEL_NAME) == "birefnet-hr-matting":
+            rgba = _matting_birefnet_gentle(rgb, W, H, model="birefnet-hr-matting")
+            _save_out(rgba, out)
+            return
 
         # 🎨 纯色背景色度键（chroma key）引擎：用户显式选择时强制走，不依赖 ML 模型。
         # 对纯色/近似纯色背景（绿幕/橙幕/摄影棚纯色）是「正解」，远稳于人像 matting。

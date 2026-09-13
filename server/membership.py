@@ -57,6 +57,7 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）—— 2026-09-06 起配额墙在「点清晰度下载」处
     "original": 100,          # 原画/4K 直链下载 / 日（会员，未接入）
     "batch_material": 1000,   # 批量下载 / 日（会员，未接入）
+    "matting": 500,           # 本地一键抠图 / 日（会员）—— 2026-09-13 起配额墙；云端火山抠图走积分不计此配额
     # 评论 / 数据 / 字幕批量：不限（不进 daily_usage 计配额）
 }
 # 免费档每日配额（2026-09-06 定稿：免费下载 10 次/日；原画/批量不开放）
@@ -64,6 +65,7 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
     "original": 0,            # 免费不开放原画
     "batch_material": 0,      # 免费不开放批量
+    "matting": 8,             # 免费本地抠图 8 次/日；云端火山抠图走积分，不占此配额
 }
 UNLIMITED_QUOTA = ("comment", "data", "subtitle")
 
@@ -238,7 +240,7 @@ def _empty_state() -> dict[str, Any]:
         "permanent_credits": {"total": 0, "packs": []},
         "daily_usage": {"date": "", "download": 0, "original": 0, "batch_material": 0,
                         "ai_subtitle": 0, "subtitle": 0, "subtitle_batch": 0,
-                        "image_translate": 0},
+                        "image_translate": 0, "matting": 0},
         "usage_history": {},
         "meta": {"activated_at": 0.0, "history": []},
     }
@@ -529,6 +531,7 @@ class MembershipStore:
             du["subtitle"] = 0
             du["subtitle_batch"] = 0
             du["image_translate"] = 0
+            du["matting"] = 0
 
     def quota_state(self, resource: str) -> dict[str, Any]:
         """查询某资源的当日用量/上限（按当前档位：免费 or 会员）。unlimited 恒放行。"""

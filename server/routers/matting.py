@@ -17,6 +17,7 @@ import matting_ai as mat
 import vision_client
 from fastapi import APIRouter
 from stats import record_event
+import capability as _cap  # 内存分级（HR 发丝引擎仅 ≥16GB 可选）
 
 router = APIRouter()
 logger = logging.getLogger("matting")
@@ -238,6 +239,25 @@ def create_matting_image(
 
     # 校验模型名（未知名字退回全局默认，不报错）
     sel_model = model if (model and model in mat.MODELS) else None
+    # HR 发丝引擎需 ≥16GB 内存，低内存设备拒绝（列表已隐藏，双保险防直调 API 触发 OOM）
+    if sel_model == "birefnet-hr-matting":
+        _ram = 0.0
+        try:
+            _ram = float(_cap.probe_capability(lama_available=False, diffusion_supported=False).get("ram_gb", 0) or 0)
+        except Exception:  # noqa: BLE001
+            _ram = 0.0
+        if _ram < 16:
+            raise app.HTTPException(status_code=400, detail="高清发丝(HR)引擎需 16GB+ 内存，当前设备不支持")
+    # 🔒 会员专享引擎门禁：birefnet-portrait/birefnet-hr-matting/isnet-general-use/
+    # sam-matting 仅会员可选；免费用户直调这些引擎时拒绝（列表已隐藏，双保险防直调绕过）。
+    if sel_model and mat.MODELS.get(sel_model, {}).get("member_only"):
+        _ms = app.current_member_store(request).status()
+        _is_member = bool(_ms["download_member"]["active"]) or bool(_ms["ai_member"]["active"])
+        if not _is_member:
+            raise app.HTTPException(
+                status_code=402,
+                detail="MEMBER_QUOTA|该抠图引擎为会员专享（" + sel_model + "）— 开通会员解锁全部高级引擎",
+            )
     # 🤖 AI 视觉定位开关：开启时后端先调 VLM 看懂图、自动框出主体再抠
     vg = (vision_guide or "").strip().lower() in ("1", "true", "yes", "on")
     kla = (keep_lasso_all or "").strip().lower() in ("1", "true", "yes", "on")
@@ -301,6 +321,19 @@ def create_matting_image(
         _gate = _credit_gate(request, "matting_cloud", reason="cloud_matting")
         if _gate:
             raise app.HTTPException(status_code=402, detail=_gate)
+    # 🧱 本地抠图日配额墙（2026-09-13）：免费 8 次/日 → 会员 500 次/日；
+    # 云端火山抠图走积分计费，不占此日配额（见上方 fc 分支）。
+    if not fc:
+        _mstore = app.current_member_store(request)
+        _q = _mstore.quota_state("matting")
+        if not _q.get("allowed"):
+            _free = _q.get("free_limit", 8)
+            _mem = _q.get("member_limit", 500)
+            raise app.HTTPException(
+                status_code=402,
+                detail="MEMBER_QUOTA|今日本地抠图额度已用尽（" + str(int(_q.get("limit", _free))) + "/日）— 开通会员可解锁 " + str(int(_mem)) + " 次/日",
+            )
+        _mstore.use_daily("matting", 1)
     app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla, fc)
     if fc:
         record_event("matting_cloud", {"model": sel_model})
@@ -511,16 +544,32 @@ def matting_image_file(job_id: str) -> app.FileResponse:
 
 
 @router.get("/api/matting/models")
-def matting_models() -> dict:
+def matting_models(request: app.Request = None) -> dict:
     """模型列表（含是否已下载）+ 当前下载进度 + 当前模型的备用下载 URL。
 
     当自动下载失败时，前端用 `download_urls` 给用户展示可手动打开的镜像链接。
     """
     cur = mat.current_model()
     meta = mat.MODELS.get(cur, {})
+    # 高清发丝(HR)引擎显存/内存占用高，仅 ≥16GB 设备可选；低内存设备直接从列表隐藏。
+    _ram = 0.0
+    try:
+        _ram = float(_cap.probe_capability(lama_available=False, diffusion_supported=False).get("ram_gb", 0) or 0)
+    except Exception:  # noqa: BLE001
+        _ram = 0.0
+    _models = [m for m in mat.list_models() if _ram >= float(m.get("min_ram_gb", 0) or 0)]
+    # 🔒 会员专享引擎：birefnet-portrait/birefnet-hr-matting/isnet-general-use/sam-matting
+    # 仅会员可见；免费用户直接从列表隐藏（与 HR 的 RAM 过滤同机制）。
+    _is_member = False
+    try:
+        _ms = app.current_member_store(request).status()
+        _is_member = bool(_ms["download_member"]["active"]) or bool(_ms["ai_member"]["active"])
+    except Exception:  # noqa: BLE001
+        _is_member = False
+    _models = [m for m in _models if (not m.get("member_only")) or _is_member]
     return {
         "default": cur,
-        "models": mat.list_models(),
+        "models": _models,
         "download": _dl_snapshot(),
         "available": mat.available(),
         "download_urls": list(meta.get("urls", [])),
