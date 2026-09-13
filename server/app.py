@@ -65,7 +65,7 @@ import torrent as torrent_mod
 from batch import BatchScheduler
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
-from llm_config import inject_llm_env, get_llm_config, save_llm_config, PROVIDER_PRESETS, DEFAULT_PROVIDER
+from llm_config import inject_llm_env, get_llm_config, save_llm_config, detect_ollama, PROVIDER_PRESETS, DEFAULT_PROVIDER
 from vision_config import (
     inject_vision_env, get_vision_config, save_vision_config,
     VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER, platform_status,
