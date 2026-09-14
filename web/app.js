@@ -996,6 +996,18 @@
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
       throw err;
     }
+    // 成功响应统一补 ok:true（语义对齐 fetch 的 Response.ok），且**不覆盖已有值**。
+    // 历史缺陷：调用方普遍写 `if (r && r.ok) {...}` 来判定「拿到了数据」，
+    // 但只有 POST 端点返回体里带 {ok:true}，GET 端点返回的是数据本身（无 ok）
+    // → 这些 GET 回填分支**永远不执行**。
+    // 真实后果（2026-09-15 定位）：「AI 能力与密钥配置」面板的 Key / Base URL /
+    // Model 永远回填不上，输入框一直空着；用户点一次「保存」就把真实配置覆盖成
+    // 空值与前端默认值（provider 被打回 openai），云端解说与视觉理解双双失效。
+    // 在统一出口补 ok 可一次性修好全部 9 处受影响调用点。
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)
+        && payload.ok === undefined) {
+      payload.ok = true;
+    }
     return payload;
   };
 

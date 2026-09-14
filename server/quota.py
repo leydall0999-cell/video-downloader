@@ -122,16 +122,24 @@ class QuotaManager:
         return True
 
     # ── 决策（供 llm_script 云端回落使用）────────────────────────────────── #
-    def decide_cloud_fallback(self) -> str:
-        """引擎 auto 模式、本机失败需回落云端时的闸门决策。
+    def decide_cloud_fallback(self, mode: str = "auto") -> str:
+        """云端闸门决策（两种云端来源语义不同，必须分开判）。
 
-        返回 'allow'（可走云端并扣额度）/ 'deny'（禁止，改走 local_only + 人话提示）。
-        会员永远 allow。
+        mode='auto'       引擎 auto，本机跑不动/失败时**回落**云端：
+                          受「终身额度」+「每日 auto 运行额度」双重约束
+                          （每日额度是给自动回落行为设的频次护栏）。
+        mode='cloud_only' 用户在设置里**明确选云端**：只受「终身额度」约束。
+                          每日 auto 额度不该拦显式选择，否则当天跑过 1 次后
+                          第 2 次会以「额度已用完」被误拒（实际终身还剩额度）。
+
+        返回 'allow'（放行）/ 'deny'（禁止，调用方给人话提示）。会员永远 allow。
         """
         if self.is_member():
             return "allow"
         if self.lifetime_cloud_remaining() <= 0:
             return "deny"          # 终身云端额度耗尽
+        if mode == "cloud_only":
+            return "allow"         # 显式选云端：不检查也不消耗每日 auto 额度
         if self.daily_auto_remaining() <= 0:
             return "deny"          # 当日 auto 已用满 → 强制 local_only
         return "allow"

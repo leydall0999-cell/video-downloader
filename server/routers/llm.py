@@ -79,9 +79,19 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
     """
     current = app.get_llm_config()
     data = dict(current)
+    # Key 语义：空值 / 脱敏值（含 ****）一律视为「本次不修改」，沿用已有 Key。
+    # 历史缺陷：原判定只挡了脱敏值，**空字符串会把已配好的 Key 直接清空**——
+    # 前端「AI 能力与密钥配置」面板在异步回填完成前点「保存」（输入框尚为空）
+    # 即触发，后果是云端解说与视觉理解双双失效，界面没有任何提示。
+    # 2026-09-15 实测：llm_config.json 与 vision_config.json 的 api_key 被同时清空
+    #（前端 Promise.all 同时 POST 两个端点，故两个文件 mtime 一致）。
+    # 语义对齐 cloud_matting_config_save 里已正确的 _merge()：空值也保留旧值。
+    _new_key = (req.api_key or "").strip()
+    if not _new_key or "****" in _new_key:
+        _new_key = current.get("api_key", "")
     data.update({
         "provider": req.provider,
-        "api_key": req.api_key if "****" not in (req.api_key or "") else current.get("api_key", ""),
+        "api_key": _new_key,
         "base_url": req.base_url,
         "model": req.model,
         "reasoning_effort": req.reasoning_effort or "low",

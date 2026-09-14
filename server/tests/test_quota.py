@@ -91,6 +91,30 @@ def test_fallback_three_states():
     shutil.rmtree(d2, ignore_errors=True)
 
 
+def test_cloud_only_ignores_daily_auto():
+    """显式选云端（cloud_only）不得被「每日 auto 额度」拦住。
+
+    回归：早期实现里 decide_cloud_fallback() 无 mode 参数，engine=cloud 也走同一判定，
+    结果是当天跑过 1 次后第 2 次被误拒（提示「额度已用完」，实际终身还剩额度）。
+    """
+    d = tempfile.mkdtemp(prefix="vdl_quota_")
+    q = _mgr(base_dir=d, now=1000.0)
+    # 先消耗掉当日 auto 额度（模拟今天已发生过一次 auto 回落）
+    assert q.consume_daily_auto() is True
+    assert q.daily_auto_remaining() == 0
+    # auto 回落：两个额度都要满足 → 当日 auto 用满 → deny
+    assert q.decide_cloud_fallback("auto") == "deny"
+    assert q.decide_cloud_fallback() == "deny"       # 默认仍是 auto 语义
+    # 显式选云端：只看终身额度 → 仍 allow（终身还剩）
+    assert q.decide_cloud_fallback("cloud_only") == "allow"
+    # 终身耗尽后，显式选云端同样 deny
+    for _ in range(LIFETIME_CLOUD_EVENTS):
+        q.consume_cloud_event()
+    assert q.lifetime_cloud_remaining() == 0
+    assert q.decide_cloud_fallback("cloud_only") == "deny"
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def test_persistence_across_instances():
     d = tempfile.mkdtemp(prefix="vdl_quota_")
     q1 = _mgr(base_dir=d, now=1000.0)
@@ -105,7 +129,7 @@ def test_persistence_across_instances():
 def main():
     tests = [test_lifetime_exhaustion, test_daily_auto_resets, test_member_unlimited,
              test_upload_duration_gate, test_fallback_three_states,
-             test_persistence_across_instances]
+             test_cloud_only_ignores_daily_auto, test_persistence_across_instances]
     for t in tests:
         t()
         print(f"  ✅ {t.__name__}")

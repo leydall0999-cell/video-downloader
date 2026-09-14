@@ -32,11 +32,20 @@ def vision_status() -> dict:
 
 @router.post("/api/vision/config")
 def vision_config_save(req: app.VisionConfigRequest) -> dict:
-    """保存视觉模型配置。如果前端传了脱敏的 api_key(含 ****)则沿用已有 Key 不覆盖。"""
+    """保存视觉模型配置。
+
+    Key 语义：空值 / 脱敏值（含 ****）一律视为「本次不修改」，沿用已有 Key。
+    历史缺陷：原判定只挡了脱敏值，空字符串会把已配好的 Key 直接清空——前端面板
+    在异步回填完成前点「保存」即触发（同一时刻 llm_config.json 的 Key 也被清空，
+    因为前端 Promise.all 同时 POST 两个端点）。语义对齐 cloud_matting_config_save。
+    """
     current = app.get_vision_config()
+    _new_key = (req.api_key or "").strip()
+    if not _new_key or "****" in _new_key:
+        _new_key = current.get("api_key", "")
     data = {
         "provider": req.provider,
-        "api_key": req.api_key if "****" not in (req.api_key or "") else current.get("api_key", ""),
+        "api_key": _new_key,
         "base_url": req.base_url,
         "model": req.model,
     }

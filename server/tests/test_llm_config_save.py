@@ -40,6 +40,7 @@ if _SERVER_DIR not in sys.path:
 import app as server_app  # noqa: E402  先完成 app 初始化，避免 routers 循环导入
 import llm_config  # noqa: E402
 from routers import llm as llm_router  # noqa: E402
+from routers import vision as vision_router  # noqa: E402
 
 
 @contextmanager
@@ -166,6 +167,54 @@ def test_save_masked_api_key_keeps_existing():
         assert _read_cfg(home)["api_key"] == "sk-real-secret-value"
 
 
+def test_save_empty_api_key_keeps_existing():
+    """空 api_key 语义 = 「本次不修改」，绝不能清空已配好的 Key。
+
+    回归（2026-09-15 实测事故）：`GET /api/llm/config` 返回体不含 ok 字段，而前端
+    用 `if (r && r.ok)` 判定回填成功 → 回填**永不执行** → 面板里 Key 输入框恒为空
+    → 用户点「保存」提交空字符串 → 旧实现 `"****" not in ""` 为真，把真实 Key 写成空。
+    后果：云端解说与视觉理解双双失效（inject_llm_env 在「无 Key + engine=cloud」
+    时直接 return，子进程拿不到 LLM_API_KEY，任务报「LLM_API_KEY 未设置」）。
+    """
+    with fake_home() as home:
+        _write_cfg(home, {
+            "provider": "deepseek",
+            "api_key": "sk-real-secret-value",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+            "engine": "cloud",
+        })
+        # 前端未回填时提交空 Key（其余字段照常提交）
+        llm_router.llm_config_save(server_app.LLMConfigRequest(
+            provider="openai", api_key="", base_url="", model="", engine="cloud"))
+        saved = _read_cfg(home)
+        assert saved["api_key"] == "sk-real-secret-value", saved
+        # 顺带锁定：本机引擎字段未被抹掉（与既有用例同源的防回归）
+
+    # 空白串同样视为「不修改」（前端 .trim() 后可能得到空串）
+    with fake_home() as home:
+        _write_cfg(home, {"api_key": "sk-real-secret-value"})
+        llm_router.llm_config_save(server_app.LLMConfigRequest(api_key="   "))
+        assert _read_cfg(home)["api_key"] == "sk-real-secret-value"
+
+
+def test_save_empty_vision_api_key_keeps_existing():
+    """视觉配置同样：空 Key 不得清空（与 LLM 面板同一时刻被清空过）。"""
+    with fake_home() as home:
+        p = home / ".video-downloader" / "vision_config.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "provider": "dashscope",
+            "api_key": "sk-vision-secret",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "model": "qwen-vl-max",
+        }, ensure_ascii=False), encoding="utf-8")
+        vision_router.vision_config_save(server_app.VisionConfigRequest(
+            provider="auto", api_key="", base_url="", model=""))
+        saved = json.loads(p.read_text(encoding="utf-8"))
+        assert saved["api_key"] == "sk-vision-secret", saved
+
+
 # ── 本机模型扫描 ──────────────────────────────────────────────────────
 def test_local_models_scan_filters_and_sorts():
     """只认「config.json + safetensors」的目录，并按参数量从大到小... 实际按升序排列。"""
@@ -225,6 +274,8 @@ def main():
         test_save_overrides_mlx_fields_when_submitted,
         test_save_rejects_unknown_engine,
         test_save_masked_api_key_keeps_existing,
+        test_save_empty_api_key_keeps_existing,
+        test_save_empty_vision_api_key_keeps_existing,
         test_local_models_scan_filters_and_sorts,
         test_local_models_dir_env_override,
         test_runtime_status_skips_missing_interpreter,
