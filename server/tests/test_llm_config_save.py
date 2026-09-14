@@ -212,6 +212,20 @@ def test_save_omitted_credentials_are_preserved():
         assert cfg["api_key"] == "sk-real-key-1234", cfg
 
 
+def test_save_does_not_add_empty_api_key_field():
+    """用户文件不该出现空的 `api_key` 字段——排查时容易被误读成「Key 被清空了」。"""
+    with fake_home() as home:
+        _write_cfg(home, {"engine": "auto"})
+        llm_router.llm_config_save(server_app.LLMConfigRequest(engine="cloud"))
+        raw = _read_cfg(home)
+        assert raw["engine"] == "cloud", raw
+        assert "api_key" not in raw, raw
+        # 文件里本来就有 Key 时仍原样保留
+        _write_cfg(home, {"engine": "auto", "api_key": "sk-keep-me-1234"})
+        llm_router.llm_config_save(server_app.LLMConfigRequest(engine="auto"))
+        assert _read_cfg(home)["api_key"] == "sk-keep-me-1234"
+
+
 def test_managed_config_overrides_user_config():
     """管理员受管配置优先于用户配置；保存时不得把受管凭据写进用户文件。"""
     with fake_home() as home, no_llm_env():
@@ -367,6 +381,7 @@ def main():
         test_save_overrides_mlx_fields_when_submitted,
         test_save_normalizes_engine_to_two_tiers,
         test_save_omitted_credentials_are_preserved,
+        test_save_does_not_add_empty_api_key_field,
         test_managed_config_overrides_user_config,
         test_managed_status_reports_source_without_plain_key,
         test_save_masked_api_key_keeps_existing,

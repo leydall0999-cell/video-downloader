@@ -102,8 +102,13 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
     _new_key = (req.api_key or "").strip()
     if not _new_key or "****" in _new_key:
         _new_key = current.get("api_key", "")
+    # 凭据不再进用户文件：用户没提交 Key 且文件里本来就没有时，干脆不写这个字段，
+    # 而不是留下一个空的 "api_key": ""（否则排查时容易误以为「Key 被清空了」）。
+    if _new_key or "api_key" in current:
+        data["api_key"] = _new_key
+    else:
+        data.pop("api_key", None)
     data.update({
-        "api_key": _new_key,
         "reasoning_effort": req.reasoning_effort or "low",
         "offpeak_only": bool(req.offpeak_only),
         "local_priority": bool(req.local_priority),

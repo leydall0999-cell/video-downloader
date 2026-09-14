@@ -477,6 +477,7 @@ def commentary_precheck(
     file_id: str = "",
     trim_start: float = 0.0,
     trim_end: float = 0.0,
+    engine: str = "",
 ) -> dict:
     """解说前置预检 —— 前端「选完视频」立刻调用，不通过就当场提示。
 
@@ -489,6 +490,12 @@ def commentary_precheck(
     前端本地文件场景自行读元数据传 duration_sec（零成本、无需上传）；
     下载库 / 接收站缓存场景传 file_id，由服务端 ffprobe 探测。
     探测失败一律 fail-open（宁可放过，不误拦），真正的兜底在任务入口。
+
+    engine 由前端传「界面上当前选中的档位」（auto / cloud），而不是只读后端已
+    保存的配置：用户可能先切档位、再去选素材，此时还没点保存，若按已保存值判定
+    就会出现两种误导——界面上是「本机优先」却被判成「将消耗云端额度」（本机明明
+    可用，甚至会被误以为额度已耗尽而拦下），或反之界面是「纯云端」却提示不花钱。
+    传空则回落到已保存配置。
     """
     from routers.quota import precheck_commentary as _pre
     dur = float(duration_sec or 0.0)
@@ -502,7 +509,7 @@ def commentary_precheck(
             dur = _effective_duration(src, trim_start, trim_end)
         except Exception:
             dur = 0.0
-    return _pre(request, dur)
+    return _pre(request, dur, engine=engine)
 
 
 @router.get("/api/commentary/list")

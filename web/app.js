@@ -9927,12 +9927,28 @@ el.dwVidPlayer.removeAttribute('src');
       const qs = new URLSearchParams();
       if (durationSec > 0) qs.set('duration_sec', String(durationSec));
       if (fileId) qs.set('file_id', fileId);
+      // 带上「界面上当前选中的档位」而不是让后端只读已保存配置：用户可能先切档位、
+      // 再去选素材（还没点保存），不传就会出现「界面写本机优先、提示却说要用云端额度」
+      // 这种自相矛盾的提示。（此处不复用 comNormalizeEngine：它声明在另一个 IIFE 里，
+      // 外层作用域取不到，就地归一避免作用域耦合。）
+      const _eng = String((el.llmEngine && el.llmEngine.value) || 'auto').trim().toLowerCase();
+      qs.set('engine', _eng === 'cloud' ? 'cloud' : 'auto');
       if (!qs.toString()) return;
       comApplyPrecheck(await request(`/api/commentary/precheck?${qs.toString()}`));
     } catch (e) {
       // 预检本身失败不能阻塞用户：不拦，交给任务入口的闸门兜底
       comPrecheckBlocked = false;
       if (el.comGenerateScript) el.comGenerateScript.disabled = false;
+    }
+  };
+
+  // 档位一变就重跑预检：档位直接决定「这次会不会花云端额度」，提示必须同步刷新，
+  // 否则用户切到「本机优先」后仍看到「本次将消耗 1 次云端额度」。
+  const comRefreshPrecheck = () => {
+    if (selectedLocalFile) {
+      comProbeLocalDuration(selectedLocalFile).then((sec) => comRunPrecheck({ durationSec: sec }));
+    } else if (el.comSource && el.comSource.value) {
+      comRunPrecheck({ fileId: el.comSource.value });
     }
   };
 
@@ -13432,8 +13448,36 @@ el.dwVidPlayer.removeAttribute('src');
         setStatus('⚠️ 无法读取本机模型列表。', '#e67e22');
       }
     }
+    // 档位改动即时落盘。档位直接决定「花不花云端额度、素材出不出本机」，属于
+    // 强影响选择，不能等用户另外点「保存」才生效——否则界面显示「本机优先」、
+    // 管线实际仍按已保存的「纯云端」跑，预检与真实计费会互相矛盾。
+    // 只提交用户可见的选择项；凭据四件套一律不提交（管理员统一下发）。
+    const saveEngineChoice = async () => {
+      try {
+        await request('/api/llm/config', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            engine: comNormalizeEngine(el.llmEngine ? el.llmEngine.value : 'auto'),
+            reasoning_effort: el.llmReasoningEffort ? el.llmReasoningEffort.value : 'low',
+            offpeak_only: el.llmOffpeakOnly ? el.llmOffpeakOnly.checked : false,
+            local_priority: false,
+            local_model: '',
+            // 选「纯云端」时不提交模型路径：undefined 不进 JSON，后端视作
+            // 「本次不修改」，切回本机档位时原路径仍在。
+            mlx_model_path: (el.llmEngine && el.llmEngine.value !== 'cloud' && el.llmMlxModel)
+              ? el.llmMlxModel.value.trim() : undefined,
+          }),
+        });
+      } catch (e) { /* 落盘失败不打断界面，任务入口的闸门仍会按真实配置兜底 */ }
+    };
     if (el.llmEngine) {
-      el.llmEngine.addEventListener('change', () => { refreshEngineNote(); refreshLocalEngine(); });
+      el.llmEngine.addEventListener('change', () => {
+        refreshEngineNote();
+        refreshLocalEngine();
+        saveEngineChoice();
+        // 已选素材时立刻重跑预检，让「会不会花额度」的提示跟着档位变
+        try { comRefreshPrecheck(); } catch (e) { /* 预检属提示性质，失败不阻塞 */ }
+      });
       if (el.llmMlxModel) el.llmMlxModel.addEventListener('change', updateMlxModelHint);
       refreshLocalEngine();
     }

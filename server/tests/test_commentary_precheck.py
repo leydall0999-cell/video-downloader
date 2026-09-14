@@ -20,6 +20,7 @@
   effective_duration_subtracts_trim         预检按裁剪后的真实时长判定
   precheck_or_raise_403_shape               拒绝时返回结构化 403（含 hint/subscribe）
   precheck_endpoint_returns_allowed_flag    HTTP 端点返回 allowed 而非 ok
+  precheck_endpoint_honors_ui_engine        端点采信「界面上当前档位」而非已保存配置
 
 设计约束：绝不读写用户真实 `~/.video-downloader` 的配额状态——所有用例都用
 临时 base_dir，并把真实的家目录探测（ffprobe / 本机引擎）替换为替身。
@@ -212,6 +213,41 @@ def test_precheck_endpoint_subtracts_trim_from_duration():
         assert r2["allowed"] is False
 
 
+def test_precheck_endpoint_honors_ui_engine():
+    """端点必须采信前端传来「界面上当前选中的档位」，而不是只读已保存配置。
+
+    真实场景（2026-09-15 实测发现）：用户先把档位切到「本机优先」，紧接着去选素材
+    ——此刻档位尚未落盘。若端点只按已保存的「纯云端」判定，本机明明可用却提示
+    「本次将消耗 1 次云端额度」；更糟的是终身额度为 0 时会直接被判
+    cloud_quota_exhausted 拦下，用户在本机明明能跑的情况下拿到「不能用」的结论。
+    """
+    _qm = quota_router.get_quota_manager
+    _ready = quota_router._local_engine_ready
+    _resolve = quota_router.resolve_engine
+    try:
+        quota_router.get_quota_manager = lambda request=None: _mgr()
+        # 本机就绪度与档位相关：auto → 本机可用；cloud → 需要云端
+        quota_router._local_engine_ready = lambda engine="": engine != "cloud"
+        # 已保存配置是「纯云端」，模拟「界面已切档但还没保存」
+        quota_router.resolve_engine = lambda request=None: "cloud"
+
+        ui_auto = cm.commentary_precheck(None, duration_sec=600.0, engine="auto")
+        assert ui_auto["allowed"] is True
+        assert ui_auto["engine"] == "auto", "端点必须采信界面档位，而非已保存配置"
+        assert ui_auto["will_use_cloud"] is False, "本机就绪时不该提示会消耗云端额度"
+        assert ui_auto["code"] == "local"
+
+        # 不传 engine 时回落到已保存配置（纯云端），提示相应改变
+        saved = cm.commentary_precheck(None, duration_sec=600.0)
+        assert saved["engine"] == "cloud"
+        assert saved["will_use_cloud"] is True
+        assert "纯云端" in saved["hint"]
+    finally:
+        quota_router.get_quota_manager = _qm
+        quota_router._local_engine_ready = _ready
+        quota_router.resolve_engine = _resolve
+
+
 _TESTS = [
     test_precheck_member_always_allowed,
     test_precheck_duration_exceeded_blocks,
@@ -227,6 +263,7 @@ _TESTS = [
     test_precheck_or_raise_passes_when_allowed,
     test_precheck_endpoint_returns_allowed_flag,
     test_precheck_endpoint_subtracts_trim_from_duration,
+    test_precheck_endpoint_honors_ui_engine,
 ]
 
 if __name__ == "__main__":
