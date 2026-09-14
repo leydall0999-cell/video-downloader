@@ -1930,19 +1930,24 @@
 
           <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->
           <section class="com-ai-col" data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
-            <h4 class="com-ai-subtitle" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">视觉模型（片头检测 &amp; 视觉理解共用）</h4>
-            <label class="adv-label" for="visionProvider" data-page-node-id="OsLIwhwzIaB5Ms0EONysM5">服务商</label>
-            <select id="visionProvider" class="adv-input" data-page-node-id="McFoNFs3vdsJQ25HnrqDJj"></select>
-            <div id="visionSignupWrap" hidden style="margin:-2px 0 8px;" data-page-node-id="XcCv1jvGUrJgPi6uFc3ErG">
-              <a id="visionSignup" href="#" target="_blank" rel="noopener noreferrer" style="color:#2d7ef7;text-decoration:underline;font-size:13px;" data-page-node-id="UHm7aBTQUrKaPOn47Am2De">申请免费额度 →</a>
+            <h4 class="com-ai-subtitle" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">视觉理解（片头检测 &amp; 画面理解共用）</h4>
+            <div id="visionManagedStatus" class="adv-note" data-page-node-id="h8EBJmwZ8MXerLQOr1EoFo"></div>
+            <!-- 视觉凭据字段：与 LLM 同原则，云端 Key 由超级管理员统一下发。
+                 保留 DOM 以免旧版逻辑取值报错，但既不展示也不再提交。 -->
+            <div hidden style="display:none;" aria-hidden="true">
+              <label class="adv-label" for="visionProvider" data-page-node-id="OsLIwhwzIaB5Ms0EONysM5">服务商</label>
+              <select id="visionProvider" class="adv-input" data-page-node-id="McFoNFs3vdsJQ25HnrqDJj"></select>
+              <div id="visionSignupWrap" hidden style="margin:-2px 0 8px;" data-page-node-id="XcCv1jvGUrJgPi6uFc3ErG">
+                <a id="visionSignup" href="#" target="_blank" rel="noopener noreferrer" style="color:#2d7ef7;text-decoration:underline;font-size:13px;" data-page-node-id="UHm7aBTQUrKaPOn47Am2De">申请免费额度 →</a>
+              </div>
+              <label class="adv-label" for="visionApiKey" data-page-node-id="xHLsu4PDwJ45XikRK7HIEj">API Key</label>
+              <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" data-page-node-id="yZFpTmS75kTtT21dF0IyL8" />
+              <label class="adv-label" for="visionBaseUrl" data-page-node-id="DU2CJouljeNLhpGPatHWIX">Base URL（自定义时填写）</label>
+              <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="M2gLBi62eLm8E5irPuB8y5" />
+              <label class="adv-label" for="visionModel" data-page-node-id="LbeYyvVk1mHww3fTEDUXzf">模型</label>
+              <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="AGU5DPoqodYqBaaDu3PT8R" />
+              <p class="adv-note" id="visionNote" data-page-node-id="9XvIsMwZ8MXerLQOr1EoFo">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
             </div>
-            <label class="adv-label" for="visionApiKey" data-page-node-id="xHLsu4PDwJ45XikRK7HIEj">API Key</label>
-            <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" data-page-node-id="yZFpTmS75kTtT21dF0IyL8" />
-            <label class="adv-label" for="visionBaseUrl" data-page-node-id="DU2CJouljeNLhpGPatHWIX">Base URL（自定义时填写）</label>
-            <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="M2gLBi62eLm8E5irPuB8y5" />
-            <label class="adv-label" for="visionModel" data-page-node-id="LbeYyvVk1mHww3fTEDUXzf">模型</label>
-            <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="AGU5DPoqodYqBaaDu3PT8R" />
-            <p class="adv-note" id="visionNote" data-page-node-id="h8EBJmwZ8MXerLQOr1EoFo">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
             <div id="visionRuntime" class="adv-note" data-page-node-id="SvkSqeKO42MZrXmDiva7w2"></div>
           </section>
 

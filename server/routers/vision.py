@@ -20,10 +20,18 @@ def vision_providers() -> dict:
 def vision_config_get() -> dict:
     """返回当前视觉模型配置（前端面板回填）。api_key 脱敏返回，仅显示首尾各 4 位。"""
     cfg = app.get_vision_config()
-    key = cfg.get("api_key", "")
-    if len(key) > 8:
-        cfg["api_key"] = key[:4] + "****" + key[-4:]
+    cfg["api_key"] = app.vision_mask_key(cfg.get("api_key", ""))
+    cfg["managed"] = app.vision_managed_status()
     return cfg
+
+@router.get("/api/vision/managed")
+def vision_managed() -> dict:
+    """管理员受管配置状态（脱敏，绝不返回明文 Key）。
+
+    与 `GET /api/llm/managed` 对称：界面据此显示「视觉理解已由管理员配置」，
+    而不是让用户自己去填 Key。
+    """
+    return app.vision_managed_status()
 
 @router.get("/api/vision/status")
 def vision_status() -> dict:
@@ -38,17 +46,26 @@ def vision_config_save(req: app.VisionConfigRequest) -> dict:
     历史缺陷：原判定只挡了脱敏值，空字符串会把已配好的 Key 直接清空——前端面板
     在异步回填完成前点「保存」即触发（同一时刻 llm_config.json 的 Key 也被清空，
     因为前端 Promise.all 同时 POST 两个端点）。语义对齐 cloud_matting_config_save。
+
+    2026-09-15：基底改用「用户配置文件本身」而不是 get_vision_config()
+    （后者已叠加受管层与环境变量）——否则一次保存就把管理员下发的凭据写进
+    用户文件，破坏「凭据只由管理员持有」的设计。四字段统一「空值＝不修改」。
     """
-    current = app.get_vision_config()
+    # 基底＝用户文件本身（不含受管层 / 环境变量）
+    current = app.load_vision_config_raw()
+    data = dict(current)
     _new_key = (req.api_key or "").strip()
     if not _new_key or "****" in _new_key:
         _new_key = current.get("api_key", "")
-    data = {
-        "provider": req.provider,
-        "api_key": _new_key,
-        "base_url": req.base_url,
-        "model": req.model,
-    }
+    # 没有 Key 且原文件也没有时，不写空的 "api_key": ""（排查时易被误读成 Key 被清空）
+    if _new_key or "api_key" in current:
+        data["api_key"] = _new_key
+    else:
+        data.pop("api_key", None)
+    for _f in ("provider", "base_url", "model"):
+        _v = (getattr(req, _f, None) or "").strip()
+        if _v:
+            data[_f] = _v
     app.save_vision_config(data)
     return {"ok": True}
 

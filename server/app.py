@@ -72,6 +72,9 @@ from llm_config import (inject_llm_env, get_llm_config, save_llm_config, detect_
 from vision_config import (
     inject_vision_env, get_vision_config, save_vision_config,
     VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER, platform_status,
+    load_user_config_raw as load_vision_config_raw,
+    managed_status as vision_managed_status,
+    mask_key as vision_mask_key,
 )
 
 # 暴露给 routers/vision.py 访问的共享内核（镜像 PROVIDER_PRESETS 等）
@@ -80,6 +83,9 @@ VISION_DEFAULT_PROVIDER = VISION_DEFAULT_PROVIDER
 get_vision_config = get_vision_config
 save_vision_config = save_vision_config
 platform_status = platform_status
+load_vision_config_raw = load_vision_config_raw
+vision_managed_status = vision_managed_status
+vision_mask_key = vision_mask_key
 from commentary_config import inject_commentary_env
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -2567,10 +2573,14 @@ class LLMConfigRequest(BaseModel):
     mlx_max_tokens: int | None = Field(default=None, ge=-1, le=131072)
 
 class VisionConfigRequest(BaseModel):
-    provider: str = Field(default="auto", max_length=32)
-    api_key: str = Field(default="", max_length=256)
-    base_url: str = Field(default="", max_length=512)
-    model: str = Field(default="", max_length=128)
+    # 与 LLM 凭据同原则（2026-09-15）：云视觉凭据由超级管理员通过受管配置统一下发，
+    # 用户界面不再暴露任何 Key 输入框。四个字段一律「空值 = 本次不修改」，
+    # 默认必须是 None 而不是 "auto"/"" —— 否则前端不提交这些字段时一次保存
+    # 就会把管理员配置打回 auto（历史事故路径同 LLMConfigRequest.provider）。
+    provider: str | None = Field(default=None, max_length=32)
+    api_key: str | None = Field(default=None, max_length=256)
+    base_url: str | None = Field(default=None, max_length=512)
+    model: str | None = Field(default=None, max_length=128)
 
 class CommentaryConfigRequest(BaseModel):
     """解说(配音/音量)手动可调设置。"""

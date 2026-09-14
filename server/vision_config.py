@@ -97,16 +97,70 @@ def _config_path() -> Path:
     return _config_dir() / "vision_config.json"
 
 
+def _managed_path() -> Path:
+    """管理员受管配置文件（凭据统一下发，用户界面既不展示也不提交）。
+
+    与 llm_config 的受管层同构（2026-09-15）：普通用户不该也没必要持有云视觉
+    Key，界面只保留「自动（本机离线 OCR）」这类不依赖 Key 的路径。
+    """
+    return _config_dir() / "vision_managed.json"
+
+
 # ── 配置读写 ─────────────────────────────────────────────────────────────
 def _env_api_key() -> str:
     """从环境变量读视觉 API Key（支持 VDL_VISION_API_KEY 写法）。"""
     return (os.environ.get("VDL_VISION_API_KEY") or "").strip()
 
 
-def get_vision_config() -> dict[str, Any]:
-    """读取完整视觉配置，优先级：环境变量 > JSON 文件 > 硬编码默认值。
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
 
-    环境变量为"最终覆盖"（服务端/容器部署不改文件），文件为"前端持久化"（桌面用户 UI 保存）。
+
+def load_user_config_raw() -> dict[str, Any]:
+    """只读用户配置文件本身（不含受管层 / 环境变量）。
+
+    保存端点的基底必须用这个文件：否则每次保存都会把管理员下发的凭据写进
+    用户文件，破坏「凭据只由管理员持有」的设计。
+    """
+    return _load_json(_config_path())
+
+
+def mask_key(key: str) -> str:
+    k = (key or "").strip()
+    if len(k) > 8:
+        return k[:4] + "****" + k[-4:]
+    return k
+
+
+def managed_status() -> dict[str, Any]:
+    """管理员受管配置状态（**绝不返回明文 Key**）。"""
+    m = _load_json(_managed_path())
+    provider = str(m.get("provider") or "").strip().lower()
+    preset = VISION_PROVIDER_PRESETS.get(provider) if provider else None
+    return {
+        "configured": bool(m) or bool(_env_api_key()),
+        "source": "env" if _env_api_key() else ("managed" if m else "user"),
+        "provider": provider,
+        "provider_name": (preset or {}).get("name", provider or ""),
+        "base_url": str(m.get("base_url") or ""),
+        "model": str(m.get("model") or ""),
+        "api_key_masked": mask_key(str(m.get("api_key") or "")),
+        "managed_file": str(_managed_path()),
+        "managed_present": bool(m),
+    }
+
+
+def get_vision_config() -> dict[str, Any]:
+    """读取完整视觉配置，优先级：环境变量 > 管理员受管 > JSON 文件 > 硬编码默认值。
+
+    环境变量为"最终覆盖"（服务端/容器部署不改文件），受管文件为管理员下发，
+    JSON 为"前端持久化"（桌面用户 UI 保存）。
     """
     cfg: dict[str, Any] = {
         "provider": VISION_DEFAULT_PROVIDER,
@@ -126,7 +180,14 @@ def get_vision_config() -> dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
 
-    # 2) 环境变量覆盖（最终裁决）
+    # 2) 管理员受管层：覆盖用户文件，但自身仍被环境变量覆盖
+    m = _load_json(_managed_path())
+    for k in ("provider", "api_key", "base_url", "model"):
+        v = str(m.get(k) or "").strip()
+        if v:
+            cfg[k] = v
+
+    # 3) 环境变量覆盖（最终裁决）
     env_key = _env_api_key()
     if env_key:
         cfg["api_key"] = env_key
@@ -140,7 +201,7 @@ def get_vision_config() -> dict[str, Any]:
     if env_provider and env_provider in VISION_PROVIDER_PRESETS:
         cfg["provider"] = env_provider
 
-    # 3) 填充缺失：从提供商预设补 base_url + model
+    # 4) 填充缺失：从提供商预设补 base_url + model
     provider = cfg.get("provider", VISION_DEFAULT_PROVIDER)
     preset = VISION_PROVIDER_PRESETS.get(provider, VISION_PROVIDER_PRESETS[VISION_DEFAULT_PROVIDER])
     if not cfg["base_url"]:

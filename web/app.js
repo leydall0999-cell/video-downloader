@@ -414,6 +414,7 @@
     visionModel: $('visionModel'),
     visionNote: $('visionNote'),
     visionRuntime: $('visionRuntime'),
+    visionManagedStatus: $('visionManagedStatus'),
     visionSignup: $('visionSignup'),
     visionSignupWrap: $('visionSignupWrap'),
     // LLM 与视觉模型共用一个保存按钮（合并 llmSave / visionSave）
@@ -5612,7 +5613,7 @@
         const vp = (el.visionProvider && el.visionProvider.value) || '';
         const vk = (el.visionApiKey && el.visionApiKey.value) || '';
         if (!vp || !vk) {
-          el.matStatus.textContent = '⚠️ AI 视觉定位已启用（说扣什么：' + promptText + '），但未配置视觉模型 Key（视频解说 → ⚙️ AI 能力与密钥配置 → 视觉模型栏选 DashScope 并填 Key），将回退普通抠图';
+          el.matStatus.textContent = '⚠️ AI 视觉定位已启用（说扣什么：' + promptText + '），但未配置云端视觉服务（由管理员统一配置，无需你操作），将回退普通抠图';
         } else {
           el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '）';
         }
@@ -5678,7 +5679,7 @@
           const vp = (el.visionProvider && el.visionProvider.value) || '';
           const vk = (el.visionApiKey && el.visionApiKey.value) || '';
           if (!vp || !vk) {
-            el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置视觉模型 Key（视频解说 → ⚙️ AI 能力与密钥配置 → 视觉模型栏选 DashScope 并填 Key），将回退普通抠图';
+            el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置云端视觉服务（由管理员统一配置，无需你操作），将回退普通抠图';
           } else {
             el.matStatus.textContent = '上传中…（🤖 AI 视觉定位：先让模型看懂图再抠主体）';
           }
@@ -13511,37 +13512,16 @@ el.dwVidPlayer.removeAttribute('src');
           mlx_model_path: (el.llmEngine && el.llmEngine.value !== 'cloud' && el.llmMlxModel)
             ? el.llmMlxModel.value.trim() : undefined,
         };
-        const visionBody = {
-          provider: el.visionProvider ? el.visionProvider.value : 'auto',
-          api_key: el.visionApiKey ? el.visionApiKey.value.trim() : '',
-          base_url: el.visionBaseUrl ? el.visionBaseUrl.value.trim() : '',
-          model: el.visionModel ? el.visionModel.value.trim() : '',
-        };
+        // 视觉模型凭据与 LLM 同理，由管理员统一下发（见 /api/vision/managed），
+        // 这里不再提交——否则隐藏输入框里的空值会把管理员配置覆盖掉。
         show('正在保存…', false);
         try {
-          const [lr, vr] = await Promise.all([
-            request('/api/llm/config', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(llmBody),
-            }),
-            request('/api/vision/config', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(visionBody),
-            }),
-          ]);
-          const ld = lr || {};
-          const vd = vr || {};
-          const llmOk = !!(ld && ld.ok);
-          const visOk = !!(vd && vd.ok);
-          if (llmOk && visOk) {
-            show('✅ 已保存（LLM + 视觉模型）', false);
-          } else if (llmOk && !visOk) {
-            show('⚠️ LLM 已保存，视觉模型失败', true);
-          } else if (!llmOk && visOk) {
-            show('⚠️ 视觉模型已保存，LLM 失败', true);
-          } else {
-            show('❌ 保存失败（LLM + 视觉模型）', true);
-          }
+          const lr = await request('/api/llm/config', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(llmBody),
+          });
+          const llmOk = !!(lr && lr.ok);
+          show(llmOk ? '✅ 已保存' : '❌ 保存失败', !llmOk);
         } catch (e) {
           show('❌ 网络错误：' + (e.message || ''), true);
         } finally {
@@ -13623,6 +13603,27 @@ el.dwVidPlayer.removeAttribute('src');
         wrap.hidden = true;
       }
     }
+
+    // 视觉凭据与 LLM 同理，由超级管理员统一下发：界面只汇报状态、不给 Key 输入框。
+    // 未配置时走「自动」——Mac 上即本机离线 OCR（免费、无需任何 Key）。
+    async function renderVisionManaged() {
+      const box = el.visionManagedStatus;
+      if (!box) return;
+      try {
+        const r = await request('/api/vision/managed');
+        if (!r) return;
+        if (r.configured && r.provider) {
+          const who = r.provider_name || r.provider;
+          const from = r.source === 'env' ? '（环境变量）' : '（管理员配置）';
+          box.textContent = `✅ 云端视觉服务已就绪${from}：${who}${r.model ? ' · ' + r.model : ''}`;
+          box.style.color = '#27ae60';
+        } else {
+          box.textContent = '使用本机离线 OCR（免费，无需任何 Key）；管理员配置云端视觉服务后自动启用。';
+          box.style.color = '';
+        }
+      } catch (e) { /* 状态属提示性质，失败不阻塞界面 */ }
+    }
+    renderVisionManaged();
 
     if (el.visionProvider) {
       el.visionProvider.innerHTML = '';
