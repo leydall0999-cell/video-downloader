@@ -11,7 +11,8 @@
 #   3b. test_matting_forward.py       —— 抠图 AI 推理前向链路（假 session 注入，不下载权重）
 #   4b. test_dewatermark_forward.py   —— 去水印 AI 推理前向链路（假 session 注入，不下载权重）
 #   5. test_convert_guards.py         —— 转换入口守卫（分片 id/排序、本地路径白名单）
-#   6. test_commentary_routes.py      —— 解说路由层（试听路径守卫、sidecar 推导、kind 白名单）
+#   6. test_commentary_routes.py      —— 解说路由层（试听路径守卫、sidecar 推导、kind 白名单、
+#                                         解说词字数/时长预检（防原速渲染静默截断旁白））
 #   7. test_codec_utils.py            —— LGPL 编码器选择（H.264/HEVC 降级链、GPL 红线）
 #   8. test_convert_pipeline.py       —— 转码管线决策 + 参数构造 + 真实转码端到端
 #   9. test_ffmpeg_tools.py           —— 媒体加工（裁剪注入防护、抽音频/封面/铃声/去水印）
@@ -62,6 +63,7 @@ run_one test_static_undefined_names.py
 run_one test_membership.py
 run_one test_member_quota_e2e.py
 run_one test_matting_member.py
+run_one test_subtitle_quota.py
 run_one test_quality_options.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
@@ -89,6 +91,9 @@ run_one test_download_wiring.py
 run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py
+run_one test_quota.py
+run_one test_llm_config_save.py
+run_one test_commentary_output_naming.py
 
 echo ""
 echo "========================================="

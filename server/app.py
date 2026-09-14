@@ -65,7 +65,9 @@ import torrent as torrent_mod
 from batch import BatchScheduler
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
-from llm_config import inject_llm_env, get_llm_config, save_llm_config, detect_ollama, PROVIDER_PRESETS, DEFAULT_PROVIDER
+from llm_config import (inject_llm_env, get_llm_config, save_llm_config, detect_ollama,
+                        PROVIDER_PRESETS, DEFAULT_PROVIDER,
+                        list_local_models, local_runtime_status, local_models_dir)
 from vision_config import (
     inject_vision_env, get_vision_config, save_vision_config,
     VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER, platform_status,
@@ -1135,9 +1137,15 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
                              bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18,
                              subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF",
                              subtitle_border: float = 1.0, subtitle_pos: str = "bottom",
-                             max_chars: int = 0) -> list:
-    """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。"""
+                             max_chars: int = 0, original_speed: bool = True) -> list:
+    """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。
+
+    original_speed=False → 带 `--no-original-speed`：渲染层改为按旁白时长放慢画面
+    （k = vdur/win）把窗口撑开，用于避免原速模式下旁白被 -t 静默截断。
+    """
     args = ["--commentary-type", commentary_type, "--highlight-source", highlight_source]
+    if not original_speed:
+        args.append("--no-original-speed")
     if style and style != "none":
         args += ["--style", style]
     if intro_highlight:
@@ -1185,7 +1193,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args += ["--max-chars", str(max_chars)]
     return args
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_pos: str = "bottom", max_chars: int = 0) -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -1264,7 +1272,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         bgm=bgm, bgm_file=bgm_file, bgm_volume=bgm_volume,
                                         subtitle_size=subtitle_size, subtitle_color=subtitle_color,
                                         subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
-                                        max_chars=max_chars)
+                                        max_chars=max_chars, original_speed=original_speed)
         if edit_only:
             if _bundled:
                 args = [sys.executable, "--vdl-commentary-worker",
@@ -1317,6 +1325,13 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             # 视觉理解与片头集数卡检测共用 VDL_VISION_* 配置；显式启用避免子进程因环境变量未设而跳过
             run_env["VDL_VISION_ENABLED"] = "1"
             run_env["VDL_INTRO_VISION_ENABLED"] = "1"
+        # 会员状态下传子进程：让管线侧配额闸门（quota.py）放行无限云端（VDL_IS_MEMBER=1）
+        try:
+            from routers.quota import _is_member
+            if _is_member(None):
+                run_env["VDL_IS_MEMBER"] = "1"
+        except Exception:
+            pass
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
@@ -1899,6 +1914,9 @@ class OpenPathRequest(BaseModel):
 class CommentaryRequest(BaseModel):
     task_id: str = Field(default="", max_length=64)
     file_id: str = Field(default="", max_length=2048)
+    # 片名锚点（可选）：显式传入时优先作为成片文件名前缀 `<title>-解说完成<时间>.mp4`。
+    # 本地拖拽上传（stash）场景由前端带上用户原始文件名，避免片名退化成 sha 哈希。
+    title: str = Field(default="", max_length=256)
     vertical: bool = False
     voice: str = Field(default="", max_length=64)
     trim_start: float = Field(default=0.0, ge=0.0)
@@ -1946,6 +1964,13 @@ class ScriptUpdateRequest(BaseModel):
 
 # 独立「解说成片」标签页：列出所有已生成成片，并支持按 id 直接下载/播放。
 # id 为成片绝对路径的 urlsafe base64，便于无状态回查且防止路径穿越。
+#
+# 成片目录里的「非成品」sidecar：渲染时 edit_ffmpeg 会在同目录额外落一份
+# `<成片名>.nomusic.mp4`（无音乐原片，供渲染后单独换/加背景音乐）。它跟成品
+# 同名只差后缀，若一起列进「解说历史」会出现两条同名记录、数量翻倍。
+# 列表接口按 stem 后缀统一剔除（未来若新增其它 sidecar，只在此追加即可）。
+_COMMENTARY_SIDECAR_STEMS = (".nomusic",)
+
 def _commentary_roots() -> list[Path]:
     """扫描两个可能的输出目录：HTTP 模式落地到 COMMENTARY_LOCAL_OUTPUT，
     本地模式落地到 COMMENTARY_DIR/output。"""
@@ -2044,8 +2069,74 @@ def _probe_video_title(src_path) -> str:
     except Exception:
         return ""
 
+
+def _probe_video_duration(src_path) -> float:
+    """用 ffprobe 读取视频总时长（秒）。失败/找不到 ffprobe → 返回 0.0（调用方按需 fail-open）。"""
+    try:
+        import json as _json
+        src_str = str(src_path)
+        if not src_str or not Path(src_str).exists():
+            return 0.0
+        path = os.environ.get("PATH", "") or ""
+        ffprobe_bin = shutil.which("ffprobe", path=path) or ""
+        if not ffprobe_bin:
+            try:
+                ffmpeg_dir = getattr(COMMENTARY_RT, "ffmpeg_dir", "") or ""
+                if ffmpeg_dir:
+                    ffprobe_bin = shutil.which("ffprobe", path=ffmpeg_dir + os.pathsep + path) or ""
+            except Exception:
+                pass
+        if not ffprobe_bin:
+            return 0.0
+        r = subprocess.run(
+            [ffprobe_bin, "-v", "quiet", "-print_format", "json",
+             "-show_entries", "format=duration", src_str],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0 or not r.stdout:
+            return 0.0
+        data = _json.loads(r.stdout)
+        dur = float((data.get("format") or {}).get("duration") or 0) or 0.0
+        return dur
+    except Exception:
+        return 0.0
+
 def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
-    """为解说任务推导剧名锚点：优先用下载任务的标题，否则退回源文件名（下载文件名通常含剧集名）。"""
+    """为解说任务推导「片名锚点」（最终会进成片文件名 `<片名>-解说完成<时间>.mp4`）。
+
+    优先级（2026-09-15 重排，修复成片名变 16 位乱码哈希）：
+      ① 调用方显式 title
+      ② 本地拖拽上传：stash 里登记的**用户原始文件名**（最贴近用户认知的片名）
+      ③ 下载任务标题（URL 解析结果，通常就是站内标题）
+      ④ 源文件名 stem（**必须过 _meaningful_stem**：upload/纯数字/哈希不许上片名）
+      ⑤ 视频自带 format.tags.title（ffprobe）
+      ⑥ v<6hex> 短码兜底
+    历史坑：旧实现最后一行直接 `Path(src_path).stem` 就返回，没有任何语义校验。
+    本地拖拽上传走 cache-by-hash 接收站，源文件是按 sha256 前 16 位命名的
+    `60e0adcf0f011d68.mp4` —— 于是这个哈希被当成片名写进了成片文件名，用户看到
+    「60e0adcf0f011d68-解说完成202609150032.mp4」，误以为是乱码。
+    """
+    # ① 显式 title（前端/接口透传的片名）
+    explicit = (getattr(payload, "title", "") or "").strip()
+    if explicit:
+        return explicit
+
+    # ② stash（本地拖拽上传）：用用户原始文件名；进程重启后索引 name 可能为空
+    _fid = (getattr(payload, "file_id", "") or "").strip()
+    if _fid.startswith("stash:"):
+        try:
+            _m = _stash_lookup(_fid[len("stash:"):]) or {}
+        except Exception:
+            _m = {}
+        _orig = (_m.get("name") or "").strip()
+        _stem = Path(_orig).stem if _orig else ""
+        if _meaningful_stem(_stem):
+            return _stem
+        _tag = _probe_video_title(_m.get("path") or src_path)
+        if _tag:
+            return _tag
+
+    # ③ 下载任务标题（含步骤详情反解 + URL 轻量重解析兜底）
     if getattr(payload, "task_id", ""):
         try:
             t = _require_task(payload.task_id)
@@ -2074,7 +2165,18 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
                     pass
         except Exception:
             pass
-    return Path(src_path).stem or ""
+
+    # ④ 源文件名（有语义才用）
+    _stem = Path(src_path).stem if src_path else ""
+    if _meaningful_stem(_stem):
+        return _stem
+    # ⑤ 视频自带标题标签
+    _tag = _probe_video_title(src_path)
+    if _tag and _meaningful_stem(_tag):
+        return _tag.strip()
+    # ⑥ 短码兜底：绝不把哈希/upload 直接当片名
+    import secrets as _secrets
+    return "v" + _secrets.token_hex(3)
 
 def _meaningful_stem(s: str) -> bool:
     """判断上传文件名 stem 是否「有语义、值得做片名前缀」。
@@ -2453,6 +2555,12 @@ class LLMConfigRequest(BaseModel):
     offpeak_only: bool = Field(default=False)
     local_priority: bool = Field(default=False)
     local_model: str = Field(default="", max_length=128)
+    # 本机 AI 引擎（MLX）字段。默认 None 表示「本次不修改」——旧版前端或
+    # 第三方调用不带这些字段时，不能把用户已配置好的本机引擎抹掉。
+    engine: str | None = Field(default=None, max_length=16)
+    mlx_model_path: str | None = Field(default=None, max_length=1024)
+    mlx_python: str | None = Field(default=None, max_length=1024)
+    mlx_max_tokens: int | None = Field(default=None, ge=-1, le=131072)
 
 class VisionConfigRequest(BaseModel):
     provider: str = Field(default="auto", max_length=32)
@@ -2877,6 +2985,8 @@ from routers import subscriptions as _subscriptions_rtr
 app.include_router(_subscriptions_rtr.router)
 from routers import membership as _membership_rtr
 app.include_router(_membership_rtr.router)
+from routers import quota as _quota_rtr
+app.include_router(_quota_rtr.router)
 from routers import auth as _auth_rtr
 app.include_router(_auth_rtr.router)
 from routers import admin as _admin_rtr

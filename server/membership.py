@@ -66,8 +66,10 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "original": 0,            # 免费不开放原画
     "batch_material": 0,      # 免费不开放批量
     "matting": 8,             # 免费本地抠图 8 次/日；云端火山抠图走积分，不占此配额
+    "subtitle": 2,            # 免费本地字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
 }
-UNLIMITED_QUOTA = ("comment", "data", "subtitle")
+# 字幕提取(subtitle) 自 2026-09-13 起改为免费 2 次/日（会员无限），不再列入不限配额
+UNLIMITED_QUOTA = ("comment", "data")
 
 # 会员权益内免费的 AI 资源描述（供 plans/status 展示）
 AI_FEATURES: list[str] = [
@@ -83,7 +85,7 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "video_parse",       "name": "视频解析",         "resource": "download", "unit": "次",   "free_limit": 10,  "member_limit": 1000, "ai_bonus": 0,  "credit_cost": 0},
     {"key": "plugin_original",   "name": "插件原画解析",     "resource": "original", "unit": "次",   "free_limit": 0,   "member_limit": 100,  "ai_bonus": 0,  "credit_cost": 0},
     {"key": "ai_subtitle",       "name": "AI字幕识别",       "resource": "ai_subtitle", "unit": "分钟", "free_limit": 0, "member_limit": 0, "ai_bonus": 30, "credit_cost": 5},
-    {"key": "subtitle_extract",  "name": "字幕提取",         "resource": "subtitle", "unit": "次",   "free_limit": 0, "member_limit": 0, "ai_bonus": 5,  "credit_cost": 5},
+    {"key": "subtitle_extract",  "name": "字幕提取",         "resource": "subtitle", "unit": "次",   "free_limit": 2, "member_limit": -1, "ai_bonus": 0, "credit_cost": 0},
     {"key": "batch_material",    "name": "插件批量下载素材", "resource": "batch_material", "unit": "条", "free_limit": 0, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
     {"key": "batch_comment",     "name": "插件批量下载评论", "resource": "comment",  "unit": "条",   "free_limit": -1,  "member_limit": -1,   "ai_bonus": 0,  "credit_cost": 0, "unlimited": True},
     {"key": "batch_data",        "name": "插件批量下载数据", "resource": "data",     "unit": "条",   "free_limit": -1,  "member_limit": -1,   "ai_bonus": 0,  "credit_cost": 0, "unlimited": True},

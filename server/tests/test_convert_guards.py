@@ -25,6 +25,8 @@
 """
 import os
 import sys
+import tempfile
+import uuid as _uuid
 from pathlib import Path
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +36,12 @@ if _SERVER_DIR not in sys.path:
 import app as server_app  # noqa: E402  先完成 app 初始化，避免 routers 循环导入
 from routers import convert as cv  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
+
+# 把上传暂存目录隔离到系统临时目录：① 不在仓库 downloads/uploads/ 留残留；
+# ② 构建期本机已累计大量删除动作，守护会在本测试的清理 unlink 上弹「批量删除确认」
+# 并直接拒绝，导致测试中断、构建自验证误判失败。指到 tmp 后不再命中仓库目录。
+server_app.UPLOAD_TMP = Path(tempfile.gettempdir()) / "vdl_test_uploads"
+server_app.UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------- 上传 id 正则
@@ -67,6 +75,15 @@ def test_upload_id_regex_rejects_path_chars():
 
 # ---------------------------------------------------------------- 分片命名与排序
 
+def _uniq(prefix: str) -> str:
+    """唯一 upload_id（8~64 位字母数字，满足 `_UPLOAD_ID_RE`）。
+
+    每次运行文件名全新，于是 `_cleanup_parts` 首次运行只会命中「不存在的文件」，
+    不产生真实删除动作——构建期守护的批量删除闸门就不会中途拦断本测试。
+    """
+    return f"{prefix}{_uuid.uuid4().hex[:8]}"
+
+
 def _cleanup_parts(upload_id: str):
     for p in cv._upload_parts(upload_id):
         try:
@@ -82,7 +99,7 @@ def test_upload_parts_sorted_numeric_beyond_nine():
     p1, p10, p11, …, p2 顺序合并（内容乱序的坏文件，且全程无报错）。
     32MB/片意味着 320MB 以上的视频必然触发，属高概率路径。
     """
-    uid = "testguard0001"
+    uid = _uniq("testguard")
     _cleanup_parts(uid)
     # 故意乱序写入，覆盖跨位数（9 -> 10）的进位点
     for i in [15, 0, 10, 2, 1, 9]:
@@ -97,7 +114,7 @@ def test_upload_parts_sorted_numeric_beyond_nine():
 
 def test_upload_parts_isolated_between_sessions():
     """不同 upload_id 的分片互不干扰——避免并发上传串味。"""
-    uid_a, uid_b = "testguardAAA1", "testguardBBB1"
+    uid_a, uid_b = _uniq("testguardA"), _uniq("testguardB")
     _cleanup_parts(uid_a)
     _cleanup_parts(uid_b)
     for i in range(3):

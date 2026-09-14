@@ -1907,14 +1907,17 @@
               <span data-page-node-id="v3coXl56GUSsg5mUtvzxST">避开峰时生成</span>
             </label>
             <hr class="adv-sep" style="margin:10px 0;border:none;border-top:1px solid #2a2f3a;" />
-            <label class="adv-checkbox-row" data-page-node-id="llmLocalPriorityRow">
-              <input id="llmLocalPriority" type="checkbox" data-page-node-id="llmLocalPriority" />
-              <span data-page-node-id="llmLocalPriorityTxt">本地优先（使用本机 Ollama，零成本）</span>
-            </label>
-            <div id="llmOllamaBox" hidden style="margin-top:4px;">
-              <div id="llmOllamaStatus" class="adv-hint" style="font-size:13px;line-height:1.5;"></div>
-              <label class="adv-label" for="llmLocalModel" data-page-node-id="llmLocalModelLbl">本机模型</label>
-              <select id="llmLocalModel" class="adv-input" data-page-node-id="llmLocalModel"></select>
+            <label class="adv-label" for="llmEngine" data-page-node-id="llmEngineLbl">本机 AI 引擎（免费 · 不消耗云端额度）</label>
+            <select id="llmEngine" class="adv-input" data-page-node-id="llmEngine">
+              <option value="auto" data-page-node-id="llmEngineAuto">自动：优先本机，不可用或失败时回落云端</option>
+              <option value="mlx" data-page-node-id="llmEngineMlx">仅本机：完全离线，不走云端</option>
+              <option value="cloud" data-page-node-id="llmEngineCloud">仅云端：使用上面配置的服务商</option>
+            </select>
+            <div id="llmMlxBox" hidden style="margin-top:6px;">
+              <div id="llmMlxStatus" class="adv-hint" style="font-size:13px;line-height:1.5;"></div>
+              <label class="adv-label" for="llmMlxModel" data-page-node-id="llmMlxModelLbl">本机模型</label>
+              <select id="llmMlxModel" class="adv-input" data-page-node-id="llmMlxModel"></select>
+              <div id="llmMlxHint" class="adv-hint" style="font-size:12px;line-height:1.5;margin-top:2px;"></div>
             </div>
           </section>
 
@@ -2185,9 +2188,53 @@
             <div class="com-generate-row" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
       <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" data-page-node-id="JPKaPDTzondWplp1ytN7S2">生成脚本（可审核修改）</button>
     </div>
+            <div id="comProgress" hidden data-page-node-id="jFzpwZ2tFFuxuHnd1JW18P">
+      <div class="com-progress-head" data-page-node-id="NXTJmE6FxZh5Tj1hy6GHOT">
+        <span id="comPhase" class="com-phase-tag" data-page-node-id="AzwHBbQvN7zWoWdKlGkrnd">转写中</span>
+        <span id="comPercent" class="com-percent" data-page-node-id="6muWVHbIRtlz0Rot5Rc1cD">0%</span>
+        <span id="comEta" class="com-eta" hidden data-page-node-id="P4D5nqU8w9pgdaLijfDzU3"></span>
+      </div>
+      <div id="comProgressBar" class="com-progress-bar" data-page-node-id="aiBtSEScc5YWBGFMnMcFXh">
+        <div id="comBarFill" class="com-bar-fill" style="width:0%" data-page-node-id="wHRqOHW8bbX7pVAn7zXeUI"></div>
+      </div>
+    </div>
+            <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
+      <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
+    </div>
+            <div id="comStepsPanel" class="com-steps-panel" hidden data-page-node-id="XPRhfobQSM0oMHSsGpleJw">
+      <div id="comStepsList" class="com-steps" data-page-node-id="QUOl8pMxfFqnkwEKf3rjUq"></div>
+      <details class="com-logs-wrap" data-page-node-id="t3FK165UWaHtDvHK6NjUO6">
+        <summary data-page-node-id="XjGgjJI37ZR7rKqIdjRIkQ">运行日志</summary>
+        <pre id="comLogs" class="com-logs" data-page-node-id="6wlomMN1vLbzztVRuFeapz"></pre>
+      </details>
+    </div>
+            <div id="comScriptPanel" hidden data-page-node-id="iwpV5BcROX7pwMACFFXb46">
+      <div class="com-script-head" data-page-node-id="ZKZOKzqfXdrmwDE35GFuWg">
+        <h3 data-page-node-id="wciBq4loFUDPGBkwJaCN22">✏️ 解说词审核</h3>
+        <div class="com-script-head-actions" data-page-node-id="WRFsDBVn8msLrndes6XtiK">
+          <label class="com-voice-label" data-page-node-id="ZUv86AIk1Cporv6YiKTlPj">全局配音：</label>
+          <select id="comScriptVoice" class="adv-input com-voice-select" data-page-node-id="6AbH5lGUCwonBNBrfHVZZ0"></select>
+          <button type="button" class="btn btn-sm btn-secondary" id="comScriptVoicePreview" data-page-node-id="EhxcizuEF3bVb1PTLZKMpS">▶ 试听</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="comScriptPrevAll" data-page-node-id="3TVo00ElmWlrcPPzktcXHp">预览全部</button>
+        </div>
+      </div>
+      <div id="comScriptSegments" class="com-script-segments" data-page-node-id="fsmcEMLoIoJpCRRpv0jITz"></div>
+      <!-- 真实的 <audio> 元素：pywebview 的 WebKit 对离屏 new Audio()/blob URL 支持不佳，
+           用 DOM 内元素 + data URL 播放更稳定。不能用 display:none，否则 WebKit 拒绝播放。 -->
+      <audio id="comAudioPreview" preload="auto" playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" data-page-node-id="UH41NHZXq20fibfP1N2yel"></audio>
+      <div class="com-script-actions" data-page-node-id="Udxf0wQe2CdRrhfOQ3PUCK">
+        <button type="button" class="btn btn-primary" id="comScriptSave" data-page-node-id="crWI8iTmHDBwbxGSZ6eZH0">💾 保存修改</button>
+        <button type="button" class="btn btn-success" id="comScriptRender" data-page-node-id="Vkv9cbHwjMQKrgFAADOIBz">🎬 生成成片</button>
+        <a class="btn btn-success btn-sm" id="comScriptFile" hidden download data-page-node-id="n1b6IuWwOrn8qMWPMk7Rmp">⬇ 保存到本机</a>
+        <span id="comScriptStatus" class="com-script-status" hidden data-page-node-id="g1ZyyPqcPlH6qVF7Mc1Xgp"></span>
+      </div>
+    </div>
             <div class="com-history" id="comHistory" data-page-node-id="aL27uBA4jmSVWj5Xi5k4SO">
-        <div class="com-grid" id="comGrid" data-page-node-id="XxMgstcH01okOqmUKEdECK"></div>
-        <p class="com-empty" id="comEmpty" hidden data-page-node-id="m6qsPBm1w0JuVk9HHOEXFx">还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
+        <!-- 2026-09-15 用户明确：本面板（解说历史 = 成片列表）必须是 com-bottom 的**最后**一块。
+             原因：页面从上到下就是工作流顺序「生成脚本 → 进度 → 步骤/日志 → 解说词审核 → 成片历史」，
+             历史是产物落点、天然在最后。此前它排在 comProgress 之前，导致「解说词审核」孤零零吊在页尾，
+             用户反馈「这个怎么在最后面呢，不应该是历史在最后面吗」。
+             ⚠️ 改动时勿再把本块前移；标题行 + 工具栏是本面板的第一个子元素（列表头，勿后置）。 -->
         <div class="com-history-head" data-page-node-id="HejiZXI2mP6UZDVhUeu8B6">
           <div class="com-history-title-wrap" data-page-node-id="wtdbMFhhPVmFdLxwoEXrVM">
             <h3 data-page-node-id="XfcDUBEM31G9M195DlqMtE">📂 解说历史 <span id="comHistoryCount" class="com-history-count" data-page-node-id="VBadUq9diV5hYYfSFfEs8r">0 个</span></h3>
@@ -2223,48 +2270,9 @@
           </div>
           </div>
         </div>
+        <div class="com-grid" id="comGrid" data-page-node-id="XxMgstcH01okOqmUKEdECK"></div>
+        <p class="com-empty" id="comEmpty" hidden data-page-node-id="m6qsPBm1w0JuVk9HHOEXFx">还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
       </div>
-            <div id="comProgress" hidden data-page-node-id="jFzpwZ2tFFuxuHnd1JW18P">
-      <div class="com-progress-head" data-page-node-id="NXTJmE6FxZh5Tj1hy6GHOT">
-        <span id="comPhase" class="com-phase-tag" data-page-node-id="AzwHBbQvN7zWoWdKlGkrnd">转写中</span>
-        <span id="comPercent" class="com-percent" data-page-node-id="6muWVHbIRtlz0Rot5Rc1cD">0%</span>
-        <span id="comEta" class="com-eta" hidden data-page-node-id="P4D5nqU8w9pgdaLijfDzU3"></span>
-      </div>
-      <div class="com-progress-bar" data-page-node-id="aiBtSEScc5YWBGFMnMcFXh">
-        <div id="comBarFill" class="com-bar-fill" style="width:0%" data-page-node-id="wHRqOHW8bbX7pVAn7zXeUI"></div>
-      </div>
-    </div>
-            <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
-      <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
-    </div>
-            <div id="comStepsPanel" class="com-steps-panel" hidden data-page-node-id="XPRhfobQSM0oMHSsGpleJw">
-      <div id="comStepsList" class="com-steps" data-page-node-id="QUOl8pMxfFqnkwEKf3rjUq"></div>
-      <details class="com-logs-wrap" data-page-node-id="t3FK165UWaHtDvHK6NjUO6">
-        <summary data-page-node-id="XjGgjJI37ZR7rKqIdjRIkQ">运行日志</summary>
-        <pre id="comLogs" class="com-logs" data-page-node-id="6wlomMN1vLbzztVRuFeapz"></pre>
-      </details>
-    </div>
-            <div id="comScriptPanel" hidden data-page-node-id="iwpV5BcROX7pwMACFFXb46">
-      <div class="com-script-head" data-page-node-id="ZKZOKzqfXdrmwDE35GFuWg">
-        <h3 data-page-node-id="wciBq4loFUDPGBkwJaCN22">✏️ 解说词审核</h3>
-        <div class="com-script-head-actions" data-page-node-id="WRFsDBVn8msLrndes6XtiK">
-          <label class="com-voice-label" data-page-node-id="ZUv86AIk1Cporv6YiKTlPj">全局配音：</label>
-          <select id="comScriptVoice" class="adv-input com-voice-select" data-page-node-id="6AbH5lGUCwonBNBrfHVZZ0"></select>
-          <button type="button" class="btn btn-sm btn-secondary" id="comScriptVoicePreview" data-page-node-id="EhxcizuEF3bVb1PTLZKMpS">▶ 试听</button>
-          <button type="button" class="btn btn-sm btn-ghost" id="comScriptPrevAll" data-page-node-id="3TVo00ElmWlrcPPzktcXHp">预览全部</button>
-        </div>
-      </div>
-      <div id="comScriptSegments" class="com-script-segments" data-page-node-id="fsmcEMLoIoJpCRRpv0jITz"></div>
-      <!-- 真实的 <audio> 元素：pywebview 的 WebKit 对离屏 new Audio()/blob URL 支持不佳，
-           用 DOM 内元素 + data URL 播放更稳定。不能用 display:none，否则 WebKit 拒绝播放。 -->
-      <audio id="comAudioPreview" preload="auto" playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" data-page-node-id="UH41NHZXq20fibfP1N2yel"></audio>
-      <div class="com-script-actions" data-page-node-id="Udxf0wQe2CdRrhfOQ3PUCK">
-        <button type="button" class="btn btn-primary" id="comScriptSave" data-page-node-id="crWI8iTmHDBwbxGSZ6eZH0">💾 保存修改</button>
-        <button type="button" class="btn btn-success" id="comScriptRender" data-page-node-id="Vkv9cbHwjMQKrgFAADOIBz">🎬 生成成片</button>
-        <a class="btn btn-success btn-sm" id="comScriptFile" hidden download data-page-node-id="n1b6IuWwOrn8qMWPMk7Rmp">⬇ 保存到本机</a>
-        <span id="comScriptStatus" class="com-script-status" hidden data-page-node-id="g1ZyyPqcPlH6qVF7Mc1Xgp"></span>
-      </div>
-    </div>
     </div>
   </section>
 

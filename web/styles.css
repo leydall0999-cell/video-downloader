@@ -2278,6 +2278,16 @@ img { max-width: 100%; display: block; }
 .com-generate-main { width: 100%; margin-top: .75rem; padding: .85rem; font-size: 1.05rem; font-weight: 700; }
 /* ---- 解说进度条 ---- */
 #comProgress { margin-top: .75rem; }
+/* 本机推理/云端生成等「阻塞调用、无确定进度数字」阶段：bar-fill 左右扫动，表明在跑只是没数字 */
+.com-progress-bar.is-indeterminate { overflow: hidden; }
+.com-progress-bar.is-indeterminate .com-bar-fill {
+  width: 40% !important;
+  animation: com-bar-sweep 1.1s ease-in-out infinite;
+}
+@keyframes com-bar-sweep {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
 .com-progress-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .3rem; }
 .com-phase-tag { font-size: .78rem; font-weight: 600; color: var(--brand); }
 .com-percent { font-size: .78rem; font-weight: 700; color: var(--text); }
@@ -2363,12 +2373,13 @@ img { max-width: 100%; display: block; }
 }
 .com-history-head {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
-  margin-top: .85rem; padding-top: .65rem;
-  border-top: 1px solid var(--line);
-  flex-wrap: wrap;
+  margin: 0 0 .6rem; padding: 0 0 .5rem;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: nowrap;
 }
 .com-history-title-wrap {
   display: flex; align-items: center; gap: .35rem;
+  flex: 0 0 auto; min-width: 0;
 }
 .com-history-head h3 {
   margin: 0; font-size: 1rem; color: var(--text);
@@ -2379,7 +2390,8 @@ img { max-width: 100%; display: block; }
   background: var(--bg-soft, #f3f4f6); padding: .15rem .5rem; border-radius: 999px;
 }
 .com-history-toolbar {
-  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  display: flex; align-items: center; gap: .6rem; flex-wrap: nowrap;
+  flex: 1 1 auto; justify-content: flex-end; min-width: 0;
 }
 .com-view-toggle {
   display: inline-flex; align-items: center;
@@ -2607,16 +2619,20 @@ img { max-width: 100%; display: block; }
   flex: 1; padding: .85rem 1rem; font-size: 1rem; font-weight: 700;
   border-radius: var(--radius-md);
 }
+/* 2026-09-14 用户反馈「不好找」：原本是白底浅边（--surface + --line），
+   跟周围卡片几乎融在一起，作为本页主操作入口太弱。改为主色高亮（与 .btn-primary 同款渐变），
+   一眼可见、与「生成成片」等主操作保持同一套视觉语言。 */
 .com-generate-row .com-generate-secondary {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--line);
-  font-weight: 600;
+  background: linear-gradient(135deg, var(--brand), #6366f1);
+  color: #fff;
+  border: 1px solid transparent;
+  font-weight: 700;
+  box-shadow: 0 8px 18px rgba(79, 70, 229, .26);
 }
-.com-generate-row .com-generate-secondary:hover {
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+.com-generate-row .com-generate-secondary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--brand-strong), #5457ea);
 }
+.com-generate-row .com-generate-secondary:active:not(:disabled) { transform: translateY(1px); }
 /* ---- 剪辑选项面板（六类方案·紧凑分段控件） ---- */
 .com-opts {
   display: block;
@@ -2967,6 +2983,19 @@ img { max-width: 100%; display: block; }
   font-size: .72rem; color: var(--warning, #b45309);
   background: rgba(245,158,11,.1); padding: .05rem .35rem; border-radius: 4px;
 }
+/* 字数 / 时长预算提示：超预算时转红加粗——原速渲染会把超出的旁白截断 */
+.com-seg-count {
+  margin-left: auto; font-size: .72rem; color: var(--text-mute);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.com-seg-count.over {
+  color: var(--danger, #dc2626); font-weight: 700;
+  background: rgba(220,38,38,.08); padding: .05rem .35rem; border-radius: 4px;
+}
+.com-seg-text.over {
+  border-color: var(--danger, #dc2626) !important;
+  box-shadow: 0 0 0 2px rgba(220,38,38,.12);
+}
 .com-seg-text {
   width: 100%; box-sizing: border-box; resize: vertical;
   font-size: .88rem; line-height: 1.5;
@@ -2980,6 +3009,7 @@ img { max-width: 100%; display: block; }
 }
 .com-script-ok { color: var(--success, #16a34a); }
 .com-script-err { color: var(--danger, #dc2626); }
+.com-script-warn { color: var(--warning, #b45309); font-weight: 600; }
 
 /* ---- 页脚构建指纹：便于确认跑的是不是最新版 ---- */
 .app-footer {
@@ -3852,6 +3882,13 @@ img { max-width: 100%; display: block; }
   margin-right: .3rem;
   width: auto;                  /* 基础样式是 width:100%，加了左右 margin 会右溢 9.6px 被裁掉 */
   padding-left: .6rem;          /* = .sidebar-group-title 的左内距，图标与分组 emoji 同列 */
+  /* 2026-09-14 纵向节奏对齐（用户反馈「首页按钮太细」）：
+     首页是顶级入口，紧挨着「下载」等分组行，高度必须同高，否则选中胶囊看着矮一截。
+       分组行 = 26px 图标 + .55rem/.45rem 内距(16px) + 1px 上边框 ≈ 43px
+       首页原 = 26px 图标 + .4rem/.4rem  内距(12.8px) + 2px 上下边框 ≈ 41px  ← 明显偏矮
+     这里把首页的上下内距补到 ≈15px，总高对齐到 ≈43px。只调纵向，不动横向与配色。 */
+  padding-top: .5rem;
+  padding-bottom: .45rem;
 }
 .sidebar-item.sidebar-home .sidebar-item-icon {
   display: inline-grid !important;   /* 覆盖「子项去图标」，需与上面的 !important 同权重+更高特异性 */

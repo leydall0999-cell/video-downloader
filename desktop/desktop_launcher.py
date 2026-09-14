@@ -509,6 +509,75 @@ class VdlApi:
         except Exception as exc:  # 把错误回传前端展示
             return {"ok": False, "msg": f"启动失败：{exc}"}
 
+    def start_qwen3tts(self) -> dict:
+        """选中「Qwen3-TTS 本地语音克隆」引擎时由前端自动调用：拉起本机 7871 服务。
+
+        与 IndexTTS-MLX 同思路：在常见位置找启动脚本与 venv，起服务，返回大白话结果。
+        找不到/启动失败时给可操作提示，不抛未捕获异常。
+        """
+        import os
+        import socket
+        import subprocess
+
+        dev_root = os.path.expanduser("~/WorkBuddy/问问题/commentary-pipeline")
+        c_dir = os.environ.get("VDL_COMMENTARY_DIR", "")
+        script_cands = [
+            os.path.join(str(BASE), "commentary", "scripts", "start_qwen3tts_server.py"),
+            os.path.join(c_dir, "scripts", "start_qwen3tts_server.py") if c_dir else None,
+            os.path.join(dev_root, "scripts", "start_qwen3tts_server.py"),
+        ]
+        script = next((s for s in script_cands if s and os.path.isfile(s)), None)
+        if not script:
+            return {
+                "ok": False,
+                "msg": "没找到 Qwen3-TTS 启动脚本（应在 commentary/scripts/start_qwen3tts_server.py）。请确认解说管线已安装。",
+            }
+
+        venv_cands = [
+            os.path.join(os.path.dirname(script), ".venv_qwen3tts", "bin", "python"),
+            os.path.join(dev_root, "scripts", ".venv_qwen3tts", "bin", "python"),
+            os.path.join(c_dir, "scripts", ".venv_qwen3tts", "bin", "python") if c_dir else None,
+        ]
+        py = next((p for p in venv_cands if p and os.path.isfile(p)), None)
+        if not py:
+            return {
+                "ok": False,
+                "msg": "没找到 Qwen3-TTS 的 Python 环境（.venv_qwen3tts）。请先安装 qwen-tts。",
+            }
+
+        # 已在运行则直接返回就绪，不重复起
+        try:
+            with socket.create_connection(("127.0.0.1", 7871), timeout=1):
+                return {"ok": True, "msg": "Qwen3-TTS 服务已在运行，可直接使用。"}
+        except Exception:
+            pass
+
+        try:
+            log_path = os.path.expanduser("~/Library/Logs/qwen3tts_server.log")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            with open(log_path, "a") as lf:
+                subprocess.Popen(
+                    [py, script, "--host", "127.0.0.1", "--port", "7871"],
+                    stdout=lf,
+                    stderr=lf,
+                    start_new_session=True,
+                )
+            return {
+                "ok": True,
+                "msg": "已开始启动 Qwen3-TTS 服务，约 25 秒后「配音引擎」状态会变绿（已就绪），即可用你的克隆声。",
+            }
+        except Exception as exc:
+            return {"ok": False, "msg": f"启动失败：{exc}"}
+
+    def stop_qwen3tts(self) -> dict:
+        """切走「Qwen3-TTS 本地语音克隆」引擎时由前端自动调用：停掉本机 7871 服务，省内存。"""
+        import subprocess
+        try:
+            subprocess.run(["pkill", "-f", "start_qwen3tts_server.py"], check=False)
+            return {"ok": True, "msg": "已停止 Qwen3-TTS 本地服务（切换其他引擎时自动释放）。"}
+        except Exception as exc:
+            return {"ok": False, "msg": f"停止失败：{exc}"}
+
     def save_commentary_file(self, job_id: str, filename: str) -> str:
         import requests
         from pathlib import Path

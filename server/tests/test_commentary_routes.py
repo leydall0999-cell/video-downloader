@@ -25,6 +25,7 @@
     cd server && python tests/test_commentary_routes.py
     cd server && python -m pytest tests/test_commentary_routes.py -v
 """
+import json
 import os
 import shutil
 import sys
@@ -222,6 +223,123 @@ def test_commentary_config_get_returns_dict():
     print("✅ 解说配置读取端点正常返回 dict")
 
 
+# ---------------------------------------------------------------- 字数 / 时长预检
+#
+# 背景：渲染层原速模式下 out_dur = end - start，ffmpeg 以 -t 收尾，
+# 旁白超出窗口会被静默截断；而生成端提示词并未按时长约束字数（"约 40~70 字…不用怕写长"），
+# 人工改长后无兜底。故在此校验预算计算与保存回传的 over_limit。
+
+@contextmanager
+def _script_job(segments):
+    """造一个 script_ready 的假任务（script.json 落临时目录），用完清理。"""
+    tmp = tempfile.mkdtemp(prefix="vdl_scriptjob_")
+    job_id = "job-narration-budget"
+    p = Path(tmp) / "script.json"
+    p.write_text(json.dumps({"title": "t", "voice": "v", "segments": segments},
+                            ensure_ascii=False), encoding="utf-8")
+    server_app.commentary_jobs[job_id] = {
+        "status": "script_ready", "script_path": str(p), "voice": "v"}
+    try:
+        yield job_id, p
+    finally:
+        server_app.commentary_jobs.pop(job_id, None)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_narration_budget_scales_with_duration():
+    """10 秒窗口 @5 字/秒 = 50 字；预算随时长线性变化。"""
+    assert cm._narration_budget(0, 10) == 50, "10s 应给出 50 字预算"
+    assert cm._narration_budget(5, 9) == 20, "4s 应给出 20 字预算"
+    print("✅ 字数预算随时长线性计算")
+
+
+def test_narration_budget_zero_when_duration_unusable():
+    """时长缺失/为 0/为负 → 返回 0（表示不校验，而不是给出误导性预算）。"""
+    assert cm._narration_budget(None, None) == 0
+    assert cm._narration_budget(5, 5) == 0, "零时长不应给出预算"
+    assert cm._narration_budget(10, 4) == 0, "负时长不应给出预算"
+    assert cm._narration_budget("x", "y") == 0, "非法值应兜底为 0"
+    print("✅ 时长不可用时不校验（返回 0）")
+
+
+def test_narration_chars_ignores_whitespace_but_keeps_punctuation():
+    """计字口径：去空白，标点保留（朗读同样占时长）。"""
+    assert cm._narration_chars("你好世界") == 4
+    assert cm._narration_chars(" 你好\n 世界 ") == 4, "空白应被排除"
+    assert cm._narration_chars("你好，世界！") == 6, "标点应计入"
+    assert cm._narration_chars(None) == 0
+    print("✅ 计字口径正确（去空白、保留标点）")
+
+
+def test_update_script_reports_over_limit():
+    """保存后回传超标段：10s 窗口塞 80 字 → 命中 over_limit。"""
+    with _script_job([{"start": 0, "end": 10, "narration": "短句"}]) as (job_id, path):
+        long_text = "这" * 80
+        res = cm.update_script(job_id, server_app.ScriptUpdateRequest(
+            segments=[{"start": 0, "end": 10, "narration": long_text}]))
+        assert res["status"] == "updated"
+        over = res.get("over_limit") or []
+        assert len(over) == 1, f"应有 1 段超长，实际 {over}"
+        assert over[0]["index"] == 1, "段序号应为 1-based"
+        assert over[0]["chars"] == 80 and over[0]["budget"] == 50, f"明细不符: {over[0]}"
+        # 写回已生效（不能只报不存）
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert saved["segments"][0]["narration"] == long_text
+    print("✅ 超标段被检出并回传（且已写回 script.json）")
+
+
+def test_update_script_no_over_limit_when_within_budget():
+    """字数在预算内 → over_limit 为空数组（不是 None，前端直接 .length 安全）。"""
+    with _script_job([{"start": 0, "end": 10, "narration": "短句"}]) as (job_id, _p):
+        res = cm.update_script(job_id, server_app.ScriptUpdateRequest(
+            segments=[{"start": 0, "end": 10, "narration": "二十字以内的短解说词"}]))
+        assert res.get("over_limit") == [], f"应为 []，实际 {res.get('over_limit')!r}"
+    print("✅ 未超时 over_limit 为空数组")
+
+
+# ---------------------------------------------------------------- 渲染前统一预检（方案 B）
+#
+# 无论脚本有没有被人工改过，渲染前都校验一遍；检出超标段则自动放弃原速，
+# 让渲染层放慢画面把窗口撑开（k = vdur/win），而不是让 -t 把旁白截断。
+
+def test_option_args_emits_no_original_speed_flag():
+    """original_speed=False → 带 --no-original-speed；默认不得误带。"""
+    assert "--no-original-speed" in server_app._commentary_option_args(original_speed=False)
+    assert "--no-original-speed" not in server_app._commentary_option_args(), \
+        "默认必须保持原速，不能误加该 flag"
+    print("✅ 原速开关正确翻译成 CLI flag")
+
+
+def test_plan_original_speed_keeps_original_when_within_budget():
+    """字数在预算内 → 保持原速，over_limit 为空。"""
+    use, over = cm._plan_original_speed([{"start": 0, "end": 10, "narration": "二十字以内"}])
+    assert use is True and over == []
+    print("✅ 未超长时保持原速")
+
+
+def test_plan_original_speed_auto_disabled_when_over_limit():
+    """检出超标段 → 自动放弃原速（宁可画面放慢，也不出截断的残片）。"""
+    use, over = cm._plan_original_speed([{"start": 0, "end": 10, "narration": "这" * 80}])
+    assert use is False, "超长时必须放弃原速，否则旁白会被 -t 截断"
+    assert len(over) == 1 and over[0]["index"] == 1
+    print("✅ 超长时自动放弃原速（防截断）")
+
+
+def test_plan_original_speed_respects_existing_preference():
+    """本就非原速时，即使超长也不能被反向改回原速。"""
+    use, over = cm._plan_original_speed([{"start": 0, "end": 10, "narration": "这" * 80}],
+                                        prefer_original_speed=False)
+    assert use is False and len(over) == 1
+    print("✅ 已非原速时不会被反向改回")
+
+
+def test_plan_original_speed_skips_when_no_duration():
+    """时长缺失 → 不校验（不产生误报），保持原速。"""
+    use, over = cm._plan_original_speed([{"start": None, "end": None, "narration": "这" * 200}])
+    assert use is True and over == []
+    print("✅ 无时长信息时不误报")
+
+
 if __name__ == "__main__":
     test_bgm_preview_path_none_without_sidecar()
     test_bgm_preview_path_resolves_sidecar()
@@ -239,4 +357,16 @@ if __name__ == "__main__":
 
     test_commentary_config_get_returns_dict()
 
-    print("\n🎉 解说路由层测试全部通过（12 项）")
+    test_narration_budget_scales_with_duration()
+    test_narration_budget_zero_when_duration_unusable()
+    test_narration_chars_ignores_whitespace_but_keeps_punctuation()
+    test_update_script_reports_over_limit()
+    test_update_script_no_over_limit_when_within_budget()
+
+    test_option_args_emits_no_original_speed_flag()
+    test_plan_original_speed_keeps_original_when_within_budget()
+    test_plan_original_speed_auto_disabled_when_over_limit()
+    test_plan_original_speed_respects_existing_preference()
+    test_plan_original_speed_skips_when_no_duration()
+
+    print("\n🎉 解说路由层测试全部通过（22 项）")

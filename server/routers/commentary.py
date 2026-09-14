@@ -11,6 +11,80 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# 解说词「字数 vs 片段时长」预检
+#
+# 背景：渲染层（commentary-pipeline/scripts/edit_ffmpeg.py）的原速模式下
+#   out_dur = win = end - start，ffmpeg 以 `-t out_dur` 收尾，
+#   **旁白超出窗口的部分会被直接截断**（见该函数 1911-1918 行注释：
+#   "窗口在调用方已保证 ≥ 旁白时长"）。而这个"保证"来自生成端 LLM 自觉控字数
+#   ——提示词里写的是"约 40~70 字…不用怕写长"，并未按时长硬性约束。
+#   人工在审核面板改长之后，这个前提即失效，且全链路无兜底。
+#
+# 因此在这里给出估算预算，供审核面板实时提示、渲染前自查，避免产出"话说一半被切"的废片。
+# ---------------------------------------------------------------------------
+
+# 中文 TTS 常规语速估算（字/秒）。生成端无同款常量，故在此定义并作为唯一数据源，
+# 前端不再自行猜测语速，改用本模块返回的 budgets。
+NARRATION_CHARS_PER_SEC = 5.0
+
+
+def _narration_budget(start, end, cps=NARRATION_CHARS_PER_SEC) -> int:
+    """按片段可用时长估算「装得下多少字」。
+
+    时长缺失/非法/非正 → 返回 0，表示「不校验」（而不是给出误导性的预算）。
+    """
+    try:
+        dur = float(end) - float(start)
+    except (TypeError, ValueError):
+        return 0
+    if dur <= 0:
+        return 0
+    return max(1, int(dur * cps))
+
+
+def _narration_chars(text) -> int:
+    """解说词计字：去空白后长度。
+
+    标点同样占用朗读时长，故计入；仅排除纯空白（含换行缩进）。
+    """
+    return len("".join(str(text or "").split()))
+
+
+def _narration_over_limit(segments: list) -> list:
+    """挑出「字数超过该片段时长预算」的段，供保存时回传给前端告警。
+
+    返回 [{"index": 1-based, "chars": 实际字数, "budget": 预算字数}, ...]。
+    """
+    out = []
+    for i, seg in enumerate(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        budget = _narration_budget(seg.get("start", 0), seg.get("end", 0))
+        if not budget:
+            continue
+        n = _narration_chars(seg.get("narration", ""))
+        if n > budget:
+            out.append({"index": i + 1, "chars": n, "budget": budget})
+    return out
+
+
+def _plan_original_speed(segments: list, prefer_original_speed: bool = True):
+    """渲染前预检：决定本次渲染要不要保持原速。
+
+    原速模式下 out_dur = end - start（固定），ffmpeg 以 -t 收尾，
+    **超出窗口的旁白会被静默截断**（"话说一半被掐断"）。
+    关闭原速后，渲染层按旁白时长放慢画面（k = vdur / win）把窗口撑开，旁白不丢。
+
+    取舍：宁可画面轻微放慢，也不出残缺品——所以检出超标段时自动放弃原速。
+
+    返回 (use_original_speed: bool, over_limit: list)。
+    """
+    over = _narration_over_limit(segments)
+    if over and prefer_original_speed:
+        return False, over
+    return bool(prefer_original_speed), over
+
 
 @router.get("/api/commentary/config")
 def commentary_config_get() -> dict:
@@ -229,6 +303,16 @@ def create_commentary_upload(
     finally:
         file.file.close()
 
+    # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
+    try:
+        from routers.quota import assert_upload_allowed
+        _dur = app._probe_video_duration(dest)
+        assert_upload_allowed(None, _dur)
+    except app.HTTPException:
+        raise
+    except Exception:
+        pass
+
     job_id = app.uuid.uuid4().hex[:12]
     # 片名前缀优先级（用户 2026-08-25 明确）：显式 title → 上传前的名字(有意义时)
     # → ffprobe 读 mp4 自带标题 → v<6hex> 短码。
@@ -304,6 +388,16 @@ def create_script_only_upload(
     finally:
         file.file.close()
 
+    # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
+    try:
+        from routers.quota import assert_upload_allowed
+        _dur = app._probe_video_duration(dest)
+        assert_upload_allowed(None, _dur)
+    except app.HTTPException:
+        raise
+    except Exception:
+        pass
+
     job_id = app.uuid.uuid4().hex[:12]
     src_path = str(dest)
     # 片名前缀优先级（用户 2026-08-25 明确）：显式 title → 上传前的名字(有意义时)
@@ -374,6 +468,12 @@ def commentary_list() -> dict:
     for root in app._commentary_roots():
         for p in root.iterdir():
             if not p.is_file() or p.suffix.lower() not in (".mp4", ".mkv", ".mov", ".webm"):
+                continue
+            # 只列「成品」：渲染时会在同目录额外落一份无音乐原片 sidecar
+            # `<成片名>.nomusic.mp4`（供渲染后单独换/加背景音乐），它不是独立成片。
+            # 2026-09-15 用户反馈：历史里出现「...-解说完成2026...nomusic.mp4」两条同名记录，
+            # 且数量翻倍 —— 根因就是这里把 sidecar 也当成了成片。按 stem 后缀剔除。
+            if p.stem.lower().endswith(app._COMMENTARY_SIDECAR_STEMS):
                 continue
             key = str(p.resolve())
             if key in seen:
@@ -614,9 +714,14 @@ def get_script(job_id: str) -> dict:
         data = app.json.loads(script_path.read_text(encoding="utf-8"))
     except Exception as e:
         raise app.HTTPException(status_code=500, detail=f"读取脚本文件失败：{e}")
+    segs = data.get("segments", [])
+    # 每段「按可用时长估算能装多少字」，交给审核面板做实时提示。
+    # 语速常量只在本模块定义，前端不再自行猜测，避免两端口径分叉。
+    budgets = [_narration_budget(s.get("start", 0), s.get("end", 0))
+               if isinstance(s, dict) else 0 for s in segs]
     return {"job_id": job_id, "title": data.get("title", ""),
             "voice": data.get("voice", ""),
-            "segments": data.get("segments", []), "segment_count": len(data.get("segments", []))}
+            "segments": segs, "segment_count": len(segs), "budgets": budgets}
 
 @router.put("/api/commentary/script/{job_id}")
 def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
@@ -669,7 +774,11 @@ def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
         with app._commentary_lock:
             app.commentary_jobs[job_id]["voice"] = payload.voice
 
-    return {"job_id": job_id, "status": "updated", "segment_count": len(payload.segments)}
+    # 超长预检：原速模式渲染时（out_dur = end - start，ffmpeg -t 收尾）
+    # 超出预算的旁白会被静默截断，故保存后回传告警，让用户在渲染前就知道。
+    over_limit = _narration_over_limit(merged)
+    return {"job_id": job_id, "status": "updated",
+            "segment_count": len(payload.segments), "over_limit": over_limit}
 
 @router.post("/api/commentary/render/{job_id}")
 def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form(""),
@@ -711,11 +820,17 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
         if not title:
             import secrets as _secrets
             title = "v" + _secrets.token_hex(3)
+    seg_data = {}
     try:
-        seg_data = app.json.loads(app.Path(script_path).read_text(encoding="utf-8"))
+        seg_data = app.json.loads(app.Path(script_path).read_text(encoding="utf-8")) or {}
         saved = seg_data.get("options") or {}
     except Exception:
         saved = {}
+
+    # 渲染前统一预检：不管脚本有没有被人工改过，都按「字数 vs 片段时长」校验一遍。
+    # 检出超标段时自动放弃原速（改为放慢画面把窗口撑开），避免旁白被 -t 静默截断。
+    use_original_speed, over_limit = _plan_original_speed(seg_data.get("segments") or [])
+    auto_adjusted = bool(over_limit) and not use_original_speed
 
     commentary_type = saved.get("commentary_type", "deep_hl")
     highlight_source = saved.get("highlight_source", "ai")
@@ -742,7 +857,9 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
         app.commentary_jobs[render_job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                           "parent_script_job": job_id, "steps": [], "logs": [],
                                           "src_path": src_path, "title": title,
-                                          "src_filename": src_filename}
+                                          "src_filename": src_filename,
+                                          # 预检结论留档，便于前端轮询/事后排查
+                                          "auto_adjusted": auto_adjusted, "over_limit": over_limit}
     v = voice or job.get("voice", "") or app.COMMENTARY_VOICE
     app.executor.submit(app._commentary_run, render_job_id, src_path, vertical, v, edit_only=script_path,
                     trim_start=trim_start, trim_end=trim_end,
@@ -758,8 +875,10 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     subtitle_size=subtitle_size, subtitle_color=subtitle_color,
                     subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
                     max_chars=max_chars,
-                    export_jianying=export_jianying)
-    return {"job_id": render_job_id, "status": "running", "script_job": job_id}
+                    export_jianying=export_jianying,
+                    original_speed=use_original_speed)
+    return {"job_id": render_job_id, "status": "running", "script_job": job_id,
+            "over_limit": over_limit, "auto_adjusted": auto_adjusted}
 
 
 def _run_remux_bgm(remux_id: str, output_path: str, bgm: str, bgm_file: str,

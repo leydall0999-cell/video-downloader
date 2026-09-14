@@ -398,6 +398,12 @@
     llmModel: $('llmModel'),
     llmReasoningEffort: $('llmReasoningEffort'),
     llmOffpeakOnly: $('llmOffpeakOnly'),
+    // 本机 AI 引擎（MLX）选择器：引擎档位 + 本机模型下拉
+    llmEngine: $('llmEngine'),
+    llmMlxBox: $('llmMlxBox'),
+    llmMlxStatus: $('llmMlxStatus'),
+    llmMlxModel: $('llmMlxModel'),
+    llmMlxHint: $('llmMlxHint'),
     // 视觉模型（片头检测 & 视觉理解共用）
     visionProvider: $('visionProvider'),
     visionApiKey: $('visionApiKey'),
@@ -458,7 +464,11 @@
     comPhase: $('comPhase'),
     comPercent: $('comPercent'),
     comBarFill: $('comBarFill'),
-    comStatus: $('comStatus'),
+    comProgressBar: $('comProgressBar'),
+    // #comStatus 在解说面板改版时被移除，状态行已统一为 #comFileStatus（class="com-status"）。
+    // 旧引用还散落在 20+ 处，直接访问 null 会抛 TypeError，被全局 onerror 捕获后弹「启动错误」红条
+    // （用户点「生成脚本」时症状最明显）。这里兜底到真实元素，一处修好全部引用。
+    comStatus: $('comStatus') || $('comFileStatus'),
     comReviewActions: $('comReviewActions'),
     comLoudness: $('comLoudness'),
     comLoudnessVal: $('comLoudnessVal'),
@@ -4408,7 +4418,7 @@
     const f = el.sbFileInput.files && el.sbFileInput.files[0];
     if (f) { el.sbFileLabel.textContent = f.name + '（网页模式暂不支持，请在桌面版使用）'; el.sbStartBtn.disabled = true; }
   });
-  el.sbStartBtn.addEventListener('click', () => {
+  const sbStartExtract = () => {
     if (!sbState.path) return;
     el.sbResult.hidden = true;
     el.sbProgressWrap.hidden = false;
@@ -4428,7 +4438,28 @@
       sbSetStatus('排队中…');
       if (sbState.timer) clearInterval(sbState.timer);
       sbState.timer = setInterval(sbPoll, 2000);
-    }).catch(err => sbSetStatus('提交失败：' + (err && err.message || err)));
+    }).catch(err => {
+      const _d = (err && err.message) || '';
+      if (_d.indexOf('MEMBER_QUOTA|') === 0) {
+        // 字幕提取免费日配额耗尽：弹会员中心 + 引导充值（与抠图/下载流一致）
+        const tip = _d.split('|').slice(1).join('|') || '今日字幕提取免费额度已用尽';
+        try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+        sbSetStatus('提交失败：' + tip);
+      } else {
+        sbSetStatus('提交失败：' + _d);
+      }
+    });
+  };
+  el.sbStartBtn.addEventListener('click', () => {
+    // 🔐 登录门禁（与下载流一致）：未登录先弹登录/注册，成功后自动继续提取
+    if (!authToken()) {
+      try { window._pendingSubtitleExtract = true; } catch (_) {}
+      sbSetStatus('请先登录或注册账号，即可开始提取字幕');
+      _authMsg('请先登录或注册账号，即可开始提取字幕', true);
+      openAuthModal();
+      return;
+    }
+    sbStartExtract();
   });
   el.sbDlSrt.addEventListener('click', () => sbSave('srt'));
   el.sbDlTxt.addEventListener('click', () => sbSave('txt'));
@@ -8375,7 +8406,8 @@ el.dwVidPlayer.removeAttribute('src');
       if (status.qwen3tts_ready) {
         comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
       } else {
-        comSetTtsStatusBar('orange', '本机 Qwen3-TTS 服务(7871)未启动：选中后将自动回退 edge-tts，或先启动本机服务再用');
+        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：选中后自动启动中（约 25 秒），稍候即可用你的克隆声');
+        comEnsureQwen3Tts(); // 默认引擎即被选中 → 自动起服务（选中即起）
       }
     } else {
       comHideTtsStatusBar();
@@ -8399,6 +8431,55 @@ el.dwVidPlayer.removeAttribute('src');
     } catch (_e) {
       // 自动启动失败保持静默，选项维持置灰，状态条已说明
     }
+  };
+
+  /** 选中 Qwen3-TTS 时自动拉起本机 7871 服务（选中即起、未选中即停）。
+   *  _ttsQwenStarting 防止页面加载/连续刷新时重复 Popen 起多个实例。 */
+  let _ttsQwenStarting = false;
+  const comEnsureQwen3Tts = async () => {
+    if (_ttsQwenStarting) return;
+    // 先看是否已就绪，避免重复起
+    try {
+      const pre = await request('/api/commentary/tts-status');
+      if (pre && pre.qwen3tts_ready) return;
+    } catch (_) { /* 忽略，继续尝试启动 */ }
+    const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.startQwen3Tts;
+    if (typeof fn !== 'function') return; // 无原生桥（web 版）则跳过，维持回退 edge-tts
+    _ttsQwenStarting = true;
+    try {
+      const res = await fn();
+      if (!res || !res.ok) {
+        if (res && res.msg) comSetTtsStatusBar('orange', res.msg);
+        _ttsQwenStarting = false;
+        return;
+      }
+      comSetTtsStatusBar('orange', '正在启动 Qwen3-TTS 本地语音克隆服务（约 25 秒）…');
+      let tries = 0;
+      const tick = async () => {
+        tries++;
+        try {
+          const st = await request('/api/commentary/tts-status');
+          if (st && st.qwen3tts_ready) {
+            comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
+            _ttsQwenStarting = false;
+            return;
+          }
+        } catch (_) { /* 忽略 */ }
+        if (tries < 30) setTimeout(tick, 2500);
+        else { comSetTtsStatusBar('orange', '本地服务启动较慢，可稍后刷新页面查看状态'); _ttsQwenStarting = false; }
+      };
+      setTimeout(tick, 2500);
+    } catch (_) {
+      _ttsQwenStarting = false;
+    }
+  };
+
+  /** 切到别的引擎时停掉 Qwen3-TTS 本机服务，释放内存。 */
+  const comAutoStopQwen3Tts = async () => {
+    try {
+      const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.stopQwen3Tts;
+      if (typeof fn === 'function') await fn();
+    } catch (_) { /* 忽略 */ }
   };
 
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
@@ -8485,6 +8566,19 @@ el.dwVidPlayer.removeAttribute('src');
     return res.id;
   };
 
+  /**
+   * 从用户选中的本地文件名推导「片名前缀」（去掉扩展名）。
+   * 无意义名（upload / VID_xxx / 纯数字 / 16 位哈希）返回空串，交后端走
+   * ffprobe 标题 → v<6hex> 短码兜底，避免哈希名直接写成片名。
+   */
+  const comTitleFromFileName = (name) => {
+    const stem = String(name || '').replace(/\.[^.]+$/, '').trim();
+    if (!stem || /^upload$/i.test(stem) || /^\d+$/.test(stem)) return '';
+    if (/^[0-9a-fA-F]{12,32}$/.test(stem)) return '';
+    if (/^(vid|img|mov|dji|gopr|dsc)[_-]?[0-9]+$/i.test(stem)) return '';
+    return stem;
+  };
+
   // ---- 脚本审核模式 ----
 
   /** 从媒体库创建脚本-only 任务 */
@@ -8526,8 +8620,13 @@ el.dwVidPlayer.removeAttribute('src');
       const stashId = await stashLocalFile(file, (msg) => { el.comStatus.textContent = msg; });
       // 第二步：拿 stash_id 走 JSON 路径，跟下载库 file_id 完全等价
       const opts = comGetOptions();
+      // 片名锚点：显式带上用户原始文件名（去扩展名），成片名才会是
+      // 「<原片名>-解说完成<时间>.mp4」而不是 stash 的 sha 哈希。
+      // 后端 _commentary_title 也会从 stash 索引里取原名，但那份索引只在内存里
+      // （重启后 reload 会把 name 置空），前端显式传最稳。
       const body = {
         file_id: stashId,
+        title: comTitleFromFileName(file.name),
         vertical: resolveVertical(),
         trim_start: comTrimStart,
         trim_end: comTrimEnd,
@@ -8595,6 +8694,22 @@ el.dwVidPlayer.removeAttribute('src');
             el.comPercent.textContent = phasePct.pct + '%';
             el.comBarFill.style.width = phasePct.pct + '%';
           }
+          // 心跳反馈：本机 MLX / 云端 LLM 阻塞调用期间，管线每 2s 打印
+          // 「⏳ [LLM] … 已用 Ns」——此时没有确定进度数字，改用不确定态扫描动画
+          // + 已用秒数回显，避免「进度条卡住 = 卡死」的误判（详见 llm_script.py 心跳线程）。
+          const _hb = (Array.isArray(st.progress) ? st.progress : [])
+            .filter((l) => /⏳\s*\[LLM\]/.test(l)).pop();
+          if (_hb) {
+            const _m = _hb.match(/已用\s*(\d+)\s*s/);
+            const _sec = _m ? (+_m[1]) : null;
+            el.comProgressBar.classList.add('is-indeterminate');
+            el.comPhase.textContent = _sec != null
+              ? `AI 生成解说词中… 已用 ${_sec}s`
+              : 'AI 生成解说词中…';
+            el.comPercent.textContent = '…';
+          } else {
+            el.comProgressBar.classList.remove('is-indeterminate');
+          }
           if (st.eta_done_at) {
             el.comEta.hidden = false;
             el.comEta.textContent = `预计完成 ${formatClock(st.eta_done_at)} · ${formatEta(st.eta_remaining)}`;
@@ -8625,6 +8740,53 @@ el.dwVidPlayer.removeAttribute('src');
     loadScriptToPanel(job_id);
   };
 
+  /** 解说词计字：去空白后长度（与后端 _narration_chars 口径一致，标点计入）。 */
+  const comSegChars = (s) => String(s || '').replace(/\s+/g, '').length;
+
+  /** 刷新单段的「当前 X 字 / 可用 Y 字」提示；超出时长预算则高亮告警。
+   *
+   * 为什么要这个：原速模式渲染时 out_dur = end - start，ffmpeg 用 -t 收尾，
+   * 旁白超出窗口的部分会被**静默截断**。这里在编辑时就给出提示，避免产出废片。
+   */
+  const refreshSegCount = (ta) => {
+    if (!ta) return;
+    const idx = parseInt(ta.dataset.idx, 10);
+    const budget = (currentScriptBudgets && currentScriptBudgets[idx]) || 0;
+    const box = ta.parentElement ? ta.parentElement.querySelector('.com-seg-count') : null;
+    if (!box) return;
+    const n = comSegChars(ta.value);
+    if (!budget) {           // 时长缺失 → 不做校验，只显示字数
+      box.textContent = `${n} 字`;
+      box.classList.remove('over');
+      ta.classList.remove('over');
+      box.title = '';
+      return;
+    }
+    box.textContent = `${n} / ${budget} 字`;
+    const over = n > budget;
+    box.classList.toggle('over', over);
+    ta.classList.toggle('over', over);
+    box.title = over
+      ? `超出约 ${n - budget} 字：原速模式渲染时尾部可能被截断，建议精简到 ${budget} 字以内`
+      : '';
+  };
+
+  /** 全量刷新（载入 / 换音色后调用）。 */
+  const refreshAllSegCounts = () => {
+    el.comScriptSegments.querySelectorAll('.com-seg-text').forEach(refreshSegCount);
+  };
+
+  /** 统计当前有多少段超出时长预算。 */
+  const countOverLimitSegs = () => {
+    let n = 0;
+    el.comScriptSegments.querySelectorAll('.com-seg-text').forEach((ta) => {
+      const idx = parseInt(ta.dataset.idx, 10);
+      const budget = (currentScriptBudgets && currentScriptBudgets[idx]) || 0;
+      if (budget && comSegChars(ta.value) > budget) n += 1;
+    });
+    return n;
+  };
+
   /** 加载脚本到编辑面板 */
   const loadScriptToPanel = async (job_id) => {
     try {
@@ -8646,6 +8808,7 @@ el.dwVidPlayer.removeAttribute('src');
       // 逐段渲染可编辑行
       const segs = data.segments || [];
       currentScriptSegments = segs;  // 保留原始时间戳+note，供 saveScript 合并
+      currentScriptBudgets = data.budgets || [];  // 每段的字数预算（语速常量由后端统一给出）
       segs.forEach((seg, idx) => {
         const row = document.createElement('div');
         row.className = 'com-seg-row';
@@ -8654,10 +8817,17 @@ el.dwVidPlayer.removeAttribute('src');
           <span class="com-seg-idx">#${idx + 1}</span>
           <span class="com-seg-time">${dur} (${(seg.end - seg.start).toFixed(1)}s)</span>
           ${seg.note ? `<span class="com-seg-note">${escHtml(seg.note)}</span>` : ''}
+          <span class="com-seg-count" data-idx="${idx}"></span>
         </div>
         <textarea class="adv-input com-seg-text" data-idx="${idx}" rows="3">${escHtml(seg.narration || '')}</textarea>`;
         el.comScriptSegments.appendChild(row);
       });
+
+      // 输入时实时刷新字数（事件委托；oninput 赋值天然幂等，重复载入不会叠加监听）
+      el.comScriptSegments.oninput = (ev) => {
+        if (ev.target && ev.target.classList.contains('com-seg-text')) refreshSegCount(ev.target);
+      };
+      refreshAllSegCounts();
 
       el.comScriptStatus.hidden = true;
       el.comScriptSave.disabled = false;
@@ -8714,16 +8884,25 @@ el.dwVidPlayer.removeAttribute('src');
     el.comScriptStatus.className = 'com-script-status';
     el.comScriptStatus.textContent = '保存中…';
     try {
-      await request(`/api/commentary/script/${currentScriptJobId}`, {
+      const res = await request(`/api/commentary/script/${currentScriptJobId}`, {
         method: 'PUT',
         body: JSON.stringify({
           segments,
           voice: el.comScriptVoice.value,
         }),
       });
-      el.comScriptStatus.textContent = '已保存 ✓';
-      el.comScriptStatus.className = 'com-script-status com-script-ok';
-      setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
+      const over = (res && Array.isArray(res.over_limit)) ? res.over_limit : [];
+      if (over.length) {
+        const ids = over.map((o) => `#${o.index}`).join('、');
+        el.comScriptStatus.textContent =
+          `已保存，但 ${over.length} 段超出时长（${ids}）：原速渲染时尾部可能被截断，建议精简`;
+        el.comScriptStatus.className = 'com-script-status com-script-warn';
+        el.comScriptStatus.hidden = false;   // 告警常驻，不自动消失
+      } else {
+        el.comScriptStatus.textContent = '已保存 ✓';
+        el.comScriptStatus.className = 'com-script-status com-script-ok';
+        setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
+      }
     } catch (err) {
       el.comScriptStatus.textContent = `保存失败：${err.message}`;
       el.comScriptStatus.className = 'com-script-status com-script-err';
@@ -8761,9 +8940,20 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('subtitle_border', String(_opts.subtitle_border));
       form.append('subtitle_pos', _opts.subtitle_pos);
       form.append('max_chars', String(_opts.max_chars));
-      const { job_id } = await request(`/api/commentary/render/${currentScriptJobId}`, {
+      const _rr = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
       });
+      const job_id = _rr.job_id;
+      // 渲染前预检：若检出旁白超出片段时长，后端已自动放弃原速（改放慢画面撑开窗口），
+      // 避免原速模式下旁白被 -t 静默截断。这里如实告知，别让用户以为画面变慢是 bug。
+      if (_rr.auto_adjusted) {
+        const n = (_rr.over_limit || []).length;
+        el.comScriptStatus.hidden = false;
+        el.comScriptStatus.className = 'com-script-status com-script-warn';
+        el.comScriptStatus.textContent =
+          `检测到 ${n} 段旁白超出画面时长，已自动改为「画面轻微放慢」适配，避免旁白被截断`;
+        el.comStatus.textContent = `渲染中（已自动放慢画面适配 ${n} 段超长旁白）…`;
+      }
       pollCommentaryJob(job_id,
         { commentary: el.comScriptRender, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
         '',
@@ -9035,6 +9225,7 @@ el.dwVidPlayer.removeAttribute('src');
   let commentaryEnvReady = false;
   let currentScriptJobId = null;  // 当前脚本审核任务的 job_id
   let currentScriptSegments = null;  // 原始脚本 segments（保留 start/end/note 供 save 合并）
+  let currentScriptBudgets = null;  // 每段「按可用时长估算能装多少字」，由后端返回（0=不校验）
 
   /** edge-tts 中文 Neural 音色可选列表。
    *  只保留 edge-tts list_voices() 真实返回、且经实测稳定的音色。
@@ -9234,7 +9425,8 @@ el.dwVidPlayer.removeAttribute('src');
     // 单区：每张成片卡都默认带配乐面板，无草稿/成片之分（用户截图要求）
     el.comGrid.className = 'com-grid com-view-' + commentaryViewMode;
     el.comGrid.replaceChildren();
-    // 左栏始终显示 comHistory（标题 + 视图切换 + 排序）；空状态用 comEmpty 占位文本填充
+    // comHistory 现在是解说页最后一块（生成脚本 → 进度 → 步骤/日志 → 解说词审核 → 成片历史），
+    // 标题/视图切换/排序常驻显示；空状态用 comEmpty 占位文本填充。
     if (el.comEmpty) el.comEmpty.hidden = items.length > 0;
 
     if (items.length === 0) {
@@ -9569,7 +9761,15 @@ el.dwVidPlayer.removeAttribute('src');
 
   // 切换配音引擎时，实时刷新可用性（自动识别并置灰不可用项）
   if (el.comTtsProvider) {
-    el.comTtsProvider.addEventListener('change', () => comRefreshTtsStatus({ force: false }));
+    el.comTtsProvider.addEventListener('change', () => {
+      // 选中 Qwen3-TTS（空值=默认项）→ 自动起本机 7871 服务；切到别的引擎 → 自动停，省资源
+      if (el.comTtsProvider.value === '') {
+        comEnsureQwen3Tts();
+      } else {
+        comAutoStopQwen3Tts();
+      }
+      comRefreshTtsStatus({ force: false });
+    });
   }
 
   // 导出剪映草稿：勾选后显示目录输入行；「选择文件夹」按钮走桌面原生桥接（无桥接则聚焦输入框手动填）
@@ -12034,6 +12234,11 @@ el.dwVidPlayer.removeAttribute('src');
             window._pendingDownload = false;
             setTimeout(() => { try { handleDownload(); } catch (_) {} }, 120);
           }
+          // 登录/注册前有点击字幕提取的待办，成功后自动继续
+          if (window._pendingSubtitleExtract) {
+            window._pendingSubtitleExtract = false;
+            setTimeout(() => { try { sbStartExtract(); } catch (_) {} }, 120);
+          }
         }, 400);
       } else {
         _authMsg('❌ ' + ((r && r.error) || (isReg ? '注册失败' : '登录失败')), true);
@@ -13024,64 +13229,81 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.llmOffpeakOnly) el.llmOffpeakOnly.checked = !!r.offpeak_only;
         // 初始显示/隐藏 base_url
         if (el.llmBaseUrl) el.llmBaseUrl.style.display = (r.provider === 'custom') ? '' : 'none';
-        // 本地优先开关回填
-        if (el.llmLocalPriority) el.llmLocalPriority.checked = !!r.local_priority;
-        if (el.llmLocalModel) el.llmLocalModel.value = r.local_model || '';
+        // 本机引擎档位回填（auto / mlx / cloud）
+        if (el.llmEngine) el.llmEngine.value = r.engine || 'auto';
       }
     } catch (e) { /* */ }
 
-    // 本地优先开关：联动设置 provider=ollama、隐藏云端 Key 字段，并拉取 Ollama 状态
-    async function refreshOllamaStatus() {
-      const on = el.llmLocalPriority && el.llmLocalPriority.checked;
-      if (el.llmOllamaBox) el.llmOllamaBox.hidden = !on;
-      if (!on) return;
+    // 本机 AI 引擎（MLX）：按档位显隐模型选择区，并拉取可用模型 + 运行时状态。
+    // 后端只做目录扫描与 find_spec 探测、不加载模型，所以这块可以随开随刷。
+    let _mlxModels = [];
+    function updateMlxModelHint() {
+      if (!el.llmMlxHint || !el.llmMlxModel) return;
+      const m = _mlxModels.find((x) => x.path === el.llmMlxModel.value);
+      el.llmMlxHint.textContent = (m && m.hint) ? '该档位：' + m.hint : '';
+    }
+    async function refreshLocalEngine() {
+      const engine = el.llmEngine ? el.llmEngine.value : 'auto';
+      const showLocal = engine === 'auto' || engine === 'mlx';
+      if (el.llmMlxBox) el.llmMlxBox.hidden = !showLocal;
+      if (!showLocal) return;
+      const setStatus = (txt, color) => {
+        if (!el.llmMlxStatus) return;
+        el.llmMlxStatus.textContent = txt;
+        el.llmMlxStatus.style.color = color || '';
+      };
+      const fmtSize = (mb) => (mb >= 1024)
+        ? (Math.round(mb / 102.4) / 10) + 'GB'
+        : Math.round(mb) + 'MB';
       try {
-        const st = await request('/api/llm/status');
-        if (!st || !st.ok) return;
-        const models = st.ollama_models || [];
-        if (el.llmLocalModel) {
-          const cur = el.llmLocalModel.value;
-          el.llmLocalModel.innerHTML = '';
-          if (models.length === 0) {
-            const opt = document.createElement('option');
-            opt.value = ''; opt.textContent = '（Ollama 暂无模型，请先 ollama pull）';
-            el.llmLocalModel.appendChild(opt);
+        const r = await request('/api/llm/local-models');
+        if (!r || !r.ok) return;
+        const models = r.models || [];
+        const rt = r.runtime || {};
+        const cur = r.current || '';
+        _mlxModels = models;
+        if (el.llmMlxModel) {
+          const keep = el.llmMlxModel.value || cur;
+          el.llmMlxModel.innerHTML = '';
+          const add = (val, text) => {
+            const o = document.createElement('option');
+            o.value = val;
+            o.textContent = text;
+            el.llmMlxModel.appendChild(o);
+          };
+          // 当前配置的模型不在扫描结果里（被删/改名/放在别处）时置顶保留，
+          // 否则下拉会「看不出正在用哪个」，用户以为配置丢了。
+          if (cur && !models.some((m) => m.path === cur)) {
+            add(cur, (r.current_exists ? '（自定义路径）' : '⚠️ 已失效（文件不存在）') + cur);
           }
+          if (!models.length && !cur) add('', '（未找到本机模型）');
           for (const m of models) {
-            const opt = document.createElement('option');
-            opt.value = m; opt.textContent = m;
-            el.llmLocalModel.appendChild(opt);
+            add(m.path, `${m.tier} · ${fmtSize(m.size_mb)} · ${m.hint}`);
           }
-          if (cur) el.llmLocalModel.value = cur;
+          el.llmMlxModel.value = keep || cur || (models[0] ? models[0].path : '');
         }
-        if (el.llmOllamaStatus) {
-          if (st.ollama_running) {
-            el.llmOllamaStatus.style.color = '#3ddc84';
-            el.llmOllamaStatus.textContent = '✅ 本机 Ollama 运行中，可用模型 ' + models.length + ' 个。列表外的模型请先 `ollama pull <模型名>`。';
-          } else {
-            el.llmOllamaStatus.style.color = '#e67e22';
-            el.llmOllamaStatus.textContent = '⚠️ 未检测到本机 Ollama（localhost:11434 无响应）。请先安装并运行 Ollama，否则将回退云端（需 Key）。';
-          }
+        // 把「为什么本机跑不了」讲清楚，避免用户以为功能坏了、实际是静默走了云端
+        if (!rt.available) {
+          setStatus('⚠️ 未检测到本机 AI 运行时（mlx）。当前会使用云端模型（消耗云端额度）。'
+            + 'Apple Silicon Mac 之外暂不支持本机引擎。', '#e67e22');
+        } else if (!models.length) {
+          setStatus('⚠️ 未找到本机模型权重。把 MLX 模型放到：' + (r.models_dir || ''), '#e67e22');
+        } else {
+          const curOk = !cur || r.current_exists;
+          setStatus((curOk ? '✅' : '⚠️') + ` 本机引擎就绪，已发现 ${models.length} 个模型`
+            + `（合计 ${fmtSize(r.total_mb || 0)}）。`
+            + (curOk ? '' : ' 当前配置的模型路径已不存在，请重新选择。'),
+            curOk ? '#3ddc84' : '#e67e22');
         }
+        updateMlxModelHint();
       } catch (e) {
-        if (el.llmOllamaStatus) {
-          el.llmOllamaStatus.style.color = '#e67e22';
-          el.llmOllamaStatus.textContent = '⚠️ 无法探测 Ollama 状态，请确认本机已安装并运行 Ollama。';
-        }
+        setStatus('⚠️ 无法读取本机模型列表。', '#e67e22');
       }
     }
-    if (el.llmLocalPriority) {
-      el.llmLocalPriority.addEventListener('change', () => {
-        const on = el.llmLocalPriority.checked;
-        if (on) {
-          if (el.llmProvider) el.llmProvider.value = 'ollama';
-          // 选 Ollama 预设会自动填 base_url，这里再兜底一次
-          if (el.llmBaseUrl) { el.llmBaseUrl.value = 'http://localhost:11434/v1'; el.llmBaseUrl.style.display = 'none'; }
-          if (el.llmModel) el.llmModel.value = '';
-        }
-        refreshOllamaStatus();
-      });
-      refreshOllamaStatus();
+    if (el.llmEngine) {
+      el.llmEngine.addEventListener('change', () => refreshLocalEngine());
+      if (el.llmMlxModel) el.llmMlxModel.addEventListener('change', updateMlxModelHint);
+      refreshLocalEngine();
     }
 
     // 统一保存按钮：同时把 LLM 与视觉模型两组配置打到后端
@@ -13103,9 +13325,15 @@ el.dwVidPlayer.removeAttribute('src');
           model: el.llmModel ? el.llmModel.value.trim() : '',
           reasoning_effort: el.llmReasoningEffort ? el.llmReasoningEffort.value : 'low',
           offpeak_only: el.llmOffpeakOnly ? el.llmOffpeakOnly.checked : false,
-          local_priority: el.llmLocalPriority ? el.llmLocalPriority.checked : false,
-          local_model: (el.llmLocalPriority && el.llmLocalPriority.checked && el.llmLocalModel)
-            ? el.llmLocalModel.value.trim() : '',
+          // 本机引擎档位统一由 engine 表达。local_priority 是 Ollama 时代遗留字段，
+          // 固定传 false 不再参与路由（后端仍支持它，兼容既有配置）。
+          local_priority: false,
+          local_model: '',
+          engine: el.llmEngine ? el.llmEngine.value : 'auto',
+          // 选「仅云端」时不提交模型路径：undefined 不会进 JSON，后端视作
+          // 「本次不修改」，这样用户切回本机档位时原路径仍在。
+          mlx_model_path: (el.llmEngine && el.llmEngine.value !== 'cloud' && el.llmMlxModel)
+            ? el.llmMlxModel.value.trim() : undefined,
         };
         const visionBody = {
           provider: el.visionProvider ? el.visionProvider.value : 'auto',

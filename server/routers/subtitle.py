@@ -218,6 +218,17 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
         is_member = bool(app.current_member_store(request).status()["download_member"]["active"])
     except Exception:
         is_member = False
+    # 🧱 字幕提取日配额墙（2026-09-13）：免费 2 次/日 → 会员无限；
+    # 本地 faster-whisper 推理不计 AI 积分（仅云端/服务端算力计费）。
+    _mstore = app.current_member_store(request)
+    _sq = _mstore.quota_state("subtitle")
+    if not _sq.get("allowed"):
+        _free = int(_sq.get("free_limit", 2))
+        raise app.HTTPException(
+            status_code=402,
+            detail="MEMBER_QUOTA|今日字幕提取免费额度已用尽（" + str(int(_sq.get("limit", _free))) + "/日）— 开通会员可解锁无限次/日，并享满速提取",
+        )
+    _mstore.use_daily("subtitle", 1)
     # 字幕提取为本地 faster-whisper 推理，不扣 AI 积分（仅云端/服务端算力计费）
     full_threads = max(4, os.cpu_count() or 4)
     cpu_threads = full_threads if is_member else 4
