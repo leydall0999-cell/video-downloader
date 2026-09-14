@@ -13568,23 +13568,26 @@ el.dwVidPlayer.removeAttribute('src');
     // 根据当前选中的 provider + 本机状态，渲染一段友好提示
     function renderVisionRuntime(provider) {
       const rt = el.visionRuntime;
-      if (!rt || !platformStatus) return;
-      const st = platformStatus;
-      const parts = [];
+      if (!rt) return;
+      const st = platformStatus || {};
+      // 视觉凭据已由管理员统一下发，界面不再让用户填 Key / 装 Ollama ——
+      // 提示只能说明「当前处于哪种能力档位、会不会影响出片」，不能引导用户去做
+      // 他已无权执行的操作（否则用户会去找一个根本不存在的 Key 输入框）。
+      const mg = (el.visionManagedStatus && el.visionManagedStatus.dataset) || {};
+      const managedOn = mg.configured === 'true';
+      if (managedOn) {
+        const name = mg.name || '管理员已配置';
+        rt.textContent = `✅ 视觉模型已由管理员配置（${name}），片头检测走画面识别。`;
+        rt.style.color = '#27ae60';
+        return;
+      }
       if (st.has_local_ocr) {
-        parts.push('✅ 本机 Apple Vision OCR 可用：选「自动」即可免 Key、离线识别片头集数/片名卡。');
-      } else if (st.platform === 'darwin') {
-        parts.push('⚠️ 当前 Mac 未加载本地 OCR（缺少 Quartz），选「自动」将降级到音频检测；建议装 Ollama 或用云端 Key。');
-      } else {
-        parts.push('ℹ️ 非 Mac 环境无免费本地 OCR：选「自动」会降级到音频检测，建议用 Ollama 或云端 Key。');
+        rt.textContent = '✅ 本机离线 OCR 可用：片头检测走画面识别，无需云端、不消耗额度。';
+        rt.style.color = '#27ae60';
+        return;
       }
-      // 仅当选中 Ollama 且本机是 Apple Silicon 时，强调多模态模型崩溃风险
-      if (st.ollama_vision_known_issue && provider === 'ollama') {
-        parts.push('⚠️ Apple Silicon（M1/M2/M3）上，部分 Ollama 版本运行 qwen2.5-vl 等多模态模型会因 Metal 后端崩溃（GGML_ASSERT）；若选 Ollama 失败，请改用「自动」或云端 provider。');
-      }
-      rt.textContent = parts.join(' ');
-      const warn = (st.ollama_vision_known_issue && provider === 'ollama') || !st.has_local_ocr;
-      rt.style.color = warn ? '#e67e22' : '#27ae60';
+      rt.textContent = 'ℹ️ 当前未启用画面识别，片头检测自动降级为音频检测，不影响解说生成；如需开启画面理解，请联系管理员开通。';
+      rt.style.color = '#e67e22';
     }
 
     // 根据选中的 provider，联动显示其免费额度申请链接（仅云端 provider 有 signup_url）
@@ -13605,23 +13608,39 @@ el.dwVidPlayer.removeAttribute('src');
     }
 
     // 视觉凭据与 LLM 同理，由超级管理员统一下发：界面只汇报状态、不给 Key 输入框。
-    // 未配置时走「自动」——Mac 上即本机离线 OCR（免费、无需任何 Key）。
+    // 未配置时走「自动」——Mac 上优先本机离线 OCR（免费、无需任何 Key）。
     async function renderVisionManaged() {
       const box = el.visionManagedStatus;
       if (!box) return;
+      // 供 renderVisionRuntime 复用同一份结论，避免两次请求得出两种说法
+      const mark = (configured, name) => {
+        box.dataset.configured = configured ? 'true' : 'false';
+        if (name) box.dataset.name = name; else delete box.dataset.name;
+      };
+      const refreshRuntime = () => {
+        try { renderVisionRuntime(el.visionProvider ? el.visionProvider.value : defaultProvider); } catch (e) { /* noop */ }
+      };
       try {
         const r = await request('/api/vision/managed');
-        if (!r) return;
+        if (!r) { mark(false); refreshRuntime(); return; }
         if (r.configured && r.provider) {
           const who = r.provider_name || r.provider;
           const from = r.source === 'env' ? '（环境变量）' : '（管理员配置）';
           box.textContent = `✅ 云端视觉服务已就绪${from}：${who}${r.model ? ' · ' + r.model : ''}`;
           box.style.color = '#27ae60';
+          mark(true, who + (r.model ? ' · ' + r.model : ''));
         } else {
-          box.textContent = '使用本机离线 OCR（免费，无需任何 Key）；管理员配置云端视觉服务后自动启用。';
+          // 别再说「用本机离线 OCR」——has_local_ocr 为 false 时（打包缺 Quartz）
+          // 实际会降级到音频检测，说成 OCR 可用是假承诺。
+          const st0 = platformStatus || {};
+          box.textContent = st0.has_local_ocr
+            ? '使用本机离线 OCR（免费，无需任何 Key）；管理员配置云端视觉服务后自动启用。'
+            : '本机无离线 OCR，未配置云端视觉服务时片头检测降级为音频检测（不影响出片）；如需画面理解请联系管理员开通。';
           box.style.color = '';
+          mark(false);
         }
       } catch (e) { /* 状态属提示性质，失败不阻塞界面 */ }
+      refreshRuntime();
     }
     renderVisionManaged();
 
