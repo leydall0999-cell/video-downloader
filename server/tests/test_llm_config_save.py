@@ -79,6 +79,31 @@ def _read_cfg(home: Path) -> dict:
     return json.loads(_cfg_path(home).read_text(encoding="utf-8"))
 
 
+def _managed_path(home: Path) -> Path:
+    return home / ".video-downloader" / "llm_managed.json"
+
+
+def _write_managed(home: Path, data: dict) -> Path:
+    p = _managed_path(home)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+@contextmanager
+def no_llm_env():
+    """临时清空 LLM 相关环境变量：它们优先级最高，会盖掉受管配置的判定。"""
+    keys = ("LLM_API_KEY", "LLM_APIKEY", "LLM_BASE_URL", "LLM_MODEL",
+            "VDL_LLM_ENGINE", "MLX_MODEL_PATH", "MLX_PYTHON")
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+
 def _make_model(root: Path, name: str, *, config=True, weights=True,
                 weight_bytes=2 * 1024 * 1024) -> Path:
     """造一个假 MLX 权重目录（只造判定所需的两个文件）。
@@ -146,17 +171,85 @@ def test_save_overrides_mlx_fields_when_submitted():
         assert cfg["mlx_python"] == "/opt/mlx/bin/python", cfg
 
 
-def test_save_rejects_unknown_engine():
-    """非法 engine 值回落 auto，避免写坏配置后引擎静默失效。"""
+def test_save_normalizes_engine_to_two_tiers():
+    """引擎档位收敛为用户可见的两档：auto（本机优先→云端配合）/ cloud（纯云端）。
+
+    旧版曾暴露 mlx / ollama 强制档，现按产品决策下线——写入时统一归一到 auto，
+    避免出现「配置文件里是 mlx、界面上只有两个选项」的幽灵状态。
+    """
     with fake_home() as home:
         _write_cfg(home, {"engine": "auto"})
-        llm_router.llm_config_save(server_app.LLMConfigRequest(engine="ollama-typo"))
-        assert _read_cfg(home)["engine"] == "auto"
-        # 合法值（含历史 ollama 档）仍可通过
-        llm_router.llm_config_save(server_app.LLMConfigRequest(engine="mlx"))
-        assert _read_cfg(home)["engine"] == "mlx"
+        for legacy in ("mlx", "ollama", "ollama-typo", ""):
+            llm_router.llm_config_save(server_app.LLMConfigRequest(engine=legacy))
+            assert _read_cfg(home)["engine"] == "auto", legacy
         llm_router.llm_config_save(server_app.LLMConfigRequest(engine="cloud"))
         assert _read_cfg(home)["engine"] == "cloud"
+
+
+def test_save_omitted_credentials_are_preserved():
+    """回归核心：前端简化后不再提交凭据四件套，保存不得把它们重置。
+
+    历史破坏路径：`provider` 的请求默认值是 "openai"，且保存是无条件写入——
+    用户只改引擎档位时，配置会被打回 openai、base_url / model 被清空，
+    云端解说随即失效（且界面没有任何提示）。
+    """
+    with fake_home() as home:
+        _write_cfg(home, {
+            "provider": "deepseek",
+            "api_key": "sk-real-key-1234",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-v4-flash",
+            "engine": "auto",
+        })
+        # 模拟「新前端」：只提交用户可见的字段（引擎档位 + 省钱旋钮）
+        llm_router.llm_config_save(server_app.LLMConfigRequest(
+            engine="cloud", reasoning_effort="low"))
+        cfg = _read_cfg(home)
+        assert cfg["engine"] == "cloud", cfg
+        assert cfg["provider"] == "deepseek", cfg
+        assert cfg["base_url"] == "https://api.deepseek.com/v1", cfg
+        assert cfg["model"] == "deepseek-v4-flash", cfg
+        assert cfg["api_key"] == "sk-real-key-1234", cfg
+
+
+def test_managed_config_overrides_user_config():
+    """管理员受管配置优先于用户配置；保存时不得把受管凭据写进用户文件。"""
+    with fake_home() as home, no_llm_env():
+        _write_cfg(home, {"provider": "openai", "api_key": "", "engine": "auto"})
+        _write_managed(home, {
+            "provider": "deepseek",
+            "api_key": "sk-managed-key-9999",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-v4-flash",
+        })
+        cfg = llm_config.get_llm_config()
+        assert cfg["provider"] == "deepseek", cfg
+        assert cfg["api_key"] == "sk-managed-key-9999", cfg
+        assert cfg["model"] == "deepseek-v4-flash", cfg
+        # 保存一次：受管凭据不得落进用户文件（否则等于在用户机器上多留一份 Key）
+        llm_router.llm_config_save(server_app.LLMConfigRequest(engine="auto"))
+        raw = _read_cfg(home)
+        assert raw.get("api_key", "") == "", raw
+        assert raw.get("provider", "") != "deepseek", raw
+
+
+def test_managed_status_reports_source_without_plain_key():
+    """状态接口要能说明「已由管理员配置」，但绝不能吐出明文 Key。"""
+    with fake_home() as home, no_llm_env():
+        _write_managed(home, {
+            "provider": "deepseek",
+            "api_key": "sk-managed-key-9999",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-v4-flash",
+        })
+        st = llm_config.managed_status()
+        assert st["configured"] is True, st
+        assert st["source"] == "managed", st
+        assert st["provider_name"] == "DeepSeek", st
+        assert st["model"] == "deepseek-v4-flash", st
+        blob = json.dumps(st, ensure_ascii=False)
+        assert "sk-managed-key-9999" not in blob, "状态接口泄露了明文 Key"
+        assert st["api_key_masked"].endswith("9999"), st
 
 
 def test_save_masked_api_key_keeps_existing():
@@ -272,7 +365,10 @@ def main():
     tests = [
         test_save_keeps_mlx_fields_when_not_submitted,
         test_save_overrides_mlx_fields_when_submitted,
-        test_save_rejects_unknown_engine,
+        test_save_normalizes_engine_to_two_tiers,
+        test_save_omitted_credentials_are_preserved,
+        test_managed_config_overrides_user_config,
+        test_managed_status_reports_source_without_plain_key,
         test_save_masked_api_key_keeps_existing,
         test_save_empty_api_key_keeps_existing,
         test_save_empty_vision_api_key_keeps_existing,

@@ -31,7 +31,19 @@ def llm_status() -> dict:
         "effective_provider": cfg.get("provider"),
         "effective_base_url": cfg.get("base_url"),
         "effective_model": cfg.get("model"),
+        "engine": str(cfg.get("engine") or "auto"),
+        # 云端服务由管理员统一配置，用户界面只展示「是否就绪」，不接触凭据
+        "managed": app.managed_status(),
     }
+
+@router.get("/api/llm/managed")
+def llm_managed() -> dict:
+    """管理员受管配置状态（**不含明文 Key**），供设置面板展示「云端服务已就绪」。
+
+    前端据此把原先的 provider / api_key / base_url / model 输入区替换成一行状态：
+    用户只需在「纯云端」与「本机优先 + 云端配合」之间做选择。
+    """
+    return app.managed_status()
 
 @router.get("/api/llm/local-models")
 def llm_local_models() -> dict:
@@ -58,9 +70,7 @@ def llm_local_models() -> dict:
 def llm_config_get() -> dict:
     """返回当前 LLM 配置（前端面板回填）。api_key 脱敏返回，仅显示首尾各 4 位。"""
     cfg = app.get_llm_config()
-    key = cfg.get("api_key", "")
-    if len(key) > 8:
-        cfg["api_key"] = key[:4] + "****" + key[-4:]
+    cfg["api_key"] = app.mask_key(cfg.get("api_key", ""))
     # 补全本地优先相关字段（脱敏后可能缺，显式带上）
     cfg.setdefault("local_priority", False)
     cfg.setdefault("local_model", "")
@@ -77,7 +87,10 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
     失效、回落到云端并消耗免费配额，且界面没有任何提示。改为增量合并后，
     未暴露的字段（以及未来新增的字段）都会被保留。
     """
-    current = app.get_llm_config()
+    # 基底用「用户配置文件本身」，**不是** get_llm_config()（后者已叠加管理员受管
+    # 配置与环境变量）：否则每次保存都会把管理员下发的凭据写进用户文件，破坏
+    # 「凭据只由管理员持有」的设计。
+    current = app.load_user_config_raw()
     data = dict(current)
     # Key 语义：空值 / 脱敏值（含 ****）一律视为「本次不修改」，沿用已有 Key。
     # 历史缺陷：原判定只挡了脱敏值，**空字符串会把已配好的 Key 直接清空**——
@@ -90,21 +103,27 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
     if not _new_key or "****" in _new_key:
         _new_key = current.get("api_key", "")
     data.update({
-        "provider": req.provider,
         "api_key": _new_key,
-        "base_url": req.base_url,
-        "model": req.model,
         "reasoning_effort": req.reasoning_effort or "low",
         "offpeak_only": bool(req.offpeak_only),
         "local_priority": bool(req.local_priority),
         "local_model": req.local_model or "",
     })
+    # 凭据三件套：只有「显式给出非空值」才更新（空值/未提交 = 本次不修改）。
+    # 用户界面已不再暴露这些字段（由超级管理员统一配置），若沿用旧的无条件写入，
+    # 一次保存就会把 provider 打回 openai、把 base_url/model 清空。
+    for _f in ("provider", "base_url", "model"):
+        _v = (getattr(req, _f, None) or "").strip()
+        if _v:
+            data[_f] = _v
     # 本机引擎字段：None = 本次不修改（后端 LLMConfigRequest 默认值），
     # 只有前端显式提交时才覆盖。
     if req.engine is not None:
         engine = (req.engine or "auto").strip().lower()
-        # 白名单校验：非法值一律回落到 auto，避免写坏配置后引擎静默失效
-        data["engine"] = engine if engine in ("auto", "cloud", "mlx", "ollama") else "auto"
+        # 用户可见档位只有两档：auto（本机优先 → 云端配合）/ cloud（纯云端）。
+        # 旧版 mlx / ollama 强制档已按产品决策下线；写入时统一归一，避免出现
+        # 「配置里是 mlx、界面上只有两档」的幽灵状态。
+        data["engine"] = "cloud" if engine == "cloud" else "auto"
     if req.mlx_model_path is not None:
         data["mlx_model_path"] = (req.mlx_model_path or "").strip()
     if req.mlx_python is not None:

@@ -121,6 +121,89 @@ class QuotaManager:
         self._persist(st)
         return True
 
+    # ── 前置可行性预检（在「开始前」拦住做不完的任务）────────────────────── #
+    def precheck_commentary(
+        self,
+        duration_sec: float,
+        local_engine_ready: bool = False,
+        engine: str = "auto",
+    ) -> dict:
+        """解说任务开始前的可行性预检，返回结构化结论供调用方转人话提示。
+
+        为什么必须前置（2026-09-15 用户实测反馈）：免费用户跑一条超出本机能力
+        的片子，会在转写与脚本生成**全部跑完之后**才因云端额度不足失败——用户
+        白等十几分钟，拿到的是废片。故所有解说入口在「开始前」统一过这道闸门，
+        不通过就立刻拒绝并说明两条出路，绝不进入执行阶段。
+
+        判定顺序（免费用户）：
+        1. 时长为 0/未知 → fail-open 放行（探测失败不应误拦）。
+        2. 时长 > FREE_MAX_DURATION_SEC → 拒绝。这条片必然要走云端，而免费档位
+           的上限就是 30 分钟，没有可用的执行路径。
+        3. 时长合法 → 本机引擎就绪则放行（零消耗）；否则需要云端，
+           终身云端额度为 0 时拒绝。
+
+        返回 {allowed, code, reason, hint, will_use_cloud}。
+        字段名用 allowed 而非 ok：前端 request() 会把「HTTP 成功」统一标成 ok，
+        两者同名会让调用方分不清「请求成功」与「业务放行」。
+        """
+        if self.is_member():
+            return {"allowed": True, "code": "member", "reason": "", "hint": "",
+                    "will_use_cloud": False}
+        if not duration_sec or duration_sec <= 0:
+            return {"allowed": True, "code": "unknown_duration", "reason": "", "hint": "",
+                    "will_use_cloud": False}
+
+        limit_min = int(FREE_MAX_DURATION_SEC // 60)
+        dur_min = int(round(float(duration_sec) / 60.0))
+        if duration_sec > FREE_MAX_DURATION_SEC:
+            return {
+                "allowed": False,
+                "code": "duration_exceeded",
+                "reason": f"视频约 {dur_min} 分钟，超过免费版单条 {limit_min} 分钟上限",
+                "hint": (
+                    f"免费版单条解说视频最长 {limit_min} 分钟，当前视频约 {dur_min} 分钟，"
+                    f"超出 {dur_min - limit_min} 分钟。请换用 {limit_min} 分钟以内的素材，"
+                    f"或开通会员解锁长视频解说。"
+                ),
+                "will_use_cloud": False,
+                "duration_sec": float(duration_sec),
+                "limit_sec": FREE_MAX_DURATION_SEC,
+                "over_sec": float(duration_sec) - FREE_MAX_DURATION_SEC,
+            }
+
+        # 走云端的两种来源语义不同，提示文案必须区分，否则会误导用户
+        # （明明是自己选的「纯云端」，却被提示「本机引擎不可用」）。
+        _explicit_cloud = str(engine or "").strip().lower() == "cloud"
+        need_cloud = _explicit_cloud or (not local_engine_ready)
+        if need_cloud and self.lifetime_cloud_remaining() <= 0:
+            return {
+                "allowed": False,
+                "code": "cloud_quota_exhausted",
+                "reason": "本机引擎不可用，且免费云端额度已用完",
+                "hint": (
+                    "这条视频需要云端生成解说词，但免费云端额度（终身 "
+                    f"{LIFETIME_CLOUD_EVENTS} 次）已用完。开通会员即可解锁无限云端解说。"
+                ),
+                "will_use_cloud": True,
+                "duration_sec": float(duration_sec),
+            }
+
+        if not need_cloud:
+            _hint = ""
+        elif _explicit_cloud:
+            _hint = "你选择的是「纯云端」，本次将消耗 1 次云端额度。"
+        else:
+            _hint = "本机 AI 引擎不可用，本次将由云端生成解说词，消耗 1 次云端额度。"
+
+        return {
+            "allowed": True,
+            "code": "will_use_cloud" if need_cloud else "local",
+            "reason": "",
+            "hint": _hint,
+            "will_use_cloud": need_cloud,
+            "duration_sec": float(duration_sec),
+        }
+
     # ── 决策（供 llm_script 云端回落使用）────────────────────────────────── #
     def decide_cloud_fallback(self, mode: str = "auto") -> str:
         """云端闸门决策（两种云端来源语义不同，必须分开判）。

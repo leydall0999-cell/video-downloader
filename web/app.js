@@ -391,13 +391,16 @@
     subTarget: $('subTarget'),
     subTranslate: $('subTranslate'),
     subBurn: $('subBurn'),
-    // LLM 服务商选择器（统一配置面板）
+    // 解说引擎（两档）+ 云端服务状态。
+    // 凭据四件套仍映射到 DOM（隐藏保留），只为兼容旧逻辑取值，不再展示与提交。
     llmProvider: $('llmProvider'),
     llmApiKey: $('llmApiKey'),
     llmBaseUrl: $('llmBaseUrl'),
     llmModel: $('llmModel'),
     llmReasoningEffort: $('llmReasoningEffort'),
     llmOffpeakOnly: $('llmOffpeakOnly'),
+    llmManagedStatus: $('llmManagedStatus'),
+    llmEngineNote: $('llmEngineNote'),
     // 本机 AI 引擎（MLX）选择器：引擎档位 + 本机模型下拉
     llmEngine: $('llmEngine'),
     llmMlxBox: $('llmMlxBox'),
@@ -9747,6 +9750,8 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   el.comGenerateScript.addEventListener('click', () => {
+    // 兜底：预检未通过时按钮通常已被禁用，这里再挡一次，避免任何路径绕过前置判定
+    if (comPrecheckBlocked) return;
     if (!commentaryEnvReady) {
       el.comStatus.hidden = false;
       el.comStatus.textContent = '解说环境未就绪，请先看上方环境状态条排查依赖';
@@ -9860,10 +9865,82 @@ el.dwVidPlayer.removeAttribute('src');
       el.comFileStatus.hidden = true;
       const opt = el.comSource.options[el.comSource.selectedIndex];
       setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`, opt ? opt.textContent : '');
+      // 立刻预检：交给后端 ffprobe 探测真实时长（含裁剪折算），不通过当场提示
+      comRunPrecheck({ fileId: el.comSource.value });
     } else {
       setupComPreview(null);
+      comClearPrecheck();
     }
   });
+
+  // ---- 解说前置预检：选完视频立刻判定「这部片现在跑得动吗」 ----
+  //
+  // 背景（2026-09-15 用户实测反馈）：免费用户跑一条超出当前档位能力的片子，系统会
+  // 在转写与脚本**全部跑完之后**才因云端额度不足失败——白等十几分钟，拿到的还是废片。
+  // 判定必须前置到「选完文件」这一刻：本地文件直接读元数据（零成本、不上传），
+  // 下载库 / 接收站缓存文件交给后端 ffprobe（按裁剪后的真实时长判定）。
+  // 不通过就当场说明原因与两条出路，并禁用开始按钮。
+  let comPrecheckBlocked = false;
+
+  /** 本地读取视频总时长（秒）。读不出（编码异常）返回 0 → 后端按「未知」放行。 */
+  const comProbeLocalDuration = (file) => new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val || 0); } };
+    try {
+      const url = URL.createObjectURL(file);
+      const v = document.createElement('video');
+      const release = () => { try { URL.revokeObjectURL(url); } catch (e) { /* 忽略 */ } };
+      v.preload = 'metadata';
+      v.onloadedmetadata = () => {
+        const d = (v.duration && isFinite(v.duration)) ? v.duration : 0;
+        release();
+        finish(d);
+      };
+      v.onerror = () => { release(); finish(0); };
+      setTimeout(() => finish(0), 10000);   // 兜底：元数据迟迟读不出就按未知处理
+      v.src = url;
+    } catch (e) { finish(0); }
+  });
+
+  const comApplyPrecheck = (res) => {
+    if (!res || res.allowed === undefined) return;
+    const blocked = res.allowed === false;
+    comPrecheckBlocked = blocked;
+    if (el.comGenerateScript) el.comGenerateScript.disabled = blocked;
+    if (!el.comStatus) return;
+    if (blocked) {
+      el.comStatus.hidden = false;
+      el.comStatus.style.color = '#e67e22';
+      el.comStatus.textContent = `⚠️ ${res.reason || '当前无法开始'}。${res.hint || ''}`;
+    } else if (res.hint) {
+      el.comStatus.hidden = false;
+      el.comStatus.style.color = '';
+      el.comStatus.textContent = res.hint;
+    } else {
+      el.comStatus.style.color = '';
+      el.comStatus.hidden = true;
+    }
+  };
+
+  const comRunPrecheck = async ({ durationSec = 0, fileId = '' } = {}) => {
+    try {
+      const qs = new URLSearchParams();
+      if (durationSec > 0) qs.set('duration_sec', String(durationSec));
+      if (fileId) qs.set('file_id', fileId);
+      if (!qs.toString()) return;
+      comApplyPrecheck(await request(`/api/commentary/precheck?${qs.toString()}`));
+    } catch (e) {
+      // 预检本身失败不能阻塞用户：不拦，交给任务入口的闸门兜底
+      comPrecheckBlocked = false;
+      if (el.comGenerateScript) el.comGenerateScript.disabled = false;
+    }
+  };
+
+  const comClearPrecheck = () => {
+    comPrecheckBlocked = false;
+    if (el.comGenerateScript) el.comGenerateScript.disabled = false;
+    if (el.comStatus) el.comStatus.style.color = '';
+  };
 
   // 入口 2：从本地文件生成
   const setLocalFile = (file) => {
@@ -9876,6 +9953,9 @@ el.dwVidPlayer.removeAttribute('src');
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
     setupComPreview(URL.createObjectURL(file), file.name);
+    // 立刻预检（本地读元数据，零成本、不上传）：超时长或额度不够当场说清楚，
+    // 绝不等到转写与脚本跑完才报「额度不足」——那时用户已白等十几分钟。
+    comProbeLocalDuration(file).then((sec) => comRunPrecheck({ durationSec: sec }));
   };
   el.comFileBtn.addEventListener('click', () => el.comFileInput.click());
   el.comFileInput.addEventListener('change', () => {
@@ -13182,8 +13262,15 @@ el.dwVidPlayer.removeAttribute('src');
   el.subTranslate.addEventListener('click', translateSubtitle);
   el.subBurn.addEventListener('click', burnSubtitle);
 
-  // ---- LLM 服务商选择器 ----
+  // ---- 解说引擎（两档）+ 云端服务状态 ----
+  //
+  // 产品决策（2026-09-15）：普通用户不需要理解、也不需要持有模型密钥——云端服务
+  // 由超级管理员统一配置（受管配置文件 / 环境变量）。界面只让用户在两个档位间
+  // 二选一：「本机优先（不够自动用云端）」与「纯云端」。
+  // 凭据输入框仍保留在 DOM（隐藏）以免旧逻辑取值报错，但既不展示也不再提交。
   (async () => {
+    // 引擎档位归一：历史配置里可能残留 mlx / ollama（旧版三档），界面只提供两档。
+    const comNormalizeEngine = (v) => (String(v || '').trim().toLowerCase() === 'cloud' ? 'cloud' : 'auto');
     // 硬编码兜底：与 server/llm_config.py 的 PROVIDER_PRESETS 镜像。
     // fetch 失败时仍能保证下拉框非空、用户可手动选 DeepSeek 等。
     const FALLBACK_LLM_PROVIDERS = {
@@ -13241,10 +13328,42 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.llmOffpeakOnly) el.llmOffpeakOnly.checked = !!r.offpeak_only;
         // 初始显示/隐藏 base_url
         if (el.llmBaseUrl) el.llmBaseUrl.style.display = (r.provider === 'custom') ? '' : 'none';
-        // 本机引擎档位回填（auto / mlx / cloud）
-        if (el.llmEngine) el.llmEngine.value = r.engine || 'auto';
+        // 引擎档位回填（只有 auto / cloud 两档；旧配置里的 mlx / ollama 归一为 auto）
+        if (el.llmEngine) el.llmEngine.value = comNormalizeEngine(r.engine);
       }
     } catch (e) { /* */ }
+
+    // 档位说明：让用户在选之前就知道「会花钱吗、素材去哪」，而不是选完才发现
+    const ENGINE_NOTES = {
+      auto: '本机够用时完全免费、素材不出本机；本机跑不动或质量不达标时自动改用云端（消耗云端额度）。',
+      cloud: '全部交给云端生成，质量最稳定；每部片子消耗 1 次云端额度。',
+    };
+    const refreshEngineNote = () => {
+      if (!el.llmEngineNote) return;
+      el.llmEngineNote.textContent = ENGINE_NOTES[comNormalizeEngine(el.llmEngine ? el.llmEngine.value : 'auto')] || '';
+    };
+    refreshEngineNote();
+
+    // 云端服务状态：用户不看凭据，只需要知道「现在能不能用」。
+    // 凭据详情（服务商 / 模型）由后端受管配置提供，接口**不含明文 Key**。
+    const refreshManagedStatus = async () => {
+      if (!el.llmManagedStatus) return;
+      try {
+        const m = await request('/api/llm/managed');
+        if (!m) return;
+        const who = [m.provider_name, m.model].filter(Boolean).join(' · ') || '未指定';
+        const from = m.source === 'managed' ? '（由管理员统一配置）'
+          : (m.source === 'env' ? '（由运维统一配置）' : '');
+        if (m.configured) {
+          el.llmManagedStatus.textContent = `✅ 云端解说服务已就绪${from}：${who}`;
+          el.llmManagedStatus.style.color = '';
+        } else {
+          el.llmManagedStatus.textContent = '⚠️ 云端解说服务尚未配置，请联系管理员。';
+          el.llmManagedStatus.style.color = '#e67e22';
+        }
+      } catch (e) { /* 状态展示失败不影响其它功能 */ }
+    };
+    refreshManagedStatus();
 
     // 本机 AI 引擎（MLX）：按档位显隐模型选择区，并拉取可用模型 + 运行时状态。
     // 后端只做目录扫描与 find_spec 探测、不加载模型，所以这块可以随开随刷。
@@ -13255,8 +13374,9 @@ el.dwVidPlayer.removeAttribute('src');
       el.llmMlxHint.textContent = (m && m.hint) ? '该档位：' + m.hint : '';
     }
     async function refreshLocalEngine() {
-      const engine = el.llmEngine ? el.llmEngine.value : 'auto';
-      const showLocal = engine === 'auto' || engine === 'mlx';
+      const engine = comNormalizeEngine(el.llmEngine ? el.llmEngine.value : 'auto');
+      // 只有「本机优先」档才需要选本机模型；纯云端档下本机模型不参与，区段收起
+      const showLocal = engine === 'auto';
       if (el.llmMlxBox) el.llmMlxBox.hidden = !showLocal;
       if (!showLocal) return;
       const setStatus = (txt, color) => {
@@ -13313,7 +13433,7 @@ el.dwVidPlayer.removeAttribute('src');
       }
     }
     if (el.llmEngine) {
-      el.llmEngine.addEventListener('change', () => refreshLocalEngine());
+      el.llmEngine.addEventListener('change', () => { refreshEngineNote(); refreshLocalEngine(); });
       if (el.llmMlxModel) el.llmMlxModel.addEventListener('change', updateMlxModelHint);
       refreshLocalEngine();
     }
@@ -13330,18 +13450,18 @@ el.dwVidPlayer.removeAttribute('src');
           el.aiStatus.style.color = isErr ? '#e74c3c' : '';
         };
         // 两组 POST 并行，整体跑完后再提示
+        // 只提交用户真的能看到、且属于「用户选择」的字段。
+        // 凭据四件套（provider / api_key / base_url / model）自 2026-09-15 起由超级
+        // 管理员通过受管配置统一下发，用户界面不再暴露；这里若继续提交，隐藏输入框
+        // 里的旧值（或空值）会把管理员配置覆盖掉——这正是此前 Key 被清空的事故路径。
         const llmBody = {
-          provider: el.llmProvider ? el.llmProvider.value : 'openai',
-          api_key: el.llmApiKey ? el.llmApiKey.value.trim() : '',
-          base_url: el.llmBaseUrl ? el.llmBaseUrl.value.trim() : '',
-          model: el.llmModel ? el.llmModel.value.trim() : '',
           reasoning_effort: el.llmReasoningEffort ? el.llmReasoningEffort.value : 'low',
           offpeak_only: el.llmOffpeakOnly ? el.llmOffpeakOnly.checked : false,
-          // 本机引擎档位统一由 engine 表达。local_priority 是 Ollama 时代遗留字段，
+          // 引擎档位统一由 engine 表达。local_priority 是 Ollama 时代遗留字段，
           // 固定传 false 不再参与路由（后端仍支持它，兼容既有配置）。
           local_priority: false,
           local_model: '',
-          engine: el.llmEngine ? el.llmEngine.value : 'auto',
+          engine: comNormalizeEngine(el.llmEngine ? el.llmEngine.value : 'auto'),
           // 选「仅云端」时不提交模型路径：undefined 不会进 JSON，后端视作
           // 「本次不修改」，这样用户切回本机档位时原路径仍在。
           mlx_model_path: (el.llmEngine && el.llmEngine.value !== 'cloud' && el.llmMlxModel)

@@ -94,6 +94,7 @@ run_one test_llm_local_priority.py
 run_one test_quota.py
 run_one test_llm_config_save.py
 run_one test_commentary_output_naming.py
+run_one test_commentary_precheck.py
 
 echo ""
 echo "========================================="

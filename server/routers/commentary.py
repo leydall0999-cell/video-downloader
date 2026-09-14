@@ -7,7 +7,7 @@ import os
 import pathlib
 import sys
 import subprocess
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 router = APIRouter()
 
@@ -242,6 +242,12 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
 
     src_path = app._resolve_source(payload)
 
+    # 前置闸门：免费用户超时长 / 必须走云端但额度已耗尽 → 立刻拒绝，绝不进入执行阶段。
+    # 历史缺口：此入口与本地拖拽入口都没有校验，用户要等转写+脚本全跑完才被告知
+    # 额度不够，白等十几分钟且拿到废片（2026-09-15 用户实测反馈）。
+    from routers.quota import precheck_or_raise
+    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end))
+
     job_id = app.uuid.uuid4().hex[:12]
     _title = app._commentary_title(payload, src_path)
     with app._commentary_lock:
@@ -306,7 +312,7 @@ def create_commentary_upload(
     # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
     try:
         from routers.quota import assert_upload_allowed
-        _dur = app._probe_video_duration(dest)
+        _dur = _effective_duration(dest, trim_start, trim_end)
         assert_upload_allowed(None, _dur)
     except app.HTTPException:
         raise
@@ -391,7 +397,7 @@ def create_script_only_upload(
     # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
     try:
         from routers.quota import assert_upload_allowed
-        _dur = app._probe_video_duration(dest)
+        _dur = _effective_duration(dest, trim_start, trim_end)
         assert_upload_allowed(None, _dur)
     except app.HTTPException:
         raise
@@ -450,6 +456,54 @@ def commentary_diagnostics() -> dict:
         "issues": app.COMMENTARY_RT.issues,
         "frozen": getattr(app.sys, "frozen", False),
     }
+
+def _effective_duration(src_path, trim_start: float = 0.0, trim_end: float = 0.0) -> float:
+    """源视频「实际参与解说的时长」= 总时长 − 头部裁剪 − 尾部裁剪（秒）。
+
+    预检必须按裁剪后的时长判定：用户把 32 分钟的片子裁掉 5 分钟头尾后只剩
+    27 分钟，按总时长判会误拦。探测失败返回 0（调用方一律 fail-open）。
+    """
+    dur = float(app._probe_video_duration(src_path) or 0.0)
+    if dur <= 0:
+        return 0.0
+    cut = max(0.0, float(trim_start or 0.0)) + max(0.0, float(trim_end or 0.0))
+    return max(0.0, dur - cut)
+
+
+@router.get("/api/commentary/precheck")
+def commentary_precheck(
+    request: Request,
+    duration_sec: float = 0.0,
+    file_id: str = "",
+    trim_start: float = 0.0,
+    trim_end: float = 0.0,
+) -> dict:
+    """解说前置预检 —— 前端「选完视频」立刻调用，不通过就当场提示。
+
+    这是「不能等做完才说额度不够」的核心保证：免费用户的时长上限与云端额度
+    必须在任务开始前判定完。历史缺陷是只在两个上传入口做校验，本地拖拽
+    （stash → script-only）与下载库入口完全没有闸门，于是免费用户跑一条超能力
+    的 40 分钟片，会在转写与脚本全部跑完后才因额度不足失败——白等十几分钟，
+    产出的是废片。
+
+    前端本地文件场景自行读元数据传 duration_sec（零成本、无需上传）；
+    下载库 / 接收站缓存场景传 file_id，由服务端 ffprobe 探测。
+    探测失败一律 fail-open（宁可放过，不误拦），真正的兜底在任务入口。
+    """
+    from routers.quota import precheck_commentary as _pre
+    dur = float(duration_sec or 0.0)
+    if dur > 0:
+        # 前端传来的是源视频总时长，这里按裁剪量折算出真实参与解说的时长
+        cut = max(0.0, float(trim_start or 0.0)) + max(0.0, float(trim_end or 0.0))
+        dur = max(0.0, dur - cut)
+    elif file_id:
+        try:
+            src = app._resolve_source(app.CommentaryRequest(file_id=file_id))
+            dur = _effective_duration(src, trim_start, trim_end)
+        except Exception:
+            dur = 0.0
+    return _pre(request, dur)
+
 
 @router.get("/api/commentary/list")
 def commentary_list() -> dict:
@@ -671,6 +725,12 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
         raise app.HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
 
     src_path = app._resolve_source(payload)
+
+    # 前置闸门（本地拖拽 / 下载库主路径）：这是「不能等做完才说额度不够」的关键点——
+    # 免费用户跑一条超能力的片子，若在此放行，会白等十几分钟后才失败并产出废片。
+    from routers.quota import precheck_or_raise
+    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end))
+
     job_id = app.uuid.uuid4().hex[:12]
     _title = app._commentary_title(payload, src_path)
     with app._commentary_lock:

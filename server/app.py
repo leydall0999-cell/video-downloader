@@ -67,7 +67,8 @@ from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_chi
 from tasks import TaskStore, TASK_ID_LENGTH
 from llm_config import (inject_llm_env, get_llm_config, save_llm_config, detect_ollama,
                         PROVIDER_PRESETS, DEFAULT_PROVIDER,
-                        list_local_models, local_runtime_status, local_models_dir)
+                        list_local_models, local_runtime_status, local_models_dir,
+                        load_user_config_raw, managed_status, mask_key)
 from vision_config import (
     inject_vision_env, get_vision_config, save_vision_config,
     VISION_PROVIDER_PRESETS, VISION_DEFAULT_PROVIDER, platform_status,
@@ -2547,7 +2548,10 @@ def _resolve_lib_video(lib_id: str) -> Path:
 # ---- LLM 服务商选择器 API（统一配置，前端面板持久化）----
 
 class LLMConfigRequest(BaseModel):
-    provider: str = Field(default="openai", max_length=32)
+    # 凭据四件套默认 None/空 = 「本次不修改」。不能用 provider 的 "openai" 作默认值：
+    # 前端简化后不再提交凭据（由管理员统一配置），若默认值仍是 "openai"，
+    # 每次保存都会把管理员配好的 deepseek 打回 openai（实测过的破坏路径）。
+    provider: str | None = Field(default=None, max_length=32)
     api_key: str = Field(default="", max_length=256)
     base_url: str = Field(default="", max_length=512)
     model: str = Field(default="", max_length=128)

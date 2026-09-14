@@ -77,6 +77,27 @@ def _config_path() -> Path:
     return _config_dir() / "llm_config.json"
 
 
+def _managed_path() -> Path:
+    """管理员受管配置路径（与用户配置分离）。
+
+    产品定位（2026-09-15 用户拍板）：普通用户不需要、也不应该在界面上配置模型
+    密钥——云端服务由**超级管理员统一配置**。用户只选择「纯云端」或「本机优先 +
+    云端配合」两种模式，凭据四件套（provider / api_key / base_url / model）由本
+    文件承载，优先级低于环境变量、高于用户 JSON。
+    """
+    return _config_dir() / "llm_managed.json"
+
+
+def mask_key(key: str) -> str:
+    """密钥脱敏展示（只留首尾各 4 位）。"""
+    k = (key or "").strip()
+    if not k:
+        return ""
+    if len(k) <= 8:
+        return "****"
+    return k[:4] + "****" + k[-4:]
+
+
 # ── 本机 Ollama 探测（本地优先开关用）─────────────────────────────────────
 _ollama_cache: dict = {"ts": 0.0, "val": None}
 _OLLAMA_CACHE_TTL = 10.0  # 秒；探测本机端口，缓存避免高频重复请求
@@ -175,6 +196,27 @@ def get_llm_config() -> dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
 
+    # 1.5) 管理员受管配置（llm_managed.json）：凭据由超级管理员统一配置，用户不接触。
+    # 优先级：环境变量 > 受管配置 > 用户 JSON。空值不覆盖（避免误清空已在用的凭据）。
+    mp = _managed_path()
+    if mp.is_file():
+        try:
+            m = json.loads(mp.read_text(encoding="utf-8"))
+            if isinstance(m, dict):
+                for k in ("provider", "api_key", "base_url", "model"):
+                    v = m.get(k)
+                    if isinstance(v, str) and v.strip():
+                        cfg[k] = v.strip()
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 1.6) 引擎档位收敛为用户可见的两档：auto（本机优先 → 云端配合）/ cloud（纯云端）。
+    # 旧版曾提供 mlx / ollama 强制档，现按产品决策下线（用户不必理解引擎细节）。
+    # 注意：只归一「配置文件」来源；环境变量仍可强制任意值（管理员/运维通道）。
+    _eng = str(cfg.get("engine") or "auto").strip().lower()
+    if _eng in ("mlx", "ollama"):
+        cfg["engine"] = "auto"
+
     # 2) 环境变量覆盖（最终裁决）
     env_key = _env_api_key()
     if env_key:
@@ -251,6 +293,25 @@ def get_llm_config() -> dict[str, Any]:
     return cfg
 
 
+def load_user_config_raw() -> dict[str, Any]:
+    """只读**用户配置文件本身**（不含受管层与环境变量覆盖）。
+
+    为什么需要它：保存端点原先以 `get_llm_config()`（已叠加受管配置与环境变量）
+    为基底做增量合并再整体写回文件——那会把**管理员下发的凭据原样写进用户文件**，
+    既破坏「凭据只由管理员统一持有」的设计，也让 Key 在用户机器上多留一份副本。
+    保存一律以本函数的结果为基底。
+    """
+    cp = _config_path()
+    if cp.is_file():
+        try:
+            got = json.loads(cp.read_text(encoding="utf-8"))
+            if isinstance(got, dict):
+                return got
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
 def save_llm_config(data: dict[str, Any]) -> None:
     """持久化 LLM 配置到 JSON 文件（API Key 仅存此文件，权限 0600）。"""
     cd = _config_dir()
@@ -261,6 +322,58 @@ def save_llm_config(data: dict[str, Any]) -> None:
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.chmod(0o600)
     tmp.replace(cp)
+
+
+def save_managed_config(data: dict[str, Any]) -> None:
+    """写入管理员受管配置（仅超级管理员使用；普通用户界面不暴露该入口）。"""
+    cd = _config_dir()
+    cd.mkdir(parents=True, exist_ok=True)
+    cp = _managed_path()
+    tmp = cp.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.chmod(0o600)
+    tmp.replace(cp)
+
+
+def managed_status() -> dict[str, Any]:
+    """云端服务配置状态（供前端展示「已由管理员配置」，**绝不含明文 Key**）。
+
+    前端用它把原来那一整块 Key / Base URL / Model 输入框替换成一行状态提示：
+    用户看到「云端解说服务已就绪（DeepSeek · deepseek-v4-flash）」即可，不必
+    关心也不需要接触任何凭据。
+    """
+    mp = _managed_path()
+    raw: dict[str, Any] = {}
+    if mp.is_file():
+        try:
+            got = json.loads(mp.read_text(encoding="utf-8"))
+            if isinstance(got, dict):
+                raw = got
+        except (json.JSONDecodeError, OSError):
+            raw = {}
+    cfg = get_llm_config()
+    key = str(cfg.get("api_key") or "").strip()
+    if _env_api_key():
+        source = "env"            # 容器/运维注入
+    elif (raw.get("api_key") or "").strip():
+        source = "managed"        # 管理员受管配置
+    elif key:
+        source = "user"           # 本机用户自行配置（兼容旧配置）
+    else:
+        source = "none"
+    prov = str(cfg.get("provider") or "")
+    return {
+        "configured": bool(key),
+        "source": source,
+        "engine": str(cfg.get("engine") or "auto"),
+        "provider": prov,
+        "provider_name": str(PROVIDER_PRESETS.get(prov, {}).get("name") or prov),
+        "base_url": str(cfg.get("base_url") or ""),
+        "model": str(cfg.get("model") or ""),
+        "api_key_masked": mask_key(key),
+        "managed_file": str(mp),
+        "managed_present": bool(raw),
+    }
 
 
 def inject_llm_env(env: dict[str, str]) -> None:
