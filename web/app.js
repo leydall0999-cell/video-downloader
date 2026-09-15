@@ -8404,9 +8404,7 @@ el.dwVidPlayer.removeAttribute('src');
     } else {
       setOpt('indextts_mlx', true, '免费（仅苹果芯片 Mac 可用）');
     }
-    // MiniMax / SiliconFlow：需填密钥
-    setOpt('minimax', !status.minimax_configured, status.minimax_configured ? '收费（密钥已填写）' : '收费（未填密钥，暂不可用）');
-    setOpt('siliconflow', !status.siliconflow_configured, status.siliconflow_configured ? '收费（密钥已填写，新用户送 ¥14）' : '收费（未填密钥，暂不可用）');
+    // MiniMax / SiliconFlow 已从下拉移除（需自填密钥，与「用户不配密钥」的产品约定不符）
     // edge-tts：始终可用兜底
     setOpt('edge', false, '免费（兜底）');
 
@@ -9877,9 +9875,9 @@ el.dwVidPlayer.removeAttribute('src');
   }
   // 字号 / 描边：数字框 + 预设下拉（仿 Excel 字号选择器）；改值即刷新实时预览
   comSetupNumSel(el.comSubSize, el.comSubSizeCaret, el.comSubSizePop,
-                 [0.8, 0.9, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6], 2);
+                 [0.8, 0.9, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6], 2, '×');
   comSetupNumSel(el.comSubBorder, el.comSubBorderCaret, el.comSubBorderPop,
-                 [0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0], 1);
+                 [0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0], 1, '×');
   if (el.comSubColor) {
     el.comSubColor.addEventListener('input', comUpdateSubPreview);
   }
@@ -9960,9 +9958,10 @@ el.dwVidPlayer.removeAttribute('src');
    * 输入或选中预设都会即时刷新实时预览；失焦时把值夹进 [min,max] 并对齐 step，
    * 防止手输空值/越界值流到后端（后端 subtitle_size 有 ge=0.6 之类的校验会直接 422）。
    */
-  function comSetupNumSel(input, caret, pop, presets, decimals) {
+  function comSetupNumSel(input, caret, pop, presets, decimals, unit) {
     if (!input || !caret || !pop) return;
     const wrap = caret.parentElement;
+    const suffix = unit || '';
     const clampVal = () => {
       const lo = Number(input.min), hi = Number(input.max);
       const step = Number(input.step) || 0.05;
@@ -9977,7 +9976,7 @@ el.dwVidPlayer.removeAttribute('src');
       presets.forEach((v) => {
         const b = document.createElement('button');
         b.type = 'button';
-        b.textContent = v.toFixed(decimals);
+        b.textContent = v.toFixed(decimals) + suffix;
         if (Math.abs(v - cur) < 1e-9) b.classList.add('is-cur');
         b.addEventListener('click', (ev) => {
           ev.preventDefault(); ev.stopPropagation();
@@ -9992,9 +9991,10 @@ el.dwVidPlayer.removeAttribute('src');
       render();
       pop.hidden = false;
       wrap.classList.add('is-open');
-      // 下拉用 fixed 定位（卡片 overflow:hidden 会裁掉绝对定位元素）：贴住按钮，下方不够就向上弹
-      const r = caret.getBoundingClientRect();
-      pop.style.minWidth = Math.round(Math.max(r.width + 44, 96)) + 'px';
+      // 下拉用 fixed 定位（卡片 overflow:hidden 会裁掉绝对定位元素）：与数字框左对齐、同宽，
+      // 下方不够就向上弹（对齐参考 Word 字号选择器）
+      const r = wrap.getBoundingClientRect();
+      pop.style.minWidth = Math.round(Math.max(r.width, 96)) + 'px';
       const pw = pop.offsetWidth, ph = pop.offsetHeight;
       let left = Math.round(r.left);
       if (left + pw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - pw - 8);
