@@ -1162,7 +1162,8 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
                              drama_start_sec: float | None = None, drama_end_sec: float | None = None,
                              bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18,
                              subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF",
-                             subtitle_border: float = 1.0, subtitle_pos: str = "bottom",
+                             subtitle_border: float = 1.0, subtitle_border_color: str = "000000",
+                             subtitle_pos: str = "bottom",
                              max_chars: int = 0, original_speed: bool = True) -> list:
     """把剪辑选项翻译成 process.py 的命令行参数（local / bundled 模式共用）。
 
@@ -1213,13 +1214,15 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args += ["--subtitle-color", subtitle_color]
     if subtitle_border and abs(subtitle_border - 1.0) > 1e-6:
         args += ["--subtitle-border", str(subtitle_border)]
+    if subtitle_border_color and subtitle_border_color.upper() != "000000":
+        args += ["--subtitle-border-color", subtitle_border_color]
     if subtitle_pos and subtitle_pos != "bottom":
         args += ["--subtitle-pos", subtitle_pos]
     if max_chars and max_chars > 0:
         args += ["--max-chars", str(max_chars)]
     return args
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True) -> None:
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_border_color: str = "000000", subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True) -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -1297,7 +1300,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                                         bgm=bgm, bgm_file=bgm_file, bgm_volume=bgm_volume,
                                         subtitle_size=subtitle_size, subtitle_color=subtitle_color,
-                                        subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
+                                        subtitle_border=subtitle_border,
+                                        subtitle_border_color=subtitle_border_color,
+                                        subtitle_pos=subtitle_pos,
                                         max_chars=max_chars, original_speed=original_speed)
         if edit_only:
             if _bundled:
@@ -2010,6 +2015,7 @@ class CommentaryRequest(BaseModel):
     subtitle_size: float = Field(default=1.0, ge=0.6, le=1.6, description="字幕字号倍率 0.6~1.6")
     subtitle_color: str = Field(default="FFFFFF", description="字幕颜色 hex(如 FFFFFF 白 / FFD700 金 / FF4500 橙)")
     subtitle_border: float = Field(default=1.0, ge=0.3, le=3.0, description="字幕描边粗细倍率 0.3~3.0")
+    subtitle_border_color: str = Field(default="000000", description="字幕描边颜色 hex(如 000000 黑 / FFFFFF 白 / 1E90FF 蓝)")
     subtitle_pos: str = Field(default="bottom", description="字幕位置: bottom=底部; center=画面中部; y:<比率>=文字中心距顶部比例(前端拖拽自定义, 如 y:0.42)")
     max_chars: int = Field(default=0, ge=0, description="解说稿总长度上限(字)，0=不限制")
 

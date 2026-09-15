@@ -521,6 +521,7 @@
     comSubBorder: $('comSubBorder'),
     comSubBorderVal: $('comSubBorderVal'),
     comSubColor: $('comSubColor'),
+    comSubBorderColor: $('comSubBorderColor'),
     comSubPreview: $('comSubPreview'),
     comSubPreviewText: $('comSubPreviewText'),
     comPreview: $('comPreview'),
@@ -8329,6 +8330,7 @@ el.dwVidPlayer.removeAttribute('src');
       subtitle_size: el.comSubSize ? Number(el.comSubSize.value) : 1.0,
       subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
       subtitle_border: el.comSubBorder ? Number(el.comSubBorder.value) : 1.0,
+      subtitle_border_color: el.comSubBorderColor ? el.comSubBorderColor.value.replace('#', '').toUpperCase() : '000000',
       subtitle_pos: (typeof comSubPosCustom === 'string' && comSubPosCustom.startsWith('y:'))
         ? comSubPosCustom
         : 'bottom',
@@ -8958,6 +8960,7 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('subtitle_size', String(_opts.subtitle_size));
       form.append('subtitle_color', _opts.subtitle_color);
       form.append('subtitle_border', String(_opts.subtitle_border));
+      form.append('subtitle_border_color', _opts.subtitle_border_color || '000000');
       form.append('subtitle_pos', _opts.subtitle_pos);
       form.append('max_chars', String(_opts.max_chars));
       const _rr = await request(`/api/commentary/render/${currentScriptJobId}`, {
@@ -9883,6 +9886,9 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comSubColor) {
     el.comSubColor.addEventListener('input', comUpdateSubPreview);
   }
+  if (el.comSubBorderColor) {
+    el.comSubBorderColor.addEventListener('input', comUpdateSubPreview);
+  }
   const _comSubPosReset = document.getElementById('comSubPosReset');
   if (_comSubPosReset) {
     _comSubPosReset.addEventListener('click', () => {
@@ -9894,9 +9900,9 @@ el.dwVidPlayer.removeAttribute('src');
   // 拖拽自定义字幕位置：null=用预设（bottom/center）；否则 'y:<比率>'（文字中心距画面顶部比例）
   let comSubPosCustom = null;
 
-  /** 字幕样式实时预览：把「字号/描边/颜色/位置」四个控件的效果
+  /** 字幕样式实时预览：把「字号/颜色/描边/描边颜色/位置」五个控件的效果
    *  以固定示例文字浮在 #comPreview 画面上，按视频实际渲染区等比缩放，
-   *  描边用 8 向 text-shadow 模拟 ffmpeg 的 ASS Border（黑描边）+ 阴影。
+   *  描边用 8 向 text-shadow 模拟 ffmpeg 的 ASS Border（颜色取「描边颜色」控件，默认黑）+ 阴影。
    *  支持直接拖动示例文字自定义纵向位置（comSubPosCustom = 'y:<比率>'）。 */
   function comUpdateSubPreview() {
     const box = el.comSubPreview, txt = el.comSubPreviewText, vid = el.comPreview;
@@ -9914,6 +9920,7 @@ el.dwVidPlayer.removeAttribute('src');
     const size = el.comSubSize ? Number(el.comSubSize.value) || 1.0 : 1.0;
     const border = el.comSubBorder ? Number(el.comSubBorder.value) || 1.0 : 1.0;
     const color = el.comSubColor ? el.comSubColor.value : '#FFFFFF';
+    const borderColor = el.comSubBorderColor ? el.comSubBorderColor.value : '#000000';
     // 基准：字幕高约等于视频高的 4.8%（size=1 时），随 size 线性缩放
     const fontSize = Math.max(12, contentH * 0.048 * size);
     // 描边厚约等于字号的 3.5% × border，clamp 1~8px
@@ -9921,8 +9928,8 @@ el.dwVidPlayer.removeAttribute('src');
     txt.style.fontSize = fontSize.toFixed(1) + 'px';
     txt.style.color = color;
     txt.style.textShadow = [
-      `${bw}px 0 0 #000`, `-${bw}px 0 0 #000`, `0 ${bw}px 0 #000`, `0 -${bw}px 0 #000`,
-      `${bw}px ${bw}px 0 #000`, `${bw}px -${bw}px 0 #000`, `-${bw}px ${bw}px 0 #000`, `-${bw}px -${bw}px 0 #000`,
+      `${bw}px 0 0 ${borderColor}`, `-${bw}px 0 0 ${borderColor}`, `0 ${bw}px 0 ${borderColor}`, `0 -${bw}px 0 ${borderColor}`,
+      `${bw}px ${bw}px 0 ${borderColor}`, `${bw}px -${bw}px 0 ${borderColor}`, `-${bw}px ${bw}px 0 ${borderColor}`, `-${bw}px -${bw}px 0 ${borderColor}`,
       `0 ${Math.max(2, bw * 1.6)}px ${Math.max(3, bw * 2)}px rgba(0,0,0,.55)`, // 底部投影
     ].join(', ');
     if (comSubPosCustom && comSubPosCustom.startsWith('y:')) {

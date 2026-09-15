@@ -270,7 +270,9 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     style=payload.style,
                     bgm=payload.bgm, bgm_file=payload.bgm_file, bgm_volume=payload.bgm_volume,
                     subtitle_size=payload.subtitle_size, subtitle_color=payload.subtitle_color,
-                    subtitle_border=payload.subtitle_border, subtitle_pos=payload.subtitle_pos,
+                    subtitle_border=payload.subtitle_border,
+                    subtitle_border_color=payload.subtitle_border_color,
+                    subtitle_pos=payload.subtitle_pos,
                     max_chars=payload.max_chars,
                     export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
@@ -760,7 +762,9 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     style=payload.style,
                     bgm=payload.bgm, bgm_file=payload.bgm_file, bgm_volume=payload.bgm_volume,
                     subtitle_size=payload.subtitle_size, subtitle_color=payload.subtitle_color,
-                    subtitle_border=payload.subtitle_border, subtitle_pos=payload.subtitle_pos,
+                    subtitle_border=payload.subtitle_border,
+                    subtitle_border_color=payload.subtitle_border_color,
+                    subtitle_pos=payload.subtitle_pos,
                     max_chars=payload.max_chars,
                     export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
@@ -853,7 +857,8 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                  bgm: str = app.Form("off"), bgm_file: str = app.Form(""),
                  bgm_volume: float = app.Form(0.18),
                  subtitle_size: float = app.Form(1.0), subtitle_color: str = app.Form("FFFFFF"),
-                 subtitle_border: float = app.Form(1.0), subtitle_pos: str = app.Form("bottom"),
+                 subtitle_border: float = app.Form(1.0), subtitle_border_color: str = app.Form("000000"),
+                 subtitle_pos: str = app.Form("bottom"),
                  max_chars: int = app.Form(0)) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
@@ -940,7 +945,9 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     src_filename=src_filename,
                     bgm=bgm, bgm_file=bgm_file, bgm_volume=bgm_volume,
                     subtitle_size=subtitle_size, subtitle_color=subtitle_color,
-                    subtitle_border=subtitle_border, subtitle_pos=subtitle_pos,
+                    subtitle_border=subtitle_border,
+                    subtitle_border_color=subtitle_border_color,
+                    subtitle_pos=subtitle_pos,
                     max_chars=max_chars,
                     export_jianying=export_jianying,
                     original_speed=use_original_speed)
