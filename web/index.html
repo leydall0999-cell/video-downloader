@@ -2181,6 +2181,13 @@
         <div id="comBarFill" class="com-bar-fill" style="width:0%" data-page-node-id="wHRqOHW8bbX7pVAn7zXeUI"></div>
       </div>
     </div>
+    <!-- ⚠️ 2026-09-16 修复「宽窗口下整个选项面板被盖住」：.com-bottom 只保留
+         「生成脚本按钮 + 进度条」这一条**矮**的常驻区，后面的审核提示 / 步骤日志 / 脚本审核 /
+         成片历史都移到 .com-bottom 之外（DOM 先后顺序不变，视觉顺序也不变）。
+         根因：.com-bottom 原先是 position:sticky; bottom:0 且包着 2000px+ 的成片历史列表，
+         sticky 元素一旦高过视口，bottom:0 会让整块被顶进视口、盖住上面的 .com-workspace
+         （只在窗口 ≥1180px 触发；≤1180px 的 @media 把它改成 static 所以看不见）。
+         🔴 后续改动：往本块里加任何「会变高」的面板前，先确认它不会超过视口高度。 -->
             <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
       <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
     </div>
@@ -2213,11 +2220,13 @@
       </div>
     </div>
             <div class="com-history" id="comHistory" data-page-node-id="aL27uBA4jmSVWj5Xi5k4SO">
-        <!-- 2026-09-15 用户明确：本面板（解说历史 = 成片列表）必须是 com-bottom 的**最后**一块。
+        <!-- 2026-09-15 用户明确：本面板（解说历史 = 成片列表）必须是解说页的**最后**一块。
              原因：页面从上到下就是工作流顺序「生成脚本 → 进度 → 步骤/日志 → 解说词审核 → 成片历史」，
              历史是产物落点、天然在最后。此前它排在 comProgress 之前，导致「解说词审核」孤零零吊在页尾，
              用户反馈「这个怎么在最后面呢，不应该是历史在最后面吗」。
-             ⚠️ 改动时勿再把本块前移；标题行 + 工具栏是本面板的第一个子元素（列表头，勿后置）。 -->
+             ⚠️ 改动时勿再把本块前移；标题行 + 工具栏是本面板的第一个子元素（列表头，勿后置）。
+             ⚠️ 2026-09-16：本块已从 .com-bottom 内移出（改为 #commentaryView 的直接子节点），
+             因为它 2000px+ 的高度会让 sticky 容器顶穿视口。视觉先后顺序未变，仍是最末一块。 -->
         <div class="com-history-head" data-page-node-id="HejiZXI2mP6UZDVhUeu8B6">
           <div class="com-history-title-wrap" data-page-node-id="wtdbMFhhPVmFdLxwoEXrVM">
             <h3 data-page-node-id="XfcDUBEM31G9M195DlqMtE">📂 解说历史 <span id="comHistoryCount" class="com-history-count" data-page-node-id="VBadUq9diV5hYYfSFfEs8r">0 个</span></h3>

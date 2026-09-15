@@ -3137,7 +3137,9 @@ img { max-width: 100%; display: block; }
 .dw-modal-footer .dw-selinfo { color: var(--text-mute, #6b7280); font-size: .85rem; }
 
 /* ===== 视频解说工作区（剪映式骨架：中素材预览 / 右参数 / 底操作条+成片历史） =====
-   2 列布局（中 1fr + 右 620-720）。成片历史（comHistory）已移至 com-bottom 内、生成脚本按钮下方。 */
+   2 列布局（中 1fr + 右 620-720）。
+   页面纵向顺序：#commentaryView 内 = .com-workspace → .com-bottom(常驻：按钮+进度)
+   → 审核提示 → 步骤日志 → 脚本审核 → .com-history（最末）。详见下方 .com-bottom 注释。 */
 #commentaryView .com-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(620px, 720px);
@@ -3317,25 +3319,34 @@ img { max-width: 100%; display: block; }
   .com-vol-card-pair { grid-template-columns: 1fr; }
   .com-vol-card-pair > .com-vol-cell:not(:last-child) { border-right: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line)); }
 }
-/* 底部操作条：生成按钮 + 进度 + 脚本审核，sticky 常驻可见 */
+/* 底部常驻操作条：**只放「生成脚本」按钮 + 进度条**，sticky 常驻可见。
+   🔴 2026-09-16 修复：原先它把「审核提示 / 步骤日志 / 脚本审核 / 成片历史」全包进来，
+   其中成片历史可高 2000px+ → sticky 元素高过视口时 bottom:0 失效，整块被顶进视口、
+   把上面的 .com-workspace 完全盖住（窗口 ≥1180px 才触发，≤1180px 有 static 回退所以看不出来）。
+   现在这四块已移到 .com-bottom 之外、成为 #commentaryView 的平级兄弟节点（顺序不变）。
+   ⚠️ 往本块里新增东西前先确认它不会超过视口高度，否则 bug 复发。 */
 .com-bottom {
   position: sticky; bottom: 0; z-index: 30;
   margin-top: 12px;
-  background: transparent;
+  background: var(--bg);                    /* 必须不透明：常驻条下方会有内容滚过 */
   border: 0;
+  border-top: 1px solid var(--line);        /* 与滚过的内容做视觉分隔 */
   border-radius: 0;
   padding: .7rem 0;
   box-shadow: none;
 }
 .com-bottom .com-generate-row { margin-top: 0; padding: 0; }
-.com-bottom .com-script-panel,
-.com-bottom .com-review-actions,
-.com-bottom .com-steps-panel { margin-top: .7rem; }
+/* 移出 .com-bottom 后的区块间距（#comScriptPanel 有自身 id 规则，不在此列） */
+#commentaryView .com-review-actions,
+#commentaryView .com-steps-panel { margin-top: .7rem; }
+/* 常驻条归位时会压住列表末尾，留出等同高度的底部空隙 */
+#commentaryView { padding-bottom: 84px; }
 /* 窄屏回退单列 */
 @media (max-width: 1180px) {
   #commentaryView .com-workspace { grid-template-columns: 1fr; }
   .com-col-left, .com-col-right { position: static; max-height: none; overflow: visible; }
   .com-bottom { position: static; }
+  #commentaryView { padding-bottom: 0; }
 }
 
 /* 一键抠图双栏：左=控制区，右=预览+结果（预览顶部与「选择图片」对齐） */
