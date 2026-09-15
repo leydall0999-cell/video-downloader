@@ -2707,6 +2707,38 @@ img { max-width: 100%; display: block; }
 .com-sub-item { display: inline-flex; align-items: center; gap: .3rem; font-size: .82rem; color: var(--text-2, #555); }
 .com-sub-item input[type="range"] { width: 96px; }
 .com-sub-item input[type="color"] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
+/* 字幕数值控件：数字框 + 预设下拉（仿 Excel 字号选择器）；字号/描边共用 */
+.com-numsel { position: relative; display: inline-flex; align-items: stretch; }
+.com-sub-item .com-numsel input[type="number"] {
+  width: 52px; height: 26px; padding: 0 .2rem 0 .3rem; text-align: center;
+  font: inherit; font-size: .82rem; color: var(--text);
+  border: 1px solid var(--line); border-right: none; border-radius: 5px 0 0 5px;
+  background: var(--surface);
+}
+.com-sub-item .com-numsel input[type="number"]:focus { outline: none; border-color: var(--accent); }
+.com-numsel-unit { display: inline-flex; align-items: center; height: 26px; padding-right: .16rem; font-size: .76rem; color: var(--text-mute); background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.com-numsel-caret {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 26px; padding: 0; cursor: pointer;
+  font-size: .62rem; line-height: 1; color: var(--text-mute);
+  border: 1px solid var(--line); border-left: none; border-radius: 0 5px 5px 0;
+  background: var(--surface);
+}
+.com-numsel-caret:hover, .com-numsel.is-open .com-numsel-caret { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--text); }
+.com-numsel-pop {
+  /* fixed：卡片是 overflow:hidden，绝对定位的下拉会被裁掉，故脱离文档流按视口定位（JS 算 left/top） */
+  position: fixed; z-index: 60;
+  min-width: 96px; max-height: 236px; overflow-y: auto;
+  padding: .28rem; background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+}
+.com-numsel-pop button {
+  display: block; width: 100%; padding: .32rem .5rem; margin: 0;
+  border: 0; border-radius: 5px; background: none; color: inherit;
+  font: inherit; font-size: .82rem; text-align: left; cursor: pointer;
+}
+.com-numsel-pop button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.com-numsel-pop button.is-cur { background: var(--accent); color: #fff; }
 .com-sub-pos { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--text-2, #555); }
 .com-sub-pos label { display: inline-flex; align-items: center; gap: .2rem; }
 

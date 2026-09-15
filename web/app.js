@@ -517,9 +517,13 @@
     comBgmFile: $('comBgmFile'),
     comBgmFilePick: $('comBgmFilePick'),
     comSubSize: $('comSubSize'),
-    comSubSizeVal: $('comSubSizeVal'),
+    comSubSizeSel: $('comSubSizeSel'),
+    comSubSizeCaret: $('comSubSizeCaret'),
+    comSubSizePop: $('comSubSizePop'),
     comSubBorder: $('comSubBorder'),
-    comSubBorderVal: $('comSubBorderVal'),
+    comSubBorderSel: $('comSubBorderSel'),
+    comSubBorderCaret: $('comSubBorderCaret'),
+    comSubBorderPop: $('comSubBorderPop'),
     comSubColor: $('comSubColor'),
     comSubBorderColor: $('comSubBorderColor'),
     comSubPreview: $('comSubPreview'),
@@ -8327,9 +8331,9 @@ el.dwVidPlayer.removeAttribute('src');
       bgm: el.comBgm ? el.comBgm.value : 'off',
       bgm_file: el.comBgmFile ? el.comBgmFile.value : '',
       bgm_volume: el.comBgmVolume ? Number(el.comBgmVolume.value) : 0.18,
-      subtitle_size: el.comSubSize ? Number(el.comSubSize.value) : 1.0,
+      subtitle_size: comNumVal(el.comSubSize, 1.0),
       subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
-      subtitle_border: el.comSubBorder ? Number(el.comSubBorder.value) : 1.0,
+      subtitle_border: comNumVal(el.comSubBorder, 1.0),
       subtitle_border_color: el.comSubBorderColor ? el.comSubBorderColor.value.replace('#', '').toUpperCase() : '000000',
       subtitle_pos: (typeof comSubPosCustom === 'string' && comSubPosCustom.startsWith('y:'))
         ? comSubPosCustom
@@ -9871,18 +9875,11 @@ el.dwVidPlayer.removeAttribute('src');
       if (el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
     });
   }
-  if (el.comSubSize) {
-    el.comSubSize.addEventListener('input', () => {
-      if (el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
-      comUpdateSubPreview();
-    });
-  }
-  if (el.comSubBorder) {
-    el.comSubBorder.addEventListener('input', () => {
-      if (el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
-      comUpdateSubPreview();
-    });
-  }
+  // 字号 / 描边：数字框 + 预设下拉（仿 Excel 字号选择器）；改值即刷新实时预览
+  comSetupNumSel(el.comSubSize, el.comSubSizeCaret, el.comSubSizePop,
+                 [0.8, 0.9, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6], 2);
+  comSetupNumSel(el.comSubBorder, el.comSubBorderCaret, el.comSubBorderPop,
+                 [0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0], 1);
   if (el.comSubColor) {
     el.comSubColor.addEventListener('input', comUpdateSubPreview);
   }
@@ -9917,8 +9914,8 @@ el.dwVidPlayer.removeAttribute('src');
       const scale = Math.min(w / vid.videoWidth, h / vid.videoHeight);
       contentH = vid.videoHeight * scale;
     }
-    const size = el.comSubSize ? Number(el.comSubSize.value) || 1.0 : 1.0;
-    const border = el.comSubBorder ? Number(el.comSubBorder.value) || 1.0 : 1.0;
+    const size = comNumVal(el.comSubSize, 1.0);
+    const border = comNumVal(el.comSubBorder, 1.0);
     const color = el.comSubColor ? el.comSubColor.value : '#FFFFFF';
     const borderColor = el.comSubBorderColor ? el.comSubBorderColor.value : '#000000';
     // 基准：字幕高约等于视频高的 4.8%（size=1 时），随 size 线性缩放
@@ -9947,6 +9944,84 @@ el.dwVidPlayer.removeAttribute('src');
       txt.style.marginTop = '';          // 恢复 CSS 预设边距
       txt.style.marginBottom = '';
     }
+  }
+
+  /** 数值输入框的安全取值：空/非法 → 默认值；超范围 → 夹到 min/max。 */
+  function comNumVal(input, dflt) {
+    if (!input) return dflt;
+    const v = Number(input.value);
+    if (!isFinite(v) || v <= 0) return dflt;
+    const lo = Number(input.min), hi = Number(input.max);
+    return Math.min(hi, Math.max(lo, v));
+  }
+
+  /**
+   * 数值选择器：数字输入框 + 预设下拉（仿 Excel 字号选择器，字号/描边共用）。
+   * 输入或选中预设都会即时刷新实时预览；失焦时把值夹进 [min,max] 并对齐 step，
+   * 防止手输空值/越界值流到后端（后端 subtitle_size 有 ge=0.6 之类的校验会直接 422）。
+   */
+  function comSetupNumSel(input, caret, pop, presets, decimals) {
+    if (!input || !caret || !pop) return;
+    const wrap = caret.parentElement;
+    const clampVal = () => {
+      const lo = Number(input.min), hi = Number(input.max);
+      const step = Number(input.step) || 0.05;
+      let v = Number(input.value);
+      if (!isFinite(v) || input.value.trim() === '') v = lo;
+      v = Math.min(hi, Math.max(lo, Math.round(v / step) * step));
+      input.value = v.toFixed(decimals);
+    };
+    const render = () => {
+      const cur = Number(input.value);
+      pop.textContent = '';
+      presets.forEach((v) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = v.toFixed(decimals);
+        if (Math.abs(v - cur) < 1e-9) b.classList.add('is-cur');
+        b.addEventListener('click', (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          input.value = v.toFixed(decimals);
+          close();
+          comUpdateSubPreview();
+        });
+        pop.appendChild(b);
+      });
+    };
+    const open = () => {
+      render();
+      pop.hidden = false;
+      wrap.classList.add('is-open');
+      // 下拉用 fixed 定位（卡片 overflow:hidden 会裁掉绝对定位元素）：贴住按钮，下方不够就向上弹
+      const r = caret.getBoundingClientRect();
+      pop.style.minWidth = Math.round(Math.max(r.width + 44, 96)) + 'px';
+      const pw = pop.offsetWidth, ph = pop.offsetHeight;
+      let left = Math.round(r.left);
+      if (left + pw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - pw - 8);
+      pop.style.left = left + 'px';
+      const up = (r.bottom + ph + 12 > window.innerHeight) && (r.top - ph - 12 > 0);
+      pop.style.top = Math.round(up ? r.top - ph - 5 : r.bottom + 5) + 'px';
+      pop.style.maxHeight = Math.round(Math.min(236, window.innerHeight * 0.5)) + 'px';
+    };
+    const close = () => { pop.hidden = true; wrap.classList.remove('is-open'); };
+    caret.addEventListener('click', (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      if (pop.hidden) open(); else close();
+    });
+    input.addEventListener('input', () => {
+      const v = Number(input.value);
+      if (isFinite(v) && v > 0) comUpdateSubPreview();   // 手输/原生步进即时预览
+      if (!pop.hidden) render();
+    });
+    input.addEventListener('blur', () => { clampVal(); comUpdateSubPreview(); });
+    input.addEventListener('change', () => { clampVal(); comUpdateSubPreview(); });
+    // 点空白处收起（capture 阶段不抢，避免和别的控件打架）
+    document.addEventListener('click', (ev) => {
+      if (!pop.hidden && !pop.contains(ev.target) && !caret.contains(ev.target)) close();
+    });
+    // fixed 定位跟不上容器滚动/窗口缩放 → 直接收起，避免浮层错位
+    window.addEventListener('scroll', () => { if (!pop.hidden) close(); }, true);
+    window.addEventListener('resize', () => { if (!pop.hidden) close(); });
   }
 
   // 拖动示例文字 → 写入自定义位置（文字中心跟随指针，clamp 6%~94%）
@@ -9998,8 +10073,6 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (_initBgm === 'off');
   if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (_initBgm !== 'user');
   if (el.comBgmVolume && el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
-  if (el.comSubSize && el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
-  if (el.comSubBorder && el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
   if (el.comMaxChars && el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
 
   // 来源互斥：选了下拉就清空本地文件
