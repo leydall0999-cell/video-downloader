@@ -205,6 +205,17 @@ _stage_commentary() {
             "COMMENTARY_PLAN.md" "verify_quality.py" "run_local.sh" "README.md"; do
     [ -f "$src/$_f" ] && cp "$src/$_f" "$staging/"
   done
+  # ── 记录「真正被打进包」的管线 revision ────────────────────────────────
+  # 踩坑（2026-09-15 实测）：staging 在构建**开头**执行，而指纹在构建**结尾**读 `git HEAD`；
+  # 两者之间若又落了提交，指纹就会"虚报"——构建 10 指纹写着 6d5c330，包里却没有那次提交的
+  # 定向重写代码（排查了一轮才发现）。这里在暂存**当场**把 revision 写进 staging，供指纹步优先读取；
+  # 工作树相对 HEAD 有未提交改动时追加 -dirty，避免「HEAD 干净但内容已改」再次骗人。
+  _pl_sha="$(git -C "$src" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if [ -n "$(git -C "$src" status --porcelain -- scripts process.py 2>/dev/null)" ]; then
+    _pl_sha="${_pl_sha}-dirty"
+  fi
+  printf '%s\n' "$_pl_sha" > "$staging/_pipeline_sha.txt"
+  echo "   ✔ 管线暂存版本: ${_pl_sha}（指纹以此为准，不取构建末尾的 HEAD）" >&2
   echo "$staging"
 }
 
@@ -437,7 +448,13 @@ echo "▶ 注入构建指纹（页脚显示，便于确认是否最新版）"
 BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
 # 解说管线（commentary-pipeline）独立仓库，其 SHA 也一并注入指纹，避免「改了管线但 /api/version 不反映」的错觉。
-PIPELINE_HASH="$(git -C "$COMMENTARY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# ⚠️ 优先读 staging 在**打包当场**记下的 revision，而不是此刻的 HEAD：staging 在构建开头、
+#    指纹在构建结尾，期间若又落了提交，直接读 HEAD 会虚报版本（2026-09-15 踩过）。
+if [ -n "${COMMENTARY_STAGING:-}" ] && [ -f "$COMMENTARY_STAGING/_pipeline_sha.txt" ]; then
+  PIPELINE_HASH="$(tr -d '[:space:]' < "$COMMENTARY_STAGING/_pipeline_sha.txt")"
+else
+  PIPELINE_HASH="$(git -C "$COMMENTARY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+fi
 # 语义化版本号：仓库根 VERSION 文件（不随构建变化，仅发版时手工 +1），供「关于/自动更新」比对。
 APP_VERSION="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]' | head -1)"
 [ -z "$APP_VERSION" ] && APP_VERSION="0.0.0"
