@@ -9994,7 +9994,7 @@ el.dwVidPlayer.removeAttribute('src');
       // 下拉用 fixed 定位（卡片 overflow:hidden 会裁掉绝对定位元素）：与数字框左对齐、同宽，
       // 下方不够就向上弹（对齐参考 Word 字号选择器）
       const r = wrap.getBoundingClientRect();
-      pop.style.minWidth = Math.round(Math.max(r.width, 96)) + 'px';
+      pop.style.minWidth = Math.round(Math.max(r.width, 72)) + 'px';
       const pw = pop.offsetWidth, ph = pop.offsetHeight;
       let left = Math.round(r.left);
       if (left + pw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - pw - 8);
