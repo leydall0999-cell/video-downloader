@@ -54,8 +54,34 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _normalize_url(url: str) -> str:
-    """去掉结尾斜杠，避免拼出 `//v1`。"""
+    """去掉结尾斜杠，避免拼出 `//v1`。
+
+    支持 `direct://` 前缀（原样保留）：含义见 _DIRECT_PREFIX——网关是国内 ECS、
+    无需代理；本机代理（Karing 等）节点断开时会 0.0s 回 502，把本来可达的网关拖死
+    （2026-09-15 实测：验收任务 LLM 8 连 502 全是本机代理回的，ECS 日志里根本没有请求）。
+    """
     return (url or "").strip().rstrip("/")
+
+
+_DIRECT_PREFIX = "direct://"
+
+
+def _strip_direct(url: str) -> str:
+    """剥掉 direct:// 前缀，得到真实可请求的 URL（无前缀则原样返回）。"""
+    u = url or ""
+    return u[len(_DIRECT_PREFIX):] if u.startswith(_DIRECT_PREFIX) else u
+
+
+def _has_direct(url: str) -> bool:
+    return (url or "").startswith(_DIRECT_PREFIX)
+
+
+def _opener_for(url: str):
+    """direct:// 前缀 → 返回绕开系统代理/环境变量代理的 opener；否则 None（urllib 默认）。"""
+    if _has_direct(url):
+        import urllib.request
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return None
 
 
 def get_gateway_config() -> dict[str, Any]:
@@ -112,11 +138,12 @@ def mask_token(token: str) -> str:
 
 
 def gateway_status() -> dict[str, Any]:
-    """供界面展示的状态（绝不返回完整令牌）。"""
+    """供界面展示的状态（绝不返回完整令牌）。url 展示剥掉 direct:// 前缀（内部配置保留）。"""
     cfg = get_gateway_config()
     return {
         "enabled": bool(cfg["enabled"]),
-        "url": cfg["url"],
+        "url": _strip_direct(cfg["url"]),
+        "direct": _has_direct(cfg["url"]),
         "has_token": bool(cfg["token"]),
         "token_masked": mask_token(cfg["token"]),
         "source": cfg["source"],
@@ -147,8 +174,10 @@ def upstream_models(ttl: float = MODELS_CACHE_TTL) -> list[str]:
     try:
         import urllib.request
 
-        url = cfg["url"] + "/health"
-        with urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT) as resp:  # noqa: S310 - 固定内网/自建网关
+        url = _strip_direct(cfg["url"]) + "/health"
+        opener = _opener_for(cfg["url"])
+        _open = opener.open if opener is not None else urllib.request.urlopen
+        with _open(url, timeout=DEFAULT_TIMEOUT) as resp:  # noqa: S310 - 固定内网/自建网关
             data = json.loads(resp.read().decode("utf-8", "replace"))
         raw = data.get("models") or []
         if isinstance(raw, list):
