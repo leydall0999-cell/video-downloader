@@ -98,6 +98,7 @@ run_one test_gateway_config.py
 run_one test_quota_refund.py
 run_one test_commentary_output_naming.py
 run_one test_commentary_precheck.py
+run_one test_llm_truncation_retry.py
 
 echo ""
 echo "========================================="
