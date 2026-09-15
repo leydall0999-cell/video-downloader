@@ -535,15 +535,10 @@
     comDropZone: $('comDropZone'),
     comTrimCard: $('comTrimCard'),
     comPreview: $('comPreview'),
-    comTrimStartRange: $('comTrimStartRange'),
-    comTrimEndRange: $('comTrimEndRange'),
-    comTrimStart: $('comTrimStart'),
-    comTrimEnd: $('comTrimEnd'),
     comTrimDuration: $('comTrimDuration'),
     comTrimTitle: $('comTrimTitle'),
     comTrimSetStart: $('comTrimSetStart'),
     comTrimSetEnd: $('comTrimSetEnd'),
-    comTrimPreview: $('comTrimPreview'),
     comTrimReset: $('comTrimReset'),
     comEta: $('comEta'),
     tabCommentary: $('tabCommentary'),
@@ -8278,23 +8273,8 @@ el.dwVidPlayer.removeAttribute('src');
     return null;
   };
 
-  // 顶部「起点/终点」外层裁剪 与 底部「正剧开始/片尾开始时间」绝对边界都界定正片范围，
-  // 同时填会叠加生效、可能重复裁剪。提交前提示用户确认；返回 true=允许继续，false=中止。
-  const comConfirmTrimOverlap = () => {
-    const topActive = comPreviewDuration > 0 && (comTrimStart > 0.5 || comTrimEnd < comPreviewDuration - 0.5);
-    if (!topActive) return true;
-    const dramaStart = el.comDramaStart && el.comDramaStart.value.trim();
-    const dramaEnd = el.comDramaEnd && el.comDramaEnd.value.trim();
-    if (!dramaStart && !dramaEnd) return true;
-    return window.confirm(
-      '检测到你同时设置了「起点/终点」（外层源文件裁剪）和「正剧开始/片尾开始时间」（绝对边界）。\n' +
-      '两者都会界定正片范围，会叠加生效、可能造成重复裁剪。\n\n' +
-      '建议只保留一处：\n' +
-      '· 只想处理某一段 → 用顶部「起点/终点」\n' +
-      '· 想让 AI 自动找边界、你只指定正剧起点 → 用底部「正剧开始/片尾开始时间」\n\n' +
-      '仍要同时提交吗？'
-    );
-  };
+  // 「起点/终点」外层裁剪 UI 已与「正剧开始/片尾开始时间」合并（trim 恒为整片、只有一处绝对时间），
+  // 原先「两处叠加裁剪」的确认弹窗已无触发场景，故移除。
 
   // source: { taskId }（下载完成的任务）或 { fileId }（媒体库里的现成视频）
   // 读取当前选中的剪辑选项（解说类型 / 高光来源 / 开关）
@@ -8529,7 +8509,6 @@ el.dwVidPlayer.removeAttribute('src');
    *  用户确认后再点击「生成成片」。避免直接渲染导致无法修改。
    *  从媒体库调用时自动切到解说标签页。 */
   const createCommentary = async (source, refs, base = '') => {
-    if (!comConfirmTrimOverlap()) return;
     switchView('commentary');
     if (refs.commentary) {
       refs.commentary.disabled = true;
@@ -9556,8 +9535,6 @@ el.dwVidPlayer.removeAttribute('src');
       comPreviewDuration = el.comPreview.duration || 0;
       comPreviewW = el.comPreview.videoWidth || 0;
       comPreviewH = el.comPreview.videoHeight || 0;
-      el.comTrimStartRange.max = String(comPreviewDuration || 100);
-      el.comTrimEndRange.max = String(comPreviewDuration || 100);
       resetTrim();
     };
     // 加载失败不再硬藏卡片 —— 让用户能继续操作，错误提示放在状态栏
@@ -9572,36 +9549,33 @@ el.dwVidPlayer.removeAttribute('src');
     el.comPreview.load();
   };
 
+  // 换片时：外层裁剪恒为整片，同时清空正剧时间输入（绝对时间只对当前这支片有意义）
   const resetTrim = () => {
     comTrimStart = 0;
     comTrimEnd = comPreviewDuration || 0;
+    if (el.comDramaStart) el.comDramaStart.value = '';
+    if (el.comDramaEnd) el.comDramaEnd.value = '';
     syncTrimInputs();
   };
 
+  // 名字沿用（调用点较多）：现在只负责刷新卡头那行提示
   const syncTrimInputs = () => {
-    el.comTrimStartRange.value = String(comTrimStart);
-    el.comTrimEndRange.value = String(comTrimEnd);
-    el.comTrimStart.value = formatHMS(comTrimStart);
-    el.comTrimEnd.value = formatHMS(comTrimEnd);
     updateTrimDurationText();
   };
 
+  // 卡头「片长：xx」；若两处正剧时间互相矛盾，就地换成红色提醒（见 styles.css .com-trim-dur.is-warn）
   const updateTrimDurationText = () => {
-    const dur = Math.max(0, comTrimEnd - comTrimStart);
-    el.comTrimDuration.textContent = `裁剪后时长：${formatDuration(dur) || '0s'}`;
-  };
-
-  const clampTrim = () => {
-    const total = comPreviewDuration || 0;
-    let s = Math.max(0, Math.min(comTrimStart, total));
-    let e = Math.max(0, Math.min(comTrimEnd, total));
-    if (e <= s) {
-      if (s >= total) s = Math.max(0, total - 0.5);
-      e = Math.min(total, s + 0.5);
+    if (!el.comTrimDuration) return;
+    const s = el.comDramaStart && el.comDramaStart.value.trim() ? parseTimeSec(el.comDramaStart.value) : null;
+    const e = el.comDramaEnd && el.comDramaEnd.value.trim() ? parseTimeSec(el.comDramaEnd.value) : null;
+    if (s != null && e != null && e <= s) {
+      el.comTrimDuration.textContent = '⚠ 片尾开始需晚于正剧开始';
+      el.comTrimDuration.classList.add('is-warn');
+      return;
     }
-    comTrimStart = s;
-    comTrimEnd = e;
-    syncTrimInputs();
+    el.comTrimDuration.classList.remove('is-warn');
+    const total = comPreviewDuration || 0;
+    el.comTrimDuration.textContent = total ? `片长：${formatDuration(total) || '0s'}` : '片长：--';
   };
 
   /** 渲染后给某张成片卡换/加/移除配乐（轻量 amix，秒级，成品就地替换）。 */
@@ -10453,47 +10427,27 @@ el.dwVidPlayer.removeAttribute('src');
 
   document.querySelectorAll('[data-com-select]').forEach(initComSelect);
 
-  // 裁剪控件事件
-  el.comTrimStartRange.addEventListener('input', () => {
-    comTrimStart = parseFloat(el.comTrimStartRange.value) || 0;
-    if (comTrimStart > comTrimEnd) comTrimStart = comTrimEnd;
-    syncTrimInputs();
-  });
-  el.comTrimEndRange.addEventListener('input', () => {
-    comTrimEnd = parseFloat(el.comTrimEndRange.value) || 0;
-    if (comTrimEnd < comTrimStart) comTrimEnd = comTrimStart;
-    syncTrimInputs();
-  });
-  el.comTrimStart.addEventListener('change', () => {
-    comTrimStart = Math.max(0, parseHMS(el.comTrimStart.value));
-    clampTrim();
-  });
-  el.comTrimEnd.addEventListener('change', () => {
-    comTrimEnd = parseHMS(el.comTrimEnd.value);
-    clampTrim();
-  });
-  el.comTrimSetStart.addEventListener('click', () => {
-    comTrimStart = Math.max(0, Math.min(el.comPreview.currentTime, comTrimEnd - 0.5));
-    syncTrimInputs();
-  });
-  el.comTrimSetEnd.addEventListener('click', () => {
-    comTrimEnd = Math.min(comPreviewDuration || el.comPreview.currentTime,
-                          Math.max(el.comPreview.currentTime, comTrimStart + 0.5));
-    syncTrimInputs();
-  });
-  el.comTrimPreview.addEventListener('click', () => {
-    if (!comPreviewDuration) return;
-    el.comPreview.currentTime = comTrimStart;
-    const stopAt = comTrimEnd;
-    const onTime = () => {
-      if (el.comPreview.currentTime >= stopAt) {
-        el.comPreview.pause();
-        el.comPreview.removeEventListener('timeupdate', onTime);
-      }
-    };
-    el.comPreview.addEventListener('timeupdate', onTime);
-    el.comPreview.play().catch(() => {});
-  });
+  // 正剧范围控件：起点/终点滑块已下线（与「正剧开始/片尾开始时间」重复），
+  // 现在只有两个绝对时间输入 + 「用播放位置设…」；trim_start/trim_end 恒为整片。
+  const normalizeDramaInput = (input) => {
+    if (!input) return;
+    const raw = input.value.trim();
+    if (!raw) { input.value = ''; updateTrimDurationText(); return; }
+    const sec = parseTimeSec(raw);
+    // 认得出就统一成 HH:MM:SS（引擎两个写法都吃，统一了更好核对片长）；认不出则原样留给后端报错
+    if (sec != null) input.value = formatHMS(sec);
+    updateTrimDurationText();
+  };
+  el.comDramaStart.addEventListener('change', () => normalizeDramaInput(el.comDramaStart));
+  el.comDramaEnd.addEventListener('change', () => normalizeDramaInput(el.comDramaEnd));
+  const setDramaFromPlayhead = (which) => {
+    const input = which === 'start' ? el.comDramaStart : el.comDramaEnd;
+    if (!input || !el.comPreview) return;
+    input.value = formatHMS(Math.max(0, Math.floor(el.comPreview.currentTime || 0)));
+    updateTrimDurationText();
+  };
+  el.comTrimSetStart.addEventListener('click', () => setDramaFromPlayhead('start'));
+  el.comTrimSetEnd.addEventListener('click', () => setDramaFromPlayhead('end'));
   el.comTrimReset.addEventListener('click', resetTrim);
 
   el.comRefresh.addEventListener('click', loadCommentary);

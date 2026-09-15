@@ -2314,6 +2314,8 @@ img { max-width: 100%; display: block; }
 .com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); flex: 0 0 auto; }
 .com-trim-title { flex: 1 1 auto; min-width: 0; font-size: .82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .com-trim-dur { flex: 0 0 auto; font-size: .78rem; color: var(--brand); font-weight: 600; }
+/* 片尾开始 ≤ 正剧开始 时把「片长」位置换成红色提示（同上，见 updateTrimDurationText） */
+.com-trim-dur.is-warn { color: #d9534f; }
 .com-preview-wrap { position: relative; }
 .com-preview {
   width: 100%; max-height: 320px; background: #000; border-radius: 6px; display: block;
@@ -2344,6 +2346,8 @@ img { max-width: 100%; display: block; }
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .5rem;
 }
 .com-trim-label { font-size: .8rem; color: var(--text-mute); white-space: nowrap; }
+/* 正剧范围行（原起点/终点行）：只剩「标签 + 时间框」，左侧贴近排布，不再给滑块留空列 */
+.com-trim-timeline-drama .com-trim-field { grid-template-columns: auto auto; justify-content: start; }
 .com-time-input {
   width: 92px; font-size: .8rem; text-align: center; font-family: monospace;
   padding: .3rem .35rem; border: 1px solid var(--line); border-radius: 5px;
@@ -3212,18 +3216,16 @@ img { max-width: 100%; display: block; }
   padding: .55rem .65rem; min-width: 0;
 }
 .com-cell-full { grid-column: 1 / -1; }
-/* 「正剧开始/片尾开始时间」：与右侧字幕卡同行（详见 .com-sub-card 注释） */
-.com-drama-bound { grid-column: 1; grid-row: 1; }
+/* 正剧边界输入已搬进左列「✂️ 预览与正剧范围」卡 → 本网格只剩字幕卡，整行铺满 */
 /* 标题仅隐藏 trigger 单元格内的（下拉按钮已显示组名）；导出剪映等真实标题保留显示 */
 .com-col-right .com-opts#comOpts .com-cell-trigger > .com-opt-title { display: none; }
 /* 字幕样式行：单行多控件；颜色 picker 自动行内 */
 .com-sub-style-row { display: flex; flex-wrap: wrap; gap: .3rem .68rem; align-items: center; }
 
 /* 字幕整卡：单行样式控件，右上角挂「重置位置」图标 */
-/* ⚠️ 卡片与「正剧开始/片尾开始时间」同占第 1 行、左右各一列，两者都显式定位：
-   网格自动放置算法对「只指定列」的项会把游标推到下一行，导致左列空一行、错位。 */
+/* 正剧边界搬走后本卡独占整行（网格里已无第二项，勿再写死 grid-column:2 否则左列空一格） */
 .com-sub-card {
-  grid-column: 2; grid-row: 1;
+  grid-column: 1 / -1;
   position: relative;               /* 「重置位置」图标的定位参照 */
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));

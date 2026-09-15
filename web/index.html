@@ -1853,9 +1853,9 @@
     </div>
                 <div class="com-trim-card" id="comTrimCard" hidden data-page-node-id="nDMvyIlDN1rvgp4iVG14i4">
       <div class="com-trim-head" data-page-node-id="NWaORyaaXLQ55Dud8PsRYH">
-        <h3 data-page-node-id="MPKTEzTi8d6eAikX1YF05D">✂️ 预览与裁剪</h3>
+        <h3 data-page-node-id="MPKTEzTi8d6eAikX1YF05D">✂️ 预览与正剧范围</h3>
         <span class="com-trim-title" id="comTrimTitle" hidden data-page-node-id="tprw9KKGotopFrZTxIptQr"></span>
-        <span class="com-trim-dur" id="comTrimDuration" data-page-node-id="z1AeLzMkwPDGwjcHvZTh68">裁剪后时长：--</span>
+        <span class="com-trim-dur" id="comTrimDuration" data-page-node-id="z1AeLzMkwPDGwjcHvZTh68">片长：--</span>
       </div>
       <div class="com-preview-wrap" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I-wrap">
         <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
@@ -1864,25 +1864,25 @@
           <span id="comSubPreviewText">字幕预览：调整下方样式实时看效果</span>
         </div>
       </div>
-      <div class="com-trim-timeline" data-page-node-id="6BLjipqUcjLfWZBrSYvPFH">
+      <!-- 原「起点/终点」（外层源文件裁剪 + 滑块）已下线：与「正剧开始/片尾开始时间」都在界定正片范围，
+           两处同填会叠加跳过（trim 先裁、drama 再按绝对时间前移）。现在只保留绝对时间一处，
+           输入框直接放在原先起点/终点这一行；trim_start/trim_end 恒为整片，不再做外层源裁剪。 -->
+      <div class="com-trim-timeline com-trim-timeline-drama" data-page-node-id="6BLjipqUcjLfWZBrSYvPFH">
         <label class="com-trim-field" data-page-node-id="Quzxv91M41D2OdgehBOfzb">
-          <span class="com-trim-label" data-page-node-id="jVksehDdcj0uw5DAwRN9l1">起点</span>
-          <input type="range" id="comTrimStartRange" class="com-range" min="0" max="100" step="0.1" value="0" data-page-node-id="ulBMUMtn0Jt460GlZkSvDi" />
-          <input type="text" id="comTrimStart" class="com-time-input" value="00:00:00" inputmode="numeric" data-page-node-id="mTCEyKRC8d58qWdwwbtZ2S" />
+          <span class="com-trim-label" data-page-node-id="jVksehDdcj0uw5DAwRN9l1">正剧开始</span>
+          <input type="text" id="comDramaStart" class="com-time-input" placeholder="00:01:25" inputmode="numeric" title="正剧开始（绝对时间，也可直接填秒数如 85）；留空＝自动检测" data-page-node-id="epPiRNymcK7wBXO31k60fD" />
         </label>
         <label class="com-trim-field" data-page-node-id="V00oLK6zeKBO8oDy6SGZX3">
-          <span class="com-trim-label" data-page-node-id="oJvQHiqJjLiBxJywxi1JqF">终点</span>
-          <input type="range" id="comTrimEndRange" class="com-range" min="0" max="100" step="0.1" value="100" data-page-node-id="rTaEsgP64D8qyx98ECSDu9" />
-          <input type="text" id="comTrimEnd" class="com-time-input" value="00:00:00" inputmode="numeric" data-page-node-id="801xLH9FPp4YoBe3AfZ67D" />
+          <span class="com-trim-label" data-page-node-id="oJvQHiqJjLiBxJywxi1JqF">片尾开始</span>
+          <input type="text" id="comDramaEnd" class="com-time-input" placeholder="00:44:00" inputmode="numeric" title="片尾开始（绝对时间，也可直接填秒数如 2640）；留空＝自动检测" data-page-node-id="CITywVSPijhBUV0Z7pvppD" />
         </label>
       </div>
       <div class="com-trim-actions" data-page-node-id="RZbvVbTsmrwMo8HQJKGsRZ">
-        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetStart" data-page-node-id="tebL9UGh9hHuPT4tskqaYx">↩ 用播放位置设起点</button>
-        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetEnd" data-page-node-id="8gQESK87B02G9UhKdOSDAN">↪ 用播放位置设终点</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="comTrimPreview" data-page-node-id="lhXdbURYReyiSHAuRNtd8z">▶ 预览裁剪片段</button>
-        <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset" data-page-node-id="MGZ2olbRoqt4U2z9pKrGwG">重置为整段</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetStart" data-page-node-id="tebL9UGh9hHuPT4tskqaYx">↩ 用播放位置设正剧开始</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetEnd" data-page-node-id="8gQESK87B02G9UhKdOSDAN">↪ 用播放位置设片尾开始</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset" data-page-node-id="MGZ2olbRoqt4U2z9pKrGwG">清空（回到自动检测）</button>
       </div>
-      <p class="com-trim-hint" data-page-node-id="wed9kMv6k29xXwSOGvjlL5">先按起止范围裁剪整段视频，再交给解说流程。<strong data-page-node-id="FNTPgGSJKtVwvsSZhuB518">与下方「固定选择项」同时填会重复裁，建议只填一处。</strong></p>
+      <p class="com-trim-hint" data-page-node-id="wed9kMv6k29xXwSOGvjlL5">留空＝自动检测片头片尾。这里填的是<strong data-page-node-id="FNTPgGSJKtVwvsSZhuB518">绝对时间</strong>（可直接写秒数，如 85）；片头片尾是「保留不解说」还是「直接剪掉」，由右侧「固定选择项」决定。</p>
     </div>
         </div>
         <div class="com-col com-col-right" data-page-node-id="B6GsAfYESd6LfdrKPmeWAD">
@@ -2052,9 +2052,8 @@
 
       <!-- ===== 第 3-7 行：2 列网格 ===== -->
       <div class="com-grid" data-page-node-id="fv7zCNlygLwrMamdllPTuG">
-        <!-- 片头片尾秒数（已下线）：与下方「正剧开始/片尾开始时间」同侧互斥、在管线里完全等价
-             （管线 _detect_intro_outro 里 drama_* 优先于 intro/outro，同填则秒数被忽略），
-             而下方输入框本就支持直接填秒数（85 / 2640），故保留绝对时间一处即可。 -->
+        <!-- 正剧边界（片头/片尾秒数、正剧开始/片尾开始时间）已全部合并到左列
+             「✂️ 预览与正剧范围」卡里，这里只剩字幕样式卡（整行）。 -->
         <div class="com-sub-card" data-page-node-id="a4VHW8hoc3d9OiJ7kmy1CK">
           <div class="com-sub-row" data-page-node-id="Kb8tSJYQWQp3U3Fr0na9bG">
             <div class="com-sub-style-row" data-page-node-id="TyN0MOEYqTRgQ3FS57qES9">
@@ -2079,15 +2078,7 @@
           </div>
         </div>
 
-        <!-- 正剧区间：绝对时间，优先于自动检测；同侧只需填一处 -->
-        <div class="com-cell com-cell-half com-retain-field com-drama-bound" data-page-node-id="oNHYn8sIbNSOOeUEz59g5g">
-          <label class="com-retain-label" data-page-node-id="DCjWfhlrJjq16HBZ8tykJc">正剧开始/片尾开始时间</label>
-          <div class="com-retain-input" data-page-node-id="fUct38DUg6BAoJK2DCZeAw">
-            <input type="text" id="comDramaStart" placeholder="01:25" title="正剧开始（绝对时间，也可直接填秒数如 85）" data-page-node-id="epPiRNymcK7wBXO31k60fD" />
-            <input type="text" id="comDramaEnd" placeholder="44:00" title="片尾开始（绝对时间，也可直接填秒数如 2640）" data-page-node-id="CITywVSPijhBUV0Z7pvppD" />
-          </div>
-          <span class="com-retain-hint" data-page-node-id="SD1b72Tn8CCrFExnXmvg1k">绝对时间（可直接填秒数）；留空=自动检测</span>
-        </div>
+        <!-- 「正剧开始/片尾开始时间」已并入左列「✂️ 预览与正剧范围」卡（原起点/终点那一行），此处不再重复 -->
       </div>
 
       <!-- ===== 配音与音量整卡（合并含试听按钮） ===== -->
