@@ -2708,11 +2708,14 @@ img { max-width: 100%; display: block; }
 .com-sub-item input[type="range"] { width: 96px; }
 .com-sub-item input[type="color"] {
   flex: 0 0 auto; width: 32px; height: 24px; padding: 0; cursor: pointer;
-  /* 白色块在白底卡片上几乎看不见 → 边框加深 + 外投影，任何颜色都有清晰轮廓 */
+  /* 白色块在浅底卡片上看不清：外框 + 内框双描边。
+     ⚠️ 内框只能用 outline + 负 offset —— inset box-shadow 会被浏览器自绘的色块(swatch)盖住。 */
   border: 1px solid #98a2ad; border-radius: 5px;
   background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .14);
+  outline: 1px solid rgba(0, 0, 0, .35); outline-offset: -3px;
 }
 .com-sub-item input[type="color"]:hover { border-color: var(--accent); }
+.com-sub-item input[type="color"]:focus { outline-color: var(--accent); }
 /* 字幕数值控件：数字框 + 预设下拉（仿 Excel 字号选择器）；字号/描边共用 */
 .com-numsel { position: relative; display: inline-flex; align-items: stretch; }
 .com-sub-item .com-numsel input[type="number"] {
@@ -2722,7 +2725,6 @@ img { max-width: 100%; display: block; }
   background: var(--surface);
 }
 .com-sub-item .com-numsel input[type="number"]:focus { outline: none; border-color: var(--accent); }
-.com-numsel-unit { display: inline-flex; align-items: center; height: 26px; padding-right: .16rem; font-size: .76rem; line-height: 1; color: var(--text-mute); background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .com-numsel-caret {
   display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 26px; padding: 0; cursor: pointer;
