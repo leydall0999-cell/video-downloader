@@ -931,6 +931,11 @@ class _CommentaryRuntime:
         另外显式设置 COMMENTARY_BASE，确保打包后 config.py 里的 BASE 一定指向管线根目录
         （避免 PyInstaller 的 __file__ 解析差异导致找不到 assets/fonts 下捆绑的中文字体）。"""
         env = os.environ.copy()
+        # 防「重入保险丝」误触发（2026-09-15 实测）：worker 子进程以 `sys.executable --vdl-commentary-worker`
+        # 重入自身，desktop_launcher 会因 `VDL_WORKER_DEPTH>0` 判为「二次重入」而拒绝执行。若 App 自身的
+        # 启动环境意外带入了该变量（某些启动方式会），首层 worker 就会被误拦、任务在「准备输入文件」即失败。
+        # server 进程永远不是 worker，因此这里显式清除，保证首层 worker 一定以 depth=0 启动。
+        env.pop("VDL_WORKER_DEPTH", None)
         env.setdefault("PYTHONIOENCODING", "utf-8")
         if COMMENTARY_DIR:
             env["COMMENTARY_BASE"] = str(COMMENTARY_DIR)
