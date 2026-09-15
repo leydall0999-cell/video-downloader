@@ -521,6 +521,9 @@
     comSubBorder: $('comSubBorder'),
     comSubBorderVal: $('comSubBorderVal'),
     comSubColor: $('comSubColor'),
+    comSubPreview: $('comSubPreview'),
+    comSubPreviewText: $('comSubPreviewText'),
+    comPreview: $('comPreview'),
     comMaxChars: $('comMaxChars'),
     comMaxCharsVal: $('comMaxCharsVal'),
     comFileInput: $('comFileInput'),
@@ -8326,7 +8329,9 @@ el.dwVidPlayer.removeAttribute('src');
       subtitle_size: el.comSubSize ? Number(el.comSubSize.value) : 1.0,
       subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
       subtitle_border: el.comSubBorder ? Number(el.comSubBorder.value) : 1.0,
-      subtitle_pos: (document.querySelector('input[name="comSubPos"]:checked') || {}).value || 'bottom',
+      subtitle_pos: (typeof comSubPosCustom === 'string' && comSubPosCustom.startsWith('y:'))
+        ? comSubPosCustom
+        : ((document.querySelector('input[name="comSubPos"]:checked') || {}).value || 'bottom'),
       max_chars: el.comMaxChars ? Number(el.comMaxChars.value) : 0,
     };
   };
@@ -8338,13 +8343,12 @@ el.dwVidPlayer.removeAttribute('src');
     return dir || '__default__';
   };
 
-  /** 更新本地语音克隆状态条的视觉状态（只读提示，无按钮）。 */
+  /** 更新本地语音克隆状态条的视觉状态（只读提示，无按钮）。
+   * 2026-09-15：状态条按产品要求隐藏——只更新文本/圆点，不再把条显示出来。 */
   const comSetTtsStatusBar = (state, text) => {
-    const bar = el.comTtsStatusBar;
     const dot = el.comTtsStatusDot;
     const txt = el.comTtsStatusText;
-    if (!bar || !dot || !txt) return;
-    bar.style.display = 'flex';
+    if (!dot || !txt) return;
     txt.textContent = text || '';
     dot.className = 'com-tts-status-dot is-' + (state || 'gray');
   };
@@ -9838,13 +9842,118 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comSubSize) {
     el.comSubSize.addEventListener('input', () => {
       if (el.comSubSizeVal) el.comSubSizeVal.textContent = Number(el.comSubSize.value).toFixed(2) + '×';
+      comUpdateSubPreview();
     });
   }
   if (el.comSubBorder) {
     el.comSubBorder.addEventListener('input', () => {
       if (el.comSubBorderVal) el.comSubBorderVal.textContent = Number(el.comSubBorder.value).toFixed(1) + '×';
+      comUpdateSubPreview();
     });
   }
+  if (el.comSubColor) {
+    el.comSubColor.addEventListener('input', comUpdateSubPreview);
+  }
+  document.querySelectorAll('input[name="comSubPos"]').forEach((r) => {
+    r.addEventListener('change', () => {
+      comSubPosCustom = null;            // 点预设 radio = 放弃自定义位置
+      comUpdateSubPreview();
+    });
+  });
+
+  // 拖拽自定义字幕位置：null=用预设（bottom/center）；否则 'y:<比率>'（文字中心距画面顶部比例）
+  let comSubPosCustom = null;
+
+  /** 字幕样式实时预览：把「字号/描边/颜色/位置」四个控件的效果
+   *  以固定示例文字浮在 #comPreview 画面上，按视频实际渲染区等比缩放，
+   *  描边用 8 向 text-shadow 模拟 ffmpeg 的 ASS Border（黑描边）+ 阴影。
+   *  支持直接拖动示例文字自定义纵向位置（comSubPosCustom = 'y:<比率>'）。 */
+  function comUpdateSubPreview() {
+    const box = el.comSubPreview, txt = el.comSubPreviewText, vid = el.comPreview;
+    if (!box || !txt || !vid) return;
+    // 视频未展示（面板未开/无源且高度为 0）时隐藏覆盖层
+    const w = vid.clientWidth, h = vid.clientHeight;
+    if (!vid.offsetParent || w < 40 || h < 40) { box.hidden = true; return; }
+    box.hidden = false;
+    // 视频内容区实际渲染高度（考虑 letterbox：width:100% + max-height:320px）
+    let contentH = h;
+    if (vid.videoWidth && vid.videoHeight) {
+      const scale = Math.min(w / vid.videoWidth, h / vid.videoHeight);
+      contentH = vid.videoHeight * scale;
+    }
+    const size = el.comSubSize ? Number(el.comSubSize.value) || 1.0 : 1.0;
+    const border = el.comSubBorder ? Number(el.comSubBorder.value) || 1.0 : 1.0;
+    const color = el.comSubColor ? el.comSubColor.value : '#FFFFFF';
+    // 基准：字幕高约等于视频高的 4.8%（size=1 时），随 size 线性缩放
+    const fontSize = Math.max(12, contentH * 0.048 * size);
+    // 描边厚约等于字号的 3.5% × border，clamp 1~8px
+    const bw = Math.min(8, Math.max(1, fontSize * 0.035 * border));
+    txt.style.fontSize = fontSize.toFixed(1) + 'px';
+    txt.style.color = color;
+    txt.style.textShadow = [
+      `${bw}px 0 0 #000`, `-${bw}px 0 0 #000`, `0 ${bw}px 0 #000`, `0 -${bw}px 0 #000`,
+      `${bw}px ${bw}px 0 #000`, `${bw}px -${bw}px 0 #000`, `-${bw}px ${bw}px 0 #000`, `-${bw}px -${bw}px 0 #000`,
+      `0 ${Math.max(2, bw * 1.6)}px ${Math.max(3, bw * 2)}px rgba(0,0,0,.55)`, // 底部投影
+    ].join(', ');
+    if (comSubPosCustom && comSubPosCustom.startsWith('y:')) {
+      // 自定义：文字中心放在比率位置（与后端 y:<比率> 渲染语义一致）
+      const ratio = Math.max(0.05, Math.min(0.95, parseFloat(comSubPosCustom.slice(2)) || 0.5));
+      box.classList.remove('is-bottom', 'is-center');
+      box.classList.add('is-custom');
+      const contentTop = (h - contentH) / 2;
+      const topPx = Math.max(0, contentTop + contentH * ratio - txt.offsetHeight / 2);
+      txt.style.marginTop = topPx.toFixed(0) + 'px';
+      txt.style.marginBottom = '0';
+    } else {
+      const pos = (document.querySelector('input[name="comSubPos"]:checked') || {}).value || 'bottom';
+      box.classList.remove('is-custom');
+      box.classList.toggle('is-bottom', pos !== 'center');
+      box.classList.toggle('is-center', pos === 'center');
+      txt.style.marginTop = '';          // 恢复 CSS 预设边距
+      txt.style.marginBottom = '';
+    }
+  }
+
+  // 拖动示例文字 → 写入自定义位置（文字中心跟随指针，clamp 6%~94%）
+  if (el.comSubPreviewText && el.comPreview) {
+    const txtEl = el.comSubPreviewText;
+    txtEl.addEventListener('pointerdown', (ev) => {
+      const box = el.comSubPreview;
+      if (!box || box.hidden) return;
+      ev.preventDefault();
+      try { txtEl.setPointerCapture(ev.pointerId); } catch (_) {}
+      const onMove = (e2) => {
+        const vid = el.comPreview;
+        if (!vid) return;
+        const r = vid.getBoundingClientRect();
+        let contentH = r.height;
+        if (vid.videoWidth && vid.videoHeight) {
+          const scale = Math.min(r.width / vid.videoWidth, r.height / vid.videoHeight);
+          contentH = vid.videoHeight * scale;
+        }
+        const contentTop = (r.height - contentH) / 2;
+        const ratio = Math.max(0.06, Math.min(0.94, (e2.clientY - r.top - contentTop) / contentH));
+        comSubPosCustom = 'y:' + ratio.toFixed(3);
+        document.querySelectorAll('input[name="comSubPos"]').forEach((rr) => { rr.checked = false; });
+        comUpdateSubPreview();
+      };
+      const onUp = () => {
+        txtEl.removeEventListener('pointermove', onMove);
+        txtEl.removeEventListener('pointerup', onUp);
+        txtEl.removeEventListener('pointercancel', onUp);
+      };
+      txtEl.addEventListener('pointermove', onMove);
+      txtEl.addEventListener('pointerup', onUp);
+      txtEl.addEventListener('pointercancel', onUp);
+    });
+  }
+  if (el.comPreview) {
+    // 视频尺寸/加载变化都会影响预览层比例
+    new ResizeObserver(comUpdateSubPreview).observe(el.comPreview);
+    el.comPreview.addEventListener('loadedmetadata', comUpdateSubPreview);
+  }
+  window.addEventListener('resize', comUpdateSubPreview);
+  comUpdateSubPreview();
   if (el.comMaxChars) {
     el.comMaxChars.addEventListener('input', () => {
       if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');

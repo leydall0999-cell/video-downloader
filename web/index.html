@@ -1857,7 +1857,13 @@
         <span class="com-trim-title" id="comTrimTitle" hidden data-page-node-id="tprw9KKGotopFrZTxIptQr"></span>
         <span class="com-trim-dur" id="comTrimDuration" data-page-node-id="z1AeLzMkwPDGwjcHvZTh68">裁剪后时长：--</span>
       </div>
-      <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
+      <div class="com-preview-wrap" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I-wrap">
+        <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
+        <!-- 字幕样式实时预览层：固定示例文字，随「字号/描边/颜色/位置」实时更新（pointer-events:none 不挡播放器操作） -->
+        <div id="comSubPreview" class="com-sub-preview" data-page-node-id="comSubPreviewLayer" hidden>
+          <span id="comSubPreviewText">字幕预览：调整下方样式实时看效果</span>
+        </div>
+      </div>
       <div class="com-trim-timeline" data-page-node-id="6BLjipqUcjLfWZBrSYvPFH">
         <label class="com-trim-field" data-page-node-id="Quzxv91M41D2OdgehBOfzb">
           <span class="com-trim-label" data-page-node-id="jVksehDdcj0uw5DAwRN9l1">起点</span>
@@ -2039,7 +2045,8 @@
             <span id="comTtsStatusText" class="com-tts-status-text" data-page-node-id="tsh4yHdlMLXdkx5rCY1brh"></span>
           </div>
         </div>
-        <div class="com-cell com-cell-r2-asr" data-page-node-id="EiRnJ6iHKu8YsFWJveRAFL">
+        <!-- ASR 校正开关隐藏：默认恒开（input 保留勾选，提交即开启） -->
+        <div class="com-cell com-cell-r2-asr" data-page-node-id="EiRnJ6iHKu8YsFWJveRAFL" style="display:none;">
           <label class="com-checkbox-row" data-page-node-id="S4hG6zX0Ry46q8k2fljdXU">
             <input id="comCorrectTranscript" type="checkbox" checked data-page-node-id="VzxQ8HRcGPIUjBdffeOqFE" />
             <span data-page-node-id="ZsfFzq2v2tlMHhsoUGDJ7A">转写稿 ASR 校正（修正同音错字/专有名词；关闭省 token）</span>
@@ -2073,7 +2080,7 @@
               <label data-page-node-id="CpVQxtsymfdpRgtKAefkX7"><input type="radio" name="comSubPos" value="bottom" checked data-page-node-id="ygi0rbAyNDyL3KPzp89zrn" />底部</label>
               <label data-page-node-id="cVPFkGQMpQlUf5pG9zqNcY"><input type="radio" name="comSubPos" value="center" data-page-node-id="CIScfsRXkrgpnv1MQEGIxd" />居中</label>
             </span>
-            <span class="com-retain-hint" data-page-node-id="EKlo7b5WOQMfu6SV5AGJ3M">实时预览 [白字+黑描边+阴影，字幕落在画面的相对位置]</span>
+            <span class="com-retain-hint" data-page-node-id="EKlo7b5WOQMfu6SV5AGJ3M">实时预览示例文字；直接<b>拖动视频上的文字</b>可自定义位置（点「底部/居中」恢复预设）</span>
           </div>
         </div>
 
@@ -2165,27 +2172,7 @@
       </div>
     </div>
                 <div class="com-opts com-enhance-section" data-page-node-id="FZFgMa4wsoBKozORKCvV22">
-      <div class="com-opt-block com-opt-block-full" data-page-node-id="u4G0AMSqCzTANPByzBw0Pa">
-        <div class="com-opt-title" data-page-node-id="uiAqnJ3G0blxLgBaq0IQLs">BGM 自动配乐</div>
-        <div class="com-opt-row" data-page-node-id="6m7anxXC47mBWQ28zl1HOS">
-          <select id="comBgm" class="com-select" data-page-node-id="3WafNDzCJTJrfjP9geIhle">
-            <option value="off" data-page-node-id="QQGYI0ICuGzDyAFgZkhGGc">关闭</option>
-            <option value="soft" data-page-node-id="vjO5OU8mFK0Fy6D7kkv8CQ">柔和氛围</option>
-            <option value="light" data-page-node-id="xj7XGqmq0lei8IixTtO0YE">轻快</option>
-            <option value="epic" data-page-node-id="WfD4Mw6POglg62LXICE9ls">恢弘</option>
-            <option value="user" data-page-node-id="wzgBoKDGil8m0zGlQdMuov">本地音乐…</option>
-          </select>
-          <div class="com-bgm-vol" id="comBgmVolWrap" hidden data-page-node-id="fR3H4RhAULte2Jd2LsMCMX">
-            <input type="range" id="comBgmVolume" min="0.02" max="0.6" step="0.01" value="0.18" data-page-node-id="TMcoi7u2189y8ZOFQgBJyO" />
-            <span class="com-vol-val" id="comBgmVolumeVal" data-page-node-id="Ett5uZNbUDDOoE6UjfJodm">18%</span>
-          </div>
-          <div class="com-bgm-file" id="comBgmFileWrap" hidden data-page-node-id="et7UIlrTsneBI8zwUarirt">
-            <input type="text" id="comBgmFile" placeholder="未选择文件" readonly data-page-node-id="IICtqx1SaTDdSGMvtKqN5l" />
-            <button type="button" id="comBgmFilePick" class="com-pick-btn" data-page-node-id="GTN71KVyeRzUmY4MCbA0os">选文件…</button>
-          </div>
-        </div>
-        <span class="com-retain-hint" data-page-node-id="nYju8pnQJyP9Alp6zvNYrN">氛围音由 ffmpeg 实时合成（正弦波三和弦）；选「本地音乐」可用自己 mp3/wav</span>
-      </div>
+      <!-- BGM 自动配乐块已移除（2026-09-15）：配乐后续在剪辑软件里做，默认关闭即可 -->
       <div class="com-opt-block com-opt-block-full" data-page-node-id="BRBFAFi664czE8f3Oh4jB1">
         <div class="com-opt-title" data-page-node-id="e6pcqRyJCXGkAKYG9IH7CF">解说长度（字数上限）</div>
         <div class="com-opt-row" data-page-node-id="BP2q4zMu8s3ZmuNzoczz1Z">

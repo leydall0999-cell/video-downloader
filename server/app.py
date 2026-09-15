@@ -2010,7 +2010,7 @@ class CommentaryRequest(BaseModel):
     subtitle_size: float = Field(default=1.0, ge=0.6, le=1.6, description="字幕字号倍率 0.6~1.6")
     subtitle_color: str = Field(default="FFFFFF", description="字幕颜色 hex(如 FFFFFF 白 / FFD700 金 / FF4500 橙)")
     subtitle_border: float = Field(default=1.0, ge=0.3, le=3.0, description="字幕描边粗细倍率 0.3~3.0")
-    subtitle_pos: str = Field(default="bottom", description="字幕位置: bottom=底部; center=画面中部")
+    subtitle_pos: str = Field(default="bottom", description="字幕位置: bottom=底部; center=画面中部; y:<比率>=文字中心距顶部比例(前端拖拽自定义, 如 y:0.42)")
     max_chars: int = Field(default=0, ge=0, description="解说稿总长度上限(字)，0=不限制")
 
 class ScriptUpdateRequest(BaseModel):

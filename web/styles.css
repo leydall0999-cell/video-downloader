@@ -2314,9 +2314,28 @@ img { max-width: 100%; display: block; }
 .com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); flex: 0 0 auto; }
 .com-trim-title { flex: 1 1 auto; min-width: 0; font-size: .82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .com-trim-dur { flex: 0 0 auto; font-size: .78rem; color: var(--brand); font-weight: 600; }
+.com-preview-wrap { position: relative; }
 .com-preview {
   width: 100%; max-height: 320px; background: #000; border-radius: 6px; display: block;
 }
+/* 字幕样式实时预览层：浮在视频画面上，位置/字号/描边/颜色由 JS 按控件实时写入 */
+.com-sub-preview {
+  position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+  display: flex; justify-content: center; align-items: flex-end;
+  pointer-events: none; overflow: hidden; border-radius: 6px;
+}
+.com-sub-preview.is-bottom { align-items: flex-end; }
+.com-sub-preview.is-center { align-items: center; }
+.com-sub-preview.is-custom { align-items: flex-start; }  /* 拖拽自定义：marginTop 由 JS 精确写入 */
+.com-sub-preview > span {
+  margin-bottom: 7%;               /* 底部模式：距底 7%，与成片字幕落位一致 */
+  font-weight: 700; line-height: 1.25;
+  max-width: 94%; white-space: nowrap; overflow: hidden; text-overflow: clip;
+  cursor: grab; touch-action: none; user-select: none;
+}
+.com-sub-preview > span:active { cursor: grabbing; }
+.com-sub-preview.is-center > span { margin-bottom: 0; }
+.com-sub-preview.is-custom > span { margin-bottom: 0; }
 .com-trim-timeline {
   display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; margin-top: .7rem;
 }
