@@ -490,8 +490,6 @@
       const v = document.querySelector('input[name="comIntroOutroMode"]:checked');
       return v ? v.value : 'keep_no_narrate';
     },
-    comIntroSec: $('comIntroSec'),
-    comOutroSec: $('comOutroSec'),
     comDramaStart: $('comDramaStart'),
     comDramaEnd: $('comDramaEnd'),
     comCorrectTranscript: $('comCorrectTranscript'),
@@ -8304,8 +8302,8 @@ el.dwVidPlayer.removeAttribute('src');
     const typeEl = document.querySelector('input[name="comType"]:checked');
     const srcEl = document.querySelector('input[name="comHlSource"]:checked');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
-    const introSec = el.comIntroSec && el.comIntroSec.value ? Number(el.comIntroSec.value) : null;
-    const outroSec = el.comOutroSec && el.comOutroSec.value ? Number(el.comOutroSec.value) : null;
+    // 正剧边界只保留「绝对时间」一处（片头/片尾秒数 UI 已下线：与它同侧互斥、完全等价，
+    // 而这里本就接受纯秒数写法；后端 intro_sec/outro_sec 参数保留供外部调用兼容）
     const dramaStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
     const dramaEnd = el.comDramaEnd && el.comDramaEnd.value ? parseTimeSec(el.comDramaEnd.value) : null;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
@@ -8318,8 +8316,6 @@ el.dwVidPlayer.removeAttribute('src');
       intro_highlight: !!(el.comIntroHighlight && el.comIntroHighlight.checked),
       skip_intro_outro,
       no_narrate_intro_outro,
-      intro_sec: introSec,
-      outro_sec: outroSec,
       drama_start_sec: dramaStart,
       drama_end_sec: dramaEnd,
       style: styleEl ? styleEl.value : 'none',

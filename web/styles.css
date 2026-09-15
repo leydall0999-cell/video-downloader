@@ -3212,15 +3212,18 @@ img { max-width: 100%; display: block; }
   padding: .55rem .65rem; min-width: 0;
 }
 .com-cell-full { grid-column: 1 / -1; }
+/* 「正剧开始/片尾开始时间」：与右侧字幕卡同行（详见 .com-sub-card 注释） */
+.com-drama-bound { grid-column: 1; grid-row: 1; }
 /* 标题仅隐藏 trigger 单元格内的（下拉按钮已显示组名）；导出剪映等真实标题保留显示 */
 .com-col-right .com-opts#comOpts .com-cell-trigger > .com-opt-title { display: none; }
 /* 字幕样式行：单行多控件；颜色 picker 自动行内 */
 .com-sub-style-row { display: flex; flex-wrap: wrap; gap: .3rem .68rem; align-items: center; }
 
 /* 字幕整卡：单行样式控件，右上角挂「重置位置」图标 */
+/* ⚠️ 卡片与「正剧开始/片尾开始时间」同占第 1 行、左右各一列，两者都显式定位：
+   网格自动放置算法对「只指定列」的项会把游标推到下一行，导致左列空一行、错位。 */
 .com-sub-card {
-  grid-column: 2;
-  grid-row: span 2 / 3;
+  grid-column: 2; grid-row: 1;
   position: relative;               /* 「重置位置」图标的定位参照 */
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
