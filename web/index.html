@@ -2167,6 +2167,18 @@
     </div>
         </div>
     </div>
+    <!-- ⚠️ 2026-09-16 底部常驻操作条：只放「生成脚本按钮 + 进度条」这一条**矮**条。
+         🔴 三个必守约束，任一破坏都会复发「整块盖住上方选项面板」的老 bug：
+         ① **高度必须远小于视口**。历史版本把它当容器包住 2000px+ 的成片列表，
+            sticky 元素一高过视口，bottom:0 就无法满足、整块被顶进视口把工作区盖住
+            （只在窗口 ≥1180px 触发，窄屏 @media 曾回退 static 所以看不出来）。
+            → 审核提示 / 步骤日志 / 脚本审核 / 成片历史都已移出本块，请勿再塞回来。
+         ② **布局位置必须在容器末尾**。sticky + bottom:0 的语义是「元素低于视口底边时
+            才被上浮贴住」，位于内容中间时它只会跟普通元素一样随页滚走。
+            这里不改 DOM 顺序（历史仍要保持最后一块），而是靠
+            `#commentaryView { display:flex }` + `.com-bottom { order:1 }` 把它推到
+            布局末尾——DOM 顺序不变、视觉与粘性行为等同于末尾元素。
+         ③ 必须保持不透明背景（下方会有内容滚过）。 -->
     <div class="com-bottom" data-page-node-id="MtOmikaEbK1RodPPszAmVU">
             <div class="com-generate-row" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
       <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" data-page-node-id="JPKaPDTzondWplp1ytN7S2">生成脚本（可审核修改）</button>
@@ -2182,13 +2194,6 @@
       </div>
     </div>
     </div>
-    <!-- ⚠️ 2026-09-16 修复「宽窗口下整个选项面板被盖住」：.com-bottom 只保留
-         「生成脚本按钮 + 进度条」这一条**矮**的常驻区，后面的审核提示 / 步骤日志 / 脚本审核 /
-         成片历史都移到 .com-bottom 之外（DOM 先后顺序不变，视觉顺序也不变）。
-         根因：.com-bottom 原先是 position:sticky; bottom:0 且包着 2000px+ 的成片历史列表，
-         sticky 元素一旦高过视口，bottom:0 会让整块被顶进视口、盖住上面的 .com-workspace
-         （只在窗口 ≥1180px 触发；≤1180px 的 @media 把它改成 static 所以看不见）。
-         🔴 后续改动：往本块里加任何「会变高」的面板前，先确认它不会超过视口高度。 -->
             <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
       <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
     </div>

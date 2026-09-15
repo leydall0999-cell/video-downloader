@@ -3319,13 +3319,24 @@ img { max-width: 100%; display: block; }
   .com-vol-card-pair { grid-template-columns: 1fr; }
   .com-vol-card-pair > .com-vol-cell:not(:last-child) { border-right: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line)); }
 }
-/* 底部常驻操作条：**只放「生成脚本」按钮 + 进度条**，sticky 常驻可见。
-   🔴 2026-09-16 修复：原先它把「审核提示 / 步骤日志 / 脚本审核 / 成片历史」全包进来，
-   其中成片历史可高 2000px+ → sticky 元素高过视口时 bottom:0 失效，整块被顶进视口、
-   把上面的 .com-workspace 完全盖住（窗口 ≥1180px 才触发，≤1180px 有 static 回退所以看不出来）。
-   现在这四块已移到 .com-bottom 之外、成为 #commentaryView 的平级兄弟节点（顺序不变）。
-   ⚠️ 往本块里新增东西前先确认它不会超过视口高度，否则 bug 复发。 */
+/* ===== 视频解说页纵向骨架 =====
+   2026-09-16 修复「宽窗口下整个解说选项面板被底部一块盖住」。
+   🔴 根因（两层，缺一不可）：
+   ① .com-bottom 曾把「审核提示 / 步骤日志 / 脚本审核 / 成片历史」全包进来，
+      成片历史可高 2000px+。sticky 元素**一旦高过视口**，bottom:0 就无法满足，
+      整块被顶进视口、把上面的 .com-workspace 完全盖住（窗口 ≥1180px 才触发；
+      ≤1180px 有 @media 回退 static，所以窄屏反而看不见这个 bug）。
+      → 现将那四块移出，.com-bottom 只留「生成脚本按钮 + 进度条」这条矮条。
+      ⚠️ 往 .com-bottom 加东西前先确认它不会超过视口高度，否则 bug 复发。
+   ② sticky + bottom:0 的真实语义是「元素低于视口底边时才被上浮贴住」——
+      元素若位于内容中间，滚动时它只是随页滚走，并不常驻；只有**布局位置在容器末尾**
+      才会一直贴在视口底部。
+      → 为了不让「📂 解说历史」丢掉末位（用户 2026-09-15 明确要求），这里不改 DOM 顺序，
+        而是把 #commentaryView 变成 flex 纵向容器、给 .com-bottom 一个更大的 order，
+        把它的**布局位置**推到末尾：DOM 顺序不变，视觉与粘性行为等同于末尾元素。 */
+#commentaryView { display: flex; flex-direction: column; }
 .com-bottom {
+  order: 1;                                 /* 布局位置推到最后（其余兄弟默认 order:0） */
   position: sticky; bottom: 0; z-index: 30;
   margin-top: 12px;
   background: var(--bg);                    /* 必须不透明：常驻条下方会有内容滚过 */
@@ -3339,14 +3350,10 @@ img { max-width: 100%; display: block; }
 /* 移出 .com-bottom 后的区块间距（#comScriptPanel 有自身 id 规则，不在此列） */
 #commentaryView .com-review-actions,
 #commentaryView .com-steps-panel { margin-top: .7rem; }
-/* 常驻条归位时会压住列表末尾，留出等同高度的底部空隙 */
-#commentaryView { padding-bottom: 84px; }
-/* 窄屏回退单列 */
+/* 窄屏回退单列（常驻条保持 sticky：它已足够矮，窄屏同样安全且更需要常驻） */
 @media (max-width: 1180px) {
   #commentaryView .com-workspace { grid-template-columns: 1fr; }
   .com-col-left, .com-col-right { position: static; max-height: none; overflow: visible; }
-  .com-bottom { position: static; }
-  #commentaryView { padding-bottom: 0; }
 }
 
 /* 一键抠图双栏：左=控制区，右=预览+结果（预览顶部与「选择图片」对齐） */
