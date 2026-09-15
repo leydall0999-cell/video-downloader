@@ -9492,7 +9492,10 @@ el.dwVidPlayer.removeAttribute('src');
       items.forEach((i) => {
         const o = document.createElement('option');
         o.value = i.id;
-        o.textContent = i.title || i.name || i.id;
+        // 选项必须带时长：同名剧集常有「完整版 / 前20分钟片段」并存（2026-09-16 实锤
+        // 用户拿片段出了整部片），光看标题区分不出来
+        const _dur = Number(i.duration) || 0;
+        o.textContent = `${i.title || i.name || i.id}${_dur ? `（${formatDuration(_dur)}）` : ''}`;
         el.comSource.appendChild(o);
       });
       if ([...el.comSource.options].some((o) => o.value === current)) el.comSource.value = current;
@@ -9754,7 +9757,24 @@ el.dwVidPlayer.removeAttribute('src');
     }
   };
 
-  el.comGenerateScript.addEventListener('click', () => {
+  // 「选错素材」防线（2026-09-16 实锤：45min 整集与 20min「前20分钟」片段并存，
+  // 用户在不知情下用片段出了片）。提交前把「文件名 + 时长」摆到台面二次确认；
+  // 文件名带片段特征时用 danger 弹窗强警示。
+  const _CLIP_NAME_RE = /前\d+分钟|前半|片段|节选|剪辑版|clip|sample|preview|trailer/i;
+  const comSelectedSourceLabel = () => {
+    const fileId = el.comSource.value;
+    if (fileId) {
+      const opt = el.comSource.options[el.comSource.selectedIndex];
+      return opt ? opt.textContent : fileId;
+    }
+    if (selectedLocalFile) {
+      const d = comPreviewDuration ? `（${formatDuration(comPreviewDuration)}）` : '';
+      return `${selectedLocalFile.name}${d}`;
+    }
+    return '';
+  };
+
+  el.comGenerateScript.addEventListener('click', async () => {
     // 兜底：预检未通过时按钮通常已被禁用，这里再挡一次，避免任何路径绕过前置判定
     if (comPrecheckBlocked) return;
     if (!commentaryEnvReady) {
@@ -9763,6 +9783,15 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
     const fileId = el.comSource.value;
+    if (fileId || selectedLocalFile) {
+      const label = comSelectedSourceLabel();
+      const isClipLike = _CLIP_NAME_RE.test(label);
+      const ok = await showConfirm(
+        `本次将解说：\n《${label}》${isClipLike ? '\n\n⚠️ 文件名含「片段 / 前N分钟」特征——请确认这是你真正想解说的完整视频，而不是截取片段！' : ''}`,
+        { okText: '没错，就是它', cancelText: '重新选', danger: isClipLike },
+      );
+      if (!ok) return;
+    }
     if (fileId) {
       createScriptOnly({ fileId });
       return;
