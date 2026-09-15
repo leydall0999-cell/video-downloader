@@ -167,8 +167,14 @@ async def chat_completions(
         "Accept": "text/event-stream" if stream else "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT) as client:
-        if not stream:
+    # ⚠️ 流式绝不能用 `async with AsyncClient()` 包住 return：上下文会在 FastAPI
+    # 开始迭代生成器**之前**就退出，客户端被关闭 → SSE 返回 0 字节、客户端收到
+    # IncompleteRead（2026-09-15 实测：/gw/ 流式永远空而非流式正常，排查绕了一大圈）。
+    # 正解：客户端生命周期绑定到生成器，在 _gen 的 finally 里关闭。
+    client = httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT)
+
+    if not stream:
+        try:
             try:
                 r = await client.post(url, headers=headers, json=payload)
             except httpx.RequestError as e:
@@ -179,39 +185,52 @@ async def chat_completions(
                 body = r.json()
             except Exception:  # noqa: BLE001
                 body = {"raw": r.text[:2000]}
-            _record_usage(meta, model, body.get("usage") if isinstance(body, dict) else None, r.status_code < 400)
+            _record_usage(meta, model, body.get("usage") if isinstance(body, dict) else None,
+                          r.status_code < 400)
             if r.status_code >= 400:
                 log.warning("上游返回 %s: %s", r.status_code, str(body)[:400])
             return JSONResponse(status_code=r.status_code, content=body)
+        finally:
+            await client.aclose()
 
-        req = client.build_request("POST", url, headers=headers, json=payload)
+    req = client.build_request("POST", url, headers=headers, json=payload)
 
-        async def _gen():  # noqa: ANN202
-            usage: dict[str, Any] | None = None
-            try:
-                async with client.stream(req.method, req.url, headers=req.headers, content=req.content) as resp:
-                    if resp.status_code >= 400:
-                        err = (await resp.aread()).decode("utf-8", "replace")[:2000]
-                        _record_usage(meta, model, None, False)
-                        yield f"data: {json.dumps({'error': {'message': err, 'status': resp.status_code}}, ensure_ascii=False)}\n\n".encode()
-                        return
-                    async for chunk in resp.aiter_bytes():
-                        if not chunk:
-                            continue
-                        # 从 SSE 里挑出带 usage 的那一帧用于记量（不落正文）
-                        try:
-                            for line in chunk.decode("utf-8", "replace").splitlines():
-                                if line.startswith("data: ") and '"usage"' in line:
-                                    data = json.loads(line[6:])
-                                    if isinstance(data.get("usage"), dict):
-                                        usage = data["usage"]
-                        except Exception:  # noqa: BLE001
-                            pass
-                        yield chunk
-                    _record_usage(meta, model, usage, True)
-            except httpx.RequestError as e:
-                _record_usage(meta, model, None, False)
-                log.error("上游流式请求失败: %s", e)
-                yield f"data: {json.dumps({'error': {'message': str(e)}}, ensure_ascii=False)}\n\n".encode()
+    async def _gen():  # noqa: ANN202
+        usage: dict[str, Any] | None = None
+        try:
+            async with client.stream(req.method, req.url, headers=req.headers,
+                                     content=req.content) as resp:
+                if resp.status_code >= 400:
+                    err = (await resp.aread()).decode("utf-8", "replace")[:2000]
+                    _record_usage(meta, model, None, False)
+                    yield (
+                        "data: "
+                        + json.dumps({"error": {"message": err, "status": resp.status_code}},
+                                     ensure_ascii=False)
+                        + "\n\n"
+                    ).encode()
+                    return
+                async for chunk in resp.aiter_bytes():
+                    if not chunk:
+                        continue
+                    # 从 SSE 里挑出带 usage 的那一帧用于记量（不落正文）
+                    try:
+                        for line in chunk.decode("utf-8", "replace").splitlines():
+                            if line.startswith("data: ") and '"usage"' in line:
+                                data = json.loads(line[6:])
+                                if isinstance(data.get("usage"), dict):
+                                    usage = data["usage"]
+                    except Exception:  # noqa: BLE001
+                        pass
+                    yield chunk
+                _record_usage(meta, model, usage, True)
+        except httpx.RequestError as e:
+            _record_usage(meta, model, None, False)
+            log.error("上游流式请求失败: %s", e)
+            yield (
+                "data: " + json.dumps({"error": {"message": str(e)}}, ensure_ascii=False) + "\n\n"
+            ).encode()
+        finally:
+            await client.aclose()
 
-        return StreamingResponse(_gen(), media_type="text/event-stream")
+    return StreamingResponse(_gen(), media_type="text/event-stream")
