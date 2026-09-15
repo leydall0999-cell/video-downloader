@@ -1447,22 +1447,28 @@ def main() -> None:
     )
     server_thread.start()
 
-    # 等服务器就绪（窗口 60s：cookie_pool 大量初始化+可选 ffmpeg 探测常使冷启动超过 20s；
-    # 旧 20s 窗口在 cookie_pool 满载时误杀首开，必须 60s+ 才稳。daemon 线程不 join，
-    # 即便超时 main 返回，server 线程仍随 main 进程存活直到用户主动退出/系统清理）
-    for _ in range(300):
+    # 等服务器就绪（窗口 240s：见下方 2026-09-15 实测）。daemon 线程不 join，
+    # 即便超时 main 返回，server 线程仍随 main 进程存活直到用户主动退出/系统清理。
+    #
+    # 2026-09-15 实测（换包后首次启动）：热启动 2s，但**冷启动 97s** —— 661MB
+    # 包刚换进 /Applications，磁盘缓存全冷 + ad-hoc 签名校验，后端 97s 才监听。
+    # 旧窗口 60s 一到就放行 → 窗口比后端先开，用户看到加载失败页（且不会自动重试），
+    # 而事实上后端再等 37s 就好了。放宽到 240s：就绪立即 break，热启动体感不变；
+    # 冷启动多等一会儿但**打开就能用**。真慢到 240s 还没起，行为与旧版一致（不更差）。
+    _READY_WAIT_SEC = 240
+    for _ in range(int(_READY_WAIT_SEC / 0.2)):
         try:
             with socket.create_connection((HOST, PORT), timeout=0.5):
                 break
         except OSError:
             time.sleep(0.2)
     else:
-        _launch_log("服务器启动超时（60s 内未就绪），但 main 不退出，server 线程继续后台尝试")
+        _launch_log(f"服务器启动超时（{_READY_WAIT_SEC}s 内未就绪），但 main 不退出，server 线程继续后台尝试")
         # 注意：不能 server_thread.join()——会让 main 阻塞直到 thread 退出，
         # 而 thread 可能因 cookie_pool 等慢 init 永远不结束，整个 app 卡死。
         # daemon=True 表明 main 退出时 thread 一起死，但用户不主动退就没人杀 main。
         # 这里只警告，不阻塞 main。
-        print(f"服务器启动较慢（>60s），请稍候或手动访问 {URL}")
+        print(f"服务器启动较慢（>{_READY_WAIT_SEC}s），请稍候或手动访问 {URL}")
 
     _launch_log("后端服务就绪，准备打开界面")
 
