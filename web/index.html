@@ -2105,8 +2105,13 @@
         <div class="com-vol-card-head" data-page-node-id="s0lI51tyEnA3mUrA4lFmuI">
           <div class="com-vol-label" data-page-node-id="4sDVUysPa6CMMiMOblGMJq">配音与音量</div>
           <span class="com-vol-hint" data-page-node-id="IQQVL4LeeU3OJo8c0PVAGf">（保存后对所有解说任务生效）</span>
+          <div class="com-vol-buttons" data-page-node-id="SWhpgDWD69n1UE2NbjhXW4">
+            <button type="button" class="btn btn-sm btn-ghost" id="comVolReset" data-page-node-id="njARBGPd5JHNgmvwx9656w">恢复默认</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview" title="试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。" data-page-node-id="SH38VoX0fYpwNqQzKAbiew">▶ 试听当前设置</button>
+            <button type="button" class="btn btn-sm btn-primary" id="comVolSave" data-page-node-id="3TxPGDwAIABEMdaKrE4Ujj">💾 保存设置</button>
+          </div>
         </div>
-        <div class="com-vol-card-pair" data-page-node-id="jepd0FQwwlMM88jO6BVbf4">
+        <div class="com-vol-card-pair com-vol-card-trio" data-page-node-id="jepd0FQwwlMM88jO6BVbf4">
           <div class="com-vol-cell" data-page-node-id="Op2WflJ47bzZV3JAitgx2P">
             <div class="com-vol-label" data-page-node-id="bxHJ5XntQczGPVF5iRRlQ0">旁白响度标准化</div>
             <div class="com-vol-ctrl" data-page-node-id="jznbj1ak0nzJqGE5bY6hbZ">
@@ -2121,26 +2126,18 @@
               <input type="range" id="comDuck" min="5" max="30" step="1" value="10" data-page-node-id="CshQlPqNFg2FjusPHcx0c4" />
               <span class="com-vol-val" id="comDuckVal" data-page-node-id="GdVABRuIPsKBvzTEq8Kcfv">10%</span>
             </div>
-            <span class="com-vol-hint" data-page-node-id="EB9pD90RAMExqoOPobBHNE">解说期间原声压到这么低（越小越静）</span>
+            <span class="com-vol-hint" title="解说期间把原声压到设定的比例（越小原声越静）" data-page-node-id="EB9pD90RAMExqoOPobBHNE">越小原声越静</span>
+          </div>
+          <div class="com-vol-cell" data-page-node-id="kDCobVHnBzGfe0Sd0ok52o">
+            <div class="com-vol-label" data-page-node-id="4QcsHaRHTyCUX0ZW9g9M2v">旁白额外增益</div>
+            <div class="com-vol-ctrl" data-page-node-id="WIaZl5iQwwNzS6J0IuzB1b">
+              <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" data-page-node-id="5LFhSrzV7bLeDv2HmJuFbG" />
+              <span class="com-vol-val" id="comBoostVal" data-page-node-id="aR0iyhARhrGWmwZMpvV0iU">1.00×</span>
+            </div>
+            <span class="com-vol-hint" title="响度标准化之后再乘这个倍数（越大越响）" data-page-node-id="QZfwZ7XyDvStuWcO0y0dWE">越大旁白越响</span>
           </div>
         </div>
-        <div class="com-vol-cell com-vol-cell-full" data-page-node-id="kDCobVHnBzGfe0Sd0ok52o">
-          <div class="com-vol-label" data-page-node-id="4QcsHaRHTyCUX0ZW9g9M2v">旁白额外增益</div>
-          <div class="com-vol-ctrl" data-page-node-id="WIaZl5iQwwNzS6J0IuzB1b">
-            <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" data-page-node-id="5LFhSrzV7bLeDv2HmJuFbG" />
-            <span class="com-vol-val" id="comBoostVal" data-page-node-id="aR0iyhARhrGWmwZMpvV0iU">1.00×</span>
-          </div>
-          <span class="com-vol-hint" data-page-node-id="QZfwZ7XyDvStuWcO0y0dWE">响度标准化之后再乘这个倍数（越大越响）</span>
-        </div>
-        <div class="com-vol-cell com-vol-cell-full com-vol-actions" data-page-node-id="WRV7oRIU5Vu9eTk8XUpjy9">
-          <span class="com-vol-hint" data-page-node-id="mBiuyLkaebHNXucd3HWaoB">试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。</span>
-          <div class="com-vol-buttons" data-page-node-id="SWhpgDWD69n1UE2NbjhXW4">
-            <button type="button" class="btn btn-sm btn-ghost" id="comVolReset" data-page-node-id="njARBGPd5JHNgmvwx9656w">恢复默认</button>
-            <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview" data-page-node-id="SH38VoX0fYpwNqQzKAbiew">▶ 试听当前设置</button>
-            <button type="button" class="btn btn-sm btn-primary" id="comVolSave" data-page-node-id="3TxPGDwAIABEMdaKrE4Ujj">💾 保存设置</button>
-          </div>
-          <span class="com-status" id="comVolStatus" hidden data-page-node-id="H6LFK6FHhW4jZ2cy0HIxr7"></span>
-        </div>
+        <span class="com-status com-vol-status" id="comVolStatus" hidden data-page-node-id="H6LFK6FHhW4jZ2cy0HIxr7"></span>
       </div>
 
       <!-- ===== 导出剪映草稿（保留在 .com-grid 之外的整行卡片） ===== -->

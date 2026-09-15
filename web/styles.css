@@ -2978,7 +2978,6 @@ img { max-width: 100%; display: block; }
 @media (max-width: 900px) {
   .com-opt-row-fixed > .com-mode-fixed,
   .com-opt-row-fixed > .com-retain-field { flex: 1 1 100%; }
-  .com-vol-actions { flex-direction: column; align-items: flex-start; gap: .7rem; }
   .com-vol-preview-hint { max-width: none; }
 }
 @media (max-width: 720px) {
@@ -3101,11 +3100,11 @@ img { max-width: 100%; display: block; }
 .com-vol-item { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
 @media (max-width: 760px) { .com-vol-row { grid-template-columns: 1fr; } }
 .com-vol-label { font-size: .85rem; font-weight: 600; color: var(--text); }
-.com-vol-ctrl { display: flex; align-items: center; gap: .6rem; }
-.com-vol-ctrl input[type="range"] { flex: 1 1 auto; accent-color: var(--accent, #2563eb); height: 4px; }
-.com-vol-val { min-width: 64px; text-align: right; font-size: .82rem; color: var(--accent, #2563eb); font-variant-numeric: tabular-nums; font-weight: 600; }
-.com-vol-off { font-size: .78rem; color: var(--text-mute); display: flex; align-items: center; gap: .35rem; cursor: pointer; }
-.com-vol-hint { font-size: .74rem; color: var(--text-mute); line-height: 1.4; }
+.com-vol-ctrl { display: flex; align-items: center; gap: .45rem; min-width: 0; }
+.com-vol-ctrl input[type="range"] { flex: 1 1 auto; min-width: 52px; accent-color: var(--accent, #2563eb); height: 4px; }
+.com-vol-val { flex: 0 0 auto; min-width: 58px; text-align: right; font-size: .78rem; color: var(--accent, #2563eb); font-variant-numeric: tabular-nums; font-weight: 600; }
+.com-vol-off { font-size: .74rem; color: var(--text-mute); display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+.com-vol-hint { font-size: .72rem; color: var(--text-mute); line-height: 1.35; }
 /* 「试听设置」格：标题 + 按钮行（自动换行防止按钮挤）+ 状态提示 */
 .com-vol-actions .com-vol-buttons {
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
@@ -3246,24 +3245,49 @@ img { max-width: 100%; display: block; }
   overflow: hidden;
 }
 .com-vol-card-head {
-  padding: .55rem .65rem;
+  padding: .42rem .58rem;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
-  display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
 }
-.com-vol-card-head .com-vol-label { font-size: .9rem; }
+.com-vol-card-head .com-vol-label { font-size: .88rem; }
+/* 操作按钮收到标题行右端：省掉原来独立的一整行 */
+.com-vol-card-head .com-vol-buttons { margin-left: auto; display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
 .com-vol-card-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
 }
+/* 三个滑块并成一行（响度 / 原声压低 / 增益），比原来「2 列 + 整行 + 操作行」矮一半 */
+.com-vol-card-pair.com-vol-card-trio { grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: none; }
 .com-vol-card-pair > .com-vol-cell:not(:last-child) {
   border-right: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
 }
 .com-vol-card .com-vol-cell {
-  padding: .55rem .65rem;
-  display: flex; flex-direction: column; gap: .35rem;
+  padding: .42rem .55rem;
+  display: flex; flex-direction: column; gap: .26rem;
+  min-width: 0;
 }
-.com-vol-card .com-vol-cell-full { padding: .55rem .65rem; }
+.com-vol-card .com-vol-cell-full { padding: .42rem .55rem; }
+/* 状态提示只在有内容时占位（hidden 时零高度） */
+.com-vol-card > .com-vol-status:not([hidden]) {
+  display: block; margin: .42rem .55rem;
+}
+
+/* 窄屏回退：三列 → 两列 → 单列（卡片实际宽度在 600~715px 区间，故阈值取视口 760/560） */
+@media (max-width: 700px) {
+  .com-vol-card-pair.com-vol-card-trio { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .com-vol-card-pair.com-vol-card-trio > .com-vol-cell { border-right: none; }
+  .com-vol-card-pair.com-vol-card-trio > .com-vol-cell:nth-child(-n+2) {
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+  }
+}
+@media (max-width: 520px) {
+  .com-vol-card-pair.com-vol-card-trio { grid-template-columns: 1fr; }
+  .com-vol-card-pair.com-vol-card-trio > .com-vol-cell { border-right: none; }
+  .com-vol-card-pair.com-vol-card-trio > .com-vol-cell:not(:last-child) {
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+  }
+}
 
 /* 窄屏回退：网格单列、第 1 行换行 */
 @media (max-width: 720px) {
