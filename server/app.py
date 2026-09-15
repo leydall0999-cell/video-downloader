@@ -1358,6 +1358,33 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。
         last_lines: list[str] = []
 
+        # ── 失败退还调查（2026-09-15）────────────────────────────────────
+        # 管线侧在发起云端调用**之前**就扣了 1 次终身额度；若整条任务最终失败
+        # （网络中断 / 超时 / 模型返回空内容），用户既没拿到成片又少了 1 次机会。
+        # 这里先快照用量，任务失败时按实际增量退还，保证「没出片就不扣额度」。
+        def _quota_snapshot() -> dict:
+            try:
+                from routers.quota import get_quota_manager
+                return get_quota_manager().snapshot()
+            except Exception:
+                return {}
+
+        def _refund_quota_if(increased: bool) -> None:
+            """任务未按预期产出时，退还本次跑任务期间新增的云端额度。"""
+            try:
+                from routers.quota import get_quota_manager
+                qm = get_quota_manager()
+                before, after = _q_before, qm.snapshot()
+                dl = int(after.get("lifetime_cloud_used", 0)) - int(before.get("lifetime_cloud_used", 0))
+                dd = int(after.get("daily_auto_used", 0)) - int(before.get("daily_auto_used", 0))
+                if (dl > 0 or dd > 0) and increased:
+                    qm.refund(lifetime=dl, daily=dd)
+                    _append(f"  [配额] 本次任务未产出成片，已退还免费云端额度（终身 -{dl}，每日 -{dd}）")
+            except Exception:
+                pass  # 退还失败绝不能掩盖真正的任务错误
+
+        _q_before = _quota_snapshot()
+
         def _append(line: str) -> None:
             line = line.rstrip("\n")
             if not line:
@@ -1406,11 +1433,13 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             ret = proc.wait(timeout=COMMENTARY_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             proc.kill()
+            _refund_quota_if(True)
             tail = "\n".join(last_lines[-20:]) or "无输出"
             raise RuntimeError(
                 f"解说管线超过 {COMMENTARY_TIMEOUT_SECONDS} 秒未完成，已终止。\n最近输出：\n{tail}"
             )
         if ret != 0:
+            _refund_quota_if(True)
             tail = "\n".join(last_lines[-20:]) or "无输出"
             raise RuntimeError(f"解说管线退出码 {ret}。\n最近输出：\n{tail}")
 
@@ -1418,6 +1447,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             # --script-only 模式：只出了 script.json，不生成成片
             script_path = _commentary_root("work") / f"{base}.script.json"
             if not script_path.exists():
+                _refund_quota_if(True)
                 tail = "\n".join(last_lines[-20:]) or "无输出"
                 raise RuntimeError(f"解说管线执行成功但未找到脚本文件：{script_path}\n输出：\n{tail}")
             with _commentary_lock:
@@ -1456,6 +1486,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 )
             out = next(iter(candidates), None)
             if not out:
+                _refund_quota_if(True)
                 tail = "\n".join(last_lines[-20:]) or "无输出"
                 raise RuntimeError(f"解说管线执行成功但未找到成片。process.py 输出：\n{tail}")
             with _commentary_lock:

@@ -110,6 +110,39 @@ class QuotaManager:
         self._persist(st)
         return True
 
+    # ── 退还（任务失败不该算用户头上）──────────────────────────────────── #
+    def snapshot(self) -> dict:
+        """当前用量快照，供「失败了要不要退」比对。"""
+        st = self._state()
+        return {
+            "lifetime_cloud_used": int(st.get("lifetime_cloud_used", 0)),
+            "daily_auto_used": int(st.get("daily_auto_used", 0)),
+        }
+
+    def refund(self, lifetime: int = 0, daily: int = 0) -> dict:
+        """退还已扣额度（失败任务 / 异常终止的补偿）。
+
+        用户视角的铁律：**没出片就不该扣额度**。管线在云端调用前就扣了 1 次
+        终身额度，若之后整条任务失败（网络、超时、模型返回空内容），用户既没
+        拿到成片、又少了 1 次机会——体感等同「花了钱买失败」。故在父进程侧按
+        实际增量退还，绝不少扣也绝不超退（clamp 到 0）。
+        """
+        if self.is_member():
+            return self.snapshot()
+        if lifetime <= 0 and daily <= 0:
+            return self.snapshot()
+        st = self._state()
+        cur_life = int(st.get("lifetime_cloud_used", 0))
+        cur_daily = int(st.get("daily_auto_used", 0))
+        new_life = max(0, cur_life - int(lifetime))
+        new_daily = max(0, cur_daily - int(daily))
+        if new_life == cur_life and new_daily == cur_daily:
+            return self.snapshot()   # 无变化不落盘：避免无谓写文件与 mtime 抖动
+        st["lifetime_cloud_used"] = new_life
+        st["daily_auto_used"] = new_daily
+        self._persist(st)
+        return self.snapshot()
+
     def consume_daily_auto(self) -> bool:
         """扣 1 次每日 auto 额度。额度不足返回 False。"""
         if self.is_member():
