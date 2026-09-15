@@ -2332,6 +2332,7 @@ img { max-width: 100%; display: block; }
   font-weight: 700; line-height: 1.25;
   max-width: 94%; white-space: nowrap; overflow: hidden; text-overflow: clip;
   cursor: grab; touch-action: none; user-select: none;
+  pointer-events: auto;            /* 容器 none 只是不挡播放器；文字本身要能接住拖拽 */
 }
 .com-sub-preview > span:active { cursor: grabbing; }
 .com-sub-preview.is-center > span { margin-bottom: 0; }
