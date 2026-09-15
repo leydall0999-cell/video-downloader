@@ -278,6 +278,21 @@ def _run_server_with_retry(start_port: int, host: str, app_dir: str, lock_file=N
             raise
     _launch_log(f"所有候选端口({start_port}..{start_port+max_off-1})均绑定失败，后端无法启动: {last_err}")
 
+def _logged_run_server(start_port: int, host: str, app_dir: str, lock_file=None) -> None:
+    """包装 _run_server_with_retry：任何未捕获异常都写进启动日志再死。
+
+    历史教训（2026-09-15）：Dock 启动（open -a）时后端线程曾静默崩溃，日志只留
+    「服务器启动超时」，但 nohup 直跑一切正常，两者唯一差别是运行方式 → 排查成本
+    极高。没有这段包装，下次还得靠猜。
+    """
+    try:
+        _run_server_with_retry(start_port, host, app_dir, lock_file)
+    except BaseException as exc:  # noqa: BLE001
+        import traceback as _tb
+        _launch_log("后端线程异常终止: %s: %s\n%s"
+                    % (type(exc).__name__, exc, _tb.format_exc()))
+
+
 _env_port = (os.environ.get("VDL_PORT") or "").strip()
 PORT = int(_env_port) if _env_port else _find_free_port()
 HOST = "127.0.0.1"
@@ -1248,6 +1263,15 @@ def _activate_existing_window() -> None:
 
 _LAUNCH_LOG = Path.home() / ".vdl_launch.log"
 
+# PATH 兜底：从 Dock/Finder 启动时 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
+# homebrew (/opt/homebrew/bin) 下的 ffmpeg/ffprobe/yt-dlp 会「存在但找不到」，
+# 进而让依赖外部工具的初始化在 GUI 启动与终端启动下行为不一致。
+VDL_PATH_BOOTSTRAP = True
+_extra_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+for _p in reversed(_extra_paths):
+    if _p not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _p + os.pathsep + os.environ.get("PATH", "")
+
 def _launch_log(msg: str) -> None:
     """把启动关键节点写入 ~/.vdl_launch.log，便于「双击打不开」时定位。"""
     try:
@@ -1412,8 +1436,12 @@ def main() -> None:
 
     # 后台启动 FastAPI 服务（带 bind 失败自动顺延端口的兜底重试）
     _app_dir = str(BASE) if getattr(sys, "frozen", False) else str(SERVER_DIR)
+    # 后端线程异常必须留痕：从 Dock/Finder（open -a）启动时 stdout/stderr 不进任何
+    # 日志文件，线程一旦抛非 OSError 异常就**静默死亡**——表现为「窗口开了但后端
+    # 永远不监听」，且 ~/.vdl_launch.log 只留一句「服务器启动超时」，无从下手。
+    # 这里统一兜住并写入启动日志。
     server_thread = threading.Thread(
-        target=_run_server_with_retry,
+        target=_logged_run_server,
         args=(PORT, HOST, _app_dir, _lock),
         daemon=True,
     )
