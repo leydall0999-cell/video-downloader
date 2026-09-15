@@ -2704,9 +2704,9 @@ img { max-width: 100%; display: block; }
 .com-bgm-file input[type="text"] { flex: 1 1 0; min-width: 0; padding: .28rem .5rem; font-size: .82rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg, #fafafa); color: var(--text, #333); }
 .com-pick-btn { padding: .28rem .65rem; font-size: .82rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--accent, #2563eb); cursor: pointer; }
 .com-pick-btn:hover { background: var(--accent, #2563eb); color: #fff; border-color: var(--accent, #2563eb); }
-.com-sub-item { display: inline-flex; align-items: center; gap: .3rem; font-size: .82rem; color: var(--text-2, #555); }
+.com-sub-item { display: inline-flex; align-items: center; gap: .42rem; font-size: .82rem; color: var(--text-2, #555); }
 .com-sub-item input[type="range"] { width: 96px; }
-.com-sub-item input[type="color"] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
+.com-sub-item input[type="color"] { flex: 0 0 auto; width: 32px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
 /* 字幕数值控件：数字框 + 预设下拉（仿 Excel 字号选择器）；字号/描边共用 */
 .com-numsel { position: relative; display: inline-flex; align-items: stretch; }
 .com-sub-item .com-numsel input[type="number"] {
@@ -3215,7 +3215,7 @@ img { max-width: 100%; display: block; }
 /* 字幕整卡：跨 3 行单卡，3 项以分割线串成整体 */
 .com-sub-card {
   grid-column: 2;
-  grid-row: span 3 / 4;
+  grid-row: span 2 / 3;
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
   border-radius: var(--radius-sm);
