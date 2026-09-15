@@ -1,0 +1,17 @@
+[Unit]
+Description=VDL LLM Gateway (OpenAI-compatible proxy; upstream key never leaves server)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vdl-gateway
+ExecStart=/opt/vdl-gateway/.venv/bin/uvicorn gateway:app --host 127.0.0.1 --port 8890
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# 网关只听本机，公网入口由 nginx 在 8888 上按 /gw/ 前缀转发进来
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

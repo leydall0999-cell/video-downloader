@@ -386,6 +386,8 @@ def inject_llm_env(env: dict[str, str]) -> None:
       由 commentary-pipeline 自己的守卫(process.py 检查 LLM_API_KEY)报清晰错误。
     - 本机 MLX 模式（engine=auto/mlx）：注入 LLM_ENGINE + MLX_MODEL_PATH + MLX_PYTHON，
       即使无云端 Key 也注入（纯本地优先，不消耗云端额度）。
+    - 云端网关优先：配了网关就用「网关地址 + 令牌」，真实 Key 永不下发到用户机器
+      （分发场景下 Key 写在用户机器上等于泄露；见 gateway_config 模块说明）。
     """
     cfg = get_llm_config()
     base = (cfg.get("base_url", "") or "").strip()
@@ -394,7 +396,16 @@ def inject_llm_env(env: dict[str, str]) -> None:
     ollama = "11434" in base
     engine = (cfg.get("engine") or "auto").strip().lower()
     need_local = engine in ("auto", "mlx")
-    if not key and not ollama and not need_local:
+
+    # 云端网关：可用时接管云端凭据。探测失败一律回退直连，绝不因此阻断任务。
+    gw = None
+    try:
+        from gateway_config import cloud_env as _gw_cloud_env
+
+        gw = _gw_cloud_env(model)
+    except Exception:  # noqa: BLE001
+        gw = None
+    if not gw and not key and not ollama and not need_local:
         return
     # 引擎选择 + MLX 本地配置：无论是否有云端 Key 都注入，供 llm_script.py 路由
     env["LLM_ENGINE"] = engine
@@ -412,13 +423,20 @@ def inject_llm_env(env: dict[str, str]) -> None:
         _mmt = 0
     if _mmt > 0:
         env["MLX_MAX_TOKENS"] = str(_mmt)
-    if not key and not ollama:
+    if gw:
+        # 走网关：token 是本机持有的可吊销凭据，不是上游 API Key
+        env["LLM_BASE_URL"] = gw["base_url"]
+        env["LLM_MODEL"] = gw["model"]
+        env["LLM_API_KEY"] = gw["api_key"]
+        env["VDL_LLM_VIA_GATEWAY"] = "1"
+    elif not key and not ollama:
         # 纯本地模式：已注入引擎/MLX 变量，无需云端凭据，停止注入
         return
-    env["LLM_BASE_URL"] = base
-    env["LLM_MODEL"] = model
-    # Ollama 不校验 Key，但 process.py 守卫要求非空，塞占位避免误报；真正请求时 Ollama 忽略它。
-    env["LLM_API_KEY"] = key or "ollama"
+    else:
+        env["LLM_BASE_URL"] = base
+        env["LLM_MODEL"] = model
+        # Ollama 不校验 Key，但 process.py 守卫要求非空，塞占位避免误报；真正请求时 Ollama 忽略它。
+        env["LLM_API_KEY"] = key or "ollama"
     # 推理强度（省钱旋钮）：注入 VDL_LLM_REASONING_EFFORT 供 llm_script.py 读取。
     # 默认 low，可在 UI 选 disabled(最省) / high(最佳质量)。
     env["VDL_LLM_REASONING_EFFORT"] = cfg.get("reasoning_effort", "low")

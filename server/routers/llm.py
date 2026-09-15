@@ -45,6 +45,16 @@ def llm_managed() -> dict:
     """
     return app.managed_status()
 
+@router.get("/api/llm/gateway")
+def llm_gateway() -> dict:
+    """云端网关接入状态（**不含完整令牌**）。
+
+    走网关时本机只持有可吊销令牌，真实 API Key 只存在服务端——界面据此把
+    「云端服务」一栏显示成「已接入网关」，而不是让用户去找并不存在的 Key 输入框。
+    """
+    return app.gateway_status()
+
+
 @router.get("/api/llm/local-models")
 def llm_local_models() -> dict:
     """本机 AI 引擎（MLX）的可用权重与运行时状态（「AI 能力与密钥配置」面板用）。

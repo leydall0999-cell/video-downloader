@@ -13363,11 +13363,38 @@ el.dwVidPlayer.removeAttribute('src');
 
     // 云端服务状态：用户不看凭据，只需要知道「现在能不能用」。
     // 凭据详情（服务商 / 模型）由后端受管配置提供，接口**不含明文 Key**。
+    //
+    // 两种云端供给方式，显示必须区分清楚：
+    //   1) 网关模式：本机只持有可吊销令牌，真实 Key 在服务端——分销场景的正确姿势；
+    //   2) 直连模式：Key 写在本机受管文件里，仅自用可接受。
+    // 若不做区分，网关模式下（本机无 Key）会被误显示成「尚未配置，请联系管理员」，
+    // 用户明明能正常出片却被告知服务没配好。
     const refreshManagedStatus = async () => {
+      let gw = null;
+      try { gw = await request('/api/llm/gateway'); } catch (e) { /* 忽略 */ }
+      const gwOn = !!(gw && gw.enabled);
+
+      if (el.llmGatewayStatus) {
+        if (gwOn) {
+          const tok = gw.token_masked ? `（令牌 ${gw.token_masked}）` : '';
+          el.llmGatewayStatus.textContent = `🔒 已接入云端网关${tok}：本机不保存任何 API Key，密钥仅存于服务端，可随时吊销。`;
+          el.llmGatewayStatus.style.color = '#27ae60';
+        } else {
+          el.llmGatewayStatus.textContent = '未接入云端网关，云端调用将使用本机保存的密钥（仅自用场景）。';
+          el.llmGatewayStatus.style.color = '';
+        }
+      }
+
       if (!el.llmManagedStatus) return;
       try {
         const m = await request('/api/llm/managed');
         if (!m) return;
+        if (gwOn) {
+          // 走网关时本机本来就没有 Key，别再报「未配置」
+          el.llmManagedStatus.textContent = '✅ 云端解说服务已就绪：由云端网关提供（由管理员统一配置）';
+          el.llmManagedStatus.style.color = '';
+          return;
+        }
         const who = [m.provider_name, m.model].filter(Boolean).join(' · ') || '未指定';
         const from = m.source === 'managed' ? '（由管理员统一配置）'
           : (m.source === 'env' ? '（由运维统一配置）' : '');

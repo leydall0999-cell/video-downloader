@@ -76,6 +76,20 @@ from vision_config import (
     managed_status as vision_managed_status,
     mask_key as vision_mask_key,
 )
+import gateway_config
+from gateway_config import (
+    get_gateway_config, gateway_status, mask_token,
+    upstream_models, resolve_model, cloud_env as gateway_cloud_env,
+)
+
+# 暴露给 routers 访问的共享内核（同时确保 PyInstaller 静态分析能收进 gateway_config；
+# llm_config 里是函数内 import，分析器看不见，未显式引用会被漏打进包）
+get_gateway_config = get_gateway_config
+gateway_status = gateway_status
+mask_token = mask_token
+upstream_models = upstream_models
+resolve_model = resolve_model
+gateway_cloud_env = gateway_cloud_env
 
 # 暴露给 routers/vision.py 访问的共享内核（镜像 PROVIDER_PRESETS 等）
 VISION_PROVIDER_PRESETS = VISION_PROVIDER_PRESETS
