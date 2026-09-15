@@ -8331,7 +8331,7 @@ el.dwVidPlayer.removeAttribute('src');
       subtitle_border: el.comSubBorder ? Number(el.comSubBorder.value) : 1.0,
       subtitle_pos: (typeof comSubPosCustom === 'string' && comSubPosCustom.startsWith('y:'))
         ? comSubPosCustom
-        : ((document.querySelector('input[name="comSubPos"]:checked') || {}).value || 'bottom'),
+        : 'bottom',
       max_chars: el.comMaxChars ? Number(el.comMaxChars.value) : 0,
     };
   };
@@ -9854,12 +9854,13 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comSubColor) {
     el.comSubColor.addEventListener('input', comUpdateSubPreview);
   }
-  document.querySelectorAll('input[name="comSubPos"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      comSubPosCustom = null;            // 点预设 radio = 放弃自定义位置
+  const _comSubPosReset = document.getElementById('comSubPosReset');
+  if (_comSubPosReset) {
+    _comSubPosReset.addEventListener('click', () => {
+      comSubPosCustom = null;            // 重置 = 回到底部默认
       comUpdateSubPreview();
     });
-  });
+  }
 
   // 拖拽自定义字幕位置：null=用预设（bottom/center）；否则 'y:<比率>'（文字中心距画面顶部比例）
   let comSubPosCustom = null;
@@ -9905,10 +9906,8 @@ el.dwVidPlayer.removeAttribute('src');
       txt.style.marginTop = topPx.toFixed(0) + 'px';
       txt.style.marginBottom = '0';
     } else {
-      const pos = (document.querySelector('input[name="comSubPos"]:checked') || {}).value || 'bottom';
-      box.classList.remove('is-custom');
-      box.classList.toggle('is-bottom', pos !== 'center');
-      box.classList.toggle('is-center', pos === 'center');
+      box.classList.remove('is-custom', 'is-center');
+      box.classList.add('is-bottom');    // 无自定义 → 底部默认
       txt.style.marginTop = '';          // 恢复 CSS 预设边距
       txt.style.marginBottom = '';
     }
@@ -9934,7 +9933,6 @@ el.dwVidPlayer.removeAttribute('src');
         const contentTop = (r.height - contentH) / 2;
         const ratio = Math.max(0.06, Math.min(0.94, (e2.clientY - r.top - contentTop) / contentH));
         comSubPosCustom = 'y:' + ratio.toFixed(3);
-        document.querySelectorAll('input[name="comSubPos"]').forEach((rr) => { rr.checked = false; });
         comUpdateSubPreview();
       };
       const onUp = () => {
