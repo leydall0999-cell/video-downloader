@@ -100,6 +100,10 @@ run_one test_commentary_output_naming.py
 run_one test_commentary_precheck.py
 run_one test_subtitle_band.py
 run_one test_llm_truncation_retry.py
+#  12. test_engine_isolation.py      —— 跨功能「共享工具」隔离性：抠图/去水印/扩散 各自独立
+#                                       session 缓存与模型全局；VDL_MODELS_DIR 下模型目录必须一致
+#                                       （同模型不下载两份）；字幕不得在请求期污染进程级 HF 端点
+run_one test_engine_isolation.py
 
 echo ""
 echo "========================================="

@@ -123,7 +123,10 @@ _INT8_RUNTIME_OK = None
 
 
 def _model_dir() -> Path:
-    """模型缓存目录：优先 VDL_MODELS_DIR，其次用户主目录下的 .vdl_models，最后回退本地 models/。
+    """模型缓存目录：优先 VDL_MODELS_DIR，其次用户主目录下的 .vdl_models。
+
+    ⚠️ 全仓所有功能的模型缓存都必须经由本函数式的「同一子目录名」解析（见下方注释），
+    否则同一份模型会在不同目录各存一份。抠图/超分/去水印目前共用 ~/.vdl_models。
 
     桌面端打包后 server/ 目录不可写，故默认落用户主目录（跨平台可读写、持久）：
     - macOS: ~/Library/Application Support 之外的隐藏目录 ~/.vdl_models（简单稳妥）
@@ -131,7 +134,11 @@ def _model_dir() -> Path:
     """
     raw = os.environ.get("VDL_MODELS_DIR")
     if raw:
-        return Path(raw) / "vdl_models"
+        # 子目录名必须带前导点，与 matting_ai._model_dir / routers.sr._model_dir 保持一致。
+        # 历史缺陷（2026-09-16 修）：此处曾写 "vdl_models"（无点），而抠图/超分写 ".vdl_models"，
+        # 于是 VDL_MODELS_DIR 生效时同一份模型被下载到两个目录、白占磁盘，且「模型未下载」
+        # 判定在两个功能间不一致。默认（不设该变量）时两者都落 ~/.vdl_models，故此前未暴露。
+        return Path(raw) / ".vdl_models"
     return Path.home() / ".vdl_models"
 
 

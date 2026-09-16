@@ -21,8 +21,31 @@ from stats import record_event
 
 router = APIRouter()
 
-# 国内加速：faster-whisper 模型走 hf-mirror（huggingface_hub 每次下载时读环境变量）
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 国内加速：所有走 huggingface_hub 的下载（faster-whisper 字幕模型、扩散去水印模型）
+# 统一走 hf-mirror。
+#
+# ⚠️ 这是**进程级**设置（环境变量 + huggingface_hub 模块常量），会影响同进程内**所有**
+# 使用 huggingface_hub 的功能，因此只在进程启动（本模块 import 期）施加一次，
+# **绝不在请求处理期修改** —— 历史缺陷（2026-09-16 修）：原实现放在 _get_model() 里，
+# 于是「先跑过一次字幕任务」会顺手把后续其他功能的下载端点也改掉，形成跨功能隐式副作用。
+def _apply_hf_mirror() -> None:
+    """幂等地把 huggingface_hub 端点指向国内镜像；用户显式配置时以用户为准。"""
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    want = (os.environ.get("HF_ENDPOINT") or "").strip()
+    if not want:
+        return
+    try:
+        # 主动 import：确保在本模块 import 时就完成常量修正。否则若其它模块先 import 了
+        # huggingface_hub，模块级 constants 会固化成官方端点，之后再设环境变量也不生效。
+        from huggingface_hub import constants as _hf_const
+
+        if getattr(_hf_const, "ENDPOINT", "") != want:
+            _hf_const.ENDPOINT = want
+    except Exception:  # noqa: BLE001  未安装 huggingface_hub 时静默跳过
+        pass
+
+
+_apply_hf_mirror()
 
 SUBTITLE_JOBS: dict = {}
 _SUBTITLE_LOCK = threading.Lock()
@@ -59,18 +82,9 @@ def _get_model(model_size: str, cpu_threads: int = 4):
     """进程级模型缓存：首次加载/下载耗时，之后秒级。
 
     cpu_threads 按会员状态区分（免费 4 / 会员满核），模型实例按「模型:线程数」缓存。
-    鲁棒性：HF 镜像强制覆盖（huggingface_hub 若已被提前 import，模块级
-    constants 会固化默认端点，故同时改环境变量与 constants）；加载/下载
-    失败自动重试 3 次，第 3 次回退本地缓存离线加载（之前下载过就能救回）。
+    加载/下载失败自动重试 3 次，第 3 次回退本地缓存离线加载（之前下载过就能救回）。
+    HF 镜像端点在模块 import 期由 _apply_hf_mirror() 一次性设置，此处不改任何全局状态。
     """
-    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-    try:
-        from huggingface_hub import constants as _hf_const
-        if getattr(_hf_const, "ENDPOINT", "") != "https://hf-mirror.com":
-            _hf_const.ENDPOINT = "https://hf-mirror.com"
-    except Exception:
-        pass
-
     cache_key = f"{model_size}:{cpu_threads}"
     with _SUBTITLE_LOCK:
         model = _SUBTITLE_MODELS.get(cache_key)
