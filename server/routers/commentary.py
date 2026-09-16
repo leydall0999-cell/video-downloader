@@ -274,8 +274,45 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     subtitle_border_color=payload.subtitle_border_color,
                     subtitle_pos=payload.subtitle_pos,
                     max_chars=payload.max_chars,
+                    feather_opt=payload.feather_opt,
                     export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
+
+@router.post("/api/commentary/feather-detect")
+def feather_detect(frames: list[app.UploadFile] = app._FastAPIFile(default=[]),
+                   vertical: bool = app.Form(False)) -> dict:
+    """探测「烧进画面的原字幕」所在横带（前端「原字幕羽化」面板用）。
+
+    入参：前端从预览视频抽的若干帧 JPEG（多文件字段 frames，通常 4 帧）。
+    出参：带占画面高的比例 + 命中帧数，供预览层画带、用户拖拽/输入微调。
+
+    **不调 LLM、不进执行队列、不扣配额**：纯 PIL 图像处理（4 帧 480px 图约 10ms）。
+    ⚠️ 算法与管线 `_prepare_feather` 同源，两侧常量必须同步（见 subtitle_band.py 顶部）。
+    """
+    if not app.COMMENTARY_ENABLED:
+        raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    from io import BytesIO
+
+    from PIL import Image
+
+    from subtitle_band import detect_band_ratio
+
+    imgs = []
+    for f in frames or []:
+        try:
+            raw = f.file.read()
+            if not raw:
+                continue
+            with Image.open(BytesIO(raw)) as im:
+                im.load()
+                imgs.append(im.copy())      # copy：with 退出后底图即关闭
+        except Exception:
+            continue                        # 单帧坏图不该让整个探测失败
+    if not imgs:
+        raise app.HTTPException(status_code=400, detail="没有收到可解析的帧图")
+    res = detect_band_ratio(imgs)
+    res["vertical"] = bool(vertical)
+    return res
 
 @router.post("/api/commentary/upload")
 def create_commentary_upload(
@@ -294,6 +331,7 @@ def create_commentary_upload(
     drama_start_sec: float = app.Form(None),
     drama_end_sec: float = app.Form(None),
     export_jianying: str = app.Form(""),
+    feather_opt: str = app.Form(""),
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
     if not app.COMMENTARY_ENABLED:
@@ -348,6 +386,7 @@ def create_commentary_upload(
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=final_title,
                     src_filename=src_filename,
+                    feather_opt=feather_opt,
                     export_jianying=export_jianying)
     return {"job_id": job_id, "status": "running"}
 
@@ -766,6 +805,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     subtitle_border_color=payload.subtitle_border_color,
                     subtitle_pos=payload.subtitle_pos,
                     max_chars=payload.max_chars,
+                    feather_opt=payload.feather_opt,
                     export_jianying=payload.export_jianying)
     return {"job_id": job_id, "status": "running"}
 
@@ -859,7 +899,8 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                  subtitle_size: float = app.Form(1.0), subtitle_color: str = app.Form("FFFFFF"),
                  subtitle_border: float = app.Form(1.0), subtitle_border_color: str = app.Form("000000"),
                  subtitle_pos: str = app.Form("bottom"),
-                 max_chars: int = app.Form(0)) -> dict:
+                 max_chars: int = app.Form(0),
+                 feather_opt: str = app.Form("")) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
     剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
@@ -949,6 +990,7 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     subtitle_border_color=subtitle_border_color,
                     subtitle_pos=subtitle_pos,
                     max_chars=max_chars,
+                    feather_opt=feather_opt,
                     export_jianying=export_jianying,
                     original_speed=use_original_speed)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id,

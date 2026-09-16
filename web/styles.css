@@ -3257,6 +3257,85 @@ img { max-width: 100%; display: block; }
 .com-sub-reset:active { transform: rotate(-45deg); }
 .com-sub-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* ===== 原字幕羽化（2026-09-16）=====
+   预览窗口用 Canvas 复刻管线的 fade/stretch/blur 擦除效果，虚线框只负责拖拽微调。
+   两者都绝对定位在 .com-preview-wrap 内（该容器已是 position:relative）。
+   为什么拆成两层：Canvas 负责"像素效果"（必须穿透指针，否则挡住播放器操作），
+   虚线框负责"命中区/拖拽"（用 DOM 做拖拽比往 canvas 里塞交互简单得多）。 */
+.com-feather-canvas {
+  position: absolute; z-index: 2;
+  pointer-events: none;
+  border-radius: 6px;
+}
+/* 羽化范围框：只有它接指针 */
+.com-feather-band {
+  position: absolute; z-index: 3;
+  box-sizing: border-box;
+  border: 1px dashed rgba(255, 214, 102, .95);
+  background: rgba(255, 214, 102, .10);
+  border-radius: 3px;
+  cursor: ns-resize;
+  touch-action: none; user-select: none;
+}
+.com-feather-band:hover { background: rgba(255, 214, 102, .18); }
+.com-feather-band.is-drag { background: rgba(255, 214, 102, .26); }
+/* 未生效（既没探测到、用户也没手动指定）：灰框示意，避免被误读成"已应用" */
+.com-feather-band.is-inactive {
+  border-color: rgba(150, 160, 175, .85);
+  background: rgba(150, 160, 175, .10);
+}
+/* 标签贴框内侧左上，避免超出预览区被裁 */
+.com-feather-band-tag {
+  position: absolute; left: 4px; top: 1px;
+  font-size: .62rem; line-height: 1.4; font-weight: 600;
+  color: #ffd666; text-shadow: 0 1px 2px rgba(0, 0, 0, .85);
+  white-space: nowrap; pointer-events: none;
+}
+/* 带太薄时标签会糊住画面，直接隐藏 */
+.com-feather-band.is-tiny .com-feather-band-tag { display: none; }
+
+/* 卡片：与「字幕样式卡」同风格（强调色淡底 + 细边），整行独占 */
+.com-feather-card {
+  grid-column: 1 / -1;
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  padding: .55rem .7rem .6rem;
+  display: flex; flex-direction: column; gap: .5rem; min-width: 0;
+}
+.com-feather-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.com-feather-title { font-size: .84rem; font-weight: 700; color: var(--text); }
+.com-feather-state {
+  font-size: .72rem; padding: .1rem .42rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-mute); white-space: nowrap;
+}
+.com-feather-state.is-ok { background: color-mix(in srgb, #16a34a 16%, transparent); color: #15803d; }
+.com-feather-state.is-miss { background: color-mix(in srgb, #d97706 16%, transparent); color: #b45309; }
+.com-feather-state.is-busy { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.com-feather-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.1rem; }
+.com-feather-field { display: flex; align-items: center; gap: .38rem; min-width: 0; }
+.com-feather-label { font-size: .78rem; color: var(--text-mute); white-space: nowrap; }
+.com-feather-select {
+  font-size: .78rem; padding: .28rem .4rem; border-radius: 5px;
+  border: 1px solid var(--line); background: var(--bg, #fff); color: var(--text);
+}
+.com-feather-num {
+  width: 62px; font-size: .78rem; text-align: center; font-family: monospace;
+  padding: .28rem .3rem; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg, #fff); color: var(--text);
+}
+.com-feather-unit { font-size: .74rem; color: var(--text-mute); }
+.com-feather-val {
+  font-size: .74rem; color: var(--accent); font-weight: 600;
+  min-width: 2.7em; text-align: right; font-variant-numeric: tabular-nums;
+}
+.com-feather-hint { margin: 0; font-size: .72rem; color: var(--text-mute); line-height: 1.5; }
+/* 窄屏：预览区变矮，范围框标签会糊住画面 */
+@media (max-width: 700px) {
+  .com-feather-band-tag { display: none; }
+}
+
 /* 配音与音量整卡：独立整体块（4 项以分割线串成一片） */
 .com-vol-card {
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));

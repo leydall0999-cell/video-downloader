@@ -1859,6 +1859,16 @@
       </div>
       <div class="com-preview-wrap" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I-wrap">
         <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
+        <!-- 原字幕羽化实时预览层：把「探测到的原字幕带」按当前擦除方式擦掉，复刻管线
+             _cover_segment 的 fade/stretch/blur 三种效果（pointer-events:none，不挡播放器）。
+             由 comFeatherPaint() 逐帧重绘；用户调下方参数即时看到结果。 -->
+        <canvas id="comFeatherCanvas" class="com-feather-canvas" data-page-node-id="comFeatherCanvasLayer" hidden></canvas>
+        <!-- 羽化范围框：只负责「可拖拽微调位置」，像素效果由上面的 canvas 呈现（职责分离，
+             便于用 DOM 做命中区/hover，不用往 canvas 里塞交互）。 -->
+        <div id="comFeatherBand" class="com-feather-band" data-page-node-id="comFeatherBandBox"
+             title="拖动可调整原字幕羽化范围" hidden>
+          <span class="com-feather-band-tag" data-page-node-id="comFeatherBandTag">原字幕羽化范围</span>
+        </div>
         <!-- 字幕样式实时预览层：固定示例文字，随「字号/描边/颜色/位置」实时更新（pointer-events:none 不挡播放器操作） -->
         <div id="comSubPreview" class="com-sub-preview" data-page-node-id="comSubPreviewLayer" hidden>
           <span id="comSubPreviewText">字幕预览：调整下方样式实时看效果</span>
@@ -2079,6 +2089,45 @@
         </div>
 
         <!-- 「正剧开始/片尾开始时间」已并入左列「✂️ 预览与正剧范围」卡（原起点/终点那一行），此处不再重复 -->
+
+        <!-- ===== 原字幕羽化（2026-09-16）：预览窗口实时看效果 + 可微调 =====
+             默认「跟随自动探测」：探测命中→带生效，未命中→不干预（管线自己探测/兜底）。
+             一旦用户改这里的数值或拖了预览里的框，即转为「手动指定」并覆盖探测结果。 -->
+        <div class="com-feather-card" id="comFeatherCard" data-page-node-id="comFeatherCard">
+          <div class="com-feather-head" data-page-node-id="comFeatherHead">
+            <span class="com-feather-title" data-page-node-id="comFeatherTitle">🎨 原字幕羽化</span>
+            <span class="com-feather-state" id="comFeatherState" data-page-node-id="comFeatherState">未探测</span>
+          </div>
+          <div class="com-feather-row" data-page-node-id="comFeatherRow1">
+            <label class="com-feather-field" data-page-node-id="comFeatherModeField">
+              <span class="com-feather-label" data-page-node-id="comFeatherModeLabel">擦除方式</span>
+              <select id="comFeatherMode" class="com-feather-select" data-page-node-id="comFeatherModeSel">
+                <option value="fade" data-page-node-id="comFeatherModeFade">渐变填充（推荐）</option>
+                <option value="stretch" data-page-node-id="comFeatherModeStretch">背景条平移</option>
+                <option value="blur" data-page-node-id="comFeatherModeBlur">高斯模糊</option>
+              </select>
+            </label>
+            <label class="com-feather-field" data-page-node-id="comFeatherStrengthField">
+              <span class="com-feather-label" data-page-node-id="comFeatherStrengthLabel">擦除强度</span>
+              <input type="range" id="comFeatherStrength" class="com-range" min="0.4" max="2.5" step="0.1" value="1" data-page-node-id="comFeatherStrengthRange" />
+              <span class="com-feather-val" id="comFeatherStrengthVal" data-page-node-id="comFeatherStrengthVal">1.0×</span>
+            </label>
+          </div>
+          <div class="com-feather-row" data-page-node-id="comFeatherRow2">
+            <label class="com-feather-field" data-page-node-id="comFeatherYField">
+              <span class="com-feather-label" data-page-node-id="comFeatherYLabel">带顶位置</span>
+              <input type="number" id="comFeatherBandY" class="com-feather-num" min="0" max="98" step="0.5" value="86" inputmode="decimal" data-page-node-id="comFeatherBandYInput" />
+              <span class="com-feather-unit" data-page-node-id="comFeatherYUnit">%</span>
+            </label>
+            <label class="com-feather-field" data-page-node-id="comFeatherHField">
+              <span class="com-feather-label" data-page-node-id="comFeatherHLabel">带高</span>
+              <input type="number" id="comFeatherBandH" class="com-feather-num" min="0.5" max="30" step="0.5" value="5" inputmode="decimal" data-page-node-id="comFeatherBandHInput" />
+              <span class="com-feather-unit" data-page-node-id="comFeatherHUnit">%</span>
+            </label>
+            <button type="button" class="btn btn-sm btn-ghost" id="comFeatherRedetect" data-page-node-id="comFeatherRedetectBtn">重新探测</button>
+          </div>
+          <p class="com-feather-hint" id="comFeatherHint" data-page-node-id="comFeatherHint">在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。</p>
+        </div>
       </div>
 
       <!-- ===== 配音与音量整卡（合并含试听按钮） ===== -->

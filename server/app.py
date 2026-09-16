@@ -1222,7 +1222,52 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args += ["--max-chars", str(max_chars)]
     return args
 
-def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_border_color: str = "000000", subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True) -> None:
+def _parse_feather_opt(raw: str) -> dict:
+    """解析前端「原字幕羽化」面板传来的 JSON 选项。
+
+    为什么打包成一个 JSON 字符串而不是 4 个扁平字段：本参数要穿过 Pydantic / Form /
+    5 个调用点，扁平化等于 20 处机械改动且极易漏（历史上 subtitle_* 就这么漏过链路）。
+    这里只多一个字段，解析与校验集中在这一处。
+
+    取值：
+      mode         fade|stretch|blur（缺省/非法 → 不传，管线用自身默认 fade）
+      band_y_ratio / band_h_ratio   占画面高的比例，成对出现才生效
+      strength     0.4~2.5 强度倍率（1.0 = 管线默认，不传）
+
+    任何一项非法都只丢弃该项，**绝不抛错**——羽化是可选美化，不该拦住整条任务。
+    """
+    if not raw:
+        return {}
+    try:
+        d = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    out: dict = {}
+    mode = str(d.get("mode") or "").strip().lower()
+    if mode in ("fade", "stretch", "blur"):
+        out["mode"] = mode
+    try:
+        by, bh = d.get("band_y_ratio"), d.get("band_h_ratio")
+        if by is not None and bh is not None:
+            by, bh = float(by), float(bh)
+            # 比例必须落在 (0,1)；band_h 极小的值会让管线 clamp 到 6px，这里只挡越界
+            if 0.0 <= by < 1.0 and 0.0 < bh <= 1.0:
+                out["band_y_ratio"], out["band_h_ratio"] = by, bh
+    except (TypeError, ValueError):
+        pass
+    try:
+        st = d.get("strength")
+        if st is not None:
+            st = float(st)
+            if 0.4 <= st <= 2.5:
+                out["strength"] = st
+    except (TypeError, ValueError):
+        pass
+    return out
+
+def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_border_color: str = "000000", subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True, feather_opt: str = "") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
     复用用户现成的 process.py 整条管线（whisper 转写 → edge-tts 配音 → ffmpeg 出片），
@@ -1356,6 +1401,21 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             # 视觉理解与片头集数卡检测共用 VDL_VISION_* 配置；显式启用避免子进程因环境变量未设而跳过
             run_env["VDL_VISION_ENABLED"] = "1"
             run_env["VDL_INTRO_VISION_ENABLED"] = "1"
+        # ===== 原字幕羽化（2026-09-16）=====
+        # 前端「原字幕羽化」面板在预览窗口用 Canvas 试调好的带位置 / 擦除方式 / 强度，
+        # 通过 env 透给管线 —— **预览看到什么，成片就烧什么**，不会两套结果打架。
+        # ⚠️ 必须传「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、
+        #    横屏是源分辨率，只有比例在两边都成立（管线侧换算见 _prepare_feather）。
+        # 没传 band 比例时管线仍走自己的自动探测，行为与改造前完全一致。
+        _fopt = _parse_feather_opt(feather_opt)
+        if _fopt:
+            if "mode" in _fopt:
+                run_env["VDL_FEATHER_MODE"] = _fopt["mode"]
+            if "band_y_ratio" in _fopt:
+                run_env["VDL_FEATHER_BAND_Y_RATIO"] = f"{_fopt['band_y_ratio']:.6f}"
+                run_env["VDL_FEATHER_BAND_H_RATIO"] = f"{_fopt['band_h_ratio']:.6f}"
+            if "strength" in _fopt and abs(_fopt["strength"] - 1.0) > 1e-6:
+                run_env["VDL_FEATHER_STRENGTH"] = f"{_fopt['strength']:.3f}"
         # 会员状态下传子进程：让管线侧配额闸门（quota.py）放行无限云端（VDL_IS_MEMBER=1）
         try:
             from routers.quota import _is_member
@@ -2018,6 +2078,11 @@ class CommentaryRequest(BaseModel):
     subtitle_border_color: str = Field(default="000000", description="字幕描边颜色 hex(如 000000 黑 / FFFFFF 白 / 1E90FF 蓝)")
     subtitle_pos: str = Field(default="bottom", description="字幕位置: bottom=底部; center=画面中部; y:<比率>=文字中心距顶部比例(前端拖拽自定义, 如 y:0.42)")
     max_chars: int = Field(default=0, ge=0, description="解说稿总长度上限(字)，0=不限制")
+    feather_opt: str = Field(default="", max_length=512, description=(
+        "原字幕羽化选项 JSON（前端「原字幕羽化」面板）："
+        "{mode:'fade'|'stretch'|'blur', band_y_ratio:0~1, band_h_ratio:0~1, strength:0.4~2.5}。"
+        "空=不干预，管线走自身自动探测。传了 band 比例则跳过探测、按预览调好的位置渲染"
+        "（保证「预览看到什么，成片就烧什么」）。"))
 
 class ScriptUpdateRequest(BaseModel):
     """PUT /api/commentary/script/{job_id}：提交人工修改后的解说词与全局配音。"""

@@ -527,6 +527,17 @@
     comSubPreview: $('comSubPreview'),
     comSubPreviewText: $('comSubPreviewText'),
     comPreview: $('comPreview'),
+    // 原字幕羽化（预览层 + 卡片控件）
+    comFeatherCanvas: $('comFeatherCanvas'),
+    comFeatherBand: $('comFeatherBand'),
+    comFeatherState: $('comFeatherState'),
+    comFeatherMode: $('comFeatherMode'),
+    comFeatherStrength: $('comFeatherStrength'),
+    comFeatherStrengthVal: $('comFeatherStrengthVal'),
+    comFeatherBandY: $('comFeatherBandY'),
+    comFeatherBandH: $('comFeatherBandH'),
+    comFeatherRedetect: $('comFeatherRedetect'),
+    comFeatherHint: $('comFeatherHint'),
     comMaxChars: $('comMaxChars'),
     comMaxCharsVal: $('comMaxCharsVal'),
     comFileInput: $('comFileInput'),
@@ -8315,6 +8326,8 @@ el.dwVidPlayer.removeAttribute('src');
         ? comSubPosCustom
         : 'bottom',
       max_chars: el.comMaxChars ? Number(el.comMaxChars.value) : 0,
+      // 原字幕羽化：空串＝不干预（管线走自身自动探测）；有值＝按预览调好的位置/方式/强度渲染
+      feather_opt: comGetFeatherOpt(),
     };
   };
 
@@ -8940,6 +8953,7 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('subtitle_border_color', _opts.subtitle_border_color || '000000');
       form.append('subtitle_pos', _opts.subtitle_pos);
       form.append('max_chars', String(_opts.max_chars));
+      if (_opts.feather_opt) form.append('feather_opt', _opts.feather_opt);
       const _rr = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
       });
@@ -9993,6 +10007,412 @@ el.dwVidPlayer.removeAttribute('src');
     window.addEventListener('scroll', () => { if (!pop.hidden) close(); }, true);
     window.addEventListener('resize', () => { if (!pop.hidden) close(); });
   }
+
+  // ===== 原字幕羽化（2026-09-16）=============================================
+  // 背景：「擦除原字幕」原先完全靠管线自动探测，UI 零暴露 —— 探测偏了只能跑完整条任务
+  // 才发现，白等十几分钟拿到废片。现在在预览窗口用 Canvas 复刻擦除效果，参数即时可见、可微调。
+  //
+  // 保真度：fade（默认）在管线里是**纯几何运算**
+  //   crop 带上一行/下一行各 2px → scale 到带高 → blend='A*(1-Y/H)+B*(Y/H)' → overlay 叠回
+  // 这里用 drawImage 取同样两行拉伸 + 线性 alpha 混合，数学等价；
+  // stretch / blur 用到 ffmpeg 的 gblur，这里用 canvas filter 的 blur 近似（视觉一致，非像素级）。
+  //
+  // ⚠️ 传输一律用「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、横屏是源分辨率，
+  //    只有比例在两边都成立 —— 这是「预览看到什么，成片就烧什么」的前提。
+  const COM_FEATHER_DEFAULT = { bandY: 0.86, bandH: 0.05 };
+  const comFeather = {
+    found: false,       // 自动探测是否命中
+    manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
+    bandY: COM_FEATHER_DEFAULT.bandY,
+    bandH: COM_FEATHER_DEFAULT.bandH,
+    mode: 'fade',
+    strength: 1.0,
+    probing: false,
+    srcKey: '',         // 已探测过的源标识，避免同一源重复抽帧
+  };
+  let _comFeatherRaf = 0;
+
+  /** 预览视频「实际画面区」相对 .com-preview-wrap 的位置与尺寸（扣掉 letterbox 黑边）。 */
+  function comFeatherContentRect() {
+    const vid = el.comPreview;
+    if (!vid || !vid.videoWidth || !vid.videoHeight) return null;
+    const wrap = vid.parentElement;
+    if (!wrap) return null;
+    const vr = vid.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    if (vr.width < 40 || vr.height < 40) return null;
+    const scale = Math.min(vr.width / vid.videoWidth, vr.height / vid.videoHeight);
+    const w = vid.videoWidth * scale;
+    const h = vid.videoHeight * scale;
+    return { x: vr.left - wr.left + (vr.width - w) / 2,
+             y: vr.top - wr.top + (vr.height - h) / 2, w, h, scale };
+  }
+
+  /** 复用同一个离屏 canvas（尺寸变化会重置上下文状态，调用方用前必须重设 filter/gCO）。 */
+  let _comFeatherOffCv = null;
+  function comFeatherOff(w, h) {
+    if (!_comFeatherOffCv) _comFeatherOffCv = document.createElement('canvas');
+    const c = _comFeatherOffCv;
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    else c.getContext('2d').clearRect(0, 0, w, h);
+    return c.getContext('2d');
+  }
+
+  /** 同步羽化层几何（canvas 铺满画面区、虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
+  function comFeatherSync() {
+    const cv = el.comFeatherCanvas, box = el.comFeatherBand;
+    const r = comFeatherContentRect();
+    if (!cv || !box || !r) {
+      if (cv) cv.hidden = true;
+      if (box) box.hidden = true;
+      return null;
+    }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.style.left = r.x + 'px';
+    cv.style.top = r.y + 'px';
+    cv.style.width = r.w + 'px';
+    cv.style.height = r.h + 'px';
+    const pw = Math.max(1, Math.round(r.w * dpr));
+    const ph = Math.max(1, Math.round(r.h * dpr));
+    if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+    cv.hidden = false;
+
+    const by = Math.max(0, Math.min(0.98, comFeather.bandY));
+    const bh = Math.max(0.005, Math.min(0.4, comFeather.bandH));
+    box.style.left = r.x + 'px';
+    box.style.width = r.w + 'px';
+    box.style.top = (r.y + by * r.h) + 'px';
+    box.style.height = Math.max(6, bh * r.h) + 'px';
+    box.hidden = false;
+    box.classList.toggle('is-tiny', bh * r.h < 16);
+    // 未生效（既没探测到、用户也没手动指定）时用灰框示意，避免误导成"已应用"
+    box.classList.toggle('is-inactive', !comFeather.found && !comFeather.manual);
+    return r;
+  }
+
+  /** 在预览画面上复刻管线的擦除效果：只画「带」这一条，其余保持透明漏出原画面。 */
+  function comFeatherPaint() {
+    const cv = el.comFeatherCanvas, vid = el.comPreview;
+    const r = comFeatherSync();
+    if (!cv || !vid || !r) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const W = cv.width, H = cv.height;                 // canvas 设备像素
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    // 未生效时不画效果（虚线框仍显示，提示"可拖动指定"）
+    if (!comFeather.found && !comFeather.manual) return;
+    if (!vid.videoWidth || vid.readyState < 2) return;  // 当前帧尚不可用
+
+    const vw = vid.videoWidth, vh = vid.videoHeight;
+    const k = H / vh;                                  // 源像素 → canvas 设备像素
+    const strength = Math.max(0.4, Math.min(2.5, comFeather.strength || 1));
+    const mode = comFeather.mode || 'fade';
+    // 管线的模糊半径是「源分辨率像素」，折到显示尺寸才等价
+    const blurPx = (srcPx) => Math.max(0.3, srcPx * k);
+
+    // 带（源空间像素）——与管线 _cover_segment 的 dy/dh 同口径
+    const bandTopSrc = Math.max(0, Math.min(0.98, comFeather.bandY)) * vh;
+    const bandHSrc = Math.max(2, Math.max(0.005, comFeather.bandH) * vh);
+
+    if (mode === 'fade') {
+      // 与管线一致：取带上一行 / 下一行各 2px 拉伸满带高，再做纵向线性混合；
+      // 覆盖**整幅宽度**（管线 cov_x=0/cov_w=cw）——解说字幕 PNG 的底色只盖「文字宽+两侧各1字」，
+      // 原字幕更长就会从两侧露出，横向躲不开。
+      const padSrc = Math.max(1, 2 * strength);        // 擦除余量（源像素）
+      const dySrc = Math.max(0, bandTopSrc - padSrc);
+      const dhSrc = Math.min(vh - dySrc, bandHSrc + padSrc * 2);
+      const syA = Math.max(0, dySrc - 2);
+      const syB = Math.min(Math.max(0, vh - 2), dySrc + dhSrc);
+      const dy = dySrc * k, dh = Math.max(2, dhSrc * k);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, dy, W, dh); ctx.clip();
+      // A = 带上一行拉伸满带高
+      ctx.drawImage(vid, 0, syA, vw, 2, 0, dy, W, dh);
+      // B = 带下一行拉伸，alpha 自 0（带顶）线性到 1（带底）——等价 blend 里的 B*(Y/H)
+      const offH = Math.max(1, Math.round(dh));
+      const off = comFeatherOff(W, offH);
+      off.globalCompositeOperation = 'source-over';
+      off.drawImage(vid, 0, syB, vw, 2, 0, 0, W, offH);
+      off.globalCompositeOperation = 'destination-in';
+      const g = off.createLinearGradient(0, 0, 0, offH);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,1)');
+      off.fillStyle = g;
+      off.fillRect(0, 0, W, offH);
+      off.globalCompositeOperation = 'source-over';
+      ctx.drawImage(off.canvas, 0, 0, W, offH, 0, dy, W, dh);
+      ctx.restore();
+      return;
+    }
+
+    // stretch / blur：都先在离屏画好「替换内容」，再做上下 alpha 渐隐后叠回
+    const padSrc2 = Math.max(2, 3 * strength);
+    const dySrc2 = Math.max(0, bandTopSrc - padSrc2);
+    const dhSrc2 = Math.min(vh - dySrc2, bandHSrc + padSrc2 * 2);
+    const dy2 = dySrc2 * k, dh2 = Math.max(2, dhSrc2 * k);
+    const offH2 = Math.max(1, Math.round(dh2));
+    const off2 = comFeatherOff(W, offH2);
+    off2.globalCompositeOperation = 'source-over';
+    if (mode === 'stretch') {
+      // 取带**正上方一条薄片**纵向拉满（薄片高 = 带宽 12%，同管线 FEATHER_STRIP_RATIO）。
+      // ⚠️ 不要取「与覆盖块等高」的条：那等于把上方整块原样搬下来 = 肉眼可辨的内容重复（拖影）。
+      const stripSrc = Math.max(3, Math.min(dhSrc2, dySrc2, bandHSrc * 0.12 * 4));
+      const softSrc = Math.max(1, Math.min(10,
+        Math.round(Math.max(2, Math.min(6, dhSrc2 * 0.05)) * strength)));
+      off2.filter = `blur(${blurPx(softSrc).toFixed(2)}px)`;
+      off2.drawImage(vid, 0, Math.max(0, dySrc2 - stripSrc), vw, stripSrc, 0, 0, W, offH2);
+      off2.filter = 'none';
+    } else {
+      // 整条高斯模糊（经典的"糊带"，留作兜底）
+      const sigmaSrc = Math.max(8, Math.min(28, Math.round(Math.max(6, bandHSrc * 0.22) * strength)));
+      off2.filter = `blur(${blurPx(sigmaSrc).toFixed(2)}px)`;
+      off2.drawImage(vid, 0, dySrc2, vw, dhSrc2, 0, 0, W, offH2);
+      off2.filter = 'none';
+    }
+    // 上下渐隐（对应管线 geq 的 alpha_expr）：顶部透明渐入、底部渐出，边缘自然融入画面
+    const gzr = Math.max(0.02, Math.min(0.45, (Math.max(2, bandHSrc * 0.25) * k) / offH2));
+    off2.globalCompositeOperation = 'destination-in';
+    const g2 = off2.createLinearGradient(0, 0, 0, offH2);
+    g2.addColorStop(0, 'rgba(0,0,0,0)');
+    g2.addColorStop(gzr, 'rgba(0,0,0,1)');
+    g2.addColorStop(1 - gzr, 'rgba(0,0,0,1)');
+    g2.addColorStop(1, 'rgba(0,0,0,0)');
+    off2.fillStyle = g2;
+    off2.fillRect(0, 0, W, offH2);
+    off2.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, dy2, W, dh2); ctx.clip();
+    ctx.drawImage(off2.canvas, 0, 0, W, offH2, 0, dy2, W, dh2);
+    ctx.restore();
+  }
+
+  function comFeatherSetState(kind, text) {
+    const s = el.comFeatherState;
+    if (!s) return;
+    s.textContent = text;
+    s.classList.remove('is-ok', 'is-miss', 'is-busy');
+    if (kind) s.classList.add('is-' + kind);
+  }
+
+  function comFeatherSyncInputs() {
+    if (el.comFeatherBandY) el.comFeatherBandY.value = (comFeather.bandY * 100).toFixed(1);
+    if (el.comFeatherBandH) el.comFeatherBandH.value = (comFeather.bandH * 100).toFixed(1);
+  }
+
+  function comFeatherReadInputs() {
+    const y = Number(el.comFeatherBandY && el.comFeatherBandY.value);
+    const h = Number(el.comFeatherBandH && el.comFeatherBandH.value);
+    if (isFinite(y)) comFeather.bandY = Math.max(0, Math.min(0.98, y / 100));
+    if (isFinite(h) && h > 0) comFeather.bandH = Math.max(0.005, Math.min(0.4, h / 100));
+  }
+
+  function comFeatherMarkManual() {
+    comFeatherSetState('ok', '手动指定（覆盖自动探测）');
+  }
+
+  /** 等待一次 seek 完成（带兜底超时，绝不卡死后续流程）。 */
+  function comFeatherSeekTo(vid, t) {
+    return new Promise((res) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        vid.removeEventListener('seeked', finish);
+        clearTimeout(timer);
+        res();
+      };
+      const timer = setTimeout(finish, 2500);
+      vid.addEventListener('seeked', finish);
+      try { vid.currentTime = t; } catch (_) { finish(); }
+    });
+  }
+
+  /** 从预览视频抽 N 帧 JPEG（缩到 480 宽）交给后端探测原字幕带。抽完把播放头放回原位。 */
+  async function comFeatherGrabFrames(n) {
+    const vid = el.comPreview;
+    if (!vid || !vid.videoWidth || !(vid.duration > 0)) return [];
+    const cvs = document.createElement('canvas');
+    const w = 480;
+    const h = Math.max(2, Math.round(480 * vid.videoHeight / vid.videoWidth));
+    cvs.width = w;
+    cvs.height = h;
+    const c = cvs.getContext('2d');
+    const saved = vid.currentTime || 0;
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      await comFeatherSeekTo(vid, vid.duration * (i / (n + 1)));
+      try {
+        c.drawImage(vid, 0, 0, w, h);
+        const blob = await new Promise((r) => cvs.toBlob(r, 'image/jpeg', 0.7));
+        if (blob) out.push(blob);
+      } catch (_) { /* 单帧失败不影响其它帧 */ }
+    }
+    await comFeatherSeekTo(vid, saved);
+    return out;
+  }
+
+  /** 抽帧 → 后端探测 → 回填带位置。force=true 时忽略缓存（用户点「重新探测」）。 */
+  async function comFeatherDetect(force) {
+    const vid = el.comPreview;
+    if (!vid || comFeather.probing || !vid.videoWidth) return;
+    const key = (el.comSource && el.comSource.value) || comPreviewUrl || '';
+    if (!force && key && key === comFeather.srcKey) return;   // 同一源不重复抽帧
+    // 换了源：旧源的探测结果与手动调整对新片都不成立，先归零再探测
+    if (key !== comFeather.srcKey) {
+      comFeather.found = false;
+      comFeather.manual = false;
+      comFeather.bandY = COM_FEATHER_DEFAULT.bandY;
+      comFeather.bandH = COM_FEATHER_DEFAULT.bandH;
+      comFeatherSyncInputs();
+    }
+    comFeather.probing = true;
+    comFeather.srcKey = key;
+    comFeatherSetState('busy', '探测中…');
+    try {
+      const blobs = await comFeatherGrabFrames(4);
+      if (!blobs.length) throw new Error('抽帧失败（视频未就绪）');
+      const fd = new FormData();
+      blobs.forEach((b, i) => fd.append('frames', b, `f${i}.jpg`));
+      fd.append('vertical', String(resolveVertical()));
+      const res = await request('/api/commentary/feather-detect', { method: 'POST', body: fd });
+      if (res && res.found) {
+        comFeather.found = true;
+        if (!comFeather.manual) {
+          comFeather.bandY = res.band_y_ratio;
+          comFeather.bandH = res.band_h_ratio;
+          comFeatherSyncInputs();
+        }
+        comFeatherSetState('ok', `已探测到原字幕（命中 ${res.hits}/${res.total} 帧）`);
+      } else {
+        comFeather.found = false;
+        if (!comFeather.manual) {
+          comFeather.bandY = COM_FEATHER_DEFAULT.bandY;
+          comFeather.bandH = COM_FEATHER_DEFAULT.bandH;
+          comFeatherSyncInputs();
+        }
+        comFeatherSetState('miss', (res && res.note) || '未探测到原字幕');
+      }
+      if (el.comFeatherHint) {
+        el.comFeatherHint.textContent = comFeather.found
+          ? '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。'
+          : '未探测到原字幕（画面较干净或字幕不是白色）。如确有原字幕，请在此手动指定带位置后拖动微调。';
+      }
+    } catch (err) {
+      comFeather.found = false;
+      comFeatherSetState('miss', '探测失败：' + ((err && err.message) || '未知错误'));
+    } finally {
+      comFeather.probing = false;
+      comFeatherPaint();
+    }
+  }
+
+  /** 播放时跟帧重绘（暂停时按需单次重绘即可，避免空转）。 */
+  function comFeatherTick() {
+    _comFeatherRaf = 0;
+    comFeatherPaint();
+    const vid = el.comPreview;
+    if (vid && !vid.paused && !vid.ended) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
+  }
+
+  /** 打包羽化选项给后端；空串＝不干预（管线走自身自动探测，含它的兜底逻辑）。 */
+  const comGetFeatherOpt = () => {
+    if (!comFeather.found && !comFeather.manual) return '';
+    try {
+      return JSON.stringify({
+        mode: comFeather.mode || 'fade',
+        band_y_ratio: Number(comFeather.bandY.toFixed(6)),
+        band_h_ratio: Number(comFeather.bandH.toFixed(6)),
+        strength: Number((comFeather.strength || 1).toFixed(2)),
+      });
+    } catch (_) { return ''; }
+  };
+
+  if (el.comFeatherMode) {
+    el.comFeatherMode.value = comFeather.mode;
+    el.comFeatherMode.addEventListener('change', () => {
+      comFeather.mode = el.comFeatherMode.value || 'fade';
+      comFeatherPaint();
+    });
+  }
+  if (el.comFeatherStrength) {
+    const onStrength = () => {
+      comFeather.strength = Math.max(0.4, Math.min(2.5, Number(el.comFeatherStrength.value) || 1));
+      if (el.comFeatherStrengthVal) el.comFeatherStrengthVal.textContent = comFeather.strength.toFixed(1) + '×';
+      comFeatherPaint();
+    };
+    el.comFeatherStrength.addEventListener('input', onStrength);
+    el.comFeatherStrength.addEventListener('change', onStrength);
+    onStrength();
+  }
+  // 改数值框 = 手动指定（会覆盖自动探测结果）
+  const comFeatherOnNumEdit = () => {
+    comFeather.manual = true;
+    comFeatherReadInputs();
+    comFeatherMarkManual();
+    comFeatherPaint();
+  };
+  if (el.comFeatherBandY) {
+    el.comFeatherBandY.addEventListener('input', comFeatherOnNumEdit);
+    el.comFeatherBandY.addEventListener('change', comFeatherOnNumEdit);
+  }
+  if (el.comFeatherBandH) {
+    el.comFeatherBandH.addEventListener('input', comFeatherOnNumEdit);
+    el.comFeatherBandH.addEventListener('change', comFeatherOnNumEdit);
+  }
+  if (el.comFeatherRedetect) {
+    el.comFeatherRedetect.addEventListener('click', () => {
+      comFeather.manual = false;
+      comFeather.srcKey = '';        // 清缓存，强制重抽
+      comFeatherDetect(true);
+    });
+  }
+  // 拖动虚线框微调带位置（上下手柄不做：高度用数值框更精确，也避免和播放器控件抢指针）
+  if (el.comFeatherBand) {
+    const box = el.comFeatherBand;
+    box.addEventListener('pointerdown', (ev) => {
+      const r = comFeatherContentRect();
+      if (!r) return;
+      ev.preventDefault();
+      box.classList.add('is-drag');
+      try { box.setPointerCapture(ev.pointerId); } catch (_) {}
+      const startY = ev.clientY;
+      const startRatio = comFeather.bandY;
+      const onMove = (e2) => {
+        const dy = (e2.clientY - startY) / r.h;
+        comFeather.bandY = Math.max(0, Math.min(0.98 - comFeather.bandH, startRatio + dy));
+        comFeather.manual = true;
+        comFeatherSyncInputs();
+        comFeatherPaint();
+      };
+      const onUp = () => {
+        box.classList.remove('is-drag');
+        box.removeEventListener('pointermove', onMove);
+        box.removeEventListener('pointerup', onUp);
+        box.removeEventListener('pointercancel', onUp);
+        comFeatherMarkManual();
+      };
+      box.addEventListener('pointermove', onMove);
+      box.addEventListener('pointerup', onUp);
+      box.addEventListener('pointercancel', onUp);
+    });
+  }
+  if (el.comPreview) {
+    el.comPreview.addEventListener('play', () => {
+      if (!_comFeatherRaf) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
+    });
+    el.comPreview.addEventListener('pause', comFeatherPaint);
+    el.comPreview.addEventListener('seeked', comFeatherPaint);
+    el.comPreview.addEventListener('loadeddata', comFeatherPaint);
+    // 元数据就绪即自动探测一次（异步，不阻塞预览）
+    el.comPreview.addEventListener('loadedmetadata', () => {
+      comFeatherPaint();
+      comFeatherDetect(false);
+    });
+    new ResizeObserver(comFeatherPaint).observe(el.comPreview);
+  }
+  window.addEventListener('resize', comFeatherPaint);
+  comFeatherPaint();
 
   // 拖动示例文字 → 写入自定义位置（文字中心跟随指针，clamp 6%~94%）
   if (el.comSubPreviewText && el.comPreview) {
