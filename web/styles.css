@@ -2323,8 +2323,11 @@ img { max-width: 100%; display: block; }
 /* 字幕样式实时预览层：浮在视频画面上，位置/字号/描边/颜色由 JS 按控件实时写入 */
 .com-sub-preview {
   position: absolute; left: 0; right: 0; top: 0; bottom: 0;
-  display: flex; justify-content: center; align-items: flex-end;
+  display: flex; justify-content: center; align-items: flex-start;
   pointer-events: none; overflow: hidden; border-radius: 6px;
+  /* 🔴 必须压过羽化两层（canvas z=2 / 虚线框 z=3）：bottom 档配音字幕与羽化带有
+     ~2% 高度重叠，层级低了文字会被羽化像素盖住看不见（用户 2026-09-16 反馈）。 */
+  z-index: 4;
 }
 /* 🔴 纵向位置一律由 JS 以 marginTop（从内容区顶边算）精确写入，
    与 comFeatherContentRect() 同源；CSS 不再用 margin-bottom/align 落位（旧版根因）。
