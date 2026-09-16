@@ -113,6 +113,11 @@ run_one test_users_store_concurrency.py
 #                                       quota.json 跨进程读写会「额度复原」；
 #                                       含全仓 AST 棘轮（不得再出现固定名 .tmp）
 run_one test_config_atomic_write.py
+#  15. test_auth_reset_code_leak.py  —— 🔴 账号接管防护：dev 模式不得把验证码回传给公网调用方
+#                                        （缺 smtp.json 时生产会自动落到 dev，原实现＝公网可改任意账号密码）；
+#                                        dev+本机仍回传（桌面调试不退化）、dev+公网为 None、
+#                                        拿不到码即改不动密码、未知账号不回传、smtp 不回传
+run_one test_auth_reset_code_leak.py
 
 echo ""
 echo "========================================="
