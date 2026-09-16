@@ -23,6 +23,7 @@
 import json
 import logging
 import os
+import atomic_io
 import subprocess
 import sys
 import tempfile
@@ -99,7 +100,7 @@ def _ensure_model() -> Path:
     import socket
 
     logger.info("ai_dewatermark: 下载 LaMa ONNX %s -> %s", LAMA_ONNX_URL, p)
-    tmp = p.with_suffix(".tmp")
+    tmp = atomic_io.unique_temp_path(p)
     # 全局 socket 超时（桌面端/受限网络下避免 107MB 下载挂死；web 实例下载更快更需要兜底）
     prev_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(60)

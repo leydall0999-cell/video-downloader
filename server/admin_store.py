@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import atomic_io
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -58,17 +59,9 @@ def _load_users() -> dict[str, Any]:
 
 def _save_users(data: dict[str, Any]) -> None:
     p = _users_path()
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        pass
+    # 原子写（唯一临时名 + os.replace），权限严格 0600。
+    # 调用方必须已在 auth_store.users_mutation() 临界区内（并发读改写会互相覆盖丢账号）。
+    atomic_io.atomic_write_json(p, data, mode=0o600, indent=2, ensure_ascii=False)
 
 
 def list_users() -> list[dict[str, Any]]:
@@ -101,13 +94,15 @@ def list_users() -> list[dict[str, Any]]:
 
 
 def set_user_disabled(user_id: str, disabled: bool) -> dict[str, Any]:
-    data = _load_users()
-    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
-    if not user:
-        return {"ok": False, "error": "用户不存在"}
-    user["disabled"] = bool(disabled)
-    user["updated_at"] = int(time.time())
-    _save_users(data)
+    import auth_store  # 复用账号表的跨进程临界区（与 auth_store 同写 users.json）
+    with auth_store.users_mutation():
+        data = _load_users()
+        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+        if not user:
+            return {"ok": False, "error": "用户不存在"}
+        user["disabled"] = bool(disabled)
+        user["updated_at"] = int(time.time())
+        _save_users(data)
     return {"ok": True, "disabled": bool(disabled)}
 
 
@@ -279,14 +274,7 @@ def save_smtp_accounts(accounts: Any) -> dict[str, Any]:
         cleaned[0]["default"] = True
     p = _base_dir() / "smtp.json"
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"accounts": cleaned}, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
+        atomic_io.atomic_write_json(p, {"accounts": cleaned})
     except OSError as e:  # noqa: BLE001
         return {"ok": False, "error": f"写入失败：{e}"}
     return {"ok": True, "count": len(cleaned)}

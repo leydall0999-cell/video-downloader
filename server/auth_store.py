@@ -9,6 +9,7 @@ HMAC-SHA256 签名的无状态 token（Bearer），由本机 .auth_secret 校验
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -20,6 +21,15 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+try:                                    # POSIX（macOS / Linux）
+    import fcntl as _fcntl
+except ImportError:                     # Windows
+    _fcntl = None
+try:
+    import msvcrt as _msvcrt
+except ImportError:
+    _msvcrt = None
 
 # --------------------------------------------------------------------------- #
 # 路径
@@ -53,6 +63,135 @@ def _avatar_path(user_id: str) -> Path:
     return _avatar_dir() / f"{user_id}.png"
 
 
+def _write_atomic(p: Path, payload: bytes, mode: int = 0o600) -> None:
+    """原子写盘：唯一临时名（带 pid + 线程 id）→ os.replace 换入。
+
+    临时名必须唯一。固定名（users.json.tmp）在两个写者并发时会发生
+    「A 写一半 → B 截断重写 → A 把这张半截文件 replace 上线」，
+    结果是 users.json 变成解析不了的半截 JSON（_load_users 只能当空表处理 = 全部账号消失）。
+    唯一名让每个写者各写各的临时文件，replace 本身是原子的，读者永远看到完整版本。
+    """
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_bytes(payload)
+        tmp.replace(p)
+    finally:
+        if tmp.exists():                    # replace 成功后已不存在；异常路径必须清理
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+    try:
+        os.chmod(p, mode)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------- #
+# users.json 有 8 个写入口（注册 / 改密 / 注销 / 提权 / 头像 / 后台禁用 / 后台重置 /
+# 超管引导），散落在 auth_store 与 admin_store 两个模块。它们**全是**
+# 「读全量 → 改一处 → 写全量」；不串行时两个入口会各自基于同一份旧快照写回，
+# 后写的把先写的整段覆盖 —— 表现是丢账号 / 丢提权 / 丢禁用标记，
+# 且不报任何错，只是文件里静静少一条记录（直到登录时才炸出「账号或密码错误」）。
+#
+# ⚠️ 只锁「落盘」那一步不解决问题：**载入**必须一起进来，
+# 否则两个线程照样各自读到同一份旧数据，锁了个寂寞。
+#
+# 双层锁：
+#   · 进程内 RLock —— 请求走线程池，这是主力；可重入（后台重置会回调 auth_store）。
+#   · 跨进程 flock —— 多进程/双实例兜底（VPS 推送 / Railway prune 与本进程会同时写）。
+_USERS_RLOCK = threading.RLock()
+_USERS_LOCK_STATE: dict[str, Any] = {"depth": 0, "owner": None, "fh": None}
+_USERS_LOCKFILE = ".users.lock"     # 跨进程锁用的空文件（与 users.json 同目录）
+_FILE_LOCK_WAIT = 2.0               # 跨进程锁最多等 2s；超时降级为仅线程锁，绝不卡死用户
+_FILE_LOCK_POLL = 0.02
+
+
+def _users_lock_path() -> Path:
+    return _base_dir() / _USERS_LOCKFILE
+
+
+def _lock_users_file():
+    """尝试取跨进程独占锁，成功返回文件句柄。
+
+    任何异常/超时都**降级返回句柄继续走**（此时仅靠进程内锁），
+    宁可极端情况下少一层保护，也不能让用户界面卡在登录/注册上。
+    """
+    try:
+        p = _users_lock_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(p, "a+")
+    except OSError:
+        return None
+    if _fcntl is None and _msvcrt is None:      # 平台不支持 → 句柄还要拿回去关
+        return fh
+    deadline = time.monotonic() + _FILE_LOCK_WAIT
+    while True:
+        try:
+            if _fcntl is not None:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            else:
+                fh.seek(0)
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+            return fh
+        except OSError:
+            if time.monotonic() >= deadline:
+                logging.getLogger(__name__).warning(
+                    "账号表跨进程锁等待超时（%ss），降级为仅进程内锁", _FILE_LOCK_WAIT)
+                return fh
+            time.sleep(_FILE_LOCK_POLL)
+
+
+def _unlock_users_file(fh) -> None:
+    if fh is None:
+        return
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        elif _msvcrt is not None:
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    finally:
+        with contextlib.suppress(OSError):
+            fh.close()
+
+
+@contextlib.contextmanager
+def users_mutation():
+    """账号表临界区：**载入 → 改 → 落盘** 整段包在这里（所有写入口统一用法）。
+
+        with users_mutation():
+            data = _load_users()
+            ... 改 data ...
+            _save_users(data)
+
+    提前 return（例如「用户不存在」）不会落盘 —— 落盘由调用方显式调用，不是自动的。
+    """
+    me = threading.get_ident()
+    _USERS_RLOCK.acquire()
+    try:
+        st = _USERS_LOCK_STATE
+        st["depth"] += 1
+        st["owner"] = me
+        if st["depth"] == 1:        # 只有最外层拿跨进程锁，否则同进程重入会自我死锁
+            st["fh"] = _lock_users_file()
+        yield
+    finally:
+        st = _USERS_LOCK_STATE
+        st["depth"] -= 1
+        if st["depth"] <= 0:
+            st["depth"] = 0
+            st["owner"] = None
+            _unlock_users_file(st["fh"])
+            st["fh"] = None
+        _USERS_RLOCK.release()
+
+
+def users_lock_held() -> bool:
+    """当前线程是否正持账号表写锁（守护测试用：断言每次落盘都发生在锁内）。"""
+    return _USERS_LOCK_STATE["owner"] == threading.get_ident()
+
+
 # --------------------------------------------------------------------------- #
 # 签名密钥（每机一份，丢失即全部旧 token 失效，但账号仍在）
 # --------------------------------------------------------------------------- #
@@ -67,9 +206,7 @@ def _load_secret() -> bytes:
     secret = secrets.token_bytes(32)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_bytes(secret)
-        tmp.replace(p)
+        _write_atomic(p, secret)
         try:
             os.chmod(p, 0o600)
         except OSError:
@@ -196,18 +333,13 @@ def _load_users() -> dict:
 
 
 def _save_users(data: dict) -> None:
+    """落盘账号表。**调用方必须已在 users_mutation() 临界区内**（见该函数说明）。"""
     p = _users_path()
     # 写前重建索引，保证 by_identifier 与 users 始终一致
     _rebuild_index(data)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
+        _write_atomic(p, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
     except OSError:
         pass
 
@@ -222,26 +354,27 @@ def create_user(identifier: str, password: str, is_admin: bool = False) -> Optio
     is_admin 仅经后台显式提权（set_user_admin / ensure_superusers），常规自注册恒为 False。
     """
     ident = _normalize(identifier)
-    data = _load_users()
-    if ident in data["by_identifier"]:
-        return None
-    # 已注销账号不可重新注册
-    if any(u.get("identifier") == ident and u.get("deleted_at") for u in data["users"]):
-        return None
-    import uuid
-    user_id = "u_" + uuid.uuid4().hex[:16]
-    salt, pw_hash = hash_password(password)
-    data["users"].append({
-        "user_id": user_id,
-        "identifier": ident,
-        "salt": salt,
-        "pw_hash": pw_hash,
-        "created_at": int(time.time()),
-        "is_admin": bool(is_admin),
-    })
-    data["by_identifier"][ident] = user_id
-    _save_users(data)
-    return user_id
+    with users_mutation():          # 载入→查重→写回 必须整段串行（并发注册同名只应成功一个）
+        data = _load_users()
+        if ident in data["by_identifier"]:
+            return None
+        # 已注销账号不可重新注册
+        if any(u.get("identifier") == ident and u.get("deleted_at") for u in data["users"]):
+            return None
+        import uuid
+        user_id = "u_" + uuid.uuid4().hex[:16]
+        salt, pw_hash = hash_password(password)
+        data["users"].append({
+            "user_id": user_id,
+            "identifier": ident,
+            "salt": salt,
+            "pw_hash": pw_hash,
+            "created_at": int(time.time()),
+            "is_admin": bool(is_admin),
+        })
+        data["by_identifier"][ident] = user_id
+        _save_users(data)
+        return user_id
 
 
 def authenticate(identifier: str, password: str) -> Optional[str]:
@@ -287,15 +420,14 @@ def set_user_avatar(user_id: str, image_bytes: bytes) -> dict[str, Any]:
     try:
         _avatar_dir().mkdir(parents=True, exist_ok=True)
         p = _avatar_path(user_id)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_bytes(image_bytes)
-        tmp.replace(p)
+        _write_atomic(p, image_bytes)
         # 记录更新时间在 users.json 中，便于前端感知变更
-        data = _load_users()
-        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
-        if user:
-            user["avatar_updated_at"] = int(time.time())
-            _save_users(data)
+        with users_mutation():
+            data = _load_users()
+            user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+            if user:
+                user["avatar_updated_at"] = int(time.time())
+                _save_users(data)
         return {"ok": True, "url": user_avatar_url(user_id)}
     except OSError as e:
         return {"ok": False, "error": f"保存头像失败: {e}"}
@@ -306,37 +438,39 @@ def reset_password(identifier: str, new_password: str) -> bool:
     if not new_password or len(new_password) < 6:
         return False
     ident = _normalize(identifier)
-    data = _load_users()
-    user_id = data["by_identifier"].get(ident)
-    if not user_id:
-        return False
-    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
-    if not user:
-        return False
-    salt, pw_hash = hash_password(new_password)
-    user["salt"] = salt
-    user["pw_hash"] = pw_hash
-    user["updated_at"] = int(time.time())
-    _save_users(data)
-    return True
+    with users_mutation():
+        data = _load_users()
+        user_id = data["by_identifier"].get(ident)
+        if not user_id:
+            return False
+        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+        if not user:
+            return False
+        salt, pw_hash = hash_password(new_password)
+        user["salt"] = salt
+        user["pw_hash"] = pw_hash
+        user["updated_at"] = int(time.time())
+        _save_users(data)
+        return True
 
 
 def deactivate_user(user_id: str) -> dict[str, Any]:
     """注销当前账号（软删除）：标记 deleted_at，清除索引，使该 identifier 不可再登录/注册。"""
-    data = _load_users()
-    user = next((u for u in data["users"] if u.get("user_id") == user_id), None)
-    if not user:
-        return {"ok": False, "error": "用户不存在"}
-    if user.get("deleted_at"):
-        return {"ok": False, "error": "账号已注销"}
-    ident = user.get("identifier", "")
-    user["deleted_at"] = int(time.time())
-    user["updated_at"] = int(time.time())
-    # 清除索引，防止再次登录/注册
-    if ident and ident in data["by_identifier"]:
-        del data["by_identifier"][ident]
-    _save_users(data)
-    return {"ok": True}
+    with users_mutation():
+        data = _load_users()
+        user = next((u for u in data["users"] if u.get("user_id") == user_id), None)
+        if not user:
+            return {"ok": False, "error": "用户不存在"}
+        if user.get("deleted_at"):
+            return {"ok": False, "error": "账号已注销"}
+        ident = user.get("identifier", "")
+        user["deleted_at"] = int(time.time())
+        user["updated_at"] = int(time.time())
+        # 清除索引，防止再次登录/注册
+        if ident and ident in data["by_identifier"]:
+            del data["by_identifier"][ident]
+        _save_users(data)
+        return {"ok": True}
 
 
 # --------------------------------------------------------------------------- #
@@ -354,14 +488,15 @@ def user_is_admin(user_id: str) -> bool:
 
 def set_user_admin(user_id: str, flag: bool) -> dict[str, Any]:
     """后台面板提权/降权。成功返回 ok=True 与当前 is_admin。"""
-    data = _load_users()
-    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
-    if not user:
-        return {"ok": False, "error": "用户不存在"}
-    user["is_admin"] = bool(flag)
-    user["updated_at"] = int(time.time())
-    _save_users(data)
-    return {"ok": True, "is_admin": bool(flag)}
+    with users_mutation():
+        data = _load_users()
+        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+        if not user:
+            return {"ok": False, "error": "用户不存在"}
+        user["is_admin"] = bool(flag)
+        user["updated_at"] = int(time.time())
+        _save_users(data)
+        return {"ok": True, "is_admin": bool(flag)}
 
 
 def ensure_superusers() -> None:
@@ -375,49 +510,50 @@ def ensure_superusers() -> None:
     提权为单向：本函数永不降级，降级须经后台面板 /api/admin/users/{id}/set-admin。
     """
     import json as _json
-    now = time.time()
-    data = _load_users()
-    has_admin = any(u.get("is_admin", False) for u in data["users"])
-    # 已有超管：60s 内不重复扫盘（显式名单变更最迟 60s 后生效，可接受）
-    if has_admin and (now - _SUPERUSER_CACHE["ts"] < 60):
-        return
+    with users_mutation():
+        now = time.time()
+        data = _load_users()
+        has_admin = any(u.get("is_admin", False) for u in data["users"])
+        # 已有超管：60s 内不重复扫盘（显式名单变更最迟 60s 后生效，可接受）
+        if has_admin and (now - _SUPERUSER_CACHE["ts"] < 60):
+            return
 
-    idents: list[str] = []
-    env_ids = os.environ.get("VDL_ADMIN_IDENTIFIER", "")
-    if env_ids:
-        for x in env_ids.split(","):
-            x = x.strip().lower()
-            if x:
-                idents.append(x)
-    try:
-        p = _base_dir() / "admin.json"
-        if p.exists():
-            with open(p, "r", encoding="utf-8") as f:
-                cfg = _json.load(f)
-            if isinstance(cfg, dict):
-                for x in (cfg.get("admin_identifiers") or []):
-                    x = str(x).strip().lower()
-                    if x:
-                        idents.append(x)
-    except Exception:
-        pass
+        idents: list[str] = []
+        env_ids = os.environ.get("VDL_ADMIN_IDENTIFIER", "")
+        if env_ids:
+            for x in env_ids.split(","):
+                x = x.strip().lower()
+                if x:
+                    idents.append(x)
+        try:
+            p = _base_dir() / "admin.json"
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    cfg = _json.load(f)
+                if isinstance(cfg, dict):
+                    for x in (cfg.get("admin_identifiers") or []):
+                        x = str(x).strip().lower()
+                        if x:
+                            idents.append(x)
+        except Exception:
+            pass
 
-    explicit = bool(idents)
-    changed = False
-    if explicit:
-        for u in data["users"]:
-            if u.get("identifier", "").strip().lower() in idents and not u.get("is_admin", False):
-                u["is_admin"] = True
+        explicit = bool(idents)
+        changed = False
+        if explicit:
+            for u in data["users"]:
+                if u.get("identifier", "").strip().lower() in idents and not u.get("is_admin", False):
+                    u["is_admin"] = True
+                    changed = True
+        else:
+            # 无显式名单：尚无任何超管时，提升最早注册账号
+            if data["users"] and not has_admin:
+                earliest = min(data["users"], key=lambda u: u.get("created_at", 0))
+                earliest["is_admin"] = True
                 changed = True
-    else:
-        # 无显式名单：尚无任何超管时，提升最早注册账号
-        if data["users"] and not has_admin:
-            earliest = min(data["users"], key=lambda u: u.get("created_at", 0))
-            earliest["is_admin"] = True
-            changed = True
-    if changed:
-        _save_users(data)
-    _SUPERUSER_CACHE["ts"] = now
+        if changed:
+            _save_users(data)
+        _SUPERUSER_CACHE["ts"] = now
 
 
 # --------------------------------------------------------------------------- #

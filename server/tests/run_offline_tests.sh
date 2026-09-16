@@ -4,6 +4,7 @@
 # 覆盖：
 #   1. test_baidu_qr_offline.py  —— 本地 Mock 百度 passport，跑通扫码登录全链路
 #   2. test_app_smoke.py         —— FastAPI TestClient 无头冒烟所有 /api/pcs/* 路由
+#   3. test_atomic_writes_and_auth.py —— 原子写契约 / 并发锁 / 验证码仅本机回传 回归
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -41,6 +42,7 @@ run_one() {
 
 run_one test_baidu_qr_offline.py
 run_one test_app_smoke.py
+run_one test_atomic_writes_and_auth.py
 
 echo ""
 echo "========================================="

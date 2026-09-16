@@ -13,6 +13,7 @@ import base64
 import json
 import subprocess
 import threading
+import atomic_io
 from pathlib import Path
 from typing import Any
 
@@ -171,7 +172,7 @@ def get_thumbnail(download_dir: Path, lib_id: str, ffmpeg_bin: str) -> Path | No
         if tp.exists():
             return tp
         tp.parent.mkdir(parents=True, exist_ok=True)
-        tmp = tp.with_suffix(".tmp.jpg")
+        tmp = atomic_io.unique_temp_path(tp)
         # 静态图片（封面/预览图）只有一帧，带任何 -ss（含 -ss 0）都会被 seek 掉导致输出为空，
         # 所以图片一律不加 -ss；视频先试 1 秒（跳过黑场片头），失败再回退到不 seek。
         is_image = item_path.suffix.lower() in IMAGE_EXTS

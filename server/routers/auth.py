@@ -3,8 +3,12 @@
 注册/登录/查询当前用户/本地重置密码（验证码流程）。token 为 HMAC 签名的无状态 Bearer，
 前端存于 localStorage('vdl_auth_token')，后续请求经 Authorization: Bearer <token> 携带。
 
-找回密码流程：先 POST /api/auth/reset-code 获取验证码（dev 模式本地展示 / smtp 真实投递），
-再 POST /api/auth/reset 携带 code 完成改密。V1 验证码投递为 dev 模式，后续可切 smtp/sms。
+找回密码流程：先 POST /api/auth/reset-code 获取验证码（dev 模式**仅本机**展示 / smtp 真实投递），
+再 POST /api/auth/reset 携带 code 完成改密。
+
+🔴 dev 模式下验证码**只回传给本机调用方**（桌面 App 的界面走 127.0.0.1，UX 不变）。公网部署
+若因缺少 `smtp.json` 落到 dev，把验证码写进响应体＝把任意账号的改密权交给调用方（账号接管），
+故按调用方地址卡死；网页版要能重置密码就得配 `smtp.json`（模式自动切 smtp），而不是靠回传。
 """
 from __future__ import annotations
 
@@ -38,6 +42,26 @@ def _is_valid_identifier(ident: str) -> bool:
     if "@" in ident:
         return bool(_EMAIL_RE.match(ident))
     return bool(_PHONE_RE.match(ident) or _E164_RE.match(ident))
+
+
+# 本机回环地址：桌面 App 的前端固定访问 127.0.0.1:8321，故其调用方恒为其中之一。
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_loopback(request: Request) -> bool:
+    """判断调用方是否来自本机。
+
+    ⚠️ 本判定依赖「反代后的 `request.client.host` 是真实客户端 IP」这一**部署侧前提**：
+    实测生产 VPS 的 `vdl-web` 访问日志为真实公网 IP（uvicorn 采纳了 nginx 的
+    `X-Forwarded-For`），故公网请求不会被误判为本机。该前提**无法在离线测试里钉住**
+    （属 nginx 配置），改反代/换端口后必须复核一次 —— 见 skill `vdl-build-release`。
+    """
+    try:
+        client = request.client
+        host = (client.host if client else "") or ""
+    except Exception:  # noqa: BLE001 — 取不到就当公网，宁可少回传
+        return False
+    return host in _LOOPBACK_HOSTS
 
 
 def _auth_user_id(request: Request) -> Optional[str]:
@@ -241,7 +265,7 @@ def account_deactivate(request: Request, payload: dict[str, Any] = Body(...)) ->
 
 
 @router.post("/api/auth/reset-code")
-def auth_reset_code(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def auth_reset_code(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     ident = str(payload.get("identifier") or "").strip().lower()
     if not ident:
         return {"ok": False, "error": "请输入邮箱或手机号"}
@@ -262,8 +286,10 @@ def auth_reset_code(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             logging.getLogger("vdl.auth").error("投递验证码失败: %s", e)
             return {"ok": False, "error": "验证码发送失败，请检查邮件服务配置"}
-    # 无论账号是否存在都返回 ok（防账号枚举）；dev 模式附带 dev_code 便于本地测试
-    dev_code = code if _send_mode() == "dev" else None
+    # 无论账号是否存在都返回 ok（防账号枚举）。
+    # 🔴 dev 模式**只在本机**附带 dev_code（桌面 App 本地调试用）。公网部署一旦因缺少
+    #    smtp.json 落到 dev，回传验证码＝调用方可直接改任意账号密码（账号接管）。
+    dev_code = code if (_send_mode() == "dev" and _is_loopback(request)) else None
     return {"ok": True, "dev_code": dev_code, "expires_in": 300}
 
 

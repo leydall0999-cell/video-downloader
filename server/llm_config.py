@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import atomic_io
 from pathlib import Path
 from typing import Any
 
@@ -133,14 +134,9 @@ def get_llm_config() -> dict[str, Any]:
 
 def save_llm_config(data: dict[str, Any]) -> None:
     """持久化 LLM 配置到 JSON 文件（API Key 仅存此文件，权限 0600）。"""
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
     cp = _config_path()
-    # 写入临时文件后原子 rename，避免断电/崩溃产生半截 JSON
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    # 原子写：唯一临时名 + os.replace，避免断电/崩溃产生半截 JSON 或并发互覆
+    atomic_io.atomic_write_json(cp, data)
 
 
 def inject_llm_env(env: dict[str, str]) -> None:

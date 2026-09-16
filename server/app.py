@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import threading
 import urllib.request
+import atomic_io
 import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
 import time
 import secrets
@@ -788,12 +789,10 @@ def _chmod_600(path: Path) -> None:
 
 
 def _vault_save(vault: dict) -> None:
-    VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = VAULT_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(vault, ensure_ascii=False), encoding="utf-8")
-    _chmod_600(tmp)
-    tmp.replace(VAULT_PATH)
-    _chmod_600(VAULT_PATH)
+    with atomic_io.mutation(VAULT_PATH):
+        atomic_io.atomic_write_text(
+            VAULT_PATH, json.dumps(vault, ensure_ascii=False), mode=0o600, chmod=_chmod_600
+        )
 
 
 def _vault_tmp_for(lib_id: str) -> Path:
