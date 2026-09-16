@@ -1275,6 +1275,22 @@ def _parse_feather_opt(raw: str) -> dict:
         out["dynamic"] = True
         out.pop("band_y_ratio", None)
         out.pop("band_h_ratio", None)
+        # 自适应之上的「手动微调补救」（2026-09-16）：探测带偶尔盖不住原字幕时，
+        # 用户在面板加偏移补救。dy=带顶上下移 / dh=带高加成，都是占画面高比例，
+        # 叠加在**每个探测出的带**上（含全片带），逐段自适应仍然生效。
+        # 仅 dynamic 模式生效：手动指定带本身就是最终值，再叠加会打架。
+        try:
+            dy, dh = d.get("dy_ratio"), d.get("dh_ratio")
+            if dy is not None:
+                dy = float(dy)
+                if -0.1 <= dy <= 0.1:
+                    out["dy_ratio"] = dy
+            if dh is not None:
+                dh = float(dh)
+                if -0.1 <= dh <= 0.2:
+                    out["dh_ratio"] = dh
+        except (TypeError, ValueError):
+            pass
     return out
 
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_border_color: str = "000000", subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True, feather_opt: str = "") -> None:
@@ -1430,6 +1446,11 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             # 与手动带位置互斥（_parse_feather_opt 已丢弃手动比例），这里只透开关。
             if _fopt.get("dynamic"):
                 run_env["VDL_FEATHER_DYNAMIC"] = "1"
+                # 自适应之上的手动微调（带顶偏移 / 带高加成，占画面高比例）
+                if "dy_ratio" in _fopt:
+                    run_env["VDL_FEATHER_DY_RATIO"] = f"{_fopt['dy_ratio']:.6f}"
+                if "dh_ratio" in _fopt:
+                    run_env["VDL_FEATHER_DH_RATIO"] = f"{_fopt['dh_ratio']:.6f}"
         # 会员状态下传子进程：让管线侧配额闸门（quota.py）放行无限云端（VDL_IS_MEMBER=1）
         try:
             from routers.quota import _is_member

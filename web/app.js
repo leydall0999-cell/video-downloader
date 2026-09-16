@@ -537,6 +537,10 @@
     comFeatherBandY: $('comFeatherBandY'),
     comFeatherBandH: $('comFeatherBandH'),
     comFeatherDynamic: $('comFeatherDynamic'),
+    comFeatherTuneRow: $('comFeatherTuneRow'),
+    comFeatherTune: $('comFeatherTune'),
+    comFeatherDy: $('comFeatherDy'),
+    comFeatherDh: $('comFeatherDh'),
     comFeatherRedetect: $('comFeatherRedetect'),
     comFeatherHint: $('comFeatherHint'),
     comMaxChars: $('comMaxChars'),
@@ -10046,6 +10050,9 @@ el.dwVidPlayer.removeAttribute('src');
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
     dynamic: false,     // 羽化带随原字幕逐段自适应（与手动带位置互斥）
+    tune: false,        // 自适应之上的手动微调补救（dy/dh 偏移叠加在每个探测带上）
+    dy: 0,              // 带顶微调（占画面高比例，可负）
+    dh: 0,              // 带高加成（占画面高比例，可负=收窄）
     bandY: COM_FEATHER_DEFAULT.bandY,
     bandH: COM_FEATHER_DEFAULT.bandH,
     mode: 'fade',
@@ -10054,6 +10061,17 @@ el.dwVidPlayer.removeAttribute('src');
     srcKey: '',         // 已探测过的源标识，避免同一源重复抽帧
   };
   let _comFeatherRaf = 0;
+
+  /** 预览与成片「实际生效」的带几何：自适应+微调时在探测结果上叠加 dy/dh 偏移，
+   *  其余模式原样返回探测/手动值。预览画到哪里，管线就擦哪里（同一套偏移口径）。 */
+  function comFeatherEff() {
+    let y = comFeather.bandY, h = comFeather.bandH;
+    if (comFeather.dynamic && comFeather.tune) {
+      y = Math.max(0, Math.min(0.98, y + comFeather.dy));
+      h = Math.max(0.005, Math.min(0.4, h + comFeather.dh));
+    }
+    return { y, h };
+  }
 
   /** 预览视频「实际画面区」相对 .com-preview-wrap 的位置与尺寸（扣掉 letterbox 黑边）。 */
   function comFeatherContentRect() {
@@ -10100,8 +10118,9 @@ el.dwVidPlayer.removeAttribute('src');
     if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
     cv.hidden = false;
 
-    const by = Math.max(0, Math.min(0.98, comFeather.bandY));
-    const bh = Math.max(0.005, Math.min(0.4, comFeather.bandH));
+    const _eff = comFeatherEff();
+    const by = Math.max(0, Math.min(0.98, _eff.y));
+    const bh = Math.max(0.005, Math.min(0.4, _eff.h));
     box.style.left = r.x + 'px';
     box.style.width = r.w + 'px';
     box.style.top = (r.y + by * r.h) + 'px';
@@ -10134,9 +10153,11 @@ el.dwVidPlayer.removeAttribute('src');
     // 管线的模糊半径是「源分辨率像素」，折到显示尺寸才等价
     const blurPx = (srcPx) => Math.max(0.3, srcPx * k);
 
-    // 带（源空间像素）——与管线 _cover_segment 的 dy/dh 同口径
-    const bandTopSrc = Math.max(0, Math.min(0.98, comFeather.bandY)) * vh;
-    const bandHSrc = Math.max(2, Math.max(0.005, comFeather.bandH) * vh);
+    // 带（源空间像素）——与管线 _cover_segment 的 dy/dh 同口径；
+    // 自适应+微调时叠加 dy/dh（与管线 _apply_feather_tune 同一套偏移）
+    const _effBand = comFeatherEff();
+    const bandTopSrc = Math.max(0, Math.min(0.98, _effBand.y)) * vh;
+    const bandHSrc = Math.max(2, Math.max(0.005, _effBand.h) * vh);
 
     if (mode === 'fade') {
       // 与管线一致：取带上一行 / 下一行各 2px 拉伸满带高，再做纵向线性混合；
@@ -10344,11 +10365,17 @@ el.dwVidPlayer.removeAttribute('src');
   const comGetFeatherOpt = () => {
     try {
       if (comFeather.dynamic) {
-        return JSON.stringify({
+        const opt = {
           mode: comFeather.mode || 'fade',
           strength: Number((comFeather.strength || 1).toFixed(2)),
           dynamic: true,
-        });
+        };
+        // 手动微调补救：偏移量叠加在每个探测出的带上（管线 _apply_feather_tune）
+        if (comFeather.tune) {
+          opt.dy_ratio = Number(comFeather.dy.toFixed(6));
+          opt.dh_ratio = Number(comFeather.dh.toFixed(6));
+        }
+        return JSON.stringify(opt);
       }
     } catch (_) { /* 落到下面常规分支 */ }
     if (!comFeather.found && !comFeather.manual) return '';
@@ -10368,12 +10395,55 @@ el.dwVidPlayer.removeAttribute('src');
       // 自适应时带位置/带高交给逐段探测，手动值不再下发（输入框保留但灰掉，避免误导）
       if (el.comFeatherBandY) el.comFeatherBandY.disabled = comFeather.dynamic;
       if (el.comFeatherBandH) el.comFeatherBandH.disabled = comFeather.dynamic;
+      // 微调补救行只在自适应下出现；关掉自适应时连微调一起归零（探测结果不背旧偏移）
+      if (el.comFeatherTuneRow) el.comFeatherTuneRow.hidden = !comFeather.dynamic;
+      if (!comFeather.dynamic && el.comFeatherTune) {
+        el.comFeatherTune.checked = false;
+        comFeather.tune = false;
+        comFeather.dy = 0;
+        comFeather.dh = 0;
+        if (el.comFeatherDy) { el.comFeatherDy.value = '0'; el.comFeatherDy.disabled = true; }
+        if (el.comFeatherDh) { el.comFeatherDh.value = '0'; el.comFeatherDh.disabled = true; }
+      }
       if (el.comFeatherHint) {
         el.comFeatherHint.textContent = comFeather.dynamic
-          ? '自适应已开：每个解说段开播前单独探测原字幕，没字幕的段不擦除；带位置/带高交给管线，面板数值不生效。'
+          ? '自适应已开：每个解说段开播前单独探测原字幕，没字幕的段不擦除。擦不干净（残字漏出）就勾「手动微调补救」加高/平移带。'
           : '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。';
       }
+      comFeatherPaint();
     });
+  }
+  // 自适应之上的手动微调：dy/dh 是**偏移量**（叠加在每个探测出的带上），不是绝对值，
+  // 所以这里绝不置 manual —— 置了就会整体退化成固定带，自适应失效。
+  if (el.comFeatherTune) {
+    el.comFeatherTune.addEventListener('change', () => {
+      comFeather.tune = !!el.comFeatherTune.checked;
+      if (el.comFeatherDy) el.comFeatherDy.disabled = !comFeather.tune;
+      if (el.comFeatherDh) el.comFeatherDh.disabled = !comFeather.tune;
+      if (!comFeather.tune) {
+        comFeather.dy = 0;
+        comFeather.dh = 0;
+        if (el.comFeatherDy) el.comFeatherDy.value = '0';
+        if (el.comFeatherDh) el.comFeatherDh.value = '0';
+      }
+      comFeatherPaint();
+    });
+  }
+  const comFeatherOnTuneEdit = () => {
+    if (!comFeather.tune) return;
+    const dy = Number(el.comFeatherDy && el.comFeatherDy.value);
+    const dh = Number(el.comFeatherDh && el.comFeatherDh.value);
+    if (isFinite(dy)) comFeather.dy = Math.max(-0.1, Math.min(0.1, dy / 100));
+    if (isFinite(dh)) comFeather.dh = Math.max(-0.1, Math.min(0.2, dh / 100));
+    comFeatherPaint();
+  };
+  if (el.comFeatherDy) {
+    el.comFeatherDy.addEventListener('input', comFeatherOnTuneEdit);
+    el.comFeatherDy.addEventListener('change', comFeatherOnTuneEdit);
+  }
+  if (el.comFeatherDh) {
+    el.comFeatherDh.addEventListener('input', comFeatherOnTuneEdit);
+    el.comFeatherDh.addEventListener('change', comFeatherOnTuneEdit);
   }
 
   if (el.comFeatherMode) {
@@ -10419,6 +10489,15 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comFeatherBand) {
     const box = el.comFeatherBand;
     box.addEventListener('pointerdown', (ev) => {
+      // 自适应模式下拖拽＝绝对位置，会让整条任务退化成固定带、自适应失效 —— 拦掉，
+      // 想补救请用「手动微调补救」的 dy/dh 偏移（叠加在每段探测结果上）。
+      if (comFeather.dynamic) {
+        ev.preventDefault();
+        if (el.comFeatherHint) {
+          el.comFeatherHint.textContent = '自适应模式下不支持拖动虚线框（那是固定带用法）；擦不干净请勾「手动微调补救」加偏移。';
+        }
+        return;
+      }
       const r = comFeatherContentRect();
       if (!r) return;
       ev.preventDefault();
