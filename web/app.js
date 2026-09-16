@@ -536,6 +536,7 @@
     comFeatherStrengthVal: $('comFeatherStrengthVal'),
     comFeatherBandY: $('comFeatherBandY'),
     comFeatherBandH: $('comFeatherBandH'),
+    comFeatherDynamic: $('comFeatherDynamic'),
     comFeatherRedetect: $('comFeatherRedetect'),
     comFeatherHint: $('comFeatherHint'),
     comMaxChars: $('comMaxChars'),
@@ -10044,6 +10045,7 @@ el.dwVidPlayer.removeAttribute('src');
   const comFeather = {
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
+    dynamic: false,     // 羽化带随原字幕逐段自适应（与手动带位置互斥）
     bandY: COM_FEATHER_DEFAULT.bandY,
     bandH: COM_FEATHER_DEFAULT.bandH,
     mode: 'fade',
@@ -10336,8 +10338,19 @@ el.dwVidPlayer.removeAttribute('src');
     if (vid && !vid.paused && !vid.ended) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
   }
 
-  /** 打包羽化选项给后端；空串＝不干预（管线走自身自动探测，含它的兜底逻辑）。 */
+  /** 打包羽化选项给后端；空串＝不干预（管线走自身自动探测，含它的兜底逻辑）。
+   *  dynamic（随原字幕自适应）：与手动带位置互斥 —— 勾选时不传 band_*_ratio，
+   *  且即使未探测命中也要传（后端透 VDL_FEATHER_DYNAMIC=1，管线逐段探测）。 */
   const comGetFeatherOpt = () => {
+    try {
+      if (comFeather.dynamic) {
+        return JSON.stringify({
+          mode: comFeather.mode || 'fade',
+          strength: Number((comFeather.strength || 1).toFixed(2)),
+          dynamic: true,
+        });
+      }
+    } catch (_) { /* 落到下面常规分支 */ }
     if (!comFeather.found && !comFeather.manual) return '';
     try {
       return JSON.stringify({
@@ -10348,6 +10361,20 @@ el.dwVidPlayer.removeAttribute('src');
       });
     } catch (_) { return ''; }
   };
+
+  if (el.comFeatherDynamic) {
+    el.comFeatherDynamic.addEventListener('change', () => {
+      comFeather.dynamic = !!el.comFeatherDynamic.checked;
+      // 自适应时带位置/带高交给逐段探测，手动值不再下发（输入框保留但灰掉，避免误导）
+      if (el.comFeatherBandY) el.comFeatherBandY.disabled = comFeather.dynamic;
+      if (el.comFeatherBandH) el.comFeatherBandH.disabled = comFeather.dynamic;
+      if (el.comFeatherHint) {
+        el.comFeatherHint.textContent = comFeather.dynamic
+          ? '自适应已开：每个解说段开播前单独探测原字幕，没字幕的段不擦除；带位置/带高交给管线，面板数值不生效。'
+          : '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。';
+      }
+    });
+  }
 
   if (el.comFeatherMode) {
     el.comFeatherMode.value = comFeather.mode;
