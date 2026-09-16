@@ -71,7 +71,6 @@ run_one test_dewatermark_core.py
 run_one test_matting_forward.py
 run_one test_dewatermark_forward.py
 run_one test_dewatermark_diffusion.py
-run_one test_dewatermark_routes.py
 #   4c. test_dewatermark_routes.py     —— 去水印路由层（扩散档）：capability 暴露 / diffusion 503 / engine·model 白名单 400
 run_one test_dewatermark_routes.py
 #   3c. test_matting_engines_forward.py —— 其余本地 ONNX 引擎前向（modnet/isnet/birefnet-matting/portrait）
@@ -104,6 +103,11 @@ run_one test_llm_truncation_retry.py
 #                                       session 缓存与模型全局；VDL_MODELS_DIR 下模型目录必须一致
 #                                       （同模型不下载两份）；字幕不得在请求期污染进程级 HF 端点
 run_one test_engine_isolation.py
+#  13. test_users_store_concurrency.py —— 账号表并发写安全：所有写入口必须整段持锁
+#                                        （注册/改密/注销/提权/头像/后台禁用/后台重置/超管引导），
+#                                        并发注册不丢号、同名只成功一次、跨进程锁生效、
+#                                        写盘用唯一临时名（固定名会写出半截 JSON）
+run_one test_users_store_concurrency.py
 
 echo ""
 echo "========================================="

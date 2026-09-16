@@ -90,14 +90,18 @@ def list_users() -> list[dict[str, Any]]:
 
 
 def set_user_disabled(user_id: str, disabled: bool) -> dict[str, Any]:
-    data = _load_users()
-    user = next((u for u in data["users"] if u["user_id"] == user_id), None)
-    if not user:
-        return {"ok": False, "error": "用户不存在"}
-    user["disabled"] = bool(disabled)
-    user["updated_at"] = int(time.time())
-    _save_users(data)
-    return {"ok": True, "disabled": bool(disabled)}
+    import auth_store
+    # 与 auth_store 的所有写入口共用同一临界区：载入→改→落盘 必须整段串行，
+    # 否则「后台禁用某用户」与「该用户此刻正在改密码」会互相覆盖（后写的赢）。
+    with auth_store.users_mutation():
+        data = _load_users()
+        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+        if not user:
+            return {"ok": False, "error": "用户不存在"}
+        user["disabled"] = bool(disabled)
+        user["updated_at"] = int(time.time())
+        _save_users(data)
+        return {"ok": True, "disabled": bool(disabled)}
 
 
 def reset_user_password(user_id: str, new_password: str) -> dict[str, Any]:
