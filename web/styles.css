@@ -3429,6 +3429,16 @@ img { max-width: 100%; display: block; }
 /* 移出 .com-bottom 后的区块间距（#comScriptPanel 有自身 id 规则，不在此列） */
 #commentaryView .com-review-actions,
 #commentaryView .com-steps-panel { margin-top: .7rem; }
+/* 宽屏下给解说页放开全站 .wrap 的 800px 上限。
+   为什么必须放开：.com-workspace 是「预览列 1fr + 控制列 620~720px」的双列网格，
+   而全站 `.wrap { width: min(800px, 100% - 2rem) }` 只给 742px 可用宽度 ——
+   `1fr` 被挤到 8px，预览列（含「✂️ 预览与正剧范围」「原字幕羽化」两个实时预览层）
+   在 >1180px 的窗口里**完全看不见**，只剩一条竖着的窄边。
+   只在解说页可见时放宽，其余页面仍是 800px 居中。`:has()` 不支持时该条被忽略 →
+   退化为改动前的行为，不会更糟。 */
+@media (min-width: 1181px) {
+  .wrap:has(#commentaryView:not([hidden])) { width: min(1280px, 100% - 2rem); }
+}
 /* 窄屏回退单列（常驻条保持 sticky：它已足够矮，窄屏同样安全且更需要常驻） */
 @media (max-width: 1180px) {
   #commentaryView .com-workspace { grid-template-columns: 1fr; }
