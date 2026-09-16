@@ -372,10 +372,16 @@ _SESSIONS = {}  # model_size -> pipeline 对象（按模型缓存，线程安全
 
 
 def _model_dir() -> Path:
-    """扩散模型缓存目录：优先 VDL_MODELS_DIR，否则 ~/.vdl_models/diffusion。"""
+    """扩散模型缓存目录：优先 VDL_MODELS_DIR，否则 ~/.vdl_models/diffusion。
+
+    ⚠️ 子目录名必须与 matting_ai / dewatermark_ai / routers.sr 一致地写 **带前导点的
+    `.vdl_models`**：否则设了 VDL_MODELS_DIR 时本功能会落到 `<base>/vdl_models/diffusion`，
+    而其他功能落在 `<base>/.vdl_models/...` → 同一台机器上出现两套模型目录树，
+    磁盘统计 / 清理 / 备份都会漏掉这一份。（2026-09-16 修复，与 dewatermark_ai 同源缺陷）
+    """
     raw = os.environ.get("VDL_MODELS_DIR")
     if raw:
-        return Path(raw) / "vdl_models" / "diffusion"
+        return Path(raw) / ".vdl_models" / "diffusion"
     return Path.home() / ".vdl_models" / "diffusion"
 
 

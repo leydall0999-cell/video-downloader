@@ -187,7 +187,35 @@ _SR_BASE_URLS = [
     "https://huggingface.co/SceneWorks/real-esrgan-onnx/resolve/main/",
     "https://hf-mirror.com/SceneWorks/real-esrgan-onnx/resolve/main/",
 ]
-_SR_CACHE_DIR = Path(os.path.expanduser("~/.video-downloader/models/sr"))
+_SR_LEGACY_DIR = Path(os.path.expanduser("~/.video-downloader/models/sr"))
+
+
+def _sr_cache_dir() -> Path:
+    """Real-ESRGAN 权重目录——必须与 `routers.sr` 指向**同一份**，否则同一个模型下载两遍。
+
+    ⚠️ 这两处曾经各写各的（本文件用 `~/.video-downloader/models/sr`，`routers.sr` 用
+    `~/.vdl_models/sr`），而模型文件名与来源 URL 完全相同（`real_esrgan_x{2,4}.onnx`，
+    同一个 HF 仓库）→ 用户磁盘上白存两份、各约 64MB，且本文件还**完全忽略 VDL_MODELS_DIR**。
+    2026-09-16 统一为「与 routers.sr 同目录」，并对老用户保留 `~/.video-downloader/models/sr`
+    的只读复用（已下过就不必重下）。
+    """
+    raw = (os.environ.get("VDL_MODELS_DIR") or "").strip()
+    base = Path(raw) if raw else Path.home()
+    return base / ".vdl_models" / "sr"
+
+
+def _sr_model_path(fname: str) -> Path | None:
+    """返回可用的权重路径；优先新统一目录，其次老位置（兼容已下载用户）。"""
+    d = _sr_cache_dir()
+    p = d / fname
+    if p.exists() and p.stat().st_size > 5_000_000:
+        return p
+    legacy = _SR_LEGACY_DIR / fname
+    if legacy.exists() and legacy.stat().st_size > 5_000_000:
+        return legacy
+    return None
+
+
 _SESSIONS: dict[int, Any] = {}
 
 def _ensure_sr_model(scale: int) -> Path | None:
@@ -195,10 +223,12 @@ def _ensure_sr_model(scale: int) -> Path | None:
     fname = _SR_MODEL_FILES.get(scale)
     if not fname:
         return None
-    path = _SR_CACHE_DIR / fname
-    if path.exists() and path.stat().st_size > 5_000_000:
-        return path
-    _SR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cached = _sr_model_path(fname)
+    if cached is not None:
+        return cached
+    d = _sr_cache_dir()
+    path = d / fname
+    d.mkdir(parents=True, exist_ok=True)
     for base in _SR_BASE_URLS:
         url = base + fname
         try:

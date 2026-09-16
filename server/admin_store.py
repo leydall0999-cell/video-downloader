@@ -43,32 +43,21 @@ def _users_path() -> Path:
 # --------------------------------------------------------------------------- #
 # 用户管理
 # --------------------------------------------------------------------------- #
+# ⚠️ users.json 是**认证（登录/注册）与后台用户管理两个功能共用的同一份文件**。
+# 这里必须委托给 auth_store 的读写实现，不能各写一份：
+#   · auth_store._save_users 写前会 _rebuild_index()，保证 by_identifier 与 users 一致；
+#   · 本文件原来的副本**没有**这一步，后台改一下用户就可能写出一份索引与列表不同步的
+#     users.json → 登录时按 identifier 反查不到 user_id → 报「账号或密码错误」。
+#     该故障历史上已真实发生过（见 auth_store._rebuild_index 的 docstring）。
+# 2026-09-16 改为单一写入者（本模块只留薄壳，10 个调用点无需改动）。
 def _load_users() -> dict[str, Any]:
-    p = _users_path()
-    if not p.exists():
-        return {"users": [], "by_identifier": {}}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8") or "{}")
-    except (json.JSONDecodeError, OSError):
-        return {"users": [], "by_identifier": {}}
-    data.setdefault("users", [])
-    data.setdefault("by_identifier", {})
-    return data
+    import auth_store
+    return auth_store._load_users()
 
 
 def _save_users(data: dict[str, Any]) -> None:
-    p = _users_path()
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        pass
+    import auth_store
+    auth_store._save_users(data)
 
 
 def list_users() -> list[dict[str, Any]]:

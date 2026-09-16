@@ -1062,7 +1062,14 @@ def _aria2c_path() -> str | None:
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             bin_dir = os.path.dirname(os.path.abspath(c))
-            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+            # ⚠️ 必须先判重再前置：本函数**每个下载任务都会调用一次**，而它改的是
+            # 进程级 os.environ["PATH"]。无去重时每下载一次就把该目录再前置一遍
+            # （实测每次 +89 字节），几十个任务后 PATH 会膨胀成一大串重复项，
+            # 拖慢所有功能的子进程按名检索，并可能触达系统 PATH 长度上限。
+            # 2026-09-16 修复。
+            _parts = os.environ.get("PATH", "").split(os.pathsep)
+            if bin_dir not in _parts:
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
             return c
     return None
 

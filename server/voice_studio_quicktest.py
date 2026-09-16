@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import os
+
 from voice_studio_client import VoiceStudioClient, VoiceStudioError
 from voice_studio_config import get_voice_studio_config, DEFAULT_BASE_URL
 
@@ -45,7 +47,9 @@ def main() -> None:
         return
     try:
         audio = client.tts("你好，这是来自 VideoDownloader 的语音合成测试。", speed=1.0)
-        out = "/tmp/vdl_vs_test.mp3"
+        # 带 pid 后缀：写死的 /tmp/vdl_vs_test.mp3 在两次并发自测时会互相覆盖，
+        # 出现「A 的试听里是 B 的音频」这种极难排查的串音。2026-09-16 修复。
+        out = f"/tmp/vdl_vs_test_{os.getpid()}.mp3"
         with open(out, "wb") as f:
             f.write(audio)
         print(f"[TTS] 合成成功，写入 {out}（{len(audio)} 字节）")
