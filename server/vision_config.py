@@ -26,6 +26,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import atomic_io
+
 # ── 提供商预设 ─────────────────────────────────────────────────────────
 # base_url / default_model 留空时由用户在 UI 填写；选定预设后前端自动回填这两个字段。
 VISION_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
@@ -214,14 +216,8 @@ def get_vision_config() -> dict[str, Any]:
 
 def save_vision_config(data: dict[str, Any]) -> None:
     """持久化视觉配置到 JSON 文件（API Key 仅存此文件，权限 0600）。"""
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
-    cp = _config_path()
-    # 写入临时文件后原子 rename，避免断电/崩溃产生半截 JSON
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    # 唯一临时名 + 原子 rename（见 atomic_io）
+    atomic_io.atomic_write_json(_config_path(), data)
 
 
 def inject_vision_env(env: dict[str, str]) -> None:

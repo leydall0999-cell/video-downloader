@@ -23,6 +23,8 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
+import atomic_io
+
 try:
     import requests
 except Exception:  # pragma: no cover
@@ -224,15 +226,10 @@ def _save(domain: str, cookies: list) -> bool:
         if prev_ckey:
             out["ckey"] = prev_ckey
         text = json.dumps(out, ensure_ascii=False)
-        # 原子写：先写同目录临时文件再 os.replace，避免跨进程并发（VPS 推送 / Railway prune / 读取）
-        # 读到「写一半」的撕裂文件（之前诡异 65 字节空条目的根因之一）。
-        tmp = f.with_suffix(f.suffix + ".tmp")
-        tmp.write_text(text)
-        os.replace(tmp, f)
-        try:
-            os.chmod(f, 0o600)
-        except Exception:
-            pass
+        # 原子写（见 atomic_io）：同目录**唯一**临时名再换入，避免跨进程并发
+        # （VPS 推送 / Railway prune / 读取）读到「写一半」的撕裂文件
+        #（之前诡异 65 字节空条目的根因之一）。历史写法用固定名 `.tmp`，两个写者会互截断。
+        atomic_io.atomic_write_text(f, text)
         logger.info("[cookie_pool] _save ok domain=%s file=%s bytes=%s", domain, f, len(text))
         return True
     except Exception as e:
@@ -444,13 +441,7 @@ def add_ckey(domain: str, ckey: str, source: str = "contrib") -> bool:
         data["ckey"] = {"ckey": ckey, "ts": int(time.time()), "source": source}
         try:
             _POOL_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = f.with_suffix(f.suffix + ".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False))
-            os.replace(tmp, f)
-            try:
-                os.chmod(f, 0o600)
-            except Exception:
-                pass
+            atomic_io.atomic_write_json(f, data, indent=None)
             logger.info("[cookie_pool] add_ckey ok domain=%s len=%s", domain, len(ckey))
             return True
         except Exception as e:

@@ -32,6 +32,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Iterable
 
+import atomic_io
+
 # 与 library.py 保持一致的标记（此处独立定义，避免循环导入）
 THUMB_DIR_NAME = ".thumbs"
 FRAMES_DIR_MARK = ".抽帧"
@@ -130,10 +132,7 @@ class RetentionStore:
                 self._cfg = RetentionConfig()
 
     def _save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(self._cfg.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        atomic_io.atomic_write_json(self._path, self._cfg.to_dict())
 
     def get(self) -> RetentionConfig:
         with self._lock:

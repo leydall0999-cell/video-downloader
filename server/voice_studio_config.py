@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import atomic_io
+
 DEFAULT_BASE_URL = "http://localhost:3900"
 DEFAULT_TIMEOUT = 120  # 秒，长文本/首包模型可能慢
 
@@ -75,22 +77,20 @@ def get_voice_studio_config() -> dict[str, Any]:
 
 def save_voice_studio_config(data: dict[str, Any]) -> dict[str, Any]:
     """持久化配置到 JSON（权限 0600），以现有文件为基底合并避免丢字段。"""
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
     cp = _config_path()
-    merged = dict(DEFAULTS)
-    if cp.is_file():
-        try:
-            merged.update(json.loads(cp.read_text(encoding="utf-8")))
-        except Exception:
-            pass
-    for k in DEFAULTS:
-        if k in data:
-            merged[k] = data[k]
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    # 本函数自己完成「读基底 → 合并 → 写回」，故整段进临界区：
+    # 只把落盘原子化挡不住两个并发保存各自读到同一份旧基底后互相覆盖。
+    with atomic_io.mutation(cp):
+        merged = dict(DEFAULTS)
+        if cp.is_file():
+            try:
+                merged.update(json.loads(cp.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+        for k in DEFAULTS:
+            if k in data:
+                merged[k] = data[k]
+        atomic_io.atomic_write_json(cp, merged)
     return merged
 
 

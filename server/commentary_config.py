@@ -18,6 +18,8 @@ from typing import Any
 
 from llm_config import _config_dir
 
+import atomic_io
+
 # 默认值必须与 pipeline config.py 对齐，避免用户没改时行为突变
 DEFAULT_NARRATION_LOUDNESS = -14.0   # LUFS；"off" 表示关闭标准化
 DEFAULT_ORIGINAL_DUCK = 0.10         # 原声保留比例（解说期间压低）
@@ -119,13 +121,7 @@ def save_commentary_config(data: dict[str, Any]) -> dict[str, Any]:
         "narration_boost": round(boost_f, 2),
     }
 
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
-    cp = _config_path()
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    atomic_io.atomic_write_json(_config_path(), normalized)
     return normalized
 
 

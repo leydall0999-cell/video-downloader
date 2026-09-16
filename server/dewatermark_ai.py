@@ -40,6 +40,8 @@ from pathlib import Path
 
 from codec_utils import h264_args
 
+import atomic_io
+
 logger = logging.getLogger("vdl.dewatermark_ai")
 
 try:
@@ -167,7 +169,10 @@ def _ensure_model(name: str = None) -> Path:
     import socket
 
     logger.info("ai_dewatermark[%s]: 下载 %s -> %s", name, spec["url"], p)
-    tmp = p.with_suffix(".tmp")
+    # 唯一临时名（见 atomic_io）：模型 107MB+，固定名 `.tmp` 下两个并发下载者
+    # （双实例 / 父流程 + 子进程）互写同一个文件 → 装上一个「体积达标但内容已损坏」
+    # 的模型，而体积守卫会让它此后永不重下。
+    tmp = atomic_io.unique_temp_path(p)
     # 全局默认 socket 超时（URL + connect 都受此限制）。107MB+ 在慢网下需要更长时间，
     # 同时加一次重试避免单次失败。下载超时即返回，由父路由转失败。
     prev_timeout = socket.getdefaulttimeout()

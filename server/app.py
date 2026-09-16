@@ -34,6 +34,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import atomic_io
 import platform_model as plat
 
 from codec_utils import h264_args as _h264_args, hevc_args as _hevc_args, \
@@ -800,11 +801,13 @@ def _chmod_600(path: Path) -> None:
 
 def _vault_save(vault: dict) -> None:
     VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = VAULT_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(vault, ensure_ascii=False), encoding="utf-8")
-    _chmod_600(tmp)
-    tmp.replace(VAULT_PATH)
-    _chmod_600(VAULT_PATH)
+    # 唯一临时名原子写（见 atomic_io）：固定名 `.tmp` 下两个并发写者互截断，
+    # 保险箱索引整份报废 = 用户加密文件全部「找不到」。_chmod_600 含 Windows icacls
+    # 处理，故用 chmod 钩子而不是默认 os.chmod。
+    with atomic_io.mutation(VAULT_PATH):
+        atomic_io.atomic_write_text(
+            VAULT_PATH, json.dumps(vault, ensure_ascii=False), chmod=_chmod_600
+        )
 
 def _vault_tmp_for(lib_id: str) -> Path:
     VAULT_TMP.mkdir(parents=True, exist_ok=True)

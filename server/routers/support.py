@@ -15,6 +15,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import atomic_io
+
 from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
@@ -46,10 +48,7 @@ def _read_threads() -> list[dict]:
 
 
 def _write_threads(threads: list[dict]) -> None:
-    p = _threads_path()
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(threads, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(p)
+    atomic_io.atomic_write_json(_threads_path(), threads)
 
 
 def _require_user(request: Request) -> Optional[str]:

@@ -19,6 +19,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import atomic_io
+
 # ── 提供商预设 ─────────────────────────────────────────────────────────
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "openai": {
@@ -314,25 +316,14 @@ def load_user_config_raw() -> dict[str, Any]:
 
 def save_llm_config(data: dict[str, Any]) -> None:
     """持久化 LLM 配置到 JSON 文件（API Key 仅存此文件，权限 0600）。"""
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
-    cp = _config_path()
-    # 写入临时文件后原子 rename，避免断电/崩溃产生半截 JSON
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    # 唯一临时名 + 原子 rename（见 atomic_io）：固定名 `.tmp` 在并发写者下会互截断，
+    # 一次「保存」就能把整份配置（含 Key）变成半截 JSON。
+    atomic_io.atomic_write_json(_config_path(), data)
 
 
 def save_managed_config(data: dict[str, Any]) -> None:
     """写入管理员受管配置（仅超级管理员使用；普通用户界面不暴露该入口）。"""
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
-    cp = _managed_path()
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    atomic_io.atomic_write_json(_managed_path(), data)
 
 
 def managed_status() -> dict[str, Any]:

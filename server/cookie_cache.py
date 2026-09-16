@@ -16,6 +16,8 @@ import os
 import time
 from pathlib import Path
 
+import atomic_io
+
 _COOKIE_CACHE_DIR = Path.home() / ".videodownloader" / "cookies"
 _COOKIE_TTL = 30 * 24 * 3600  # 秒；超时自动重新解密浏览器，避免用到失效 Cookie
 
@@ -50,8 +52,9 @@ def _save(host: str, header: str) -> None:
         # 目录仅本人可读：避免其他本地用户列目录名（文件名含登录站点，泄露登录足迹）
         os.chmod(_COOKIE_CACHE_DIR, 0o700)
         f = _cache_file(host)
-        f.write_text(json.dumps({"header": header, "ts": int(time.time())}))
-        os.chmod(f, 0o600)  # 仅当前用户可读写，保护登录凭证
+        # 原子写（唯一临时名，权限 0600）：直接 write_text 先截断再写，杀进程 / 并发读会拿到
+        # 半截 JSON，上层按「缓存未命中」处理 → 白跑一次浏览器凭证解密。
+        atomic_io.atomic_write_json(f, {"header": header, "ts": int(time.time())}, indent=None)
     except Exception:
         pass
 

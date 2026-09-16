@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import atomic_io
+
 # --------------------------------------------------------------------------- #
 # 套餐与权益常量表（唯一真源：VDL_会员商业化_V1方案_2026-09-05.md）
 # --------------------------------------------------------------------------- #
@@ -160,14 +162,7 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
             else:
                 existing[k] = v
         p = plan_override_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
+        atomic_io.atomic_write_json(p, existing)
         _PLAN_OVERRIDE_CACHE = (p.stat().st_mtime_ns, existing)
         return existing
 
@@ -265,14 +260,10 @@ def _load_state(path: Path) -> dict[str, Any]:
 
 def _save_state(path: Path, state: dict[str, Any]) -> None:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        # 会员状态是「用户付钱买来的东西」，坏了等于会员凭空消失：唯一临时名原子写
+        # + 按路径的进程内临界区（并发写者共用固定名 `.json.tmp` 会互截断，见 atomic_io）。
+        with atomic_io.mutation(path):
+            atomic_io.atomic_write_json(path, state)
     except OSError:
         # 状态文件写失败不应让业务崩溃（降级为内存态）
         pass

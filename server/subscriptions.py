@@ -15,6 +15,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 
+import atomic_io
+
 @dataclass
 class Subscription:
     id: str
@@ -58,17 +60,9 @@ class SubscriptionStore:
                 self._subs = {}
 
     def _save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(
-                {"subscriptions": {sid: asdict(s) for sid, s in self._subs.items()}},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        atomic_io.atomic_write_json(
+            self._path, {"subscriptions": {sid: asdict(s) for sid, s in self._subs.items()}}
         )
-        tmp.replace(self._path)
 
     def add(self, sub: Subscription) -> Subscription:
         with self._lock:

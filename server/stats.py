@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import atomic_io
+
 _lock = threading.Lock()
 _default_now: Callable[[], float] = time.time
 
@@ -69,14 +71,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 def _save(path: Path, state: dict[str, Any]) -> None:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        atomic_io.atomic_write_json(path, state)
     except OSError:
         pass
 

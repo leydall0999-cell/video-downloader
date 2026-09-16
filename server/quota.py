@@ -14,9 +14,20 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
+
+try:                                    # 跨进程锁：POSIX 用 flock，Windows 用 msvcrt
+    import fcntl as _fcntl
+except ImportError:                     # pragma: no cover
+    _fcntl = None
+try:
+    import msvcrt as _msvcrt
+except ImportError:                     # pragma: no cover
+    _msvcrt = None
 
 # ── 配额常量（唯一真源）────────────────────────────────────────────────────── #
 LIFETIME_CLOUD_EVENTS = 3          # 终身云端事件上限（不可恢复）
@@ -25,9 +36,125 @@ FREE_MAX_DURATION_SEC = 30 * 60    # 免费用户单条视频时长上限（秒�
 
 DEFAULT_BASE_DIR = Path(os.path.expanduser("~/.video-downloader"))
 
+# ── 落盘：唯一临时名原子写 + 「载入 → 改 → 写回」临界区 ───────────────────── #
+# 为什么（2026-09-16 同类隐患清查）：quota.json 有**两个进程**的写者 —— 子进程
+# worker（llm_script 扣额度）与父进程（任务失败时退额度）。此前是**直接
+# write_text**（先截断再写），于是：
+#   · 并发的另一方、以及 /api/quota/status 的读者，会读到「写了一半」的文件；
+#     `_load()` 解析失败后按空状态返回 → 计数归零 = 免费云端额度**整体复原**；
+#   · 进程被杀 / 断电则永久留下半截文件，此后每次都「额度复原」。
+# 现改为同目录唯一临时名 + os.replace 原子换入，并用 flock 把「载入 → 改 → 写回」
+# **整段**串起来（只锁落盘等于没锁：两个进程照样各自读到同一份旧快照）。
+# ⚠️ 本文件与解说管线 `scripts/quota.py` **逐字节同源**（diff 校验守护），故这些
+#    helper 就地实现，不 import app 侧的 atomic_io（那个模块不随管线分发）。
+
+_TMP_MARK = ".tmp"
+_seq_guard = threading.Lock()
+_seq = 0
+_LOCKS: dict = {}
+_LOCKS_GUARD = threading.Lock()
+_reentry = threading.local()
+
+
+def _next_seq() -> int:
+    global _seq
+    with _seq_guard:
+        _seq += 1
+        return _seq
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """唯一临时名（pid + 线程 id + 序号）+ os.replace：绝不就地截断目标文件。"""
+    tmp = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{_next_seq()}{_TMP_MARK}"
+    )
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():                # 失败路径不留垃圾
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _path_lock(path: Path) -> threading.RLock:
+    """按绝对路径共享的进程内锁。
+
+    ⚠️ 必须按**路径**而不是按实例：`routers/quota.py` 每个请求都新建一个
+    QuotaManager，实例级锁互相看不见 = 等于没锁。
+    """
+    key = os.path.abspath(str(path))
+    with _LOCKS_GUARD:
+        lk = _LOCKS.get(key)
+        if lk is None:
+            lk = threading.RLock()
+            _LOCKS[key] = lk
+        return lk
+
+
+def _flock_acquire(lock_path: Path, timeout: float = 2.0):
+    """取跨进程独占锁；平台不支持 / 超时 → 返回 None（降级为仅进程内锁）。"""
+    if _fcntl is None and _msvcrt is None:
+        return None
+    try:
+        fh = open(lock_path, "a+")
+    except OSError:
+        return None
+    deadline = time.time() + timeout
+    while True:
+        try:
+            if _fcntl is not None:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            else:
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)   # type: ignore[union-attr]
+            return fh
+        except OSError:
+            if time.time() >= deadline:
+                # 绝不为了记账把用户卡死：降级为仅进程内锁
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+                return None
+            time.sleep(0.02)
+
+
+def _flock_release(fh) -> None:
+    if fh is None:
+        return
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        elif _msvcrt is not None:
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    finally:
+        try:
+            fh.close()
+        except OSError:
+            pass
+
 
 class QuotaManager:
-    """免费用户配额状态机。线程不安全（单人单机使用，可接受）。"""
+    """免费用户配额状态机。
+
+    并发：三个写入口（扣终身 / 扣每日 / 退还）都在 `_mutation()` 临界区内
+    （进程内按路径 RLock + 跨进程 flock）；只读查询不加锁。
+    """
 
     def __init__(
         self,
@@ -43,6 +170,12 @@ class QuotaManager:
 
     # ── 持久化 ──────────────────────────────────────────────────────────── #
     def _load(self) -> dict:
+        """读取状态。解析失败 → 空 dict（等价「额度全部复原」）。
+
+        ⚠️ 这个兜底看着无害，其实很贵：只要文件出现半截内容，用户就会白拿回
+        3 次终身云端额度。改为唯一临时名原子写之后「读到半截」这条路径已不存在，
+        所以**不要**把 `_save` 改回就地 write_text。
+        """
         if self.path.exists():
             try:
                 return json.loads(self.path.read_text(encoding="utf-8") or "{}")
@@ -51,9 +184,27 @@ class QuotaManager:
         return {}
 
     def _save(self, st: dict) -> None:
-        self.path.write_text(
-            json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write_atomic(self.path, json.dumps(st, ensure_ascii=False, indent=2))
+
+    @contextmanager
+    def _mutation(self) -> Iterator[None]:
+        """「载入 → 改 → 写回」临界区（进程内 RLock + 跨进程 flock）。
+
+        跨进程锁只在**最外层**取一次：同一线程重入时若再开一个 fd 去 flock，
+        会和自己的第一把锁死锁（flock 按 open file description 计）。
+        """
+        with _path_lock(self.path):
+            depth = int(getattr(_reentry, "depth", 0))
+            fh = None
+            if depth == 0:
+                fh = _flock_acquire(self.base_dir / ".quota.lock")
+            _reentry.depth = depth + 1
+            try:
+                yield
+            finally:
+                _reentry.depth = depth
+                if fh is not None:
+                    _flock_release(fh)
 
     def _today(self) -> str:
         return time.strftime("%Y-%m-%d", time.localtime(self._now()))
@@ -103,12 +254,13 @@ class QuotaManager:
         """扣 1 次终身云端事件。额度不足返回 False。"""
         if self.is_member():
             return True
-        st = self._state()
-        if self.lifetime_cloud_remaining() <= 0:
-            return False
-        st["lifetime_cloud_used"] = int(st.get("lifetime_cloud_used", 0)) + 1
-        self._persist(st)
-        return True
+        with self._mutation():
+            st = self._state()
+            if self.lifetime_cloud_remaining() <= 0:
+                return False
+            st["lifetime_cloud_used"] = int(st.get("lifetime_cloud_used", 0)) + 1
+            self._persist(st)
+            return True
 
     # ── 退还（任务失败不该算用户头上）──────────────────────────────────── #
     def snapshot(self) -> dict:
@@ -131,28 +283,30 @@ class QuotaManager:
             return self.snapshot()
         if lifetime <= 0 and daily <= 0:
             return self.snapshot()
-        st = self._state()
-        cur_life = int(st.get("lifetime_cloud_used", 0))
-        cur_daily = int(st.get("daily_auto_used", 0))
-        new_life = max(0, cur_life - int(lifetime))
-        new_daily = max(0, cur_daily - int(daily))
-        if new_life == cur_life and new_daily == cur_daily:
-            return self.snapshot()   # 无变化不落盘：避免无谓写文件与 mtime 抖动
-        st["lifetime_cloud_used"] = new_life
-        st["daily_auto_used"] = new_daily
-        self._persist(st)
-        return self.snapshot()
+        with self._mutation():
+            st = self._state()
+            cur_life = int(st.get("lifetime_cloud_used", 0))
+            cur_daily = int(st.get("daily_auto_used", 0))
+            new_life = max(0, cur_life - int(lifetime))
+            new_daily = max(0, cur_daily - int(daily))
+            if new_life == cur_life and new_daily == cur_daily:
+                return self.snapshot()   # 无变化不落盘：避免无谓写文件与 mtime 抖动
+            st["lifetime_cloud_used"] = new_life
+            st["daily_auto_used"] = new_daily
+            self._persist(st)
+            return self.snapshot()
 
     def consume_daily_auto(self) -> bool:
         """扣 1 次每日 auto 额度。额度不足返回 False。"""
         if self.is_member():
             return True
-        st = self._state()
-        if self.daily_auto_remaining() <= 0:
-            return False
-        st["daily_auto_used"] = int(st.get("daily_auto_used", 0)) + 1
-        self._persist(st)
-        return True
+        with self._mutation():
+            st = self._state()
+            if self.daily_auto_remaining() <= 0:
+                return False
+            st["daily_auto_used"] = int(st.get("daily_auto_used", 0)) + 1
+            self._persist(st)
+            return True
 
     # ── 前置可行性预检（在「开始前」拦住做不完的任务）────────────────────── #
     def precheck_commentary(

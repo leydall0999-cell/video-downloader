@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import atomic_io
+
 
 def _config_dir() -> Path:
     if sys.platform == "win32" and getattr(sys, "frozen", False):
@@ -71,13 +73,7 @@ def get_cloud_matting_config() -> dict[str, Any]:
 
 def save_cloud_matting_config(data: dict[str, Any]) -> None:
     """持久化到 JSON（AK/SK 仅存此文件，权限 0600）。"""
-    cd = _config_dir()
-    cd.mkdir(parents=True, exist_ok=True)
-    cp = _config_path()
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(cp)
+    atomic_io.atomic_write_json(_config_path(), data)
 
 
 def is_cloud_matting_ready() -> bool:

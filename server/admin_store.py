@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import atomic_io
+
 # --------------------------------------------------------------------------- #
 # 路径
 # --------------------------------------------------------------------------- #
@@ -272,14 +274,7 @@ def save_smtp_accounts(accounts: Any) -> dict[str, Any]:
         cleaned[0]["default"] = True
     p = _base_dir() / "smtp.json"
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"accounts": cleaned}, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
-        try:
-            os.chmod(p, 0o600)
-        except OSError:
-            pass
+        atomic_io.atomic_write_json(p, {"accounts": cleaned})
     except OSError as e:  # noqa: BLE001
         return {"ok": False, "error": f"写入失败：{e}"}
     return {"ok": True, "count": len(cleaned)}

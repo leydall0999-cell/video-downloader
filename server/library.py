@@ -16,6 +16,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import atomic_io
 import crypto_vault as crypto_mod
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".ts", ".flv", ".mpeg", ".mpg"}
@@ -171,7 +172,10 @@ def get_thumbnail(download_dir: Path, lib_id: str, ffmpeg_bin: str) -> Path | No
         if tp.exists():
             return tp
         tp.parent.mkdir(parents=True, exist_ok=True)
-        tmp = tp.with_suffix(".tmp.jpg")
+        # 唯一临时名（见 atomic_io）：固定名 `.tmp.jpg` 下两个并发写者互截断，
+        # 半截 jpg 一旦被 replace 上线，`tp.exists()` 之后就永远当作有效缩略图。
+        # 扩展名必须保留 `.jpg`：ffmpeg 靠它猜封装格式。
+        tmp = atomic_io.unique_temp_path(tp)
         # 静态图片（封面/预览图）只有一帧，带任何 -ss（含 -ss 0）都会被 seek 掉导致输出为空，
         # 所以图片一律不加 -ss；视频先试 1 秒（跳过黑场片头），失败再回退到不 seek。
         is_image = item_path.suffix.lower() in IMAGE_EXTS
@@ -188,6 +192,7 @@ def get_thumbnail(download_dir: Path, lib_id: str, ffmpeg_bin: str) -> Path | No
             if tmp.exists() and tmp.stat().st_size > 0:
                 tmp.replace(tp)
                 return tp
+        tmp.unlink(missing_ok=True)   # 唯一临时名：失败路径必须自己清理，否则每次重试都留垃圾
         return None
 
 

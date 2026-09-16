@@ -108,6 +108,11 @@ run_one test_engine_isolation.py
 #                                        并发注册不丢号、同名只成功一次、跨进程锁生效、
 #                                        写盘用唯一临时名（固定名会写出半截 JSON）
 run_one test_users_store_concurrency.py
+#  14. test_config_atomic_write.py  —— 配置/状态文件的「原子落盘 + 读改写串行」：
+#                                       固定名临时文件并发下会互相截断（有可复现反证）、
+#                                       quota.json 跨进程读写会「额度复原」；
+#                                       含全仓 AST 棘轮（不得再出现固定名 .tmp）
+run_one test_config_atomic_write.py
 
 echo ""
 echo "========================================="
