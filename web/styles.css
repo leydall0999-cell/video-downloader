@@ -2326,11 +2326,14 @@ img { max-width: 100%; display: block; }
   display: flex; justify-content: center; align-items: flex-end;
   pointer-events: none; overflow: hidden; border-radius: 6px;
 }
-.com-sub-preview.is-bottom { align-items: flex-end; }
-.com-sub-preview.is-center { align-items: center; }
+/* 🔴 纵向位置一律由 JS 以 marginTop（从内容区顶边算）精确写入，
+   与 comFeatherContentRect() 同源；CSS 不再用 margin-bottom/align 落位（旧版根因）。
+   is-bottom / is-custom 都从顶边定位，is-center 仅作为历史类名保留。 */
+.com-sub-preview.is-bottom { align-items: flex-start; }
+.com-sub-preview.is-center { align-items: flex-start; }
 .com-sub-preview.is-custom { align-items: flex-start; }  /* 拖拽自定义：marginTop 由 JS 精确写入 */
 .com-sub-preview > span {
-  margin-bottom: 7%;               /* 底部模式：距底 7%，与成片字幕落位一致 */
+  margin-bottom: 0;                /* 位置改由 JS 的 marginTop 驱动（见 app.js comUpdateSubPreview） */
   font-weight: 700; line-height: 1.25;
   max-width: 94%; white-space: nowrap; overflow: hidden; text-overflow: clip;
   cursor: grab; touch-action: none; user-select: none;

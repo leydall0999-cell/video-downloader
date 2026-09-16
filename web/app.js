@@ -9879,6 +9879,15 @@ el.dwVidPlayer.removeAttribute('src');
   // 拖拽自定义字幕位置：null=用预设（bottom/center）；否则 'y:<比率>'（文字中心距画面顶部比例）
   let comSubPosCustom = null;
 
+  // ===== 字幕预览 ↔ 成片的同源几何常量（2026-09-16）=====
+  // 管线 `scripts/config.py`：SUBTITLE_SIZE=44（@854 高基准）、SUBTITLE_RAISE_RATIO=0.03；
+  // `edit_ffmpeg._subtitle_size(h)=max(20,int(44*h/854))`；
+  // bottom 档落位（`_seg_cmd_narration`）：字幕中心对齐「原字幕羽化带」中心，再整体上抬 3%×画面高。
+  // 🔴 预览必须**逐式复刻**这三个数，否则「预览看到的 ≠ 成片烧进去的」（用户 2026-09-16 反馈）。
+  const COM_SUB_EM_RATIO = 44 / 854;   // 字号占画面高（管线口径，不含用户倍率）
+  const COM_SUB_RAISE_RATIO = 0.03;    // bottom 档整体上抬比例
+  const COM_SUB_BASE_MARGIN = 0.08;    // 无羽化带时的底边距（管线 base_margin 兜底 8%）
+
   /** 字幕样式实时预览：把「字号/颜色/描边/描边颜色/位置」五个控件的效果
    *  以固定示例文字浮在 #comPreview 画面上，按视频实际渲染区等比缩放，
    *  描边用 8 向 text-shadow 模拟 ffmpeg 的 ASS Border（颜色取「描边颜色」控件，默认黑）+ 阴影。
@@ -9887,21 +9896,19 @@ el.dwVidPlayer.removeAttribute('src');
     const box = el.comSubPreview, txt = el.comSubPreviewText, vid = el.comPreview;
     if (!box || !txt || !vid) return;
     // 视频未展示（面板未开/无源且高度为 0）时隐藏覆盖层
-    const w = vid.clientWidth, h = vid.clientHeight;
-    if (!vid.offsetParent || w < 40 || h < 40) { box.hidden = true; return; }
+    if (!vid.offsetParent || vid.clientWidth < 40 || vid.clientHeight < 40) { box.hidden = true; return; }
     box.hidden = false;
-    // 视频内容区实际渲染高度（考虑 letterbox：width:100% + max-height:320px）
-    let contentH = h;
-    if (vid.videoWidth && vid.videoHeight) {
-      const scale = Math.min(w / vid.videoWidth, h / vid.videoHeight);
-      contentH = vid.videoHeight * scale;
-    }
+    // 🔴 定位基准一律取「画面内容区」（扣掉 letterbox 黑边），与羽化层、与成片同源。
+    //    旧版靠 CSS flex + `margin-bottom:7%` 落位 —— 百分比 margin 是按**容器宽度**解析的，
+    //    画面被 max-height:320px 压出黑边后该百分比会整体偏上，正是「预览浮在羽化带上方」的根因。
+    const r = comFeatherContentRect() || { x: 0, y: 0, w: vid.clientWidth, h: vid.clientHeight };
+    const contentH = r.h;
     const size = comNumVal(el.comSubSize, 1.0);
     const border = comNumVal(el.comSubBorder, 1.0);
     const color = el.comSubColor ? el.comSubColor.value : '#FFFFFF';
     const borderColor = el.comSubBorderColor ? el.comSubBorderColor.value : '#000000';
-    // 基准：字幕高约等于视频高的 4.8%（size=1 时），随 size 线性缩放
-    const fontSize = Math.max(12, contentH * 0.048 * size);
+    // 基准：与管线 _subtitle_size 同口径（44/854 ≈ 画面高的 5.15%），再乘用户字号倍率
+    const fontSize = Math.max(10, contentH * COM_SUB_EM_RATIO * size);
     // 描边厚约等于字号的 3.5% × border，clamp 1~8px
     const bw = Math.min(8, Math.max(1, fontSize * 0.035 * border));
     txt.style.fontSize = fontSize.toFixed(1) + 'px';
@@ -9912,19 +9919,33 @@ el.dwVidPlayer.removeAttribute('src');
       `0 ${Math.max(2, bw * 1.6)}px ${Math.max(3, bw * 2)}px rgba(0,0,0,.55)`, // 底部投影
     ].join(', ');
     if (comSubPosCustom && comSubPosCustom.startsWith('y:')) {
-      // 自定义：文字中心放在比率位置（与后端 y:<比率> 渲染语义一致）
+      // 自定义：文字中心放在比率位置（与管线 subtitle_pos='y:<比率>' 同口径）
       const ratio = Math.max(0.05, Math.min(0.95, parseFloat(comSubPosCustom.slice(2)) || 0.5));
       box.classList.remove('is-bottom', 'is-center');
       box.classList.add('is-custom');
-      const contentTop = (h - contentH) / 2;
-      const topPx = Math.max(0, contentTop + contentH * ratio - txt.offsetHeight / 2);
-      txt.style.marginTop = topPx.toFixed(0) + 'px';
+      txt.style.marginTop = Math.max(0, r.y + contentH * ratio - txt.offsetHeight / 2).toFixed(1) + 'px';
       txt.style.marginBottom = '0';
     } else {
       box.classList.remove('is-custom', 'is-center');
-      box.classList.add('is-bottom');    // 无自定义 → 底部默认
-      txt.style.marginTop = '';          // 恢复 CSS 预设边距
-      txt.style.marginBottom = '';
+      box.classList.add('is-bottom');    // 无自定义 → 底部默认（＝管线 bottom 档）
+      // 逐式复刻管线 _seg_cmd_narration：
+      //   ① 有羽化带时 y_bottom = ch - band_y - band_h/2 - size/2（字幕中心对齐带中心）
+      //   ② clamp 到 [base_margin(8%), ch - size]
+      //   ③ bottom 档再整体上抬 SUBTITLE_RAISE_RATIO(3%)×画面高
+      //   ④ 文字顶 = ch - y_bottom - size（管线 y = h - margin - used）
+      // 🔴 用「真实渲染高度」做比例（含 10px 下限与 line-height），而非纯比例 subH，
+      //    否则小预览里字号被下限抬到 10px、文字框比比例值高，预览会比成片偏下、压住羽化带。
+      const subH = (txt.offsetHeight || (contentH * COM_SUB_EM_RATIO * size)) / contentH;
+      let yBottom = COM_SUB_BASE_MARGIN;                 // 文字底边距画面底（比例）
+      if (comFeather.found || comFeather.manual) {
+        yBottom = 1 - (comFeather.bandY + comFeather.bandH / 2) - subH / 2;
+        yBottom = Math.max(yBottom, COM_SUB_BASE_MARGIN);
+        yBottom = Math.min(yBottom, 1 - subH);
+      }
+      yBottom = Math.min(yBottom + COM_SUB_RAISE_RATIO, 1 - subH);
+      const topRatio = 1 - yBottom - subH;
+      txt.style.marginTop = Math.max(0, r.y + contentH * topRatio).toFixed(1) + 'px';
+      txt.style.marginBottom = '0';
     }
   }
 
