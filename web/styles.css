@@ -4797,23 +4797,67 @@ html.com-theater { overflow: hidden; }
 /* 滑块弹性填充、数值固定右侧同行——原 width:100% 会把「不限」挤到下一行 */
 .com-actionbar .com-enhance-section input[type="range"] { flex: 1 1 auto; width: auto; min-width: 60px; }
 .com-actionbar .com-enhance-section .com-vol-val { flex: none; min-width: 2.6rem; text-align: right; font-size: .76rem; }
-/* ---- 中栏：时间轴（正剧范围可视化；旁白/字幕轨需管线时间码，二期接） ---- */
+/* ---- 中栏：剪映式三轨时间轴（原声 / 旁白 / 字幕）----
+   原声 = 总时长 + 正剧区间；旁白/字幕 = 脚本段 start/end（见 app.js comTlSync）。
+   配色沿用解说页深色皮肤（本卡底色 #1F1F21），刻意不引 CSS 变量，免得受全局主题翻面影响。 */
 .com-timeline {
   flex: none; background: #1F1F21; color: #9CA3AF;
   border-radius: var(--radius-md); padding: .5rem .8rem .55rem;
 }
-.com-tl-head { display: flex; align-items: center; gap: .7rem; font-size: .72rem; margin-bottom: .4rem; }
+.com-tl-head { display: flex; align-items: center; gap: .7rem; font-size: .72rem; margin-bottom: .45rem; }
 .com-tl-title { color: #E5E7EB; font-weight: 600; }
 .com-tl-range { color: #A5B4FC; }
-.com-tl-hint { margin-left: auto; color: #4B5563; }
-.com-tl-track { position: relative; height: 12px; background: #33363B; border-radius: 4px; overflow: hidden; }
-.com-tl-drama {
-  position: absolute; top: 0; bottom: 0; left: var(--tl-s, 0%);
-  width: calc(var(--tl-e, 100%) - var(--tl-s, 0%));
-  background: linear-gradient(135deg, #4F46E5, #6366F1);
+.com-tl-cut { color: #F59E0B; }
+/* 步骤进度（生成中才有内容，与底部步骤面板同源数据）：过长省略，别把缩放挤出视野 */
+.com-tl-step { color: #6B7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
+.com-tl-zoom { margin-left: auto; display: inline-flex; align-items: center; gap: .28rem; }
+.com-tl-zoom-btn {
+  width: 18px; height: 18px; padding: 0; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #2A2C31; color: #9CA3AF; border: 1px solid #3A3D45; border-radius: 4px; font-size: .72rem;
+}
+.com-tl-zoom-btn:hover:not(:disabled) { color: #E5E7EB; border-color: #4F46E5; }
+.com-tl-zoom-btn:disabled { opacity: .4; cursor: default; }
+.com-tl-zoom-val { min-width: 2.5rem; text-align: center; font-variant-numeric: tabular-nums; }
+/* 视口横向滚动（缩放 >100% 时）；三轨与刻度同在 .com-tl-inner 内，放大后同步展开 */
+.com-tl-viewport { overflow-x: auto; overflow-y: hidden; }
+.com-tl-viewport::-webkit-scrollbar { height: 6px; }
+.com-tl-inner { display: flex; flex-direction: column; gap: 3px; }
+/* 每行 = [固定宽标签][轨道]。标签 sticky 左贴，缩放横向滚动时不被轨道压过 */
+.com-tl-lane-row { display: flex; align-items: center; gap: 6px; }
+.com-tl-lane-label {
+  flex: 0 0 28px; text-align: right; font-size: .62rem; color: #6B7280;
+  position: sticky; left: 0; z-index: 1; background: #1F1F21;
+}
+.com-tl-lane {
+  position: relative; flex: 1 1 auto; min-width: 0; height: 15px;
+  background: #2A2C31; border-radius: 3px; overflow: hidden;
+}
+.com-tl-clip { position: absolute; top: 0; bottom: 0; }
+/* 原声：整片暗底 + 正剧区间高亮（区间外即被剪掉的头部/尾部） */
+.com-tl-orig-base { left: 0; right: 0; background: #33363B; border-radius: 3px; }
+.com-tl-kept {
+  background: linear-gradient(135deg, rgba(79, 70, 229, .62), rgba(99, 102, 241, .62));
   border-radius: 3px; transition: left .1s, width .1s;
 }
-.com-tl-scale { display: flex; justify-content: space-between; font-size: .62rem; color: #4B5563; margin-top: .3rem; }
+/* 旁白 / 字幕段：品牌紫实心；字幕轨用同色系略浅一档以区分轨别 */
+.com-tl-seg { background: linear-gradient(135deg, #4F46E5, #6366F1); border-radius: 3px; }
+.com-tl-lane-subs .com-tl-seg { background: linear-gradient(135deg, #7C6CF0, #8B7CF6); }
+.com-tl-ruler-row { margin-top: 1px; }
+.com-tl-scale { position: relative; flex: 1 1 auto; min-width: 0; height: 13px; }
+.com-tl-tick {
+  position: absolute; top: 3px; width: 0;
+  font-size: .6rem; color: #4B5563; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+/* 文字放进子 span：零宽刻度锚在精确时间点上，首尾标签分别左/右对齐，避免端点溢出视口产生横滚 */
+.com-tl-tick > span { position: absolute; top: 0; transform: translateX(-50%); }
+.com-tl-tick-first > span { transform: translateX(0); }
+.com-tl-tick-last > span { transform: translateX(-100%); }
+.com-tl-tick::before {
+  content: ''; position: absolute; left: 0; top: -4px; width: 1px; height: 2px; background: #3A3D45;
+}
+/* 未选视频：淡出，避免「有时间轴却没内容」的误导 */
+.com-timeline.is-empty .com-tl-viewport { opacity: .4; }
 /* ---- 右栏检查器 ---- */
 .com-insp-head {
   position: sticky; top: 0; z-index: 2;
@@ -4862,9 +4906,9 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 /* 操作条：中栏窄时「解说长度」卡自动换行到下一行，不再挤压生成按钮 */
 .com-actionbar { flex-wrap: wrap; }
 .com-actionbar .com-enhance-section { width: auto; flex: 1 1 230px; min-width: 200px; }
-/* 时间轴标题/数值不换行 */
+/* 时间轴标题/数值/缩放不换行 */
 .com-tl-head { white-space: nowrap; }
-.com-tl-title, .com-tl-range { flex: none; }
+.com-tl-title, .com-tl-range, .com-tl-cut, .com-tl-zoom { flex: none; }
 /* ---- 中档窗口（1000–1359）：三栏全保留，左右栏收窄（2026-09-17 用户 1080 窗口也要三栏） ---- */
 @media (min-width: 1000px) and (max-width: 1359px) {
   #commentaryView { height: calc(100vh - 110px); }
@@ -4873,7 +4917,6 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   #comScriptPanel { left: 224px; right: 264px; }
   #comReviewActions { left: 224px; right: 264px; }
   #comStepsPanel { right: 264px; }
-  .com-tl-hint { display: none; }   /* 窄中栏放不下长提示，信息在左栏滑块旁自明 */
 }
 /* ---- 窄窗口（<1000）：右栏收抽屉 ---- */
 .com-insp-fab { display: none; }
@@ -4948,8 +4991,7 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 .com-preview-stage { padding: 8px; border-radius: 10px; }
 .com-preview-stage video#comPreview { border-radius: 8px; }
 .com-timeline { padding: .45rem .7rem .5rem; }
-.com-tl-track { height: 14px; border-radius: 5px; }
-.com-tl-scale { margin-top: .25rem; }
+.com-tl-lane { height: 14px; }
 
 /* 5) 操作条按钮高度统一 */
 .com-actionbar #comGenerateRow .com-generate-main { padding: .8rem 1rem; font-size: .95rem; }

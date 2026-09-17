@@ -8243,11 +8243,27 @@ el.dwVidPlayer.removeAttribute('src');
   const renderComSteps = (st) => {
     const steps = Array.isArray(st.steps) ? st.steps : [];
     const logs = Array.isArray(st.logs) ? st.logs : [];
+    // 时间轴头部同源进度「第 x/y 步 · 名称 详情」——与步骤面板取同一份 steps，别另建一套口径
+    const tlStep = $('comTlStep');
     if (steps.length === 0) {
       el.comStepsPanel.hidden = true;
+      if (tlStep) { tlStep.hidden = true; tlStep.textContent = ''; }
       return;
     }
     el.comStepsPanel.hidden = false;
+    if (tlStep) {
+      // 优先显示正在跑的那一步；没有 running 就取最后一个已完成的；否则退到第 1 步
+      let cur = steps.findIndex((s) => s.status === 'running');
+      if (cur < 0) {
+        let lastDone = -1;
+        steps.forEach((s, i) => { if (s.status === 'done') lastDone = i; });
+        cur = lastDone >= 0 ? lastDone : 0;
+      }
+      const cs = steps[cur] || {};
+      const detail = cs.detail ? ' ' + String(cs.detail) : '';
+      tlStep.hidden = false;
+      tlStep.textContent = `第 ${cur + 1}/${steps.length} 步 · ${cs.name || ''}${detail}`;
+    }
     el.comStepsList.innerHTML = steps.map((s) => {
       const statusClass = s.status === 'running' ? 'task-step--running' :
                           s.status === 'done' ? 'task-step--done' :
@@ -8829,6 +8845,7 @@ el.dwVidPlayer.removeAttribute('src');
       const segs = data.segments || [];
       currentScriptSegments = segs;  // 保留原始时间戳+note，供 saveScript 合并
       currentScriptBudgets = data.budgets || [];  // 每段的字数预算（语速常量由后端统一给出）
+      comTlSync();  // 三轨时间轴：脚本就绪即把「旁白 / 字幕」两轨按 start/end 画出来
       segs.forEach((seg, idx) => {
         const row = document.createElement('div');
         row.className = 'com-seg-row';
@@ -8927,6 +8944,9 @@ el.dwVidPlayer.removeAttribute('src');
         el.comScriptStatus.className = 'com-script-status com-script-ok';
         setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
       }
+      // 保存成功后同步三轨时间轴（段数/工具提示跟着人工改动走）
+      currentScriptSegments = segments;
+      comTlSync();
     } catch (err) {
       el.comScriptStatus.textContent = `保存失败：${err.message}`;
       el.comScriptStatus.className = 'com-script-status com-script-err';
@@ -11140,30 +11160,138 @@ el.dwVidPlayer.removeAttribute('src');
   if (comHistScrim) {
     comHistScrim.addEventListener('click', () => document.body.classList.remove('com-hist-open'));
   }
-  // 时间轴：正剧范围可视化（滑块/输入框/清空/视频元数据 四路同步）
-  const comTlDrama = $('comTlDrama'), comTlRange = $('comTlRange'), comTlEnd = $('comTlEnd');
+  // ===== 剪映式三轨时间轴（2026-09-17 晚）：原声 / 旁白 / 字幕 =====
+  // 数据源（全部前端已有，无需改后端）：
+  //   · 原声轨 = 视频总时长（#comDramaEndRange.max）+ 正剧区间；区间外＝被剪掉的头部/尾部。
+  //   · 旁白轨 = currentScriptSegments 的 start/end（GET /api/commentary/script 返回）。
+  //   · 字幕轨 = 与旁白同源时间码（成片里字幕跟随旁白），分两轨是为对齐剪映「音轨/字幕轨」形态。
+  const comTlDrama = $('comTlDrama'), comTlRange = $('comTlRange');
+  const comTlLaneNarr = $('comTlLaneNarr'), comTlLaneSubs = $('comTlLaneSubs');
+  const comTlScale = $('comTlScale'), comTlCut = $('comTlCut'), comTlStep = $('comTlStep');
+  const comTlInner = $('comTlInner'), comTlZoomVal = $('comTlZoomVal'), comTlRoot = $('comTimeline');
+  let comTlZoom = 100;  // 100 = 铺满视口；>100 横向滚动（同时放大三轨与刻度）
+
+  /** 秒 → 「m:ss」/「h:mm:ss」（刻度尺用，比 formatHMS 紧凑）。 */
+  const comTlTickText = (sec) => {
+    const t = Math.max(0, Math.round(sec));
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+    const p = (n) => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+  };
+  /** 把「秒/格」向上取整成 1/2/5×10^n，保证刻度落在整数时间上。 */
+  const comTlNiceStep = (raw) => {
+    if (!isFinite(raw) || raw <= 0) return 1;
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const n = raw / pow;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
+  };
+  /** 渲染刻度尺：按轨道实际像素宽决定密度（约每 72px 一格）。 */
+  const comTlRenderScale = (dur) => {
+    if (!comTlScale) return;
+    if (!dur || !isFinite(dur)) { comTlScale.replaceChildren(); return; }
+    const laneW = (comTlLaneNarr && comTlLaneNarr.clientWidth) || comTlScale.clientWidth || 0;
+    const want = laneW > 0 ? Math.max(2, Math.round(laneW / 72)) : 5;
+    const step = comTlNiceStep(dur / want);
+    const parts = [];
+    let i = 0;
+    for (let t = 0; t <= dur + step * 0.001; t += step, i++) {
+      const sp = document.createElement('span');
+      sp.className = 'com-tl-tick';
+      sp.style.left = ((t / dur) * 100).toFixed(3) + '%';
+      const txt = document.createElement('span');
+      txt.textContent = comTlTickText(t);
+      sp.appendChild(txt);
+      parts.push(sp);
+    }
+    if (parts.length) {
+      parts[0].classList.add('com-tl-tick-first');
+      parts[parts.length - 1].classList.add('com-tl-tick-last');
+    }
+    comTlScale.replaceChildren(...parts);
+  };
+  /** 把一组 {start,end}(秒) 画到某条轨道上。 */
+  const comTlRenderSegs = (lane, segs, dur) => {
+    if (!lane) return;
+    if (!dur || !Array.isArray(segs) || !segs.length) { lane.replaceChildren(); return; }
+    const parts = [];
+    segs.forEach((sg) => {
+      const a = Math.max(0, Math.min(dur, Number(sg.start) || 0));
+      const b = Math.max(a, Math.min(dur, Number(sg.end) || a));
+      if (b - a < 0.05) return;
+      const d = document.createElement('div');
+      d.className = 'com-tl-clip com-tl-seg';
+      d.style.left = ((a / dur) * 100).toFixed(3) + '%';
+      d.style.width = Math.max(0.35, ((b - a) / dur) * 100).toFixed(3) + '%';
+      const txt = String(sg.narration || '').replace(/\s+/g, ' ').trim();
+      d.title = `${formatHMS(Math.floor(a))} – ${formatHMS(Math.floor(b))}（${(b - a).toFixed(1)}s）${txt ? '\n' + txt.slice(0, 60) : ''}`;
+      parts.push(d);
+    });
+    lane.replaceChildren(...parts);
+  };
+  /** 全量重绘。触发：滑块 input / 输入框 change / 清空 / 视频元数据 / 脚本载入 / 缩放 / 窗口尺寸。 */
   const comTlSync = () => {
-    if (!comTlDrama) return;
     const dur = parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0;
-    if (!dur || !isFinite(dur)) return;
+    const hasDur = !!dur && isFinite(dur);
     const s = parseTimeSec(el.comDramaStart.value);
     const e2 = parseTimeSec(el.comDramaEnd.value);
-    const sPct = Math.max(0, Math.min(100, ((s == null ? 0 : s) / dur) * 100));
-    const ePct = Math.max(sPct, Math.min(100, ((e2 == null ? dur : e2) / dur) * 100));
-    comTlDrama.style.left = sPct + '%';
-    comTlDrama.style.width = Math.max(0.5, ePct - sPct) + '%';
-    if (comTlEnd) comTlEnd.textContent = formatDuration(dur) || '--';
-    if (comTlRange) {
-      comTlRange.textContent = (s == null && e2 == null)
-        ? '正剧范围：自动检测'
-        : '正剧 ' + formatHMS(Math.floor(s == null ? 0 : s)) + ' – ' + (e2 == null ? '片尾' : formatHMS(Math.floor(e2)));
+    if (comTlRoot) comTlRoot.classList.toggle('is-empty', !hasDur);
+    // 原声轨：正剧区间高亮（区间外＝被剪掉的头尾，留在暗底上）
+    if (comTlDrama) {
+      if (!hasDur) {
+        comTlDrama.style.display = 'none';
+      } else {
+        comTlDrama.style.display = '';
+        const sPct = Math.max(0, Math.min(100, ((s == null ? 0 : s) / dur) * 100));
+        const ePct = Math.max(sPct, Math.min(100, ((e2 == null ? dur : e2) / dur) * 100));
+        comTlDrama.style.left = sPct.toFixed(3) + '%';
+        comTlDrama.style.width = Math.max(0.5, ePct - sPct).toFixed(3) + '%';
+      }
     }
+    if (comTlRange) {
+      comTlRange.textContent = (!hasDur || (s == null && e2 == null))
+        ? '正剧范围：自动检测'
+        : '正剧 ' + formatHMS(Math.floor(s == null ? 0 : s)) + ' → ' + (e2 == null ? '片尾' : formatHMS(Math.floor(e2)));
+    }
+    // 剪掉段数＝正剧区间之外被排除的连续区间（头/尾各最多 1 段）。
+    // 管线当前只暴露正剧起止，故上限为 2；将来若拿到中间插段会自动变多，无需改这里。
+    if (comTlCut) {
+      let n = 0;
+      if (hasDur) {
+        if (s != null && s > 0.5) n += 1;
+        if (e2 != null && dur - e2 > 0.5) n += 1;
+      }
+      comTlCut.hidden = n === 0;
+      comTlCut.textContent = n ? `剪掉 ${n} 段` : '';
+    }
+    const segs = Array.isArray(currentScriptSegments) ? currentScriptSegments : [];
+    comTlRenderSegs(comTlLaneNarr, segs, hasDur ? dur : 0);
+    comTlRenderSegs(comTlLaneSubs, segs, hasDur ? dur : 0);
+    comTlRenderScale(hasDur ? dur : 0);
   };
+  /** 缩放：写 width%（>100 才写内联，100% 铺满）；并重算刻度密度。 */
+  const comTlApplyZoom = () => {
+    if (comTlZoomVal) comTlZoomVal.textContent = comTlZoom + '%';
+    if (comTlInner) comTlInner.style.width = comTlZoom > 100 ? comTlZoom + '%' : '';
+    const out = $('comTlZoomOut'), inc = $('comTlZoomIn');
+    if (out) out.disabled = comTlZoom <= 100;
+    if (inc) inc.disabled = comTlZoom >= 500;
+    comTlSync();
+  };
+  const comTlZoomOutBtn = $('comTlZoomOut'), comTlZoomInBtn = $('comTlZoomIn');
+  if (comTlZoomOutBtn) comTlZoomOutBtn.addEventListener('click', () => { comTlZoom = Math.max(100, comTlZoom - 50); comTlApplyZoom(); });
+  if (comTlZoomInBtn) comTlZoomInBtn.addEventListener('click', () => { comTlZoom = Math.min(500, comTlZoom + 50); comTlApplyZoom(); });
+  // 窗口尺寸变化：轨道像素宽变了，刻度密度跟着重算（防抖，避免拖动窗口时反复重排）
+  let comTlResizeT = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(comTlResizeT);
+    comTlResizeT = setTimeout(() => comTlRenderScale(parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0), 120);
+  });
   [el.comDramaStartRange, el.comDramaEndRange].forEach((r) => r && r.addEventListener('input', comTlSync));
   [el.comDramaStart, el.comDramaEnd].forEach((i) => i && i.addEventListener('change', comTlSync));
   if (el.comTrimReset) el.comTrimReset.addEventListener('click', () => setTimeout(comTlSync, 0));
   const comPreviewEl = $('comPreview');
   if (comPreviewEl) comPreviewEl.addEventListener('loadedmetadata', () => setTimeout(comTlSync, 0));
+  comTlApplyZoom();  // 初始化（含「缩小」按钮置灰）
   setTimeout(comTlSync, 800);
   // 窄窗口（<1280）：检查器收抽屉，浮动按钮/「完成」开合
   const comInspFab = $('comInspFab'), comInspCloseBtn = $('comInspClose'), comInspector = $('comInspector');

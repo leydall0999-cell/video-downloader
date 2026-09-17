@@ -1978,14 +1978,48 @@
       </div>
     </div>
         </div><!-- /com-actionbar -->
+        <!-- ===== 剪映式三轨时间轴（2026-09-17 晚，对齐用户给的效果图）=====
+             原声 / 旁白 / 字幕 三轨 + 时间刻度尺；头部含 正剧区间・剪掉段数・步骤进度・缩放。
+             数据源全部前端已有，**不需要改后端**：
+               · 原声轨 = 视频总时长（#comDramaEndRange.max）+ 正剧区间；区间外＝被剪掉的头部/尾部（暗底留白）。
+               · 旁白轨 = 脚本段 start/end（GET /api/commentary/script 返回，前端存于 currentScriptSegments）。
+               · 字幕轨 = 与旁白同源时间码（成片里字幕跟随旁白走），分两轨是为对齐剪映「音轨/字幕轨」的形态。
+             渲染逻辑见 app.js 的 comTlSync() / comTlRenderScale() / comTlRenderSegs()。 -->
         <div class="com-timeline" id="comTimeline">
           <div class="com-tl-head">
             <span class="com-tl-title">🎬 时间轴</span>
-            <span class="com-tl-range" id="comTlRange">正剧范围：自动检测</span>
-            <span class="com-tl-hint">在左侧「正剧范围」拖动滑块调整</span>
+            <span class="com-tl-range" id="comTlRange" title="在左侧「正剧范围」拖动滑块调整">正剧范围：自动检测</span>
+            <span class="com-tl-cut" id="comTlCut" hidden></span>
+            <span class="com-tl-step" id="comTlStep" hidden></span>
+            <span class="com-tl-zoom" role="group" aria-label="时间轴缩放">
+              <button type="button" class="com-tl-zoom-btn" id="comTlZoomOut" title="缩小时间轴" aria-label="缩小时间轴">−</button>
+              <span class="com-tl-zoom-val" id="comTlZoomVal">100%</span>
+              <button type="button" class="com-tl-zoom-btn" id="comTlZoomIn" title="放大时间轴" aria-label="放大时间轴">＋</button>
+            </span>
           </div>
-          <div class="com-tl-track"><div class="com-tl-drama" id="comTlDrama"></div></div>
-          <div class="com-tl-scale"><span>00:00</span><span id="comTlEnd">--</span></div>
+          <div class="com-tl-viewport" id="comTlViewport">
+            <div class="com-tl-inner" id="comTlInner">
+              <div class="com-tl-lane-row">
+                <span class="com-tl-lane-label">原声</span>
+                <div class="com-tl-lane com-tl-lane-orig" id="comTlLaneOrig">
+                  <div class="com-tl-clip com-tl-orig-base"></div>
+                  <div class="com-tl-clip com-tl-kept" id="comTlDrama"></div>
+                </div>
+              </div>
+              <div class="com-tl-lane-row">
+                <span class="com-tl-lane-label">旁白</span>
+                <div class="com-tl-lane com-tl-lane-narr" id="comTlLaneNarr"></div>
+              </div>
+              <div class="com-tl-lane-row">
+                <span class="com-tl-lane-label">字幕</span>
+                <div class="com-tl-lane com-tl-lane-subs" id="comTlLaneSubs"></div>
+              </div>
+              <div class="com-tl-lane-row com-tl-ruler-row">
+                <span class="com-tl-lane-label"></span>
+                <div class="com-tl-scale" id="comTlScale"></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div><!-- /com-center -->
       <div class="com-splitter" id="comSplitR" title="左右拖动调整右栏宽度"></div>
