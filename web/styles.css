@@ -4542,3 +4542,187 @@ img { max-width: 100%; display: block; }
 .pf-report-actions { display: flex; gap: .6rem; justify-content: flex-end; }
 .pf-report-actions .user-menu-btn { height: 36px; padding: 0 1.1rem; font-size: .85rem; }
 
+
+/* ======================================================================
+   ===== v2 剪映式三栏改版（2026-09-17）：subbar → 左/中/右三栏单屏 =====
+   原 .com-workspace 双列布局退役（元素 id 全部保留，仅重排+样式）。
+   ====================================================================== */
+#commentaryView {
+  display: flex; flex-direction: column;
+  height: calc(100vh - 120px);      /* 单屏：视口 - 顶栏 - panel 边距 */
+  min-height: 560px;
+  overflow: hidden;
+}
+/* ---- 顶部素材条 ---- */
+.com-subbar {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .45rem .7rem; margin: .2rem 0 .6rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  flex: none;
+}
+.com-subbar-label { font-size: .78rem; color: var(--text-mute); flex: none; }
+.com-subbar .com-entry-grid { display: flex; gap: .6rem; flex: 1; min-width: 0; margin: 0; }
+.com-subbar .com-entry-card {
+  flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: .55rem;
+  margin: 0; padding: .35rem .6rem;
+}
+.com-subbar .com-entry-title { margin: 0 .3rem 0 0; font-size: .78rem; white-space: nowrap; }
+.com-subbar .com-entry-card #comSource { flex: 1; min-width: 0; }
+.com-subbar .com-entry-card #comFileBtn { white-space: nowrap; }
+.com-hist-toggle {
+  flex: none; display: inline-flex; align-items: center; gap: .3rem;
+  background: #F1F0FE; color: var(--brand); font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
+  border-radius: var(--radius-md); padding: .42rem .8rem; font-size: .8rem;
+}
+.com-hist-toggle:hover { background: #E9E7FD; }
+/* ---- 三栏主体 ---- */
+.com-v2 { display: flex; gap: 10px; flex: 1; min-height: 0; align-items: stretch; }
+.com-left {
+  width: 248px; flex: none; min-height: 0; overflow: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  padding-right: 2px;
+}
+.com-center { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.com-right {
+  width: 300px; flex: none; min-height: 0; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--surface); padding-bottom: .8rem;
+}
+/* ---- 左栏：正剧范围卡（原全宽卡在窄栏下的适配） ---- */
+.com-left .com-trim-card { margin: 0; display: flex; flex-direction: column; }
+.com-left .com-trim-head h3 { font-size: .88rem; }
+/* ---- 中栏：深色预览舞台 ---- */
+.com-preview-stage {
+  flex: 1; min-height: 0;
+  background: #18181A; border-radius: var(--radius-md);
+  padding: 10px; display: flex;
+}
+.com-preview-stage .com-preview-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.com-preview-stage video#comPreview {
+  max-width: 100%; max-height: 100%; width: auto; height: auto;
+  background: #000; border-radius: 6px;
+}
+/* ---- 中栏：操作条（生成脚本 + 字数上限） ---- */
+.com-actionbar { display: flex; gap: 10px; align-items: stretch; flex: none; }
+.com-actionbar #comGenerateRow { flex: 1; margin: 0; padding: 0; }
+.com-actionbar #comGenerateRow .com-generate-main { width: 100%; height: 100%; }
+.com-actionbar .com-enhance-section {
+  width: 250px; flex: none; margin: 0;
+  display: flex; align-items: center; padding: .4rem .8rem;
+}
+.com-actionbar .com-enhance-section .com-opt-block { display: flex; align-items: center; gap: .6rem; width: 100%; }
+.com-actionbar .com-enhance-section .com-opt-title { flex: none; font-size: .74rem; white-space: nowrap; color: var(--text-mute); }
+.com-actionbar .com-enhance-section .com-opt-row { flex: 1; margin: 0; }
+.com-actionbar .com-enhance-section input[type="range"] { width: 100%; }
+.com-actionbar .com-enhance-section .com-vol-val { flex: none; min-width: 2.6rem; text-align: right; font-size: .76rem; }
+/* ---- 中栏：时间轴（正剧范围可视化；旁白/字幕轨需管线时间码，二期接） ---- */
+.com-timeline {
+  flex: none; background: #1F1F21; color: #9CA3AF;
+  border-radius: var(--radius-md); padding: .5rem .8rem .55rem;
+}
+.com-tl-head { display: flex; align-items: center; gap: .7rem; font-size: .72rem; margin-bottom: .4rem; }
+.com-tl-title { color: #E5E7EB; font-weight: 600; }
+.com-tl-range { color: #A5B4FC; }
+.com-tl-hint { margin-left: auto; color: #4B5563; }
+.com-tl-track { position: relative; height: 12px; background: #33363B; border-radius: 4px; overflow: hidden; }
+.com-tl-drama {
+  position: absolute; top: 0; bottom: 0; left: var(--tl-s, 0%);
+  width: calc(var(--tl-e, 100%) - var(--tl-s, 0%));
+  background: linear-gradient(135deg, #4F46E5, #6366F1);
+  border-radius: 3px; transition: left .1s, width .1s;
+}
+.com-tl-scale { display: flex; justify-content: space-between; font-size: .62rem; color: #4B5563; margin-top: .3rem; }
+/* ---- 右栏检查器 ---- */
+.com-insp-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .55rem .8rem; background: var(--surface);
+  border-bottom: 1px solid var(--line); margin-bottom: .6rem;
+}
+.com-insp-head b { font-size: .86rem; }
+.com-insp-done { display: none; }
+/* ---- 覆盖层化：解说词审核 / 步骤日志（hidden 优先级保护必须加） ---- */
+#comScriptPanel[hidden], #comReviewActions[hidden], #comStepsPanel[hidden] { display: none !important; }
+#comScriptPanel {
+  position: fixed; top: 74px; bottom: 18px; left: 260px; right: 322px;
+  z-index: 60; margin: 0; width: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .35);
+  display: flex; flex-direction: column; overflow: hidden; padding: .8rem 1rem;
+}
+#comScriptPanel .com-script-segments { flex: 1; overflow: auto; min-height: 0; }
+#comScriptPanel .com-script-actions { flex: none; }
+#comReviewActions {
+  position: fixed; top: 66px; left: 260px; right: 322px; z-index: 59;
+  background: #FEF9C3; border: 1px solid #FDE68A; border-radius: var(--radius-md);
+  padding: .45rem .8rem; margin: 0;
+}
+#comStepsPanel {
+  position: fixed; right: 322px; bottom: 16px; width: 400px; max-height: 46vh;
+  z-index: 62; margin: 0; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: 0 16px 48px rgba(15, 23, 42, .3); padding: .7rem .8rem;
+}
+/* ---- 解说历史抽屉（顶栏按钮呼出） ---- */
+#commentaryView #comHistory {
+  position: fixed; top: 74px; right: 12px; bottom: 12px; width: min(720px, 60vw);
+  z-index: 55; margin: 0; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: -12px 0 48px rgba(15, 23, 42, .28);
+  transform: translateX(calc(100% + 40px)); transition: transform .22s ease;
+}
+body.com-hist-open #commentaryView #comHistory { transform: none; }
+#comHistScrim {
+  position: fixed; inset: 0; z-index: 54; background: rgba(15, 23, 42, .38);
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
+/* ---- 窄窗口（<1280）：右栏收抽屉 ---- */
+.com-insp-fab { display: none; }
+@media (max-width: 1279px) {
+  #commentaryView { height: calc(100vh - 110px); }
+  .com-right {
+    position: fixed; top: 70px; right: 0; bottom: 0; z-index: 56;
+    transform: translateX(105%); transition: transform .22s ease;
+    box-shadow: -12px 0 40px rgba(15, 23, 42, .25);
+  }
+  .com-right.open { transform: none; }
+  .com-insp-fab {
+    display: flex; position: fixed; right: 14px; bottom: 74px; z-index: 45;
+    background: linear-gradient(135deg, var(--brand), #6366F1); color: #fff;
+    border-radius: 999px; padding: .55rem 1rem; font-size: .8rem; font-weight: 700;
+    box-shadow: 0 8px 20px rgba(79, 70, 229, .35);
+  }
+  .com-insp-done { display: inline-block; }
+  #comScriptPanel { left: 20px; right: 20px; }
+  #comReviewActions { left: 20px; right: 20px; }
+  #comStepsPanel { right: 20px; }
+}
+/* ---- 深色舞台内羽化带/字幕预览层配色适配（原为浅底设计） ---- */
+.com-preview-stage .com-feather-band { border-color: rgba(255,255,255,.4); }
+.com-preview-stage .com-feather-band-tag { color: rgba(255,255,255,.55); }
+
+/* ---- v2 补丁（2026-09-17 二轮） ---- */
+/* 左栏「片头片尾处理」静态卡（脱离 dropdown 机制，radio 直接可见） */
+.com-fixed-card {
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--surface); padding: .55rem .7rem .65rem;
+}
+.com-fixed-card .com-opt-title { font-size: .8rem; font-weight: 600; margin-bottom: .45rem; }
+.com-fixed-card .com-opt-row-fixed { display: flex; flex-direction: column; gap: .4rem; }
+.com-fixed-card .com-mode-option {
+  display: flex; align-items: flex-start; gap: .4rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: .4rem .5rem; font-size: .74rem; line-height: 1.45; cursor: pointer;
+}
+.com-fixed-card .com-mode-option:has(input:checked) { border-color: var(--brand); background: #F8F8FF; }
+.com-fixed-card .com-mode-option input { margin-top: .15rem; }
+/* 右栏 row-1：270px 窄栏下 5 个下拉允许换行 */
+.com-right .com-row-1 { flex-wrap: wrap; }
+.com-right .com-row-1 > .com-cell-trigger { flex: 1 1 46%; }
+/* 操作条内生成按钮去掉旧 margin；字数上限卡隐藏长 hint */
+.com-actionbar #comGenerateRow .com-generate-main { margin-top: 0; }
+.com-actionbar .com-enhance-section .com-retain-hint { display: none; }
+/* 进度条空态时隐藏底部粘性条（避免整宽空白条） */
+.com-bottom:has(#comProgress[hidden]) { display: none; }

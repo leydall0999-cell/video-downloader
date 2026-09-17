@@ -11076,6 +11076,46 @@ el.dwVidPlayer.removeAttribute('src');
   }
   el.comTrimReset.addEventListener('click', resetTrim);
 
+  // ===== v2 剪映式改版（2026-09-17）：历史抽屉 / 时间轴同步 / 窄窗口检查器抽屉 =====
+  // 解说历史改为抽屉（按钮呼出 + 遮罩关闭），列表渲染/排序/视图切换逻辑不变
+  const comHistToggleBtn = $('comHistToggle');
+  if (comHistToggleBtn) {
+    comHistToggleBtn.addEventListener('click', () => document.body.classList.toggle('com-hist-open'));
+  }
+  const comHistScrim = $('comHistScrim');
+  if (comHistScrim) {
+    comHistScrim.addEventListener('click', () => document.body.classList.remove('com-hist-open'));
+  }
+  // 时间轴：正剧范围可视化（滑块/输入框/清空/视频元数据 四路同步）
+  const comTlDrama = $('comTlDrama'), comTlRange = $('comTlRange'), comTlEnd = $('comTlEnd');
+  const comTlSync = () => {
+    if (!comTlDrama) return;
+    const dur = parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0;
+    if (!dur || !isFinite(dur)) return;
+    const s = parseTimeSec(el.comDramaStart.value);
+    const e2 = parseTimeSec(el.comDramaEnd.value);
+    const sPct = Math.max(0, Math.min(100, ((s == null ? 0 : s) / dur) * 100));
+    const ePct = Math.max(sPct, Math.min(100, ((e2 == null ? dur : e2) / dur) * 100));
+    comTlDrama.style.left = sPct + '%';
+    comTlDrama.style.width = Math.max(0.5, ePct - sPct) + '%';
+    if (comTlEnd) comTlEnd.textContent = formatDuration(dur) || '--';
+    if (comTlRange) {
+      comTlRange.textContent = (s == null && e2 == null)
+        ? '正剧范围：自动检测'
+        : '正剧 ' + formatHMS(Math.floor(s == null ? 0 : s)) + ' – ' + (e2 == null ? '片尾' : formatHMS(Math.floor(e2)));
+    }
+  };
+  [el.comDramaStartRange, el.comDramaEndRange].forEach((r) => r && r.addEventListener('input', comTlSync));
+  [el.comDramaStart, el.comDramaEnd].forEach((i) => i && i.addEventListener('change', comTlSync));
+  if (el.comTrimReset) el.comTrimReset.addEventListener('click', () => setTimeout(comTlSync, 0));
+  const comPreviewEl = $('comPreview');
+  if (comPreviewEl) comPreviewEl.addEventListener('loadedmetadata', () => setTimeout(comTlSync, 0));
+  setTimeout(comTlSync, 800);
+  // 窄窗口（<1280）：检查器收抽屉，浮动按钮/「完成」开合
+  const comInspFab = $('comInspFab'), comInspCloseBtn = $('comInspClose'), comInspector = $('comInspector');
+  if (comInspFab && comInspector) comInspFab.addEventListener('click', () => comInspector.classList.toggle('open'));
+  if (comInspCloseBtn && comInspector) comInspCloseBtn.addEventListener('click', () => comInspector.classList.remove('open'));
+
   el.comRefresh.addEventListener('click', loadCommentary);
 
   // 配音与音量：手动调节滑块 + 保存/重置

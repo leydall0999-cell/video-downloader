@@ -1832,10 +1832,12 @@
         <button type="button" class="btn btn-ghost btn-sm" id="comRefresh" data-page-node-id="4jtKVLl2yzPG0H0spLNPOb">刷新</button>
       </div>
     </div>
-    <div class="com-workspace" data-page-node-id="Co5owSZBHHawjNcZyMnoMY">
-        <div class="com-col com-col-center" data-page-node-id="NT8AqWPjEZbiWEMk0RaV3E">
-                <div id="comEnvStatus" class="com-env-status" hidden data-page-node-id="l9gtT6T9eNCDAbBv7vsyrd"></div>
-
+    <!-- ===== v2 剪映式三栏改版（2026-09-17）：subbar(入口+历史按钮) → 左栏(正剧范围+片头片尾处理)
+         / 中栏(大预览+操作条+时间轴) / 右栏(参数检查器)。所有元素 id 保持不变，功能零删减。
+         改版前完整备份：web_backup_改版前_2026-09-17/（git 亦有提交可回滚） ===== -->
+    <div id="comEnvStatus" class="com-env-status" hidden></div>
+    <div class="com-subbar">
+      <span class="com-subbar-label">素材来源</span>
                 <div class="com-entry-grid" data-page-node-id="4vxki4rlk7GLDCL0TEBHdF">
       <!-- 入口 1：从下载历史库（媒体库）生成 -->
       <div class="com-entry-card" data-page-node-id="0OWjGch4fsH75pLlg7EbDB">
@@ -1851,28 +1853,15 @@
         <span class="com-status" id="comFileStatus" hidden data-page-node-id="UVEEGlhweQLL2sHr69GIwk"></span>
       </div>
     </div>
+      <button type="button" class="com-hist-toggle" id="comHistToggle" title="打开解说历史抽屉">📂 解说历史</button>
+    </div><!-- /com-subbar -->
+    <div class="com-v2">
+      <div class="com-left" id="comLeftCol">
                 <div class="com-trim-card" id="comTrimCard" hidden data-page-node-id="nDMvyIlDN1rvgp4iVG14i4">
       <div class="com-trim-head" data-page-node-id="NWaORyaaXLQ55Dud8PsRYH">
         <h3 data-page-node-id="MPKTEzTi8d6eAikX1YF05D">✂️ 预览与正剧范围</h3>
         <span class="com-trim-title" id="comTrimTitle" hidden data-page-node-id="tprw9KKGotopFrZTxIptQr"></span>
         <span class="com-trim-dur" id="comTrimDuration" data-page-node-id="z1AeLzMkwPDGwjcHvZTh68">片长：--</span>
-      </div>
-      <div class="com-preview-wrap" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I-wrap">
-        <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
-        <!-- 原字幕羽化实时预览层：把「探测到的原字幕带」按当前擦除方式擦掉，复刻管线
-             _cover_segment 的 fade/stretch/blur 三种效果（pointer-events:none，不挡播放器）。
-             由 comFeatherPaint() 逐帧重绘；用户调下方参数即时看到结果。 -->
-        <canvas id="comFeatherCanvas" class="com-feather-canvas" data-page-node-id="comFeatherCanvasLayer" hidden></canvas>
-        <!-- 羽化范围框：只负责「可拖拽微调位置」，像素效果由上面的 canvas 呈现（职责分离，
-             便于用 DOM 做命中区/hover，不用往 canvas 里塞交互）。 -->
-        <div id="comFeatherBand" class="com-feather-band" data-page-node-id="comFeatherBandBox"
-             title="拖动可调整原字幕羽化范围" hidden>
-          <span class="com-feather-band-tag" data-page-node-id="comFeatherBandTag">原字幕羽化范围</span>
-        </div>
-        <!-- 字幕样式实时预览层：固定示例文字，随「字号/描边/颜色/位置」实时更新（pointer-events:none 不挡播放器操作） -->
-        <div id="comSubPreview" class="com-sub-preview" data-page-node-id="comSubPreviewLayer" hidden>
-          <span id="comSubPreviewText">字幕预览：调整下方样式实时看效果</span>
-        </div>
       </div>
       <!-- 原「起点/终点」（外层源文件裁剪 + 滑块）已下线：与「正剧开始/片尾开始时间」都在界定正片范围，
            两处同填会叠加跳过（trim 先裁、drama 再按绝对时间前移）。现在只保留绝对时间一处，
@@ -1895,11 +1884,68 @@
       <div class="com-trim-actions" data-page-node-id="RZbvVbTsmrwMo8HQJKGsRZ">
         <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset" data-page-node-id="MGZ2olbRoqt4U2z9pKrGwG">清空（回到自动检测）</button>
       </div>
-      <!-- 2026-09-17：com-trim-hint 提示段已删（用户确认无用）——三条信息全部冗余：
-           ①留空=自动检测 → 清空按钮文案；②绝对时间/可写秒数 → 输入框 title；
-           ③保留 vs 剪掉 → 右侧「固定选择项」radio 自身文案自说明。 -->
-    </div>
+      </div>
+      <!-- [v2] 固定选择项（片头片尾处理）自右栏 row-1 搬来，紧贴正剧范围 -->
+      <div class="com-fixed-card">
+        <div class="com-opt-title">片头片尾处理</div>
+        <div class="com-opt-row com-opt-row-fixed">
+          <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
+          <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾（自动检测后剪掉）</span></label>
         </div>
+      </div>
+    </div><!-- /com-left -->
+      <!-- ===== 中栏：大预览 + 操作条 + 时间轴 ===== -->
+      <div class="com-center">
+        <div class="com-preview-stage">
+      <div class="com-preview-wrap" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I-wrap">
+        <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
+        <!-- 原字幕羽化实时预览层：把「探测到的原字幕带」按当前擦除方式擦掉，复刻管线
+             _cover_segment 的 fade/stretch/blur 三种效果（pointer-events:none，不挡播放器）。
+             由 comFeatherPaint() 逐帧重绘；用户调下方参数即时看到结果。 -->
+        <canvas id="comFeatherCanvas" class="com-feather-canvas" data-page-node-id="comFeatherCanvasLayer" hidden></canvas>
+        <!-- 羽化范围框：只负责「可拖拽微调位置」，像素效果由上面的 canvas 呈现（职责分离，
+             便于用 DOM 做命中区/hover，不用往 canvas 里塞交互）。 -->
+        <div id="comFeatherBand" class="com-feather-band" data-page-node-id="comFeatherBandBox"
+             title="拖动可调整原字幕羽化范围" hidden>
+          <span class="com-feather-band-tag" data-page-node-id="comFeatherBandTag">原字幕羽化范围</span>
+        </div>
+        <!-- 字幕样式实时预览层：固定示例文字，随「字号/描边/颜色/位置」实时更新（pointer-events:none 不挡播放器操作） -->
+        <div id="comSubPreview" class="com-sub-preview" data-page-node-id="comSubPreviewLayer" hidden>
+          <span id="comSubPreviewText">字幕预览：调整下方样式实时看效果</span>
+        </div>
+      </div>
+<!--@@pv@@-->
+        </div><!-- /com-preview-stage -->
+        <div class="com-actionbar">
+          <div class="com-generate-row" id="comGenerateRow">
+            <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript">生成脚本（可审核修改）</button>
+          </div>
+                <div class="com-opts com-enhance-section" data-page-node-id="FZFgMa4wsoBKozORKCvV22">
+      <!-- BGM 自动配乐块已移除（2026-09-15）：配乐后续在剪辑软件里做，默认关闭即可 -->
+      <div class="com-opt-block com-opt-block-full" data-page-node-id="BRBFAFi664czE8f3Oh4jB1">
+        <div class="com-opt-title" data-page-node-id="e6pcqRyJCXGkAKYG9IH7CF">解说长度（字数上限）</div>
+        <div class="com-opt-row" data-page-node-id="BP2q4zMu8s3ZmuNzoczz1Z">
+          <input type="range" id="comMaxChars" min="0" max="3000" step="100" value="0" data-page-node-id="EameDD6x7T3mYSgpBpIk2s" />
+          <span class="com-vol-val" id="comMaxCharsVal" data-page-node-id="Xdt38ie4anutGiRAFgfCTQ">不限</span>
+        </div>
+        <span class="com-retain-hint" data-page-node-id="z45Ba9CiW0noNbuF3o3eeJ">0=不限制；短视频想短就调小（如 600），课程想长就调大</span>
+      </div>
+    </div>
+        </div><!-- /com-actionbar -->
+        <div class="com-timeline" id="comTimeline">
+          <div class="com-tl-head">
+            <span class="com-tl-title">🎬 时间轴</span>
+            <span class="com-tl-range" id="comTlRange">正剧范围：自动检测</span>
+            <span class="com-tl-hint">在左侧「正剧范围」拖动滑块调整</span>
+          </div>
+          <div class="com-tl-track"><div class="com-tl-drama" id="comTlDrama"></div></div>
+          <div class="com-tl-scale"><span>00:00</span><span id="comTlEnd">--</span></div>
+        </div>
+      </div><!-- /com-center -->
+      <!-- ===== 右栏：参数检查器 ===== -->
+      <div class="com-right" id="comInspector">
+        <div class="com-insp-head"><b>⚙️ 解说设置</b><button type="button" class="btn btn-sm btn-primary com-insp-done" id="comInspClose">完成</button></div>
+          <!-- [v2] 以下原 .com-col-right 内容原样保留（类名不动，样式规则全部继续生效） -->
         <div class="com-col com-col-right" data-page-node-id="B6GsAfYESd6LfdrKPmeWAD">
                 <div class="com-ai-config" id="comAiConfig" data-page-node-id="VKUeqOVKDakZ5WqOhOPHI7">
       <details class="adv com-ai-details" id="aiSettings" data-page-node-id="tZpscD6PPt04tE3uO3aX2N">
@@ -2019,13 +2065,6 @@
             <input type="checkbox" id="comIntroHighlight" data-page-node-id="2LQTracB4gTXxCjfnaHJMN" />
             <span data-page-node-id="S8Myz5GgKYjEjAF7eISbHi"><b data-page-node-id="0OrSqsmm6bdHKEQxBxtpxH">片头插入精彩片段</b>（把最精彩一段剪到最开头当钩子）</span>
           </label>
-        </div>
-        <div class="com-cell com-cell-trigger" data-com-select="comIntroOutroMode" data-page-node-id="GJH9dF4PhHUC76GdW0QHFC">
-          <div class="com-opt-title" data-page-node-id="NDSoSdB3JxfaBU7u80DfzV">固定选择项</div>
-          <div class="com-opt-row com-opt-row-fixed" data-page-node-id="C1xTUBGN4fKL2CwPa5SyhT">
-            <label class="com-mode-option com-mode-fixed" data-page-node-id="HoklUVktDkWKJh0j2WwH6J"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked data-page-node-id="kyrR51ZyOkFrkGb6XRlogh" /><span data-page-node-id="pAudtLN9DMB7Q94E286c2H"><b data-page-node-id="SREkHPa0Fly3jLgADHHxFC">保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
-            <label class="com-mode-option com-mode-fixed" data-page-node-id="bLSkxQDMcvlRgIFyeV76xF"><input type="radio" name="comIntroOutroMode" value="skip" data-page-node-id="Ufe87wgB34EBJTORQfvSm8" /><span data-page-node-id="RtX9jdlpMTX9hjOidAPJ7U">去片头片尾（自动检测后剪掉）</span></label>
-          </div>
         </div>
         <div class="com-cell com-cell-trigger" data-com-select="comAspect" data-page-node-id="N5dCBd5yZWtxEOXmByPmpD">
           <div class="com-opt-title" data-page-node-id="zFJekhCVE34S39tLW1N3pO">画幅</div>
@@ -2228,24 +2267,11 @@
         <p class="com-style-hint" id="comStyleHint" data-page-node-id="dCUvaY0nB7rEDAZ0uBfsG9">默认风格：音色由下方「全局配音」决定。</p>
       </div>
     </div>
-                <div class="com-opts com-enhance-section" data-page-node-id="FZFgMa4wsoBKozORKCvV22">
-      <!-- BGM 自动配乐块已移除（2026-09-15）：配乐后续在剪辑软件里做，默认关闭即可 -->
-      <div class="com-opt-block com-opt-block-full" data-page-node-id="BRBFAFi664czE8f3Oh4jB1">
-        <div class="com-opt-title" data-page-node-id="e6pcqRyJCXGkAKYG9IH7CF">解说长度（字数上限）</div>
-        <div class="com-opt-row" data-page-node-id="BP2q4zMu8s3ZmuNzoczz1Z">
-          <input type="range" id="comMaxChars" min="0" max="3000" step="100" value="0" data-page-node-id="EameDD6x7T3mYSgpBpIk2s" />
-          <span class="com-vol-val" id="comMaxCharsVal" data-page-node-id="Xdt38ie4anutGiRAFgfCTQ">不限</span>
-        </div>
-        <span class="com-retain-hint" data-page-node-id="z45Ba9CiW0noNbuF3o3eeJ">0=不限制；短视频想短就调小（如 600），课程想长就调大</span>
-      </div>
     </div>
-      <!-- 2026-09-17 用户指定：生成脚本按钮放选项卡下方、解说历史上方的空隙处（红框位置）。
-           从 .com-bottom 粘性条挪入正常文档流；粘性条只保留进度条。 -->
-      <div class="com-generate-row" id="comGenerateRow" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
-        <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" data-page-node-id="JPKaPDTzondWplp1ytN7S2">生成脚本（可审核修改）</button>
-      </div>
-    </div>
-    </div>
+          </div><!-- /com-right -->
+    </div><!-- /com-v2 -->
+    <div id="comHistScrim"></div>
+    <button type="button" class="com-insp-fab" id="comInspFab">⚙ 解说设置</button>
     <!-- ⚠️ 2026-09-16 底部常驻操作条：只放「进度条」这一条**矮**条（生成脚本按钮已于 2026-09-17
          挪到上方选项卡下方的文档流中）。
          🔴 三个必守约束，任一破坏都会复发「整块盖住上方选项面板」的老 bug：
