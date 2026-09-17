@@ -3383,10 +3383,16 @@ details.com-feather-card > .com-feather-head,
 details.com-vol-card > .com-vol-card-head { cursor: pointer; list-style: none; user-select: none; }
 details.com-feather-card > .com-feather-head::-webkit-details-marker,
 details.com-vol-card > .com-vol-card-head::-webkit-details-marker { display: none; }
-details.com-feather-card > .com-feather-head::before,
-details.com-vol-card > .com-vol-card-head::before { content: "▸"; font-size: .78rem; color: var(--text-mute); }
-details[open].com-feather-card > .com-feather-head::before,
-details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
+/* 同「下拉logo改右边」：羽化卡/音量卡的头也把三角挪到行尾（这两张卡的头不一定是 flex 行，
+   ::after 在 flex 下靠 margin-left:auto 贴右；音量卡头里还有 .com-vol-buttons(margin-left:auto)，
+   三角排在其后即最右端）。同样不写 line-height，保持与折叠卡一致的卡高。 */
+details.com-feather-card > .com-feather-head::after,
+details.com-vol-card > .com-vol-card-head::after {
+  content: "▸"; margin-left: auto; flex: none;
+  font-size: .78rem; color: var(--text-mute);
+}
+details[open].com-feather-card > .com-feather-head::after,
+details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
 .com-vol-card-actions {
   display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
   padding: .45rem .58rem 0;
@@ -3414,8 +3420,17 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
   padding: .5rem .65rem; cursor: pointer; list-style: none; user-select: none;
 }
 .com-fold-card > .com-fold-head::-webkit-details-marker { display: none; }
-.com-fold-card > .com-fold-head::before { content: "▸"; font-size: .78rem; color: var(--text-mute); }
-.com-fold-card[open] > .com-fold-head::before { content: "▾"; }
+/* 2026-09-18（用户：「下拉logo改右边」）：三角从行首挪到行尾。
+   用 ::after + margin-left:auto 固定贴右内边距（右上角那套 .sidebar-group-title 用的同一写法）；
+   flex:none 保证窄栏下不被压扁。摘要 .com-fold-hint 已是 flex:1 1 auto，三角排在它之后即最右端。
+   🔴 不要给三角写 line-height:1：折叠卡头的高度本来就是被三角这个 flex 项的行盒撑起来的
+   （标题 lh 1.15 只有 15.5px，三角 12.48px 字号按 normal 行高约 19px），写死 1 会让卡高
+   从 30px 掉到 25px，和羽化/音量卡（31px）参差，「统一」反而更差。 */
+.com-fold-card > .com-fold-head::after {
+  content: "▸"; margin-left: auto; flex: none;
+  font-size: .78rem; color: var(--text-mute);
+}
+.com-fold-card[open] > .com-fold-head::after { content: "▾"; }
 .com-fold-card .com-fold-title { font-size: .84rem; font-weight: 700; color: var(--text); white-space: nowrap; }
 .com-fold-card .com-fold-hint { flex: 1 1 auto; min-width: 0; font-size: .68rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 2026-09-17 晚（用户：「这边 tab 再矮一点，往上走」）：
@@ -3440,7 +3455,34 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
    「类型 / 高光 / 画幅 / 片头片尾 / 引擎」会省略——用户已确认接受这个代价。 */
 /* 其余三类卡的头内边距收到同一档，避免「只有折叠卡变矮、旁边几张还很高」的参差 */
 .com-col-right > .com-ai-config { margin-bottom: .3rem; }
-.com-col-right > .com-ai-config .adv-summary { padding: .2rem .55rem; }
+/* 2026-09-18（用户：「按钮样式改成这样，要统一风格，下拉logo改右边」）
+   「⚙️ AI 能力与密钥配置」此前是 .adv 家族的**白色胶囊**（#fff 底 / 边框 var(--line) /
+   border-radius:999px），而同在右栏的 5 张折叠卡是浅青卡（accent 4%+surface 底 /
+   accent 18%+line 边框 / var(--radius-sm) 圆角）——一列里两套视觉语言，就是用户说的「不统一」。
+   用户给的参照图正是折叠卡那套，这里把外框、标题行、展开间距逐项对齐（只改外观，DOM/JS 不动）。
+   🔴 刻意用 3 个 id 的选择器（#commentaryView #comAiConfig > #aiSettings）：暗色主题里有一条
+   `html.theme-dark #commentaryView .com-ai-config .adv{background:var(--surface-2)}`，与同权规则
+   相争时按「后来者胜」会压掉这一块（那条在文件更后面）→ id 数更多才能稳定覆盖，
+   保证 AI 卡在明/暗两种主题下都与折叠卡同色（而不是一个浅青、一个深灰）。 */
+#commentaryView #comAiConfig > #aiSettings {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  margin-bottom: .38rem; padding: 0;
+}
+#commentaryView #comAiConfig > #aiSettings > .adv-summary {
+  display: flex; align-items: center; gap: .38rem;
+  padding: .28rem .6rem;
+  font-size: .84rem; font-weight: 700; color: var(--text);
+}
+#commentaryView #comAiConfig > #aiSettings > .adv-summary::before { content: none; }
+#commentaryView #comAiConfig > #aiSettings > .adv-summary::after {
+  content: "▸"; margin-left: auto; flex: none;
+  font-size: .78rem; color: var(--text-mute);
+}
+#commentaryView #comAiConfig > #aiSettings[open] > .adv-summary::after { content: "▾"; }
+/* 展开内容区与折叠卡内容区同距（折叠卡是 .com-cell 的 .15rem .6rem .65rem） */
+#commentaryView #comAiConfig > #aiSettings > .adv-body { margin: .15rem .6rem .65rem; }
 .com-col-right .com-feather-card { padding: .2rem .55rem .25rem; gap: .35rem; margin-bottom: .3rem; }
 .com-col-right .com-vol-card-head { padding: .2rem .55rem; }
 /* 音量卡的 margin-bottom 原由 #commentaryView 前缀的规则写死 .55rem，这里同权重覆盖成 .3rem */
