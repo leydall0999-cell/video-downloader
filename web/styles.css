@@ -2267,8 +2267,9 @@ img { max-width: 100%; display: block; }
 .com-ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; align-items: start; }
 /* 「高级（一般不用改）」跨双列全宽：窄右栏里被压到 ~110px 时下拉文案必然截断 */
 #commentaryView #llmAdvanced { grid-column: 1 / -1; }
-.com-ai-col { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
-.com-ai-subtitle { font-size: .82rem; font-weight: 700; color: var(--text); margin: 0 0 .1rem; }
+/* v2 十五轮：「解说引擎 / 画面识别」由常显块改为各自折起（内置 details.adv）。
+   min-width:0 必须保留——窄右栏栅格里缺了它长文案不换行，会把列撑破。 */
+.com-ai-fold { min-width: 0; }
 .com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
 /* 「保存」按钮加大 + 加粗（合并后只此一个保存按钮，给足视觉权重） */
 #aiSave { padding: .55rem 1.4rem; font-size: .95rem; font-weight: 700; }

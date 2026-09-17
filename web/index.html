@@ -1989,9 +1989,11 @@
 
           <!-- 解说引擎：普通用户只在两个档位间二选一即可。
                云端凭据（服务商 / Key / Base URL / 模型）由超级管理员统一配置，
-               不在用户界面出现——用户既不需要理解也不需要持有它们。 -->
-          <section class="com-ai-col" data-page-node-id="t1NXg8JSKcxO1kgy9DeYQr">
-            <h4 class="com-ai-subtitle" data-page-node-id="wznF6QoZACAr1aTMYILdOM">解说引擎</h4>
+               不在用户界面出现——用户既不需要理解也不需要持有它们。
+               v2 十五轮：本块改为独立折起、默认收起（此前与「画面识别」并排常显，用户反馈应可隐藏）。 -->
+          <details class="adv com-ai-fold" data-page-node-id="t1NXg8JSKcxO1kgy9DeYQr">
+            <summary class="adv-summary" data-page-node-id="wznF6QoZACAr1aTMYILdOM">解说引擎</summary>
+            <div class="adv-body" data-page-node-id="comAiEngineBody">
             <div id="llmManagedStatus" class="adv-note" data-page-node-id="llmManagedStatus">正在读取云端服务状态…</div>
             <div id="llmGatewayStatus" class="adv-note" data-page-node-id="llmGatewayStatus"></div>
             <label class="adv-label" for="llmEngine" data-page-node-id="llmEngineLbl">解说词由谁来生成</label>
@@ -2006,12 +2008,18 @@
               <select id="llmMlxModel" class="adv-input" data-page-node-id="llmMlxModel"></select>
               <div id="llmMlxHint" class="adv-hint" style="font-size:12px;line-height:1.5;margin-top:2px;"></div>
             </div>
-          </section>
+            </div>
+          </details>
 
-          <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->
-          <section class="com-ai-col" data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
-            <h4 class="com-ai-subtitle" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">画面识别</h4>
-            <div id="visionManagedStatus" class="adv-note" data-page-node-id="h8EBJmwZ8MXerLQOr1EoFo"></div>
+          <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型
+               v2 十五轮：改为独立折起、默认收起（纯只读状态，无用户输入，最该收起）。 -->
+          <details class="adv com-ai-fold" data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
+            <summary class="adv-summary" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">画面识别</summary>
+            <div class="adv-body" data-page-node-id="comAiVisionBody">
+            <!-- 本行与下方 visionRuntime 在三种档位下都同义重复（如「片头检测走本机画面识别（离线免费）。」
+                 vs「✅ 片头检测走画面识别（本机离线，免费）」），故隐藏文本、只留作数据载体：
+                 renderVisionRuntime 依赖它的 dataset.configured / dataset.name 判断档位，DOM 不可删。 -->
+            <div id="visionManagedStatus" class="adv-note" hidden style="display:none;" aria-hidden="true" data-page-node-id="h8EBJmwZ8MXerLQOr1EoFo"></div>
             <!-- 视觉凭据字段：与 LLM 同原则，云端 Key 由超级管理员统一下发。
                  保留 DOM 以免旧版逻辑取值报错，但既不展示也不再提交。 -->
             <div hidden style="display:none;" aria-hidden="true">
@@ -2029,7 +2037,8 @@
               <p class="adv-note" id="visionNote" data-page-node-id="9XvIsMwZ8MXerLQOr1EoFo">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
             </div>
             <div id="visionRuntime" class="adv-note" data-page-node-id="SvkSqeKO42MZrXmDiva7w2"></div>
-          </section>
+            </div>
+          </details>
 
           <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
 
