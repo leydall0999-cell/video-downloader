@@ -1865,8 +1865,17 @@
          / 中栏(大预览+操作条+时间轴) / 右栏(参数检查器)。所有元素 id 保持不变，功能零删减。
          改版前完整备份：web_backup_改版前_2026-09-17/（git 亦有提交可回滚） ===== -->
     <div id="comEnvStatus" class="com-env-status" hidden></div>
-    <div class="com-subbar">
-      <span class="com-subbar-label">素材来源</span>
+    <div class="com-v2">
+      <button type="button" class="com-edge-tab com-edge-tab-l" id="comLeftTab" title="收起/展开左栏"></button>
+      <button type="button" class="com-edge-tab com-edge-tab-r" id="comRightTab" title="收起/展开右栏"></button>
+      <div class="com-left" id="comLeftCol">
+      <!-- 2026-09-18（用户：「这一行能放到左边 tab 栏吗」+ 空白截图）：原三栏上方的全宽
+           「素材来源」横条搬进左栏顶部，改**纵向**排布（左栏只 196–240px 宽，横排放不下）。
+           入口 id（comSource / comDropZone / comFileBtn / comHistToggle）全部不变，JS 仍按 id 绑定，
+           因此功能零改动。左栏原本空着的约 400px 由此利用起来；同时三栏整体上移约 50px
+           （素材条原占的高度还给中栏预览）。 -->
+      <div class="com-subbar">
+        <span class="com-subbar-label">素材来源</span>
                 <div class="com-entry-grid" data-page-node-id="4vxki4rlk7GLDCL0TEBHdF">
       <!-- 入口 1：从下载历史库（媒体库）生成 -->
       <div class="com-entry-card" data-page-node-id="0OWjGch4fsH75pLlg7EbDB">
@@ -1883,11 +1892,7 @@
       </div>
     </div>
       <button type="button" class="com-hist-toggle" id="comHistToggle" title="打开解说历史抽屉">📂 解说历史</button>
-    </div><!-- /com-subbar -->
-    <div class="com-v2">
-      <button type="button" class="com-edge-tab com-edge-tab-l" id="comLeftTab" title="收起/展开左栏"></button>
-      <button type="button" class="com-edge-tab com-edge-tab-r" id="comRightTab" title="收起/展开右栏"></button>
-      <div class="com-left" id="comLeftCol">
+      </div><!-- /com-subbar -->
                 <div class="com-trim-card" id="comTrimCard" hidden data-page-node-id="nDMvyIlDN1rvgp4iVG14i4">
       <div class="com-trim-head" data-page-node-id="NWaORyaaXLQ55Dud8PsRYH">
         <h3 data-page-node-id="MPKTEzTi8d6eAikX1YF05D">✂️ 预览与正剧范围</h3>

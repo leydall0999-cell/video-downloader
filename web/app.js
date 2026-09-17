@@ -11235,10 +11235,20 @@ el.dwVidPlayer.removeAttribute('src');
       offsetHeight 为 0（视图还没显示）时不写，沿用 CSS 兜底 108px。 */
   const comTlPublishHeight = () => {
     if (!comTlRoot) return;
-    const h = comTlRoot.offsetHeight;
     const host = document.getElementById('commentaryView');
-    if (!host || !(h > 0)) return;
-    const want = Math.round(h + 12) + 'px';
+    if (!host) return;
+    // 🔴 预留量＝「中栏底边 − 时间轴顶边 + 8px 安全间距」，不是「时间轴高度 + 12」：
+    // 时间轴并不贴中栏底边（下面还有约 19px 空隙），用高度算会少算约 17px
+    // → 设置栏底边压到时间轴顶边之下 8px（实测重叠），最后一张卡被盖住。
+    const col = comTlRoot.parentElement;
+    const colBox = col && col.getBoundingClientRect();
+    const tlBox = comTlRoot.getBoundingClientRect();
+    let want;
+    if (colBox && colBox.height > 0 && tlBox.height > 0) {
+      want = Math.max(0, Math.round(colBox.bottom - tlBox.top + 8)) + 'px';
+    } else {
+      want = Math.round(comTlRoot.offsetHeight + 20) + 'px';
+    }
     if (host.style.getPropertyValue('--com-tl-h') !== want) host.style.setProperty('--com-tl-h', want);
   };
   const comTlSync = () => {
@@ -11297,7 +11307,9 @@ el.dwVidPlayer.removeAttribute('src');
   let comTlResizeT = null;
   window.addEventListener('resize', () => {
     clearTimeout(comTlResizeT);
-    comTlResizeT = setTimeout(() => comTlRenderScale(parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0), 120);
+    // 走 comTlSync（而不是只重算刻度）：窗口变了时间轴顶边位置也变，
+    // --com-tl-h 预留量必须跟着重算，否则设置栏底边会重新压到时间轴上。
+    comTlResizeT = setTimeout(comTlSync, 120);
   });
   [el.comDramaStartRange, el.comDramaEndRange].forEach((r) => r && r.addEventListener('input', comTlSync));
   [el.comDramaStart, el.comDramaEnd].forEach((i) => i && i.addEventListener('change', comTlSync));
@@ -11306,6 +11318,16 @@ el.dwVidPlayer.removeAttribute('src');
   if (comPreviewEl) comPreviewEl.addEventListener('loadedmetadata', () => setTimeout(comTlSync, 0));
   comTlApplyZoom();  // 初始化（含「缩小」按钮置灰）
   setTimeout(comTlSync, 800);
+  /** 单行折叠卡的摘要放不下会被省略号截断 → 挂原生 title，hover 可看全文。 */
+  const comHintTitles = () => {
+    const host = document.querySelector('.com-right');
+    if (!host) return;
+    Array.prototype.forEach.call(host.querySelectorAll('.com-fold-hint'), (h) => {
+      const t = (h.textContent || '').trim();
+      if (t && !h.title) h.title = t;
+    });
+  };
+  comHintTitles();
   // 窄窗口（<1280）：检查器收抽屉，浮动按钮/「完成」开合
   const comInspFab = $('comInspFab'), comInspCloseBtn = $('comInspClose'), comInspector = $('comInspector');
   if (comInspFab && comInspector) comInspFab.addEventListener('click', () => comInspector.classList.toggle('open'));

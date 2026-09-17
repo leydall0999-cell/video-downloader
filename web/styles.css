@@ -3450,12 +3450,26 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
    同时收紧纵向节奏：头内边距 .5→.3rem、行距 .12rem、行高 1.2、卡间距 .55→.35rem。
    单卡高度约 63px → 约 42px（有摘要）/ 约 24px（无摘要），整列因此整体上移。 */
 .com-right .com-fold-card > .com-fold-head {
-  flex-wrap: wrap; column-gap: .4rem; row-gap: .1rem;
-  align-items: center; padding: .24rem .6rem;
+  flex-wrap: nowrap; column-gap: .38rem;
+  align-items: center; padding: .28rem .6rem;
 }
-.com-right .com-fold-card .com-fold-title { line-height: 1.15; }
-.com-right .com-fold-card .com-fold-hint { flex: 1 1 100%; min-width: 0; line-height: 1.15; }
-.com-right .com-fold-card { margin-bottom: .35rem; }
+.com-right .com-fold-card .com-fold-title { line-height: 1.15; flex: none; }
+.com-right .com-fold-card .com-fold-hint { flex: 1 1 auto; min-width: 0; line-height: 1.15; }
+.com-right .com-fold-card { margin-bottom: .38rem; }
+/* 2026-09-18（用户：「排版能继续优化吗?感觉空间利用的还不够」→ 选定「卡片压成单行」）：
+   改回「标题 + 摘要同行」——摘要 flex:1 1 auto 吃下剩余宽度、超长走省略号
+   （.com-fold-hint 基础规则已带 nowrap + overflow:hidden + text-overflow:ellipsis）。
+   单卡 42px → 约 26px，右栏一屏放下、不再需要滚动。
+   历史：上一轮改成两行，是因为面板只有 228px 时摘要在同行被截成「… / 引」；现在面板 255px，
+   同行留给摘要约 110px，「字号 / 描边 / 位置复位」整条放得下，长的那条
+   「类型 / 高光 / 画幅 / 片头片尾 / 引擎」会省略——用户已确认接受这个代价。 */
+/* 其余三类卡的头内边距收到同一档，避免「只有折叠卡变矮、旁边几张还很高」的参差 */
+.com-col-right > .com-ai-config { margin-bottom: .3rem; }
+.com-col-right > .com-ai-config .adv-summary { padding: .2rem .55rem; }
+.com-col-right .com-feather-card { padding: .2rem .55rem .25rem; gap: .35rem; margin-bottom: .3rem; }
+.com-col-right .com-vol-card-head { padding: .2rem .55rem; }
+/* 音量卡的 margin-bottom 原由 #commentaryView 前缀的规则写死 .55rem，这里同权重覆盖成 .3rem */
+#commentaryView .com-col-right > .com-vol-card { margin: .3rem 0; }
 /* v2 十二轮（2026-09-17）：按语义分组，每组各自一张折叠卡——不再折成一大坨
    （用户：「按之前的分类，每组折起来，不是折到一起」）。
    外层 details.com-fold-card 承担卡框，内层容器一律去框透明，避免「卡套卡」。 */
@@ -4695,6 +4709,10 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
   width: 300px; flex: none; min-height: 0; overflow: auto;
   border: 1px solid var(--line); border-radius: var(--radius-md);
   background: var(--surface); padding-bottom: .8rem;
+  /* 🔴 卡片压成单行后内容只剩约 330px，若继续跟着 flex stretch 撑到 max-height（约 430px），
+     面板底部会出现约 117px 的空白框（「空间利用不够」的观感来源）。
+     改 align-self:flex-start → 面板高度贴合内容，多出来的高度留给时间轴那一横条。 */
+  align-self: flex-start;
   /* 🔴 2026-09-17 晚（用户：时间轴最右边要与设置栏右边对齐）：
      中栏时间轴改为**向右伸出**、右端与设置栏右边界齐平 → 时间轴会压在设置栏的下半区上。
      所以设置栏必须在自己底边之前让出时间轴的高度，否则最下面的卡片会被盖住看不见。
@@ -4705,6 +4723,26 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
 /* ---- 左栏：正剧范围卡（原全宽卡在窄栏下的适配） ---- */
 .com-left .com-trim-card { margin: 0; display: flex; flex-direction: column; }
 .com-left .com-trim-head h3 { font-size: .88rem; }
+/* ---- 左栏顶部：素材来源（2026-09-18 从三栏上方的全宽横条搬进来，改纵向） ----
+   左栏只 196–240px 宽 → 纵向排：小标签 / 两张入口卡（标题一行、控件一行）/ 解说历史按钮。
+   入口 id（comSource、comDropZone、comFileBtn、comHistToggle）不变，JS 按 id 绑定 → 功能零改动。
+   🔴 必须同时把 flex 基准改掉：基础规则里 .com-subbar .com-entry-grid{flex:1}、
+   .com-subbar .com-entry-card{flex:1 1 0} 是给**横排**写的；横改纵后 flex-basis 作用在高度上，
+   不覆盖会让卡片/网格高度塌成 0（列容器 height:auto，没有剩余空间可分）。 */
+.com-left .com-subbar {
+  flex-direction: column; align-items: stretch;
+  gap: .3rem; padding: .45rem .5rem; margin: 0;
+}
+.com-left .com-subbar .com-subbar-label { font-size: .74rem; font-weight: 600; }
+.com-left .com-subbar .com-entry-grid { flex: none; flex-direction: column; gap: .3rem; }
+.com-left .com-subbar .com-entry-card {
+  flex: 0 0 auto; flex-direction: column; align-items: stretch;
+  gap: .28rem; padding: .35rem .45rem;
+}
+.com-left .com-subbar .com-entry-title { margin: 0; white-space: normal; font-size: .76rem; }
+.com-left .com-subbar .com-entry-card #comSource { width: 100%; }
+.com-left .com-subbar .com-entry-card #comFileBtn { width: 100%; }
+.com-left .com-subbar .com-hist-toggle { justify-content: center; }
 /* ---- 中栏：深色预览舞台 ---- */
 /* 🔴 舞台高度＝素材比例（JS `comSyncStageSize()` 写内联 height）。
    历史：flex:1 时舞台恒为「中栏剩下的全部高度」，与素材比例无关 → 16:9 素材在更高的舞台里
