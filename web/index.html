@@ -1982,74 +1982,67 @@
         <div class="com-insp-head"><b>⚙️ 解说设置</b><button type="button" class="btn btn-sm btn-primary com-insp-done" id="comInspClose">完成</button></div>
           <!-- [v2] 以下原 .com-col-right 内容原样保留（类名不动，样式规则全部继续生效） -->
         <div class="com-col com-col-right" data-page-node-id="B6GsAfYESd6LfdrKPmeWAD">
-                <div class="com-ai-config" id="comAiConfig" data-page-node-id="VKUeqOVKDakZ5WqOhOPHI7">
-      <details class="adv com-ai-details" id="aiSettings" data-page-node-id="tZpscD6PPt04tE3uO3aX2N">
-        <summary class="adv-summary" data-page-node-id="4gQWgd0UXy5tHTprVBxGh7">⚙️ AI 能力与密钥配置</summary>
-        <div class="adv-body com-ai-grid" data-page-node-id="Y9SGbF6T2ecZ4zM3GZdSbX">
+        <div class="com-ai-config" id="comAiConfig" data-page-node-id="VKUeqOVKDakZ5WqOhOPHI7">
+          <details class="adv com-ai-details" id="aiSettings" data-page-node-id="tZpscD6PPt04tE3uO3aX2N">
+            <summary class="adv-summary" data-page-node-id="4gQWgd0UXy5tHTprVBxGh7">⚙️ AI 能力与密钥配置</summary>
+            <div class="adv-body com-ai-flat" data-page-node-id="Y9SGbF6T2ecZ4zM3GZdSbX">
 
-          <!-- 解说引擎：普通用户只在两个档位间二选一即可。
-               云端凭据（服务商 / Key / Base URL / 模型）由超级管理员统一配置，
-               不在用户界面出现——用户既不需要理解也不需要持有它们。
-               v2 十五轮：本块改为独立折起、默认收起（此前与「画面识别」并排常显，用户反馈应可隐藏）。
-               v2 十六轮：状态行改为「只在异常时出现」——已就绪（✅）不占位，未配置（⚠️）才显示。 -->
-          <details class="adv com-ai-fold" id="comAiEngineFold" data-page-node-id="t1NXg8JSKcxO1kgy9DeYQr">
-            <summary class="adv-summary" data-page-node-id="wznF6QoZACAr1aTMYILdOM">解说引擎</summary>
-            <div class="adv-body" data-page-node-id="comAiEngineBody">
-            <!-- 默认隐藏：加载中不再显示「正在读取云端服务状态…」，只有判定为未配置时才由 JS 放出 ⚠️ -->
-            <div id="llmManagedStatus" class="adv-note" hidden data-page-node-id="llmManagedStatus"></div>
-            <div id="llmGatewayStatus" class="adv-note" data-page-node-id="llmGatewayStatus"></div>
-            <label class="adv-label" for="llmEngine" data-page-node-id="llmEngineLbl">解说词由谁来生成</label>
-            <select id="llmEngine" class="adv-input" data-page-node-id="llmEngine">
-              <option value="auto" data-page-node-id="llmEngineAuto">本机优先：本机够用就本机（免费、素材不出本机），不够自动用云端</option>
-              <option value="cloud" data-page-node-id="llmEngineCloud">纯云端：全程云端生成，质量最稳，消耗云端额度</option>
-            </select>
-            <p class="adv-note" id="llmEngineNote" data-page-node-id="llmEngineNote"></p>
-            <div id="llmMlxBox" hidden style="margin-top:6px;">
-              <div id="llmMlxStatus" class="adv-hint" style="font-size:13px;line-height:1.5;"></div>
-              <label class="adv-label" for="llmMlxModel" data-page-node-id="llmMlxModelLbl">本机模型</label>
-              <select id="llmMlxModel" class="adv-input" data-page-node-id="llmMlxModel"></select>
-              <div id="llmMlxHint" class="adv-hint" style="font-size:12px;line-height:1.5;margin-top:2px;"></div>
-            </div>
-            </div>
-          </details>
-
-          <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型
-               v2 十五轮：改为独立折起、默认收起（纯只读状态，无用户输入，最该收起）。
-               v2 十六轮：本块唯一内容就是一条状态，正常（走画面识别）时整块不显示，
-                          只有降级为音频检测时才出现 —— 默认带 hidden，JS 判异常后放开。 -->
-          <details class="adv com-ai-fold" id="comAiVisionFold" hidden data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
-            <summary class="adv-summary" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">画面识别</summary>
-            <div class="adv-body" data-page-node-id="comAiVisionBody">
-            <!-- 本行与下方 visionRuntime 在三种档位下都同义重复（如「片头检测走本机画面识别（离线免费）。」
-                 vs「✅ 片头检测走画面识别（本机离线，免费）」），故隐藏文本、只留作数据载体：
-                 renderVisionRuntime 依赖它的 dataset.configured / dataset.name 判断档位，DOM 不可删。 -->
-            <div id="visionManagedStatus" class="adv-note" hidden style="display:none;" aria-hidden="true" data-page-node-id="h8EBJmwZ8MXerLQOr1EoFo"></div>
-            <!-- 视觉凭据字段：与 LLM 同原则，云端 Key 由超级管理员统一下发。
-                 保留 DOM 以免旧版逻辑取值报错，但既不展示也不再提交。 -->
-            <div hidden style="display:none;" aria-hidden="true">
-              <label class="adv-label" for="visionProvider" data-page-node-id="OsLIwhwzIaB5Ms0EONysM5">服务商</label>
-              <select id="visionProvider" class="adv-input" data-page-node-id="McFoNFs3vdsJQ25HnrqDJj"></select>
-              <div id="visionSignupWrap" hidden style="margin:-2px 0 8px;" data-page-node-id="XcCv1jvGUrJgPi6uFc3ErG">
-                <a id="visionSignup" href="#" target="_blank" rel="noopener noreferrer" style="color:#2d7ef7;text-decoration:underline;font-size:13px;" data-page-node-id="UHm7aBTQUrKaPOn47Am2De">申请免费额度 →</a>
+              <!-- 解说引擎：普通用户只在两个档位间二选一即可。
+                   云端凭据（服务商 / Key / Base URL / 模型）由超级管理员统一配置，
+                   不在用户界面出现——用户既不需要理解也不需要持有它们。
+                   v2 十五轮：本块曾与「画面识别」并排常显，后改为各自独立折起（用户反馈应可隐藏）。
+                   v2 十六轮：状态行改为「只在异常时出现」——已就绪（✅）不占位，未配置（⚠️）才显示。
+                   v2 十七轮：拆掉「父卡 → 子折叠卡」那层嵌套——改一个下拉要点两次太绕；
+                   现把三块内容直接平铺进本卡，用行内小标签分组，层级与「解说参数」等卡对齐。 -->
+              <div class="com-ai-sec" data-page-node-id="wznF6QoZACAr1aTMYILdOM">解说引擎</div>
+              <!-- 默认隐藏：加载中不再显示「正在读取云端服务状态…」，只有判定为未配置时才由 JS 放出 ⚠️ -->
+              <div id="llmManagedStatus" class="adv-note" hidden data-page-node-id="llmManagedStatus"></div>
+              <div id="llmGatewayStatus" class="adv-note" data-page-node-id="llmGatewayStatus"></div>
+              <label class="adv-label" for="llmEngine" data-page-node-id="llmEngineLbl">解说词由谁来生成</label>
+              <select id="llmEngine" class="adv-input" data-page-node-id="llmEngine">
+                <option value="auto" data-page-node-id="llmEngineAuto">本机优先：本机够用就本机（免费、素材不出本机），不够自动用云端</option>
+                <option value="cloud" data-page-node-id="llmEngineCloud">纯云端：全程云端生成，质量最稳，消耗云端额度</option>
+              </select>
+              <p class="adv-note" id="llmEngineNote" data-page-node-id="llmEngineNote"></p>
+              <div id="llmMlxBox" hidden style="margin-top:6px;">
+                <div id="llmMlxStatus" class="adv-hint" style="font-size:13px;line-height:1.5;"></div>
+                <label class="adv-label" for="llmMlxModel" data-page-node-id="llmMlxModelLbl">本机模型</label>
+                <select id="llmMlxModel" class="adv-input" data-page-node-id="llmMlxModel"></select>
+                <div id="llmMlxHint" class="adv-hint" style="font-size:12px;line-height:1.5;margin-top:2px;"></div>
               </div>
-              <label class="adv-label" for="visionApiKey" data-page-node-id="xHLsu4PDwJ45XikRK7HIEj">API Key</label>
-              <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" data-page-node-id="yZFpTmS75kTtT21dF0IyL8" />
-              <label class="adv-label" for="visionBaseUrl" data-page-node-id="DU2CJouljeNLhpGPatHWIX">Base URL（自定义时填写）</label>
-              <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="M2gLBi62eLm8E5irPuB8y5" />
-              <label class="adv-label" for="visionModel" data-page-node-id="LbeYyvVk1mHww3fTEDUXzf">模型</label>
-              <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="AGU5DPoqodYqBaaDu3PT8R" />
-              <p class="adv-note" id="visionNote" data-page-node-id="9XvIsMwZ8MXerLQOr1EoFo">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
-            </div>
-            <div id="visionRuntime" class="adv-note" data-page-node-id="SvkSqeKO42MZrXmDiva7w2"></div>
-            </div>
-          </details>
 
-          <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
+              <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型。
+                   v2 十世轮：本块唯一可展示内容就是一条状态，正常（走画面识别）时整块不显示，
+                               只有降级为音频检测时才由 syncVisionFold() 放开 —— 默认带 hidden。 -->
+              <div id="comAiVisionFold" hidden data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
+                <div class="com-ai-sec" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">画面识别</div>
+                <!-- 本行与下方 visionRuntime 在三种档位下都同义重复（如「片头检测走本机画面识别（离线免费）。」
+                     vs「✅ 片头检测走画面识别（本机离线，免费）」），故隐藏文本、只留作数据载体：
+                     renderVisionRuntime 依赖它的 dataset.configured / dataset.name 判断档位，DOM 不可删。 -->
+                <div id="visionManagedStatus" class="adv-note" hidden style="display:none;" aria-hidden="true" data-page-node-id="h8EBJmwZ8MXerLQOr1EoFo"></div>
+                <!-- 视觉凭据字段：与 LLM 同原则，云端 Key 由超级管理员统一下发。
+                     保留 DOM 以免旧版逻辑取值报错，但既不展示也不再提交。 -->
+                <div hidden style="display:none;" aria-hidden="true">
+                  <label class="adv-label" for="visionProvider" data-page-node-id="OsLIwhwzIaB5Ms0EONysM5">服务商</label>
+                  <select id="visionProvider" class="adv-input" data-page-node-id="McFoNFs3vdsJQ25HnrqDJj"></select>
+                  <div id="visionSignupWrap" hidden style="margin:-2px 0 8px;" data-page-node-id="XcCv1jvGUrJgPi6uFc3ErG">
+                    <a id="visionSignup" href="#" target="_blank" rel="noopener noreferrer" style="color:#2d7ef7;text-decoration:underline;font-size:13px;" data-page-node-id="UHm7aBTQUrKaPOn47Am2De">申请免费额度 →</a>
+                  </div>
+                  <label class="adv-label" for="visionApiKey" data-page-node-id="xHLsu4PDwJ45XikRK7HIEj">API Key</label>
+                  <input id="visionApiKey" class="adv-input" type="password" placeholder="sk-...（Ollama/自动模式可留空）" autocomplete="off" spellcheck="false" data-page-node-id="yZFpTmS75kTtT21dF0IyL8" />
+                  <label class="adv-label" for="visionBaseUrl" data-page-node-id="DU2CJouljeNLhpGPatHWIX">Base URL（自定义时填写）</label>
+                  <input id="visionBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="M2gLBi62eLm8E5irPuB8y5" />
+                  <label class="adv-label" for="visionModel" data-page-node-id="LbeYyvVk1mHww3fTEDUXzf">模型</label>
+                  <input id="visionModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" data-page-node-id="AGU5DPoqodYqBaaDu3PT8R" />
+                  <p class="adv-note" id="visionNote" data-page-node-id="9XvIsMwZ8MXerLQOr1EoFo">不同平台/环境自动适配：Mac 选「自动」即用本机离线 OCR（免费、无需 Key）；装有 Ollama 选「本机 Ollama」免费本地识别；也可填任意云端多模态 Key。任何环境都不会因未配置而报错，会优雅降级。</p>
+                </div>
+                <div id="visionRuntime" class="adv-note" data-page-node-id="SvkSqeKO42MZrXmDiva7w2"></div>
+              </div>
 
-          <!-- 高级（一般不用改）：跨双列全宽（原嵌在「解说引擎」列里被压到 ~110px，下拉文案截断） -->
-          <details class="adv" id="llmAdvanced" style="margin-top:2px;" data-page-node-id="llmAdvanced">
-            <summary class="adv-summary" data-page-node-id="llmAdvancedSummary">高级（一般不用改）</summary>
-            <div class="adv-body" data-page-node-id="llmAdvancedBody">
+              <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
+
+              <!-- 高级（一般不用改）：原为独立折叠卡，v2 十七轮起降为行内小标签（少一层点击） -->
+              <div class="com-ai-sec" data-page-node-id="llmAdvancedSummary">高级（一般不用改）</div>
               <label class="adv-label" for="llmReasoningEffort" data-page-node-id="oQaZCa2VipSQfmlTCMOBM2">推理强度</label>
               <select id="llmReasoningEffort" class="adv-input" title="低=推荐：省钱且质量够用；关闭=最省 token，质量略降；高=最佳质量，最贵" data-page-node-id="yDrDOaGscPebzGzOCYtDJl">
                 <option value="low" data-page-node-id="ogKvOZMxWC7DtajaAxLUCZ">低（推荐）</option>
@@ -2068,17 +2061,15 @@
                 <input id="llmBaseUrl" class="adv-input" type="text" autocomplete="off" data-page-node-id="crqt1RKWcQnCBgjqz3ZJkx" />
                 <input id="llmModel" class="adv-input" type="text" autocomplete="off" data-page-node-id="QA0KpAGvtpFTyLcAviera5" />
               </div>
+
+              <!-- 共用一个保存按钮（同时保存 LLM 与视觉模型两组配置） -->
+              <div class="com-ai-actions" data-page-node-id="OLa5zRKj5BUcXYsVDdlGGi">
+                <button type="button" class="btn btn-primary btn-sm" id="aiSave" data-page-node-id="lSvCNpV51c3cogMri50hAZ">保存</button>
+                <span id="aiStatus" class="sub-status" hidden data-page-node-id="n7N6scsBpkuIGpR7vEoNAK"></span>
+              </div>
             </div>
           </details>
-
-          <!-- 共用一个保存按钮（同时保存 LLM 与视觉模型两组配置） -->
-          <div class="com-ai-actions" data-page-node-id="OLa5zRKj5BUcXYsVDdlGGi">
-            <button type="button" class="btn btn-primary btn-sm" id="aiSave" data-page-node-id="lSvCNpV51c3cogMri50hAZ">保存</button>
-            <span id="aiStatus" class="sub-status" hidden data-page-node-id="n7N6scsBpkuIGpR7vEoNAK"></span>
-          </div>
         </div>
-      </details>
-    </div>
       <!-- v2 十二轮：按语义分组，每组各自一张折叠卡（用户：「按之前的分类，每组折起来，不是折到一起」） -->
       <!-- 组 1：解说参数（解说类型 / 高光 / 画幅 / 引擎） -->
       <details class="com-fold-card" id="comOptsFold">

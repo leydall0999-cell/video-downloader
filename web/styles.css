@@ -2263,20 +2263,19 @@ img { max-width: 100%; display: block; }
 }
 .com-ai-config .adv { background: #fff; }
 .com-ai-config .adv[open] { border-radius: var(--radius-md); }
-/* 内部两列：LLM + 视觉模型分组，底部横线 + 单个保存按钮 */
-.com-ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; align-items: start; }
-/* 「高级（一般不用改）」跨双列全宽：窄右栏里被压到 ~110px 时下拉文案必然截断 */
-#commentaryView #llmAdvanced { grid-column: 1 / -1; }
-/* v2 十五轮：「解说引擎 / 画面识别」由常显块改为各自折起（内置 details.adv）。
-   min-width:0 必须保留——窄右栏栅格里缺了它长文案不换行，会把列撑破。 */
-.com-ai-fold { min-width: 0; }
-/* v2 十六轮：画面识别正常态整块隐藏（[hidden]）时，让解说引擎独占整行——
-   否则它只占左侧 1fr，右半屏空着、下拉被压到 ~110px。 */
-.com-ai-grid:has(#comAiVisionFold[hidden]) #comAiEngineFold { grid-column: 1 / -1; }
-.com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
+/* v2 十七轮：本卡内部不再套子折叠卡，内容单列平铺 + 行内分组小标签
+   （此前是「父卡 → 解说引擎/画面识别/高级 三张子卡 → 参数」，改一个下拉要点两次）。
+   原两列栅格 .com-ai-grid 与它的 :has() 兜底规则一并删除——已无并列项。 */
+.com-ai-flat { min-width: 0; gap: .55rem; }
+/* 行内分组标签：小字 + 拖尾细横线，替代原来的子折叠卡标题（不再是可点层级） */
+.com-ai-sec {
+  display: flex; align-items: center; gap: .5rem; margin-top: .15rem;
+  font-size: .72rem; font-weight: 700; color: var(--text-mute); letter-spacing: .02em;
+}
+.com-ai-sec::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--line); }
+.com-ai-actions { display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
 /* 「保存」按钮加大 + 加粗（合并后只此一个保存按钮，给足视觉权重） */
 #aiSave { padding: .55rem 1.4rem; font-size: .95rem; font-weight: 700; }
-@media (max-width: 720px) { .com-ai-grid { grid-template-columns: 1fr; } }
 .com-entry-card select.adv-input { width: 100%; display: block; }
 /* 「选择本地视频」按钮与左侧「选择视频」下拉同款外观：全宽+细边框+白底 */
 .com-entry-card #comFileBtn {
