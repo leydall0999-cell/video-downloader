@@ -9697,7 +9697,11 @@ el.dwVidPlayer.removeAttribute('src');
     name.appendChild(nameIn);
     const size = document.createElement('span');
     size.className = 'com-size';
-    size.textContent = `${formatBytes(it.size)} · ${new Date(it.mtime * 1000).toLocaleString()}`;
+    // 日期不带年、不带秒：面板收窄到 187px 后「大小 · 日期」一行只有 105px 视窗，
+    // 实测 `485 MB · 2026/9/17 10:18` 宽 125（截掉时间），`485 MB · 9/17 10:18` 正好 105 塞满不截断。
+    const _dt = new Date(it.mtime * 1000);
+    const _p2 = (n) => String(n).padStart(2, '0');
+    size.textContent = `${formatBytes(it.size)} · ${_dt.getMonth() + 1}/${_dt.getDate()} ${_p2(_dt.getHours())}:${_p2(_dt.getMinutes())}`;
     meta.appendChild(name);
     meta.appendChild(size);
 
@@ -11145,7 +11149,14 @@ el.dwVidPlayer.removeAttribute('src');
     const pop = el.comHistory, btn = comHistToggleBtn;
     if (!pop || !btn) return;
     const r = btn.getBoundingClientRect();
-    const W = Math.min(320, Math.max(220, window.innerWidth - 24));
+    // 宽度：**右端对齐左栏右边界**（2026-09-18 用户「还是太宽，缩到截图最右边」——
+    // 实测那张截图的右边界就是左栏右边界，即按钮右边 + 左栏内边距 12.8）。
+    // 左端仍锚在按钮左边，所以 宽度 = 左栏右 − 按钮左（1340 窗口下 424.2−237.2 = 187）。
+    // 左栏缺失时退回 320 上限；窗口过窄时再让一步。
+    const colEl = $('comLeftCol');
+    const colRight = colEl ? colEl.getBoundingClientRect().right : 0;
+    const target = colRight > r.left + 40 ? Math.round(colRight - r.left) : 320;
+    const W = Math.min(320, Math.max(170, Math.min(target, window.innerWidth - 24)));
     const left = Math.max(12, Math.min(r.left, window.innerWidth - W - 12));
     const below = window.innerHeight - (r.bottom + 8) - 12;
     const above = r.top - 8 - 12;
@@ -11842,6 +11853,8 @@ el.dwVidPlayer.removeAttribute('src');
   };
   const syncSortMenu = () => {
     el.comSortLabel.textContent = SORT_LABELS[commentarySort] || commentarySort;
+    // 面板收窄（187px）后排序按钮只留图标，当前排序靠 tooltip 交代
+    if (el.comSortBtn) el.comSortBtn.title = '排序：' + (SORT_LABELS[commentarySort] || commentarySort);
     el.comSortMenu.querySelectorAll('li[data-value]').forEach((li) =>
       li.classList.toggle('selected', li.dataset.value === commentarySort));
   };

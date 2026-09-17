@@ -5072,7 +5072,7 @@ html.com-theater { overflow: hidden; }
   /* 初始值只是兜底：正常路径由 JS positionHistPop() 按按钮实测写内联 left/top/width/maxHeight。
      这里给「左栏附近」的合理初值，避免定位函数没跑到时面板贴到屏幕左上角（0,0）盖住页头。 */
   position: fixed; top: 140px; left: 24px; right: auto; bottom: auto;
-  width: 320px; max-height: 60vh;
+  width: 190px; max-height: 60vh;
   z-index: 56; margin: 0; padding: 0;
   display: flex; flex-direction: column; overflow: visible;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
@@ -5109,8 +5109,17 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 #commentaryView #comHistory .com-view-btn { width: 24px; height: 24px; }
 #commentaryView #comHistory .com-view-btn svg { width: 15px; height: 15px; }
 #commentaryView #comHistory .com-sort-btn {
-  min-width: 116px; padding: .3rem .42rem; font-size: .74rem; gap: .28rem;
+  min-width: 0; padding: .3rem .34rem; font-size: .74rem; gap: .28rem;
 }
+/* 面板 187px 后工具条一行要装下「4 个视图按钮 + 排序」：
+   带字的排序按钮（116px）装不下 → 只留图标（26px），当前排序看 tooltip。
+   图标也换新的（⇅），所以把带字的 label 与下三角 caret 都收掉。 */
+#commentaryView #comHistory .com-sort-label,
+#commentaryView #comHistory .com-sort-caret { display: none; }
+#commentaryView #comHistory .com-sort-ico { width: 15px; height: 15px; display: block; flex: none; }
+/* 排序下拉贴着排序按钮（= 工具条右端）弹出：min-width 设成内容宽（约 139），
+   不要再写 168/180 —— 那会让菜单左端伸出面板左边缘 16px（面板只有 187 宽）。 */
+#commentaryView #comHistory .com-sort-menu { min-width: 132px; }
 .com-hist-close {
   order: 2; flex: none; width: 22px; height: 22px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
