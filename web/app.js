@@ -9679,7 +9679,9 @@ el.dwVidPlayer.removeAttribute('src');
     const video = document.createElement('video');
     video.className = 'com-video';
     video.src = url;
-    video.controls = true;
+    // 紧凑行（列表视图）里 64px 宽的缩略图挂控件只会糊成一团 → 默认不挂；
+    // 点这一行就地展开时，由 el.comGrid 的 click 委托把 controls 挂回来。
+    video.controls = false;
     video.preload = 'metadata';
 
     const meta = document.createElement('div');
@@ -9700,7 +9702,9 @@ el.dwVidPlayer.removeAttribute('src');
     dl.type = 'button';
     dl.className = 'btn btn-success btn-sm';
     dl.title = '选择保存位置（可重命名），默认存入下载文件夹';
-    dl.textContent = '💾 保存';
+    // 图标与文字拆成两个 span：紧凑行里只留图标（384px 宽放不下「💾 保存 🗑 删除」
+    // 两个带字按钮），点展开后才出文字 —— 见 #comGrid.com-view-list .lbl 样式。
+    dl.innerHTML = '<span class="ico" aria-hidden="true">💾</span><span class="lbl">保存</span>';
     dl.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -9710,7 +9714,7 @@ el.dwVidPlayer.removeAttribute('src');
     delBtn.type = 'button';
     delBtn.className = 'btn btn-ghost btn-sm';
     delBtn.title = '删除（移入回收站）';
-    delBtn.textContent = '🗑 删除';
+    delBtn.innerHTML = '<span class="ico" aria-hidden="true">🗑</span><span class="lbl">删除</span>';
     delBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -9728,7 +9732,9 @@ el.dwVidPlayer.removeAttribute('src');
   /** 「保存」：桌面端弹出原生保存面板（默认下载文件夹、可重命名/改位置）；Web 端退化为浏览器下载 */
   const saveCommentaryAs = async (id, name, btn) => {
     const api = window.pywebview && window.pywebview.api;
-    const orig = btn.textContent;
+    // 🔴 存 innerHTML 而不是 textContent：按钮内容是「图标 span + 文字 span」，
+    // 用 textContent 恢复会把结构抹平成纯文本（紧凑行就再也显示不出图标了）。
+    const orig = btn.innerHTML;
     btn.disabled = true;
     btn.textContent = '选择中…';
     try {
@@ -9754,7 +9760,7 @@ el.dwVidPlayer.removeAttribute('src');
       showError('保存失败：' + (e.message || '未知错误'), '');
     } finally {
       btn.disabled = false;
-      btn.textContent = orig;
+      btn.innerHTML = orig;
     }
   };
 
@@ -11121,15 +11127,74 @@ el.dwVidPlayer.removeAttribute('src');
   }
   el.comTrimReset.addEventListener('click', resetTrim);
 
-  // ===== v2 剪映式改版（2026-09-17）：历史抽屉 / 时间轴同步 / 窄窗口检查器抽屉 =====
-  // 解说历史改为抽屉（按钮呼出 + 遮罩关闭），列表渲染/排序/视图切换逻辑不变
+  // ===== v2 剪映式改版（2026-09-17）：历史面板 / 时间轴同步 / 窄窗口检查器抽屉 =====
+  // 解说历史：2026-09-18 用户「换个方式展示，在这里做个展开查看」——从右侧大抽屉
+  // 改为**锚定左栏「📂 解说历史」按钮下方的就地展开浮层**（宽 ~384px，不压暗页面）。
+  // 列表渲染/排序/视图切换逻辑不变，只有定位与开合方式换了。
   const comHistToggleBtn = $('comHistToggle');
-  if (comHistToggleBtn) {
-    comHistToggleBtn.addEventListener('click', () => document.body.classList.toggle('com-hist-open'));
-  }
   const comHistScrim = $('comHistScrim');
-  if (comHistScrim) {
-    comHistScrim.addEventListener('click', () => document.body.classList.remove('com-hist-open'));
+  const comHistCloseBtn = $('comHistClose');
+  /** 把面板放到按钮正下方（fixed 定位不随左栏滚动，需在 resize/滚动时重算）。
+   *  🔴 面板宽度与位置全部由这里实测决定：CSS 里只给初始值，避免写死像素。 */
+  const positionHistPop = () => {
+    const pop = el.comHistory, btn = comHistToggleBtn;
+    if (!pop || !btn) return;
+    const r = btn.getBoundingClientRect();
+    const W = Math.min(384, Math.max(240, window.innerWidth - 24));
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - W - 12));
+    const below = window.innerHeight - (r.bottom + 8) - 12;
+    const above = r.top - 8 - 12;
+    let top = r.bottom + 8;
+    let maxH = Math.min(620, Math.max(200, below));
+    if (below < 260 && above > below) {   // 按钮贴近视口底部时改为向上翻
+      maxH = Math.min(620, Math.max(200, above));
+      top = Math.max(12, r.top - 8 - maxH);
+    }
+    pop.style.left = Math.round(left) + 'px';
+    pop.style.top = Math.round(top) + 'px';
+    pop.style.width = Math.round(W) + 'px';
+    pop.style.maxHeight = Math.round(maxH) + 'px';
+  };
+  const isHistOpen = () => document.body.classList.contains('com-hist-open');
+  const setHistOpen = (open) => {
+    if (open) {
+      positionHistPop();
+      if (el.comGrid) el.comGrid.scrollTop = 0;   // 每次展开都从最新一条看起
+    }
+    document.body.classList.toggle('com-hist-open', !!open);
+    if (comHistToggleBtn) comHistToggleBtn.setAttribute('aria-expanded', String(!!open));
+  };
+  if (comHistToggleBtn) comHistToggleBtn.addEventListener('click', () => setHistOpen(!isHistOpen()));
+  if (comHistCloseBtn) comHistCloseBtn.addEventListener('click', () => setHistOpen(false));
+  if (comHistScrim) comHistScrim.addEventListener('click', () => setHistOpen(false));
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && isHistOpen()) setHistOpen(false);
+  });
+  window.addEventListener('resize', () => { if (isHistOpen()) positionHistPop(); });
+  const comLeftColEl = $('comLeftCol');
+  if (comLeftColEl) comLeftColEl.addEventListener('scroll', () => { if (isHistOpen()) positionHistPop(); });
+
+  // 点列表某一行 → 该行就地展开（同一时刻只留一行展开，避免列表被拉得过长）；
+  // 展开时才把 video 的 controls 挂回来。保存/删除按钮与重命名输入框不触发展开。
+  if (el.comGrid) {
+    el.comGrid.addEventListener('click', (ev) => {
+      if (ev.target.closest('.com-actions')) return;
+      if (ev.target.closest('input, textarea, select, a')) return;
+      const card = ev.target.closest('.com-card');
+      if (!card || !el.comGrid.classList.contains('com-view-list')) return;
+      const open = !card.classList.contains('is-open');
+      if (open) {
+        Array.prototype.forEach.call(el.comGrid.querySelectorAll('.com-card.is-open'), (c) => {
+          if (c === card) return;
+          c.classList.remove('is-open');
+          const cv = c.querySelector('video');
+          if (cv) cv.removeAttribute('controls');
+        });
+      }
+      card.classList.toggle('is-open', open);
+      const v = card.querySelector('video');
+      if (v) { if (open) v.setAttribute('controls', ''); else v.removeAttribute('controls'); }
+    });
   }
   // ===== 剪映式三轨时间轴（2026-09-17 晚）：原声 / 旁白 / 字幕 =====
   // 数据源（全部前端已有，无需改后端）：
@@ -12043,6 +12108,11 @@ el.dwVidPlayer.removeAttribute('src');
       // 解说页刚显示：只有此刻才量得到时间轴真实高度 → 补一次同步，
       // 把 --com-tl-h 写给设置栏（max-height 让位，避免卡片被向右伸出的时间轴盖住）。
       try { comTlSync(); } catch (_) {}
+    } else {
+      // 切出解说页时收起解说历史浮层：它是 fixed 定位、状态挂在 body 上，
+      // 不会随父级 hidden 自动复位 —— 不清理的话切回来会「莫名其妙还开着」。
+      // 这里直接改 class（不调 setHistOpen），避免依赖它在本文件中的初始化顺序。
+      document.body.classList.remove('com-hist-open');
     }
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isProfileGroup) loadProfile();
