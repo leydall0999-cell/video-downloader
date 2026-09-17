@@ -4955,3 +4955,45 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 #commentaryView .com-env-status { font-size: .7rem; }
 /* 左栏 radio 选中底色在深色下更柔和 */
 #commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #252840; }
+
+/* ======================================================================
+   ===== v2 六轮（2026-09-17）：正剧范围卡重排 + 深色滑块轨道 + 上传前占位 =====
+   窄左栏下起点/终点改上下两行：标签+时间框一行、滑块独占整行，根治截断/重叠。
+   ====================================================================== */
+.com-left .com-trim-timeline-drama { grid-template-columns: 1fr; gap: .7rem 0; margin-top: .6rem; }
+.com-left .com-trim-timeline-drama .com-trim-field {
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "label input" "range range";
+  row-gap: .3rem;
+}
+.com-left .com-trim-label { grid-area: label; font-size: .76rem; }
+.com-left .com-time-input { grid-area: input; justify-self: end; width: 88px; font-size: .76rem; padding: .24rem .3rem; background: var(--surface-2); }
+.com-left .com-range { grid-area: range; }
+/* 深色下滑块画出自定义轨道+圆点（原来只剩一个孤点、轨道不可见） */
+#commentaryView .com-range {
+  -webkit-appearance: none; appearance: none;
+  height: 16px; background: transparent; margin: 0;
+}
+#commentaryView .com-range::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px; background: #3A3D45;
+}
+#commentaryView .com-range::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--brand); margin-top: -4.5px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .55); border: none;
+}
+#commentaryView .com-range::-moz-range-track { height: 4px; border-radius: 2px; background: #3A3D45; }
+#commentaryView .com-range::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%; background: var(--brand); border: none;
+}
+/* 清空按钮：深色 ghost 化 + 紧凑 */
+#commentaryView #comTrimReset { background: var(--surface-2); color: var(--text-mute); border: 1px solid var(--line); }
+#commentaryView #comTrimReset:hover { color: var(--text); background: #2B2D34; }
+/* 上传视频前左栏占位提示（跟随 comTrimCard 显隐，纯 CSS） */
+.com-left-placeholder {
+  display: none;
+  border: 1.5px dashed #33363B; border-radius: 10px;
+  padding: 1.1rem .8rem; text-align: center;
+  font-size: .76rem; line-height: 1.7; color: #6B7280;
+}
+#commentaryView:has(#comTrimCard[hidden]) .com-left-placeholder { display: block; }
