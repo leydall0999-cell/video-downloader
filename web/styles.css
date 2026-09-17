@@ -3390,6 +3390,15 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
 }
 .com-vol-card-actions .btn { margin-bottom: .45rem; }
+/* v2 十一轮（2026-09-17）：配音与音量参考左栏「✂️ 预览与正剧范围」排版——
+   标签居左 + 数值居右一行，滑块通栏在下；三个参数纵排，替代原三列挤挤压布局。 */
+.com-vol-rows { padding: .5rem .6rem .55rem; display: flex; flex-direction: column; gap: .55rem; }
+.com-vol-row { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.com-vol-row-head { display: flex; align-items: baseline; gap: .5rem; min-width: 0; }
+.com-vol-row-head .com-vol-label { font-size: .76rem; font-weight: 600; color: var(--text-mute); }
+.com-vol-row-head .com-vol-val { margin-left: auto; min-width: 0; flex: 0 0 auto; }
+.com-vol-rows input[type="range"] { width: 100%; accent-color: var(--accent, #4F46E5); }
+.com-vol-rows .com-vol-off { margin-top: .05rem; }
 /* v2 十轮（2026-09-17）：右栏「解说参数」整块折叠卡（默认收起），同羽化/音量卡的开合语言 */
 .com-fold-card {
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
