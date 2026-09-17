@@ -3415,7 +3415,22 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
 .com-fold-card[open] > .com-fold-head::before { content: "▾"; }
 .com-fold-card .com-fold-title { font-size: .84rem; font-weight: 700; color: var(--text); white-space: nowrap; }
 .com-fold-card .com-fold-hint { flex: 1 1 auto; min-width: 0; font-size: .68rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#commentaryView .com-fold-card > .com-opts#comOpts { padding: .1rem .6rem .6rem; }
+/* v2 十二轮（2026-09-17）：按语义分组，每组各自一张折叠卡——不再折成一大坨
+   （用户：「按之前的分类，每组折起来，不是折到一起」）。
+   外层 details.com-fold-card 承担卡框，内层容器一律去框透明，避免「卡套卡」。 */
+#commentaryView .com-fold-card > .com-opts#comOpts,
+#commentaryView .com-fold-card > .com-sub-card,
+#commentaryView .com-fold-card > .com-cell {
+  background: none; border: none; border-radius: 0; margin: 0;
+  grid-column: auto;
+}
+#commentaryView .com-fold-card > .com-opts#comOpts { padding: .15rem .6rem .6rem; }
+#commentaryView .com-fold-card > .com-sub-card { padding: .05rem .6rem .65rem; }
+#commentaryView .com-fold-card > .com-cell { padding: .15rem .6rem .65rem; }
+/* 导出剪映草稿：标题已由折叠头承担，去掉卡内重复标题 */
+#commentaryView .com-fold-card > .com-cell > .com-opt-title { display: none; }
+/* 羽化 / 音量卡脱离旧的两列网格后，补足与下一张卡的纵向间距 */
+#commentaryView .com-col-right > .com-vol-card { margin-bottom: .55rem; }
 /* 下拉胶囊在两列窄格里的标签超宽兜底：省略号，不撑破布局 */
 .com-right .com-mode-dropdown-toggle .com-mode-dropdown-label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

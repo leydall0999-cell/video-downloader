@@ -2037,13 +2037,14 @@
         </div>
       </details>
     </div>
-                <!-- v2 十轮：解说参数整块折叠卡（默认收起；原 #comOpts 四个下拉窄栏下单列竖排占屏过多） -->
-                <details class="com-fold-card" id="comOptsFold">
-                  <summary class="com-fold-head">
-                    <span class="com-fold-title">🎬 解说参数</span>
-                    <span class="com-fold-hint">类型 / 高光 / 画幅 / 配音 / 字幕样式</span>
-                  </summary>
-                <div class="com-opts" id="comOpts" data-page-node-id="ZRiiH42GFUywZFNYdV5GXS">
+      <!-- v2 十二轮：按语义分组，每组各自一张折叠卡（用户：「按之前的分类，每组折起来，不是折到一起」） -->
+      <!-- 组 1：解说参数（解说类型 / 高光 / 画幅 / 引擎） -->
+      <details class="com-fold-card" id="comOptsFold">
+        <summary class="com-fold-head">
+          <span class="com-fold-title">🎬 解说参数</span>
+          <span class="com-fold-hint">类型 / 高光 / 画幅 / 引擎</span>
+        </summary>
+        <div class="com-opts" id="comOpts" data-page-node-id="ZRiiH42GFUywZFNYdV5GXS">
       <!-- ===== 第 1 行：5 个下拉 trigger 横排 ===== -->
       <div class="com-row com-row-1" data-page-node-id="VawhqAxHpo1erBvfgcHNVF">
         <!-- 解说类型（自定义下拉） -->
@@ -2118,10 +2119,15 @@
         </div>
       </div>
 
-      <!-- ===== 第 3-7 行：2 列网格 ===== -->
-      <div class="com-grid" data-page-node-id="fv7zCNlygLwrMamdllPTuG">
-        <!-- 正剧边界（片头/片尾秒数、正剧开始/片尾开始时间）已全部合并到左列
-             「✂️ 预览与正剧范围」卡里，这里只剩字幕样式卡（整行）。 -->
+        </div>
+      </details>
+
+      <!-- 组 2：字幕样式 -->
+      <details class="com-fold-card" id="comSubFold">
+        <summary class="com-fold-head">
+          <span class="com-fold-title">🖋 字幕样式</span>
+          <span class="com-fold-hint">字号 / 描边 / 位置复位</span>
+        </summary>
         <div class="com-sub-card" data-page-node-id="a4VHW8hoc3d9OiJ7kmy1CK">
           <div class="com-sub-row" data-page-node-id="Kb8tSJYQWQp3U3Fr0na9bG">
             <div class="com-sub-style-row" data-page-node-id="TyN0MOEYqTRgQ3FS57qES9">
@@ -2146,7 +2152,9 @@
           </div>
         </div>
 
-        <!-- 「正剧开始/片尾开始时间」已并入左列「✂️ 预览与正剧范围」卡（原起点/终点那一行），此处不再重复 -->
+      </details>
+
+      <!-- 「正剧开始/片尾开始时间」已并入左列「✂️ 预览与正剧范围」卡（原起点/终点那一行），此处不再重复 -->
 
         <!-- ===== 原字幕羽化（2026-09-16）：预览窗口实时看效果 + 可微调 =====
              默认「跟随自动探测」：探测命中→带生效，未命中→不干预（管线自己探测/兜底）。
@@ -2206,7 +2214,6 @@
           </div>
           <p class="com-feather-hint" id="comFeatherHint" data-page-node-id="comFeatherHint">在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。</p>
         </details>
-      </div>
 
       <!-- ===== 配音与音量整卡（合并含试听按钮；details 默认折起） ===== -->
       <details class="com-vol-card" data-page-node-id="rs6i6mlJ11jXDTlJyyE1qN">
@@ -2245,9 +2252,12 @@
         <span class="com-status com-vol-status" id="comVolStatus" hidden data-page-node-id="H6LFK6FHhW4jZ2cy0HIxr7"></span>
       </details>
 
-      <!-- ===== 导出剪映草稿（保留在 .com-grid 之外的整行卡片） ===== -->
-      <div class="com-grid com-grid-tail" data-page-node-id="gWjsT1mv42XePANsyGZa6S">
-        <!-- 导出剪映草稿（整行） -->
+      <!-- 组 5：导出剪映草稿 -->
+      <details class="com-fold-card" id="comExportFold">
+        <summary class="com-fold-head">
+          <span class="com-fold-title">📤 导出剪映草稿</span>
+          <span class="com-fold-hint">可选</span>
+        </summary>
         <div class="com-cell com-cell-full com-export-cell" data-page-node-id="FMtYvDTLbL9ddcZG5IFfpA">
           <div class="com-opt-title" data-page-node-id="0ah5d1B9dqXNszdZKOHyl1">导出剪映草稿（可选）</div>
           <label class="com-checkbox-row" style="margin-bottom:8px;" data-page-node-id="dbLWhuH0dPnozum4vGCkTF">
@@ -2259,9 +2269,9 @@
             <button type="button" class="btn btn-sm btn-secondary" id="comExportJianyingPick" data-page-node-id="KCP1i6uU4I0BcLEC5SabuK">选择文件夹</button>
           </div>
         </div>
-      </div>
-                </div>
-                </details>
+      </details>
+
+      <!-- 解说风格（保持常驻不折叠） -->
 <div class="com-opts com-style-section" data-page-node-id="Sz5nRE8swHna6brNFDH63B">
       <div class="com-opt-block com-opt-block-full" data-com-select="comStyle" data-page-node-id="GrZyAzBYPmx2INqrg1yyn2">
         <div class="com-opt-row com-opt-row-styles" data-page-node-id="BtyKx0Ef2J21UrRt1gqk2P">
