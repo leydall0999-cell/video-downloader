@@ -2270,6 +2270,9 @@ img { max-width: 100%; display: block; }
 /* v2 十五轮：「解说引擎 / 画面识别」由常显块改为各自折起（内置 details.adv）。
    min-width:0 必须保留——窄右栏栅格里缺了它长文案不换行，会把列撑破。 */
 .com-ai-fold { min-width: 0; }
+/* v2 十六轮：画面识别正常态整块隐藏（[hidden]）时，让解说引擎独占整行——
+   否则它只占左侧 1fr，右半屏空着、下拉被压到 ~110px。 */
+.com-ai-grid:has(#comAiVisionFold[hidden]) #comAiEngineFold { grid-column: 1 / -1; }
 .com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
 /* 「保存」按钮加大 + 加粗（合并后只此一个保存按钮，给足视觉权重） */
 #aiSave { padding: .55rem 1.4rem; font-size: .95rem; font-weight: 700; }

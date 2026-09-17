@@ -14223,8 +14223,10 @@ el.dwVidPlayer.removeAttribute('src');
         if (!m) return;
         if (gwOn) {
           // 走网关时本机本来就没有 Key，别再报「未配置」
+          // v2 十六轮：正常就绪不占位——✅ 行隐藏，只有异常（未配置）才放出提示。
           el.llmManagedStatus.textContent = '✅ 解说引擎已就绪（云端网关）';
           el.llmManagedStatus.style.color = '';
+          el.llmManagedStatus.hidden = true;
           return;
         }
         const who = [m.provider_name, m.model].filter(Boolean).join(' · ') || '未指定';
@@ -14233,9 +14235,11 @@ el.dwVidPlayer.removeAttribute('src');
         if (m.configured) {
           el.llmManagedStatus.textContent = `✅ 解说引擎已就绪：${who}`;
           el.llmManagedStatus.style.color = '';
+          el.llmManagedStatus.hidden = true;
         } else {
           el.llmManagedStatus.textContent = '⚠️ 云端解说服务尚未配置。';
           el.llmManagedStatus.style.color = '#e67e22';
+          el.llmManagedStatus.hidden = false;
         }
       } catch (e) { /* 状态展示失败不影响其它功能 */ }
     };
@@ -14424,6 +14428,14 @@ el.dwVidPlayer.removeAttribute('src');
       if (r && r.ok) platformStatus = r;
     } catch (e) { /* 忽略 */ }
 
+    // v2 十六轮：画面识别块里唯一的内容就是下面这条状态。
+    // 正常（走画面识别）时整块不显示，只有降级为音频检测时才放出来——
+    // 否则绿色 ✅ 常驻，既占地方又没信息量。
+    function syncVisionFold(abnormal) {
+      const fold = document.getElementById('comAiVisionFold');
+      if (fold) fold.hidden = !abnormal;
+    }
+
     // 根据当前选中的 provider + 本机状态，渲染一段友好提示
     function renderVisionRuntime(provider) {
       const rt = el.visionRuntime;
@@ -14438,15 +14450,18 @@ el.dwVidPlayer.removeAttribute('src');
         const name = mg.name || '管理员已配置';
         rt.textContent = `✅ 片头检测走画面识别（${name}）`;
         rt.style.color = '#27ae60';
+        syncVisionFold(false);
         return;
       }
       if (st.has_local_ocr) {
         rt.textContent = '✅ 片头检测走画面识别（本机离线，免费）';
         rt.style.color = '#27ae60';
+        syncVisionFold(false);
         return;
       }
       rt.textContent = 'ℹ️ 片头检测走音频检测（不影响出片）';
       rt.style.color = '#e67e22';
+      syncVisionFold(true);
     }
 
     // 根据选中的 provider，联动显示其免费额度申请链接（仅云端 provider 有 signup_url）

@@ -1990,11 +1990,13 @@
           <!-- 解说引擎：普通用户只在两个档位间二选一即可。
                云端凭据（服务商 / Key / Base URL / 模型）由超级管理员统一配置，
                不在用户界面出现——用户既不需要理解也不需要持有它们。
-               v2 十五轮：本块改为独立折起、默认收起（此前与「画面识别」并排常显，用户反馈应可隐藏）。 -->
-          <details class="adv com-ai-fold" data-page-node-id="t1NXg8JSKcxO1kgy9DeYQr">
+               v2 十五轮：本块改为独立折起、默认收起（此前与「画面识别」并排常显，用户反馈应可隐藏）。
+               v2 十六轮：状态行改为「只在异常时出现」——已就绪（✅）不占位，未配置（⚠️）才显示。 -->
+          <details class="adv com-ai-fold" id="comAiEngineFold" data-page-node-id="t1NXg8JSKcxO1kgy9DeYQr">
             <summary class="adv-summary" data-page-node-id="wznF6QoZACAr1aTMYILdOM">解说引擎</summary>
             <div class="adv-body" data-page-node-id="comAiEngineBody">
-            <div id="llmManagedStatus" class="adv-note" data-page-node-id="llmManagedStatus">正在读取云端服务状态…</div>
+            <!-- 默认隐藏：加载中不再显示「正在读取云端服务状态…」，只有判定为未配置时才由 JS 放出 ⚠️ -->
+            <div id="llmManagedStatus" class="adv-note" hidden data-page-node-id="llmManagedStatus"></div>
             <div id="llmGatewayStatus" class="adv-note" data-page-node-id="llmGatewayStatus"></div>
             <label class="adv-label" for="llmEngine" data-page-node-id="llmEngineLbl">解说词由谁来生成</label>
             <select id="llmEngine" class="adv-input" data-page-node-id="llmEngine">
@@ -2012,8 +2014,10 @@
           </details>
 
           <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型
-               v2 十五轮：改为独立折起、默认收起（纯只读状态，无用户输入，最该收起）。 -->
-          <details class="adv com-ai-fold" data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
+               v2 十五轮：改为独立折起、默认收起（纯只读状态，无用户输入，最该收起）。
+               v2 十六轮：本块唯一内容就是一条状态，正常（走画面识别）时整块不显示，
+                          只有降级为音频检测时才出现 —— 默认带 hidden，JS 判异常后放开。 -->
+          <details class="adv com-ai-fold" id="comAiVisionFold" hidden data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
             <summary class="adv-summary" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">画面识别</summary>
             <div class="adv-body" data-page-node-id="comAiVisionBody">
             <!-- 本行与下方 visionRuntime 在三种档位下都同义重复（如「片头检测走本机画面识别（离线免费）。」
