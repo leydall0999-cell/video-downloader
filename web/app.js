@@ -11229,6 +11229,18 @@ el.dwVidPlayer.removeAttribute('src');
     lane.replaceChildren(...parts);
   };
   /** 全量重绘。触发：滑块 input / 输入框 change / 清空 / 视频元数据 / 脚本载入 / 缩放 / 窗口尺寸。 */
+  /** 把时间轴实测总高写进 #commentaryView 的 --com-tl-h。
+      中栏时间轴 2026-09-17 晚起向右伸出、右端与设置栏右边界齐平 → 会压在设置栏下半区上，
+      设置栏靠 `max-height: calc(100% - var(--com-tl-h))` 让位，保证最下面的卡片不被盖住。
+      offsetHeight 为 0（视图还没显示）时不写，沿用 CSS 兜底 108px。 */
+  const comTlPublishHeight = () => {
+    if (!comTlRoot) return;
+    const h = comTlRoot.offsetHeight;
+    const host = document.getElementById('commentaryView');
+    if (!host || !(h > 0)) return;
+    const want = Math.round(h + 12) + 'px';
+    if (host.style.getPropertyValue('--com-tl-h') !== want) host.style.setProperty('--com-tl-h', want);
+  };
   const comTlSync = () => {
     const dur = parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0;
     const hasDur = !!dur && isFinite(dur);
@@ -11267,6 +11279,7 @@ el.dwVidPlayer.removeAttribute('src');
     comTlRenderSegs(comTlLaneNarr, segs, hasDur ? dur : 0);
     comTlRenderSegs(comTlLaneSubs, segs, hasDur ? dur : 0);
     comTlRenderScale(hasDur ? dur : 0);
+    comTlPublishHeight();
   };
   /** 缩放：写 width%（>100 才写内联，100% 铺满）；并重算刻度密度。 */
   const comTlApplyZoom = () => {
@@ -11616,7 +11629,12 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
-    if (isCom) loadCommentary();
+    if (isCom) {
+      loadCommentary();
+      // 解说页刚显示：只有此刻才量得到时间轴真实高度 → 补一次同步，
+      // 把 --com-tl-h 写给设置栏（max-height 让位，避免卡片被向右伸出的时间轴盖住）。
+      try { comTlSync(); } catch (_) {}
+    }
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isProfileGroup) loadProfile();
     if (isProfileAbout) loadAboutPanel();

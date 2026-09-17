@@ -3443,11 +3443,19 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
 .com-fold-card[open] > .com-fold-head::before { content: "▾"; }
 .com-fold-card .com-fold-title { font-size: .84rem; font-weight: 700; color: var(--text); white-space: nowrap; }
 .com-fold-card .com-fold-hint { flex: 1 1 auto; min-width: 0; font-size: .68rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 右栏收窄后（本轮 320→约 228）：摘要行不再被挤成 60px 的「类…」——
-   剩余宽度不足 6.5rem 时整段换到下一行（标题先行、摘要独占一行），而不是把摘要压扁。
-   min-width 触发 flex 换行，比「写死隐藏」更稳（宽栏下仍是一行）。 */
-.com-right .com-fold-head { flex-wrap: wrap; }
-.com-right .com-fold-hint { min-width: 6.5rem; }
+/* 2026-09-17 晚（用户：「这边 tab 再矮一点，往上走」）：
+   右栏折叠卡改**标题一行 + 摘要独占第二行（整卡宽）**：摘要用 `flex: 1 1 100%` 强制换行，
+   而不是靠 flex-wrap 碰运气（窄栏换行 / 宽栏挤一行，卡高忽高忽低）——也避免 grid 轨道在
+   WebKit 里给摘要只留第二列宽、把长摘要截成「… / 引」的问题（实测 grid-column:1/-1 无效）。
+   同时收紧纵向节奏：头内边距 .5→.3rem、行距 .12rem、行高 1.2、卡间距 .55→.35rem。
+   单卡高度约 63px → 约 42px（有摘要）/ 约 24px（无摘要），整列因此整体上移。 */
+.com-right .com-fold-card > .com-fold-head {
+  flex-wrap: wrap; column-gap: .4rem; row-gap: .1rem;
+  align-items: center; padding: .24rem .6rem;
+}
+.com-right .com-fold-card .com-fold-title { line-height: 1.15; }
+.com-right .com-fold-card .com-fold-hint { flex: 1 1 100%; min-width: 0; line-height: 1.15; }
+.com-right .com-fold-card { margin-bottom: .35rem; }
 /* v2 十二轮（2026-09-17）：按语义分组，每组各自一张折叠卡——不再折成一大坨
    （用户：「按之前的分类，每组折起来，不是折到一起」）。
    外层 details.com-fold-card 承担卡框，内层容器一律去框透明，避免「卡套卡」。 */
@@ -4687,6 +4695,12 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
   width: 300px; flex: none; min-height: 0; overflow: auto;
   border: 1px solid var(--line); border-radius: var(--radius-md);
   background: var(--surface); padding-bottom: .8rem;
+  /* 🔴 2026-09-17 晚（用户：时间轴最右边要与设置栏右边对齐）：
+     中栏时间轴改为**向右伸出**、右端与设置栏右边界齐平 → 时间轴会压在设置栏的下半区上。
+     所以设置栏必须在自己底边之前让出时间轴的高度，否则最下面的卡片会被盖住看不见。
+     高度由 JS（comTlSync 里 comTlPublishHeight）实测后写进 --com-tl-h；
+     108px 是 CSS 兜底值（视图尚未渲染 / offsetHeight 量不到时用）。 */
+  max-height: calc(100% - var(--com-tl-h, 108px));
 }
 /* ---- 左栏：正剧范围卡（原全宽卡在窄栏下的适配） ---- */
 .com-left .com-trim-card { margin: 0; display: flex; flex-direction: column; }
@@ -4808,7 +4822,17 @@ html.com-theater { overflow: hidden; }
 .com-timeline {
   flex: none; background: #1F1F21; color: #9CA3AF;
   border-radius: var(--radius-md); padding: .5rem .8rem .55rem;
+  /* 🔴 2026-09-17 晚（用户：「时间轴往右拉长，最右边与这个 tab（设置栏）右边对齐」）：
+     中栏到设置栏右边界之间 = 一条列间距 10px + 分隔条 8px（margin 0 -1px → 实占 6px）+ 10px
+     = 26px，再加上设置栏自身宽度 → 负外边距正好把时间轴右端推到设置栏右边界。
+     覆盖层的偏移用的是同一个 26px（见 #comScriptPanel 的 calc），改一处必须两处一起看。
+     z-index 抬到 3：时间轴要盖在设置栏之上（否则被右栏的背景吃掉）。
+     设置栏靠 max-height 让出 --com-tl-h 的高度，保证没有内容被压住。 */
+  position: relative; z-index: 3;
+  margin-right: calc(-1 * (var(--com-right-w, 280px) + 26px));
 }
+/* 设置栏收起时它已经不在流里（flex gap 也消失）→ 负外边距必须撤掉，否则时间轴右端溢出视口 */
+#commentaryView.com-right-off .com-timeline { margin-right: 0; }
 .com-tl-head { display: flex; align-items: center; gap: .7rem; font-size: .72rem; margin-bottom: .45rem; }
 .com-tl-title { color: #E5E7EB; font-weight: 600; }
 .com-tl-range { color: #A5B4FC; }
@@ -4986,7 +5010,7 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 /* 3) 右栏检查器：头部带底色分隔、内容左右留白一致 */
 .com-right { border-radius: 10px; }
 .com-right .com-insp-head {
-  margin: 0 0 .55rem; padding: .6rem .75rem;
+  margin: 0 0 .32rem; padding: .45rem .7rem;
   background: color-mix(in srgb, var(--brand) 4%, var(--surface, #fff));
   border-radius: 10px 10px 0 0;
 }
@@ -5027,7 +5051,12 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
      变宽才符合直觉）。拖动存下来的宽度是 root 内联样式，优先级高于这里；
      双击分隔条复位即回到这里的 clamp 值。 */
   --com-left-w: clamp(196px, 14vw, 240px);
-  --com-right-w: clamp(224px, 17vw, 300px);
+  /* 右栏 17vw→19vw（2026-09-17 晚）：用户给的效果图里设置栏明显更宽、卡片摘要能整行显示。
+     1340 窗口下 228→255，卡片内宽 179→205（= 效果图卡片宽），长摘要不再被截成「… / 引」。
+     代价：中栏（预览）少 27px；但时间轴横跨中栏+设置栏，总宽几乎不变（858px）。 */
+  --com-right-w: clamp(224px, 19vw, 320px);
+  /* 时间轴总高（含与设置栏之间的呼吸位）：JS 实测后覆盖，这里只是未渲染时的兜底 */
+  --com-tl-h: 108px;
 }
 /* 深色态：仅在 html.theme-dark 时启用（个人中心可切换 浅色/深色） */
 html.theme-dark #commentaryView {
