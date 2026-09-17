@@ -14223,7 +14223,7 @@ el.dwVidPlayer.removeAttribute('src');
         if (!m) return;
         if (gwOn) {
           // 走网关时本机本来就没有 Key，别再报「未配置」
-          el.llmManagedStatus.textContent = '✅ 云端解说服务已就绪：由云端网关提供（由管理员统一配置）';
+          el.llmManagedStatus.textContent = '✅ 解说引擎已就绪（云端网关）';
           el.llmManagedStatus.style.color = '';
           return;
         }
@@ -14231,10 +14231,10 @@ el.dwVidPlayer.removeAttribute('src');
         const from = m.source === 'managed' ? '（由管理员统一配置）'
           : (m.source === 'env' ? '（由运维统一配置）' : '');
         if (m.configured) {
-          el.llmManagedStatus.textContent = `✅ 云端解说服务已就绪${from}：${who}`;
+          el.llmManagedStatus.textContent = `✅ 解说引擎已就绪：${who}`;
           el.llmManagedStatus.style.color = '';
         } else {
-          el.llmManagedStatus.textContent = '⚠️ 云端解说服务尚未配置，请联系管理员。';
+          el.llmManagedStatus.textContent = '⚠️ 云端解说服务尚未配置。';
           el.llmManagedStatus.style.color = '#e67e22';
         }
       } catch (e) { /* 状态展示失败不影响其它功能 */ }
@@ -14436,16 +14436,16 @@ el.dwVidPlayer.removeAttribute('src');
       const managedOn = mg.configured === 'true';
       if (managedOn) {
         const name = mg.name || '管理员已配置';
-        rt.textContent = `✅ 视觉模型已由管理员配置（${name}），片头检测走画面识别。`;
+        rt.textContent = `✅ 片头检测走画面识别（${name}）`;
         rt.style.color = '#27ae60';
         return;
       }
       if (st.has_local_ocr) {
-        rt.textContent = '✅ 本机离线 OCR 可用：片头检测走画面识别，无需云端、不消耗额度。';
+        rt.textContent = '✅ 片头检测走画面识别（本机离线，免费）';
         rt.style.color = '#27ae60';
         return;
       }
-      rt.textContent = 'ℹ️ 当前未启用画面识别，片头检测自动降级为音频检测，不影响解说生成；如需开启画面理解，请联系管理员开通。';
+      rt.textContent = 'ℹ️ 片头检测走音频检测（不影响出片）';
       rt.style.color = '#e67e22';
     }
 
@@ -14485,7 +14485,7 @@ el.dwVidPlayer.removeAttribute('src');
         if (r.configured && r.provider) {
           const who = r.provider_name || r.provider;
           const from = r.source === 'env' ? '（环境变量）' : '（管理员配置）';
-          box.textContent = `✅ 云端视觉服务已就绪${from}：${who}${r.model ? ' · ' + r.model : ''}`;
+          box.textContent = `✅ 画面识别已就绪：${who}${r.model ? ' · ' + r.model : ''}`;
           box.style.color = '#27ae60';
           mark(true, who + (r.model ? ' · ' + r.model : ''));
         } else {
@@ -14493,8 +14493,8 @@ el.dwVidPlayer.removeAttribute('src');
           // 实际会降级到音频检测，说成 OCR 可用是假承诺。
           const st0 = platformStatus || {};
           box.textContent = st0.has_local_ocr
-            ? '使用本机离线 OCR（免费，无需任何 Key）；管理员配置云端视觉服务后自动启用。'
-            : '本机无离线 OCR，未配置云端视觉服务时片头检测降级为音频检测（不影响出片）；如需画面理解请联系管理员开通。';
+            ? '片头检测走本机画面识别（离线免费）。'
+            : '未配置画面识别，片头检测走音频检测（不影响出片）。';
           box.style.color = '';
           mark(false);
         }

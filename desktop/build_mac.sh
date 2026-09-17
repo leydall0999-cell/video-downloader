@@ -319,7 +319,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --collect-all fitz \
   --collect-all requests \
   --collect-all PIL \
-  --collect-all pyobjc-framework-Quartz \
+  --collect-all Quartz \
   --collect-all onnxruntime \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
