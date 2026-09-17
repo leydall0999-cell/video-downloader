@@ -78,6 +78,26 @@ def _band_rows(gray, w0: int, h0: int):
     return top, bot
 
 
+def _band_cols(gray, w0: int, top: int, bot: int):
+    """在已探测出的带行范围内扫白像素的横向范围，返回 (minx, maxx) 或 None。
+
+    与 _band_rows 同判据（>=205 近白），隔列采样。供「羽化宽度随原字幕长短」用：
+    管线擦除矩形按 max(新字幕宽, 原字幕宽)+1字 收窄，预览同口径绘制。
+    """
+    px = gray.load()
+    minx, maxx = None, None
+    for y in range(top, bot + 1):
+        for x in range(0, w0, 2):
+            if px[x, y] >= 205:
+                if minx is None or x < minx:
+                    minx = x
+                if maxx is None or x > maxx:
+                    maxx = x
+    if minx is None or maxx is None:
+        return None
+    return minx, maxx
+
+
 def _median(xs):
     xs = sorted(xs)
     n = len(xs)
@@ -95,6 +115,7 @@ def detect_band_ratio(images) -> dict:
     """
     total = len(images)
     bands = []
+    cols = None          # 所有命中帧里最宽的横向范围（比例），union 防残字
     for im in images:
         try:
             gray = im.convert("L")
@@ -108,10 +129,21 @@ def detect_band_ratio(images) -> dict:
         if rel_h > 0.25:
             continue
         bands.append((b[0] / gray.height, b[1] / gray.height))
+        # 横向范围：取各帧的并集（最宽帧）——窄了会漏出原字幕，宽了只是多擦一点
+        try:
+            c = _band_cols(gray, gray.width, b[0], b[1])
+        except Exception:
+            c = None
+        if c:
+            w0 = gray.width
+            r0, r1 = c[0] / w0, c[1] / w0
+            if cols is None or (r1 - r0) > (cols[1] - cols[0]):
+                cols = (r0, r1)
 
     if len(bands) < 2:
         # 前端只给 4 帧，这里要求命中 ≥2 帧才算确认（管线用 6 帧、要求 ≥3，口径一致）
         return {"found": False, "band_y_ratio": 0.0, "band_h_ratio": 0.0,
+                "band_x_ratio": 0.0, "band_w_ratio": 0.0,
                 "hits": len(bands), "total": total,
                 "note": ("未探测到原字幕（画面较干净，或字幕不是白色）"
                          if not bands else "命中帧太少，无法确认原字幕位置")}
@@ -124,7 +156,15 @@ def detect_band_ratio(images) -> dict:
     pad_rel = max(0.003, mh * 0.08)
     top_rel = max(0.0, mc - mh / 2 - pad_rel)
     bot_rel = min(1.0, mc + mh / 2 + pad_rel)
-    return {"found": True,
-            "band_y_ratio": round(top_rel, 6),
-            "band_h_ratio": round(bot_rel - top_rel, 6),
-            "hits": len(bands), "total": total, "note": ""}
+    out = {"found": True,
+           "band_y_ratio": round(top_rel, 6),
+           "band_h_ratio": round(bot_rel - top_rel, 6),
+           "hits": len(bands), "total": total, "note": ""}
+    # 横向范围（可选字段）：探测到才带，供预览把擦除效果画成「随原字幕长短」的窄矩形。
+    # 太宽/太窄都不可信（噪声/漏检），宽度须落在画面 5%~95% 内才下发。
+    if cols:
+        cw_r = cols[1] - cols[0]
+        if 0.05 <= cw_r <= 0.95:
+            out["band_x_ratio"] = round(max(0.0, cols[0]), 6)
+            out["band_w_ratio"] = round(min(1.0, cw_r), 6)
+    return out

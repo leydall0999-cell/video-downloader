@@ -10072,6 +10072,8 @@ el.dwVidPlayer.removeAttribute('src');
     dh: 0,              // 带高加成（占画面高比例，可负=收窄）
     bandY: COM_FEATHER_DEFAULT.bandY,
     bandH: COM_FEATHER_DEFAULT.bandH,
+    bandX: null,        // 原字幕横向起点（占画面宽比例）；null=未测到，擦除按整幅宽
+    bandW: null,        // 原字幕横向宽度（占画面宽比例）
     mode: 'fade',
     strength: 1.0,
     probing: false,
@@ -10176,33 +10178,59 @@ el.dwVidPlayer.removeAttribute('src');
     const bandTopSrc = Math.max(0, Math.min(0.98, _effBand.y)) * vh;
     const bandHSrc = Math.max(2, Math.max(0.005, _effBand.h) * vh);
 
+    // 横向范围：按「探测到的原字幕宽 + 两侧各 1 字」收窄，与管线 cov（max(新,原)+1字）
+    // 同口径——预览不知道每段解说字幕的渲染宽度，用「探测宽+1字」近似（解说字幕通常更窄）。
+    // 未测到宽度（bandW 为空）时维持整幅宽，与旧行为一致。
+    let ex0 = 0, ex1 = vw, fxSrc = 0;                  // 擦除横向范围与渐隐带宽（源像素）
+    if (comFeather.bandW > 0 && comFeather.bandW < 0.98) {
+      const bcx = ((comFeather.bandX != null ? comFeather.bandX : (1 - comFeather.bandW) / 2)
+                   + comFeather.bandW / 2) * vw;
+      const half = (comFeather.bandW * vw) / 2;
+      const charSrc = Math.max(4, bandHSrc);           // 1 字符 ≈ 字幕高
+      ex0 = Math.max(0, bcx - half - charSrc);
+      ex1 = Math.min(vw, bcx + half + charSrc);
+      fxSrc = Math.max(2, Math.min(charSrc, (ex1 - ex0) / 3));
+    }
+    const exW = Math.max(2, Math.round((ex1 - ex0) * k));  // 擦除矩形显示宽（设备像素）
+
     if (mode === 'fade') {
       // 与管线一致：取带上一行 / 下一行各 2px 拉伸满带高，再做纵向线性混合；
-      // 覆盖**整幅宽度**（管线 cov_x=0/cov_w=cw）——解说字幕 PNG 的底色只盖「文字宽+两侧各1字」，
-      // 原字幕更长就会从两侧露出，横向躲不开。
+      // 横向按「原字幕宽+1字」收窄（管线 cov_x/cov_w），左右各 fade_x 像素 alpha 渐隐消接缝。
       const padSrc = Math.max(1, 2 * strength);        // 擦除余量（源像素）
       const dySrc = Math.max(0, bandTopSrc - padSrc);
       const dhSrc = Math.min(vh - dySrc, bandHSrc + padSrc * 2);
       const syA = Math.max(0, dySrc - 2);
       const syB = Math.min(Math.max(0, vh - 2), dySrc + dhSrc);
       const dy = dySrc * k, dh = Math.max(2, dhSrc * k);
+      const ex = ex0 * k;                              // 擦除矩形左缘（显示坐标）
       ctx.save();
-      ctx.beginPath(); ctx.rect(0, dy, W, dh); ctx.clip();
+      ctx.beginPath(); ctx.rect(ex, dy, exW, dh); ctx.clip();
       // A = 带上一行拉伸满带高
-      ctx.drawImage(vid, 0, syA, vw, 2, 0, dy, W, dh);
+      ctx.drawImage(vid, ex0, syA, ex1 - ex0, 2, ex, dy, exW, dh);
       // B = 带下一行拉伸，alpha 自 0（带顶）线性到 1（带底）——等价 blend 里的 B*(Y/H)
       const offH = Math.max(1, Math.round(dh));
-      const off = comFeatherOff(W, offH);
+      const off = comFeatherOff(exW, offH);
       off.globalCompositeOperation = 'source-over';
-      off.drawImage(vid, 0, syB, vw, 2, 0, 0, W, offH);
+      off.drawImage(vid, ex0, syB, ex1 - ex0, 2, 0, 0, exW, offH);
       off.globalCompositeOperation = 'destination-in';
       const g = off.createLinearGradient(0, 0, 0, offH);
       g.addColorStop(0, 'rgba(0,0,0,0)');
       g.addColorStop(1, 'rgba(0,0,0,1)');
       off.fillStyle = g;
-      off.fillRect(0, 0, W, offH);
+      off.fillRect(0, 0, exW, offH);
+      // 横向渐隐（与管线 fade 分支的 geq 横向 alpha 同口径）
+      if (fxSrc > 0) {
+        const fx = Math.max(1, Math.round(fxSrc * k));
+        const gh = off.createLinearGradient(0, 0, exW, 0);
+        gh.addColorStop(0, 'rgba(0,0,0,0)');
+        gh.addColorStop(Math.min(0.45, fx / exW), 'rgba(0,0,0,1)');
+        gh.addColorStop(1 - Math.min(0.45, fx / exW), 'rgba(0,0,0,1)');
+        gh.addColorStop(1, 'rgba(0,0,0,0)');
+        off.fillStyle = gh;
+        off.fillRect(0, 0, exW, offH);
+      }
       off.globalCompositeOperation = 'source-over';
-      ctx.drawImage(off.canvas, 0, 0, W, offH, 0, dy, W, dh);
+      ctx.drawImage(off.canvas, 0, 0, exW, offH, ex, dy, exW, dh);
       ctx.restore();
       return;
     }
@@ -10212,8 +10240,9 @@ el.dwVidPlayer.removeAttribute('src');
     const dySrc2 = Math.max(0, bandTopSrc - padSrc2);
     const dhSrc2 = Math.min(vh - dySrc2, bandHSrc + padSrc2 * 2);
     const dy2 = dySrc2 * k, dh2 = Math.max(2, dhSrc2 * k);
+    const ex2 = ex0 * k;
     const offH2 = Math.max(1, Math.round(dh2));
-    const off2 = comFeatherOff(W, offH2);
+    const off2 = comFeatherOff(exW, offH2);
     off2.globalCompositeOperation = 'source-over';
     if (mode === 'stretch') {
       // 取带**正上方一条薄片**纵向拉满（薄片高 = 带宽 12%，同管线 FEATHER_STRIP_RATIO）。
@@ -10222,13 +10251,13 @@ el.dwVidPlayer.removeAttribute('src');
       const softSrc = Math.max(1, Math.min(10,
         Math.round(Math.max(2, Math.min(6, dhSrc2 * 0.05)) * strength)));
       off2.filter = `blur(${blurPx(softSrc).toFixed(2)}px)`;
-      off2.drawImage(vid, 0, Math.max(0, dySrc2 - stripSrc), vw, stripSrc, 0, 0, W, offH2);
+      off2.drawImage(vid, ex0, Math.max(0, dySrc2 - stripSrc), ex1 - ex0, stripSrc, 0, 0, exW, offH2);
       off2.filter = 'none';
     } else {
       // 整条高斯模糊（经典的"糊带"，留作兜底）
       const sigmaSrc = Math.max(8, Math.min(28, Math.round(Math.max(6, bandHSrc * 0.22) * strength)));
       off2.filter = `blur(${blurPx(sigmaSrc).toFixed(2)}px)`;
-      off2.drawImage(vid, 0, dySrc2, vw, dhSrc2, 0, 0, W, offH2);
+      off2.drawImage(vid, ex0, dySrc2, ex1 - ex0, dhSrc2, 0, 0, exW, offH2);
       off2.filter = 'none';
     }
     // 上下渐隐（对应管线 geq 的 alpha_expr）：顶部透明渐入、底部渐出，边缘自然融入画面
@@ -10240,11 +10269,22 @@ el.dwVidPlayer.removeAttribute('src');
     g2.addColorStop(1 - gzr, 'rgba(0,0,0,1)');
     g2.addColorStop(1, 'rgba(0,0,0,0)');
     off2.fillStyle = g2;
-    off2.fillRect(0, 0, W, offH2);
+    off2.fillRect(0, 0, exW, offH2);
+    // 左右渐隐（窄矩形消接缝，与管线横向 ramp 同口径）
+    if (fxSrc > 0) {
+      const fx2 = Math.max(1, Math.round(fxSrc * k));
+      const gh2 = off2.createLinearGradient(0, 0, exW, 0);
+      gh2.addColorStop(0, 'rgba(0,0,0,0)');
+      gh2.addColorStop(Math.min(0.45, fx2 / exW), 'rgba(0,0,0,1)');
+      gh2.addColorStop(1 - Math.min(0.45, fx2 / exW), 'rgba(0,0,0,1)');
+      gh2.addColorStop(1, 'rgba(0,0,0,0)');
+      off2.fillStyle = gh2;
+      off2.fillRect(0, 0, exW, offH2);
+    }
     off2.globalCompositeOperation = 'source-over';
     ctx.save();
-    ctx.beginPath(); ctx.rect(0, dy2, W, dh2); ctx.clip();
-    ctx.drawImage(off2.canvas, 0, 0, W, offH2, 0, dy2, W, dh2);
+    ctx.beginPath(); ctx.rect(ex2, dy2, exW, dh2); ctx.clip();
+    ctx.drawImage(off2.canvas, 0, 0, exW, offH2, ex2, dy2, exW, dh2);
     ctx.restore();
   }
 
@@ -10325,6 +10365,8 @@ el.dwVidPlayer.removeAttribute('src');
       comFeather.manual = false;
       comFeather.bandY = COM_FEATHER_DEFAULT.bandY;
       comFeather.bandH = COM_FEATHER_DEFAULT.bandH;
+      comFeather.bandX = null;
+      comFeather.bandW = null;
       comFeatherSyncInputs();
     }
     comFeather.probing = true;
@@ -10339,6 +10381,11 @@ el.dwVidPlayer.removeAttribute('src');
       const res = await request('/api/commentary/feather-detect', { method: 'POST', body: fd });
       if (res && res.found) {
         comFeather.found = true;
+        // 横向范围（可选）：测到才存，预览擦除效果按它收窄（与成片同一口径）
+        comFeather.bandX = (typeof res.band_x_ratio === 'number' && res.band_w_ratio > 0)
+          ? res.band_x_ratio : null;
+        comFeather.bandW = (typeof res.band_x_ratio === 'number' && res.band_w_ratio > 0)
+          ? res.band_w_ratio : null;
         if (!comFeather.manual) {
           comFeather.bandY = res.band_y_ratio;
           comFeather.bandH = res.band_h_ratio;
