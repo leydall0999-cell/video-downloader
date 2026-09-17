@@ -4742,3 +4742,64 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 .com-actionbar .com-enhance-section .com-retain-hint { display: none; }
 /* 进度条空态时隐藏底部粘性条（避免整宽空白条） */
 .com-bottom:has(#comProgress[hidden]) { display: none; }
+
+/* ======================================================================
+   ===== v2 三轮打磨（2026-09-17）：紧凑节奏 + 卡片风格统一 + 窄中栏加宽 =====
+   ====================================================================== */
+/* 1) 顶部两横条瘦身：环境横幅一行化、素材条减高，把纵向空间还给预览舞台 */
+#commentaryView .com-env-status {
+  padding: .35rem .7rem; font-size: .74rem; line-height: 1.45;
+  margin: .15rem 0 .5rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.com-subbar { padding: .35rem .5rem; gap: .5rem; margin-bottom: .5rem; }
+.com-subbar .com-entry-card { padding: .28rem .5rem; gap: .45rem; }
+.com-subbar .com-entry-card .btn { padding: .3rem .65rem; font-size: .76rem; }
+.com-hist-toggle { padding: .34rem .65rem; font-size: .76rem; }
+
+/* 2) 左栏卡片统一质感：同圆角、同描边、轻投影、标题同构 */
+.com-left .com-trim-card, .com-left .com-fixed-card {
+  border-radius: 10px; box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+}
+.com-left .com-trim-card { padding-bottom: .6rem; }
+.com-left .com-trim-head { padding: .55rem .7rem .35rem; }
+.com-left .com-trim-head h3 { display: flex; align-items: center; gap: .35rem; margin: 0; font-size: .85rem; }
+.com-left .com-fixed-card { padding: .55rem .7rem .6rem; }
+.com-left .com-fixed-card .com-opt-title {
+  display: flex; align-items: center; gap: .35rem;
+  font-size: .85rem; margin: 0 0 .45rem;
+}
+.com-left .com-fixed-card .com-opt-title::before { content: "✂️"; font-size: .8rem; }
+.com-left .com-mode-fixed { border-radius: 8px; padding: .38rem .5rem; }
+
+/* 3) 右栏检查器：头部带底色分隔、内容左右留白一致 */
+.com-right { border-radius: 10px; }
+.com-right .com-insp-head {
+  margin: 0 0 .55rem; padding: .6rem .75rem;
+  background: color-mix(in srgb, var(--brand) 4%, var(--surface, #fff));
+  border-radius: 10px 10px 0 0;
+}
+.com-right > *:not(.com-insp-head) { margin-left: .6rem; margin-right: .6rem; }
+.com-right > *:last-child { margin-bottom: .7rem; }
+
+/* 4) 中栏：舞台内边距收窄、时间轴更精致 */
+.com-preview-stage { padding: 8px; border-radius: 10px; }
+.com-preview-stage video#comPreview { border-radius: 8px; }
+.com-timeline { padding: .45rem .7rem .5rem; }
+.com-tl-track { height: 14px; border-radius: 5px; }
+.com-tl-scale { margin-top: .25rem; }
+
+/* 5) 操作条按钮高度统一 */
+.com-actionbar #comGenerateRow .com-generate-main { padding: .8rem 1rem; font-size: .95rem; }
+
+/* 6) 窄中栏（1000–1359）再加宽中栏：左 200 / 右 240 */
+@media (min-width: 1000px) and (max-width: 1359px) {
+  .com-left { width: 200px; }
+  .com-right { width: 240px; }
+  #comScriptPanel { left: 212px; right: 252px; }
+  #comReviewActions { left: 212px; right: 252px; }
+  #comStepsPanel { right: 252px; }
+  /* 240px 窄栏：row-1 下拉改单列，避免「自动挑…」类截断 */
+  .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 100%; }
+  .com-right select { font-size: .74rem; }
+}
