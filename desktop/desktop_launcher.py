@@ -1539,15 +1539,60 @@ def main() -> None:
                 )
 
         api = VdlApi()
+
+        # ---- 窗口尺寸/位置记忆（2026-09-17：用户要求按上次手动调整后的宽高打开） ----
+        # 存 _app_data_dir()/window_frame.json；首次运行无文件 → 用默认 1100x750 居中。
+        _win_frame_file = _app_data_dir() / "window_frame.json"
+
+        def _load_win_frame():
+            import json as _json
+            try:
+                d = _json.loads(_win_frame_file.read_text(encoding="utf-8"))
+                w = max(800, min(3840, int(d.get("width", 1100))))
+                h = max(500, min(2160, int(d.get("height", 750))))
+                x = d.get("x"); y = d.get("y")
+                x = int(x) if isinstance(x, (int, float)) else None
+                y = int(y) if isinstance(y, (int, float)) else None
+                return w, h, x, y
+            except Exception:
+                return 1100, 750, None, None
+
+        _win_w, _win_h, _win_x, _win_y = _load_win_frame()
         window = webview.create_window(
             title="视频工坊",
             url=URL,
-            width=1100,
-            height=750,
+            width=_win_w,
+            height=_win_h,
+            x=_win_x,
+            y=_win_y,
             min_size=(800, 500),
             text_select=True,
             js_api=api,
         )
+
+        def _save_win_frame(*_args):
+            """resized/moved 时持久化窗口框架（失败静默，不影响主流程）。"""
+            import json as _json
+            try:
+                _win_frame_file.parent.mkdir(parents=True, exist_ok=True)
+                _json.dump(
+                    {
+                        "width": int(window.width),
+                        "height": int(window.height),
+                        "x": int(window.x),
+                        "y": int(window.y),
+                    },
+                    open(_win_frame_file, "w", encoding="utf-8"),
+                )
+            except Exception:
+                pass
+
+        window.events.resized += _save_win_frame
+        try:
+            window.events.moved += _save_win_frame  # 老版本 pywebview 无 moved 时忽略
+        except AttributeError:
+            pass
+
         # 把 window 引用交给桥接 API，供「返回桌面」/「退出」按钮调用
         api.window = window
 
