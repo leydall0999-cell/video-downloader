@@ -4928,3 +4928,30 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 }
 #commentaryView .com-ai-config .adv { background: var(--surface-2); }
 #commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
+
+/* ======================================================================
+   ===== v2 五轮（2026-09-17）：解说页字体/按钮整体降一号（用户「有的太大」） =====
+   ====================================================================== */
+/* 按钮基础高度降档（仅解说页） */
+#commentaryView .btn { min-height: 30px; font-size: .8rem; }
+#commentaryView .btn.btn-sm { min-height: 26px; font-size: .74rem; padding: 0 .6rem; }
+#commentaryView .com-subbar .com-entry-card .btn { min-height: 26px; padding: .18rem .5rem; font-size: .72rem; }
+#commentaryView .com-hist-toggle { min-height: 26px; padding: .2rem .55rem; font-size: .73rem; }
+/* 生成脚本主按钮：原来 .95rem + .8rem 内边距，明显偏大 */
+#commentaryView .com-actionbar #comGenerateRow .com-generate-main {
+  padding: .5rem .8rem; font-size: .84rem; font-weight: 600;
+}
+/* 检查器：下拉/开关/输入整体降一号 */
+#commentaryView .com-mode-dropdown-toggle { min-height: 29px; font-size: .73rem; padding: .28rem .5rem; }
+#commentaryView .com-mode-dropdown-option { font-size: .74rem; padding: .3rem .5rem; }
+#commentaryView .com-insp-head b { font-size: .8rem; }
+#commentaryView .com-right select,
+#commentaryView .com-right input:not([type=checkbox]):not([type=radio]):not([type=range]) { font-size: .74rem; }
+#commentaryView .com-fixed-card .com-opt-title { font-size: .78rem; }
+#commentaryView .com-fixed-card .com-mode-option { font-size: .7rem; padding: .3rem .45rem; }
+#commentaryView .com-trim-head h3 { font-size: .8rem; }
+/* 时间轴/环境横幅字号微降 */
+#commentaryView .com-tl-head { font-size: .68rem; }
+#commentaryView .com-env-status { font-size: .7rem; }
+/* 左栏 radio 选中底色在深色下更柔和 */
+#commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #252840; }
