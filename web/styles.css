@@ -4803,3 +4803,128 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 100%; }
   .com-right select { font-size: .74rem; }
 }
+
+/* ======================================================================
+   ===== v2 四轮（2026-09-17）：原型深色皮肤 + 可拖动三栏 + 侧栏收起 =====
+   皮肤只作用于 #commentaryView（解说页），其余页面保持浅色。
+   ====================================================================== */
+#commentaryView {
+  --surface: #1D1F24;
+  --surface-2: #23252C;
+  --line: #2F323A;
+  --text: #E7E8EC;
+  --text-mute: #9CA3AF;
+  color-scheme: dark;
+  color: var(--text);
+  background: #16171B;
+  border-radius: 12px;
+  padding: .55rem .7rem .7rem;
+}
+/* 深色滚动条 */
+#commentaryView ::-webkit-scrollbar { width: 9px; height: 9px; }
+#commentaryView ::-webkit-scrollbar-thumb { background: #33363B; border-radius: 5px; }
+#commentaryView ::-webkit-scrollbar-thumb:hover { background: #4B5563; }
+#commentaryView ::-webkit-scrollbar-track { background: transparent; }
+/* 表单控件统一深色（原生控件靠 color-scheme，自定义样式兜底） */
+#commentaryView select,
+#commentaryView textarea,
+#commentaryView input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]) {
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+#commentaryView select:focus-visible, #commentaryView input:focus-visible, #commentaryView textarea:focus-visible {
+  outline: 1.5px solid var(--brand); outline-offset: 0;
+}
+#commentaryView input[type=range] { accent-color: var(--brand); }
+#commentaryView input[type=checkbox], #commentaryView input[type=radio] { accent-color: var(--brand); }
+/* 深色下常见浅色写死的组件逐个翻面 */
+#commentaryView .com-hist-toggle { background: #2B2E52; color: #A5B4FC; border-color: #3F437A; }
+#commentaryView .com-hist-toggle:hover { background: #343762; }
+#commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #262A4A; }
+#commentaryView .com-mode-option { border-color: var(--line); }
+#commentaryView .com-trim-card, #commentaryView .com-fixed-card, #commentaryView .com-subbar,
+#commentaryView .com-right, #commentaryView .com-cell, #commentaryView .com-entry-card {
+  box-shadow: none;
+}
+#commentaryView .com-insp-head { background: #22242A; border-bottom-color: var(--line); }
+#commentaryView .btn-ghost { color: var(--text); }
+#commentaryView .btn-ghost:hover { background: #26282E; }
+#commentaryView .com-env-status.ok { background: #12291B; border-color: #1E4D2E; color: #86EFAC; }
+#commentaryView .com-env-status.err { background: #2E1414; border-color: #5B2020; color: #FCA5A5; }
+#commentaryView .com-sub-preview { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+#commentaryView .com-feather-band { border-color: rgba(255,255,255,.45); }
+/* 覆盖层（审核/步骤/历史）跟随深色 */
+#commentaryView #comScriptPanel, #commentaryView #comStepsPanel, #commentaryView #comHistory,
+#commentaryView #comReviewActions {
+  background: #1D1F24; border-color: var(--line); color: var(--text);
+}
+#commentaryView #comReviewActions { background: #2E2510; border-color: #61501B; color: #FDE68A; }
+
+/* ---- 三栏宽度改 CSS 变量（可拖动/记忆；默认加宽：左 260 / 右 320） ---- */
+.com-left { width: var(--com-left-w, 260px); }
+.com-right { width: var(--com-right-w, 320px); }
+/* 拖动分隔条 */
+.com-splitter {
+  flex: none; width: 8px; margin: 0 -1px; position: relative;
+  cursor: col-resize; border-radius: 4px; touch-action: none;
+}
+.com-splitter::after {
+  content: ""; position: absolute; top: 30%; bottom: 30%; left: 2.5px; right: 2.5px;
+  border-radius: 3px; background: #3A3D45; opacity: .45; transition: all .15s;
+}
+.com-splitter:hover::after, .com-splitter.dragging::after {
+  background: var(--brand); opacity: 1; top: 6%; bottom: 6%;
+}
+.com-splitter.dragging { background: color-mix(in srgb, var(--brand) 14%, transparent); }
+/* 侧栏收起小拉手（贴三栏区左右边缘，竖向小把手） */
+.com-v2 { position: relative; }
+.com-edge-tab {
+  position: absolute; top: 10px; z-index: 6; width: 15px; height: 46px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text-mute);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; padding: 0; cursor: pointer;
+}
+.com-edge-tab:hover { color: var(--text); background: #2B2D34; }
+.com-edge-tab-l { left: 0; border-radius: 0 8px 8px 0; border-left: none; }
+.com-edge-tab-r { right: 0; border-radius: 8px 0 0 8px; border-right: none; }
+.com-edge-tab-l::after { content: "❮"; }
+.com-edge-tab-r::after { content: "❯"; }
+#commentaryView.com-left-off .com-edge-tab-l::after { content: "❯"; }
+#commentaryView.com-right-off .com-edge-tab-r::after { content: "❮"; }
+/* 收起态：整列与对应分隔条隐藏 */
+#commentaryView.com-left-off .com-left,
+#commentaryView.com-left-off #comSplitL { display: none; }
+#commentaryView.com-right-off .com-right,
+#commentaryView.com-right-off #comSplitR { display: none; }
+/* 覆盖层偏移跟随变量与收起态（替代旧的固定 212/252 档） */
+#comScriptPanel { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 320px) + 26px); }
+#comReviewActions { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 320px) + 26px); }
+#comStepsPanel { right: calc(var(--com-right-w, 320px) + 26px); }
+#commentaryView.com-left-off #comScriptPanel, #commentaryView.com-left-off #comReviewActions { left: 20px; }
+#commentaryView.com-right-off #comScriptPanel, #commentaryView.com-right-off #comReviewActions,
+#commentaryView.com-right-off #comStepsPanel { right: 20px; }
+
+/* ---- v2 四轮补丁：深色下遗漏的写死浅色组件 ---- */
+#commentaryView .com-mode-dropdown-toggle,
+#commentaryView .com-mode-dropdown-toggle[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+#commentaryView .com-mode-dropdown-panel {
+  background: #23252C; border-color: var(--line);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+}
+#commentaryView .com-mode-dropdown-option:hover { background: #2B2E52; }
+#commentaryView .com-mode-dropdown-option.is-selected {
+  background: color-mix(in srgb, var(--brand) 30%, #1D1F24); color: #C7D2FE;
+}
+/* 默认（无变体）按钮与次要按钮深色化 */
+#commentaryView .btn:not(.btn-primary):not(.btn-danger):not(.com-generate-main):not(.com-insp-done) {
+  background: var(--surface-2); color: var(--text); border-color: var(--line);
+}
+#commentaryView .btn:not(.btn-primary):not(.btn-danger):not(.com-generate-main):not(.com-insp-done):hover {
+  background: #2B2D34;
+}
+/* 解说长度 range 轨道深色 */
+#commentaryView input[type=range] {
+  background: transparent;
+}
+#commentaryView .com-ai-config .adv { background: var(--surface-2); }
+#commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }

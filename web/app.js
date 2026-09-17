@@ -15857,3 +15857,70 @@ el.dwVidPlayer.removeAttribute('src');
     switchView,
   });
 })();
+
+/* ==== v2 四轮（2026-09-17）：三栏拖动分隔条 + 侧栏收起（宽度/状态存 localStorage） ==== */
+(function () {
+  const root = document.getElementById('commentaryView');
+  if (!root) return;
+  const v2 = root.querySelector('.com-v2');
+  if (!v2) return;
+  const colL = v2.querySelector('.com-left');
+  const colR = v2.querySelector('.com-right');
+
+  // 恢复上次宽度/收起状态
+  try {
+    const lw = parseInt(localStorage.getItem('com_left_w'), 10);
+    const rw = parseInt(localStorage.getItem('com_right_w'), 10);
+    if (lw >= 170 && lw <= 480) root.style.setProperty('--com-left-w', lw + 'px');
+    if (rw >= 200 && rw <= 520) root.style.setProperty('--com-right-w', rw + 'px');
+    if (localStorage.getItem('com_left_off') === '1') root.classList.add('com-left-off');
+    if (localStorage.getItem('com_right_off') === '1') root.classList.add('com-right-off');
+  } catch (e) { /* 隐私模式等忽略 */ }
+
+  // 拖动分隔条
+  function bindSplit(handle, panel, side) {
+    if (!handle || !panel) return;
+    let startX = 0, startW = 0, dragging = false;
+    handle.addEventListener('pointerdown', (e) => {
+      dragging = true; startX = e.clientX;
+      startW = panel.getBoundingClientRect().width;
+      handle.classList.add('dragging');
+      handle.setPointerCapture(e.pointerId);
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const delta = side === 'l' ? (e.clientX - startX) : (startX - e.clientX);
+      const min = side === 'l' ? 170 : 200, max = side === 'l' ? 480 : 520;
+      const w = Math.min(max, Math.max(min, startW + delta));
+      root.style.setProperty(side === 'l' ? '--com-left-w' : '--com-right-w', w + 'px');
+    });
+    const done = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem(side === 'l' ? 'com_left_w' : 'com_right_w',
+          String(Math.round(panel.getBoundingClientRect().width)));
+      } catch (err) { /* ignore */ }
+    };
+    handle.addEventListener('pointerup', done);
+    handle.addEventListener('pointercancel', done);
+  }
+  bindSplit(v2.querySelector('#comSplitL'), colL, 'l');
+  bindSplit(v2.querySelector('#comSplitR'), colR, 'r');
+
+  // 侧栏收起/展开
+  function bindTab(tabId, cls, storeKey) {
+    const tab = document.getElementById(tabId);
+    if (!tab) return;
+    tab.addEventListener('click', () => {
+      root.classList.toggle(cls);
+      try { localStorage.setItem(storeKey, root.classList.contains(cls) ? '1' : '0'); } catch (e) { /* ignore */ }
+    });
+  }
+  bindTab('comLeftTab', 'com-left-off', 'com_left_off');
+  bindTab('comRightTab', 'com-right-off', 'com_right_off');
+})();
