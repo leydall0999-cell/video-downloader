@@ -3218,6 +3218,23 @@ img { max-width: 100%; display: block; }
 .com-row-2 > .com-cell-r2-vision { flex: 0 0 auto; }
 .com-row-2 > .com-cell-r2-tts { flex: 1 1 200px; min-width: 0; }
 .com-row-2 > .com-cell-r2-asr { flex: 1 1 320px; min-width: 0; }
+/* 第 3 行：片头片尾处理（2026-09-17 晚自左栏「固定选择项」卡搬入，归入「解说参数」这一类）
+   ⚠️ 复用既有的 .com-opt-row-fixed / .com-mode-fixed（样式在 2855 一带），
+      只把方向从横排改竖排：右栏可用宽仅 240px，两个选项各占半行会被长文案压成两行碎片。 */
+.com-row-3 { display: flex; flex-wrap: wrap; gap: .5rem .7rem; align-items: flex-start; margin-top: .55rem; }
+.com-row-3 > .com-cell-introoutro { flex: 1 1 100%; min-width: 0; }
+.com-row-3 > .com-cell-introoutro > .com-opt-title { font-size: .8rem; font-weight: 600; margin: 0 0 .45rem; }
+.com-row-3 .com-opt-row-fixed { flex-direction: column; gap: .4rem; }
+.com-row-3 .com-opt-row-fixed > .com-mode-fixed {
+  flex: 0 0 auto; border-radius: 8px; padding: .38rem .5rem;
+  align-items: flex-start; font-size: .74rem; line-height: 1.45;
+}
+.com-row-3 .com-opt-row-fixed > .com-mode-fixed > input { margin-top: .15rem; }
+/* 选中态：原写法写死 #F8F8FF（深色主题下会变成白底）→ 改用品牌色与 --surface 混色，主题自适应 */
+.com-row-3 .com-opt-row-fixed > .com-mode-fixed:has(input:checked) {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface));
+}
 .com-checkbox-row { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; line-height: 1.3; }
 /* 第 3-7 行：2 列网格 */
 .com-grid {
@@ -4701,6 +4718,71 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
   object-fit: contain;
   background: #000; border-radius: 6px;
 }
+/* ---- 中栏：播放模块（2026-09-17 晚）----
+   原 video 的浏览器原生 controls 是「压在画面底部」的浮层（wkwebview 下是深色圆角浮条），
+   用户要求把它移到画面外：位置＝预览舞台下方、生成脚本（.com-actionbar）上方。
+   做法：video 去掉 controls，控制条自己实现（app.js initComPlayerBar()）。
+   ⚠️ 不要给 video 加回 controls；也不要给本条的按钮写死颜色（走 --text/--surface 才能随主题翻面）。 */
+.com-player {
+  flex: none;
+  display: flex; align-items: center; gap: .3rem;
+  padding: .3rem .55rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+}
+.com-player-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 2.15rem; height: 1.8rem; padding: 0 .3rem;
+  background: none; border: 1px solid transparent; border-radius: 7px;
+  color: var(--text); font-family: inherit; font-size: .82rem; line-height: 1;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.com-player-btn:hover { background: color-mix(in srgb, var(--brand) 9%, transparent); }
+.com-player-play { color: var(--brand); }
+.com-player-play span { display: block; font-size: .95rem; }
+.com-player-time {
+  flex: none; min-width: 2.9rem; text-align: center;
+  font-size: .74rem; color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.com-player-seek { flex: 1 1 auto; width: auto; min-width: 60px; accent-color: var(--brand); cursor: pointer; }
+.com-player-vol { flex: none; width: 54px; accent-color: var(--brand); cursor: pointer; }
+/* 无素材：整条置灰（不隐藏，避免「一会儿出现一会儿消失」）；JS 只负责加/去 .is-idle */
+.com-player.is-idle { opacity: .48; }
+.com-player.is-idle .com-player-btn,
+.com-player.is-idle .com-player-seek,
+.com-player.is-idle .com-player-vol { cursor: default; }
+.com-player.is-idle .com-player-btn:hover { background: none; }
+
+/* 剧场模式（⛶ 全屏）：把预览舞台临时提升为整窗口画面。
+   🔴 为什么不用标准 Fullscreen API：App 的 WKWebView 把它禁掉了 —— WKWebView 实测
+      `video.requestFullscreen` / `document.fullscreenEnabled` 都是 undefined
+      （只留了 iOS 时代的 webkitEnterFullscreen，在 macOS 下行为不可靠）。
+      移出原生 controls 不能因此丢掉全屏能力，所以用自研覆盖层等价替代：
+      提升层级 + video 自带的 width/height 100% + object-fit:contain 铺满。
+      羽化/字幕叠加层不必手动重算：它们各自的 ResizeObserver 观察的就是 #comPreview，
+      video 撑开的瞬间会自动重绘（见 app.js 10643 / 10682 两处）。 */
+html.com-theater { overflow: hidden; }
+.com-theater .com-preview-stage {
+  position: fixed; inset: 0; z-index: 9990;
+  width: auto; max-width: none;
+  height: auto !important;   /* 🔴 必须 !important：comSyncStageSize() 会给舞台写内联 height */
+  aspect-ratio: auto; margin: 0; padding: 0;
+  border-radius: 0; background: #000;
+}
+.com-theater .com-preview-stage video#comPreview { border-radius: 0; }
+.com-theater #comPlayerBar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 9991;
+  margin: 0; border: none; border-radius: 0;
+  background: rgba(20, 20, 22, .94); border-top: 1px solid rgba(255, 255, 255, .14);
+}
+.com-theater #comPlayerBar .com-player-btn { color: #F3F4F6; }
+.com-theater #comPlayerBar .com-player-btn:hover { background: rgba(255, 255, 255, .12); }
+.com-theater #comPlayerBar .com-player-play { color: #A5B4FC; }
+.com-theater #comPlayerBar .com-player-time { color: #C7CBD1; }
+
 /* ---- 中栏：操作条（生成脚本 + 字数上限） ---- */
 .com-actionbar { display: flex; gap: 10px; align-items: stretch; flex: none; }
 .com-actionbar #comGenerateRow { flex: 1; margin: 0; padding: 0; }
@@ -4819,20 +4901,8 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 .com-preview-stage .com-feather-band-tag { color: rgba(255,255,255,.55); }
 
 /* ---- v2 补丁（2026-09-17 二轮） ---- */
-/* 左栏「片头片尾处理」静态卡（脱离 dropdown 机制，radio 直接可见） */
-.com-fixed-card {
-  border: 1px solid var(--line); border-radius: var(--radius-md);
-  background: var(--surface); padding: .55rem .7rem .65rem;
-}
-.com-fixed-card .com-opt-title { font-size: .8rem; font-weight: 600; margin-bottom: .45rem; }
-.com-fixed-card .com-opt-row-fixed { display: flex; flex-direction: column; gap: .4rem; }
-.com-fixed-card .com-mode-option {
-  display: flex; align-items: flex-start; gap: .4rem;
-  border: 1px solid var(--line); border-radius: var(--radius-sm);
-  padding: .4rem .5rem; font-size: .74rem; line-height: 1.45; cursor: pointer;
-}
-.com-fixed-card .com-mode-option:has(input:checked) { border-color: var(--brand); background: #F8F8FF; }
-.com-fixed-card .com-mode-option input { margin-top: .15rem; }
+/* 左栏「片头片尾处理」静态卡 → 2026-09-17 晚已搬进右栏「🎬 解说参数」卡（.com-row-3），
+   原 .com-fixed-card 规则全部下线（类名已不再出现在 index.html）。 */
 /* 右栏 row-1：270px 窄栏下 5 个下拉允许换行 */
 .com-right .com-row-1 { flex-wrap: wrap; }
 .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 46%; }
@@ -4857,19 +4927,12 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 .com-hist-toggle { padding: .34rem .65rem; font-size: .76rem; }
 
 /* 2) 左栏卡片统一质感：同圆角、同描边、轻投影、标题同构 */
-.com-left .com-trim-card, .com-left .com-fixed-card {
+.com-left .com-trim-card {
   border-radius: 10px; box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
 }
 .com-left .com-trim-card { padding-bottom: .6rem; }
 .com-left .com-trim-head { padding: .55rem .7rem .35rem; }
 .com-left .com-trim-head h3 { display: flex; align-items: center; gap: .35rem; margin: 0; font-size: .85rem; }
-.com-left .com-fixed-card { padding: .55rem .7rem .6rem; }
-.com-left .com-fixed-card .com-opt-title {
-  display: flex; align-items: center; gap: .35rem;
-  font-size: .85rem; margin: 0 0 .45rem;
-}
-.com-left .com-fixed-card .com-opt-title::before { content: "✂️"; font-size: .8rem; }
-.com-left .com-mode-fixed { border-radius: 8px; padding: .38rem .5rem; }
 
 /* 3) 右栏检查器：头部带底色分隔、内容左右留白一致 */
 .com-right { border-radius: 10px; }
@@ -4947,9 +5010,8 @@ html.theme-dark #commentaryView input[type=checkbox], html.theme-dark #commentar
 /* 深色下常见浅色写死的组件逐个翻面 */
 html.theme-dark #commentaryView .com-hist-toggle { background: #2B2E52; color: #A5B4FC; border-color: #3F437A; }
 html.theme-dark #commentaryView .com-hist-toggle:hover { background: #343762; }
-html.theme-dark #commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #262A4A; }
 html.theme-dark #commentaryView .com-mode-option { border-color: var(--line); }
-html.theme-dark #commentaryView .com-trim-card, html.theme-dark #commentaryView .com-fixed-card, html.theme-dark #commentaryView .com-subbar,
+html.theme-dark #commentaryView .com-trim-card, html.theme-dark #commentaryView .com-subbar,
 html.theme-dark #commentaryView .com-right, html.theme-dark #commentaryView .com-cell, html.theme-dark #commentaryView .com-entry-card {
   box-shadow: none;
 }
@@ -5054,14 +5116,13 @@ html.theme-dark #commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
 #commentaryView .com-insp-head b { font-size: .8rem; }
 #commentaryView .com-right select,
 #commentaryView .com-right input:not([type=checkbox]):not([type=radio]):not([type=range]) { font-size: .74rem; }
-#commentaryView .com-fixed-card .com-opt-title { font-size: .78rem; }
-#commentaryView .com-fixed-card .com-mode-option { font-size: .7rem; padding: .3rem .45rem; }
+/* 片头片尾选项（已搬进右栏解说参数卡 .com-row-3）：窄栏下用小一号字，与同卡其他行协调 */
+#commentaryView .com-row-3 .com-opt-title { font-size: .78rem; }
+#commentaryView .com-row-3 .com-opt-row-fixed > .com-mode-fixed { font-size: .7rem; padding: .3rem .45rem; }
 #commentaryView .com-trim-head h3 { font-size: .8rem; }
 /* 时间轴/环境横幅字号微降 */
 #commentaryView .com-tl-head { font-size: .68rem; }
 #commentaryView .com-env-status { font-size: .7rem; }
-/* 左栏 radio 选中底色在深色下更柔和 */
-#commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #252840; }
 
 /* ======================================================================
    ===== v2 六轮（2026-09-17）：正剧范围卡重排 + 深色滑块轨道 + 上传前占位 =====

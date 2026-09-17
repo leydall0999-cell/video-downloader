@@ -16038,3 +16038,138 @@ el.dwVidPlayer.removeAttribute('src');
     m.addEventListener('change', function () { if (current() === 'system') apply('system'); });
   }
 })();
+
+/* ======================================================================
+   播放模块（2026-09-17 晚）：把播放条从画面里搬出来，独立成一条
+   ----------------------------------------------------------------------
+   背景：#comPreview 原来用浏览器原生 controls —— 它是**压在画面底部**的浮层
+   （WKWebView 下就是一条深色圆角浮条，会盖住画面下沿）。用户要求「把这个播放模块
+   移到视频预览下方、生成脚本上方」→ video 去掉 controls，改由 #comPlayerBar 驱动；
+   DOM 位置就在 .com-preview-stage 与 .com-actionbar 之间。
+   · 不碰既有逻辑：羽化实时预览 / 字幕预览层 / 舞台高度自适应 都挂在 video 自身的事件
+     与 el.comPreview 上，这里只是额外接一套控件。
+   · 无素材 → 整条加 .is-idle 并 disable 各控件（置灰、不隐藏，避免一闪一现）。
+   · 中栏多出这一条后，comSyncStageSize() 会把它自动算进「同栏其他卡片高度」，
+     舞台高度随之收一点，无需另做处理。
+   ====================================================================== */
+(function initComPlayerBar() {
+  var v = document.getElementById('comPreview');
+  var bar = document.getElementById('comPlayerBar');
+  if (!v || !bar) return;
+  var icoPlay = document.getElementById('comPbPlayIco');
+  var btnPlay = document.getElementById('comPbPlay');
+  var btnBack = document.getElementById('comPbBack');
+  var btnFwd = document.getElementById('comPbFwd');
+  var btnMute = document.getElementById('comPbMute');
+  var btnFull = document.getElementById('comPbFull');
+  var elCur = document.getElementById('comPbCur');
+  var elDur = document.getElementById('comPbDur');
+  var seek = document.getElementById('comPbSeek');
+  var vol = document.getElementById('comPbVol');
+  var SKIP = 15;
+  var dragging = false;
+  var widgets = [btnPlay, btnBack, btnFwd, btnMute, seek, vol];
+
+  function fmt(sec) {
+    var s = Number(sec);
+    if (!isFinite(s) || s < 0) s = 0;
+    s = Math.floor(s);
+    var mm = Math.floor(s / 60), ss = s % 60;
+    return (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+  }
+  // 有 src 且已元数据就绪才算「有素材」；此时才让控件可点
+  function hasMedia() {
+    return !!v.getAttribute('src') && v.readyState > 0 && isFinite(v.duration) && v.duration > 0;
+  }
+  function syncIcon() { if (icoPlay) icoPlay.textContent = v.paused ? '▶' : '❚❚'; }
+  function syncTime() {
+    if (dragging) return;
+    elCur.textContent = fmt(v.currentTime);
+    var d = hasMedia() ? v.duration : 0;
+    elDur.textContent = d ? fmt(d) : '--:--';
+    if (d) seek.value = String(Math.round((v.currentTime / d) * 1000));
+  }
+  function syncIdle() {
+    var idle = !hasMedia();
+    bar.classList.toggle('is-idle', idle);
+    for (var i = 0; i < widgets.length; i++) { if (widgets[i]) widgets[i].disabled = idle; }
+    if (idle) { elCur.textContent = '00:00'; elDur.textContent = '--:--'; seek.value = '0'; }
+    syncIcon();
+  }
+  function toggle() {
+    if (!hasMedia()) return;
+    if (v.paused) { var p = v.play(); if (p && p.catch) p.catch(function () { /* 自动播放被拒等：静默 */ }); }
+    else v.pause();
+  }
+
+  if (btnPlay) btnPlay.addEventListener('click', toggle);
+  // 去掉原生 controls 后，点画面播放/暂停要自己补上（原先是原生控件的默认行为）
+  v.addEventListener('click', toggle);
+  if (btnBack) btnBack.addEventListener('click', function () {
+    if (hasMedia()) v.currentTime = Math.max(0, v.currentTime - SKIP);
+  });
+  if (btnFwd) btnFwd.addEventListener('click', function () {
+    if (hasMedia()) v.currentTime = Math.min(v.duration, v.currentTime + SKIP);
+  });
+
+  if (seek) {
+    seek.addEventListener('input', function () {
+      dragging = true;
+      if (!hasMedia()) return;
+      v.currentTime = (Number(seek.value) / 1000) * (v.duration || 0);
+      elCur.textContent = fmt(v.currentTime);   // 拖动时时间码跟手，不等 timeupdate
+    });
+    seek.addEventListener('change', function () { dragging = false; syncTime(); });
+  }
+
+  if (vol) {
+    vol.addEventListener('input', function () {
+      var val = Number(vol.value);
+      v.volume = val;
+      v.muted = val === 0;
+    });
+  }
+  if (btnMute) {
+    btnMute.addEventListener('click', function () {
+      v.muted = !v.muted;
+      if (!v.muted && v.volume === 0) v.volume = 1;
+    });
+  }
+  v.addEventListener('volumechange', function () {
+    if (vol) vol.value = String(v.muted ? 0 : v.volume);
+    if (btnMute) btnMute.textContent = (v.muted || v.volume === 0) ? '🔇' : '🔊';
+  });
+
+  // 全屏 = 自研「剧场模式」（把舞台提升为整窗口画面 + 控制条贴窗口底）。
+  // 🔴 不用标准 Fullscreen API：App 的 WKWebView 把它禁了（实测 requestFullscreen 与
+  //    document.fullscreenEnabled 都是 undefined，只剩 iOS 遗留的 webkitEnterFullscreen，
+  //    macOS 下不可靠）。去掉原生 controls 不能因此丢全屏，故用纯 CSS 覆盖层等价替代。
+  //    Esc 或再点一次退出（退出后内联高度/叠加层都会自行恢复，羽化与字幕层由各自的
+  //    ResizeObserver 跟随 #comPreview 重绘）。
+  function applyTheater(on) {
+    document.documentElement.classList.toggle('com-theater', on);
+    if (btnFull) btnFull.title = on ? '退出全屏（Esc）' : '全屏';
+  }
+  if (btnFull) {
+    btnFull.addEventListener('click', function () {
+      applyTheater(!document.documentElement.classList.contains('com-theater'));
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && document.documentElement.classList.contains('com-theater')) applyTheater(false);
+    });
+  }
+
+  v.addEventListener('play', syncIcon);
+  v.addEventListener('pause', syncIcon);
+  v.addEventListener('ended', syncIcon);
+  v.addEventListener('timeupdate', syncTime);
+  v.addEventListener('seeked', syncTime);
+  v.addEventListener('durationchange', function () { syncIdle(); syncTime(); });
+  v.addEventListener('loadedmetadata', function () { syncIdle(); syncTime(); });
+  v.addEventListener('emptied', function () { syncIdle(); });
+
+  if (vol) vol.value = String(v.volume);
+  syncIdle();
+  syncTime();
+  syncIcon();
+})();

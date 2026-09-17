@@ -1916,14 +1916,9 @@
         <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset" data-page-node-id="MGZ2olbRoqt4U2z9pKrGwG">清空（回到自动检测）</button>
       </div>
       </div>
-      <!-- [v2] 固定选择项（片头片尾处理）自右栏 row-1 搬来，紧贴正剧范围 -->
-      <div class="com-fixed-card">
-        <div class="com-opt-title">片头片尾处理</div>
-        <div class="com-opt-row com-opt-row-fixed">
-          <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
-          <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾（自动检测后剪掉）</span></label>
-        </div>
-      </div>
+      <!-- 「片头片尾处理」已于 2026-09-17 晚搬进右栏「🎬 解说参数」折叠卡（用户要求：
+           它属于解说参数这一类，不该单独占左栏一张卡）。左栏现在只承担「预览与正剧范围」。
+           取值逻辑不变：JS 仍按 input[name="comIntroOutroMode"]:checked 读。 -->
       <!-- [v2] 未选视频时左栏占位提示（纯 CSS 随 comTrimCard 显隐，非控件） -->
       <div class="com-left-placeholder">📹 选择视频后<br>这里出现「预览与正剧范围」调节</div>
     </div><!-- /com-left -->
@@ -1932,7 +1927,10 @@
       <div class="com-center">
         <div class="com-preview-stage">
       <div class="com-preview-wrap" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I-wrap">
-        <video id="comPreview" class="com-preview" controls preload="metadata" data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
+        <!-- 🔴 2026-09-17 晚：原生 controls 已移除（用户要求「把播放模块移到视频预览下方、
+             生成脚本上方」）→ 控制条改由下方 #comPlayerBar 承担，画面里不再压一条控件。
+             点击画面仍可播放/暂停（app.js 的 initComPlayerBar 里绑定）。 -->
+        <video id="comPreview" class="com-preview" preload="metadata" playsinline data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
         <!-- 原字幕羽化实时预览层：把「探测到的原字幕带」按当前擦除方式擦掉，复刻管线
              _cover_segment 的 fade/stretch/blur 三种效果（pointer-events:none，不挡播放器）。
              由 comFeatherPaint() 逐帧重绘；用户调下方参数即时看到结果。 -->
@@ -1950,6 +1948,20 @@
       </div>
 <!--@@pv@@-->
         </div><!-- /com-preview-stage -->
+        <!-- ===== 播放模块（2026-09-17 晚）：原 video 原生 controls 移出画面，独立成一条，
+             位置＝视频预览下方、生成脚本（.com-actionbar）上方。逻辑见 app.js 的 initComPlayerBar()。
+             无素材时整条置灰不可点（不隐藏，避免「一会儿出现一会儿消失」）。 ===== -->
+        <div class="com-player" id="comPlayerBar" role="group" aria-label="播放控制">
+          <button type="button" class="com-player-btn" id="comPbBack" title="后退 15 秒" aria-label="后退 15 秒">⟲15</button>
+          <button type="button" class="com-player-btn com-player-play" id="comPbPlay" title="播放 / 暂停" aria-label="播放"><span id="comPbPlayIco">▶</span></button>
+          <button type="button" class="com-player-btn" id="comPbFwd" title="前进 15 秒" aria-label="前进 15 秒">15⟳</button>
+          <span class="com-player-time" id="comPbCur">00:00</span>
+          <input type="range" class="com-player-seek" id="comPbSeek" min="0" max="1000" step="1" value="0" aria-label="播放进度" />
+          <span class="com-player-time" id="comPbDur">--:--</span>
+          <button type="button" class="com-player-btn" id="comPbMute" title="静音 / 取消静音" aria-label="静音">🔊</button>
+          <input type="range" class="com-player-vol" id="comPbVol" min="0" max="1" step="0.01" value="1" title="音量" aria-label="音量" />
+          <button type="button" class="com-player-btn" id="comPbFull" title="全屏" aria-label="全屏">⛶</button>
+        </div>
         <div class="com-actionbar">
           <div class="com-generate-row" id="comGenerateRow">
             <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" title="生成解说脚本 —— 生成后可在右侧审核、修改，确认无误再渲染成片">生成脚本</button>
@@ -2085,7 +2097,7 @@
       <details class="com-fold-card" id="comOptsFold">
         <summary class="com-fold-head">
           <span class="com-fold-title">🎬 解说参数</span>
-          <span class="com-fold-hint">类型 / 高光 / 画幅 / 引擎</span>
+          <span class="com-fold-hint">类型 / 高光 / 画幅 / 片头片尾 / 引擎</span>
         </summary>
         <div class="com-opts" id="comOpts" data-page-node-id="ZRiiH42GFUywZFNYdV5GXS">
       <!-- ===== 第 1 行：5 个下拉 trigger 横排 ===== -->
@@ -2159,6 +2171,20 @@
             <input id="comCorrectTranscript" type="checkbox" checked data-page-node-id="VzxQ8HRcGPIUjBdffeOqFE" />
             <span data-page-node-id="ZsfFzq2v2tlMHhsoUGDJ7A">转写稿 ASR 校正（修正同音错字/专有名词；关闭省 token）</span>
           </label>
+        </div>
+      </div>
+
+      <!-- ===== 第 3 行：片头片尾处理（2026-09-17 晚自左栏「固定选择项」卡搬入）=====
+           用户要求：它属于解说参数这一类，折进本卡当子项，不再单独占左栏一张卡。
+           ⚠️ radio 的 name/取值方式保持原样（JS 按 input[name="comIntroOutroMode"]:checked 读），
+              搬的只是 DOM 位置，逻辑零改动。 -->
+      <div class="com-row com-row-3" id="comIntroOutroRow">
+        <div class="com-cell com-cell-introoutro">
+          <div class="com-opt-title">✂️ 片头片尾处理</div>
+          <div class="com-opt-row com-opt-row-fixed">
+            <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b>（自动检测边界，片头片尾绝对不解说）</span></label>
+            <label class="com-mode-option com-mode-fixed"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾（自动检测后剪掉）</span></label>
+          </div>
         </div>
       </div>
 
