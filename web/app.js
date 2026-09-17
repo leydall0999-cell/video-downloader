@@ -553,9 +553,11 @@
     comPreview: $('comPreview'),
     comTrimDuration: $('comTrimDuration'),
     comTrimTitle: $('comTrimTitle'),
-    comTrimSetStart: $('comTrimSetStart'),
-    comTrimSetEnd: $('comTrimSetEnd'),
+    comDramaStartRange: $('comDramaStartRange'),
+    comDramaEndRange: $('comDramaEndRange'),
     comTrimReset: $('comTrimReset'),
+    comRegenScript: $('comRegenScript'),
+    comGenerateRow: $('comGenerateRow'),
     comEta: $('comEta'),
     tabCommentary: $('tabCommentary'),
     // 上传转换（需求文档模块一）
@@ -8688,6 +8690,7 @@ el.dwVidPlayer.removeAttribute('src');
           el.comScriptPanel.hidden = true;
           el.comReviewActions.hidden = true;
           el.comStatus.textContent = `生成失败：${st.error || '未知错误'}`;
+          if (el.comGenerateRow) el.comGenerateRow.hidden = false;  // 失败：底部入口回来
           el.comGenerateScript.disabled = false;
           el.comGenerateScript.textContent = '重试生成脚本';
         } else if (st.status === 'running') {
@@ -8850,6 +8853,9 @@ el.dwVidPlayer.removeAttribute('src');
       el.comScriptSave.disabled = false;
       el.comScriptRender.disabled = false;
       currentScriptJobId = job_id; // 兜底：面板打开时确保全局 job_id 与显示内容一致
+      // 审核态：底部粘性条的「重新生成脚本」大按钮退场（2026-09-17）——它与「生成成片」
+      // 空间贴近且层级在上，用户极易误触白等一遍；重新生成入口挪到审核区提示框上方。
+      if (el.comGenerateRow) el.comGenerateRow.hidden = true;
       el.comGenerateScript.textContent = '重新生成脚本';
       el.comGenerateScript.disabled = false;
 
@@ -8866,6 +8872,7 @@ el.dwVidPlayer.removeAttribute('src');
         retryBtn.addEventListener('click', () => loadScriptToPanel(job_id));
       }
       el.comScriptStatus.hidden = true;
+      if (el.comGenerateRow) el.comGenerateRow.hidden = false;  // 加载失败：底部入口回来
       el.comGenerateScript.disabled = false;
       el.comGenerateScript.textContent = '重试生成脚本';
     }
@@ -9330,6 +9337,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comGenerateScript.disabled = false;
     el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     el.comGenerateScript.hidden = false;
+    if (el.comGenerateRow) el.comGenerateRow.hidden = false;  // 离开审核态：底部入口恢复
     el.comScriptPanel.hidden = true;
     el.comScriptSegments.replaceChildren();
     el.comScriptStatus.hidden = true;
@@ -9554,6 +9562,9 @@ el.dwVidPlayer.removeAttribute('src');
       comPreviewDuration = el.comPreview.duration || 0;
       comPreviewW = el.comPreview.videoWidth || 0;
       comPreviewH = el.comPreview.videoHeight || 0;
+      // 起点/终点滑块量程 = 视频时长（秒），滑块值直接就是绝对时间
+      if (el.comDramaStartRange) el.comDramaStartRange.max = String(comPreviewDuration || 100);
+      if (el.comDramaEndRange) el.comDramaEndRange.max = String(comPreviewDuration || 100);
       resetTrim();
     };
     // 加载失败不再硬藏卡片 —— 让用户能继续操作，错误提示放在状态栏
@@ -9574,6 +9585,9 @@ el.dwVidPlayer.removeAttribute('src');
     comTrimEnd = comPreviewDuration || 0;
     if (el.comDramaStart) el.comDramaStart.value = '';
     if (el.comDramaEnd) el.comDramaEnd.value = '';
+    // 滑块回到「起点=0 / 终点=片尾」的默认位置
+    if (el.comDramaStartRange) el.comDramaStartRange.value = '0';
+    if (el.comDramaEndRange) el.comDramaEndRange.value = String(comPreviewDuration || 100);
     syncTrimInputs();
   };
 
@@ -9768,7 +9782,8 @@ el.dwVidPlayer.removeAttribute('src');
     return '';
   };
 
-  el.comGenerateScript.addEventListener('click', async () => {
+  // 生成/重新生成脚本的统一入口：底部主按钮与审核区「↻ 重新生成脚本」共用同一逻辑。
+  const comStartScriptGeneration = async () => {
     // 兜底：预检未通过时按钮通常已被禁用，这里再挡一次，避免任何路径绕过前置判定
     if (comPrecheckBlocked) return;
     if (!commentaryEnvReady) {
@@ -9796,7 +9811,9 @@ el.dwVidPlayer.removeAttribute('src');
     }
     el.comStatus.hidden = false;
     el.comStatus.textContent = '请从下载历史库选择视频，或选择本地视频';
-  });
+  };
+  el.comGenerateScript.addEventListener('click', comStartScriptGeneration);
+  if (el.comRegenScript) el.comRegenScript.addEventListener('click', comStartScriptGeneration);
 
   // 解说风格切换：联动默认音色 + 更新提示文案（用户仍可在审核面板手动改音色）
   document.querySelectorAll('input[name="comStyle"]').forEach((r) => {
@@ -10974,8 +10991,8 @@ el.dwVidPlayer.removeAttribute('src');
 
   document.querySelectorAll('[data-com-select]').forEach(initComSelect);
 
-  // 正剧范围控件：起点/终点滑块已下线（与「正剧开始/片尾开始时间」重复），
-  // 现在只有两个绝对时间输入 + 「用播放位置设…」；trim_start/trim_end 恒为整片。
+  // 正剧范围控件（2026-09-17 恢复滑块）：起点/终点滑块直接驱动「正剧开始/片尾开始」
+  // 绝对时间输入，双向同步；trim_start/trim_end 恒为整片。
   const normalizeDramaInput = (input) => {
     if (!input) return;
     const raw = input.value.trim();
@@ -10983,18 +11000,33 @@ el.dwVidPlayer.removeAttribute('src');
     const sec = parseTimeSec(raw);
     // 认得出就统一成 HH:MM:SS（引擎两个写法都吃，统一了更好核对片长）；认不出则原样留给后端报错
     if (sec != null) input.value = formatHMS(sec);
+    syncDramaSlider(input);
     updateTrimDurationText();
+  };
+  // 输入框 → 滑块：手动改时间（或「用播放位置」类路径）后让滑块跟上去
+  const syncDramaSlider = (input) => {
+    if (!input) return;
+    const sec = parseTimeSec(input.value);
+    const range = input === el.comDramaStart ? el.comDramaStartRange : el.comDramaEndRange;
+    if (range && sec != null) range.value = String(Math.max(0, sec));
   };
   el.comDramaStart.addEventListener('change', () => normalizeDramaInput(el.comDramaStart));
   el.comDramaEnd.addEventListener('change', () => normalizeDramaInput(el.comDramaEnd));
-  const setDramaFromPlayhead = (which) => {
-    const input = which === 'start' ? el.comDramaStart : el.comDramaEnd;
-    if (!input || !el.comPreview) return;
-    input.value = formatHMS(Math.max(0, Math.floor(el.comPreview.currentTime || 0)));
-    updateTrimDurationText();
-  };
-  el.comTrimSetStart.addEventListener('click', () => setDramaFromPlayhead('start'));
-  el.comTrimSetEnd.addEventListener('click', () => setDramaFromPlayhead('end'));
+  // 滑块 → 输入框：拖动即落值（等价于旧「用播放位置设起点/终点」，但可以任意微调）
+  if (el.comDramaStartRange) {
+    el.comDramaStartRange.addEventListener('input', () => {
+      const v = parseFloat(el.comDramaStartRange.value) || 0;
+      el.comDramaStart.value = formatHMS(Math.max(0, Math.floor(v)));
+      updateTrimDurationText();
+    });
+  }
+  if (el.comDramaEndRange) {
+    el.comDramaEndRange.addEventListener('input', () => {
+      const v = parseFloat(el.comDramaEndRange.value) || 0;
+      el.comDramaEnd.value = formatHMS(Math.max(0, Math.floor(v)));
+      updateTrimDurationText();
+    });
+  }
   el.comTrimReset.addEventListener('click', resetTrim);
 
   el.comRefresh.addEventListener('click', loadCommentary);

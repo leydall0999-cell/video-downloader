@@ -1877,19 +1877,22 @@
       <!-- 原「起点/终点」（外层源文件裁剪 + 滑块）已下线：与「正剧开始/片尾开始时间」都在界定正片范围，
            两处同填会叠加跳过（trim 先裁、drama 再按绝对时间前移）。现在只保留绝对时间一处，
            输入框直接放在原先起点/终点这一行；trim_start/trim_end 恒为整片，不再做外层源裁剪。 -->
+      <!-- 「起点/终点」滑块（2026-09-17 应用户要求恢复）：直接驱动下方的正剧开始/片尾开始
+           绝对时间输入（同一份值，双向同步），替代原先「用播放位置设…」两个按钮。
+           trim_start/trim_end 恒为整片，不做外层源裁剪。 -->
       <div class="com-trim-timeline com-trim-timeline-drama" data-page-node-id="6BLjipqUcjLfWZBrSYvPFH">
         <label class="com-trim-field" data-page-node-id="Quzxv91M41D2OdgehBOfzb">
-          <span class="com-trim-label" data-page-node-id="jVksehDdcj0uw5DAwRN9l1">正剧开始</span>
+          <span class="com-trim-label" data-page-node-id="jVksehDdcj0uw5DAwRN9l1">起点</span>
+          <input type="range" id="comDramaStartRange" class="com-range" min="0" max="100" step="0.1" value="0" title="拖动滑块设置正剧开始时间（与右侧输入框同步）" data-page-node-id="ulBMUMtn0Jt460GlZkSvDi" />
           <input type="text" id="comDramaStart" class="com-time-input" placeholder="00:01:25" inputmode="numeric" title="正剧开始（绝对时间，也可直接填秒数如 85）；留空＝自动检测" data-page-node-id="epPiRNymcK7wBXO31k60fD" />
         </label>
         <label class="com-trim-field" data-page-node-id="V00oLK6zeKBO8oDy6SGZX3">
-          <span class="com-trim-label" data-page-node-id="oJvQHiqJjLiBxJywxi1JqF">片尾开始</span>
+          <span class="com-trim-label" data-page-node-id="oJvQHiqJjLiBxJywxi1JqF">终点</span>
+          <input type="range" id="comDramaEndRange" class="com-range" min="0" max="100" step="0.1" value="100" title="拖动滑块设置片尾开始时间（与右侧输入框同步）" data-page-node-id="rTaEsgP64D8qyx98ECSDu9" />
           <input type="text" id="comDramaEnd" class="com-time-input" placeholder="00:44:00" inputmode="numeric" title="片尾开始（绝对时间，也可直接填秒数如 2640）；留空＝自动检测" data-page-node-id="CITywVSPijhBUV0Z7pvppD" />
         </label>
       </div>
       <div class="com-trim-actions" data-page-node-id="RZbvVbTsmrwMo8HQJKGsRZ">
-        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetStart" data-page-node-id="tebL9UGh9hHuPT4tskqaYx">↩ 用播放位置设正剧开始</button>
-        <button type="button" class="btn btn-sm btn-secondary" id="comTrimSetEnd" data-page-node-id="8gQESK87B02G9UhKdOSDAN">↪ 用播放位置设片尾开始</button>
         <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset" data-page-node-id="MGZ2olbRoqt4U2z9pKrGwG">清空（回到自动检测）</button>
       </div>
       <p class="com-trim-hint" data-page-node-id="wed9kMv6k29xXwSOGvjlL5">留空＝自动检测片头片尾。这里填的是<strong data-page-node-id="FNTPgGSJKtVwvsSZhuB518">绝对时间</strong>（可直接写秒数，如 85）；片头片尾是「保留不解说」还是「直接剪掉」，由右侧「固定选择项」决定。</p>
@@ -2249,7 +2252,7 @@
             布局末尾——DOM 顺序不变、视觉与粘性行为等同于末尾元素。
          ③ 必须保持不透明背景（下方会有内容滚过）。 -->
     <div class="com-bottom" data-page-node-id="MtOmikaEbK1RodPPszAmVU">
-            <div class="com-generate-row" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
+            <div class="com-generate-row" id="comGenerateRow" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
       <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" data-page-node-id="JPKaPDTzondWplp1ytN7S2">生成脚本（可审核修改）</button>
     </div>
             <div id="comProgress" hidden data-page-node-id="jFzpwZ2tFFuxuHnd1JW18P">
@@ -2264,6 +2267,9 @@
     </div>
     </div>
             <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
+      <!-- 重新生成脚本放在提示框上方（2026-09-17）：此前它在底部粘性条的「生成成片」上层，
+           用户想点生成成片时极易误触重新生成（白等几分钟）。挪进审核区后与成片按钮空间分离。 -->
+      <button type="button" class="btn btn-sm btn-ghost" id="comRegenScript" data-page-node-id="comRegenScriptBtn">↻ 重新生成脚本</button>
       <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
     </div>
             <div id="comStepsPanel" class="com-steps-panel" hidden data-page-node-id="XPRhfobQSM0oMHSsGpleJw">

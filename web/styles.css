@@ -2352,8 +2352,9 @@ img { max-width: 100%; display: block; }
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .5rem;
 }
 .com-trim-label { font-size: .8rem; color: var(--text-mute); white-space: nowrap; }
-/* 正剧范围行（原起点/终点行）：只剩「标签 + 时间框」，左侧贴近排布，不再给滑块留空列 */
-.com-trim-timeline-drama .com-trim-field { grid-template-columns: auto auto; justify-content: start; }
+/* 正剧范围行（2026-09-17 恢复滑块）：「标签 + 滑块(弹性) + 时间框」，滑块占中间主列 */
+.com-trim-timeline-drama .com-trim-field { grid-template-columns: auto 1fr auto; }
+.com-trim-timeline-drama .com-range { min-width: 0; }
 .com-time-input {
   width: 92px; font-size: .8rem; text-align: center; font-family: monospace;
   padding: .3rem .35rem; border: 1px solid var(--line); border-radius: 5px;
