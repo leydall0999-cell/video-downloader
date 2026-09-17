@@ -5069,7 +5069,9 @@ html.com-theater { overflow: hidden; }
    定位由 JS 写内联 left/top/width/maxHeight（见 app.js positionHistPop）。
    🔴 不能写 overflow:hidden —— 排序下拉菜单要从头部溢出，会被裁掉。 */
 #commentaryView #comHistory {
-  position: fixed; top: 0; left: 0; right: auto; bottom: auto;
+  /* 初始值只是兜底：正常路径由 JS positionHistPop() 按按钮实测写内联 left/top/width/maxHeight。
+     这里给「左栏附近」的合理初值，避免定位函数没跑到时面板贴到屏幕左上角（0,0）盖住页头。 */
+  position: fixed; top: 140px; left: 24px; right: auto; bottom: auto;
   width: 384px; max-height: 60vh;
   z-index: 56; margin: 0; padding: 0;
   display: flex; flex-direction: column; overflow: visible;
