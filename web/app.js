@@ -9689,7 +9689,12 @@ el.dwVidPlayer.removeAttribute('src');
     const name = document.createElement('span');
     name.className = 'com-name';
     name.title = it.name;
-    name.textContent = it.name;
+    // 剧名放内层 span：列表视图下 .com-name 是定宽「视窗」，内层负责超长时悬停平移
+    // 展示完整剧名（2026-09-18 用户「剧名展示不齐 / 鼠标悬停可左右滚动」）。
+    const nameIn = document.createElement('span');
+    nameIn.className = 'com-name-in';
+    nameIn.textContent = it.name;
+    name.appendChild(nameIn);
     const size = document.createElement('span');
     size.className = 'com-size';
     size.textContent = `${formatBytes(it.size)} · ${new Date(it.mtime * 1000).toLocaleString()}`;
@@ -11140,7 +11145,7 @@ el.dwVidPlayer.removeAttribute('src');
     const pop = el.comHistory, btn = comHistToggleBtn;
     if (!pop || !btn) return;
     const r = btn.getBoundingClientRect();
-    const W = Math.min(384, Math.max(240, window.innerWidth - 24));
+    const W = Math.min(320, Math.max(220, window.innerWidth - 24));
     const left = Math.max(12, Math.min(r.left, window.innerWidth - W - 12));
     const below = window.innerHeight - (r.bottom + 8) - 12;
     const above = r.top - 8 - 12;
@@ -11194,6 +11199,31 @@ el.dwVidPlayer.removeAttribute('src');
       card.classList.toggle('is-open', open);
       const v = card.querySelector('video');
       if (v) { if (open) v.setAttribute('controls', ''); else v.removeAttribute('controls'); }
+    });
+
+    // 悬停某一行 → 剧名若被截断，则内层文本缓慢左右滚动（alternate 往返）展示完整剧名。
+    // 距离/时长按实测算：--mv = -(inner.scrollWidth - name.clientWidth)，--md = 距离/42s（夹在 2.6~9s）。
+    // 只在 list 视图生效（其它视图剧名会换行显示，不需要滚）。
+    // 移出时不用清理：动画由 .com-card:hover 触发，:hover 消失即取消并回到起点。
+    el.comGrid.addEventListener('mouseover', (ev) => {
+      const t = ev.target;
+      if (!t || !t.closest) return;
+      const card = t.closest('.com-card');
+      if (!card || !el.comGrid.classList.contains('com-view-list')) return;
+      if (card.classList.contains('is-open')) return;
+      const nm = card.querySelector('.com-name'), inner = card.querySelector('.com-name-in');
+      if (!nm || !inner) return;
+      const over = Math.round(inner.scrollWidth - nm.clientWidth);
+      if (over > 4) {
+        inner.style.setProperty('--mv', (-over) + 'px');
+        inner.style.setProperty('--md', Math.min(9, Math.max(2.6, over / 42)).toFixed(2) + 's');
+        inner.setAttribute('data-ov', '1');
+        // 已经用滚动展示全名了，去掉原生 tooltip，否则它会盖住正在滚动的文字
+        nm.removeAttribute('title');
+      } else {
+        inner.removeAttribute('data-ov');
+        if (!nm.getAttribute('title')) nm.setAttribute('title', nm.textContent || '');
+      }
     });
   }
   // ===== 剪映式三轨时间轴（2026-09-17 晚）：原声 / 旁白 / 字幕 =====

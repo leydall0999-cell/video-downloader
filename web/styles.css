@@ -5072,7 +5072,7 @@ html.com-theater { overflow: hidden; }
   /* 初始值只是兜底：正常路径由 JS positionHistPop() 按按钮实测写内联 left/top/width/maxHeight。
      这里给「左栏附近」的合理初值，避免定位函数没跑到时面板贴到屏幕左上角（0,0）盖住页头。 */
   position: fixed; top: 140px; left: 24px; right: auto; bottom: auto;
-  width: 384px; max-height: 60vh;
+  width: 320px; max-height: 60vh;
   z-index: 56; margin: 0; padding: 0;
   display: flex; flex-direction: column; overflow: visible;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
@@ -5095,15 +5095,22 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 /* 头部改两行（宽 384 放不下「标题 + 4 个视图按钮 + 排序 + 关闭」一行）：
    第 1 行标题 + 关闭，第 2 行视图切换 + 排序（排序靠右）。 */
 #commentaryView #comHistory .com-history-head {
-  flex-wrap: wrap; row-gap: .3rem; flex: none;
-  margin: 0; padding: .45rem .55rem .4rem;
+  flex-wrap: wrap; row-gap: .24rem; flex: none;
+  margin: 0; padding: .36rem .45rem .32rem;
 }
 #commentaryView #comHistory .com-history-title-wrap { order: 1; flex: 1 1 auto; }
-#commentaryView #comHistory .com-history-head h3 { font-size: .86rem; }
+#commentaryView #comHistory .com-history-head h3 { font-size: .8rem; }
 #commentaryView #comHistory .com-history-toolbar {
-  order: 3; flex: 1 1 100%; justify-content: flex-start; gap: .4rem;
+  order: 3; flex: 1 1 100%; justify-content: flex-start; gap: .3rem;
 }
 #commentaryView #comHistory .com-sort { margin-left: auto; }
+/* 面板缩到 320 后，工具条按钮同步压一档，保证「4 个视图按钮 + 排序」仍在同一行 */
+#commentaryView #comHistory .com-view-toggle { padding: .1rem; }
+#commentaryView #comHistory .com-view-btn { width: 24px; height: 24px; }
+#commentaryView #comHistory .com-view-btn svg { width: 15px; height: 15px; }
+#commentaryView #comHistory .com-sort-btn {
+  min-width: 116px; padding: .3rem .42rem; font-size: .74rem; gap: .28rem;
+}
 .com-hist-close {
   order: 2; flex: none; width: 22px; height: 22px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
@@ -5117,52 +5124,67 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
    （用户截图里「两列大卡片」就是这么来的）。用 id 前缀把成片列表夺回来。 */
 #commentaryView #comHistory #comGrid {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
-  padding: .4rem .45rem .5rem;
-  display: grid; grid-template-columns: 1fr; gap: .22rem;
+  padding: .3rem .32rem .36rem;
+  display: grid; grid-template-columns: 1fr; gap: .14rem;
   /* 🔴 必须写 max-content：`grid-auto-rows: auto` 时 WebKit 把「含 aspect-ratio 子元素的
      卡片」的行轨道高算成约 21px（≈ 一行文字），而卡片实际渲染 51px → 18 行全部互相
      压叠 30px（实测 row0 465..516 / row1 486..537）。改成 max-content 后轨道=卡片高。 */
   grid-auto-rows: max-content;
 }
-/* ---- 列表视图 = 紧凑行（384px 宽里一屏看 7~8 条）---- */
+/* ---- 列表视图 = 紧凑行（320px 面板、单行约 34px，一屏 9~10 条）---- */
 #comGrid.com-view-list .com-card {
-  flex-direction: row; flex-wrap: nowrap; align-items: center; gap: .45rem;
-  padding: .2rem .34rem; border-radius: 8px; box-shadow: none; cursor: pointer;
+  flex-direction: row; flex-wrap: nowrap; align-items: center; gap: .3rem;
+  padding: .15rem .28rem; border-radius: 7px; box-shadow: none; cursor: pointer;
   transition: background .12s, border-color .12s;
 }
 #comGrid.com-view-list .com-card:hover {
   transform: none; background: var(--bg-soft, #f5f6f8);
   border-color: color-mix(in srgb, var(--brand) 30%, var(--line));
 }
-#comGrid.com-view-list .com-video {
-  width: 56px; min-width: 56px; flex: none; aspect-ratio: 16/10;
-  border-radius: 5px; pointer-events: none;   /* 缩略图不接事件，点击归整行「展开」 */
-}
-#comGrid.com-view-list .com-meta { flex: 1 1 auto; min-width: 0; padding: 0; gap: .06rem; border: none; }
+/* 缩略图去掉（2026-09-18 用户「缩略图不要」）：列表行里那块黑框既没解出画面
+   （preload=metadata 不取帧），又白吃 56px 名称宽度。展开态仍显示视频（那是播放器）。 */
+#comGrid.com-view-list .com-video { display: none; }
+#comGrid.com-view-list .com-meta { flex: 1 1 auto; min-width: 0; padding: 0; gap: .04rem; border: none; }
+/* 剧名展示（用户「剧名展示不齐 / 鼠标悬停可左右滚动」）：
+   .com-name 是**视窗**（定宽 + overflow:hidden，右边界与所有行一致 → 齐），
+   文本放在内层 .com-name-in；超长时悬停跑 @keyframes comNameScroll 左右平移看全名。
+   距离/时长由 JS 实测写入 --mv / --md（见 app.js el.comGrid 的 mouseover）。 */
 #comGrid.com-view-list .com-name {
-  font-size: .78rem; font-weight: 600;
+  font-size: .73rem; font-weight: 600; line-height: 1.3;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #comGrid.com-view-list .com-size {
-  font-size: .67rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: .62rem; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-#comGrid.com-view-list .com-actions { flex: none; width: auto; min-width: 0; padding: 0; gap: .2rem; border: none; }
-#comGrid.com-view-list .com-actions .btn { padding: .18rem .3rem; font-size: .7rem; border-radius: 6px; }
-/* 紧凑行只留图标（384px 放不下「💾 保存 🗑 删除」两个带字按钮）；
+#comGrid.com-view-list .com-name-in { display: inline-block; white-space: nowrap; }
+#comGrid.com-view-list .com-card:hover .com-name-in[data-ov="1"] {
+  animation: comNameScroll var(--md, 4s) ease-in-out infinite alternate;
+}
+@keyframes comNameScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--mv, 0px)); }
+}
+#comGrid.com-view-list .com-actions { flex: none; width: auto; min-width: 0; padding: 0; gap: .16rem; border: none; }
+#comGrid.com-view-list .com-actions .btn { padding: .13rem .24rem; font-size: .66rem; border-radius: 6px; }
+/* 紧凑行只留图标（320px 放不下「💾 保存 🗑 删除」两个带字按钮）；
    悬停不出文字，避免行宽跳动；展开后才出文字。 */
 #comGrid.com-view-list .com-actions .lbl { display: none; }
 #comGrid.com-view-list .com-card.is-open .com-actions .lbl { display: inline; }
-/* 点一行 → 该行就地展开：缩略图放大成可播放（video.controls 由 JS 挂回） */
+/* 点一行 → 该行就地展开：视频恢复可播（video.controls 由 JS 挂回）+ 剧名换行看全 */
 #comGrid.com-view-list .com-card.is-open {
-  flex-wrap: wrap; align-items: stretch; row-gap: .35rem;
+  flex-wrap: wrap; align-items: stretch; row-gap: .3rem;
   background: var(--bg-soft, #f5f6f8);
   border-color: color-mix(in srgb, var(--brand) 34%, var(--line));
 }
 #comGrid.com-view-list .com-card.is-open .com-video {
-  width: 100%; min-width: 0; aspect-ratio: 16/10; pointer-events: auto;
+  display: block; width: 100%; min-width: 0; aspect-ratio: 16/10; border-radius: 5px;
 }
-#comGrid.com-view-list .com-card.is-open .com-name { white-space: normal; overflow: visible; text-overflow: clip; }
-#comGrid.com-view-list .com-card.is-open .com-size { white-space: normal; overflow: visible; }
+#comGrid.com-view-list .com-card.is-open .com-name,
+#comGrid.com-view-list .com-card.is-open .com-size { white-space: normal; overflow: visible; text-overflow: clip; }
+/* 展开态名称已完整换行 → 取消滚动，且内层要退回普通 inline 才能跟着换行 */
+#comGrid.com-view-list .com-card.is-open .com-name-in {
+  display: inline; white-space: normal; animation: none !important; transform: none !important;
+}
 /* 其余三种视图在窄面板里的列数（同样要盖住 3240 行那条误伤规则） */
 #comGrid.com-view-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 #comGrid.com-view-timeline { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
