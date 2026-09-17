@@ -3374,7 +3374,7 @@ img { max-width: 100%; display: block; }
 .com-vol-card > .com-vol-status:not([hidden]) {
   display: block; margin: .42rem .55rem;
 }
-/* v2 八轮（2026-09-17）：原字幕羽化 / 配音与音量改 details 默认折起（用户「默认折起,不要展开」），
+/* v2 九轮：原字幕羽化 / 配音与音量改 details 默认折起（用户「默认折起,不要展开」），
    标题行即整条开合热区；按钮行移出 summary（点按钮不再触发折叠）。 */
 details.com-feather-card > .com-feather-head,
 details.com-vol-card > .com-vol-card-head { cursor: pointer; list-style: none; user-select: none; }
@@ -3390,6 +3390,27 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
 }
 .com-vol-card-actions .btn { margin-bottom: .45rem; }
+/* v2 十轮（2026-09-17）：右栏「解说参数」整块折叠卡（默认收起），同羽化/音量卡的开合语言 */
+.com-fold-card {
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border-radius: var(--radius-sm);
+  margin-bottom: .55rem; min-width: 0;
+}
+.com-fold-card > .com-fold-head {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .5rem .65rem; cursor: pointer; list-style: none; user-select: none;
+}
+.com-fold-card > .com-fold-head::-webkit-details-marker { display: none; }
+.com-fold-card > .com-fold-head::before { content: "▸"; font-size: .78rem; color: var(--text-mute); }
+.com-fold-card[open] > .com-fold-head::before { content: "▾"; }
+.com-fold-card .com-fold-title { font-size: .84rem; font-weight: 700; color: var(--text); white-space: nowrap; }
+.com-fold-card .com-fold-hint { flex: 1 1 auto; min-width: 0; font-size: .68rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#commentaryView .com-fold-card > .com-opts#comOpts { padding: .1rem .6rem .6rem; }
+/* 下拉胶囊在两列窄格里的标签超宽兜底：省略号，不撑破布局 */
+.com-right .com-mode-dropdown-toggle .com-mode-dropdown-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* 窄屏回退：三列 → 两列 → 单列（卡片实际宽度在 600~715px 区间，故阈值取视口 760/560） */
 @media (max-width: 700px) {
@@ -4821,8 +4842,8 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   #comScriptPanel { left: 212px; right: 252px; }
   #comReviewActions { left: 212px; right: 252px; }
   #comStepsPanel { right: 252px; }
-  /* 240px 窄栏：row-1 下拉改单列，避免「自动挑…」类截断 */
-  .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 100%; }
+  /* 240px 窄栏：row-1 下拉改两列紧凑排（标签超宽省略号兜底，不再单列竖排占屏） */
+  .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 46%; }
   .com-right select { font-size: .74rem; }
 }
 
