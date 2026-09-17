@@ -20,6 +20,17 @@
     document.write('<link rel="stylesheet" href="styles.css?v=' + encodeURIComponent(v) + '">');
   })();
 </script>
+<script>
+  // 主题：默认浅色；个人中心可切换 浅色 / 深色 / 跟随系统。早执行避免闪烁。
+  (function () {
+    try {
+      var t = localStorage.getItem('vdl-theme');
+      var dark = (t === 'dark') ||
+        (t === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (dark) document.documentElement.classList.add('theme-dark');
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body data-page-node-id="a4OZT83L9hBtO8loxwXlfl">
 <a class="skip-link" href="#main" data-page-node-id="nACuRUEKE1CfOZ8WMYEwcb">跳到主要内容</a>
@@ -1566,6 +1577,24 @@
           </div>
 
           <p class="pf-ov-desc" data-page-node-id="BHT7oPmp6SGXpaW2fAamyd">查看当前会员、积分等权益；购买记录、积分流水、账号安全请在左侧子菜单查看。</p>
+
+          <!-- 界面主题切换（浅色 / 深色 / 跟随系统） -->
+          <div class="pf-sec-list" style="margin-top:1rem" data-page-node-id="vdThemeSec">
+            <div class="pf-sec-item" data-page-node-id="vdThemeItem">
+              <div class="pf-sec-ic" aria-hidden="true" data-page-node-id="vdThemeIc">🎨</div>
+              <div class="pf-sec-main" data-page-node-id="vdThemeMain">
+                <div class="pf-sec-title" data-page-node-id="vdThemeTitle">界面主题</div>
+                <div class="pf-sec-sub" data-page-node-id="vdThemeSub">切换浅色 / 深色外观，设置自动保存</div>
+              </div>
+              <div class="pf-sec-actions" data-page-node-id="vdThemeActions">
+                <div class="theme-seg" id="profThemeSeg" role="group" aria-label="界面主题" data-page-node-id="vdThemeSeg">
+                  <button type="button" class="theme-seg-btn" data-theme="light" data-page-node-id="vdThemeLight">☀ 浅色</button>
+                  <button type="button" class="theme-seg-btn" data-theme="dark" data-page-node-id="vdThemeDark">🌙 深色</button>
+                  <button type="button" class="theme-seg-btn" data-theme="system" data-page-node-id="vdThemeSys">🖥 跟随系统</button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div class="pf-card-grid" data-page-node-id="E1CtGjLSAK0KVABOGszYJv">
             <div class="pf-card" data-page-node-id="WvXxBAVXGZkgYSWadc4O92">

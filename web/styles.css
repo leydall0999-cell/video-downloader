@@ -4876,6 +4876,16 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
    皮肤只作用于 #commentaryView（解说页），其余页面保持浅色。
    ====================================================================== */
 #commentaryView {
+  color-scheme: light;
+  color: var(--text);
+  background: var(--surface);
+  border-radius: 12px;
+  padding: .55rem .7rem .7rem;
+  /* 浅色态局部变量；深色态由「html.theme-dark #commentaryView」覆盖 */
+  --surface-2: #eef0f4;
+}
+/* 深色态：仅在 html.theme-dark 时启用（个人中心可切换 浅色/深色） */
+html.theme-dark #commentaryView {
   --surface: #1D1F24;
   --surface-2: #23252C;
   --line: #2F323A;
@@ -4884,48 +4894,46 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   color-scheme: dark;
   color: var(--text);
   background: #16171B;
-  border-radius: 12px;
-  padding: .55rem .7rem .7rem;
 }
 /* 深色滚动条 */
-#commentaryView ::-webkit-scrollbar { width: 9px; height: 9px; }
-#commentaryView ::-webkit-scrollbar-thumb { background: #33363B; border-radius: 5px; }
-#commentaryView ::-webkit-scrollbar-thumb:hover { background: #4B5563; }
-#commentaryView ::-webkit-scrollbar-track { background: transparent; }
+html.theme-dark #commentaryView ::-webkit-scrollbar { width: 9px; height: 9px; }
+html.theme-dark #commentaryView ::-webkit-scrollbar-thumb { background: #33363B; border-radius: 5px; }
+html.theme-dark #commentaryView ::-webkit-scrollbar-thumb:hover { background: #4B5563; }
+html.theme-dark #commentaryView ::-webkit-scrollbar-track { background: transparent; }
 /* 表单控件统一深色（原生控件靠 color-scheme，自定义样式兜底） */
-#commentaryView select,
-#commentaryView textarea,
-#commentaryView input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]) {
+html.theme-dark #commentaryView select,
+html.theme-dark #commentaryView textarea,
+html.theme-dark #commentaryView input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]) {
   background: var(--surface-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px;
 }
-#commentaryView select:focus-visible, #commentaryView input:focus-visible, #commentaryView textarea:focus-visible {
+html.theme-dark #commentaryView select:focus-visible, html.theme-dark #commentaryView input:focus-visible, html.theme-dark #commentaryView textarea:focus-visible {
   outline: 1.5px solid var(--brand); outline-offset: 0;
 }
-#commentaryView input[type=range] { accent-color: var(--brand); }
-#commentaryView input[type=checkbox], #commentaryView input[type=radio] { accent-color: var(--brand); }
+html.theme-dark #commentaryView input[type=range] { accent-color: var(--brand); }
+html.theme-dark #commentaryView input[type=checkbox], html.theme-dark #commentaryView input[type=radio] { accent-color: var(--brand); }
 /* 深色下常见浅色写死的组件逐个翻面 */
-#commentaryView .com-hist-toggle { background: #2B2E52; color: #A5B4FC; border-color: #3F437A; }
-#commentaryView .com-hist-toggle:hover { background: #343762; }
-#commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #262A4A; }
-#commentaryView .com-mode-option { border-color: var(--line); }
-#commentaryView .com-trim-card, #commentaryView .com-fixed-card, #commentaryView .com-subbar,
-#commentaryView .com-right, #commentaryView .com-cell, #commentaryView .com-entry-card {
+html.theme-dark #commentaryView .com-hist-toggle { background: #2B2E52; color: #A5B4FC; border-color: #3F437A; }
+html.theme-dark #commentaryView .com-hist-toggle:hover { background: #343762; }
+html.theme-dark #commentaryView .com-fixed-card .com-mode-option:has(input:checked) { background: #262A4A; }
+html.theme-dark #commentaryView .com-mode-option { border-color: var(--line); }
+html.theme-dark #commentaryView .com-trim-card, html.theme-dark #commentaryView .com-fixed-card, html.theme-dark #commentaryView .com-subbar,
+html.theme-dark #commentaryView .com-right, html.theme-dark #commentaryView .com-cell, html.theme-dark #commentaryView .com-entry-card {
   box-shadow: none;
 }
-#commentaryView .com-insp-head { background: #22242A; border-bottom-color: var(--line); }
-#commentaryView .btn-ghost { color: var(--text); }
-#commentaryView .btn-ghost:hover { background: #26282E; }
-#commentaryView .com-env-status.ok { background: #12291B; border-color: #1E4D2E; color: #86EFAC; }
-#commentaryView .com-env-status.err { background: #2E1414; border-color: #5B2020; color: #FCA5A5; }
-#commentaryView .com-sub-preview { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
-#commentaryView .com-feather-band { border-color: rgba(255,255,255,.45); }
+html.theme-dark #commentaryView .com-insp-head { background: #22242A; border-bottom-color: var(--line); }
+html.theme-dark #commentaryView .btn-ghost { color: var(--text); }
+html.theme-dark #commentaryView .btn-ghost:hover { background: #26282E; }
+html.theme-dark #commentaryView .com-env-status.ok { background: #12291B; border-color: #1E4D2E; color: #86EFAC; }
+html.theme-dark #commentaryView .com-env-status.err { background: #2E1414; border-color: #5B2020; color: #FCA5A5; }
+html.theme-dark #commentaryView .com-sub-preview { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+html.theme-dark #commentaryView .com-feather-band { border-color: rgba(255,255,255,.45); }
 /* 覆盖层（审核/步骤/历史）跟随深色 */
-#commentaryView #comScriptPanel, #commentaryView #comStepsPanel, #commentaryView #comHistory,
-#commentaryView #comReviewActions {
+html.theme-dark #commentaryView #comScriptPanel, html.theme-dark #commentaryView #comStepsPanel, html.theme-dark #commentaryView #comHistory,
+html.theme-dark #commentaryView #comReviewActions {
   background: #1D1F24; border-color: var(--line); color: var(--text);
 }
-#commentaryView #comReviewActions { background: #2E2510; border-color: #61501B; color: #FDE68A; }
+html.theme-dark #commentaryView #comReviewActions { background: #2E2510; border-color: #61501B; color: #FDE68A; }
 
 /* ---- 三栏宽度改 CSS 变量（可拖动/记忆；默认加宽：左 260 / 右 320） ---- */
 .com-left { width: var(--com-left-w, 260px); }
@@ -4972,29 +4980,29 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 #commentaryView.com-right-off #comStepsPanel { right: 20px; }
 
 /* ---- v2 四轮补丁：深色下遗漏的写死浅色组件 ---- */
-#commentaryView .com-mode-dropdown-toggle,
-#commentaryView .com-mode-dropdown-toggle[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
-#commentaryView .com-mode-dropdown-panel {
+html.theme-dark #commentaryView .com-mode-dropdown-toggle,
+html.theme-dark #commentaryView .com-mode-dropdown-toggle[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+html.theme-dark #commentaryView .com-mode-dropdown-panel {
   background: #23252C; border-color: var(--line);
   box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
 }
-#commentaryView .com-mode-dropdown-option:hover { background: #2B2E52; }
-#commentaryView .com-mode-dropdown-option.is-selected {
+html.theme-dark #commentaryView .com-mode-dropdown-option:hover { background: #2B2E52; }
+html.theme-dark #commentaryView .com-mode-dropdown-option.is-selected {
   background: color-mix(in srgb, var(--brand) 30%, #1D1F24); color: #C7D2FE;
 }
 /* 默认（无变体）按钮与次要按钮深色化 */
-#commentaryView .btn:not(.btn-primary):not(.btn-danger):not(.com-generate-main):not(.com-insp-done) {
+html.theme-dark #commentaryView .btn:not(.btn-primary):not(.btn-danger):not(.com-generate-main):not(.com-insp-done) {
   background: var(--surface-2); color: var(--text); border-color: var(--line);
 }
-#commentaryView .btn:not(.btn-primary):not(.btn-danger):not(.com-generate-main):not(.com-insp-done):hover {
+html.theme-dark #commentaryView .btn:not(.btn-primary):not(.btn-danger):not(.com-generate-main):not(.com-insp-done):hover {
   background: #2B2D34;
 }
 /* 解说长度 range 轨道深色 */
-#commentaryView input[type=range] {
+html.theme-dark #commentaryView input[type=range] {
   background: transparent;
 }
-#commentaryView .com-ai-config .adv { background: var(--surface-2); }
-#commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
+html.theme-dark #commentaryView .com-ai-config .adv { background: var(--surface-2); }
+html.theme-dark #commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
 
 /* ======================================================================
    ===== v2 五轮（2026-09-17）：解说页字体/按钮整体降一号（用户「有的太大」） =====
@@ -5059,9 +5067,9 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 /* 上传视频前左栏占位提示（跟随 comTrimCard 显隐，纯 CSS） */
 .com-left-placeholder {
   display: none;
-  border: 1.5px dashed #33363B; border-radius: 10px;
+  border: 1.5px dashed var(--line); border-radius: 10px;
   padding: 1.1rem .8rem; text-align: center;
-  font-size: .76rem; line-height: 1.7; color: #6B7280;
+  font-size: .76rem; line-height: 1.7; color: var(--text-mute);
 }
 #commentaryView:has(#comTrimCard[hidden]) .com-left-placeholder { display: block; }
 
@@ -5092,3 +5100,157 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 }
 /* 右侧「解说长度」卡吃掉空出来的余量，操作条仍是满宽 */
 #commentaryView .com-actionbar .com-enhance-section { flex: 1 1 200px; }
+
+/* ======================================================================
+   ===== 全局深色主题（2026-09-17）：个人中心「界面主题」可切换 =====
+   仅当 <html class="theme-dark"> 时启用；默认浅色。
+   解说页深色细节见上方 html.theme-dark #commentaryView 块。
+   ====================================================================== */
+html.theme-dark {
+  --brand: #818cf8;
+  --brand-strong: #a5b4fc;
+  --brand-soft: #1e1b4b;
+  --accent: #22d3ee;
+  --success: #34d399;
+  --success-soft: #052e1a;
+  --danger: #f87171;
+  --danger-soft: #2a0f0f;
+  --text: #E7E8EC;
+  --text-mute: #9CA3AF;
+  --line: #2F323A;
+  --border: #2F323A;
+  --primary: #818cf8;
+  --surface: #1D1F24;
+  --bg: #16171B;
+  --bg-soft: #20232b;
+  --bg-card: #23252c;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.5);
+  color-scheme: dark;
+}
+
+/* 页面背景：浅色径向渐变 → 深色同调暗渐变 */
+html.theme-dark body {
+  background:
+    radial-gradient(900px 420px at 12% -8%, #1e1b4b 0%, rgba(30,27,75,0) 60%),
+    radial-gradient(760px 380px at 92% 4%, #0e7490 0%, rgba(14,116,144,0) 58%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+/* 顶栏 */
+html.theme-dark .site-header {
+  background: rgba(29,31,36,.82);
+  border-bottom-color: var(--line);
+}
+html.theme-dark .badge { border-color: #3a3a5c; }
+html.theme-dark .badge:hover { background: #2a2a45; }
+
+/* 侧栏 */
+html.theme-dark .sidebar {
+  background: linear-gradient(180deg, #1b1d23 0%, #17181d 100%);
+  border-right-color: var(--line);
+  box-shadow: inset -1px 0 0 rgba(255,255,255,.04);
+}
+html.theme-dark .sidebar-cookie-sync button {
+  background: linear-gradient(135deg, var(--brand-soft), #20232b);
+  border-color: var(--line); color: var(--text);
+}
+html.theme-dark .sidebar-cookie-sync button:hover { background: var(--brand-soft); }
+html.theme-dark .sidebar-item:hover {
+  background: rgba(255,255,255,.06);
+  border-color: rgba(129,140,248,.28);
+  box-shadow: 0 4px 12px rgba(0,0,0,.25);
+}
+html.theme-dark .sidebar-item::after { background: rgba(129,140,248,.22); }
+html.theme-dark .sidebar-group-title { border-top-color: rgba(129,140,248,.22); }
+html.theme-dark .sidebar-item-icon { background: rgba(129,140,248,.12); }
+html.theme-dark .sidebar-item:hover .sidebar-item-icon { background: rgba(129,140,248,.22); }
+
+/* 按钮 */
+html.theme-dark .btn-ghost { background: #26282e; color: var(--text-mute); border-color: var(--line); }
+html.theme-dark .btn-ghost:hover:not(:disabled) { background: #2f323a; color: var(--text); }
+html.theme-dark .btn-batch { background: #20232b; border-color: var(--brand); color: var(--brand); }
+html.theme-dark .btn-batch:hover:not(:disabled) { background: #2a2d3a; }
+html.theme-dark .task-delete:hover:not(:disabled) { background: #3a1a1a; }
+html.theme-dark .watch-quality { background: var(--surface); border-color: var(--line); color: var(--text); }
+
+/* 表单控件（解说页由自身 gated 块处理，这里覆盖其余页面） */
+html.theme-dark .adv-input,
+html.theme-dark .adv-textarea { background: #16171b; color: var(--text); border-color: var(--line); }
+html.theme-dark .adv-note { color: var(--text-mute); }
+html.theme-dark select { background-color: var(--surface); color: var(--text); }
+
+/* 个别写死浅色的浮层/弹窗 */
+html.theme-dark .admin-pwmodal-card { background: var(--surface); }
+
+/* 全局滚动条 */
+html.theme-dark ::-webkit-scrollbar { width: 10px; height: 10px; }
+html.theme-dark ::-webkit-scrollbar-thumb { background: #33363b; border-radius: 5px; }
+html.theme-dark ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+html.theme-dark ::-webkit-scrollbar-track { background: transparent; }
+html.theme-dark * { scrollbar-color: #33363b transparent; }
+
+/* ---- 个人中心「界面主题」分段控件 ---- */
+.theme-seg {
+  display: inline-flex; align-items: center;
+  background: #f3f4f6; border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px; gap: 2px;
+}
+html.theme-dark .theme-seg { background: #20232b; }
+.theme-seg-btn {
+  border: none; background: transparent; color: var(--text-mute);
+  font: inherit; font-size: .8rem; font-weight: 600;
+  padding: .35rem .7rem; border-radius: 999px; cursor: pointer;
+  transition: background .15s, color .15s; white-space: nowrap;
+}
+.theme-seg-btn:hover { color: var(--text); }
+.theme-seg-btn.is-active {
+  background: var(--brand); color: #fff;
+  box-shadow: 0 2px 8px rgba(79,70,229,.25);
+}
+
+/* ---- 深色：写死浅色的组件逐个翻面（个人中心 / 下载 / 转换 / 媒体库 / 授权弹窗等） ---- */
+html.theme-dark .pf-card,
+html.theme-dark .pf-table,
+html.theme-dark .pf-usage-table,
+html.theme-dark .pf-report-card,
+html.theme-dark .pf-ov-btn.ghost,
+html.theme-dark .user-menu-copy,
+html.theme-dark .member-acc-chip,
+html.theme-dark .legal-content .legal-card-body,
+html.theme-dark .admin-input,
+html.theme-dark .admin-btn,
+html.theme-dark .admin-pwmodal-card,
+html.theme-dark .auth-input,
+html.theme-dark .clean-master,
+html.theme-dark .clean-rule,
+html.theme-dark .convert-target,
+html.theme-dark .convert-res,
+html.theme-dark .dw-toolgroup.dw-seg .dw-mode.is-active,
+html.theme-dark .baidu-auth-frame,
+html.theme-dark .mat-h,
+html.theme-dark .input-shell:focus-within,
+html.theme-dark .node-switch {
+  background: var(--surface); border-color: var(--line); color: var(--text);
+}
+html.theme-dark .pf-chip:not(.is-active),
+html.theme-dark .auth-code-btn,
+html.theme-dark .uc-item:hover,
+html.theme-dark .uc-item.is-running,
+html.theme-dark .task-step-dot,
+html.theme-dark .tab:not(.is-active):not(.active) {
+  background: var(--bg-soft); color: var(--text); border-color: var(--line);
+}
+html.theme-dark .uc-item-side select,
+html.theme-dark .uc-field input[type="text"],
+html.theme-dark .uc-field select,
+html.theme-dark .uc-field input[type="file"],
+html.theme-dark .auth-input:focus {
+  background: var(--surface); color: var(--text); border-color: var(--line);
+}
+/* 通用表单控件深色兜底（解说页有更具体的 gated 规则，不受影响） */
+html.theme-dark input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]),
+html.theme-dark select,
+html.theme-dark textarea {
+  background-color: var(--surface); color: var(--text); border-color: var(--line);
+}

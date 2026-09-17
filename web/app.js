@@ -15924,3 +15924,46 @@ el.dwVidPlayer.removeAttribute('src');
   bindTab('comLeftTab', 'com-left-off', 'com_left_off');
   bindTab('comRightTab', 'com-right-off', 'com_right_off');
 })();
+
+// ===== 界面主题切换（个人中心「界面主题」：浅色 / 深色 / 跟随系统）=====
+// 防闪烁的 class 应用已在 index.html <head> 内联脚本完成；此处负责 UI 联动与持久化。
+(function () {
+  var KEY = 'vdl-theme';
+  var root = document.documentElement;
+  function mql() { return window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null; }
+  function effective(choice) {
+    if (choice === 'dark') return true;
+    if (choice === 'light') return false;
+    var m = mql();
+    return !!(m && m.matches);
+  }
+  function current() {
+    try { return localStorage.getItem(KEY) || 'light'; } catch (e) { return 'light'; }
+  }
+  function apply(choice) {
+    var dark = effective(choice);
+    root.classList.toggle('theme-dark', dark);
+    try { localStorage.setItem(KEY, choice); } catch (e) { /* ignore */ }
+    var seg = document.getElementById('profThemeSeg');
+    if (seg) {
+      var btns = seg.querySelectorAll('.theme-seg-btn');
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle('is-active', btns[i].getAttribute('data-theme') === choice);
+      }
+    }
+  }
+  // 初始同步 UI 高亮（class 已由 head 脚本就绪）
+  apply(current());
+  var seg = document.getElementById('profThemeSeg');
+  if (seg) {
+    var btns = seg.querySelectorAll('.theme-seg-btn');
+    for (var j = 0; j < btns.length; j++) {
+      btns[j].addEventListener('click', function () { apply(this.getAttribute('data-theme')); });
+    }
+  }
+  // 「跟随系统」时，系统外观变化实时响应
+  var m = mql();
+  if (m && m.addEventListener) {
+    m.addEventListener('change', function () { if (current() === 'system') apply('system'); });
+  }
+})();
