@@ -4678,9 +4678,25 @@ body.com-hist-open #commentaryView #comHistory { transform: none; }
   opacity: 0; pointer-events: none; transition: opacity .2s;
 }
 body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
-/* ---- 窄窗口（<1280）：右栏收抽屉 ---- */
+/* 操作条：中栏窄时「解说长度」卡自动换行到下一行，不再挤压生成按钮 */
+.com-actionbar { flex-wrap: wrap; }
+.com-actionbar .com-enhance-section { width: auto; flex: 1 1 230px; min-width: 200px; }
+/* 时间轴标题/数值不换行 */
+.com-tl-head { white-space: nowrap; }
+.com-tl-title, .com-tl-range { flex: none; }
+/* ---- 中档窗口（1000–1359）：三栏全保留，左右栏收窄（2026-09-17 用户 1080 窗口也要三栏） ---- */
+@media (min-width: 1000px) and (max-width: 1359px) {
+  #commentaryView { height: calc(100vh - 110px); }
+  .com-left { width: 212px; }
+  .com-right { width: 252px; }
+  #comScriptPanel { left: 224px; right: 264px; }
+  #comReviewActions { left: 224px; right: 264px; }
+  #comStepsPanel { right: 264px; }
+  .com-tl-hint { display: none; }   /* 窄中栏放不下长提示，信息在左栏滑块旁自明 */
+}
+/* ---- 窄窗口（<1000）：右栏收抽屉 ---- */
 .com-insp-fab { display: none; }
-@media (max-width: 1279px) {
+@media (max-width: 999px) {
   #commentaryView { height: calc(100vh - 110px); }
   .com-right {
     position: fixed; top: 70px; right: 0; bottom: 0; z-index: 56;
