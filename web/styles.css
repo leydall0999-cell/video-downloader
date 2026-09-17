@@ -5260,13 +5260,10 @@ html.theme-dark #commentaryView #comReviewActions { background: #2E2510; border-
   flex: none; width: 8px; margin: 0 -1px; position: relative;
   cursor: col-resize; border-radius: 4px; touch-action: none;
 }
-.com-splitter::after {
-  content: ""; position: absolute; top: 30%; bottom: 30%; left: 2.5px; right: 2.5px;
-  border-radius: 3px; background: #3A3D45; opacity: .45; transition: all .15s;
-}
-.com-splitter:hover::after, .com-splitter.dragging::after {
-  background: var(--brand); opacity: 1; top: 6%; bottom: 6%;
-}
+/* 🔴 拖动把手的 ::after **全站只有一处定义**，在下方「v2 七轮 · 拖动分隔条显眼化」块里
+   （虚线纹路版）。不要在这里再写一份：同选择器「后来者胜」，这里写了也会被盖掉。
+   2026-09-18 清理：此处曾留着一份 height:150px / hover 240px 的旧规则（注释还写着 300px），
+   被后面那处的 200px / 260px 静默覆盖 —— 纯死代码，且会让人照着注释误判实际长度。 */
 .com-splitter.dragging { background: color-mix(in srgb, var(--brand) 14%, transparent); }
 /* 侧栏收起小拉手（贴三栏区左右边缘，竖向小把手） */
 .com-v2 { position: relative; }
@@ -5389,16 +5386,28 @@ html.theme-dark #commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
 }
 #commentaryView:has(#comTrimCard[hidden]) .com-left-placeholder { display: block; }
 
-/* ---- v2 七轮（2026-09-17）：拖动分隔条显眼化（功能本来就有，但太隐蔽用户发现不了） ---- */
+/* ---- v2 七轮（2026-09-17）：拖动分隔条显眼化（功能本来就有，但太隐蔽用户发现不了） ----
+   2026-09-18 用户「有点长了」→ 把手长度改**固定值 + 垂直居中**（原先 top/bottom:18% 内缩）。
+   🔴 百分比内缩的问题：内缩比例跟着**行高**走，而行高由中栏决定（预览 + 播放条 + 操作条 + 时间轴），
+   两侧面板内容却短得多。1340×795 下行高 575 → 实测把手 y303..650 共 346px，
+   而两侧面板内容只到 y≈550/570、时间轴顶边在 615 → 把手比面板多垂出约 100px 并压在
+   时间轴深色卡上，观感就是一条过长的虚线挂在空处。
+   改为固定 200px 居中（实测渲染 194px，两端留白来自虚线 5px/4px 的收尾）；
+   hover/拖动加长到 260px 作为可拖拽反馈（实测 256px，距时间轴顶 623 仍余 24px）。
+   注：这里同时覆盖了上方那份死规则（已删），改长度只改这一处即可。 */
 .com-splitter { width: 14px; margin: 0 -3px; z-index: 5; }
 .com-splitter::after {
-  left: 4px; right: 4px; top: 18%; bottom: 18%;
+  content: ""; position: absolute;
+  left: 4px; right: 4px; top: 50%; bottom: auto; height: 200px;
+  transform: translateY(-50%);
   background: repeating-linear-gradient(180deg, #565B66 0 5px, transparent 5px 9px);
   opacity: .9; border-radius: 2px;
+  /* 过渡：合并死规则时把原来的 transition:all .15s 一并带过来了（否则 hover 从平滑变硬切） */
+  transition: background .15s, height .15s, opacity .15s;
 }
 .com-splitter:hover::after, .com-splitter.dragging::after {
   background: repeating-linear-gradient(180deg, var(--brand) 0 5px, transparent 5px 9px);
-  opacity: 1;
+  opacity: 1; height: 260px;
 }
 
 /* ======================================================================
