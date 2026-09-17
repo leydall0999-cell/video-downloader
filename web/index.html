@@ -2006,9 +2006,14 @@
             <div class="com-tl-inner" id="comTlInner">
               <div class="com-tl-lane-row">
                 <span class="com-tl-lane-label">原声</span>
-                <div class="com-tl-lane com-tl-lane-orig" id="comTlLaneOrig">
+                <div class="com-tl-lane com-tl-lane-orig" id="comTlLaneOrig" title="点任意位置定位预览；拖两端把手改正剧范围">
                   <div class="com-tl-clip com-tl-orig-base"></div>
                   <div class="com-tl-clip com-tl-kept" id="comTlDrama"></div>
+                  <!-- 正剧范围把手（2026-09-18）：拖动改写左栏「正剧范围」的滑块（同一数据源，不新增范围状态） -->
+                  <span class="com-tl-handle com-tl-handle-l" id="comTlHandleL" role="slider"
+                        aria-label="正剧起点" tabindex="0" title="拖动改正剧起点（同左侧「正剧范围」起点）"></span>
+                  <span class="com-tl-handle com-tl-handle-r" id="comTlHandleR" role="slider"
+                        aria-label="正剧终点" tabindex="0" title="拖动改正剧终点（同左侧「正剧范围」终点）"></span>
                 </div>
               </div>
               <div class="com-tl-lane-row">
@@ -2023,6 +2028,8 @@
                 <span class="com-tl-lane-label"></span>
                 <div class="com-tl-scale" id="comTlScale"></div>
               </div>
+              <!-- 播放头（2026-09-18）：跟着预览播放位置走；点轨道任意处定位 -->
+              <span class="com-tl-playhead" id="comTlPlayhead" hidden></span>
             </div>
           </div>
         </div>

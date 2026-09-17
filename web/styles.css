@@ -4923,6 +4923,54 @@ html.com-theater { overflow: hidden; }
 .com-tl-tick::before {
   content: ''; position: absolute; left: 0; top: -4px; width: 1px; height: 2px; background: #3A3D45;
 }
+/* ---- 时间轴交互层（2026-09-18）：播放头 / 正剧把手 / 可点提示 ----
+   三轨从「只读展示」变可操作：点轨道定位预览、拖原声轨两端改正剧、点段联动脚本面板。
+   🔴 交互一律回写已有控件（#comDramaStartRange / #comDramaEndRange 与脚本面板行），
+      不新增第二套范围状态、不新增第二处范围控件。 */
+.com-tl-inner { position: relative; }
+.com-tl-lane { cursor: pointer; }
+/* 原声轨要放把手 → 不能裁剪（把手中心压在起止边缘上，一半会超出轨道） */
+.com-tl-lane-orig { overflow: visible; }
+.com-tl-lane-orig:hover .com-tl-orig-base { background: #3B3F45; }
+.com-tl-seg { cursor: pointer; }
+.com-tl-seg:hover { filter: brightness(1.3); }
+/* 极短段（<0.6s）在整片尺度下只有一两像素 → 给最小命中宽度，保证点得中 */
+.com-tl-seg.is-tiny { min-width: 4px; }
+/* 播放头：跟着预览的真实播放位置走（整片尺度，不夹到正剧区间里——预览播的就是原片）；
+   点轨道任意处即定位，定位后播放头立刻跟手 */
+.com-tl-playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: #F87171; border-radius: 1px; pointer-events: none; z-index: 4;
+  box-shadow: 0 0 4px rgba(248, 113, 113, .55);
+}
+.com-tl-playhead::before {
+  content: ''; position: absolute; top: -1px; left: -3px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 4px solid #F87171;
+}
+/* 正剧范围把手：拖动即改左栏「正剧范围」滑块（同一数据源） */
+.com-tl-handle {
+  position: absolute; top: 0; bottom: 0; width: 9px; z-index: 3;
+  cursor: col-resize; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+}
+.com-tl-handle::after {
+  content: ''; width: 2px; height: 11px; border-radius: 2px;
+  background: #E5E7EB; box-shadow: 0 0 0 1px rgba(0, 0, 0, .45);
+}
+.com-tl-handle-l { margin-left: -4px; }
+.com-tl-handle-r { margin-left: -5px; }
+.com-tl-handle:hover::after, .com-tl-handle.dragging::after {
+  background: #FFF; box-shadow: 0 0 0 2px rgba(129, 140, 248, .9);
+}
+.com-tl-handle:focus-visible { outline: 2px solid #818CF8; outline-offset: 1px; }
+/* 时间轴段被选中（与脚本面板行联动） */
+.com-tl-seg.is-active {
+  background: #F87171 !important; box-shadow: 0 0 0 1px rgba(248, 113, 113, .6);
+}
+/* 脚本面板中被时间轴点中的那一段 */
+.com-seg-row.is-tl-active { outline: 2px solid #818CF8; outline-offset: 2px; border-radius: 8px; }
+.com-seg-row .com-seg-meta { cursor: pointer; }
 /* 未选视频：淡出，避免「有时间轴却没内容」的误导 */
 .com-timeline.is-empty .com-tl-viewport { opacity: .4; }
 /* ---- 右栏检查器 ---- */

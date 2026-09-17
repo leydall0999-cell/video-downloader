@@ -11169,6 +11169,102 @@ el.dwVidPlayer.removeAttribute('src');
   const comTlLaneNarr = $('comTlLaneNarr'), comTlLaneSubs = $('comTlLaneSubs');
   const comTlScale = $('comTlScale'), comTlCut = $('comTlCut'), comTlStep = $('comTlStep');
   const comTlInner = $('comTlInner'), comTlZoomVal = $('comTlZoomVal'), comTlRoot = $('comTimeline');
+  // 交互层（2026-09-18）：原声轨引用、正剧把手、播放头
+  const comTlLaneOrig = $('comTlLaneOrig'), comTlHandleL = $('comTlHandleL'), comTlHandleR = $('comTlHandleR');
+  const comTlPlayhead = $('comTlPlayhead');
+  /** 时间轴时长（秒）＝片尾滑块 max（与预览视频时长同源）。 */
+  const comTlDur = () => {
+    const d = parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0;
+    return d > 0 && isFinite(d) ? d : 0;
+  };
+  /** 时间轴轨道区（原声/旁白/字幕三轨等宽同左边界）的屏幕几何。 */
+  const comTlLaneGeom = () => {
+    const ref = comTlLaneNarr || comTlLaneSubs || comTlLaneOrig;
+    if (!ref) return null;
+    const r = ref.getBoundingClientRect();
+    return r.width > 0 ? r : null;
+  };
+  /** 屏幕横坐标 → 时间轴秒数（超出轨道两端自动夹住）。 */
+  const comTlSecFromX = (clientX) => {
+    const g = comTlLaneGeom(), dur = comTlDur();
+    if (!g || !dur) return null;
+    const ratio = Math.max(0, Math.min(1, (clientX - g.left) / g.width));
+    return ratio * dur;
+  };
+  /** 定位预览到某秒（与独立播放条解耦：改 currentTime 后由它的 timeupdate 自己同步）。 */
+  const comTlSeekTo = (sec) => {
+    const v = $('comPreview');
+    if (!v || !v.getAttribute('src') || !v.readyState) return false;
+    const d = (isFinite(v.duration) && v.duration > 0) ? v.duration : comTlDur();
+    const t = Math.max(0, Math.min(d || sec, Number(sec) || 0));
+    try { v.currentTime = t; } catch (_) { return false; }
+    comTlSyncPlayhead();
+    return true;
+  };
+  /** 播放头位置＝当前播放时间在轨道上的投影；无素材/无时长时隐藏。 */
+  function comTlSyncPlayhead() {
+    if (!comTlPlayhead) return;
+    const v = $('comPreview'), lane = comTlLaneNarr || comTlLaneOrig, dur = comTlDur();
+    if (!v || !lane || !dur || !v.getAttribute('src') || !(isFinite(v.duration) && v.duration > 0)) {
+      comTlPlayhead.hidden = true; return;
+    }
+    const t = Math.max(0, Math.min(dur, v.currentTime || 0));
+    const innerR = comTlInner ? comTlInner.getBoundingClientRect() : null;
+    const laneR = lane.getBoundingClientRect();
+    const base = innerR ? (laneR.left - innerR.left) : 0;
+    comTlPlayhead.hidden = false;
+    comTlPlayhead.style.left = (base + (t / dur) * laneR.width).toFixed(1) + 'px';
+  }
+  /** 两枚正剧把手贴到当前区间两端（跟随滑块/输入框/清空/脚本重绘）。 */
+  const comTlPlaceHandles = () => {
+    const dur = comTlDur();
+    const s = parseTimeSec(el.comDramaStart.value);
+    const e2 = parseTimeSec(el.comDramaEnd.value);
+    const put = (h, sec, dflt) => {
+      if (!h) return;
+      h.hidden = !dur;
+      if (!dur) return;
+      const v = sec == null ? dflt : sec;
+      h.style.left = Math.max(0, Math.min(100, (v / dur) * 100)).toFixed(3) + '%';
+    };
+    put(comTlHandleL, s, 0);
+    put(comTlHandleR, e2, dur);
+  };
+  /** 拖把手 → 改「正剧范围」。🔴 只回写左栏已有的两个滑块并派发 input：
+      复用现成的同步链（滑块→文本输入框→片长文案→三轨重绘），
+      全站仍然只有「正剧范围」这一处范围控件，这里只是它的第二个操作面。 */
+  const comTlMinGap = 1;   // 秒：起止最小间距，避免拖成零长区间
+  const comTlSetDrama = (side, sec) => {
+    const dur = comTlDur();
+    const rs = el.comDramaStartRange, re = el.comDramaEndRange;
+    if (!dur || !rs || !re) return;
+    let start = parseFloat(rs.value) || 0;
+    let end = parseFloat(re.value);
+    if (!isFinite(end) || end <= 0) end = dur;
+    const v = Math.max(0, Math.min(dur, Number(sec) || 0));
+    if (side === 'l') start = Math.max(0, Math.min(v, end - comTlMinGap));
+    else end = Math.min(dur, Math.max(v, start + comTlMinGap));
+    if (parseFloat(rs.value) !== start) rs.value = String(start);
+    if (parseFloat(re.value) !== end) re.value = String(end);
+    rs.dispatchEvent(new Event('input', { bubbles: true }));
+    re.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  /** 选中某段：两条轨同 idx 的段 + 脚本面板对应行一起高亮，并把面板滚到那一行。 */
+  const comTlActiveSeg = (idx) => {
+    [comTlLaneNarr, comTlLaneSubs].forEach((lane) => {
+      if (!lane) return;
+      Array.prototype.forEach.call(lane.querySelectorAll('.com-tl-seg'), (d) => {
+        d.classList.toggle('is-active', parseInt(d.dataset.idx, 10) === idx);
+      });
+    });
+    const box = el.comScriptSegments;
+    if (!box || !el.comScriptPanel || el.comScriptPanel.hidden) return;
+    Array.prototype.forEach.call(box.querySelectorAll('.com-seg-row'), (row, i) => {
+      row.classList.toggle('is-tl-active', i === idx);
+    });
+    const row = box.children[idx];
+    if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
   let comTlZoom = 100;  // 100 = 铺满视口；>100 横向滚动（同时放大三轨与刻度）
 
   /** 秒 → 「m:ss」/「h:mm:ss」（刻度尺用，比 formatHMS 紧凑）。 */
@@ -11214,7 +11310,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (!lane) return;
     if (!dur || !Array.isArray(segs) || !segs.length) { lane.replaceChildren(); return; }
     const parts = [];
-    segs.forEach((sg) => {
+    segs.forEach((sg, idx) => {
       const a = Math.max(0, Math.min(dur, Number(sg.start) || 0));
       const b = Math.max(a, Math.min(dur, Number(sg.end) || a));
       if (b - a < 0.05) return;
@@ -11222,8 +11318,13 @@ el.dwVidPlayer.removeAttribute('src');
       d.className = 'com-tl-clip com-tl-seg';
       d.style.left = ((a / dur) * 100).toFixed(3) + '%';
       d.style.width = Math.max(0.35, ((b - a) / dur) * 100).toFixed(3) + '%';
+      // 交互用锚点（2026-09-18）：点段定位预览 + 联动脚本面板同 idx 的行
+      d.dataset.idx = String(idx);
+      d.dataset.start = String(a);
+      d.dataset.end = String(b);
       const txt = String(sg.narration || '').replace(/\s+/g, ' ').trim();
-      d.title = `${formatHMS(Math.floor(a))} – ${formatHMS(Math.floor(b))}（${(b - a).toFixed(1)}s）${txt ? '\n' + txt.slice(0, 60) : ''}`;
+      d.title = `${formatHMS(Math.floor(a))} – ${formatHMS(Math.floor(b))}（${(b - a).toFixed(1)}s）${txt ? '\n' + txt.slice(0, 60) : ''}\n点一下：预览跳到这一句`;
+      if (b - a < 0.6) d.classList.add('is-tiny');   // 极短段：够窄也要能点中（CSS 给最小命中宽度）
       parts.push(d);
     });
     lane.replaceChildren(...parts);
@@ -11289,6 +11390,8 @@ el.dwVidPlayer.removeAttribute('src');
     comTlRenderSegs(comTlLaneNarr, segs, hasDur ? dur : 0);
     comTlRenderSegs(comTlLaneSubs, segs, hasDur ? dur : 0);
     comTlRenderScale(hasDur ? dur : 0);
+    comTlPlaceHandles();
+    comTlSyncPlayhead();
     comTlPublishHeight();
   };
   /** 缩放：写 width%（>100 才写内联，100% 铺满）；并重算刻度密度。 */
@@ -11303,6 +11406,102 @@ el.dwVidPlayer.removeAttribute('src');
   const comTlZoomOutBtn = $('comTlZoomOut'), comTlZoomInBtn = $('comTlZoomIn');
   if (comTlZoomOutBtn) comTlZoomOutBtn.addEventListener('click', () => { comTlZoom = Math.max(100, comTlZoom - 50); comTlApplyZoom(); });
   if (comTlZoomInBtn) comTlZoomInBtn.addEventListener('click', () => { comTlZoom = Math.min(500, comTlZoom + 50); comTlApplyZoom(); });
+
+  // ===== 时间轴交互（2026-09-18）：点轨道定位 / 拖把手改正剧 / 点段联动脚本面板 =====
+  /** 拖正剧把手：pointer 拖拽（capture）+ 键盘微调（← →，Shift=10s）。 */
+  const comTlBindHandle = (handle, side) => {
+    if (!handle) return;
+    let dragging = false;
+    const onMove = (ev) => {
+      if (!dragging) return;
+      const sec = comTlSecFromX(ev.clientX);
+      if (sec == null) return;
+      ev.preventDefault();
+      comTlSetDrama(side, sec);
+    };
+    const stop = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      try { handle.releasePointerCapture(ev.pointerId); } catch (_) { /* 未捕获过则忽略 */ }
+    };
+    handle.addEventListener('pointerdown', (ev) => {
+      if (!comTlDur()) return;
+      ev.preventDefault();
+      ev.stopPropagation();          // 别让轨道把这次按下当成「点此定位」
+      dragging = true;
+      handle.classList.add('dragging');
+      try { handle.setPointerCapture(ev.pointerId); } catch (_) { /* 老引擎忽略 */ }
+    });
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', stop);
+    handle.addEventListener('pointercancel', stop);
+    handle.addEventListener('keydown', (ev) => {
+      const step = ev.shiftKey ? 10 : 1;
+      const rs = el.comDramaStartRange, re = el.comDramaEndRange;
+      if (!rs || !re) return;
+      const cur = parseFloat(side === 'l' ? rs.value : re.value) || 0;
+      if (ev.key === 'ArrowLeft') { ev.preventDefault(); comTlSetDrama(side, cur - step); }
+      else if (ev.key === 'ArrowRight') { ev.preventDefault(); comTlSetDrama(side, cur + step); }
+    });
+  };
+  comTlBindHandle(comTlHandleL, 'l');
+  comTlBindHandle(comTlHandleR, 'r');
+
+  /** 点轨道 = 定位预览；点在某个旁白/字幕段上 = 定位到该段起点并联动脚本面板。 */
+  const comTlBindSeek = (node) => {
+    if (!node) return;
+    node.addEventListener('click', (ev) => {
+      if (ev.target && ev.target.classList && ev.target.classList.contains('com-tl-handle')) return;
+      const segEl = ev.target && ev.target.closest ? ev.target.closest('.com-tl-seg') : null;
+      if (segEl && segEl.dataset.start != null) {
+        comTlSeekTo(segEl.dataset.start);
+        const idx = parseInt(segEl.dataset.idx, 10);
+        if (idx >= 0) comTlActiveSeg(idx);
+        return;
+      }
+      const sec = comTlSecFromX(ev.clientX);
+      if (sec == null) return;
+      comTlSeekTo(sec);
+      comTlActiveSeg(-1);            // 点空白＝取消选中
+    });
+  };
+  [comTlLaneOrig, comTlLaneNarr, comTlLaneSubs, comTlScale].forEach(comTlBindSeek);
+
+  // 反向联动：点脚本面板某段的「#N + 时间码」行 → 时间轴高亮该段 + 预览跳过去。
+  // 只在 .com-seg-meta 上触发（不拦 textarea，编辑时视频不会乱跳）。
+  if (el.comScriptSegments) {
+    el.comScriptSegments.addEventListener('click', (ev) => {
+      const meta = ev.target && ev.target.closest ? ev.target.closest('.com-seg-meta') : null;
+      if (!meta) return;
+      const row = meta.closest('.com-seg-row');
+      const idx = Array.prototype.indexOf.call(el.comScriptSegments.children, row);
+      if (idx < 0) return;
+      comTlActiveSeg(idx);
+      // 起跳时间优先取状态数组；状态与 DOM 行号可能错位（saveScript 会丢弃空旁白行），
+      // 这时退回轨上同 idx 段的 dataset.start，避免「点了行、时间轴高亮了、预览却没动」。
+      const sg = (currentScriptSegments || [])[idx];
+      let start = sg ? Number(sg.start) : NaN;
+      if (!isFinite(start)) {
+        const segEl = comTlLaneNarr && comTlLaneNarr.querySelector('.com-tl-seg[data-idx="' + idx + '"]');
+        if (segEl && segEl.dataset.start != null) start = Number(segEl.dataset.start);
+      }
+      if (isFinite(start)) comTlSeekTo(start);
+    });
+  }
+
+  // 播放头跟随播放位置（rAF 节流，避免 timeupdate 高频重排）
+  const comTlPreviewEl = $('comPreview');
+  if (comTlPreviewEl) {
+    let phRaf = 0;
+    comTlPreviewEl.addEventListener('timeupdate', () => {
+      if (phRaf) return;
+      phRaf = requestAnimationFrame(() => { phRaf = 0; comTlSyncPlayhead(); });
+    });
+    comTlPreviewEl.addEventListener('seeked', comTlSyncPlayhead);
+    comTlPreviewEl.addEventListener('loadedmetadata', () => setTimeout(comTlSyncPlayhead, 0));
+    comTlPreviewEl.addEventListener('emptied', comTlSyncPlayhead);
+  }
   // 窗口尺寸变化：轨道像素宽变了，刻度密度跟着重算（防抖，避免拖动窗口时反复重排）
   let comTlResizeT = null;
   window.addEventListener('resize', () => {
