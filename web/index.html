@@ -1977,29 +1977,6 @@
               <select id="llmMlxModel" class="adv-input" data-page-node-id="llmMlxModel"></select>
               <div id="llmMlxHint" class="adv-hint" style="font-size:12px;line-height:1.5;margin-top:2px;"></div>
             </div>
-            <details class="adv" id="llmAdvanced" style="margin-top:8px;" data-page-node-id="llmAdvanced">
-              <summary class="adv-summary" data-page-node-id="llmAdvancedSummary">高级（一般不用改）</summary>
-              <div class="adv-body" data-page-node-id="llmAdvancedBody">
-                <label class="adv-label" for="llmReasoningEffort" data-page-node-id="oQaZCa2VipSQfmlTCMOBM2">推理强度</label>
-                <select id="llmReasoningEffort" class="adv-input" data-page-node-id="yDrDOaGscPebzGzOCYtDJl">
-                  <option value="low" data-page-node-id="ogKvOZMxWC7DtajaAxLUCZ">低（推荐：省钱且质量够用）</option>
-                  <option value="disabled" data-page-node-id="ZiXDHsJB00bxKfIGgTelDB">关闭（最省 token，质量略降）</option>
-                  <option value="high" data-page-node-id="GFXo0gonx7pUnt1Si0K6b7">高（最佳质量，最贵）</option>
-                </select>
-                <label class="adv-checkbox-row" data-page-node-id="Mgu4IqN5rSHeVJ2aWOCKHE">
-                  <input id="llmOffpeakOnly" type="checkbox" data-page-node-id="wUlU94mTTk526ABHo5KlaJ" />
-                  <span data-page-node-id="v3coXl56GUSsg5mUtvzxST">避开峰时生成</span>
-                </label>
-                <!-- 凭据字段：保留 DOM 以免旧版逻辑取值时报错，但已不展示、也不再提交
-                     （云端服务由超级管理员通过受管配置统一下发）。 -->
-                <div hidden style="display:none;" aria-hidden="true">
-                  <select id="llmProvider" class="adv-input" data-page-node-id="uDL3oOZ8cFpppOYEh2v46w"></select>
-                  <input id="llmApiKey" class="adv-input" type="password" autocomplete="off" data-page-node-id="1DLaTHjloWLAYiwqxEvNd6" />
-                  <input id="llmBaseUrl" class="adv-input" type="text" autocomplete="off" data-page-node-id="crqt1RKWcQnCBgjqz3ZJkx" />
-                  <input id="llmModel" class="adv-input" type="text" autocomplete="off" data-page-node-id="QA0KpAGvtpFTyLcAviera5" />
-                </div>
-              </div>
-            </details>
           </section>
 
           <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型 -->
@@ -2026,6 +2003,31 @@
           </section>
 
           <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
+
+          <!-- 高级（一般不用改）：跨双列全宽（原嵌在「解说引擎」列里被压到 ~110px，下拉文案截断） -->
+          <details class="adv" id="llmAdvanced" style="margin-top:2px;" data-page-node-id="llmAdvanced">
+            <summary class="adv-summary" data-page-node-id="llmAdvancedSummary">高级（一般不用改）</summary>
+            <div class="adv-body" data-page-node-id="llmAdvancedBody">
+              <label class="adv-label" for="llmReasoningEffort" data-page-node-id="oQaZCa2VipSQfmlTCMOBM2">推理强度</label>
+              <select id="llmReasoningEffort" class="adv-input" title="低=推荐：省钱且质量够用；关闭=最省 token，质量略降；高=最佳质量，最贵" data-page-node-id="yDrDOaGscPebzGzOCYtDJl">
+                <option value="low" data-page-node-id="ogKvOZMxWC7DtajaAxLUCZ">低（推荐）</option>
+                <option value="disabled" data-page-node-id="ZiXDHsJB00bxKfIGgTelDB">关闭（最省）</option>
+                <option value="high" data-page-node-id="GFXo0gonx7pUnt1Si0K6b7">高（最佳质量）</option>
+              </select>
+              <label class="adv-checkbox-row" data-page-node-id="Mgu4IqN5rSHeVJ2aWOCKHE">
+                <input id="llmOffpeakOnly" type="checkbox" data-page-node-id="wUlU94mTTk526ABHo5KlaJ" />
+                <span data-page-node-id="v3coXl56GUSsg5mUtvzxST">避开峰时生成</span>
+              </label>
+              <!-- 凭据字段：保留 DOM 以免旧版逻辑取值时报错，但已不展示、也不再提交
+                   （云端服务由超级管理员通过受管配置统一下发）。 -->
+              <div hidden style="display:none;" aria-hidden="true">
+                <select id="llmProvider" class="adv-input" data-page-node-id="uDL3oOZ8cFpppOYEh2v46w"></select>
+                <input id="llmApiKey" class="adv-input" type="password" autocomplete="off" data-page-node-id="1DLaTHjloWLAYiwqxEvNd6" />
+                <input id="llmBaseUrl" class="adv-input" type="text" autocomplete="off" data-page-node-id="crqt1RKWcQnCBgjqz3ZJkx" />
+                <input id="llmModel" class="adv-input" type="text" autocomplete="off" data-page-node-id="QA0KpAGvtpFTyLcAviera5" />
+              </div>
+            </div>
+          </details>
 
           <!-- 共用一个保存按钮（同时保存 LLM 与视觉模型两组配置） -->
           <div class="com-ai-actions" data-page-node-id="OLa5zRKj5BUcXYsVDdlGGi">

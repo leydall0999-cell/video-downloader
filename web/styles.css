@@ -318,6 +318,9 @@ img { max-width: 100%; display: block; }
 .adv-textarea:focus, .adv-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79, 70, 229, .12); }
 .adv-textarea { line-height: 1.5; }
 .adv-note { font-size: .76rem; color: #94a0b4; line-height: 1.5; }
+/* 复选框行：单行不换行（窄右栏下「避开峰时生成」曾被挤成两行） */
+.adv-checkbox-row { display: flex; align-items: center; gap: .45rem; font-size: .78rem; color: var(--text-mute); cursor: pointer; white-space: nowrap; }
+.adv-checkbox-row input { flex: none; width: auto; margin: 0; accent-color: var(--brand); }
 
 /* Cookie 操作指引 */
 .cookie-help { margin-top: .6rem; border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: 0; }
@@ -2262,6 +2265,8 @@ img { max-width: 100%; display: block; }
 .com-ai-config .adv[open] { border-radius: var(--radius-md); }
 /* 内部两列：LLM + 视觉模型分组，底部横线 + 单个保存按钮 */
 .com-ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; align-items: start; }
+/* 「高级（一般不用改）」跨双列全宽：窄右栏里被压到 ~110px 时下拉文案必然截断 */
+#commentaryView #llmAdvanced { grid-column: 1 / -1; }
 .com-ai-col { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
 .com-ai-subtitle { font-size: .82rem; font-weight: 700; color: var(--text); margin: 0 0 .1rem; }
 .com-ai-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
@@ -4613,8 +4618,9 @@ img { max-width: 100%; display: block; }
 }
 .com-actionbar .com-enhance-section .com-opt-block { display: flex; align-items: center; gap: .6rem; width: 100%; }
 .com-actionbar .com-enhance-section .com-opt-title { flex: none; font-size: .74rem; white-space: nowrap; color: var(--text-mute); }
-.com-actionbar .com-enhance-section .com-opt-row { flex: 1; margin: 0; }
-.com-actionbar .com-enhance-section input[type="range"] { width: 100%; }
+.com-actionbar .com-enhance-section .com-opt-row { flex: 1; margin: 0; flex-wrap: nowrap; }
+/* 滑块弹性填充、数值固定右侧同行——原 width:100% 会把「不限」挤到下一行 */
+.com-actionbar .com-enhance-section input[type="range"] { flex: 1 1 auto; width: auto; min-width: 60px; }
 .com-actionbar .com-enhance-section .com-vol-val { flex: none; min-width: 2.6rem; text-align: right; font-size: .76rem; }
 /* ---- 中栏：时间轴（正剧范围可视化；旁白/字幕轨需管线时间码，二期接） ---- */
 .com-timeline {
