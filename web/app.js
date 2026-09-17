@@ -16071,7 +16071,7 @@ el.dwVidPlayer.removeAttribute('src');
     const lw = parseInt(localStorage.getItem('com_left_w'), 10);
     const rw = parseInt(localStorage.getItem('com_right_w'), 10);
     if (lw >= 170 && lw <= 480) root.style.setProperty('--com-left-w', lw + 'px');
-    if (rw >= 200 && rw <= 520) root.style.setProperty('--com-right-w', rw + 'px');
+    if (rw >= 160 && rw <= 520) root.style.setProperty('--com-right-w', rw + 'px');
     if (localStorage.getItem('com_left_off') === '1') root.classList.add('com-left-off');
     if (localStorage.getItem('com_right_off') === '1') root.classList.add('com-right-off');
   } catch (e) { /* 隐私模式等忽略 */ }
@@ -16091,7 +16091,8 @@ el.dwVidPlayer.removeAttribute('src');
     handle.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       const delta = side === 'l' ? (e.clientX - startX) : (startX - e.clientX);
-      const min = side === 'l' ? 170 : 200, max = side === 'l' ? 480 : 520;
+      // 右栏下限 200→160：用户想把中栏（时间轴）往右边拉长，右栏要能再让一截
+      const min = side === 'l' ? 170 : 160, max = side === 'l' ? 480 : 520;
       const w = Math.min(max, Math.max(min, startW + delta));
       root.style.setProperty(side === 'l' ? '--com-left-w' : '--com-right-w', w + 'px');
     });
@@ -16107,6 +16108,13 @@ el.dwVidPlayer.removeAttribute('src');
     };
     handle.addEventListener('pointerup', done);
     handle.addEventListener('pointercancel', done);
+    // 双击分隔条复位：清掉记忆宽度与内联变量 → 回落到 CSS 默认（中档窗口的媒体查询值）。
+    // 用途：用户拖宽过侧栏导致中栏被挤窄时，双击即可拿回「时间轴更长」的默认布局。
+    handle.addEventListener('dblclick', () => {
+      const varName = side === 'l' ? '--com-left-w' : '--com-right-w';
+      root.style.removeProperty(varName);
+      try { localStorage.removeItem(side === 'l' ? 'com_left_w' : 'com_right_w'); } catch (err) { /* ignore */ }
+    });
   }
   bindSplit(v2.querySelector('#comSplitL'), colL, 'l');
   bindSplit(v2.querySelector('#comSplitR'), colR, 'r');

@@ -3443,6 +3443,11 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
 .com-fold-card[open] > .com-fold-head::before { content: "▾"; }
 .com-fold-card .com-fold-title { font-size: .84rem; font-weight: 700; color: var(--text); white-space: nowrap; }
 .com-fold-card .com-fold-hint { flex: 1 1 auto; min-width: 0; font-size: .68rem; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 右栏收窄后（本轮 320→约 228）：摘要行不再被挤成 60px 的「类…」——
+   剩余宽度不足 6.5rem 时整段换到下一行（标题先行、摘要独占一行），而不是把摘要压扁。
+   min-width 触发 flex 换行，比「写死隐藏」更稳（宽栏下仍是一行）。 */
+.com-right .com-fold-head { flex-wrap: wrap; }
+.com-right .com-fold-hint { min-width: 6.5rem; }
 /* v2 十二轮（2026-09-17）：按语义分组，每组各自一张折叠卡——不再折成一大坨
    （用户：「按之前的分类，每组折起来，不是折到一起」）。
    外层 details.com-fold-card 承担卡框，内层容器一律去框透明，避免「卡套卡」。 */
@@ -4911,12 +4916,13 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 .com-tl-title, .com-tl-range, .com-tl-cut, .com-tl-zoom { flex: none; }
 /* ---- 中档窗口（1000–1359）：三栏全保留，左右栏收窄（2026-09-17 用户 1080 窗口也要三栏） ---- */
 @media (min-width: 1000px) and (max-width: 1359px) {
-  #commentaryView { height: calc(100vh - 110px); }
-  .com-left { width: 212px; }
-  .com-right { width: 252px; }
-  #comScriptPanel { left: 224px; right: 264px; }
-  #comReviewActions { left: 224px; right: 264px; }
-  #comStepsPanel { right: 264px; }
+  #commentaryView {
+    height: calc(100vh - 110px);
+    /* 列宽不再写死像素：统一由 #commentaryView 上的 clamp() 变量决定（见 v2 四轮块），
+       🔴 这里如果再写 width:212px 会被后面的 var() 规则盖掉（同选择器「后来者胜」），
+       历史上正是因此中档窗口左右栏一直没收窄、中栏白损失约 90px。 */
+  }
+  /* 覆盖层偏移不再写死像素：由 5111 行 calc(var(--com-*-w) + 26px) 跟随列宽 */
 }
 /* ---- 窄窗口（<1000）：右栏收抽屉 ---- */
 .com-insp-fab { display: none; }
@@ -4998,14 +5004,10 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 
 /* 6) 窄中栏（1000–1359）再加宽中栏：左 200 / 右 240 */
 @media (min-width: 1000px) and (max-width: 1359px) {
-  .com-left { width: 200px; }
-  .com-right { width: 240px; }
-  #comScriptPanel { left: 212px; right: 252px; }
-  #comReviewActions { left: 212px; right: 252px; }
-  #comStepsPanel { right: 252px; }
-  /* 240px 窄栏：row-1 下拉改两列紧凑排（标签超宽省略号兜底，不再单列竖排占屏） */
+  /* 236px 窄栏：row-1 下拉改两列紧凑排（标签超宽省略号兜底，不再单列竖排占屏） */
   .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 46%; }
   .com-right select { font-size: .74rem; }
+  /* 列宽与覆盖层偏移统一由 4913 块的变量 + 5111 行的 calc(var()) 处理，此处不再写死 */
 }
 
 /* ======================================================================
@@ -5020,6 +5022,12 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   padding: .55rem .7rem .7rem;
   /* 浅色态局部变量；深色态由「html.theme-dark #commentaryView」覆盖 */
   --surface-2: #eef0f4;
+  /* 三栏宽度：随窗口平滑伸缩（用户反馈「时间轴想往右边拉长」→ 侧栏让位给中栏）。
+     🔴 用 clamp 而不是断点：断点会在跨过临界值时让中栏**反而变窄**（窗口变宽、中栏
+     变宽才符合直觉）。拖动存下来的宽度是 root 内联样式，优先级高于这里；
+     双击分隔条复位即回到这里的 clamp 值。 */
+  --com-left-w: clamp(196px, 14vw, 240px);
+  --com-right-w: clamp(224px, 17vw, 300px);
 }
 /* 深色态：仅在 html.theme-dark 时启用（个人中心可切换 浅色/深色） */
 html.theme-dark #commentaryView {
@@ -5071,9 +5079,9 @@ html.theme-dark #commentaryView #comReviewActions {
 }
 html.theme-dark #commentaryView #comReviewActions { background: #2E2510; border-color: #61501B; color: #FDE68A; }
 
-/* ---- 三栏宽度改 CSS 变量（可拖动/记忆；默认加宽：左 260 / 右 320） ---- */
+/* ---- 三栏宽度改 CSS 变量（可拖动/记忆；默认 左 260 / 右 280，中档窗口由媒体查询改变量收窄） ---- */
 .com-left { width: var(--com-left-w, 260px); }
-.com-right { width: var(--com-right-w, 320px); }
+.com-right { width: var(--com-right-w, 280px); }
 /* 拖动分隔条 */
 .com-splitter {
   flex: none; width: 8px; margin: 0 -1px; position: relative;
@@ -5108,9 +5116,9 @@ html.theme-dark #commentaryView #comReviewActions { background: #2E2510; border-
 #commentaryView.com-right-off .com-right,
 #commentaryView.com-right-off #comSplitR { display: none; }
 /* 覆盖层偏移跟随变量与收起态（替代旧的固定 212/252 档） */
-#comScriptPanel { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 320px) + 26px); }
-#comReviewActions { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 320px) + 26px); }
-#comStepsPanel { right: calc(var(--com-right-w, 320px) + 26px); }
+#comScriptPanel { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 280px) + 26px); }
+#comReviewActions { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 280px) + 26px); }
+#comStepsPanel { right: calc(var(--com-right-w, 280px) + 26px); }
 #commentaryView.com-left-off #comScriptPanel, #commentaryView.com-left-off #comReviewActions { left: 20px; }
 #commentaryView.com-right-off #comScriptPanel, #commentaryView.com-right-off #comReviewActions,
 #commentaryView.com-right-off #comStepsPanel { right: 20px; }
