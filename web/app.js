@@ -9532,37 +9532,11 @@ el.dwVidPlayer.removeAttribute('src');
     comPreviewUrl = null;
   };
 
-  /** 预览画框的默认比例：跟随「画幅」选择（竖屏 9:16；横屏/自动按 16:9，
-   *  与 resolveVertical() 的横屏兜底同口径）。 */
-  const comPreviewFrameRatio = () => (comGetAspect() === 'vertical' ? 9 / 16 : 16 / 9);
-
-  /** 无视频时把预览画框撑成「常用画幅」的等比尺寸（16:9 / 9:16）。
-   *  背景：<video> 没有元数据时浏览器按默认 300×150 渲染，空预览就是一个又小又扁的黑盒、
-   *  四周全是空舞台（用户 2026-09-17 反馈「预览的长宽应默认为常用尺寸」）。
-   *  这里只写内联像素、不动 CSS——元数据一到即清空内联，仍交回既有的
-   *  max-width/max-height 让浏览器按视频真实比例自适应。
-   *  （⚠️ 别改成在 CSS 里写 aspect-ratio：实测它会**压过**视频真实比例，
-   *   把竖屏素材掰成 16:9 的框，见 9:16 素材实测 276×491 → 360×203。） */
-  const comSyncPreviewFrame = () => {
-    const vid = el.comPreview;
-    if (!vid) return;
-    if (vid.videoWidth > 0 && vid.videoHeight > 0) {   // 已有元数据：交回浏览器按真实比例
-      vid.style.width = '';
-      vid.style.height = '';
-      return;
-    }
-    const wrap = vid.parentElement;
-    if (!wrap) return;
-    const aw = wrap.clientWidth, ah = wrap.clientHeight;
-    if (aw < 40 || ah < 40) return;                    // 面板未开/尺寸未就绪：保持原样
-    const ratio = comPreviewFrameRatio();
-    let w = aw, h = w / ratio;
-    if (h > ah) { h = ah; w = h * ratio; }             // 等比 contain，别撑破舞台
-    const ws = Math.round(w) + 'px', hs = Math.round(h) + 'px';
-    // 与现值比较后再写，避免 ResizeObserver 反复触发
-    if (vid.style.width !== ws) vid.style.width = ws;
-    if (vid.style.height !== hs) vid.style.height = hs;
-  };
+  // 🔴 预览画框不再由 JS 写内联宽高（2026-09-17）：
+  //   旧版为了让空预览看起来是「常用画幅」，按 16:9 / 9:16 算一个像素尺寸写进 <video>，
+  //   但舞台比 16:9 高，多出来的高度就变成上下两条灰边（用户截图反馈）。
+  //   现改由 CSS 让 video 铺满舞台 + object-fit: contain 处理真实比例，灰边消失。
+  //   故 comPreviewFrameRatio / comSyncPreviewFrame 整套占位逻辑已删除。
 
   const setupComPreview = (url, title) => {
     if (!url) {
@@ -9573,7 +9547,6 @@ el.dwVidPlayer.removeAttribute('src');
       comTrimEnd = 0;
       comPreviewDuration = 0;
       if (el.comTrimTitle) { el.comTrimTitle.hidden = true; el.comTrimTitle.textContent = ''; }
-      comSyncPreviewFrame();   // 无片：画框回到常用画幅（16:9 / 9:16）
       return;
     }
     // 切到新 src 之前先把 video 元素内部状态清零，避免 onerror race 触发导致首次没显示
@@ -9610,8 +9583,6 @@ el.dwVidPlayer.removeAttribute('src');
     };
     el.comPreview.src = url;
     el.comPreview.load();
-    // 元数据到达前先按常用画幅占位（避免又闪一下 300×150 的小盒）；到达后自动切真实比例
-    comSyncPreviewFrame();
   };
 
   // 换片时：外层裁剪恒为整片，同时清空正剧时间输入（绝对时间只对当前这支片有意义）
@@ -10679,17 +10650,6 @@ el.dwVidPlayer.removeAttribute('src');
   }
   window.addEventListener('resize', comUpdateSubPreview);
   comUpdateSubPreview();
-  // 预览画框占位尺寸：舞台尺寸 / 画幅选择 / 元数据到达 都要重算一次
-  if (el.comPreview) {
-    new ResizeObserver(() => comSyncPreviewFrame())
-      .observe(el.comPreview.parentElement || el.comPreview);
-    el.comPreview.addEventListener('loadedmetadata', comSyncPreviewFrame);
-    document.addEventListener('change', (e) => {
-      const t = e.target;
-      if (t && t.name === 'comAspect') comSyncPreviewFrame();   // 切「画幅」→ 空预览画框跟着变
-    });
-  }
-  comSyncPreviewFrame();
   if (el.comMaxChars) {
     el.comMaxChars.addEventListener('input', () => {
       if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
