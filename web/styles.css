@@ -4674,9 +4674,17 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
    历史：flex:1 时舞台恒为「中栏剩下的全部高度」，与素材比例无关 → 16:9 素材在更高的舞台里
    上下留边（先是灰边、后是黑边），用户两次反馈「这上下的边有用吗 / 还是很大」。
    现改为 flex:0 0 auto + JS 按 videoWidth/Height 定高：播放器盒子＝画面本身，边为零。
-   `aspect-ratio: 16/9` 只是 JS 未跑/尺寸未就绪时的兜底（写内联 height 后它自动失效）。 */
+   `aspect-ratio: 16/9` 只是 JS 未跑/尺寸未就绪时的兜底（写内联 height 后它自动失效）。
+
+   🔴 **必须同时写 `width: 100%`（2026-09-17 用户反馈「右边都缺边了」）**：
+   `aspect-ratio` 只在**宽或高有一边是 auto** 时才会反推另一边。舞台宽度本来是 auto，
+   于是拿到 JS 写死的高度后，**WebKit（App 的 WKWebView）会用比例反推出宽度** = 高度×16/9，
+   比中栏还宽 → 舞台右侧溢出到设置栏底下，右边那圈底色和内边距被盖住（左边正常、右边缺边）。
+   Chromium 走的是 flex 的 stretch（宽度＝中栏宽），所以浏览器里测不出来 —— 这是引擎差异，别只信 Chromium。
+   写死 `width:100%` 后宽度确定，比例只能影响高度，两个引擎行为一致。 */
 .com-preview-stage {
   flex: 0 0 auto; min-height: 0;
+  width: 100%; max-width: 100%;
   aspect-ratio: 16 / 9;
   background: #18181A; border-radius: var(--radius-md);
   padding: 10px; display: flex;

@@ -9558,7 +9558,12 @@ el.dwVidPlayer.removeAttribute('src');
       if (n !== stage) { othersH += n.getBoundingClientRect().height; othersN++; }
     });
     const availInnerH = colH - othersH - gap * othersN - pad * 2;
-    const availInnerW = stage.clientWidth - pad * 2;
+    // 🔴 可用宽度按「中栏」算，不要读 stage.clientWidth（2026-09-17）：
+    //   舞台一旦因为引擎差异被撑宽，读它自己就等于把错误放大一轮（旧版 WebKit 下
+    //   高度 270 → 宽度被比例反推成 480 → 再读 480 算高度 285 → 宽度 507… 逐次胀大）。
+    const colCS = getComputedStyle(col);
+    const availInnerW = colW - (parseFloat(colCS.paddingLeft) || 0)
+                             - (parseFloat(colCS.paddingRight) || 0) - pad * 2;
     if (availInnerH < 80 || availInnerW < 80) return;
     let h = availInnerW / comPreviewRatio();           // 先按占满宽度
     if (h > availInnerH) h = availInnerH;              // 竖屏素材太高 → 按可用高度封顶
