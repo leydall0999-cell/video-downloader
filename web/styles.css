@@ -4997,3 +4997,15 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   font-size: .76rem; line-height: 1.7; color: #6B7280;
 }
 #commentaryView:has(#comTrimCard[hidden]) .com-left-placeholder { display: block; }
+
+/* ---- v2 七轮（2026-09-17）：拖动分隔条显眼化（功能本来就有，但太隐蔽用户发现不了） ---- */
+.com-splitter { width: 14px; margin: 0 -3px; z-index: 5; }
+.com-splitter::after {
+  left: 4px; right: 4px; top: 18%; bottom: 18%;
+  background: repeating-linear-gradient(180deg, #565B66 0 5px, transparent 5px 9px);
+  opacity: .9; border-radius: 2px;
+}
+.com-splitter:hover::after, .com-splitter.dragging::after {
+  background: repeating-linear-gradient(180deg, var(--brand) 0 5px, transparent 5px 9px);
+  opacity: 1;
+}
