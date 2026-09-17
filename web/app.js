@@ -8559,7 +8559,7 @@ el.dwVidPlayer.removeAttribute('src');
         refs.commentary.textContent = comButtonOriginalText(refs.commentary);
       }
       el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateScript.textContent = '生成脚本';
     }
   };
 
@@ -8622,7 +8622,7 @@ el.dwVidPlayer.removeAttribute('src');
     } catch (err) {
       el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateScript.textContent = '生成脚本';
     }
   };
 
@@ -8659,7 +8659,7 @@ el.dwVidPlayer.removeAttribute('src');
     } catch (err) {
       el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+      el.comGenerateScript.textContent = '生成脚本';
     }
   };
 
@@ -9335,7 +9335,7 @@ el.dwVidPlayer.removeAttribute('src');
   async function loadCommentary() {
     // 重置生成区状态
     el.comGenerateScript.disabled = false;
-    el.comGenerateScript.textContent = '生成脚本（可审核修改）';
+    el.comGenerateScript.textContent = '生成脚本';
     el.comGenerateScript.hidden = false;
     if (el.comGenerateRow) el.comGenerateRow.hidden = false;  // 离开审核态：底部入口恢复
     el.comScriptPanel.hidden = true;

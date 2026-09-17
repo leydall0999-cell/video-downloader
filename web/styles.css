@@ -5076,3 +5076,19 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   background: repeating-linear-gradient(180deg, var(--brand) 0 5px, transparent 5px 9px);
   opacity: 1;
 }
+
+/* ======================================================================
+   ===== v2 十三轮（2026-09-17）：操作条「生成脚本」按钮收敛 =====
+   用户「这个优化一下,按钮太大了」——原按钮 flex:1 + height:100% 撑满
+   整个左侧并把字撑到与旁边卡片同高，视觉上是一大块实心紫。
+   改为：宽度由内容决定、高度不拉伸、垂直居中，字号再降一档。
+   ====================================================================== */
+#commentaryView .com-actionbar { align-items: center; }
+#commentaryView .com-actionbar #comGenerateRow { flex: 0 0 auto; }
+#commentaryView .com-actionbar #comGenerateRow .com-generate-main {
+  width: auto; height: auto; min-height: 30px;
+  padding: .4rem .9rem; font-size: .78rem; font-weight: 600;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, .22);
+}
+/* 右侧「解说长度」卡吃掉空出来的余量，操作条仍是满宽 */
+#commentaryView .com-actionbar .com-enhance-section { flex: 1 1 200px; }
