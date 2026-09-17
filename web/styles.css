@@ -2273,6 +2273,14 @@ img { max-width: 100%; display: block; }
   font-size: .72rem; font-weight: 700; color: var(--text-mute); letter-spacing: .02em;
 }
 .com-ai-sec::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--line); }
+/* v2 十八轮：参数行「标签 + 控件 + 复选框」并排（原为 label 独占一行 + 控件独占一行）。
+   窄右栏卡内实测只有 240px，三项并排放不下，所以用 flex-wrap 自动折行：
+   宽面板一行、窄面板「标签+控件 / 复选框」两行，两种情况都不溢出、不截断。
+   注意 select 必须 width:auto —— .adv-input 默认 width:100%，不改会独占整行把复选框顶下去。 */
+.com-ai-inline { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .55rem; }
+.com-ai-inline-lbl { flex: 0 0 auto; margin: 0; }
+.com-ai-inline-sel { flex: 1 1 96px; width: auto; min-width: 0; }
+.com-ai-inline-chk { flex: 0 0 auto; }
 .com-ai-actions { display: flex; align-items: center; gap: .6rem; padding-top: .6rem; border-top: 1px dashed var(--line); margin-top: .2rem; }
 /* 「保存」按钮加大 + 加粗（合并后只此一个保存按钮，给足视觉权重） */
 #aiSave { padding: .55rem 1.4rem; font-size: .95rem; font-weight: 700; }

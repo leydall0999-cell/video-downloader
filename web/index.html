@@ -1999,9 +1999,12 @@
               <div id="llmManagedStatus" class="adv-note" hidden data-page-node-id="llmManagedStatus"></div>
               <div id="llmGatewayStatus" class="adv-note" data-page-node-id="llmGatewayStatus"></div>
               <label class="adv-label" for="llmEngine" data-page-node-id="llmEngineLbl">解说词由谁来生成</label>
+              <!-- v2 十八轮：选项文案精简到「右栏 240px 内不截断」——此前「本机优先：本机够用就本机（免费、
+                   素材不出本机），不够自动用云端」在窄栏里被砍成半句，用户看不到关键信息。
+                   详细差异交给下方 note（随选择动态变化），选项只留一行内的结论。 -->
               <select id="llmEngine" class="adv-input" data-page-node-id="llmEngine">
-                <option value="auto" data-page-node-id="llmEngineAuto">本机优先：本机够用就本机（免费、素材不出本机），不够自动用云端</option>
-                <option value="cloud" data-page-node-id="llmEngineCloud">纯云端：全程云端生成，质量最稳，消耗云端额度</option>
+                <option value="auto" data-page-node-id="llmEngineAuto">本机优先（免费、素材不出本机）</option>
+                <option value="cloud" data-page-node-id="llmEngineCloud">纯云端（质量最稳、消耗额度）</option>
               </select>
               <p class="adv-note" id="llmEngineNote" data-page-node-id="llmEngineNote"></p>
               <div id="llmMlxBox" hidden style="margin-top:6px;">
@@ -2011,9 +2014,31 @@
                 <div id="llmMlxHint" class="adv-hint" style="font-size:12px;line-height:1.5;margin-top:2px;"></div>
               </div>
 
+
+              <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
+
+              <!-- v2 十八轮（用户：「这三样放一起，聪明一点」）：
+                   取消「高级（一般不用改）」小节标签——本卡如今只剩这一个功能块，中间再切一刀
+                   反而把「推理强度 / 避开峰时生成」跟上面的引擎档位人为分开，用户得跨节找。
+                   推理强度改「标签 + 控件」同行（窄栏自动折行），与复选框并成一块。
+                   两项都只对云端生成有影响，跟引擎档位本是同一件事的三个参数、同属一组。 -->
+              <div class="com-ai-inline" data-page-node-id="comAiInline">
+                <label class="adv-label com-ai-inline-lbl" for="llmReasoningEffort" data-page-node-id="oQaZCa2VipSQfmlTCMOBM2">推理强度</label>
+                <select id="llmReasoningEffort" class="adv-input com-ai-inline-sel" title="低=推荐：省钱且质量够用；关闭=最省 token，质量略降；高=最佳质量，最贵" data-page-node-id="yDrDOaGscPebzGzOCYtDJl">
+                  <option value="low" data-page-node-id="ogKvOZMxWC7DtajaAxLUCZ">低（推荐）</option>
+                  <option value="disabled" data-page-node-id="ZiXDHsJB00bxKfIGgTelDB">关闭（最省）</option>
+                  <option value="high" data-page-node-id="GFXo0gonx7pUnt1Si0K6b7">高（最佳质量）</option>
+                </select>
+                <label class="adv-checkbox-row com-ai-inline-chk" data-page-node-id="Mgu4IqN5rSHeVJ2aWOCKHE">
+                  <input id="llmOffpeakOnly" type="checkbox" data-page-node-id="wUlU94mTTk526ABHo5KlaJ" />
+                  <span data-page-node-id="v3coXl56GUSsg5mUtvzxST">避开峰时生成</span>
+                </label>
+              </div>
               <!-- 视觉模型选择器：统一配置片头集数卡检测和视觉理解所需的 Key / 服务商 / 模型。
-                   v2 十世轮：本块唯一可展示内容就是一条状态，正常（走画面识别）时整块不显示，
-                               只有降级为音频检测时才由 syncVisionFold() 放开 —— 默认带 hidden。 -->
+                   v2 十六轮：本块唯一可展示内容就是一条状态，正常（走画面识别）时整块不显示，
+                              只有降级为音频检测时才由 syncVisionFold() 放开 —— 默认带 hidden。
+                   v2 十八轮：整块下移到「推理强度 / 避开峰时生成」之后——否则降级时它会插在
+                              引擎档位与那两项参数之间，把用户要求「放一起」的那一组又拆开。 -->
               <div id="comAiVisionFold" hidden data-page-node-id="yw13FoKq1uHmcWgCBhzrds">
                 <div class="com-ai-sec" data-page-node-id="wFA1ZJ1FPFu2XzNCFwWAWJ">画面识别</div>
                 <!-- 本行与下方 visionRuntime 在三种档位下都同义重复（如「片头检测走本机画面识别（离线免费）。」
@@ -2038,21 +2063,6 @@
                 </div>
                 <div id="visionRuntime" class="adv-note" data-page-node-id="SvkSqeKO42MZrXmDiva7w2"></div>
               </div>
-
-              <!-- 云端抠图配置已整体搬到「一键抠图」面板的 ⚙️ 高级里（原在此处，两处配置会互相覆盖） -->
-
-              <!-- 高级（一般不用改）：原为独立折叠卡，v2 十七轮起降为行内小标签（少一层点击） -->
-              <div class="com-ai-sec" data-page-node-id="llmAdvancedSummary">高级（一般不用改）</div>
-              <label class="adv-label" for="llmReasoningEffort" data-page-node-id="oQaZCa2VipSQfmlTCMOBM2">推理强度</label>
-              <select id="llmReasoningEffort" class="adv-input" title="低=推荐：省钱且质量够用；关闭=最省 token，质量略降；高=最佳质量，最贵" data-page-node-id="yDrDOaGscPebzGzOCYtDJl">
-                <option value="low" data-page-node-id="ogKvOZMxWC7DtajaAxLUCZ">低（推荐）</option>
-                <option value="disabled" data-page-node-id="ZiXDHsJB00bxKfIGgTelDB">关闭（最省）</option>
-                <option value="high" data-page-node-id="GFXo0gonx7pUnt1Si0K6b7">高（最佳质量）</option>
-              </select>
-              <label class="adv-checkbox-row" data-page-node-id="Mgu4IqN5rSHeVJ2aWOCKHE">
-                <input id="llmOffpeakOnly" type="checkbox" data-page-node-id="wUlU94mTTk526ABHo5KlaJ" />
-                <span data-page-node-id="v3coXl56GUSsg5mUtvzxST">避开峰时生成</span>
-              </label>
               <!-- 凭据字段：保留 DOM 以免旧版逻辑取值时报错，但已不展示、也不再提交
                    （云端服务由超级管理员通过受管配置统一下发）。 -->
               <div hidden style="display:none;" aria-hidden="true">
