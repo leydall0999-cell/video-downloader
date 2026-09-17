@@ -3374,6 +3374,22 @@ img { max-width: 100%; display: block; }
 .com-vol-card > .com-vol-status:not([hidden]) {
   display: block; margin: .42rem .55rem;
 }
+/* v2 八轮（2026-09-17）：原字幕羽化 / 配音与音量改 details 默认折起（用户「默认折起,不要展开」），
+   标题行即整条开合热区；按钮行移出 summary（点按钮不再触发折叠）。 */
+details.com-feather-card > .com-feather-head,
+details.com-vol-card > .com-vol-card-head { cursor: pointer; list-style: none; user-select: none; }
+details.com-feather-card > .com-feather-head::-webkit-details-marker,
+details.com-vol-card > .com-vol-card-head::-webkit-details-marker { display: none; }
+details.com-feather-card > .com-feather-head::before,
+details.com-vol-card > .com-vol-card-head::before { content: "▸"; font-size: .78rem; color: var(--text-mute); }
+details[open].com-feather-card > .com-feather-head::before,
+details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
+.com-vol-card-actions {
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+  padding: .45rem .58rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+}
+.com-vol-card-actions .btn { margin-bottom: .45rem; }
 
 /* 窄屏回退：三列 → 两列 → 单列（卡片实际宽度在 600~715px 区间，故阈值取视口 760/560） */
 @media (max-width: 700px) {

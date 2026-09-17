@@ -2145,11 +2145,11 @@
         <!-- ===== 原字幕羽化（2026-09-16）：预览窗口实时看效果 + 可微调 =====
              默认「跟随自动探测」：探测命中→带生效，未命中→不干预（管线自己探测/兜底）。
              一旦用户改这里的数值或拖了预览里的框，即转为「手动指定」并覆盖探测结果。 -->
-        <div class="com-feather-card" id="comFeatherCard" data-page-node-id="comFeatherCard">
-          <div class="com-feather-head" data-page-node-id="comFeatherHead">
+        <details class="com-feather-card" id="comFeatherCard" data-page-node-id="comFeatherCard">
+          <summary class="com-feather-head" data-page-node-id="comFeatherHead">
             <span class="com-feather-title" data-page-node-id="comFeatherTitle">🎨 原字幕羽化</span>
             <span class="com-feather-state" id="comFeatherState" data-page-node-id="comFeatherState">未探测</span>
-          </div>
+          </summary>
           <div class="com-feather-row" data-page-node-id="comFeatherRow1">
             <label class="com-feather-field" data-page-node-id="comFeatherModeField">
               <span class="com-feather-label" data-page-node-id="comFeatherModeLabel">擦除方式</span>
@@ -2199,19 +2199,19 @@
             <button type="button" class="btn btn-sm btn-ghost" id="comFeatherRedetect" data-page-node-id="comFeatherRedetectBtn">重新探测</button>
           </div>
           <p class="com-feather-hint" id="comFeatherHint" data-page-node-id="comFeatherHint">在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。</p>
-        </div>
+        </details>
       </div>
 
-      <!-- ===== 配音与音量整卡（合并含试听按钮） ===== -->
-      <div class="com-vol-card" data-page-node-id="rs6i6mlJ11jXDTlJyyE1qN">
-        <div class="com-vol-card-head" data-page-node-id="s0lI51tyEnA3mUrA4lFmuI">
-          <div class="com-vol-label" data-page-node-id="4sDVUysPa6CMMiMOblGMJq">配音与音量</div>
+      <!-- ===== 配音与音量整卡（合并含试听按钮；details 默认折起） ===== -->
+      <details class="com-vol-card" data-page-node-id="rs6i6mlJ11jXDTlJyyE1qN">
+        <summary class="com-vol-card-head" data-page-node-id="s0lI51tyEnA3mUrA4lFmuI">
+          <span class="com-vol-label" data-page-node-id="4sDVUysPa6CMMiMOblGMJq">配音与音量</span>
           <span class="com-vol-hint" data-page-node-id="IQQVL4LeeU3OJo8c0PVAGf">（保存后对所有解说任务生效）</span>
-          <div class="com-vol-buttons" data-page-node-id="SWhpgDWD69n1UE2NbjhXW4">
+        </summary>
+        <div class="com-vol-card-actions" data-page-node-id="SWhpgDWD69n1UE2NbjhXW4">
             <button type="button" class="btn btn-sm btn-ghost" id="comVolReset" data-page-node-id="njARBGPd5JHNgmvwx9656w">恢复默认</button>
             <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview" title="试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。" data-page-node-id="SH38VoX0fYpwNqQzKAbiew">▶ 试听当前设置</button>
             <button type="button" class="btn btn-sm btn-primary" id="comVolSave" data-page-node-id="3TxPGDwAIABEMdaKrE4Ujj">💾 保存设置</button>
-          </div>
         </div>
         <div class="com-vol-card-pair com-vol-card-trio" data-page-node-id="jepd0FQwwlMM88jO6BVbf4">
           <div class="com-vol-cell" data-page-node-id="Op2WflJ47bzZV3JAitgx2P">
@@ -2240,7 +2240,7 @@
           </div>
         </div>
         <span class="com-status com-vol-status" id="comVolStatus" hidden data-page-node-id="H6LFK6FHhW4jZ2cy0HIxr7"></span>
-      </div>
+      </details>
 
       <!-- ===== 导出剪映草稿（保留在 .com-grid 之外的整行卡片） ===== -->
       <div class="com-grid com-grid-tail" data-page-node-id="gWjsT1mv42XePANsyGZa6S">
