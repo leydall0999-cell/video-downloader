@@ -3432,7 +3432,8 @@ img { max-width: 100%; display: block; }
   padding: .7rem 0;
   box-shadow: none;
 }
-.com-bottom .com-generate-row { margin-top: 0; padding: 0; }
+/* 2026-09-17 生成脚本按钮已挪到 .com-col 内（选项卡下方文档流），不再有 .com-bottom 内的覆盖规则；
+   基础 .com-generate-row（margin-top:1rem + padding:0 1rem）即为其新落位样式。 */
 /* 移出 .com-bottom 后的区块间距（#comScriptPanel 有自身 id 规则，不在此列） */
 #commentaryView .com-review-actions,
 #commentaryView .com-steps-panel { margin-top: .7rem; }

@@ -2237,9 +2237,15 @@
         <span class="com-retain-hint" data-page-node-id="z45Ba9CiW0noNbuF3o3eeJ">0=不限制；短视频想短就调小（如 600），课程想长就调大</span>
       </div>
     </div>
-        </div>
+      <!-- 2026-09-17 用户指定：生成脚本按钮放选项卡下方、解说历史上方的空隙处（红框位置）。
+           从 .com-bottom 粘性条挪入正常文档流；粘性条只保留进度条。 -->
+      <div class="com-generate-row" id="comGenerateRow" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
+        <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" data-page-node-id="JPKaPDTzondWplp1ytN7S2">生成脚本（可审核修改）</button>
+      </div>
     </div>
-    <!-- ⚠️ 2026-09-16 底部常驻操作条：只放「生成脚本按钮 + 进度条」这一条**矮**条。
+    </div>
+    <!-- ⚠️ 2026-09-16 底部常驻操作条：只放「进度条」这一条**矮**条（生成脚本按钮已于 2026-09-17
+         挪到上方选项卡下方的文档流中）。
          🔴 三个必守约束，任一破坏都会复发「整块盖住上方选项面板」的老 bug：
          ① **高度必须远小于视口**。历史版本把它当容器包住 2000px+ 的成片列表，
             sticky 元素一高过视口，bottom:0 就无法满足、整块被顶进视口把工作区盖住
@@ -2252,9 +2258,6 @@
             布局末尾——DOM 顺序不变、视觉与粘性行为等同于末尾元素。
          ③ 必须保持不透明背景（下方会有内容滚过）。 -->
     <div class="com-bottom" data-page-node-id="MtOmikaEbK1RodPPszAmVU">
-            <div class="com-generate-row" id="comGenerateRow" data-page-node-id="tXFBLdbFcKD4JtQB1XWVsx">
-      <button type="button" class="btn com-generate-main com-generate-secondary" id="comGenerateScript" data-page-node-id="JPKaPDTzondWplp1ytN7S2">生成脚本（可审核修改）</button>
-    </div>
             <div id="comProgress" hidden data-page-node-id="jFzpwZ2tFFuxuHnd1JW18P">
       <div class="com-progress-head" data-page-node-id="NXTJmE6FxZh5Tj1hy6GHOT">
         <span id="comPhase" class="com-phase-tag" data-page-node-id="AzwHBbQvN7zWoWdKlGkrnd">转写中</span>
