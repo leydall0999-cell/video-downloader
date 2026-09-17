@@ -9532,11 +9532,39 @@ el.dwVidPlayer.removeAttribute('src');
     comPreviewUrl = null;
   };
 
-  // 🔴 预览画框不再由 JS 写内联宽高（2026-09-17）：
-  //   旧版为了让空预览看起来是「常用画幅」，按 16:9 / 9:16 算一个像素尺寸写进 <video>，
-  //   但舞台比 16:9 高，多出来的高度就变成上下两条灰边（用户截图反馈）。
-  //   现改由 CSS 让 video 铺满舞台 + object-fit: contain 处理真实比例，灰边消失。
-  //   故 comPreviewFrameRatio / comSyncPreviewFrame 整套占位逻辑已删除。
+  // ===== 预览舞台高度＝素材比例（2026-09-17 晚，第二轮）=========================
+  // 历史：① 舞台原为 flex:1，比 16:9 高 → 空预览按 16:9 占位时上下各留一条灰边；
+  //       ② 改为 video 铺满舞台后，灰边变黑边，**但对 16:9 素材仍是「很大的边」**
+  //          （用户第二次反馈「还是很大」）——根因是舞台高度与素材比例无关。
+  // 结论：舞台高度必须跟着素材走，播放器盒子＝画面本身，边才真正为零。
+  //   · 有元数据 → 用 videoWidth/videoHeight；
+  //   · 无片/未就绪 → 跟「画幅」档位（16:9 / 9:16），即用户要的「常用画幅」。
+  // 中栏因此让出的高度由 flex 布局留在时间轴下方（舞台不再吃掉全部剩余高度）。
+  const comPreviewRatio = () => {
+    const v = el.comPreview;
+    if (v && v.videoWidth > 0 && v.videoHeight > 0) return v.videoWidth / v.videoHeight;
+    return comGetAspect() === 'vertical' ? 9 / 16 : 16 / 9;
+  };
+  const comSyncStageSize = () => {
+    const stage = el.comPreview && el.comPreview.closest('.com-preview-stage');
+    const col = stage && stage.parentElement;
+    if (!stage || !col) return;
+    const pad = parseFloat(getComputedStyle(stage).paddingTop) || 0;
+    const colH = col.clientHeight, colW = col.clientWidth;
+    if (colH < 160 || colW < 160) return;              // 面板未开/尺寸未就绪：交给 CSS 兜底
+    const gap = parseFloat(getComputedStyle(col).rowGap) || 0;
+    let othersH = 0, othersN = 0;                      // 同栏其他卡片（操作条 / 时间轴）都是 flex:none
+    Array.prototype.forEach.call(col.children, (n) => {
+      if (n !== stage) { othersH += n.getBoundingClientRect().height; othersN++; }
+    });
+    const availInnerH = colH - othersH - gap * othersN - pad * 2;
+    const availInnerW = stage.clientWidth - pad * 2;
+    if (availInnerH < 80 || availInnerW < 80) return;
+    let h = availInnerW / comPreviewRatio();           // 先按占满宽度
+    if (h > availInnerH) h = availInnerH;              // 竖屏素材太高 → 按可用高度封顶
+    const want = Math.round(h + pad * 2) + 'px';
+    if (stage.style.height !== want) stage.style.height = want;   // 比现值再写，避免观察器自激
+  };
 
   const setupComPreview = (url, title) => {
     if (!url) {
@@ -9547,6 +9575,7 @@ el.dwVidPlayer.removeAttribute('src');
       comTrimEnd = 0;
       comPreviewDuration = 0;
       if (el.comTrimTitle) { el.comTrimTitle.hidden = true; el.comTrimTitle.textContent = ''; }
+      comSyncStageSize();   // 无片：舞台回到「画幅」档位的常用比例
       return;
     }
     // 切到新 src 之前先把 video 元素内部状态清零，避免 onerror race 触发导致首次没显示
@@ -10650,6 +10679,20 @@ el.dwVidPlayer.removeAttribute('src');
   }
   window.addEventListener('resize', comUpdateSubPreview);
   comUpdateSubPreview();
+  // 舞台高度跟着素材比例走：中栏尺寸 / 素材元数据 / 「画幅」档位 三种变化都要重算。
+  // 观察的是**中栏**而不是舞台本身（舞台高度由本函数写，观察它会自激）。
+  if (el.comPreview) {
+    const stageEl = el.comPreview.closest('.com-preview-stage');
+    if (stageEl && stageEl.parentElement) {
+      new ResizeObserver(() => comSyncStageSize()).observe(stageEl.parentElement);
+    }
+    el.comPreview.addEventListener('loadedmetadata', comSyncStageSize);
+    document.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t && t.name === 'comAspect') comSyncStageSize();
+    });
+  }
+  comSyncStageSize();
   if (el.comMaxChars) {
     el.comMaxChars.addEventListener('input', () => {
       if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');

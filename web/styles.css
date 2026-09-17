@@ -4670,8 +4670,14 @@ details[open].com-vol-card > .com-vol-card-head::before { content: "▾"; }
 .com-left .com-trim-card { margin: 0; display: flex; flex-direction: column; }
 .com-left .com-trim-head h3 { font-size: .88rem; }
 /* ---- 中栏：深色预览舞台 ---- */
+/* 🔴 舞台高度＝素材比例（JS `comSyncStageSize()` 写内联 height）。
+   历史：flex:1 时舞台恒为「中栏剩下的全部高度」，与素材比例无关 → 16:9 素材在更高的舞台里
+   上下留边（先是灰边、后是黑边），用户两次反馈「这上下的边有用吗 / 还是很大」。
+   现改为 flex:0 0 auto + JS 按 videoWidth/Height 定高：播放器盒子＝画面本身，边为零。
+   `aspect-ratio: 16/9` 只是 JS 未跑/尺寸未就绪时的兜底（写内联 height 后它自动失效）。 */
 .com-preview-stage {
-  flex: 1; min-height: 0;
+  flex: 0 0 auto; min-height: 0;
+  aspect-ratio: 16 / 9;
   background: #18181A; border-radius: var(--radius-md);
   padding: 10px; display: flex;
 }
