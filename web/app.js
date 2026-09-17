@@ -442,11 +442,8 @@
     comEmpty: $('comEmpty'),
     comGrid: $('comGrid'),
     comHistory: $('comHistory'),
-    comHistoryCount: $('comHistoryCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comSortBtn: $('comSortBtn'),
-    comSortMenu: $('comSortMenu'),
-    comSortLabel: $('comSortLabel'),
     comSource: $('comSource'),
     // 解说类型自定义下拉
     comTypeDropdown: $('comTypeDropdown'),
@@ -937,7 +934,7 @@
   // 解说成片列表视图状态
   let commentaryItems = [];
   let commentaryViewMode = 'list';   // grid | list | timeline | gallery
-  let commentarySort = 'mtime-desc'; // mtime-desc | mtime-asc | size-desc | size-asc | name-asc | name-desc
+  let commentarySort = 'mtime-desc'; // 只留时间维度：mtime-desc（最新在前，默认）| mtime-asc（最早在前）
 
   // -------------------------------------------------------------- 节点分流
   // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
@@ -9476,7 +9473,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
     } else {
-      el.comHistoryCount.textContent = `${items.length} 个`;
+      // 2026-09-18：标题行的「N 个」计数徽标已按用户要求移除（只留「📂 解说历史」）
       if (commentaryViewMode === 'timeline') {
         const groups = {};
         items.forEach((it) => {
@@ -11845,39 +11842,26 @@ el.dwVidPlayer.removeAttribute('src');
     renderCommentaryList();
   });
 
-  // 解说成片：排序切换（自定义弹出菜单，仿 macOS 原生菜单）
-  const SORT_LABELS = {
-    'mtime-desc': '时间：最新在前', 'mtime-asc': '时间：最早在前',
-    'size-desc': '大小：从大到小', 'size-asc': '大小：从小到大',
-    'name-asc': '名称：A-Z', 'name-desc': '名称：Z-A',
-  };
+  // 解说成片：排序（2026-09-18 用户「排序方式默认当前，其他排序方式不要，只留这个」）
+  // 只保留时间维度：⇅ 按钮一键在「最新在前 / 最早在前」之间切换，默认仍是 mtime-desc。
+  // 原来的下拉菜单（大小 2 项 + 名称 2 项）连同带字 label / 下三角 caret 一并删除 ——
+  // 面板只有 187px，一个方向切换就够；「当前排序」靠 tooltip + is-asc 高亮交代。
+  const SORT_LABELS = { 'mtime-desc': '时间 · 最新在前', 'mtime-asc': '时间 · 最早在前' };
   const syncSortMenu = () => {
-    el.comSortLabel.textContent = SORT_LABELS[commentarySort] || commentarySort;
-    // 面板收窄（187px）后排序按钮只留图标，当前排序靠 tooltip 交代
-    if (el.comSortBtn) el.comSortBtn.title = '排序：' + (SORT_LABELS[commentarySort] || commentarySort);
-    el.comSortMenu.querySelectorAll('li[data-value]').forEach((li) =>
-      li.classList.toggle('selected', li.dataset.value === commentarySort));
+    if (!SORT_LABELS[commentarySort]) commentarySort = 'mtime-desc';  // 防御：旧值兜底
+    const lbl = SORT_LABELS[commentarySort];
+    if (!el.comSortBtn) return;
+    el.comSortBtn.title = '排序：' + lbl + '（点击切换）';
+    el.comSortBtn.setAttribute('aria-label', '排序：' + lbl);
+    el.comSortBtn.classList.toggle('is-asc', commentarySort === 'mtime-asc');
   };
-  const closeSortMenu = () => {
-    el.comSortMenu.classList.remove('open');
-    el.comSortBtn.setAttribute('aria-expanded', 'false');
-  };
-  el.comSortBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const open = el.comSortMenu.classList.toggle('open');
-    el.comSortBtn.setAttribute('aria-expanded', String(open));
-  });
-  el.comSortMenu.addEventListener('click', (e) => {
-    const li = e.target.closest('li[data-value]');
-    if (!li) return;
-    commentarySort = li.dataset.value;
-    syncSortMenu();
-    closeSortMenu();
-    renderCommentaryList();
-  });
-  document.addEventListener('click', (e) => {
-    if (!el.comSortMenu.contains(e.target) && !el.comSortBtn.contains(e.target)) closeSortMenu();
-  });
+  if (el.comSortBtn) {
+    el.comSortBtn.addEventListener('click', () => {
+      commentarySort = commentarySort === 'mtime-asc' ? 'mtime-desc' : 'mtime-asc';
+      syncSortMenu();
+      renderCommentaryList();
+    });
+  }
   syncSortMenu();
 
   // ------------------------------------------------------------------ 初始化

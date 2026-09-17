@@ -2523,7 +2523,8 @@
              因为它 2000px+ 的高度会让 sticky 容器顶穿视口。视觉先后顺序未变，仍是最末一块。 -->
         <div class="com-history-head" data-page-node-id="HejiZXI2mP6UZDVhUeu8B6">
           <div class="com-history-title-wrap" data-page-node-id="wtdbMFhhPVmFdLxwoEXrVM">
-            <h3 data-page-node-id="XfcDUBEM31G9M195DlqMtE">📂 解说历史 <span id="comHistoryCount" class="com-history-count" data-page-node-id="VBadUq9diV5hYYfSFfEs8r">0 个</span></h3>
+            <!-- 2026-09-18 用户「包括解说历史 18 个也不要」：计数徽标已移除，标题只留文字 -->
+            <h3 data-page-node-id="XfcDUBEM31G9M195DlqMtE">📂 解说历史</h3>
           </div>
           <div class="com-history-toolbar" data-page-node-id="7zDJhZ6I3de55Cfj4FwvB1">
             <div class="com-view-toggle" id="comHistoryToolbar" data-page-node-id="mCOYJj9skOFLBAKgsMM9O3">
@@ -2541,19 +2542,12 @@
           </button>
         </div>
         <div class="com-sort" data-page-node-id="FA03uy8SIqBFuFAM2iNqDG">
-          <button type="button" class="com-sort-btn" id="comSortBtn" aria-haspopup="true" aria-expanded="false" data-page-node-id="OasBWDnXtUAAIDH7gU1pJb">
+          <!-- 2026-09-18 用户「排序方式默认当前，其他排序方式不要，只留这个」：
+               保留这个 ⇅ 按钮，但下拉菜单（大小/名称 4 项）已整体删除。
+               现在点它 = 在「最新在前 / 最早在前」之间一键切换，默认仍是「最新在前」。 -->
+          <button type="button" class="com-sort-btn" id="comSortBtn" title="排序：时间 · 最新在前（点击切换）" aria-label="排序：时间 · 最新在前" data-page-node-id="OasBWDnXtUAAIDH7gU1pJb">
             <svg class="com-sort-ico" viewBox="0 0 16 16" aria-hidden="true" data-page-node-id="comSortIco"><path d="M4.5 2.5v11M4.5 13.5l-2.2-2.2M4.5 13.5l2.2-2.2M11.5 13.5v-11M11.5 2.5l-2.2 2.2M11.5 2.5l2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="comSortIcoPath"/></svg>
-            <span class="com-sort-label" id="comSortLabel" data-page-node-id="wu9R9ski2skP8BWYkQFQX7">时间：最新在前</span>
-            <svg class="com-sort-caret" viewBox="0 0 12 12" aria-hidden="true" data-page-node-id="rmcsDSOI48Am5y80jvg1SY"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="5zGaEUGe1CiacDlIc4b8Hi"/></svg>
           </button>
-          <ul class="com-sort-menu" id="comSortMenu" role="menu" data-page-node-id="xUYUPfZGXiZzTfhBxJc4hD">
-            <li role="menuitem" data-value="mtime-desc" data-page-node-id="YcImTqbgciqIvGUvMmRVMu">时间：最新在前</li>
-            <li role="menuitem" data-value="mtime-asc" data-page-node-id="rXxwFUKSxLXafCFaXaBHCb">时间：最早在前</li>
-            <li role="menuitem" data-value="size-desc" data-page-node-id="jwH8Qbh7Ch2GWAjbYYh1W4">大小：从大到小</li>
-            <li role="menuitem" data-value="size-asc" data-page-node-id="ZECUGnJqPutfy72ArlNEvD">大小：从小到大</li>
-            <li role="menuitem" data-value="name-asc" data-page-node-id="TBNt3UusVFulrDO2DmrMFM">名称：A-Z</li>
-            <li role="menuitem" data-value="name-desc" data-page-node-id="rfHjGTBeUa2tr6KBGXj8zh">名称：Z-A</li>
-          </ul>
           </div>
           <button type="button" class="com-hist-close" id="comHistClose" title="收起解说历史" aria-label="收起解说历史" data-page-node-id="comHistCloseBtn">✕</button>
           </div>
