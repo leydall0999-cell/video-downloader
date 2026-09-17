@@ -4971,6 +4971,64 @@ html.com-theater { overflow: hidden; }
 /* 脚本面板中被时间轴点中的那一段 */
 .com-seg-row.is-tl-active { outline: 2px solid #818CF8; outline-offset: 2px; border-radius: 8px; }
 .com-seg-row .com-seg-meta { cursor: pointer; }
+
+/* ---- 音乐轨（2026-09-18：时间轴第四条轨）----
+   配乐在渲染成片时混入（后端 build 的 bgm/bgm_file/bgm_volume），音乐循环铺满全片，
+   所以 clip 恒铺满 0→100%：这一轨表达「有没有配乐、哪一首、多大声」，不是时间区间。 */
+.com-tl-lane-music { display: flex; align-items: center; justify-content: center; }
+.com-tl-lane-music:hover { background: #2F3238; }
+.com-tl-music-add {
+  width: 100%; height: 100%; padding: 0; cursor: pointer; font-size: .6rem; line-height: 1;
+  background: none; border: 1px dashed #4B5563; border-radius: 3px; color: #9CA3AF;
+}
+.com-tl-music-add:hover { color: #E5E7EB; border-color: #818CF8; background: rgba(129, 140, 248, .08); }
+.com-tl-music-clip {
+  left: 0; right: 0; display: flex; align-items: center; padding: 0 .4rem;
+  background: linear-gradient(135deg, #0E7490, #0891B2); border-radius: 3px; cursor: pointer; overflow: hidden;
+}
+.com-tl-music-clip:hover { filter: brightness(1.18); }
+.com-tl-music-txt {
+  font-size: .6rem; color: #ECFEFF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 配乐选择面板：贴在时间轴卡上方（卡片本身是深色，这里沿用同色系） */
+.com-tl-music-pop {
+  position: absolute; left: .8rem; bottom: calc(100% + 6px); z-index: 8;
+  width: 348px; max-width: calc(100% - 1.6rem);
+  background: #26282E; border: 1px solid #3A3D45; border-radius: 8px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .5); padding: .5rem .62rem .55rem;
+  font-size: .68rem; color: #D1D5DB;
+}
+.com-tl-music-pop[hidden] { display: none; }
+.com-tl-music-pophead { display: flex; align-items: center; gap: .4rem; margin-bottom: .45rem; }
+.com-tl-music-pophead b { color: #E5E7EB; font-size: .74rem; }
+.com-tl-music-pophead > span { color: #6B7280; font-size: .62rem; }
+.com-tl-music-close {
+  margin-left: auto; width: 18px; height: 18px; padding: 0; cursor: pointer; line-height: 1;
+  background: none; border: none; color: #6B7280; font-size: .7rem;
+}
+.com-tl-music-close:hover { color: #E5E7EB; }
+.com-tl-music-opts { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .45rem; }
+.com-tl-music-opt {
+  flex: 0 0 auto; padding: .2rem .55rem; cursor: pointer; border-radius: 5px;
+  background: #2F3238; border: 1px solid #3A3D45; color: #C7CBD1; font-size: .66rem;
+}
+.com-tl-music-opt:hover { color: #E5E7EB; border-color: #4F46E5; }
+.com-tl-music-opt.is-on { background: #0891B2; border-color: #22D3EE; color: #ECFEFF; }
+.com-tl-music-filerow { display: flex; align-items: center; gap: .4rem; margin-bottom: .45rem; min-width: 0; }
+.com-tl-music-filerow[hidden] { display: none; }
+.com-tl-music-path {
+  flex: 1 1 0; min-width: 0; font-size: .62rem; color: #9CA3AF;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;
+}
+.com-tl-music-volrow { display: flex; align-items: center; gap: .4rem; margin-bottom: .45rem; }
+.com-tl-music-lab { flex: none; color: #9CA3AF; }
+.com-tl-music-volrow input[type="range"] { flex: 1 1 auto; min-width: 80px; }
+.com-tl-music-val { flex: none; min-width: 2.2rem; text-align: right; font-variant-numeric: tabular-nums; color: #E5E7EB; }
+.com-tl-music-acts { display: flex; align-items: center; gap: .4rem; }
+.com-tl-music-acts .btn[hidden] { display: none; }
+.com-tl-music-hint { margin-top: .4rem; color: #6B7280; font-size: .62rem; line-height: 1.45; }
+.com-tl-music-hint.is-err { color: #FCA5A5; }
+.com-tl-music-hint.is-ok { color: #6EE7B7; }
 /* 未选视频：淡出，避免「有时间轴却没内容」的误导 */
 .com-timeline.is-empty .com-tl-viewport { opacity: .4; }
 /* ---- 右栏检查器 ---- */

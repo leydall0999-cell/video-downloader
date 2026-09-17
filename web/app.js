@@ -507,13 +507,8 @@
     comTtsStatusDot: $('comTtsStatusDot'),
     comTtsStatusText: $('comTtsStatusText'),
     comTtsProvider: $('comTtsProvider'),
-    comBgm: $('comBgm'),
-    comBgmVolume: $('comBgmVolume'),
-    comBgmVolumeVal: $('comBgmVolumeVal'),
-    comBgmVolWrap: $('comBgmVolWrap'),
-    comBgmFileWrap: $('comBgmFileWrap'),
-    comBgmFile: $('comBgmFile'),
-    comBgmFilePick: $('comBgmFilePick'),
+    // BGM 的 7 个元素引用（comBgm*）2026-09-18 删除：DOM 早在 2026-09-15 随「成片增强 ·
+    // 自动配乐」块移除，引用恒为 null；配乐改由时间轴「音乐」轨的 comMusic 状态承载。
     comSubSize: $('comSubSize'),
     comSubSizeSel: $('comSubSizeSel'),
     comSubSizeCaret: $('comSubSizeCaret'),
@@ -8338,9 +8333,11 @@ el.dwVidPlayer.removeAttribute('src');
       // 后端 CommentaryRequest.correct_transcript 是 str('0'=关/''=开)，勿发布尔（bool 会 422）
       correct_transcript: !(el.comCorrectTranscript && el.comCorrectTranscript.checked) ? '0' : '',
       export_jianying: comGetExportJianying(),
-      bgm: el.comBgm ? el.comBgm.value : 'off',
-      bgm_file: el.comBgmFile ? el.comBgmFile.value : '',
-      bgm_volume: el.comBgmVolume ? Number(el.comBgmVolume.value) : 0.18,
+      // 音乐轨（2026-09-18）：状态在 comMusic（原 comBgm* 元素 2026-09-15 随「成片增强」块删除，
+      // 保留的 el.comBgm 引用恒为 null → 配乐一直是 off）。用 (comMusic || {}) 兜住初始化顺序。
+      bgm: (comMusic || {}).kind || 'off',
+      bgm_file: (comMusic && comMusic.kind === 'user') ? (comMusic.file || '') : '',
+      bgm_volume: (comMusic && comMusic.volume) || 0.18,
       subtitle_size: comNumVal(el.comSubSize, 1.0),
       subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
       subtitle_border: comNumVal(el.comSubBorder, 1.0),
@@ -9911,34 +9908,10 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
-  // === 成片增强控件事件绑定（BGM / 字幕样式 / 解说长度）===
-  if (el.comBgm) {
-    el.comBgm.addEventListener('change', () => {
-      const v = el.comBgm.value;
-      if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (v === 'off');
-      if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (v !== 'user');
-    });
-  }
-  // 本地音乐选择：走 pywebview 桌面桥 chooseFiles（无桥接回退为聚焦输入框）
-  if (el.comBgmFilePick) {
-    el.comBgmFilePick.addEventListener('click', async () => {
-      try {
-        const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFiles;
-        let p = '';
-        if (typeof fn === 'function') {
-          const arr = await fn();
-          p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
-        }
-        if (p && el.comBgmFile) el.comBgmFile.value = p;
-        else if (el.comBgmFile) el.comBgmFile.placeholder = '请把 mp3/wav 路径粘到这里';
-      } catch (_) { /* 用户取消或环境不支持，忽略 */ }
-    });
-  }
-  if (el.comBgmVolume) {
-    el.comBgmVolume.addEventListener('input', () => {
-      if (el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
-    });
-  }
+  // === 成片增强控件事件绑定（字幕样式 / 解说长度）===
+  // 🔴 BGM 的三个处理器（comBgm / comBgmFilePick / comBgmVolume）已于 2026-09-18 删除：
+  //    它们绑的 DOM 在 2026-09-15 随「成片增强 · 自动配乐」块一起没了（el.comBgm* 恒为 null），
+  //    配乐改成时间轴第 4 条「音乐」轨（见 comMusic* 一组），这里只留死绑定没有任何作用。
   // 字号 / 描边：数字框 + 预设下拉（仿 Excel 字号选择器）；改值即刷新实时预览
   comSetupNumSel(el.comSubSize, el.comSubSizeCaret, el.comSubSizePop,
                  [0.8, 0.9, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6], 2, '×');
@@ -10724,10 +10697,8 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
   // 初始化：根据默认值同步显隐与回显
-  const _initBgm = el.comBgm ? el.comBgm.value : 'off';
-  if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (_initBgm === 'off');
-  if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (_initBgm !== 'user');
-  if (el.comBgmVolume && el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
+  // （BGM 的三行初始化 2026-09-18 删除：comBgm* 元素已不存在，配乐改用 comMusic；
+  //   comMusicSync() 在音乐轨自己的初始化里调用。）
   if (el.comMaxChars && el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
 
   // 来源互斥：选了下拉就清空本地文件
@@ -11265,6 +11236,223 @@ el.dwVidPlayer.removeAttribute('src');
     const row = box.children[idx];
     if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
+
+  // ===== 音乐轨（2026-09-18）：配乐状态 / 选择面板 / 试听 / 应用到已有成片 =====
+  // 🔴 用 var：渲染 payload 在源码上位于本块之前（buildPayload 一带），var 提升避免
+  //    初始化顺序上的 TDZ；payload 侧一律用 (comMusic || {}) 兜底取值。
+  //    配乐在渲染成片时混入（后端 build 的 bgm/bgm_file/bgm_volume 参数一直在，只是
+  //    2026-09-15 删掉「成片增强」里的 BGM 块后，前端恒发 off）。
+  var comMusic = { kind: 'off', file: '', volume: 0.18 };
+  var comMusicAuditionEl = null;
+  var comMusicOutCache = null;              // { ts, item } 最近一次成片列表查询结果
+  const COM_MUSIC_LABEL = { off: '无', soft: '柔和', light: '轻快', epic: '恢弘', user: '本地文件' };
+  const comMusicEls = () => ({
+    add: $('comTlMusicAdd'), clip: $('comTlMusicClip'), txt: $('comTlMusicTxt'),
+    pop: $('comTlMusicPop'), opts: $('comTlMusicOpts'), fileRow: $('comTlMusicFileRow'),
+    path: $('comTlMusicPath'), vol: $('comTlMusicVol'), volVal: $('comTlMusicVolVal'),
+    pick: $('comTlMusicPick'), audition: $('comTlMusicAudition'),
+    apply: $('comTlMusicApply'), hint: $('comTlMusicHint')
+  });
+  const comMusicLabel = () => COM_MUSIC_LABEL[comMusic.kind] || '无';
+  const comMusicFileBase = () => String(comMusic.file || '').split('/').pop();
+  const comMusicHint = (txt, cls) => {
+    const m = comMusicEls();
+    if (!m.hint) return;
+    m.hint.textContent = txt || '';
+    m.hint.className = 'com-tl-music-hint' + (cls ? ' is-' + cls : '');
+  };
+  /** 轨道 + 面板 UI 与 comMusic 对齐。 */
+  const comMusicSync = () => {
+    const m = comMusicEls();
+    const on = comMusic.kind !== 'off';
+    const pct = Math.round(comMusic.volume * 100) + '%';
+    if (m.add) m.add.hidden = on;
+    if (m.clip) {
+      m.clip.hidden = !on;
+      m.clip.title = '配乐：' + comMusicLabel() + ' · 音量 ' + pct + '（点击更换/移除）';
+    }
+    if (m.txt && on) {
+      m.txt.textContent = '🎵 ' + comMusicLabel()
+        + (comMusic.kind === 'user' && comMusic.file ? ' · ' + comMusicFileBase() : '')
+        + ' · ' + pct;
+    }
+    if (m.opts) {
+      Array.prototype.forEach.call(m.opts.querySelectorAll('.com-tl-music-opt'), (b) => {
+        b.classList.toggle('is-on', b.dataset.kind === comMusic.kind);
+      });
+    }
+    if (m.fileRow) m.fileRow.hidden = comMusic.kind !== 'user';
+    if (m.path) { m.path.textContent = comMusic.file || '未选择'; m.path.title = comMusic.file || ''; }
+    if (m.vol) m.vol.value = String(comMusic.volume);
+    if (m.volVal) m.volVal.textContent = pct;
+  };
+  /** 最近一支成片（试听内置曲 / 一键应用都要 cid）。15s 内复用，避免频繁打接口。 */
+  const comMusicOut = async (fresh) => {
+    if (!fresh && comMusicOutCache && Date.now() - comMusicOutCache.ts < 15000) return comMusicOutCache.item;
+    try {
+      const d = await request('/api/commentary/list');
+      const item = (d && d.items && d.items[0]) || null;
+      comMusicOutCache = { ts: Date.now(), item };
+      return item;
+    } catch (_) {
+      return null;
+    }
+  };
+  const comMusicOpening = async () => {
+    const m = comMusicEls();
+    if (!m.pop || m.pop.hidden) return;
+    comMusicSync();
+    if (m.apply) m.apply.hidden = true;
+    const pending = '正在查最近成片…';
+    comMusicHint(pending);
+    const item = await comMusicOut(true);
+    if (m.apply) m.apply.hidden = !item;
+    // 🔴 只在提示还是「查询中」时才覆盖：否则会把用户已经点出来的「已选柔和」等提示顶掉
+    const now = comMusicEls().hint;
+    if (now && now.textContent !== pending) return;
+    if (!item) {
+      comMusicHint('还没有成片：配乐会在下次「生成成片」时一起混进去；渲染完就能在这里一键换/加/移除。');
+      return;
+    }
+    const st = item.bgm_state || {};
+    const cur = (st.bgm && st.bgm !== 'off')
+      ? (COM_MUSIC_LABEL[st.bgm] || st.bgm) + ' · ' + Math.round((st.volume || 0.18) * 100) + '%'
+      : '无配乐';
+    comMusicHint('最近成片：' + item.name + '（当前 ' + cur + '）。改完点「应用到当前成片」秒级生效，不用重渲。');
+  };
+  const comMusicOpen = (open) => {
+    const m = comMusicEls();
+    if (!m.pop) return;
+    m.pop.hidden = !open;
+    if (open) comMusicOpening();
+  };
+  const comMusicAudition = async () => {
+    const m = comMusicEls();
+    if (comMusicAuditionEl) {
+      try { comMusicAuditionEl.pause(); } catch (_) { /* 已释放 */ }
+      comMusicAuditionEl = null;
+    }
+    if (comMusic.kind === 'off') { comMusicHint('先选一首配乐再试听'); return; }
+    let url = '';
+    if (comMusic.kind === 'user') {
+      if (!comMusic.file) { comMusicHint('先点「选择音乐文件」挑一首', 'err'); return; }
+      url = '/api/commentary/audio-preview?path=' + encodeURIComponent(comMusic.file);
+    } else {
+      const item = await comMusicOut();
+      if (!item || (item.bgm_previews || []).indexOf(comMusic.kind) < 0) {
+        comMusicHint('内置曲的试听文件是渲染成片时一并生成的：先渲一次成片就能试听，或改用「本地文件…」。', 'err');
+        return;
+      }
+      url = '/api/commentary/bgm-preview/' + encodeURIComponent(item.id) + '/' + comMusic.kind;
+    }
+    try {
+      const a = new Audio(url);
+      a.volume = Math.max(0, Math.min(1, comMusic.volume));
+      comMusicAuditionEl = a;
+      await a.play();
+      comMusicHint('试听中…（音量按上面的滑块，实际成片里也是这个音量）', 'ok');
+    } catch (e) {
+      comMusicHint('试听失败：' + ((e && e.message) || e), 'err');
+    }
+  };
+  /** 把当前配乐应用到已有成片：轻量 amix，秒级，就地替换成片（不重渲）。 */
+  const comMusicApply = async () => {
+    const m = comMusicEls();
+    const item = await comMusicOut(true);
+    if (!item) { comMusicHint('没找到已渲染的成片——先点「生成成片」，渲染完再回来应用配乐。', 'err'); return; }
+    if (comMusic.kind === 'user' && !comMusic.file) { comMusicHint('「本地文件…」还没选文件', 'err'); return; }
+    if (m.apply) m.apply.disabled = true;
+    comMusicHint('正在混入配乐（秒级，不重渲）…');
+    try {
+      const form = new FormData();
+      form.append('bgm', comMusic.kind);
+      if (comMusic.kind === 'user' && comMusic.file) form.append('bgm_file', comMusic.file);
+      form.append('bgm_volume', String(comMusic.volume));
+      const r = await request('/api/commentary/remux-bgm/' + encodeURIComponent(item.id), { method: 'POST', body: form });
+      const jid = r && r.job_id;
+      if (!jid) throw new Error('未拿到混音任务号');
+      for (let i = 0; i < 90; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        const st = await request('/api/commentary/' + jid);
+        if (!st) continue;
+        if (st.status === 'completed') {
+          comMusicOutCache = null;   // 成片的 bgm_state 变了，缓存作废
+          comMusicHint('✅ 已应用到成片：' + item.name + '（' + comMusicLabel() + ' · '
+            + Math.round(comMusic.volume * 100) + '%）', 'ok');
+          return;
+        }
+        if (st.status === 'failed') throw new Error(st.error || '混音失败');
+        const last = (st.progress || []).slice(-1)[0];
+        comMusicHint('混音中… ' + (last || ''));
+      }
+      throw new Error('等待超时（90s），可在「成片」列表里看结果');
+    } catch (e) {
+      comMusicHint('应用失败：' + ((e && e.message) || e), 'err');
+    } finally {
+      if (m.apply) m.apply.disabled = false;
+    }
+  };
+  (() => {
+    const m = comMusicEls();
+    const toggle = () => comMusicOpen(!!(m.pop && m.pop.hidden));
+    if (m.add) m.add.addEventListener('click', toggle);
+    if (m.clip) m.clip.addEventListener('click', toggle);
+    const closeBtn = $('comTlMusicClose');
+    if (closeBtn) closeBtn.addEventListener('click', () => comMusicOpen(false));
+    if (m.opts) {
+      m.opts.addEventListener('click', (ev) => {
+        const b = ev.target && ev.target.closest ? ev.target.closest('.com-tl-music-opt') : null;
+        if (!b) return;
+        comMusic.kind = b.dataset.kind || 'off';
+        const cur = comMusicEls();
+        comMusicSync();
+        if (comMusic.kind === 'off') comMusicHint('已移除配乐（下次渲染生效；已渲染的成片点「应用到当前成片」立即去掉）');
+        else if (comMusic.kind === 'user') comMusicHint('挑一个本地音乐文件（mp3 / wav / m4a / flac）');
+        else comMusicHint('已选「' + comMusicLabel() + '」，可先点「试听」');
+      });
+    }
+    if (m.pick) {
+      m.pick.addEventListener('click', async () => {
+        // 复用桌面桥 chooseFiles（无桥接时提示手动贴路径）
+        try {
+          const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFiles;
+          let p = '';
+          if (typeof fn === 'function') {
+            const arr = await fn();
+            p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
+          }
+          if (p) {
+            comMusic.file = p;
+            comMusicSync();
+            comMusicHint('已选：' + comMusicFileBase() + '，可先试听');
+          } else {
+            comMusicHint('没选到文件（桌面桥不可用时可把绝对路径贴到下面的输入框）', 'err');
+            if (m.path && m.path.tagName === 'SPAN') {
+              const inp = document.createElement('input');
+              inp.type = 'text';
+              inp.className = 'com-tl-music-path';
+              inp.placeholder = '/Users/you/Music/bgm.mp3';
+              inp.value = comMusic.file || '';
+              inp.addEventListener('change', () => {
+                comMusic.file = inp.value.trim();
+                comMusicSync();
+              });
+              m.path.replaceWith(inp);
+            }
+          }
+        } catch (_) { /* 用户取消 */ }
+      });
+    }
+    if (m.vol) {
+      m.vol.addEventListener('input', () => {
+        comMusic.volume = Math.max(0.02, Math.min(0.6, Number(m.vol.value) || 0.18));
+        comMusicSync();
+      });
+    }
+    if (m.audition) m.audition.addEventListener('click', comMusicAudition);
+    if (m.apply) m.apply.addEventListener('click', comMusicApply);
+    comMusicSync();
+  })();
   let comTlZoom = 100;  // 100 = 铺满视口；>100 横向滚动（同时放大三轨与刻度）
 
   /** 秒 → 「m:ss」/「h:mm:ss」（刻度尺用，比 formatHMS 紧凑）。 */

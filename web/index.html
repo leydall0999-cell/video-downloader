@@ -2004,6 +2004,20 @@
           </div>
           <div class="com-tl-viewport" id="comTlViewport">
             <div class="com-tl-inner" id="comTlInner">
+              <!-- ===== 音乐轨（2026-09-18）：配乐在渲染成片时混入（后端 build 的 bgm/bgm_file/bgm_volume
+                   参数，一直在；原「成片增强」里的 BGM 块 2026-09-15 被删后状态恒为 off）。
+                   音乐是循环铺满整片的，所以这一轨的 clip 恒铺满 0→100%——不涉及「原片时间 vs
+                   成片时间」的换算；要改起止得动后端的 amix（adelay/atrim），暂不做。 ===== -->
+              <div class="com-tl-lane-row com-tl-music-row">
+                <span class="com-tl-lane-label">音乐</span>
+                <div class="com-tl-lane com-tl-lane-music" id="comTlLaneMusic">
+                  <button type="button" class="com-tl-music-add" id="comTlMusicAdd"
+                          title="添加背景音乐（渲染成片时混入）">＋ 添加音乐</button>
+                  <div class="com-tl-clip com-tl-music-clip" id="comTlMusicClip" hidden>
+                    <span class="com-tl-music-txt" id="comTlMusicTxt"></span>
+                  </div>
+                </div>
+              </div>
               <div class="com-tl-lane-row">
                 <span class="com-tl-lane-label">原声</span>
                 <div class="com-tl-lane com-tl-lane-orig" id="comTlLaneOrig" title="点任意位置定位预览；拖两端把手改正剧范围">
@@ -2031,6 +2045,37 @@
               <!-- 播放头（2026-09-18）：跟着预览播放位置走；点轨道任意处定位 -->
               <span class="com-tl-playhead" id="comTlPlayhead" hidden></span>
             </div>
+          </div>
+          <!-- 音乐选择面板（点「＋ 添加音乐」或已加音乐的 clip 呼出） -->
+          <div class="com-tl-music-pop" id="comTlMusicPop" hidden>
+            <div class="com-tl-music-pophead">
+              <b>🎵 配乐</b>
+              <span>渲染成片时混入 · 循环铺满全片</span>
+              <button type="button" class="com-tl-music-close" id="comTlMusicClose" aria-label="关闭">✕</button>
+            </div>
+            <div class="com-tl-music-opts" id="comTlMusicOpts" role="group" aria-label="选择配乐">
+              <button type="button" class="com-tl-music-opt is-on" data-kind="off">无</button>
+              <button type="button" class="com-tl-music-opt" data-kind="soft">柔和</button>
+              <button type="button" class="com-tl-music-opt" data-kind="light">轻快</button>
+              <button type="button" class="com-tl-music-opt" data-kind="epic">恢弘</button>
+              <button type="button" class="com-tl-music-opt" data-kind="user">本地文件…</button>
+            </div>
+            <div class="com-tl-music-filerow" id="comTlMusicFileRow" hidden>
+              <button type="button" class="btn btn-sm btn-secondary" id="comTlMusicPick">选择音乐文件</button>
+              <span class="com-tl-music-path" id="comTlMusicPath">未选择</span>
+            </div>
+            <div class="com-tl-music-volrow">
+              <span class="com-tl-music-lab">音量</span>
+              <input type="range" id="comTlMusicVol" min="0.02" max="0.6" step="0.01" value="0.18"
+                     aria-label="配乐音量" />
+              <span class="com-tl-music-val" id="comTlMusicVolVal">18%</span>
+            </div>
+            <div class="com-tl-music-acts">
+              <button type="button" class="btn btn-sm btn-secondary" id="comTlMusicAudition" title="试听所选配乐">▶ 试听</button>
+              <button type="button" class="btn btn-sm btn-secondary" id="comTlMusicApply" hidden
+                      title="把当前配乐应用到已渲染的成片（秒级，不重渲）">应用到当前成片</button>
+            </div>
+            <div class="com-tl-music-hint" id="comTlMusicHint"></div>
           </div>
         </div>
       </div><!-- /com-center -->
