@@ -2544,6 +2544,20 @@
       <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
     </div>
             <div id="comScriptPanel" hidden data-page-node-id="iwpV5BcROX7pwMACFFXb46">
+      <!-- 右上角窗口控件（2026-09-18 用户：「要放在右上角，不要放其他地方」）：
+           最小化 / 关闭固定钉在面板**右上角**，做成窗口控件的样子。
+           ⚠️ 此前这两个按钮混在头部灰按钮排（配音下拉 / 试听 / 预览全部）里，
+              用户反馈「哪里没看到」——🔴 不要再挪回 .com-script-head-actions。 -->
+      <div class="com-script-corner" data-page-node-id="rGQ8mYq4Xn2pZcV7wKt5Lb">
+        <!-- 最小化审核面板（2026-09-18 用户：「加最小化按钮」）：只把浮层收成标题条，
+             露出中栏预览与时间轴；解说词与编辑内容全保留，点「▢ 展开」原样还原。
+             与「✕ 关闭」的区别：关闭是把面板整个收起（回「📄 继续审核」入口），
+             最小化只是压矮面板、面板仍在眼前。 -->
+        <button type="button" class="btn btn-sm btn-ghost com-script-min" id="comScriptMin" title="最小化审核面板（解说词保留，可再展开）" data-page-node-id="comScriptMinBtn">➖ 最小化</button>
+        <!-- 退出审核面板（2026-09-18 用户：「解说词页面没有退出按钮」）：收起面板回正常态，
+             底部「生成脚本」入口与提示行的「继续审核」都能再回来，脚本不丢。 -->
+        <button type="button" class="btn btn-sm btn-ghost com-script-close" id="comScriptClose" title="收起审核面板（解说词不会丢，可随时回来）" data-page-node-id="comScriptCloseBtn">✕ 关闭</button>
+      </div>
       <div class="com-script-head" data-page-node-id="ZKZOKzqfXdrmwDE35GFuWg">
         <h3 data-page-node-id="wciBq4loFUDPGBkwJaCN22">✏️ 解说词审核</h3>
         <div class="com-script-head-actions" data-page-node-id="WRFsDBVn8msLrndes6XtiK">
@@ -2551,14 +2565,6 @@
           <select id="comScriptVoice" class="adv-input com-voice-select" data-page-node-id="6AbH5lGUCwonBNBrfHVZZ0"></select>
           <button type="button" class="btn btn-sm btn-secondary" id="comScriptVoicePreview" data-page-node-id="EhxcizuEF3bVb1PTLZKMpS">▶ 试听</button>
           <button type="button" class="btn btn-sm btn-ghost" id="comScriptPrevAll" data-page-node-id="3TVo00ElmWlrcPPzktcXHp">预览全部</button>
-          <!-- 最小化审核面板（2026-09-18 用户：「加最小化按钮」）：只把浮层收成标题条，
-               露出中栏预览与时间轴；解说词与编辑内容全保留，点「▢ 展开」原样还原。
-               与「✕ 关闭」的区别：关闭是把面板整个收起（回「📄 继续审核」入口），
-               最小化只是压矮面板、面板仍在眼前。 -->
-          <button type="button" class="btn btn-sm btn-ghost com-script-min" id="comScriptMin" title="最小化审核面板（解说词保留，可再展开）" data-page-node-id="comScriptMinBtn">➖ 最小化</button>
-          <!-- 退出审核面板（2026-09-18 用户：「解说词页面没有退出按钮」）：收起面板回正常态，
-               底部「生成脚本」入口与提示行的「继续审核」都能再回来，脚本不丢。 -->
-          <button type="button" class="btn btn-sm btn-ghost com-script-close" id="comScriptClose" title="收起审核面板（解说词不会丢，可随时回来）" data-page-node-id="comScriptCloseBtn">✕ 关闭</button>
         </div>
       </div>
       <div id="comScriptSegments" class="com-script-segments" data-page-node-id="fsmcEMLoIoJpCRRpv0jITz"></div>

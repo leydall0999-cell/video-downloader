@@ -5193,12 +5193,32 @@ html.com-theater { overflow: hidden; }
 }
 #comScriptPanel .com-script-segments { flex: 1; overflow: auto; min-height: 0; }
 #comScriptPanel .com-script-actions { flex: none; }
+/* 右上角窗口控件（2026-09-18 用户：「要放在右上角，不要放其他地方」）：
+   最小化 / 关闭钉在面板右上角，做成窗口控件样式，不再混在头部灰按钮排里
+   （混排时用户反馈「哪里没看到」）。absolute 相对 #comScriptPanel 本身
+   —— 面板压矮成标题条时控件仍稳在右角。 */
+#comScriptPanel .com-script-corner {
+  position: absolute; top: .5rem; right: .55rem; z-index: 2;
+  display: flex; align-items: center; gap: .3rem;
+}
+#comScriptPanel .com-script-corner .btn { padding: .2rem .5rem; line-height: 1.25; }
+/* 头部让出右上角控件占位：否则 .com-script-head-actions（靠右）会与控件组在同一行相撞。
+   预留 ≈ 最小化 + 关闭 + 间距；改动按钮文案/字号时同步核这一条。 */
+/* 头部让出右上角控件占位：否则 .com-script-head-actions（靠右）会与控件组在同一行相撞。
+   🔴 这个值 = 右上角控件组实测占位宽（展开态约 139px）+ 间距，别随手加大：
+      留白超过 ~200px 时「预览全部」会被挤到第二行（头部白白变高）。 */
+#comScriptPanel .com-script-head { padding-right: 146px; }
+/* 配音下拉带 .adv-input（width:100%），在 flex 头部里会撑大按钮排、间接把控件挤换行。
+   锁成确定宽度，保证头部恒为一行。 */
+#comScriptPanel .com-voice-select { width: auto; flex: 0 1 auto; min-width: 140px; max-width: 220px; }
 /* 最小化态（2026-09-18 用户：「加最小化按钮」）：面板压矮成「标题条」，
    隐藏段落列表与底部操作，露出中栏预览/时间轴。解说词数据与编辑内容不受影响，
    点标题条里的「▢ 展开」原样还原（见 app.js setScriptMin）。
    🔴 只改 bottom→auto / height→auto，left/right 不动：宽度保持与展开时一致，
       避免与 #comReviewActions / 右栏浮层错位（那两处的 26px 偏移与本条无关）。 */
 #comScriptPanel.is-min { bottom: auto; height: auto; padding: .45rem 1rem; }
+/* 标题条变矮，右上角控件跟着上提一点，保证垂直居中且不被 overflow 裁到 */
+#comScriptPanel.is-min .com-script-corner { top: .3rem; }
 #comScriptPanel.is-min .com-script-segments,
 #comScriptPanel.is-min .com-script-actions { display: none; }
 /* 标题条上下不再需要分隔线留白，否则白白撑高 */
