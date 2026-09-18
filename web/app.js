@@ -10664,6 +10664,71 @@ el.dwVidPlayer.removeAttribute('src');
     return c.getContext('2d');
   }
 
+  /** 离屏画布池：模糊要**同时**持有「同尺寸的多张」（源 / 中间结果），
+   *  单张复用会互相覆盖 —— 所以按尺寸各留若干张轮转。
+   *  ⚠️ 拿到的 ctx 已被复位（transform/alpha/composite/smoothing），可直接画。 */
+  const _comFeatherPool = new Map();
+  function comFeatherPool(w, h) {
+    const key = w + 'x' + h;
+    let slot = _comFeatherPool.get(key);
+    if (!slot) {
+      if (_comFeatherPool.size > 16) _comFeatherPool.clear();   // 尺寸频繁变化时不无限涨
+      slot = { list: [], i: 0 };
+      _comFeatherPool.set(key, slot);
+    }
+    if (!slot.list.length) {
+      for (let n = 0; n < 6; n++) {
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        slot.list.push(c);
+      }
+    }
+    const g = slot.list[slot.i++ % slot.list.length].getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.clearRect(0, 0, w, h);
+    return g;
+  }
+
+  /** 高斯模糊近似：反复「下采样到 1/f → 平滑升回原尺寸」（纯 drawImage）。
+   *
+   *  🔴 为什么**不能**用 `ctx.filter = 'blur(Npx)'`（2026-09-18 踩过，别再改回去）：
+   *     canvas 2D 的 `filter` 属性在 **Safari 18 / macOS 15 之前根本不存在**。
+   *     本机 WKWebView = `AppleWebKit/605.1.15`（macOS 13.7.8），真机探针实测：
+   *       · `'filter' in ctx`  → **false**（引擎里没有这个 IDL 属性，赋值只是挂了个 JS 扩展属性）
+   *       · 设 `blur(6px)` 后画高对比棋盘，像素方差 **12192.2 → 12192.2**（逐位相同）
+   *     ⇒ 旧代码 blur 分支里的 `off.filter = 'blur(...)'` 一直是**静默空操作**，
+   *        带内画出来的就是原样清晰的画面 —— 这就是用户报「高斯模糊没有一点预览效果」的真凶。
+   *        （fade 分支不用 filter，所以只有高斯模糊"没效果"、fade 好好的，症状高度指向这里。）
+   *
+   *  ✅ 本方案实测（同一探针）：下采样→升采样把方差 **12192 → 2389（−80%）**，
+   *     只用 `drawImage` + `imageSmoothing`，**任何引擎都成立**，也不需要特性检测分支。
+   *
+   *  @param radiusPx 期望模糊半径（**目标画布的设备像素**，不是源像素）
+   *  @param rounds   1＝盒式（够用），2~3≈高斯；次数越多越糊、越慢
+   *  @returns 一张 (dw, dh) 的 canvas —— 池内复用，调用方须**立即** drawImage 走
+   */
+  function comFeatherBlur(src, sx, sy, sw, sh, dw, dh, radiusPx, rounds) {
+    const base = comFeatherPool(dw, dh);
+    base.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh);
+    let cur = base.canvas;
+    // f＝下采样倍数：越小越清晰、越大越糊。下限 2（再小等于没糊），上限 24（避免糊成一块纯色）
+    const f = Math.max(2, Math.min(24, Math.round((radiusPx || 4) * 0.7)));
+    const nw = Math.max(1, Math.round(dw / f)), nh = Math.max(1, Math.round(dh / f));
+    const times = Math.max(1, Math.min(3, rounds || 2));
+    for (let i = 0; i < times; i++) {
+      const down = comFeatherPool(nw, nh);
+      down.drawImage(cur, 0, 0, dw, dh, 0, 0, nw, nh);
+      const up = comFeatherPool(dw, dh);
+      up.drawImage(down.canvas, 0, 0, nw, nh, 0, 0, dw, dh);
+      cur = up.canvas;
+    }
+    return cur;
+  }
+
   /** 同步羽化层几何（虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
   function comFeatherSync() {
     const cv = el.comFeatherCanvas, box = el.comFeatherBand;
@@ -10814,15 +10879,20 @@ el.dwVidPlayer.removeAttribute('src');
       const stripSrc = Math.max(3, Math.min(dhSrc2, dySrc2, bandHSrc * 0.12 * 4));
       const softSrc = Math.max(1, Math.min(10,
         Math.round(Math.max(2, Math.min(6, dhSrc2 * 0.05)) * strength)));
-      off2.filter = `blur(${blurPx(softSrc).toFixed(2)}px)`;
-      off2.drawImage(vid, ex0, Math.max(0, dySrc2 - stripSrc), ex1 - ex0, stripSrc, 0, 0, exW, offH2);
-      off2.filter = 'none';
+      // 先纵向拉满，再**用 drawImage 软化**（旧的 `off2.filter` 在 Safari 16 上是空操作 ⇒
+      // 拉伸纹路肉眼可见）。see comFeatherBlur 顶部注释。
+      const stretched = comFeatherPool(exW, offH2);
+      stretched.drawImage(vid, ex0, Math.max(0, dySrc2 - stripSrc),
+                          ex1 - ex0, stripSrc, 0, 0, exW, offH2);
+      const soft = comFeatherBlur(stretched.canvas, 0, 0, exW, offH2, exW, offH2,
+                                  blurPx(softSrc), 1);
+      off2.drawImage(soft, 0, 0, exW, offH2, 0, 0, exW, offH2);
     } else {
       // 整条高斯模糊（经典的"糊带"，留作兜底）
       const sigmaSrc = Math.max(8, Math.min(28, Math.round(Math.max(6, bandHSrc * 0.22) * strength)));
-      off2.filter = `blur(${blurPx(sigmaSrc).toFixed(2)}px)`;
-      off2.drawImage(vid, ex0, dySrc2, ex1 - ex0, dhSrc2, 0, 0, exW, offH2);
-      off2.filter = 'none';
+      const blurred = comFeatherBlur(vid, ex0, dySrc2, ex1 - ex0, dhSrc2, exW, offH2,
+                                     blurPx(sigmaSrc), 2);
+      off2.drawImage(blurred, 0, 0, exW, offH2, 0, 0, exW, offH2);
     }
     // 上下渐隐（对应管线 geq 的 alpha_expr）：顶部透明渐入、底部渐出，边缘自然融入画面
     const gzr = Math.max(0.02, Math.min(0.45, (Math.max(2, bandHSrc * 0.25) * k) / offH2));
