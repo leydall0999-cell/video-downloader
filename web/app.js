@@ -9781,6 +9781,31 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   // ---- 预览与裁剪逻辑 ----
+  /** 无片时复位所有「挂在画面上」的预览覆层。
+   *
+   *  🔴 2026-09-18 用户截图实锤：切走再切回「视频解说」页（或点「刷新」）会走
+   *     `loadCommentary() → setupComPreview(null)` 把视频源清掉，但**覆层不会自己消失** ——
+   *     黑屏上继续挂着「字幕预览」示例文字、「原字幕羽化范围」虚线框，虚框里的擦除预览
+   *     还留着上一支片那一帧的内容（canvas 只在 play/pause/seeked/loadeddata/resize 时重绘，
+   *     清源只触发 `emptied`，没人听），时间轴也停在上一支片的时长标尺与配乐条上。
+   *     覆层各自「无画面即自隐」的逻辑都在，只是没被叫醒 —— 所以这里统一叫一次。 */
+  const comResetPreviewOverlays = () => {
+    // 上述三者的绘制入口在文件靠后的块里定义（初始化期调用本函数时会踩 TDZ），故一律 try 包住。
+    try { comFeatherPaint(); } catch (_) { /* 初始化未就绪 */ }
+    // 无画面时 comFeatherPaint 会在清画布之前就 return（sync 已把两层藏了），
+    // 旧帧的擦除预览会留在 canvas 位图里 —— 显式抹掉，免得下次显示时闪一下旧内容。
+    try {
+      const cv = el.comFeatherCanvas;
+      if (cv && cv.width) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    } catch (_) { /* 忽略 */ }
+    try { comUpdateSubPreview(); } catch (_) { /* 同上 */ }
+    // 时间轴量程 = 素材时长：清源后必须归零，否则 comTlDur() 仍返回上一支片的时长，
+    // 标尺/正剧区间/配乐条会整条留在那儿（comTlSync 会读 el.comDramaEndRange.max）。
+    if (el.comDramaStartRange) el.comDramaStartRange.max = '100';
+    if (el.comDramaEndRange) el.comDramaEndRange.max = '100';
+    try { comTlSync(); } catch (_) { /* 同上 */ }
+  };
+
   const resetComPreviewElement = () => {
     // 清空 video 元素内部状态（避免残留已 revoke 的旧 blob src 触发 race 性 onerror）
     try {
@@ -9846,6 +9871,7 @@ el.dwVidPlayer.removeAttribute('src');
       comPreviewDuration = 0;
       if (el.comTrimTitle) { el.comTrimTitle.hidden = true; el.comTrimTitle.textContent = ''; }
       comSyncStageSize();   // 无片：舞台回到「画幅」档位的常用比例
+      comResetPreviewOverlays();   // 覆层（羽化带/擦除预览/字幕示例/时间轴标尺）一并复位
       return;
     }
     // 切到新 src 之前先把 video 元素内部状态清零，避免 onerror race 触发导致首次没显示
@@ -10375,6 +10401,9 @@ el.dwVidPlayer.removeAttribute('src');
     if (!box || !txt || !vid) return;
     // 视频未展示（面板未开/无源且高度为 0）时隐藏覆盖层
     if (!vid.offsetParent || vid.clientWidth < 40 || vid.clientHeight < 40) { box.hidden = true; return; }
+    // 没有实际画面（还没选片 / 源被清空 / 加载失败）时也不显示示例字幕 —— 舞台是空的，
+    // 悬空的一行白字会被误读成「这素材有问题」（2026-09-18 用户截图：清源后黑屏上残留示例字）。
+    if (!vid.videoWidth || !vid.videoHeight) { box.hidden = true; return; }
     box.hidden = false;
     // 🔴 定位基准一律取「画面内容区」（扣掉 letterbox 黑边），与羽化层、与成片同源。
     //    旧版靠 CSS flex + `margin-bottom:7%` 落位 —— 百分比 margin 是按**容器宽度**解析的，
@@ -11053,6 +11082,12 @@ el.dwVidPlayer.removeAttribute('src');
     el.comPreview.addEventListener('pause', comFeatherPaint);
     el.comPreview.addEventListener('seeked', comFeatherPaint);
     el.comPreview.addEventListener('loadeddata', comFeatherPaint);
+    // 源被清空 / 加载失败：画面没了，两层必须立刻隐掉（否则黑屏上留着上一帧的擦除预览）。
+    // ⚠️ 不要在这里调 comResetPreviewOverlays()（那会连时间轴量程一起归零），
+    //    清源路径（setupComPreview(null)）自己会调，这里只管覆层。
+    const hideOverlaysNoPicture = () => { comFeatherPaint(); comUpdateSubPreview(); };
+    el.comPreview.addEventListener('emptied', hideOverlaysNoPicture);
+    el.comPreview.addEventListener('error', hideOverlaysNoPicture);
     // 元数据就绪即自动探测一次（异步，不阻塞预览）
     el.comPreview.addEventListener('loadedmetadata', () => {
       comFeatherPaint();
@@ -11132,7 +11167,9 @@ el.dwVidPlayer.removeAttribute('src');
       selectedLocalFile = null;
       el.comFileStatus.hidden = true;
       const opt = el.comSource.options[el.comSource.selectedIndex];
-      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`, opt ? opt.textContent : '');
+      // ?play=1：内联播放模式（后端按扩展名给 video/mp4 等正确 MIME）。
+      // 🔴 不带它时后端回 application/octet-stream + attachment，WKWebView 拒解码 ⇒ 预览恒黑屏。
+      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}?play=1`, opt ? opt.textContent : '');
       // 立刻预检：交给后端 ffprobe 探测真实时长（含裁剪折算），不通过当场提示
       comRunPrecheck({ fileId: el.comSource.value });
     } else {
@@ -12456,7 +12493,9 @@ el.dwVidPlayer.removeAttribute('src');
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
   };
   const libThumbUrl = (id) => `/api/library/thumb/${encodeURIComponent(id)}`;
-  const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}`;
+  // ?play=1 = 内联播放（后端给正确 MIME）；不带参数是下载语义（octet-stream + attachment）。
+  // 本函数的两处调用点都是「播放/预览」，故一律带 play=1 —— 否则 WKWebView 解码不了。
+  const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}?play=1`;
   const libEncFileUrl = (id) => `/api/library/encfile/${encodeURIComponent(id)}`;
 
   function switchView(view) {
@@ -15214,7 +15253,7 @@ el.dwVidPlayer.removeAttribute('src');
   el.libCommentary.addEventListener('click', () => {
     if (!currentLibItem) return;
     // 预加载预览元数据，让「自动」画幅能拿到视频宽高判断横竖
-    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}`, currentLibItem.name || currentLibItem.id);
+    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}?play=1`, currentLibItem.name || currentLibItem.id);
     createCommentary(
       { fileId: currentLibItem.id },
       { commentary: el.libCommentary, commentaryStatus: el.libCommentaryStatus, commentaryFile: el.libCommentaryFile },

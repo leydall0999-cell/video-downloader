@@ -7,6 +7,22 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
+# 扩展名 → 播放用 MIME。🔴 2026-09-18 实测：`/api/library/file/{id}` 原先一律回
+# `application/octet-stream`（配合 filename= 让浏览器下载），但 URL 里没有扩展名、
+# MIME 也不是视频 ⇒ WKWebView（App 的 webview）直接拒绝解码，`<video>` 报
+# MEDIA_ERR_SRC_NOT_SUPPORTED、videoWidth 恒 0 ⇒「下载历史库」选来的片子在预览里
+# **永远是黑屏**（媒体库弹窗里的视频预览同样）。带 ?play=1 走这张表即可正常播放；
+# 不带参数保持原样（下载语义不变）。
+_MEDIA_BY_EXT = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska", ".webm": "video/webm", ".avi": "video/x-msvideo",
+    ".flv": "video/x-flv", ".ts": "video/mp2t", ".mpg": "video/mpeg", ".mpeg": "video/mpeg",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
+    ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+}
+
 @router.get("/api/library")
 def library_list(q: str = "", platform: str = "", kind: str = "all") -> dict:
     items = app.library_mod.scan_library(app.DOWNLOAD_DIR)
@@ -25,10 +41,13 @@ def library_list(q: str = "", platform: str = "", kind: str = "all") -> dict:
     return {"items": items, "total": len(items)}
 
 @router.get("/api/library/file/{lib_id}")
-def library_file(lib_id: str) -> app.FileResponse:
+def library_file(lib_id: str, play: int = 0) -> app.FileResponse:
     p = app.library_mod._resolve_safe(app.DOWNLOAD_DIR, lib_id)
     if not p:
         raise app.HTTPException(status_code=404, detail="文件不存在")
+    if play:
+        # 内联播放：按扩展名给正确 MIME，且**不带 filename=**（避免 attachment 语义）
+        return app.FileResponse(path=p, media_type=_MEDIA_BY_EXT.get(p.suffix.lower(), "application/octet-stream"))
     return app.FileResponse(path=p, filename=p.name, media_type="application/octet-stream")
 
 @router.get("/api/library/thumb/{lib_id}")
