@@ -12,6 +12,10 @@
   start_install()     非 Apple Silicon 拒绝 / 已就绪短路 / 磁盘不足拦截 / 幂等
   cancel()            空闲时取消返回 ok=False
   _mlx_pin()          macOS 13 钉 0.29.3、14+ 不钉（决定能不能装上）
+  Python 版本矩阵     macOS ≤13 排除 3.14/3.9；3.14 只出现在 macOS ≥14 且垫底；
+                      python3 指向 3.14 时要退到兼容版本；基础解释器优先标准安装位置
+                      （venv 的 bin/python 是软链，住 App 运行时里迟早变死链）；
+                      没有可用解释器时 start_install 必须提前拦住并给出可照做的建议
   _sub_env()          默认摘代理、显式 KEEP 时保留
   🔴 隔离纪律        全程不得改写进程级 HF_ENDPOINT（对齐 test_engine_isolation 的要求）
 
@@ -220,6 +224,156 @@ def test_mlx_pin_by_macos_version():
             os.environ["VDL_CLONE_MLX_VERSION"] = saved_env
 
 
+# ───────── Python 版本矩阵（2026-09-18 实测 PyPI wheel 后的护栏）─────────
+# 背景：Homebrew 默认把 `python3` 指向 3.14，而 macOS 13 上 mlx 只到 0.29.3（无 cp314 wheel）；
+# Xcode 自带的 python3 又是 3.9，而 mlx-audio 0.5.4 要求 ≥3.10。两条都会让安装失败，
+# 且失败现象是 pip 报一堆「找不到匹配的 wheel」，普通人根本看不懂。
+
+def test_allowed_py_matrix_by_macos():
+    """macOS ≤13 的可用集合是 3.10–3.13（不含 3.14、不含 3.9）；macOS ≥14 才把 3.14 纳入且垫底。"""
+    saved_mac, saved_env = C.platform.mac_ver, os.environ.pop("VDL_CLONE_MLX_VERSION", None)
+    try:
+        C.platform.mac_ver = lambda: ("13.7.8", ("", "", ""), "")   # type: ignore[assignment]
+        a13 = C._allowed_py_minors()
+        assert "3.14" not in a13, f"macOS 13 上不能选 3.14（mlx 0.29.3 无 cp314 wheel）：{a13}"
+        assert "3.9" not in a13, f"3.9 装不上 mlx-audio（requires_python >=3.10）：{a13}"
+        assert set(a13) == {"3.10", "3.11", "3.12", "3.13"}, a13
+
+        C.platform.mac_ver = lambda: ("14.5.0", ("", "", ""), "")   # type: ignore[assignment]
+        a14 = C._allowed_py_minors()
+        assert "3.14" in a14, f"macOS 14+ 可以用 3.14：{a14}"
+        assert a14[-1] == "3.14", f"3.14 必须是最后选择（最未经检验）：{a14}"
+    finally:
+        C.platform.mac_ver = saved_mac                        # type: ignore[assignment]
+        if saved_env is not None:
+            os.environ["VDL_CLONE_MLX_VERSION"] = saved_env
+
+
+def test_base_python_skips_incompatible_314():
+    """`python3` 指向 3.14 时（macOS 13 上常见的 Homebrew 默认），必须退到 3.12 而不是选 3.14。"""
+    saved = (C.platform.mac_ver, C._py_candidates, C._probe_python, dict(C._PY_CACHE))
+    try:
+        C.platform.mac_ver = lambda: ("13.7.8", ("", "", ""), "")   # type: ignore[assignment]
+        C._py_candidates = lambda: [("/hb/python3", 0), ("/usr/local/bin/python3.12", 0)]  # type: ignore[assignment]
+
+        def _probe(p: str):
+            return (3, 14, 6) if p.endswith("python3") else (3, 12, 9)
+
+        def probe(path: str):
+            v = _probe(path)
+            return True, "", v
+
+        C._probe_python = probe                                    # type: ignore[assignment]
+        C._PY_CACHE.update({"at": 0.0, "path": "", "version": "", "all": [], "hint": ""})
+        py = C.base_python(force=True)
+        assert py["path"] == "/usr/local/bin/python3.12", f"应跳过 3.14 选 3.12，实际 {py}"
+        assert any("mlx 无此版本" in s for s in py["all"]), f"候选明细要说明 3.14 为何被跳过：{py['all']}"
+
+        # 全都不可用（例如只有 3.9）时：不能硬选，且要给出**可照做**的建议
+        C._probe_python = lambda path: (False, "版本过低（3.9.6，mlx-audio 需要 ≥ 3.10）", (3, 9, 6))  # type: ignore[assignment]
+        C._PY_CACHE.update({"at": 0.0, "path": "", "version": "", "all": [], "hint": ""})
+        py2 = C.base_python(force=True)
+        assert py2["path"] == "", py2
+        assert "3.13" in py2["hint"], f"没有可用解释器时必须给出可照做的建议：{py2['hint']!r}"
+        assert "xcode-select" not in py2["hint"], "不能再推荐 Xcode 自带的 3.9（版本太低）"
+    finally:
+        C.platform.mac_ver, C._py_candidates, C._probe_python = saved[0], saved[1], saved[2]  # type: ignore[assignment]
+        C._PY_CACHE.clear()
+        C._PY_CACHE.update(saved[3])
+
+
+def test_py_prefers_stable_location_over_path():
+    """venv 的基础解释器必须优先取标准安装位置。
+
+    venv 的 `bin/python` 是指向基础解释器的软链：基础解释器若住在「会被升级/搬家」的目录
+    （App 自带运行时、临时目录），venv 迟早变死链。所以来源优先级要压过版本偏好。
+    """
+    saved = (C.platform.mac_ver, C._py_candidates, C._probe_python, dict(C._PY_CACHE))
+    try:
+        C.platform.mac_ver = lambda: ("13.7.8", ("", "", ""), "")   # type: ignore[assignment]
+        # 3.13（版本上更优）只在 PATH 上；3.12 在标准位置
+        C._py_candidates = lambda: [("/somewhere/app/python3.13", 1),   # type: ignore[assignment]
+                                    ("/opt/homebrew/bin/python3.12", 0)]
+
+        def probe(path: str):
+            return (True, "", (3, 13, 12) if "3.13" in path else (3, 12, 9))
+
+        C._probe_python = probe                                    # type: ignore[assignment]
+        C._PY_CACHE.update({"at": 0.0, "path": "", "version": "", "all": [], "hint": ""})
+        py = C.base_python(force=True)
+        assert py["path"] == "/opt/homebrew/bin/python3.12", f"应优先标准安装位置，实际 {py}"
+    finally:
+        C.platform.mac_ver, C._py_candidates, C._probe_python = saved[0], saved[1], saved[2]  # type: ignore[assignment]
+        C._PY_CACHE.clear()
+        C._PY_CACHE.update(saved[3])
+
+
+def test_start_install_blocks_without_python():
+    """没有可用解释器时必须**提前**拦住——别让人等 2.4GB 下完才发现装不上。"""
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        with _Sandbox(tmp):
+            saved = (C.base_python, C.venv_ok, C.weights_ok, C._disk_free_mb, C._venv_dirs)
+            C._venv_dirs = lambda: [tmp / "none"]                   # type: ignore[assignment]
+            C.venv_ok = lambda: False                               # type: ignore[assignment]
+            C.weights_ok = lambda: False                            # type: ignore[assignment]
+            C._disk_free_mb = lambda p: 999_999                     # type: ignore[assignment]
+            C.base_python = lambda force=False: {"path": "", "version": "", "all": [],
+                                                 "hint": "请先 `brew install python@3.13`"}  # type: ignore[assignment]
+            try:
+                r = C.start_install()
+                assert r["ok"] is False, r
+                assert "python@3.13" in r["msg"], f"要把可照做的建议透出来：{r}"
+                assert C.progress()["active"] is False, "不该真的起安装线程"
+            finally:
+                (C.base_python, C.venv_ok, C.weights_ok,
+                 C._disk_free_mb, C._venv_dirs) = saved         # type: ignore[assignment]
+
+
+def test_ca_bundle_injected_for_python_org():
+    """python.org 的解释器默认没有 CA 路径（cafile=None），必须给安装子进程注入有效证书包。
+
+    不注入的后果（2026-09-18 实测）：pip 报 `[SSL: CERTIFICATE_VERIFY_FAILED]`——
+    错长得像网络故障，会把人往镜像/代理方向带偏。
+    """
+    keys = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT")
+    saved_env = {k: os.environ.get(k) for k in keys}
+    saved_memo = list(C._CA_BUNDLE_MEMO)
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        C._CA_BUNDLE_MEMO.clear()
+        bundle = C._ca_bundle()
+        assert bundle and os.path.isfile(bundle), f"应能定位到可用的 CA 包，实际 {bundle!r}"
+        env = C._sub_env()
+        assert env.get("SSL_CERT_FILE") == bundle, env.get("SSL_CERT_FILE")
+        assert env.get("PIP_CERT") == bundle, "pip 走 PIP_CERT"
+        assert env.get("REQUESTS_CA_BUNDLE") == bundle
+
+        # 已有有效值时不抢用户配置
+        os.environ["SSL_CERT_FILE"] = bundle
+        assert C._sub_env().get("SSL_CERT_FILE") == bundle
+        # 已有但指向不存在的文件 → 必须覆盖成有效包（否则照样 SSL 失败）
+        os.environ["SSL_CERT_FILE"] = "/nonexistent/cert.pem"
+        assert C._sub_env().get("SSL_CERT_FILE") == bundle, "指向失效路径时必须兜底覆盖"
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        C._CA_BUNDLE_MEMO[:] = saved_memo
+
+
+def test_ssl_hint_on_cert_error():
+    """证书错要补一句「这是证书问题不是网络问题 + 怎么修」；其它错别乱加话。"""
+    msg = C._ssl_hint("Max retries exceeded … [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+    assert "证书" in msg, msg
+    assert "Install Certificates" in msg, f"要给出可照做的修法：{msg}"
+    assert C._ssl_hint("404 Not Found") == "", "非证书错不该乱加提示"
+    assert C._ssl_hint("") == ""
+
+
 def test_sub_env_strips_dead_proxy():
     """默认摘掉代理（坏代理会让 pip/下载报「连不上镜像」这种误导错），KEEP 时保留。"""
     saved = {k: os.environ.get(k) for k in ("HTTP_PROXY", "HTTPS_PROXY", "VDL_CLONE_KEEP_PROXY")}
@@ -319,6 +473,12 @@ _TESTS = [
     test_start_install_blocks_on_low_disk,
     test_cancel_when_idle,
     test_mlx_pin_by_macos_version,
+    test_allowed_py_matrix_by_macos,
+    test_base_python_skips_incompatible_314,
+    test_py_prefers_stable_location_over_path,
+    test_start_install_blocks_without_python,
+    test_ca_bundle_injected_for_python_org,
+    test_ssl_hint_on_cert_error,
     test_sub_env_strips_dead_proxy,
     test_never_mutates_process_hf_endpoint,
     test_routes_wired,
