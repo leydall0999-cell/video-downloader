@@ -225,7 +225,24 @@ class QuotaManager:
         self._save(st)
 
     # ── 查询 ────────────────────────────────────────────────────────────── #
+    def _admin_exempt(self) -> bool:
+        """管理员豁免（2026-09-19）：作者本机自用不受免费配额约束。
+
+        满足任一即豁免：环境变量 VDL_QUOTA_ADMIN=1，或 base_dir 下存在
+        .admin_exempt 标记文件。标记文件是主通道——桌面 App 由用户双击启动，
+        无法可靠注入环境变量；文件标记对任何启动方式都生效，删除即收回。
+        分发用户机器上不存在该文件，不受影响。
+        """
+        if (os.environ.get("VDL_QUOTA_ADMIN") or "").strip() == "1":
+            return True
+        try:
+            return (self.base_dir / ".admin_exempt").exists()
+        except Exception:
+            return False
+
     def is_member(self) -> bool:
+        if self._admin_exempt():
+            return True
         try:
             return bool(self._is_member())
         except Exception:
@@ -416,9 +433,11 @@ class QuotaManager:
 
     def status(self) -> dict:
         st = self._state()
-        member = self.is_member()
+        admin = self._admin_exempt()
+        member = self.is_member() and not admin   # 管理员豁免≠会员，如实分开报告
         return {
             "is_member": member,
+            "admin_exempt": admin,
             "lifetime_cloud_used": 0 if member else int(st.get("lifetime_cloud_used", 0)),
             "lifetime_cloud_limit": LIFETIME_CLOUD_EVENTS,
             "lifetime_cloud_remaining": self.lifetime_cloud_remaining(),

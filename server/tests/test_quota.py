@@ -126,10 +126,39 @@ def test_persistence_across_instances():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def test_admin_exempt():
+    """管理员豁免（2026-09-19）：标记文件 / 环境变量任一即无限额度，status 如实区分。"""
+    d = tempfile.mkdtemp(prefix="vdl_quota_")
+    # 无标记 → 不豁免，正常拦截
+    q = _mgr(base_dir=d)
+    assert not q.is_member() and not q._admin_exempt()
+    assert q.consume_cloud_event() is True
+    # 标记文件 → 豁免（对已耗尽的额度也生效）
+    open(os.path.join(d, ".admin_exempt"), "w").close()
+    assert q._admin_exempt() and q.is_member()
+    assert q.lifetime_cloud_remaining() == 10 ** 9
+    assert q.decide_cloud_fallback() == "allow"
+    st = q.status()
+    assert st["admin_exempt"] is True and st["is_member"] is False  # admin ≠ 会员
+    # 环境变量通道（无标记文件的干净目录）
+    d2 = tempfile.mkdtemp(prefix="vdl_quota_")
+    os.environ["VDL_QUOTA_ADMIN"] = "1"
+    try:
+        q2 = _mgr(base_dir=d2)
+        assert q2._admin_exempt() and q2.lifetime_cloud_remaining() == 10 ** 9
+    finally:
+        os.environ.pop("VDL_QUOTA_ADMIN", None)  # 绝不泄漏到后续测试
+    q3 = _mgr(base_dir=d2)
+    assert not q3._admin_exempt()  # 移除后立即失效
+    shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(d2, ignore_errors=True)
+
+
 def main():
     tests = [test_lifetime_exhaustion, test_daily_auto_resets, test_member_unlimited,
              test_upload_duration_gate, test_fallback_three_states,
-             test_cloud_only_ignores_daily_auto, test_persistence_across_instances]
+             test_cloud_only_ignores_daily_auto, test_persistence_across_instances,
+             test_admin_exempt]
     for t in tests:
         t()
         print(f"  ✅ {t.__name__}")
