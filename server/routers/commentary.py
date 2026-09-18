@@ -93,6 +93,30 @@ def commentary_config_get() -> dict:
     return get_commentary_config()
 
 
+@router.get("/api/commentary/voice-sample")
+def get_commentary_voice_sample() -> dict:
+    """读取「我的音色」本地克隆参考样本（音频路径 + 文字稿 + 是否可用）。"""
+    from commentary_config import get_voice_sample
+    return get_voice_sample()
+
+
+@router.post("/api/commentary/voice-sample")
+def save_commentary_voice_sample(
+    audio_path: str = app.Form(""),
+    ref_text: str = app.Form(""),
+) -> dict:
+    """保存「我的音色」样本：音频绝对路径 + 该音频里念的文字稿。
+
+    校验失败（文件不存在 / 格式不支持 / 文字稿为空）返回 400 + 中文原因，
+    前端直接展示，避免把用不了的样本留到渲染时才炸。
+    """
+    from commentary_config import save_voice_sample
+    try:
+        return save_voice_sample(audio_path, ref_text)
+    except ValueError as exc:
+        raise app.HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/api/commentary/tts-status")
 def commentary_tts_status() -> dict:
     """返回 TTS 引擎相关的本机配置/就绪状态，供前端动态推荐。
@@ -101,6 +125,7 @@ def commentary_tts_status() -> dict:
     - apple_silicon: 是否为 Apple Silicon Mac（MLX 仅在此推荐）
     - indextts_mlx_ready: 127.0.0.1:7866 是否可连接
     - qwen3tts_ready: 127.0.0.1:7871 是否可连接（Qwen3-TTS 本地语音克隆）
+    - voice_sample_ready: 是否已配「我的音色」样本（克隆引擎真正生效的前提）
     - minimax_configured / siliconflow_configured: 是否已配置 API Key
     """
     import json
@@ -149,9 +174,19 @@ def commentary_tts_status() -> dict:
         "apple_silicon": apple_silicon,
         "indextts_mlx_ready": indextts_mlx_ready,
         "qwen3tts_ready": qwen3tts_ready,
+        "voice_sample_ready": _voice_sample_ready(),
         "minimax_configured": bool(minimax_key),
         "siliconflow_configured": bool(siliconflow_key),
     }
+
+
+def _voice_sample_ready() -> bool:
+    """「我的音色」样本是否可用（读取异常一律视为未就绪，不影响状态接口本身）。"""
+    try:
+        from commentary_config import get_voice_sample
+        return bool(get_voice_sample().get("ready"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @router.post("/api/commentary/stash")
@@ -900,11 +935,17 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                  subtitle_border: float = app.Form(1.0), subtitle_border_color: str = app.Form("000000"),
                  subtitle_pos: str = app.Form("bottom"),
                  max_chars: int = app.Form(0),
-                 feather_opt: str = app.Form("")) -> dict:
+                 feather_opt: str = app.Form(""),
+                 tts_provider: str = app.Form("")) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
     剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
     避免用默认值覆盖用户当初的选择（例如一键生成的全片深入+联网会被 deep_hl 默认值冲掉）。
+
+    tts_provider（2026-09-18 新增）：🔴 此前本接口**根本没有这个参数**，于是「配音引擎」下拉
+    在「生成脚本 → 渲染」这条主链路上完全无效——用户在界面上选了本地语音克隆，渲染子进程
+    拿不到 VDL_TTS_PROVIDER，只能吃 ~/.video-downloader/tts_config.json 里的旧值（实测是
+    siliconflow），出来的成片自然不是自己的声音。现在把界面上选的引擎如实透传给渲染子进程。
     """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
@@ -992,6 +1033,7 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
                     max_chars=max_chars,
                     feather_opt=feather_opt,
                     export_jianying=export_jianying,
+                    tts_provider=tts_provider,
                     original_speed=use_original_speed)
     return {"job_id": render_job_id, "status": "running", "script_job": job_id,
             "over_limit": over_limit, "auto_adjusted": auto_adjusted}
@@ -1173,11 +1215,16 @@ def voice_preview(
     text: str = app.Form("你好，我是视频解说员。我将为你解说这段视频。"),
     loudness: str = app.Form(None),
     boost: str = app.Form(None),
+    provider: str = app.Form(""),
 ) -> app.FileResponse:
     """配音试听：把指定文本用指定 voice 转成 mp3 返回给前端播放。
 
     若带 loudness/boost（来自「配音与音量」面板的「试听当前设置」），生成的旁白会
     再做 ffmpeg 响度标准化 + 增益，使试听与成片响度一致；不传则保持纯 TTS（音色试听）。
+
+    provider（2026-09-18 新增）：传 qwen3tts 时改走本机克隆引擎试听（用「我的音色」样本），
+    此时 voice 允许不是 zh-* 音色（克隆与 edge 音色名无关），返回 wav。这样「试听听到的」
+    才等于「成片会用的声音」——此前试听恒为 edge，用户永远验不出克隆有没有生效。
     """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
@@ -1185,7 +1232,8 @@ def voice_preview(
         raise app.HTTPException(status_code=400, detail="配音试听需在 local 模式使用")
     # 1. 先校验输入（不等 COMMENTARY_DIR 挂掉）
     voice = (voice or "").strip()
-    if not voice.startswith("zh-"):
+    is_clone = provider.strip().lower() == "qwen3tts"
+    if not is_clone and not voice.startswith("zh-"):
         raise app.HTTPException(status_code=400, detail=f"voice 必须是 zh-CN-* 音色，当前: {voice}")
     # FastAPI Form() 有 bug：空字符串会落回默认值（即使前端显式发 text=），所以加 fallback
     text = (text or "").strip()[:500] if text else ""
@@ -1212,13 +1260,19 @@ def voice_preview(
 
     out_dir = app._commentary_root("work") / "voice_preview"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{app.uuid.uuid4().hex[:12]}.mp3"
+    suffix = ".wav" if is_clone else ".mp3"
+    out_path = out_dir / f"{app.uuid.uuid4().hex[:12]}{suffix}"
     try:
-        app._run_voice_preview(text, voice, out_path, timeout=45,
-                               loudness=loudness, boost=boost)
+        app._run_voice_preview(text, voice, out_path,
+                               timeout=(900 if is_clone else 45),
+                               loudness=loudness, boost=boost,
+                               provider=("qwen3tts" if is_clone else ""))
     except RuntimeError as e:
         raise app.HTTPException(status_code=500, detail=f"试听生成失败：{e}")
     # 加过期清理保护：定时任务会清理 work/voice_preview/ 下超过 1 天的文件（用户本机 .cleanup）
+    if is_clone:
+        # 克隆引擎返回 wav（Qwen3-TTS 服务原始产物），浏览器 <audio> 直接可播
+        return app.FileResponse(path=str(out_path), filename="preview.wav", media_type="audio/wav")
     return app.FileResponse(path=str(out_path), filename="preview.mp3", media_type="audio/mpeg")
 
 @router.post("/api/commentary/preview/{job_id}")

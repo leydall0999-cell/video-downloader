@@ -123,6 +123,48 @@
       }
       return { ok: false, msg: '当前环境不支持自动开启，请在桌面版中使用。' };
     },
+    // 「我的音色」：弹原生文件框选一段参考录音，返回绝对路径；取消返回 ""。
+    // 无桥接（网页版）返回 ""，调用方回退为手填路径。
+    pickVoiceSample() {
+      const api = window.pywebview && window.pywebview.api;
+      if (!(api && typeof api.pick_voice_sample === 'function')) return Promise.resolve('');
+      const norm = (r) => (typeof r === 'string') ? r : '';
+      try {
+        const r = api.pick_voice_sample();
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => '');
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve('');
+      }
+    },
+    // Qwen3-TTS 本地语音克隆服务起停（选中即起、切走即停），返回 {ok, msg}。
+    // 与 startIndexTts 同一套「用户不用懂端口/服务」的约定；无桥接时返回可读提示。
+    startQwen3Tts() {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.start_qwen3tts === 'function') {
+        try {
+          const r = api.start_qwen3tts();
+          if (r && typeof r.then === 'function') return r;
+          return Promise.resolve(r);
+        } catch (e) {
+          return Promise.resolve({ ok: false, msg: '启动失败：' + e });
+        }
+      }
+      return Promise.resolve({ ok: false, msg: '当前环境不支持自动开启，请在桌面版中使用。' });
+    },
+    stopQwen3Tts() {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.stop_qwen3tts === 'function') {
+        try {
+          const r = api.stop_qwen3tts();
+          if (r && typeof r.then === 'function') return r;
+          return Promise.resolve(r);
+        } catch (e) {
+          return Promise.resolve({ ok: false, msg: '停止失败：' + e });
+        }
+      }
+      return Promise.resolve({ ok: false, msg: '' });
+    },
   };
   window.VDL.desktop = desktop;
 

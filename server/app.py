@@ -101,7 +101,7 @@ platform_status = platform_status
 load_vision_config_raw = load_vision_config_raw
 vision_managed_status = vision_managed_status
 vision_mask_key = vision_mask_key
-from commentary_config import inject_commentary_env
+from commentary_config import get_voice_sample, inject_commentary_env
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vdl")
@@ -1420,6 +1420,12 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         if tts_provider:
             # 语音克隆/海螺等可切换 TTS 服务商（indextts2=本地 IndexTTS2 语音克隆，需先起推理服务）
             run_env["VDL_TTS_PROVIDER"] = tts_provider
+        # 本机克隆引擎（qwen3tts / indextts*）跑的是**单进程、共享一个模型**的本地推理服务：
+        # 管线默认 VDL_TTS_CONCURRENCY=8（那是给 edge-tts 的网络 IO 场景调的），
+        # 对本地模型等于 8 个请求抢同一份权重——实测会把单句推理拖到十几分钟，
+        # 渲染整片基本不可能收敛。这里对克隆引擎降到 1（串行），除非用户自己显式设过。
+        if (tts_provider or "").strip().lower() in ("qwen3tts", "indextts2", "indextts_mlx"):
+            run_env.setdefault("VDL_TTS_CONCURRENCY", "1")
         if correct_transcript == "0":
             # 关闭转写稿 ASR 校正（默认开启，传 '0' 才关，省 token）
             run_env["VDL_CORRECT_TRANSCRIPT"] = "0"
@@ -2412,7 +2418,12 @@ def _build_loudness_filter(loudness: str | None, boost: str | None) -> str:
     return filt + f"volume={bv:.2f},alimiter=limit=0.98:level=disabled"
 
 def _apply_narration_loudness(src_mp3: Path, loudness: str | None, boost: str | None) -> None:
-    """对已有旁白 mp3 原地做响度标准化 + 增益（试听即所得，与成片 edit_ffmpeg 一致）。
+    """对已有旁白做响度标准化 + 增益（试听即所得，与成片 edit_ffmpeg 一致）。
+
+    ⚠️ 输出容器必须跟输入同后缀（2026-09-18 修）：克隆引擎的试听产物是 .wav，
+    而旧写法恒写 .mp3 再把内容改名回 .wav —— 文件后缀与实际编码不符，
+    接口又按后缀声明 media_type=audio/wav，浏览器解析会失败（试听直接不出声）。
+    现在按后缀选编码：wav → pcm_s16le，其余 → ffmpeg 默认 mp3 编码。
 
     失败不致命：保留原 TTS 音频，仅打印告警，不让试听整体失败。
     """
@@ -2425,8 +2436,12 @@ def _apply_narration_loudness(src_mp3: Path, loudness: str | None, boost: str | 
     except ValueError as e:
         print(f"  [试听] 响度参数错误，跳过后处理：{e}")
         return
-    tmp = src_mp3.with_suffix(".loud.mp3")
-    cmd = [ff, "-y", "-i", str(src_mp3), "-af", filt, "-ar", "44100", "-ac", "2", str(tmp)]
+    suffix = src_mp3.suffix.lower()
+    tmp = src_mp3.with_name(src_mp3.stem + ".loud" + suffix)
+    cmd = [ff, "-y", "-i", str(src_mp3), "-af", filt, "-ar", "44100", "-ac", "2"]
+    if suffix == ".wav":
+        cmd += ["-c:a", "pcm_s16le"]
+    cmd.append(str(tmp))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except Exception as e:
@@ -2443,8 +2458,99 @@ def _apply_narration_loudness(src_mp3: Path, loudness: str | None, boost: str | 
         if tmp.exists():
             tmp.unlink()
 
+def _qwen3tts_api_url() -> str:
+    """本机 Qwen3-TTS 克隆服务地址（与管线 config.QWEN3TTS_API_URL 同一默认值）。"""
+    return (os.environ.get("QWEN3TTS_API_URL") or "http://127.0.0.1:7871").rstrip("/")
+
+
+def _run_voice_preview_clone(text: str, ref_audio: str, ref_text: str,
+                            output: Path, timeout: int = 300) -> None:
+    """克隆引擎试听：把文本 + 参考音频 + 文字稿发给本机 Qwen3-TTS 服务，落盘 wav。
+
+    与渲染端行为对齐（scripts/edit_ffmpeg.py 的 qwen3tts 分支）：
+      · 服务不可达 → 直接报错，**不静默回退 edge**（用户显式选了克隆，试听听到的必须是克隆声，
+        否则「试听正常、成片不是自己的声音」这种误导比报错更糟）；
+      · 参考音频缺失 / 文字稿为空 → 报错并提示先配「我的音色」。
+    """
+    import urllib.error
+    import urllib.request
+
+    ref_audio = (ref_audio or "").strip()
+    ref_text = (ref_text or "").strip()
+    if not ref_audio or not os.path.isfile(ref_audio):
+        raise RuntimeError("还没配置音色样本：请先在「我的音色（本地克隆源）」里选一段录音")
+    if not ref_text:
+        raise RuntimeError("音色样本缺少文字稿：请填写那段录音里念的内容")
+
+    api_url = _qwen3tts_api_url()
+    boundary = "----vdlpreviewclone"
+    try:
+        with open(ref_audio, "rb") as rf:
+            parts = [
+                (
+                    f"--{boundary}\r\n"
+                    f"Content-Disposition: form-data; name=\"reference_audio\"; "
+                    f"filename=\"{os.path.basename(ref_audio)}\"\r\n"
+                    f"Content-Type: audio/wav\r\n\r\n"
+                ).encode("utf-8"),
+                rf.read(),
+                b"\r\n",
+            ]
+        for k, v in (("text", text.strip()), ("prompt_text", ref_text)):
+            parts.append(
+                (
+                    f"--{boundary}\r\n"
+                    f"Content-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+                ).encode("utf-8")
+            )
+        parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        req = urllib.request.Request(
+            f"{api_url}/tts",
+            data=b"".join(parts),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            audio = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "ignore")[:200]
+        except Exception:
+            pass
+        raise RuntimeError(f"克隆服务返回 HTTP {exc.code}：{detail}") from exc
+    except (TimeoutError, socket.timeout) as exc:
+        # 超时 ≠ 连不上：本地 CPU 推理本来就慢（实测 macOS 13 无 MPS，
+        # 一个 3 字短句都能跑过 5 分钟），把「慢」说成「连不上」会让人去查端口，
+        # 完全跑偏。这里明确区分。
+        raise RuntimeError(
+            f"克隆合成超时（>{timeout}s）：本机语音克隆是纯 CPU 推理，速度较慢。"
+            "可先改用较短的试听文本，或换「微软 edge-tts」兜底；渲染成片时需要更长时间。"
+        ) from exc
+    except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), (TimeoutError, socket.timeout)):
+            raise RuntimeError(
+                f"克隆合成超时（>{timeout}s）：本机语音克隆是纯 CPU 推理，速度较慢。"
+                "可先改用较短的试听文本，或换「微软 edge-tts」兜底。"
+            ) from exc
+        raise RuntimeError(
+            f"连不上本机克隆服务（{api_url}）：{type(exc).__name__}: {exc}。"
+            "可稍等 25 秒让服务启动完成，或在引擎下拉里切一次重新拉起。"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"连不上本机克隆服务（{api_url}）：{type(exc).__name__}: {exc}。"
+            "可稍等 25 秒让服务启动完成，或在引擎下拉里切一次重新拉起。"
+        ) from exc
+
+    if not audio or len(audio) < 100:
+        raise RuntimeError("克隆服务返回空音频")
+    output.write_bytes(audio)
+
+
 def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 60,
-                       loudness: str | None = None, boost: str | None = None) -> None:
+                       loudness: str | None = None, boost: str | None = None,
+                       provider: str = "") -> None:
     """用 edge-tts 把一段文本转成指定音色的 mp3。
 
     bundled 模式：edge_tts 已随包冻结，直接 in-process 调用，避开「subprocess 跑
@@ -2453,31 +2559,43 @@ def _run_voice_preview(text: str, voice: str, output_mp3: Path, timeout: int = 6
 
     loudness/boost（试听「配音与音量」设置用）：非 None 时对生成好的旁白再做
     ffmpeg 响度标准化 + 增益，使试听与成片响度一致。
-    """
-    if not COMMENTARY_RT.ready():
-        raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
 
-    # bundled 模式：桌面打包态，edge_tts 已冻结进 exe，直接 in-process 调用
-    if plat.is_desktop():
-        _run_voice_preview_inprocess(text, voice, output_mp3, timeout=timeout)
+    provider（2026-09-18 新增）：传本机克隆引擎时改走 Qwen3-TTS 克隆试听，
+    见 _run_voice_preview_clone；空/edge 时保持原有 edge-tts 行为。
+    """
+    is_clone = str(provider or "").strip().lower() == "qwen3tts"
+    if is_clone:
+        # 克隆引擎：走本机 7871 服务 + 「我的音色」样本。
+        # 🔴 这段刻意「不 return」——要让下面那段响度/增益后处理照样作用在克隆 wav 上，
+        #    否则「试听当前设置」在克隆引擎下会听到未处理的干声，与成片响度对不上。
+        sample = get_voice_sample()
+        _run_voice_preview_clone(text, sample["audio_path"], sample["ref_text"],
+                                 output_mp3, timeout=max(timeout, 900))
     else:
-        # dev/外部：subprocess 走 commentary-pipeline 的 venv
-        if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
-            raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
-        script = COMMENTARY_DIR / "scripts" / "voice_preview.py"
-        cmd = [COMMENTARY_RT.python, str(script), text, voice, str(output_mp3)]
-        try:
-            proc = subprocess.run(cmd, cwd=str(COMMENTARY_DIR), capture_output=True,
-                                  text=True, timeout=timeout, env=COMMENTARY_RT.env())
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"edge-tts 生成超时（>{timeout}s）") from exc
-        except Exception as exc:
-            raise RuntimeError(f"edge-tts 调用失败：{exc}") from exc
-        if proc.returncode != 0:
-            msg = (proc.stderr or proc.stdout or "无输出").strip()[:400]
-            raise RuntimeError(f"edge-tts 退出码 {proc.returncode}: {msg}")
-        if not output_mp3.exists() or output_mp3.stat().st_size < 100:
-            raise RuntimeError("edge-tts 未产出有效音频文件")
+        if not COMMENTARY_RT.ready():
+            raise RuntimeError("解说环境未就绪：" + "；".join(COMMENTARY_RT.issues))
+
+        # bundled 模式：桌面打包态，edge_tts 已冻结进 exe，直接 in-process 调用
+        if plat.is_desktop():
+            _run_voice_preview_inprocess(text, voice, output_mp3, timeout=timeout)
+        else:
+            # dev/外部：subprocess 走 commentary-pipeline 的 venv
+            if not COMMENTARY_DIR or not (COMMENTARY_DIR / "scripts" / "voice_preview.py").exists():
+                raise RuntimeError("voice_preview.py 不存在（请在 commentary-pipeline/scripts/ 下创建）")
+            script = COMMENTARY_DIR / "scripts" / "voice_preview.py"
+            cmd = [COMMENTARY_RT.python, str(script), text, voice, str(output_mp3)]
+            try:
+                proc = subprocess.run(cmd, cwd=str(COMMENTARY_DIR), capture_output=True,
+                                      text=True, timeout=timeout, env=COMMENTARY_RT.env())
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"edge-tts 生成超时（>{timeout}s）") from exc
+            except Exception as exc:
+                raise RuntimeError(f"edge-tts 调用失败：{exc}") from exc
+            if proc.returncode != 0:
+                msg = (proc.stderr or proc.stdout or "无输出").strip()[:400]
+                raise RuntimeError(f"edge-tts 退出码 {proc.returncode}: {msg}")
+            if not output_mp3.exists() or output_mp3.stat().st_size < 100:
+                raise RuntimeError("edge-tts 未产出有效音频文件")
 
     # 音量后处理（试听「配音与音量」设置时才带 loudness/boost）
     if loudness is not None or boost is not None:

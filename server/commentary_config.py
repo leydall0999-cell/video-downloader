@@ -138,3 +138,89 @@ def inject_commentary_env(env: dict[str, str]) -> None:
         env["VDL_ORIGINAL_DUCK"] = str(cfg["original_duck"])
     if "VDL_NARRATION_BOOST" not in env:
         env["VDL_NARRATION_BOOST"] = str(cfg["narration_boost"])
+    inject_voice_sample_env(env)
+
+
+# ───────────────────────── 「我的音色」本地克隆参考样本 ─────────────────────────
+# 背景（2026-09-18 修）：界面里的「Qwen3-TTS 本地语音克隆」此前**从未真正克隆**——
+#   ① 该选项 value 为空 → 后端不写 VDL_TTS_PROVIDER → 管线落到 tts_config.json 的 provider；
+#   ② 全站没有「音色样本」入口，QWEN3TTS_REF_AUDIO/REF_TEXT 恒空 → 即便服务起来了也克隆不了。
+# 现在把样本存成 ~/.video-downloader/voice_sample.json，并在每次起解说子进程时注入
+# QWEN3TTS_REF_AUDIO / QWEN3TTS_REF_TEXT（管线 scripts/edit_ffmpeg.py 的 qwen3tts 分支会读它们）。
+VOICE_SAMPLE_EXTS = (".wav", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".mp4")
+
+
+def _voice_sample_path() -> Path:
+    return _config_dir() / "voice_sample.json"
+
+
+def get_voice_sample() -> dict[str, Any]:
+    """读取「我的音色」参考样本（音频绝对路径 + 该音频的文字稿）。
+
+    返回 {"audio_path", "ref_text", "audio_exists", "ready", "updated_at"}。
+    ready = 路径非空 + 扩展名受支持 + 文件此刻仍在 + 文字稿非空；
+    任何一项不满足都只是 ready=False（不抛错），供前端显示待配置状态。
+    """
+    audio, text, updated = "", "", ""
+    sp = _voice_sample_path()
+    if sp.is_file():
+        try:
+            saved = json.loads(sp.read_text(encoding="utf-8"))
+            audio = str(saved.get("audio_path") or "").strip()
+            text = str(saved.get("ref_text") or "").strip()
+            updated = str(saved.get("updated_at") or "").strip()
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    exists = bool(audio) and os.path.isfile(audio)
+    suffix_ok = audio.lower().endswith(VOICE_SAMPLE_EXTS)
+    return {
+        "audio_path": audio,
+        "ref_text": text,
+        "audio_exists": exists,
+        "ready": bool(exists and suffix_ok and text),
+        "updated_at": updated,
+    }
+
+
+def save_voice_sample(audio_path: str, ref_text: str) -> dict[str, Any]:
+    """持久化「我的音色」样本（原子写入，权限 0600）。
+
+    校验：音频路径必须存在、扩展名受支持、文字稿非空 —— 缺一样直接抛 ValueError
+    （前端立刻提示，避免把「存了个用不了的样本」留到渲染时才炸）。
+    """
+    import datetime as _dt
+
+    audio = str(audio_path or "").strip().strip('"').strip("'")
+    text = str(ref_text or "").strip()
+    if not audio:
+        raise ValueError("请先选择一段音色样本音频")
+    if not os.path.isfile(audio):
+        raise ValueError(f"音频文件不存在：{audio}")
+    if not audio.lower().endswith(VOICE_SAMPLE_EXTS):
+        allowed = " / ".join(e.lstrip(".") for e in VOICE_SAMPLE_EXTS)
+        raise ValueError(f"音频格式不支持（仅 {allowed}）")
+    if not text:
+        raise ValueError("请填写这段音频里念的内容（文字稿），克隆需要它对齐韵律")
+
+    payload = {
+        "audio_path": audio,
+        "ref_text": text,
+        "updated_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    atomic_io.atomic_write_json(_voice_sample_path(), payload)
+    return get_voice_sample()
+
+
+def inject_voice_sample_env(env: dict[str, str]) -> None:
+    """把「我的音色」样本注入解说子进程（QWEN3TTS_REF_AUDIO / QWEN3TTS_REF_TEXT）。
+
+    只在样本 ready 且同名变量未被显式设置时注入 —— 运维/容器里显式设定的参考音频优先级更高。
+    样本没配就不注入，管线会按其原有逻辑报「需要参考音频/文字稿」或回退兜底引擎。
+    """
+    sample = get_voice_sample()
+    if not sample["ready"]:
+        return
+    if "QWEN3TTS_REF_AUDIO" not in env:
+        env["QWEN3TTS_REF_AUDIO"] = sample["audio_path"]
+    if "QWEN3TTS_REF_TEXT" not in env:
+        env["QWEN3TTS_REF_TEXT"] = sample["ref_text"]

@@ -2857,6 +2857,73 @@ img { max-width: 100%; display: block; }
 .com-opt-row-fixed > .com-mode-fixed:hover > span { background: none; border: none; }
 .com-opt-row-fixed > .com-mode-fixed input:checked + span b { color: var(--accent); }
 
+/* ===== 我的音色（本地克隆源）整行：2026-09-18 新增 =====
+   只在「配音引擎 = Qwen3-TTS 本地语音克隆」时显示（JS 控制 hidden）。
+   🔴 底色/边框沿用折叠卡那套 color-mix(accent …%, surface/line)，**不要写死 #F5FCFD**：
+   本 App 有暗色主题（html.theme-dark），写死浅色会在暗色下变成刺眼的亮块。
+   🔴 选择器带 #commentaryView，避免被后面同权的暗色规则按「后来者胜」压掉。 */
+#commentaryView .com-row-myvoice { margin-top: .55rem; }
+#commentaryView .com-row-myvoice > .com-cell-myvoice {
+  flex: 1 1 100%; min-width: 0;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  padding: .55rem .6rem;
+  display: flex; flex-direction: column; gap: .45rem;
+}
+#commentaryView .com-cell-myvoice > .com-opt-title {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .82rem; font-weight: 700; color: var(--text);
+  margin: 0;
+}
+.com-myvoice-badge {
+  font-size: .68rem; font-weight: 600;
+  padding: .06rem .4rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, var(--surface));
+  color: var(--text-mute);
+}
+.com-myvoice-badge.is-ready { background: #DDF5E4; color: #1B7A3D; }
+#commentaryView .com-myvoice-grid {
+  /* 单列堆叠：右栏可用宽只有 ~188px，两列（按钮｜路径）会把路径压到 45px、
+     提示文字挤成 4 行，读起来很碎。全部改成整行，各自独占宽度。 */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: .38rem;
+}
+.com-myvoice-pick { white-space: nowrap; align-self: flex-start; }
+.com-myvoice-path {
+  min-width: 0;
+  font-size: .74rem; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.com-myvoice-path.is-set { color: var(--text); }
+.com-myvoice-label {
+  font-size: .76rem; font-weight: 600; color: var(--text);
+}
+.com-myvoice-text {
+  width: 100%; box-sizing: border-box;
+  font-family: inherit; font-size: .78rem; line-height: 1.45;
+  padding: .38rem .5rem;
+  color: var(--text); background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+.com-myvoice-text:focus { outline: none; border-color: var(--accent); }
+.com-myvoice-actions {
+  display: flex; flex-direction: column; align-items: stretch; gap: .35rem;
+}
+.com-myvoice-hint {
+  font-size: .7rem; color: var(--text-mute); line-height: 1.35;
+}
+.com-myvoice-actions .btn { align-self: flex-end; }
+/* 保存/选择后的即时反馈配色：沿用 .com-script-ok/-err/-warn 那套语义色，
+   否则 ok/warn 全一个灰，用户看不出「到底成没成」。 */
+#commentaryView #comMyVoiceStatus[data-kind="ok"] { color: var(--success, #16a34a); }
+#commentaryView #comMyVoiceStatus[data-kind="warn"] { color: var(--warning, #b45309); }
+
 .com-retain-field {
   display: flex; flex-wrap: wrap; align-items: center;
   gap: .25rem .55rem;

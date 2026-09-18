@@ -438,6 +438,34 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
+    def pick_voice_sample(self) -> str:
+        """选择「我的音色」参考音频：弹系统文件选择框，返回绝对路径；取消返回空串。
+
+        与 choose_folder / choose_files 同套机制（osascript 子进程弹原生 panel），
+        刻意不用 tkinter：bridge 未必跑在 main thread，Tk 会触发
+        `NSWindow ... Main Thread` 约束直接 SIGTRAP，把整个 App 卡死。
+        单选 + 限定音频类型（克隆样本只可能是音频）。
+        """
+        try:
+            import subprocess as _sp
+            exts = ["wav", "mp3", "m4a", "flac", "aac", "ogg", "opus", "mp4"]
+            ext_list = "{" + ", ".join(f'"{e}"' for e in exts) + "}"
+            script_lines = [
+                f'set theFile to choose file of type {ext_list} with prompt '
+                f'"选择你的音色样本（念一句话的录音，3~15 秒最佳）"',
+                "return POSIX path of theFile",
+            ]
+            cmd = ["osascript"]
+            for line in script_lines:
+                cmd += ["-e", line]
+            proc = _sp.run(cmd, capture_output=True, text=True, timeout=180)
+            out = (proc.stdout or "").strip()
+            if out and "execution error" not in out and "User canceled" not in out:
+                return out
+            return ""
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
     def start_indextts_mlx(self) -> dict:
         """一键开启本地语音克隆（IndexTTS-MLX）。
 

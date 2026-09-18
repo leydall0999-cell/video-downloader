@@ -504,6 +504,15 @@
     comTtsStatusDot: $('comTtsStatusDot'),
     comTtsStatusText: $('comTtsStatusText'),
     comTtsProvider: $('comTtsProvider'),
+    // 「我的音色」（本地克隆源）元素：2026-09-18 新增
+    comOptsFold: $('comOptsFold'),
+    comMyVoiceRow: $('comMyVoiceRow'),
+    comMyVoiceBadge: $('comMyVoiceBadge'),
+    comMyVoicePick: $('comMyVoicePick'),
+    comMyVoicePath: $('comMyVoicePath'),
+    comMyVoiceText: $('comMyVoiceText'),
+    comMyVoiceSave: $('comMyVoiceSave'),
+    comMyVoiceStatus: $('comMyVoiceStatus'),
     // BGM 的 7 个元素引用（comBgm*）2026-09-18 删除：DOM 早在 2026-09-15 随「成片增强 ·
     // 自动配乐」块移除，引用恒为 null；配乐改由时间轴「音乐」轨的 comMusic 状态承载。
     comSubSize: $('comSubSize'),
@@ -8373,6 +8382,12 @@ el.dwVidPlayer.removeAttribute('src');
   /** 根据本机配置/服务就绪状态，自动识别每个配音引擎是否可用，不可用项直接置灰禁用。 */
   let _ttsStatusCache = null;
   let _ttsAutoStartTried = false;
+  /** 「我的音色」样本的本地态（audio_path/ref_text/ready）。
+   *  声明在这里而不是靠下的实现块里：comRefreshTtsStatus 在初始化阶段就会被调用，
+   *  若用 let 声明在下方会命中 TDZ 抛 ReferenceError。 */
+  let comVoiceSampleState = { audio_path: '', ref_text: '', ready: false };
+  /** 「我的音色」未配置时自动展开「解说参数」卡，只做一次（避免用户手动折起后反复被打开）。 */
+  let _myVoiceAutoOpened = false;
   const comRefreshTtsStatus = async (opts = {}) => {
     const sel = el.comTtsProvider;
     if (!sel) return;
@@ -8400,8 +8415,9 @@ el.dwVidPlayer.removeAttribute('src');
       opt.textContent = base + (suffix ? '　' + suffix : '');
     };
 
-    // 默认 edge-tts：始终可用
-    setOpt('', false, '免费');
+    // 默认 Qwen3-TTS 本地语音克隆（2026-09-18 起为真默认；此前 value="" 等于「不告诉后端」，
+    // 后端不写 VDL_TTS_PROVIDER → 管线落到 tts_config.json 里的旧 provider，克隆形同虚设）
+    setOpt('qwen3tts', false, status.voice_sample_ready ? '免费' : '免费（需先配「我的音色」）');
     // IndexTTS-MLX：仅 Apple Silicon + 服务就绪可用，否则置灰
     if (status.indextts_mlx_ready) {
       setOpt('indextts_mlx', false, '免费（已就绪）');
@@ -8414,9 +8430,9 @@ el.dwVidPlayer.removeAttribute('src');
     // edge-tts：始终可用兜底
     setOpt('edge', false, '免费（兜底）');
 
-    // 当前选中的项若已被禁用，自动回退到默认引擎
+    // 当前选中的项若已被禁用，自动回退到 edge 兜底（不能再回落成 ''，'' 已不是合法取值）
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
-      sel.value = '';
+      sel.value = 'edge';
     }
 
     // 刷新只读状态条提示
@@ -8432,16 +8448,31 @@ el.dwVidPlayer.removeAttribute('src');
     } else if (cur === 'minimax' || cur === 'siliconflow') {
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
       comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
-    } else if (cur === '') {
-      if (status.qwen3tts_ready) {
-        comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
+    } else if (cur === 'qwen3tts') {
+      // 2026-09-18：克隆真正生效需要 ①服务在跑 ②有「我的音色」样本。缺哪样就说哪样，
+      // 不再出现「界面显示就绪、成片却是 edge 声」这种误导。
+      if (!status.voice_sample_ready) {
+        comSetTtsStatusBar('orange', '还差一步：在「解说参数 → 我的音色」里选一段自己的录音 + 填文字稿并保存');
+        comEnsureQwen3Tts(); // 服务可以并行预热，配好样本即可直接用
+        // 「我的音色」藏在默认折起的「解说参数」卡里 —— 只自动展开一次（每会话），
+        // 否则用户手动折起后每次刷新都被强行打开，很烦。
+        if (!_myVoiceAutoOpened && el.comOptsFold && el.comMyVoiceRow) {
+          _myVoiceAutoOpened = true;
+          el.comOptsFold.open = true;
+          try { el.comMyVoiceRow.scrollIntoView({ block: 'nearest' }); } catch (_) {}
+        }
+      } else if (status.qwen3tts_ready) {
+        comSetTtsStatusBar('green', '本地语音克隆已就绪，将用「我的音色」里的声音解说');
       } else {
-        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：选中后自动启动中（约 25 秒），稍候即可用你的克隆声');
+        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：正在自动启动（约 25 秒），稍候即可用你的克隆声');
         comEnsureQwen3Tts(); // 默认引擎即被选中 → 自动起服务（选中即起）
       }
     } else {
       comHideTtsStatusBar();
     }
+
+    // 「我的音色」整行：只在选中克隆引擎时露出，其余引擎下藏起来（避免无关噪音）
+    if (el.comMyVoiceRow) el.comMyVoiceRow.hidden = (cur !== 'qwen3tts');
 
     // 自动识别：Apple Silicon 但服务未起时，自动后台尝试启动本地语音克隆（取代手动「一键开启」）
     if (status.apple_silicon && !status.indextts_mlx_ready && !_ttsAutoStartTried) {
@@ -8980,6 +9011,31 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('subtitle_pos', _opts.subtitle_pos);
       form.append('max_chars', String(_opts.max_chars));
       if (_opts.feather_opt) form.append('feather_opt', _opts.feather_opt);
+      // 配音引擎必须随渲染一起发下去（2026-09-18 修）：本接口此前没有这个参数，
+      // 界面选了本地语音克隆也传不到渲染子进程 → 成片用的是 tts_config.json 里的旧引擎。
+      const _renderProvider = el.comTtsProvider ? el.comTtsProvider.value : '';
+      // 选了克隆但还没配「我的音色」→ 先说清楚会退回 edge 音色，避免出片后才发现不是自己的声音。
+      if (_renderProvider === 'qwen3tts') {
+        // 🔴 此处按钮已被置为「渲染中…」禁用态，提前退出必须自己还原，
+        //    否则用户取消后就再也点不动渲染了。
+        const _restoreRenderBtn = () => {
+          el.comScriptRender.disabled = false;
+          el.comScriptRender.textContent = '🎬 生成成片';
+        };
+        await comLoadVoiceSample();   // 用最新状态判定，别吃缓存
+        if (!comVoiceSampleState.ready) {
+          const goOn = window.confirm(
+            '还没配「我的音色」——这句解说会用不到你自己的声音，成片里的旁白会退回系统免费音色。\n\n' +
+            '建议先取消，在「解说参数 → 我的音色」里选一段自己的录音（3~15 秒）并填上文字稿保存。\n\n' +
+            '仍要继续渲染吗？'
+          );
+          if (!goOn) {
+            _restoreRenderBtn();
+            return;
+          }
+        }
+      }
+      if (_renderProvider) form.append('tts_provider', _renderProvider);
       const _rr = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
       });
@@ -9066,6 +9122,10 @@ el.dwVidPlayer.removeAttribute('src');
       const form = new FormData();
       form.append('voice', voice);
       form.append('text', '你好，我是视频解说员。我将为你解说这段视频。');
+      // provider（2026-09-18）：选中克隆引擎时让后端直接走本机克隆试听。
+      // 不传的话试听恒为 edge，用户永远验不出克隆有没有生效（这正是一开始的坑）。
+      const _prevProvider = el.comTtsProvider ? el.comTtsProvider.value : '';
+      if (_prevProvider) form.append('provider', _prevProvider);
       // request 不能直接拿 blob，但 /api/commentary/voice-preview 返回 mp3 二进制；
       // 这里直接用 fetch 处理，方便放 audio 播放
       const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
@@ -9087,7 +9147,9 @@ el.dwVidPlayer.removeAttribute('src');
       }, 30000);
       el.comScriptStatus.hidden = false;
       el.comScriptStatus.className = 'com-script-status com-script-ok';
-      el.comScriptStatus.textContent = `✓ 已用 ${voice} 试听`;
+      el.comScriptStatus.textContent = _prevProvider === 'qwen3tts'
+        ? '✓ 已用你的克隆声试听'
+        : `✓ 已用 ${voice} 试听`;
       setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
     } catch (err) {
       el.comScriptStatus.hidden = false;
@@ -9122,6 +9184,10 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('text', '你好，我是视频解说员。这段视频的精彩内容，我来为你娓娓道来。');
       form.append('loudness', loudness);
       form.append('boost', boost);
+      // provider：克隆引擎下让后端用「我的音色」合成，再对 wav 做同样的响度/增益后处理，
+      // 这样这里听到的响度才真的等于成片响度（后端已支持对克隆产物做后处理）。
+      const _volProvider = el.comTtsProvider ? el.comTtsProvider.value : '';
+      if (_volProvider) form.append('provider', _volProvider);
       const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({}));
@@ -9130,7 +9196,9 @@ el.dwVidPlayer.removeAttribute('src');
       const blob = await resp.blob();
       await playAudio(blob);
       el.comScriptStatus.className = 'com-script-status com-script-ok';
-      el.comScriptStatus.textContent = `✓ 已试听（响度 ${loudness} / 增益 ${boost}×）`;
+      el.comScriptStatus.textContent = _volProvider === 'qwen3tts'
+        ? `✓ 已试听你的克隆声（响度 ${loudness} / 增益 ${boost}×）`
+        : `✓ 已试听（响度 ${loudness} / 增益 ${boost}×）`;
       setTimeout(() => { el.comScriptStatus.hidden = true; }, 2500);
     } catch (err) {
       el.comScriptStatus.className = 'com-script-status com-script-err';
@@ -9377,6 +9445,7 @@ el.dwVidPlayer.removeAttribute('src');
     refreshComSource();
     refreshCommentaryDiagnostics();
     loadVolumeConfig();
+    comLoadVoiceSample();   // 「我的音色」当前态（回填路径/文字稿/徽标）
     comRefreshTtsStatus();
   };
 
@@ -9893,13 +9962,112 @@ el.dwVidPlayer.removeAttribute('src');
   // 切换配音引擎时，实时刷新可用性（自动识别并置灰不可用项）
   if (el.comTtsProvider) {
     el.comTtsProvider.addEventListener('change', () => {
-      // 选中 Qwen3-TTS（空值=默认项）→ 自动起本机 7871 服务；切到别的引擎 → 自动停，省资源
-      if (el.comTtsProvider.value === '') {
+      // 选中 Qwen3-TTS → 自动起本机 7871 服务；切到别的引擎 → 自动停，省资源
+      if (el.comTtsProvider.value === 'qwen3tts') {
         comEnsureQwen3Tts();
+        if (!comVoiceSampleState.ready) comLoadVoiceSample(); // 顺手拉一次样本状态，保证提示准确
       } else {
         comAutoStopQwen3Tts();
       }
-      comRefreshTtsStatus({ force: false });
+      comRefreshTtsStatus({ force: true });
+    });
+  }
+
+  // ===== 「我的音色」（本地克隆源）：选录音 + 填文字稿 + 保存 =====
+  // 2026-09-18 新增。这是「配音引擎 = Qwen3-TTS 本地语音克隆」真正生效的前提：
+  // 没有样本时管线拿不到 QWEN3TTS_REF_AUDIO/REF_TEXT，服务起来了也只是静默回退 edge。
+  /** 短路径显示：只留「…/父目录/文件名」，避免长绝对路径把这一行撑爆 */
+  const comVoiceSampleBrief = (p) => {
+    const s = String(p || '');
+    if (!s) return '';
+    const parts = s.split('/').filter(Boolean);
+    if (parts.length <= 2) return s;
+    return '…/' + parts.slice(-2).join('/');
+  };
+  const comSetVoiceStatus = (kind, msg) => {
+    const node = el.comMyVoiceStatus;
+    if (!node) return;
+    if (!msg) { node.hidden = true; node.textContent = ''; return; }
+    node.hidden = false;
+    node.textContent = msg;
+    node.dataset.kind = kind || 'info';
+  };
+  const comRenderVoiceSample = (s) => {
+    comVoiceSampleState = {
+      audio_path: (s && s.audio_path) || '',
+      ref_text: (s && s.ref_text) || '',
+      ready: !!(s && s.ready),
+    };
+    if (el.comMyVoicePath) {
+      const brief = comVoiceSampleBrief(comVoiceSampleState.audio_path);
+      el.comMyVoicePath.textContent = brief || '还没选择录音文件';
+      el.comMyVoicePath.title = comVoiceSampleState.audio_path || '';
+      el.comMyVoicePath.classList.toggle('is-set', !!brief);
+    }
+    if (el.comMyVoiceText && document.activeElement !== el.comMyVoiceText) {
+      el.comMyVoiceText.value = comVoiceSampleState.ref_text;
+    }
+    if (el.comMyVoiceBadge) {
+      el.comMyVoiceBadge.textContent = comVoiceSampleState.ready ? '已配置' : '未配置';
+      el.comMyVoiceBadge.classList.toggle('is-ready', comVoiceSampleState.ready);
+    }
+  };
+  const comLoadVoiceSample = async () => {
+    try {
+      const s = await request('/api/commentary/voice-sample');
+      comRenderVoiceSample(s);
+    } catch (_e) { /* 拉不到就维持现状，不打扰用户 */ }
+  };
+  if (el.comMyVoicePick) {
+    el.comMyVoicePick.addEventListener('click', async () => {
+      const pick = window.VDL && window.VDL.desktop && window.VDL.desktop.pickVoiceSample;
+      if (typeof pick !== 'function') {
+        comSetVoiceStatus('warn', '网页版不支持弹文件框，请直接粘贴音频的完整路径');
+        if (el.comMyVoicePath) {
+          el.comMyVoicePath.textContent = '（把音频绝对路径粘贴到这里）';
+          el.comMyVoicePath.classList.add('is-set');
+        }
+        return;
+      }
+      const p = await pick();
+      if (!p) return; // 用户取消
+      if (String(p).startsWith('ERROR')) { comSetVoiceStatus('warn', String(p).slice(7)); return; }
+      comVoiceSampleState.audio_path = p;
+      if (el.comMyVoicePath) {
+        el.comMyVoicePath.textContent = comVoiceSampleBrief(p);
+        el.comMyVoicePath.title = p;
+        el.comMyVoicePath.classList.add('is-set');
+      }
+      comSetVoiceStatus('info', '录音已选好，请补上它念的内容并保存');
+    });
+  }
+  if (el.comMyVoiceSave) {
+    el.comMyVoiceSave.addEventListener('click', async () => {
+      const path = (comVoiceSampleState.audio_path || '').trim();
+      const text = (el.comMyVoiceText ? el.comMyVoiceText.value : '').trim();
+      if (!path) { comSetVoiceStatus('warn', '请先选择一段录音'); return; }
+      if (!text) { comSetVoiceStatus('warn', '请填写那段录音里念的内容（克隆需要它对齐韵律）'); return; }
+      el.comMyVoiceSave.disabled = true;
+      comSetVoiceStatus('info', '保存中…');
+      try {
+        const fd = new FormData();
+        fd.append('audio_path', path);
+        fd.append('ref_text', text);
+        const res = await fetch('/api/commentary/voice-sample', { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          comSetVoiceStatus('warn', (data && data.detail) || ('保存失败（HTTP ' + res.status + '）'));
+          return;
+        }
+        comRenderVoiceSample(data);
+        comSetVoiceStatus('ok', '音色已保存，渲染解说时会用这个声音');
+        _ttsStatusCache = null;           // 样本变了 → 让状态条重新判定「就绪」
+        comRefreshTtsStatus({ force: true });
+      } catch (e) {
+        comSetVoiceStatus('warn', '保存失败：' + e);
+      } finally {
+        el.comMyVoiceSave.disabled = false;
+      }
     });
   }
 
