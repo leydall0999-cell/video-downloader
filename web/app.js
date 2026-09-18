@@ -10799,7 +10799,9 @@ el.dwVidPlayer.removeAttribute('src');
     comFeather.srcKey = key;
     comFeatherSetState('busy', '探测中…');
     try {
-      const blobs = await comFeatherGrabFrames(4);
+      // 10 帧（2026-09-18 从 4 帧加密度）：硬字幕间歇出现，4 个固定时刻可能大半
+      // 落在无字幕镜头上 →「命中帧太少」误报；探测是纯 PIL（~10ms/帧），加密度零成本。
+      const blobs = await comFeatherGrabFrames(10);
       if (!blobs.length) throw new Error('抽帧失败（视频未就绪）');
       const fd = new FormData();
       blobs.forEach((b, i) => fd.append('frames', b, `f${i}.jpg`));

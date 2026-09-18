@@ -13,9 +13,12 @@
   detect_finds_white_text_band           底部白字带能被找到
   detect_clean_frame_returns_not_found   干净画面不误报
   detect_requires_two_hits               命中帧不足（1/4）时不确认
+  detect_10frames_needs_three_hits       10 帧门槛 = max(2, 30% 帧数)（2026-09-18）
   detect_ignores_oversized_band          大字幕墙/演职员表（>25% 高）被丢弃
   detect_pads_band_slightly              返回的带比原字略大（包住描边/辉光）
   band_ratio_independent_of_resolution   同一内容不同分辨率给出同一比例
+  band_rows_rejects_bright_spill         亮场景溢出（贴扫描区顶且高 >15%）弃帧
+  band_rows_keeps_short_band_touching_scan_top   守卫双条件，不误伤矮带
   mark_matches_pipeline                  关键常量与管线口径一致（防单边漂移）
 
 运行：
@@ -72,6 +75,41 @@ def test_detect_requires_two_hits():
     assert r["hits"] == 1, r
 
 
+def test_detect_10frames_needs_three_hits():
+    # 2026-09-18 前端抽帧 4→10：门槛随帧数走（max(2, 30% 帧数)），10 帧要求 ≥3。
+    # 2/10 命中不确认；3/10 命中确认且带位置贴合真实字幕。
+    good = _mk_frame(band_top=228, band_h=20)
+    r2 = subtitle_band.detect_band_ratio([good, good] + [_mk_frame() for _ in range(8)])
+    assert r2["found"] is False, r2
+    assert r2["hits"] == 2, r2
+    r3 = subtitle_band.detect_band_ratio([good] * 3 + [_mk_frame() for _ in range(7)])
+    assert r3["found"] is True, r3
+    assert 0.78 < r3["band_y_ratio"] < 0.9 and r3["band_h_ratio"] < 0.16, r3
+
+
+def _mk_bright_spill_frame(w=480, h=270):
+    """合成「亮场景」帧：白窗/白墙从画面 50% 高一直亮到底（占宽 30%，落在
+    hi_w=45% 以内 —— 正是少帅实测里骗过旧判据的亮窗形态）。"""
+    im = Image.new("RGB", (w, h), (30, 40, 60))
+    d = ImageDraw.Draw(im)
+    d.rectangle([int(w * 0.10), int(h * 0.50), int(w * 0.40), h - 1], fill=(255, 255, 255))
+    return im
+
+
+def test_band_rows_rejects_bright_spill():
+    # 亮场景溢出守卫（2026-09-18）：带贴扫描区顶（0.70h）且高 >15% 画面 → 弃帧。
+    # 不弃的话少帅实测 4 帧里 3 帧亮场景会把中位带高撑到 ~0.17（糊掉大片画面）。
+    b = subtitle_band._band_rows(_mk_bright_spill_frame().convert("L"), 480, 270)
+    assert b is None, b
+
+
+def test_band_rows_keeps_short_band_touching_scan_top():
+    # 守卫是「贴顶 + 高」双条件，不误伤：贴着扫描区顶但矮（≤15% 画面）的带仍保留
+    b = subtitle_band._band_rows(_mk_frame(band_top=192, band_h=26).convert("L"), 480, 270)
+    assert b is not None, b
+    assert b[0] == 192, b
+
+
 def test_detect_ignores_oversized_band():
     # 带高占画面 >25%（演职员表/大字幕墙）应被整帧丢弃，不能把整屏当字幕带
     r = subtitle_band.detect_band_ratio([_mk_frame(band_top=190, band_h=70) for _ in range(4)])
@@ -109,15 +147,20 @@ def test_mark_matches_pipeline():
     assert ">= 205" in src, "白字阈值应与管线一致（近白像素 >= 205）"
     assert "0.08" in src, "带外扩比例应与管线一致（字幕高的 8%）"
     assert "0.25" in src, ">25% 的异常帧丢弃口径应与管线一致"
+    assert "0.045" in src, "双行合并阈值应与管线 v9 一致（max(6 行, 4.5%)）"
+    assert "0.15" in src, "亮场景溢出守卫应与管线一致（贴扫描区顶且高 >15% 弃帧）"
 
 
 _TESTS = [
     test_detect_finds_white_text_band,
     test_detect_clean_frame_returns_not_found,
     test_detect_requires_two_hits,
+    test_detect_10frames_needs_three_hits,
     test_detect_ignores_oversized_band,
     test_detect_pads_band_slightly,
     test_band_ratio_independent_of_resolution,
+    test_band_rows_rejects_bright_spill,
+    test_band_rows_keeps_short_band_touching_scan_top,
     test_mark_matches_pipeline,
 ]
 

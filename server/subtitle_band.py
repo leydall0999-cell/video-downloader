@@ -11,8 +11,9 @@
 比拉起一个管线进程便宜得多（后者要加载 whisper/torch 等重依赖）。
 
 ⚠️ 与管线 `scripts/edit_ffmpeg.py::_prepare_feather / _band_rows` **同源**：
-   判据（只认白字 >=205、允许 2 行间隙、丢 >25% 的异常帧、中位数聚合、
-   上下各扩 8% 字幕高且至少 0.3% 画面）必须与那边保持一致，改任一处都要对照另一处，
+   判据（只认白字 >=205、允许 2 行间隙、双行合并 max(6 行, 4.5%)、亮场景溢出守卫、
+   丢 >25% 的异常帧、中位数聚合、上下各扩 8% 字幕高且至少 0.3% 画面）
+   必须与那边保持一致，改任一处都要对照另一处，
    否则会出现「预览和成片位置不一致」——这正是本功能要消灭的问题。
 """
 from __future__ import annotations
@@ -63,16 +64,27 @@ def _band_rows(gray, w0: int, h0: int):
         return None
 
     # 合并相近的段：双行字幕的两行之间常有几行空隙，合并后才得到完整字幕带，
-    # 否则只会羽化其中一行、另一行原字幕残留。阈值取 max(5 行, 画面高 3%)。
+    # 否则只会羽化其中一行、另一行原字幕残留。阈值取 max(6 行, 画面高 4.5%)：
+    # 2026-09-16 实测（合成双行帧，行距 8.3% 画面高）3% 阈值只够吞单倍行距，
+    # 稍宽的行距就差 1 行没并上、只羽化到第二行；4.5% 能覆盖主流双行排版的间隙。
+    # ⚠️ 与管线 _band_rows 同步（那边 v9 已是 4.5%，App 侧 2026-09-18 补齐）。
     merged = []
     for seg in sorted(segments, key=lambda s: s[0]):
-        if not merged or seg[0] - merged[-1][1] > max(5, int(h0 * 0.03)):
+        if not merged or seg[0] - merged[-1][1] > max(6, int(h0 * 0.045)):
             merged.append(list(seg))
         else:
             merged[-1][1] = seg[1]
 
     best = max(merged, key=lambda s: s[1] - s[0])
     top, bot = y0 + best[0], y0 + best[1]
+    # 亮场景溢出守卫（2026-09-18）：白窗/天空/白墙的高光常从扫描区顶（0.70h）
+    # 一路亮到底，拼出的「带」贴着扫描区顶且很高 —— 真字幕几乎不会顶到 0.75h
+    # 还超过画面高 15%。这种点判为亮场景溢出而非字幕，整帧弃用（其余帧会补上
+    # 信号）；不弃的话 4 帧里 3 帧亮场景会把中位数撑到带高 20%+，糊掉大片画面。
+    # 实测（少帅 45min，24 帧统计）：该守卫砍掉全部 9 个高光误报点，
+    # 中位带高从 ~0.17 回落到 0.06（与真实字幕吻合）。
+    if (top - y0) <= max(2, int(h0 * 0.05)) and (bot - top) > h0 * 0.15:
+        return None
     if bot - top < max(2, int(h0 * 0.01)):   # 太薄，多半是画面噪点
         return None
     return top, bot
@@ -140,8 +152,10 @@ def detect_band_ratio(images) -> dict:
             if cols is None or (r1 - r0) > (cols[1] - cols[0]):
                 cols = (r0, r1)
 
-    if len(bands) < 2:
-        # 前端只给 4 帧，这里要求命中 ≥2 帧才算确认（管线用 6 帧、要求 ≥3，口径一致）
+    if len(bands) < max(2, -(-total * 3 // 10)):
+        # 前端抽 10 帧（2026-09-18 从 4 帧加密度：硬字幕是间歇出现的，4 个固定
+        # 时刻有概率大半落在无字幕镜头上 →「命中帧太少」误报）。门槛随帧数走：
+        # max(2, 30% 帧数) —— 10 帧要求 ≥3，4 帧仍要求 ≥2，与管线口径同源。
         return {"found": False, "band_y_ratio": 0.0, "band_h_ratio": 0.0,
                 "band_x_ratio": 0.0, "band_w_ratio": 0.0,
                 "hits": len(bands), "total": total,

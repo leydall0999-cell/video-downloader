@@ -346,7 +346,7 @@ def feather_detect(frames: list[app.UploadFile] = app._FastAPIFile(default=[]),
                    vertical: bool = app.Form(False)) -> dict:
     """探测「烧进画面的原字幕」所在横带（前端「原字幕羽化」面板用）。
 
-    入参：前端从预览视频抽的若干帧 JPEG（多文件字段 frames，通常 4 帧）。
+    入参：前端从预览视频抽的若干帧 JPEG（多文件字段 frames，通常 10 帧）。
     出参：带占画面高的比例 + 命中帧数，供预览层画带、用户拖拽/输入微调。
 
     **不调 LLM、不进执行队列、不扣配额**：纯 PIL 图像处理（4 帧 480px 图约 10ms）。
