@@ -1936,9 +1936,12 @@
              生成脚本上方」）→ 控制条改由下方 #comPlayerBar 承担，画面里不再压一条控件。
              点击画面仍可播放/暂停（app.js 的 initComPlayerBar 里绑定）。 -->
         <video id="comPreview" class="com-preview" preload="metadata" playsinline data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
-        <!-- 原字幕羽化覆层用的 canvas。🔴 2026-09-18 起**不再画拉伸擦除模拟**（用户要求：
-             带内那块拉伸糊块会被当成乱码）→ 现在恒为透明，范围只由下面的虚线框表达。
-             元素保留是为了清源复位路径（comResetPreviewOverlays）和可回滚的 COM_FEATHER_SIM 开关。
+        <!-- 原字幕羽化覆层用的 canvas。🔴 2026-09-18 两轮反馈后的口径：
+             默认**不画**擦除模拟（用户第 1 轮：带内那块拉伸糊块会被当成乱码）；
+             但卡片里新增了「预览擦除效果」勾选框（#comFeatherSim → comFeather.sim），
+             用户第 2 轮反馈"看不到预览效果" ⇒ **勾了就必须画**（近似模拟）。
+             未勾选时本 canvas 恒为透明，范围只由下面的 .com-feather-band 虚线框表达。
+             元素保留也是为了清源复位路径（comResetPreviewOverlays）。
              pointer-events:none，不挡播放器。 -->
         <canvas id="comFeatherCanvas" class="com-feather-canvas" data-page-node-id="comFeatherCanvasLayer" hidden></canvas>
         <!-- 羽化范围框：只负责「可拖拽微调位置」，像素效果由上面的 canvas 呈现（职责分离，
