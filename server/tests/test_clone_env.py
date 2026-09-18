@@ -258,6 +258,56 @@ def test_never_mutates_process_hf_endpoint():
     assert "HF_ENDPOINT" not in os.environ, "status() 不得顺手设 HF_ENDPOINT"
 
 
+def test_routes_wired():
+    """三个接口必须真的挂在 app 上（404 detail=="Not Found" 就是路由没 include）。
+
+    ⚠️ 绝不让安装真的跑起来：把磁盘余量压到 1MB 让 start_install 提前拒绝，
+    这样既验证了「路由 + Form 解析 + 拒绝分支返回 JSON」这条链路，又不会去下 2.4GB。
+    """
+    from fastapi.testclient import TestClient
+    import app as server_app
+
+    c = TestClient(server_app.app)
+
+    r = c.get("/api/commentary/clone-env")
+    assert r.status_code == 200, f"状态接口非 200：{r.status_code}"
+    body = r.json()
+    assert "ready" in body and "install" in body, f"状态接口字段不对：{list(body)[:8]}"
+
+    # 把「已就绪短路」与「磁盘充足」都按下去，确定性走到磁盘闸门分支：
+    # 既验证路由 + Form 解析 + 拒绝分支返回 JSON，又保证绝不会真去下 2.4GB
+    # （本机若环境已就绪，start_install 会在磁盘检查之前就返回「已就绪」，
+    #   那样这条断言就变成测环境而不是测接口了）。
+    saved = (C._disk_free_mb, C.venv_ok, C.weights_ok)
+    C._disk_free_mb = lambda p: 1                       # type: ignore[assignment]
+    C.venv_ok = lambda: False                           # type: ignore[assignment]
+    C.weights_ok = lambda: False                        # type: ignore[assignment]
+    try:
+        r2 = c.post("/api/commentary/clone-env/install", data={})
+        assert r2.status_code == 200, f"安装接口非 200：{r2.status_code}"
+        b2 = r2.json()
+        assert b2.get("ok") is False and "磁盘" in (b2.get("msg") or ""), f"应被磁盘闸门拦下：{b2}"
+    finally:
+        C._disk_free_mb, C.venv_ok, C.weights_ok = saved   # type: ignore[assignment]
+
+    r3 = c.post("/api/commentary/clone-env/cancel", data={})
+    assert r3.status_code == 200, f"取消接口非 200：{r3.status_code}"
+    assert "ok" in r3.json(), r3.json()
+
+
+def test_route_order_before_job_id():
+    """🔴 固定路径路由必须排在 /api/commentary/{job_id} 之前（仓库既有铁律）。
+
+    否则 `/api/commentary/clone-env` 会被当成 job_id 匹配进详情接口，返回「任务不存在」，
+    现象是「接口明明写了却 404」，极难查。
+    """
+    src = (Path(__file__).resolve().parent.parent / "routers" / "commentary.py").read_text(encoding="utf-8")
+    i_env = src.find('"/api/commentary/clone-env"')
+    i_job = src.find('"/api/commentary/{job_id}"')
+    assert i_env != -1 and i_job != -1, "没找到路由定义"
+    assert i_env < i_job, "clone-env 路由必须在 {job_id} 之前，否则会被当成 job_id 吞掉"
+
+
 _TESTS = [
     test_status_shape_and_no_home_writes,
     test_find_venv_prefers_install_target_over_dev_path,
@@ -271,6 +321,8 @@ _TESTS = [
     test_mlx_pin_by_macos_version,
     test_sub_env_strips_dead_proxy,
     test_never_mutates_process_hf_endpoint,
+    test_routes_wired,
+    test_route_order_before_job_id,
 ]
 
 if __name__ == "__main__":
