@@ -110,6 +110,26 @@ def test_band_rows_keeps_short_band_touching_scan_top():
     assert b[0] == 192, b
 
 
+def test_band_rows_run_length_criterion():
+    # 游程判据（2026-09-19，与管线 edit_ffmpeg.py::_band_rows 同源同文）：
+    # 白物行（单条长游程，实测白桌布 38~118px）必须整行拒绝；文字行（短游程）
+    # 不误伤。这是「牌桌亮场景羽化带被撑到 12~17% 画高」的根因修复。
+    w, h = 480, 270
+    # ① 白物：底部一条 30% 宽实心白块（单条游程 144px ≫ 24px）→ 拒
+    im = Image.new("RGB", (w, h), (30, 40, 60))
+    ImageDraw.Draw(im).rectangle([96, 230, 240, 250], fill=(255, 255, 255))
+    assert subtitle_band._band_rows(im.convert("L"), w, h) is None
+    # ② 文字：同一位置改成 10px 短竖条（游程 ≤24px）→ 保留
+    im2 = Image.new("RGB", (w, h), (30, 40, 60))
+    d2 = ImageDraw.Draw(im2)
+    x = int(w * 0.18)
+    while x < w * 0.82:
+        d2.rectangle([x, 232, x + 10, 252], fill=(255, 255, 255))
+        x += 24
+    b = subtitle_band._band_rows(im2.convert("L"), w, h)
+    assert b is not None and b[0] == 232, b
+
+
 def test_detect_ignores_oversized_band():
     # 带高占画面 >25%（演职员表/大字幕墙）应被整帧丢弃，不能把整屏当字幕带
     r = subtitle_band.detect_band_ratio([_mk_frame(band_top=190, band_h=70) for _ in range(4)])

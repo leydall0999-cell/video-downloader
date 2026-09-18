@@ -33,15 +33,28 @@ def _band_rows(gray, w0: int, h0: int):
     px = gray.load()
     lo_w = max(8, int(w0 * 0.015))       # 最少白字像素（≥8 避免抗锯齿/噪声把边缘零星白点算进命中）
     hi_w = int(w0 * 0.45)                 # 最多白字像素（比例过高多半是整屏白块）
+    # 单行最长连续白游程上限（真实像素）：白字笔画在 480 宽探测图上单条游程实测
+    # ≤22px（2026-09-19 少帅第8集多帧校准），而白桌布/白碗/白墙等大面积白物单条
+    # 游程 38~118px——这是区分「文字行」与「白物行」的关键判据。
+    # ⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同步（2026-09-19 同日同改）。
+    _max_run = max(24, int(w0 * 0.05))
 
     rows = []
     for y in range(y0, h0):
         nw = 0
+        run = 0
+        max_run = 0
         for x in range(0, w0, 2):        # 隔列采样
             if px[x, y] >= 205:
                 nw += 1
+                run += 2                 # 隔列采样，每个命中像素代表 ~2px 真实宽度
+                if run > max_run:
+                    max_run = run
+            else:
+                run = 0
         nw *= 2
-        rows.append(lo_w <= nw <= hi_w)
+        # 文字行双判据：白像素总数落在区间内，且没有「一整条」超长白游程（白物）
+        rows.append(lo_w <= nw <= hi_w and max_run <= _max_run)
 
     # 收集所有连续命中段，允许最多 2 行间隙
     segments = []

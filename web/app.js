@@ -10585,7 +10585,9 @@ el.dwVidPlayer.removeAttribute('src');
   const comFeather = {
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
-    dynamic: false,     // 羽化带随原字幕逐段自适应（与手动带位置互斥）
+    // 2026-09-19 用户拍板：自适应**默认开启**（全片固定带对位置漂移/亮场景只能给一条
+    // 折中带，是「带太高/残字」两类反馈的共同根源）。手动调过带仍覆盖之。
+    dynamic: true,      // 羽化带随原字幕逐段自适应（与手动带位置互斥）
     tune: false,        // 自适应之上的手动微调补救（dy/dh 偏移叠加在每个探测带上）
     sim: COM_FEATHER_SIM_DEFAULT,  // 是否在带内画擦除模拟（用户勾选控制）
     segs: [],           // 逐帧探测结果 [{t,y,h}]（t=源内秒）：勾自适应时预览「跟幕」取带，
@@ -11127,35 +11129,40 @@ el.dwVidPlayer.removeAttribute('src');
     } catch (_) { return ''; }
   };
 
+  /** 把 comFeather.dynamic 的当前值同步到 UI：输入框禁用、微调行显隐、提示文案、重绘。
+   *  2026-09-19 自适应默认开启 ⇒ 初始化时也必须跑一次，不能只在 change 里做。 */
+  const comFeatherApplyDynamic = () => {
+    comFeather.dynamic = !!(el.comFeatherDynamic && el.comFeatherDynamic.checked);
+    // 自适应时带位置/带高交给逐段探测，手动值不再下发（输入框保留但灰掉，避免误导）
+    if (el.comFeatherBandY) el.comFeatherBandY.disabled = comFeather.dynamic;
+    if (el.comFeatherBandH) el.comFeatherBandH.disabled = comFeather.dynamic;
+    // 微调补救行只在自适应下出现；关掉自适应时连微调一起归零（探测结果不背旧偏移）
+    if (el.comFeatherTuneRow) el.comFeatherTuneRow.hidden = !comFeather.dynamic;
+    if (!comFeather.dynamic && el.comFeatherTune) {
+      el.comFeatherTune.checked = false;
+      comFeather.tune = false;
+      comFeather.dy = 0;
+      comFeather.dh = 0;
+      if (el.comFeatherDy) { el.comFeatherDy.value = '0'; el.comFeatherDy.disabled = true; }
+      if (el.comFeatherDh) { el.comFeatherDh.value = '0'; el.comFeatherDh.disabled = true; }
+    }
+    if (el.comFeatherHint) {
+      el.comFeatherHint.textContent = comFeather.dynamic
+        ? (comFeather.segs.length
+            ? '自适应已开：预览会跟着播放头切到「这一幕」探测到的字幕位置；拖框＝给每段加偏移（自动打开「手动微调补救」），残字漏出就把带高再加一点。'
+            : '自适应已开（渲染时每个解说段单独探测）。预览还没取到逐帧结果 —— 点「重新探测」后即可在这里跟着每一幕预览。')
+        : '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。';
+    }
+    // 跟幕靠逐帧重绘驱动：tick 在「未开模拟且无跟幕」时会早退，这里补一次调度
+    if (comFeather.dynamic && comFeather.segs.length && !_comFeatherRaf) {
+      _comFeatherRaf = requestAnimationFrame(comFeatherTick);
+    }
+    comFeatherPaint();
+  };
   if (el.comFeatherDynamic) {
-    el.comFeatherDynamic.addEventListener('change', () => {
-      comFeather.dynamic = !!el.comFeatherDynamic.checked;
-      // 自适应时带位置/带高交给逐段探测，手动值不再下发（输入框保留但灰掉，避免误导）
-      if (el.comFeatherBandY) el.comFeatherBandY.disabled = comFeather.dynamic;
-      if (el.comFeatherBandH) el.comFeatherBandH.disabled = comFeather.dynamic;
-      // 微调补救行只在自适应下出现；关掉自适应时连微调一起归零（探测结果不背旧偏移）
-      if (el.comFeatherTuneRow) el.comFeatherTuneRow.hidden = !comFeather.dynamic;
-      if (!comFeather.dynamic && el.comFeatherTune) {
-        el.comFeatherTune.checked = false;
-        comFeather.tune = false;
-        comFeather.dy = 0;
-        comFeather.dh = 0;
-        if (el.comFeatherDy) { el.comFeatherDy.value = '0'; el.comFeatherDy.disabled = true; }
-        if (el.comFeatherDh) { el.comFeatherDh.value = '0'; el.comFeatherDh.disabled = true; }
-      }
-      if (el.comFeatherHint) {
-        el.comFeatherHint.textContent = comFeather.dynamic
-          ? (comFeather.segs.length
-              ? '自适应已开：预览会跟着播放头切到「这一幕」探测到的字幕位置；拖框＝给每段加偏移（自动打开「手动微调补救」），残字漏出就把带高再加一点。'
-              : '自适应已开（渲染时每个解说段单独探测）。预览还没取到逐帧结果 —— 点「重新探测」后即可在这里跟着每一幕预览。')
-          : '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。';
-      }
-      // 跟幕靠逐帧重绘驱动：tick 在「未开模拟且无跟幕」时会早退，这里补一次调度
-      if (comFeather.dynamic && comFeather.segs.length && !_comFeatherRaf) {
-        _comFeatherRaf = requestAnimationFrame(comFeatherTick);
-      }
-      comFeatherPaint();
-    });
+    el.comFeatherDynamic.checked = !!comFeather.dynamic;   // 默认开启（与 comFeather.dynamic 初始值一致）
+    el.comFeatherDynamic.addEventListener('change', comFeatherApplyDynamic);
+    comFeatherApplyDynamic();
   }
   // 自适应之上的手动微调：dy/dh 是**偏移量**（叠加在每个探测出的带上），不是绝对值，
   // 所以这里绝不置 manual —— 置了就会整体退化成固定带，自适应失效。
