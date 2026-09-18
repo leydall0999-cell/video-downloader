@@ -10682,10 +10682,13 @@ el.dwVidPlayer.removeAttribute('src');
     const W = cv.width, H = cv.height;                 // canvas 设备像素
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    // 🔴 用户要求：不画「带内拉伸糊块」（会被当成乱码）。范围由虚线框表达。
+    // 🔴 默认不画（用户第 1 轮反馈：带内那块拉伸糊块像乱码）。只有用户**显式勾选**
+    // 「预览擦除效果」才画 —— 勾了就是"我想看效果"。
     if (!comFeather.sim) return;
-    // 未生效时不画效果（虚线框仍显示，提示"可拖动指定"）
-    if (!comFeather.found && !comFeather.manual) return;
+    // ⚠️ 这里**不再**用 `!found && !manual` 早退（2026-09-18 第 2 轮真机实测出来的坑）：
+    //    勾上开关时若恰好没探测到、用户也没手动指定，早退会让 canvas 一个像素都不画 ⇒
+    //    「勾了没反应」，用户照样"看不到预览效果"。宁可画一个"未来不会被应用"的近似效果
+    //    （框已经是灰的、标签也写明「未生效」），也不要让开关看起来是坏的。
     if (!vid.videoWidth || vid.readyState < 2) return;  // 当前帧尚不可用
 
     const vw = vid.videoWidth, vh = vid.videoHeight;
