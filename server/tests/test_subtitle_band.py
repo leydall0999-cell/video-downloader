@@ -140,6 +140,41 @@ def test_band_ratio_independent_of_resolution():
     assert abs(small["band_h_ratio"] - big["band_h_ratio"]) < 0.03, (small, big)
 
 
+def test_detect_covers_varying_subtitle_position():
+    """🔴 2026-09-18 用户反馈「有部分字预览没有擦除」的回归锁。
+
+    实测根因：同一条片子里字幕位置并不恒定（两处交替 / 缓慢漂移 / 单行与双行混排），
+    而旧实现**只取中心中位数**，会把带放在"两头都不沾"的位置——字幕在 620/560 两处
+    交替时实测只盖住字高 42%~47%（露 28~30 行），正是用户截图里「字的下半截露在带外」。
+
+    现在改为「鲁棒并集」（顶 p10 / 底 p90，相对中位带最多再长 6% 画高），
+    要求两个位置的字体**都要被盖满**。间距取实测幅度：两处相差约 8% 画高
+    （270px 高的合成帧 → 22px；真机那一例是 720p 里差 60px）。"""
+    imgs = []
+    for i in range(10):
+        imgs.append(_mk_frame(band_top=228 if i % 2 == 0 else 206))   # 两处交替，相距 8% 画高
+    r = subtitle_band.detect_band_ratio(imgs)
+    assert r["found"] is True, r
+    top = r["band_y_ratio"] * 270
+    bot = (r["band_y_ratio"] + r["band_h_ratio"]) * 270
+    for band_top in (228, 206):
+        band_bot = band_top + 24
+        cov = max(0, min(bot, band_bot) - max(top, band_top))
+        assert cov >= 24 * 0.95, (
+            "位置 %d~%d 未被盖满（覆盖 %.0f%%，带 %.0f~%.0f）" % (band_top, band_bot, 100.0 * cov / 24, top, bot))
+    # 并集必须仍然受增长上限约束，不许退化成糊一大片
+    assert r["band_h_ratio"] < 0.25, r
+
+
+def test_detect_keeps_tight_band_when_position_fixed():
+    """位置固定时不许被"并集"改胖：固定片子的带应与中位数口径一致（约 24/270 + padding）。"""
+    imgs = [_mk_frame(band_top=228) for _ in range(10)]
+    r = subtitle_band.detect_band_ratio(imgs)
+    assert r["found"] is True, r
+    assert r["band_h_ratio"] < 0.13, r          # 24/270=0.089 + 8% padding ≈ 0.096
+    assert 0.78 < r["band_y_ratio"] < 0.845, r
+
+
 def test_mark_matches_pipeline():
     # 关键常量与管线同源：改任一处都要同步，否则预览与成片位置会漂移
     src = open(os.path.join(_SERVER_DIR, "subtitle_band.py"), encoding="utf-8").read()
@@ -149,6 +184,10 @@ def test_mark_matches_pipeline():
     assert "0.25" in src, ">25% 的异常帧丢弃口径应与管线一致"
     assert "0.045" in src, "双行合并阈值应与管线 v9 一致（max(6 行, 4.5%)）"
     assert "0.15" in src, "亮场景溢出守卫应与管线一致（贴扫描区顶且高 >15% 弃帧）"
+    # 2026-09-18：聚合口径从「纯中位数」升级为「鲁棒并集 + 增长上限」，
+    # 管线的 _prepare_feather 与自适应那处必须用同一个 _GROW_CAP=0.06
+    assert "_GROW_CAP = 0.06" in src, "鲁棒并集的增长上限 0.06 必须显式写死，供管线对照同步"
+    assert "_percentile" in src, "并集用 p10/p90 分位，别退回 min/max（会被单点撑大）"
 
 
 _TESTS = [
@@ -161,6 +200,8 @@ _TESTS = [
     test_band_ratio_independent_of_resolution,
     test_band_rows_rejects_bright_spill,
     test_band_rows_keeps_short_band_touching_scan_top,
+    test_detect_covers_varying_subtitle_position,
+    test_detect_keeps_tight_band_when_position_fixed,
     test_mark_matches_pipeline,
 ]
 

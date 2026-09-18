@@ -116,6 +116,29 @@ def _median(xs):
     return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
 
 
+def _percentile(xs, q):
+    """线性插值分位数（q∈[0,1]）。用于「鲁棒并集」：p10 顶 / p90 底 能覆盖同片内的
+    位置漂移，又不会被单个极端点（抗锯齿拉长、偶发误检）撑大。"""
+    xs = sorted(xs)
+    if not xs:
+        return 0.0
+    if len(xs) == 1:
+        return xs[0]
+    pos = q * (len(xs) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(xs) - 1)
+    frac = pos - lo
+    return xs[lo] * (1 - frac) + xs[hi] * frac
+
+
+# 「鲁棒并集」相对中位数带允许的最大增长（占画面高）。
+# 🔴 2026-09-18 定案，**管线侧必须用同一个数**（edit_ffmpeg.py::_prepare_feather 与
+#    自适应那处）。取 6% 的理由：足够覆盖「同片内字幕位置有变化」的常见幅度
+#    （实测两个位置相差 8% 画高时，±6% 的中位带即可同时盖住），又不至于因为个别
+#    噪声点把带撑成大糊块（历史上的 min/max 拼块就是这么出问题的）。
+_GROW_CAP = 0.06
+
+
 def detect_band_ratio(images) -> dict:
     """从若干帧图聚合出原字幕带（比例）。images 为 PIL.Image 序列。
 
@@ -165,11 +188,33 @@ def detect_band_ratio(images) -> dict:
     centers = [(b[0] + b[1]) / 2 for b in bands]
     heights = [b[1] - b[0] for b in bands]
     mc, mh = _median(centers), _median(heights)
+    med_top, med_bot = mc - mh / 2, mc + mh / 2
+    # 🔴 2026-09-18（第二次修正）：「鲁棒并集」取代纯中位数。
+    #   背景：用户截图反馈「有部分字预览没有擦除」——真机复现 + 合成实验定量：
+    #     同一片内字幕位置在变（两处交替 / 缓慢漂移 / 单行与双行混排）时，
+    #     **只取中心中位数**会把带放在"两头都不沾"的位置：实测字幕在 620/560 两处
+    #     交替时，中位带只盖住字高的 42%~47%（露 28~30 行），双行镜头甚至整行露在带外。
+    #   做法：顶取 p10、底取 p90（丢单个极端点），相对中位带**最多再长 _GROW_CAP**；
+    #     若并集总高仍超过 25% 画高（与 _band_rows 的弃帧口径一致）则退回中位数，
+    #     保证不会退化成"糊住带外一大片"。
+    #   ⚠️ 管线 `edit_ffmpeg.py` 的 `_prepare_feather` 与自适应那处必须同步改，否则
+    #      预览与成片位置漂移（见文件头说明）。
+    tops = [b[0] for b in bands]
+    bots = [b[1] for b in bands]
+    if len(bands) >= 3:
+        u_top, u_bot = _percentile(tops, 0.10), _percentile(bots, 0.90)
+    else:
+        u_top, u_bot = med_top, med_bot
+    u_top = max(u_top, med_top - _GROW_CAP)
+    u_bot = min(u_bot, med_bot + _GROW_CAP)
+    if u_bot - u_top > 0.25:
+        u_top, u_bot = med_top, med_bot
+    span = max(0.0, u_bot - u_top)
     # 羽化带比原字幕略大：上下各扩 8% 字幕高度（至少 0.3% 画面），
     # 包住描边/辉光/抗锯齿外溢，避免「原字幕羽化不够、残字漏出」。
-    pad_rel = max(0.003, mh * 0.08)
-    top_rel = max(0.0, mc - mh / 2 - pad_rel)
-    bot_rel = min(1.0, mc + mh / 2 + pad_rel)
+    pad_rel = max(0.003, span * 0.08)
+    top_rel = max(0.0, u_top - pad_rel)
+    bot_rel = min(1.0, u_bot + pad_rel)
     out = {"found": True,
            "band_y_ratio": round(top_rel, 6),
            "band_h_ratio": round(bot_rel - top_rel, 6),
