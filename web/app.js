@@ -8400,8 +8400,9 @@ el.dwVidPlayer.removeAttribute('src');
       style: styleEl ? styleEl.value : 'none',
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
-      // 后端 CommentaryRequest.correct_transcript 是 str('0'=关/''=开)，勿发布尔（bool 会 422）
-      correct_transcript: !(el.comCorrectTranscript && el.comCorrectTranscript.checked) ? '0' : '',
+      // 后端 CommentaryRequest.correct_transcript 是 str('1'=开/'0'=关)，勿发布尔（bool 会 422）。
+      // 2026-09-19：ASR 校正改为 opt-in（默认关，省一次万级 token 调用），勾选才传 '1'。
+      correct_transcript: (el.comCorrectTranscript && el.comCorrectTranscript.checked) ? '1' : '0',
       export_jianying: comGetExportJianying(),
       // 音乐轨（2026-09-18）：状态在 comMusic（原 comBgm* 元素 2026-09-15 随「成片增强」块删除，
       // 保留的 el.comBgm 引用恒为 null → 配乐一直是 off）。用 (comMusic || {}) 兜住初始化顺序。

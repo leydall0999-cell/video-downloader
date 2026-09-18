@@ -2260,11 +2260,13 @@
             <span id="comTtsStatusText" class="com-tts-status-text" data-page-node-id="tsh4yHdlMLXdkx5rCY1brh"></span>
           </div>
         </div>
-        <!-- ASR 校正开关隐藏：默认恒开（input 保留勾选，提交即开启） -->
+        <!-- ASR 校正开关隐藏：默认**关闭**（2026-09-19：它是解说链路里最贵的一次调用，
+             全量转写稿一个请求发出去，而下游 Stage1/Stage2 大半用不到校正后的内容）。
+             需要时把下面 input 加回 checked（或把这一行 display 去掉露出开关）。 -->
         <div class="com-cell com-cell-r2-asr" data-page-node-id="EiRnJ6iHKu8YsFWJveRAFL" style="display:none;">
           <label class="com-checkbox-row" data-page-node-id="S4hG6zX0Ry46q8k2fljdXU">
-            <input id="comCorrectTranscript" type="checkbox" checked data-page-node-id="VzxQ8HRcGPIUjBdffeOqFE" />
-            <span data-page-node-id="ZsfFzq2v2tlMHhsoUGDJ7A">转写稿 ASR 校正（修正同音错字/专有名词；关闭省 token）</span>
+            <input id="comCorrectTranscript" type="checkbox" data-page-node-id="VzxQ8HRcGPIUjBdffeOqFE" />
+            <span data-page-node-id="ZsfFzq2v2tlMHhsoUGDJ7A">转写稿 ASR 校正（修正同音错字/专有名词；开启会多一次万级 token 调用）</span>
           </label>
         </div>
       </div>

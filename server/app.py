@@ -1426,9 +1426,11 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         # 渲染整片基本不可能收敛。这里对克隆引擎降到 1（串行），除非用户自己显式设过。
         if (tts_provider or "").strip().lower() in ("qwen3tts", "indextts2", "indextts_mlx"):
             run_env.setdefault("VDL_TTS_CONCURRENCY", "1")
-        if correct_transcript == "0":
-            # 关闭转写稿 ASR 校正（默认开启，传 '0' 才关，省 token）
-            run_env["VDL_CORRECT_TRANSCRIPT"] = "0"
+        # ASR 校正改为 opt-in（2026-09-19）：**默认关闭**，只有前端显式传 '1' 才开启。
+        # 它是解说链路里最贵的一次调用（全量转写稿一个请求进出各万级 token），而下游
+        # Stage1 只看压缩后的 8000 字、Stage2 高光模式只发关键片段，性价比很低。
+        # 留空/None/'0' 一律按关闭处理，保证不设置环境变量时行为也确定。
+        run_env["VDL_CORRECT_TRANSCRIPT"] = "1" if correct_transcript == "1" else "0"
         if vision:
             # 视觉理解与片头集数卡检测共用 VDL_VISION_* 配置；显式启用避免子进程因环境变量未设而跳过
             run_env["VDL_VISION_ENABLED"] = "1"
