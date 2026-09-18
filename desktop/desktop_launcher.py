@@ -576,16 +576,25 @@ class VdlApi:
                 "msg": "没找到 Qwen3-TTS 启动脚本（应在 commentary/scripts/start_qwen3tts_server.py）。请确认解说管线已安装。",
             }
 
+        # 🔴 优先 MLX venv（.venv_qwen3tts_mlx）：Apple GPU 直跑，实测 RTF≈1.05；
+        #    旧 torch venv 在 macOS 13 无 MPS，纯 CPU 一句 3 字都要跑几分钟。
+        #    两者都放候选里，脚本自身 --engine auto 也会在 torch venv 里 execv 切到 MLX。
         venv_cands = [
+            os.path.join(os.path.dirname(script), ".venv_qwen3tts_mlx", "bin", "python"),
             os.path.join(os.path.dirname(script), ".venv_qwen3tts", "bin", "python"),
+            os.path.join(dev_root, "scripts", ".venv_qwen3tts_mlx", "bin", "python"),
             os.path.join(dev_root, "scripts", ".venv_qwen3tts", "bin", "python"),
+            os.path.join(c_dir, "scripts", ".venv_qwen3tts_mlx", "bin", "python") if c_dir else None,
             os.path.join(c_dir, "scripts", ".venv_qwen3tts", "bin", "python") if c_dir else None,
+            os.path.expanduser("~/.video-downloader/venvs/qwen3tts_mlx/bin/python"),
+            os.path.expanduser("~/.video-downloader/venvs/qwen3tts/bin/python"),
         ]
         py = next((p for p in venv_cands if p and os.path.isfile(p)), None)
         if not py:
             return {
                 "ok": False,
-                "msg": "没找到 Qwen3-TTS 的 Python 环境（.venv_qwen3tts）。请先安装 qwen-tts。",
+                "msg": "没找到 Qwen3-TTS 的 Python 环境（.venv_qwen3tts_mlx / .venv_qwen3tts）。"
+                       "请先安装本地克隆环境。",
             }
 
         # 已在运行则直接返回就绪，不重复起
@@ -607,7 +616,9 @@ class VdlApi:
                 )
             return {
                 "ok": True,
-                "msg": "已开始启动 Qwen3-TTS 服务，约 25 秒后「配音引擎」状态会变绿（已就绪），即可用你的克隆声。",
+                "msg": "已开始启动 Qwen3-TTS 服务，首次加载权重约 30–70 秒（MLX 走 Apple GPU）。"
+                       "状态变绿（已就绪）后再开始渲染；即使提前点渲染，本轮也会等到服务就绪，"
+                       "不会再静默回退 edge。",
             }
         except Exception as exc:
             return {"ok": False, "msg": f"启动失败：{exc}"}
