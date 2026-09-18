@@ -8264,10 +8264,19 @@ el.dwVidPlayer.removeAttribute('src');
     return { text, path };
   };
 
-  /** 产物路径缩略：超长只留尾部（文件名 + 最近两级目录信息量最大），完整值进 title。 */
+  /** 产物路径缩略：优先「…/最近两级目录/文件名」——文件名是用户真正要看的那截，
+   *  而且缩得更短才不会又被容器的 text-overflow 从右边二次截掉。完整值放 title。 */
   const shrinkArtifactPath = (p, max = 78) => {
     const s = String(p || '');
-    return s.length <= max ? s : '…' + s.slice(-(max - 1));
+    if (s.length <= max) return s;
+    const parts = s.split('/').filter(Boolean);
+    for (let keep = 3; keep >= 1; keep -= 1) {
+      if (parts.length > keep) {
+        const short = '…/' + parts.slice(-keep).join('/');
+        if (short.length <= max) return short;
+      }
+    }
+    return '…' + s.slice(-(max - 1));
   };
 
   /** 把本轮步骤里出现的产物路径并到进度条下方那一行（单行、不撑高面板）。 */
