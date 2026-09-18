@@ -8469,7 +8469,7 @@ el.dwVidPlayer.removeAttribute('src');
       } else if (status.qwen3tts_ready) {
         comSetTtsStatusBar('green', '本地语音克隆已就绪，将用「我的音色」里的声音解说');
       } else {
-        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：正在自动启动（约 25 秒），稍候即可用你的克隆声');
+        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：正在自动启动（首次加载权重约 30–70 秒），稍候即可用你的克隆声');
         comEnsureQwen3Tts(); // 默认引擎即被选中 → 自动起服务（选中即起）
       }
     } else {
@@ -8519,7 +8519,7 @@ el.dwVidPlayer.removeAttribute('src');
         _ttsQwenStarting = false;
         return;
       }
-      comSetTtsStatusBar('orange', '正在启动 Qwen3-TTS 本地语音克隆服务（约 25 秒）…');
+      comSetTtsStatusBar('orange', '正在启动 Qwen3-TTS 本地语音克隆服务（首次加载权重约 30–70 秒）…');
       let tries = 0;
       const tick = async () => {
         tries++;
@@ -8531,8 +8531,14 @@ el.dwVidPlayer.removeAttribute('src');
             return;
           }
         } catch (_) { /* 忽略 */ }
-        if (tries < 30) setTimeout(tick, 2500);
-        else { comSetTtsStatusBar('orange', '本地服务启动较慢，可稍后刷新页面查看状态'); _ttsQwenStarting = false; }
+        // 最多等 120s（48×2.5s）：MLX 8bit 权重冷启动实测 28–35s，留足慢机余量。
+        if (tries < 48) setTimeout(tick, 2500);
+        else {
+          // 这里不是错误：渲染时管线自己会等就绪（最多 120s），别让人误以为必须手动刷新。
+          comSetTtsStatusBar('orange', '本地服务首次加载较慢（权重较大）。状态稍后会自动变绿；'
+            + '此时直接点渲染也没问题——管线会等到服务就绪再配音，不会退回 edge。');
+          _ttsQwenStarting = false;
+        }
       };
       setTimeout(tick, 2500);
     } catch (_) {
