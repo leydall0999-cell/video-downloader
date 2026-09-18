@@ -1936,9 +1936,10 @@
              生成脚本上方」）→ 控制条改由下方 #comPlayerBar 承担，画面里不再压一条控件。
              点击画面仍可播放/暂停（app.js 的 initComPlayerBar 里绑定）。 -->
         <video id="comPreview" class="com-preview" preload="metadata" playsinline data-page-node-id="OBkdzQdGaipwDNH1zB1P8I"></video>
-        <!-- 原字幕羽化实时预览层：把「探测到的原字幕带」按当前擦除方式擦掉，复刻管线
-             _cover_segment 的 fade/stretch/blur 三种效果（pointer-events:none，不挡播放器）。
-             由 comFeatherPaint() 逐帧重绘；用户调下方参数即时看到结果。 -->
+        <!-- 原字幕羽化覆层用的 canvas。🔴 2026-09-18 起**不再画拉伸擦除模拟**（用户要求：
+             带内那块拉伸糊块会被当成乱码）→ 现在恒为透明，范围只由下面的虚线框表达。
+             元素保留是为了清源复位路径（comResetPreviewOverlays）和可回滚的 COM_FEATHER_SIM 开关。
+             pointer-events:none，不挡播放器。 -->
         <canvas id="comFeatherCanvas" class="com-feather-canvas" data-page-node-id="comFeatherCanvasLayer" hidden></canvas>
         <!-- 羽化范围框：只负责「可拖拽微调位置」，像素效果由上面的 canvas 呈现（职责分离，
              便于用 DOM 做命中区/hover，不用往 canvas 里塞交互）。 -->
@@ -2407,7 +2408,7 @@
             </label>
             <button type="button" class="btn btn-sm btn-ghost" id="comFeatherRedetect" data-page-node-id="comFeatherRedetectBtn">重新探测</button>
           </div>
-          <p class="com-feather-hint" id="comFeatherHint" data-page-node-id="comFeatherHint">在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。</p>
+          <p class="com-feather-hint" id="comFeatherHint" data-page-node-id="comFeatherHint">虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。</p>
         </details>
 
       <!-- ===== 配音与音量整卡（合并含试听按钮；details 默认折起） ===== -->

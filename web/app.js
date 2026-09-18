@@ -10538,16 +10538,24 @@ el.dwVidPlayer.removeAttribute('src');
 
   // ===== 原字幕羽化（2026-09-16）=============================================
   // 背景：「擦除原字幕」原先完全靠管线自动探测，UI 零暴露 —— 探测偏了只能跑完整条任务
-  // 才发现，白等十几分钟拿到废片。现在在预览窗口用 Canvas 复刻擦除效果，参数即时可见、可微调。
+  // 才发现，白等十几分钟拿到废片。现在在预览窗口标出「带」的位置/范围，参数即时可见、可微调。
   //
-  // 保真度：fade（默认）在管线里是**纯几何运算**
-  //   crop 带上一行/下一行各 2px → scale 到带高 → blend='A*(1-Y/H)+B*(Y/H)' → overlay 叠回
-  // 这里用 drawImage 取同样两行拉伸 + 线性 alpha 混合，数学等价；
-  // stretch / blur 用到 ffmpeg 的 gblur，这里用 canvas filter 的 blur 近似（视觉一致，非像素级）。
+  // 🔴 2026-09-18（用户明确要求）：**不再在预览里画「擦除模拟」**。
+  //   原先用 Canvas 复刻管线 fade/stretch/blur（取带上下各 2px 一行纵向拉伸满带高再叠回），
+  //   数学上等价、也确实"所见即所得"；但那块东西在真机上看就是**一条被拉长的糊块**，
+  //   用户反馈"像坏掉的画面/乱码"（截图 2026-09-18 22:14）。
+  //   加上自动探测本身不稳（实测同一视频「命中 3/10 帧」也判 found=true，带子位置可能整个偏掉，
+  //   于是"擦除"把正常画面拉成糊块），这个模拟的误导成本 > 收益。
+  //   ⇒ 现在只保留**范围示意**：虚线框（`.com-feather-band`，自带 10% 淡黄底）+ 位置/高度输入框。
+  //   真实擦除效果请以成片为准；预览不再承诺"看到什么就烧什么"。
+  //   历史实现见 git（本文件 2026-09-18 之前的 comFeatherPaint，含 fade/stretch/blur 三支）。
   //
-  // ⚠️ 传输一律用「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、横屏是源分辨率，
-  //    只有比例在两边都成立 —— 这是「预览看到什么，成片就烧什么」的前提。
+  // ⚠️ 几何一律用「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、横屏是源分辨率，
+  //    只有比例在两边都成立 —— 带子位置/高度仍然按比例同步给管线（band_y_ratio / band_h_ratio）。
   const COM_FEATHER_DEFAULT = { bandY: 0.86, bandH: 0.05 };
+  /** false＝预览只画范围框，不画拉伸擦除模拟（2026-09-18 用户要求，见上方说明）。
+   *  改回 true 即可恢复旧的三支模拟（fade/stretch/blur 逻辑在 comFeatherPaint 里原样保留）。 */
+  const COM_FEATHER_SIM = false;
   const comFeather = {
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
@@ -10593,7 +10601,8 @@ el.dwVidPlayer.removeAttribute('src');
              y: vr.top - wr.top + (vr.height - h) / 2, w, h, scale };
   }
 
-  /** 复用同一个离屏 canvas（尺寸变化会重置上下文状态，调用方用前必须重设 filter/gCO）。 */
+  /** 复用同一个离屏 canvas（尺寸变化会重置上下文状态，调用方用前必须重设 filter/gCO）。
+   *  ⚠️ 只被 COM_FEATHER_SIM=true 的旧模拟分支使用；开关为 false 时是"备用但不调用"。 */
   let _comFeatherOffCv = null;
   function comFeatherOff(w, h) {
     if (!_comFeatherOffCv) _comFeatherOffCv = document.createElement('canvas');
@@ -10603,7 +10612,7 @@ el.dwVidPlayer.removeAttribute('src');
     return c.getContext('2d');
   }
 
-  /** 同步羽化层几何（canvas 铺满画面区、虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
+  /** 同步羽化层几何（虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
   function comFeatherSync() {
     const cv = el.comFeatherCanvas, box = el.comFeatherBand;
     const r = comFeatherContentRect();
@@ -10636,7 +10645,8 @@ el.dwVidPlayer.removeAttribute('src');
     return r;
   }
 
-  /** 在预览画面上复刻管线的擦除效果：只画「带」这一条，其余保持透明漏出原画面。 */
+  /** 重绘羽化覆层：**2026-09-18 起只清画布 + 同步范围框**，不再画拉伸擦除模拟
+   *  （COM_FEATHER_SIM=false）。旧的三支模拟（fade/stretch/blur）原样保留在闸门之后。 */
   function comFeatherPaint() {
     const cv = el.comFeatherCanvas, vid = el.comPreview;
     const r = comFeatherSync();
@@ -10646,6 +10656,8 @@ el.dwVidPlayer.removeAttribute('src');
     const W = cv.width, H = cv.height;                 // canvas 设备像素
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    // 🔴 用户要求：不画「带内拉伸糊块」（会被当成乱码）。范围由虚线框表达。
+    if (!COM_FEATHER_SIM) return;
     // 未生效时不画效果（虚线框仍显示，提示"可拖动指定"）
     if (!comFeather.found && !comFeather.manual) return;
     if (!vid.videoWidth || vid.readyState < 2) return;  // 当前帧尚不可用
@@ -10890,7 +10902,7 @@ el.dwVidPlayer.removeAttribute('src');
       }
       if (el.comFeatherHint) {
         el.comFeatherHint.textContent = comFeather.found
-          ? '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。'
+          ? '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。'
           : '未探测到原字幕（画面较干净或字幕不是白色）。如确有原字幕，请在此手动指定带位置后拖动微调。';
       }
     } catch (err) {
@@ -10902,9 +10914,11 @@ el.dwVidPlayer.removeAttribute('src');
     }
   }
 
-  /** 播放时跟帧重绘（暂停时按需单次重绘即可，避免空转）。 */
+  /** 播放时跟帧重绘（暂停时按需单次重绘即可，避免空转）。
+   *  2026-09-18：不画模拟后不需要跟帧 —— 直接不调度（省掉播放期每帧一次的重绘开销）。 */
   function comFeatherTick() {
     _comFeatherRaf = 0;
+    if (!COM_FEATHER_SIM) return;
     comFeatherPaint();
     const vid = el.comPreview;
     if (vid && !vid.paused && !vid.ended) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
@@ -10959,7 +10973,7 @@ el.dwVidPlayer.removeAttribute('src');
       if (el.comFeatherHint) {
         el.comFeatherHint.textContent = comFeather.dynamic
           ? '自适应已开：每个解说段开播前单独探测原字幕，没字幕的段不擦除。擦不干净（残字漏出）就勾「手动微调补救」加高/平移带。'
-          : '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。';
+          : '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。';
       }
       comFeatherPaint();
     });
