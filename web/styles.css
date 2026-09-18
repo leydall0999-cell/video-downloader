@@ -3395,32 +3395,42 @@ img { max-width: 100%; display: block; }
   pointer-events: none;
   border-radius: 6px;
 }
-/* 羽化范围框：只有它接指针 */
+/* 羽化范围框：只有它接指针。
+   ⚠️ 2026-09-18：这是预览里**唯一**表达「带在哪」的元素（带内不再画擦除模拟），
+   所以必须保证「亮画面/暗画面/灰画面都一眼看得见」—— 黄虚线 2px + 黑色外描边 + 标签胶囊。 */
 .com-feather-band {
   position: absolute; z-index: 3;
   box-sizing: border-box;
-  border: 1px dashed rgba(255, 214, 102, .95);
-  background: rgba(255, 214, 102, .10);
+  border: 2px dashed rgba(255, 214, 102, .98);
+  background: rgba(255, 214, 102, .14);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .5);
   border-radius: 3px;
   cursor: ns-resize;
   touch-action: none; user-select: none;
 }
-.com-feather-band:hover { background: rgba(255, 214, 102, .18); }
-.com-feather-band.is-drag { background: rgba(255, 214, 102, .26); }
-/* 未生效（既没探测到、用户也没手动指定）：灰框示意，避免被误读成"已应用" */
+.com-feather-band:hover { background: rgba(255, 214, 102, .22); }
+.com-feather-band.is-drag { background: rgba(255, 214, 102, .30); }
+/* 未生效（既没探测到、用户也没手动指定）：灰框示意，避免被误读成"已应用"；
+   但同样要保持可见（灰到看不见就失去"提示这里可拖动"的意义）。 */
 .com-feather-band.is-inactive {
-  border-color: rgba(150, 160, 175, .85);
-  background: rgba(150, 160, 175, .10);
+  border-color: rgba(190, 200, 215, .95);
+  background: rgba(190, 200, 215, .15);
 }
-/* 标签贴框内侧左上，避免超出预览区被裁 */
+/* 标签贴框内侧左上，避免超出预览区被裁；做成实心胶囊，任何底色上都读得清 */
 .com-feather-band-tag {
-  position: absolute; left: 4px; top: 1px;
-  font-size: .62rem; line-height: 1.4; font-weight: 600;
-  color: #ffd666; text-shadow: 0 1px 2px rgba(0, 0, 0, .85);
+  position: absolute; left: 3px; top: 1px;
+  font-size: .62rem; line-height: 1.5; font-weight: 600;
+  color: #ffd666; background: rgba(0, 0, 0, .66);
+  padding: 0 5px; border-radius: 3px;
   white-space: nowrap; pointer-events: none;
 }
-/* 带太薄时标签会糊住画面，直接隐藏 */
+/* 带太薄时标签会糊住画面，直接隐藏（阈值与 app.js 的 is-tiny 判定一致） */
 .com-feather-band.is-tiny .com-feather-band-tag { display: none; }
+/* 「预览擦除效果」开关后面的说明文字（关＝只画范围框） */
+.com-feather-note {
+  font-size: .7rem; line-height: 1.5;
+  color: var(--text-dim, #6b7280);
+}
 
 /* 卡片：与「字幕样式卡」同风格（强调色淡底 + 细边），整行独占 */
 .com-feather-card {
@@ -5416,9 +5426,18 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   #comScriptPanel { left: 20px; right: 20px; }
   #comReviewActions { left: 20px; right: 20px; }
 }
-/* ---- 深色舞台内羽化带/字幕预览层配色适配（原为浅底设计） ---- */
-.com-preview-stage .com-feather-band { border-color: rgba(255,255,255,.4); }
-.com-preview-stage .com-feather-band-tag { color: rgba(255,255,255,.55); }
+/* ---- 舞台内羽化带配色（2026-09-18 二次修正） ----
+   原先此处把虚线压成「40% 白」以求不抢画面，但舞台底是**真实视频**（亮/彩/暗都有），
+   40% 白在亮画面上等于不存在 ⇒ 用户反馈「羽化看不到预览效果」（真机量到框仅 16px 高、
+   alpha 0.4，确实几乎不可见）。现在改为「黄 + 黑色外描边」双层对比：任何底色都能读出来。 */
+.com-preview-stage .com-feather-band {
+  border-color: rgba(255,196,0,.98);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.55), inset 0 0 0 1px rgba(0,0,0,.35);
+}
+.com-preview-stage .com-feather-band.is-inactive {
+  border-color: rgba(205,215,230,.95);
+}
+.com-preview-stage .com-feather-band-tag { color: #ffd666; }
 
 /* ---- v2 补丁（2026-09-17 二轮） ---- */
 /* 左栏「片头片尾处理」静态卡 → 2026-09-17 晚已搬进右栏「🎬 解说参数」卡（.com-row-3），
@@ -5547,7 +5566,13 @@ html.theme-dark #commentaryView .btn-ghost:hover { background: #26282E; }
 html.theme-dark #commentaryView .com-env-status.ok { background: #12291B; border-color: #1E4D2E; color: #86EFAC; }
 html.theme-dark #commentaryView .com-env-status.err { background: #2E1414; border-color: #5B2020; color: #FCA5A5; }
 html.theme-dark #commentaryView .com-sub-preview { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
-html.theme-dark #commentaryView .com-feather-band { border-color: rgba(255,255,255,.45); }
+html.theme-dark #commentaryView .com-feather-band {
+  border-color: rgba(255,196,0,.98);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.55);
+}
+html.theme-dark #commentaryView .com-feather-band.is-inactive {
+  border-color: rgba(205,215,230,.95);
+}
 /* 覆盖层（审核/历史）跟随深色（步骤面板 2026-09-18 已不再是覆盖层，从本条移除：
    它现在内联在 .com-bottom 的进度条区域，背景跟随 .com-bottom 即可） */
 html.theme-dark #commentaryView #comScriptPanel, html.theme-dark #commentaryView #comHistory,

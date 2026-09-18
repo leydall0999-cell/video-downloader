@@ -545,6 +545,8 @@
     // 原字幕羽化（预览层 + 卡片控件）
     comFeatherCanvas: $('comFeatherCanvas'),
     comFeatherBand: $('comFeatherBand'),
+    comFeatherBandTag: $('comFeatherBandTag'),
+    comFeatherSim: $('comFeatherSim'),
     comFeatherState: $('comFeatherState'),
     comFeatherMode: $('comFeatherMode'),
     comFeatherStrength: $('comFeatherStrength'),
@@ -10540,27 +10542,39 @@ el.dwVidPlayer.removeAttribute('src');
   // 背景：「擦除原字幕」原先完全靠管线自动探测，UI 零暴露 —— 探测偏了只能跑完整条任务
   // 才发现，白等十几分钟拿到废片。现在在预览窗口标出「带」的位置/范围，参数即时可见、可微调。
   //
-  // 🔴 2026-09-18（用户明确要求）：**不再在预览里画「擦除模拟」**。
-  //   原先用 Canvas 复刻管线 fade/stretch/blur（取带上下各 2px 一行纵向拉伸满带高再叠回），
-  //   数学上等价、也确实"所见即所得"；但那块东西在真机上看就是**一条被拉长的糊块**，
-  //   用户反馈"像坏掉的画面/乱码"（截图 2026-09-18 22:14）。
-  //   加上自动探测本身不稳（实测同一视频「命中 3/10 帧」也判 found=true，带子位置可能整个偏掉，
-  //   于是"擦除"把正常画面拉成糊块），这个模拟的误导成本 > 收益。
-  //   ⇒ 现在只保留**范围示意**：虚线框（`.com-feather-band`，自带 10% 淡黄底）+ 位置/高度输入框。
-  //   真实擦除效果请以成片为准；预览不再承诺"看到什么就烧什么"。
+  // 🔴 2026-09-18 两轮用户反馈后的**最终形态**（改这块前务必读完）：
+  //   第 1 轮：预览里默认画「擦除模拟」（Canvas 复刻管线 fade/stretch/blur —— 取带上下各 2px
+  //           一行纵向拉伸满带高再叠回，数学等价、确实"所见即所得"）。用户判为**乱码**
+  //           （真机上就是"带内一条被拉长的糊块"，还常落在探测偏了的位置 → 把正常画面拉花）。
+  //           ⇒ 默认改成不画。
+  //   第 2 轮：不画之后用户反馈「羽化看不到预览效果」。真机实测原因**不在逻辑**而在可见度：
+  //           `styles.css` 里 `.com-preview-stage .com-feather-band` 把虚线压成 40% 白、
+  //           底色只有 10% alpha，舞台底又是真实视频 ⇒ 几乎不可见；
+  //           且 `is-tiny` 阈值 16px 恰好等于 5% 带高在中等舞台上算出的 16px ⇒ 标签被永久隐藏。
+  //   ⇒ 现在的口径：**范围框是"带在哪"的唯一表达，必须显眼**（黄虚线 2px + 黑色外描边 +
+  //      实心标签胶囊 + 未生效时写明"未生效"）；**擦除模拟改为用户显式勾选**（卡片里
+  //      「预览擦除效果」，默认关），想看近似效果时自己打开。
+  //   真实擦除效果以成片为准；预览不承诺"看到什么就烧什么"。
   //   历史实现见 git（本文件 2026-09-18 之前的 comFeatherPaint，含 fade/stretch/blur 三支）。
   //
   // ⚠️ 几何一律用「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、横屏是源分辨率，
   //    只有比例在两边都成立 —— 带子位置/高度仍然按比例同步给管线（band_y_ratio / band_h_ratio）。
+  // ⚠️ 任何"早退"都必须发生在 comFeatherSync() **之后**：它是范围框唯一的定位入口，
+  //    早退挪到它前面 = 关掉模拟就看不到框（正是第 2 轮那个 bug 的形态）。
   const COM_FEATHER_DEFAULT = { bandY: 0.86, bandH: 0.05 };
-  /** false＝预览只画范围框，不画拉伸擦除模拟（2026-09-18 用户要求，见上方说明）。
-   *  改回 true 即可恢复旧的三支模拟（fade/stretch/blur 逻辑在 comFeatherPaint 里原样保留）。 */
-  const COM_FEATHER_SIM = false;
+  /** 擦除模拟预览的**默认值**（false＝只画范围框）。运行期真值在 comFeather.sim，
+   *  由卡片里的「预览擦除效果」勾选框控制，用户可随时打开看近似效果。
+   *  ⚠️ 2026-09-18 两轮反馈：① 默认画出来＝"带内一条拉伸糊块"，用户判为乱码 → 改成不画；
+   *  ② 不画之后用户又反馈"羽化看不到预览效果" → 结论：**默认不画，但给显式开关**，
+   *  并同步把范围框做得足够显眼（它才是"带在哪"的主要表达）。
+   *  fade/stretch/blur 三支模拟逻辑在 comFeatherPaint 里原样保留，sim=true 即启用。 */
+  const COM_FEATHER_SIM_DEFAULT = false;
   const comFeather = {
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
     dynamic: false,     // 羽化带随原字幕逐段自适应（与手动带位置互斥）
     tune: false,        // 自适应之上的手动微调补救（dy/dh 偏移叠加在每个探测带上）
+    sim: COM_FEATHER_SIM_DEFAULT,  // 是否在带内画擦除模拟（用户勾选控制）
     dy: 0,              // 带顶微调（占画面高比例，可负）
     dh: 0,              // 带高加成（占画面高比例，可负=收窄）
     bandY: COM_FEATHER_DEFAULT.bandY,
@@ -10602,7 +10616,7 @@ el.dwVidPlayer.removeAttribute('src');
   }
 
   /** 复用同一个离屏 canvas（尺寸变化会重置上下文状态，调用方用前必须重设 filter/gCO）。
-   *  ⚠️ 只被 COM_FEATHER_SIM=true 的旧模拟分支使用；开关为 false 时是"备用但不调用"。 */
+   *  ⚠️ 只被模拟分支（comFeather.sim=true）使用；未勾选「预览擦除效果」时是"备用但不调用"。 */
   let _comFeatherOffCv = null;
   function comFeatherOff(w, h) {
     if (!_comFeatherOffCv) _comFeatherOffCv = document.createElement('canvas');
@@ -10639,14 +10653,26 @@ el.dwVidPlayer.removeAttribute('src');
     box.style.top = (r.y + by * r.h) + 'px';
     box.style.height = Math.max(6, bh * r.h) + 'px';
     box.hidden = false;
-    box.classList.toggle('is-tiny', bh * r.h < 16);
+    // 阈值从 16px 降到 11px：5% 带高在中档舞台上正好 ≈16px，旧阈值会**永远**把标签藏掉，
+    // 用户连"框在哪"都无从判断 —— 这正是「羽化看不到预览效果」的一半原因。
+    box.classList.toggle('is-tiny', bh * r.h < 11);
     // 未生效（既没探测到、用户也没手动指定）时用灰框示意，避免误导成"已应用"
-    box.classList.toggle('is-inactive', !comFeather.found && !comFeather.manual);
+    const inactive = !comFeather.found && !comFeather.manual;
+    box.classList.toggle('is-inactive', inactive);
+    // 标签写清"生效 / 未生效"，避免灰框被当成已完成设置
+    if (el.comFeatherBandTag) {
+      el.comFeatherBandTag.textContent = inactive
+        ? '原字幕羽化范围（未生效：未探测到，可拖动指定）'
+        : (comFeather.dynamic ? '原字幕羽化范围（自适应逐段）' : '原字幕羽化范围');
+    }
     return r;
   }
 
   /** 重绘羽化覆层：**2026-09-18 起只清画布 + 同步范围框**，不再画拉伸擦除模拟
-   *  （COM_FEATHER_SIM=false）。旧的三支模拟（fade/stretch/blur）原样保留在闸门之后。 */
+   *  （默认 comFeather.sim=false，由卡片「预览擦除效果」勾选框控制）。
+   *  旧的三支模拟（fade/stretch/blur）原样保留在闸门之后，勾选即启用。
+   *  ⚠️ 无论 sim 开关如何，**comFeatherSync() 都必须先跑**（它是唯一的范围框定位入口，
+   *  早退只能发生在 sync 之后），否则关掉模拟会连框一起不显示。 */
   function comFeatherPaint() {
     const cv = el.comFeatherCanvas, vid = el.comPreview;
     const r = comFeatherSync();
@@ -10657,7 +10683,7 @@ el.dwVidPlayer.removeAttribute('src');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
     // 🔴 用户要求：不画「带内拉伸糊块」（会被当成乱码）。范围由虚线框表达。
-    if (!COM_FEATHER_SIM) return;
+    if (!comFeather.sim) return;
     // 未生效时不画效果（虚线框仍显示，提示"可拖动指定"）
     if (!comFeather.found && !comFeather.manual) return;
     if (!vid.videoWidth || vid.readyState < 2) return;  // 当前帧尚不可用
@@ -10918,7 +10944,7 @@ el.dwVidPlayer.removeAttribute('src');
    *  2026-09-18：不画模拟后不需要跟帧 —— 直接不调度（省掉播放期每帧一次的重绘开销）。 */
   function comFeatherTick() {
     _comFeatherRaf = 0;
-    if (!COM_FEATHER_SIM) return;
+    if (!comFeather.sim) return;
     comFeatherPaint();
     const vid = el.comPreview;
     if (vid && !vid.paused && !vid.ended) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
@@ -10992,6 +11018,20 @@ el.dwVidPlayer.removeAttribute('src');
         if (el.comFeatherDh) el.comFeatherDh.value = '0';
       }
       comFeatherPaint();
+    });
+  }
+  // 「预览擦除效果」开关（2026-09-18 新增，默认关）：
+  //   关 → 带内只留范围框（默认，避免"糊块像乱码"）；
+  //   开 → 画出 fade/stretch/blur 近似模拟，用于确认"擦得干不干净"。
+  //   打开时若正在播放，需要重新挂上跟帧重绘（comFeatherTick 在 sim=false 时会直接返回）。
+  if (el.comFeatherSim) {
+    el.comFeatherSim.addEventListener('change', () => {
+      comFeather.sim = !!el.comFeatherSim.checked;
+      comFeatherPaint();
+      const vid = el.comPreview;
+      if (comFeather.sim && vid && !vid.paused && !vid.ended && !_comFeatherRaf) {
+        _comFeatherRaf = requestAnimationFrame(comFeatherTick);
+      }
     });
   }
   const comFeatherOnTuneEdit = () => {

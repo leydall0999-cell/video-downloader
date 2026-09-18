@@ -1945,7 +1945,7 @@
              便于用 DOM 做命中区/hover，不用往 canvas 里塞交互）。 -->
         <div id="comFeatherBand" class="com-feather-band" data-page-node-id="comFeatherBandBox"
              title="拖动可调整原字幕羽化范围" hidden>
-          <span class="com-feather-band-tag" data-page-node-id="comFeatherBandTag">原字幕羽化范围</span>
+          <span class="com-feather-band-tag" id="comFeatherBandTag" data-page-node-id="comFeatherBandTag">原字幕羽化范围</span>
         </div>
         <!-- 字幕样式实时预览层：固定示例文字，随「字号/描边/颜色/位置」实时更新（pointer-events:none 不挡播放器操作） -->
         <div id="comSubPreview" class="com-sub-preview" data-page-node-id="comSubPreviewLayer" hidden>
@@ -2407,6 +2407,16 @@
               <span class="com-feather-unit" data-page-node-id="comFeatherHUnit">%</span>
             </label>
             <button type="button" class="btn btn-sm btn-ghost" id="comFeatherRedetect" data-page-node-id="comFeatherRedetectBtn">重新探测</button>
+          </div>
+          <!-- 预览开关（默认关）：关＝只画范围框；开＝在带内画出擦除模拟（近似），
+               便于确认"擦得干不干净"。2026-09-18 用户先嫌默认画出来的糊块像乱码，
+               后又反馈"看不到预览效果"，故改为**由用户显式打开**。 -->
+          <div class="com-feather-row" data-page-node-id="comFeatherSimRow">
+            <label class="com-feather-field" data-page-node-id="comFeatherSimField">
+              <input type="checkbox" id="comFeatherSim" data-page-node-id="comFeatherSimCheck" />
+              <span class="com-feather-label" data-page-node-id="comFeatherSimLabel">预览擦除效果</span>
+            </label>
+            <span class="com-feather-note" data-page-node-id="comFeatherSimNote">勾选后在带内预览擦除结果（近似模拟，成片以渲染为准）</span>
           </div>
           <p class="com-feather-hint" id="comFeatherHint" data-page-node-id="comFeatherHint">虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。</p>
         </details>
