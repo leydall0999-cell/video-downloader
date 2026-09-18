@@ -10941,6 +10941,7 @@ el.dwVidPlayer.removeAttribute('src');
       comFeather.bandH = COM_FEATHER_DEFAULT.bandH;
       comFeather.bandX = null;
       comFeather.bandW = null;
+      comFeather.segs = [];   // 旧片的逐帧带对新片毫无意义（否则勾自适应会画到错位置）
       comFeatherSyncInputs();
     }
     comFeather.probing = true;
@@ -10996,6 +10997,7 @@ el.dwVidPlayer.removeAttribute('src');
       }
     } catch (err) {
       comFeather.found = false;
+      comFeather.segs = [];   // 探测失败：段表也要清，免得拿上一次的带继续跟幕
       comFeatherSetState('miss', '探测失败：' + ((err && err.message) || '未知错误'));
     } finally {
       comFeather.probing = false;
