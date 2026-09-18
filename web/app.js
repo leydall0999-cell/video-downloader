@@ -493,6 +493,7 @@
     comVision: $('comVision'),
     comStepsPanel: $('comStepsPanel'),
     comStepsList: $('comStepsList'),
+    comArtifact: $('comArtifact'),
     comLogs: $('comLogs'),
     comRefresh: $('comRefresh'),
     comEnvStatus: $('comEnvStatus'),
@@ -566,6 +567,8 @@
     comDramaEndRange: $('comDramaEndRange'),
     comTrimReset: $('comTrimReset'),
     comRegenScript: $('comRegenScript'),
+    comScriptClose: $('comScriptClose'),
+    comScriptReopen: $('comScriptReopen'),
     comGenerateRow: $('comGenerateRow'),
     comEta: $('comEta'),
     tabCommentary: $('tabCommentary'),
@@ -8249,6 +8252,33 @@ el.dwVidPlayer.removeAttribute('src');
     return { phase, pct };
   };
 
+  /** 步骤详情里的绝对路径单独抽出来（2026-09-18 用户：「并入下方进度条显示就可以了」）。
+   *  此前 detail 直接塞整行日志（含 /Users/... 产物全路径），把每个步骤都撑成三行；
+   *  现在步骤行只留文字，路径统一交给进度条下方那一行（见 renderComArtifact）。 */
+  const splitDetailPath = (raw) => {
+    const s = String(raw == null ? '' : raw);
+    const m = s.match(/\/[^\s，,；;、"']+/);
+    if (!m) return { text: s, path: '' };
+    const path = m[0].replace(/[.。]+$/, '');
+    const text = s.replace(m[0], '').replace(/\s*[:：]\s*$/, '').trim();
+    return { text, path };
+  };
+
+  /** 产物路径缩略：超长只留尾部（文件名 + 最近两级目录信息量最大），完整值进 title。 */
+  const shrinkArtifactPath = (p, max = 78) => {
+    const s = String(p || '');
+    return s.length <= max ? s : '…' + s.slice(-(max - 1));
+  };
+
+  /** 把本轮步骤里出现的产物路径并到进度条下方那一行（单行、不撑高面板）。 */
+  const renderComArtifact = (paths) => {
+    if (!el.comArtifact) return;
+    const last = paths.length ? paths[paths.length - 1] : '';
+    el.comArtifact.hidden = !last;
+    el.comArtifact.textContent = last ? '📄 ' + shrinkArtifactPath(last) : '';
+    el.comArtifact.title = last;
+  };
+
   const renderComSteps = (st) => {
     const steps = Array.isArray(st.steps) ? st.steps : [];
     const logs = Array.isArray(st.logs) ? st.logs : [];
@@ -8269,10 +8299,12 @@ el.dwVidPlayer.removeAttribute('src');
         cur = lastDone >= 0 ? lastDone : 0;
       }
       const cs = steps[cur] || {};
-      const detail = cs.detail ? ' ' + String(cs.detail) : '';
+      const csDetail = splitDetailPath(cs.detail);
+      const detail = csDetail.text ? ' ' + csDetail.text : '';
       tlStep.hidden = false;
       tlStep.textContent = `第 ${cur + 1}/${steps.length} 步 · ${cs.name || ''}${detail}`;
     }
+    const artifacts = [];
     el.comStepsList.innerHTML = steps.map((s) => {
       const statusClass = s.status === 'running' ? 'task-step--running' :
                           s.status === 'done' ? 'task-step--done' :
@@ -8280,7 +8312,9 @@ el.dwVidPlayer.removeAttribute('src');
       const icon = s.status === 'running' ? '●' :
                    s.status === 'done' ? '✓' :
                    s.status === 'error' ? '✕' : '○';
-      const detail = s.detail ? `<span class="task-step-detail">${escHtml(String(s.detail))}</span>` : '';
+      const { text, path } = splitDetailPath(s.detail);
+      if (path) artifacts.push(path);
+      const detail = text ? `<span class="task-step-detail">${escHtml(text)}</span>` : '';
       return `<div class="task-step ${statusClass}">
         <span class="task-step-dot">${icon}</span>
         <div class="task-step-body">
@@ -8289,6 +8323,7 @@ el.dwVidPlayer.removeAttribute('src');
         </div>
       </div>`;
     }).join('');
+    renderComArtifact(artifacts);
     el.comLogs.textContent = logs.slice(-30).join('\n');
     const logsWrap = el.comLogs.parentElement;
     if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
@@ -8901,6 +8936,7 @@ el.dwVidPlayer.removeAttribute('src');
    *  即使拉取失败也保留面板可见，并给出重试按钮，避免用户看不到任何反馈。 */
   const openScriptReview = (job_id, opts = {}) => {
     el.comScriptPanel.hidden = false;
+    if (el.comScriptReopen) el.comScriptReopen.hidden = true;  // 面板已打开，提示行不再需要「继续审核」
     if (el.comEmpty) el.comEmpty.hidden = true;
     el.comScriptSegments.replaceChildren();
     el.comScriptStatus.hidden = false;
@@ -10065,6 +10101,31 @@ el.dwVidPlayer.removeAttribute('src');
   };
   el.comGenerateScript.addEventListener('click', comStartScriptGeneration);
   if (el.comRegenScript) el.comRegenScript.addEventListener('click', comStartScriptGeneration);
+
+  /** 收起审核面板（2026-09-18 用户：「解说词页面没有退出按钮」）。
+   *  只收起、不丢脚本：currentScriptJobId 留着，提示行的「📄 继续审核」可原样打开同一份，
+   *  底部「生成脚本」入口也回来，用户能换素材/改设置重跑。 */
+  const closeScriptReview = () => {
+    const hasScript = !!currentScriptJobId;
+    el.comScriptPanel.hidden = true;
+    if (el.comScriptReopen) el.comScriptReopen.hidden = !hasScript;
+    el.comReviewActions.hidden = !hasScript;
+    if (el.comGenerateRow) el.comGenerateRow.hidden = false;
+    el.comGenerateScript.disabled = false;
+    el.comGenerateScript.textContent = hasScript ? '重新生成脚本' : '生成脚本';
+    if (hasScript) {
+      el.comStatus.hidden = false;
+      el.comStatus.textContent = '解说词已收起（脚本仍保留在本机），点「📄 继续审核」可回到编辑';
+    }
+  };
+  if (el.comScriptClose) el.comScriptClose.addEventListener('click', closeScriptReview);
+  if (el.comScriptReopen) {
+    el.comScriptReopen.addEventListener('click', () => {
+      if (!currentScriptJobId) return;
+      el.comScriptReopen.hidden = true;
+      openScriptReview(currentScriptJobId, { autoScroll: true });
+    });
+  }
 
   // 解说风格切换：联动默认音色 + 更新提示文案（用户仍可在审核面板手动改音色）
   document.querySelectorAll('input[name="comStyle"]').forEach((r) => {

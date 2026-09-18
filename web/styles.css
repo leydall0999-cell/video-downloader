@@ -2316,6 +2316,13 @@ img { max-width: 100%; display: block; }
   margin-left: auto; font-size: .76rem; font-weight: 600; color: var(--text-mute);
   background: var(--bg-soft, #f3f4f6); padding: .15rem .55rem; border-radius: 999px;
 }
+/* 产物路径行（2026-09-18）：步骤行里不再塞绝对路径，统一并到进度条下方这一行。
+   单行 + 尾部省略，避免长路径把面板撑高；完整路径看 title（悬停）。 */
+.com-artifact {
+  margin-top: .45rem; font-size: .74rem; line-height: 1.5; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---- 预览与裁剪卡片 ---- */
 .com-trim-card {

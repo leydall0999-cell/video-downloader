@@ -2512,11 +2512,17 @@
       <div id="comProgressBar" class="com-progress-bar" data-page-node-id="aiBtSEScc5YWBGFMnMcFXh">
         <div id="comBarFill" class="com-bar-fill" style="width:0%" data-page-node-id="wHRqOHW8bbX7pVAn7zXeUI"></div>
       </div>
+      <!-- 产物路径行（2026-09-18 用户：「路径太长，并入下方进度条显示就可以了」）：
+           步骤详情里的绝对路径（转写稿 / 脚本 json）不再留在步骤行里把它撑成三行，
+           统一抽到进度条正下方这一行单行展示（超长尾部省略，悬停看全路径）。 -->
+      <div id="comArtifact" class="com-artifact" hidden title="" data-page-node-id="comArtifactLine"></div>
     </div>
     </div>
             <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
       <!-- 重新生成脚本放在提示框上方（2026-09-17）：此前它在底部粘性条的「生成成片」上层，
            用户想点生成成片时极易误触重新生成（白等几分钟）。挪进审核区后与成片按钮空间分离。 -->
+      <!-- 收起审核面板后回到这里：「继续审核」把面板原样打开（同一份脚本，不重跑） -->
+      <button type="button" class="btn btn-sm btn-secondary" id="comScriptReopen" hidden data-page-node-id="comScriptReopenBtn">📄 继续审核</button>
       <button type="button" class="btn btn-sm btn-ghost" id="comRegenScript" data-page-node-id="comRegenScriptBtn">↻ 重新生成脚本</button>
       <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
     </div>
@@ -2535,6 +2541,9 @@
           <select id="comScriptVoice" class="adv-input com-voice-select" data-page-node-id="6AbH5lGUCwonBNBrfHVZZ0"></select>
           <button type="button" class="btn btn-sm btn-secondary" id="comScriptVoicePreview" data-page-node-id="EhxcizuEF3bVb1PTLZKMpS">▶ 试听</button>
           <button type="button" class="btn btn-sm btn-ghost" id="comScriptPrevAll" data-page-node-id="3TVo00ElmWlrcPPzktcXHp">预览全部</button>
+          <!-- 退出审核面板（2026-09-18 用户：「解说词页面没有退出按钮」）：收起面板回正常态，
+               底部「生成脚本」入口与提示行的「继续审核」都能再回来，脚本不丢。 -->
+          <button type="button" class="btn btn-sm btn-ghost com-script-close" id="comScriptClose" title="收起审核面板（解说词不会丢，可随时回来）" data-page-node-id="comScriptCloseBtn">✕ 关闭</button>
         </div>
       </div>
       <div id="comScriptSegments" class="com-script-segments" data-page-node-id="fsmcEMLoIoJpCRRpv0jITz"></div>
