@@ -5193,6 +5193,23 @@ html.com-theater { overflow: hidden; }
 }
 #comScriptPanel .com-script-segments { flex: 1; overflow: auto; min-height: 0; }
 #comScriptPanel .com-script-actions { flex: none; }
+/* 最小化态（2026-09-18 用户：「加最小化按钮」）：面板压矮成「标题条」，
+   隐藏段落列表与底部操作，露出中栏预览/时间轴。解说词数据与编辑内容不受影响，
+   点标题条里的「▢ 展开」原样还原（见 app.js setScriptMin）。
+   🔴 只改 bottom→auto / height→auto，left/right 不动：宽度保持与展开时一致，
+      避免与 #comReviewActions / 右栏浮层错位（那两处的 26px 偏移与本条无关）。 */
+#comScriptPanel.is-min { bottom: auto; height: auto; padding: .45rem 1rem; }
+#comScriptPanel.is-min .com-script-segments,
+#comScriptPanel.is-min .com-script-actions { display: none; }
+/* 标题条上下不再需要分隔线留白，否则白白撑高 */
+#comScriptPanel.is-min .com-script-head {
+  margin-bottom: 0; padding-bottom: 0; border-bottom: none;
+}
+/* 最小化时收起头部副控件（配音下拉 / 试听 / 预览全部），保证标题条恒为一行 */
+#comScriptPanel.is-min .com-voice-label,
+#comScriptPanel.is-min #comScriptVoice,
+#comScriptPanel.is-min #comScriptVoicePreview,
+#comScriptPanel.is-min #comScriptPrevAll { display: none; }
 #comReviewActions {
   position: fixed; top: 66px; left: 260px; right: 322px; z-index: 59;
   background: #FEF9C3; border: 1px solid #FDE68A; border-radius: var(--radius-md);

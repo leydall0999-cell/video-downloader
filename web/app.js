@@ -573,6 +573,7 @@
     comTrimReset: $('comTrimReset'),
     comRegenScript: $('comRegenScript'),
     comScriptClose: $('comScriptClose'),
+    comScriptMin: $('comScriptMin'),
     comScriptReopen: $('comScriptReopen'),
     comGenerateRow: $('comGenerateRow'),
     comEta: $('comEta'),
@@ -8950,10 +8951,24 @@ el.dwVidPlayer.removeAttribute('src');
     }, 2500);
   };
 
+  /** 最小化 / 展开「解说词审核」浮层（2026-09-18 用户：「加最小化按钮」）。
+   *  最小化只把面板压矮成标题条（CSS .is-min 收起段落列表与底部操作），露出中栏预览/时间轴；
+   *  解说词数据、编辑内容、currentScriptJobId 全部保留，点标题条上的「▢ 展开」原样还原。
+   *  与「✕ 关闭」的区别：关闭是整块收起（回「📄 继续审核」入口），最小化面板仍在眼前。 */
+  const setScriptMin = (min) => {
+    if (!el.comScriptPanel) return;
+    el.comScriptPanel.classList.toggle('is-min', !!min);
+    if (el.comScriptMin) {
+      el.comScriptMin.textContent = min ? '▢ 展开' : '➖ 最小化';
+      el.comScriptMin.title = min ? '展开审核面板' : '最小化审核面板（解说词保留，可再展开）';
+    }
+  };
+
   /** 打开脚本审核面板：先展示面板（带加载态），再异步拉取脚本内容。
    *  即使拉取失败也保留面板可见，并给出重试按钮，避免用户看不到任何反馈。 */
   const openScriptReview = (job_id, opts = {}) => {
     el.comScriptPanel.hidden = false;
+    setScriptMin(false);  // 每次打开都是完整面板（上次若最小化过，先还原）
     if (el.comScriptReopen) el.comScriptReopen.hidden = true;  // 面板已打开，提示行不再需要「继续审核」
     if (el.comEmpty) el.comEmpty.hidden = true;
     el.comScriptSegments.replaceChildren();
@@ -10126,6 +10141,7 @@ el.dwVidPlayer.removeAttribute('src');
   const closeScriptReview = () => {
     const hasScript = !!currentScriptJobId;
     el.comScriptPanel.hidden = true;
+    setScriptMin(false);  // 关闭时清掉最小化态，下次打开 / 「继续审核」是完整面板
     if (el.comScriptReopen) el.comScriptReopen.hidden = !hasScript;
     el.comReviewActions.hidden = !hasScript;
     if (el.comGenerateRow) el.comGenerateRow.hidden = false;
@@ -10137,6 +10153,11 @@ el.dwVidPlayer.removeAttribute('src');
     }
   };
   if (el.comScriptClose) el.comScriptClose.addEventListener('click', closeScriptReview);
+  if (el.comScriptMin) {
+    el.comScriptMin.addEventListener('click', () => {
+      setScriptMin(!el.comScriptPanel.classList.contains('is-min'));
+    });
+  }
   if (el.comScriptReopen) {
     el.comScriptReopen.addEventListener('click', () => {
       if (!currentScriptJobId) return;
