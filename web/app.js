@@ -8372,6 +8372,9 @@ el.dwVidPlayer.removeAttribute('src');
     if (!dot || !txt) return;
     txt.textContent = text || '';
     dot.className = 'com-tts-status-dot is-' + (state || 'gray');
+    // 🔴 必须同时显示状态条：它在 index.html 里带内联 `style="display:none"`，
+    // 内联样式优先级高于样式表，光写文字永远不会露出来（2026-09-18 修）。
+    if (el.comTtsStatusBar) el.comTtsStatusBar.style.display = '';
   };
 
   /** 隐藏本地语音克隆状态条（非本地语音克隆/收费项时）。 */
@@ -8415,8 +8418,10 @@ el.dwVidPlayer.removeAttribute('src');
       opt.textContent = base + (suffix ? '　' + suffix : '');
     };
 
-    // 默认 Qwen3-TTS 本地语音克隆（2026-09-18 起为真默认；此前 value="" 等于「不告诉后端」，
-    // 后端不写 VDL_TTS_PROVIDER → 管线落到 tts_config.json 里的旧 provider，克隆形同虚设）
+    // 🔴 默认引擎 = edge-tts（2026-09-18 用户拍板「先退回 edge」）。
+    // 原因：Qwen3-TTS 是纯 CPU 推理，本机 macOS 13（MPS 需 ≥14）合成一句话数分钟量级，
+    // 且选中即自动拉起 7871（常驻约 2GB 内存）——在性能问题解决前不该做默认。
+    // 注意：这里只是「默认选中」，不是「禁用」；用户主动选 qwen3tts 时照样会拉起服务。
     setOpt('qwen3tts', false, status.voice_sample_ready ? '免费' : '免费（需先配「我的音色」）');
     // IndexTTS-MLX：仅 Apple Silicon + 服务就绪可用，否则置灰
     if (status.indextts_mlx_ready) {
