@@ -6,7 +6,7 @@
 
 本算法与管线 `scripts/edit_ffmpeg.py::_prepare_feather / _band_rows` **同源**：
 判据（只认白字 >=205、从画面 70% 起扫、允许 2 行间隙、丢 >25% 的异常帧、中位数聚合、
-上下各扩 8% 字幕高且至少 0.3% 画面）必须与那边一致 —— 只改一边会让比例漂移，
+上下各扩 5% 字幕高且至少 0.3% 画面）必须与那边一致 —— 只改一边会让比例漂移，
 直观看就是「预览和成片位置不一致」，正是本功能要消灭的问题。
 
 覆盖：
@@ -118,8 +118,9 @@ def test_detect_ignores_oversized_band():
 
 
 def test_detect_pads_band_slightly():
-    # 返回的带必须略大于原字（上下各扩 8% 字幕高），否则描边/辉光会残字；
-    # 但也不该扩到翻倍（那会糊住带外的画面）。
+    # 返回的带必须略大于原字（上下各扩 _PAD_RATIO＝5% 字幕高），否则描边/辉光会残字；
+    # 但也不该扩到翻倍（那会糊住带外一大片）。
+    # ⚠️ 2026-09-19 用户反馈默认带高偏大（9.5 → 想 9）后由 8% 收到 5%。
     imgs = [_mk_frame(band_top=230, band_h=20) for _ in range(4)]
     r = subtitle_band.detect_band_ratio(imgs)
     assert r["found"] is True, r
