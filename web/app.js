@@ -513,6 +513,14 @@
     comMyVoiceText: $('comMyVoiceText'),
     comMyVoiceSave: $('comMyVoiceSave'),
     comMyVoiceStatus: $('comMyVoiceStatus'),
+    // 本地克隆「运行环境」按需下载入口（2026-09-18）
+    comCloneEnvBox: $('comCloneEnvBox'),
+    comCloneEnvText: $('comCloneEnvText'),
+    comCloneEnvBar: $('comCloneEnvBar'),
+    comCloneEnvFill: $('comCloneEnvFill'),
+    comCloneEnvBtn: $('comCloneEnvBtn'),
+    comCloneEnvCancel: $('comCloneEnvCancel'),
+    comMyVoiceGrid: $('comMyVoiceGrid'),
     // BGM 的 7 个元素引用（comBgm*）2026-09-18 删除：DOM 早在 2026-09-15 随「成片增强 ·
     // 自动配乐」块移除，引用恒为 null；配乐改由时间轴「音乐」轨的 comMusic 状态承载。
     comSubSize: $('comSubSize'),
@@ -8454,9 +8462,13 @@ el.dwVidPlayer.removeAttribute('src');
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
       comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
     } else if (cur === 'qwen3tts') {
-      // 2026-09-18：克隆真正生效需要 ①服务在跑 ②有「我的音色」样本。缺哪样就说哪样，
+      // 2026-09-18：克隆真正生效需要 ①运行环境已装 ②服务在跑 ③有「我的音色」样本。缺哪样就说哪样，
       // 不再出现「界面显示就绪、成片却是 edge 声」这种误导。
-      if (!status.voice_sample_ready) {
+      comRefreshCloneEnv();   // 顺带把环境状态刷成最新（缺失时会顶掉「我的音色」并接管状态条）
+      if (_cloneEnvReady === false) {
+        // 环境没装：状态条由下载入口那段文案负责。这里**必须什么都不写** ——
+        // 否则会一边说「正在自动启动服务」一边永远等不到（服务压根没有 venv 可跑）。
+      } else if (!status.voice_sample_ready) {
         comSetTtsStatusBar('orange', '还差一步：在「解说参数 → 我的音色」里选一段自己的录音 + 填文字稿并保存');
         comEnsureQwen3Tts(); // 服务可以并行预热，配好样本即可直接用
         // 「我的音色」藏在默认折起的「解说参数」卡里 —— 只自动展开一次（每会话），
@@ -8552,6 +8564,96 @@ el.dwVidPlayer.removeAttribute('src');
       const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.stopQwen3Tts;
       if (typeof fn === 'function') await fn();
     } catch (_) { /* 忽略 */ }
+  };
+
+  /* ── 本地语音克隆「运行环境」按需下载（2026-09-18）────────────────────────
+     这个能力要两样大资源：500MB 的 venv（mlx + mlx-audio）+ 1.9GB 的 Qwen3-TTS 权重，
+     合计约 2.4GB，远超发行包体积目标 → **不进包**，首次用它才下（后端见 server/clone_env.py）。
+     环境没装好时「我的音色」配了也跑不起来，所以用下载入口顶掉那一段，
+     并把状态条交给它 —— 否则会一边喊「正在启动服务」一边永远等不到。 */
+  let _cloneEnvReady = null;      // null=未知（按原逻辑显示，避免首屏闪烁）
+  let _cloneEnvTimer = null;
+  const comRenderCloneEnv = (st) => {
+    const box = el.comCloneEnvBox, text = el.comCloneEnvText,
+          btn = el.comCloneEnvBtn, cancelBtn = el.comCloneEnvCancel,
+          bar = el.comCloneEnvBar, fill = el.comCloneEnvFill, grid = el.comMyVoiceGrid;
+    if (!box) return;
+    // 状态拿不到 / 本机不支持（非 Apple Silicon）：不插下载入口，「我的音色」照常显示，
+    // 真要选了克隆引擎时由 tts-status 那条分支去解释原因。
+    if (!st || !st.supported) {
+      box.hidden = true;
+      if (grid) grid.hidden = false;
+      return;
+    }
+    const inst = st.install || {};
+    _cloneEnvReady = !!(st.ready && !inst.active);
+    if (_cloneEnvReady) {
+      box.hidden = true;
+      if (grid) grid.hidden = false;
+      return;
+    }
+    box.hidden = false;
+    box.classList.toggle('is-error', inst.phase === 'error');
+    if (grid) grid.hidden = true;   // 环境都没装好，先配音色没有意义
+    // 状态条也归这里管：环境没装时不能再说「正在启动服务」（服务没有 venv 可跑）。
+    // 只在当前选中的就是克隆引擎时改写，免得污染其它引擎的提示。
+    const curProv = el.comTtsProvider ? el.comTtsProvider.value : '';
+    if (curProv === 'qwen3tts') {
+      comSetTtsStatusBar('orange', inst.active
+        ? '正在下载安装本地语音克隆运行环境…（可继续用其它功能）'
+        : '本机还没安装本地语音克隆运行环境：点下面的按钮下载安装（约 2.4GB，一次性）');
+    }
+    if (inst.active) {
+      const pct = Math.max(2, Math.min(100, Number(inst.pct || 0)));
+      bar.hidden = false; fill.style.width = pct + '%';
+      btn.hidden = true; cancelBtn.hidden = false;
+      const mb = (inst.total_mb || 0) > 0
+        ? ` ${(inst.done_mb || 0).toFixed(0)} / ${(inst.total_mb || 0).toFixed(0)} MB` : '';
+      text.textContent = `正在下载安装本地语音克隆环境…${mb}`
+        + (inst.msg ? `\n${inst.msg}` : '')
+        + '\n（过程中可以正常用其它功能）';
+    } else {
+      bar.hidden = true; btn.hidden = false; cancelBtn.hidden = true;
+      const gb = ((st.needed_mb || 2400) / 1024).toFixed(1);
+      btn.textContent = `⤓ 下载并安装（约 ${gb}GB）`;
+      // 磁盘不足先拦住：下到 1.8GB 才失败是最糟的体验
+      const lowDisk = Number(st.disk_free_mb) >= 0 && Number(st.disk_free_mb) < Number(st.needed_mb || 0) + 500;
+      btn.disabled = lowDisk;
+      if (inst.phase === 'error') {
+        text.textContent = `安装失败：${inst.error || '未知原因'}\n可重试；若卡在下载，可换镜像（设 VDL_CLONE_HF_ENDPOINT）`
+          + (st.note ? `\n${st.note}` : '');
+      } else if (inst.phase === 'cancelled') {
+        text.textContent = '安装已取消，可重新开始。' + (st.note ? `\n${st.note}` : '');
+      } else {
+        text.textContent = '本机还没安装「本地语音克隆」运行环境（约 2.4GB，一次性）'
+          + (st.note ? `\n${st.note}` : '');
+      }
+      if (lowDisk && inst.phase !== 'error') {
+        text.textContent += `\n⚠️ 磁盘可用仅 ${st.disk_free_mb}MB，不够（需约 ${st.needed_mb}MB），请先腾空间。`;
+      }
+    }
+  };
+  const comRefreshCloneEnv = async () => {
+    try {
+      const st = await request('/api/commentary/clone-env');
+      comRenderCloneEnv(st);
+      // 安装中 → 自动轮询到结束，不用用户手动刷新
+      if (st && st.install && st.install.active && !_cloneEnvTimer) {
+        _cloneEnvTimer = setInterval(async () => {
+          let s2 = null;
+          try { s2 = await request('/api/commentary/clone-env'); } catch (_) { /* 忽略 */ }
+          comRenderCloneEnv(s2);
+          if (!s2 || !s2.install || !s2.install.active) {
+            clearInterval(_cloneEnvTimer); _cloneEnvTimer = null;
+            if (s2 && s2.ready) {
+              // 装好了 → 让 tts-status 那条链路照常把服务拉起来
+              comSetTtsStatusBar('green', '运行环境已装好，正在启动本地语音克隆服务…');
+              comRefreshTtsStatus({ force: true });
+            }
+          }
+        }, 2000);
+      }
+    } catch (_) { /* 拉不到就维持现状 */ }
   };
 
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
@@ -10029,6 +10131,36 @@ el.dwVidPlayer.removeAttribute('src');
       comRenderVoiceSample(s);
     } catch (_e) { /* 拉不到就维持现状，不打扰用户 */ }
   };
+  // 克隆运行环境的下载 / 取消两个按钮（2026-09-18）。
+  // 🔴 POST 必须发 FormData：接口参数是 FastAPI 的 Form，发 JSON 会被判 422。
+  if (el.comCloneEnvBtn) {
+    el.comCloneEnvBtn.addEventListener('click', async () => {
+      el.comCloneEnvBtn.disabled = true;
+      try {
+        const r = await request('/api/commentary/clone-env/install',
+          { method: 'POST', body: new FormData() });
+        // 后端会拒绝的情况（磁盘不足 / 非 Apple Silicon / 已在装）都不是异常，是明确答复，
+        // 原样展示 + 马上刷新状态，别让按钮一直卡在禁用态说不清。
+        comSetTtsStatusBar((r && r.ok) ? 'orange' : 'gray',
+          (r && r.msg) || '安装请求已发送');
+        await comRefreshCloneEnv();
+      } catch (_e) {
+        comSetTtsStatusBar('gray', '安装请求失败，请看下方提示');
+      } finally {
+        el.comCloneEnvBtn.disabled = false;
+      }
+    });
+  }
+  if (el.comCloneEnvCancel) {
+    el.comCloneEnvCancel.addEventListener('click', async () => {
+      try {
+        const r = await request('/api/commentary/clone-env/cancel',
+          { method: 'POST', body: new FormData() });
+        if (r && r.msg) comSetTtsStatusBar('gray', r.msg);
+        await comRefreshCloneEnv();
+      } catch (_e) { /* 忽略 */ }
+    });
+  }
   if (el.comMyVoicePick) {
     el.comMyVoicePick.addEventListener('click', async () => {
       const pick = window.VDL && window.VDL.desktop && window.VDL.desktop.pickVoiceSample;

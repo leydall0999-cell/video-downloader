@@ -2289,7 +2289,18 @@
             📇 我的音色（本地克隆源）
             <span class="com-myvoice-badge" id="comMyVoiceBadge">未配置</span>
           </div>
-          <div class="com-myvoice-grid">
+          <!-- 运行环境缺失时的下载入口（2026-09-18）：本地克隆要 500MB venv + 1.9GB 权重，
+               不进发行包 → 首次使用现下（见 server/clone_env.py）。
+               环境都没装好时，「我的音色」配了也跑不起来，所以用它顶掉下面那段。 -->
+          <div class="com-clone-env" id="comCloneEnvBox" hidden>
+            <div class="com-clone-env-text" id="comCloneEnvText">本机还没安装「本地语音克隆」运行环境</div>
+            <div class="com-clone-env-bar" id="comCloneEnvBar" hidden><i id="comCloneEnvFill"></i></div>
+            <div class="com-clone-env-actions">
+              <button type="button" class="btn btn-sm btn-primary" id="comCloneEnvBtn">⤓ 下载并安装（约 2.4GB）</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="comCloneEnvCancel" hidden>取消</button>
+            </div>
+          </div>
+          <div class="com-myvoice-grid" id="comMyVoiceGrid">
             <button type="button" class="btn btn-sm btn-secondary com-myvoice-pick" id="comMyVoicePick">🎙 选择一段录音</button>
             <div class="com-myvoice-path" id="comMyVoicePath" title="">还没选择录音文件</div>
             <label class="com-myvoice-label" for="comMyVoiceText">那段录音里念的内容（文字稿）</label>

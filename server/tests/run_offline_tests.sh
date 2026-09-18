@@ -81,6 +81,9 @@ run_one test_matting_chroma_key.py
 run_one test_matting_sam_forward.py
 run_one test_convert_guards.py
 run_one test_commentary_routes.py
+#   6b. test_clone_env.py             —— 本地语音克隆「按需安装」环境判定（候选优先级 / 半成品驳回 /
+#                                        磁盘不足拦截 / 非 Apple Silicon 拒绝 / 全程不得改进程级 HF_ENDPOINT）
+run_one test_clone_env.py
 run_one test_codec_utils.py
 run_one test_convert_pipeline.py
 run_one test_ffmpeg_tools.py

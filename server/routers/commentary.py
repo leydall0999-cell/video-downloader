@@ -189,6 +189,34 @@ def _voice_sample_ready() -> bool:
         return False
 
 
+# ── 本地语音克隆运行环境（按需下载安装）─────────────────────────────
+# 为什么单独开三个接口：这能力要 500MB venv + 1.9GB 权重，**不进发行包**（见 server/clone_env.py），
+# 所以必须能在界面上「检测 → 一键装 → 看进度 → 可取消」，而不是丢一句命令行让用户自己搞。
+@router.get("/api/commentary/clone-env")
+def commentary_clone_env() -> dict:
+    """本机语音克隆环境状态 + 安装进度。
+
+    ready=True 才算真能用（venv 有 mlx/mlx_audio 且权重完整）；
+    needed_mb / disk_free_mb 供前端在「开始下载」前就拦住磁盘不足。
+    """
+    import clone_env
+    return clone_env.status()
+
+
+@router.post("/api/commentary/clone-env/install")
+def commentary_clone_env_install(force: bool = app.Form(False)) -> dict:
+    """启动环境安装（幂等；force=True 可强制重装）。"""
+    import clone_env
+    return clone_env.start_install(force=bool(force))
+
+
+@router.post("/api/commentary/clone-env/cancel")
+def commentary_clone_env_cancel() -> dict:
+    """取消进行中的安装（当前步骤跑完即停，不留半包数据）。"""
+    import clone_env
+    return clone_env.cancel()
+
+
 @router.post("/api/commentary/stash")
 async def create_commentary_stash(
     file: app.UploadFile = app._FastAPIFile(...),

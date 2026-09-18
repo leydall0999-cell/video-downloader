@@ -2912,6 +2912,36 @@ img { max-width: 100%; display: block; }
   resize: vertical;
 }
 .com-myvoice-text:focus { outline: none; border-color: var(--accent); }
+
+/* 克隆「运行环境」按需下载入口（环境缺失时代替「我的音色」显示） */
+.com-clone-env {
+  display: flex; flex-direction: column; gap: .45rem;
+  padding: .5rem .55rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.com-clone-env.is-error {
+  border-color: #C2483B;
+  background: color-mix(in srgb, #C2483B 8%, var(--surface));
+}
+.com-clone-env-text {
+  font-size: .76rem; line-height: 1.5; color: var(--text);
+  word-break: break-word;
+  /* 🔴 文案里带 \n 分段（进度行 / 原因行 / 磁盘告警行），不开 pre-line 会被折成一行，
+     一整段挤在 188px 宽的右栏里根本读不了 */
+  white-space: pre-line;
+}
+.com-clone-env-bar {
+  height: 6px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--line) 75%, var(--surface));
+}
+.com-clone-env-bar > i {
+  display: block; height: 100%; width: 0;
+  background: var(--accent);
+  transition: width .3s ease;
+}
+.com-clone-env-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .com-myvoice-actions {
   display: flex; flex-direction: column; align-items: stretch; gap: .35rem;
 }
