@@ -150,20 +150,30 @@ def detect_band_ratio(images) -> dict:
     """
     total = len(images)
     bands = []
+    # 🔴 2026-09-18：逐帧结果。与 images **索引一一对应**，前端拿着它 + 自己记录的抽帧时间点
+    #   就能让预览「跟幕」——播放头走到哪儿，框就跳到那一片时段探测出的带上。
+    #   （用户原话："我们不是有探测原字幕的设计吗？根据这幕来羽化吗，为什么没有产生作用？"
+    #    旧实现只回一条全片聚合带，播放时框纹丝不动 ⇒ 用户看不到自适应有任何效果。）
+    per_frame = []
     cols = None          # 所有命中帧里最宽的横向范围（比例），union 防残字
     for im in images:
         try:
             gray = im.convert("L")
             b = _band_rows(gray, gray.width, gray.height)
         except Exception:
-            continue
+            b = None
         if not b:
+            per_frame.append({"found": False})
             continue
         # 单帧 band 高度 > 25% 视为「演职员表/大字幕墙/广告条」，丢弃该点避免污染最终 band
         rel_h = (b[1] - b[0]) / max(1, gray.height)
         if rel_h > 0.25:
+            per_frame.append({"found": False, "note": "oversized"})
             continue
         bands.append((b[0] / gray.height, b[1] / gray.height))
+        per_frame.append({"found": True,
+                          "band_y_ratio": b[0] / gray.height,
+                          "band_h_ratio": (b[1] - b[0]) / gray.height})
         # 横向范围：取各帧的并集（最宽帧）——窄了会漏出原字幕，宽了只是多擦一点
         try:
             c = _band_cols(gray, gray.width, b[0], b[1])
@@ -182,6 +192,8 @@ def detect_band_ratio(images) -> dict:
         return {"found": False, "band_y_ratio": 0.0, "band_h_ratio": 0.0,
                 "band_x_ratio": 0.0, "band_w_ratio": 0.0,
                 "hits": len(bands), "total": total,
+                # 未达门槛＝整片结论不可信 ⇒ 逐帧值也不往外给（免得预览拿零星噪声去跟幕）
+                "per_frame": [],
                 "note": ("未探测到原字幕（画面较干净，或字幕不是白色）"
                          if not bands else "命中帧太少，无法确认原字幕位置")}
 
@@ -215,10 +227,20 @@ def detect_band_ratio(images) -> dict:
     pad_rel = max(0.003, span * 0.08)
     top_rel = max(0.0, u_top - pad_rel)
     bot_rel = min(1.0, u_bot + pad_rel)
+    # 逐帧值补**同样的外扩**（与 top_rel/bot_rel 同口径），前端拿去直接当"该帧的带"照画，
+    # 不必自己再算 pad —— 少一处口径不一致的机会。
+    for pf in per_frame:
+        if not pf.get("found"):
+            continue
+        t0 = max(0.0, pf["band_y_ratio"] - pad_rel)
+        b0 = min(1.0, pf["band_y_ratio"] + pf["band_h_ratio"] + pad_rel)
+        pf["band_y_ratio"] = round(t0, 6)
+        pf["band_h_ratio"] = round(b0 - t0, 6)
     out = {"found": True,
            "band_y_ratio": round(top_rel, 6),
            "band_h_ratio": round(bot_rel - top_rel, 6),
-           "hits": len(bands), "total": total, "note": ""}
+           "hits": len(bands), "total": total, "note": "",
+           "per_frame": per_frame}
     # 横向范围（可选字段）：探测到才带，供预览把擦除效果画成「随原字幕长短」的窄矩形。
     # 太宽/太窄都不可信（噪声/漏检），宽度须落在画面 5%~95% 内才下发。
     if cols:

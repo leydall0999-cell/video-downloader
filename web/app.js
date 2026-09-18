@@ -10542,18 +10542,27 @@ el.dwVidPlayer.removeAttribute('src');
   // 背景：「擦除原字幕」原先完全靠管线自动探测，UI 零暴露 —— 探测偏了只能跑完整条任务
   // 才发现，白等十几分钟拿到废片。现在在预览窗口标出「带」的位置/范围，参数即时可见、可微调。
   //
-  // 🔴 2026-09-18 两轮用户反馈后的**最终形态**（改这块前务必读完）：
+  // 🔴 2026-09-18 **三轮**用户反馈后的**最终形态**（改这块前务必读完，别再反复）：
   //   第 1 轮：预览里默认画「擦除模拟」（Canvas 复刻管线 fade/stretch/blur —— 取带上下各 2px
-  //           一行纵向拉伸满带高再叠回，数学等价、确实"所见即所得"）。用户判为**乱码**
-  //           （真机上就是"带内一条被拉长的糊块"，还常落在探测偏了的位置 → 把正常画面拉花）。
-  //           ⇒ 默认改成不画。
-  //   第 2 轮：不画之后用户反馈「羽化看不到预览效果」。真机实测原因**不在逻辑**而在可见度：
+  //           一行纵向拉伸满带高再叠回，数学等价、确实"所见即所得"）。用户判为**乱码**。
+  //           ⚠️ 事后查明**真凶是带子位置偏**（聚合取纯中位数），擦除把没有字幕的正常画面拉花；
+  //              同一个模拟在这种前提下当然"像坏掉"。 → 见 server/subtitle_band.py 的「鲁棒并集」。
+  //           当时我误判成"模拟本身不能要"，把它默认关掉。
+  //   第 2 轮：不画 ⇒ 「羽化看不到预览效果」。实测原因**不在逻辑**而在可见度：
   //           `styles.css` 里 `.com-preview-stage .com-feather-band` 把虚线压成 40% 白、
   //           底色只有 10% alpha，舞台底又是真实视频 ⇒ 几乎不可见；
   //           且 `is-tiny` 阈值 16px 恰好等于 5% 带高在中等舞台上算出的 16px ⇒ 标签被永久隐藏。
-  //   ⇒ 现在的口径：**范围框是"带在哪"的唯一表达，必须显眼**（黄虚线 2px + 黑色外描边 +
-  //      实心标签胶囊 + 未生效时写明"未生效"）；**擦除模拟改为用户显式勾选**（卡片里
-  //      「预览擦除效果」，默认关），想看近似效果时自己打开。
+  //   ⇒ 范围框是"带在哪"的唯一表达，必须显眼（黄虚线 2px + 黑色外描边 + 实心标签胶囊 +
+  //      未生效时写明"未生效"）。
+  //   第 3 轮：用户选了「高斯模糊」却什么都看不到 ⇒ "没有一点效果"；同时发现
+  //           ① 勾了「自适应」后框**拖不动**（代码里刻意 preventDefault 拦掉）；
+  //           ② 「自适应逐段」只在下发给管线时生效，**预览里完全不体现** ⇒ "根据这幕来羽化吗，
+  //              为什么没有产生作用"。
+  //   ⇒ 现在的口径：
+  //      a) **擦除模拟默认打开**（选了擦除方式就该看到那种方式的效果），开关留给嫌它挡视线的人；
+  //      b) 自适应模式下拖动不再拦截，而是**自动打开「手动微调补救」写 dy 偏移**（不动绝对位置，
+  //         自适应不失效 —— 方向对的东西，交互不能让它看起来是坏的）；
+  //      c) 抽帧按**时间步长**、后端回 `per_frame` ⇒ 预览跟着播放头切到「这一幕」的带（跟幕）。
   //   真实擦除效果以成片为准；预览不承诺"看到什么就烧什么"。
   //   历史实现见 git（本文件 2026-09-18 之前的 comFeatherPaint，含 fade/stretch/blur 三支）。
   //
@@ -10562,19 +10571,24 @@ el.dwVidPlayer.removeAttribute('src');
   // ⚠️ 任何"早退"都必须发生在 comFeatherSync() **之后**：它是范围框唯一的定位入口，
   //    早退挪到它前面 = 关掉模拟就看不到框（正是第 2 轮那个 bug 的形态）。
   const COM_FEATHER_DEFAULT = { bandY: 0.86, bandH: 0.05 };
-  /** 擦除模拟预览的**默认值**（false＝只画范围框）。运行期真值在 comFeather.sim，
-   *  由卡片里的「预览擦除效果」勾选框控制，用户可随时打开看近似效果。
-   *  ⚠️ 2026-09-18 两轮反馈：① 默认画出来＝"带内一条拉伸糊块"，用户判为乱码 → 改成不画；
-   *  ② 不画之后用户又反馈"羽化看不到预览效果" → 结论：**默认不画，但给显式开关**，
-   *  并同步把范围框做得足够显眼（它才是"带在哪"的主要表达）。
-   *  fade/stretch/blur 三支模拟逻辑在 comFeatherPaint 里原样保留，sim=true 即启用。 */
-  const COM_FEATHER_SIM_DEFAULT = false;
+  /** 擦除模拟预览的**默认值**（true＝默认就在带内画出所选擦除方式的近似效果）。
+   *  运行期真值在 comFeather.sim，由卡片里的「预览擦除效果」勾选框控制，可随时关掉。
+   *  ⚠️ 2026-09-18 **三轮**反馈的最终口径（别再改回去）：
+   *    ① 默认画 fade 模拟 ⇒ 用户判为"乱码" —— 但**真凶是当时带子位置偏**（聚合取纯中位数），
+   *       擦除把没有字幕的正常画面拉成糊块；聚合改成「鲁棒并集」后带子落在真字幕上，同一模拟不再乱。
+   *    ② 改成默认不画 ⇒ 用户马上反馈"羽化看不到预览效果"。
+   *    ③ 用户在卡片里选了「高斯模糊」、调了强度，**预览里一无所获** ⇒ "高斯模糊没有一点效果"。
+   *  ⇒ 结论：**默认打开**（选了擦除方式就必须能看到那种方式的效果），开关保留给"嫌吵"的人关。
+   *  fade/stretch/blur 三支模拟逻辑在 comFeatherPaint 里，sim=true 即按 comFeather.mode 画。 */
+  const COM_FEATHER_SIM_DEFAULT = true;
   const comFeather = {
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
     dynamic: false,     // 羽化带随原字幕逐段自适应（与手动带位置互斥）
     tune: false,        // 自适应之上的手动微调补救（dy/dh 偏移叠加在每个探测带上）
     sim: COM_FEATHER_SIM_DEFAULT,  // 是否在带内画擦除模拟（用户勾选控制）
+    segs: [],           // 逐帧探测结果 [{t,y,h}]（t=源内秒）：勾自适应时预览「跟幕」取带，
+                        // 见 comFeatherBandAt()。空数组＝退回单条聚合带（旧行为）。
     dy: 0,              // 带顶微调（占画面高比例，可负）
     dh: 0,              // 带高加成（占画面高比例，可负=收窄）
     bandY: COM_FEATHER_DEFAULT.bandY,
@@ -10588,10 +10602,34 @@ el.dwVidPlayer.removeAttribute('src');
   };
   let _comFeatherRaf = 0;
 
+  /** 从逐帧探测结果里取「当前播放头所在那一幕」的带（就近取，不插值）。
+   *  未命中该帧时向后/向前取最近的有效帧；全都没命中返回 null（调用方退回聚合带）。
+   *  ⚠️ 这就是用户要的「根据这幕来羽化」在预览侧的体现：管线渲染时逐段探测，
+   *  预览拿不到段落划分，用「抽帧时间点 + 就近取」做同一件事的近似。 */
+  function comFeatherBandAt(t) {
+    const segs = comFeather.segs;
+    if (!segs || !segs.length) return null;
+    let best = null, bestD = Infinity;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (s.y == null) continue;
+      const d = Math.abs(s.t - t);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best ? { y: best.y, h: best.h } : null;
+  }
+
   /** 预览与成片「实际生效」的带几何：自适应+微调时在探测结果上叠加 dy/dh 偏移，
    *  其余模式原样返回探测/手动值。预览画到哪里，管线就擦哪里（同一套偏移口径）。 */
   function comFeatherEff() {
     let y = comFeather.bandY, h = comFeather.bandH;
+    // 勾了「随原字幕自适应」且已有逐帧探测结果 ⇒ 预览跟着播放头走**这一幕**的带。
+    // （不做这一步的话：播放时框纹丝不动，用户看到的就是「自适应没产生作用」。）
+    if (comFeather.dynamic) {
+      const vid = el.comPreview;
+      const at = (vid && isFinite(vid.currentTime)) ? comFeatherBandAt(vid.currentTime) : null;
+      if (at) { y = at.y; h = at.h; }
+    }
     if (comFeather.dynamic && comFeather.tune) {
       y = Math.max(0, Math.min(0.98, y + comFeather.dy));
       h = Math.max(0.005, Math.min(0.4, h + comFeather.dh));
@@ -10855,8 +10893,12 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
-  /** 从预览视频抽 N 帧 JPEG（缩到 480 宽）交给后端探测原字幕带。抽完把播放头放回原位。 */
-  async function comFeatherGrabFrames(n) {
+  /** 从预览视频抽帧 JPEG（缩到 480 宽）交给后端探测原字幕带。抽完把播放头放回原位。
+   *  返回 `[{blob, t}]`（t＝源内秒）—— **t 必须带上**：勾了「自适应」时预览要按播放头
+   *  就近取"这一幕"的带（comFeatherBandAt），后端 per_frame 的顺序与此处一一对应。
+   *  抽帧密度：按**时间步长**而非固定条数（每 STEP 秒一帧，24 帧封顶、8 帧兜底）。
+   *  旧实现固定 10 帧均匀分布 ⇒ 长片里相邻两帧可能差好几分钟，跟幕必跟丢。 */
+  async function comFeatherGrabFrames() {
     const vid = el.comPreview;
     if (!vid || !vid.videoWidth || !(vid.duration > 0)) return [];
     const cvs = document.createElement('canvas');
@@ -10866,13 +10908,19 @@ el.dwVidPlayer.removeAttribute('src');
     cvs.height = h;
     const c = cvs.getContext('2d');
     const saved = vid.currentTime || 0;
+    const dur = vid.duration;
+    let step = Math.max(8, dur / 24);                 // 长片自动稀释到 ≤24 帧
+    if (dur / step < 8) step = Math.max(0.5, dur / 8); // 短片保底 8 帧
+    const ts = [];
+    for (let t = step * 0.5; t < dur - 0.2 && ts.length < 24; t += step) ts.push(t);
     const out = [];
-    for (let i = 1; i <= n; i++) {
-      await comFeatherSeekTo(vid, vid.duration * (i / (n + 1)));
+    for (const t of ts) {
+      await comFeatherSeekTo(vid, t);
       try {
         c.drawImage(vid, 0, 0, w, h);
         const blob = await new Promise((r) => cvs.toBlob(r, 'image/jpeg', 0.7));
-        if (blob) out.push(blob);
+        // 用**实际落点**（seek 未必精确）而不是请求值，跟幕才对得上
+        if (blob) out.push({ blob, t: Math.round(vid.currentTime * 1000) / 1000 });
       } catch (_) { /* 单帧失败不影响其它帧 */ }
     }
     await comFeatherSeekTo(vid, saved);
@@ -10899,14 +10947,26 @@ el.dwVidPlayer.removeAttribute('src');
     comFeather.srcKey = key;
     comFeatherSetState('busy', '探测中…');
     try {
-      // 10 帧（2026-09-18 从 4 帧加密度）：硬字幕间歇出现，4 个固定时刻可能大半
-      // 落在无字幕镜头上 →「命中帧太少」误报；探测是纯 PIL（~10ms/帧），加密度零成本。
-      const blobs = await comFeatherGrabFrames(10);
-      if (!blobs.length) throw new Error('抽帧失败（视频未就绪）');
+      // 按时间步长抽帧（见 comFeatherGrabFrames）：硬字幕间歇出现，稀疏命中会误报
+      // 「未探测到」；探测是纯 PIL（~10ms/帧），瓶颈在 seek，24 帧封顶可控。
+      const picked = await comFeatherGrabFrames();
+      if (!picked.length) throw new Error('抽帧失败（视频未就绪）');
+      const times = picked.map((x) => x.t);
       const fd = new FormData();
-      blobs.forEach((b, i) => fd.append('frames', b, `f${i}.jpg`));
+      picked.forEach((x, i) => fd.append('frames', x.blob, `f${i}.jpg`));
       fd.append('vertical', String(resolveVertical()));
       const res = await request('/api/commentary/feather-detect', { method: 'POST', body: fd });
+      // 🔴 逐帧带 → segs：勾了「随原字幕自适应」时预览按播放头就近取带（"跟幕"）。
+      //    后端尚未返回 per_frame（比如还没重构建）时 segs 为空 → 自动退回单条聚合带（旧行为），
+      //    不会报错，只是不跟幕。
+      comFeather.segs = [];
+      const pf = Array.isArray(res && res.per_frame) ? res.per_frame : [];
+      for (let i = 0; i < pf.length && i < times.length; i++) {
+        const f = pf[i];
+        if (f && typeof f.band_y_ratio === 'number' && f.band_h_ratio > 0) {
+          comFeather.segs.push({ t: times[i], y: f.band_y_ratio, h: f.band_h_ratio });
+        }
+      }
       if (res && res.found) {
         comFeather.found = true;
         // 横向范围（可选）：测到才存，预览擦除效果按它收窄（与成片同一口径）
@@ -10944,10 +11004,12 @@ el.dwVidPlayer.removeAttribute('src');
   }
 
   /** 播放时跟帧重绘（暂停时按需单次重绘即可，避免空转）。
-   *  2026-09-18：不画模拟后不需要跟帧 —— 直接不调度（省掉播放期每帧一次的重绘开销）。 */
+   *  ⚠️ 早退条件必须同时考虑**跟幕**：勾了「自适应」且已有逐帧带时，即使关着擦除模拟，
+   *  播放过程中框要跟着这一幕的字幕位置走 —— 早退会让框定死在第一帧的位置上。 */
   function comFeatherTick() {
     _comFeatherRaf = 0;
-    if (!comFeather.sim) return;
+    const followScene = comFeather.dynamic && comFeather.segs.length > 0;
+    if (!comFeather.sim && !followScene) return;
     comFeatherPaint();
     const vid = el.comPreview;
     if (vid && !vid.paused && !vid.ended) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
@@ -11001,8 +11063,14 @@ el.dwVidPlayer.removeAttribute('src');
       }
       if (el.comFeatherHint) {
         el.comFeatherHint.textContent = comFeather.dynamic
-          ? '自适应已开：每个解说段开播前单独探测原字幕，没字幕的段不擦除。擦不干净（残字漏出）就勾「手动微调补救」加高/平移带。'
+          ? (comFeather.segs.length
+              ? '自适应已开：预览会跟着播放头切到「这一幕」探测到的字幕位置；拖框＝给每段加偏移（自动打开「手动微调补救」），残字漏出就把带高再加一点。'
+              : '自适应已开（渲染时每个解说段单独探测）。预览还没取到逐帧结果 —— 点「重新探测」后即可在这里跟着每一幕预览。')
           : '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。';
+      }
+      // 跟幕靠逐帧重绘驱动：tick 在「未开模拟且无跟幕」时会早退，这里补一次调度
+      if (comFeather.dynamic && comFeather.segs.length && !_comFeatherRaf) {
+        _comFeatherRaf = requestAnimationFrame(comFeatherTick);
       }
       comFeatherPaint();
     });
@@ -11028,6 +11096,7 @@ el.dwVidPlayer.removeAttribute('src');
   //   开 → 画出 fade/stretch/blur 近似模拟，用于确认"擦得干不干净"。
   //   打开时若正在播放，需要重新挂上跟帧重绘（comFeatherTick 在 sim=false 时会直接返回）。
   if (el.comFeatherSim) {
+    el.comFeatherSim.checked = !!comFeather.sim;   // 默认打开（见 COM_FEATHER_SIM_DEFAULT）
     el.comFeatherSim.addEventListener('change', () => {
       comFeather.sim = !!el.comFeatherSim.checked;
       comFeatherPaint();
@@ -11094,30 +11163,38 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
   // 拖动虚线框微调带位置（上下手柄不做：高度用数值框更精确，也避免和播放器控件抢指针）
+  // 🔴 2026-09-18 用户实锤：**自适应模式下这个框以前是拖不动的**（代码里刻意 preventDefault 拦掉），
+  //    理由是"拖动＝写绝对位置，会让整条任务退化成固定带"。方向对、交互错：用户只会觉得"坏了"。
+  //    现在改成 —— 自适应下拖动＝**自动打开「手动微调补救」并写 dy 偏移**（偏移叠加在每段探测带上，
+  //    自适应照样生效）；非自适应下仍是老语义（写绝对位置 = 手动指定）。
   if (el.comFeatherBand) {
     const box = el.comFeatherBand;
     box.addEventListener('pointerdown', (ev) => {
-      // 自适应模式下拖拽＝绝对位置，会让整条任务退化成固定带、自适应失效 —— 拦掉，
-      // 想补救请用「手动微调补救」的 dy/dh 偏移（叠加在每段探测结果上）。
-      if (comFeather.dynamic) {
-        ev.preventDefault();
-        if (el.comFeatherHint) {
-          el.comFeatherHint.textContent = '自适应模式下不支持拖动虚线框（那是固定带用法）；擦不干净请勾「手动微调补救」加偏移。';
-        }
-        return;
-      }
       const r = comFeatherContentRect();
       if (!r) return;
       ev.preventDefault();
+      const dyn = comFeather.dynamic;
+      if (dyn) {
+        // 自动切到「微调补救」：拖动改的是**偏移量**，不动绝对带位置 ⇒ 自适应不失效
+        comFeather.tune = true;
+        if (el.comFeatherTune) el.comFeatherTune.checked = true;
+        if (el.comFeatherDy) el.comFeatherDy.disabled = false;
+        if (el.comFeatherDh) el.comFeatherDh.disabled = false;
+      }
       box.classList.add('is-drag');
       try { box.setPointerCapture(ev.pointerId); } catch (_) {}
       const startY = ev.clientY;
-      const startRatio = comFeather.bandY;
+      const startOff = dyn ? comFeather.dy : comFeather.bandY;
       const onMove = (e2) => {
-        const dy = (e2.clientY - startY) / r.h;
-        comFeather.bandY = Math.max(0, Math.min(0.98 - comFeather.bandH, startRatio + dy));
-        comFeather.manual = true;
-        comFeatherSyncInputs();
+        const d = (e2.clientY - startY) / r.h;
+        if (dyn) {
+          comFeather.dy = Math.max(-0.1, Math.min(0.1, startOff + d));
+          if (el.comFeatherDy) el.comFeatherDy.value = (comFeather.dy * 100).toFixed(1);
+        } else {
+          comFeather.bandY = Math.max(0, Math.min(0.98 - comFeather.bandH, startOff + d));
+          comFeather.manual = true;
+          comFeatherSyncInputs();
+        }
         comFeatherPaint();
       };
       const onUp = () => {
@@ -11125,7 +11202,14 @@ el.dwVidPlayer.removeAttribute('src');
         box.removeEventListener('pointermove', onMove);
         box.removeEventListener('pointerup', onUp);
         box.removeEventListener('pointercancel', onUp);
-        comFeatherMarkManual();
+        if (dyn) {
+          if (el.comFeatherHint) {
+            el.comFeatherHint.textContent = '已按拖动量设了「带顶偏移 ' + (comFeather.dy * 100).toFixed(1)
+              + '%」：偏移叠加在每段探测出的带上，自适应仍然有效（想要更大范围直接改「带顶 ±%」）。';
+          }
+        } else {
+          comFeatherMarkManual();
+        }
       };
       box.addEventListener('pointermove', onMove);
       box.addEventListener('pointerup', onUp);

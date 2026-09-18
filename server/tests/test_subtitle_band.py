@@ -175,6 +175,41 @@ def test_detect_keeps_tight_band_when_position_fixed():
     assert 0.78 < r["band_y_ratio"] < 0.845, r
 
 
+def test_per_frame_empty_when_not_found():
+    """未达门槛时 per_frame 必须是空列表：整片结论都不可信，零星噪声更不该拿去跟幕。"""
+    imgs = [_mk_frame(band_top=214)] + [_mk_frame() for _ in range(9)]
+    r = subtitle_band.detect_band_ratio(imgs)
+    assert r["found"] is False, r
+    assert r.get("per_frame") == [], r
+
+
+def test_per_frame_tracks_each_scene():
+    """per_frame 与入参**索引对齐**，且给出的是**该帧自己**的带 —— 前端「跟幕」全靠它。
+
+    2026-09-18 第三轮：用户「有部分字预览没有擦除」修完之后接着问「我们不是有探测
+    原字幕的设计吗？根据这幕来羽化吗，为什么没有产生作用？」——光回一条全片聚合带不够：
+    同一片内字幕位置会变，预览必须能取到**每一帧/每一幕**的带才行。
+    """
+    # ⚠️ 两个位置都必须落在扫描区内（y0 = int(h*0.70) = 189）：低于 189 的字会被
+    #    扫描起点截断，逐帧带自然盖不全 —— 那是用法问题，不是跟幕的问题。
+    tops = [204 if i % 2 == 0 else 244 for i in range(12)]
+    imgs = [_mk_frame(band_top=t) for t in tops]
+    r = subtitle_band.detect_band_ratio(imgs)
+    assert r["found"] is True, r
+    pf = r.get("per_frame")
+    assert isinstance(pf, list) and len(pf) == len(imgs), (len(pf) if pf else pf, len(imgs))
+    h = 270
+    for i, t in enumerate(tops):
+        assert pf[i]["found"] is True, (i, pf[i])
+        y = pf[i]["band_y_ratio"] * h
+        bh = pf[i]["band_h_ratio"] * h
+        # 逐帧带必须单独贴合自己那一帧的字（含 pad），既不能漏也不能是别的帧的带
+        assert y <= t + 1, (i, y, t)
+        assert y + bh >= t + 24 - 1, (i, y, bh, t)
+    # 关键：两处必须有明显落差 —— 若相等就说明退化回了「全片一条带」
+    assert abs(pf[0]["band_y_ratio"] - pf[1]["band_y_ratio"]) * h > 30, pf[:2]
+
+
 def test_mark_matches_pipeline():
     # 关键常量与管线同源：改任一处都要同步，否则预览与成片位置会漂移
     src = open(os.path.join(_SERVER_DIR, "subtitle_band.py"), encoding="utf-8").read()
@@ -203,6 +238,8 @@ _TESTS = [
     test_detect_covers_varying_subtitle_position,
     test_detect_keeps_tight_band_when_position_fixed,
     test_mark_matches_pipeline,
+    test_per_frame_empty_when_not_found,
+    test_per_frame_tracks_each_scene,
 ]
 
 if __name__ == "__main__":

@@ -2411,12 +2411,13 @@
             </label>
             <button type="button" class="btn btn-sm btn-ghost" id="comFeatherRedetect" data-page-node-id="comFeatherRedetectBtn">重新探测</button>
           </div>
-          <!-- 预览开关（默认关）：关＝只画范围框；开＝在带内画出擦除模拟（近似），
-               便于确认"擦得干不干净"。2026-09-18 用户先嫌默认画出来的糊块像乱码，
-               后又反馈"看不到预览效果"，故改为**由用户显式打开**。 -->
+          <!-- 预览开关（**默认开**）：开＝在带内按所选擦除方式画出近似效果，便于确认"擦得干不干净"。
+               2026-09-18 三轮反馈：① 默认画出来被判"乱码"（真凶是当时带子位置偏，不是模拟本身）；
+               ② 改成默认不画 ⇒ "羽化看不到预览效果"；③ 选了「高斯模糊」却什么都看不到 ⇒ "没有一点效果"。
+               ⇒ 最终口径：**默认打开**（选了方式就该看到那种方式的效果），开关留给嫌它挡视线的人。 -->
           <div class="com-feather-row" data-page-node-id="comFeatherSimRow">
             <label class="com-feather-field" data-page-node-id="comFeatherSimField">
-              <input type="checkbox" id="comFeatherSim" data-page-node-id="comFeatherSimCheck" />
+              <input type="checkbox" id="comFeatherSim" checked data-page-node-id="comFeatherSimCheck" />
               <span class="com-feather-label" data-page-node-id="comFeatherSimLabel">预览擦除效果</span>
             </label>
             <span class="com-feather-note" data-page-node-id="comFeatherSimNote">勾选后在带内预览擦除结果（近似模拟；未探测到时按当前带位置估算，成片以渲染为准）</span>
