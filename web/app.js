@@ -55,9 +55,13 @@
   const POLL_FALLBACK_MS = 1500;
 
   /** 时间格式化 (mm:ss.s) —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
+  /** 秒 → m:ss.s。
+   *  🔴 必须先按 0.1 秒取整再分解：2099.96s 直接 `Math.floor(t/60)` + `(t%60).toFixed(1)`
+   *  会得到「34:60.0」（2026-09-18 用户截图报的秒数不进位）。 */
   const fmtTs = (t) => {
-    const m = Math.floor(t / 60);
-    const s = (t % 60).toFixed(1);
+    const v = Math.max(0, Math.round((Number(t) || 0) * 10) / 10);
+    const m = Math.floor(v / 60);
+    const s = (v - m * 60).toFixed(1);
     return `${m}:${s.padStart(4, '0')}`;
   };
   /** HTML 转义 —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
@@ -492,6 +496,7 @@
     comCorrectTranscript: $('comCorrectTranscript'),
     comVision: $('comVision'),
     comStepsPanel: $('comStepsPanel'),
+    comStepsNow: $('comStepsNow'),
     comStepsList: $('comStepsList'),
     comArtifact: $('comArtifact'),
     comLogs: $('comLogs'),
@@ -8299,20 +8304,24 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
     el.comStepsPanel.hidden = false;
-    if (tlStep) {
-      // 优先显示正在跑的那一步；没有 running 就取最后一个已完成的；否则退到第 1 步
-      let cur = steps.findIndex((s) => s.status === 'running');
-      if (cur < 0) {
-        let lastDone = -1;
-        steps.forEach((s, i) => { if (s.status === 'done') lastDone = i; });
-        cur = lastDone >= 0 ? lastDone : 0;
-      }
-      const cs = steps[cur] || {};
-      const csDetail = splitDetailPath(cs.detail);
-      const detail = csDetail.text ? ' ' + csDetail.text : '';
-      tlStep.hidden = false;
-      tlStep.textContent = `第 ${cur + 1}/${steps.length} 步 · ${cs.name || ''}${detail}`;
+    // 当前步骤口径只算一次：时间轴头部（#comTlStep）与进度条区的摘要行（#comStepsNow）
+    // 共用它，避免两处各算一遍导致显示不一致。
+    // 优先级：正在跑的那一步 → 最后一个已完成的 → 第 1 步。
+    let cur = steps.findIndex((s) => s.status === 'running');
+    if (cur < 0) {
+      let lastDone = -1;
+      steps.forEach((s, i) => { if (s.status === 'done') lastDone = i; });
+      cur = lastDone >= 0 ? lastDone : 0;
     }
+    const cs = steps[cur] || {};
+    const csDetail = splitDetailPath(cs.detail);
+    const detail = csDetail.text ? ' ' + csDetail.text : '';
+    const stepLine = `第 ${cur + 1}/${steps.length} 步 · ${cs.name || ''}${detail}`;
+    if (tlStep) {
+      tlStep.hidden = false;
+      tlStep.textContent = stepLine;
+    }
+    if (el.comStepsNow) el.comStepsNow.textContent = stepLine;
     const artifacts = [];
     el.comStepsList.innerHTML = steps.map((s) => {
       const statusClass = s.status === 'running' ? 'task-step--running' :

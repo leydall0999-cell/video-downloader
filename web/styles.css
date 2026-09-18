@@ -1396,8 +1396,27 @@ img { max-width: 100%; display: block; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* ---- 解说面板过程时间线 ---- */
-.com-steps-panel { margin-top: .7rem; }
+/* ---- 解说面板过程时间线 ----
+   2026-09-18 用户：「这个（步骤面板）在这里（进度条）显示就可以了」——
+   #comStepsPanel 已从 #commentaryView 直接子节点挪进 .com-bottom > #comProgress，
+   并改成 <details> **默认收起**：收起态只有一行「当前步骤摘要 + 步骤明细」，
+   点开才铺步骤列表 + 运行日志。展开区限高，避免撑高 sticky 常驻条顶穿视口。 */
+.com-steps-panel { margin-top: .5rem; font-size: .78rem; }
+.com-steps-panel > summary.com-steps-summary {
+  display: flex; align-items: center; gap: .5rem;
+  cursor: pointer; user-select: none; list-style: none;
+  font-size: .76rem; line-height: 1.5; color: var(--text-mute);
+}
+.com-steps-panel > summary.com-steps-summary::-webkit-details-marker { display: none; }
+.com-steps-now {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.com-steps-now::before { content: '▸ '; }
+.com-steps-panel[open] .com-steps-now::before { content: '▾ '; }
+.com-steps-toggle-label { flex: 0 0 auto; color: var(--brand); font-weight: 600; }
+.com-steps-panel[open] .com-steps-toggle-label { visibility: hidden; }
+.com-steps-panel .com-steps { max-height: 34vh; overflow: auto; margin-top: .45rem; }
 .com-logs-wrap { margin-top: .5rem; }
 .com-logs-wrap summary { font-size: .8rem; color: var(--text-mute); cursor: pointer; user-select: none; }
 .com-logs {
@@ -3666,9 +3685,11 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
 }
 /* 2026-09-17 生成脚本按钮已挪到 .com-col 内（选项卡下方文档流），不再有 .com-bottom 内的覆盖规则；
    基础 .com-generate-row（margin-top:1rem + padding:0 1rem）即为其新落位样式。 */
-/* 移出 .com-bottom 后的区块间距（#comScriptPanel 有自身 id 规则，不在此列） */
-#commentaryView .com-review-actions,
-#commentaryView .com-steps-panel { margin-top: .7rem; }
+/* 移出 .com-bottom 后的区块间距（#comScriptPanel 有自身 id 规则，不在此列）
+   ⚠️ .com-steps-panel 已于 2026-09-18 挪进 .com-bottom > #comProgress，
+   这里不能再留 `#commentaryView .com-steps-panel` 那条 —— 它特异性高于
+   `.com-steps-panel`，会把新间距规则盖掉。 */
+#commentaryView .com-review-actions { margin-top: .7rem; }
 /* 宽屏下给解说页放开全站 .wrap 的 800px 上限。
    为什么必须放开：.com-workspace 是「预览列 1fr + 控制列 620~720px」的双列网格，
    而全站 `.wrap { width: min(800px, 100% - 2rem) }` 只给 742px 可用宽度 ——
@@ -5177,12 +5198,12 @@ html.com-theater { overflow: hidden; }
   background: #FEF9C3; border: 1px solid #FDE68A; border-radius: var(--radius-md);
   padding: .45rem .8rem; margin: 0;
 }
-#comStepsPanel {
-  position: fixed; right: 322px; bottom: 16px; width: 400px; max-height: 46vh;
-  z-index: 62; margin: 0; overflow: auto;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
-  box-shadow: 0 16px 48px rgba(15, 23, 42, .3); padding: .7rem .8rem;
-}
+/* 步骤明细面板原本是**固定浮层**（position:fixed / right:322px / bottom:16px / width:400px /
+   46vh / 大投影），在解说页右下角浮着：
+   2026-09-18 用户截图反馈「这个（浮着的步骤面板）在这里（底部进度条）显示就可以了」。
+   → 已挪进 .com-bottom > #comProgress，作为进度条下方的内联折叠区（样式见「解说面板过程时间线」一节）。
+   ⚠️ 不要再给它恢复 position:fixed / 固定 width —— 一旦浮起来就会压住中栏预览与右栏设置。
+   注意 #comScriptPanel / #comReviewActions 仍是浮层（用户未反馈，勿一并改动）。 */
 /* ---- 解说历史：就地展开面板（2026-09-18 用户「换个方式展示，在这里做个展开查看」）----
    原来是右侧滑出的大抽屉（top:74px / bottom:12px / width:min(720px,60vw)）+ 半透明遮罩：
    一打开就压住中栏预览与右栏设置，两列大卡片一屏只看得到 6 个。
@@ -5357,7 +5378,6 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   .com-insp-done { display: inline-block; }
   #comScriptPanel { left: 20px; right: 20px; }
   #comReviewActions { left: 20px; right: 20px; }
-  #comStepsPanel { right: 20px; }
 }
 /* ---- 深色舞台内羽化带/字幕预览层配色适配（原为浅底设计） ---- */
 .com-preview-stage .com-feather-band { border-color: rgba(255,255,255,.4); }
@@ -5491,8 +5511,9 @@ html.theme-dark #commentaryView .com-env-status.ok { background: #12291B; border
 html.theme-dark #commentaryView .com-env-status.err { background: #2E1414; border-color: #5B2020; color: #FCA5A5; }
 html.theme-dark #commentaryView .com-sub-preview { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
 html.theme-dark #commentaryView .com-feather-band { border-color: rgba(255,255,255,.45); }
-/* 覆盖层（审核/步骤/历史）跟随深色 */
-html.theme-dark #commentaryView #comScriptPanel, html.theme-dark #commentaryView #comStepsPanel, html.theme-dark #commentaryView #comHistory,
+/* 覆盖层（审核/历史）跟随深色（步骤面板 2026-09-18 已不再是覆盖层，从本条移除：
+   它现在内联在 .com-bottom 的进度条区域，背景跟随 .com-bottom 即可） */
+html.theme-dark #commentaryView #comScriptPanel, html.theme-dark #commentaryView #comHistory,
 html.theme-dark #commentaryView #comReviewActions {
   background: #1D1F24; border-color: var(--line); color: var(--text);
 }
@@ -5534,10 +5555,8 @@ html.theme-dark #commentaryView #comReviewActions { background: #2E2510; border-
 /* 覆盖层偏移跟随变量与收起态（替代旧的固定 212/252 档） */
 #comScriptPanel { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 280px) + 26px); }
 #comReviewActions { left: calc(var(--com-left-w, 260px) + 26px); right: calc(var(--com-right-w, 280px) + 26px); }
-#comStepsPanel { right: calc(var(--com-right-w, 280px) + 26px); }
 #commentaryView.com-left-off #comScriptPanel, #commentaryView.com-left-off #comReviewActions { left: 20px; }
-#commentaryView.com-right-off #comScriptPanel, #commentaryView.com-right-off #comReviewActions,
-#commentaryView.com-right-off #comStepsPanel { right: 20px; }
+#commentaryView.com-right-off #comScriptPanel, #commentaryView.com-right-off #comReviewActions { right: 20px; }
 
 /* ---- v2 四轮补丁：深色下遗漏的写死浅色组件 ---- */
 html.theme-dark #commentaryView .com-mode-dropdown-toggle,

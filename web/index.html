@@ -2516,6 +2516,23 @@
            步骤详情里的绝对路径（转写稿 / 脚本 json）不再留在步骤行里把它撑成三行，
            统一抽到进度条正下方这一行单行展示（超长尾部省略，悬停看全路径）。 -->
       <div id="comArtifact" class="com-artifact" hidden title="" data-page-node-id="comArtifactLine"></div>
+      <!-- 步骤明细（2026-09-18 用户：「这个（页面中段的步骤面板）在这里（进度条）显示就可以了」）：
+           从页面中段独立一块挪进进度条区域，并用 <details> **默认收起**——只露当前一步摘要，
+           点开才是完整步骤 + 运行日志。
+           🔴 必须能收起且限高：.com-bottom 是 sticky 常驻条，内容一旦高过视口就会顶穿、
+           把整个工作区盖住（2026-09-16 修过的老 bug，详见 styles.css 里 .com-bottom 的注释），
+           所以展开区另有 max-height 兜住。 -->
+      <details id="comStepsPanel" class="com-steps-panel" hidden data-page-node-id="XPRhfobQSM0oMHSsGpleJw">
+        <summary class="com-steps-summary" data-page-node-id="comStepsSummary">
+          <span id="comStepsNow" class="com-steps-now" data-page-node-id="comStepsNowLabel"></span>
+          <span class="com-steps-toggle-label" data-page-node-id="comStepsToggleLabel">步骤明细</span>
+        </summary>
+        <div id="comStepsList" class="com-steps" data-page-node-id="QUOl8pMxfFqnkwEKf3rjUq"></div>
+        <details class="com-logs-wrap" data-page-node-id="t3FK165UWaHtDvHK6NjUO6">
+          <summary data-page-node-id="XjGgjJI37ZR7rKqIdjRIkQ">运行日志</summary>
+          <pre id="comLogs" class="com-logs" data-page-node-id="6wlomMN1vLbzztVRuFeapz"></pre>
+        </details>
+      </details>
     </div>
     </div>
             <div id="comReviewActions" class="com-review-actions" hidden data-page-node-id="Y9YX322rllKFLbYLsUrA7A">
@@ -2525,13 +2542,6 @@
       <button type="button" class="btn btn-sm btn-secondary" id="comScriptReopen" hidden data-page-node-id="comScriptReopenBtn">📄 继续审核</button>
       <button type="button" class="btn btn-sm btn-ghost" id="comRegenScript" data-page-node-id="comRegenScriptBtn">↻ 重新生成脚本</button>
       <span class="com-review-hint" data-page-node-id="4aaw2Us3GKmf3A0Gc9txtl">解说词已生成，审核通过后再渲染成片</span>
-    </div>
-            <div id="comStepsPanel" class="com-steps-panel" hidden data-page-node-id="XPRhfobQSM0oMHSsGpleJw">
-      <div id="comStepsList" class="com-steps" data-page-node-id="QUOl8pMxfFqnkwEKf3rjUq"></div>
-      <details class="com-logs-wrap" data-page-node-id="t3FK165UWaHtDvHK6NjUO6">
-        <summary data-page-node-id="XjGgjJI37ZR7rKqIdjRIkQ">运行日志</summary>
-        <pre id="comLogs" class="com-logs" data-page-node-id="6wlomMN1vLbzztVRuFeapz"></pre>
-      </details>
     </div>
             <div id="comScriptPanel" hidden data-page-node-id="iwpV5BcROX7pwMACFFXb46">
       <div class="com-script-head" data-page-node-id="ZKZOKzqfXdrmwDE35GFuWg">
