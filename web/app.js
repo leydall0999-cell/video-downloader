@@ -10693,7 +10693,7 @@ el.dwVidPlayer.removeAttribute('src');
     return g;
   }
 
-  /** 高斯模糊近似：反复「下采样到 1/f → 平滑升回原尺寸」（纯 drawImage）。
+  /** 高斯模糊近似：**逐级减半的金字塔**（下采样链 → 逐级平滑升回），纯 drawImage。
    *
    *  🔴 为什么**不能**用 `ctx.filter = 'blur(Npx)'`（2026-09-18 踩过，别再改回去）：
    *     canvas 2D 的 `filter` 属性在 **Safari 18 / macOS 15 之前根本不存在**。
@@ -10704,29 +10704,38 @@ el.dwVidPlayer.removeAttribute('src');
    *        带内画出来的就是原样清晰的画面 —— 这就是用户报「高斯模糊没有一点预览效果」的真凶。
    *        （fade 分支不用 filter，所以只有高斯模糊"没效果"、fade 好好的，症状高度指向这里。）
    *
-   *  ✅ 本方案实测（同一探针）：下采样→升采样把方差 **12192 → 2389（−80%）**，
-   *     只用 `drawImage` + `imageSmoothing`，**任何引擎都成立**，也不需要特性检测分支。
+   *  ⚠️ 为什么是"逐级减半"而不是"一次降到 1/f"：
+   *     一次性把 69px 高的带压到 6px 再放大回 69px，bilinear 会留下 **~11px 的方块台阶**，
+   *     真机截图里肉眼可见一格一格的块斑（第一版实测如此）。逐级减半每次只放大 2×，
+   *     台阶被摊平 ⇒ 观感是均匀糊开，与成片 `gblur` 接近。
    *
    *  @param radiusPx 期望模糊半径（**目标画布的设备像素**，不是源像素）
-   *  @param rounds   1＝盒式（够用），2~3≈高斯；次数越多越糊、越慢
    *  @returns 一张 (dw, dh) 的 canvas —— 池内复用，调用方须**立即** drawImage 走
    */
-  function comFeatherBlur(src, sx, sy, sw, sh, dw, dh, radiusPx, rounds) {
+  function comFeatherBlur(src, sx, sy, sw, sh, dw, dh, radiusPx) {
     const base = comFeatherPool(dw, dh);
     base.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh);
-    let cur = base.canvas;
-    // f＝下采样倍数：越小越清晰、越大越糊。下限 2（再小等于没糊），上限 24（避免糊成一块纯色）
-    const f = Math.max(2, Math.min(24, Math.round((radiusPx || 4) * 0.7)));
-    const nw = Math.max(1, Math.round(dw / f)), nh = Math.max(1, Math.round(dh / f));
-    const times = Math.max(1, Math.min(3, rounds || 2));
-    for (let i = 0; i < times; i++) {
-      const down = comFeatherPool(nw, nh);
-      down.drawImage(cur, 0, 0, dw, dh, 0, 0, nw, nh);
-      const up = comFeatherPool(dw, dh);
-      up.drawImage(down.canvas, 0, 0, nw, nh, 0, 0, dw, dh);
-      cur = up.canvas;
+
+    // ① 逐级减半：每减半一次＝平均窗口 ×2，所以「减半次数 ≈ log2(半径)」时窗口刚好覆盖半径。
+    //    这样模糊量由 radiusPx 唯一决定（stretch 的轻度软化不会被过度糊）。
+    const steps = Math.max(1, Math.min(6, Math.round(Math.log2(Math.max(2, radiusPx || 4)))));
+    const chain = [{ cv: base.canvas, w: dw, h: dh }];
+    let cw = dw, ch = dh;
+    for (let i = 0; i < steps && Math.min(cw, ch) > 3; i++) {
+      const nw = Math.max(1, Math.round(cw / 2)), nh = Math.max(1, Math.round(ch / 2));
+      const g = comFeatherPool(nw, nh);
+      g.drawImage(chain[chain.length - 1].cv, 0, 0, cw, ch, 0, 0, nw, nh);
+      chain.push({ cv: g.canvas, w: nw, h: nh });
+      cw = nw; ch = nh;
     }
-    return cur;
+    // ② 从最粗一级逐级升回（每级只 ×2）
+    let cur = chain[chain.length - 1];
+    for (let i = chain.length - 2; i >= 0; i--) {
+      const g = comFeatherPool(chain[i].w, chain[i].h);
+      g.drawImage(cur.cv, 0, 0, cur.w, cur.h, 0, 0, chain[i].w, chain[i].h);
+      cur = { cv: g.canvas, w: chain[i].w, h: chain[i].h };
+    }
+    return cur.cv;
   }
 
   /** 同步羽化层几何（虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
@@ -10885,13 +10894,13 @@ el.dwVidPlayer.removeAttribute('src');
       stretched.drawImage(vid, ex0, Math.max(0, dySrc2 - stripSrc),
                           ex1 - ex0, stripSrc, 0, 0, exW, offH2);
       const soft = comFeatherBlur(stretched.canvas, 0, 0, exW, offH2, exW, offH2,
-                                  blurPx(softSrc), 1);
+                                  blurPx(softSrc));
       off2.drawImage(soft, 0, 0, exW, offH2, 0, 0, exW, offH2);
     } else {
       // 整条高斯模糊（经典的"糊带"，留作兜底）
       const sigmaSrc = Math.max(8, Math.min(28, Math.round(Math.max(6, bandHSrc * 0.22) * strength)));
       const blurred = comFeatherBlur(vid, ex0, dySrc2, ex1 - ex0, dhSrc2, exW, offH2,
-                                     blurPx(sigmaSrc), 2);
+                                     blurPx(sigmaSrc));
       off2.drawImage(blurred, 0, 0, exW, offH2, 0, 0, exW, offH2);
     }
     // 上下渐隐（对应管线 geq 的 alpha_expr）：顶部透明渐入、底部渐出，边缘自然融入画面
