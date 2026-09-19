@@ -2349,12 +2349,13 @@ img { max-width: 100%; display: block; }
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius-md); box-shadow: var(--shadow);
 }
+/* 2026-09-19 用户要求：标题与「片长」分两行 —— 窄左栏一行挤不下，片长被挤没 */
 .com-trim-head {
-  display: flex; align-items: center; gap: .5rem 1rem;
+  display: flex; flex-direction: column; align-items: flex-start; gap: .18rem;
   margin-bottom: .65rem;
 }
 .com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); flex: 0 0 auto; }
-.com-trim-title { flex: 1 1 auto; min-width: 0; font-size: .82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.com-trim-title { flex: 0 1 auto; max-width: 100%; min-width: 0; font-size: .82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .com-trim-dur { flex: 0 0 auto; font-size: .78rem; color: var(--brand); font-weight: 600; }
 /* 片尾开始 ≤ 正剧开始 时把「片长」位置换成红色提示（同上，见 updateTrimDurationText） */
 .com-trim-dur.is-warn { color: #d9534f; }
@@ -4937,7 +4938,9 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
    不覆盖会让卡片/网格高度塌成 0（列容器 height:auto，没有剩余空间可分）。 */
 .com-left .com-subbar {
   flex-direction: column; align-items: stretch;
-  gap: .7rem; padding: .55rem .95rem .6rem; margin: 0;
+  /* 2026-09-19：gap 由 .7rem 收到 .55rem —— 与 .com-entry-grid 内部间距取同值，
+     让「标签 / 下拉 / 按钮 / 解说历史」四行等距（原 .7rem 会形成「松-紧-松」的节奏）。 */
+  gap: .55rem; padding: .55rem .95rem .6rem; margin: 0;
 }
 .com-left .com-subbar .com-subbar-label { font-size: .74rem; font-weight: 600; }
 .com-left .com-subbar .com-entry-grid { flex: none; flex-direction: column; gap: .55rem; }
@@ -4967,8 +4970,13 @@ html.theme-dark #commentaryView .com-left .com-subbar .com-entry-card.is-dragove
    而 computedPadding 是 0px —— 也就是说 height / min-height / padding 对它**全部无效**
    （内联 style 硬写 26px 也还是 22px），高度由系统绘制决定。
    要等高只能 `appearance: none` 自己画箭头，但那会丢掉图二里那个原生凹陷+▲▼ 的观感，
-   得不偿失 ⇒ 保持原生（下拉 22px / 按钮 26px，4px 差肉眼几乎看不出）。 */
-.com-left .com-subbar .com-entry-card #comSource { width: 100%; }
+   得不偿失 ⇒ 保持原生（下拉 22px / 按钮 26px，4px 差肉眼几乎看不出）。
+   🔴 2026-09-19 补充（用户「解说历史按钮也对齐排版」）：三行控件里只有下拉还是浏览器默认
+   13px，而按钮/解说历史都是 .72rem ⇒ 第一行文字明显更大、整列看着不齐，故补 font-size/weight。
+   实测原生 select 的 **font-size 是可改的**（内联 .72rem → computed 11.52px、文字宽 129→114px、
+   高度 22→21px）；**border-radius 则死活改不动**（内联 9px 仍读回 5px，由系统绘制）。
+   那点圆角差只能接受 —— 要改就得 `appearance:none` 自绘，高度会跳到 37px 并丢掉凹陷+▲▼。 */
+.com-left .com-subbar .com-entry-card #comSource { width: 100%; font-size: .72rem; font-weight: 500; }
 .com-left .com-subbar .com-entry-card #comFileBtn { width: 100%; }
 .com-left .com-subbar .com-hist-toggle { justify-content: center; }
 /* ---- 中栏：深色预览舞台 ---- */
@@ -5747,7 +5755,19 @@ html.theme-dark #commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
 #commentaryView .btn { min-height: 30px; font-size: .8rem; }
 #commentaryView .btn.btn-sm { min-height: 26px; font-size: .74rem; padding: 0 .6rem; }
 #commentaryView .com-subbar .com-entry-card .btn { min-height: 26px; padding: .18rem .5rem; font-size: .72rem; }
-#commentaryView .com-hist-toggle { min-height: 26px; padding: .2rem .55rem; font-size: .73rem; }
+/* 2026-09-19（用户「解说历史按钮也对齐排版」）：左栏顶部现在是**一列三个控件**
+   （下拉 / 从本地文件生成 / 解说历史），历史上三者的圆角、边框粗细、字号、内边距、字重
+   各不相同（实测 hist = 12px 圆角 / 1px 边框 / .73rem / .2rem .55rem / 600，
+   btn = 9px / 1.5px / .72rem / .18rem .5rem / 500）⇒ 一行里看着是一堆零件。
+   这里把 hist 的**几何规格**全部对齐到 .com-entry-card .btn（圆角→--radius-sm、
+   边框→1.5px、字号→.72rem、内边距→.18rem .5rem、字重→500），
+   只保留它的**品牌紫配色**（它是「打开历史面板」的动作，与两个「选素材」入口用颜色区分）。
+   🔴 权重必须带 .com-subbar：5560 行还有一条 `.com-hist-toggle{padding:.34rem .65rem;font-size:.76rem}`
+   位置更后，只有 id + 双类能稳定压住它。 */
+#commentaryView .com-subbar .com-hist-toggle {
+  min-height: 26px; padding: .18rem .5rem; font-size: .72rem; font-weight: 500;
+  border-width: 1.5px; border-radius: var(--radius-sm);
+}
 /* 生成脚本主按钮：原来 .95rem + .8rem 内边距，明显偏大 */
 #commentaryView .com-actionbar #comGenerateRow .com-generate-main {
   padding: .5rem .8rem; font-size: .84rem; font-weight: 600;

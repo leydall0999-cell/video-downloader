@@ -11223,7 +11223,9 @@ el.dwVidPlayer.removeAttribute('src');
   }
 
   function comFeatherMarkManual() {
-    comFeatherSetState('ok', '手动指定（覆盖自动探测）');
+    // 2026-09-19 用户拍板：去掉「手动指定」字样，徽章只留「覆盖自动探测」，
+    // 跟在「🎨 原字幕羽化」标题后一行放下（旧长文案在窄栏会折行/挤丢）。
+    comFeatherSetState('ok', '覆盖自动探测');
   }
 
   /** 等待一次 seek 完成（带兜底超时，绝不卡死后续流程）。 */
