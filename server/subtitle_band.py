@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 
-def _band_rows(gray, w0: int, h0: int):
+def _band_rows(gray, w0: int, h0: int, min_runs: int = 3):
     """在图像底部 30% 区域内找「白字字幕行」的行范围，找不到返回 None。
 
     判据：一行里近白像素（白字笔画，>=205）占比落在合理区间，连续这样的行拼成
@@ -38,12 +38,14 @@ def _band_rows(gray, w0: int, h0: int):
     # 游程 38~118px——这是区分「文字行」与「白物行」的关键判据。
     # ⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同步（2026-09-19 同日同改）。
     _max_run = max(24, int(w0 * 0.05))
+    _min_runs = max(1, int(min_runs))
 
     rows = []
     for y in range(y0, h0):
         nw = 0
         run = 0
         max_run = 0
+        n_runs = 0
         for x in range(0, w0, 2):        # 隔列采样
             if px[x, y] >= 205:
                 nw += 1
@@ -51,10 +53,23 @@ def _band_rows(gray, w0: int, h0: int):
                 if run > max_run:
                     max_run = run
             else:
+                if run:
+                    n_runs += 1
                 run = 0
+        if run:
+            n_runs += 1
         nw *= 2
-        # 文字行双判据：白像素总数落在区间内，且没有「一整条」超长白游程（白物）
-        rows.append(lo_w <= nw <= hi_w and max_run <= _max_run)
+        # 文字行三判据（2026-09-19 追加第三条，⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同值）：
+        #   ① 白像素总数落在区间内；
+        #   ② 没有「一整条」超长白游程（白桌布/白墙那种大面积白物）；
+        #   ③ 有足够多条**笔画游程**——文字由多个字组成，被字间/笔画间空隙切成许多条
+        #      短游程（480 宽图上真字幕行隔列采样实测 8~15 条）；而画面底部的小白块
+        #      （金属反光 / 白瓷器 / 亮边）单行只有 1~2 条连续游程，恰好同时躲过 ①
+        #      （总数落在 1.5%~45%）与 ②（游程 19~21px ≤ 24px），被当成文字行混进并集
+        #      ⇒ 带位被下拉、带高被撑大、报「这一段字幕没擦干净而且下面多糊一条」。
+        #      唯一可能被误伤的形态是「只有 1~2 个字的超短字幕」，故 min_runs 可关
+        #      （detect_band_ratio 在命中帧不足时会用 min_runs=0 放宽重试一次）。
+        rows.append(lo_w <= nw <= hi_w and max_run <= _max_run and n_runs >= _min_runs)
 
     # 收集所有连续命中段，允许最多 2 行间隙
     segments = []
@@ -99,6 +114,13 @@ def _band_rows(gray, w0: int, h0: int):
     if (top - y0) <= max(2, int(h0 * 0.05)) and (bot - top) > h0 * 0.15:
         return None
     if bot - top < max(2, int(h0 * 0.01)):   # 太薄，多半是画面噪点
+        return None
+    # 近底守卫（2026-09-19 收尾，⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同值）：
+    # 硬字幕几乎从不下探到画面最底部 7%（必留安全边距）。实测少帅第8集真实字幕带底
+    # 恒在 ~0.90h，而亮场景/白物污染的「伪字幕带」常探到 0.94h~0.99h（t165/166/625.5/
+    # 626s 等），往往比真字幕更高更靠下 ⇒ 被「取最长段」选中 → 带位被拉低、带高被撑大。
+    # 带底超过 0.93h 一律判非字幕（静默弃用该帧），由其余干净帧补信号。
+    if bot > h0 * 0.93:
         return None
     return top, bot
 
@@ -169,41 +191,54 @@ def detect_band_ratio(images) -> dict:
     探测点的边缘噪声（抗锯齿把白字上下各拉长几行）撑大，导致羽化带过高、糊住带外画面。
     """
     total = len(images)
-    bands = []
-    # 🔴 2026-09-18：逐帧结果。与 images **索引一一对应**，前端拿着它 + 自己记录的抽帧时间点
-    #   就能让预览「跟幕」——播放头走到哪儿，框就跳到那一片时段探测出的带上。
-    #   （用户原话："我们不是有探测原字幕的设计吗？根据这幕来羽化吗，为什么没有产生作用？"
-    #    旧实现只回一条全片聚合带，播放时框纹丝不动 ⇒ 用户看不到自适应有任何效果。）
-    per_frame = []
-    cols = None          # 所有命中帧里最宽的横向范围（比例），union 防残字
-    for im in images:
-        try:
-            gray = im.convert("L")
-            b = _band_rows(gray, gray.width, gray.height)
-        except Exception:
-            b = None
-        if not b:
-            per_frame.append({"found": False})
-            continue
-        # 单帧 band 高度 > 25% 视为「演职员表/大字幕墙/广告条」，丢弃该点避免污染最终 band
-        rel_h = (b[1] - b[0]) / max(1, gray.height)
-        if rel_h > 0.25:
-            per_frame.append({"found": False, "note": "oversized"})
-            continue
-        bands.append((b[0] / gray.height, b[1] / gray.height))
-        per_frame.append({"found": True,
-                          "band_y_ratio": b[0] / gray.height,
-                          "band_h_ratio": (b[1] - b[0]) / gray.height})
-        # 横向范围：取各帧的并集（最宽帧）——窄了会漏出原字幕，宽了只是多擦一点
-        try:
-            c = _band_cols(gray, gray.width, b[0], b[1])
-        except Exception:
-            c = None
-        if c:
-            w0 = gray.width
-            r0, r1 = c[0] / w0, c[1] / w0
-            if cols is None or (r1 - r0) > (cols[1] - cols[0]):
-                cols = (r0, r1)
+
+    def _collect(min_runs):
+        """用给定的笔画游程下限跑一遍全部帧，返回 (bands, per_frame, cols)。"""
+        b_acc = []
+        # 🔴 2026-09-18：逐帧结果。与 images **索引一一对应**，前端拿着它 + 自己记录的抽帧时间点
+        #   就能让预览「跟幕」——播放头走到哪儿，框就跳到那一片时段探测出的带上。
+        pf_acc = []
+        cols_acc = None          # 所有命中帧里最宽的横向范围（比例），union 防残字
+        for im in images:
+            try:
+                gray = im.convert("L")
+                b = _band_rows(gray, gray.width, gray.height, min_runs=min_runs)
+            except Exception:
+                b = None
+            if not b:
+                pf_acc.append({"found": False})
+                continue
+            # 单帧 band 高度 > 25% 视为「演职员表/大字幕墙/广告条」，丢弃该点避免污染最终 band
+            rel_h = (b[1] - b[0]) / max(1, gray.height)
+            if rel_h > 0.25:
+                pf_acc.append({"found": False, "note": "oversized"})
+                continue
+            b_acc.append((b[0] / gray.height, b[1] / gray.height))
+            pf_acc.append({"found": True,
+                           "band_y_ratio": b[0] / gray.height,
+                           "band_h_ratio": (b[1] - b[0]) / gray.height})
+            # 横向范围：取各帧的并集（最宽帧）——窄了会漏出原字幕，宽了只是多擦一点
+            try:
+                c = _band_cols(gray, gray.width, b[0], b[1])
+            except Exception:
+                c = None
+            if c:
+                w0 = gray.width
+                r0, r1 = c[0] / w0, c[1] / w0
+                if cols_acc is None or (r1 - r0) > (cols_acc[1] - cols_acc[0]):
+                    cols_acc = (r0, r1)
+        return b_acc, pf_acc, cols_acc
+
+    bands, per_frame, cols = _collect(3)
+    _need = max(2, -(-total * 3 // 10))
+    if len(bands) < _need:
+        # 放宽重试（2026-09-19，与管线 _prepare_feather 同口径同原因）：笔画游程判据
+        # （_band_rows 第三判据）可能误杀「只有 1~2 个字的超短字幕」帧；万一因此命中帧
+        # 不够门槛，前端会退回"底部默认带"，用户看到的就是"原字幕根本没擦干净"。
+        # 丢掉游程判据重判一遍（图像已在内存，零额外抽帧开销）。
+        rb, rp, rc_ = _collect(0)
+        if len(rb) > len(bands):
+            bands, per_frame, cols = rb, rp, rc_
 
     if len(bands) < max(2, -(-total * 3 // 10)):
         # 前端抽 10 帧（2026-09-18 从 4 帧加密度：硬字幕是间歇出现的，4 个固定

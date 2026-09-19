@@ -51,10 +51,10 @@ def _mk_frame(w=480, h=270, band_top=None, band_h=24, bg=(30, 40, 60)):
 
 
 def test_detect_finds_white_text_band():
-    imgs = [_mk_frame(band_top=228) for _ in range(4)]
+    imgs = [_mk_frame(band_top=222) for _ in range(4)]
     r = subtitle_band.detect_band_ratio(imgs)
     assert r["found"] is True, r
-    # 原字 228/270 ≈ 0.844；扣除「带比原字略大」的 padding 后，带顶应略高于此
+    # 原字 222/270 ≈ 0.822；扣除「带比原字略大」的 padding 后，带顶应略高于此
     assert 0.78 < r["band_y_ratio"] < 0.845, r
     assert 0.03 < r["band_h_ratio"] < 0.16, r
     assert r["hits"] == 4 and r["total"] == 4, r
@@ -69,7 +69,7 @@ def test_detect_clean_frame_returns_not_found():
 
 def test_detect_requires_two_hits():
     # 4 帧里只有 1 帧有字幕 → 不足以确认（避免把偶然出现的画面元素当成字幕带）
-    imgs = [_mk_frame(band_top=228)] + [_mk_frame() for _ in range(3)]
+    imgs = [_mk_frame(band_top=222)] + [_mk_frame() for _ in range(3)]
     r = subtitle_band.detect_band_ratio(imgs)
     assert r["found"] is False, r
     assert r["hits"] == 1, r
@@ -124,10 +124,10 @@ def test_band_rows_run_length_criterion():
     d2 = ImageDraw.Draw(im2)
     x = int(w * 0.18)
     while x < w * 0.82:
-        d2.rectangle([x, 232, x + 10, 252], fill=(255, 255, 255))
+        d2.rectangle([x, 206, x + 10, 226], fill=(255, 255, 255))
         x += 24
     b = subtitle_band._band_rows(im2.convert("L"), w, h)
-    assert b is not None and b[0] == 232, b
+    assert b is not None and b[0] == 206, b
 
 
 def test_detect_ignores_oversized_band():
@@ -173,12 +173,12 @@ def test_detect_covers_varying_subtitle_position():
     （270px 高的合成帧 → 22px；真机那一例是 720p 里差 60px）。"""
     imgs = []
     for i in range(10):
-        imgs.append(_mk_frame(band_top=228 if i % 2 == 0 else 206))   # 两处交替，相距 8% 画高
+        imgs.append(_mk_frame(band_top=222 if i % 2 == 0 else 206))   # 两处交替，相距 6% 画高
     r = subtitle_band.detect_band_ratio(imgs)
     assert r["found"] is True, r
     top = r["band_y_ratio"] * 270
     bot = (r["band_y_ratio"] + r["band_h_ratio"]) * 270
-    for band_top in (228, 206):
+    for band_top in (222, 206):
         band_bot = band_top + 24
         cov = max(0, min(bot, band_bot) - max(top, band_top))
         assert cov >= 24 * 0.95, (
@@ -189,7 +189,7 @@ def test_detect_covers_varying_subtitle_position():
 
 def test_detect_keeps_tight_band_when_position_fixed():
     """位置固定时不许被"并集"改胖：固定片子的带应与中位数口径一致（约 24/270 + padding）。"""
-    imgs = [_mk_frame(band_top=228) for _ in range(10)]
+    imgs = [_mk_frame(band_top=222) for _ in range(10)]
     r = subtitle_band.detect_band_ratio(imgs)
     assert r["found"] is True, r
     assert r["band_h_ratio"] < 0.13, r          # 24/270=0.089 + 8% padding ≈ 0.096
@@ -213,7 +213,7 @@ def test_per_frame_tracks_each_scene():
     """
     # ⚠️ 两个位置都必须落在扫描区内（y0 = int(h*0.70) = 189）：低于 189 的字会被
     #    扫描起点截断，逐帧带自然盖不全 —— 那是用法问题，不是跟幕的问题。
-    tops = [204 if i % 2 == 0 else 244 for i in range(12)]
+    tops = [195 if i % 2 == 0 else 226 for i in range(12)]
     imgs = [_mk_frame(band_top=t) for t in tops]
     r = subtitle_band.detect_band_ratio(imgs)
     assert r["found"] is True, r
@@ -246,6 +246,28 @@ def test_mark_matches_pipeline():
     assert "_percentile" in src, "并集用 p10/p90 分位，别退回 min/max（会被单点撑大）"
 
 
+def test_band_rows_rejects_bottom_pollution():
+    # 近底守卫（2026-09-19 收尾）：白物污染探到 0.94h~0.99h 时，绝不产出带底 > 0.93h 的带。
+    # 少帅第8集 t165/166/625.5/626s 实测：亮场景/白物「伪字幕带」底探到 0.944h~0.967h，
+    # 比真字幕（~0.90h）更低更靠下，会被「取最长段」选中把带子拉低拉高。守卫保证
+    # 任何被接受的带，其带底都不越过 0.93h（251px @270h）；贴底白物要么被剔除、要么整帧弃用。
+    w, h = 480, 270
+    # 真字幕（0.81h~0.89h）+ 紧贴其下的文字状白物污染（探到 0.97h）
+    im = Image.new("RGB", (w, h), (30, 40, 60))
+    d = ImageDraw.Draw(im)
+    x = int(w * 0.18)
+    while x < w * 0.82:
+        d.rectangle([x, 218, x + 10, 238], fill=(255, 255, 255))   # 真字幕 218~238
+        x += 24
+    x = int(w * 0.20)
+    while x < w * 0.80:
+        d.rectangle([x, 241, x + 8, 262], fill=(255, 255, 255))    # 污染 241~262（游程短，过②③判据）
+        x += 20
+    b = subtitle_band._band_rows(im.convert("L"), w, h)
+    # 要么整帧弃用（污染与真字幕纠缠，最长段贴底被剔除后无候选），要么带底不越 0.93h
+    assert b is None or b[1] <= h * 0.93, b
+
+
 _TESTS = [
     test_detect_finds_white_text_band,
     test_detect_clean_frame_returns_not_found,
@@ -261,6 +283,7 @@ _TESTS = [
     test_mark_matches_pipeline,
     test_per_frame_empty_when_not_found,
     test_per_frame_tracks_each_scene,
+    test_band_rows_rejects_bottom_pollution,
 ]
 
 if __name__ == "__main__":
