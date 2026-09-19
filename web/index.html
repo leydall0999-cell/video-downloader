@@ -2241,7 +2241,19 @@
         </div>
       </div>
 
-      <!-- ===== 第 2 行：启用视觉理解 | 配音引擎 | 转写稿 ASR 校正 ===== -->
+      <!-- ===== 片头片尾处理（2026-09-19 用户「顺序调一下」：下拉组排一起，启用视觉理解殿后）=====
+           radio 的 name/取值方式保持原样（JS 按 input[name="comIntroOutroMode"]:checked 读），逻辑零改动。 -->
+      <div class="com-row com-row-3" id="comIntroOutroRow">
+        <div class="com-cell com-cell-trigger com-cell-introoutro" data-com-select="comIntroOutroMode">
+          <div class="com-opt-title">✂️ 片头片尾处理</div>
+          <div class="com-opt-row com-opt-row-fixed">
+            <label class="com-mode-option com-mode-fixed" title="自动检测边界，片头片尾绝对不解说"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b></span></label>
+            <label class="com-mode-option com-mode-fixed" title="自动检测后剪掉"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾</span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 第 2 行：启用视觉理解（放最后） | 转写稿 ASR 校正（隐藏） ===== -->
       <div class="com-row com-row-2" data-page-node-id="ATOdR88BwnGYdyHUAfZ3gn">
         <div class="com-cell com-cell-r2-vision" data-page-node-id="WSTfKlbI8MHf1zrPI5Pff1">
           <label class="com-highlights-toggle" data-page-node-id="BxIHVJnwu1bmRj8kWus74v">
@@ -2259,20 +2271,6 @@
             <input id="comCorrectTranscript" type="checkbox" data-page-node-id="VzxQ8HRcGPIUjBdffeOqFE" />
             <span data-page-node-id="ZsfFzq2v2tlMHhsoUGDJ7A">转写稿 ASR 校正（修正同音错字/专有名词；开启会多一次万级 token 调用）</span>
           </label>
-        </div>
-      </div>
-
-      <!-- ===== 第 3 行：片头片尾处理（2026-09-17 晚自左栏「固定选择项」卡搬入）=====
-           用户要求：它属于解说参数这一类，折进本卡当子项，不再单独占左栏一张卡。
-           ⚠️ radio 的 name/取值方式保持原样（JS 按 input[name="comIntroOutroMode"]:checked 读），
-              搬的只是 DOM 位置，逻辑零改动。 -->
-      <div class="com-row com-row-3" id="comIntroOutroRow">
-        <div class="com-cell com-cell-trigger com-cell-introoutro" data-com-select="comIntroOutroMode">
-          <div class="com-opt-title">✂️ 片头片尾处理</div>
-          <div class="com-opt-row com-opt-row-fixed">
-            <label class="com-mode-option com-mode-fixed" title="自动检测边界，片头片尾绝对不解说"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b></span></label>
-            <label class="com-mode-option com-mode-fixed" title="自动检测后剪掉"><input type="radio" name="comIntroOutroMode" value="skip" /><span>去片头片尾</span></label>
-          </div>
         </div>
       </div>
 
@@ -2441,8 +2439,8 @@
                样式全在 #commentaryView 作用域（.com-row-myvoice / .com-cell-myvoice），不依赖父容器，DOM 搬家零 CSS 改动。 -->
           <div class="com-row com-row-myvoice" id="comMyVoiceRow" hidden>
             <div class="com-cell com-cell-myvoice">
-              <div class="com-opt-title">
-                📇 我的音色（本地克隆源）
+              <div class="com-opt-title" title="本地语音克隆源：配好后选克隆引擎即用你的声音解说">
+                📇 我的音色
                 <span class="com-myvoice-badge" id="comMyVoiceBadge">未配置</span>
               </div>
               <!-- 运行环境缺失时的下载入口（2026-09-18）：本地克隆要 500MB venv + 1.9GB 权重，
@@ -2457,8 +2455,10 @@
                 </div>
               </div>
               <div class="com-myvoice-grid" id="comMyVoiceGrid">
-                <button type="button" class="btn btn-sm btn-secondary com-myvoice-pick" id="comMyVoicePick">🎙 选择一段录音</button>
-                <div class="com-myvoice-path" id="comMyVoicePath" title="">还没选择录音文件</div>
+                <div class="com-myvoice-line">
+                  <button type="button" class="btn btn-sm btn-secondary com-myvoice-pick" id="comMyVoicePick">🎙 选择录音</button>
+                  <div class="com-myvoice-path" id="comMyVoicePath" title="">还没选择录音文件</div>
+                </div>
                 <label class="com-myvoice-label" for="comMyVoiceText">那段录音里念的内容（文字稿）</label>
                 <textarea id="comMyVoiceText" class="com-myvoice-text" rows="2" placeholder="例如：大家好，今天我们来聊一聊这个让人意想不到的故事。" spellcheck="false"></textarea>
                 <div class="com-myvoice-actions">

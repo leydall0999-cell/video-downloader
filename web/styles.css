@@ -5929,3 +5929,29 @@ html.theme-dark select,
 html.theme-dark textarea {
   background-color: var(--surface); color: var(--text); border-color: var(--line);
 }
+
+/* ======================================================================
+   2026-09-19：「配音与音量」卡排版整肃（用户「太乱了,东一块西一块」）
+   目标节奏：配音引擎 → ─ 三个滑块 ─ → 我的音色，节间细虚线分隔、
+   行距统一收紧；状态条从三行大框收成单行小字条。
+   ====================================================================== */
+.com-right .com-vol-rows { gap: .5rem; }
+.com-right .com-vol-rows > .com-vol-row + .com-vol-row {
+  border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent);
+  padding-top: .5rem;
+}
+.com-right .com-vol-row { gap: .25rem; }
+.com-right .com-tts-status-bar {
+  margin-top: .4rem; padding: .35rem .5rem; gap: 6px;
+  font-size: .73rem; line-height: 1.45; border-radius: var(--radius-sm);
+}
+.com-right .com-tts-status-dot { width: 7px; height: 7px; }
+/* 我的音色：选择按钮｜路径一行（路径省略号），提示｜保存一行 */
+.com-right .com-myvoice-line { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.com-right .com-myvoice-line .com-myvoice-pick { align-self: auto; white-space: nowrap; flex: 0 0 auto; }
+.com-right .com-myvoice-line .com-myvoice-path { flex: 1 1 auto; }
+.com-right .com-myvoice-actions { flex-direction: row; align-items: center; gap: .5rem; }
+.com-right .com-myvoice-actions .com-myvoice-hint { flex: 1 1 auto; }
+.com-right .com-myvoice-actions .btn { align-self: center; flex: 0 0 auto; }
+/* 「我的音色」区块与上面滑块之间也拉开一档（它整块 hidden 直到选克隆引擎） */
+.com-right .com-vol-rows > .com-row-myvoice { border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); padding-top: .5rem; }
