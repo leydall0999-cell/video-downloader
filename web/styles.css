@@ -3210,6 +3210,10 @@ img { max-width: 100%; display: block; }
 
 /* ── 配音与音量手动调节面板：4 项 2×2 网格 ── */
 .com-vol-row { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1.5rem; margin-top: .45rem; }
+/* 配音引擎行（2026-09-19 搬入）：单列占满整行，别被默认双列格压成半宽 */
+.com-vol-row.com-vol-row-engine { grid-template-columns: 1fr; }
+.com-vol-row-engine .com-select { width: 100%; }
+.com-vol-row-engine #comTtsStatusBar { flex: 1 1 100%; }
 .com-vol-item { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
 @media (max-width: 760px) { .com-vol-row { grid-template-columns: 1fr; } }
 .com-vol-label { font-size: .85rem; font-weight: 600; color: var(--text); }

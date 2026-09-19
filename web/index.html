@@ -2249,17 +2249,8 @@
             <span data-page-node-id="hJpuQnajXHvvp3EbE2QB4Y"><b data-page-node-id="H6iamx35Qs1sySSd9pUpzL">启用视觉理解</b></span>
           </label>
         </div>
-        <div class="com-cell com-cell-r2-tts" data-page-node-id="Ak4XInE8xUySU1ViRLPFpX">
-          <select id="comTtsProvider" class="com-select" data-page-node-id="3mp9ZAEGQP307usX9ScbaA">
-            <option value="edge" selected data-base="微软 edge-tts" data-page-node-id="6zxXakxowB9wTuIaNbcEzd">微软 edge-tts　免费（兜底）</option>
-            <option value="qwen3tts" data-base="Qwen3-TTS 本地语音克隆" data-page-node-id="NcAdMKfdC1iVhJUHED8GHS">Qwen3-TTS 本地语音克隆　免费</option>
-            <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆（更自然）" data-page-node-id="Y0AGKEBPBSoshSOrno4CxK">IndexTTS-MLX 本地语音克隆（更自然）　免费</option>
-          </select>
-          <div id="comTtsStatusBar" class="com-tts-status-bar" style="display:none;" data-page-node-id="E1A395jZTrTQcYUYMelsJq">
-            <span id="comTtsStatusDot" class="com-tts-status-dot" data-page-node-id="TUmcm9k4ePETZ2VXxbEoob"></span>
-            <span id="comTtsStatusText" class="com-tts-status-text" data-page-node-id="tsh4yHdlMLXdkx5rCY1brh"></span>
-          </div>
-        </div>
+        <!-- 配音引擎下拉已搬进右栏「配音与音量」卡（2026-09-19 用户：「这个也得一起挪」
+             ——配音引擎与「我的音色」同属配音设置，聚在一处）。JS 全按 id 引用，搬家零逻辑改动。 -->
         <!-- ASR 校正开关隐藏：默认**关闭**（2026-09-19：它是解说链路里最贵的一次调用，
              全量转写稿一个请求发出去，而下游 Stage1/Stage2 大半用不到校正后的内容）。
              需要时把下面 input 加回 checked（或把这一行 display 去掉露出开关）。 -->
@@ -2403,6 +2394,22 @@
             <button type="button" class="btn btn-sm btn-primary" id="comVolSave" data-page-node-id="3TxPGDwAIABEMdaKrE4Ujj">💾 保存设置</button>
         </div>
         <div class="com-vol-rows" data-page-node-id="jepd0FQwwlMM88jO6BVbf4">
+          <!-- 配音引擎（2026-09-19 自「解说参数」卡搬入：配音相关设置聚一处）。
+               选「本地语音克隆」时下方露出「📇 我的音色」；JS 全按 id 引用，搬家零逻辑改动。 -->
+          <div class="com-vol-row com-vol-row-engine" id="comTtsEngineRow">
+            <div class="com-vol-item">
+              <span class="com-vol-label">配音引擎</span>
+              <select id="comTtsProvider" class="com-select" data-page-node-id="3mp9ZAEGQP307usX9ScbaA">
+                <option value="edge" selected data-base="微软 edge-tts" data-page-node-id="6zxXakxowB9wTuIaNbcEzd">微软 edge-tts　免费（兜底）</option>
+                <option value="qwen3tts" data-base="Qwen3-TTS 本地语音克隆" data-page-node-id="NcAdMKfdC1iVhJUHED8GHS">Qwen3-TTS 本地语音克隆　免费</option>
+                <option value="indextts_mlx" data-base="IndexTTS-MLX 本地语音克隆（更自然）" data-page-node-id="Y0AGKEBPBSoshSOrno4CxK">IndexTTS-MLX 本地语音克隆（更自然）　免费</option>
+              </select>
+              <div id="comTtsStatusBar" class="com-tts-status-bar" style="display:none;" data-page-node-id="E1A395jZTrTQcYUYMelsJq">
+                <span id="comTtsStatusDot" class="com-tts-status-dot" data-page-node-id="TUmcm9k4ePETZ2VXxbEoob"></span>
+                <span id="comTtsStatusText" class="com-tts-status-text" data-page-node-id="tsh4yHdlMLXdkx5rCY1brh"></span>
+              </div>
+            </div>
+          </div>
           <div class="com-vol-row" data-page-node-id="Op2WflJ47bzZV3JAitgx2P">
             <div class="com-vol-row-head" data-page-node-id="jznbj1ak0nzJqGE5bY6hbZ">
               <span class="com-vol-label" data-page-node-id="bxHJ5XntQczGPVF5iRRlQ0">旁白响度标准化</span>
