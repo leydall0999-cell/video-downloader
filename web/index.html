@@ -2386,11 +2386,6 @@
         <summary class="com-vol-card-head" title="保存后对所有解说任务生效" data-page-node-id="s0lI51tyEnA3mUrA4lFmuI">
           <span class="com-vol-label" data-page-node-id="4sDVUysPa6CMMiMOblGMJq">🔊 配音与音量</span>
         </summary>
-        <div class="com-vol-card-actions" data-page-node-id="SWhpgDWD69n1UE2NbjhXW4">
-            <button type="button" class="btn btn-sm btn-ghost" id="comVolReset" data-page-node-id="njARBGPd5JHNgmvwx9656w">恢复默认</button>
-            <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview" title="试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。" data-page-node-id="SH38VoX0fYpwNqQzKAbiew">▶ 试听当前设置</button>
-            <button type="button" class="btn btn-sm btn-primary" id="comVolSave" data-page-node-id="3TxPGDwAIABEMdaKrE4Ujj">💾 保存设置</button>
-        </div>
         <div class="com-vol-rows" data-page-node-id="jepd0FQwwlMM88jO6BVbf4">
           <!-- 配音引擎（2026-09-19 自「解说参数」卡搬入：配音相关设置聚一处）。
                选「本地语音克隆」时下方露出「📇 我的音色」；JS 全按 id 引用，搬家零逻辑改动。 -->
@@ -2408,31 +2403,9 @@
               </div>
             </div>
           </div>
-          <div class="com-vol-row" data-page-node-id="Op2WflJ47bzZV3JAitgx2P">
-            <div class="com-vol-row-head" data-page-node-id="jznbj1ak0nzJqGE5bY6hbZ">
-              <span class="com-vol-label" data-page-node-id="bxHJ5XntQczGPVF5iRRlQ0">旁白响度标准化</span>
-              <span class="com-vol-val" id="comLoudnessVal" data-page-node-id="6U6XhzeOduB1RYxCLGyW40">-14 LUFS</span>
-            </div>
-            <input type="range" id="comLoudness" min="-18" max="-10" step="1" value="-14" data-page-node-id="Qlf3ltLJZhFYOqa5GvwwwY" />
-            <label class="com-vol-off" data-page-node-id="v3o2LjIjlnzMEE5oX0KsJF"><input type="checkbox" id="comLoudnessOff" data-page-node-id="PGagWyMoQSZoykdng6WgFd" /> 关闭（仅用增益兜底）</label>
-          </div>
-          <div class="com-vol-row" data-page-node-id="7s2ANOEYF0dAPauT5iNQpt">
-            <div class="com-vol-row-head" title="解说期间把原声压到设定的比例（越小原声越静）" data-page-node-id="XtcBgnXvVSnzvL6SxkM36m">
-              <span class="com-vol-label" data-page-node-id="YgsVW96of5H21WLw4SQIds">原声压低比例</span>
-              <span class="com-vol-val" id="comDuckVal" data-page-node-id="GdVABRuIPsKBvzTEq8Kcfv">10%</span>
-            </div>
-            <input type="range" id="comDuck" min="5" max="30" step="1" value="10" data-page-node-id="CshQlPqNFg2FjusPHcx0c4" />
-          </div>
-          <div class="com-vol-row" data-page-node-id="kDCobVHnBzGfe0Sd0ok52o">
-            <div class="com-vol-row-head" title="响度标准化之后再乘这个倍数（越大越响）" data-page-node-id="WIaZl5iQwwNzS6J0IuzB1b">
-              <span class="com-vol-label" data-page-node-id="4QcsHaRHTyCUX0ZW9g9M2v">旁白额外增益</span>
-              <span class="com-vol-val" id="comBoostVal" data-page-node-id="aR0iyhARhrGWmwZMpvV0iU">1.00×</span>
-            </div>
-            <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" data-page-node-id="5LFhSrzV7bLeDv2HmJuFbG" />
-          </div>
-
           <!-- ===== 我的音色（本地克隆源）：Qwen3-TTS 克隆真正生效的前提 =====
                2026-09-18 新增；2026-09-19 用户要求从「解说参数」卡搬进「配音与音量」（配音相关设置聚一处）。
+               2026-09-19 再上移：紧跟「配音引擎」下拉（选克隆→正下方就是音色样本），不再隔三个滑块。
                此前「配音引擎=本地语音克隆」看似可选，但全站没有音色样本入口，
                QWEN3TTS_REF_AUDIO/REF_TEXT 恒空 → 服务起来了也克隆不出你的声音（静默回退 edge）。
                这里「选一段自己的录音 + 填那段录音里念的文字稿」，随解说子进程注入。
@@ -2469,6 +2442,34 @@
               <span class="com-status" id="comMyVoiceStatus" hidden></span>
             </div>
           </div>
+          <div class="com-vol-row" data-page-node-id="Op2WflJ47bzZV3JAitgx2P">
+            <div class="com-vol-row-head" data-page-node-id="jznbj1ak0nzJqGE5bY6hbZ">
+              <span class="com-vol-label" data-page-node-id="bxHJ5XntQczGPVF5iRRlQ0">旁白响度标准化</span>
+              <span class="com-vol-val" id="comLoudnessVal" data-page-node-id="6U6XhzeOduB1RYxCLGyW40">-14 LUFS</span>
+            </div>
+            <input type="range" id="comLoudness" min="-18" max="-10" step="1" value="-14" data-page-node-id="Qlf3ltLJZhFYOqa5GvwwwY" />
+            <label class="com-vol-off" data-page-node-id="v3o2LjIjlnzMEE5oX0KsJF"><input type="checkbox" id="comLoudnessOff" data-page-node-id="PGagWyMoQSZoykdng6WgFd" /> 关闭（仅用增益兜底）</label>
+          </div>
+          <div class="com-vol-row" data-page-node-id="7s2ANOEYF0dAPauT5iNQpt">
+            <div class="com-vol-row-head" title="解说期间把原声压到设定的比例（越小原声越静）" data-page-node-id="XtcBgnXvVSnzvL6SxkM36m">
+              <span class="com-vol-label" data-page-node-id="YgsVW96of5H21WLw4SQIds">原声压低比例</span>
+              <span class="com-vol-val" id="comDuckVal" data-page-node-id="GdVABRuIPsKBvzTEq8Kcfv">10%</span>
+            </div>
+            <input type="range" id="comDuck" min="5" max="30" step="1" value="10" data-page-node-id="CshQlPqNFg2FjusPHcx0c4" />
+          </div>
+          <div class="com-vol-row" data-page-node-id="kDCobVHnBzGfe0Sd0ok52o">
+            <div class="com-vol-row-head" title="响度标准化之后再乘这个倍数（越大越响）" data-page-node-id="WIaZl5iQwwNzS6J0IuzB1b">
+              <span class="com-vol-label" data-page-node-id="4QcsHaRHTyCUX0ZW9g9M2v">旁白额外增益</span>
+              <span class="com-vol-val" id="comBoostVal" data-page-node-id="aR0iyhARhrGWmwZMpvV0iU">1.00×</span>
+            </div>
+            <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" data-page-node-id="5LFhSrzV7bLeDv2HmJuFbG" />
+          </div>
+        </div>
+        <!-- 操作按钮沉底（2026-09-19）：参数在前、动作在后；恢复默认+保存一行，试听通栏 -->
+        <div class="com-vol-card-actions" data-page-node-id="SWhpgDWD69n1UE2NbjhXW4">
+          <button type="button" class="btn btn-sm btn-ghost" id="comVolReset" data-page-node-id="njARBGPd5JHNgmvwx9656w">恢复默认</button>
+          <button type="button" class="btn btn-sm btn-primary" id="comVolSave" data-page-node-id="3TxPGDwAIABEMdaKrE4Ujj">💾 保存设置</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="comVolPreview" title="试听仅含旁白（已应用上方响度/增益），原声压低在成片混流时生效。调好后再保存、再渲染。" data-page-node-id="SH38VoX0fYpwNqQzKAbiew">▶ 试听当前设置</button>
         </div>
         <span class="com-status com-vol-status" id="comVolStatus" hidden data-page-node-id="H6LFK6FHhW4jZ2cy0HIxr7"></span>
       </details>

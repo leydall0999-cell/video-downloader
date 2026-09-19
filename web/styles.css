@@ -3530,12 +3530,14 @@ details.com-vol-card > .com-vol-card-head::after {
 }
 details[open].com-feather-card > .com-feather-head::after,
 details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
+/* 2026-09-19 沉底改版：参数在前、动作在后；恢复默认+保存一行，试听通栏 */
 .com-vol-card-actions {
-  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
-  padding: .45rem .58rem 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+  display: grid; grid-template-columns: 1fr 1fr; gap: .4rem;
+  margin: 0 .6rem; padding: .45rem 0 .55rem;
+  border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent);
 }
-.com-vol-card-actions .btn { margin-bottom: .45rem; }
+.com-vol-card-actions .btn { margin-bottom: 0; }
+.com-vol-card-actions #comVolPreview { grid-column: 1 / -1; }
 /* v2 十一轮（2026-09-17）：配音与音量参考左栏「✂️ 预览与正剧范围」排版——
    标签居左 + 数值居右一行，滑块通栏在下；三个参数纵排，替代原三列挤挤压布局。 */
 .com-vol-rows { padding: .5rem .6rem .55rem; display: flex; flex-direction: column; gap: .55rem; }
