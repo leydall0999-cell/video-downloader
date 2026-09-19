@@ -9082,6 +9082,12 @@ el.dwVidPlayer.removeAttribute('src');
       el.comScriptStatus.hidden = true;
       el.comScriptSave.disabled = false;
       el.comScriptRender.disabled = false;
+      // 🔴 2026-09-19 修「在哪里渲染呢」：上一轮渲染完成后 pollCommentaryJob 会把
+      //    「🎬 生成成片」按钮 hidden=true（防重复渲染），但此后再载入任何脚本
+      //    （点「📄 继续审核」/ 从历史打开）都没人把它恢复 → 面板底行只剩
+      //    「保存修改 / 保存到本机」，渲染入口永久消失。这里一并还原文字与可见性。
+      el.comScriptRender.hidden = false;
+      el.comScriptRender.textContent = '🎬 生成成片';
       currentScriptJobId = job_id; // 兜底：面板打开时确保全局 job_id 与显示内容一致
       // 审核态：底部粘性条的「重新生成脚本」大按钮退场（2026-09-17）——它与「生成成片」
       // 空间贴近且层级在上，用户极易误触白等一遍；重新生成入口挪到审核区提示框上方。

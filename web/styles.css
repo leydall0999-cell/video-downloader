@@ -5236,7 +5236,15 @@ html.com-theater { overflow: hidden; }
    点标题条里的「▢ 展开」原样还原（见 app.js setScriptMin）。
    🔴 只改 bottom→auto / height→auto，left/right 不动：宽度保持与展开时一致，
       避免与 #comReviewActions / 右栏浮层错位（那两处的 26px 偏移与本条无关）。 */
-#comScriptPanel.is-min { bottom: auto; height: auto; padding: .45rem 1rem; }
+#comScriptPanel.is-min {
+  bottom: auto; height: auto; padding: .45rem 1rem;
+  /* 2026-09-19 用户「放中间一点，现在偏左边了」：最小化标题条不再保持展开时的
+     全宽（left:260/right:322 贴着内容列两端，视觉上挤在左侧），改为按内容收缩
+     并水平居中于窗口。corner 控件 absolute 不参与收缩宽度，head 自带
+     padding-right:146px 防重叠。 */
+  left: 50%; right: auto; transform: translateX(-50%);
+  width: auto; min-width: 380px; max-width: min(640px, calc(100vw - 292px));
+}
 /* 标题条变矮，右上角控件跟着上提一点，保证垂直居中且不被 overflow 裁到 */
 #comScriptPanel.is-min .com-script-corner { top: .3rem; }
 #comScriptPanel.is-min .com-script-segments,
@@ -5455,9 +5463,10 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 /* ---- v2 补丁（2026-09-17 二轮） ---- */
 /* 左栏「片头片尾处理」静态卡 → 2026-09-17 晚已搬进右栏「🎬 解说参数」卡（.com-row-3），
    原 .com-fixed-card 规则全部下线（类名已不再出现在 index.html）。 */
-/* 右栏 row-1：270px 窄栏下 5 个下拉允许换行 */
+/* 右栏 row-1：270px 窄栏下下拉改为一行一个（2026-09-19 用户「一行两个，参数显示不完整」
+   ——46% 两列时选中值被截成「高光处…」「AI 自动…」，全宽才放得下完整参数）。 */
 .com-right .com-row-1 { flex-wrap: wrap; }
-.com-right .com-row-1 > .com-cell-trigger { flex: 1 1 46%; }
+.com-right .com-row-1 > .com-cell-trigger { flex: 1 1 100%; }
 /* 操作条内生成按钮去掉旧 margin；字数上限卡隐藏长 hint */
 .com-actionbar #comGenerateRow .com-generate-main { margin-top: 0; }
 .com-actionbar .com-enhance-section .com-retain-hint { display: none; }
@@ -5507,8 +5516,9 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
 
 /* 6) 窄中栏（1000–1359）再加宽中栏：左 200 / 右 240 */
 @media (min-width: 1000px) and (max-width: 1359px) {
-  /* 236px 窄栏：row-1 下拉改两列紧凑排（标签超宽省略号兜底，不再单列竖排占屏） */
-  .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 46%; }
+  /* 236px 窄栏：row-1 下拉一行一个（2026-09-19 用户「一行两个，参数显示不完整」
+     ——两列时选中值截成「高光处…」「AI 自动…」；旧的两列紧凑排作废）。 */
+  .com-right .com-row-1 > .com-cell-trigger { flex: 1 1 100%; }
   .com-right select { font-size: .74rem; }
   /* 列宽与覆盖层偏移统一由 4913 块的变量 + 5111 行的 calc(var()) 处理，此处不再写死 */
 }
