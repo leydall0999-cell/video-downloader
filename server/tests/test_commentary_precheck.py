@@ -159,6 +159,10 @@ def test_effective_duration_uses_actual_range():
                                      None, 900.0) == 900.0
         assert cm._effective_duration("/x.mp4", 0.0, 2000.0,
                                      300.0, 900.0) == 600.0
+        # 正剧范围拖反（起点 900 在终点 300 之后）→ 交换归一化成 300~900，同样是 600 秒；
+        # 关键是不能退回 2000 秒整片（否则免费档 45 分钟片会被误拦、且真跑起来白等半小时）
+        assert cm._effective_duration("/x.mp4", 0.0, 2000.0,
+                                     900.0, 300.0) == 600.0
         # 正剧范围覆盖整片 → 仍是整片时长
         assert cm._effective_duration("/x.mp4", 0.0, 2000.0, 0.0, 2000.0) == 2000.0
     finally:
@@ -173,8 +177,17 @@ def test_fold_commentary_range_skips_full_span():
     # 只做中间 15 分钟：区间就是它
     assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 0.0, 900.0) == (0.0, 900.0)
     assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 1234.0, 2134.0) == (1234.0, 2134.0)
-    # 终点早于起点（用户把两块拖反了）→ 不裁，绝不产出废片
-    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 2000.0, 300.0) == (0.0, 2733.5)
+    # 终点早于起点（用户把两块拖反 / 手输反了）→ **交换归一化**，而不是退回整片。
+    # 🔴 退回整片会复活本次要修的病灶：45 分钟的片子按整片转写（CPU int8 半小时以上），
+    #    而用户只想做其中一段。左栏两个时间是自由文本输入，UI 只给红色提醒不拦提交，
+    #    所以这条路径真实可达 —— 必须归一到「用户显然想要的那一段」。
+    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 2000.0, 300.0) == (300.0, 2000.0)
+    # 外层裁剪拖反同理
+    assert server_app._fold_commentary_range(2733.5, 1200.0, 300.0) == (300.0, 1200.0)
+    # 但「终点缺省」（trim_end=0 表示到片尾）不能被误判成拖反
+    assert server_app._fold_commentary_range(2733.5, 600.0, 0.0) == (600.0, 2733.5)
+    # 起点超片长 → 仍走 fail-open（参数无意义，不因它出废片）
+    assert server_app._fold_commentary_range(2733.5, 5000.0, 0.0) == (0.0, 2733.5)
 
 
 # ── 3. 路由层：结构化 403 与预检端点 ─────────────────────────────────── #

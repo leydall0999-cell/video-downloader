@@ -1308,15 +1308,27 @@ def _fold_commentary_range(src_dur: float, trim_start: float = 0.0, trim_end: fl
       起点取更靠后的那个，终点取更靠前的那个；
       区间覆盖整片时返回 (0, src_dur)——调用方据此跳过无谓的整片重编码
       （旧逻辑会把整片重编码一遍，还打出误导性的「已裁剪 0~2734s」）。
+
+    🔴 拖反归一化（2026-09-19，与上面同批修）：起点大于终点时**交换**，而不是
+      「非法 → 退回整片」。左栏两个时间是自由文本输入，用户完全可能把
+      「片尾开始」填得比「正剧开始」还早（UI 只给红色提醒，不拦提交）——
+      若此时退回整片，正好复活本次要修的病灶：45 分钟的片子按整片转写
+      （CPU int8 半小时以上），而用户只想做其中一段。交换是唯一符合直觉的
+      解释，且处理量绝不比用户意图更大。
     """
     dur = float(src_dur or 0.0)
     ts = max(0.0, float(trim_start or 0.0))
     te = float(trim_end or 0.0)
+    ds = float(drama_start_sec or 0.0)
+    de = float(drama_end_sec or 0.0)
+    # 拖反 → 交换（见 docstring 末段）。两端都给了值才判，避免把「终点缺省=片尾」误当拖反。
+    if ts > 0 and te > 0 and te < ts:
+        ts, te = te, ts
+    if ds > 0 and de > 0 and de < ds:
+        ds, de = de, ds
     if dur > 0:
         ts = min(ts, dur)
         te = min(te, dur) if te > 0 else dur
-    ds = float(drama_start_sec or 0.0)
-    de = float(drama_end_sec or 0.0)
     if ds > 0:
         ts = max(ts, ds)
     if de > 0:
