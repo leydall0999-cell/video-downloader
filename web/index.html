@@ -1877,17 +1877,19 @@
       <div class="com-subbar">
         <span class="com-subbar-label">素材来源</span>
                 <div class="com-entry-grid" data-page-node-id="4vxki4rlk7GLDCL0TEBHdF">
+      <!-- 2026-09-19（用户：优化，参考图二）：两个入口不再各自包一张「带小标题的卡」。
+           标题文字直接写进控件本身（下拉的默认项 / 按钮的文案）⇒ 卡片里只叠两个控件，
+           省掉两行小标题（约 40px），左栏更紧凑。入口名保留在控件文案里，不会失去指向。
+           id（comSource / comDropZone / comFileBtn / comHistToggle）全部不变，JS 仍按 id 绑定。 -->
       <!-- 入口 1：从下载历史库（媒体库）生成 -->
       <div class="com-entry-card" data-page-node-id="0OWjGch4fsH75pLlg7EbDB">
-        <h3 class="com-entry-title" data-page-node-id="34qNsfBtTipJgbWCBkumuZ">📚 从下载历史库生成</h3>
-        <select id="comSource" class="adv-input" data-page-node-id="Q6VRg86QeMpEqAb8ZfETnR"><option value="" data-page-node-id="H0Q19b0YNPvhlcCGtdIhLE">选择视频…</option></select>
+        <select id="comSource" class="adv-input" data-page-node-id="Q6VRg86QeMpEqAb8ZfETnR"><option value="" data-page-node-id="H0Q19b0YNPvhlcCGtdIhLE">📚 从下载历史库生成</option></select>
       </div>
 
       <!-- 入口 2：拖入本地文件 -->
       <div class="com-entry-card" id="comDropZone" data-page-node-id="ED3cU5bGL0ytIS5GCURtjQ">
-        <h3 class="com-entry-title" data-page-node-id="XKhdpBi28dLMLAcjosDSJq">📁 从本地文件生成</h3>
         <input id="comFileInput" type="file" accept="video/*" hidden data-page-node-id="mrsYH40np06nNonAJrCHs3" />
-        <button type="button" class="btn btn-secondary" id="comFileBtn" data-page-node-id="zwUQYZ4yaHfDHGxGHvEqHD">选择本地视频</button>
+        <button type="button" class="btn btn-secondary" id="comFileBtn" data-page-node-id="zwUQYZ4yaHfDHGxGHvEqHD">📁 从本地文件生成</button>
         <span class="com-status" id="comFileStatus" hidden data-page-node-id="UVEEGlhweQLL2sHr69GIwk"></span>
       </div>
     </div>

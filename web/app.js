@@ -9788,9 +9788,17 @@ el.dwVidPlayer.removeAttribute('src');
       const current = el.comSource.value;
       el.comSource.replaceChildren();
       const def = document.createElement('option');
+      // 2026-09-19（用户：优化，参考图二）：小标题已删，入口名改由控件自己承担 ⇒
+      // 下拉的默认项就写「📚 从下载历史库生成」。
+      // 🔴 空库时不能再拼「（暂无视频）」：左栏仅 196px、下拉实宽 162px，13px 字号下
+      //    「📚 从下载历史库生成」已占 129px（可用约 134px），再长必然被原生 select 截断
+      //    （没有省略号，会硬切成「从下载历史库生」）。所以空态改成 hover 提示，不占排版。
       def.value = '';
-      def.textContent = items.length ? '选择视频…' : '媒体库暂无视频';
+      def.textContent = '📚 从下载历史库生成';
       el.comSource.appendChild(def);
+      el.comSource.title = items.length
+        ? '从下载历史库（媒体库）里选一部片子'
+        : '媒体库暂无视频：先在「下载」里下好，或用下面的「从本地文件生成」';
       items.forEach((i) => {
         const o = document.createElement('option');
         o.value = i.id;
@@ -9805,7 +9813,8 @@ el.dwVidPlayer.removeAttribute('src');
       // 媒体库不可用时下拉只保留默认提示
       el.comSource.replaceChildren();
       const def = document.createElement('option');
-      def.value = ''; def.textContent = '无法读取媒体库';
+      def.value = ''; def.textContent = '📚 从下载历史库生成';
+      el.comSource.title = '媒体库读取失败：稍后重试，或用下面的「从本地文件生成」';
       el.comSource.appendChild(def);
     }
   };
