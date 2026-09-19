@@ -1122,6 +1122,29 @@ def _apply_trim(src_path: str, in_dir: Path, start: float, end: float):
         return src_path, 0.0
     return str(trim_out), dur
 
+def _commentary_needs_trim(ts: float, te: float, src_dur: float) -> bool:
+    """折叠区间 (ts, te) 是否需要预裁源片。
+
+    🔴 2026-09-20 用户实测暴露：设「正剧开始」留空 +「片尾开始」= 15 分钟 → 成片仍是 46 分钟整片，
+    只有前 15 分钟有解说。根因是这里的判据退化成 `0.0 < ts < te`：
+    ts=0（从片头开始裁）被排除 ⇒ 走 else 分支拿到整片源，而 drama 窗口只作用于旁白，
+    于是「解说 15 分钟 + 画面 46 分钟」。
+
+    判据取两版历史实现之长：
+      · 2026-08-26 `0 <= ts < te`：ts=0 能裁（对），但整片也会白重编码一遍（错）；
+      · 2026-09-19 `0.0 < ts < te`：跳过整片（对），却把 ts=0 一起漏掉（错，本次病灶）。
+    ⇒ **只要 (ts, te) 是整片的真子区间就裁**（含 ts=0 这种「从片头裁到中间」），
+      与 `_fold_commentary_range` 的「覆盖整片 ⇒ 不裁」容差保持完全一致，
+      保证整片场景的行为与改造前逐字节相同（不多一次重编码）。
+    """
+    if not (te > ts):
+        return False                              # 空区间 / 未指定 / 探测失败（src_dur=0）
+    if ts <= 0.5 and (src_dur <= 0 or te >= src_dur - 0.5):
+        return False                              # 覆盖整片 ⇒ 不裁
+    if src_dur > 0 and te > src_dur + 1.0:
+        return False                              # 越界（沿用旧版守卫）
+    return True
+
 def _commentary_eta(job: dict, line: str, src_dur: float) -> None:
     """从子进程进度行推算 ETA，写入 job['eta_remaining']（剩余秒）/ eta_done_at（绝对时间戳）。"""
     now = time.time()
@@ -1400,7 +1423,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         eff_dur = src_dur
         # 用户只要指定了终点（te > 0），即使起点是 0 也要裁剪——旧条件 te > ts > 0 会漏掉
         # 「从片头裁到中间」这种 ts=0 的场景，导致 worker 拿到全片。
-        if 0.0 < ts < te:
+        # 🔴 2026-09-20：判据收敛到 _commentary_needs_trim（见其 docstring）——09-19 引入 fold 时
+        #    写成 `0.0 < ts < te`，把 ts=0 一起漏掉，直接导致「选 15 分钟 → 成片 46 分钟整片」。
+        if _commentary_needs_trim(ts, te, src_dur):
             use_src, _ = _apply_trim(src_path, in_dir, ts, te)
             eff_dur = te - ts
             # 管线拿到的输入已是 [ts, te] 这段的相对时间轴，drama 窗口必须按新基准给，

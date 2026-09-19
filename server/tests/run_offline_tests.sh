@@ -81,6 +81,11 @@ run_one test_matting_chroma_key.py
 run_one test_matting_sam_forward.py
 run_one test_convert_guards.py
 run_one test_commentary_routes.py
+#   6a. test_commentary_range_trim.py —— 解说「正剧范围 → 实际输入」裁剪判据（2026-09-20 用户实测）：
+#                                        「正剧开始」留空 + 「片尾开始」15 分钟 → 成片仍是 46 分钟整片
+#                                        （ts=0 被 `0.0 < ts < te` 静默漏掉）。含 fold 与裁剪判据必须一致
+#                                        的不变量 + 「调用方不许再抄一份判据」的静态守卫
+run_one test_commentary_range_trim.py
 #   6b. test_clone_env.py             —— 本地语音克隆「按需安装」环境判定（候选优先级 / 半成品驳回 /
 #                                        磁盘不足拦截 / 非 Apple Silicon 拒绝 / 全程不得改进程级 HF_ENDPOINT）
 run_one test_clone_env.py
