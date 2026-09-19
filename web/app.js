@@ -8175,9 +8175,54 @@ el.dwVidPlayer.removeAttribute('src');
   const comSelectResetters = [];
   const resetComSelects = () => { comSelectResetters.forEach((fn) => fn()); };
 
+  /** 成片文件名：renderComArtifact 已把步骤里解析出的产物全路径写在 comArtifact.title，
+   *  这里取它的 basename（管线命名是「<原片名>-解说完成<时间>.mp4」）。
+   *  拿不到就退回通用名 —— 只是名字不精确，绝不能让保存因取名失败而中断。 */
+  const comFinishedName = () => {
+    const p = (el.comArtifact && el.comArtifact.title) || '';
+    const base = String(p).split('/').pop() || '';
+    return /\.(mp4|mkv|mov|webm)$/i.test(base) ? base : '解说成片.mp4';
+  };
+
+  /** 成片完成时必须「出声」（2026-09-20 用户：「解说完成怎么默不作声呢？
+   *  要有个提示吧或者保存什么的吧」）。渲染长片时用户基本都会切去别的视图等，
+   *  只改面板里那行文字他根本看不到，所以：
+   *   ① 立刻弹 toast（fixed 定位，任何视图都看得见）；
+   *   ② 桌面版顺手把成片另存到「下载」文件夹 —— 复用「⬇ 保存到本机」同一条原生桥
+   *      save_commentary_file（写 ~/Downloads；重名自动加 (1)/(2)，不会覆盖旧文件），
+   *      存好后把真实落盘文件名回写进 toast 与状态行，用户不必再去点按钮；
+   *   ③ Web 版没有原生桥 → 只弹 toast，其余与旧版一致（面板里的下载链接照旧可用）。
+   *  同一个 job 只播报一次（重复轮询/回看历史都不会重弹）。 */
+  const _comAnnounced = new Set();
+  const comAnnounceFinished = async (jobId, name, refs) => {
+    if (!jobId || _comAnnounced.has(jobId)) return;
+    _comAnnounced.add(jobId);
+    const api = window.pywebview && window.pywebview.api;
+    const canSave = !!(api && api.save_commentary_file);
+    const say = (msg, ms) => { try { showToast(msg, ms); } catch (e) { /* toast 失败不影响成片 */ } };
+    say(canSave ? '🎬 解说成片已生成，正在保存到「下载」文件夹…' : '🎬 解说成片已生成', 6000);
+    if (!canSave) return;
+    try {
+      const res = await api.save_commentary_file(jobId, name);
+      if (typeof res === 'string' && res.startsWith('ERROR:')) {
+        say('成片已生成，但自动保存失败：' + res.replace(/^ERROR:\s*/, '').slice(0, 60), 9000);
+      } else if (typeof res === 'string' && res) {
+        const saved = res.split('/').pop() || name;
+        say(`🎬 解说成片已完成，已保存到「下载」：${saved}`, 9000);
+        if (refs && refs.commentaryStatus) {
+          // ⚠️ 追加而不是覆盖：本函数在 onCompleted() 之后才跑完，而 onCompleted 会往同一行写
+          // 「成片已完成…点『📄 继续审核』可回到脚本再渲染一版」（见调用点）。直接赋值会把它抹掉。
+          const prev = refs.commentaryStatus.textContent || '';
+          refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + `已保存到「下载」：${saved}`;
+        }
+      }
+    } catch (e) {
+      // 自动保存失败不改变「成片已生成」这个事实：面板里「⬇ 保存到本机」仍可手动保存
+    }
+  };
+
   // 通用轮询：拿到 job_id 后定时查状态，更新 refs（commentary 按钮 / status / file 链接）。
-  const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {
-    refs.commentaryStatus.hidden = false;
+  const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {    refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
     let shownProgress = 0;  // 已显示过的进度行数，避免重复追加
     const poll = setInterval(async () => {
@@ -8190,15 +8235,19 @@ el.dwVidPlayer.removeAttribute('src');
         }
         if (st.status === 'completed') {
           clearInterval(poll);
+          // 成片名用真实产物名，别一律叫「解说成片.mp4」——用户下载/保存到下载夹后要能分辨是哪一条
+          const outName = comFinishedName();
           refs.commentaryStatus.textContent = '解说成片已生成';
           refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
-          refs.commentaryFile.setAttribute('download', '解说成片.mp4');
+          refs.commentaryFile.setAttribute('download', outName);
           refs.commentaryFile.hidden = false;
           if (refs.commentary) refs.commentary.hidden = true;
           el.comProgress.hidden = true;
           el.comEta.hidden = true;
           if (typeof onCompleted === 'function') onCompleted();
           resetComSelects();
+          // 完成播报 + 自动另存到「下载」（用户 2026-09-20：「解说完成怎么默不作声呢」）
+          comAnnounceFinished(job_id, outName, refs);
         } else if (st.status === 'failed') {
           clearInterval(poll);
           refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
@@ -8814,7 +8863,11 @@ el.dwVidPlayer.removeAttribute('src');
     const res = await request('/api/commentary/stash', { method: 'POST', body: fd });
     const dt = Date.now() - t0;
     if (res && res.from_cache) {
-      setStatus(`本机已缓存该视频（${formatBytes(res.size)}），直接复用，0 字节上传`);
+      // 2026-09-20 用户「这个提示是不是多余」：命中缓存时确实什么都不用等，别让整块状态卡渲染三行
+      // 技术说明（「直接复用」与「0 字节上传」是同一件事，重复了）→ 压成一行。
+      // 但也不能整条删掉：上一行刚写过「正在把视频保存到本机（…）」，什么都不留会让用户
+      // 以为还在上传、不敢动。
+      setStatus(`已复用本机缓存（${formatBytes(res.size)}）`);
     } else {
       setStatus(`视频已保存到本机（${formatBytes(res.size)}，${(dt / 1000).toFixed(1)}s），开始转写…`);
     }
@@ -10003,19 +10056,23 @@ el.dwVidPlayer.removeAttribute('src');
     updateTrimDurationText();
   };
 
-  // 卡头「片长：xx」；若两处正剧时间互相矛盾，就地换成红色提醒（见 styles.css .com-trim-dur.is-warn）
+  // 卡头时长；若两处正剧时间互相矛盾，就地换成红色提醒（见 styles.css .com-trim-dur.is-warn）
+  // 2026-09-20：去掉「片长：」前缀（真实左栏卡头可用宽仅 ~137px，标题+前缀+时间会折成三行，
+  // 见 styles.css .com-trim-head 的注释）→ 标签信息改挂 title 悬停，窄栏里只留时间本身。
   const updateTrimDurationText = () => {
     if (!el.comTrimDuration) return;
     const s = el.comDramaStart && el.comDramaStart.value.trim() ? parseTimeSec(el.comDramaStart.value) : null;
     const e = el.comDramaEnd && el.comDramaEnd.value.trim() ? parseTimeSec(el.comDramaEnd.value) : null;
     if (s != null && e != null && e <= s) {
       el.comTrimDuration.textContent = '⚠ 片尾开始需晚于正剧开始';
+      el.comTrimDuration.title = '片尾开始时间必须晚于正剧开始时间';
       el.comTrimDuration.classList.add('is-warn');
       return;
     }
     el.comTrimDuration.classList.remove('is-warn');
     const total = comPreviewDuration || 0;
-    el.comTrimDuration.textContent = total ? `片长：${formatDuration(total) || '0s'}` : '片长：--';
+    el.comTrimDuration.textContent = total ? (formatDuration(total) || '0s') : '--';
+    el.comTrimDuration.title = total ? `片长：${formatDuration(total) || '0s'}` : '片长：未知';
   };
 
   /** 渲染后给某张成片卡换/加/移除配乐（轻量 amix，秒级，成品就地替换）。 */

@@ -2349,13 +2349,22 @@ img { max-width: 100%; display: block; }
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius-md); box-shadow: var(--shadow);
 }
-/* 2026-09-19 用户要求：标题与「片长」分两行 —— 窄左栏一行挤不下，片长被挤没 */
+/* 2026-09-20 用户：「这个标题能再节约一点空间吗，现在是半中间，不上不下的，logo 也不要了」。
+   改前：卡头是 `flex-direction: column` 的三行（标题／片名／片长），真实左栏卡头仅 ~164px 宽，
+   实测高度 75px，标题孤零零占第一行、下面两行各占一行 → 又高又「不上不下」。
+   改后：一行元信息流 `flex-wrap: wrap` + `align-items: baseline`，DOM 顺序 标题 → 片长 → 片名。
+   ⚠️ 为什么片名用 `flex: 1 1 60px`（小基准）而不是 `flex: 1 1 auto`：
+   flex 的**折行判定发生在收缩之前**，用 `auto`（=内容宽 ~180px）时
+   `90 + 180 > 164` 会让它当场折到第二行，再叠加片长就是三行 —— 就是原来那个毛病。
+   给小基准才会「先缩到能放下、放不下才折行」：164px 下得「标题 / 片长+片名」两行（~52px），
+   栏宽 ≥ ~240px 时三项并成一行（~25px）。片名截断有 title 悬停兜底，且成片预览就在旁边。 */
 .com-trim-head {
-  display: flex; flex-direction: column; align-items: flex-start; gap: .18rem;
-  margin-bottom: .65rem;
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  column-gap: .5rem; row-gap: .1rem;
+  margin-bottom: .3rem;
 }
 .com-trim-head h3 { margin: 0; font-size: .95rem; color: var(--text); flex: 0 0 auto; }
-.com-trim-title { flex: 0 1 auto; max-width: 100%; min-width: 0; font-size: .82rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.com-trim-title { flex: 1 1 50px; min-width: 0; font-size: .76rem; color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .com-trim-dur { flex: 0 0 auto; font-size: .78rem; color: var(--brand); font-weight: 600; }
 /* 片尾开始 ≤ 正剧开始 时把「片长」位置换成红色提示（同上，见 updateTrimDurationText） */
 .com-trim-dur.is-warn { color: #d9534f; }
@@ -5572,8 +5581,9 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
   border-radius: 10px; box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
 }
 .com-left .com-trim-card { padding-bottom: .6rem; }
-.com-left .com-trim-head { padding: .55rem .7rem .35rem; }
-.com-left .com-trim-head h3 { display: flex; align-items: center; gap: .35rem; margin: 0; font-size: .85rem; }
+.com-left .com-trim-head { padding: .5rem .7rem .3rem; }
+/* 2026-09-20：行首 ✂️ 已删（用户「logo 也不要了」）→ h3 不再需要 flex 对齐图标 */
+.com-left .com-trim-head h3 { margin: 0; font-size: .85rem; }
 
 /* 3) 右栏检查器：头部带底色分隔、内容左右留白一致 */
 .com-right { border-radius: 10px; }

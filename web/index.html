@@ -1896,10 +1896,15 @@
       <button type="button" class="com-hist-toggle" id="comHistToggle" title="打开解说历史抽屉">📂 解说历史</button>
       </div><!-- /com-subbar -->
                 <div class="com-trim-card" id="comTrimCard" hidden data-page-node-id="nDMvyIlDN1rvgp4iVG14i4">
+      <!-- 2026-09-20（用户：「这个标题能再节约一点空间吗，现在是半中间，不上不下的，logo 也不要了」）：
+           ① 去掉行首 ✂️（logo 不要了）；
+           ② 卡片头从「竖排三行（标题／片名／片长）」压成「标题 + 片长同行、片名另起一行」：
+              窄左栏下标题不再孤零零悬在中间，无片时整块只剩一行（实测省 ~20px，有片时省 ~30px）。
+              DOM 顺序改成 标题 → 片长 → 片名：片长靠右对齐始终与标题同行，片名 flex-basis:100% 独占下一行。 -->
       <div class="com-trim-head" data-page-node-id="NWaORyaaXLQ55Dud8PsRYH">
-        <h3 data-page-node-id="MPKTEzTi8d6eAikX1YF05D">✂️ 预览与正剧范围</h3>
+        <h3 data-page-node-id="MPKTEzTi8d6eAikX1YF05D">预览与正剧范围</h3>
+        <span class="com-trim-dur" id="comTrimDuration" title="片长：未知" data-page-node-id="z1AeLzMkwPDGwjcHvZTh68">--</span>
         <span class="com-trim-title" id="comTrimTitle" hidden data-page-node-id="tprw9KKGotopFrZTxIptQr"></span>
-        <span class="com-trim-dur" id="comTrimDuration" data-page-node-id="z1AeLzMkwPDGwjcHvZTh68">片长：--</span>
       </div>
       <!-- 原「起点/终点」（外层源文件裁剪 + 滑块）已下线：与「正剧开始/片尾开始时间」都在界定正片范围，
            两处同填会叠加跳过（trim 先裁、drama 再按绝对时间前移）。现在只保留绝对时间一处，
