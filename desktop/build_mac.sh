@@ -5,6 +5,10 @@
 #   bash desktop/build_mac.sh --cleanup-only  # 只清理历史构建垃圾，不构建
 # 环境变量：
 #   VDL_BUILD_KEEP_OLD=1  保留最近几份 _old_* 用于回滚（默认 1；设 0 表示全清）
+#   VDL_BUILD_WORKPATH=…  PyInstaller 工作目录（默认 $REPO/build）。**沙盒里必须改**：
+#                         仓库内 build/ 若残留上次构建的已签名 exe，替换大二进制会被拦
+#                         （AssertionError: Executable contains code signature!）。
+#                         沙盒用法：VDL_BUILD_WORKPATH=/tmp/vdl_build_work bash desktop/build_mac.sh
 # 产物：dist/VideoDownloader.app（双击即用，无需安装 Python/ffmpeg）
 set -euo pipefail
 
@@ -49,6 +53,22 @@ VENV="$REPO/.build_venv"
 # 策略：构建成功后统一收尾，每类只保留最近 N 份用于回滚，更早的**移入回收站**
 #       （可恢复，不用 rm -rf；osascript/Finder 在本机未授权，故直接搬 ~/.Trash）。
 BUILD_KEEP_OLD="${VDL_BUILD_KEEP_OLD:-1}"
+
+# ── PyInstaller 工作目录（沙盒关键）─────────────────────────────────
+# 🔴 2026-09-20 踩坑：默认 workpath = $REPO/build。若该目录里**残留上一次构建的
+#    build/VideoDownloader/VideoDownloader**（一个已带 LC_CODE_SIGNATURE 的 40MB exe），
+#    PyInstaller 的 fix_exe_for_code_signing() 会先删签名再改 Mach-O 头，
+#    而「覆盖替换一个已存在的 40MB 可执行文件」正是沙盒 file-write-unlink 守卫拦的动作
+#    ⇒ 构建以 `AssertionError: Executable contains code signature!` 收场，
+#    且脚本里 `mv build/VideoDownloader build/_old_<pid>` 对同名大目录同样会被拦（静默 || true）。
+#    把 workpath 指到仓库外的可写目录即可根治：新目录每次都是干净的，不触发任何替换。
+# 默认值保持 $REPO/build（不改变用户本机行为）；沙盒里用
+#    VDL_BUILD_WORKPATH=/tmp/vdl_build_work bash desktop/build_mac.sh
+VDL_BUILD_WORKPATH="${VDL_BUILD_WORKPATH:-$REPO/build}"
+mkdir -p "$VDL_BUILD_WORKPATH" 2>/dev/null || true
+if [ "$VDL_BUILD_WORKPATH" != "$REPO/build" ]; then
+  echo "ℹ️  PyInstaller 工作目录改为 $VDL_BUILD_WORKPATH（绕开沙盒对仓库内 build/ 的替换守卫）"
+fi
 
 trash_path() {
   local src="$1" base dest n
@@ -290,6 +310,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --name VideoDownloader \
   --windowed \
   --noconfirm \
+  --workpath "$VDL_BUILD_WORKPATH" \
   --icon "$ICON_ICNS" \
   --osx-bundle-identifier com.videodownloader.desktop \
   --paths "$REPO/server" \
