@@ -2267,7 +2267,7 @@
            ⚠️ radio 的 name/取值方式保持原样（JS 按 input[name="comIntroOutroMode"]:checked 读），
               搬的只是 DOM 位置，逻辑零改动。 -->
       <div class="com-row com-row-3" id="comIntroOutroRow">
-        <div class="com-cell com-cell-introoutro">
+        <div class="com-cell com-cell-trigger com-cell-introoutro" data-com-select="comIntroOutroMode">
           <div class="com-opt-title">✂️ 片头片尾处理</div>
           <div class="com-opt-row com-opt-row-fixed">
             <label class="com-mode-option com-mode-fixed" title="自动检测边界，片头片尾绝对不解说"><input type="radio" name="comIntroOutroMode" value="keep_no_narrate" checked /><span><b>保留片头片尾·不解说</b></span></label>

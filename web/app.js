@@ -11661,7 +11661,7 @@ el.dwVidPlayer.removeAttribute('src');
     },
     comIntroOutroMode: {
       kind: 'radio',
-      title: '固定选择项',
+      title: '片头片尾处理',
       hide: '.com-mode-fixed',
       options: [['keep_no_narrate', '保留片头片尾·不解说'], ['skip', '去片头片尾']],
     },
