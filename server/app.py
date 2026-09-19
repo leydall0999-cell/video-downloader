@@ -1293,6 +1293,42 @@ def _parse_feather_opt(raw: str) -> dict:
             pass
     return out
 
+def _fold_commentary_range(src_dur: float, trim_start: float = 0.0, trim_end: float = 0.0,
+                           drama_start_sec: float | None = None,
+                           drama_end_sec: float | None = None) -> tuple[float, float]:
+    """把「正剧范围」（绝对秒）折进「真正喂给管线的区间」，返回 (起点, 终点)。
+
+    🔴 2026-09-19 用户实测暴露的问题：`drama_start_sec/drama_end_sec`（界面上的
+    「正剧开始/片尾开始时间」）此前**只透传给管线当旁白窗口**，whisper 依旧对整片转写 ——
+    用户把一支 45.6 分钟的片子设成只做其中 15 分钟，步骤里照样显示「已裁剪 0~2734s」、
+    日志里照样是「开始听写 45.6 分钟音频」，CPU int8 要跑半小时以上（白等）。
+    现在起这段区间就是**实际输入**：转写 / 生成脚本 / 渲染都只发生在它里面。
+
+    交集语义（两者都是绝对秒，缺省＝不设限）：
+      起点取更靠后的那个，终点取更靠前的那个；
+      区间覆盖整片时返回 (0, src_dur)——调用方据此跳过无谓的整片重编码
+      （旧逻辑会把整片重编码一遍，还打出误导性的「已裁剪 0~2734s」）。
+    """
+    dur = float(src_dur or 0.0)
+    ts = max(0.0, float(trim_start or 0.0))
+    te = float(trim_end or 0.0)
+    if dur > 0:
+        ts = min(ts, dur)
+        te = min(te, dur) if te > 0 else dur
+    ds = float(drama_start_sec or 0.0)
+    de = float(drama_end_sec or 0.0)
+    if ds > 0:
+        ts = max(ts, ds)
+    if de > 0:
+        te = min(te, de) if te > 0 else de
+    if dur > 0 and te > dur:
+        te = dur
+    if te <= ts:                      # 非法区间 → 不裁（fail-open，绝不因参数问题出废片）
+        return 0.0, (dur if dur > 0 else 0.0)
+    if ts <= 0.5 and (dur <= 0 or te >= dur - 0.5):
+        return 0.0, (dur if dur > 0 else 0.0)   # 覆盖整片 → 不裁
+    return ts, te
+
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_border_color: str = "000000", subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True, feather_opt: str = "") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
@@ -1307,6 +1343,10 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         src_dur = 0.0
 
     if COMMENTARY_MODE == "http":
+        # ⚠️ HTTP worker 模式走的是「把源片整体交给远端 worker」这条路，本地不裁文件
+        #    ⇒ 无法把「正剧范围」折成实际输入（远端仍会转写整片）。桌面版默认 local/bundled
+        #    模式，不走这里；将来要让 HTTP 模式也享受同一优化，需在远端 worker 侧支持
+        #    「只处理 [start, end]」的入参。
         return _commentary_run_http(job_id, src_path, vertical, voice, mode,
                                     commentary_type=commentary_type,
                                     highlight_source=highlight_source,
@@ -1339,12 +1379,32 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         # ---- 时长裁剪（服务端预处理）----
         # 用确定性命名（源路径+起止哈希）切出裁剪片段，script-only 与后续 render 复用同一文件，避免重复切。
         # src_dur 已在函数开头探测，并用于换算 drama_start_sec/drama_end_sec。
-        ts, te = float(trim_start or 0), float(trim_end or 0)
+        # 🔴 2026-09-19：区间 = 外层裁剪 ∩「正剧范围」，见 _fold_commentary_range 顶部说明。
+        #    折进来之后：①「只做中间 15 分钟」的片子只转写 15 分钟（原先转写整片，白等半小时）；
+        #    ② 步骤详情不再打误导性的「已裁剪 0~2734s」（整片不再触发裁剪与重编码）。
+        ts, te = _fold_commentary_range(src_dur, trim_start, trim_end,
+                                        drama_start_sec, drama_end_sec)
         use_src = src_path
+        eff_dur = src_dur
         # 用户只要指定了终点（te > 0），即使起点是 0 也要裁剪——旧条件 te > ts > 0 会漏掉
         # 「从片头裁到中间」这种 ts=0 的场景，导致 worker 拿到全片。
-        if 0 <= ts < te and (not src_dur or te <= src_dur + 1.0):
+        if 0.0 < ts < te:
             use_src, _ = _apply_trim(src_path, in_dir, ts, te)
+            eff_dur = te - ts
+            # 管线拿到的输入已是 [ts, te] 这段的相对时间轴，drama 窗口必须按新基准给，
+            # 否则会把绝对秒当相对秒用（整体偏移一个 ts）。裁到起点的那一端＝0，不传。
+            _src_ds = float(drama_start_sec or 0.0)
+            _src_de = float(drama_end_sec or 0.0)
+            _n_ds = max(0.0, _src_ds - ts) if _src_ds > 0 else 0.0
+            _n_de = max(0.0, _src_de - ts) if _src_de > 0 else 0.0
+            drama_start_sec = _n_ds if _n_ds > 0.5 else None
+            drama_end_sec = _n_de if _n_de > 0.5 else None
+            _win = ""
+            if _src_ds > 0 or _src_de > 0:
+                _win = f"，正剧窗口按裁剪后时间轴 {_n_ds:.0f}~{_n_de:.0f}s"
+            print(f"[裁剪] 实际处理区间 {ts:.0f}~{te:.0f}s（共 {eff_dur:.0f}s）{_win}")
+        else:
+            ts, te = 0.0, src_dur   # 整片：展示与 ETA 都用整片时长
 
         in_file = in_dir / f"{base}.mp4"
         if in_file.exists() or in_file.is_symlink():
@@ -1510,12 +1570,12 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 job["progress"] = list(last_lines)
                 _commentary_log(job, line)
                 _update_commentary_steps(job, line)
-                _commentary_eta(job, line, src_dur)
+                _commentary_eta(job, line, eff_dur)
 
         with _commentary_lock:
             job = commentary_jobs.setdefault(job_id, {})
             job["started_at"] = job.get("started_at") or time.time()
-            job["source_duration"] = src_dur
+            job["source_duration"] = eff_dur
             job["trim_start"] = ts
             job["trim_end"] = te
             job["trim_path"] = use_src if use_src != src_path else ""
@@ -1525,8 +1585,10 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             # 优先展示用户上传时的原始文件名，upload 端点会把磁盘文件名统一改名为 upload.<ext>
             # 所以 src_path.basename 永远是 upload.mp4 这种占位名，用 src_filename 兜出真实名
             display_src = (src_filename or "").strip() or Path(src_path).name
+            # 只在**真的裁了**的时候提示，且写清是「只处理这一段」——
+            # 旧文案「已裁剪 0~2734s」（= 整片）会让用户以为没生效（2026-09-19 用户实测）。
             steps[0]["detail"] = f"源视频: {display_src}" + (
-                f"（已裁剪 {ts:.0f}~{te:.0f}s）" if use_src != src_path else "")
+                f"（只处理 {ts:.0f}~{te:.0f}s 这段，共 {eff_dur:.0f}s）" if use_src != src_path else "")
             steps[0]["updated_at"] = time.time()
 
         try:

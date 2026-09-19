@@ -5840,7 +5840,15 @@ html.theme-dark #commentaryView .com-ai-config .adv-summary { color: #A5B4FC; }
 .com-splitter { width: 14px; margin: 0 -3px; z-index: 5; }
 .com-splitter::after {
   content: ""; position: absolute;
-  left: 4px; right: 4px; top: 50%; bottom: auto; height: 200px;
+  /* 🔴 2026-09-19 收尾（用户截图「往上调整」）：`--com-split-y` 由 app.js 的
+     comSyncSplitHandle() 写成「视频舞台竖向中心」相对 .com-v2 顶边的 px 值。
+     为什么不能再居中于整栏：.com-v2 的高度由**中栏**决定（舞台 + 播放条 + 操作条 +
+     时间轴），比两侧面板内容高得多（实测 1360×880：v2 146~835=688px，而左栏内容只到
+     534、右栏到 515）⇒ top:50% 的把手（实测 390~590）下半截整个垂在两侧面板内容
+     之下的空处，观感就是「一条虚线挂在空处」。改成对齐舞台中心（146~487 → 中心 316）
+     后把手落在 216~416，正好贴在画面区中间。
+     取值失败（JS 未跑/面板未开）时退回 50%，行为与旧版一致。 */
+  left: 4px; right: 4px; top: var(--com-split-y, 50%); bottom: auto; height: 200px;
   transform: translateY(-50%);
   background: repeating-linear-gradient(180deg, #565B66 0 5px, transparent 5px 9px);
   opacity: .9; border-radius: 2px;

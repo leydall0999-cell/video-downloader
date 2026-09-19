@@ -336,7 +336,8 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
     # 历史缺口：此入口与本地拖拽入口都没有校验，用户要等转写+脚本全跑完才被告知
     # 额度不够，白等十几分钟且拿到废片（2026-09-15 用户实测反馈）。
     from routers.quota import precheck_or_raise
-    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end))
+    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end,
+                                                  payload.drama_start_sec, payload.drama_end_sec))
 
     job_id = app.uuid.uuid4().hex[:12]
     _title = app._commentary_title(payload, src_path)
@@ -442,7 +443,8 @@ def create_commentary_upload(
     # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
     try:
         from routers.quota import assert_upload_allowed
-        _dur = _effective_duration(dest, trim_start, trim_end)
+        _dur = _effective_duration(dest, trim_start, trim_end,
+                                   drama_start_sec, drama_end_sec)
         assert_upload_allowed(None, _dur)
     except app.HTTPException:
         raise
@@ -528,7 +530,8 @@ def create_script_only_upload(
     # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
     try:
         from routers.quota import assert_upload_allowed
-        _dur = _effective_duration(dest, trim_start, trim_end)
+        _dur = _effective_duration(dest, trim_start, trim_end,
+                                   drama_start_sec, drama_end_sec)
         assert_upload_allowed(None, _dur)
     except app.HTTPException:
         raise
@@ -588,17 +591,28 @@ def commentary_diagnostics() -> dict:
         "frozen": getattr(app.sys, "frozen", False),
     }
 
-def _effective_duration(src_path, trim_start: float = 0.0, trim_end: float = 0.0) -> float:
-    """源视频「实际参与解说的时长」= 总时长 − 头部裁剪 − 尾部裁剪（秒）。
+def _effective_duration(src_path, trim_start: float = 0.0, trim_end: float = 0.0,
+                        drama_start_sec: float | None = None,
+                        drama_end_sec: float | None = None) -> float:
+    """源视频「实际参与解说的时长」= 外层裁剪 ∩ 正剧范围（秒）。
 
-    预检必须按裁剪后的时长判定：用户把 32 分钟的片子裁掉 5 分钟头尾后只剩
+    预检必须按真实处理的时长判定：用户把 32 分钟的片子裁掉 5 分钟头尾后只剩
     27 分钟，按总时长判会误拦。探测失败返回 0（调用方一律 fail-open）。
+
+    🔴 2026-09-19 修正两处口径：
+      ① 旧实现把 trim_start/trim_end 当「从头/从尾裁掉的秒数」（dur − (ts + te)），
+         而 app._commentary_run 把它们当「绝对起止秒」——同一个字段两套语义。前端传的是
+         **整片终点**，于是这里恒算出 0（预检形同失效）。现统一按 [起点, 终点] 区间算。
+      ② 界面上的「正剧范围」（drama_* 绝对秒）现在会真正决定喂给管线的区间
+         （见 app._fold_commentary_range），预检当然也要按它判——否则用户设了 15 分钟
+         仍会被按 45 分钟拦下。
     """
     dur = float(app._probe_video_duration(src_path) or 0.0)
     if dur <= 0:
         return 0.0
-    cut = max(0.0, float(trim_start or 0.0)) + max(0.0, float(trim_end or 0.0))
-    return max(0.0, dur - cut)
+    ts, te = app._fold_commentary_range(dur, trim_start, trim_end,
+                                        drama_start_sec, drama_end_sec)
+    return max(0.0, (te - ts) if te > ts else dur)
 
 
 @router.get("/api/commentary/precheck")
@@ -608,6 +622,8 @@ def commentary_precheck(
     file_id: str = "",
     trim_start: float = 0.0,
     trim_end: float = 0.0,
+    drama_start_sec: float = 0.0,
+    drama_end_sec: float = 0.0,
     engine: str = "",
 ) -> dict:
     """解说前置预检 —— 前端「选完视频」立刻调用，不通过就当场提示。
@@ -631,13 +647,18 @@ def commentary_precheck(
     from routers.quota import precheck_commentary as _pre
     dur = float(duration_sec or 0.0)
     if dur > 0:
-        # 前端传来的是源视频总时长，这里按裁剪量折算出真实参与解说的时长
-        cut = max(0.0, float(trim_start or 0.0)) + max(0.0, float(trim_end or 0.0))
-        dur = max(0.0, dur - cut)
+        # 前端传来的是源视频总时长，这里折算出真实参与解说的时长。
+        # 🔴 2026-09-19：旧实现按「ts+te 是要裁掉的秒数」算（前端传的是整片终点，
+        #    于是恒等于 0、预检形同失效）；现统一走 app._fold_commentary_range，
+        #    与真正喂给管线的区间同一套口径（含「正剧范围」）。
+        _ts, _te = app._fold_commentary_range(dur, trim_start, trim_end,
+                                              drama_start_sec, drama_end_sec)
+        dur = max(0.0, (_te - _ts) if _te > _ts else dur)
     elif file_id:
         try:
             src = app._resolve_source(app.CommentaryRequest(file_id=file_id))
-            dur = _effective_duration(src, trim_start, trim_end)
+            dur = _effective_duration(src, trim_start, trim_end,
+                                      drama_start_sec, drama_end_sec)
         except Exception:
             dur = 0.0
     return _pre(request, dur, engine=engine)
@@ -867,7 +888,8 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
     # 前置闸门（本地拖拽 / 下载库主路径）：这是「不能等做完才说额度不够」的关键点——
     # 免费用户跑一条超能力的片子，若在此放行，会白等十几分钟后才失败并产出废片。
     from routers.quota import precheck_or_raise
-    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end))
+    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end,
+                                                  payload.drama_start_sec, payload.drama_end_sec))
 
     job_id = app.uuid.uuid4().hex[:12]
     _title = app._commentary_title(payload, src_path)

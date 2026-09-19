@@ -138,18 +138,43 @@ def test_precheck_cloud_engine_ignores_daily_auto():
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ── 2. 按裁剪后时长判定 ──────────────────────────────────────────────── #
-def test_effective_duration_subtracts_trim():
-    """32 分钟的片子裁掉 5 分钟头尾后只剩 27 分钟，不该被误拦。"""
+# ── 2. 按「真正会被处理」的时长判定 ──────────────────────────────────── #
+def test_effective_duration_uses_actual_range():
+    """口径 = [起点, 终点] 区间 ∩ 正剧范围（与 app._fold_commentary_range 同源）。
+
+    ⚠️ 2026-09-19 语义修正：旧实现把 trim_start/trim_end 当「从头/从尾裁掉的秒数」
+    （dur − (ts + te)），而 app._commentary_run 把它们当**绝对起止秒** —— 前端传的是
+    整片终点（如 0~2734），于是旧实现恒算出 0，免费档时长闸门形同失效。
+    """
     orig = server_app._probe_video_duration
     server_app._probe_video_duration = lambda p: 2000.0
     try:
         assert cm._effective_duration("/x.mp4") == 2000.0
-        assert cm._effective_duration("/x.mp4", 100.0, 200.0) == 1700.0
-        # 裁剪量超过总时长 → 视为「未知」而不是负数
-        assert cm._effective_duration("/x.mp4", 5000.0, 0.0) == 0.0
+        # [100, 200] 是绝对秒 → 只有 100 秒参与
+        assert cm._effective_duration("/x.mp4", 100.0, 200.0) == 100.0
+        # 起点超出片长 → 不裁（fail-open，绝不因参数问题把任务判死）
+        assert cm._effective_duration("/x.mp4", 5000.0, 0.0) == 2000.0
+        # 前端常态：trim 恒为整片（0~2000），真正决定区间的是「正剧范围」
+        assert cm._effective_duration("/x.mp4", 0.0, 2000.0,
+                                     None, 900.0) == 900.0
+        assert cm._effective_duration("/x.mp4", 0.0, 2000.0,
+                                     300.0, 900.0) == 600.0
+        # 正剧范围覆盖整片 → 仍是整片时长
+        assert cm._effective_duration("/x.mp4", 0.0, 2000.0, 0.0, 2000.0) == 2000.0
     finally:
         server_app._probe_video_duration = orig
+
+
+def test_fold_commentary_range_skips_full_span():
+    """覆盖整片时必须返回 (0, 片长)：调用方据此跳过无谓的整片重编码。"""
+    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5) == (0.0, 2733.5)
+    # drama 精确到片尾也算整片（容差 0.5s）
+    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 0.0, 2733.0) == (0.0, 2733.5)
+    # 只做中间 15 分钟：区间就是它
+    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 0.0, 900.0) == (0.0, 900.0)
+    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 1234.0, 2134.0) == (1234.0, 2134.0)
+    # 终点早于起点（用户把两块拖反了）→ 不裁，绝不产出废片
+    assert server_app._fold_commentary_range(2733.5, 0.0, 2733.5, 2000.0, 300.0) == (0.0, 2733.5)
 
 
 # ── 3. 路由层：结构化 403 与预检端点 ─────────────────────────────────── #
@@ -202,15 +227,23 @@ def test_precheck_endpoint_returns_allowed_flag():
         assert ok["allowed"] is True
 
 
-def test_precheck_endpoint_subtracts_trim_from_duration():
-    """前端传的是源片总时长，服务端要按裁剪量折算后再判。"""
+def test_precheck_endpoint_uses_actual_range():
+    """端点按「真正会被处理的区间」折算后再判（外层裁剪 ∩ 正剧范围）。
+
+    语义（2026-09-19 统一）：trim_start/trim_end 是**绝对起止秒**，与 app._commentary_run
+    一致；前端常态是 trim 传整片、真正决定区间的是「正剧范围」drama_start_sec/drama_end_sec。
+    """
     with _Patch():
-        # 32 分钟源片，裁掉 5 分钟 → 27 分钟，应当放行
-        r = cm.commentary_precheck(None, duration_sec=1920.0, trim_start=150.0, trim_end=150.0)
+        # 32 分钟源片，只做 150~1830s 这段（1680s）→ 应当放行
+        r = cm.commentary_precheck(None, duration_sec=1920.0, trim_start=150.0, trim_end=1830.0)
         assert r["allowed"] is True
-        # 不裁剪则拦下
-        r2 = cm.commentary_precheck(None, duration_sec=1920.0)
+        # 整片（trim 传整片、正剧范围=整片）→ 拦下
+        r2 = cm.commentary_precheck(None, duration_sec=1920.0, trim_end=1920.0)
         assert r2["allowed"] is False
+        # 前端常态：trim 整片 + 只做前 15 分钟的正剧范围 → 按 900s 判，放行
+        r3 = cm.commentary_precheck(None, duration_sec=1920.0, trim_end=1920.0,
+                                    drama_start_sec=0.0, drama_end_sec=900.0)
+        assert r3["allowed"] is True
 
 
 def test_precheck_endpoint_honors_ui_engine():
@@ -258,11 +291,12 @@ _TESTS = [
     test_precheck_cloud_hint_distinguishes_explicit_choice,
     test_precheck_cloud_exhausted_blocks,
     test_precheck_cloud_engine_ignores_daily_auto,
-    test_effective_duration_subtracts_trim,
+    test_effective_duration_uses_actual_range,
+    test_fold_commentary_range_skips_full_span,
     test_precheck_or_raise_403_shape,
     test_precheck_or_raise_passes_when_allowed,
     test_precheck_endpoint_returns_allowed_flag,
-    test_precheck_endpoint_subtracts_trim_from_duration,
+    test_precheck_endpoint_uses_actual_range,
     test_precheck_endpoint_honors_ui_engine,
 ]
 

@@ -1984,7 +1984,14 @@
       refs.logs.textContent = logs.slice(-30).join('\n');
       const logsWrap = refs.logs.parentElement;
       if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
-        logsWrap.open = logs.length > 0 && (task.status === 'failed' || logs.length > 3);
+        // 同解说面板：自动展开**一次**即可，之后尊重用户的手动收起
+        // （旧实现每轮轮询都强制 open，用户收不起来 —— 2026-09-19 用户反馈同源问题）
+        if (task.status === 'failed') {
+          logsWrap.open = true;
+        } else if (logsWrap.dataset.autoOpened !== '1' && logs.length > 3) {
+          logsWrap.open = true;
+          logsWrap.dataset.autoOpened = '1';
+        }
       }
     }
   };
@@ -8354,7 +8361,16 @@ el.dwVidPlayer.removeAttribute('src');
     el.comLogs.textContent = logs.slice(-30).join('\n');
     const logsWrap = el.comLogs.parentElement;
     if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
-      logsWrap.open = logs.length > 0 && (st.status === 'failed' || logs.length > 3);
+      // 🔴 2026-09-19 用户反馈「点这个没有收起」：旧实现每次轮询（2 秒）都按
+      //    `logs.length > 3` 强制 open=true —— 用户手动收起后 2 秒又被弹开，永远收不起来。
+      //    现在只在「日志首次够多」时自动展开一次（任务失败则强制展开，原因必须可见），
+      //    之后一律尊重用户的手动开合。
+      if (st.status === 'failed') {
+        logsWrap.open = true;
+      } else if (logsWrap.dataset.autoOpened !== '1' && logs.length > 3) {
+        logsWrap.open = true;
+        logsWrap.dataset.autoOpened = '1';
+      }
     }
   };
 
@@ -9898,6 +9914,27 @@ el.dwVidPlayer.removeAttribute('src');
     if (h > availInnerH) h = availInnerH;              // 竖屏素材太高 → 按可用高度封顶
     const want = Math.round(h + pad * 2) + 'px';
     if (stage.style.height !== want) stage.style.height = want;   // 比现值再写，避免观察器自激
+  };
+
+  /** 拖动把手「往上移」（2026-09-19 用户截图反馈「往上调整」）：
+   *  把虚线把手的中点对齐到**视频舞台**的竖向中心，而不是整栏（.com-v2）的中心。
+   *  原因：.com-v2 的高度由中栏决定（舞台 + 播放条 + 操作条 + 时间轴），比两侧面板
+   *  内容高得多（实测 1360×880：v2 高 688，左栏内容只到 534、右栏到 515），
+   *  居中于整栏会把把手顶到 y390~590 —— 下半截垂在两侧面板内容之外的空处。
+   *  对齐舞台中心后把手落在 y216~416，贴在画面区中间，视觉上才像"两栏之间的分隔"。
+   *  写在 CSS 变量 --com-split-y 上（`styles.css` 的 .com-splitter::after 读它），
+   *  这样宽度拖动、画幅切换、窗口缩放都不必重算 CSS 规则。 */
+  const comSyncSplitHandle = () => {
+    const v2 = document.querySelector('.com-v2');
+    const stage = el.comPreview && el.comPreview.closest('.com-preview-stage');
+    if (!v2 || !stage) return;
+    const vr = v2.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    // 面板未打开 / 尺寸未就绪时不动它（CSS 的 50% 兜底仍然生效）
+    if (vr.height < 120 || sr.height < 40) return;
+    const y = (sr.top + sr.bottom) / 2 - vr.top;
+    if (!(y > 0) || y >= vr.height) return;
+    v2.style.setProperty('--com-split-y', Math.round(y) + 'px');
   };
 
   const setupComPreview = (url, title) => {
@@ -11642,15 +11679,22 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comPreview) {
     const stageEl = el.comPreview.closest('.com-preview-stage');
     if (stageEl && stageEl.parentElement) {
-      new ResizeObserver(() => comSyncStageSize()).observe(stageEl.parentElement);
+      new ResizeObserver(() => { comSyncStageSize(); comSyncSplitHandle(); })
+        .observe(stageEl.parentElement);
     }
-    el.comPreview.addEventListener('loadedmetadata', comSyncStageSize);
+    el.comPreview.addEventListener('loadedmetadata', () => { comSyncStageSize(); comSyncSplitHandle(); });
     document.addEventListener('change', (e) => {
       const t = e.target;
-      if (t && t.name === 'comAspect') comSyncStageSize();
+      if (t && t.name === 'comAspect') { comSyncStageSize(); comSyncSplitHandle(); }
     });
   }
+  // 拖动把手位置（--com-split-y）跟着舞台走：切换视图时 .com-v2 从 0 变成真实尺寸、
+  // 窗口缩放、画幅切换都要重算。观察 .com-v2 而不是把手自身（写变量不该触发自激）。
+  const comV2El = document.querySelector('.com-v2');
+  if (comV2El) new ResizeObserver(comSyncSplitHandle).observe(comV2El);
+  window.addEventListener('resize', comSyncSplitHandle);
   comSyncStageSize();
+  comSyncSplitHandle();
   if (el.comMaxChars) {
     el.comMaxChars.addEventListener('input', () => {
       if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
@@ -11732,6 +11776,15 @@ el.dwVidPlayer.removeAttribute('src');
       const qs = new URLSearchParams();
       if (durationSec > 0) qs.set('duration_sec', String(durationSec));
       if (fileId) qs.set('file_id', fileId);
+      // 裁剪口径必须与后端一致（app._fold_commentary_range：外层裁剪 ∩「正剧范围」）。
+      // 🔴 2026-09-19：此前完全不传 —— 后端只能按片长判，用户把 45 分钟片子设成只做
+      //    中间 15 分钟，预检仍按 45 分钟算（免费档可能被误拦），而真正跑起来又只处理 15 分钟。
+      if (comTrimStart > 0) qs.set('trim_start', String(comTrimStart));
+      if (comTrimEnd > 0) qs.set('trim_end', String(comTrimEnd));
+      const _dStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
+      const _dEnd = el.comDramaEnd && el.comDramaEnd.value ? parseTimeSec(el.comDramaEnd.value) : null;
+      if (_dStart) qs.set('drama_start_sec', String(_dStart));
+      if (_dEnd) qs.set('drama_end_sec', String(_dEnd));
       // 带上「界面上当前选中的档位」而不是让后端只读已保存配置：用户可能先切档位、
       // 再去选素材（还没点保存），不传就会出现「界面写本机优先、提示却说要用云端额度」
       // 这种自相矛盾的提示。（此处不复用 comNormalizeEngine：它声明在另一个 IIFE 里，
