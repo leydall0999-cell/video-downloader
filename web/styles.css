@@ -5195,13 +5195,19 @@ html.com-theater { overflow: hidden; }
 /* ---- 覆盖层化：解说词审核 / 步骤日志（hidden 优先级保护必须加） ---- */
 #comScriptPanel[hidden], #comReviewActions[hidden], #comStepsPanel[hidden] { display: none !important; }
 #comScriptPanel {
-  position: fixed; top: 74px; bottom: 18px; left: 260px; right: 322px;
+  /* 2026-09-19 用户：「下面空白部分没用到，可以往上缩小」——不再恒撑到底（bottom:18px），
+     改为高度随内容自适应、上限封在视口内（上限时段落列表自行滚动，行为不变）。 */
+  position: fixed; top: 74px; bottom: auto; max-height: calc(100vh - 92px); left: 260px; right: 322px;
   z-index: 60; margin: 0; width: auto;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px rgba(15, 23, 42, .35);
   display: flex; flex-direction: column; overflow: hidden; padding: .8rem 1rem;
 }
-#comScriptPanel .com-script-segments { flex: 1; overflow: auto; min-height: 0; }
+/* 2026-09-19 配合面板高度自适应（#comScriptPanel bottom:auto + max-height）：
+   flex-basis 改 auto（0% 时不撑高容器、面板恒停在内容最小高度）、
+   解除旧的内嵌面板时代 50vh 上限（.com-script-segments 基类里的 max-height），
+   让面板自身的 max-height 统一管上限，到顶后段落列表自行滚动。 */
+#comScriptPanel .com-script-segments { flex: 1 1 auto; overflow: auto; min-height: 0; max-height: none; }
 #comScriptPanel .com-script-actions { flex: none; }
 /* 右上角窗口控件（2026-09-18 用户：「要放在右上角，不要放其他地方」）：
    最小化 / 关闭钉在面板右上角，做成窗口控件样式，不再混在头部灰按钮排里
@@ -5234,6 +5240,9 @@ html.com-theater { overflow: hidden; }
 /* 标题条上下不再需要分隔线留白，否则白白撑高 */
 #comScriptPanel.is-min .com-script-head {
   margin-bottom: 0; padding-bottom: 0; border-bottom: none;
+  /* 最小化态整条标题可点展开（2026-09-19 用户「最小化后没有入口」——只有右上角
+     一个小「▢ 展开」太隐蔽）。展开态不设 pointer（点了不该有动作，避免误收）。 */
+  cursor: pointer;
 }
 /* 最小化时收起头部副控件（配音下拉 / 试听 / 预览全部），保证标题条恒为一行 */
 #comScriptPanel.is-min .com-voice-label,

@@ -9239,9 +9239,21 @@ el.dwVidPlayer.removeAttribute('src');
         { commentary: el.comScriptRender, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
         '',
         () => {
+          // 2026-09-19 修「渲染完成后没有入口再渲染」：loadCommentary() 会把面板、
+          // currentScriptJobId 全部重置，用户此后只能重新生成脚本才能再渲染一版
+          //（用户原话「最小化后没办法渲染成片，没有入口」的真凶之一）。
+          // 改为保留任务号 + 露出「📄 继续审核」，一键回到同一份脚本的审核面板再渲染。
+          const _doneJob = currentScriptJobId;
           loadCommentary();
-          el.comScriptPanel.hidden = true;
-          currentScriptJobId = null;
+          if (_doneJob) {
+            currentScriptJobId = _doneJob;
+            if (el.comScriptReopen) el.comScriptReopen.hidden = false;
+            el.comReviewActions.hidden = false;
+            if (el.comGenerateRow) el.comGenerateRow.hidden = false;
+            el.comGenerateScript.textContent = '重新生成脚本';
+            el.comStatus.hidden = false;
+            el.comStatus.textContent = '成片已完成，已加入下方解说历史；点「📄 继续审核」可回到脚本再渲染一版';
+          }
         });
     } catch (err) {
       el.comStatus.textContent = `渲染启动失败：${err.message}`;
@@ -10185,6 +10197,16 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comScriptMin) {
     el.comScriptMin.addEventListener('click', () => {
       setScriptMin(!el.comScriptPanel.classList.contains('is-min'));
+    });
+  }
+  // 最小化态：点标题条任意空白处也能展开（2026-09-19 用户「最小化后没有入口」——
+  // 只留右上角一个小「▢ 展开」太隐蔽）。展开态不加监听动作，避免误点收起。
+  const _comScriptHead = document.querySelector('#comScriptPanel .com-script-head');
+  if (_comScriptHead) {
+    _comScriptHead.addEventListener('click', (ev) => {
+      if (!el.comScriptPanel.classList.contains('is-min')) return;
+      if (ev.target && ev.target.closest && ev.target.closest('button, select, label, input, a')) return;
+      setScriptMin(false);
     });
   }
   if (el.comScriptReopen) {
