@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 
-def _band_rows(gray, w0: int, h0: int, min_runs: int = 3):
+def _band_rows(gray, w0: int, h0: int, min_runs: int = 3, avg_run_max: float | None = None):
     """在图像底部 30% 区域内找「白字字幕行」的行范围，找不到返回 None。
 
     判据：一行里近白像素（白字笔画，>=205）占比落在合理区间，连续这样的行拼成
@@ -28,6 +28,9 @@ def _band_rows(gray, w0: int, h0: int, min_runs: int = 3):
     只认白字、不认黑像素：原视频常是「黑底白字」硬字幕条，若把黑像素也算进文字，
     整条黑底会被误判成字幕带（band 撑到 30%+），这已被历史教训证伪。
     返回 (top, bottom) 行号（原图坐标），已合并相近的多行字幕块。
+
+    `avg_run_max`：第四判据「游程平均宽」的上限（像素）。None=用默认值
+    （`max(4, 1.25% 宽)`）；传 0 或负数=关闭该判据（仅供「命中点不足时放宽重试」用）。
     """
     y0 = int(h0 * 0.70)
     px = gray.load()
@@ -39,6 +42,34 @@ def _band_rows(gray, w0: int, h0: int, min_runs: int = 3):
     # ⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同步（2026-09-19 同日同改）。
     _max_run = max(24, int(w0 * 0.05))
     _min_runs = max(1, int(min_runs))
+    # 第四判据「游程形状」（2026-09-19 三次根治，⚠️ 与管线 scripts/edit_ffmpeg.py
+    # ::_band_rows 同值）：真字幕笔画细，字间/笔画间的空隙把它切成许多条**窄**游程；
+    # 画面里的亮块（土黄军装的高光肩章/铜扣、白瓷器、金属反光、大面积高光）则是
+    # 「少数几条宽游程」。用「游程平均宽」与「游程条数」两个量一起看：
+    #
+    #   命中条件：avg_run ≤ _AVG_RUN_MAX   **或**   n_runs ≥ _N_RUNS_STRONG
+    #
+    # 为什么是「或」而不是「且」：只卡平均宽会误杀**粗体大字幕**（笔画本身就有
+    # 6~10px），也会误杀本仓合成测试里 10px 宽的白条 —— 而字幕是「许多条」笔画，
+    # 条数天然很多；亮块是「少数几条」宽游程，条数天然很少。两者取并集既保住灵敏度，
+    # 又能把亮块挡住（必须同时是「宽游程」且「条数少」才判非文字）。
+    #
+    # 实测（480 宽探测图，用户真实片源 24 帧逐行打印）：
+    #   真字幕行    avg_run 2.0~6.2（中位 3.3），n_runs 10~22
+    #   军装高光块  avg_run 6.4~12.5（中位 8.6），n_runs 4~10 ← 两个条件都不满足
+    # 前三条判据挡不住军装块：白像素总数恰好落在 ① 区间内，单条最宽游程 22~24 刚好
+    # 卡在 ② 的 24px 门槛下，n_runs 也够 ③ 的 3 条 —— 于是整块「军装」被当成字幕段，
+    # 且行数比真字幕还多而被「取最长段」选中 ⇒ 用户截图里虚线框压在军装上、真字幕
+    # 反而在框外（2026-09-19 用户第 2 张图；帧 2334.9s 实测带位 0.700~0.789，
+    # 真字幕在 0.837~0.900；加第四条后回到 0.837~0.900，肉眼复核框已落在字上）。
+    #
+    # 阈值取 1.25% 画宽（480 宽 → 6.0px）与 2.5% 画宽（480 宽 → 12 条）：
+    # 真字幕 avg_run 上限 6.2 与之相邻（那一行属双行字幕的一行、邻行仍命中，段不断）；
+    # 军装块 n_runs 上限 10 < 12、avg_run 中位 8.6 > 6，两条都够不着。
+    # ⚠️ 残留边界：条纹衣物（许多条 10px 宽条纹）仍可能骗过第四条，靠帧间一致性兜底
+    #    + 面板手动 dy/dh 覆盖；这是「纯像素启发式」的能力边界，已如实记录。
+    _avg_run_max = max(4.0, w0 * 0.0125) if avg_run_max is None else float(avg_run_max)
+    _n_runs_strong = _N_RUNS_STRONG
 
     rows = []
     for y in range(y0, h0):
@@ -59,7 +90,8 @@ def _band_rows(gray, w0: int, h0: int, min_runs: int = 3):
         if run:
             n_runs += 1
         nw *= 2
-        # 文字行三判据（2026-09-19 追加第三条，⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同值）：
+        # 文字行四判据（第三条 2026-09-19 追加、第四条同日三次根治，
+        # ⚠️ 与管线 scripts/edit_ffmpeg.py::_band_rows 同值）：
         #   ① 白像素总数落在区间内；
         #   ② 没有「一整条」超长白游程（白桌布/白墙那种大面积白物）；
         #   ③ 有足够多条**笔画游程**——文字由多个字组成，被字间/笔画间空隙切成许多条
@@ -69,7 +101,14 @@ def _band_rows(gray, w0: int, h0: int, min_runs: int = 3):
         #      ⇒ 带位被下拉、带高被撑大、报「这一段字幕没擦干净而且下面多糊一条」。
         #      唯一可能被误伤的形态是「只有 1~2 个字的超短字幕」，故 min_runs 可关
         #      （detect_band_ratio 在命中帧不足时会用 min_runs=0 放宽重试一次）。
-        rows.append(lo_w <= nw <= hi_w and max_run <= _max_run and n_runs >= _min_runs)
+        #   ④ 游程**形状**——「平均宽 ≤ _avg_run_max」或「条数 ≥ _n_runs_strong」至少
+        #      满足一个（见上）。③ 只数条数，数不出「少数几条宽游程」的亮块；只有
+        #      「宽游程 + 条数少」同时成立才判非文字。
+        avg_run = (nw / n_runs) if n_runs else float("inf")
+        rows.append(lo_w <= nw <= hi_w and max_run <= _max_run and n_runs >= _min_runs
+                    and (_avg_run_max <= 0
+                         or avg_run <= _avg_run_max
+                         or n_runs >= _n_runs_strong))
 
     # 收集所有连续命中段，允许最多 2 行间隙
     segments = []
@@ -174,6 +213,44 @@ def _percentile(xs, q):
     return xs[lo] * (1 - frac) + xs[hi] * frac
 
 
+# 第四判据「游程条数」的强阈值（2026-09-19，⚠️ 与管线同值）：**固定条数，不随分辨率缩放**。
+# 理由：游程条数≈一行字的笔画段数，是**字形本身**的属性 —— 分辨率升高只会让原本
+# 粘连的细笔画分开（条数不降），故固定下限是保守的；按宽度等比例放大反而会在高分辨率
+# 下把真实字幕判掉（本仓 test_band_ratio_independent_of_resolution 就是这么暴露的：
+# 同一份比例内容在 1280 宽下条数仍是 14 条，按 2.5%×1280=32 条去要求必然误杀）。
+# 取值须 > 实测「亮块」条数上限（480 宽下军装高光块 4~10 条）且 ≤ 真实字幕下限（10~22 条）：
+# 12 同时满足（且高于本仓合成测试的 14 条白条）。
+_N_RUNS_STRONG = 12
+
+# 帧间位置离群判据（2026-09-19 三次根治第二层，⚠️ 与管线 `_prepare_feather` /
+# `_segment_feather` 同值同理）：
+#   「原字幕」在同一支片里的位置是**稳定**的（这也是全片共用一条带的依据）；
+#   而亮块误报（军装高光 / 白瓷器 / 金属反光 / 片头片尾演职员表）位置**随机**。
+#   于是把各帧 band 的**中心**拿来投票：中心偏离中位数超过容差的帧判为离群、丢弃。
+#   容差 = max(_POS_TOL_FLOOR, 3×MAD)，用 MAD（中位绝对偏差）而不是标准差，因为
+#   MAD 本身抗离群；**双峰分布**（字幕确实在两处交替，2026-09-18 实测 620/560 两处、
+#   相差约 8% 画高）时 MAD 会变大 ⇒ 容差自动放宽到能同时容纳两处 ⇒ **退化为「不丢」**，
+#   不会误伤已知的合法漂移。只有「一个主峰 + 个别散点」才真正动手。
+_POS_TOL_FLOOR = 0.06
+
+
+def _band_center(b) -> float:
+    return (b[0] + b[1]) / 2.0
+
+
+def _keep_by_position(bands, floor_tol: float = _POS_TOL_FLOOR):
+    """按帧间位置投票挑出「同一处」的命中帧，返回 (keep_indices, med, mad, tol)。"""
+    n = len(bands)
+    if n < 3:
+        return list(range(n)), 0.0, 0.0, float(floor_tol)
+    centers = [_band_center(b) for b in bands]
+    med = _median(centers)
+    mad = _median([abs(c - med) for c in centers])
+    tol = max(float(floor_tol), 3.0 * mad)
+    keep = [i for i, c in enumerate(centers) if abs(c - med) <= tol]
+    return keep, med, mad, tol
+
+
 # 「鲁棒并集」相对中位数带允许的最大增长（占画面高）。
 # 🔴 2026-09-18 定案，**管线侧必须用同一个数**（edit_ffmpeg.py::_prepare_feather 与
 #    自适应那处）。取 6% 的理由：足够覆盖「同片内字幕位置有变化」的常见幅度
@@ -201,16 +278,23 @@ def detect_band_ratio(images) -> dict:
     total = len(images)
 
     def _collect(min_runs):
-        """用给定的笔画游程下限跑一遍全部帧，返回 (bands, per_frame, cols)。"""
+        """用给定的笔画游程下限跑一遍全部帧，返回 (bands, per_frame, cols_list, idx_list)。
+
+        `idx_list`：每个 band 对应的**帧下标**（bands 是稀疏的，只收命中帧）——
+        帧间位置投票要据此把离群帧的 per_frame 一并作废（否则预览「跟幕」会跳到亮块上）。
+        `cols_list`：与 bands 一一对应的横向范围（比例），过滤后重新取并集。
+        """
         b_acc = []
         # 🔴 2026-09-18：逐帧结果。与 images **索引一一对应**，前端拿着它 + 自己记录的抽帧时间点
         #   就能让预览「跟幕」——播放头走到哪儿，框就跳到那一片时段探测出的带上。
         pf_acc = []
-        cols_acc = None          # 所有命中帧里最宽的横向范围（比例），union 防残字
-        for im in images:
+        idx_acc = []             # 每个 band 命中的帧下标
+        cols_list = []           # 每个 band 的横向范围（比例）或 None
+        for k, im in enumerate(images):
             try:
                 gray = im.convert("L")
-                b = _band_rows(gray, gray.width, gray.height, min_runs=min_runs)
+                b = _band_rows(gray, gray.width, gray.height, min_runs=min_runs,
+                               avg_run_max=None if min_runs else 0)
             except Exception:
                 b = None
             if not b:
@@ -222,6 +306,7 @@ def detect_band_ratio(images) -> dict:
                 pf_acc.append({"found": False, "note": "oversized"})
                 continue
             b_acc.append((b[0] / gray.height, b[1] / gray.height))
+            idx_acc.append(k)
             pf_acc.append({"found": True,
                            "band_y_ratio": b[0] / gray.height,
                            "band_h_ratio": (b[1] - b[0]) / gray.height})
@@ -231,22 +316,23 @@ def detect_band_ratio(images) -> dict:
             except Exception:
                 c = None
             if c:
-                w0 = gray.width
-                r0, r1 = c[0] / w0, c[1] / w0
-                if cols_acc is None or (r1 - r0) > (cols_acc[1] - cols_acc[0]):
-                    cols_acc = (r0, r1)
-        return b_acc, pf_acc, cols_acc
+                cols_list.append((c[0] / gray.width, c[1] / gray.width))
+            else:
+                cols_list.append(None)
+        return b_acc, pf_acc, cols_list, idx_acc
 
-    bands, per_frame, cols = _collect(3)
+    bands, per_frame, cols_list, band_idx = _collect(3)
     _need = max(2, -(-total * 3 // 10))
     if len(bands) < _need:
         # 放宽重试（2026-09-19，与管线 _prepare_feather 同口径同原因）：笔画游程判据
         # （_band_rows 第三判据）可能误杀「只有 1~2 个字的超短字幕」帧；万一因此命中帧
         # 不够门槛，前端会退回"底部默认带"，用户看到的就是"原字幕根本没擦干净"。
         # 丢掉游程判据重判一遍（图像已在内存，零额外抽帧开销）。
-        rb, rp, rc_ = _collect(0)
+        # 放宽时连第四判据（游程形状）一起关：它同样是"像不像文字"的形态判据，
+        # 只松第三、不松第四，等于没松。帧间投票仍会兜住误报（见下）。
+        rb, rp, rl, ri = _collect(0)
         if len(rb) > len(bands):
-            bands, per_frame, cols = rb, rp, rc_
+            bands, per_frame, cols_list, band_idx = rb, rp, rl, ri
 
     if len(bands) < max(2, -(-total * 3 // 10)):
         # 前端抽 10 帧（2026-09-18 从 4 帧加密度：硬字幕是间歇出现的，4 个固定
@@ -259,6 +345,33 @@ def detect_band_ratio(images) -> dict:
                 "per_frame": [],
                 "note": ("未探测到原字幕（画面较干净，或字幕不是白色）"
                          if not bands else "命中帧太少，无法确认原字幕位置")}
+
+    # ---- 第二层：帧间位置投票，丢掉「位置离群」的命中帧（2026-09-19 三次根治）----
+    # 动因：单帧判据再严，也总有某个镜头（大片高光/片头片尾字幕墙）能凑出一段
+    # 「像文字」的带；而真字幕在**全片**的位置稳定，误报位置随机 —— 用帧间一致性
+    # 把它们分开，比继续给单帧加判据更可靠（单帧判据越加越容易误杀真字幕）。
+    keep, _pmed, _pmad, _ptol = _keep_by_position(bands)
+    if len(keep) < len(bands):
+        dropped = [band_idx[i] for i in range(len(bands)) if i not in set(keep)]
+        for k in dropped:
+            per_frame[k] = {"found": False, "note": "position-outlier"}
+        bands = [bands[i] for i in keep]
+        cols_list = [cols_list[i] for i in keep]
+        print(f"[探测] 帧间位置投票剔除 {len(dropped)} 帧离群带"
+              f"（中位中心 {_pmed:.3f}，容差 {_ptol:.3f}）：帧 {dropped}")
+    if len(bands) < max(2, -(-total * 3 // 10)):
+        # 剔除后剩下的帧连门槛都不到 ⇒ 这些「命中」不是同一个稳定元素
+        # （典型：片头片尾的演职员表 + 各种亮块各说各话）。此时给位置＝赌博，
+        # fail-open 让用户手动指定更安全（绝不因探测去糊一片画面）。
+        return {"found": False, "band_y_ratio": 0.0, "band_h_ratio": 0.0,
+                "band_x_ratio": 0.0, "band_w_ratio": 0.0,
+                "hits": len(bands), "total": total, "per_frame": [],
+                "note": "命中帧位置不集中（画面无稳定白字字幕可信），已跳过自动探测"}
+    # 横向范围：过滤后重新取并集（被剔除帧的 cols 不能算进来）
+    cols = None
+    for c in cols_list:
+        if c and (cols is None or (c[1] - c[0]) > (cols[1] - cols[0])):
+            cols = c
 
     centers = [(b[0] + b[1]) / 2 for b in bands]
     heights = [b[1] - b[0] for b in bands]

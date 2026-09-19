@@ -244,6 +244,65 @@ def test_mark_matches_pipeline():
     # 管线的 _prepare_feather 与自适应那处必须用同一个 _GROW_CAP=0.06
     assert "_GROW_CAP = 0.06" in src, "鲁棒并集的增长上限 0.06 必须显式写死，供管线对照同步"
     assert "_percentile" in src, "并集用 p10/p90 分位，别退回 min/max（会被单点撑大）"
+    # 2026-09-19 三次根治：第四判据（游程形状）+ 帧间位置投票，两边必须同值同源
+    assert "_N_RUNS_STRONG = 12" in src, "游程条数强阈值固定 12，供管线对照同步"
+    assert "_POS_TOL_FLOOR = 0.06" in src, "帧间位置投票容差下限 0.06，供管线对照同步"
+    assert "0.0125" in src, "游程平均宽上限 = 1.25% 画宽，供管线对照同步"
+    assert "_keep_by_position" in src, "帧间位置投票必须显式成函数，管线那边同名同源"
+
+
+def _mk_frame_with_block(w=480, h=270, block_top=None, text_top=None):
+    """合成一帧，可选两块内容：
+      ① `block_top`：**亮块**——5 条 12px 宽白条、间距 40px（＝实测「土黄军装高光」
+         的游程形态：n_runs 少而 avg_run 宽）；
+      ② `text_top`：**细笔画字幕行**——2px 细条、间距 12px（＝真字笔画：条数多而窄）。
+    """
+    im = Image.new("RGB", (w, h), (30, 40, 60))
+    d = ImageDraw.Draw(im)
+    if block_top is not None:
+        for k in range(5):
+            x = int(w * 0.10) + k * 40
+            d.rectangle([x, block_top, x + 12, block_top + 24], fill=(255, 255, 255))
+    if text_top is not None:
+        x = int(w * 0.10)
+        while x < w * 0.85:
+            d.rectangle([x, text_top, x + 2, text_top + 18], fill=(255, 255, 255))
+            x += 12
+    return im
+
+
+def test_band_rows_rejects_wide_run_bright_block():
+    """🔴 2026-09-19 用户第 2 张截图（虚线框压在军装上、真字幕在框外）的回归锁。
+
+    实测现场（帧 2334.9s，480×270）：军装高光块占 0.700~0.789，真字幕在 0.837~0.900；
+    高光块命中行数**比真字幕还多**，被「取最长段」选中。
+    """
+    im = _mk_frame_with_block(block_top=189, text_top=226)
+    g = im.convert("L")
+    b = subtitle_band._band_rows(g, 480, 270)
+    assert b is not None, "细笔画字幕行应被探测到"
+    assert b[0] >= 220, f"应选中细笔画字幕行（y≈226），实际 {b} —— 亮块又被选中了"
+    # 反证：关掉第四判据（＝放宽重试路径的形态判据）时，亮块确实会赢
+    # ⇒ 说明本 fixture 真复现了病灶，而不是碰巧通过
+    loose = subtitle_band._band_rows(g, 480, 270, avg_run_max=0)
+    assert loose is not None and loose[0] < 200, f"反证失败：关掉判据后亮块仍未胜出 {loose}"
+
+
+def test_detect_drops_position_outlier_frame():
+    """帧间位置投票：个别帧位置离群（片头/片尾字幕、某镜头大片高光）不得污染结果，
+    也不得让预览「跟幕」跳到那一帧的错位置上。"""
+    # 4 帧真字幕（同位置）+ 1 帧位置明显不同的带（模拟片头字幕 / 高光误报）
+    imgs = [_mk_frame(band_top=228) for _ in range(4)] + [_mk_frame(band_top=196)]
+    r = subtitle_band.detect_band_ratio(imgs)
+    assert r["found"] is True, r
+    pf = r["per_frame"]
+    assert len(pf) == 5, pf
+    assert pf[4]["found"] is False, f"离群帧应被剔除，实际 {pf[4]}"
+    assert pf[4].get("note") == "position-outlier", pf[4]
+    for i in range(4):
+        assert pf[i]["found"] is True, (i, pf[i])
+    # 4 帧一致 → 带落在 228/270≈0.844 附近（含 pad 会略早）
+    assert 0.78 < r["band_y_ratio"] < 0.86, r
 
 
 def test_band_rows_rejects_bottom_pollution():
