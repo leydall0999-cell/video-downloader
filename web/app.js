@@ -8454,7 +8454,7 @@ el.dwVidPlayer.removeAttribute('src');
    *  声明在这里而不是靠下的实现块里：comRefreshTtsStatus 在初始化阶段就会被调用，
    *  若用 let 声明在下方会命中 TDZ 抛 ReferenceError。 */
   let comVoiceSampleState = { audio_path: '', ref_text: '', ready: false };
-  /** 「我的音色」未配置时自动展开「解说参数」卡，只做一次（避免用户手动折起后反复被打开）。 */
+  /** 「我的音色」未配置时自动展开其所在卡（现「配音与音量」），只做一次（避免用户手动折起后反复被打开）。 */
   let _myVoiceAutoOpened = false;
   const comRefreshTtsStatus = async (opts = {}) => {
     const sel = el.comTtsProvider;
@@ -8526,13 +8526,16 @@ el.dwVidPlayer.removeAttribute('src');
         // 环境没装：状态条由下载入口那段文案负责。这里**必须什么都不写** ——
         // 否则会一边说「正在自动启动服务」一边永远等不到（服务压根没有 venv 可跑）。
       } else if (!status.voice_sample_ready) {
-        comSetTtsStatusBar('orange', '还差一步：在「解说参数 → 我的音色」里选一段自己的录音 + 填文字稿并保存');
+        comSetTtsStatusBar('orange', '还差一步：在「配音与音量 → 我的音色」里选一段自己的录音 + 填文字稿并保存');
         comEnsureQwen3Tts(); // 服务可以并行预热，配好样本即可直接用
-        // 「我的音色」藏在默认折起的「解说参数」卡里 —— 只自动展开一次（每会话），
+        // 「我的音色」默认折在「配音与音量」卡里 —— 只自动展开一次（每会话），
         // 否则用户手动折起后每次刷新都被强行打开，很烦。
-        if (!_myVoiceAutoOpened && el.comOptsFold && el.comMyVoiceRow) {
+        // 2026-09-19 它随用户要求从「解说参数」搬进「配音与音量」：就近找所属 details 展开，
+        // 不绑死卡 id，以后再搬家这里也不用跟着改。
+        if (!_myVoiceAutoOpened && el.comMyVoiceRow) {
           _myVoiceAutoOpened = true;
-          el.comOptsFold.open = true;
+          const _fold = el.comMyVoiceRow.closest('details');
+          if (_fold) _fold.open = true;
           try { el.comMyVoiceRow.scrollIntoView({ block: 'nearest' }); } catch (_) {}
         }
       } else if (status.qwen3tts_ready) {
@@ -9211,7 +9214,7 @@ el.dwVidPlayer.removeAttribute('src');
         if (!comVoiceSampleState.ready) {
           const goOn = window.confirm(
             '还没配「我的音色」——这句解说会用不到你自己的声音，成片里的旁白会退回系统免费音色。\n\n' +
-            '建议先取消，在「解说参数 → 我的音色」里选一段自己的录音（3~15 秒）并填上文字稿保存。\n\n' +
+            '建议先取消，在「配音与音量 → 我的音色」里选一段自己的录音（3~15 秒）并填上文字稿保存。\n\n' +
             '仍要继续渲染吗？'
           );
           if (!goOn) {

@@ -2285,41 +2285,6 @@
         </div>
       </div>
 
-      <!-- ===== 我的音色（本地克隆源）：Qwen3-TTS 克隆真正生效的前提 =====
-           2026-09-18 新增。此前「配音引擎=本地语音克隆」看似可选，但全站没有音色样本入口，
-           QWEN3TTS_REF_AUDIO/REF_TEXT 恒空 → 服务起来了也克隆不出你的声音（静默回退 edge）。
-           这里补上「选一段自己的录音 + 填那段录音里念的文字稿」，随解说子进程注入。 -->
-      <div class="com-row com-row-myvoice" id="comMyVoiceRow" hidden>
-        <div class="com-cell com-cell-myvoice">
-          <div class="com-opt-title">
-            📇 我的音色（本地克隆源）
-            <span class="com-myvoice-badge" id="comMyVoiceBadge">未配置</span>
-          </div>
-          <!-- 运行环境缺失时的下载入口（2026-09-18）：本地克隆要 500MB venv + 1.9GB 权重，
-               不进发行包 → 首次使用现下（见 server/clone_env.py）。
-               环境都没装好时，「我的音色」配了也跑不起来，所以用它顶掉下面那段。 -->
-          <div class="com-clone-env" id="comCloneEnvBox" hidden>
-            <div class="com-clone-env-text" id="comCloneEnvText">本机还没安装「本地语音克隆」运行环境</div>
-            <div class="com-clone-env-bar" id="comCloneEnvBar" hidden><i id="comCloneEnvFill"></i></div>
-            <div class="com-clone-env-actions">
-              <button type="button" class="btn btn-sm btn-primary" id="comCloneEnvBtn">⤓ 下载并安装（约 2.4GB）</button>
-              <button type="button" class="btn btn-sm btn-ghost" id="comCloneEnvCancel" hidden>取消</button>
-            </div>
-          </div>
-          <div class="com-myvoice-grid" id="comMyVoiceGrid">
-            <button type="button" class="btn btn-sm btn-secondary com-myvoice-pick" id="comMyVoicePick">🎙 选择一段录音</button>
-            <div class="com-myvoice-path" id="comMyVoicePath" title="">还没选择录音文件</div>
-            <label class="com-myvoice-label" for="comMyVoiceText">那段录音里念的内容（文字稿）</label>
-            <textarea id="comMyVoiceText" class="com-myvoice-text" rows="2" placeholder="例如：大家好，今天我们来聊一聊这个让人意想不到的故事。" spellcheck="false"></textarea>
-            <div class="com-myvoice-actions">
-              <span class="com-myvoice-hint">3~15 秒、干净无配乐的短句最准</span>
-              <button type="button" class="btn btn-sm btn-primary" id="comMyVoiceSave">💾 保存音色</button>
-            </div>
-          </div>
-          <span class="com-status" id="comMyVoiceStatus" hidden></span>
-        </div>
-      </div>
-
         </div>
       </details>
 
@@ -2459,6 +2424,43 @@
               <span class="com-vol-val" id="comBoostVal" data-page-node-id="aR0iyhARhrGWmwZMpvV0iU">1.00×</span>
             </div>
             <input type="range" id="comBoost" min="1.0" max="1.6" step="0.05" value="1.0" data-page-node-id="5LFhSrzV7bLeDv2HmJuFbG" />
+          </div>
+
+          <!-- ===== 我的音色（本地克隆源）：Qwen3-TTS 克隆真正生效的前提 =====
+               2026-09-18 新增；2026-09-19 用户要求从「解说参数」卡搬进「配音与音量」（配音相关设置聚一处）。
+               此前「配音引擎=本地语音克隆」看似可选，但全站没有音色样本入口，
+               QWEN3TTS_REF_AUDIO/REF_TEXT 恒空 → 服务起来了也克隆不出你的声音（静默回退 edge）。
+               这里「选一段自己的录音 + 填那段录音里念的文字稿」，随解说子进程注入。
+               样式全在 #commentaryView 作用域（.com-row-myvoice / .com-cell-myvoice），不依赖父容器，DOM 搬家零 CSS 改动。 -->
+          <div class="com-row com-row-myvoice" id="comMyVoiceRow" hidden>
+            <div class="com-cell com-cell-myvoice">
+              <div class="com-opt-title">
+                📇 我的音色（本地克隆源）
+                <span class="com-myvoice-badge" id="comMyVoiceBadge">未配置</span>
+              </div>
+              <!-- 运行环境缺失时的下载入口（2026-09-18）：本地克隆要 500MB venv + 1.9GB 权重，
+                   不进发行包 → 首次使用现下（见 server/clone_env.py）。
+                   环境都没装好时，「我的音色」配了也跑不起来，所以用它顶掉下面那段。 -->
+              <div class="com-clone-env" id="comCloneEnvBox" hidden>
+                <div class="com-clone-env-text" id="comCloneEnvText">本机还没安装「本地语音克隆」运行环境</div>
+                <div class="com-clone-env-bar" id="comCloneEnvBar" hidden><i id="comCloneEnvFill"></i></div>
+                <div class="com-clone-env-actions">
+                  <button type="button" class="btn btn-sm btn-primary" id="comCloneEnvBtn">⤓ 下载并安装（约 2.4GB）</button>
+                  <button type="button" class="btn btn-sm btn-ghost" id="comCloneEnvCancel" hidden>取消</button>
+                </div>
+              </div>
+              <div class="com-myvoice-grid" id="comMyVoiceGrid">
+                <button type="button" class="btn btn-sm btn-secondary com-myvoice-pick" id="comMyVoicePick">🎙 选择一段录音</button>
+                <div class="com-myvoice-path" id="comMyVoicePath" title="">还没选择录音文件</div>
+                <label class="com-myvoice-label" for="comMyVoiceText">那段录音里念的内容（文字稿）</label>
+                <textarea id="comMyVoiceText" class="com-myvoice-text" rows="2" placeholder="例如：大家好，今天我们来聊一聊这个让人意想不到的故事。" spellcheck="false"></textarea>
+                <div class="com-myvoice-actions">
+                  <span class="com-myvoice-hint">3~15 秒、干净无配乐的短句最准</span>
+                  <button type="button" class="btn btn-sm btn-primary" id="comMyVoiceSave">💾 保存音色</button>
+                </div>
+              </div>
+              <span class="com-status" id="comMyVoiceStatus" hidden></span>
+            </div>
           </div>
         </div>
         <span class="com-status com-vol-status" id="comVolStatus" hidden data-page-node-id="H6LFK6FHhW4jZ2cy0HIxr7"></span>
