@@ -519,12 +519,11 @@
     comMyVoiceText: $('comMyVoiceText'),
     comMyVoiceSave: $('comMyVoiceSave'),
     comMyVoiceStatus: $('comMyVoiceStatus'),
-    // 页面内直接录制（2026-09-19）：按钮 + 录制条（计时/电平/停止/取消）
+    // 页面内直接录制（2026-09-19）：主按钮在「直接录制 / 停止并保存」间切换，录制条只报状态
     comMyVoiceRec: $('comMyVoiceRec'),
     comMyVoiceRecBar: $('comMyVoiceRecBar'),
     comMyVoiceRecTime: $('comMyVoiceRecTime'),
     comMyVoiceRecLevel: $('comMyVoiceRecLevel'),
-    comMyVoiceRecStop: $('comMyVoiceRecStop'),
     comMyVoiceRecCancel: $('comMyVoiceRecCancel'),
     // 本地克隆「运行环境」按需下载入口（2026-09-18）
     comCloneEnvBox: $('comCloneEnvBox'),
@@ -10339,7 +10338,7 @@ el.dwVidPlayer.removeAttribute('src');
   const COM_REC_MIN_SEC = 1.0;     // 下限：不到 1 秒必然没内容
   const COM_REC_PEAK_MIN = 0.02;   // 整段峰值下限，低于它视为「没采到声音」
   const comRec = {
-    active: false, stream: null, ctx: null, proc: null, src: null, sink: null,
+    active: false, busy: false, stream: null, ctx: null, proc: null, src: null, sink: null,
     chunks: [], t0: 0, tick: 0, autoStop: 0, level: 0,
   };
 
@@ -10348,11 +10347,25 @@ el.dwVidPlayer.removeAttribute('src');
       && (window.AudioContext || window.webkitAudioContext));
   }
 
-  function comRecSetBar(on) {
-    if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !on;
+  // 等麦克风授权的那几秒里按钮既不能重复点、也不能点不动没反应
+  function comRecBusy(on) {
+    comRec.busy = !!on;
     if (el.comMyVoiceRec) {
       el.comMyVoiceRec.disabled = !!on;
-      el.comMyVoiceRec.textContent = on ? '⏺ 录制中…' : '⏺ 直接录制';
+      if (on) el.comMyVoiceRec.textContent = '⏳ 连接麦克风…';
+    }
+  }
+
+  function comRecSetBar(on) {
+    comRec.busy = false;
+    if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !on;
+    if (el.comMyVoiceRec) {
+      // 🔴 录制中让主按钮自己变成「停止并保存」，别禁用它：
+      // 之前把主按钮禁掉、把唯一的停止键只放在文字稿下面的录制条里，而真机设置面板
+      // 会把录制条滚出可视区 ⇒ 用户只看到一个点不动的「录制中…」，报「没有结束键」。
+      el.comMyVoiceRec.disabled = false;
+      el.comMyVoiceRec.textContent = on ? '⏹ 停止并保存' : '⏺ 直接录制';
+      el.comMyVoiceRec.classList.toggle('is-recording', !!on);
     }
     if (el.comMyVoiceText) el.comMyVoiceText.readOnly = !!on;   // 录制中别改稿，免得念的和存的对不上
   }
@@ -10395,7 +10408,7 @@ el.dwVidPlayer.removeAttribute('src');
   }
 
   async function comRecStart() {
-    if (comRec.active) return;
+    if (comRec.active || comRec.busy) return;   // 等授权期间再点一下会拿到第二条流、旧的那条漏着不放
     const text = el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '';
     if (!text) {
       comSetVoiceStatus('warn', '请先写好你要念的内容（1~2 句），录制时照着读 —— 克隆要靠它对齐韵律');
@@ -10407,6 +10420,7 @@ el.dwVidPlayer.removeAttribute('src');
       return;
     }
     comSetVoiceStatus('info', '正在获取麦克风…（首次使用系统会问一次授权）');
+    comRecBusy(true);
     let stream;
     try {
       stream = await Promise.race([
@@ -10426,6 +10440,7 @@ el.dwVidPlayer.removeAttribute('src');
       } else if ((e && e.message) === 'COM_REC_TIMEOUT') {
         msg = '麦克风一直没有响应：请检查「系统设置 → 隐私与安全性 → 麦克风」是否已允许「视频工坊」，然后重试';
       }
+      comRecSetBar(false);   // 还原按钮，顺带清掉 busy
       comSetVoiceStatus('warn', msg);
       return;
     }
@@ -10453,7 +10468,9 @@ el.dwVidPlayer.removeAttribute('src');
       comRec.proc = proc; comRec.src = src; comRec.sink = sink;
       comRec.t0 = Date.now();
       comRecSetBar(true);
-      comSetVoiceStatus('info', '录制中：照着文字稿念一遍，念完点「⏹ 停止并保存」');
+      // 录制条可能被滚出设置面板的可视区 → 带进视野（block:'nearest' 只做最小滚动）
+      try { if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.scrollIntoView({ block: 'nearest' }); } catch (_) { /* ignore */ }
+      comSetVoiceStatus('info', '录制中：照着文字稿念一遍，念完点上面的「⏹ 停止并保存」');
       comRec.tick = setInterval(() => {
         const sec = (Date.now() - comRec.t0) / 1000;
         if (el.comMyVoiceRecTime) el.comMyVoiceRecTime.textContent = sec.toFixed(1) + 's';
@@ -10522,11 +10539,11 @@ el.dwVidPlayer.removeAttribute('src');
     }
   }
 
+  // 同一个按钮两种状态：闲置＝开始录，录制中＝停止并保存 —— 结束键永远在用户刚点的位置
   if (el.comMyVoiceRec) {
-    el.comMyVoiceRec.addEventListener('click', () => { comRecStart(); });
-  }
-  if (el.comMyVoiceRecStop) {
-    el.comMyVoiceRecStop.addEventListener('click', () => { comRecStop(true, false); });
+    el.comMyVoiceRec.addEventListener('click', () => {
+      if (comRec.active) comRecStop(true, false); else comRecStart();
+    });
   }
   if (el.comMyVoiceRecCancel) {
     el.comMyVoiceRecCancel.addEventListener('click', () => { comRecStop(false, false); });

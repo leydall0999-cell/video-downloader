@@ -2433,19 +2433,20 @@
                        依赖 WKWebView 的 getUserMedia → 桌面端由 desktop_launcher.py 放行
                        requestMediaCapturePermissionForOrigin，包内 Info.plist 声明 NSMicrophoneUsageDescription；
                        网页版（真浏览器）天然可用。 -->
-                  <button type="button" class="btn btn-sm btn-primary com-myvoice-rec" id="comMyVoiceRec" title="先写好下面要念的内容，再点这里照着读一遍">⏺ 直接录制</button>
+                  <button type="button" class="btn btn-sm btn-primary com-myvoice-rec" id="comMyVoiceRec" title="先写好下面要念的内容，再点这里照着读一遍；录制中这个按钮会变成「停止并保存」">⏺ 直接录制</button>
                   <button type="button" class="btn btn-sm btn-secondary com-myvoice-pick" id="comMyVoicePick">🎙 选择录音</button>
                   <div class="com-myvoice-path" id="comMyVoicePath" title="">还没选择录音文件</div>
                 </div>
                 <label class="com-myvoice-label" for="comMyVoiceText">那段录音里念的内容（文字稿）</label>
                 <textarea id="comMyVoiceText" class="com-myvoice-text" rows="2" placeholder="例如：大家好，今天我们来聊一聊这个让人意想不到的故事。" spellcheck="false"></textarea>
-                <!-- 录制中：计时 + 录到声音没有的电平条 + 停止/取消（2026-09-19）-->
+                <!-- 录制中：计时 + 录到声音没有的电平条（2026-09-19）
+                     停止键不在这里 —— 用上面那个「⏺ 直接录制」按钮就地变「⏹ 停止并保存」，
+                     否则这条被滚出设置面板可视区时用户就找不到结束键了。 -->
                 <div class="com-myvoice-recbar" id="comMyVoiceRecBar" hidden>
                   <span class="com-myvoice-recdot" id="comMyVoiceRecDot"></span>
                   <span class="com-myvoice-rectime" id="comMyVoiceRecTime">0.0s</span>
                   <span class="com-myvoice-reclevel" title="有声音时这条会跳；一直不动说明麦克风没采到"><i id="comMyVoiceRecLevel"></i></span>
                   <span class="com-myvoice-rectip">照着上面文字稿念…</span>
-                  <button type="button" class="btn btn-sm btn-primary" id="comMyVoiceRecStop">⏹ 停止并保存</button>
                   <button type="button" class="btn btn-sm btn-ghost" id="comMyVoiceRecCancel">取消</button>
                 </div>
                 <div class="com-myvoice-actions">

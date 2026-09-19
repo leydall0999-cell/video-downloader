@@ -3007,6 +3007,22 @@ img { max-width: 100%; display: block; }
   font-size: .7rem; color: var(--text-mute); flex: 1 1 100%; order: 9;
 }
 .com-myvoice-recbar .btn { flex: 0 0 auto; }
+/* 录制中：主按钮就地变「停止并保存」并转红。结束键必须就是用户刚点的那个按钮 ——
+   原来禁用了主按钮、把唯一的停止键只放在文字稿下面的录制条里，而录制条会被设置面板
+   滚出可视区，用户只看到一个点不动的「录制中…」（2026-09-19 用户报「没有结束键」）。 */
+.com-myvoice-rec.is-recording {
+  background-color: #e11d48; background-image: none;
+  border-color: #e11d48; color: #fff;
+  box-shadow: 0 8px 18px rgba(225, 29, 72, .28);
+  /* 必须瞬时切换：.btn 自带 `transition: background .18s`，而 .btn-primary 的底是
+     linear-gradient（backgroundColor 为 transparent）⇒ 过渡期间是「白底 + 白字」，
+     那 0.18 秒按钮文字是看不见的。离屏 WKWebView 里过渡根本不推进，
+     会被冻结在起点（截图/实测都读成透明），极容易误判成「红色没生效」。 */
+  transition: none;
+}
+.com-myvoice-rec.is-recording:hover:not(:disabled) {
+  background-color: #be123c; border-color: #be123c; background-image: none;
+}
 /* 保存/选择后的即时反馈配色：沿用 .com-script-ok/-err/-warn 那套语义色，
    否则 ok/warn 全一个灰，用户看不出「到底成没成」。 */
 #commentaryView #comMyVoiceStatus[data-kind="ok"] { color: var(--success, #16a34a); }
@@ -5995,4 +6011,8 @@ html.theme-dark textarea {
 .com-right .com-myvoice-line .com-myvoice-rec,
 .com-right .com-myvoice-line .com-myvoice-pick { flex: 1 1 0; min-width: 0; }
 .com-right .com-myvoice-line .com-myvoice-path { flex: 1 1 100%; }
+/* 录制中：停止键独占一整行。`.btn` 是 white-space:nowrap 且没有 ellipsis，
+   标签变长（「⏹ 停止并保存」比「⏺ 直接录制」长）后在窄栏里会被挤出按钮框外、
+   压到旁边控件上；录制期间「选择录音」也不必并排（2026-09-19 实测 63px 宽时裁字）。 */
+.com-right .com-myvoice-line .com-myvoice-rec.is-recording { flex: 1 1 100%; }
 .com-right .com-myvoice-recbar { gap: .35rem; }
