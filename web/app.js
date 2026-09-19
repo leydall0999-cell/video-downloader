@@ -519,6 +519,13 @@
     comMyVoiceText: $('comMyVoiceText'),
     comMyVoiceSave: $('comMyVoiceSave'),
     comMyVoiceStatus: $('comMyVoiceStatus'),
+    // 页面内直接录制（2026-09-19）：按钮 + 录制条（计时/电平/停止/取消）
+    comMyVoiceRec: $('comMyVoiceRec'),
+    comMyVoiceRecBar: $('comMyVoiceRecBar'),
+    comMyVoiceRecTime: $('comMyVoiceRecTime'),
+    comMyVoiceRecLevel: $('comMyVoiceRecLevel'),
+    comMyVoiceRecStop: $('comMyVoiceRecStop'),
+    comMyVoiceRecCancel: $('comMyVoiceRecCancel'),
     // 本地克隆「运行环境」按需下载入口（2026-09-18）
     comCloneEnvBox: $('comCloneEnvBox'),
     comCloneEnvText: $('comCloneEnvText'),
@@ -10321,6 +10328,210 @@ el.dwVidPlayer.removeAttribute('src');
       } catch (_e) { /* 忽略 */ }
     });
   }
+  // ===== 「我的音色」页面内直接录制（2026-09-19）=====
+  // 用户问「录音能在这里直接录吗」——此前只能先开别的录音软件录好再回来选文件，太重。
+  // 采集用 WebAudio（**不用 MediaRecorder**：Safari 给 m4a、Chrome 给 webm，格式不统一，
+  // 后端还得多判；这里自己把 PCM 编 16bit WAV，落盘即是最稳的样本格式）。
+  // 桌面端两条硬依赖（缺任一都会「点了没反应/一直卡在获取麦克风」）：
+  //   ① desktop_launcher.py 给 pywebview 的 WKUIDelegate 补 requestMediaCapturePermissionForOrigin 放行；
+  //   ② 包内 Info.plist 声明 NSMicrophoneUsageDescription（desktop/build_mac.sh 注入）。
+  const COM_REC_MAX_SEC = 30;      // 上限：超过自动停止（样本 3~15 秒最准）
+  const COM_REC_MIN_SEC = 1.0;     // 下限：不到 1 秒必然没内容
+  const COM_REC_PEAK_MIN = 0.02;   // 整段峰值下限，低于它视为「没采到声音」
+  const comRec = {
+    active: false, stream: null, ctx: null, proc: null, src: null, sink: null,
+    chunks: [], t0: 0, tick: 0, autoStop: 0, level: 0,
+  };
+
+  function comRecSupported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+      && (window.AudioContext || window.webkitAudioContext));
+  }
+
+  function comRecSetBar(on) {
+    if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !on;
+    if (el.comMyVoiceRec) {
+      el.comMyVoiceRec.disabled = !!on;
+      el.comMyVoiceRec.textContent = on ? '⏺ 录制中…' : '⏺ 直接录制';
+    }
+    if (el.comMyVoiceText) el.comMyVoiceText.readOnly = !!on;   // 录制中别改稿，免得念的和存的对不上
+  }
+
+  function comRecTeardown() {
+    try { if (comRec.proc) comRec.proc.disconnect(); } catch (_) { /* ignore */ }
+    try { if (comRec.src) comRec.src.disconnect(); } catch (_) { /* ignore */ }
+    try { if (comRec.sink) comRec.sink.disconnect(); } catch (_) { /* ignore */ }
+    try { if (comRec.stream) comRec.stream.getTracks().forEach((t) => t.stop()); } catch (_) { /* ignore */ }
+    try { if (comRec.ctx && comRec.ctx.state !== 'closed') comRec.ctx.close(); } catch (_) { /* ignore */ }
+    if (comRec.tick) { clearInterval(comRec.tick); comRec.tick = 0; }
+    if (comRec.autoStop) { clearTimeout(comRec.autoStop); comRec.autoStop = 0; }
+    comRec.active = false; comRec.stream = null; comRec.ctx = null;
+    comRec.proc = null; comRec.src = null; comRec.sink = null;
+    comRecSetBar(false);
+    if (el.comMyVoiceRecLevel) el.comMyVoiceRecLevel.style.width = '0%';
+    if (el.comMyVoiceRecTime) el.comMyVoiceRecTime.textContent = '0.0s';
+  }
+
+  // Float32 PCM → 16bit 单声道 WAV（标准 44 字节头）。参考样本不需要压缩。
+  function comRecEncodeWav(chunks, sampleRate) {
+    let n = 0;
+    for (let i = 0; i < chunks.length; i++) n += chunks[i].length;
+    const dv = new DataView(new ArrayBuffer(44 + n * 2));
+    const wr = (off, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(off + i, s.charCodeAt(i)); };
+    wr(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); wr(8, 'WAVE');
+    wr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true);
+    dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+    wr(36, 'data'); dv.setUint32(40, n * 2, true);
+    let off = 44;
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      for (let j = 0; j < c.length; j++, off += 2) {
+        const s = Math.max(-1, Math.min(1, c[j]));
+        dv.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      }
+    }
+    return new Blob([dv.buffer], { type: 'audio/wav' });
+  }
+
+  async function comRecStart() {
+    if (comRec.active) return;
+    const text = el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '';
+    if (!text) {
+      comSetVoiceStatus('warn', '请先写好你要念的内容（1~2 句），录制时照着读 —— 克隆要靠它对齐韵律');
+      if (el.comMyVoiceText) el.comMyVoiceText.focus();
+      return;
+    }
+    if (!comRecSupported()) {
+      comSetVoiceStatus('warn', '当前环境不支持直接录制，请用「🎙 选择录音」导入已录好的音频');
+      return;
+    }
+    comSetVoiceStatus('info', '正在获取麦克风…（首次使用系统会问一次授权）');
+    let stream;
+    try {
+      stream = await Promise.race([
+        navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true })),
+        // 权限被系统层挡住时 promise 可能一直不落定 → 12 秒当失败，给可执行的提示
+        new Promise((_, rej) => setTimeout(() => rej(new Error('COM_REC_TIMEOUT')), 12000)),
+      ]);
+    } catch (e) {
+      const name = (e && e.name) || '';
+      let msg = '拿不到麦克风：' + ((e && e.message) || e);
+      if (name === 'NotAllowedError') {
+        msg = '麦克风被拒绝：请到「系统设置 → 隐私与安全性 → 麦克风」里允许「视频工坊」，再回来重试';
+      } else if (name === 'NotFoundError') {
+        msg = '没找到可用的麦克风设备';
+      } else if ((e && e.message) === 'COM_REC_TIMEOUT') {
+        msg = '麦克风一直没有响应：请检查「系统设置 → 隐私与安全性 → 麦克风」是否已允许「视频工坊」，然后重试';
+      }
+      comSetVoiceStatus('warn', msg);
+      return;
+    }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (_) { /* ignore */ } }
+      const src = ctx.createMediaStreamSource(stream);
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      const sink = ctx.createGain();
+      sink.gain.value = 0;   // 静音接目的地：既驱动节点，又不会把声音放出来（否则啸叫）
+      comRec.chunks = []; comRec.level = 0;
+      proc.onaudioprocess = (ev) => {
+        const ch = ev.inputBuffer.getChannelData(0);
+        comRec.chunks.push(new Float32Array(ch));
+        let peak = 0;
+        for (let i = 0; i < ch.length; i += 8) {
+          const v = ch[i] < 0 ? -ch[i] : ch[i];
+          if (v > peak) peak = v;
+        }
+        if (peak * 1.6 > comRec.level) comRec.level = Math.min(1, peak * 1.6);
+      };
+      src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+      comRec.active = true; comRec.stream = stream; comRec.ctx = ctx;
+      comRec.proc = proc; comRec.src = src; comRec.sink = sink;
+      comRec.t0 = Date.now();
+      comRecSetBar(true);
+      comSetVoiceStatus('info', '录制中：照着文字稿念一遍，念完点「⏹ 停止并保存」');
+      comRec.tick = setInterval(() => {
+        const sec = (Date.now() - comRec.t0) / 1000;
+        if (el.comMyVoiceRecTime) el.comMyVoiceRecTime.textContent = sec.toFixed(1) + 's';
+        if (el.comMyVoiceRecLevel) {
+          el.comMyVoiceRecLevel.style.width = Math.round(comRec.level * 100) + '%';
+          comRec.level *= 0.72;   // 回落，否则一直顶格看不出变化
+        }
+      }, 100);
+      // 到上限自动收：超长样本没意义，也免得忘了停一直占着麦克风
+      comRec.autoStop = setTimeout(() => { comRecStop(true, true); }, COM_REC_MAX_SEC * 1000);
+    } catch (e) {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (_) { /* ignore */ }
+      comRecTeardown();
+      comSetVoiceStatus('warn', '启动录音失败：' + ((e && e.message) || e));
+    }
+  }
+
+  async function comRecStop(save, auto) {
+    if (!comRec.active) { comRecTeardown(); return; }
+    const sec = (Date.now() - comRec.t0) / 1000;
+    const chunks = comRec.chunks.slice();
+    const sampleRate = comRec.ctx ? comRec.ctx.sampleRate : 48000;
+    let peak = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      for (let j = 0; j < c.length; j += 4) {
+        const v = c[j] < 0 ? -c[j] : c[j];
+        if (v > peak) peak = v;
+      }
+    }
+    comRecTeardown();
+    if (!save) { comSetVoiceStatus('info', '已取消录制'); return; }
+    if (sec < COM_REC_MIN_SEC) { comSetVoiceStatus('warn', '录得太短（不到 1 秒），请重录'); return; }
+    if (peak < COM_REC_PEAK_MIN) {
+      comSetVoiceStatus('warn', '这段几乎没有声音（麦克风可能没采到），请检查输入设备后重录');
+      return;
+    }
+    const blob = comRecEncodeWav(chunks, sampleRate);
+    if (!blob.size) { comSetVoiceStatus('warn', '录音数据为空，请重录'); return; }
+    comSetVoiceStatus('info', (auto ? '已录满 ' + COM_REC_MAX_SEC + ' 秒，' : '') + '正在保存录音…');
+    try {
+      const fd = new FormData();
+      fd.append('audio', blob, 'voice_rec.wav');
+      fd.append('duration', sec.toFixed(2));
+      const res = await fetch('/api/commentary/voice-sample/record', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        comSetVoiceStatus('warn', (data && data.detail) || ('保存录音失败（HTTP ' + res.status + '）'));
+        return;
+      }
+      const p = (data && data.audio_path) || '';
+      if (!p) { comSetVoiceStatus('warn', '后端没返回录音路径，请重试'); return; }
+      comVoiceSampleState.audio_path = p;
+      if (el.comMyVoicePath) {
+        el.comMyVoicePath.textContent = comVoiceSampleBrief(p);
+        el.comMyVoicePath.title = p;
+        el.comMyVoicePath.classList.add('is-set');
+      }
+      comSetVoiceStatus('info', '录音已就绪，正在保存音色…');
+      // 文字稿是「能开录」的前置条件，这里直接落库省一步点击；失败也只是提示，样本文件仍在
+      if (el.comMyVoiceSave && el.comMyVoiceText && el.comMyVoiceText.value.trim()) {
+        el.comMyVoiceSave.click();
+      }
+    } catch (e) {
+      comSetVoiceStatus('warn', '保存录音失败：' + e);
+    }
+  }
+
+  if (el.comMyVoiceRec) {
+    el.comMyVoiceRec.addEventListener('click', () => { comRecStart(); });
+  }
+  if (el.comMyVoiceRecStop) {
+    el.comMyVoiceRecStop.addEventListener('click', () => { comRecStop(true, false); });
+  }
+  if (el.comMyVoiceRecCancel) {
+    el.comMyVoiceRecCancel.addEventListener('click', () => { comRecStop(false, false); });
+  }
+
   if (el.comMyVoicePick) {
     el.comMyVoicePick.addEventListener('click', async () => {
       const pick = window.VDL && window.VDL.desktop && window.VDL.desktop.pickVoiceSample;

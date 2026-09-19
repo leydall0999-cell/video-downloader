@@ -1577,6 +1577,40 @@ def main() -> None:
                     file=sys.stderr,
                 )
 
+        # ── 放行 WebView 麦克风（2026-09-19）：「我的音色 → ⏺ 直接录制」靠 WKWebView 的
+        #    getUserMedia。macOS 12+ 采集前必须由 WKUIDelegate 的
+        #    webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:
+        #    给出决定；pywebview 没实现它，而 WKWebView 自己没有权限弹窗 →
+        #    请求会一直挂着不落定（页面侧表现＝点录制没反应）。这里补上并直接 grant，
+        #    系统 TCC 仍会照常弹一次「视频工坊想访问麦克风」，用户拒绝则前端给出中文指引。
+        #    ⚠️ 签名必须显式写全（v@: + 每个实参一个编码，type 是 NSUInteger→Q，block→@?）：
+        #       classAddMethods 校验的实参个数 = 签名里 self/_cmd 之后的个数，少写一个即
+        #       BadPrototypeError，多写一个则 block 参数传不进来（拿不到 handler 必崩）。
+        if sys.platform == "darwin":
+            try:
+                import objc as _objc
+                import webview.platforms.cocoa as _cocoa_mic
+                _mic_sel = (
+                    b"webView:requestMediaCapturePermissionForOrigin:"
+                    b"initiatedByFrame:type:decisionHandler:"
+                )
+
+                def _vdl_allow_media_capture(self, _wv, _origin, _frame, _mtype, handler):
+                    """放行麦克风/摄像头采集（仅本机页面；TCC 会再问用户一次）。"""
+                    try:
+                        handler(1)   # WKPermissionDecisionGrant
+                    except Exception:
+                        pass
+
+                _objc.classAddMethods(
+                    _cocoa_mic.BrowserView.BrowserDelegate,
+                    [_objc.selector(_vdl_allow_media_capture, selector=_mic_sel,
+                                    signature=b"v@:@@@Q@?")],
+                )
+                _launch_log("已放行 WebView 媒体采集权限（我的音色·直接录制）")
+            except Exception as _mic_err:
+                _launch_log(f"无法放行 WebView 麦克风（「直接录制」将不可用）: {_mic_err!r}")
+
         api = VdlApi()
 
         # ---- 窗口尺寸/位置记忆（2026-09-17：用户要求按上次手动调整后的宽高打开） ----

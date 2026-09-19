@@ -224,3 +224,130 @@ def inject_voice_sample_env(env: dict[str, str]) -> None:
         env["QWEN3TTS_REF_AUDIO"] = sample["audio_path"]
     if "QWEN3TTS_REF_TEXT" not in env:
         env["QWEN3TTS_REF_TEXT"] = sample["ref_text"]
+
+
+# ── 页面内直接录制（2026-09-19）───────────────────────────────────────────────
+# 背景：此前「我的音色」只能「选择录音」挑一个已有文件，用户得先开别的录音软件。
+# 现在前端用 WebAudio 采 PCM 自己编 16bit WAV 传上来，这里只做「校验 + 落盘」，
+# 不转码 —— WAV 是 libsndfile / ffmpeg 双方都能解的最稳格式（管线侧原本就有
+# soundfile 失败再交 ffmpeg 兜底的逻辑，见 working memory）。
+VOICE_REC_MIN_SEC = 1.0                    # 短于 1 秒必然是误触/空录
+VOICE_REC_MAX_SEC = 60.0                   # 前端 30 秒自动收，这里留一倍余量防绕过
+VOICE_REC_MAX_BYTES = 32 * 1024 * 1024     # 32MB：60 秒 48k 16bit 单声道也只 ~5.8MB
+VOICE_REC_KEEP = 5                         # 只保留最近几段录音，免得悄无声息地堆满磁盘
+
+
+def _voice_rec_dir() -> Path:
+    """录制音频的落盘目录（与用户自选的外部文件分开，便于按策略清理）。"""
+    return _config_dir() / "voice_samples"
+
+
+def _wav_duration(data: bytes) -> float | None:
+    """从 WAV 头算时长；不是合法 WAV（其他容器/头被截断）返回 None。
+
+    只认标准的 `RIFF....WAVE` + 能找到的 `fmt `/`data` 块 —— 够用且不引新依赖。
+    """
+    if len(data) < 44 or data[0:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    import struct
+
+    pos, byte_rate, data_size = 12, 0, 0
+    while pos + 8 <= len(data):
+        cid = data[pos:pos + 4]
+        size = struct.unpack_from("<I", data, pos + 4)[0]
+        if cid == b"fmt " and pos + 8 + 16 <= len(data):
+            byte_rate = struct.unpack_from("<I", data, pos + 16)[0]
+        elif cid == b"data":
+            data_size = size
+            break
+        pos += 8 + size + (size & 1)
+    if byte_rate <= 0 or data_size <= 0:
+        return None
+    return data_size / float(byte_rate)
+
+
+def save_recorded_voice_sample(
+    data: bytes,
+    filename: str = "voice_rec.wav",
+    duration: float | None = None,
+) -> dict[str, Any]:
+    """把页面内录制的音频落盘，返回 {"audio_path", "duration", "bytes"}。
+
+    校验（不满足抛 ValueError，前端直接展示中文原因）：
+      数据非空 / 不超 32MB / 扩展名受支持 / 时长在 1~60 秒之间。
+    时长优先取 WAV 头实测值，拿不到（非 WAV）才用前端报的值。
+    """
+    import datetime as _dt
+    import re as _re
+
+    blob = data or b""
+    if not blob:
+        raise ValueError("没有收到录音数据，请重新录制")
+    if len(blob) > VOICE_REC_MAX_BYTES:
+        raise ValueError("录音数据过大，请缩短到 60 秒以内")
+
+    name = os.path.basename(str(filename or "voice_rec.wav"))
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in VOICE_SAMPLE_EXTS:
+        allowed = " / ".join(e.lstrip(".") for e in VOICE_SAMPLE_EXTS)
+        raise ValueError(f"录音格式不支持（仅 {allowed}）")
+
+    dur: float | None = _wav_duration(blob)
+    if dur is None and duration is not None:
+        try:
+            dur = float(duration)
+        except (TypeError, ValueError):
+            dur = None
+    if dur is not None:
+        if dur < VOICE_REC_MIN_SEC:
+            raise ValueError("录得太短（不到 1 秒），请重新录制")
+        if dur > VOICE_REC_MAX_SEC:
+            raise ValueError(f"录音过长（{dur:.0f} 秒），请控制在 60 秒以内")
+
+    out_dir = _voice_rec_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(out_dir, 0o700)
+    except OSError:
+        pass
+    stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S") + "_%03d" % (_dt.datetime.now().microsecond // 1000)
+    safe = _re.sub(r"[^0-9A-Za-z_.-]", "_", os.path.splitext(name)[0])[:24] or "voice_rec"
+    target = out_dir / f"{safe}_{stamp}{ext}"
+    # 同一毫秒内连存（测试/连点）也要各占一个文件，否则后一段会静默覆盖前一段
+    seq = 1
+    while target.exists():
+        target = out_dir / f"{safe}_{stamp}_{seq}{ext}"
+        seq += 1
+    target.write_bytes(blob)
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+
+    _prune_voice_recordings(keep=str(target))
+    return {
+        "audio_path": str(target),
+        "duration": round(dur, 2) if dur is not None else None,
+        "bytes": len(blob),
+    }
+
+
+def _prune_voice_recordings(keep: str = "") -> None:
+    """只保留最近 VOICE_REC_KEEP 段录音（含刚写的那段），其余删除。
+
+    只动本模块自己写的 `voice_samples/`（用户从别处选的样本文件不在其内，绝不碰）。
+    """
+    try:
+        files = [p for p in _voice_rec_dir().glob("*") if p.is_file()]
+    except OSError:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    keep_name = os.path.basename(keep or "")
+    for idx, path in enumerate(files):
+        if idx < VOICE_REC_KEEP or path.name == keep_name:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            pass
+

@@ -121,6 +121,11 @@ run_one test_config_atomic_write.py
 #                                        dev+本机仍回传（桌面调试不退化）、dev+公网为 None、
 #                                        拿不到码即改不动密码、未知账号不回传、smtp 不回传
 run_one test_auth_reset_code_leak.py
+#  16. test_voice_sample_record.py —— 「我的音色 · 直接录制」落盘守卫：
+#                                      WAV 头时长解析、空/过大/格式/太短/过长 五类拒绝、
+#                                      非 WAV 回落前端报的时长、文件 0600 目录 0700、
+#                                      只保留最近 5 段且不碰配置目录里的其它文件
+run_one test_voice_sample_record.py
 
 echo ""
 echo "========================================="

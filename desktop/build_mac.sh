@@ -354,6 +354,15 @@ if [ -f "$PLIST" ]; then
   # 声明支持中文本地化（否则 macOS 不加载 zh-Hans.lproj）
   plutil -replace CFBundleLocalizations -json '["zh-Hans", "en"]' "$PLIST"
   plutil -replace CFBundleDevelopmentRegion -string "zh-Hans" "$PLIST"
+  # 麦克风用途说明（2026-09-19）：「我的音色 · ⏺ 直接录制」用 WKWebView 的 getUserMedia 采集。
+  # macOS 要求宿主 App 的 Info.plist 声明该键，否则 TCC **静默拒绝** ——
+  # getUserMedia 会报 NotAllowedError（或一直挂着），而弹窗根本不出现，极难排查。
+  # 键一开始不存在，`plutil -replace` 会失败 → 退回 `-insert`。
+  plutil -replace NSMicrophoneUsageDescription \
+    -string "用于录制「我的音色」参考音频，在本机完成语音克隆" "$PLIST" 2>/dev/null \
+    || plutil -insert NSMicrophoneUsageDescription \
+      -string "用于录制「我的音色」参考音频，在本机完成语音克隆" "$PLIST"
+  echo "   已声明 NSMicrophoneUsageDescription（我的音色·直接录制）"
   echo "   已设置中文名 + 本地化声明：视频工坊 (zh-Hans)"
 else
   echo "   ⚠️ Info.plist 不存在，跳过"

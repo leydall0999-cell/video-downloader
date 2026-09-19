@@ -2975,6 +2975,38 @@ img { max-width: 100%; display: block; }
   font-size: .7rem; color: var(--text-mute); line-height: 1.35;
 }
 .com-myvoice-actions .btn { align-self: flex-end; }
+/* 录制条（2026-09-19）：计时 + 电平 + 停止/取消。平时 hidden，录制中才出现，
+   所以样式按「一行放得下」排；窄容器靠 flex-wrap 兜。 */
+.com-myvoice-recbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .45rem;
+  padding: .4rem .5rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.com-myvoice-recdot {
+  width: .5rem; height: .5rem; border-radius: 50%;
+  background: #e11d48; flex: 0 0 auto;
+  animation: comRecPulse 1s ease-in-out infinite;
+}
+@keyframes comRecPulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+.com-myvoice-rectime {
+  font-variant-numeric: tabular-nums; font-size: .78rem; font-weight: 600;
+  color: var(--text); flex: 0 0 auto; min-width: 2.6rem;
+}
+.com-myvoice-reclevel {
+  flex: 1 1 4rem; min-width: 3rem; height: 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, var(--surface));
+  overflow: hidden;
+}
+.com-myvoice-reclevel > i {
+  display: block; height: 100%; width: 0;
+  background: var(--accent);
+}
+.com-myvoice-rectip {
+  font-size: .7rem; color: var(--text-mute); flex: 1 1 100%; order: 9;
+}
+.com-myvoice-recbar .btn { flex: 0 0 auto; }
 /* 保存/选择后的即时反馈配色：沿用 .com-script-ok/-err/-warn 那套语义色，
    否则 ok/warn 全一个灰，用户看不出「到底成没成」。 */
 #commentaryView #comMyVoiceStatus[data-kind="ok"] { color: var(--success, #16a34a); }
@@ -5957,3 +5989,10 @@ html.theme-dark textarea {
 .com-right .com-myvoice-actions .btn { align-self: center; flex: 0 0 auto; }
 /* 「我的音色」区块与上面滑块之间也拉开一档（它整块 hidden 直到选克隆引擎） */
 .com-right .com-vol-rows > .com-row-myvoice { border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); padding-top: .5rem; }
+/* 右栏很窄：两个按钮（录制 / 选择录音）+ 文件名放一行会被文件名挤没，
+   这里让两个按钮各占一半、文件名独占下一行（2026-09-19）。 */
+.com-right .com-myvoice-line { flex-wrap: wrap; row-gap: .35rem; }
+.com-right .com-myvoice-line .com-myvoice-rec,
+.com-right .com-myvoice-line .com-myvoice-pick { flex: 1 1 0; min-width: 0; }
+.com-right .com-myvoice-line .com-myvoice-path { flex: 1 1 100%; }
+.com-right .com-myvoice-recbar { gap: .35rem; }

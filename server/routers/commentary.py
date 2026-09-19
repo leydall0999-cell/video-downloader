@@ -7,7 +7,7 @@ import os
 import pathlib
 import sys
 import subprocess
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 
 router = APIRouter()
 
@@ -113,6 +113,33 @@ def save_commentary_voice_sample(
     from commentary_config import save_voice_sample
     try:
         return save_voice_sample(audio_path, ref_text)
+    except ValueError as exc:
+        raise app.HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/commentary/voice-sample/record")
+async def record_commentary_voice_sample(
+    audio: UploadFile = File(...),
+    duration: str = Form(""),
+) -> dict:
+    """接收「我的音色」页面内直接录制的音频并落盘（2026-09-19）。
+
+    前端用 WebAudio 采 PCM、自己编 16bit WAV 传上来（不依赖 MediaRecorder 的编码差异），
+    这里只做校验 + 落盘，返回 {"audio_path", "duration", "bytes"}；
+    路径拿到后，前端仍走既有 `POST /api/commentary/voice-sample` 落配置（同一套校验）。
+    """
+    from commentary_config import save_recorded_voice_sample
+
+    data = await audio.read()
+    dur: float | None = None
+    raw_dur = str(duration or "").strip()
+    if raw_dur:
+        try:
+            dur = float(raw_dur)
+        except ValueError:
+            dur = None
+    try:
+        return save_recorded_voice_sample(data, audio.filename or "voice_rec.wav", dur)
     except ValueError as exc:
         raise app.HTTPException(status_code=400, detail=str(exc)) from exc
 
