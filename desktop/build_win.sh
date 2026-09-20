@@ -153,7 +153,7 @@ if [ -d "$DIST_APP/_internal" ]; then RUN_ROOT="$DIST_APP/_internal"; else RUN_R
 mkdir -p "$RUN_ROOT/server"
 echo "$APP_VERSION" > "$DIST_APP/version.txt"
 echo "$APP_VERSION" > "$RUN_ROOT/server/version.txt"
-echo "   版本：$APP_VERSION（写入 $DIST_APP/version.txt 与 $RUN_ROOT/server/version.txt）"
+echo "   版本：${APP_VERSION}（写入 $DIST_APP/version.txt 与 $RUN_ROOT/server/version.txt）"
 
 echo "✅ 完成：dist/VideoDownloader/VideoDownloader.exe"
 echo "   双击打开即可，浏览器自动访问 http://127.0.0.1:8321（端口被占用会自动顺延）"

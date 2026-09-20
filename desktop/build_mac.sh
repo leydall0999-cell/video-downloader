@@ -67,7 +67,7 @@ BUILD_KEEP_OLD="${VDL_BUILD_KEEP_OLD:-1}"
 VDL_BUILD_WORKPATH="${VDL_BUILD_WORKPATH:-$REPO/build}"
 mkdir -p "$VDL_BUILD_WORKPATH" 2>/dev/null || true
 if [ "$VDL_BUILD_WORKPATH" != "$REPO/build" ]; then
-  echo "ℹ️  PyInstaller 工作目录改为 $VDL_BUILD_WORKPATH（绕开沙盒对仓库内 build/ 的替换守卫）"
+  echo "ℹ️  PyInstaller 工作目录改为 ${VDL_BUILD_WORKPATH}（绕开沙盒对仓库内 build/ 的替换守卫）"
 fi
 
 trash_path() {
@@ -449,7 +449,7 @@ if [ -x "$LGPL_FF_DIR/bin/ffmpeg" ]; then
 else
   FF="$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)"
   FFPROBE="$(command -v ffprobe || echo /opt/homebrew/bin/ffprobe)"
-  echo "   ⚠️  未找到 LGPL 构建（$LGPL_FF_DIR），回退系统 ffmpeg：$FF"
+  echo "   ⚠️  未找到 LGPL 构建（${LGPL_FF_DIR}），回退系统 ffmpeg：$FF"
 fi
 # 硬校验：捆绑的二进制绝不能是 GPL 构建
 if "$FF" -version 2>/dev/null | grep -q -- "--enable-gpl"; then
