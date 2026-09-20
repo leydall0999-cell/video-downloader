@@ -8936,13 +8936,17 @@ el.dwVidPlayer.removeAttribute('src');
     }
 
     // 自动识别可用性并设置 option 禁用态（不可用项直接置灰、不可选中）
-    const setOpt = (val, disabled, suffix) => {
+    const setOpt = (val, disabled, suffix, fullText) => {
       const opt = sel.querySelector(`option[value="${val}"]`);
       if (!opt) return;
       const base = opt.dataset.base || opt.textContent.split('　')[0];
       if (!opt.dataset.base) opt.dataset.base = base;
       opt.disabled = !!disabled;
-      opt.textContent = base + (suffix ? '　' + suffix : '');
+      if (fullText) {
+        opt.textContent = fullText;
+      } else {
+        opt.textContent = base + (suffix ? '　' + suffix : '');
+      }
     };
 
     // 🔴 默认引擎 = edge-tts（2026-09-18 用户拍板「先退回 edge」）。
@@ -8950,17 +8954,16 @@ el.dwVidPlayer.removeAttribute('src');
     // 且选中即自动拉起 7871（常驻约 2GB 内存）——在性能问题解决前不该做默认。
     // 注意：这里只是「默认选中」，不是「禁用」；用户主动选 qwen3tts 时照样会拉起服务。
     setOpt('qwen3tts', false, status.voice_sample_ready ? '免费' : '免费（需先配「我的音色」）');
-    // IndexTTS-MLX：仅 Apple Silicon + 服务就绪可用，否则置灰
+    // MLX语音克隆：仅 Apple Silicon + 服务就绪可用，否则置灰
     if (status.indextts_mlx_ready) {
       setOpt('indextts_mlx', false, '免费（已就绪）');
-    } else if (status.apple_silicon) {
-      setOpt('indextts_mlx', true, '免费（本机未就绪，暂不可用）');
     } else {
-      setOpt('indextts_mlx', true, '免费（仅苹果芯片 Mac 可用）');
+      // 任何不可用原因（非苹果芯片 / 本机未就绪）统一灰显「本机暂不支持」
+      setOpt('indextts_mlx', true, null, 'MLX语音克隆(更自然,本机暂不支持)');
     }
     // MiniMax / SiliconFlow 已从下拉移除（需自填密钥，与「用户不配密钥」的产品约定不符）
-    // edge-tts：始终可用兜底
-    setOpt('edge', false, '免费（兜底）');
+    // 系统音色（edge-tts）：始终可用兜底
+    setOpt('edge', false, '');
 
     // 当前选中的项若已被禁用，自动回退到 edge 兜底（不能再回落成 ''，'' 已不是合法取值）
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
