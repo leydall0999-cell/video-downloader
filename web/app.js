@@ -10133,6 +10133,7 @@ el.dwVidPlayer.removeAttribute('src');
         hint.textContent = `「${st}」风格已联动音色：${comVoiceLabel(v)}（可在下方「全局配音」手动改）。`;
       }
     }
+    comSyncStyleFoldHint();  // 折叠卡摘要跟着变（收起状态下也能看到当前风格）
   };
 
   const refreshCommentaryDiagnostics = async () => {
@@ -10879,6 +10880,24 @@ el.dwVidPlayer.removeAttribute('src');
     });
   }
 
+  /** 解说风格折叠卡的摘要：实时显示「当前风格 · 强度 n」（收起时也能一眼看清当前选择）。
+   *  2026-09-21 用户要求这块跟上面几张卡一样能收起来 → 收起后列表与滑杆都不可见，
+   *  所以摘要必须自己承担「当前值」的展示；宽度不够时靠 title 看全文。
+   *  ⚠️ 用 getElementById 取滑杆，不引用下面才定义的 comStyleIntensityEl（否则初始化时 TDZ 报错）。 */
+  const comStyleFoldHintEl = document.getElementById('comStyleFoldHint');
+  const comSyncStyleFoldHint = () => {
+    if (!comStyleFoldHintEl) return;
+    const radio = document.querySelector('input[name="comStyle"]:checked');
+    const labEl = radio ? radio.closest('label') : null;
+    const spanEl = labEl ? labEl.querySelector('span') : null;
+    const name = ((spanEl ? spanEl.textContent : '默认') || '默认').trim();
+    const rng = document.getElementById('comStyleIntensity');
+    const val = rng ? rng.value : '65';
+    const txt = name + ' · 强度 ' + val;
+    if (comStyleFoldHintEl.textContent !== txt) comStyleFoldHintEl.textContent = txt;
+    comStyleFoldHintEl.title = txt;
+  };
+
   // 解说风格切换：联动默认音色 + 更新提示文案（用户仍可在审核面板手动改音色）
   document.querySelectorAll('input[name="comStyle"]').forEach((r) => {
     r.addEventListener('change', comApplyStyleVoice);
@@ -10889,10 +10908,14 @@ el.dwVidPlayer.removeAttribute('src');
   const comStyleIntensityEl = document.getElementById('comStyleIntensity');
   const comStyleIntensityValEl = document.getElementById('comStyleIntensityVal');
   if (comStyleIntensityEl && comStyleIntensityValEl) {
-    const syncStyleIntensity = () => { comStyleIntensityValEl.textContent = comStyleIntensityEl.value; };
+    const syncStyleIntensity = () => {
+      comStyleIntensityValEl.textContent = comStyleIntensityEl.value;
+      comSyncStyleFoldHint();
+    };
     comStyleIntensityEl.addEventListener('input', syncStyleIntensity);
     syncStyleIntensity();  // 初始化回显
   }
+  comSyncStyleFoldHint();  // 折叠卡摘要初始化
 
   // 切换配音引擎时，实时刷新可用性（自动识别并置灰不可用项）
   if (el.comTtsProvider) {

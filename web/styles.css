@@ -3746,6 +3746,19 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
 #commentaryView .com-fold-card > .com-cell { padding: .15rem .6rem .65rem; }
 /* 导出剪映草稿：标题已由折叠头承担，去掉卡内重复标题 */
 #commentaryView .com-fold-card > .com-cell > .com-opt-title { display: none; }
+/* 解说风格卡（2026-09-21；用户：「你就不能跟上面一样可以收起来吗」）：整块收进同款折叠卡。
+   承接上面「外层承担卡框、内层去框透明」的规则，避免卡套卡；
+   卡内「解说风格」标题已由折叠头「🎭 解说风格」承担 → 去掉重复标题；
+   「风格强度」在卡内不再自成一卡（同款扁平行），否则会变成小卡套大卡。 */
+#commentaryView .com-fold-card > .com-style-section {
+  background: none; border: none; border-radius: 0; margin: 0; grid-column: auto;
+  padding: .1rem .6rem .55rem;
+}
+#commentaryView .com-style-fold .com-opt-block[data-com-select-inline] > .com-opt-title { display: none; }
+#commentaryView .com-style-fold .com-style-card {
+  background: none; border: none; border-radius: 0;
+  padding: .2rem 0 .1rem; margin: .4rem 0 0;
+}
 /* 羽化 / 音量卡脱离旧的两列网格后，补足与下一张卡的纵向间距 */
 #commentaryView .com-col-right > .com-vol-card { margin-bottom: .55rem; }
 /* 下拉胶囊在两列窄格里的标签超宽兜底：省略号，不撑破布局 */
