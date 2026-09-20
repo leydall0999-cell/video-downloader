@@ -8953,7 +8953,7 @@ el.dwVidPlayer.removeAttribute('src');
     // 原因：Qwen3-TTS 是纯 CPU 推理，本机 macOS 13（MPS 需 ≥14）合成一句话数分钟量级，
     // 且选中即自动拉起 7871（常驻约 2GB 内存）——在性能问题解决前不该做默认。
     // 注意：这里只是「默认选中」，不是「禁用」；用户主动选 qwen3tts 时照样会拉起服务。
-    setOpt('qwen3tts', false, status.voice_sample_ready ? '免费' : '免费（需先配「我的音色」）');
+    setOpt('qwen3tts', false, status.voice_sample_ready ? '' : '需先配「我的音色」');
     // MLX语音克隆：仅 Apple Silicon + 服务就绪可用，否则置灰
     if (status.indextts_mlx_ready) {
       setOpt('indextts_mlx', false, '免费（已就绪）');
