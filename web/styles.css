@@ -2849,6 +2849,17 @@ img { max-width: 100%; display: block; }
   padding: .35rem; max-height: 320px; overflow-y: auto;
   max-width: 280px;
 }
+/* 展开时面板会被移到 <body> 下并加 .is-portal（JS 按 trigger 实测写入 left/width/top）。
+   原因（用户报「风格选择不了 / 拉不下去」的真正根因，两层叠加）：
+   ① 原位置上面板挂在右栏 .com-right 内，而它是 overflow:auto 的滚动容器 → 面板伸出容器底部就被**裁掉**，
+      被裁掉的选项看不见、点不到（点击直接穿透到背后的时间轴元素上）；
+   ② 面板又被困在 .com-col-right（position:sticky，自成层叠上下文）里 → z-index 抬到 999
+      也压不过右栏粘滞表头(z-index:2)与时间轴（elementsFromPoint 实测确认）。
+   移到 body 下 + fixed 可同时脱离这两者：按**视口**定位、完整显示。
+   收起时 JS 会把它放回原位并清掉内联样式。 */
+.com-mode-dropdown-panel.is-portal {
+  position: fixed; right: auto; z-index: 400;
+}
 /* 原生 radio/checkbox 组已转下拉，原生控件仅保留在 DOM 供兼容读取 */
 .com-native-hidden { display: none !important; }
 .com-mode-dropdown-option {
@@ -5764,12 +5775,15 @@ html.theme-dark #commentaryView #comReviewActions { background: #2E2510; border-
 /* ---- v2 四轮补丁：深色下遗漏的写死浅色组件 ---- */
 html.theme-dark #commentaryView .com-mode-dropdown-toggle,
 html.theme-dark #commentaryView .com-mode-dropdown-toggle[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
-html.theme-dark #commentaryView .com-mode-dropdown-panel {
+html.theme-dark #commentaryView .com-mode-dropdown-panel,
+html.theme-dark .com-mode-dropdown-panel.is-portal {
   background: #23252C; border-color: var(--line);
   box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
 }
-html.theme-dark #commentaryView .com-mode-dropdown-option:hover { background: #2B2E52; }
-html.theme-dark #commentaryView .com-mode-dropdown-option.is-selected {
+html.theme-dark #commentaryView .com-mode-dropdown-option:hover,
+html.theme-dark .com-mode-dropdown-panel.is-portal .com-mode-dropdown-option:hover { background: #2B2E52; }
+html.theme-dark #commentaryView .com-mode-dropdown-option.is-selected,
+html.theme-dark .com-mode-dropdown-panel.is-portal .com-mode-dropdown-option.is-selected {
   background: color-mix(in srgb, var(--brand) 30%, #1D1F24); color: #C7D2FE;
 }
 /* 默认（无变体）按钮与次要按钮深色化 */

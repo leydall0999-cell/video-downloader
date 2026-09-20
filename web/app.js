@@ -13147,7 +13147,71 @@ el.dwVidPlayer.removeAttribute('src');
 
     let dirty = false;
     const defaultVal = def.kind === 'checkbox' ? 'off' : (def.options[0] || [''])[0];
-    const close = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    // ---- 展开定位（2026-09-21 修复"风格选择不了 / 拉不下去"）----
+    // 面板原本常驻在 trigger 旁边（absolute），被两层东西挡住：
+    //   ① 右栏 .com-right 是 overflow:auto 的滚动容器 → 面板伸出容器底部就被**裁掉**，
+    //      被裁掉的选项看不见、也点不到（点击穿透到背后的时间轴元素）；
+    //   ② .com-col-right 是 position:sticky（自成层叠上下文）→ 面板 z-index 抬到 999
+    //      仍压不过右栏粘滞表头(z-index:2)与时间轴（elementsFromPoint 实测确认）。
+    // 解法：展开时把面板移到 <body> 下并加 .is-portal（position:fixed），脱离这两层；
+    // 按**视口**定位，面板就能完整显示；收起时放回原位、清掉内联样式。
+    const PANEL_MAX_H = 320, PANEL_GAP = 7, PANEL_PAD = 8, PANEL_MIN_H = 120;
+    const clipHost = (() => {                 // 用于「trigger 被滚出视野就自动收起」
+      let n = panel.parentElement;
+      while (n && n !== document.documentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.overflow !== 'visible' || cs.overflowY !== 'visible') return n;
+        n = n.parentElement;
+      }
+      return null;
+    })();
+    let _placeKey = '';
+    const placePanel = () => {
+      if (panel.hidden || !panel.classList.contains('is-portal')) return;
+      const tr = btn.getBoundingClientRect();
+      const vh = window.innerHeight;
+      const key = [Math.round(tr.top), Math.round(tr.left), Math.round(tr.width), vh].join(',');
+      if (key === _placeKey) return;          // 位置没变就不重复量（面板内部滚动也会触发 scroll）
+      _placeKey = key;
+      // 宽度：至少与 trigger 同宽，但要容得下最长的选项（右栏 trigger 只有 80px，「短剧解说」「影视深度」会被省略号截断）
+      panel.style.left = '0px';
+      panel.style.width = 'max-content';
+      panel.style.minWidth = Math.round(tr.width) + 'px';
+      const pw = Math.min(panel.offsetWidth, window.innerWidth - PANEL_PAD * 2);
+      panel.style.minWidth = '';
+      panel.style.width = Math.round(pw) + 'px';
+      panel.style.left = Math.round(Math.max(PANEL_PAD, Math.min(tr.left, window.innerWidth - pw - PANEL_PAD))) + 'px';
+      panel.style.top = Math.round(tr.bottom + PANEL_GAP) + 'px';
+      panel.style.maxHeight = '';
+      const need = panel.scrollHeight;        // 自然高度（清掉 max-height 后量）
+      const want = Math.min(need, PANEL_MAX_H);
+      const below = vh - tr.bottom - PANEL_GAP - PANEL_PAD;
+      const above = tr.top - PANEL_GAP - PANEL_PAD;
+      if (below < want && above > below) {
+        // 下方不够且上方更宽裕 → 向上翻：先定 max-height 再量高，才能把底边贴到 trigger 上沿
+        panel.style.maxHeight = Math.round(Math.max(Math.min(want, above), PANEL_MIN_H)) + 'px';
+        const h = panel.offsetHeight;
+        panel.style.top = Math.round(Math.max(tr.top - PANEL_GAP - h, PANEL_PAD)) + 'px';
+      } else if (below < want) {
+        // 两侧都不够 → 按可用高度收 max-height，面板自己滚（保证每一项都能点到）
+        panel.style.maxHeight = Math.round(Math.max(below, PANEL_MIN_H)) + 'px';
+      }
+    };
+    const openPanel = () => {
+      document.body.appendChild(panel);       // 脱离 overflow 裁剪 + .com-col-right 层叠上下文
+      panel.classList.add('is-portal');
+      panel.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      placePanel();
+    };
+    const close = () => {
+      panel.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      panel.classList.remove('is-portal');
+      panel.removeAttribute('style');
+      _placeKey = '';
+      if (panel.parentElement !== wrap) wrap.appendChild(panel);   // 放回原位
+    };
     const syncUI = () => {
       const cur = comSelectRead(def, key);
       // 用户未选择时显示组名（功能标题），选择后显示具体参数；
@@ -13166,7 +13230,7 @@ el.dwVidPlayer.removeAttribute('src');
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (panel.hidden) { panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); }
+      if (panel.hidden) openPanel();
       else close();
     });
     panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
@@ -13177,18 +13241,31 @@ el.dwVidPlayer.removeAttribute('src');
         close();
       });
     });
+    // 展开时面板被移到 <body> 下（.is-portal），点击判定要同时看 wrap 和 panel
     document.addEventListener('click', (e) => {
-      if (wrap.contains(e.target)) return;
+      if (wrap.contains(e.target) || panel.contains(e.target)) return;
       close();
     });
-    // 鼠标离开 trigger + panel 整体时自动折起
+    // 鼠标离开 trigger + panel 整体时自动折起（面板已 portal 到 body，两边都要挂）
     let _leaveTimer = null;
-    wrap.addEventListener('mouseleave', () => {
-      _leaveTimer = setTimeout(close, 120);
-    });
-    wrap.addEventListener('mouseenter', () => {
-      if (_leaveTimer) { clearTimeout(_leaveTimer); _leaveTimer = null; }
-    });
+    const onLeave = () => { _leaveTimer = setTimeout(close, 120); };
+    const onEnter = () => { if (_leaveTimer) { clearTimeout(_leaveTimer); _leaveTimer = null; } };
+    wrap.addEventListener('mouseleave', onLeave);
+    wrap.addEventListener('mouseenter', onEnter);
+    panel.addEventListener('mouseleave', onLeave);
+    panel.addEventListener('mouseenter', onEnter);
+    // 展开状态下容器滚动（右栏 .com-right 可滚）/ 窗口缩放时重新定位；
+    // trigger 被滚出右栏视野就收起（面板已 fixed 到 body，不会再跟着一起滚出去）
+    const _reposition = () => {
+      if (panel.hidden) return;
+      if (clipHost) {
+        const hr = clipHost.getBoundingClientRect(), tr = btn.getBoundingClientRect();
+        if (tr.bottom < hr.top || tr.top > hr.bottom) { close(); return; }
+      }
+      placePanel();
+    };
+    window.addEventListener('resize', _reposition, { passive: true });
+    document.addEventListener('scroll', _reposition, { capture: true, passive: true });
     syncUI();
   };
 
