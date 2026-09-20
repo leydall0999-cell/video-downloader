@@ -11625,7 +11625,11 @@ el.dwVidPlayer.removeAttribute('src');
         onUse: (btn) => {
           if (!el.comScriptVoice) { comVoiceLibHint('「全局配音」下拉还没初始化，稍后再试', 'warn'); return; }
           btn.disabled = true;
-          el.comScriptVoice.value = v.value;
+          // 🔴 2026-09-20 实测踩坑：这个下拉**只在加载过脚本时才被填充**（comFillScriptVoice
+          //    原本只在 loadScriptToPanel / 存音色时调用）。刚进解说页还没选视频时它是**空的**
+          //    （options.length=0），直接 `.value = v.value` 会静默失败 ⇒ 看起来点了「使用」
+          //    却什么都没选。所以必须先填充再选中（keepValue 机制会把它选上）。
+          comFillScriptVoice(v.value);
           el.comScriptVoice.dispatchEvent(new Event('change'));
           // 🔴 引擎若停在克隆档，出片会走你的克隆声、把刚选的系统音色整个吃掉 ——
           //    自动切回 edge 并**说明原因**，否则用户会以为「选了没用」。
