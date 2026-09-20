@@ -2584,14 +2584,16 @@
           <label class="com-mode-option" data-page-node-id="RyN7KkRFOjDvQQ2zJhyScX"><input type="radio" name="comStyle" value="short_drama" data-page-node-id="bFZm9R50FFpsWT3RIKrs45" /><span data-page-node-id="ioOAocYYrkv0LSFKvOeTIE">短剧解说</span></label>
           <label class="com-mode-option" data-page-node-id="UnPIUyfOvIuXYgzxOa6Rcx"><input type="radio" name="comStyle" value="movie" data-page-node-id="X0kCajUUQlhOj8mv7QMEBg" /><span data-page-node-id="Bh8DG7xMqkbe7yEK8XlJYN">影视深度</span></label>
         </div>
-        <div class="com-style-intensity" data-page-node-id="comStyleIntensityWrap">
-          <label class="com-style-intensity-label" for="comStyleIntensity" data-page-node-id="comStyleIntensityLabel">风格强度</label>
-          <input type="range" id="comStyleIntensity" min="0" max="100" value="65" step="5" data-page-node-id="comStyleIntensity" />
-          <span class="com-style-intensity-val" id="comStyleIntensityVal" data-page-node-id="comStyleIntensityVal">65</span>
-          <span class="com-style-intensity-hint" data-page-node-id="comStyleIntensityHint">弱 → 强（默认 65：口吻鲜明贯穿全片；调低更克制自然）</span>
-        </div>
-        <p class="com-style-hint" id="comStyleHint" data-page-node-id="dCUvaY0nB7rEDAZ0uBfsG9">默认风格：音色由下方「全局配音」决定。</p>
       </div>
+      <div class="com-fold-card com-style-card" data-page-node-id="comStyleIntensityWrap">
+        <div class="com-style-card-head">
+          <label class="com-fold-title" for="comStyleIntensity" data-page-node-id="comStyleIntensityLabel">🎚 风格强度</label>
+          <input type="range" id="comStyleIntensity" class="com-style-range" min="0" max="100" value="65" step="5" title="默认 65：口吻鲜明但不夸张，全片保持一致调性；调低更克制自然，调高风格表现力更强" data-page-node-id="comStyleIntensity" />
+          <span class="com-style-val" id="comStyleIntensityVal" data-page-node-id="comStyleIntensityVal">65</span>
+        </div>
+        <p class="com-style-note" data-page-node-id="comStyleIntensityHint">弱 → 强（默认 65）；调低更克制自然</p>
+      </div>
+      <p class="com-style-hint" id="comStyleHint" data-page-node-id="dCUvaY0nB7rEDAZ0uBfsG9">默认风格：音色由下方「全局配音」决定。</p>
     </div>
     </div>
           </div><!-- /com-right -->

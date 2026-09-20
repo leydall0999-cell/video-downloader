@@ -3122,11 +3122,19 @@ img { max-width: 100%; display: block; }
 .com-opt-row-styles .com-mode-option > span { text-align: center; }
 
 /* 风格强度滑杆（2026-09-20）：与「解说风格」下拉并列，调节口吻力度 */
-.com-style-intensity { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; width: 100%; margin-top: .4rem; }
-.com-style-intensity-label { font-size: .8rem; font-weight: 600; color: var(--text-mute); white-space: nowrap; }
-.com-style-intensity input[type="range"] { flex: 1 1 150px; max-width: 260px; accent-color: var(--accent, #4f8cff); }
-.com-style-intensity-val { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 2em; text-align: center; }
-.com-style-intensity-hint { font-size: .72rem; color: var(--text-mute); }
+/* 2026-09-21：风格强度改为「与右栏其他折叠卡同款外壳」的平铺卡（浅底/圆角/边框），
+   标题复用 .com-fold-title（.84rem / 700 / --text，与上面几张卡同规格）；
+   滑杆与数值固定同行（窄栏 236px 内：label 60 + 杆 flex + 值 33 + gap ≈ 装得下），
+   不再把「65」挤到第二行；提示收成一行小字，完整解释挂 title。 */
+.com-style-card { padding: .3rem .6rem .5rem; margin-top: .45rem; }
+.com-style-card-head { display: flex; align-items: center; gap: .4rem; }
+.com-style-range { flex: 1 1 40px; min-width: 40px; max-width: none; accent-color: var(--accent, #4f8cff); }
+.com-style-val {
+  flex: none; min-width: 2.2em; text-align: right;
+  font-size: .84rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.com-style-note { margin: .2rem 0 0; font-size: .68rem; line-height: 1.25; color: var(--text-mute); }
+/* ⚠️ .com-style-hint 的规则在下方（原第 3209 行那组）——同名规则后来者胜，别在这里再写一份 */
 
 /* 高级剪辑：折叠区，视觉上与卡片标题左对齐、不额外内缩 */
 .com-opts-inner {
@@ -3199,8 +3207,7 @@ img { max-width: 100%; display: block; }
   font-size: .85rem; color: var(--text-mute);
 }
 .com-style-hint {
-  margin: .4rem 0 0; font-size: .78rem; line-height: 1.55; color: var(--text-mute);
-  min-height: 1.4em;
+  margin: .35rem 0 0; font-size: .68rem; line-height: 1.3; color: var(--text-mute);
 }
 .com-script-head {
   display: flex; justify-content: space-between; align-items: center;
