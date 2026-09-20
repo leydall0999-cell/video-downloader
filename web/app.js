@@ -8974,11 +8974,11 @@ el.dwVidPlayer.removeAttribute('src');
     const cur = sel.value;
     if (cur === 'indextts_mlx') {
       if (status.indextts_mlx_ready) {
-        comSetTtsStatusBar('green', '本地语音克隆已就绪，可直接使用');
+        comSetTtsStatusBar('green', 'MLX语音克隆已就绪，可直接使用');
       } else if (status.apple_silicon) {
-        comSetTtsStatusBar('orange', '本地语音克隆本机已支持，正在准备运行环境…（可稍后重试）');
+        comSetTtsStatusBar('orange', 'MLX语音克隆本机已支持，正在准备运行环境…（可稍后重试）');
       } else {
-        comSetTtsStatusBar('gray', '本地语音克隆需要苹果芯片 Mac（M 系列）');
+        comSetTtsStatusBar('gray', 'MLX语音克隆需要苹果芯片 Mac（M 系列）');
       }
     } else if (cur === 'minimax' || cur === 'siliconflow') {
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
@@ -9004,9 +9004,9 @@ el.dwVidPlayer.removeAttribute('src');
           try { el.comMyVoiceRow.scrollIntoView({ block: 'nearest' }); } catch (_) {}
         }
       } else if (status.qwen3tts_ready) {
-        comSetTtsStatusBar('green', '本地语音克隆已就绪，将用「我的音色」里的声音解说');
+        comSetTtsStatusBar('green', 'TTS语音克隆已就绪，将用「我的音色」里的声音解说');
       } else {
-        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：正在自动启动（首次加载权重约 30–70 秒），稍候即可用你的克隆声');
+        comSetTtsStatusBar('orange', 'TTS语音克隆：正在自动启动（首次加载权重约 30–70 秒），稍候即可用你的克隆声');
         comEnsureQwen3Tts(); // 默认引擎即被选中 → 自动起服务（选中即起）
       }
     } else {
@@ -9056,14 +9056,14 @@ el.dwVidPlayer.removeAttribute('src');
         _ttsQwenStarting = false;
         return;
       }
-      comSetTtsStatusBar('orange', '正在启动 Qwen3-TTS 本地语音克隆服务（首次加载权重约 30–70 秒）…');
+      comSetTtsStatusBar('orange', '正在启动 TTS语音克隆服务（首次加载权重约 30–70 秒）…');
       let tries = 0;
       const tick = async () => {
         tries++;
         try {
           const st = await request('/api/commentary/tts-status');
           if (st && st.qwen3tts_ready) {
-            comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
+            comSetTtsStatusBar('green', 'TTS语音克隆已就绪，可直接使用');
             _ttsQwenStarting = false;
             return;
           }
@@ -9125,8 +9125,8 @@ el.dwVidPlayer.removeAttribute('src');
     const curProv = el.comTtsProvider ? el.comTtsProvider.value : '';
     if (curProv === 'qwen3tts') {
       comSetTtsStatusBar('orange', inst.active
-        ? '正在下载安装本地语音克隆运行环境…（可继续用其它功能）'
-        : '本机还没安装本地语音克隆运行环境：点下面的按钮下载安装（约 2.4GB，一次性）');
+        ? '正在下载安装 TTS语音克隆运行环境…（可继续用其它功能）'
+        : '本机还没安装 TTS语音克隆运行环境：点下面的按钮下载安装（约 2.4GB，一次性）');
     }
     if (inst.active) {
       const pct = Math.max(2, Math.min(100, Number(inst.pct || 0)));
@@ -9134,7 +9134,7 @@ el.dwVidPlayer.removeAttribute('src');
       btn.hidden = true; cancelBtn.hidden = false;
       const mb = (inst.total_mb || 0) > 0
         ? ` ${(inst.done_mb || 0).toFixed(0)} / ${(inst.total_mb || 0).toFixed(0)} MB` : '';
-      text.textContent = `正在下载安装本地语音克隆环境…${mb}`
+      text.textContent = `正在下载安装 TTS语音克隆环境…${mb}`
         + (inst.msg ? `\n${inst.msg}` : '')
         + '\n（过程中可以正常用其它功能）';
     } else {
@@ -9150,7 +9150,7 @@ el.dwVidPlayer.removeAttribute('src');
       } else if (inst.phase === 'cancelled') {
         text.textContent = '安装已取消，可重新开始。' + (st.note ? `\n${st.note}` : '');
       } else {
-        text.textContent = '本机还没安装「本地语音克隆」运行环境（约 2.4GB，一次性）'
+        text.textContent = '本机还没安装「TTS语音克隆」运行环境（约 2.4GB，一次性）'
           + (st.note ? `\n${st.note}` : '');
       }
       if (lowDisk && inst.phase !== 'error') {
@@ -9172,7 +9172,7 @@ el.dwVidPlayer.removeAttribute('src');
             clearInterval(_cloneEnvTimer); _cloneEnvTimer = null;
             if (s2 && s2.ready) {
               // 装好了 → 让 tts-status 那条链路照常把服务拉起来
-              comSetTtsStatusBar('green', '运行环境已装好，正在启动本地语音克隆服务…');
+              comSetTtsStatusBar('green', '运行环境已装好，正在启动 TTS语音克隆服务…');
               comRefreshTtsStatus({ force: true });
             }
           }
