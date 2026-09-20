@@ -13099,6 +13099,9 @@ el.dwVidPlayer.removeAttribute('src');
   };
 
   const initComSelect = (block) => {
+    // data-com-select-inline：保留原生单选组的内联胶囊排布，不做下拉化
+    // （解说风格：10 个 2~4 字短标签，下拉浮层会盖住下方内容且一路拉到底）
+    if (block.hasAttribute('data-com-select-inline')) return;
     const key = block.getAttribute('data-com-select');
     const def = COM_SELECT_DEFS[key];
     if (!def) return;

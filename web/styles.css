@@ -3127,10 +3127,19 @@ img { max-width: 100%; display: block; }
 .com-badge-paid { background: #FF3B30; }
 .com-price-note { font-size: .72rem; opacity: .7; line-height: 1.4; }
 
-/* ⑥ 解说风格：胶囊换行 */
+/* ⑥ 解说风格：胶囊换行（内联，不做下拉化）
+   ⚠️ 2026-09-21：这块原被 initComSelect 下拉化（.com-mode-dropdown 浮层）。
+   但 10 个 2~4 字标签的下拉面板 ≈575px 高，从触发器一路拉到底、把下方「风格强度」卡与
+   提示整片盖住。这类「短标签多选项」用内联胶囊更合适 —— 无浮层、不遮挡、一眼看全。
+   HTML 上标 data-com-select-inline，initComSelect 见到即跳过（原生 radio 保留，逻辑不变）。 */
 .com-opt-row-styles { display: flex; flex-wrap: wrap; gap: .35rem; }
 .com-opt-row-styles .com-mode-option { flex: 0 0 auto; }
 .com-opt-row-styles .com-mode-option > span { text-align: center; }
+/* 未下拉化的块：恢复左侧蓝字标题 + 块级左对齐（覆盖 [data-com-select] 的 flex-end / 标题隐藏） */
+.com-opt-block[data-com-select-inline] { display: block; justify-content: flex-start; }
+.com-opt-block[data-com-select-inline] > .com-opt-title { display: block; margin: 0 0 .5rem; }
+/* 胶囊更紧凑：一行排 4 个（2 字标签），「短剧解说/影视深度」独占第二行 */
+.com-opt-block[data-com-select-inline] .com-mode-option > span { padding: .3rem .6rem; }
 
 /* 风格强度滑杆（2026-09-20）：与「解说风格」下拉并列，调节口吻力度 */
 /* 2026-09-21：风格强度改为「与右栏其他折叠卡同款外壳」的平铺卡（浅底/圆角/边框），
