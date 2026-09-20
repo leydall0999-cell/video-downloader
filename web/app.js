@@ -10538,10 +10538,11 @@ el.dwVidPlayer.removeAttribute('src');
   /** 暂存用户在「去片头片尾」下填的时间：切回来时原样恢复，免得来回切一次就白填。 */
   let comDramaStash = { start: '', end: '' };
   const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，'
-    + '起点/终点保持 00:00:00（正剧范围由系统自动判断）。'
+    + '起点/终点保持留空（正剧范围由系统自动判断）。'
     + '要手动指定，请到「✂️ 片头片尾处理」里选「去片头片尾」。';
-  const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：填<b>片头结束 / 片尾开始</b>的绝对时间'
-    + '（也可直接填秒数，如 85）；留空则由系统自动检测。';
+  const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：<b>留空＝自动检测</b>——系统会读片名/集数画面'
+    + '（视觉识别）+ 人声/黑场/静音来定片头边界，识别不到时兜底跳过前 90 秒；'
+    + '<b>只要填了值就以你填的为准</b>（人工输入优先级最高，也可直接填秒数如 85）。';
   const comDramaGate = () => {
     const row = $('comDramaRow');
     const s = el.comDramaStart, e = el.comDramaEnd;
