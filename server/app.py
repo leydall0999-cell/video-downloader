@@ -2205,6 +2205,7 @@ class CommentaryRequest(BaseModel):
     web: bool = Field(default=False, description="联网搜索资料辅助发挥")
     one_click: bool = Field(default=False, description="一键生成: 全片深入解说+AI联网+片头插精彩片段")
     style: str = Field(default="none", description="解说口吻风格: none=默认; funny=搞笑; serious=严肃; domineering=霸道; angry=愤青; suspense=悬疑; healing=治愈; sarcastic=毒舌; short_drama=短剧解说(网感快节奏); movie=影视深度解说")
+    style_intensity: int = Field(default=65, ge=0, le=100, description="风格强度 0~100（默认 65）：≤35 口吻克制只轻点缀；≥80 拉满风格表现力。仅在选了具体风格时生效")
     vision: bool = Field(default=False, description="视觉理解：抽帧调多模态模型补全无声/纯画面段落（需配置 VDL_VISION_*）")
     tts_provider: str = Field(default="", max_length=32, description="TTS 服务商: 空=默认 edge; indextts2=本地 IndexTTS2 语音克隆(需先起推理服务); minimax/siliconflow=云端")
     correct_transcript: str = Field(default="", max_length=32, description="转写稿 ASR 校正: '0'=关闭(省 token); 空=默认开启(LLM 修正同音错字/专有名词)")
