@@ -834,6 +834,115 @@ class VdlApi:
         _log(f"saved -> {target}")
         return str(target)
 
+    def save_qr_image_dialog(self, data_url: str, suggested_name: str) -> str:
+        """把「扫码分享」的二维码 PNG 存到用户选定位置（桌面版原生保存）。
+
+        为什么必须走原生桥：**WKWebView 不支持 `<a download>` 的 blob 下载**——
+        在 App 里点「保存二维码」不会弹任何保存框，而是把**主框架导航**到 blob: 图片，
+        整个 App 界面被替换成一张二维码、只能重启（用户 2026-09-21 报的
+        「点击保存二维码有问题」正是此现象，已在真机复现取证）。
+        所以前端把已经取到的 PNG 转成 data URL 传进来，这里解 base64 直接落盘。
+
+        与 save_text_file_dialog / save_matting_file_dialog 同套机制：
+        用 osascript `choose file name` 子进程弹原生窗口，绕开 pywebview 主线程
+        run loop 阻塞。取消返回 "CANCELLED"；osascript 不可用时退化为存「下载」文件夹。
+        """
+        import base64
+        import binascii
+        import json
+        import os
+        import tempfile
+        import subprocess
+        import datetime as _dt
+        from pathlib import Path
+
+        def _log(msg):
+            try:
+                with open("/tmp/vdl_qr_save.log", "a") as f:
+                    f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+            except Exception:
+                pass
+
+        raw = (data_url or "").strip()
+        if raw.startswith("data:"):
+            # data:image/png;base64,XXXX → 取逗号后的负载
+            comma = raw.find(",")
+            raw = raw[comma + 1:] if comma >= 0 else ""
+        raw = "".join(raw.split())  # 去掉换行/空格，防止桥接传输插入的空白
+        try:
+            blob = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            _log(f"base64 decode failed: {exc!r}")
+            return f"ERROR: 二维码数据解析失败（{exc}）"
+        if not blob.startswith(b"\x89PNG\r\n\x1a\n"):
+            _log(f"not a png, head={blob[:8]!r} len={len(blob)}")
+            return "ERROR: 二维码数据不是有效 PNG"
+
+        suggested = (suggested_name or "分享二维码.png").strip() or "分享二维码.png"
+        if not suggested.lower().endswith(".png"):
+            suggested += ".png"
+        downloads = Path.home() / "Downloads"
+        try:
+            downloads.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads = Path.home()
+        _log(f"enter save_qr_image_dialog suggested={suggested!r} bytes={len(blob)}")
+
+        dest = None
+        try:
+            name_json = json.dumps(suggested, ensure_ascii=False)
+            script = (
+                'set p to choose file name with prompt "保存二维码" '
+                f'default name {name_json} '
+                'default location (path to downloads folder)\n'
+                'POSIX path of p'
+            )
+            fd, scpt = tempfile.mkstemp(suffix=".applescript")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(script)
+            try:
+                r = subprocess.run(
+                    ["osascript", scpt],
+                    capture_output=True, text=True, timeout=600,
+                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    dest = r.stdout.strip()
+                    _log(f"osascript chose: {dest}")
+                else:
+                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
+                    return "CANCELLED"
+            finally:
+                try:
+                    os.remove(scpt)
+                except Exception:
+                    pass
+        except Exception as e:
+            _log(f"osascript exception: {e!r}")
+            dest = None
+
+        if not dest:
+            dest = str(downloads / suggested)
+
+        target = Path(dest)
+        try:
+            if target.suffix.lower() != ".png":
+                target = target.with_suffix(target.suffix + ".png")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # 避免覆盖已有文件
+            if target.exists():
+                stem, suf = target.stem, target.suffix
+                i = 1
+                while target.exists():
+                    target = target.parent / f"{stem}({i}){suf}"
+                    i += 1
+            target.write_bytes(blob)
+        except Exception as exc:
+            _log(f"write error: {exc!r}")
+            return f"ERROR: {exc}"
+        _log(f"saved -> {target} ({target.stat().st_size} bytes)")
+        return str(target)
+
     def save_commentary_file_dialog(self, cid: str, suggested_name: str) -> str:
         """弹出系统保存面板（默认目录=下载文件夹、预填文件名），用户可改位置/重命名。
 

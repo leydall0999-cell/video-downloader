@@ -4606,23 +4606,60 @@
     el.shareOpenBtn.addEventListener('click', () => {
       const v = el.shareUrlInput.value;
       if (!v) return;
+      // 桌面版的 WKWebView 会**静默拦截 window.open**（见 desktop_launcher.VdlApi.open_external
+      // 的说明）——原来这一句在 App 里点下去毫无反应。改为让 Python 调系统默认浏览器打开；
+      // 无桥接（网页版）或桥接失败时回退 window.open。
+      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
+      if (typeof openExt === 'function') {
+        Promise.resolve(openExt(v)).then((ok) => { if (!ok) window.open(v, '_blank'); }).catch(() => { window.open(v, '_blank'); });
+        return;
+      }
       window.open(v, '_blank');
     });
     el.shareSaveQrBtn.addEventListener('click', async () => {
       const it = shState.current;
       if (!it || !it.url) return;
+      // ⚠️ 桌面版必须走原生保存面板：WKWebView 不支持 <a download> 的 blob 下载，
+      // 直接 a.click() 会把**主框架导航**到 blob: 图片——整个 App 界面被一张二维码
+      // 替换、只能重启（2026-09-21 用户报「点击保存二维码有问题」的真因，已真机复现）。
+      // 与抠图/导出等流程同套约定：原生桥优先，网页版才回退 <a download>。
+      const nativeSave = window.VDL && window.VDL.desktop && window.VDL.desktop.saveQrImage;
+      const name = '分享二维码-' + String(it.name || 'file').replace(/\.[^.]+$/, '') + '.png';
+      const qrUrl = '/api/share/qr?text=' + encodeURIComponent(it.url) + '&size=1024';
+      const btn = el.shareSaveQrBtn;
+      const label = btn.textContent;
+      const flash = (t) => { btn.textContent = t; setTimeout(() => { btn.textContent = label; }, 1600); };
       try {
-        const r = await fetch('/api/share/qr?text=' + encodeURIComponent(it.url) + '&size=1024');
+        const r = await fetch(qrUrl);
+        if (!r.ok) throw new Error('二维码接口返回 ' + r.status);
         const b = await r.blob();
+        if (typeof nativeSave === 'function') {
+          const dataUrl = await new Promise((res, rej) => {
+            const fr = new FileReader();
+            fr.onload = () => res(String(fr.result || ''));
+            fr.onerror = () => rej(new Error('读取二维码数据失败'));
+            fr.readAsDataURL(b);
+          });
+          const saved = await nativeSave(dataUrl, name);
+          if (saved && String(saved).startsWith('ERROR:')) window.alert('保存失败：' + String(saved).slice(6));
+          else if (saved && saved !== 'CANCELLED') { flash('已保存'); window.alert('已保存到：' + saved); }
+          return;
+        }
+        // 无原生桥（网页版）才用 <a download>；桌面壳内若旧包缺 save_qr_image_dialog
+        // 则**绝不导航**——宁可提示，也不要把整个 App 界面换成一张二维码。
+        if (window.pywebview || (window.VDL && window.VDL.desktop)) {
+          window.alert('当前版本不支持直接保存二维码，请升级后再试。\n（可先用截图保存，或点「复制链接」在浏览器里打开。）');
+          return;
+        }
         const a = document.createElement('a');
         a.href = URL.createObjectURL(b);
-        a.download = '分享二维码-' + String(it.name || 'file').replace(/\.[^.]+$/, '') + '.png';
+        a.download = name;
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(a.href), 4000);
       } catch (e) {
-        alert('保存失败：' + ((e && e.message) || '未知错误'));
+        window.alert('保存失败：' + ((e && e.message) || '未知错误'));
       }
     });
 

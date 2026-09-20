@@ -110,6 +110,23 @@
         return Promise.resolve('');
       }
     },
+    // 保存二维码 PNG：弹系统保存面板，用户自选位置。
+    // 必须走原生桥——WKWebView 不支持 <a download> 的 blob 下载，直接点会把主框架
+    // 导航到 blob: 图片、整个 App 界面被二维码替换（用户 2026-09-21 报的缺陷）。
+    // 入参 dataUrl 为 data:image/png;base64,... ；取消返回 "CANCELLED"，失败返回 "ERROR: ..."，
+    // 无桥接（网页版）返回空串让调用方走 <a download> 兜底。
+    saveQrImage(dataUrl, suggestedName) {
+      const api = window.pywebview && window.pywebview.api;
+      if (!(api && typeof api.save_qr_image_dialog === 'function')) return Promise.resolve('');
+      const norm = (r) => (typeof r === 'string') ? r : (r || '');
+      try {
+        const r = api.save_qr_image_dialog(dataUrl, suggestedName || '分享二维码.png');
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => '');
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve('');
+      }
+    },
     // 一键开启本地语音克隆（IndexTTS-MLX）：自动寻找并启动本地服务，返回 {ok, msg}。
     // 普通用户无需理解「端口/服务」等概念，点一下由 App 自己搞定；无桥接则回退提示。
     startIndexTts() {
