@@ -11220,7 +11220,19 @@ el.dwVidPlayer.removeAttribute('src');
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       const ctx = new AC();
-      if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (_) { /* ignore */ } }
+      // 🔴 2026-09-20：`ctx.resume()` 在**没有可用音频输出设备**时可能**永远不落定**
+      //    （离线/无头环境、声卡被占、蓝牙设备刚断开都会这样）。裸 await 会卡死在
+      //    「⏳ 连接麦克风…」，而取消键在弹窗里、弹窗又要等拿到流才开 ⇒ 用户彻底点不动。
+      //    这里给它 3 秒上限：超时就带着 suspended 的上下文继续，真录不出声音的话
+      //    既有的峰值检测会明确提示「这段几乎没有声音」，不会静默失败。
+      if (ctx.state === 'suspended') {
+        try {
+          await Promise.race([
+            ctx.resume(),
+            new Promise((res) => setTimeout(res, 3000)),
+          ]);
+        } catch (_) { /* ignore */ }
+      }
       const src = ctx.createMediaStreamSource(stream);
       const proc = ctx.createScriptProcessor(4096, 1, 1);
       const sink = ctx.createGain();
