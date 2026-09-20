@@ -2371,6 +2371,84 @@ def _probe_video_duration(src_path) -> float:
     except Exception:
         return 0.0
 
+
+def _suggest_intro_outro(src_path: str) -> dict:
+    """轻量探测片头/片尾边界（前端「起点/终点」预填建议值用，2026-09-20）。
+
+    与管线 `_detect_intro_outro` 的音频/画面信号同源（silencedetect/blackdetect/
+    freezedetect，判据与常量一致：段起点≤3s 取结束、段结束贴窗口尾取开始、
+    正片区<40% 整体放弃），但**不跑** VAD 人声与视觉 LLM —— 这两项成本高，
+    留给渲染时的管线做更精的二次检测；这里只求秒级出结果供输入框预填。
+    语义约定：探测成功 → 前端填的值就是渲染用的值（所见即所用，手动优先级最高）；
+    探测不到（有声有色的片头，主题曲+画面无静音/黑场）→ ok=False，前端保持
+    「自动检测」占位，渲染时管线走全量检测（含视觉集数卡识别）。
+    """
+    try:
+        src_str = str(src_path)
+        dur = _probe_video_duration(src_str)
+        if dur <= 20:
+            return {"ok": False, "lo": None, "hi": None, "dur": dur}
+        path = os.environ.get("PATH", "") or ""
+        ffmpeg_bin = shutil.which("ffmpeg", path=path) or ""
+        if not ffmpeg_bin:
+            try:
+                ffmpeg_dir = getattr(COMMENTARY_RT, "ffmpeg_dir", "") or ""
+                if ffmpeg_dir:
+                    ffmpeg_bin = shutil.which("ffmpeg", path=ffmpeg_dir + os.pathsep + path) or ""
+            except Exception:
+                pass
+        if not ffmpeg_bin:
+            return {"ok": False, "lo": None, "hi": None, "dur": dur}
+
+        def _probe_edge(start: float, win: float, is_head: bool):
+            """单窗口探测：返回边界候选秒或 None（与管线 _detect_edge 同判据）。"""
+            try:
+                proc = subprocess.run(
+                    [ffmpeg_bin, "-hide_banner", "-ss", f"{start:.3f}", "-t", f"{win:.3f}",
+                     "-i", src_str,
+                     "-af", "silencedetect=n=-40dB:d=0.5",
+                     "-vf", "blackdetect=d=0.5:pix_th=0.10,freezedetect=d=0.5",
+                     "-f", "null", "-"],
+                    stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, timeout=120)
+                out = proc.stderr.decode("utf-8", "ignore")
+            except Exception:
+                return None
+            # -ss 在 -i 前：滤镜报的时戳是相对窗口起点的，+start 还原成绝对秒（同管线 _parse_detect）
+            segs, pend = [], {"silence": None, "black": None, "freeze": None}
+            for line in out.splitlines():
+                for kind in ("silence", "black", "freeze"):
+                    ms = re.search(rf"{kind}_start:\s*([\d.]+)", line)
+                    me = re.search(rf"{kind}_end:\s*([\d.]+)", line)
+                    if ms:
+                        pend[kind] = float(ms.group(1)) + start
+                    if me and pend[kind] is not None:
+                        segs.append((pend[kind], float(me.group(1)) + start))
+                        pend[kind] = None
+            win_end = start + win
+            if is_head:
+                cands = [e for s, e in segs if s <= 3.0 and e > s]
+                return max(cands) if cands else None
+            cands = [s for s, e in segs if e >= win_end - 3.0 and e > s]
+            return min(cands) if cands else None
+
+        head_win = min(dur * 0.5, 180.0)
+        tail_win = min(dur * 0.5, 180.0)
+        lo = _probe_edge(0.0, head_win, is_head=True)
+        hi = _probe_edge(max(0.0, dur - tail_win), tail_win, is_head=False)
+        if lo is not None and lo <= 1.0:
+            lo = None
+        if hi is not None and not (0.0 < hi < dur - 1.0):
+            hi = None
+        # 保护与管线一致：正片区过短说明探测不可信 → 整体放弃（交给渲染时全量检测）
+        if lo is not None and hi is not None and hi - lo < dur * 0.4:
+            return {"ok": False, "lo": None, "hi": None, "dur": dur}
+        return {"ok": bool(lo is not None or hi is not None),
+                "lo": round(lo, 2) if lo is not None else None,
+                "hi": round(hi, 2) if hi is not None else None,
+                "dur": round(dur, 2)}
+    except Exception:
+        return {"ok": False, "lo": None, "hi": None, "dur": 0.0}
+
 def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     """为解说任务推导「片名锚点」（最终会进成片文件名 `<片名>-解说完成<时间>.mp4`）。
 

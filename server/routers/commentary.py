@@ -454,6 +454,20 @@ def feather_detect(frames: list[app.UploadFile] = app._FastAPIFile(default=[]),
     res["vertical"] = bool(vertical)
     return res
 
+@router.post("/api/commentary/suggest-range")
+def suggest_range(payload: app.CommentaryRequest) -> dict:
+    """轻量探测片头/片尾边界，供前端「起点/终点」预填建议值（2026-09-20）。
+
+    只跑 ffmpeg 静音/黑场/静止探测（秒级、零 LLM 成本）。探测不到（有声有色的
+    片头）→ ok=False，前端保持「自动检测」占位，渲染时管线再做全量检测
+    （含视觉集数卡识别）。探测到的值前端当普通输入值提交 → 所见即所用。
+    不进执行队列、不扣配额、不写任务。
+    """
+    if not app.COMMENTARY_ENABLED:
+        raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    src = app._resolve_source(payload)
+    return app._suggest_intro_outro(src)
+
 @router.post("/api/commentary/upload")
 def create_commentary_upload(
     file: app.UploadFile = app._FastAPIFile(...),

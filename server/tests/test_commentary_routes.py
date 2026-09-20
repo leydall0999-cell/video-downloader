@@ -370,3 +370,56 @@ if __name__ == "__main__":
     test_plan_original_speed_skips_when_no_duration()
 
     print("\n🎉 解说路由层测试全部通过（22 项）")
+
+
+# ---------------------------------------------------------------- 片头/片尾边界建议（2026-09-20）
+# 背景：前端「起点/终点」在「去片头片尾」模式下要预填真实边界（用户：「选了去片头片尾，
+# 左边的起点肯定是有时间的不是0」）。/api/commentary/suggest-range 只跑 ffmpeg
+# 静音/黑场/静止轻量探测；探测不到 → ok=False，前端保持「自动检测」，渲染时管线
+# 再做全量检测（含视觉集数卡）。这里验证路由守卫/透传与探测函数的守卫路径。
+
+def test_suggest_range_passthrough_and_guard():
+    """suggest-range 路由：未启用解说 → 503；启用 → 透传 _suggest_intro_outro 结果。"""
+    from routers import commentary as cr
+    saved_enabled = server_app.COMMENTARY_ENABLED
+    try:
+        server_app.COMMENTARY_ENABLED = False
+        raised = False
+        try:
+            cr.suggest_range(server_app.CommentaryRequest())
+        except Exception as e:
+            raised = getattr(e, "status_code", None) == 503
+        assert raised, "未启用解说时应 503"
+    finally:
+        server_app.COMMENTARY_ENABLED = saved_enabled
+    saved_src = server_app._resolve_source
+    saved_sug = server_app._suggest_intro_outro
+    try:
+        server_app.COMMENTARY_ENABLED = True   # 透传阶段需要开关打开（测试环境默认关）
+        server_app._resolve_source = lambda p: "/tmp/fake.mp4"
+        server_app._suggest_intro_outro = lambda src: {
+            "ok": True, "lo": 85.0, "hi": 2600.0, "dur": 2734.0}
+        res = cr.suggest_range(server_app.CommentaryRequest(file_id="x.mp4"))
+        assert res["ok"] is True and res["lo"] == 85.0 and res["hi"] == 2600.0
+    finally:
+        server_app._resolve_source = saved_src
+        server_app._suggest_intro_outro = saved_sug
+    print("✅ suggest-range 路由守卫与透传正常")
+
+
+def test_suggest_intro_outro_guards():
+    """_suggest_intro_outro：过短视频直接放弃；找不到 ffmpeg 不抛异常、返回 ok=False。"""
+    saved_dur = server_app._probe_video_duration
+    saved_which = server_app.shutil.which
+    try:
+        server_app._probe_video_duration = lambda p: 10.0
+        r = server_app._suggest_intro_outro("/tmp/whatever.mp4")
+        assert r["ok"] is False and r["dur"] == 10.0
+        server_app._probe_video_duration = lambda p: 1800.0
+        server_app.shutil.which = lambda name, path=None: ""   # ffmpeg/ffprobe 全部落空
+        r = server_app._suggest_intro_outro("/tmp/whatever.mp4")
+        assert r["ok"] is False and r["lo"] is None and r["hi"] is None
+    finally:
+        server_app._probe_video_duration = saved_dur
+        server_app.shutil.which = saved_which
+    print("✅ suggest 轻量探测守卫正常（短视频/无 ffmpeg 不抛异常）")

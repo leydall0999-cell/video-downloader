@@ -8843,11 +8843,13 @@ el.dwVidPlayer.removeAttribute('src');
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
     // 正剧边界只保留「绝对时间」一处（片头/片尾秒数 UI 已下线：与它同侧互斥、完全等价，
     // 而这里本就接受纯秒数写法；后端 intro_sec/outro_sec 参数保留供外部调用兼容）
-    const dramaStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
-    const dramaEnd = el.comDramaEnd && el.comDramaEnd.value ? parseTimeSec(el.comDramaEnd.value) : null;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
+    // 起点/终点只在「去片头片尾」下生效（2026-09-20 定稿：非 skip 显示 00:00:00 且不参与
+    // 提交——那边填的只是草稿；否则用户在非 skip 模式里的草稿会被当成全片裁剪区间）。
+    const dramaStart = (skip_intro_outro && el.comDramaStart && el.comDramaStart.value) ? parseTimeSec(el.comDramaStart.value) : null;
+    const dramaEnd = (skip_intro_outro && el.comDramaEnd && el.comDramaEnd.value) ? parseTimeSec(el.comDramaEnd.value) : null;
     const no_narrate_intro_outro = true; // 两个模式都不解说片头片尾（skip 模式已剪掉）
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
@@ -10479,6 +10481,7 @@ el.dwVidPlayer.removeAttribute('src');
       if (el.comDramaStartRange) el.comDramaStartRange.max = String(comPreviewDuration || 100);
       if (el.comDramaEndRange) el.comDramaEndRange.max = String(comPreviewDuration || 100);
       resetTrim();
+      comDramaSuggestFetch();   // 后台轻量探测片头/片尾边界，到货后自动预填（2026-09-20）
     };
     // 加载失败不再硬藏卡片 —— 让用户能继续操作，错误提示放在状态栏
     el.comPreview.onerror = () => {
@@ -10501,7 +10504,10 @@ el.dwVidPlayer.removeAttribute('src');
     // 滑块回到「起点=0 / 终点=片尾」的默认位置
     if (el.comDramaStartRange) el.comDramaStartRange.value = '0';
     if (el.comDramaEndRange) el.comDramaEndRange.value = String(comPreviewDuration || 100);
-    syncTrimInputs();
+    // 换片：旧片的草稿与建议值全部作废，占位符/预填按当前模式重来（2026-09-20）
+    comDramaStash.start = '';
+    comDramaStash.end = '';
+    comDramaGate();
   };
 
   // 名字沿用（调用点较多）：现在只负责刷新卡头那行提示
@@ -10528,38 +10534,74 @@ el.dwVidPlayer.removeAttribute('src');
     el.comTrimDuration.title = total ? `片长：${formatDuration(total) || '0s'}` : '片长：未知';
   };
 
-  // ═══════════ 起点/终点 门控（2026-09-20）═══════════════════════════════════════
-  // 用户原话：「这个应该都默认为零时零分零秒，只有选择去片头才有片头/终点时间，
-  //   不然给人默认就是从这个开始，但是我们默认没有这一环节」。
-  // 即：默认（保留片头片尾·不解说）这一步不存在 ⇒ 起点/终点恒显示 00:00:00、不可改、整行置灰；
-  //     只有选了「去片头片尾」才放开，此时填的就是「片头结束 / 片尾开始」的绝对时间。
-  // 🔴 刻意**不改后端**：置灰时输入框清空 ⇒ comGetOptions 里 parse 出来是 null ⇒
-  //    与「从来没填过」完全一致，后端照旧自动检测正剧范围（这条路径本来就在正常工作，不动）。
-  /** 暂存用户在「去片头片尾」下填的时间：切回来时原样恢复，免得来回切一次就白填。 */
+  // ═══════════ 起点/终点（2026-09-20 晚定稿，取代早上的「门控置灰」方案）═════════
+  // 用户原话：「选了去片头片尾，左边的起点肯定是有时间的不是0；选择不去片头片尾
+  //   左边的肯定是0；左边要默认可以编辑，手动输入权限最大」。
+  // ⇒ ① 两个输入框**任何模式下都可编辑**（不再置灰）；
+  //    ②「去片头片尾」选中且输入为空时，自动预填后端轻量探测到的真实边界
+  //    （POST /api/commentary/suggest-range，静音/黑场/静止信号秒级出结果；
+  //    探测不到保持「自动检测」占位，渲染时管线再做全量检测含视觉集数卡）；
+  //    ③ 非 skip 模式显示 00:00:00（此模式不裁剪，填的值只是草稿、不参与提交，
+  //    见 comGetOptions），切回 skip 原样恢复；
+  //    ④ 提交的值即最终边界（后端 drama_start/end 优先级本来就最高）。
+  /** 暂存用户手填的时间：切到非 skip 再切回来时原样恢复，免得白填。 */
   let comDramaStash = { start: '', end: '' };
-  const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，'
-    + '起点/终点保持留空（正剧范围由系统自动判断）。'
-    + '要手动指定，请到「✂️ 片头片尾处理」里选「去片头片尾」。';
-  const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：<b>留空＝自动检测</b>——系统会读片名/集数画面'
-    + '（视觉识别）+ 人声/黑场/静音来定片头边界，识别不到时兜底跳过前 90 秒；'
-    + '<b>只要填了值就以你填的为准</b>（人工输入优先级最高，也可直接填秒数如 85）。';
+  let comDramaSuggest = null;      // {lo, hi, dur} | null（轻量探测建议值）
+  let comDramaSuggestSeq = 0;      // 换片竞态保护：旧请求迟到直接丢弃
+  const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，起点/终点显示 00:00:00'
+    + '（这里填的时间只是草稿，切到「去片头片尾」才生效）。';
+  const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：<b>留空＝自动检测</b>（读片名/集数画面+人声黑场，识别不到兜底跳过前 90 秒）；'
+    + '<b>填了就以你填的为准</b>（人工输入优先级最高，也可直接填秒数如 85）。预填的时间是系统探测到的建议值，可直接改。';
+  /** 向后端要轻量边界建议（媒体库/下载源才有 id；本地拖拽文件拿不到服务端路径，
+   *  不预填、留给渲染时全量检测——避免拿 audio-only 的建议值盖掉更准的视觉识别）。 */
+  const comDramaSuggestFetch = async (fidOverride) => {
+    comDramaSuggest = null;
+    const seq = ++comDramaSuggestSeq;
+    if (selectedLocalFile) return;
+    const fid = fidOverride || (el.comSource && el.comSource.value) || '';
+    if (!fid) return;
+    try {
+      const r = await request('/api/commentary/suggest-range', {
+        method: 'POST',
+        body: JSON.stringify({ file_id: fid }),
+      });
+      if (seq !== comDramaSuggestSeq) return;   // 期间已换片
+      if (r && r.ok) comDramaSuggest = { lo: r.lo, hi: r.hi, dur: r.dur };
+      comDramaGate();   // 到货后按当前模式应用一次（skip 且输入为空 → 预填）
+    } catch (e) { /* 建议值失败不影响主流程：保持自动检测 */ }
+  };
+  /** 把探测到的边界填进**空的**输入框（用户已填的值绝不动 → 手动永远优先）。 */
+  const comDramaFillSuggestion = () => {
+    if (!comDramaSuggest) return false;
+    const s = el.comDramaStart, e = el.comDramaEnd;
+    let filled = false;
+    if (s && !s.value.trim() && comDramaSuggest.lo != null) { s.value = formatHMS(comDramaSuggest.lo); filled = true; }
+    if (e && !e.value.trim() && comDramaSuggest.hi != null) { e.value = formatHMS(comDramaSuggest.hi); filled = true; }
+    if (filled) {
+      if (typeof syncDramaSlider === 'function') { if (s) syncDramaSlider(s); if (e) syncDramaSlider(e); }
+      updateTrimDurationText();
+    }
+    return filled;
+  };
   const comDramaGate = () => {
-    const row = $('comDramaRow');
     const s = el.comDramaStart, e = el.comDramaEnd;
     const note = el.comDramaNote;
     const open = el.comIntroOutroMode() === 'skip';
-    if (row) row.classList.toggle('is-gated', !open);
-    [s, e].forEach((n) => { if (n) n.disabled = !open; });
-    [el.comDramaStartRange, el.comDramaEndRange].forEach((n) => { if (n) n.disabled = !open; });
     if (!open) {
-      // 置灰时把值撤走（视觉上就是占位符 00:00:00），但先存起来
+      // 非 skip：显示 00:00:00（comGetOptions 里非 skip 不提交这两个值），先暂存手填值
       if (s && s.value.trim()) comDramaStash.start = s.value.trim();
       if (e && e.value.trim()) comDramaStash.end = e.value.trim();
-      if (s) s.value = '';
-      if (e) e.value = '';
-    } else if ((comDramaStash.start || comDramaStash.end)) {
-      if (s && !s.value.trim()) s.value = comDramaStash.start;
-      if (e && !e.value.trim()) e.value = comDramaStash.end;
+      if (s) { s.value = ''; s.placeholder = '00:00:00'; }
+      if (e) { e.value = ''; e.placeholder = '00:00:00'; }
+    } else {
+      if (s) s.placeholder = '自动检测';
+      if (e) e.placeholder = '自动检测';
+      if (comDramaStash.start || comDramaStash.end) {
+        if (s && !s.value.trim()) s.value = comDramaStash.start;
+        if (e && !e.value.trim()) e.value = comDramaStash.end;
+      } else {
+        comDramaFillSuggestion();   // 无草稿 → 预填探测到的真实边界
+      }
     }
     if (note) note.innerHTML = open ? COM_DRAMA_OPEN_NOTE : COM_DRAMA_GATE_NOTE;
     updateTrimDurationText();
