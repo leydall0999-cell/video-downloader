@@ -11,6 +11,7 @@ env 变量名与 commentary-pipeline/scripts/config.py 完全对齐：
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -163,12 +164,14 @@ def get_voice_sample() -> dict[str, Any]:
     """
     audio, text, updated = "", "", ""
     sp = _voice_sample_path()
+    nm = ""
     if sp.is_file():
         try:
             saved = json.loads(sp.read_text(encoding="utf-8"))
             audio = str(saved.get("audio_path") or "").strip()
             text = str(saved.get("ref_text") or "").strip()
             updated = str(saved.get("updated_at") or "").strip()
+            nm = str(saved.get("name") or "").strip()
         except (json.JSONDecodeError, OSError, ValueError):
             pass
     exists = bool(audio) and os.path.isfile(audio)
@@ -176,22 +179,28 @@ def get_voice_sample() -> dict[str, Any]:
     return {
         "audio_path": audio,
         "ref_text": text,
+        # 配音名字（2026-09-20 新增）：用户在录制弹窗里可编辑，缺省用文件名
+        "name": nm,
         "audio_exists": exists,
         "ready": bool(exists and suffix_ok and text),
         "updated_at": updated,
     }
 
 
-def save_voice_sample(audio_path: str, ref_text: str) -> dict[str, Any]:
+def save_voice_sample(audio_path: str, ref_text: str, name: str = "") -> dict[str, Any]:
     """持久化「我的音色」样本（原子写入，权限 0600）。
 
     校验：音频路径必须存在、扩展名受支持、文字稿非空 —— 缺一样直接抛 ValueError
     （前端立刻提示，避免把「存了个用不了的样本」留到渲染时才炸）。
+
+    name（2026-09-20 新增）：配音名字，随样本一起存，并顺手登记进**音色库**
+    （voice_library.json）。登记失败不影响「样本已生效」这个事实 —— 它只是收藏夹。
     """
     import datetime as _dt
 
     audio = str(audio_path or "").strip().strip('"').strip("'")
     text = str(ref_text or "").strip()
+    nm = _clean_voice_name(name)
     if not audio:
         raise ValueError("请先选择一段音色样本音频")
     if not os.path.isfile(audio):
@@ -205,9 +214,14 @@ def save_voice_sample(audio_path: str, ref_text: str) -> dict[str, Any]:
     payload = {
         "audio_path": audio,
         "ref_text": text,
+        "name": nm,
         "updated_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     atomic_io.atomic_write_json(_voice_sample_path(), payload)
+    try:
+        upsert_voice_library(nm, audio, text)
+    except (OSError, ValueError, TypeError):
+        pass
     return get_voice_sample()
 
 
@@ -224,6 +238,194 @@ def inject_voice_sample_env(env: dict[str, str]) -> None:
         env["QWEN3TTS_REF_AUDIO"] = sample["audio_path"]
     if "QWEN3TTS_REF_TEXT" not in env:
         env["QWEN3TTS_REF_TEXT"] = sample["ref_text"]
+
+
+# ───────────────────────── 音色库（命名保存 / 全部音色，2026-09-20）─────────────────────────
+# 背景（用户 2026-09-20）：「试听可以编辑配音名字保存」「在我的音色里面应该也加个可以看到
+#   全部音色的弹窗」。此前「我的音色」是**单例**（voice_sample.json）——录一段覆盖一段、
+#   连名字都没有，用户无法在多个自己录的音色之间切回，也看不到"自己到底有哪些音色"。
+#
+# 设计（关键是**不让新功能碰到已在跑的那条链路**）：
+#   · voice_sample.json 仍是**唯一生效**的样本 —— 管线注入 QWEN3TTS_REF_* 只读它，零改动；
+#   · voice_library.json 只是「收藏夹」：记住用户存过的每个音色（名字 + 音频 + 文字稿）；
+#   · 在库里选一条 = 拿它的路径/文字稿重新走一次既有 save_voice_sample（同一套校验）。
+#   ⇒ 库文件损坏/丢失只会少一个列表，绝不会让渲染失败。
+VOICE_LIB_MAX = 40        # 库上限：超出淘汰最旧的，防无声堆积
+VOICE_NAME_MAX = 40       # 名字长度上限（界面上是窄卡片，太长会撑破）
+
+
+def _voice_library_path() -> Path:
+    return _config_dir() / "voice_library.json"
+
+
+def _voice_lib_id(audio_path: str, ref_text: str) -> str:
+    """条目 id = 音频路径 + 文字稿的哈希 ⇒ 同一段样本重复保存只更新它自己。"""
+    raw = f"{str(audio_path or '').strip()}\x00{str(ref_text or '').strip()}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _clean_voice_name(name: str) -> str:
+    """清洗用户输入的配音名字：去首尾空白、压掉换行、截断到上限。"""
+    raw = str(name or "").replace("\r", " ").replace("\n", " ")
+    return " ".join(raw.split()).strip()[:VOICE_NAME_MAX]
+
+
+def _default_voice_name(audio_path: str) -> str:
+    """没填名字时的兜底名：用音频文件名（比"我的音色"更有辨识度）。"""
+    base = os.path.splitext(os.path.basename(str(audio_path or "")))[0].strip()
+    return (base or "我的音色")[:VOICE_NAME_MAX]
+
+
+def _read_voice_library() -> list[dict[str, Any]]:
+    p = _voice_library_path()
+    if not p.is_file():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return []          # 读坏当空库：宁可少一个列表，也不能让面板打不开
+    items = data.get("items") if isinstance(data, dict) else None
+    return [it for it in (items or []) if isinstance(it, dict)]
+
+
+def _write_voice_library(items: list[dict[str, Any]]) -> None:
+    atomic_io.atomic_write_json(_voice_library_path(), {"items": items})
+
+
+def list_voice_library() -> dict[str, Any]:
+    """列出音色库（新存的在前），并标出哪一条是**当前生效**的。
+
+    ready = 文件还在 + 扩展名受支持 + 文字稿非空（与 get_voice_sample 同一口径）；
+    active = 该条就是 voice_sample.json 里那段 —— 前端据此打勾。
+    """
+    active = get_voice_sample()
+    active_path = str(active.get("audio_path") or "")
+    out: list[dict[str, Any]] = []
+    for it in _read_voice_library():
+        audio = str(it.get("audio_path") or "")
+        text = str(it.get("ref_text") or "")
+        exists = bool(audio) and os.path.isfile(audio)
+        out.append({
+            "id": str(it.get("id") or _voice_lib_id(audio, text)),
+            "name": _clean_voice_name(it.get("name") or "") or _default_voice_name(audio),
+            "audio_path": audio,
+            "ref_text": text,
+            "created_at": str(it.get("created_at") or ""),
+            "audio_exists": exists,
+            # 是不是 App 自己录的（决定删除时能不能顺手清文件）——只对 voice_samples/ 内的
+            "managed": _is_managed_voice_file(audio),
+            "ready": bool(exists and audio.lower().endswith(VOICE_SAMPLE_EXTS) and text.strip()),
+            "active": bool(active_path) and audio == active_path,
+        })
+    out.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+    return {"items": out, "active_audio_path": active_path, "active_name": str(active.get("name") or "")}
+
+
+def upsert_voice_library(
+    name: str,
+    audio_path: str,
+    ref_text: str,
+    created_at: str = "",
+) -> dict[str, Any]:
+    """把一段样本登记进音色库（已存在则改名并刷新），返回该条目。
+
+    只校验"路径与文字稿非空"——文件是否存在交给 list_voice_library 的 ready 判定，
+    这样即便用户之后把文件删了，库里那条也只是变成"不可用"，不会把整库写坏。
+    """
+    import datetime as _dt
+
+    audio = str(audio_path or "").strip()
+    text = str(ref_text or "").strip()
+    if not audio or not text:
+        raise ValueError("音色样本缺少音频路径或文字稿")
+    nm = _clean_voice_name(name) or _default_voice_name(audio)
+    vid = _voice_lib_id(audio, text)
+    items = _read_voice_library()
+    entry = {
+        "id": vid,
+        "name": nm,
+        "audio_path": audio,
+        "ref_text": text,
+        "created_at": created_at or _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    replaced = False
+    for idx, it in enumerate(items):
+        if str(it.get("id") or "") == vid:
+            # 重命名/重存保留原始入库时间，排序位置不会莫名乱跳
+            entry["created_at"] = str(it.get("created_at") or entry["created_at"])
+            items[idx] = entry
+            replaced = True
+            break
+    if not replaced:
+        items.insert(0, entry)
+    del items[VOICE_LIB_MAX:]
+    _write_voice_library(items)
+    return {"id": vid, "name": nm, "created": not replaced}
+
+
+def remove_voice_library(vid: str) -> dict[str, Any]:
+    """从音色库删掉一条。
+
+    ⚠️ 只删 App 自己录进 `voice_samples/` 的那个音频文件；用户从别处选的样本**一律不碰**
+    （那是他自己的文件，删了不可恢复）。
+    """
+    key = str(vid or "").strip()
+    if not key:
+        raise ValueError("缺少要删除的音色 id")
+    items = _read_voice_library()
+    hit: dict[str, Any] | None = None
+    keep: list[dict[str, Any]] = []
+    for it in items:
+        if hit is None and str(it.get("id") or "") == key:
+            hit = it
+            continue
+        keep.append(it)
+    if hit is None:
+        raise ValueError("这个音色已经不在库里了")
+    _write_voice_library(keep)
+
+    removed_file = False
+    audio = str(hit.get("audio_path") or "")
+    if audio and _is_managed_voice_file(audio):
+        try:
+            p = Path(audio)
+            if p.is_file():
+                p.unlink()
+                removed_file = True
+        except OSError:
+            pass
+    return {"id": key, "removed_file": removed_file}
+
+
+def _is_managed_voice_file(audio_path: str) -> bool:
+    """该音频是不是 App 自己录的（落在 voice_samples/ 里）——只有这种才允许被顺手删掉。"""
+    if not audio_path:
+        return False
+    try:
+        return Path(audio_path).resolve().parent == _voice_rec_dir().resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def rename_active_voice(name: str) -> dict[str, Any]:
+    """只改「当前生效样本」的名字（不动音频/文字稿），供界面直接改名用。"""
+    cur = get_voice_sample()
+    if not cur.get("audio_path"):
+        raise ValueError("还没有配置音色样本")
+    return save_voice_sample(cur["audio_path"], cur.get("ref_text") or "", name)
+
+
+def library_audio_paths() -> set[str]:
+    """库里所有音频的绝对路径集合 —— 给 `_prune_voice_recordings` 用，别把在用的删了。"""
+    out: set[str] = set()
+    for it in _read_voice_library():
+        audio = str(it.get("audio_path") or "")
+        if audio:
+            out.add(audio)
+    sample = get_voice_sample()
+    if sample.get("audio_path"):
+        out.add(str(sample["audio_path"]))
+    return out
 
 
 # ── 页面内直接录制（2026-09-19）───────────────────────────────────────────────
@@ -336,6 +538,9 @@ def _prune_voice_recordings(keep: str = "") -> None:
     """只保留最近 VOICE_REC_KEEP 段录音（含刚写的那段），其余删除。
 
     只动本模块自己写的 `voice_samples/`（用户从别处选的样本文件不在其内，绝不碰）。
+
+    ⚠️ 2026-09-20：**音色库里还在用的音频一律不删**。否则用户给一个音色起了名字存进库、
+    再录 5 次新的，那条库记录指向的 wav 就被这里悄悄删掉，界面上变成「不可用」。
     """
     try:
         files = [p for p in _voice_rec_dir().glob("*") if p.is_file()]
@@ -343,8 +548,23 @@ def _prune_voice_recordings(keep: str = "") -> None:
         return
     files.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
     keep_name = os.path.basename(keep or "")
-    for idx, path in enumerate(files):
-        if idx < VOICE_REC_KEEP or path.name == keep_name:
+    try:
+        protected = library_audio_paths()
+    except (OSError, ValueError):
+        protected = set()
+    kept = 0
+    for path in files:
+        # 🔴 名额记账必须与改造前一致：**被保留的每一条都占一个名额**（含 keep 那一条）。
+        #    曾经把 keep/受保护的文件写成「额外多留、不占名额」，结果最近 N 段之外又多出一份，
+        #    test_prune_keeps_recent_only 直接挂（应留 5 段实际 6 段）。
+        pinned = bool(keep_name) and path.name == keep_name
+        if not pinned:
+            try:
+                pinned = str(path) in protected or str(path.resolve()) in protected
+            except OSError:
+                pinned = False
+        if pinned or kept < VOICE_REC_KEEP:
+            kept += 1
             continue
         try:
             path.unlink()

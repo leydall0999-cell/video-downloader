@@ -531,6 +531,33 @@
     comMyVoiceAuditInfo: $('comMyVoiceAuditInfo'),
     comMyVoiceAuditRedo: $('comMyVoiceAuditRedo'),
     comMyVoiceAuditOk: $('comMyVoiceAuditOk'),
+    // 2026-09-20：录制/试听条搬到居中弹窗里，另加「全部音色」入口
+    comMyVoiceAll: $('comMyVoiceAll'),
+    comVoiceRecModal: $('comVoiceRecModal'),
+    comVoiceRecModalClose: $('comVoiceRecModalClose'),
+    comRecModalRead: $('comRecModalRead'),
+    comRecModalRecActions: $('comRecModalRecActions'),
+    comRecModalStop: $('comRecModalStop'),
+    comVoiceModalStatus: $('comVoiceModalStatus'),
+    comVoiceName: $('comVoiceName'),
+    // 「🎧 全部音色」弹窗
+    comVoiceLibModal: $('comVoiceLibModal'),
+    comVoiceLibClose: $('comVoiceLibClose'),
+    comVoiceLibList: $('comVoiceLibList'),
+    comVoiceLibHint: $('comVoiceLibHint'),
+    comVoiceLibDone: $('comVoiceLibDone'),
+    // 「🎬 渲染完成」弹窗
+    comDoneModal: $('comDoneModal'),
+    comDoneClose: $('comDoneClose'),
+    comDoneLead: $('comDoneLead'),
+    comDoneName: $('comDoneName'),
+    comDonePath: $('comDonePath'),
+    comDoneNote: $('comDoneNote'),
+    comDoneLater: $('comDoneLater'),
+    comDoneOpenHist: $('comDoneOpenHist'),
+    // 「起点/终点」模式门控（2026-09-20）
+    comDramaRow: $('comDramaRow'),
+    comDramaNote: $('comDramaNote'),
     // 本地克隆「运行环境」按需下载入口（2026-09-18）
     comCloneEnvBox: $('comCloneEnvBox'),
     comCloneEnvText: $('comCloneEnvText'),
@@ -8434,6 +8461,101 @@ el.dwVidPlayer.removeAttribute('src');
     return /\.(mp4|mkv|mov|webm)$/i.test(base) ? base : '解说成片.mp4';
   };
 
+  // ═══════════ 🎬 渲染完成弹窗（2026-09-20）═══════════════════════════════════
+  // 用户原话：「现在渲染完还是没提示，应该加个『已渲染完成，请在解说历史里保存到本地』的弹窗。
+  //   直接存在解说历史里面，用户都不知道有没有渲染完成，解说历史应该是保存的历史文件，
+  //   它有可能不在同一文件夹里面」。
+  // 为什么非要多一个模态窗口：渲染长片动辄十几分钟，用户早切去别的视图了，
+  //   底部那条 6 秒的 toast 他根本等不到 —— 模态会一直等他点，这才是「有提示」。
+  // ⚠️ 与既有「toast + 自动另存到下载夹」并存、不替换（那部分在正常工作，别动）。
+  /** 历史条目 id 是「成片绝对路径」的 base64（见服务端 /api/commentary/list）——
+   *  解出来就能如实告诉用户文件到底在哪个文件夹。⚠️ 服务端用的是 URL-safe 变体（-_ 而非 +/）。 */
+  const comDoneDecodePath = (id) => {
+    try {
+      const b64 = String(id || '').replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+      const bin = atob(pad);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
+    } catch (_e) { return ''; }
+  };
+
+  /** 按成片名反查它的真实落盘路径（拿不到就返回空，绝不影响弹窗本身弹出）。 */
+  const comDoneLocate = async (name) => {
+    if (!name) return '';
+    try {
+      const data = await request('/api/commentary/list');
+      const items = (data && data.items) || [];
+      const hit = items.find((x) => x.name === name);
+      return hit ? comDoneDecodePath(hit.id) : '';
+    } catch (_e) { return ''; }
+  };
+
+  /** 弹出「已渲染完成」弹窗。savedFull=自动另存到「下载」的完整路径（Web 版为空）。 */
+  const comDoneShow = (opts) => {
+    const dlg = el.comDoneModal;
+    if (!dlg) return;
+    const o = opts || {};
+    const where = o.folder || '';
+    if (el.comDoneName) {
+      el.comDoneName.textContent = o.name || '解说成片.mp4';
+      el.comDoneName.title = o.name || '';
+    }
+    if (el.comDonePath) {
+      if (where) {
+        el.comDonePath.textContent = where;
+        el.comDonePath.title = where;
+      } else {
+        el.comDonePath.textContent = '（读取中…）';
+        el.comDonePath.title = '';
+        // 异步补上真实目录：路径拿不到也不影响弹窗已经给出的指引
+        comDoneLocate(o.name).then((full) => {
+          if (!el.comDonePath || el.comDonePath.textContent !== '（读取中…）') return;
+          const dir = full ? full.split('/').slice(0, -1).join('/') : '';
+          el.comDonePath.textContent = dir || '（暂时读不到路径，到「📂 解说历史」里能看到）';
+          el.comDonePath.title = dir;
+        });
+      }
+    }
+    if (el.comDoneLead) {
+      el.comDoneLead.textContent = o.savedFull
+        ? '成片已生成，并已自动另存到「下载」文件夹。想放到别的位置，就到「📂 解说历史」里点「💾 保存」。'
+        : '成片已渲染完成。请到「📂 解说历史」里点「💾 保存」，把成片存到你要的文件夹。';
+    }
+    if (el.comDoneNote) {
+      el.comDoneNote.innerHTML = '解说历史里的成片存在 App 自己的成片归档目录，'
+        + '<b>不一定在你平时放视频的文件夹</b>；要放进自己的文件夹，就点那条的「💾 保存」。';
+    }
+    if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
+    else dlg.setAttribute('open', '');
+  };
+
+  const comDoneClose = () => {
+    const dlg = el.comDoneModal;
+    if (!dlg) return;
+    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
+    else dlg.removeAttribute('open');
+  };
+
+  if (el.comDoneClose) el.comDoneClose.addEventListener('click', comDoneClose);
+  if (el.comDoneLater) el.comDoneLater.addEventListener('click', comDoneClose);
+  if (el.comDoneModal) {
+    el.comDoneModal.addEventListener('cancel', () => { /* Esc 直接关，无需额外清理 */ });
+    el.comDoneModal.addEventListener('click', (ev) => { if (ev.target === el.comDoneModal) comDoneClose(); });
+  }
+  if (el.comDoneOpenHist) {
+    el.comDoneOpenHist.addEventListener('click', () => {
+      comDoneClose();
+      // 展开左栏「📂 解说历史」浮层并把它带进视野 —— 用户下一步就是在那儿点「💾 保存」
+      try { setHistOpen(true); } catch (_e) { /* ignore */ }
+      try {
+        const t = $('comHistToggle');
+        if (t) t.scrollIntoView({ block: 'center' });
+      } catch (_e) { /* ignore */ }
+    });
+  }
+
   /** 成片完成时必须「出声」（2026-09-20 用户：「解说完成怎么默不作声呢？
    *  要有个提示吧或者保存什么的吧」）。渲染长片时用户基本都会切去别的视图等，
    *  只改面板里那行文字他根本看不到，所以：
@@ -8442,7 +8564,8 @@ el.dwVidPlayer.removeAttribute('src');
    *      save_commentary_file（写 ~/Downloads；重名自动加 (1)/(2)，不会覆盖旧文件），
    *      存好后把真实落盘文件名回写进 toast 与状态行，用户不必再去点按钮；
    *   ③ Web 版没有原生桥 → 只弹 toast，其余与旧版一致（面板里的下载链接照旧可用）。
-   *  同一个 job 只播报一次（重复轮询/回看历史都不会重弹）。 */
+   *  同一个 job 只播报一次（重复轮询/回看历史都不会重弹）。
+   *  2026-09-20 追加 ④：弹一个**模态**窗口（comDoneShow），因为 toast 会被错过。 */
   const _comAnnounced = new Set();
   const comAnnounceFinished = async (jobId, name, refs) => {
     if (!jobId || _comAnnounced.has(jobId)) return;
@@ -8451,11 +8574,16 @@ el.dwVidPlayer.removeAttribute('src');
     const canSave = !!(api && api.save_commentary_file);
     const say = (msg, ms) => { try { showToast(msg, ms); } catch (e) { /* toast 失败不影响成片 */ } };
     say(canSave ? '🎬 解说成片已生成，正在保存到「下载」文件夹…' : '🎬 解说成片已生成', 6000);
-    if (!canSave) return;
+    if (!canSave) {
+      // Web 版：没有原生桥，指引用户自己在解说历史里下载
+      comDoneShow({ name, savedFull: '', folder: '' });
+      return;
+    }
     try {
       const res = await api.save_commentary_file(jobId, name);
       if (typeof res === 'string' && res.startsWith('ERROR:')) {
         say('成片已生成，但自动保存失败：' + res.replace(/^ERROR:\s*/, '').slice(0, 60), 9000);
+        comDoneShow({ name, savedFull: '', folder: '' });
       } else if (typeof res === 'string' && res) {
         const saved = res.split('/').pop() || name;
         say(`🎬 解说成片已完成，已保存到「下载」：${saved}`, 9000);
@@ -8465,9 +8593,20 @@ el.dwVidPlayer.removeAttribute('src');
           const prev = refs.commentaryStatus.textContent || '';
           refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + `已保存到「下载」：${saved}`;
         }
+        // 「位置」优先显示刚另存成功的那条路径（最贴近用户此刻关心的「文件在哪」）
+        comDoneShow({
+          name,
+          savedFull: res,
+          folder: res.split('/').slice(0, -1).join('/'),
+        });
+      } else {
+        // 桥接返回了空/非字符串：当成没存成功，仍然给出指引
+        comDoneShow({ name, savedFull: '', folder: '' });
       }
     } catch (e) {
       // 自动保存失败不改变「成片已生成」这个事实：面板里「⬇ 保存到本机」仍可手动保存
+      // —— 但必须告诉用户，否则他以为「没提示 = 没渲染完」
+      comDoneShow({ name, savedFull: '', folder: '' });
     }
   };
 
@@ -8774,7 +8913,7 @@ el.dwVidPlayer.removeAttribute('src');
   /** 「我的音色」样本的本地态（audio_path/ref_text/ready）。
    *  声明在这里而不是靠下的实现块里：comRefreshTtsStatus 在初始化阶段就会被调用，
    *  若用 let 声明在下方会命中 TDZ 抛 ReferenceError。 */
-  let comVoiceSampleState = { audio_path: '', ref_text: '', ready: false };
+  let comVoiceSampleState = { audio_path: '', ref_text: '', name: '', ready: false };
   /** 「我的音色」未配置时自动展开其所在卡（现「配音与音量」），只做一次（避免用户手动折起后反复被打开）。 */
   let _myVoiceAutoOpened = false;
   const comRefreshTtsStatus = async (opts = {}) => {
@@ -10389,6 +10528,46 @@ el.dwVidPlayer.removeAttribute('src');
     el.comTrimDuration.title = total ? `片长：${formatDuration(total) || '0s'}` : '片长：未知';
   };
 
+  // ═══════════ 起点/终点 门控（2026-09-20）═══════════════════════════════════════
+  // 用户原话：「这个应该都默认为零时零分零秒，只有选择去片头才有片头/终点时间，
+  //   不然给人默认就是从这个开始，但是我们默认没有这一环节」。
+  // 即：默认（保留片头片尾·不解说）这一步不存在 ⇒ 起点/终点恒显示 00:00:00、不可改、整行置灰；
+  //     只有选了「去片头片尾」才放开，此时填的就是「片头结束 / 片尾开始」的绝对时间。
+  // 🔴 刻意**不改后端**：置灰时输入框清空 ⇒ comGetOptions 里 parse 出来是 null ⇒
+  //    与「从来没填过」完全一致，后端照旧自动检测正剧范围（这条路径本来就在正常工作，不动）。
+  /** 暂存用户在「去片头片尾」下填的时间：切回来时原样恢复，免得来回切一次就白填。 */
+  let comDramaStash = { start: '', end: '' };
+  const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，'
+    + '起点/终点保持 00:00:00（正剧范围由系统自动判断）。'
+    + '要手动指定，请到「✂️ 片头片尾处理」里选「去片头片尾」。';
+  const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：填<b>片头结束 / 片尾开始</b>的绝对时间'
+    + '（也可直接填秒数，如 85）；留空则由系统自动检测。';
+  const comDramaGate = () => {
+    const row = $('comDramaRow');
+    const s = el.comDramaStart, e = el.comDramaEnd;
+    const note = el.comDramaNote;
+    const open = el.comIntroOutroMode() === 'skip';
+    if (row) row.classList.toggle('is-gated', !open);
+    [s, e].forEach((n) => { if (n) n.disabled = !open; });
+    [el.comDramaStartRange, el.comDramaEndRange].forEach((n) => { if (n) n.disabled = !open; });
+    if (!open) {
+      // 置灰时把值撤走（视觉上就是占位符 00:00:00），但先存起来
+      if (s && s.value.trim()) comDramaStash.start = s.value.trim();
+      if (e && e.value.trim()) comDramaStash.end = e.value.trim();
+      if (s) s.value = '';
+      if (e) e.value = '';
+    } else if ((comDramaStash.start || comDramaStash.end)) {
+      if (s && !s.value.trim()) s.value = comDramaStash.start;
+      if (e && !e.value.trim()) e.value = comDramaStash.end;
+    }
+    if (note) note.innerHTML = open ? COM_DRAMA_OPEN_NOTE : COM_DRAMA_GATE_NOTE;
+    updateTrimDurationText();
+  };
+  document.querySelectorAll('input[name="comIntroOutroMode"]').forEach((r) => {
+    r.addEventListener('change', comDramaGate);
+  });
+  comDramaGate();   // 页面进来先按默认模式置一次，避免首屏出现「可编辑」的错觉
+
   /** 渲染后给某张成片卡换/加/移除配乐（轻量 amix，秒级，成品就地替换）。 */
 
   const createComCard = (it, gallery = false) => {
@@ -10682,16 +10861,34 @@ el.dwVidPlayer.removeAttribute('src');
   };
   const comSetVoiceStatus = (kind, msg) => {
     const node = el.comMyVoiceStatus;
-    if (!node) return;
-    if (!msg) { node.hidden = true; node.textContent = ''; return; }
-    node.hidden = false;
-    node.textContent = msg;
-    node.dataset.kind = kind || 'info';
+    if (node) {
+      if (!msg) { node.hidden = true; node.textContent = ''; }
+      else { node.hidden = false; node.textContent = msg; node.dataset.kind = kind || 'info'; }
+    }
+    // 2026-09-20：录制弹窗盖住整屏时，卡片里那行状态用户根本看不到 ——
+    // 所以同一条消息**镜像**进弹窗内的状态条（弹窗关着时不显示，避免两边重复）。
+    const m = el.comVoiceModalStatus;
+    if (m) {
+      const open = !!(el.comVoiceRecModal && el.comVoiceRecModal.open);
+      if (!msg) { m.hidden = true; m.textContent = ''; }
+      else if (open) { m.hidden = false; m.textContent = msg; m.dataset.kind = kind || 'info'; }
+      else { m.hidden = true; m.textContent = ''; }
+    }
+  };
+  /** 音色的默认名字（2026-09-20）：优先取文字稿开头几个字 —— 「我的声音 A/B/C」这种
+   *  千篇一律的名字在「全部音色」列表里根本认不出哪一个是什么。 */
+  const comDefaultVoiceName = () => {
+    const t = (el.comMyVoiceText ? el.comMyVoiceText.value : '').trim();
+    if (t) return t.slice(0, 12);
+    const d = new Date();
+    return '音色 ' + (d.getMonth() + 1) + '/' + d.getDate() + ' '
+      + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   };
   const comRenderVoiceSample = (s) => {
     comVoiceSampleState = {
       audio_path: (s && s.audio_path) || '',
       ref_text: (s && s.ref_text) || '',
+      name: (s && s.name) || '',
       ready: !!(s && s.ready),
     };
     if (el.comMyVoicePath) {
@@ -10702,6 +10899,11 @@ el.dwVidPlayer.removeAttribute('src');
     }
     if (el.comMyVoiceText && document.activeElement !== el.comMyVoiceText) {
       el.comMyVoiceText.value = comVoiceSampleState.ref_text;
+    }
+    // 名字回填：正在输入时绝不覆盖用户手里的值（与上面文字稿同一条规则）
+    if (el.comVoiceName && document.activeElement !== el.comVoiceName
+      && (comVoiceSampleState.name || !el.comVoiceName.value.trim())) {
+      el.comVoiceName.value = comVoiceSampleState.name || comDefaultVoiceName();
     }
     if (el.comMyVoiceBadge) {
       el.comMyVoiceBadge.textContent = comVoiceSampleState.ready ? '已配置' : '未配置';
@@ -10760,6 +10962,10 @@ el.dwVidPlayer.removeAttribute('src');
     // 录完待确认的那段（2026-09-20）：{blob, sec, round}。**先试听、再落盘**，
     // 不直接上传 —— 否则用户不满意只能「先存坏的样本 → 再重录覆盖」，白写一次盘。
     pending: null,
+    // 2026-09-20：「✅ 没问题，保存并结束」走的是「上传录音 → 再存音色」两跳，
+    // 存音色那一步要等异步回来才知道成败，所以用这个标记把「存成功后自动关弹窗」
+    // 挂到保存结果上 —— 提前关会让用户看不到失败原因。
+    closeAfterSave: false,
   };
 
   function comRecSupported() {
@@ -10779,6 +10985,9 @@ el.dwVidPlayer.removeAttribute('src');
   function comRecSetBar(on) {
     comRec.busy = false;
     if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !on;
+    // 弹窗内的「取消录制 / ⏹ 停止并试听」整行跟着录制条一起显隐（2026-09-20）：
+    // 保持「录制中」的所有可见元素只有一个开关，避免出现「有计时条却没有停止键」。
+    if (el.comRecModalRecActions) el.comRecModalRecActions.hidden = !on;
     if (el.comMyVoiceRec) {
       // 🔴 录制中让主按钮自己变成「停止并保存」，别禁用它：
       // 之前把主按钮禁掉、把唯一的停止键只放在文字稿下面的录制条里，而真机设置面板
@@ -10867,6 +11076,68 @@ el.dwVidPlayer.removeAttribute('src');
     }
   }
 
+
+  // ─────────────────── 居中录制弹窗（2026-09-20）───────────────────────────
+  // 用户原话：「录制的时候能不能弹个窗口在画面中间，现在位置太小了，然后试听可以编辑配音
+  //   名字保存，点保存，任务就结束，弹窗自动关闭」。
+  // 做法：**不新建第二套录制 UI** —— 原来的「录制条」#comMyVoiceRecBar 与「试听条」
+  //   #comMyVoiceAudit 是整体搬进弹窗的（id 一个没改），这里只加「开合 + 阶段切换」。
+  //   好处：所有既有状态机（计时/电平/静音检测/试听/上传）一行没动。
+  /** 弹窗内的阶段：rec=正在录（计时条 + 停止键）/ audit=录完待确认（试听 + 命名）/ none=都不显示。 */
+  function comRecModalStage(stage) {
+    const rec = stage === 'rec';
+    if (el.comRecModalRecActions) el.comRecModalRecActions.hidden = !rec;
+    if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !rec;
+    if (el.comMyVoiceAudit) el.comMyVoiceAudit.hidden = stage !== 'audit';
+    if (stage === 'audit' && el.comVoiceName) {
+      // 弹窗里第一件该做的事就是给这段音色起个名（也能直接改），所以聚焦并全选现成的默认名
+      try { el.comVoiceName.focus(); el.comVoiceName.select(); } catch (_e) { /* ignore */ }
+    }
+  }
+
+  /** 打开录制弹窗（居中）。开着就不重复 showModal（重复调用会抛 InvalidStateError）。 */
+  function comRecModalOpen() {
+    const dlg = el.comVoiceRecModal;
+    if (!dlg) return;
+    if (el.comRecModalRead) {
+      // 要念的稿子就是下面那份文字稿 —— 弹窗里大字显示，省得来回滚
+      el.comRecModalRead.textContent = (el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '');
+    }
+    if (el.comVoiceName && !el.comVoiceName.value.trim()) {
+      el.comVoiceName.value = comVoiceSampleState.name || comDefaultVoiceName();
+    }
+    comSetVoiceStatus('', '');          // 清掉上一次的残留提示
+    comRecModalStage('rec');
+    if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
+    else dlg.setAttribute('open', '');
+  }
+
+  /** 关弹窗。录制中=取消录制；有待确认的录音=丢弃（**没点「保存并结束」的一律不算数**）。 */
+  function comRecModalClose() {
+    comRec.closeAfterSave = false;
+    if (comRec.active) comRecStop(false, false);
+    if (comRec.pending) {
+      comRec.pending = null;
+      comSetVoiceStatus('info', '已丢弃这段录音（没保存）');
+    }
+    try {
+      const a = el.comAudioPreview;
+      if (a) { a.pause(); a.removeAttribute('src'); a.load(); }
+    } catch (_e) { /* ignore */ }
+    comRecModalStage('none');
+    if (el.comVoiceModalStatus) { el.comVoiceModalStatus.hidden = true; el.comVoiceModalStatus.textContent = ''; }
+    const dlg = el.comVoiceRecModal;
+    if (!dlg) return;
+    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
+    else dlg.removeAttribute('open');
+  }
+
+  /** 「✅ 没问题，保存并结束」：录完确认后落盘 + 存成音色，成功后**自动关闭弹窗**（用户要求）。 */
+  async function comAuditConfirmAndFinish() {
+    if (!comRec.pending) { comSetVoiceStatus('warn', '没有待确认的录音，请先点「⏺ 直接录制」'); return; }
+    comRec.closeAfterSave = true;       // 保存成功那一刻由保存流程收尾关窗（失败要留着让用户看原因）
+    await comAuditConfirm();
+  }
 
   /** 收掉采集链路（麦克风、AudioContext、计时器）。**不动 comRec.pending** ——
    *  录完后待确认的那段要活到用户点「✅ 没问题」或「🔄 重录」为止。 */
@@ -10969,10 +11240,13 @@ el.dwVidPlayer.removeAttribute('src');
       comRec.active = true; comRec.stream = stream; comRec.ctx = ctx;
       comRec.proc = proc; comRec.src = src; comRec.sink = sink;
       comRec.t0 = Date.now();
+      // 麦克风**拿到之后**才弹窗（2026-09-20）：授权/超时失败时不该先糊一个空窗口，
+      // 那条路径继续用卡片里原有的错误提示，用户看得见也关得掉。
+      comRecModalOpen();
       comRecSetBar(true);
-      // 录制条可能被滚出设置面板的可视区 → 带进视野（block:'nearest' 只做最小滚动）
-      try { if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.scrollIntoView({ block: 'nearest' }); } catch (_) { /* ignore */ }
-      comSetVoiceStatus('info', '录制中：照着文字稿念一遍，念完点上面的「⏹ 停止并保存」');
+      // 弹窗是 top layer，不再需要把录制条滚进视野；但要保证弹窗里的稿子是最新的
+      try { if (el.comRecModalRead) el.comRecModalRead.textContent = (el.comMyVoiceText ? el.comMyVoiceText.value.trim() : ''); } catch (_) { /* ignore */ }
+      comSetVoiceStatus('info', '录制中：照着弹窗里的稿子念一遍，念完点「⏹ 停止并试听」');
       comRec.tick = setInterval(() => {
         const sec = (Date.now() - comRec.t0) / 1000;
         if (el.comMyVoiceRecTime) el.comMyVoiceRecTime.textContent = sec.toFixed(1) + 's';
@@ -11017,24 +11291,46 @@ el.dwVidPlayer.removeAttribute('src');
     //    「自己录完声音预览怎么没有呢？录完应该有个试听，没问题再保存」。
     comRec.pending = { blob, sec };
     comAuditSet(true, (auto ? '已录满 ' + COM_REC_MAX_SEC + 's · ' : '') + '共 ' + sec.toFixed(1) + 's');
-    comSetVoiceStatus('info', '录好了 —— 先听一遍：没问题点「✅ 没问题，保存音色」，不满意点「🔄 重录」');
-    try { if (el.comMyVoiceAudit) el.comMyVoiceAudit.scrollIntoView({ block: 'nearest' }); } catch (_) { /* ignore */ }
+    // 切到「待确认」阶段：录制条 + 停止键收起，取而代之的是「试听 + 配音名字 + 保存并结束」
+    comRecModalStage('audit');
+    comSetVoiceStatus('info', '录好了 —— 先听一遍：没问题点「✅ 没问题，保存并结束」，不满意点「🔄 重录」');
     comAuditPlay();   // 用户要的就是「录完就有得听」，不用再点一次；被自动播放策略挡住时按钮仍在
   }
 
   // 同一个按钮两种状态：闲置＝开始录，录制中＝停止并保存 —— 结束键永远在用户刚点的位置
+  // （2026-09-20：录制中那个「结束键」现在也有弹窗内的「⏹ 停止并试听」一份，两者等价）
   if (el.comMyVoiceRec) {
     el.comMyVoiceRec.addEventListener('click', () => {
       if (comRec.active) comRecStop(true, false); else comRecStart();
     });
   }
+  // ── 录制弹窗内的控件（2026-09-20）─────────────────────────────────────────
+  if (el.comRecModalStop) {
+    el.comRecModalStop.addEventListener('click', () => { comRecStop(true, false); });
+  }
   if (el.comMyVoiceRecCancel) {
-    el.comMyVoiceRecCancel.addEventListener('click', () => { comRecStop(false, false); });
+    // 弹窗里的「取消录制」= 放弃这段并关窗（原来只停录制、弹窗会留在那儿，用户还得再点一次 ✕）
+    el.comMyVoiceRecCancel.addEventListener('click', () => { comRecModalClose(); });
+  }
+  if (el.comVoiceRecModalClose) {
+    el.comVoiceRecModalClose.addEventListener('click', () => { comRecModalClose(); });
+  }
+  if (el.comVoiceRecModal) {
+    // Esc 关窗走原生 cancel —— 必须拦下来走自己的清理，否则录制中的麦克风不会释放
+    el.comVoiceRecModal.addEventListener('cancel', (ev) => { ev.preventDefault(); comRecModalClose(); });
+    // 点遮罩（dialog 自身区域）关窗，与 .modal 的既有交互习惯一致
+    el.comVoiceRecModal.addEventListener('click', (ev) => {
+      if (ev.target === el.comVoiceRecModal) comRecModalClose();
+    });
   }
   // 试听条三个动作（2026-09-20）：试听 / 重录 / 确认保存
   if (el.comMyVoiceAuditPlay) el.comMyVoiceAuditPlay.addEventListener('click', () => { comAuditPlay(); });
-  if (el.comMyVoiceAuditRedo) el.comMyVoiceAuditRedo.addEventListener('click', () => { comAuditRedo(); });
-  if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.addEventListener('click', () => { comAuditConfirm(); });
+  if (el.comMyVoiceAuditRedo) {
+    // 重录：丢掉这段并**就地重开一次录制**。原来只丢不录，用户在弹窗里会卡住
+    // （「⏺ 直接录制」在卡片里，被弹窗盖着点不到）。
+    el.comMyVoiceAuditRedo.addEventListener('click', () => { comAuditRedo(); comRecStart(); });
+  }
+  if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.addEventListener('click', () => { comAuditConfirmAndFinish(); });
 
   if (el.comMyVoicePick) {
     el.comMyVoicePick.addEventListener('click', async () => {
@@ -11071,9 +11367,13 @@ el.dwVidPlayer.removeAttribute('src');
         const fd = new FormData();
         fd.append('audio_path', path);
         fd.append('ref_text', text);
+        // 配音名字（2026-09-20）：随样本一起落库，并登记进音色库（「🎧 全部音色」列表用）
+        const nm = (el.comVoiceName ? el.comVoiceName.value : '').trim();
+        if (nm) fd.append('name', nm);
         const res = await fetch('/api/commentary/voice-sample', { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+          comRec.closeAfterSave = false;   // 失败不关弹窗：得让用户看到原因
           comSetVoiceStatus('warn', (data && data.detail) || ('保存失败（HTTP ' + res.status + '）'));
           return;
         }
@@ -11081,15 +11381,291 @@ el.dwVidPlayer.removeAttribute('src');
         // 存好之后立刻把它挂进「全局配音」下拉（2026-09-20 用户要求「保存到全局配音里供选择」）：
         // 不刷新的话，下拉里那一项要等下次打开审核面板才出现，用户会以为没保存上。
         comFillScriptVoice();
-        comSetVoiceStatus('ok', '音色已保存 ✓ 已加进右上「全局配音」，可选「🎤 我的音色（克隆）」');
+        const shown = (data && data.name) || nm;
+        comSetVoiceStatus('ok', '音色已保存 ✓' + (shown ? '（' + shown + '）' : '')
+          + '已加进右上「全局配音」与「🎧 全部音色」');
         _ttsStatusCache = null;           // 样本变了 → 让状态条重新判定「就绪」
         comRefreshTtsStatus({ force: true });
+        comVoiceLibItems = [];            // 库内容变了：下次开「全部音色」重新拉
       } catch (e) {
+        comRec.closeAfterSave = false;
         comSetVoiceStatus('warn', '保存失败：' + e);
       } finally {
         el.comMyVoiceSave.disabled = false;
+        // 「✅ 没问题，保存并结束」→ 落库成功即收工关窗（用户明确要求「点保存，任务就结束，
+        // 弹窗自动关闭」）。放在 finally 而不是 try 里，是为了让上面那些提示能先渲染出来。
+        if (comRec.closeAfterSave) {
+          setTimeout(() => { if (comRec.closeAfterSave) comRecModalClose(); }, 700);
+        }
       }
     });
+  }
+
+  // ═══════════ 🎧 全部音色弹窗（2026-09-20）══════════════════════════════════
+  // 用户原话：「在我的音色里面应该也加个可以看到全部音色的弹窗，这样更合理」。
+  // 一个列表合成两条来源：
+  //   ① 「你保存的音色」= 后端 voice_library.json（名字 + 录的那段 + 文字稿 + 哪条在生效）；
+  //   ② 「系统音色」    = COM_VOICES（edge-tts 的 7 个，与右上「全局配音」同一份数据）。
+  // 🔴 「使用」**不新开状态**：值写回右上那个「全局配音」下拉并派发 change ——
+  //    引擎联动、哨兵值翻译、渲染时取值全都沿用既有那一套，这里绝不复制第二份。
+  let comVoiceLibItems = [];
+  let comVoiceLibActiveName = '';
+
+  const comVoiceLibHint = (msg, kind) => {
+    const n = el.comVoiceLibHint;
+    if (!n) return;
+    n.textContent = msg || '';
+    n.dataset.kind = kind || '';
+  };
+
+  /** 把库里某条设为「当前生效样本」（复用既有 POST /voice-sample，同一套校验）。 */
+  const comVoiceLibActivate = async (it) => {
+    const fd = new FormData();
+    fd.append('audio_path', it.audio_path);
+    fd.append('ref_text', it.ref_text);
+    if (it.name) fd.append('name', it.name);
+    const res = await fetch('/api/commentary/voice-sample', { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data && data.detail) || ('切换失败（HTTP ' + res.status + '）'));
+    return data;
+  };
+
+  /** 试听一段声音：系统音色 → edge 合成；我的音色 → 克隆引擎按当前样本合成。
+   *  provider 为空时后端走默认 edge（这对「系统音色」是刻意的：必须真听见系统音色）。 */
+  const comVoiceLibPlay = async (voiceValue, provider) => {
+    const form = new FormData();
+    form.append('voice', voiceValue);
+    form.append('text', '你好，我是视频解说员。我将为你解说这段视频。');
+    if (provider) form.append('provider', provider);
+    const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error((d && (d.detail || d.error)) || ('试听失败（HTTP ' + resp.status + '）'));
+    }
+    await playAudio(await resp.blob());
+  };
+
+  /** 生成一行音色。opts.onUse/onPlay 由调用方给（两条来源的语义不同）。 */
+  const comVoiceLibRow = (opts) => {
+    const row = document.createElement('div');
+    row.className = 'com-voicelib-item'
+      + (opts.active ? ' is-active' : '') + (opts.dead ? ' is-dead' : '');
+    const main = document.createElement('div');
+    main.className = 'com-voicelib-main';
+    const nm = document.createElement('span');
+    nm.className = 'com-voicelib-name';
+    nm.textContent = opts.name;
+    nm.title = opts.name;
+    const meta = document.createElement('span');
+    meta.className = 'com-voicelib-meta';
+    meta.textContent = opts.meta || '';
+    meta.title = opts.meta || '';
+    main.append(nm, meta);
+    row.appendChild(main);
+
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.className = 'btn btn-sm btn-secondary';
+    play.textContent = '▶';
+    play.title = '试听这段声音';
+    play.addEventListener('click', () => opts.onPlay(play));
+    row.appendChild(play);
+
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'btn btn-sm ' + (opts.active ? 'btn-ghost' : 'btn-primary');
+    use.textContent = opts.active ? '使用中' : '使用';
+    use.disabled = !!opts.active || !!opts.dead;
+    if (!use.disabled) use.addEventListener('click', () => opts.onUse(use));
+    row.appendChild(use);
+
+    if (opts.onDelete) {
+      // 删除做两步确认（按钮就地改文案）：库里删一条会连带删 App 自己录的那个 wav，
+      // 不该一击即中。用就地两段式而不是 window.confirm —— WKWebView 里的原生确认框
+      // 会阻塞事件循环，且样式与应用完全脱节。
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn btn-sm btn-ghost';
+      del.textContent = '🗑';
+      del.title = '从列表里删掉这个音色';
+      let armed = 0;
+      del.addEventListener('click', () => {
+        if (!armed) {
+          armed = setTimeout(() => { armed = 0; del.textContent = '🗑'; del.title = '从列表里删掉这个音色'; }, 4000);
+          del.textContent = '确认删?';
+          del.title = '再点一次即删除';
+          return;
+        }
+        clearTimeout(armed);
+        armed = 0;
+        opts.onDelete(del);
+      });
+      row.appendChild(del);
+    }
+    return row;
+  };
+
+  const comVoiceLibRender = () => {
+    const box = el.comVoiceLibList;
+    if (!box) return;
+    box.replaceChildren();
+    const cur = el.comScriptVoice ? el.comScriptVoice.value : '';
+    const cloneOn = cur === COM_CLONE_VOICE;
+
+    // ── 组 1：我的音色（用户自己保存的）──
+    const g1 = document.createElement('div');
+    g1.className = 'com-voicelib-group';
+    g1.textContent = '🎤 我的音色（你保存的）';
+    box.appendChild(g1);
+    if (!comVoiceLibItems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'com-voicelib-empty';
+      empty.textContent = '还没有保存过自己的音色。到「📇 我的音色」点「⏺ 直接录制」录一段，或「🎙 选择录音」挑一个音频文件。';
+      box.appendChild(empty);
+    }
+    comVoiceLibItems.forEach((it) => {
+      const active = !!(it.active && cloneOn);
+      box.appendChild(comVoiceLibRow({
+        name: it.name,
+        meta: it.ready
+          ? (it.active ? '当前生效' : '已保存') + (it.created_at ? ' · ' + it.created_at : '')
+          : '⚠ 音频文件不在了（被删或换过电脑），重新录一段吧',
+        dead: !it.ready,
+        active,
+        onPlay: async (btn) => {
+          if (!it.ready) { comVoiceLibHint('这条的音频文件已经不在，没法试听', 'warn'); return; }
+          btn.disabled = true;
+          comVoiceLibHint('正在切到「' + it.name + '」并试听…', '');
+          try {
+            const data = await comVoiceLibActivate(it);
+            comRenderVoiceSample(data);
+            comFillScriptVoice();
+            await comVoiceLibPlay(STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural', COM_CLONE_PROVIDERS[0]);
+            comVoiceLibHint('这是「' + it.name + '」的克隆声（已顺便切到它）', '');
+          } catch (e) {
+            comVoiceLibHint(String((e && e.message) || e), 'warn');
+          } finally {
+            btn.disabled = false;
+          }
+        },
+        onUse: async (btn) => {
+          btn.disabled = true;
+          comVoiceLibHint('正在切到「' + it.name + '」…', '');
+          try {
+            const data = await comVoiceLibActivate(it);
+            comRenderVoiceSample(data);
+            comFillScriptVoice();
+            if (el.comScriptVoice) {
+              el.comScriptVoice.value = COM_CLONE_VOICE;
+              // 派发 change 会让既有监听把「配音引擎」也切到克隆 —— 不切的话出片还是系统音色
+              el.comScriptVoice.dispatchEvent(new Event('change'));
+            }
+            _ttsStatusCache = null;
+            comRefreshTtsStatus({ force: true });
+            comVoiceLibHint('已使用「' + it.name + '」：右上「全局配音」＝🎤 我的音色（克隆）', '');
+            await comVoiceLibLoad();
+          } catch (e) {
+            comVoiceLibHint(String((e && e.message) || e), 'warn');
+            btn.disabled = false;
+          }
+        },
+        onDelete: async () => {
+          try {
+            const fd = new FormData();
+            fd.append('id', it.id);
+            const res = await fetch('/api/commentary/voice-library/delete', { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error((data && data.detail) || ('删除失败（HTTP ' + res.status + '）'));
+            comVoiceLibHint('已删除「' + it.name + '」'
+              + ((data && data.removed && data.removed.removed_file) ? '（录音文件也一并清掉了）' : ''), '');
+            _ttsStatusCache = null;
+            await comVoiceLibLoad();
+          } catch (e) {
+            comVoiceLibHint(String((e && e.message) || e), 'warn');
+          }
+        },
+      }));
+    });
+
+    // ── 组 2：系统音色（与右上「全局配音」同一份 COM_VOICES）──
+    const g2 = document.createElement('div');
+    g2.className = 'com-voicelib-group';
+    g2.textContent = '🌐 系统音色（免费用，不需要录音）';
+    box.appendChild(g2);
+    COM_VOICES.forEach((v) => {
+      const active = !cloneOn && cur === v.value;
+      box.appendChild(comVoiceLibRow({
+        name: v.label,
+        meta: active ? '当前生效' : '在线合成',
+        active,
+        onPlay: async (btn) => {
+          btn.disabled = true;
+          comVoiceLibHint('正在生成「' + v.label + '」的试听…', '');
+          try {
+            await comVoiceLibPlay(v.value, '');
+            comVoiceLibHint('刚才那段是「' + v.label + '」', '');
+          } catch (e) {
+            comVoiceLibHint(String((e && e.message) || e), 'warn');
+          } finally {
+            btn.disabled = false;
+          }
+        },
+        onUse: (btn) => {
+          if (!el.comScriptVoice) { comVoiceLibHint('「全局配音」下拉还没初始化，稍后再试', 'warn'); return; }
+          btn.disabled = true;
+          el.comScriptVoice.value = v.value;
+          el.comScriptVoice.dispatchEvent(new Event('change'));
+          // 🔴 引擎若停在克隆档，出片会走你的克隆声、把刚选的系统音色整个吃掉 ——
+          //    自动切回 edge 并**说明原因**，否则用户会以为「选了没用」。
+          if (el.comTtsProvider && COM_CLONE_PROVIDERS.indexOf(el.comTtsProvider.value) >= 0) {
+            el.comTtsProvider.value = 'edge';
+            el.comTtsProvider.dispatchEvent(new Event('change'));
+            comVoiceLibHint('已使用「' + v.label + '」，并把引擎从克隆切回 edge（不切的话出片仍是你的克隆声）', '');
+          } else {
+            comVoiceLibHint('已使用「' + v.label + '」', '');
+          }
+          comVoiceLibRender();
+        },
+      }));
+    });
+  };
+
+  const comVoiceLibLoad = async () => {
+    try {
+      const d = await request('/api/commentary/voice-library');
+      comVoiceLibItems = (d && d.items) || [];
+      comVoiceLibActiveName = (d && d.active_name) || '';
+      comVoiceLibHint('');
+    } catch (e) {
+      comVoiceLibItems = [];
+      comVoiceLibHint('读取「你保存的音色」失败：' + ((e && e.message) || e) + '（下面的系统音色仍可选）', 'warn');
+    }
+    comVoiceLibRender();
+  };
+
+  const comVoiceLibOpen = async () => {
+    const dlg = el.comVoiceLibModal;
+    if (!dlg) return;
+    comVoiceLibHint('加载中…', '');
+    if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
+    else dlg.setAttribute('open', '');
+    // 每次打开都重新渲染：期间可能刚录完一段新音色
+    comVoiceLibRender();
+    await comVoiceLibLoad();
+  };
+
+  const comVoiceLibClose = () => {
+    const dlg = el.comVoiceLibModal;
+    if (!dlg) return;
+    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
+    else dlg.removeAttribute('open');
+  };
+
+  if (el.comMyVoiceAll) el.comMyVoiceAll.addEventListener('click', () => { comVoiceLibOpen(); });
+  if (el.comVoiceLibClose) el.comVoiceLibClose.addEventListener('click', comVoiceLibClose);
+  if (el.comVoiceLibDone) el.comVoiceLibDone.addEventListener('click', comVoiceLibClose);
+  if (el.comVoiceLibModal) {
+    el.comVoiceLibModal.addEventListener('click', (ev) => { if (ev.target === el.comVoiceLibModal) comVoiceLibClose(); });
   }
 
   // 导出剪映草稿：勾选后显示目录输入行；「选择文件夹」按钮走桌面原生桥接（无桥接则聚焦输入框手动填）

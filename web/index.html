@@ -1962,19 +1962,25 @@
            输入框直接放在原先起点/终点这一行；trim_start/trim_end 恒为整片，不再做外层源裁剪。 -->
       <!-- 「起点/终点」滑块（2026-09-17 应用户要求恢复）：直接驱动下方的正剧开始/片尾开始
            绝对时间输入（同一份值，双向同步），替代原先「用播放位置设…」两个按钮。
-           trim_start/trim_end 恒为整片，不做外层源裁剪。 -->
-      <div class="com-trim-timeline com-trim-timeline-drama" data-page-node-id="6BLjipqUcjLfWZBrSYvPFH">
+           trim_start/trim_end 恒为整片，不做外层源裁剪。
+           2026-09-20 用户：「这个应该都默认为零时零分零秒，只有选择去片头才有片头/终点时间，
+           不然给人默认就是从这个开始，但是我们默认没有这一环节」——
+           ⇒ 占位符由 00:01:25 / 00:44:00 改为 00:00:00（那两串只是示例、并非已设定值，
+              却让人误以为默认就从 01:25 开始）；且仅在「去片头片尾」模式下可编辑，
+              另一模式下整行置灰 + 说明，避免用户以为默认存在裁剪环节。 -->
+      <div class="com-trim-timeline com-trim-timeline-drama" id="comDramaRow" data-page-node-id="6BLjipqUcjLfWZBrSYvPFH">
         <label class="com-trim-field" data-page-node-id="Quzxv91M41D2OdgehBOfzb">
           <span class="com-trim-label" data-page-node-id="jVksehDdcj0uw5DAwRN9l1">起点</span>
           <input type="range" id="comDramaStartRange" class="com-range" min="0" max="100" step="0.1" value="0" title="拖动滑块设置正剧开始时间（与右侧输入框同步）" data-page-node-id="ulBMUMtn0Jt460GlZkSvDi" />
-          <input type="text" id="comDramaStart" class="com-time-input" placeholder="00:01:25" inputmode="numeric" title="正剧开始（绝对时间，也可直接填秒数如 85）；留空＝自动检测" data-page-node-id="epPiRNymcK7wBXO31k60fD" />
+          <input type="text" id="comDramaStart" class="com-time-input" placeholder="00:00:00" inputmode="numeric" title="正剧开始（绝对时间，也可直接填秒数如 85）；留空＝自动检测" data-page-node-id="epPiRNymcK7wBXO31k60fD" />
         </label>
         <label class="com-trim-field" data-page-node-id="V00oLK6zeKBO8oDy6SGZX3">
           <span class="com-trim-label" data-page-node-id="oJvQHiqJjLiBxJywxi1JqF">终点</span>
           <input type="range" id="comDramaEndRange" class="com-range" min="0" max="100" step="0.1" value="100" title="拖动滑块设置片尾开始时间（与右侧输入框同步）" data-page-node-id="rTaEsgP64D8qyx98ECSDu9" />
-          <input type="text" id="comDramaEnd" class="com-time-input" placeholder="00:44:00" inputmode="numeric" title="片尾开始（绝对时间，也可直接填秒数如 2640）；留空＝自动检测" data-page-node-id="CITywVSPijhBUV0Z7pvppD" />
+          <input type="text" id="comDramaEnd" class="com-time-input" placeholder="00:00:00" inputmode="numeric" title="片尾开始（绝对时间，也可直接填秒数如 2640）；留空＝自动检测" data-page-node-id="CITywVSPijhBUV0Z7pvppD" />
         </label>
       </div>
+      <p class="com-trim-note" id="comDramaNote" data-page-node-id="comDramaNoteP"></p>
       <div class="com-trim-actions" data-page-node-id="RZbvVbTsmrwMo8HQJKGsRZ">
         <button type="button" class="btn btn-sm btn-ghost" id="comTrimReset" data-page-node-id="MGZ2olbRoqt4U2z9pKrGwG">清空（回到自动检测）</button>
       </div>
@@ -2497,29 +2503,16 @@
                 </div>
                 <label class="com-myvoice-label" for="comMyVoiceText">那段录音里念的内容（文字稿）</label>
                 <textarea id="comMyVoiceText" class="com-myvoice-text" rows="2" placeholder="例如：大家好，今天我们来聊一聊这个让人意想不到的故事。" spellcheck="false"></textarea>
-                <!-- 录制中：计时 + 录到声音没有的电平条（2026-09-19）
-                     停止键不在这里 —— 用上面那个「⏺ 直接录制」按钮就地变「⏹ 停止并保存」，
-                     否则这条被滚出设置面板可视区时用户就找不到结束键了。 -->
-                <div class="com-myvoice-recbar" id="comMyVoiceRecBar" hidden>
-                  <span class="com-myvoice-recdot" id="comMyVoiceRecDot"></span>
-                  <span class="com-myvoice-rectime" id="comMyVoiceRecTime">0.0s</span>
-                  <span class="com-myvoice-reclevel" title="有声音时这条会跳；一直不动说明麦克风没采到"><i id="comMyVoiceRecLevel"></i></span>
-                  <span class="com-myvoice-rectip">照着上面文字稿念…</span>
-                  <button type="button" class="btn btn-sm btn-ghost" id="comMyVoiceRecCancel">取消</button>
-                </div>
-                <!-- 🎧 试听条（2026-09-20 用户要求「录完应该有个试听，没问题再保存到全局配音供选择」）：
-                     录完**不直接落盘**，先把 WAV 留在内存里回放一遍；满意就「用它」，不满意就地重录。
-                     试听走 playAudio() 的 data URL 通道（WKWebView 对 blob URL 支持不佳，见 comAudioPreview 注释）。 -->
-                <div class="com-myvoice-audit" id="comMyVoiceAudit" hidden>
-                  <button type="button" class="btn btn-sm btn-secondary" id="comMyVoiceAuditPlay">▶ 试听</button>
-                  <span class="com-myvoice-audit-info" id="comMyVoiceAuditInfo">已录 0.0s</span>
-                  <button type="button" class="btn btn-sm btn-ghost" id="comMyVoiceAuditRedo">🔄 重录</button>
-                  <button type="button" class="btn btn-sm btn-primary com-myvoice-audit-ok" id="comMyVoiceAuditOk">✅ 没问题，保存音色</button>
-                </div>
+                <!-- 录制中 / 试听条已移入「居中录制弹窗」（2026-09-20 用户：「录制的时候能不能弹个
+                     窗口在画面中间，现在位置太小了」）—— DOM 整体搬进 #comVoiceRecModal，
+                     id 一个没改，所有既有 JS 逻辑零改动。见本 section 末尾的弹窗定义。 -->
                 <div class="com-myvoice-actions">
                   <span class="com-myvoice-hint">3~15 秒、干净无配乐的短句最准</span>
                   <button type="button" class="btn btn-sm btn-primary" id="comMyVoiceSave">💾 保存音色</button>
                 </div>
+                <!-- 🎧 全部音色（2026-09-20 用户：「在我的音色里面应该也加个可以看到全部音色的弹窗」）：
+                     窄左栏塞不下第 3 个按钮，故独占一行通栏 —— 点开 #comVoiceLibModal。 -->
+                <button type="button" class="btn btn-sm btn-ghost com-myvoice-all" id="comMyVoiceAll" title="查看并切换全部音色（含你保存的）">🎧 全部音色（查看/切换）</button>
               </div>
               <span class="com-status" id="comMyVoiceStatus" hidden></span>
             </div>
@@ -2729,6 +2722,103 @@
         <div class="com-grid" id="comGrid" data-page-node-id="XxMgstcH01okOqmUKEdECK"></div>
         <p class="com-empty" id="comEmpty" hidden data-page-node-id="m6qsPBm1w0JuVk9HHOEXFx">还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。</p>
       </div>
+
+  <!-- ═══════════════ 弹窗 1：录制我的音色（居中，2026-09-20）═══════════════
+       用户原话：「录制的时候能不能弹个窗口在画面中间，现在位置太小了，然后试听可以编辑配音名字
+       保存，点保存，任务就结束，弹窗自动关闭」。
+       实现要点：原来的「录制条」「试听条」DOM **整体搬进来**（id 一个没改），既有 JS 全部继续可用；
+       弹窗只负责「把它显示在画面正中 + 开合时机」。
+       dialog 元素走 top layer，不受任何父容器 overflow/transform 影响 —— 这正是「位置太小」的根因
+       （原来贴在窄左栏设置面板里，182px 宽）。 -->
+  <dialog id="comVoiceRecModal" class="modal com-rec-modal" aria-labelledby="comRecModalTitle" data-page-node-id="comVoiceRecModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="comRecModalTitle" data-page-node-id="comRecModalTitle">🎤 录制我的音色</h2>
+        <button type="button" class="modal-close" id="comVoiceRecModalClose" aria-label="关闭" data-page-node-id="comRecModalClose">✕</button>
+      </div>
+      <p class="modal-sub" id="comRecModalHint" data-page-node-id="comRecModalHint">照着下面这段念一遍，3~15 秒最准；念完点「停止」就能试听。</p>
+      <div class="com-rec-modal-read" id="comRecModalRead" title="这段文字就是克隆要用的文字稿，可在左侧卡片里修改" data-page-node-id="comRecModalRead"></div>
+
+      <!-- 录制中：计时 + 电平条（DOM 原样从「我的音色」卡片搬来） -->
+      <div class="com-myvoice-recbar com-rec-modal-bar" id="comMyVoiceRecBar" hidden data-page-node-id="comMyVoiceRecBar">
+        <span class="com-myvoice-recdot" id="comMyVoiceRecDot" data-page-node-id="comMyVoiceRecDot"></span>
+        <span class="com-myvoice-rectime" id="comMyVoiceRecTime" data-page-node-id="comMyVoiceRecTime">0.0s</span>
+        <span class="com-myvoice-reclevel" title="有声音时这条会跳；一直不动说明麦克风没采到" data-page-node-id="comMyVoiceRecLevelWrap"><i id="comMyVoiceRecLevel" data-page-node-id="comMyVoiceRecLevel"></i></span>
+      </div>
+      <div class="com-rec-modal-actions" id="comRecModalRecActions" hidden data-page-node-id="comRecModalRecActions">
+        <button type="button" class="btn btn-ghost" id="comMyVoiceRecCancel" data-page-node-id="comMyVoiceRecCancel">取消录制</button>
+        <button type="button" class="btn btn-primary btn-lg" id="comRecModalStop" data-page-node-id="comRecModalStop">⏹ 停止并试听</button>
+      </div>
+
+      <!-- 🎧 试听 + 命名（用户：「试听可以编辑配音名字保存，点保存，任务就结束，弹窗自动关闭」） -->
+      <div class="com-myvoice-audit com-rec-modal-audit" id="comMyVoiceAudit" hidden data-page-node-id="comMyVoiceAudit">
+        <div class="com-audit-head" data-page-node-id="comAuditHead">
+          <span class="com-myvoice-audit-info" id="comMyVoiceAuditInfo" data-page-node-id="comMyVoiceAuditInfo">已录 0.0s</span>
+        </div>
+        <label class="com-audit-name" for="comVoiceName" data-page-node-id="comAuditName">
+          <span data-page-node-id="comAuditNameLabel">配音名字</span>
+          <input type="text" id="comVoiceName" maxlength="40" placeholder="例如：宝可梦解说" spellcheck="false" autocomplete="off" data-page-node-id="comVoiceName" />
+        </label>
+        <div class="com-audit-actions" data-page-node-id="comAuditActions">
+          <button type="button" class="btn btn-sm btn-secondary" id="comMyVoiceAuditPlay" data-page-node-id="comMyVoiceAuditPlay">▶ 再听一遍</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="comMyVoiceAuditRedo" data-page-node-id="comMyVoiceAuditRedo">🔄 重录</button>
+          <button type="button" class="btn btn-primary com-myvoice-audit-ok" id="comMyVoiceAuditOk" data-page-node-id="comMyVoiceAuditOk">✅ 没问题，保存并结束</button>
+        </div>
+      </div>
+      <span class="com-status com-rec-modal-status" id="comVoiceModalStatus" hidden data-page-node-id="comVoiceModalStatus"></span>
+    </div>
+  </dialog>
+
+  <!-- ═══════════════ 弹窗 2：全部音色（2026-09-20）═══════════════
+       用户原话：「在我的音色里面应该也加个可以看到全部音色的弹窗，这样更合理」。
+       列出「你保存过的音色」（后端 voice_library.json）＋ 7 个系统音色，都能当场试听、一键使用；
+       切换后写回右上「全局配音」下拉（同一个哨兵值 / 同一套联动，不新增第二份状态）。 -->
+  <dialog id="comVoiceLibModal" class="modal com-lib-voice-modal" aria-labelledby="comVoiceLibTitle" data-page-node-id="comVoiceLibModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="comVoiceLibTitle" data-page-node-id="comVoiceLibTitle">🎧 全部音色</h2>
+        <button type="button" class="modal-close" id="comVoiceLibClose" aria-label="关闭" data-page-node-id="comVoiceLibClose">✕</button>
+      </div>
+      <p class="modal-sub" data-page-node-id="comVoiceLibSub">点「▶」先听一遍，满意再点「使用」——选中的会成为右上「全局配音」。</p>
+      <div class="com-voicelib-list" id="comVoiceLibList" data-page-node-id="comVoiceLibList"></div>
+      <div class="modal-actions com-voicelib-foot" data-page-node-id="comVoiceLibFoot">
+        <span class="com-voicelib-hint" id="comVoiceLibHint" data-page-node-id="comVoiceLibHint"></span>
+        <button type="button" class="btn btn-secondary" id="comVoiceLibDone" data-page-node-id="comVoiceLibDone">完成</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ═══════════════ 弹窗 3：渲染完成（2026-09-20）═══════════════
+       用户原话：「现在渲染完还是没提示，应该加个『已渲染完成，请在解说历史里保存到本地』的弹窗。
+       直接存在解说历史里面，用户都不知道有没有渲染完成，解说历史应该是保存的历史文件，它有可能
+       不在同一文件夹里面」。
+       ⚠️ 与既有「toast + 自动另存到下载夹」并存、不替换（那部分是在正常工作的，别动）：
+       这个弹窗解决的是**toast 会被错过**——渲染动辄十几分钟，用户早切去别的视图了，
+       6 秒的 toast 他根本看不到；模态窗口会一直等他点。 -->
+  <dialog id="comDoneModal" class="modal com-done-modal" aria-labelledby="comDoneTitle" data-page-node-id="comDoneModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="comDoneTitle" data-page-node-id="comDoneTitle">🎬 解说成片已渲染完成</h2>
+        <button type="button" class="modal-close" id="comDoneClose" aria-label="关闭" data-page-node-id="comDoneClose">✕</button>
+      </div>
+      <p class="com-done-lead" id="comDoneLead" data-page-node-id="comDoneLead">请到「📂 解说历史」里点「💾 保存」，把成片存到你要的文件夹。</p>
+      <div class="com-done-info" data-page-node-id="comDoneInfo">
+        <div class="com-done-row" data-page-node-id="comDoneRowName">
+          <span class="com-done-k" data-page-node-id="comDoneKName">成片</span>
+          <span class="com-done-v" id="comDoneName" title="" data-page-node-id="comDoneName">—</span>
+        </div>
+        <div class="com-done-row" data-page-node-id="comDoneRowPath">
+          <span class="com-done-k" data-page-node-id="comDoneKPath">位置</span>
+          <span class="com-done-v com-done-path" id="comDonePath" title="" data-page-node-id="comDonePath">—</span>
+        </div>
+      </div>
+      <p class="com-done-note" id="comDoneNote" data-page-node-id="comDoneNote">解说历史里的成片存在 App 自己的成片归档目录，<b>不一定在你平时放视频的文件夹</b>；要放进自己的文件夹，就点那条的「💾 保存」。</p>
+      <div class="modal-actions" data-page-node-id="comDoneActions">
+        <button type="button" class="btn btn-ghost" id="comDoneLater" data-page-node-id="comDoneLater">知道了</button>
+        <button type="button" class="btn btn-primary" id="comDoneOpenHist" data-page-node-id="comDoneOpenHist">📂 打开解说历史</button>
+      </div>
+    </div>
+  </dialog>
   </section>
 
   <!-- 订阅追更视图（桌面版功能） -->

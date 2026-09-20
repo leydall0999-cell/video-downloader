@@ -104,17 +104,66 @@ def get_commentary_voice_sample() -> dict:
 def save_commentary_voice_sample(
     audio_path: str = app.Form(""),
     ref_text: str = app.Form(""),
+    name: str = app.Form(""),
 ) -> dict:
-    """保存「我的音色」样本：音频绝对路径 + 该音频里念的文字稿。
+    """保存「我的音色」样本：音频绝对路径 + 该音频里念的文字稿 + 配音名字。
 
     校验失败（文件不存在 / 格式不支持 / 文字稿为空）返回 400 + 中文原因，
     前端直接展示，避免把用不了的样本留到渲染时才炸。
+    name（2026-09-20）：录制弹窗里可编辑的名字；留空则按音频文件名兜底。
     """
     from commentary_config import save_voice_sample
     try:
-        return save_voice_sample(audio_path, ref_text)
+        return save_voice_sample(audio_path, ref_text, name)
     except ValueError as exc:
         raise app.HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/commentary/voice-library")
+def get_commentary_voice_library() -> dict:
+    """「我的音色」音色库（2026-09-20）：用户存过的全部音色 + 哪一条当前生效。
+
+    供「🎧 全部音色」弹窗列出并切换。库只是收藏夹，读坏当空库，绝不影响渲染。
+    """
+    from commentary_config import list_voice_library
+    return list_voice_library()
+
+
+@router.post("/api/commentary/voice-library")
+def add_commentary_voice_library_item(
+    audio_path: str = app.Form(""),
+    ref_text: str = app.Form(""),
+    name: str = app.Form(""),
+    activate: str = app.Form(""),
+) -> dict:
+    """把一段样本登记进音色库；activate=1 时同时设为当前生效样本。
+
+    「设为当前」直接复用既有 save_voice_sample（同一套文件/格式/文字稿校验），
+    不新增第二条落配置的路径。
+    """
+    from commentary_config import list_voice_library, save_voice_sample, upsert_voice_library
+    try:
+        item = upsert_voice_library(name, audio_path, ref_text)
+        if str(activate or "").strip().lower() in ("1", "true", "yes", "on"):
+            save_voice_sample(audio_path, ref_text, item.get("name") or name)
+    except ValueError as exc:
+        raise app.HTTPException(status_code=400, detail=str(exc)) from exc
+    lib = list_voice_library()
+    lib["item"] = item
+    return lib
+
+
+@router.post("/api/commentary/voice-library/delete")
+def delete_commentary_voice_library_item(id: str = app.Form("")) -> dict:
+    """从音色库删掉一条（只连带删 App 自己录的那个 wav，外部样本文件不动）。"""
+    from commentary_config import list_voice_library, remove_voice_library
+    try:
+        removed = remove_voice_library(id)
+    except ValueError as exc:
+        raise app.HTTPException(status_code=400, detail=str(exc)) from exc
+    lib = list_voice_library()
+    lib["removed"] = removed
+    return lib
 
 
 @router.post("/api/commentary/voice-sample/record")

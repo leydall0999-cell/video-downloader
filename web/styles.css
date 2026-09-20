@@ -6089,13 +6089,122 @@ html.theme-dark textarea {
    标签变长（「⏹ 停止并保存」比「⏺ 直接录制」长）后在窄栏里会被挤出按钮框外、
    压到旁边控件上；录制期间「选择录音」也不必并排（2026-09-19 实测 63px 宽时裁字）。 */
 .com-right .com-myvoice-line .com-myvoice-rec.is-recording { flex: 1 1 100%; }
-.com-right .com-myvoice-recbar { gap: .35rem; }
-/* 试听条（2026-09-20）：右栏极窄（可用 ~137px），三个按钮 + 时长同排必裁字 →
-   试听/重录各占一半，「时长」「保存音色」各占一整行；.btn 自带 nowrap，
-   这里给最长的那个开换行，免得字被挤出按钮框（录制条踩过同样的坑）。 */
-.com-right .com-myvoice-audit { gap: .35rem; }
-.com-right .com-myvoice-audit .btn { flex: 1 1 0; min-width: 0; }
-.com-right .com-myvoice-audit .com-myvoice-audit-info { flex: 1 1 100%; order: 9; text-align: right; }
-.com-right .com-myvoice-audit .com-myvoice-audit-ok {
-  flex: 1 1 100%; order: 10; white-space: normal; line-height: 1.25;
+.com-right .com-myvoice-rec { flex: 0 0 auto; }
+/* ⚠️ 2026-09-20：「录制条」「试听条」已整体搬进居中弹窗 #comVoiceRecModal，
+   不再位于 .com-right 内 —— 原先为「右栏极窄（可用 ~137px）」写的那几条
+   `.com-right .com-myvoice-recbar/.com-myvoice-audit` 布局规则已随之失效并删除。
+   现在这两个条目的样式见文件末尾「居中录制弹窗」一节（弹窗宽 520px，不再需要掐宽度）。 */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2026-09-20 解说页三个新弹窗 + 起点/终点门控
+   · #comVoiceRecModal  录制我的音色（居中；录制条/试听条 DOM 搬入）
+   · #comVoiceLibModal  全部音色（音色库 + 系统音色，可试听/切换/删除）
+   · #comDoneModal      渲染完成提示（指引到「解说历史」保存到本机）
+   · #comDramaNote / .com-trim-timeline-drama.is-gated  起点/终点默认归零 + 模式门控
+   全部走 <dialog>（top layer），不受父容器 overflow/transform 影响。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ---------------- ① 起点/终点：默认 00:00:00 + 仅「去片头片尾」可编辑 ---------------- */
+.com-trim-note {
+  margin: .4rem 0 0; font-size: .7rem; line-height: 1.5; color: var(--text-mute);
 }
+.com-trim-note:empty { display: none; }
+/* 当前模式不裁剪片头片尾时整行置灰：视觉上就表明「这一步现在不参与」，
+   免得用户以为默认已经从 01:25 开始剪（用户 2026-09-20 的原话）。 */
+.com-trim-timeline-drama.is-gated { opacity: .42; }
+.com-trim-timeline-drama.is-gated .com-range,
+.com-trim-timeline-drama.is-gated .com-time-input { pointer-events: none; }
+
+/* ---------------- ② 居中录制弹窗 ---------------- */
+.com-rec-modal.modal { width: min(520px, 100% - 2rem); max-width: 520px; }
+.com-rec-modal .modal-card { padding: 1.1rem 1.2rem 1.25rem; }
+.com-rec-modal-read {
+  margin-top: .75rem; padding: .7rem .8rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  font-size: .92rem; line-height: 1.65; color: var(--text);
+  max-height: 32vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+}
+.com-rec-modal-read:empty::before {
+  content: '（左侧卡片的「文字稿」为空，先写好要念的内容再来录）';
+  color: var(--text-mute); font-size: .8rem;
+}
+.com-rec-modal-bar { margin-top: .75rem; padding: .55rem .6rem; }
+.com-rec-modal-bar .com-myvoice-rectime { font-size: 1rem; min-width: 3.6rem; }
+.com-rec-modal-bar .com-myvoice-reclevel { height: 8px; }
+.com-rec-modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: .9rem; }
+.com-rec-modal-actions .btn-lg { min-height: 44px; padding: 0 1.15rem; font-size: .95rem; }
+.com-rec-modal-audit {
+  flex-direction: column; align-items: stretch; gap: .65rem;
+  margin-top: .8rem; padding: .75rem .8rem;
+}
+.com-rec-modal-audit .com-audit-head { display: flex; align-items: center; }
+.com-rec-modal-audit .com-myvoice-audit-info { flex: 1 1 auto; font-size: .8rem; }
+.com-audit-name { display: flex; align-items: center; gap: .55rem; font-size: .78rem; color: var(--text-mute); }
+.com-audit-name > span { flex: 0 0 auto; }
+.com-audit-name > input {
+  flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 0 .6rem; font-size: .88rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-family: inherit;
+}
+.com-audit-name > input:focus { outline: none; border-color: var(--accent); }
+.com-audit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.com-rec-modal-status { margin-top: .75rem; }
+.com-rec-modal-status[data-kind="warn"] { border-color: color-mix(in srgb, #e11d48 35%, var(--line)); }
+.com-rec-modal-status[data-kind="ok"] { border-color: color-mix(in srgb, #16a34a 40%, var(--line)); }
+
+/* ---------------- ③ 全部音色弹窗 ---------------- */
+.com-lib-voice-modal.modal { width: min(600px, 100% - 2rem); max-width: 600px; }
+.com-voicelib-list {
+  margin-top: .8rem; display: flex; flex-direction: column; gap: .4rem;
+  max-height: 56vh; overflow-y: auto; padding-right: .2rem;
+}
+.com-voicelib-group {
+  margin: .55rem 0 .05rem; font-size: .72rem; font-weight: 700; color: var(--text-mute);
+  letter-spacing: .02em;
+}
+.com-voicelib-group:first-child { margin-top: 0; }
+.com-voicelib-item {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .5rem .6rem; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: #fbfbfe;
+}
+.com-voicelib-item.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.com-voicelib-item.is-dead { opacity: .55; }
+.com-voicelib-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+.com-voicelib-name {
+  font-size: .88rem; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.com-voicelib-meta {
+  font-size: .68rem; color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.com-voicelib-item .btn { flex: 0 0 auto; }
+.com-voicelib-empty { padding: 1.1rem .6rem; text-align: center; font-size: .8rem; color: var(--text-mute); }
+.com-voicelib-foot { align-items: center; }
+.com-voicelib-hint { flex: 1 1 auto; font-size: .72rem; color: var(--text-mute); text-align: left; }
+.com-voicelib-hint[data-kind="warn"] { color: #b91c1c; }
+
+/* ---------------- ④ 渲染完成弹窗 ---------------- */
+.com-done-modal.modal { width: min(520px, 100% - 2rem); max-width: 520px; }
+.com-done-lead { margin-top: .65rem; font-size: .9rem; line-height: 1.65; color: var(--text); }
+.com-done-info {
+  margin-top: .8rem; display: flex; flex-direction: column; gap: .4rem;
+  padding: .7rem .75rem; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: #fbfbfe;
+}
+.com-done-row { display: flex; gap: .55rem; font-size: .8rem; align-items: baseline; }
+.com-done-k { flex: 0 0 2.8rem; color: var(--text-mute); }
+.com-done-v {
+  flex: 1 1 auto; min-width: 0; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.com-done-path { font-size: .72rem; color: var(--text-mute); }
+.com-done-note { margin-top: .75rem; font-size: .74rem; line-height: 1.6; color: var(--text-mute); }
+.com-done-note b { color: var(--text); }
+.com-done-saved { color: #15803d; font-weight: 600; }
