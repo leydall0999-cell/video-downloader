@@ -9759,6 +9759,10 @@ el.dwVidPlayer.removeAttribute('src');
         dataUrl = blobOrUrl;
       }
     }
+    // 🔧 2026-09-20：先彻底清空源再挂 data URL，规避 WebKit「上一段 play() 还在进行 /
+    // 已 ended 时再点播放静默拒绝」的坑——表现为「试听 / 再听一遍点了没反应、也没报错」。
+    audio.removeAttribute('src');
+    audio.load();
     audio.src = dataUrl;
     audio.dataset.dataUrl = dataUrl;
     audio.currentTime = 0;
