@@ -3017,6 +3017,20 @@ img { max-width: 100%; display: block; }
   font-size: .7rem; color: var(--text-mute); flex: 1 1 100%; order: 9;
 }
 .com-myvoice-recbar .btn { flex: 0 0 auto; }
+/* 试听条（2026-09-20）：录完先回放确认再落盘。与录制条同构，只是换成「确认」语义，
+   所以用绿系描边和录制条的强调色区分开；窄容器同样靠 flex-wrap 兜。 */
+.com-myvoice-audit {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .45rem;
+  padding: .4rem .5rem;
+  border: 1px solid color-mix(in srgb, #16a34a 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, #16a34a 7%, var(--surface));
+}
+.com-myvoice-audit-info {
+  font-size: .72rem; color: var(--text-mute); flex: 1 1 5rem;
+  font-variant-numeric: tabular-nums;
+}
+.com-myvoice-audit .btn { flex: 0 0 auto; }
 /* 录制中：主按钮就地变「停止并保存」并转红。结束键必须就是用户刚点的那个按钮 ——
    原来禁用了主按钮、把唯一的停止键只放在文字稿下面的录制条里，而录制条会被设置面板
    滚出可视区，用户只看到一个点不动的「录制中…」（2026-09-19 用户报「没有结束键」）。 */
@@ -6076,3 +6090,12 @@ html.theme-dark textarea {
    压到旁边控件上；录制期间「选择录音」也不必并排（2026-09-19 实测 63px 宽时裁字）。 */
 .com-right .com-myvoice-line .com-myvoice-rec.is-recording { flex: 1 1 100%; }
 .com-right .com-myvoice-recbar { gap: .35rem; }
+/* 试听条（2026-09-20）：右栏极窄（可用 ~137px），三个按钮 + 时长同排必裁字 →
+   试听/重录各占一半，「时长」「保存音色」各占一整行；.btn 自带 nowrap，
+   这里给最长的那个开换行，免得字被挤出按钮框（录制条踩过同样的坑）。 */
+.com-right .com-myvoice-audit { gap: .35rem; }
+.com-right .com-myvoice-audit .btn { flex: 1 1 0; min-width: 0; }
+.com-right .com-myvoice-audit .com-myvoice-audit-info { flex: 1 1 100%; order: 9; text-align: right; }
+.com-right .com-myvoice-audit .com-myvoice-audit-ok {
+  flex: 1 1 100%; order: 10; white-space: normal; line-height: 1.25;
+}

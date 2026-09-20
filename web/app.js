@@ -525,6 +525,12 @@
     comMyVoiceRecTime: $('comMyVoiceRecTime'),
     comMyVoiceRecLevel: $('comMyVoiceRecLevel'),
     comMyVoiceRecCancel: $('comMyVoiceRecCancel'),
+    // 录完的试听条（2026-09-20）：确认后才落盘 + 存音色
+    comMyVoiceAudit: $('comMyVoiceAudit'),
+    comMyVoiceAuditPlay: $('comMyVoiceAuditPlay'),
+    comMyVoiceAuditInfo: $('comMyVoiceAuditInfo'),
+    comMyVoiceAuditRedo: $('comMyVoiceAuditRedo'),
+    comMyVoiceAuditOk: $('comMyVoiceAuditOk'),
     // 本地克隆「运行环境」按需下载入口（2026-09-18）
     comCloneEnvBox: $('comCloneEnvBox'),
     comCloneEnvText: $('comCloneEnvText'),
@@ -666,6 +672,23 @@
     cpBulkApplyBtn: $('cpBulkApplyBtn'),
     cpStartAllBtn: $('cpStartAllBtn'),
     cpStatus: $('cpStatus'),
+
+    // 扫码分享（share* 前缀，独立 tab；2026-09-20 新增：本机文件 → 短链 + 二维码）
+    tabShare: $('tabShare'),
+    shareView: $('shareView'),
+    sTabShare: $('sTabShare'),
+    shareAddBtn: $('shareAddBtn'),
+    shareFileInput: $('shareFileInput'),
+    shareClearBtn: $('shareClearBtn'),
+    shareCount: $('shareCount'),
+    shareQueue: $('shareQueue'),
+    shareResult: $('shareResult'),
+    shareQrImg: $('shareQrImg'),
+    shareUrlInput: $('shareUrlInput'),
+    shareCopyBtn: $('shareCopyBtn'),
+    shareOpenBtn: $('shareOpenBtn'),
+    shareSaveQrBtn: $('shareSaveQrBtn'),
+    shareHint: $('shareHint'),
 
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
     tabSr: $('tabSr'),
@@ -4351,6 +4374,233 @@
       item.status = 'failed'; item.errorMsg = (err && err.message) || '修复请求失败'; srRender(); reject(err);
     });
   });
+
+  // ===== 扫码分享（2026-09-20 新增）：本机文件 → 短链 + 二维码 =====
+  // 流程：选本地文件 → 本地后端流式转发到分享节点（带进度）→ 拿短链 → 生成二维码
+  // 为什么经本地后端：桌面端原生文件框只给「路径」，前端拿不到文件内容；
+  // 后端与 App 同机（localhost），转发不产生额外网络开销，还能上报进度、自动换通道。
+  // 节点部署见 desktop/vps-share/（systemd: vdl-share，nginx 在 8888 按域名分流）。
+  {
+    const shCfg = { base: '', limit: 100 * 1024 * 1024, maxUpload: 2 * 1024 ** 3 };
+    const shState = { list: [], nextId: 1, timer: null, current: null };
+
+    const shFmt = (b) => {
+      if (!b && b !== 0) return '';
+      if (b < 1024) return b + ' B';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+      if (b < 1073741824) return (b / 1048576).toFixed(2) + ' MB';
+      return (b / 1073741824).toFixed(2) + ' GB';
+    };
+    const shDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+    // 文件名来自用户/系统，进 innerHTML 前必须转义
+    const shEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    async function shInit() {
+      try {
+        const r = await fetch('/api/share/config');
+        const d = await r.json();
+        if (d && d.ok) {
+          shCfg.base = d.base || '';
+          shCfg.limit = d.cf_body_limit || shCfg.limit;
+          shCfg.maxUpload = d.max_upload || shCfg.maxUpload;
+        }
+      } catch (e) { /* 节点未配置时静默，上传时再报错 */ }
+    }
+
+    function shRender() {
+      const box = el.shareQueue;
+      if (!box) return;
+      if (!shState.list.length) {
+        box.innerHTML = '';
+        el.shareClearBtn.hidden = true;
+        el.shareCount.textContent = '尚未选择文件';
+        return;
+      }
+      el.shareClearBtn.hidden = false;
+      const okN = shState.list.filter((x) => x.status === 'done').length;
+      el.shareCount.textContent = `${shState.list.length} 个文件（${okN} 个已生成链接）`;
+      box.innerHTML = shState.list.map((it) => {
+        const pct = it.total ? Math.min(100, Math.round((it.sent / it.total) * 100)) : 0;
+        let st = '<span class="st">等待中</span>';
+        if (it.status === 'uploading') st = `<span class="st">上传中 ${pct}%</span>`;
+        else if (it.status === 'done') st = '<span class="st ok">✓ 已生成</span>';
+        else if (it.status === 'failed') st = `<span class="st err">✕ 失败</span>`;
+        const bar = it.status === 'uploading'
+          ? `<div class="share-bar"><i style="width:${pct}%"></i></div>` : '';
+        const acts = [
+          it.status === 'done' ? '<button type="button" class="btn btn-ghost" data-act="show" style="padding:4px 10px;font-size:12px;">看二维码</button>' : '',
+          it.status === 'failed' ? `<button type="button" class="btn btn-ghost" data-act="retry" style="padding:4px 10px;font-size:12px;" title="${shEsc(it.err || '')}">重试</button>` : '',
+        ].join('');
+        return `<div class="share-item" data-id="${it.id}">
+          <span class="nm">${shEsc(it.name)}</span>
+          <span class="sz">${shFmt(it.total)}</span>${bar}${st}${acts}</div>`;
+      }).join('');
+    }
+
+    function shStopPoll() {
+      if (shState.timer) { clearInterval(shState.timer); shState.timer = null; }
+    }
+
+    function shEnsurePoll() {
+      if (shState.timer) return;
+      shState.timer = setInterval(async () => {
+        // 串行推进：没有正在上传的，就启动下一个等待中的（避免多文件抢上行带宽）
+        if (!shState.list.some((x) => x.status === 'uploading')) {
+          const next = shState.list.find((x) => x.status === 'pending');
+          if (next) shStart(next);
+        }
+        const active = shState.list.filter((x) => x.tid && x.status === 'uploading');
+        for (const it of active) {
+          try {
+            const r = await fetch('/api/share/task/' + it.tid);
+            const d = await r.json();
+            if (!d || !d.ok) continue;
+            it.sent = d.sent || 0;
+            it.total = d.total || it.total;
+            if (d.status === 'done') { it.status = 'done'; it.sid = d.sid; it.url = d.url; shShowResult(it); }
+            else if (d.status === 'failed') { it.status = 'failed'; it.err = d.error || '上传失败'; }
+          } catch (e) { /* 轮询抖动忽略，下轮继续 */ }
+        }
+        shRender();
+        const busy = shState.list.some((x) => x.status === 'pending' || x.status === 'uploading');
+        if (!busy) shStopPoll();
+      }, 700);
+    }
+
+    async function shStart(item) {
+      if (item.status === 'uploading') return;
+      item.status = 'uploading';
+      item.sent = 0;
+      item.err = '';
+      shRender();
+      try {
+        let r;
+        if (item.path) {
+          r = await fetch('/api/share/upload_path', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: item.path }),
+          });
+        } else {
+          const fd = new FormData();
+          fd.append('file', item.file, item.name);
+          r = await fetch('/api/share/upload_file', { method: 'POST', body: fd });
+        }
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+          const why = d && (d.error === 'too_large'
+            ? `文件超过上限 ${shFmt(d.max || shCfg.maxUpload)}`
+            : (d.error || d.detail || ('HTTP ' + r.status)));
+          throw new Error(why);
+        }
+        item.tid = d.task_id;
+        item.total = d.size || item.total;
+        shEnsurePoll();
+      } catch (e) {
+        item.status = 'failed';
+        item.err = (e && e.message) || '上传失败';
+        shRender();
+      }
+    }
+
+    function shShowResult(it) {
+      if (!it || !it.url) return;
+      shState.current = it;
+      el.shareResult.hidden = false;
+      el.shareQrImg.src = '/api/share/qr?text=' + encodeURIComponent(it.url) + '&size=640';
+      el.shareUrlInput.value = it.url;
+      el.shareHint.textContent = `「${it.name}」已就绪 · 手机扫码即可查看（${shFmt(it.total)}）`;
+      try { el.shareResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+    }
+
+    function shPushPath(p) {
+      const name = String(p).split(/[\\/]/).pop() || 'file';
+      shState.list.push({ id: shState.nextId++, path: p, file: null, name,
+        total: 0, sent: 0, status: 'pending', tid: null, sid: '', url: '', err: '' });
+    }
+
+    function shPushFile(f) {
+      shState.list.push({ id: shState.nextId++, path: '', file: f, name: f.name || 'file',
+        total: f.size || 0, sent: 0, status: 'pending', tid: null, sid: '', url: '', err: '' });
+    }
+
+    el.shareAddBtn.addEventListener('click', () => {
+      if (shDesktopNative()) {
+        // 铁律：选文件必须显式传类型；'any' 才允许任意格式（不传会被当成 media，文档/压缩包会置灰）
+        window.VDL.desktop.chooseFiles('any')
+          .then((list) => {
+            if (!list || !list.length) return;
+            list.forEach(shPushPath);
+            shRender();
+            shEnsurePoll();
+          })
+          .catch(() => {});
+      } else {
+        el.shareFileInput.click();
+      }
+    });
+    el.shareFileInput.addEventListener('change', () => {
+      const fs = el.shareFileInput.files;
+      if (fs && fs.length) {
+        Array.from(fs).forEach(shPushFile);
+        el.shareFileInput.value = '';
+        shRender();
+        shEnsurePoll();
+      }
+    });
+    el.shareQueue.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const row = btn.closest('.share-item');
+      const id = row ? +row.dataset.id : 0;
+      const it = shState.list.find((x) => x.id === id);
+      if (!it) return;
+      if (btn.dataset.act === 'show') shShowResult(it);
+      else if (btn.dataset.act === 'retry') { it.status = 'pending'; it.err = ''; shRender(); shEnsurePoll(); }
+    });
+    el.shareClearBtn.addEventListener('click', () => {
+      shState.list = shState.list.filter((x) => x.status === 'uploading');
+      if (!shState.list.length) { el.shareResult.hidden = true; shState.current = null; }
+      shRender();
+    });
+    el.shareCopyBtn.addEventListener('click', async () => {
+      const v = el.shareUrlInput.value;
+      if (!v) return;
+      try {
+        await navigator.clipboard.writeText(v);
+      } catch (e) {
+        el.shareUrlInput.select();
+        try { document.execCommand('copy'); } catch (e2) {}
+      }
+      el.shareCopyBtn.textContent = '已复制';
+      setTimeout(() => { el.shareCopyBtn.textContent = '复制链接'; }, 1600);
+    });
+    el.shareOpenBtn.addEventListener('click', () => {
+      const v = el.shareUrlInput.value;
+      if (!v) return;
+      window.open(v, '_blank');
+    });
+    el.shareSaveQrBtn.addEventListener('click', async () => {
+      const it = shState.current;
+      if (!it || !it.url) return;
+      try {
+        const r = await fetch('/api/share/qr?text=' + encodeURIComponent(it.url) + '&size=1024');
+        const b = await r.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = '分享二维码-' + String(it.name || 'file').replace(/\.[^.]+$/, '') + '.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      } catch (e) {
+        alert('保存失败：' + ((e && e.message) || '未知错误'));
+      }
+    });
+
+    shInit();
+  }
 
   el.srAddBtn.addEventListener('click', () => {
     if (srDesktopNative()) {
@@ -9118,16 +9368,10 @@ el.dwVidPlayer.removeAttribute('src');
       el.comScriptPanel.hidden = false;
       el.comScriptSegments.replaceChildren();
 
-      // 初始化全局配音选择器（默认选中当前风格联动的音色）
-      el.comScriptVoice.replaceChildren();
-      const linkedVoice = STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
-      COM_VOICES.forEach((v) => {
-        const o = document.createElement('option');
-        o.value = v.value;
-        o.textContent = v.label;
-        if (v.value === linkedVoice) o.selected = true;
-        el.comScriptVoice.appendChild(o);
-      });
+      // 初始化全局配音选择器（默认选中当前风格联动的音色）。
+      // 先拉一次样本状态：选项里要不要带「🎤 我的音色（克隆）」取决于 ready，别吃旧值。
+      await comLoadVoiceSample();
+      comFillScriptVoice(STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural');
 
       // 逐段渲染可编辑行
       const segs = data.segments || [];
@@ -9223,7 +9467,7 @@ el.dwVidPlayer.removeAttribute('src');
         method: 'PUT',
         body: JSON.stringify({
           segments,
-          voice: el.comScriptVoice.value,
+          voice: comVoiceForBackend(),
         }),
       });
       const over = (res && Array.isArray(res.over_limit)) ? res.over_limit : [];
@@ -9266,7 +9510,7 @@ el.dwVidPlayer.removeAttribute('src');
     try {
       const form = new FormData();
       form.append('vertical', String(resolveVertical()));
-      form.append('voice', el.comScriptVoice.value);
+      form.append('voice', comVoiceForBackend());
       const exportJy = comGetExportJianying();
       if (exportJy) form.append('export_jianying', exportJy);
       const _opts = comGetOptions();
@@ -9282,7 +9526,7 @@ el.dwVidPlayer.removeAttribute('src');
       if (_opts.feather_opt) form.append('feather_opt', _opts.feather_opt);
       // 配音引擎必须随渲染一起发下去（2026-09-18 修）：本接口此前没有这个参数，
       // 界面选了本地语音克隆也传不到渲染子进程 → 成片用的是 tts_config.json 里的旧引擎。
-      const _renderProvider = el.comTtsProvider ? el.comTtsProvider.value : '';
+      const _renderProvider = comTtsProviderForBackend();
       // 选了克隆但还没配「我的音色」→ 先说清楚会退回 edge 音色，避免出片后才发现不是自己的声音。
       if (_renderProvider === 'qwen3tts') {
         // 🔴 此处按钮已被置为「渲染中…」禁用态，提前退出必须自己还原，
@@ -9395,7 +9639,7 @@ el.dwVidPlayer.removeAttribute('src');
       el.comScriptStatus.textContent = '解说环境未就绪，无法试听';
       return;
     }
-    const voice = el.comScriptVoice.value;
+    const voice = comVoiceForBackend();
     const originalText = el.comScriptVoicePreview.textContent;
     el.comScriptVoicePreview.disabled = true;
     el.comScriptVoicePreview.textContent = '⏳ 生成中…';
@@ -9405,7 +9649,7 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('text', '你好，我是视频解说员。我将为你解说这段视频。');
       // provider（2026-09-18）：选中克隆引擎时让后端直接走本机克隆试听。
       // 不传的话试听恒为 edge，用户永远验不出克隆有没有生效（这正是一开始的坑）。
-      const _prevProvider = el.comTtsProvider ? el.comTtsProvider.value : '';
+      const _prevProvider = comTtsProviderForBackend();
       if (_prevProvider) form.append('provider', _prevProvider);
       // request 不能直接拿 blob，但 /api/commentary/voice-preview 返回 mp3 二进制；
       // 这里直接用 fetch 处理，方便放 audio 播放
@@ -9450,7 +9694,7 @@ el.dwVidPlayer.removeAttribute('src');
       el.comScriptStatus.textContent = '解说环境未就绪，无法试听';
       return;
     }
-    const voice = el.comScriptVoice.value;
+    const voice = comVoiceForBackend();
     const loudness = el.comLoudnessOff.checked ? 'off' : String(el.comLoudness.value);
     const boost = String(el.comBoost.value);
     const original = el.comVolPreview.textContent;
@@ -9467,7 +9711,7 @@ el.dwVidPlayer.removeAttribute('src');
       form.append('boost', boost);
       // provider：克隆引擎下让后端用「我的音色」合成，再对 wav 做同样的响度/增益后处理，
       // 这样这里听到的响度才真的等于成片响度（后端已支持对克隆产物做后处理）。
-      const _volProvider = el.comTtsProvider ? el.comTtsProvider.value : '';
+      const _volProvider = comTtsProviderForBackend();
       if (_volProvider) form.append('provider', _volProvider);
       const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
       if (!resp.ok) {
@@ -9506,7 +9750,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.comScriptStatus.textContent = '正在用当前配音生成前 3 段预览…';
     try {
       const form = new FormData();
-      form.append('voice', el.comScriptVoice.value);
+      form.append('voice', comVoiceForBackend());
       form.append('max_segments', '3');
       const resp = await fetch(`/api/commentary/preview/${currentScriptJobId}`, {
         method: 'POST', body: form,
@@ -9542,6 +9786,21 @@ el.dwVidPlayer.removeAttribute('src');
   el.comScriptSave.addEventListener('click', saveScript);
   el.comScriptRender.addEventListener('click', renderFromScript);
   el.comScriptVoicePreview.addEventListener('click', previewVoice);
+
+  // 在「全局配音」里选了「🎤 我的音色（克隆）」→ 把「配音引擎」也切到克隆（2026-09-20）。
+  // 不切的话用户以为选了自己的声音，实际引擎还是 edge-tts，出片仍是系统音色 ——
+  // 这正是「我的音色配了却没生效」那类投诉的来源。
+  // 用 dispatchEvent('change') 而不是直接调函数：引擎下拉自己的监听里带着
+  // 「起 qwen3tts 服务 / 刷新状态条 / 露出我的音色行」一整套逻辑，别抄第二份。
+  if (el.comScriptVoice) {
+    el.comScriptVoice.addEventListener('change', () => {
+      if (el.comScriptVoice.value !== COM_CLONE_VOICE) return;
+      if (!el.comTtsProvider) return;
+      if (COM_CLONE_PROVIDERS.indexOf(el.comTtsProvider.value) >= 0) return;  // 已经是克隆引擎
+      el.comTtsProvider.value = COM_CLONE_PROVIDERS[0];
+      el.comTtsProvider.dispatchEvent(new Event('change'));
+    });
+  }
   el.comScriptPrevAll.addEventListener('click', previewAllSegments);
   if (el.comVolPreview) el.comVolPreview.addEventListener('click', previewNarration);
 
@@ -9641,6 +9900,61 @@ el.dwVidPlayer.removeAttribute('src');
     suspense:    'zh-CN-YunjianNeural',   // 悬疑：沉稳男声（低沉神秘）
     healing:     'zh-CN-XiaoxiaoNeural',  // 治愈：温柔女声
     sarcastic:   'zh-CN-YunyangNeural',   // 毒舌：新闻腔男声（犀利冷幽默）
+  };
+
+  /** 「全局配音」下拉里的克隆音色哨兵值（2026-09-20）。
+   *  用户要求「录完试听没问题就保存到全局配音里供选择」—— 配好「我的音色」后，
+   *  它就和 7 个系统音色一样出现在同一个下拉里。
+   *  🔴 它**不是**合法的 edge 音色名：凡是要发给后端的 voice 必须先过 comVoiceForBackend()
+   *     翻译、引擎过 comTtsProviderForBackend()，绝不能让哨兵值漏进请求体。 */
+  const COM_CLONE_VOICE = '__my_voice__';
+  /** 真正的克隆引擎（选了「我的音色」时至少要切到其中之一，否则出片还是系统音色）。 */
+  const COM_CLONE_PROVIDERS = ['qwen3tts', 'indextts_mlx'];
+
+  /** 是否已存好克隆样本 —— 决定「全局配音」里要不要出现「我的音色」那一项。 */
+  const comCloneVoiceReady = () => !!(comVoiceSampleState && comVoiceSampleState.ready);
+
+  /** 重建「全局配音」选项：7 个系统音色 ＋（样本就绪时）「🎤 我的音色（克隆）」。
+   *  默认选中当前风格联动的音色；keepValue 传当前值以在重建后保持用户选择。 */
+  const comFillScriptVoice = (keepValue) => {
+    if (!el.comScriptVoice) return;
+    const want = keepValue || el.comScriptVoice.value || '';
+    el.comScriptVoice.replaceChildren();
+    if (comCloneVoiceReady()) {
+      const oc = document.createElement('option');
+      oc.value = COM_CLONE_VOICE;
+      oc.textContent = '🎤 我的音色（克隆）';
+      el.comScriptVoice.appendChild(oc);
+    }
+    const linkedVoice = STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
+    COM_VOICES.forEach((v) => {
+      const o = document.createElement('option');
+      o.value = v.value;
+      o.textContent = v.label;
+      if (v.value === linkedVoice) o.selected = true;
+      el.comScriptVoice.appendChild(o);
+    });
+    if (want && Array.prototype.some.call(el.comScriptVoice.options, (o) => o.value === want)) {
+      el.comScriptVoice.value = want;
+    }
+  };
+
+  /** 发给后端的 voice。选了「我的音色」时翻成当前风格联动的系统音色 ——
+   *  克隆没生效时仍有正常旁白兜底，而不是把一个非法音色名丢给后端。 */
+  const comVoiceForBackend = () => {
+    const v = el.comScriptVoice ? el.comScriptVoice.value : '';
+    if (v === COM_CLONE_VOICE) return STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
+    return v;
+  };
+
+  /** 发给后端的配音引擎。选了「我的音色」就必须走克隆引擎 ——
+   *  否则用户以为选了自己的声音，实际渲染用的还是 edge，成片里仍是系统音色。 */
+  const comTtsProviderForBackend = () => {
+    const cur = el.comTtsProvider ? el.comTtsProvider.value : '';
+    if (el.comScriptVoice && el.comScriptVoice.value === COM_CLONE_VOICE) {
+      return COM_CLONE_PROVIDERS.indexOf(cur) >= 0 ? cur : COM_CLONE_PROVIDERS[0];
+    }
+    return cur;
   };
 
   /** 把音色 value 翻译成展示名（用于在提示里显示联动音色）。 */
@@ -10443,6 +10757,9 @@ el.dwVidPlayer.removeAttribute('src');
   const comRec = {
     active: false, busy: false, stream: null, ctx: null, proc: null, src: null, sink: null,
     chunks: [], t0: 0, tick: 0, autoStop: 0, level: 0,
+    // 录完待确认的那段（2026-09-20）：{blob, sec, round}。**先试听、再落盘**，
+    // 不直接上传 —— 否则用户不满意只能「先存坏的样本 → 再重录覆盖」，白写一次盘。
+    pending: null,
   };
 
   function comRecSupported() {
@@ -10473,6 +10790,86 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.comMyVoiceText) el.comMyVoiceText.readOnly = !!on;   // 录制中别改稿，免得念的和存的对不上
   }
 
+  /** 试听条显隐（2026-09-20）。与录制条互斥：录完把录制条收掉、换成试听条，
+   *  所以这里不收录制条，由 comRecTeardown() 负责。 */
+  function comAuditSet(on, info) {
+    if (el.comMyVoiceAudit) el.comMyVoiceAudit.hidden = !on;
+    if (el.comMyVoiceAuditInfo) el.comMyVoiceAuditInfo.textContent = on ? (info || '') : '';
+  }
+
+  /** 放一遍待确认的那段录音。
+   *  走 playAudio()（DOM 内 <audio> + data URL）—— WKWebView 对 blob URL 支持不佳，
+   *  直接用 audio.src=blob: 会报 "The operation is not supported"。 */
+  async function comAuditPlay() {
+    const p = comRec.pending;
+    if (!p) { comSetVoiceStatus('warn', '没有待确认的录音，请先点「⏺ 直接录制」'); return; }
+    try {
+      await playAudio(p.blob);
+      comSetVoiceStatus('info', '正在播放你刚录的这段 —— 满意就点「✅ 没问题，保存音色」，不满意点「🔄 重录」');
+    } catch (e) {
+      // 自动播放被系统策略挡住是常见情况（playAudio 内部有一次异步转码，会脱离点击手势），
+      // 不是「功能坏了」→ 别吓用户，给一条能立刻照做的指引，细节留给控制台。
+      console.warn('[试听] 播放失败', e);
+      comSetVoiceStatus('warn', '试听没能自动播放，请点「▶ 试听」手动听一遍（先确认再保存，别存一段没听过的）');
+    }
+  }
+
+  /** 丢掉待确认的那段，重新录。顺手停掉可能还在响的回放。 */
+  function comAuditRedo() {
+    comRec.pending = null;
+    comAuditSet(false);
+    try {
+      const a = el.comAudioPreview;
+      if (a) { a.pause(); a.removeAttribute('src'); a.load(); }
+    } catch (_e) { /* ignore */ }
+    comSetVoiceStatus('info', '已丢弃刚才那段，点「⏺ 直接录制」重录一遍');
+  }
+
+  /** 「没问题」→ 落盘 + 存成音色（原来 comRecStop 里干的事，挪到用户确认之后）。 */
+  async function comAuditConfirm() {
+    const p = comRec.pending;
+    if (!p) { comSetVoiceStatus('warn', '没有待确认的录音，请先点「⏺ 直接录制」'); return; }
+    const text = el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '';
+    if (!text) {
+      comSetVoiceStatus('warn', '请先填上这段录音里念的内容（克隆要靠它对齐韵律）');
+      if (el.comMyVoiceText) el.comMyVoiceText.focus();
+      return;
+    }
+    if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.disabled = true;
+    comSetVoiceStatus('info', '正在保存录音…');
+    try {
+      const fd = new FormData();
+      fd.append('audio', p.blob, 'voice_rec.wav');
+      fd.append('duration', p.sec.toFixed(2));
+      const res = await fetch('/api/commentary/voice-sample/record', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        comSetVoiceStatus('warn', (data && data.detail) || ('保存录音失败（HTTP ' + res.status + '）'));
+        return;
+      }
+      const path = (data && data.audio_path) || '';
+      if (!path) { comSetVoiceStatus('warn', '后端没返回录音路径，请重试'); return; }
+      comRec.pending = null;
+      comAuditSet(false);
+      comVoiceSampleState.audio_path = path;
+      if (el.comMyVoicePath) {
+        el.comMyVoicePath.textContent = comVoiceSampleBrief(path);
+        el.comMyVoicePath.title = path;
+        el.comMyVoicePath.classList.add('is-set');
+      }
+      comSetVoiceStatus('info', '录音已存好，正在存成音色…');
+      // 文字稿是「能开录」的前置条件，这里直接落库省一步点击；成败由保存按钮自己播报
+      if (el.comMyVoiceSave) el.comMyVoiceSave.click();
+    } catch (e) {
+      comSetVoiceStatus('warn', '保存录音失败：' + e);
+    } finally {
+      if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.disabled = false;
+    }
+  }
+
+
+  /** 收掉采集链路（麦克风、AudioContext、计时器）。**不动 comRec.pending** ——
+   *  录完后待确认的那段要活到用户点「✅ 没问题」或「🔄 重录」为止。 */
   function comRecTeardown() {
     try { if (comRec.proc) comRec.proc.disconnect(); } catch (_) { /* ignore */ }
     try { if (comRec.src) comRec.src.disconnect(); } catch (_) { /* ignore */ }
@@ -10512,6 +10909,8 @@ el.dwVidPlayer.removeAttribute('src');
 
   async function comRecStart() {
     if (comRec.active || comRec.busy) return;   // 等授权期间再点一下会拿到第二条流、旧的那条漏着不放
+    // 直接开始新一次录制 = 放弃上一段待确认的（否则试听条会挂着一份对不上的旧录音）
+    if (comRec.pending) { comRec.pending = null; comAuditSet(false); }
     const text = el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '';
     if (!text) {
       comSetVoiceStatus('warn', '请先写好你要念的内容（1~2 句），录制时照着读 —— 克隆要靠它对齐韵律');
@@ -10613,33 +11012,14 @@ el.dwVidPlayer.removeAttribute('src');
     }
     const blob = comRecEncodeWav(chunks, sampleRate);
     if (!blob.size) { comSetVoiceStatus('warn', '录音数据为空，请重录'); return; }
-    comSetVoiceStatus('info', (auto ? '已录满 ' + COM_REC_MAX_SEC + ' 秒，' : '') + '正在保存录音…');
-    try {
-      const fd = new FormData();
-      fd.append('audio', blob, 'voice_rec.wav');
-      fd.append('duration', sec.toFixed(2));
-      const res = await fetch('/api/commentary/voice-sample/record', { method: 'POST', body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        comSetVoiceStatus('warn', (data && data.detail) || ('保存录音失败（HTTP ' + res.status + '）'));
-        return;
-      }
-      const p = (data && data.audio_path) || '';
-      if (!p) { comSetVoiceStatus('warn', '后端没返回录音路径，请重试'); return; }
-      comVoiceSampleState.audio_path = p;
-      if (el.comMyVoicePath) {
-        el.comMyVoicePath.textContent = comVoiceSampleBrief(p);
-        el.comMyVoicePath.title = p;
-        el.comMyVoicePath.classList.add('is-set');
-      }
-      comSetVoiceStatus('info', '录音已就绪，正在保存音色…');
-      // 文字稿是「能开录」的前置条件，这里直接落库省一步点击；失败也只是提示，样本文件仍在
-      if (el.comMyVoiceSave && el.comMyVoiceText && el.comMyVoiceText.value.trim()) {
-        el.comMyVoiceSave.click();
-      }
-    } catch (e) {
-      comSetVoiceStatus('warn', '保存录音失败：' + e);
-    }
+    // 🔴 2026-09-20：到这里**不落盘**了。先把 WAV 留在内存里试听，用户点「✅ 没问题」才
+    //    上传 + 存音色（comAuditConfirm）。此前是录完立刻上传并自动保存 —— 用户报
+    //    「自己录完声音预览怎么没有呢？录完应该有个试听，没问题再保存」。
+    comRec.pending = { blob, sec };
+    comAuditSet(true, (auto ? '已录满 ' + COM_REC_MAX_SEC + 's · ' : '') + '共 ' + sec.toFixed(1) + 's');
+    comSetVoiceStatus('info', '录好了 —— 先听一遍：没问题点「✅ 没问题，保存音色」，不满意点「🔄 重录」');
+    try { if (el.comMyVoiceAudit) el.comMyVoiceAudit.scrollIntoView({ block: 'nearest' }); } catch (_) { /* ignore */ }
+    comAuditPlay();   // 用户要的就是「录完就有得听」，不用再点一次；被自动播放策略挡住时按钮仍在
   }
 
   // 同一个按钮两种状态：闲置＝开始录，录制中＝停止并保存 —— 结束键永远在用户刚点的位置
@@ -10651,6 +11031,10 @@ el.dwVidPlayer.removeAttribute('src');
   if (el.comMyVoiceRecCancel) {
     el.comMyVoiceRecCancel.addEventListener('click', () => { comRecStop(false, false); });
   }
+  // 试听条三个动作（2026-09-20）：试听 / 重录 / 确认保存
+  if (el.comMyVoiceAuditPlay) el.comMyVoiceAuditPlay.addEventListener('click', () => { comAuditPlay(); });
+  if (el.comMyVoiceAuditRedo) el.comMyVoiceAuditRedo.addEventListener('click', () => { comAuditRedo(); });
+  if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.addEventListener('click', () => { comAuditConfirm(); });
 
   if (el.comMyVoicePick) {
     el.comMyVoicePick.addEventListener('click', async () => {
@@ -10694,7 +11078,10 @@ el.dwVidPlayer.removeAttribute('src');
           return;
         }
         comRenderVoiceSample(data);
-        comSetVoiceStatus('ok', '音色已保存，渲染解说时会用这个声音');
+        // 存好之后立刻把它挂进「全局配音」下拉（2026-09-20 用户要求「保存到全局配音里供选择」）：
+        // 不刷新的话，下拉里那一项要等下次打开审核面板才出现，用户会以为没保存上。
+        comFillScriptVoice();
+        comSetVoiceStatus('ok', '音色已保存 ✓ 已加进右上「全局配音」，可选「🎤 我的音色（克隆）」');
         _ttsStatusCache = null;           // 样本变了 → 让状态条重新判定「就绪」
         comRefreshTtsStatus({ force: true });
       } catch (e) {
@@ -13119,6 +13506,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isImage = view === 'imageconvert';
     const isCp = view === 'compress';   // 高效压缩（2026-09-11 新增）
     const isSr = view === 'sr';         // 高清修复（2026-09-12 新增）
+    const isShare = view === 'share';   // 扫码分享（2026-09-20 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
@@ -13130,7 +13518,7 @@ el.dwVidPlayer.removeAttribute('src');
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -13141,6 +13529,7 @@ el.dwVidPlayer.removeAttribute('src');
     el.imageConvertView.hidden = !isImage;
     if (el.compressView) el.compressView.hidden = !isCp;
     if (el.srView) el.srView.hidden = !isSr;
+    if (el.shareView) el.shareView.hidden = !isShare;
     el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
@@ -13152,7 +13541,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isSt && !isBridge && !isProfileGroup);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isSt && !isBridge && !isProfileGroup);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -13162,13 +13551,14 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
     if (el.tabCompress) el.tabCompress.classList.toggle('is-active', isCp);
     if (el.tabSr) el.tabSr.classList.toggle('is-active', isSr);
+    if (el.tabShare) el.tabShare.classList.toggle('is-active', isShare);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfileGroup);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabHome) el.tabHome.classList.toggle('is-active', isHome);
     if (el.sTabHome) el.sTabHome.classList.toggle('is-active', isHome);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isShare && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -13179,6 +13569,7 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
     if (el.sTabCompress) el.sTabCompress.classList.toggle('is-active', isCp);
     if (el.sTabSr) el.sTabSr.classList.toggle('is-active', isSr);
+    if (el.sTabShare) el.sTabShare.classList.toggle('is-active', isShare);
     if (el.sTabProfile) el.sTabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabProfilePurchases) el.sTabProfilePurchases.classList.toggle('is-active', isProfilePurchases);
     if (el.sTabProfileCredits) el.sTabProfileCredits.classList.toggle('is-active', isProfileCredits);
@@ -13681,6 +14072,7 @@ el.dwVidPlayer.removeAttribute('src');
     [el.sTabImageConvert, 'imageconvert'],
     [el.sTabCompress, 'compress'],
     [el.sTabSr, 'sr'],
+    [el.sTabShare, 'share'],   // 扫码分享（2026-09-20 新增）
     [el.sTabSubtitle, 'subtitle'],
     [el.sTabProfile, 'profile'],
     [el.sTabProfilePurchases, 'profile_purchases'],
