@@ -131,6 +131,13 @@ run_one test_auth_reset_code_leak.py
 #                                      非 WAV 回落前端报的时长、文件 0600 目录 0700、
 #                                      只保留最近 5 段且不碰配置目录里的其它文件
 run_one test_voice_sample_record.py
+#  17. test_commentary_style_intensity.py —— 解说「风格强度」链路（2026-09-21 新增）：
+#                                        CommentaryRequest.style_intensity 字段必须存在（漏加则
+#                                        router 的 payload.style_intensity 在 JSON 主路径 AttributeError，
+#                                        pyflakes 查不到这类字段缺失）；CLI 按强度产出
+#                                        `--style <s> --style-intensity <n>`；★AST 棘轮：
+#                                        routers 里每处 payload.X 都必须是该函数绑定模型里的真实字段
+run_one test_commentary_style_intensity.py
 
 echo ""
 echo "========================================="
