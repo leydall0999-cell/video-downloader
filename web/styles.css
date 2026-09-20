@@ -3121,6 +3121,13 @@ img { max-width: 100%; display: block; }
 .com-opt-row-styles .com-mode-option { flex: 0 0 auto; }
 .com-opt-row-styles .com-mode-option > span { text-align: center; }
 
+/* 风格强度滑杆（2026-09-20）：与「解说风格」下拉并列，调节口吻力度 */
+.com-style-intensity { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; width: 100%; margin-top: .4rem; }
+.com-style-intensity-label { font-size: .8rem; font-weight: 600; color: var(--text-mute); white-space: nowrap; }
+.com-style-intensity input[type="range"] { flex: 1 1 150px; max-width: 260px; accent-color: var(--accent, #4f8cff); }
+.com-style-intensity-val { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 2em; text-align: center; }
+.com-style-intensity-hint { font-size: .72rem; color: var(--text-mute); }
+
 /* 高级剪辑：折叠区，视觉上与卡片标题左对齐、不额外内缩 */
 .com-opts-inner {
   display: grid;

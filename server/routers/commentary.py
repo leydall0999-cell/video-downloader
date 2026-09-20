@@ -408,6 +408,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style,
+                    style_intensity=payload.style_intensity,
                     bgm=payload.bgm, bgm_file=payload.bgm_file, bgm_volume=payload.bgm_volume,
                     subtitle_size=payload.subtitle_size, subtitle_color=payload.subtitle_color,
                     subtitle_border=payload.subtitle_border,
@@ -566,6 +567,7 @@ def create_script_only_upload(
     web: bool = app.Form(False),
     one_click: bool = app.Form(False),
     style: str = app.Form("none"),
+    style_intensity: int = app.Form(65),
     vision: bool = app.Form(False),
     tts_provider: str = app.Form(""),
     correct_transcript: str = app.Form(""),
@@ -633,6 +635,7 @@ def create_script_only_upload(
                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                     title=final_title,
                     style=style,
+                    style_intensity=style_intensity,
                     src_filename=src_filename,
                     export_jianying=export_jianying)
     return {"job_id": job_id, "status": "running"}
@@ -974,6 +977,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                     one_click=payload.one_click,
                     title=_title,
                     style=payload.style,
+                    style_intensity=payload.style_intensity,
                     bgm=payload.bgm, bgm_file=payload.bgm_file, bgm_volume=payload.bgm_volume,
                     subtitle_size=payload.subtitle_size, subtitle_color=payload.subtitle_color,
                     subtitle_border=payload.subtitle_border,

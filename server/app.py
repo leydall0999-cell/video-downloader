@@ -1183,7 +1183,7 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
                              intro_highlight: bool = False, skip_intro_outro: bool = False,
                              no_narrate_intro_outro: bool = True, retain_pct: float | None = None,
                              web: bool = False, one_click: bool = False, mode: str | None = None,
-                             style: str = "none", vision: bool = False,
+                             style: str = "none", style_intensity: int = 65, vision: bool = False,
                              intro_sec: float | None = None, outro_sec: float | None = None,
                              drama_start_sec: float | None = None, drama_end_sec: float | None = None,
                              bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18,
@@ -1201,6 +1201,8 @@ def _commentary_option_args(*, commentary_type: str = "deep_hl", highlight_sourc
         args.append("--no-original-speed")
     if style and style != "none":
         args += ["--style", style]
+    if style_intensity is not None:
+        args += ["--style-intensity", str(style_intensity)]
     if intro_highlight:
         args.append("--intro-highlight")
     if skip_intro_outro:
@@ -1390,7 +1392,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                     no_narrate_intro_outro=no_narrate_intro_outro,
                                     retain_pct=retain_pct, web=web,
                                     one_click=one_click, vision=vision,
-                                    tts_provider=tts_provider, correct_transcript=correct_transcript, style=style,
+                                    tts_provider=tts_provider, correct_transcript=correct_transcript,                                     style=style,
+                                    style_intensity=style_intensity,
                                     intro_sec=intro_sec, outro_sec=outro_sec,
                                     drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                                     export_jianying=export_jianying)
@@ -1463,7 +1466,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                                         no_narrate_intro_outro=no_narrate_intro_outro,
                                         retain_pct=retain_pct, web=web,
                                         one_click=one_click, mode=mode,
-                                        style=style, vision=vision,
+                                        style=style, style_intensity=style_intensity, vision=vision,
                                         intro_sec=intro_sec, outro_sec=outro_sec,
                                         drama_start_sec=drama_start_sec, drama_end_sec=drama_end_sec,
                                         bgm=bgm, bgm_file=bgm_file, bgm_volume=bgm_volume,
@@ -1722,7 +1725,7 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
             commentary_jobs[job_id]["error"] = str(exc)[:800]
         logger.exception("解说任务 %s 失败", job_id)
 
-def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "") -> None:
+def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, style: str = "none", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", style_intensity: int = 65) -> None:
     """HTTP 模式：把已下载视频 POST 给独立解说 worker，轮询取回成片到主站本地。"""
     endpoint = COMMENTARY_ENDPOINT
     headers = {"X-Worker-Token": COMMENTARY_TOKEN} if COMMENTARY_TOKEN else {}

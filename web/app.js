@@ -8860,6 +8860,7 @@ el.dwVidPlayer.removeAttribute('src');
       drama_start_sec: dramaStart,
       drama_end_sec: dramaEnd,
       style: styleEl ? styleEl.value : 'none',
+      style_intensity: (() => { const si = document.getElementById('comStyleIntensity'); return si ? (parseInt(si.value, 10) || 65) : 65; })(),
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
       // 后端 CommentaryRequest.correct_transcript 是 str('1'=开/'0'=关)，勿发布尔（bool 会 422）。
@@ -10883,6 +10884,15 @@ el.dwVidPlayer.removeAttribute('src');
     r.addEventListener('change', comApplyStyleVoice);
   });
   comApplyStyleVoice();  // 初始化提示
+
+  // 风格强度滑杆：实时回显数值
+  const comStyleIntensityEl = document.getElementById('comStyleIntensity');
+  const comStyleIntensityValEl = document.getElementById('comStyleIntensityVal');
+  if (comStyleIntensityEl && comStyleIntensityValEl) {
+    const syncStyleIntensity = () => { comStyleIntensityValEl.textContent = comStyleIntensityEl.value; };
+    comStyleIntensityEl.addEventListener('input', syncStyleIntensity);
+    syncStyleIntensity();  // 初始化回显
+  }
 
   // 切换配音引擎时，实时刷新可用性（自动识别并置灰不可用项）
   if (el.comTtsProvider) {
