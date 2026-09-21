@@ -4615,7 +4615,9 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
                 _fh.truncate(total)          # 预分配，各线程按偏移写入不会互相覆盖
             _wlock = _threading.Lock()
             ranges = [(s, min(s + CHUNK, total) - 1) for s in range(0, total, CHUNK)]
-            workers = 4 if total > 8 * 1024 * 1024 else 2
+            # 并发度：跨境链路单连接吞吐低且波动大（实测 0.1~1MB/s），
+            # 8 并发能把总量顶到链路天花板；小文件 2 并发足够，别浪费建连开销。
+            workers = 8 if total > 8 * 1024 * 1024 else 2
 
             def _fetch(rng) -> int:
                 s, e = rng
