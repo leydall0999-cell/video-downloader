@@ -239,7 +239,9 @@ def _empty_state() -> dict[str, Any]:
                         "ai_subtitle": 0, "subtitle": 0, "subtitle_batch": 0,
                         "image_translate": 0, "matting": 0},
         "usage_history": {},
-        "meta": {"activated_at": 0.0, "history": []},
+        "meta": {"activated_at": 0.0, "history": [],
+                 "device_fp": "", "device_bound_at": 0.0,
+                 "license_code": "", "license_revoked": False},
     }
 
 
@@ -324,7 +326,7 @@ class MembershipStore:
         # 惰性日切
         self._roll_daily(now)
 
-        return {
+        out = {
             "download_member": {
                 "active": dl_active,
                 "plan": dl.get("plan") if dl.get("active") else (ai.get("plan") if ai.get("active") else None),
@@ -342,6 +344,27 @@ class MembershipStore:
             "credits_total": int(ai.get("credits_left", 0)) + int(st["permanent_credits"].get("total", 0)),
             "daily_usage": dict(st["daily_usage"]),
         }
+
+        # P2 一机一码：指纹不符 / 卡密被作废 → 会员权益整体锁定（数据保留，不删状态）。
+        # 锁定是**展示与判定层**的：paid 闸门读 status() 的 active 即自动降为免费档。
+        lock = self._device_lock()
+        if lock:
+            out["download_member"]["active"] = False
+            out["download_member"]["plan"] = None
+            out["download_member"]["source"] = None
+            out["ai_member"]["active"] = False
+            out["ai_member"]["credits_left"] = 0
+            out["device_locked"] = lock
+        return out
+
+    def _device_lock(self) -> Optional[str]:
+        """取当前设备指纹并判定锁定（引擎内延迟导入，保持可独立单测）。"""
+        try:
+            from device_id import fingerprint  # noqa: PLC0415
+            fp, strong = fingerprint()
+        except Exception:
+            return None  # 指纹模块不可用 → fail-open
+        return self.device_lock_reason(fp, strong)
 
     def plans(self) -> dict[str, Any]:
         """套餐表（价格/时长/权益），供前端购买中心展示。
@@ -374,8 +397,16 @@ class MembershipStore:
         }
 
     # ---- 激活 ----
-    def activate(self, code: str, via: str = "test") -> dict[str, Any]:
-        """按套餐/积分包 code 激活。续费顺延，AI 会员自动捆绑下载权益。"""
+    def activate(self, code: str, via: str = "test",
+                 device_fp: Optional[str] = None,
+                 license_code: str = "") -> dict[str, Any]:
+        """按套餐/积分包 code 激活。续费顺延，AI 会员自动捆绑下载权益。
+
+        P2 一机一码：激活时把设备指纹写进 meta.device_fp（仅收**强指纹**；
+        弱指纹不绑，宁漏勿误伤）。之后 status() 发现指纹不符 → 会员锁定
+        （防拷贝 membership.json 到别的机器白嫖）。license_code 一并留痕，
+        供启动时向授权中心 check 卡密是否被作废。
+        """
         self._ensure_loaded()
         now = self._now()
         st = self._state
@@ -420,12 +451,47 @@ class MembershipStore:
 
         if not st["meta"].get("activated_at"):
             st["meta"]["activated_at"] = now
+        if device_fp:  # 仅收强指纹（is_fingerprint 校验 32hex）；换机重绑也走这里
+            st["meta"]["device_fp"] = device_fp
+            st["meta"]["device_bound_at"] = now
+        if license_code:
+            st["meta"]["license_code"] = license_code
+            st["meta"]["license_revoked"] = False  # 新卡激活视为恢复
         st["meta"].setdefault("history", []).append({
             "code": code, "via": via, "at": now, "type": "activate",
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]  # 只留最近 200 条
         self._persist()
         return result
+
+    # ---- 设备绑定校验（P2 一机一码） ----
+    def device_lock_reason(self, current_fp: str, strong: bool = True) -> Optional[str]:
+        """当前设备与绑定设备不符时返回锁定原因，否则 None。
+
+        规则（宁漏勿误伤付费用户）：
+          - 未绑过设备 / 未激活过 → 不锁（老用户向后兼容）
+          - 当前是弱指纹 → 不锁（系统级 ID 取不到时别错杀）
+          - 卡密被云端作废（meta.license_revoked）→ 锁
+          - 强指纹与 meta.device_fp 不一致 → 锁
+        """
+        self._ensure_loaded()
+        meta = self._state.get("meta") or {}
+        if meta.get("license_revoked"):
+            return "LICENSE_REVOKED"
+        bound = str(meta.get("device_fp") or "")
+        if not bound:
+            return None
+        if not strong:
+            return None
+        if current_fp != bound:
+            return "DEVICE_MISMATCH"
+        return None
+
+    def set_license_revoked(self, revoked: bool) -> None:
+        """启动校验发现卡密被作废时由路由层调用（引擎不做网络）。"""
+        self._ensure_loaded()
+        self._state.setdefault("meta", {})["license_revoked"] = bool(revoked)
+        self._persist()
 
     # ---- 积分 ----
     def spend_credits(self, amount: int, reason: str = "ai_usage") -> dict[str, Any]:

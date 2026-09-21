@@ -15509,15 +15509,28 @@ el.dwVidPlayer.removeAttribute('src');
     el.memberActivateBtn.disabled = true;
     _memberMsg('激活中…');
     try {
-      const r = await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
+      // P2 一机一码：VDL- 开头 = 签名卡密 → 走云端验签+绑定设备的兑换通道；
+      // 其余 = 套餐 code 直激活（仅限本机调试，远程会被服务端拒绝 USE_REDEEM）。
+      const isLicense = /^VDL-/i.test(code);
+      const r = isLicense
+        ? await request('/api/member/redeem', { method: 'POST', body: JSON.stringify({ license_code: code }) })
+        : await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
       if (r && r.ok) {
         showToast('会员激活成功');
-        _memberMsg('✅ 激活成功' + (r.kind ? `（${r.kind}）` : ''));
+        _memberMsg('✅ 激活成功' + (r.kind ? `（${r.kind}）` : '') + (isLicense ? ' · 已绑定本机' : ''));
         if (el.memberCode) el.memberCode.value = '';
         await renderMemberStatus();
         if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
       } else if (r && r.code === 'NO_AUTH') {
         _memberMsg('请先登录账号后再激活（右上角登录/注册）', true);
+      } else if (r && r.code === 'ALREADY_BOUND') {
+        _memberMsg('❌ 这张卡密已绑定其他设备。换机请联系客服解绑后重试。', true);
+      } else if (r && r.code === 'REVOKED') {
+        _memberMsg('❌ 这张卡密已被作废，如有疑问请联系客服。', true);
+      } else if (r && r.code === 'CLOUD_UNREACHABLE') {
+        _memberMsg('❌ ' + ((r && r.error) || '无法连接授权中心'), true);
+      } else if (r && r.code === 'USE_REDEEM') {
+        _memberMsg('❌ 在线环境请使用卡密激活：输入 VDL- 开头的卡密后点「激活」', true);
       } else {
         _memberMsg('❌ ' + ((r && r.error) || '激活失败'), true);
       }
