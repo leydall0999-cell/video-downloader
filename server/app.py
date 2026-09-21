@@ -3610,7 +3610,11 @@ def _ensure_vps_env() -> None:
       - VDL_COOKIE_SYNC_TOKEN = <token>（/v1/resolve 转发端点校验用）
     这样 downloader._call_vps_worker 对 14 个 VPS 平台（抖音/快手/微博/爱奇艺/
     红果/微视/1905…）自动走线上转发，桌面 App 零额外配置获得 VPS 解析能力。
+
+    另见下方「双节点转发」：若 cloud_sync.json 声明了 peer（海外节点地址），
+    则把本机区域标为 cn、对端标为 peer，让海外链接整体转发给海外节点处理。
     """
+    global NODE_REGION, PEER_ENDPOINT
     if os.environ.get("VDL_WORKER_URL"):
         return  # 已显式配置，不覆盖
     url, token = _cloud_sync_config()
@@ -3622,6 +3626,25 @@ def _ensure_vps_env() -> None:
         os.environ["VDL_COOKIE_SYNC_TOKEN"] = token
     os.environ["VDL_WORKER_URL"] = url.rstrip("/")
     logger.info("[vps] 桌面端注入 VPS 转发配置: %s", os.environ["VDL_WORKER_URL"])
+
+    # 双节点转发（可选）：桌面端本身跑在海内、没有出国链路，YouTube 等海外站直连
+    # 必然失败（解析超时）。若 cloud_sync.json 显式声明了 peer（海外节点地址），则
+    # 告知前端「本机区域 = cn、对端 = <peer>」：前端 baseFor() 会把海外链接的解析/
+    # 下载整体转发给对端，由对端本地出网取流、成果再经 CDN 回传 —— 实测经
+    # Cloudflare 回传比从大陆直连该节点快一个数量级，且本机无需任何翻墙链路。
+    # 未声明 peer 时不改动 region/peer，保持原有单节点行为不变。
+    if not os.environ.get("VDL_PEER_ENDPOINT") and not os.environ.get("VDL_REGION"):
+        cfg_file = Path.home() / ".videodownloader" / "cloud_sync.json"
+        if cfg_file.exists():
+            try:
+                raw = json.loads(cfg_file.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                raw = {}
+            peer = str(raw.get("peer") or "").strip().rstrip("/")
+            if peer:
+                NODE_REGION = str(raw.get("region") or "cn").strip().lower() or "cn"
+                PEER_ENDPOINT = peer
+                logger.info("[vps] 桌面端启用双节点转发: region=%s peer=%s", NODE_REGION, PEER_ENDPOINT)
 
 _ensure_vps_env()
 
