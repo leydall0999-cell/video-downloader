@@ -37,6 +37,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -118,8 +119,9 @@ def test_hist_add_dedupe_and_order():
         assert [x["sid"] for x in items] == ["a", "b"], items
         assert items[0]["name"] == "a-new.png"
         assert hp.is_file()
-        # 原子写：不得留下固定名 .tmp 残骸
-        assert not hp.with_name(hp.name + ".tmp").exists()
+        # 原子写：目录里不得留下任何 .tmp 残骸（含唯一临时名的失败路径）
+        leftovers = [p.name for p in hp.parent.iterdir() if p.name.endswith(".tmp")]
+        assert leftovers == [], leftovers
         # 没有 sid 的脏记录不入库
         sh._hist_add({"name": "no-sid.png"})
         assert len(sh._hist_load()) == 2
@@ -374,9 +376,8 @@ def _main() -> int:
     for name, fn in tests:
         try:
             fn()
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             fail += 1
-            import traceback
             print("❌ %s\n%s" % (name, traceback.format_exc()))
         else:
             ok += 1

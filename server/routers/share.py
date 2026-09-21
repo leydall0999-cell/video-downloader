@@ -34,6 +34,7 @@
 """
 from __future__ import annotations
 
+import atomic_io
 import http.client
 import json
 import os
@@ -69,7 +70,8 @@ _TASKS_LOCK = threading.Lock()
 # 不含任何服务器凭据；删除动作仍需节点 token，token 不写进历史文件。
 HIST_PATH = CONF_PATH.parent / "share_history.json"
 HIST_MAX = 300                      # 列表上限，超出裁掉最旧的
-_HIST_LOCK = threading.Lock()
+# ⚠️ 不要在这里另起一把私有锁：统一走 atomic_io.mutation（按绝对路径共享的可重入锁），
+#    否则「这个入口用私有锁、那个入口用路径锁」等于没锁。
 
 # 可选有效期（秒）。0 = 永久。须与节点 X-Expire 语义一致（share_server.py:554）
 EXPIRE_CHOICES = (0, 86400, 7 * 86400, 30 * 86400)
@@ -210,12 +212,14 @@ def _hist_load() -> list:
 
 
 def _hist_save(items: list) -> None:
+    """原子落盘（唯一临时名 + os.replace + fsync）。
+
+    ⚠️ 必须走 atomic_io，**不能**自己拼固定名 `.tmp`：并发写者会互相截断（仓库里有
+    可复现反证），而且棘轮守卫 test_config_atomic_write.py 会直接把构建拦下
+    —— 2026-09-21 实测踩到（构建自验证 45 通过 / 1 失败正是这条）。
+    """
     try:
-        HIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = HIST_PATH.with_name(HIST_PATH.name + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump({"items": items[:HIST_MAX]}, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, HIST_PATH)      # 原子替换，避免半截文件
+        atomic_io.atomic_write_json(HIST_PATH, {"items": items[:HIST_MAX]})
     except Exception:
         pass
 
@@ -224,7 +228,7 @@ def _hist_add(rec: dict) -> None:
     """上传成功后落一条（同 sid 去重，新的排最前）。"""
     if not rec.get("sid"):
         return
-    with _HIST_LOCK:
+    with atomic_io.mutation(HIST_PATH):     # 必须包住「读」——只锁落盘等于没锁
         items = [x for x in _hist_load() if x.get("sid") != rec.get("sid")]
         items.insert(0, rec)
         _hist_save(items)
@@ -555,14 +559,13 @@ def share_history_delete(sid: str):
     任意删除代理 —— token 内置在客户端，不能拿它当通用删除入口。
     """
     sid = (sid or "").strip()
-    with _HIST_LOCK:
-        items = _hist_load()
-    if not any(x.get("sid") == sid for x in items):
+    # 读不加锁：写走 os.replace，读到的必是完整文件
+    if not any(x.get("sid") == sid for x in _hist_load()):
         return JSONResponse({"ok": False, "error": "not_in_history"}, status_code=404)
     ok, detail = _node_delete(sid)
     if not ok:
         return JSONResponse({"ok": False, "error": "node_delete_failed", "detail": detail},
                             status_code=502)
-    with _HIST_LOCK:
+    with atomic_io.mutation(HIST_PATH):
         _hist_save([x for x in _hist_load() if x.get("sid") != sid])
     return {"ok": True, "sid": sid, "node": detail}
