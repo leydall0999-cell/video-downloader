@@ -138,6 +138,12 @@ run_one test_voice_sample_record.py
 #                                        `--style <s> --style-intensity <n>`；★AST 棘轮：
 #                                        routers 里每处 payload.X 都必须是该函数绑定模型里的真实字段
 run_one test_commentary_style_intensity.py
+#  18. test_share_history.py        —— 扫码分享「我的分享 / 删除 / 有效期」（2026-09-21 新增）：
+#                                        历史落盘（去重/新在前/上限裁剪/坏文件容错）、
+#                                        删除端点**只允许删本机历史里的 sid**（否则成任意删除代理）、
+#                                        节点删失败必须保留记录、通道根推导（direct 只能上传，
+#                                        删除/探活须用源站根）、上传须透传 X-Expire 且成功后落历史
+run_one test_share_history.py
 
 echo ""
 echo "========================================="

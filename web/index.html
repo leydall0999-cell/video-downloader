@@ -888,6 +888,16 @@
 
     <div class="uc-toolbar">
       <button type="button" class="btn btn-primary" id="shareAddBtn">选择文件</button>
+      <label class="share-expire" for="shareExpireSel"
+             title="超过有效期后链接自动失效，服务器会定时清理；选「永久」则一直有效，需要手动删除">
+        有效期
+        <select id="shareExpireSel">
+          <option value="0">永久</option>
+          <option value="86400">1 天</option>
+          <option value="604800">7 天</option>
+          <option value="2592000">30 天</option>
+        </select>
+      </label>
       <input type="file" id="shareFileInput" multiple hidden />
       <button type="button" class="btn btn-ghost" id="shareClearBtn" hidden>清空记录</button>
       <span class="uc-count" id="shareCount">尚未选择文件</span>
@@ -906,6 +916,18 @@
       <div class="share-hint" id="shareHint"></div>
     </div>
 
+    <!-- 我的分享（2026-09-21 新增）：记录持久化在本地后端，重开 App 仍在，
+         可重新取出链接/二维码，或把已发出去的内容从服务器上删掉 -->
+    <div class="share-hist">
+      <div class="share-hist-head">
+        <span class="share-hist-title">📚 我的分享</span>
+        <span class="uc-count" id="shareHistCount">—</span>
+        <button type="button" class="btn btn-ghost" id="shareHistRefreshBtn"
+                title="向分享节点逐条确认链接是否仍然有效（已被删除或过期的会标出来）">刷新</button>
+      </div>
+      <div id="shareHistList"></div>
+    </div>
+
     <style>
       #shareQueue { margin-top: 10px; }
       .share-item { display:flex; align-items:center; gap:10px; padding:10px 13px; border:1px solid var(--border,#d1d5db); border-radius:11px; margin-bottom:8px; font-size:13px; }
@@ -921,6 +943,17 @@
       .share-url-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }
       .share-url-row input { flex:1; min-width:240px; max-width:520px; padding:9px 12px; border:1px solid var(--border,#d1d5db); border-radius:9px; font-size:13px; background:transparent; color:inherit; }
       .share-hint { text-align:center; color:var(--text-mute,#6b7280); font-size:12.5px; margin-top:9px; }
+      /* ---- 有效期选择 + 我的分享 ---- */
+      .share-expire { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-mute,#6b7280); }
+      .share-expire select { padding:5px 8px; border:1px solid var(--border,#d1d5db); border-radius:8px; background:transparent; color:inherit; font-size:12.5px; cursor:pointer; }
+      .share-hist { margin-top:24px; padding-top:14px; border-top:1px solid var(--border,#e5e7eb); }
+      .share-hist-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+      .share-hist-title { font-size:13.5px; font-weight:600; }
+      .share-hist-head .uc-count { flex:1; }
+      .share-item .hist-time { color:var(--text-mute,#6b7280); font-size:12px; white-space:nowrap; }
+      .share-item .st.warn { color:#d97706; }
+      .share-item .st.gone { color:var(--text-mute,#6b7280); text-decoration:line-through; }
+      .share-hist-empty { color:var(--text-mute,#6b7280); font-size:12.5px; padding:6px 2px; }
     </style>
   </section>
 

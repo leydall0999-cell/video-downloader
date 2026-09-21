@@ -1,0 +1,20 @@
+[Unit]
+Description=VDL Share Node (扫码分享：上传 / 短链 / 分享页)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vdl-share
+ExecStart=/usr/bin/python3 /opt/vdl-share/share_server.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=VDL_SHARE_DIR=/opt/vdl-share
+Environment=VDL_SHARE_PORT=8901
+Environment=VDL_SHARE_PUBLIC_BASE=https://share.hanyuxz.top
+# 只听本机，公网入口由 nginx 在 8888 上按域名分流
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

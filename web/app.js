@@ -716,6 +716,10 @@
     shareOpenBtn: $('shareOpenBtn'),
     shareSaveQrBtn: $('shareSaveQrBtn'),
     shareHint: $('shareHint'),
+    shareExpireSel: $('shareExpireSel'),
+    shareHistCount: $('shareHistCount'),
+    shareHistRefreshBtn: $('shareHistRefreshBtn'),
+    shareHistList: $('shareHistList'),
 
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
     tabSr: $('tabSr'),
@@ -4409,7 +4413,9 @@
   // 节点部署见 desktop/vps-share/（systemd: vdl-share，nginx 在 8888 按域名分流）。
   {
     const shCfg = { base: '', limit: 100 * 1024 * 1024, maxUpload: 2 * 1024 ** 3 };
-    const shState = { list: [], nextId: 1, timer: null, current: null };
+    // hist = 「我的分享」列表（持久化在本地后端 ~/.videodownloader/share_history.json，
+    //        与 list 不同：list 是本次会话的待上传队列，重开 App 即空）
+    const shState = { list: [], nextId: 1, timer: null, current: null, hist: [] };
 
     const shFmt = (b) => {
       if (!b && b !== 0) return '';
@@ -4433,6 +4439,12 @@
           shCfg.maxUpload = d.max_upload || shCfg.maxUpload;
         }
       } catch (e) { /* 节点未配置时静默，上传时再报错 */ }
+      // 记住上次选的有效期，下次打开还是它
+      try {
+        const saved = localStorage.getItem('vdl-share-expire');
+        if (saved != null && el.shareExpireSel) el.shareExpireSel.value = saved;
+      } catch (e) {}
+      shLoadHistory();   // 「我的分享」：持久化在本地后端，重开 App 仍在
     }
 
     function shRender() {
@@ -4485,7 +4497,7 @@
             if (!d || !d.ok) continue;
             it.sent = d.sent || 0;
             it.total = d.total || it.total;
-            if (d.status === 'done') { it.status = 'done'; it.sid = d.sid; it.url = d.url; shShowResult(it); }
+            if (d.status === 'done') { it.status = 'done'; it.sid = d.sid; it.url = d.url; shShowResult(it); shLoadHistory(); }
             else if (d.status === 'failed') { it.status = 'failed'; it.err = d.error || '上传失败'; }
           } catch (e) { /* 轮询抖动忽略，下轮继续 */ }
         }
@@ -4503,16 +4515,17 @@
       shRender();
       try {
         let r;
+        const expire = shGetExpire();          // 0 = 永久
         if (item.path) {
           r = await fetch('/api/share/upload_path', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: item.path }),
+            body: JSON.stringify({ path: item.path, expire }),
           });
         } else {
           const fd = new FormData();
           fd.append('file', item.file, item.name);
-          r = await fetch('/api/share/upload_file', { method: 'POST', body: fd });
+          r = await fetch('/api/share/upload_file?expire=' + expire, { method: 'POST', body: fd });
         }
         const d = await r.json();
         if (!r.ok || !d.ok) {
@@ -4550,6 +4563,78 @@
     function shPushFile(f) {
       shState.list.push({ id: shState.nextId++, path: '', file: f, name: f.name || 'file',
         total: f.size || 0, sent: 0, status: 'pending', tid: null, sid: '', url: '', err: '' });
+    }
+
+    // ---------- 有效期（2026-09-21 新增）----------
+    // 传给后端的秒数，0 = 永久；后端经 X-Expire 交给分享节点计算 expire_at。
+    function shGetExpire() {
+      if (!el.shareExpireSel) return 0;
+      const v = parseInt(el.shareExpireSel.value, 10);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    }
+
+    // ---------- 我的分享：列表 / 删除 / 探活（2026-09-21 新增）----------
+    // 为什么要有：shState 原先是纯内存，切走页面或重开 App 记录全丢 —— 已发出的链接与
+    // 二维码再也找不回；且发出去的东西**既撤不回也删不掉**（节点侧早就有 DELETE 与
+    // X-Expire，桌面端一个都没接上）。记录落盘在后端，删服务器文件也由后端用它内置的
+    // 凭据去调，用户不需要经手任何服务器操作。
+    async function shLoadHistory(probe) {
+      try {
+        const r = await fetch('/api/share/history' + (probe ? '?probe=1' : ''));
+        const d = await r.json();
+        if (d && d.ok) shState.hist = d.items || [];
+      } catch (e) { /* 后端未就绪时静默，不影响上传主流程 */ }
+      // 无论成败都渲染一次：接口不可用时也要让用户看到这块是干什么的，而不是一片空白
+      shRenderHistory();
+    }
+
+    // 剩余有效期文案。expire_at=0 ⇒ 永久（与后端语义一致，不做过期判定）。
+    function shHistLife(it) {
+      if (!it.expire_at) return { text: '永久有效', cls: 'ok' };
+      const left = it.expire_at - Math.floor(Date.now() / 1000);
+      if (left <= 0) return { text: '已过期', cls: 'gone' };
+      const day = Math.floor(left / 86400), hour = Math.floor(left / 3600);
+      const s = day >= 1 ? day + ' 天'
+        : (hour >= 1 ? hour + ' 小时' : Math.max(1, Math.floor(left / 60)) + ' 分钟');
+      return { text: '剩 ' + s, cls: left < 86400 ? 'warn' : 'ok' };
+    }
+
+    function shHistTime(t) {
+      if (!t) return '';
+      try {
+        return new Date(t * 1000).toLocaleString('zh-CN',
+          { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      } catch (e) { return ''; }
+    }
+
+    function shRenderHistory() {
+      const box = el.shareHistList;
+      if (!box) return;
+      const n = shState.hist.length;
+      if (el.shareHistCount) el.shareHistCount.textContent = n ? (n + ' 条记录') : '还没有分享记录';
+      if (!n) {
+        box.innerHTML = '<div class="share-hist-empty">上传过的文件会记在这里，重开 App 仍在，'
+          + '可随时取回链接/二维码，或从服务器上删掉。</div>';
+        return;
+      }
+      box.innerHTML = shState.hist.map((it) => {
+        const life = shHistLife(it);
+        // 探活结果（只有点「刷新」才有）：alive=false ⇒ 节点上已经没有了（被删或过期清掉）
+        let st;
+        if (it.alive === false) st = '<span class="st gone">链接已失效</span>';
+        else if (it.expired) st = '<span class="st gone">已过期</span>';
+        else if (it.alive === true) st = '<span class="st ok">在线 · ' + life.text + '</span>';
+        else st = '<span class="st ' + life.cls + '">' + life.text + '</span>';
+        const btns = [
+          '<button type="button" class="btn btn-ghost" data-hact="qr" style="padding:4px 10px;font-size:12px;">看二维码</button>',
+          '<button type="button" class="btn btn-ghost" data-hact="del" style="padding:4px 10px;font-size:12px;">删除</button>',
+        ].join('');
+        return '<div class="share-item" data-sid="' + shEsc(it.sid) + '">'
+          + '<span class="nm">' + shEsc(it.name) + '</span>'
+          + '<span class="sz">' + shFmt(it.size) + '</span>'
+          + '<span class="hist-time">' + shEsc(shHistTime(it.time)) + '</span>'
+          + st + btns + '</div>';
+      }).join('');
     }
 
     el.shareAddBtn.addEventListener('click', () => {
@@ -4591,6 +4676,61 @@
       if (!shState.list.length) { el.shareResult.hidden = true; shState.current = null; }
       shRender();
     });
+
+    // ★ 注意：上面「清空记录」只清本次会话的待上传队列，**不动**「我的分享」历史
+    //   （那是已经发出去的分享，误清会让链接找不回）。历史的删除是逐条的。
+    if (el.shareExpireSel) {
+      el.shareExpireSel.addEventListener('change', () => {
+        try { localStorage.setItem('vdl-share-expire', el.shareExpireSel.value); } catch (e) {}
+      });
+    }
+    if (el.shareHistRefreshBtn) {
+      el.shareHistRefreshBtn.addEventListener('click', async () => {
+        const b = el.shareHistRefreshBtn, label = b.textContent;
+        b.disabled = true; b.textContent = '刷新中…';
+        await shLoadHistory(true);
+        b.disabled = false; b.textContent = label;
+      });
+    }
+    if (el.shareHistList) {
+      el.shareHistList.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-hact]');
+        if (!btn) return;
+        const row = btn.closest('.share-item');
+        const sid = row ? row.dataset.sid : '';
+        const it = shState.hist.find((x) => x.sid === sid);
+        if (!it) return;
+
+        if (btn.dataset.hact === 'qr') {
+          // 复用上传完成后的结果区：喂一个同形状的对象即可
+          shShowResult({ name: it.name, url: it.url, total: it.size });
+          return;
+        }
+        if (btn.dataset.hact === 'del') {
+          // ⚠️ 用内置确认框，不用 window.confirm —— 后者在 pywebview 下无效
+          const yes = await showConfirm(
+            '删除后链接立即失效，服务器上的文件也会一起清除，无法恢复。\n\n确定删除「' + it.name + '」吗？',
+            { okText: '删除', cancelText: '取消', danger: true });
+          if (!yes) return;
+          btn.disabled = true; btn.textContent = '删除中…';
+          try {
+            const r = await fetch('/api/share/history/' + encodeURIComponent(sid), { method: 'DELETE' });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.ok) throw new Error((d && (d.detail || d.error)) || ('HTTP ' + r.status));
+            shState.hist = shState.hist.filter((x) => x.sid !== sid);
+            shRenderHistory();
+            // 结果区展示的正是它 → 一并收起来，免得留着一张已失效的二维码
+            if (shState.current && shState.current.url === it.url) {
+              el.shareResult.hidden = true; shState.current = null;
+            }
+            showToast('已删除「' + it.name + '」');
+          } catch (err) {
+            btn.disabled = false; btn.textContent = '删除';
+            window.alert('删除失败：' + ((err && err.message) || '未知错误'));
+          }
+        }
+      });
+    }
     el.shareCopyBtn.addEventListener('click', async () => {
       const v = el.shareUrlInput.value;
       if (!v) return;
