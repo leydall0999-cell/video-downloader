@@ -123,13 +123,20 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     if _peer and not app.is_china_host(host) and not (payload.proxy or "").strip():
         try:
             import requests as _rq
+            import logging as _logging
+            _logging.getLogger(__name__).info("[peer] 海外站转发对端解析: %s -> %s", host, _peer)
             _r = _rq.post(_peer + "/api/resolve",
                           json={"url": payload.url, "cookie": payload.cookie or "", "proxy": ""},
-                          timeout=timeout + 10)
+                          timeout=timeout + 10,
+                          # 必须显式禁用环境代理：桌面端进程常继承 Clash/系统代理，
+                          # 走代理访问自家节点会被误拦（与 _call_vps_worker 同理）
+                          proxies={"http": None, "https": None})
             if _r.status_code == 200:
                 return _r.json()
-        except Exception:  # noqa: BLE001
-            pass  # 对端不可达 → 回落本机
+            _logging.getLogger(__name__).warning("[peer] 对端解析返回 HTTP %s", _r.status_code)
+        except Exception as _exc:  # noqa: BLE001
+            import logging as _logging
+            _logging.getLogger(__name__).warning("[peer] 对端解析异常，回落本机: %s", _exc)
 
     loop = app.asyncio.get_running_loop()
     try:

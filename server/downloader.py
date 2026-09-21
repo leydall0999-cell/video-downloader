@@ -4464,6 +4464,12 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
         import requests as _rq
     except Exception:  # noqa: BLE001
         _rq = None
+    if _rq is not None:
+        # 换成 Session 并关闭 trust_env：桌面端进程常继承 Clash/系统代理，
+        # 若不禁用，访问自家节点会被代理误拦（与 _call_vps_worker 同理）。
+        # 绑定回 _rq 后下面所有 _rq.post/get/head 自动复用同一会话（回传大文件也更快）。
+        _rq = _rq.Session()
+        _rq.trust_env = False
 
     peer = (os.environ.get("VDL_PEER_ENDPOINT") or "").strip().rstrip("/")
     if not peer or _rq is None:

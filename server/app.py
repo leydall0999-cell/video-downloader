@@ -3644,6 +3644,11 @@ def _ensure_vps_env() -> None:
             if peer:
                 NODE_REGION = str(raw.get("region") or "cn").strip().lower() or "cn"
                 PEER_ENDPOINT = peer
+                # 同步写入环境变量：downloader.run_remote_download 只能从 os.environ 取
+                # （downloader 不能 import app，会循环依赖）。用 setdefault 以免覆盖
+                # 部署者显式设置的值；能进这个分支说明两者原本都为空。
+                os.environ.setdefault("VDL_REGION", NODE_REGION)
+                os.environ.setdefault("VDL_PEER_ENDPOINT", peer)
                 logger.info("[vps] 桌面端启用双节点转发: region=%s peer=%s", NODE_REGION, PEER_ENDPOINT)
 
 _ensure_vps_env()
