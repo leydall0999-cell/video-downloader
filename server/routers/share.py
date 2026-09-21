@@ -50,9 +50,11 @@ from fastapi.responses import JSONResponse, Response
 
 router = APIRouter()
 
-# ---- 内置默认（对应自建节点 8.138.223.3 上的 vdl-share） ----
-DEFAULT_BASE = "https://share.hanyuxz.top"
-DEFAULT_DIRECT = "http://8.138.223.3:8888/su"
+# ---- 内置默认（2026-09-21 起分享服务迁至香港节点 47.82.101.79，公网入口 hanyuxz.top）----
+# 运行时以 ~/.videodownloader/share.json 为准，这里是它缺失（换机/重装）时的兜底。
+# 为什么弃用旧的 share.hanyuxz.top：该子域从来没有 DNS 记录，链路必然回退明文直连。
+DEFAULT_BASE = "https://hanyuxz.top"
+DEFAULT_DIRECT = "http://47.82.101.79/api/upload"
 DEFAULT_TOKEN = "_hI50c3L0HYZ2kK_jMXa5tzKY7BnS_3b"
 
 CF_BODY_LIMIT = 100 * 1024 * 1024      # Cloudflare 免费版请求体上限
