@@ -36,6 +36,7 @@ logger = logging.getLogger("vdl-daemon")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bilibili_ecs_cookie import push_once, _collect_cookies, _push_to_cloud  # noqa: E402
 from douyin_resolve import resolve as douyin_resolve  # noqa: E402
+import douyin_direct  # noqa: E402  抖音 a_bogus 签名直连（快路，免 Chromium）
 from kuaishou_resolve import resolve as kuaishou_resolve  # noqa: E402
 from weibo_resolve import resolve as weibo_resolve  # noqa: E402
 from ximalaya_album_resolve import resolve_album as ximalaya_album_resolve  # noqa: E402
@@ -294,6 +295,14 @@ def do_resolve(platform, url, cookie=""):
     resolver = _RESOLVERS.get(platform)
     if resolver is None:
         return False, "不支持的平台: %s" % platform
+    # 抖音快路：a_bogus 签名纯 HTTP 直连（免 Chromium、不占 _resolve_lock，
+    # 实测 ~0.7s/条 vs Playwright 20s+）。签名被抖音风控升级打掉或链接
+    # 非视频页时才回落 Playwright 浏览器方案，快路失败对用户透明。
+    if platform == "douyin":
+        try:
+            return True, douyin_direct.resolve(url)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[douyin-direct] 直连失败，回落 Playwright: %s", str(e)[:150])
     if not _resolve_lock.acquire(blocking=False):
         # 上一轮 Chromium 还在跑：最多等 8s（避免并发请求无限排队 + 线程堆积
         # 撑爆小内存 VPS；等不到就返回「解析忙」让 Railway 端给用户可读提示）
