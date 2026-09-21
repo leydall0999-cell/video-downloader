@@ -54,16 +54,34 @@ def test_activate_records_device_fp_and_status_ok(monkeypatch):
     assert "device_locked" not in s
 
 
-def test_status_locked_on_device_mismatch(monkeypatch):
+def test_status_not_locked_when_machine_changed(monkeypatch):
+    """账号制核心：换机/重装不再锁会员 —— 重新登录即可，不必人工解绑。"""
     cur = [T0]
     st = _mkstore(cur)
     st.activate("download_year", via="license", device_fp=FP_A)
     _fake_device_id(monkeypatch, FP_B, strong=True)   # 换了一台机器
     s = st.status()
-    assert s["device_locked"] == "DEVICE_MISMATCH"
-    assert s["download_member"]["active"] is False
-    # 数据保留（不删状态）：换回原机即恢复
+    assert "device_locked" not in s
+    assert s["download_member"]["active"] is True
+
+
+def test_evicted_locks_and_relogin_unlocks(monkeypatch):
+    """被别的机器挤出 -> 本机降级；重新登录（set_evicted(False)）立即恢复。"""
+    cur = [T0]
+    st = _mkstore(cur)
+    st.save_account("u@x.com", "dummy-token", {"devices": [], "max_devices": 2}, fp=FP_A)
+    st.apply_cloud_purchases([{"id": "p1", "plan_code": "download_year"}])
     _fake_device_id(monkeypatch, FP_A, strong=True)
+    assert st.status()["download_member"]["active"] is True
+
+    st.set_evicted(True)
+    s = st.status()
+    assert s["device_locked"] == "DEVICE_EVICTED"
+    assert s["download_member"]["active"] is False
+    assert s["account"]["evicted"] is True
+
+    st.set_evicted(False)          # 重新登录 = 抢回名额
+    assert "device_locked" not in st.status()
     assert st.status()["download_member"]["active"] is True
 
 
@@ -105,11 +123,19 @@ def test_activate_rejects_malformed_fp():
 
 
 def test_device_lock_reason_is_pure():
-    """纯函数路径：不经过 fingerprint() 也能判锁（供路由层带指纹调用）。"""
+    """纯函数路径：不经过 fingerprint() 也能判锁（供路由层带指纹调用）。
+
+    账号制：换机（FP_B）不再构成锁定；只有 ADMIN 停用 / 被挤出才算。
+    """
     cur = [T0]
     st = _mkstore(cur)
-    assert st.device_lock_reason(FP_A) is None           # 未绑定
+    assert st.device_lock_reason(FP_A) is None           # 未绑定任何机器
     st.activate("download_year", device_fp=FP_A)
     assert st.device_lock_reason(FP_A) is None           # 本机
-    assert st.device_lock_reason(FP_B) == "DEVICE_MISMATCH"
-    assert st.device_lock_reason(FP_B, strong=False) is None  # 弱指纹放行
+    assert st.device_lock_reason(FP_B) is None           # 换机：放行（不再卡死）
+    assert st.device_lock_reason(FP_B, strong=False) is None
+    st.set_evicted(True)
+    assert st.device_lock_reason(FP_A) == "DEVICE_EVICTED"
+    st.set_evicted(False)
+    st.set_license_revoked(True)
+    assert st.device_lock_reason(FP_A) == "LICENSE_REVOKED"

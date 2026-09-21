@@ -355,6 +355,7 @@ class MembershipStore:
             out["ai_member"]["active"] = False
             out["ai_member"]["credits_left"] = 0
             out["device_locked"] = lock
+        out["account"] = self.account_view()
         return out
 
     def _device_lock(self) -> Optional[str]:
@@ -464,28 +465,118 @@ class MembershipStore:
         self._persist()
         return result
 
-    # ---- 设备绑定校验（P2 一机一码） ----
-    def device_lock_reason(self, current_fp: str, strong: bool = True) -> Optional[str]:
-        """当前设备与绑定设备不符时返回锁定原因，否则 None。
+    # ---- 设备/账号状态（账号制定版） ----
+    def device_lock_reason(self, current_fp: str = "", strong: bool = True) -> Optional[str]:
+        """会员是否在本次查询中被「降级停用」。返回原因或 None。
 
-        规则（宁漏勿误伤付费用户）：
-          - 未绑过设备 / 未激活过 → 不锁（老用户向后兼容）
-          - 当前是弱指纹 → 不锁（系统级 ID 取不到时别错杀）
-          - 卡密被云端作废（meta.license_revoked）→ 锁
-          - 强指纹与 meta.device_fp 不一致 → 锁
+        账号制语义（2026-09-22 起）：**不再因为机器换了就锁死会员**。
+        member.json 被拷贝到别的机器用另一回事 —— 真正的限制在云端「同账号最多
+        N 台设备」（见 deploy/license_server.py 的 device 配额），挤掉由 heartbeat
+        发现后写到这里。调用方应放宽心态：宁可漏管一台，也不让付费用户被锁死。
+
+        仅两种情况停用：
+          - LICENSE_REVOKED：卡密/账号被管理员停用（主动行为）
+          - DEVICE_EVICTED：该账号已在其他两台设备登录，本机被挤掉（重新登录即恢复）
         """
         self._ensure_loaded()
         meta = self._state.get("meta") or {}
         if meta.get("license_revoked"):
             return "LICENSE_REVOKED"
-        bound = str(meta.get("device_fp") or "")
-        if not bound:
-            return None
-        if not strong:
-            return None
-        if current_fp != bound:
-            return "DEVICE_MISMATCH"
+        acct = meta.get("account") or {}
+        if acct.get("evicted"):
+            return "DEVICE_EVICTED"
         return None
+
+    # ---- 云端账号状态 ----
+    def save_account(self, email: str, token: str, account: Optional[dict] = None,
+                     fp: str = "", name: str = "") -> dict[str, Any]:
+        """记录登录态（token/邮箱/设备列表），清掉 evicted 标记。"""
+        self._ensure_loaded()
+        meta = self._state.setdefault("meta", {})
+        acc = meta.setdefault("account", {})
+        acc.update({
+            "email": (email or "").strip().lower(),
+            "token": token or "",
+            "fp": fp or acc.get("fp", ""),
+            "name": name or acc.get("name", ""),
+            "evicted": False,
+            "logged_in": bool(token),
+            "last_sync": self._now(),
+        })
+        if isinstance(account, dict):
+            acc["devices"] = account.get("devices") or []
+            acc["max_devices"] = int(account.get("max_devices") or 2)
+        if "purchases_applied" not in acc:
+            acc["purchases_applied"] = []
+        self._persist()
+        return {"ok": True}
+
+    def clear_account(self) -> dict[str, Any]:
+        """本地登出：清 token 与设备信息，但**保留已购买的权益**（重要）。
+
+        换机重装时权益必须跟着账号走，所以这里只清登录态，不动 membership 本体。
+        """
+        self._ensure_loaded()
+        meta = self._state.setdefault("meta", {})
+        acc = meta.get("account") or {}
+        acc.update({"token": "", "email": acc.get("email", ""), "logged_in": False,
+                    "evicted": False, "devices": [], "last_sync": 0.0})
+        meta["account"] = acc
+        self._persist()
+        return {"ok": True}
+
+    def set_evicted(self, evicted: bool) -> None:
+        """被其他设备挤出时标记 → status() 立即降级为免费档。"""
+        self._ensure_loaded()
+        acc = self._state.setdefault("meta", {}).setdefault("account", {})
+        acc["evicted"] = bool(evicted)
+        self._persist()
+
+    def apply_cloud_purchases(self, purchases: list[dict[str, Any]],
+                              via: str = "license") -> dict[str, Any]:
+        """把云端账号下的套餐/积分包**按 purchase id 幂等**落户到本地权益。
+
+        幂等是硬要求：登录会重复调用，若不按 id 去重，每次登录都会给会员顺延一年。
+        """
+        self._ensure_loaded()
+        acc = self._state.setdefault("meta", {}).setdefault("account", {})
+        applied = acc.setdefault("purchases_applied", [])
+        if not isinstance(applied, list):
+            applied = acc["purchases_applied"] = []
+        out_applied: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for p in (purchases or []):
+            if not isinstance(p, dict):
+                continue
+            pid = str(p.get("id") or "").strip()
+            plan_code = str(p.get("plan_code") or "").strip()
+            if not pid or not plan_code or pid in applied:
+                continue
+            res = self.activate(plan_code, via=via)
+            if res.get("ok"):
+                applied.append(pid)
+                out_applied.append(plan_code)
+            else:
+                errors.append({"id": pid, "plan_code": plan_code,
+                               "error": res.get("error") or "未知错误"})
+        acc["purchases_applied"] = applied[-500:]
+        self._persist()
+        return {"ok": not errors, "applied": out_applied, "errors": errors}
+
+    def account_view(self) -> dict[str, Any]:
+        """给前端的账号快照（不吐 token）。"""
+        self._ensure_loaded()
+        acc = (self._state.get("meta") or {}).get("account") or {}
+        return {
+            "logged_in": bool(acc.get("token")),
+            "email": acc.get("email", ""),
+            "device_fp": acc.get("fp", ""),
+            "device_name": acc.get("name", ""),
+            "devices": acc.get("devices") or [],
+            "max_devices": int(acc.get("max_devices") or 2),
+            "evicted": bool(acc.get("evicted")),
+            "last_sync": float(acc.get("last_sync") or 0),
+        }
 
     def set_license_revoked(self, revoked: bool) -> None:
         """启动校验发现卡密被作废时由路由层调用（引擎不做网络）。"""

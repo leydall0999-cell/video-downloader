@@ -3458,7 +3458,9 @@ app.include_router(_process_rtr.router)
 from routers import subscriptions as _subscriptions_rtr
 app.include_router(_subscriptions_rtr.router)
 from routers import membership as _membership_rtr
+from routers import cloud_account as _cloud_rtr
 app.include_router(_membership_rtr.router)
+app.include_router(_cloud_rtr.router)
 from routers import quota as _quota_rtr
 app.include_router(_quota_rtr.router)
 from routers import auth as _auth_rtr

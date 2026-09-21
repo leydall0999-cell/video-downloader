@@ -308,6 +308,13 @@
     memberCode: $('memberCode'),
     memberActivateBtn: $('memberActivateBtn'),
     memberActMsg: $('memberActMsg'),
+    cloudAccountBox: $('cloudAccountBox'),
+    cloudLoginBox: $('cloudLoginBox'),
+    cloudEmail: $('cloudEmail'),
+    cloudDevices: $('cloudDevices'),
+    cloudNotice: $('cloudNotice'),
+    cloudLoginBtn: $('cloudLoginBtn'),
+    cloudLogoutBtn: $('cloudLogoutBtn'),
     // 账号区（A1 本地账号）元素已上移，保持统一定义
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
@@ -15507,38 +15514,111 @@ el.dwVidPlayer.removeAttribute('src');
   async function activateMember(code) {
     if (!el.memberActivateBtn) return;
     el.memberActivateBtn.disabled = true;
-    _memberMsg('激活中…');
+    _memberMsg('充值中…');
     try {
-      // P2 一机一码：VDL- 开头 = 签名卡密 → 走云端验签+绑定设备的兑换通道；
+      // 账号制：VDL- 开头 = 签名卡密 → 充值到当前登录账号（换机无需解绑）；
       // 其余 = 套餐 code 直激活（仅限本机调试，远程会被服务端拒绝 USE_REDEEM）。
       const isLicense = /^VDL-/i.test(code);
-      const r = isLicense
-        ? await request('/api/member/redeem', { method: 'POST', body: JSON.stringify({ license_code: code }) })
-        : await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
+      let r;
+      if (isLicense) {
+        r = await request('/api/cloud/redeem', { method: 'POST', body: JSON.stringify({ code }) });
+      } else {
+        r = await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
+      }
       if (r && r.ok) {
-        showToast('会员激活成功');
-        _memberMsg('✅ 激活成功' + (r.kind ? `（${r.kind}）` : '') + (isLicense ? ' · 已绑定本机' : ''));
+        showToast('会员充值成功');
+        _memberMsg('✅ 充值成功' + (r.plan_code ? `（${r.plan_code}）` : ''));
         if (el.memberCode) el.memberCode.value = '';
         await renderMemberStatus();
+        await renderCloudAccount();
         if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
-      } else if (r && r.code === 'NO_AUTH') {
-        _memberMsg('请先登录账号后再激活（右上角登录/注册）', true);
-      } else if (r && r.code === 'ALREADY_BOUND') {
-        _memberMsg('❌ 这张卡密已绑定其他设备。换机请联系客服解绑后重试。', true);
-      } else if (r && r.code === 'REVOKED') {
-        _memberMsg('❌ 这张卡密已被作废，如有疑问请联系客服。', true);
+      } else if (r && r.code === 'NOT_LOGGED_IN') {
+        _memberMsg('请先登录账号后再充值（上方「登录 / 注册账号」）', true);
       } else if (r && r.code === 'CLOUD_UNREACHABLE') {
         _memberMsg('❌ ' + ((r && r.error) || '无法连接授权中心'), true);
+      } else if (r && r.code === 'REVOKED') {
+        _memberMsg('❌ 这张卡密已被作废，如有疑问请联系客服。', true);
+      } else if (r && r.code === 'ALREADY_USED') {
+        _memberMsg('❌ 这张卡密已被使用过，无法重复充值。', true);
       } else if (r && r.code === 'USE_REDEEM') {
-        _memberMsg('❌ 在线环境请使用卡密激活：输入 VDL- 开头的卡密后点「激活」', true);
+        _memberMsg('❌ 在线环境请使用卡密充值：输入 VDL- 开头的卡密后点「充值」', true);
       } else {
-        _memberMsg('❌ ' + ((r && r.error) || '激活失败'), true);
+        _memberMsg('❌ ' + ((r && r.error) || '充值失败'), true);
       }
     } catch (e) {
-      _memberMsg('❌ ' + ((e && (e.message || e.hint)) || '激活失败'), true);
+      _memberMsg('❌ ' + ((e && (e.message || e.hint)) || '充值失败'), true);
     } finally {
       el.memberActivateBtn.disabled = false;
     }
+  }
+  // ---- 云端账号（会员归属 + 最多 2 台设备）----
+  function _fmtAgo(ts) {
+    if (!ts) return '';
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(ts)));
+    if (s < 60) return '刚刚';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+    return Math.floor(s / 86400) + ' 天前';
+  }
+  async function renderCloudAccount() {
+    if (!el.cloudAccountBox || !el.cloudLoginBox) return;
+    let st = null;
+    try { st = await request('/api/cloud/status'); } catch (_) { /* 离线可读，忽略 */ }
+    const acc = (st && st.account) || null;
+    const loggedIn = !!(acc && acc.logged_in);
+    if (loggedIn) {
+      el.cloudAccountBox.hidden = false;
+      el.cloudLoginBox.hidden = true;
+      if (el.cloudEmail) el.cloudEmail.textContent = acc.email || '—';
+      if (el.cloudDevices) {
+        const devs = (acc.devices || []);
+        const max = acc.max_devices || 2;
+        if (!devs.length) {
+          el.cloudDevices.innerHTML = '<p class="member-cloud-devhint">尚未记录设备</p>';
+        } else {
+          el.cloudDevices.innerHTML = devs.map((d) => {
+            const cur = d.current ? ' <span class="member-cloud-cur">本机</span>' : '';
+            const when = d.last_seen ? _fmtAgo(d.last_seen) : '';
+            const unbind = d.current ? '' :
+              `<button type="button" class="btn btn-ghost btn-xs cloud-unbind" data-fp="${escHtml(d.fp)}">下线</button>`;
+            return `<div class="member-cloud-dev">${escHtml(d.name || d.fp)}${cur}<span class="member-cloud-when">${when}</span>${unbind}</div>`;
+          }).join('');
+          el.cloudDevices.insertAdjacentHTML('beforeend',
+            `<p class="member-cloud-devhint">已登录 ${devs.length} / ${max} 台设备（超出将自动挤下最久未活动的设备）</p>`);
+        }
+        el.cloudDevices.querySelectorAll('.cloud-unbind').forEach((b) => {
+          b.addEventListener('click', () => cloudUnbind(b.getAttribute('data-fp')));
+        });
+      }
+      if (el.cloudNotice) {
+        el.cloudNotice.hidden = !acc.evicted;
+        el.cloudNotice.textContent = acc.evicted ? '本机已被其他设备挤出，请重新登录以继续使用会员权益。' : '';
+      }
+    } else {
+      el.cloudAccountBox.hidden = true;
+      el.cloudLoginBox.hidden = false;
+      if (el.cloudNotice) { el.cloudNotice.hidden = true; el.cloudNotice.textContent = ''; }
+    }
+  }
+  async function cloudSyncAccount() {
+    // 后台静默同步：续期 + 拉新权益 + 检查设备名额（断网不动本地，fail-open）
+    try {
+      const r = await request('/api/cloud/sync', { method: 'POST' });
+      if (r && r.ok && el.cloudAccountBox && !el.cloudAccountBox.hidden) await renderCloudAccount();
+    } catch (_) { /* 忽略 */ }
+  }
+  async function cloudUnbind(fp) {
+    if (!fp) return;
+    try {
+      const r = await request('/api/cloud/unbind', { method: 'POST', body: JSON.stringify({ fp }) });
+      if (r && r.ok) { await renderCloudAccount(); _memberMsg('已将该设备下线'); }
+      else _memberMsg('❌ ' + ((r && r.error) || '操作失败'), true);
+    } catch (e) { _memberMsg('❌ 操作失败', true); }
+  }
+  async function cloudLogoutAccount() {
+    try { await request('/api/cloud/logout', { method: 'POST' }); } catch (_) {}
+    logoutAccount();
+    await renderCloudAccount();
   }
   // ---- 账号区（A1 本地账号：登录 / 注册 / 登出） ----
   let authMode = 'login';
@@ -15592,6 +15672,7 @@ el.dwVidPlayer.removeAttribute('src');
       updateAdminTabVisibility();
       _updateProfileSidebarLock();
       _chatRefresh();
+      cloudSyncAccount();   // 已登录：后台静默同步云端会员 + 设备名额
     } catch (_) {
       logoutAccount();
     }
@@ -16218,9 +16299,39 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.authModalClose) el.authModalClose.disabled = true;
     _authMsg('处理中…');
     try {
-      const r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+      let localToken = null, cloudAccount = null, cloudNotice = '';
+      // 1) 云端账号（会员归属 + 最多 2 台设备的真源）：一次邮箱+密码登录即开通会员，
+      //    不再绑机器。云端成功会顺带签发本地 token（功能门禁/个人中心都依赖它）。
+      const cres = await request(isReg ? '/api/cloud/register' : '/api/cloud/login', {
+        method: 'POST', body: JSON.stringify({ email: ident, password: pw }),
       });
+      if (cres && cres.ok && cres.local_token) {
+        localToken = cres.local_token;
+        cloudAccount = cres.account || null;
+        cloudNotice = cres.notice || '';
+      } else if (cres && cres.code === 'CLOUD_UNREACHABLE') {
+        _authMsg('授权中心暂时不可达，先用本地账号登录（联网后自动同步会员）', false);
+      } else if (cres && cres.code === 'EXISTS' && !isReg) {
+        // 云端已存在该账号但登录被拒（密码错等）：交给下方本地登录兜底提示
+        _authMsg((cres.error) || '登录失败', true);
+      }
+      // 2) 保底：无论如何确保本地 token（下载/字幕/个人中心门禁依赖它）
+      if (!localToken) {
+        const lres = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
+          method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+        });
+        if (lres && lres.ok && lres.token) {
+          localToken = lres.token;
+        } else if (isReg && lres && /已注册/.test(lres.error || '')) {
+          const l2 = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }) });
+          if (l2 && l2.ok && l2.token) localToken = l2.token;
+        }
+      }
+      if (!localToken) {
+        _authMsg('❌ ' + ((cres && cres.error) || (isReg ? '注册失败' : '登录失败')), true);
+        return;
+      }
+      const r = { ok: true, token: localToken, is_admin: false };
       if (r && r.ok && r.token) {
         const remember = el.authRemember ? el.authRemember.checked : true;
         if (remember) {
@@ -16235,10 +16346,12 @@ el.dwVidPlayer.removeAttribute('src');
         updateAdminTabVisibility();
         _renderAuthHeader();
         _updateProfileSidebarLock();
-        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
+        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功') + (cloudNotice ? ' · ' + cloudNotice : ''), false);
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
+        await renderAccount();
         await renderMemberStatus();
+        await renderCloudAccount();
         setTimeout(() => {
           try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); }
           // 登录/注册前有点击下载的待办，成功后自动继续
@@ -16411,7 +16524,7 @@ el.dwVidPlayer.removeAttribute('src');
     try { el.memberModal.showModal(); } catch (_) { el.memberModal.setAttribute('open', ''); }
     switchMemberTab('dl');
     if (el.memberActMsg) el.memberActMsg.hidden = true;
-    await Promise.all([renderMemberStatus(), renderMemberPlans()]);
+    await Promise.all([renderMemberStatus(), renderMemberPlans(), renderCloudAccount()]);
   }
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
@@ -17159,6 +17272,8 @@ el.dwVidPlayer.removeAttribute('src');
     activateMember(code);
   });
   if (el.memberCode) el.memberCode.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.memberActivateBtn) el.memberActivateBtn.click(); });
+  if (el.cloudLoginBtn) el.cloudLoginBtn.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} openAuthModal(); });
+  if (el.cloudLogoutBtn) el.cloudLogoutBtn.addEventListener('click', () => { cloudLogoutAccount(); });
   // ============ /会员中心 ============
   el.libDelete.addEventListener('click', deleteLibItem);
   el.libSubtitle.addEventListener('click', toggleSubPanel);
