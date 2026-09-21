@@ -12,7 +12,8 @@
 #   3) 建 venv + 装 requirements.txt
 #   4) 编译 bgutil PO token server → /opt/bgutil（YouTube bot 检测绕过，缺了就下不了 YouTube）
 #   5) 写 systemd 单元（用 start.py 启动，它会自动拉起 bgutil）→ 启动
-#   6) 自检：服务状态 / bgutil:4416 监听 / YouTube 可达性
+#   6) 装 nginx 把 80/443 反代到 APP_PORT（CF 橙云回源走标准端口，缺了 → https 521）
+#   7) 自检：服务状态 / bgutil:4416 监听 / deno / YouTube 真实下载
 #
 # 前置条件：
 #   1. 已在 VPS 控制台把本机 SSH 公钥（桌面「VPS部署SSH公钥.txt」）加进机器
@@ -30,6 +31,21 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 读配置（可选）
 VDL_PROXY_CN=""
 VDL_INSTANCE="cloud"
+
+# 反向隧道 token：国内 ECS 的 cn_tunnel_client 必须与此值一致，否则 /ws/cn-tunnel
+# 握手被 1008 拒绝 → 桌面 App 那 14 个「借国内 Playwright worker 解析」的平台全失效。
+# 默认值即 server/cn_tunnel.py 的内置默认；要轮换就在 deploy/.env 覆盖。
+VDL_TUNNEL_TOKEN="vdl-rv-tunnel-7f3a9c2e-4b1d-8c66-2e5f9a0b3c7d"
+
+# 桌面 App 的同步/解析 token（App 侧存在 ~/.videodownloader/cloud_sync.json）。
+# 本机服务靠它给 /v1/resolve 与 cookie 同步端点鉴权；留空则这些端点一律 403。
+# ⚠️ 属于凭证 —— 只能写在 deploy/.env（已被 .gitignore 覆盖），**不要提交**。
+VDL_COOKIE_SYNC_TOKEN=""
+
+# 站点域名：用于 nginx 自签证书的 CN/SAN，以及最后的访问提示。留空则只提示 IP。
+VDL_DOMAIN="${VDL_DOMAIN:-}"
+
+# Cloudflare SSL/TLS 模式需要为 Full（非 Full-strict）—— 自签证书才被接受。
 if [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]]; then
   set -a; source "$ENV_FILE"; set +a
 fi
@@ -158,7 +174,7 @@ ssh $SSH_COMMON "$REMOTE" 'set -e
 
 # 5. systemd 单元（heredoc 经 stdin 写入，变量在本地展开）
 #    用 start.py 而非裸 uvicorn：start.py 会拉起 bgutil 并放宽 WS keepalive（跨境链路必需）。
-ok "5/6 写 systemd 单元并启用…"
+ok "5/7 写 systemd 单元并启用…"
 ssh $SSH_COMMON "$REMOTE" 'cat > /etc/systemd/system/vdl-web.service' <<UNIT
 [Unit]
 Description=VDL 网页端 (uvicorn via start.py)
@@ -174,6 +190,8 @@ Environment=VDL_INSTANCE=${VDL_INSTANCE}
 Environment=VDL_REGION=global
 Environment=VDL_FFMPEG_BIN=/usr/bin/ffmpeg
 Environment=VDL_PROXY_CN=${VDL_PROXY_CN}
+Environment=VDL_TUNNEL_TOKEN=${VDL_TUNNEL_TOKEN}
+Environment=VDL_COOKIE_SYNC_TOKEN=${VDL_COOKIE_SYNC_TOKEN}
 ExecStart=/opt/vdl/.venv/bin/python start.py
 Restart=always
 RestartSec=5
@@ -183,8 +201,37 @@ WantedBy=multi-user.target
 UNIT
 ssh $SSH_COMMON "$REMOTE" 'systemctl daemon-reload; systemctl enable --now vdl-web; systemctl restart vdl-web'
 
-# 6. 自检
-ok "6/6 等待启动并自检…"
+# 6. nginx：把 80/443 反代到本机 APP_PORT
+#    为什么必须做：Cloudflare 橙云回源走标准端口（http→origin:80 / https→origin:443），
+#    应用却只监听 APP_PORT。缺这一层时 `https://<域名>` 直接 521 ——
+#    而桌面 App 的 ~/.videodownloader/cloud_sync.json 里写的就是 `https://<域名>`，
+#    于是「14 个平台解析」整条链路会以 521 表现失败（2026-09-21 实测）。
+#    证书用自签：CF 的 SSL/TLS 模为 Full（非 Full-strict）时不回源校验证书。
+ok "6/7 配置 nginx 反代（80/443 → ${APP_PORT}，含 WebSocket 升级放行）…"
+if [[ -n "$VDL_DOMAIN" ]]; then CERT_CN="$VDL_DOMAIN"; else
+  CERT_CN=$(ssh $SSH_COMMON "$REMOTE" 'hostname -I' | awk '{print $1}'); fi
+scp -q $SSH_COMMON "$PROJECT_DIR/deploy/nginx-vdl.conf" "$REMOTE:/tmp/vdl-nginx.conf"
+scp -q $SSH_COMMON "$PROJECT_DIR/deploy/nginx-ws-upgrade.conf" "$REMOTE:/tmp/vdl-ws-upgrade.conf"
+ssh $SSH_COMMON "$REMOTE" "set -e
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y -qq nginx openssl >/dev/null 2>&1
+  mkdir -p /etc/nginx/ssl /etc/nginx/conf.d
+  if [ ! -f /etc/nginx/ssl/vdl.crt ]; then
+    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+      -keyout /etc/nginx/ssl/vdl.key -out /etc/nginx/ssl/vdl.crt \
+      -subj '/CN=${CERT_CN}' -addext 'subjectAltName=DNS:${CERT_CN}' >/dev/null 2>&1
+  fi
+  install -m 644 /tmp/vdl-ws-upgrade.conf /etc/nginx/conf.d/ws_upgrade.conf
+  sed 's/__PORT__/${APP_PORT}/g; s/__DOMAIN__/${CERT_CN}/g' /tmp/vdl-nginx.conf > /etc/nginx/sites-available/vdl
+  ln -sf /etc/nginx/sites-available/vdl /etc/nginx/sites-enabled/vdl
+  rm -f /etc/nginx/sites-enabled/default /tmp/vdl-nginx.conf /tmp/vdl-ws-upgrade.conf
+  nginx -t >/dev/null 2>&1 || { echo 'nginx 配置校验失败:'; nginx -t; exit 1; }
+  systemctl enable nginx >/dev/null 2>&1
+  systemctl restart nginx
+  ss -lnt 2>/dev/null | grep -qE ':80 |:443 ' && echo 'nginx ok: 80/443 已在监听'"
+
+# 7. 自检
+ok "7/7 等待启动并自检…"
 if ssh $SSH_COMMON "$REMOTE" 'sleep 5; systemctl is-active --quiet vdl-web'; then
   echo "    vdl-web: active"
 else
@@ -219,7 +266,16 @@ ssh $SSH_COMMON "$REMOTE" 'echo "--- bgutil PO token server ---"
 PUB_IP=$(ssh $SSH_COMMON "$REMOTE" 'curl -fsS --max-time 8 https://api.ipify.org || hostname -I' | awk '{print $1}')
 echo
 ok "部署完成！浏览器打开:  http://${PUB_IP}:${APP_PORT}"
-echo "    （去云厂商控制台安全组放行 TCP ${APP_PORT}；仅自己用时可限制来源 IP）"
+echo "    （去云厂商安全组放行 TCP ${APP_PORT}、80、443；仅自己用时可限制来源 IP）"
+if [[ -n "$VDL_DOMAIN" ]]; then
+  echo "    绑域名后（Cloudflare A 记录 → ${PUB_IP}，橙云 Proxied）可直接用："
+  echo "      https://${VDL_DOMAIN}          ← 经 nginx，标准端口"
+  echo "      http://${VDL_DOMAIN}:${APP_PORT}  ← 走 CF 的 ${APP_PORT} 代理端口，绕过 nginx"
+fi
 if [[ -z "$VDL_PROXY_CN" ]]; then
   warn "未配置 VDL_PROXY_CN：B站/抖音等国内平台无法回源。把国内 ECS 的 cn_proxy 凭据填入 deploy/.env 后重跑本脚本即可。"
+fi
+if [[ -z "$VDL_COOKIE_SYNC_TOKEN" ]]; then
+  warn "未配置 VDL_COOKIE_SYNC_TOKEN：/v1/resolve 与 cookie 同步端点会一律 403（桌面 App 的 14 个平台解析会失败）。
+   把 App 的 ~/.videodownloader/cloud_sync.json 里的 token 填进 deploy/.env 后重跑，或直接改 systemd 单元加 Environment=VDL_COOKIE_SYNC_TOKEN=... 再 restart。"
 fi
