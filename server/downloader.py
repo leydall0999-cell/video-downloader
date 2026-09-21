@@ -4461,14 +4461,15 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
     import tempfile as _tempfile
     from urllib.parse import unquote as _unquote
     try:
-        import requests as _rq
+        import requests as _rq_mod
     except Exception:  # noqa: BLE001
-        _rq = None
-    if _rq is not None:
+        _rq_mod = None
+    _rq = None
+    if _rq_mod is not None:
         # 换成 Session 并关闭 trust_env：桌面端进程常继承 Clash/系统代理，
         # 若不禁用，访问自家节点会被代理误拦（与 _call_vps_worker 同理）。
         # 绑定回 _rq 后下面所有 _rq.post/get/head 自动复用同一会话（回传大文件也更快）。
-        _rq = _rq.Session()
+        _rq = _rq_mod.Session()
         _rq.trust_env = False
 
     peer = (os.environ.get("VDL_PEER_ENDPOINT") or "").strip().rstrip("/")
@@ -4562,6 +4563,9 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
 
     def _safe_name(raw: str) -> str:
         raw = (raw or "").strip().strip('"')
+        # Content-Disposition 里可能是 filename*=utf-8''xxx（Starlette 用小写），
+        # 大小写不敏感地剥掉这个编码前缀，否则文件名会变成 utf-8''xxx.mp4 这种垃圾名。
+        raw = _re.sub(r"^utf-8''", "", raw, flags=_re.I)
         raw = raw.replace("\\", "_").replace("/", "_").replace(":", "_")
         for ch in ('*', '?', '"', '<', '>', '|'):
             raw = raw.replace(ch, "_")
@@ -4572,35 +4576,109 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
         out = out.with_suffix(".mp4")
 
     task.add_step("回传文件到本机", "running", "")
+    # ⚠️ 跨境回传不能走「一条长流」：实测 84MB 的文件在 33MB 处被对端/CDN 掐断，
+    # 报 IncompleteRead(33087479 bytes read, 51372525 more expected)，整单直接失败——
+    # 前面几十 MB 全白下。改成 **分片 Range 下载**：每片独立请求、独立超时、失败只重试该片，
+    # 已下的片写盘即固化，链路抖动最多拖慢、不会整单作废。
+    CHUNK = 4 * 1024 * 1024
+
+    def _name_from_headers(resp) -> None:
+        nonlocal out
+        cd = resp.headers.get("Content-Disposition") or ""
+        m = _re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd, flags=_re.I)
+        if m:
+            nm = _safe_name(_unquote(m.group(1)))
+            if nm:
+                out = workdir / nm
+
     try:
-        with _rq.get(file_url, stream=True, timeout=300) as r:
-            if r.status_code != 200:
-                raise RuntimeError("HTTP %s" % r.status_code)
-            # 优先采用对端给的真实文件名
-            cd = r.headers.get("Content-Disposition") or ""
-            m = _re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd)
-            if m:
-                nm = _safe_name(_unquote(m.group(1)))
-                if nm:
-                    out = workdir / nm
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
+        # 探测请求：只取 1 字节，顺带拿到总长度（Content-Range: bytes 0-0/TOTAL）与真实文件名
+        r0 = _rq.get(file_url, headers={"Range": "bytes=0-0"}, timeout=(15, 90))
+        if r0.status_code not in (200, 206):
+            raise RuntimeError("HTTP %s" % r0.status_code)
+        _name_from_headers(r0)
+        total = 0
+        mm = _re.search(r"/(\d+)\s*$", (r0.headers.get("Content-Range") or "").strip())
+        if mm:
+            total = int(mm.group(1))
+        if not total:
+            total = int(r0.headers.get("Content-Length") or 0)
+        if r0.status_code == 206 and total > 0:
+            # 支持 Range 且拿到总长 → **并行分片**回传。
+            # 实测跨境单连接只有 100~900KB/s 且会被中途掐断；多连接并行能把带宽吃满，
+            # 单片失败只重试该片，已落盘的片不回退。
+            import threading as _threading
+            from concurrent.futures import ThreadPoolExecutor
+
+            with out.open("wb") as _fh:
+                _fh.truncate(total)          # 预分配，各线程按偏移写入不会互相覆盖
+            _wlock = _threading.Lock()
+            ranges = [(s, min(s + CHUNK, total) - 1) for s in range(0, total, CHUNK)]
+            workers = 4 if total > 8 * 1024 * 1024 else 2
+
+            def _fetch(rng) -> int:
+                s, e = rng
+                want = e - s + 1
+                last_err = ""
+                # requests.Session 非线程安全 → 每个线程独立建会话
+                sess = _rq_mod.Session() if _rq_mod is not None else None
+                if sess is not None:
+                    sess.trust_env = False
+                for attempt in range(4):
+                    if task.cancel_requested:
+                        return 0
+                    try:
+                        rr = (sess or _rq).get(file_url,
+                                               headers={"Range": "bytes=%d-%d" % (s, e)},
+                                               timeout=(15, 120))
+                        if rr.status_code == 206:
+                            data = rr.content or b""
+                            if not data:
+                                last_err = "空响应"
+                            elif len(data) != want:
+                                last_err = "长度不符(%d/%d)" % (len(data), want)
+                            else:
+                                with _wlock:
+                                    with out.open("r+b") as fh:
+                                        fh.seek(s)
+                                        fh.write(data)
+                                return len(data)
+                        else:
+                            last_err = "HTTP %s" % rr.status_code
+                    except Exception as exc:  # noqa: BLE001
+                        last_err = str(exc)
+                    time.sleep(min(2 + attempt * 3, 10))
+                raise RuntimeError("分片 %d-%d 回传失败：%s" % (s, e, last_err[:120]))
+
+            got_total = 0
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futs = [ex.submit(_fetch, r) for r in ranges]
+                for fu in futs:
+                    got_total += fu.result()   # 任一片最终失败 → 在此抛出
+                    if total:
+                        store.update(task.id,
+                                     progress=min(99.0, got_total * 100.0 / total))
+        else:
+            # 对端不支持 Range / 拿不到总长 → 退化成一次性整包（老行为）
             with out.open("wb") as fh:
-                for chunk in r.iter_content(chunk_size=512 * 1024):
+                for chunk in r0.iter_content(chunk_size=512 * 1024):
                     if not chunk:
                         continue
                     if task.cancel_requested:
                         return
                     fh.write(chunk)
-                    done += len(chunk)
-                    if total:
-                        store.update(task.id, progress=min(99.0, done * 100.0 / total))
     except Exception as exc:  # noqa: BLE001
         _fail("回传文件失败", str(exc))
         return
 
     if not out.exists() or out.stat().st_size <= 0:
         _fail("回传文件为空", "")
+        return
+    # 长度校验：分片写盘是按偏移 seek 的，任何一片缺失都会「看起来完成、实际残缺」，
+    # 宁可报错也不要把打不开的文件当用户成果。
+    if total and out.stat().st_size != total:
+        _fail("回传文件不完整",
+              "期望 %s，实际落盘 %s" % (_format_bytes(total), _format_bytes(out.stat().st_size)))
         return
 
     task.add_step("下载完成", "done", "文件大小：%s" % _format_bytes(out.stat().st_size))
