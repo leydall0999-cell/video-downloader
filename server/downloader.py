@@ -1054,10 +1054,15 @@ def can_download_directly(host: str) -> bool:
         if hit and now - hit[0] < _DIRECT_REACH_TTL:
             return hit[1]
     ok = False
-    # 1) 系统/环境代理存在 → yt-dlp 会自动沿用，本机即可出海
+    # 1) 系统级代理（macOS/Windows 系统代理设置）→ yt-dlp 会自动沿用，本机即可出海。
+    #    🔴 只认系统配置，**忽略进程环境变量**：从终端/工具链启动时 HTTP_PROXY 常被
+    #    注入本地服务代理（127.0.0.1:xxxx），并不代表用户真开了 VPN，据此误判会
+    #    把海外任务留在本机然后卡死。Finder/Dock 正常启动无此问题。
     try:
         import urllib.request as _ur
-        if _ur.getproxies():
+        env_proxies = _ur.getproxies_environment()
+        sys_proxies = {k: v for k, v in _ur.getproxies().items() if env_proxies.get(k) != v}
+        if sys_proxies:
             ok = True
     except Exception:  # noqa: BLE001
         pass
