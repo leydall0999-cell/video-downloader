@@ -1918,7 +1918,10 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
             ) from e
         raise ResolveError("视频解析服务不可达", f"{_clean_message(str(e))}") from e
     if not data.get("ok"):
-        raise ResolveError("视频解析失败", data.get("error") or "未知错误")
+        # worker 的 hint 才带可操作诊断（如「视频已删除/作者设为私密/短链已过期」，
+        # 含 final_url 与 streams 数），原先只取 error（恒为「视频解析失败」）
+        # 会把诊断丢掉、只剩一句笼统提示。优先透传 hint。
+        raise ResolveError("视频解析失败", data.get("hint") or data.get("error") or "未知错误")
     # 成功结果写入短时缓存（供「解析 → 立即下载」复用，避免二次 Playwright）
     _resolve_cache_put(_ckey, data)
     return data
