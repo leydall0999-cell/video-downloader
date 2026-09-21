@@ -1034,6 +1034,51 @@ CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "16") or 1
 VDL_DOWNLOADER = (os.environ.get("VDL_DOWNLOADER") or "native").strip().lower()
 _MAX_CONCURRENT = 64  # 单任务并发上限，防止被腾讯封总连接数
 
+# ---------------------------------------------------------------------------
+# 海外站「直连可达」探测：有 VPN（TUN 透明接管 / 系统代理）时应本机直连下载
+# （速度 = VPN 速度），只有确实出不去才转发香港节点兜底。
+# 探测结果按 host 缓存 60 秒，避免批量任务反复握手。
+# ---------------------------------------------------------------------------
+_DIRECT_REACH_CACHE: dict = {}
+_DIRECT_REACH_LOCK = threading.Lock()
+_DIRECT_REACH_TTL = 60.0        # 缓存秒数
+_DIRECT_REACH_TIMEOUT = 2.5     # 单次握手超时
+
+def can_download_directly(host: str) -> bool:
+    host = (host or "").strip().lower()
+    if not host:
+        return False
+    now = time.time()
+    with _DIRECT_REACH_LOCK:
+        hit = _DIRECT_REACH_CACHE.get(host)
+        if hit and now - hit[0] < _DIRECT_REACH_TTL:
+            return hit[1]
+    ok = False
+    # 1) 系统/环境代理存在 → yt-dlp 会自动沿用，本机即可出海
+    try:
+        import urllib.request as _ur
+        if _ur.getproxies():
+            ok = True
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) TLS 握手探测（覆盖 TUN 模式与真裸连）。必须带 TLS：GFW 的 DNS 污染
+    #    常给出能完成 TCP 握手的假 IP，只有证书校验通过的 TLS 才算真连通。
+    if not ok:
+        try:
+            import socket as _socket
+            import ssl as _ssl
+            raw = _socket.create_connection((host, 443), timeout=_DIRECT_REACH_TIMEOUT)
+            raw.settimeout(_DIRECT_REACH_TIMEOUT)
+            ctx = _ssl.create_default_context()
+            tls = ctx.wrap_socket(raw, server_hostname=host)
+            tls.close()
+            ok = True
+        except Exception:  # noqa: BLE001
+            ok = False
+    with _DIRECT_REACH_LOCK:
+        _DIRECT_REACH_CACHE[host] = (now, ok)
+    return ok
+
 def _clamp_concurrency(value: int) -> int:
     if not value or value < 1:
         return CONCURRENT_FRAGMENTS

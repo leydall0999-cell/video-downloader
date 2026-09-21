@@ -120,7 +120,8 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     # 这里做后端兜底：只要声明了对端节点、目标是海外站、且用户未显式指定代理，
     # 就交给对端解析；对端不可达才回落本机原有逻辑。
     _peer = (app.PEER_ENDPOINT or "").strip().rstrip("/")
-    if _peer and not app.is_china_host(host) and not (payload.proxy or "").strip():
+    if (_peer and not app.is_china_host(host) and not (payload.proxy or "").strip()
+            and not app.downloader.can_download_directly(host)):
         try:
             import requests as _rq
             import logging as _logging
@@ -341,7 +342,8 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     # 整个下载交给对端执行、成品再回传本机（run_remote_download），本机无需出网链路。
     # 用户自己填了代理时仍走本机（此时本机本就能出海，避免跨境回传的带宽损耗）。
     _peer = (app.PEER_ENDPOINT or "").strip().rstrip("/")
-    if _peer and not app.is_china_host(app._host_of(url)) and not (payload.proxy or "").strip():
+    if (_peer and not app.is_china_host(app._host_of(url)) and not (payload.proxy or "").strip()
+            and not app.downloader.can_download_directly(app._host_of(url))):
         _runner = app.downloader.run_remote_download
     else:
         _runner = app.downloader.run_download
