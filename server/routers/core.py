@@ -125,9 +125,14 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         try:
             import requests as _rq
             import logging as _logging
-            _logging.getLogger(__name__).info("[peer] 海外站转发对端解析: %s -> %s", host, _peer)
+            # 🔴 用户没手动粘贴 Cookie 时，把本机浏览器里实时解密出的登录态一并带给对端：
+            # 对端（无浏览器的服务器）自己的 Cookie 源大概率是空的，不带这条就会误报
+            # 「YouTube 需要登录 Cookie」——明明本机浏览器明明登录着（2026-09-22 实测踩坑）。
+            _ck = payload.cookie or (app.downloader.get_browser_cookie_header(host, payload.url) or "")
+            _logging.getLogger(__name__).info("[peer] 海外站转发对端解析: %s -> %s (cookie_len=%s)",
+                                              host, _peer, len(_ck or ""))
             _r = _rq.post(_peer + "/api/resolve",
-                          json={"url": payload.url, "cookie": payload.cookie or "", "proxy": ""},
+                          json={"url": payload.url, "cookie": _ck, "proxy": ""},
                           timeout=timeout + 10,
                           # 必须显式禁用环境代理：桌面端进程常继承 Clash/系统代理，
                           # 走代理访问自家节点会被误拦（与 _call_vps_worker 同理）
@@ -337,16 +342,24 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
-    task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
     # 出国兜底（2026-09-21）：海外平台 + 已声明对端节点 + 用户未显式指定代理 →
     # 整个下载交给对端执行、成品再回传本机（run_remote_download），本机无需出网链路。
     # 用户自己填了代理时仍走本机（此时本机本就能出海，避免跨境回传的带宽损耗）。
     _peer = (app.PEER_ENDPOINT or "").strip().rstrip("/")
-    if (_peer and not app.is_china_host(app._host_of(url)) and not (payload.proxy or "").strip()
-            and not app.downloader.can_download_directly(app._host_of(url))):
+    _host_of_url = app._host_of(url)
+    _goes_remote = bool(_peer and not app.is_china_host(_host_of_url)
+                        and not (payload.proxy or "").strip()
+                        and not app.downloader.can_download_directly(_host_of_url))
+    # 🔴 走对端时，本机浏览器实时解密的登录态必须跟着走（对端没有浏览器，
+    # 缺它就会误报「需要登录 Cookie」——与 resolve 转发同理，2026-09-22 实测踩坑）。
+    _task_cookie = payload.cookie
+    if _goes_remote and not (_task_cookie or "").strip():
+        _task_cookie = app.downloader.get_browser_cookie_header(_host_of_url, url) or ""
+    if _goes_remote:
         _runner = app.downloader.run_remote_download
     else:
         _runner = app.downloader.run_download
+    task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=_task_cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
     app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
     _charged = app.current_member_store(request).use_daily('download', 1)
