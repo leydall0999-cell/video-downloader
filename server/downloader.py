@@ -1478,13 +1478,16 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             _cookie_diag("cookie_bare_value_fixed", "bilibili bare SESSDATA auto-prefixed")
         headers["Cookie"] = cookie_text
     # YouTube 专用参数：player_client 选择。
-    # 2026-08 起 YouTube 对 web/ios client 强制 SABR 流（DASH only），
-    # 导致 extract_info 拿不到任何可下载格式（formats 为空或仅含图片）。
-    # android_music / tv_embedded / media_connect / create 仍返回完整格式列表。
+    # 2026-09-21 实测（yt-dlp 2026.08.19）：原选的 tv_embedded 已被 yt-dlp 移除
+    # （日志 "Skipping unsupported client tv_embedded"），触发静默回退到默认
+    # android_vr；而 bgutil 是按 client 生成 gvs PO Token 的（默认为 web_safari），
+    # token 与 client 不匹配 → googlevideo 对分片一律 403
+    # （现象：/api/resolve 解析成功且能拿到 play_url，下载却 403）。
+    # 改用 web_safari：与 bgutil 生成的 PO Token 同 client，实测可正常下载。
     # 注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
-    # 多 client 列表会导致 web 的空 SABR 结果污染整体，必须只传一个。
+    # 多 client 列表会导致空 SABR 结果污染整体，必须只传一个。
     if host and ("youtube.com" in host or "youtu.be" in host):
-        options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
+        options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["web_safari"]
     elif not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
@@ -3636,7 +3639,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # "This video is unavailable"/"Sign in to confirm you're not a bot" 这类业务
         # 错误既不抛 DownloadError 也不 logger.error，导致前端「未获取到视频信息」
         # 误导。让 yt-dlp 真实抛 DownloadError，由下方 except DownloadError 分支
-        # 统一捕获 + extract_flat/tv_embedded 降级。
+        # 统一捕获 + extract_flat / web_safari 降级。
         with _YoutubeDL(opts) as ydl:
             # 诊断：记录 yt-dlp 运行时真实配置（proxy/handlers/每 handler proxies）
             try:
@@ -3742,7 +3745,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                     opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
                     opts2["extract_flat"] = "in"
                     if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
-                        opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["tv_embedded"]
+                        opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["web_safari"]
                     with _YoutubeDL(opts2) as ydl2:
                         info = ydl2.extract_info(url, download=False)
                         _last_err = None  # 降级成功
@@ -4459,9 +4462,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             if info.get("extractor") == "bilibili" and info.get("requested_formats"):
                 _rebuild_requested_formats(info, quality_key)
 
-            # YouTube 403 自动降级：tv_embedded 等客户端的某些格式 ID
+            # YouTube 403 自动降级：部分 client 的格式 ID
             # （如 AV1 400/39x、部分 H.264 298/18）URL 被 Google CDN 拒绝，
-            # 捕获后自动换已知可用格式重试，用户无感知。
+            # 捕获后自动换 client 与已知可用格式重试，用户无感知。
             try:
                 ydl.process_info(info)
             except (DownloadError, ExtractorError) as _exc:
@@ -4496,9 +4499,12 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     #   ios    → Requested format is not available（SABR 无格式）
                     #   tv     → The page needs to be reloaded
                     #   android → ✅ 直连 mp4 对云 IP 放行，成功
-                    #   tv_embedded → 解析 OK 但下载分片 403
-                    # 故 android 前置（首次尝试即成功，降级 ~35s），其余兜底。
-                    _yt_clients = ["android", "ios", "tv", "web_safari", "tv_embedded"]
+                    # 2026-09-21 复测（yt-dlp 2026.08.19 + bgutil 2.0.0，阿里云香港 IP）：
+                    #   android / tv_embedded → 分片一律 403（bgutil 的 gvs PO Token
+                    #   按 client 生成，与 android 不匹配；tv_embedded 已被 yt-dlp 移除）
+                    #   web_safari → ✅ 与 PO Token 同 client，实测 12MB 秒下
+                    # 故 web_safari 前置，其余兜底。
+                    _yt_clients = ["web_safari", "android", "ios", "tv"]
                     _done = False
                     for _client in _yt_clients:
                         if task.cancel_requested:
