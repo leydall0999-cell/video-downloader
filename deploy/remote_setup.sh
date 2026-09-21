@@ -131,7 +131,15 @@ ssh $SSH_COMMON "$REMOTE" 'set -e
     chmod +x /usr/local/bin/deno
     rm -f /tmp/deno.zip
   fi
-  echo "python: $(python3 --version 2>&1) | ffmpeg: $(ffmpeg -version | head -1) | node: $(node -v) | deno: $(deno --version | head -1)"'
+  echo "python: $(python3 --version 2>&1) | ffmpeg: $(ffmpeg -version | head -1) | node: $(node -v) | deno: $(deno --version | head -1)"
+  # 拥塞控制：默认 cubic 在跨境高延迟线路上会把吞吐压到几十 KB/s
+  # （2026-09-21 实测：大陆→香港该机 92KB/s；换 BBR 后 1.07MB/s，11.6 倍）。
+  # 模块与 sysctl 双持久化，重启后仍生效。
+  modprobe tcp_bbr 2>/dev/null || true
+  echo tcp_bbr > /etc/modules-load.d/bbr.conf
+  printf "net.core.default_qdisc = fq\nnet.ipv4.tcp_congestion_control = bbr\n" > /etc/sysctl.d/99-bbr.conf
+  sysctl --system >/dev/null 2>&1 || true
+  echo "拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null) | qdisc: $(sysctl -n net.core.default_qdisc 2>/dev/null)"'
 
 # 2. 推送代码（排除大目录/缓存，避免传几 GB 的 build/dist）
 ok "2/6 推送代码到 VPS (/opt/vdl)…"
