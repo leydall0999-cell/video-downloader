@@ -114,6 +114,23 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         timeout = app.RESOLVE_TIMEOUT_DOMESTIC
     else:
         timeout = app.RESOLVE_TIMEOUT_SECONDS
+    # 出国兜底（2026-09-21）：桌面端跑在国内、本机没有出网链路时，海外站直连必然超时。
+    # 前端 baseFor() 已经会把海外链接转发给对端，但那依赖 /api/nodes 请求成功
+    # （跨境链路实测约 20% 概率失败），一旦失败前端拿不到 peer 就会退回本机 → 超时。
+    # 这里做后端兜底：只要声明了对端节点、目标是海外站、且用户未显式指定代理，
+    # 就交给对端解析；对端不可达才回落本机原有逻辑。
+    _peer = (app.PEER_ENDPOINT or "").strip().rstrip("/")
+    if _peer and not app.is_china_host(host) and not (payload.proxy or "").strip():
+        try:
+            import requests as _rq
+            _r = _rq.post(_peer + "/api/resolve",
+                          json={"url": payload.url, "cookie": payload.cookie or "", "proxy": ""},
+                          timeout=timeout + 10)
+            if _r.status_code == 200:
+                return _r.json()
+        except Exception:  # noqa: BLE001
+            pass  # 对端不可达 → 回落本机
+
     loop = app.asyncio.get_running_loop()
     try:
         info = await app.asyncio.wait_for(loop.run_in_executor(app.prober, app.downloader.probe, url, payload.cookie, payload.proxy), timeout=timeout)
@@ -313,7 +330,15 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
     task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls)
-    app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
+    # 出国兜底（2026-09-21）：海外平台 + 已声明对端节点 + 用户未显式指定代理 →
+    # 整个下载交给对端执行、成品再回传本机（run_remote_download），本机无需出网链路。
+    # 用户自己填了代理时仍走本机（此时本机本就能出海，避免跨境回传的带宽损耗）。
+    _peer = (app.PEER_ENDPOINT or "").strip().rstrip("/")
+    if _peer and not app.is_china_host(app._host_of(url)) and not (payload.proxy or "").strip():
+        _runner = app.downloader.run_remote_download
+    else:
+        _runner = app.downloader.run_download
+    app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
     _charged = app.current_member_store(request).use_daily('download', 1)
     _qs = app.current_member_store(request).quota_state('download')

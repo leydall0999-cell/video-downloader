@@ -4444,6 +4444,165 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             eta=0,
         )
 
+def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str = "", cookie: str = "",
+                        proxy: str = "", max_retries: int = 0, format_id: str = "",
+                        concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
+    """海外站点下载：把任务整个交给对端（海外）节点执行，再把成品回传本机。
+
+    背景：桌面端跑在国内、本机没有出网链路时，YouTube 等海外站直连必然解析/下载超时。
+    前端 baseFor() 已经会把海外链接转发给对端，但那依赖 /api/nodes 请求成功
+    （跨境链路实测约 20% 概率失败），一旦失败前端拿不到 peer 就退回本机 → 超时。
+    本函数是**后端兜底**：只要声明了 VDL_PEER_ENDPOINT，海外平台一律交给对端执行，
+    对端不可达才报错。本机因此完全不需要翻墙链路。
+
+    签名与 run_download 保持一致，供 scheduler 直接替换。
+    """
+    import re as _re
+    import tempfile as _tempfile
+    from urllib.parse import unquote as _unquote
+    try:
+        import requests as _rq
+    except Exception:  # noqa: BLE001
+        _rq = None
+
+    peer = (os.environ.get("VDL_PEER_ENDPOINT") or "").strip().rstrip("/")
+    if not peer or _rq is None:
+        store.update(task.id, status="failed", error="海外节点不可用",
+                     hint="未配置海外节点（VDL_PEER_ENDPOINT），无法下载海外视频",
+                     category="network")
+        return
+
+    def _fail(err: str, hint: str) -> None:
+        store.update(task.id, status="failed", error=err, hint=_clean_message(hint)[:300],
+                     category="network")
+
+    task.add_step("提交到海外节点", "running", peer)
+    try:
+        resp = _rq.post(peer + "/api/download",
+                        json={"url": task.url, "quality": quality_key or BEST_KEY,
+                              "title": task.title or "", "cookie": "", "proxy": "",
+                              "format_id": format_id or "",
+                              "extract_script": task.extract_mode or ""},
+                        timeout=60)
+        if resp.status_code != 200:
+            raise RuntimeError("HTTP %s" % resp.status_code)
+        cloud_id = str((resp.json() or {}).get("task_id") or "")
+    except Exception as exc:  # noqa: BLE001
+        _fail("提交到海外节点失败", str(exc))
+        return
+    if not cloud_id:
+        _fail("海外节点未返回任务 ID", "")
+        return
+
+    task.log("已提交到海外节点：%s" % cloud_id)
+    store.update(task.id, status="downloading", progress=0.0)
+
+    # 轮询对端进度。⚠️ 对端任务完成后详情接口可能返回空（保留策略会清理），
+    # 因此不能只依赖状态接口：状态不可读时改用 HEAD 探测成品文件是否就绪。
+    file_url = "%s/api/tasks/%s/file" % (peer, cloud_id)
+    status_url = "%s/api/tasks/%s" % (peer, cloud_id)
+    ready = False
+    for _ in range(600):                      # 最长约 30 分钟
+        if task.cancel_requested or task.is_finished:
+            try:
+                _rq.post("%s/api/tasks/%s/cancel" % (peer, cloud_id), timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        st: dict[str, Any] = {}
+        try:
+            r = _rq.get(status_url, timeout=25)
+            if r.status_code == 200:
+                st = r.json() or {}
+        except Exception:  # noqa: BLE001
+            st = {}
+        status = str(st.get("status") or "")
+        if status == "completed":
+            ready = True
+            break
+        if status in ("failed", "error", "canceled"):
+            _fail("海外节点下载失败", str(st.get("error") or st.get("hint") or status))
+            return
+        if status:
+            _title = str(st.get("title") or "")
+            if _title and not task.title:
+                store.update(task.id, title=_title)
+            try:
+                store.update(task.id, status="downloading",
+                             progress=min(99.0, float(st.get("progress") or 0)))
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            # 状态接口不可用 → 直接探测成品文件是否就绪
+            try:
+                h = _rq.head(file_url, timeout=25, allow_redirects=True)
+                if h.status_code == 200 and int(h.headers.get("Content-Length") or 0) > 0:
+                    ready = True
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(3)
+
+    if not ready:
+        _fail("海外节点下载超时", "30 分钟内未完成")
+        return
+
+    # ---- 回传成品到本机 ----
+    workdir = Path(task.workdir) if task.workdir else None
+    if workdir is None:
+        workdir = Path(_tempfile.mkdtemp(prefix="vdl_remote_"))
+        task.workdir = workdir
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    def _safe_name(raw: str) -> str:
+        raw = (raw or "").strip().strip('"')
+        raw = raw.replace("\\", "_").replace("/", "_").replace(":", "_")
+        for ch in ('*', '?', '"', '<', '>', '|'):
+            raw = raw.replace(ch, "_")
+        return raw or "video.mp4"
+
+    out = workdir / _safe_name(task.title or "video") 
+    if not out.suffix:
+        out = out.with_suffix(".mp4")
+
+    task.add_step("回传文件到本机", "running", "")
+    try:
+        with _rq.get(file_url, stream=True, timeout=300) as r:
+            if r.status_code != 200:
+                raise RuntimeError("HTTP %s" % r.status_code)
+            # 优先采用对端给的真实文件名
+            cd = r.headers.get("Content-Disposition") or ""
+            m = _re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd)
+            if m:
+                nm = _safe_name(_unquote(m.group(1)))
+                if nm:
+                    out = workdir / nm
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
+            with out.open("wb") as fh:
+                for chunk in r.iter_content(chunk_size=512 * 1024):
+                    if not chunk:
+                        continue
+                    if task.cancel_requested:
+                        return
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        store.update(task.id, progress=min(99.0, done * 100.0 / total))
+    except Exception as exc:  # noqa: BLE001
+        _fail("回传文件失败", str(exc))
+        return
+
+    if not out.exists() or out.stat().st_size <= 0:
+        _fail("回传文件为空", "")
+        return
+
+    task.add_step("下载完成", "done", "文件大小：%s" % _format_bytes(out.stat().st_size))
+    task.log("海外节点下载完成：%s" % out.name)
+    store.update(task.id, status="completed", progress=100.0, filepath=out,
+                 filename=out.name, filesize=out.stat().st_size, speed=0.0, eta=0)
+
+
 def _run_extraction(task: DownloadTask, store: TaskStore, output: Path, info: dict[str, Any],
                     cookie: str = "", proxy: str = "", mode: str | None = None) -> None:
     """在后台线程里执行文案提取，结果写回任务。任何失败都降级处理，不影响下载完成态。
