@@ -39,6 +39,7 @@ import http.client
 import json
 import os
 import ssl
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -425,10 +426,25 @@ def _norm_expire(raw) -> int:
 
 
 def _start_upload(tid: str, make_reader, total: int, filename: str,
-                  expire: int = 0) -> None:
+                  expire: int = 0, cleanup_path: str = "") -> None:
+    """起后台上传线程；cleanup_path 非空时，无论成败都删掉它。
+
+    为什么把清理放在这一层：`_run_upload` 内部有多条 return（成功即返回），
+    在调用处包一层 try/finally 比给它整体加缩进更不容易改错。
+    """
     conf = _load_conf()
-    th = threading.Thread(target=_run_upload,
-                          args=(tid, make_reader, total, filename, conf, expire),
+
+    def _worker() -> None:
+        try:
+            _run_upload(tid, make_reader, total, filename, conf, expire)
+        finally:
+            if cleanup_path:
+                try:
+                    os.unlink(cleanup_path)
+                except OSError:
+                    pass
+
+    th = threading.Thread(target=_worker,
                           name="share-upload-%s" % tid, daemon=True)
     th.start()
 
@@ -471,11 +487,42 @@ def share_upload_path(payload: dict = Body(...)):
     return {"ok": True, "task_id": tid, "name": name, "size": total, "expire": expire}
 
 
+def _spool_to_tempfile(f) -> str:
+    """把上传流分块落到临时文件，返回路径（失败时清掉半截文件）。
+
+    🔴 为什么必须落盘而不是直接读 `UploadFile.file`：
+    Starlette 在**请求处理返回后**关闭 `UploadFile.file`，而真正读它的
+    `_run_upload` 跑在**后台线程**里 —— 直接读会报
+    `I/O operation on closed file`（2026-09-21 实测：桌面端走 upload_path 正常，
+    浏览器入口 upload_file 必失败）。落盘一次，后台线程就有稳定的数据源。
+    分块而非 `read()` 整份进内存：单文件上限 2GB，整份进内存会打爆小内存机器。
+    """
+    fd, path = tempfile.mkstemp(prefix="vdl_share_up_", suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = f.read(CHUNK)
+                if not chunk:
+                    break
+                out.write(chunk)
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
 @router.post("/api/share/upload_file")
-async def share_upload_file(file: UploadFile = File(...), expire: int = 0):
+def share_upload_file(file: UploadFile = File(...), expire: int = 0):
     """浏览器入口：multipart 上传（Web 版没有本地路径权限）。
 
     expire 走 query 参数（`?expire=86400`），语义与桌面端一致：0 = 永久。
+
+    ⚠️ 本函数刻意是**同步 def**：改成 async def 后 Starlette 会在响应返回时关闭
+    `UploadFile.file`，而后台上传线程仍在读它（见 `_spool_to_tempfile` 的说明）。
+    同步 def 由 FastAPI 丢进线程池执行，`file.file` 在本函数返回前一直可用。
     """
     f = file.file
     try:
@@ -491,13 +538,27 @@ async def share_upload_file(file: UploadFile = File(...), expire: int = 0):
                              "max": MAX_UPLOAD, "size": total}, status_code=413)
 
     name = os.path.basename(file.filename or "file")
+    expire = _norm_expire(expire)
+
+    try:
+        spool = _spool_to_tempfile(f)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": "spool_failed", "detail": str(exc)},
+                            status_code=500)
 
     def make_reader():
-        gen = (chunk for chunk in iter(lambda: f.read(CHUNK), b""))
+        def _read():
+            with open(spool, "rb") as fh:
+                while True:
+                    chunk = fh.read(CHUNK)
+                    if not chunk:
+                        break
+                    yield chunk
+        gen = _read()
         return lambda: next(gen, b"")
 
     tid = _new_task(name, total)
-    _start_upload(tid, make_reader, total, name, _norm_expire(expire))
+    _start_upload(tid, make_reader, total, name, expire, cleanup_path=spool)
     return {"ok": True, "task_id": tid, "name": name, "size": total}
 
 
