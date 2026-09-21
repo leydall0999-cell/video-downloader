@@ -41,6 +41,7 @@ def test_normalize_url_variants():
     assert n("https://www.douyin.com/video/7380308675841297704") == "7380308675841297704"
     assert n("https://www.douyin.com/note/73803086758412977041") == "73803086758412977041"
     assert n("https://www.iesdouyin.com/xg/video/7380308675841297704") == "7380308675841297704"
+    assert n("https://www.iesdouyin.com/share/video/7298145681699622182/?region=CN") == "7298145681699622182"
     assert n("https://www.ixigua.com/7380308675841297704") == "7380308675841297704"
     assert n("https://www.douyin.com/?modal_id=7380308675841297704") == "7380308675841297704"
     # 短链需出网展开 → 离线环境返回空串（不抛错）

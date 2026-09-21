@@ -35,6 +35,10 @@ _NOTE_RE = re.compile(r"/note/(\d{15,})")
 _MODAL_RE = re.compile(r"[?&]modal_id=(\d{15,})")
 
 
+class VideoNotFoundError(RuntimeError):
+    """签名有效但视频确证不存在（已删/私密/短链过期）——无需回落浏览器。"""
+
+
 # ---------------------------------------------------------------- SM3（国标）
 class _SM3:
     """GB/T 32905-2016 SM3 哈希，纯 Python（约 5μs/短串，够用）。"""
@@ -285,7 +289,7 @@ def _ttwid(timeout: int = 10) -> str:
 
 
 def normalize_url(url: str) -> str:
-    m = (re.search(r"(?:iesdouyin\.com/xg/video/|douyin\.com/(?:video|note)/|ixigua\.com/(?:video/|i)?|modal_id=)(\d{15,})", url))
+    m = (re.search(r"(?:iesdouyin\.com/(?:xg|share)/video/|douyin\.com/(?:video|note)/|ixigua\.com/(?:video/|i)?|modal_id=)(\d{15,})", url))
     if m:
         return m.group(1)
     if "v.douyin.com" in url or "iesdouyin.com/share" in url:
@@ -294,7 +298,7 @@ def normalize_url(url: str) -> str:
                 "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
                 "Accept": "text/html,*/*"})
             final = urllib.request.urlopen(req, timeout=15).geturl()
-            m2 = re.search(r"(?:douyin\.com/(?:video|note)/|iesdouyin\.com/xg/video/|modal_id=)(\d{15,})", final)
+            m2 = re.search(r"(?:iesdouyin\.com/(?:xg|share)/video/|douyin\.com/(?:video|note)/|modal_id=)(\d{15,})", final)
             if m2:
                 return m2.group(1)
         except Exception:
@@ -352,8 +356,11 @@ def resolve(url: str, timeout: int = 15) -> dict:
 
     detail = data.get("aweme_detail") or {}
     if not detail:
-        raise RuntimeError("详情接口无 aweme_detail（status_code=%s，视频可能已删除/私密）"
-                           % data.get("status_code"))
+        # status_code=0 说明签名被正常接受、请求成功处理，只是没有这个视频
+        # ——确定性结论，调用方无需再回落 Playwright 白耗 20s
+        raise VideoNotFoundError(
+            "抖音链接无效或视频不存在（status_code=%s）。"
+            "可能原因：视频已删除/作者设为私密/短链已过期" % data.get("status_code"))
 
     video = detail.get("video") or {}
     title = (detail.get("desc") or aweme_id).strip() or aweme_id
