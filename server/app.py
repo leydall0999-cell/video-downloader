@@ -355,7 +355,10 @@ PEER_ENDPOINT = os.environ.get("VDL_PEER_ENDPOINT", "").strip().rstrip("/")
 _allow_raw = os.environ.get("VDL_ALLOW_ORIGINS", "").strip()
 ALLOW_ORIGINS = [o.strip().rstrip("/") for o in _allow_raw.split(",") if o.strip()] or ([PEER_ENDPOINT] if PEER_ENDPOINT else [])
 RESOLVE_TIMEOUT_SECONDS = 40          # 海外站（走代理），留出代理延迟余量
-RESOLVE_TIMEOUT_DOMESTIC = 20         # 国内站（腾讯/优酷/B站等直连，本就很快；受限视频也能更快判定）
+# 国内站：腾讯/优酷/B站等直连本可很快，但抖音/快手/微博/爱奇艺等 14 个平台
+# 依赖云端 Playwright worker（经隧道起 Chromium 做浏览器级解析，实测 25~50s），
+# 原先的 20s 会稳定误报「解析超时」→ 对齐网页端取 60s，可用环境变量覆盖。
+RESOLVE_TIMEOUT_DOMESTIC = int(os.environ.get("VDL_RESOLVE_TIMEOUT_DOMESTIC", "60"))
 SSE_INTERVAL_SECONDS = 0.5
 SSE_MAX_SECONDS = 60 * 30
 CLEANUP_INTERVAL_SECONDS = 600

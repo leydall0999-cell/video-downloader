@@ -94,7 +94,19 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     app._assert_safe_url(payload.url)
     url, platform = app.parse_source(payload.url)
     host = app._host_of(url)
-    if host == 'v.qq.com':
+    # 走云端 Playwright worker 的平台必须单独给额度：起 Chromium + 页面加载 +
+    # 等播放器发流请求，实测 25~60s，用通用的国内直连阈值（60s）会误报超时。
+    # 与网页端 core.py 保持同源，改这里时两边须同步。
+    if app.downloader._is_douyin_host(host):
+        # 抖音走 VPS Playwright 真实浏览器解析，起 Chromium + 页面加载实测 25-30s
+        timeout = 75
+    elif app.downloader._is_iqiyi_host(host):
+        # 爱奇艺 VPS Playwright worker：起 Chromium + 等播放器发 m3u8 请求，实测 30-50s
+        timeout = 90
+    elif 'bestv.com.cn' in host:
+        # 百视TV wasm 签名 worker：实测 40-60s，默认 45s 会误超时
+        timeout = 80
+    elif host == 'v.qq.com':
         timeout = 35
     elif 'youtube.com' in host or 'youtu.be' in host:
         timeout = 70
@@ -107,7 +119,11 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         info = await app.asyncio.wait_for(loop.run_in_executor(app.prober, app.downloader.probe, url, payload.cookie, payload.proxy), timeout=timeout)
     except app.asyncio.TimeoutError:
         host = app._host_of(url)
-        if host == 'v.qq.com':
+        if app.downloader._is_douyin_host(host):
+            detail = '抖音解析超时。抖音已升级反爬，需云端真实浏览器解析（起浏览器 + 加载页面后捕获真实流），偶发较慢。建议：①稍后重试；②确认链接是单个视频播放页（而非首页/列表）；③仍失败请反馈该链接'
+        elif app.downloader._is_iqiyi_host(host):
+            detail = '爱奇艺解析超时。依赖云端 Playwright worker（启动 Chromium + 等播放器发 m3u8 请求）。建议：①稍后重试；②确认链接是分享页或 v_xxx.html 而非首页；③若持续失败请反馈该链接'
+        elif host == 'v.qq.com':
             detail = '腾讯视频解析超时。该视频可能是会员/付费内容，或腾讯页面改版导致提取器暂时失效。建议：①在「高级选项」粘贴浏览器 Cookie 后重试；②确认视频可公开访问（非 VIP 专享）；③稍后重试或反馈此链接'
         elif 'youtube.com' in host or 'youtu.be' in host:
             detail = f'YouTube 解析超时（超过 {timeout} 秒）。常见原因：①代理速度慢或不稳定（YouTube 需要拉取 player.js 签名，代理延迟会叠加）；②该视频可能受限（地区/年龄限制）；建议：①检查代理是否通畅；②稍后重试；③若持续失败，尝试更换节点或关闭代理直连'
