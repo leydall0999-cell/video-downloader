@@ -9089,7 +9089,6 @@ el.dwVidPlayer.removeAttribute('src');
 
   /** 根据本机配置/服务就绪状态，自动识别每个配音引擎是否可用，不可用项直接置灰禁用。 */
   let _ttsStatusCache = null;
-  let _ttsAutoStartTried = false;
   /** 「我的音色」样本的本地态（audio_path/ref_text/ready）。
    *  声明在这里而不是靠下的实现块里：comRefreshTtsStatus 在初始化阶段就会被调用，
    *  若用 let 声明在下方会命中 TDZ 抛 ReferenceError。 */
@@ -9108,7 +9107,7 @@ el.dwVidPlayer.removeAttribute('src');
         _ttsStatusCache = status;
       } catch (_e) {
         // 检测失败：保守起见只放行 edge-tts，其余统一置灰
-        status = { indextts_mlx_ready: false, apple_silicon: false, minimax_configured: false, siliconflow_configured: false };
+        status = { minimax_configured: false, siliconflow_configured: false };
         _ttsStatusCache = null;
       }
     }
@@ -9132,14 +9131,8 @@ el.dwVidPlayer.removeAttribute('src');
     // 且选中即自动拉起 7871（常驻约 2GB 内存）——在性能问题解决前不该做默认。
     // 注意：这里只是「默认选中」，不是「禁用」；用户主动选 qwen3tts 时照样会拉起服务。
     setOpt('qwen3tts', false, status.voice_sample_ready ? '' : '需先配「我的音色」');
-    // MLX语音克隆：仅 Apple Silicon + 服务就绪可用，否则置灰
-    if (status.indextts_mlx_ready) {
-      setOpt('indextts_mlx', false, '免费（已就绪）');
-    } else {
-      // 任何不可用原因（非苹果芯片 / 本机未就绪）统一灰显「本机暂不支持」
-      setOpt('indextts_mlx', true, null, 'MLX语音克隆(更自然,本机暂不支持)');
-    }
     // MiniMax / SiliconFlow 已从下拉移除（需自填密钥，与「用户不配密钥」的产品约定不符）
+    // IndexTTS-MLX 已从下拉移除（2026-09-21 商用合规：bilibili 协议仅限非商用，克隆统一走 Apache-2.0 的 qwen3tts）
     // 系统音色（edge-tts）：始终可用兜底
     setOpt('edge', false, '');
 
@@ -9150,15 +9143,7 @@ el.dwVidPlayer.removeAttribute('src');
 
     // 刷新只读状态条提示
     const cur = sel.value;
-    if (cur === 'indextts_mlx') {
-      if (status.indextts_mlx_ready) {
-        comSetTtsStatusBar('green', 'MLX语音克隆已就绪，可直接使用');
-      } else if (status.apple_silicon) {
-        comSetTtsStatusBar('orange', 'MLX语音克隆本机已支持，正在准备运行环境…（可稍后重试）');
-      } else {
-        comSetTtsStatusBar('gray', 'MLX语音克隆需要苹果芯片 Mac（M 系列）');
-      }
-    } else if (cur === 'minimax' || cur === 'siliconflow') {
+    if (cur === 'minimax' || cur === 'siliconflow') {
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
       comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
     } else if (cur === 'qwen3tts') {
@@ -9193,25 +9178,6 @@ el.dwVidPlayer.removeAttribute('src');
 
     // 「我的音色」整行：只在选中克隆引擎时露出，其余引擎下藏起来（避免无关噪音）
     if (el.comMyVoiceRow) el.comMyVoiceRow.hidden = (cur !== 'qwen3tts');
-
-    // 自动识别：Apple Silicon 但服务未起时，自动后台尝试启动本地语音克隆（取代手动「一键开启」）
-    if (status.apple_silicon && !status.indextts_mlx_ready && !_ttsAutoStartTried) {
-      _ttsAutoStartTried = true;
-      comAutoStartIndexTts();
-    }
-  };
-
-  /** 自动尝试启动本地语音克隆服务（无需用户手动点按钮，启动成功后自动刷新使选项亮起）。 */
-  const comAutoStartIndexTts = async () => {
-    try {
-      if (window.VDL && window.VDL.desktop && typeof window.VDL.desktop.startIndexTts === 'function') {
-        await window.VDL.desktop.startIndexTts();
-        // 启动后稍等再强制刷新，让选项自动变亮
-        setTimeout(() => comRefreshTtsStatus({ force: true }), 6000);
-      }
-    } catch (_e) {
-      // 自动启动失败保持静默，选项维持置灰，状态条已说明
-    }
   };
 
   /** 选中 Qwen3-TTS 时自动拉起本机 7871 服务（选中即起、未选中即停）。
@@ -10235,7 +10201,7 @@ el.dwVidPlayer.removeAttribute('src');
    *     翻译、引擎过 comTtsProviderForBackend()，绝不能让哨兵值漏进请求体。 */
   const COM_CLONE_VOICE = '__my_voice__';
   /** 真正的克隆引擎（选了「我的音色」时至少要切到其中之一，否则出片还是系统音色）。 */
-  const COM_CLONE_PROVIDERS = ['qwen3tts', 'indextts_mlx'];
+  const COM_CLONE_PROVIDERS = ['qwen3tts'];
 
   /** 是否已存好克隆样本 —— 决定「全局配音」里要不要出现「我的音色」那一项。 */
   const comCloneVoiceReady = () => !!(comVoiceSampleState && comVoiceSampleState.ready);

@@ -127,19 +127,6 @@
         return Promise.resolve('');
       }
     },
-    // 一键开启本地语音克隆（IndexTTS-MLX）：自动寻找并启动本地服务，返回 {ok, msg}。
-    // 普通用户无需理解「端口/服务」等概念，点一下由 App 自己搞定；无桥接则回退提示。
-    startIndexTts() {
-      const api = window.pywebview && window.pywebview.api;
-      if (api && typeof api.start_indextts_mlx === 'function') {
-        try {
-          return api.start_indextts_mlx();
-        } catch (e) {
-          return { ok: false, msg: '开启失败：' + e };
-        }
-      }
-      return { ok: false, msg: '当前环境不支持自动开启，请在桌面版中使用。' };
-    },
     // 「我的音色」：弹原生文件框选一段参考录音，返回绝对路径；取消返回 ""。
     // 无桥接（网页版）返回 ""，调用方回退为手填路径。
     pickVoiceSample() {
@@ -155,7 +142,7 @@
       }
     },
     // Qwen3-TTS 本地语音克隆服务起停（选中即起、切走即停），返回 {ok, msg}。
-    // 与 startIndexTts 同一套「用户不用懂端口/服务」的约定；无桥接时返回可读提示。
+    // 与「用户不用懂端口/服务」的同一套约定；无桥接时返回可读提示。
     startQwen3Tts() {
       const api = window.pywebview && window.pywebview.api;
       if (api && typeof api.start_qwen3tts === 'function') {
