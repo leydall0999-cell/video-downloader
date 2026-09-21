@@ -4591,6 +4591,7 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
             if nm:
                 out = workdir / nm
 
+    wrote_bytes = [0]   # 真正写入的字节数（预分配后 st_size 恒等于 total，完成度只能靠它判断）
     try:
         # 探测请求：只取 1 字节，顺带拿到总长度（Content-Range: bytes 0-0/TOTAL）与真实文件名
         r0 = _rq.get(file_url, headers={"Range": "bytes=0-0"}, timeout=(15, 90))
@@ -4655,11 +4656,13 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
                 futs = [ex.submit(_fetch, r) for r in ranges]
                 for fu in futs:
                     got_total += fu.result()   # 任一片最终失败 → 在此抛出
+                    wrote_bytes[0] = got_total
                     if total:
                         store.update(task.id,
                                      progress=min(99.0, got_total * 100.0 / total))
         else:
             # 对端不支持 Range / 拿不到总长 → 退化成一次性整包（老行为）
+            _n = 0
             with out.open("wb") as fh:
                 for chunk in r0.iter_content(chunk_size=512 * 1024):
                     if not chunk:
@@ -4667,6 +4670,8 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
                     if task.cancel_requested:
                         return
                     fh.write(chunk)
+                    _n += len(chunk)
+            wrote_bytes[0] = _n
     except Exception as exc:  # noqa: BLE001
         _fail("回传文件失败", str(exc))
         return
@@ -4674,11 +4679,13 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
     if not out.exists() or out.stat().st_size <= 0:
         _fail("回传文件为空", "")
         return
-    # 长度校验：分片写盘是按偏移 seek 的，任何一片缺失都会「看起来完成、实际残缺」，
-    # 宁可报错也不要把打不开的文件当用户成果。
-    if total and out.stat().st_size != total:
+    # 长度校验：分片写盘是按偏移 seek + 预分配的，缺片时文件大小**仍是满的**（空洞），
+    # 所以只能按「实际写入字节数」判定；宁可报错也不要把打不开的文件当用户成果。
+    _expect = total or 0
+    _wrote = (wrote_bytes[0] if _expect else out.stat().st_size)
+    if _expect and _wrote != _expect:
         _fail("回传文件不完整",
-              "期望 %s，实际落盘 %s" % (_format_bytes(total), _format_bytes(out.stat().st_size)))
+              "期望 %s，实际写入 %s（分片有缺失）" % (_format_bytes(_expect), _format_bytes(_wrote)))
         return
 
     task.add_step("下载完成", "done", "文件大小：%s" % _format_bytes(out.stat().st_size))
