@@ -4537,7 +4537,9 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
     try:
         resp = _rq.post(peer + "/api/download",
                         json={"url": task.url, "quality": quality_key or BEST_KEY,
-                              "title": task.title or "", "cookie": "", "proxy": "",
+                              # 🔴 必须把登录态带给对端（cookie 参数 ← create_download 已注入
+                              # 本机浏览器解密结果）：写死空串会让对端误报「需要登录 Cookie」。
+                              "title": task.title or "", "cookie": cookie or task.cookie or "", "proxy": "",
                               "format_id": format_id or "",
                               "extract_script": task.extract_mode or ""},
                         timeout=60)

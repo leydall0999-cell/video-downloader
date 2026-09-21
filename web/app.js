@@ -8385,7 +8385,11 @@ el.dwVidPlayer.removeAttribute('src');
     setLoading(true);
     el.resultPanel.hidden = true;
     el.hqTip.hidden = true;   // 每次重新解析时重置「更高分辨率」提示，避免残留
-    const base = baseFor(url);
+    // 解析一律走本机后端（base=''）：后端对海外链接会自动转发对端节点，
+    // 并且会实时携带本机浏览器解密的登录态。前端若直发对端，浏览器 Cookie
+    // 会丢在半路 → 对端误报「YouTube 需要登录 Cookie」（2026-09-22 实测踩坑）。
+    // 下载/进度/取件也统一走本机：后端 create_download 自己决定是否交对端执行。
+    const base = '';
     // 歌单/专辑链接 → 走 /api/playlist 列出全部曲目（网易云歌单/榜单、喜马拉雅专辑）
     if (isPlaylistUrl(url)) {
       await handlePlaylist(url, base, cookie, proxy);
