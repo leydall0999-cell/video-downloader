@@ -15439,7 +15439,7 @@ el.dwVidPlayer.removeAttribute('src');
           <div class="member-plan-price"><span class="member-ccy">¥</span>${price}</div>
           ${extra && extra.meta ? `<div class="member-plan-meta">${extra.meta}</div>` : ''}
         </div>
-        <button type="button" class="btn btn-ghost btn-sm member-buy" data-code="${code}">立即开通（测试期即时生效）</button>
+        <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}">购买</button>
         ${foot}
       </div>`;
   }
@@ -15506,7 +15506,7 @@ el.dwVidPlayer.removeAttribute('src');
       el.memberModal.querySelectorAll('.member-buy').forEach((btn) => {
         btn.addEventListener('click', () => {
           const code = btn.getAttribute('data-code');
-          if (code) activateMember(code);
+          if (code) payCreate(code);
         });
       });
     } catch (_) { /* 静默 */ }
@@ -15550,6 +15550,61 @@ el.dwVidPlayer.removeAttribute('src');
     } finally {
       el.memberActivateBtn.disabled = false;
     }
+  }
+  // ---- 支付宝购买（下单 → 二维码弹窗 → 轮询自动开通）----
+  let _payTimer = null;
+  async function payCreate(planCode) {
+    if (!el.memberActivateBtn) return;
+    _memberMsg('正在生成支付二维码…');
+    let r;
+    try {
+      r = await request('/api/cloud/pay/create', {
+        method: 'POST', body: JSON.stringify({ plan_code: planCode }) });
+    } catch (e) {
+      _memberMsg('❌ 下单失败：网络错误', true); return;
+    }
+    if (!r || !r.ok) {
+      _memberMsg('❌ ' + ((r && r.error) || '下单失败'), true); return;
+    }
+    _memberMsg('');
+    openPayModal(r.order_id, r.qr_png, r.amount, r.plan_code);
+  }
+  function openPayModal(orderId, qrPng, amount, planCode) {
+    closePayModal();
+    const overlay = document.createElement('div');
+    overlay.className = 'vdl-pay-overlay';
+    overlay.innerHTML = `
+      <div class="vdl-pay-modal">
+        <div class="vdl-pay-title">扫码支付开通会员</div>
+        <div class="vdl-pay-amt">¥${amount} · ${planCode}</div>
+        <img class="vdl-pay-qr" src="${qrPng}" alt="支付宝支付二维码"/>
+        <div class="vdl-pay-tip">请使用支付宝扫码付款，支付成功后自动开通</div>
+        <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>
+        <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePayModal(); });
+    overlay.querySelector('#vdlPayClose').addEventListener('click', closePayModal);
+    const statusEl = overlay.querySelector('#vdlPayStatus');
+    _payTimer = setInterval(async () => {
+      try {
+        const q = await request('/api/cloud/pay/query', {
+          method: 'POST', body: JSON.stringify({ order_id: orderId }) });
+        if (q && q.ok && q.status === 'PAID') {
+          clearInterval(_payTimer); _payTimer = null;
+          statusEl.textContent = '✅ 支付成功，已开通';
+          showToast('会员开通成功');
+          await renderMemberStatus();
+          await renderCloudAccount();
+          setTimeout(closePayModal, 1200);
+        }
+      } catch (_) { /* 轮询失败静默重试 */ }
+    }, 2500);
+  }
+  function closePayModal() {
+    if (_payTimer) { clearInterval(_payTimer); _payTimer = null; }
+    const o = document.querySelector('.vdl-pay-overlay');
+    if (o) o.remove();
   }
   // ---- 云端账号（会员归属 + 最多 2 台设备）----
   function _fmtAgo(ts) {

@@ -237,6 +237,50 @@ def cloud_unbind(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return _pub(store)
 
 
+@router.post("/api/cloud/pay/create")
+def cloud_pay_create(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """购买下单：调香港机支付服务生成支付宝当面付二维码。
+
+    金额由服务端（pay_server.PRICE_MAP）决定，前端只传 plan_code，防改价。
+    """
+    import license_client
+    plan_code = str(payload.get("plan_code") or "")
+    if not plan_code:
+        return {"ok": False, "error": "缺少套餐"}
+    store = _store()
+    acc = (store._state.get("meta") or {}).get("account") or {}
+    token = str(acc.get("token") or "")
+    if not token:
+        return {"ok": False, "error": "请先登录账号", "code": "NOT_LOGGED_IN"}
+    try:
+        r = license_client.pay_create_remote(token, plan_code)
+    except license_client.LicenseCloudError as e:
+        return {"ok": False, "error": f"{e}（下单需要联网）", "code": "CLOUD_UNREACHABLE"}
+    if not r.get("ok"):
+        return {"ok": False, "error": r.get("error") or "下单失败",
+                "code": r.get("code") or "REJECTED"}
+    return {"ok": True, "order_id": r.get("order_id"), "qr_png": r.get("qr_png"),
+            "amount": r.get("amount"), "plan_code": r.get("plan_code")}
+
+
+@router.post("/api/cloud/pay/query")
+def cloud_pay_query(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """订单状态轮询（App 前端轮询，支付成功自动开通）。"""
+    import license_client
+    order_id = str(payload.get("order_id") or "")
+    if not order_id:
+        return {"ok": False, "error": "缺少订单号"}
+    try:
+        r = license_client.pay_query_remote(order_id)
+    except license_client.LicenseCloudError as e:
+        return {"ok": False, "error": str(e), "code": "CLOUD_UNREACHABLE"}
+    if not r.get("ok"):
+        return {"ok": False, "error": r.get("error") or "查询失败",
+                "code": r.get("code") or "REJECTED"}
+    return {"ok": True, "order_id": order_id, "status": r.get("status"),
+            "plan_code": r.get("plan_code"), "amount": r.get("amount")}
+
+
 def maybe_sync_account(store) -> None:
     """member_status 的惰性钩子：登录过的前提下，每隔 _SYNC_MIN_INTERVAL 同步一次。
 
