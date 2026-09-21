@@ -6309,7 +6309,20 @@
   const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}`;
   const libEncFileUrl = (id) => `/api/library/encfile/${encodeURIComponent(id)}`;
 
+  // 2026-09-21：导航栏可见性**不再**依赖 /api/nodes 的成败。
+  // 该请求一旦失败（跨境链路抖动 / 代理 / CF 边缘错误），`.catch()` 原本完全静默，
+  // 而 `<nav id="tabs" hidden>` 只在成功回调里被解开 → 整个导航栏永久隐藏，
+  // 表现为「网页版只剩下载，去水印/音乐转换/图片转换/AI 字幕/个人中心凭空消失」，
+  // 且页面不给任何提示。故由必定会被调用的 switchView 兜底（幂等）。
+  function applyWebTabs() {
+    // 桌面版专属 tab 在网页精简版一律隐藏（不受后端 profile 影响，保持原语义）
+    ['tabLibrary', 'tabCommentary', 'tabSubscribe', 'tabTorrent', 'tabBaidu', 'tabPcs']
+      .forEach((id) => { const t = document.getElementById(id); if (t) t.hidden = true; });
+    if (el.tabs) el.tabs.hidden = false;
+  }
+
   function switchView(view) {
+    applyWebTabs();
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
@@ -9157,7 +9170,11 @@
       initSubUI();
       paintNodeBar();
     })
-    .catch(() => { /* 取不到节点信息就退回单节点，全部走本机 */ });
+    .catch(() => {
+      /* 取不到节点信息就退回单节点，全部走本机。
+         2026-09-21：此处必须补一次 applyWebTabs() —— 导航栏不能再因为这一次失败而消失。 */
+      try { applyWebTabs(); } catch (_) {}
+    });
   // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
   // 支持 #view=xxx 直达（音乐转换/图片转换/字幕/个人中心等）
   try {
