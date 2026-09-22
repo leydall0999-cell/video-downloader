@@ -57,6 +57,31 @@ def _local_token_for(email: str, password: str) -> str:
     return issue_token(uid)
 
 
+def _adopt_local_account(email: str, password: str, fp: str, name: str) -> bool:
+    """把「只存在本机」的老账号补建到云端，返回是否已建号（调用方应重试登录）。
+
+    🔴 为什么需要（2026-09-22 实测）：云端注册过去只收邮箱，手机号注册会被拒，
+    而前端注册流程吞掉了这个失败、本地照常注册成功 → 这批用户「本机有账号、
+    云端没有」，会员权益只在本机，换机/重装即丢，登录时还会被云端回一句
+    「账号不存在」误导。
+
+    **必须本机密码校验通过才迁移**：既杜绝替他人建号，也避免密码打错时
+    在云端静默建出一个永远用不上的空账号。
+    """
+    try:
+        from auth_store import authenticate
+        if not authenticate(email, password):
+            return False
+    except Exception:
+        return False
+    try:
+        import license_client
+        rr = license_client.register_remote(email.strip(), password, fp, name)
+    except Exception:
+        return False
+    return bool(rr and rr.get("ok"))
+
+
 def _fp_name() -> tuple[str, str]:
     try:
         import device_id
@@ -125,6 +150,14 @@ def cloud_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         r = license_client.login_remote(email, password, fp, name)
     except license_client.LicenseCloudError as e:
         return {"ok": False, "error": f"{e}（登录需要联网）", "code": "CLOUD_UNREACHABLE"}
+    if not r.get("ok"):
+        # 老账号自愈：云端不认识这个账号，但本机账号表里有且密码正确 → 说明这是
+        # 当年用手机号注册、云端从没建号的用户，就地补建后重试一次登录。
+        if r.get("code") == "NO_ACCOUNT" and _adopt_local_account(email, password, fp, name):
+            try:
+                r = license_client.login_remote(email, password, fp, name)
+            except license_client.LicenseCloudError as e:
+                return {"ok": False, "error": f"{e}（登录需要联网）", "code": "CLOUD_UNREACHABLE"}
     if not r.get("ok"):
         return {"ok": False, "error": r.get("error") or "登录失败",
                 "code": r.get("code") or "REJECTED"}

@@ -100,15 +100,26 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/api/auth/login")
-def auth_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def auth_login(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     ident = str(payload.get("identifier") or "").strip().lower()
     pw = str(payload.get("password") or "")
     if not ident or not pw:
         return {"ok": False, "error": "请输入账号和密码"}
-    from auth_store import authenticate, issue_token, ensure_superusers, user_is_admin
+    from auth_store import (authenticate, issue_token, ensure_superusers,
+                            user_is_admin, user_exists)
     uid = authenticate(ident, pw)
     if not uid:
-        return {"ok": False, "error": "账号或密码错误"}
+        # 🔴 2026-09-22 实测缺陷：此前统一回「账号或密码错误」，桌面端拿这个文案
+        #    又去和云端比对，最终把云端的「账号不存在」显示给用户——手机号老账号
+        #    只存在于本机（云端当年 register 拒收非邮箱），于是用户明明账号在、
+        #    只是密码打错，却被提示「账号不存在，请先注册」。
+        #    本机账号表才是权威，故在本机回环时区分两种失败，让提示与事实一致。
+        #    公网（网页版）保持模糊文案，避免账号枚举。
+        if _is_loopback(request) and user_exists(ident):
+            return {"ok": False, "error": "密码不正确", "code": "BAD_PASSWORD"}
+        if _is_loopback(request):
+            return {"ok": False, "error": "账号不存在，请先注册", "code": "NO_ACCOUNT"}
+        return {"ok": False, "error": "账号或密码错误", "code": "BAD_CREDENTIALS"}
     ensure_superusers()
     record_event("login", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,

@@ -16456,6 +16456,7 @@ el.dwVidPlayer.removeAttribute('src');
     _authMsg('处理中…');
     try {
       let localToken = null, cloudAccount = null, cloudNotice = '';
+      let cloudErrMsg = '', cloudErrCode = '';
       // 1) 云端账号（会员归属 + 最多 2 台设备的真源）：一次邮箱+密码登录即开通会员，
       //    不再绑机器。云端成功会顺带签发本地 token（功能门禁/个人中心都依赖它）。
       const cres = await request(isReg ? '/api/cloud/register' : '/api/cloud/login', {
@@ -16467,24 +16468,37 @@ el.dwVidPlayer.removeAttribute('src');
         cloudNotice = cres.notice || '';
       } else if (cres && cres.code === 'CLOUD_UNREACHABLE') {
         _authMsg('授权中心暂时不可达，先用本地账号登录（联网后自动同步会员）', false);
-      } else if (cres && cres.code === 'EXISTS' && !isReg) {
-        // 云端已存在该账号但登录被拒（密码错等）：交给下方本地登录兜底提示
-        _authMsg((cres.error) || '登录失败', true);
+      } else if (cres && !cres.ok) {
+        // 云端失败原因只作兜底记录——**不要立刻当成最终结论**：
+        // 手机号老账号只存在于本机（云端认不出），云端会说「账号不存在」，
+        // 而本机账号表才是权威。结论等第 2 步本地登录跑完再下。
+        cloudErrMsg = String(cres.error || '');
+        cloudErrCode = String(cres.code || '');
       }
       // 2) 保底：无论如何确保本地 token（下载/字幕/个人中心门禁依赖它）
+      let lres = null;
       if (!localToken) {
-        const lres = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
+        lres = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
           method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
         });
         if (lres && lres.ok && lres.token) {
           localToken = lres.token;
         } else if (isReg && lres && /已注册/.test(lres.error || '')) {
           const l2 = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }) });
-          if (l2 && l2.ok && l2.token) localToken = l2.token;
+          if (l2 && l2.ok && l2.token) { localToken = l2.token; lres = l2; }
         }
       }
       if (!localToken) {
-        _authMsg('❌ ' + ((cres && cres.error) || (isReg ? '注册失败' : '登录失败')), true);
+        // 🔴 2026-09-22 缺陷修复：此前这里用的是**云端**的错误文案（cres.error），
+        //    云端不认识只在本机注册的手机号账号 → 用户明明账号在、只是密码打错，
+        //    却被提示「账号不存在，请先注册」，与事实相反且把人引向重新注册。
+        //    本机账号表才决定账号是否存在，故本地错误优先，云端原因仅在没有本地
+        //    结论时兜底。
+        const lerr = String((lres && lres.error) || '');
+        const lcode = String((lres && lres.code) || '');
+        let msg = lerr || cloudErrMsg || (isReg ? '注册失败' : '登录失败');
+        if (!isReg && lcode === 'BAD_PASSWORD') msg += '（可点下方「忘记密码」重置）';
+        _authMsg('❌ ' + msg, true);
         return;
       }
       const r = { ok: true, token: localToken, is_admin: false };
@@ -16502,7 +16516,12 @@ el.dwVidPlayer.removeAttribute('src');
         updateAdminTabVisibility();
         _renderAuthHeader();
         _updateProfileSidebarLock();
-        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功') + (cloudNotice ? ' · ' + cloudNotice : ''), false);
+        // 云端没成功但本地成功 → 如实说明（别让用户以为会员权益已经跟账号走，
+        // 否则换机才发现权益只在本机）。手机号老账号已由后端自愈迁移，正常不会再触发。
+        const cloudWarn = (cloudErrMsg && !cloudAccount)
+          ? ` · 本机账号（云端未同步：${cloudErrMsg}）` : '';
+        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功')
+                 + (cloudNotice ? ' · ' + cloudNotice : '') + cloudWarn, false);
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
         await renderAccount();

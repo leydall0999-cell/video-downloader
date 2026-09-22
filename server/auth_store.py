@@ -391,6 +391,24 @@ def authenticate(identifier: str, password: str) -> Optional[str]:
     return None
 
 
+def user_exists(identifier: str) -> bool:
+    """账号是否存在于本机账号表（已注销的不算）。
+
+    ⚠️ 仅用于**本机回环**调用方的登录错误提示区分（「密码不正确」vs「账号不存在」），
+    绝不可让公网调用方据此区分——那等于开放账号枚举。调用点见 routers/auth.py 的
+    `_is_loopback` 守卫。
+    """
+    ident = _normalize(identifier)
+    if not ident:
+        return False
+    data = _load_users()
+    uid = data["by_identifier"].get(ident)
+    if not uid:
+        return False
+    return any(u.get("user_id") == uid and not u.get("deleted_at")
+               for u in data.get("users", []))
+
+
 def user_identifier(user_id: str) -> Optional[str]:
     data = _load_users()
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)

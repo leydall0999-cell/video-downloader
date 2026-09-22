@@ -85,6 +85,23 @@ PLAN_CODE_TO_SHORT = {v: k for k, v in PLAN_MAP.items()}
 
 CODE_RE = re.compile(r"^VDL-([A-Z0-9]{3,4})-([0-9A-Fa-f]{10})-([0-9A-Fa-f]{8})$")
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# 🔴 2026-09-22：账号主键过去**只认邮箱**（register 里硬判 "@" in uid），而 App 本地
+#    账号表与前端校验一直是「邮箱或手机号」都能注册。结果用手机号注册的用户：
+#    云端 400 BAD_EMAIL → 前端注册流程静默忽略该失败、继续本地注册成功 →
+#    用户看到「注册成功」，但云端从未建号（会员权益只落本机，换机即丢），
+#    且此后每次登录云端都回 NO_ACCOUNT「账号不存在」误导用户。
+#    此处与 server/routers/auth.py 的正则保持一致，两端同口径。
+PHONE_RE = re.compile(r"^1[3-9]\d{9}$")          # 中国大陆手机号
+E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")       # 国际格式（+ 开头）
+
+
+def _valid_account_id(uid: str) -> bool:
+    """账号主键合法性：邮箱 或 手机号（与 App 本地账号表同口径）。"""
+    if not uid:
+        return False
+    if "@" in uid:
+        return bool(EMAIL_RE.match(uid))
+    return bool(PHONE_RE.match(uid) or E164_RE.match(uid))
 
 _THROTTLE: dict[str, deque] = {}
 _THROTTLE_GUARD = threading.Lock()
@@ -209,8 +226,8 @@ def register_impl(state: dict[str, Any], email: str, password: str, now: float,
     if not secret:
         raise ApiError(500, "NO_SECRET", "服务端未配置 VDL_LICENSE_SECRET")
     uid = _norm_id(email)
-    if not uid or "@" not in uid:
-        raise ApiError(400, "BAD_EMAIL", "请输入有效的邮箱")
+    if not _valid_account_id(uid):
+        raise ApiError(400, "BAD_ACCOUNT", "请输入有效的邮箱或手机号")
     if len(password or "") < MIN_PASSWORD:
         raise ApiError(400, "WEAK_PASSWORD", f"密码至少 {MIN_PASSWORD} 位")
     users = _users(state)
