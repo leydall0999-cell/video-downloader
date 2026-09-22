@@ -66,6 +66,7 @@ run_one test_matting_member.py
 run_one test_subtitle_quota.py
 run_one test_subtitle_preview.py
 run_one test_subtitle_audio.py
+run_one test_subtitle_music_fallback.py
 run_one test_quality_options.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py

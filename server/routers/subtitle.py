@@ -227,6 +227,40 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
             rows.append((float(seg.start), float(seg.end), text))
             if total > 0:
                 job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
+
+        # 3.5) 音乐兜底二次识别（2026-09-22）：Silero VAD 是「说话声」检测器，
+        #   歌曲的「人声+伴奏」会被当成非语音整段过滤——实测 阿刁(6:18) 只放行 14s，
+        #   用户拿到 51s→78s 四句残字幕。对策：VAD 通过的语音占比 < 15% 时，
+        #   判定大概率是音乐/纯音乐环境，关 VAD 全曲重识别（无 VAD 幻觉风险用
+        #   no_speech_prob / avg_logprob 逐段过滤），仅当结果比首轮更多时才采用。
+        if total > 0:
+            speech_secs = sum(ed - st for st, ed, _ in rows)
+            if speech_secs / total < 0.15:
+                job["stage"] = "识别中（检测到音乐，整曲重识别）"
+                job["progress"] = max(job.get("progress") or 15, 15)
+                app.logger.info("subtitle %s VAD coverage %.1f%% too low, retry without VAD",
+                                job_id, speech_secs / total * 100)
+                retry_kwargs = dict(
+                    language=language or None,
+                    vad_filter=False,
+                    beam_size=1 if fast else 5,
+                    condition_on_previous_text=False,  # 防幻觉连锁
+                )
+                segs2, _info2 = model.transcribe(str(wav_path), **retry_kwargs)
+                rows2 = []
+                for seg in segs2:
+                    text = (seg.text or "").strip()
+                    if not text:
+                        continue
+                    # 无 VAD 时纯伴奏段易幻觉出假歌词，按置信度过滤
+                    if seg.no_speech_prob >= 0.6 or seg.avg_logprob <= -1.0:
+                        continue
+                    rows2.append((float(seg.start), float(seg.end), text))
+                    if total > 0:
+                        job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
+                if sum(ed - st for st, ed, _ in rows2) > speech_secs:
+                    rows = rows2
+
         if not rows:
             raise RuntimeError("未识别到任何语音内容（视频可能没有对话/音轨）")
 
