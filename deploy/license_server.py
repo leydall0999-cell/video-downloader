@@ -302,6 +302,46 @@ def heartbeat_impl(state: dict[str, Any], token: str, fp: str, now: float,
             "account": _public_user(user, "")}
 
 
+def password_impl(state: dict[str, Any], email: str, new_password: str, now: float,
+                  secret: str, old_password: str = "", token: str = "") -> dict[str, Any]:
+    """把 App 本机账号的新密码同步到云端（「一套账号」的关键一环）。
+
+    🔴 为什么必须有：账号其实是**两套库**——本机 `auth_store`（账号是否存在/密码对不对
+      的权威 + 功能门禁）与云端本文件（会员权益 + 设备位）。两边各存一份密码哈希，
+      任何一侧改密而另一侧不同步 → 用户「在这台能登、换台说密码错」。
+      本机侧改动（个人中心改密 / 忘记密码重置）通过本接口推过来。
+
+    鉴权二选一，都必须能证明对该账号的持有：
+      · old_password：知道原密码（个人中心「修改密码」）
+      · token       ：云端签发的登录 token（忘记密码只走验证码，本机已无原密码）
+
+    云端没有该账号 → `{ok: True, synced: False}`（这是「只在本机注册过」的老账号，
+    下次登录时 App 会把它自愈补建到云端），**不算失败**，别让用户看到报错。
+    """
+    uid = _norm_id(email)
+    if not _valid_account_id(uid):
+        raise ApiError(400, "BAD_ACCOUNT", "请输入有效的邮箱或手机号")
+    if len(new_password or "") < MIN_PASSWORD:
+        raise ApiError(400, "WEAK_PASSWORD", f"密码至少 {MIN_PASSWORD} 位")
+    user = _users(state).get(uid)
+    if not user:
+        return {"ok": True, "synced": False, "reason": "cloud_no_account", "email": uid}
+    ok = bool(old_password) and verify_password(
+        old_password, user.get("salt", ""), user.get("pw_hash", ""))
+    if not ok and token:
+        try:
+            ok = parse_token(token, secret, now) == uid
+        except ApiError:
+            ok = False
+    if not ok:
+        raise ApiError(401, "BAD_CREDENTIALS", "云端校验未通过，密码未同步")
+    salt, pw_hash = hash_password(new_password)
+    user["salt"] = salt
+    user["pw_hash"] = pw_hash
+    user["pw_changed_at"] = now
+    return {"ok": True, "synced": True, "email": uid}
+
+
 def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
                 secret: str) -> dict[str, Any]:
     """卡密充值到账号（不再绑机器）。同一张卡第二次用会拒绝。"""
@@ -540,6 +580,13 @@ class Handler(BaseHTTPRequestHandler):
                                          now, SECRET)
                     if out.get("ok"):
                         _save_state(st)
+                elif action == "password":
+                    # App 本机改密 / 忘记密码重置后同步过来（两端密码不分叉）
+                    out = password_impl(st, str(data.get("email") or ""),
+                                        str(data.get("new_password") or ""), now, SECRET,
+                                        old_password=str(data.get("old_password") or ""),
+                                        token=str(data.get("token") or ""))
+                    _save_state(st)
                 elif action == "redeem":
                     out = redeem_impl(st, str(data.get("token") or ""),
                                       str(data.get("code") or "").strip(), now, SECRET)

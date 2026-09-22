@@ -306,6 +306,67 @@ URL = f"http://{HOST}:{PORT}"
 # 使窗口 closing 拦截放行；红叉（windowShouldClose）不置此标记 → 仍最小化返回桌面。
 _app_terminating = False
 
+
+def _choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
+    """弹 macOS 原生「保存文件」面板，返回用户选定的绝对路径；取消返回 "CANCELLED"。
+
+    为什么用 osascript 子进程而不是 pywebview/NSSavePanel：桌面壳的主线程跑在
+    pywebview 的 run loop 上，从 JS 同步桥调用里弹 NSSavePanel 会把 run loop 卡死。
+    另起 osascript 进程则完全不碰主线程。
+
+    中文提示词/默认名必须写进**临时 .applescript 文件（UTF-8）**再交给 osascript 执行，
+    经 argv 传中文会被错误解码导致面板根本不弹（历史踩坑）。
+
+    返回 "CANCELLED" 与 "ERROR: ..." 是约定值，前端据此区分「用户主动取消」与「真失败」。
+    """
+    import json
+    import tempfile
+    import subprocess
+
+    def _log(msg: str) -> None:
+        if not log_path:
+            return
+        try:
+            import datetime as _dt
+            with open(log_path, "a") as f:
+                f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+        except Exception:
+            pass
+
+    script = (
+        f'set p to choose file name with prompt "{prompt}" '
+        f'default name {json.dumps(suggested, ensure_ascii=False)} '
+        'default location (path to downloads folder)\n'
+        'POSIX path of p'
+    )
+    scpt = ""
+    try:
+        fd, scpt = tempfile.mkstemp(suffix=".applescript")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(script)
+        r = subprocess.run(
+            ["osascript", scpt],
+            capture_output=True, text=True, timeout=600,
+            env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            chosen = r.stdout.strip()
+            _log(f"choose-save-path -> {chosen}")
+            return chosen
+        # 用户点了「取消」，osascript 退出码为 1 且 stderr 形如 "User canceled."。
+        _log(f"choose-save-path cancelled rc={r.returncode} err={r.stderr.strip()!r}")
+        return "CANCELLED"
+    except Exception as exc:  # noqa: BLE001 — osascript 缺失/异常 → 交给调用方兜底
+        _log(f"choose-save-path exception: {exc!r}")
+        return ""
+    finally:
+        if scpt:
+            try:
+                os.remove(scpt)
+            except Exception:
+                pass
+
+
 class VdlApi:
     """暴露给前端 JS 的桥接 API（仅 pywebview 桌面模式生效）。
 
@@ -656,7 +717,10 @@ class VdlApi:
         return str(dest)
 
     def save_direct_url(self, url: str, filename: str, referer: str = "", ua: str = "") -> str:
-        """把「直链视频」直接保存到用户「下载」文件夹（桌面版原生直存）。
+        """把「直链视频」保存到用户**自选的位置**（桌面版原生直存）。
+
+        流程：先弹系统「保存」面板（默认「下载」文件夹 + 视频标题），用户选定路径后由
+        Python 带 Referer/UA 拉流写盘；用户点「取消」返回 "CANCELLED"（前端只提示不报错）。
 
         ★ 2026-09-22 修复「直接保存到本机 = 应用界面变成 403 页」：
           旧实现是前端 `<a href=直链 download>`，而桌面壳是 WKWebView —— 点击会把
@@ -666,9 +730,13 @@ class VdlApi:
           现在改由本方法在 Python 侧带 Referer/UA 拉流写盘：既不导航 WebView，
           又满足防盗链（后端下载同源，仍不经过外网服务器）。
 
+        ★ 2026-09-22 用户要求「也要弹出来可选择保存的位置弹窗」：落盘前先过
+          `_choose_save_path()`（osascript 原生保存面板），不再固定塞进「下载」。
+
         referer/ua 由后端 resolve 下发的 video.direct_headers 提供；缺省时按
         「无防盗链的裸文件直链」处理（只发一个普通浏览器 UA）。
-        返回保存的绝对路径；失败返回 "ERROR: ..."（前端据此自动回落服务器下载）。
+        返回保存的绝对路径；取消返回 "CANCELLED"；失败返回 "ERROR: ..."
+        （前端据此自动回落服务器下载）。
         """
         import os as _os
         import re as _re
@@ -692,12 +760,23 @@ class VdlApi:
             downloads.mkdir(parents=True, exist_ok=True)
         except Exception:
             downloads = Path.home()
-        dest = downloads / name
+
+        # ★ 2026-09-22 用户要求：直存也要先弹系统「保存到哪里」面板（与去水印/文案/二维码
+        #   保存一致），而不是一声不吭塞进「下载」文件夹。默认位置仍是「下载」，
+        #   默认名是解析出来的视频标题，用户直接回车＝老行为（零学习成本）。
+        chosen = _choose_save_path("保存视频到", name, "/tmp/vdl_direct_save.log")
+        if chosen == "CANCELLED":
+            return "CANCELLED"
+        dest = Path(chosen) if chosen else (downloads / name)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR: 无法写入所选目录（{exc}）"
         if dest.exists():  # 不覆盖已有文件
             stem, suf = dest.stem, dest.suffix
             i = 1
             while dest.exists():
-                dest = downloads / f"{stem}({i}){suf}"
+                dest = dest.parent / f"{stem}({i}){suf}"
                 i += 1
 
         headers = {

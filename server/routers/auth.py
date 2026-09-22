@@ -79,6 +79,62 @@ def _bearer(request: Request) -> Optional[str]:
     return token_from_header(request.headers.get("Authorization"))
 
 
+def _cloud_password_token(ident: str) -> str:
+    """取本机保存的云端登录 token（仅当它属于同一个账号）。
+
+    用于「忘记密码」路径：那条路只有验证码、没有原密码，只能靠云端 token 证明持有。
+    """
+    try:
+        import app as _app
+        store = _app.member_store
+        store._ensure_loaded()
+        acc = (store._state.get("meta") or {}).get("account") or {}
+        if (acc.get("email") or "").strip().lower() == (ident or "").strip().lower():
+            return str(acc.get("token") or "")
+    except Exception:  # noqa: BLE001 — 取不到就是没 token，走原密码鉴权
+        pass
+    return ""
+
+
+def _sync_cloud_password(ident: str, new_pw: str, old_pw: str = "") -> dict[str, Any]:
+    """把本机改好的密码推到云端账号库，保持两端一致（best-effort）。
+
+    🔴 为什么必须做：账号是**两套库**——本机 `auth_store` 管「账号是否存在/密码对不对」
+    与功能门禁，云端授权中心管会员权益与设备位，两边各存一份密码哈希。本机改密而云端
+    不改 → 用户在**这台能登、换台说密码错**，而且云端登录失败还会连累会员权益同步。
+
+    返回 {synced, tried, reason}：
+      · tried=False  → 手上没有云端凭据（原密码/云端 token 都没有），这轮**没法试**，
+                       前端不该提示「同步失败」（多数是本机专属老账号，云端压根没号）
+      · synced=True  → 云端已改；或云端本就没有该账号（`reason=cloud_no_account`，
+                       那种账号下次登录会被自动补建到云端，不算问题）
+      · synced=False → 试过但失败（云端连不上/校验被拒），**要如实告诉用户**
+
+    绝不因为云端失败而回滚本机改密（fail-open），否则断网用户连密码都改不了。
+    """
+    if not ident:
+        return {"synced": False, "tried": False, "reason": "no_identity"}
+    try:
+        import license_client
+    except Exception:  # noqa: BLE001
+        return {"synced": False, "tried": False, "reason": "no_client"}
+    token = "" if old_pw else _cloud_password_token(ident)
+    if not old_pw and not token:
+        return {"synced": False, "tried": False, "reason": "no_cloud_session"}
+    try:
+        r = license_client.set_password_remote(ident, new_pw, old_password=old_pw,
+                                               token=token)
+    except Exception as e:  # noqa: BLE001 — 云端不可达：本机照常生效
+        logging.getLogger("vdl.auth").warning("云端改密同步失败: %s", e)
+        return {"synced": False, "tried": True, "reason": "cloud_unreachable"}
+    if r and r.get("ok"):
+        return {"synced": True, "tried": True,
+                "reason": "" if r.get("synced", True) else "cloud_no_account"}
+    logging.getLogger("vdl.auth").warning("云端改密被拒: %s", r)
+    return {"synced": False, "tried": True,
+            "reason": str((r or {}).get("code") or "rejected")}
+
+
 @router.post("/api/auth/register")
 def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     ident = str(payload.get("identifier") or "").strip().lower()
@@ -257,8 +313,10 @@ def auth_change_password(request: Request, payload: dict[str, Any] = Body(...)) 
     if not authenticate(ident, cur):
         return {"ok": False, "error": "当前密码错误"}
     reset_password(ident, new)
+    sync = _sync_cloud_password(ident, new, old_pw=cur)
     record_event("change_pw", {"identifier": ident})
-    return {"ok": True}
+    return {"ok": True, "cloud_synced": sync["synced"], "cloud_sync_tried": sync["tried"],
+            "cloud_sync_reason": sync["reason"]}
 
 
 @router.post("/api/account/deactivate")
@@ -340,5 +398,8 @@ def auth_reset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return {"ok": False, "error": "验证码错误或已过期"}
     if not reset_password(ident, pw):
         return {"ok": False, "error": "该账号不存在，无法重置"}
+    # 忘记密码这条路上本机已经没有原密码了，只能用云端 token 证明持有（有就同步）。
+    sync = _sync_cloud_password(ident, pw)
     record_event("reset_pw", {"identifier": ident})
-    return {"ok": True}
+    return {"ok": True, "cloud_synced": sync["synced"], "cloud_sync_tried": sync["tried"],
+            "cloud_sync_reason": sync["reason"]}

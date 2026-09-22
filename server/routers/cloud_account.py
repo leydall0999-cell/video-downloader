@@ -82,6 +82,39 @@ def _adopt_local_account(email: str, password: str, fp: str, name: str) -> bool:
     return bool(rr and rr.get("ok"))
 
 
+def _heal_cloud_password(email: str, password: str) -> bool:
+    """云端密码与本机不一致时，把本机密码推上云端（返回是否推成功）。
+
+    🔴 为什么需要（2026-09-22）：账号是**两套库**（本机 auth_store / 云端授权中心），
+    各存一份密码哈希。只要有一侧单独改过密码（例如断网时在本机改了、或用户在网络不通
+    时重置过），两边就分叉 —— 用户「这台能登、换台说密码错」，云端登录失败还会连累
+    会员权益同步。这里让分叉在**下一次登录时自动收敛**。
+
+    **三重前提，缺一不推**（防越权改别人账号的密码）：
+      ① 本机账号表里该账号存在，且**当前输入的密码在本机校验通过**（用户确实持有密码）
+      ② 本机保存着该账号的云端登录 token（说明这台机器上有过合法的云端会话）
+      ③ 云端确认该账号存在且确实不认这个密码（调用方只在 BAD_PASSWORD 时进来）
+    """
+    try:
+        from auth_store import authenticate
+        if not authenticate(email, password):
+            return False
+    except Exception:
+        return False
+    store = _store()
+    try:
+        store._ensure_loaded()
+        acc = (store._state.get("meta") or {}).get("account") or {}
+        token = str(acc.get("token") or "")
+        if not token or (acc.get("email") or "").strip().lower() != email.strip().lower():
+            return False
+        import license_client
+        r = license_client.set_password_remote(email.strip(), password, token=token)
+    except Exception:
+        return False
+    return bool(r and r.get("ok") and r.get("synced", True))
+
+
 def _fp_name() -> tuple[str, str]:
     try:
         import device_id
@@ -153,7 +186,14 @@ def cloud_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not r.get("ok"):
         # 老账号自愈：云端不认识这个账号，但本机账号表里有且密码正确 → 说明这是
         # 当年用手机号注册、云端从没建号的用户，就地补建后重试一次登录。
-        if r.get("code") == "NO_ACCOUNT" and _adopt_local_account(email, password, fp, name):
+        healed = False
+        if r.get("code") == "NO_ACCOUNT":
+            healed = _adopt_local_account(email, password, fp, name)
+        elif r.get("code") == "BAD_PASSWORD":
+            # 两端密码分叉（本机改过、云端没跟上）→ 把本机密码推上云端再试一次。
+            # 这样用户永远不会遇到「本机密码对、云端说密码错」的死结。共用一个重试。
+            healed = _heal_cloud_password(email, password)
+        if healed:
             try:
                 r = license_client.login_remote(email, password, fp, name)
             except license_client.LicenseCloudError as e:

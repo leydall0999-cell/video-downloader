@@ -96,6 +96,23 @@ def redeem_remote(token: str, code: str, base_url: str = DEFAULT_BASE,
                  base_url, timeout, opener)
 
 
+def set_password_remote(email: str, new_password: str, old_password: str = "",
+                        token: str = "", base_url: str = DEFAULT_BASE,
+                        timeout: float = 12.0,
+                        opener: Optional[Callable] = None) -> dict[str, Any]:
+    """把本机账号的新密码同步到云端（两端一套密码，见 license_server.password_impl）。
+
+    鉴权二选一：知道原密码（改密）或持有云端 token（忘记密码重置）。
+    云端没有该账号时返回 {"ok": True, "synced": False}（老的本机专属账号），不是失败。
+    网络故障抛 LicenseCloudError —— 调用方 **fail-open**：本机改密已生效，不能因为
+    云端连不上就把本机也回滚。
+    """
+    return _post("/api/license/password",
+                 {"email": email, "new_password": new_password,
+                  "old_password": old_password, "token": token},
+                 base_url, timeout, opener)
+
+
 def devices_remote(token: str, fp: str = "", base_url: str = DEFAULT_BASE,
                    timeout: float = 8.0,
                    opener: Optional[Callable] = None) -> dict[str, Any]:

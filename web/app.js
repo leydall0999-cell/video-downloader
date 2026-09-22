@@ -8545,11 +8545,16 @@ el.dwVidPlayer.removeAttribute('src');
     const orig = btn.lastChild.textContent;
     btn.lastChild.textContent = '正在保存到本机…';
     el.directHint.hidden = false;
-    el.directHint.textContent = '⬇ 正在从源站下载到「下载」文件夹…大文件需要一会儿，请勿关闭窗口。';
+    el.directHint.textContent = '⬇ 请在弹出的窗口中选择保存位置，选好后开始从源站下载（大文件需要一会儿，请勿关闭窗口）。';
     try {
       const saved = await saveDirectViaBridge(video);
       el.directHint.hidden = false;
-      el.directHint.textContent = `✅ 已保存到本机：${saved}（可在「下载」文件夹查看 / 右键用它打开）`;
+      if (saved === 'CANCELLED') {
+        // 用户在系统保存面板点了「取消」：这不是错误，别触发服务器下载兜底。
+        el.directHint.textContent = '已取消保存（未下载任何文件）。';
+        return;
+      }
+      el.directHint.textContent = `✅ 已保存到本机：${saved}（右键可用它打开 / 在访达中显示）`;
     } catch (err) {
       const msg = (err && err.message) || '本机直存失败';
       el.directHint.hidden = false;
@@ -16453,39 +16458,68 @@ el.dwVidPlayer.removeAttribute('src');
       el.authActionBtn.textContent = isReg ? '创建中…' : '登录中…';
     }
     if (el.authModalClose) el.authModalClose.disabled = true;
-    _authMsg('处理中…');
+    // 文案说清在做什么（原来只写「处理中…」，用户不知道卡在哪一步）
+    _authMsg(isReg ? '正在创建账号…' : '正在登录…');
     try {
       let localToken = null, cloudAccount = null, cloudNotice = '';
       let cloudErrMsg = '', cloudErrCode = '';
-      // 1) 云端账号（会员归属 + 最多 2 台设备的真源）：一次邮箱+密码登录即开通会员，
-      //    不再绑机器。云端成功会顺带签发本地 token（功能门禁/个人中心都依赖它）。
-      const cres = await request(isReg ? '/api/cloud/register' : '/api/cloud/login', {
-        method: 'POST', body: JSON.stringify({ email: ident, password: pw }),
-      });
-      if (cres && cres.ok && cres.local_token) {
-        localToken = cres.local_token;
-        cloudAccount = cres.account || null;
-        cloudNotice = cres.notice || '';
-      } else if (cres && cres.code === 'CLOUD_UNREACHABLE') {
-        _authMsg('授权中心暂时不可达，先用本地账号登录（联网后自动同步会员）', false);
-      } else if (cres && !cres.ok) {
-        // 云端失败原因只作兜底记录——**不要立刻当成最终结论**：
-        // 手机号老账号只存在于本机（云端认不出），云端会说「账号不存在」，
-        // 而本机账号表才是权威。结论等第 2 步本地登录跑完再下。
-        cloudErrMsg = String(cres.error || '');
-        cloudErrCode = String(cres.code || '');
-      }
-      // 2) 保底：无论如何确保本地 token（下载/字幕/个人中心门禁依赖它）
-      let lres = null;
-      if (!localToken) {
-        lres = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
+
+      // ── 阶段 1：本机账号（毫秒级）────────────────────────────────────────────
+      // 🔴 2026-09-22 用户报「怎么会显示处理中呢，直接登录了呀，加载太慢」：
+      //    旧流程把**云端登录串在登录路径最前面**，走 CF 一次往返 1~4 秒，
+      //    用户就得盯着「处理中…」干等 4 秒；而本机账号表登录只要 30 毫秒。
+      //    本机账号表同时是「账号是否存在 / 密码对不对」的权威，也是功能门禁
+      //    （下载/字幕/个人中心）唯一认的凭据 —— 所以它必须排第一、且立刻放行。
+      const localPromise = (async () => {
+        let r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
           method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
         });
-        if (lres && lres.ok && lres.token) {
-          localToken = lres.token;
-        } else if (isReg && lres && /已注册/.test(lres.error || '')) {
-          const l2 = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }) });
-          if (l2 && l2.ok && l2.token) { localToken = l2.token; lres = l2; }
+        // 注册撞上「已注册」→ 本机已有同号账号，改按登录处理（老行为）
+        if (r && !r.ok && isReg && /已注册/.test(r.error || '')) {
+          r = await request('/api/auth/login', {
+            method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+          });
+        }
+        return r;
+      })();
+
+      // ── 阶段 2：云端账号（会员归属 + 最多 2 台设备的真源，1~4 秒）──────────────
+      // 不再挡在登录路径上：**并发**发出，本机登录成功就先放行界面，
+      // 云端结果到了再用 toast 补报（成功=权益已同步；失败=本机账号可正常用，
+      // 但会员权益没跟账号走，换机/重装会丢，必须如实告诉用户）。
+      const cloudPromise = (async () => {
+        let c = await request(isReg ? '/api/cloud/register' : '/api/cloud/login', {
+          method: 'POST', body: JSON.stringify({ email: ident, password: pw }),
+        });
+        // 注册时云端早有同名账号（例如以前在网页版注册过）→ 用同一密码走云端登录，
+        // 否则这轮会员权益同步不上。
+        if (isReg && c && !c.ok && /已存在|已注册/.test(String(c.error || ''))) {
+          c = await request('/api/cloud/login', {
+            method: 'POST', body: JSON.stringify({ email: ident, password: pw }),
+          });
+        }
+        return c;
+      })().catch(() => null);
+
+      const lres = await localPromise;
+      if (lres && lres.ok && lres.token) localToken = lres.token;
+
+      if (!localToken) {
+        // 本机给不出结论（账号不在本机 / 密码不对）：云端还可能是该账号的唯一持有者
+        // （早年只在网页版注册过的邮箱账号，云端会自动补建本机账号）。这条兜底路径
+        // 必须等云端结果才能下结论 —— 用户本来就登不进去，等这一下不亏。
+        const cres = await cloudPromise;
+        if (cres && cres.ok && cres.local_token) {
+          localToken = cres.local_token;
+          cloudAccount = cres.account || null;
+          cloudNotice = cres.notice || '';
+        } else if (cres && !cres.ok) {
+          cloudErrMsg = String(cres.error || '');
+          cloudErrCode = String(cres.code || '');
+        } else {
+          // 请求抛出（断网/超时）→ 云端结论不可得，只能按「本机说了算」处理。
+          cloudErrCode = 'CLOUD_UNREACHABLE';
+          cloudErrMsg = '授权中心暂时不可达';
         }
       }
       if (!localToken) {
@@ -16498,6 +16532,11 @@ el.dwVidPlayer.removeAttribute('src');
         const lcode = String((lres && lres.code) || '');
         let msg = lerr || cloudErrMsg || (isReg ? '注册失败' : '登录失败');
         if (!isReg && lcode === 'BAD_PASSWORD') msg += '（可点下方「忘记密码」重置）';
+        // 本机说「账号不存在」，但云端这轮根本没连上 → 结论不完整（该账号可能只在
+        // 云端），如实补一句，别让用户白跑一趟注册。
+        if (cloudErrCode === 'CLOUD_UNREACHABLE' && lcode === 'NO_ACCOUNT') {
+          msg += '（也可能是网络问题：授权中心暂时连不上，联网后请重试）';
+        }
         _authMsg('❌ ' + msg, true);
         return;
       }
@@ -16516,17 +16555,35 @@ el.dwVidPlayer.removeAttribute('src');
         updateAdminTabVisibility();
         _renderAuthHeader();
         _updateProfileSidebarLock();
-        // 云端没成功但本地成功 → 如实说明（别让用户以为会员权益已经跟账号走，
-        // 否则换机才发现权益只在本机）。手机号老账号已由后端自愈迁移，正常不会再触发。
-        const cloudWarn = (cloudErrMsg && !cloudAccount)
-          ? ` · 本机账号（云端未同步：${cloudErrMsg}）` : '';
+        // 立刻放行：本机 token 到手就够了（功能门禁只认它）。会员状态/云端快照一律
+        // **后台刷新、不 await** —— /api/member/status 里带着一次云端心跳，await 它
+        // 等于又把刚省下的 4 秒还回去（这正是「处理中…」迟迟不消失的第二层原因）。
         _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功')
-                 + (cloudNotice ? ' · ' + cloudNotice : '') + cloudWarn, false);
+                 + (cloudNotice ? ' · ' + cloudNotice : ''), false);
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
-        await renderAccount();
-        await renderMemberStatus();
-        await renderCloudAccount();
+        await renderAccount();          // 只打本机 /api/auth/me，毫秒级
+        renderMemberStatus();           // 后台刷新（不 await）
+        renderCloudAccount();           // 后台刷新（不 await）
+        if (!cloudAccount) {
+          // 云端这一轮还没出结果 → 等它回来补报（成功=权益已跟账号；失败=只在本机，
+          // 换机/重装会丢，必须如实说，不能糊过去）。
+          cloudPromise.then(async (cres) => {
+            if (cres && cres.ok) {
+              cloudNotice = cres.notice || '';
+              try { await renderMemberStatus(); } catch (_) {}
+              try { await renderCloudAccount(); } catch (_) {}
+              showToast('✅ ' + (cloudNotice ? cloudNotice + '；' : '')
+                        + '会员权益已同步到账号（换机/重装不丢）');
+            } else {
+              const why = (cres && cres.error) || cloudErrMsg || '未能连接授权中心';
+              const extra = (cres && cres.code === 'CLOUD_UNREACHABLE')
+                ? '联网后重新登录即可同步' : '重新登录时若仍失败请截图本提示';
+              showToast('⚠️ 本机登录成功，但云端未同步（' + why + '）——'
+                        + '会员权益暂无账号归属，' + extra + '。', 6000);
+            }
+          });
+        }
         setTimeout(() => {
           try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); }
           // 登录/注册前有点击下载的待办，成功后自动继续
@@ -16680,7 +16737,10 @@ el.dwVidPlayer.removeAttribute('src');
         method: 'POST', body: JSON.stringify({ identifier: ident, code: code, password: pw }),
       });
       if (r && r.ok) {
-        _forgetMsg('✅ 密码已重置，请用新密码登录');
+        const warned = r.cloud_sync_tried === true && r.cloud_synced === false;
+        _forgetMsg(warned
+          ? '✅ 本机密码已重置。⚠️ 云端账号未同步（多为断网）：在这台重新登录一次即可同步'
+          : '✅ 密码已重置，请用新密码登录');
         if (el.forgetPw) el.forgetPw.value = '';
         if (el.forgetPw2) el.forgetPw2.value = '';
         if (el.forgetCode) el.forgetCode.value = '';
@@ -17340,11 +17400,16 @@ el.dwVidPlayer.removeAttribute('src');
         body: JSON.stringify({ current_password: cur, new_password: np }),
       });
       if (r && r.ok) {
-        msg('✅ 密码已修改，下次登录请使用新密码', false);
+        // 云端账号库同步结果如实说明：本机改了但云端没改，会导致「这台能登、换台说
+        // 密码错」，用户必须知道（一般是断网所致）。「没试过」不是失败，不提示。
+        const warned = r.cloud_sync_tried === true && r.cloud_synced === false;
+        msg(warned ? '✅ 本机密码已修改。⚠️ 云端账号未同步（多为断网），联网后重新登录会自动同步'
+                   : '✅ 密码已修改，下次登录请使用新密码',
+            false);
         if (el.profCurPw) el.profCurPw.value = '';
         if (el.profNewPw) el.profNewPw.value = '';
         if (el.profNewPw2) el.profNewPw2.value = '';
-        setTimeout(() => _toggleChangePwForm(false), 1200);
+        setTimeout(() => _toggleChangePwForm(false), warned ? 3000 : 1200);
       } else {
         msg((r && r.error) || '修改失败，请重试', true);
       }

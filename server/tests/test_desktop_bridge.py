@@ -43,7 +43,8 @@ def capture_script(kind, call_without_arg=False):
     """调用 choose_files 并返回它生成的 osascript -e 参数列表。"""
     captured = {}
 
-    def fake_run(cmd, capture_output=False, text=False, timeout=None):
+    def fake_run(cmd, capture_output=False, text=False, timeout=None, **kw):
+        captured["env"] = kw.get("env") or {}
         captured["cmd"] = list(cmd)
         return _FakeProc()
 
@@ -67,6 +68,167 @@ def capture_script(kind, call_without_arg=False):
 def exts_of(first_line):
     inner = first_line.split("of type ", 1)[1].split(" with", 1)[0]
     return [e.strip().strip('"') for e in inner.strip("{}").split(",")]
+
+
+def _direct_save_section():
+    """「直接保存到本机」：必须先弹系统保存位置面板，再往用户选的地方落盘。
+
+    背景（2026-09-22 用户报）：点了直存不弹任何位置选择框，直接塞进「下载」文件夹；
+    用户要求「也要弹出来可选择保存的位置弹窗」，与去水印/文案/二维码三处保存一致。
+
+    全程拦掉 subprocess.run 与 requests，不真的调 osascript、不真的下载。
+    """
+    import tempfile
+    import types
+
+    import os
+    tmpdir = Path(tempfile.mkdtemp(prefix="vdl_direct_save_test_"))
+    chosen = str(tmpdir / "我选的目录" / "我的视频.mp4")
+    captured = {}
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None, **kw):
+        captured["env"] = kw.get("env") or {}
+        captured["cmd"] = list(cmd)
+        # 脚本文件是临时文件，必须在调用期间读（调用返回后会被删掉）
+        try:
+            captured["script"] = Path(cmd[1]).read_text(encoding="utf-8")
+        except Exception as exc:  # pragma: no cover
+            captured["script"] = f"<读不到脚本: {exc}>"
+        return types.SimpleNamespace(returncode=0, stdout=chosen + "\n", stderr="")
+
+    real_run = subprocess.run
+    subprocess.run = fake_run
+    try:
+        got = dl._choose_save_path("保存视频到", "我的视频.mp4", "")
+    finally:
+        subprocess.run = real_run
+
+    check("面板真的被调起（osascript）", captured.get("cmd", [None])[0] == "osascript",
+          captured.get("cmd", [])[:1])
+    script = captured.get("script", "")
+    check("用 choose file name（选保存位置）", "choose file name" in script, script[:80])
+    check("提示语进脚本（中文经 argv 会乱码）", "保存视频到" in script, script[:80])
+    check("默认文件名进脚本", "我的视频.mp4" in script, script[:80])
+    check("默认位置为「下载」文件夹", "path to downloads folder" in script, script[:80])
+    check("返回用户选定的绝对路径", got == chosen, got)
+
+    # 用户点「取消」：osascript 退出码 1 → 必须返回 CANCELLED（不是空串、不是报错）
+    def fake_cancel(cmd, capture_output=False, text=False, timeout=None, **kw):
+        return types.SimpleNamespace(returncode=1, stdout="",
+                                     stderr="execution error: User canceled. (-128)")
+
+    subprocess.run = fake_cancel
+    try:
+        got_cancel = dl._choose_save_path("保存视频到", "x.mp4", "")
+    finally:
+        subprocess.run = real_run
+    check("取消面板 → 'CANCELLED'", got_cancel == "CANCELLED", got_cancel)
+
+    # osascript 不可用（没有 GUI/被拦）→ 返回空串，交给调用方兜底，不能抛异常
+    def fake_missing(cmd, capture_output=False, text=False, timeout=None, **kw):
+        raise FileNotFoundError("osascript not found")
+
+    subprocess.run = fake_missing
+    try:
+        got_missing = dl._choose_save_path("保存视频到", "x.mp4", "")
+    finally:
+        subprocess.run = real_run
+    check("osascript 不可用 → 空串（调用方兜底）", got_missing == "", repr(got_missing))
+
+    # ---- save_direct_url 行为 ----
+    api = dl.VdlApi()
+
+    # ① 用户取消：直接返回 CANCELLED，不发起任何请求（不能误触发服务器下载兜底）
+    http_calls = []
+
+    class _Resp:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_content(self, chunk_size=0):
+            return iter([b"x" * 1024])
+
+    fake_requests = types.ModuleType("requests")
+
+    def fake_get(url, headers=None, stream=False, timeout=None, **kw):
+        http_calls.append({"url": url, "headers": headers or {}})
+        return _Resp()
+
+    fake_requests.get = fake_get
+    real_requests = sys.modules.get("requests")
+    sys.modules["requests"] = fake_requests
+
+    real_choose = dl._choose_save_path
+    try:
+        dl._choose_save_path = lambda *a, **kw: "CANCELLED"
+        out_cancel = api.save_direct_url("https://cdn.example.com/v.mp4", "标题.mp4",
+                                        "https://www.douyin.com/")
+        check("直存：取消 → 返回 CANCELLED", out_cancel == "CANCELLED", out_cancel)
+        check("直存：取消时不得发起下载请求", http_calls == [], http_calls)
+
+        # ② 选了位置：落到该位置，且带 Referer/UA（字节系 CDN 缺 Referer 会 403）
+        target = tmpdir / "选定" / "片子.mp4"
+        dl._choose_save_path = lambda *a, **kw: str(target)
+        out1 = api.save_direct_url("https://cdn.example.com/v.mp4", "标题.mp4",
+                                   "https://www.douyin.com/", "UA-Test/1.0")
+        check("直存：落到用户选定的路径", out1 == str(target), out1)
+        check("直存：文件真的写出来了（有内容）",
+              target.exists() and target.stat().st_size > 0, target)
+        check("直存：自动创建所选目录", target.parent.is_dir(), target.parent)
+        check("直存：残留 .part 已清理",
+              not (target.parent / (target.name + ".part")).exists())
+        check("直存：请求带 Referer（防盗链）",
+              http_calls[-1]["headers"].get("Referer") == "https://www.douyin.com/",
+              http_calls[-1]["headers"])
+        check("直存：请求带 UA", http_calls[-1]["headers"].get("User-Agent") == "UA-Test/1.0",
+              http_calls[-1]["headers"])
+
+        out2 = api.save_direct_url("https://cdn.example.com/v.mp4", "标题.mp4",
+                                   "https://www.douyin.com/")
+        check("直存：同名不覆盖，自动加 (1)", out2 == str(target.with_name("片子(1).mp4")), out2)
+
+        # ③ 文件名清洗：路径分隔符/非法字符不得逃出所选目录，且必须带扩展名
+        target2 = tmpdir / "选定2" / "占位.mp4"
+        dl._choose_save_path = lambda *a, **kw: str(target2)
+        out3 = api.save_direct_url("https://cdn.example.com/v.mp4", "../a/b:c*?.mp4")
+        check("直存：文件名非法字符被清洗", "/" not in Path(out3).name and ":" not in Path(out3).name,
+              out3)
+        check("直存：清洗后仍在所选目录内", Path(out3).parent == target2.parent, out3)
+
+        # ④ 源站 4xx → 报错文本（前端据此回落服务器下载），且不留下半截文件
+        class _Bad:
+            status_code = 403
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        fake_requests.get = lambda *a, **kw: _Bad()
+        target3 = tmpdir / "选定3" / "x.mp4"
+        dl._choose_save_path = lambda *a, **kw: str(target3)
+        out4 = api.save_direct_url("https://cdn.example.com/v.mp4", "x.mp4",
+                                   "https://www.douyin.com/")
+        check("直存：403 如实报错（含状态码）", out4.startswith("ERROR:") and "403" in out4, out4)
+        check("直存：失败不留半截文件", not target3.exists(), target3)
+
+        # ⑤ 非法直链直接拒绝
+        out5 = api.save_direct_url("javascript:alert(1)", "x.mp4")
+        check("直存：非 http(s) 直链被拒", out5.startswith("ERROR:"), out5)
+    finally:
+        dl._choose_save_path = real_choose
+        if real_requests is not None:
+            sys.modules["requests"] = real_requests
+        else:  # pragma: no cover
+            sys.modules.pop("requests", None)
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def main():
@@ -122,6 +284,10 @@ def main():
     check("带 multiple selections allowed", "multiple selections allowed" in lines[0])
     check("语句拆成多个 -e（不用内嵌换行）", len(lines) >= 5 and not any("\n" in ln for ln in lines), len(lines))
     check("末尾 return out", lines[-1].strip() == "return out", lines[-1])
+
+    print("")
+    print("▶ 桌面桥「直接保存到本机」：保存位置面板 + 落盘行为")
+    _direct_save_section()
 
     print("")
     print("=========================================")

@@ -144,6 +144,24 @@ run_one test_commentary_style_intensity.py
 #                                        节点删失败必须保留记录、通道根推导（direct 只能上传，
 #                                        删除/探活须用源站根）、上传须透传 X-Expire 且成功后落历史
 run_one test_share_history.py
+#  19. test_login_error_message.py  —— 登录提示不得张冠李戴 + 手机号账号的云端建号（2026-09-22 新增）：
+#                                      本机账号表决定「账号是否存在」（本机区分 BAD_PASSWORD /
+#                                      NO_ACCOUNT，公网仍模糊防枚举）、手机号老账号自愈只在
+#                                      本机密码正确时补建、云端的账号主键口径与 App 一致
+#                                      ⚠️ 之前漏挂在清单里 —— 加了新测试文件必须在这里登记，
+#                                     否则构建门禁根本不跑它（只写文件＝没门禁）
+run_one test_login_error_message.py
+#  20. test_cloud_account.py        —— 账号制客户端（2026-09-22）：
+#                                      同一笔云端购买不得重复落户（幂等）、登出/被挤掉不清已购权益
+run_one test_cloud_account.py
+#  21. test_password_sync.py        —— 🔴 两端账号库的密码一致性（2026-09-22 新增）：
+#                                      账号其实是两套库（本机 auth_store 管登录与门禁 / 云端授权中心
+#                                      管会员与设备位），各存一份密码哈希 —— 任何一侧单独改密都会
+#                                      分叉成「这台能登、换台说密码错」。锁死三条收敛路径：
+#                                      ①改密/重置后推云端（fail-open，云端失败不回滚本机）
+#                                      ②云端本无此账号不算失败 ③下次登录时自愈（须本机密码对
+#                                      **且**持该账号的云端 token，防越权改他人密码）
+run_one test_password_sync.py
 
 echo ""
 echo "========================================="
