@@ -3801,11 +3801,30 @@ def _best_audio_size(formats: list[dict]) -> int:
     ]
     return max(sizes, default=0)
 
+def _bucket_height(height: int) -> int:
+    """把非标准高度归到最接近的标准档（1080/720/480/360…）。
+
+    🔴 2026-09-22 用户实测踩坑：YouTube 少数视频给的是 **1072 / 714 / 476** 这类
+    非整高度（标准档减若干行，常见于 1.79:1 等非 16:9 或音乐长视频）。若直接把它们
+    当独立档位：①界面上会出现「1072P」这种怪标签；②更严重的是固定档位表的
+    `1080 > 视频最高(1072)` 判断会把 **1080 整档当「超过最高画质」跳过** → 用户看到
+    的最高档只有 720P（明明网页播放器里有 1080p）。
+    归一到标准档后：标签规整、档位不丢、下载选择器 `height<=1080` 仍能命中 1072 的流。
+    """
+    for preset, _ in QUALITY_PRESETS:
+        if abs(height - preset) <= max(4, int(preset * 0.03)):
+            return preset
+    return height
+
+
 def _video_size_at(formats: list[dict], height: int) -> int:
+    # 容差匹配：非标准高度（1072 等）归到 1080 档后，按 ±3% 找真实 stream 估算体积
+    tol = max(4, int(height * 0.03))
     sizes = [
         f.get("filesize") or f.get("filesize_approx") or 0
         for f in formats
-        if f.get("height") == height and f.get("vcodec") not in (None, "none")
+        if f.get("height") and abs(int(f["height"]) - height) <= tol
+        and f.get("vcodec") not in (None, "none")
     ]
     return max(sizes, default=0)
 
@@ -3817,8 +3836,10 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     只列 formats 中实际存在的高度（视频只有 720 就不再虚构 480/360 假档）。
     """
     formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    # 非标准高度（YouTube 偶见 1072/714/476）先归到标准档，避免「1072P」怪标签
+    # 和「1080 > 1072 被判超最高画质 → 1080 档整档消失」（2026-09-22 实测踩坑）
     heights = sorted({
-        int(f["height"]) for f in formats
+        _bucket_height(int(f["height"])) for f in formats
         if f.get("height") and 0 < int(f["height"]) <= 4320
     }, reverse=True)
     audio_size = _best_audio_size(formats)
