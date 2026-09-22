@@ -4885,7 +4885,7 @@
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
   const sbDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '',
-                    preview: null, view: 'srt' };
+                    preview: null, view: 'srt', metaBase: '' };
   const sbSetStatus = (text) => { el.sbStatus.textContent = text; };
   const sbStopPolling = () => { if (sbState.timer) { clearInterval(sbState.timer); sbState.timer = null; } };
 
@@ -4916,7 +4916,10 @@
         el.sbProgressFill.style.width = '100%';
         sbState.srtName = st.srt_name || 'subtitle.srt';
         sbState.txtName = st.txt_name || 'subtitle.txt';
-        el.sbMeta.textContent = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'} · ${st.cpu_threads || 4} 线程`;
+        // 覆盖时段由预览接口补上（见 sbLoadPreview）——「共 N 句」回答不了
+        // 用户真正在意的「全片都识别了吗」
+        sbState.metaBase = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'} · ${st.cpu_threads || 4} 线程`;
+        el.sbMeta.textContent = sbState.metaBase;
         el.sbResult.hidden = false;
         sbSetStatus('完成 ✅');
         // 识别结果立即可预览（2026-09-22）：不必先下载
@@ -5009,7 +5012,7 @@
     if (el.sbPreviewNote && pv && pv.segments) {
       if (pv.truncated) {
         el.sbPreviewNote.textContent =
-          `内容较长，此处仅预览前 ${pv.segments.length} 句（共 ${pv.lines} 句），完整内容请下载`;
+          `内容较长，此处仅显示前 ${pv.segments.length} 句（共 ${pv.lines} 句），完整内容请下载`;
       } else {
         // 在切换视图之后量（纯文本视图行更矮，是否溢出会变）
         const scrollable = el.sbLines && el.sbLines.scrollHeight > el.sbLines.clientHeight + 4;
@@ -5033,6 +5036,11 @@
       // 期间用户可能已经换了文件/重新提交 → 丢弃过期响应
       if (sbState.jobId !== jobId) return;
       sbState.preview = pv;
+      // 「覆盖 00:00 → 44:17」：直接回答「有没有提取全片」——45 分钟剧集有 872 句，
+      // 只看「共 N 句」判断不了范围，用户会以为识别到一半就断了（2026-09-22 实测踩到）
+      if (el.sbMeta && sbState.metaBase && pv.covered && pv.covered.start) {
+        el.sbMeta.textContent = `${sbState.metaBase} · 覆盖 ${pv.covered.start} → ${pv.covered.end}`;
+      }
       sbRenderPreview();
       sbSetPreviewView(sbState.view);
     } catch (e) {

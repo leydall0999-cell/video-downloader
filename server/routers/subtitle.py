@@ -21,9 +21,14 @@ from stats import record_event
 
 router = APIRouter()
 
-# 结果预览最多返回多少句（2026-09-22）：长视频可能上千句，前端一次渲染会卡；
-# 超出部分不返回、只在 UI 上说明「完整内容请下载」，总句数照常统计。
-_PREVIEW_MAX_LINES = 600
+# 结果预览最多返回多少句（2026-09-22 二次修订）。
+#
+# 初版设 600，实测被用户判为「没有全片提取」：45 分钟剧集有 872 句，预览滚到底停在
+# 第 600 句（31:08），看上去就像识别到一半就断了 —— 明明 SRT 完整到片尾。
+# ⇒ 上限必须高到「任何正常片子都碰不到」。按本机实测密度（872 句 / 45.5 分钟 ≈ 0.32 句/秒），
+# 5000 句 ≈ 4.3 小时连续对白，单集/单部电影/长直播都覆盖得住；响应约 0.55MB，本机回环无感。
+# 仍保留这个上限只为兜住异常输入（十几小时的连续语音），此时 UI 会明确写出「仅显示前 N 句」。
+_PREVIEW_MAX_LINES = 5000
 
 # 国内加速：所有走 huggingface_hub 的下载（faster-whisper 字幕模型、扩散去水印模型）
 # 统一走 hf-mirror。
@@ -357,8 +362,11 @@ def subtitle_preview(job_id: str, request: app.Request) -> dict:
     """识别结果预览：把已落盘的 SRT 解析成逐句结构，供前端在结果卡里直接展示。
 
     用户要求「识别完要可预览」——此前结果卡只有两个下载按钮，看不到识别出来的内容。
-    这里**只读已生成的 SRT**（不重跑 ASR、不额外占用 CPU），并对超长视频截断到
-    _PREVIEW_MAX_LINES 句（其余仍可下载），避免一次把几千行塞给前端。
+    这里**只读已生成的 SRT**（不重跑 ASR、不额外占用 CPU）。
+
+    返回体除逐句内容外还带 `covered`（首句起点 → 末句终点），让用户一眼看出
+    「识别覆盖到片子的哪个位置」，不必靠滚动到底去推断（_PREVIEW_MAX_LINES 见文件头注记）。
+    `covered` 按**整个 SRT**统计，即使返回体被截断也仍反映真实覆盖范围。
     """
     path = _subtitle_file(job_id, "srt", request)
     job = SUBTITLE_JOBS.get(job_id) or {}
@@ -369,6 +377,8 @@ def subtitle_preview(job_id: str, request: app.Request) -> dict:
 
     segments: list[dict] = []
     total = 0
+    first_start_raw = ""
+    last_end_raw = ""
     for block in raw.replace("\r\n", "\n").split("\n\n"):
         lines = [ln for ln in block.strip("\n").split("\n") if ln.strip()]
         if len(lines) < 2 or "-->" not in lines[1]:
@@ -377,9 +387,12 @@ def subtitle_preview(job_id: str, request: app.Request) -> dict:
         if not idx_raw.isdigit():
             continue
         total += 1
+        start_raw, _, end_raw = ts_raw.partition("-->")
+        if not first_start_raw:
+            first_start_raw = start_raw
+        last_end_raw = end_raw
         if len(segments) >= _PREVIEW_MAX_LINES:
             continue                      # 仍继续数总句数，只截断返回体
-        start_raw, _, end_raw = ts_raw.partition("-->")
         segments.append({
             "i": int(idx_raw),
             "start": round(_parse_ts(start_raw), 3),
@@ -387,10 +400,14 @@ def subtitle_preview(job_id: str, request: app.Request) -> dict:
             "ts": _short_ts(start_raw),
             "text": "\n".join(lines[2:]).strip(),
         })
+    covered = {}
+    if first_start_raw:
+        covered = {"start": _short_ts(first_start_raw), "end": _short_ts(last_end_raw)}
     return {
         "status": job.get("status", "completed"),
         "lines": total,
         "language": job.get("language", ""),
         "segments": segments,
         "truncated": total > len(segments),
+        "covered": covered,
     }
