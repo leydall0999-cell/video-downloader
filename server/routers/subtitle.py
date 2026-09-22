@@ -21,6 +21,10 @@ from stats import record_event
 
 router = APIRouter()
 
+# 结果预览最多返回多少句（2026-09-22）：长视频可能上千句，前端一次渲染会卡；
+# 超出部分不返回、只在 UI 上说明「完整内容请下载」，总句数照常统计。
+_PREVIEW_MAX_LINES = 600
+
 # 国内加速：所有走 huggingface_hub 的下载（faster-whisper 字幕模型、扩散去水印模型）
 # 统一走 hf-mirror。
 #
@@ -145,6 +149,25 @@ def _fmt_ts(seconds: float) -> str:
     m, ms = divmod(ms, 60000)
     s, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _parse_ts(raw: str) -> float:
+    """SRT 时间戳（00:00:01,200）→ 秒；解析失败返回 0。"""
+    try:
+        hms, _, ms = raw.strip().replace(".", ",").partition(",")
+        parts = (hms.split(":") + ["0", "0", "0"])[:3]
+        h, m, s = (int(float(p or 0)) for p in parts)
+        return h * 3600 + m * 60 + s + (int(float(ms or 0)) / 1000.0)
+    except Exception:
+        return 0.0
+
+
+def _short_ts(raw: str) -> str:
+    """预览用紧凑时间戳：不足 1 小时显示 mm:ss，超过则 h:mm:ss。"""
+    total = int(_parse_ts(raw))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
 def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_library: bool,
@@ -327,3 +350,47 @@ def _subtitle_file(job_id: str, kind: str, request: app.Request) -> _Path:
 def subtitle_file(job_id: str, request: app.Request, kind: str = "srt") -> app.FileResponse:
     path = _subtitle_file(job_id, kind if kind in ("srt", "txt") else "srt", request)
     return app.FileResponse(path, filename=path.name)
+
+
+@router.get("/api/subtitle/{job_id}/preview")
+def subtitle_preview(job_id: str, request: app.Request) -> dict:
+    """识别结果预览：把已落盘的 SRT 解析成逐句结构，供前端在结果卡里直接展示。
+
+    用户要求「识别完要可预览」——此前结果卡只有两个下载按钮，看不到识别出来的内容。
+    这里**只读已生成的 SRT**（不重跑 ASR、不额外占用 CPU），并对超长视频截断到
+    _PREVIEW_MAX_LINES 句（其余仍可下载），避免一次把几千行塞给前端。
+    """
+    path = _subtitle_file(job_id, "srt", request)
+    job = SUBTITLE_JOBS.get(job_id) or {}
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise app.HTTPException(status_code=500, detail=f"读取字幕失败：{e}")
+
+    segments: list[dict] = []
+    total = 0
+    for block in raw.replace("\r\n", "\n").split("\n\n"):
+        lines = [ln for ln in block.strip("\n").split("\n") if ln.strip()]
+        if len(lines) < 2 or "-->" not in lines[1]:
+            continue
+        idx_raw, ts_raw = lines[0].strip(), lines[1].strip()
+        if not idx_raw.isdigit():
+            continue
+        total += 1
+        if len(segments) >= _PREVIEW_MAX_LINES:
+            continue                      # 仍继续数总句数，只截断返回体
+        start_raw, _, end_raw = ts_raw.partition("-->")
+        segments.append({
+            "i": int(idx_raw),
+            "start": round(_parse_ts(start_raw), 3),
+            "end": round(_parse_ts(end_raw), 3),
+            "ts": _short_ts(start_raw),
+            "text": "\n".join(lines[2:]).strip(),
+        })
+    return {
+        "status": job.get("status", "completed"),
+        "lines": total,
+        "language": job.get("language", ""),
+        "segments": segments,
+        "truncated": total > len(segments),
+    }

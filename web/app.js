@@ -771,6 +771,13 @@
     sbDlTxt: $('sbDlTxt'),
     sbHelpBtn: $('sbHelpBtn'),
     sbHelpText: $('sbHelpText'),
+    // 识别结果预览（2026-09-22）
+    sbPreview: $('sbPreview'),
+    sbTabSrt: $('sbTabSrt'),
+    sbTabTxt: $('sbTabTxt'),
+    sbPreviewNote: $('sbPreviewNote'),
+    sbCopyBtn: $('sbCopyBtn'),
+    sbLines: $('sbLines'),
 
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
@@ -4877,7 +4884,8 @@
 
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
   const sbDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
-  const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '' };
+  const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '',
+                    preview: null, view: 'srt' };
   const sbSetStatus = (text) => { el.sbStatus.textContent = text; };
   const sbStopPolling = () => { if (sbState.timer) { clearInterval(sbState.timer); sbState.timer = null; } };
 
@@ -4890,6 +4898,7 @@
     el.sbFileLabel.textContent = sbState.name;
     el.sbStartBtn.disabled = false;
     el.sbResult.hidden = true;
+    sbResetPreview('识别完成后在此预览');
     sbSetStatus('');
   };
 
@@ -4910,6 +4919,8 @@
         el.sbMeta.textContent = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'} · ${st.cpu_threads || 4} 线程`;
         el.sbResult.hidden = false;
         sbSetStatus('完成 ✅');
+        // 识别结果立即可预览（2026-09-22）：不必先下载
+        sbLoadPreview(sbState.jobId);
       } else if (st.status === 'failed') {
         sbStopPolling();
         el.sbProgressWrap.hidden = true;
@@ -4942,6 +4953,125 @@
     } catch (e) { sbSetStatus('下载失败：' + (e && e.message || e)); }
   };
 
+  // ---------- 识别结果预览（2026-09-22 用户要求「识别完要可预览」） ----------
+  // 结果卡此前只有两个下载按钮，用户必须先下载才能看到识别内容。这里在卡内直接渲染
+  // 逐句列表（时间轴视图）+ 纯文本视图，并可一键复制（不用先落盘）。
+  const sbFmtSrtTs = (sec) => {
+    const ms = Math.max(0, Math.round((Number(sec) || 0) * 1000));
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000), r = ms % 1000;
+    const p = (n, w) => String(n).padStart(w, '0');
+    return `${p(h, 2)}:${p(m, 2)}:${p(s, 2)},${p(r, 3)}`;
+  };
+
+  const sbRenderPreview = () => {
+    if (!el.sbLines) return;
+    el.sbLines.textContent = '';
+    const pv = sbState.preview;
+    const segs = (pv && pv.segments) || [];
+    if (!segs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sb-preview-empty';
+      empty.textContent = '没有可预览的内容';
+      el.sbLines.appendChild(empty);
+      return;
+    }
+    // 用 createElement + textContent 构建（字幕文本可能含 < & 等字符，绝不拼 innerHTML）
+    const frag = document.createDocumentFragment();
+    segs.forEach((seg) => {
+      const row = document.createElement('div');
+      row.className = 'sb-line';
+      const ts = document.createElement('span');
+      ts.className = 'sb-line-ts';
+      ts.textContent = seg.ts || '';
+      const no = document.createElement('span');
+      no.className = 'sb-line-no';
+      no.textContent = String(seg.i == null ? '' : seg.i);
+      const tx = document.createElement('span');
+      tx.className = 'sb-line-text';
+      tx.textContent = seg.text || '';
+      row.appendChild(ts); row.appendChild(no); row.appendChild(tx);
+      frag.appendChild(row);
+    });
+    el.sbLines.appendChild(frag);
+    el.sbLines.scrollTop = 0;
+  };
+
+  const sbSetPreviewView = (view) => {
+    sbState.view = view === 'txt' ? 'txt' : 'srt';
+    const isTxt = sbState.view === 'txt';
+    if (el.sbPreview) el.sbPreview.classList.toggle('is-txt', isTxt);
+    if (el.sbTabSrt) { el.sbTabSrt.classList.toggle('is-active', !isTxt); el.sbTabSrt.setAttribute('aria-selected', isTxt ? 'false' : 'true'); }
+    if (el.sbTabTxt) { el.sbTabTxt.classList.toggle('is-active', isTxt); el.sbTabTxt.setAttribute('aria-selected', isTxt ? 'true' : 'false'); }
+    // 说明位只承担「提示/异常」信息（句数已在卡标题里，不重复）：
+    // 被截断 → 说明只预览了前 N 句；列表放不下 → 提示可滚动（否则最后一行被切一半像卡住）
+    const pv = sbState.preview;
+    if (el.sbPreviewNote && pv && pv.segments) {
+      if (pv.truncated) {
+        el.sbPreviewNote.textContent =
+          `内容较长，此处仅预览前 ${pv.segments.length} 句（共 ${pv.lines} 句），完整内容请下载`;
+      } else {
+        // 在切换视图之后量（纯文本视图行更矮，是否溢出会变）
+        const scrollable = el.sbLines && el.sbLines.scrollHeight > el.sbLines.clientHeight + 4;
+        el.sbPreviewNote.textContent = scrollable ? '上下滚动查看全部' : '';
+      }
+    }
+  };
+
+  const sbResetPreview = (note) => {
+    sbState.preview = null;
+    if (el.sbLines) el.sbLines.textContent = '';
+    if (el.sbPreviewNote) el.sbPreviewNote.textContent = note || '识别完成后在此预览';
+    sbSetPreviewView('srt');
+  };
+
+  const sbLoadPreview = async (jobId) => {
+    if (!jobId || !el.sbLines) return;
+    if (el.sbPreviewNote) el.sbPreviewNote.textContent = '正在读取字幕…';
+    try {
+      const pv = await request(`/api/subtitle/${jobId}/preview`);
+      // 期间用户可能已经换了文件/重新提交 → 丢弃过期响应
+      if (sbState.jobId !== jobId) return;
+      sbState.preview = pv;
+      sbRenderPreview();
+      sbSetPreviewView(sbState.view);
+    } catch (e) {
+      if (el.sbPreviewNote) el.sbPreviewNote.textContent = '预览加载失败：' + ((e && e.message) || e);
+    }
+  };
+
+  const sbCopyPreview = async () => {
+    const pv = sbState.preview;
+    const segs = (pv && pv.segments) || [];
+    if (!segs.length) { sbSetStatus('暂无可复制的内容'); return; }
+    const isTxt = sbState.view === 'txt';
+    const payload = isTxt
+      ? segs.map((s) => s.text || '').join('\n')
+      : segs.map((s) => `${s.i}\n${sbFmtSrtTs(s.start)} --> ${sbFmtSrtTs(s.end)}\n${s.text || ''}\n`).join('\n');
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(payload);
+      ok = true;
+    } catch (_e) {
+      // WKWebView 下 clipboard API 可能被拒 → 退回隐藏 textarea + execCommand
+      const ta = document.createElement('textarea');
+      ta.value = payload;
+      ta.setAttribute('readonly', 'readonly');
+      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+      document.body.appendChild(ta);
+      ta.select();
+      try { ok = document.execCommand('copy'); } catch (_e2) { ok = false; }
+      document.body.removeChild(ta);
+    }
+    sbSetStatus(ok
+      ? `已复制${isTxt ? '纯文本' : '带时间轴字幕'}（${segs.length} 句）`
+      : '复制失败，请改用下方下载按钮');
+  };
+
+  if (el.sbTabSrt) el.sbTabSrt.addEventListener('click', () => sbSetPreviewView('srt'));
+  if (el.sbTabTxt) el.sbTabTxt.addEventListener('click', () => sbSetPreviewView('txt'));
+  if (el.sbCopyBtn) el.sbCopyBtn.addEventListener('click', () => { sbCopyPreview(); });
+
   el.sbPickBtn.addEventListener('click', () => {
     if (sbDesktopNative()) {
       window.VDL.desktop.chooseFiles().then(list => {
@@ -4958,6 +5088,7 @@
   const sbStartExtract = () => {
     if (!sbState.path) return;
     el.sbResult.hidden = true;
+    sbResetPreview('识别完成后在此预览');
     el.sbProgressWrap.hidden = false;
     el.sbProgressFill.style.width = '0%';
     sbSetStatus('提交中…');

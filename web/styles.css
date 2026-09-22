@@ -4485,6 +4485,57 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
   background: var(--brand-soft, #eef2ff); border: 1px solid #dfe3ff; border-radius: 8px; padding: .6rem .8rem; }
 .sb-help-text p { margin: .2rem 0; }
 
+/* 字幕识别结果预览（2026-09-22）：识别完成后直接看内容，不必先下载。
+   结构：条（视图切换 + 句数说明 + 复制） + 可滚动逐句列表。
+   颜色全走主题变量（--line/--text/--text-mute/--bg-soft），深色自动翻面。 */
+.sb-preview {
+  margin-top: .75rem; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); overflow: hidden;
+}
+.sb-preview-bar {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .4rem .55rem; background: var(--bg-soft, #f7f8fc);
+  border-bottom: 1px solid var(--line);
+}
+.sb-preview-tabs { display: inline-flex; gap: .2rem; flex: 0 0 auto; }
+.sb-tab {
+  border: 1px solid transparent; background: none; font: inherit; font-size: .78rem;
+  color: var(--text-mute); padding: .22rem .6rem; border-radius: 999px; cursor: pointer;
+}
+.sb-tab:hover { color: var(--brand-strong, #4338ca); }
+.sb-tab.is-active {
+  background: var(--brand-soft, #eef2ff); border-color: #dfe3ff;
+  color: var(--brand-strong, #4338ca); font-weight: 600;
+}
+.sb-preview-note { margin-left: auto; font-size: .75rem; color: var(--text-mute); }
+.sb-copy {
+  flex: 0 0 auto; border: 1px solid var(--line); background: var(--surface);
+  color: var(--text-mute); font: inherit; font-size: .75rem;
+  padding: .2rem .55rem; border-radius: 7px; cursor: pointer;
+}
+.sb-copy:hover { color: var(--brand-strong, #4338ca); border-color: #dfe3ff; }
+.sb-lines { max-height: 320px; overflow: auto; padding: .35rem .25rem .35rem .45rem; }
+.sb-line {
+  display: grid; grid-template-columns: 52px 34px 1fr; gap: .5rem;
+  align-items: baseline; padding: .18rem .4rem; border-radius: 6px;
+  font-size: .84rem; line-height: 1.55;
+}
+.sb-line:nth-child(odd) { background: var(--bg-soft, #f9fafd); }
+.sb-line-ts {
+  color: var(--brand-strong, #4338ca); font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+}
+.sb-line-no { color: var(--text-mute); font-size: .72rem; text-align: right; }
+.sb-line-text { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+/* 纯文本视图：只留正文，去掉时间戳与序号列（列宽也要一起收，否则正文右缩进） */
+.sb-preview.is-txt .sb-line { grid-template-columns: 1fr; }
+.sb-preview.is-txt .sb-line-ts,
+.sb-preview.is-txt .sb-line-no { display: none; }
+.sb-preview-empty { padding: 1.1rem .6rem; text-align: center; color: var(--text-mute); font-size: .82rem; }
+/* 深色：淡色底与青紫强调需要定点换值（--bg-soft 深色已定义，此处只补对比度不足的几处） */
+html.theme-dark .sb-tab.is-active { background: #2A2F45; border-color: #3A4066; color: #C7D2FE; }
+html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; border-color: #3A4066; }
+
 /* ---------------- 2026-09-08 侧栏改版：中文组标题 + 分组折叠 + 子项去图标 ---------------- */
 /* 子项不显示 emoji 图标（纯文字更干净）；display:none 不参与布局，不留空位 */
 .sidebar-item-icon { display: none !important; }
@@ -6114,6 +6165,10 @@ html.theme-dark select,
 html.theme-dark textarea {
   background-color: var(--surface); color: var(--text); border-color: var(--line);
 }
+/* 通用卡片 .uc-bulk：底色写死 #fafbfd（浅色），深色下会变成「浅底浅字」——
+   卡标题用的是 --text（深色下是 #E7E8EC），实测几乎看不见。全站 15 处用到它，
+   故在此统一换底（2026-09-22 做字幕预览时发现，字幕结果卡里尤其刺眼）。 */
+html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: var(--line); }
 
 /* ======================================================================
    2026-09-19：「配音与音量」卡排版整肃（用户「太乱了,东一块西一块」）

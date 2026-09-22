@@ -37,6 +37,8 @@ for _p in (str(SERVER), str(DESKTOP)):
 # 隔离数据目录：必须在 import app 之前设好
 _TMPROOT = tempfile.mkdtemp(prefix="vdl_dlwiring_")
 os.environ["VDL_DATA_DIR"] = _TMPROOT
+# 保存面板目录（Python 侧读写 in.txt/out.txt/编译 applet）单独重定向，见 call_bridge
+_PANEL_TMP = Path(tempfile.mkdtemp(prefix="vdl_dlwiring_panel_"))
 
 import app  # noqa: E402
 import routers.compress as compress_mod  # noqa: E402
@@ -82,12 +84,20 @@ def call_bridge(job_id, suggested, dest=None):
         return _FakeProc(1, "", "User canceled.")
 
     real_run = subprocess.run
+    real_panel_dir = dl._save_panel_dir
     subprocess.run = fake_run
+    # 保存面板的入参/结果文件目录固定写死在 `~/.video-downloader/save_panel`
+    # （AppleScript 里也是这个绝对路径），**不认 VDL_DATA_DIR** —— 不重定向的话本测试
+    # 会往用户真实目录写 in.txt 残留（2026-09-22 实测发现，与文件顶部「绝不写用户家目录」
+    # 的声明不符）。这里只重定向 Python 侧的读写；applet 因 subprocess.run 已被 stub
+    # 而不会真的运行，故 AppleScript 内的绝对路径不受影响。
+    dl._save_panel_dir = lambda: str(_PANEL_TMP)
     try:
         api = dl.VdlApi()
         rv = api.save_convert_file_dialog(job_id, suggested)
     finally:
         subprocess.run = real_run
+        dl._save_panel_dir = real_panel_dir
     return rv, captured.get("script", "")
 
 

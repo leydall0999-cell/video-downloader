@@ -1046,6 +1046,19 @@
         <p data-page-node-id="7qvIvb2ED0jscag5xq1HuE"><b data-page-node-id="gZWj0r1eZXrw1Le4oNZiy7">下载 TXT 纯文本</b>：只有台词本身，一行一句、没有时间。适合阅读整理、做笔记，或复制给其它工具二次加工。</p>
         <p style="color:var(--text-mute,#6b7280);" data-page-node-id="0zv199MFuqP87IeEVaSfnr">两次识别内容一致，按用途选择即可。</p>
       </div>
+      <!-- 识别结果预览（2026-09-22 用户要求「识别完要可预览」）：
+           此前结果卡只有两个下载按钮，用户必须先把文件下下来才能看到识别结果。 -->
+      <div class="sb-preview" id="sbPreview" data-page-node-id="SbPrevWrap0001">
+        <div class="sb-preview-bar" data-page-node-id="SbPrevBar00001">
+          <div class="sb-preview-tabs" role="tablist" aria-label="预览视图" data-page-node-id="SbPrevTabs0001">
+            <button type="button" class="sb-tab is-active" id="sbTabSrt" role="tab" aria-selected="true" data-page-node-id="SbPrevTabSrt01">时间轴</button>
+            <button type="button" class="sb-tab" id="sbTabTxt" role="tab" aria-selected="false" data-page-node-id="SbPrevTabTxt01">纯文本</button>
+          </div>
+          <span class="sb-preview-note" id="sbPreviewNote" data-page-node-id="SbPrevNote0001">识别完成后在此预览</span>
+          <button type="button" class="sb-copy" id="sbCopyBtn" title="复制当前视图的全部内容" data-page-node-id="SbPrevCopy0001">复制</button>
+        </div>
+        <div class="sb-lines" id="sbLines" data-page-node-id="SbPrevLines001"></div>
+      </div>
       <div class="uc-bulk-actions" data-page-node-id="Jd2uVa26tZX56oY2Vq5E4q">
         <button type="button" class="btn btn-primary" id="sbDlSrt" data-page-node-id="s13U4hewMGCB6uLYCMM967">下载 SRT 字幕</button>
         <button type="button" class="btn btn-ghost" id="sbDlTxt" data-page-node-id="Mk86YBnGBelzitFb7LZrAB">下载 TXT 纯文本</button>
