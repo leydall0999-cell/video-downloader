@@ -3507,7 +3507,9 @@ from user_membership import get_current_user_id, current_member_store
 _SYNC_RL = {"ts": {}, "lock": threading.Lock()}
 
 def _sync_rate_ok(ip: str) -> bool:
-    """单 IP 30 秒内至多一次，防滥用。"""
+    """单 IP 30 秒内至多一次，防滥用。环回客户端（桌面 App 自连）豁免。"""
+    if _is_loopback_ip(ip):
+        return True
     now = time.time()
     with _SYNC_RL["lock"]:
         last = _SYNC_RL["ts"].get(ip, 0)
