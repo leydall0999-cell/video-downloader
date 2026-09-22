@@ -608,6 +608,26 @@ def _client_ip(request: Request) -> str:
         return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
+
+def _is_loopback_ip(ip: str) -> bool:
+    """环回地址（桌面 App 自连 127.0.0.1 / ::1 / localhost）判定的唯一真源。
+
+    桌面 App 是单用户本机程序：前端（pywebview/WKWebView）所有请求都来自
+    127.0.0.1，与本机 FastAPI 后端共用同一个环回 IP。若对它套用「每 IP 限流」，
+    一台机器的全部正常操作会挤进同一个桶，30 次/小时的上限极易打满，导致用户
+    在做解析/下载/转码时频繁收到「下载太频繁了」的 429（2026-09-22 用户实测反馈）。
+    环回地址不存在被外部薅带宽的滥用场景，故一律豁免；只有真实远端 IP 才受限。
+    注意：经 Cloudflare / nginx 反代时 _client_ip 会取 X-Real-IP / X-Forwarded-For
+    里的真实远端地址，不会误判为环回，公开部署的护栏依然有效。
+    """
+    if ip in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return False
+
+
 # ---- SSRF 防护：拒绝指向内网 / 环回 / 链路本地 / 云元数据的链接 ----
 # 视频站都是公网域名；攻击者若传入内网地址（如 169.254.169.254 云元数据），
 # 服务器会去请求并可能泄露凭据，或被当成跳板。入口强制只允许公网可达地址。
@@ -656,10 +676,15 @@ def _assert_safe_url(url: str) -> None:
         )
 
 def _check_rate_limit(request: Request) -> None:
-    """滑动窗口限流。超限抛 429，并告知还要等多久。"""
+    """滑动窗口限流。超限抛 429，并告知还要等多久。
+
+    环回客户端（桌面 App 自连）豁免，详见 _is_loopback_ip。
+    """
     if RATE_LIMIT_PER_HOUR <= 0:
         return
     ip = _client_ip(request)
+    if _is_loopback_ip(ip):
+        return
     now = time.time()
     with _rate_lock:
         hits = [t for t in _rate_log.get(ip, []) if now - t < RATE_LIMIT_WINDOW]
