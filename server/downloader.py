@@ -1297,6 +1297,10 @@ _CDN_TO_COOKIE_DOMAIN: dict[str, str] = {
     # B 站：视频 CDN 在 *.bilivideo.[com|cn]，Cookie 在 bilibili.com
     "bilivideo.com": "bilibili.com",
     "bilivideo.cn": "bilibili.com",
+    # YouTube：用户粘贴的常是 youtu.be 短链，但登录 Cookie 全在 youtube.com 域
+    # （2026-09-22 实测：youtu.be 链接按 youtu.be 查 Cookie → 0 命中 → 不带登录态
+    # 转发对端 → 误报「需要登录 Cookie」；www.youtube.com 链接则一切正常）
+    "youtu.be": "youtube.com",
 }
 
 def _cookie_domains_for_host(host: str) -> list[str]:
@@ -1385,10 +1389,16 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
         from urllib.request import Request
         jar = extract_cookies_from_browser(browser, profile)
 
-        # 生成候选 URL 列表：原始域名 + 常见主域变体
+        # 生成候选 URL 列表：原始域名 + 常见主域变体 + 登录域映射
         # 短链/CDN 域名的登录态在主域，必须合并才能拿到完整 Session
         parts = host.split(".")
         candidates = [url]
+        # 映射出的登录域（如 youtu.be → youtube.com）也必须进候选，
+        # 否则 add_cookie_header 按短链域匹配拿不到 .youtube.com 的登录 Cookie
+        # （merged_names 按 name 去重，候选重复无副作用）
+        for d in _cookie_domains_for_host(host):
+            candidates.append(f"https://www.{d}/")
+            candidates.append(f"https://{d}/")
         if len(parts) >= 2:
             base = ".".join(parts[-2:])  # e.g. kuaishou.com from v.kuaishou.com
             for sub in ("www", "id", "m"):

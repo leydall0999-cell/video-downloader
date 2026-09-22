@@ -107,6 +107,21 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     # 对端撞 bot 检测，被误报成「需要登录 Cookie」（2026-09-22 实测踩坑）。
     if 'youtube.com' in host or 'youtu.be' in host:
         app.downloader.validate_youtube_id(url)
+        # 🔴 youtu.be 短链规范化成 watch 长链（2026-09-22 实测踩坑）：同一份 Cookie，
+        # 对端解析 watch 形态 200、youtu.be 形态 400——Cookie 请求头按初始 URL 的域
+        # 绑定，youtu.be 302 跳到 youtube.com 后登录态没跟过去，仍被判 bot 拦截。
+        # 提前把短链改写成等价长链，短链/长链行为完全一致；host 同步修正，
+        # 保证后面 Cookie 域名推导、peer 转发、本机回落全走 youtube.com。
+        if host == 'youtu.be':
+            import re as _re
+            _m = _re.search(r'youtu\.be/([\w-]{11})', url)
+            if _m:
+                url = f'https://www.youtube.com/watch?v={_m.group(1)}'
+                try:
+                    payload.url = url
+                except Exception:
+                    pass
+                host = 'www.youtube.com'
     # 走云端 Playwright worker 的平台必须单独给额度：起 Chromium + 页面加载 +
     # 等播放器发流请求，实测 25~60s，用通用的国内直连阈值（60s）会误报超时。
     # 与网页端 core.py 保持同源，改这里时两边须同步。
@@ -145,7 +160,7 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
             _logging.getLogger(__name__).info("[peer] 海外站转发对端解析: %s -> %s (cookie_len=%s)",
                                               host, _peer, len(_ck or ""))
             _r = _rq.post(_peer + "/api/resolve",
-                          json={"url": payload.url, "cookie": _ck, "proxy": ""},
+                          json={"url": url, "cookie": _ck, "proxy": ""},
                           timeout=timeout + 10,
                           # 必须显式禁用环境代理：桌面端进程常继承 Clash/系统代理，
                           # 走代理访问自家节点会被误拦（与 _call_vps_worker 同理）
