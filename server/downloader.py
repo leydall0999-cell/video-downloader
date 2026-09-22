@@ -5242,9 +5242,29 @@ def _combine_series_title(info: dict[str, Any]) -> str:
         return f"{show} - {title}"
     return title or show or "未命名视频"
 
+def direct_headers(info: dict[str, Any]) -> dict[str, str]:
+    """直链下载所需的最小请求头（仅 UA / Referer / Origin 白名单，不含 Cookie）。
+
+    ★ 为什么要暴露到前端（2026-09-22 实测踩坑）：字节系 CDN（抖音/快手/微博/红果…）
+      校验 Referer，缺失一律 403 openresty。而 **Referer 是浏览器的 forbidden
+      header**，`<a href>` / fetch / XHR 都无法设置它 —— 所以「把直链丢给浏览器/
+      WKWebView 下载」对这些平台天然不成立（桌面版还会把整个应用界面导航到 403 页）。
+      桌面版改由本机原生桥按这些头拉流写盘；此处把 headers 一并下发。
+    """
+    raw = info.get("http_headers") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("User-Agent", "Referer", "Origin"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = _clean_header_value(value)
+    return out
+
 def summarize(info: dict[str, Any]) -> dict[str, Any]:
     """抽取前端需要的字段。"""
     play_url, is_hls = _detect_play_url(info)
+    _dh = direct_headers(info)
     return {
         "title": _combine_series_title(info),
         "uploader": info.get("uploader") or info.get("channel") or "",
@@ -5254,6 +5274,10 @@ def summarize(info: dict[str, Any]) -> dict[str, Any]:
         "webpage_url": info.get("webpage_url") or "",
         "extractor": info.get("extractor_key") or "",
         "direct_url": _detect_direct_url(info),
+        # 直链下载必须的防盗链头（UA/Referer）；needs_referer=True 代表浏览器侧
+        # 无法直连（Referer 是 forbidden header）→ 桌面端走原生桥、web 端回落服务器下载。
+        "direct_headers": _dh,
+        "direct_needs_referer": bool(_dh.get("Referer") or _dh.get("referer")),
         "play_url": play_url,
         "is_hls": is_hls,
         "is_live": bool(info.get("is_live")),

@@ -1651,12 +1651,20 @@
     }
 
     const directUrl = video.direct_url;
-    if (directUrl) {
-      // 直链透传：跳过清晰度选择与服务器下载，直接让浏览器从源站拉文件
+    // 直链是否能在浏览器里直接拉（防盗链判定）：
+    // 字节系 CDN（抖音/快手/微博…）校验 Referer，而 Referer 是浏览器的 forbidden
+    // header（JS/<a>/fetch 都设不了）→ 浏览器直连必然 403，只能交给本机后端/原生桥。
+    const directOk = !!directUrl && (isDesktopShell() || !directNeedsReferer(video));
+    if (directUrl && directOk) {
+      // 直链透传：跳过清晰度选择与服务器下载，直接保存到本机
       el.qualityBlock.hidden = true;
       el.downloadBtn.lastChild.textContent = '直接保存到本机 ⬇';
       el.directHint.hidden = false;
-      el.directHint.textContent = '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
+      el.directHint.textContent = isDesktopShell()
+        ? (directNeedsReferer(video)
+            ? '✅ 检测到这是可直接下载的文件。将由本机直连源站保存到「下载」文件夹（自动携带防盗链 Referer，不经过外网服务器）。'
+            : '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到「下载」文件夹。')
+        : '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
       el.serverFallbackBtn.hidden = false;
     } else {
       el.qualityBlock.hidden = false;
@@ -8477,14 +8485,81 @@ el.dwVidPlayer.removeAttribute('src');
     }
   };
 
-  const triggerDirectDownload = (url, title) => {
-    const a = document.createElement('a');
-    a.href = url;
-    if (title) a.download = title;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。若源站拒绝直连，请用上方「改用服务器下载」。';
+  // ---- 直链保存（2026-09-22 修复：桌面版「直接保存到本机」把应用界面顶成 403 页）----
+  // 根因：① 桌面壳是 WKWebView，`<a href=源站CDN>` 会把**整个应用界面**导航到该 URL，
+  //        抖音 CDN 防盗链返回 403 openresty 页面 → 应用界面消失，只能重开 App；
+  //      ② Referer 是浏览器 forbidden header（JS/<a>/fetch 都设不了），字节系 CDN
+  //        校验 Referer（缺则 403）→ 「直链丢给浏览器下载」对这些平台天然不成立。
+  // 修法：桌面版走本机原生桥 save_direct_url（Python 带 Referer/UA 拉流写盘，与后端
+  //       下载同源，仍不经过外网服务器）；浏览器版仅无防盗链时用 <a download>，其余
+  //       交给服务器下载（渲染时已按 directOk 切到普通下载流程）。
+  const isDesktopShell = () => !!(window.pywebview && window.pywebview.api);
+
+  const directNeedsReferer = (video) => !!(video && video.direct_needs_referer);
+
+  const directHeaderOf = (video, name) => {
+    const h = (video && video.direct_headers) || {};
+    const lower = name.toLowerCase();
+    for (const k of Object.keys(h)) {
+      if (k.toLowerCase() === lower) return h[k] || '';
+    }
+    return '';
+  };
+
+  /** 本机原生桥保存直链；返回保存路径字符串或抛错。 */
+  const saveDirectViaBridge = async (video) => {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || typeof api.save_direct_url !== 'function') {
+      throw new Error('当前版本不支持本机直存，请更新应用');
+    }
+    const res = await api.save_direct_url(
+      video.direct_url,
+      video.title || '视频.mp4',
+      directHeaderOf(video, 'Referer'),
+      directHeaderOf(video, 'User-Agent'),
+    );
+    if (typeof res === 'string' && res.startsWith('ERROR:')) {
+      throw new Error(res.replace(/^ERROR:\s*/, ''));
+    }
+    return String(res || '');
+  };
+
+  /** 直链保存入口：桌面走原生桥，浏览器走 <a download>。失败自动回落到服务器下载。 */
+  const triggerDirectDownload = async (video) => {
+    if (!isDesktopShell()) {
+      const a = document.createElement('a');
+      a.href = video.direct_url;
+      if (video.title) a.download = video.title;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      el.directHint.hidden = false;
+      el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。';
+      return;
+    }
+    // 桌面：绝不能让 WKWebView 导航到外站（会把应用界面顶掉），改由 Python 拉流写盘
+    const btn = el.downloadBtn;
+    if (btn.dataset.submitting === '1') return;
+    btn.dataset.submitting = '1';
+    btn.disabled = true;
+    const orig = btn.lastChild.textContent;
+    btn.lastChild.textContent = '正在保存到本机…';
+    el.directHint.hidden = false;
+    el.directHint.textContent = '⬇ 正在从源站下载到「下载」文件夹…大文件需要一会儿，请勿关闭窗口。';
+    try {
+      const saved = await saveDirectViaBridge(video);
+      el.directHint.hidden = false;
+      el.directHint.textContent = `✅ 已保存到本机：${saved}（可在「下载」文件夹查看 / 右键用它打开）`;
+    } catch (err) {
+      const msg = (err && err.message) || '本机直存失败';
+      el.directHint.hidden = false;
+      el.directHint.textContent = `源站直连失败，已自动改用服务器下载（${msg}）`;
+      await startDownload(selectedQuality || 'best');
+    } finally {
+      btn.dataset.submitting = '';
+      btn.disabled = false;
+      btn.lastChild.textContent = orig;
+    }
   };
 
   const handleDownload = async () => {
@@ -8495,9 +8570,10 @@ el.dwVidPlayer.removeAttribute('src');
       openAuthModal();
       return;
     }
-    if (resolved?.video?.direct_url) {
-      // 直链直存：浏览器从源站拉文件，瞬时响应，无需 loading 态
-      triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
+    const dv = resolved?.video;
+    if (dv?.direct_url && (isDesktopShell() || !directNeedsReferer(dv))) {
+      // 直链直存：桌面走原生桥（带 Referer 拉流写盘），浏览器无防盗链时交下载栏
+      await triggerDirectDownload(dv);
       return;
     }
     // 服务器下载：loading 态防重复点击（连点会建多个任务）；后端 90s 内命中
@@ -14372,6 +14448,27 @@ el.dwVidPlayer.removeAttribute('src');
   el.subModal.addEventListener('click', (event) => {
     if (event.target === el.subModal) el.subModal.close();
   });
+
+  // ---- 桌面版导航护栏（2026-09-22）----
+  // WKWebView 里任何指向外站的 <a href> 点击都会把**整个应用界面**导航过去，且没有
+  // 后退按钮 —— 用户等于「丢了」App（本次「直接保存到本机 → 403 openresty 页」就是这个坑）。
+  // 这里在捕获阶段统一拦截：外站链接交系统默认浏览器打开，本机/同源链接放行
+  // （后端取件、保存到本机等仍走原路径）。已带 download 属性的同源链接也放行。
+  document.addEventListener('click', (ev) => {
+    if (!isDesktopShell()) return;
+    const target = ev.target;
+    const a = target && target.closest ? target.closest('a[href]') : null;
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+    let abs;
+    try { abs = new URL(href, location.href); } catch (_) { return; }
+    if (abs.origin === location.origin) return;   // 同源（本机后端）资源放行
+    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') return;
+    ev.preventDefault();
+    const api = window.pywebview && window.pywebview.api;
+    if (api && api.open_external) { try { api.open_external(abs.href); } catch (_) {} }
+  }, true);
   el.subApply.addEventListener('click', () => {
     const key = el.subInput.value.trim();
     const msg = el.subMsg;

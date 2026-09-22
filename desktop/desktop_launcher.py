@@ -655,6 +655,87 @@ class VdlApi:
             return f"ERROR: {exc}"
         return str(dest)
 
+    def save_direct_url(self, url: str, filename: str, referer: str = "", ua: str = "") -> str:
+        """把「直链视频」直接保存到用户「下载」文件夹（桌面版原生直存）。
+
+        ★ 2026-09-22 修复「直接保存到本机 = 应用界面变成 403 页」：
+          旧实现是前端 `<a href=直链 download>`，而桌面壳是 WKWebView —— 点击会把
+          **整个应用界面导航**到该 URL；抖音/快手等字节系 CDN 校验 Referer，浏览器
+          拿不到（Referer 是 forbidden header），于是返回 403 openresty 页面，
+          应用界面直接消失，用户只能重开 App。
+          现在改由本方法在 Python 侧带 Referer/UA 拉流写盘：既不导航 WebView，
+          又满足防盗链（后端下载同源，仍不经过外网服务器）。
+
+        referer/ua 由后端 resolve 下发的 video.direct_headers 提供；缺省时按
+        「无防盗链的裸文件直链」处理（只发一个普通浏览器 UA）。
+        返回保存的绝对路径；失败返回 "ERROR: ..."（前端据此自动回落服务器下载）。
+        """
+        import os as _os
+        import re as _re
+        import requests
+        from pathlib import Path
+
+        url = (url or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            return "ERROR: 无效的直链地址"
+        # 文件名清洗：去掉路径分隔符与文件系统非法字符，兜底一个扩展名
+        name = (filename or "视频").strip() or "视频"
+        name = _re.sub(r"[\\/:*?\"<>|\r\n\t]+", "_", name).strip(" .") or "视频"
+        if not _re.search(r"\.[A-Za-z0-9]{2,5}$", name):
+            name += ".mp4"
+        if len(name) > 120:  # 超长文件名部分文件系统会失败
+            stem, dot, suf = name.rpartition(".")
+            name = (stem[:110] + dot + suf) if dot else name[:120]
+
+        downloads = Path.home() / "Downloads"
+        try:
+            downloads.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads = Path.home()
+        dest = downloads / name
+        if dest.exists():  # 不覆盖已有文件
+            stem, suf = dest.stem, dest.suffix
+            i = 1
+            while dest.exists():
+                dest = downloads / f"{stem}({i}){suf}"
+                i += 1
+
+        headers = {
+            "User-Agent": (ua or "").strip() or (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        }
+        if (referer or "").strip():
+            headers["Referer"] = referer.strip()
+
+        tmp = dest.with_name(dest.name + ".part")
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=(15, 600)) as r:
+                if r.status_code >= 400:
+                    return f"ERROR: 源站返回 HTTP {r.status_code}（防盗链或链接已过期）"
+                written = 0
+                with open(tmp, "wb") as fh:
+                    for chunk in r.iter_content(chunk_size=256 * 1024):
+                        if chunk:
+                            fh.write(chunk)
+                            written += len(chunk)
+            if written <= 0:
+                try:
+                    _os.remove(tmp)
+                except OSError:
+                    pass
+                return "ERROR: 源站返回空文件"
+            _os.replace(tmp, dest)
+        except Exception as exc:  # 把错误回传前端展示，并让前端回落服务器下载
+            try:
+                if tmp.exists():
+                    _os.remove(tmp)
+            except OSError:
+                pass
+            return f"ERROR: {exc}"
+        return str(dest)
+
     def save_dw_file_dialog(self, job_id: str, kind: str, suggested_name: str) -> str:
         """弹出系统保存面板让用户自选去水印结果位置（桌面版原生下载）。
 
