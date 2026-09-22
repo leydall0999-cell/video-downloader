@@ -266,11 +266,13 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
         #   无 VAD 重识别后**按时间段合并**（VAD 段优先，仅补 VAD 漏掉的区域），
         #   过滤以 avg_logprob 为主——实测音乐里 nsp 高达 0.84 的段 lp 只有 -0.37
         #   且全是真歌词，nsp 在音乐上不可靠。
-        if total > 0 and rows:
+        #   ⚠️ 2026-09-23 案例3 爱死了昨天(4:27)：VAD 放行 0 段 → 首轮一句没有，
+        #   曾因 `and rows` 守卫直接报「未识别到任何语音内容」——空结果恰恰最需要兜底。
+        if total > 0:
             speech_secs = sum(ed - st for st, ed, _ in rows)
-            low_cov = speech_secs / total < 0.15
+            low_cov = (not rows) or speech_secs / total < 0.15
             tail_missed = False
-            if rows[-1][1] < total * 0.92:
+            if rows and rows[-1][1] < total * 0.92:
                 # 尾部确实有声音（音乐）才值得重识别；静音收尾的正常语音视频跳过
                 tail_rms = _wav_region_rms(wav_path, rows[-1][1], total)
                 ref_rms = _wav_region_rms(wav_path, rows[0][0], min(rows[0][0] + 60.0, rows[-1][1]))
@@ -278,8 +280,9 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
             if low_cov or tail_missed:
                 job["stage"] = "识别中（检测到音乐，整曲重识别）"
                 job["progress"] = max(job.get("progress") or 15, 15)
+                _last_end = rows[-1][1] if rows else 0.0
                 app.logger.info("subtitle %s VAD incomplete (cov %.1f%%, last_end %.0f/%.0f%s), retry without VAD",
-                                job_id, speech_secs / total * 100, rows[-1][1], total,
+                                job_id, speech_secs / total * 100, _last_end, total,
                                 ", tail has energy" if tail_missed else "")
                 # 语言：显式指定优先；否则沿用首轮（在 VAD 挑出的清晰人声上检测，更可信）。
                 # 锁定语言能压住伴奏段的英文幻觉（实测纯伴奏被解码成
@@ -319,7 +322,7 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                     rows = merged
 
         if not rows:
-            raise RuntimeError("未识别到任何语音内容（视频可能没有对话/音轨）")
+            raise RuntimeError("未识别到任何语音内容（可能没有对话/人声，或为纯器乐/极强噪音）")
 
         # 4) 写 SRT + TXT
         job["stage"] = "生成字幕"

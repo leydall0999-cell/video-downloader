@@ -138,6 +138,17 @@ def run():
     ok &= bool(passed)
     print(("✅" if passed else "❌"), f"正常语音高覆盖不触发（calls={len(m.calls)}, lines={job.get('lines')}）")
 
+    # 5.5) 案例3 爱死了昨天：VAD 放行 0 段（rows 空）→ 仍必须触发兜底（曾因 and rows 直接报错）
+    m = _FakeModel([
+        [],
+        [_FakeSeg(30, 60, "是我爱死了昨天"), _FakeSeg(60, 90, "看你虚伪的表演")],
+    ], duration=267.0)
+    _setup_model(m)
+    job = _do_job("job_vad_empty", duration=267.0)
+    passed = len(m.calls) == 2 and job.get("lines") == 2 and job.get("status") == "completed"
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"VAD 零放行仍触发兜底（calls={len(m.calls)}, lines={job.get('lines')}, status={job.get('status')}）")
+
     # 6) 触发了但合并后没有更多内容 → 保留首轮
     m = _FakeModel([
         [_FakeSeg(10, 60, "唯一内容")],                                    # 60/100=60% 结束但尾部静音？
