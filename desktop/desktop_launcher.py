@@ -307,8 +307,10 @@ URL = f"http://{HOST}:{PORT}"
 _app_terminating = False
 
 
-def _choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
-    """弹 macOS 原生「保存文件」面板，返回用户选定的绝对路径；取消返回 "CANCELLED"。
+def _choose_save_path_via_osascript(prompt: str, suggested: str, log_path: str = "") -> str:
+    """★ 兜底路径（面板会是**英文**）：直接调 osascript 的 `choose file name`。
+
+    弹 macOS 原生「保存文件」面板，返回用户选定的绝对路径；取消返回 "CANCELLED"。
 
     为什么用 osascript 子进程而不是 pywebview/NSSavePanel：桌面壳的主线程跑在
     pywebview 的 run loop 上，从 JS 同步桥调用里弹 NSSavePanel 会把 run loop 卡死。
@@ -365,6 +367,201 @@ def _choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
                 os.remove(scpt)
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# 原生「保存到哪里」面板（中文本地化版）
+#
+# ★ 2026-09-22 用户报「面板/替换提示是英文，改中文」。根因实测（非推断）：
+#   系统语言确实是中文（AppleLanguages = zh-Hans-CN），但 CLI 形态的 `osascript`
+#   自身**没有中文本地化资源**，它弹出来的面板一律走英文 —— 连文件夹都显示成
+#   "Downloads" 而不是「下载」。三种常见偏方**实测全部无效**：
+#     ① env LANG/LC_ALL=zh_CN.UTF-8   ② osascript -AppleLanguages '(zh-Hans-CN)'
+#     ③ 伪造 __CFBundleIdentifier + defaults 写 AppleLanguages
+#   唯一有效：把同一段 AppleScript 用 `osacompile` 编成**真正的 .app 程序**，
+#   并在 Info.plist 声明中文优先（CFBundleDevelopmentRegion=zh-Hans +
+#   CFBundleLocalizations），再用 `open -W` 启动它 —— 面板立即全中文
+#   （存储为 / 标签 / 位置: 下载 / 取消 / 存储，已实测截图核对）。
+#
+# 入参/结果用文件交换：`open --args` 传不进 applet 的 `on run argv`（实测无效），
+# 所以用   <数据目录>/in.txt  = 随机数 \n 提示语 \n 默认文件名
+#          <数据目录>/out.txt = 随机数 \n 选定路径|CANCELLED
+# 随机数用来识别「这一次」的结果，避免读到上一次的残留文件而被误判。
+# applet 只在首次（或版本升级）编译一次，之后一直复用。
+# ---------------------------------------------------------------------------
+_SAVE_PANEL_APPLET_SRC = r'''on run
+	set basePath to (POSIX path of (path to home folder)) & ".video-downloader/save_panel/"
+	set inPath to basePath & "in.txt"
+	set outPath to basePath & "out.txt"
+	set theNonce to "0"
+	set thePrompt to "Save file to"
+	set theName to "untitled"
+	try
+		set rawText to (do shell script "cat " & quoted form of inPath)
+		set AppleScript's text item delimiters to linefeed
+		set theParts to text items of rawText
+		if (count of theParts) is less than 3 then
+			set AppleScript's text item delimiters to return
+			set theParts to text items of rawText
+		end if
+		if (count of theParts) is greater than or equal to 3 then
+			set theNonce to item 1 of theParts
+			set thePrompt to item 2 of theParts
+			set theName to item 3 of theParts
+		end if
+		set AppleScript's text item delimiters to ""
+	end try
+	set theResult to "CANCELLED"
+	try
+		set chosenFile to choose file name with prompt thePrompt default name theName default location (path to downloads folder)
+		set theResult to POSIX path of chosenFile
+	end try
+	do shell script "echo " & quoted form of theNonce & " > " & quoted form of outPath & "; echo " & quoted form of theResult & " >> " & quoted form of outPath
+end run
+'''
+
+_SAVE_PANEL_APPLET_CACHE = {"path": None}
+
+
+def _save_panel_dir() -> str:
+    """保存面板的入参/结果/applet 数据目录（`~/.video-downloader/save_panel`）。"""
+    d = os.path.join(os.path.expanduser("~"), ".video-downloader", "save_panel")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        return ""
+    return d
+
+
+def _ensure_save_panel_applet(log_path: str = "") -> str:
+    """确保存在「中文本地化」的保存面板 applet，返回其绝对路径；不可用返回 ""。
+
+    失败（没有 osacompile / 无写权限 / 编译报错）时返回 ""，调用方会回落到
+    osascript 那条老路 —— 功能一样，只是面板文案是英文。
+    """
+    import subprocess
+    import shutil
+    import hashlib
+
+    cached = _SAVE_PANEL_APPLET_CACHE.get("path")
+    if cached and os.path.isdir(cached):
+        return cached
+
+    d = _save_panel_dir()
+    if not d:
+        return ""
+    app = os.path.join(d, "SavePanel.app")
+    info = os.path.join(app, "Contents", "Info.plist")
+    ver_file = os.path.join(d, "SavePanel.version")
+    # ★ 按源码指纹判断是否需要重编：只按「plist 里有 zh-Hans」判断的话，
+    #   以后改了 _SAVE_PANEL_APPLET_SRC，老用户会一直用旧 applet（改了不生效）。
+    sig = hashlib.sha1(_SAVE_PANEL_APPLET_SRC.encode("utf-8")).hexdigest()[:16]
+
+    if os.path.isfile(info) and os.path.isfile(ver_file):
+        try:
+            with open(ver_file, "r", encoding="utf-8", errors="ignore") as fh:
+                same_ver = fh.read().strip() == sig
+            with open(info, "r", encoding="utf-8", errors="ignore") as fh:
+                same_loc = "zh-Hans" in fh.read()
+            if same_ver and same_loc:
+                _SAVE_PANEL_APPLET_CACHE["path"] = app
+                return app
+        except Exception:  # noqa: BLE001
+            pass
+
+    src = os.path.join(d, "SavePanel.applescript")
+    try:
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(_SAVE_PANEL_APPLET_SRC)
+        shutil.rmtree(app, ignore_errors=True)
+        r = subprocess.run(
+            ["osacompile", "-o", app, src],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode != 0 or not os.path.isfile(info):
+            return ""
+        # ★ 关键一步：声明中文优先。不写这两项，系统面板仍按英文渲染。
+        for args in (
+            ["-replace", "CFBundleDevelopmentRegion", "-string", "zh-Hans"],
+            ["-insert", "CFBundleLocalizations", "-json", '["zh-Hans","en"]'],
+            ["-replace", "CFBundleName", "-string", "视频工坊"],
+        ):
+            try:
+                subprocess.run(["plutil"] + args + [info], capture_output=True, text=True, timeout=30)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            with open(info, "r", encoding="utf-8", errors="ignore") as fh:
+                if "zh-Hans" not in fh.read():
+                    return ""
+        except Exception:  # noqa: BLE001
+            return ""
+        try:
+            with open(ver_file, "w", encoding="utf-8") as fh:
+                fh.write(sig)
+        except Exception:  # noqa: BLE001
+            pass
+        _SAVE_PANEL_APPLET_CACHE["path"] = app
+        return app
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _choose_save_path_via_applet(prompt: str, suggested: str, log_path: str = "") -> str:
+    """走中文本地化 applet 弹面板：返回选定路径 / "CANCELLED"；机制不可用返回 ""。"""
+    import subprocess
+    import time
+    import secrets
+
+    app = _ensure_save_panel_applet(log_path)
+    if not app:
+        return ""
+    d = _save_panel_dir()
+    if not d:
+        return ""
+    in_path = os.path.join(d, "in.txt")
+    out_path = os.path.join(d, "out.txt")
+    nonce = f"{int(time.time() * 1000)}-{secrets.token_hex(4)}"
+    try:
+        os.remove(out_path)  # 清掉上一次的残留，只认本次随机数
+    except OSError:
+        pass
+    try:
+        with open(in_path, "w", encoding="utf-8") as fh:
+            fh.write(f"{nonce}\n{prompt}\n{suggested}\n")
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        # -W：等 applet 退出（= 用户关掉面板）再返回，天然同步
+        r = subprocess.run(["open", "-W", app], capture_output=True, text=True, timeout=1800)
+    except Exception:  # noqa: BLE001
+        return ""
+    if r.returncode != 0:
+        return ""
+    try:
+        with open(out_path, "r", encoding="utf-8") as fh:
+            parts = fh.read().splitlines()
+    except Exception:  # noqa: BLE001
+        return ""
+    if len(parts) < 2 or parts[0].strip() != nonce:
+        return ""  # 没拿到本次结果 → 交给调用方回落
+    res = parts[1].strip()
+    if not res or res == "CANCELLED":
+        return "CANCELLED"
+    return res
+
+
+def _choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
+    """弹系统「保存文件」面板，返回用户选定的绝对路径；取消返回 "CANCELLED"。
+
+    两级：先走**中文本地化 applet**（面板全中文）；applet 不可用时回落
+    `osascript`（功能一致，但面板文案是英文）。
+    返回 "" 表示面板机制整体不可用，由调用方决定兜底位置。
+    """
+    got = _choose_save_path_via_applet(prompt, suggested, log_path)
+    if got:
+        return got
+    return _choose_save_path_via_osascript(prompt, suggested, log_path)
 
 
 class VdlApi:
@@ -852,40 +1049,18 @@ class VdlApi:
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
             prompt = "保存去水印结果" if kind == "image" else "保存去水印 PDF"
-            # 写入临时 .applescript 文件(UTF-8) 再 osascript <file> 执行，
-            # 避免中文经 argv 传给 osascript 被错误解码导致面板不弹。
-            script = (
-                f'set p to choose file name with prompt "{prompt}" '
-                f'default name {name_json} '
-                'default location (path to downloads folder)\n'
-                'POSIX path of p'
-            )
-            fd, scpt = tempfile.mkstemp(suffix=".applescript")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(script)
-            try:
-                r = subprocess.run(
-                    ["osascript", scpt],
-                    capture_output=True, text=True, timeout=600,
-                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    dest = r.stdout.strip()
-                    _log(f"osascript chose: {dest}")
-                else:
-                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
-                    return "CANCELLED"
-            finally:
-                try:
-                    os.remove(scpt)
-                except Exception:
-                    pass
+            # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
+            chosen = _choose_save_path(prompt, suggested, "/tmp/vdl_dw_save.log")
+            if chosen == "CANCELLED":
+                return "CANCELLED"
+            dest = chosen or None
+            _log(f"chose: {dest!r}")
         except Exception as e:
-            _log(f"osascript exception: {e!r}")
+            _log(f"choose-save-path exception: {e!r}")
             dest = None
 
         if not dest:
-            # 兜底：osascript 不可用时存到下载文件夹（符合默认行为）。
+            # 兜底：面板机制整体不可用时存到下载文件夹（符合默认行为）。
             dest = str(downloads / suggested)
 
         target = Path(dest)
@@ -941,40 +1116,18 @@ class VdlApi:
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
             prompt = "保存提取文案为文本"
-            # 写入临时 .applescript 文件(UTF-8) 再 osascript <file> 执行，
-            # 避免中文经 argv 传给 osascript 被错误解码导致面板不弹。
-            script = (
-                f'set p to choose file name with prompt "{prompt}" '
-                f'default name {name_json} '
-                'default location (path to downloads folder)\n'
-                'POSIX path of p'
-            )
-            fd, scpt = tempfile.mkstemp(suffix=".applescript")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(script)
-            try:
-                r = subprocess.run(
-                    ["osascript", scpt],
-                    capture_output=True, text=True, timeout=600,
-                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    dest = r.stdout.strip()
-                    _log(f"osascript chose: {dest}")
-                else:
-                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
-                    return "CANCELLED"
-            finally:
-                try:
-                    os.remove(scpt)
-                except Exception:
-                    pass
+            # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
+            chosen = _choose_save_path(prompt, suggested, "/tmp/vdl_text_save.log")
+            if chosen == "CANCELLED":
+                return "CANCELLED"
+            dest = chosen or None
+            _log(f"chose: {dest!r}")
         except Exception as e:
-            _log(f"osascript exception: {e!r}")
+            _log(f"choose-save-path exception: {e!r}")
             dest = None
 
         if not dest:
-            # 兜底：osascript 不可用时存到下载文件夹（符合默认行为）。
+            # 兜底：面板机制整体不可用时存到下载文件夹（符合默认行为）。
             dest = str(downloads / suggested)
 
         target = Path(dest)
@@ -1004,7 +1157,7 @@ class VdlApi:
         所以前端把已经取到的 PNG 转成 data URL 传进来，这里解 base64 直接落盘。
 
         与 save_text_file_dialog / save_matting_file_dialog 同套机制：
-        用 osascript `choose file name` 子进程弹原生窗口，绕开 pywebview 主线程
+        弹系统原生保存窗口（中文本地化 applet；不可用时内部回落 osascript），绕开 pywebview 主线程
         run loop 阻塞。取消返回 "CANCELLED"；osascript 不可用时退化为存「下载」文件夹。
         """
         import base64
@@ -1051,34 +1204,14 @@ class VdlApi:
         dest = None
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
-            script = (
-                'set p to choose file name with prompt "保存二维码" '
-                f'default name {name_json} '
-                'default location (path to downloads folder)\n'
-                'POSIX path of p'
-            )
-            fd, scpt = tempfile.mkstemp(suffix=".applescript")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(script)
-            try:
-                r = subprocess.run(
-                    ["osascript", scpt],
-                    capture_output=True, text=True, timeout=600,
-                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    dest = r.stdout.strip()
-                    _log(f"osascript chose: {dest}")
-                else:
-                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
-                    return "CANCELLED"
-            finally:
-                try:
-                    os.remove(scpt)
-                except Exception:
-                    pass
+            # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
+            chosen = _choose_save_path("保存二维码", suggested, "/tmp/vdl_qr_save.log")
+            if chosen == "CANCELLED":
+                return "CANCELLED"
+            dest = chosen or None
+            _log(f"chose: {dest!r}")
         except Exception as e:
-            _log(f"osascript exception: {e!r}")
+            _log(f"choose-save-path exception: {e!r}")
             dest = None
 
         if not dest:
@@ -1144,38 +1277,18 @@ class VdlApi:
         # 触发「syntax error: 预期是引号，却找到未知的记号」导致面板不弹。
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
-            script = (
-                'set p to choose file name with prompt "保存解说成片" '
-                f'default name {name_json} '
-                'default location (path to downloads folder)\n'
-                'POSIX path of p'
-            )
-            fd, scpt = tempfile.mkstemp(suffix=".applescript")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(script)
-            try:
-                r = subprocess.run(
-                    ["osascript", scpt],
-                    capture_output=True, text=True, timeout=600,
-                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    dest = r.stdout.strip()
-                    _log(f"osascript chose: {dest}")
-                else:
-                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
-                    return "CANCELLED"
-            finally:
-                try:
-                    os.remove(scpt)
-                except Exception:
-                    pass
+            # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
+            chosen = _choose_save_path("保存解说成片", suggested, "/tmp/vdl_save.log")
+            if chosen == "CANCELLED":
+                return "CANCELLED"
+            dest = chosen or None
+            _log(f"chose: {dest!r}")
         except Exception as e:
-            _log(f"osascript exception: {e!r}")
+            _log(f"choose-save-path exception: {e!r}")
             dest = None
 
         if not dest:
-            # 兜底：osascript 不可用时直接存到下载文件夹（符合默认行为）。
+            # 兜底：面板机制整体不可用时直接存到下载文件夹（符合默认行为）。
             _log("fallback -> ~/Downloads copy")
             dest = str(downloads / suggested)
 
@@ -1202,7 +1315,7 @@ class VdlApi:
         """弹出系统保存面板让用户自选「一键抠图」透明 PNG 位置（桌面版原生下载）。
 
         与 save_commentary_file_dialog / save_dw_file_dialog 同套机制：
-        用 osascript `choose file name` 子进程弹原生窗口，绕开 pywebview 主线程
+        弹系统原生保存窗口（中文本地化 applet；不可用时内部回落 osascript），绕开 pywebview 主线程
         run loop 阻塞。取消返回 "CANCELLED"；osascript 不可用时退化为存「下载」文件夹。
         """
         import json
@@ -1232,34 +1345,14 @@ class VdlApi:
         dest = None
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
-            script = (
-                'set p to choose file name with prompt "保存抠图结果" '
-                f'default name {name_json} '
-                'default location (path to downloads folder)\n'
-                'POSIX path of p'
-            )
-            fd, scpt = tempfile.mkstemp(suffix=".applescript")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(script)
-            try:
-                r = subprocess.run(
-                    ["osascript", scpt],
-                    capture_output=True, text=True, timeout=600,
-                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    dest = r.stdout.strip()
-                    _log(f"osascript chose: {dest}")
-                else:
-                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
-                    return "CANCELLED"
-            finally:
-                try:
-                    os.remove(scpt)
-                except Exception:
-                    pass
+            # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
+            chosen = _choose_save_path("保存抠图结果", suggested, "/tmp/vdl_matting_save.log")
+            if chosen == "CANCELLED":
+                return "CANCELLED"
+            dest = chosen or None
+            _log(f"chose: {dest!r}")
         except Exception as e:
-            _log(f"osascript exception: {e!r}")
+            _log(f"choose-save-path exception: {e!r}")
             dest = None
 
         if not dest:
@@ -1290,7 +1383,7 @@ class VdlApi:
         （routers.compress.COMPRESS_JOBS），按 job_id 依次查两个注册表。
 
         与 save_commentary_file_dialog / save_dw_file_dialog 同套机制：
-        用 osascript `choose file name` 子进程弹原生窗口，绕开 pywebview 主线程
+        弹系统原生保存窗口（中文本地化 applet；不可用时内部回落 osascript），绕开 pywebview 主线程
         run loop 阻塞（NSSavePanel 在主线程被同步 JS 调用卡死的问题）。取消返回
         "CANCELLED"；osascript 不可用时退化为存「下载」文件夹。
         """
@@ -1365,34 +1458,14 @@ class VdlApi:
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
             _prompt = "保存压缩结果" if is_compress else "保存转码结果"
-            script = (
-                f'set p to choose file name with prompt "{_prompt}" '
-                f'default name {name_json} '
-                'default location (path to downloads folder)\n'
-                'POSIX path of p'
-            )
-            fd, scpt = tempfile.mkstemp(suffix=".applescript")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(script)
-            try:
-                r = subprocess.run(
-                    ["osascript", scpt],
-                    capture_output=True, text=True, timeout=600,
-                    env={**os.environ, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"},
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    dest = r.stdout.strip()
-                    _log(f"osascript chose: {dest}")
-                else:
-                    _log(f"osascript cancelled/failed rc={r.returncode} err={r.stderr.strip()!r}")
-                    return "CANCELLED"
-            finally:
-                try:
-                    os.remove(scpt)
-                except Exception:
-                    pass
+            # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
+            chosen = _choose_save_path(_prompt, suggested, "/tmp/vdl_convert_save.log")
+            if chosen == "CANCELLED":
+                return "CANCELLED"
+            dest = chosen or None
+            _log(f"chose: {dest!r}")
         except Exception as e:
-            _log(f"osascript exception: {e!r}")
+            _log(f"choose-save-path exception: {e!r}")
             dest = None
 
         if not dest:

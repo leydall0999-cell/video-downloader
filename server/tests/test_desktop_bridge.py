@@ -82,9 +82,87 @@ def _direct_save_section():
     import types
 
     import os
+    # ---- applet 源码级棘轮（2026-09-22 用户报「面板是英文」的根治点）----
+    src = dl._SAVE_PANEL_APPLET_SRC
+    check("applet 源码用 choose file name 弹面板", "choose file name" in src, src[:60])
+    check("applet 源码兼容 CR 换行（do shell script 会把 LF 转成 CR，只按 linefeed 切会永远读不到入参）",
+          "text item delimiters to return" in src, "")
+    check("applet 源码默认位置为「下载」文件夹", "path to downloads folder" in src, "")
+    launcher_src = Path(dl.__file__).read_text(encoding="utf-8")
+    check("applet 声明中文本地化（缺了面板仍按英文渲染）",
+          "CFBundleLocalizations" in launcher_src and "zh-Hans" in launcher_src, "")
+
     tmpdir = Path(tempfile.mkdtemp(prefix="vdl_direct_save_test_"))
     chosen = str(tmpdir / "我选的目录" / "我的视频.mp4")
     captured = {}
+
+    real_run = subprocess.run
+    real_ensure = dl._ensure_save_panel_applet
+    real_sp_dir = dl._save_panel_dir
+    fake_applet = str(tmpdir / "SavePanel.app")
+    (tmpdir / "SavePanel.app").mkdir(parents=True, exist_ok=True)
+    # 入参/结果都写进临时目录，绝不碰用户真实的 ~/.video-downloader/save_panel
+    dl._save_panel_dir = lambda: str(tmpdir)
+    dl._ensure_save_panel_applet = lambda *a, **kw: fake_applet
+
+    # ---- 第一层：中文本地化 applet（面板全中文；用户报的「英文替换提示」根治点）----
+    def fake_run_applet(cmd, capture_output=False, text=False, timeout=None, **kw):
+        captured["cmd"] = list(cmd)
+        if cmd and cmd[0] == "open":
+            parts = (tmpdir / "in.txt").read_text(encoding="utf-8").splitlines()
+            captured["in_parts"] = parts
+            (tmpdir / "out.txt").write_text(f"{parts[0]}\n{chosen}\n", encoding="utf-8")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    subprocess.run = fake_run_applet
+    try:
+        got = dl._choose_save_path("保存视频到", "我的视频.mp4", "")
+    finally:
+        subprocess.run = real_run
+
+    check("面板经 applet 调起（open -W）",
+          captured.get("cmd", [None, None])[:2] == ["open", "-W"], captured.get("cmd", [])[:2])
+    check("目标就是中文本地化的 SavePanel.app",
+          str(captured.get("cmd", ["", "", ""])[2]).endswith("SavePanel.app"), captured.get("cmd", []))
+    parts = captured.get("in_parts") or []
+    check("入参第 1 行是随机数（识别本次结果）", len(parts) > 0 and len(parts[0]) > 8, parts[:1])
+    check("入参第 2 行是提示语", len(parts) > 1 and parts[1] == "保存视频到", parts)
+    check("入参第 3 行是默认文件名", len(parts) > 2 and parts[2] == "我的视频.mp4", parts)
+    check("applet：返回用户选定的绝对路径", got == chosen, got)
+
+    def fake_run_applet_cancel(cmd, capture_output=False, text=False, timeout=None, **kw):
+        if cmd and cmd[0] == "open":
+            parts = (tmpdir / "in.txt").read_text(encoding="utf-8").splitlines()
+            (tmpdir / "out.txt").write_text(f"{parts[0]}\nCANCELLED\n", encoding="utf-8")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    subprocess.run = fake_run_applet_cancel
+    try:
+        got_cancel_applet = dl._choose_save_path("保存视频到", "x.mp4", "")
+    finally:
+        subprocess.run = real_run
+    check("applet：取消 → 'CANCELLED'", got_cancel_applet == "CANCELLED", got_cancel_applet)
+
+    def fake_run_applet_dead(cmd, capture_output=False, text=False, timeout=None, **kw):
+        if cmd and cmd[0] == "open":
+            try:
+                (tmpdir / "out.txt").unlink()
+            except OSError:
+                pass
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout=chosen + "\n", stderr="")
+
+    subprocess.run = fake_run_applet_dead
+    try:
+        got_applet_fallback = dl._choose_save_path("保存视频到", "x.mp4", "")
+    finally:
+        subprocess.run = real_run
+    check("applet 没产出结果 → 回落 osascript 仍拿到路径（不误判成取消）",
+          got_applet_fallback == chosen, got_applet_fallback)
+
+    # ---- 第二层：applet 不可用 → 回落 osascript（功能一致，面板文案是英文）----
+    dl._ensure_save_panel_applet = lambda *a, **kw: ""
+    captured.clear()
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None, **kw):
         captured["env"] = kw.get("env") or {}
@@ -96,21 +174,20 @@ def _direct_save_section():
             captured["script"] = f"<读不到脚本: {exc}>"
         return types.SimpleNamespace(returncode=0, stdout=chosen + "\n", stderr="")
 
-    real_run = subprocess.run
     subprocess.run = fake_run
     try:
-        got = dl._choose_save_path("保存视频到", "我的视频.mp4", "")
+        got_os = dl._choose_save_path("保存视频到", "我的视频.mp4", "")
     finally:
         subprocess.run = real_run
 
-    check("面板真的被调起（osascript）", captured.get("cmd", [None])[0] == "osascript",
+    check("回落路径：面板被调起（osascript）", captured.get("cmd", [None])[0] == "osascript",
           captured.get("cmd", [])[:1])
+    check("回落路径：返回选定路径", got_os == chosen, got_os)
     script = captured.get("script", "")
     check("用 choose file name（选保存位置）", "choose file name" in script, script[:80])
     check("提示语进脚本（中文经 argv 会乱码）", "保存视频到" in script, script[:80])
     check("默认文件名进脚本", "我的视频.mp4" in script, script[:80])
     check("默认位置为「下载」文件夹", "path to downloads folder" in script, script[:80])
-    check("返回用户选定的绝对路径", got == chosen, got)
 
     # 用户点「取消」：osascript 退出码 1 → 必须返回 CANCELLED（不是空串、不是报错）
     def fake_cancel(cmd, capture_output=False, text=False, timeout=None, **kw):
@@ -133,7 +210,7 @@ def _direct_save_section():
         got_missing = dl._choose_save_path("保存视频到", "x.mp4", "")
     finally:
         subprocess.run = real_run
-    check("osascript 不可用 → 空串（调用方兜底）", got_missing == "", repr(got_missing))
+    check("两级都不可用 → 空串（调用方兜底）", got_missing == "", repr(got_missing))
 
     # ---- save_direct_url 行为 ----
     api = dl.VdlApi()
@@ -223,6 +300,8 @@ def _direct_save_section():
         check("直存：非 http(s) 直链被拒", out5.startswith("ERROR:"), out5)
     finally:
         dl._choose_save_path = real_choose
+        dl._ensure_save_panel_applet = real_ensure
+        dl._save_panel_dir = real_sp_dir
         if real_requests is not None:
             sys.modules["requests"] = real_requests
         else:  # pragma: no cover
