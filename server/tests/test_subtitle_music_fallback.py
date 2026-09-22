@@ -1,9 +1,12 @@
-"""字幕提取「音乐兜底二次识别」回归（2026-09-22 用户报「阿刁 6:18 的歌只识别出 51s→78s 四句」）。
+"""字幕提取「音乐兜底二次识别」回归（2026-09-22/23 两轮用户实测）。
 
-根因：Silero VAD 是「说话声」检测器，歌曲的「人声+伴奏」被整段判为非语音——
-实测该歌 378s 里 VAD 只放行 14s（占比 3.7%），副歌全丢。
-对策：VAD 语音占比 < 15% 时关 VAD 整曲重识别（no_speech_prob/avg_logprob 滤幻觉），
-且仅当第二轮语音总量 > 第一轮时才采用。
+案例1 阿刁(6:18)：VAD 只放行 14s（3.7%）→ 只出 51s-78s 四句；
+案例2 天使的翅膀(3:40)：VAD 放行 61%（止于 2:22）→ 尾部副歌整段丢。
+
+触发条件（任一）：a) 语音占比 < 15%；b) 末句结束 < 全长 92% 且尾部有能量（非静音）。
+无 VAD 重识别后**按时间段合并**（VAD 段优先，只补空隙）。
+过滤以 avg_logprob 为主：≤-1.0 必丢；(nsp≥0.7 且 lp<-0.8) 丢；
+音乐真歌词 nsp=0.84/lp=-0.37 必须保留。套话黑名单照丢。
 
 运行（独立进程，HOME 隔离）：
     cd server && .build_venv/bin/python tests/test_subtitle_music_fallback.py
@@ -37,31 +40,33 @@ class _FakeInfo(types.SimpleNamespace):
 
 
 class _FakeModel:
-    """按调用顺序返回预设结果；记录每次 transcribe 的 vad_filter 取值。"""
+    """按调用顺序返回预设结果；记录每次 transcribe 的 (vad_filter, kwargs)。"""
 
-    def __init__(self, passes):
-        self._passes = list(passes)   # 每个 pass: list[_FakeSeg]
-        self.calls = []               # [(vad_filter, kwargs)]
+    def __init__(self, passes, duration=100.0):
+        self._passes = list(passes)
+        self._duration = duration
+        self.calls = []
 
     def transcribe(self, path, **kw):
         self.calls.append((kw.get("vad_filter"), kw))
-        return iter(self._passes.pop(0)), _FakeInfo(duration=100.0, language="zh")
+        return iter(self._passes.pop(0)), _FakeInfo(duration=self._duration, language="zh")
 
 
-def _setup_model(fake, ffmpeg_fail=False):
+def _setup_model(fake, tail_rms=1.0, ref_rms=1.0):
     sb._SUBTITLE_MODELS.clear()
     sb._get_model = lambda size, threads: fake
+    # 尾部调用形如 rms(wav, last_end, total=100/220)；参考调用 rms(wav, start, ≤70)
+    sb._wav_region_rms = lambda path, a, b: (tail_rms if b >= 100 else ref_rms)
     server_app.SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None, **kwargs):
-        # 模拟 ffmpeg：创建输出 wav（cmd[-1]）
         Path(cmd[-1]).write_bytes(b"fake")
         return types.SimpleNamespace(returncode=0, stderr="")
 
     sb.subprocess.run = fake_run
 
 
-def _do_job(job_id):
+def _do_job(job_id, duration=100.0):
     sb.SUBTITLE_JOBS.clear()
     sb.SUBTITLE_JOBS[job_id] = {"stage": "", "progress": 0}
     sb._run_subtitle(job_id, "/fake/src.mp4", "base", "zh", False, fast=True, cpu_threads=4)
@@ -71,67 +76,79 @@ def _do_job(job_id):
 def run():
     ok = True
 
-    # 1) 音乐场景：VAD 只放行 7% → 触发二次识别，采用更全的第二轮
+    # 1) 低覆盖(7%)触发重识别；合并跳过与 VAD 重叠的段，只补空隙
+    #    VAD=[51-58] nvad=[10-30 ✓, 30-60 ✗重叠, 60-90 ✓] → 3 句
     m = _FakeModel([
-        [_FakeSeg(51, 58, "清唱一句")],                                   # 第一轮 VAD：7s/100s = 7%
-        [_FakeSeg(10, 30, "第一句"), _FakeSeg(30, 60, "第二句"),
-         _FakeSeg(60, 90, "第三句")],                                     # 第二轮无 VAD：80s
+        [_FakeSeg(51, 58, "清唱一句")],
+        [_FakeSeg(10, 30, "第一句"), _FakeSeg(30, 60, "重叠句"), _FakeSeg(60, 90, "第三句")],
     ])
     _setup_model(m)
     job = _do_job("job_music")
-    two_calls = len(m.calls) == 2 and m.calls[0][0] is True and m.calls[1][0] is False
-    passed = two_calls and job.get("lines") == 3
+    passed = len(m.calls) == 2 and m.calls[1][0] is False and job.get("lines") == 3
+    srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
+    passed = passed and "清唱一句" in srt and "重叠句" not in srt and "第三句" in srt
     ok &= bool(passed)
-    print(("✅" if passed else "❌"),
-          f"音乐低覆盖(7%)触发无VAD重识别并采用（lines={job.get('lines')}, calls={len(m.calls)}）",
-          "" if passed else job)
+    print(("✅" if passed else "❌"), f"低覆盖触发重识别+按时间段合并（lines={job.get('lines')}）")
 
-    # 2) 幻觉过滤：第二轮里 no_speech_prob≥0.6 / avg_logprob≤-1.0 / 套话黑名单的段被丢弃
+    # 2) 过滤规则：lp 主导。nsp=0.84/lp=-0.37 真歌词必留；lp≤-1.0 丢；(nsp≥0.7且lp<-0.8) 丢；套话丢
     m = _FakeModel([
-        [_FakeSeg(51, 58, "清唱一句")],
-        [_FakeSeg(10, 30, "好句"), _FakeSeg(30, 50, "幻觉句", nsp=0.8),
-         _FakeSeg(50, 70, "低置信句", lp=-1.5),
-         _FakeSeg(70, 75, "Thank you for watching this video."),
-         _FakeSeg(75, 80, "请订阅我的频道")],
-    ])
+        [_FakeSeg(200, 210, "清唱一句")],
+        [_FakeSeg(10, 30, "真歌词好句"),                                   # nsp/lp 默认 → 留
+         _FakeSeg(30, 50, "尾部真歌词", nsp=0.84, lp=-0.37),               # 案例2 实测值 → 留
+         _FakeSeg(50, 70, "低置信句", lp=-1.5),                            # lp≤-1.0 → 丢
+         _FakeSeg(70, 90, "双重坏句", nsp=0.9, lp=-1.2),                   # → 丢
+         _FakeSeg(90, 100, "Thank you for watching this video."),          # 套话 → 丢
+         _FakeSeg(100, 110, "请订阅我的频道")],                            # 套话 → 丢
+    ], duration=220.0)
     _setup_model(m)
-    job = _do_job("job_halluc")
-    passed = job.get("lines") == 1
+    job = _do_job("job_halluc", duration=220.0)
+    passed = job.get("lines") == 3
     ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"无VAD轮幻觉段被过滤（lines={job.get('lines')}，应=1）")
+    print(("✅" if passed else "❌"), f"lp主导过滤+高nsp真歌词保留（lines={job.get('lines')}，应=3）")
 
-    # 2.5) zh 任务的无 VAD 轮应带 initial_prompt（压英文幻觉）且锁定语言
-    passed = len(m.calls) == 2 and m.calls[1][0] is False \
-        and m.calls[1][1].get("language") == "zh" and "initial_prompt" in m.calls[1][1]
-    ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"zh 兜底轮锁定语言+initial_prompt（calls1={m.calls[1][1].get('language')}）")
-
-    # 3) 二轮更差时不采用：保留第一轮结果
+    # 3) 尾部未覆盖 + 尾部有能量 → 触发重识别并补上尾部
     m = _FakeModel([
-        [_FakeSeg(5, 60, "正常对话一句"), _FakeSeg(60, 90, "正常对话两句")],  # 85s/100s 高覆盖
-        [_FakeSeg(10, 20, "更差")],                                        # 不会触发（覆盖高）
-    ])
-    _setup_model(m)
-    job = _do_job("job_speech")
-    passed = len(m.calls) == 1 and job.get("lines") == 2   # 高覆盖不重识别
+        [_FakeSeg(10, 60, "前半句")],                                      # 止于 60/220=27%
+        [_FakeSeg(150, 210, "尾部副歌")],
+    ], duration=220.0)
+    _setup_model(m, tail_rms=1.0, ref_rms=1.0)
+    job = _do_job("job_tail_music", duration=220.0)
+    passed = len(m.calls) == 2 and job.get("lines") == 2
     ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"正常语音高覆盖不触发重识别（calls={len(m.calls)}, lines={job.get('lines')}）")
+    print(("✅" if passed else "❌"), f"尾部未覆盖+有能量触发重识别（calls={len(m.calls)}, lines={job.get('lines')}）")
 
-    # 4) 低覆盖但第二轮更差 → 保留第一轮
+    # 4) 尾部未覆盖但尾部是静音（正常语音视频静音收尾）→ 不重识别
     m = _FakeModel([
-        [_FakeSeg(51, 58, "清唱一句")],                                   # 7%
-        [_FakeSeg(52, 56, "更短")],                                       # 4s < 7s
-    ])
-    _setup_model(m)
-    job = _do_job("job_keep_first")
-    passed = job.get("lines") == 1 and job.get("srt_file")
+        [_FakeSeg(10, 60, "前半句")],
+        [_FakeSeg(150, 210, "不该出现")],
+    ], duration=220.0)
+    _setup_model(m, tail_rms=0.01, ref_rms=1.0)   # 尾部静音
+    job = _do_job("job_tail_silence", duration=220.0)
+    passed = len(m.calls) == 1 and job.get("lines") == 1
     ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"低覆盖但二轮更差时保留首轮（lines={job.get('lines')}）")
-    if job.get("srt_file"):
-        srt = Path(job["srt_file"]).read_text(encoding="utf-8")
-        passed = "清唱一句" in srt
-        ok &= bool(passed)
-        print(("✅" if passed else "❌"), "保留的 SRT 内容来自第一轮")
+    print(("✅" if passed else "❌"), f"尾部静音不触发重识别（calls={len(m.calls)}）")
+
+    # 5) 正常语音高覆盖 → 不重识别
+    m = _FakeModel([
+        [_FakeSeg(5, 60, "对话一"), _FakeSeg(60, 95, "对话二")],
+    ], duration=100.0)
+    _setup_model(m)
+    job = _do_job("job_speech", duration=100.0)
+    passed = len(m.calls) == 1 and job.get("lines") == 2
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"正常语音高覆盖不触发（calls={len(m.calls)}, lines={job.get('lines')}）")
+
+    # 6) 触发了但合并后没有更多内容 → 保留首轮
+    m = _FakeModel([
+        [_FakeSeg(10, 60, "唯一内容")],                                    # 60/100=60% 结束但尾部静音？
+        [_FakeSeg(20, 40, "完全重叠")],                                    # 全重叠 → 合并无增益
+    ], duration=100.0)
+    _setup_model(m, tail_rms=1.0, ref_rms=1.0)   # 尾部有能量 → 会触发
+    job = _do_job("job_keep_first", duration=100.0)
+    srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
+    passed = "唯一内容" in srt and "完全重叠" not in srt
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"合并无增益时保留首轮（lines={job.get('lines')}）")
 
     print("\n通过" if ok else "\n失败")
     return 0 if ok else 1

@@ -39,6 +39,26 @@ _HALLUCINATION_RE = re.compile(
     r"|(请订阅|感谢观看|谢谢观看|订阅我的频道|字幕由|amara\.org|请点赞|关注频道)"
 )
 
+
+def _wav_region_rms(wav_path, start_s: float, end_s: float) -> float:
+    """读 16k mono s16 wav 的 [start_s, end_s) 区间均方根振幅（0-32768 量纲）。
+    用于判断「识别没覆盖的尾部」是静音还是音乐——静音不值得重识别。"""
+    try:
+        import wave as _wave
+        import numpy as _np
+        with _wave.open(str(wav_path), "rb") as w:
+            sr = w.getframerate() or 16000
+            total_frames = w.getnframes()
+            start = max(0, min(int(start_s * sr), total_frames - 1))
+            n = max(0, min(int((end_s - start_s) * sr), total_frames - start))
+            if n <= 0:
+                return 0.0
+            w.setpos(start)
+            a = _np.frombuffer(w.readframes(n), dtype=_np.int16).astype(_np.float32)
+            return float(_np.sqrt(_np.mean(a * a))) if a.size else 0.0
+    except Exception:
+        return -1.0   # 读不出当「有能量」处理，宁可多重识别不漏内容
+
 # 国内加速：所有走 huggingface_hub 的下载（faster-whisper 字幕模型、扩散去水印模型）
 # 统一走 hf-mirror。
 #
@@ -237,18 +257,30 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
             if total > 0:
                 job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
 
-        # 3.5) 音乐兜底二次识别（2026-09-22）：Silero VAD 是「说话声」检测器，
-        #   歌曲的「人声+伴奏」会被当成非语音整段过滤——实测 阿刁(6:18) 只放行 14s，
-        #   用户拿到 51s→78s 四句残字幕。对策：VAD 通过的语音占比 < 15% 时，
-        #   判定大概率是音乐/纯音乐环境，关 VAD 全曲重识别（无 VAD 幻觉风险用
-        #   no_speech_prob / avg_logprob 逐段过滤），仅当结果比首轮更多时才采用。
-        if total > 0:
+        # 3.5) 音乐兜底二次识别（2026-09-22/23 两版）：
+        #   Silero VAD 是「说话声」检测器，歌曲「人声+伴奏」会被判为非语音：
+        #   案例1 阿刁(6:18)：VAD 只放行 14s（3.7%）——副歌全丢；
+        #   案例2 天使的翅膀(3:40)：VAD 放行 61%（只到 2:22）——尾部副歌整段丢。
+        #   ⇒ 触发条件两条任一：a) 语音占比 < 15%（几乎全丢）；
+        #     b) 末句结束 < 全长 92% 且「尾部有能量」（不是静音收尾）。
+        #   无 VAD 重识别后**按时间段合并**（VAD 段优先，仅补 VAD 漏掉的区域），
+        #   过滤以 avg_logprob 为主——实测音乐里 nsp 高达 0.84 的段 lp 只有 -0.37
+        #   且全是真歌词，nsp 在音乐上不可靠。
+        if total > 0 and rows:
             speech_secs = sum(ed - st for st, ed, _ in rows)
-            if speech_secs / total < 0.15:
+            low_cov = speech_secs / total < 0.15
+            tail_missed = False
+            if rows[-1][1] < total * 0.92:
+                # 尾部确实有声音（音乐）才值得重识别；静音收尾的正常语音视频跳过
+                tail_rms = _wav_region_rms(wav_path, rows[-1][1], total)
+                ref_rms = _wav_region_rms(wav_path, rows[0][0], min(rows[0][0] + 60.0, rows[-1][1]))
+                tail_missed = ref_rms > 0 and tail_rms >= ref_rms * 0.15
+            if low_cov or tail_missed:
                 job["stage"] = "识别中（检测到音乐，整曲重识别）"
                 job["progress"] = max(job.get("progress") or 15, 15)
-                app.logger.info("subtitle %s VAD coverage %.1f%% too low, retry without VAD",
-                                job_id, speech_secs / total * 100)
+                app.logger.info("subtitle %s VAD incomplete (cov %.1f%%, last_end %.0f/%.0f%s), retry without VAD",
+                                job_id, speech_secs / total * 100, rows[-1][1], total,
+                                ", tail has energy" if tail_missed else "")
                 # 语言：显式指定优先；否则沿用首轮（在 VAD 挑出的清晰人声上检测，更可信）。
                 # 锁定语言能压住伴奏段的英文幻觉（实测纯伴奏被解码成
                 # "Thank you for watching / subscribe to my channel" 套话）。
@@ -267,8 +299,8 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                     text = (seg.text or "").strip()
                     if not text:
                         continue
-                    # 无 VAD 时纯伴奏段易幻觉出假歌词：置信度过滤 + 套话黑名单
-                    if seg.no_speech_prob >= 0.6 or seg.avg_logprob <= -1.0:
+                    # avg_logprob 主导：≤-1.0 必丢；nsp 只在 lp 也差时才丢
+                    if seg.avg_logprob <= -1.0 or (seg.no_speech_prob >= 0.7 and seg.avg_logprob < -0.8):
                         continue
                     if _HALLUCINATION_RE.search(text):
                         app.logger.info("subtitle %s drop hallucinated line: %r", job_id, text[:60])
@@ -276,8 +308,15 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                     rows2.append((float(seg.start), float(seg.end), text))
                     if total > 0:
                         job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
-                if sum(ed - st for st, ed, _ in rows2) > speech_secs:
-                    rows = rows2
+                # 按时间段合并：VAD 段优先，只补 VAD 完全没覆盖的空隙
+                merged = list(rows)
+                for st, ed, tx in rows2:
+                    if any(st < ve and ed > vs for vs, ve, _ in rows):
+                        continue
+                    merged.append((st, ed, tx))
+                merged.sort()
+                if merged and sum(ed - st for st, ed, _ in merged) > speech_secs:
+                    rows = merged
 
         if not rows:
             raise RuntimeError("未识别到任何语音内容（视频可能没有对话/音轨）")
