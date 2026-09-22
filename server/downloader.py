@@ -2974,6 +2974,27 @@ def _fetch_youtube_visitor_data(proxy: str = "") -> str:
         logger.info("[youtube] 获取 visitor_data 失败（不影响 Cookie 兜底）: %s", str(_e)[:100])
     return ""
 
+_YT_ID_RE = re.compile(r'(?:youtu\.be/|/shorts/|/live/|/embed/|[?&]v=)([A-Za-z0-9_-]{1,20})')
+
+
+def validate_youtube_id(url: str) -> None:
+    """YouTube 视频 ID 固定 11 位；分享链接复制丢字时**提前**给出明确提示。
+
+    否则无效 ID 会流进 bot 检测（对端无 Cookie → 误报「YouTube 需要登录
+    Cookie」）或 yt-dlp 的 Unsupported URL（2026-09-22 实测：用户粘贴的
+    youtu.be/mGBQMAUayc 只有 10 位 ID，两端各报一种误导性错误）。
+    """
+    m = _YT_ID_RE.search(url or "")
+    if m and len(m.group(1)) != 11:
+        bad = m.group(1)
+        raise ResolveError(
+            "视频链接不完整",
+            f"YouTube 视频 ID 应为 11 位，这条链接里的 ID「{bad}」只有 {len(bad)} 位"
+            "（通常是复制时丢了字符）。请回到来源重新复制完整链接再试。",
+            category="bad_url",
+        )
+
+
 def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """YouTube 自动降级解析：方法一（免 Cookie + PO Token）→ 方法二（Cookie 源自动切换）。
 
@@ -2984,6 +3005,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
     返回 yt-dlp info dict；全部失败抛 ResolveError（bot 拦截时 category=cookie_required）。
     """
     host = _host_of(url)
+    validate_youtube_id(url)  # ID 不完整直接明确报错，别流进 bot/Cookie 兜底
     effective_proxy = proxy or _resolve_proxy(host)
     # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路
     visitor_data = _fetch_youtube_visitor_data(effective_proxy)

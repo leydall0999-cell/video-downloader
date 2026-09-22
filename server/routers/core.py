@@ -94,6 +94,10 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     app._assert_safe_url(payload.url)
     url, platform = app.parse_source(payload.url)
     host = app._host_of(url)
+    # 🔴 YouTube ID 长度前置校验：放在 peer 转发**之前**，否则无效 ID 会先打到
+    # 对端撞 bot 检测，被误报成「需要登录 Cookie」（2026-09-22 实测踩坑）。
+    if 'youtube.com' in host or 'youtu.be' in host:
+        app.downloader.validate_youtube_id(url)
     # 走云端 Playwright worker 的平台必须单独给额度：起 Chromium + 页面加载 +
     # 等播放器发流请求，实测 25~60s，用通用的国内直连阈值（60s）会误报超时。
     # 与网页端 core.py 保持同源，改这里时两边须同步。
