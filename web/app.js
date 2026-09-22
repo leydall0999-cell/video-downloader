@@ -4885,8 +4885,18 @@
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
   const sbDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '',
-                    preview: null, view: 'srt', metaBase: '' };
+                    preview: null, view: 'srt', metaParts: null };
   const sbSetStatus = (text) => { el.sbStatus.textContent = text; };
+  // 结果卡标题行：句数/语言/线程 + 覆盖时段。
+  // 句数以**预览接口解析文件得到的数量**为准（预览到达后覆盖状态接口的值），
+  // 这样「共 N 句」与下面列出的内容永远同源，不会出现标题与列表对不上。
+  const sbSetMeta = () => {
+    const p = sbState.metaParts;
+    if (!el.sbMeta || !p) return;
+    let s = `共 ${p.lines} 句 · 语言 ${p.lang} · ${p.threads} 线程`;
+    if (p.covered && p.covered.start) s += ` · 覆盖 ${p.covered.start} → ${p.covered.end}`;
+    el.sbMeta.textContent = s;
+  };
   const sbStopPolling = () => { if (sbState.timer) { clearInterval(sbState.timer); sbState.timer = null; } };
 
   const sbSetFile = (pathOrName) => {
@@ -4918,8 +4928,9 @@
         sbState.txtName = st.txt_name || 'subtitle.txt';
         // 覆盖时段由预览接口补上（见 sbLoadPreview）——「共 N 句」回答不了
         // 用户真正在意的「全片都识别了吗」
-        sbState.metaBase = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'} · ${st.cpu_threads || 4} 线程`;
-        el.sbMeta.textContent = sbState.metaBase;
+        sbState.metaParts = { lines: st.lines || 0, lang: st.language || 'auto',
+                              threads: st.cpu_threads || 4, covered: null };
+        sbSetMeta();
         el.sbResult.hidden = false;
         sbSetStatus('完成 ✅');
         // 识别结果立即可预览（2026-09-22）：不必先下载
@@ -5037,9 +5048,12 @@
       if (sbState.jobId !== jobId) return;
       sbState.preview = pv;
       // 「覆盖 00:00 → 44:17」：直接回答「有没有提取全片」——45 分钟剧集有 872 句，
-      // 只看「共 N 句」判断不了范围，用户会以为识别到一半就断了（2026-09-22 实测踩到）
-      if (el.sbMeta && sbState.metaBase && pv.covered && pv.covered.start) {
-        el.sbMeta.textContent = `${sbState.metaBase} · 覆盖 ${pv.covered.start} → ${pv.covered.end}`;
+      // 只看「共 N 句」判断不了范围，用户会以为识别到一半就断了（2026-09-22 实测踩到）。
+      // 句数同步改为以文件实际内容为准（status 接口的 lines 与文件可能因截断/重写不一致）。
+      if (sbState.metaParts) {
+        if (pv.lines) sbState.metaParts.lines = pv.lines;
+        if (pv.covered && pv.covered.start) sbState.metaParts.covered = pv.covered;
+        sbSetMeta();
       }
       sbRenderPreview();
       sbSetPreviewView(sbState.view);
