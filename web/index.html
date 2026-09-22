@@ -987,16 +987,16 @@
 
   <!-- 本地视频字幕提取（faster-whisper ASR，MIT 可商用；VAD 逐句精准分段，输出 SRT/TXT） -->
   <section id="subtitleView" class="panel" hidden aria-labelledby="sbTitle" data-page-node-id="j2dLchV24A2XACOuLUWNYd">
-    <h2 id="sbTitle" class="guide-title" data-page-node-id="hjc9zwp1bp2LCDMgOynt1t">📝 本地视频字幕提取</h2>
+    <h2 id="sbTitle" class="guide-title" data-page-node-id="hjc9zwp1bp2LCDMgOynt1t">📝 本地视频 / 音频字幕提取</h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="iDHJ8eZpZo1EPMc6C49kL2">
-      本地 AI 语音识别，把视频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
-      全程本地完成，不上传云端；识别模型首次使用会自动下载（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB）。
+      本地 AI 语音识别，把视频 / 音频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
+      支持视频（mp4/mkv/mov…）与音频（mp3/m4a/wav/flac…）。全程本地完成，不上传云端；识别模型首次使用会自动下载（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB）。
     </p>
 
     <div class="uc-toolbar" data-page-node-id="U4w8iSTGBqGBfLHouBBTDr">
-      <button type="button" class="btn btn-primary" id="sbPickBtn" data-page-node-id="YoMXuzmfm2WESN9amTdbFp">选取视频</button>
-      <input type="file" id="sbFileInput" accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v" hidden data-page-node-id="DZa7wVLQiG4CoVxjxRiq1e" />
-      <span class="uc-count" id="sbFileLabel" data-page-node-id="lmlDqEKgGuCaWIMolOcxPo">尚未选择视频</span>
+      <button type="button" class="btn btn-primary" id="sbPickBtn" data-page-node-id="YoMXuzmfm2WESN9amTdbFp">选取视频 / 音频</button>
+      <input type="file" id="sbFileInput" accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v,audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.wma" hidden data-page-node-id="DZa7wVLQiG4CoVxjxRiq1e" />
+      <span class="uc-count" id="sbFileLabel" data-page-node-id="lmlDqEKgGuCaWIMolOcxPo">尚未选择视频 / 音频</span>
     </div>
 
     <div class="uc-bulk" data-page-node-id="VWTAohF88RRHX2qt8kPHQl">

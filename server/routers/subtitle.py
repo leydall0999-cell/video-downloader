@@ -277,8 +277,12 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
     resolved = _resolve_safe_local_path(payload.local_path)
     suffix = resolved.suffix.lower()
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请选择视频文件")
+    # 🔴 2026-09-22 缺陷修复：此前只收视频后缀，用户选 .m4a 音频（播客/录音/歌曲）
+    #    直接 409「请选择视频文件」。而下游管线本就是「ffmpeg -vn 抽 16k mono → ASR」，
+    #    对纯音频输入天然兼容（-vn 对无视频流无害），没有任何技术理由拒绝。
+    #    ⇒ 放开为视频 + 音频（与桌面选择器 choose_files("media") 的范围对齐）。
+    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请选择视频或音频文件")
     model_size = payload.model_size if payload.model_size in ALLOWED_MODELS else _DEFAULT_MODEL
     # 会员权益：下载/AI 会员（含捆绑）满核提取；免费版固定 4 线程（按请求用户态判定，C2）
     try:
