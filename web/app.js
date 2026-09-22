@@ -10208,8 +10208,30 @@ el.dwVidPlayer.removeAttribute('src');
       ev.preventDefault();
       if (!cid) { aEl.textContent = '保存失败：缺少成片标识'; setTimeout(() => aEl.textContent = orig, 3000); return; }
 
-      // 方案 A：优先调用原生 Python 桥接。该桥接内部会请求 GET /api/commentary/{id}/file
-      // 并把文件写到用户「下载」文件夹（VideoDownloader 桌面版的原生能力）。
+      // 方案 A：优先调用**带保存位置面板**的原生桥（与直存/去水印/抠图/二维码同一约定：
+      // 用户主动点「保存到本机」必须先让他选放哪儿，而不是静默塞进「下载」）。
+      // 老桥（无面板、静默写「下载」）保留为兼容回退，仅当新桥不存在时才用。
+      if (api && api.save_commentary_file_dialog) {
+        aEl.textContent = '请在弹出的窗口中选择保存位置…';
+        try {
+          const res = await api.save_commentary_file_dialog(cid, filename);
+          if (res === 'CANCELLED') {
+            aEl.textContent = '已取消保存';
+          } else if (typeof res === 'string' && res.startsWith('ERROR:')) {
+            aEl.textContent = '保存失败：' + res.replace(/^ERROR:\s*/, '').slice(0, 40);
+          } else if (typeof res === 'string' && res) {
+            aEl.textContent = '已保存到：' + (res.split('/').pop() || res);
+          } else {
+            aEl.textContent = '保存失败：未拿到保存路径';
+          }
+        } catch (err) {
+          aEl.textContent = '保存失败：' + ((err && err.message) || '桥接调用失败');
+        }
+        setTimeout(() => { aEl.textContent = orig; }, 4000);
+        return;
+      }
+
+      // 方案 A′：老版本原生桥（无保存位置面板，固定写「下载」文件夹）
       if (api && api.save_commentary_file) {
         aEl.textContent = '保存中…';
         try {
