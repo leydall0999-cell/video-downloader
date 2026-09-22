@@ -3012,6 +3012,25 @@ def validate_youtube_id(url: str) -> None:
         )
 
 
+def canonicalize_video_url(url: str) -> str:
+    """把等价短链规范化成标准长链（当前仅 YouTube：youtu.be/<id> → watch?v=<id>）。
+
+    🔴 2026-09-22 实测：同一份浏览器登录 Cookie，对端解析 watch 形态 200、
+    youtu.be 形态 400——Cookie 请求头按初始 URL 的域绑定，youtu.be 302 跳到
+    youtube.com 后登录态没跟过去，仍被判 bot 拦截。**解析与下载入口都必须先
+    规范化**，否则会出现「解析成功但下载失败」这种更难查的分裂现象。
+    """
+    try:
+        host = _host_of(url)
+    except Exception:  # noqa: BLE001
+        return url
+    if host == "youtu.be":
+        m = _YT_ID_RE.search(url or "")
+        if m:
+            return f"https://www.youtube.com/watch?v={m.group(1)}"
+    return url
+
+
 def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """YouTube 自动降级解析：方法一（免 Cookie + PO Token）→ 方法二（Cookie 源自动切换）。
 
@@ -3021,6 +3040,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
 
     返回 yt-dlp info dict；全部失败抛 ResolveError（bot 拦截时 category=cookie_required）。
     """
+    url = canonicalize_video_url(url)  # 短链先规范化，避免 youtu.be 形态过不了 bot
     host = _host_of(url)
     validate_youtube_id(url)  # ID 不完整直接明确报错，别流进 bot/Cookie 兜底
     effective_proxy = proxy or _resolve_proxy(host)
