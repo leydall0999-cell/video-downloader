@@ -48,6 +48,13 @@ fi
 
 EXPECTED="$(cat "$DIST/Contents/Resources/build_version.txt")"
 echo "目标版本: $EXPECTED"
+# 脏包提示（不阻断部署）：标签含 -dirty 表示这个包是用【未提交的改动】构建的
+# （见 build_mac.sh 开头那段注释）。本地自用没问题，但别把它当成某个提交的正式产物
+# 发出去或对外报版本号 —— 它对应的代码不在版本库里，事后无法复现。
+if [ "${EXPECTED#*-dirty}" != "$EXPECTED" ]; then
+  echo "⚠️  该包的代码含未提交改动（标签带 -dirty），对应不到任何提交；"
+  echo "    若是要对外发布，请先 git commit 再重新构建。"
+fi
 
 # 1) 退出运行中的旧实例，确保进程真的死了（不死绝不复制）
 echo "▶ 退出运行中的实例..."
