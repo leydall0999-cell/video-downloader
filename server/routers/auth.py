@@ -291,16 +291,29 @@ def auth_reset_code(request: Request, payload: dict[str, Any] = Body(...)) -> di
     if not reset_code_cooldown_ok(ident):
         return {"ok": False, "error": "验证码已发送，请稍后再试（60 秒冷却）"}
     code = generate_reset_code(ident)
+    loopback = _is_loopback(request)
+    ident_is_email = "@" in ident
+    dev_code = None
     if code:
         try:
             deliver_reset_code(ident, code)
         except Exception as e:  # noqa: BLE001
             logging.getLogger("vdl.auth").error("投递验证码失败: %s", e)
-            return {"ok": False, "error": "验证码发送失败，请检查邮件服务配置"}
+            # 🔴 2026-09-22 实测缺陷：手机号账号根本走不到重置流程。投递模式是 smtp，
+            #    而 SMTP 只发邮箱 —— 手机号必然抛异常 → 直接回「验证码发送失败」，
+            #    于是**忘记密码的手机号用户被永久卡在登录页**（本次报障的账号
+            #    15014313254 就是这种形态）。短信网关（sms 模式）尚未接入，
+            #    故对手机号在本机回环时退回「自助回显」：能操作本机的人本就持有
+            #    该账号所在的数据目录，安全边界与 dev 模式一致。
+            if loopback and not ident_is_email:
+                dev_code = code
+            else:
+                return {"ok": False, "error": "验证码发送失败，请检查邮件服务配置"}
     # 无论账号是否存在都返回 ok（防账号枚举）。
     # 🔴 dev 模式**只在本机**附带 dev_code（桌面 App 本地调试用）。公网部署一旦因缺少
     #    smtp.json 落到 dev，回传验证码＝调用方可直接改任意账号密码（账号接管）。
-    dev_code = code if (_send_mode() == "dev" and _is_loopback(request)) else None
+    if dev_code is None and code and loopback and _send_mode() == "dev":
+        dev_code = code
     return {"ok": True, "dev_code": dev_code, "expires_in": 300}
 
 
