@@ -149,8 +149,12 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
             _logging.getLogger(__name__).warning("[peer] 对端解析异常，回落本机: %s", _exc)
 
     loop = app.asyncio.get_running_loop()
+    # 🔴 本机解析路径也自动带浏览器 Cookie（与 peer 转发路径对称）：用户没手动粘贴
+    # Cookie 时，自动注入本机浏览器里该站的登录态。数据中心 IP 上的 YouTube 等
+    # Bot 检测只认完整登录会话，仅靠代理直连仍会被判 cookie_required（2026-09-22 实测）。
+    _cookie = payload.cookie or (app.downloader.get_browser_cookie_header(host, url) or "")
     try:
-        info = await app.asyncio.wait_for(loop.run_in_executor(app.prober, app.downloader.probe, url, payload.cookie, payload.proxy), timeout=timeout)
+        info = await app.asyncio.wait_for(loop.run_in_executor(app.prober, app.downloader.probe, url, _cookie, payload.proxy), timeout=timeout)
     except app.asyncio.TimeoutError:
         host = app._host_of(url)
         if app.downloader._is_douyin_host(host):

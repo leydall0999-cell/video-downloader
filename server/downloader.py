@@ -1329,34 +1329,41 @@ def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
         import sqlite3 as _sq
     except Exception:
         return None
+    # 🔴 不再「第一个命中即返回」：同一站点用户可能在多个 Profile 都有 Cookie，
+    # 但常只有一个是「完整登录会话」（其余是游客态/过期态）。数据中心 IP 上的
+    # YouTube 等 Bot 检测只认完整会话，拿游客态 Cookie 转发会被判 cookie_required。
+    # 故按「该域 Cookie 数量」打分，返回会话最完整的 Profile（2026-09-22 实测：
+    # Profile 33 含 139 个 YouTube/Google Cookie 可过 Bot；Default/Profile 43
+    # 仅 46~63 个，转发后对端仍报 cookie_required）。
+    best: tuple[str, str] | None = None
+    best_score = 0
     for name, pattern in _BROWSER_COOKIE_PROFILES:
         for db in glob.glob(os.path.expanduser(pattern)):
             profile_dir = os.path.basename(os.path.dirname(db))
             try:
                 con = _sq.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
                 try:
-                    found = False
+                    score = 0
                     for domain in domains:
-                        row = con.execute(
-                            "SELECT 1 FROM cookies WHERE host_key LIKE ? LIMIT 1",
+                        cnt = con.execute(
+                            "SELECT COUNT(*) FROM cookies WHERE host_key LIKE ?",
                             (f"%.{domain}",),
-                        ).fetchone()
-                        # host_key 有的带前导点(.qq.com)、有的是裸域(qq.com)，两种都试
-                        if row is None:
-                            row = con.execute(
-                                "SELECT 1 FROM cookies WHERE host_key = ? LIMIT 1",
+                        ).fetchone()[0]
+                        # host_key 有的带前导点(.qq.com)、有的是裸域(qq.com)，两种都算
+                        if cnt == 0:
+                            cnt = con.execute(
+                                "SELECT COUNT(*) FROM cookies WHERE host_key = ?",
                                 (domain,),
-                            ).fetchone()
-                        if row:
-                            found = True
-                            break
-                    if found:
-                        return (name, profile_dir)
+                            ).fetchone()[0]
+                        score += cnt
+                    if score > best_score:
+                        best_score = score
+                        best = (name, profile_dir)
                 finally:
                     con.close()
             except Exception:
                 continue
-    return None
+    return best
 
 def get_browser_cookie_header(host: str, url: str) -> str | None:
     """若本机浏览器含目标站点的登录 Cookie，提取并构造可用于请求头的 Cookie 字符串。
