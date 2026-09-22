@@ -85,8 +85,18 @@ done
 
 # ── 4) 重注入构建戳（缓存击穿 + 页脚指纹 + 自动接管用指纹）─────────────────
 step "重注入构建指纹"
+# ⚠️ 与 build_mac.sh 同款：只取 `rev-parse HEAD` 会谎报 —— 它不看工作区，
+#    所以工作区有未提交改动时，打出的标签是「上一个提交」，而包内容已是新代码。
+#    实测（2026-09-22）：改过 web/app.js 后热更，包内 app.js 已含改动、标签却仍是旧 sha。
+#    加 `-dirty` 让「这个包对应的代码没进版本库」一眼可见；判定必须排除未追踪文件
+#    （本仓库常驻 dist/、PROJECT_SNAPSHOT_*.md、.workbuddy/ 等产物，否则永远 dirty）。
 BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
+if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  BUILD_HASH="$BUILD_HASH-dirty"
+  BUILD_DATE="$(date +'%m-%d %H:%M')"
+else
+  BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
+fi
 APP_VERSION="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]' | head -1)"
 [ -z "$APP_VERSION" ] && APP_VERSION="0.0.0"
 BUILD_STAMP="$(date +%y%m%d%H%M%S)"

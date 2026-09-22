@@ -24,6 +24,33 @@ if ! mkdir "$BUILD_LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$BUILD_LOCK" 2>/dev/null || true' EXIT
 
+# ── 构建指纹：在【构建一开始】就锁定，不要等到结尾 ──────────────────────────
+# 🔴 2026-09-22 用户报了「构建老是出现提交旧版本」，实测复现了两条根因，都在这几行：
+#
+#   根因 A（标签谎报「旧提交」）：原先只写 `git rev-parse --short HEAD`，它只看
+#   提交指针、**完全不看工作区**。所以只要构建时还有未提交的改动，打出来的标签就是
+#   「上一个提交」，而包里的代码其实是改动后的新代码 —— 包内容 ≠ 标签。
+#   实测：工作区改过 web/app.js 后跑热更，包内 app.js 已含改动，标签却仍是 de33099。
+#   修法：加 `-dirty` 后缀。带 `-dirty` 就说明「这个包对应一份没进版本库的代码」，
+#   一眼可辨，不会再被误读成「构建出了旧版本」。
+#
+#   根因 B（标签谎报「新提交」）：指纹原先在构建【结尾】才取（原 477-478 行），
+#   而全量构建要跑约 40 分钟。构建期间若落了提交，标签会指向「比包里代码更新」的
+#   提交号。2026-09-15 已在解说管线上踩过同一个坑（见下方 PIPELINE_HASH 注释），
+#   当时只给管线打了补丁，app 自身的 SHA 一直没修。现在在开头锁定，一次定位。
+#
+# ⚠️ dirty 判定必须排除未追踪文件（--untracked-files=no）：本仓库常驻大量
+#    未追踪产物（dist/、PROJECT_SNAPSHOT_*.md、.workbuddy/、docs/…），若把它们
+#    算作 dirty，每次构建都会显示 -dirty，这个标记就彻底失去意义了。
+APP_BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  APP_BUILD_HASH="$APP_BUILD_HASH-dirty"
+  APP_BUILD_DATE="$(date +'%m-%d %H:%M')"   # 脏构建：显示构建时刻，而非上一个提交时间
+else
+  APP_BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
+fi
+echo "▶ 构建指纹已锁定：$APP_BUILD_HASH @ $APP_BUILD_DATE"
+
 # 找 node：先 PATH，再 workbuddy 托管（按版本号取最新），最后常见位置。
 # 不在脚本里硬写绝对路径，跨机器/跨用户都能跑；找不到则明确报错而不是静默回退。
 NODE=""
@@ -275,7 +302,10 @@ fi
 _PCS_ADD_BINARY_ARG=""
 
 # ── 写入构建信息（版本号显示用）──
-_BUILD_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# 用开头锁定的 APP_BUILD_HASH（同款含 -dirty），不要在这里另取一次 HEAD。
+# 注：本文件当前无人消费（全仓 grep 无读取方），保留是为向后兼容；
+#     它在 .gitignore:46 里，属未追踪产物，不会污染上面「是否 dirty」的判定。
+_BUILD_HASH="$APP_BUILD_HASH"
 _BUILD_TIME="$(date '+%m-%d %H:%M')"
 cat > "$REPO/server/build_info.txt" <<BUILDINFO
 {"hash": "${_BUILD_HASH}", "time": "${_BUILD_TIME}"}
@@ -475,8 +505,10 @@ else
 fi
 
 echo "▶ 注入构建指纹（页脚显示，便于确认是否最新版）"
-BUILD_HASH="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-BUILD_DATE="$(git -C "$REPO" log -1 --format='%cd' --date=format:'%m-%d %H:%M' 2>/dev/null || echo '?')"
+# ⚠️ 这里不再现取 HEAD：用脚本开头锁定的 APP_BUILD_HASH / APP_BUILD_DATE。
+#    原因见文件开头那段注释（根因 A「标签谎报旧提交」/ 根因 B「标签谎报新提交」）。
+BUILD_HASH="$APP_BUILD_HASH"
+BUILD_DATE="$APP_BUILD_DATE"
 # 解说管线（commentary-pipeline）独立仓库，其 SHA 也一并注入指纹，避免「改了管线但 /api/version 不反映」的错觉。
 # ⚠️ 优先读 staging 在**打包当场**记下的 revision，而不是此刻的 HEAD：staging 在构建开头、
 #    指纹在构建结尾，期间若又落了提交，直接读 HEAD 会虚报版本（2026-09-15 踩过）。
