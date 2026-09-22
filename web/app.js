@@ -16645,7 +16645,11 @@ el.dwVidPlayer.removeAttribute('src');
         _forgetMsg('验证码已发送，请查收邮箱/手机');
         if (r.dev_code && el.forgetDevNote) {
           el.forgetDevNote.hidden = false;
-          el.forgetDevNote.textContent = '（测试模式）验证码：' + r.dev_code + '（接入真实网关后将不再显示）';
+          // self_serve：手机号找回（短信通道未接入）→ 直接在本机显示；
+          // 否则是桌面调试用的 dev 模式回显。措辞别让用户以为功能是半成品。
+          el.forgetDevNote.textContent = r.self_serve
+            ? '验证码：' + r.dev_code + '（手机号暂不支持短信接收，已直接显示）'
+            : '（测试模式）验证码：' + r.dev_code + '（接入真实网关后将不再显示）';
         }
         if (el.forgetCode) el.forgetCode.focus();
         _forgetStartCountdown((r.expires_in && r.expires_in > 60) ? 60 : 60);

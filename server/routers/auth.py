@@ -316,7 +316,10 @@ def auth_reset_code(request: Request, payload: dict[str, Any] = Body(...)) -> di
     #    密码（账号接管），故 _is_loopback 是硬前提，不可放宽。
     dev_code = code if (code and _is_loopback(request)
                         and (_send_mode() == "dev" or delivery_failed)) else None
-    return {"ok": True, "dev_code": dev_code, "expires_in": 300}
+    # self_serve：这次回传是因为**投递渠道走不通**（手机号 + sms 未接入），
+    # 而不是 dev 调试模式——前端据此换一句人话，别让用户以为「这是个测试功能」。
+    return {"ok": True, "dev_code": dev_code, "expires_in": 300,
+            "self_serve": bool(dev_code and delivery_failed)}
 
 
 @router.post("/api/auth/reset")

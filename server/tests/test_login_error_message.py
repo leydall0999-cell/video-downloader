@@ -179,6 +179,9 @@ def test_phone_reset_code_works_on_loopback(smtp_no_channel):
     r = auth_reset_code(_req("127.0.0.1"), {"identifier": PHONE})
     assert r["ok"] is True
     assert r.get("dev_code"), f"本机应能自助拿到验证码，实际 {r}"
+    # self_serve 让前端把措辞从「测试模式」改成「手机号暂不支持短信接收」，
+    # 别让用户以为这是个没做完的功能
+    assert r.get("self_serve") is True, f"手机号自助应标记 self_serve，实际 {r}"
 
 
 def test_phone_reset_code_never_leaks_on_public(smtp_no_channel):
