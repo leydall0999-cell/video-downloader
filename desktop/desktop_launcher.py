@@ -433,6 +433,37 @@ def _save_panel_dir() -> str:
     return d
 
 
+def _save_panel_icon_bytes() -> bytes:
+    """读 App 正式图标（desktop/icon.icns），用于替换 osacompile 默认卷曲纸图标。
+
+    查找顺序：源码态 `desktop/icon.icns`（与本文件同目录）→ 打包态
+    `VideoDownloader.app/Contents/Resources/icon.icns`（sys.executable 同级的
+    Resources）。都找不到返回 b""（applet 保持默认图标，功能不受影响）。
+
+    背景（2026-09-22 用户截图）：osacompile 编译的 applet 用 AppleScript 默认
+    「卷曲纸卷」图标，弹保存面板时 Dock/切换器里冒出陌生图标，用户截图来问
+    「这是什么」。换成正式 App 图标后可辨识。
+    """
+    candidates = []
+    try:
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.icns"))
+    except Exception:
+        pass
+    try:
+        candidates.append(os.path.join(os.path.dirname(sys.executable), "..", "Resources", "icon.icns"))
+    except Exception:
+        pass
+    for cand in candidates:
+        try:
+            with open(cand, "rb") as fh:
+                data = fh.read()
+            if data:
+                return data
+        except Exception:
+            continue
+    return b""
+
+
 def _ensure_save_panel_applet(log_path: str = "") -> str:
     """确保存在「中文本地化」的保存面板 applet，返回其绝对路径；不可用返回 ""。
 
@@ -455,7 +486,11 @@ def _ensure_save_panel_applet(log_path: str = "") -> str:
     ver_file = os.path.join(d, "SavePanel.version")
     # ★ 按源码指纹判断是否需要重编：只按「plist 里有 zh-Hans」判断的话，
     #   以后改了 _SAVE_PANEL_APPLET_SRC，老用户会一直用旧 applet（改了不生效）。
-    sig = hashlib.sha1(_SAVE_PANEL_APPLET_SRC.encode("utf-8")).hexdigest()[:16]
+    #   指纹同时纳入图标内容 —— 图标换版也要重编落盘（2026-09-22）。
+    icon_bytes = _save_panel_icon_bytes()
+    icon_sig = hashlib.sha1(icon_bytes).hexdigest()[:16] if icon_bytes else "noicon"
+    sig = hashlib.sha1((hashlib.sha1(_SAVE_PANEL_APPLET_SRC.encode("utf-8")).hexdigest()
+                        + icon_sig).encode("utf-8")).hexdigest()[:16]
 
     if os.path.isfile(info) and os.path.isfile(ver_file):
         try:
@@ -480,6 +515,16 @@ def _ensure_save_panel_applet(log_path: str = "") -> str:
         )
         if r.returncode != 0 or not os.path.isfile(info):
             return ""
+        # ★ 用 App 正式图标覆盖 osacompile 的默认「卷曲纸」图标（2026-09-22）。
+        #   不换的话弹面板时 Dock/切换器里出现陌生图标，用户不知道那是什么。
+        if icon_bytes:
+            try:
+                with open(os.path.join(app, "Contents", "Resources", "applet.icns"), "wb") as fh:
+                    fh.write(icon_bytes)
+                # bump mtime 促使 LaunchServices/Dock 重读图标缓存
+                subprocess.run(["touch", app], capture_output=True, timeout=10)
+            except Exception:
+                pass
         # ★ 关键一步：声明中文优先。不写这两项，系统面板仍按英文渲染。
         for args in (
             ["-replace", "CFBundleDevelopmentRegion", "-string", "zh-Hans"],
@@ -1097,7 +1142,11 @@ class VdlApi:
         from pathlib import Path
 
         suggested = (suggested_name or "提取文案.txt").strip() or "提取文案.txt"
-        if not suggested.lower().endswith(".txt"):
+        # 🔴 2026-09-22 缺陷修复：此前无条件 `not endswith('.txt') 就追加 .txt`，
+        #    把「下载 SRT 字幕」传来的 xxx.srt 强改成 xxx.srt.txt —— 用户拿到
+        #    双后缀文件，拖进播放器/剪映识别不了字幕。正确规则：只要文件名已带
+        #    任意后缀就原样保留，仅对「无后缀」的裸名兜底补 .txt。
+        if not os.path.splitext(suggested)[1]:
             suggested += ".txt"
         downloads = Path.home() / "Downloads"
         try:

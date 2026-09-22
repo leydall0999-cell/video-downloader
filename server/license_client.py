@@ -19,11 +19,45 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Optional
 
 DEFAULT_BASE = "https://hanyuxz.top"
+
+_BASE_CACHE: dict[str, str] = {}
+
+
+def license_base() -> str:
+    """授权中心基址（2026-09-22 授权中心自香港迁国内 ECS 后引入）。
+
+    解析顺序：
+      1. env `VDL_LICENSE_BASE`（部署侧显式覆盖）；
+      2. `~/.videodownloader/cloud_sync.json` 的 `url`（worker 与授权中心同在
+         ECS 8888，nginx 按 location 分流 —— 一个 origin 服务两个后端）；
+      3. 回落 DEFAULT_BASE（hanyuxz.top，历史兼容）。
+
+    背景：原 DEFAULT_BASE 走 hanyuxz.top → Cloudflare → 香港，实测单次
+    login 7.5s，贴着 12s 超时线抖动，用户登录时随机「云端未同步」。
+    迁 ECS 后同链路实测 ~86ms。结果进程内缓存，避免每次请求都读盘。
+    """
+    cached = _BASE_CACHE.get("base")
+    if cached:
+        return cached
+    base = (os.environ.get("VDL_LICENSE_BASE") or "").strip()
+    if not base:
+        try:
+            cfg_path = os.path.join(os.path.expanduser("~"), ".videodownloader", "cloud_sync.json")
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                cfg = json.load(fh) or {}
+            base = str(cfg.get("url") or "").strip()
+        except Exception:
+            base = ""
+    if not base:
+        base = DEFAULT_BASE
+    _BASE_CACHE["base"] = base.rstrip("/")
+    return _BASE_CACHE["base"]
 
 
 class LicenseCloudError(Exception):
@@ -34,8 +68,10 @@ class LicenseCloudError(Exception):
         self.status = status
 
 
-def _post(path: str, payload: dict[str, Any], base_url: str,
+def _post(path: str, payload: dict[str, Any], base_url: Optional[str],
           timeout: float, opener: Optional[Callable] = None) -> dict[str, Any]:
+    if not base_url:
+        base_url = license_base()
     url = base_url.rstrip("/") + path
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
@@ -61,7 +97,7 @@ def _post(path: str, payload: dict[str, Any], base_url: str,
 
 # ---- 账号 ----
 def register_remote(email: str, password: str, fp: str, name: str = "",
-                    base_url: str = DEFAULT_BASE, timeout: float = 12.0,
+                    base_url: Optional[str] = None, timeout: float = 12.0,
                     opener: Optional[Callable] = None) -> dict[str, Any]:
     """注册并自动登录。返回 {ok, token, account, evicted?}。"""
     return _post("/api/license/register",
@@ -71,7 +107,7 @@ def register_remote(email: str, password: str, fp: str, name: str = "",
 
 
 def login_remote(email: str, password: str, fp: str, name: str = "",
-                 base_url: str = DEFAULT_BASE, timeout: float = 12.0,
+                 base_url: Optional[str] = None, timeout: float = 12.0,
                  opener: Optional[Callable] = None) -> dict[str, Any]:
     """登录。返回 {ok, token, account:{email, devices, purchases, max_devices}, evicted?}。"""
     return _post("/api/license/login",
@@ -80,7 +116,7 @@ def login_remote(email: str, password: str, fp: str, name: str = "",
                  base_url, timeout, opener)
 
 
-def heartbeat_remote(token: str, fp: str, base_url: str = DEFAULT_BASE,
+def heartbeat_remote(token: str, fp: str, base_url: Optional[str] = None,
                      timeout: float = 8.0,
                      opener: Optional[Callable] = None) -> dict[str, Any]:
     """心跳续期 / 配额校验。被挤掉时返回 {"ok": False, "code": "DEVICE_EVICTED"}。"""
@@ -88,7 +124,7 @@ def heartbeat_remote(token: str, fp: str, base_url: str = DEFAULT_BASE,
                  base_url, timeout, opener)
 
 
-def redeem_remote(token: str, code: str, base_url: str = DEFAULT_BASE,
+def redeem_remote(token: str, code: str, base_url: Optional[str] = None,
                   timeout: float = 12.0,
                   opener: Optional[Callable] = None) -> dict[str, Any]:
     """卡密充值到账号。返回 {ok, plan_code, purchase_id, account}。"""
@@ -97,7 +133,7 @@ def redeem_remote(token: str, code: str, base_url: str = DEFAULT_BASE,
 
 
 def set_password_remote(email: str, new_password: str, old_password: str = "",
-                        token: str = "", base_url: str = DEFAULT_BASE,
+                        token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,
                         opener: Optional[Callable] = None) -> dict[str, Any]:
     """把本机账号的新密码同步到云端（两端一套密码，见 license_server.password_impl）。
@@ -113,7 +149,7 @@ def set_password_remote(email: str, new_password: str, old_password: str = "",
                  base_url, timeout, opener)
 
 
-def devices_remote(token: str, fp: str = "", base_url: str = DEFAULT_BASE,
+def devices_remote(token: str, fp: str = "", base_url: Optional[str] = None,
                    timeout: float = 8.0,
                    opener: Optional[Callable] = None) -> dict[str, Any]:
     """我的设备列表（含 max_devices）。传 fp 时云端会标出哪台是本机。"""
@@ -121,7 +157,7 @@ def devices_remote(token: str, fp: str = "", base_url: str = DEFAULT_BASE,
                  base_url, timeout, opener)
 
 
-def unbind_remote(token: str, fp: str, base_url: str = DEFAULT_BASE,
+def unbind_remote(token: str, fp: str, base_url: Optional[str] = None,
                   timeout: float = 8.0,
                   opener: Optional[Callable] = None) -> dict[str, Any]:
     """登出/移除某台设备，腾位置给别人。"""
@@ -129,7 +165,7 @@ def unbind_remote(token: str, fp: str, base_url: str = DEFAULT_BASE,
                  base_url, timeout, opener)
 
 
-def check_remote(code: str, fingerprint: str = "", base_url: str = DEFAULT_BASE,
+def check_remote(code: str, fingerprint: str = "", base_url: Optional[str] = None,
                  timeout: float = 8.0,
                  opener: Optional[Callable] = None) -> dict[str, Any]:
     """卡密状态查询（兼容保留）。网络故障抛 LicenseCloudError（调用方 fail-open）。"""
