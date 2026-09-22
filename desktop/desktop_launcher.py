@@ -1593,6 +1593,15 @@ def main() -> None:
         args=(PORT, HOST, _app_dir, _lock),
         daemon=True,
     )
+    # 🔍 诊断（2026-09-22）：后端线程曾卡死在 import 阶段的 open()（系统日志无从下手），
+    # 让 faulthandler 每 30s 把全部线程的 Python 栈打到启动日志，卡在哪一行一目了然。
+    try:
+        import faulthandler as _fh
+        _dump_path = Path.home() / ".vdl_pydump.log"
+        _dump_fh = open(_dump_path, "w")
+        _fh.dump_traceback_later(30, repeat=True, file=_dump_fh)
+    except Exception:
+        _dump_fh = None
     server_thread.start()
 
     # 等服务器就绪（窗口 240s：见下方 2026-09-15 实测）。daemon 线程不 join，
