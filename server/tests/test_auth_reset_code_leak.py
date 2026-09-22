@@ -34,6 +34,7 @@
 """
 import atexit
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -165,14 +166,26 @@ def test_smtp_mode_never_returns_code() -> None:
 
 
 def test_source_ratchet_dev_code_is_gated() -> None:
-    """⑥ 源码棘轮：dev_code 赋值必须同时受投递模式与本机判定约束（防改回去）。"""
+    """⑥ 源码棘轮：验证码回传必须同时受投递渠道与本机判定约束（防改回去）。
+
+    2026-09-22 更新：该赋值现在是**跨行条件表达式**（手机号自助找回这条分支加入后，
+    条件变长），故按「完整语句」而不是单行来检查——只要语句里同时出现
+    `_send_mode()` 与 `_is_loopback(` 即可，原意不变。
+    """
     src = (Path(_SERVER_DIR) / "routers" / "auth.py").read_text(encoding="utf-8")
-    lines = [l.strip() for l in src.splitlines() if "dev_code = " in l and "dev_code =" in l]
-    assert len(lines) == 1, f"应只有一处 dev_code 赋值，实际 {len(lines)} 处：{lines}"
-    line = lines[0]
-    assert "_send_mode()" in line, f"dev_code 必须受投递模式约束：{line}"
-    assert "_is_loopback(" in line, f"dev_code 必须受本机判定约束：{line}"
-    print("✅ ⑥ 源码棘轮：dev_code 同时受 _send_mode 与 _is_loopback 约束")
+    lines = src.splitlines()
+    starts = [i for i, l in enumerate(lines) if re.match(r"\s*dev_code\s*=", l)]
+    assert len(starts) == 1, f"应只有一处 dev_code 赋值，实际 {len(starts)} 处：{starts}"
+    stmt, depth, i = "", 0, starts[0]
+    while i < len(lines):
+        stmt += lines[i] + "\n"
+        depth += lines[i].count("(") - lines[i].count(")")
+        i += 1
+        if depth <= 0:
+            break
+    assert "_send_mode()" in stmt, f"验证码回传必须受投递渠道约束：{stmt!r}"
+    assert "_is_loopback(" in stmt, f"验证码回传必须受本机判定约束：{stmt!r}"
+    print("✅ ⑥ 源码棘轮：验证码回传同时受 _send_mode 与 _is_loopback 约束")
 
 
 def test_source_ratchet_loopback_whitelist_is_minimal() -> None:

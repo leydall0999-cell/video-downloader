@@ -291,29 +291,31 @@ def auth_reset_code(request: Request, payload: dict[str, Any] = Body(...)) -> di
     if not reset_code_cooldown_ok(ident):
         return {"ok": False, "error": "验证码已发送，请稍后再试（60 秒冷却）"}
     code = generate_reset_code(ident)
-    loopback = _is_loopback(request)
     ident_is_email = "@" in ident
-    dev_code = None
+    delivery_failed = False
     if code:
         try:
             deliver_reset_code(ident, code)
         except Exception as e:  # noqa: BLE001
             logging.getLogger("vdl.auth").error("投递验证码失败: %s", e)
-            # 🔴 2026-09-22 实测缺陷：手机号账号根本走不到重置流程。投递模式是 smtp，
-            #    而 SMTP 只发邮箱 —— 手机号必然抛异常 → 直接回「验证码发送失败」，
-            #    于是**忘记密码的手机号用户被永久卡在登录页**（本次报障的账号
-            #    15014313254 就是这种形态）。短信网关（sms 模式）尚未接入，
-            #    故对手机号在本机回环时退回「自助回显」：能操作本机的人本就持有
-            #    该账号所在的数据目录，安全边界与 dev 模式一致。
-            if loopback and not ident_is_email:
-                dev_code = code
-            else:
+            delivery_failed = True
+            # 本机（桌面 App）如实报错，用户能看到真问题并自助处理。
+            # 🔴 2026-09-22 实测缺陷：投递模式是 smtp，而 SMTP 只发邮箱 —— 手机号
+            #    必然走到这里。若照旧直接回「发送失败」，**忘记密码的手机号用户就
+            #    永久卡在登录页**（本次报障的 15014313254 正是这种形态）。短信网关
+            #    （sms 模式）尚未接入，故手机号在本机回环时改走下方自助回显；
+            #    邮箱投递失败仍如实报错（那是配置问题，不该被顺手放过）。
+            if ident_is_email and _is_loopback(request):
                 return {"ok": False, "error": "验证码发送失败，请检查邮件服务配置"}
+            # 公网不回错误体：与「账号不存在」保持同一响应形状，防账号枚举。
     # 无论账号是否存在都返回 ok（防账号枚举）。
-    # 🔴 dev 模式**只在本机**附带 dev_code（桌面 App 本地调试用）。公网部署一旦因缺少
-    #    smtp.json 落到 dev，回传验证码＝调用方可直接改任意账号密码（账号接管）。
-    if dev_code is None and code and loopback and _send_mode() == "dev":
-        dev_code = code
+    # 🔴 全文件**唯一**的验证码回传点，必须同时受「本机回环」与「投放渠道」约束：
+    #    · dev 模式 + 本机 → 桌面 App 本地调试（原有语义）
+    #    · 手机号投递失败 + 本机 → 自助找回（sms 未接入，否则用户永久进不来）
+    #    公网部署一旦因缺少 smtp.json 落到 dev，回传验证码＝调用方可直接改任意账号
+    #    密码（账号接管），故 _is_loopback 是硬前提，不可放宽。
+    dev_code = code if (code and _is_loopback(request)
+                        and (_send_mode() == "dev" or delivery_failed)) else None
     return {"ok": True, "dev_code": dev_code, "expires_in": 300}
 
 
