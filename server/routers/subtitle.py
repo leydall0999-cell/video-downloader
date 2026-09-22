@@ -54,13 +54,38 @@ ALLOWED_MODELS = {"base", "small", "medium", "large-v3"}
 _DEFAULT_MODEL = "small"
 
 
+def _asr_thread_cap() -> int:
+    """ASR 线程上限 = **性能核数**（不是 os.cpu_count() 的总核数）。
+
+    🔴 2026-09-22 实测（Apple M1 · 8 核(4P+4E) · 8GB，20 分 50 秒音频，small/int8）：
+
+        线程=8  → 244.7s   (5.1x 实时)
+        线程=4  →  99.1s  (12.6x 实时)
+        线程=2  →  38.6s  (32.4x 实时)
+
+    原实现 `max(4, os.cpu_count())` = 8，把 4 个能效核也拉进 CTC 推理，再加上超订阅
+    （8 worker + 主线程抢 4 个性能核），**实测反而慢 2.5 倍** —— 所谓「会员满速」当时
+    是负优化。故上限取 `hw.perflevel0.physicalcpu`（Apple Silicon 的性能核数），
+    读不到时回落到 `cpu_count()`，并统一封顶 8。
+    """
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.perflevel0.physicalcpu"],
+                             capture_output=True, text=True, timeout=2)
+        v = int((out.stdout or "").strip())
+        if v > 0:
+            return max(1, min(8, v))
+    except Exception:  # noqa: BLE001  非 macOS / 无该键 → 走回落
+        pass
+    return max(1, min(8, os.cpu_count() or 4))
+
+
 class SubtitleRequest(app.BaseModel):
     """桌面端本地视频字幕提取请求。"""
     local_path: str
     model_size: str = "small"        # base / small / medium / large-v3
     language: str = ""               # ""=自动检测 / "zh" / "en"
     to_library: bool = False
-    fast: bool = False               # 快速模式：贪心解码，约快 2~3 倍，准确度略降
+    fast: bool = True                # 快速模式：贪心解码，实测快约 2 倍（20min 音频 99s→45s），准确度略降
 
 
 def _resolve_safe_local_path(path: str) -> _Path:
@@ -242,17 +267,31 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
             status_code=402,
             detail="MEMBER_QUOTA|今日字幕提取免费额度已用尽（" + str(int(_sq.get("limit", _free))) + "/日）— 开通会员可解锁无限次/日，并享满速提取",
         )
+    # 满速 = 性能核数（见 _asr_thread_cap 的实测注记：用满总核数会慢 2.5 倍）
+    full_threads = _asr_thread_cap()
+    cpu_threads = full_threads if is_member else min(4, full_threads)
+    dev = _device_of_req(request)
+    # 幂等去重：同一文件 + 同一设备已在识别中 → 复用原任务（不吃配额、不重复开线程）。
+    # 实测（2026-09-22 日志）：用户等待中重复点两次，两个任务各开 4~8 线程互抢 CPU，
+    # 单任务从 99s 劣化到 5 分钟以上 —— 这里直接返回原 job_id。
+    src_key = str(resolved)
+    with _SUBTITLE_LOCK:
+        for _jid, _j in SUBTITLE_JOBS.items():
+            if (_j.get("status") == "running" and _j.get("src") == src_key
+                    and _j.get("device_id") == dev):
+                return {"job_id": _jid, "status": "running",
+                        "model": _j.get("model", model_size),
+                        "cpu_threads": _j.get("cpu_threads", cpu_threads),
+                        "member": is_member, "deduped": True}
     _mstore.use_daily("subtitle", 1)
     # 字幕提取为本地 faster-whisper 推理，不扣 AI 积分（仅云端/服务端算力计费）
-    full_threads = max(4, os.cpu_count() or 4)
-    cpu_threads = full_threads if is_member else 4
     job_id = app.uuid.uuid4().hex[:12]
     with _SUBTITLE_LOCK:
         SUBTITLE_JOBS[job_id] = {
             "status": "running", "stage": "排队中", "progress": 0, "error": "",
             "srt_file": "", "txt_file": "", "srt_name": "", "txt_name": "",
             "lines": 0, "language": "", "cpu_threads": cpu_threads,
-            "device_id": _device_of_req(request),
+            "device_id": dev, "src": src_key, "model": model_size,
         }
     app.executor.submit(_run_subtitle, job_id, str(resolved), model_size,
                         (payload.language or "").strip(), bool(payload.to_library),

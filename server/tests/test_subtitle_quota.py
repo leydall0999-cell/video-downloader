@@ -28,8 +28,20 @@ from fastapi.testclient import TestClient  # noqa: E402
 client = TestClient(server_app.app, raise_server_exceptions=False)
 
 # 假视频文件：仅需存在且后缀合法（extract 端点只校验后缀 + 配额；executor 已 mock 不真跑 whisper）
-_VID = os.path.join(_TMP, "sample.mp4")
-Path(_VID).write_text("fake", encoding="utf-8")
+# ⚠️ 2026-09-22：extract 端点新增「同文件并发提交幂等去重」——同一路径重复提交会复用原 job
+# 且不吃配额。故本文件的每次提交都用**不同文件名**，以便继续验证「配额墙」本身；
+# 去重行为由 test_duplicate_submit_reuses_job 单独覆盖。
+_counter = {"n": 0}
+
+
+def _fresh_vid() -> str:
+    _counter["n"] += 1
+    p = os.path.join(_TMP, f"sample{_counter['n']}.mp4")
+    Path(p).write_text("fake", encoding="utf-8")
+    return p
+
+
+_VID = _fresh_vid()   # 兼容旧引用
 
 
 def _setup():
@@ -47,9 +59,10 @@ def _reset_state():
     server_app.member_store._loaded = False
 
 
-def _post_subtitle(model="small"):
+def _post_subtitle(model="small", path=None):
     return client.post("/api/subtitle/extract",
-                       json={"local_path": _VID, "model_size": model, "language": "", "fast": False})
+                       json={"local_path": path or _fresh_vid(), "model_size": model,
+                             "language": "", "fast": False})
 
 
 def test_free_2_then_402():
@@ -90,8 +103,29 @@ def test_member_unblocks():
     print("✅ 免费满 2 → 激活下载会员 → 恢复本地字幕提取，member 档无限（日配额不累计）")
 
 
+def test_duplicate_submit_reuses_job():
+    """同一文件重复提交（用户等不及又点一次）→ 复用原 job，不吃第二次配额。
+
+    2026-09-22：实测日志里出现过 3 秒内提交两次（18:32:44 / 18:32:47），两个任务各开
+    4~8 线程互抢 CPU，单任务从 99s 劣化到 5 分钟以上。此棘轮锁定「幂等去重」。
+    """
+    _reset_state()
+    _setup()
+    p = _fresh_vid()
+    r1 = _post_subtitle(path=p)
+    r2 = _post_subtitle(path=p)
+    assert r1.status_code == 200, r1.text[:200]
+    assert r2.status_code == 200, r2.text[:200]
+    assert r2.json().get("job_id") == r1.json().get("job_id"), (r1.json(), r2.json())
+    assert r2.json().get("deduped") is True, r2.json()
+    used = server_app.member_store.status()["daily_usage"].get("subtitle", 0)
+    assert used == 1, f"重复提交不应累计配额，实际 {used}"
+    print("✅ 同文件重复提交 → 复用原 job_id 且不重复计配额（幂等去重）")
+
+
 if __name__ == "__main__":
     test_free_2_then_402()
     test_member_unblocks()
-    print("\n🎉 字幕提取会员日配额单测全部通过（2 项）")
+    test_duplicate_submit_reuses_job()
+    print("\n🎉 字幕提取会员日配额单测全部通过（3 项）")
     shutil.rmtree(_TMP, ignore_errors=True)
