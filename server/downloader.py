@@ -1066,6 +1066,18 @@ def can_download_directly(host: str) -> bool:
             ok = True
     except Exception:  # noqa: BLE001
         pass
+    # 1.5) 复用 _resolve_proxy 的 macOS 系统代理 / 本地代理端口扫描兜底。
+    #      urllib.getproxies() 在部分 macOS 环境读不到 networksetup 配的代理
+    #      （如 Karing/Clash 的 127.0.0.1:7892），导致误判「本机无出网链路」、
+    #      把海外站错误转发给数据中心对端 → 对端 IP 被 YouTube bot 检测拦截。
+    #      这里用 _resolve_proxy（scutil + 端口扫描，含 7892）补上，确保本机
+    #      有代理时走本地解析（浏览器 Cookie + 本机代理），不再误转对端。
+    if not ok:
+        try:
+            if _resolve_proxy(host):
+                ok = True
+        except Exception:  # noqa: BLE001
+            pass
     # 2) TLS 握手探测（覆盖 TUN 模式与真裸连）。必须带 TLS：GFW 的 DNS 污染
     #    常给出能完成 TCP 握手的假 IP，只有证书校验通过的 TLS 才算真连通。
     if not ok:
