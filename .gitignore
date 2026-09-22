@@ -54,3 +54,10 @@ desktop/icon.icns.bak.*
 
 # 增量更新基线（每次发布生成的归一化 .app tar，体积大，不入库）
 desktop/.release_baselines/
+
+# 构建/测试临时目录（本机产生，体积可观，不入库）
+.build_tmp/
+.pytest_tmp/
+
+# 项目本地数据（记忆/技能/会话产物，与主仓库 app-dev/web-dev 一致忽略）
+.workbuddy/
