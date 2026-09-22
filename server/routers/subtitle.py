@@ -8,6 +8,7 @@ job 机制独立于 CONVERT_JOBS：SUBTITLE_JOBS + app.executor，设备隔离�
 """
 import app
 import os
+import re
 import time
 import shutil
 import subprocess
@@ -29,6 +30,14 @@ router = APIRouter()
 # 5000 句 ≈ 4.3 小时连续对白，单集/单部电影/长直播都覆盖得住；响应约 0.55MB，本机回环无感。
 # 仍保留这个上限只为兜住异常输入（十几小时的连续语音），此时 UI 会明确写出「仅显示前 N 句」。
 _PREVIEW_MAX_LINES = 5000
+
+# 无 VAD 兜底轮的「幻觉套话」黑名单（2026-09-23）。
+# Whisper 在纯伴奏/静音段会高频输出这些训练语料残留（YouTube 片尾感谢、字幕组署名等），
+# 属于确定性垃圾内容，与置信度无关，直接按文本匹配丢弃。
+_HALLUCINATION_RE = re.compile(
+    r"(?i)(thank you for watching|thanks for watching|subscribe to (my|the|our) (channel|channel))"
+    r"|(请订阅|感谢观看|谢谢观看|订阅我的频道|字幕由|amara\.org|请点赞|关注频道)"
+)
 
 # 国内加速：所有走 huggingface_hub 的下载（faster-whisper 字幕模型、扩散去水印模型）
 # 统一走 hf-mirror。
@@ -240,20 +249,29 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                 job["progress"] = max(job.get("progress") or 15, 15)
                 app.logger.info("subtitle %s VAD coverage %.1f%% too low, retry without VAD",
                                 job_id, speech_secs / total * 100)
+                # 语言：显式指定优先；否则沿用首轮（在 VAD 挑出的清晰人声上检测，更可信）。
+                # 锁定语言能压住伴奏段的英文幻觉（实测纯伴奏被解码成
+                # "Thank you for watching / subscribe to my channel" 套话）。
+                eff_lang = language or info.language or None
                 retry_kwargs = dict(
-                    language=language or None,
+                    language=eff_lang,
                     vad_filter=False,
                     beam_size=1 if fast else 5,
                     condition_on_previous_text=False,  # 防幻觉连锁
                 )
+                if eff_lang == "zh":
+                    retry_kwargs["initial_prompt"] = "以下是普通话的歌词或对话内容。"
                 segs2, _info2 = model.transcribe(str(wav_path), **retry_kwargs)
                 rows2 = []
                 for seg in segs2:
                     text = (seg.text or "").strip()
                     if not text:
                         continue
-                    # 无 VAD 时纯伴奏段易幻觉出假歌词，按置信度过滤
+                    # 无 VAD 时纯伴奏段易幻觉出假歌词：置信度过滤 + 套话黑名单
                     if seg.no_speech_prob >= 0.6 or seg.avg_logprob <= -1.0:
+                        continue
+                    if _HALLUCINATION_RE.search(text):
+                        app.logger.info("subtitle %s drop hallucinated line: %r", job_id, text[:60])
                         continue
                     rows2.append((float(seg.start), float(seg.end), text))
                     if total > 0:

@@ -86,17 +86,25 @@ def run():
           f"音乐低覆盖(7%)触发无VAD重识别并采用（lines={job.get('lines')}, calls={len(m.calls)}）",
           "" if passed else job)
 
-    # 2) 幻觉过滤：第二轮里 no_speech_prob≥0.6 / avg_logprob≤-1.0 的段被丢弃
+    # 2) 幻觉过滤：第二轮里 no_speech_prob≥0.6 / avg_logprob≤-1.0 / 套话黑名单的段被丢弃
     m = _FakeModel([
         [_FakeSeg(51, 58, "清唱一句")],
         [_FakeSeg(10, 30, "好句"), _FakeSeg(30, 50, "幻觉句", nsp=0.8),
-         _FakeSeg(50, 70, "低置信句", lp=-1.5)],
+         _FakeSeg(50, 70, "低置信句", lp=-1.5),
+         _FakeSeg(70, 75, "Thank you for watching this video."),
+         _FakeSeg(75, 80, "请订阅我的频道")],
     ])
     _setup_model(m)
     job = _do_job("job_halluc")
     passed = job.get("lines") == 1
     ok &= bool(passed)
     print(("✅" if passed else "❌"), f"无VAD轮幻觉段被过滤（lines={job.get('lines')}，应=1）")
+
+    # 2.5) zh 任务的无 VAD 轮应带 initial_prompt（压英文幻觉）且锁定语言
+    passed = len(m.calls) == 2 and m.calls[1][0] is False \
+        and m.calls[1][1].get("language") == "zh" and "initial_prompt" in m.calls[1][1]
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"zh 兜底轮锁定语言+initial_prompt（calls1={m.calls[1][1].get('language')}）")
 
     # 3) 二轮更差时不采用：保留第一轮结果
     m = _FakeModel([
