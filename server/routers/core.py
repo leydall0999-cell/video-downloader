@@ -82,8 +82,17 @@ def node_info() -> dict:
 
     前端据此在粘贴链接时自动把请求发到「离目标站点更近」的节点：
     国内站 → cn 节点，海外站 → global 节点。对端为空则退化为单节点模式。
+
+    🔴 桌面版（profile=app）不向前端暴露 peer（2026-09-22 实测踩坑）：
+    前端 baseFor() 拿到 peer 后会把海外链接**直发对端**，而对端机器上没有
+    本机浏览器登录态，YouTube 等 Bot 检测站必报 cookie_required；前端 JS 也
+    不可能读到 Chrome Cookie。桌面后端本就有完整的带登录态转发链路
+    （解析 core.py /api/resolve 自动带浏览器 Cookie 转发、下载入口注入
+    Cookie 后 run_remote_download 交给对端），所以前端全走本机、由后端转发
+    才是正解。web 云端部署（VDL_INSTANCE=cloud）行为不变。
     """
-    info = {'region': app.NODE_REGION, 'peer': app.PEER_ENDPOINT, 'china_domains': list(app.CHINA_DOMAINS), 'commentary_enabled': app.COMMENTARY_ENABLED, 'ads_enabled': app.ADS_ENABLED, 'convert': {'subscription_required': app.CONVERT_SUB_ENABLED, 'free_daily': app.CONVERT_FREE_DAILY, 'targets': list(app.CONVERT_TARGETS.keys())}, 'download': {'subscription_required': app.DOWNLOAD_SUB_ENABLED, 'free_daily': app.DOWNLOAD_FREE_DAILY}, 'library': {'enabled': app.plat.is_desktop() or bool(app.os.environ.get('VDL_LIBRARY_ENABLED'))}, 'subscriptions': {'enabled': app.SUB_ENABLED, 'probe_limit': app.SUBSCRIBE_PROBE_LIMIT, 'check_interval': app.SUB_CHECK_INTERVAL}, 'retention': {'enabled': app.RETENTION_ENABLED, 'trash_available': app.retention_mod.trash_available() if app.RETENTION_ENABLED else False}, 'crypto': {'enabled': app.CRYPTO_ENABLED, 'has_pass': bool(app._vault_load()) if app.CRYPTO_ENABLED else False, 'locked': app.VAULT_KEY is None}, 'torrent': {'enabled': app.TORRENT_ENABLED, 'available': app.torrent_mod.available()}, 'ai_dewatermark': {'enabled': app.AI_DEWATERMARK_ENABLED, 'gpu': app.AI_GPU_AVAILABLE, 'image_ai': bool(app.dwc_ai_available)}, 'authRequired': app.AUTH_REQUIRED, 'profile': ('web' if app.os.environ.get('VDL_INSTANCE') == 'cloud' else 'app')}
+    _is_web = app.os.environ.get('VDL_INSTANCE') == 'cloud'
+    info = {'region': app.NODE_REGION, 'peer': (app.PEER_ENDPOINT if _is_web else ''), 'china_domains': list(app.CHINA_DOMAINS), 'commentary_enabled': app.COMMENTARY_ENABLED, 'ads_enabled': app.ADS_ENABLED, 'convert': {'subscription_required': app.CONVERT_SUB_ENABLED, 'free_daily': app.CONVERT_FREE_DAILY, 'targets': list(app.CONVERT_TARGETS.keys())}, 'download': {'subscription_required': app.DOWNLOAD_SUB_ENABLED, 'free_daily': app.DOWNLOAD_FREE_DAILY}, 'library': {'enabled': app.plat.is_desktop() or bool(app.os.environ.get('VDL_LIBRARY_ENABLED'))}, 'subscriptions': {'enabled': app.SUB_ENABLED, 'probe_limit': app.SUBSCRIBE_PROBE_LIMIT, 'check_interval': app.SUB_CHECK_INTERVAL}, 'retention': {'enabled': app.RETENTION_ENABLED, 'trash_available': app.retention_mod.trash_available() if app.RETENTION_ENABLED else False}, 'crypto': {'enabled': app.CRYPTO_ENABLED, 'has_pass': bool(app._vault_load()) if app.CRYPTO_ENABLED else False, 'locked': app.VAULT_KEY is None}, 'torrent': {'enabled': app.TORRENT_ENABLED, 'available': app.torrent_mod.available()}, 'ai_dewatermark': {'enabled': app.AI_DEWATERMARK_ENABLED, 'gpu': app.AI_GPU_AVAILABLE, 'image_ai': bool(app.dwc_ai_available)}, 'authRequired': app.AUTH_REQUIRED, 'profile': ('web' if _is_web else 'app')}
     caps = app.plat.node_capabilities()
     return {k: v for k, v in info.items() if k not in app.plat.NODE_GROUPS or k in caps}
 
