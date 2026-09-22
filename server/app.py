@@ -3348,17 +3348,30 @@ def _cookie_pull_from_vps() -> None:
     if not token:
         logger.warning("[cookie_pull] 未配置 VDL_COOKIE_REFILL_TOKEN / VDL_COOKIE_SYNC_TOKEN，跳过")
         return
+    # 本节点若根本没有 daemon（例如香港只做网页/海外节点，解析 daemon 在国内 ECS），
+    # 这条拉取链路就没有对象：直连模式会每 interval 秒刷一条「连接失败」日志。
+    # 设 VDL_COOKIE_PULL_ENABLED=0 显式停用（公共池改由 App 直推解析入口节点）。
+    if (os.environ.get("VDL_COOKIE_PULL_ENABLED", "1") or "1").strip().lower() in ("0", "false", "no", "off"):
+        logger.info("[cookie_pull] 已由 VDL_COOKIE_PULL_ENABLED=0 停用（本节点无解析 daemon）")
+        return
     interval = int(os.environ.get("VDL_COOKIE_PULL_INTERVAL", "1200"))  # 默认 20 分钟
     while True:
         try:
             import cn_tunnel as _cn
-            if not _cn._TUNNEL_READY.is_set():
+            # 直连模式（daemon 与后端同机，见 downloader.worker_proxy_url）无需隧道；
+            # 仅当确实要走隧道代理时才等隧道就绪，否则直连部署会被这里永久卡住。
+            proxy = downloader.worker_proxy_url()
+            if proxy and not _cn._TUNNEL_READY.is_set():
                 time.sleep(30)
                 continue
-            proxy = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
             url = "http://127.0.0.1:18731/v1/pull-cookie?token=" + token
-            # 显式同时覆盖 http/https 代理，避免 Railway 环境变量 http_proxy/https_proxy 误伤本地隧道
-            resp = requests.get(url, proxies={"http": proxy, "https": proxy}, timeout=90)
+            # 显式同时覆盖 http/https 代理，避免环境变量 http_proxy/https_proxy 误伤本地请求；
+            # 直连模式下传空串即显式禁用代理（None 反而会回落环境代理）。
+            resp = requests.get(
+                url,
+                proxies={"http": proxy, "https": proxy} if proxy else {"http": "", "https": ""},
+                timeout=90,
+            )
             data = resp.json()
             cookie = (data or {}).get("cookie") or ""
             if data.get("ok") and cookie:
@@ -3415,13 +3428,17 @@ def _vps_rate_ok(client_ip: str) -> bool:
 
 @app.get("/v1/resolve")
 def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = "", request: Request = None) -> dict:
-    """App 桌面端解析转发端点：/v1/resolve → 反向隧道 → VPS daemon（18731）。
+    """App 桌面端解析转发端点：/v1/resolve → 本机解析 daemon（18731）。
 
-    桌面 App 没有本地隧道，配 `VDL_WORKER_URL=https://hanyuxz.top` +
-    `VDL_WORKER_PROXY=""` 后，其 downloader._call_vps_worker 会请求本端点
-    （token 用 VDL_COOKIE_SYNC_TOKEN）。本端点校验 token 后复用与 web 相同的
-    `_call_vps_worker` 隧道链路转发 VPS 解析，返回与 daemon 一致的 JSON
-    （ok/video_url/title/error…），App 端零改动消费。
+    桌面 App 的 downloader._call_vps_worker 会请求本端点（token 用 VDL_COOKIE_SYNC_TOKEN）。
+    本端点校验 token 后复用与网页版相同的 `_call_vps_worker` 链路，返回与 daemon 一致的
+    JSON（ok/video_url/title/error…），App 端零改动消费。
+
+    两种部署形态：
+      * 海外（Railway 时代）：经「18889 隧道代理 → WebSocket 反向隧道」到国内 ECS daemon；
+      * 国内 ECS（2026-09-22 起，daemon 与 vdl-web 同机）：**直连** 127.0.0.1:18731，
+        由 `VDL_WORKER_PROXY=direct` 显式关闭代理 —— 隧道上游（原 Railway 应用）已删除，
+        走 18889 只会得到「视频解析服务不可达」。
     """
     expected = (
         os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
@@ -3473,11 +3490,16 @@ def cookie_pull_diag(mode: str = "full") -> dict:
         return out
     out["requests_available"] = True
     tok = os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
-    proxy = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    proxy = downloader.worker_proxy_url()
+    out["proxy_mode"] = proxy or "direct"
     url = "http://127.0.0.1:18731/v1/pull-cookie?token=" + tok
     try:
-        # 显式同时覆盖 http/https 代理，避免 Railway 环境变量代理误伤本地隧道
-        resp = requests.get(url, proxies={"http": proxy, "https": proxy}, timeout=90)
+        # 显式同时覆盖 http/https 代理，避免环境变量代理误伤本地请求；直连模式传空串禁用代理
+        resp = requests.get(
+            url,
+            proxies={"http": proxy, "https": proxy} if proxy else {"http": "", "https": ""},
+            timeout=90,
+        )
         out["http_status"] = resp.status_code
         try:
             data = resp.json()

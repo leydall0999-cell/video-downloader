@@ -1012,6 +1012,28 @@ def _cn_proxy_url() -> str:
     return "http://127.0.0.1:18889" if on_railway else ""
 
 
+def worker_proxy_url() -> str:
+    """解析 worker / Cookie 拉取请求应使用的代理地址；**返回空串表示直连**。
+
+    历史：网页版原部署在海外（Railway），解析 daemon 在国内 ECS，跨境入站不稳，
+    故经「本机 18889 隧道代理 → WebSocket 反向隧道 → ECS 18731」访问。
+
+    2026-09-22 起解析入口整体迁入国内 ECS：daemon（18731）与 vdl-web **同机**，
+    而隧道上游（`wss://hanyuxz.top`，原 Railway 应用）已删除 ⇒ 再走 18889 只会
+    得到「视频解析服务不可达」。因此这里支持显式关闭代理，让请求直连本机 daemon：
+
+        VDL_WORKER_PROXY（或 VDL_COOKIE_PULL_PROXY）= direct / off / none / no / 空
+        → 直连；未设置时保持旧默认 18889（兼容海外 Railway 部署）。
+    """
+    raw = os.environ.get("VDL_WORKER_PROXY")
+    if raw is None:
+        raw = os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    val = (raw or "").strip()
+    if val.lower() in ("", "direct", "off", "none", "no", "0", "false"):
+        return ""
+    return val
+
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
 
@@ -1829,13 +1851,16 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
     转发到 ECS 127.0.0.1:18731。通过显式 ``proxies`` 参数覆盖 Railway 环境变量中的
     ``http_proxy``/``https_proxy``，避免外部代理把本地隧道/内网请求误拦截为 407。
 
+    ⚠️ daemon 与 vdl-web 同机部署时（2026-09-22 起的国内 ECS）**必须直连**，
+    隧道已随原 Railway 应用一起消失，见 ``worker_proxy_url()``。
+
     配置优先级：
       1. VDL_WORKER_URL / VDL_WORKER_PROXY（推荐，语义最清晰）
       2. VDL_COOKIE_REFILL_URL / VDL_COOKIE_PULL_PROXY（向后兼容）
       3. 默认值 http://127.0.0.1:18731 经 http://127.0.0.1:18889 隧道代理
     """
     worker_base = os.environ.get("VDL_WORKER_URL") or os.environ.get("VDL_COOKIE_REFILL_URL", "")
-    worker_proxy = os.environ.get("VDL_WORKER_PROXY") or os.environ.get("VDL_COOKIE_PULL_PROXY", "http://127.0.0.1:18889")
+    worker_proxy = worker_proxy_url()
     if not worker_base:
         worker_base = "http://127.0.0.1:18731"
     # 兼容旧配置：若把隧道代理地址错填成 worker 目标，自动纠正为 daemon 目标
@@ -1845,9 +1870,11 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
     # daemon(18731) 并经隧道 18889 访问，否则会被 cn_proxy 拦成 407 误报「需要 Cookie」。
     # ⚠️ 同时检查 worker_proxy：环境变量错把 VDL_COOKIE_PULL_PROXY 配成 18888
     # 时（连到 cn_proxy 而非 tunnel client），会被拒成 400 "不可达"。
+    # ⚠️ 直连模式（worker_proxy 为空）下不得再强塞隧道代理，否则国内 ECS 会重新撞上死隧道。
     if ":18888" in worker_base:
         worker_base = "http://127.0.0.1:18731"
-        worker_proxy = "http://127.0.0.1:18889"
+        if worker_proxy:
+            worker_proxy = "http://127.0.0.1:18889"
     if ":18888" in worker_proxy:
         worker_proxy = "http://127.0.0.1:18889"
 
@@ -1873,8 +1900,13 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
     )
     if cookie:
         endpoint += "&cookie=" + urllib.parse.quote(cookie, safe="")
-    # 显式指定代理并覆盖环境变量代理，确保本地隧道/内网请求不被外部 http_proxy 截获
-    proxies = {"http": worker_proxy, "https": worker_proxy} if worker_proxy else None
+    # 显式指定代理并覆盖环境变量代理，确保本地隧道/内网请求不被外部 http_proxy 截获；
+    # ⚠️ 直连模式（worker_proxy 为空）必须传空串显式禁用代理——传 None 会被 requests
+    #    回落到环境变量代理（http_proxy/https_proxy），把本机 18731 请求劫走。
+    proxies = (
+        {"http": worker_proxy, "https": worker_proxy} if worker_proxy
+        else {"http": "", "https": ""}
+    )
     try:
         if _requests is None:
             raise RuntimeError("requests 库未安装")

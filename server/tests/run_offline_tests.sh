@@ -43,6 +43,7 @@ run_one() {
 run_one test_baidu_qr_offline.py
 run_one test_app_smoke.py
 run_one test_atomic_writes_and_auth.py
+run_one test_worker_proxy_direct.py
 
 echo ""
 echo "========================================="
