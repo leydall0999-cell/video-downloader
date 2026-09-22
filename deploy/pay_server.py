@@ -2,7 +2,7 @@
 """VDL 支付服务（支付宝 · 独立进程，与授权中心解耦）。
 
 定位：处理「用户真付款 -> 自动开通对应套餐」的闭环。
-  - 支付宝异步回调需公网可达 => 本服务部署在香港机，nginx 反代 /api/pay/。
+  - 支付宝异步回调需公网可达 => 本服务部署在内地 ECS（pay.hanyuxz.top），nginx 反代 /api/pay/。
   - 下单需云端登录 token（证明是谁买的）；回调验签确认真付款后，内部调授权中心的
     /api/license/grant 把档位写到该账号（state 单写者原则：本服务不直接写授权中心 state）。
   - 金额以本服务 PRICE_MAP 为准（服务端真源），前端只传 plan_code，防改价。
@@ -39,7 +39,7 @@ ORDERS_PATH = DATA_DIR / "pay_orders.json"
 # 与授权中心共享同一 secret，用于解登录 token 取邮箱（user_id）
 SECRET = (os.environ.get("VDL_LICENSE_SECRET") or "").strip()
 ADMIN_TOKEN = (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
-GRANT_URL = "http://127.0.0.1:8902/api/license/grant"
+GRANT_URL = "https://hanyuxz.top/api/license/grant"
 ALIPAY_CFG = Path(os.environ.get("VDL_ALIPAY_CFG") or "/opt/vdl-license/alipay.json")
 TOKEN_TTL = float(os.environ.get("VDL_LICENSE_TOKEN_TTL_DAYS") or "30") * 86400.0
 
@@ -105,7 +105,7 @@ def get_alipay():
     if not appid or not priv or not pub:
         _alipay_err = "支付宝配置不完整(需 appid + app_private_key + alipay_public_key)"
         return None, _alipay_err
-    notify_base = (cfg.get("notify_base") or "https://hanyuxz.top").rstrip("/")
+    notify_base = (cfg.get("notify_base") or "https://pay.hanyuxz.top").rstrip("/")
     debug = bool(cfg.get("debug", False))
     try:
         _alipay = AliPay(

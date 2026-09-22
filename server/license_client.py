@@ -120,8 +120,11 @@ def check_remote(code: str, fingerprint: str = "", base_url: str = DEFAULT_BASE,
                  base_url, timeout, opener)
 
 
-# ---- 支付（支付宝，香港机 /api/pay/*）----
-def pay_create_remote(token: str, plan_code: str, base_url: str = DEFAULT_BASE,
+# ---- 支付（支付宝，内地 ECS pay.hanyuxz.top /api/pay/*）----
+PAY_BASE = "https://pay.hanyuxz.top"
+
+
+def pay_create_remote(token: str, plan_code: str, base_url: str = PAY_BASE,
                       timeout: float = 15.0,
                       opener: Optional[Callable] = None) -> dict[str, Any]:
     """下单：拿支付宝当面付二维码。返回 {ok, order_id, qr_png, amount, plan_code}。"""
@@ -129,7 +132,7 @@ def pay_create_remote(token: str, plan_code: str, base_url: str = DEFAULT_BASE,
                  base_url, timeout, opener)
 
 
-def pay_query_remote(order_id: str, base_url: str = DEFAULT_BASE,
+def pay_query_remote(order_id: str, base_url: str = PAY_BASE,
                      timeout: float = 8.0,
                      opener: Optional[Callable] = None) -> dict[str, Any]:
     """订单状态轮询。返回 {ok, order_id, status: PENDING|PAID|GRANT_FAILED}。"""

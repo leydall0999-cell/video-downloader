@@ -239,7 +239,7 @@ def cloud_unbind(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 @router.post("/api/cloud/pay/create")
 def cloud_pay_create(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """购买下单：调香港机支付服务生成支付宝当面付二维码。
+    """购买下单：调内地 ECS 支付服务（pay.hanyuxz.top）生成支付宝当面付二维码。
 
     金额由服务端（pay_server.PRICE_MAP）决定，前端只传 plan_code，防改价。
     """
