@@ -4893,7 +4893,13 @@
   const sbSetMeta = () => {
     const p = sbState.metaParts;
     if (!el.sbMeta || !p) return;
-    let s = `共 ${p.lines} 句 · 语言 ${p.lang} · ${p.threads} 线程`;
+    let s = `共 ${p.lines} 句`;
+    if (p.source === 'lyrics') {
+      // 歌词库直取：不是听写出来的，文本逐字准确 —— 明确标出来，用户才知道可放心使用
+      s += ` · 官方歌词${p.lyricsFrom ? '（' + p.lyricsFrom + '）' : ''}`;
+    } else {
+      s += ` · 语言 ${p.lang} · ${p.threads} 线程`;
+    }
     if (p.covered && p.covered.start) s += ` · 覆盖 ${p.covered.start} → ${p.covered.end}`;
     el.sbMeta.textContent = s;
   };
@@ -4929,7 +4935,8 @@
         // 覆盖时段由预览接口补上（见 sbLoadPreview）——「共 N 句」回答不了
         // 用户真正在意的「全片都识别了吗」
         sbState.metaParts = { lines: st.lines || 0, lang: st.language || 'auto',
-                              threads: st.cpu_threads || 4, covered: null };
+                              threads: st.cpu_threads || 4, covered: null,
+                              source: st.source || '', lyricsFrom: st.lyrics_from || '' };
         sbSetMeta();
         el.sbResult.hidden = false;
         sbSetStatus('完成 ✅');

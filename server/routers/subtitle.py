@@ -7,6 +7,7 @@ job 机制独立于 CONVERT_JOBS：SUBTITLE_JOBS + app.executor，设备隔离�
 （X-Device-Id 头查状态 / device= query 下载）。
 """
 import app
+import json
 import os
 import re
 import time
@@ -36,8 +37,102 @@ _PREVIEW_MAX_LINES = 5000
 # 属于确定性垃圾内容，与置信度无关，直接按文本匹配丢弃。
 _HALLUCINATION_RE = re.compile(
     r"(?i)(thank you for watching|thanks for watching|subscribe to (my|the|our) (channel|channel))"
-    r"|(请订阅|感谢观看|谢谢观看|订阅我的频道|字幕由|amara\.org|请点赞|关注频道)"
+    # 中文套话：large-v3 实测在歌曲首尾幻觉出「请不吝点赞 订阅 转发 打赏支持…栏目」
+    r"|(请不吝点赞|点赞.{0,6}(订阅|转发)|打赏支持|请订阅|感谢观看|谢谢观看|订阅我的频道"
+    r"|字幕由|amara\.org|请点赞|关注频道|请按赞|订阅按赞)"
 )
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+# ── 歌词库直取（2026-09-23）——歌曲字幕的正解，不是听写 ──────────────────────────
+# 背景：Whisper 是「听写」模型，听歌必然翻车——实测《爱死了昨天》把
+#   「是我 爱死了昨天 / 誓言 割碎你的脸」听成「是我暗死了昨天 是眼隔碎你的脸」，
+#   《天使的翅膀》「只留给天空美丽一场」→「只留给天空每一层飞舞的身影」；
+#   large-v3 更糟，伴奏段会自信地幻觉出整段英文（"The only thing I know...")。
+# 而歌词是现成的权威文本，还自带逐行时间轴（LRC）。命中即秒级产出、逐字准确。
+# 数据源 lrclib.net：开放歌词库，免费、无需 key。失败/无网一律静默回落 ASR。
+_LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
+_LRCLIB_TIMEOUT = 6.0          # 短超时：歌词只是快路径，不能拖慢主流程
+_LRCLIB_MAX_DELTA = 6.0        # 时长容差（秒）：超出则判为翻唱/现场版，不采用
+_LRC_LINE_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)")
+
+
+def _clean_track_keywords(name: str) -> str:
+    """从文件名猜「歌名 + 歌手」搜索词。
+
+    实测样本：爱死了昨天-李慧珍-254611 / [m4a]阿刁-赵雷-16827758 / 安琥 - 天使的翅膀[weiyun]
+    处理：去扩展名 → 去方括号/括号标记（[weiyun]、(Live)）→ 去纯数字 ID 段 → 分隔符转空格。
+    """
+    s = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", name)
+    s = re.sub(r"\[[^\]]*\]|\([^)]*\)|（[^）]*）|【[^】]*】", " ", s)
+    s = re.sub(r"(?<!\d)\d{4,}(?!\d)", " ", s)
+    s = re.sub(r"[_－—–\-]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _parse_lrc(lrc: str, duration: float = 0.0) -> list:
+    """解析 LRC（[mm:ss.xx] 文本）→ [(start, end, text)]。
+
+    end 取下一行起点（首行间距过大时钳到 ≤20s），末行补 6s；元数据行（[ti:] 等）跳过。
+    """
+    rows = []
+    for line in (lrc or "").splitlines():
+        m = _LRC_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        text = (m.group(4) or "").strip()
+        if not text or re.match(r"(?i)(ti|ar|al|by|offset|re|ve)\s*:", text):
+            continue
+        frac = (m.group(3) or "0").ljust(3, "0")[:3]
+        start = int(m.group(1)) * 60 + int(m.group(2)) + int(frac) / 1000.0
+        rows.append([start, 0.0, text])
+    for i, r in enumerate(rows):
+        nxt = rows[i + 1][0] if i + 1 < len(rows) else (duration or r[0] + 6.0)
+        r[1] = max(r[0] + 0.4, min(nxt, r[0] + 20.0))
+    return [(a, b, c) for a, b, c in rows]
+
+
+def _fetch_synced_lyrics(keywords: str, duration: float) -> tuple:
+    """查开放歌词库，返回 (rows, 曲目描述)；未命中/无网/超时 → ([], "") 由调用方回落 ASR。
+
+    按 duration 选最贴近的版本，避免把原唱配成翻唱 / 现场版。
+    """
+    if not keywords:
+        return [], ""
+    import urllib.parse
+    import urllib.request
+    try:
+        url = _LRCLIB_SEARCH_URL + "?" + urllib.parse.urlencode({"q": keywords})
+        req = urllib.request.Request(url, headers={"User-Agent": "VideoDownloader/1.0"})
+        with urllib.request.urlopen(req, timeout=_LRCLIB_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001  无网 / DNS 失败 / 超时，一律静默回落
+        app.logger.info("lyrics lookup failed (%s): %s", keywords, e)
+        return [], ""
+    if not isinstance(data, list):
+        return [], ""
+    best, best_delta = None, 1e9
+    for item in data:
+        d = item.get("duration") or 0
+        if not d:
+            continue
+        delta = abs(float(d) - duration) if duration > 0 else 0.0
+        if delta < best_delta:
+            best, best_delta = item, delta
+    if best is None or (duration > 0 and best_delta > _LRCLIB_MAX_DELTA):
+        return [], ""
+    rows = _parse_lrc(best.get("syncedLyrics") or "", duration)
+    if not rows:
+        return [], ""
+    desc = " - ".join(x for x in (best.get("artistName") or "", best.get("trackName") or "") if x)
+    return rows, desc
+
+
+def _wav_duration(path: _Path) -> float:
+    """管线固定抽成 16k/mono/pcm_s16le → 时长 ≈ 字节数 / 32000（44 字节头忽略不计）。"""
+    try:
+        return max(0.0, path.stat().st_size / (16000 * 2))
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def _wav_region_rms(wav_path, start_s: float, end_s: float) -> float:
@@ -204,6 +299,31 @@ def _short_ts(raw: str) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def _write_outputs(job: dict, srt_path: _Path, txt_path: _Path, rows: list,
+                   to_library: bool, stem: str) -> None:
+    """写 SRT + TXT 并标记任务完成——ASR 结果与歌词库直取结果共用同一出口。"""
+    job["stage"] = "生成字幕"
+    job["progress"] = 96
+    with open(srt_path, "w", encoding="utf-8") as fh:
+        for i, (st, ed, text) in enumerate(rows, 1):
+            fh.write(f"{i}\n{_fmt_ts(st)} --> {_fmt_ts(ed)}\n{text}\n\n")
+    with open(txt_path, "w", encoding="utf-8") as fh:
+        for _, _, text in rows:
+            fh.write(text + "\n")
+    if to_library:
+        try:
+            shutil.copy2(srt_path, app.DOWNLOAD_DIR / srt_path.name)
+        except Exception:  # noqa: BLE001  入库失败不影响主产物
+            pass
+    job["status"] = "completed"
+    job["progress"] = 100
+    job["srt_file"] = str(srt_path)
+    job["txt_file"] = str(txt_path)
+    job["srt_name"] = f"{stem}.srt"
+    job["txt_name"] = f"{stem}.txt"
+    job["lines"] = len(rows)
+
+
 def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_library: bool,
                   fast: bool = False, cpu_threads: int = 4) -> None:
     """后台线程：抽音频 → ASR → SRT/TXT，更新 SUBTITLE_JOBS。
@@ -230,6 +350,21 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
         if proc.returncode != 0 or not wav_path.exists():
             raise RuntimeError(f"音频提取失败：{(proc.stderr or '')[-300:]}")
         job["progress"] = 15
+
+        # 1.5) 歌词库直取（仅纯音频文件）：歌曲字幕走「歌词」而非「听写」。
+        #   命中 → 秒级产出逐字准确的字幕（带官方逐行时间轴），直接 return，不加载模型。
+        #   未命中（无网 / 纯音乐 / 未收录）→ 静默回落下面的 ASR 管线。
+        if _Path(src).suffix.lower() in app.UPLOAD_AUDIO_EXTS:
+            job["stage"] = "匹配歌词库"
+            dur = _wav_duration(wav_path)
+            lyric_rows, lyric_desc = _fetch_synced_lyrics(_clean_track_keywords(stem), dur)
+            if lyric_rows:
+                app.logger.info("subtitle %s from lyrics library: %s (%d lines)",
+                                job_id, lyric_desc, len(lyric_rows))
+                _write_outputs(job, srt_path, txt_path, lyric_rows, to_library, stem)
+                job["source"] = "lyrics"
+                job["lyrics_from"] = lyric_desc
+                return
 
         # 2) 加载模型（首次含下载，可能数分钟）；线程数按会员状态（免费 4 / 会员满核）
         job["stage"] = f"加载模型（{model_size} · {cpu_threads} 线程，首次需下载）"
@@ -284,10 +419,12 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                 app.logger.info("subtitle %s VAD incomplete (cov %.1f%%, last_end %.0f/%.0f%s), retry without VAD",
                                 job_id, speech_secs / total * 100, _last_end, total,
                                 ", tail has energy" if tail_missed else "")
-                # 语言：显式指定优先；否则沿用首轮（在 VAD 挑出的清晰人声上检测，更可信）。
-                # 锁定语言能压住伴奏段的英文幻觉（实测纯伴奏被解码成
-                # "Thank you for watching / subscribe to my channel" 套话）。
-                eff_lang = language or info.language or None
+                # 语言：显式指定优先；否则**不要再沿用首轮 info.language**。
+                # ⚠️ 2026-09-23 实测坑：首轮跑的是 VAD 挑出的窄带语音，VAD 零放行时
+                #   info.language 完全不可信（爱死了昨天被判成 en）→ 兜底轮沿用后
+                #   整首被解码成英文幻觉（"The only thing I know..."）。
+                #   兜底轮跑的是完整音频，让它自己检测才准（同曲实测得到 zh，输出全中文）。
+                eff_lang = language or None
                 retry_kwargs = dict(
                     language=eff_lang,
                     vad_filter=False,
@@ -308,6 +445,11 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                     if _HALLUCINATION_RE.search(text):
                         app.logger.info("subtitle %s drop hallucinated line: %r", job_id, text[:60])
                         continue
+                    # 中文内容里冒出的「纯英文段」= 伴奏幻觉（实测 "Zither Harp"、
+                    # "Open eyes, but I can't see"）。中英混排的原歌词保留。
+                    if eff_lang == "zh" and not _CJK_RE.search(text):
+                        app.logger.info("subtitle %s drop non-CJK line in zh: %r", job_id, text[:60])
+                        continue
                     rows2.append((float(seg.start), float(seg.end), text))
                     if total > 0:
                         job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
@@ -325,30 +467,9 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
             raise RuntimeError("未识别到任何语音内容（可能没有对话/人声，或为纯器乐/极强噪音）")
 
         # 4) 写 SRT + TXT
-        job["stage"] = "生成字幕"
-        job["progress"] = 96
-        with open(srt_path, "w", encoding="utf-8") as fh:
-            for i, (st, ed, text) in enumerate(rows, 1):
-                fh.write(f"{i}\n{_fmt_ts(st)} --> {_fmt_ts(ed)}\n{text}\n\n")
-        with open(txt_path, "w", encoding="utf-8") as fh:
-            for _, _, text in rows:
-                fh.write(text + "\n")
-
-        if to_library:
-            try:
-                dest = app.DOWNLOAD_DIR / srt_path.name
-                shutil.copy2(srt_path, dest)
-            except Exception:
-                pass
-
-        job["status"] = "completed"
-        job["progress"] = 100
-        job["srt_file"] = str(srt_path)
-        job["txt_file"] = str(txt_path)
-        job["srt_name"] = f"{stem}.srt"
-        job["txt_name"] = f"{stem}.txt"
-        job["lines"] = len(rows)
+        _write_outputs(job, srt_path, txt_path, rows, to_library, stem)
         job["language"] = info.language or ""
+        job["source"] = "asr"
         app.logger.info("subtitle %s done: %d lines (%s)", job_id, len(rows), info.language)
     except Exception as e:
         job["status"] = "failed"
@@ -435,7 +556,8 @@ def subtitle_status(job_id: str, request: app.Request) -> dict:
     return {"status": job["status"], "stage": job.get("stage", ""), "progress": job.get("progress", 0),
             "error": job.get("error", ""), "srt_name": job.get("srt_name", ""),
             "txt_name": job.get("txt_name", ""), "lines": job.get("lines", 0),
-            "language": job.get("language", ""), "cpu_threads": job.get("cpu_threads", 4)}
+            "language": job.get("language", ""), "cpu_threads": job.get("cpu_threads", 4),
+            "source": job.get("source", ""), "lyrics_from": job.get("lyrics_from", "")}
 
 
 def _subtitle_file(job_id: str, kind: str, request: app.Request) -> _Path:
