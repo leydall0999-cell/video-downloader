@@ -3568,6 +3568,7 @@
         <button type="button" class="admin-tab" data-admin-view="members" data-page-node-id="pfUxUMkHNSQMABgoOqdepc">会员管理</button>
         <button type="button" class="admin-tab" data-admin-view="stats" data-page-node-id="BzQ1qcEHo3X1dLuFECX5uz">使用统计</button>
         <button type="button" class="admin-tab" data-admin-view="config" data-page-node-id="XWeeZbATMr2HbusVcKq2dF">系统配置</button>
+        <button type="button" class="admin-tab" data-admin-view="aiaccounts" data-page-node-id="aiAcctTab">AI 账户</button>
       </nav>
       <div class="admin-body" data-page-node-id="RYA0sEY7fsTbPcGaQp5gmC">
         <section class="admin-view" data-admin-view="users" id="adminViewUsers" data-page-node-id="p6bUVjPAOQ0OpOAa2jjHg7">
@@ -3630,6 +3631,15 @@
             <button type="button" id="adminPlansSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="UTASA0d2I96VuV564sGonf">保存套餐配置</button>
             <p id="adminPlansMsg" class="admin-msg" data-page-node-id="TdpHjrtdxmUkGw1hst7Q28"></p>
           </div>
+        </section>
+
+        <!-- AI 大模型账户（2026-09-24） -->
+        <section class="admin-view" data-admin-view="aiaccounts" id="adminViewAiAccounts" hidden data-page-node-id="aiAcctView">
+          <div class="admin-toolbar" data-page-node-id="aiAcctTb">
+            <span class="admin-count">各 AI 提供方余额与充值入口（仅超级用户可见）</span>
+            <button type="button" id="adminAiRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="aiAcctRefresh">刷新</button>
+          </div>
+          <div id="adminAiAccounts" class="admin-ai-accounts" data-page-node-id="aiAcctBox"></div>
         </section>
       </div>
     </div>

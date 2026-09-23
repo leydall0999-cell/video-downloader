@@ -19075,6 +19075,7 @@ el.dwVidPlayer.removeAttribute('src');
       else if (name === 'members') loadMembers();
       else if (name === 'stats') loadStats();
       else if (name === 'config') loadConfig();
+      else if (name === 'aiaccounts') loadAiAccounts();
     };
 
     const loadAll = () => {
@@ -19082,7 +19083,75 @@ el.dwVidPlayer.removeAttribute('src');
       loadMembers();
       loadStats();
       loadConfig();
+      loadAiAccounts();
     };
+
+    // ---- AI 大模型账户 ----
+    const aiStatusLabel = (s) => ({
+      ok: ['正常', 'is-ok'], insufficient: ['余额不足', 'is-err'], error: ['查询失败', 'is-err'],
+      no_gateway: ['无网关', 'is-warn'], configured: ['已配置', 'is-ok'], not_configured: ['未配置', 'is-warn'],
+      enabled: ['已启用', 'is-ok'], disabled: ['已禁用', 'is-warn'], no_api_key: ['缺 Key', 'is-warn'],
+    }[s] || [s || '未知', '']);
+    const loadAiAccounts = async () => {
+      const box = $('adminAiAccounts');
+      if (box) box.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const r = await adminRequest('/api/admin/ai/accounts');
+        if (!r || !r.ok) { if (box) box.innerHTML = '<div class="admin-empty">加载失败</div>'; return; }
+        renderAiAccounts(r.accounts || []);
+      } catch (e) {
+        if (box) box.innerHTML = '<div class="admin-empty">网络错误</div>';
+      }
+    };
+    const _openExternal = (url) => {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && api.open_external) { try { api.open_external(url); return; } catch (_) {} }
+      try { window.open(url, '_blank'); } catch (_) {}
+    };
+    const renderAiAccounts = (accounts) => {
+      const box = $('adminAiAccounts');
+      if (!box) return;
+      if (!accounts.length) { box.innerHTML = '<div class="admin-empty">暂无 AI 账户</div>'; return; }
+      box.innerHTML = accounts.map((a) => {
+        const [lbl, cls] = aiStatusLabel(a.status);
+        let balHtml;
+        if (a.balance_source === 'live') {
+          const b = (a.balance == null) ? '—' : a.balance;
+          const avail = a.is_available ? '<span class="ai-badge is-ok">可用</span>' : '<span class="ai-badge is-err">不可用</span>';
+          balHtml = `<div class="ai-acct-balance">${esc(b)} <small>${esc(a.currency || '')}</small> ${avail}</div>`;
+          (a.balances || []).forEach((x) => {
+            if (x.currency !== a.currency) balHtml += `<div class="ai-acct-sub">${esc(x.currency)}: ${esc(x.total)}</div>`;
+          });
+        } else if (a.balance_source === 'console') {
+          balHtml = '<div class="ai-acct-balance ai-muted">余额请登录控制台查看</div>';
+        } else {
+          balHtml = '<div class="ai-acct-balance ai-muted">—</div>';
+        }
+        const mods = (a.modules || []).map((m) => `<li>${esc(m)}</li>`).join('');
+        const rechargeBtn = a.recharge_url
+          ? `<button type="button" class="admin-btn admin-btn-primary admin-btn-sm" data-recharge="${esc(a.recharge_url)}">去充值</button>` : '';
+        const consoleBtn = a.console_url
+          ? `<button type="button" class="admin-btn admin-btn-sm" data-console="${esc(a.console_url)}">控制台</button>` : '';
+        return `<div class="ai-acct-card">
+          <div class="ai-acct-head">
+            <span class="ai-acct-name">${esc(a.name)}</span>
+            <span class="admin-tag ${cls}">${esc(lbl)}</span>
+          </div>
+          <div class="ai-acct-rows">
+            <div class="ai-acct-row"><span>模型</span><b>${esc(a.model || '—')}</b></div>
+            <div class="ai-acct-row"><span>使用模块</span><b><ul class="ai-acct-mods">${mods}</ul></b></div>
+            <div class="ai-acct-row"><span>账号标识</span><b>${esc(a.account || '—')}</b></div>
+            ${balHtml}
+          </div>
+          ${a.note ? `<div class="ai-acct-note">${esc(a.note)}</div>` : ''}
+          <div class="ai-acct-actions">${rechargeBtn}${consoleBtn}</div>
+        </div>`;
+      }).join('');
+      box.querySelectorAll('[data-recharge]').forEach((b) => { b.onclick = () => _openExternal(b.dataset.recharge); });
+      box.querySelectorAll('[data-console]').forEach((b) => { b.onclick = () => _openExternal(b.dataset.console); });
+    };
+    const aiRefreshBtn = $('adminAiRefresh');
+    if (aiRefreshBtn) aiRefreshBtn.onclick = () => loadAiAccounts();
 
     // ---- 用户管理 ----
     const loadUsers = async () => {

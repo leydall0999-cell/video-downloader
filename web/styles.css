@@ -6346,3 +6346,24 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .vdl-pay-tip { font-size: .74rem; line-height: 1.5; color: var(--text-mute, #6b7280); }
 .vdl-pay-status { margin-top: .55rem; font-size: .82rem; font-weight: 600; color: #1d9e75; min-height: 1.1rem; }
 .vdl-pay-close { margin-top: .9rem; width: 100%; }
+
+/* ── AI 大模型账户（2026-09-24）── */
+.admin-ai-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: .9rem; padding: .3rem 0 1.2rem; }
+.ai-acct-card { border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: .9rem 1rem; background: var(--surface, #fff); }
+.ai-acct-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-bottom: .7rem; }
+.ai-acct-name { font-weight: 700; font-size: .98rem; }
+.ai-acct-rows { display: flex; flex-direction: column; gap: .45rem; }
+.ai-acct-row { display: flex; gap: .6rem; font-size: .85rem; }
+.ai-acct-row > span { flex: 0 0 4.5rem; color: var(--text-mute, #6b7280); }
+.ai-acct-row > b { font-weight: 600; }
+.ai-acct-mods { margin: 0; padding-left: 1rem; }
+.ai-acct-mods li { list-style: disc; }
+.ai-acct-balance { font-size: 1.15rem; font-weight: 700; margin-top: .2rem; }
+.ai-acct-balance small { font-size: .7rem; font-weight: 500; color: var(--text-mute, #6b7280); }
+.ai-acct-sub { font-size: .8rem; color: var(--text-mute, #6b7280); }
+.ai-acct-balance.ai-muted { font-size: .85rem; font-weight: 500; color: var(--text-mute, #6b7280); }
+.ai-badge { display: inline-block; margin-left: .4rem; padding: .05rem .45rem; border-radius: 999px; font-size: .7rem; }
+.ai-badge.is-ok { background: var(--success-soft, #d1fae5); color: var(--success, #1d9e75); }
+.ai-badge.is-err { background: var(--danger-soft, #fee2e2); color: var(--danger, #dc2626); }
+.ai-acct-note { margin-top: .6rem; font-size: .78rem; line-height: 1.45; color: var(--text-mute, #6b7280); background: var(--bg-soft, #f7f8fa); border-radius: 8px; padding: .45rem .6rem; }
+.ai-acct-actions { margin-top: .8rem; display: flex; gap: .5rem; }

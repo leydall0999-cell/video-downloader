@@ -133,3 +133,180 @@ def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = No
 def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
     return save_plan_overrides(payload or {})
+
+
+# ── AI 大模型账户（2026-09-24 新增）────────────────────────────────────────
+# 超级管理员面板用：汇总各 AI 提供方的「余额 / 使用模块 / 账号标识 / 充值入口」。
+# DeepSeek 余额走网关实时取（Key 仅在服务端）；百炼/火山无通用余额 REST，
+# 标记为 console（前端给出控制台/充值链接）。
+import json
+import os
+import urllib.error
+import urllib.request
+
+
+def _gw_get(url: str, token: str) -> dict:
+    """带 Bearer token 调网关，绕过本机代理（direct:// 语义），失败返回 ok=False。"""
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=12) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+def _gateway_base() -> tuple:
+    """返回 (base_url, token) 或 (None, None)。"""
+    p = os.path.expanduser("~/.video-downloader/gateway_managed.json")
+    if not os.path.exists(p):
+        return None, None
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return None, None
+    url = (d.get("url") or "").replace("direct://", "", 1).rstrip("/")
+    return url, d.get("token")
+
+
+def _mask(s: str) -> str:
+    s = str(s or "")
+    return "****" if len(s) <= 8 else f"{s[:4]}\u2026{s[-4:]}"
+
+
+def _deepseek_account() -> dict:
+    info = {
+        "id": "deepseek",
+        "name": "DeepSeek（解说大模型）",
+        "provider": "deepseek",
+        "model": "",
+        "modules": ["视频解说 / 解说词生成", "长片云端兜底 LLM"],
+        "account": "",
+        "status": "unknown",
+        "balance": None,
+        "balances": [],
+        "currency": None,
+        "is_available": None,
+        "balance_source": "none",
+        "recharge_url": "https://platform.deepseek.com/top_up",
+        "console_url": "https://platform.deepseek.com",
+        "note": "",
+    }
+    base, token = _gateway_base()
+    if not base:
+        info["note"] = "未找到网关配置（gateway_managed.json）"
+        info["status"] = "no_gateway"
+        return info
+    # 模型名 + 健康
+    try:
+        h = _gw_get(base + "/health", token)
+        if h and h.get("ok"):
+            info["model"] = (h.get("models") or [""])[0]
+        elif h:
+            info["note"] = h.get("error", "")
+    except Exception as e:
+        info["note"] = f"网关查询失败：{e}"
+    # 余额（实时）
+    try:
+        b = _gw_get(base + "/balance", token)
+        if b and b.get("ok"):
+            info["balance"] = b.get("balance")
+            info["balances"] = b.get("balances") or []
+            info["currency"] = b.get("currency")
+            info["is_available"] = b.get("is_available")
+            info["balance_source"] = "live"
+            info["status"] = "ok" if b.get("is_available") else "insufficient"
+            if not b.get("is_available"):
+                info["note"] = "余额已耗尽/为负，云端解说调用会被拒，请尽快充值"
+            info["account"] = f"网关令牌 {_mask(token)}（上游 Key 仅在服务端）"
+        elif b:
+            info["balance_source"] = "error"
+            info["status"] = "error"
+            info["note"] = b.get("error", "余额查询失败")
+            info["account"] = f"网关令牌 {_mask(token)}"
+    except Exception as e:
+        info["status"] = "error"
+        info["note"] = f"余额查询异常：{e}"
+    return info
+
+
+def _dashscope_account() -> dict:
+    info = {
+        "id": "dashscope",
+        "name": "阿里百炼 DashScope（视觉 / VLM）",
+        "provider": "dashscope",
+        "model": "",
+        "modules": ["视觉理解 / 图片 OCR", "抠图 VLM 自动分类"],
+        "account": "",
+        "status": "unknown",
+        "balance": None,
+        "balances": [],
+        "currency": None,
+        "is_available": None,
+        "balance_source": "console",
+        "recharge_url": "https://billing.console.aliyun.com/?#/account/balance",
+        "console_url": "https://dashscope.console.aliyun.com/",
+        "note": "余额请登录阿里云费用中心查看；有免费额度，中文 OCR 强。",
+    }
+    try:
+        from vision_config import get_vision_config
+        cfg = get_vision_config()
+        key = (cfg.get("api_key") or "").strip()
+        info["model"] = cfg.get("model") or ""
+        info["account"] = _mask(key) if key else "(未配置 Key)"
+        info["status"] = "configured" if key else "not_configured"
+    except Exception as e:  # noqa: BLE001
+        info["note"] = f"读取视觉配置失败：{e}"
+        info["status"] = "error"
+    return info
+
+
+def _volcengine_account() -> dict:
+    info = {
+        "id": "volcengine",
+        "name": "火山引擎 Volcengine（云端去水印 / 抠图）",
+        "provider": "volcengine",
+        "model": "mediakit / visual",
+        "modules": ["云端去水印（mediakit）", "云端抠图（visual）"],
+        "account": "",
+        "status": "unknown",
+        "balance": None,
+        "balances": [],
+        "currency": None,
+        "is_available": None,
+        "balance_source": "console",
+        "recharge_url": "https://console.volcengine.com/wallet",
+        "console_url": "https://console.volcengine.com/",
+        "note": "按量计费，余额请登录火山控制台「费用中心」查看。",
+    }
+    try:
+        from cloud_matting_config import (
+            get_cloud_matting_config,
+            is_cloud_matting_mediakit_ready,
+        )
+        cfg = get_cloud_matting_config()
+        ak = (cfg.get("access_key") or "").strip()
+        info["account"] = _mask(ak) if ak else "(未配置 AccessKey)"
+        enabled = bool(cfg.get("enabled"))
+        mediakit = is_cloud_matting_mediakit_ready()
+        if enabled and mediakit:
+            info["status"] = "enabled"
+        elif not enabled:
+            info["status"] = "disabled"
+        else:
+            info["status"] = "no_api_key"
+    except Exception as e:  # noqa: BLE001
+        info["note"] = f"读取火山配置失败：{e}"
+        info["status"] = "error"
+    return info
+
+
+def _collect_ai_accounts() -> list:
+    return [_deepseek_account(), _dashscope_account(), _volcengine_account()]
+
+
+@router.get("/api/admin/ai/accounts")
+def admin_ai_accounts(request: Request = None) -> dict[str, Any]:
+    """超级管理员：汇总各 AI 提供方账户（余额 / 模块 / 账号 / 充值入口）。"""
+    require_admin(request)
+    return {"ok": True, "accounts": _collect_ai_accounts()}
