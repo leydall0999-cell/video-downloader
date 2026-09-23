@@ -60,11 +60,25 @@ except Exception:                      # noqa: BLE001
     _zhconv_convert = None
 
 
+_ZHCONV_WARNED = False
+
+
 def _to_simplified(text: str) -> str:
     """繁→简归一化。faster-whisper 在噪声/伴奏下会整句输出繁体，与简体行混排
     （实测中文+6dB 噪声：「今天我們要討論的是人工智能在語音識別領域…」）。
-    zhconv 缺失时原样返回——宁可不转，也不能让字幕提取失败。"""
-    if not text or _zhconv_convert is None:
+    zhconv 缺失时原样返回——宁可不转，也不能让字幕提取失败。
+    ⚠️ 缺失必须留痕：否则「用户看到繁体」会变成无人知晓的静默降级
+    （2026-09-23 实测：PyInstaller 未收 zhconv，包内 import 失败，表象正是繁体照出）。"""
+    global _ZHCONV_WARNED
+    if not text:
+        return text
+    if _zhconv_convert is None:
+        if not _ZHCONV_WARNED:
+            _ZHCONV_WARNED = True
+            try:
+                app.logger.warning("subtitle: zhconv 不可用，繁→简归一化已跳过（字幕可能出繁体）")
+            except Exception:          # noqa: BLE001
+                pass
         return text
     try:
         return _zhconv_convert(text, "zh-cn")

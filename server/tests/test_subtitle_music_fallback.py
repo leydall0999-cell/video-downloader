@@ -247,6 +247,21 @@ def run():
     ok &= bool(passed)
     print(("✅" if passed else "❌"), f"强制 en 时英文全部保留（lines={job.get('lines')}，应=2）")
 
+    # ── 12) zhconv 缺失时不能崩、不能吞字（打包漏收会走到这条路径） ──────────────
+    real_conv = sb._zhconv_convert
+    try:
+        sb._zhconv_convert = None
+        m = _FakeModel([[_FakeSeg(0.0, 4.0, "繁體一句測試"), _FakeSeg(4.0, 8.0, "正常一句")]])
+        _install(str(p3), m)
+        job = _do_job("job_no_zhconv")
+        srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
+        passed = (job.get("status") == "completed" and job.get("lines") == 2
+                  and "繁體一句測試" in srt and "正常一句" in srt)
+    finally:
+        sb._zhconv_convert = real_conv
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), "zhconv 缺失时降级不崩、原文保留（lines=%s）" % job.get("lines"))
+
     print("\n通过" if ok else "\n失败")
     return 0 if ok else 1
 

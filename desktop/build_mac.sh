@@ -365,6 +365,8 @@ echo "   ✔ 前端 JS 语法校验通过"
   --hidden-import dewatermark_ai \
   --hidden-import dewatermark_diffusion \
   --hidden-import matting_ai \
+  --hidden-import zhconv \
+  --collect-all zhconv \
   --collect-binaries cv2 \
   --collect-all pymupdf \
   --collect-all fitz \
