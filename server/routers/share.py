@@ -51,11 +51,15 @@ from fastapi.responses import JSONResponse, Response
 
 router = APIRouter()
 
-# ---- 内置默认（2026-09-21 起分享服务迁至香港节点 47.82.101.79，公网入口 hanyuxz.top）----
+# ---- 内置默认（2026-09-23 起分享服务定档国内 ECS 8.138.223.3，公网入口 CF quick tunnel）----
 # 运行时以 ~/.videodownloader/share.json 为准，这里是它缺失（换机/重装）时的兜底。
-# 为什么弃用旧的 share.hanyuxz.top：该子域从来没有 DNS 记录，链路必然回退明文直连。
-DEFAULT_BASE = "https://hanyuxz.top"
-DEFAULT_DIRECT = "http://47.82.101.79/api/upload"
+# 架构（2026-09-23 迁移定档）：
+#   base  = CF quick tunnel（https，≤100MB 走它；隧道重启会换随机域名，
+#           届时同步改 ECS vdl-share.service 的 VDL_SHARE_PUBLIC_BASE 与本文件/share.json）
+#   direct = ECS 8888 的 /su（nginx 精确匹配直传通道，无体积限制）
+#   分享短链一律回 PUBLIC_BASE（trycloudflare 域），裸 IP 链接会被微信拦且不可信。
+DEFAULT_BASE = "https://depending-safely-keyboards-pix.trycloudflare.com"
+DEFAULT_DIRECT = "http://8.138.223.3:8888/su"
 DEFAULT_TOKEN = "_hI50c3L0HYZ2kK_jMXa5tzKY7BnS_3b"
 
 CF_BODY_LIMIT = 100 * 1024 * 1024      # Cloudflare 免费版请求体上限
