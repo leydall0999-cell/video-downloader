@@ -761,6 +761,7 @@
     sbModel: $('sbModel'),
     sbLang: $('sbLang'),
     sbFast: $('sbFast'),
+    sbLyrics: $('sbLyrics'),
     sbStartBtn: $('sbStartBtn'),
     sbProgressWrap: $('sbProgressWrap'),
     sbProgressFill: $('sbProgressFill'),
@@ -5125,9 +5126,10 @@
       method: 'POST',
       body: JSON.stringify({
         local_path: sbState.path,
-        model_size: el.sbModel.value || 'small',
+        model_size: el.sbModel.value || 'medium',
         language: el.sbLang.value || '',
         fast: !!(el.sbFast && el.sbFast.checked),
+        lyrics: !!(el.sbLyrics && el.sbLyrics.checked),
       }),
       headers: { 'Content-Type': 'application/json' },
     }).then(data => {

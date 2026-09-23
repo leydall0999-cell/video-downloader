@@ -1,12 +1,24 @@
-"""字幕提取「音乐兜底二次识别」回归（2026-09-22/23 两轮用户实测）。
+"""字幕提取「有声段分段 + 解码参数」回归（2026-09-23 重写）。
 
-案例1 阿刁(6:18)：VAD 只放行 14s（3.7%）→ 只出 51s-78s 四句；
-案例2 天使的翅膀(3:40)：VAD 放行 61%（止于 2:22）→ 尾部副歌整段丢。
+⚠️ 本文件原名 music_fallback，测的是**已删除**的「音乐兜底二次识别」三层补丁
+（占比<15% / 尾部有能量 / 空结果也兜底）。那套补丁是在补偿 Silero VAD 的错配：
+Silero 判断「像不像人在说话」，歌曲人声+伴奏会被整段判为非语音（实测阿刁
+6:18 只放行 14s = 3.7%，爱死了昨天放行 0 段）。补丁能救回内容，但每来一个
+新案例就要再加一条触发条件，属于治标。
 
-触发条件（任一）：a) 语音占比 < 15%；b) 末句结束 < 全长 92% 且尾部有能量（非静音）。
-无 VAD 重识别后**按时间段合并**（VAD 段优先，只补空隙）。
-过滤以 avg_logprob 为主：≤-1.0 必丢；(nsp≥0.7 且 lp<-0.8) 丢；
-音乐真歌词 nsp=0.84/lp=-0.37 必须保留。套话黑名单照丢。
+现改为**能量分段**（_energy_segments）：只判断「有没有声音」，对歌曲、录音、
+嘈杂环境一律成立。本文件因此重写为对新管线的回归：
+
+  1. 全程有能量的「歌曲样」音频 → 覆盖率必须高（不再出现 3.7% 那种崩塌）
+  2. 分段结果合法：单调、不重叠、不越界、长段被切开
+  3. 尾部静音被正确排除（不是无脑铺满全长）
+  4. 解码参数：condition_on_previous_text 恒 False（曾写成 `not fast`，
+     非快速档反而开 True，与紧邻注释自相矛盾 → 幻觉滚雪球）
+  5. vad_filter 恒 False（Silero 不再参与）
+  6. 过滤规则：lp≤-1.0 丢、套话黑名单丢、正常句留
+  7. lyrics 开关：关掉时不查歌词库
+
+合成音频用 numpy 直接写 16k mono wav，不依赖 ffmpeg、不联网、不加载模型。
 
 运行（独立进程，HOME 隔离）：
     cd server && .build_venv/bin/python tests/test_subtitle_music_fallback.py
@@ -15,9 +27,10 @@ import os
 import sys
 import tempfile
 import types
+import wave
 from pathlib import Path
 
-_TMP = tempfile.mkdtemp(prefix="vdl_sb_music_")
+_TMP = tempfile.mkdtemp(prefix="vdl_sb_energy_")
 os.environ["HOME"] = _TMP
 os.makedirs(os.path.join(_TMP, ".video-downloader"), exist_ok=True)
 
@@ -27,6 +40,32 @@ if _SERVER_DIR not in sys.path:
 
 import app as server_app  # noqa: E402
 import routers.subtitle as sb  # noqa: E402
+
+_SR = 16000
+
+
+def _write_wav(path, total_s, voiced_spans, noise_floor=0.0015):
+    """合成 16k mono wav：voiced_spans 内有信号，其余是底噪。"""
+    import numpy as np
+    n = int(total_s * _SR)
+    a = np.zeros(n, dtype=np.float32)
+    rng = np.random.default_rng(7)
+    for s, e in voiced_spans:
+        i0, i1 = int(s * _SR), min(n, int(e * _SR))
+        if i1 <= i0:
+            continue
+        t = (np.arange(i1 - i0)) / float(_SR)
+        env = 0.35 + 0.25 * np.sin(2 * np.pi * 0.7 * t)   # 缓慢包络，模拟乐句起伏
+        a[i0:i1] = env * (0.55 * np.sin(2 * np.pi * 220 * t)
+                          + 0.30 * np.sin(2 * np.pi * 440 * t)
+                          + 0.15 * rng.standard_normal(i1 - i0))
+    a += rng.standard_normal(n) * noise_floor
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(_SR)
+        w.writeframes((np.clip(a, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+    return path
 
 
 class _FakeSeg:
@@ -40,126 +79,134 @@ class _FakeInfo(types.SimpleNamespace):
 
 
 class _FakeModel:
-    """按调用顺序返回预设结果；记录每次 transcribe 的 (vad_filter, kwargs)。"""
+    """每次 transcribe 返回一段预设结果；记录全部 kwargs。"""
 
-    def __init__(self, passes, duration=100.0):
+    def __init__(self, passes):
         self._passes = list(passes)
-        self._duration = duration
         self.calls = []
 
-    def transcribe(self, path, **kw):
-        self.calls.append((kw.get("vad_filter"), kw))
-        return iter(self._passes.pop(0)), _FakeInfo(duration=self._duration, language="zh")
+    def transcribe(self, audio, **kw):
+        self.calls.append(kw)
+        if self._passes:
+            return iter(self._passes.pop(0)), _FakeInfo(language="zh", duration=60.0)
+        return iter([]), _FakeInfo(language="zh", duration=60.0)
 
 
-def _setup_model(fake, tail_rms=1.0, ref_rms=1.0):
+def _install(src_wav, model):
+    """把 _run_subtitle 的外部依赖换成可控假件。"""
     sb._SUBTITLE_MODELS.clear()
-    sb._get_model = lambda size, threads: fake
-    # 尾部调用形如 rms(wav, last_end, total=100/220)；参考调用 rms(wav, start, ≤70)
-    sb._wav_region_rms = lambda path, a, b: (tail_rms if b >= 100 else ref_rms)
-    server_app.SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
+    sb._get_model = lambda size, threads: model
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None, **kwargs):
-        Path(cmd[-1]).write_bytes(b"fake")
+        Path(cmd[-1]).write_bytes(Path(src_wav).read_bytes())
         return types.SimpleNamespace(returncode=0, stderr="")
 
     sb.subprocess.run = fake_run
+    server_app.SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _do_job(job_id, duration=100.0):
+def _do_job(job_id, src="/fake/src.mp4", **kw):
     sb.SUBTITLE_JOBS.clear()
     sb.SUBTITLE_JOBS[job_id] = {"stage": "", "progress": 0}
-    sb._run_subtitle(job_id, "/fake/src.mp4", "base", "zh", False, fast=True, cpu_threads=4)
+    args = dict(fast=True, cpu_threads=4, use_lyrics=False)
+    args.update(kw)
+    sb._run_subtitle(job_id, src, "base", "zh", False, **args)
     return sb.SUBTITLE_JOBS[job_id]
 
 
 def run():
     ok = True
+    work = Path(_TMP)
 
-    # 1) 低覆盖(7%)触发重识别；合并跳过与 VAD 重叠的段，只补空隙
-    #    VAD=[51-58] nvad=[10-30 ✓, 30-60 ✗重叠, 60-90 ✓] → 3 句
-    m = _FakeModel([
-        [_FakeSeg(51, 58, "清唱一句")],
-        [_FakeSeg(10, 30, "第一句"), _FakeSeg(30, 60, "重叠句"), _FakeSeg(60, 90, "第三句")],
-    ])
-    _setup_model(m)
-    job = _do_job("job_music")
-    passed = len(m.calls) == 2 and m.calls[1][0] is False and job.get("lines") == 3
+    # ── 1) 歌曲样音频（全程有能量）不该被判成静音：对比 Silero 的 3.7% ──────────
+    # 歌曲样：两段长乐句 + 中间 3s 间奏静音（真实歌曲有前奏/间奏，不是全片满能量）
+    p = _write_wav(work / "song.wav", 120.0, [(0.0, 40.0), (43.0, 80.0), (83.0, 118.0)])
+    segs = sb._energy_segments(str(p))
+    cov = sum(e - s for s, e in segs) / 120.0
+    passed = cov >= 0.85
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"),
+          f"全程有能量的歌曲样音频覆盖率={cov:.0%}（Silero 同场景仅 3.7%）")
+
+    # ── 2) 分段合法性 + 长段被切开 ────────────────────────────────────────────
+    passed = bool(segs) and all(s < e for s, e in segs)
+    passed = passed and all(segs[i][1] <= segs[i + 1][0] + 1e-6 for i in range(len(segs) - 1))
+    passed = passed and all(0.0 <= s and e <= 120.0 + 0.01 for s, e in segs)
+    passed = passed and all(e - s <= 28.0 * 1.45 + 1e-6 for s, e in segs)
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"),
+          f"分段合法且长段已切开（{len(segs)} 段，最长 {max(e-s for s,e in segs):.1f}s）")
+
+    # ── 3) 尾部静音应被排除，不是无脑铺满全长 ──────────────────────────────────
+    p2 = _write_wav(work / "tail_silence.wav", 100.0, [(0.0, 60.0)])
+    segs2 = sb._energy_segments(str(p2))
+    passed = bool(segs2) and segs2[-1][1] < 75.0
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"),
+          f"尾部静音被排除（末段止于 {segs2[-1][1]:.1f}s / 全长 100s）")
+
+    # ── 4) 解码参数：condition_on_previous_text 恒 False、vad_filter 恒 False ──
+    p3 = _write_wav(work / "speech.wav", 40.0, [(1.0, 12.0), (14.0, 30.0)])
+    for fast in (True, False):
+        m = _FakeModel([[_FakeSeg(0.0, 5.0, "第一句"), _FakeSeg(5.0, 11.0, "第二句")],
+                        [_FakeSeg(0.0, 6.0, "第三句")]])
+        _install(str(p3), m)
+        _do_job("job_params_%s" % fast, fast=fast)
+        passed = bool(m.calls) and all(c.get("condition_on_previous_text") is False for c in m.calls)
+        passed = passed and all(c.get("vad_filter") is False for c in m.calls)
+        ok &= bool(passed)
+        print(("✅" if passed else "❌"),
+              f"fast={fast}：condition_on_previous_text/vad_filter 恒 False（{len(m.calls)} 次调用）")
+
+    # ── 5) 过滤规则：lp≤-1.0 丢、套话丢、正常留 ────────────────────────────────
+    m = _FakeModel([[_FakeSeg(0.0, 4.0, "正常一句", lp=-0.4),
+                     _FakeSeg(4.0, 8.0, "尾部真歌词", nsp=0.84, lp=-0.37),   # 高 nsp 也留
+                     _FakeSeg(8.0, 12.0, "低置信句", lp=-1.5),               # lp 太差 → 丢
+                     _FakeSeg(12.0, 16.0, "Thank you for watching"),         # 套话 → 丢
+                     _FakeSeg(16.0, 20.0, "请不吝点赞 订阅 转发")]])         # 套话 → 丢
+    _install(str(p3), m)
+    job = _do_job("job_filter")
+    passed = job.get("lines") == 2
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"过滤规则（lines={job.get('lines')}，应=2）")
+
+    # ── 6) 时间戳要叠加段起点偏移（不能都从 0 开始） ────────────────────────────
+    p4 = _write_wav(work / "two_spans.wav", 60.0, [(2.0, 20.0), (30.0, 50.0)])
+    m = _FakeModel([[_FakeSeg(1.0, 5.0, "甲句")], [_FakeSeg(1.0, 5.0, "乙句")]])
+    _install(str(p4), m)
+    job = _do_job("job_offset")
     srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
-    passed = passed and "清唱一句" in srt and "重叠句" not in srt and "第三句" in srt
+    # 第二段起点 ≈ 30+1=31s；若漏了段偏移会退化成 00:00:01
+    passed = ("00:00:31" in srt or "00:00:32" in srt or "00:00:30" in srt)
     ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"低覆盖触发重识别+按时间段合并（lines={job.get('lines')}）")
+    print(("✅" if passed else "❌"), "时间戳叠加段起点偏移（第二段不从 0 开始）")
 
-    # 2) 过滤规则：lp 主导。nsp=0.84/lp=-0.37 真歌词必留；lp≤-1.0 丢；(nsp≥0.7且lp<-0.8) 丢；套话丢
-    m = _FakeModel([
-        [_FakeSeg(200, 210, "清唱一句")],
-        [_FakeSeg(10, 30, "真歌词好句"),                                   # nsp/lp 默认 → 留
-         _FakeSeg(30, 50, "尾部真歌词", nsp=0.84, lp=-0.37),               # 案例2 实测值 → 留
-         _FakeSeg(50, 70, "低置信句", lp=-1.5),                            # lp≤-1.0 → 丢
-         _FakeSeg(70, 90, "双重坏句", nsp=0.9, lp=-1.2),                   # → 丢
-         _FakeSeg(90, 100, "Thank you for watching this video."),          # 套话 → 丢
-         _FakeSeg(100, 110, "请订阅我的频道")],                            # 套话 → 丢
-    ], duration=220.0)
-    _setup_model(m)
-    job = _do_job("job_halluc", duration=220.0)
-    passed = job.get("lines") == 3
-    ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"lp主导过滤+高nsp真歌词保留（lines={job.get('lines')}，应=3）")
+    # ── 7) lyrics 开关：关掉时不查歌词库 ──────────────────────────────────────
+    called = {"n": 0}
+    real = sb._fetch_synced_lyrics
 
-    # 3) 尾部未覆盖 + 尾部有能量 → 触发重识别并补上尾部
-    m = _FakeModel([
-        [_FakeSeg(10, 60, "前半句")],                                      # 止于 60/220=27%
-        [_FakeSeg(150, 210, "尾部副歌")],
-    ], duration=220.0)
-    _setup_model(m, tail_rms=1.0, ref_rms=1.0)
-    job = _do_job("job_tail_music", duration=220.0)
-    passed = len(m.calls) == 2 and job.get("lines") == 2
-    ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"尾部未覆盖+有能量触发重识别（calls={len(m.calls)}, lines={job.get('lines')}）")
+    def spy(kw, dur):
+        called["n"] += 1
+        return [], ""
 
-    # 4) 尾部未覆盖但尾部是静音（正常语音视频静音收尾）→ 不重识别
-    m = _FakeModel([
-        [_FakeSeg(10, 60, "前半句")],
-        [_FakeSeg(150, 210, "不该出现")],
-    ], duration=220.0)
-    _setup_model(m, tail_rms=0.01, ref_rms=1.0)   # 尾部静音
-    job = _do_job("job_tail_silence", duration=220.0)
-    passed = len(m.calls) == 1 and job.get("lines") == 1
-    ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"尾部静音不触发重识别（calls={len(m.calls)}）")
+    try:
+        m = _FakeModel([[_FakeSeg(0.0, 5.0, "听写出来的")]])
+        _install(str(p4), m)
+        sb._fetch_synced_lyrics = spy
+        _do_job("job_nolyrics", src="/fake/song.m4a", use_lyrics=False)
+        n_off = called["n"]
 
-    # 5) 正常语音高覆盖 → 不重识别
-    m = _FakeModel([
-        [_FakeSeg(5, 60, "对话一"), _FakeSeg(60, 95, "对话二")],
-    ], duration=100.0)
-    _setup_model(m)
-    job = _do_job("job_speech", duration=100.0)
-    passed = len(m.calls) == 1 and job.get("lines") == 2
+        m2 = _FakeModel([[_FakeSeg(0.0, 5.0, "听写出来的")]])
+        _install(str(p4), m2)
+        sb._fetch_synced_lyrics = spy
+        _do_job("job_lyrics", src="/fake/song.m4a", use_lyrics=True)
+        n_on = called["n"]
+    finally:
+        sb._fetch_synced_lyrics = real
+    passed = (n_off == 0) and (n_on >= 1)
     ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"正常语音高覆盖不触发（calls={len(m.calls)}, lines={job.get('lines')}）")
-
-    # 5.5) 案例3 爱死了昨天：VAD 放行 0 段（rows 空）→ 仍必须触发兜底（曾因 and rows 直接报错）
-    m = _FakeModel([
-        [],
-        [_FakeSeg(30, 60, "是我爱死了昨天"), _FakeSeg(60, 90, "看你虚伪的表演")],
-    ], duration=267.0)
-    _setup_model(m)
-    job = _do_job("job_vad_empty", duration=267.0)
-    passed = len(m.calls) == 2 and job.get("lines") == 2 and job.get("status") == "completed"
-    ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"VAD 零放行仍触发兜底（calls={len(m.calls)}, lines={job.get('lines')}, status={job.get('status')}）")
-
-    # 6) 触发了但合并后没有更多内容 → 保留首轮
-    m = _FakeModel([
-        [_FakeSeg(10, 60, "唯一内容")],                                    # 60/100=60% 结束但尾部静音？
-        [_FakeSeg(20, 40, "完全重叠")],                                    # 全重叠 → 合并无增益
-    ], duration=100.0)
-    _setup_model(m, tail_rms=1.0, ref_rms=1.0)   # 尾部有能量 → 会触发
-    job = _do_job("job_keep_first", duration=100.0)
-    srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
-    passed = "唯一内容" in srt and "完全重叠" not in srt
-    ok &= bool(passed)
-    print(("✅" if passed else "❌"), f"合并无增益时保留首轮（lines={job.get('lines')}）")
+    print(("✅" if passed else "❌"),
+          f"歌词库开关生效（关时查 {n_off} 次 / 开时累计 {n_on} 次）")
 
     print("\n通过" if ok else "\n失败")
     return 0 if ok else 1

@@ -990,7 +990,7 @@
     <h2 id="sbTitle" class="guide-title" data-page-node-id="hjc9zwp1bp2LCDMgOynt1t">📝 本地视频 / 音频字幕提取</h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="iDHJ8eZpZo1EPMc6C49kL2">
       本地 AI 语音识别，把视频 / 音频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
-      支持视频（mp4/mkv/mov…）与音频（mp3/m4a/wav/flac…）。全程本地完成，不上传云端；识别模型首次使用会自动下载（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB）。
+      支持视频（mp4/mkv/mov…）与音频（mp3/m4a/wav/flac…）。全程本地完成，不上传云端；识别模型首次使用会自动下载（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB）。对话、录音、英文、嘈杂环境均直接听写；已收录的出版歌曲可额外命中官方歌词库（逐字准确）。
     </p>
 
     <div class="uc-toolbar" data-page-node-id="U4w8iSTGBqGBfLHouBBTDr">
@@ -1006,9 +1006,10 @@
           <span class="uc-label" data-page-node-id="ZbxB1G9duOKj5qmv2pHLTy">识别模型</span>
           <select id="sbModel" data-page-node-id="Fbmtmspnu48JSADjl2fed7">
             <option value="base" data-page-node-id="5uDXGC1tQfwCROTo8fbEjn">base（最快，准确度一般）</option>
-            <option value="small" selected data-page-node-id="d1W0oF0tEnsrusFwNVs0gR">small（推荐，速度与准确均衡）</option>
-            <option value="medium" data-page-node-id="xCNh5iAgsY15b6f15PkjqN">medium（更准，较慢）</option>
-            <option value="large-v3" data-page-node-id="SxbLLBvkOzxvnrT287Gz2n">large-v3（最准，CPU 很慢）</option>
+            <option value="small" data-page-node-id="d1W0oF0tEnsrusFwNVs0gR">small（噪音下易错，中文会出繁体）</option>
+            <option value="medium" selected data-page-node-id="xCNh5iAgsY15b6f15PkjqN">medium（推荐 · 准且稳）</option>
+            <option value="large-v3-turbo" data-page-node-id="sVbTurbo0pt2026k9mZzQx">large-v3-turbo（比 large-v3 快数倍）</option>
+            <option value="large-v3" data-page-node-id="SxbLLBvkOzxvnrT287Gz2n">large-v3（模型 3GB，CPU 很慢）</option>
           </select>
         </label>
         <label class="uc-field" data-page-node-id="fGE9MWOqfcZuRGzwVFy2Bk">
@@ -1020,7 +1021,10 @@
           </select>
         </label>
         <label class="uc-field uc-check" data-page-node-id="gLStbDGitvcLLXesF3f59Z">
-          <input type="checkbox" id="sbFast" data-page-node-id="HHDZDRldp4liaFO1smbRTS" checked /> <span class="uc-label" data-page-node-id="sLs7uRtSufPqgKX4jDiALy">快速模式（快约 2 倍，准确度略降）</span>
+          <input type="checkbox" id="sbFast" data-page-node-id="HHDZDRldp4liaFO1smbRTS" /> <span class="uc-label" data-page-node-id="sLs7uRtSufPqgKX4jDiALy">快速模式（快约 2 倍，准确度略降）</span>
+        </label>
+        <label class="uc-field uc-check" data-page-node-id="qLyRcsChk2026sbLyricOpt1">
+          <input type="checkbox" id="sbLyrics" data-page-node-id="sbLyricChk2026opt0001" checked /> <span class="uc-label" data-page-node-id="sbLyricLbl2026opt0001">音频优先匹配官方歌词库（仅对已收录的出版歌曲生效，录音/访谈/外语不会命中）</span>
         </label>
         <p class="uc-tip" style="grid-column:1/-1;margin:.2rem 0 0;font-size:11.5px;color:var(--text-mute,#6b7280);" data-page-node-id="21wOaqa6ebIdRmCYlVo8SB">
           💎 会员专享：满速提取。开通会员中心「下载会员 / AI 会员」自动满速。

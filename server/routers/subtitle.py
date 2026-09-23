@@ -1,7 +1,15 @@
 """server/routers/subtitle.py — 本地视频字幕提取（faster-whisper ASR，MIT 可商用）。
 
-流程：本地视频 → ffmpeg 抽 16k mono 音频 → faster-whisper（CPU int8，VAD 句级分段）
+流程：本地视频 → ffmpeg 抽 16k mono 音频 → **能量分段** → faster-whisper（CPU int8）
 → SRT / TXT 输出。模型按需从 HF（默认走 hf-mirror）下载到用户缓存，不进 DMG。
+
+⚠️ 2026-09-23 重写识别链路（回答「为什么接歌词库、录音/英文/嘈杂怎么办」）：
+  此前的核心错配是拿 **Silero VAD** 当分段器——它判断的是「像不像人在说话」，
+  而字幕要的是「有没有声音」。于是歌曲人声+伴奏被整段丢弃（阿刁只放行 3.7%、
+  爱死了昨天 0 段），只能靠一层层打补丁去救（占比<15% / 尾部有能量 / 空结果也兜底）。
+  现改为能量分段（_energy_segments），对上述场景一律成立；解码参数同时修正
+  （condition_on_previous_text 恒 False 等）。详见 _energy_segments 与步骤 3 的注记。
+  歌词库（lrclib）保留为**可选快通道**：只对已收录的出版歌曲生效，可在界面关闭。
 
 job 机制独立于 CONVERT_JOBS：SUBTITLE_JOBS + app.executor，设备隔离与 convert 一致
 （X-Device-Id 头查状态 / device= query 下载）。
@@ -135,6 +143,135 @@ def _wav_duration(path: _Path) -> float:
         return 0.0
 
 
+def _read_wav_f32(wav_path):
+    """读 16k mono s16le wav → (float32 数组[-1,1], 采样率)；失败返回 (None, 0)。"""
+    try:
+        import wave as _wave
+        import numpy as _np
+        with _wave.open(str(wav_path), "rb") as w:
+            sr = w.getframerate() or 16000
+            a = _np.frombuffer(w.readframes(w.getnframes()), dtype=_np.int16)
+            return a.astype(_np.float32) / 32768.0, sr
+    except Exception:  # noqa: BLE001
+        return None, 0
+
+
+def _energy_segments(wav_path, min_sil_s: float = 0.35, max_seg_s: float = 28.0,
+                     pad_s: float = 0.10):
+    """「有声段」检测 —— 取代 Silero VAD 的分段器。返回 [(start_s, end_s), ...]。
+
+    🔴 为什么必须换掉 faster-whisper 自带的 Silero VAD（2026-09-23）：
+    Silero 的训练目标是「这段像不像人在说话」，是个**说话声分类器**。字幕场景要的
+    根本不是这件事 —— 我们要的是「这段有没有声音」。两者在以下场景直接冲突：
+      · 歌曲「人声+伴奏」→ Silero 判为非语音 → 整段丢弃
+      · 嘈杂环境录音（噪声占比高）→ 置信度掉到阈值下 → 丢弃
+      · 纯音乐/伴奏段 → 丢弃
+    实测三首歌：阿刁(6:18) VAD 只放行 14s（3.7%）、天使的翅膀只到 2:22、
+    爱死了昨天放行 **0 段**。此前为绕开它糊了三层补丁（占比<15% / 尾部有能量 /
+    空结果也兜底），本质是拿补丁去补一个**根本性错配**。
+
+    能量法只做「有没有能量」的判断，对上述场景一律成立，且无需额外模型依赖。
+    自适应阈值：thr = max(p05 * 4, p95 * 0.05) —— 前项压住安静录音的底噪，
+    后项压住「整段都很响」的歌曲/噪声（避免全片判为有声而失去分段意义）。
+    """
+    import numpy as _np
+    a, sr = _read_wav_f32(wav_path)
+    if a is None or a.size < sr:          # 读不出或不足 1 秒 → 交给调用方整段处理
+        return []
+    total = a.size / float(sr)
+    frame = max(1, int(0.020 * sr))       # 20ms 帧
+    hop = max(1, frame // 2)
+    if a.size < frame:
+        return [(0.0, total)]
+    n_frames = 1 + (a.size - frame) // hop
+    idx = _np.arange(frame)[None, :] + hop * _np.arange(n_frames)[:, None]
+    rms = _np.sqrt(_np.mean(a[idx] * a[idx], axis=1))
+    p05 = float(_np.percentile(rms, 5))
+    p50 = float(_np.percentile(rms, 50))
+    p95 = float(_np.percentile(rms, 95))
+    if p95 <= 0:
+        return []
+    thr = max(p05 * 4.0, p95 * 0.05)
+    # ⚠️ 必须再压一道「中位能量」天花板：p05*4 在**动态范围小**的音频上会荒谬地
+    #   偏高。全程有声音的素材（歌曲、持续讲话）没有真正的静音段，p05 本身就
+    #   是有声区间的低谷，再乘 4 会越过中位能量 → 整片被判成静音（实测合成曲
+    #   覆盖率只剩 57%，被切成 83 个碎段）。上限取中位能量的 60%，保证「多数
+    #   时候的能量」一定算有声；真正的静音段仍远低于它。
+    thr = min(thr, p50 * 0.6)
+    if thr <= 0:
+        return []
+    voiced = rms > thr
+
+    # 1) 把短于 min_sil_s 的静音缺口填平（句间停顿不切段）
+    gap_frames = max(1, int(min_sil_s * sr / hop))
+    i = 0
+    while i < len(voiced):
+        if voiced[i]:
+            j = i
+            while j < len(voiced) and voiced[j]:
+                j += 1
+            k = j
+            while k < len(voiced) and not voiced[k]:
+                k += 1
+            if k < len(voiced) and (k - j) <= gap_frames:
+                voiced[j:k] = True
+            i = k
+        else:
+            i += 1
+
+    # 2) 连通域 → 段；丢弃过短碎段（<0.25s）
+    segs = []
+    i = 0
+    while i < len(voiced):
+        if voiced[i]:
+            j = i
+            while j < len(voiced) and voiced[j]:
+                j += 1
+            st = i * hop / float(sr)
+            ed = min(total, (j - 1) * hop / float(sr) + frame / float(sr))
+            if ed - st >= 0.25:
+                segs.append([st, ed])
+            i = j
+        else:
+            i += 1
+
+    # 3) 前后补 pad（Whisper 句首句尾需要一点上下文），并按边界钳制、合并紧邻段。
+    #    ⚠️ pad 必须在**切分之前**做：切分产生的相邻段首尾是同一个时间点，
+    #    若先切后 pad，前后各扩 0.1s 会互相重叠 → 下面的合并判断会把它们
+    #    又粘回一整段（实测阿刁被粘回 313s 单段，分片完全失效）。
+    res = []
+    for st, ed in segs:
+        s2 = max(0.0, st - pad_s)
+        e2 = min(total, ed + pad_s)
+        if res and s2 <= res[-1][1]:      # 与上一段重叠/紧邻 → 合并
+            res[-1][1] = max(res[-1][1], e2)
+        else:
+            res.append([s2, e2])
+
+    # 4) 超长段（整首歌/长录音）在段内能量最低点切开，避免 Whisper 30s 窗口硬切句
+    out = []
+    for st, ed in res:
+        while ed - st > max_seg_s:
+            # 在 [st + 0.6·max, st + 1.4·max] 窗口内挑能量最低点当切点：
+            # 既保证每段长度接近 max_seg_s（不会退化成 200s 巨段），
+            # 又尽量落在句间/换气处（不会把一个词硬切成两半）。
+            w0 = int((st + max_seg_s * 0.6) * sr / hop)
+            w1 = min(len(rms), int((st + max_seg_s * 1.4) * sr / hop))
+            if w1 - w0 >= 4:
+                # w0/w1 是**全局**帧下标（rms 与整条音频对齐），换算回时间直接
+                # 乘 hop/sr，不要再叠加 st —— 叠加会把切点推到 2·st 之后，
+                # 表现为「长段根本切不开」（实测阿刁切出 124s / 100s 巨段）。
+                cut_t = (w0 + int(_np.argmin(rms[w0:w1]))) * hop / float(sr)
+            else:
+                cut_t = st + max_seg_s
+            if cut_t <= st + 1.0 or cut_t >= ed - 0.5:
+                break                     # 切不动了 → 交给 Whisper 自己滑窗
+            out.append([st, cut_t])
+            st = cut_t
+        out.append([st, ed])
+    return [(round(s, 3), round(e, 3)) for s, e in out if e - s > 0.1]
+
+
 def _wav_region_rms(wav_path, start_s: float, end_s: float) -> float:
     """读 16k mono s16 wav 的 [start_s, end_s) 区间均方根振幅（0-32768 量纲）。
     用于判断「识别没覆盖的尾部」是静音还是音乐——静音不值得重识别。"""
@@ -183,8 +320,23 @@ _apply_hf_mirror()
 SUBTITLE_JOBS: dict = {}
 _SUBTITLE_LOCK = threading.Lock()
 _SUBTITLE_MODELS: dict = {}          # model_size -> WhisperModel（进程级缓存，避免重复加载）
-ALLOWED_MODELS = {"base", "small", "medium", "large-v3"}
-_DEFAULT_MODEL = "small"
+ALLOWED_MODELS = {"base", "small", "medium", "large-v3", "large-v3-turbo"}
+# 🔴 默认档位：small → medium（2026-09-23 实测，Apple M1 · 8GB · int8 · 4 线程 · beam5）
+#
+# 合成对照集（中文/英文 × 干净/叠 6dB 人声babble噪声，10s 左右）：
+#
+#   模型       中文干净        英文干净   中文+6dB噪                    英文+6dB噪  速度    体积
+#   small      ✅但输出**繁体**  ✅       ❌崩：「人際智能在**靈異**識別領域」 ✅      2.0x    484MB
+#   medium     ✅              ✅       ✅全对                        ✅      0.9x    1.5GB
+#   large-v3   ✅              ✅       ⚠️错 1 字（人机←人工）          ✅      0.5x    3GB
+#
+# 两件事值得记住：
+#   ① **「越大越准」是错的** —— large-v3 在这组中文噪声样本上反而不如 medium，
+#      且慢 1.8 倍、模型体积大一倍（8GB 内存机器上加载就要 2.5 分钟）。
+#   ② 默认 small 是此前「识别不准/错字连篇」的一大来源：它在噪声下直接崩坏，
+#      而且中文输出繁体（我們/討論/識別），用户看到的就是「字都认错了」。
+# ⇒ medium 是质量×速度×内存的甜点，改其为默认。
+_DEFAULT_MODEL = "medium"
 
 
 def _asr_thread_cap() -> int:
@@ -219,6 +371,10 @@ class SubtitleRequest(app.BaseModel):
     language: str = ""               # ""=自动检测 / "zh" / "en"
     to_library: bool = False
     fast: bool = True                # 快速模式：贪心解码，实测快约 2 倍（20min 音频 99s→45s），准确度略降
+    # 歌词库直取开关（用户可在界面上关掉）。它**只对已收录的出版歌曲**生效：
+    # 需同时满足「是纯音频文件」+「歌词库返回曲目」+「时长差 ≤6s」三个条件，
+    # 录音、访谈、会议、外语节目、未收录曲目都不会命中，直接走 ASR。
+    lyrics: bool = True
 
 
 def _resolve_safe_local_path(path: str) -> _Path:
@@ -325,7 +481,7 @@ def _write_outputs(job: dict, srt_path: _Path, txt_path: _Path, rows: list,
 
 
 def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_library: bool,
-                  fast: bool = False, cpu_threads: int = 4) -> None:
+                  fast: bool = False, cpu_threads: int = 4, use_lyrics: bool = True) -> None:
     """后台线程：抽音频 → ASR → SRT/TXT，更新 SUBTITLE_JOBS。
     cpu_threads：免费 4 / 会员满核（extract 端点按会员状态决定）。"""
     job = SUBTITLE_JOBS.get(job_id)
@@ -354,7 +510,7 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
         # 1.5) 歌词库直取（仅纯音频文件）：歌曲字幕走「歌词」而非「听写」。
         #   命中 → 秒级产出逐字准确的字幕（带官方逐行时间轴），直接 return，不加载模型。
         #   未命中（无网 / 纯音乐 / 未收录）→ 静默回落下面的 ASR 管线。
-        if _Path(src).suffix.lower() in app.UPLOAD_AUDIO_EXTS:
+        if use_lyrics and _Path(src).suffix.lower() in app.UPLOAD_AUDIO_EXTS:
             job["stage"] = "匹配歌词库"
             dur = _wav_duration(wav_path)
             lyric_rows, lyric_desc = _fetch_synced_lyrics(_clean_track_keywords(stem), dur)
@@ -370,107 +526,85 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
         job["stage"] = f"加载模型（{model_size} · {cpu_threads} 线程，首次需下载）"
         model = _get_model(model_size, cpu_threads)
 
-        # 3) 转写：VAD 句级分段，逐句输出（对话切换处自然断句）
+        # 3) 转写：能量分段 → 逐段识别（2026-09-23 重写，不再用 Silero VAD）
         job["stage"] = "识别中" + ("（快速模式）" if fast else "")
-        # 快速模式：贪心解码(beam=1) + 不继承前文——解码开销降约 2~3 倍；
-        # condition_on_previous_text=False 还能避免长音频复读/幻觉连锁，准确度略降
-        transcribe_kwargs = dict(
-            language=language or None,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 350},
-            beam_size=1 if fast else 5,
-            condition_on_previous_text=not fast,
-        )
-        segments, info = model.transcribe(str(wav_path), **transcribe_kwargs)
-        rows = []            # (start, end, text)
-        total = info.duration or 0.0
-        for seg in segments:
-            text = (seg.text or "").strip()
-            if not text:
-                continue
-            rows.append((float(seg.start), float(seg.end), text))
-            if total > 0:
-                job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
+        total = _wav_duration(wav_path) or 0.0
+        seg_ranges = _energy_segments(wav_path)
+        if not seg_ranges:
+            # 能量分段失败（读不出 / 全静音）：退回整段识别，总比直接报错强
+            seg_ranges = [(0.0, total)] if total > 0 else []
+        app.logger.info("subtitle %s energy segments: %d spans over %.0fs",
+                        job_id, len(seg_ranges), total)
+        audio, sr = _read_wav_f32(wav_path)
 
-        # 3.5) 音乐兜底二次识别（2026-09-22/23 两版）：
-        #   Silero VAD 是「说话声」检测器，歌曲「人声+伴奏」会被判为非语音：
-        #   案例1 阿刁(6:18)：VAD 只放行 14s（3.7%）——副歌全丢；
-        #   案例2 天使的翅膀(3:40)：VAD 放行 61%（只到 2:22）——尾部副歌整段丢。
-        #   ⇒ 触发条件两条任一：a) 语音占比 < 15%（几乎全丢）；
-        #     b) 末句结束 < 全长 92% 且「尾部有能量」（不是静音收尾）。
-        #   无 VAD 重识别后**按时间段合并**（VAD 段优先，仅补 VAD 漏掉的区域），
-        #   过滤以 avg_logprob 为主——实测音乐里 nsp 高达 0.84 的段 lp 只有 -0.37
-        #   且全是真歌词，nsp 在音乐上不可靠。
-        #   ⚠️ 2026-09-23 案例3 爱死了昨天(4:27)：VAD 放行 0 段 → 首轮一句没有，
-        #   曾因 `and rows` 守卫直接报「未识别到任何语音内容」——空结果恰恰最需要兜底。
-        if total > 0:
-            speech_secs = sum(ed - st for st, ed, _ in rows)
-            low_cov = (not rows) or speech_secs / total < 0.15
-            tail_missed = False
-            if rows and rows[-1][1] < total * 0.92:
-                # 尾部确实有声音（音乐）才值得重识别；静音收尾的正常语音视频跳过
-                tail_rms = _wav_region_rms(wav_path, rows[-1][1], total)
-                ref_rms = _wav_region_rms(wav_path, rows[0][0], min(rows[0][0] + 60.0, rows[-1][1]))
-                tail_missed = ref_rms > 0 and tail_rms >= ref_rms * 0.15
-            if low_cov or tail_missed:
-                job["stage"] = "识别中（检测到音乐，整曲重识别）"
-                job["progress"] = max(job.get("progress") or 15, 15)
-                _last_end = rows[-1][1] if rows else 0.0
-                app.logger.info("subtitle %s VAD incomplete (cov %.1f%%, last_end %.0f/%.0f%s), retry without VAD",
-                                job_id, speech_secs / total * 100, _last_end, total,
-                                ", tail has energy" if tail_missed else "")
-                # 语言：显式指定优先；否则**不要再沿用首轮 info.language**。
-                # ⚠️ 2026-09-23 实测坑：首轮跑的是 VAD 挑出的窄带语音，VAD 零放行时
-                #   info.language 完全不可信（爱死了昨天被判成 en）→ 兜底轮沿用后
-                #   整首被解码成英文幻觉（"The only thing I know..."）。
-                #   兜底轮跑的是完整音频，让它自己检测才准（同曲实测得到 zh，输出全中文）。
-                eff_lang = language or None
-                retry_kwargs = dict(
-                    language=eff_lang,
-                    vad_filter=False,
-                    beam_size=1 if fast else 5,
-                    condition_on_previous_text=False,  # 防幻觉连锁
-                )
-                if eff_lang == "zh":
-                    retry_kwargs["initial_prompt"] = "以下是普通话的歌词或对话内容。"
-                segs2, _info2 = model.transcribe(str(wav_path), **retry_kwargs)
-                rows2 = []
-                for seg in segs2:
-                    text = (seg.text or "").strip()
-                    if not text:
-                        continue
-                    # avg_logprob 主导：≤-1.0 必丢；nsp 只在 lp 也差时才丢
-                    if seg.avg_logprob <= -1.0 or (seg.no_speech_prob >= 0.7 and seg.avg_logprob < -0.8):
-                        continue
-                    if _HALLUCINATION_RE.search(text):
-                        app.logger.info("subtitle %s drop hallucinated line: %r", job_id, text[:60])
-                        continue
-                    # 中文内容里冒出的「纯英文段」= 伴奏幻觉（实测 "Zither Harp"、
-                    # "Open eyes, but I can't see"）。中英混排的原歌词保留。
-                    if eff_lang == "zh" and not _CJK_RE.search(text):
-                        app.logger.info("subtitle %s drop non-CJK line in zh: %r", job_id, text[:60])
-                        continue
-                    rows2.append((float(seg.start), float(seg.end), text))
-                    if total > 0:
-                        job["progress"] = 15 + int(min(80, max(0, seg.end / total * 80)))
-                # 按时间段合并：VAD 段优先，只补 VAD 完全没覆盖的空隙
-                merged = list(rows)
-                for st, ed, tx in rows2:
-                    if any(st < ve and ed > vs for vs, ve, _ in rows):
-                        continue
-                    merged.append((st, ed, tx))
-                merged.sort()
-                if merged and sum(ed - st for st, ed, _ in merged) > speech_secs:
-                    rows = merged
+        # 🔴 解码参数（这里是此前「幻觉/复读」的直接来源）：
+        #   · condition_on_previous_text **恒为 False**。上一版写成 `not fast`：
+        #     fast=True 时是 False，非快速档反而变 True —— 与紧邻的注释
+        #     「False 还能避免长音频复读/幻觉连锁」自相矛盾。自回归模型把上一段的
+        #     错误文本当 prompt 继续解码，一旦某段听错（音乐/噪声）就会滚雪球，
+        #     这正是整首歌后半段变成大段英文套话的机制。
+        #   · temperature 阶梯 fallback：0.0 解码出的段若压缩比/对数概率异常，
+        #     自动升温重试，比「一次定生死」稳。
+        #   · 三个阈值一并显式打开，交给 faster-whisper 自己拦截幻觉段。
+        #   · vad_filter=False：分段已由 _energy_segments 负责，不再让 Silero 参与。
+        rows = []            # (start, end, text)
+        eff_lang = (language or "").strip() or None
+        # 处理顺序按「段长降序」：让**内容最丰富**的那一段先跑，由它定语言。
+        # ⚠️ 实测坑（阿刁）：若按时间顺序跑，第一段是 9-29s 的前奏（纯吉他、无人声），
+        #   Whisper 在这种段上把语言判成 en，一旦沿用就把「英文」强加给整首中文歌，
+        #   后续每段都被强制英文解码。先跑最长的段（主歌/副歌）再回填，语言才可信。
+        #   rows 最后按时间重排，结果顺序不受影响。
+        order = sorted(range(len(seg_ranges)),
+                       key=lambda i: seg_ranges[i][1] - seg_ranges[i][0], reverse=True)
+        for _i in order:
+            st, ed = seg_ranges[_i]
+            if audio is not None and sr > 0:
+                chunk = audio[int(st * sr):int(ed * sr)]
+                src_audio = chunk if chunk.size > sr * 0.1 else str(wav_path)
+            else:
+                src_audio = str(wav_path)
+            kw = dict(
+                language=eff_lang,
+                beam_size=1 if fast else 5,
+                condition_on_previous_text=False,
+                vad_filter=False,
+                temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+            )
+            _segs, _info = model.transcribe(src_audio, **kw)
+            # 首段检测出的语言沿用给后续段：避免段与段之间语言来回跳
+            if not eff_lang and _info is not None and getattr(_info, "language", ""):
+                eff_lang = _info.language
+            for seg in _segs:
+                text = (seg.text or "").strip()
+                if not text:
+                    continue
+                if getattr(seg, "avg_logprob", 0) <= -1.0:
+                    continue
+                if _HALLUCINATION_RE.search(text):
+                    app.logger.info("subtitle %s drop hallucinated line: %r", job_id, text[:60])
+                    continue
+                rows.append((st + float(seg.start), st + float(seg.end), text))
+            if total > 0:
+                # 段是乱序跑的（先长后短），进度只取历史最大值，不能让它回头
+                job["progress"] = max(int(job.get("progress") or 15),
+                                      15 + int(min(80, max(0, ed / total * 80))))
+        rows.sort()
+
+        # （原「3.5 音乐兜底二次识别」三层补丁已于 2026-09-23 删除：它是在补偿
+        #   Silero VAD 对音乐的误判——占比<15% / 尾部有能量 / 空结果也兜底。
+        #   分段改用能量法后，歌曲、录音、嘈杂环境都会被正常切出，不再需要补偿。）
 
         if not rows:
             raise RuntimeError("未识别到任何语音内容（可能没有对话/人声，或为纯器乐/极强噪音）")
 
         # 4) 写 SRT + TXT
         _write_outputs(job, srt_path, txt_path, rows, to_library, stem)
-        job["language"] = info.language or ""
+        job["language"] = eff_lang or ""
         job["source"] = "asr"
-        app.logger.info("subtitle %s done: %d lines (%s)", job_id, len(rows), info.language)
+        app.logger.info("subtitle %s done: %d lines (%s)", job_id, len(rows), eff_lang)
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)[:400]
@@ -542,7 +676,7 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
         }
     app.executor.submit(_run_subtitle, job_id, str(resolved), model_size,
                         (payload.language or "").strip(), bool(payload.to_library),
-                        bool(payload.fast), cpu_threads)
+                        bool(payload.fast), cpu_threads, bool(payload.lyrics))
     record_event("subtitle", {"model": model_size, "member": is_member})
     return {"job_id": job_id, "status": "running", "model": model_size,
             "cpu_threads": cpu_threads, "member": is_member}
