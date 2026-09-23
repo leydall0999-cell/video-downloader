@@ -19287,6 +19287,13 @@ el.dwVidPlayer.removeAttribute('src');
     };
 
     // ---- 系统配置 ----
+    // 套餐表单「未保存改动保护」：loadConfig 的重渲染会 innerHTML 整块重建，
+    // 用户改了一半的价格会被旧值静默抹掉（切页签回来/保存后刷新都会触发）。
+    // 因此：任何输入动作 → plansBox 标脏 → renderPlansForm 跳过重渲染，
+    // 保存成功后才清脏并刷新为服务端真值。
+    if (plansBox) {
+      plansBox.addEventListener('input', () => { plansBox.dataset.dirty = '1'; });
+    }
     const loadConfig = async () => {
       try {
         const r = await adminRequest('/api/admin/config');
@@ -19362,6 +19369,11 @@ el.dwVidPlayer.removeAttribute('src');
     // 套餐与积分成本表单
     const renderPlansForm = (cfg) => {
       if (!plansBox) return;
+      // 有未保存的编辑 → 不重建表单（保住用户正在改的价格），只提示
+      if (plansBox.dataset.dirty) {
+        _adminMsg(plansMsg, '套餐有未保存的修改，已为你保留；点「保存套餐配置」生效。', false);
+        return;
+      }
       const plans = cfg.plans || {};
       const dl = (plans.download_member && plans.download_member.plans) || {};
       const ai = (plans.ai_member && plans.ai_member.plans) || {};
@@ -19424,7 +19436,10 @@ el.dwVidPlayer.removeAttribute('src');
         const r = await adminRequest('/api/admin/config/plans', {
           method: 'POST', body: JSON.stringify(payload),
         });
-        if (r && r.ok) { loadConfig(); _adminMsg(plansMsg, '套餐配置已保存', false); }
+        if (r && r.ok) {
+          delete plansBox.dataset.dirty; // 保存成功 → 允许 loadConfig 用服务端真值刷新表单
+          loadConfig(); _adminMsg(plansMsg, '套餐配置已保存', false);
+        }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
       } catch (e) { _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true); }
     };

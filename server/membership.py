@@ -145,6 +145,9 @@ def load_plan_overrides() -> dict[str, Any]:
         return {}
 
 
+_SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs")
+
+
 def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
     """写入 plans.json（0600）。与现有覆盖做 overlay 合并；传 null 的键视为删除。
 
@@ -152,6 +155,11 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
       { "download_plans": {...}, "ai_plans": {...}, "credit_packs": {...},
         "credit_costs": {...} }
     任意键可缺省；返回写盘后的完整覆盖 dict。失败抛 OSError。
+
+    合并语义（2026-09-24 修复）：四张表内部按「套餐 code / 成本 key」逐条合并——
+    载荷只更新它携带的条目，同表其余条目原样保留（此前是整表替换，
+    部分载荷会把未携带的套餐从覆盖层抹掉，造成「改一个价、别的全丢」）。
+    条目值为 null 视为删除该条目。
     """
     global _PLAN_OVERRIDE_CACHE
     with _PLAN_OVERRIDE_LOCK:
@@ -159,6 +167,15 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
         for k, v in (data or {}).items():
             if v is None:
                 existing.pop(k, None)
+                continue
+            if k in _SAVE_TABLE_KEYS and isinstance(v, dict) and isinstance(existing.get(k), dict):
+                merged = dict(existing[k])
+                for ik, iv in v.items():
+                    if iv is None:
+                        merged.pop(ik, None)
+                    else:
+                        merged[ik] = iv
+                existing[k] = merged
             else:
                 existing[k] = v
         p = plan_override_path()
