@@ -6367,3 +6367,7 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .ai-badge.is-err { background: var(--danger-soft, #fee2e2); color: var(--danger, #dc2626); }
 .ai-acct-note { margin-top: .6rem; font-size: .78rem; line-height: 1.45; color: var(--text-mute, #6b7280); background: var(--bg-soft, #f7f8fa); border-radius: 8px; padding: .45rem .6rem; }
 .ai-acct-actions { margin-top: .8rem; display: flex; gap: .5rem; }
+
+/* ── 用户 ID 列（2026-09-24）── */
+.admin-uid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: var(--text-mute, #6b7280); cursor: copy; }
+.admin-uid:hover { color: var(--primary, #4f46e5); }

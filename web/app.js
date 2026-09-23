@@ -19169,12 +19169,13 @@ el.dwVidPlayer.removeAttribute('src');
         const m = u.membership || {};
         const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const identifier = esc(u.identifier).toLowerCase();
+        const uidStr = (u.user_id || '').toLowerCase();
         const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
         const memStr = mem.toLowerCase();
-        return identifier.includes(q) || created.includes(q) || memStr.includes(q);
+        return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || memStr.includes(q);
       });
       if (userCount) userCount.textContent = q ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
-      const head = '<thead><tr><th>账号</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
       const rows = list.map((u) => {
         const m = u.membership || {};
         const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
@@ -19192,6 +19193,7 @@ el.dwVidPlayer.removeAttribute('src');
             + `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`;
         return `<tr>
           <td>${esc(u.identifier)}</td>
+          <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
           <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
           <td>${mem}</td>
           <td>${cred}</td>
@@ -19201,7 +19203,7 @@ el.dwVidPlayer.removeAttribute('src');
         </tr>`;
       }).join('');
       const emptyMsg = q ? '无匹配用户' : '暂无用户';
-      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="7" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
+      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="8" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
     };
 
     // ---- 会员管理 ----
@@ -19217,13 +19219,14 @@ el.dwVidPlayer.removeAttribute('src');
     };
     const renderMemberTable = () => {
       if (!memberTable) return;
-      const head = '<thead><tr><th>账号</th><th>下载会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>下载会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
         const ops = `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`;
         return `<tr>
           <td>${esc(m.identifier)}</td>
+          <td><code class="admin-uid" data-copy="${esc(m.user_id || '')}" title="点击复制">${esc(m.user_id || '—')}</code></td>
           <td>${dl}</td>
           <td>${ai}</td>
           <td>${m.ai_credits_left != null ? m.ai_credits_left : '—'}</td>
@@ -19232,7 +19235,7 @@ el.dwVidPlayer.removeAttribute('src');
           <td class="admin-ops">${ops}</td>
         </tr>`;
       }).join('');
-      memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="7" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
+      memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="8" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
     };
     const fillGrantSelects = () => {
       if (grantUserSel) {
@@ -19433,6 +19436,26 @@ el.dwVidPlayer.removeAttribute('src');
 
     // 表格操作（事件委托）
     const onTableClick = async (e) => {
+      // 点击用户 ID → 复制到剪贴板
+      const uidEl = e.target.closest('code.admin-uid[data-copy]');
+      if (uidEl && uidEl.dataset.copy) {
+        const v = uidEl.dataset.copy;
+        const done = () => {
+          const old = uidEl.textContent;
+          uidEl.textContent = '已复制 ✓';
+          setTimeout(() => { uidEl.textContent = old; }, 900);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(v).then(done).catch(() => {});
+        } else {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = v; document.body.appendChild(ta); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta); done();
+          } catch (_) {}
+        }
+        return;
+      }
       const btn = e.target.closest('button[data-uid]');
       if (!btn) return;
       const uid = btn.dataset.uid;
