@@ -141,8 +141,20 @@ VDL_BATCH_MAX_ITEMS = int(os.environ.get("VDL_BATCH_MAX_ITEMS", "50") or 50)
 SINGLE_DOWNLOAD_RETRIES = 0  # 单条下载默认不自动重试（失败让用户手动点重试）；批量才默认重试
 
 # ---- 格式转换（增值能力）：对已下载文件做 ffmpeg 转码，异步 job ----
+def _safe_mkdir(p: Path) -> None:
+    """建立目录但绝不让 TCC/权限问题打断 import。
+
+    ~/Downloads 属 TCC 保护目录；新构建首次运行时若用户点了「不允许」，
+    mkdir 会抛 PermissionError，import 直接崩 → 后端静默死亡。目录建不出来
+    也要让应用先起来，真正写文件时再把错误暴露到 UI（可操作、可提示）。
+    """
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
 CONVERT_DIR = DOWNLOAD_DIR / "conversions"
-CONVERT_DIR.mkdir(parents=True, exist_ok=True)
+_safe_mkdir(CONVERT_DIR)
 CONVERT_JOBS: dict[str, dict] = {}
 CONVERT_LOCK = threading.Lock()
 FFMPEG_BIN = os.environ.get("VDL_FFMPEG_BIN") or shutil.which("ffmpeg") or ("/opt/homebrew/bin/ffmpeg" if sys.platform == "darwin" else "")
@@ -324,7 +336,7 @@ def _convert_image_webp(src: str, out: "Path", quality: int = 0, resize: int = 0
 
 # ---- 本地视频上传转码（需求文档模块一）：接收上传文件直接转码，复用上面的 ffmpeg 管线 ----
 UPLOAD_TMP = DOWNLOAD_DIR / "uploads"
-UPLOAD_TMP.mkdir(parents=True, exist_ok=True)
+_safe_mkdir(UPLOAD_TMP)
 # 上传文件大小上限（字节），默认 2GB，可用 VDL_UPLOAD_MAX_BYTES 覆盖
 UPLOAD_MAX_BYTES = int(os.environ.get("VDL_UPLOAD_MAX_BYTES") or 2_000_000_000)
 # 单个分片大小上限（字节），前端大文件用 64MB 分片、常规 32MB；超过即 413 拒绝。
@@ -339,10 +351,10 @@ UPLOAD_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", 
 
 # ---- PDF / 图片去水印（需求文档模块二）：接收上传图片/PDF 做去水印，依赖 cv2/fitz（缺则降级） ----
 DW_DIR = DOWNLOAD_DIR / "dewatermark"
-DW_DIR.mkdir(parents=True, exist_ok=True)
+_safe_mkdir(DW_DIR)
 # ---- 本地视频字幕提取（faster-whisper ASR，MIT）：SRT/TXT 产物目录 ----
 SUBTITLE_DIR = DOWNLOAD_DIR / "subtitles"
-SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
+_safe_mkdir(SUBTITLE_DIR)
 DW_JOBS: dict[str, dict] = {}
 DW_LOCK = threading.Lock()
 
@@ -814,7 +826,7 @@ CRYPTO_JOBS: dict[str, dict] = {}
 CRYPTO_LOCK = threading.Lock()
 # 解密播放临时目录（与下载目录同盘，避免跨卷复制大文件）
 VAULT_TMP = DOWNLOAD_DIR / ".vault_tmp"
-VAULT_TMP.mkdir(parents=True, exist_ok=True)
+_safe_mkdir(VAULT_TMP)
 CRYPTO_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-crypto")
 
 # ---- 桌面版种子下载（libtorrent 集成）：把 magnet/.torrent 下载到本地媒体库 ----
@@ -1914,14 +1926,26 @@ async def _cleanup_loop() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
-    orphans = store.purge_orphans()
-    if orphans:
-        logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)
-    # 启动即清一次解说 work 过期目录（周期清理在 _cleanup_loop 内）
-    try:
-        await asyncio.to_thread(_purge_commentary_work)
-    except Exception:
-        logger.exception("启动时解说 work 清理失败")
+    # ⚠️ 启动期目录清理必须放后台线程（2026-09-24 第四次踩 TCC 坑）：
+    # purge_orphans / _purge_commentary_work 会 iterdir/open ~/Downloads 等
+    # TCC 保护目录。ad-hoc 签名的包每次重建 cdhash 变化 → 首次运行系统弹
+    # 「访问下载文件夹」授权框；**同步**执行时没人点授权 → open() 永久阻塞
+    # → uvicorn 永不监听（症状：窗口开了、8321 连不上、日志 240s 假就绪）。
+    # 放后台线程后：启动路径不再触碰 TCC，授权框点不点都不影响后端起来。
+    def _deferred_startup_cleanup() -> None:
+        try:
+            orphans = store.purge_orphans()
+            if orphans:
+                logger.info("已清理 %s 个上次运行遗留的任务目录", orphans)
+        except Exception:
+            logger.exception("启动时孤儿任务清理失败")
+        try:
+            _purge_commentary_work()
+        except Exception:
+            logger.exception("启动时解说 work 清理失败")
+
+    threading.Thread(target=_deferred_startup_cleanup,
+                     name="vdl-startup-cleanup", daemon=True).start()
     # 桌面版种子下载：启动 libtorrent session（libtorrent 缺失时内部为空操作）
     if TORRENT_ENABLED and torrent_mod.available():
         try:
