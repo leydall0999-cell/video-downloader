@@ -761,7 +761,6 @@
     sbModel: $('sbModel'),
     sbLang: $('sbLang'),
     sbFast: $('sbFast'),
-    sbLyrics: $('sbLyrics'),
     sbStartBtn: $('sbStartBtn'),
     sbProgressWrap: $('sbProgressWrap'),
     sbProgressFill: $('sbProgressFill'),
@@ -5129,7 +5128,6 @@
         model_size: el.sbModel.value || 'medium',
         language: el.sbLang.value || '',
         fast: !!(el.sbFast && el.sbFast.checked),
-        lyrics: !!(el.sbLyrics && el.sbLyrics.checked),
       }),
       headers: { 'Content-Type': 'application/json' },
     }).then(data => {
