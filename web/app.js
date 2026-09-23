@@ -16748,15 +16748,13 @@ el.dwVidPlayer.removeAttribute('src');
         renderMemberStatus();           // 后台刷新（不 await）
         renderCloudAccount();           // 后台刷新（不 await）
         if (!cloudAccount) {
-          // 云端这一轮还没出结果 → 等它回来补报（成功=权益已跟账号；失败=只在本机，
-          // 换机/重装会丢，必须如实说，不能糊过去）。
+          // 云端这一轮还没出结果 → 等它回来后台刷新（不弹成功 toast，
+          // 🔴 2026-09-23 用户反馈「这个提示不要」：同步成功是本分，不必打扰）。
           cloudPromise.then(async (cres) => {
             if (cres && cres.ok) {
               cloudNotice = cres.notice || '';
               try { await renderMemberStatus(); } catch (_) {}
               try { await renderCloudAccount(); } catch (_) {}
-              showToast('✅ ' + (cloudNotice ? cloudNotice + '；' : '')
-                        + '会员权益已同步到账号（换机/重装不丢）');
             } else {
               const why = (cres && cres.error) || cloudErrMsg || '未能连接授权中心';
               const extra = (cres && cres.code === 'CLOUD_UNREACHABLE')
