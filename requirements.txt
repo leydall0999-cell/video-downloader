@@ -74,3 +74,10 @@ pillow-avif-plugin>=1.6.0
 #   纯 Python 实现、无第三方依赖、约 1MB，import 守护（缺失时自动跳过归一化）。
 #   另：先转简再跑幻觉正则，一套简体规则即可同时拦住繁/简两种套话输出。
 zhconv>=1.4.0
+
+# SenseVoice（sherpa-onnx，2026-09-23）：字幕的「粤语 / 现场噪声」增强引擎。
+#   不替换 Whisper，而是先快速听一遍（30~40x 实时）把文本作为 initial_prompt 喂给
+#   Whisper —— 时间轴仍由 Whisper 出。实测现场噪声字符命中 +1~+3/45，粤语由「错误翻译」
+#   纠正为「正确转写」。模型（model.int8.onnx 228MB + tokens.txt）由 build_mac.sh
+#   从 ~/.cache/vdl-sensevoice 注入包内；缺失时静默降级为纯 Whisper，绝不阻断提取。
+sherpa-onnx>=1.13.0

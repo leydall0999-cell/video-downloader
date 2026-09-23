@@ -262,6 +262,34 @@ def run():
     ok &= bool(passed)
     print(("✅" if passed else "❌"), "zhconv 缺失时降级不崩、原文保留（lines=%s）" % job.get("lines"))
 
+    # ── 13) SenseVoice 缺失时必须静默降级（不崩、不吞字） ──────────────────────
+    #   打包漏收 sherpa_onnx / 模型缺失都会走到这条路径。历史上 zhconv 就是这样
+    #   「代码对了但包里没生效」，所以每条静默降级分支都要有回归。
+    real_rec = sb._sensevoice_recognizer
+    try:
+        sb._sensevoice_recognizer = lambda: None
+        m = _FakeModel([[_FakeSeg(0.0, 4.0, "降级后第一句"), _FakeSeg(4.0, 8.0, "降级后第二句")]])
+        _install(str(p3), m)
+        job = _do_job("job_no_sv")
+        srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
+        passed = (job.get("status") == "completed" and job.get("lines") == 2
+                  and "降级后第一句" in srt and "降级后第二句" in srt)
+    finally:
+        sb._sensevoice_recognizer = real_rec
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), "SenseVoice 缺失时降级不崩、原文保留（lines=%s）" % job.get("lines"))
+
+    # ── 14) 段长必须 ≤20s（SenseVoice 超过 ~20s 会严重丢内容） ──────────────────
+    #   实测：30s 段 SenseVoice 只吐一句，提示就变成了错的引导。
+    long_wav = work / "long.wav"
+    _write_wav(long_wav, 300.0, [(0.0, 298.0)])
+    segs = sb._energy_segments(str(long_wav))
+    mx = max((e - s for s, e in segs), default=0.0)
+    cov = sum(e - s for s, e in segs) / 300.0 * 100
+    passed = bool(segs) and mx <= 20.5 and cov >= 85
+    ok &= passed
+    print(("✅" if passed else "❌"), f"分段严格 ≤20s 且覆盖充分（段数={len(segs)} 最长={mx:.1f}s 覆盖={cov:.0f}%）")
+
     print("\n通过" if ok else "\n失败")
     return 0 if ok else 1
 

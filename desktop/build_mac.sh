@@ -367,6 +367,8 @@ echo "   ✔ 前端 JS 语法校验通过"
   --hidden-import matting_ai \
   --hidden-import zhconv \
   --collect-all zhconv \
+  --hidden-import sherpa_onnx \
+  --collect-all sherpa_onnx \
   --collect-binaries cv2 \
   --collect-all pymupdf \
   --collect-all fitz \
@@ -544,6 +546,20 @@ echo "   版本：$APP_VERSION"
 
 echo "▶ 打包 aria2c（种子后端随安装包自包含，脱离本机 Homebrew）"
 python3 "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader.app/Contents/Resources" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用）"
+
+# SenseVoice 模型（字幕「粤语 / 现场噪声」增强，2026-09-23）：随包自包含，离线可用。
+# 构建机上没有模型时**不失败**——运行时找不到就静默降级为纯 Whisper 链路。
+echo "▶ 打包 SenseVoice 模型（粤语 / 现场噪声增强）"
+SV_SRC="${VDL_SENSEVOICE_DIR:-$HOME/.cache/vdl-sensevoice}"
+SV_DST="$REPO/dist/VideoDownloader.app/Contents/Resources/sensevoice"
+if [ -f "$SV_SRC/model.int8.onnx" ] && [ -f "$SV_SRC/tokens.txt" ]; then
+  mkdir -p "$SV_DST"
+  cp "$SV_SRC/model.int8.onnx" "$SV_DST/"
+  cp "$SV_SRC/tokens.txt" "$SV_DST/"
+  echo "   已注入：Contents/Resources/sensevoice（$(du -sh "$SV_DST" | cut -f1)）"
+else
+  echo "   ⚠️ 未找到模型（$SV_SRC），跳过——字幕将仅用 Whisper（粤语支持不可用）"
+fi
 
 echo "▶ 签名（ad-hoc）"
 codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null

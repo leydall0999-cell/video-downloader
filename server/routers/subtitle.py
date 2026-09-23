@@ -59,6 +59,90 @@ try:                                   # 纯 Python 繁→简（zhconv，约 1MB
 except Exception:                      # noqa: BLE001
     _zhconv_convert = None
 
+# ── SenseVoice（sherpa-onnx）预识别：为 Whisper 生成 initial_prompt ─────────
+#
+# 为什么引入第二个引擎（2026-09-23 实测，M1 / 8GB / int8）：
+#   SenseVoice 是原生中文·粤语模型，短音频约 30~40x 实时（Whisper medium 仅 ~0.9x）。
+#   两者短板恰好互补：
+#     · SenseVoice：粤语、快速口语、现场稳态噪声上更准；但**不产出时间戳**，
+#       且单段超过 ~20s 会严重丢内容（实测 30s 段只吐一句，378s 整段只吐半句）。
+#     · Whisper：时间轴准确、长段稳定；但**不支持粤语**（会把粤语「翻译」成
+#       普通话书面语，做方言素材直接失真）。
+#   ⇒ 因此不是替换，而是**提示引导**：先用 SenseVoice 把该段听一遍拿到文本，
+#     作为 initial_prompt 喂给 Whisper，最终文本与时间轴仍由 Whisper 产出。
+#   实测（参考句 45 字，字符命中）：
+#     现场粉噪 0dB 41→44 · 白噪 5dB 42→44 · 粉噪 5dB 43→44 · 混响 43→44 · babble 3dB 34→36
+#     粤语：「今天我们要讨论的是…」（错误翻译）→「今日我哋要讨论嘅系…」（正确转写）
+#   ⚠️ 已知代价：0dB 极强 babble（多人大声同时说话）下 SenseVoice 自身会崩，
+#      错误文本会经提示传给 Whisper。该场景两者都已严重降级（30/45 上下），
+#      属当前无解的鸡尾酒会问题，不做额外兜底。
+try:
+    import sherpa_onnx as _sherpa_onnx
+except Exception:                      # noqa: BLE001
+    _sherpa_onnx = None
+
+_SV_RECOGNIZER = None                  # 懒加载的 OfflineRecognizer
+_SV_TRIED = False                      # 是否已尝试初始化（避免每段重复失败）
+_SV_MAX_SEG_S = 20.0                   # 超过此长度的段不送 SenseVoice（会丢内容）
+
+
+def _sensevoice_dir():
+    """定位 SenseVoice 模型目录：env → App 资源目录 → 用户缓存。无则返回 None。"""
+    cands = []
+    env = os.environ.get("VDL_SENSEVOICE_DIR")
+    if env:
+        cands.append(_Path(env))
+    base = getattr(app, "BASE_DIR", None)
+    if base:
+        cands.append(_Path(base) / "sensevoice")
+    cands.append(_Path.home() / ".cache" / "vdl-sensevoice")
+    for p in cands:
+        if (p / "model.int8.onnx").exists() and (p / "tokens.txt").exists():
+            return p
+    return None
+
+
+def _sensevoice_recognizer():
+    """懒加载识别器；不可用时返回 None —— 静默降级到「无提示」的纯 Whisper 链路。"""
+    global _SV_RECOGNIZER, _SV_TRIED
+    if _SV_RECOGNIZER is not None:
+        return _SV_RECOGNIZER
+    if _SV_TRIED:
+        return None
+    _SV_TRIED = True
+    if _sherpa_onnx is None:
+        app.logger.warning("[subtitle] SenseVoice 不可用：未安装 sherpa-onnx，仅用 Whisper")
+        return None
+    d = _sensevoice_dir()
+    if d is None:
+        app.logger.warning("[subtitle] SenseVoice 不可用：未找到模型目录，仅用 Whisper")
+        return None
+    try:
+        _SV_RECOGNIZER = _sherpa_onnx.OfflineRecognizer.from_sense_voice(
+            model=str(d / "model.int8.onnx"),
+            tokens=str(d / "tokens.txt"),
+            use_itn=True, num_threads=2, debug=False,
+        )
+        app.logger.info("[subtitle] SenseVoice 就绪：%s", d)
+    except Exception as _exc:          # noqa: BLE001
+        app.logger.warning("[subtitle] SenseVoice 初始化失败，仅用 Whisper：%s", _exc)
+        _SV_RECOGNIZER = None
+    return _SV_RECOGNIZER
+
+
+def _sensevoice_text(chunk, sr):
+    """对单段音频（float32 ndarray）跑 SenseVoice，返回转简后的文本；失败返回 ''。"""
+    rec = _sensevoice_recognizer()
+    if rec is None or chunk is None or getattr(chunk, "size", 0) < sr * 0.2:
+        return ""
+    try:
+        s = rec.create_stream()
+        s.accept_waveform(sr, chunk.astype("float32", copy=False))
+        rec.decode_streams([s])
+        return _to_simplified((s.result.text or "").strip())
+    except Exception:                  # noqa: BLE001
+        return ""
+
 
 _ZHCONV_WARNED = False
 
@@ -190,7 +274,7 @@ def _read_wav_f32(wav_path):
         return None, 0
 
 
-def _energy_segments(wav_path, min_sil_s: float = 0.35, max_seg_s: float = 28.0,
+def _energy_segments(wav_path, min_sil_s: float = 0.35, max_seg_s: float = 20.0,
                      pad_s: float = 0.10):
     """「有声段」检测 —— 取代 Silero VAD 的分段器。返回 [(start_s, end_s), ...]。
 
@@ -269,6 +353,20 @@ def _energy_segments(wav_path, min_sil_s: float = 0.35, max_seg_s: float = 28.0,
         else:
             i += 1
 
+    # 2.5) 合并碎段：能量包络的缓慢起伏（乐句、语调）会把一段**持续**的声音
+    #      切成大量 1 秒级碎片 —— 实测 300s 合成曲被切成 209 段（最长 1.2s），
+    #      每段都单独送 Whisper 既慢（固定开销 ×N）又缺上下文。
+    #      合并规则：与上一段间隔 <1.0s，或本段自身 <2.0s（单独成段无意义）。
+    #      ⚠️ 合并长段不必担心：Whisper 对一段音频会自行分句输出多个 segment，
+    #      字幕行数不受影响，第 4 步随后还会把超长段再切开。
+    merged = []
+    for st, ed in segs:
+        if merged and (st - merged[-1][1] < 1.0 or ed - st < 2.0):
+            merged[-1][1] = ed
+        else:
+            merged.append([st, ed])
+    segs = merged
+
     # 3) 前后补 pad（Whisper 句首句尾需要一点上下文），并按边界钳制、合并紧邻段。
     #    ⚠️ pad 必须在**切分之前**做：切分产生的相邻段首尾是同一个时间点，
     #    若先切后 pad，前后各扩 0.1s 会互相重叠 → 下面的合并判断会把它们
@@ -290,7 +388,10 @@ def _energy_segments(wav_path, min_sil_s: float = 0.35, max_seg_s: float = 28.0,
             # 既保证每段长度接近 max_seg_s（不会退化成 200s 巨段），
             # 又尽量落在句间/换气处（不会把一个词硬切成两半）。
             w0 = int((st + max_seg_s * 0.6) * sr / hop)
-            w1 = min(len(rms), int((st + max_seg_s * 1.4) * sr / hop))
+            # 上界**严格**取 max_seg_s（原本是 1.4×，会切出 26~28s 的段）：
+            # SenseVoice 在超过 ~20s 的段上会严重丢内容（实测 30s 段只吐一句），
+            # 段长必须压在 max_seg_s 以内，否则该段拿不到提示引导。
+            w1 = min(len(rms), int((st + max_seg_s) * sr / hop))
             if w1 - w0 >= 4:
                 # w0/w1 是**全局**帧下标（rms 与整条音频对齐），换算回时间直接
                 # 乘 hop/sr，不要再叠加 st —— 叠加会把切点推到 2·st 之后，
@@ -597,11 +698,18 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                 src_audio = chunk if chunk.size > sr * 0.1 else str(wav_path)
             else:
                 src_audio = str(wav_path)
+            # SenseVoice 预识别 → initial_prompt（见文件头「提示引导」注记）。
+            # 只在段长 ≤20s 时送：更长会被 SenseVoice 截断，反而带偏 Whisper。
+            # 拿不到提示（引擎缺失 / 段太长 / 空段）时 initial_prompt=None，等同原链路。
+            sv_prompt = None
+            if audio is not None and sr > 0 and (ed - st) <= _SV_MAX_SEG_S + 0.5:
+                sv_prompt = _sensevoice_text(chunk, sr) or None
             kw = dict(
                 language=eff_lang,
                 beam_size=1 if fast else 5,
                 condition_on_previous_text=False,
                 vad_filter=False,
+                initial_prompt=sv_prompt,
                 temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
