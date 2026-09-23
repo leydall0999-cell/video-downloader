@@ -105,12 +105,12 @@ def _install(src_wav, model):
     server_app.SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _do_job(job_id, src="/fake/src.mp4", **kw):
+def _do_job(job_id, src="/fake/src.mp4", language="zh", **kw):
     sb.SUBTITLE_JOBS.clear()
     sb.SUBTITLE_JOBS[job_id] = {"stage": "", "progress": 0}
     args = dict(fast=True, cpu_threads=4, use_lyrics=False)
     args.update(kw)
-    sb._run_subtitle(job_id, src, "base", "zh", False, **args)
+    sb._run_subtitle(job_id, src, "base", language, False, **args)
     return sb.SUBTITLE_JOBS[job_id]
 
 
@@ -207,6 +207,45 @@ def run():
     ok &= bool(passed)
     print(("✅" if passed else "❌"),
           f"歌词库开关生效（关时查 {n_off} 次 / 开时累计 {n_on} 次）")
+
+    # ── 8) 繁体输出统一转简（噪声/伴奏下会整句出繁体，用户视为错字） ─────────────
+    m = _FakeModel([[_FakeSeg(0.0, 5.0, "今天我們要討論的是人工智能在語音識別領域")]])
+    _install(str(p3), m)
+    job = _do_job("job_trad")
+    srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
+    passed = ("今天我们要讨论的是人工智能在语音识别领域" in srt) and ("我們" not in srt)
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"繁体输出转简体（{srt.splitlines()[2][:24] if len(srt.splitlines())>2 else '?'}…）")
+
+    # ── 9) 繁体套话也要被拦（转简后正则命中；未转简时正则只写简体 → 漏网） ──────
+    m = _FakeModel([[_FakeSeg(0.0, 4.0, "正常歌词一句"),
+                     _FakeSeg(4.0, 8.0, "請不吝點贊訂閱轉發打賞支持明鏡與點點欄目"),
+                     _FakeSeg(8.0, 12.0, "优优独播剧场——YoYo Television Series Exclusive")]])
+    _install(str(p3), m)
+    job = _do_job("job_trad_hallu")
+    passed = job.get("lines") == 1
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"繁体/尾缀套话被拦（lines={job.get('lines')}，应=1）")
+
+    # ── 10) 中文主体下的纯拉丁行判为伴奏幻觉（实测《阿刁》间奏输出 Zither Harp） ─
+    m = _FakeModel([[_FakeSeg(0.0, 4.0, "阿刁 住在西藏某个地方"),
+                     _FakeSeg(20.0, 24.0, "Zither Harp"),
+                     _FakeSeg(30.0, 34.0, "灰色帽檐下 凹陷的脸颊")]])
+    _install(str(p3), m)
+    job = _do_job("job_latin")
+    srt = Path(job["srt_file"]).read_text(encoding="utf-8") if job.get("srt_file") else ""
+    passed = ("Zither" not in srt) and (job.get("lines") == 2)
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"中文主体下纯拉丁行被丢弃（lines={job.get('lines')}，应=2）")
+
+    # ── 11) 英文内容不该被误杀（强制 language=en 时保留纯拉丁行） ────────────────
+    m = _FakeModel([[_FakeSeg(0.0, 4.0, "The quarterly revenue grew by eighteen percent"),
+                     _FakeSeg(4.0, 8.0, "driven by strong demand in cloud")]])
+    _install(str(p3), m)
+    job = _do_job("job_en_keep", language="en")
+    passed = job.get("lines") == 2
+    ok &= bool(passed)
+    print(("✅" if passed else "❌"), f"强制 en 时英文全部保留（lines={job.get('lines')}，应=2）")
 
     print("\n通过" if ok else "\n失败")
     return 0 if ok else 1

@@ -45,11 +45,31 @@ _PREVIEW_MAX_LINES = 5000
 # 属于确定性垃圾内容，与置信度无关，直接按文本匹配丢弃。
 _HALLUCINATION_RE = re.compile(
     r"(?i)(thank you for watching|thanks for watching|subscribe to (my|the|our) (channel|channel))"
-    # 中文套话：large-v3 实测在歌曲首尾幻觉出「请不吝点赞 订阅 转发 打赏支持…栏目」
+    r"|(television series exclusive|exclusive broadcast|all rights reserved)"
+    # 中文套话：实测在歌曲首尾幻觉出「请不吝点赞 订阅 转发 打赏支持…栏目」「优优独播剧场」。
+    # ⚠️ 正则一律写简体：匹配前已由 _to_simplified() 把整句转简，故繁体输出同样命中。
     r"|(请不吝点赞|点赞.{0,6}(订阅|转发)|打赏支持|请订阅|感谢观看|谢谢观看|订阅我的频道"
-    r"|字幕由|amara\.org|请点赞|关注频道|请按赞|订阅按赞)"
+    r"|字幕由|amara\.org|请点赞|关注频道|请按赞|订阅按赞"
+    r"|独播剧场|点栏目|栏目组|请支持|别忘了.{0,4}订阅|一键三连)"
 )
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+try:                                   # 纯 Python 繁→简（zhconv，约 1MB），缺失时静默跳过
+    from zhconv import convert as _zhconv_convert
+except Exception:                      # noqa: BLE001
+    _zhconv_convert = None
+
+
+def _to_simplified(text: str) -> str:
+    """繁→简归一化。faster-whisper 在噪声/伴奏下会整句输出繁体，与简体行混排
+    （实测中文+6dB 噪声：「今天我們要討論的是人工智能在語音識別領域…」）。
+    zhconv 缺失时原样返回——宁可不转，也不能让字幕提取失败。"""
+    if not text or _zhconv_convert is None:
+        return text
+    try:
+        return _zhconv_convert(text, "zh-cn")
+    except Exception:                  # noqa: BLE001
+        return text
 
 # ── 歌词库直取（2026-09-23）——歌曲字幕的正解，不是听写 ──────────────────────────
 # 背景：Whisper 是「听写」模型，听歌必然翻车——实测《爱死了昨天》把
@@ -583,6 +603,7 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                     continue
                 if getattr(seg, "avg_logprob", 0) <= -1.0:
                     continue
+                text = _to_simplified(text)     # 先转简，再跑简体套话正则
                 if _HALLUCINATION_RE.search(text):
                     app.logger.info("subtitle %s drop hallucinated line: %r", job_id, text[:60])
                     continue
@@ -592,6 +613,21 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                 job["progress"] = max(int(job.get("progress") or 15),
                                       15 + int(min(80, max(0, ed / total * 80))))
         rows.sort()
+
+        # 3.4) 中文主体下的纯拉丁行判为伴奏幻觉（实测《阿刁》间奏段自信地输出
+        #      「Zither Harp」——一句英文占 20 秒，正是 Whisper 对无人声段的典型脑补）。
+        #      只在「用户未强制 en」且「≥60% 的行含 CJK」时生效，避免误伤英文内容。
+        if (language or "").strip().lower() != "en" and rows:
+            cjk_rows = sum(1 for _, _, t in rows if _CJK_RE.search(t))
+            if cjk_rows >= len(rows) * 0.6:
+                kept = []
+                for r in rows:
+                    if not _CJK_RE.search(r[2]) and re.search(r"[A-Za-z]{3,}", r[2]):
+                        app.logger.info("subtitle %s drop latin-only line: %r", job_id, r[2][:60])
+                        continue
+                    kept.append(r)
+                if kept:                      # 极端情况下别把整篇清空
+                    rows = kept
 
         # （原「3.5 音乐兜底二次识别」三层补丁已于 2026-09-23 删除：它是在补偿
         #   Silero VAD 对音乐的误判——占比<15% / 尾部有能量 / 空结果也兜底。
