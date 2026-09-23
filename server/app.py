@@ -761,7 +761,31 @@ process_queue = pq_mod.ProcessQueue(executor, default_concurrency=2, hard_max=4)
 SUB_ENABLED = plat.is_desktop() or bool(os.environ.get("VDL_SUBSCRIPTIONS_ENABLED"))
 SUBSCRIBE_PROBE_LIMIT = int(os.environ.get("VDL_SUBSCRIBE_PROBE_LIMIT", "100") or 100)
 SUB_CHECK_INTERVAL = int(os.environ.get("VDL_SUB_CHECK_INTERVAL", "1800") or 1800)  # 默认 30 分钟
-sub_store = subs_mod.SubscriptionStore(DOWNLOAD_DIR / ".subscriptions.json")
+
+def _tcc_safe_config_path(name: str) -> Path:
+    """配置类 JSON 存放路径：用户数据目录（~/.video-downloader 等），**不是**下载目录。
+
+    根因（2026-09-24，第三次咬人）：此前 .subscriptions.json / .retention.json 放在
+    ~/Downloads/VideoDownloader/（TCC 保护目录）。每次重新构建 ad-hoc 签名 cdhash 变化，
+    macOS 重新弹「访问下载文件夹」授权框；后端在 import 阶段同步 open() 该文件，
+    授权框没人点 → open() 永久阻塞 → 后端永不监听（症状：窗口开了但 8321 连不上，
+    pydump 卡 pathlib open）。配置文件搬出 Downloads 后，启动路径不再触碰 TCC 保护目录。
+    旧文件迁移：新路径不存在且旧路径存在时尝试复制，任何 OSError 立即吞掉
+    （新装环境拿不到授权就先空仓库起步，避免启动被卡）。
+    """
+    new = _user_data_dir() / name
+    if new.exists():
+        return new
+    old = DOWNLOAD_DIR / name
+    if old.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old, new)
+        except OSError:
+            pass
+    return new
+
+sub_store = subs_mod.SubscriptionStore(_tcc_safe_config_path(".subscriptions.json"))
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
 
 # ---- 时效自动清理（桌面版功能）：按保留期/容量上限清理下载目录 ----
@@ -771,7 +795,7 @@ RETENTION_ENABLED = (
     or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
     or bool(os.environ.get("VDL_RETENTION_ENABLED"))
 )
-retention_store = retention_mod.RetentionStore(DOWNLOAD_DIR / ".retention.json")
+retention_store = retention_mod.RetentionStore(_tcc_safe_config_path(".retention.json"))
 
 # ---- 库内保险箱（桌面版功能）：选中文件就地 AES 加密为 .vdlenc，播放前临时解密 ----
 # 与媒体库同一开关。内存密钥 VAULT_KEY 为 None 即「锁定」态；vault.json 只存 salt+verify，
