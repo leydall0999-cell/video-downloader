@@ -6371,3 +6371,15 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 /* ── 用户 ID 列（2026-09-24）── */
 .admin-uid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: var(--text-mute, #6b7280); cursor: copy; }
 .admin-uid:hover { color: var(--primary, #4f46e5); }
+
+/* ── 调整积分弹窗（2026-09-24）：AI 订阅积分 / 永久积分分开调 ── */
+.admin-credit-dlg { border: none; border-radius: 14px; padding: 20px 22px; width: 360px; max-width: 90vw;
+  background: var(--panel, #fff); color: var(--text, #1f2937); box-shadow: 0 18px 50px rgba(0,0,0,.25); }
+.admin-credit-dlg::backdrop { background: rgba(15,23,42,.5); }
+.admin-credit-dlg h3 { margin: 0 0 10px; font-size: 1.02rem; }
+.admin-credit-dlg .acd-user { font-weight: 600; margin-bottom: 4px; }
+.admin-credit-dlg .acd-balance { font-size: .82rem; color: var(--text-mute, #6b7280); margin-bottom: 14px; }
+.admin-credit-dlg .acd-field { display: block; margin-bottom: 12px; font-size: .85rem; }
+.admin-credit-dlg .acd-field .admin-input { width: 100%; margin-top: 4px; box-sizing: border-box; }
+.admin-credit-dlg .acd-err { color: #dc2626; font-size: .82rem; margin-bottom: 10px; }
+.admin-credit-dlg .acd-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }

@@ -164,7 +164,7 @@ def grant_membership(user_id: str, code: str) -> dict[str, Any]:
     return res
 
 
-def adjust_credits(user_id: str, delta: int) -> dict[str, Any]:
+def adjust_credits(user_id: str, delta: int, pool: str = "auto") -> dict[str, Any]:
     from user_membership import get_user_store
     data = _load_users()
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)
@@ -174,8 +174,10 @@ def adjust_credits(user_id: str, delta: int) -> dict[str, Any]:
         delta = int(delta)
     except (TypeError, ValueError):
         return {"ok": False, "error": "delta 必须为整数"}
+    if pool not in ("auto", "ai", "permanent"):
+        return {"ok": False, "error": f"未知积分池：{pool}"}
     try:
-        res = get_user_store(user_id).add_credits(delta)
+        res = get_user_store(user_id).add_credits(delta, pool=pool)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"调分失败：{e}"}
     return res

@@ -19237,6 +19237,75 @@ el.dwVidPlayer.removeAttribute('src');
       }).join('');
       memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="8" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
     };
+    // 调整积分弹窗：AI 订阅积分 / 永久积分分开调，正=充值 负=扣减，留空=不动该池
+    let _creditDlg = null;
+    const openCreditDlg = (m) => {
+      if (!_creditDlg) {
+        _creditDlg = document.createElement('dialog');
+        _creditDlg.className = 'admin-credit-dlg';
+        _creditDlg.innerHTML = `
+          <h3>调整积分</h3>
+          <div class="acd-user"></div>
+          <div class="acd-balance"></div>
+          <label class="acd-field">AI 订阅积分（随会员过期清零）
+            <input class="admin-input acd-ai" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
+          </label>
+          <label class="acd-field">永久积分（不过期）
+            <input class="admin-input acd-perm" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
+          </label>
+          <div class="acd-err" hidden></div>
+          <div class="acd-btns">
+            <button class="admin-btn acd-cancel" type="button">取消</button>
+            <button class="admin-btn admin-btn-primary acd-ok" type="button">确定调整</button>
+          </div>`;
+        document.body.appendChild(_creditDlg);
+        _creditDlg.querySelector('.acd-cancel').addEventListener('click', () => _creditDlg.close());
+        _creditDlg.querySelector('.acd-ok').addEventListener('click', submitCreditDlg);
+      }
+      const dlg = _creditDlg;
+      dlg.dataset.uid = m.user_id || '';
+      dlg.querySelector('.acd-user').textContent = m.identifier || m.user_id || '';
+      const aiN = (m.ai_credits_left != null) ? m.ai_credits_left : 0;
+      const pmN = (m.permanent_credits != null) ? m.permanent_credits : 0;
+      dlg.querySelector('.acd-balance').textContent = `当前余额：AI 订阅积分 ${aiN} ｜ 永久积分 ${pmN} ｜ 合计 ${m.credits_total != null ? m.credits_total : aiN + pmN}`;
+      dlg.querySelector('.acd-ai').value = '';
+      dlg.querySelector('.acd-perm').value = '';
+      const errEl = dlg.querySelector('.acd-err');
+      errEl.hidden = true; errEl.textContent = '';
+      if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
+      else dlg.setAttribute('open', '');
+    };
+    const submitCreditDlg = async () => {
+      const dlg = _creditDlg;
+      if (!dlg) return;
+      const uid = dlg.dataset.uid;
+      const errEl = dlg.querySelector('.acd-err');
+      errEl.hidden = true; errEl.textContent = '';
+      const aiV = dlg.querySelector('.acd-ai').value.trim();
+      const pmV = dlg.querySelector('.acd-perm').value.trim();
+      if (aiV === '' && pmV === '') { errEl.textContent = '两个积分池至少填一个'; errEl.hidden = false; return; }
+      const jobs = [];
+      if (aiV !== '') {
+        const d = parseInt(aiV, 10);
+        if (isNaN(d)) { errEl.textContent = 'AI 订阅积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        jobs.push({ delta: d, pool: 'ai' });
+      }
+      if (pmV !== '') {
+        const d = parseInt(pmV, 10);
+        if (isNaN(d)) { errEl.textContent = '永久积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        jobs.push({ delta: d, pool: 'permanent' });
+      }
+      for (let i = 0; i < jobs.length; i++) {
+        try {
+          const r = await adminRequest('/api/admin/memberships/credits', {
+            method: 'POST', body: JSON.stringify({ user_id: uid, delta: jobs[i].delta, pool: jobs[i].pool }),
+          });
+          if (!r || !r.ok) { errEl.textContent = (r && r.error) || '调分失败'; errEl.hidden = false; return; }
+        } catch (e) { errEl.textContent = '调分失败：' + (e && e.message ? e.message : '网络错误'); errEl.hidden = false; return; }
+      }
+      dlg.close();
+      loadMembers();
+    };
     const fillGrantSelects = () => {
       if (grantUserSel) {
         grantUserSel.innerHTML = lastMembers.map((m) => `<option value="${esc(m.user_id)}">${esc(m.identifier)}</option>`).join('');
@@ -19496,15 +19565,8 @@ el.dwVidPlayer.removeAttribute('src');
           if (r && r.ok) { loadUsers(); }
           else alert((r && r.error) || '操作失败');
         } else if (act === 'credit') {
-          const d = (typeof prompt === 'function') ? prompt('调整积分（正=充值，负=扣减，如 100 / -50）：') : null;
-          if (d == null || d.trim() === '') return;
-          const delta = parseInt(d.trim(), 10);
-          if (isNaN(delta)) { alert('请输入整数'); return; }
-          const r = await adminRequest('/api/admin/memberships/credits', {
-            method: 'POST', body: JSON.stringify({ user_id: uid, delta }),
-          });
-          if (r && r.ok) { loadMembers(); }
-          else alert((r && r.error) || '调分失败');
+          const m = (lastMembers || []).find((x) => x.user_id === uid) || { user_id: uid };
+          openCreditDlg(m);
         }
       } catch (err) {
         alert('操作失败：' + (err && err.message ? err.message : '网络错误'));

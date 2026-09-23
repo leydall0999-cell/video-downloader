@@ -99,7 +99,9 @@ def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) 
         delta = int(payload.get("delta"))
     except (TypeError, ValueError):
         return {"ok": False, "error": "delta 必须为整数"}
-    return adjust_credits(user_id, delta)
+    # pool: "ai"=AI 订阅积分 / "permanent"=永久积分；缺省 auto=旧语义（正充永久，负先 AI 后永久）
+    pool = str(payload.get("pool") or "auto").strip() or "auto"
+    return adjust_credits(user_id, delta, pool)
 
 
 @router.get("/api/admin/stats")

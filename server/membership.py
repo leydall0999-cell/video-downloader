@@ -148,6 +148,25 @@ def load_plan_overrides() -> dict[str, Any]:
 _SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs")
 
 
+def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
+    """把覆盖表逐字段叠加到代码默认套餐上：默认值打底，覆盖字段获胜。
+
+    覆盖表缺整个条目 → 用默认条目；条目里缺某字段（如 days/label）→
+    落回默认值。只存在于覆盖层的条目原样保留。
+    """
+    if not isinstance(override, dict) or not override:
+        return dict(defaults)
+    out: dict[str, Any] = {k: dict(v) if isinstance(v, dict) else v for k, v in defaults.items()}
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            merged = dict(out[k])
+            merged.update(v)
+            out[k] = merged
+        else:
+            out[k] = v
+    return out
+
+
 def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
     """写入 plans.json（0600）。与现有覆盖做 overlay 合并；传 null 的键视为删除。
 
@@ -387,12 +406,15 @@ class MembershipStore:
     def plans(self) -> dict[str, Any]:
         """套餐表（价格/时长/权益），供前端购买中心展示。
 
-        优先级：plans.json 覆盖层（整段替换三张套餐表）→ 代码常量默认值。
+        优先级：plans.json 覆盖层 → 代码常量默认值。
+        合并语义（2026-09-24 修复）：覆盖层**逐字段叠加**在默认条目上
+        （此前是整段替换，覆盖条目里缺 days/label 会把默认值顶丢，
+        出现「后台天数空白、前台显示裸 code」）。
         """
         ov = load_plan_overrides()
-        dl = ov.get("download_plans", DOWNLOAD_PLANS)
-        ai = ov.get("ai_plans", AI_PLANS)
-        cp = ov.get("credit_packs", CREDIT_PACKS)
+        dl = _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans"))
+        ai = _overlay_plans(AI_PLANS, ov.get("ai_plans"))
+        cp = _overlay_plans(CREDIT_PACKS, ov.get("credit_packs"))
         return {
             "download_member": {
                 "plans": dl,
@@ -633,35 +655,51 @@ class MembershipStore:
         return {"ok": True, "spent": amount, "reason": reason,
                 "credits_left": self.status()["credits_total"]}
 
-    def add_credits(self, delta: int, reason: str = "admin_adjust") -> dict[str, Any]:
-        """管理员调整积分：正=充值（永久积分池，不过期），负=扣减（先 AI 订阅后永久）。
+    def add_credits(self, delta: int, reason: str = "admin_adjust",
+                    pool: str = "auto") -> dict[str, Any]:
+        """管理员调整积分，可指定积分池。负 delta 允许透支（管理员强扣）。
 
-        负 delta 直接扣减，不受正常「积分不足拒绝」限制（管理员强扣）。返回最新余额。
+        pool="ai"        → 只动 AI 订阅积分（ai_member.credits_left）
+        pool="permanent" → 只动永久积分（permanent_credits.total）
+        pool="auto"      → 兼容旧语义：正=充永久池，负=先扣 AI 订阅再扣永久
+        返回两个池的最新余额。
         """
         self._ensure_loaded()
         st = self._state
-        if delta >= 0:
+        if pool not in ("auto", "ai", "permanent"):
+            return {"ok": False, "error": f"未知积分池：{pool}"}
+        delta = int(delta)
+        ai = st["ai_member"]
+        if pool == "ai":
+            ai["credits_left"] = int(ai.get("credits_left", 0)) + delta
+        elif pool == "permanent":
             st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + delta
-        else:
-            amount = -delta
-            ai = st["ai_member"]
-            ai_left = int(ai.get("credits_left", 0)) if ai.get("active") else 0
-            perm_total = int(st["permanent_credits"].get("total", 0))
-            # 先扣 AI 订阅积分，再扣永久积分（可能扣成负数，管理员强扣允许透支由前端提示）
-            remaining = amount
-            if remaining > 0 and ai_left > 0:
-                take = min(ai_left, remaining)
-                ai["credits_left"] = ai_left - take
-                remaining -= take
-            if remaining > 0:
-                perm_total -= remaining
-                st["permanent_credits"]["total"] = perm_total
+        else:  # auto（旧语义）
+            if delta >= 0:
+                st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + delta
+            else:
+                amount = -delta
+                ai_left = int(ai.get("credits_left", 0)) if ai.get("active") else 0
+                perm_total = int(st["permanent_credits"].get("total", 0))
+                # 先扣 AI 订阅积分，再扣永久积分（可能扣成负数，管理员强扣允许透支由前端提示）
+                remaining = amount
+                if remaining > 0 and ai_left > 0:
+                    take = min(ai_left, remaining)
+                    ai["credits_left"] = ai_left - take
+                    remaining -= take
+                if remaining > 0:
+                    perm_total -= remaining
+                    st["permanent_credits"]["total"] = perm_total
         st["meta"].setdefault("history", []).append({
-            "code": f"admin_adjust:{delta}", "via": reason, "at": self._now(), "type": "admin_adjust",
+            "code": f"admin_adjust:{delta}:{pool}", "via": reason, "at": self._now(), "type": "admin_adjust",
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]
         self._persist()
-        return {"ok": True, "delta": delta, "credits_total": self.status()["credits_total"]}
+        s = self.status()
+        return {"ok": True, "delta": delta, "pool": pool,
+                "ai_credits_left": int(s["ai_member"]["credits_left"]),
+                "permanent_credits": int(s["permanent_credits"]),
+                "credits_total": s["credits_total"]}
 
     def credits_balance(self) -> dict[str, int]:
         s = self.status()
