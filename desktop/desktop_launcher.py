@@ -1134,10 +1134,18 @@ class VdlApi:
         import threading as _th
         from pathlib import Path
 
-        if kind not in ("image", "pdf"):
+        if kind not in ("image", "pdf", "video"):
             return "ERROR: 未知的去水印类型"
         url = f"http://{HOST}:{PORT}/api/dw/{kind}/{job_id}/file"
-        suggested = suggested_name or ("dewatered.png" if kind == "image" else "dewatered.pdf")
+        # 默认建议文件名：图片→png / PDF→pdf / 视频→mp4（缺失或用户未给时兜底）
+        if suggested_name:
+            suggested = suggested_name
+        elif kind == "image":
+            suggested = "dewatered.png"
+        elif kind == "pdf":
+            suggested = "dewatered.pdf"
+        else:
+            suggested = "dewatered.mp4"
         downloads = Path.home() / "Downloads"
         try:
             downloads.mkdir(parents=True, exist_ok=True)
@@ -1154,7 +1162,7 @@ class VdlApi:
         dest = None
         try:
             name_json = json.dumps(suggested, ensure_ascii=False)
-            prompt = "保存去水印结果" if kind == "image" else "保存去水印 PDF"
+            prompt = "保存去水印视频" if kind == "video" else ("保存去水印结果" if kind == "image" else "保存去水印 PDF")
             # ★ 统一走 `_choose_save_path`（中文本地化面板；不可用时内部自动回落 osascript）
             chosen = _choose_save_path(prompt, suggested, "/tmp/vdl_dw_save.log")
             if chosen == "CANCELLED":

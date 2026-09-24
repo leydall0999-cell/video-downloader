@@ -27,6 +27,8 @@ from pathlib import Path
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
+_REPO_DIR = os.path.dirname(_SERVER_DIR)          # 仓库根（含 web/ 与 desktop/）
+_WEB_DIR = os.path.join(_REPO_DIR, "web")
 
 import pytest  # noqa: E402
 
@@ -977,6 +979,38 @@ def test_dw_video_encode_quality_adaptive():
     src_code = open(os.path.join(_SERVER_DIR, "dewatermark_ai.py"), encoding="utf-8").read()
     assert "src_video=src" in src_code, "ai_video_inpaint 重编码调用必须传 src_video=src"
     print("OK dw video encode adaptive: 码率自适应 + high/5.2 + 软编回退 + 调用点钉住")
+
+
+def test_video_result_download_uses_native_save():
+    """防回归（2026-09-25）：视频去水印「下载结果」按钮必须走原生保存面板，禁用裸 <a download>。
+
+    用户报「点下载结果出现问题」真因：dwVidDownload 是 <a download href=.../api/dw/video/{id}/file>，
+    桌面端 WKWebView 对裸 <a download> 不可靠——点击直接把主框架导航到视频文件，整个 App 界面
+    被替换/白屏。图片/PDF 早就走了 dwDownload → save_dw_file_dialog 原生桥接，唯独视频漏接。
+    钉：① 点击处理器必须 preventDefault 且调用 dwDownload(el.dwVidDownload, 'video')；
+        ② 不得再是旧写法「仅 href 缺失才 preventDefault」（那等于没拦）；
+        ③ Python 端 save_dw_file_dialog 必须放行 video kind（否则原生桥返回 ERROR）。
+    """
+    app_js = open(os.path.join(_WEB_DIR, "app.js"), encoding="utf-8").read()
+    i = app_js.index("el.dwVidDownload.addEventListener('click'")
+    # 该处理器紧邻的下一个处理器是 el.dwImgDownload 的；用它做右边界，避免截到同一行
+    i2 = app_js.index("el.dwImgDownload.addEventListener('click'", i)
+    block = app_js[i:i2]
+    assert "e.preventDefault()" in block, "视频下载按钮必须 preventDefault，否则 WKWebView 会跳走"
+    assert "dwDownload(el.dwVidDownload, 'video')" in block, "视频下载必须走原生保存桥接 dwDownload('video')"
+    assert "if (!el.dwVidDownload.href) e.preventDefault();" not in block, \
+        "不得保留旧写法：仅 href 缺失才拦，等价于不拦（href 已设，永远不拦）"
+
+    # Python 端放行 video
+    launch = open(os.path.join(_REPO_DIR, "desktop", "desktop_launcher.py"), encoding="utf-8").read()
+    i_fn = launch.index("def save_dw_file_dialog(")
+    i_body = launch.index("url = f\"http://{HOST}", i_fn)
+    head = launch[i_fn:i_body]
+    assert '("image", "pdf", "video")' in head, "save_dw_file_dialog 必须放行 video kind"
+    # video 默认建议名 + 提示文案
+    assert 'suggested = "dewatered.mp4"' in launch, "video 默认建议文件名应为 dewatered.mp4"
+    assert '"保存去水印视频"' in launch, "video 保存面板提示应为「保存去水印视频」"
+    print("OK video result download uses native save: 禁用裸 <a download>，video 走 save_dw_file_dialog")
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -1045,5 +1079,6 @@ if __name__ == "__main__":
     test_result_modal_sibling_of_panes_ratchet()
     test_hidden_video_must_pause_ratchet()
     test_dw_video_encode_quality_adaptive()
+    test_video_result_download_uses_native_save()
 
     print("\n🎉 去水印核心测试全部通过（50 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")

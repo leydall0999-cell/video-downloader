@@ -8351,9 +8351,12 @@ el.dwVidPlayer.hidden = true;
       if (el.dwVidStatus && el.dwVidStatus.textContent.includes('转码')) el.dwVidStatus.textContent = '';
     }
   });
-  // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
+  // 视频结果下载：与图片/PDF 同套——桌面端走原生保存面板（save_dw_file_dialog），
+  // 绕过 WKWebView 对 <a download> 的拦截（否则一点就跳走/白屏，2026-09-25 用户报障）。
+  // 按钮是 <a download>，默认会触发导航，必须 preventDefault 后再走 dwDownload。
   el.dwVidDownload.addEventListener('click', (e) => {
-    if (!el.dwVidDownload.href) e.preventDefault();
+    e.preventDefault();
+    dwDownload(el.dwVidDownload, 'video');
   });
 
   // 去水印结果下载：桌面端(pywebview/WKWebView) <a download> 不弹保存框，
@@ -8363,7 +8366,7 @@ el.dwVidPlayer.hidden = true;
   const dwDownload = async (btn, kind) => {
     const href = btn.href || '';
     const jobId = btn.dataset.jobId || (() => {
-      const m = href.match(/\/api\/dw\/(?:image|pdf)\/([^/?#]+)(?:\/file)?/);
+      const m = href.match(/\/api\/dw\/(?:image|pdf|video)\/([^/?#]+)(?:\/file)?/);
       return m ? m[1] : null;
     })();
     const filename = btn.getAttribute('download') || (kind === 'image' ? 'dewatered.png' : 'dewatered.pdf');
