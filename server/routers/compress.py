@@ -350,10 +350,8 @@ def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: boo
         src_path = app.Path(src)
         if kind == "video":
             ext = ".mp4"                       # H.264 / HEVC 均封装为 MP4
-        elif output_format == "webp":
-            ext = ".webp"
-        elif output_format == "avif":
-            ext = ".avif"
+        elif output_format in _OUT_EXT:
+            ext = _OUT_EXT[output_format]      # webp / jpg / png / avif
         else:
             ext = src_path.suffix.lower() or ".png"
         out_path = app.CONVERT_DIR / f"compress_{job_id}{ext}"

@@ -42,6 +42,8 @@ from routers.compress import (  # noqa: E402
     _validate_codec,
     _validate_output_format,
     _TRANSCODE_SEM,
+    IMAGE_OUT_FORMATS,
+    _OUT_EXT,
     pillow_avif,
     COMPRESS_JOBS,
 )
@@ -554,6 +556,39 @@ def test_status_endpoints_are_not_rate_limited():
               bool(body) and "_check_rate_limit" in body)
 
 
+def test_format_parity_and_ext_table():
+    """防回归：输出格式清单在「后端白名单 / 落盘扩展名表 / 前端两个下拉」必须一致。
+
+    背景（2026-09-24 实机故障）：后端 IMAGE_OUT_FORMATS 已加入 jpg，但
+    `_run_compress` 里仍写着 `elif output_format == "webp" / "avif"` 的老分支 ——
+    选 JPG 时扩展名回落到源后缀 .png，落盘产物成了「名字叫 png 的 JPEG 文件」，
+    而离线用例全绿（它们直接调 `_compress_image`，绕过了扩展名决策那一段）。
+    所以这里把「必须查表」+「四处一致」都钉成棘轮。
+    """
+    import re as _re
+    repo = os.path.dirname(_SERVER_DIR)
+    src = open(os.path.join(_SERVER_DIR, "routers", "compress.py"), encoding="utf-8").read()
+
+    m = _re.search(r"\ndef _run_compress\(.*?(?=\ndef |\Z)", src, _re.S)
+    body = m.group(0) if m else ""
+    check("_run_compress 落盘扩展名走 _OUT_EXT 查表（不许退回 if/elif 硬编码）",
+          "_OUT_EXT[output_format]" in body, body[:160])
+    check("扩展名表 key 与白名单对齐（keep 除外）",
+          set(_OUT_EXT) == IMAGE_OUT_FORMATS - {"keep"}, str(sorted(_OUT_EXT)))
+
+    appjs = open(os.path.join(repo, "web", "app.js"), encoding="utf-8").read()
+    m2 = _re.search(r"CP_FMT_LIST\s*=\s*\[([^\]]*)\]", appjs)
+    fe_list = _re.findall(r"'([a-z0-9]+)'", m2.group(1)) if m2 else []
+    check("前端 CP_FMT_LIST 覆盖后端全部格式", set(fe_list) == IMAGE_OUT_FORMATS, str(fe_list))
+    check("前端 CP_FMT_LIST 首项为 keep（默认「原格式」）",
+          bool(fe_list) and fe_list[0] == "keep", str(fe_list))
+
+    html = open(os.path.join(repo, "web", "index.html"), encoding="utf-8").read()
+    m3 = _re.search(r'<select id="cpBulkFormat".*?</select>', html, _re.S)
+    bulk = _re.findall(r'<option value="([a-z0-9]+)"', m3.group(0)) if m3 else []
+    check("批量下拉 #cpBulkFormat 覆盖后端全部格式", set(bulk) == IMAGE_OUT_FORMATS, str(bulk))
+
+
 if __name__ == "__main__":
     test_png_lossless_pixel_identical()
     test_jpg_quality_downscale_size()
@@ -573,5 +608,6 @@ if __name__ == "__main__":
     test_transcode_gate_queues_when_full()
     test_queued_transcode_does_not_starve_shared_pool()
     test_status_endpoints_are_not_rate_limited()
+    test_format_parity_and_ext_table()
     print(f"\n通过: {PASS}  失败: {FAIL}")
     sys.exit(1 if FAIL else 0)
