@@ -223,6 +223,76 @@ def test_video_endpoints_not_rate_limited():
         check(f"{name} 未限流", "app._check_rate_limit(request)" not in b)
 
 
+def test_restart_discards_previous_output():
+    """「重新修复」的旧产物回收：删文件 + 移记录，且只动已结束的任务。
+
+    背景（2026-09-24，与高效压缩页同口径）：已完成的行改完参数可原地重压，前端把
+    上一轮 job_id 作为 `replaces` 传上来，后端据此回收，否则同一源文件每重修一次
+    就在 CONVERT_DIR 里多留一份产物、旧 job 记录永远留在内存。
+    """
+    print("\n[12] 重新修复：旧产物回收")
+    with tempfile.TemporaryDirectory() as td:
+        # ① 已结束的任务：产物删除 + 记录移除
+        jid = app.uuid.uuid4().hex[:12]
+        out = Path(td) / f"sr_{jid}.png"
+        out.write_bytes(b"x" * 64)
+        sr.SR_JOBS[jid] = {"status": "completed", "out_path": str(out)}
+        sr._discard_job(jid)
+        check("重新修复：已完成任务的记录被移除", jid not in sr.SR_JOBS)
+        check("重新修复：已完成任务的旧产物被删除", not out.exists(), str(out))
+
+        # ② 仍在处理的任务：绝不能清（工作线程会写回没人查询的幽灵 job，用户等不到结果）
+        jid2 = app.uuid.uuid4().hex[:12]
+        out2 = Path(td) / f"sr_{jid2}.png"
+        out2.write_bytes(b"y" * 64)
+        sr.SR_JOBS[jid2] = {"status": "running", "out_path": str(out2)}
+        try:
+            sr._discard_job(jid2)
+            check("重新修复：处理中的任务不被回收", jid2 in sr.SR_JOBS and out2.exists())
+        finally:
+            sr.SR_JOBS.pop(jid2, None)
+
+        # ③ 非法 / 未知 id：静默返回，不抛错、不越权删文件
+        try:
+            sr._discard_job("")
+            sr._discard_job("../../etc/passwd")
+            sr._discard_job("deadbeefdead")
+            check("重新修复：空 / 路径型 / 未知 job_id 安全忽略", True)
+        except Exception as e:  # noqa: BLE001
+            check("重新修复：空 / 路径型 / 未知 job_id 安全忽略", False, repr(e))
+
+
+def test_restart_ui_wiring_ratchet():
+    """防回归：「重新修复」的界面接线必须齐全（与高效压缩页同口径）。
+
+    缺任何一条都会退回用户报的痛点：压错了 / 修错了只能「移除 → 重新添加 → 重新选文件」。
+    """
+    print("\n[13] 重新修复：界面接线棘轮")
+    src = (SERVER / "routers" / "sr.py").read_text(encoding="utf-8")
+    check("后端存在 _discard_job 回收函数", "def _discard_job(" in src)
+    check("图片 / 视频两个提交口都调用 _discard_job",
+          src.count("_discard_job(") >= 3, str(src.count("_discard_job(")))
+    check("两个请求模型都带 replaces 字段", src.count('replaces: str = ""') >= 2,
+          str(src.count('replaces: str = ""')))
+
+    appjs = (REPO / "web" / "app.js").read_text(encoding="utf-8")
+    m = re.search(r"const srRender = \(\) => \{.*?\n  \};", appjs, re.S)
+    body = m.group(0) if m else ""
+    check("srRender 可定位（正则失配即视作回归）", bool(body))
+    check("已完成的行也渲染「重新修复」按钮（状态集含 completed）",
+          "['pending', 'failed', 'completed'].includes(it.status)" in body, body[-300:])
+    check("已完成行参数下拉不再锁死（仅 running 禁改）",
+          "const optDis = it.status === 'running' ? 'disabled' : '';" in body)
+    check("行内档位 / 倍率 / 编码下拉齐备",
+          'data-act="mode"' in body and 'data-act="scale"' in body and 'data-act="codec"' in body)
+
+    m2 = re.search(r"const srStartOne = \(item\) => new Promise.*?\n  \}\);", appjs, re.S)
+    body2 = m2.group(0) if m2 else ""
+    check("srStartOne 可定位", bool(body2))
+    check("提交体透传 replaces（图片 + 视频两条链路）",
+          "body.replaces = item.replaces || '';" in body2)
+
+
 def main():
     print("=" * 50)
     print("高清修复（sr）离线测试")
@@ -238,6 +308,8 @@ def main():
     test_video_bitrate_lift()
     test_video_mode_validation()
     test_video_endpoints_not_rate_limited()
+    test_restart_discards_previous_output()
+    test_restart_ui_wiring_ratchet()
     print("\n" + "=" * 50)
     print(f"  通过: {PASS}   失败: {FAIL}")
     print("=" * 50)

@@ -318,6 +318,31 @@ def _sr_ai(img, key: str, job: dict) -> "Image.Image":
 # job 表与执行
 
 
+def _discard_job(job_id: str) -> None:
+    """清掉一次「重新修复」被顶替掉的旧任务：删产物文件 + 移除记录（2026-09-24）。
+
+    与 ``routers/compress.py::_discard_job`` 同契约（前端点「重新修复」时把上一轮
+    job_id 作为 ``replaces`` 传上来），两条硬约束同样适用：
+    1. 只清理**已结束**（completed / failed）的任务 —— running 的被 pop 掉会让工作
+       线程写回一个没人查询的 dict，任务变幽灵，用户永远等不到结果；
+    2. 删除对象取自**本进程自己的记录**（``job["out_path"]``），不是客户端传来的
+       路径，伪造 job_id 也无法越权删任意文件。
+    """
+    if not job_id or not app.re.fullmatch(r"[0-9a-f]{8,32}", job_id or ""):
+        return
+    with _LOCK:
+        old = SR_JOBS.get(job_id)
+        if not old or old.get("status") not in ("completed", "failed"):
+            return
+        SR_JOBS.pop(job_id, None)
+        out_path = old.get("out_path") or ""
+    if out_path:
+        try:
+            app.Path(out_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _register_job(device_id: str, src_name: str) -> str:
     job_id = app.uuid.uuid4().hex[:12]
     with _LOCK:
@@ -683,6 +708,7 @@ class LocalSrRequest(BaseModel):
     local_path: str
     mode: str = _DEFAULT_MODE     # fast / ai
     scale: int = _DEFAULT_SCALE   # 2 / 4
+    replaces: str = ""            # 「重新修复」时带上上一轮 job_id，由后端回收旧产物
 
 
 @router.post("/api/sr/local")
@@ -696,6 +722,7 @@ def sr_local(payload: LocalSrRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=409, detail="仅支持图片（PNG/JPG/WebP/BMP）")
     mode = _validate_mode(payload.mode)
     scale = _validate_scale(payload.scale)
+    _discard_job(payload.replaces)     # 重新修复：先回收上一轮产物，再登记新任务
     job_id = _submit_sr(str(resolved), mode, scale, _device_of(request),
                         src_name=resolved.name, src_is_temp=False)
     record_event("sr_submit", {"mode": mode, "scale": scale, "src": "local"})
@@ -710,6 +737,7 @@ class LocalSrVideoRequest(BaseModel):
     mode: str = _DEFAULT_VIDEO_MODE  # standard / enhance
     scale: int = 2                   # 2 / 4
     codec: str = "h264"              # h264 / hevc
+    replaces: str = ""               # 「重新修复」时带上上一轮 job_id，由后端回收旧产物
 
 
 @router.post("/api/sr/video/local")
@@ -747,6 +775,7 @@ def sr_video_local(payload: LocalSrVideoRequest, request: app.Request) -> dict:
             detail=(f"×4 放大仅支持短边 ≤360px 的视频（当前 {short_side}px）。"
                     f"请改用 ×2，或先用格式转换把视频缩小"))
 
+    _discard_job(payload.replaces)     # 重新修复：先回收上一轮产物，再登记新任务
     job_id = _submit_sr_video(str(resolved), mode, scale, codec, _device_of(request),
                               src_name=resolved.name, src_is_temp=False)
     record_event("sr_submit", {"mode": mode, "scale": scale, "src": "local", "kind": "video"})

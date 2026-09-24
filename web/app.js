@@ -4382,6 +4382,17 @@
   const srEnsurePolling = () => { if (!srState.pollTimer) srState.pollTimer = setInterval(srPollAll, SR_POLL_INTERVAL); };
   const srStopPolling = () => { if (srState.pollTimer) { clearInterval(srState.pollTimer); srState.pollTimer = null; } };
 
+  // 每行「单独设置」用的短标签（行内窄，完整解释挂 title）——与下方「默认修复设置」同义，
+  // 选项值必须与后端 MODES / VIDEO_MODES / SCALES 及 index.html 的三个批量下拉一致。
+  const SR_MODE_SHORT_IMAGE = { fast: '快速档', ai: 'AI 档' };
+  const SR_MODE_SHORT_VIDEO = { standard: '标准档', enhance: '增强档' };
+  const SR_MODE_DESC_IMAGE = { fast: '快速档 · 秒级（放大 + 锐化）', ai: 'AI 档 · 细节重建（较慢，效果更好）' };
+  const SR_MODE_DESC_VIDEO = { standard: '标准档 · 5× 实时（推荐）', enhance: '增强档 · 2.5× 实时（含降噪）' };
+  const SR_SCALE_SHORT = { 2: '×2', 4: '×4' };
+  const SR_SCALE_DESC = { 2: '×2（推荐）', 4: '×4（体积与耗时都更大）' };
+  const SR_CODEC_SHORT = { h264: 'H.264', hevc: 'HEVC' };
+  const SR_CODEC_DESC = { h264: 'H.264（兼容性最好）', hevc: 'HEVC（同画质体积约小 25%）' };
+
   const srRender = () => {
     const list = srState.list;
     el.srCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
@@ -4400,24 +4411,62 @@
           + (it.eta ? ` · 约剩 ${srMmss(it.eta)}` : '')
           + (it.stage ? ` · ${escHtml(it.stage)}` : '');
       } else if (it.status === 'completed') {
-        statusText = `完成 ✅ ${it.wBefore}×${it.hBefore} → ${it.wAfter}×${it.hAfter}`
+        // 已完成的行改了参数 → 顶一句醒目提示，否则用户不知道「改了没生效」
+        statusText = (it.dirty ? '参数已改，点「重新修复」生效 · ' : '')
+          + `完成 ✅ ${it.wBefore}×${it.hBefore} → ${it.wAfter}×${it.hAfter}`
           + (it.sizeAfter ? ` · ${cpFormatSize(it.sizeAfter)}` : '')
           + (it.note ? ` · ${escHtml(it.note)}` : '');
       } else if (it.status === 'failed') {
         statusText = '失败：' + escHtml(it.errorMsg || '');
       }
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status;
-      const disabled = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
+      // ★ 仅修复中禁用移除（2026-09-24）：已完成的行同样可移除（同压缩页口径）
+      const disabled = it.status === 'running' ? 'disabled' : '';
       const progressHtml = it.status === 'running'
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.jobId
         ? `<a class="uc-item-download" href="/api/sr/${it.jobId}/file" download="${escHtml(it.outputName || 'upscaled')}">下载</a>`
         : '';
-      const startHtml = it.status === 'pending' || it.status === 'failed'
-        ? `<button type="button" class="uc-item-start" data-act="start">${it.status === 'failed' ? '重试' : '开始修复'}</button>`
+      // ★ 已完成的行也给「重新修复」（2026-09-24，与高效压缩页对齐）：改完行内参数
+      //   点一下即可，本机文件直接复用路径，**不用重新选文件**。
+      const startTitle = it.status === 'completed'
+        ? '用该行当前参数重新修复（无需重新选择文件；新结果会替换上一次的下载文件）'
+        : (it.status === 'failed' ? '按当前参数重试该文件' : '按当前档位开始修复');
+      const startHtml = ['pending', 'failed', 'completed'].includes(it.status)
+        ? `<button type="button" class="uc-item-start" data-act="start" title="${startTitle}">`
+          + (it.status === 'pending' ? '开始修复' : (it.status === 'failed' ? '重试' : '重新修复'))
+          + `</button>`
+        : '';
+      // ★ 每行「单独设置」（2026-09-24）：与视频/音乐/图片转换、高效压缩一致，档位与
+      //   倍率可在行内逐条改，不再只能靠下方「默认修复设置」统一应用。
+      //   ★ 已完成的行同样可改（同日）：改完点「重新修复」生效，不必「移除 → 重新添加」。
+      const optDis = it.status === 'running' ? 'disabled' : '';
+      const lockHint = it.status === 'running' ? '修复中不可修改'
+        : it.status === 'completed' ? '改完点「重新修复」生效（无需重新选择文件）'
+        : '点「开始修复 / 重新修复」时生效';
+      const isVid = it.kind === 'video';
+      const modeMap = isVid ? SR_MODE_SHORT_VIDEO : SR_MODE_SHORT_IMAGE;
+      const modeDesc = isVid ? SR_MODE_DESC_VIDEO : SR_MODE_DESC_IMAGE;
+      const modeVals = isVid ? ['standard', 'enhance'] : ['fast', 'ai'];
+      const modeSel = `<select class="uc-item-opt" data-act="mode" ${optDis}`
+        + ` title="本行修复档位：${modeVals.map(v => modeDesc[v]).join(' / ')} · ${lockHint}">`
+        + modeVals.map(v =>
+            `<option value="${v}"${v === it.mode ? ' selected' : ''} title="${modeDesc[v]}">${modeMap[v]}</option>`).join('')
+        + `</select>`;
+      const scaleSel = `<select class="uc-item-opt" data-act="scale" ${optDis}`
+        + ` title="本行放大倍率：${[2, 4].map(v => SR_SCALE_DESC[v]).join(' / ')} · ${lockHint}">`
+        + [2, 4].map(v =>
+            `<option value="${v}"${String(v) === String(it.scale) ? ' selected' : ''} title="${SR_SCALE_DESC[v]}">${SR_SCALE_SHORT[v]}</option>`).join('')
+        + `</select>`;
+      const codecSel = isVid
+        ? `<select class="uc-item-opt" data-act="codec" ${optDis}`
+          + ` title="本行视频编码：${['h264', 'hevc'].map(v => SR_CODEC_DESC[v]).join(' / ')} · ${lockHint}">`
+          + ['h264', 'hevc'].map(v =>
+              `<option value="${v}"${v === it.codec ? ' selected' : ''} title="${SR_CODEC_DESC[v]}">${SR_CODEC_SHORT[v]}</option>`).join('')
+          + `</select>`
         : '';
       const safeName = escHtml(it.name || '未命名');
-      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
+      return `<li class="uc-item uc-item-sr ${statusCls}" data-id="${it.id}">
         <div class="uc-item-main">
           <div class="uc-item-name" title="${safeName}">${safeName}</div>
           <div class="uc-item-meta"><span>${modeText} · ×${it.scale}</span></div>
@@ -4425,6 +4474,9 @@
           <div class="uc-item-status">${statusText}</div>
         </div>
         <div class="uc-item-side">
+          ${modeSel}
+          ${scaleSel}
+          ${codecSel}
           ${startHtml}
           ${downloadHtml}
           <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
@@ -4446,6 +4498,7 @@
         name, kind, mode, scale, codec, status: 'pending', jobId: null, progress: 0, stage: '',
         elapsed: 0, eta: 0, errorMsg: '', outputName: '', note: '',
         wBefore: 0, hBefore: 0, wAfter: 0, hAfter: 0, sizeAfter: 0,
+        dirty: false, replaces: '',      // 参数被改动 / 需要顶掉的上一轮 job（重新修复用）
       });
     });
     srRender();
@@ -4496,6 +4549,7 @@
     const body = item.kind === 'video'
       ? { local_path: item.localPath, mode: item.mode, scale: item.scale, codec: item.codec || 'h264' }
       : { local_path: item.localPath, mode: item.mode, scale: item.scale };
+    body.replaces = item.replaces || '';   // 重新修复：托后端回收上一轮产物
     request(endpoint, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -4503,7 +4557,11 @@
     }).then(data => {
       // 视频提交时后端已回传预估耗时，立刻显示，别让用户对着 0% 干等
       if (data.eta) { item.eta = data.eta; item.stage = '已提交'; srRender(); }
-      if (data.job_id) { item.jobId = data.job_id; item.status = 'running'; srRender(); resolve(data); }
+      if (data.job_id) {
+        item.jobId = data.job_id; item.status = 'running';
+        item.replaces = '';              // 旧任务已交后端清理，别在后续重试里重复提交
+        srRender(); resolve(data);
+      }
       else { item.status = 'failed'; item.errorMsg = data.detail || '修复请求失败'; srRender(); reject(new Error(item.errorMsg)); }
     }).catch(err => {
       item.status = 'failed'; item.errorMsg = (err && err.message) || '修复请求失败'; srRender(); reject(err);
@@ -4922,14 +4980,40 @@
   el.srFileInput.addEventListener('change', () => {
     if (el.srFileInput.files && el.srFileInput.files.length) { srAddFiles(el.srFileInput.files); el.srFileInput.value = ''; }
   });
+  // 行内「单独设置」：修复档位 / 放大倍率 / 视频编码（逐条改，立即写回该行）
+  el.srList.addEventListener('change', (e) => {
+    const t = e.target;
+    const act = t && t.dataset && t.dataset.act;
+    if (act !== 'mode' && act !== 'scale' && act !== 'codec') return;
+    const li = t.closest('.uc-item'); if (!li) return;
+    const it = srState.list.find(x => x.id === +li.dataset.id); if (!it) return;
+    if (act === 'mode') it.mode = t.value;
+    else if (act === 'scale') it.scale = +t.value;
+    else it.codec = t.value;
+    // 已完成的行被改了参数 → 标脏，状态栏出现「参数已改，点『重新修复』生效」（2026-09-24）
+    it.dirty = it.status === 'completed';
+    srRender();
+    el.srStatus.textContent = it.dirty
+      ? '已更新该行参数：点该行「重新修复」即可生效（无需重新选择文件）'
+      : '已更新该行参数（点「开始修复」或该行按钮时生效）';
+  });
   el.srList.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const act0 = btn.dataset.act;
+    if (act0 !== 'remove' && act0 !== 'start') return;   // 行内下拉不算「操作按钮」
     const li = btn.closest('.uc-item'); const id = +li.dataset.id;
     const it = srState.list.find(x => x.id === id); if (!it) return;
     if (btn.dataset.act === 'remove') {
       srState.list = srState.list.filter(x => x.id !== id); srRender();
     } else if (btn.dataset.act === 'start') {
-      if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
+      if (it.status === 'completed' || it.status === 'failed') {
+        // 重新修复（2026-09-24）：把上一次的 job 交给后端一并清理（删旧产物 + 移除记录），
+        // 免得同一源文件的历次结果在磁盘上越堆越多；随后原地回到「未开始」再重投。
+        if (it.status === 'completed' && it.jobId) it.replaces = it.jobId;
+        it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null;
+        it.stage = ''; it.elapsed = 0; it.eta = 0;
+        it.wAfter = 0; it.hAfter = 0; it.sizeAfter = 0; it.note = ''; it.dirty = false;
+      }
       srEnsurePolling(); srStartOne(it).catch(() => {});
     }
   });
@@ -4952,7 +5036,7 @@
     el.srStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项';
   });
   el.srStartAllBtn.addEventListener('click', () => {
-    srState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
+    srState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.dirty = false; } });
     const wait = srState.list.filter(x => x.status === 'pending');
     if (!wait.length) {
       el.srStatus.textContent = srState.kind === 'video'

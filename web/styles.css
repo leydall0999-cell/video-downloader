@@ -6404,3 +6404,9 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .uc-item-cp .uc-item-side { flex-wrap: wrap; justify-content: flex-end; }
 .uc-item-cp .uc-item-side .uc-item-opt { max-width: 112px; }
 .uc-item-cp .uc-item-side .uc-item-opt:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── 高清修复：行内「单独设置」下拉 + 已完成行可重新修复（2026-09-24，与高效压缩页同口径）──
+   每行可单独改 档位 / 放大倍率 / 视频编码，且改完点「重新修复」即可，不用重新选文件。 */
+.uc-item-sr .uc-item-side { flex-wrap: wrap; justify-content: flex-end; }
+.uc-item-sr .uc-item-side .uc-item-opt { max-width: 112px; }
+.uc-item-sr .uc-item-side .uc-item-opt:disabled { opacity: .5; cursor: not-allowed; }
