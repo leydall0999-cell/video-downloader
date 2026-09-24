@@ -866,6 +866,60 @@ def test_result_modal_sibling_of_panes_ratchet():
     print("OK result modal sibling-of-panes ratchet: 灯箱已与 pane 平级，视频页可见")
 
 
+def test_hidden_video_must_pause_ratchet():
+    """防回归（2026-09-24）：<video> 被隐藏前必须先 pause —— 尤其「结果播放器」。
+
+    WKWebView（macOS 桌面端）里 hidden / display:none 的 <video> **不会自动暂停**：
+    画面没了，解码与声音照旧。用户报到的是最直观的一例 —— 结果预览正在播，
+    点「重新选取素材 / 重新处理」，界面回到工作区，声音却在后面继续响。
+
+    钉四件事：
+    1. 统一的停止入口 dwStopVideo / dwStopResultVideos / dwStopAllVideos 必须在；
+    2. 「换素材」必须 release（摘 src + load()），否则旧结果的句柄/声音都还在；
+    3. 「重新处理(dwVidRedo)」与「提交新一轮(startDwVideo)」藏结果区之前必须先停；
+    4. 离开 dw 视图(switchView) 也要停，且保留 MutationObserver 兜底。
+    """
+    repo = os.path.dirname(_SERVER_DIR)
+    src = open(os.path.join(repo, "web", "app.js"), encoding="utf-8").read()
+
+    for name in ("const dwStopVideo =", "const dwStopResultVideos =", "const dwStopAllVideos ="):
+        assert name in src, f"缺少统一停止入口 {name}（藏 <video> 必须走它，不能直接 hidden）"
+    assert "v.removeAttribute('src'); v.load();" in src, \
+        "release 必须 removeAttribute('src') 后再 load()，否则 WKWebView 未必真的断流"
+
+    # 2) 换素材：release 旧结果
+    i_change = src.index("el.dwVidFile.addEventListener('change'")
+    i_tail = src.index("const url = URL.createObjectURL(f)", i_change)
+    chunk = src[i_change:i_tail]
+    assert "dwStopResultVideos({ release: true })" in chunk, "换素材必须释放旧结果视频（pause + 摘 src）"
+    assert "dwStopVideo(el.dwVidPlayer, { release: true })" in chunk, "换素材也要释放工作区预览播放器"
+
+    # 3) 藏结果区的三处分支：先停再藏（顺序不能反，先藏再停没有意义）
+    i_redo = src.index("el.dwVidRedo.addEventListener('click'")
+    i_redo_end = src.index("el.dwVidWork.scrollIntoView", i_redo)
+    redo = src[i_redo:i_redo_end]
+    assert redo.index("dwStopResultVideos()") < redo.index("el.dwVidResult.hidden = true"), \
+        "「重新处理」必须先停再藏结果区"
+    i_start = src.index("const startDwVideo = async ()")
+    i_start_end = src.index("const startSec =", i_start)
+    start = src[i_start:i_start_end]
+    assert "dwStopResultVideos()" in start, "提交新一轮去水印前必须停掉上一轮结果的播放"
+
+    # 灯箱「放大查看」：大屏播放前先停背景小窗，避免双份音轨
+    i_viewer = src.index("const dwOpenResultViewer = (media)")
+    i_viewer_end = src.index("const src = el.dwImgOut", i_viewer)
+    assert "dwStopResultVideos()" in src[i_viewer:i_viewer_end], \
+        "结果「放大查看」应先停掉结果区的小窗播放器"
+
+    # 4) 离开 dw 视图 + MutationObserver 兜底
+    i_switch = src.index("function switchView(view)")
+    i_dwview = src.index("el.dwView.hidden = !isDw", i_switch)
+    i_stop = src.index("if (!isDw) dwStopAllVideos();", i_switch)
+    assert i_switch < i_dwview < i_stop, "切出去水印视图时必须（在 dwView 被隐藏之后）停掉所有播放器"
+    assert "new MutationObserver(" in src, "必须有 MutationObserver 兜底：容器被 hidden 即自动 pause"
+    print("OK hidden-video-must-pause ratchet: 结果播放器隐藏前全部先 pause（换素材还带 release）")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -932,5 +986,6 @@ if __name__ == "__main__":
 
     # 结果灯箱位置棘轮（2026-09-24 新增：埋在 dwImgPane 内导致视频页灯箱不可见）
     test_result_modal_sibling_of_panes_ratchet()
+    test_hidden_video_must_pause_ratchet()
 
     print("\n🎉 去水印核心测试全部通过（50 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")

@@ -5341,12 +5341,37 @@
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
 
+  // ★ 视频去水印「统一停止播放」入口（2026-09-24）
+  // 根因：WKWebView（macOS 桌面端 WebView）里 <video hidden> / 祖先 hidden **不会自动暂停**，
+  // 画面消失了但解码仍在跑、声音照出 —— 用户报「完成预览点了重新选取素材，视频还在播放」。
+  // 所以凡是「把 video 藏起来」的地方都必须先过这个函数，不能只写 hidden = true。
+  //   release = true → 连 src 一起摘掉并 load()，彻底放掉解码器 / blob URL / 网络连接
+  //   rewind   = true → currentTime 归零，下次再显示时从片头开始（避免停在中间一帧）
+  const dwStopVideo = (v, { release = false, rewind = false } = {}) => {
+    if (!v) return;
+    try { v.pause(); } catch (_e) { /* 未初始化就忽略 */ }
+    if (rewind) { try { v.currentTime = 0; } catch (_e) { /* 忽略 */ } }
+    if (release) {
+      try { v.removeAttribute('src'); v.load(); } catch (_e) { /* 忽略 */ }
+    }
+  };
+  // 视频去水印涉及的全部播放器：工作区预览 / 结果区「原视频」「处理后」/ 灯箱大屏
+  const dwStopAllVideos = (opts = {}) => {
+    [el.dwVidPlayer, el.dwVidOrig, el.dwVidOut, el.dwModalVid].forEach((v) => dwStopVideo(v, opts));
+  };
+  // 停掉「结果区」那两个对比播放器（原视频 / 处理后）——保持 src，用户还能回来看
+  const dwStopResultVideos = (opts = {}) => {
+    [el.dwVidOrig, el.dwVidOut].forEach((v) => dwStopVideo(v, opts));
+  };
+
   // 图片 / PDF / 视频 / 一键抠图 子模式切换
   // 2026-09-08 视图内 dw-tabs 按钮行已删（子模式由侧栏入口直达），dwMode* 元素不存在，做防御式处理
   const dwSwitchPane = (mode) => {
     el.dwImgPane.hidden = mode !== 'img';
     el.dwPdfPane.hidden = mode !== 'pdf';
     el.dwVideoPane.hidden = mode !== 'video';
+    // 离开视频子面板（切到图片/PDF/一键抠图）时同样要停：hidden 不等于 pause
+    if (mode !== 'video') dwStopAllVideos();
     el.dwMattingPane.hidden = mode !== 'matting';
     for (const [elRef, m] of [[el.dwModeImg, 'img'], [el.dwModePdf, 'pdf'], [el.dwModeVideo, 'video'], [el.dwModeMatting, 'matting']]) {
       if (elRef) elRef.classList.toggle('is-active', mode === m);
@@ -5356,6 +5381,17 @@
     el.dwVidStatus.textContent = '';
     if (el.matStatus) el.matStatus.textContent = '';
   };
+
+  // 兜底保险：任何一个装着 <video> 的容器被 hidden，就把里面的播放器停掉。
+  // 上面已经逐个调用点修了，但每加一条「把视频藏起来」的分支都要记得 pause 太脆，
+  // 这里用 MutationObserver 兜住未来所有新路径 —— hidden 变化 ⇒ 自动 pause。
+  [el.dwView, el.dwVideoPane, el.dwVidResult, el.dwImgModal].forEach((node) => {
+    if (!node || typeof MutationObserver === 'undefined') return;
+    new MutationObserver(() => {
+      if (!node.hidden) return;
+      node.querySelectorAll('video').forEach((v) => { try { v.pause(); } catch (_e) { /* 忽略 */ } });
+    }).observe(node, { attributes: true, attributeFilter: ['hidden'] });
+  });
   // 2026-09-08 dwMode* 按钮已从视图删除（子模式经侧栏入口直达），原 4 行 click 绑定一并移除
 
   // ---- 一键抠图（图片去背景，输出透明 PNG）----
@@ -7058,6 +7094,8 @@
       if (!src) { el.dwVidStatus && (el.dwVidStatus.textContent = '尚无处理结果'); return; }
       dwSetModalMode('result', 'video');
       if (el.dwModalImg) { el.dwModalImg.hidden = true; el.dwModalImg.removeAttribute('src'); }
+      // 大屏播放前先停掉结果区里那两个小窗（否则灯箱声音 + 背后细节窗声音叠在一起）
+      dwStopResultVideos();
       if (el.dwModalVid) { el.dwModalVid.hidden = false; el.dwModalVid.src = src; el.dwModalVid.currentTime = 0; }
       dwShowModal();
       return;
@@ -7073,11 +7111,9 @@
     el.dwImgModal.hidden = true;
     document.body.style.overflow = '';
     // 关闭即停止视频播放并释放句柄，避免后台继续出声/占资源
-    if (el.dwModalVid && !el.dwModalVid.hidden) {
-      try { el.dwModalVid.pause(); } catch (e) { /* 忽略 */ }
-      el.dwModalVid.removeAttribute('src');
-      el.dwModalVid.hidden = true;
-    }
+    // （release：摘 src + load()，否则 WKWebView 里 removeAttribute('src') 未必立刻断流）
+    dwStopVideo(el.dwModalVid, { release: true, rewind: true });
+    if (el.dwModalVid) el.dwModalVid.hidden = true;
     if (el.dwModalImg) el.dwModalImg.hidden = false;
     dwSetModalMode('edit', 'image');
     dwResizeAll();
@@ -7493,6 +7529,10 @@
 // 显示工作态 cap「原视频预览 · 在画面上拖框选水印」（默认 hidden，mousedown 拖框即隐藏）。
 if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
 if (el.dwVidCapOverlay) el.dwVidCapOverlay.hidden = false;
+    // ★ 换素材时上一次的结果必须彻底作废：只 hidden 不 pause 会「画面没了声音还在」
+    // （release 会摘 src + load()，把解码器与 blob/媒体句柄一起放掉）
+    dwStopResultVideos({ release: true });
+    dwStopVideo(el.dwVidPlayer, { release: true });
     const url = URL.createObjectURL(f);
     // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
@@ -7514,7 +7554,7 @@ const wrap = el.dwVidThumb && el.dwVidThumb.parentElement;
 if (wrap) wrap.classList.remove('is-playable');
 wrap.style.aspectRatio = '';
 el.dwVidPlayer.hidden = true;
-el.dwVidPlayer.removeAttribute('src');
+// src 已在上面 dwStopVideo(release) 摘掉；这里再保险一次防止半路重建过 src
     // 视频预览默认开启（WKWebView 不转码播不了，所以"开箱即播"是默认体验）；
     // 用户取消勾选后才走"无转码"主链路：仅首帧 img 框选，无播放器。
     const wantPreview = !!(el.dwVidPreviewToggle && el.dwVidPreviewToggle.checked);
@@ -8082,6 +8122,8 @@ el.dwVidPlayer.removeAttribute('src');
     }
     el.dwVidBtn.disabled = true;
     el.dwVidStatus.textContent = '视频去水印处理中（逐帧推理，请稍候）…';
+    // ★ 提交新一轮前先停掉上一轮结果的播放（避免重复音轨叠加）
+    dwStopResultVideos();
     el.dwVidResult.hidden = true;
     const startSec = parseFloat(el.dwVidStart.value) || 0;
     const endSec = parseFloat(el.dwVidEnd.value) || 0;
@@ -8275,6 +8317,8 @@ el.dwVidPlayer.removeAttribute('src');
   // 重新处理：显示工作区（原视频预览/框选/参数），隐藏结果区，回到可重新提交的初始态。
   if (el.dwVidRedo) el.dwVidRedo.addEventListener('click', () => {
     if (el.dwVidWork) el.dwVidWork.hidden = false;
+    // ★ 先停再藏：否则结果区虽隐藏，「原视频/处理后」两段仍在后台继续出声
+    dwStopResultVideos();
     el.dwVidResult.hidden = true;
     el.dwVidRunCtrls.hidden = true;
     el.dwVidStatus.textContent = '';
@@ -8294,6 +8338,8 @@ el.dwVidPlayer.removeAttribute('src');
     } else {
       // 关闭预览：取消轮询，隐藏 player / spinner，回到「仅首帧」静态态
       if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
+      // 停 + 释放：只 hidden 的话 WKWebView 还在后台播
+      dwStopVideo(el.dwVidPlayer, { release: true });
       if (el.dwVidPlayer) { el.dwVidPlayer.hidden = true; el.dwVidPlayer.removeAttribute('src'); }
       if (el.dwVidTranscoding) el.dwVidTranscoding.hidden = true;
       if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
@@ -14968,6 +15014,9 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.shareView) el.shareView.hidden = !isShare;
     el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
+    // ★ 离开去水印视图时停掉所有播放器：只 hidden 不会 pause，切到别的页面声音还会继续。
+    // 保留 src（不 release），用户在 dw 之间来回切时結果还能接着播。
+    if (!isDw) dwStopAllVideos();
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.profileView) el.profileView.hidden = !isProfileGroup;
