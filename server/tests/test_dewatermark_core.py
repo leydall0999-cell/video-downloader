@@ -920,6 +920,63 @@ def test_hidden_video_must_pause_ratchet():
     print("OK hidden-video-must-pause ratchet: 结果播放器隐藏前全部先 pause（换素材还带 release）")
 
 
+
+def _shutil_which(name):
+    import shutil
+    return shutil.which(name)
+
+
+def test_dw_video_encode_quality_adaptive():
+    """防回归（2026-09-24）：视频去水印成片编码必须自适应源码率，禁止回到固定 6000k。
+
+    用户报「质量差好多哦」：旧实现 h264_videotoolbox 固定 -b:v 6000k + profile main
+    + level 4.0 —— 对高码率 1080p 源（社交平台常见 8~12M）是肉眼可见的劣化；
+    main+4.0 还是老 Apple TV 时代的约束（4K/高规格被迫降质）。
+    钉：码率梯度、profile high / level 5.2、maxrate/bufsize 存在、软编回退走 high 档。
+    """
+    sys.path.insert(0, _SERVER_DIR)
+    try:
+        import dewatermark_ai as dai
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ 跳过（dewatermark_ai 导入失败：{e}）")
+        return
+    # 1) 码率梯度：未知→8M 兜底；8M 源→9.2M；12M 源→13.8M；50M 源→40M 封顶
+    assert dai._dw_output_bitrate(0) == 8_000_000
+    assert dai._dw_output_bitrate(8_000_000) == 9_200_000
+    assert dai._dw_output_bitrate(12_000_000) == 13_800_000
+    assert dai._dw_output_bitrate(50_000_000) == 40_000_000
+    assert dai._dw_output_bitrate(1_000_000) == 6_000_000, "低码率源也要有 6M 下限"
+
+    ff = os.environ.get("VDL_TEST_FFMPEG") or _shutil_which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    if not os.path.exists(ff) and ff != "ffmpeg":
+        print("⚠️ 跳过（本机无 ffmpeg，硬编命令构造不可测）")
+        return
+    # 2) 硬编命令：high profile + level 5.2 + 自适应 -b:v + maxrate/bufsize
+    cmd = dai._video_encode_cmd(ff, "/tmp/x.mp4", 15, "/tmp/f", False, None, src_video="/tmp/src.mp4")
+    s = " ".join(cmd)
+    for token in ("-profile:v", "high", "-level", "5.2", "-b:v", "-maxrate", "-bufsize"):
+        assert token in s, f"硬编命令缺 {token}（自适应码率/高质量档不得回退）"
+    assert "-b:v 6000k" not in s, "不得回到旧固定 6000k 码率"
+    i_br = cmd.index("-b:v")
+    br = int(cmd[i_br + 1])
+    assert br >= 6_000_000 and br <= 40_000_000, f"-b:v {br} 不在 [6M, 40M]"
+
+    # 3) 软编回退（本机无 VideoToolbox）：必须走 h264_args("high")，不得硬编/低质
+    orig_vt, orig_h264 = dai._videotoolbox_available, dai.h264_args
+    try:
+        dai._videotoolbox_available = lambda _ff: False
+        dai.h264_args = lambda _ff, _q: ["-c:v", "libopenh264", "-b:v", "8000k"]  # high 档替身
+        cmd2 = dai._video_encode_cmd(ff, "/tmp/x.mp4", 15, "/tmp/f", False, None, src_video=None)
+    finally:
+        dai._videotoolbox_available, dai.h264_args = orig_vt, orig_h264
+    s2 = " ".join(cmd2)
+    assert "h264_videotoolbox" not in s2, "无 VT 时不得仍走硬编"
+    assert "libopenh264" in s2 and "8000k" in s2, "软编回退必须是 high 档（8000k）"
+
+    # 4) 调用点必须把源视频传进去（否则自适应拿不到源码率）
+    src_code = open(os.path.join(_SERVER_DIR, "dewatermark_ai.py"), encoding="utf-8").read()
+    assert "src_video=src" in src_code, "ai_video_inpaint 重编码调用必须传 src_video=src"
+    print("OK dw video encode adaptive: 码率自适应 + high/5.2 + 软编回退 + 调用点钉住")
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -987,5 +1044,6 @@ if __name__ == "__main__":
     # 结果灯箱位置棘轮（2026-09-24 新增：埋在 dwImgPane 内导致视频页灯箱不可见）
     test_result_modal_sibling_of_panes_ratchet()
     test_hidden_video_must_pause_ratchet()
+    test_dw_video_encode_quality_adaptive()
 
     print("\n🎉 去水印核心测试全部通过（50 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")

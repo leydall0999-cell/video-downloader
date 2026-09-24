@@ -834,6 +834,7 @@
     dwModalVid: $('dwModalVid'),
     dwModalViewHint: $('dwModalViewHint'),
     dwModalViewClose: $('dwModalViewClose'),
+    dwModalFloatClose: $('dwModalFloatClose'),
     dwImgOutZoom: $('dwImgOutZoom'),
     dwVidOutZoom: $('dwVidOutZoom'),
     dwImgRadius: $('dwImgRadius'),
@@ -7124,6 +7125,8 @@
   el.dwModalClose.addEventListener('click', dwCloseModal);
   el.dwModalDone.addEventListener('click', dwCloseModal);
   if (el.dwModalViewClose) el.dwModalViewClose.addEventListener('click', dwCloseModal);
+  // 悬浮退出按钮（窗口右上角常显，不依赖 header/footer 布局）
+  if (el.dwModalFloatClose) el.dwModalFloatClose.addEventListener('click', dwCloseModal);
   // 结果图点击 / 结果区「放大查看」按钮
   if (el.dwImgOut) el.dwImgOut.addEventListener('click', () => dwOpenResultViewer('image'));
   if (el.dwImgOutZoom) el.dwImgOutZoom.addEventListener('click', () => dwOpenResultViewer('image'));

@@ -788,18 +788,52 @@ def _videotoolbox_available(ffmpeg_bin: str) -> bool:
     return _VT_CACHE[key]
 
 
-def _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path):
+def _probe_video_bitrate(ffmpeg_bin: str, src: str) -> int:
+    """探测源视频总码率（bits/s）；ffprobe 优先，拿不到返回 0（由调用方兜底）。"""
+    probe = _shutil.which("ffprobe") or (os.path.join(os.path.dirname(ffmpeg_bin), "ffprobe") if ffmpeg_bin else "")
+    if probe and os.path.exists(probe):
+        try:
+            out = subprocess.run(
+                [probe, "-v", "error", "-show_entries", "format=bit_rate",
+                 "-of", "default=nk=1:nw=1", src],
+                capture_output=True, text=True,
+            )
+            val = (out.stdout or "").strip().splitlines()
+            if val and val[0].strip().isdigit():
+                return int(val[0].strip())
+        except Exception:
+            pass
+    return 0
+
+
+def _dw_output_bitrate(src_bitrate: int) -> int:
+    """成片目标码率：跟着源走（去水印不该降画质）。
+
+    - 源码率未知 → 8 Mbps 兜底（旧固定 6M 对高码率源是肉眼可见的劣化）；
+    - 已知 → max(6M, min(源×1.15, 40M))：略高于源保安全余量，上限 40M 防 4K 高码率源把成片炸到巨大。
+    """
+    if src_bitrate <= 0:
+        return 8_000_000
+    return max(6_000_000, min(int(round(src_bitrate * 1.15)), 40_000_000))
+
+
+def _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path, src_video=None):
     """构造「逐帧 PNG → H.264 mp4」命令：VideoToolbox 硬编（macOS）优先，无则 libopenh264 软编。
 
-    硬编用 6000k 码率上限保画质（成片交付），软编走 high 档（LGPL 构建无 libx264）。
+    硬编码率**自适应源视频**（2026-09-24）：旧固定 6000k 对高码率源（社交平台
+    1080p 高动画面板常见 8~12M）是肉眼可见的劣化——用户报「质量差好多」；
+    现在按源码率 ×1.15（6M 下限 / 40M 上限），profile main→high、level 4.0→5.2
+    （main+4.0 是老 Apple TV 约束，4K/高规格源会被迫降质）。软编走 high 档。
     """
     cmd = [ffmpeg_bin, "-y", "-framerate", f"{fps:g}",
            "-i", os.path.join(src_frames, "%05d.png")]
     if has_audio:
         cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "192k"]
     if _videotoolbox_available(ffmpeg_bin):
-        cmd += ["-c:v", "h264_videotoolbox", "-profile:v", "main", "-level", "4.0",
-                "-b:v", "6000k"]
+        br = _dw_output_bitrate(_probe_video_bitrate(ffmpeg_bin, src_video) if src_video else 0)
+        cmd += ["-c:v", "h264_videotoolbox", "-profile:v", "high", "-level", "5.2",
+                "-b:v", str(br),
+                "-maxrate", str(int(br * 1.25)), "-bufsize", str(br * 2)]
     else:
         cmd += h264_args(ffmpeg_bin, "high")
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
@@ -1269,7 +1303,8 @@ def ai_video_inpaint(src_path, dst_path, regions, ffmpeg_bin, progress_cb=None,
             has_audio = False
 
         # 6) 重编码混音（VideoToolbox 硬编优先提速，无则 libopenh264 软编）
-        cmd = _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path)
+        #    传 src_video：目标码率自适应源视频码率（2026-09-24，修「成片质量差好多」）
+        cmd = _video_encode_cmd(ffmpeg_bin, dst_path, fps, src_frames, has_audio, audio_path, src_video=src)
         _run_ffmpeg(cmd)
 
         if not os.path.exists(str(dst_path)) or os.path.getsize(str(dst_path)) == 0:

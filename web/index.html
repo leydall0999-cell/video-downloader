@@ -1471,6 +1471,10 @@
       <button type="button" class="btn btn-primary" id="dwModalViewClose" hidden data-page-node-id="dwModalViewClose1">关闭</button>
       </div>
       </div>
+      <!-- 悬浮退出按钮：相对 #dwImgModal（fixed inset:0）定位，永远悬在窗口右上角。
+           不依赖 header/footer 的 flex 布局 —— WKWebView 里视频模式一旦把 content 撑高，
+           header/footer 会被裁出视口（用户报「退出预览窗口呢」），这个按钮任何情况都可见可点。 -->
+      <button type="button" class="dw-modal-float-close" id="dwModalFloatClose" aria-label="退出预览" data-page-node-id="dwModalFloatClose1">✕</button>
       </div>
     <!-- 一键抠图模式（AI 去背景，输出透明 PNG） -->
     <div id="dwMattingPane" hidden data-page-node-id="mKblgPmZode0rnErb7f9O6">

@@ -6392,12 +6392,27 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .dw-modal.is-view-result .dw-toolgroup[aria-label="选区模式"],
 .dw-modal.is-view-result .dw-toolgroup[aria-label="选区操作"],
 .dw-modal.is-view-result .dw-tooldiv { display: none; }
-/* 视频不做缩放：藏掉缩放组，播放器铺满弹窗体 */
+/* 视频不做缩放：藏掉缩放组，播放器铺满弹窗体。
+   根治「header/footer 被裁出视口」：给 content 显式定高（94vh）——
+   旧实现高度链全靠「视频自然高度」，WKWebView 里视频一撑高，content 超过
+   max-height:94vh 被剪，header/footer 全没影（用户报「退出预览窗口呢」）。
+   content 定高后 body 由 flex:1 分配出稳定高度，wrap 100%×100% 即可靠。 */
 .dw-modal.is-view-video .dw-zoomgroup { display: none; }
+.dw-modal.is-view-video .dw-modal-content { height: 94vh; }
 .dw-modal.is-view-video .dw-modal-body { align-items: center; justify-content: center; overflow: hidden; }
-.dw-modal.is-view-video .dw-preview-wrap { width: 100%; height: 100%; max-width: 100%; align-self: center; transform: none !important; }
+.dw-modal.is-view-video .dw-preview-wrap { width: 100%; height: 100%; max-width: 100%; align-self: stretch; transform: none !important; }
 .dw-modal-preview video#dwModalVid { width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; background: #000; border-radius: 6px; display: block; }
 .dw-modal-preview video#dwModalVid[hidden] { display: none !important; }
+
+/* 结果预览的悬浮退出按钮（2026-09-24）：相对 #dwImgModal（fixed inset:0）定位，
+   永远悬在窗口右上角 —— 不依赖 header/footer 布局，任何 WebView 都可见可点。
+   仅 result（查看结果）模式显示；edit（框选编辑）模式沿用 header 上的 ✕。 */
+.dw-modal-float-close { display: none; position: absolute; top: 18px; right: 18px; z-index: 5;
+  width: 46px; height: 46px; border: 0; border-radius: 50%; cursor: pointer;
+  background: rgba(17, 24, 39, .72); color: #fff; font-size: 20px; line-height: 1;
+  align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
+.dw-modal-float-close:hover { background: rgba(17, 24, 39, .9); }
+.dw-modal.is-view-result .dw-modal-float-close { display: flex; }
 
 /* ── 高效压缩：行内「单独设置」下拉（2026-09-24，与视频/音乐/图片转换对齐）──
    每个文件行可单独改 压缩强度 / 视频编码 / 图片输出格式，不再只能靠下方统一应用。 */
