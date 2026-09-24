@@ -830,6 +830,12 @@
     dwModalZoomLabel: $('dwModalZoomLabel'),
     dwModalSelInfo: $('dwModalSelInfo'),
     dwModalPreviewWrap: $('dwModalPreviewWrap'),
+    dwModalTitle: $('dwModalTitle'),
+    dwModalVid: $('dwModalVid'),
+    dwModalViewHint: $('dwModalViewHint'),
+    dwModalViewClose: $('dwModalViewClose'),
+    dwImgOutZoom: $('dwImgOutZoom'),
+    dwVidOutZoom: $('dwVidOutZoom'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
     dwImgStatus: $('dwImgStatus'),
@@ -6736,7 +6742,10 @@
       // （旧逻辑：z>1 且起点落在已有加选区内也 pan——这会让「加选」模式下在已有选区上拖动时
       //   误把图片平移走，而非按用户本意加画新框。现已收紧到只能显式移动模式。）
       let startPan = false;
-      if (target === 'modal' && dwDrawMode === 'pan' && dwModalZoom > 1.0001) {
+      // 结果查看模式（只读）：按住即平移（无需先切「移动」），且绝不产生新选区
+      if (target === 'modal' && dwModalMode === 'result') {
+        if (dwModalZoom > 1.0001) startPan = true;
+      } else if (target === 'modal' && dwDrawMode === 'pan' && dwModalZoom > 1.0001) {
         startPan = true;
       }
       if (startPan) {
@@ -6747,6 +6756,7 @@
         e.preventDefault();
         return;
       }
+      if (target === 'modal' && dwModalMode === 'result') { e.preventDefault(); return; }
       dwDragging = true;
       dwDragTarget = target;
       const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
@@ -6841,22 +6851,75 @@
   if (el.dwModalZoomFit) el.dwModalZoomFit.addEventListener('click', () => { dwModalZoom = 1; dwApplyZoom('modal'); });
 
   // 打开 / 关闭弹窗
-  const dwOpenModal = () => {
-    // 放宽前置校验：文件选择器选图、或拖拽/粘贴/回填导致预览图已加载，都能开灯箱
-    const hasImg = el.dwImgFile.files[0] || (el.dwImgPreview.src && el.dwImgPreview.naturalWidth > 0);
-    if (!hasImg) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
+  // 灯箱两种用途：'edit'（框选水印区域，默认）/ 'result'（只读查看处理结果，可缩放平移）
+  let dwModalMode = 'edit';
+  let dwResultMedia = 'image';   // 'image' | 'video'（仅 result 模式有意义）
+  const dwSetModalMode = (mode, media) => {
+    dwModalMode = mode;
+    dwResultMedia = media || 'image';
+    const viewing = mode === 'result';
+    const isVideo = dwResultMedia === 'video';
+    if (el.dwImgModal) {
+      el.dwImgModal.classList.toggle('is-view-result', viewing);
+      el.dwImgModal.classList.toggle('is-view-video', viewing && isVideo);
+    }
+    if (el.dwModalTitle) el.dwModalTitle.textContent = viewing
+      ? (isVideo ? '查看处理后的视频' : '查看处理结果') : '框选去水印区域';
+    if (el.dwModalDone) el.dwModalDone.hidden = viewing;
+    if (el.dwModalViewClose) el.dwModalViewClose.hidden = !viewing;
+    if (el.dwModalSelInfo) el.dwModalSelInfo.hidden = viewing;
+    if (el.dwModalViewHint) el.dwModalViewHint.hidden = !viewing || isVideo;
+  };
+  const dwShowModal = () => {
     el.dwImgModal.hidden = false;
     document.body.style.overflow = 'hidden';
     dwModalZoom = 1;
+    dwPanX = 0; dwPanY = 0;
+    if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.style.transform = 'translate(0px, 0px)';
     if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
     // 同步模式按钮高亮
     dwSyncModeButtons();
     // 等布局稳定后按可用区域适配（否则弹窗以原图自然尺寸显示，过大无法编辑）
     requestAnimationFrame(() => requestAnimationFrame(() => dwApplyZoom('modal')));
   };
+  const dwOpenModal = () => {
+    // 放宽前置校验：文件选择器选图、或拖拽/粘贴/回填导致预览图已加载，都能开灯箱
+    const hasImg = el.dwImgFile.files[0] || (el.dwImgPreview.src && el.dwImgPreview.naturalWidth > 0);
+    if (!hasImg) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
+    dwSetModalMode('edit', 'image');
+    if (el.dwModalVid) { el.dwModalVid.pause(); el.dwModalVid.hidden = true; el.dwModalVid.removeAttribute('src'); }
+    if (el.dwModalImg) el.dwModalImg.hidden = false;
+    dwShowModal();
+  };
+  // 结果「放大查看」：图片走灯箱缩放/平移；视频在灯箱里大屏播放（不做缩放）
+  const dwOpenResultViewer = (media) => {
+    if (media === 'video') {
+      const src = el.dwVidOut && el.dwVidOut.src;
+      if (!src) { el.dwVidStatus && (el.dwVidStatus.textContent = '尚无处理结果'); return; }
+      dwSetModalMode('result', 'video');
+      if (el.dwModalImg) { el.dwModalImg.hidden = true; el.dwModalImg.removeAttribute('src'); }
+      if (el.dwModalVid) { el.dwModalVid.hidden = false; el.dwModalVid.src = src; el.dwModalVid.currentTime = 0; }
+      dwShowModal();
+      return;
+    }
+    const src = el.dwImgOut && el.dwImgOut.src;
+    if (!src) { el.dwImgStatus.textContent = '尚无处理结果'; return; }
+    dwSetModalMode('result', 'image');
+    if (el.dwModalVid) { el.dwModalVid.pause(); el.dwModalVid.hidden = true; el.dwModalVid.removeAttribute('src'); }
+    if (el.dwModalImg) { el.dwModalImg.hidden = false; el.dwModalImg.src = src; }
+    dwShowModal();
+  };
   const dwCloseModal = () => {
     el.dwImgModal.hidden = true;
     document.body.style.overflow = '';
+    // 关闭即停止视频播放并释放句柄，避免后台继续出声/占资源
+    if (el.dwModalVid && !el.dwModalVid.hidden) {
+      try { el.dwModalVid.pause(); } catch (e) { /* 忽略 */ }
+      el.dwModalVid.removeAttribute('src');
+      el.dwModalVid.hidden = true;
+    }
+    if (el.dwModalImg) el.dwModalImg.hidden = false;
+    dwSetModalMode('edit', 'image');
     dwResizeAll();
     dwDrawAll();
   };
@@ -6864,6 +6927,22 @@
   el.dwExpandBtn2.addEventListener('click', dwOpenModal);
   el.dwModalClose.addEventListener('click', dwCloseModal);
   el.dwModalDone.addEventListener('click', dwCloseModal);
+  if (el.dwModalViewClose) el.dwModalViewClose.addEventListener('click', dwCloseModal);
+  // 结果图点击 / 结果区「放大查看」按钮
+  if (el.dwImgOut) el.dwImgOut.addEventListener('click', () => dwOpenResultViewer('image'));
+  if (el.dwImgOutZoom) el.dwImgOutZoom.addEventListener('click', () => dwOpenResultViewer('image'));
+  if (el.dwVidOutZoom) el.dwVidOutZoom.addEventListener('click', () => dwOpenResultViewer('video'));
+  // Esc 关闭灯箱（灯箱不是 <dialog>，没有原生 Esc）
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && el.dwImgModal && !el.dwImgModal.hidden) dwCloseModal();
+  });
+  // 灯箱图加载完成后按窗口重新适配：结果图是刚生成的 URL，用户可能立刻点「放大查看」，
+  // 此时图片尚未解码（naturalWidth=0），dwApplyZoom 会提前返回 → 图会以原始尺寸溢出弹窗。
+  if (el.dwModalImg) {
+    el.dwModalImg.addEventListener('load', () => {
+      if (el.dwImgModal && !el.dwImgModal.hidden && !el.dwModalImg.hidden) dwApplyZoom('modal');
+    });
+  }
   el.dwImgModal.addEventListener('click', (e) => { if (e.target === el.dwImgModal || e.target.classList.contains('dw-modal-backdrop')) dwCloseModal(); });
 
   const startDwImage = async () => {

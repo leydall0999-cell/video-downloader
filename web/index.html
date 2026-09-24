@@ -1170,10 +1170,11 @@
       <div class="dw-result" id="dwImgResult" hidden data-page-node-id="B0wEniLP9SCnLMtAjKE2eH">
         <div class="dw-compare" data-page-node-id="ZlCsPBkbTu5tGbgDucC9Tn">
           <div data-page-node-id="VXYBTnHMYCJsUyvsDwdOme"><span class="dw-cap" data-page-node-id="vFJxW2RfPaYeMGaCTSRACS">原图</span><img id="dwImgOrig" alt="原图" data-page-node-id="smY643yEYPdh7d5BZGEWqr" /></div>
-          <div data-page-node-id="76kXuXMkftyvvrNV43nrGA"><span class="dw-cap" data-page-node-id="8yI9lTLpVJeczvTItQimBI">处理后</span><img id="dwImgOut" alt="处理后" data-page-node-id="R0n4x0RiME53drIGWAPmyp" /></div>
+          <div data-page-node-id="76kXuXMkftyvvrNV43nrGA"><span class="dw-cap" data-page-node-id="8yI9lTLpVJeczvTItQimBI">处理后</span><img id="dwImgOut" class="dw-zoomable" alt="处理后" title="点击放大查看（滚轮缩放 / 拖动平移）" data-page-node-id="R0n4x0RiME53drIGWAPmyp" /></div>
         </div>
         <div class="dw-result-actions" data-page-node-id="fho45fgBgC9zJlLIfpeCCS">
           <a class="btn btn-accent btn-sm" id="dwImgDownload" download data-page-node-id="rGFYfcLwq9kckrdlBOtlcQ">下载结果</a>
+          <button type="button" class="btn btn-ghost btn-sm" id="dwImgOutZoom" title="全屏查看处理结果（滚轮缩放 / 拖动平移）" data-page-node-id="dwImgOutZoom01">🔍 放大查看</button>
           <button type="button" class="btn btn-primary btn-sm" id="dwImgToMatting" data-page-node-id="W2UGxpHdbTttQOVwizcAvE">🪄 丢到抠图区去抠图</button>
         </div>
       </div>
@@ -1183,7 +1184,7 @@
         <div class="dw-modal-backdrop" data-page-node-id="FuTrbUnHPPAPCZaZUdagv9"></div>
         <div class="dw-modal-content" data-page-node-id="s3EacEVkhxmzwXOO4gFMYB">
           <div class="dw-modal-header" data-page-node-id="h1iVeXtGfjrEDX2oGAuCxp">
-            <h3 data-page-node-id="szuQnHTrmjOyFDARzjJzfc">框选去水印区域</h3>
+            <h3 id="dwModalTitle" data-page-node-id="szuQnHTrmjOyFDARzjJzfc">框选去水印区域</h3>
             <button type="button" class="dw-modal-close" id="dwModalClose" aria-label="关闭" data-page-node-id="CwHHFJCPe4iiykjGiEEKjb">✕</button>
           </div>
           <div class="dw-modal-toolbar" data-page-node-id="Q2DLxOhaYiGzDLF78vCI3l">
@@ -1208,13 +1209,16 @@
           <div class="dw-modal-body" data-page-node-id="ZYXy9mVhZ6rRUiWFhaXudN">
             <div class="dw-preview-wrap dw-modal-preview" id="dwModalPreviewWrap" data-page-node-id="7CRpGwHpOhNfIMCnTh2LDt">
               <img id="dwModalImg" alt="放大预览" data-page-node-id="N5cClfHmqFExaExo31y1k3" />
+              <video id="dwModalVid" controls playsinline hidden data-page-node-id="dwModalVid0001"></video>
               <svg id="dwModalSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg" data-page-node-id="lzoTCCjhVMiwGj4NuMfefL"></svg>
               <canvas id="dwModalCanvas" class="dw-canvas" data-page-node-id="1sxj6a4w9JflUEr5sM1ihZ"></canvas>
             </div>
           </div>
           <div class="dw-modal-footer" data-page-node-id="zXWBcYMy1Jo1fM6qN83r7N">
             <span class="dw-selinfo" id="dwModalSelInfo" data-page-node-id="v7GoHEJQKeUVhMIVm2jdyK">尚未框选</span>
+            <span class="dw-selinfo" id="dwModalViewHint" hidden data-page-node-id="dwModalViewHint01">滚轮或 🔍± 缩放 · 放大后按住拖动可平移</span>
             <button type="button" class="btn btn-primary" id="dwModalDone" data-page-node-id="meJDxm4Kea2mLRkWEMKeZc">完成编辑</button>
+            <button type="button" class="btn btn-primary" id="dwModalViewClose" hidden data-page-node-id="dwModalViewClose1">关闭</button>
           </div>
         </div>
       </div>
@@ -1308,6 +1312,7 @@
           <div class="dw-result" id="dwVidResult" hidden data-page-node-id="nPpW7GgnC75H5zU06NE2PJ">
             <div class="dw-result-head" data-page-node-id="yar47lCO7pfYEac2Atgu39">
               <span class="dw-cap" data-page-node-id="8hMCr6bJNY35vuQ40rs00n">去水印结果</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="dwVidOutZoom" title="全屏查看处理后的视频" data-page-node-id="dwVidOutZoom01">🔍 放大查看</button>
               <button type="button" class="btn btn-ghost btn-sm" id="dwVidRedo" title="回到上方工作区，重新框选 / 换视频再处理" data-page-node-id="WNCVNGVZ9VapUT5UHYTnAE">↻ 重新处理</button>
             </div>
             <div class="dw-compare" data-page-node-id="ZCkgq91HThruzvr3NMZF8w">
