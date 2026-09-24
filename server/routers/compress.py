@@ -14,6 +14,11 @@
 音轨优先原样复制（aac/mp3），其余自动 AAC 160k；进度经 ``-progress pipe:1`` 实时解析。
 压缩后反而更大时保留原文件（saving=0）。
 
+「重新压缩」（2026-09-24）：已完成 / 失败的行可原地改参数重压，**不需要用户再选一次
+文件**（本机文件直接复用路径；网页文件复用浏览器里已选的 File 对象重传）。前端会把上
+一轮的 job_id 作为 ``replaces`` 带上，后端据此删掉旧产物并移除旧记录（``_discard_job``），
+避免同一源文件的历次结果在磁盘上堆积。
+
 ⚠️ WebP/AVIF/HEVC 均为「视觉无损」（人眼难辨，像素不完全一致），并非逐字节无损。
 PNG 原格式 optimize 才是严格无损。
 
@@ -85,7 +90,8 @@ class LocalCompressRequest(BaseModel):
     local_path: str
     level: str = _DEFAULT_LEVEL
     codec: str = "h264"          # 视频编码：h264 / hevc
-    output_format: str = "keep"  # 图片输出格式：keep / webp / avif
+    output_format: str = "keep"  # 图片输出格式：keep / webp / jpg / png / avif
+    replaces: str = ""           # 「重新压缩」时带上上一轮 job_id，由后端回收旧产物
 
 
 def _ffprobe_bin() -> str:
@@ -151,6 +157,33 @@ def _probe_video_meta(path: str) -> dict:
             br = 0.0
     meta["bit_rate"] = int(br)
     return meta
+
+
+def _discard_job(job_id: str) -> None:
+    """清掉一次「重新压缩」被顶替掉的旧任务：删产物文件 + 移除记录（2026-09-24）。
+
+    前端点「重新压缩」时会把上一轮的 job_id 作为 ``replaces`` 传上来，这里顺手
+    回收，免得同一源文件的历次结果在 CONVERT_DIR 里越堆越多。
+
+    两点安全约束：
+    1. 只清理**已结束**（completed / failed）的任务 —— 正在转码的 job 被移除会让
+       工作线程写回一个已无人查询的 dict，任务变成幽灵，用户永远等不到结果；
+    2. 删除对象取自**本进程自己的记录**（``job["out_path"]``），不是客户端传来的
+       路径，因此伪造 job_id 也无法越权删任意文件。
+    """
+    if not job_id or not app.re.fullmatch(r"[0-9a-f]{8,32}", job_id or ""):
+        return
+    with _LOCK:
+        old = COMPRESS_JOBS.get(job_id)
+        if not old or old.get("status") not in ("completed", "failed"):
+            return
+        COMPRESS_JOBS.pop(job_id, None)
+        out_path = old.get("out_path") or ""
+    if out_path:
+        try:
+            app.Path(out_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _register_job(device_id: str, src_name: str) -> str:
@@ -443,6 +476,7 @@ def compress_local(payload: LocalCompressRequest, request: app.Request) -> dict:
     level = _validate_level(payload.level)
     codec = _validate_codec(payload.codec)
     output_format = _validate_output_format(payload.output_format)
+    _discard_job(payload.replaces)     # 重新压缩：先回收上一轮产物，再登记新任务
     job_id = _submit_compress(str(resolved), level, _device_of(request),
                               src_name=resolved.name, src_is_temp=False,
                               codec=codec, output_format=output_format)
@@ -462,6 +496,7 @@ def compress_finish(
     level: str = app.Form(_DEFAULT_LEVEL),
     codec: str = app.Form("h264"),
     output_format: str = app.Form("keep"),
+    replaces: str = app.Form(""),
     request: app.Request = None,
 ) -> dict:
     """分片上传收尾（压缩专用）：合并分片 → 提交压缩 job。"""
@@ -493,6 +528,7 @@ def compress_finish(
         for p in parts:
             p.unlink(missing_ok=True)
         raise app.HTTPException(status_code=500, detail=f"合并上传文件失败：{e}")
+    _discard_job(replaces)             # 重新压缩：先回收上一轮产物，再登记新任务
     job_id = _submit_compress(str(save_path), level, _device_of(request),
                               src_name=filename, src_is_temp=True,
                               codec=codec, output_format=output_format)

@@ -4060,26 +4060,37 @@
               + (it.eta ? ` · 约剩 ${cpMmss(it.eta)}` : '')
               + (it.stale ? ' · 进度刷新受阻（任务仍在进行）' : '')
             : '压缩中…'),
-        completed: it.saving > 0
-          ? `完成 ✅ 节省 ${it.saving}%（${cpFormatSize(it.sizeBefore || 0)} → ${cpFormatSize(it.sizeAfter || 0)}）${it.note || ''}`
-          : `完成 ✅ ${it.note || '体积已足够小'}`,
+        // 已完成的行改了参数 → 状态栏顶一句醒目提示，否则用户不知道「改了没生效」
+        completed: (it.dirty ? '参数已改，点「重新压缩」生效 · ' : '')
+          + (it.saving > 0
+            ? `完成 ✅ 节省 ${it.saving}%（${cpFormatSize(it.sizeBefore || 0)} → ${cpFormatSize(it.sizeAfter || 0)}）${it.note || ''}`
+            : `完成 ✅ ${it.note || '体积已足够小'}`),
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status;
-      const disabled = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
+      // ★ 仅压缩中禁用移除（2026-09-24）：已完成的行同样可移除——否则「选错了文件又
+      //   已压完」就只能清空整个列表重新来过。
+      const disabled = it.status === 'running' ? 'disabled' : '';
       const progressHtml = it.status === 'running'
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.jobId
         ? `<a class="uc-item-download" href="/api/compress/${it.jobId}/file" download="${it.outputName || 'compressed'}">下载</a>`
         : '';
-      const startHtml = it.status === 'pending' || it.status === 'failed'
-        ? `<button type="button" class="uc-item-start" data-act="start" title="按当前强度压缩该文件">${it.status === 'failed' ? '重新压缩' : '开始压缩'}</button>`
+      // ★ 已完成的行也给「重新压缩」（2026-09-24，用户要求「不满意 / 压错了不用重新上传」）：
+      //   行内参数改完点一下即可；本机文件直接复用路径重压，网页文件复用浏览器里已选的
+      //   File 对象（都不需要用户再去选一次文件）。
+      const startTitle = it.status === 'completed'
+        ? '用该行当前参数重新压缩（无需重新选择文件；新结果会替换上一次的下载文件）'
+        : (it.status === 'failed' ? '按当前参数重试该文件' : '按当前强度压缩该文件');
+      const startHtml = ['pending', 'failed', 'completed'].includes(it.status)
+        ? `<button type="button" class="uc-item-start" data-act="start" title="${startTitle}">${it.status === 'pending' ? '开始压缩' : '重新压缩'}</button>`
         : '';
       // ★ 每行「单独设置」（2026-09-24）：与视频 / 音乐 / 图片转换一致，参数可在行内逐条改，
       //   不再只能靠下方「默认压缩设置」统一应用（用户报「少了单独操作部分」）
-      const optDis = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
+      //   ★ 已完成的行同样可改（同日）：改完点「重新压缩」生效，不必「移除 → 重新添加」
+      const optDis = it.status === 'running' ? 'disabled' : '';
       const lockHint = it.status === 'running' ? '压缩中不可修改'
-        : it.status === 'completed' ? '已完成：参数已固定，如需其他参数请移除后重新添加'
+        : it.status === 'completed' ? '改完点「重新压缩」生效（无需重新选择文件）'
         : '点「开始压缩 / 重新压缩」时生效';
       const levelSel = `<select class="uc-item-opt" data-act="level" ${optDis}`
         + ` title="本行压缩强度：轻度 / 推荐 = 视觉无损，极致 = 有损、体积最小 · ${lockHint}">`
@@ -4141,6 +4152,7 @@
         status: isLocal ? 'pending' : 'pending',
         jobId: null, progress: 0, stage: '', elapsed: 0, eta: 0,
         errorMsg: '', outputName: '', sizeBefore: 0, sizeAfter: 0, saving: 0, note: '',
+        dirty: false, replaces: '',      // 参数被改动 / 需要顶掉的上一轮 job（重新压缩用）
         _removed: false, _xhrs: null, _uploadId: null, _totalChunks: 0,
       });
     });
@@ -4188,7 +4200,9 @@
     const finishJob = (data) => {
       if (data.job_id) {
         item.jobId = data.job_id; item.status = 'running'; item.progress = 5;
-        item.elapsed = 0; item.eta = 0; cpRender(); resolve(data);
+        item.elapsed = 0; item.eta = 0;
+        item.replaces = '';          // 旧任务已交后端清理，别在后续重试里重复提交
+        cpRender(); resolve(data);
       } else {
         item.status = 'failed'; item.errorMsg = data.detail || data.error || '压缩请求失败'; cpRender(); reject(new Error(item.errorMsg));
       }
@@ -4199,6 +4213,7 @@
         body: JSON.stringify({
           local_path: item.localPath, level: item.level,
           codec: item.codec || 'h264', output_format: item.outputFormat || 'keep',
+          replaces: item.replaces || '',      // 重新压缩时带走上一轮 job，后端顺手清理旧产物
         }),
         headers: { 'Content-Type': 'application/json' },
       }).then(finishJob).catch(err => {
@@ -4231,6 +4246,7 @@
       form.append('level', item.level);
       form.append('codec', item.codec || 'h264');
       form.append('output_format', item.outputFormat || 'keep');
+      if (item.replaces) form.append('replaces', item.replaces);   // 重新压缩：托后端清旧产物
       const xhr = new XMLHttpRequest();
       item._xhrs.add(xhr);
       xhr.open('POST', location.origin + '/api/compress/finish');
@@ -4267,8 +4283,12 @@
     if (act === 'level') it.level = t.value;
     else if (act === 'codec') it.codec = t.value;
     else it.outputFormat = t.value;
+    // 已完成的行被改了参数 → 标脏，状态栏出现「参数已改，点『重新压缩』生效」（2026-09-24）
+    it.dirty = it.status === 'completed';
     cpRender();
-    el.cpStatus.textContent = '已更新该行参数（点「开始压缩」或该行按钮时生效）';
+    el.cpStatus.textContent = it.dirty
+      ? '已更新该行参数：点该行「重新压缩」即可生效（无需重新选择文件）'
+      : '已更新该行参数（点「开始压缩」或该行按钮时生效）';
   });
   el.cpList.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
@@ -4282,9 +4302,13 @@
       cpState.list = cpState.list.filter(x => x.id !== id);
       cpRender();
     } else if (act === 'start') {
-      if (it.status === 'failed') {
+      if (it.status === 'completed' || it.status === 'failed') {
+        // 重新压缩（2026-09-24）：把上一次的 job 一并交给后端清理（删旧产物 + 移除记录），
+        // 免得同一源文件的历次结果在磁盘上越堆越多；随后原地回到「未开始」再重投。
+        if (it.status === 'completed' && it.jobId) it.replaces = it.jobId;
         it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null;
         it.elapsed = 0; it.eta = 0;
+        it.sizeAfter = 0; it.saving = 0; it.note = ''; it.dirty = false;
       }
       cpEnsurePolling();
       cpStartOne(it).catch(() => {});
@@ -4308,7 +4332,7 @@
     el.cpStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项（所有项都已开始/完成）';
   });
   el.cpStartAllBtn.addEventListener('click', () => {
-    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.elapsed = 0; it.eta = 0; } });
+    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.elapsed = 0; it.eta = 0; it.dirty = false; } });
     const wait = cpState.list.filter(x => x.status === 'pending');
     if (!wait.length) { el.cpStatus.textContent = '没有可开始的项（先添加文件）'; return; }
     el.cpStatus.textContent = `批量压缩中…（${wait.length} 个）`;

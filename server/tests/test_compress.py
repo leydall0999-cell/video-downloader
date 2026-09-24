@@ -35,6 +35,7 @@ import app  # noqa: E402
 from codec_utils import available_h264, rate_controlled_args, target_bitrate_kbps  # noqa: E402
 from routers.compress import (  # noqa: E402
     _compress_image,
+    _discard_job,
     _probe_video_meta,
     _run_compress,
     _submit_compress,
@@ -628,6 +629,78 @@ def test_format_parity_and_ext_table():
     check("批量下拉 #cpBulkFormat 覆盖后端全部格式", set(bulk) == IMAGE_OUT_FORMATS, str(bulk))
 
 
+def test_restart_discards_previous_output():
+    """「重新压缩」的旧产物回收：`_discard_job` 必须删文件 + 移记录，且只动已结束的任务。
+
+    背景（2026-09-24）：用户报「不满意或压错了，不用重新上传」。修法是行内原地改参数
+    重压，并把上一轮 job_id 作为 `replaces` 交给后端回收 —— 否则同一源文件每重压一次
+    就在 CONVERT_DIR 里多留一份产物，且旧 job 记录永远留在内存里。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        # ① 已结束的任务：产物删除 + 记录移除
+        jid = app.uuid.uuid4().hex[:12]
+        out = app.Path(td) / f"compress_{jid}.jpg"
+        out.write_bytes(b"x" * 64)
+        COMPRESS_JOBS[jid] = {"status": "completed", "out_path": str(out)}
+        _discard_job(jid)
+        check("重新压缩：已完成任务的记录被移除", jid not in COMPRESS_JOBS)
+        check("重新压缩：已完成任务的旧产物被删除", not out.exists(), str(out))
+
+        # ② 仍在转码的任务：绝不能清 —— 工作线程会写回一个没人查询的幽灵 job，
+        #    用户永远等不到结果（比磁盘垃圾严重得多）
+        jid2 = app.uuid.uuid4().hex[:12]
+        out2 = app.Path(td) / f"compress_{jid2}.jpg"
+        out2.write_bytes(b"y" * 64)
+        COMPRESS_JOBS[jid2] = {"status": "running", "out_path": str(out2)}
+        try:
+            _discard_job(jid2)
+            check("重新压缩：转码中的任务不被回收",
+                  jid2 in COMPRESS_JOBS and out2.exists())
+        finally:
+            COMPRESS_JOBS.pop(jid2, None)
+
+        # ③ 非法 / 未知 id：静默返回，不抛错、也不越权删文件
+        try:
+            _discard_job("")
+            _discard_job("../../etc/passwd")
+            _discard_job("deadbeefdead")
+            check("重新压缩：空 / 路径型 / 未知 job_id 安全忽略", True)
+        except Exception as e:      # noqa: BLE001
+            check("重新压缩：空 / 路径型 / 未知 job_id 安全忽略", False, repr(e))
+
+
+def test_restart_ui_wiring_ratchet():
+    """防回归：「重新压缩」的界面接线三件套必须齐全，缺任何一条都会退回用户报的痛点。
+
+    1. 已完成的行也要渲染 data-act="start" 按钮（旧代码只在 pending/failed 渲染 →
+       用户压错了只能「移除 → 重新添加 → 重新选文件」）；
+    2. 已完成行的参数下拉不得再 disabled（参数锁死的话「重新压缩」毫无意义）；
+    3. 提交请求必须透传 replaces（否则旧产物永远留在磁盘上，越堆越多）。
+    """
+    import re as _re
+    repo = os.path.dirname(_SERVER_DIR)
+    csrc = open(os.path.join(_SERVER_DIR, "routers", "compress.py"), encoding="utf-8").read()
+    check("后端存在 _discard_job 回收函数", "def _discard_job(" in csrc)
+    check("后端两个提交口都调用 _discard_job（本机 + 分片上传）",
+          csrc.count("_discard_job(") >= 3, str(csrc.count("_discard_job(")))
+
+    appjs = open(os.path.join(repo, "web", "app.js"), encoding="utf-8").read()
+    m = _re.search(r"const cpRender = \(\) => \{.*?\n  \};", appjs, _re.S)
+    body = m.group(0) if m else ""
+    check("cpRender 可定位（正则失配即视作回归）", bool(body))
+    check("已完成的行也渲染「重新压缩」按钮（状态集含 completed）",
+          "['pending', 'failed', 'completed'].includes(it.status)" in body,
+          body[-300:])
+    check("已完成行参数下拉不再锁死（仅 running 禁改）",
+          "const optDis = it.status === 'running' ? 'disabled' : '';" in body)
+
+    m2 = _re.search(r"const cpStartOne = \(item\) => new Promise.*?\n  \}\);", appjs, _re.S)
+    body2 = m2.group(0) if m2 else ""
+    check("cpStartOne 可定位", bool(body2))
+    check("本机路径提交透传 replaces", "replaces: item.replaces || ''" in body2)
+    check("分片上传收尾透传 replaces", "form.append('replaces', item.replaces)" in body2)
+
+
 if __name__ == "__main__":
     test_png_lossless_pixel_identical()
     test_jpg_quality_downscale_size()
@@ -649,5 +722,7 @@ if __name__ == "__main__":
     test_queued_transcode_does_not_starve_shared_pool()
     test_status_endpoints_are_not_rate_limited()
     test_format_parity_and_ext_table()
+    test_restart_discards_previous_output()
+    test_restart_ui_wiring_ratchet()
     print(f"\n通过: {PASS}  失败: {FAIL}")
     sys.exit(1 if FAIL else 0)
