@@ -2,7 +2,8 @@
 
 覆盖：
   1. 图片压缩核心 `_compress_image`：PNG 无损优化（像素逐字节一致）、
-     JPG 质量档（产物可开且更小/可控）、WebP 质量档；
+     JPG 质量档（产物可开且更小/可控）、WebP 质量档、
+     转 JPG / 转 PNG（含「透明 PNG 转 JPG 白底」回归守卫）；
   2. `_run_compress` 全链路（图片）：job 状态机 running→completed、
      size_before/after/saving 统计、输出文件落盘；
   3. 「压缩后反而更大」守卫：不可压缩的小 PNG → 输出回退为原文件副本
@@ -154,6 +155,8 @@ def test_validate_codec_and_format():
     check("图片格式：合法原样返回",
           _validate_output_format("keep") == "keep"
           and _validate_output_format("webp") == "webp"
+          and _validate_output_format("jpg") == "jpg"
+          and _validate_output_format("png") == "png"
           and _validate_output_format("avif") == "avif")
     check("图片格式：非法回退 keep",
           _validate_output_format("bmp") == "keep" and _validate_output_format("") == "keep")
@@ -185,6 +188,61 @@ def test_webp_output_smaller():
               f"{os.path.getsize(src)} -> {os.path.getsize(out)}")
         with Image.open(out) as im:
             check("WebP 可解码且格式正确", im.format == "WEBP", im.format)
+
+
+def _photoish_png(path, size=512, seed=7):
+    """照片感素材（平滑渐变 + 固定种子细噪声），用来衡量 JPG 的真实收益。
+
+    ⚠️ 不能复用 ``_photo_png``：纯平滑渐变的 PNG 本身只有几 KB（PNG 的预测器极擅长
+    低频渐变），转 JPG 反而更大；只有带细噪声的「类相机」素材才反映 JPEG 的强项
+    （实测 512x512：PNG 391KB → JPG 46KB，约 12%）。固定种子保证断言可复现。
+    """
+    import random
+    rnd = random.Random(seed)
+    img = Image.new("RGB", (size, size))
+    px = img.load()
+    for y in range(size):
+        for x in range(size):
+            n = rnd.randint(-12, 12)
+            px[x, y] = (max(0, min(255, int(255 * x / size) + n)),
+                        max(0, min(255, int(255 * y / size) + n)),
+                        max(0, min(255, int(128 + 100 * ((x + y) / (2 * size))) + n)))
+    img.save(path, format="PNG", optimize=True)
+
+
+def test_jpg_png_output():
+    """图片输出格式=jpg / png：产物可解码、格式正确；照片感 PNG → JPG 应明显更小。"""
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "a.png")
+        _photoish_png(src, 512)
+        out_jpg = os.path.join(td, "a.jpg")
+        _compress_image({"stage": ""}, src, app.Path(out_jpg), "balanced", output_format="jpg")
+        check("JPG 输出真实更小", os.path.getsize(out_jpg) < os.path.getsize(src),
+              f"{os.path.getsize(src)} -> {os.path.getsize(out_jpg)}")
+        with Image.open(out_jpg) as im:
+            check("JPG 可解码且格式正确", im.format == "JPEG", im.format)
+            check("JPG 无 alpha 通道（RGB）", im.mode == "RGB", im.mode)
+        out_png = os.path.join(td, "b.png")
+        _compress_image({"stage": ""}, src, app.Path(out_png), "balanced", output_format="png")
+        check("PNG 输出落盘", os.path.getsize(out_png) > 0)
+        with Image.open(out_png) as im:
+            check("PNG 可解码且格式正确", im.format == "PNG", im.format)
+
+
+def test_transparent_png_to_jpg_white_bg():
+    """透明 PNG 转 JPG：透明区必须合成**白底**。
+
+    回归守卫——旧写法直接 ``im.convert("RGB")`` 会把透明像素写成黑色，
+    PNG 截图（常带透明）转 JPG 就会出现整片黑块。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "t.png")
+        Image.new("RGBA", (64, 64), (255, 0, 0, 0)).save(src, format="PNG")  # 全透明
+        out = os.path.join(td, "t.jpg")
+        _compress_image({"stage": ""}, src, app.Path(out), "balanced", output_format="jpg")
+        with Image.open(out) as im:
+            px = im.convert("RGB").getpixel((32, 32))
+        check("透明区转 JPG 后是白底（非黑块）", all(c >= 245 for c in px), str(px))
 
 
 def test_avif_output_smaller():
@@ -503,6 +561,8 @@ if __name__ == "__main__":
     test_validate_level()
     test_validate_codec_and_format()
     test_webp_output_smaller()
+    test_jpg_png_output()
+    test_transparent_png_to_jpg_white_bg()
     test_avif_output_smaller()
     test_avif_missing_plugin_errors()
     test_run_compress_hevc_video_guarded()

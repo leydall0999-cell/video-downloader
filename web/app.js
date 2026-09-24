@@ -4014,7 +4014,16 @@
   const cpState = { list: [], nextId: 1, pollTimer: null };
   // 每行「单独设置」用的短标签（行内窄，长解释挂 title）
   const CP_LEVEL_SHORT = { high: '轻度', balanced: '推荐', strong: '极致' };
-  const CP_FMT_SHORT = { keep: '原格式', webp: 'WebP', avif: 'AVIF' };
+  const CP_FMT_SHORT = { keep: '原格式', webp: 'WebP', jpg: 'JPG', png: 'PNG', avif: 'AVIF' };
+  // ⚠️ 与后端 server/routers/compress.py 的 IMAGE_OUT_FORMATS 保持一致（顺序即下拉顺序）
+  const CP_FMT_LIST = ['keep', 'webp', 'jpg', 'png', 'avif'];
+  const CP_FMT_DESC = {
+    keep: '原格式（PNG 严格无损重压 / JPG 视觉无损）',
+    webp: 'WebP（更小·推荐，全网通用）',
+    jpg: 'JPG（兼容最好·体积小，透明区自动填白）',
+    png: 'PNG（严格无损·保留透明，体积可能变大）',
+    avif: 'AVIF（极致压缩·较慢，新系统/新浏览器）',
+  };
   const CP_CODEC_SHORT = { h264: 'H.264', hevc: 'HEVC' };
   const cpDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const cpFormatSize = (b) => {
@@ -4084,14 +4093,14 @@
               `<option value="${v}"${v === it.codec ? ' selected' : ''}>${CP_CODEC_SHORT[v]}</option>`).join('')
           + `</select>`
         : `<select class="uc-item-opt" data-act="outputFormat" ${optDis}`
-          + ` title="本行图片输出格式：原格式（PNG 严格无损）/ WebP（更小）/ AVIF（极致压缩·较慢） · ${lockHint}">`
-          + ['keep', 'webp', 'avif'].map(v =>
-              `<option value="${v}"${v === it.outputFormat ? ' selected' : ''}>${CP_FMT_SHORT[v]}</option>`).join('')
+          + ` title="本行图片输出格式：${CP_FMT_LIST.map(v => CP_FMT_DESC[v]).join(' / ')} · 需要 BMP/TIFF/GIF 请用「图片格式转换」 · ${lockHint}">`
+          + CP_FMT_LIST.map(v =>
+              `<option value="${v}"${v === it.outputFormat ? ' selected' : ''} title="${CP_FMT_DESC[v]}">${CP_FMT_SHORT[v]}</option>`).join('')
           + `</select>`;
       const displayName = it.name || '未命名';
       const levelText = { high: '轻度', balanced: '推荐', strong: '极致·有损' }[it.level] || it.level;
       const codecText = it.kind === 'video' ? ({ h264: 'H.264', hevc: 'HEVC' }[it.codec] || 'H.264') : '';
-      const fmtText = it.kind === 'image' ? ({ keep: '原格式', webp: 'WebP', avif: 'AVIF' }[it.outputFormat] || '原格式') : '';
+      const fmtText = it.kind === 'image' ? (CP_FMT_SHORT[it.outputFormat] || '原格式') : '';
       const kindText = (it.kind === 'video' ? '视频' + (codecText ? ' · ' + codecText : '') : '图片' + (fmtText ? ' · ' + fmtText : ''));
       const metaSpans = it.localPath
         ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>${kindText} · ${levelText}${it.sizeBefore ? ' · ' + cpFormatSize(it.sizeBefore) : ''}</span>`

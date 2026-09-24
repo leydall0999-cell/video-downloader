@@ -2,7 +2,9 @@
 
 图片走 Pillow 高质量重编码：
 - 原格式：PNG 无损优化（optimize）、JPG 质量档+渐进式、WebP 质量档；
-- 转格式：WebP（更小）、AVIF（极致压缩，需 pillow-avif-plugin，import 守护）；
+- 转格式：JPG（兼容最好）、PNG（严格无损）、WebP（更小）、
+  AVIF（极致压缩，需 pillow-avif-plugin，import 守护）；
+  透明图转 JPG 时先合成白底（直接 convert('RGB') 会把透明区压成黑色）；
 视频走 ffmpeg 重编码：
 - H.264（VideoToolbox→libopenh264→mpeg4 自动选择，LGPL 合规）；
 - HEVC/H.265（hevc_videotoolbox，同画质体积再小约 30-45%，硬件加速）。
@@ -45,8 +47,13 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".avif"}
 
 # 视频编码：h264（默认，兼容最好）/ hevc（同画质更小、macOS 硬件加速）
 VIDEO_CODECS = {"h264", "hevc"}
-# 图片输出格式：keep（按源格式重编码）/ webp（更小）/ avif（极致压缩）
-IMAGE_OUT_FORMATS = {"keep", "webp", "avif"}
+# 图片输出格式：keep（按源格式重编码）/ webp（更小）/ jpg（兼容最好）/
+# png（严格无损）/ avif（极致压缩，需 pillow-avif-plugin）
+IMAGE_OUT_FORMATS = {"keep", "webp", "jpg", "png", "avif"}
+# 输出格式 -> 落地扩展名（keep 不在表内：沿用源扩展名）
+# ⚠️ 前端 web/app.js 的 CP_FMT_SHORT / web/index.html 的 #cpBulkFormat
+#    必须与本表同步，否则会出现「选了但落默认」的静默降级。
+_OUT_EXT = {"webp": ".webp", "jpg": ".jpg", "png": ".png", "avif": ".avif"}
 
 # level -> 图片质量档（jpeg_q/webp_q，AVIF 复用 webp_q 作为质量档）
 LEVELS = {
@@ -161,12 +168,29 @@ def _register_job(device_id: str, src_name: str) -> str:
     return job_id
 
 
+def _flatten_to_rgb(im):
+    """把任意模式的图摊平成 RGB（带透明时先合成**白底**）。
+
+    JPEG 不支持 alpha 通道，直接 ``convert("RGB")`` 会把透明像素写成黑色，
+    PNG 截图转 JPG 就会出现大片黑块 —— 这里显式铺白底，符合「看图时的直觉」。
+    """
+    from PIL import Image
+    if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[-1])   # alpha 当遮罩，透明处露出白底
+        return bg
+    return im.convert("RGB")
+
+
 def _compress_image(job: dict, src: str, out_path: app.Path, level: str,
                     output_format: str = "keep") -> None:
-    """图片压缩：原格式重编码 / 转 WebP / 转 AVIF。
+    """图片压缩：原格式重编码 / 转 WebP / JPG / PNG / AVIF。
 
     - keep  ：按源格式重编码（PNG 无损 optimize；JPG 质量档+渐进式；WebP 质量档）
     - webp  ：统一输出 WebP（质量档来自 level，method=6 最佳压缩）
+    - jpg   ：统一输出 JPEG（兼容最好；透明区合成白底）
+    - png   ：统一输出 PNG（严格无损、保留透明；体积可能变大，上层会兜底留原文件）
     - avif  ：统一输出 AVIF（质量档来自 level；需 pillow_avif，缺失即报错）
     """
     from PIL import Image
@@ -175,6 +199,16 @@ def _compress_image(job: dict, src: str, out_path: app.Path, level: str,
         if output_format == "webp":
             save_im = im.convert("RGB") if im.mode == "P" else im
             save_im.save(out_path, format="WEBP", quality=cfg["webp_q"], method=6)
+            return
+        if output_format == "jpg":
+            _flatten_to_rgb(im).save(out_path, format="JPEG", quality=cfg["jpeg_q"],
+                                     optimize=True, progressive=True)
+            return
+        if output_format == "png":
+            save_im = im
+            if im.mode == "P":      # 调色板图直接重存 PNG 会丢/错透明，先转真彩
+                save_im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
+            save_im.save(out_path, format="PNG", optimize=True)
             return
         if output_format == "avif":
             if pillow_avif is None:
@@ -189,8 +223,8 @@ def _compress_image(job: dict, src: str, out_path: app.Path, level: str,
         if fmt == "PNG":
             im.save(out_path, format="PNG", optimize=True)          # 无损：仅重压Deflate
         elif fmt in ("JPEG", "MPO"):
-            im.convert("RGB").save(out_path, format="JPEG", quality=cfg["jpeg_q"],
-                                   optimize=True, progressive=True)
+            _flatten_to_rgb(im).save(out_path, format="JPEG", quality=cfg["jpeg_q"],
+                                     optimize=True, progressive=True)
         elif fmt == "WEBP":
             im.save(out_path, format="WEBP", quality=cfg["webp_q"], method=6)
         elif fmt == "AVIF":
@@ -335,7 +369,11 @@ def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: boo
             shutil.copyfile(src, out_path)
             job["size_after"] = job["size_before"]
             job["saving"] = 0.0
-            job["note"] = "原文件已足够小，输出为原文件副本"
+            # 区分两种「没变小」：转了格式（PNG 常常比 JPG 大）vs 本来就压不动
+            if kind == "image" and output_format not in ("", "keep"):
+                job["note"] = "目标格式体积更大，已保留原文件（格式未变）"
+            else:
+                job["note"] = "原文件已足够小，输出为原文件副本"
         else:
             job["saving"] = round((1 - job["size_after"] / job["size_before"]) * 100, 1)
         job["out_path"] = str(out_path)
