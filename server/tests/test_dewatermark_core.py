@@ -848,6 +848,24 @@ def test_video_sel_drag_anchor_ratchet():
     print("OK video sel drag anchor ratchet: 锚点修复钉住，四个方向拖拽均有效")
 
 
+def test_result_modal_sibling_of_panes_ratchet():
+    """防回归（2026-09-24）：结果/框选灯箱 #dwImgModal 必须与各模式 pane 平级。
+
+    灯箱原先埋在 #dwImgPane 里：视频去水印页激活时该 pane 被隐藏（display:none），
+    用户点「放大查看」弹出 0 尺寸的不可见灯箱——页面被锁、无画面也无退出入口
+    （用户报「视频去水印完成预览没有退出」）。钉住：dwImgModal 必须位于
+    dwVideoPane 之后、且不在 dwImgPane 区块内。
+    """
+    repo = os.path.dirname(_SERVER_DIR)
+    html = open(os.path.join(repo, "web", "index.html"), encoding="utf-8").read()
+    i_img = html.index('id="dwImgPane"')
+    i_vid = html.index('id="dwVideoPane"')
+    i_modal = html.index('id="dwImgModal"')
+    assert i_modal > i_vid, "灯箱必须在 dwVideoPane 之后（与各模式 pane 平级），不能埋回 dwImgPane"
+    assert html.index('id="dwImgModal"', i_img) == i_modal and i_modal > i_vid, "灯箱不得位于 dwImgPane 区块内"
+    print("OK result modal sibling-of-panes ratchet: 灯箱已与 pane 平级，视频页可见")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -912,4 +930,7 @@ if __name__ == "__main__":
     # 视频去水印框选锚点棘轮（2026-09-24 新增：向上/向左拖拽选区丢失）
     test_video_sel_drag_anchor_ratchet()
 
-    print("\n🎉 去水印核心测试全部通过（49 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
+    # 结果灯箱位置棘轮（2026-09-24 新增：埋在 dwImgPane 内导致视频页灯箱不可见）
+    test_result_modal_sibling_of_panes_ratchet()
+
+    print("\n🎉 去水印核心测试全部通过（50 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
