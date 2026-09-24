@@ -412,6 +412,12 @@ _SAVE_PANEL_APPLET_SRC = r'''on run
 		set AppleScript's text item delimiters to ""
 	end try
 	set theResult to "CANCELLED"
+	-- ★ 2026-09-24：applet 现在是 LSUIElement 后台程序（不占 Dock、不占切换器），
+	--   agent 程序不会自动激活，面板可能弹在别的窗口后面。先 activate 顶到最前。
+	--   （对普通前台程序，activate 本就是默认行为，无副作用。）
+	try
+		activate
+	end try
 	try
 		set chosenFile to choose file name with prompt thePrompt default name theName default location (path to downloads folder)
 		set theResult to POSIX path of chosenFile
@@ -421,6 +427,10 @@ end run
 '''
 
 _SAVE_PANEL_APPLET_CACHE = {"path": None}
+
+# ★ 2026-09-24：applet「形态」版本号。凡改动 Info.plist 侧行为（图标 / 本地化 / LSUIElement）
+#   都要 bump 一次 —— 指纹里带上它，老用户机器上的 applet 才会被重编（否则改了不生效）。
+_SAVE_PANEL_APPLET_VER = "2026-09-24-lsuielement"
 
 
 def _save_panel_dir() -> str:
@@ -490,14 +500,17 @@ def _ensure_save_panel_applet(log_path: str = "") -> str:
     icon_bytes = _save_panel_icon_bytes()
     icon_sig = hashlib.sha1(icon_bytes).hexdigest()[:16] if icon_bytes else "noicon"
     sig = hashlib.sha1((hashlib.sha1(_SAVE_PANEL_APPLET_SRC.encode("utf-8")).hexdigest()
-                        + icon_sig).encode("utf-8")).hexdigest()[:16]
+                        + icon_sig + _SAVE_PANEL_APPLET_VER).encode("utf-8")).hexdigest()[:16]
 
     if os.path.isfile(info) and os.path.isfile(ver_file):
         try:
             with open(ver_file, "r", encoding="utf-8", errors="ignore") as fh:
                 same_ver = fh.read().strip() == sig
             with open(info, "r", encoding="utf-8", errors="ignore") as fh:
-                same_loc = "zh-Hans" in fh.read()
+                plist_old = fh.read()
+            # 除了中文优先级，还要确认「后台形态」已写进 plist：09-22 版 applet 没有
+            # LSUIElement，会占着 Dock 一个磁贴（用户截图问「为什么多一个一样的图标」）。
+            same_loc = ("zh-Hans" in plist_old) and ("LSUIElement" in plist_old)
             if same_ver and same_loc:
                 _SAVE_PANEL_APPLET_CACHE["path"] = app
                 return app
@@ -526,10 +539,16 @@ def _ensure_save_panel_applet(log_path: str = "") -> str:
             except Exception:
                 pass
         # ★ 关键一步：声明中文优先。不写这两项，系统面板仍按英文渲染。
+        # ★ 追加 LSUIElement：让 applet 成为「后台程序」（agent）—— 面板照常弹、
+        #   文案照旧中文，但**不再出现在 Dock 和 Cmd-Tab 里**。
+        #   背景（2026-09-24 用户截图）：09-22 把 applet 图标/CFBundleName 都改成了
+        #   「视频工坊」，于是弹保存面板时 Dock 里多出一个**一模一样的图标**（还带运行小圆点），
+        #   看起来像 App 被双开。lsappinfo 实测该进程 type="Foreground" → 确有 Dock 磁贴。
         for args in (
             ["-replace", "CFBundleDevelopmentRegion", "-string", "zh-Hans"],
             ["-insert", "CFBundleLocalizations", "-json", '["zh-Hans","en"]'],
             ["-replace", "CFBundleName", "-string", "视频工坊"],
+            ["-insert", "LSUIElement", "-bool", "true"],
         ):
             try:
                 subprocess.run(["plutil"] + args + [info], capture_output=True, text=True, timeout=30)
@@ -537,8 +556,11 @@ def _ensure_save_panel_applet(log_path: str = "") -> str:
                 pass
         try:
             with open(info, "r", encoding="utf-8", errors="ignore") as fh:
-                if "zh-Hans" not in fh.read():
-                    return ""
+                _plist_after = fh.read()
+            if "zh-Hans" not in _plist_after:
+                return ""
+            if "LSUIElement" not in _plist_after:
+                return ""   # 没写进去就当不可用，回落 osascript（宁可英文面板，也不要多一个 Dock 图标）
         except Exception:  # noqa: BLE001
             return ""
         try:
@@ -552,8 +574,29 @@ def _ensure_save_panel_applet(log_path: str = "") -> str:
         return ""
 
 
-def _choose_save_path_via_applet(prompt: str, suggested: str, log_path: str = "") -> str:
-    """走中文本地化 applet 弹面板：返回选定路径 / "CANCELLED"；机制不可用返回 ""。"""
+def _kill_save_panel_applet(app: str) -> None:
+    """杀掉我们自己的保存面板 applet 进程（只匹配该 applet 的可执行路径，绝不误伤 App 本体）。
+
+    用途：① 上一次面板还挂着（用户点红点关窗 / 面板被切到后台）时，新一次保存不应再叠一个
+    面板；② 看门狗超时兜底，避免 applet 永久僵住。
+    """
+    import subprocess
+    try:
+        exe = os.path.join(app, "Contents", "MacOS", "applet")
+        subprocess.run(["pkill", "-f", exe], capture_output=True, timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _choose_save_path_via_applet(prompt: str, suggested: str, log_path: str = "",
+                                 timeout_s: float = 1800.0) -> str:
+    """走中文本地化 applet 弹面板：返回选定路径 / "CANCELLED"；机制不可用返回 ""。
+
+    ⚠️ 只有「applet 压根不可用」（编译失败 / 目录不可写）才返回 "" 让调用方回落英文面板；
+    applet 一旦成功弹出来，任何拿不到结果的情况都按 **"CANCELLED"** 处理 —— 否则会紧接着
+    再弹一个英文 osascript 面板，用户看到的是「取消了一个又冒出一个」。
+    `timeout_s` 是面板等待上限（看门狗），超时即杀掉 applet 并按取消处理。
+    """
     import subprocess
     import time
     import secrets
@@ -567,6 +610,9 @@ def _choose_save_path_via_applet(prompt: str, suggested: str, log_path: str = ""
     in_path = os.path.join(d, "in.txt")
     out_path = os.path.join(d, "out.txt")
     nonce = f"{int(time.time() * 1000)}-{secrets.token_hex(4)}"
+    # 先清掉上一次遗留的 applet：面板没关/关窗后挂住时，Dock（老版本）或后台会残一个，
+    # 而且两个面板叠着也没法用 —— 本次保存为准。
+    _kill_save_panel_applet(app)
     try:
         os.remove(out_path)  # 清掉上一次的残留，只认本次随机数
     except OSError:
@@ -577,19 +623,34 @@ def _choose_save_path_via_applet(prompt: str, suggested: str, log_path: str = ""
     except Exception:  # noqa: BLE001
         return ""
     try:
-        # -W：等 applet 退出（= 用户关掉面板）再返回，天然同步
-        r = subprocess.run(["open", "-W", app], capture_output=True, text=True, timeout=1800)
+        # -W：等 applet 退出（= 用户关掉面板）再返回，天然同步。
+        # 用 Popen + 看门狗而不是 run(timeout=…)：run 超时会抛异常、连通 returncode 都拿不到，
+        # 老的兜底路径会再弹一个英文面板。这里超时就**杀 applet + 按取消**，干净利落。
+        proc = subprocess.Popen(["open", "-W", app], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, text=True)
+        remained = float(timeout_s)
+        while proc.poll() is None and remained > 0:
+            time.sleep(0.2)
+            remained -= 0.2
+        if proc.poll() is None:
+            _kill_save_panel_applet(app)
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+            return "CANCELLED"   # 超时不回落（避免第二个英文面板）
     except Exception:  # noqa: BLE001
-        return ""
-    if r.returncode != 0:
-        return ""
+        return ""                # open 都起不来 → 交给调用方回落
+    if proc.returncode != 0:
+        # applet 被我们自己杀掉（上一次遗留/看门狗）或异常退出 → 按取消处理，不回落。
+        return "CANCELLED"
     try:
         with open(out_path, "r", encoding="utf-8") as fh:
             parts = fh.read().splitlines()
     except Exception:  # noqa: BLE001
-        return ""
+        return "CANCELLED"
     if len(parts) < 2 or parts[0].strip() != nonce:
-        return ""  # 没拿到本次结果 → 交给调用方回落
+        return "CANCELLED"  # 结果不是本次的（被后续请求顶掉）→ 当作用户取消，不回落
     res = parts[1].strip()
     if not res or res == "CANCELLED":
         return "CANCELLED"

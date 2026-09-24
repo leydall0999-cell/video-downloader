@@ -91,12 +91,21 @@ def _direct_save_section():
     launcher_src = Path(dl.__file__).read_text(encoding="utf-8")
     check("applet 声明中文本地化（缺了面板仍按英文渲染）",
           "CFBundleLocalizations" in launcher_src and "zh-Hans" in launcher_src, "")
+    # ★ 2026-09-24 用户报「转格式保存时下方多跳出一个一模一样的图标」：applet 是真 .app，
+    #   `open` 启动会占一个 Dock 磁贴 + 切换器条目，而它的 CFBundleName 和图标又都被
+    #   改成了「视频工坊」→ 看起来像 App 被双开。根治点＝Info.plist 声明 LSUIElement
+    #   （后台程序：面板照常弹、不再占 Dock/切换器）。
+    check("applet 声明为后台程序 LSUIElement（不占 Dock/切换器）",
+          "LSUIElement" in launcher_src, "")
+    check("applet 弹面板前先 activate（agent 程序不会自动前置）",
+          "activate" in dl._SAVE_PANEL_APPLET_SRC, "")
 
     tmpdir = Path(tempfile.mkdtemp(prefix="vdl_direct_save_test_"))
     chosen = str(tmpdir / "我选的目录" / "我的视频.mp4")
     captured = {}
 
     real_run = subprocess.run
+    real_popen = subprocess.Popen
     real_ensure = dl._ensure_save_panel_applet
     real_sp_dir = dl._save_panel_dir
     fake_applet = str(tmpdir / "SavePanel.app")
@@ -105,60 +114,113 @@ def _direct_save_section():
     dl._save_panel_dir = lambda: str(tmpdir)
     dl._ensure_save_panel_applet = lambda *a, **kw: fake_applet
 
-    # ---- 第一层：中文本地化 applet（面板全中文；用户报的「英文替换提示」根治点）----
-    def fake_run_applet(cmd, capture_output=False, text=False, timeout=None, **kw):
-        captured["cmd"] = list(cmd)
-        if cmd and cmd[0] == "open":
-            parts = (tmpdir / "in.txt").read_text(encoding="utf-8").splitlines()
-            captured["in_parts"] = parts
-            (tmpdir / "out.txt").write_text(f"{parts[0]}\n{chosen}\n", encoding="utf-8")
+    killed = []
+
+    def fake_run_pkill(cmd, capture_output=False, text=False, timeout=None, **kw):
+        """只关心我们自己发出的 pkill（清掉遗留 applet / 看门狗兜底）。"""
+        if cmd and cmd[0] == "pkill":
+            killed.append(list(cmd))
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    subprocess.run = fake_run_applet
+    def make_popen(on_launch):
+        """替身 Popen：模拟 `open -W app`（applet 现在是 Popen 起的，不是 run）。
+        on_launch 返回 False = 面板永不退出（看门狗场景）。"""
+        class _P:
+            def __init__(self, cmd, **kw):
+                captured["popen"] = list(cmd)
+                self.returncode = 0 if on_launch() is not False else None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+        return _P
+
+    # ---- 第一层：中文本地化 applet（面板全中文；用户报的「英文替换提示」根治点）----
+    def write_selected():
+        parts = (tmpdir / "in.txt").read_text(encoding="utf-8").splitlines()
+        captured["in_parts"] = parts
+        (tmpdir / "out.txt").write_text(f"{parts[0]}\n{chosen}\n", encoding="utf-8")
+        return True
+
+    subprocess.run = fake_run_pkill
+    subprocess.Popen = make_popen(write_selected)
     try:
         got = dl._choose_save_path("保存视频到", "我的视频.mp4", "")
     finally:
         subprocess.run = real_run
+        subprocess.Popen = real_popen
 
     check("面板经 applet 调起（open -W）",
-          captured.get("cmd", [None, None])[:2] == ["open", "-W"], captured.get("cmd", [])[:2])
+          captured.get("popen", [None, None])[:2] == ["open", "-W"], captured.get("popen", [])[:2])
     check("目标就是中文本地化的 SavePanel.app",
-          str(captured.get("cmd", ["", "", ""])[2]).endswith("SavePanel.app"), captured.get("cmd", []))
+          str(captured.get("popen", ["", "", ""])[2]).endswith("SavePanel.app"), captured.get("popen", []))
+    check("启动前先清掉遗留 applet（pkill 只匹配 applet 可执行路径）",
+          bool(killed) and killed[0][0] == "pkill"
+          and killed[0][-1].endswith("SavePanel.app/Contents/MacOS/applet"), killed[:1])
     parts = captured.get("in_parts") or []
     check("入参第 1 行是随机数（识别本次结果）", len(parts) > 0 and len(parts[0]) > 8, parts[:1])
     check("入参第 2 行是提示语", len(parts) > 1 and parts[1] == "保存视频到", parts)
     check("入参第 3 行是默认文件名", len(parts) > 2 and parts[2] == "我的视频.mp4", parts)
     check("applet：返回用户选定的绝对路径", got == chosen, got)
 
-    def fake_run_applet_cancel(cmd, capture_output=False, text=False, timeout=None, **kw):
-        if cmd and cmd[0] == "open":
-            parts = (tmpdir / "in.txt").read_text(encoding="utf-8").splitlines()
-            (tmpdir / "out.txt").write_text(f"{parts[0]}\nCANCELLED\n", encoding="utf-8")
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    def write_cancelled():
+        parts = (tmpdir / "in.txt").read_text(encoding="utf-8").splitlines()
+        (tmpdir / "out.txt").write_text(f"{parts[0]}\nCANCELLED\n", encoding="utf-8")
+        return True
 
-    subprocess.run = fake_run_applet_cancel
+    subprocess.run = fake_run_pkill
+    subprocess.Popen = make_popen(write_cancelled)
     try:
         got_cancel_applet = dl._choose_save_path("保存视频到", "x.mp4", "")
     finally:
         subprocess.run = real_run
+        subprocess.Popen = real_popen
     check("applet：取消 → 'CANCELLED'", got_cancel_applet == "CANCELLED", got_cancel_applet)
 
-    def fake_run_applet_dead(cmd, capture_output=False, text=False, timeout=None, **kw):
-        if cmd and cmd[0] == "open":
-            try:
-                (tmpdir / "out.txt").unlink()
-            except OSError:
-                pass
-            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        return types.SimpleNamespace(returncode=0, stdout=chosen + "\n", stderr="")
+    # ★ 2026-09-24 行为变更：applet 已经弹出来了、但拿不到结果（被后续保存顶掉 / 异常退出）时
+    #   按「取消」处理；以前这里回落到 osascript，用户会看到「刚取消完又冒出一个英文面板」。
+    def write_nothing():
+        try:
+            (tmpdir / "out.txt").unlink()
+        except OSError:
+            pass
+        return True
 
-    subprocess.run = fake_run_applet_dead
+    osascript_calls = []
+
+    def fake_run_track(cmd, capture_output=False, text=False, timeout=None, **kw):
+        if cmd and cmd[0] == "osascript":
+            osascript_calls.append(list(cmd))
+        return fake_run_pkill(cmd, capture_output, text, timeout, **kw)
+
+    subprocess.run = fake_run_track
+    subprocess.Popen = make_popen(write_nothing)
     try:
-        got_applet_fallback = dl._choose_save_path("保存视频到", "x.mp4", "")
+        got_applet_none = dl._choose_save_path("保存视频到", "x.mp4", "")
     finally:
         subprocess.run = real_run
-    check("applet 没产出结果 → 回落 osascript 仍拿到路径（不误判成取消）",
-          got_applet_fallback == chosen, got_applet_fallback)
+        subprocess.Popen = real_popen
+    check("applet 没产出结果 → 按取消处理，不再回落英文面板",
+          got_applet_none == "CANCELLED" and not osascript_calls, (got_applet_none, osascript_calls))
+
+    # 看门狗：面板永不退出（用户点红点关窗会让 AppleScript 永久挂住）→ 到点杀掉并按取消
+    killed.clear()
+
+    def never_exit():
+        return False
+
+    subprocess.run = fake_run_pkill
+    subprocess.Popen = make_popen(never_exit)
+    try:
+        got_timeout = dl._choose_save_path_via_applet("保存视频到", "x.mp4", "", timeout_s=0.6)
+    finally:
+        subprocess.run = real_run
+        subprocess.Popen = real_popen
+    check("看门狗：面板卡死超时 → 杀掉 applet 并返回 CANCELLED",
+          got_timeout == "CANCELLED" and bool(killed), (got_timeout, killed[:1]))
 
     # ---- 第二层：applet 不可用 → 回落 osascript（功能一致，面板文案是英文）----
     dl._ensure_save_panel_applet = lambda *a, **kw: ""
