@@ -4012,6 +4012,10 @@
   // ===== 压缩（图片 原格式/WebP/AVIF + 视频 H.264/HEVC；2026-09-11 新增，2026-09-11 扩展编码/格式选项）=====
   const CP_POLL_INTERVAL = UC_POLL_INTERVAL || 1500;
   const cpState = { list: [], nextId: 1, pollTimer: null };
+  // 每行「单独设置」用的短标签（行内窄，长解释挂 title）
+  const CP_LEVEL_SHORT = { high: '轻度', balanced: '推荐', strong: '极致' };
+  const CP_FMT_SHORT = { keep: '原格式', webp: 'WebP', avif: 'AVIF' };
+  const CP_CODEC_SHORT = { h264: 'H.264', hevc: 'HEVC' };
   const cpDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const cpFormatSize = (b) => {
     if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
@@ -4062,6 +4066,28 @@
       const startHtml = it.status === 'pending' || it.status === 'failed'
         ? `<button type="button" class="uc-item-start" data-act="start" title="按当前强度压缩该文件">${it.status === 'failed' ? '重新压缩' : '开始压缩'}</button>`
         : '';
+      // ★ 每行「单独设置」（2026-09-24）：与视频 / 音乐 / 图片转换一致，参数可在行内逐条改，
+      //   不再只能靠下方「默认压缩设置」统一应用（用户报「少了单独操作部分」）
+      const optDis = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
+      const lockHint = it.status === 'running' ? '压缩中不可修改'
+        : it.status === 'completed' ? '已完成：参数已固定，如需其他参数请移除后重新添加'
+        : '点「开始压缩 / 重新压缩」时生效';
+      const levelSel = `<select class="uc-item-opt" data-act="level" ${optDis}`
+        + ` title="本行压缩强度：轻度 / 推荐 = 视觉无损，极致 = 有损、体积最小 · ${lockHint}">`
+        + ['high', 'balanced', 'strong'].map(v =>
+            `<option value="${v}"${v === it.level ? ' selected' : ''}>${CP_LEVEL_SHORT[v]}</option>`).join('')
+        + `</select>`;
+      const subSel = it.kind === 'video'
+        ? `<select class="uc-item-opt" data-act="codec" ${optDis}`
+          + ` title="本行视频编码：H.264 兼容最好，HEVC 同画质更小（硬件加速） · ${lockHint}">`
+          + ['h264', 'hevc'].map(v =>
+              `<option value="${v}"${v === it.codec ? ' selected' : ''}>${CP_CODEC_SHORT[v]}</option>`).join('')
+          + `</select>`
+        : `<select class="uc-item-opt" data-act="outputFormat" ${optDis}`
+          + ` title="本行图片输出格式：原格式（PNG 严格无损）/ WebP（更小）/ AVIF（极致压缩·较慢） · ${lockHint}">`
+          + ['keep', 'webp', 'avif'].map(v =>
+              `<option value="${v}"${v === it.outputFormat ? ' selected' : ''}>${CP_FMT_SHORT[v]}</option>`).join('')
+          + `</select>`;
       const displayName = it.name || '未命名';
       const levelText = { high: '轻度', balanced: '推荐', strong: '极致·有损' }[it.level] || it.level;
       const codecText = it.kind === 'video' ? ({ h264: 'H.264', hevc: 'HEVC' }[it.codec] || 'H.264') : '';
@@ -4070,7 +4096,7 @@
       const metaSpans = it.localPath
         ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>${kindText} · ${levelText}${it.sizeBefore ? ' · ' + cpFormatSize(it.sizeBefore) : ''}</span>`
         : (it.file ? `<span>${cpFormatSize(it.file.size)}</span><span>${kindText} · ${levelText}</span>` : `<span>${kindText} · ${levelText}</span>`);
-      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
+      return `<li class="uc-item uc-item-cp ${statusCls}" data-id="${it.id}">
         <div class="uc-item-main">
           <div class="uc-item-name" title="${displayName}">${displayName}</div>
           <div class="uc-item-meta">${metaSpans}</div>
@@ -4078,6 +4104,8 @@
           <div class="uc-item-status">${statusText}</div>
         </div>
         <div class="uc-item-side">
+          ${levelSel}
+          ${subSel}
           ${startHtml}
           ${downloadHtml}
           <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
@@ -4220,8 +4248,23 @@
   el.cpFileInput.addEventListener('change', () => {
     if (el.cpFileInput.files && el.cpFileInput.files.length) { cpAddFiles(el.cpFileInput.files); el.cpFileInput.value = ''; }
   });
+  // 行内「单独设置」：压缩强度 / 视频编码 / 图片输出格式（逐条改，立即写回该行）
+  el.cpList.addEventListener('change', (e) => {
+    const t = e.target;
+    const act = t && t.dataset && t.dataset.act;
+    if (act !== 'level' && act !== 'codec' && act !== 'outputFormat') return;
+    const li = t.closest('.uc-item'); if (!li) return;
+    const it = cpState.list.find(x => x.id === +li.dataset.id); if (!it) return;
+    if (act === 'level') it.level = t.value;
+    else if (act === 'codec') it.codec = t.value;
+    else it.outputFormat = t.value;
+    cpRender();
+    el.cpStatus.textContent = '已更新该行参数（点「开始压缩」或该行按钮时生效）';
+  });
   el.cpList.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const act0 = btn.dataset.act;
+    if (act0 !== 'remove' && act0 !== 'start') return;   // 行内下拉不算「操作按钮」
     const li = btn.closest('.uc-item'); const id = +li.dataset.id;
     const it = cpState.list.find(x => x.id === id); if (!it) return;
     const act = btn.dataset.act;
