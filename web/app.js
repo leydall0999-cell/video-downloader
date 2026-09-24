@@ -7681,16 +7681,20 @@ el.dwVidPlayer.removeAttribute('src');
     if (el.dwVidCapOverlay && !el.dwVidCapOverlay.hidden) el.dwVidCapOverlay.hidden = true;
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
     dwVidSel = { x: nx, y: ny, w: 0, h: 0 };
+    dwVidDragAnchor = { x: nx, y: ny };  // 固定锚点：宽高必须相对起点算（2026-09-24）
     e.preventDefault();
   }, { capture: true });
+  let dwVidDragAnchor = null;  // 拖拽起手点（归一化）。此前误用 sel.x/y 当锚点——
+  // min() 覆写后再算 |nx - sel.x|，向上/向左拖时宽高恒为 0，mouseup 把选区当误点丢弃
+  // → 「往右上框 Seko 水印/从下往上框字幕永远框不上，且无任何提示」（用户报：删除重选后添加不了选区）
   document.addEventListener('mousemove', (e) => {
-    if (!dwVidDrag) return;
+    if (!dwVidDrag || !dwVidDragAnchor) return;
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
-    const x0 = Math.min(dwVidSel.x, nx), y0 = Math.min(dwVidSel.y, ny);
-    dwVidSel.x = x0;
-    dwVidSel.y = y0;
-    dwVidSel.w = Math.abs(nx - dwVidSel.x);
-    dwVidSel.h = Math.abs(ny - dwVidSel.y);
+    // 与图片面板同款：相对固定锚点取 min/abs，四个拖拽方向都成立
+    dwVidSel.x = Math.min(dwVidDragAnchor.x, nx);
+    dwVidSel.y = Math.min(dwVidDragAnchor.y, ny);
+    dwVidSel.w = Math.abs(nx - dwVidDragAnchor.x);
+    dwVidSel.h = Math.abs(ny - dwVidDragAnchor.y);
     if (dwVidSel.w < 0.005) dwVidSel.w = 0.005;
     if (dwVidSel.h < 0.005) dwVidSel.h = 0.005;
     dwVidDraw();

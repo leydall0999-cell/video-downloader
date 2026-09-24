@@ -829,6 +829,25 @@ def test_auto_fallback_boundary():
     print(f"OK boundary regression: opacity={op:.3f} 触发 LaMa 回落（修复 v1.0.17）")
 
 
+def test_video_sel_drag_anchor_ratchet():
+    """防回归（2026-09-24）：视频去水印预览框选必须用固定锚点算宽高。
+
+    旧代码在 mousemove 里先覆写 sel.x/y（min）再算 |nx - sel.x| —— 向上/向左拖时
+    宽高恒为 0，mouseup 把选区当误点丢弃且无任何提示（用户报「删除重选后添加不了
+    选区」，实为换了个拖拽方向就必失败）。钉两件事：
+    1. mousedown 必须记录 dwVidDragAnchor 锚点，mousemove 必须相对锚点取 min/abs；
+    2. 旧的「覆写后再对自己求差」坏模式不得回来。
+    （图片面板一直是对的——它用 dwStartX/dwStartY 固定锚点，可对照。）
+    """
+    repo = os.path.dirname(_SERVER_DIR)  # _SERVER_DIR=server/ → 仓库根（web/app.js 所在）
+    src = open(os.path.join(repo, "web", "app.js"), encoding="utf-8").read()
+    assert "dwVidDragAnchor = { x: nx, y: ny }" in src, "mousedown 必须记录拖拽锚点 dwVidDragAnchor"
+    assert "Math.abs(nx - dwVidDragAnchor.x)" in src and "Math.abs(ny - dwVidDragAnchor.y)" in src, \
+        "mousemove 宽高必须相对固定锚点计算（四个拖拽方向都成立）"
+    assert "Math.abs(nx - dwVidSel.x)" not in src, "旧的坏模式（覆写 sel.x 后对自己求差）不得回归"
+    print("OK video sel drag anchor ratchet: 锚点修复钉住，四个方向拖拽均有效")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -890,4 +909,7 @@ if __name__ == "__main__":
     test_estimate_watermark_opacity()
     test_auto_fallback_decision()
 
-    print("\n🎉 去水印核心测试全部通过（48 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
+    # 视频去水印框选锚点棘轮（2026-09-24 新增：向上/向左拖拽选区丢失）
+    test_video_sel_drag_anchor_ratchet()
+
+    print("\n🎉 去水印核心测试全部通过（49 项；另有 2 项依赖 pytest fixture 由 pytest 运行）")
