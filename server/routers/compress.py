@@ -364,11 +364,24 @@ def _run_compress(job_id: str, src: str, kind: str, level: str, src_is_temp: boo
         job["size_after"] = out_path.stat().st_size
         # 压缩后反而更大 → 保留原文件副本，如实标注
         if job["size_after"] >= job["size_before"]:
+            src_ext = src_path.suffix.lower() or ".bin"
+            converted = ext != src_ext            # 是否真的换了格式（换后缀才算）
+            if converted:
+                # ⚠️ 保留的是**原文件**，扩展名就必须回到源后缀：否则会产出
+                # 「.jpg 里装着 PNG 字节」这类名实不符的文件——下载方按后缀解析
+                # 直接失败，比「没压小」更糟（2026-09-24 实机复验抓到）。
+                new_path = app.CONVERT_DIR / f"compress_{job_id}{src_ext}"
+                try:
+                    out_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                out_path = new_path
+                ext = src_ext
             shutil.copyfile(src, out_path)
             job["size_after"] = job["size_before"]
             job["saving"] = 0.0
-            # 区分两种「没变小」：转了格式（PNG 常常比 JPG 大）vs 本来就压不动
-            if kind == "image" and output_format not in ("", "keep"):
+            # 区分两种「没变小」：真的转了格式（PNG 常常比 JPG 大）vs 本来就压不动
+            if kind == "image" and converted:
                 job["note"] = "目标格式体积更大，已保留原文件（格式未变）"
             else:
                 job["note"] = "原文件已足够小，输出为原文件副本"

@@ -247,6 +247,45 @@ def test_transparent_png_to_jpg_white_bg():
         check("透明区转 JPG 后是白底（非黑块）", all(c >= 245 for c in px), str(px))
 
 
+def test_format_fallback_keeps_source_extension():
+    """转格式后体积没下降 → 回退原文件副本时，扩展名必须回到源后缀。
+
+    背景（2026-09-24 实机复验抓到）：透明小 PNG 转 JPG 时产物没变小，兜底把源
+    PNG **原样复制**到 `compress_xxx.jpg` —— 得到「扩展名 .jpg、内容却是 PNG」的
+    欺骗性文件，下载方按后缀解析必然失败，比「没压小」更糟。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "tiny.png")
+        Image.new("RGBA", (64, 64), (255, 0, 0, 0)).save(src, format="PNG")  # 极小 RGBA PNG
+        jid = _submit_compress(src, "balanced", "t", src_name="tiny.png",
+                               output_format="jpg")
+        st = {}
+        deadline = time.time() + 20.0
+        while time.time() < deadline:
+            st = COMPRESS_JOBS.get(jid) or {}
+            if st.get("status") in ("completed", "failed"):
+                break
+            time.sleep(0.1)
+        out = str(st.get("out_path") or "")
+        check("转格式未变小 → 产物扩展名回到源后缀 .png", out.endswith(".png"),
+              f"out={out} status={st.get('status')} err={st.get('error')!r}")
+        real_fmt = ""
+        if out and os.path.isfile(out):
+            with Image.open(out) as im:
+                real_fmt = im.format or ""
+        check("产物内容与扩展名一致（确实是 PNG）", real_fmt == "PNG", real_fmt)
+        check("note 如实标注已保留原文件",
+              "保留原文件" in (st.get("note") or ""), st.get("note"))
+        check("文件名后缀同样回到源后缀",
+              str(st.get("filename") or "").endswith(".png"), st.get("filename"))
+        for f in app.CONVERT_DIR.glob(f"compress_{jid}.*"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        COMPRESS_JOBS.pop(jid, None)
+
+
 def test_avif_output_smaller():
     """图片输出格式=avif：照片型素材产物应为更小且可解码的 AVIF（需 pillow_avif）。"""
     if pillow_avif is None:
@@ -598,6 +637,7 @@ if __name__ == "__main__":
     test_webp_output_smaller()
     test_jpg_png_output()
     test_transparent_png_to_jpg_white_bg()
+    test_format_fallback_keeps_source_extension()
     test_avif_output_smaller()
     test_avif_missing_plugin_errors()
     test_run_compress_hevc_video_guarded()
