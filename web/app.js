@@ -53,51 +53,9 @@
     window.addEventListener('unhandledrejection', (e) => _vdlReport('error', e.reason || e));
   } catch (_) {}
 
-  // 运维看板/超级管理员：界面零痕迹——不显示任何按钮或密钥输入区。
-  // 唯一入口：3 秒内连点「关于本应用」版本号 5 次 → 直接打开 /ops-board；
-  // 未配置密钥的机器会先出验证页（密钥在验证页粘贴并实测校验后存钥匙串）。
-  try {
-    const _ver = document.getElementById('profAboutVersion');
-    let _opsClicks = 0, _opsTimer = null;
-    const _opsDeny = () => {
-      let t = document.getElementById('opsDenyToast');
-      if (!t) {
-        t = document.createElement('div');
-        t.id = 'opsDenyToast';
-        t.style.cssText = 'position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99999;background:#1c2333;color:#ffd9d9;border:1px solid #5a3040;border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35);';
-        document.body.appendChild(t);
-      }
-      t.textContent = '🔒 仅超级管理员账号可用：请先在「账号」中登录超级管理员账号';
-      t.style.display = 'block';
-      clearTimeout(t._timer);
-      t._timer = setTimeout(() => { t.style.display = 'none'; }, 2600);
-    };
-    if (_ver) {
-      _ver.addEventListener('click', () => {
-        _opsClicks += 1;
-        clearTimeout(_opsTimer);
-        _opsTimer = setTimeout(() => { _opsClicks = 0; }, 3000);
-        if (_opsClicks >= 5) {
-          _opsClicks = 0;
-          // 账号级门禁：当前登录账号必须是超级管理员（is_admin）才进入。
-          // 2026-09-26：运维看板已并入管理后台「运维监控」tab，直达后台。
-          try {
-            const _tok = localStorage.getItem('vdl_auth_token') || '';
-            fetch('/api/auth/me', { headers: _tok ? { 'Authorization': 'Bearer ' + _tok } : {} })
-              .then(r => r.json())
-              .then(me => {
-                if (me && me.ok && me.is_admin) {
-                  if (window.VDL && typeof window.VDL.openAdminMonitor === 'function') { window.VDL.openAdminMonitor(); }
-                  else { window.location.assign('/ops-board'); }
-                } else { _opsDeny(); }
-              })
-              .catch(() => _opsDeny());
-          } catch (_) { _opsDeny(); }
-        }
-      });
-    }
-  } catch (_) {}
-  // （密钥配置已移至 /ops-board 验证页：未配密钥时打开看板即出验证页，无需在设置里输入。）
+  // 运维/后台入口（2026-09-26 定版）：连点版本号隐藏入口已按用户要求移除，
+  // 后台管理面板只从设置里的「后台管理」按钮进入；异常告警红横幅点击仍
+  // 直达「运维监控」tab（那是提醒动作，不是常规入口）。
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;
