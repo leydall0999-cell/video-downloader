@@ -79,12 +79,18 @@
         _opsTimer = setTimeout(() => { _opsClicks = 0; }, 3000);
         if (_opsClicks >= 5) {
           _opsClicks = 0;
-          // 账号级门禁：当前登录账号必须是超级管理员（is_admin）才跳看板。
+          // 账号级门禁：当前登录账号必须是超级管理员（is_admin）才进入。
+          // 2026-09-26：运维看板已并入管理后台「运维监控」tab，直达后台。
           try {
             const _tok = localStorage.getItem('vdl_auth_token') || '';
             fetch('/api/auth/me', { headers: _tok ? { 'Authorization': 'Bearer ' + _tok } : {} })
               .then(r => r.json())
-              .then(me => { if (me && me.ok && me.is_admin) { window.location.assign('/ops-board'); } else { _opsDeny(); } })
+              .then(me => {
+                if (me && me.ok && me.is_admin) {
+                  if (window.VDL && typeof window.VDL.openAdminMonitor === 'function') { window.VDL.openAdminMonitor(); }
+                  else { window.location.assign('/ops-board'); }
+                } else { _opsDeny(); }
+              })
               .catch(() => _opsDeny());
           } catch (_) { _opsDeny(); }
         }
@@ -16381,7 +16387,11 @@ el.dwVidPlayer.hidden = true;
     b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 16px;'
       + 'background:#c0392b;color:#fff;font-size:13px;font-weight:600;text-align:center;'
       + 'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);';
-    b.addEventListener('click', () => { window.location.assign('/ops-board'); });
+    // 2026-09-26：运维看板并入后台，横幅点击直达管理面板「运维监控」tab
+    b.addEventListener('click', () => {
+      if (window.VDL && typeof window.VDL.openAdminMonitor === 'function') { window.VDL.openAdminMonitor(); }
+      else { window.location.assign('/ops-board'); }
+    });
     document.body.appendChild(b);
     _laBanner = b;
   }
@@ -19661,6 +19671,11 @@ el.dwVidPlayer.hidden = true;
       });
     });
     const loadMonitor = () => { loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts(); loadMonitorRecon(); };
+    // 2026-09-26：连点版本号 5 次 / 告警红横幅的直达入口——运维看板已并入后台，
+    // 统一改开管理面板并落在「运维监控」tab（openAdmin 自带登录+is_admin 门禁）。
+    window.VDL = Object.assign(window.VDL || {}, {
+      openAdminMonitor: () => { openAdmin(); switchAdminView('monitor'); },
+    });
     const _adminViewMonitorEl = $('adminViewMonitor');
     const _adminMonitorTimer = setInterval(() => {
       // 仅当管理面板打开且停留在运维监控页时自动刷新
