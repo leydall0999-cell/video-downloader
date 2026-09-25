@@ -656,9 +656,12 @@ def client_error(payload: dict, request: app.Request):
 
 
 @router.get('/api/admin/events')
-def admin_events(request: app.Request, limit: int = 200, level: str = ""):
-    """读取结构化事件日志（运维视图）。本机免密钥，远端需 X-Admin-Key。"""
+def admin_events(request: app.Request, limit: int = 200, level: str = "", range: str = ""):
+    """读取结构化事件日志（运维视图）。本机免密钥，远端需 X-Admin-Key。
+    range 时间窗同 /api/admin/visits；空=全部（兼容 diagnostic 旧调用）。"""
     _require_admin(request)
+    from datetime import datetime, timezone, timedelta
+    threshold = _ops_range_start(range)
     path = app.EVENT_LOG_PATH
     items = []
     if path.exists():
@@ -673,11 +676,20 @@ def admin_events(request: app.Request, limit: int = 200, level: str = ""):
                     continue
                 if level and rec.get("level") != level:
                     continue
+                if threshold is not None:
+                    ts = rec.get("ts")
+                    if ts is not None:
+                        try:
+                            _dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=8)))
+                            if _dt < threshold:
+                                continue
+                        except Exception:
+                            pass
                 items.append(rec)
         except Exception:
             pass
     items = items[-max(1, min(int(limit), 2000)):]
-    return {"count": len(items), "events": items}
+    return {"count": len(items), "events": items, "range": range or "all", "range_label": _OPS_RANGE_LABELS.get(range, "全部")}
 
 
 def _collect_local_diag() -> dict:
@@ -724,13 +736,16 @@ _STATIC_SUFFIX = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico",
 
 
 @router.get("/api/admin/visits")
-def admin_visits(request: app.Request, limit: int = 100):
+def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     """网站访客汇总：解析 nginx access.log，统计独立 IP / 状态码 / 热点路径 / 最近访问。
 
+    range 时间窗：day=今天 / 3d=近三天 / week=近七天 / month=近三十天；空=全部（兼容旧调用）。
     这是「网页访问记录」的真正数据源（首页 /api/* 之外的真实外部访问）。
     本机（桌面 App WebView）免密钥，远端必须带正确 X-Admin-Key。
     """
     _require_admin(request)
+    from datetime import datetime, timedelta, timezone
+    threshold = _ops_range_start(range)
     import re as _re
     from collections import Counter
     line_re = _re.compile(
@@ -753,6 +768,13 @@ def admin_visits(request: app.Request, limit: int = 100):
         m = line_re.search(ln)
         if not m:
             continue
+        if threshold is not None:
+            try:
+                _dt = datetime.strptime(m.group("t"), "%d/%b/%Y:%H:%M:%S %z")
+                if _dt < threshold:
+                    continue
+            except Exception:
+                pass
         total += 1
         ip = m.group("ip")
         path = m.group("p")
@@ -780,6 +802,8 @@ def admin_visits(request: app.Request, limit: int = 100):
         "top_ips": [{"ip": k, "count": v} for k, v in top_ips.most_common(15)],
         "recent": recent[-max(1, min(int(limit), 200)):],
         "source": _NGINX_ACCESS_LOG,
+        "range": range or "all",
+        "range_label": _OPS_RANGE_LABELS.get(range, "全部"),
     }
 
 
@@ -795,4 +819,109 @@ def ops_console(request: app.Request):
         html = html_path.read_text(encoding="utf-8")
     except Exception as e:
         return app.Response(f"<h1>运维控制台页面缺失</h1><p>{e}</p>", media_type="text/html", status_code=500)
+    return app.Response(html, media_type="text/html")
+
+
+# --------------------------------------------------------------------------- #
+# App 内运维看板：本地代理拉取 ECS 数据 + 看板页面（WKWebView 同源加载）
+# --------------------------------------------------------------------------- #
+_OPS_ADMIN_KEY_FILE = _Path.home() / ".video-downloader" / "ops_admin_key"
+_OPS_ECS_BASE = (os.environ.get("VDL_OPS_ECS_BASE") or "http://8.138.223.3:8888").strip()
+
+
+def _ops_range_start(range_key: str):
+    """看板时间窗 key → CST 时区起始 datetime；非法/空返回 None（不过滤，兼容旧调用）。
+
+    day=今天 00:00 CST / 3d=近三天 / week=近七天 / month=近三十天。
+    """
+    from datetime import datetime, timedelta, timezone
+    if not range_key or range_key not in ("day", "3d", "week", "month"):
+        return None
+    _tz = timezone(timedelta(hours=8))
+    now = datetime.now(_tz)
+    if range_key == "3d":
+        return now - timedelta(days=3)
+    if range_key == "week":
+        return now - timedelta(days=7)
+    if range_key == "month":
+        return now - timedelta(days=30)
+    # day：今天 00:00 CST
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+_OPS_RANGE_LABELS = {"day": "每天", "3d": "三天", "week": "每周", "month": "每月", "": "全部"}
+
+
+def _ops_admin_key() -> str:
+    """运维（超级管理员）密钥解析优先级：环境变量 > 本机文件 > 空。
+
+    安全约束：二进制/服务端**不内置**任何可用密钥。ECS 侧由 VDL_ADMIN_KEY 环境变量
+    持有超级管理员密钥；未配置时远端一律 403，避免误暴露。
+    """
+    env = (os.environ.get("VDL_ADMIN_KEY") or "").strip()
+    if env:
+        return env
+    try:
+        if _OPS_ADMIN_KEY_FILE.exists():
+            k = _OPS_ADMIN_KEY_FILE.read_text(encoding="utf-8").strip()
+            if k:
+                return k
+    except Exception:
+        pass
+    return ""
+
+
+def _require_local(request):
+    """App 内看板代理/页面仅限本机 WebView（127.0.0.1）访问，防远端滥用。"""
+    if not _is_local_request(request):
+        raise app.HTTPException(status_code=403, detail="仅限本机访问")
+
+
+@router.get("/api/app/ops-visits")
+def app_ops_visits(request: app.Request, limit: int = 100, range: str = ""):
+    """App 内看板代理：本机放行，带密钥去 ECS 拉「网站访客」汇总并转发给前端。
+
+    数据仍在 ECS（nginx 日志），App 不落盘、不缓存——纯代理展示，不会撑爆 App。
+    """
+    _require_local(request)
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/admin/visits",
+            params={"limit": max(1, min(int(limit), 200)), "range": range},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取 ECS 访客数据失败：{e}")
+
+
+@router.get("/api/app/ops-events")
+def app_ops_events(request: app.Request, limit: int = 200, level: str = "", range: str = ""):
+    """App 内看板代理：本机放行，带密钥去 ECS 拉「错误/异常事件」并转发给前端。"""
+    _require_local(request)
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/admin/events",
+            params={"limit": max(1, min(int(limit), 2000)), "level": level, "range": range},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取 ECS 事件数据失败：{e}")
+
+
+@router.get("/ops-board")
+def ops_board(request: app.Request):
+    """App 内运维看板页面：WKWebView 同源加载本机 /ops-board，fetch /api/app/*。
+
+    页面壳不鉴权（本机已 _require_local）；真正数据走 /api/app/ops-*（带密钥代理 ECS）。
+    """
+    _require_local(request)
+    html_path = _Path(__file__).resolve().parent.parent.parent / "web" / "ops" / "board.html"
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return app.Response(f"<h1>运维看板页面缺失</h1><p>{e}</p>", media_type="text/html", status_code=500)
     return app.Response(html, media_type="text/html")
