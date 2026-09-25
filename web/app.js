@@ -76,8 +76,9 @@
     }
   } catch (_) {}
   // 超级管理员密钥：设置里粘贴一次，存本机钥匙串（不进二进制）。
-  // 普通用户完全不可见：密钥区块默认隐藏，仅已配置密钥时显示；
-  // 超级管理员初始入口：3 秒内连点「关于本应用」版本号 5 次临时唤醒输入框。
+  // 密钥输入区**永远默认隐藏**（含已配置的机器），普通用户零痕迹；
+  // 超级管理员入口：3 秒内连点「关于本应用」版本号 5 次唤出（可查看/更换密钥）。
+  // 已配置时只自动显示「运维看板」按钮。
   try {
     const _saveBtn = document.getElementById('profOpsKeySave');
     const _input = document.getElementById('profOpsKeyInput');
@@ -93,7 +94,7 @@
             _clicks += 1;
             clearTimeout(_timer);
             _timer = setTimeout(() => { _clicks = 0; }, 3000);
-            if (_clicks >= 5) { _clicks = 0; _revealRow(); }
+            if (_clicks >= 5) { _clicks = 0; _revealRow(); _refreshStatus(); }
           });
         }
       } catch (_) {}
@@ -102,8 +103,7 @@
           const r = await fetch('/api/app/ops-key-status');
           const d = await r.json();
           if (d && d.configured) {
-            _revealRow();
-            _hint.textContent = '✅ 已配置超级管理员密钥';
+            _hint.textContent = '✅ 已配置超级管理员密钥（可粘贴新密钥覆盖）';
             _hint.style.color = 'var(--green, #2e9e5b)';
             const _b = document.getElementById('profOpsBoardBtn');
             if (_b) {
@@ -114,7 +114,7 @@
               }
             }
           }
-          // 未配置：整块保持隐藏，界面上不留任何超级管理员痕迹
+          // 未配置：输入区保持隐藏、按钮不显示，界面上不留任何超级管理员痕迹
         } catch (_) {}
       };
       _saveBtn.addEventListener('click', async () => {
