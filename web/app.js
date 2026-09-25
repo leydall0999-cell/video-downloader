@@ -53,6 +53,19 @@
     window.addEventListener('unhandledrejection', (e) => _vdlReport('error', e.reason || e));
   } catch (_) {}
 
+  // App 运维看板入口：关于区「运维看板」按钮 → 同源打开 /ops-board（仅本机 WebView 可访问）。
+  try {
+    const _bindOpsBoard = () => {
+      const b = document.getElementById('profOpsBoardBtn');
+      if (!b) return false;
+      b.addEventListener('click', () => { window.location.href = '/ops-board'; });
+      return true;
+    };
+    if (!_bindOpsBoard()) {
+      document.addEventListener('DOMContentLoaded', _bindOpsBoard);
+    }
+  } catch (_) {}
+
   // 运维看板入口：在 App 内同源加载 /ops-board（WKWebView 不让导航外站，故走本机路由）。
   try {
     const _opsBtn = document.getElementById('profOpsBoardBtn');
