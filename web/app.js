@@ -76,25 +76,45 @@
     }
   } catch (_) {}
   // 超级管理员密钥：设置里粘贴一次，存本机钥匙串（不进二进制）。
+  // 普通用户完全不可见：密钥区块默认隐藏，仅已配置密钥时显示；
+  // 超级管理员初始入口：3 秒内连点「关于本应用」版本号 5 次临时唤醒输入框。
   try {
     const _saveBtn = document.getElementById('profOpsKeySave');
     const _input = document.getElementById('profOpsKeyInput');
     const _hint = document.getElementById('profOpsKeyHint');
-    if (_saveBtn && _input && _hint) {
+    const _row = document.getElementById('profOpsKeyRow');
+    if (_saveBtn && _input && _hint && _row) {
+      const _revealRow = () => { _row.hidden = false; };
+      try {
+        const _ver = document.getElementById('profAboutVersion');
+        let _clicks = 0, _timer = null;
+        if (_ver) {
+          _ver.addEventListener('click', () => {
+            _clicks += 1;
+            clearTimeout(_timer);
+            _timer = setTimeout(() => { _clicks = 0; }, 3000);
+            if (_clicks >= 5) { _clicks = 0; _revealRow(); }
+          });
+        }
+      } catch (_) {}
       const _refreshStatus = async () => {
         try {
           const r = await fetch('/api/app/ops-key-status');
           const d = await r.json();
-          _hint.textContent = d.configured ? '✅ 已配置超级管理员密钥' : '⚠️ 尚未配置，运维看板将提示缺少密钥';
-          _hint.style.color = d.configured ? 'var(--green, #2e9e5b)' : 'var(--muted, #888)';
-          const _b = document.getElementById('profOpsBoardBtn');
-          if (_b && d.configured) {
-            _b.style.display = '';
-            if (!_b.dataset.bound) {
-              _b.dataset.bound = '1';
-              _b.addEventListener('click', () => { window.location.assign('/ops-board'); });
+          if (d && d.configured) {
+            _revealRow();
+            _hint.textContent = '✅ 已配置超级管理员密钥';
+            _hint.style.color = 'var(--green, #2e9e5b)';
+            const _b = document.getElementById('profOpsBoardBtn');
+            if (_b) {
+              _b.style.display = '';
+              if (!_b.dataset.bound) {
+                _b.dataset.bound = '1';
+                _b.addEventListener('click', () => { window.location.assign('/ops-board'); });
+              }
             }
           }
+          // 未配置：整块保持隐藏，界面上不留任何超级管理员痕迹
         } catch (_) {}
       };
       _saveBtn.addEventListener('click', async () => {
