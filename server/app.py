@@ -107,6 +107,53 @@ else:
     WEB_DIR = BASE_DIR / "web"
     DOWNLOAD_DIR = BASE_DIR / "downloads"
 
+# --------------------------------------------------------------------------- #
+# 结构化事件日志（运维可观测性）
+# 未捕获异常 / 前端上报的 JS 错误 / 关键错误统一落盘为 JSON 行，轮转保留；
+# 运维接口 /api/admin/events 读取，桌面端「导出诊断信息」聚合打包。
+# 任何写入失败都不影响主流程（record_event 内部已吞异常）。
+# --------------------------------------------------------------------------- #
+import logging.handlers as _logging_handlers
+EVENT_LOG_PATH = DOWNLOAD_DIR / ".events.log"
+_event_logger = logging.getLogger("vdl.events")
+if not _event_logger.handlers:
+    try:
+        _event_handler = _logging_handlers.RotatingFileHandler(
+            EVENT_LOG_PATH, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        _event_handler.setFormatter(logging.Formatter("%(message)s"))
+        _event_logger.addHandler(_event_handler)
+        _event_logger.setLevel(logging.INFO)
+        _event_logger.propagate = False
+    except Exception:
+        pass
+
+def record_event(level, category, message, *, request=None, extra=None):
+    """线程安全写一条结构化事件（JSON 行），供运维查询与诊断导出。"""
+    try:
+        rec = {
+            "ts": int(time.time()),
+            "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+            "level": str(level),
+            "category": str(category),
+            "message": str(message)[:2000],
+        }
+        if request is not None:
+            rec["method"] = getattr(request, "method", "")
+            try:
+                rec["path"] = request.url.path
+            except Exception:
+                rec["path"] = ""
+            rec["ua"] = (request.headers.get("User-Agent") or "")[:200]
+            try:
+                rec["ip"] = request.client.host if request.client else ""
+            except Exception:
+                rec["ip"] = ""
+        if extra:
+            rec["extra"] = extra
+        _event_logger.info(json.dumps(rec, ensure_ascii=False))
+    except Exception:
+        pass
+
 # 字幕提取产物目录（faster-whisper ASR，随下载目录走）
 SUBTITLE_DIR = DOWNLOAD_DIR / "subtitles"
 SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1973,12 +2020,14 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     排查时拿不到真实堆栈。这里把异常类型+消息透传给前端，并写服务端日志，
     让用户（双击启动 App 也能）直接看到 500 的真实成因。
     """
-    logger.exception("未捕获异常 %s %s: %s", request.method, request.url.path, exc)
-    # 不要拦截 FastAPI 自身的 HTTPException（如 402 订阅提示、400 参数错误）
     from fastapi import HTTPException as _HTTPException
 
+    # 先判断，避免把 FastAPI 自身的 HTTPException（402 订阅提示 / 400 参数错误等）当未捕获异常记录
     if isinstance(exc, _HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    logger.exception("未捕获异常 %s %s: %s", request.method, request.url.path, exc)
+    # 落入结构化事件日志，闭环「用户报问题我们看不到服务端错误」
+    record_event("error", "server_exception", f"{type(exc).__name__}: {exc}", request=request)
     msg = f"{type(exc).__name__}: {str(exc)[:200]}"
     return JSONResponse(
         status_code=500,

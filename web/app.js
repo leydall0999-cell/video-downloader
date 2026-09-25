@@ -31,6 +31,73 @@
       }
     } catch (_) {}
   });
+
+  // 客户端错误上报：把前端 JS 运行期错误（含未处理的 Promise rejection）发到服务端
+  // /api/client-error，落入结构化事件日志 —— 闭环「网站前端报错我们看不到记录」。
+  // 自身任何异常都静默吞掉，绝不因上报逻辑再触发二次错误。
+  let _vdlErrSent = 0;
+  const _vdlErrCap = 50; // 单会话上限，防止错误风暴刷屏服务端
+  function _vdlReportError(message, stack, category) {
+    if (_vdlErrSent >= _vdlErrCap) return;
+    _vdlErrSent++;
+    try {
+      const payload = {
+        message: String(message || '').slice(0, 2000),
+        stack: String(stack || '').slice(0, 3000),
+        url: location.href.slice(0, 500),
+        level: 'error',
+        category: category || 'client_js',
+      };
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/client-error', new Blob([body], { type: 'application/json' }));
+      } else {
+        fetch('/api/client-error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+      }
+    } catch (_) {}
+  }
+  window.addEventListener('error', (e) => {
+    try {
+      const stack = (e.error && e.error.stack) ? e.error.stack : '';
+      const loc = e.filename ? (String(e.filename).split('/').pop() + ':' + e.lineno + ':' + e.colno) : '';
+      _vdlReportError((e.message || (e.error && e.error.message) || e.error) + (loc ? ' @ ' + loc : ''), stack, 'client_js');
+    } catch (_) {}
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    try {
+      const r = e.reason;
+      const msg = (r && (r.message || r.reason)) ? (r.message || r.reason) : String(r);
+      const stack = (r && r.stack) ? r.stack : '';
+      _vdlReportError(msg, stack, 'unhandledrejection');
+    } catch (_) {}
+  });
+
+  // 导出诊断信息：点击从 /api/diagnostic 拉取打包并下载为 JSON，便于用户报障时附带。
+  const _exportDiagBtn = document.getElementById('exportDiagBtn');
+  if (_exportDiagBtn) {
+    _exportDiagBtn.addEventListener('click', async () => {
+      const _orig = _exportDiagBtn.textContent;
+      try {
+        _exportDiagBtn.disabled = true;
+        _exportDiagBtn.textContent = '生成中…';
+        const r = await fetch('/api/diagnostic', { credentials: 'same-origin' });
+        if (!r.ok) { window.alert('导出诊断失败：HTTP ' + r.status); return; }
+        const data = await r.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'vdl-diagnostic-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      } catch (err) {
+        window.alert('导出诊断失败：' + (err && err.message ? err.message : err));
+      } finally {
+        _exportDiagBtn.disabled = false;
+        _exportDiagBtn.textContent = _orig;
+      }
+    });
+  }
+
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;

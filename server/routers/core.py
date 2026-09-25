@@ -7,6 +7,9 @@ handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在
 """
 import os
 import subprocess
+import json as _json
+import time as _time
+from pathlib import Path as _Path
 
 import app
 from fastapi import APIRouter
@@ -601,3 +604,115 @@ def _append_feedback(path, record: dict) -> dict:
         except Exception:
             pass  # 写入失败不阻塞反馈接口
     return {"ok": True, "ts": record["ts"]}
+
+
+# --------------------------------------------------------------------------- #
+# 运维可观测性：事件日志 / 前端错误上报 / 诊断导出
+# --------------------------------------------------------------------------- #
+ADMIN_KEY = (os.environ.get("VDL_ADMIN_KEY") or "").strip()
+
+
+def _is_local_request(request) -> bool:
+    """桌面端本机 WebView 通过 127.0.0.1 访问，视为可信，免密钥放行运维端点。"""
+    try:
+        host = request.client.host if request.client else ""
+    except Exception:
+        host = ""
+    return host in ("127.0.0.1", "::1", "localhost", "")
+
+
+def _require_admin(request):
+    """运维端点鉴权：本机（桌面 App）放行；远端必须带正确 X-Admin-Key。
+    未配置 VDL_ADMIN_KEY 时远端一律 403，避免误暴露。"""
+    if _is_local_request(request):
+        return
+    key = (request.headers.get("X-Admin-Key") or "").strip()
+    if ADMIN_KEY and key == ADMIN_KEY:
+        return
+    raise app.HTTPException(status_code=403, detail="需要管理员密钥（X-Admin-Key）")
+
+
+@router.post('/api/client-error')
+def client_error(payload: dict, request: app.Request):
+    """前端 JS 运行期错误上报（window.onerror / unhandledrejection）。
+
+    让网站前端报错也能在服务端事件日志查到，闭环「用户报问题我们看不到记录」。
+    仅记录 message 必填；其余为可选上下文。
+    """
+    app._check_rate_limit(request)
+    msg = (payload.get("message") or "").strip()[:2000]
+    if not msg:
+        raise app.HTTPException(status_code=400, detail="缺少 message")
+    extra = {
+        "stack": (payload.get("stack") or "")[:3000],
+        "url": (payload.get("url") or "")[:500],
+        "line": payload.get("line"),
+        "col": payload.get("col"),
+        "level": payload.get("level", "error"),
+        "category": payload.get("category", "client_js"),
+    }
+    app.record_event("error", "client_js", msg, request=request, extra=extra)
+    return {"ok": True}
+
+
+@router.get('/api/admin/events')
+def admin_events(request: app.Request, limit: int = 200, level: str = ""):
+    """读取结构化事件日志（运维视图）。本机免密钥，远端需 X-Admin-Key。"""
+    _require_admin(request)
+    path = app.EVENT_LOG_PATH
+    items = []
+    if path.exists():
+        try:
+            for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rec = _json.loads(ln)
+                except Exception:
+                    continue
+                if level and rec.get("level") != level:
+                    continue
+                items.append(rec)
+        except Exception:
+            pass
+    items = items[-max(1, min(int(limit), 2000)):]
+    return {"count": len(items), "events": items}
+
+
+def _collect_local_diag() -> dict:
+    """聚合桌面端本机诊断文件（仅桌面 App 本地实例存在；网页版返回空）。"""
+    out: dict = {}
+    launch = _Path.home() / ".vdl_launch.log"
+    if launch.exists():
+        try:
+            txt = launch.read_text(encoding="utf-8", errors="replace")
+            out["launch_log_tail"] = "\n".join(txt.splitlines()[-120:])
+            out["launch_log_size"] = launch.stat().st_size
+        except Exception:
+            pass
+    stats = _Path.home() / ".video-downloader" / "stats.json"
+    if stats.exists():
+        try:
+            out["stats"] = _json.loads(stats.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            pass
+    return out
+
+
+@router.get('/api/diagnostic')
+def diagnostic(request: app.Request):
+    """导出诊断信息包：版本指纹 + 近期事件 + 桌面端本机日志/统计。
+    桌面端「导出诊断信息」按钮调用；本机免密钥，远端需 X-Admin-Key。"""
+    _require_admin(request)
+    data: dict = {"generated_at": int(_time.time())}
+    try:
+        data["version"] = api_version()
+    except Exception as e:
+        data["version"] = {"error": str(e)}
+    try:
+        data["recent_events"] = admin_events(request, limit=50).get("events", [])
+    except Exception:
+        data["recent_events"] = []
+    data["local_diag"] = _collect_local_diag()
+    return app.JSONResponse(content=data)
