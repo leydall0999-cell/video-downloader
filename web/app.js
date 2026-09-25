@@ -16090,10 +16090,11 @@ el.dwVidPlayer.hidden = true;
         chips.push(`<span class="member-chip member-chip-dl">👑 下载会员${src} 至 ${_memberFmtDate(dl.expire_at)}</span>`);
       }
       if (ai.active) {
-        chips.push(`<span class="member-chip member-chip-ai">🤖 AI 会员 至 ${_memberFmtDate(ai.expire_at)} · 积分 ${ai.credits_left || 0}${ai.grant_credits ? '/' + ai.grant_credits : ''}</span>`);
+        // 标注「到期清零」：AI 订阅积分随 AI 会员到期日一起失效，与永久积分区别开来
+        chips.push(`<span class="member-chip member-chip-ai">🤖 AI 会员 至 ${_memberFmtDate(ai.expire_at)} · 积分 ${ai.credits_left || 0}${ai.grant_credits ? '/' + ai.grant_credits : ''}（到期清零）</span>`);
       }
       const perm = Number(s.permanent_credits || 0);
-      if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}</span>`);
+      if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}（不过期）</span>`);
       el.memberStatus.innerHTML = chips.length
         ? `<div class="member-status-inner">${chips.join('')}<span class="member-total">可用积分合计 ${Number(s.credits_total || 0)}</span></div>`
         : `<div class="member-status-inner member-status-empty">尚未开通会员 — 下方选择套餐（V1 测试期激活即时生效）</div>`;
@@ -17928,6 +17929,8 @@ el.dwVidPlayer.hidden = true;
     const cur = _aboutCurrentVer || '';
     let title = ver ? ('版本 v' + ver + ' 更新内容') : '更新内容';
     if (isNew) title = '新版本 v' + ver + ' 更新内容';
+    // 更新源版本与本机不一致（通常是更新源还没发到本机版本）时不要写成「当前版本」误导
+    else if (ver && cur && ver !== cur) title = '最新发布版本 v' + ver + ' 更新内容';
     const cached = _cachedUpdateNotes();
     if (!isNew && cached && cached.version && cur && cached.version === cur) {
       title = '本次更新已完成（v' + cur + '）';
