@@ -18584,6 +18584,27 @@ el.dwVidPlayer.hidden = true;
     });
   }
 
+  // 「启用云端抠图」开关即改即存（密钥输入区已对用户隐藏，AK/SK 走后端已有值合并，传空不覆盖）。
+  if (el.cloudMattingEnabled) {
+    el.cloudMattingEnabled.addEventListener('change', async () => {
+      try {
+        await request('/api/cloud-matting/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key: el.cloudAk ? el.cloudAk.value.trim() : '',
+            secret_key: el.cloudSk ? el.cloudSk.value.trim() : '',
+            mediakit_api_key: el.cloudMk ? el.cloudMk.value.trim() : '',
+            enhance_version: (el.matEnhanceToggle && !el.matEnhanceToggle.checked) ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : ''),
+            mat_output_hd: el.matOutputHd ? el.matOutputHd.checked : false,
+            auto_vlm_classify: el.autoVlmClassify ? el.autoVlmClassify.checked : true,
+            enabled: el.cloudMattingEnabled.checked,
+          }),
+        });
+      } catch (_) { /* 静默：下次切换或保存按钮会再存 */ }
+    });
+  }
+
   // ---- 抠图面板内的「AI 画质增强」开关 + 档位（即改即存） ----
   if (el.matEnhanceToggle) {
     const saveEnhance = async () => {

@@ -1516,24 +1516,26 @@
                 <span data-page-node-id="Drds6rurtkBjVg8CIQcwco">AI 智能识别图片类型（自动模式：先看一眼图再选引擎，海报/科技图不再误判人像）</span>
               </label>
 
-              <!-- ☁️ 云端抠图（火山引擎 · 豆包级）：原在「视频解说」密钥配置里，
-                   已整体搬到抠图面板，避免两处配置不一致互相覆盖。 -->
+              <!-- ☁️ 云端抠图（火山引擎 · 豆包级）：密钥由发行方预配置（cloud_matting.json / 环境变量），
+                   对用户只暴露「启用」开关；密钥输入区 hidden 隐藏但保留在 DOM，
+                   GET 回填的值随开关自动保存隐形流转，避免误清空。 -->
               <div class="mat-cloud-cfg" data-page-node-id="lFjiK9CvbWOij4CaNq9CzU">
-                <span class="uc-label" data-page-node-id="eSrSoLf5bkqGE1kGDUZglj">☁️ 云端抠图（火山引擎 · 豆包级）</span>
                 <label class="adv-toggle-row" data-page-node-id="hnbHYwWp0U9NLIdjWjLtEU">
                   <input type="checkbox" id="cloudMattingEnabled" data-page-node-id="tPpea9VOLxkbJOisQ5GXcE" />
-                  <span data-page-node-id="Ky49y7Ow9dYD3APGObDbjQ">启用云端抠图（说扣什么走火山像素级，未启用则本地 SAM/MODNet 兜底）</span>
+                  <span data-page-node-id="Ky49y7Ow9dYD3APGObDbjQ">☁️ 云端抠图 · 豆包级（说扣什么走火山像素级，未启用或断网则本地 SAM/MODNet 兜底）</span>
                 </label>
-                <label class="adv-label" for="cloudMk" data-page-node-id="VvAaAAeFKggoaAK3v3Vj9r">AI MediaKit API Key（豆包级软 alpha 抠图，推荐）</label>
-                <input id="cloudMk" class="adv-input" type="password" placeholder="火山 AI MediaKit Bearer Key（火山引擎控制台 → AI MediaKit）" autocomplete="off" spellcheck="false" data-page-node-id="HovyTiwtXBPnmwCBCY7NUE" />
-                <label class="adv-label" for="cloudAk" data-page-node-id="vQcDoCTH71ogv5Sz1igBYP">Access Key ID（cv 兜底，可选）</label>
-                <input id="cloudAk" class="adv-input" type="text" placeholder="火山引擎访问控制 → 访问密钥 AK" autocomplete="off" spellcheck="false" data-page-node-id="kYydA2Z0cx34EvSR6cg9n0" />
-                <label class="adv-label" for="cloudSk" data-page-node-id="REuz8IVqlzDbSCxke047Oz">Secret Access Key（cv 兜底，可选）</label>
-                <input id="cloudSk" class="adv-input" type="password" placeholder="火山引擎 Secret Key（SK）" autocomplete="off" spellcheck="false" data-page-node-id="uSb98Fv5AbDbtBcFHDONaN" />
-                <span class="dw-hint" data-page-node-id="BcEh8VrccWHeW91Yztuzo9">未配置 / 断网自动回退本地抠图，不报错。增强失败自动回退不增强，不中断抠图。</span>
-                <div class="mat-cloud-actions" data-page-node-id="dRapNjCb6iHaxcDaR1qy0i">
-                  <button type="button" class="btn btn-primary btn-sm" id="cloudMattingSave" data-page-node-id="yCN6QJt63NxuSqCe4wG9To">保存云端抠图配置</button>
-                  <span id="cloudMattingStatus" class="sub-status" hidden data-page-node-id="DIXkneFY1Q2yWKg0x2o2rk"></span>
+                <div hidden>
+                  <label class="adv-label" for="cloudMk" data-page-node-id="VvAaAAeFKggoaAK3v3Vj9r">AI MediaKit API Key（豆包级软 alpha 抠图，推荐）</label>
+                  <input id="cloudMk" class="adv-input" type="password" placeholder="火山 AI MediaKit Bearer Key（火山引擎控制台 → AI MediaKit）" autocomplete="off" spellcheck="false" data-page-node-id="HovyTiwtXBPnmwCBCY7NUE" />
+                  <label class="adv-label" for="cloudAk" data-page-node-id="vQcDoCTH71ogv5Sz1igBYP">Access Key ID（cv 兜底，可选）</label>
+                  <input id="cloudAk" class="adv-input" type="text" placeholder="火山引擎访问控制 → 访问密钥 AK" autocomplete="off" spellcheck="false" data-page-node-id="kYydA2Z0cx34EvSR6cg9n0" />
+                  <label class="adv-label" for="cloudSk" data-page-node-id="REuz8IVqlzDbSCxke047Oz">Secret Access Key（cv 兜底，可选）</label>
+                  <input id="cloudSk" class="adv-input" type="password" placeholder="火山引擎 Secret Key（SK）" autocomplete="off" spellcheck="false" data-page-node-id="uSb98Fv5AbDbtBcFHDONaN" />
+                  <span class="dw-hint" data-page-node-id="BcEh8VrccWHeW91Yztuzo9">未配置 / 断网自动回退本地抠图，不报错。增强失败自动回退不增强，不中断抠图。</span>
+                  <div class="mat-cloud-actions" data-page-node-id="dRapNjCb6iHaxcDaR1qy0i">
+                    <button type="button" class="btn btn-primary btn-sm" id="cloudMattingSave" data-page-node-id="yCN6QJt63NxuSqCe4wG9To">保存云端抠图配置</button>
+                    <span id="cloudMattingStatus" class="sub-status" hidden data-page-node-id="DIXkneFY1Q2yWKg0x2o2rk"></span>
+                  </div>
                 </div>
               </div>
             </div>
