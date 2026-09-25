@@ -73,6 +73,45 @@
       _opsBtn.addEventListener('click', () => { window.location.assign('/ops-board'); });
     }
   } catch (_) {}
+  // 超级管理员密钥：设置里粘贴一次，存本机钥匙串（不进二进制）。
+  try {
+    const _saveBtn = document.getElementById('profOpsKeySave');
+    const _input = document.getElementById('profOpsKeyInput');
+    const _hint = document.getElementById('profOpsKeyHint');
+    if (_saveBtn && _input && _hint) {
+      const _refreshStatus = async () => {
+        try {
+          const r = await fetch('/api/app/ops-key-status');
+          const d = await r.json();
+          _hint.textContent = d.configured ? '✅ 已配置超级管理员密钥' : '⚠️ 尚未配置，运维看板将提示缺少密钥';
+          _hint.style.color = d.configured ? 'var(--green, #2e9e5b)' : 'var(--muted, #888)';
+        } catch (_) {}
+      };
+      _saveBtn.addEventListener('click', async () => {
+        const key = (_input.value || '').trim();
+        if (!key) { _hint.textContent = '请先粘贴密钥'; _hint.style.color = 'var(--red, #d33)'; return; }
+        _saveBtn.disabled = true;
+        try {
+          const r = await fetch('/api/app/ops-key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
+          const d = await r.json();
+          if (r.ok && d.ok) {
+            _hint.textContent = '✅ 已保存到本机钥匙串（请重启 App 使运维看板生效）';
+            _hint.style.color = 'var(--green, #2e9e5b)';
+            _input.value = '';
+          } else {
+            _hint.textContent = '保存失败：' + (d.detail || ('HTTP ' + r.status));
+            _hint.style.color = 'var(--red, #d33)';
+          }
+        } catch (e) {
+          _hint.textContent = '保存失败：' + (e && e.message ? e.message : e);
+          _hint.style.color = 'var(--red, #d33)';
+        } finally {
+          _saveBtn.disabled = false;
+        }
+      });
+      _refreshStatus();
+    }
+  } catch (_) {}
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;

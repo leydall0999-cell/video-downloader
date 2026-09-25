@@ -48,6 +48,9 @@
   .err{color:var(--red);padding:10px}
   footer{padding:10px 18px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
   a{color:var(--accent)}
+  .tabs{display:flex;gap:8px;align-items:center;padding:0 18px 6px;flex-wrap:wrap}
+  .tabs .lbl{color:var(--muted);font-size:12px}
+  .tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}
 </style>
 </head>
 <body>
@@ -58,6 +61,14 @@
   <button id="refreshBtn" class="primary">刷新</button>
   <button id="backBtn">返回主界面</button>
 </header>
+
+<div class="tabs" id="rangeTabs">
+  <span class="lbl">时间范围</span>
+  <button data-range="day" class="active">每天</button>
+  <button data-range="3d">三天</button>
+  <button data-range="week">每周</button>
+  <button data-range="month">每月</button>
+</div>
 
 <div class="wrap">
   <section class="panel">
@@ -80,19 +91,24 @@
 
 <script>
 const $ = (s) => document.querySelector(s);
+let curRange = 'day';
+let curRangeLabel = '每天';
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function fmtTime(t){
   // nginx 时间格式: 25/Sep/2026:12:43:01 +0800
   try{const d=new Date(t.replace(' ','T').replace(/\+0800$/,'+08:00'));return d.toLocaleString('zh-CN',{hour12:false});}catch(e){return t;}
 }
 function statusClass(s){if(s>=500)return'status-5xx';if(s>=400)return'status-4xx';if(s>=300)return'status-3xx';return'status-2xx';}
+function isKeyErr(e){return /运维密钥|X-Admin-Key|401|403/.test(e&&e.message||'');}
+function keyNeededMsg(){return '未配置超级管理员密钥：请在 App「关于本应用」粘贴运维密钥并重启后重试';}
 
 async function loadVisits(){
   const el=$('#visitsStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
-    const r=await fetch('/api/app/ops-visits?limit=100');
+    const r=await fetch('/api/app/ops-visits?limit=100&range='+encodeURIComponent(curRange));
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
+    if(d.range_label) curRangeLabel=d.range_label;
     el.innerHTML=
       `<div class="stat"><div class="n">${d.total}</div><div class="l">总请求</div></div>`+
       `<div class="stat"><div class="n">${d.unique_ips}</div><div class="l">独立 IP</div></div>`;
@@ -106,14 +122,14 @@ async function loadVisits(){
       `<div class="row"><span class="t">${esc(fmtTime(x.t))}</span> · <b>${esc(x.ip)}</b> · <span class="${statusClass(x.s)}">${x.s}</span> · ${esc(x.p)}<br><span class="t">${esc(x.ua)}</span></div>`
     ).join(''):'<div class="empty">无最近访问</div>';
   }catch(e){
-    el.innerHTML=''; $('#visitsRecent').innerHTML=`<div class="err">访客加载失败：${esc(e.message)}</div>`;
+    el.innerHTML=''; $('#visitsRecent').innerHTML=`<div class="err">${isKeyErr(e)?esc(keyNeededMsg()):('访客加载失败：'+esc(e.message))}</div>`;
   }
 }
 
 async function loadEvents(){
   const el=$('#eventsStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
-    const r=await fetch('/api/app/ops-events?limit=200');
+    const r=await fetch('/api/app/ops-events?limit=200&range='+encodeURIComponent(curRange));
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
     const errs=(d.events||[]).filter(x=>x.level==='error').length;
@@ -129,14 +145,22 @@ async function loadEvents(){
       `</div>`
     ).join(''):'<div class="empty">暂无事件</div>';
   }catch(e){
-    el.innerHTML=''; $('#eventsLog').innerHTML=`<div class="err">事件加载失败：${esc(e.message)}</div>`;
+    el.innerHTML=''; $('#eventsLog').innerHTML=`<div class="err">${isKeyErr(e)?esc(keyNeededMsg()):('事件加载失败：'+esc(e.message))}</div>`;
   }
 }
 
 async function loadAll(){
-  $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false});
+  $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false})+' · 范围：'+curRangeLabel;
   await Promise.all([loadVisits(),loadEvents()]);
 }
+document.querySelectorAll('#rangeTabs button[data-range]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    curRange=b.dataset.range;
+    document.querySelectorAll('#rangeTabs button[data-range]').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    loadAll();
+  });
+});
 $('#refreshBtn').addEventListener('click',loadAll);
 $('#backBtn').addEventListener('click',()=>{window.location.href='/';});
 loadAll();

@@ -591,15 +591,57 @@ _OPS_LOCAL_LOG = app.Path.home() / ".video-downloader" / ".ops_events.log"
 _OPS_MAX_BYTES = 2 * 1024 * 1024
 
 
-def _ops_admin_key() -> str:
-    """运维密钥优先级：环境变量 > 本机文件 ~/.video-downloader/ops_admin_key > 内置默认。
+def _ops_range_start(range_key: str):
+    """看板时间窗 key → CST 时区起始 datetime；非法/空返回 None（不过滤，兼容旧调用）。
 
-    内置默认仅为开箱即用（自托管运维工具，密钥本就开放给用户自己）；
-    可被环境变量或本机文件覆盖。
+    day=今天 00:00 CST / 3d=近三天 / week=近七天 / month=近三十天。
+    """
+    from datetime import datetime, timedelta, timezone
+    if not range_key or range_key not in ("day", "3d", "week", "month"):
+        return None
+    _tz = timezone(timedelta(hours=8))
+    now = datetime.now(_tz)
+    if range_key == "3d":
+        return now - timedelta(days=3)
+    if range_key == "week":
+        return now - timedelta(days=7)
+    if range_key == "month":
+        return now - timedelta(days=30)
+    # day：今天 00:00 CST
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+_OPS_RANGE_LABELS = {"day": "每天", "3d": "三天", "week": "每周", "month": "每月", "": "全部"}
+
+
+def _ops_keychain_key() -> str:
+    """从 macOS 钥匙串读取运维（超级管理员）密钥（service=vdl-ops-admin）。无则返回空。"""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "vdl-ops-admin", "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _ops_admin_key() -> str:
+    """运维（超级管理员）密钥优先级：环境变量 > 本机钥匙串 > 本机文件 > 空。
+
+    安全约束：二进制内**不内置**任何可用密钥。网页控制台由用户手输密钥；App 侧从
+    本机钥匙串读取（设置里贴一次即可），外人拿到安装包也无法拿到密钥，拉 ECS 数据
+    一律 403。ECS 侧通过 VDL_ADMIN_KEY 环境变量持有同一把超级管理员密钥。
     """
     env = (app.os.environ.get("VDL_ADMIN_KEY") or "").strip()
     if env:
         return env
+    kc = _ops_keychain_key()
+    if kc:
+        return kc
     try:
         if _OPS_ADMIN_KEY_FILE.exists():
             k = _OPS_ADMIN_KEY_FILE.read_text(encoding="utf-8").strip()
@@ -607,7 +649,7 @@ def _ops_admin_key() -> str:
                 return k
     except Exception:
         pass
-    return "be2b20a60cd9d2de82e678375ec8a4a0ed4d261c07c2b38b"  # 内置默认
+    return ""
 
 
 def _is_local_request(request) -> bool:
@@ -679,9 +721,12 @@ def client_error(payload: dict, request: app.Request):
 
 
 @router.get('/api/admin/events')
-def admin_events(request: app.Request, limit: int = 200, level: str = ""):
-    """读取本地结构化事件日志（App 自身错误，运维视图）。本机免密钥，远端需 X-Admin-Key。"""
+def admin_events(request: app.Request, limit: int = 200, level: str = "", range: str = ""):
+    """读取本地结构化事件日志（App 自身错误，运维视图）。本机免密钥，远端需 X-Admin-Key。
+    range 时间窗同 /api/admin/visits；空=全部（兼容 diagnostic 旧调用）。"""
     _require_admin(request)
+    from datetime import datetime, timezone, timedelta
+    threshold = _ops_range_start(range)
     items = []
     if _OPS_LOCAL_LOG.exists():
         try:
@@ -695,11 +740,20 @@ def admin_events(request: app.Request, limit: int = 200, level: str = ""):
                     continue
                 if level and rec.get("level") != level:
                     continue
+                if threshold is not None:
+                    ts = rec.get("ts")
+                    if ts is not None:
+                        try:
+                            _dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=8)))
+                            if _dt < threshold:
+                                continue
+                        except Exception:
+                            pass
                 items.append(rec)
         except Exception:
             pass
     items = items[-max(1, min(int(limit), 2000)):]
-    return {"count": len(items), "events": items}
+    return {"count": len(items), "events": items, "range": range or "all", "range_label": _OPS_RANGE_LABELS.get(range, "全部")}
 
 
 def _collect_local_diag() -> dict:
@@ -743,12 +797,15 @@ _STATIC_SUFFIX = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico",
 
 
 @router.get("/api/admin/visits")
-def admin_visits(request: app.Request, limit: int = 100):
+def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     """网站访客汇总：解析 nginx access.log（仅 ECS 有；本机无 nginx 时优雅返回空）。
 
+    range 时间窗：day=今天 / 3d=近三天 / week=近七天 / month=近三十天；空=全部（兼容旧调用）。
     桌面 App 看网站数据请走 /api/app/ops-visits（代理 ECS），本端点用于 ECS 本机直查。
     """
     _require_admin(request)
+    from datetime import datetime, timedelta, timezone
+    threshold = _ops_range_start(range)
     import re as _re
     from collections import Counter
     line_re = _re.compile(
@@ -772,6 +829,13 @@ def admin_visits(request: app.Request, limit: int = 100):
         m = line_re.search(ln)
         if not m:
             continue
+        if threshold is not None:
+            try:
+                _dt = datetime.strptime(m.group("t"), "%d/%b/%Y:%H:%M:%S %z")
+                if _dt < threshold:
+                    continue
+            except Exception:
+                pass
         total += 1
         ip = m.group("ip")
         path = m.group("p")
@@ -794,6 +858,8 @@ def admin_visits(request: app.Request, limit: int = 100):
         "top_ips": [{"ip": k, "count": v} for k, v in top_ips.most_common(15)],
         "recent": recent[-max(1, min(int(limit), 200)):],
         "source": _NGINX_ACCESS_LOG,
+        "range": range or "all",
+        "range_label": _OPS_RANGE_LABELS.get(range, "全部"),
     }
 
 
@@ -824,16 +890,18 @@ def ops_board(request: app.Request):
 
 
 @router.get("/api/app/ops-visits")
-def app_ops_visits(request: app.Request, limit: int = 100):
+def app_ops_visits(request: app.Request, limit: int = 100, range: str = ""):
     """App 内看板代理：本机放行，带密钥去 ECS 拉「网站访客」汇总并转发前端。
 
     数据仍在 ECS（nginx 日志），App 不落盘、不缓存——纯代理展示，不会撑爆 App。
     """
     _require_local(request)
+    if not _ops_admin_key():
+        raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
         resp = app.requests.get(
             f"{_OPS_ECS_BASE}/api/admin/visits",
-            params={"limit": max(1, min(int(limit), 200))},
+            params={"limit": max(1, min(int(limit), 200)), "range": range},
             headers={"X-Admin-Key": _ops_admin_key()},
             timeout=15,
         )
@@ -843,16 +911,48 @@ def app_ops_visits(request: app.Request, limit: int = 100):
 
 
 @router.get("/api/app/ops-events")
-def app_ops_events(request: app.Request, limit: int = 200, level: str = ""):
+def app_ops_events(request: app.Request, limit: int = 200, level: str = "", range: str = ""):
     """App 内看板代理：本机放行，带密钥去 ECS 拉「错误/异常事件」并转发前端。"""
     _require_local(request)
+    if not _ops_admin_key():
+        raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
         resp = app.requests.get(
             f"{_OPS_ECS_BASE}/api/admin/events",
-            params={"limit": max(1, min(int(limit), 2000)), "level": level},
+            params={"limit": max(1, min(int(limit), 2000)), "level": level, "range": range},
             headers={"X-Admin-Key": _ops_admin_key()},
             timeout=15,
         )
         return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
     except Exception as e:
         raise app.HTTPException(status_code=502, detail=f"拉取 ECS 事件数据失败：{e}")
+
+
+@router.get("/api/app/ops-key-status")
+def app_ops_key_status(request: app.Request):
+    """本机查看是否已配置运维密钥（不返回明文）。"""
+    _require_local(request)
+    return {"configured": bool(_ops_admin_key())}
+
+
+@router.post("/api/app/ops-key")
+def app_ops_key_save(payload: dict, request: app.Request):
+    """本机保存运维（超级管理员）密钥到 macOS 钥匙串（不进二进制、不写明文文件）。
+
+    仅本机 WebView 可调用；Keychain 首次访问可能弹授权，允许一次即可。
+    """
+    _require_local(request)
+    key = (payload.get("key") or "").strip()
+    if not key:
+        raise app.HTTPException(status_code=400, detail="密钥为空")
+    try:
+        import subprocess
+        subprocess.run(["security", "delete-generic-password", "-s", "vdl-ops-admin"],
+                       capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["security", "add-generic-password", "-s", "vdl-ops-admin", "-w", key],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip() or "security 写入失败")
+    except Exception as e:
+        raise app.HTTPException(status_code=500, detail=f"保存密钥到钥匙串失败：{e}")
+    return {"ok": True, "stored": "keychain"}
