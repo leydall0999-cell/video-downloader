@@ -716,3 +716,83 @@ def diagnostic(request: app.Request):
         data["recent_events"] = []
     data["local_diag"] = _collect_local_diag()
     return app.JSONResponse(content=data)
+
+
+_NGINX_ACCESS_LOG = "/var/log/nginx/access.log"
+_STATIC_SUFFIX = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico",
+                  ".woff", ".woff2", ".ttf", ".svg", ".map", ".json")
+
+
+@router.get("/api/admin/visits")
+def admin_visits(request: app.Request, limit: int = 100):
+    """网站访客汇总：解析 nginx access.log，统计独立 IP / 状态码 / 热点路径 / 最近访问。
+
+    这是「网页访问记录」的真正数据源（首页 /api/* 之外的真实外部访问）。
+    本机（桌面 App WebView）免密钥，远端必须带正确 X-Admin-Key。
+    """
+    _require_admin(request)
+    import re as _re
+    from collections import Counter
+    line_re = _re.compile(
+        r'^(?P<ip>\S+) \S+ \S+ \[(?P<t>[^\]]+)\] "(?P<m>\S+) (?P<p>\S+) [^"]*" '
+        r'(?P<s>\d{3}) (?P<sz>\S+) "(?P<ref>[^"]*)" "(?P<ua>[^"]*)"'
+    )
+    total = 0
+    ips: set = set()
+    by_status: Counter = Counter()
+    by_method: Counter = Counter()
+    top_paths: Counter = Counter()
+    top_ips: Counter = Counter()
+    recent: list = []
+    try:
+        with open(_NGINX_ACCESS_LOG, "r", encoding="utf-8", errors="replace") as f:
+            raw_lines = f.readlines()[-8000:]
+    except Exception as e:
+        return {"error": f"无法读取访问日志：{e}", "total": 0, "source": _NGINX_ACCESS_LOG}
+    for ln in raw_lines:
+        m = line_re.search(ln)
+        if not m:
+            continue
+        total += 1
+        ip = m.group("ip")
+        path = m.group("p")
+        status = m.group("s")
+        ips.add(ip)
+        by_status[status] += 1
+        by_method[m.group("m")] += 1
+        top_ips[ip] += 1
+        if not path.lower().endswith(_STATIC_SUFFIX):
+            top_paths[path] += 1
+        recent.append({
+            "t": m.group("t"),
+            "ip": ip,
+            "m": m.group("m"),
+            "p": path,
+            "s": int(status),
+            "ua": m.group("ua")[:140],
+        })
+    return {
+        "total": total,
+        "unique_ips": len(ips),
+        "by_status": dict(by_status.most_common()),
+        "by_method": dict(by_method.most_common()),
+        "top_paths": [{"path": k, "count": v} for k, v in top_paths.most_common(20)],
+        "top_ips": [{"ip": k, "count": v} for k, v in top_ips.most_common(15)],
+        "recent": recent[-max(1, min(int(limit), 200)):],
+        "source": _NGINX_ACCESS_LOG,
+    }
+
+
+@router.get("/ops")
+def ops_console(request: app.Request):
+    """运维控制台页面：并排展示「网站访客」与「错误/异常事件」的可视化。
+
+    页面壳本身不鉴权（只是 HTML）；真正的数据接口 /api/admin/* 仍受 X-Admin-Key 保护，
+    没有密钥拉不到任何数据。前端在页面内输入密钥后本地拉取并渲染。
+    """
+    html_path = _Path(__file__).resolve().parent.parent.parent / "web" / "ops" / "index.html"
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return app.Response(f"<h1>运维控制台页面缺失</h1><p>{e}</p>", media_type="text/html", status_code=500)
+    return app.Response(html, media_type="text/html")
