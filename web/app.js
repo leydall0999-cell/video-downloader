@@ -53,24 +53,26 @@
     window.addEventListener('unhandledrejection', (e) => _vdlReport('error', e.reason || e));
   } catch (_) {}
 
-  // App 运维看板入口：关于区「运维看板」按钮 → 同源打开 /ops-board（仅本机 WebView 可访问）。
+  // App 运维看板入口：仅超级管理员可见——本机未配置运维密钥时隐藏按钮；
+  // 配置后才显示并绑定点击（同源打开 /ops-board，页面与数据双门禁）。
   try {
-    const _bindOpsBoard = () => {
+    const _gateOpsBoard = () => {
       const b = document.getElementById('profOpsBoardBtn');
       if (!b) return false;
-      b.addEventListener('click', () => { window.location.href = '/ops-board'; });
+      b.style.display = 'none';
+      fetch('/api/app/ops-key-status').then(r => r.json()).then(d => {
+        if (d && d.configured) {
+          b.style.display = '';
+          if (!b.dataset.bound) {
+            b.dataset.bound = '1';
+            b.addEventListener('click', () => { window.location.assign('/ops-board'); });
+          }
+        }
+      }).catch(() => {});
       return true;
     };
-    if (!_bindOpsBoard()) {
-      document.addEventListener('DOMContentLoaded', _bindOpsBoard);
-    }
-  } catch (_) {}
-
-  // 运维看板入口：在 App 内同源加载 /ops-board（WKWebView 不让导航外站，故走本机路由）。
-  try {
-    const _opsBtn = document.getElementById('profOpsBoardBtn');
-    if (_opsBtn) {
-      _opsBtn.addEventListener('click', () => { window.location.assign('/ops-board'); });
+    if (!_gateOpsBoard()) {
+      document.addEventListener('DOMContentLoaded', _gateOpsBoard);
     }
   } catch (_) {}
   // 超级管理员密钥：设置里粘贴一次，存本机钥匙串（不进二进制）。
@@ -85,6 +87,14 @@
           const d = await r.json();
           _hint.textContent = d.configured ? '✅ 已配置超级管理员密钥' : '⚠️ 尚未配置，运维看板将提示缺少密钥';
           _hint.style.color = d.configured ? 'var(--green, #2e9e5b)' : 'var(--muted, #888)';
+          const _b = document.getElementById('profOpsBoardBtn');
+          if (_b && d.configured) {
+            _b.style.display = '';
+            if (!_b.dataset.bound) {
+              _b.dataset.bound = '1';
+              _b.addEventListener('click', () => { window.location.assign('/ops-board'); });
+            }
+          }
         } catch (_) {}
       };
       _saveBtn.addEventListener('click', async () => {
@@ -95,7 +105,7 @@
           const r = await fetch('/api/app/ops-key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
           const d = await r.json();
           if (r.ok && d.ok) {
-            _hint.textContent = '✅ 已保存到本机钥匙串（请重启 App 使运维看板生效）';
+            _hint.textContent = '✅ 已保存到本机钥匙串，「运维看板」按钮已解锁，点击即可进入';
             _hint.style.color = 'var(--green, #2e9e5b)';
             _input.value = '';
           } else {

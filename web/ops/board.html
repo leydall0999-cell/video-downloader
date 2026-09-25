@@ -100,7 +100,7 @@ function fmtTime(t){
 }
 function statusClass(s){if(s>=500)return'status-5xx';if(s>=400)return'status-4xx';if(s>=300)return'status-3xx';return'status-2xx';}
 function isKeyErr(e){return /运维密钥|X-Admin-Key|401|403/.test(e&&e.message||'');}
-function keyNeededMsg(){return '未配置超级管理员密钥：请在 App「关于本应用」粘贴运维密钥并重启后重试';}
+function keyNeededMsg(){return '超级管理员密钥无效：服务器拒绝了这把密钥，请在 App「关于本应用」重新粘贴正确的运维密钥';}
 
 async function loadVisits(){
   const el=$('#visitsStats'); el.innerHTML='<div class="empty">加载中…</div>';

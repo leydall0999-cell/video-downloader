@@ -874,13 +874,69 @@ def ops_console(request: app.Request):
     return app.Response(html, media_type="text/html")
 
 
+_OPS_KEY_GATE_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>超级管理员验证 · 视频工坊</title>
+<style>
+  :root{--bg:#0f1320;--panel:#171c2e;--line:#2a3350;--txt:#e7ecf5;--muted:#9aa6c2;--accent:#4f8cff;--green:#3ecf8e;--red:#ff6b6b}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--txt);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px;width:min(420px,92vw)}
+  h1{font-size:17px;margin:0 0 6px}
+  p.desc{color:var(--muted);font-size:13px;margin:0 0 16px}
+  input{width:100%;background:#0b0f1a;border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:10px 12px;font-size:14px;outline:none}
+  input:focus{border-color:var(--accent)}
+  button{margin-top:12px;width:100%;background:var(--accent);border:none;border-radius:8px;color:#fff;padding:10px;font-size:14px;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .hint{margin-top:12px;font-size:12.5px;color:var(--muted);min-height:18px}
+  .hint.err{color:var(--red)} .hint.ok{color:var(--green)}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔒 运维看板 · 仅超级管理员可见</h1>
+    <p class="desc">请粘贴超级管理员密钥。密钥会先在服务器实测校验，通过后保存到本机钥匙串，之后无需重复输入。</p>
+    <input id="keyInput" type="password" placeholder="粘贴超级管理员密钥" autocomplete="off">
+    <button id="saveBtn">验证并进入看板</button>
+    <div class="hint" id="hint"></div>
+  </div>
+<script>
+const $=s=>document.querySelector(s);
+$('#saveBtn').addEventListener('click',async()=>{
+  const key=($('#keyInput').value||'').trim();
+  const h=$('#hint');
+  if(!key){h.textContent='请先粘贴密钥';h.className='hint err';return;}
+  $('#saveBtn').disabled=true;h.textContent='正在校验密钥…';h.className='hint';
+  try{
+    const v=await fetch('/api/app/ops-key-verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+    const vd=await v.json();
+    if(!(v.ok&&vd.ok)){h.textContent='密钥无效：服务器拒绝了这把密钥（HTTP '+(vd.status||v.status)+'）';h.className='hint err';return;}
+    const s=await fetch('/api/app/ops-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+    const sd=await s.json();
+    if(s.ok&&sd.ok){h.textContent='✅ 校验通过，已保存到本机钥匙串，正在进入看板…';h.className='hint ok';setTimeout(()=>location.reload(),700);}
+    else{h.textContent='密钥有效但保存失败：'+(sd.detail||('HTTP '+s.status));h.className='hint err';}
+  }catch(e){h.textContent='校验失败：'+(e&&e.message?e.message:e);h.className='hint err';}
+  finally{$('#saveBtn').disabled=false;}
+});
+$('#keyInput').addEventListener('keydown',e=>{if(e.key==='Enter')$('#saveBtn').click();});
+</script>
+</body>
+</html>"""
+
+
 @router.get("/ops-board")
 def ops_board(request: app.Request):
     """App 内运维看板页面：WKWebView 同源加载本机 /ops-board，fetch /api/app/*。
 
-    页面壳不鉴权（本机已 _require_local）；真实数据走 /api/app/ops-*（带密钥代理 ECS）。
+    超级管理员门禁：本机未配置运维密钥时只返回密钥验证页（不含看板与任何数据）；
+    配置后才能进入看板。数据接口 /api/app/ops-* 仍独立校验密钥，双保险。
     """
     _require_local(request)
+    if not _ops_admin_key():
+        return app.Response(_OPS_KEY_GATE_HTML, media_type="text/html")
     html_path = app.WEB_DIR / "ops" / "board.html"
     try:
         html = html_path.read_text(encoding="utf-8")
@@ -949,10 +1005,32 @@ def app_ops_key_save(payload: dict, request: app.Request):
         import subprocess
         subprocess.run(["security", "delete-generic-password", "-s", "vdl-ops-admin"],
                        capture_output=True, text=True, timeout=5)
-        r = subprocess.run(["security", "add-generic-password", "-s", "vdl-ops-admin", "-w", key],
+        r = subprocess.run(["security", "add-generic-password", "-a", "vdl", "-s", "vdl-ops-admin", "-w", key],
                            capture_output=True, text=True, timeout=5)
         if r.returncode != 0:
             raise RuntimeError(r.stderr.strip() or "security 写入失败")
     except Exception as e:
         raise app.HTTPException(status_code=500, detail=f"保存密钥到钥匙串失败：{e}")
     return {"ok": True, "stored": "keychain"}
+
+
+@router.post("/api/app/ops-key-verify")
+def app_ops_key_verify(payload: dict, request: app.Request):
+    """校验一把密钥是否为有效超级管理员密钥（拿去 ECS 实测一次，不落盘）。仅本机可调。
+
+    验证页「验证并进入看板」用：先确认密钥有效，再允许保存进钥匙串，防止存进废钥匙。
+    """
+    _require_local(request)
+    key = (payload.get("key") or "").strip()
+    if not key:
+        raise app.HTTPException(status_code=400, detail="密钥为空")
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/admin/events",
+            params={"limit": 1},
+            headers={"X-Admin-Key": key},
+            timeout=10,
+        )
+        return {"ok": resp.status_code == 200, "status": resp.status_code}
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"无法连接校验服务：{e}")
