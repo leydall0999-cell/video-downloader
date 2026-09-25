@@ -59,12 +59,35 @@
   try {
     const _ver = document.getElementById('profAboutVersion');
     let _opsClicks = 0, _opsTimer = null;
+    const _opsDeny = () => {
+      let t = document.getElementById('opsDenyToast');
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'opsDenyToast';
+        t.style.cssText = 'position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99999;background:#1c2333;color:#ffd9d9;border:1px solid #5a3040;border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35);';
+        document.body.appendChild(t);
+      }
+      t.textContent = '🔒 仅超级管理员账号可用：请先在「账号」中登录超级管理员账号';
+      t.style.display = 'block';
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => { t.style.display = 'none'; }, 2600);
+    };
     if (_ver) {
       _ver.addEventListener('click', () => {
         _opsClicks += 1;
         clearTimeout(_opsTimer);
         _opsTimer = setTimeout(() => { _opsClicks = 0; }, 3000);
-        if (_opsClicks >= 5) { _opsClicks = 0; window.location.assign('/ops-board'); }
+        if (_opsClicks >= 5) {
+          _opsClicks = 0;
+          // 账号级门禁：当前登录账号必须是超级管理员（is_admin）才跳看板。
+          try {
+            const _tok = localStorage.getItem('vdl_auth_token') || '';
+            fetch('/api/auth/me', { headers: _tok ? { 'Authorization': 'Bearer ' + _tok } : {} })
+              .then(r => r.json())
+              .then(me => { if (me && me.ok && me.is_admin) { window.location.assign('/ops-board'); } else { _opsDeny(); } })
+              .catch(() => _opsDeny());
+          } catch (_) { _opsDeny(); }
+        }
       });
     }
   } catch (_) {}

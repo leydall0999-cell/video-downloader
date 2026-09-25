@@ -667,6 +667,20 @@ def _require_local(request):
         raise app.HTTPException(status_code=403, detail="仅限本机访问")
 
 
+def _ops_requester_is_admin(request) -> bool:
+    """登录账号级超管门禁：当前请求必须携带有效登录 token 且该账号 is_admin=True。
+
+    bearer token 即 user_id（与 /api/auth/me 同源判定，auth_store.user_is_admin）。
+    机器级钥匙串密钥只是第二因子——**换了普通账号登录，有密钥也进不去**。
+    """
+    try:
+        from auth_store import token_from_header, user_is_admin
+        uid = token_from_header(request.headers.get("Authorization"))
+        return bool(uid and user_is_admin(uid))
+    except Exception:
+        return False
+
+
 def _require_admin(request):
     """运维端点鉴权：本机放行；远端必须带正确 X-Admin-Key。"""
     if _is_local_request(request):
@@ -913,6 +927,7 @@ $('#saveBtn').addEventListener('click',async()=>{
   try{
     const v=await fetch('/api/app/ops-key-verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
     const vd=await v.json();
+    if(v.status===403){h.textContent='仅超级管理员账号登录后才可验证：请回到主界面用超级管理员账号登录后再试';h.className='hint err';return;}
     if(!(v.ok&&vd.ok)){h.textContent='密钥无效：服务器拒绝了这把密钥（HTTP '+(vd.status||v.status)+'）';h.className='hint err';return;}
     const s=await fetch('/api/app/ops-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
     const sd=await s.json();
@@ -922,6 +937,19 @@ $('#saveBtn').addEventListener('click',async()=>{
   finally{$('#saveBtn').disabled=false;}
 });
 $('#keyInput').addEventListener('keydown',e=>{if(e.key==='Enter')$('#saveBtn').click();});
+// 账号级门禁：非超级管理员登录时隐藏密钥输入，只提示换账号。
+(async()=>{
+  try{
+    const tok=localStorage.getItem('vdl_auth_token')||'';
+    const r=await fetch('/api/auth/me',{headers:tok?{'Authorization':'Bearer '+tok}:{}});
+    const me=await r.json();
+    if(!(me&&me.ok&&me.is_admin)){
+      $('#keyInput').style.display='none';$('#saveBtn').style.display='none';
+      const h=$('#hint');h.textContent='当前登录的不是超级管理员账号：请回到主界面「账号」中切换为超级管理员账号，再连点版本号 5 次进入';
+      document.querySelector('.desc').textContent='此页面仅对超级管理员账号开放。';
+    }
+  }catch(_){}
+})();
 </script>
 </body>
 </html>"""
@@ -952,6 +980,8 @@ def app_ops_visits(request: app.Request, limit: int = 100, range: str = ""):
     数据仍在 ECS（nginx 日志），App 不落盘、不缓存——纯代理展示，不会撑爆 App。
     """
     _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
     if not _ops_admin_key():
         raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
@@ -970,6 +1000,8 @@ def app_ops_visits(request: app.Request, limit: int = 100, range: str = ""):
 def app_ops_events(request: app.Request, limit: int = 200, level: str = "", range: str = ""):
     """App 内看板代理：本机放行，带密钥去 ECS 拉「错误/异常事件」并转发前端。"""
     _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
     if not _ops_admin_key():
         raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
@@ -995,9 +1027,12 @@ def app_ops_key_status(request: app.Request):
 def app_ops_key_save(payload: dict, request: app.Request):
     """本机保存运维（超级管理员）密钥到 macOS 钥匙串（不进二进制、不写明文文件）。
 
-    仅本机 WebView 可调用；Keychain 首次访问可能弹授权，允许一次即可。
+    仅本机 WebView 可调用；且**当前登录账号必须是超级管理员**（is_admin）才允许写入；
+    Keychain 首次访问可能弹授权，允许一次即可。
     """
     _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可配置密钥")
     key = (payload.get("key") or "").strip()
     if not key:
         raise app.HTTPException(status_code=400, detail="密钥为空")
@@ -1019,8 +1054,11 @@ def app_ops_key_verify(payload: dict, request: app.Request):
     """校验一把密钥是否为有效超级管理员密钥（拿去 ECS 实测一次，不落盘）。仅本机可调。
 
     验证页「验证并进入看板」用：先确认密钥有效，再允许保存进钥匙串，防止存进废钥匙。
+    非超级管理员账号调用一律 403——普通用户即使拿到密钥也验证不了。
     """
     _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
     key = (payload.get("key") or "").strip()
     if not key:
         raise app.HTTPException(status_code=400, detail="密钥为空")
