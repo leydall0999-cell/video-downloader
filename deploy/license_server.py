@@ -870,7 +870,8 @@ class Handler(BaseHTTPRequestHandler):
 
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
-                          "ban", "adjust", "setstate", "usage"):
+                          "ban", "adjust", "setstate", "usage",
+                          "alerts", "alerts_ack"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -914,6 +915,17 @@ class Handler(BaseHTTPRequestHandler):
                         _save_state(st)
                     elif action == "usage":
                         out = usage_impl(st, str(data.get("email") or ""), now)
+                    elif action == "alerts":
+                        try:
+                            since = float(data.get("since") or 0)
+                        except (TypeError, ValueError):
+                            since = 0.0
+                        out = alerts_impl(st, since=since,
+                                          unseen_only=bool(data.get("unseen_only")),
+                                          limit=int(data.get("limit") or 100))
+                    elif action == "alerts_ack":
+                        out = alerts_ack_impl(st, data.get("ids"))
+                        _save_state(st)
                     else:
                         out = users_impl(st)
                 return self._json(200, out)
