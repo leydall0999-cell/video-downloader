@@ -53,95 +53,22 @@
     window.addEventListener('unhandledrejection', (e) => _vdlReport('error', e.reason || e));
   } catch (_) {}
 
-  // App 运维看板入口：仅超级管理员可见——本机未配置运维密钥时隐藏按钮；
-  // 配置后才显示并绑定点击（同源打开 /ops-board，页面与数据双门禁）。
+  // 运维看板/超级管理员：界面零痕迹——不显示任何按钮或密钥输入区。
+  // 唯一入口：3 秒内连点「关于本应用」版本号 5 次 → 直接打开 /ops-board；
+  // 未配置密钥的机器会先出验证页（密钥在验证页粘贴并实测校验后存钥匙串）。
   try {
-    const _gateOpsBoard = () => {
-      const b = document.getElementById('profOpsBoardBtn');
-      if (!b) return false;
-      b.style.display = 'none';
-      fetch('/api/app/ops-key-status').then(r => r.json()).then(d => {
-        if (d && d.configured) {
-          b.style.display = '';
-          if (!b.dataset.bound) {
-            b.dataset.bound = '1';
-            b.addEventListener('click', () => { window.location.assign('/ops-board'); });
-          }
-        }
-      }).catch(() => {});
-      return true;
-    };
-    if (!_gateOpsBoard()) {
-      document.addEventListener('DOMContentLoaded', _gateOpsBoard);
-    }
-  } catch (_) {}
-  // 超级管理员密钥：设置里粘贴一次，存本机钥匙串（不进二进制）。
-  // 密钥输入区**永远默认隐藏**（含已配置的机器），普通用户零痕迹；
-  // 超级管理员入口：3 秒内连点「关于本应用」版本号 5 次唤出（可查看/更换密钥）。
-  // 已配置时只自动显示「运维看板」按钮。
-  try {
-    const _saveBtn = document.getElementById('profOpsKeySave');
-    const _input = document.getElementById('profOpsKeyInput');
-    const _hint = document.getElementById('profOpsKeyHint');
-    const _row = document.getElementById('profOpsKeyRow');
-    if (_saveBtn && _input && _hint && _row) {
-      const _revealRow = () => { _row.hidden = false; };
-      try {
-        const _ver = document.getElementById('profAboutVersion');
-        let _clicks = 0, _timer = null;
-        if (_ver) {
-          _ver.addEventListener('click', () => {
-            _clicks += 1;
-            clearTimeout(_timer);
-            _timer = setTimeout(() => { _clicks = 0; }, 3000);
-            if (_clicks >= 5) { _clicks = 0; _revealRow(); _refreshStatus(); }
-          });
-        }
-      } catch (_) {}
-      const _refreshStatus = async () => {
-        try {
-          const r = await fetch('/api/app/ops-key-status');
-          const d = await r.json();
-          if (d && d.configured) {
-            _hint.textContent = '✅ 已配置超级管理员密钥（可粘贴新密钥覆盖）';
-            _hint.style.color = 'var(--green, #2e9e5b)';
-            const _b = document.getElementById('profOpsBoardBtn');
-            if (_b) {
-              _b.style.display = '';
-              if (!_b.dataset.bound) {
-                _b.dataset.bound = '1';
-                _b.addEventListener('click', () => { window.location.assign('/ops-board'); });
-              }
-            }
-          }
-          // 未配置：输入区保持隐藏、按钮不显示，界面上不留任何超级管理员痕迹
-        } catch (_) {}
-      };
-      _saveBtn.addEventListener('click', async () => {
-        const key = (_input.value || '').trim();
-        if (!key) { _hint.textContent = '请先粘贴密钥'; _hint.style.color = 'var(--red, #d33)'; return; }
-        _saveBtn.disabled = true;
-        try {
-          const r = await fetch('/api/app/ops-key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
-          const d = await r.json();
-          if (r.ok && d.ok) {
-            _hint.textContent = '✅ 已保存到本机钥匙串，「运维看板」按钮已解锁，点击即可进入';
-            _hint.style.color = 'var(--green, #2e9e5b)';
-            _input.value = '';
-          } else {
-            _hint.textContent = '保存失败：' + (d.detail || ('HTTP ' + r.status));
-            _hint.style.color = 'var(--red, #d33)';
-          }
-        } catch (e) {
-          _hint.textContent = '保存失败：' + (e && e.message ? e.message : e);
-          _hint.style.color = 'var(--red, #d33)';
-        } finally {
-          _saveBtn.disabled = false;
-        }
+    const _ver = document.getElementById('profAboutVersion');
+    let _opsClicks = 0, _opsTimer = null;
+    if (_ver) {
+      _ver.addEventListener('click', () => {
+        _opsClicks += 1;
+        clearTimeout(_opsTimer);
+        _opsTimer = setTimeout(() => { _opsClicks = 0; }, 3000);
+        if (_opsClicks >= 5) { _opsClicks = 0; window.location.assign('/ops-board'); }
       });
-      _refreshStatus();
     }
   } catch (_) {}
+  // （密钥配置已移至 /ops-board 验证页：未配密钥时打开看板即出验证页，无需在设置里输入。）
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;
