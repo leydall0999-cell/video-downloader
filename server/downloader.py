@@ -3750,6 +3750,14 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                 logger.warning("[probe] Bilibili API fallback failed: %s", str(fb_err)[:200])
 
         if _last_err:
+            # 平台专属友好映射短路（2026-09-25 小红书）：必须置于下方 format
+            # 降级判断**之前**——"No video formats found" 含 "format" 会被误判成
+            # 格式问题走 extract_flat 降级，抛通用「视频解析失败」绕过
+            # _friendly_error 的平台分支。仅对明确命中的平台 category 短路，
+            # 其余平台错误保持原有行为不变。
+            _fe = _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts))
+            if getattr(_fe, "category", "") in ("xhs_short_link", "xhs_login_required"):
+                raise _fe from exc
             # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
             if "format" in str(exc).lower() or "not available" in str(exc).lower():
                 try:
