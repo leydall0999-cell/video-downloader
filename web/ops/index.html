@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频工坊 · 运维控制台</title>
+<style>
+  :root { --bg:#0f1320; --panel:#171c2e; --panel2:#1f2740; --line:#2a3350; --txt:#e6e9f2; --muted:#9aa3c0; --accent:#5b8cff; --red:#ff6b6b; --green:#42d392; --amber:#ffb84d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  .keybox { display:flex; gap:8px; align-items:center; margin-left:auto; }
+  .keybox input { background:var(--panel2); border:1px solid var(--line); color:var(--txt); padding:8px 10px; border-radius:8px; width:240px; outline:none; }
+  .keybox input:focus { border-color:var(--accent); }
+  button { background:var(--accent); color:#fff; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:13px; }
+  button.ghost { background:var(--panel2); color:var(--txt); border:1px solid var(--line); }
+  button:active { transform:translateY(1px); }
+  .wrap { padding:20px 24px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width:980px){ .wrap { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .panel h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .panel h2 .dot { width:8px; height:8px; border-radius:50%; background:var(--accent); }
+  .stats { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .stat { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; min-width:90px; }
+  .stat b { display:block; font-size:20px; }
+  .stat span { color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  td.ip, td.path { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { display:inline-block; padding:1px 7px; border-radius:6px; font-size:12px; }
+  .b2xx { background:rgba(66,211,146,.15); color:var(--green); }
+  .b3xx { background:rgba(91,140,255,.15); color:var(--accent); }
+  .b4xx { background:rgba(255,184,77,.15); color:var(--amber); }
+  .b5xx { background:rgba(255,107,107,.15); color:var(--red); }
+  .recent { max-height:240px; overflow:auto; }
+  .empty { color:var(--muted); padding:14px 0; }
+  #toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:var(--panel2); border:1px solid var(--line); padding:10px 16px; border-radius:10px; display:none; }
+  .err { color:var(--red); }
+  small.note { color:var(--muted); display:block; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>视频工坊 · 运维控制台</h1>
+  <div class="keybox">
+    <input id="key" type="password" placeholder="运维密钥 (X-Admin-Key)" autocomplete="off">
+    <button id="load">加载数据</button>
+    <button id="clear" class="ghost">清除密钥</button>
+  </div>
+</header>
+<div class="wrap">
+  <section class="panel">
+    <h2><span class="dot"></span>网站访客</h2>
+    <div class="stats" id="visitStats"><div class="empty">输入密钥后加载</div></div>
+    <h3 style="font-size:13px;color:var(--muted);margin:6px 0">热点路径（排除静态资源）</h3>
+    <table id="visitPaths"><tbody></tbody></table>
+    <h3 style="font-size:13px;color:var(--muted);margin:12px 0 6px">来源 IP Top</h3>
+    <table id="visitIps"><tbody></tbody></table>
+    <h3 style="font-size:13px;color:var(--muted);margin:12px 0 6px">最近访问</h3>
+    <div class="recent"><table id="visitRecent"><tbody></tbody></table></div>
+    <small class="note">数据来源：nginx 访问日志（最近 8000 行）。</small>
+  </section>
+  <section class="panel">
+    <h2><span class="dot"></span>错误 / 异常事件</h2>
+    <div class="stats" id="evtStats"><div class="empty">输入密钥后加载</div></div>
+    <div class="recent"><table id="evtList"><tbody></tbody></table></div>
+    <small class="note">数据来源：服务端结构化事件日志（前端 JS 报错 + 未捕获异常）。</small>
+  </section>
+</div>
+<div id="toast"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+function toast(msg, isErr){ const t=$('toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor=isErr?'var(--red)':'var(--line)'; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display='none',2600); }
+function getKey(){ return sessionStorage.getItem('vdl_ops_key') || ''; }
+function setKey(k){ if(k) sessionStorage.setItem('vdl_ops_key', k); else sessionStorage.removeItem('vdl_ops_key'); }
+function statusBadge(s){ const c = s>=500?'b5xx':s>=400?'b4xx':s>=300?'b3xx':'b2xx'; return `<span class="badge ${c}">${s}</span>`; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function load(){
+  const key = $('key').value.trim() || getKey();
+  if(!key){ toast('请先输入运维密钥', true); return; }
+  setKey(key);
+  $('key').value = key;
+  try {
+    const [v, e] = await Promise.all([
+      fetch('/api/admin/visits', {headers:{'X-Admin-Key':key}}).then(r=>{ if(!r.ok) throw new Error('visits '+r.status); return r.json(); }),
+      fetch('/api/admin/events?limit=200', {headers:{'X-Admin-Key':key}}).then(r=>{ if(!r.ok) throw new Error('events '+r.status); return r.json(); }),
+    ]);
+    renderVisits(v);
+    renderEvents(e);
+    toast('已刷新');
+  } catch(err){
+    toast('加载失败：' + err.message + '（密钥错误？）', true);
+  }
+}
+function renderVisits(v){
+  if(v.error){ $('visitStats').innerHTML = `<div class="err">${esc(v.error)}</div>`; return; }
+  $('visitStats').innerHTML =
+    `<div class="stat"><b>${v.total}</b><span>总请求</span></div>`+
+    `<div class="stat"><b>${v.unique_ips}</b><span>独立 IP</span></div>`+
+    Object.entries(v.by_status||{}).slice(0,4).map(([k,n])=>`<div class="stat"><b>${statusBadge(+k).replace('span','span')}</b><span>${k}: ${n}</span></div>`).join('');
+  $('visitPaths').innerHTML = (v.top_paths||[]).map(r=>`<tr><td class="path" title="${esc(r.path)}">${esc(r.path)}</td><td>${r.count}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">无</td></tr>';
+  $('visitIps').innerHTML = (v.top_ips||[]).map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.count}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">无</td></tr>';
+  $('visitRecent').innerHTML = (v.recent||[]).map(r=>`<tr><td>${esc(r.t.split(' ')[0])}</td><td>${esc(r.ip)}</td><td>${r.m}</td><td class="path" title="${esc(r.p)}">${esc(r.p)}</td><td>${statusBadge(r.s)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">无</td></tr>';
+}
+function renderEvents(e){
+  const evs = (e.events||[]).slice().reverse();
+  $('evtStats').innerHTML = `<div class="stat"><b>${evs.length}</b><span>事件数</span></div>`;
+  $('evtList').innerHTML = evs.length ? evs.map(r=>`<tr><td>${esc((r.ts?new Date(r.ts*1000).toLocaleString():''))}</td><td>${esc(r.level)}</td><td>${esc(r.type)}</td><td class="path" title="${esc(r.message)}">${esc(r.message)}</td><td class="ip">${esc((r.extra&&r.extra.url)||'')}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">暂无事件</td></tr>';
+}
+$('load').onclick = load;
+$('clear').onclick = ()=>{ setKey(''); $('key').value=''; toast('已清除本地密钥'); };
+if(getKey()){ $('key').value = getKey(); load(); }
+</script>
+</body>
+</html>

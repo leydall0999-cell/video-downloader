@@ -31,6 +31,35 @@
       }
     } catch (_) {}
   });
+  // App 可观测性：前端 JS 运行期错误上报到本机 server（/api/client-error → .ops_events.log）。
+  // 与上方 boot 红条并存：红条给用户看，这里给运维留痕（闭环「用户报问题我们看不到记录」）。
+  try {
+    const _vdlReport = (level, e) => {
+      try {
+        const msg = (e && (e.message || (e.error && e.error.message))) || String(e);
+        const stack = (e && e.error && e.error.stack) ? String(e.error.stack) : (e && e.stack ? String(e.stack) : '');
+        const payload = { level: level, message: msg, stack: stack,
+          url: location.href, line: e && e.lineno, col: e && e.colno };
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/client-error', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
+        } else {
+          fetch('/api/client-error', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload), keepalive: true }).catch(() => {});
+        }
+      } catch (_) {}
+    };
+    window.addEventListener('error', (e) => _vdlReport('error', e));
+    window.addEventListener('unhandledrejection', (e) => _vdlReport('error', e.reason || e));
+  } catch (_) {}
+
+  // 运维看板入口：在 App 内同源加载 /ops-board（WKWebView 不让导航外站，故走本机路由）。
+  try {
+    const _opsBtn = document.getElementById('profOpsBoardBtn');
+    if (_opsBtn) {
+      _opsBtn.addEventListener('click', () => { window.location.assign('/ops-board'); });
+    }
+  } catch (_) {}
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;

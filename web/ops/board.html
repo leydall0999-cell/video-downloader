@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运维看板 · 视频工坊</title>
+<style>
+  :root{
+    --bg:#0f1320; --panel:#171c2e; --panel2:#1e2538; --line:#2a3350;
+    --txt:#e7ecf5; --muted:#9aa6c2; --accent:#4f8cff; --green:#3ecf8e;
+    --red:#ff6b6b; --amber:#ffb454; --chip:#243049;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+  header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;
+    padding:12px 18px;background:rgba(15,19,32,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header .sub{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+  button{background:var(--chip);color:var(--txt);border:1px solid var(--line);border-radius:8px;
+    padding:7px 12px;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .wrap{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:200px}
+  .panel h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .panel h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  .stat-row{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:96px}
+  .stat .n{font-size:20px;font-weight:700}
+  .stat .l{color:var(--muted);font-size:12px}
+  .kv{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+  .chip b{color:var(--txt)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500}
+  .status-2xx{color:var(--green)} .status-3xx{color:var(--accent)}
+  .status-4xx{color:var(--amber)} .status-5xx{color:var(--red)}
+  .log{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#0b0f1a}
+  .log .row{padding:7px 10px;border-bottom:1px solid #1a2030;font-size:12px}
+  .log .row .t{color:var(--muted)}
+  .log .row .lv{font-weight:700;margin-right:6px}
+  .lv-error{color:var(--red)} .lv-warn{color:var(--amber)} .lv-info{color:var(--accent)}
+  .log .row .msg{color:var(--txt);word-break:break-all}
+  .empty{color:var(--muted);padding:18px;text-align:center}
+  .err{color:var(--red);padding:10px}
+  footer{padding:10px 18px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>运维看板</h1>
+  <span class="sub">网站访客 · 错误/异常事件（数据来自 ECS，App 仅展示）</span>
+  <span class="spacer"></span>
+  <button id="refreshBtn" class="primary">刷新</button>
+  <button id="backBtn">返回主界面</button>
+</header>
+
+<div class="wrap">
+  <section class="panel">
+    <h2><span class="dot"></span>网站访客</h2>
+    <div id="visitsStats" class="stat-row"></div>
+    <div id="visitsStatus" class="kv"></div>
+    <div id="visitsPaths"></div>
+    <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">最近访问</h3>
+    <div id="visitsRecent" class="log"></div>
+  </section>
+
+  <section class="panel">
+    <h2><span class="dot" style="background:var(--red)"></span>错误 / 异常事件</h2>
+    <div id="eventsStats" class="stat-row"></div>
+    <div id="eventsLog" class="log"></div>
+  </section>
+</div>
+
+<footer id="foot">加载中…</footer>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function fmtTime(t){
+  // nginx 时间格式: 25/Sep/2026:12:43:01 +0800
+  try{const d=new Date(t.replace(' ','T').replace(/\+0800$/,'+08:00'));return d.toLocaleString('zh-CN',{hour12:false});}catch(e){return t;}
+}
+function statusClass(s){if(s>=500)return'status-5xx';if(s>=400)return'status-4xx';if(s>=300)return'status-3xx';return'status-2xx';}
+
+async function loadVisits(){
+  const el=$('#visitsStats'); el.innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const r=await fetch('/api/app/ops-visits?limit=100');
+    const d=await r.json();
+    if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
+    el.innerHTML=
+      `<div class="stat"><div class="n">${d.total}</div><div class="l">总请求</div></div>`+
+      `<div class="stat"><div class="n">${d.unique_ips}</div><div class="l">独立 IP</div></div>`;
+    const bs=Object.entries(d.by_status||{}).map(([k,v])=>`<span class="chip"><b class="${statusClass(+k)}">${k}</b> · ${v}</span>`).join('');
+    $('#visitsStatus').innerHTML='状态码：'+bs;
+    $('#visitsPaths').innerHTML='<h3 style="font-size:13px;color:var(--muted);margin:12px 0 6px">热点路径</h3>'+
+      (d.top_paths&&d.top_paths.length?('<table><tr><th>路径</th><th>次数</th></tr>'+
+        d.top_paths.map(p=>`<tr><td>${esc(p.path)}</td><td>${p.count}</td></tr>`).join('')+'</table>'):'<div class="empty">无</div>');
+    const rec=(d.recent||[]).slice().reverse();
+    $('#visitsRecent').innerHTML=rec.length?rec.map(x=>
+      `<div class="row"><span class="t">${esc(fmtTime(x.t))}</span> · <b>${esc(x.ip)}</b> · <span class="${statusClass(x.s)}">${x.s}</span> · ${esc(x.p)}<br><span class="t">${esc(x.ua)}</span></div>`
+    ).join(''):'<div class="empty">无最近访问</div>';
+  }catch(e){
+    el.innerHTML=''; $('#visitsRecent').innerHTML=`<div class="err">访客加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function loadEvents(){
+  const el=$('#eventsStats'); el.innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const r=await fetch('/api/app/ops-events?limit=200');
+    const d=await r.json();
+    if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
+    const errs=(d.events||[]).filter(x=>x.level==='error').length;
+    el.innerHTML=`<div class="stat"><div class="n">${d.count}</div><div class="l">事件总数</div></div>`+
+      `<div class="stat"><div class="n" style="color:var(--red)">${errs}</div><div class="l">错误</div></div>`;
+    const items=(d.events||[]).slice().reverse();
+    $('#eventsLog').innerHTML=items.length?items.map(x=>
+      `<div class="row"><span class="lv lv-${esc(x.level)}">${esc(x.level)}</span>`+
+      `<span class="t">${esc(x.ts?new Date(x.ts*1000).toLocaleString('zh-CN',{hour12:false}):'')}</span><br>`+
+      `<span class="msg">${esc(x.message)}</span>`+
+      (x.extra&&x.extra.url?`<br><span class="t">@ ${esc(x.extra.url)}</span>`:'')+
+      (x.extra&&x.extra.stack?`<br><span class="t" style="white-space:pre-wrap">${esc(x.extra.stack.slice(0,300))}</span>`:'')+
+      `</div>`
+    ).join(''):'<div class="empty">暂无事件</div>';
+  }catch(e){
+    el.innerHTML=''; $('#eventsLog').innerHTML=`<div class="err">事件加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function loadAll(){
+  $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false});
+  await Promise.all([loadVisits(),loadEvents()]);
+}
+$('#refreshBtn').addEventListener('click',loadAll);
+$('#backBtn').addEventListener('click',()=>{window.location.href='/';});
+loadAll();
+</script>
+</body>
+</html>

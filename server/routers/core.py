@@ -575,3 +575,286 @@ def resume_task(task_id: str) -> dict:
     app.store.update(task.id, status='downloading')
     app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, '', '', app.SINGLE_DOWNLOAD_RETRIES)
     return {'task_id': task_id, 'resumed': True}
+
+
+# --------------------------------------------------------------------------- #
+# 运维可观测性（App 内看板）：本地错误日志 + 本机代理拉取 ECS 网站数据
+# --------------------------------------------------------------------------- #
+# 设计要点（防「放 App 撑爆」）：
+#   - 网站访客 / 错误事件**全部在 ECS**，App 只做「带密钥代理 + 前端展示」，
+#     不落盘、不缓存全量；每次拉取 ECS 现解析 nginx 日志约 0.05s，返回几 KB。
+#   - 本地仅记 App 自身的前端 JS 报错 + 服务端未捕获异常到 .ops_events.log
+#     （2MB×3 轮转的 JSON 行），规模极小。
+_OPS_ADMIN_KEY_FILE = app.Path.home() / ".video-downloader" / "ops_admin_key"
+_OPS_ECS_BASE = (app.os.environ.get("VDL_OPS_ECS_BASE") or "http://8.138.223.3:8888").strip()
+_OPS_LOCAL_LOG = app.Path.home() / ".video-downloader" / ".ops_events.log"
+_OPS_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _ops_admin_key() -> str:
+    """运维密钥优先级：环境变量 > 本机文件 ~/.video-downloader/ops_admin_key > 内置默认。
+
+    内置默认仅为开箱即用（自托管运维工具，密钥本就开放给用户自己）；
+    可被环境变量或本机文件覆盖。
+    """
+    env = (app.os.environ.get("VDL_ADMIN_KEY") or "").strip()
+    if env:
+        return env
+    try:
+        if _OPS_ADMIN_KEY_FILE.exists():
+            k = _OPS_ADMIN_KEY_FILE.read_text(encoding="utf-8").strip()
+            if k:
+                return k
+    except Exception:
+        pass
+    return "be2b20a60cd9d2de82e678375ec8a4a0ed4d261c07c2b38b"  # 内置默认
+
+
+def _is_local_request(request) -> bool:
+    """桌面端本机 WebView 经 127.0.0.1 访问，视为可信。"""
+    try:
+        host = request.client.host if request.client else ""
+    except Exception:
+        host = ""
+    return host in ("127.0.0.1", "::1", "localhost", "")
+
+
+def _require_local(request):
+    """App 内看板代理/页面仅限本机 WebView 访问，防远端滥用。"""
+    if not _is_local_request(request):
+        raise app.HTTPException(status_code=403, detail="仅限本机访问")
+
+
+def _require_admin(request):
+    """运维端点鉴权：本机放行；远端必须带正确 X-Admin-Key。"""
+    if _is_local_request(request):
+        return
+    key = (request.headers.get("X-Admin-Key") or "").strip()
+    if key == _ops_admin_key():
+        return
+    raise app.HTTPException(status_code=403, detail="需要管理员密钥（X-Admin-Key）")
+
+
+def _ops_append_local(level: str, message: str, extra: dict = None) -> None:
+    """把一条本地事件追加到 .ops_events.log（JSON 行，轮转）；任何异常静默。"""
+    try:
+        _OPS_LOCAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": int(app.time.time()), "level": level, "message": str(message)[:3000]}
+        if extra:
+            rec["extra"] = extra
+        line = app.json.dumps(rec, ensure_ascii=False)
+        if _OPS_LOCAL_LOG.exists() and _OPS_LOCAL_LOG.stat().st_size > _OPS_MAX_BYTES:
+            # 简单轮转：保留后 60%（避免一次性读全量）
+            try:
+                _txt = _OPS_LOCAL_LOG.read_text(encoding="utf-8", errors="replace")
+                _lines = [l for l in _txt.splitlines() if l.strip()][-3000:]
+                _OPS_LOCAL_LOG.write_text("\n".join(_lines) + "\n", encoding="utf-8")
+            except Exception:
+                pass
+        with _OPS_LOCAL_LOG.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+@router.post('/api/client-error')
+def client_error(payload: dict, request: app.Request):
+    """前端 JS 运行期错误上报（window.onerror / unhandledrejection）。
+
+    让 App 自身前端报错也能在服务端 .ops_events.log 查到，闭环「用户报问题我们看不到记录」。
+    """
+    app._check_rate_limit(request)
+    msg = (payload.get("message") or "").strip()[:2000]
+    if not msg:
+        raise app.HTTPException(status_code=400, detail="缺少 message")
+    extra = {
+        "stack": (payload.get("stack") or "")[:3000],
+        "url": (payload.get("url") or "")[:500],
+        "line": payload.get("line"),
+        "col": payload.get("col"),
+        "level": payload.get("level", "error"),
+    }
+    _ops_append_local("error", msg, extra)
+    return {"ok": True}
+
+
+@router.get('/api/admin/events')
+def admin_events(request: app.Request, limit: int = 200, level: str = ""):
+    """读取本地结构化事件日志（App 自身错误，运维视图）。本机免密钥，远端需 X-Admin-Key。"""
+    _require_admin(request)
+    items = []
+    if _OPS_LOCAL_LOG.exists():
+        try:
+            for ln in _OPS_LOCAL_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rec = app.json.loads(ln)
+                except Exception:
+                    continue
+                if level and rec.get("level") != level:
+                    continue
+                items.append(rec)
+        except Exception:
+            pass
+    items = items[-max(1, min(int(limit), 2000)):]
+    return {"count": len(items), "events": items}
+
+
+def _collect_local_diag() -> dict:
+    """聚合 App 本机诊断文件（launch.log + stats.json）。"""
+    out: dict = {}
+    launch = app.Path.home() / ".vdl_launch.log"
+    if launch.exists():
+        try:
+            txt = launch.read_text(encoding="utf-8", errors="replace")
+            out["launch_log_tail"] = "\n".join(txt.splitlines()[-120:])
+            out["launch_log_size"] = launch.stat().st_size
+        except Exception:
+            pass
+    stats = app.Path.home() / ".video-downloader" / "stats.json"
+    if stats.exists():
+        try:
+            out["stats"] = app.json.loads(stats.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            pass
+    return out
+
+
+@router.get('/api/diagnostic')
+def diagnostic(request: app.Request):
+    """导出诊断信息包：版本指纹 + 近期事件 + 本机日志/统计。本机免密钥，远端需 X-Admin-Key。"""
+    _require_admin(request)
+    data: dict = {"generated_at": int(app.time.time())}
+    try:
+        data["version"] = api_version()
+    except Exception as e:
+        data["version"] = {"error": str(e)}
+    try:
+        data["recent_events"] = admin_events(request, limit=50).get("events", [])
+    except Exception:
+        data["recent_events"] = []
+    data["local_diag"] = _collect_local_diag()
+    return app.JSONResponse(content=data)
+
+
+_NGINX_ACCESS_LOG = "/var/log/nginx/access.log"
+_STATIC_SUFFIX = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico",
+                  ".woff", ".woff2", ".ttf", ".svg", ".map", ".json")
+
+
+@router.get("/api/admin/visits")
+def admin_visits(request: app.Request, limit: int = 100):
+    """网站访客汇总：解析 nginx access.log（仅 ECS 有；本机无 nginx 时优雅返回空）。
+
+    桌面 App 看网站数据请走 /api/app/ops-visits（代理 ECS），本端点用于 ECS 本机直查。
+    """
+    _require_admin(request)
+    import re as _re
+    from collections import Counter
+    line_re = _re.compile(
+        r'^(?P<ip>\S+) \S+ \S+ \[(?P<t>[^\]]+)\] "(?P<m>\S+) (?P<p>\S+) [^"]*" '
+        r'(?P<s>\d{3}) (?P<sz>\S+) "(?P<ref>[^"]*)" "(?P<ua>[^"]*)"'
+    )
+    total = 0
+    ips = set()
+    by_status = Counter()
+    by_method = Counter()
+    top_paths = Counter()
+    top_ips = Counter()
+    recent = []
+    try:
+        with open(_NGINX_ACCESS_LOG, "r", encoding="utf-8", errors="replace") as f:
+            raw_lines = f.readlines()[-8000:]
+    except Exception as e:
+        return {"error": f"无法读取访问日志（本机非服务器，无 nginx）：{e}", "total": 0,
+                "source": "local-desktop-no-nginx"}
+    for ln in raw_lines:
+        m = line_re.search(ln)
+        if not m:
+            continue
+        total += 1
+        ip = m.group("ip")
+        path = m.group("p")
+        status = m.group("s")
+        ips.add(ip)
+        by_status[status] += 1
+        by_method[m.group("m")] += 1
+        top_ips[ip] += 1
+        if not path.lower().endswith(_STATIC_SUFFIX):
+            top_paths[path] += 1
+        recent.append({
+            "t": m.group("t"), "ip": ip, "m": m.group("m"),
+            "p": path, "s": int(status), "ua": m.group("ua")[:140],
+        })
+    return {
+        "total": total, "unique_ips": len(ips),
+        "by_status": dict(by_status.most_common()),
+        "by_method": dict(by_method.most_common()),
+        "top_paths": [{"path": k, "count": v} for k, v in top_paths.most_common(20)],
+        "top_ips": [{"ip": k, "count": v} for k, v in top_ips.most_common(15)],
+        "recent": recent[-max(1, min(int(limit), 200)):],
+        "source": _NGINX_ACCESS_LOG,
+    }
+
+
+@router.get("/ops")
+def ops_console(request: app.Request):
+    """运维控制台页面（web 版用）。本机 WebView 加载 /ops-board 即可看板。"""
+    html_path = app.WEB_DIR / "ops" / "index.html"
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return app.Response(f"<h1>运维控制台页面缺失</h1><p>{e}</p>", media_type="text/html", status_code=500)
+    return app.Response(html, media_type="text/html")
+
+
+@router.get("/ops-board")
+def ops_board(request: app.Request):
+    """App 内运维看板页面：WKWebView 同源加载本机 /ops-board，fetch /api/app/*。
+
+    页面壳不鉴权（本机已 _require_local）；真实数据走 /api/app/ops-*（带密钥代理 ECS）。
+    """
+    _require_local(request)
+    html_path = app.WEB_DIR / "ops" / "board.html"
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return app.Response(f"<h1>运维看板页面缺失</h1><p>{e}</p>", media_type="text/html", status_code=500)
+    return app.Response(html, media_type="text/html")
+
+
+@router.get("/api/app/ops-visits")
+def app_ops_visits(request: app.Request, limit: int = 100):
+    """App 内看板代理：本机放行，带密钥去 ECS 拉「网站访客」汇总并转发前端。
+
+    数据仍在 ECS（nginx 日志），App 不落盘、不缓存——纯代理展示，不会撑爆 App。
+    """
+    _require_local(request)
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/admin/visits",
+            params={"limit": max(1, min(int(limit), 200))},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取 ECS 访客数据失败：{e}")
+
+
+@router.get("/api/app/ops-events")
+def app_ops_events(request: app.Request, limit: int = 200, level: str = ""):
+    """App 内看板代理：本机放行，带密钥去 ECS 拉「错误/异常事件」并转发前端。"""
+    _require_local(request)
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/admin/events",
+            params={"limit": max(1, min(int(limit), 2000)), "level": level},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取 ECS 事件数据失败：{e}")
