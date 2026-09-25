@@ -1654,10 +1654,14 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
         "is_cloud", os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud"
     )
 
-    # —— 小红书专属分层（2026-09-25）：打包 yt-dlp 已带 XiaoHongShuIE，失败只有两种形态 ——
+    # —— 小红书专属分层（2026-09-25）：打包 yt-dlp 已带 XiaoHongShuIE，失败只有三种形态 ——
     # ① xhslink 短链：App 专属深链，网页端（含真 Chrome）一律 302 回首页；
     # ② xiaohongshu.com 直链但本机浏览器无小红书登录态：网页版 2026 年起强制登录，
-    #    无 Cookie 时 SSR 页是空壳 → "No video formats found"。分别给精准指引。
+    #    无 Cookie 时 SSR 页是空壳 → "No video formats found"。
+    # ③ /explore? 或 /discovery/item? 后面直接跟 "?"（无 24 位笔记 ID）：残缺链接。
+    #    实测（2026-09-25）：该形态无论是否带登录 Cookie、是否带真实 xsec_token，
+    #    服务端都只回首页 feed（noteDetailMap 恒为空）——链接本身不含笔记引用，
+    #    无法自动展开，只能指引重新获取完整链接。分别给精准指引。
     # 注意：必须放在 UnsupportedError 分支之前，否则 xiaohongshu.com（在白名单内）
     # 会先落进误导性的「暂未实现该站的解析器」。
     _xhs_ctx_host = (ctx.get("host", "") or "").lower()
@@ -1687,6 +1691,23 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
             "若已登录仍报此错：请确认登录用的就是 Chrome/Edge（Safari 因权限限制暂不支持自动读取），"
             "或把笔记页地址栏的完整链接（含 xsec_token 参数）粘贴过来重试。",
             category="xhs_login_required",
+        )
+    # ③ 残缺链接：/explore? /discovery/item? 后无笔记 ID（XiaoHongShuIE 的
+    #    _VALID_URL 要求路径里有 24 位 hex ID，缺了就没有 extractor 匹配 → UnsupportedError）。
+    if _xhs_hit and re.search(
+        r"xiaohongshu\.com/(?:explore|discovery/item)\?", ctx.get("url", "") or ""
+    ):
+        return ResolveError(
+            "这条小红书链接缺了笔记 ID，无法解析",
+            "粘贴的链接是 xiaohongshu.com/explore? 参数形态，/explore/ 后面没有那串 24 位笔记 ID——"
+            "链接本身不指向任何笔记（多半是复制时只截取了半截，或分享渠道吞掉了 ID）。\n\n"
+            "请重新获取完整链接：\n"
+            "① 在小红书 App 打开该笔记 → 分享 → 复制链接，粘贴到电脑浏览器打开（需登录小红书）；\n"
+            "② 浏览器地址栏里的完整地址应形如 www.xiaohongshu.com/explore/6a8b085b0000000024……"
+            "（explore/ 后面有一长串字母数字）——把地址栏完整链接粘贴到视频工坊即可。\n\n"
+            "提示：正规 App 分享链接一定含笔记 ID 和 xsec_token 参数；若粘贴后仍不见 ID，"
+            "说明复制来源不完整，可把笔记从 App 发到微信/QQ 后再复制完整链接。",
+            category="xhs_no_note_id",
         )
 
     # yt-dlp 抛出 UnsupportedError 通常意味着「域名不在 yt-dlp 支持的 extractor 列表」
