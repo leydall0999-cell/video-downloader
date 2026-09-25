@@ -132,6 +132,18 @@ def redeem_remote(token: str, code: str, base_url: Optional[str] = None,
                  base_url, timeout, opener)
 
 
+def spend_remote(token: str, items: list, base_url: Optional[str] = None,
+                 timeout: float = 8.0,
+                 opener: Optional[Callable] = None) -> dict[str, Any]:
+    """积分扣减上报（幂等）。items: [{pool: permanent|ai, cost, op, id}]。
+
+    返回 {ok, applied, authority}；云端按 id 去重，断网重发不会重复扣。
+    网络异常抛 LicenseCloudError —— 调用方把 items 入 pending 队列下次补报。
+    """
+    return _post("/api/license/spend", {"token": token, "items": items},
+                 base_url, timeout, opener)
+
+
 def set_password_remote(email: str, new_password: str, old_password: str = "",
                         token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,

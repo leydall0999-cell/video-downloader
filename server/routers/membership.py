@@ -56,21 +56,24 @@ def _maybe_sync(store) -> None:
 def member_activate(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """激活/续费。payload: {"code": "download_year"|"ai_15000"|"credits_5000"}。需登录。
 
-    🔒 P2 收口：套餐 code 直激活是**本机调试后门**，仅限回环请求（桌面 App 本机）。
-    远程请求一律要求走 /api/member/redeem 卡密通道 —— 否则任何登录用户
-    都能白嫖任意套餐（V1 时期的洞）。
+    🔒 2026-09-25 防破解收口（原 P2 后门彻底关闭）：套餐 code 直激活此前只限
+    回环请求——但用户自己的机器就是回环，一条 curl 即可白嫖任意套餐/永久积分，
+    且 via=ui_test 不记 license_code，授权中心 revoke 也管不到。现在要求
+    **当前登录账号必须是超级管理员（is_admin）**，普通用户一律走
+    /api/member/redeem（卡密，云端验真）或 /api/cloud/redeem。
     """
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
-    client_ip = (request.client.host if request.client else "") or ""
-    if client_ip not in ("127.0.0.1", "::1", "localhost"):
-        return {"ok": False, "error": "请使用卡密激活（购买卡密后在本面板输入兑换）",
+    from auth_store import user_is_admin
+    if not user_is_admin(uid):
+        return {"ok": False,
+                "error": "套餐直激活仅限超级管理员；请输入 VDL- 卡密兑换，或通过会员中心购买",
                 "code": "USE_REDEEM"}
     code = str(payload.get("code") or "").strip()
     if not code:
         return {"ok": False, "error": "缺少 code"}
-    return _store(request).activate(code, via="ui_test")
+    return _store(request).activate(code, via="admin_direct")
 
 
 @router.post("/api/member/redeem")

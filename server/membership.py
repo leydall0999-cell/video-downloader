@@ -513,15 +513,18 @@ class MembershipStore:
         N 台设备」（见 deploy/license_server.py 的 device 配额），挤掉由 heartbeat
         发现后写到这里。调用方应放宽心态：宁可漏管一台，也不让付费用户被锁死。
 
-        仅两种情况停用：
+        仅三种情况停用：
           - LICENSE_REVOKED：卡密/账号被管理员停用（主动行为）
           - DEVICE_EVICTED：该账号已在其他两台设备登录，本机被挤掉（重新登录即恢复）
+          - ACCOUNT_BANNED：账号被超管封禁（2026-09-25 防破解，云端心跳下发）
         """
         self._ensure_loaded()
         meta = self._state.get("meta") or {}
         if meta.get("license_revoked"):
             return "LICENSE_REVOKED"
         acct = meta.get("account") or {}
+        if acct.get("banned"):
+            return "ACCOUNT_BANNED"
         if acct.get("evicted"):
             return "DEVICE_EVICTED"
         return None
@@ -602,6 +605,55 @@ class MembershipStore:
         self._persist()
         return {"ok": not errors, "applied": out_applied, "errors": errors}
 
+    def apply_cloud_authoritative(self, acct: dict[str, Any]) -> dict[str, Any]:
+        """云端权威对账（2026-09-25 防破解核心）：用授权中心的权益快照**覆盖**本地。
+
+        与 apply_cloud_purchases（幂等追加、只加不减）的本质区别：本地文件里的
+        expire_at / credits_left / permanent_credits 被篡改（手改 JSON / 回环后门 /
+        第三方工具）后，只要一联网同步，就被云端真值覆盖回滚 —— 改了也白改。
+
+        仅当快照带 authority.v>=1（新版授权中心）时才覆盖；老服务端无快照 →
+        调用方应退回 apply_cloud_purchases。封禁标记一并落 meta.account.banned，
+        由 device_lock_reason → status() 全局锁定权益。
+        """
+        self._ensure_loaded()
+        auth = (acct or {}).get("authority") or {}
+        if not isinstance(auth, dict) or int(auth.get("v") or 0) < 1:
+            return {"ok": False, "reason": "no_authority"}
+        now = self._now()
+        st = self._state
+        dl = st["download_member"]
+        ai = st["ai_member"]
+
+        dl_until = float(auth.get("member_until_dl") or 0)
+        dl["expire_at"] = dl_until
+        dl["active"] = dl_until > now
+        if not dl["active"]:
+            dl["plan"] = None
+
+        ai_until = float(auth.get("member_until_ai") or 0)
+        ai_active = ai_until > now
+        ai["expire_at"] = ai_until
+        ai["active"] = ai_active
+        if ai_active:
+            ai["credits_left"] = max(0, int(auth.get("ai_credits_left") or 0))
+            if not ai.get("plan"):
+                ai["plan"] = "cloud_ai"
+        else:
+            ai["plan"] = None
+            ai["credits_left"] = 0  # AI 订阅积分随订阅失效清零
+
+        st["permanent_credits"]["total"] = max(0, int(auth.get("perm_credits") or 0))
+
+        acc = st["meta"].setdefault("account", {})
+        acc["banned"] = bool(auth.get("banned"))
+        st["meta"]["last_authority_sync"] = now
+        self._persist()
+        return {"ok": True, "banned": bool(auth.get("banned")),
+                "download_until": dl_until, "ai_until": ai_until,
+                "perm_credits": int(st["permanent_credits"]["total"]),
+                "ai_credits_left": int(ai.get("credits_left", 0))}
+
     def account_view(self) -> dict[str, Any]:
         """给前端的账号快照（不吐 token）。"""
         self._ensure_loaded()
@@ -625,7 +677,12 @@ class MembershipStore:
 
     # ---- 积分 ----
     def spend_credits(self, amount: int, reason: str = "ai_usage") -> dict[str, Any]:
-        """消耗积分：先 AI 订阅积分（快过期），后永久积分。不足则拒绝。"""
+        """消耗积分：先 AI 订阅积分（快过期），后永久积分。不足则拒绝。
+
+        2026-09-25 防破解：扣减成功后异步上报授权中心记账（report_spend_async），
+        云端按幂等 id 累计消耗 —— 本地 JSON 被篡改的余额会在下次同步时被云端
+        权威快照覆盖（见 apply_cloud_authoritative）。
+        """
         if amount <= 0:
             return {"ok": False, "error": "amount 必须为正"}
         self._ensure_loaded()
@@ -637,22 +694,34 @@ class MembershipStore:
             return {"ok": False, "error": f"积分不足：需要 {amount}，当前 {ai_left + perm_total}"}
 
         remaining = amount
+        ai_taken = 0
         # 1) AI 订阅积分
         if remaining > 0 and ai_left > 0:
             take = min(ai_left, remaining)
             ai["credits_left"] = ai_left - take
             remaining -= take
+            ai_taken = take
         # 2) 永久积分
+        perm_taken = 0
         if remaining > 0:
             perm_total -= remaining
             st["permanent_credits"]["total"] = perm_total
             remaining = 0
+            perm_taken = amount - ai_taken
         st["meta"].setdefault("history", []).append({
             "type": "spend", "amount": amount, "reason": reason, "at": self._now(),
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]
         self._persist()
+        # 异步上云记账（fire-and-forget，失败/离线进 pending 队列下次同步补报）
+        try:
+            from routers.cloud_account import report_spend_async
+            report_spend_async(self, amount=amount, ai_taken=ai_taken,
+                               perm_taken=perm_taken, reason=reason)
+        except Exception:
+            pass
         return {"ok": True, "spent": amount, "reason": reason,
+                "ai_taken": ai_taken, "perm_taken": perm_taken,
                 "credits_left": self.status()["credits_total"]}
 
     def add_credits(self, delta: int, reason: str = "admin_adjust",

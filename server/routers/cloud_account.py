@@ -130,10 +130,119 @@ def _fp_name() -> tuple[str, str]:
     return fp, name[:64]
 
 
+def _apply_account_state(store, acct: dict[str, Any]) -> None:
+    """云端权益落地（2026-09-25 防破解核心切换点）。
+
+    授权中心带 authority 快照（v>=1）→ 用云端真值**覆盖**本地 memberships
+    （篡改的 expire_at/积分一联网即回滚）；老服务端无快照 → 退回旧的幂等追加。
+    """
+    auth = (acct or {}).get("authority") or {}
+    if isinstance(auth, dict) and int(auth.get("v") or 0) >= 1:
+        store.apply_cloud_authoritative(acct)
+    else:
+        store.apply_cloud_purchases(acct.get("purchases") or [])
+
+
 def _after_login(store, email: str, resp: dict[str, Any], fp: str, name: str) -> None:
     acct = resp.get("account") or {}
     store.save_account(email, resp.get("token", ""), acct, fp=fp, name=name)
-    store.apply_cloud_purchases(acct.get("purchases") or [])
+    _apply_account_state(store, acct)
+
+
+# ---- 积分扣减上云（防破解：本地余额只是缓存，消耗流水以云端为准）------------
+def _pending_spends_path_guard(store) -> list[dict]:
+    try:
+        store._ensure_loaded()
+        meta = store._state.setdefault("meta", {})
+        q = meta.setdefault("pending_spends", [])
+        if not isinstance(q, list):
+            q = meta["pending_spends"] = []
+        return q
+    except Exception:
+        return []
+
+
+def _queue_pending_spends(store, items: list[dict]) -> None:
+    try:
+        q = _pending_spends_path_guard(store)
+        q.extend(items)
+        store._state["meta"]["pending_spends"] = q[-200:]  # 上限 200 条
+        store._persist()
+    except Exception:
+        pass
+
+
+def _report_spend(store, items: list[dict]) -> None:
+    """同步上报（在后台线程里跑）：成功则用云端权威快照校准本地余额。"""
+    try:
+        store._ensure_loaded()
+        token = str(((store._state.get("meta") or {}).get("account") or {}).get("token") or "")
+        if not token or not items:
+            return
+        import license_client
+        r = license_client.spend_remote(token, items)
+        if r and r.get("ok"):
+            auth = r.get("authority") or {}
+            if auth:
+                store.apply_cloud_authoritative({"authority": auth})
+        else:
+            _queue_pending_spends(store, items)
+    except Exception:
+        _queue_pending_spends(store, items)  # 断网/超时：排队下次补报
+
+
+def report_spend_async(store, amount: int, ai_taken: int = 0, perm_taken: int = 0,
+                       reason: str = "") -> None:
+    """membership.spend_credits 的上云钩子（fire-and-forget，不阻塞功能主流程）。
+
+    items 按 spend_credits 的实际扣减拆分（先 AI 后永久），幂等 id 唯一 ——
+    重试/补报不会在云端重复扣。
+    离线测试环境（pytest / VDL_OFFLINE_TESTS）直接跳过：后台线程会污染全局
+    store 单例并发起真实网络请求。
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    import threading
+    import uuid
+    ev = uuid.uuid4().hex[:16]
+    items: list[dict] = []
+    if ai_taken > 0:
+        items.append({"pool": "ai", "cost": int(ai_taken), "op": reason[:40],
+                      "id": f"{ev}-ai"})
+    if perm_taken > 0:
+        items.append({"pool": "permanent", "cost": int(perm_taken), "op": reason[:40],
+                      "id": f"{ev}-perm"})
+    if not items:
+        return
+    try:
+        threading.Thread(target=_report_spend, args=(store, items),
+                         daemon=True, name="vdl-spend-report").start()
+    except Exception:
+        _queue_pending_spends(store, items)
+
+
+def flush_pending_spends(store) -> None:
+    """联网时补报离线期间积累的扣减（登录/心跳成功后调用）。"""
+    try:
+        store._ensure_loaded()
+        meta = store._state.get("meta") or {}
+        pending = meta.get("pending_spends") or []
+        if not pending:
+            return
+        token = str((meta.get("account") or {}).get("token") or "")
+        if not token:
+            return
+        import license_client
+        r = license_client.spend_remote(token, pending)
+        if r and r.get("ok"):
+            meta["pending_spends"] = []
+            store._persist()
+            auth = r.get("authority") or {}
+            if auth:
+                store.apply_cloud_authoritative({"authority": auth})
+    except Exception:
+        pass  # 仍离线：保留队列下次再试
 
 
 def _pub(store, extra: Optional[dict] = None) -> dict[str, Any]:
@@ -254,8 +363,9 @@ def cloud_sync() -> dict[str, Any]:
     acct = r.get("account") or {}
     store.set_evicted(False)
     store.save_account(acc.get("email", ""), token, acct, fp=fp, name=name)
-    applied = store.apply_cloud_purchases(acct.get("purchases") or [])
-    return _pub(store, {"applied": applied.get("applied") or []})
+    _apply_account_state(store, acct)
+    flush_pending_spends(store)
+    return _pub(store)
 
 
 @router.post("/api/cloud/redeem")
@@ -280,9 +390,9 @@ def cloud_redeem(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     acct = r.get("account") or {}
     store.save_account(acc.get("email", ""), token, acct,
                        fp=acc.get("fp", ""), name=acc.get("name", ""))
-    applied = store.apply_cloud_purchases(acct.get("purchases") or [])
-    return _pub(store, {"plan_code": r.get("plan_code"),
-                        "applied": applied.get("applied") or []})
+    _apply_account_state(store, acct)
+    flush_pending_spends(store)
+    return _pub(store, {"plan_code": r.get("plan_code")})
 
 
 @router.post("/api/cloud/unbind")
@@ -379,8 +489,17 @@ def maybe_sync_account(store) -> None:
             acct = r.get("account") or {}
             store.set_evicted(False)
             store.save_account(acc.get("email", ""), token, acct, fp=fp, name=name)
-            store.apply_cloud_purchases(acct.get("purchases") or [])
+            _apply_account_state(store, acct)
+            flush_pending_spends(store)
         elif r.get("code") == "DEVICE_EVICTED":
             store.set_evicted(True)
+        elif r.get("code") == "ACCOUNT_BANNED":
+            # 云端封禁：落 meta.account.banned → device_lock_reason 全局锁权益
+            try:
+                store._ensure_loaded()
+                store._state.setdefault("meta", {}).setdefault("account", {})["banned"] = True
+                store._persist()
+            except Exception:
+                pass
     except Exception:
         pass  # 网络/指纹异常：保持现状（宽限语义）

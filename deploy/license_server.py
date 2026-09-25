@@ -35,6 +35,15 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
   POST /api/license/revoke    {code, token}                        管理员作废卡密
   POST /api/license/grant     {email, plan, note?, token}          管理员直接给账号开套餐
   POST /api/license/users     {token}                              管理员账号列表
+  POST /api/license/spend     {token, items:[{pool,cost,op,id}]}   客户端积分扣减上报（幂等）
+  POST /api/license/ban       {email, banned, note?, token}        管理员封禁/解封账号
+  POST /api/license/adjust    {email, pool, delta, note?, token}   管理员调整积分（可负）
+  POST /api/license/setstate  {email, member_until_dl?, member_until_ai?, perm_credits?, ai_credits_left?, token}
+                                                                   管理员设定权威基线（迁移/纠错）
+  POST /api/license/usage     {email, token}                       管理员查权益与流水
+
+  权益权威化（v1）：登录/心跳/充值响应的 account.authority 快照是会员到期与积分
+  余额的唯一真源；客户端用它覆盖本地文件 —— 篡改 memberships/*.json 一联网即回滚。
 
 部署：香港机 /opt/vdl-license/，systemd vdl-license 监听 127.0.0.1:8902，
 nginx `location ^~ /api/license/` 反代。数据 /opt/vdl-license/data/license_data.json
@@ -82,6 +91,23 @@ PLAN_MAP: dict[str, str] = {
     "CK15": "credits_15000",
 }
 PLAN_CODE_TO_SHORT = {v: k for k, v in PLAN_MAP.items()}
+
+# ── 套餐效果（2026-09-25 权益云端权威化）───────────────────────────────────── #
+# 服务端按「事件推进」维护账号权益状态（与 App 端 activate() 同语义：
+# 续费顺延 = max(now, 当前到期) + days），登录/心跳响应携带权威快照，
+# 客户端用它覆盖本地 memberships/*.json —— 用户篡改本地文件一联网即回滚。
+PLAN_EFFECT: dict[str, dict[str, Any]] = {
+    "download_month":     {"kind": "dl",   "days": 30},
+    "download_half_year": {"kind": "dl",   "days": 180},
+    "download_year":      {"kind": "dl",   "days": 365},
+    "ai_5500":            {"kind": "ai",   "days": 30, "credits": 5500},
+    "ai_15000":           {"kind": "ai",   "days": 30, "credits": 15000},
+    "credits_5000":       {"kind": "pack", "credits": 5000},
+    "credits_15000":      {"kind": "pack", "credits": 15000},
+}
+SPEND_LEDGER_CAP = 300     # 每账号积分流水保留条数（审计用，余额是独立累计字段）
+SPEND_ID_CAP = 600         # 幂等 id 去重表容量
+PURCHASE_LEDGER_CAP = 500
 
 CODE_RE = re.compile(r"^VDL-([A-Z0-9]{3,4})-([0-9A-Fa-f]{10})-([0-9A-Fa-f]{8})$")
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -212,10 +238,189 @@ def _public_user(user: dict[str, Any], fp: str = "") -> dict[str, Any]:
         "email": user.get("email", ""),
         "devices": devs,
         "max_devices": MAX_DEVICES,
+        "banned": bool(user.get("banned")),
+        # 权威权益快照（v1）：客户端 presence 检测后用它覆盖本地 memberships
+        "authority": _authority_view(user, time.time()),
         "purchases": [
             {"id": p.get("id", ""), "plan_code": p.get("plan_code", ""),
              "at": float(p.get("at", 0))}
             for p in (user.get("purchases") or [])
+        ],
+    }
+
+
+# ── 权益权威状态（2026-09-25 防破解：会员到期/积分余额以本服务为准）─────────── #
+def _apply_plan_effect(user: dict[str, Any], plan_code: str, now: float) -> None:
+    """把一次套餐/积分包购买推进账号的权威权益状态（与 App 端 activate 同语义）。"""
+    eff = PLAN_EFFECT.get(plan_code)
+    if not eff:
+        return
+    if eff["kind"] == "dl":
+        cur = float(user.get("member_until_dl") or 0)
+        user["member_until_dl"] = max(now, cur) + eff["days"] * 86400.0
+    elif eff["kind"] == "ai":
+        cur = float(user.get("member_until_ai") or 0)
+        ai_until = max(now, cur) + eff["days"] * 86400.0
+        user["member_until_ai"] = ai_until
+        # App 端语义：AI 会员捆绑下载权益（下载覆盖到 AI 到期）
+        if float(user.get("member_until_dl") or 0) < ai_until:
+            user["member_until_dl"] = ai_until
+        user["ai_grant_total"] = int(user.get("ai_grant_total") or 0) + int(eff["credits"])
+    elif eff["kind"] == "pack":
+        user["perm_credits"] = int(user.get("perm_credits") or 0) + int(eff["credits"])
+    user["authority_init"] = True
+
+
+def _ensure_authority(user: dict[str, Any], now: float) -> None:
+    """惰性迁移：老账号有 purchases 但从未算过权威状态 → 按 at 时序重放一次。
+
+    重放结果与 App 端逐笔 activate 的本地累计一致（同一套 max(now,cur)+days 语义），
+    因此已登录老用户首次心跳即完成迁移，本地权益不会被清零。
+    """
+    if user.get("authority_init"):
+        return
+    for p in sorted(user.get("purchases") or [], key=lambda x: float(x.get("at", 0))):
+        _apply_plan_effect(user, str(p.get("plan_code") or ""), now)
+    user["authority_init"] = True
+
+
+def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
+    """登录/心跳响应携带的权威快照（客户端 presence 检测 v>=1 才覆盖本地）。"""
+    _ensure_authority(user, now)
+    ai_active = float(user.get("member_until_ai") or 0) > now
+    ai_left = 0
+    if ai_active:
+        ai_left = max(0, int(user.get("ai_grant_total") or 0) - int(user.get("ai_spent_total") or 0))
+    return {
+        "v": 1,
+        "member_until_dl": float(user.get("member_until_dl") or 0),
+        "member_until_ai": float(user.get("member_until_ai") or 0),
+        "ai_credits_left": ai_left,
+        "perm_credits": int(user.get("perm_credits") or 0),
+        "banned": bool(user.get("banned")),
+    }
+
+
+def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
+               secret: str) -> dict[str, Any]:
+    """客户端积分扣减上报（幂等）：永久积分直接扣余额，AI 积分记累计消耗。
+
+    幂等键 id 由客户端生成（uuid），重复上报（断网重发）只记一次。
+    余额允许扣成负数——正常客户端本地已做不足拒绝，负数即篡改/并发信号，供审计。
+    """
+    uid = parse_token(token, secret, now)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    if user.get("banned"):
+        raise ApiError(403, "ACCOUNT_BANNED", "账号已被停用，如有疑问请联系客服")
+    if not isinstance(items, list):
+        raise ApiError(400, "BAD_BODY", "items 必须是数组")
+    ids = user.setdefault("spend_ids", [])
+    ledger = user.setdefault("spends", [])
+    applied = 0
+    for it in items[:50]:
+        if not isinstance(it, dict):
+            continue
+        try:
+            cost = int(it.get("cost") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cost <= 0:
+            continue
+        iid = str(it.get("id") or "").strip()[:64]
+        if iid and iid in ids:
+            continue                                   # 幂等：重发只记一次
+        pool = str(it.get("pool") or "permanent")
+        if pool not in ("permanent", "ai"):
+            pool = "permanent"
+        if pool == "permanent":
+            user["perm_credits"] = int(user.get("perm_credits") or 0) - cost
+        else:
+            user["ai_spent_total"] = int(user.get("ai_spent_total") or 0) + cost
+        applied += cost
+        if iid:
+            ids.append(iid)
+        ledger.append({"op": str(it.get("op") or "")[:40], "pool": pool,
+                       "cost": cost, "at": now, "id": iid})
+    user["spends"] = ledger[-SPEND_LEDGER_CAP:]
+    user["spend_ids"] = ids[-SPEND_ID_CAP:]
+    return {"ok": True, "applied": applied, "authority": _authority_view(user, now)}
+
+
+def _admin_find_user(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
+    uid = _norm_id(email)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(404, "NOT_FOUND", f"账号不存在: {uid}")
+    _ensure_authority(user, now)
+    return user
+
+
+def ban_impl(state: dict[str, Any], email: str, flag: bool, now: float,
+             note: str = "") -> dict[str, Any]:
+    """管理员封禁/解封账号：封禁后登录被拒、心跳回 ACCOUNT_BANNED、权益锁定。"""
+    user = _admin_find_user(state, email, now)
+    user["banned"] = bool(flag)
+    user["ban_note"] = note[:120]
+    user["banned_at"] = now if flag else 0.0
+    return {"ok": True, "email": _norm_id(email), "banned": bool(flag),
+            "authority": _authority_view(user, now)}
+
+
+def adjust_impl(state: dict[str, Any], email: str, pool: str, delta: int,
+                now: float, note: str = "") -> dict[str, Any]:
+    """管理员调整积分（可为负=强扣）：pool ∈ permanent|ai。"""
+    if pool not in ("permanent", "ai"):
+        raise ApiError(400, "BAD_POOL", "pool 必须是 permanent 或 ai")
+    user = _admin_find_user(state, email, now)
+    if pool == "permanent":
+        user["perm_credits"] = int(user.get("perm_credits") or 0) + int(delta)
+    else:
+        # 调 AI 订阅积分：直接动剩余额度（grant − spent 的差值口径），等价于调 grant
+        user["ai_grant_total"] = int(user.get("ai_grant_total") or 0) + int(delta)
+    user.setdefault("adjusts", []).append(
+        {"pool": pool, "delta": int(delta), "note": note[:120], "at": now})
+    user["adjusts"] = user["adjusts"][-SPEND_LEDGER_CAP:]
+    return {"ok": True, "email": _norm_id(email), "pool": pool, "delta": int(delta),
+            "authority": _authority_view(user, now)}
+
+
+def setstate_impl(state: dict[str, Any], email: str, now: float,
+                  member_until_dl: float = -1.0, member_until_ai: float = -1.0,
+                  perm_credits: int = -1, ai_credits_left: int = -1) -> dict[str, Any]:
+    """管理员直接设定权威基线（迁移存量本机权益 / 纠错用）。传 -1 表示不改该项。"""
+    user = _admin_find_user(state, email, now)
+    if member_until_dl >= 0:
+        user["member_until_dl"] = float(member_until_dl)
+    if member_until_ai >= 0:
+        user["member_until_ai"] = float(member_until_ai)
+        if user["member_until_ai"] > float(user.get("member_until_dl") or 0):
+            user["member_until_dl"] = user["member_until_ai"]   # AI 捆绑下载权益
+    if perm_credits >= 0:
+        user["perm_credits"] = int(perm_credits)
+    if ai_credits_left >= 0:
+        user["ai_grant_total"] = int(ai_credits_left) + int(user.get("ai_spent_total") or 0)
+    user["authority_init"] = True
+    return {"ok": True, "email": _norm_id(email), "authority": _authority_view(user, now)}
+
+
+def usage_impl(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
+    """管理员查账号权益与流水（审计篡改/客诉依据）。"""
+    user = _admin_find_user(state, email, now)
+    return {
+        "ok": True,
+        "email": _norm_id(email),
+        "authority": _authority_view(user, now),
+        "purchases": user.get("purchases") or [],
+        "spends": user.get("spends") or [],
+        "adjusts": user.get("adjusts") or [],
+        "banned": bool(user.get("banned")),
+        "ban_note": user.get("ban_note", ""),
+        "devices": [
+            {"fp": d.get("fp", ""), "name": d.get("name", ""),
+             "last_seen": float(d.get("last_seen", 0))}
+            for d in (user.get("devices") or [])
         ],
     }
 
@@ -273,6 +478,9 @@ def login_impl(state: dict[str, Any], email: str, password: str, now: float,
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请先注册")
     if not verify_password(password or "", user.get("salt", ""), user.get("pw_hash", "")):
         raise ApiError(401, "BAD_PASSWORD", "密码不正确")
+    if user.get("banned"):
+        raise ApiError(403, "ACCOUNT_BANNED",
+                       "账号已被停用，如有疑问请联系客服")
     fp = str((device or {}).get("fp") or "").strip()
     evicted = _attach_device(user, device, now)
     user["last_login"] = now
@@ -291,6 +499,10 @@ def heartbeat_impl(state: dict[str, Any], token: str, fp: str, now: float,
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    if user.get("banned"):
+        return {"ok": False, "code": "ACCOUNT_BANNED",
+                "error": "账号已被停用，如有疑问请联系客服",
+                "account": _public_user(user, "")}
     fp = (fp or "").strip()
     devices = user.setdefault("devices", [])
     for d in devices:
@@ -368,6 +580,7 @@ def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
     pid = secrets.token_hex(6)
     user.setdefault("purchases", []).append(
         {"id": pid, "plan_code": plan_code, "at": now})
+    _apply_plan_effect(user, plan_code, now)   # 权威状态同步推进（余额/到期）
     return {"ok": True, "plan_code": plan_code, "purchase_id": pid,
             "account": _public_user(user)}
 
@@ -413,6 +626,7 @@ def grant_impl(state: dict[str, Any], email: str, plan: str, now: float,
     pid = secrets.token_hex(6)
     user.setdefault("purchases", []).append(
         {"id": pid, "plan_code": plan_code, "at": now, "note": note[:120]})
+    _apply_plan_effect(user, plan_code, now)   # 权威状态同步推进（余额/到期）
     return {"ok": True, "user_id": uid, "plan_code": plan_code, "purchase_id": pid,
             "account": _public_user(user)}
 
@@ -540,7 +754,8 @@ class Handler(BaseHTTPRequestHandler):
             action = path.rsplit("/", 1)[-1]
 
             # --- 管理员接口（不做 IP 限流，走 token）---
-            if action in ("gen", "revoke", "grant", "users"):
+            if action in ("gen", "revoke", "grant", "users",
+                          "ban", "adjust", "setstate", "usage"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -555,6 +770,35 @@ class Handler(BaseHTTPRequestHandler):
                                          str(data.get("plan") or ""), now,
                                          str(data.get("note") or ""))
                         _save_state(st)
+                    elif action == "ban":
+                        out = ban_impl(st, str(data.get("email") or ""),
+                                       bool(data.get("banned", data.get("flag", True))),
+                                       now, str(data.get("note") or ""))
+                        _save_state(st)
+                    elif action == "adjust":
+                        try:
+                            delta = int(data.get("delta"))
+                        except (TypeError, ValueError):
+                            raise ApiError(400, "BAD_DELTA", "delta 必须为整数")
+                        out = adjust_impl(st, str(data.get("email") or ""),
+                                          str(data.get("pool") or "permanent"),
+                                          delta, now, str(data.get("note") or ""))
+                        _save_state(st)
+                    elif action == "setstate":
+                        def _num(key, default=-1.0, cast=float):
+                            try:
+                                v = data.get(key)
+                                return cast(v) if v is not None else default
+                            except (TypeError, ValueError):
+                                return default
+                        out = setstate_impl(st, str(data.get("email") or ""), now,
+                                            member_until_dl=_num("member_until_dl"),
+                                            member_until_ai=_num("member_until_ai"),
+                                            perm_credits=int(_num("perm_credits", -1, int)),
+                                            ai_credits_left=int(_num("ai_credits_left", -1, int)))
+                        _save_state(st)
+                    elif action == "usage":
+                        out = usage_impl(st, str(data.get("email") or ""), now)
                     else:
                         out = users_impl(st)
                 return self._json(200, out)
@@ -603,6 +847,10 @@ class Handler(BaseHTTPRequestHandler):
                 elif action == "check":
                     out = check_impl(st, str(data.get("code") or ""),
                                      str(data.get("fingerprint") or ""))
+                elif action == "spend":
+                    out = spend_impl(st, str(data.get("token") or ""),
+                                     data.get("items"), now, SECRET)
+                    _save_state(st)
                 else:
                     return self._json(404, {"ok": False, "error": "unknown action"})
             return self._json(200, out)
