@@ -110,6 +110,13 @@
 const $ = (s) => document.querySelector(s);
 let curRange = 'day';
 let curRangeLabel = '每天';
+// 账号级门禁（_ops_requester_is_admin）要求每个请求带登录 token——
+// 2026-09-26 修复：此前数据接口 fetch 未带 Authorization，超管登录也整版 403。
+function authHeaders(){
+  let tok='';
+  try{ tok = localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token') || ''; }catch(_){}
+  return tok ? {'Authorization':'Bearer '+tok} : {};
+}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function fmtTime(t){
   // nginx 时间格式: 25/Sep/2026:12:43:01 +0800
@@ -124,7 +131,7 @@ function adminNeededMsg(){return '🔒 仅超级管理员账号可用：当前�
 async function loadVisits(){
   const el=$('#visitsStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
-    const r=await fetch('/api/app/ops-visits?limit=100&range='+encodeURIComponent(curRange));
+    const r=await fetch('/api/app/ops-visits?limit=100&range='+encodeURIComponent(curRange),{headers:authHeaders()});
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
     if(d.range_label) curRangeLabel=d.range_label;
@@ -148,7 +155,7 @@ async function loadVisits(){
 async function loadEvents(){
   const el=$('#eventsStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
-    const r=await fetch('/api/app/ops-events?limit=200&range='+encodeURIComponent(curRange));
+    const r=await fetch('/api/app/ops-events?limit=200&range='+encodeURIComponent(curRange),{headers:authHeaders()});
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
     const errs=(d.events||[]).filter(x=>x.level==='error').length;
@@ -178,7 +185,7 @@ const ALERT_KINDS={
 async function loadAlerts(){
   const el=$('#alertsStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
-    const r=await fetch('/api/app/license-alerts?limit=100');
+    const r=await fetch('/api/app/license-alerts?limit=100',{headers:authHeaders()});
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
     const alerts=(d.alerts||[]);
@@ -212,7 +219,7 @@ async function loadAlerts(){
 async function ackAlerts(ids){
   try{
     await fetch('/api/app/license-alerts/ack',{method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
       body:JSON.stringify({ids:ids||[]})});
     loadAlerts();
   }catch(e){}
@@ -227,7 +234,7 @@ async function loadRecon(){
   const el=$('#reconStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
     const r=await fetch('/api/app/license-recon',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({days:7})});
+      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),body:JSON.stringify({days:7})});
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
     const ms=d.mismatches||[];

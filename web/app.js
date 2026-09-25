@@ -19600,10 +19600,70 @@ el.dwVidPlayer.hidden = true;
         if (mis) mis.innerHTML = '';
       }
     };
-    const loadMonitor = () => { loadMonitorAlerts(); loadMonitorRecon(); };
+    // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
+    let _monRange = 'day';
+    const _monStatusClass = (s) => (s >= 500 ? 'is-err' : s >= 400 ? 'is-warn' : 'is-ok');
+    const _monNginxTime = (t) => {
+      try { return new Date(t.replace(' ', 'T').replace(/\+0800$/, '+08:00')).toLocaleString('zh-CN', { hour12: false }); } catch (_) { return t; }
+    };
+    const loadMonitorVisits = async () => {
+      const st = $('adminMonitorVisitStats'), paths = $('adminMonitorVisitPaths'), rec = $('adminMonitorVisitRecent');
+      if (!st) return;
+      st.innerHTML = '加载中…';
+      try {
+        const d = await adminRequest('/api/app/ops-visits?limit=100&range=' + encodeURIComponent(_monRange));
+        st.innerHTML = `总请求 <b>${d.total || 0}</b> · 独立 IP <b>${d.unique_ips || 0}</b> · 状态码 ` +
+          Object.entries(d.by_status || {}).map(([k, v]) =>
+            `<span style="color:${_monStatusClass(+k) === 'is-err' ? '#e5484d' : _monStatusClass(+k) === 'is-warn' ? '#f5a623' : '#30a46c'}">${k}×${v}</span>`).join(' ') || '无';
+        paths.innerHTML = (d.top_paths && d.top_paths.length)
+          ? '<table class="admin-table"><thead><tr><th>热点路径</th><th>次数</th></tr></thead><tbody>' +
+            d.top_paths.map((p) => `<tr><td>${esc(p.path)}</td><td>${p.count}</td></tr>`).join('') + '</tbody></table>'
+          : '<div class="admin-empty">无访问数据</div>';
+        const items = (d.recent || []).slice().reverse();
+        rec.innerHTML = items.length
+          ? items.map((x) => `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px">` +
+              `<span style="opacity:.6">${esc(_monNginxTime(x.t))}</span> · <b>${esc(x.ip)}</b> · ` +
+              `<span style="color:${_monStatusClass(+x.s) === 'is-err' ? '#e5484d' : _monStatusClass(+x.s) === 'is-warn' ? '#f5a623' : '#30a46c'}">${esc(String(x.s))}</span> · ${esc(x.p)}</div>`).join('')
+          : '<div class="admin-empty">无最近访问</div>';
+      } catch (e) {
+        st.innerHTML = '';
+        paths.innerHTML = '';
+        rec.innerHTML = `<div class="admin-empty">访客加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
+      }
+    };
+    const loadMonitorEvents = async () => {
+      const st = $('adminMonitorEventStats'), log = $('adminMonitorEventLog');
+      if (!st) return;
+      st.innerHTML = '加载中…';
+      try {
+        const d = await adminRequest('/api/app/ops-events?limit=200&range=' + encodeURIComponent(_monRange));
+        const events = (d && d.events) || [];
+        const errs = events.filter((x) => x.level === 'error').length;
+        st.innerHTML = `事件 <b>${d.count || 0}</b> 条 · 错误 <b style="color:#e5484d">${errs}</b> 条`;
+        log.innerHTML = events.length
+          ? events.map((x) => `<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px">` +
+              `<span style="color:${x.level === 'error' ? '#e5484d' : x.level === 'warn' ? '#f5a623' : '#30a46c'};font-weight:600">[${esc(x.level)}]</span> ` +
+              `<span style="opacity:.6">${x.ts ? new Date(x.ts * 1000).toLocaleString('zh-CN', { hour12: false }) : ''}</span><br>` +
+              `${esc(x.message || '')}` +
+              (x.extra && x.extra.url ? `<br><span style="opacity:.6">@ ${esc(x.extra.url)}</span>` : '') + '</div>').join('')
+          : '<div class="admin-empty">暂无事件</div>';
+      } catch (e) {
+        st.innerHTML = '';
+        log.innerHTML = `<div class="admin-empty">事件加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
+      }
+    };
+    document.querySelectorAll('.admin-mon-range[data-mon-range]').forEach((b) => {
+      b.addEventListener('click', () => {
+        _monRange = b.dataset.monRange || 'day';
+        document.querySelectorAll('.admin-mon-range[data-mon-range]').forEach((x) => x.classList.toggle('is-active', x === b));
+        loadMonitorVisits();
+        loadMonitorEvents();
+      });
+    });
+    const loadMonitor = () => { loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts(); loadMonitorRecon(); };
     const _adminViewMonitorEl = $('adminViewMonitor');
     const _adminMonitorTimer = setInterval(() => {
-      // 仅当管理面板打开且停留在监控告警页时自动刷新
+      // 仅当管理面板打开且停留在运维监控页时自动刷新
       if (!overlay.hidden && !_adminViewMonitorEl.hidden) loadMonitorAlerts();
     }, 30 * 1000);
     if ($('adminMonitorRefresh')) $('adminMonitorRefresh').addEventListener('click', loadMonitor);

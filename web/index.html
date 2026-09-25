@@ -3583,7 +3583,7 @@
         <button type="button" class="admin-tab" data-admin-view="stats" data-page-node-id="BzQ1qcEHo3X1dLuFECX5uz">使用统计</button>
         <button type="button" class="admin-tab" data-admin-view="config" data-page-node-id="XWeeZbATMr2HbusVcKq2dF">系统配置</button>
         <button type="button" class="admin-tab" data-admin-view="aiaccounts" data-page-node-id="aiAcctTab">AI 账户</button>
-        <button type="button" class="admin-tab" data-admin-view="monitor" data-page-node-id="adminMonTab">监控告警</button>
+        <button type="button" class="admin-tab" data-admin-view="monitor" data-page-node-id="adminMonTab">运维监控</button>
       </nav>
       <div class="admin-body" data-page-node-id="RYA0sEY7fsTbPcGaQp5gmC">
         <section class="admin-view" data-admin-view="users" id="adminViewUsers" data-page-node-id="p6bUVjPAOQ0OpOAa2jjHg7">
@@ -3656,14 +3656,42 @@
           </div>
           <div id="adminAiAccounts" class="admin-ai-accounts" data-page-node-id="aiAcctBox"></div>
         </section>
-        <!-- 监控告警（2026-09-26）：充值/权益异常告警 + 每日入账对账，从运维看板提权到管理后台 -->
+        <!-- 运维监控（2026-09-26）：完整运维看板并入管理后台——访客/事件/告警/对账一处看全 -->
         <section class="admin-view" data-admin-view="monitor" id="adminViewMonitor" hidden data-page-node-id="adminMonView">
           <div class="admin-toolbar" data-page-node-id="adminMonTb">
-            <span class="admin-count">充值/权益异常告警 + 每日入账对账（授权中心实时检测，本页 30s 自动刷新）</span>
-            <button type="button" id="adminMonitorAckAll" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminMonAckAll">全部标为已读</button>
+            <span class="admin-count">网站运维 + 充值/权益监控（数据来自 ECS，本页 30s 自动刷新）</span>
+            <span class="admin-count" style="margin-left:10px">范围：</span>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-mon-range is-active" data-mon-range="day">每天</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-mon-range" data-mon-range="3d">三天</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-mon-range" data-mon-range="week">每周</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-mon-range" data-mon-range="month">每月</button>
+            <button type="button" id="adminMonitorAckAll" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminMonAckAll">告警全部已读</button>
             <button type="button" id="adminMonitorRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminMonRefresh">刷新</button>
           </div>
-          <div id="adminMonitorAlerts" class="admin-table-wrap"></div>
+          <div class="admin-cfg-section" data-page-node-id="adminMonVisitSec">
+            <div class="admin-cfg-head" data-page-node-id="adminMonVisitHead">
+              <h3 data-page-node-id="adminMonVisitTitle">网站访客</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminMonVisitHint">nginx 日志汇总：总请求 / 独立 IP / 状态码 / 热点路径 / 最近访问</span>
+            </div>
+            <div id="adminMonitorVisitStats" class="admin-count" style="margin-bottom:6px"></div>
+            <div id="adminMonitorVisitPaths" class="admin-table-wrap"></div>
+            <div id="adminMonitorVisitRecent" class="admin-table-wrap" style="margin-top:8px;max-height:220px;overflow:auto"></div>
+          </div>
+          <div class="admin-cfg-section" style="margin-top:14px" data-page-node-id="adminMonEventSec">
+            <div class="admin-cfg-head" data-page-node-id="adminMonEventHead">
+              <h3 data-page-node-id="adminMonEventTitle">错误 / 异常事件</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminMonEventHint">前端与解析链路上报的错误事件</span>
+            </div>
+            <div id="adminMonitorEventStats" class="admin-count" style="margin-bottom:6px"></div>
+            <div id="adminMonitorEventLog" class="admin-table-wrap" style="max-height:260px;overflow:auto"></div>
+          </div>
+          <div class="admin-cfg-section" style="margin-top:14px" data-page-node-id="adminMonAlertSec">
+            <div class="admin-cfg-head" data-page-node-id="adminMonAlertHead">
+              <h3 data-page-node-id="adminMonAlertTitle">异常告警 · 充值/权益监控</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminMonAlertHint">大额充值 / 短时连刷 / 卡密爆破 / 负余额 / 资金对账差异（授权中心实时检测）</span>
+            </div>
+            <div id="adminMonitorAlerts" class="admin-table-wrap"></div>
+          </div>
           <div class="admin-cfg-section" style="margin-top:14px" data-page-node-id="adminMonReconSec">
             <div class="admin-cfg-head" data-page-node-id="adminMonReconHead">
               <h3 data-page-node-id="adminMonReconTitle">每日对账 · 入账 vs 充值发货</h3>
