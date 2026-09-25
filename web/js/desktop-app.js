@@ -251,5 +251,18 @@
       document.addEventListener('pywebviewready', wire, { once: true });
     }
     setInterval(() => syncToCloud(false), 30 * 60 * 1000);
+
+    // 2026-09-25：超管手动入口。默认保持隐藏（普通用户零痕迹）；
+    // app.js 的 updateAdminTabVisibility() 在确认 is_admin 后调 setVisible(true)
+    // 把按钮显示为「Cookie 池自动上传」，点击走同一 syncToCloud(true) 带结果弹窗。
+    window.VDL.cookieSync = {
+      run: syncToCloud,
+      setVisible(v) {
+        const wrap = document.getElementById('syncCookieWrap');
+        if (wrap) wrap.style.display = v ? '' : 'none';
+        const b = document.getElementById('syncCookieBtn');
+        if (b && v) b.textContent = 'Cookie 池自动上传';
+      },
+    };
   })();
 })();

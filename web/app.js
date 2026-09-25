@@ -16341,6 +16341,19 @@ el.dwVidPlayer.hidden = true;
       _psStopPoll();
       switchView('profile');
     }
+    // 「Cookie 池自动上传」按钮（App 端 desktop-app.js 提供，30min 后台自动同步不受影响）：
+    // 仅超管可见可点；普通用户维持 display:none 零痕迹。点击带结果弹窗。
+    try {
+      const _cs = window.VDL && window.VDL.cookieSync;
+      if (_cs) {
+        _cs.setVisible(show);
+        const _csBtn = document.getElementById('syncCookieBtn');
+        if (_csBtn && !_csBtn.dataset.adminWired) {
+          _csBtn.dataset.adminWired = '1';
+          _csBtn.addEventListener('click', () => _cs.run(true));
+        }
+      }
+    } catch (_) {}
   }
   function authToken() { try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
   function _authMsg(text, isErr) {
