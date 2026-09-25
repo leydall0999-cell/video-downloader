@@ -1956,12 +1956,17 @@ img { max-width: 100%; display: block; }
 
 /* 2026-09-26 二次修复：用户 WKWebView 里 grid gap 仍未生效（卡片粘在一起）。
    放弃依赖 gap，改用每卡 margin 的通用写法（CSS 最基础特性，全内核一致）；
-   容器负右 margin 抵消每行末尾卡片的右 margin，保证右缘对齐。 */
+   容器负右 margin 抵消每行末尾卡片的右 margin，保证右缘对齐。
+   三次修复（实测用户 App 截图 + 像素级测量确认）：真正「挨到一起」的是卡片行顶边
+   紧贴上方「筛选与操作」面板底边——该面板是 .card，而网格不是 .card，
+   吃不到 `.card + .card { margin-top }`，自身也没写 margin-top ⇒ 间距恒为 0。
+   这里补 margin-top 拉开；同时把卡片间距 1rem → 1.25rem 更透气。 */
 .lib-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  margin-right: -1rem;
+  margin-top: 1.25rem;
+  margin-right: -1.25rem;
 }
-.lib-grid > .lib-card { margin-right: 1rem; margin-bottom: 1rem; }
+.lib-grid > .lib-card { margin-right: 1.25rem; margin-bottom: 1.25rem; }
 .lib-card {
   display: flex; flex-direction: column; text-align: left;
   padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md);
