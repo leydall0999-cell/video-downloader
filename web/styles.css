@@ -4014,7 +4014,8 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
 
 /* 个人中心整页 */
 /* 2026-09-25 用户反馈：个人资料页贴左、右侧留白大 → 水平居中（与 .wrap 同轴） */
-.profile-panel { max-width: 920px; margin-inline: auto; }
+/* 2026-09-26：去掉 920px 上限——个人资料页宽度与其他视图（转换/工具等，撑满内容区）保持一致 */
+.profile-panel { max-width: none; margin-inline: auto; }
 
 /* 登录后头部「账号」按钮显示头像（替代 👤 图标，2026-09-25） */
 .badge .hdr-avatar {
