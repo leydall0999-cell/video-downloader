@@ -16326,6 +16326,8 @@ el.dwVidPlayer.hidden = true;
   let authMode = 'login';
   // 超级用户标记（后台管理面板可见性依据）：登录/me 后由后端 is_admin 写入
   let _vdlIsAdmin = false;
+  // 登录用户的头像 URL（个人资料/用户卡加载后写入，供头部「账号」按钮渲染头像）
+  let _vdlAvatarUrl = '';
   function updateAdminTabVisibility() {
     // 整个「🛡️ 后台」组随权限显隐：非超管连组标题都不露，避免空组占位。
     const show = !!(authToken() && _vdlIsAdmin);
@@ -16371,7 +16373,19 @@ el.dwVidPlayer.hidden = true;
       el.authHeaderBtn.classList.remove('is-logged');
       return;
     }
-    el.authHeaderBtn.textContent = '👤 账号';
+    // 2026-09-25 用户要求：登录后头部显示头像（有 avatar_url 时），无头像退回 👤 图标。
+    // 用 DOM API 构建，避免把 avatar_url 直接拼进 innerHTML。
+    el.authHeaderBtn.textContent = '';
+    if (_vdlAvatarUrl) {
+      const img = document.createElement('img');
+      img.className = 'hdr-avatar';
+      img.src = _vdlAvatarUrl;
+      img.alt = '';
+      el.authHeaderBtn.appendChild(img);
+      el.authHeaderBtn.appendChild(document.createTextNode('账号'));
+    } else {
+      el.authHeaderBtn.textContent = '👤 账号';
+    }
     el.authHeaderBtn.title = '已登录，点击查看账号详情';
     el.authHeaderBtn.classList.add('is-logged');
   }
@@ -16396,6 +16410,7 @@ el.dwVidPlayer.hidden = true;
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
     try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
     _vdlIsAdmin = false;
+    _vdlAvatarUrl = '';  // 头像随登出清空，防止下一个账号短暂显示上一位的头像
     updateAdminTabVisibility();
     _renderAuthHeader();
     _updateProfileSidebarLock();
@@ -17357,7 +17372,9 @@ el.dwVidPlayer.hidden = true;
     }
     setTxt(el.userMenuName, me.identifier || '已登录');
     setTxt(el.userMenuUid, me.user_id || '—');
+    _vdlAvatarUrl = (prof && prof.avatar_url) || '';
     _renderAvatar(prof && prof.avatar_url);
+    _renderAuthHeader();
     // 角色标签（顶部 tag 唯一展示角色，不再单独一行）
     const isAdmin = !!me.is_admin;
     if (el.userMenuTag) {
@@ -17635,7 +17652,9 @@ el.dwVidPlayer.hidden = true;
     }
     setTxt(el.profName, me.identifier || '已登录');
     setTxt(el.profTag, me.is_admin ? '👑 超级管理员' : '普通用户');
+    _vdlAvatarUrl = (prof && prof.avatar_url) || '';
     _renderAvatar(prof && prof.avatar_url);
+    _renderAuthHeader();
     // 注册时间
     const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
     setTxt(el.profCreated, ct ? _memberFmtDate(ct, true) : '—');
