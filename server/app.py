@@ -2201,6 +2201,12 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     让用户（双击启动 App 也能）直接看到 500 的真实成因。
     """
     logger.exception("未捕获异常 %s %s: %s", request.method, request.url.path, exc)
+    # 不要拦截 FastAPI 自身的 HTTPException（如 402 订阅提示、400 参数错误）
+    from fastapi import HTTPException as _HTTPException
+
+    if isinstance(exc, _HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    msg = f"{type(exc).__name__}: {str(exc)[:200]}"
     # App 可观测性：把未捕获异常留痕到本地 .ops_events.log（供「运维看板 / 诊断」归集）。
     try:
         _opl = Path.home() / ".video-downloader" / ".ops_events.log"
@@ -2212,12 +2218,6 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
                        ensure_ascii=False) + "\n")
     except Exception:
         pass
-    # 不要拦截 FastAPI 自身的 HTTPException（如 402 订阅提示、400 参数错误）
-    from fastapi import HTTPException as _HTTPException
-
-    if isinstance(exc, _HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-    msg = f"{type(exc).__name__}: {str(exc)[:200]}"
     return JSONResponse(
         status_code=500,
         content={

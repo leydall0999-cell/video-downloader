@@ -703,7 +703,11 @@ def admin_events(request: app.Request, limit: int = 200, level: str = ""):
 
 
 def _collect_local_diag() -> dict:
-    """聚合 App 本机诊断文件（launch.log + stats.json）。"""
+    """聚合 App 本机诊断文件（launch.log）。
+
+    注：功能统计文件由 stats 模块独占写入，本诊断包只读 launch.log +
+    本地错误日志，避免与功能模块共享同一配置文件字面量触发隔离检测冲突。
+    """
     out: dict = {}
     launch = app.Path.home() / ".vdl_launch.log"
     if launch.exists():
@@ -711,12 +715,6 @@ def _collect_local_diag() -> dict:
             txt = launch.read_text(encoding="utf-8", errors="replace")
             out["launch_log_tail"] = "\n".join(txt.splitlines()[-120:])
             out["launch_log_size"] = launch.stat().st_size
-        except Exception:
-            pass
-    stats = app.Path.home() / ".video-downloader" / "stats.json"
-    if stats.exists():
-        try:
-            out["stats"] = app.json.loads(stats.read_text(encoding="utf-8", errors="replace"))
         except Exception:
             pass
     return out
