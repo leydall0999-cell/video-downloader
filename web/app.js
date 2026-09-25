@@ -16412,11 +16412,14 @@ el.dwVidPlayer.hidden = true;
     subExtract: '字幕提取',
     subBurn: '字幕烧录',
     comGenerateScript: '视频解说',
+    comScriptRender: '解说渲染成片',
     shareAddBtn: '扫码分享',
     subAddBtn: '订阅追更',
     torAddBtn: '种子下载',
     processRun: '队列处理',
     libBatchProcess: '媒体库批量处理',
+    libCommentary: '媒体库生成解说成片',
+    libCleanup: '媒体库自动清理',
     cleanRun: '存储清理',
   };
   var _LOGIN_GATE_SELECTOR = Object.keys(_LOGIN_GATED_ACTIONS).map(function (id) { return '#' + id; }).join(',');

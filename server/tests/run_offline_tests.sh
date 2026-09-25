@@ -27,6 +27,13 @@
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
 
+# 登录门禁（2026-09-26）：生产默认开启——能力型 POST 端点（解析/下载/转换/抠图/去水印/字幕/
+# 解说/订阅等）未登录一律 401 + NO_AUTH，见 server/app.py 的 _login_gate。
+# 本运行器里这批脚本测试的是「功能内部逻辑」，都直接打端点且不模拟登录态，
+# 因此整体关掉门禁（保持它们原本的语义）。门禁自身的拦截/放行由
+# tests/test_login_gate.py 单独打开开关验证。
+export VDL_LOGIN_GATE=0
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER="$REPO/server"
 
