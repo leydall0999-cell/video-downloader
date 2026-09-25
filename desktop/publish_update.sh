@@ -28,6 +28,13 @@ VPS_HOST="${VDL_UPDATE_HOST:-root@8.138.223.3}"
 VPS_DIR="${VDL_UPDATE_DIR:-/opt/vdl-update}"
 PUB_BASE="${VDL_UPDATE_BASE_URL:-http://8.138.223.3:8765}"
 NOTES="${VDL_RELEASE_NOTES:-性能优化与问题修复}"
+# 更新内容支持多行（2026-09-26）：用户端「关于本应用」按行渲染成列表。
+#   VDL_RELEASE_NOTES=$'新增：媒体库搜索\n修复：积分到期提示' bash publish_update.sh
+#   或把多行说明写进文件：VDL_RELEASE_NOTES_FILE=/tmp/notes.txt bash publish_update.sh
+if [ -n "${VDL_RELEASE_NOTES_FILE:-}" ] && [ -f "${VDL_RELEASE_NOTES_FILE:-}" ]; then
+  NOTES="$(cat "$VDL_RELEASE_NOTES_FILE")"
+  echo "   更新说明来源 : $VDL_RELEASE_NOTES_FILE（$(printf '%s\n' "$NOTES" | grep -c .) 条）"
+fi
 
 ASSUME_YES=0
 FORCE=0
@@ -195,21 +202,30 @@ if [ "$KEEP_BASES" -gt 0 ] 2>/dev/null && [ -d "$BASE_DIR" ]; then
 fi
 
 # 4) 生成 latest.json（发布清单）
+#    用 python 写 JSON：notes 允许换行（多行更新内容），手写 heredoc 会破坏 JSON 合法性。
 PUB_AT="$(date +%Y-%m-%d)"
-cat > "$LATEST_JSON" <<JSON
-{
-  "version": "$VERSION",
-  "notes": "$NOTES",
-  "published_at": "$PUB_AT",
-  "url": "$PUB_BASE/VideoDownloader.app.zip",
-  "size": $ZIP_SIZE,
-  "sha256": "$ZIP_SHA",
-  "from_version": "$FROM_VERSION",
-  "patch_url": "$PATCH_URL",
-  "patch_size": $PATCH_SIZE,
-  "patch_sha256": "$PATCH_SHA"
+VDL_J_VERSION="$VERSION" VDL_J_NOTES="$NOTES" VDL_J_PUB_AT="$PUB_AT" \
+VDL_J_URL="$PUB_BASE/VideoDownloader.app.zip" VDL_J_SIZE="$ZIP_SIZE" VDL_J_SHA="$ZIP_SHA" \
+VDL_J_FROM="$FROM_VERSION" VDL_J_PATCH_URL="$PATCH_URL" VDL_J_PATCH_SIZE="$PATCH_SIZE" VDL_J_PATCH_SHA="$PATCH_SHA" \
+python3 - > "$LATEST_JSON" <<'PY'
+import json, os
+notes = os.environ.get("VDL_J_NOTES", "")
+data = {
+    "version": os.environ["VDL_J_VERSION"],
+    "notes": notes,
+    # notes_list：按行拆好的更新条目，客户端直接渲染列表（兼容旧客户端只用 notes）
+    "notes_list": [ln.strip() for ln in notes.replace("\r\n", "\n").split("\n") if ln.strip()],
+    "published_at": os.environ["VDL_J_PUB_AT"],
+    "url": os.environ["VDL_J_URL"],
+    "size": int(os.environ["VDL_J_SIZE"] or 0),
+    "sha256": os.environ["VDL_J_SHA"],
+    "from_version": os.environ["VDL_J_FROM"],
+    "patch_url": os.environ["VDL_J_PATCH_URL"],
+    "patch_size": int(os.environ["VDL_J_PATCH_SIZE"] or 0),
+    "patch_sha256": os.environ["VDL_J_PATCH_SHA"],
 }
-JSON
+print(json.dumps(data, ensure_ascii=False, indent=2))
+PY
 cat "$LATEST_JSON"
 
 # 5) 发布前人工确认（默认开启，避免误发未测试版本）
@@ -239,11 +255,13 @@ echo "   ✔ 已上传安装包与 latest.json"
 echo "▶ 校验对外可访问性"
 if curl -fsS --max-time 8 "$PUB_BASE/latest.json" >/tmp/vdl_pub_check.json 2>/dev/null; then
   echo "   ✔ 可访问：$PUB_BASE/latest.json"
-  python3 -c 'import json;d=json.load(open("/tmp/vdl_pub_check.json"));print("   线上版本:",d.get("version"),"| 说明:",d.get("notes"))' 2>/dev/null || true
+  python3 -c 'import json;d=json.load(open("/tmp/vdl_pub_check.json"));print("   线上版本:",d.get("version"),"| 更新内容:",(d.get("notes") or "").replace(chr(10)," / "))' 2>/dev/null || true
 else
   echo "   ⚠️ 当前环境访问 $PUB_BASE 失败（多半是阿里云安全组未放行该端口）。"
   echo "      文件已上传成功，放行后用户端即可正常检查到更新。"
 fi
 
 echo
-echo "✅ 发布完成：v${VERSION}（更新说明：${NOTES}）"
+echo "✅ 发布完成：v${VERSION}"
+echo "   更新内容："
+printf '%s\n' "$NOTES" | sed 's/^/     · /'

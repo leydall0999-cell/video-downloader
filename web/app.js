@@ -278,6 +278,10 @@
     profUpdateNotes: $('profUpdateNotes'),
     profUpdateSize: $('profUpdateSize'),
     profUpdateNowBtn: $('profUpdateNowBtn'),
+    profChangelog: $('profChangelog'),
+    profChangelogTitle: $('profChangelogTitle'),
+    profChangelogDate: $('profChangelogDate'),
+    profChangelogList: $('profChangelogList'),
     profCheckUpdateBtn: $('profCheckUpdateBtn'),
     profErrorReportBtn: $('profErrorReportBtn'),
     profAboutMsg: $('profAboutMsg'),
@@ -306,6 +310,8 @@
     profCreditsTotal: $('profCreditsTotal'),
     profCreditsAi: $('profCreditsAi'),
     profCreditsPerm: $('profCreditsPerm'),
+    profCreditsAiNote: $('profCreditsAiNote'),
+    profCreditsPermNote: $('profCreditsPermNote'),
     profUsage: $('profUsage'),
     profUsageTable: $('profUsageTable'),
     profUsageQuotaHeader: $('profUsageQuotaHeader'),
@@ -1143,6 +1149,13 @@
       }
       const err = { message: msg, hint: payload.hint || '', category: payload.category || '' };
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
+      // 登录门禁兜底（2026-09-26）：后端要求登录而本端没有 token → 直接拉起登录框。
+      // 即使某个功能入口漏加了前端守卫，用户也不会「点下去毫无反应」，
+      // 而是立刻看到登录提示（并发请求只弹一次，见 _notifyNeedLogin）。
+      if (payload.code === 'NO_AUTH') {
+        err.needLogin = true;
+        _notifyNeedLogin(msg);
+      }
       throw err;
     }
     // 成功响应统一补 ok:true（语义对齐 fetch 的 Response.ok），且**不覆盖已有值**。
@@ -16360,6 +16373,81 @@ el.dwVidPlayer.hidden = true;
     el.authMsg.hidden = !text;
     el.authMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
   }
+  // ---- 功能级登录门禁（2026-09-26 用户要求「所有功能必须登录才能使用」）----
+  var _loginPromptAt = 0;      // 并发请求节流：3 秒内只弹一次登录框
+  var _pendingGatedId = '';    // 登录前想用的功能按钮 id，登录成功后自动补点一次
+
+  /** 统一登录提示：提示文案 + 拉起登录/注册框（登录成功后会补点原按钮）。 */
+  function _notifyNeedLogin(msg) {
+    const now = Date.now();
+    if (now - _loginPromptAt < 3000) return;
+    _loginPromptAt = now;
+    try { _authMsg(msg || '请先登录或注册账号后使用该功能', true); } catch (_) { /* 忽略 */ }
+    try { openAuthModal(); } catch (_) { /* 忽略 */ }
+  }
+
+  /**
+   * 需要登录才能执行的功能入口（按钮 id → 中文名，用于提示文案）。
+   *
+   * 用 document **捕获阶段**的委托监听统一拦截：捕获阶段一定先于按钮自身的
+   * bubble 监听执行，因此在 document 上 stopPropagation() 就能整体阻断原有 handler，
+   * 不必逐个改 20 多处已有的 click 绑定，也不会因漏改一处而放行一个功能。
+   * 后端另有 NO_AUTH 兜底（见 request/_notifyNeedLogin），双保险。
+   */
+  var _LOGIN_GATED_ACTIONS = {
+    resolveBtn: '视频解析',
+    batchBtn: '批量下载',
+    downloadBtn: '下载',
+    ucStartAllBtn: '视频格式转换',
+    musStartAllBtn: '音乐格式转换',
+    imgStartAllBtn: '图片格式转换',
+    cpStartAllBtn: '高效压缩',
+    srStartAllBtn: '高清修复',
+    mcMergeBtn: '视频/音频桥接',
+    dwImgBtn: '图片去水印',
+    dwPdfBtn: 'PDF 去水印',
+    dwVidBtn: '视频去水印',
+    matBtn: '一键抠图',
+    sbStartBtn: '本地字幕提取',
+    subExtract: '字幕提取',
+    subBurn: '字幕烧录',
+    comGenerateScript: '视频解说',
+    shareAddBtn: '扫码分享',
+    subAddBtn: '订阅追更',
+    torAddBtn: '种子下载',
+    processRun: '队列处理',
+    libBatchProcess: '媒体库批量处理',
+    cleanRun: '存储清理',
+  };
+  var _LOGIN_GATE_SELECTOR = Object.keys(_LOGIN_GATED_ACTIONS).map(function (id) { return '#' + id; }).join(',');
+  document.addEventListener('click', function (e) {
+    try {
+      const t = e.target;
+      if (!t || typeof t.closest !== 'function') return;
+      const hit = t.closest(_LOGIN_GATE_SELECTOR);
+      if (!hit) return;
+      if (authToken()) return;                 // 已登录：放行，走原有逻辑
+      const label = _LOGIN_GATED_ACTIONS[hit.id] || '该功能';
+      if (hit.id === 'downloadBtn') { try { window._pendingDownload = true; } catch (_) {} }
+      else if (hit.id === 'sbStartBtn') { try { window._pendingSubtitleExtract = true; } catch (_) {} }
+      else { _pendingGatedId = hit.id; }
+      e.preventDefault();
+      e.stopPropagation();                     // 阻断按钮自身的 click handler
+      _notifyNeedLogin('请先登录或注册账号，即可使用' + label);
+    } catch (_) { /* 守卫异常不阻塞页面 */ }
+  }, true);
+
+  /** 登录成功后自动补点一次之前被拦下的功能按钮（对齐下载的「登录后继续」体验）。 */
+  function _replayGatedAction() {
+    const id = _pendingGatedId;
+    _pendingGatedId = '';
+    if (!id || id === 'shareAddBtn') return;   // 选文件类按钮异步重放会被系统拦截
+    setTimeout(function () {
+      const node = document.getElementById(id);
+      if (node && !node.disabled) { try { node.click(); } catch (_) {} }
+    }, 150);
+  }
+
   function _renderAuthHeader() {
     if (!el.authHeaderBtn) return;
     const tok = authToken();
@@ -17159,6 +17247,8 @@ el.dwVidPlayer.hidden = true;
             window._pendingSubtitleExtract = false;
             setTimeout(() => { try { sbStartExtract(); } catch (_) {} }, 120);
           }
+          // 其他被登录门禁拦下的功能（转换/压缩/去水印/抠图…）登录成功后补点一次
+          _replayGatedAction();
         }, 400);
       } else {
         _authMsg('❌ ' + ((r && r.error) || (isReg ? '注册失败' : '登录失败')), true);
@@ -17680,6 +17770,7 @@ el.dwVidPlayer.hidden = true;
       if (el.profCreditsTotal) el.profCreditsTotal.textContent = creditsTotal;
       if (el.profCreditsAi) el.profCreditsAi.textContent = aiLeft;
       if (el.profCreditsPerm) el.profCreditsPerm.textContent = perm;
+      _renderCreditNotes(ai, perm);
     } else {
       if (el.profMemberList) el.profMemberList.hidden = true;
       if (el.profMemberNone) el.profMemberNone.hidden = false;
@@ -17687,6 +17778,8 @@ el.dwVidPlayer.hidden = true;
       if (el.profCreditsTotal) el.profCreditsTotal.textContent = '—';
       if (el.profCreditsAi) el.profCreditsAi.textContent = '—';
       if (el.profCreditsPerm) el.profCreditsPerm.textContent = '—';
+      if (el.profCreditsAiNote) el.profCreditsAiNote.textContent = '有效期随 AI 会员到期日，到期清零';
+      if (el.profCreditsPermNote) el.profCreditsPermNote.textContent = '永不过期，长期有效';
     }
     // 记录（即便 prof 请求失败也渲染空态表格，避免空白面板）
     const credits = (prof && prof.credit_history) || [];
@@ -17704,6 +17797,44 @@ el.dwVidPlayer.hidden = true;
     try { _renderUserUsage(prof && prof.usage, prof && prof.usage_features, prof && prof.usage_period || _profileUsagePeriod || 'today'); } catch (e) { console.error('[profile] usage render failed', e); }
     try { _renderUserPurchases(_profilePurchasesCache, _profileMemberStatus); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
+  }
+
+  /**
+   * 积分分池说明（2026-09-26 用户报「积分要分清楚过期时间和永久积分」）。
+   *
+   * 「当前可用」= AI 会员积分 + 永久积分，但两者有效期完全不同：
+   *   - AI 会员积分：随 AI 会员到期日一起清零（membership.status 惰性过期）；
+   *   - 永久积分  ：购买后永久有效，永不过期。
+   * 只显示一个总数会让用户误以为「积分一直有效、慢慢用就行」，到期白丢积分。
+   * 因此把到期日直接写在对应行下面，7 天内到期高亮预警。
+   */
+  function _renderCreditNotes(ai, perm) {
+    const aiNode = el.profCreditsAiNote;
+    const permNode = el.profCreditsPermNote;
+    if (aiNode) {
+      aiNode.classList.remove('is-warn', 'is-muted');
+      const left = Number((ai && ai.credits_left) || 0);
+      const exp = Number((ai && ai.expire_at) || 0);
+      const active = !!(ai && ai.active);
+      if (!active || !exp || left <= 0) {
+        aiNode.textContent = '开通 AI 会员后获得，有效期随会员到期日（到期清零）';
+        aiNode.classList.add('is-muted');
+      } else {
+        const days = Math.ceil((exp * 1000 - Date.now()) / 86400000);
+        const until = _memberFmtDate(exp);
+        if (days <= 7) {
+          aiNode.textContent = '⚠️ 有效期至 ' + until + '，仅剩 ' + days + ' 天，到期清零';
+          aiNode.classList.add('is-warn');
+        } else {
+          aiNode.textContent = '有效期至 ' + until + '，到期自动清零';
+        }
+      }
+    }
+    if (permNode) {
+      permNode.textContent = perm > 0
+        ? '永不过期，长期有效'
+        : '永不过期，购买积分包后长期有效';
+    }
   }
 
   // 个人中心：关于 / 版本 / 自动更新 / 错误上报
@@ -17729,13 +17860,20 @@ el.dwVidPlayer.hidden = true;
     if (!_aboutUpdatable) { el.profUpdateBanner.hidden = true; return; }
     let data = null;
     try { data = await request('/api/system/latest'); } catch (_) { data = null; }
-    if (!data || !data.ok || !data.update_available) {
+    if (!data || !data.ok) {
       el.profUpdateBanner.hidden = true;
+      _renderChangelog(null);
       return;
     }
     _aboutLatest = data.latest || {};
+    // 更新内容：无论有没有新版都渲染出来——用户点「检查更新」就是要知道改了什么
+    _renderChangelog(data);
+    if (!data.update_available) {
+      el.profUpdateBanner.hidden = true;
+      return;
+    }
     if (el.profUpdateVer) el.profUpdateVer.textContent = _aboutLatest.version || '—';
-    if (el.profUpdateNotes) el.profUpdateNotes.textContent = _aboutLatest.notes || '';
+    if (el.profUpdateNotes) el.profUpdateNotes.textContent = _changelogSummary(_aboutLatest);
     // 增量更新提示：已装版本 == from_version 时走几 MB 差分，其余走全量
     if (el.profUpdateSize) {
       const inc = !!(_aboutLatest.patch_url && _aboutLatest.from_version && _aboutLatest.from_version === _aboutCurrentVer);
@@ -17748,6 +17886,70 @@ el.dwVidPlayer.hidden = true;
       }
     }
     el.profUpdateBanner.hidden = false;
+  }
+
+  /** 把 latest.notes_list / notes 归一成字符串数组（兼容只有 notes 的旧清单）。 */
+  function _changelogItems(latest) {
+    const raw = (latest && latest.notes_list) || [];
+    let items = Array.isArray(raw) ? raw.map((x) => String(x).trim()).filter(Boolean) : [];
+    if (!items.length && latest && latest.notes) {
+      items = String(latest.notes).replace(/\r\n/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean);
+    }
+    return items;
+  }
+
+  /** 更新横幅里的一行摘要（取前 3 条，超出标「等 N 项」）。 */
+  function _changelogSummary(latest) {
+    const items = _changelogItems(latest);
+    if (!items.length) return '性能优化与问题修复';
+    const head = items.slice(0, 3).join('；');
+    return items.length > 3 ? head + ' 等 ' + items.length + ' 项' : head;
+  }
+
+  /**
+   * 更新内容展示（2026-09-26 用户要求「更新加入更新内容」）。
+   *
+   * 三种场景与标题：
+   *   有新版本     → 「新版本 vX 更新内容」（配合上方更新横幅）
+   *   已是最新     → 「版本 vX 更新内容」（点检查更新也能看到改了什么）
+   *   刚更新完回来 → 「本次更新已完成（vX）」，优先展示更新时缓存下来的条目
+   */
+  function _renderChangelog(data) {
+    const box = el.profChangelog;
+    const list = el.profChangelogList;
+    if (!box || !list) return;
+    const latest = (data && data.latest) || {};
+    const ver = latest.version || '';
+    let items = _changelogItems(latest);
+    const isNew = !!(data && data.update_available);
+    const cur = _aboutCurrentVer || '';
+    let title = ver ? ('版本 v' + ver + ' 更新内容') : '更新内容';
+    if (isNew) title = '新版本 v' + ver + ' 更新内容';
+    const cached = _cachedUpdateNotes();
+    if (!isNew && cached && cached.version && cur && cached.version === cur) {
+      title = '本次更新已完成（v' + cur + '）';
+      if (cached.items && cached.items.length) items = cached.items;
+    }
+    if (!items.length && !ver) { box.hidden = true; return; }
+    if (el.profChangelogTitle) el.profChangelogTitle.textContent = title;
+    if (el.profChangelogDate) {
+      el.profChangelogDate.textContent = latest.published_at ? ('发布于 ' + latest.published_at) : '';
+    }
+    if (!items.length) items = ['本次更新以优化与问题修复为主。'];
+    list.replaceChildren(...items.map((t) => {
+      const li = document.createElement('li');
+      li.textContent = t;
+      return li;
+    }));
+    box.hidden = false;
+  }
+
+  /** 最近一次成功更新时缓存的更新内容（更新完成重启后仍能回看「这次改了什么」）。 */
+  function _cachedUpdateNotes() {
+    try {
+      const raw = localStorage.getItem('vdl_update_notes');
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
   }
 
   function _aboutMsg(txt, err) {
@@ -17810,6 +18012,13 @@ el.dwVidPlayer.hidden = true;
     try { status = await api.update_status(jobId); } catch (e) { status = null; }
     const s = status && status.status;
     if (s === 'ready') {
+      // 记住「这次更新了什么」：重启后关于面板能回看本次更新内容
+      try {
+        localStorage.setItem('vdl_update_notes', JSON.stringify({
+          version: (_aboutLatest && _aboutLatest.version) || '',
+          items: _changelogItems(_aboutLatest || {}),
+        }));
+      } catch (_) { /* localStorage 不可用就算了，不阻塞更新 */ }
       _aboutMsg('更新已就绪，应用即将重启…');
       const a = window.pywebview && window.pywebview.api;
       if (a && typeof a.quit_app === 'function') {
@@ -17891,9 +18100,9 @@ el.dwVidPlayer.hidden = true;
   if (el.profCheckUpdateBtn) el.profCheckUpdateBtn.addEventListener('click', async () => {
     _aboutMsg('正在检查更新…');
     await _checkForUpdate();
-    if (el.profUpdateBanner && !el.profUpdateBanner.hidden) _aboutMsg('发现新版本！');
-    else _aboutMsg('已是最新版本');
-    setTimeout(() => _aboutMsg(''), 2500);
+    if (el.profUpdateBanner && !el.profUpdateBanner.hidden) _aboutMsg('发现新版本，更新内容见下方');
+    else _aboutMsg('已是最新版本，更新内容见下方');
+    setTimeout(() => _aboutMsg(''), 3000);
   });
   if (el.profUpdateNowBtn) el.profUpdateNowBtn.addEventListener('click', _doUpdate);
   if (el.profErrorReportBtn) el.profErrorReportBtn.addEventListener('click', () => {
@@ -18047,9 +18256,15 @@ el.dwVidPlayer.hidden = true;
   if (el.forgetModalClose) el.forgetModalClose.addEventListener('click', () => { try { el.forgetModal.close(); } catch (_) {} });
   if (el.forgetModal) el.forgetModal.addEventListener('click', (e) => { if (e.target === el.forgetModal) { try { el.forgetModal.close(); } catch (_) {} } });
   function _authLoading() { return !!(el.authActionBtn && el.authActionBtn.classList.contains('is-loading')); }
-  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { window._pendingDownload = false; el.authModal.close(); } catch (_) {} });
+  /** 用户放弃登录（关闭弹窗）时清掉所有「待办动作」，避免下次登录后被莫名补点。 */
+  function _clearPendingActions() {
+    try { window._pendingDownload = false; } catch (_) {}
+    try { window._pendingSubtitleExtract = false; } catch (_) {}
+    _pendingGatedId = '';
+  }
+  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { _clearPendingActions(); el.authModal.close(); } catch (_) {} });
   if (el.authModal) {
-    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { window._pendingDownload = false; el.authModal.close(); } catch (_) {} } });
+    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { _clearPendingActions(); el.authModal.close(); } catch (_) {} } });
     el.authModal.addEventListener('cancel', (e) => { if (_authLoading()) e.preventDefault(); });
   }
   // 法律条款弹窗（服务条款 / 隐私政策）

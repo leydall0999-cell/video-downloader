@@ -38,3 +38,9 @@ os.environ["VDL_AI_DEWATERMARK_ENDPOINT"] = "http://fake-worker.local"
 os.environ["VDL_COMMENTARY_ENABLED"] = "true"
 os.environ["VDL_COMMENTARY_MODE"] = "http"
 os.environ["VDL_COMMENTARY_ENDPOINT"] = "http://fake-worker.local"
+
+# ---- 登录门禁（2026-09-26）----
+# 生产默认开启（能力型 POST 端点必须登录，见 server/app.py 的 _login_gate）。
+# 既有离线测试直接对这些端点发请求且不模拟登录态，这里整体关掉，保持它们原本的语义；
+# 门禁本身的拦截/放行行为由 tests/test_login_gate.py 单独打开开关验证。
+os.environ["VDL_LOGIN_GATE"] = "0"

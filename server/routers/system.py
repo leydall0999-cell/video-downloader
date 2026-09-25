@@ -391,12 +391,20 @@ def system_latest() -> dict[str, Any]:
         return {"ok": False, "error": "无法连接更新服务器（%s）" % e, "current": VERSION}
     latest_ver = str(data.get("version") or "")
     update_available = bool(latest_ver) and _parse_ver(latest_ver) > _parse_ver(VERSION)
+    # 更新内容（2026-09-26）：发布侧按行写入 notes/notes_list，客户端渲染成条目列表；
+    # 老版本 latest.json 只有 notes，这里按换行兜底拆分，保证客户端拿到的一定是列表。
+    latest_notes = str(data.get("notes") or "")
+    notes_list = data.get("notes_list")
+    if not isinstance(notes_list, list):
+        notes_list = [ln.strip() for ln in latest_notes.replace("\r\n", "\n").split("\n") if ln.strip()]
+    notes_list = [str(x).strip() for x in notes_list if str(x).strip()]
     return {
         "ok": True,
         "current": VERSION,
         "latest": {
             "version": latest_ver,
-            "notes": data.get("notes") or "",
+            "notes": latest_notes,
+            "notes_list": notes_list,
             "published_at": data.get("published_at") or "",
             "url": data.get("url") or "",
             "size": data.get("size") or 0,

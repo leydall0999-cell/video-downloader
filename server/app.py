@@ -2034,6 +2034,86 @@ class _ApiTokenMiddleware(BaseHTTPMiddleware):
 app.add_middleware(_ApiTokenMiddleware)
 
 # --------------------------------------------------------------------------- #
+# 登录门禁（2026-09-26 用户要求「所有功能必须登录才能使用」）
+#
+# 产品行为对齐下载页：未登录点「开始下载」先弹登录框，登录后自动继续。
+# 前端已用 document 捕获阶段统一拦截并弹框（web/app.js 的 _LOGIN_GATED_ACTIONS），
+# 这里做**服务端兜底**——防止改前端 JS 或直接 curl 本机 8321 绕过登录白嫖功能。
+#
+# 只拦「产生结果 / 消耗算力」的写操作（POST）。状态查询与文件读取一律放行：
+# 未登录时前端本就拿不到这些任务，拦了只会破坏轮询与预览。
+# 授权中心 / 账号 / 会员 / 管理 / 分享落地 / 系统更新等前缀不在拦截范围内
+# （其中 /api/system/update 自己已有鉴权）。
+# --------------------------------------------------------------------------- #
+_LOGIN_GATED_EXACT = {
+    "/api/resolve",                       # 视频解析
+    "/api/download",                      # 创建下载任务
+    "/api/batch",                         # 批量下载
+    "/api/commentary",                    # 生成解说
+    "/api/commentary/script-only",        # 生成解说脚本
+    "/api/commentary/script-only/upload",
+    "/api/commentary/stash",
+    "/api/commentary/upload",             # 上传素材/音色录制
+    "/api/subtitles/extract",             # 字幕提取
+    "/api/subtitles/burn",                # 烧录硬字幕
+    "/api/subtitles/translate",           # 字幕翻译
+    "/api/subtitle/extract",              # 本地字幕提取（云侧）
+    "/api/process/run",                   # 队列处理
+    "/api/retention/run",                 # 存储清理
+    "/api/torrents/add",
+    "/api/torrents/add-file",
+    "/api/share/upload_path",             # 扫码分享上传
+    "/api/share/upload_file",
+}
+_LOGIN_GATED_PREFIXES = (
+    "/api/convert",            # /api/convert、/api/convert/local
+    "/api/upload-convert",     # 本地文件转换（视频 / 音乐 / 图片共用）
+    "/api/upload-chunk",       # 分片上传（转换前置）
+    "/api/concat",             # 视频/音频桥接
+    "/api/compress",           # /api/compress/local、/api/compress/finish
+    "/api/sr",                 # 高清修复 / 超分
+    "/api/matting",            # 一键抠图（含模型预热/切换）
+    "/api/dw",                 # 图片 / PDF / 视频去水印（含编辑期抽帧）
+    "/api/subscriptions",      # 订阅追更
+    "/api/commentary/render",      # 渲染成片
+    "/api/commentary/remux-bgm",   # 重新混音
+    "/api/commentary/preview",
+)
+
+
+def _login_gated_path(path: str) -> bool:
+    # 「收尾类」操作放行：暂停 / 继续 / 取消 / 中止已有任务不会产生新结果，
+    # 但若登录态中途失效（token 过期）而任务仍在跑，用户必须还能把任务停下来。
+    if path.endswith(("/pause", "/resume", "/cancel", "/abort")):
+        return False
+    if path in _LOGIN_GATED_EXACT:
+        return True
+    return any(path.startswith(p) for p in _LOGIN_GATED_PREFIXES)
+
+
+# 门禁开关：默认开启。VDL_LOGIN_GATE=0 可整体关闭——离线测试需要在「未模拟登录」的
+# 前提下直连这些端点，此时由 tests/test_login_gate.py 单独打开开关验证拦截行为。
+LOGIN_GATE_ENABLED = (os.environ.get("VDL_LOGIN_GATE", "1").strip() != "0")
+
+
+@app.middleware("http")
+async def _login_gate(request: Request, call_next):
+    if (LOGIN_GATE_ENABLED and request.method == "POST"
+            and _login_gated_path(request.url.path)):
+        from user_membership import get_current_user_id   # 局部导入，避免循环依赖
+        if not get_current_user_id(request):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "ok": False,
+                    "code": "NO_AUTH",
+                    "error": "请先登录账号后再使用该功能",
+                    "hint": "登录 / 注册后即可继续（会员权益与积分按账号计算）",
+                },
+            )
+    return await call_next(request)
+
+# --------------------------------------------------------------------------- #
 # 请求模型 & 错误处理
 # --------------------------------------------------------------------------- #
 

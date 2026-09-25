@@ -4110,6 +4110,18 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
 .pf-card-muted { margin: 0; font-size: .85rem; color: var(--text-mute, #9ca3af); }
 .pf-card-link { font-size: .82rem; color: var(--brand, #4f46e5); text-decoration: none; font-weight: 600; }
 .pf-card-link:hover { text-decoration: underline; }
+/* 积分分池（2026-09-26）：AI 订阅积分有到期日、永久积分不过期，两行都要写清有效期。
+   ⚠️ App 端 WKWebView 不保证 flex gap 生效，行间距一律用 margin 兜底。 */
+.pf-credit { margin-top: .6rem; padding-top: .5rem; border-top: 1px dashed var(--line, #e6e8f0); }
+.pf-row-credit { font-size: .82rem; }
+.pf-credit-name { color: var(--text-mute, #64748b); }
+.pf-credit-note { margin-top: .15rem; font-size: .72rem; line-height: 1.4; color: var(--text-mute, #64748b); }
+.pf-credit-note.is-perm { color: #15803d; font-weight: 600; }
+.pf-credit-note.is-warn { color: #b45309; font-weight: 600; }
+.pf-credit-note.is-muted { opacity: .8; }
+html.theme-dark .pf-credit { border-top-color: rgba(255, 255, 255, .12); }
+html.theme-dark .pf-credit-note.is-perm { color: #4ade80; }
+html.theme-dark .pf-credit-note.is-warn { color: #fbbf24; }
 .pf-ov-foot { font-size: .78rem; color: var(--text-mute, #9ca3af); margin-top: .2rem; }
 @media (max-width: 640px) {
   .pf-card-grid { grid-template-columns: 1fr; }
@@ -5002,6 +5014,22 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
   transition: background .15s;
 }
 .pf-update-btn:hover { background: #15803d; }
+/* 更新内容（2026-09-26）：关于面板里始终展示线上版本的更新条目，
+   已是最新时也能看到「这个版本改了什么」，更新完成后回看「本次更新内容」。 */
+.pf-changelog {
+  margin: .5rem 0 1rem; padding: .8rem .95rem; border-radius: 12px;
+  background: var(--surface-2, #f7f8fc); border: 1px solid var(--line, #e6e8f0);
+}
+.pf-changelog-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: .45rem; gap: .8rem;
+}
+.pf-changelog-title { font-size: .86rem; font-weight: 700; color: var(--text, #1f2937); }
+.pf-changelog-date { font-size: .72rem; color: var(--text-mute, #64748b); flex: none; }
+.pf-changelog-list { margin: 0; padding-left: 1.15rem; }
+.pf-changelog-list li { font-size: .8rem; line-height: 1.8; color: var(--text, #374151); }
+.pf-changelog-list li::marker { color: var(--brand, #4f46e5); }
+html.theme-dark .pf-changelog { background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .1); }
 .pf-update-btn:disabled { opacity: .6; cursor: default; }
 .pf-about-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 /* 错误上报弹窗 */
