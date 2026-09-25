@@ -1955,7 +1955,7 @@ img { max-width: 100%; display: block; }
 .tor-actions { display: flex; gap: .45rem; flex-wrap: wrap; }
 
 .lib-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .8rem;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem;
 }
 .lib-card {
   display: flex; flex-direction: column; text-align: left; gap: .5rem;
@@ -1964,8 +1964,10 @@ img { max-width: 100%; display: block; }
   transition: border-color .16s, box-shadow .16s, transform .12s;
 }
 .lib-card:hover { border-color: var(--brand); box-shadow: var(--shadow); transform: translateY(-2px); }
+/* 2026-09-26 修复：用户 WKWebView 不支持 aspect-ratio → 无缩略图时 thumb 区塌成 0 高，
+   卡片被压成纯文字条、视觉上「挨到一起」。min-height 兜底（新内核 16:9 计算值 ≥84px 时不影响）。 */
 .lib-thumb {
-  position: relative; aspect-ratio: 16 / 9; background: #e9ecf5; display: grid; place-items: center; overflow: hidden;
+  position: relative; aspect-ratio: 16 / 9; min-height: 84px; background: #e9ecf5; display: grid; place-items: center; overflow: hidden;
 }
 .lib-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .lib-thumb-fallback { position: absolute; font-size: 1.8rem; opacity: .35; z-index: 0; }
