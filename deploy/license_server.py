@@ -72,6 +72,7 @@ ADMIN_TOKEN = (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
 PORT = int(os.environ.get("VDL_LICENSE_PORT") or "8902")
 DATA_PATH = Path(os.environ.get("VDL_LICENSE_DATA")
                  or os.path.expanduser("~/.vdl-license/cards.json"))
+EVENT_LOG_PATH = DATA_PATH.parent / "events.jsonl"   # 充值/消耗全量事件流水（审计+监控源）
 
 MAX_DEVICES = int(os.environ.get("VDL_LICENSE_MAX_DEVICES") or "2")
 if MAX_DEVICES < 1:
@@ -302,7 +303,7 @@ def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
 
 
 def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
-               secret: str) -> dict[str, Any]:
+               secret: str, ip: str = "") -> dict[str, Any]:
     """客户端积分扣减上报（幂等）：永久积分直接扣余额，AI 积分记累计消耗。
 
     幂等键 id 由客户端生成（uuid），重复上报（断网重发）只记一次。
@@ -345,6 +346,11 @@ def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
                        "cost": cost, "at": now, "id": iid})
     user["spends"] = ledger[-SPEND_LEDGER_CAP:]
     user["spend_ids"] = ids[-SPEND_ID_CAP:]
+    if applied > 0:
+        _log_event(state, "spend", now, email=uid, applied=applied)
+        if int(user.get("perm_credits") or 0) < 0:
+            _raise_alert(state, "negative_balance", "critical", uid, "",
+                         f"永久积分余额为负（{user['perm_credits']}），疑似篡改/并发扣减", now)
     return {"ok": True, "applied": applied, "authority": _authority_view(user, now)}
 
 
@@ -382,6 +388,8 @@ def adjust_impl(state: dict[str, Any], email: str, pool: str, delta: int,
     user.setdefault("adjusts", []).append(
         {"pool": pool, "delta": int(delta), "note": note[:120], "at": now})
     user["adjusts"] = user["adjusts"][-SPEND_LEDGER_CAP:]
+    _log_event(state, "adjust", now, email=_norm_id(email), pool=pool,
+               delta=int(delta), note=note[:80])
     return {"ok": True, "email": _norm_id(email), "pool": pool, "delta": int(delta),
             "authority": _authority_view(user, now)}
 
@@ -555,7 +563,7 @@ def password_impl(state: dict[str, Any], email: str, new_password: str, now: flo
 
 
 def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
-                secret: str) -> dict[str, Any]:
+                secret: str, ip: str = "") -> dict[str, Any]:
     """卡密充值到账号（不再绑机器）。同一张卡第二次用会拒绝。"""
     if not secret:
         raise ApiError(500, "NO_SECRET", "服务端未配置 VDL_LICENSE_SECRET")
@@ -563,17 +571,23 @@ def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
-    short = verify_code(code, secret)
-    plan_code = PLAN_MAP[short]
-    cards = state.setdefault("cards", {})
-    rec = cards.get(code) or {
-        "plan": short, "plan_code": plan_code, "status": "unused",
-        "bound_fp": "", "bound_at": 0.0, "created_at": now,
-    }
-    if rec.get("status") == "revoked":
-        raise ApiError(403, "REVOKED", "卡密已被作废")
-    if rec.get("status") == "used":
-        raise ApiError(403, "USED", "卡密已被使用过")
+    try:
+        short = verify_code(code, secret)
+        plan_code = PLAN_MAP[short]
+        cards = state.setdefault("cards", {})
+        rec = cards.get(code) or {
+            "plan": short, "plan_code": plan_code, "status": "unused",
+            "bound_fp": "", "bound_at": 0.0, "created_at": now,
+        }
+        if rec.get("status") == "revoked":
+            raise ApiError(403, "REVOKED", "卡密已被作废")
+        if rec.get("status") == "used":
+            raise ApiError(403, "USED", "卡密已被使用过")
+    except ApiError as e:
+        # 核销失败入事件流（卡密爆破检测数据源）+ 告警扫描；任何调用路径都覆盖
+        _log_event(state, "redeem_fail", now, ip=ip, code=code[:48], err=e.code)
+        _scan_redeem_fail_anomalies(state, now, ip)
+        raise
     rec.update({"status": "used", "bound_user": uid, "bound_at": now, "plan": short,
                 "plan_code": plan_code})
     cards[code] = rec
@@ -581,6 +595,9 @@ def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
     user.setdefault("purchases", []).append(
         {"id": pid, "plan_code": plan_code, "at": now})
     _apply_plan_effect(user, plan_code, now)   # 权威状态同步推进（余额/到期）
+    _log_event(state, "recharge", now, email=uid, ip=ip,
+               plan_code=plan_code, code=code[:48])
+    _scan_recharge_anomalies(state, now, uid, ip, plan_code)
     return {"ok": True, "plan_code": plan_code, "purchase_id": pid,
             "account": _public_user(user)}
 
@@ -694,6 +711,104 @@ def revoke_impl(state: dict[str, Any], code: str, now: float) -> dict[str, Any]:
     rec["status"] = "revoked"
     rec["revoked_at"] = now
     return {"ok": True, "code": code, "status": "revoked"}
+
+
+# ── 充值监控与异常告警（2026-09-25 超管实时监控）───────────────────────────── #
+# 事件双写：state.ev_ring（内存环，供异常规则回看）+ events.jsonl（全量审计流水）。
+# 告警存 state.alerts（超管 alerts 接口拉取），同源同类 5 分钟内合并防轰炸。
+EVENT_RING_CAP = 800
+ALERTS_CAP = 200
+ALERT_DEDUPE_WINDOW = 300.0
+RECHARGE_BURST_N = 3            # 同账号 10 分钟内 ≥3 笔充值 → 连刷告警
+RECHARGE_BURST_WINDOW = 600.0
+REDEEM_BRUTE_N = 5              # 同 IP 10 分钟内 ≥5 次核销失败 → 爆破告警
+REDEEM_BRUTE_WINDOW = 600.0
+HIGH_VALUE_PLANS = {"download_year", "ai_15000", "credits_15000"}
+
+
+def _log_event(state: dict[str, Any], kind: str, now: float, **fields: Any) -> dict[str, Any]:
+    ev = {"kind": kind, "at": float(now)}
+    ev.update(fields)
+    ring = state.setdefault("ev_ring", [])
+    ring.append(ev)
+    state["ev_ring"] = ring[-EVENT_RING_CAP:]
+    try:
+        EVENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(EVENT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    except OSError:
+        pass                                    # 审计流水写失败不阻断业务
+    return ev
+
+
+def _raise_alert(state: dict[str, Any], kind: str, level: str, email: str,
+                 ip: str, detail: str, now: float) -> dict[str, Any]:
+    alerts = state.setdefault("alerts", [])
+    for a in alerts[-30:]:                      # 近窗口内去重合并（count 递增）
+        if (a.get("kind") == kind and a.get("email") == email and a.get("ip") == ip
+                and now - float(a.get("at", 0)) <= ALERT_DEDUPE_WINDOW):
+            a["count"] = int(a.get("count", 1)) + 1
+            a["at"] = float(now)
+            a["detail"] = detail[:300]
+            a["seen"] = False
+            return a
+    a = {"id": secrets.token_hex(6), "kind": kind, "level": level,
+         "email": email or "", "ip": ip or "", "detail": detail[:300],
+         "at": float(now), "count": 1, "seen": False}
+    alerts.append(a)
+    state["alerts"] = alerts[-ALERTS_CAP:]
+    return a
+
+
+def _scan_recharge_anomalies(state: dict[str, Any], now: float, email: str,
+                             ip: str, plan_code: str) -> None:
+    """充值后扫描：大额单笔 / 同账号短时连刷。"""
+    if plan_code in HIGH_VALUE_PLANS:
+        _raise_alert(state, "high_value_recharge", "warn", email, ip,
+                     f"大额充值：{plan_code}", now)
+    ring = state.get("ev_ring") or []
+    recent = [e for e in ring
+              if e.get("kind") == "recharge" and e.get("email") == email
+              and now - float(e.get("at", 0)) <= RECHARGE_BURST_WINDOW]
+    if len(recent) >= RECHARGE_BURST_N:
+        _raise_alert(state, "recharge_burst", "critical", email, ip,
+                     f"10 分钟内连续充值 {len(recent)} 笔（最近 {plan_code}），疑似异常", now)
+
+
+def _scan_redeem_fail_anomalies(state: dict[str, Any], now: float, ip: str) -> None:
+    """核销失败扫描：同 IP 短时多次失败 → 疑似卡密爆破。"""
+    if not ip:
+        return
+    ring = state.get("ev_ring") or []
+    recent = [e for e in ring
+              if e.get("kind") == "redeem_fail" and e.get("ip") == ip
+              and now - float(e.get("at", 0)) <= REDEEM_BRUTE_WINDOW]
+    if len(recent) >= REDEEM_BRUTE_N:
+        _raise_alert(state, "redeem_bruteforce", "critical", "", ip,
+                     f"IP {ip} 10 分钟内核销失败 {len(recent)} 次，疑似卡密爆破", now)
+
+
+def alerts_impl(state: dict[str, Any], since: float = 0.0,
+                unseen_only: bool = False, limit: int = 100) -> dict[str, Any]:
+    """管理员拉取告警列表（at 倒序）。unseen_only=True 只回未确认；unseen=当前未确认总数。"""
+    all_alerts = state.get("alerts") or []
+    out = [a for a in all_alerts if float(a.get("at", 0)) > float(since or 0)]
+    if unseen_only:
+        out = [a for a in out if not a.get("seen")]
+    out = sorted(out, key=lambda a: float(a.get("at", 0)), reverse=True)
+    return {"ok": True, "alerts": out[:max(1, min(int(limit), 200))],
+            "unseen": len([a for a in all_alerts if not a.get("seen")])}
+
+
+def alerts_ack_impl(state: dict[str, Any], ids: Any) -> dict[str, Any]:
+    """管理员确认告警。ids 为空 = 全部确认。"""
+    idset = {str(i) for i in (ids or []) if str(i)}
+    n = 0
+    for a in state.get("alerts") or []:
+        if (not idset or str(a.get("id")) in idset) and not a.get("seen"):
+            a["seen"] = True
+            n += 1
+    return {"ok": True, "acked": n}
 
 
 # ── 限流 ───────────────────────────────────────────────────────────────────── #
@@ -832,9 +947,13 @@ class Handler(BaseHTTPRequestHandler):
                                         token=str(data.get("token") or ""))
                     _save_state(st)
                 elif action == "redeem":
-                    out = redeem_impl(st, str(data.get("token") or ""),
-                                      str(data.get("code") or "").strip(), now, SECRET)
-                    _save_state(st)
+                    try:
+                        out = redeem_impl(st, str(data.get("token") or ""),
+                                          str(data.get("code") or "").strip(), now,
+                                          SECRET, ip=ip)
+                    finally:
+                        # 失败路径 impl 内已记事件/告警；成败都要把 ring/alerts 落盘
+                        _save_state(st)
                 elif action == "devices":
                     if _throttled(ip, now):
                         return self._json(429, {"ok": False, "error": "请求过于频繁，稍后再试"})
@@ -849,7 +968,7 @@ class Handler(BaseHTTPRequestHandler):
                                      str(data.get("fingerprint") or ""))
                 elif action == "spend":
                     out = spend_impl(st, str(data.get("token") or ""),
-                                     data.get("items"), now, SECRET)
+                                     data.get("items"), now, SECRET, ip=ip)
                     _save_state(st)
                 else:
                     return self._json(404, {"ok": False, "error": "unknown action"})

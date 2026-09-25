@@ -1072,3 +1072,64 @@ def app_ops_key_verify(payload: dict, request: app.Request):
         return {"ok": resp.status_code == 200, "status": resp.status_code}
     except Exception as e:
         raise app.HTTPException(status_code=502, detail=f"无法连接校验服务：{e}")
+
+
+# ── 授权中心异常告警（2026-09-25 超管实时监控）──────────────────────────────── #
+# 链路：App 前端(admin 登录) → 本机 /api/app/license-alerts（is_admin 门禁）
+#       → ECS worker /api/license-alerts（X-Admin-Key）→ 本机 8902 license alerts。
+# 告警在授权中心生成：大额充值 / 连刷 / 卡密爆破 / 负余额（见 deploy/license_server.py）。
+
+@router.get("/api/app/license-alerts")
+def app_license_alerts(request: app.Request, since: float = 0.0,
+                       unseen_only: bool = False, limit: int = 100):
+    """拉取授权中心异常告警（超管账号 + 本机双门禁）。前端 60s 轮询用。"""
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/license-alerts",
+            params={"since": since, "unseen_only": "true" if unseen_only else "false",
+                    "limit": max(1, min(int(limit), 200))},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=12,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取授权中心告警失败：{e}")
+
+
+@router.post("/api/app/license-alerts/ack")
+def app_license_alerts_ack(payload: dict, request: app.Request):
+    """确认（已读）告警。ids 为空数组 = 全部确认。"""
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    try:
+        resp = app.requests.post(
+            f"{_OPS_ECS_BASE}/api/license-alerts/ack",
+            json={"ids": list(payload.get("ids") or [])},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=12,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"确认告警失败：{e}")
+
+
+@router.post("/api/app/license-alerts/notify")
+def app_license_alerts_notify(payload: dict, request: app.Request):
+    """macOS 系统通知桥：前端轮询发现新告警时调用，弹系统级通知（免解锁也可见）。"""
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    import subprocess
+    title = str(payload.get("title") or "视频工坊·异常告警")[:60]
+    body = str(payload.get("body") or "")[:200]
+    try:
+        script = f'display notification "{body}" with title "{title}" sound name "Glass"'
+        r = subprocess.run(["osascript", "-e", script], capture_output=True,
+                           text=True, timeout=6)
+        return {"ok": r.returncode == 0, "err": (r.stderr or "").strip()[:200]}
+    except Exception as e:
+        return {"ok": False, "err": str(e)[:200]}

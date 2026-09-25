@@ -85,6 +85,13 @@
     <div id="eventsStats" class="stat-row"></div>
     <div id="eventsLog" class="log"></div>
   </section>
+
+  <section class="panel" style="grid-column:1/-1">
+    <h2><span class="dot" style="background:var(--amber)"></span>异常告警 · 充值/权益监控
+      <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">大额充值 / 短时连刷 / 卡密爆破 / 负余额（授权中心实时检测，30s 自动刷新）</span></h2>
+    <div id="alertsStats" class="stat-row"></div>
+    <div id="alertsLog" class="log" style="max-height:320px"></div>
+  </section>
 </div>
 
 <footer id="foot">加载中…</footer>
@@ -151,6 +158,55 @@ async function loadEvents(){
   }
 }
 
+const ALERT_KINDS={
+  recharge_burst:'🚨 连续充值',
+  high_value_recharge:'⚠️ 大额充值',
+  redeem_bruteforce:'🚨 卡密爆破',
+  negative_balance:'🚨 积分负余额',
+};
+async function loadAlerts(){
+  const el=$('#alertsStats'); el.innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const r=await fetch('/api/app/license-alerts?limit=100');
+    const d=await r.json();
+    if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
+    const alerts=(d.alerts||[]);
+    const crit=alerts.filter(a=>a.level==='critical'&&!a.seen).length;
+    el.innerHTML=
+      `<div class="stat"><div class="n" style="color:${crit?'var(--red)':'var(--green)'}">${d.unseen||0}</div><div class="l">未确认</div></div>`+
+      `<div class="stat"><div class="n">${alerts.length}</div><div class="l">近 100 条</div></div>`+
+      `<button id="ackAllBtn">全部标为已读</button>`;
+    const items=alerts;
+    $('#alertsLog').innerHTML=items.length?items.map(a=>
+      `<div class="row" style="${a.seen?'opacity:.55':''}">`+
+      `<span class="lv" style="color:${a.level==='critical'?'var(--red)':'var(--amber)'}">${esc(ALERT_KINDS[a.kind]||a.kind)}</span>`+
+      (a.count>1?`<span class="chip" style="padding:1px 8px">×${a.count}</span>`:'')+
+      `<span class="t">${a.at?new Date(a.at*1000).toLocaleString('zh-CN',{hour12:false}):''}</span>`+
+      (a.email?` · 账号 <b>${esc(a.email)}</b>`:'')+
+      (a.ip?` · IP <b>${esc(a.ip)}</b>`:'')+
+      `<br><span class="msg">${esc(a.detail||'')}</span>`+
+      (a.seen?'':` <button data-ack="${esc(a.id)}" style="padding:2px 8px;font-size:11px;float:right">确认</button>`)+
+      `</div>`
+    ).join(''):'<div class="empty">暂无告警 —— 一切正常</div>';
+    $('#alertsLog').querySelectorAll('button[data-ack]').forEach(b=>{
+      b.addEventListener('click',()=>ackAlerts([b.dataset.ack]));
+    });
+    const ackAll=$('#ackAllBtn');
+    if(ackAll) ackAll.addEventListener('click',()=>ackAlerts([]));
+  }catch(e){
+    el.innerHTML='';
+    $('#alertsLog').innerHTML=`<div class="err">${isAdminErr(e)?esc(adminNeededMsg()):(isKeyErr(e)?esc(keyNeededMsg()):('告警加载失败：'+esc(e.message)))}</div>`;
+  }
+}
+async function ackAlerts(ids){
+  try{
+    await fetch('/api/app/license-alerts/ack',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ids:ids||[]})});
+    loadAlerts();
+  }catch(e){}
+}
+
 // 账号级门禁兜底：页面能被直接输 URL 打开，这里再验一次登录身份——
 // 非超级管理员登录时整页替换为锁定提示（数据接口侧已 403，双保险）。
 (async()=>{
@@ -166,8 +222,9 @@ async function loadEvents(){
 
 async function loadAll(){
   $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false})+' · 范围：'+curRangeLabel;
-  await Promise.all([loadVisits(),loadEvents()]);
+  await Promise.all([loadVisits(),loadEvents(),loadAlerts()]);
 }
+setInterval(loadAlerts,30*1000);   // 告警 30s 自动刷新（不受时间范围切换影响）
 document.querySelectorAll('#rangeTabs button[data-range]').forEach(b=>{
   b.addEventListener('click',()=>{
     curRange=b.dataset.range;

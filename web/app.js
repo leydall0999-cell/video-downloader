@@ -16356,6 +16356,73 @@ el.dwVidPlayer.hidden = true;
         }
       }
     } catch (_) {}
+    // 授权中心异常告警轮询：仅超管登录时启动；普通用户零痕迹。
+    try { _licenseAlertWatch(show); } catch (_) {}
+  }
+
+  // ── 充值/权益异常告警（授权中心 → 本机代理）────────────────────────────────
+  // 60s 轮询 unseen 告警：有新增 → 顶部红横幅 + macOS 系统通知；点击横幅进运维看板。
+  // 已通知的告警 id 记 localStorage（防重复弹）；确认（ack）在看板里做。
+  let _laTimer = null;
+  let _laBanner = null;
+  function _licenseAlertWatch(start) {
+    if (!start) {                       // 登出/切普通账号：停轮询 + 撤横幅（零痕迹）
+      if (_laTimer) { clearInterval(_laTimer); _laTimer = null; }
+      if (_laBanner) { _laBanner.remove(); _laBanner = null; }
+      return;
+    }
+    if (_laTimer) return;               // 已在轮询
+    const _poll = async () => {
+      try {
+        const r = await fetch('/api/app/license-alerts?unseen_only=true&limit=50',
+                              { headers: { Authorization: 'Bearer ' + authToken() } });
+        if (!r.ok) return;
+        const d = await r.json();
+        const unseen = d.unseen || 0;
+        const alerts = d.alerts || [];
+        let seenIds = [];
+        try { seenIds = JSON.parse(localStorage.getItem('vdl_la_notified') || '[]'); } catch (_) {}
+        const fresh = alerts.filter(a => !seenIds.includes(a.id));
+        if (fresh.length) {
+          _laShowBanner(unseen);
+          // 系统通知（每条一条，最多合并 3 条防轰炸）
+          const head = fresh.slice(0, 3);
+          for (const a of head) {
+            const lv = a.level === 'critical' ? '🚨' : '⚠️';
+            fetch('/api/app/license-alerts/notify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + authToken() },
+              body: JSON.stringify({
+                title: '视频工坊·异常告警',
+                body: lv + (a.detail || a.kind) + (a.email ? ' · ' + a.email : ''),
+              }),
+            }).catch(() => {});
+          }
+          try {
+            seenIds = seenIds.concat(fresh.map(a => a.id)).slice(-200);
+            localStorage.setItem('vdl_la_notified', JSON.stringify(seenIds));
+          } catch (_) {}
+        } else if (unseen > 0) {
+          _laShowBanner(unseen);        // 通知过但未确认 → 只亮横幅
+        } else if (_laBanner) {
+          _laBanner.remove(); _laBanner = null;
+        }
+      } catch (_) {}
+    };
+    _poll();
+    _laTimer = setInterval(_poll, 60 * 1000);
+  }
+  function _laShowBanner(unseen) {
+    if (_laBanner) { _laBanner.textContent = `🚨 异常告警 ${unseen} 条未处理，点击查看`; return; }
+    const b = document.createElement('div');
+    b.id = 'licenseAlertBanner';
+    b.textContent = `🚨 异常告警 ${unseen} 条未处理，点击查看`;
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 16px;'
+      + 'background:#c0392b;color:#fff;font-size:13px;font-weight:600;text-align:center;'
+      + 'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);';
+    b.addEventListener('click', () => { window.location.assign('/ops-board'); });
+    document.body.appendChild(b);
+    _laBanner = b;
   }
   function authToken() { try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
   function _authMsg(text, isErr) {
