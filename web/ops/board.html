@@ -99,8 +99,10 @@ function fmtTime(t){
   try{const d=new Date(t.replace(' ','T').replace(/\+0800$/,'+08:00'));return d.toLocaleString('zh-CN',{hour12:false});}catch(e){return t;}
 }
 function statusClass(s){if(s>=500)return'status-5xx';if(s>=400)return'status-4xx';if(s>=300)return'status-3xx';return'status-2xx';}
-function isKeyErr(e){return /运维密钥|X-Admin-Key|401|403/.test(e&&e.message||'');}
-function keyNeededMsg(){return '超级管理员密钥无效：服务器拒绝了这把密钥，请在 App「关于本应用」重新粘贴正确的运维密钥';}
+function isKeyErr(e){return /运维密钥|X-Admin-Key|401/.test(e&&e.message||'');}
+function isAdminErr(e){return /超级管理员账号|403/.test(e&&e.message||'');}
+function keyNeededMsg(){return '超级管理员密钥无效：服务器拒绝了这把密钥，请用超级管理员账号重新进入并粘贴正确的运维密钥';}
+function adminNeededMsg(){return '🔒 仅超级管理员账号可用：当前登录的不是超级管理员，请回主界面切换账号';}
 
 async function loadVisits(){
   const el=$('#visitsStats'); el.innerHTML='<div class="empty">加载中…</div>';
@@ -122,7 +124,7 @@ async function loadVisits(){
       `<div class="row"><span class="t">${esc(fmtTime(x.t))}</span> · <b>${esc(x.ip)}</b> · <span class="${statusClass(x.s)}">${x.s}</span> · ${esc(x.p)}<br><span class="t">${esc(x.ua)}</span></div>`
     ).join(''):'<div class="empty">无最近访问</div>';
   }catch(e){
-    el.innerHTML=''; $('#visitsRecent').innerHTML=`<div class="err">${isKeyErr(e)?esc(keyNeededMsg()):('访客加载失败：'+esc(e.message))}</div>`;
+    el.innerHTML=''; $('#visitsRecent').innerHTML=`<div class="err">${isAdminErr(e)?esc(adminNeededMsg()):(isKeyErr(e)?esc(keyNeededMsg()):('访客加载失败：'+esc(e.message)))}</div>`;
   }
 }
 
@@ -145,9 +147,22 @@ async function loadEvents(){
       `</div>`
     ).join(''):'<div class="empty">暂无事件</div>';
   }catch(e){
-    el.innerHTML=''; $('#eventsLog').innerHTML=`<div class="err">${isKeyErr(e)?esc(keyNeededMsg()):('事件加载失败：'+esc(e.message))}</div>`;
+    el.innerHTML=''; $('#eventsLog').innerHTML=`<div class="err">${isAdminErr(e)?esc(adminNeededMsg()):(isKeyErr(e)?esc(keyNeededMsg()):('事件加载失败：'+esc(e.message)))}</div>`;
   }
 }
+
+// 账号级门禁兜底：页面能被直接输 URL 打开，这里再验一次登录身份——
+// 非超级管理员登录时整页替换为锁定提示（数据接口侧已 403，双保险）。
+(async()=>{
+  try{
+    const tok=localStorage.getItem('vdl_auth_token')||'';
+    const r=await fetch('/api/auth/me',{headers:tok?{'Authorization':'Bearer '+tok}:{}});
+    const me=await r.json();
+    if(!(me&&me.ok&&me.is_admin)){
+      document.body.innerHTML='<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1320;color:#e7ecf5;font:14px/1.7 -apple-system,BlinkMacSystemFont,\'PingFang SC\',sans-serif"><div style="background:#171c2e;border:1px solid #2a3350;border-radius:14px;padding:28px;max-width:420px;text-align:center"><div style="font-size:34px">🔒</div><h1 style="font-size:17px;margin:8px 0 6px">仅超级管理员可见</h1><p style="color:#9aa6c2;font-size:13px;margin:0">当前登录的不是超级管理员账号。<br>请回到主界面「账号」中切换为超级管理员账号，再连点版本号 5 次进入。</p></div></div>';
+    }
+  }catch(_){}
+})();
 
 async function loadAll(){
   $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false})+' · 范围：'+curRangeLabel;
