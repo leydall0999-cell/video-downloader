@@ -370,29 +370,13 @@ def cloud_sync() -> dict[str, Any]:
 
 @router.post("/api/cloud/redeem")
 def cloud_redeem(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """卡密充值到当前登录账号（一次充值终身有效，换机无需解绑）。"""
-    import license_client
-    code = str(payload.get("code") or "").strip()
-    if not code:
-        return {"ok": False, "error": "请输入卡密"}
-    store = _store()
-    acc = (store._state.get("meta") or {}).get("account") or {}
-    token = str(acc.get("token") or "")
-    if not token:
-        return {"ok": False, "error": "请先登录账号", "code": "NOT_LOGGED_IN"}
-    try:
-        r = license_client.redeem_remote(token, code)
-    except license_client.LicenseCloudError as e:
-        return {"ok": False, "error": f"{e}（充值需要联网）", "code": "CLOUD_UNREACHABLE"}
-    if not r.get("ok"):
-        return {"ok": False, "error": r.get("error") or "卡密无效",
-                "code": r.get("code") or "REJECTED"}
-    acct = r.get("account") or {}
-    store.save_account(acc.get("email", ""), token, acct,
-                       fp=acc.get("fp", ""), name=acc.get("name", ""))
-    _apply_account_state(store, acct)
-    flush_pending_spends(store)
-    return _pub(store, {"plan_code": r.get("plan_code")})
+    """卡密通道已下线（2026-09-26，充值统一走支付宝/微信在线支付）。
+
+    保留路由是为了老客户端拿到明确提示而不是 404；授权中心侧同步用
+    VDL_REDEEM_DISABLED 关闭了核销，卡密不再构成任何入账/发货通路。
+    """
+    return {"ok": False, "error": "卡密充值已下线，请在会员中心使用支付宝/微信扫码充值",
+            "code": "REDEEM_OFFLINE"}
 
 
 @router.post("/api/cloud/unbind")

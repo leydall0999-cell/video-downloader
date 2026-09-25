@@ -95,6 +95,11 @@ PLAN_MAP: dict[str, str] = {
 }
 PLAN_CODE_TO_SHORT = {v: k for k, v in PLAN_MAP.items()}
 
+# 卡密通道下线开关（2026-09-26）：充值统一走支付宝/微信在线支付（pay_server 自动
+# grant），补单走管理员 grant —— 卡密不再构成任何入账/发货通路。设 VDL_REDEEM_DISABLED=1
+# 关闭核销（含「库外合法签名卡自动建卡」的旁路，防泄露卡密白嫖）；留空/0 = 可用（测试/应急）。
+REDEEM_DISABLED = (os.environ.get("VDL_REDEEM_DISABLED") or "").strip().lower() not in ("", "0", "false")
+
 # ── 套餐效果（2026-09-25 权益云端权威化）───────────────────────────────────── #
 # 服务端按「事件推进」维护账号权益状态（与 App 端 activate() 同语义：
 # 续费顺延 = max(now, 当前到期) + days），登录/心跳响应携带权威快照，
@@ -566,9 +571,16 @@ def password_impl(state: dict[str, Any], email: str, new_password: str, now: flo
 
 def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
                 secret: str, ip: str = "") -> dict[str, Any]:
-    """卡密充值到账号（不再绑机器）。同一张卡第二次用会拒绝。"""
+    """卡密充值到账号（不再绑机器）。同一张卡第二次用会拒绝。
+
+    VDL_REDEEM_DISABLED=1 时整条通道关闭（410），失败也入事件流留审计痕迹。
+    """
     if not secret:
         raise ApiError(500, "NO_SECRET", "服务端未配置 VDL_LICENSE_SECRET")
+    if REDEEM_DISABLED:
+        _log_event(state, "redeem_fail", now, ip=ip, code=code[:48], err="REDEEM_DISABLED")
+        _scan_redeem_fail_anomalies(state, now, ip)
+        raise ApiError(410, "REDEEM_DISABLED", "卡密充值已下线，请在会员中心使用支付宝/微信扫码充值")
     uid = parse_token(token, secret, now)
     user = _users(state).get(uid)
     if not user:

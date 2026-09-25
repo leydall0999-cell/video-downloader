@@ -366,8 +366,8 @@
     memberPaneDl: $('memberPaneDl'),
     memberPaneAi: $('memberPaneAi'),
     memberPanePacks: $('memberPanePacks'),
-    memberCode: $('memberCode'),
-    memberActivateBtn: $('memberActivateBtn'),
+    memberCode: null,          // 卡密通道已下线（2026-09-26），元素已从 index.html 移除
+    memberActivateBtn: null,
     memberActMsg: $('memberActMsg'),
     cloudAccountBox: $('cloudAccountBox'),
     cloudLoginBox: $('cloudLoginBox'),
@@ -16158,50 +16158,11 @@ el.dwVidPlayer.hidden = true;
       });
     } catch (_) { /* 静默 */ }
   }
-  async function activateMember(code) {
-    if (!el.memberActivateBtn) return;
-    el.memberActivateBtn.disabled = true;
-    _memberMsg('充值中…');
-    try {
-      // 账号制：VDL- 开头 = 签名卡密 → 充值到当前登录账号（换机无需解绑）；
-      // 其余 = 套餐 code 直激活（仅限本机调试，远程会被服务端拒绝 USE_REDEEM）。
-      const isLicense = /^VDL-/i.test(code);
-      let r;
-      if (isLicense) {
-        r = await request('/api/cloud/redeem', { method: 'POST', body: JSON.stringify({ code }) });
-      } else {
-        r = await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
-      }
-      if (r && r.ok) {
-        showToast('会员充值成功');
-        _memberMsg('✅ 充值成功' + (r.plan_code ? `（${r.plan_code}）` : ''));
-        if (el.memberCode) el.memberCode.value = '';
-        await renderMemberStatus();
-        await renderCloudAccount();
-        if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
-      } else if (r && r.code === 'NOT_LOGGED_IN') {
-        _memberMsg('请先登录账号后再充值（上方「登录 / 注册账号」）', true);
-      } else if (r && r.code === 'CLOUD_UNREACHABLE') {
-        _memberMsg('❌ ' + ((r && r.error) || '无法连接授权中心'), true);
-      } else if (r && r.code === 'REVOKED') {
-        _memberMsg('❌ 这张卡密已被作废，如有疑问请联系客服。', true);
-      } else if (r && r.code === 'ALREADY_USED') {
-        _memberMsg('❌ 这张卡密已被使用过，无法重复充值。', true);
-      } else if (r && r.code === 'USE_REDEEM') {
-        _memberMsg('❌ 在线环境请使用卡密充值：输入 VDL- 开头的卡密后点「充值」', true);
-      } else {
-        _memberMsg('❌ ' + ((r && r.error) || '充值失败'), true);
-      }
-    } catch (e) {
-      _memberMsg('❌ ' + ((e && (e.message || e.hint)) || '充值失败'), true);
-    } finally {
-      el.memberActivateBtn.disabled = false;
-    }
-  }
+  // 卡密通道已下线（2026-09-26）：activateMember 已移除，充值一律走 payCreate（支付宝/微信在线支付）
   // ---- 支付宝购买（下单 → 二维码弹窗 → 轮询自动开通）----
   let _payTimer = null;
   async function payCreate(planCode) {
-    if (!el.memberActivateBtn) return;
+    if (!el.memberModal) return;
     _memberMsg('正在生成支付二维码…');
     let r;
     try {
@@ -18148,12 +18109,7 @@ el.dwVidPlayer.hidden = true;
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
   for (const [b, k] of _memberTabs) { if (b) b.addEventListener('click', () => switchMemberTab(k)); }
-  if (el.memberActivateBtn) el.memberActivateBtn.addEventListener('click', () => {
-    const code = (el.memberCode && el.memberCode.value || '').trim();
-    if (!code) { _memberMsg('请输入套餐 code 或激活码', true); return; }
-    activateMember(code);
-  });
-  if (el.memberCode) el.memberCode.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.memberActivateBtn) el.memberActivateBtn.click(); });
+  // 卡密输入/充值事件绑定已随卡密通道下线移除（2026-09-26）
   if (el.cloudLoginBtn) el.cloudLoginBtn.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} openAuthModal(); });
   if (el.cloudLogoutBtn) el.cloudLogoutBtn.addEventListener('click', () => { cloudLogoutAccount(); });
   // ============ /会员中心 ============
