@@ -41,6 +41,8 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
   POST /api/license/setstate  {email, member_until_dl?, member_until_ai?, perm_credits?, ai_credits_left?, token}
                                                                    管理员设定权威基线（迁移/纠错）
   POST /api/license/usage     {email, token}                       管理员查权益与流水
+  POST /api/license/recon     {days?, token}                       管理员每日入账/充值对账报告
+                                                                   （后台另有 10 分钟自扫线程，差异自动告警）
 
   权益权威化（v1）：登录/心跳/充值响应的 account.authority 快照是会员到期与积分
   余额的唯一真源；客户端用它覆盖本地文件 —— 篡改 memberships/*.json 一联网即回滚。
@@ -644,6 +646,9 @@ def grant_impl(state: dict[str, Any], email: str, plan: str, now: float,
     user.setdefault("purchases", []).append(
         {"id": pid, "plan_code": plan_code, "at": now, "note": note[:120]})
     _apply_plan_effect(user, plan_code, now)   # 权威状态同步推进（余额/到期）
+    # 全量事件（2026-09-26 每日对账的数据源：note 以 alipay-auto 开头 = 支付回调自动发货，
+    # 对账时必须能对应上一笔已收款订单；管理员手动 grant/补发不计入资金口径）
+    _log_event(state, "grant", now, email=uid, plan_code=plan_code, note=note[:120])
     return {"ok": True, "user_id": uid, "plan_code": plan_code, "purchase_id": pid,
             "account": _public_user(user)}
 
@@ -811,6 +816,214 @@ def alerts_ack_impl(state: dict[str, Any], ids: Any) -> dict[str, Any]:
     return {"ok": True, "acked": n}
 
 
+# ── 每日入账与充值对账（2026-09-26 资金核对）───────────────────────────────── #
+# 口径（钱 vs 权益，两个独立数据源交叉核对）：
+#   入账     = pay_server 的 pay_orders.json 里 status ∈ {PAID, GRANT_FAILED} 的订单
+#              （GRANT_FAILED = 用户已付款但自动发货失败；卡在 GRANTING 超时同理）。
+#   自动发货 = 本服务事件流里 note 以 "alipay-auto" 开头的 grant 事件
+#              （pay_server 回调成功后经 /grant 落账；新版 note 带 order_id 可精确对号）。
+#   卡密核销 = redeem 事件 —— 线下收款发卡，系统外入账，单列展示、不算资金差异。
+# 差异三类（发现即告警，走 _raise_alert → 超管横幅/系统通知/看板）：
+#   paid_no_grant        已收款但没发货（critical：用户花了钱没拿到权益，需补发）
+#   grant_no_pay         发了货但找不到已收款订单（critical：疑似绕过支付/伪造发货）
+#   plan_amount_mismatch 发货套餐与订单实付不符（warn：金额与权益对不上）
+PAY_ORDERS_PATH = Path(os.environ.get("VDL_PAY_ORDERS")
+                       or str(DATA_PATH.parent / "pay_orders.json"))
+RECON_DAYS = 7                  # 每轮回看近 N 天（新差异只告警一次，老差异不重复吵）
+RECON_INTERVAL = 600.0          # 后台 10 分钟自扫一轮（对账很轻：两个小文件）
+RECON_SEEN_CAP = 1000
+GRANTING_STUCK = 1800.0         # 订单卡在 GRANTING 超 30 分钟 = 发货挂了
+MATCH_FALLBACK_WINDOW = 172800.0  # 老数据无 order_id 时按 (账号,套餐) 就近配对的窗口 48h
+AUTO_NOTE_PREFIX = "alipay-auto"
+
+# 金额真源（与 deploy/pay_server.py PRICE_MAP 保持一致，单位元；对账报告估算用）
+PLAN_PRICE: dict[str, str] = {
+    "download_month": "29.80", "download_half_year": "99.90",
+    "download_year": "179.00", "ai_5500": "49.90", "ai_15000": "99.90",
+    "credits_5000": "50.00", "credits_15000": "99.00",
+}
+
+
+def _bj_day(ts: float) -> str:
+    """账期日切按北京时间（UTC+8）—— 与人工对账习惯一致。"""
+    return time.strftime("%Y-%m-%d", time.gmtime(float(ts) + 8 * 3600))
+
+
+def _read_recon_events(path: Path, kinds: set) -> list:
+    """读全量审计流水（events.jsonl），只挑指定 kind。文件缺失/损坏行静默跳过。"""
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if ev.get("kind") in kinds:
+                    out.append(ev)
+    except OSError:
+        pass
+    return out
+
+
+def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
+               now: Optional[float] = None) -> dict[str, Any]:
+    """每日入账与充值对账：支付宝实付订单 vs 自动发货，差异即刻告警。
+
+    幂等：同一差异只在第一次发现时告警（recon_seen 去重表），修复后自动消失。
+    """
+    now = time.time() if now is None else float(now)
+    days = max(1, min(int(days), 60))
+    horizon = 86400.0 * days
+
+    # 入账侧：已收款订单（PAID / GRANT_FAILED / 卡死的 GRANTING）
+    orders = []
+    try:
+        raw = json.loads(PAY_ORDERS_PATH.read_text(encoding="utf-8") or "{}")
+        for oid, o in (raw or {}).items():
+            if isinstance(o, dict):
+                o = dict(o)
+                o["order_id"] = str(oid)
+                orders.append(o)
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass                                        # 支付文件缺失 = 尚无线上订单
+
+    def _paid_at(o: dict) -> float:
+        return float(o.get("paid_at") or o.get("created_at") or 0)
+
+    in_money = [o for o in orders
+                if o.get("status") in ("PAID", "GRANT_FAILED")
+                and now - _paid_at(o) <= horizon]
+    in_money += [o for o in orders
+                 if o.get("status") == "GRANTING"
+                 and now - float(o.get("created_at") or 0) > GRANTING_STUCK
+                 and now - float(o.get("created_at") or 0) <= horizon]
+
+    # 发货侧：自动发货 grant 事件（管理员手动 grant 的 note 不是 alipay-auto，不计资金口径）
+    grants = [e for e in _read_recon_events(EVENT_LOG_PATH, {"grant"})
+              if str(e.get("note") or "").startswith(AUTO_NOTE_PREFIX)
+              and now - float(e.get("at", 0)) <= horizon]
+
+    matched_orders: set = set()
+    matched_grants: set = set()
+    mismatches: list = []
+
+    def _amount(o: dict) -> str:
+        return str(o.get("amount") or PLAN_PRICE.get(str(o.get("plan_code"))) or "?")
+
+    # pass 1：order_id 精确对号（新版 note = "alipay-auto:<order_id>"）
+    by_oid = {o["order_id"]: o for o in in_money}
+    for g in grants:
+        note = str(g.get("note") or "")
+        oid = note.split(":", 1)[1].strip() if ":" in note else ""
+        o = by_oid.get(oid)
+        if o:
+            matched_orders.add(oid)
+            matched_grants.add(id(g))
+            if str(o.get("plan_code")) != str(g.get("plan_code")):
+                mismatches.append({
+                    "kind": "plan_amount_mismatch", "order_id": oid, "at": _paid_at(o),
+                    "email": str(g.get("email") or ""),
+                    "detail": f"订单 {oid} 实付「{o.get('plan_code')}」{_amount(o)} 元，"
+                              f"但发货「{g.get('plan_code')}」—— 金额与权益不符，请人工核对"})
+
+    # pass 2：兜底（升级前的老订单/老 note 没有 order_id）—— 按 (账号,套餐) 时间就近配对
+    for g in grants:
+        if id(g) in matched_grants:
+            continue
+        cand = [o for o in in_money
+                if o["order_id"] not in matched_orders
+                and str(o.get("email")) == str(g.get("email"))
+                and str(o.get("plan_code")) == str(g.get("plan_code"))
+                and abs(_paid_at(o) - float(g.get("at", 0))) <= MATCH_FALLBACK_WINDOW]
+        if cand:
+            o = min(cand, key=lambda x: abs(_paid_at(x) - float(g.get("at", 0))))
+            matched_orders.add(o["order_id"])
+            matched_grants.add(id(g))
+
+    for o in in_money:
+        if o["order_id"] in matched_orders:
+            continue
+        mismatches.append({
+            "kind": "paid_no_grant", "order_id": o["order_id"], "at": _paid_at(o),
+            "email": str(o.get("email") or ""),
+            "detail": f"订单 {o['order_id']} 已收款 {_amount(o)} 元"
+                      f"（{o.get('plan_code')}，{_bj_day(_paid_at(o))}，状态 {o.get('status')}）"
+                      f"但没有对应发货 —— 用户花了钱没拿到权益，请立即补发"
+                      f"（grant note 带 alipay-auto:{o['order_id']} 即可自动对账销号）"})
+    for g in grants:
+        if id(g) in matched_grants:
+            continue
+        mismatches.append({
+            "kind": "grant_no_pay", "order_id": "", "at": float(g.get("at", 0)),
+            "email": str(g.get("email") or ""),
+            "detail": f"{_bj_day(float(g.get('at', 0)))} 给 {g.get('email')} 自动发货"
+                      f"「{g.get('plan_code')}」但找不到已收款订单 —— 疑似绕过支付/伪造发货调用"})
+
+    # 按天汇总（展示用；差异在行内带明细）
+    day_rows: dict = {}
+
+    def _row(d: str) -> dict:
+        return day_rows.setdefault(d, {"date": d, "income_yuan": 0.0, "paid_orders": 0,
+                                       "grant_failed": 0, "auto_grants": 0, "redeems": 0,
+                                       "redeem_income_est": 0.0, "mismatch": 0})
+
+    for o in in_money:
+        r = _row(_bj_day(_paid_at(o)))
+        r["paid_orders"] += 1
+        if o.get("status") == "GRANT_FAILED":
+            r["grant_failed"] += 1
+        try:
+            r["income_yuan"] += float(o.get("amount")
+                                      or PLAN_PRICE.get(str(o.get("plan_code"))) or 0)
+        except (TypeError, ValueError):
+            pass
+    for g in grants:
+        _row(_bj_day(float(g.get("at", 0))))["auto_grants"] += 1
+    for e in _read_recon_events(EVENT_LOG_PATH, {"recharge"}):
+        if now - float(e.get("at", 0)) <= horizon:
+            r = _row(_bj_day(float(e.get("at", 0))))
+            r["redeems"] += 1
+            try:
+                r["redeem_income_est"] += float(PLAN_PRICE.get(str(e.get("plan_code"))) or 0)
+            except (TypeError, ValueError):
+                pass
+    for m in mismatches:
+        _row(_bj_day(m["at"]))["mismatch"] += 1
+
+    # 告警：只对「第一次发现」的差异响铃（recon_seen 持久去重，修复后销号）
+    seen = {str(x) for x in (state.get("recon_seen") or [])}
+    new_alerts = 0
+    for m in mismatches:
+        key = f"{m['kind']}:{m.get('order_id') or ''}:{m.get('email') or ''}:{_bj_day(m['at'])}"
+        if key in seen:
+            continue
+        seen.add(key)
+        _raise_alert(state, "recon_mismatch",
+                     "warn" if m["kind"] == "plan_amount_mismatch" else "critical",
+                     m.get("email") or "", "", m["detail"], now)
+        new_alerts += 1
+    state["recon_seen"] = sorted(seen)[-RECON_SEEN_CAP:]
+
+    return {"ok": True, "days": days, "checked_at": now,
+            "income_yuan_total": round(sum(r["income_yuan"] for r in day_rows.values()), 2),
+            "day_rows": sorted(day_rows.values(), key=lambda r: r["date"], reverse=True),
+            "mismatches": mismatches, "new_alerts": new_alerts}
+
+
+def _recon_loop() -> None:
+    """后台对账线程：每 10 分钟扫一遍近 7 天，差异即时告警（只响一次）。"""
+    while True:
+        try:
+            with _LOCK:
+                st = _load_state()
+                recon_impl(st, days=RECON_DAYS, now=time.time())
+                _save_state(st)
+        except Exception as e:                      # 对账失败绝不影响业务
+            sys.stderr.write(f"[license] recon loop error: {e}\n")
+        time.sleep(RECON_INTERVAL)
+
+
 # ── 限流 ───────────────────────────────────────────────────────────────────── #
 def _throttled(ip: str, now: float) -> bool:
     with _THROTTLE_GUARD:
@@ -871,7 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
                           "ban", "adjust", "setstate", "usage",
-                          "alerts", "alerts_ack"):
+                          "alerts", "alerts_ack", "recon"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -925,6 +1138,13 @@ class Handler(BaseHTTPRequestHandler):
                                           limit=int(data.get("limit") or 100))
                     elif action == "alerts_ack":
                         out = alerts_ack_impl(st, data.get("ids"))
+                        _save_state(st)
+                    elif action == "recon":
+                        try:
+                            d = int(data.get("days") or RECON_DAYS)
+                        except (TypeError, ValueError):
+                            d = RECON_DAYS
+                        out = recon_impl(st, days=d, now=now)
                         _save_state(st)
                     else:
                         out = users_impl(st)
@@ -1041,8 +1261,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # 每日入账/充值对账后台线程（10 分钟一轮，差异自动告警；失败不影响业务）
+    threading.Thread(target=_recon_loop, daemon=True, name="recon").start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"[license] listening on 127.0.0.1:{PORT}  data={DATA_PATH}"
+          f"  pay_orders={PAY_ORDERS_PATH}"
           f"  max_devices={MAX_DEVICES}"
           f"  secret={'set' if SECRET else 'MISSING'}"
           f"  admin={'set' if ADMIN_TOKEN else 'MISSING'}", flush=True)

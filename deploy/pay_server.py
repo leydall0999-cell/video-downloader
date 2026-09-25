@@ -166,9 +166,11 @@ def _qr_png(text: str) -> str:
 
 
 # ── grant 内部调用（写档位到账号，state 单写者原则）──────────────────────────── #
-def _grant(email: str, plan_code: str) -> dict[str, Any]:
+def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, Any]:
+    # note 带 order_id（alipay-auto:<order_id>）时，授权中心每日对账可把这笔发货
+    # 精确对应到已收款订单；不带则只能按 (账号,套餐) 就近兜底匹配。
     import urllib.request
-    body = json.dumps({"email": email, "plan": plan_code, "note": "alipay-auto",
+    body = json.dumps({"email": email, "plan": plan_code, "note": note[:120],
                        "token": ADMIN_TOKEN}).encode("utf-8")
     req = urllib.request.Request(GRANT_URL, data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
@@ -277,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._text(400, "failure")
         trade_status = params.get("trade_status", "")
         order_id = params.get("out_trade_no", "")
+        trade_no = params.get("trade_no", "")
         # 非终态（如 WAIT_BUYER_PAY）也回 success，避免支付宝无谓重试
         if trade_status not in ("TRADE_SUCCESS", "TRADE_FINISHED"):
             return self._text(200, "success")
@@ -292,10 +295,13 @@ class Handler(BaseHTTPRequestHandler):
             ordr["status"] = "GRANTING"
             _save_orders(o)
         try:
-            _grant(email, plan_code)
+            _grant(email, plan_code, note=f"alipay-auto:{order_id}")
             with _LOCK:
                 o = _load_orders()
                 o[order_id]["status"] = "PAID"
+                o[order_id]["paid_at"] = time.time()   # 对账用：入账时间（授权中心 recon 读取）
+                if trade_no:
+                    o[order_id]["trade_no"] = trade_no
                 _save_orders(o)
             return self._text(200, "success")
         except Exception as e:
@@ -303,6 +309,10 @@ class Handler(BaseHTTPRequestHandler):
                 o = _load_orders()
                 o[order_id]["status"] = "GRANT_FAILED"
                 o[order_id]["err"] = str(e)[:200]
+                # 已收款只是发货失败 —— 对账口径里 GRANT_FAILED = 已收款未发货，会告警补发
+                o[order_id]["paid_at"] = time.time()
+                if trade_no:
+                    o[order_id]["trade_no"] = trade_no
                 _save_orders(o)
             # 仍回 success 避免支付宝无限重试；后台可查 GRANT_FAILED 补单
             return self._text(200, "success")

@@ -88,9 +88,19 @@
 
   <section class="panel" style="grid-column:1/-1">
     <h2><span class="dot" style="background:var(--amber)"></span>异常告警 · 充值/权益监控
-      <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">大额充值 / 短时连刷 / 卡密爆破 / 负余额（授权中心实时检测，30s 自动刷新）</span></h2>
+      <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">大额充值 / 短时连刷 / 卡密爆破 / 负余额 / 资金对账差异（授权中心实时检测，30s 自动刷新）</span></h2>
     <div id="alertsStats" class="stat-row"></div>
     <div id="alertsLog" class="log" style="max-height:320px"></div>
+  </section>
+
+  <section class="panel" style="grid-column:1/-1">
+    <h2><span class="dot" style="background:var(--green)"></span>每日对账 · 入账 vs 充值发货
+      <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">支付宝实付订单 vs 自动发货逐笔核对；差异自动告警（授权中心每 10 分钟自扫，此处按需拉报告）</span>
+      <span class="spacer"></span>
+      <button id="reconBtn">立即核对</button></h2>
+    <div id="reconStats" class="stat-row"></div>
+    <div id="reconTable"></div>
+    <div id="reconMismatches" style="margin-top:10px"></div>
   </section>
 </div>
 
@@ -163,6 +173,7 @@ const ALERT_KINDS={
   high_value_recharge:'⚠️ 大额充值',
   redeem_bruteforce:'🚨 卡密爆破',
   negative_balance:'🚨 积分负余额',
+  recon_mismatch:'💸 资金对账差异',
 };
 async function loadAlerts(){
   const el=$('#alertsStats'); el.innerHTML='<div class="empty">加载中…</div>';
@@ -207,6 +218,43 @@ async function ackAlerts(ids){
   }catch(e){}
 }
 
+const MISMATCH_KINDS={
+  paid_no_grant:['🚨 收款未发货','var(--red)'],
+  grant_no_pay:['🚨 发货未收款','var(--red)'],
+  plan_amount_mismatch:['⚠️ 金额与发货不符','var(--amber)'],
+};
+async function loadRecon(){
+  const el=$('#reconStats'); el.innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const r=await fetch('/api/app/license-recon',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({days:7})});
+    const d=await r.json();
+    if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
+    const ms=d.mismatches||[];
+    el.innerHTML=
+      `<div class="stat"><div class="n" style="color:var(--green)">¥${(d.income_yuan_total||0).toFixed(2)}</div><div class="l">近 7 天线上入账</div></div>`+
+      `<div class="stat"><div class="n" style="color:${ms.length?'var(--red)':'var(--green)'}">${ms.length}</div><div class="l">对账差异</div></div>`+
+      `<div class="stat"><div class="n">${(d.day_rows||[]).reduce((s,x)=>s+(x.redeems||0),0)}</div><div class="l">卡密核销（线下入账）</div></div>`;
+    $('#reconTable').innerHTML=(d.day_rows&&d.day_rows.length)?
+      ('<table><tr><th>日期</th><th>线上入账</th><th>订单数</th><th>发货失败</th><th>自动发货</th><th>卡密核销</th><th>差异</th></tr>'+
+      d.day_rows.map(x=>`<tr><td>${esc(x.date)}</td><td>¥${(x.income_yuan||0).toFixed(2)}</td>`+
+        `<td>${x.paid_orders||0}</td><td style="color:${x.grant_failed?'var(--red)':'inherit'}">${x.grant_failed||0}</td>`+
+        `<td>${x.auto_grants||0}</td><td>${x.redeems||0}</td>`+
+        `<td style="color:${x.mismatch?'var(--red)':'var(--green)'}">${x.mismatch||0}</td></tr>`).join('')+'</table>')
+      :'<div class="empty">近 7 天暂无账目</div>';
+    $('#reconMismatches').innerHTML=ms.length?
+      ms.map(m=>{const kk=MISMATCH_KINDS[m.kind]||[m.kind,'var(--amber)'];
+        return `<div class="row" style="border:1px solid var(--line);border-radius:8px;margin-bottom:6px">`+
+        `<span class="lv" style="color:${kk[1]}">${kk[0]}</span>`+
+        (m.email?` · 账号 <b>${esc(m.email)}</b>`:'')+
+        `<br><span class="msg">${esc(m.detail||'')}</span></div>`;}).join('')
+      :'';
+  }catch(e){
+    el.innerHTML='';
+    $('#reconTable').innerHTML=`<div class="err">${isAdminErr(e)?esc(adminNeededMsg()):(isKeyErr(e)?esc(keyNeededMsg()):('对账加载失败：'+esc(e.message)))}</div>`;
+  }
+}
+
 // 账号级门禁兜底：页面能被直接输 URL 打开，这里再验一次登录身份——
 // 非超级管理员登录时整页替换为锁定提示（数据接口侧已 403，双保险）。
 (async()=>{
@@ -222,9 +270,10 @@ async function ackAlerts(ids){
 
 async function loadAll(){
   $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false})+' · 范围：'+curRangeLabel;
-  await Promise.all([loadVisits(),loadEvents(),loadAlerts()]);
+  await Promise.all([loadVisits(),loadEvents(),loadAlerts(),loadRecon()]);
 }
 setInterval(loadAlerts,30*1000);   // 告警 30s 自动刷新（不受时间范围切换影响）
+$('#reconBtn').addEventListener('click',loadRecon);
 document.querySelectorAll('#rangeTabs button[data-range]').forEach(b=>{
   b.addEventListener('click',()=>{
     curRange=b.dataset.range;

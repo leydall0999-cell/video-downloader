@@ -1133,3 +1133,30 @@ def app_license_alerts_notify(payload: dict, request: app.Request):
         return {"ok": r.returncode == 0, "err": (r.stderr or "").strip()[:200]}
     except Exception as e:
         return {"ok": False, "err": str(e)[:200]}
+
+
+@router.post("/api/app/license-recon")
+def app_license_recon(payload: dict, request: app.Request):
+    """每日入账/充值对账报告（2026-09-26 资金核对，超管专用）。
+
+    链路：App 前端(看板) → 本机 /api/app/license-recon（is_admin 门禁）
+          → ECS worker /api/license-recon（X-Admin-Key）→ 本机 8902 license recon。
+    差异（收款未发货/发货未收款/金额不符）在授权中心自动告警，本接口按需拉报告。
+    """
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    try:
+        days = int(payload.get("days") or 7)
+    except (TypeError, ValueError):
+        days = 7
+    try:
+        resp = app.requests.post(
+            f"{_OPS_ECS_BASE}/api/license-recon",
+            json={"days": max(1, min(days, 60))},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"对账服务不可达：{e}")
