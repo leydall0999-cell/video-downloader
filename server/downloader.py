@@ -492,16 +492,23 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         return _strip_tracking_params(url)
 
     # 小红书短链 xhslink.cn / xhslink.com/o/xxx：302 展开为 xiaohongshu.com 详情页
-    # （yt-dlp XiaohongshuIE 只认 xiaohongshu.com 域，短链会落 generic 失败；
+    # （yt-dlp XiaohongShuIE 只认 xiaohongshu.com 域，短链会落 generic 失败；
     #  展开后的 xsec_token / share_id 等参数由 yt-dlp 自行处理，保留不剥离）
+    # 2026-09-25 实测：xhslink.com/o/xxx 是 App 专属深链，网页端（含真 Chrome）
+    # 一律 302 回首页——把首页当展开结果传给 yt-dlp 只会得到误导性的
+    # 「暂未实现该站的解析器」。故仅当展开结果含笔记路径（/explore/ 或
+    # /discovery/item/）才采用；否则保留 xhslink 原链，由 _friendly_error
+    # 的小红书专属分支给出精准指引。
     if "xhslink.cn" in url or "xhslink.com" in url:
         expanded = _expand_generic_302(url, proxy=proxy,
                                        allowed_hosts=("xiaohongshu.com",),
                                        referer="https://www.xiaohongshu.com/")
-        if expanded != url:
+        if expanded != url and ("/explore/" in expanded or "/discovery/item/" in expanded):
             logger.info("[normalize] %s -> %s", url, expanded)
             return expanded
-        return _strip_tracking_params(url)
+        if expanded != url:
+            logger.info("[normalize] %s -> %s（未展开为笔记页，保留原短链）", url, expanded)
+        return url
 
     # 爱奇艺 直接 playShare 分享页（www.iqiyi.com/playShare.html?shareId=...）：
     # shareId / positiveId 是视频标识，必须保留，否则 bare playShare.html 会被
@@ -1646,6 +1653,41 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
     is_cloud = ctx.get(
         "is_cloud", os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud"
     )
+
+    # —— 小红书专属分层（2026-09-25）：打包 yt-dlp 已带 XiaoHongShuIE，失败只有两种形态 ——
+    # ① xhslink 短链：App 专属深链，网页端（含真 Chrome）一律 302 回首页；
+    # ② xiaohongshu.com 直链但本机浏览器无小红书登录态：网页版 2026 年起强制登录，
+    #    无 Cookie 时 SSR 页是空壳 → "No video formats found"。分别给精准指引。
+    # 注意：必须放在 UnsupportedError 分支之前，否则 xiaohongshu.com（在白名单内）
+    # 会先落进误导性的「暂未实现该站的解析器」。
+    _xhs_ctx_host = (ctx.get("host", "") or "").lower()
+    _xhs_hit = ("xiaohongshu" in _xhs_ctx_host or "xhslink" in _xhs_ctx_host
+                or "xiaohongshu" in text.lower() or "xhslink" in text.lower()
+                or "[xiaohongshu]" in lowered)
+    if _xhs_hit and ("xhslink" in _xhs_ctx_host or "xhslink" in text.lower()):
+        return ResolveError(
+            "小红书 App 分享短链无法在网页端打开",
+            "这条 xhslink.com 短链是小红书 App 专属深链，网页端访问会被重定向回首页，任何下载工具都无法直接解析。\n\n"
+            "请改用完整链接：\n"
+            "① 在小红书 App 打开该笔记 → 分享 → 复制链接，发送到电脑（如微信文件传输助手）；\n"
+            "② 把链接粘贴到电脑浏览器地址栏打开笔记页（需登录小红书），"
+            "再复制地址栏里 www.xiaohongshu.com/explore/... 开头的完整地址；\n"
+            "③ 把完整地址粘贴到视频工坊即可。\n\n"
+            "注意：小红书网页版需登录才能看到笔记，请先用 Chrome/Edge 打开 xiaohongshu.com 登录一次，"
+            "视频工坊会自动读取浏览器登录态，无需手动粘贴 Cookie。",
+            category="xhs_short_link",
+        )
+    if _xhs_hit and ("no video formats" in lowered or "unable to extract" in lowered):
+        return ResolveError(
+            "小红书笔记需要登录后才能解析",
+            "小红书网页版自 2026 年起强制登录：未登录时页面是空壳，看不到笔记内容（也就拿不到视频）。\n\n"
+            "解决办法（一次性，约 30 秒）：\n"
+            "① 用 Chrome 或 Edge 浏览器打开 www.xiaohongshu.com 并登录你的账号；\n"
+            "② 回到视频工坊重新粘贴链接——登录态会自动读取并注入，无需手动配置。\n\n"
+            "若已登录仍报此错：请确认登录用的就是 Chrome/Edge（Safari 因权限限制暂不支持自动读取），"
+            "或把笔记页地址栏的完整链接（含 xsec_token 参数）粘贴过来重试。",
+            category="xhs_login_required",
+        )
 
     # yt-dlp 抛出 UnsupportedError 通常意味着「域名不在 yt-dlp 支持的 extractor 列表」
     # ——对 VDL 用户来说，含义比 1625 行通用提示更具体：要么找原视频、要么找
