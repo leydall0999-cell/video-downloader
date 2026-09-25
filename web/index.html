@@ -3583,6 +3583,7 @@
         <button type="button" class="admin-tab" data-admin-view="stats" data-page-node-id="BzQ1qcEHo3X1dLuFECX5uz">使用统计</button>
         <button type="button" class="admin-tab" data-admin-view="config" data-page-node-id="XWeeZbATMr2HbusVcKq2dF">系统配置</button>
         <button type="button" class="admin-tab" data-admin-view="aiaccounts" data-page-node-id="aiAcctTab">AI 账户</button>
+        <button type="button" class="admin-tab" data-admin-view="monitor" data-page-node-id="adminMonTab">监控告警</button>
       </nav>
       <div class="admin-body" data-page-node-id="RYA0sEY7fsTbPcGaQp5gmC">
         <section class="admin-view" data-admin-view="users" id="adminViewUsers" data-page-node-id="p6bUVjPAOQ0OpOAa2jjHg7">
@@ -3654,6 +3655,23 @@
             <button type="button" id="adminAiRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="aiAcctRefresh">刷新</button>
           </div>
           <div id="adminAiAccounts" class="admin-ai-accounts" data-page-node-id="aiAcctBox"></div>
+        </section>
+        <!-- 监控告警（2026-09-26）：充值/权益异常告警 + 每日入账对账，从运维看板提权到管理后台 -->
+        <section class="admin-view" data-admin-view="monitor" id="adminViewMonitor" hidden data-page-node-id="adminMonView">
+          <div class="admin-toolbar" data-page-node-id="adminMonTb">
+            <span class="admin-count">充值/权益异常告警 + 每日入账对账（授权中心实时检测，本页 30s 自动刷新）</span>
+            <button type="button" id="adminMonitorAckAll" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminMonAckAll">全部标为已读</button>
+            <button type="button" id="adminMonitorRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminMonRefresh">刷新</button>
+          </div>
+          <div id="adminMonitorAlerts" class="admin-table-wrap"></div>
+          <div class="admin-cfg-section" style="margin-top:14px" data-page-node-id="adminMonReconSec">
+            <div class="admin-cfg-head" data-page-node-id="adminMonReconHead">
+              <h3 data-page-node-id="adminMonReconTitle">每日对账 · 入账 vs 充值发货</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminMonReconHint">支付宝实付订单 vs 自动发货逐笔核对；差异自动告警，授权中心每 10 分钟自扫</span>
+            </div>
+            <div id="adminMonitorRecon" class="admin-table-wrap"></div>
+            <div id="adminMonitorMismatches"></div>
+          </div>
         </section>
       </div>
     </div>

@@ -19511,6 +19511,7 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'stats') loadStats();
       else if (name === 'config') loadConfig();
       else if (name === 'aiaccounts') loadAiAccounts();
+      else if (name === 'monitor') loadMonitor();
     };
 
     const loadAll = () => {
@@ -19520,6 +19521,93 @@ el.dwVidPlayer.hidden = true;
       loadConfig();
       loadAiAccounts();
     };
+
+    // ---- 监控告警（2026-09-26）：异常告警 + 每日入账对账（从运维看板提权到管理后台）----
+    const _MON_ALERT_KINDS = {
+      recharge_burst: '🚨 连续充值', high_value_recharge: '⚠️ 大额充值',
+      redeem_bruteforce: '🚨 卡密爆破', negative_balance: '🚨 积分负余额',
+      recon_mismatch: '💸 资金对账差异',
+    };
+    const _MON_MISMATCH_KINDS = {
+      paid_no_grant: ['🚨 收款未发货', 'is-err'],
+      grant_no_pay: ['🚨 发货未收款', 'is-err'],
+      plan_amount_mismatch: ['⚠️ 金额与发货不符', 'is-warn'],
+    };
+    const loadMonitorAlerts = async () => {
+      const box = $('adminMonitorAlerts');
+      if (!box) return;
+      box.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const d = await adminRequest('/api/app/license-alerts?limit=100');
+        const alerts = (d && d.alerts) || [];
+        const crit = alerts.filter((a) => a.level === 'critical' && !a.seen).length;
+        const rows = alerts.map((a) => {
+          const kk = _MON_ALERT_KINDS[a.kind] || a.kind;
+          return `<tr style="${a.seen ? 'opacity:.55' : ''}">` +
+            `<td style="color:${a.level === 'critical' ? 'var(--admin-err,#e5484d)' : 'var(--admin-warn,#f5a623)'};font-weight:600">${esc(kk)}${a.count > 1 ? ` ×${a.count}` : ''}</td>` +
+            `<td>${esc(a.email || '')}</td><td>${esc(a.ip || '')}</td>` +
+            `<td>${esc(a.detail || '')}</td>` +
+            `<td>${a.at ? new Date(a.at * 1000).toLocaleString('zh-CN', { hour12: false }) : ''}</td>` +
+            (a.seen ? '<td></td>' : `<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm" data-ack="${esc(a.id)}">确认</button></td>`) +
+            '</tr>';
+        }).join('');
+        const head = '<table class="admin-table"><thead><tr>' +
+          '<th>类型</th><th>账号</th><th>IP</th><th>详情</th><th>时间</th><th></th></tr></thead>';
+        box.innerHTML = `<div class="admin-count" style="margin-bottom:6px">未确认 <b style="color:${crit ? '#e5484d' : '#30a46c'}">${(d && d.unseen) || 0}</b> · 近 ${alerts.length} 条</div>` +
+          (alerts.length ? head + '<tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">暂无告警 —— 一切正常</div>');
+        box.querySelectorAll('button[data-ack]').forEach((b) => {
+          b.addEventListener('click', () => ackMonitorAlerts([b.dataset.ack]));
+        });
+      } catch (e) {
+        box.innerHTML = `<div class="admin-empty">告警加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
+      }
+    };
+    const ackMonitorAlerts = async (ids) => {
+      try {
+        await adminRequest('/api/app/license-alerts/ack', {
+          method: 'POST', body: JSON.stringify({ ids: ids || [] }),
+          headers: { 'Content-Type': 'application/json' } });
+        loadMonitorAlerts();
+      } catch (_) { /* 静默 */ }
+    };
+    const loadMonitorRecon = async () => {
+      const box = $('adminMonitorRecon');
+      const mis = $('adminMonitorMismatches');
+      if (!box) return;
+      box.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const d = await adminRequest('/api/app/license-recon', {
+          method: 'POST', body: JSON.stringify({ days: 7 }),
+          headers: { 'Content-Type': 'application/json' } });
+        const mismatches = (d && d.mismatches) || [];
+        const dayRows = (d && d.day_rows) || [];
+        const totalRedeems = dayRows.reduce((s, x) => s + (x.redeems || 0), 0);
+        const rows = dayRows.map((x) =>
+          `<tr><td>${esc(x.date)}</td><td>¥${(x.income_yuan || 0).toFixed(2)}</td>` +
+          `<td>${x.paid_orders || 0}</td>` +
+          `<td style="color:${x.grant_failed ? '#e5484d' : 'inherit'}">${x.grant_failed || 0}</td>` +
+          `<td>${x.auto_grants || 0}</td><td>${x.redeems || 0}</td>` +
+          `<td style="color:${x.mismatch ? '#e5484d' : '#30a46c'}">${x.mismatch || 0}</td></tr>`).join('');
+        box.innerHTML = `<div class="admin-count" style="margin-bottom:6px">近 7 天线上入账 <b>¥${(d && d.income_yuan_total || 0).toFixed(2)}</b> · 对账差异 <b style="color:${mismatches.length ? '#e5484d' : '#30a46c'}">${mismatches.length}</b> · 卡密核销（线下入账）${totalRedeems} 笔</div>` +
+          (dayRows.length ? '<table class="admin-table"><thead><tr><th>日期</th><th>线上入账</th><th>订单数</th><th>发货失败</th><th>自动发货</th><th>卡密核销</th><th>差异</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">近 7 天暂无账目</div>');
+        if (mis) mis.innerHTML = mismatches.map((m) => {
+          const kk = _MON_MISMATCH_KINDS[m.kind] || [m.kind, 'is-warn'];
+          return `<div class="admin-msg is-err" style="display:block;margin-top:6px"><b>${kk[0]}</b>` +
+            (m.email ? ` · 账号 ${esc(m.email)}` : '') + `：${esc(m.detail || '')}</div>`;
+        }).join('');
+      } catch (e) {
+        box.innerHTML = `<div class="admin-empty">对账加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
+        if (mis) mis.innerHTML = '';
+      }
+    };
+    const loadMonitor = () => { loadMonitorAlerts(); loadMonitorRecon(); };
+    const _adminViewMonitorEl = $('adminViewMonitor');
+    const _adminMonitorTimer = setInterval(() => {
+      // 仅当管理面板打开且停留在监控告警页时自动刷新
+      if (!overlay.hidden && !_adminViewMonitorEl.hidden) loadMonitorAlerts();
+    }, 30 * 1000);
+    if ($('adminMonitorRefresh')) $('adminMonitorRefresh').addEventListener('click', loadMonitor);
+    if ($('adminMonitorAckAll')) $('adminMonitorAckAll').addEventListener('click', () => ackMonitorAlerts([]));
 
     // ---- AI 大模型账户 ----
     const aiStatusLabel = (s) => ({
