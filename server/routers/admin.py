@@ -264,12 +264,18 @@ def _dashscope_account() -> dict:
 
 
 def _volcengine_account() -> dict:
+    """火山引擎账户卡（信息与实际链路对齐，2026-09-25 校正）：
+
+    - 云端抠图（说扣什么）：visual.volcengineapi.com，SigV4 签名，用 **AK/SK**。
+    - 抠图增强 / AI 画质增强：AI MediaKit，用 **Bearer Key**（mediakit_api_key）。
+    - 云端去水印：**不依赖火山**（本地 LaMa 精修链路），旧卡片把它挂在火山名下是旧信息。
+    """
     info = {
         "id": "volcengine",
-        "name": "火山引擎 Volcengine（云端去水印 / 抠图）",
+        "name": "火山引擎 Volcengine（云端抠图 / 画质增强）",
         "provider": "volcengine",
-        "model": "mediakit / visual",
-        "modules": ["云端去水印（mediakit）", "云端抠图（visual）"],
+        "model": "visual · mediakit",
+        "modules": [],
         "account": "",
         "status": "unknown",
         "balance": None,
@@ -282,21 +288,29 @@ def _volcengine_account() -> dict:
         "note": "按量计费，余额请登录火山控制台「费用中心」查看。",
     }
     try:
-        from cloud_matting_config import (
-            get_cloud_matting_config,
-            is_cloud_matting_mediakit_ready,
-        )
+        from cloud_matting_config import get_cloud_matting_config
         cfg = get_cloud_matting_config()
         ak = (cfg.get("access_key") or "").strip()
-        info["account"] = _mask(ak) if ak else "(未配置 AccessKey)"
+        sk = (cfg.get("secret_key") or "").strip()
+        mk = (cfg.get("mediakit_api_key") or "").strip()
         enabled = bool(cfg.get("enabled"))
-        mediakit = is_cloud_matting_mediakit_ready()
-        if enabled and mediakit:
-            info["status"] = "enabled"
-        elif not enabled:
+        visual_ready = bool(ak and sk)
+        mk_ready = bool(mk)
+        info["account"] = _mask(ak) if ak else "(未配置 AccessKey)"
+        # 模块清单带实时就绪标记，用户一眼看到哪条链路可用
+        info["modules"] = [
+            f"云端抠图 / 说扣什么（visual · AK/SK）{'✓ 已配置' if visual_ready else '✗ 未配置 AK/SK'}",
+            f"抠图增强 / AI 画质增强（AI MediaKit · Bearer Key）{'✓ 已配置' if mk_ready else '✗ 未配置 Key'}",
+        ]
+        if not enabled:
             info["status"] = "disabled"
+            info["note"] = "云端抠图开关未启用（抠图设置 → ☁️ 云端抠图）；启用后「说扣什么」走火山像素级。"
+        elif visual_ready:
+            info["status"] = "enabled"
+            info["note"] = ("云端抠图已就绪；MediaKit 增强" + ("已就绪。" if mk_ready else "未配 Bearer Key，仅画质增强/增强抠图回退 visual/本地。"))
         else:
             info["status"] = "no_api_key"
+            info["note"] = "已启用但缺 AK/SK：云端抠图不可用，将回退本地 SAM/MODNet。"
     except Exception as e:  # noqa: BLE001
         info["note"] = f"读取火山配置失败：{e}"
         info["status"] = "error"
