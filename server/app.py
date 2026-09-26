@@ -3649,16 +3649,22 @@ from user_membership import get_current_user_id, current_member_store
 # 与「仅本机个人缓存」(cookie_cache.py) 严格隔离：独立存储目录、仅白名单域、入池前验真。
 _SYNC_RL = {"ts": {}, "lock": threading.Lock()}
 
-def _sync_rate_ok(ip: str) -> bool:
-    """单 IP 30 秒内至多一次，防滥用。环回客户端（桌面 App 自连）豁免。"""
+def _sync_rate_ok(ip: str, scope: str = "") -> bool:
+    """防滥用限流。环回客户端（桌面 App 自连本机后端）豁免。
+
+    - 不传 scope：按单 IP 30 秒至多一次（面向网页访客的 /api/cookie/contribute）。
+    - 传 scope：按 (IP, scope) 各 30 秒一次。令牌鉴权的 /api/cookie/sync 需按域
+      批量推送十几次，按 IP 限流会让除第一个外的域全部 429（见 web-dev 同源注释）。
+    """
     if _is_loopback_ip(ip):
         return True
+    key = f"{ip}|{scope}" if scope else ip
     now = time.time()
     with _SYNC_RL["lock"]:
-        last = _SYNC_RL["ts"].get(ip, 0)
+        last = _SYNC_RL["ts"].get(key, 0)
         if now - last < 30:
             return False
-        _SYNC_RL["ts"][ip] = now
+        _SYNC_RL["ts"][key] = now
         return True
 
 _COOKIE_ALERT_TS: dict[str, float] = {}
@@ -3724,7 +3730,9 @@ def cookie_sync(payload: dict, request: Request) -> dict:
     if not is_allowed(domain):
         raise HTTPException(status_code=400, detail="不支持的域名")
     ip = (request.client.host if request.client else "") or ""
-    if not _sync_rate_ok(ip):
+    # 按「IP + 域」限流：一次「同步到云端」会按域批量推送十几次，
+    # 按 IP 限流会把除第一个以外的域全部 429 掉（见 _sync_rate_ok 注释）。
+    if not _sync_rate_ok(ip, domain):
         raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
     ok = verify_cookie(domain, cookie)
     if ok is False:
