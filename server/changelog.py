@@ -18,6 +18,13 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.27",
+        "date": "2026-09-26",
+        "items": [
+            "大幅加快海外链接解析：修复了打包版本缺失加解密组件导致浏览器 Cookie 逐条用纯 Python 解密、拖慢 YouTube 等站点解析约 1 分钟的问题，现走原生实现，解析耗时回到正常水平",
+        ],
+    },
+    {
         "version": "1.0.26",
         "date": "2026-09-26",
         "items": [
