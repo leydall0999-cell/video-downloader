@@ -109,6 +109,7 @@ fi
   --collect-all pymupdf \
   --collect-all fitz \
   --collect-submodules yt_dlp \
+  --collect-all Cryptodome \
   "${COMMENTARY_DATA[@]}" \
   "$REPO/desktop/desktop_launcher.py"
 
