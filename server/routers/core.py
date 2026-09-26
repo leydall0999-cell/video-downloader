@@ -151,29 +151,50 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     # 这里做后端兜底：只要声明了对端节点、目标是海外站、且用户未显式指定代理，
     # 就交给对端解析；对端不可达才回落本机原有逻辑。
     _peer = (app.PEER_ENDPOINT or "").strip().rstrip("/")
-    if (_peer and not app.is_china_host(host) and not (payload.proxy or "").strip()
-            and not app.downloader.can_download_directly(host)):
+    if _peer and not app.is_china_host(host) and not (payload.proxy or "").strip():
+        # 🔴 2026-09-26 实测（血泪，三小时排障的最终真凶）：下面两步都会发起**真实网络
+        # 访问**，绝不能跑在事件循环线程上。当时机器上留着一个 launchd 注入的
+        # VDL_PEER_ENDPOINT=https://hanyuxz.top（对端在 ECS 上连 YouTube 必失败），
+        # 于是每次解析海外站：同步 TLS 探测 + 同步 requests.post 合计阻塞事件循环
+        # 数十秒 —— 期间整个后端（连 /api/version）零响应，前端 60s 后被 WebKit 掐断，
+        # 用户只看到「连接本地服务失败（Load failed）」。代码永远是好的，死在网络等待上。
+        # 现全部挪进 executor（不占事件循环），并给对端一个**远小于路由预算**的超时，
+        # 坏对端不再能拖垮本机；探测失败/对端不可达一律平稳回落本机解析。
+        _loop = app.asyncio.get_running_loop()
         try:
-            import requests as _rq
-            import logging as _logging
-            # 🔴 用户没手动粘贴 Cookie 时，把本机浏览器里实时解密出的登录态一并带给对端：
-            # 对端（无浏览器的服务器）自己的 Cookie 源大概率是空的，不带这条就会误报
-            # 「YouTube 需要登录 Cookie」——明明本机浏览器明明登录着（2026-09-22 实测踩坑）。
-            _ck = payload.cookie or (app.downloader.get_browser_cookie_header(host, payload.url) or "")
-            _logging.getLogger(__name__).info("[peer] 海外站转发对端解析: %s -> %s (cookie_len=%s)",
-                                              host, _peer, len(_ck or ""))
-            _r = _rq.post(_peer + "/api/resolve",
-                          json={"url": url, "cookie": _ck, "proxy": ""},
-                          timeout=timeout + 10,
-                          # 必须显式禁用环境代理：桌面端进程常继承 Clash/系统代理，
-                          # 走代理访问自家节点会被误拦（与 _call_vps_worker 同理）
-                          proxies={"http": None, "https": None})
-            if _r.status_code == 200:
-                return _r.json()
-            _logging.getLogger(__name__).warning("[peer] 对端解析返回 HTTP %s", _r.status_code)
-        except Exception as _exc:  # noqa: BLE001
-            import logging as _logging
-            _logging.getLogger(__name__).warning("[peer] 对端解析异常，回落本机: %s", _exc)
+            _direct = await _loop.run_in_executor(None, app.downloader.can_download_directly, host)
+        except Exception:  # noqa: BLE001
+            _direct = False
+        if not _direct:
+            try:
+                import requests as _rq
+                import logging as _logging
+                # 🔴 用户没手动粘贴 Cookie 时，把本机浏览器里实时解密出的登录态一并带给对端：
+                # 对端（无浏览器的服务器）自己的 Cookie 源大概率是空的，不带这条就会误报
+                # 「YouTube 需要登录 Cookie」——明明本机浏览器明明登录着（2026-09-22 实测踩坑）。
+                if payload.cookie:
+                    _ck = payload.cookie
+                else:
+                    _ck = await _loop.run_in_executor(
+                        None, app.downloader.get_browser_cookie_header, host, payload.url) or ""
+                _peer_timeout = min(20, timeout)
+                _logging.getLogger(__name__).info(
+                    "[peer] 海外站转发对端解析: %s -> %s (cookie_len=%s, timeout=%ss)",
+                    host, _peer, len(_ck or ""), _peer_timeout)
+                _r = await _loop.run_in_executor(
+                    None,
+                    lambda: _rq.post(_peer + "/api/resolve",
+                                     json={"url": url, "cookie": _ck, "proxy": ""},
+                                     timeout=_peer_timeout,
+                                     # 必须显式禁用环境代理：桌面端进程常继承 Clash/系统代理，
+                                     # 走代理访问自家节点会被误拦（与 _call_vps_worker 同理）
+                                     proxies={"http": None, "https": None}))
+                if _r.status_code == 200:
+                    return _r.json()
+                _logging.getLogger(__name__).warning("[peer] 对端解析返回 HTTP %s", _r.status_code)
+            except Exception as _exc:  # noqa: BLE001
+                import logging as _logging
+                _logging.getLogger(__name__).warning("[peer] 对端解析异常，回落本机: %s", _exc)
 
     loop = app.asyncio.get_running_loop()
     # 🔴 本机解析路径也自动带浏览器 Cookie（与 peer 转发路径对称）：用户没手动粘贴
