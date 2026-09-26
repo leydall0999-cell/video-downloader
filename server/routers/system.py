@@ -87,7 +87,44 @@ def _read_first(cands: list[Path]) -> str:
 
 VERSION = _read_first(_candidates_version_txt()) or "0.0.0"
 BUILD = _read_first(_candidates_build_txt()) or "dev"
-IS_BUNDLED = getattr(sys, "frozen", False) and ".app" in str(getattr(sys, "executable", ""))
+
+# ---- 平台判定（真实上报，不再硬编码） ----
+def _current_platform() -> str:
+    """返回标准化的平台名：macos / windows / linux。
+
+    历史缺陷（2026-09-26）：/api/system/info 里 platform 写死 "macos"，
+    Windows 打包版对外谎报自己是 macOS，排查时极具误导性。
+    """
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("win"):
+        return "windows"
+    return "linux"
+
+
+PLATFORM = _current_platform()
+
+# 打包态（PyInstaller 冻结）：**平台中立**。Windows 的 .exe / 单目录产物同样成立。
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+# macOS .app bundle：只有它具备完整的自更新链路（ditto 解压 / codesign 重签 /
+# 脱离父进程的更新助手 / open 重启），其余平台暂不支持应用内更新。
+IS_BUNDLED = IS_FROZEN and ".app" in str(getattr(sys, "executable", ""))
+
+UPDATABLE = IS_BUNDLED
+
+
+def _update_unsupported_reason() -> str:
+    """不可更新时给前端/用户的**真实原因**（空串=可更新）。
+
+    历史缺陷（2026-09-26）：旧代码用 `IS_BUNDLED`（内含 ".app" 判断）当打包态，
+    Windows 打包版恒为 False ⇒ 走到「开发模式不支持更新」分支，
+    用户拿到的是**完全错误的原因**，属于把平台缺失伪装成运行模式问题。
+    """
+    if not IS_FROZEN:
+        return "当前为未打包的运行环境（开发模式），请下载安装包"
+    if PLATFORM != "macos":
+        return "当前平台（%s）暂不支持应用内更新，请下载最新安装包覆盖安装" % PLATFORM
+    return ""
 
 
 def _bundle_path() -> Optional[Path]:
@@ -376,9 +413,13 @@ def system_info() -> dict[str, Any]:
         "ok": True,
         "version": VERSION,
         "build": BUILD,
-        "platform": "macos",
-        "bundled": IS_BUNDLED,
-        "updatable": IS_BUNDLED,
+        # 平台如实上报（曾写死 "macos"）：Windows/Linux 打包版不再谎报自己是 macOS
+        "platform": PLATFORM,
+        # 打包态：Windows .exe / Linux 单目录产物同样为 True（曾错误地只对 .app 为真）
+        "bundled": IS_FROZEN,
+        "updatable": UPDATABLE,
+        # 不可更新时给真实原因（空串=可更新），前端可直接展示，避免误导用户与排障
+        "update_unsupported_reason": _update_unsupported_reason(),
         "update_base_url": UPDATE_BASE_URL,
     }
 
@@ -437,8 +478,18 @@ def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
-    if not IS_BUNDLED:
-        return {"ok": False, "error": "开发模式下不支持一键更新，请下载安装包", "code": "NOT_BUNDLED"}
+    if not IS_FROZEN:
+        return {"ok": False, "error": "当前为未打包的运行环境（开发模式），不支持一键更新，请下载安装包", "code": "NOT_BUNDLED"}
+    # ⚠️ 更新链路（ditto 解压 / codesign 重签 / bash 更新助手 / open 重启）目前**仅
+    #    macOS 实现**。此处必须显式拦停并返回真原因 —— 否则 Windows 用户会一路走到
+    #   下载 `VideoDownloader.app.zip`（latest.json 的 url 是单一的 macOS 资产），
+    #   下载几百 MB 后才在一个看不懂的环节失败。
+    if PLATFORM != "macos":
+        return {
+            "ok": False,
+            "error": _update_unsupported_reason(),
+            "code": "PLATFORM_UNSUPPORTED",
+        }
 
     target_ver = str(payload.get("version") or "").strip()
     if not target_ver:

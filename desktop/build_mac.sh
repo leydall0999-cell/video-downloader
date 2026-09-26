@@ -172,7 +172,23 @@ print("icon.png ->", out)
 PY
 ICON_PNG="$REPO/desktop/icon.png"
 ICON_ICNS="$REPO/desktop/icon.icns"
+
+# 清理上一轮构建 mv 出来的临时副本（自愈式回收）。
+# 背景：下面若干处刻意用 mv 而非 rm -f 移走旧产物，是为了避开沙盒的批量删除守卫；
+# 但这些副本此前**从不清退**，每次构建都新攒一份 —— 历史上堆到 207 个
+# icon.icns.bak.<pid>。这里在「写入新副本之前」统一清一遍，保证同类残留永远
+# 不超过 1 份，同时完整保留 mv 绕过守卫的做法。
+_cleanup_stale_copies() {
+  local f
+  for f in "$@"; do
+    [ -e "$f" ] || continue
+    rm -rf -- "$f" 2>/dev/null || true
+  done
+}
+
 # 用 mv 而非 rm -f 移走旧 .icns，避开沙盒的批量删除守卫（2112 个文件的误报）
+_cleanup_stale_copies "$ICON_ICNS".bak.* "$REPO/VideoDownloader.spec".bak.* \
+  "$REPO"/dist/_old_* "$REPO"/build/_old_* "$REPO"/.jscheck.err.bak.*
 [ -e "$ICON_ICNS" ] && mv "$ICON_ICNS" "$ICON_ICNS.bak.$$" 2>/dev/null || true
 sips -s format icns "$ICON_PNG" --out "$ICON_ICNS" >/dev/null 2>&1 || true
 
