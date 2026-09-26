@@ -518,6 +518,48 @@ async function testHugeFileUsesSingleStream() {
   done('超过分片上限的文件走单流（保护内存）');
 }
 
+async function testPeerRelayMissingFallsBackToMainNode() {
+  // 实测：香港节点的 routers/core.py 是更早的分支，连 /api/stream/proxy 都没有，
+  // 自然也没有本端点。若强行让对端内联，等于在「已经 404 的节点」上重试 3 次再
+  // 整条降级 —— 所以在**探测阶段**就回落主站（主站对非墙海外源仍能中转）。
+  const total = 1024 * 1024;
+  const calls = [];
+  const { api } = loadEngine(async (url, o = {}) => {
+    calls.push(url);
+    if (url.startsWith('https://hk.example/')) {
+      return new FakeResponse({ status: 404, detail: 'Not Found', headers: {} });
+    }
+    const rng = (o.headers || {}).Range;
+    if (!rng) {
+      return new FakeResponse({
+        status: 200,
+        headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(total) },
+        body: patternSlice(0, total - 1),
+      });
+    }
+    const m = /^bytes=(\d+)-(\d*)$/.exec(rng);
+    const start = parseInt(m[1], 10);
+    const end = m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
+    return new FakeResponse({
+      status: 206,
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(end - start + 1),
+        'Content-Range': `bytes ${start}-${end}/${total}`,
+      },
+      body: patternSlice(start, end),
+    });
+  });
+  const blob = await api._dlRun('https://x.invalid/a.mp4', {
+    base: 'https://hk.example', title: 't', signal: new AbortController().signal, onProgress: () => {},
+  });
+  ok(calls[0].startsWith('https://hk.example/'), `应优先打解析锁定节点，实际 ${calls[0]}`);
+  ok(calls.some((u) => u.startsWith('/api/media/proxy')),
+    `对端缺端点时必须回落主站中继，实际只打了：${calls.join(' , ')}`);
+  samePattern(new Uint8Array(await blob.arrayBuffer()), 0, '回落主站后拼接');
+  done('对端缺端点 → 探测阶段回落主站中继（不白烧流量）');
+}
+
 async function testRelayFailureFallsBackToAnchorDownload() {
   const origin = { fetch: async () => new FakeResponse({ status: 403, detail: '防盗链被拒' }) };
   const { api, env } = loadEngine(origin.fetch);
@@ -598,6 +640,7 @@ async function main() {
   await testOriginIgnoringRangeFallsBackToSingleStream();
   await testSmallFileUsesSingleStream();
   await testHugeFileUsesSingleStream();
+  await testPeerRelayMissingFallsBackToMainNode();
   await testRelayFailureFallsBackToAnchorDownload();
   await testCancelOnSecondClick();
   await testSuccessSavesBlobWithExtension();

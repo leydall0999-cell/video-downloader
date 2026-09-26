@@ -3830,6 +3830,27 @@
     a.remove();
   };
 
+  // 中继基址候选：优先「解析锁定节点」（海外直链的 IP 签名/防盗链只对那个节点有效），
+  // 失败再回落主站。为什么需要回落 —— 对端节点可能是老版本、还没有本端点（实测香港
+  // 节点的 routers/core.py 就是更早的分支，连 /api/stream/proxy 都没有），而主站对
+  // **非墙海外源**仍能中转（走 VDL_PROXY）。回落**只在探测阶段**发生：已经下了半截
+  // 再换节点等于白烧流量。
+  const _dlProbeWithFallback = async (url, base, signal) => {
+    const bases = base ? [base, ''] : [''];
+    let lastErr = null;
+    for (const b of bases) {
+      try {
+        const relay = _dlRelayUrl(url, b);
+        const probe = await _dlProbe(relay, signal);
+        return { relay, probe };
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('中继不可用');
+  };
+
   const _DL_CHUNK_FALLBACK_MAX = 512 * 1024 * 1024;   // 分片失败后最多重下这么多（见 _dlRun）
 
   // ① 分片并发。每片必须整片到手，否则宁可整体失败也不拼出带空洞的文件。
@@ -3877,8 +3898,7 @@
   };
 
   const _dlRun = async (url, { base, title, signal, onProgress }) => {
-    const relay = _dlRelayUrl(url, base);
-    const probe = await _dlProbe(relay, signal);
+    const { relay, probe } = await _dlProbeWithFallback(url, base, signal);
     const total = probe.size || 0;
     const canChunk = probe.ranged && total >= _DL_MIN_CHUNKED && total <= _DL_MAX_CHUNKS * _DL_CHUNK;
     if (canChunk) {
