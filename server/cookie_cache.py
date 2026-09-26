@@ -76,6 +76,24 @@ def clear_cookie_cache() -> int:
         return 0
 
 
+def drop_cached_cookie(host: str) -> bool:
+    """删除单站缓存（返回是否真的删掉了文件）。
+
+    用于「缓存里的 Cookie 已被证实失效」的场景：TTL 有 30 天，若不删，
+    这份失效快照会一直排在公共池新鲜值前面被尝试并失败，形成死循环
+    （见 downloader._evict_youtube_cookie_cache）。桌面端删后下次会实时
+    重新解密浏览器；服务端删后回落到公共池。
+    """
+    try:
+        f = _cache_file(host)
+        if f.exists():
+            f.unlink()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def refresh_cookie(host: str) -> str | None:
     """强制重新解密该站点 Cookie 并刷新缓存。"""
     try:

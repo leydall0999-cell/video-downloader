@@ -3328,16 +3328,26 @@ from user_membership import get_current_user_id, current_member_store
 _SYNC_RL = {"ts": {}, "lock": threading.Lock()}
 
 
-def _sync_rate_ok(ip: str) -> bool:
-    """单 IP 30 秒内至多一次，防滥用。环回客户端（桌面 App 自连）豁免。"""
+def _sync_rate_ok(ip: str, scope: str = "") -> bool:
+    """防滥用限流。环回客户端（桌面 App 自连本机后端）豁免。
+
+    - 不传 scope：按 **单 IP 30 秒至多一次**。用于面向网页访客、无需令牌的
+      /api/cookie/contribute。
+    - 传 scope：按 **(IP, scope) 各 30 秒一次**。用于令牌鉴权的 /api/cookie/sync
+      ——「同步到云端」是按域批量推送（本机浏览器登录了十来个站就推十几次），
+      按 IP 限流会让除第一个以外的域全部撞 429，末尾的 youtube.com / youku.com
+      必然失败（2026-09-26 实测到的自愈链路阻断点）。按域计既能放行批量推送，
+      又仍挡住对同一域的反复刷写。
+    """
     if _is_loopback_ip(ip):
         return True
+    key = f"{ip}|{scope}" if scope else ip
     now = time.time()
     with _SYNC_RL["lock"]:
-        last = _SYNC_RL["ts"].get(ip, 0)
+        last = _SYNC_RL["ts"].get(key, 0)
         if now - last < 30:
             return False
-        _SYNC_RL["ts"][ip] = now
+        _SYNC_RL["ts"][key] = now
         return True
 
 
@@ -3661,6 +3671,69 @@ def cookie_cache_clear() -> dict:
     return {"ok": True, "cleared": n}
 
 
+# 需要「转发给海外对端」的站点：网页版这些站的解析/下载由前端 baseFor() 直接
+# 发到对端节点执行，Cookie 必须落在**对端**才生效；而桌面端 to-cloud 只认云端地址。
+# 云端收下后转发一份即可让「桌面端 30min 自动推送」一路续到对端。
+_PEER_RELAY_DOMAINS: tuple[str, ...] = ("youtube.com",)
+
+
+def _relay_cookie_to_peer_if_needed(domain: str, header: str) -> dict | None:
+    """把指定域的 Cookie 转发给海外对端节点（VDL_PEER_ENDPOINT）；非目标域返回 None。
+
+    复用对端已有的 /api/cookie/sync（两端共用同一个 VDL_COOKIE_SYNC_TOKEN）。
+    任何失败都只记日志、绝不影响本次同步的返回结果 —— 转发只是「锦上添花」，
+    云端自身入池已成功。
+    """
+    try:
+        from cookie_pool import _strip_sub
+        if _strip_sub(domain) not in _PEER_RELAY_DOMAINS:
+            return None
+    except Exception:
+        return None
+    peer = (os.environ.get("VDL_PEER_ENDPOINT") or "").strip().rstrip("/")
+    token = os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    if not peer or not token or not peer.lower().startswith("http"):
+        return {"relayed": False, "reason": "no_peer_or_token"}
+    try:
+        import time as _t
+        import urllib.error
+        import urllib.request
+
+        body = json.dumps({"token": token, "domain": domain, "cookie": header}).encode()
+        req = urllib.request.Request(
+            peer + "/api/cookie/sync",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                # 带浏览器 UA：对端可能挂在 Cloudflare 后面，Python-urllib 会被 1010 拦
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                ),
+            },
+            method="POST",
+        )
+        # 对端也可能有同款限流 / 瞬时 5xx：对 429/5xx 做有限退避重试，
+        # 保证「云端收到 → 续到对端」这一跳不因一次抖动而断（YouTube 自愈链路关键跳）。
+        last: Exception | None = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    resp = json.loads(r.read().decode() or "{}")
+                logger.info("[cookie_sync] relay domain=%s -> %s ok=%s", domain, peer, resp.get("ok"))
+                return {"relayed": True, "resp": resp}
+            except urllib.error.HTTPError as e:
+                last = e
+                if e.code in (429, 500, 502, 503, 504) and attempt < 2:
+                    _t.sleep(2 ** attempt)
+                    continue
+                raise
+        raise last or RuntimeError("relay 失败")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[cookie_sync] relay domain=%s -> %s 失败: %s", domain, peer, str(e)[:160])
+        return {"relayed": False, "reason": str(e)[:120]}
+
+
 @app.post("/api/cookie/sync")
 def cookie_sync(payload: dict, request: Request) -> dict:
     """App 端上报指定站点登录态到公共池（需用户知情同意 + 客户端令牌）。"""
@@ -3676,7 +3749,9 @@ def cookie_sync(payload: dict, request: Request) -> dict:
     if not is_allowed(domain):
         raise HTTPException(status_code=400, detail="不支持的域名")
     ip = (request.client.host if request.client else "") or ""
-    if not _sync_rate_ok(ip):
+    # 按「IP + 域」限流：桌面端一次「同步到云端」会按域批量推送十几次，
+    # 按 IP 限流会把除第一个以外的域全部 429 掉（见 _sync_rate_ok 注释）。
+    if not _sync_rate_ok(ip, domain):
         raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
     ok = verify_cookie(domain, cookie)
     if ok is False:
@@ -3686,7 +3761,8 @@ def cookie_sync(payload: dict, request: Request) -> dict:
                    "优酷/腾讯视频等站需含登录态字段如 P__yk__uck / vus_session）",
         )
     added = add_cookie(domain, cookie, source="sync")
-    return {"ok": True, "added": added, "verified": (ok is True)}
+    relay = _relay_cookie_to_peer_if_needed(domain, cookie)
+    return {"ok": True, "added": added, "verified": (ok is True), "relay": relay}
 
 
 @app.post("/api/cookie/contribute")
@@ -3728,7 +3804,8 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
         add_ckey(domain, ckey, source="contrib")
         added = True
     logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s ckey=%s", domain, ip, added, bool(ckey))
-    return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
+    relay = _relay_cookie_to_peer_if_needed(domain, cookie)
+    return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey), "relay": relay}
 
 
 @app.post("/api/cookie/sync/from-local")

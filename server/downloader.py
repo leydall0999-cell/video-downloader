@@ -1258,6 +1258,11 @@ _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
     # 加入后自动从本机浏览器读该站 Cookie 并注入视频流请求头（无需手动粘贴）。
     "chrqj.com",
 )
+# 注意：YouTube **故意不列入** hardened —— hardened 会把 403 文案改写成
+# 「该站需要登录 Cookie」，从而盖掉 YouTube 403 真正该排查的代理/地区线索
+# （见 tests/test_friendly_error_403.py::test_youtube_403_is_cdn_forbidden）。
+# 但 YouTube 的 Cookie 又必须能进公共池（否则桌面端推来会被 400 拒收），
+# 因此走 cookie_pool._POOL_EXTRA_DOMAINS 单独放行，两件事互不干扰。
 
 # 候选浏览器（按优先级）。Chrome/Edge/Brave/Chromium 的 Cookie 解密仅需 cryptography
 # （已打包进 .app），不依赖 brotli，故优先；Firefox 需 brotli，暂不入列。
@@ -2997,6 +3002,10 @@ _YOUTUBE_HOSTS: tuple[str, ...] = ("youtube.com", "youtu.be", "youtube-nocookie.
 _BOT_KEYWORDS: tuple[str, ...] = (
     "sign in to confirm", "not a bot", "please sign in",
     "login_required", "confirm you're not", "sign in to continue",
+    # Cookie 被 Google 轮换作废（Google 把登录态与出口 IP 绑定，拿到别处用
+    # 即整份失效）。与 bot 拦截同样要「换下一个源」，否则会直接抛错、
+    # 白白浪费后面本来可用的新鲜源。
+    "no longer valid", "rotated in the browser", "cookies are no longer",
 )
 
 
@@ -3034,6 +3043,26 @@ def _youtube_cookie_candidates(user_cookie: str) -> list[tuple[str, str]]:
     except Exception:
         pass
     return cands
+
+
+def _evict_youtube_cookie_cache(reason: str = "") -> None:
+    """清掉 YouTube 的**本机 Cookie 缓存**，避免失效快照长期遮蔽后续新鲜源。
+
+    背景（2026-09-26 实测）：cookie_cache 的 TTL 长达 30 天，而候选优先级是
+    `user > env > cache > pool`。一旦缓存里躺着一份被 Google 轮换作废的旧快照，
+    它会**永远排在**每 30min 新推送到公共池的那份**前面**被尝试并失败 ——
+    表现为「明明一直在推新 Cookie，却始终报 bot 拦截」的死循环。
+
+    桌面端删掉后下次会实时重新解密浏览器（拿到最新）；服务端删掉后则自然
+    回落到公共池里的新鲜值。
+    """
+    try:
+        from cookie_cache import drop_cached_cookie
+        if drop_cached_cookie("youtube.com"):
+            logger.info("[youtube] 已清除失效的本地 Cookie 缓存（%s），改用后续源",
+                        reason or "resolve failed")
+    except Exception:
+        pass
 
 
 def _fetch_youtube_visitor_data(proxy: str = "") -> str:
@@ -3132,20 +3161,27 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
                 return info
         except _YouTubeBotBlocked:
             logger.info("[youtube] Cookie 源=%s 仍被 bot 拦截，换下一个", src)
+            if src == "cache":
+                _evict_youtube_cookie_cache("bot 拦截")
             continue
         except (DownloadError, ExtractorError) as exc:
             low = str(exc).lower()
             if any(k in low for k in _BOT_KEYWORDS):
+                if src == "cache":
+                    _evict_youtube_cookie_cache("bot 拦截")
                 continue
             logger.info("[youtube] Cookie 源=%s 报非 bot 错误（可能 Cookie 过期），换下一个: %s",
                         src, str(exc)[:120])
+            if src == "cache":
+                _evict_youtube_cookie_cache("解析失败")
             continue
 
     raise ResolveError(
         "YouTube 需要登录 Cookie 才能解析",
         "YouTube 2025 起对服务器数据中心 IP 强制 bot 检测，需带登录态才能绕过。\n"
-        "请在「高级选项 → Cookie」粘贴一次 YouTube 登录 Cookie（后端自动缓存，后续免粘贴）；"
-        "或由管理员配置环境变量 VDL_YOUTUBE_COOKIE 全局生效。",
+        "① 最直接：在「高级选项 → Cookie」粘贴一次 YouTube 登录 Cookie，随后重试；\n"
+        "② 免手动：桌面版在本机浏览器登录过 YouTube 后，登录态会被自动同步"
+        "（每 30 分钟一次）到服务器，无需粘贴。",
         category="cookie_required",
     )
 
