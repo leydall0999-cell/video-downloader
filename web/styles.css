@@ -1000,9 +1000,20 @@ img { max-width: 100%; display: block; }
   margin: 0;
 }
 /* 旧版单卡 layout（UC 上传转换等仍用）保留 */
-.dw-card .uc-form { display: flex; flex-direction: column; gap: .7rem; margin: 0 0 .8rem; }
-/* 新版：PROCESSING section 内 uc-form 收紧上下间距 */
-.dw-section .uc-form { display: flex; flex-direction: column; gap: .55rem; margin: 0; }
+/* 🔴 2026-09-26 align-items: stretch 必写（用户报「处理参数」面板控件错位）：
+   这两条把布局从全局 `.uc-form` 的 grid 改成 flex column，但**没重置全局的
+   `align-items: end`**。flex column 下 align-items 作用于**交叉轴＝水平方向**，
+   `end` ⇒ 右对齐 **且宽度收缩到内容宽度**（不 stretch）。后果实测：
+     · 「修复引擎」字段宽 284 /「处理模式」385 /「半径」68 —— 同卡片里三种宽度；
+     · 更严重的是内容宽的字段会**左溢出卡片**（卡片 316px，「处理模式」385px，
+       左溢出 86px）：label「处理模式」被挤出可视区、下拉框只剩右半段文字
+       （用户截图里那个只剩「最稳）」的横条就是这个）。
+   根因是被选中的 option 文字越长，select 的 max-content 越宽
+   （「精修（实验档：两遍去水印，难例更强，普通场景持平）」≈385px）。
+   实测注入 align-items:stretch 后：三个字段统一 x=751 w=282，label 恢复可见。 */
+.dw-card .uc-form { display: flex; flex-direction: column; gap: .7rem; margin: 0 0 .8rem; align-items: stretch; }
+/* 新版：PROCESSING section 内 uc-form 收紧上下间距（同样需要 stretch，见上） */
+.dw-section .uc-form { display: flex; flex-direction: column; gap: .55rem; margin: 0; align-items: stretch; }
 /* 替代原来内联 style 的 small 提示 */
 .uc-hint-block { display: block; color: var(--muted, #8a8a8a); margin-top: 4px; font-size: 12px; line-height: 1.5; }
 /* ACTION 区：开始按钮 + 进度贴合 */
@@ -1825,8 +1836,10 @@ img { max-width: 100%; display: block; }
     background: rgba(99,102,241,.18);
     transform: scale(1.06);
   }
-  /* 长 label 截断：200px 侧栏里「图片 / PDF 去水印」「视频 / 音频桥接」
-     经常溢出。允许 ellipsis，由 button title 提供完整文本悬停查看 */
+  /* 长 label 截断：200px 侧栏里「视频 / 音频桥接」这类长名
+     经常溢出。允许 ellipsis，由 button title 提供完整文本悬停查看
+     （去水印三项自 2026-09-26 起改为短名「图片去水印 / PDF 去水印 / 视频去水印」，
+      已不再触发截断） */
   .sidebar-item-label {
     flex: 1; min-width: 0;
     white-space: nowrap;

@@ -823,6 +823,7 @@
     appIntroView: $('appIntroView'),
     dwModeImg: $('dwModeImg'),
     dwModePdf: $('dwModePdf'),
+    dwTitle: $('dwTitle'),
     dwImgPane: $('dwImgPane'),
     dwImgFile: $('dwImgFile'),
     dwPreviewWrap: $('dwPreviewWrap'),
@@ -5406,7 +5407,12 @@
 
   // 图片 / PDF / 视频 / 一键抠图 子模式切换
   // 2026-09-08 视图内 dw-tabs 按钮行已删（子模式由侧栏入口直达），dwMode* 元素不存在，做防御式处理
+  // 2026-09-26 标题跟随子模式：四个入口在侧栏是独立入口（图片去水印 / PDF 去水印 /
+  // 视频去水印 / 一键抠图），共用同一个 dwView。标题原先写死「图片 / PDF / 视频 去水印」，
+  // 导致单看「图片去水印」时也显示另外两个功能 —— 用户要求「图片去水印只保留图片」。
+  const DW_PANE_TITLE = { img: '图片去水印', pdf: 'PDF 去水印', video: '视频去水印', matting: '一键抠图' };
   const dwSwitchPane = (mode) => {
+    if (el.dwTitle) el.dwTitle.textContent = DW_PANE_TITLE[mode] || '图片去水印';
     el.dwImgPane.hidden = mode !== 'img';
     el.dwPdfPane.hidden = mode !== 'pdf';
     el.dwVideoPane.hidden = mode !== 'video';
