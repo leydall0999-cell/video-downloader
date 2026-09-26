@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.26",
+        "date": "2026-09-26",
+        "items": [
+            "修复 YouTube 解析失败：YouTube 近期调整了视频服务策略，旧版会报「Requested format is not available」，现已适配，开代理即可正常解析下载",
+            "海外链接解析更快：不再先绕道远端节点空等（此前会白白多等一分多钟）",
+        ],
+    },
+    {
         "version": "1.0.25",
         "date": "2026-09-26",
         "items": [
