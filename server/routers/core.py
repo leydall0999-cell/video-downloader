@@ -135,7 +135,9 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     elif host == 'v.qq.com':
         timeout = 35
     elif 'youtube.com' in host or 'youtu.be' in host:
-        timeout = 70
+        # 2026-09-26：70s 是代理健康时的余量；用户 VPN 节点抖动（实测约一半请求失败）
+        # 时 PROBE_RETRIES=3 的重试需要更长的墙钟时间，70s 会在重试中途被 504 掐断。
+        timeout = 110
     elif app.is_china_host(host):
         timeout = app.RESOLVE_TIMEOUT_DOMESTIC
     else:

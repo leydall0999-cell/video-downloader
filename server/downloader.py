@@ -63,7 +63,11 @@ from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode
 logger = logging.getLogger(__name__)
 
 SOCKET_TIMEOUT = 30  # 国内 CDN 偶发慢响应，30 秒更稳
-PROBE_RETRIES = 1
+# 2026-09-26 实测：用户 VPN 代理节点出海质量差（同一时刻 curl 10/10 成、requests 0/5 挂，
+# yt-dlp 连续 502 Tunnel/SSL EOF）——每请求约一半概率失败。PROBE_RETRIES=1 时解析
+# 要连发 ~5 个请求，全活的概率太低。提到 3：P(单请求 4 连挂)=6%，解析可穿越代理抖动。
+# 代价：最坏 4 次重试 × 30s socket_timeout，由路由层 wait_for 超时兜底（YouTube 110s）。
+PROBE_RETRIES = 3
 # 下载健壮性：防止站点/CDN 假死导致任务永久挂起、占满并发槽拖垮后续任务
 # 1) 下载阶段：已开始下分片但 N 秒无字节增量 → 判定停滞，自动终止
 # 2) 整体硬上限：解析+下载任意阶段超过此秒数 → 强制结束（兜底；腾讯等限速站常需更久）
@@ -974,6 +978,48 @@ def _patch_requests_handler_retries() -> None:
 # 模块加载时即启用 requests 重试补丁
 _patch_requests_handler_retries()
 
+
+# --------------------------------------------------------------------------- #
+# 代理客户端「连接复用缺陷」规避补丁（2026-09-26 实测定位）
+#
+# 用户代理客户端（本机 127.0.0.1:7892，Clash 系）对**复用连接**处理有缺陷：
+# 同一时刻对照实验——池化 Session 连发 4/4 全部读超时，每次新建连接 3/4 成功（0.4~1.8s）；
+# 原始 socket 逐头排查 CONNECT 全部 200 ⇒ 502/卡死都发生在「复用」环节。
+# curl 独立进程（永远新连接）全通；浏览器自动重试 + HTTP/2 复用所以能播；
+# yt-dlp 的 requests handler 用持久 Session ⇒ 首个请求之后稳定卡死/502。
+#
+# 解法：probe/resolve 期间（线程局部开关）每个请求发送前 _clear_instances()
+# 丢弃缓存的 Session ⇒ 每请求新建 TCP+TLS。下载阶段不开开关（分片吞吐靠连接复用）。
+# --------------------------------------------------------------------------- #
+_no_keepalive_local = threading.local()
+
+
+def _patch_requests_handler_no_keepalive() -> None:
+    try:
+        from yt_dlp.networking._requests import RequestsRH
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[no-keepalive patch] cannot import requests handler: %s", e)
+        return
+    if getattr(RequestsRH._send, "_vdl_no_keepalive_patched", False):
+        return
+
+    _orig_send = RequestsRH._send
+
+    def _patched_send(self, request):
+        if getattr(_no_keepalive_local, "enabled", False):
+            try:
+                self._clear_instances()   # 丢弃上一请求留下的 Session/连接池
+            except Exception:  # noqa: BLE001
+                pass
+        return _orig_send(self, request)
+
+    RequestsRH._send = _patched_send
+    setattr(_patched_send, "_vdl_no_keepalive_patched", True)
+    logger.info("[no-keepalive patch] enabled（resolve 线程禁用 yt-dlp 连接复用）")
+
+
+_patch_requests_handler_no_keepalive()
+
 def _cn_proxy_url() -> str:
     """国内站回源代理地址。
 
@@ -1825,6 +1871,13 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
         (("geo", "not available in your country", "region"), "该视频在当前网络所在地区不可播放", "可尝试更换网络环境后重试", "restricted"),
         (("unsupported url", "no video"), "无法从该链接中找到视频", "请确认链接指向的是视频播放页，而不是首页或列表页", "unknown"),
         (("404", "not found", "removed", "unavailable", "does not exist"), "视频不存在或已被删除", "请检查链接是否正确、视频是否仍然在线", "unknown"),
+        # 2026-09-26：代理隧道类失败单独分层（必须排在通用 network 规则之前）。
+        # 实测用户 VPN 节点抖动时报 "Tunnel connection failed: 502 Bad Gateway" /
+        # SSL UNEXPECTED_EOF，用户完全看不懂；翻成可行动的「换节点」指引。
+        (("tunnel connection failed", "unable to connect to proxy", "502 bad gateway", "proxyerror"),
+         "代理/VPN 节点出海失败",
+         "当前代理节点不稳定（实测约一半请求被拒）。建议：①在代理/VPN 软件里切换一个节点后重试；"
+         "②或到「高级选项 → 代理」换一个代理地址；③稍等片刻再试（节点恢复后即可正常解析）", "network"),
         (("timed out", "timeout", "connection", "network", "resolve", "proxy", "ssl"), "网络连接超时", "请检查本机网络（部分海外站点需要代理）后重试", "network"),
         (("drm", "protected"), "该视频有版权保护，无法下载", "请通过官方渠道观看", "restricted"),
         (("extractor error", "keyerror", "unable to extract"), "无法识别该链接对应的视频", "请确认链接完整且指向具体的视频页面", "unknown"),
@@ -3480,6 +3533,16 @@ class _NeedYtDlp(Exception):
     """标记该平台应交由 probe() 末尾的 yt-dlp 通用流程解析（已收录且 yt-dlp 支持）。"""
 
 def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    """probe 包装：本线程禁用 yt-dlp 连接复用（代理客户端复用缺陷，见
+    _patch_requests_handler_no_keepalive），再转 _probe_impl。"""
+    _no_keepalive_local.enabled = True
+    try:
+        return _probe_impl(url, cookie=cookie, proxy=proxy)
+    finally:
+        _no_keepalive_local.enabled = False
+
+
+def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """只解析不下载，返回 yt-dlp 的原始 info dict。"""
     effective_proxy = proxy or _resolve_proxy(_host_of(url) or "")
     # 归一化前先做非视频页（空间/动态/番剧）可读拦截，避免 yt-dlp 提取失败后
