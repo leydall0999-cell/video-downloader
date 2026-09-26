@@ -392,6 +392,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --collect-all PIL \
   --collect-all Quartz \
   --collect-all onnxruntime \
+  --collect-all Cryptodome \
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   $_PCS_ADD_BINARY_ARG \

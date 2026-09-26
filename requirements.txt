@@ -3,6 +3,14 @@ uvicorn[standard]==0.52.1
 yt-dlp==2026.8.19
 requests==2.32.3
 cryptography==50.0.0
+
+# ⚠️ 关键性能依赖（2026-09-26 补）：yt-dlp 浏览器 Cookie 解密（Chrome/Edge 的 AES-CBC/AES-GCM）
+# 必须依赖 pycryptodome 的原生 AES。缺失时 yt_dlp/aes.py 的 `if Cryptodome.AES` 为假，
+# 跌回纯 Python AES，逐条解密全 Profile 数千条 Cookie 需 1 分钟+，直接拖慢 YouTube 等站点的
+# 解析（实测 ~2 分钟）。装上后走 Cryptodome 原生实现，整批解密降到毫秒级。
+# 另：yt-dlp 通过 `from .dependencies import Cryptodome` 动态 import，PyInstaller 静态分析看不到，
+# 必须在 build_mac.sh 里显式 `--collect-all Cryptodome` 才能打进 .app（否则打包产物仍是纯 Python 慢路径）。
+pycryptodome>=3.20
 python-multipart==0.0.20
 
 # 本地 Apple Vision OCR（片头视觉检测降级路径）：macOS 原生、免 key、离线。
