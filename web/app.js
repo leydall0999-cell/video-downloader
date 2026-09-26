@@ -8905,7 +8905,9 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     try {
-      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
+      // timeout 300s（2026-09-26）：解析（尤其 YouTube 走代理）实测可达 50s+，
+      // 默认 120s 曾把仍在进行的解析掐断 → 误报「连接本地服务失败」。后端上限 90s，300s 留足余量。
+      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }), timeout: 300000 }, base);
       resolved.cookie = cookie;
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点

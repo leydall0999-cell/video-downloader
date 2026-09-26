@@ -174,7 +174,13 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     # 🔴 本机解析路径也自动带浏览器 Cookie（与 peer 转发路径对称）：用户没手动粘贴
     # Cookie 时，自动注入本机浏览器里该站的登录态。数据中心 IP 上的 YouTube 等
     # Bot 检测只认完整登录会话，仅靠代理直连仍会被判 cookie_required（2026-09-22 实测）。
-    _cookie = payload.cookie or (app.downloader.get_browser_cookie_header(host, url) or "")
+    # 🔴 2026-09-26 修复：Chrome Cookie 解密（_extract_chrome_cookies）实测 30s+，
+    # 同步调用会**卡死整个事件循环** —— wait_for 的超时计时器也随之冻结（504 永不触发），
+    # 于是前端 120s fetch 先掐断 → 用户看到「连接本地服务失败」红字（18:20 实测定案）。
+    # 必须挪进 executor 与 probe 并行执行。
+    _cookie = payload.cookie
+    if not _cookie:
+        _cookie = await loop.run_in_executor(None, app.downloader.get_browser_cookie_header, host, url) or ""
     try:
         info = await app.asyncio.wait_for(loop.run_in_executor(app.prober, app.downloader.probe, url, _cookie, payload.proxy), timeout=timeout)
     except app.asyncio.TimeoutError:

@@ -366,7 +366,11 @@ NODE_REGION = (os.environ.get("VDL_REGION", "global").strip().lower() or "global
 PEER_ENDPOINT = os.environ.get("VDL_PEER_ENDPOINT", "").strip().rstrip("/")
 _allow_raw = os.environ.get("VDL_ALLOW_ORIGINS", "").strip()
 ALLOW_ORIGINS = [o.strip().rstrip("/") for o in _allow_raw.split(",") if o.strip()] or ([PEER_ENDPOINT] if PEER_ENDPOINT else [])
-RESOLVE_TIMEOUT_SECONDS = 40          # 海外站（走代理），留出代理延迟余量
+# 海外站（走代理）：2026-09-26 从 40 提到 90 —— 此前 40s 因事件循环被 Chrome Cookie
+# 同步解密卡死而从未真正生效（计时器被冻结）；Cookie 挪进 executor 并行后超时恢复
+# 真实作用，YouTube 代理链路实测 25~50s（player.js 拉取慢时更久），40s 会开始误杀。
+# 仍需 < 前端 fetch 默认 120s（web/app.js request()），否则前端先掐断报「连接本地服务失败」。
+RESOLVE_TIMEOUT_SECONDS = int(os.environ.get("VDL_RESOLVE_TIMEOUT_OVERSEAS", "90"))
 # 国内站：腾讯/优酷/B站等直连本可很快，但抖音/快手/微博/爱奇艺等 14 个平台
 # 依赖云端 Playwright worker（经隧道起 Chromium 做浏览器级解析，实测 25~50s），
 # 原先的 20s 会稳定误报「解析超时」→ 对齐网页端取 60s，可用环境变量覆盖。
