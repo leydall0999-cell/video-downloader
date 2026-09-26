@@ -23,6 +23,14 @@
   _apply_delta             增量套用：bsdiff 后**权限保持不变**（+x 不能丢）、
                            新增文件按 manifest 的 mode 复原、del / link 分支
   发布脚本守卫              基线裁剪必须用逐段数值排序，不能退回裸 sort
+  基线裁剪行为              当前版本 / 线上版本豁免裁剪、keep=0 关闭裁剪、
+                           非版本号形态的目录文件不碰（2026-09-26 补）
+
+关于基线裁剪用例为何"截取脚本原文执行"：
+ 此前这里只有一条静态文本守卫（检查 sort 参数字符串），证明不了保护逻辑真的生效。现改为从 publish_update.sh 原文截取第 3.7 节的真实片段喂给 bash，
+ 并把 HOME 重定向到临时目录（脚本用 mv 到 $HOME/.Trash 回收基线）—— 既保证
+ "脚本一改测试就跟着变"，又严格遵守不向用户家目录写东西的约束。
+ 已做变异验证：把 VERSION/REMOTE_VER 的保护换成 `if false`，该用例立即失败。
 
 设计约束
 --------
@@ -357,6 +365,105 @@ def test_apply_delta_delete_and_link():
     print("✅ 增量套用：del 删除、link 复原软链")
 
 
+_TRIM_BEGIN = 'KEEP_BASES="${VDL_KEEP_BASELINES:-2}"'
+_TRIM_END = "# 4) 生成 latest.json"
+
+
+def _trim_snippet() -> str:
+    """从真实 publish_update.sh 里截取第 3.7 节的裁剪代码片段。
+
+    为什么要"扣 flexible 代码"而不是在测试里复刻一遍：复刻会漂移（脚本改了测试还绿），
+    而这里直接取脚本原文执行 —— 谁改动裁剪逻辑，测试立刻跟着变。
+    """
+    script = Path(__file__).resolve().parents[2] / "desktop" / "publish_update.sh"
+    txt = script.read_text(encoding="utf-8")
+    for marker in (_TRIM_BEGIN, _TRIM_END):
+        if marker not in txt:
+            raise AssertionError("publish_update.sh 结构已变，找不到锚点：%r" % marker[:40])
+    return txt[txt.index(_TRIM_BEGIN):txt.index(_TRIM_END)]
+
+
+def _run_trim(root: Path, versions, keep, version="", remote_ver="", junk=()):
+    """跑一次真实裁剪片段，返回裁剪后 BaseDir 里剩下的条目名。
+
+    HOME 被重定向到临时目录：脚本处理废弃基线的方式是 `mv ... "$HOME/.Trash/..."`，
+    这样回收站也落在临时目录内，严格遵守本文件「不向用户家目录写东西」的约束。
+    """
+    base = root / "baselines"
+    base.mkdir(parents=True, exist_ok=True)
+    for v in versions:
+        (base / v).mkdir(exist_ok=True)
+    for name, is_dir in junk:
+        p = base / name
+        p.mkdir(exist_ok=True) if is_dir else p.write_text("x", encoding="utf-8")
+    home = root / "home"
+    (home / ".Trash").mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update({
+        "BASE_DIR": str(base),
+        "VDL_KEEP_BASELINES": str(keep),
+        "VERSION": version,
+        "REMOTE_VER": remote_ver,
+        "HOME": str(home),
+    })
+    proc = subprocess.run(["bash", "-c", _trim_snippet()], env=env,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, "裁剪片段执行失败：%s" % proc.stderr
+    return sorted(p.name for p in base.iterdir())
+
+
+def test_release_trim_never_drops_current_and_remote():
+    """当前发布版本与线上版本**必须**躲过裁剪。
+
+    误删它们不是小事： VERSION 的基线是本次发布的产物， REMOTE_VER 的基线是下轮
+    生成差分的唯一基准（缺了只能退化成"每次 400MB 全量"）。
+    """
+    versions = ["1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"]
+    with tempfile.TemporaryDirectory() as td:
+        left = _run_trim(Path(td), versions, keep=2,
+                         version="1.0.2", remote_ver="1.0.3")
+    # 排序后 1.0.1/1.0.2/1.0.3 落在被裁区间，但后两者被保护位捞了回来
+    assert "1.0.1" not in left, "最老的一版应被裁剪，实际却是：%s" % left
+    for guarded in ("1.0.2", "1.0.3", "1.0.4", "1.0.5"):
+        assert guarded in left, "%s 不该被剪掉（当前/线上版本受保护）：%s" % (guarded, left)
+    print("✅ 基线裁剪：当前版本与线上版本永不被删")
+
+
+def test_release_trim_respects_numeric_order():
+    """1.0.10 / 1.0.11 不能排在 1.0.2 之前 —— 否则删掉的是最新的基线。"""
+    versions = ["1.0.2", "1.0.9", "1.0.10", "1.0.11"]
+    with tempfile.TemporaryDirectory() as td:
+        left = _run_trim(Path(td), versions, keep=2)
+    assert left == ["1.0.10", "1.0.11"], left
+    print("✅ 基线裁剪按数值序取舍，保留 1.0.10 / 1.0.11 而非 1.0.9")
+
+
+def test_release_trim_disabled_when_keep_is_zero():
+    """VDL_KEEP_BASELINES=0 是显式关闭裁剪的开关，必须一个都不删。"""
+    versions = ["1.0.1", "1.0.2", "1.0.3", "1.0.4"]
+    with tempfile.TemporaryDirectory() as td:
+        left = _run_trim(Path(td), versions, keep=0)
+    assert left == versions, "keep=0 不应裁剪任何基线，实际：%s" % left
+    print("✅ 基线裁剪：VDL_KEEP_BASELINES=0 时不删任何东西")
+
+
+def test_release_trim_ignores_non_version_entries():
+    """只有「纯版本号形态」的目录才算候选，混进来的其它文件/目录一律不碰。
+
+    别小看这条：BASE_DIR 在真实环境里也曾被丢进过日志文件和临时目录，
+    若把它们当候选一起 mv 走，用户手上的东西就悄悄没了。
+    """
+    versions = ["1.0.1", "1.0.2", "1.0.3", "1.0.4"]
+    junk = [("latest", True), (".DS_Store", False), ("build_tmp", True)]
+    with tempfile.TemporaryDirectory() as td:
+        left = _run_trim(Path(td), versions, keep=1, junk=junk)
+    for name, _ in junk:
+        assert name in left, "%s 不是版本号形态，不该被裁剪逻辑碰：%s" % (name, left)
+    assert "1.0.1" not in left, "最老基线应被裁剪：%s" % left
+    print("✅ 基线裁剪：非版本号形态的目录/文件一律不动")
+
+
 if __name__ == "__main__":
     test_parse_ver_is_numeric()
     test_publish_script_uses_numeric_version_sort()
@@ -372,4 +479,9 @@ if __name__ == "__main__":
     test_apply_delta_new_file_honours_manifest_mode()
     test_apply_delta_delete_and_link()
 
-    print("\n🎉 自更新链路测试全部通过（10 项）")
+    test_release_trim_never_drops_current_and_remote()
+    test_release_trim_respects_numeric_order()
+    test_release_trim_disabled_when_keep_is_zero()
+    test_release_trim_ignores_non_version_entries()
+
+    print("\n🎉 自更新链路测试全部通过（14 项）")
