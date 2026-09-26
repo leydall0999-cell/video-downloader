@@ -1,10 +1,20 @@
-"""server/routers/auth.py — VDL 本地账号（/api/auth/*，A1）。
+"""server/routers/auth.py — VDL 账号（/api/auth/*，A1）。
 
 注册/登录/查询当前用户/本地重置密码（验证码流程）。token 为 HMAC 签名的无状态 Bearer，
 前端存于 localStorage('vdl_auth_token')，后续请求经 Authorization: Bearer <token> 携带。
 
+🔴 2026-09-26「打通 web 与 App 用户数据」后，**账号权威是授权中心（ECS 8902）**：
+注册/登录先打云端（`server/cloud_link.py`），成功后在**本机 auth_store 落一份同号同密码
+的镜像** —— 本机仍是 bearer 签发方、功能门禁与离线登录的兜底；会员/积分由云端
+`authority` 快照覆盖本机 `memberships/{uid}.json`。云端不可达时退回纯本机账号（fail-open），
+只在响应里带 `cloud_notice` 如实说明，不让用户白屏。
+
+浏览器设备号：cookie `vdl_dev`（服务端 uuid，首次登录/注册响应 Set-Cookie）→ 作为
+授权中心的 device.fp，网页版因此占一个设备位（与 App 的 2 台设备额度同一套语义）。
+
 找回密码流程：先 POST /api/auth/reset-code 获取验证码（dev 模式**仅本机**展示 / smtp 真实投递），
-再 POST /api/auth/reset 携带 code 完成改密。
+再 POST /api/auth/reset 携带 code 完成改密；改完密码会用上一次登录留下的云端 token
+把新密码同步到授权中心（否则两端密码分叉，换端登录会报「密码不正确」）。
 
 🔴 dev 模式下验证码**只回传给本机调用方**（桌面 App 的界面走 127.0.0.1，UX 不变）。公网部署
 若因缺少 `smtp.json` 落到 dev，把验证码写进响应体＝把任意账号的改密权交给调用方（账号接管），
@@ -16,11 +26,12 @@ import logging
 import re
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Request, Response
 
 router = APIRouter()
 
 from stats import record_event
+import cloud_link
 
 
 # 头像上传/读取相关依赖（懒加载，避免模块顶层循环 import）
@@ -79,8 +90,77 @@ def _bearer(request: Request) -> Optional[str]:
     return token_from_header(request.headers.get("Authorization"))
 
 
+# ── 云端账号联动的小工具（2026-09-26：网页版账号接授权中心）─────────────────
+def _cloud_device(request: Request, response: Response) -> tuple[str, str]:
+    """取浏览器设备号：(fp, 设备名)。首次访问签发 cookie `vdl_dev`。
+
+    授权中心 login/register 强制要求 device.fp（MAX_DEVICES=2 防共享），网页版用它
+    占一个设备位。cookie 缺失时当场签发并在响应里 Set-Cookie（三年有效）。
+    """
+    fp = cloud_link.ensure_fp(request)
+    if not fp:
+        fp = cloud_link.issue_fp()
+    try:
+        response.set_cookie(cloud_link.COOKIE_NAME, fp,
+                            max_age=cloud_link.COOKIE_MAX_AGE,
+                            httponly=True, samesite="lax")
+    except Exception:  # noqa: BLE001 — 设不上 cookie 也继续（本次请求仍带 fp 打云端）
+        pass
+    return fp, cloud_link.device_name(request)
+
+
+def _cloud_login_or_register(request: Request, response: Response, ident: str,
+                             pw: str, is_reg: bool) -> tuple[Optional[dict], str, str]:
+    """打云端 register/login。返回 (结果或 None, fp, 设备名)。"""
+    if not cloud_link.link_enabled():
+        return None, "", ""
+    fp, name = _cloud_device(request, response)
+    res = (cloud_link.try_register(ident, pw, fp, name) if is_reg
+           else cloud_link.try_login(ident, pw, fp, name))
+    return res, fp, name
+
+
+def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
+                  fp: str, name: str, *, registered: bool = False) -> dict[str, Any]:
+    """登录收尾：签发本机 bearer + 落地云端登录态与权益快照。"""
+    from auth_store import issue_token, ensure_superusers, user_is_admin
+    ensure_superusers()
+    token = issue_token(uid)
+    notice = ""
+    synced = False
+    if cloud and cloud.get("ok"):
+        synced = True
+        try:
+            import user_membership
+            store = user_membership.get_user_store(uid)
+            cloud_link.apply_login(store, cloud.get("email") or ident,
+                                   cloud.get("token") or "",
+                                   cloud.get("account") or {}, fp, name)
+        except Exception as e:  # noqa: BLE001 — 权益落地失败不影响登录本身
+            logging.getLogger("vdl.auth").warning("云端权益落地失败: %s", e)
+            notice = "已登录，但会员权益同步失败，可稍后在个人中心刷新"
+        if cloud.get("evicted"):
+            ev = cloud.get("evicted") or []
+            names = "、".join(str(x.get("name") or "未知设备") for x in ev[:2])
+            notice = f"已占满 2 台设备额度，自动退出了最久未使用的设备（{names}）"
+    elif cloud is not None:
+        notice = "授权中心暂时不可达，本次按本机账号登录；会员权益可能不是最新"
+    record_event("register" if registered else "login", {"identifier": ident})
+    return {"ok": True, "token": token, "user_id": uid, "identifier": ident,
+            "is_admin": bool(user_is_admin(uid)),
+            "registered": bool(registered),
+            "cloud_synced": synced,
+            "cloud_notice": notice}
+
+
 @router.post("/api/auth/register")
-def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def auth_register(request: Request, response: Response,
+                  payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """注册。账号权威在授权中心 —— 云端注册成功后在本机落镜像账号。
+
+    云端说「已存在」→ 用同一密码试云端登录（用户多半以前在 App 注册过）；
+    云端不可达 → 退回纯本机注册（带 cloud_notice，账号暂不跨端）。
+    """
     ident = str(payload.get("identifier") or "").strip().lower()
     pw = str(payload.get("password") or "")
     if not ident:
@@ -89,30 +169,79 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return {"ok": False, "error": "账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号"}
     if len(pw) < 6:
         return {"ok": False, "error": "密码至少 6 位"}
-    from auth_store import create_user, issue_token, ensure_superusers, user_is_admin
+
+    from auth_store import create_user, user_is_admin
+    cloud, fp, name = _cloud_login_or_register(request, response, ident, pw, True)
+
+    if cloud and cloud.get("ok"):
+        uid = cloud_link.mirror_local_account(ident, pw)
+        if not uid:
+            return {"ok": False, "error": "本机账号写入失败，请重试"}
+        return _finish_login(request, uid, ident, cloud, fp, name, registered=True)
+
+    if cloud is not None and str(cloud.get("code")) == "EXISTS":
+        # 云端已有该账号 → 用同一密码登录，成功后本机落镜像（老用户不该被卡住）
+        relogin = cloud_link.try_login(ident, pw, fp, name)
+        if relogin.get("ok"):
+            uid = cloud_link.mirror_local_account(ident, pw)
+            if uid:
+                return _finish_login(request, uid, ident, relogin, fp, name)
+        return {"ok": False, "error": "该账号已注册，请直接登录"}
+
+    if cloud is not None and str(cloud.get("code")) in (
+            "CLOUD_UNREACHABLE", "NO_SECRET", "NO_DEVICE"):
+        # 云端不可用 → 本机注册兜底（离线可用；跨端要等云端恢复后首次登录自愈）
+        uid = create_user(ident, pw)
+        if not uid:
+            return {"ok": False, "error": "该账号已注册，请直接登录"}
+        res = _finish_login(request, uid, ident, None, fp, name, registered=True)
+        res["cloud_notice"] = "授权中心暂时不可达，账号已在本机创建；联网后登录会自动并入账号"
+        res["cloud_synced"] = False
+        return res
+
+    if cloud is not None:
+        return {"ok": False, "error": cloud.get("error") or "注册失败",
+                "code": cloud.get("code") or "REJECTED"}
+
+    # 云端联动被显式关闭（VDL_CLOUD_LINK=0）→ 纯本机注册（排障/离线测试用）
     uid = create_user(ident, pw)
     if not uid:
         return {"ok": False, "error": "该账号已注册，请直接登录"}
-    ensure_superusers()
-    record_event("register", {"identifier": ident})
-    return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
-            "is_admin": bool(user_is_admin(uid))}
+    res = _finish_login(request, uid, ident, None, "", "", registered=True)
+    res["cloud_synced"] = False
+    res["cloud_notice"] = "本机模式：账号未同步到云端（VDL_CLOUD_LINK=0）"
+    return res
 
 
 @router.post("/api/auth/login")
-def auth_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def auth_login(request: Request, response: Response,
+               payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """登录。云端优先（账号权威）→ 本机镜像兜底（离线也能登）。"""
     ident = str(payload.get("identifier") or "").strip().lower()
     pw = str(payload.get("password") or "")
     if not ident or not pw:
         return {"ok": False, "error": "请输入账号和密码"}
-    from auth_store import authenticate, issue_token, ensure_superusers, user_is_admin
-    uid = authenticate(ident, pw)
+
+    from auth_store import authenticate
+    cloud, fp, name = _cloud_login_or_register(request, response, ident, pw, False)
+
+    uid = authenticate(ident, pw)                    # 本机镜像 / 离线兜底
+    if not uid and cloud and cloud.get("ok"):
+        # 云端认了但本机没有这个号（如 App 注册、或网页版首次登录）→ 落镜像
+        uid = cloud_link.mirror_local_account(ident, pw)
     if not uid:
-        return {"ok": False, "error": "账号或密码错误"}
-    ensure_superusers()
-    record_event("login", {"identifier": ident})
-    return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
-            "is_admin": bool(user_is_admin(uid))}
+        # 公网错误文案保持模糊（防账号枚举）；只有封禁这类必须告知的才照实回
+        code = str((cloud or {}).get("code") or "")
+        if code == "ACCOUNT_BANNED":
+            return {"ok": False, "error": (cloud or {}).get("error") or "账号已被停用",
+                    "code": "ACCOUNT_BANNED"}
+        if code == "CLOUD_UNREACHABLE":
+            return {"ok": False,
+                    "error": "账号或密码错误（授权中心暂时不可达，可稍后重试）",
+                    "code": "BAD_CREDENTIALS"}
+        return {"ok": False, "error": "账号或密码错误", "code": "BAD_CREDENTIALS"}
+
+    return _finish_login(request, uid, ident, cloud, fp, name)
 
 
 @router.get("/api/auth/me")
@@ -121,8 +250,17 @@ def auth_me(request: Request) -> dict[str, Any]:
     if not uid:
         return {"ok": False, "error": "未登录", "code": "NO_AUTH"}
     from auth_store import user_identifier, user_is_admin
-    return {"ok": True, "user_id": uid, "identifier": user_identifier(uid) or uid,
-            "is_admin": bool(user_is_admin(uid))}
+    out: dict[str, Any] = {"ok": True, "user_id": uid,
+                           "identifier": user_identifier(uid) or uid,
+                           "is_admin": bool(user_is_admin(uid))}
+    # 云端账号快照（设备/被挤/封禁状态）——前端据此提示「已在其他设备登录」
+    try:
+        import user_membership
+        out["account"] = user_membership.get_user_store(uid).account_view()
+        out["cloud_linked"] = cloud_link.link_enabled()
+    except Exception:  # noqa: BLE001 — 老数据/异常不影响登录态查询
+        pass
+    return out
 
 
 @router.get("/api/account/profile")
@@ -140,6 +278,11 @@ def account_profile(request: Request, usage_period: str = "today") -> dict[str, 
     from auth_store import user_identifier, user_is_admin, _load_users
     ident = user_identifier(uid) or uid
     store = user_membership.get_user_store(uid)
+    # 个人中心是看会员/积分的正主 → 先与云端权威对齐（节流 60s）
+    try:
+        cloud_link.refresh_authority(store)
+    except Exception:  # noqa: BLE001 — 云端异常不影响个人中心其余内容
+        pass
     st = store.status()
     raw_hist = (store._state.get("meta", {}) or {}).get("history", [])
     purchases: list[dict] = []
@@ -247,7 +390,21 @@ def auth_change_password(request: Request, payload: dict[str, Any] = Body(...)) 
         return {"ok": False, "error": "当前密码错误"}
     reset_password(ident, new)
     record_event("change_pw", {"identifier": ident})
-    return {"ok": True}
+    # 新密码同步到授权中心（否则两端密码分叉：网页版改完，App 那边还是旧密码）
+    synced = True
+    try:
+        import user_membership
+        sess = user_membership.get_user_store(uid).cloud_session()
+        r = cloud_link.push_password(ident, new, old_password=cur,
+                                     token=str(sess.get("token") or ""))
+        synced = bool(r.get("ok")) and bool(r.get("synced", True))
+    except Exception as e:  # noqa: BLE001 — fail-open：本机已改成功，不能回滚
+        logging.getLogger("vdl.auth").warning("改密同步云端失败: %s", e)
+        synced = False
+    out: dict[str, Any] = {"ok": True, "cloud_synced": synced}
+    if not synced:
+        out["notice"] = "本机密码已修改；云端账号暂时没同步上，下次登录会用新密码自动补齐"
+    return out
 
 
 @router.post("/api/account/deactivate")
@@ -312,4 +469,23 @@ def auth_reset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not reset_password(ident, pw):
         return {"ok": False, "error": "该账号不存在，无法重置"}
     record_event("reset_pw", {"identifier": ident})
-    return {"ok": True}
+    # 重置后的新密码同步到授权中心：此时已无原密码，只能靠该账号上次登录留下的
+    # 云端 token 自证身份（见 license_server.password_impl 的鉴权二选一）。
+    synced = True
+    try:
+        from auth_store import authenticate
+        uid = authenticate(ident, pw)
+        if uid:
+            import user_membership
+            sess = user_membership.get_user_store(uid).cloud_session()
+            r = cloud_link.push_password(ident, pw, token=str(sess.get("token") or ""))
+            synced = bool(r.get("ok")) and bool(r.get("synced", True))
+        else:
+            synced = False
+    except Exception as e:  # noqa: BLE001 — fail-open
+        logging.getLogger("vdl.auth").warning("重置密码同步云端失败: %s", e)
+        synced = False
+    out: dict[str, Any] = {"ok": True, "cloud_synced": synced}
+    if not synced:
+        out["notice"] = "密码已重置；云端账号未同步（需先在网页版或 App 登录一次即可自动对齐）"
+    return out

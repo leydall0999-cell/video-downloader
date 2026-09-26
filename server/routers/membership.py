@@ -35,9 +35,27 @@ def member_plans() -> dict[str, Any]:
 
 @router.get("/api/member/status")
 def member_status(request: Request) -> dict[str, Any]:
-    """当前会员状态：下载/AI 双轨、积分余额、今日配额用量。兼容匿名（返回免费态）。"""
-    s = _store(request).status()
-    s["anonymous"] = _require_user(request) is None
+    """当前会员状态：下载/AI 双轨、积分余额、今日配额用量。兼容匿名（返回免费态）。
+
+    已登录时先用**云端权威快照**校准本机权益（节流 60s，见 cloud_link.refresh_authority）：
+    web 版与 App 从此看到的是同一份会员/积分；被挤下设备或账号被封禁也会即时降级。
+    """
+    store = _store(request)
+    uid = _require_user(request)
+    cloud: dict[str, Any] = {}
+    if uid:
+        try:
+            import cloud_link
+            cloud = cloud_link.refresh_authority(store)
+        except Exception:  # noqa: BLE001 — 云端异常绝不能拖垮状态查询
+            cloud = {"ok": False, "reason": "error"}
+    s = store.status()
+    s["anonymous"] = uid is None
+    if cloud:
+        s["cloud"] = {"ok": bool(cloud.get("ok")),
+                      "skipped": str(cloud.get("skipped") or ""),
+                      "code": str(cloud.get("code") or ""),
+                      "reason": str(cloud.get("reason") or "")}
     return s
 
 

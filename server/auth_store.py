@@ -392,6 +392,23 @@ def authenticate(identifier: str, password: str) -> Optional[str]:
     return None
 
 
+def user_exists(identifier: str) -> bool:
+    """账号是否存在于本机账号表（已注销的不算）。
+
+    用途：web 版登录/镜像时判断「本机有没有这个号」，以及本机回环调用方的错误提示
+    区分（「密码不正确」vs「账号不存在」）。公网调用方**不得**据此区分（账号枚举）。
+    """
+    ident = _normalize(identifier)
+    if not ident:
+        return False
+    data = _load_users()
+    uid = data["by_identifier"].get(ident)
+    if not uid:
+        return False
+    return any(u.get("user_id") == uid and not u.get("deleted_at")
+               for u in data.get("users", []))
+
+
 def user_identifier(user_id: str) -> Optional[str]:
     data = _load_users()
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)

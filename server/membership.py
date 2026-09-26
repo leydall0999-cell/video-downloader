@@ -302,6 +302,154 @@ class MembershipStore:
     def _now(self) -> float:
         return self.now_fn()
 
+    # ---- 云端账号状态（2026-09-26：web 版账号接授权中心）------------------
+    # 本机 store 从此同时承载「登录态 + 权益缓存」：账号与会话的权威在授权中心，
+    # 这里只做落地与离线兜底；云端 authority 快照一联网即覆盖本地（防篡改）。
+    def save_account(self, email: str, token: str, account: Optional[dict] = None,
+                     fp: str = "", name: str = "") -> dict[str, Any]:
+        """记录登录态（云端 token / 邮箱 / 设备号），清掉 evicted 标记。"""
+        self._ensure_loaded()
+        meta = self._state.setdefault("meta", {})
+        acc = meta.setdefault("account", {})
+        acc.update({
+            "email": (email or "").strip().lower(),
+            "token": token or "",
+            "fp": fp or acc.get("fp", ""),
+            "name": name or acc.get("name", ""),
+            "evicted": False,
+            "logged_in": bool(token),
+            "last_sync": self._now(),
+        })
+        if isinstance(account, dict):
+            acc["devices"] = account.get("devices") or []
+            acc["max_devices"] = int(account.get("max_devices") or 2)
+        if "purchases_applied" not in acc:
+            acc["purchases_applied"] = []
+        self._persist()
+        return {"ok": True}
+
+    def clear_account(self) -> dict[str, Any]:
+        """登出：只清登录态，**保留已购权益**（换机重装权益要跟着账号走）。"""
+        self._ensure_loaded()
+        acc = self._state.setdefault("meta", {}).setdefault("account", {})
+        acc.update({"token": "", "email": acc.get("email", ""), "logged_in": False,
+                    "evicted": False, "devices": [], "last_sync": 0.0})
+        self._persist()
+        return {"ok": True}
+
+    def set_evicted(self, evicted: bool) -> None:
+        """被其他设备挤出 → status() 立即降级免费档（不删数据）。"""
+        self._ensure_loaded()
+        acc = self._state.setdefault("meta", {}).setdefault("account", {})
+        acc["evicted"] = bool(evicted)
+        self._persist()
+
+    def account_view(self) -> dict[str, Any]:
+        """给前端的账号快照（**不吐 token**）。"""
+        self._ensure_loaded()
+        acc = (self._state.get("meta") or {}).get("account") or {}
+        return {
+            "logged_in": bool(acc.get("token")),
+            "email": acc.get("email", ""),
+            "device_fp": acc.get("fp", ""),
+            "device_name": acc.get("name", ""),
+            "devices": acc.get("devices") or [],
+            "max_devices": int(acc.get("max_devices") or 2),
+            "evicted": bool(acc.get("evicted")),
+            "banned": bool(acc.get("banned")),
+            "last_sync": float(acc.get("last_sync") or 0),
+        }
+
+    def cloud_session(self) -> dict[str, Any]:
+        """内部用：云端会话（含 token，**不可下发给前端**）。"""
+        self._ensure_loaded()
+        acc = (self._state.get("meta") or {}).get("account") or {}
+        return {"email": acc.get("email", ""), "token": acc.get("token", ""),
+                "fp": acc.get("fp", ""), "name": acc.get("name", "")}
+
+    def apply_cloud_purchases(self, purchases: list[dict[str, Any]],
+                              via: str = "license") -> dict[str, Any]:
+        """按 purchase id **幂等**把云端购买记录落户（老服务端无 authority 快照时的兜底）。"""
+        self._ensure_loaded()
+        acc = self._state.setdefault("meta", {}).setdefault("account", {})
+        applied = acc.setdefault("purchases_applied", [])
+        if not isinstance(applied, list):
+            applied = acc["purchases_applied"] = []
+        out_applied: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for p in (purchases or []):
+            if not isinstance(p, dict):
+                continue
+            pid = str(p.get("id") or "").strip()
+            plan_code = str(p.get("plan_code") or "").strip()
+            if not pid or not plan_code or pid in applied:
+                continue
+            res = self.activate(plan_code, via=via)
+            if res.get("ok"):
+                applied.append(pid)
+                out_applied.append(plan_code)
+            else:
+                errors.append({"id": pid, "plan_code": plan_code,
+                               "error": res.get("error") or "未知错误"})
+        acc["purchases_applied"] = applied[-500:]
+        self._persist()
+        return {"ok": not errors, "applied": out_applied, "errors": errors}
+
+    def apply_cloud_authoritative(self, acct: dict[str, Any]) -> dict[str, Any]:
+        """云端权威对账：用授权中心的权益快照**覆盖**本地（只认快照 v>=1）。
+
+        与 apply_cloud_purchases（幂等追加、只加不减）的本质区别：本地文件里的
+        expire_at / credits_left / permanent_credits 被手改（或走了别的后门）后，
+        一联网同步就被云端真值覆盖回滚。封禁标记落 meta.account.banned。
+        """
+        self._ensure_loaded()
+        auth = (acct or {}).get("authority") or {}
+        if not isinstance(auth, dict) or int(auth.get("v") or 0) < 1:
+            return {"ok": False, "reason": "no_authority"}
+        now = self._now()
+        st = self._state
+        dl = st["download_member"]
+        ai = st["ai_member"]
+
+        dl_until = float(auth.get("member_until_dl") or 0)
+        dl["expire_at"] = dl_until
+        dl["active"] = dl_until > now
+        if not dl["active"]:
+            dl["plan"] = None
+
+        ai_until = float(auth.get("member_until_ai") or 0)
+        ai_active = ai_until > now
+        ai["expire_at"] = ai_until
+        ai["active"] = ai_active
+        if ai_active:
+            ai["credits_left"] = max(0, int(auth.get("ai_credits_left") or 0))
+            if not ai.get("plan"):
+                ai["plan"] = "cloud_ai"
+        else:
+            ai["plan"] = None
+            ai["credits_left"] = 0        # AI 订阅积分随订阅失效清零
+
+        st["permanent_credits"]["total"] = max(0, int(auth.get("perm_credits") or 0))
+
+        acc = st.setdefault("meta", {}).setdefault("account", {})
+        acc["banned"] = bool(auth.get("banned"))
+        st["meta"]["last_authority_sync"] = now
+        self._persist()
+        return {"ok": True, "banned": bool(auth.get("banned")),
+                "download_until": dl_until, "ai_until": ai_until,
+                "perm_credits": int(st["permanent_credits"]["total"]),
+                "ai_credits_left": int(ai.get("credits_left", 0))}
+
+    def _account_lock(self) -> Optional[str]:
+        """账号级锁（封禁 / 被挤下设备）→ 展示与判定层降级为免费档。"""
+        self._ensure_loaded()
+        acc = (self._state.get("meta") or {}).get("account") or {}
+        if acc.get("banned"):
+            return "ACCOUNT_BANNED"
+        if acc.get("evicted"):
+            return "DEVICE_EVICTED"
+        return None
+
     # ---- 公开查询 ----
     def status(self) -> dict[str, Any]:
         """当前会员状态（惰性判定过期、惰性日切配额）。返回公开 dict。"""
@@ -329,7 +477,7 @@ class MembershipStore:
         # 惰性日切
         self._roll_daily(now)
 
-        return {
+        out = {
             "download_member": {
                 "active": dl_active,
                 "plan": dl.get("plan") if dl.get("active") else (ai.get("plan") if ai.get("active") else None),
@@ -347,6 +495,18 @@ class MembershipStore:
             "credits_total": int(ai.get("credits_left", 0)) + int(st["permanent_credits"].get("total", 0)),
             "daily_usage": dict(st["daily_usage"]),
         }
+
+        # 账号级锁：封禁 / 被其他设备挤下 → 整体降级免费档（数据保留）
+        lock = self._account_lock()
+        if lock:
+            out["download_member"]["active"] = False
+            out["download_member"]["plan"] = None
+            out["download_member"]["source"] = None
+            out["ai_member"]["active"] = False
+            out["ai_member"]["credits_left"] = 0
+            out["account_locked"] = lock
+        out["account"] = self.account_view()
+        return out
 
     def plans(self) -> dict[str, Any]:
         """套餐表（价格/时长/权益），供前端购买中心展示。
@@ -434,7 +594,11 @@ class MembershipStore:
 
     # ---- 积分 ----
     def spend_credits(self, amount: int, reason: str = "ai_usage") -> dict[str, Any]:
-        """消耗积分：先 AI 订阅积分（快过期），后永久积分。不足则拒绝。"""
+        """消耗积分：先 AI 订阅积分（快过期），后永久积分。不足则拒绝。
+
+        2026-09-26 打通后：扣减成功即异步上报授权中心记账（cloud_link.report_spend_async），
+        否则网页版花掉的积分会在下次云端权威同步时被「涨回来」（本地只是缓存）。
+        """
         if amount <= 0:
             return {"ok": False, "error": "amount 必须为正"}
         self._ensure_loaded()
@@ -446,22 +610,34 @@ class MembershipStore:
             return {"ok": False, "error": f"积分不足：需要 {amount}，当前 {ai_left + perm_total}"}
 
         remaining = amount
+        ai_taken = 0
         # 1) AI 订阅积分
         if remaining > 0 and ai_left > 0:
             take = min(ai_left, remaining)
             ai["credits_left"] = ai_left - take
             remaining -= take
+            ai_taken = take
         # 2) 永久积分
+        perm_taken = 0
         if remaining > 0:
             perm_total -= remaining
             st["permanent_credits"]["total"] = perm_total
+            perm_taken = amount - ai_taken
             remaining = 0
         st["meta"].setdefault("history", []).append({
             "type": "spend", "amount": amount, "reason": reason, "at": self._now(),
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]
         self._persist()
+        # 异步上云记账（fire-and-forget；失败/离线进 pending 队列，下次心跳补报）
+        try:
+            import cloud_link
+            cloud_link.report_spend_async(self, amount=amount, ai_taken=ai_taken,
+                                          perm_taken=perm_taken, reason=reason)
+        except Exception:  # noqa: BLE001 — 上云失败绝不影响本地扣减结果
+            pass
         return {"ok": True, "spent": amount, "reason": reason,
+                "ai_taken": ai_taken, "perm_taken": perm_taken,
                 "credits_left": self.status()["credits_total"]}
 
     def add_credits(self, delta: int, reason: str = "admin_adjust") -> dict[str, Any]:
