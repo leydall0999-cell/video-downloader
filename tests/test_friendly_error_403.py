@@ -4,7 +4,8 @@
   A. 强反爬站（douyin/v.qq.com 等）无 Cookie  → category=cookie_required
   B. 强反爬站 有 Cookie 但被拒        → category=cookie_invalid_or_expired
   C. 非 hardened 站（YouTube/bilibili）→ category=cdn_forbidden
-  D. 非 403 错误（private/geo）        → 走既有规则，category 默认 unknown
+  D. 非 403 错误（private/geo）        → 走既有规则；private/members-only 归 cookie_required
+                                          （私密=需访问权限，引导提供 Cookie），geo 归 restricted
 """
 import os
 import sys
@@ -80,10 +81,11 @@ def test_bilibili_short_link_403_has_bilibili_hint():
     assert "B站" in err.hint
 
 
-def test_non_403_private_video_keeps_unknown_category():
+def test_non_403_private_video_is_cookie_required():
+    # web 版语义：private/members-only 归为 cookie_required（私密=需访问权限，引导提供 Cookie）
     exc = _FakeExc("This video is private")
     err = downloader._friendly_error(exc)
-    assert err.category == "unknown"
+    assert err.category == "cookie_required"
     assert "私密" in err.message or "登录" in err.message
 
 
@@ -101,6 +103,6 @@ if __name__ == "__main__":
     test_youtube_403_is_cdn_forbidden()
     test_bilibili_403_is_cdn_forbidden()
     test_bilibili_short_link_403_has_bilibili_hint()
-    test_non_403_private_video_keeps_unknown_category()
+    test_non_403_private_video_is_cookie_required()
     test_no_context_returns_cdn_forbidden_fallback_for_403()
     print("✅ 全部 403 诊断分层测试通过")
