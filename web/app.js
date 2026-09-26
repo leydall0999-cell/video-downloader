@@ -1533,7 +1533,9 @@
         || lower.includes('networkerror') || lower.includes('network error')) {
       return {
         message: '连接本地服务失败',
-        hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。'
+        // 2026-09-26：这把"万能烟雾弹"已三次误导排障（真实原因各不相同却都显示同一句）。
+        // 必须把 WebKit 原始错误透传出来，否则永远无法定位是断连/中止/其它。
+        hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。（原始错误：' + String(msg || '(空)') + '）'
       };
     }
     return null;
