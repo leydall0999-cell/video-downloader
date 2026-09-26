@@ -173,6 +173,12 @@ run_one test_cloud_account.py
 #                                      ②云端本无此账号不算失败 ③下次登录时自愈（须本机密码对
 #                                      **且**持该账号的云端 token，防越权改他人密码）
 run_one test_password_sync.py
+#  22. test_system_changelog.py     —— 「关于本应用」的内置更新日志（2026-09-26 新增）：
+#                                      不再依赖线上更新源（线上长期停在旧版会让面板只显示
+#                                      旧版说明）：结构与版本降序、仓库 VERSION 必须在日志里
+#                                      命中（漏写则退回兜底文案）、未命中时优雅降级、
+#                                      端点免登录可用（未登录也要能看更新内容）
+run_one test_system_changelog.py
 
 echo ""
 echo "========================================="

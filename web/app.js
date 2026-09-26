@@ -282,6 +282,7 @@
     profChangelogTitle: $('profChangelogTitle'),
     profChangelogDate: $('profChangelogDate'),
     profChangelogList: $('profChangelogList'),
+    profChangelogHistory: $('profChangelogHistory'),
     profCheckUpdateBtn: $('profCheckUpdateBtn'),
     profErrorReportBtn: $('profErrorReportBtn'),
     profAboutMsg: $('profAboutMsg'),
@@ -17845,6 +17846,7 @@ el.dwVidPlayer.hidden = true;
   let _aboutUpdatable = true;
   let _aboutLatest = null;
   let _aboutCurrentVer = '';
+  let _aboutChangelog = null;
 
   async function loadAboutPanel() {
     if (!el.profileAboutPanel) return;
@@ -17857,6 +17859,8 @@ el.dwVidPlayer.hidden = true;
     if (el.profAboutBuild) el.profAboutBuild.textContent = build ? ('构建：' + build) : '';
     _aboutUpdatable = !!(info && info.updatable);
     await _checkForUpdate();
+    // 内置更新日志：与线上更新源无关，离线也能看到本机版本改了什么（2026-09-26）
+    await _loadAboutChangelog();
   }
 
   async function _checkForUpdate() {
@@ -17866,12 +17870,9 @@ el.dwVidPlayer.hidden = true;
     try { data = await request('/api/system/latest'); } catch (_) { data = null; }
     if (!data || !data.ok) {
       el.profUpdateBanner.hidden = true;
-      _renderChangelog(null);
       return;
     }
     _aboutLatest = data.latest || {};
-    // 更新内容：无论有没有新版都渲染出来——用户点「检查更新」就是要知道改了什么
-    _renderChangelog(data);
     if (!data.update_available) {
       el.profUpdateBanner.hidden = true;
       return;
@@ -17918,36 +17919,84 @@ el.dwVidPlayer.hidden = true;
    *   已是最新     → 「版本 vX 更新内容」（点检查更新也能看到改了什么）
    *   刚更新完回来 → 「本次更新已完成（vX）」，优先展示更新时缓存下来的条目
    */
-  function _renderChangelog(data) {
+  async function _loadAboutChangelog() {
+    try {
+      _aboutChangelog = await request('/api/system/changelog');
+    } catch (_) {
+      _aboutChangelog = null;
+    }
+    _renderChangelog();
+  }
+
+  function _renderChangelog() {
     const box = el.profChangelog;
     const list = el.profChangelogList;
     if (!box || !list) return;
-    const latest = (data && data.latest) || {};
-    const ver = latest.version || '';
-    let items = _changelogItems(latest);
-    const isNew = !!(data && data.update_available);
     const cur = _aboutCurrentVer || '';
-    let title = ver ? ('版本 v' + ver + ' 更新内容') : '更新内容';
-    if (isNew) title = '新版本 v' + ver + ' 更新内容';
-    // 更新源版本与本机不一致（通常是更新源还没发到本机版本）时不要写成「当前版本」误导
-    else if (ver && cur && ver !== cur) title = '最新发布版本 v' + ver + ' 更新内容';
+    const data = _aboutChangelog || {};
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    const hit = entries.find((e) => e && e.version === cur) || null;
+    let items = (hit && Array.isArray(hit.items)) ? hit.items.slice() : [];
+    let title = cur ? ('当前版本 v' + cur + ' 更新内容') : '更新内容';
+    let dateText = (hit && hit.date) || '';
+    // 刚更新完回来：更新时缓存下来的条目最贴合「这次装进来的改动」
     const cached = _cachedUpdateNotes();
-    if (!isNew && cached && cached.version && cur && cached.version === cur) {
+    if (cached && cached.version && cur && cached.version === cur &&
+        cached.items && cached.items.length) {
       title = '本次更新已完成（v' + cur + '）';
-      if (cached.items && cached.items.length) items = cached.items;
+      items = cached.items.slice();
     }
-    if (!items.length && !ver) { box.hidden = true; return; }
+    // 内置日志尚未登记当前版本（例如刚 bump 版本号）：退回线上清单，避免区块空白
+    if (!items.length) {
+      const latest = (_aboutLatest && _aboutLatest.version) ? _aboutLatest : null;
+      const fb = _changelogItems(latest || {});
+      if (fb.length) {
+        title = '最新发布版本 v' + latest.version + ' 更新内容';
+        dateText = latest.published_at || '';
+        items = fb;
+      }
+    }
+    if (!items.length) { box.hidden = true; return; }
     if (el.profChangelogTitle) el.profChangelogTitle.textContent = title;
-    if (el.profChangelogDate) {
-      el.profChangelogDate.textContent = latest.published_at ? ('发布于 ' + latest.published_at) : '';
-    }
-    if (!items.length) items = ['本次更新以优化与问题修复为主。'];
+    if (el.profChangelogDate) el.profChangelogDate.textContent = dateText;
     list.replaceChildren(...items.map((t) => {
       const li = document.createElement('li');
       li.textContent = t;
       return li;
     }));
+    _renderChangelogHistory(entries, cur);
     box.hidden = false;
+  }
+
+  /** 历史版本条目（当前版本之外的全部），放进可滚动容器。 */
+  function _renderChangelogHistory(entries, currentVer) {
+    const hist = el.profChangelogHistory;
+    if (!hist) return;
+    const rest = (entries || []).filter((e) => e && e.version && e.version !== currentVer);
+    if (!rest.length) { hist.hidden = true; return; }
+    hist.replaceChildren(...rest.map((e) => {
+      const group = document.createElement('div');
+      group.className = 'pf-changelog-group';
+      const head = document.createElement('div');
+      head.className = 'pf-changelog-group-head';
+      const ver = document.createElement('span');
+      ver.className = 'pf-changelog-group-ver';
+      ver.textContent = 'v' + e.version;
+      const date = document.createElement('span');
+      date.className = 'pf-changelog-group-date';
+      date.textContent = e.date || '';
+      head.append(ver, date);
+      const ul = document.createElement('ul');
+      ul.className = 'pf-changelog-list';
+      ul.replaceChildren(...(e.items || []).map((t) => {
+        const li = document.createElement('li');
+        li.textContent = t;
+        return li;
+      }));
+      group.append(head, ul);
+      return group;
+    }));
+    hist.hidden = false;
   }
 
   /** 最近一次成功更新时缓存的更新内容（更新完成重启后仍能回看「这次改了什么」）。 */
@@ -18106,6 +18155,7 @@ el.dwVidPlayer.hidden = true;
   if (el.profCheckUpdateBtn) el.profCheckUpdateBtn.addEventListener('click', async () => {
     _aboutMsg('正在检查更新…');
     await _checkForUpdate();
+    await _loadAboutChangelog();
     if (el.profUpdateBanner && !el.profUpdateBanner.hidden) _aboutMsg('发现新版本，更新内容见下方');
     else _aboutMsg('已是最新版本，更新内容见下方');
     setTimeout(() => _aboutMsg(''), 3000);

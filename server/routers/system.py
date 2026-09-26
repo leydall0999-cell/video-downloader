@@ -418,6 +418,19 @@ def system_latest() -> dict[str, Any]:
     }
 
 
+@router.get("/api/system/changelog")
+def system_changelog() -> dict[str, Any]:
+    """内置更新日志（2026-09-26）。
+
+    不再依赖线上更新源读「更新内容」：线上长期停在 v1.0.18，导致本机 v1.0.25
+    只能显示 1.0.18 的说明。改由随包内置的 changelog 提供，离线也有内容，
+    并标出哪一条对应当前版本（version 与仓库 VERSION 一致者）。
+    """
+    from changelog import build_payload  # noqa: PLC0415 —— 同目录模块，避免导入期耦合
+
+    return build_payload(VERSION)
+
+
 @router.post("/api/system/update")
 def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # 更新涉及磁盘写入与进程派生，限定已登录用户触发

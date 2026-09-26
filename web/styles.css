@@ -5014,8 +5014,8 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
   transition: background .15s;
 }
 .pf-update-btn:hover { background: #15803d; }
-/* 更新内容（2026-09-26）：关于面板里始终展示线上版本的更新条目，
-   已是最新时也能看到「这个版本改了什么」，更新完成后回看「本次更新内容」。 */
+/* 更新内容（2026-09-26）：关于面板展示随包内置的更新日志（离线可看），
+   当前版本条目在上，历史版本收进下方可滚动区；更新完成后仍可回看本次内容。 */
 .pf-changelog {
   margin: .5rem 0 1rem; padding: .8rem .95rem; border-radius: 12px;
   background: var(--surface-2, #f7f8fc); border: 1px solid var(--line, #e6e8f0);
@@ -5029,7 +5029,23 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .pf-changelog-list { margin: 0; padding-left: 1.15rem; }
 .pf-changelog-list li { font-size: .8rem; line-height: 1.8; color: var(--text, #374151); }
 .pf-changelog-list li::marker { color: var(--brand, #4f46e5); }
+/* 历史版本区：版本倒序，超长时可滚动（不用 flex gap —— 旧 WKWebView 不保证支持） */
+.pf-changelog-history {
+  margin-top: .6rem; padding-top: .6rem;
+  border-top: 1px dashed var(--line, #e6e8f0);
+  max-height: 13rem; overflow-y: auto;
+}
+.pf-changelog-group + .pf-changelog-group { margin-top: .7rem; }
+.pf-changelog-group-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: .2rem;
+}
+.pf-changelog-group-ver { font-size: .76rem; font-weight: 600; color: var(--text, #4b5563); }
+.pf-changelog-group-date { font-size: .7rem; color: var(--text-mute, #94a3b8); margin-left: .6rem; flex: none; }
+.pf-changelog-history .pf-changelog-list li { font-size: .76rem; line-height: 1.7; color: var(--text-mute, #64748b); }
+.pf-changelog-history .pf-changelog-list li::marker { color: var(--text-mute, #cbd5e1); }
 html.theme-dark .pf-changelog { background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .1); }
+html.theme-dark .pf-changelog-history { border-top-color: rgba(255, 255, 255, .1); }
 .pf-update-btn:disabled { opacity: .6; cursor: default; }
 .pf-about-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 /* 错误上报弹窗 */
