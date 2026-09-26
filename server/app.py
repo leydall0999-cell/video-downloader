@@ -27,6 +27,7 @@ import sys
 import shutil
 import subprocess
 import threading
+import urllib.error
 import urllib.request
 import atomic_io
 import requests  # 解说 worker HTTP 模式客户端（VDL_COMMENTARY_MODE=http 时用到）
@@ -42,6 +43,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.concurrency import run_in_threadpool
 from fastapi import File as _FastAPIFile, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1722,6 +1724,139 @@ async def _no_cache_frontend(request: Request, call_next):
         resp.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
     return resp
 logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
+
+
+# ---- 海外请求兜底转发（2026-09-27）--------------------------------------- #
+# 背景：双节点模式下，海外站（YouTube 等）的解析/下载请求本应由**浏览器直连**
+# 海外对端（见 web/app.js 的 baseFor()）。但页面一旦长期不关，内存里的
+# node.peer 会停留在「当时」的认知 —— 服务器侧后来才配上对端时，老页面仍以为
+# 自己是「本机直连」，于是把 YouTube 请求发给国内节点。国内节点到不了 YouTube
+# （TLS SNI 被重置），用户只看到 `[Errno 104] Connection reset by peer`
+# 这种既看不懂、也解决不了的错误（2026-09-27 用户报障的原始现象）。
+#
+# 前端修复（web-dev 30ef052：对端落盘 / 定期刷新 / 失败自愈）只能救
+# **重新加载过**的页面；已经开着的旧标签页无论如何都救不了 —— 唯一的办法是
+# 节点侧兜底：判定为海外站就把请求原样转发给对端，把对端响应原样回给浏览器。
+# 这样旧页面无需知道对端存在也能正常工作。
+#
+# 只在国内节点（VDL_REGION=cn 且有 VDL_PEER_ENDPOINT）生效，单节点部署零影响。
+_PEER_FWD_POST_PATHS = ("/api/resolve", "/api/download", "/api/batch")
+_PEER_FWD_TASK_PREFIX = "/api/tasks/"
+# 这两类响应不能缓冲：大文件（几十 MB）与 SSE 事件流。只回 307，让浏览器
+# 直连对端取件 —— 顺带避免把视频流经国内节点中转（跨境带宽翻倍）。
+_PEER_FWD_REDIRECT_SUFFIX = ("/file", "/events")
+
+
+def _urls_in_body(raw: bytes) -> list[str]:
+    """从请求体里取出待处理的链接（/api/resolve 的 url、/api/batch 的 urls）。"""
+    try:
+        data = json.loads(raw.decode("utf-8", "ignore") or "{}")
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    out: list[str] = []
+    for key in ("url", "urls"):
+        val = data.get(key)
+        if isinstance(val, str):
+            out.append(val)
+        elif isinstance(val, list):
+            out.extend([v for v in val if isinstance(v, str)])
+    return out
+
+
+def _has_overseas_url(raw: bytes) -> bool:
+    """请求体里是否含「非国内站」链接（决定是否该转给海外对端）。
+
+    判据复用 platforms.is_china_host（与前端 baseFor / 平台清单同一份
+    china_domains，避免两套名单漂移）。任一条海外链接即转发：混合批次转给
+    对端后，国内站由对端按 VDL_WORKER_URL 回派，不会丢任务。
+    """
+    for u in _urls_in_body(raw):
+        try:
+            host = (urlparse(u).hostname or "").lower()
+        except Exception:
+            continue
+        if host and not is_china_host(host):
+            return True
+    return False
+
+
+async def _peer_forward(request: Request, path: str, body: bytes) -> Response:
+    """把当前请求原样转发给海外对端，并原样返回其响应。
+
+    对端挂在 Cloudflare 后面，Python-urllib 默认 UA 会被 CF 规则 1010 拒，
+    故必须伪装浏览器 UA（与 _relay_cookie_to_peer_if_needed 同一处理）。
+    转发失败（对端不可达）返回 502 + 明确 category，绝不再抛「Connection reset」
+    这种用户无法处置的原生异常文案。
+    """
+    target = PEER_ENDPOINT + path
+    if request.url.query:
+        target += "?" + request.url.query
+    if path.endswith(_PEER_FWD_REDIRECT_SUFFIX):
+        # 307 保留方法与查询串；浏览器直连对端取件/订阅事件流
+        return Response(status_code=307, headers={"Location": target,
+                                                  "Cache-Control": "no-store"})
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+    ctype = request.headers.get("content-type")
+    if ctype:
+        headers["Content-Type"] = ctype
+
+    def _do() -> tuple[int, bytes, str]:
+        req = urllib.request.Request(target, data=(body or None), headers=headers,
+                                     method=request.method)
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                return r.status, r.read(), (r.headers.get("Content-Type") or "application/json")
+        except urllib.error.HTTPError as e:      # 解析失败等业务错误：照原样透传
+            return e.code, e.read(), (e.headers.get("Content-Type") or "application/json")
+
+    try:
+        status, payload, media = await run_in_threadpool(_do)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[peer-fwd] %s 转发对端失败: %s", path, str(e)[:160])
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "海外节点暂时不可达",
+                "hint": "海外线路（香港节点）连接失败，请稍后重试；国内平台不受影响。",
+                "category": "peer_unreachable",
+            },
+        )
+    logger.info("[peer-fwd] %s -> %s status=%s", path, PEER_ENDPOINT, status)
+    return Response(content=payload, status_code=status, media_type=media.split(";")[0].strip())
+
+
+@app.middleware("http")
+async def _peer_overseas_fallback(request: Request, call_next):
+    """国内节点兜底：把海外站请求（含旧页面发来的）转给海外对端。
+
+    仅当「本节点是国内节点 + 配了对端」时启用：
+    - POST /api/resolve|/api/download|/api/batch：请求体含非国内站链接 → 转发；
+    - /api/tasks/*：先走本节点，本节点没有该任务（404）则转发 —— 旧页面把对端
+      的 task_id 打到本节点时，进度轮询/删除/暂停照样能用。
+    """
+    if not PEER_ENDPOINT or NODE_REGION != "cn" or request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    if request.method == "POST" and path in _PEER_FWD_POST_PATHS:
+        raw = await request.body()          # 读一次即缓存，call_next 仍拿得到
+        if _has_overseas_url(raw):
+            return await _peer_forward(request, path, raw)
+        return await call_next(request)
+    if path.startswith(_PEER_FWD_TASK_PREFIX):
+        resp = await call_next(request)
+        if resp.status_code == 404:
+            return await _peer_forward(request, path, b"")
+        return resp
+    return await call_next(request)
 
 
 # --------------------------------------------------------------------------- #
