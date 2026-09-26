@@ -633,6 +633,19 @@
     cryptoHasPass: false,
     cryptoLocked: true,
   };
+  // 启动即回填上次已知的对端信息（2026-09-27）。
+  // 背景：`node` 只在本页加载时取一次，页面开着不关就永远停在那一刻的认知。
+  // 若服务器侧后来才配上对端（VDL_PEER_ENDPOINT），老页面仍以为自己是「本机直连」，
+  // 于是把 YouTube 请求发给国内节点 —— 国内节点到不了 YouTube（TLS SNI 被重置），
+  // 用户只看到难懂的 `Connection reset by peer`，而换台机器/新开页面却正常。
+  // 故落盘 + 回填：即便本次 /api/nodes 失败，也不会丢掉对端。
+  try {
+    const cachedPeer = localStorage.getItem('vdl_peer');
+    const cachedRegion = localStorage.getItem('vdl_region');
+    if (cachedPeer) node.peer = cachedPeer;
+    if (cachedRegion) node.region = cachedRegion;
+  } catch (e) { /* 隐私模式可能抛错 */ }
+
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
   /** 最近一个下载完成的任务（供交叉入口「存到网盘」定位；task 结束时 trackers 会移除，故单独留存） */
@@ -3225,15 +3238,26 @@
     const quality = el.batchQuality.value || 'best';
     const concurrency = parseInt(el.batchConcurrency.value, 10) || 3;
     try {
-      const data = await request('/api/batch', {
-        method: 'POST',
-        body: JSON.stringify({ urls, quality, cookie, proxy, concurrency }),
+      // 分流（2026-09-27）：批量里常混着国内站与海外站（如 B站 + YouTube）。
+      // 原实现不带 base，整批都发给本节点 —— 海外站到了国内节点必然失败
+      // （连不上 YouTube）。故按 baseFor 分组，各组提交到各自节点，并用同一 base 跟踪进度。
+      const groups = new Map();
+      urls.forEach((u) => {
+        const b = baseFor(u);
+        if (!groups.has(b)) groups.set(b, []);
+        groups.get(b).push(u);
       });
+      for (const [base, group] of groups) {
+        const data = await request('/api/batch', {
+          method: 'POST',
+          body: JSON.stringify({ urls: group, quality, cookie, proxy, concurrency }),
+        }, base);
+        data.task_ids.forEach((tid) => {
+          const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
+          trackTask(tid, refs, base);
+        });
+      }
       el.alert.hidden = true;
-      data.task_ids.forEach((tid) => {
-        const refs = createTaskCard(tid, { title: '解析中…', platform: '' });
-        trackTask(tid, refs, '');
-      });
       if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
         urls.forEach((u) => contributeCookie(u, cookie));
       }
@@ -3570,11 +3594,28 @@
       setLoading(false);
       return;
     }
+    let useBase = base;
     try {
-      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
+      try {
+        resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, useBase);
+      } catch (error) {
+        // 自愈（2026-09-27）：海外站被误发到国内节点时，国内节点根本连不上目标站
+        // （实测回 `[Errno 104] Connection reset by peer`，category=unknown）。
+        // 此时若已知对端，自动改走对端重试一次，并把后续下载/进度/取件一并锁到对端；
+        // 只对「网络类」错误重试 —— 明确的业务错误（需要 Cookie / 地区限制 / 视频不存在）
+        // 换节点也不会有不同结果，不做无谓的二次等待。
+        const alt = (!useBase && node.peer && regionFor(url) !== node.region) ? node.peer : '';
+        const retriable = !error.category || error.category === 'unknown'
+          || /errno|reset|timed? ?out|timeout|unable to download|connection|network|econn|502|503/i
+            .test(`${error.hint || ''} ${error.message || ''}`);
+        if (!alt || !retriable) throw error;
+        resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, alt);
+        useBase = alt;
+        paintNodeBar();     // 线路条同步改为对端，避免用户看着还是「本机直连」而困惑
+      }
       resolved.cookie = cookie;
       resolved.proxy = proxy;
-      resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
+      resolved.base = useBase;                     // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
       if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
         contributeCookie(url, cookie);
@@ -9163,7 +9204,20 @@
     .then(({ platforms }) => renderPlatforms(platforms))
     .catch(() => { /* 平台清单获取失败不影响主流程 */ });
 
-  request('/api/nodes')
+  // 节点信息获取（含重试）：跨境链路 / CF 边缘抖动很常见，而单次失败就永久退化
+  // 成「本机直连」代价极大 —— 海外站会直接不可用（国内节点到不了 YouTube）。
+  // 故重试两次再认输；仍失败时还有上面的 localStorage 回填兜底。
+  const fetchNodes = async (attempt = 0) => {
+    try {
+      return await request('/api/nodes');
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      return fetchNodes(attempt + 1);
+    }
+  };
+
+  fetchNodes()
     .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, authRequired, profile }) => {
       node.authRequired = !!authRequired;
       if (node.authRequired && !localStorage.getItem('vdl_api_token')) {
@@ -9172,6 +9226,12 @@
       }
       node.region = region || 'global';
       node.peer = peer || '';
+      // 落盘：下次打开（或本次请求失败）时先回填，避免退化成「全部走本机」。
+      // 服务器真正降级为单节点时会返回空 peer，此处会同步清掉缓存，不会残留误判。
+      try {
+        localStorage.setItem('vdl_peer', node.peer);
+        localStorage.setItem('vdl_region', node.region);
+      } catch (e) { /* 隐私模式可能抛错 */ }
       node.chinaDomains = domains || [];
       node.commentaryEnabled = !!commentary_enabled;
       node.adsEnabled = !!ads_enabled;
@@ -9242,6 +9302,28 @@
          2026-09-21：此处必须补一次 applyWebTabs() —— 导航栏不能再因为这一次失败而消失。 */
       try { applyWebTabs(); } catch (_) {}
     });
+
+  // 对端信息定期回填（2026-09-27）：标签页常年不关是常态（实测有页面开着 10 小时以上），
+  // 服务器侧新增/变更对端不会自动反映到页面内存里，会一直以「本机直连」把海外站
+  // 发到国内节点而必然失败。每 10 分钟静默刷新一次，并在切回本标签页时立刻刷一次
+  // （多标签/移动端切前后台最常触发）。只在真正变化时重绘线路条，平时零副作用。
+  const refreshNodeInfo = async () => {
+    try {
+      const { region, peer } = await request('/api/nodes');
+      const nextPeer = peer || '';
+      const nextRegion = region || 'global';
+      const changed = (nextPeer !== node.peer) || (nextRegion !== node.region);
+      node.peer = nextPeer;
+      node.region = nextRegion;
+      try {
+        localStorage.setItem('vdl_peer', nextPeer);
+        localStorage.setItem('vdl_region', nextRegion);
+      } catch (e) { /* ignore */ }
+      if (changed) paintNodeBar();
+    } catch (e) { /* 静默：刷新失败保留现状，不影响已能用的链路 */ }
+  };
+  setInterval(refreshNodeInfo, 10 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshNodeInfo(); });
   // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
   // 支持 #view=xxx 直达（音乐转换/图片转换/字幕/个人中心等）
   try {
