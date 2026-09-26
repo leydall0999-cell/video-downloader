@@ -51,14 +51,17 @@ from fastapi.responses import JSONResponse, Response
 
 router = APIRouter()
 
-# ---- 内置默认（2026-09-23 起分享服务定档国内 ECS 8.138.223.3，公网入口 CF quick tunnel）----
+# ---- 内置默认（2026-09-26 起公网入口改为主域 hanyuxz.top）----
 # 运行时以 ~/.videodownloader/share.json 为准，这里是它缺失（换机/重装）时的兜底。
-# 架构（2026-09-23 迁移定档）：
-#   base  = CF quick tunnel（https，≤100MB 走它；隧道重启会换随机域名，
-#           届时同步改 ECS vdl-share.service 的 VDL_SHARE_PUBLIC_BASE 与本文件/share.json）
+# 架构（2026-09-26 定档）：
+#   base  = https://hanyuxz.top（CF 橙云 → 命名隧道 vdl-ecs → ECS nginx:8888，
+#           ≤100MB 走它；域名固定，不再随隧道重启而变）
 #   direct = ECS 8888 的 /su（nginx 精确匹配直传通道，无体积限制）
-#   分享短链一律回 PUBLIC_BASE（trycloudflare 域），裸 IP 链接会被微信拦且不可信。
-DEFAULT_BASE = "https://depending-safely-keyboards-pix.trycloudflare.com"
+#   分享短链：节点侧优先用请求 Host 反推（`_is_public_host`），故经 base 上传即得
+#   https://hanyuxz.top/s/<sid>；裸 IP 直传通道回退 ECS 的 VDL_SHARE_PUBLIC_BASE。
+#   历史：曾用 CF 临时隧道 `depending-safely-keyboards-pix.trycloudflare.com`，
+#         因其 Restart=always 会换随机域名、令已发短链静默失效，2026-09-26 弃用。
+DEFAULT_BASE = "https://hanyuxz.top"
 DEFAULT_DIRECT = "http://8.138.223.3:8888/su"
 DEFAULT_TOKEN = "_hI50c3L0HYZ2kK_jMXa5tzKY7BnS_3b"
 
