@@ -949,10 +949,13 @@ def _patch_requests_handler_retries() -> None:
         session = _orig_create_instance(self, cookiejar=cookiejar, legacy_ssl_support=legacy_ssl_support)
 
         # 重新 mount 一个带重试策略的 adapter
+        # 2026-09-26：默认值提高（5/3/5 → 12/10/10）。用户代理客户端复用连接必挂
+        # （实测池化 0/4）+ 新连接约 25% 失败，而失败都很快（502/SSL EOF 亚秒级），
+        # 重试几乎不增加耗时却能显著提高单请求成功率（0.25^11 ≈ 2e-7）。
         retry = urllib3.util.retry.Retry(
-            total=int(os.environ.get("VDL_REQUESTS_RETRY_TOTAL", "5")),
-            connect=int(os.environ.get("VDL_REQUESTS_RETRY_CONNECT", "3")),
-            read=int(os.environ.get("VDL_REQUESTS_RETRY_READ", "5")),
+            total=int(os.environ.get("VDL_REQUESTS_RETRY_TOTAL", "12")),
+            connect=int(os.environ.get("VDL_REQUESTS_RETRY_CONNECT", "10")),
+            read=int(os.environ.get("VDL_REQUESTS_RETRY_READ", "10")),
             backoff_factor=float(os.environ.get("VDL_REQUESTS_RETRY_BACKOFF", "0.5")),
             # 对 IncompleteRead / Connection reset / read timeout 等做重试
             raise_on_status=False,
