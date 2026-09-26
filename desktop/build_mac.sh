@@ -317,6 +317,19 @@ fi
 # ── 百度网盘 / PCS-Go 功能已整体移除（用户要求「网盘全部不要」），不再预下载或打包 BaiduPCS-Go ──
 _PCS_ADD_BINARY_ARG=""
 
+# ── deno：YouTube JS 挑战（nsig）的 JS runtime ──
+# requirements.txt 里的 PyPI 包 `deno` 会把官方二进制装到 $VENV/bin/deno，
+# 而 PyInstaller **不会**分发 venv 的脚本目录 ⇒ 必须显式 --add-binary 才有。
+# 落到包内 <_MEIPASS>/bin/deno，运行时由 server/downloader.py 的
+# _find_js_runtime_binary() 找到并交给 yt-dlp 的 js_runtimes（见其上方实测矩阵）。
+# 缺了它：带登录态会卡在 "The page needs to be reloaded"，裸请求被 bot 拦截。
+_DENO_BINARY_ARGS=()
+if [ -x "$VENV/bin/deno" ]; then
+  _DENO_BINARY_ARGS=(--add-binary "$VENV/bin/deno:bin")
+else
+  echo "⚠️  未找到 $VENV/bin/deno —— 包内将没有 JS runtime，YouTube 可能解不了 nsig 挑战" >&2
+fi
+
 # ── 写入构建信息（版本号显示用）──
 # 用开头锁定的 APP_BUILD_HASH（同款含 -dirty），不要在这里另取一次 HEAD。
 # 注：本文件当前无人消费（全仓 grep 无读取方），保留是为向后兼容；
@@ -396,6 +409,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --collect-submodules yt_dlp \
   ${COMMENTARY_DATA[@]+"${COMMENTARY_DATA[@]}"} \
   $_PCS_ADD_BINARY_ARG \
+  ${_DENO_BINARY_ARGS[@]+"${_DENO_BINARY_ARGS[@]}"} \
   "$REPO/desktop/desktop_launcher.py"
 
 # 校验：PyInstaller 必须产出 .app bundle，否则后续注入 ffmpeg/web 都会失败

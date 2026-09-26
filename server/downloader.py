@@ -1576,6 +1576,11 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     # 注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
     # 多 client 列表会导致空 SABR 结果污染整体，必须只传一个。
     _is_yt = bool(host) and ("youtube.com" in host or "youtu.be" in host)
+    if _is_yt:
+        # YouTube 必须带 JS runtime + EJS 求解器，否则 nsig 挑战无解 ——
+        # 带登录态会卡在 "The page needs to be reloaded"，不带则被 bot 拦截。
+        # 实测矩阵与依赖来源见 _js_challenge_options 上方注释。
+        options.update(_js_challenge_options())
     if not _is_yt and not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
@@ -3065,8 +3070,155 @@ def _is_youtube_host(host: str) -> bool:
 class _YouTubeBotBlocked(Exception):
     """yt-dlp 返回 bot 检测类错误，应触发 Cookie 降级。"""
 
+# --------------------------------------------------------------------------- #
+# YouTube JS 挑战（nsig / signature）求解链 —— 2026-09-27 补，对标竞品 DataTool
+# --------------------------------------------------------------------------- #
+# 背景（本机 A/B 实测，video=YK9a6TC9j54，同机/同代理）：
+#   yt-dlp 的 `--js-runtimes` **默认只启用 deno**（见 yt_dlp/options.py），
+#   而不是「自动找 PATH 里任何一个」。本机与打包环境都没有 deno 时，JS 挑战无人可解：
+#     实时会话 + 无 JS runtime → "The page needs to be reloaded"（SABR 流，卡死）
+#     实时会话 + node + EJS   → ✅ 解析成功（标题、格式都拿到了）
+#     缓存快照 + node + EJS   → 仍 bot 拦截（⇒ 会话那一半同样不能少）
+#   ⇒ 「会话自持」与「JS 挑战求解」是**互补的两半**，缺一不可。
+#
+# 依赖侧（见 requirements.txt）：yt-dlp-ejs（本地 EJS 脚本，免 GitHub 远程拉取）
+# + deno（PyPI 分发的官方二进制，由 build_mac.sh --add-binary 放进包内 bin/）。
+_JS_RUNTIME_ENV = "VDL_JS_RUNTIME"
+# 优先级与 yt-dlp 一致（deno > node > quickjs > bun）；把能用的都报上去，
+# yt-dlp 会自己挑「已启用且可用」里优先级最高的那个。
+_JS_RUNTIME_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("deno", ("deno",)),
+    ("node", ("node",)),
+    ("bun", ("bun",)),
+    ("quickjs", ("qjs", "quickjs")),
+)
+
+def _find_js_runtime_binary(name: str) -> str | None:
+    """定位某个 JS runtime 的可执行文件；找不到返回 None。
+
+    查找顺序（先打包内置、再开发环境，最后系统）：
+      ① `VDL_JS_RUNTIME` 环境变量显式指定（形如 `deno` 或 `deno:/abs/path`）；
+      ② 打包内置：`<_MEIPASS>/bin/<exe>`（build_mac.sh 的 `--add-binary …:bin`），
+         以及 `dirname(sys.executable)/bin/<exe>`（.app 的 Contents/MacOS/bin）；
+      ③ 开发环境：`sysconfig.get_path("scripts")`（= venv 的 bin/，pip 装的 deno 就在这）；
+      ④ 系统 PATH。
+    """
+    import shutil as _shutil
+    import sysconfig as _sysconfig
+
+    exe = name + (".exe" if os.name == "nt" else "")
+
+    override = (os.environ.get(_JS_RUNTIME_ENV) or "").strip()
+    if override:
+        _o_name, _, _o_path = override.partition(":")
+        if _o_name.strip().lower() == name and _o_path.strip():
+            return _o_path.strip()
+
+    roots = []
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        roots.append(Path(meipass) / "bin")
+    try:
+        roots.append(Path(sys.executable).parent / "bin")
+    except Exception:
+        pass
+    try:
+        roots.append(Path(_sysconfig.get_path("scripts") or ""))
+    except Exception:
+        pass
+    for _root in roots:
+        if not str(_root):
+            continue
+        _cand = _root / exe
+        try:
+            if _cand.is_file() and os.access(_cand, os.X_OK):
+                return str(_cand)
+        except Exception:
+            continue
+
+    found = _shutil.which(name)
+    return found or None
+
+def _js_challenge_options() -> dict[str, Any]:
+    """YouTube 解析要用的 JS runtime + EJS 远程组件（yt-dlp 选项）。
+
+    只在能真正找到 runtime / 支持该组件时才写进 options：
+    `YoutubeDL._clean_js_runtimes()` 对**不认识的名字会直接 raise ValueError**，
+    所以必须拿装好的 yt-dlp 自己的注册表来过滤，而不是硬编码。
+    """
+    try:
+        from yt_dlp.globals import supported_js_runtimes, supported_remote_components
+        ok_runtimes = set(supported_js_runtimes.value.keys())
+        ok_components = list(supported_remote_components.value)
+    except Exception:
+        ok_runtimes = {n for n, _ in _JS_RUNTIME_CANDIDATES}
+        ok_components = ["ejs:github"]
+
+    runtimes: dict[str, dict[str, str]] = {}
+    for _name, _ in _JS_RUNTIME_CANDIDATES:
+        if _name not in ok_runtimes:
+            continue
+        _path = _find_js_runtime_binary(_name)
+        if _path:
+            runtimes[_name] = {"path": _path}
+
+    out: dict[str, Any] = {}
+    if runtimes:
+        out["js_runtimes"] = runtimes
+    # EJS 远程组件只在**本地 yt-dlp-ejs 不可用**时才被 yt-dlp 真正拉取；
+    # 声明它是为了「本地包缺失/版本不匹配」时仍有兜底（DataTool 同样这么做）。
+    if "ejs:github" in ok_components:
+        out["remote_components"] = ["ejs:github"]
+    _cookie_diag("yt_js_challenge", f"runtimes={list(runtimes)} components={out.get('remote_components')}")
+    return out
+
+# YouTube「登录态」判据（对标 DataTool 的 getYoutubeEmbeddedLoginStatus）。
+# 只有真登录过才会有这几个名字；缺了它们，YouTube 一律按匿名处理 → 必然命中
+# bot 检测。DataTool 包里那句日志写得很直白：
+#   "found cookies but no login session (SID/LOGIN_INFO/__Secure-*PSID);
+#    age-restricted / SABR downloads may fail"
+_YT_LOGIN_COOKIE_NAMES: tuple[str, ...] = (
+    "SID", "__Secure-1PSID", "__Secure-3PSID", "LOGIN_INFO",
+)
+
+def youtube_cookie_login_state(header: str) -> str:
+    """Cookie 头的 YouTube 登录态：'empty' | 'no_login' | 'logged_in'。"""
+    h = (header or "").strip()
+    if not h:
+        return "empty"
+    names = {p.split("=", 1)[0].strip() for p in h.split(";") if "=" in p}
+    return "logged_in" if names & set(_YT_LOGIN_COOKIE_NAMES) else "no_login"
+
+def _youtube_source_is_hopeless(src: str, ck: str) -> str | None:
+    """自动 Cookie 源是否「必然被拦」而可直接跳过；是则返回原因，否则 None。
+
+    `user` / `env` 不参与判定 —— 用户显式给的仍然照试（个别站点是单键鉴权）。
+    自动源（browser / cache / pool）缺 SID / LOGIN_INFO / __Secure-*PSID 时，
+    YouTube 100% 按匿名处理，试它只会白烧掉墙钟预算（YOUTUBE_RESOLVE_BUDGET）。
+    """
+    if src not in ("browser", "cache", "pool"):
+        return None
+    st = youtube_cookie_login_state(ck)
+    if st == "logged_in":
+        return None
+    return "未登录" if st == "no_login" else "空 Cookie"
+
 def _youtube_cookie_candidates(user_cookie: str) -> list[tuple[str, str]]:
-    """收集 YouTube Cookie 候选（去重，用户显式优先）。"""
+    """收集 YouTube Cookie 候选（去重）。
+
+    顺序（2026-09-27 调整）：user > env > **browser** > cache > pool。
+
+    🔴 为什么把「实时浏览器」插到 cache 前面（有实测依据）：在同一台机器上同时取
+    两份做 diff，认证字段完全一致（SID / LOGIN_INFO / __Secure-1PSID / 3PSID /
+    SAPISID / HSID / SSID …），**只有 5 个「滚动刷新」字段不同** ——
+    `SIDCC`、`__Secure-1PSIDCC`、`__Secure-1PSIDTS`、`__Secure-3PSIDCC`、
+    `__Secure-3PSIDTS`。Google 正是靠这几个滚动值判定会话是否还活着；快照一旦
+    落后于浏览器，YouTube 就把整份会话当无效（LOGGED_IN:false）。
+    而 cookie_cache 的 TTL 长达 30 天 ⇒「有缓存」会**一直**挡在新鲜值前面被尝试
+    并失败，表现为「Cookie 明明在更新，却始终被判未登录/bot」。
+    竞品 DataTool 之所以稳，就是它每次都导出自己浏览器里那份**活着的**会话
+    （同一台机器、同一个出口 IP）——我们缺的从来不是 yt-dlp，而是这一步。
+    """
     cands: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -3079,6 +3231,11 @@ def _youtube_cookie_candidates(user_cookie: str) -> list[tuple[str, str]]:
     if user_cookie:
         _add("user", user_cookie)
     _add("env", os.environ.get("VDL_YOUTUBE_COOKIE", ""))
+    # 实时解密本机浏览器：同机同 IP、会话仍在滚动更新，是唯一「活着」的那份。
+    try:
+        _add("browser", get_browser_cookie_header("youtube.com", "https://www.youtube.com/") or "")
+    except Exception as e:  # noqa: BLE001
+        _cookie_diag("yt_browser_exception", str(e)[:200])
     try:
         from cookie_cache import get_cached_cookie_header
         _add("cache", get_cached_cookie_header("youtube.com") or "")
@@ -3274,11 +3431,22 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
         # 非 bot 错误（视频不可用/链接失效等）→ 转 ResolveError 透传真实原因
         raise ResolveError("视频解析失败", _clean_message(str(exc))[:300]) from exc
 
-    # 方法二：Cookie 源自动切换（user > env > cache > pool）
+    # 方法二：Cookie 源自动切换（user > env > browser > cache > pool）
+    _hopeless: list[str] = []
     for src, ck in _youtube_cookie_candidates(user_cookie):
         if _left() <= 5:
             logger.info("[youtube] 预算耗尽（剩余 %.1fs），停止切换 Cookie 源", _left())
             break
+        # 登录态体检（对标 DataTool 的 getYoutubeEmbeddedLoginStatus）：自动源缺
+        # SID/LOGIN_INFO/__Secure-*PSID 时 YouTube 100% 按匿名处理，试它只是白烧
+        # 墙钟预算；跳过并记账，用于最后给出精确的失败原因。
+        _why = _youtube_source_is_hopeless(src, ck)
+        if _why:
+            _hopeless.append(f"{src}（{_why}）")
+            logger.info("[youtube] Cookie 源=%s 无登录态字段（%s），跳过", src, _why)
+            if src == "cache":
+                _evict_youtube_cookie_cache("无登录态字段")
+            continue
         try:
             info = _try(ck)
             if info:
@@ -3301,6 +3469,19 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
                 _evict_youtube_cookie_cache("解析失败")
             continue
 
+    if _hopeless:
+        # 自动源里有 Cookie、但都不是登录态 —— 精确告诉用户是哪一步的问题，
+        # 而不是笼统地丢一句「需要登录 Cookie」（那种提示会让人以为没配 Cookie）。
+        raise ResolveError(
+            "浏览器里的 YouTube 登录态不可用",
+            "本机浏览器/缓存里确实有 YouTube Cookie，但都不含登录态字段"
+            "（SID / LOGIN_INFO / __Secure-*PSID），来源：" + "、".join(_hopeless) + "。\n"
+            "常见原因：① 浏览器里 YouTube 已退出登录；② Google 把这份会话作废了"
+            "（滚动字段 __Secure-*PSIDTS 过期，浏览器一刷新就换新值）。\n"
+            "处理：在本机浏览器打开 youtube.com，确认右上角是已登录状态，然后直接重试即可"
+            "（会自动重新读取浏览器里的会话，不需要粘贴 Cookie）。",
+            category="cookie_required",
+        )
     raise ResolveError(
         "YouTube 需要登录 Cookie 才能解析",
         "YouTube 2025 起对服务器数据中心 IP 强制 bot 检测，需带登录态才能绕过。\n"

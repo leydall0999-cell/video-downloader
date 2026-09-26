@@ -27,6 +27,24 @@ pyobjc-framework-Quartz; sys_platform == "darwin"
 # PO token 失效 → googlevideo 分片一律 403（现象为「解析成功但下载 403」）。故锁定 2.0.0。
 # 另：yt-dlp 需 >= 2026.08，旧版（2026.7.4）无法驱动该插件且不支持 web_safari client。
 bgutil-ytdlp-pot-provider==2.0.0
+
+# 🔴 YouTube JS 挑战（nsig / signature）求解链（2026-09-27 补，对标竞品 DataTool）：
+# yt-dlp 默认只启用 `deno` 这一个 JS runtime（见 yt_dlp/options.py 的 --js-runtimes 默认值）；
+# 本机与打包环境都没有它时，**JS 挑战无人可解** —— 带登录态的请求反而会卡在
+# "The page needs to be reloaded"（SABR 流），裸请求则被 bot 拦截，两头都走不通。
+# 实测矩阵（同机/同代理/同 Cookie，video=YK9a6TC9j54）：
+#   实时会话 + 无 JS runtime → "The page needs to be reloaded"
+#   实时会话 + node + ejs   → ✅ 解析成功
+#   缓存快照 + node + ejs   → bot 拦截（说明会话那一半也不能少）
+#
+# - yt-dlp-ejs：EJS 求解脚本的**本地**包（DataTool 也锁定 0.8.0）。
+#   有它就不必每次从 GitHub 拉远程组件；yt-dlp 自带 PyInstaller hook 会自动收集其中的 *.js。
+# - deno：PyPI 分发的**官方 deno 二进制**（装在 venv 的 bin/ 下，约 81MB）。
+#   build_mac.sh / build_win.sh 用 --add-binary 把它放进包内 bin/，运行时由
+#   downloader._find_js_runtime_binary() 定位并交给 yt-dlp 的 js_runtimes。
+yt-dlp-ejs==0.8.0
+deno==2.9.7
+
 # 种子下载（桌面版可选）：libtorrent 为可选依赖，未安装时功能自动关闭（import 守护）。
 # 官方 wheel 现状：2.0.13 仅 macOS 14/15；2.0.11 额外提供 macOS 13 的 x86_64 wheel。
 # 为避免在 macOS 13 / Windows 等无对应 wheel 的环境让 `pip install -r requirements.txt` 失败，

@@ -81,6 +81,20 @@ else
   echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
 fi
 
+# ── deno：YouTube JS 挑战（nsig）的 JS runtime ──
+# requirements.txt 里的 PyPI 包 `deno` 会把官方二进制装到 $VENV/Scripts/deno.exe，
+# 而 PyInstaller **不会**分发 venv 的脚本目录 ⇒ 必须显式 --add-binary 才有。
+# 落到包内 <_MEIPASS>/bin/deno(.exe)，运行时由 server/downloader.py 的
+# _find_js_runtime_binary() 找到并交给 yt-dlp 的 js_runtimes。
+# 缺了它：带登录态会卡在 "The page needs to be reloaded"，裸请求被 bot 拦截。
+# 注：Windows 下 --add-binary 用 `;` 分隔（macOS/Linux 用 `:`）。
+_DENO_BINARY_ARGS=()
+if [ -f "$VENV/Scripts/deno.exe" ]; then
+  _DENO_BINARY_ARGS=(--add-binary "$VENV/Scripts/deno.exe;bin")
+else
+  echo "⚠️  未找到 $VENV/Scripts/deno.exe —— 包内将没有 JS runtime，YouTube 可能解不了 nsig 挑战" >&2
+fi
+
 # ⚠️ 不要再加 --collect-all onnx：它会把 onnx 官方的测试数据集（约 2.4 万个文件）
 #    整个打进包，属纯死重（server/ 代码零 import onnx），拖慢构建并撑大安装包。
 #    与 build_mac.sh 保持一致；真需要时 PyInstaller 的常规依赖分析会自动收进来。
@@ -111,6 +125,7 @@ fi
   --collect-submodules yt_dlp \
   --collect-all Cryptodome \
   "${COMMENTARY_DATA[@]}" \
+  ${_DENO_BINARY_ARGS[@]+"${_DENO_BINARY_ARGS[@]}"} \
   "$REPO/desktop/desktop_launcher.py"
 
 # 清理 staging 临时目录

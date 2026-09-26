@@ -179,6 +179,32 @@ run_one test_password_sync.py
 #                                      命中（漏写则退回兜底文案）、未命中时优雅降级、
 #                                      端点免登录可用（未登录也要能看更新内容）
 run_one test_system_changelog.py
+#  23. test_youtube_player_client.py —— YouTube player_client 选择（2026-09-26 写成，2026-09-27 补登记）：
+#                                      不得再给 YouTube 强制 player_client（SABR 后全部失效）、
+#                                      下载兜底链首位必须是 "(default)"、
+#                                      带 Cookie 失败要能剥 Cookie 裸重试
+#                                      ⚠️ 之前漏挂在清单里 —— 只写文件＝没门禁
+run_one test_youtube_player_client.py
+#  24. test_youtube_cookie_sources.py —— YouTube Cookie 源顺序 + 登录态体检（2026-09-27 新增，
+#                                       对标竞品 DataTool 的会话自持机制）：
+#                                      ①登录态判据只认 SID/__Secure-*PSID/LOGIN_INFO；
+#                                      ②自动源缺登录态字段即跳过、显式源(user/env)永不跳过；
+#                                      ③候选顺序必须是 user > env > **browser** > cache > pool
+#                                       （实时解密浏览器必须早于 30 天 TTL 的缓存：Google 的
+#                                       SIDCC/__Secure-*PSIDTS 是滚动的，快照落后即被判未登录，
+#                                       而「有缓存」会永远挡在新鲜值前面 → 死循环）
+run_one test_youtube_cookie_sources.py
+#  25. test_youtube_js_challenge.py —— YouTube JS 挑战（nsig）求解链 + 打包依赖（2026-09-27 新增，
+#                                     对标竞品 DataTool 的第二半机制：自带 deno + yt-dlp-ejs）：
+#                                     ①_find_js_runtime_binary 按 VDL_JS_RUNTIME > _MEIPASS/bin >
+#                                       venv/bin > sysconfig scripts > PATH 顺序探测 deno/node/bun/quickjs；
+#                                     ②_js_challenge_options 只下发 yt_dlp.globals 真正支持的 runtime
+#                                       （不支持的绝不硬塞，否则 options 校验直接抛错）；
+#                                     ③_base_options 只给 YouTube 挂 js_runtimes/remote_components，
+#                                       其它站点（B 站等）行为不得被改变；
+#                                     ④requirements 必须含 yt-dlp-ejs + deno，两个 build 脚本必须把
+#                                       deno 显式 --add-binary 进包（venv 脚本目录不会自动分发）
+run_one test_youtube_js_challenge.py
 
 echo ""
 echo "========================================="
