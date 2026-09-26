@@ -135,9 +135,12 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     elif host == 'v.qq.com':
         timeout = 35
     elif 'youtube.com' in host or 'youtu.be' in host:
-        # 2026-09-26：70s 是代理健康时的余量；用户 VPN 节点抖动（实测约一半请求失败）
-        # 时 PROBE_RETRIES=3 的重试需要更长的墙钟时间，70s 会在重试中途被 504 掐断。
-        timeout = 110
+        # 🔴 2026-09-26 修正：**必须低于 60s**。前端跑在 WKWebView 里，NSURLSession 对
+        # 单个请求默认 60s 上限，超过就把连接掐断 → 前端只看到 WebKit 的 "Load failed"，
+        # 后端精心准备的中文原因（需要 Cookie / 节点太慢）永远送不出去（实测一次 115.9s
+        # 全被浪费）。50s 给后端留出在浏览器放弃前返回明确结论的余量；
+        # downloader._resolve_youtube 内部另有 45s 墙钟预算，通常轮不到这里。
+        timeout = 50
     elif app.is_china_host(host):
         timeout = app.RESOLVE_TIMEOUT_DOMESTIC
     else:

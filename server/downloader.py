@@ -3044,6 +3044,11 @@ _BOT_KEYWORDS: tuple[str, ...] = (
     "login_required", "confirm you're not", "sign in to continue",
 )
 
+# 🔴 2026-09-26 墙钟预算：WKWebView(NSURLSession) 对**单个请求**默认 60s 上限，超过就把
+# 连接掐断，前端只看到 WebKit 的 "Load failed"（实测一次解析 115.9s，前端 60s 就死了，
+# 后端的中文原因永远送不出去）。故 YouTube 解析必须在预算内给出明确结论——宁可早报错。
+YOUTUBE_RESOLVE_BUDGET = float(os.environ.get("VDL_YT_RESOLVE_BUDGET", "45"))
+
 def _is_youtube_host(host: str) -> bool:
     host = (host or "").lower()
     return any(host == d or host.endswith("." + d) for d in _YOUTUBE_HOSTS)
@@ -3098,7 +3103,7 @@ def _fetch_youtube_visitor_data(proxy: str = "") -> str:
     proxies = {"http": proxy, "https": proxy} if proxy else None
     try:
         r = _requests.get(
-            "https://www.youtube.com/", headers=headers, proxies=proxies, timeout=15
+            "https://www.youtube.com/", headers=headers, proxies=proxies, timeout=8
         )
         if r.status_code == 200:
             m = _re.search(r'"VISITOR_DATA":"([^"]+)"', r.text)
@@ -3161,12 +3166,30 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
     host = _host_of(url)
     validate_youtube_id(url)  # ID 不完整直接明确报错，别流进 bot/Cookie 兜底
     effective_proxy = proxy or _resolve_proxy(host)
-    # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路
-    visitor_data = _fetch_youtube_visitor_data(effective_proxy)
-    if visitor_data:
-        logger.info("[youtube] 已自动获取 visitor_data（%s…），启用 PO Token 免 Cookie 路径", visitor_data[:20])
+    _deadline = time.monotonic() + YOUTUBE_RESOLVE_BUDGET
+
+    def _left() -> float:
+        """剩余墙钟预算（秒）。见 YOUTUBE_RESOLVE_BUDGET 注释。"""
+        return _deadline - time.monotonic()
+
+    # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路。
+    # 🔴 有用户 Cookie 时**不必**抓：visitorData 只服务「免 Cookie + PO Token」路径，
+    # 而对 YouTube 首页的这次代理请求实测可白花 15s（2026-09-26）。
+    visitor_data = ""
+    if not (user_cookie or "").strip():
+        visitor_data = _fetch_youtube_visitor_data(effective_proxy)
+        if visitor_data:
+            logger.info("[youtube] 已自动获取 visitor_data（%s…），启用 PO Token 免 Cookie 路径", visitor_data[:20])
 
     def _try(cookie_text: str, use_visitor: bool = True) -> dict[str, Any]:
+        if _left() <= 5:
+            raise ResolveError(
+                "YouTube 解析超时",
+                f"解析已用满 {int(YOUTUBE_RESOLVE_BUDGET)} 秒预算仍未拿到结果，"
+                "多半是当前代理/VPN 节点出海太慢或不稳定。建议：①换一个节点后重试；"
+                "②若节点正常仍失败，请到「高级选项 → Cookie」粘贴一次 YouTube 登录 Cookie。",
+                category="network",
+            )
         opts = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
         opts["format"] = None
         # 免 Cookie 路径：注入 visitor_data + 强制 fetch PO Token（bgutil 自动生效）
@@ -3187,13 +3210,19 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
             # 完整格式列表（实测 48 个）**。故带 Cookie 失败且命中 SABR 特征时，
             # 自动剥掉 Cookie 裸重试一次（visitor_data 也一并去掉，二者绑定的是
             # 同一套 PO Token 上下文）。
-            if cookie_text and ("page needs to be reloaded" in low
-                                or "not available" in low or "format" in low):
+            # ⚠️ 但在被风控的出口 IP 上这次裸试**必然失败且极慢**（实测 75s 无结果），
+            # 会单独吃掉整个预算；故仅在剩余预算充裕（>20s）时才值得试。
+            if (cookie_text and _left() > 20
+                    and ("page needs to be reloaded" in low
+                         or "not available" in low or "format" in low)):
                 try:
                     return _try("", use_visitor=False)
                 except (DownloadError, ExtractorError):
                     pass  # 裸重试也失败 → 落回下方 extract_flat 降级
             # 非 bot 错误（format not available 等 SABR 问题）：extract_flat 降级一次
+            # （同样受预算约束：拿不到真格式时它只能给出元数据，别为它耗尽预算）
+            if _left() <= 10:
+                raise
             try:
                 opts2 = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
                 opts2["extract_flat"] = "in"
@@ -3218,6 +3247,9 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
 
     # 方法二：Cookie 源自动切换（user > env > cache > pool）
     for src, ck in _youtube_cookie_candidates(user_cookie):
+        if _left() <= 5:
+            logger.info("[youtube] 预算耗尽（剩余 %.1fs），停止切换 Cookie 源", _left())
+            break
         try:
             info = _try(ck)
             if info:
