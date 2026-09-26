@@ -64,6 +64,14 @@ _LOCK = threading.Lock()
 # 放行整个腾讯系——与 _STRUCTURAL_FIELDS 里已有的 qq.com 条目语义一致。
 _BASE_DOMAINS = {"chrqj.com", "bilibili.com", "youku.com", "weixin.qq.com"}
 
+# 额外放行域：需要「桌面端把本机登录态自动推送到云端池」、但**不适合列入**
+# downloader._COOKIE_HARDENED_DOMAINS 的站。二者拆开是因为 hardened 还有副作用
+# ——它会把 403 文案改写成「该站需要登录 Cookie」，从而盖掉 YouTube 403 真正
+# 该排查的代理/地区线索（见 tests/test_friendly_error_403.py）。
+# youtube.com：2025 起对数据中心 IP 强制 bot 检测，网页版海外解析必须带登录态；
+# 而 hardened 之外没有任何机制能让它进池（/api/cookie/sync 会以 400 拒收）。
+_POOL_EXTRA_DOMAINS = {"youtube.com"}
+
 logger = logging.getLogger(__name__)
 
 # chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
@@ -108,6 +116,8 @@ def _strip_sub(domain: str) -> str:
 def _root_domains() -> set:
     """白名单根域集合 = 基础集 + hardened 清单派生 + env 扩展。"""
     ds: set = {_strip_sub(d) for d in _BASE_DOMAINS if _strip_sub(d)}
+    # 额外放行域（不需要「改写 403 文案」副作用的那批，如 youtube.com）
+    ds |= {_strip_sub(d) for d in _POOL_EXTRA_DOMAINS if _strip_sub(d)}
     # env 扩展：逗号/分号/空格分隔的域名列表
     extra = os.environ.get("VDL_COOKIE_POOL_DOMAINS", "")
     for d in extra.replace(";", ",").replace(" ", ",").split(","):
@@ -388,6 +398,13 @@ _STRUCTURAL_FIELDS: dict[str, set[str]] = {
         "vus_session", "video_platform", "uid_tt", "login_ecookie",
         # 微信视频号登录态关键字段（channels.weixin.qq.com / finder 会话）
         "wap_sid2", "pass_ticket", "appmsg_token", "wxuin", "wxsid", "skey",
+    },
+    # YouTube：走 yt-dlp 试解析验真在国内机房必然失败（连不上或被 bot 拦），
+    # 会被误判 False 而把有效 Cookie 拒之池外。改为只校验「是否含登录态字段」。
+    "youtube.com": {
+        "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO",
+        "__Secure-1PSID", "__Secure-3PSID",
+        "__Secure-1PAPISID", "__Secure-3PAPISID",
     },
 }
 

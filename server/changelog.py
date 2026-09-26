@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.28",
+        "date": "2026-09-26",
+        "items": [
+            "网页版的 YouTube 解析现在能自动续期：桌面版每 30 分钟把本机浏览器的 YouTube 登录态同步到云端，登录态被网站轮换后也无需再手动粘贴 Cookie",
+            "修复网页版在登录态过期后一直提示需要登录的问题（过期快照会挡住新同步进来的登录态，现已能自动淘汰失效快照）",
+        ],
+    },
+    {
         "version": "1.0.27",
         "date": "2026-09-26",
         "items": [
