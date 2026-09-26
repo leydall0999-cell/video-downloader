@@ -1514,17 +1514,15 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             _cookie_diag("cookie_bare_value_fixed", "bilibili bare SESSDATA auto-prefixed")
         headers["Cookie"] = cookie_text
     # YouTube 专用参数：player_client 选择。
-    # 2026-09-21 实测（yt-dlp 2026.08.19）：原选的 tv_embedded 已被 yt-dlp 移除
-    # （日志 "Skipping unsupported client tv_embedded"），触发静默回退到默认
-    # android_vr；而 bgutil 是按 client 生成 gvs PO Token 的（默认为 web_safari），
-    # token 与 client 不匹配 → googlevideo 对分片一律 403
-    # （现象：解析成功且能拿到 play_url，下载却 403）。
-    # 改用 web_safari：与 bgutil 生成的 PO Token 同 client，实测可正常下载。
+    # 2026-09-21 曾强制 web_safari（当时与 bgutil PO Token 同 client 可用）。
+    # 🔴 2026-09-26 实测（用户 VPN 出口 + yt-dlp 2026.08.19）：YouTube 端 SABR
+    # 调整后 web_safari/mweb/web/tv 全部抛 "Requested format is not available"，
+    # **只有不传 player_client（走 yt-dlp 默认客户端链）才能拿到完整格式列表
+    # （实测 31 个格式，解析成功）**。故删除强制覆盖，交还 yt-dlp 默认。
     # 注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
     # 多 client 列表会导致空 SABR 结果污染整体，必须只传一个。
-    if host and ("youtube.com" in host or "youtu.be" in host):
-        options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["web_safari"]
-    elif not cookie_text:
+    _is_yt = bool(host) and ("youtube.com" in host or "youtu.be" in host)
+    if not _is_yt and not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
         # B站 短链 b23.tv 与长链 bilibili.com 同属一个站，云端公共池 Cookie 以
@@ -3128,6 +3126,17 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
             low = str(exc).lower()
             if any(k in low for k in _BOT_KEYWORDS):
                 raise _YouTubeBotBlocked(str(exc)[:300]) from exc
+            # 🔴 2026-09-26 实测：带登录态 Cookie 的请求会触发 YouTube SABR 新流程，
+            # 返回 "The page needs to be reloaded"；**无 Cookie 的干净请求反而能拿到
+            # 完整格式列表（实测 48 个）**。故带 Cookie 失败且命中 SABR 特征时，
+            # 自动剥掉 Cookie 裸重试一次（visitor_data 也一并去掉，二者绑定的是
+            # 同一套 PO Token 上下文）。
+            if cookie_text and ("page needs to be reloaded" in low
+                                or "not available" in low or "format" in low):
+                try:
+                    return _try("", use_visitor=False)
+                except (DownloadError, ExtractorError):
+                    pass  # 裸重试也失败 → 落回下方 extract_flat 降级
             # 非 bot 错误（format not available 等 SABR 问题）：extract_flat 降级一次
             try:
                 opts2 = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
@@ -3784,8 +3793,7 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                 try:
                     opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
                     opts2["extract_flat"] = "in"
-                    if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
-                        opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["web_safari"]
+                    # 2026-09-26：不再强制 web_safari（SABR 后已失效），走 yt-dlp 默认客户端链
                     with _YoutubeDL(opts2) as ydl2:
                         info = ydl2.extract_info(url, download=False)
                         _last_err = None  # 降级成功
@@ -4529,8 +4537,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     #   android / tv_embedded → 分片一律 403（bgutil 的 gvs PO Token
                     #   按 client 生成，与 android 不匹配；tv_embedded 已被 yt-dlp 移除）
                     #   web_safari → ✅ 与 PO Token 同 client，实测可正常下载
-                    # 故 web_safari 前置，其余兜底。
-                    _yt_clients = ["web_safari", "android", "ios", "tv"]
+                    # 2026-09-26 复测（用户 VPN 出口 + yt-dlp 2026.08.19，SABR 新政后）：
+                    #   web_safari/mweb/web/tv → 解析即抛 "Requested format is not available"
+                    #   不传 player_client（yt-dlp 默认客户端链）→ ✅ 31 个格式解析成功
+                    # 故把「默认客户端」排到第一位；"(default)" 表示不覆盖 player_client。
+                    _yt_clients = ["(default)", "web_safari", "android", "ios", "tv"]
                     _done = False
                     for _client in _yt_clients:
                         if task.cancel_requested:
@@ -4543,10 +4554,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                                 _fb_opts = dict(_fb_base)
                                 _fb_opts["format"] = _chain
                                 _ya = _fb_opts.setdefault("extractor_args", {}).setdefault("youtube", {})
-                                _ya["player_client"] = [_client]
-                                # 免 Cookie 时保持 PO Token 上下文
-                                if not (cookie or "").strip():
-                                    _ya.setdefault("fetch_pot", ["always"])
+                                if _client != "(default)":
+                                    _ya["player_client"] = [_client]
+                                    # 免 Cookie 时保持 PO Token 上下文
+                                    if not (cookie or "").strip():
+                                        _ya.setdefault("fetch_pot", ["always"])
                                 with _YoutubeDL(_fb_opts) as _ydl2:
                                     info = _ydl2.extract_info(task.url, download=False) or info
                                     if info.get("title"):
