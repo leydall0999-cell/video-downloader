@@ -1703,7 +1703,12 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key", "X-Device-Id"],
+    # Range 必须放行：网页版分片下载（/api/media/proxy）靠 `Range: bytes=a-b` 切段，
+    # 而解析落在对端节点时页面与 API 不同源 ⇒ 带 Range 的 fetch 会先发预检 OPTIONS，
+    # 预检里没有 Range 就会被浏览器直接拦掉（症状：海外视频一律「加速下载不可用」）。
+    # 虽然新版 Fetch 规范已把 Range 列为可豁免的自列表头，但 Safari/WKWebView 支持滞后，
+    # 显式放行才是稳的。仅放宽 GET 上这一个头，不放宽来源与方法。
+    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key", "X-Device-Id", "Range"],
 )
 
 

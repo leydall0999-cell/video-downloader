@@ -332,6 +332,114 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
         _resp_headers['Content-Length'] = resp.headers['Content-Length']
     return app.StreamingResponse(_gen(), media_type=content_type or 'application/octet-stream', headers=_resp_headers, status_code=resp.status_code)
 
+_MEDIA_EXT_BY_TYPE = {
+    'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov',
+    'video/x-matroska': '.mkv', 'video/mpeg': '.mpg', 'video/x-flv': '.flv',
+    'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/aac': '.aac',
+    'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav',
+}
+
+@router.get('/api/media/proxy')
+def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None):
+    """下载用媒体中继（对标 DataTool 的 /api/proxy/media）。
+
+    为什么下载必须走服务端中继：浏览器 `fetch` 跨域拿不到 CDN 的
+    `Content-Length` / `Content-Range`（CDN 不回 `Access-Control-Expose-Headers`），
+    没有总长度就无法分片、也无法画进度条，只能退化成一个整文件请求。
+    本端点把源站响应连同 Range 语义一并透传，前端即可做
+    「10MB/片 · 3 并发 · 3 重试」的断点式分片下载。
+
+    与 `/api/stream/proxy` 的分工（**互不影响，别合并**）：
+      - `/api/stream/proxy` 服务于 `<video>` 在线播放，会改写 m3u8 内部 URL、强制带 Referer；
+      - 本端点只做**字节透传**，不改写任何内容，专供下载。
+    只透传不改写，是为了让 `Content-Length` 与 `Content-Range` 保持源站原值，
+    前端才能据此切分片；一旦改写（如 gzip）长度就对不上，分片必然错位。
+    """
+    if not u:
+        raise app.HTTPException(status_code=400, detail='缺少 u 参数')
+    app._assert_safe_url(u)
+    host = app._host_of(u)
+    _proxies: dict | None = None
+    if not app.is_china_host(host):
+        _proxy_url = app.downloader._resolve_proxy(host)
+        if _proxy_url:
+            _proxies = {'http': _proxy_url, 'https': _proxy_url}
+    user_cookie = (cookie or '').strip()
+    if user_cookie.lower().startswith('cookie:'):
+        user_cookie = user_cookie[7:].strip()
+    cookie_text = user_cookie
+    used_auto_cookie = False
+    if not cookie_text:
+        try:
+            auto = app.downloader.get_browser_cookie_header(host, u)
+        except Exception:
+            auto = None
+        if auto:
+            cookie_text = auto
+            used_auto_cookie = True
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        # 强制 identity：带 gzip 时源站给的 Content-Length 是压缩前长度，
+        # 透传给前端会导致分片区间错位（分片下载的经典坑）。
+        'Accept-Encoding': 'identity',
+    }
+    _ref = _stream_referer(host)
+    if _ref:
+        headers['Referer'] = _ref
+    if cookie_text:
+        headers['Cookie'] = cookie_text
+    _client_range: str | None = None
+    if request:
+        _cr = request.headers.get('range')
+        if _cr:
+            _client_range = _cr
+            headers['Range'] = _cr
+    try:
+        resp = app.requests.get(u, headers=headers, stream=True, timeout=(10, 300), proxies=_proxies)
+    except Exception as exc:
+        raise app.HTTPException(status_code=502, detail=f'上游拉取失败：{app.downloader._clean_message(str(exc))}') from None
+    if resp.status_code >= 400:
+        detail = f'上游返回 {resp.status_code}'
+        if resp.status_code in (401, 403):
+            if used_auto_cookie:
+                detail += '（已自动携带浏览器登录态仍被拒，可能需先在浏览器登录该平台，或手动粘贴 Cookie）'
+            elif cookie_text:
+                detail += '（防盗链被拒，可在「高级选项」重新粘贴 Cookie 后重试）'
+            else:
+                detail += '（防盗链被拒，可能需要登录 Cookie，请在「高级选项」粘贴浏览器 Cookie 后重试）'
+        resp.close()
+        raise app.HTTPException(status_code=resp.status_code, detail=detail)
+    content_type = resp.headers.get('Content-Type') or 'application/octet-stream'
+    _resp_headers = {
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range',
+        'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+        'X-Accel-Buffering': 'no',
+        # 下载语义：始终声明支持 Range，这样前端 3 路并发各拿一段互不干扰。
+        'Accept-Ranges': resp.headers.get('Accept-Ranges') or 'bytes',
+    }
+    if resp.headers.get('Content-Length'):
+        _resp_headers['Content-Length'] = resp.headers['Content-Length']
+    if _client_range and resp.status_code == 206 and resp.headers.get('Content-Range'):
+        _resp_headers['Content-Range'] = resp.headers['Content-Range']
+    if dl:
+        _base = content_type.split(';')[0].strip().lower()
+        _ext = _MEDIA_EXT_BY_TYPE.get(_base, '')
+        _fname = dl if ('.' in dl.rsplit('/', 1)[-1]) else f'{dl}{_ext}'
+        _resp_headers['Content-Disposition'] = (
+            "attachment; filename*=UTF-8''" + app.quote(_fname, safe='')
+        )
+
+    def _gen():
+        try:
+            for chunk in resp.iter_content(chunk_size=256 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            resp.close()
+    return app.StreamingResponse(_gen(), media_type=content_type, headers=_resp_headers, status_code=resp.status_code)
+
 @router.get('/api/cookie/status')
 def cookie_status(url: str='') -> dict:
     """探测本机浏览器是否含目标站点的登录 Cookie，供前端「检测登录态」与解析后自动提示。

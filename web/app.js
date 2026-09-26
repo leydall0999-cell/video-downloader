@@ -1099,11 +1099,21 @@
 
       const label = document.createElement('strong');
       label.textContent = quality.label;
+      // 原画档角标：只做「讲清楚档位」这件事，不做拦截。
+      // 硬闸门需要后端按画质鉴权，而当前 node.subscribed 只在额度响应里被置真、
+      // 从没有被置假过，据此拦截会误伤已付费用户 → 本轮只展示，不 gate。
+      if (quality.pro) {
+        const badge = document.createElement('span');
+        badge.className = 'quality-pro';
+        badge.textContent = 'PRO';
+        badge.title = '原画档 · 会员权益';
+        label.append(badge);
+      }
       const note = document.createElement('small');
       const noteText = quality.approx_size
         ? `${quality.note} · 约 ${formatBytes(quality.approx_size)}`
         : quality.note;
-      note.textContent = noteText;
+      note.textContent = quality.pro ? `${noteText} · 原画需会员` : noteText;
 
       option.append(label, note);
       option.addEventListener('click', () => selectQuality(quality.key));
@@ -1137,11 +1147,11 @@
 
     const directUrl = video.direct_url;
     if (directUrl) {
-      // 直链透传：跳过清晰度选择与服务器下载，直接让浏览器从源站拉文件
+      // 直链透传：跳过清晰度选择与服务器任务队列，走浏览器侧分片下载引擎
       el.qualityBlock.hidden = true;
       el.downloadBtn.lastChild.textContent = '直接保存到本机 ⬇';
       el.directHint.hidden = false;
-      el.directHint.textContent = '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
+      el.directHint.textContent = '✅ 检测到可直接下载的文件。点上方按钮即分片加速下载（10MB/片 · 3 路并发 · 自动重试），有实时进度、可再点一次取消；加速不可用时自动降级为浏览器直连。';
       el.serverFallbackBtn.hidden = false;
     } else {
       el.qualityBlock.hidden = false;
@@ -3679,20 +3689,260 @@
     }
   };
 
-  const triggerDirectDownload = (url, title) => {
+  // ===== 直链分片下载引擎（对标 DataTool 网页端的浏览器侧下载）=====
+  // 三条链路，按能力从强到弱自动降级：
+  //   ① 分片并发：经 /api/media/proxy 中继拿总长度 → 10MB/片 · 3 并发 · 3 重试 → 有进度、可续、抗限速
+  //   ② 单流中继：拿不到总长度（源站不认 Range）或体积过大 → 一个整文件请求，仍有进度
+  //   ③ 浏览器直连：中继整条不可用（服务器过载 / 源站拒绝服务器 IP）→ <a download> 裸下，零服务器带宽
+  // 为什么不直接 ①：跨域 fetch 读不到 CDN 的 Content-Length/Content-Range（CDN 不回 CORS 头），
+  // 没有总长度就切不了片，所以必须先过中继。中继在解析同一节点上跑，直链的 IP 绑定/签名天然一致。
+  const _DL_CHUNK = 10 * 1024 * 1024;        // 10MB / 片（与 DataTool 同档）
+  const _DL_PARALLEL = 3;                    // 3 路并发（与 DataTool 同档）
+  const _DL_RETRY = 3;                       // 每片最多 3 次
+  const _DL_MIN_CHUNKED = 4 * 1024 * 1024;   // < 4MB 不值当分片，走单流
+  const _DL_MAX_CHUNKS = 400;                // 分片上限（≈4GB）：超出走单流，避免分片数组把内存吃爆
+  let _dlAbort = null;
+  let _dlBusy = false;
+  let _dlLastPaint = 0;
+
+  const _dlRelayUrl = (url, base) =>
+    `${base || ''}/api/media/proxy?u=${encodeURIComponent(url)}`;
+
+  const _dlExtFromUrl = (url) => {
+    const m = /\.(mp4|webm|mov|mkv|flv|m4a|mp3|aac|ogg|wav)(?:[?#]|$)/i.exec(url || '');
+    return m ? `.${m[1].toLowerCase()}` : '';
+  };
+
+  const _dlWithExt = (title, contentType, url = '') => {
+    const name = (title || 'video').trim() || 'video';
+    if (/\.[a-z0-9]{2,5}$/i.test(name)) return name;      // 已有扩展名，尊重原样
+    const map = {
+      'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov',
+      'video/x-matroska': '.mkv', 'video/x-flv': '.flv',
+      'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/aac': '.aac',
+      'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav',
+    };
+    const byType = map[(contentType || '').split(';')[0].trim().toLowerCase()] || '';
+    return name + (byType || _dlExtFromUrl(url));
+  };
+
+  // 取消：再点一次同一按钮
+  const _dlCancel = () => {
+    if (_dlBusy && _dlAbort) {
+      el.directHint.textContent = '正在取消…';
+      _dlAbort.abort();
+      return true;
+    }
+    return false;
+  };
+
+  // 探测源站总长度与类型：Range: bytes=0-0 → 206 + Content-Range: bytes 0-0/TOTAL
+  const _dlProbe = async (relay, signal) => {
+    const r = await fetch(relay, { headers: { Range: 'bytes=0-0' }, signal, cache: 'no-store' });
+    if (r.status !== 206 && !r.ok) {
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch (_e) { /* 非 JSON 响应 */ }
+      throw new Error(detail || `源站返回 ${r.status}`);
+    }
+    const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(r.headers.get('Content-Range') || '');
+    const type = (r.headers.get('Content-Type') || 'video/mp4').split(';')[0].trim();
+    // 必须把 body 取消掉，否则这条 206 连接一直占着并发额度
+    try { await r.body?.cancel(); } catch (_e) { /* 已结束 */ }
+    if (m) return { size: parseInt(m[1], 10) || 0, type, ranged: true };
+    const cl = parseInt(r.headers.get('Content-Length') || '0', 10) || 0;
+    return { size: r.status === 200 ? cl : 0, type, ranged: r.status === 206 };
+  };
+
+  const _dlChunk = async (relay, start, end, signal) => {
+    const want = end - start + 1;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= _DL_RETRY; attempt += 1) {
+      try {
+        const r = await fetch(relay, {
+          headers: { Range: `bytes=${start}-${end}` },
+          signal,
+          cache: 'no-store',
+        });
+        if (r.status !== 206) {
+          if (r.status === 200) {
+            // 源站忽略 Range 直接甩回整文件。这里**不能**去读 body ——
+            // 那等于把一个完整视频当 JSON 解析，白白吃满内存。
+            try { await r.body?.cancel(); } catch (_e) { /* 已结束 */ }
+            throw new Error('源站不支持分段');
+          }
+          let detail = '';
+          try { detail = (await r.json()).detail || ''; } catch (_e) { /* 非 JSON 响应 */ }
+          throw new Error(detail || `HTTP ${r.status}`);
+        }
+        const buf = new Uint8Array(await r.arrayBuffer());
+        // 长度必须与请求区间**严格相等**：短了会留空洞（成品损坏），长了说明源站没按 Range 回。
+        // 宁可重试、再退单流，也绝不把错位的数据拼进成品 —— 静默损坏比报错更难查。
+        if (buf.byteLength !== want) {
+          throw new Error(`分片长度不符（期望 ${want}，收到 ${buf.byteLength}）`);
+        }
+        return buf;
+      } catch (err) {
+        if (err.name === 'AbortError') throw err;
+        lastErr = err;
+      }
+      if (attempt < _DL_RETRY) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+    throw lastErr || new Error('分片下载失败');
+  };
+
+  const _dlPaint = (state) => {
+    const now = performance.now();
+    if (now - _dlLastPaint < 120) return;   // 单流可能几十 KB 一次回调，节流重绘
+    _dlLastPaint = now;
+    const sec = Math.max(0.3, (now - state.t0) / 1000);
+    const speed = state.done / sec;
+    const pct = state.total ? Math.min(100, Math.floor((state.done / state.total) * 100)) : 0;
+    const eta = state.total && speed > 0 ? (state.total - state.done) / speed : 0;
+    el.directHint.textContent = state.total
+      ? `⬇ 下载中 ${pct}% · ${formatBytes(state.done)}/${formatBytes(state.total)} · ${formatBytes(Math.round(speed))}/s`
+        + `${eta ? ` · ${formatEta(eta)}` : ''}（再点一次按钮可取消）`
+      : `⬇ 下载中 · 已接收 ${formatBytes(state.done)} · ${formatBytes(Math.round(speed))}/s（再点一次按钮可取消）`;
+    const label = el.downloadBtn.lastChild;
+    if (label) label.textContent = state.total ? `下载中 ${pct}%…（点此取消）` : '下载中…（点此取消）';
+  };
+
+  const _dlSave = (blob, title, url = '') => {
+    const objUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    if (title) a.download = title;
+    a.href = objUrl;
+    a.download = _dlWithExt(title, blob.type, url);
     document.body.appendChild(a);
     a.click();
     a.remove();
-    el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。若源站拒绝直连，请用上方「改用服务器下载」。';
+    // 立刻 revoke 会让部分浏览器下载中断，延后释放
+    setTimeout(() => URL.revokeObjectURL(objUrl), 120000);
+  };
+
+  const _dlAnchorDownload = (url, title) => {
+    const a = document.createElement('a');
+    a.href = url;
+    if (title) a.download = _dlWithExt(title, '', url);
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const _DL_CHUNK_FALLBACK_MAX = 512 * 1024 * 1024;   // 分片失败后最多重下这么多（见 _dlRun）
+
+  // ① 分片并发。每片必须整片到手，否则宁可整体失败也不拼出带空洞的文件。
+  const _dlRunChunked = async (relay, total, type, signal, onProgress) => {
+    const count = Math.ceil(total / _DL_CHUNK);
+    const parts = new Array(count);
+    let done = 0;
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = next;
+        next += 1;
+        if (i >= count) return;
+        const start = i * _DL_CHUNK;
+        const end = Math.min(total, start + _DL_CHUNK) - 1;
+        parts[i] = await _dlChunk(relay, start, end, signal);
+        done += parts[i].byteLength;
+        onProgress(done, total);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(_DL_PARALLEL, count) }, worker));
+    return new Blob(parts, { type });
+  };
+
+  // ② 单流中继：源站不认 Range，或体积超过分片上限（保护内存）
+  const _dlRunStream = async (relay, total, type, signal, onProgress) => {
+    const r = await fetch(relay, { signal, cache: 'no-store' });
+    if (!r.ok) {
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch (_e) { /* 非 JSON 响应 */ }
+      throw new Error(detail || `源站返回 ${r.status}`);
+    }
+    const len = parseInt(r.headers.get('Content-Length') || '0', 10) || total || 0;
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.byteLength;
+      onProgress(got, len);
+    }
+    return new Blob(chunks, { type });
+  };
+
+  const _dlRun = async (url, { base, title, signal, onProgress }) => {
+    const relay = _dlRelayUrl(url, base);
+    const probe = await _dlProbe(relay, signal);
+    const total = probe.size || 0;
+    const canChunk = probe.ranged && total >= _DL_MIN_CHUNKED && total <= _DL_MAX_CHUNKS * _DL_CHUNK;
+    if (canChunk) {
+      try {
+        return await _dlRunChunked(relay, total, probe.type, signal, onProgress);
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        // 分片失败（源站裁短 Range / 某片反复 5xx）：小文件就地退单流重来；
+        // 大文件不再重下一遍 —— 交给上层降级为浏览器直连，别白烧用户流量与服务器带宽。
+        if (total > _DL_CHUNK_FALLBACK_MAX) throw err;
+        onProgress(0, total);
+      }
+    }
+    return _dlRunStream(relay, total, probe.type, signal, onProgress);
+  };
+
+  const triggerDirectDownload = async (url, title, base = '') => {
+    if (_dlCancel()) return;                 // 正在下载 → 本次点击视为取消
+    if (!url) return;
+    _dlBusy = true;
+    _dlAbort = new AbortController();
+    const signal = _dlAbort.signal;
+    const label = el.downloadBtn.lastChild;
+    const origLabel = label ? label.textContent : '';
+    // 保持按钮可点：它是唯一的「取消」入口
+    el.downloadBtn.disabled = false;
+    el.serverFallbackBtn.hidden = true;
+    const t0 = performance.now();
+    const state = { done: 0, total: 0, t0 };
+    try {
+      const blob = await _dlRun(url, {
+        base,
+        title,
+        signal,
+        onProgress: (done, total) => {
+          state.done = done;
+          state.total = total;
+          _dlPaint(state);
+        },
+      });
+      _dlSave(blob, title, url);
+      el.directHint.textContent =
+        `✅ 已保存到本机（${formatBytes(blob.size)}）。文件从源站直取、不落我们的服务器磁盘，也不计入服务器下载额度。`;
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        el.directHint.textContent = '已取消下载。再次点击可直接重试。';
+        return;
+      }
+      // 中继不可用 → 退回浏览器直连源站（零服务器带宽，代价是没进度）
+      el.directHint.textContent =
+        `⚠ 加速下载不可用（${err.message || err}），已改用浏览器直接下载。若仍失败，请点下方「改用服务器下载」。`;
+      _dlAnchorDownload(url, title);
+    } finally {
+      _dlBusy = false;
+      _dlAbort = null;
+      const l = el.downloadBtn.lastChild;
+      if (l) l.textContent = origLabel || '直接保存到本机 ⬇';
+    }
   };
 
   const handleDownload = async () => {
     if (resolved?.video?.direct_url) {
-      // 直链直存：浏览器从源站拉文件，瞬时响应，无需 loading 态
-      triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
+      // 直链直存：走分片下载引擎（失败自动降级），锁定解析所在节点
+      triggerDirectDownload(resolved.video.direct_url, resolved.video.title, resolved.base || '');
       return;
     }
     // 服务器下载：loading 态防重复点击（连点会建多个任务）；后端 90s 内命中

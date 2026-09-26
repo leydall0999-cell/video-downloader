@@ -1210,6 +1210,10 @@ QUALITY_PRESETS: tuple[tuple[int, str], ...] = (
     (360, "360P 流畅"),
 )
 
+# 超过此高度即视为「原画档」，前端画 PRO 角标。放在此处而非前端硬编码，
+# 是为了让档位分级与真实可用分辨率一致（前端只看 max_height 就少一处知识重复）。
+PRO_MIN_HEIGHT = 1080
+
 BEST_KEY = "best"
 AUDIO_KEY = "audio"
 WEBM_KEY = "webm"
@@ -3949,6 +3953,9 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
                 "label": label,
                 "note": "MP4",
                 "approx_size": (video_size + audio_size) if video_size else 0,
+                # 原画档标记：前端据此画 PRO 角标（纯展示，不在此处拦截）。
+                # 真正的鉴权由会员体系决定，这里只负责「把档位分级讲清楚」。
+                "pro": height > PRO_MIN_HEIGHT,
             }
         )
     options.append(

@@ -429,6 +429,14 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .quality-opt.has-speed { border-color: #34b57a; }
 .quality-opt.has-speed small { color: #177245; }
 .quality-opt.has-speed[aria-checked="true"] { border-color: var(--brand); }
+/* 原画档 PRO 角标：纯标识档位分级（金色在浅色/深色主题下都成立），不参与下载鉴权 */
+.quality-pro {
+  display: inline-block; margin-left: .32rem; padding: 0 .3rem;
+  font-size: .6rem; font-weight: 700; letter-spacing: .04em; line-height: 1.4;
+  vertical-align: middle; border-radius: 4px;
+  color: #7a4f00; background: linear-gradient(180deg, #ffe9a8, #ffd166);
+  border: 1px solid #efc04a;
+}
 
 /* ---------------- tasks ---------------- */
 .task-list { list-style: none; margin: .7rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .7rem; }

@@ -7,6 +7,8 @@
 #   3. test_atomic_writes_and_auth.py —— 原子写契约 / 并发锁 / 验证码仅本机回传 回归
 #   4. test_worker_proxy_direct.py —— 解析通道直连 daemon 的路由回归
 #   5. test_cloud_link.py        —— web 版账号接授权中心（打通 web 与 App 用户数据）
+#   6. test_media_proxy_range.py —— 下载用媒体中继 /api/media/proxy 的 Range/防盗链/SSRF 契约
+#   7. test_web_direct_download.js —— 网页版直链分片下载引擎（前端真源码 + 假源站，需 node）
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -46,12 +48,37 @@ run_one() {
   fi
 }
 
+# --- Node 解释器（前端下载引擎测试用）---
+# 找不到就只跳过那一条，不让「本机没装 node」把整份套件染红。
+NODE=""
+for cand in /Users/suixindelang/.workbuddy/binaries/node/versions/*/bin/node \
+            "$(command -v node 2>/dev/null)"; do
+  if [ -n "$cand" ] && [ -x "$cand" ]; then NODE="$cand"; break; fi
+done
+
+run_node() {
+  local f="$1"
+  echo ""
+  echo "=== $f (node) ==="
+  if [ -z "$NODE" ]; then
+    echo "⏭ 跳过：未找到 node 解释器（前端下载引擎测试需要 node）"
+    return 0
+  fi
+  if "$NODE" "tests/$f" 2>&1; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+}
+
 run_one test_baidu_qr_offline.py
 run_one test_app_smoke.py
 run_one test_atomic_writes_and_auth.py
 run_one test_worker_proxy_direct.py
 run_one test_peer_overseas_fallback.py
 run_one test_cloud_link.py
+run_one test_media_proxy_range.py
+run_node test_web_direct_download.js
 
 echo ""
 echo "========================================="
