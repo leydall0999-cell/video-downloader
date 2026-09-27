@@ -1590,6 +1590,15 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
         # 带登录态会卡在 "The page needs to be reloaded"，不带则被 bot 拦截。
         # 实测矩阵与依赖来源见 _js_challenge_options 上方注释。
         options.update(_js_challenge_options())
+        # 提速：player_skip=configs 跳过「为每个非 webpage 客户端额外下载一次 ytcfg」的请求。
+        # 2026-09-27 香港节点实测（yt-dlp 2026.8.19，默认客户端链，同一视频跑两遍）：
+        #   格式数 49→49、协议分布 mhtml×4 + m3u8_native×17 + https×28 完全不变
+        #   解析耗时 5.54s→4.18s / 4.11s→4.43s（噪声内，不劣化）
+        #   ⇒ 少一次请求，且不裁掉 HLS/DASH（skip 类参数最容易误伤格式列表）。
+        # 来源：竞品 DataTool 的 yt_dlp_bridge.py build_info_opts 同款提速项。
+        # 紧急回滚开关：VDL_YT_PLAYER_SKIP=0（不需要重新发版）。
+        if os.environ.get("VDL_YT_PLAYER_SKIP", "1").strip().lower() not in ("0", "false", "no", "off"):
+            options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_skip"] = ["configs"]
     if not _is_yt and not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
