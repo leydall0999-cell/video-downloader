@@ -170,15 +170,34 @@ m3u8-dl <url> --header "User-Agent: …" --header "Referer: …"
 
 ### ★★★ 立刻能做、成本低
 
-| # | 吸收项 | 证据 | 工作量 |
-|---|---|---|---|
-| 1 | **cookie 每次用 `tempfile.mkstemp` 新副本**喂 yt-dlp，不复用同一路径 | `yt_dlp_bridge.py:114-144` 注释原文「yt-dlp 会回写 cookiefile」 | 极小（十几行） |
-| 2 | **解析阶段加 `player_skip: ["configs"]` + `max_comments: 0` + `skip: translated_subs,chapters`**，并**不 skip hls/dash** | `yt_dlp_bridge.py:187-210` | 极小 |
-| 3 | **SOCKS5→HTTP 本地桥**（用户开 socks VPN 时 yt-dlp/aria2 能用上） | `utils/socks-http-bridge.js` | 小（约 100 行） |
-| 4 | **系统代理自动探测**（macOS `scutil --proxy`） | `utils/detect-system-proxy.js` | 小 |
-| 5 | **文件名唯一化 + 命名模板变量** | `utils/filename-utils.js`、`naming-rule-utils.js` | 小 |
+| # | 吸收项 | 证据 | 工作量 | 复核结论（2026-09-27） |
+|---|---|---|---|---|
+| 1 | **cookie 每次用 `tempfile.mkstemp` 新副本**喂 yt-dlp，不复用同一路径 | `yt_dlp_bridge.py:114-144` 注释原文「yt-dlp 会回写 cookiefile」 | 极小 | ❌ **不适用**：我们从不写 cookiefile，cookie 一律以 `http_headers["Cookie"]` 注入（全仓 grep `cookiefile` 零命中），结构上不存在「回写污染」 |
+| 2 | **`player_skip: ["configs"]`**（+`max_comments:0`、+`skip: translated_subs,chapters`） | `yt_dlp_bridge.py:187-210` | 极小 | ✅ **已落地**（只取 player_skip，理由见下） |
+| 3 | **SOCKS5→HTTP 本地桥** | `utils/socks-http-bridge.js` | 小 | ❌ **不必要**：yt-dlp 自带 `yt_dlp/socks.py`（Public Domain 实现，无需 PySocks），原生支持 `socks5://`；aria2 同样原生支持 |
+| 4 | **系统代理自动探测**（macOS `scutil --proxy`） | `utils/detect-system-proxy.js` | 小 | ❌ **已有**：`_macos_system_proxy()`（scutil）+ `_probe_local_proxy_ports()`（常见端口兜底） |
+| 5 | **文件名唯一化 + 命名模板变量** | `utils/filename-utils.js`、`naming-rule-utils.js` | 小 | ⏸ 待做 |
 
-> 其中 1、2 直接命中我们已知的两个痛点：「cookie 快照滚动字段过期」「YT 解析慢 ~2min」。
+> 复核方法：先 grep 自己代码再决定抄不抄。**竞品的解法服务于它的实现路径**（它用 cookiefile + Electron 无 socks 支持），
+> 不等于我们的缺口。4 条里只有第 2 条是真缺口。
+
+### 第 2 条落地记录（2026-09-27）
+
+只取 `player_skip`，**不取** `max_comments` / `skip: translated_subs,chapters`：
+- `max_comments`：yt-dlp 默认 `getcomments=False`，传了是空转；
+- `skip:`：会裁掉字幕/章节元数据，收益（省一次请求）不抵风险，我们前端后续要用。
+
+实测（香港节点 47.82.101.79，yt-dlp 2026.8.19，同一视频跑两遍、交替顺序抵消预热偏差）：
+
+| 客户端链 | 格式数 | 协议分布 | 耗时 baseline → skip_configs |
+|---|---|---|---|
+| `web_safari`（web-dev） | 11 → 11 | mhtml×4 + m3u8_native×6 + https×1（**不变**） | 5.63→4.52s、4.83→4.49s |
+| 默认链（app-dev） | 49 → 49 | mhtml×4 + m3u8_native×17 + https×28（**不变**） | 5.54→4.18s、4.11→4.43s |
+
+⇒ **省一次 ytcfg 请求、耗时不劣化，且不裁掉 HLS/DASH**（skip 类参数最容易误伤格式列表，这条必须实测而非照抄）。
+
+落地：`server/downloader.py` 的 `_base_options()` YouTube 分支，带 `VDL_YT_PLAYER_SKIP=0` 紧急回滚开关；
+离线用例 `tests/test_youtube_player_skip.py`（web-dev + app-dev 各一份）。
 
 ### ★★ 值得做、但要评估
 

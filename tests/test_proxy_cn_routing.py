@@ -14,6 +14,11 @@ import downloader  # noqa: E402
 
 def _proxy_for(host: str, env=None) -> str:
     saved = {}
+    # 本机代理探测（scutil / 常见端口扫描）会让用例结果随开发者机器漂移：
+    # 开着 Clash 时海外站必然被探测到 127.0.0.1:789x，与被测逻辑无关。此处短路。
+    _orig = (downloader._macos_system_proxy, downloader._probe_local_proxy_ports)
+    downloader._macos_system_proxy = lambda *a, **kw: ""
+    downloader._probe_local_proxy_ports = lambda *a, **kw: ""
     try:
         for k in ("VDL_PROXY_CN", "VDL_PROXY", "https_proxy", "http_proxy"):
             saved[k] = os.environ.pop(k, None)
@@ -23,6 +28,7 @@ def _proxy_for(host: str, env=None) -> str:
         opts = downloader._base_options(host=host)
         return opts.get("proxy", "")
     finally:
+        downloader._macos_system_proxy, downloader._probe_local_proxy_ports = _orig
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v

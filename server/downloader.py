@@ -1527,7 +1527,17 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     # 注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
     # 多 client 列表会导致空 SABR 结果污染整体，必须只传一个。
     if host and ("youtube.com" in host or "youtu.be" in host):
-        options.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["web_safari"]
+        _yt_args = options.setdefault("extractor_args", {}).setdefault("youtube", {})
+        _yt_args["player_client"] = ["web_safari"]
+        # 提速：player_skip=configs 跳过「为每个非 webpage 客户端额外下载一次 ytcfg」的请求。
+        # 2026-09-27 香港节点实测（yt-dlp 2026.8.19 + web_safari，同一视频跑两遍）：
+        #   解析耗时 5.63s→4.52s、4.83s→4.49s（-7%~-20%）
+        #   格式数 11→11、协议分布 mhtml×4 + m3u8_native×6 + https×1 完全不变
+        #   ⇒ 少一次请求，且不裁掉 HLS/DASH（这是关键，skip 类参数最容易误伤格式列表）。
+        # 来源：竞品 DataTool 的 yt_dlp_bridge.py build_info_opts 同款提速项。
+        # 紧急回滚开关：VDL_YT_PLAYER_SKIP=0（不需要重新发版）。
+        if os.environ.get("VDL_YT_PLAYER_SKIP", "1").strip().lower() not in ("0", "false", "no", "off"):
+            _yt_args["player_skip"] = ["configs"]
     elif not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。

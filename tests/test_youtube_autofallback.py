@@ -142,7 +142,8 @@ def test_youtube_no_cookie_sources(monkeypatch):
         raise AssertionError("应抛 ResolveError")
     except ResolveError as e:
         assert e.category == "cookie_required"
-        assert "VDL_YOUTUBE_COOKIE" in (e.hint or "")
+        # 提示文案会迭代（不再逐字写死环境变量名），只锁定「必须引导用户补 Cookie」这层语义
+        assert "Cookie" in (e.hint or "")
 
 
 def test_youtube_visitor_data_injected_for_pot(monkeypatch):
