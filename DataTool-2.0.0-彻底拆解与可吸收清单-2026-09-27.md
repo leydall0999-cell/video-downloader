@@ -21,7 +21,7 @@
 | 框架 | Electron（`NSPrincipalClass=AtomApplication`）+ `ee-core@4.1.3`（electron-egg）+ Vue3 | FastAPI + PyWebView/原生壳 | 路线不同 |
 | yt-dlp | **2026.8.19**（官方原版，943 个 extractor，无 `--subtitles-probe-only` 等私有参数） | **2026.8.19**（`dist/.../yt_dlp-2026.8.19.dist-info`） | **持平** |
 | JS 挑战 | 自带 **deno 2.9.6**（实测 `--version`）+ `yt_dlp_ejs 0.8.0` | 已修通（v1.0.29 `dbe37b7`） | 持平 |
-| HTTP 分片下载 | **aria2c 改名 `boost-core`**（4.9 MB，`strings` 命中 aria2 帮助文本全文） | aria2 **仅用于种子/磁力**（`server/torrent.py:501`），普通下载不用 | **我们有但没用在正地方** |
+| HTTP 分片下载 | **aria2c 改名 `boost-core`**（4.9 MB，`strings` 命中 aria2 帮助文本全文） | 桌面端 aria2c 已随包（88 MB，`desktop/bundle_aria2.py`）；普通下载**有开关但未默认启用**（`downloader.py:4421` `VDL_DOWNLOADER=aria2c`），实测未突破单 IP 限速顶 | ~~我们有但没用在正地方~~ → **已落地，无增量** |
 | HLS 下载 | **N_m3u8DL-RE 改名 `m3u8-dl`**（20 MB，.NET AOT；`strings` 命中 `N_m3u8DL-RE.Common`、`LoadM3u8FromUrlAsync`、`MergeByFFmpeg`、`ParseHLSCustomKey`） | 桌面端走 yt-dlp；网页版是我们自己写的浏览器内拼接 | **明显落后** |
 | ffmpeg | 自带 `ffmpeg` + `ffprobe`（各 ~50 MB） | 自带 | 持平 |
 | Python | 自带 Python **3.12** 运行环境（`extraResources/python/bin/python3.12` + `yt-dlp`） | 打包进 app | 持平 |
@@ -201,13 +201,45 @@ m3u8-dl <url> --header "User-Agent: …" --header "Referer: …"
 
 ### ★★ 值得做、但要评估
 
-| # | 吸收项 | 说明 |
+| # | 吸收项 | 说明 | 回本仓复核（2026-09-27） |
+|---|---|---|---|
+| 6 | **HLS 换 N_m3u8DL-RE**（桌面端） | 补齐加密流解密、自动选档、并发合并。二进制 20 MB 需随包。网页版无法直接用（要落盘到服务器） | ⏸ **不优先**：见下方「6 vs 7 决策」 |
+| 7 | **普通直链下载接 aria2 RPC**（桌面端） | 我们 aria2 已随包但只服务种子。`--split=4 --min-split-size=8M --max-connection-per-server=4 --retry-wait=5` 这套参数可直接抄 | ❌ **已经做完了**：`downloader.py:4421-4429` 早有 `VDL_DOWNLOADER=aria2c` / 请求字段 `downloader_type` 开关 + `_build_aria2c_args()`；`desktop/bundle_aria2.py` 已把 aria2c+7 dylib（88 MB）打进包。报告第 24 行「普通下载不用」表述不准，应为「已实现开关、默认不启用」 |
+| 8 | **远端失败自动换路由重试**（网页版） | 把现有「对端→主站回落」升级成：区分 TLS 重试/路由重试、独立 key、耗尽集合防抖 | ⏸ 网页版可考虑 |
+| 9 | **双套 extractor_args**（解析用 / 多音轨发现用） | 不同目的用不同 skip 组合 | ⏸ |
+| 10 | **aria2 端口冲突自愈 + 重启限流** | 换端口、netstat/lsof 查占用、重启次数+冷却双限流 | ❌ 我们用 yt-dlp 的 external downloader 接口调 aria2c，**不起 RPC 守护进程**，无端口冲突问题 |
+
+#### 6 vs 7 决策：两个都不做，真正的瓶颈是单 IP 限速
+
+**7（aria2）已经落地且实测无收益** —— `downloader.py:1081-1086` 的注释就是当年实测原文：
+
+```
+# 腾讯等平台实测：单连接限速 ~1KB/s，但**单 IP 总带宽硬顶 ~18KB/s**（与并发数无关）。
+# 16 并发已吃满该上限（VPS 实测：5并发=5KB/s, 16并发=18KB/s, 32/64/aria2c 均未突破）。
+```
+
+⇒ 换下载器（aria2c 也好、N_m3u8DL-RE 也好）**在单 IP 上都不可能突破这个顶**。
+
+**6（N_m3u8DL-RE）唯一真增量是加密方式覆盖**，但 yt-dlp 的实际边界是
+`downloader/hls.py:63`：`r'#EXT-X-KEY:METHOD=(?!NONE|AES-128)'` → 只有 **SAMPLE-AES / 私有 METHOD** 会被判 unsupported；
+AES-128 由 HlsFD 自己解（或交给 ffmpeg），明文更不用说。而我们目标站群（优酷/腾讯/爱奇艺/B站/YouTube）
+基本落在「明文 + AES-128」区间，SAMPLE-AES 命中率极低。
+
+并且它**不是 yt-dlp 的 external downloader** —— aria2c 能接是因为 yt-dlp 有 `options["downloader"]` 接口，
+N_m3u8DL-RE 没有，**必须完全旁路 yt-dlp 重写 HLS 子系统**（进程管理、进度解析、失败重试、合并、任务状态全重建）。
+
+| 项 | 6 N_m3u8DL-RE | 7 aria2 接直链 |
 |---|---|---|
-| 6 | **HLS 换 N_m3u8DL-RE**（桌面端） | 补齐加密流解密、自动选档、并发合并。二进制 20 MB 需随包。网页版无法直接用（要落盘到服务器） |
-| 7 | **普通直链下载接 aria2 RPC**（桌面端） | 我们 aria2 已随包但只服务种子。`--split=4 --min-split-size=8M --max-connection-per-server=4 --retry-wait=5` 这套参数可直接抄 |
-| 8 | **远端失败自动换路由重试**（网页版） | 把现有「对端→主站回落」升级成：区分 TLS 重试/路由重试、独立 key、耗尽集合防抖 |
-| 9 | **双套 extractor_args**（解析用 / 多音轨发现用） | 不同目的用不同 skip 组合 |
-| 10 | **aria2 端口冲突自愈 + 重启限流** | 换端口、netstat/lsof 查占用、重启次数+冷却双限流 |
+| 现状 | 未做 | **已做完**（开关+随包+实测） |
+| 增量 | SAMPLE-AES/私有加密、自动选轨、直播录制 | 无（实测未突破限速顶） |
+| 工作量 | 大（旁路重写 HLS 子系统） | 无 |
+| 随包 | +20~40 MB（现有包体 1.0 G，占比可忽略） | 已含 88 MB |
+
+⇒ **结论：先不做这两个。真正能突破 18 KB/s 硬顶的是「换 IP」而不是「换下载器」** ——
+我们已有香港（47.82.101.79）+ ECS（8.138.223.3）两个出口，以及桌面端开 VPN 时的本机出口，
+把同一任务的分片/字节段**调度到多个出口 IP 并行拉取**，是唯一有可能把吞吐翻倍的路线。
+下一步该做的是**先验证 CDN 是否接受跨 IP 拉同一 m3u8 的不同分片**（成本低，curl 即可验），
+验证通过再谈工程化。
 
 ### ★ 战略级、成本高
 
