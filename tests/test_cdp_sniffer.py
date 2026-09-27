@@ -344,15 +344,23 @@ def test_report_result_rejects_empty_send_id():
 
 
 def test_desktop_auth_signal_defaults_unknown():
-    """桌面端登录态默认未知；前端轮询 picked 带来令牌后才变 True/False，且会过期。"""
+    """桌面端登录态默认未知；带令牌轮询才置 True，且会过期。
+
+    ⚠️ 关键不变式（2026-09-28）：匿名轮询（user_id=None，来自普通浏览器伪装成桌面端、
+    每 3s 调 /api/sniffer/picked）**绝不**把信号覆盖成 False —— 否则会误报「未登录」红条。
+    信号只有两种来源：带有效令牌 → True；无信号 / 过期 → None（未知）。
+    """
     import cdp_sniffer as mod
 
     s = CDPSniffer()
     assert s.status()["desktop_logged_in"] is None, "没有信号时必须是 None（未知），不能谎报未登录"
     s.mark_desktop_auth("u_1")
     assert s.status()["desktop_logged_in"] is True
+    # 匿名轮询不得污染已登录信号：保持 True，而非被改写成 False
     s.mark_desktop_auth(None)
-    assert s.status()["desktop_logged_in"] is False
-    # 过期 → 回到未知（App 界面关掉后不应继续报「未登录」）
+    assert s.status()["desktop_logged_in"] is True
+    s.mark_desktop_auth(None)  # 连续匿名轮询也不变
+    assert s.status()["desktop_logged_in"] is True
+    # 过期 → 回到未知（App 关掉界面后不应继续报「未登录」）
     with patch.object(mod.time, "time", return_value=mod.time.time() + mod.DESKTOP_AUTH_TTL + 5):
         assert s.status()["desktop_logged_in"] is None

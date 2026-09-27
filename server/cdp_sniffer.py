@@ -256,6 +256,9 @@ class CDPSniffer:
             # 桌面端登录态：由桌面端前端轮询 picked 时带的 Authorization 决定（见
             # mark_desktop_auth）。过期（>DESKTOP_AUTH_TTL）返回 None=未知——App 关掉
             # 界面后信号会自然失效，扩展据此显示「无法确认」而不是谎报未登录。
+            # 注意：本值只可能是 True 或 None（见 mark_desktop_auth 的防污染约定：
+            # 匿名轮询绝不改写为 False），故扩展侧「未登录」红条在当前设计下只会在
+            # Token 过期/无信号时出现，不会因普通浏览器伪装轮询而误报。
             logged_in = None
             if self._desktop_auth is not None:
                 ts, ok = self._desktop_auth
@@ -277,9 +280,17 @@ class CDPSniffer:
         扩展自己没有桌面端会话令牌，问 /api/sniffer/status 时永远拿不到登录态；
         而桌面端前端每 3s 就来轮询一次 picked 且带着自己的 Bearer 令牌 —— 借这条
         既有流量把「桌面端登没登录」告诉服务端，扩展即可在点下载前就提示用户。
+
+        ⚠️ 防污染（2026-09-28）：匿名轮询（无 Bearer，user_id is None）一律**不写入**。
+        否则任何打开 http://127.0.0.1:8321 的普通浏览器一旦加载了 desktop-app.js，
+        会以匿名身份每 3s 把登录态覆盖成 False，导致扩展红条误报「未登录」。
+        只有带有效令牌的桌面端才有权更新该信号；匿名请求直接忽略，信号维持上次有效值，
+        过期（>DESKTOP_AUTH_TTL）后由 status() 自然回落到 None（=「无法确认」）。
         """
+        if not user_id:
+            return
         with self._lock:
-            self._desktop_auth = (time.time(), bool(user_id))
+            self._desktop_auth = (time.time(), True)
 
     def report_result(self, send_id: str, ok: bool, message: str = "") -> bool:
         """桌面端把「建任务结果」写回给扩展（send_id 来自 /api/sniffer/send 的响应）。"""
