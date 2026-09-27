@@ -3751,8 +3751,21 @@
       if (window.pywebview || isDesktopBuild) {
         loadDesktopApp();
       } else {
-        // 纯 web 环境：pywebview 可能稍后注入，但 build 指纹证明不是桌面包，永不加载
-        document.addEventListener('pywebviewready', loadDesktopApp, { once: true });
+        // pywebview 可能稍后注入。⚠️ 2026-09-27 实测：WKWebView 下 'pywebviewready'
+        // 可能早于本内联脚本执行就派发（监听器永远等不到，desktop-app.js 整个漏载，
+        // 嗅探徽标/原生桥接全灭）。故除事件外再加轮询兜底，双保险。
+        var _daLoaded = false;
+        var _daTry = function () {
+          if (_daLoaded) return;
+          if (window.pywebview) { _daLoaded = true; loadDesktopApp(); }
+        };
+        document.addEventListener('pywebviewready', _daTry, { once: true });
+        var _daN = 0;
+        var _daTimer = setInterval(function () {
+          _daN += 1;
+          _daTry();
+          if (_daLoaded || _daN > 40) clearInterval(_daTimer); // 最多轮询 ~20s
+        }, 500);
       }
     };
     document.head.appendChild(s);
