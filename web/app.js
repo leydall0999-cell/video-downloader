@@ -3719,6 +3719,92 @@
   const _dlRelayUrl = (url, base) =>
     `${base || ''}/api/media/proxy?u=${encodeURIComponent(url)}`;
 
+  // ===== 远端失败自动换路由重试 =====
+  // 浏览器侧拿不到底层错误码：TLS 握手失败、连接重置、DNS 失败在 fetch 里统统是
+  // `TypeError: Failed to fetch`。所以只能按**可观测信号**分类，不同类别策略不同：
+  //   · network —— 网络层（TLS 抖动 / 连接重置 / DNS）。**先在同一条路由上原地重试**，
+  //                这类抖动常自愈；换路由解决不了本机的偶发问题，只会白白多打一次对端。
+  //   · missing —— 404/405：对端**没有这个端点**（老分支常见）。原地重试纯属浪费，
+  //                直接换路由，并把该节点标记为长期不可用（端点缺失是节点属性，与源站无关）。
+  //   · forbid  —— 401/403：防盗链 / 签名不匹配。换路由可能有效（IP 签名换出口就变了），
+  //                但它是**源站维度**的，按 host 记。
+  //   · upstream—— 5xx：上游（CDN / 对端代理）自己失败，换路由有机会绕开；也可能自愈，短 TTL。
+  //   · abort   —— 用户取消，任何重试都不该发生。
+  const _dlErrKind = (err) => {
+    if (!err) return 'unknown';
+    if (err.name === 'AbortError') return 'abort';
+    const m = String((err && err.message) || err);
+    if (/\b(404|405)\b|Not Found/i.test(m)) return 'missing';
+    if (/\b(401|403)\b|Forbidden|Unauthorized/i.test(m)) return 'forbid';
+    if (/\b5\d\d\b/i.test(m)) return 'upstream';
+    if (/Failed to fetch|NetworkError|TypeError|network/i.test(m)) return 'network';
+    return 'unknown';
+  };
+
+  const _DL_ROUTE_TTL = {           // 各类失败把某条路由"判死"多久（毫秒）
+    missing: 600000,                // 端点不存在 → 这次会话基本不用再试
+    forbid: 300000,
+    upstream: 60000,
+    network: 30000,
+    unknown: 30000,
+  };
+  // 端点缺失（missing）是**节点属性**，换任何源站都一样 ⇒ key 不带 host；
+  // 其余是源站/链路属性 ⇒ key 带 host，避免一个源站的问题株连到别的源站。
+  const _DL_ROUTE_HOST_SCOPED = { missing: false, forbid: true, upstream: true, network: true, unknown: true };
+  const _DL_ROUTE_NET_RETRY = 1;    // 同一条路由上，网络类错误的原地重试次数
+  const _DL_ROUTE_SWITCH_MAX = 2;   // 单次下载最多切几次路由（防止来回抖动）
+
+  const _dlRouteExhausted = new Map();   // key -> 解禁时间戳
+  const _dlHostOf = (url) => {
+    try { return new URL(url).hostname || ''; } catch (_e) { return ''; }
+  };
+  const _dlRouteKey = (kind, b, host) =>
+    `${kind}|${b || ''}|${(_DL_ROUTE_HOST_SCOPED[kind] === false) ? '' : (host || '')}`;
+  const _dlRouteDead = (kind, b, host) => {
+    const until = _dlRouteExhausted.get(_dlRouteKey(kind, b, host));
+    if (!until) return false;
+    if (Date.now() > until) { _dlRouteExhausted.delete(_dlRouteKey(kind, b, host)); return false; }
+    return true;
+  };
+
+  /**
+   * 按候选路由依次取一次资源。成功即返回，并把选中的 base 写回 state.base
+   * （后续请求沿用，**不再逐个试探**）；失败先按 _dlErrKind 决定「原地重试」还是
+   * 「换路由」，再把判死的路由写进 _dlRouteExhausted —— 这就是防抖的关键：
+   * 对端一旦被确认为缺端点，后面几十上百个分片请求都不会再去敲它。
+   */
+  const _dlRouteFetch = async (url, bases, state, doFetch, signal) => {
+    const host = _dlHostOf(url);
+    const order = [state.base, ...bases.filter((b) => b !== state.base)];
+    let lastErr = null;
+    for (const b of order) {
+      if (_dlRouteDead('missing', b, host)) continue;
+      let netTry = 0;
+      for (;;) {
+        try {
+          const out = await doFetch(_dlRelayUrl(url, b), signal);
+          if (b !== state.base) {
+            state.switches = (state.switches || 0) + 1;
+            state.base = b;
+          }
+          return out;
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          lastErr = err;
+          const kind = _dlErrKind(err);
+          if (kind === 'network' && netTry < _DL_ROUTE_NET_RETRY) { netTry += 1; continue; }
+          // network 类不判死：它多半是本机/链路的偶发抖动，不是这条路由的错
+          if (kind !== 'network') {
+            _dlRouteExhausted.set(_dlRouteKey(kind, b, host), Date.now() + (_DL_ROUTE_TTL[kind] || 30000));
+          }
+          break;
+        }
+      }
+      if ((state.switches || 0) >= _DL_ROUTE_SWITCH_MAX) break;
+    }
+    throw lastErr || new Error('中继不可用');
+  };
+
   const _dlExtFromUrl = (url) => {
     const m = /\.(mp4|webm|mov|mkv|flv|m4a|mp3|aac|ogg|wav)(?:[?#]|$)/i.exec(url || '');
     return m ? `.${m[1].toLowerCase()}` : '';
@@ -3866,19 +3952,9 @@
   // **非墙海外源**仍能中转（走 VDL_PROXY）。回落**只在探测阶段**发生：已经下了半截
   // 再换节点等于白烧流量。
   const _dlProbeWithFallback = async (url, base, signal) => {
-    const bases = base ? [base, ''] : [''];
-    let lastErr = null;
-    for (const b of bases) {
-      try {
-        const relay = _dlRelayUrl(url, b);
-        const probe = await _dlProbe(relay, signal);
-        return { relay, probe };
-      } catch (err) {
-        if (err && err.name === 'AbortError') throw err;
-        lastErr = err;
-      }
-    }
-    throw lastErr || new Error('中继不可用');
+    const state = { base: base || '', switches: 0 };
+    const probe = await _dlRouteFetch(url, base ? [base, ''] : [''], state, _dlProbe, signal);
+    return { relay: _dlRelayUrl(url, state.base), probe };
   };
 
   const _DL_CHUNK_FALLBACK_MAX = 512 * 1024 * 1024;   // 分片失败后最多重下这么多（见 _dlRun）
@@ -4074,27 +4150,18 @@
     // 回落只在**第一条请求**做一次，之后整条链路都用选定的 base：
     // 两边都能取到同一份分片，中途换节点没有意义，只会让地址来源变得难以复现。
     const bases = base ? [base, ''] : [''];
-    let relayBase = '';
-    let text = null;
-    let lastErr = null;
-    for (const b of bases) {
-      try {
-        text = await _dlFetchText(_dlRelayUrl(m3u8Url, b), signal);
-        relayBase = b;
-        break;
-      } catch (err) {
-        if (err && err.name === 'AbortError') throw err;
-        lastErr = err;
-      }
-    }
-    if (text === null) throw lastErr || new Error('中继不可用');
+    // state.base 是"当前生效的路由"，成功的那条会被写回并被后续所有请求沿用；
+    // 中途某条请求失败时按 _dlErrKind 换路由，换成功也写回 state.base（不来回切）。
+    const state = { base: base || '', switches: 0 };
+    const fetchText = (u) => _dlRouteFetch(u, bases, state, _dlFetchText, signal);
+    const fetchBin = (u) => _dlRouteFetch(u, bases, state, _dlFetchBin, signal);
 
     let url = m3u8Url;
-    let pl = _dlParseM3u8(text, url);
+    let pl = _dlParseM3u8(await fetchText(m3u8Url), url);
     if (pl.kind === 'master') {
       if (!pl.variants.length) throw new Error('清单里没有可用的清晰度');
       url = _dlPickVariant(pl.variants, wantHeight).uri;
-      pl = _dlParseM3u8(await _dlFetchText(_dlRelayUrl(url, relayBase), signal), url);
+      pl = _dlParseM3u8(await fetchText(url), url);
     }
     if (pl.kind !== 'media' || !pl.segments.length) throw new Error('清单里没有分片');
     if (pl.encrypted) throw new Error('该流已加密，浏览器无法解密');
@@ -4106,7 +4173,7 @@
     let bytes = 0;
     if (pl.init) {
       // 初始化段必须排在最前：fMP4 少了它整个文件无法解码
-      parts[0] = await _dlFetchBin(_dlRelayUrl(pl.init, relayBase), signal);
+      parts[0] = await fetchBin(pl.init);
       bytes += parts[0].byteLength;
     }
     let next = 0;
@@ -4116,7 +4183,7 @@
         const i = next;
         next += 1;
         if (i >= pl.segments.length) return;
-        const buf = await _dlFetchBin(_dlRelayUrl(pl.segments[i], relayBase), signal);
+        const buf = await fetchBin(pl.segments[i]);
         parts[i + offset] = buf;
         bytes += buf.byteLength;
         segDone += 1;
