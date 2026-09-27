@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover
 
 MAX_ITEMS = 200          # 环形上限：URL 全量去重，超限弹最旧
 TICKER_INTERVAL = 1.5    # outbox 轮询 / 悬浮球刷新
-WATCH_INTERVAL = 3.0     # /json 监视（发现新标签页）
+WATCH_INTERVAL = 1.5     # /json 监视（发现新标签页；间隔越小，错过页面加载期请求的窗口越小）
 CDP_HTTP_TIMEOUT = 3.0
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,6 @@ _OUTBOX_READ_JS = (
     " ? window.__VDL_SNIFF.outbox.splice(0) : []);}catch(e){return '[]';}})()"
 )
 
-_SETITEMS_JS_PREFIX = "window.__VDL_SNIFF && window.__VDL_SNIFF.setItems("
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +264,7 @@ class CDPSniffer:
         self._stop_evt.clear()
         self._port = port
         self._error = ""
+        self._state = "running"   # 预置：线程刚起时 status() 查询不至于显示 idle
         self._thread = threading.Thread(target=self._run, name="vdl-cdp-sniffer", daemon=True)
         self._thread.start()
         return self.status()
@@ -287,8 +287,9 @@ class CDPSniffer:
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        self._tasks: set[asyncio.Task] = set()
         try:
-            self._loop.run_until_complete(self._watch())
+            self._loop.run_until_complete(self._browser_session())
         except Exception as exc:  # noqa: BLE001 - 后台线程兜底
             self._state, self._error = "error", f"嗅探线程异常: {exc}"
         finally:
@@ -297,48 +298,23 @@ class CDPSniffer:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _watch(self) -> None:
-        """监视 /json：新 page 建连、消失页断连。"""
-        self._state = "running"
-        conns: dict[str, asyncio.Task] = {}
-        try:
-            while not self._stop_evt.is_set():
-                try:
-                    targets = await asyncio.to_thread(self._list_pages, self._port)
-                except Exception:  # noqa: BLE001 - 浏览器暂时没起来
-                    targets = []
-                alive = set()
-                for t in targets:
-                    ws_url = t.get("webSocketDebuggerUrl") or ""
-                    if not ws_url:
-                        continue
-                    alive.add(ws_url)
-                    if ws_url not in conns:
-                        conns[ws_url] = asyncio.create_task(
-                            self._page_worker(ws_url, t.get("title") or ""))
-                for k in list(conns):
-                    if k not in alive:
-                        conns[k].cancel()
-                        conns.pop(k, None)
-                await asyncio.sleep(WATCH_INTERVAL)
-        finally:
-            for t in conns.values():
-                t.cancel()
+    async def _browser_session(self) -> None:
+        """browser 级 CDP 会话（flatten 模式）。
 
-    async def _page_worker(self, ws_url: str, title: str) -> None:
+        用 Target.setAutoAttach 在**标签页创建瞬间**挂上并立刻 Network.enable ——
+        赶在页面首个请求之前，直链导航型页面（打开 URL 就播、1s 内请求完毕）
+        也能抓到。旧方案（轮询 /json 逐 tab 建连）要 2~3s，必然错过这类页面。
+        """
         import websockets as _ws
-        seq = 0
-        pending: dict[str, dict] = {}   # requestId -> {url, headers, page_url}
+        self._state = "running"
+        ws_url = await asyncio.to_thread(self._browser_ws_url, self._port)
+        pages: dict[str, dict] = {}      # sessionId -> {title, url}
+        pendings: dict[str, dict] = {}   # sessionId -> {requestId: meta}
         try:
             async with _ws.connect(ws_url, max_size=None, open_timeout=8) as ws:
-                seq += 1
-                await ws.send(json.dumps({"id": seq, "method": "Network.enable"}))
-                seq += 1
-                await ws.send(json.dumps({"id": seq, "method": "Page.addScriptToEvaluateOnNewDocument",
-                                          "params": {"source": _BALL_JS}}))
-                seq += 1
-                await ws.send(json.dumps({"id": seq, "method": "Runtime.evaluate",
-                                          "params": {"expression": _BALL_JS}}))
+                self._ws_id = 0
+                await self._send(ws, "", "Target.setAutoAttach", {
+                    "autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
                 last_ticker = 0.0
                 while not self._stop_evt.is_set():
                     try:
@@ -346,20 +322,44 @@ class CDPSniffer:
                     except asyncio.TimeoutError:
                         raw = None
                     if raw is not None:
-                        self._on_message(json.loads(raw), pending, title)
+                        self._on_browser_message(json.loads(raw), pages, pendings, ws)
                     now = time.time()
                     if now - last_ticker >= TICKER_INTERVAL:
                         last_ticker = now
-                        await self._tick(ws, ws_url)
+                        for sid in list(pages):
+                            await self._tick_sid(ws, sid)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
             if not self._stop_evt.is_set():
-                self._error = f"标签页连接断开: {exc}"[:200]
+                self._state, self._error = "error", f"浏览器连接断开: {exc}"[:200]
 
-    def _on_message(self, msg: dict, pending: dict, title: str) -> None:
+    async def _send(self, ws: Any, sid: str, method: str, params: dict | None = None) -> None:
+        self._ws_id = (getattr(self, "_ws_id", 0) + 1) & 0x7FFFFFFF
+        msg: dict[str, Any] = {"id": self._ws_id, "method": method}
+        if params:
+            msg["params"] = params
+        if sid:
+            msg["sessionId"] = sid
+        await ws.send(json.dumps(msg, ensure_ascii=False))
+
+    def _on_browser_message(self, msg: dict, pages: dict, pendings: dict, ws: Any) -> None:
         method = msg.get("method") or ""
         params = msg.get("params") or {}
+        sid = msg.get("sessionId") or ""
+        if method == "Target.attachedToTarget":
+            ti = params.get("targetInfo") or {}
+            new_sid = params.get("sessionId") or ""
+            if ti.get("type") == "page" and new_sid:
+                pages[new_sid] = {"title": ti.get("title") or "", "url": ti.get("url") or ""}
+                self._spawn(self._enable_page(ws, new_sid))
+            return
+        if method == "Target.targetInfoChanged":
+            ti = params.get("targetInfo") or {}
+            if sid in pages:
+                pages[sid]["title"] = ti.get("title") or pages[sid]["title"]
+                pages[sid]["url"] = ti.get("url") or pages[sid]["url"]
+            return
         if not method and "id" in msg:
             # Runtime.evaluate 的响应：outbox 读取那条会带回用户点击的下载项
             value = ((msg.get("result") or {}).get("result") or {}).get("value")
@@ -372,6 +372,9 @@ class CDPSniffer:
                     with self._lock:
                         self._picked.extend(rows)
             return
+        if sid not in pages:
+            return
+        pending = pendings.setdefault(sid, {})
         if method == "Network.requestWillBeSent":
             req = params.get("request") or {}
             rid = params.get("requestId") or ""
@@ -399,23 +402,45 @@ class CDPSniffer:
             referer = headers.get("Referer") or headers.get("referer") or ""
             self._register(url=url, mime=resp.get("mimeType") or "", kind=kind,
                            referer=referer, page_url=meta.get("page_url") or "",
-                           page_title=title)
-            if len(pending) > 800:  # 防内存：只留最近的 requestId
+                           page_title=pages[sid].get("title") or "")
+            if len(pending) > 800:
                 for k in list(pending)[: -400]:
                     pending.pop(k, None)
 
-    async def _tick(self, ws: Any, ws_url: str) -> None:
-        """低频轮询：读 outbox + 把最新 items 推给悬浮球。"""
+    async def _enable_page(self, ws: Any, sid: str) -> None:
+        """新 tab 挂上后立刻 enable + 注悬浮球（导航请求前生效）。"""
         try:
-            await ws.send(json.dumps({"id": int(time.time() * 1000) & 0x7FFFFFFF,
-                                      "method": "Runtime.evaluate",
-                                      "params": {"expression": _OUTBOX_READ_JS, "returnByValue": True}}))
+            await self._send(ws, sid, "Network.enable")
+            await self._send(ws, sid, "Page.addScriptToEvaluateOnNewDocument",
+                             {"source": _BALL_JS})
+            await self._send(ws, sid, "Runtime.evaluate",
+                             {"expression": _BALL_JS, "returnByValue": True})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _spawn(self, coro) -> None:
+        """惰性创建 task：无运行中事件循环（如单测直调消息处理）时直接丢弃。"""
+        try:
+            task = asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            coro.close()
+            return
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _tick_sid(self, ws: Any, sid: str) -> None:
+        """低频轮询：读 outbox + 把最新 items 推给悬浮球（未注入的补注）。"""
+        try:
+            await self._send(ws, sid, "Runtime.evaluate",
+                             {"expression": _OUTBOX_READ_JS, "returnByValue": True})
             rows = self.items(limit=30)
             payload = json.dumps([{k: r.get(k) for k in ("url", "mime", "kind", "referer", "page_url")}
                                   for r in rows], ensure_ascii=False)
-            await ws.send(json.dumps({"id": int(time.time() * 1000) & 0x7FFFFFFF,
-                                      "method": "Runtime.evaluate",
-                                      "params": {"expression": _SETITEMS_JS_PREFIX + payload + ");"}}))
+            # addScriptToEvaluateOnNewDocument 对「已加载完的当前文档」不生效，这里兜底
+            await self._send(ws, sid, "Runtime.evaluate", {"expression":
+                "window.__VDL_SNIFF ? window.__VDL_SNIFF.setItems(" + payload
+                + ") : (function(){" + _BALL_JS + " window.__VDL_SNIFF.setItems("
+                + payload + ");})()"})
         except Exception:  # noqa: BLE001 - ticker 失败不打断嗅探
             pass
 
@@ -448,6 +473,16 @@ class CDPSniffer:
                 self._items.popitem(last=False)
 
     # ---- 浏览器探测 / 启动 ----
+
+    @staticmethod
+    def _browser_ws_url(port: int) -> str:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version",
+                                    timeout=CDP_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        url = data.get("webSocketDebuggerUrl") or ""
+        if not url:
+            raise RuntimeError("浏览器未提供 browser 级调试端点")
+        return url
 
     @staticmethod
     def _list_pages(port: int) -> list[dict]:

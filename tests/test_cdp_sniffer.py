@@ -99,23 +99,38 @@ def test_register_ring_limit():
 
 
 # ---------------------------------------------------------------------------
-# _on_message：CDP 假消息流
+# _on_browser_message：CDP 假消息流（browser 级 flatten 会话）
 # ---------------------------------------------------------------------------
+
+def _make_session(s: CDPSniffer):
+    pages: dict = {}
+    pendings: dict = {}
+    async def _noop_enable(ws, sid):    # 真发送走 ws，单测只需 stub
+        return None
+    s._enable_page = _noop_enable
+    s._spawn = lambda coro: coro.close()
+    return pages, pendings
+
 
 def test_on_message_request_response_flow():
     s = _fresh_sniffer()
-    pending: dict = {}
-    s._on_message({"method": "Network.requestWillBeSent", "params": {
+    pages, pendings = _make_session(s)
+    s._on_browser_message({"method": "Target.attachedToTarget", "params": {
+        "sessionId": "s1",
+        "targetInfo": {"type": "page", "title": "页面A", "url": "https://p/watch"},
+    }}, pages, pendings, None)
+    assert "s1" in pages
+    s._on_browser_message({"sessionId": "s1", "method": "Network.requestWillBeSent", "params": {
         "requestId": "r1",
         "documentURL": "https://p/watch",
         "request": {"url": "https://c/master.m3u8?sig=1",
                     "headers": {"Referer": "https://p/watch", "User-Agent": "UA"}},
-    }}, pending, "页面A")
-    s._on_message({"method": "Network.responseReceived", "params": {
+    }}, pages, pendings, None)
+    s._on_browser_message({"sessionId": "s1", "method": "Network.responseReceived", "params": {
         "requestId": "r1",
         "response": {"url": "https://c/master.m3u8?sig=1",
                      "mimeType": "application/vnd.apple.mpegurl"},
-    }}, pending, "页面A")
+    }}, pages, pendings, None)
     rows = s.items()
     assert len(rows) == 1
     assert rows[0]["referer"] == "https://p/watch"   # 防盗链关键
@@ -123,25 +138,38 @@ def test_on_message_request_response_flow():
     assert rows[0]["page_title"] == "页面A"
 
 
-def test_on_message_ignores_non_media():
+def test_on_message_ignores_non_page_and_non_media():
     s = _fresh_sniffer()
-    pending: dict = {}
-    s._on_message({"method": "Network.requestWillBeSent", "params": {
+    pages, pendings = _make_session(s)
+    # 非 page target（扩展/浏览器 UI）不建 pages 条目，其事件被忽略
+    s._on_browser_message({"method": "Target.attachedToTarget", "params": {
+        "sessionId": "ext", "targetInfo": {"type": "service_worker"},
+    }}, pages, pendings, None)
+    s._on_browser_message({"sessionId": "ext", "method": "Network.requestWillBeSent", "params": {
+        "requestId": "r9", "documentURL": "", "request": {"url": "https://c/a.mp4", "headers": {}},
+    }}, pages, pendings, None)
+    assert s.items() == []
+    # page 上的非媒体请求
+    s._on_browser_message({"method": "Target.attachedToTarget", "params": {
+        "sessionId": "s2", "targetInfo": {"type": "page", "title": "t", "url": "https://p/"},
+    }}, pages, pendings, None)
+    s._on_browser_message({"sessionId": "s2", "method": "Network.requestWillBeSent", "params": {
         "requestId": "r2", "documentURL": "https://p/",
         "request": {"url": "https://p/api.json", "headers": {}},
-    }}, pending, "t")
-    s._on_message({"method": "Network.responseReceived", "params": {
+    }}, pages, pendings, None)
+    s._on_browser_message({"sessionId": "s2", "method": "Network.responseReceived", "params": {
         "requestId": "r2", "response": {"url": "https://p/api.json",
                                         "mimeType": "application/json"},
-    }}, pending, "t")
+    }}, pages, pendings, None)
     assert s.items() == []
 
 
 def test_on_message_collects_outbox_response():
     s = _fresh_sniffer()
-    s._on_message({"id": 42, "result": {"result": {"value": json.dumps([
+    pages, pendings = _make_session(s)
+    s._on_browser_message({"id": 42, "result": {"result": {"value": json.dumps([
         {"url": "https://c/full.mp4", "referer": "https://p/", "mime": "video/mp4",
-         "page_url": "https://p/watch"}])}}}, {}, "t")
+         "page_url": "https://p/watch"}])}}}, pages, pendings, None)
     picked = s.take_picked()
     assert len(picked) == 1 and picked[0]["url"] == "https://c/full.mp4"
     assert s.take_picked() == []                      # take 即清空
@@ -149,13 +177,16 @@ def test_on_message_collects_outbox_response():
 
 def test_on_message_pending_memory_cap():
     s = _fresh_sniffer()
-    pending: dict = {}
+    pages, pendings = _make_session(s)
+    s._on_browser_message({"method": "Target.attachedToTarget", "params": {
+        "sessionId": "s3", "targetInfo": {"type": "page", "title": "t", "url": "https://p/"},
+    }}, pages, pendings, None)
     for i in range(900):
-        s._on_message({"method": "Network.requestWillBeSent", "params": {
+        s._on_browser_message({"sessionId": "s3", "method": "Network.requestWillBeSent", "params": {
             "requestId": f"r{i}", "documentURL": "https://p/",
             "request": {"url": f"https://c/{i}.m3u8", "headers": {}},
-        }}, pending, "t")
-    assert len(pending) <= 600
+        }}, pages, pendings, None)
+    assert len(pendings["s3"]) <= 600
 
 
 # ---------------------------------------------------------------------------
