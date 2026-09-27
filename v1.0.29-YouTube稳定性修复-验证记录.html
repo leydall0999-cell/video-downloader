@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v1.0.29 YouTube 稳定性修复 — 验证记录</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f7f8fa; --line:#e3e6ea; --text:#1b1f24;
+    --muted:#5c6672; --accent:#0b6bcb; --ok:#0f7b3f; --warn:#a8600a; --bad:#c0392b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 64px;background:var(--bg);color:var(--text);
+       font:15px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:860px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 6px;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+  h2{font-size:17px;margin:32px 0 10px;padding-left:10px;border-left:3px solid var(--accent)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f4;font-weight:600}
+  code{background:#eef1f4;border-radius:4px;padding:1px 5px;font-size:13px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:#1b1f24;color:#e8eaed;border-radius:8px;padding:14px 16px;overflow:auto;
+      font-size:12.5px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .ok{color:var(--ok);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  ul{padding-left:22px;margin:8px 0}
+  li{margin:4px 0}
+  .kpi{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}
+  .kpi div{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);
+           border-radius:10px;padding:12px 14px}
+  .kpi b{display:block;font-size:20px;margin-bottom:2px}
+  .kpi span{color:var(--muted);font-size:12.5px}
+  .tag{display:inline-block;background:#e8f2fd;color:#0b6bcb;border-radius:20px;
+       padding:1px 10px;font-size:12px;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>v1.0.29 — YouTube 稳定性修复（已装机，可试用）</h1>
+  <div class="sub">
+    <span class="tag">app-dev</span><span class="tag">dbe37b7</span><span class="tag">2026-09-27</span>
+    把竞品 DataTool 的「两半机制」搬进桌面端 · 已部署到 <code>/Applications</code>
+  </div>
+
+  <h2>一、为什么会一直失败（原来只差两半）</h2>
+  <div class="card">
+    以前 VDL 的 YouTube 是<b>两头都走不通</b>：带登录态卡在
+    <code>The page needs to be reloaded</code>，不带则被 bot 拦截。
+    对标 DataTool 静态分析 + 本机 A/B 实测后确认，它稳定靠的是<b>两半互补</b>的机制，而我们此前<b>两半都缺</b>。
+  </div>
+
+  <h2>二、决定性证据（同机 / 同代理 / 同 Cookie，video=YK9a6TC9j54）</h2>
+  <table>
+    <tr><th>组合</th><th>结果</th></tr>
+    <tr><td>实时浏览器会话 + <b>无</b> JS runtime</td><td class="bad">❌ The page needs to be reloaded（卡死）</td></tr>
+    <tr><td>实时浏览器会话 + deno + EJS</td><td class="ok">✅ 解析成功（35 格式，含 4K）</td></tr>
+    <tr><td>缓存快照 + deno + EJS</td><td class="bad">❌ 仍 bot 拦截</td></tr>
+  </table>
+  <div class="card">⇒ <b>两半缺一不可</b>。只补 JS runtime、或只换新鲜 Cookie，单独做都还是失败。</div>
+
+  <h2>三、这次改了什么</h2>
+  <table>
+    <tr><th>半</th><th>改动</th></tr>
+    <tr>
+      <td>① 会话自持</td>
+      <td>Cookie 候选顺序改为 <code>user &gt; env &gt; browser &gt; cache &gt; pool</code>；
+          <b>实时浏览器会话插到 30 天 TTL 的缓存之前</b>（Google 靠 5 个滚动字段判会话死活，
+          快照一落后就被判未登录，而缓存会一直挡在新鲜值前面）。
+          新增登录态体检（只认 <code>SID/__Secure-1PSID/__Secure-3PSID/LOGIN_INFO</code>）与
+          精确报错（「浏览器里的登录态不可用」而非笼统「需要 Cookie」）。</td>
+    </tr>
+    <tr>
+      <td>② JS 挑战求解</td>
+      <td>新增 runtime 定位（<code>_MEIPASS/bin</code> → venv → PATH）与挑战选项下发
+          （<b>按 yt-dlp 注册表过滤</b>，硬编码会让它直接报错）；
+          打包带上 <code>yt-dlp-ejs</code> + <code>deno</code> 二进制。
+          <b>关键坑</b>：yt-dlp 的 <code>--js-runtimes</code> 默认只启用 deno，
+          <b>不会自动找 PATH 里任何 JS runtime</b>。</td>
+    </tr>
+  </table>
+
+  <h2>四、装机后实测结果</h2>
+  <div class="kpi">
+    <div><b class="ok">35 / 31</b><span>两条视频解析出的格式数（均含 4K）</span></div>
+    <div><b class="ok">6.8–9.3s</b><span>解析耗时（原先是 100s+ 后失败）</span></div>
+    <div><b class="ok">11.28 MB</b><span>真下载落盘（11.8s）</span></div>
+    <div><b class="ok">57 / 0</b><span>离线测试 通过 / 失败</span></div>
+  </div>
+  <pre>① 运行时定位 JS runtime
+   js_runtimes : {deno: .../VideoDownloader.app/Contents/Frameworks/bin/deno, node: ...}
+   用的是包内 deno : True
+
+② 实时浏览器会话（第一半）
+   login_state : logged_in
+
+③ 实跑解析（两半合起来）
+   YK9a6TC9j54 : ✅ 9.3s  印度尼西亚｜4K纪录片          formats=35  含4K=True
+   dQw4w9WgXcQ : ✅ 6.8s  Rick Astley - Never Gonna...  formats=31  含4K=True
+
+④ 真下载（用包内产出的 yt-dlp 选项）
+   下载耗时 11.8s → dQw4w9WgXcQ.mp4  11.28 MB  ✅ 下载链路通</pre>
+
+  <h2>五、怎么试用 / 怎么回滚</h2>
+  <ul>
+    <li><b>试用</b>：App 已装好并正在运行（<code>/Applications</code>，v1.0.29，端口 8321）。
+        直接打开界面，粘贴一个 YouTube 链接点解析即可。已实测两条视频可解析、可下载。</li>
+    <li><b>前提</b>：需要开着代理（YouTube 走代理；本次实测代理 <code>127.0.0.1:7892</code> 正常）。</li>
+    <li><b>回滚</b>：上一版已备份在
+        <code>~/.vdl_backups/视频工坊.app.backup-20260927-054333</code>，直接替换回去即可。</li>
+    <li><span class="warn">未对外发布</span>：只做了本机构建 + 装机，没有推送到更新源，
+        其他人不会被动升级；要正式发布需另行确认。</li>
+  </ul>
+
+  <h2>六、一个需要如实说明的边界</h2>
+  <div class="card">
+    本次修复的是<b>桌面端</b>：它用的是<b>本机</b>浏览器的实时会话（同机同 IP，YouTube 认）。
+    <b>网页版</b>走的是机房 IP、Cookie 需要跨机回放，那条路上 YouTube 仍判
+    <code>LOGGED_IN:false</code> —— 这个老结论<b>没有被本次修复改变</b>，别用它推断网页版能下 YouTube。<br>
+    另外 YouTube 有<b>逐视频</b>的登录要求（部分视频对任何下载器都要求登录），
+    那种情况会明确报「登录态不可用」或需要登录，属视频本身策略，不是本 app 的缺陷。
+  </div>
+
+</div>
+</body>
+</html>

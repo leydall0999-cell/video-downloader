@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DataTool 网页下载引擎拆解 · 我们该借鉴什么（2026-09-27）</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --surface:#fff; --line:#e5e7eb; --text:#1f2430; --mute:#6b7280;
+    --brand:#4f46e5; --ok:#059669; --warn:#b45309; --bad:#b91c1c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1060px;margin:0 auto;padding:40px 22px 72px}
+  header.hero{background:linear-gradient(115deg,#0f172a,#3730a3 55%,#0e7490);color:#fff;
+    border-radius:18px;padding:30px;box-shadow:0 12px 32px rgba(15,23,42,.22)}
+  header.hero h1{margin:0 0 8px;font-size:clamp(1.35rem,3.2vw,1.85rem)}
+  header.hero p{margin:0;opacity:.92;font-size:.95rem}
+  .meta{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}
+  .meta span{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.24);
+    border-radius:999px;padding:3px 12px;font-size:12.5px}
+  h2{font-size:1.14rem;margin:34px 0 12px;padding-left:11px;border-left:4px solid var(--brand)}
+  h3{font-size:1rem;margin:20px 0 8px}
+  .tldr{background:#fff;border:1px solid var(--line);border-left:5px solid var(--brand);
+    border-radius:12px;padding:16px 20px;box-shadow:0 2px 10px rgba(16,24,40,.04)}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;font-size:14px;box-shadow:0 2px 10px rgba(16,24,40,.04)}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f1f2f7;font-size:13px;font-weight:600;color:#374151;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  code{background:#f3f4f6;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+    font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#0f172a}
+  .yes{color:var(--ok);font-weight:600}
+  .no{color:var(--bad);font-weight:600}
+  .part{color:var(--warn);font-weight:600}
+  .star{color:#f59e0b;letter-spacing:1px;white-space:nowrap}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 20px;
+    box-shadow:0 2px 10px rgba(16,24,40,.04);margin:12px 0}
+  ul{margin:8px 0 8px 4px;padding-left:20px} li{margin:5px 0}
+  ol{padding-left:22px} ol li{margin:8px 0}
+  .rec{background:linear-gradient(180deg,#eef2ff,#fff);border:1px solid #c7d2fe;
+    border-radius:12px;padding:16px 20px;margin-top:14px}
+  .rec h3{margin-top:0;color:var(--brand)}
+  .foot{margin-top:34px;padding-top:16px;border-top:1px dashed var(--line);color:var(--mute);font-size:12.5px}
+  .flow{background:#0f172a;color:#e5e7eb;border-radius:12px;padding:16px 20px;font-size:13.5px;
+    line-height:1.9;overflow-x:auto}
+  .flow b{color:#93c5fd}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>DataTool 网页下载引擎拆解 · 我们该借鉴什么</h1>
+    <p>只针对「网页端下载」这一件事：把它的前端下载链路读透，跟我们逐项对比，挑出真正值得搬的。</p>
+    <div class="meta">
+      <span>2026-09-27</span>
+      <span>证据：线上 JS 源码静态分析</span>
+      <span>我方基线：web-dev @ 41f0007</span>
+    </div>
+  </header>
+
+  <h2>一句话结论</h2>
+  <div class="tldr">
+    <p>它的网页下载<b>不是靠"服务端帮你下好"</b>，而是<b>把下载这件事放到浏览器里干</b>：分片并发拉、失败自动重试、HLS 在浏览器里合成 MP4、防盗链用轻量中继绕。
+    我们正好相反——<b>能直连就一个单连接裸下（没进度没重试），不行就整包甩给服务端</b>。</p>
+    <p>于是最有价值的借鉴只有一条主线：<b>把「浏览器侧下载」从"点一下听天由命"升级成"分片 + 并发 + 进度 + 重试"</b>，再配一个媒体中继兜住防盗链。这一条同时省服务端带宽、提升成功率、还让用户看得见进度。其余（浏览器内 m3u8→MP4、画质分级 PRO 角标）是第二梯队。</p>
+  </div>
+
+  <h2>一、它的下载链路长什么样</h2>
+  <div class="flow">
+    <b>解析</b> POST api.datatool.vip<b>/api/video/parse</b> { url } → 返回 media[]（含 <b>video / audio / image</b> 三类 variant）<br>
+    &nbsp;&nbsp;└ 加密档（<code>is_encrypt</code>）再走 <b>/api/video/decrypt</b> 换真实地址；<code>need_vip</code> 只标"原画"档 → 前端出 <b>PRO 角标</b><br>
+    <b>下载分流</b> 点下载后按 URL 分三路：<br>
+    &nbsp;&nbsp;① 自己的中继域（snappdown.com）→ <b>分片并发下载</b>（带进度条）<br>
+    &nbsp;&nbsp;② 其它域名 → <b>单流下载</b>（仍带进度回调）<br>
+    &nbsp;&nbsp;③ 后端标记 <code>needClientTip</code> 的格式 → 弹窗引导<b>装桌面客户端</b>（导流）<br>
+    <b>HLS 分支</b> protocol 是 m3u8 → <b>浏览器内合成 MP4</b>（纯 JS 拼接，或 ffmpeg.wasm 兜底）<br>
+    <b>兜底</b> 失败时开新窗口展示图片让用户右键另存
+  </div>
+
+  <h3>关键参数（从代码里读出来的实值）</h3>
+  <table>
+    <thead><tr><th>环节</th><th>它的做法</th></tr></thead>
+    <tbody>
+      <tr><td>分片大小</td><td><b>10 MB / 片</b>（默认值，可传参覆盖）</td></tr>
+      <tr><td>并发数</td><td><b>3</b>（分片间与 ts 段间都是 3）</td></tr>
+      <tr><td>重试</td><td><b>3 次</b>，按 index 落位、乱序返回也能正确拼装</td></tr>
+      <tr><td>取长度</td><td>先发 <code>HEAD</code>；拿不到 content-length 就整包单流下载</td></tr>
+      <tr><td>进度</td><td>用 <code>response.body.getReader()</code> 逐片累计 → 汇总到 99%，拼完 100%</td></tr>
+      <tr><td>HLS 合成</td><td>取 init 段(fMP4) + 全部 ts/m4s 并发拉 → 拼 <code>Blob</code> → 存 .mp4（有 init 时存 .m4s）</td></tr>
+      <tr><td>HLS 兜底</td><td>按需加载 <code>mediaTools.js</code> + <code>ffmpeg-core.wasm</code>（含<b>多线程 core</b>），用 ffmpeg.wasm 转</td></tr>
+      <tr><td>防盗链</td><td><code>/api/proxy/media?url=</code> 由自己服务器带 Referer/UA 取，前端识别中继 URL 后直接交给浏览器</td></tr>
+      <tr><td>封面健壮性</td><td>HEIC 封面用 heic2any 转码；封面加载失败从网络重取</td></tr>
+    </tbody>
+  </table>
+
+  <h2>二、我们现在的下载是什么样</h2>
+  <table>
+    <thead><tr><th>路径</th><th>实现</th><th>评价</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>直链下载</td>
+        <td><code>web/app.js</code> 的 <code>triggerDirectDownload()</code>：建一个 <code>&lt;a download&gt;</code> 点一下</td>
+        <td class="no">单连接、无进度、无重试；源站防盗链就失败，得让用户手动切「改用服务器下载」</td>
+      </tr>
+      <tr>
+        <td>服务端下载</td>
+        <td><code>POST /api/download</code> 建任务 → 服务端 yt-dlp 拉完 → 浏览器取文件</td>
+        <td class="part">能力最全（见下），但服务端要扛出口带宽与转码</td>
+      </tr>
+      <tr>
+        <td>HLS 处理</td>
+        <td>全靠服务端；直链已明确排除 HLS（<code>_detect_direct_url()</code> 要求 <code>info['direct']</code> + http(s) + 直链扩展名）</td>
+        <td class="part">不会误存成 .m3u8 文本（这点是对的），但 HLS 的活全压在服务器</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>三、逐项对比</h2>
+  <table>
+    <thead><tr><th>能力</th><th>DataTool 网页</th><th>我们</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td>浏览器侧分片并发下载</td><td class="yes">有（10MB × 3 并发 × 3 重试）</td><td class="no">无</td><td><b>该搬</b></td></tr>
+      <tr><td>下载进度条</td><td class="yes">有（含直连路径）</td><td class="no">直连路径无</td><td><b>该搬</b></td></tr>
+      <tr><td>断点/失败自动重试</td><td class="yes">有</td><td class="no">直连路径无</td><td><b>该搬</b></td></tr>
+      <tr><td>媒体中继（绕防盗链/CORS）</td><td class="yes">有 <code>/api/proxy/media</code></td><td class="no">无</td><td><b>该搬</b></td></tr>
+      <tr><td>浏览器内 HLS→MP4</td><td class="yes">有（双实现）</td><td class="no">服务端做</td><td>可搬（省服务器成本）</td></tr>
+      <tr><td>画质分级付费钩子</td><td class="yes">PRO 角标（原画档）</td><td class="no">会员有，画质不分级</td><td>该搬（变现最快）</td></tr>
+      <tr><td>一次解析出 视频+音频+图片</td><td class="yes">有，含图集下载</td><td class="part">以视频为主</td><td>可搬</td></tr>
+      <tr><td>格式太重时引导装客户端</td><td class="yes">有（<code>needClientTip</code>）</td><td class="part">有「更多功能」介绍页</td><td>可搬（导流）</td></tr>
+      <tr><td>失败降级链完整性</td><td class="yes">中继→分片→单流→右键另存</td><td class="part">直链 / 服务器 两条</td><td>可搬</td></tr>
+      <tr><td>服务端下载任务队列</td><td class="no">无（纯客户端）</td><td class="yes">有</td><td><b>我们的优势，别动</b></td></tr>
+      <tr><td>暂停 / 续传 / 重试 / 取消</td><td class="no">无</td><td class="yes">有</td><td><b>我们的优势，别动</b></td></tr>
+      <tr><td>SSE 实时进度、并发数可调、多下载器选择、播放列表批量</td><td class="no">无</td><td class="yes">有</td><td><b>我们的优势，别动</b></td></tr>
+      <tr><td>线路切换（国内/海外双节点）+ Cookie/代理</td><td class="no">无</td><td class="yes">有</td><td><b>我们的优势，别动</b></td></tr>
+    </tbody>
+  </table>
+
+  <h2>四、值得借鉴的（按性价比排序）</h2>
+  <table>
+    <thead><tr><th>优先级</th><th>搬什么</th><th>怎么做 / 注意什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="star">★★★</span></td>
+        <td><b>直链下载升级为「分片 + 并发 + 进度 + 重试」</b></td>
+        <td>改 <code>triggerDirectDownload()</code>：先 <code>HEAD</code> 取长度 → 10MB 分片 → 3 并发 <code>Range</code> 请求 → 失败重试 3 次 → 进度条。
+        <b>坑</b>：跨域 Range 要源站给 CORS 且暴露 <code>Content-Length</code>，拿不到就自动退化单流——这正是对方为什么必须配中继。</td>
+      </tr>
+      <tr>
+        <td><span class="star">★★★</span></td>
+        <td><b>加媒体中继 <code>/api/proxy/media</code></b></td>
+        <td>防盗链/CORS 时由自己服务器带 Referer/UA 转发。有了它，「源站拒绝直连」就从"失败"变"能下"，也让大文件下载留在浏览器侧、减轻 ECS 出口压力。</td>
+      </tr>
+      <tr>
+        <td><span class="star">★★★</span></td>
+        <td><b>画质分级付费钩子（PRO 角标）</b></td>
+        <td>后端在变体上标 <code>need_vip</code>（原画档），前端出 PRO 角标。免费给 1080P、付费给原画。我们会员中心/激活码/配额都现成，<b>只差这一步就能变现</b>。</td>
+      </tr>
+      <tr>
+        <td><span class="star">★★</span></td>
+        <td><b>浏览器内 m3u8 → MP4</b></td>
+        <td>拉 init 段 + 全部 ts 并发合成 Blob（纯 JS，快、无转码）；复杂流再上 ffmpeg.wasm。价值是<b>把 HLS 的转码/出口成本从服务器挪走</b>。注意我们直链已排除 HLS，所以这是"新增能力"而非修 bug，收益主要体现在服务端下载路线。</td>
+      </tr>
+      <tr>
+        <td><span class="star">★★</span></td>
+        <td><b>格式过重时引导装客户端</b></td>
+        <td>把"网页端搞不定的重型格式"做成明确提示 + 一键去下载页，既是降级也是导流。我们只是被动提示"改用服务器下载"。</td>
+      </tr>
+      <tr>
+        <td><span class="star">★</span></td>
+        <td>一次解析返回 视频/音频/图片 三类 + 图集下载</td>
+        <td>对齐 Instagram/小红书轮播这类"一次多文件"的场景；我们的图片能力目前在别的 tab，可以打通。</td>
+      </tr>
+      <tr>
+        <td><span class="star">★</span></td>
+        <td>失败降级链 + 封面健壮性</td>
+        <td>中继 → 分片 → 单流 → 右键另存窗口；HEIC 封面转码、封面 404 重取。属于"稳"的细节。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>五、我们不该动摇的优势</h2>
+  <div class="card">
+    <p>把上面看完容易产生"我们哪哪都不如"的错觉，其实相反——<b>我们网页版的下载骨架比它强</b>：</p>
+    <ul>
+      <li><b>服务端任务队列</b>：任务卡 + SSE 实时进度 + <b>暂停 / 续传 / 重试 / 取消</b>。它是纯客户端下载，断网就得重头再来，没有队列、没有续传。</li>
+      <li><b>可调并发数、多下载器选择、播放列表批量</b>。它是一个下载按钮打天下。</li>
+      <li><b>线路切换（国内 / 海外双节点）+ Cookie / 代理高级项</b>。它服务端在海外、能力单一；我们能干"需要登录态、需要指定出口"的活。</li>
+    </ul>
+    <p style="margin-bottom:0">所以正确姿势是<b>补齐"浏览器侧那一半"</b>，而不是把服务端那一半拆掉。两边各干各擅长的事：能直连的走分片并发（便宜、快、有进度），搞不定的甩服务端（能力全、能兜底）。</p>
+  </div>
+
+  <div class="rec">
+    <h3>建议落地顺序</h3>
+    <ol>
+      <li><b>第一步（最划算）</b>：直链改分片并发 + 进度 + 重试，同时加 <code>/api/proxy/media</code> 中继兜防盗链。这两件必须一起做，否则分片在跨域下拿不到长度、退化成单流，等于白改。</li>
+      <li><b>第二步</b>：画质分级 PRO 角标 —— 后端数据（会员/配额）全都有，只加展示与扣次，变现最快。</li>
+      <li><b>第三步</b>：浏览器内 m3u8→MP4，把 HLS 的服务端成本挪到客户端；优先级低于前两步，因为影响面主要在服务端下载路线。</li>
+      <li><b>第四步</b>：混合媒体 + 图集、导流提示、降级链收尾。</li>
+    </ol>
+  </div>
+
+  <div class="foot">
+    证据来源：对 <code>datatool.vip</code> 线上前端资源（<code>downloader/downloader/index.js</code>、<code>js/mediaTools.js</code>、<code>downloader/utils/qualityProBadge.js</code>）做静态阅读，参数均取自代码中的实际默认值；
+    我方以 <code>~/WorkBuddy/video-downloader</code>（web-dev @ <code>41f0007</code>）实际代码为准。本报告只做分析，未修改任何代码。
+  </div>
+
+</div>
+</body>
+</html>

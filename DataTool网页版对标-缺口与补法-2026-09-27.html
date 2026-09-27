@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DataTool.vip 网页版对标 · 缺口与补法（2026-09-27）</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --surface:#ffffff; --line:#e5e7eb; --text:#1f2430; --mute:#6b7280;
+    --brand:#4f46e5; --ok:#059669; --warn:#b45309; --bad:#b91c1c; --chip:#eef2ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 22px 72px}
+  header.hero{background:linear-gradient(115deg,#1e1b4b,#4f46e5 52%,#0891b2);color:#fff;
+    border-radius:18px;padding:30px 30px 26px;box-shadow:0 12px 32px rgba(30,27,75,.22)}
+  header.hero h1{margin:0 0 8px;font-size:clamp(1.35rem,3.3vw,1.9rem);letter-spacing:.4px}
+  header.hero p{margin:0;opacity:.92;font-size:.95rem}
+  header.hero .meta{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}
+  header.hero .meta span{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.24);
+    border-radius:999px;padding:3px 12px;font-size:12.5px}
+  h2{font-size:1.16rem;margin:34px 0 12px;padding-left:11px;border-left:4px solid var(--brand)}
+  h3{font-size:1rem;margin:22px 0 8px}
+  p{margin:8px 0}
+  .tldr{background:#fff;border:1px solid var(--line);border-left:5px solid var(--brand);
+    border-radius:12px;padding:16px 20px;box-shadow:0 2px 10px rgba(16,24,40,.04)}
+  .tldr b{color:var(--brand)}
+  table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;font-size:14px;box-shadow:0 2px 10px rgba(16,24,40,.04)}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f1f2f7;font-weight:600;font-size:13px;color:#374151;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .yes{color:var(--ok);font-weight:600}
+  .no{color:var(--bad);font-weight:600}
+  .part{color:var(--warn);font-weight:600}
+  .chip{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600;
+    border:1px solid transparent;white-space:nowrap}
+  .p0{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
+  .p1{background:#fffbeb;color:#b45309;border-color:#fde68a}
+  .p2{background:#f0fdf4;color:#047857;border-color:#bbf7d0}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 20px;
+    box-shadow:0 2px 10px rgba(16,24,40,.04);margin:12px 0}
+  ul{margin:8px 0 8px 4px;padding-left:20px}
+  li{margin:5px 0}
+  code{background:#f3f4f6;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#0f172a}
+  .evi{font-size:13px;color:var(--mute)}
+  .rec{background:linear-gradient(180deg,#eef2ff,#ffffff);border:1px solid #c7d2fe;
+    border-radius:12px;padding:16px 20px;margin-top:14px}
+  .rec h3{margin-top:0;color:var(--brand)}
+  ol.plan{padding-left:22px;margin:10px 0 0}
+  ol.plan li{margin:8px 0}
+  .foot{margin-top:34px;padding-top:16px;border-top:1px dashed var(--line);color:var(--mute);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>DataTool.vip 网页版对标 · 我们的缺口与补法</h1>
+    <p>把竞品官网的网页功能逐项拆出来，与「视频工坊」网页版现状一一对照，给出可直接开工的补法清单。</p>
+    <div class="meta">
+      <span>抓取时间 2026-09-27 05:5x</span>
+      <span>方法：抓其线上 HTML + 路由清单</span>
+      <span>我方基线：web-dev @ 41f0007</span>
+    </div>
+  </header>
+
+  <h2>一句话结论</h2>
+  <div class="tldr">
+    <p>他们的<b>网页版功能面其实比我们窄</b>——没有去水印、没有音乐/图片转换、没有本地 ASR、没有抠图，全靠「在线解析 + 字幕 + AI 总结」三件事撑门面。
+    我们<b>后端能力（21 个路由模块）明显更厚</b>，真正缺的不是能力，而是<b>把已有能力摆到网页上、并让搜索引擎和海外用户找得到</b>。</p>
+    <p>所以「补」的重点不是照抄功能，而是三块：<b>① 该亮的没亮</b>（下载页全写"开发中"、全站禁收录）、
+    <b>② 对标缺口</b>（AI 视频总结、字幕导出多格式/任务列表）、<b>③ 增长面</b>（多语言、每平台落地页、扩展页）。</p>
+  </div>
+
+  <h2>一、DataTool 网页版实测有什么</h2>
+  <p class="evi">以下为其线上导航与路由的抓取结果（非推测）：</p>
+  <table>
+    <thead><tr><th>模块</th><th>他们的网页版做什么</th><th>路由证据</th></tr></thead>
+    <tbody>
+      <tr><td>在线下载</td><td>粘链接→解析，主打去水印 / 4K / 高速，含「Download All Image」图集下载</td><td><code>/</code>、<code>/downloader/free-tiktok-video-downloader</code></td></tr>
+      <tr><td>批量解析</td><td>独立导航项，多链接批量解析</td><td><code>/downloader/batch/en-us</code></td></tr>
+      <tr><td>字幕提取</td><td><b>任务列表式</b>：标题/上传时间/时长/状态/操作，筛选 全部·提取中·已完成·失败，支持<b>批量删除 / 批量导出</b></td><td><code>/transcriber/subtitle-extract/en-us</code></td></tr>
+      <tr><td>AI 转录</td><td>视频转文字</td><td><code>/transcriber/index/en-us</code></td></tr>
+      <tr><td>AI 总结 / 对话</td><td>对视频内容问答（Prompt 库、新建话题）、<b>内容上下文预算 1000–50000 字（默认 6000）</b>；字幕翻译 <b>双语 / 仅原文 / 仅译文</b> 三模式，导出 <b>TXT / SRT / VTT / JSON</b>；图文总结声明为「客户端独有」</td><td><code>/video-summary/en-us</code></td></tr>
+      <tr><td>浏览器扩展</td><td>独立安装页，社媒页内直接抠图/视频下载</td><td><code>/downloader/install-plugin/en-us</code></td></tr>
+      <tr><td>客户端分发</td><td>Electron 客户端页 + macOS(Intel/Apple) / Windows / Android 安装包 + Microsoft Store</td><td><code>/downloader/install-electron/en-us</code>、OSS 上的 <code>*.dmg/*.exe/*.apk</code></td></tr>
+      <tr><td>账号体系</td><td>登录、账号设置、<b>购买中心、订单历史、捐赠中心 / 捐赠记录</b></td><td><code>/auth/login</code>、<code>/user/account-settings</code>、<code>/user/donation-center</code>、<code>/user/donation-records</code></td></tr>
+      <tr><td>内容 / SEO</td><td>每平台独立落地页（TikTok、Douyin、…）、博客、FAQ、广告合作</td><td><code>/downloader/free-*-video-downloader</code>、<code>/blog/en-us</code>、<code>/downloader/faq/en-us</code></td></tr>
+      <tr><td>国际化</td><td><b>30 种语言</b>（en/zh/zh-tw/ja/ko/de/fr/es/pt/ru/ar/…），带 Cookie 同意横幅 + 在线客服</td><td>导航语言切换器 + <code>/&lt;lang&gt;</code> 前缀</td></tr>
+    </tbody>
+  </table>
+
+  <h2>二、我们网页版现状</h2>
+  <table>
+    <thead><tr><th>我们已有</th><th>实现位置</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>下载视频（单链 / 批量切换、播放列表、清晰度、并发、下载器选择、线路切换、Cookie/代理高级项）</td><td><code>web/index.html</code> <code>#downloadView</code> + <code>web/app.js</code></td><td class="yes">已上线</td></tr>
+      <tr><td>视频处理 / 去水印 / 音乐转换 / 图片转换</td><td>同页 4 个 panel</td><td class="yes">已上线</td></tr>
+      <tr><td>AI 字幕：上传→识别→导出 <b>SRT / TXT</b>，附「翻译字幕（需 LLM Key）」</td><td><code>#subtitleView</code> L597-662；<code>#subTarget</code> 为<b>自由文本输入</b></td><td class="part">部分</td></tr>
+      <tr><td>个人中心：登录/注册 + 会员状态 + 激活码</td><td><code>#profileView</code> L665-714</td><td class="part">部分（无购买中心/订单）</td></tr>
+      <tr><td>客户端下载页</td><td><code>web/download/index.html</code>：macOS/Windows/Android/iOS 四卡<b>全部写「加急开发中」</b></td><td class="no">名不符实</td></tr>
+      <tr><td>后端能力</td><td><code>server/routers/</code> 21 个模块：auth / membership(套餐·状态·激活·积分·配额) / subscriptions / subtitle(s) / commentary / llm / dewatermark / convert / process / library / cloud / pcs / torrents / archive / admin / support …</td><td class="yes">比对方厚</td></tr>
+      <tr><td>SEO 基础</td><td><code>web/robots.txt</code> = <code>User-agent: * / Disallow: /</code>；无 sitemap；无语言版本</td><td class="no">全站禁收录</td></tr>
+    </tbody>
+  </table>
+
+  <h2>三、缺口清单（按「值不值得做」排序）</h2>
+  <table>
+    <thead><tr><th>优先级</th><th>缺口</th><th>为什么值得补</th><th>怎么补</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="chip p0">P0</span></td>
+        <td>下载页写着「开发中」，但 macOS 版其实已经可用（v1.0.29 已构建装机）</td>
+        <td>自己人看到的第一个页面在说谎，白白丢掉最直接的转化入口</td>
+        <td>把 <code>web/download/index.html</code> 的卡片换成真实安装包链接 + 版本号，未就绪的才保留"开发中"</td>
+      </tr>
+      <tr>
+        <td><span class="chip p0">P0</span></td>
+        <td><code>robots.txt</code> 全站 <code>Disallow: /</code>，等于告诉所有搜索引擎"别来"</td>
+        <td>他们靠 SEO 落地页吃自然流量，我们是 0；这条不放开，后面做多少落地页都白做</td>
+        <td>放开抓取 + 加 <code>sitemap.xml</code>（把首页、/download、各落地页列进去）</td>
+      </tr>
+      <tr>
+        <td><span class="chip p1">P1</span></td>
+        <td>字幕导出只有 SRT / TXT；翻译只有单模式、目标语言靠手打</td>
+        <td>对标最直接的差距，且改动全在 <code>#subtitleView</code> 内，不碰后端</td>
+        <td>补 <b>VTT / JSON</b> 导出；翻译加 <b>双语 / 仅译文 / 仅原文</b> 三模式；目标语言改下拉</td>
+      </tr>
+      <tr>
+        <td><span class="chip p1">P1</span></td>
+        <td>缺「AI 视频总结」入口（他们导航四大项之一）</td>
+        <td>我们已有 LLM 配置 + 字幕内容，做文本总结是"顺手接上"，差异化明显</td>
+        <td>新增「AI 总结」面板：基于已有字幕 → 总结 / 问答 + 提示词库 + 内容预算（对标 6000 字默认）</td>
+      </tr>
+      <tr>
+        <td><span class="chip p1">P1</span></td>
+        <td>字幕提取是"一次一单"，没有任务列表</td>
+        <td>批量场景（一次丢十个链接）体验差距最大的一环</td>
+        <td>做任务列表：全部/进行中/已完成/失败 + 批量导出/删除，接已有 <code>/api/tasks</code></td>
+      </tr>
+      <tr>
+        <td><span class="chip p1">P1</span></td>
+        <td>个人中心无「购买中心 / 订单记录」</td>
+        <td>后端 <code>/api/member/plans</code> 与 <code>auth.py</code> 的 <code>purchases</code> 数据都现成，只差前端</td>
+        <td>在 <code>#profileView</code> 加两块：套餐展示（走 member/plans）+ 兑换/订单记录（走已有 purchases）</td>
+      </tr>
+      <tr>
+        <td><span class="chip p2">P2</span></td>
+        <td>无浏览器扩展安装页</td>
+        <td>已有百度网盘油猴脚本基础（<code>baidu-tampermonkey/</code>），可先出安装页</td>
+        <td>新增扩展介绍/安装页，引导装脚本或打包扩展</td>
+      </tr>
+      <tr>
+        <td><span class="chip p2">P2</span></td>
+        <td>无每平台 SEO 落地页 / 博客 / FAQ</td>
+        <td>他们靠这套吃自然搜索；我们需要同类页面承接关键词</td>
+        <td>先做 3~5 个高频平台落地页（YouTube / B站 / 抖音 / 小红书 / TikTok）+ FAQ</td>
+      </tr>
+      <tr>
+        <td><span class="chip p2">P2</span></td>
+        <td>单语言（zh-CN）</td>
+        <td>他们 30 语言面向全球；我们若做海外才有必要，否则性价比低</td>
+        <td>先抽出文案字典做 <b>i18n 骨架</b>，按需补 en 一种，别一上来 30 种</td>
+      </tr>
+      <tr>
+        <td><span class="chip p2">P2</span></td>
+        <td>Android / iOS / 应用商店分发</td>
+        <td>他们有 Android APK + Microsoft Store；属产品线扩张，不是网页缺口</td>
+        <td>先只在下载页如实标注现状，产品线单独立项</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>四、建议怎么走</h2>
+  <div class="rec">
+    <h3>我的建议：P0 两件立刻做，P1 里挑「字幕增强 + AI 总结」一起做，其余看运营节奏。</h3>
+    <ol class="plan">
+      <li><b>P0-1 下载页说实话</b>：macOS 已可用就该给真实下载；把「加急开发中」只留给真正没做的平台。改动只在 1 个 HTML 文件。</li>
+      <li><b>P0-2 放开收录 + 建 sitemap</b>：这是所有 SEO 动作的前置，不先做后面全白费。改动 2 个文件。</li>
+      <li><b>P1 字幕导出与翻译增强</b>：VTT/JSON + 双语/仅译文/仅原文 + 目标语言下拉。纯前端，风险最低，对标感最强。</li>
+      <li><b>P1 AI 视频总结</b>：复用已有字幕产物 + LLM 配置，新增一个面板，是真正"他们有我无"的功能差异。</li>
+      <li><b>P1 字幕任务列表 / 购买中心</b>：后端数据都现成，属"把已有能力摆上去"，可批量一起做。</li>
+    </ol>
+    <p style="margin-bottom:0">P2 的落地页/多语言/扩展页属于增长投入，建议等 P0+P1 上线拿到数据后再决定要不要压资源——尤其多语言，<b>别一上来做 30 种</b>。</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">顺带发现的两处"名不符实"（建议一并修）</h3>
+    <ul>
+      <li><code>web/download/index.html</code> 声称"安装包托管于 GitHub Releases"，但页内<b>没有任何真实下载地址</b>，四张卡全是占位按钮。</li>
+      <li>页尾那句"支持 macOS / Windows / Android / iOS"与实际"全部开发中"自相矛盾。</li>
+    </ul>
+  </div>
+
+  <div class="foot">
+    证据来源：<code>https://www.datatool.vip/</code> 及其 <code>/downloader/batch</code>、<code>/transcriber/*</code>、<code>/video-summary</code>、<code>/downloader/faq</code> 页面的线上 HTML 抓取；
+    我方以 <code>~/WorkBuddy/video-downloader</code>（web-dev，commit <code>41f0007</code>）实际代码为准。报告未做任何修改性操作，仅为静态对标。
+  </div>
+
+</div>
+</body>
+</html>
