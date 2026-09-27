@@ -190,12 +190,30 @@ def test_looks_like_direct_file_recognizes_media_ext():
     """非平台域名 + 媒体扩展名 → 判定为直链。"""
     for url in (
         "https://cdn.example.com/a.mp4",
-        "https://cdn.example.com/hls.m3u8",
         "https://cdn.example.com/a.mkv?token=1",
         "https://files.example.org/song.m4a",
     ):
         assert _looks_like_direct_file(url) == url, url
     print("✅ 媒体扩展名直链被正确识别")
+
+
+def test_looks_like_direct_file_excludes_hls_manifest():
+    """⚠️ HLS 清单（.m3u8）**不是**可直接下载的文件，必须排除。
+
+    2026-09-27 更正的旧期望：原先把 `hls.m3u8` 也算作直链。后果是
+    `probe()` 会在最前面命中 `_looks_like_direct_file()` 并**短路跳过 yt-dlp**，
+    于是 `direct_url` = 那个 m3u8，前端把它当文件存下来 —— 用户拿到的是
+    一个几百字节的**播放列表文本**，不是视频。实测粘贴裸 m3u8 链接即可复现。
+
+    .m3u8 是分片索引，正确路径是交给 HLS 合成（桌面端走服务端 ffmpeg）；
+    `.ts` 仍算直链（单个 .ts 本身就是完整可播的 MPEG-TS）。
+    """
+    assert _looks_like_direct_file("https://cdn.example.com/hls.m3u8") is None
+    assert _looks_like_direct_file("https://cdn.example.com/hls.m3u8?token=1") is None
+    assert _looks_like_direct_file("https://cdn.example.com/master.m3u8") is None
+    # 不误伤：单个 .ts 分片文件仍可直取
+    assert _looks_like_direct_file("https://cdn.example.com/seg-1.ts") == "https://cdn.example.com/seg-1.ts"
+    print("✅ HLS 清单被排除出直链（不会再存成播放列表文本）")
 
 
 def test_looks_like_direct_file_rejects_known_platform():
@@ -230,6 +248,7 @@ if __name__ == "__main__":
     test_platform_host_detection_matches_subdomains()
     test_cookie_hardened_hosts()
     test_looks_like_direct_file_recognizes_media_ext()
+    test_looks_like_direct_file_excludes_hls_manifest()
     test_looks_like_direct_file_rejects_known_platform()
     test_looks_like_direct_file_rejects_non_media()
-    print("\n🎉 下载器链接解析测试全部通过（19 项）")
+    print("\n🎉 下载器链接解析测试全部通过（20 项）")

@@ -206,6 +206,14 @@ run_one test_youtube_cookie_sources.py
 #                                       deno 显式 --add-binary 进包（venv 脚本目录不会自动分发）
 run_one test_youtube_js_challenge.py
 
+#  26. test_direct_url_hls.py —— m3u8 不得被当作「可直接下载的文件」（2026-09-27 修复）：
+#                                 `.m3u8` 曾在 _DIRECT_EXT_RE 白名单里，导致 `probe()` 在
+#                                 `_looks_like_direct_file()` 处短路跳过 yt-dlp，`direct_url`
+#                                 直接等于那个清单地址 → 前端把播放列表当文件存下来，
+#                                 用户拿到几百字节的废文本。现在清单一律走 HLS 合成路径；
+#                                 单个 `.ts` 仍是可直取的完整 MPEG-TS，不得误伤。
+run_one test_direct_url_hls.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

@@ -1204,8 +1204,12 @@ DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给�
 
 # 直链透传：用户贴的是单个可直接下载的媒体文件（.mp4 等）时，让前端直接从源站
 # 把文件拉到本地，跳过服务器落盘与带宽消耗（真正只下一遍）。
+# ⚠️ 不要把 m3u8 放进来。HLS 清单不是「媒体文件」而是分片索引：一旦命中，
+# probe() 会在 _looks_like_direct_file() 短路（跳过 yt-dlp 直接当直链），
+# 前端再把 manifest 当文件存下来 ⇒ 用户得到一个几百字节的废文本。
+# 2026-09-27 实测：粘贴裸 m3u8 链接即可复现（is_hls=True 的同时 direct_url=该 m3u8）。
 _DIRECT_EXT_RE = re.compile(
-    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv|f4v|m3u8)(\?|#|$|&)", re.IGNORECASE
+    r"\.(mp4|webm|m4a|mp3|mov|mkv|ogg|flac|avi|wmv|m4v|ts|flv|f4v)(\?|#|$|&)", re.IGNORECASE
 )
 # 这些域名即使是媒体扩展名结尾，也属于需经 yt-dlp 解析的平台，不能用直链透传绕过
 _KNOWN_PLATFORM_HOSTS = {
@@ -1249,6 +1253,11 @@ def _detect_direct_url(info: dict[str, Any]) -> str | None:
         return None
     protocol = (info.get("protocol") or "").split("+")[0].lower()
     if protocol not in ("http", "https", ""):
+        return None
+    # HLS 清单永远不是「可直取的文件」：manifest 只是分片索引，存下来是废文本。
+    # 护栏有双重意义 —— 既挡住 m3u8 扩展名，也挡住「无扩展名但实际是清单」的源
+    # （此时 protocol 常为 m3u8_native，上面那行已拦；这里再兜一次 _is_hls_url）。
+    if protocol in ("m3u8", "m3u8_native") or _is_hls_url(url):
         return None
     if _DIRECT_EXT_RE.search(url) or _DIRECT_EXT_RE.search(f".{info.get('ext') or ''}"):
         return url
