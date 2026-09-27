@@ -228,7 +228,12 @@ class CDPSniffer:
         return rows
 
     def add_manual(self, payload: dict) -> dict:
-        """悬浮球/外部直接提交的下载项（嗅探端 outbox 轮询失败时的兜底入口）。"""
+        """悬浮球/浏览器扩展直接提交的下载项（outbox 轮询失败时的兜底入口）。
+
+        - cookie：MV3 扩展从 webRequest 捕获的页面 Cookie（嗅探直链常带签名
+          且要求会话，桌面端下载任务直接透传给 yt-dlp；截断 8192 防御异常头）
+        - source：提交来源标记（'manual' 悬浮球兜底 / 'extension' 浏览器扩展）
+        """
         url = (payload.get("url") or "").strip()
         if not url:
             raise ValueError("url is required")
@@ -239,9 +244,10 @@ class CDPSniffer:
             "referer": (payload.get("referer") or "").strip(),
             "page_url": (payload.get("page_url") or "").strip(),
             "page_title": payload.get("page_title") or "",
+            "cookie": (payload.get("cookie") or "").strip()[:8192],
             "first_seen": time.time(),
             "count": 1,
-            "source": "manual",
+            "source": (payload.get("source") or "manual").strip()[:32],
         }
         with self._lock:
             self._picked.append(item)

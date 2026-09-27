@@ -400,7 +400,7 @@
             url: it.url,
             quality: 'best',
             title: it.page_title || '',
-            cookie: '',
+            cookie: it.cookie || '',
             proxy: '',
             extract_script: '',
             format_id: '',

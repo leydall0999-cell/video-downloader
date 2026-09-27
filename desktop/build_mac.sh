@@ -342,9 +342,9 @@ BUILDINFO
 echo "   ✔ 构建信息: ${_BUILD_HASH} @ ${_BUILD_TIME}"
 
 # ── JS 语法门禁：防止前端语法错误（如顶层 await）导致整个 app.js 解析失败、所有按钮失效 ──
-echo "▶ JS 语法门禁 (node --check web/*.js)..."
+echo "▶ JS 语法门禁 (node --check web/*.js + extension/*.js)..."
 JS_FAIL=0
-for f in "$REPO"/web/*.js; do
+for f in "$REPO"/web/*.js "$REPO"/extension/*.js; do
   if [ -f "$f" ]; then
     if ! "$NODE" --check "$f" 2>"$REPO"/.jscheck.err; then
       echo "❌ JS 语法错误: $f"; cat "$REPO"/.jscheck.err; JS_FAIL=1
@@ -375,6 +375,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --paths "$REPO/server" \
   --paths "$REPO" \
   --add-data "$REPO/web:web" \
+  --add-data "$REPO/extension:extension" \
   --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
   --add-data "$REPO/server:server" \
   --add-data "$REPO/server/build_info.txt:server" \

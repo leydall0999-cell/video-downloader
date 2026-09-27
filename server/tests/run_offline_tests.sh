@@ -214,6 +214,28 @@ run_one test_youtube_js_challenge.py
 #                                 单个 `.ts` 仍是可直取的完整 MPEG-TS，不得误伤。
 run_one test_direct_url_hls.py
 
+#  27. test_sniffer_extension_ingest.py —— MV3 扩展回传链路（2026-09-27，★12）：
+#      /api/sniffer/send 接受 cookie/source（extension 标记）、picked 出队含全字段、
+#      items 展示区不受污染、cookie 截断 8192（对齐 DownloadRequest.max_length）、
+#      缺 url 400、缺省回落 manual（悬浮球兜底语义不回归）
+run_one test_sniffer_extension_ingest.py
+
+echo ""
+echo "=== extension/tests/test_sniff_core.js（MV3 扩展判定核心，node） ==="
+NODE_BIN=""
+for cand in /Users/suixindelang/.workbuddy/binaries/node/versions/22.22.2-3/bin/node "$(command -v node 2>/dev/null)"; do
+  if [ -n "$cand" ] && [ -x "$cand" ]; then NODE_BIN="$cand"; break; fi
+done
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_sniff_core.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

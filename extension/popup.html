@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <title>VideoDownloader 媒体嗅探</title>
+</head>
+<body>
+  <header class="hd">
+    <div class="hd-title">
+      <span class="dot"></span>媒体嗅探
+      <label class="switch" title="嗅探开关">
+        <input type="checkbox" id="sniffToggle" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="hd-endpoint" id="endpointRow">
+      <span id="endpointText" class="ep-unknown">探测桌面端…</span>
+      <button id="reDetect" class="mini" title="重新探测桌面端地址">重探</button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <button id="sendAll" class="primary">全部发送</button>
+    <button id="clearAll" class="ghost">清空</button>
+  </div>
+
+  <div id="segNote" class="seg-note" hidden></div>
+
+  <main id="list" class="list">
+    <div class="empty">打开有视频的网页，这里会列出嗅探到的媒体流</div>
+  </main>
+
+  <footer class="ft">
+    <label class="ck"><input type="checkbox" id="carryCookie" checked> 发送时携带页面 Cookie</label>
+    <span class="hint">发送后在桌面端任务列表查看进度</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
