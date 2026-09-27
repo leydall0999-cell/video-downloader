@@ -134,16 +134,32 @@ def test_send_id_and_ack_roundtrip():
 
 
 def test_picked_poll_records_desktop_login_state():
-    """桌面端前端轮询 picked 时带的令牌 = 桌面端登录态（扩展提前提示「请先登录」的唯一来源）。"""
+    """桌面端登录态信号：只有带有效令牌的桌面端轮询 picked 才能写入；匿名轮询不得污染。
+
+    这是 2026-09-28 修复的核心不变量：普通浏览器（Chrome）打开 127.0.0.1:8321 也会
+    加载 desktop-app.js 并匿名轮询 picked，旧实现会把信号覆盖成 False → 扩展误报「未登录」。
+    修复后 mark_desktop_auth(None) 是 no-op，信号维持上次有效值，过期才回落 None。
+    """
     _clean_picked()
     # 单例跨用例共存：先清掉可能由其它用例写下的信号，保证断言与执行顺序无关
     SNIFFER._desktop_auth = None  # noqa: SLF001
     c = _client()
+    # 1) 没有任何轮询过 → 未知（None），不能谎报未登录
     assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is None, \
         "没有桌面端轮询过时必须未知（None），不能谎报未登录"
-    c.get("/api/sniffer/picked")   # 匿名轮询
-    assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is False
-    print("✅ picked 轮询把桌面端登录态带给 /api/sniffer/status")
+    # 2) 匿名轮询（无 Bearer）→ 不得写入 False（本次修复点：防污染）
+    c.get("/api/sniffer/picked")
+    assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is None, \
+        "匿名轮询不得把登录态覆盖成 False（2026-09-28 修复点）"
+    # 3) 桌面端已登录（带令牌轮询过）→ 信号为 True
+    SNIFFER.mark_desktop_auth("u_real_desktop")  # 等价于路由器解析到有效令牌后调用
+    assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is True, \
+        "带有效令牌的桌面端轮询后应为 True"
+    # 4) 之后即便有匿名轮询，也不得把 True 偷改成 False/None（Chrome 伪装成 App 的场景）
+    c.get("/api/sniffer/picked")
+    assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is True, \
+        "已登录状态下，匿名轮询不得污染信号（修复点）"
+    print("✅ picked 轮询：匿名不污染，仅带令牌桌面端可写入登录态")
 
 
 if __name__ == "__main__":
