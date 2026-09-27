@@ -3946,8 +3946,10 @@
   };
 
   // ===== 浏览器内 HLS 合成（对标 DataTool 网页端的浏览器侧 m3u8 → MP4）=====
-  // 服务端那条路要占用服务器出口带宽与磁盘（HLS 还要 ffmpeg 合并/转码）；本路径全程走
-  // 用户自己的带宽。清单与分片都必须经 /api/media/proxy 中继：HLS 分片同样带 IP 绑定签名
+  // 服务端那条路要落盘、要 ffmpeg 合并/转码，且成品还要再发给用户一次
+  // （出口流量 = 分片拉回 + 成品发出，约两趟）；本路径把合并放在浏览器里做，
+  // 服务器只做字节中继转发（一趟），不落盘、不转码、不计下载额度。
+  // 清单与分片都必须经 /api/media/proxy 中继：HLS 分片同样带 IP 绑定签名
   // 与 Referer 防盗链，直连浏览器既跨域又会被 403。
   //
   // 产物容器按分片扩展名决定（**不做转码**，浏览器内 ffmpeg.wasm 光 core 就 30MB+，不值当）：
@@ -4182,7 +4184,7 @@
       });
       _dlSave(blob, title, m3u8Url, ext);
       el.directHint.textContent =
-        `✅ 已在浏览器内合成并保存（${formatBytes(blob.size)}，${ext}）。全程走你的带宽，未占用服务器出口。`;
+        `✅ 已在浏览器内合成并保存（${formatBytes(blob.size)}，${ext}）。服务器只做中继转发，未落盘、未转码。`;
     } catch (err) {
       if (err && err.name === 'AbortError') {
         el.directHint.textContent = '已取消合成。再次点击可重试。';
