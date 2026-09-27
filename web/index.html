@@ -3739,7 +3739,7 @@
     var isDesktopBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
     var v = isDesktopBuild ? fp : ('dev' + Date.now());
     var s = document.createElement('script');
-    s.src = 'app.js?v=' + encodeURIComponent(v);
+    s.src = 'app.js?v=' + encodeURIComponent(v) + '&p=3';
     s.onload = function () {
       // app.js 已执行并暴露 window.VDL。仅桌面版加载 app 专属脚本；
       // 通过 build 指纹判断是否为桌面打包产物，避免 pywebview 注入时机不稳定导致漏载。

@@ -1333,8 +1333,15 @@
     try {
       response = await doFetch();
       if (response.status === 401) {
-        // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
-        const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
+        // 仅当 401 确实来自 API Token 中间件时才引导输入（其响应体含 "API Token"/"访问令牌"）；
+        // 账号会话失效、私密空间、运维密钥等业务 401 各有 UI，误弹本框只会让用户困惑（2026-09-27 修复）。
+        let _isToken401 = false;
+        try {
+          const _j = await response.clone().json();
+          const _s = String((_j && (_j.error || '')) + (_j && (_j.hint || '')) + (_j && (_j.detail || '')));
+          _isToken401 = _s.includes('API Token') || _s.includes('访问令牌');
+        } catch (_e) { /* 非 JSON 响应体 → 视为非 token 401 */ }
+        const t = (_isToken401 && typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
         if (t && t.trim()) {
           localStorage.setItem('vdl_api_token', t.trim());
           merged['X-Api-Key'] = t.trim();
