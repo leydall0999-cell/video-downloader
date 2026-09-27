@@ -205,7 +205,7 @@ m3u8-dl <url> --header "User-Agent: …" --header "Referer: …"
 |---|---|---|---|
 | 6 | **HLS 换 N_m3u8DL-RE**（桌面端） | 补齐加密流解密、自动选档、并发合并。二进制 20 MB 需随包。网页版无法直接用（要落盘到服务器） | ⏸ **不优先**：见下方「6 vs 7 决策」 |
 | 7 | **普通直链下载接 aria2 RPC**（桌面端） | 我们 aria2 已随包但只服务种子。`--split=4 --min-split-size=8M --max-connection-per-server=4 --retry-wait=5` 这套参数可直接抄 | ❌ **已经做完了**：`downloader.py:4421-4429` 早有 `VDL_DOWNLOADER=aria2c` / 请求字段 `downloader_type` 开关 + `_build_aria2c_args()`；`desktop/bundle_aria2.py` 已把 aria2c+7 dylib（88 MB）打进包。报告第 24 行「普通下载不用」表述不准，应为「已实现开关、默认不启用」 |
-| 8 | **远端失败自动换路由重试**（网页版） | 把现有「对端→主站回落」升级成：区分 TLS 重试/路由重试、独立 key、耗尽集合防抖 | ⏸ 网页版可考虑 |
+| 8 | **远端失败自动换路由重试**（网页版） | 把现有「对端→主站回落」升级成：区分 TLS 重试/路由重试、独立 key、耗尽集合防抖 | ✅ **已落地**（`c7add8e`，见下节） |
 | 9 | **双套 extractor_args**（解析用 / 多音轨发现用） | 不同目的用不同 skip 组合 | ⏸ |
 | 10 | **aria2 端口冲突自愈 + 重启限流** | 换端口、netstat/lsof 查占用、重启次数+冷却双限流 | ❌ 我们用 yt-dlp 的 external downloader 接口调 aria2c，**不起 RPC 守护进程**，无端口冲突问题 |
 
@@ -266,6 +266,37 @@ ECS（8.138.223.3）两个出口，把同一任务的分片/字节段调度到�
 
 **副产品（可直接用）**：B 站签名不绑 IP ⇒ **ECS 解析出的直链可被 HK 直接使用**，
 说明「对端→主站回落」里复用主站解析结果这条路是安全的，不必担心 token 与出口 IP 绑定。
+
+#### 第 8 条落地：远端失败自动换路由重试（2026-09-27，`c7add8e`）
+
+原来只有「失败就换下一个 base」，三个问题没解决：
+
+1. **没有重试** —— 网络层抖动（TLS 握手失败 / 连接重置）直接把整次下载判死，
+   而这类抖动在同一条路由上再试一次通常就好了。
+2. **不区分失败类型** —— 404（对端没这个端点）原地重试纯属浪费；
+   5xx（上游自己失败）换路由才有机会绕开。一刀切会白白多打对端。
+3. **没有防抖** —— 对端一旦被确认缺端点，后面几十上百个分片请求还会挨个去敲它。
+
+新增 `_dlRouteFetch` 统一调度，直链探测（`_dlProbeWithFallback`）与 HLS 整链（`_dlRunHls`）都接入：
+
+| 机制 | 做法 |
+|---|---|
+| 失败分类 `_dlErrKind()` | 浏览器拿不到底层错误码（TLS/连接重置/DNS 在 fetch 里统统是 `TypeError: Failed to fetch`），只能按**可观测信号**分：`missing`(404/405) / `forbid`(401/403) / `upstream`(5xx) / `network` / `abort` |
+| 独立策略 | `network` → **原地重试** 1 次（抖动常自愈，换路由解决不了本机问题）；其余 → **换路由** |
+| 耗尽集合 `_dlRouteExhausted` | 按 kind 记 TTL：`missing` 10 分钟（端点缺失是**节点属性**，key **不带 host**）、`forbid`/`upstream` 按 host 记（源站/链路属性，避免一个源站株连别的源站）、`network` **不判死** |
+| 切换上限 | `_DL_ROUTE_SWITCH_MAX = 2`，防止来回抖动 |
+| 取消 | `AbortError` 原样上抛，不重试不换路由 |
+
+**成功路径行为完全不变**（一发命中即返回，不多打一次对端）——既有
+`test_web_hls_assemble.js` 的 `peerFallback` 断言（对端仅试探 1 次、后续全走主站、
+总请求数 = 1 + 1 + 片数）仍 68/68 通过。
+
+新增 `server/tests/test_web_route_retry.js`（42 项，抽真源码 + 假依赖，不复制逻辑）并登记进
+`run_offline_tests.sh`；全量离线套件 **11/11 通过**。
+
+线上核验：ECS `/opt/vdl-worker/web/app.js` sha256 与本机一致（`bcc9152e…`，下发前确认现网 =
+改动前版本，无线上专属改动才整文件覆盖）；真实浏览器 E2E：解析 → 下载 2.7 MB 单流，
+进度 0→100% 平滑、`window.onerror` 为空、中继请求 2 次（`bytes=0-0` 探测 + 单流），无回归。
 
 ### ★ 战略级、成本高
 
