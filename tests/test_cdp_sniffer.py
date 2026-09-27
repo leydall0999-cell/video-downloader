@@ -7,6 +7,7 @@ outbox 回收、悬浮球脚本关键符号、referer 透传下载链路。
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +18,7 @@ from cdp_sniffer import (  # noqa: E402
     _OUTBOX_READ_JS,
     CDPSniffer,
     classify_media,
+    is_noise_url,
 )
 
 
@@ -40,9 +42,33 @@ from cdp_sniffer import (  # noqa: E402
     ("https://v.com/img.jpg", "image/jpeg", ""),
     ("https://googlevideo.com/videoplayback?expire=1", "", ""),   # 无后缀签名 URL
     ("https://v.com/full.mp4", "text/html", ""),                  # mime 权威：错报 html 一律过滤
+    # 站内 UI/接口资源（2026-09-27 用户实测）：YouTube 搜索页的语音搜索音效被当成「直链」，
+    # 复制粘贴到工坊后按 youtube:tab 页面解析 → 只报「视频解析失败」。
+    # 与 extension/tests/test_sniff_core.js 的 MATRIX 逐条镜像，改一边必须改另一边。
+    ("https://www.youtube.com/s/search/audio/success.mp3", "audio/mpeg", ""),
+    ("https://www.youtube.com/s/search/audio/no_input.mp3", "audio/mpeg", ""),
+    ("https://www.youtube.com/youtubei/v1/player", "application/json", ""),
+    # 只吃「该主机的内部路径」：别的站点同样路径、以及 YouTube 的非内部路径都照常展示
+    ("https://cdn.example.com/s/search/audio/success.mp3", "audio/mpeg", "media"),
+    ("https://www.youtube.com/clip/audio/real.mp3", "audio/mpeg", "media"),
 ])
 def test_classify_media(url, mime, expect):
     assert classify_media(url, mime) == expect
+
+
+@pytest.mark.parametrize("url,expect", [
+    ("https://www.youtube.com/s/search/audio/open.mp3", True),
+    ("https://m.youtube.com/s/search/audio/open.mp3", True),
+    ("https://www.youtube.com/youtubei/v1/browse", True),
+    ("https://www.youtube.com/ptracking", True),
+    ("https://www.youtube.com/generate_204", True),
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", False),
+    ("https://cdn.example.com/s/search/audio/open.mp3", False),
+    ("https://notyoutube.com/s/search/audio/open.mp3", False),
+    ("not a url", False),
+])
+def test_is_noise_url(url, expect):
+    assert is_noise_url(url) is expect
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +306,53 @@ def test_store_create_persists_referer():
     assert task.referer == "https://p/watch"
     assert store.get(task.id).referer == "https://p/watch"
     shutil.rmtree(root, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# 回执通道（2026-09-27）：扩展点「下载」后必须知道桌面端到底做没做
+# ---------------------------------------------------------------------------
+
+def test_manual_item_carries_send_id():
+    """add_manual 必须发 send_id（回执凭据），且每次唯一。"""
+    s = CDPSniffer()
+    a = s.add_manual({"url": "https://c/a.mp4"})
+    b = s.add_manual({"url": "https://c/b.mp4"})
+    assert a["send_id"] and b["send_id"]
+    assert a["send_id"] != b["send_id"], "send_id 必须唯一，否则回执会串台"
+
+
+def test_send_result_pending_then_ok_or_error():
+    """入队 → pending；桌面端写回 → ok / error（带原因）；未知 id → unknown。"""
+    s = CDPSniffer()
+    item = s.add_manual({"url": "https://c/a.mp4"})
+    sid = item["send_id"]
+    assert s.send_result(sid)["state"] == "pending", "桌面端还没处理时应为 pending"
+    assert s.report_result(sid, False, "请先登录账号后再使用该功能") is True
+    got = s.send_result(sid)
+    assert got["state"] == "error", "失败回执必须是 error"
+    assert "登录" in got["message"], "失败原因必须原样带回给扩展（用户才知道为什么没反应）"
+    assert s.send_result("nosuchid")["state"] == "unknown", "过期/伪造 id 一律 unknown"
+    # 成功后覆盖为 ok 且不再带错误信息
+    s.report_result(sid, True, "")
+    ok = s.send_result(sid)
+    assert ok["state"] == "ok" and ok["message"] == ""
+
+
+def test_report_result_rejects_empty_send_id():
+    s = CDPSniffer()
+    assert s.report_result("", True) is False, "空 send_id 不得写入回执表"
+
+
+def test_desktop_auth_signal_defaults_unknown():
+    """桌面端登录态默认未知；前端轮询 picked 带来令牌后才变 True/False，且会过期。"""
+    import cdp_sniffer as mod
+
+    s = CDPSniffer()
+    assert s.status()["desktop_logged_in"] is None, "没有信号时必须是 None（未知），不能谎报未登录"
+    s.mark_desktop_auth("u_1")
+    assert s.status()["desktop_logged_in"] is True
+    s.mark_desktop_auth(None)
+    assert s.status()["desktop_logged_in"] is False
+    # 过期 → 回到未知（App 界面关掉后不应继续报「未登录」）
+    with patch.object(mod.time, "time", return_value=mod.time.time() + mod.DESKTOP_AUTH_TTL + 5):
+        assert s.status()["desktop_logged_in"] is None

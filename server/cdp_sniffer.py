@@ -23,11 +23,13 @@ import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import threading
 import time
 import urllib.request
+import uuid
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import urlsplit
@@ -42,6 +44,11 @@ TICKER_INTERVAL = 1.5    # outbox 轮询 / 悬浮球刷新
 WATCH_INTERVAL = 1.5     # /json 监视（发现新标签页；间隔越小，错过页面加载期请求的窗口越小）
 CDP_HTTP_TIMEOUT = 3.0
 
+# 回执通道预算（见 __init__ 注释）：扩展每 ~0.9s 轮询一次，重建任务正常 < 10s。
+SEND_TTL = 600.0         # send_id / 回执保留 10 分钟，超时清理
+SEND_MAX = 200           # 回执与待回执表的环形上限
+DESKTOP_AUTH_TTL = 30.0  # 桌面端登录态信号有效期（前端 3s 轮询一次 picked，30s 未续期即视为未知）
+
 # ---------------------------------------------------------------------------
 # 媒体判定（纯函数，便于离线测试）
 # ---------------------------------------------------------------------------
@@ -52,6 +59,34 @@ _MIME_MEDIA_PREFIX = ("video/", "audio/")
 _MEDIA_SUFFIXES = (".mp4", ".webm", ".m4v", ".mov", ".flv", ".mkv", ".mp3", ".m4a", ".aac", ".wav", ".ogg")
 _SEGMENT_SUFFIXES = (".m4s", ".ts", ".mp4")  # mp4 同时是直链与分片形态，按 mime 区分
 _IGNORED_SUFFIXES = (".vtt", ".srt", ".ass", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".css", ".js", ".html", ".json", ".xml", ".txt", ".ico")
+
+# 站点内部 UI / 交互资源：主机正则 → 该主机上「永远不是用户内容」的路径正则。
+# 2026-09-27 用户实测补充。实证案例：YouTube 搜索页会加载自己的语音搜索提示音
+# https://www.youtube.com/s/search/audio/{success,failure,no_input,open}.mp3
+# （响应 audio/mpeg），被嗅探成「直链」；复制粘贴到工坊后按 youtube:tab 页面解析
+# → 报「视频解析失败」，点「下载」也只会建出必然失败的任务。
+# **与 extension/sniff-core.js 的 NOISE_HOST_PATHS 逐条对齐，改一边必须改另一边。**
+_NOISE_HOST_PATHS = (
+    (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/(?:s/search|youtubei)/")),
+    (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/(?:ptracking|generate_204)$")),
+)
+
+
+def is_noise_url(url: str) -> bool:
+    """站点内部 UI/接口资源（播放器音效、内部 API）→ True，一律不当作可下载媒体。
+
+    **跨模块单源**：链接校验（platforms._is_station_internal_url）也复用它，
+    改规则只需改这里一处 + 扩展侧 sniff-core.js 的 NOISE_HOST_PATHS。"""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    path = parts.path or ""
+    for host_re, path_re in _NOISE_HOST_PATHS:
+        if host_re.search(host) and path_re.search(path):
+            return True
+    return False
 
 
 def _path_suffix(url: str) -> str:
@@ -78,6 +113,8 @@ def classify_media(url: str, mime: str = "") -> str:
     """
     mime = (mime or "").split(";")[0].strip().lower()
     suffix = _path_suffix(url)
+    if is_noise_url(url):
+        return ""
     if suffix in _IGNORED_SUFFIXES:
         return ""
     if mime.startswith("image/") or mime in ("text/html", "text/css", "application/javascript", "text/javascript"):
@@ -197,6 +234,14 @@ class CDPSniffer:
         self._lock = threading.Lock()
         self._items: OrderedDict[str, dict] = OrderedDict()   # url -> item
         self._picked: list[dict] = []                          # 悬浮球回传的下载请求
+        # ---- 回执通道（2026-09-27）：浏览器扩展点「下载」后必须知道桌面端到底做没做 ----
+        # 扩展 → /api/sniffer/send（这条只是入队，必然成功）→ 桌面端 picked 轮询取走 →
+        # 建任务。若桌面端未登录/不支持/超配额，建任务会失败，但失败发生在桌面端进程里，
+        # 扩展无从得知，于是按钮显示「已发送 ✓」而用户什么也没等到（用户实测抱怨）。
+        # 这里补一条回执：入队时发 send_id，桌面端把建任务结果写回，扩展轮询取结果。
+        self._sent_ids: OrderedDict[str, float] = OrderedDict()   # send_id -> ts（待回执）
+        self._results: OrderedDict[str, dict] = OrderedDict()     # send_id -> 回执
+        self._desktop_auth: tuple[float, bool] | None = None      # (ts, 桌面端是否带有效登录态)
         self._error = ""
         self._state = "idle"                                   # idle / running / error
 
@@ -208,6 +253,14 @@ class CDPSniffer:
 
     def status(self) -> dict:
         with self._lock:
+            # 桌面端登录态：由桌面端前端轮询 picked 时带的 Authorization 决定（见
+            # mark_desktop_auth）。过期（>DESKTOP_AUTH_TTL）返回 None=未知——App 关掉
+            # 界面后信号会自然失效，扩展据此显示「无法确认」而不是谎报未登录。
+            logged_in = None
+            if self._desktop_auth is not None:
+                ts, ok = self._desktop_auth
+                if time.time() - ts <= DESKTOP_AUTH_TTL:
+                    logged_in = ok
             return {
                 "state": self._state,
                 "port": self._port,
@@ -215,7 +268,62 @@ class CDPSniffer:
                 "picked": len(self._picked),
                 "error": self._error,
                 "supported": websockets is not None,
+                "desktop_logged_in": logged_in,
             }
+
+    def mark_desktop_auth(self, user_id: str | None) -> None:
+        """桌面端前端每次轮询 picked 时调用：记录**它的**登录态（不是请求方的）。
+
+        扩展自己没有桌面端会话令牌，问 /api/sniffer/status 时永远拿不到登录态；
+        而桌面端前端每 3s 就来轮询一次 picked 且带着自己的 Bearer 令牌 —— 借这条
+        既有流量把「桌面端登没登录」告诉服务端，扩展即可在点下载前就提示用户。
+        """
+        with self._lock:
+            self._desktop_auth = (time.time(), bool(user_id))
+
+    def report_result(self, send_id: str, ok: bool, message: str = "") -> bool:
+        """桌面端把「建任务结果」写回给扩展（send_id 来自 /api/sniffer/send 的响应）。"""
+        if not send_id:
+            return False
+        with self._lock:
+            self._results[send_id] = {
+                "ok": bool(ok),
+                "message": (message or "").strip()[:300],
+                "at": time.time(),
+            }
+            self._results.move_to_end(send_id)
+            self._prune_sends()
+        return True
+
+    def send_result(self, send_id: str) -> dict:
+        """扩展查询回执：pending（桌面端还没处理）/ ok / error / unknown（过期或没这条）。"""
+        if not send_id:
+            return {"state": "unknown"}
+        with self._lock:
+            self._prune_sends()
+            hit = self._results.get(send_id)
+            if hit:
+                return {
+                    "state": "ok" if hit["ok"] else "error",
+                    "message": hit["message"],
+                }
+            if send_id in self._sent_ids:
+                return {"state": "pending"}
+        return {"state": "unknown"}
+
+    def _prune_sends(self) -> None:
+        """清理过期/超量的 send_id 与回执（调用方持锁）。"""
+        cutoff = time.time() - SEND_TTL
+        while self._sent_ids:
+            sid, ts = next(iter(self._sent_ids.items()))
+            if ts >= cutoff and len(self._sent_ids) <= SEND_MAX:
+                break
+            self._sent_ids.pop(sid, None)
+        while self._results:
+            sid, row = next(iter(self._results.items()))
+            if row["at"] >= cutoff and len(self._results) <= SEND_MAX:
+                break
+            self._results.pop(sid, None)
 
     def items(self, limit: int = 100) -> list[dict]:
         with self._lock:
@@ -248,9 +356,13 @@ class CDPSniffer:
             "first_seen": time.time(),
             "count": 1,
             "source": (payload.get("source") or "manual").strip()[:32],
+            # 回执凭据：桌面端建任务后按此 id 写回结果，扩展据此显示「已加入下载」或失败原因。
+            "send_id": uuid.uuid4().hex[:12],
         }
         with self._lock:
             self._picked.append(item)
+            self._sent_ids[item["send_id"]] = time.time()
+            self._prune_sends()
         return item
 
     def start(self, port: int = 9222, launch: bool = False) -> dict:

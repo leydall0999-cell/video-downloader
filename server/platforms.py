@@ -279,6 +279,26 @@ def _normalize_url(url: str, host: str) -> str:
     return url
 
 
+def _is_station_internal_url(url: str) -> bool:
+    """站点内部 UI / 接口资源（播放器音效、内部 API）→ True。
+
+    2026-09-27 用户实测踩坑：浏览器扩展嗅到的
+        https://www.youtube.com/s/search/audio/success.mp3
+    复制粘贴到工坊后，host 命中 youtube.com → 被当成 YouTube 播放页交给 yt-dlp 的
+    youtube:tab 提取器 → 只回一句「视频解析失败」，用户不知道该怎么办。这类地址
+    **不是内容**，必须当场拒绝并给出可操作提示，而不是丢给 yt-dlp 报笼统错误。
+    判定规则与嗅探链路同源（cdp_sniffer.is_noise_url），避免两边漂移。
+    """
+    try:
+        from cdp_sniffer import is_noise_url
+    except Exception:  # noqa: BLE001 - 极端环境下取不到判定模块时放行（不误伤正常链接）
+        return False
+    try:
+        return bool(is_noise_url(url))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def parse_source(raw_input: str) -> tuple[str, Platform]:
     """校验输入并返回 (规范化链接, 命中的平台)。"""
     url = extract_first_url(raw_input)
@@ -288,6 +308,14 @@ def parse_source(raw_input: str) -> tuple[str, Platform]:
         raise UnsupportedPlatformError(
             f"该站点暂不支持视频下载：{host}",
             "请粘贴视频播放页链接（如 B 站、抖音、YouTube 等）",
+        )
+    # 站点内部 UI/接口资源（播放器音效、内部 API）不是内容：当场拒绝并给出可操作提示，
+    # 否则会被当成该平台的播放页交给 yt-dlp，只回一句笼统的「视频解析失败」（实测踩坑）。
+    if _is_station_internal_url(url):
+        raise UnsupportedPlatformError(
+            "这个地址是站点内部的音效 / 接口资源，不是视频播放页",
+            "请在浏览器里打开该视频的播放页，复制地址栏里的链接再粘贴解析",
+            category="not_a_page",
         )
     platform = _match_platform(host)
     url = _normalize_url(url, host)

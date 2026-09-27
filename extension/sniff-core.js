@@ -23,6 +23,31 @@
   var IGNORED_SUFFIXES = ['.vtt', '.srt', '.ass', '.jpg', '.jpeg', '.png',
     '.webp', '.gif', '.css', '.js', '.html', '.json', '.xml', '.txt', '.ico'];
 
+  // ---- 站点内部 UI / 交互资源：主机后缀 → 该主机上「永远不是用户内容」的路径 ----
+  // 2026-09-27 用户实测补充。实证案例：在 YouTube 搜索页，站点会加载自己的语音搜索
+  // 提示音 https://www.youtube.com/s/search/audio/{success,failure,no_input,open}.mp3
+  // （响应 audio/mpeg），被嗅探成「直链」列进面板；用户复制粘贴到工坊后，链接被
+  // 当成 youtube:tab 页面交给 yt-dlp → 报「视频解析失败」，而点「下载」也只会建出
+  // 必然失败的任务。这类资源不是内容，必须在判定阶段就丢掉。
+  // **与 server/cdp_sniffer.py 的 _NOISE_HOST_PATHS 逐条对齐，改一边必须改另一边。**
+  var NOISE_HOST_PATHS = [
+    [/(^|\.)youtube\.com$/, /^\/(?:s\/search|youtubei)\//],
+    [/(^|\.)youtube\.com$/, /^\/(?:ptracking|generate_204)$/]
+  ];
+
+  function isNoiseUrl(url) {
+    var u;
+    try { u = new URL(url); } catch (e) { return false; }
+    var host = (u.hostname || '').toLowerCase();
+    var path = u.pathname || '';
+    for (var i = 0; i < NOISE_HOST_PATHS.length; i++) {
+      if (NOISE_HOST_PATHS[i][0].test(host) && NOISE_HOST_PATHS[i][1].test(path)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function pathSuffix(url) {
     // 对齐 python _path_suffix()：剥查询串、取路径 basename 的小写后缀（含点）。
     var path;
@@ -38,6 +63,7 @@
   function classifyMedia(url, mime) {
     mime = (mime || '').split(';')[0].trim().toLowerCase();
     var suffix = pathSuffix(url);
+    if (isNoiseUrl(url)) return '';
     if (IGNORED_SUFFIXES.indexOf(suffix) >= 0) return '';
     if (mime.indexOf('image/') === 0 ||
         ['text/html', 'text/css', 'application/javascript', 'text/javascript']
@@ -178,6 +204,7 @@
   root.VDLSniffCore = {
     classifyMedia: classifyMedia,
     pathSuffix: pathSuffix,
+    isNoiseUrl: isNoiseUrl,
     pickHeaders: pickHeaders,
     SniffStore: SniffStore,
     probeBases: probeBases

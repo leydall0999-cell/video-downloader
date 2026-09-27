@@ -110,3 +110,24 @@ button.mini { font-size: 11px; padding: 1px 7px; border-radius: 5px; }
   color: var(--muted);
 }
 .ft .ck { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+
+/* ---- 桌面端未登录横幅（2026-09-27）：不提前说清楚，用户点下载只会看到
+   桌面端弹登录框（窗口在后台），误以为「点了没反应」 ---- */
+.login-warn {
+  margin: 8px 12px 0; padding: 6px 9px; border-radius: 6px;
+  background: #fef2f2; color: #b91c1c; font-size: 12px;
+}
+
+/* ---- 结果提示行：回执 / 批量发送汇总 ---- */
+.send-note {
+  margin: 8px 12px 0; padding: 6px 9px; border-radius: 6px;
+  background: var(--accent-soft); color: var(--accent); font-size: 12px;
+}
+.send-note.is-err { background: #fef2f2; color: #b91c1c; }
+
+/* ---- 条目级结果（成功淡色提示 / 失败红字原因） ---- */
+.item-msg { margin-top: 3px; font-size: 11px; color: var(--muted); }
+.item-msg.is-err { color: #b91c1c; }
+
+/* 「页面」条目（发送当前页）用的标签色 */
+.chip.page { background: #7c3aed; }

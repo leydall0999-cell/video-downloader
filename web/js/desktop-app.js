@@ -440,10 +440,16 @@
         trackTask(data.task_id, refs, '');
         btn.textContent = '已加入下载 ✓';
         sniffToast('✓ 已加入下载队列：' + (it.page_title || it.url.slice(0, 60)));
+        return { ok: true, message: '' };
       } catch (e) {
         btn.disabled = false;
         btn.textContent = '下载';
-        showError('嗅探下载失败', (e && e.message) || '未知错误');
+        const msg = (e && e.message) || '未知错误';
+        // silent（扩展/悬浮球回流的项，没有可点的面板按钮）：不弹桌面端错误框，
+        // 由调用方把原因通过回执送回来源方——否则用户在浏览器里只看到「已发送 ✓」，
+        // 桌面端却什么都没发生（用户实测抱怨「点下载没反应」）。
+        if (!silent) showError('嗅探下载失败', msg);
+        return { ok: false, message: msg };
       }
     };
 
@@ -456,13 +462,28 @@
       } catch (e) { /* 面板开着但后端忙：下次再刷 */ }
     };
 
-    // ---- 悬浮球 outbox 回流：用户在视频页点「下载」→ 这里自动建任务 ----
+    // 回执：把「建任务结果」写回服务端，浏览器扩展据此显示成功 / 失败原因
+    // （未登录 / 不支持 / 超配额）。没有这条，扩展只能谎报「已发送 ✓」。
+    const reportSendResult = (sendId, res) => {
+      if (!sendId) return;
+      request('/api/sniffer/send-result', {
+        method: 'POST',
+        body: JSON.stringify({
+          send_id: sendId,
+          ok: !!(res && res.ok),
+          message: (res && res.message) || '',
+        }),
+      }).catch(() => { /* 回执尽力而为，不影响本地任务 */ });
+    };
+
+    // ---- 悬浮球 outbox / 浏览器扩展回流：来源方点「下载」→ 这里自动建任务 ----
     const pollPicked = async () => {
       try {
         const data = await request('/api/sniffer/picked');
-        (data.items || []).forEach((it) => {
-          downloadItem(Object.assign({}, it, { kind: it.kind || 'media' }),
+        (data.items || []).forEach(async (it) => {
+          const res = await downloadItem(Object.assign({}, it, { kind: it.kind || 'media' }),
             { querySelector: () => ({ disabled: false, textContent: '' }) }, true);
+          reportSendResult(it.send_id, res);
         });
       } catch (e) { /* 静默 */ }
     };

@@ -99,6 +99,53 @@ def test_default_source_manual():
     print("✅ 缺省 source=manual、cookie 空串（悬浮球兜底行为不回归）")
 
 
+def test_send_id_and_ack_roundtrip():
+    """2026-09-27 用户实测：扩展点「下载」→ 桌面端没反应，扩展却显示「已发送 ✓」。
+
+    /api/sniffer/send 只是入队（必然 200）；真正建任务在桌面端进程里，未登录 /
+    不支持 / 超配额都会失败 —— 必须有一条回执通道把结果送回扩展，否则扩展只能
+    谎报成功。这里锁住：send 回 send_id、picked 条目带同一 send_id、
+    result 先 pending 再按桌面端写回变成 error(带原因)/ok。
+    """
+    _clean_picked()
+    c = _client()
+    r = c.post("/api/sniffer/send", json={"url": "https://c/a.mp4"})
+    assert r.status_code == 200
+    sid = r.json().get("send_id")
+    assert sid, "send 必须回 send_id（扩展据它轮询回执）"
+
+    assert c.get("/api/sniffer/result", params={"send_id": sid}).json()["state"] == "pending", \
+        "桌面端还没处理时应为 pending"
+    assert c.get("/api/sniffer/result", params={"send_id": "nosuchid"}).json()["state"] == "unknown"
+
+    rows = SNIFFER.take_picked()
+    assert len(rows) == 1 and rows[0]["send_id"] == sid, "picked 条目必须带同一 send_id（桌面端据它写回执）"
+
+    w = c.post("/api/sniffer/send-result",
+               json={"send_id": sid, "ok": False, "message": "请先登录账号后再使用该功能"})
+    assert w.status_code == 200 and w.json().get("ok") is True
+    got = c.get("/api/sniffer/result", params={"send_id": sid}).json()
+    assert got["state"] == "error" and "登录" in got["message"], \
+        "失败原因必须原样回到扩展（用户才知道为什么没反应）"
+
+    c.post("/api/sniffer/send-result", json={"send_id": sid, "ok": True, "message": ""})
+    assert c.get("/api/sniffer/result", params={"send_id": sid}).json()["state"] == "ok"
+    print("✅ send_id 回执往返：pending → error(带原因) → ok")
+
+
+def test_picked_poll_records_desktop_login_state():
+    """桌面端前端轮询 picked 时带的令牌 = 桌面端登录态（扩展提前提示「请先登录」的唯一来源）。"""
+    _clean_picked()
+    # 单例跨用例共存：先清掉可能由其它用例写下的信号，保证断言与执行顺序无关
+    SNIFFER._desktop_auth = None  # noqa: SLF001
+    c = _client()
+    assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is None, \
+        "没有桌面端轮询过时必须未知（None），不能谎报未登录"
+    c.get("/api/sniffer/picked")   # 匿名轮询
+    assert c.get("/api/sniffer/status").json()["desktop_logged_in"] is False
+    print("✅ picked 轮询把桌面端登录态带给 /api/sniffer/status")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

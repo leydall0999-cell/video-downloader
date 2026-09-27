@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VideoDownloader 媒体嗅探",
-  "version": "1.0.0",
+  "version": "1.0.33",
   "description": "嗅探网页中的视频 / 音频 / HLS 清单，一键发给 VideoDownloader 桌面端下载。仅监听请求头，数据只发往本机桌面端。",
   "permissions": [
     "webRequest",

@@ -55,18 +55,50 @@ def sniffer_items(limit: int = 100) -> dict:
 
 @router.post('/api/sniffer/send')
 def sniffer_send(payload: dict = Body(...), response: Response = None) -> dict:  # noqa: RUF013
-    """悬浮球兜底回传（仅本机/回环场景使用）。"""
+    """悬浮球 / 浏览器扩展提交下载项（仅本机/回环场景使用）。
+
+    返回的 send_id 是**回执凭据**：本条只是入队（必然成功），真正的建任务发生在
+    桌面端进程里。调用方（扩展）拿 send_id 轮询 /api/sniffer/result，才能知道
+    桌面端是「已加入下载」还是失败（未登录 / 不支持 / 超配额），而不是一律显示成功。
+    """
     if response is not None:
         _pna(response)
     try:
         item = cdp_sniffer.SNIFFER.add_manual(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "picked": True, "url": item["url"][:200]}
+    return {"ok": True, "picked": True, "send_id": item["send_id"],
+            "url": item["url"][:200]}
+
+
+@router.get('/api/sniffer/result')
+def sniffer_result(send_id: str = "", response: Response = None) -> dict:  # noqa: RUF013
+    """扩展查询回执：pending / ok / error(带原因) / unknown。**绝不限流**（扩展 ~0.9s 轮询）。"""
+    if response is not None:
+        _pna(response)
+    return cdp_sniffer.SNIFFER.send_result(send_id)
+
+
+@router.post('/api/sniffer/send-result')
+def sniffer_send_result(payload: dict = Body(...), response: Response = None) -> dict:  # noqa: RUF013
+    """桌面端前端写回建任务结果（仅本机/回环场景使用）。"""
+    if response is not None:
+        _pna(response)
+    ok = bool(payload.get("ok"))
+    cdp_sniffer.SNIFFER.report_result(
+        str(payload.get("send_id") or ""), ok, str(payload.get("message") or ""))
+    return {"ok": True}
 
 
 @router.get('/api/sniffer/picked')
-def sniffer_picked(response: Response = None) -> dict:  # noqa: RUF013
+def sniffer_picked(request: Request, response: Response = None) -> dict:  # noqa: RUF013
+    # 借这条 3s 一次的既有轮询，把**桌面端自己**的登录态告知服务端：扩展没有桌面端
+    # 会话令牌，只有这样才能在点下载之前提示「桌面端未登录」（见 mark_desktop_auth）。
+    try:
+        from user_membership import get_current_user_id
+        cdp_sniffer.SNIFFER.mark_desktop_auth(get_current_user_id(request))
+    except Exception:  # noqa: BLE001 - 登录态信号是尽力而为，绝不影响出队
+        pass
     if response is not None:
         _pna(response)
     return {"items": cdp_sniffer.SNIFFER.take_picked()}
