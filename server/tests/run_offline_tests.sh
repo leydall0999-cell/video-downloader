@@ -106,6 +106,12 @@ run_one test_ffmpeg_tools.py
 run_one test_compress.py
 run_one test_desktop_bridge.py
 run_one test_download_wiring.py
+#  11b. test_login_gate_placement.py —— 登录门禁「挂载位置」守卫（2026-09-27 用户实测：
+#                                       点「解析链接」就弹登录框 = 门禁挂错层）。
+#                                       锁住「前置步骤（解析/选文件）不弹，执行动作才弹」，
+#                                       并要求门禁表 id 在 index.html 真实存在、后端名单同步、
+#                                       提示文案不被 openAuthModal 清空
+run_one test_login_gate_placement.py
 run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py

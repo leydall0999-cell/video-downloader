@@ -2050,7 +2050,9 @@ app.add_middleware(_ApiTokenMiddleware)
 # （其中 /api/system/update 自己已有鉴权）。
 # --------------------------------------------------------------------------- #
 _LOGIN_GATED_EXACT = {
-    "/api/resolve",                       # 视频解析
+    # 2026-09-27 用户要求回调门禁位置：「解析链接」是下载的前置步骤（只是拿到清晰度/标题，
+    # 不产出文件），点它不该弹登录；只有真正落盘的「开始下载」/「批量下载」才要登录。
+    # 故 /api/resolve 从这里移除，前端 _LOGIN_GATED_ACTIONS 同步移除 resolveBtn。
     "/api/download",                      # 创建下载任务
     "/api/batch",                         # 批量下载
     "/api/commentary",                    # 生成解说

@@ -3,6 +3,27 @@
 (() => {
   'use strict';
 
+  // —— 原生 alert 全局降级为轻提示条（2026-09-27）——
+  // WKWebView 把 JS alert 渲染成带「警告」标题的打断式弹窗，成功类消息（如「已保存到」）
+  // 观感像出错，用户明确反馈不适。统一改为底部轻提示条；错误类文案自带「失败/错误」
+  // 字样，同样式呈现。confirm() 是刻意的交互确认，保持原生不动。
+  window.alert = (m) => {
+    try {
+      let t = document.getElementById('vdl-toast-global');
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'vdl-toast-global';
+        t.style.cssText =
+          'position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#222a38;color:#eaeaea;padding:10px 16px;border-radius:8px;font-size:13px;z-index:2147483647;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:80vw;display:none;white-space:pre-wrap;';
+        document.body.appendChild(t);
+      }
+      t.textContent = String(m == null ? '' : m);
+      t.style.display = 'block';
+      clearTimeout(window.__vdlToastTimer);
+      window.__vdlToastTimer = setTimeout(() => { t.style.display = 'none'; }, 3200);
+    } catch (e) { /* DOM 未就绪等极端情况静默降级 */ }
+  };
+
   // 启动诊断：捕获任何未处理的脚本错误并显示在页面顶部红条，便于定位初始化失败
   // （之前默认视图兜底没生效，很可能是 IIFE 中途同步抛错导致末尾 switchView 未执行）。
   window.addEventListener('error', (e) => {
@@ -4721,6 +4742,15 @@
 
     async function shStart(item) {
       if (item.status === 'uploading') return;
+      // 2026-09-27：登录门禁从「选择文件」按钮挪到真正的上传动作上——
+      // 点选文件不弹登录，开始上传（要传到服务器、占存储）才校验。登录后点「重试」即可继续。
+      if (!authToken()) {
+        item.status = 'failed';
+        item.err = '需要登录后才能分享';
+        shRender();
+        try { _notifyNeedLogin('请先登录或注册账号，即可使用扫码分享'); } catch (_) {}
+        return;
+      }
       item.status = 'uploading';
       item.sent = 0;
       item.err = '';
@@ -5368,8 +5398,8 @@
     if (!authToken()) {
       try { window._pendingSubtitleExtract = true; } catch (_) {}
       sbSetStatus('请先登录或注册账号，即可开始提取字幕');
+      openAuthModal();   // 先开弹窗（openAuthModal 内部会清空提示），再写文案
       _authMsg('请先登录或注册账号，即可开始提取字幕', true);
-      openAuthModal();
       return;
     }
     sbStartExtract();
@@ -9082,8 +9112,8 @@ el.dwVidPlayer.hidden = true;
     if (!authToken()) {
       // 未登录：引导登录/注册，成功后可自动继续下载
       try { window._pendingDownload = true; } catch (_) {}
+      openAuthModal();   // 先开弹窗（openAuthModal 内部会清空提示），再写文案
       _authMsg('请先登录或注册账号，即可开始下载', true);
-      openAuthModal();
       return;
     }
     const dv = resolved?.video;
@@ -16401,8 +16431,10 @@ el.dwVidPlayer.hidden = true;
     const now = Date.now();
     if (now - _loginPromptAt < 3000) return;
     _loginPromptAt = now;
-    try { _authMsg(msg || '请先登录或注册账号后使用该功能', true); } catch (_) { /* 忽略 */ }
+    // 顺序很重要：openAuthModal() 内部会 _authMsg('') 清空提示；
+    // 先把弹窗拉起来、再写文案，否则用户看到的是一个「没有任何说明」的登录框。
     try { openAuthModal(); } catch (_) { /* 忽略 */ }
+    try { _authMsg(msg || '请先登录或注册账号后使用该功能', true); } catch (_) { /* 忽略 */ }
   }
 
   /**
@@ -16414,7 +16446,9 @@ el.dwVidPlayer.hidden = true;
    * 后端另有 NO_AUTH 兜底（见 request/_notifyNeedLogin），双保险。
    */
   var _LOGIN_GATED_ACTIONS = {
-    resolveBtn: '视频解析',
+    // 2026-09-27 用户要求：登录门禁只挂在「真正执行（会产出结果）」的按钮上。
+    // 前置步骤不弹登录 —— 解析链接（只拿清晰度/标题，不落盘）与「选择文件」
+    // （扫码分享的文件选择器，真正上传时才校验，见 shStart）已从这里移除。
     batchBtn: '批量下载',
     downloadBtn: '下载',
     ucStartAllBtn: '视频格式转换',
@@ -16432,7 +16466,7 @@ el.dwVidPlayer.hidden = true;
     subBurn: '字幕烧录',
     comGenerateScript: '视频解说',
     comScriptRender: '解说渲染成片',
-    shareAddBtn: '扫码分享',
+    // shareAddBtn 已移出：它是「选择文件」（前置步骤），上传动作由 shStart 校验登录
     subAddBtn: '订阅追更',
     torAddBtn: '种子下载',
     processRun: '队列处理',

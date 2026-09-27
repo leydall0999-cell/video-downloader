@@ -1,9 +1,11 @@
-"""全功能登录门禁测试（2026-09-26 用户要求「所有功能必须登录才能使用」）。
+"""登录门禁测试（2026-09-26 建立；2026-09-27 按用户要求收窄到「执行动作」）。
 
 契约（server/app.py `_login_gate` + web/app.js `_LOGIN_GATED_ACTIONS`）：
-  1. 未登录调用能力型 POST 入口 → 401 + code=NO_AUTH
+  1. 未登录调用**产出结果/落盘**的能力型 POST 入口 → 401 + code=NO_AUTH
   2. 已登录 → 放行（交回正常路由，不再被门禁拦）
-  3. GET 状态查询 / 文件读取、以及登录、账号、会员、管理、支付等公开前缀 → 不拦
+  3. GET 状态查询 / 文件读取，以及登录、账号、会员、管理、支付等公开前缀 → 不拦
+  4. **前置步骤不拦**：解析（拿到清晰度/标题、不落盘）属下载的前置动作，未登录也放行；
+     只有真正的执行动作（开始下载 / 生成脚本 / 开始提取 / 开始转换 …）才要登录。
 
 不依赖任何外部算力：门禁在路由之前生效，命中即 401；放行分支只断言「不是 401」，
 不假设具体路由实现（测试环境用 fake 模块屏蔽真实解码/模型）。
@@ -30,7 +32,6 @@ def _gate_on(monkeypatch):
 # 1) 未登录：能力型入口一律 401 + NO_AUTH
 # --------------------------------------------------------------------------- #
 GATED_POSTS = [
-    ("/api/resolve", {"url": "https://example.com/v"}),
     ("/api/download", {}),
     ("/api/batch", {}),
     ("/api/convert", {}),
@@ -88,7 +89,6 @@ def test_logged_in_is_allowed(monkeypatch):
 # 3) 名单本身：不能误伤账号 / 会员 / 管理 / 支付 / 只读接口
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("path", [
-    "/api/resolve",
     "/api/download",
     "/api/batch",
     "/api/convert",
@@ -117,6 +117,7 @@ def test_path_is_gated(path):
 
 @pytest.mark.parametrize("path", [
     "/api/system/info",
+    "/api/resolve",                  # 下载的前置步骤：解析不该要登录（2026-09-27 用户要求）
     "/api/member/status",
     "/api/auth/login",
     "/api/auth/register",
