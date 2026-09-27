@@ -318,7 +318,7 @@ ECS（8.138.223.3）两个出口，把同一任务的分片/字节段调度到�
 | # | 吸收项 | 说明 |
 |---|---|---|
 | 11 | **CDP 嗅探 + 页面悬浮球** | 这是「在真实浏览器上下文里拿流」的产品化，技术难度中高；但它是竞品"看起来很稳"的重要观感来源 | ✅ **已落地**（app-dev `4f0da4a`+`a6630c6`，见下节） |
-| 12 | **MV3 浏览器扩展**（站点覆盖） | 他们覆盖了 tiktok/快手/小红书/X/onlyfans/新片场/vimeo/facebook/bilibili，我们靠 yt-dlp extractor，扩展能拿 yt-dlp 拿不到的站 |
+| 12 | **MV3 浏览器扩展**（站点覆盖） | 他们覆盖了 tiktok/快手/小红书/X/onlyfans/新片场/vimeo/facebook/bilibili，我们靠 yt-dlp extractor，扩展能拿 yt-dlp 拿不到的站 | ✅ **已落地**（app-dev `ebb3227`，extension/ 目录：sniff-core 判定矩阵对齐 cdp_sniffer + webRequest extraHeaders 抓 Referer/Cookie + popup 一键发桌面端 `/api/sniffer/send`；JS 测试 43 项 + python ingest 5 项 + CFT 真浏览器 E2E 捕获通过） |
 
 ### ✗ 不建议吸收
 
