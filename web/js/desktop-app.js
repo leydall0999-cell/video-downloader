@@ -319,7 +319,9 @@
     badgeBtn.id = 'sniffBadge';
     badgeBtn.title = '连接浏览器嗅探视频流（HLS/直链），含页面悬浮球';
     badgeBtn.textContent = '🔍 浏览器嗅探';
-    badgeBtn.hidden = true; // 仅桌面版显示（本文件只在 pywebview 环境加载，wire 时显示）
+    // 不再等 pywebviewready 才显示：本文件只在桌面壳环境加载，徽标直接常显。
+    // （此前靠 wire() 解锁，pywebviewready 事件在动态脚本执行前就已派发时会永远隐藏）
+    badgeBtn.hidden = false;
 
     const panel = document.createElement('div');
     panel.className = 'vdl-sniff-panel';
