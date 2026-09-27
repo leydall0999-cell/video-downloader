@@ -2146,6 +2146,10 @@ class DownloadRequest(BaseModel):
     play_url: str = Field(default="", max_length=2048)
     watch_options: list[dict] = Field(default_factory=list)
     is_hls: bool = False
+    # CDP 嗅探直链的防盗链 Referer（嗅探来源页）。嗅探 URL 的 host 是 CDN，
+    # _base_options 按 host 生成的 Referer 会错（如 upos-*.bilivideo.com 必须带
+    # https://www.bilibili.com/），必须显式透传；空值时维持旧行为。
+    referer: str = Field(default="", max_length=2048)
 
 class ConvertRequest(BaseModel):
     """格式转换请求（与 routers/convert.py 共享，故保留在 app.py 公开契约层，不迁入 core）。"""
@@ -3623,6 +3627,8 @@ from routers import vision as _vision_rtr
 app.include_router(_vision_rtr.router)
 from routers import process as _process_rtr
 app.include_router(_process_rtr.router)
+from routers import sniffer as _sniffer_rtr
+app.include_router(_sniffer_rtr.router)
 from routers import subscriptions as _subscriptions_rtr
 app.include_router(_subscriptions_rtr.router)
 from routers import membership as _membership_rtr

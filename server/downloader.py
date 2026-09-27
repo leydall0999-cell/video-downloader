@@ -4413,6 +4413,12 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
         # 仅保留最后的 TS→mp4 remux 调用 ffmpeg（快、低风险）
         "hls_prefer_native": True,
     }
+    # CDP 嗅探直链的防盗链 Referer（2026-09-27）：必须显式覆盖 —— 嗅探 URL 的
+    # host 是 CDN（如 upos-*.bilivideo.com），_base_options 按 host 生成的
+    # Referer 是 CDN origin，B站 CDN 校验只认 https://www.bilibili.com/ 这类
+    # 页面 origin，不覆盖必 403。
+    if (getattr(task, "referer", "") or "").strip():
+        options.setdefault("http_headers", {})["Referer"] = task.referer.strip()
     # 断点续传：保留 .part 分片的前提下，显式开启 continue 让 yt-dlp 从上次中断处接上。
     # aria2c 分支已在 _build_aria2c_args 内置 --continue=true；此处覆盖原生下载器场景。
     if resume:

@@ -265,4 +265,230 @@
       },
     };
   })();
+
+  /* =======================================================================
+   * 浏览器嗅探（CDP + 悬浮球，2026-09-27 对标 DataTool）：
+   * 连接带 --remote-debugging-port 的浏览器 → 监听各标签页的媒体请求
+   * （HLS/DASH 清单、mp4/webm 直链）→ 面板一键下载（带来源页 Referer 防
+   * 防盗链 403）；页面内悬浮球点「下载」的项经后端 outbox 自动回流到这里。
+   * ======================================================================= */
+  (function initSniffer() {
+    if (!window.VDL || !window.VDL.request) return;
+    const { $, escHtml, request, showError, createTaskCard, trackTask } = window.VDL;
+
+    const POLL_ITEMS_MS = 2000;
+    const POLL_PICKED_MS = 3000;
+    let panelOpen = false;
+    let itemsTimer = null;
+    let pickedTimer = null;
+
+    // ---- 样式（一次性注入，类名 vdl-sniff-* 避免冲突） ----
+    const css = document.createElement('style');
+    css.textContent = `
+.vdl-sniff-panel{position:fixed;top:0;right:0;width:420px;max-width:92vw;height:100%;
+  background:#fff;box-shadow:-8px 0 32px rgba(0,0,0,.18);z-index:2147483000;display:flex;
+  flex-direction:column;font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#222;}
+.vdl-sniff-head{padding:14px 16px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:8px;}
+.vdl-sniff-head b{font-size:15px;flex:1;}
+.vdl-sniff-body{flex:1;overflow:auto;padding:10px 16px;}
+.vdl-sniff-status{padding:6px 10px;border-radius:8px;background:#f4f5f7;color:#555;margin-bottom:10px;}
+.vdl-sniff-status.on{background:#e8f7ef;color:#0a7d43;}
+.vdl-sniff-actions{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+.vdl-sniff-actions button{border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12px;}
+.vdl-sniff-actions .main{background:#4f46e5;color:#fff;}
+.vdl-sniff-actions .ghost{background:#eef;background:#eef0f4;color:#333;}
+.vdl-sniff-actions .danger{background:#fdecec;color:#c0392b;}
+.vdl-sniff-item{border:1px solid #eee;border-radius:10px;padding:8px 10px;margin-bottom:8px;}
+.vdl-sniff-item .k{font-size:11px;font-weight:600;border-radius:4px;padding:1px 6px;margin-right:6px;}
+.vdl-sniff-item .k.playlist{background:#e8f7ef;color:#0a7d43;}
+.vdl-sniff-item .k.media{background:#eef0ff;color:#4f46e5;}
+.vdl-sniff-item .k.segment{background:#fff7e6;color:#b26a00;}
+.vdl-sniff-item .u{color:#666;font-size:12px;word-break:break-all;margin:4px 0;}
+.vdl-sniff-item .p{color:#999;font-size:11px;margin-bottom:6px;}
+.vdl-sniff-item button{border:0;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;margin-right:6px;}
+.vdl-sniff-item .dl{background:#4f46e5;color:#fff;}
+.vdl-sniff-item .cp{background:#eef0f4;}
+.vdl-sniff-empty{color:#999;text-align:center;padding:30px 0;}
+`;
+    document.head.appendChild(css);
+
+    // ---- 面板骨架 ----
+    const badgeBtn = document.createElement('button');
+    badgeBtn.type = 'button';
+    badgeBtn.className = 'badge';
+    badgeBtn.id = 'sniffBadge';
+    badgeBtn.title = '连接浏览器嗅探视频流（HLS/直链），含页面悬浮球';
+    badgeBtn.textContent = '🔍 浏览器嗅探';
+    badgeBtn.hidden = true; // 仅桌面版显示（本文件只在 pywebview 环境加载，wire 时显示）
+
+    const panel = document.createElement('div');
+    panel.className = 'vdl-sniff-panel';
+    panel.hidden = true;
+    panel.innerHTML = `
+      <div class="vdl-sniff-head"><b>浏览器嗅探</b>
+        <button type="button" class="ghost" id="sniffClose" style="border:0;background:#eef0f4;border-radius:8px;padding:6px 10px;cursor:pointer;">关闭</button>
+      </div>
+      <div class="vdl-sniff-body">
+        <div class="vdl-sniff-status" id="sniffStatus">未连接</div>
+        <div class="vdl-sniff-actions">
+          <button type="button" class="main" id="sniffStart">以调试模式启动浏览器并嗅探</button>
+          <button type="button" class="ghost" id="sniffAttach">连接已开启的浏览器</button>
+          <button type="button" class="danger" id="sniffStop" hidden>停止嗅探</button>
+        </div>
+        <div class="vdl-sniff-status" style="margin-top:0">提示：先开嗅探、再在浏览器里播放视频；正在播放的流要重新播放一次才能被截到。悬浮球出现在视频页右下角。</div>
+        <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
+      </div>`;
+    document.body.appendChild(badgeBtn);
+    document.body.appendChild(panel);
+
+    const statusEl = panel.querySelector('#sniffStatus');
+    const listEl = panel.querySelector('#sniffList');
+    const stopBtn = panel.querySelector('#sniffStop');
+
+    const renderStatus = (st) => {
+      if (st.state === 'running') {
+        statusEl.className = 'vdl-sniff-status on';
+        statusEl.textContent = `嗅探中 · 端口 ${st.port} · 已捕获 ${st.items} 条`;
+        stopBtn.hidden = false;
+      } else if (st.state === 'error') {
+        statusEl.className = 'vdl-sniff-status';
+        statusEl.textContent = '出错：' + (st.error || '未知错误');
+        stopBtn.hidden = true;
+      } else {
+        statusEl.className = 'vdl-sniff-status';
+        statusEl.textContent = '未连接';
+        stopBtn.hidden = true;
+      }
+    };
+
+    const KIND_LABEL = { playlist: 'HLS/DASH', media: '直链', segment: '分片' };
+
+    const renderItem = (it) => {
+      const div = document.createElement('div');
+      div.className = 'vdl-sniff-item';
+      const short = it.url.length > 150 ? it.url.slice(0, 150) + '…' : it.url;
+      div.innerHTML =
+        `<span class="k ${escHtml(it.kind)}">${KIND_LABEL[it.kind] || escHtml(it.kind)}</span>` +
+        `<span style="color:#888;font-size:11px">×${it.count || 1}</span>` +
+        `<div class="u">${escHtml(short)}</div>` +
+        (it.page_title ? `<div class="p">来源：${escHtml(it.page_title)}</div>` : '') +
+        `<button type="button" class="dl">下载</button><button type="button" class="cp">复制链接</button>`;
+      div.querySelector('.dl').addEventListener('click', () => downloadItem(it, div));
+      div.querySelector('.cp').addEventListener('click', () => {
+        navigator.clipboard && navigator.clipboard.writeText(it.url);
+      });
+      return div;
+    };
+
+    const renderItems = (items) => {
+      listEl.innerHTML = '';
+      if (!items.length) {
+        listEl.innerHTML = '<div class="vdl-sniff-empty">还没有嗅探到媒体流</div>';
+        return;
+      }
+      items.forEach((it) => listEl.appendChild(renderItem(it)));
+    };
+
+    const downloadItem = async (it, div, silent = false) => {
+      const btn = div.querySelector('.dl');
+      btn.disabled = true;
+      btn.textContent = '创建中…';
+      try {
+        const data = await request('/api/download', {
+          method: 'POST',
+          body: JSON.stringify({
+            url: it.url,
+            quality: 'best',
+            title: it.page_title || '',
+            cookie: '',
+            proxy: '',
+            extract_script: '',
+            format_id: '',
+            concurrent_fragments: 0,
+            downloader: 'native',
+            play_url: '',
+            watch_options: [],
+            is_hls: it.kind === 'playlist',
+            referer: it.referer || '',
+          }),
+        });
+        const refs = createTaskCard(data.task_id, {
+          title: it.page_title || '(嗅探流)',
+          platform: '嗅探',
+        });
+        trackTask(data.task_id, refs, '');
+        btn.textContent = '已加入下载 ✓';
+        if (!silent) window.alert('嗅探流已创建下载任务：\n' + (it.url.slice(0, 120)));
+        window.alert('嗅探流已创建下载任务：\n' + (it.url.slice(0, 120)));
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '下载';
+        showError('嗅探下载失败', (e && e.message) || '未知错误');
+      }
+    };
+
+    const refresh = async () => {
+      try {
+        const st = await request('/api/sniffer/status');
+        renderStatus(st);
+        const list = await request('/api/sniffer/items?limit=60');
+        renderItems(list.items || []);
+      } catch (e) { /* 面板开着但后端忙：下次再刷 */ }
+    };
+
+    // ---- 悬浮球 outbox 回流：用户在视频页点「下载」→ 这里自动建任务 ----
+    const pollPicked = async () => {
+      try {
+        const data = await request('/api/sniffer/picked');
+        (data.items || []).forEach((it) => {
+          downloadItem(Object.assign({}, it, { kind: it.kind || 'media' }),
+            { querySelector: () => ({ disabled: false, textContent: '' }) }, true);
+        });
+      } catch (e) { /* 静默 */ }
+    };
+
+    badgeBtn.addEventListener('click', () => {
+      panel.hidden = !panel.hidden;
+      panelOpen = !panel.hidden;
+      clearInterval(itemsTimer);
+      clearInterval(pickedTimer);
+      if (panelOpen) {
+        refresh();
+        itemsTimer = setInterval(refresh, POLL_ITEMS_MS);
+      }
+    });
+    panel.querySelector('#sniffClose').addEventListener('click', () => {
+      panel.hidden = true;
+      panelOpen = false;
+      clearInterval(itemsTimer);
+    });
+    panel.querySelector('#sniffStart').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { renderStatus(await request('/api/sniffer/connect', {
+        method: 'POST', body: JSON.stringify({ port: 9222, launch: true }),
+      })); } catch (err) { showError('连接失败', (err && err.message) || '未知错误'); }
+      btn.disabled = false;
+    });
+    panel.querySelector('#sniffAttach').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { renderStatus(await request('/api/sniffer/connect', {
+        method: 'POST', body: JSON.stringify({ port: 9222, launch: false }),
+      })); } catch (err) { showError('连接失败', (err && err.message) || '未知错误'); }
+      btn.disabled = false;
+    });
+    stopBtn.addEventListener('click', async () => {
+      try { renderStatus(await request('/api/sniffer/disconnect', { method: 'POST', body: '{}' })); }
+      catch (err) { showError('停止失败', (err && err.message) || '未知错误'); }
+    });
+
+    // picked 轮询常驻（悬浮球点击不依赖面板是否打开）
+    pickedTimer = setInterval(pollPicked, POLL_PICKED_MS);
+
+    // 桌面壳就绪后显示入口徽标
+    const wire = () => { badgeBtn.hidden = false; };
+    if (window.pywebview && window.pywebview.api) wire();
+    else document.addEventListener('pywebviewready', wire, { once: true });
+  })();
 })();

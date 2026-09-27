@@ -20487,6 +20487,7 @@ el.dwVidPlayer.hidden = true;
     request,
     showError,
     createTaskCard,
+    trackTask,
     switchView,
   });
 })();

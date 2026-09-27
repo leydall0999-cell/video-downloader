@@ -65,6 +65,8 @@ class DownloadTask:
     play_url: str = ""
     watch_options: list[dict] = field(default_factory=list)
     is_hls: bool = False
+    # CDP 嗅探直链的防盗链 Referer（嗅探来源页），重试/续传时原样复用
+    referer: str = ""
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -148,7 +150,7 @@ class TaskStore:
                 concurrent_fragments: int = 0, downloader_type: str = "",
                 cookie: str = "", proxy: str = "",
                 play_url: str = "", watch_options: list[dict] | None = None,
-                is_hls: bool = False) -> DownloadTask:
+                is_hls: bool = False, referer: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -158,6 +160,7 @@ class TaskStore:
             concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
             cookie=cookie, proxy=proxy,
             play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
+            referer=referer,
         )
         with self._lock:
             self._tasks[task_id] = task
