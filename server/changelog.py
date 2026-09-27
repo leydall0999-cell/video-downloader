@@ -18,6 +18,15 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.31",
+        "date": "2026-09-27",
+        "items": [
+            "新增浏览器媒体嗅探：App 内置的嗅探面板能自动捕获你浏览网页时出现的视频/音频直链，列表里一键下载（此前 v1.0.30 已含）",
+            "新增浏览器扩展：装一次后，在 Chrome/Edge 里看视频时点扩展图标即可把嗅探到的媒体一键发回桌面端下载，带 Referer/Cookie 防盗链直链也能下",
+            "嗅探到的链接会自动带上请求头（Referer/Cookie），部分站的直链不再因为直接打开 403 而下载失败",
+        ],
+    },
+    {
         "version": "1.0.30",
         "date": "2026-09-27",
         "items": [
