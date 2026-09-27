@@ -338,7 +338,10 @@
         <div class="vdl-sniff-status" style="margin-top:0">提示：先开嗅探、再在浏览器里播放视频；正在播放的流要重新播放一次才能被截到。悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
       </div>`;
-    document.body.appendChild(badgeBtn);
+    // 插入顶栏徽标行（「会员中心」一排，桌面壳专属行）；找不到顶栏才兜底挂 body
+    const badgeRow = document.querySelector('#engineBadge')?.parentElement;
+    if (badgeRow) badgeRow.insertBefore(badgeBtn, badgeRow.querySelector('#memberBadge'));
+    else document.body.appendChild(badgeBtn);
     document.body.appendChild(panel);
 
     const statusEl = panel.querySelector('#sniffStatus');
