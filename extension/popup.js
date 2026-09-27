@@ -96,7 +96,9 @@ function renderItem(it) {
   }
   var meta = [];
   if (it.count > 1) meta.push('×' + it.count);
-  if (it.firstSeen) meta.push(fmtTime(it.firstSeen));
+  // 用户实测反馈（2026-09-27）：裸写 `00:36:14` 会被读成「时长」，以为 UI 音效有 36 分钟。
+  // 它其实是「第一次嗅到这个地址的时刻」（本地时钟 时:分:秒），加前缀消歧。
+  if (it.firstSeen) meta.push('嗅于 ' + fmtTime(it.firstSeen));
   if (it.referer) { try { meta.push(new URL(it.referer).host); } catch (e) { /* 忽略 */ } }
   if (meta.length) {
     var m = document.createElement('div');
