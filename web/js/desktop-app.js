@@ -394,6 +394,22 @@
       items.forEach((it) => listEl.appendChild(renderItem(it)));
     };
 
+    // 轻量提示条（替代 alert：成功类信息不打断操作，也不用「警告」标题吓人）
+    const sniffToast = (msg) => {
+      let t = document.getElementById('vdl-sniff-toast');
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'vdl-sniff-toast';
+        t.style.cssText =
+          'position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#222a38;color:#eaeaea;padding:10px 16px;border-radius:8px;font-size:13px;z-index:10000;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:80vw;display:none;';
+        document.body.appendChild(t);
+      }
+      t.textContent = msg;
+      t.style.display = 'block';
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => { t.style.display = 'none'; }, 2600);
+    };
+
     const downloadItem = async (it, div, silent = false) => {
       const btn = div.querySelector('.dl');
       btn.disabled = true;
@@ -423,8 +439,7 @@
         });
         trackTask(data.task_id, refs, '');
         btn.textContent = '已加入下载 ✓';
-        if (!silent) window.alert('嗅探流已创建下载任务：\n' + (it.url.slice(0, 120)));
-        window.alert('嗅探流已创建下载任务：\n' + (it.url.slice(0, 120)));
+        sniffToast('✓ 已加入下载队列：' + (it.page_title || it.url.slice(0, 60)));
       } catch (e) {
         btn.disabled = false;
         btn.textContent = '下载';

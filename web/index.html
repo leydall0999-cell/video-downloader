@@ -3745,7 +3745,7 @@
       // 通过 build 指纹判断是否为桌面打包产物，避免 pywebview 注入时机不稳定导致漏载。
       var loadDesktopApp = function () {
         var d = document.createElement('script');
-        d.src = 'js/desktop-app.js?v=' + encodeURIComponent(v) + '&p=2';
+        d.src = 'js/desktop-app.js?v=' + encodeURIComponent(v) + '&p=3';
         document.head.appendChild(d);
       };
       if (window.pywebview || isDesktopBuild) {
