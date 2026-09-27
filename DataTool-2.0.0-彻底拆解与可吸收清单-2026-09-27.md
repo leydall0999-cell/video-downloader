@@ -298,11 +298,26 @@ ECS（8.138.223.3）两个出口，把同一任务的分片/字节段调度到�
 改动前版本，无线上专属改动才整文件覆盖）；真实浏览器 E2E：解析 → 下载 2.7 MB 单流，
 进度 0→100% 平滑、`window.onerror` 为空、中继请求 2 次（`bytes=0-0` 探测 + 单流），无回归。
 
+#### 第 11 条落地：CDP 嗅探 + 页面悬浮球（2026-09-27，app-dev `4f0da4a`+`a6630c6`）
+
+- **架构**：连 `/json/version` 的 browser 级 ws 端点 + `Target.setAutoAttach(flatten)`——
+  标签页创建瞬间挂上并立刻 `Network.enable`，请求一个不漏。（旧方案「轮询 /json 逐 tab
+  建连」有 2~3s 盲窗，直链导航型页面必然错过——E2E 实测推翻后重构。）
+- **悬浮球**：Shadow DOM 注入视频页右下角；点「下载」的项写 `window.__VDL_SNIFF.outbox`，
+  嗅探端 1.5s Runtime.evaluate 轮询取回——**不走页面 fetch，绕开 CSP 与 Private Network
+  Access**（YouTube 等会拦往 127.0.0.1 的 fetch，这正是不能像常见方案那样直接 POST 的原因）。
+- **防盗链 Referer**：`DownloadRequest`/`DownloadTask` 加 referer 字段直通 yt-dlp
+  `http_headers["Referer"]`——嗅探直链的 host 是 CDN，按 host 生成 Referer 必 403。
+- **浏览器启动**：Chrome 136+ 禁默认 profile 开调试端口 ⇒ 独立 user-data-dir 启动
+  （`~/.video-downloader/cdp-profile`），不动用户现有会话；工坊 UI 一键「以调试模式启动浏览器并嗅探」。
+- **E2E 实测**（本机 Chrome 153）：直链导航页 mp4 捕获 ✅、悬浮球 9/9 tab 注入 ✅、
+  outbox 回流含 referer ✅；离线守卫 `tests/test_cdp_sniffer.py` 29 项。
+
 ### ★ 战略级、成本高
 
 | # | 吸收项 | 说明 |
 |---|---|---|
-| 11 | **CDP 嗅探 + 页面悬浮球** | 这是「在真实浏览器上下文里拿流」的产品化，技术难度中高；但它是竞品"看起来很稳"的重要观感来源 |
+| 11 | **CDP 嗅探 + 页面悬浮球** | 这是「在真实浏览器上下文里拿流」的产品化，技术难度中高；但它是竞品"看起来很稳"的重要观感来源 | ✅ **已落地**（app-dev `4f0da4a`+`a6630c6`，见下节） |
 | 12 | **MV3 浏览器扩展**（站点覆盖） | 他们覆盖了 tiktok/快手/小红书/X/onlyfans/新片场/vimeo/facebook/bilibili，我们靠 yt-dlp extractor，扩展能拿 yt-dlp 拿不到的站 |
 
 ### ✗ 不建议吸收
