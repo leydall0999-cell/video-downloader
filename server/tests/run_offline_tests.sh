@@ -8,7 +8,9 @@
 #   4. test_worker_proxy_direct.py —— 解析通道直连 daemon 的路由回归
 #   5. test_cloud_link.py        —— web 版账号接授权中心（打通 web 与 App 用户数据）
 #   6. test_media_proxy_range.py —— 下载用媒体中继 /api/media/proxy 的 Range/防盗链/SSRF 契约
-#   7. test_web_direct_download.js —— 网页版直链分片下载引擎（前端真源码 + 假源站，需 node）
+#   7. test_direct_url_hls.py    —— m3u8 不得被当作「可直接下载的文件」透传（否则存下播放列表文本）
+#   8. test_web_direct_download.js —— 网页版直链分片下载引擎（前端真源码 + 假源站，需 node）
+#   9. test_web_hls_assemble.js  —— 浏览器内 HLS 合成（m3u8 解析/变体选择/初始化段/加密与直播拒绝，需 node）
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -78,7 +80,9 @@ run_one test_worker_proxy_direct.py
 run_one test_peer_overseas_fallback.py
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
+run_one test_direct_url_hls.py
 run_node test_web_direct_download.js
+run_node test_web_hls_assemble.js
 
 echo ""
 echo "========================================="

@@ -180,6 +180,7 @@
     extractSelect: $('extractSelect'),
     directHint: $('directHint'),
     serverFallbackBtn: $('serverFallbackBtn'),
+    browserHlsBtn: $('browserHlsBtn'),
     playlistPanel: $('playlistPanel'),
     playlistTitle: $('playlistTitle'),
     playlistMeta: $('playlistMeta'),
@@ -1153,6 +1154,7 @@
       el.directHint.hidden = false;
       el.directHint.textContent = '✅ 检测到可直接下载的文件。点上方按钮即分片加速下载（10MB/片 · 3 路并发 · 自动重试），有实时进度、可再点一次取消；加速不可用时自动降级为浏览器直连。';
       el.serverFallbackBtn.hidden = false;
+      if (el.browserHlsBtn) el.browserHlsBtn.hidden = true;
     } else {
       el.qualityBlock.hidden = false;
       el.downloadBtn.lastChild.textContent = '开始下载';
@@ -1160,6 +1162,15 @@
       el.directHint.textContent = '';
       el.serverFallbackBtn.hidden = true;
       renderQualities(data.qualities);
+      // HLS 源额外给一条「浏览器内合成」：产物 .ts/.mp4，全程走用户带宽，
+      // 省下服务器出口流量与磁盘（HLS 在服务端还要 ffmpeg 合并）。属于可选加速项，
+      // 所以默认收起、只在确认可用时露出。直播没有终点；加密流要取到清单才知道，
+      // 由 triggerBrowserHlsDownload 的报错兜底。
+      // 注意 el 判空：CF 可能仍给出旧的 index.html（没有这个按钮）而 app.js 已是新版。
+      if (el.browserHlsBtn) {
+        const hasHlsUrl = (video.watch_options || []).some((o) => o && o.is_hls && o.url);
+        el.browserHlsBtn.hidden = !(video.is_hls && !video.is_live && hasHlsUrl);
+      }
     }
     // 在线观看：按清晰度生成下拉，默认选最高画质
     const watchOpts = (video.watch_options && video.watch_options.length) ? video.watch_options : null;
@@ -3798,21 +3809,40 @@
     _dlLastPaint = now;
     const sec = Math.max(0.3, (now - state.t0) / 1000);
     const speed = state.done / sec;
+    // 按钮文案由调用方决定（直链下载按钮含 SVG，只能改末位文本节点；HLS 合成按钮是纯文本）
+    const setLabel = state.setLabel || ((text) => {
+      const node = el.downloadBtn.lastChild;
+      if (node) node.textContent = text;
+    });
+    // HLS 合成：总字节数事先未知（清单里不写大小），进度只能按「片」算
+    if (state.segCount) {
+      const spct = Math.min(100, Math.floor((state.segDone / state.segCount) * 100));
+      el.directHint.textContent =
+        `⬇ 合成中 ${spct}% · 第 ${state.segDone}/${state.segCount} 片 · 已接收 ${formatBytes(state.done)}`
+        + ` · ${formatBytes(Math.round(speed))}/s（再点一次按钮可取消）`;
+      setLabel(`合成中 ${spct}%…（点此取消）`);
+      return;
+    }
     const pct = state.total ? Math.min(100, Math.floor((state.done / state.total) * 100)) : 0;
     const eta = state.total && speed > 0 ? (state.total - state.done) / speed : 0;
     el.directHint.textContent = state.total
       ? `⬇ 下载中 ${pct}% · ${formatBytes(state.done)}/${formatBytes(state.total)} · ${formatBytes(Math.round(speed))}/s`
         + `${eta ? ` · ${formatEta(eta)}` : ''}（再点一次按钮可取消）`
       : `⬇ 下载中 · 已接收 ${formatBytes(state.done)} · ${formatBytes(Math.round(speed))}/s（再点一次按钮可取消）`;
-    const label = el.downloadBtn.lastChild;
-    if (label) label.textContent = state.total ? `下载中 ${pct}%…（点此取消）` : '下载中…（点此取消）';
+    setLabel(state.total ? `下载中 ${pct}%…（点此取消）` : '下载中…（点此取消）');
   };
 
-  const _dlSave = (blob, title, url = '') => {
+  const _dlSave = (blob, title, url = '', forceExt = '') => {
     const objUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = objUrl;
-    a.download = _dlWithExt(title, blob.type, url);
+    if (forceExt) {
+      // HLS 合成的容器由分片扩展名决定（.ts / .mp4），比标题里可能带的旧后缀可靠 —— 强制覆盖
+      const stripped = (title || 'video').trim().replace(/\.(mp4|webm|mov|mkv|flv|m4a|mp3|aac|ogg|wav|ts|m3u8)$/i, '');
+      a.download = `${stripped || 'video'}${forceExt}`;
+    } else {
+      a.download = _dlWithExt(title, blob.type, url);
+    }
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -3913,6 +3943,258 @@
       }
     }
     return _dlRunStream(relay, total, probe.type, signal, onProgress);
+  };
+
+  // ===== 浏览器内 HLS 合成（对标 DataTool 网页端的浏览器侧 m3u8 → MP4）=====
+  // 服务端那条路要占用服务器出口带宽与磁盘（HLS 还要 ffmpeg 合并/转码）；本路径全程走
+  // 用户自己的带宽。清单与分片都必须经 /api/media/proxy 中继：HLS 分片同样带 IP 绑定签名
+  // 与 Referer 防盗链，直连浏览器既跨域又会被 403。
+  //
+  // 产物容器按分片扩展名决定（**不做转码**，浏览器内 ffmpeg.wasm 光 core 就 30MB+，不值当）：
+  //   · fMP4 / CMAF（有 #EXT-X-MAP，或分片是 .m4s/.mp4）→ 拼成 .mp4
+  //   · MPEG-TS（分片是 .ts）→ 拼成 .ts（VLC / PotPlayer / ffmpeg 都能直接播）
+  // 明确不支持，命中即抛错并由上层提示「改用服务器下载」：
+  //   · 加密流（#EXT-X-KEY）—— 需实现 AES-128 / SAMPLE-AES；
+  //   · 直播流（媒体清单无 #EXT-X-ENDLIST）—— 没有终点，永远拼不完；
+  //   · DASH / 音视频分离 —— 那类不走 m3u8，属于服务端队列的活。
+  const _HLS_MAX_SEGMENTS = 4000;      // 异常大的清单直接放弃，别把请求数与内存打爆
+
+  // 相对地址必须相对**清单自己的 URL** 解析，不能相对中继地址（否则会拼出假路径）。
+  // 解析失败**必须抛错**：静默退回相对地址只会让中继收到一个非 http(s) 的 u 参数，
+  // 最后变成一个莫名其妙的 400，比直接说「清单里的地址无法解析」难查得多。
+  const _hlsAbs = (uri, baseUrl) => {
+    try {
+      return new URL(uri, baseUrl).href;
+    } catch (_e) {
+      throw new Error(`清单里的地址无法解析：${String(uri).slice(0, 80)}`);
+    }
+  };
+
+  const _dlFetchText = async (relay, signal) => {
+    const r = await fetch(relay, { signal, cache: 'no-store' });
+    if (!r.ok) {
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch (_e) { /* 非 JSON 响应 */ }
+      throw new Error(detail || `清单读取失败（HTTP ${r.status}）`);
+    }
+    return r.text();
+  };
+
+  const _dlFetchBin = async (relay, signal) => {
+    const r = await fetch(relay, { signal, cache: 'no-store' });
+    if (!r.ok) {
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch (_e) { /* 非 JSON 响应 */ }
+      throw new Error(detail || `分片读取失败（HTTP ${r.status}）`);
+    }
+    return new Uint8Array(await r.arrayBuffer());
+  };
+
+  /** 解析 m3u8。baseUrl 必须是清单自身地址（用于把相对 URI 解析成绝对地址）。 */
+  const _dlParseM3u8 = (text, baseUrl) => {
+    const variants = [];
+    const segments = [];
+    let init = null;
+    let encrypted = false;
+    let ended = false;
+    let pending = null;
+    for (const raw of String(text || '').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (line.startsWith('#')) {
+        if (line.startsWith('#EXT-X-KEY')) {
+          // METHOD=NONE 表示自此不再加密，等价于「没加密」
+          if (!/METHOD\s*=\s*NONE/i.test(line)) encrypted = true;
+        } else if (line.startsWith('#EXT-X-MAP')) {
+          const m = /URI\s*=\s*"([^"]*)"/i.exec(line);
+          if (m) init = _hlsAbs(m[1], baseUrl);
+        } else if (line.startsWith('#EXT-X-ENDLIST')) {
+          ended = true;
+        } else if (line.startsWith('#EXT-X-STREAM-INF')) {
+          const h = /RESOLUTION\s*=\s*\d+x(\d+)/i.exec(line);
+          const bw = /BANDWIDTH\s*=\s*(\d+)/i.exec(line);
+          pending = {
+            height: h ? parseInt(h[1], 10) : 0,
+            bandwidth: bw ? parseInt(bw[1], 10) : 0,
+          };
+        }
+        continue;
+      }
+      if (pending) {                    // 紧跟 #EXT-X-STREAM-INF 的非注释行 = 该变体的地址
+        pending.uri = _hlsAbs(line, baseUrl);
+        variants.push(pending);
+        pending = null;
+      } else {
+        segments.push(_hlsAbs(line, baseUrl));
+      }
+    }
+    if (variants.length) return { kind: 'master', variants };
+    // 分片扩展名 → 成品容器（同一清单内容器一致，看第一片就够）
+    const leaf = (segments[0] || '').split(/[?#]/)[0].split('/').pop().toLowerCase();
+    const dot = leaf.lastIndexOf('.');
+    return {
+      kind: 'media',
+      segments,
+      init,
+      encrypted,
+      live: !ended,                     // 媒体清单没有 ENDLIST ⇒ 直播/未完结，拼不完整
+      segExt: dot > 0 ? leaf.slice(dot + 1) : '',
+    };
+  };
+
+  /** master 清单里挑一路变体：有目标高度就挑「不超过它」的最高档，否则挑码率最高档。 */
+  const _dlPickVariant = (variants, wantHeight) => {
+    const list = variants.slice().sort((a, b) => (a.height - b.height) || (a.bandwidth - b.bandwidth));
+    if (wantHeight > 0) {
+      let best = null;
+      for (const v of list) {
+        if (v.height && v.height <= wantHeight) best = v;
+      }
+      return best || list[0];
+    }
+    return list[list.length - 1];
+  };
+
+  /** 成品容器：有初始化段或分片是 fMP4/CMAF → .mp4；否则按 MPEG-TS → .ts。 */
+  const _dlHlsContainer = (pl) => {
+    const e = (pl.segExt || '').toLowerCase();
+    if (pl.init || e === 'm4s' || e === 'mp4' || e === 'cmfv' || e === 'cmfa') {
+      return { ext: '.mp4', type: 'video/mp4' };
+    }
+    return { ext: '.ts', type: 'video/mp2t' };
+  };
+
+  /** 浏览器内合成主流程。wantHeight 来自当前选中的下载画质（0 = 最高档）。 */
+  const _dlRunHls = async (m3u8Url, base, { signal, wantHeight = 0, onProgress }) => {
+    // 中继基址候选：优先「解析锁定节点」，失败回落主站。为什么必须回落 —— 海外链接的
+    // base 指向对端（香港），而**对端常是更老的分支、没有 /api/media/proxy**
+    // （实测 2026-09-27：不回落时海外 HLS 一律拿到 404「Not Found」）。
+    // 回落只在**第一条请求**做一次，之后整条链路都用选定的 base：
+    // 两边都能取到同一份分片，中途换节点没有意义，只会让地址来源变得难以复现。
+    const bases = base ? [base, ''] : [''];
+    let relayBase = '';
+    let text = null;
+    let lastErr = null;
+    for (const b of bases) {
+      try {
+        text = await _dlFetchText(_dlRelayUrl(m3u8Url, b), signal);
+        relayBase = b;
+        break;
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        lastErr = err;
+      }
+    }
+    if (text === null) throw lastErr || new Error('中继不可用');
+
+    let url = m3u8Url;
+    let pl = _dlParseM3u8(text, url);
+    if (pl.kind === 'master') {
+      if (!pl.variants.length) throw new Error('清单里没有可用的清晰度');
+      url = _dlPickVariant(pl.variants, wantHeight).uri;
+      pl = _dlParseM3u8(await _dlFetchText(_dlRelayUrl(url, relayBase), signal), url);
+    }
+    if (pl.kind !== 'media' || !pl.segments.length) throw new Error('清单里没有分片');
+    if (pl.encrypted) throw new Error('该流已加密，浏览器无法解密');
+    if (pl.live) throw new Error('直播流没有终点');
+    if (pl.segments.length > _HLS_MAX_SEGMENTS) throw new Error(`分片过多（${pl.segments.length} 段）`);
+    const { ext, type } = _dlHlsContainer(pl);
+    const offset = pl.init ? 1 : 0;
+    const parts = new Array(pl.segments.length + offset);
+    let bytes = 0;
+    if (pl.init) {
+      // 初始化段必须排在最前：fMP4 少了它整个文件无法解码
+      parts[0] = await _dlFetchBin(_dlRelayUrl(pl.init, relayBase), signal);
+      bytes += parts[0].byteLength;
+    }
+    let next = 0;
+    let segDone = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = next;
+        next += 1;
+        if (i >= pl.segments.length) return;
+        const buf = await _dlFetchBin(_dlRelayUrl(pl.segments[i], relayBase), signal);
+        parts[i + offset] = buf;
+        bytes += buf.byteLength;
+        segDone += 1;
+        onProgress(bytes, segDone, pl.segments.length);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(_DL_PARALLEL, pl.segments.length) }, worker),
+    );
+    return { blob: new Blob(parts, { type }), ext };
+  };
+
+  /** 当前选中下载画质 → 可用的播放地址（用 watch_options 的真实地址最稳）。 */
+  const _dlHlsSourceFor = (qualityKey) => {
+    const opts = Array.from(el.watchQuality.options || []).filter((o) => o.dataset.url);
+    if (!opts.length) return null;
+    const num = (o) => parseInt(o.value, 10);
+    const want = parseInt(qualityKey, 10);
+    if (Number.isFinite(want)) {
+      const exact = opts.find((o) => num(o) === want);
+      if (exact) return exact;
+      const numbered = opts.filter((o) => Number.isFinite(num(o)));
+      const lower = numbered.filter((o) => num(o) <= want).sort((a, b) => num(b) - num(a))[0];
+      if (lower) return lower;
+      // 目标档低于所有可选档（平台没提供这么低的分辨率）→ 给**最低**档。
+      // 不能给最高档：用户要的是「小」，静默升档属于欺骗。
+      if (numbered.length) return numbered.slice().sort((a, b) => num(a) - num(b))[0];
+    }
+    // best / auto / audio / webm 等：挑高度最高的 HLS 档（优先 HLS，没有才退渐进式）
+    const hls = opts.filter((o) => o.dataset.hls === 'true');
+    return (hls.length ? hls : opts).slice().sort((a, b) => (num(b) || 0) - (num(a) || 0))[0] || null;
+  };
+
+  const triggerBrowserHlsDownload = async () => {
+    if (_dlCancel()) return;                 // 正在合成 → 本次点击视为取消
+    const src = _dlHlsSourceFor(selectedQuality);
+    if (!src || !src.dataset.url) {
+      el.directHint.textContent = '当前画质没有可用于浏览器合成的地址，请改用上方「开始下载」走服务器。';
+      return;
+    }
+    const m3u8Url = src.dataset.url;
+    const title = (resolved && resolved.video && resolved.video.title) || 'video';
+    const base = (resolved && resolved.base) || '';
+    _dlBusy = true;
+    _dlAbort = new AbortController();
+    const signal = _dlAbort.signal;
+    const btn = el.browserHlsBtn;
+    const orig = btn.textContent;
+    btn.disabled = false;                    // 保持可点：它是唯一的取消入口
+    const t0 = performance.now();
+    const state = {
+      done: 0, total: 0, t0, segDone: 0, segCount: 0,
+      setLabel: (text) => { btn.textContent = text; },
+    };
+    try {
+      const { blob, ext } = await _dlRunHls(m3u8Url, base, {
+        signal,
+        wantHeight: parseInt(selectedQuality, 10) || 0,
+        onProgress: (bytes, segDone, segCount) => {
+          state.done = bytes;
+          state.segDone = segDone;
+          state.segCount = segCount;
+          _dlPaint(state);
+        },
+      });
+      _dlSave(blob, title, m3u8Url, ext);
+      el.directHint.textContent =
+        `✅ 已在浏览器内合成并保存（${formatBytes(blob.size)}，${ext}）。全程走你的带宽，未占用服务器出口。`;
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        el.directHint.textContent = '已取消合成。再次点击可重试。';
+        return;
+      }
+      el.directHint.textContent =
+        `⚠ 浏览器内合成不可用（${err.message || err}）。请用上方「开始下载」走服务器（服务器会合并/转码成 MP4）。`;
+    } finally {
+      _dlBusy = false;
+      _dlAbort = null;
+      btn.textContent = orig;
+    }
   };
 
   const triggerDirectDownload = async (url, title, base = '') => {
@@ -5548,6 +5830,8 @@
     setTimeout(() => { el.cookieHelpCopy.textContent = '复制操作指引'; }, 1500);
   });
   el.serverFallbackBtn.addEventListener('click', () => startDownload(selectedQuality || 'best'));
+  // 浏览器内合成（HLS）：再点一次即取消，语义与「直接保存到本机」一致
+  if (el.browserHlsBtn) el.browserHlsBtn.addEventListener('click', () => { triggerBrowserHlsDownload(); });
   el.input.addEventListener('input', () => { toggleClearButton(); paintNodeBar(); });
   el.clearBtn.addEventListener('click', () => {
     el.input.value = '';
