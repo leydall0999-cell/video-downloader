@@ -3120,6 +3120,43 @@ def _fetch_youtube_visitor_data(proxy: str = "") -> str:
     return ""
 
 
+def _youtube_oembed_status(url: str, proxy: str = "") -> str:
+    """用 YouTube oEmbed 公共接口判定视频是否还存在。
+
+    为什么需要它（2026-09-29）：数据中心 IP 上 yt-dlp 对被 bot 拦截的请求，
+    返回的报错与「视频已删除」高度相似，全部 Cookie 源耗尽时无法区分 ——
+    实测一个已删视频被笼统引导「去粘贴 Cookie」，用户白折腾。
+
+    oEmbed 是公开 API（`/oembed?url=...&format=json`），**不走 bot 检测**，
+    数据中心 IP 也能稳定拿到结果：
+      · 200         → 视频存在（那就是真被 bot 拦了，该引导贴 Cookie）
+      · 400 / 404   → 视频不存在（已删除/链接失效）
+      · 401 / 403   → 私享或禁止嵌入（无法确定是否可下载，归 unknown）
+      · 超时/异常    → unknown（探测失败，不改变原有行为）
+
+    返回 "ok" / "missing" / "unknown"。
+    """
+    import requests as _requests
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        r = _requests.get(
+            "https://www.youtube.com/oembed",
+            params={"url": url, "format": "json"},
+            headers={"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")},
+            proxies=proxies,
+            timeout=10,
+        )
+    except Exception as _e:  # noqa: BLE001
+        logger.info("[youtube] oEmbed 探测失败（按 unknown 处理）: %s", str(_e)[:100])
+        return "unknown"
+    if r.status_code == 200:
+        return "ok"
+    if r.status_code in (400, 404):
+        return "missing"
+    return "unknown"
+
+
 def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """YouTube 自动降级解析：方法一（免 Cookie + PO Token）→ 方法二（Cookie 源自动切换）。
 
@@ -3165,6 +3202,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
             raise
 
     # 方法一：无 Cookie（bgutil PO Token 尽力）
+    _last_content_error = ""   # 最后一个「内容级」错误（非 bot、非 Cookie 失效），仅供日志
     try:
         info = _try(user_cookie or "")
         if info:
@@ -3172,11 +3210,14 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
     except _YouTubeBotBlocked:
         logger.info("[youtube] %s 被 bot 检测拦截，自动切换 Cookie 源", url[:60])
     except (DownloadError, ExtractorError) as exc:
-        # 非 bot 错误（视频不可用/链接失效等）→ 转 ResolveError 透传真实原因
-        raise ResolveError("视频解析失败", _clean_message(str(exc))[:300]) from exc
+        # 非 bot 错误：**不急着下结论**。YouTube 对数据中心 IP 会把「被 bot 拦截」
+        # 伪装成 `Video unavailable`，仅凭报错无法与「视频已删除」区分（2026-09-29）。
+        # 先记下来继续走 Cookie 源，全部失败后由 oEmbed 终判视频到底还在不在。
+        _last_content_error = _clean_message(str(exc))[:200]
+        logger.info("[youtube] 免 Cookie 路径报非 bot 错误，继续尝试 Cookie 源: %s",
+                    _last_content_error[:120])
 
     # 方法二：Cookie 源自动切换（user > env > cache > pool）
-    _last_content_error = ""   # Cookie 源报的最后一个「内容级」错误（非 bot、非 Cookie 失效）
     for src, ck in _youtube_cookie_candidates(user_cookie):
         try:
             info = _try(ck)
@@ -3197,31 +3238,31 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
             logger.info("[youtube] Cookie 源=%s 报非 bot 错误（可能 Cookie 过期），换下一个: %s",
                         src, str(exc)[:120])
             # 记录内容级错误（video unavailable / private / removed / 地区限制等）：
-            # 全部源耗尽时它比「贴 Cookie」横幅更接近真相 —— 视频本身可能就没了
-            #（2026-09-29 实测：某已删视频被笼统引导贴 Cookie，误导排查）。
+            # 只用于日志；是否「视频真的没了」由末尾的 oEmbed 判定，不靠报错文案猜。
             if not _last_content_error:
                 _last_content_error = _clean_message(str(exc))[:200]
             if src == "cache":
                 _evict_youtube_cookie_cache("解析失败")
             continue
 
-    # 全部源耗尽：若最后拿到的是内容级错误，如实透传（并保留 Cookie 建议作为次选）
-    if _last_content_error:
+    # 全部源耗尽。先问 oEmbed「这个视频还在吗」——数据中心 IP 上 yt-dlp 会把
+    # 「视频已删除」和「被 bot 拦截」报得几乎一样，只看 yt-dlp 报错无法区分。
+    #   · missing  → 视频确实没了：如实说明，别再让用户白折腾 Cookie；
+    #   · ok/未知  → 视频还在（或无法判定）：引导贴 Cookie，原始报错进日志备查。
+    _status = _youtube_oembed_status(url, effective_proxy)
+    if _status == "missing":
+        logger.info("[youtube] oEmbed 判定视频已失效，不再引导贴 Cookie: %s", url[:60])
         raise ResolveError(
-            "该视频无法访问：可能已被删除、转为私享或存在地区限制",
-            f"解析器返回：{_last_content_error}\n"
-            "· 若视频确实存在，YouTube 偶尔会对数据中心 IP 伪装成「视频不可用」，"
-            "可在「高级选项 → Cookie」粘贴登录态后再试一次；\n"
-            "· 若视频已被删除 / 私享 / 地区限制，任何登录态都无法解析。",
-            category="unknown",
+            "该视频无法访问",
+            "可能已被删除、转为私享或存在地区限制。",
+            category="restricted",
         )
-
+    if _last_content_error:
+        logger.info("[youtube] 全部 Cookie 源失败，最后一条内容级报错: %s",
+                    _last_content_error[:160])
     raise ResolveError(
         "YouTube 需要登录 Cookie 才能解析",
-        "YouTube 2025 起对服务器数据中心 IP 强制 bot 检测，需带登录态才能绕过。\n"
-        "① 最直接：在「高级选项 → Cookie」粘贴一次 YouTube 登录 Cookie，随后重试；\n"
-        "② 免手动：桌面版在本机浏览器登录过 YouTube 后，登录态会被自动同步"
-        "（每 30 分钟一次）到服务器，无需粘贴。",
+        "在「高级选项 → Cookie」粘贴一次登录 Cookie 后重试。",
         category="cookie_required",
     )
 
