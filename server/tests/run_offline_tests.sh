@@ -11,6 +11,8 @@
 #   8. test_web_direct_download.js —— 网页版直链分片下载引擎（前端真源码 + 假源站，需 node）
 #   9. test_web_hls_assemble.js  —— 浏览器内 HLS 合成（m3u8 解析/变体选择/初始化段/加密与直播拒绝，需 node）
 #   10. test_web_route_retry.js  —— 远端失败自动换路由重试（失败分类/原地重试/换路由/耗尽集合防抖/切换上限，需 node）
+#   11. test_youtube_shortlink_scope.py —— youtu.be / shorts / m. 短链必须归一化为 www 长链
+#       （yt-dlp 的 http_headers Cookie 按域作用域，短链会把有效 Cookie 挡在 innertube 之外）
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -79,6 +81,7 @@ run_one test_worker_proxy_direct.py
 run_one test_peer_overseas_fallback.py
 run_one test_member_download_quota.py
 run_one test_youtube_unavailable_vs_bot.py
+run_one test_youtube_shortlink_scope.py
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
 run_one test_direct_url_hls.py

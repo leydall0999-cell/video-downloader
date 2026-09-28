@@ -59,7 +59,7 @@ def _cookie_diag(key: str, value: str = "") -> None:
             f.write(f"[{ts}] {key}={value}\n")
     except Exception:
         pass
-from urllib.parse import urlparse, parse_qsl, urlencode
+from urllib.parse import urlparse, parse_qsl, parse_qs, urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -463,6 +463,62 @@ def _strip_tracking_params(url: str, keep: frozenset[str] | set[str] | None = No
     return parsed._replace(query=urlencode(kept)).geturl()
 
 
+# --------------------------------------------------------------------------- #
+# YouTube 链接归一化：各种等价形态 → www.youtube.com/watch?v=<id>
+# --------------------------------------------------------------------------- #
+_YT_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _normalize_youtube_url(url: str) -> str:
+    """把 YouTube 各种等价链接统一成 `https://www.youtube.com/watch?v=<id>` 长链。
+
+    为什么必须做（2026-09-29 香港节点实测定位）：
+    yt-dlp 通过 `http_headers["Cookie"]` 注入的 Cookie 会被**限定在输入 URL 的域**
+    （yt-dlp 原话：`they will be scoped to the domain of the downloaded urls`）。
+    用户粘贴 `youtu.be/xxxx` 短链时，Cookie 只挂到 `youtu.be`，而真正取播放信息的
+    innertube 请求打到 `www.youtube.com/youtubei/v1/player` 时**不带 Cookie** →
+    一律报 "Sign in to confirm you're not a bot"。实测对照（同一视频、同一份公共池
+    Cookie、同一 web_safari 客户端）：
+
+        youtu.be/Rpv74_GxY6s          + http_headers Cookie → bot 拦截
+        m.youtube.com/watch?v=...     + http_headers Cookie → bot 拦截
+        www.youtube.com/watch?v=...   + http_headers Cookie → 成功（11 个格式）
+        youtu.be/Rpv74_GxY6s          + cookiefile(.youtube.com) → 成功
+
+    即：**有有效 Cookie 也会被判 bot**，用户看到的「需要登录 Cookie」是假警报，
+    重粘 Cookie 永远修不好。归一化成长链即可让 Cookie 落到 youtube.com 域。
+    顺带省掉一次 302 跳转，并让下游 `_is_youtube_host` 域判断更稳定。
+
+    覆盖形态：youtu.be/<id>、/shorts/<id>、/live/<id>、/embed/<id>、/v/<id>，
+    以及 m./music./www. 各子域的上述路径与 /watch?v=。
+    非 YouTube 链接、或取不到合法 11 位视频 ID 时原样返回（不猜、不改）。
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    host = (parsed.hostname or "").lower()
+    if not _is_youtube_host(host):
+        return url
+    path = parsed.path or ""
+    vid = ""
+    if path == "/watch":
+        vid = (parse_qs(parsed.query).get("v") or [""])[0]
+        # 已是标准长链：保持原样（可能带 list / index / t 等有语义的参数）。
+        # ⚠️ 只认 www.youtube.com —— 裸域与 m./music. 子域的 watch 长链会让
+        # http_headers Cookie 变成「只发给该主机」的 cookie，实测仍被判 bot，
+        # 必须一并改写（裸域也要改写，因为 host-only cookie 不匹配 www）。
+        if host == "www.youtube.com":
+            return url
+    elif host in ("youtu.be", "www.youtu.be"):
+        vid = path.strip("/").split("/")[0]
+    elif path.startswith(("/shorts/", "/live/", "/embed/", "/v/")):
+        vid = path.strip("/").split("/", 1)[-1].split("/")[0]
+    if not _YT_VIDEO_ID_RE.match(vid or ""):
+        return url
+    return f"https://www.youtube.com/watch?v={vid}"
+
+
 def _normalize_share_url(url: str, proxy: str = "") -> str:
     """链接归一化入口（平台无关）。
 
@@ -475,7 +531,23 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     3. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
        不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
        无法从长链静态推导，强行构造会破坏解析（需调分享 API，不在本范围）。
+    4. YouTube：youtu.be / shorts / live / embed 统一为 www.youtube.com/watch?v=。
+       目的不是好看——是按域作用域把 Cookie 落到 youtube.com，否则有效 Cookie
+       也会被 yt-dlp 挡在 innertube 之外、被判 bot（详见 _normalize_youtube_url）。
     """
+    # YouTube 优先：短链/移动域/嵌入页统一成长链。必须做——yt-dlp 用 http_headers
+    # 注入的 Cookie 按「输入 URL 的域」作用域，youtu.be 短链会把公共池/用户 Cookie
+    # 挡在 www.youtube.com 之外，导致「有有效 Cookie 也判 bot」（详见上函数注释）。
+    try:
+        _yt_host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        _yt_host = ""
+    if _is_youtube_host(_yt_host):
+        normalized = _normalize_youtube_url(url)
+        if normalized != url:
+            logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
     # B站 特例优先：先把短链展开成长链，再统一规范化为 bilibili.com 长链
     if "bilibili.com" in url or "b23.tv" in url:
         expanded = _expand_b23tv_url(url, proxy=proxy)
@@ -3166,6 +3238,10 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
 
     返回 yt-dlp info dict；全部失败抛 ResolveError（bot 拦截时 category=cookie_required）。
     """
+    # 入口再兜一层归一化：本函数也会被测试/探针直接以原始短链调用，不能只依赖
+    # 调用方（_normalize_share_url）先归一。youtu.be 短链若漏进来，Cookie 会被
+    # yt-dlp 按域作用域挡在 www.youtube.com 之外 → 有效 Cookie 也被判 bot。
+    url = _normalize_youtube_url(url)
     host = _host_of(url)
     effective_proxy = proxy or _resolve_proxy(host)
     # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路
