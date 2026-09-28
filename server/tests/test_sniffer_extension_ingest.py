@@ -63,11 +63,35 @@ def test_picked_via_http_and_not_in_items():
     items = c.get("/api/sniffer/items?limit=100").json()["items"]
     assert all("master.m3u8" not in (i.get("url") or "") for i in items), \
         "manual/extension 提交项不进 items 列表（那是 CDP 嗅探的展示区）"
-    picked = c.get("/api/sniffer/picked").json()["items"]
+    # picked 出队走的是「带令牌的桌面端」身份（生产里 request() 注入 Bearer）
+    with patch("user_membership.get_current_user_id", return_value="u_desktop"):
+        picked = c.get("/api/sniffer/picked").json()["items"]
     assert len(picked) == 1 and picked[0]["kind"] == "playlist", "picked 经 HTTP 出队应含该清单"
-    again = c.get("/api/sniffer/picked").json()["items"]
+    with patch("user_membership.get_current_user_id", return_value="u_desktop"):
+        again = c.get("/api/sniffer/picked").json()["items"]
     assert again == [], "picked 取走即出队（幂等消费）"
     print("✅ picked 经 HTTP 出队且 items 列表不受污染")
+
+
+def test_anonymous_picked_poll_does_not_steal():
+    """2026-09-28 修复：匿名轮询 picked 不得出队，否则 Chrome 旧页面会抢走扩展条目。
+
+    真实场景：用户在 Chrome 打开 127.0.0.1:8321，旧构建会加载 desktop-app.js 并匿名
+    轮询 picked；修复前它把条目 take_picked() 走（自己不要、也不处理）→ 桌面端永远
+    拿不到 → 扩展显示「已发送」但桌面端没反应。修复后匿名轮询返回空、不动队列。
+    """
+    _clean_picked()
+    c = _client()
+    c.post("/api/sniffer/send", json={"url": "https://c/a.mp4"})
+    # 匿名轮询（无 Bearer，模拟 Chrome 旧页面）
+    assert c.get("/api/sniffer/picked").json()["items"] == [], \
+        "匿名轮询不得出队（防偷条目）"
+    # 带令牌的桌面端才能取走扩展发来的条目
+    with patch("user_membership.get_current_user_id", return_value="u_app"):
+        rows = c.get("/api/sniffer/picked").json()["items"]
+    assert len(rows) == 1 and rows[0]["url"].endswith("/a.mp4"), \
+        "带令牌的桌面端才能取走扩展发来的条目"
+    print("✅ 匿名轮询不出队，仅带令牌桌面端可取走（防 Chrome 偷条目）")
 
 
 def test_cookie_truncated_to_8192():

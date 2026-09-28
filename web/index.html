@@ -3741,17 +3741,21 @@
     var s = document.createElement('script');
     s.src = 'app.js?v=' + encodeURIComponent(v) + '&p=3';
     s.onload = function () {
-      // app.js 已执行并暴露 window.VDL。仅当本页面运行在 pywebview 桌面壳内才加载
-      // app 专属脚本（desktop-app.js）—— 普通浏览器（Chrome 等）打开同一地址 127.0.0.1:8321
-      // 不会加载，避免其伪装成桌面端、每 3s 匿名轮询 /api/sniffer/picked：既把「桌面端登录态」
-      // 信号写成 False（扩展红条误报「未登录」），又抢走扩展发来的下载条目（点下载没反应）。
-      // pywebview 注入时机不稳定时由下方 else 分支轮询兜底（最多 ~20s），双保险。
+      // app.js 已执行并暴露 window.VDL。桌面壳（pywebview 注入 / 打包指纹 isDesktopBuild）
+      // 会加载 app 专属脚本（desktop-app.js）；普通浏览器（Chrome 等）打开同一地址
+      // 127.0.0.1:8321 虽也会走到这里加载 desktop-app.js，但 desktop-app.js 顶部有
+      // `if (!window.pywebview) return` 守卫——Chrome 没有 pywebview 对象，加载即变 no-op，
+      // 不会伪装成桌面端去匿名轮询 /api/sniffer/picked（否则会既把「桌面端登录态」信号写成
+      // False 触发扩展红条误报「未登录」，又抢走扩展发来的下载条目导致「点下载没反应」）。
+      // 服务端 cdp_sniffer.mark_desktop_auth 对匿名调用 also 是 no-op、/api/sniffer/picked
+      // 仅对带令牌的桌面端出队，多重保险。pywebview 注入时机不稳定时由下方 else 分支
+      // 轮询兜底（最多 ~20s），双保险。
       var loadDesktopApp = function () {
         var d = document.createElement('script');
         d.src = 'js/desktop-app.js?v=' + encodeURIComponent(v) + '&p=3';
         document.head.appendChild(d);
       };
-      if (window.pywebview) {
+      if (window.pywebview || isDesktopBuild) {
         loadDesktopApp();
       } else {
         // pywebview 可能稍后注入。⚠️ 2026-09-27 实测：WKWebView 下 'pywebviewready'

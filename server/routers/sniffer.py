@@ -94,11 +94,20 @@ def sniffer_send_result(payload: dict = Body(...), response: Response = None) ->
 def sniffer_picked(request: Request, response: Response = None) -> dict:  # noqa: RUF013
     # 借这条 3s 一次的既有轮询，把**桌面端自己**的登录态告知服务端：扩展没有桌面端
     # 会话令牌，只有这样才能在点下载之前提示「桌面端未登录」（见 mark_desktop_auth）。
+    user_id = None
     try:
         from user_membership import get_current_user_id
-        cdp_sniffer.SNIFFER.mark_desktop_auth(get_current_user_id(request))
+        user_id = get_current_user_id(request)
+        cdp_sniffer.SNIFFER.mark_desktop_auth(user_id)
     except Exception:  # noqa: BLE001 - 登录态信号是尽力而为，绝不影响出队
         pass
     if response is not None:
         _pna(response)
-    return {"items": cdp_sniffer.SNIFFER.take_picked()}
+    # ⚠️ 防偷条目（2026-09-28）：只有带有效令牌的桌面端才允许出队。匿名轮询
+    # （Chrome 旧页面仍加载着 desktop-app.js / 普通浏览器）一律返回空、**不得**
+    # take_picked()，否则会抢走扩展发来的下载条目，导致「点下载桌面端没反应」。
+    # 桌面端桌面端 request() 总会带 Bearer（来自 WKWebView localStorage），与 Chrome
+    # 的独立存储天然区分，因此令牌即身份判据。
+    if user_id:
+        return {"items": cdp_sniffer.SNIFFER.take_picked()}
+    return {"items": []}

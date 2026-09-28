@@ -1,7 +1,11 @@
 // web/js/desktop-app.js — 桌面版(pywebview)专属行为脚本。
 //
-// 仅由 index.html 在检测到 window.pywebview 存在时才加载；纯 web 环境永不加载本文件。
-// 因此本文件里的所有 app 专属功能，都不会进入 web 的加载集，也不会影响 web 端。
+// 由 index.html 在桌面壳环境加载（pywebview 注入 或 打包指纹 isDesktopBuild 命中）。
+// ⚠️ 纯 web 环境（Chrome 等浏览器打开 127.0.0.1:8321）也会加载本文件——但浏览器里的
+//    pollPicked 已经无害：服务端 cdp_sniffer.mark_desktop_auth 对匿名调用是 no-op（不会
+//    把「桌面端登录态」信号写成 False），且 /api/sniffer/picked 仅对带令牌的桌面端出队
+//    （匿名轮询返回空、抢不走扩展条目）。所以这里**不再**用 `if (!window.pywebview) return`
+//    去拦截——pywebview 注入时机不稳定，过早 return 会连桌面壳自己的轮询一起误杀。
 //
 // ⚠️ 这是 app 端窗口的专属编辑文件：以后桌面版的新功能（退出/原生桥接/系统托盘等）
 //    只改这里，不要写回共享的 web/app.js，也不要让 web 窗口碰本文件。
