@@ -519,6 +519,29 @@ def _normalize_youtube_url(url: str) -> str:
     return f"https://www.youtube.com/watch?v={vid}"
 
 
+# 从各种 YouTube 链接形态里搜出「疑似视频 ID」（故意放宽成 1~20 位，好捕获复制丢字）
+_YT_ID_RE = re.compile(r'(?:youtu\.be/|/shorts/|/live/|/embed/|[?&]v=)([A-Za-z0-9_-]{1,20})')
+
+
+def validate_youtube_id(url: str) -> None:
+    """YouTube 视频 ID 固定 11 位；分享链接复制丢字时**提前**给出明确提示。
+
+    否则无效 ID 会流进 bot 检测（数据中心节点无 Cookie → 误报「YouTube 需要登录
+    Cookie」）或 yt-dlp 的 Unsupported URL，两端各报一种误导性错误
+    （app 端 2026-09-22 实测：用户粘贴的 youtu.be/mGBQMAUayc 只有 10 位）。
+    本函数从 app 端 `downloader.validate_youtube_id` 移植，保持两分支行为一致。
+    """
+    m = _YT_ID_RE.search(url or "")
+    if m and len(m.group(1)) != 11:
+        bad = m.group(1)
+        raise ResolveError(
+            "视频链接不完整",
+            f"YouTube 视频 ID 应为 11 位，这条链接里的 ID「{bad}」只有 {len(bad)} 位"
+            "（通常是复制时丢了字符）。请回到来源重新复制完整链接再试。",
+            category="bad_url",
+        )
+
+
 def _normalize_share_url(url: str, proxy: str = "") -> str:
     """链接归一化入口（平台无关）。
 
@@ -3242,6 +3265,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
     # 调用方（_normalize_share_url）先归一。youtu.be 短链若漏进来，Cookie 会被
     # yt-dlp 按域作用域挡在 www.youtube.com 之外 → 有效 Cookie 也被判 bot。
     url = _normalize_youtube_url(url)
+    validate_youtube_id(url)  # ID 不完整直接明确报错，别流进 bot/Cookie 兜底
     host = _host_of(url)
     effective_proxy = proxy or _resolve_proxy(host)
     # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路

@@ -25,7 +25,9 @@
   3. 非 YouTube 链接（B站/抖音/X）与非法形态（ID 非 11 位、playlist、频道页）
      一律原样返回——不猜、不改；
   4. **`_resolve_youtube` 绝不把短链交给 yt-dlp**：即使调用方漏了归一化，
-     函数入口也会兜一层（这是本次 bug 的根防线）。
+     函数入口也会兜一层（这是本次 bug 的根防线）；
+  5. 复制丢字的 ID（≠11 位）在打 yt-dlp 之前就报「视频链接不完整」（category=bad_url），
+     不再让它流进 bot 检测、变成误导性的「需要登录 Cookie」。
 """
 
 import os
@@ -123,7 +125,61 @@ def test_resolve_entry_normalizes_before_ytdlp():
 
 
 # --------------------------------------------------------------------------- #
-# 2. 标准长链 / 非视频页原样通过
+# 2. 复制丢字的 ID：给「链接不完整」，别流入 bot/Cookie 兜底报误导性错误
+# --------------------------------------------------------------------------- #
+def test_validate_truncated_id_reports_clear_error():
+    # 11 位合法 ID 与非 YouTube 链接：不得报错
+    for u in (_WANT, f"https://youtu.be/{_VID}", f"https://www.youtube.com/shorts/{_VID}",
+              "https://www.bilibili.com/video/BV1xx411c7mD"):
+        dl.validate_youtube_id(u)  # 不抛即通过
+
+    # 10 位（复制丢字，app 端真实案例 youtu.be/mGBQMAUayc）与过短 ID：必须报明确错
+    for u in ("https://youtu.be/mGBQMAUayc", "https://www.youtube.com/watch?v=abc"):
+        try:
+            dl.validate_youtube_id(u)
+        except dl.ResolveError as exc:
+            assert exc.message == "视频链接不完整", f"实际标题：{exc.message}"
+            assert getattr(exc, "category", "") == "bad_url", "前端据此显示「链接不完整」而非贴 Cookie"
+            assert "11 位" in (exc.hint or ""), f"提示应说明应为 11 位：{exc.hint}"
+        else:
+            raise AssertionError(f"{u} 应报「视频链接不完整」，实际没报错")
+
+    # 入口契约：截断 ID 在调用 yt-dlp 之前就被拦下（一次都不该打出去）
+    calls = []
+
+    class _NoCallYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):  # pragma: no cover
+            calls.append(url)
+            raise AssertionError("截断 ID 不该走到 yt-dlp")
+
+    _saved = (dl._YoutubeDL, dl._fetch_youtube_visitor_data, dl._resolve_proxy)
+    try:
+        dl._YoutubeDL = _NoCallYDL
+        dl._fetch_youtube_visitor_data = lambda proxy="": ""
+        dl._resolve_proxy = lambda host: ""
+        try:
+            dl._resolve_youtube("https://youtu.be/mGBQMAUayc", "", "")
+        except dl.ResolveError as exc:
+            assert exc.message == "视频链接不完整", f"实际：{exc.message}"
+        else:
+            raise AssertionError("截断 ID 应抛 ResolveError")
+    finally:
+        dl._YoutubeDL, dl._fetch_youtube_visitor_data, dl._resolve_proxy = _saved
+    assert not calls, "截断 ID 不该触发任何 yt-dlp 请求"
+    print("✅ 截断 ID（10 位）：解析前明确报「视频链接不完整」，零次 yt-dlp 请求")
+
+
+# --------------------------------------------------------------------------- #
+# 2b. 标准长链 / 非视频页原样通过
 # --------------------------------------------------------------------------- #
 def test_canonical_and_non_video_passthrough():
     same = [
@@ -167,6 +223,7 @@ def test_invalid_and_other_platforms_untouched():
 
 if __name__ == "__main__":
     test_short_forms_all_normalized()
+    test_validate_truncated_id_reports_clear_error()
     test_resolve_entry_normalizes_before_ytdlp()
     test_canonical_and_non_video_passthrough()
     test_invalid_and_other_platforms_untouched()
