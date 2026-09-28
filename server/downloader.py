@@ -466,7 +466,22 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
     3. 其他平台：剥离追踪参数，降低防盗链/风控识别概率。
        不做伪短链转换——抖音/快手/小红书短链是服务端随机 token，
        无法从长链静态推导，强行构造会破坏解析（需调分享 API，不在本范围）。
+    4. YouTube：youtu.be / shorts / live / embed / m. / music. 统一为
+       www.youtube.com/watch?v=。**下载入口同样必须归一化**：yt-dlp 的
+       http_headers Cookie 按初始 URL 的域作用域，短链会把有效 Cookie 挡在
+       innertube 之外 → 解析成功但下载被判 bot（详见 canonicalize_video_url）。
     """
+    # YouTube 优先：短链/子域/嵌入页统一成长链，解析与下载两条路径共用同一入口
+    try:
+        _yt_host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        _yt_host = ""
+    if _is_youtube_host(_yt_host):
+        normalized = canonicalize_video_url(url)
+        if normalized != url:
+            logger.info("[normalize] %s -> %s", url, normalized)
+        return normalized
+
     # B站 特例优先：先把短链展开成长链，再统一规范化为 bilibili.com 长链
     if "bilibili.com" in url or "b23.tv" in url:
         expanded = _expand_b23tv_url(url, proxy=proxy)
@@ -3318,6 +3333,8 @@ def _fetch_youtube_visitor_data(proxy: str = "") -> str:
     return ""
 
 _YT_ID_RE = re.compile(r'(?:youtu\.be/|/shorts/|/live/|/embed/|[?&]v=)([A-Za-z0-9_-]{1,20})')
+# 严格版：只有 11 位才是合法视频 ID，供 canonicalize 判断「能不能安全改写」用
+_YT_VIDEO_ID_STRICT_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 def validate_youtube_id(url: str) -> None:
@@ -3339,22 +3356,39 @@ def validate_youtube_id(url: str) -> None:
 
 
 def canonicalize_video_url(url: str) -> str:
-    """把等价短链规范化成标准长链（当前仅 YouTube：youtu.be/<id> → watch?v=<id>）。
+    """把等价短链规范化成标准长链（YouTube：各种形态 → www.youtube.com/watch?v=<id>）。
 
     🔴 2026-09-22 实测：同一份浏览器登录 Cookie，对端解析 watch 形态 200、
     youtu.be 形态 400——Cookie 请求头按初始 URL 的域绑定，youtu.be 302 跳到
     youtube.com 后登录态没跟过去，仍被判 bot 拦截。**解析与下载入口都必须先
     规范化**，否则会出现「解析成功但下载失败」这种更难查的分裂现象。
+
+    2026-09-29 对齐网页版（web-dev）后覆盖全部等价形态：youtu.be/<id>、
+    /shorts/、/live/、/embed/、/v/，以及 m./music./裸域 / watch 长链
+    —— 这些 host 同样会让 Cookie 变成「只发给该主机」的 cookie，实测仍被判 bot；
+    已规范的 www.youtube.com/watch 长链原样保留（不误伤 list / index / t）。
+    取不到合法 11 位 ID、或非 YouTube 链接一律原样返回，不猜不改。
     """
     try:
-        host = _host_of(url)
-    except Exception:  # noqa: BLE001
+        parsed = urlparse(url)
+    except ValueError:
         return url
-    if host == "youtu.be":
-        m = _YT_ID_RE.search(url or "")
-        if m:
-            return f"https://www.youtube.com/watch?v={m.group(1)}"
-    return url
+    host = (parsed.hostname or "").lower()
+    if not _is_youtube_host(host):
+        return url
+    path = parsed.path or ""
+    vid = ""
+    if path == "/watch":
+        vid = (parse_qs(parsed.query).get("v") or [""])[0]
+        if host == "www.youtube.com":
+            return url  # 已是标准长链：保留 list / index / t 等有语义参数
+    elif host in ("youtu.be", "www.youtu.be"):
+        vid = path.strip("/").split("/")[0]
+    elif path.startswith(("/shorts/", "/live/", "/embed/", "/v/")):
+        vid = path.strip("/").split("/", 1)[-1].split("/")[0]
+    if not _YT_VIDEO_ID_STRICT_RE.match(vid or ""):
+        return url
+    return f"https://www.youtube.com/watch?v={vid}"
 
 
 def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:

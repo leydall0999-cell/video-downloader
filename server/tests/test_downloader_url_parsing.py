@@ -11,6 +11,8 @@
   - _root_domain            取根域（v.qq.com → qq.com；a.b.com.cn → b.com.cn）
   - _is_douyin_host / _is_kuaishou_host / is_cookie_hardened_host  平台识别
   - _looks_like_direct_file 直链媒体文件识别（已知平台不误判）
+  - canonicalize_video_url  YouTube 等价形态 → www.youtube.com/watch?v=（2026-09-29 补）
+  - validate_youtube_id     视频 ID 必须 11 位，复制丢字提前报错
 
 运行：
     cd server && python tests/test_downloader_url_parsing.py
@@ -24,12 +26,14 @@ if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
 from downloader import (  # noqa: E402
-    _host_of, _is_douyin_host, _is_kuaishou_host, _looks_like_direct_file,
-    _normalize_bilibili_url, _root_domain, _strip_tracking_params,
-    is_cookie_hardened_host,
+    ResolveError, _host_of, _is_douyin_host, _is_kuaishou_host,
+    _looks_like_direct_file, _normalize_bilibili_url, _normalize_share_url,
+    _root_domain, _strip_tracking_params, canonicalize_video_url,
+    is_cookie_hardened_host, validate_youtube_id,
 )
 
 _BV = "BV1xx411c7mD"
+_YT = "Rpv74_GxY6s"
 
 
 # --------------------------------------------------------------------------- #
@@ -97,6 +101,72 @@ def test_normalize_bilibili_non_bili_untouched():
     ):
         assert _normalize_bilibili_url(url) == url, url
     print("✅ 非 B站 链接原样返回，不误伤其它平台")
+
+
+# --------------------------------------------------------------------------- #
+# canonicalize_video_url / _normalize_share_url（YouTube）
+# --------------------------------------------------------------------------- #
+def test_canonicalize_youtube_all_equivalent_forms():
+    """youtu.be / shorts / live / embed / m. / music. / 裸域 → www 长链。
+
+    yt-dlp 经 http_headers 注入的 Cookie 按**初始 URL 的域**作用域，短链会把
+    有效登录 Cookie 挡在 innertube（www.youtube.com）之外 → 被判 bot。
+    """
+    want = f"https://www.youtube.com/watch?v={_YT}"
+    for url in (
+        f"https://youtu.be/{_YT}?si=u1h2E430EY2cjFOy",
+        f"https://youtu.be/{_YT}",
+        f"https://youtu.be/{_YT}/",
+        f"https://www.youtu.be/{_YT}",
+        f"https://m.youtube.com/watch?v={_YT}",
+        f"https://music.youtube.com/watch?v={_YT}",
+        f"https://youtube.com/watch?v={_YT}",
+        f"https://www.youtube.com/shorts/{_YT}",
+        f"https://m.youtube.com/shorts/{_YT}",
+        f"https://www.youtube.com/live/{_YT}?feature=share",
+        f"https://www.youtube.com/embed/{_YT}",
+        f"https://www.youtube.com/v/{_YT}",
+        f"https://www.youtube-nocookie.com/embed/{_YT}",
+    ):
+        assert canonicalize_video_url(url) == want, f"{url} → {canonicalize_video_url(url)}"
+        assert _normalize_share_url(url) == want, f"下载入口未归一化：{url}"
+    print("✅ YouTube 13 种等价形态（含下载入口）统一归一化为 www 长链")
+
+
+def test_canonicalize_youtube_keeps_meaningful_and_untouched():
+    """已规范长链保留 list/index/t；播放列表、频道页、非 YouTube 一律不动。"""
+    same = (
+        f"https://www.youtube.com/watch?v={_YT}&list=PLabc&index=3",
+        "https://www.youtube.com/playlist?list=PLabc",
+        "https://www.youtube.com/watch?list=PLabc",     # 无 v，别乱造 ID
+        "https://www.youtube.com/@somechannel",
+        "https://www.bilibili.com/video/BV1xx411c7mD",
+        "https://v.douyin.com/abc/",
+        "https://x.com/a",
+    )
+    for url in same:
+        assert canonicalize_video_url(url) == url, url
+        assert _normalize_share_url(url) == url, url
+    # 11 位不合法（截断/空）不得被改写成错误长链
+    assert canonicalize_video_url("https://youtu.be/mGBQMAUayc") == "https://youtu.be/mGBQMAUayc"
+    assert canonicalize_video_url("https://youtu.be/") == "https://youtu.be/"
+    print("✅ 标准长链/播放列表/频道页/其它平台原样通过（不误伤、不瞎猜）")
+
+
+def test_validate_youtube_id_rejects_truncated():
+    """复制丢字的 ID（≠11 位）→ 明确报「视频链接不完整」，别流进 bot/Cookie 兜底。"""
+    for url in (f"https://www.youtube.com/watch?v={_YT}", f"https://youtu.be/{_YT}",
+                "https://www.bilibili.com/video/BV1xx411c7mD"):
+        validate_youtube_id(url)  # 不抛即通过
+    for url in ("https://youtu.be/mGBQMAUayc", "https://www.youtube.com/watch?v=abc"):
+        try:
+            validate_youtube_id(url)
+        except ResolveError as exc:
+            assert exc.message == "视频链接不完整", exc.message
+            assert getattr(exc, "category", "") == "bad_url"
+        else:
+            raise AssertionError(f"{url} 应报「视频链接不完整」")
+    print("✅ 截断 ID（10 位）报「视频链接不完整」（category=bad_url）")
 
 
 # --------------------------------------------------------------------------- #
@@ -238,6 +308,9 @@ if __name__ == "__main__":
     test_normalize_bilibili_root_bv()
     test_normalize_bilibili_keeps_p_and_t_drops_tracking()
     test_normalize_bilibili_non_bili_untouched()
+    test_canonicalize_youtube_all_equivalent_forms()
+    test_canonicalize_youtube_keeps_meaningful_and_untouched()
+    test_validate_youtube_id_rejects_truncated()
     test_strip_tracking_removes_tracking_keeps_business()
     test_strip_tracking_no_query_untouched()
     test_strip_tracking_all_removed_no_dangling_question_mark()
@@ -251,4 +324,4 @@ if __name__ == "__main__":
     test_looks_like_direct_file_excludes_hls_manifest()
     test_looks_like_direct_file_rejects_known_platform()
     test_looks_like_direct_file_rejects_non_media()
-    print("\n🎉 下载器链接解析测试全部通过（20 项）")
+    print("\n🎉 下载器链接解析测试全部通过（23 项）")
