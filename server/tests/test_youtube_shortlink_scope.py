@@ -212,7 +212,7 @@ def test_invalid_and_other_platforms_untouched():
     for u in same:
         got = dl._normalize_share_url(u)
         if u.startswith("https://youtu.be/abcdefghijk"):
-            assert got == f"https://www.youtube.com/watch?v=abcdefghijk", f"实际：{got}"
+            assert got == "https://www.youtube.com/watch?v=abcdefghijk", f"实际：{got}"
             continue
         assert got == u, f"{u} 不应被改动，实际：{got}"
     # 直接调 helper：非 YouTube host 一律原样
