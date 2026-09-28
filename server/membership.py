@@ -738,7 +738,7 @@ class MembershipStore:
             return {"ok": True, "resource": resource, "unlimited": q.get("unlimited", False)}
         if not q["allowed"]:
             if q.get("tier") == "free":
-                return {"ok": False, "error": f"今日免费解析额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
+                return {"ok": False, "error": f"今日免费下载额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
                         "resource": resource, "code": "MEMBER_QUOTA"}
             return {"ok": False, "error": f"{resource} 今日配额已用尽（{q['limit']}/日）", "resource": resource,
                     "code": "MEMBER_QUOTA"}

@@ -100,9 +100,12 @@ def quota_state(resource: str, request: Request) -> dict[str, Any]:
 
 @router.post("/api/member/quota/use")
 def quota_use(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """消耗下载类配额。payload: {"resource": "download", "n": 1}。需登录。"""
-    if not _require_user(request):
-        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    """消耗下载类配额。payload: {"resource": "download", "n": 1}。需登录。
+
+    2026-09-28 新增 `check_only: true`：只查不扣（返回 quota_state）。供海外（global）
+    节点把 cn 签发的 Authorization 原样回派过来做**下载配额预检**（cn 是会员/配额权威，
+    hk 本机验不了 token、也读不到 cn 的 store）——回派失败由调用方 fail-open。
+    """
     resource = str(payload.get("resource") or "").strip()
     if not resource:
         return {"ok": False, "error": "缺少 resource"}
@@ -110,4 +113,10 @@ def quota_use(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str
         n = int(payload.get("n", 1))
     except (TypeError, ValueError):
         return {"ok": False, "error": "n 必须为整数"}
+    if payload.get("check_only"):
+        if not _require_user(request):
+            return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+        return _store(request).quota_state(resource)
+    if not _require_user(request):
+        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
     return _store(request).use_daily(resource, n=n)

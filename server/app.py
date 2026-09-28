@@ -1686,7 +1686,11 @@ app.add_middleware(
     # 预检里没有 Range 就会被浏览器直接拦掉（症状：海外视频一律「加速下载不可用」）。
     # 虽然新版 Fetch 规范已把 Range 列为可豁免的自列表头，但 Safari/WKWebView 支持滞后，
     # 显式放行才是稳的。仅放宽 GET 上这一个头，不放宽来源与方法。
-    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key", "X-Device-Id", "Range"],
+    # Authorization（2026-09-28）：下载配额墙上线后前端默认携带登录 bearer（V1 免费
+    # 10 次/日按账号计），海外站请求跨域打 global 节点时预检必须放行该头，
+    # 否则海外下载直接被浏览器拦死（比 Range 更致命）。
+    allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key", "X-Device-Id",
+                   "Range", "Authorization"],
 )
 
 

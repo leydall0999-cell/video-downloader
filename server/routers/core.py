@@ -475,6 +475,112 @@ def _device_of(request: app.Request) -> str:
     return dev[:64]
 
 
+# ---- V1 下载配额墙（2026-09-28 修复「任务成功创建后 used 恒 0」）-------------- #
+# 规格（V1 方案 6.7）：/api/download、/api/batch 设墙 —— 免费 10 次/日、会员 1000 次/日；
+# 任务成功创建才计费；超限 402。此前会员引擎的 use_daily 从未被下载链路调用，
+# used 永远是 0，免费限额形同虚设。
+#
+# 计数权威 = cn 节点（会员 store 本地落盘 memberships/{uid}.json，token 也是 cn 签发
+# 的 HMAC —— hk 本机验不了、也读不到 cn 的文件）。故：
+#   · cn / 单节点（桌面、无回派目标）：直接 current_member_store 预检 + 计数；
+#   · global 节点（hk）：把原始 Authorization 原样回派 cn 的 /api/member/quota/use
+#     （check_only 预检 → 创建成功后回派计数）；cn 不可达时 fail-open（不挡下载）；
+#   · 匿名（无/无效 token）：cn 用全局匿名共享池；hk 回派收到 NO_AUTH → 落 hk 本机
+#     匿名共享池。会员引擎任何异常一律 fail-open，绝不因配额系统故障挡下载。
+
+def _quota_relay_base() -> str:
+    """global 节点回派配额的目标（cn 权威）。VDL_QUOTA_RELAY_URL 优先，缺省复用
+    VDL_WORKER_URL（海外→国内任务回派本就指向 cn，同一条链路不新增配置）。"""
+    return (os.environ.get("VDL_QUOTA_RELAY_URL")
+            or os.environ.get("VDL_WORKER_URL") or "").strip().rstrip("/")
+
+
+def _relay_member_quota(request, payload: dict):
+    """把配额检查/计数回派给 cn。返回 cn 响应 dict；任何失败返回 None（fail-open）。"""
+    base = _quota_relay_base()
+    if not base:
+        return None
+    import urllib.request as _ureq
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    auth = request.headers.get("Authorization")
+    if auth:  # 原样带上 cn 签发的 bearer，由 cn 验签并定位用户
+        headers["Authorization"] = auth
+    req = _ureq.Request(base + "/api/member/quota/use",
+                        data=_json.dumps(payload).encode("utf-8"),
+                        headers=headers, method="POST")
+    try:
+        with _ureq.urlopen(req, timeout=10) as r:
+            return _json.loads(r.read().decode("utf-8", "ignore") or "{}")
+    except Exception as e:  # noqa: BLE001 — 配额服务异常绝不挡下载
+        try:
+            app.logger.warning("[member-quota] 回派 cn 失败（fail-open）: %s", str(e)[:160])
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+def _member_quota_gate(request, need: int = 1) -> dict:
+    """下载配额预检（不计数）。超限抛 402；放行返回 gate 描述（供计数阶段复用）。
+
+    need：本次打算创建的任务数（批量用）。剩余不足时按剩余数放行（调用方据此
+    截断批量，与旧 IP 配额「创建到额度耗尽为止」的语义一致）。
+    """
+    try:
+        if app.NODE_REGION != "cn" and _quota_relay_base():
+            res = _relay_member_quota(request, {"resource": "download", "n": need,
+                                                "check_only": True})
+            if res and res.get("ok") is False and res.get("code") == "MEMBER_QUOTA":
+                raise app.HTTPException(status_code=402,
+                                        detail=res.get("error") or "今日免费下载次数已用尽")
+            remaining = res.get("remaining") if isinstance(res, dict) else None
+            return {"mode": "relay", "remaining": remaining if isinstance(remaining, int) else None}
+        store = app.current_member_store(request)
+        q = store.quota_state("download")
+        if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
+            return {"mode": "local", "store": store, "remaining": q.get("remaining")}
+        if q.get("tier") == "free":
+            detail = (f"今日免费下载次数已用尽（{q['limit']}/日），"
+                      f"开通下载会员可解锁 {q.get('member_limit', 0)} 次/日")
+        else:
+            detail = f"今日下载配额已用尽（{q['limit']}/日）"
+        raise app.HTTPException(status_code=402, detail=detail)
+    except app.HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
+        return {"mode": "local", "store": None, "remaining": None}
+
+
+def _member_quota_count(request, gate: dict, n: int = 1) -> dict | None:
+    """任务成功创建后的计数（V1：成功创建才计费）。失败只记日志，不影响已建任务。
+
+    匿名（回派收到 NO_AUTH）落本机全局匿名共享池 —— 与 user_membership 的
+    「匿名回退 app.member_store」同一份，保证预检与计数落在同一个池。
+    """
+    if n <= 0:
+        return None
+    try:
+        if gate.get("mode") == "relay":
+            res = _relay_member_quota(request, {"resource": "download", "n": n})
+            if isinstance(res, dict) and res.get("ok") is False and res.get("code") == "NO_AUTH":
+                return app.member_store.use_daily("download", n=n)
+            return res
+        store = gate.get("store") or app.current_member_store(request)
+        return store.use_daily("download", n=n)
+    except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
+        try:
+            app.logger.warning("[member-quota] 计数失败（忽略）: %s", str(e)[:160])
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+def _mq_public(mq) -> dict | None:
+    """把计数结果裁成响应里的公开字段（None/失败 → None，前端不展示）。"""
+    if not isinstance(mq, dict) or not mq.get("ok"):
+        return None
+    return {k: mq[k] for k in ("resource", "used", "remaining") if k in mq}
+
+
 @router.post('/api/download')
 def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
@@ -483,9 +589,12 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
+    gate = _member_quota_gate(request, need=1)
     task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, device_id=_device_of(request))
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
-    return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}}
+    # V1：任务成功创建才计费（预检在 store.create 之前，计数在其之后）
+    member_quota = _mq_public(_member_quota_count(request, gate, n=1))
+    return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}, 'member_quota': member_quota}
 
 class BatchRequest(app.BaseModel):
     urls: list[str] = app.Field(default_factory=list, max_length=app.VDL_BATCH_MAX_ITEMS)
@@ -505,6 +614,11 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
+    # V1 配额墙预检：剩余 0 → 402；剩余不足按剩余数截断（创建到额度耗尽为止）
+    gate = _member_quota_gate(request, need=len(urls))
+    member_cap = gate.get('remaining') if isinstance(gate.get('remaining'), int) else len(urls)
+    if member_cap is not None and member_cap <= 0:
+        raise app.HTTPException(status_code=402, detail='今日免费下载次数已用尽，开通下载会员可解锁更多次数')
     if payload.concurrency > 0:
         app.scheduler.set_concurrency(payload.concurrency)
     retries = payload.retries if payload.retries >= 0 else app.BATCH_RETRIES_DEFAULT
@@ -512,6 +626,9 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     skipped = 0
     quota_exhausted = False
     for u in urls:
+        if member_cap is not None and len(task_ids) >= member_cap:
+            quota_exhausted = True
+            break
         try:
             app._check_download_quota(request)
         except app.HTTPException as exc:
@@ -531,7 +648,9 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
         if quota_exhausted:
             raise app.HTTPException(status_code=402, detail='今日免费下载次数已用完，订阅可解锁无限下载')
         raise app.HTTPException(status_code=400, detail='链接均无法识别，请确认是视频播放页链接')
-    return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted}
+    # V1：任务成功创建才计费（按实际创建数，剩余不足时只计创建的那部分）
+    member_quota = _mq_public(_member_quota_count(request, gate, n=len(task_ids)))
+    return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted, 'member_quota': member_quota}
 
 @router.get('/api/tasks')
 def list_tasks(request: app.Request) -> dict:

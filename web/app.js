@@ -698,6 +698,11 @@
     if (subKey) headers['X-Subscription-Key'] = subKey;
     const apiToken = localStorage.getItem('vdl_api_token');
     if (apiToken) headers['X-Api-Key'] = apiToken;
+    // 登录态 bearer（2026-09-28）：默认全量携带，服务端据此把下载/配额归因到账号
+    // （V1 免费下载 10 次/日按账号计——不带头就会被当成匿名，计数落不到用户头上）。
+    // 未登录时为 undefined，服务端按匿名处理，行为与从前一致。
+    const authToken = localStorage.getItem('vdl_auth_token');
+    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
     // 设备隔离（2026-08-22）：每标签页独立 device_id（sessionStorage），
     // 后端据此只返回本页面创建的任务——手机/其他页面完全看不到本页任务。
     headers['X-Device-Id'] = deviceId();
