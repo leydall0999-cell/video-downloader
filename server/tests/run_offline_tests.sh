@@ -226,6 +226,12 @@ run_one test_direct_url_hls.py
 #      缺 url 400、缺省回落 manual（悬浮球兜底语义不回归）
 run_one test_sniffer_extension_ingest.py
 
+#  28. test_upload_endpoint_same_origin.py —— 上传端点必须同源（2026-09-29，★13）：
+#      UC_UPLOAD_ENDPOINTS 只许 location.origin。曾有的第二项（已停服的 Railway 云上
+#      备份）会让每个奇数下标分片先撞死主机；非同源端点还会把分片劈到两份存储上，
+#      finish 必报「分片不完整」。同时钉住「非 JSON 的 413 = 网关拦截」的区分文案。
+run_one test_upload_endpoint_same_origin.py
+
 echo ""
 echo "=== extension/tests/test_sniff_core.js（MV3 扩展判定核心，node） ==="
 NODE_BIN=""

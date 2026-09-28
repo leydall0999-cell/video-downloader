@@ -2303,11 +2303,16 @@
   const UC_CHUNK_CONCURRENCY = 8;               // 单文件分片并发路数（高 RTT 链路多连接并行提速，HTTP/2 无连接限制）
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
-  // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
-  // Railway 原生域名（无 CF 限速层，直连源站）指向同一个后端、同一份分片存储，
-  // 动态选路：每片发出前按两通道「最近 3 次成功分片平均吞吐」实时选更快通道，
-  // 慢通道（跨境抖动/掉速）自然少被选中，不再拖累整体；单通道失败重试自动故障转移到另一通道。
-  const UC_UPLOAD_ENDPOINTS = [location.origin, 'https://web-production-b9993.up.railway.app'];
+  // 上传端点：只保留同源一个（2026-09-29，与网页版 web-dev 同步修）。
+  // 历史：曾用 `[location.origin, 'https://web-production-b9993.up.railway.app']` 做
+  // 「双端点混合上传」——桌面端起见的同源是 127.0.0.1 本机服务，Railway 那条是早期
+  // 云上同源备份（与主站同一后端同一份分片存储）。
+  // 但该 Railway 应用自 2026-09-11 起已不存在（Application not found / 连接直接失败），
+  // 而选路在「样本不足（<4 片）」时按奇偶分流、重试又固定切到「另一条」
+  // ⇒ 每个奇数下标分片都要先撞一次死主机才成功（样本攒够后仍有 20% 的概率去撞）。
+  // 🔴 红线：任何新增端点必须与主站**同后端、同分片存储**，否则分片会落到别的节点磁盘，
+  //    finish 时必然报「分片不完整」——宁可不加，也不要加一个不同源的端点。
+  const UC_UPLOAD_ENDPOINTS = [location.origin];
   // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于动态选路
   const ucChStats = () => ({
     samples: [[], []],
@@ -2636,7 +2641,12 @@
       if (xhr.status >= 200 && xhr.status < 300) resolve();
       else {
         let msg = '分片上传失败 HTTP ' + xhr.status;
-        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) msg = d.detail; } catch (e) { /* ignore */ }
+        let fromServer = false;
+        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) { msg = d.detail; fromServer = true; } } catch (e) { /* ignore */ }
+        // 413 分两种：应用自己的 413 一定带 JSON detail（「单个分片超过大小上限」等）；
+        // 非 JSON 的 413 = 被网关/代理在到达应用前拒掉 —— 说清是网关体积限制，
+        // 否则会被误读成「视频本身太大不能传」。
+        if (xhr.status === 413 && !fromServer) msg = '上传被网关拒绝（HTTP 413·单次体积超限）';
         reject(new Error(msg));
       }
     });
