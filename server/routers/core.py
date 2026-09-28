@@ -485,8 +485,13 @@ def _device_of(request: app.Request) -> str:
 #   · cn / 单节点（桌面、无回派目标）：直接 current_member_store 预检 + 计数；
 #   · global 节点（hk）：把原始 Authorization 原样回派 cn 的 /api/member/quota/use
 #     （check_only 预检 → 创建成功后回派计数）；cn 不可达时 fail-open（不挡下载）；
-#   · 匿名（无/无效 token）：cn 用全局匿名共享池；hk 回派收到 NO_AUTH → 落 hk 本机
-#     匿名共享池。会员引擎任何异常一律 fail-open，绝不因配额系统故障挡下载。
+#   · 匿名（无/无效 token）：**一律 403 拒绝**（2026-09-28 用户拍板：网页版与 App 看齐，
+#     下载必须登录 —— 匿名共享池方案作废）。hk 无法本地验 cn token，靠回派响应的
+#     NO_AUTH 识别匿名并同样 403。会员引擎异常仍 fail-open（已登录用户不因故障被挡）。
+
+# 下载强制登录的统一文案（前端据此弹登录框，见 web/app.js 的 needLogin 处理）
+_LOGIN_REQUIRED_MSG = "下载前请先登录账号（免费账号每日 10 次下载额度，注册即得）"
+
 
 def _quota_relay_base() -> str:
     """global 节点回派配额的目标（cn 权威）。VDL_QUOTA_RELAY_URL 优先，缺省复用
@@ -529,11 +534,18 @@ def _member_quota_gate(request, need: int = 1) -> dict:
         if app.NODE_REGION != "cn" and _quota_relay_base():
             res = _relay_member_quota(request, {"resource": "download", "n": need,
                                                 "check_only": True})
-            if res and res.get("ok") is False and res.get("code") == "MEMBER_QUOTA":
-                raise app.HTTPException(status_code=402,
-                                        detail=res.get("error") or "今日免费下载次数已用尽")
+            if isinstance(res, dict) and res.get("ok") is False:
+                if res.get("code") == "MEMBER_QUOTA":
+                    raise app.HTTPException(status_code=402,
+                                            detail=res.get("error") or "今日免费下载次数已用尽")
+                if res.get("code") == "NO_AUTH":
+                    # hk 验不了 cn 的 token，匿名/无效 token 由 cn 判定后回传
+                    raise app.HTTPException(status_code=403, detail=_LOGIN_REQUIRED_MSG)
             remaining = res.get("remaining") if isinstance(res, dict) else None
             return {"mode": "relay", "remaining": remaining if isinstance(remaining, int) else None}
+        # 下载必须登录（2026-09-28 与 App 行为对齐）：匿名一律 403，配额按账号计
+        if not app.get_current_user_id(request):
+            raise app.HTTPException(status_code=403, detail=_LOGIN_REQUIRED_MSG)
         store = app.current_member_store(request)
         q = store.quota_state("download")
         if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):

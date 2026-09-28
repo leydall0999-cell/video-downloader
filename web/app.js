@@ -454,6 +454,17 @@
     pfUserBox: $('pfUserBox'), pfUserIdent: $('pfUserIdent'), pfAdminBadge: $('pfAdminBadge'),
     pfLogoutBtn: $('pfLogoutBtn'), pfMemberList: $('pfMemberList'),
     pfActivateCode: $('pfActivateCode'), pfActivateBtn: $('pfActivateBtn'), pfMemberStatus: $('pfMemberStatus'),
+    // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
+    authHeaderBtn: $('authHeaderBtn'),
+    authModal: $('authModal'), authModalTitle: $('authModalTitle'), authModalHint: $('authModalHint'),
+    amIdentifier: $('amIdentifier'), amPassword: $('amPassword'),
+    amSubmit: $('amSubmit'), amSwitch: $('amSwitch'), amStatus: $('amStatus'),
+    // —— 个人中心 · 账号安全（改密 / 忘记密码 / 注销）——
+    pfCurPw: $('pfCurPw'), pfNewPw: $('pfNewPw'), pfChangePwBtn: $('pfChangePwBtn'),
+    pfForgotBtn: $('pfForgotBtn'), pfResetBox: $('pfResetBox'),
+    pfResetIdent: $('pfResetIdent'), pfResetCode: $('pfResetCode'), pfResetPw: $('pfResetPw'),
+    pfResetSendBtn: $('pfResetSendBtn'), pfResetSubmit: $('pfResetSubmit'),
+    pfSecurityStatus: $('pfSecurityStatus'), pfDeactivateBtn: $('pfDeactivateBtn'),
 
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
@@ -671,6 +682,8 @@
     if (!response.ok) {
       const err = { message: payload.error || payload.detail || '请求失败，请稍后重试', hint: payload.hint || '', category: payload.category || '' };
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
+      // 下载强制登录（2026-09-28 对齐 App）：服务端 403 + 登录文案 → 前端弹登录框
+      if (response.status === 403 && /登录/.test(err.message)) err.needLogin = true;
       throw err;
     }
     return payload;
@@ -720,6 +733,12 @@
     // 防止后端挂起时前端无限等待。大文件上传/下载可传 options.timeout=0 关闭
     // 或传更大值；请求超时抛可读错误而非静默卡死。
     const fetchTimeout = (options && options.timeout) || 120000;
+    // 下载强制登录（2026-09-28 对齐 App）：未登录直接拦在本地，弹登录框、不发请求。
+    // request 定义早于登录弹窗代码，故经 window 钩子解耦（弹窗代码稍后挂载）。
+    if ((path === '/api/download' || path === '/api/batch') && !localStorage.getItem('vdl_auth_token')) {
+      try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_e) { /* ignore */ }
+      throw { needLogin: true, message: '下载前请先登录账号（免费账号每日 10 次下载额度，注册即得）', hint: '' };
+    }
     const doFetch = () => {
       if (!fetchTimeout) return fetch(apiBase + path, { ...options, headers: merged });
       const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -3217,6 +3236,7 @@
       trackTask(data.task_id, refs, base);
       return data.task_id;
     } catch (error) {
+      if (error.needLogin) return { needLogin: true };   // 登录弹窗已弹出
       if (error.subscribe) {
         promptSubscribe();
         return { subscribe: true };
@@ -3261,7 +3281,9 @@
         urls.forEach((u) => contributeCookie(u, cookie));
       }
     } catch (error) {
-      if (error.subscribe) {
+      if (error.needLogin) {
+        // 登录弹窗已弹出，不再叠加报错
+      } else if (error.subscribe) {
         promptSubscribe();
         showError('今日免费下载次数已用完', '点右上角「订阅解锁」即可无限下载');
       } else {
@@ -3489,22 +3511,28 @@
 
   /** 为歌单中的单曲创建一个下载任务（不依赖 resolved，独立 URL）。 */
   const createSingleDownload = async (item, base) => {
-    const data = await request('/api/download', {
-      method: 'POST',
-      body: JSON.stringify({
-        url: item.url,
-        quality: 'best',
-        cookie: '',
-        proxy: '',
-        extract_script: el.extractSelect ? el.extractSelect.value || '' : '',
-        format_id: '',
-        concurrent_fragments: 0,
-        downloader: 'native',
-        play_url: '',
-        watch_options: [],
-        is_hls: false,
-      }),
-    }, base);
+    let data;
+    try {
+      data = await request('/api/download', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: item.url,
+          quality: 'best',
+          cookie: '',
+          proxy: '',
+          extract_script: el.extractSelect ? el.extractSelect.value || '' : '',
+          format_id: '',
+          concurrent_fragments: 0,
+          downloader: 'native',
+          play_url: '',
+          watch_options: [],
+          is_hls: false,
+        }),
+      }, base);
+    } catch (error) {
+      if (error.needLogin) return null;   // 登录弹窗已弹出，不打断歌单循环
+      throw error;
+    }
     const taskId = data.task_id;
     if (data.quota) {
       node.downloadFreeUsed = data.quota.free_used || 0;
@@ -3668,6 +3696,7 @@
       trackTask(taskId, refs, base);
       return taskId;
     } catch (error) {
+      if (error.needLogin) return null;   // 登录弹窗已弹出，不再叠加报错
       if (error.subscribe) {
         promptSubscribe();
         showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
@@ -6973,16 +7002,22 @@
   const pfAuthHeaders = () => (pfToken() ? { 'Authorization': 'Bearer ' + pfToken() } : {});
   let pfAuthIsRegister = false;
 
-  const pfRender = (me, member) => {
+  const pfRender = (me, member, quota) => {
     const logged = !!(me && me.ok);
     el.pfAuthBox.hidden = logged;
     el.pfUserBox.hidden = !logged;
+    renderAuthHeader();
     if (!logged) return;
     el.pfUserIdent.textContent = '账号：' + (me.identifier || me.user_id || '');
     el.pfAdminBadge.textContent = me.is_admin ? '⚡ 超级管理员' : '';
     // 会员状态列表
     const rows = [];
     const fmtExp = (ts) => { try { return ts ? new Date(ts * 1000).toLocaleDateString() : '—'; } catch (_e) { return '—'; } };
+    if (quota && quota.ok !== false) {
+      const qUsed = quota.used != null ? quota.used : '—';
+      const qRem = quota.unlimited ? '不限' : (quota.remaining != null ? quota.remaining : '—');
+      rows.push(['今日下载额度', `${qUsed} 已用 / 剩 ${qRem}`]);
+    }
     if (member) {
       const dm = member.download_member || {}, am = member.ai_member || {};
       rows.push(['下载会员', dm.active ? `✅ 生效中（至 ${fmtExp(dm.expire_at)}）` : '未开通']);
@@ -7004,13 +7039,14 @@
 
   const pfLoad = async () => {
     if (!pfToken()) { pfRender(null, null); return; }
-    let me = null, member = null;
+    let me = null, member = null, quota = null;
     try {
       me = await request('/api/auth/me', { headers: pfAuthHeaders() });
       if (!me.ok) { localStorage.removeItem('vdl_auth_token'); me = null; }
     } catch (_e) { /* ignore */ }
     try { member = await request('/api/member/status', { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
-    pfRender(me, member);
+    try { quota = await request('/api/member/quota/download', { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
+    pfRender(me, member, quota);
   };
 
   const pfSetAuthStatus = (t) => { el.pfAuthStatus.textContent = t || ''; };
@@ -7051,6 +7087,7 @@
     localStorage.removeItem('vdl_auth_token');
     el.pfIdentifier.value = ''; el.pfPassword.value = '';
     pfRender(null, null);
+    renderAuthHeader();
   });
   el.pfActivateBtn.addEventListener('click', async () => {
     const code = el.pfActivateCode.value.trim();
@@ -7072,6 +7109,195 @@
       }
     } catch (e) {
       el.pfMemberStatus.textContent = '请求失败：' + (e && e.message || e);
+    }
+  });
+
+  // ======================================================================
+  // ===== 登录强制 + 账号安全（2026-09-28 对齐 App）=====
+  //  · 下载必须登录：未登录点下载 → 本地拦截并弹登录框（request() 里挂钩子），
+  //    服务端 403 兜底（needLogin 错误在各下载入口静默处理，不重复报错）。
+  //  · 右上角账号按钮：未登录弹登录框，已登录跳个人中心。
+  //  · 个人中心补齐 App 能力：修改密码 / 忘记密码（邮箱验证码）/ 注销账号。
+  // ======================================================================
+
+  // —— 右上角账号按钮（未登录「登录 / 注册」，已登录「👤 账号」跳个人中心）——
+  const renderAuthHeader = () => {
+    if (!el.authHeaderBtn) return;
+    if (pfToken()) {
+      el.authHeaderBtn.textContent = '👤 账号';
+      el.authHeaderBtn.title = '已登录，点击查看账号详情';
+    } else {
+      el.authHeaderBtn.textContent = '登录 / 注册';
+      el.authHeaderBtn.title = '登录 / 注册账号（下载需登录）';
+    }
+  };
+
+  // —— 登录弹窗（下载被拦 / 右上角入口共用）——
+  let amIsRegister = false;
+  const openAuthModal = (hint) => {
+    if (el.authModalHint && hint) el.authModalHint.textContent = hint;
+    if (el.amStatus) el.amStatus.textContent = '';
+    try { el.authModal.showModal(); } catch (_e) { /* 已打开 */ }
+    renderAuthHeader();
+  };
+  // request() 定义早于本段，经 window 钩子解耦调用
+  window.__vdlOpenAuthModal = () => openAuthModal('下载需要登录账号；免费账号每日 10 次下载额度，注册即得。');
+
+  const closeAuthModal = () => { try { el.authModal.close(); } catch (_e) { /* 本来就没开 */ } };
+  const amSetStatus = (t) => { el.amStatus.textContent = t || ''; };
+
+  const amDoAuth = async () => {
+    const ident = el.amIdentifier.value.trim();
+    const pw = el.amPassword.value;
+    if (!ident || !pw) { amSetStatus('请填写账号和密码'); return; }
+    amSetStatus(amIsRegister ? '注册中…' : '登录中…');
+    try {
+      const ep = amIsRegister ? '/api/auth/register' : '/api/auth/login';
+      const data = await request(ep, { method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }) });
+      if (data.ok && data.token) {
+        localStorage.setItem('vdl_auth_token', data.token);
+        amSetStatus('');
+        closeAuthModal();
+        renderAuthHeader();
+        pfLoad();
+      } else {
+        amSetStatus(data.error || '操作失败');
+      }
+    } catch (e) {
+      amSetStatus('请求失败：' + (e && e.message || e));
+    }
+  };
+  el.amSubmit.addEventListener('click', amDoAuth);
+  el.amPassword.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') amDoAuth(); });
+  el.amSwitch.addEventListener('click', () => {
+    amIsRegister = !amIsRegister;
+    el.authModalTitle.textContent = amIsRegister ? '注册新账号' : '登录账号';
+    el.amSubmit.textContent = amIsRegister ? '注册' : '登录';
+    el.amSwitch.textContent = amIsRegister ? '已有账号？登录' : '没有账号？注册';
+    amSetStatus('');
+  });
+  el.authModalClose.addEventListener('click', closeAuthModal);
+  if (el.authHeaderBtn) {
+    el.authHeaderBtn.addEventListener('click', () => {
+      if (pfToken()) switchView('profile'); else openAuthModal();
+    });
+  }
+  renderAuthHeader();
+
+  // —— 账号安全：修改密码（需当前密码；服务端会把新密码同步云端授权中心）——
+  const pfSecStatus = (t) => { el.pfSecurityStatus.textContent = t || ''; };
+  el.pfChangePwBtn.addEventListener('click', async () => {
+    if (!pfToken()) { pfSecStatus('请先登录'); return; }
+    const cur = el.pfCurPw.value;
+    const nw = el.pfNewPw.value;
+    if (!cur || !nw) { pfSecStatus('请输入当前密码和新密码'); return; }
+    if (nw.length < 6) { pfSecStatus('新密码至少 6 位'); return; }
+    pfSecStatus('提交中…');
+    try {
+      const data = await request('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: cur, new_password: nw }),
+        headers: pfAuthHeaders(),
+      });
+      if (data.ok) {
+        pfSecStatus('密码已修改 ✅' + (data.notice ? '（' + data.notice + '）' : ''));
+        el.pfCurPw.value = '';
+        el.pfNewPw.value = '';
+      } else {
+        pfSecStatus(data.error || '修改失败');
+      }
+    } catch (e) {
+      pfSecStatus('请求失败：' + (e && e.message || e));
+    }
+  });
+
+  // —— 忘记密码：邮箱验证码重置（未登录也可用）——
+  let pfResetCountdown = 0;
+  el.pfForgotBtn.addEventListener('click', () => {
+    el.pfResetBox.hidden = !el.pfResetBox.hidden;
+    if (!el.pfResetBox.hidden && !el.pfResetIdent.value && el.pfIdentifier.value) {
+      el.pfResetIdent.value = el.pfIdentifier.value;
+    }
+  });
+  el.pfResetSendBtn.addEventListener('click', async () => {
+    const ident = el.pfResetIdent.value.trim();
+    if (!ident) { pfSecStatus('请输入注册时的邮箱 / 手机号'); return; }
+    pfSecStatus('验证码发送中…');
+    try {
+      const data = await request('/api/auth/reset-code', {
+        method: 'POST', body: JSON.stringify({ identifier: ident }),
+      });
+      if (data.ok) {
+        pfSecStatus('验证码已发送，请查收邮箱（5 分钟内有效）');
+        pfResetCountdown = 60;
+        el.pfResetSendBtn.disabled = true;
+        const timer = setInterval(() => {
+          pfResetCountdown -= 1;
+          if (pfResetCountdown <= 0) {
+            clearInterval(timer);
+            el.pfResetSendBtn.disabled = false;
+            el.pfResetSendBtn.textContent = '发送验证码';
+          } else {
+            el.pfResetSendBtn.textContent = `重发(${pfResetCountdown}s)`;
+          }
+        }, 1000);
+      } else {
+        pfSecStatus(data.error || '发送失败');
+      }
+    } catch (e) {
+      pfSecStatus('请求失败：' + (e && e.message || e));
+    }
+  });
+  el.pfResetSubmit.addEventListener('click', async () => {
+    const ident = el.pfResetIdent.value.trim();
+    const code = el.pfResetCode.value.trim();
+    const pw = el.pfResetPw.value;
+    if (!ident || !code || !pw) { pfSecStatus('请填写账号、验证码和新密码'); return; }
+    if (pw.length < 6) { pfSecStatus('新密码至少 6 位'); return; }
+    pfSecStatus('重置中…');
+    try {
+      const data = await request('/api/auth/reset', {
+        method: 'POST', body: JSON.stringify({ identifier: ident, code, password: pw }),
+      });
+      if (data.ok) {
+        pfSecStatus('密码已重置，请用新密码重新登录');
+        el.pfResetBox.hidden = true;
+        // 旧 token 可能已失效，强制重新登录
+        localStorage.removeItem('vdl_auth_token');
+        el.pfCurPw.value = '';
+        el.pfNewPw.value = '';
+        renderAuthHeader();
+        pfRender(null, null);
+      } else {
+        pfSecStatus(data.error || '重置失败');
+      }
+    } catch (e) {
+      pfSecStatus('请求失败：' + (e && e.message || e));
+    }
+  });
+
+  // —— 注销账号（软删除，二次确认；对齐 App 的危险区）——
+  el.pfDeactivateBtn.addEventListener('click', async () => {
+    if (!pfToken()) { pfSecStatus('请先登录'); return; }
+    const ok = await showConfirm('确定注销账号吗？注销后将无法使用该邮箱登录或重新注册，会员与积分一并失效，此操作不可恢复。', { okText: '确认注销', danger: true });
+    if (!ok) return;
+    pfSecStatus('注销中…');
+    try {
+      const data = await request('/api/account/deactivate', { method: 'POST', headers: pfAuthHeaders() });
+      if (data.ok) {
+        localStorage.removeItem('vdl_auth_token');
+        el.pfIdentifier.value = '';
+        el.pfPassword.value = '';
+        el.pfCurPw.value = '';
+        el.pfNewPw.value = '';
+        pfRender(null, null);
+        renderAuthHeader();
+        pfSecStatus('');
+      } else {
+        pfSecStatus(data.error || '注销失败');
+      }
+    } catch (e) {
+      pfSecStatus('请求失败：' + (e && e.message || e));
     }
   });
 

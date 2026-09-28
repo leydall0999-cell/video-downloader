@@ -10,17 +10,17 @@
      服务端即使计数也只能落进全局匿名池，归因不到账号。
 
 修复后的契约（本测试钉住）：
-  1. cn/单节点：_member_quota_gate 用 current_member_store 预检（匿名→全局共享池，
-     登录→该用户 store），_member_quota_count 在任务创建成功后计数（used 递增）；
+  1. cn/单节点：**匿名一律 403 拒绝**（2026-09-28 用户拍板：网页版与 App 看齐，下载必须
+     登录，原「匿名全局共享池」作废）；登录→该用户 store 预检 + 创建成功后计数；
   2. 超限：402（tier=free 文案含免费额度与会员额度），且 store.create 不被调用
      （配额墙在「点清晰度下载」处，不能先建任务再拒绝）；
   3. /api/download 响应带 member_quota {used, remaining}，前端/个人中心可对账；
   4. /api/batch：剩余不足时按剩余数截断（创建到额度耗尽为止，quota_exhausted=true），
      只按实际创建数计数；
   5. global 节点回派：gate 把 Authorization 原样回派 cn check_only 预检 ——
-     cn 判 MEMBER_QUOTA → 402；cn 不可达 → fail-open（放行，不挡下载）；
-     计数回派收到 NO_AUTH（匿名）→ 落本机全局匿名池；
-  6. 会员引擎任何异常 fail-open：gate/count 异常绝不打断下载主链路。
+     cn 判 MEMBER_QUOTA → 402；cn 判 NO_AUTH（匿名）→ 403；cn 不可达 → fail-open；
+     计数回派收到 NO_AUTH（防御分支）→ 落本机全局匿名池；
+  6. 会员引擎任何异常 fail-open：gate/count 异常绝不打断（已登录用户的）下载主链路。
 
 全程离线：会员 store 用临时目录隔离，下载引擎（store/scheduler/downloader/parse_source）
 全部打桩，不打任何网络。运行：cd server && python tests/test_member_download_quota.py
@@ -88,21 +88,32 @@ def _patch_engine_calls(store):
 
 
 # --------------------------------------------------------------------------- #
-# 1. cn / 单节点：匿名共享池 gate + 创建成功后计数
+# 1. cn / 单节点：匿名一律 403（下载必须登录），且不创建任何任务
 # --------------------------------------------------------------------------- #
-def test_anonymous_gate_then_count():
+def test_anonymous_rejected_403():
     with tempfile.TemporaryDirectory() as d:
         store = _patch_global_store(d)
+        calls = _patch_engine_calls(store)
         req = _StubRequest()
-        gate = core_rt._member_quota_gate(req, need=1)
-        assert gate["mode"] == "local" and gate.get("store") is store
-        assert gate.get("remaining") == 10, f"免费档应为 10/日，实为 {gate.get('remaining')}"
-        # 任务「创建成功」后计数 → used 递增、remaining 递减
-        res = core_rt._member_quota_count(req, gate, n=1)
-        assert res and res.get("ok") and res["used"] == 1 and res["remaining"] == 9
-        q = store.quota_state("download")
-        assert q["used"] == 1 and q["remaining"] == 9
-    print("✅ 匿名共享池：gate 预检放行 + 创建成功后 used=1（修复前恒 0）")
+        raised = None
+        try:
+            core_rt._member_quota_gate(req, need=1)
+        except A.HTTPException as e:
+            raised = e
+        assert raised is not None and raised.status_code == 403, f"匿名应 403，实为 {raised}"
+        assert "登录" in raised.detail, "403 文案必须引导登录"
+        # create_download 全链路同样 403，且 store.create 零调用
+        payload = A.DownloadRequest(url="https://www.bilibili.com/video/BV1GJ411x7h7",
+                                    quality="360")
+        raised2 = None
+        try:
+            core_rt.create_download(payload, req)
+        except A.HTTPException as e:
+            raised2 = e
+        assert raised2 is not None and raised2.status_code == 403
+        assert calls["created"] == 0, "匿名下载必须挡在 store.create 之前"
+        assert store.quota_state("download")["used"] == 0, "匿名被拒后不应有任何计数"
+    print("✅ 匿名下载 403 拒绝（下载必须登录，共享池作废），且不建任务不计数")
 
 
 # --------------------------------------------------------------------------- #
@@ -110,11 +121,14 @@ def test_anonymous_gate_then_count():
 # --------------------------------------------------------------------------- #
 def test_exhausted_gate_blocks_before_create():
     with tempfile.TemporaryDirectory() as d:
-        store = _patch_global_store(d)
+        _patch_global_store(d)
+        from auth_store import issue_token
+        token = issue_token("u_exhausted")
+        user_store = um.get_user_store("u_exhausted")
         for _ in range(10):
-            assert store.use_daily("download", n=1)["ok"]
-        req = _StubRequest()
-        calls = _patch_engine_calls(store)
+            assert user_store.use_daily("download", n=1)["ok"]
+        req = _StubRequest(auth=f"Bearer {token}")
+        calls = _patch_engine_calls(user_store)
         payload = A.DownloadRequest(url="https://www.bilibili.com/video/BV1GJ411x7h7",
                                     quality="360")
         raised = None
@@ -156,29 +170,35 @@ def test_logged_in_download_counts_to_user():
 # --------------------------------------------------------------------------- #
 def test_batch_caps_at_remaining():
     with tempfile.TemporaryDirectory() as d:
-        store = _patch_global_store(d)
+        _patch_global_store(d)
+        from auth_store import issue_token
+        token = issue_token("u_batch_cap")
+        user_store = um.get_user_store("u_batch_cap")
         for _ in range(8):  # 已用 8 → 剩 2
-            store.use_daily("download", n=1)
-        req = _StubRequest()
-        _patch_engine_calls(store)
+            user_store.use_daily("download", n=1)
+        req = _StubRequest(auth=f"Bearer {token}")
+        _patch_engine_calls(user_store)
         urls = [f"https://www.bilibili.com/video/BV1GJ411x7{i}" for i in range(5)]
         payload = core_rt.BatchRequest(urls=urls, quality="360")
         resp = core_rt.create_batch(payload, req)
         assert resp["count"] == 2, f"剩余 2 应只创建 2 个任务，实为 {resp['count']}"
         assert resp["quota_exhausted"] is True
         assert resp["member_quota"]["used"] == 10 and resp["member_quota"]["remaining"] == 0
-        q = store.quota_state("download")
+        q = user_store.quota_state("download")
         assert q["used"] == 10, f"计数应恰好到 10（不超卖），实为 {q['used']}"
     print("✅ 批量：剩余不足截断创建 + 按实际创建数计数（不超卖）")
 
 
 def test_batch_zero_remaining_rejects():
     with tempfile.TemporaryDirectory() as d:
-        store = _patch_global_store(d)
+        _patch_global_store(d)
+        from auth_store import issue_token
+        token = issue_token("u_batch_zero")
+        user_store = um.get_user_store("u_batch_zero")
         for _ in range(10):
-            store.use_daily("download", n=1)
-        req = _StubRequest()
-        calls = _patch_engine_calls(store)
+            user_store.use_daily("download", n=1)
+        req = _StubRequest(auth=f"Bearer {token}")
+        calls = _patch_engine_calls(user_store)
         payload = core_rt.BatchRequest(
             urls=[f"https://www.bilibili.com/video/BV1GJ411x7{i}" for i in range(3)],
             quality="360")
@@ -214,6 +234,16 @@ def test_relay_mode_gate_and_count():
                 raised = e
             assert raised is not None and raised.status_code == 402
 
+            # 5a2. cn 判 NO_AUTH（匿名 / 无效 token）→ 403 引导登录
+            core_rt._relay_member_quota = lambda req, p: {
+                "ok": False, "code": "NO_AUTH", "error": "请先登录账号"}
+            raised = None
+            try:
+                core_rt._member_quota_gate(_StubRequest(), need=1)
+            except A.HTTPException as e:
+                raised = e
+            assert raised is not None and raised.status_code == 403, f"回派 NO_AUTH 应 403，实为 {raised}"
+
             # 5b. cn 不可达（回派返回 None）→ fail-open 放行
             core_rt._relay_member_quota = lambda req, p: None
             gate = core_rt._member_quota_gate(_StubRequest(), need=1)
@@ -243,19 +273,21 @@ def test_relay_mode_gate_and_count():
 def test_engine_error_fail_open():
     with tempfile.TemporaryDirectory() as d:
         _patch_global_store(d)
+        from auth_store import issue_token
+        token = issue_token("u_failopen")
 
         def _boom():
             raise RuntimeError("disk on fire")
         orig = A.current_member_store  # 先存原函数再 patch，finally 原样还原
         A.current_member_store = lambda req: _boom()
         try:
-            gate = core_rt._member_quota_gate(_StubRequest(), need=1)
+            gate = core_rt._member_quota_gate(_StubRequest(auth=f"Bearer {token}"), need=1)
             assert gate["mode"] == "local" and gate.get("store") is None, f"应 fail-open 放行: {gate}"
             # 计数失败同样吞掉（返回 None）
             assert core_rt._member_quota_count(_StubRequest(), gate, n=1) is None
         finally:
             A.current_member_store = orig
-    print("✅ 会员引擎异常 fail-open：绝不打断下载主链路")
+    print("✅ 会员引擎异常 fail-open：绝不打断（已登录用户的）下载主链路")
 
 
 # --------------------------------------------------------------------------- #
@@ -277,7 +309,7 @@ def test_quota_use_check_only():
 
 
 if __name__ == "__main__":
-    test_anonymous_gate_then_count()
+    test_anonymous_rejected_403()
     test_exhausted_gate_blocks_before_create()
     test_logged_in_download_counts_to_user()
     test_batch_caps_at_remaining()
