@@ -457,6 +457,7 @@
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
     authModal: $('authModal'), authModalTitle: $('authModalTitle'), authModalHint: $('authModalHint'),
+    authModalClose: $('authModalClose'),
     amIdentifier: $('amIdentifier'), amPassword: $('amPassword'),
     amSubmit: $('amSubmit'), amSwitch: $('amSwitch'), amStatus: $('amStatus'),
     // —— 个人中心 · 账号安全（改密 / 忘记密码 / 注销）——
