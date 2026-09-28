@@ -7891,7 +7891,7 @@
       p.className = 'arc-empty';
       p.textContent = data.configured
         ? '没有待归档的文件（全部已归档，或都不符合筛选条件）。'
-        : '尚未配置网盘凭据，请先填写上方 WebDAV / 百度网盘信息并保存。';
+        : '尚未配置网盘凭据，请先填写上方 WebDAV 信息并保存。';
       el.arcPreview.appendChild(p);
       el.arcPreview.hidden = false;
       el.arcRun.disabled = true;

@@ -999,7 +999,6 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .cloud-form { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .7rem; }
 .cloud-form label { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; color: var(--text-mute); }
 .cloud-form .adv-input { width: 100%; }
-.cloud-baidu-status { margin: .5rem 0 0; font-size: .82rem; color: var(--text-mute); }
 .cloud-dest { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; color: var(--text-mute); margin-bottom: .7rem; }
 .cloud-dest .adv-input { width: 100%; }
 .cloud-actions { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
@@ -1011,94 +1010,6 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   font-size: .76rem; color: #94a0b4; line-height: 1.6;
 }
 .cloud-status-line { margin-top: .5rem; font-size: .82rem; color: var(--success); }
-
-/* ---------------- 百度网盘浏览/下载 ---------------- */
-.baidu-auth-row { display: flex; align-items: center; gap: .7rem; margin: .5rem 0 .7rem; flex-wrap: wrap; }
-.baidu-status { font-size: .85rem; color: var(--text-mute); }
-.baidu-status.is-ok { color: var(--success); }
-.baidu-status.is-err { color: var(--danger); }
-.baidu-hint { font-size: .78rem; color: #94a0b4; }
-.baidu-breadcrumb { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; font-size: .82rem; color: var(--text-mute); margin-bottom: .5rem; }
-.baidu-breadcrumb .crumb { cursor: pointer; color: var(--accent); }
-.baidu-breadcrumb .crumb:hover { text-decoration: underline; }
-.baidu-breadcrumb .sep { color: #94a0b4; }
-.baidu-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
-.baidu-row { display: flex; align-items: center; gap: .6rem; padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
-.baidu-row:last-child { border-bottom: none; }
-.baidu-row .icon { width: 1.2rem; text-align: center; }
-.baidu-row .name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.baidu-row .name.folder { color: var(--accent); font-weight: 600; }
-.baidu-row .size { font-size: .78rem; color: #94a0b4; }
-.baidu-row .dl { flex: none; }
-.baidu-row .baidu-nodl { font-size: .72rem; color: #94a0b4; cursor: help; white-space: nowrap; }
-.baidu-crumbs { padding: .5rem .7rem .3rem; font-size: .78rem; color: var(--accent); word-break: break-all; }
-.baidu-crumbs a { color: var(--accent); text-decoration: none; cursor: pointer; }
-.baidu-crumbs a:hover { text-decoration: underline; }
-.baidu-crumbs span { color: var(--text); font-weight: 600; }
-.baidu-row .name[data-open] { cursor: pointer; }
-.baidu-row .name[data-open]:hover { color: var(--accent); }
-.baidu-empty { padding: 1rem; text-align: center; color: #94a0b4; font-size: .85rem; }
-.baidu-dl { margin-top: .9rem; }
-.baidu-dl-title { font-size: .9rem; color: var(--text-mute); margin-bottom: .4rem; }
-.baidu-dl-list { display: flex; flex-direction: column; gap: .45rem; }
-.baidu-dl-item { border: 1px solid var(--line); border-radius: 8px; padding: .45rem .6rem; }
-.baidu-dl-item .top { display: flex; justify-content: space-between; gap: .5rem; font-size: .82rem; }
-.baidu-dl-item .top .st { color: var(--text-mute); }
-.baidu-dl-item .top .st.is-ok { color: var(--success); }
-.baidu-dl-item .top .st.is-err { color: var(--danger); }
-.baidu-dl-item .top .st.is-warn { color: #e6a23c; }
-.baidu-dl-bar { height: 6px; background: var(--line); border-radius: 4px; margin-top: .35rem; overflow: hidden; }
-.baidu-dl-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
-.baidu-sep { border: none; border-top: 1px solid var(--line); margin: 1rem 0; }
-.baidu-share-title { font-size: .95rem; margin: .2rem 0 .3rem; }
-.baidu-share-sub { margin: 0 0 .6rem; }
-.baidu-share-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-.baidu-share-row .adv-input { flex: 1 1 220px; }
-.baidu-share-row .adv-input-pwd { flex: 0 0 140px; }
-.baidu-share-status { font-size: .85rem; color: var(--text-mute); margin: .5rem 0; min-height: 1.1rem; }
-.baidu-share-status.is-err { color: var(--danger); }
-.baidu-bduss-row { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .3rem 0; padding: .35rem .5rem; background: var(--bg-card, rgba(0,0,0,.03)); border-radius: 6px; font-size: .78rem; }
-.baidu-bduss-row label { color: var(--text-mute); white-space: nowrap; font-size: .78rem; }
-.baidu-bduss-row .adv-input { flex: 1 1 200px; font-size: .78rem; }
-.baidu-bduss-row .btn-outline { flex: 0 0 auto; font-size: .75rem; padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; cursor: pointer; }
-.baidu-share-list { max-height: 280px; }
-.baidu-share-list .baidu-row .dl button:disabled { opacity: .45; cursor: not-allowed; }
-.baidu-login-status { font-size: .76rem; color: var(--text-mute); }
-.baidu-login-status.is-ok { color: var(--success); }
-.baidu-bduss-manual { width: 100%; margin-top: .25rem; font-size: .76rem; }
-.baidu-bduss-manual summary { cursor: pointer; color: var(--text-mute); user-select: none; }
-.baidu-bduss-manual-inner { display: flex; gap: .4rem; margin-top: .35rem; align-items: center; }
-.baidu-bduss-manual-inner .adv-input { flex: 1 1 200px; font-size: .78rem; }
-
-/* ── baiduPCS-Go 面板 ── */
-.pcs-status { font-size: .85rem; color: var(--text-mute); margin: .4rem 0 .2rem; padding: .4rem .6rem; background: var(--bg-card, rgba(0,0,0,.03)); border-radius: 6px; }
-.pcs-status.is-ok { color: var(--success); }
-.pcs-status.is-err { color: var(--danger); }
-.pcs-block { margin-top: .6rem; }
-.pcs-block h3 { font-size: .92rem; margin: .4rem 0 .3rem; }
-.pcs-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .3rem 0; }
-.pcs-row .adv-input { flex: 1 1 160px; }
-.pcs-who { font-size: .82rem; color: var(--text-mute); }
-.pcs-qr-wrap { display: flex; flex-direction: column; align-items: center; gap: .5rem; margin: .4rem 0; }
-.pcs-qr-img { width: 220px; height: 220px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 6px; object-fit: contain; }
-.pcs-qr-img.is-hidden { display: none; }
-.pcs-qr-status { font-size: .85rem; color: var(--text-mute); text-align: center; min-height: 1.2em; }
-.pcs-qr-status.is-ok { color: var(--success); }
-.pcs-qr-status.is-err { color: var(--danger); }
-.pcs-raw { max-height: 220px; overflow: auto; background: #0f172a; color: #c8d3e0; padding: .6rem; border-radius: 6px; font-size: .72rem; white-space: pre-wrap; word-break: break-all; }
-.baidu-list-item { display: flex; align-items: center; gap: .6rem; padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
-.baidu-list-item:last-child { border-bottom: none; }
-.baidu-list-item .bi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
-.pcs-dl-btn { flex: none; }
-.baidu-bduss-manual-inner .btn-outline { flex: 0 0 auto; font-size: .75rem; padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; cursor: pointer; }
-/* 扫码登录弹窗 */
-.baidu-qr-modal .modal-card { max-width: 360px; }
-.baidu-qr-box { text-align: center; padding: 1rem 0; }
-.baidu-qr-box img { width: 220px; height: 220px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
-.baidu-qr-status { margin-top: .6rem; font-size: .82rem; color: var(--text-mute); }
-.baidu-qr-status.is-ok { color: var(--success); }
-.baidu-qr-status.is-err { color: var(--danger); }
-.baidu-qr-modal .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .5rem; }
 
 /* ---------------- 顶栏单行导航（参考 DataTool 式排版，2026-09-28） ----------------
    nav.tabs 并入 header-inner：品牌(左) → 功能导航(紧随) → 胶囊按钮(最右)。
@@ -1337,11 +1248,6 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 /* ---------------- 时效自动清理 ---------------- */
 .modal-wide { max-width: 620px; }
 
-/* 百度授权：页内 dialog 嵌入授权页，不开第二个窗口 */
-.baidu-auth-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .6rem; }
-.baidu-auth-head h2 { font-size: 1rem; font-weight: 700; }
-.baidu-auth-frame { width: 100%; height: 560px; border: 0; border-radius: 8px; background: #fff; }
-
 .clean-usage {
   margin: .9rem 0 .2rem; padding: .6rem .8rem; border-radius: 10px;
   background: #f4f6fb; font-size: .84rem; color: var(--text);
@@ -1428,7 +1334,6 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .arc-actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
 .arc-status { font-size: .82rem; color: var(--text-mute); }
 .arc-status.is-error { color: var(--danger); }
-.arc-baidu-status { margin: .2rem 0 0; font-size: .78rem; color: var(--text-mute); }
 .arc-preview {
   margin-top: .9rem; padding-top: .8rem; border-top: 1px dashed var(--line);
   display: flex; flex-direction: column; gap: .5rem; max-height: 38vh; overflow-y: auto;
@@ -1946,8 +1851,6 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 
 /* 弹窗操作行（确认 / 取消按钮） */
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
-
-
 
 /* ============ 留言反馈（2026-08-23 右下角悬浮入口） ============ */
 .feedback-fab {
