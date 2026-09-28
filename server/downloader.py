@@ -3176,6 +3176,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
         raise ResolveError("视频解析失败", _clean_message(str(exc))[:300]) from exc
 
     # 方法二：Cookie 源自动切换（user > env > cache > pool）
+    _last_content_error = ""   # Cookie 源报的最后一个「内容级」错误（非 bot、非 Cookie 失效）
     for src, ck in _youtube_cookie_candidates(user_cookie):
         try:
             info = _try(ck)
@@ -3195,9 +3196,25 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
                 continue
             logger.info("[youtube] Cookie 源=%s 报非 bot 错误（可能 Cookie 过期），换下一个: %s",
                         src, str(exc)[:120])
+            # 记录内容级错误（video unavailable / private / removed / 地区限制等）：
+            # 全部源耗尽时它比「贴 Cookie」横幅更接近真相 —— 视频本身可能就没了
+            #（2026-09-29 实测：某已删视频被笼统引导贴 Cookie，误导排查）。
+            if not _last_content_error:
+                _last_content_error = _clean_message(str(exc))[:200]
             if src == "cache":
                 _evict_youtube_cookie_cache("解析失败")
             continue
+
+    # 全部源耗尽：若最后拿到的是内容级错误，如实透传（并保留 Cookie 建议作为次选）
+    if _last_content_error:
+        raise ResolveError(
+            "该视频无法访问：可能已被删除、转为私享或存在地区限制",
+            f"解析器返回：{_last_content_error}\n"
+            "· 若视频确实存在，YouTube 偶尔会对数据中心 IP 伪装成「视频不可用」，"
+            "可在「高级选项 → Cookie」粘贴登录态后再试一次；\n"
+            "· 若视频已被删除 / 私享 / 地区限制，任何登录态都无法解析。",
+            category="unknown",
+        )
 
     raise ResolveError(
         "YouTube 需要登录 Cookie 才能解析",
