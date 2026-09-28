@@ -1684,11 +1684,16 @@
   const UC_CHUNK_CONCURRENCY = 2;               // 单文件分片并发路数（2026-08-28：CF 免费方案对 8 路并发大文件 POST 触发 Heavy Upload Limiter，每路降速到 ~200KB/s；降到 2 路绕过限流，单条 32MB 可跑 1.3MB/s）
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
-  // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
-  // Railway 原生域名（无 CF 限速层，直连源站）指向同一个后端、同一份分片存储，
-  // 动态选路：每片发出前按两通道「最近 3 次成功分片平均吞吐」实时选更快通道，
-  // 慢通道（跨境抖动/掉速）自然少被选中，不再拖累整体；单通道失败重试自动故障转移到另一通道。
-  const UC_UPLOAD_ENDPOINTS = [location.origin, 'https://web-production-b9993.up.railway.app'];
+  // 上传端点：只保留同源一个（2026-09-29）。
+  // 历史：曾用 `[location.origin, 'https://web-production-b9993.up.railway.app']` 做
+  // 「双端点混合上传」——Railway 原生域无 CF 限速层，且与 CF 域**指向同一后端、同一份
+  // 分片存储**，所以按通道吞吐动态选路是安全的。
+  // 但该 Railway 应用自 2026-09-11 起已不存在（边缘 Application not found / 连接直接失败），
+  // 而选路在「样本不足（<4 片）」阶段按奇偶分流 ⇒ **每个奇数下标分片都被发到死主机**：
+  // 用户看到的就是「分片 2/8 上传失败」（2、4、6… 必失败，重试还会再撞一次死主机）。
+  // 🔴 红线：任何新增端点必须与主站**同后端、同分片存储**，否则分片会落到另一个节点的
+  //    磁盘上，finish 时必然报「分片不完整」——宁可不加，也不要加一个不同源的端点。
+  const UC_UPLOAD_ENDPOINTS = [location.origin];
   // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于动态选路
   const ucChStats = () => ({
     samples: [[], []],
@@ -1967,7 +1972,12 @@
       if (xhr.status >= 200 && xhr.status < 300) resolve();
       else {
         let msg = '分片上传失败 HTTP ' + xhr.status;
-        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) msg = d.detail; } catch (e) { /* ignore */ }
+        let fromServer = false;
+        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) { msg = d.detail; fromServer = true; } } catch (e) { /* ignore */ }
+        // 413 分两种，别混：应用自己的 413 一定带 JSON detail（「单个分片超过大小上限」等）；
+        // 非 JSON 的 413 = 被网关（nginx/CF）在到达应用前就拒了 —— 即「单次上传体积超限」，
+        // 这时要说清是网关而不是文件本身有问题，否则会误判成「视频太大不能传」。
+        if (xhr.status === 413 && !fromServer) msg = '上传被网关拒绝（HTTP 413·单次体积超限）';
         reject(new Error(msg));
       }
     });

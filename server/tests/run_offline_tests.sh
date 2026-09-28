@@ -13,6 +13,8 @@
 #   10. test_web_route_retry.js  —— 远端失败自动换路由重试（失败分类/原地重试/换路由/耗尽集合防抖/切换上限，需 node）
 #   11. test_youtube_shortlink_scope.py —— youtu.be / shorts / m. 短链必须归一化为 www 长链
 #       （yt-dlp 的 http_headers Cookie 按域作用域，短链会把有效 Cookie 挡在 innertube 之外）
+#   12. test_upload_body_limit.py —— 网关体积上限守卫：/api/upload-chunk 必须放得下 64MB 分片，
+#       前端上传端点只允许同源（VPS 那份 nginx 曾只有 8m，把网页版全部上传 413 打死）
 #
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
@@ -82,6 +84,7 @@ run_one test_peer_overseas_fallback.py
 run_one test_member_download_quota.py
 run_one test_youtube_unavailable_vs_bot.py
 run_one test_youtube_shortlink_scope.py
+run_one test_upload_body_limit.py
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
 run_one test_direct_url_hls.py
