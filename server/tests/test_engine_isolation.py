@@ -660,12 +660,18 @@ def test_subtitle_does_not_mutate_process_env_at_request_time():
 
 
 # -------------------------------------------------------------------- 16
-# 允许被多个功能模块共同读写的配置文件（都是**按设计**共享的同一份状态）。
+# 允许被多个功能模块共同引用的配置文件。
+# 判据是「会不会互相覆盖字段」——下面两种都安全：
+#  (a) 同一份共享状态（都写，但有单一写入者约定）；
+#  (b) **只读的静态资源**（谁都不写，只是各自读同一个文件名）。
 _ALLOWED_SHARED_CONFIG = {
     "users.json",        # 账号表：auth_store 写，admin_store 只经其委托写（见测试 9）
     "admin.json",        # 管理员配置：admin_store 与 auth_store（发信配置）共用
     "smtp.json",         # 邮件配置：同上，同一份发信设置
     "cloud_sync.json",   # 云端同步地址：app 与 downloader 读同一份（同一账号配置）
+    # (b) 只读静态资源：扩展清单 —— routers/extension.py 读源码目录里的那份，
+    # routers/system.py 读上传包里的那份（zip 内），两边都不是可写状态，不会互相覆盖。
+    "manifest.json",
 }
 
 

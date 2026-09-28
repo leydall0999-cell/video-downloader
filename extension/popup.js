@@ -19,6 +19,8 @@ var listEl = $('list');
 var state = { endpoint: '', sentUrls: {}, carryCookie: true };
 // 桌面端登录态：true=已登录 / false=未登录 / null=未知（App 未启动或界面已关闭）
 var desktopLoggedIn = null;
+// 面板只呈现**当前标签页当前页**的嗅探结果（背景按 tabId 分库，见 background.js）
+var currentTabId = -1;
 
 function fmtTime(ts) {
   if (!ts) return '';
@@ -140,7 +142,8 @@ function render(st) {
   var segs = st.segments || [];
   listEl.innerHTML = '';
   if (!items.length && !segs.length) {
-    listEl.innerHTML = '<div class="empty">打开有视频的网页，这里会列出嗅探到的媒体流</div>';
+    listEl.innerHTML = '<div class="empty">当前页没有嗅探到媒体流。<br>' +
+      '播放页面里的视频或音频后这里会自动列出；已离开的页面不会保留。</div>';
   } else {
     items.forEach(function (it) { listEl.appendChild(renderItem(it)); });
   }
@@ -158,9 +161,15 @@ function render(st) {
 }
 
 function refresh() {
-  chrome.runtime.sendMessage({ type: 'getState' }, function (st) {
-    if (chrome.runtime.lastError) return;
-    render(st);
+  // 先取当前标签页：背景按 tabId 分库，不传就会落到「最近激活的标签页」，
+  // 多窗口场景下可能给错那一页的数据
+  chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+    var tab = tabs && tabs[0];
+    if (tab && typeof tab.id === 'number') currentTabId = tab.id;
+    chrome.runtime.sendMessage({ type: 'getState', tabId: currentTabId }, function (st) {
+      if (chrome.runtime.lastError) return;
+      render(st);
+    });
   });
 }
 

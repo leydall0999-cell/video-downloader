@@ -139,6 +139,78 @@ eq(bases[0], 'http://127.0.0.1:8321', '探测表起点 8321');
 eq(bases.length, 30, '探测表长度 30');
 ok(bases.every(function (b) { return /^http:\/\/127\.0\.0\.1:\d+$/.test(b); }), '探测表格式');
 
+// ---- 9) TabStores：按标签页分库（「只保存当前页」的底座，2026-09-29） ----
+var tb = new CORE.TabStores(3, 200);
+tb.add(11, { url: 'https://b.alipay.com/a.mp4', mime: 'video/mp4', pageTitle: '商家平台', ts: 1 });
+tb.add(11, { url: 'https://b.alipay.com/b.m4s', mime: 'video/mp4', ts: 2 });
+tb.add(22, { url: 'https://www.baidu.com/x.mp4', mime: 'video/mp4', pageTitle: '百度一下', ts: 3 });
+
+eq(tb.list(11).length, 1, '标签页 11 只有 1 条可下载项（分片不算）');
+eq(tb.list(11)[0].pageTitle, '商家平台', '标签页 11 是支付宝那页的条目');
+eq(tb.list(22).length, 1, '标签页 22 只有 1 条');
+eq(tb.list(22)[0].pageTitle, '百度一下', '标签页 22 是百度那页的条目');
+ok(tb.list(11).every(function (it) { return it.pageTitle !== '百度一下'; }),
+  '★ 分库隔离：别的页面嗅到的条目不会串到当前页');
+eq(tb.segments(11).length, 1, '标签页 11 的分片占位独立');
+eq(tb.segments(22).length, 0, '标签页 22 没有分片占位');
+eq(tb.count(11), 1, 'count(tab) 只数该页');
+eq(tb.totalCount(), 2, 'totalCount 汇总所有页');
+eq(tb.list(999).length, 0, '不存在的标签页返回空列表（不新建库）');
+
+tb.clearTab(11);
+eq(tb.list(11).length, 0, 'clearTab 清掉该页');
+eq(tb.list(22).length, 1, '★ clearTab 不误伤别的页');
+
+// 主文档导航 = 同一个 tabId 换页 → 旧页条目清掉、新页重新记
+tb.add(22, { url: 'https://www.baidu.com/x.mp4', mime: 'video/mp4', ts: 4 });
+eq(tb.list(22).length, 1, '同页同 URL 去重（不新增条目）');
+eq(tb.list(22)[0].count, 2, '同页重复命中累加 count');
+tb.clearTab(22);
+tb.add(22, { url: 'https://v.qq.com/new.mp4', mime: 'video/mp4', pageTitle: '新页', ts: 5 });
+eq(tb.list(22).length, 1, '换页后只留新页条目');
+eq(tb.list(22)[0].pageTitle, '新页', '换页后是新页的数据');
+
+// 关页丢库 / 恢复时只删不存在的页
+tb.dropTab(22);
+eq(tb.list(22).length, 0, 'dropTab 清掉整库');
+tb.add(33, { url: 'https://c/v.mp4', mime: 'video/mp4', ts: 6 });
+tb.dropTabsExcept([33, 44]);
+eq(tb.list(33).length, 1, '★ dropTabsExcept 不动现存标签页的数据（SW 空闲重启不该丢当前页）');
+ok(tb.list(44).length === 0 && tb.list(22).length === 0, '不存在的标签页分库被丢弃');
+
+// 标签页数量上限：淘汰最早建库的，不淘汰刚进来的
+var tb2 = new CORE.TabStores(2, 200);
+tb2.add(1, { url: 'https://a/1.mp4', mime: 'video/mp4', ts: 1 });
+tb2.add(2, { url: 'https://a/2.mp4', mime: 'video/mp4', ts: 2 });
+tb2.add(3, { url: 'https://a/3.mp4', mime: 'video/mp4', ts: 3 });
+eq(tb2.list(1).length, 0, '超上限时最早的标签页分库被淘汰');
+eq(tb2.list(3).length, 1, '★ 新进来的标签页绝不会被淘汰');
+
+// toJSON / loadFrom 往返（多标签页）
+var snap2 = JSON.parse(JSON.stringify(tb.toJSON()));
+ok(!!snap2.tabs, 'toJSON 输出 {tabs:{...}} 结构');
+var tb3 = new CORE.TabStores(3, 200);
+tb3.loadFrom(snap2);
+eq(tb3.list(33).length, 1, 'loadFrom 恢复多标签页数据');
+var tb4 = new CORE.TabStores(3, 200);
+tb4.loadFrom({ items: [], segments: {} });   // 旧版（v1.0.33 全局单库）快照
+eq(tb4.totalCount(), 0, '旧版单库快照不会把分库撑坏（安全降级为空）');
+
+tb.clearAll();
+eq(tb.totalCount(), 0, 'clearAll 清所有页');
+
+// ---- 10) pageKeyOf：换页判定基准（丢 hash） ----
+eq(CORE.pageKeyOf('https://b.alipay.com/home?x=1#frag'), 'https://b.alipay.com/home?x=1',
+  'pageKeyOf 丢掉 hash');
+eq(CORE.pageKeyOf('https://b.alipay.com/home#a'), CORE.pageKeyOf('https://b.alipay.com/home#b'),
+  '★ 仅 hash 变化的页内跳转不算换页（不会误清当前页条目）');
+ok(CORE.pageKeyOf('https://b.alipay.com/home') !== CORE.pageKeyOf('https://www.baidu.com/'),
+  '★ 跨站点导航算换页');
+ok(CORE.pageKeyOf('https://v.com/list?p=1') !== CORE.pageKeyOf('https://v.com/list?p=2'),
+  'query 变化算换页');
+eq(CORE.pageKeyOf('not a url'), 'not a url', '非 URL 原样返回（不抛异常）');
+eq(CORE.pageKeyOf(''), '', '空串安全');
+
 // ---- 汇总 ----
 console.log('\n嗅探核心测试：通过 ' + passes + '，失败 ' + failures);
 process.exit(failures ? 1 : 0);

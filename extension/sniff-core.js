@@ -190,6 +190,125 @@
     }
   };
 
+  /**
+   * 多标签页容器：每个 tabId 一个 SniffStore。
+   *
+   * 2026-09-29 用户反馈「插件保存的信息太多了，保存当前页的就行」——原实现是
+   * **全局单库**，逛过支付宝商家平台再看百度，面板里两个站点的条目堆在一起，
+   * 还带着早已离开的页面的标题，用户根本分不清哪条属于当前页。
+   * 现在改为「按标签页分库 + 主文档导航即清」，面板只呈现当前页的嗅探结果。
+   *
+   * 与 SniffStore 一样零 chrome.* 依赖（tabId 只是外部传入的整型），
+   * 便于 node 离线测试；chrome 侧的「导航/关页/切页」接线在 background.js。
+   */
+  function TabStores(cap, perTabCap) {
+    this.cap = cap || 30;              // 最多同时保留多少个标签页的分库
+    this.perTabCap = perTabCap || 200; // 单个标签页的可下载项上限
+    this.tabs = {};                    // 'tabId' -> SniffStore（键保持插入序，便于淘汰）
+  }
+
+  TabStores.prototype.store = function (tabId) {
+    var k = String(tabId);
+    var s = this.tabs[k];
+    if (s) return s;
+    s = this.tabs[k] = new SniffStore(this.perTabCap);
+    var keys = Object.keys(this.tabs);
+    // 超限淘汰「最早建立分库」的标签页，绝不淘汰刚进来的这个（它才是用户当前在看/刚在用的）
+    while (keys.length > this.cap) {
+      var victim = keys.shift();
+      if (victim === k) { keys.push(victim); continue; }  // 理论到不了（新键必在末尾）
+      delete this.tabs[victim];
+    }
+    return s;
+  };
+
+  TabStores.prototype.add = function (tabId, entry) {
+    return this.store(tabId).add(entry);
+  };
+
+  TabStores.prototype.list = function (tabId) {
+    var s = this.tabs[String(tabId)];
+    return s ? s.list() : [];
+  };
+
+  TabStores.prototype.segments = function (tabId) {
+    var s = this.tabs[String(tabId)];
+    return s ? s.segments() : [];
+  };
+
+  TabStores.prototype.count = function (tabId) {
+    var s = this.tabs[String(tabId)];
+    return s ? s.badgeCount() : 0;
+  };
+
+  TabStores.prototype.totalCount = function () {
+    var n = 0;
+    for (var k in this.tabs) {
+      if (Object.prototype.hasOwnProperty.call(this.tabs, k)) n += this.tabs[k].badgeCount();
+    }
+    return n;
+  };
+
+  /** 只清一个标签页（页面跳转 / 用户点「清空」时用）。 */
+  TabStores.prototype.clearTab = function (tabId) {
+    var s = this.tabs[String(tabId)];
+    if (s) s.clear();
+  };
+
+  /** 丢掉整个标签页的分库（标签页关闭时用）。 */
+  TabStores.prototype.dropTab = function (tabId) {
+    delete this.tabs[String(tabId)];
+  };
+
+  /** 丢掉已不存在的标签页的分库（SW 重启恢复后清理残留）。
+   *  ⚠️ 只删不存在的，**绝不顺手清现存标签页**——SW 空闲被杀是常态，
+   *  清掉会把用户当前页刚嗅到的条目也一起抹了。 */
+  TabStores.prototype.dropTabsExcept = function (keepIds) {
+    var keep = {};
+    (keepIds || []).forEach(function (id) { keep[String(id)] = 1; });
+    for (var k in this.tabs) {
+      if (Object.prototype.hasOwnProperty.call(this.tabs, k) && !keep[k]) {
+        delete this.tabs[k];
+      }
+    }
+  };
+
+  TabStores.prototype.clearAll = function () {
+    for (var k in this.tabs) {
+      if (Object.prototype.hasOwnProperty.call(this.tabs, k)) this.tabs[k].clear();
+    }
+  };
+
+  TabStores.prototype.toJSON = function () {
+    var out = {};
+    for (var k in this.tabs) {
+      if (Object.prototype.hasOwnProperty.call(this.tabs, k)) out[k] = this.tabs[k].toJSON();
+    }
+    return { tabs: out };
+  };
+
+  TabStores.prototype.loadFrom = function (data) {
+    this.tabs = {};
+    if (!data) return;
+    var tabs = (data && data.tabs) || {};
+    var keys = Object.keys(tabs);
+    for (var i = 0; i < keys.length; i++) {
+      var s = new SniffStore(this.perTabCap);
+      s.loadFrom(tabs[keys[i]]);
+      this.tabs[keys[i]] = s;
+    }
+  };
+
+  /** 换页判定基准：`origin + pathname + search`（**故意丢掉 hash**）。
+   *  页内锚点跳转 / 前端路由只改 hash 时不应算「换页」，否则会把当前页刚嗅到的
+   *  条目误清。# 之外的变化（含 query）都算换页 —— 见 background.js 的用法。 */
+  function pageKeyOf(url) {
+    try {
+      var p = new URL(url);
+      return p.origin + p.pathname + p.search;
+    } catch (e) { return url || ''; }
+  }
+
   // 桌面端端口探测表：desktop_launcher._find_free_port 从 8321 顺延。
   var PROBE_PORT_START = 8321;
   var PROBE_PORT_COUNT = 30;
@@ -207,6 +326,8 @@
     isNoiseUrl: isNoiseUrl,
     pickHeaders: pickHeaders,
     SniffStore: SniffStore,
+    TabStores: TabStores,
+    pageKeyOf: pageKeyOf,
     probeBases: probeBases
   };
 })(typeof self !== 'undefined' ? self : globalThis);

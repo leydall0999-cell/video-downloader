@@ -243,6 +243,18 @@ else
 fi
 
 echo ""
+echo "=== extension/tests/test_background_page_scope.js（扩展「只保存当前页」，node + chrome 桩） ==="
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_background_page_scope.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
 echo "========================================="

@@ -23,9 +23,9 @@
   <div id="loginWarn" class="login-warn" hidden></div>
 
   <div class="toolbar">
-    <button id="sendAll" class="primary">全部发送</button>
+    <button id="sendAll" class="primary" title="把下面列出的（当前页嗅到的）全部发给桌面端">全部发送</button>
     <button id="sendPage" class="ghost" title="把当前网页地址交给桌面端解析（YouTube 等站点扩展嗅不到直链，用这个最稳）">发送当前页</button>
-    <button id="clearAll" class="ghost">清空</button>
+    <button id="clearAll" class="ghost" title="清空当前页的嗅探结果（其它页面本就不保留）">清空</button>
   </div>
 
   <div id="sendNote" class="send-note" hidden></div>
@@ -33,7 +33,7 @@
   <div id="segNote" class="seg-note" hidden></div>
 
   <main id="list" class="list">
-    <div class="empty">打开有视频的网页，这里会列出嗅探到的媒体流</div>
+    <div class="empty">当前页没有嗅探到媒体流。<br>播放页面里的视频或音频后这里会自动列出；已离开的页面不会保留。</div>
   </main>
 
   <footer class="ft">

@@ -12,16 +12,23 @@
  * - 只观察不阻塞：不用 onBeforeRequest 的 blocking 模式，MV3 无需
  *   declarativeNetRequest 权限，也不影响页面加载。
  * - 持久化用 chrome.storage.session（浏览器会话内有效，SW 被杀可恢复）。
+ * - **分页隔离（2026-09-29）**：原实现是全局单库，逛多个站点后条目堆在一起，
+ *   用户反馈「保存的信息太多了，保存当前页的就行」。现在按 tabId 分库
+ *   （core.TabStores），并把「主文档请求」当作换页信号——换页即清掉该标签页
+ *   上一页的条目；面板只呈现当前标签页的结果。
  */
 'use strict';
 
 importScripts('sniff-core.js');
 
 var CORE = globalThis.VDLSniffCore;
-var STORE_CAP = 200;
+var STORE_CAP = 200;        // 单个标签页的可下载项上限
+var TAB_CAP = 30;           // 最多同时保留多少个标签页的分库
 var PERSIST_DEBOUNCE_MS = 500;
 
-var store = new CORE.SniffStore(STORE_CAP);
+var store = new CORE.TabStores(TAB_CAP, STORE_CAP);
+var tabPage = {};            // storage.session['tabPage']，tabId -> 主文档 URL（换页判定基准）
+var activeTabId = -1;        // 最近一次激活的标签页（徽标计数用）
 var enabled = true;          // storage.local['enabled']，默认开
 var carryCookie = true;      // storage.local['carryCookie']，发送时是否携带 Cookie
 var endpoint = '';           // storage.local['endpoint']，探测到的桌面端基址
@@ -30,6 +37,10 @@ var headerMeta = new Map();  // requestId -> {referer, cookie}
 var persistTimer = null;
 
 var LOCAL_HOST_RE = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/;
+
+/** 换页判定基准（实现与测试都在 sniff-core.pageKeyOf）：忽略 hash ——
+ *  页内锚点跳转不算换页，否则会把当前页刚嗅到的条目误清。 */
+var pageKeyOf = CORE.pageKeyOf;
 
 function isLocalUrl(u) {
   try { return LOCAL_HOST_RE.test(new URL(u).hostname); } catch (e) { return false; }
@@ -65,18 +76,24 @@ function persist() {
     try {
       chrome.storage.session.set({
         vdlSniff: store.toJSON(),
+        tabPage: tabPage,
         sentUrls: sentUrls
       });
     } catch (e) { /* 会话存储不可用时静默（内存态仍在） */ }
   }, PERSIST_DEBOUNCE_MS);
 }
 
+/** 徽标 = **当前标签页**的可下载项数（列表已按页隔离，徽标口径必须跟着走）。 */
 function updateBadge() {
-  var n = store.badgeCount();
-  try {
-    chrome.action.setBadgeText({ text: n > 0 ? String(n) : '' });
-    chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
-  } catch (e) { /* 无 action 场景忽略 */ }
+  chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+    var tab = tabs && tabs[0];
+    if (tab && typeof tab.id === 'number') activeTabId = tab.id;
+    var n = store.count(activeTabId);
+    try {
+      chrome.action.setBadgeText({ text: n > 0 ? String(n) : '' });
+      chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
+    } catch (e) { /* 无 action 场景忽略 */ }
+  });
 }
 
 function handleCompleted(details) {
@@ -86,12 +103,27 @@ function handleCompleted(details) {
     headerMeta.delete(details.requestId);
     return;
   }
+  var tabId = (typeof details.tabId === 'number') ? details.tabId : -1;
+
+  // 主文档请求 = 这个标签页换页了 → 丢掉上一页嗅到的条目（「只保存当前页」的闸门）。
+  // 用 pageKeyOf 忽略 hash：页内锚点跳转不算换页。
+  if (details.type === 'main_frame') {
+    var pk = String(tabId);
+    var prev = tabPage[pk] || '';
+    if (prev && prev !== pageKeyOf(url)) {
+      store.clearTab(tabId);
+      updateBadge();
+    }
+    tabPage[pk] = pageKeyOf(url);
+    persist();
+  }
+
   var picked = CORE.pickHeaders(details.responseHeaders, null);
   var meta = headerMeta.get(details.requestId) || {};
   headerMeta.delete(details.requestId);
 
   // mime 权威原则与桌面端一致：响应头 text/html 等错报一律过滤
-  var res = store.add({
+  var res = store.add(tabId, {
     url: url,
     mime: picked.mime,
     referer: meta.referer || initiator || '',
@@ -101,10 +133,10 @@ function handleCompleted(details) {
     ts: Date.now() / 1000
   });
   if (res && res.isNew) updateBadge();
-  if (res && details.tabId && details.tabId > 0) {
+  if (res && tabId > 0) {
     // 补页面标题（异步，失败不影响条目）
     try {
-      chrome.tabs.get(details.tabId, function (tab) {
+      chrome.tabs.get(tabId, function (tab) {
         if (chrome.runtime.lastError || !tab) return;
         res.item.pageTitle = tab.title || '';
         res.item.pageUrl = tab.url || res.item.pageUrl;
@@ -141,6 +173,26 @@ try {
   );
 } catch (e) {
   console.error('webRequest 监听注册失败', e);
+}
+
+// ---- 标签页生命周期：关页丢库、切页刷徽标（均不需要额外权限） ----
+try {
+  if (chrome.tabs && chrome.tabs.onRemoved) {
+    chrome.tabs.onRemoved.addListener(function (tabId) {
+      store.dropTab(tabId);
+      delete tabPage[String(tabId)];
+      persist();
+      updateBadge();
+    });
+  }
+  if (chrome.tabs && chrome.tabs.onActivated) {
+    chrome.tabs.onActivated.addListener(function (info) {
+      activeTabId = info && typeof info.tabId === 'number' ? info.tabId : activeTabId;
+      updateBadge();
+    });
+  }
+} catch (e) {
+  console.error('标签页监听注册失败', e);
 }
 
 // ---- 端点探测：desktop_launcher 从 8321 起顺延找空闲端口，这里扫同一张表 ----
@@ -193,31 +245,54 @@ function getEndpoint(cb) {
     if (st.carryCookie === false) carryCookie = false;
     if (st.endpoint) endpoint = st.endpoint;
   });
-  chrome.storage.session.get(['vdlSniff', 'sentUrls'], function (st) {
+  chrome.storage.session.get(['vdlSniff', 'tabPage', 'sentUrls'], function (st) {
     if (st.vdlSniff) store.loadFrom(st.vdlSniff);
+    if (st.tabPage) tabPage = st.tabPage;
     if (st.sentUrls) sentUrls = st.sentUrls;
-    updateBadge();
+    // 已关闭标签页的残留分库清掉（只删不存在的，不动现存标签页的数据）
+    try {
+      chrome.tabs.query({}, function (tabs) {
+        if (chrome.runtime.lastError) return;
+        var ids = (tabs || []).map(function (t) { return t.id; });
+        store.dropTabsExcept(ids);
+        updateBadge();
+        persist();
+      });
+    } catch (e) {
+      updateBadge();
+    }
   });
 })();
 
 // ---- popup 消息通道 ----
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   msg = msg || {};
+  // popup 传它自己的标签页 id；没传（旧版 popup）则回落到最近激活的标签页
+  function scopeTabId() {
+    return (typeof msg.tabId === 'number' && msg.tabId >= 0) ? msg.tabId : activeTabId;
+  }
   switch (msg.type) {
     case 'getState':
+      var tid = scopeTabId();
       sendResponse({
         enabled: enabled,
         carryCookie: carryCookie,
         endpoint: endpoint,
-        items: store.list(),
-        segments: store.segments(),
+        tabId: tid,
+        items: store.list(tid),
+        segments: store.segments(tid),
         sentUrls: sentUrls
       });
       return false;
     case 'setEnabled':
       enabled = !!msg.value;
       chrome.storage.local.set({ enabled: enabled });
-      if (!enabled) { store.clear(); persist(); updateBadge(); }
+      if (!enabled) {
+        store.clearAll();
+        tabPage = {};
+        persist();
+        updateBadge();
+      }
       sendResponse({ ok: true, enabled: enabled });
       return false;
     case 'setCarryCookie':
@@ -226,11 +301,14 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       sendResponse({ ok: true, carryCookie: carryCookie });
       return false;
     case 'clear':
-      store.clear();
-      sentUrls = {};
+      // 「清空」= 清当前页（面板里能看到的就是这一页的）；
+      // 已发送标记只跟着这一页的条目走，别把别页的标记一起抹了
+      var ctid = scopeTabId();
+      store.list(ctid).forEach(function (it) { delete sentUrls[it.url]; });
+      store.clearTab(ctid);
       persist();
       updateBadge();
-      sendResponse({ ok: true });
+      sendResponse({ ok: true, tabId: ctid });
       return false;
     case 'markSent':
       sentUrls[msg.url] = Date.now();
