@@ -66,18 +66,8 @@ import process_queue as pq_mod
 import torrent as torrent_mod
 from batch import BatchScheduler
 from clouddrive import (
-    BaiduProvider,
     CloudError,
     WebDAVProvider,
-    baidu_auth_url,
-    baidu_exchange_token,
-    _baidu_callback_html,
-    save_baidu_token,
-    load_baidu_token,
-    clear_baidu_token,
-    baidu_qr_create,
-    baidu_qr_poll,
-    baidu_qr_status,
 )
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
@@ -463,19 +453,7 @@ CLOUD_FREE_DAILY = int(os.environ.get("VDL_CLOUD_FREE_DAILY", "5") or 5)
 CLOUD_SUB_ENABLED = CLOUD_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
 _cloud_quota: dict[str, dict] = {}        # ip -> {"date": "YYYY-MM-DD", "count": int}
 _cloud_quota_lock = threading.Lock()
-# 百度网盘 OAuth：需部署者自备开放平台应用（个人网盘读写的授权）
-BAIDU_APP_KEY = os.environ.get("VDL_BAIDU_APP_KEY", "").strip()
-BAIDU_APP_SECRET = os.environ.get("VDL_BAIDU_APP_SECRET", "").strip()
-BAIDU_REDIRECT_URI = os.environ.get("VDL_BAIDU_REDIRECT_URI", "").strip()
-BAIDU_APP_ID = os.environ.get("VDL_BAIDU_APP_ID", "").strip()  # AppID（≠AppKey），OAuth device_id 必需
-BAIDU_ENABLED = bool(BAIDU_APP_KEY and BAIDU_APP_SECRET and BAIDU_REDIRECT_URI and BAIDU_APP_ID)
-# 百度 OAuth state：防止授权码流程被 CSRF 诱导。state 由服务端签发并短期缓存，
-# 回调时比对；过期/缺失/不匹配一律拒绝。注意：单实例进程内缓存；多副本部署需换成共享存储。
-_BAIDU_STATES: dict[str, float] = {}
-_BAIDU_STATES_LOCK = threading.Lock()
-_BAIDU_STATE_TTL = 600
 _webdav_provider = WebDAVProvider()
-_baidu_provider = BaiduProvider()
 CLOUD_JOBS: dict[str, dict] = {}
 CLOUD_LOCK = threading.Lock()
 
@@ -2444,88 +2422,6 @@ class CloudSaveRequest(BaseModel):
     provider: str = Field(min_length=1, max_length=16)
     dest_path: str = Field(default="", max_length=1024)
     webdav: dict = Field(default_factory=dict)
-    baidu: dict = Field(default_factory=dict)
-
-
-
-
-
-
-
-
-# ── 百度网盘「下载到本机」（官方 PCS，速度由账号等级决定）─────────────────
-# 内存任务表：仅保存下载进度，不持久化（百度 dlink 短时效，断点续传意义不大）。
-_baidu_dl_tasks: dict[str, dict] = {}
-_baidu_dl_lock = threading.Lock()
-
-
-class BaiduDownloadRequest(BaseModel):
-    token: str = ""
-    fs_id: int = 0
-    path: str = ""
-    name: str = ""
-    backend: str = ""  # 空=auto（优先 aria2c 并发，缺失回退 requests）
-
-
-
-
-def _baidu_safe_name(name: str) -> str:
-    """取网盘文件名的纯文件名部分，剔除路径穿越字符。"""
-    s = (name or "").strip()
-    if not s or s in ("undefined", "(null)", "None"):
-        s = "file"
-    base = Path(s).name
-    return base or "file"
-
-
-
-
-
-
-# ── 百度网盘「分享链接下载」（登录后转存到自己网盘再下，官方通道）──────────
-class BaiduShareListRequest(BaseModel):
-    url: str = ""
-    pwd: str = ""
-    dir: str = ""           # 分享内子目录（空=根），用于点击文件夹展开
-
-
-
-
-class BaiduShareDownloadRequest(BaseModel):
-    url: str = ""
-    pwd: str = ""
-    path: str = ""        # 分享内文件路径（来自 share/list 的 path 字段）
-    name: str = ""
-    token: str = ""       # 可选；缺省回退到本机持久化的令牌
-    backend: str = ""     # 空=auto（优先 aria2c 并发，缺失回退 requests）
-    # 以下来自 share/list 响应，传入后可跳过重复 verify（避免百度限频）
-    sekey: str = ""       # list 返回的 sekey（randsk）
-    share_id: int | None = None  # list 返回的 share_id
-    uk: int | None = None        # list 返回的 uk
-    fs_id: int | None = None     # 要下载的文件的 fs_id（list items 里）
-    bduss: str = ""       # 用户提供的百度 BDUSS Cookie（用于高速直链下载）
-    dlink: str = ""        # 前端通过 WebView 注入 JS 预取的直链（优先级最高，跳过 transfer+dlink 策略）
-
-
-
-
-# ── 百度令牌本机持久化（每个用户各自存自己机器，重启后免重复授权）────────
-
-
-class BaiduTokenSet(BaseModel):
-    access_token: str = ""
-    expires_in: int | None = None
-    scope: str = ""
-    refresh_token: str = ""
-
-
-
-
-
-
-# ── 百度扫码登录（自动获取 BDUSS，免手动复制 Cookie）────────────────
-
-
 
 
 
@@ -2627,7 +2523,6 @@ class ArchiveConfigRequest(BaseModel):
     max_file_gb: float | None = Field(default=None, ge=0, le=1024)
     delete_after: bool | None = None
     webdav: dict | None = None
-    baidu: dict | None = None
 
 
 class ArchiveRunRequest(BaseModel):
@@ -2655,13 +2550,6 @@ def _archive_provider(cfg) -> tuple:
         except LinkError as exc:
             raise HTTPException(status_code=400, detail="WebDAV 地址不合法：" + exc.message)
         return _webdav_provider.upload, creds
-    if cfg.provider == "baidu":
-        if not BAIDU_ENABLED:
-            raise HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
-        creds = archive_store.get_creds("baidu")
-        if not (creds.get("token") or "").strip():
-            raise HTTPException(status_code=400, detail="尚未完成百度网盘授权")
-        return _baidu_provider.upload, creds
     raise HTTPException(status_code=400, detail="不支持的网盘类型")
 
 
@@ -3365,33 +3253,6 @@ if ARCHIVE_ENABLED:
     _arc_watchdog.start()
 
 
-# ---- 百度网盘直链下载（油猴脚本 → 本接口 → aria2c）----
-# 油猴脚本在用户已登录的浏览器里拦截百度 API 拿到 dlink，POST 到这里。
-# 后端用 aria2c 多线程下载到本地，彻底摆脱 app 内 WebView 注入 BDUSS 的不稳定链路。
-class BaiduDlinkRequest(BaseModel):
-    dlink: str = Field(..., min_length=10, max_length=8192)
-    filename: str = Field(default="", max_length=255)
-
-
-
-
-# ---- 百度网盘下载（baiduPCS-Go 适配器，替代脆弱的 WebView 注入）----
-try:
-    import baidu_pcs  # noqa: E402
-except Exception as _pcs_err:  # pragma: no cover
-    logger.warning("baidu_pcs 加载失败，百度网盘(PCS-Go)功能不可用: %s", _pcs_err)
-    baidu_pcs = None
-
-try:
-    import baidu_qr  # noqa: E402
-    if baidu_pcs is not None:
-        baidu_qr.PCS_LOGIN = baidu_pcs
-except Exception as _qr_err:  # pragma: no cover
-    logger.warning("baidu_qr 加载失败，扫码登录不可用: %s", _qr_err)
-    baidu_qr = None
-
-_pcs_tasks: dict[str, dict] = {}
-_pcs_lock = threading.Lock()
 
 
 
@@ -3425,8 +3286,7 @@ _pcs_lock = threading.Lock()
 #   公共 Cookie 池：代码内联于本文件后部（非 cloud.py），含接收端 /api/cookie/sync、
 #     本机 from-local、查询 status、清理 cache/clear 及后台探测 watchdog，网页版复用。
 #   剥离(App 专属，仅在 main 完整版挂载)：commentary / library /
-#     retention / archive / torrents / subtitles / llm / process / subscriptions /
-#     baidu_dlink / pcs
+#     retention / archive / torrents / subtitles / llm / process / subscriptions
 # 必须在 app.mount("/", StaticFiles) 之前 include，否则 "/" 挂载会前缀匹配吞掉 /api/* 路由
 from routers import crypto as _crypto_rtr
 app.include_router(_crypto_rtr.router)
@@ -3451,6 +3311,10 @@ from membership import MembershipStore as _MembershipStore
 member_store = _MembershipStore()  # 会员引擎共享单例（/api/member + 功能配额判定共用同一状态文件）
 from routers import membership as _membership_rtr
 app.include_router(_membership_rtr.router)
+from routers import payment as _payment_rtr
+app.include_router(_payment_rtr.router)
+from routers import extension as _extension_rtr
+app.include_router(_extension_rtr.router)
 from routers import auth as _auth_rtr
 app.include_router(_auth_rtr.router)
 from routers import admin as _admin_rtr

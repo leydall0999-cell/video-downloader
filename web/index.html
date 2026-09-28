@@ -13,7 +13,7 @@
 <a class="skip-link" href="#main">跳到主要内容</a>
 
 <header class="site-header">
-  <div class="wrap header-inner">
+  <div class="wrap-wide header-inner">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -25,6 +25,18 @@
         <span>不止是下载工具，更懂视频精修加工</span>
       </div>
     </div>
+    <nav class="tabs" id="tabs" hidden aria-label="功能导航">
+      <div class="tabs-inner">
+        <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载视频</button>
+        <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
+        <button type="button" class="tab" data-view="dw" id="tabDw">去水印</button>
+        <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
+        <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
+        <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
+        <button type="button" class="tab tab-sep" data-view="profile" id="tabProfile">个人中心</button>
+        <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能</button>
+      </div>
+    </nav>
     <div class="header-actions">
       <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 100+ 平台</button>
       <a class="badge badge-link" id="headerDownloadBtn" href="/download" title="下载桌面客户端">Download下载</a>
@@ -33,23 +45,6 @@
       <button type="button" class="badge" id="quitAppBtn" hidden title="退出视频工坊（仅此按钮会真正退出软件）">退出</button>
     </div>
   </div>
-
-  <nav class="tabs" id="tabs" hidden>
-    <div class="wrap tabs-inner">
-      <div class="tabs-left">
-        <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载视频</button>
-        <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
-        <button type="button" class="tab" data-view="dw" id="tabDw">去水印</button>
-        <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
-        <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
-        <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
-        <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能</button>
-      </div>
-      <div class="tabs-right">
-        <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
-      </div>
-    </div>
-  </nav>
 </header>
 
 <main id="main" class="wrap">
@@ -1473,7 +1468,6 @@
 
     <div class="cloud-providers">
       <label class="cloud-radio"><input type="radio" name="cloudProvider" value="webdav" checked> WebDAV（Nextcloud / 群晖 / 自建）</label>
-      <label class="cloud-radio" id="cloudBaiduRadio" hidden><input type="radio" name="cloudProvider" value="baidu"> 百度网盘</label>
     </div>
 
     <div class="cloud-form" id="cloudWebdavForm">
@@ -1488,11 +1482,6 @@
       </label>
     </div>
 
-    <div class="cloud-form" id="cloudBaiduForm" hidden>
-      <button type="button" class="btn btn-primary btn-sm" id="cloudBaiduBtn">授权百度网盘</button>
-      <p class="cloud-baidu-status" id="cloudBaiduStatus">未授权</p>
-    </div>
-
     <label class="cloud-dest">保存到网盘的路径（可留空，默认用文件名）
       <input type="text" id="cloudDest" class="adv-input" placeholder="如 Videos/ 或 /Movies/foo.mp4" autocomplete="off" spellcheck="false">
     </label>
@@ -1502,115 +1491,6 @@
       <span class="cloud-status" id="cloudStatus"></span>
     </div>
     <p class="cloud-note">凭据仅保存在你本机浏览器（localStorage），只发往你配置的网盘。自托管实例下服务端会短暂读取以完成上传。</p>
-  </div>
-</dialog>
-
-<!-- 百度网盘浏览/下载：从用户自己的网盘把文件拉回本机（官方 PCS，速度由账号等级决定）-->
-<dialog id="baiduModal" class="modal" aria-labelledby="baiduModalTitle">
-  <div class="modal-card modal-wide">
-    <div class="modal-head">
-      <h2 id="baiduModalTitle">☁️ 百度网盘</h2>
-      <button type="button" class="modal-close" id="baiduModalClose" aria-label="关闭">✕</button>
-    </div>
-    <p class="modal-sub">从你<strong>自己的</strong>百度网盘把文件下载到本机（~/Downloads/VideoDownloader/baidu/）。走官方授权，速度由你账号等级决定；免费账号大文件可能被限速或需开通会员提速。</p>
-
-    <div class="baidu-auth-row">
-      <button type="button" class="btn btn-primary btn-sm" id="baiduDriveAuthBtn">授权百度网盘</button>
-      <span class="baidu-status" id="baiduDriveStatus">未授权</span>
-      <span class="baidu-hint" id="baiduDriveHint"></span>
-    </div>
-
-    <hr class="baidu-sep" />
-
-    <div class="baidu-share">
-      <h3 class="baidu-share-title">📎 分享链接下载</h3>
-      <p class="modal-sub baidu-share-sub">粘贴别人分享的百度网盘链接 + 提取码，登录你<strong>自己的</strong>账号后自动转存到你的网盘再下载（官方通道，速度由你账号等级决定）。</p>
-      <div class="baidu-share-row">
-        <input type="text" id="baiduShareUrl" class="adv-input" placeholder="https://pan.baidu.com/s/..." />
-        <input type="text" id="baiduSharePwd" class="adv-input adv-input-pwd" placeholder="提取码（可选）" />
-        <button type="button" class="btn btn-primary btn-sm" id="baiduShareListBtn">列出文件</button>
-      </div>
-      <div class="baidu-bduss-row">
-        <button type="button" class="btn btn-primary btn-sm" id="baiduAppLoginBtn">🔑 登录百度网盘（下载分享必需）</button>
-        <span class="baidu-login-status" id="baiduLoginStatus"></span>
-      </div>
-      <p class="baidu-share-status" id="baiduShareStatus"></p>
-      <div class="baidu-list baidu-share-list" id="baiduShareList"><p class="baidu-empty">粘贴分享链接后点「列出文件」。</p></div>
-
-    <!-- 扫码登录弹窗已移除：扫码登录的 BDUSS 与下载分享必需的 WebView 登录态是两回事，
-         保留会让用户混淆。现在只需点「🔑 登录百度网盘」一次，登录态持久化在 app 内 WebView。 -->
-    </div>
-
-    <hr class="baidu-sep" />
-
-    <div class="baidu-breadcrumb" id="baiduBreadcrumb"></div>
-
-    <p class="baidu-hint">「我的网盘」仅支持浏览——百度限制第三方应用不能直下网盘任意文件（会报 errno=20020）。下载请用上方「📎 分享链接下载」。</p>
-
-    <div class="baidu-list" id="baiduList"><p class="baidu-empty">请先授权百度网盘。</p></div>
-
-    <div class="baidu-dl">
-      <h3 class="baidu-dl-title">本机下载进度</h3>
-      <div class="baidu-dl-list" id="baiduDlList"><p class="baidu-empty">还没有下载任务。</p></div>
-    </div>
-    <p class="cloud-note">需在配置文件中填入你自己的百度开放平台应用凭据（VDL_BAIDU_APP_KEY / VDL_BAIDU_APP_SECRET / VDL_BAIDU_REDIRECT_URI，redirect_uri 须指向本机回调地址）才会显示本功能。</p>
-  </div>
-</dialog>
-
-<!-- 百度网盘下载（baiduPCS-Go 适配器）：粘贴 cookie 登录一次 → 粘贴分享链接+密码 → 转存 → 下载 -->
-<dialog id="pcsModal" class="modal" aria-labelledby="pcsModalTitle">
-  <div class="modal-card modal-wide">
-    <div class="modal-head">
-      <h2 id="pcsModalTitle">📥 百度网盘下载 <small style="font-size:12px;color:#888">（baiduPCS-Go）</small> <span id="pcsBuildInfo" style="font-size:10px;color:#aaa;font-weight:normal"></span></h2>
-      <button type="button" class="modal-close" id="pcsModalClose" aria-label="关闭">✕</button>
-    </div>
-    <p class="modal-sub">方案：用开源命令行工具 <code>baiduPCS-Go</code> 管理登录态与下载，<strong>不依赖浏览器注入、不需要百度开放平台凭据</strong>。首次使用会自动下载该工具（约 30MB）。</p>
-
-    <div class="pcs-status" id="pcsStatus">正在检查环境…</div>
-
-    <div class="pcs-block">
-      <h3>① 登录百度网盘（扫码，零门槛）</h3>
-      <p class="modal-sub">打开<strong>手机百度网盘 App</strong> → 扫下方二维码 → 手机上点「确认登录」即可。<strong>不需要记密码、不需要复制 Cookie、不需要 F12。</strong></p>
-      <div class="pcs-qr-wrap">
-        <img id="pcsQrImg" class="pcs-qr-img" alt="登录二维码" />
-        <div id="pcsQrStatus" class="pcs-qr-status">正在生成二维码…</div>
-        <button type="button" class="btn btn-sm" id="pcsQrRefresh">🔄 刷新二维码</button>
-      </div>
-      <span id="pcsWho" class="pcs-who"></span>
-      <details style="margin-top:.5rem"><summary style="font-size:12px;color:#888;cursor:pointer">其他登录方式：账号密码 / Cookie</summary>
-        <div style="display:flex;gap:.5rem;margin-top:.4rem;align-items:center">
-          <input type="text" id="pcsUsername" class="adv-input" placeholder="百度账号（手机号/邮箱/用户名）" style="flex:1" autocomplete="username" />
-          <input type="password" id="pcsPassword" class="adv-input" placeholder="密码" style="flex:1;min-width:140px" autocomplete="current-password" />
-          <button type="button" class="btn btn-primary btn-sm" id="pcsLoginBtn">🔑 登录</button>
-        </div>
-        <textarea id="pcsCookies" class="adv-textarea" rows="2" placeholder="粘贴 BDUSS 值或完整 Cookie 字符串" style="margin-top:.3rem;font-size:12px"></textarea>
-        <button type="button" class="btn btn-default btn-sm" id="pcsCookieLoginBtn" style="margin-top:.2rem">用 Cookie 登录</button>
-      </details>
-    </div>
-
-    <hr class="baidu-sep" />
-
-    <div class="pcs-block">
-      <h3>② 下载分享链接</h3>
-      <p class="modal-sub">粘贴别人分享的百度网盘链接 + 提取码，自动<strong>转存到你的网盘</strong>再下载。</p>
-      <div class="pcs-row">
-        <input type="text" id="pcsShareUrl" class="adv-input" placeholder="https://pan.baidu.com/s/..." style="flex:2" />
-        <input type="text" id="pcsSharePwd" class="adv-input" placeholder="提取码（如有）" style="flex:1;max-width:160px" />
-        <button type="button" class="btn btn-primary btn-sm" id="pcsTransferBtn">转存</button>
-        <button type="button" class="btn btn-sm" id="pcsLsBtn">列出网盘</button>
-      </div>
-      <p class="pcs-status" id="pcsShareStatus"></p>
-      <div class="baidu-list" id="pcsList"><p class="baidu-empty">转存后会自动列出文件，点「下载」即可。</p></div>
-      <div class="pcs-row" style="margin-top:.4rem">
-        <input type="text" id="pcsManualPath" class="adv-input" placeholder="或手动填网盘路径，如 /app-arm64-v8a-release.apk" style="flex:2" />
-        <button type="button" class="btn btn-sm" id="pcsManualDlBtn">按路径下载</button>
-      </div>
-    </div>
-
-    <div class="baidu-dl" style="margin-top:12px">
-      <h3 class="baidu-dl-title">本机下载进度</h3>
-      <div class="baidu-dl-list" id="pcsDlList"><p class="baidu-empty">还没有下载任务。</p></div>
-    </div>
   </div>
 </dialog>
 
@@ -1689,7 +1569,6 @@
 
     <div class="arc-provider-row">
       <label class="arc-radio"><input type="radio" name="arcProvider" value="webdav" checked> WebDAV（群晖 / Nextcloud / 自建）</label>
-      <label class="arc-radio" id="arcBaiduRadio" hidden><input type="radio" name="arcProvider" value="baidu"> 百度网盘</label>
     </div>
 
     <div class="arc-form" id="arcWebdavForm">
@@ -1702,14 +1581,6 @@
       <label class="arc-field">密码
         <input type="password" id="arcWebdavPass" class="adv-input" placeholder="留空则沿用已保存" autocomplete="new-password">
       </label>
-    </div>
-
-    <div class="arc-form" id="arcBaiduForm" hidden>
-      <button type="button" class="btn btn-primary btn-sm" id="arcBaiduBtn">授权百度网盘</button>
-      <label class="arc-field">授权后粘贴 token
-        <input type="text" id="arcBaiduToken" class="adv-input" placeholder="在回调页复制 token 粘贴到这里" autocomplete="off" spellcheck="false">
-      </label>
-      <p class="arc-baidu-status" id="arcBaiduStatus">未授权</p>
     </div>
 
     <label class="arc-field">远端路径模板

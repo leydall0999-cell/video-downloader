@@ -55,7 +55,7 @@ class ArchiveConfig:
     auto_enabled: bool = False
     interval_hours: float = 6.0
 
-    provider: str = "webdav"          # webdav | baidu
+    provider: str = "webdav"
     dest_template: str = DEFAULT_TEMPLATE
 
     # 只归档这些类型（抽帧封面之类的图片默认不传，免得把网盘刷爆）
@@ -106,7 +106,7 @@ class ArchiveStore:
         self.path = path
         self._lock = threading.RLock()
         self._config = ArchiveConfig()
-        self._creds: dict[str, dict] = {"webdav": {}, "baidu": {}}
+        self._creds: dict[str, dict] = {"webdav": {}}
         self._records: dict[str, dict] = {}
         self._load()
 
@@ -132,7 +132,6 @@ class ArchiveStore:
         if isinstance(creds, dict):
             self._creds = {
                 "webdav": creds.get("webdav") if isinstance(creds.get("webdav"), dict) else {},
-                "baidu": creds.get("baidu") if isinstance(creds.get("baidu"), dict) else {},
             }
         recs = raw.get("records")
         if isinstance(recs, dict):
@@ -186,7 +185,6 @@ class ArchiveStore:
     def creds_masked(self) -> dict:
         with self._lock:
             wd = self._creds.get("webdav") or {}
-            bd = self._creds.get("baidu") or {}
             return {
                 "webdav": {
                     "url": wd.get("url", ""),
@@ -194,18 +192,12 @@ class ArchiveStore:
                     "pass_set": bool(wd.get("pass")),
                     "pass_masked": _mask(wd.get("pass", "")),
                 },
-                "baidu": {
-                    "token_set": bool(bd.get("token")),
-                    "token_masked": _mask(bd.get("token", "")),
-                },
             }
 
     def has_creds(self, provider: str) -> bool:
         c = self.get_creds(provider)
         if provider == "webdav":
             return bool((c.get("url") or "").strip())
-        if provider == "baidu":
-            return bool((c.get("token") or "").strip())
         return False
 
     # ---- 归档记录 ---- #

@@ -2,8 +2,7 @@
 # 离线测试运行器：在沙盒内验证 VideoDownloader 后端，不依赖任何外部网络。
 #
 # 覆盖：
-#   1. test_baidu_qr_offline.py  —— 本地 Mock 百度 passport，跑通扫码登录全链路
-#   2. test_app_smoke.py         —— FastAPI TestClient 无头冒烟所有 /api/pcs/* 路由
+#   1. test_app_smoke.py         —— FastAPI TestClient 无头冒烟装配
 #   3. test_atomic_writes_and_auth.py —— 原子写契约 / 并发锁 / 验证码仅本机回传 回归
 #   4. test_worker_proxy_direct.py —— 解析通道直连 daemon 的路由回归
 #   5. test_cloud_link.py        —— web 版账号接授权中心（打通 web 与 App 用户数据）
@@ -74,7 +73,6 @@ run_node() {
   fi
 }
 
-run_one test_baidu_qr_offline.py
 run_one test_app_smoke.py
 run_one test_atomic_writes_and_auth.py
 run_one test_worker_proxy_direct.py

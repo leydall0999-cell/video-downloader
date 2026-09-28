@@ -15,7 +15,7 @@ def archive_config_get() -> dict:
         "config": cfg.to_dict(),
         "creds": app.archive_store.creds_masked(),
         "configured": app.archive_store.has_creds(cfg.provider),
-        "providers": ["webdav"] + (["baidu"] if app.BAIDU_ENABLED else []),
+        "providers": ["webdav"],
         "tokens": app.archive_mod.TEMPLATE_TOKENS,
         "default_template": app.archive_mod.DEFAULT_TEMPLATE,
         "trash_available": app.retention_mod.trash_available(),
@@ -27,13 +27,10 @@ def archive_config_set(req: app.ArchiveConfigRequest) -> dict:
     app._require_archive()
     data = req.model_dump()
     webdav = data.pop("webdav", None)
-    baidu = data.pop("baidu", None)
     fields = {k: v for k, v in data.items() if v is not None}
 
-    if fields.get("provider") and fields["provider"] not in ("webdav", "baidu"):
+    if fields.get("provider") and fields["provider"] != "webdav":
         raise app.HTTPException(status_code=400, detail="不支持的网盘类型")
-    if fields.get("provider") == "baidu" and not app.BAIDU_ENABLED:
-        raise app.HTTPException(status_code=503, detail="该实例未配置百度网盘应用凭据")
     # 安全阀：没有可用回收站时不允许开「归档后删本地」，避免静默硬删用户资产
     if fields.get("delete_after") and not app.retention_mod.trash_available():
         raise app.HTTPException(status_code=400, detail="系统回收站不可用，无法开启「归档后删本地」（拒绝直接硬删）")
@@ -50,9 +47,6 @@ def archive_config_set(req: app.ArchiveConfigRequest) -> dict:
             "user": (webdav.get("user") or "").strip(),
             "pass": webdav.get("pass") or "",
         })
-    if baidu is not None:
-        app.archive_store.set_creds("baidu", {"token": (baidu.get("token") or "").strip()})
-
     cfg = app.archive_store.update(**fields)
     return {
         "config": cfg.to_dict(),

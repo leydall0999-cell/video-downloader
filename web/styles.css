@@ -43,6 +43,8 @@ p { margin: 0; }
 img { max-width: 100%; display: block; }
 
 .wrap { width: min(880px, 100% - 2rem); margin-inline: auto; }
+/* 顶栏专用宽容器：参考 DataTool 式通栏导航（2026-09-28） */
+.wrap-wide { width: min(1440px, 100% - 2.5rem); margin-inline: auto; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -63,11 +65,11 @@ img { max-width: 100%; display: block; }
   border-bottom: 1px solid var(--line);
 }
 .header-inner {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: stretch; justify-content: flex-start;
   gap: 1rem; min-height: 60px;
 }
-.header-actions { display: flex; align-items: center; gap: .55rem; margin-left: auto; }
-.brand { display: flex; align-items: center; gap: .7rem; }
+.header-actions { display: flex; align-items: center; gap: .55rem; margin-left: auto; flex: none; }
+.brand { display: flex; align-items: center; gap: .7rem; flex: none; }
 .brand-mark {
   display: grid; place-items: center; width: 38px; height: 38px;
   border-radius: 11px; color: #fff;
@@ -1098,21 +1100,19 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .baidu-qr-status.is-err { color: var(--danger); }
 .baidu-qr-modal .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .5rem; }
 
-/* ---------------- 媒体库（桌面版功能） ---------------- */
+/* ---------------- 顶栏单行导航（参考 DataTool 式排版，2026-09-28） ----------------
+   nav.tabs 并入 header-inner：品牌(左) → 功能导航(紧随) → 胶囊按钮(最右)。
+   注意：display:flex 会覆盖 hidden 属性，必须显式写 .tabs[hidden]。 */
 .tabs {
-  background: rgba(255, 255, 255, .55);
-  border-bottom: 1px solid var(--line);
+  display: flex; min-width: 0; margin-left: .35rem;
+  background: none; border: 0;
 }
+.tabs[hidden] { display: none; }
 .tabs-inner {
-  display: flex; align-items: stretch; justify-content: space-between; gap: .5rem;
-  min-height: 42px;
-}
-.tabs-left {
   display: flex; align-items: stretch; gap: .1rem; min-width: 0;
   overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
 }
-.tabs-left::-webkit-scrollbar { display: none; }
-.tabs-right { display: flex; align-items: stretch; flex: none; margin-left: auto; }
+.tabs-inner::-webkit-scrollbar { display: none; }
 .tab {
   position: relative; flex: none; display: inline-flex; align-items: center;
   padding: 0 .85rem; border: 0; background: none; cursor: pointer;
@@ -1125,6 +1125,16 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .tab.is-active::after {
   content: ""; position: absolute; left: .85rem; right: .85rem; bottom: 0;
   height: 2px; border-radius: 2px 2px 0 0; background: var(--brand);
+}
+/* 个人中心：与功能 tab 同一行，细分隔线区隔（2026-09-28 排版调整） */
+.tab-sep { border-left: 1px solid var(--line); margin-left: .3rem; }
+/* 宽度不够时逐级收紧：先藏品牌副标题，再缩导航间距（保 DataTool 式单行不换行） */
+@media (max-width: 1399px) {
+  .brand-text span { display: none; }
+}
+@media (max-width: 1120px) {
+  .tab { padding: 0 .65rem; font-size: .8rem; }
+  .tab.is-active::after { left: .65rem; right: .65rem; }
 }
 
 .lib-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .9rem; }
@@ -2047,9 +2057,10 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   .hero h1 { font-size: clamp(1.25rem, 5.5vw, 1.6rem); }
   .hero p { font-size: .88rem; }
   .hero-note { display: block; width: 100%; font-size: .82rem; padding: .45rem .7rem; }
-  .tabs-inner { justify-content: flex-start; gap: 0; min-height: 40px; }
-  .tab { padding: 0 .7rem; font-size: .8rem; min-height: 40px; }
-  .tabs-right { margin-left: auto; }
+  .tabs { margin-left: 0; }
+  .tabs-inner { gap: 0; }
+  .tab { padding: 0 .7rem; font-size: .8rem; }
+  .tab-sep { margin-left: .15rem; }
   .panel { padding: 1rem; border-radius: 15px; }
   .input-row { flex-direction: column; }
   .input-row #resolveBtn { width: 100%; height: 48px; }
