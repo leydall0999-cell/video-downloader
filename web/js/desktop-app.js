@@ -12,6 +12,12 @@
 //
 // 复用 web/app.js 暴露的共享能力：window.VDL（el/$/escHtml/request/showError/
 // createTaskCard/switchView）。app.js 必须先于本文件执行（index.html 已保证顺序）。
+//
+// 环境标记（2026-09-29）：本文件只在桌面壳（pywebview / 桌面包指纹）或本机 127.0.0.1
+// 场景加载。app.js 的 _friendlyNetworkError 据此区分「连接本地服务失败」（桌面话术）
+// 和「网络连接失败」（网页话术），避免 Chrome 用户被引导去 Cmd+Q 重启根本没装的 App。
+// 放在本文件最顶部、IIFE 之前，保证加载即生效（不依赖 pywebview 注入时机）。
+window.__VDL_DESKTOP_SHELL = true;
 (function () {
   'use strict';
 

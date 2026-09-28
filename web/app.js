@@ -938,14 +938,23 @@
 
   // 把 WebKit 原始网络错误（load failed / Failed to fetch / NetworkError）
   // 转成用户友好的中文提示，避免用户看到吓人的技术报错。
+  // ⚠️ 文案按运行环境区分（2026-09-29）：「本地服务/Cmd+Q/DMG」只对桌面壳有意义，
+  // Chrome 打开的网页版网络失败曾被误引导成重启桌面应用，用户完全无所适从。
+  const _isDesktopShell = () => !!(window.pywebview || window.__VDL_DESKTOP_SHELL);
   const _friendlyNetworkError = (msg) => {
     const lower = String(msg || '').toLowerCase();
     if (lower === 'load failed' || lower === 'failed to fetch' || lower === 'networkerror'
         || lower.includes('load failed') || lower.includes('failed to fetch')
         || lower.includes('networkerror') || lower.includes('network error')) {
+      if (_isDesktopShell()) {
+        return {
+          message: '连接本地服务失败',
+          hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。'
+        };
+      }
       return {
-        message: '连接本地服务失败',
-        hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。'
+        message: '网络连接失败',
+        hint: '请检查网络后重试；海外链接可点输入框下方「切换线路」后重试，解析会自动改走可用的线路。'
       };
     }
     return null;
@@ -3632,7 +3641,12 @@
         // 此时若已知对端，自动改走对端重试一次，并把后续下载/进度/取件一并锁到对端；
         // 只对「网络类」错误重试 —— 明确的业务错误（需要 Cookie / 地区限制 / 视频不存在）
         // 换节点也不会有不同结果，不做无谓的二次等待。
-        const alt = (!useBase && node.peer && regionFor(url) !== node.region) ? node.peer : '';
+        // 双向自愈（2026-09-29）：反方向同样成立 —— 浏览器直连海外节点偶发网络层失败
+        // （Cloudflare 边缘抖动/被挑战，实测 2026-09-29 用户解析 YouTube 撞上），
+        // 此时改走主站（空 base）：cn 会在服务端把 /api/resolve 转发给对端（_PEER_FWD），
+        // 绕开浏览器→Cloudflare 这一跳。
+        const alt = useBase ? ''
+          : (node.peer && regionFor(url) !== node.region ? node.peer : '');
         const retriable = !error.category || error.category === 'unknown'
           || /errno|reset|timed? ?out|timeout|unable to download|connection|network|econn|502|503/i
             .test(`${error.hint || ''} ${error.message || ''}`);
