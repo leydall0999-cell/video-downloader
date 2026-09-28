@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "VideoDownloader 媒体嗅探",
+  "name": "视频工坊 媒体嗅探",
   "version": "1.0.33",
-  "description": "嗅探网页中的视频 / 音频 / HLS 清单，一键发给 VideoDownloader 桌面端下载。仅监听请求头，数据只发往本机桌面端。",
+  "description": "嗅探网页中的视频、音频与 HLS 流，一键发给「视频工坊」桌面端下载。数据仅在本机流转。",
   "permissions": [
     "webRequest",
     "storage"
@@ -18,7 +18,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "VideoDownloader 媒体嗅探",
+    "default_title": "视频工坊 媒体嗅探",
     "default_icon": {
       "16": "icons/16.png",
       "32": "icons/32.png",

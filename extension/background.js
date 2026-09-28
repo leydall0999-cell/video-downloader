@@ -1,4 +1,4 @@
-/* VideoDownloader 媒体嗅探 —— MV3 service worker。
+/* 视频工坊 媒体嗅探 —— MV3 service worker。
  *
  * 职责：webRequest 观察监听（不改写请求）→ sniff-core 判定 → 去重存储 →
  * 徽标计数；popup 通过 runtime 消息取列表 / 发送到桌面端。

@@ -1,4 +1,4 @@
-/* VideoDownloader 媒体嗅探 —— 纯逻辑核心（无 chrome.* 依赖，便于 node 离线测试）。
+/* 视频工坊 媒体嗅探 —— 纯逻辑核心（无 chrome.* 依赖，便于 node 离线测试）。
  *
  * 判定矩阵与桌面端 server/cdp_sniffer.py 的 classify_media() 逐条对齐
  * （playlist / media / segment / 空），两边不许分叉 —— python 侧测试

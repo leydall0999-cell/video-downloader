@@ -1,4 +1,4 @@
-/* VideoDownloader 媒体嗅探 —— popup 逻辑。
+/* 视频工坊 媒体嗅探 —— popup 逻辑。
  *
  * 发送通道复用桌面端 /api/sniffer/send（add_manual → picked 队列），
  * 桌面端 web/js/desktop-app.js 的 picked 轮询会自动建下载任务 —— 与
@@ -117,7 +117,7 @@ function render(st) {
   state = st;
   var epEl = $('endpointText');
   if (st.endpoint) {
-    epEl.textContent = '已连接 ' + st.endpoint.replace('http://', '');
+    epEl.textContent = '已连接桌面端';
     epEl.className = 'ep-ok';
   } else {
     epEl.textContent = '未找到桌面端（请确认 App 已启动）';
