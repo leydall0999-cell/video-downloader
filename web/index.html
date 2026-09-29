@@ -106,6 +106,8 @@
       <button type="button" class="sidebar-item" data-view="sr" id="sTabSr" title="图片高清修复：快速档秒级放大，AI 档重建真实细节" data-page-node-id="JThpU9xiJ3QK6XcLLen0CF"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="zS8vYjHQFUCk8Sn6Zvp1PE">✨</span><span class="sidebar-item-label" data-page-node-id="DUfCc9BmTCAFM8f894bCse">高清修复</span></button>
       <!-- 2026-09-20 新增：扫码分享（本机文件 → 短链 + 二维码；微信/QQ/浏览器扫码直接看） -->
       <button type="button" class="sidebar-item" data-view="share" id="sTabShare" title="扫码分享：把图片 / 视频 / PDF 等本地文件生成二维码，对方扫码即可直接查看" data-page-node-id="sHareTab20260en0x01"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="sHareIco20260en0x01">📲</span><span class="sidebar-item-label" data-page-node-id="sHareLbl20260en0x01">扫码分享</span></button>
+      <!-- 2026-09-30 新增：文件变网页（本机文件 → 一个自包含 HTML 页面，离线可看、可直接发人） -->
+      <button type="button" class="sidebar-item" data-view="page" id="sTabPage" title="文件变网页：把图片 / PDF / 视频 / 音乐打包成一个 HTML 页面，双击即可打开，也能直接发给别人" data-page-node-id="pAgeTab20260en0x01"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="pAgeIco20260en0x01">🌐</span><span class="sidebar-item-label" data-page-node-id="pAgeLbl20260en0x01">文件变网页</span></button>
     </div>
 
     <div class="sidebar-group collapsed" data-page-node-id="HpW2XDtxH7sRggtjj44Qxl">
@@ -172,6 +174,7 @@
         <button type="button" class="tab" data-view="compress" id="tabCompress" data-page-node-id="7p82sqSwmjTR9tgIX8pp9M">🗜️ 高效压缩</button>
         <button type="button" class="tab" data-view="sr" id="tabSr" data-page-node-id="PCRUF2B6zkGtQQ9XdyckAe">✨ 高清修复</button>
         <button type="button" class="tab" data-view="share" id="tabShare" data-page-node-id="sHareTabTop2026en01">📲 扫码分享</button>
+        <button type="button" class="tab" data-view="page" id="tabPage" data-page-node-id="pAgeTabTop2026en01">🌐 文件变网页</button>
     <button type="button" class="tab" data-view="dw" id="tabDw" data-page-node-id="N9RTDjwHrnMXbYAvIzTCdO">🧽 图片去水印</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe" data-page-node-id="rSafkSMroVCsnxtt3WE7up">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden data-page-node-id="bOI6hQq4T7ILw9Ning6dVw">🧲 种子</button>
@@ -957,6 +960,52 @@
       .share-item .st.warn { color:#d97706; }
       .share-item .st.gone { color:var(--text-mute,#6b7280); text-decoration:line-through; }
       .share-hist-empty { color:var(--text-mute,#6b7280); font-size:12.5px; padding:6px 2px; }
+    </style>
+  </section>
+
+  <!-- 2026-09-30 新增：文件变网页 —— 与「扫码分享」同级的独立入口。
+       区别：扫码分享给的是**链接**（对方要联网）；这里给的是一个**文件**（离线也能看，可直接发人）。
+       服务端见 server/routers/pagetool.py。 -->
+  <section id="pageView" class="panel" hidden aria-labelledby="pageTitle">
+    <h2 id="pageTitle" class="guide-title">🌐 文件变网页</h2>
+
+    <p class="uc-tip" style="color:var(--text-mute,#6b7280);font-size:12.5px;">
+      选本地文件（图片 / PDF / 视频 / 音乐…可多选）→ 生成<b>一个 HTML 页面</b>。
+      文件内容直接内嵌在页面里，<b>不依赖任何外部资源</b>：双击就能打开，也能直接发给别人，离线照样能看。
+      <br><span style="color:var(--brand,#2563eb);">提示：图片 / PDF / 音频效果最好；视频需是 H.264 / VP9 / AV1 编码（MKV、MPEG-4 Visual 等在浏览器里播不了）。</span>
+    </p>
+
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="pageAddBtn">选择文件</button>
+      <label class="share-expire" for="pageTitleInput"
+             title="显示在网页顶部的标题；留空则用第一个文件名">
+        页面标题
+        <input type="text" id="pageTitleInput" placeholder="可选" style="padding:5px 8px;border:1px solid var(--border,#d1d5db);border-radius:8px;background:transparent;color:inherit;font-size:12.5px;width:190px;" />
+      </label>
+      <input type="file" id="pageFileInput" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="pageClearBtn" hidden>清空</button>
+      <span class="uc-count" id="pageCount">尚未选择文件</span>
+    </div>
+
+    <div id="pageQueue"></div>
+
+    <div class="uc-toolbar" style="margin-top:6px;">
+      <button type="button" class="btn btn-primary" id="pageBuildBtn" disabled>生成网页</button>
+      <span class="uc-count" id="pageHint"></span>
+    </div>
+
+    <div id="pageResult" hidden>
+      <div class="share-url-row" style="margin-top:14px;">
+        <input type="text" id="pagePathInput" readonly />
+        <button type="button" class="btn btn-ghost" id="pageCopyPathBtn">复制路径</button>
+        <button type="button" class="btn btn-ghost" id="pageOpenBtn">用浏览器打开</button>
+      </div>
+      <div class="share-hint" id="pageResultHint"></div>
+    </div>
+
+    <style>
+      #pageQueue { margin-top: 10px; }
+      .page-tip { color: var(--text-mute,#6b7280); font-size: 12.5px; padding: 6px 2px; }
     </style>
   </section>
 

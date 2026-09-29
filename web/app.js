@@ -792,6 +792,23 @@
     shareHistCount: $('shareHistCount'),
     shareHistRefreshBtn: $('shareHistRefreshBtn'),
     shareHistList: $('shareHistList'),
+    // 文件变网页（page* 前缀，独立 tab；2026-09-30 新增：本机文件 → 自包含 HTML 页面）
+    tabPage: $('tabPage'),
+    pageView: $('pageView'),
+    sTabPage: $('sTabPage'),
+    pageAddBtn: $('pageAddBtn'),
+    pageTitleInput: $('pageTitleInput'),
+    pageFileInput: $('pageFileInput'),
+    pageClearBtn: $('pageClearBtn'),
+    pageCount: $('pageCount'),
+    pageQueue: $('pageQueue'),
+    pageBuildBtn: $('pageBuildBtn'),
+    pageHint: $('pageHint'),
+    pageResult: $('pageResult'),
+    pagePathInput: $('pagePathInput'),
+    pageCopyPathBtn: $('pageCopyPathBtn'),
+    pageOpenBtn: $('pageOpenBtn'),
+    pageResultHint: $('pageResultHint'),
 
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
     tabSr: $('tabSr'),
@@ -5260,6 +5277,246 @@
     srEnsurePolling();
     wait.forEach(it => srStartOne(it).catch(() => {}));
   });
+
+  // ===== 文件变网页（2026-09-30 新增）：本机文件 → 一个自包含 HTML 页面 =====
+  // 与「扫码分享」互补，不是替代：那边给的是**链接**（对方要联网、文件留在分享节点上），
+  // 这边给的是一个**文件**（离线也能看，发出去就归对方）。因此刻意放在同级入口。
+  // 接入方式也保持一致：桌面端走原生框拿路径（免上传），网页端走上传
+  // （服务端把页面内容回传，浏览器直接下载——服务端的磁盘路径对访客没有意义）。
+  const pgDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
+  const PG_MAX_ITEM = 80 * 1024 * 1024;
+  const PG_MAX_TOTAL = 200 * 1024 * 1024;
+  const pgState = { paths: [], files: [], busy: false, pageHtml: '', outName: '' };
+
+  const pgHuman = (n) => (n < 1024 ? n + ' B'
+    : (n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB'));
+
+  const PG_EXT_KIND = {
+    image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'svg'],
+    audio: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'amr'],
+    video: ['mp4', 'm4v', 'webm', 'ogv', 'mov', 'mkv', 'avi', 'flv', 'ts', 'wmv', '3gp'],
+    pdf: ['pdf'],
+    text: ['txt', 'md', 'log', 'csv', 'json', 'xml', 'yaml', 'yml'],
+  };
+  const pgKindOf = (name) => {
+    const m = /\.([A-Za-z0-9]+)$/.exec(String(name || ''));
+    const e = m ? m[1].toLowerCase() : '';
+    for (const k of Object.keys(PG_EXT_KIND)) if (PG_EXT_KIND[k].indexOf(e) >= 0) return k;
+    return 'file';
+  };
+  const PG_KIND_LABEL = { image: '图片', audio: '音频', video: '视频', pdf: 'PDF', text: '文本', file: '文件' };
+
+  const pgItems = () => (pgState.paths.length
+    ? pgState.paths.map((p) => ({ name: String(p).split('/').pop(), size: 0 }))
+    : pgState.files.map((f) => ({ name: f.name, size: f.size })));
+
+  const pgTotal = () => pgState.files.reduce((s, f) => s + (f.size || 0), 0);
+
+  const pgSetHint = (text, color) => {
+    if (!el.pageHint) return;
+    el.pageHint.textContent = text || '';
+    el.pageHint.style.color = color || '';
+  };
+
+  function pgRender() {
+    if (!el.pageQueue) return;
+    const items = pgItems();
+    el.pageQueue.innerHTML = items.map((it, i) => {
+      const kind = pgKindOf(it.name);
+      const heavy = it.size > PG_MAX_ITEM;
+      return '<div class="share-item" data-i="' + i + '">'
+        + '<span class="sz">' + PG_KIND_LABEL[kind] + '</span>'
+        + '<span class="nm">' + escHtml(it.name) + '</span>'
+        + '<span class="sz"' + (heavy ? ' style="color:#dc2626"' : '') + '>'
+        + (it.size ? pgHuman(it.size) : '') + (heavy ? ' 超限' : '') + '</span>'
+        + '<button type="button" class="btn btn-ghost" data-act="del">移除</button>'
+        + '</div>';
+    }).join('');
+    const n = items.length;
+    const total = pgTotal();
+    el.pageCount.textContent = n
+      ? ('已选 ' + n + ' 个文件' + (total ? '（合计 ' + pgHuman(total) + '）' : ''))
+      : '尚未选择文件';
+    if (el.pageClearBtn) el.pageClearBtn.hidden = !n;
+    if (el.pageBuildBtn) el.pageBuildBtn.disabled = !n || pgState.busy;
+    if (el.pageResult && !pgState.outName) el.pageResult.hidden = true;
+  }
+
+  function pgAddPaths(list) {
+    (list || []).forEach((p) => { if (p && pgState.paths.indexOf(p) < 0) pgState.paths.push(p); });
+    pgState.files = [];   // 两种来源不混用，避免「路径 + 上传文件」同时进一个页面时语义混乱
+    pgSetHint('');
+    pgRender();
+  }
+
+  function pgAddFiles(files) {
+    Array.from(files || []).forEach((f) => pgState.files.push(f));
+    pgState.paths = [];
+    pgSetHint('');
+    pgRender();
+  }
+
+  function pgReset() {
+    pgState.paths = []; pgState.files = []; pgState.pageHtml = ''; pgState.outName = '';
+    if (el.pageResult) el.pageResult.hidden = true;
+    if (el.pagePathInput) el.pagePathInput.value = '';
+    pgSetHint('');
+    pgRender();
+  }
+
+  // 前端先挡一道：超限的请求不必发出去（后端也有同样的闸门，见 pagetool.MAX_*）
+  function pgTooBig() {
+    const items = pgItems();
+    const over = items.filter((it) => it.size > PG_MAX_ITEM);
+    if (over.length) return '「' + over[0].name + '」超过单文件 ' + pgHuman(PG_MAX_ITEM) + ' 上限，请先压缩。';
+    const total = pgTotal();
+    if (total > PG_MAX_TOTAL) {
+      return '合计 ' + pgHuman(total) + ' 超过 ' + pgHuman(PG_MAX_TOTAL) + ' 上限，请分批生成（内嵌会整体膨胀约 33%）。';
+    }
+    return '';
+  }
+
+  function pgShowResult(data, isUpload) {
+    pgState.outName = data.out_name || '';
+    pgState.pageHtml = data.page_html || '';
+    if (el.pageResult) el.pageResult.hidden = false;
+    if (el.pagePathInput) {
+      el.pagePathInput.value = isUpload ? (data.out_name || '') : (data.out_path || '');
+    }
+    if (el.pageCopyPathBtn) el.pageCopyPathBtn.hidden = !!isUpload;
+    if (el.pageOpenBtn) el.pageOpenBtn.textContent = isUpload ? '下载网页（HTML）' : '用浏览器打开';
+    const saved = isUpload ? (data.out_name + '（已存入浏览器下载目录）') : (data.out_path || '');
+    const kinds = (data.items || []).map((x) => PG_KIND_LABEL[x.kind] || '文件');
+    let extra = '';
+    if (kinds.indexOf('视频') >= 0) {
+      extra = ' ⚠️ 页面里的视频需为 H.264 / VP9 / AV1 编码，否则浏览器无法播放（MKV、MPEG-4 Visual 等都不行）。';
+    }
+    if (el.pageResultHint) {
+      el.pageResultHint.textContent = '已生成 ' + pgHuman(data.html_size || 0) + '（源 '
+        + pgHuman(data.source_size || 0) + '，膨胀 ' + (data.inflated || 1) + ' 倍）→ ' + saved
+        + '。相对路径引用的资源已全部内嵌，单文件即可分发。' + extra;
+    }
+    pgSetHint('生成完成', '#16a34a');
+  }
+
+  // 网页端：页面内容随响应回来，用 Blob 存到访客本机。
+  // ⚠️ 这条兜底只在**真浏览器**里用；桌面壳 WKWebView 不支持 <a download>（会把主框架
+  //    导航到 blob:，整个界面被页面替换，2026-09-21 扫码分享踩过），所以桌面端不给这个按钮。
+  function pgDownloadHtml() {
+    if (!pgState.pageHtml) return;
+    const blob = new Blob([pgState.pageHtml], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = pgState.outName || '页面.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  async function pgBuild() {
+    if (pgState.busy) return;
+    const items = pgItems();
+    if (!items.length) { pgSetHint('请先选择文件', '#dc2626'); return; }
+    const bad = pgTooBig();
+    if (bad) { pgSetHint(bad, '#dc2626'); return; }
+
+    const isUpload = !pgState.paths.length;
+    const title = (el.pageTitleInput && el.pageTitleInput.value || '').trim();
+    pgState.busy = true;
+    if (el.pageBuildBtn) el.pageBuildBtn.disabled = true;
+    pgSetHint('正在生成…');
+
+    try {
+      let data;
+      if (!isUpload) {
+        data = await request('/api/pagetool/build', {
+          method: 'POST',
+          body: JSON.stringify({ paths: pgState.paths, title: title }),
+          timeout: 300000,
+        });
+      } else {
+        const fd = new FormData();
+        pgState.files.forEach((f) => fd.append('files', f, f.name));
+        fd.append('title', title);
+        data = await request('/api/pagetool/build-upload', {
+          method: 'POST', body: fd, timeout: 300000,
+        });
+      }
+      if (!data || !data.ok) throw { message: (data && data.msg) || '生成失败' };
+      pgShowResult(data, isUpload);
+    } catch (e) {
+      pgSetHint((e && e.message) || '生成失败，请重试', '#dc2626');
+      if (e && e.hint) pgSetHint(((e && e.message) || '生成失败') + ' ' + e.hint, '#dc2626');
+    } finally {
+      pgState.busy = false;
+      if (el.pageBuildBtn) el.pageBuildBtn.disabled = pgItems().length === 0;
+    }
+  }
+
+  if (el.pageAddBtn) {
+    el.pageAddBtn.addEventListener('click', () => {
+      if (pgDesktopNative()) {
+        // 铁律：必须显式传 'any'，否则原生框按视频/音频过滤，图片和 PDF 会被置灰
+        window.VDL.desktop.chooseFiles('any')
+          .then((list) => { if (list && list.length) pgAddPaths(list); })
+          .catch(() => {});
+      } else {
+        el.pageFileInput.click();
+      }
+    });
+  }
+  if (el.pageFileInput) {
+    el.pageFileInput.addEventListener('change', () => {
+      const fs = el.pageFileInput.files;
+      if (fs && fs.length) pgAddFiles(fs);
+      el.pageFileInput.value = '';   // 清空以便同一个文件能再次选择
+    });
+  }
+  if (el.pageQueue) {
+    el.pageQueue.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const row = btn.closest('.share-item');
+      const i = row ? +row.dataset.i : -1;
+      if (i < 0) return;
+      if (pgState.paths.length) pgState.paths.splice(i, 1);
+      else pgState.files.splice(i, 1);
+      pgRender();
+    });
+  }
+  if (el.pageClearBtn) el.pageClearBtn.addEventListener('click', pgReset);
+  if (el.pageBuildBtn) el.pageBuildBtn.addEventListener('click', () => { pgBuild(); });
+  if (el.pageCopyPathBtn) {
+    el.pageCopyPathBtn.addEventListener('click', () => {
+      const v = el.pagePathInput ? el.pagePathInput.value : '';
+      if (!v) return;
+      el.pagePathInput.select();
+      try { document.execCommand('copy'); } catch (e2) {}
+      const btn = el.pageCopyPathBtn;
+      btn.textContent = '已复制';
+      setTimeout(() => { btn.textContent = '复制路径'; }, 1600);
+    });
+  }
+  if (el.pageOpenBtn) {
+    el.pageOpenBtn.addEventListener('click', () => {
+      // 网页端：没有本机路径，改为把页面内容存到访客本机
+      if (!pgState.paths.length) { pgDownloadHtml(); return; }
+      const p = el.pagePathInput ? el.pagePathInput.value : '';
+      if (!p) return;
+      // file:// 交给系统默认浏览器打开；桌面壳里 window.open 会被静默拦截（见 desktop_launcher.open_external）
+      const fileUrl = 'file://' + p.split('/').map(encodeURIComponent).join('/');
+      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
+      if (typeof openExt === 'function') {
+        Promise.resolve(openExt(fileUrl)).then((ok) => { if (!ok) window.open(fileUrl, '_blank'); })
+          .catch(() => { window.open(fileUrl, '_blank'); });
+        return;
+      }
+      window.open(fileUrl, '_blank');
+    });
+  }
+  pgRender();
 
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
   const sbDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
@@ -15231,6 +15488,7 @@ el.dwVidPlayer.hidden = true;
     const isCp = view === 'compress';   // 高效压缩（2026-09-11 新增）
     const isSr = view === 'sr';         // 高清修复（2026-09-12 新增）
     const isShare = view === 'share';   // 扫码分享（2026-09-20 新增）
+    const isPage = view === 'page';     // 文件变网页（2026-09-30 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
@@ -15242,7 +15500,7 @@ el.dwVidPlayer.hidden = true;
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -15254,6 +15512,7 @@ el.dwVidPlayer.hidden = true;
     if (el.compressView) el.compressView.hidden = !isCp;
     if (el.srView) el.srView.hidden = !isSr;
     if (el.shareView) el.shareView.hidden = !isShare;
+    if (el.pageView) el.pageView.hidden = !isPage;
     el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
     // ★ 离开去水印视图时停掉所有播放器：只 hidden 不会 pause，切到别的页面声音还会继续。
@@ -15268,7 +15527,7 @@ el.dwVidPlayer.hidden = true;
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isSt && !isBridge && !isProfileGroup);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -15279,13 +15538,14 @@ el.dwVidPlayer.hidden = true;
     if (el.tabCompress) el.tabCompress.classList.toggle('is-active', isCp);
     if (el.tabSr) el.tabSr.classList.toggle('is-active', isSr);
     if (el.tabShare) el.tabShare.classList.toggle('is-active', isShare);
+    if (el.tabPage) el.tabPage.classList.toggle('is-active', isPage);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfileGroup);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabHome) el.tabHome.classList.toggle('is-active', isHome);
     if (el.sTabHome) el.sTabHome.classList.toggle('is-active', isHome);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isShare && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -15297,6 +15557,7 @@ el.dwVidPlayer.hidden = true;
     if (el.sTabCompress) el.sTabCompress.classList.toggle('is-active', isCp);
     if (el.sTabSr) el.sTabSr.classList.toggle('is-active', isSr);
     if (el.sTabShare) el.sTabShare.classList.toggle('is-active', isShare);
+    if (el.sTabPage) el.sTabPage.classList.toggle('is-active', isPage);
     if (el.sTabProfile) el.sTabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabProfilePurchases) el.sTabProfilePurchases.classList.toggle('is-active', isProfilePurchases);
     if (el.sTabProfileCredits) el.sTabProfileCredits.classList.toggle('is-active', isProfileCredits);
@@ -15780,6 +16041,7 @@ el.dwVidPlayer.hidden = true;
   if (el.tabCompress) el.tabCompress.addEventListener('click', () => switchView('compress'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabSr) el.tabSr.addEventListener('click', () => switchView('sr'));
+  if (el.tabPage) el.tabPage.addEventListener('click', () => switchView('page'));   // 文件变网页（2026-09-30）
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
@@ -15800,6 +16062,7 @@ el.dwVidPlayer.hidden = true;
     [el.sTabCompress, 'compress'],
     [el.sTabSr, 'sr'],
     [el.sTabShare, 'share'],   // 扫码分享（2026-09-20 新增）
+    [el.sTabPage, 'page'],     // 文件变网页（2026-09-30 新增）
     [el.sTabSubtitle, 'subtitle'],
     [el.sTabProfile, 'profile'],
     [el.sTabProfilePurchases, 'profile_purchases'],
