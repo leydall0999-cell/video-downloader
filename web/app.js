@@ -495,6 +495,12 @@
     dwImgRadiusField: $('dwImgRadiusField'),
     // 去水印放大弹窗
     dwImgModal: $('dwImgModal'),
+    // 结果预览灯箱 + 重新加工
+    dwResultLightbox: $('dwResultLightbox'),
+    dwResultLightboxImg: $('dwResultLightboxImg'),
+    dwResultLightboxCap: $('dwResultLightboxCap'),
+    dwResultLightboxClose: $('dwResultLightboxClose'),
+    dwImgRedo: $('dwImgRedo'),
     dwModalClose: $('dwModalClose'),
     dwModalDone: $('dwModalDone'),
     dwModalImg: $('dwModalImg'),
@@ -2943,6 +2949,23 @@
     });
   };
   dwBindView(el.dwImgPreview, el.dwImgCanvas, { get value() { return dwZoom; }, set value(v) { dwZoom = v; } }, 'preview');
+
+  // 触控板捏合（Chrome 上是 ctrlKey+wheel）默认会缩放整个页面——白色弹窗框会跟着一起变大。
+  // 在去水印区域统一拦截：捏合一律转成「只放大图片」（2026-09-29 用户反馈）。
+  const dwPinchToZoom = (target) => (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    // img/canvas 上的 wheel 已由 dwBindView 处理过，避免双重缩放
+    if (e.target === el.dwImgPreview || e.target === el.dwImgCanvas || e.target === el.dwImgSvg) return;
+    if (target === 'modal' && (e.target === el.dwModalImg || e.target === el.dwModalCanvas || e.target === el.dwModalSvg)) return;
+    const zObj = target === 'modal'
+      ? { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }
+      : { get value() { return dwZoom; }, set value(v) { dwZoom = v; } };
+    zObj.value = e.deltaY < 0 ? Math.min(5, zObj.value + 0.2) : Math.max(1, zObj.value - 0.2);
+    dwApplyZoom(target);
+  };
+  el.dwImgModal.addEventListener('wheel', dwPinchToZoom('modal'), { passive: false });
+  if (el.dwPreviewWrap) el.dwPreviewWrap.addEventListener('wheel', dwPinchToZoom('preview'), { passive: false });
   dwBindView(el.dwModalImg, el.dwModalCanvas, { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }, 'modal');
 
   // 滚动时叠加层必须重新跟随图片位置，否则选区会“跑”
@@ -3099,6 +3122,31 @@
     }
   };
   el.dwImgBtn.addEventListener('click', startDwImage);
+
+  // 结果预览灯箱：点「原图 / 处理后」放大查看，判断效果；不行就点「重新加工」回去调整选区
+  const dwOpenResultLightbox = (src, cap) => {
+    if (!src) return;
+    el.dwResultLightboxImg.src = src;
+    el.dwResultLightboxCap.textContent = cap;
+    el.dwResultLightbox.hidden = false;
+    document.body.style.overflow = 'hidden';
+  };
+  const dwCloseResultLightbox = () => {
+    el.dwResultLightbox.hidden = true;
+    document.body.style.overflow = '';
+  };
+  el.dwImgOrig.addEventListener('click', () => dwOpenResultLightbox(el.dwImgOrig.src, '原图'));
+  el.dwImgOut.addEventListener('click', () => dwOpenResultLightbox(el.dwImgOut.src, '处理后'));
+  el.dwResultLightboxClose.addEventListener('click', dwCloseResultLightbox);
+  el.dwResultLightbox.addEventListener('click', (e) => {
+    if (e.target === el.dwResultLightbox || e.target.classList.contains('dw-modal-backdrop')) dwCloseResultLightbox();
+  });
+  if (el.dwImgRedo) el.dwImgRedo.addEventListener('click', () => {
+    el.dwImgResult.hidden = true;
+    dwCloseResultLightbox();
+    el.dwImgStatus.textContent = '选区仍保留，可在图上增减框后重新点「开始处理」';
+    if (el.dwImgPreview.scrollIntoView) el.dwImgPreview.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
   // 选 AI 引擎时隐藏 OpenCV 专属的「方法 / 半径」（AI 走 LaMa，不依赖这两个参数）
   if (el.dwImgEngine) {
     const dwSyncEngineUi = () => {

@@ -773,6 +773,26 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 }
 .dw-modal-footer .dw-selinfo { margin-left: 0; }
 
+/* 结果预览灯箱（点击原图/处理后查看大图） */
+.dw-lightbox-inner {
+  position: relative; z-index: 1;
+  max-width: min(94vw, 1100px); max-height: 92vh;
+  display: flex; flex-direction: column; align-items: center; gap: .5rem;
+}
+.dw-lightbox-inner img {
+  max-width: 100%; max-height: 86vh; object-fit: contain;
+  display: block; border-radius: 10px; background: transparent;
+}
+.dw-lightbox-close {
+  position: absolute; top: -16px; right: -16px; z-index: 2;
+  width: 34px; height: 34px; border: 0; border-radius: 999px;
+  background: rgba(255,255,255,.92); color: #111827; font-size: 1.05rem;
+  cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center;
+}
+.dw-lightbox-close:hover { background: #fff; }
+.dw-lightbox-cap { color: #fff; font-size: .85rem; text-shadow: 0 1px 4px rgba(0,0,0,.65); }
+
 /* 图片模式两栏布局 */
 .dw-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 1.2rem; align-items: start; }
 .dw-main { min-width: 0; }
@@ -786,6 +806,8 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .dw-compare { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .dw-compare > div { display: flex; flex-direction: column; gap: .35rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: .55rem; }
 .dw-compare img { width: 100%; height: auto; max-height: 300px; object-fit: contain; display: block; margin: 0 auto; border: 0; border-radius: var(--radius-sm); background: #0b0d12; }
+.dw-compare img { cursor: zoom-in; }
+.dw-result-actions { display: flex; gap: .6rem; align-items: center; }
 .dw-cap { font-size: .78rem; color: var(--text-mute); }
 
 @media (max-width: 760px) {

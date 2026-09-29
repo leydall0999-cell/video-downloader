@@ -831,10 +831,23 @@
       </div>
       <div class="dw-result" id="dwImgResult" hidden>
         <div class="dw-compare">
-          <div><span class="dw-cap">原图</span><img id="dwImgOrig" alt="原图" /></div>
-          <div><span class="dw-cap">处理后</span><img id="dwImgOut" alt="处理后" /></div>
+          <div><span class="dw-cap">原图（点击预览）</span><img id="dwImgOrig" alt="原图" /></div>
+          <div><span class="dw-cap">处理后（点击预览）</span><img id="dwImgOut" alt="处理后" /></div>
         </div>
-        <a class="btn btn-accent btn-sm" id="dwImgDownload" download>下载结果</a>
+        <div class="dw-result-actions">
+          <a class="btn btn-accent btn-sm" id="dwImgDownload" download>下载结果</a>
+          <button type="button" class="btn btn-sm" id="dwImgRedo" title="效果不满意？回到编辑器调整选区后重新处理">↻ 重新加工</button>
+        </div>
+      </div>
+
+      <!-- 结果预览灯箱：点击原图/处理后大图查看 -->
+      <div id="dwResultLightbox" class="dw-modal" hidden>
+        <div class="dw-modal-backdrop"></div>
+        <div class="dw-lightbox-inner">
+          <button type="button" class="dw-lightbox-close" id="dwResultLightboxClose" aria-label="关闭">✕</button>
+          <img id="dwResultLightboxImg" alt="结果预览" />
+          <div class="dw-lightbox-cap" id="dwResultLightboxCap"></div>
+        </div>
       </div>
 
       <!-- 图片去水印放大弹窗（灯箱） -->
