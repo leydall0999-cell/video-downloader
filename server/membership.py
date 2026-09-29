@@ -61,6 +61,7 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "batch_material": 1000,   # 批量下载 / 日（会员，未接入）
     "matting": 500,           # 本地一键抠图 / 日（会员）—— 2026-09-13 起配额墙；云端火山抠图走积分不计此配额
     "cloud": 200,             # 云端算力（网页版转码/拼接/去水印/字幕）/ 日（会员）—— 2026-09-29 对齐（App 本地算力不消耗）
+    "app_compute": 200,       # App 本地重算力（转码/拼接/压缩/超分）/ 日（会员）—— 2026-09-29 用户定档：免费 5 次/日
     # 评论 / 数据 / 字幕批量：不限（不进 daily_usage 计配额）
 }
 # 免费档每日配额（2026-09-06 定稿：免费下载 10 次/日；原画/批量不开放）
@@ -70,6 +71,7 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "batch_material": 0,      # 免费不开放批量
     "matting": 8,             # 免费本地抠图 8 次/日；云端火山抠图走积分，不占此配额
     "cloud": 3,               # 云端算力免费 3 次/日（网页版专用键，账号级两端共享）—— 2026-09-29 对齐
+    "app_compute": 5,         # App 本地算力免费 5 次/日（转码/拼接/压缩/超分，账号级上云共享）—— 2026-09-29 用户定档
     "subtitle": 2,            # 免费本地字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
 }
 # 字幕提取(subtitle) 自 2026-09-13 起改为免费 2 次/日（会员无限），不再列入不限配额
@@ -829,6 +831,7 @@ class MembershipStore:
             du["subtitle_batch"] = 0
             du["image_translate"] = 0
             du["matting"] = 0
+            du["app_compute"] = 0
 
     def quota_state(self, resource: str) -> dict[str, Any]:
         """查询某资源的当日用量/上限（按当前档位：免费 or 会员）。unlimited 恒放行。"""
@@ -862,7 +865,10 @@ class MembershipStore:
             return {"ok": True, "resource": resource, "unlimited": q.get("unlimited", False)}
         if not q["allowed"]:
             if q.get("tier") == "free":
-                return {"ok": False, "error": f"今日免费解析额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
+                if resource == "download":   # 历史文案保持不变（test_membership 钉住）
+                    return {"ok": False, "error": f"今日免费下载额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
+                            "resource": resource, "code": "MEMBER_QUOTA"}
+                return {"ok": False, "error": f"今日免费处理额度已用尽（{q['limit']}/日）— 开通会员可解锁 {q.get('member_limit', 0)} 次/日",
                         "resource": resource, "code": "MEMBER_QUOTA"}
             return {"ok": False, "error": f"{resource} 今日配额已用尽（{q['limit']}/日）", "resource": resource,
                     "code": "MEMBER_QUOTA"}

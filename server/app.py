@@ -759,6 +759,52 @@ def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
         quota_lock=_convert_quota_lock, label="转换",
     )
 
+
+# ---- App 本地算力账号级每日配额（2026-09-29 用户定档）：免费 5 次/日，会员 200 次/日 ---- #
+# 覆盖 App 本地重算力功能：转码（含免重传重转/音乐转换）/视频拼接/压缩/超分。
+# 与网页云端算力（resource="cloud"）同引擎：按账号 daily_usage 记账 + 异步上云共享。
+# 任务成功创建才计费；会员引擎异常 fail-open。紧急停用：VDL_APP_COMPUTE_QUOTA_OFF=true。
+_APP_COMPUTE_QUOTA_OFF = os.environ.get("VDL_APP_COMPUTE_QUOTA_OFF", "false").strip().lower() == "true"
+
+
+def app_compute_gate(request: Request) -> dict:
+    """本地算力配额预检（不计数）。免费 5/日，超限 402；引擎异常 fail-open。"""
+    if _APP_COMPUTE_QUOTA_OFF:
+        return {"mode": "off"}
+    try:
+        from user_membership import current_member_store  # 局部导入，避免 import 顺序问题
+        store = current_member_store(request)
+        q = store.quota_state("app_compute")
+        if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
+            return {"mode": "local", "store": store, "remaining": q.get("remaining")}
+        if q.get("tier") == "free":
+            detail = (f"今日免费处理额度已用尽（{q['limit']}/日），"
+                      f"开通会员可解锁 {q.get('member_limit', 0)} 次/日")
+        else:
+            detail = f"今日处理配额已用尽（{q['limit']}/日）"
+        raise HTTPException(status_code=402, detail=detail)
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
+        return {"mode": "local", "store": None}
+
+
+def app_compute_count(request: Request, gate: dict, n: int = 1) -> None:
+    """任务成功创建后的计数（失败只记日志，不回滚已建任务）。"""
+    if gate.get("mode") in ("off",) or n <= 0:
+        return
+    try:
+        store = gate.get("store")
+        if store is None:
+            from user_membership import current_member_store
+            store = current_member_store(request)
+        store.use_daily("app_compute", n=n)
+    except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
+        try:
+            logger.warning("[app-compute-quota] 计数失败（忽略）: %s", str(e)[:160])
+        except Exception:  # noqa: BLE001
+            pass
+
 def _host_of(url: str) -> str:
     """从链接取出主机名（去掉 www./m. 前缀），解析失败返回空串。"""
     try:
@@ -3637,6 +3683,10 @@ from routers import membership as _membership_rtr
 from routers import cloud_account as _cloud_rtr
 app.include_router(_membership_rtr.router)
 app.include_router(_cloud_rtr.router)
+from routers import payment as _payment_rtr
+app.include_router(_payment_rtr.router)
+from routers import extension as _extension_rtr
+app.include_router(_extension_rtr.router)
 from routers import quota as _quota_rtr
 app.include_router(_quota_rtr.router)
 from routers import auth as _auth_rtr

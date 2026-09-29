@@ -18,6 +18,7 @@ router = APIRouter()
 @router.post("/api/convert")
 def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
@@ -37,6 +38,7 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
             "device_id": _device_of(request),   # 设备隔离：转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
+    app.app_compute_count(request, _gate)           # 任务成功创建才计费
     record_event("convert", {"target": target})
     return {
         "job_id": job_id,
@@ -103,6 +105,7 @@ def create_upload_convert(
     图片目标（png/jpg/webp/bmp/tiff）另用 image_quality/resize/flatten_alpha。
     """
     app._check_rate_limit(request)
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
@@ -153,6 +156,7 @@ def create_upload_convert(
                         resolution, bitrate, audio, rotate, remux, src_is_temp=True,
                         audio_bitrate=audio_bitrate, image_quality=image_quality,
                         resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
+    app.app_compute_count(request, _gate)           # 任务成功创建才计费
     return {
         "job_id": job_id,
         "status": "running",
@@ -174,8 +178,11 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
                         to_library, device_id, src_name="", src_is_temp=True,
                         audio_bitrate: str = "", image_quality: int = 0,
                         resize: int = 0, flatten_alpha: bool = True,
-                        is_image: bool = False) -> tuple:
-    """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
+                        is_image: bool = False, request=None) -> tuple:
+    """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。
+    request 传入时执行本地算力账号级配额（免费 5 次/日，超限 402）。"""
+    if request is not None:
+        _gate = app.app_compute_gate(request)
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
     out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
@@ -197,6 +204,8 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
                         resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp,
                         audio_bitrate=audio_bitrate, image_quality=image_quality,
                         resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
+    if request is not None:
+        app.app_compute_count(request, _gate)   # 任务成功创建才计费
     return job_id, out_path.name
 
 
@@ -250,7 +259,7 @@ def convert_local_api(payload: LocalConvertRequest, request: app.Request) -> dic
         _device_of(request), src_name=resolved.name, src_is_temp=False,
         audio_bitrate=payload.audio_bitrate, image_quality=payload.image_quality,
         resize=payload.resize, flatten_alpha=payload.flatten_alpha,
-        is_image=payload.is_image,
+        is_image=payload.is_image, request=request,
     )
     return {
         "job_id": job_id,
@@ -433,7 +442,8 @@ def reconvert_from_source(
     new_job_id, out_name = _submit_convert_job(
         src_path, target, "original", "", True, 0, False,
         to_library, _device_of(request), src_name=old.get("src_name") or src_path.name,
-        audio_bitrate=audio_bitrate, src_is_temp=True)   # 桌面端无 TTL 清理循环，转完即删防泄漏
+        audio_bitrate=audio_bitrate, src_is_temp=True,   # 桌面端无 TTL 清理循环，转完即删防泄漏
+        request=request)
     return {
         "job_id": new_job_id,
         "status": "running",
@@ -620,7 +630,8 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
 
 
 def _create_concat_job(segs, out_format, out_name, to_library, audio_only, request):
-    """为 /api/concat 与 /api/concat/local 共用的 job 创建逻辑。"""
+    """为 /api/concat 与 /api/concat/local 共用的 job 创建逻辑（含本地算力配额）。"""
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     if len(segs) < 2:
         raise app.HTTPException(status_code=400, detail="至少需要 2 个片段")
     probes = [_probe_streams(p) for p in segs]

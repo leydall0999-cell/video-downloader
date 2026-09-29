@@ -715,6 +715,7 @@ class LocalSrRequest(BaseModel):
 def sr_local(payload: LocalSrRequest, request: app.Request) -> dict:
     """桌面版专用：本机绝对路径直接处理（免上传）。"""
     app._check_rate_limit(request)
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     from .convert import _resolve_safe_local_path
     resolved = _resolve_safe_local_path(payload.local_path)
@@ -725,6 +726,7 @@ def sr_local(payload: LocalSrRequest, request: app.Request) -> dict:
     _discard_job(payload.replaces)     # 重新修复：先回收上一轮产物，再登记新任务
     job_id = _submit_sr(str(resolved), mode, scale, _device_of(request),
                         src_name=resolved.name, src_is_temp=False)
+    app.app_compute_count(request, _gate)           # 任务成功创建才计费
     record_event("sr_submit", {"mode": mode, "scale": scale, "src": "local"})
     return {"job_id": job_id, "status": "running", "mode": mode, "scale": scale,
             "quota": {"subscribed": subscribed, "free_used": free_used,
@@ -750,6 +752,7 @@ def sr_video_local(payload: LocalSrVideoRequest, request: app.Request) -> dict:
     与其让用户等 20 分钟拿到一个 2.6GB 的文件，不如一开始就讲清楚。
     """
     app._check_rate_limit(request)
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     from .convert import _resolve_safe_local_path
     resolved = _resolve_safe_local_path(payload.local_path)

@@ -466,6 +466,7 @@ def _submit_compress(src: str, level: str, device_id: str,
 def compress_local(payload: LocalCompressRequest, request: app.Request) -> dict:
     """桌面版专用：本机绝对路径直接压缩（免上传）。"""
     app._check_rate_limit(request)
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     from .convert import _resolve_safe_local_path
     resolved = _resolve_safe_local_path(payload.local_path)
@@ -480,6 +481,7 @@ def compress_local(payload: LocalCompressRequest, request: app.Request) -> dict:
     job_id = _submit_compress(str(resolved), level, _device_of(request),
                               src_name=resolved.name, src_is_temp=False,
                               codec=codec, output_format=output_format)
+    app.app_compute_count(request, _gate)           # 任务成功创建才计费
     record_event("compress_submit", {"level": level, "codec": codec,
                                      "output_format": output_format, "src": "local"})
     return {"job_id": job_id, "status": "running", "level": level,
@@ -501,6 +503,7 @@ def compress_finish(
 ) -> dict:
     """分片上传收尾（压缩专用）：合并分片 → 提交压缩 job。"""
     app._check_rate_limit(request)
+    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if not app.re.fullmatch(r"[0-9a-z]+", upload_id or "") or total <= 0 or total > 4096:
         raise app.HTTPException(status_code=400, detail="分片参数非法")
@@ -532,6 +535,7 @@ def compress_finish(
     job_id = _submit_compress(str(save_path), level, _device_of(request),
                               src_name=filename, src_is_temp=True,
                               codec=codec, output_format=output_format)
+    app.app_compute_count(request, _gate)           # 任务成功创建才计费
     record_event("compress_submit", {"level": level, "codec": codec,
                                      "output_format": output_format, "src": "upload"})
     return {"job_id": job_id, "status": "running", "level": level,

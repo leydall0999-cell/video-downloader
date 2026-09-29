@@ -149,6 +149,26 @@ def test_free_quota_10_then_blocked():
     assert st.quota_state("batch_material")["allowed"] is False
     print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；原画/批量免费不开放")
 
+def test_app_compute_quota_free5_member200():
+    """app_compute（本地算力）：免费 5 次/日超限拒绝；会员 200 次/日；跨日重置。"""
+    cur = [T0]
+    st = _mkstore(tempfile.mkdtemp(), cur)
+    assert st.quota_state("app_compute")["limit"] == 5
+    for i in range(5):
+        assert st.use_daily("app_compute")["ok"] is True, f"第 {i+1} 次应放行"
+    r = st.use_daily("app_compute")
+    assert r["ok"] is False and r.get("code") == "MEMBER_QUOTA"
+    assert "免费" in r["error"] and "开通会员" in r["error"]
+    # 会员档 200/日（当日已用计数延续）
+    st.activate("download_month")
+    q = st.quota_state("app_compute")
+    assert q["tier"] == "member" and q["limit"] == 200 and q["used"] == 5
+    assert st.use_daily("app_compute")["ok"] is True
+    # 跨日惰性重置
+    cur[0] = T0 + 86400
+    assert st.quota_state("app_compute")["used"] == 0
+    print("✅ app_compute 免费 5/日超限拒、会员 200/日、跨日重置")
+
 def test_member_quota_upgrade_after_activation():
     """开通下载会员后 download 额度升到 1000/日，当日已用计数延续。"""
     cur = [T0]
@@ -254,6 +274,7 @@ if __name__ == "__main__":
         test_credit_spend_insufficient,
         test_permanent_credits_survive_expiry,
         test_free_quota_10_then_blocked,
+        test_app_compute_quota_free5_member200,
         test_member_quota_upgrade_after_activation,
         test_daily_quota_unlimited_and_unknown,
         test_daily_quota_reset_on_new_day,
