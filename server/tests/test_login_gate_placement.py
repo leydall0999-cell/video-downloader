@@ -127,6 +127,46 @@ def main():
     check("_notifyNeedLogin 先开弹窗、后写文案",
           0 <= i_open < i_msg, f"openAuthModal@{i_open} _authMsg@{i_msg}")
 
+    print("\n[G] 裸 XHR/fetch 直连受拦路径必须带登录 token（2026-09-29）")
+    # 服务端 _login_gate 按 Authorization 头判登录；request() 封装会自动带，
+    # 但散落的裸 XHR/fetch 必须手动带 authBearerHeaders()，否则已登录用户也被 401。
+    gated_literals = [
+        "/api/upload-chunk'",            # 分片上传本体（/abort 例外，收尾类放行）
+        "/api/upload-chunk/finish'",
+        "/api/convert/reconvert'",
+        "/api/compress/finish'",
+        "/api/share/upload_path'",
+        "/api/share/upload_file",
+        "/api/matting/model'",
+        "/api/matting/upload-model'",
+        "/api/matting/analyze'",
+        "/api/matting/blocks/split'",
+        "/api/matting/image'",
+        "/api/dw/ai/warmup'",
+        "/api/dw/video/thumbnail'",
+        "/api/dw/video/filmstrip",
+        "/api/commentary/preview/",
+    ]
+    lines = app_js.splitlines()
+    bad = []
+    for lit in gated_literals:
+        for idx, ln in enumerate(lines):
+            if lit not in ln:
+                continue
+            win = "\n".join(lines[max(0, idx - 3): idx + 9])
+            if re.search(r"authBearerHeaders\(\)|authBearerToken\(\)|setRequestHeader\('Authorization'", win):
+                continue
+            # 经「共享 headers 变量」注入的写法（如 dw/video filmstrip/thumbnail）：
+            # 变量本身是否带 token 由下一条「无裸 headers 变量」检查兜底。
+            if re.search(r"\bheaders[,}\s]", win):
+                continue
+            bad.append(f"L{idx + 1}:{lit.strip(chr(39))}")
+    check("受拦路径的裸请求附近都有 token 注入", not bad, f"缺 token：{bad}")
+    n_plain = sum(1 for ln in lines
+                  if ln.strip() == "const headers = { 'X-Device-Id': deviceId() };")
+    check("共享 headers 变量均已并入 token（无裸 X-Device-Id-only）", n_plain == 0,
+          f"裸 headers 变量 {n_plain} 处")
+
     print("")
     print("=========================================")
     print(f"  通过: {PASS}   失败: {FAIL}")

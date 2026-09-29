@@ -3,6 +3,18 @@
 (() => {
   'use strict';
 
+  // —— 登录 token 帮助函数（2026-09-29）——
+  // 服务端 _login_gate 按 Authorization 头判登录。request() 封装会自动带 token，
+  // 但散落的裸 XHR/fetch（分片上传/finish、reconvert、share、matting、commentary/preview）
+  // 必须手动带——否则**已登录用户**也会被自家门禁误拦 401。
+  function authBearerToken() {
+    try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token') || ''; } catch (_) { return ''; }
+  }
+  function authBearerHeaders() {
+    const t = authBearerToken();
+    return t ? { 'Authorization': 'Bearer ' + t } : {};
+  }
+
   // —— 原生 alert 全局降级为轻提示条（2026-09-27）——
   // WKWebView 把 JS alert 渲染成带「警告」标题的打断式弹窗，成功类消息（如「已保存到」）
   // 观感像出错，用户明确反馈不适。统一改为底部轻提示条；错误类文案自带「失败/错误」
@@ -1288,7 +1300,7 @@
     const base = `${window.VDL_API_BASE || ''}`;
     const SLICE = 32 * 1024 * 1024;
     const slice = file.size > SLICE ? file.slice(0, SLICE) : file;
-    const headers = { 'X-Device-Id': deviceId() };
+    const headers = { 'X-Device-Id': deviceId(), ...authBearerHeaders() };
     const tryOnce = async (payload, label) => {
       const fd = new FormData();
       fd.append('file', payload, file.name);
@@ -2628,6 +2640,7 @@
     xhr.open('POST', (endpoint || location.origin) + '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;   // 2 分钟单片超时（防后台 tab 限流/网络静默断网卡死）
     if (xhrs) xhrs.add(xhr);
     const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
@@ -2836,6 +2849,7 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
     xhr.addEventListener('load', () => {
       try {
@@ -3185,6 +3199,7 @@
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload-chunk/finish');
       xhr.setRequestHeader('X-Device-Id', deviceId());
+      { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
       xhr.timeout = 120000;
       xhr.addEventListener('load', () => {
         try {
@@ -3687,6 +3702,7 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;
     xhr.addEventListener('load', () => {
       try {
@@ -3721,7 +3737,7 @@
     form.append('target', item.target);
     form.append('audio_bitrate', item.audio_bitrate || '');
     form.append('to_library', item.toLibrary ? 'true' : 'false');
-    fetch('/api/convert/reconvert', { method: 'POST', body: form, headers: { 'X-Device-Id': deviceId() } })
+    fetch('/api/convert/reconvert', { method: 'POST', body: form, headers: { 'X-Device-Id': deviceId(), ...authBearerHeaders() } })
       .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
       .then(({ ok, status, data }) => {
         if (ok && data.job_id) {
@@ -4064,6 +4080,7 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;
     xhr.addEventListener('load', () => {
       try {
@@ -4437,6 +4454,7 @@
       item._xhrs.add(xhr);
       xhr.open('POST', location.origin + '/api/compress/finish');
       xhr.setRequestHeader('X-Device-Id', deviceId());
+      { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
       xhr.onload = () => {
         try { finishJob(JSON.parse(xhr.responseText)); }
         catch (_e) { item.status = 'failed'; item.errorMsg = '压缩请求解析失败'; cpRender(); reject(new Error(item.errorMsg)); }
@@ -4876,13 +4894,13 @@
         if (item.path) {
           r = await fetch('/api/share/upload_path', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
             body: JSON.stringify({ path: item.path, expire }),
           });
         } else {
           const fd = new FormData();
           fd.append('file', item.file, item.name);
-          r = await fetch('/api/share/upload_file?expire=' + expire, { method: 'POST', body: fd });
+          r = await fetch('/api/share/upload_file?expire=' + expire, { method: 'POST', body: fd, headers: authBearerHeaders() });
         }
         const d = await r.json();
         if (!r.ok || !d.ok) {
@@ -5639,7 +5657,7 @@
     el.matModel.addEventListener('change', () => {
       fetch('/api/matting/model', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
         body: JSON.stringify({ name: el.matModel.value }),
       })
         .then(r => r.json())
@@ -5710,7 +5728,7 @@
       const fd = new FormData();
       fd.append('file', file);
       fd.append('payload', JSON.stringify({ model: el.matModel && el.matModel.value }));
-      fetch('/api/matting/upload-model', { method: 'POST', body: fd })
+      fetch('/api/matting/upload-model', { method: 'POST', body: fd, headers: authBearerHeaders() })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {
           if (el.matUploadStatus) el.matUploadStatus.textContent = `✅ 上传成功（${d.size_mb} MB），已可直接抠图`;
@@ -6021,7 +6039,7 @@
       const fd = new FormData();
       fd.append('file', file);
       if (el.matTextDetect && el.matTextDetect.checked) fd.append('with_text', '1');
-      const r = await fetch('/api/matting/analyze', { method: 'POST', body: fd });
+      const r = await fetch('/api/matting/analyze', { method: 'POST', body: fd, headers: authBearerHeaders() });
       const d = await r.json();
       if (d && d.blocks) {
         matBlockList = d.blocks;
@@ -6055,7 +6073,7 @@
       const fd = new FormData();
       fd.append('file', file);
       fd.append('block', JSON.stringify({ contour: target.contour }));
-      const r = await fetch('/api/matting/blocks/split', { method: 'POST', body: fd });
+      const r = await fetch('/api/matting/blocks/split', { method: 'POST', body: fd, headers: authBearerHeaders() });
       const d = await r.json();
       if (d && d.blocks && d.blocks.length) {
         // 父块移除，子块加入候选（不自动选中）
@@ -6768,7 +6786,7 @@
           }
         }
       }
-      fetch('/api/matting/image', { method: 'POST', body: fd })
+      fetch('/api/matting/image', { method: 'POST', body: fd, headers: authBearerHeaders() })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {
           matJobId = d.job_id;
@@ -6809,7 +6827,7 @@
     const fd = new FormData();
     fd.append('file', file);
     fd.append('force_cloud', '1');
-      fetch('/api/matting/image', { method: 'POST', body: fd })
+      fetch('/api/matting/image', { method: 'POST', body: fd, headers: authBearerHeaders() })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {
           matJobId = d.job_id;
@@ -7797,7 +7815,7 @@ el.dwVidPlayer.hidden = true;
       const wf = new FormData();
       wf.append('int8', el.dwVidInt8.checked ? '1' : '0');
       if (el.dwVidModel) wf.append('model', el.dwVidModel.value || 'lama');
-      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST', body: wf });
+      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST', body: wf, headers: authBearerHeaders() });
     } catch (_e) { /* 预热失败不影响主流程 */ }
     // 抽首帧（img 框选）与 filmstrip（点击跳转时间线）：
     //   之前用 Promise.all([thumb, film]) 等齐才往下走——filmstrip 要 decode 20 帧再 tile，
@@ -7815,7 +7833,7 @@ el.dwVidPlayer.hidden = true;
     const ctrl = new AbortController();
     const ctrlTs = Date.now();
     const timer = setTimeout(() => ctrl.abort(), 90000);
-    const headers = { 'X-Device-Id': deviceId() };
+    const headers = { 'X-Device-Id': deviceId(), ...authBearerHeaders() };
 
     // ① 本地抽帧（秒级最佳 UX）
     let localThumb = null;
@@ -10810,7 +10828,7 @@ el.dwVidPlayer.hidden = true;
       form.append('voice', comVoiceForBackend());
       form.append('max_segments', '3');
       const resp = await fetch(`/api/commentary/preview/${currentScriptJobId}`, {
-        method: 'POST', body: form,
+        method: 'POST', body: form, headers: authBearerHeaders(),
       });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({}));
