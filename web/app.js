@@ -7013,7 +7013,7 @@
     sbSetStatus('');
   };
 
-  // 分片上传所选视频并提交字幕任务：32MB/片 × 并发，上传完调 finish 合并+提交
+  // 分片上传所选音/视频并提交字幕任务：32MB/片 × 并发，上传完调 finish 合并+提交
   const sbUploadAndStart = () => {
     const file = sbState.file;
     if (!file) return;

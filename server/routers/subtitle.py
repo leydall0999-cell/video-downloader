@@ -216,8 +216,8 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
     resolved = _resolve_safe_local_path(payload.local_path)
     suffix = resolved.suffix.lower()
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请选择视频文件")
+    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请选择视频或音频文件")
     model_size = payload.model_size if payload.model_size in ALLOWED_MODELS else _DEFAULT_MODEL
     # 会员权益：下载/AI 会员（含捆绑）满核提取；免费版固定 4 线程（按请求用户态判定，C2）
     try:
@@ -290,8 +290,8 @@ def subtitle_upload_finish(
     if not re.fullmatch(r"[0-9a-z]+", upload_id or "") or total <= 0 or total > 4096:
         raise app.HTTPException(status_code=400, detail="分片参数非法")
     suffix = app.Path(filename or "upload.mp4").suffix.lower() or ".mp4"
-    if suffix not in app.UPLOAD_VIDEO_EXTS:
-        raise app.HTTPException(status_code=409, detail="请上传视频文件")
+    if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
+        raise app.HTTPException(status_code=409, detail="请上传视频或音频文件")
     parts = _upload_parts(upload_id)
     if len(parts) != total:
         raise app.HTTPException(status_code=400, detail=f"分片不完整（{len(parts)}/{total}），请重试")

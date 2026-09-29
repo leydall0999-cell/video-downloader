@@ -595,14 +595,14 @@
   <section id="subtitleView" class="panel" hidden aria-labelledby="sbTitle">
     <h2 id="sbTitle" class="guide-title">📝 AI 字幕提取</h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);">
-      AI 语音识别，把视频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
-      网页版：视频上传后由服务器识别（大文件自动分片上传）；服务器同一时间处理一个识别任务，超出自动排队。
+      AI 语音识别，把视频/音频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
+      网页版：音/视频上传后由服务器识别（大文件自动分片上传）；服务器同一时间处理一个识别任务，超出自动排队。
     </p>
 
     <div class="uc-toolbar">
-      <button type="button" class="btn btn-primary" id="sbPickBtn">选取视频</button>
-      <input type="file" id="sbFileInput" accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v" hidden />
-      <span class="uc-count" id="sbFileLabel">尚未选择视频</span>
+      <button type="button" class="btn btn-primary" id="sbPickBtn">选取音视频</button>
+      <input type="file" id="sbFileInput" accept="video/*,audio/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.wma" hidden />
+      <span class="uc-count" id="sbFileLabel">尚未选择音/视频</span>
     </div>
 
     <div class="uc-bulk">
