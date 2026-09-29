@@ -339,10 +339,12 @@
         <div class="vdl-sniff-actions">
           <button type="button" class="main" id="sniffStart">以调试模式启动浏览器并嗅探</button>
           <button type="button" class="ghost" id="sniffAttach">连接已开启的浏览器</button>
+          <button type="button" class="ghost" id="sniffDownloadExt">下载浏览器扩展</button>
           <button type="button" class="danger" id="sniffStop" hidden>停止嗅探</button>
         </div>
         <div class="vdl-sniff-status" style="margin-top:0">提示：先开嗅探、再在浏览器里播放视频；正在播放的流要重新播放一次才能被截到。悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
+        <div id="sniffExtHelp" hidden></div>
       </div>`;
     // 插入顶栏徽标行（「会员中心」一排，桌面壳专属行）；找不到顶栏才兜底挂 body
     const badgeRow = document.querySelector('#engineBadge')?.parentElement;
@@ -457,6 +459,24 @@
       }
     };
 
+    // 把后端 /api/extension/info 的「安装步骤」渲染进面板，引导用户把扩展装进浏览器
+    const renderExtHelp = (info) => {
+      const box = panel.querySelector('#sniffExtHelp');
+      if (!box) return;
+      const steps = (info && info.install_steps) || [];
+      const name = (info && info.name) || '视频工坊媒体嗅探';
+      const ver = (info && info.version) || '';
+      box.hidden = false;
+      box.style.cssText =
+        'margin-top:10px;padding:10px 12px;background:#f4f6fa;border:1px solid #e3e7ee;border-radius:10px;font-size:12px;line-height:1.7;color:#2b3442;';
+      box.innerHTML =
+        '<div style="font-weight:600;margin-bottom:6px;">已下载「' + escHtml(name) + '」' +
+        (ver ? ' v' + escHtml(ver) : '') + '，按以下步骤装到浏览器：</div>' +
+        (steps.length
+          ? '<ol style="margin:0;padding-left:18px;">' + steps.map((s) => '<li>' + escHtml(s) + '</li>').join('') + '</ol>'
+          : '<div>打开 chrome://extensions → 开发者模式 → 加载已解压的扩展程序，选择刚下载的文件夹即可。</div>');
+    };
+
     const refresh = async () => {
       try {
         const st = await request('/api/sniffer/status');
@@ -526,6 +546,34 @@
     stopBtn.addEventListener('click', async () => {
       try { renderStatus(await request('/api/sniffer/disconnect', { method: 'POST', body: '{}' })); }
       catch (err) { showError('停止失败', (err && err.message) || '未知错误'); }
+    });
+    panel.querySelector('#sniffDownloadExt').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const info = await request('/api/extension/info');
+        // 触发 zip 下载：WKWebView 拦截裸 <a download>，故走 fetch→blob→临时 a 点击（与全站下载同套路）
+        const resp = await fetch('/api/extension/package');
+        if (!resp.ok) throw new Error('打包失败(' + resp.status + ')');
+        const blob = await resp.blob();
+        const fname = (info && info.version)
+          ? 'vdl-sniffer-extension-' + info.version + '.zip'
+          : 'vdl-sniffer-extension.zip';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        renderExtHelp(info);
+        sniffToast('✓ 扩展包已下载，按面板步骤安装到浏览器');
+      } catch (err) {
+        showError('下载扩展失败', (err && err.message) || '未知错误');
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     // picked 轮询常驻（悬浮球点击不依赖面板是否打开）
