@@ -6325,7 +6325,7 @@
       const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
-      const downloadHtml = it.downloadUrl && ['completed', 'uploaded', 'failed'].includes(it.status)
+      const downloadHtml = it.downloadUrl && !['running', 'uploading'].includes(it.status)
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
       const reeditHtml = it.status === 'completed'
@@ -6335,7 +6335,9 @@
         ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
         : it.status === 'failed'
           ? `<button type="button" class="uc-item-start" data-act="start" title="清除错误状态，按当前格式重新转码">重新转码</button>`
-          : '';
+          : it.status === 'pending'
+            ? `<button type="button" class="uc-item-start" data-act="start" title="先上传该文件，再按当前格式转码">开始转码</button>`
+            : '';
       const targetDisabled = (it.status === 'running' || it.status === 'completed') ? 'disabled' : '';
       const displayName = it.name || (it.file && it.file.name) || '未命名';
       const metaSpans = it.localPath
@@ -6477,10 +6479,12 @@
         const data = JSON.parse(xhr.responseText || '{}');
         if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
           item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
+          item._uploadId = null; item._totalChunks = null;   // 分片已被 finish 合并消化，之后重转需重传
           musEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑（防 tick 自杀停表后无人重启）
           musRender(); resolve(data);
         } else {
           item.status = 'failed';
+          item._uploadId = null; item._totalChunks = null;   // 分片状态已不可信（可能被消化/不完整），下次重新转码走重传
           item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
           musRender(); reject(new Error(item.errorMsg));
         }
@@ -6488,8 +6492,8 @@
         item.status = 'failed'; item.errorMsg = '服务器响应异常（可能是网络/代理超时）'; musRender(); reject(e);
       }
     });
-    xhr.addEventListener('error', () => { item.status = 'failed'; item.errorMsg = '网络错误'; musRender(); reject(new Error('network')); });
-    xhr.addEventListener('timeout', () => { item.status = 'failed'; item.errorMsg = '响应超时（请重试）'; musRender(); reject(new Error('timeout')); });
+    xhr.addEventListener('error', () => { item.status = 'failed'; item._uploadId = null; item._totalChunks = null; item.errorMsg = '网络错误'; musRender(); reject(new Error('network')); });
+    xhr.addEventListener('timeout', () => { item.status = 'failed'; item._uploadId = null; item._totalChunks = null; item.errorMsg = '响应超时（请重试）'; musRender(); reject(new Error('timeout')); });
     xhr.send(form);
   });
 
@@ -6563,10 +6567,20 @@
     } else if (act === 'start') {
       if (it.status === 'failed') { it.status = 'uploaded'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
       musEnsurePolling();
-      musFinishOne(it).catch(() => {});
+      if (it.localPath) {
+        if (it.status !== 'uploaded') { it.status = 'uploaded'; it.progress = 30; it.stage = '本地文件'; musRender(); }
+        musFinishOne(it).catch(() => {});
+      } else if (it._uploadId) {
+        musFinishOne(it).catch(() => {});            // 已上传（含重新转码）
+      } else {
+        musUploadOne(it).then(() => musFinishOne(it)).catch(() => {});  // 未上传/分片已被 finish 消化：先上传再转
+      }
     } else if (act === 'reedit') {
-      // 重新编辑：已完成行恢复为可编辑（可改格式/重新转码），保留旧结果下载链接直到新结果产出
-      it.status = 'uploaded'; it.errorMsg = ''; it.jobId = null; it.progress = 30; it.stage = '';
+      // 重新编辑：已完成行恢复可编辑（可改格式/重新转码），保留旧结果下载链接直到新结果产出。
+      // 分片在 finish 合并时已被服务端删除（p.unlink），必须清掉 _uploadId 让文件重传，否则报「分片不完整 (0/1)」。
+      it.status = it.localPath ? 'uploaded' : 'pending';
+      it.errorMsg = ''; it.jobId = null; it.progress = it.localPath ? 30 : 0; it.stage = it.localPath ? '本地文件' : '';
+      it._uploadId = null; it._totalChunks = null; it._xhrs = null;
       musRender();
     }
   });
