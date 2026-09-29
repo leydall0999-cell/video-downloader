@@ -7246,6 +7246,7 @@
         localStorage.setItem('vdl_auth_token', data.token);
         pfSetAuthStatus('');
         pfLoad();
+        _replayGatedAction();   // 登录/注册前被门禁拦下的功能按钮，成功后自动补点一次
       } else {
         pfSetAuthStatus(data.error || '操作失败');
       }
@@ -7340,6 +7341,7 @@
         closeAuthModal();
         renderAuthHeader();
         pfLoad();
+        _replayGatedAction();   // 登录/注册前被门禁拦下的功能按钮，成功后自动补点一次
       } else {
         amSetStatus(data.error || '操作失败');
       }
@@ -7363,6 +7365,64 @@
     });
   }
   renderAuthHeader();
+
+  // —— 功能级登录门禁（2026-09-29 对齐 App 2026-09-26 版本：所有功能须登录才能使用）——
+  // 捕获阶段委托拦截「真正执行」的按钮：捕获先于按钮自身 bubble 监听，stopPropagation
+  // 即可整体阻断原 handler，不必逐个改既有 click 绑定。下载另有 request()/服务端 403 兜底。
+  let _loginPromptAt = 0;      // 并发节流：3 秒内只弹一次登录框
+  let _pendingGatedId = '';    // 登录前想用的功能按钮 id，登录成功后自动补点一次
+  const _notifyNeedLogin = (msg) => {
+    const now = Date.now();
+    if (now - _loginPromptAt < 3000) return;
+    _loginPromptAt = now;
+    openAuthModal(msg || '请先登录或注册账号后使用该功能');
+  };
+  // 只挂「真正执行（会产出结果）」的按钮；前置步骤（解析链接、选择文件）不弹登录 —— 与 App 决策一致。
+  const _LOGIN_GATED_ACTIONS = {
+    batchBtn: '批量下载',
+    downloadBtn: '下载',
+    ucStartAllBtn: '视频格式转换',
+    musStartAllBtn: '音乐格式转换',
+    imgStartAllBtn: '图片格式转换',
+    mcMergeBtn: '视频/音频拼接',
+    sbStartBtn: '本地字幕提取',
+    dwImgBtn: '图片去水印',
+    dwPdfBtn: 'PDF 去水印',
+    subExtract: '字幕提取',
+    subBurn: '字幕烧录',
+    comGenerateScript: '视频解说',
+    comScriptRender: '解说渲染成片',
+    subAddBtn: '订阅追更',
+    torAddBtn: '种子下载',
+    processRun: '队列处理',
+    libBatchProcess: '媒体库批量处理',
+    libCleanup: '媒体库自动清理',
+  };
+  const _LOGIN_GATE_SELECTOR = Object.keys(_LOGIN_GATED_ACTIONS).map((id) => '#' + id).join(',');
+  document.addEventListener('click', (e) => {
+    try {
+      const t = e.target;
+      if (!t || typeof t.closest !== 'function') return;
+      const hit = t.closest(_LOGIN_GATE_SELECTOR);
+      if (!hit) return;
+      if (pfToken()) return;                   // 已登录：放行，走原有逻辑
+      const label = _LOGIN_GATED_ACTIONS[hit.id] || '该功能';
+      _pendingGatedId = hit.id;
+      e.preventDefault();
+      e.stopPropagation();                     // 阻断按钮自身的 click handler
+      _notifyNeedLogin('请先登录或注册账号，即可使用' + label);
+    } catch (_e) { /* 守卫异常不阻塞页面 */ }
+  }, true);
+  // 登录成功后自动补点一次之前被拦下的功能按钮（对齐 App「登录后继续」体验）
+  const _replayGatedAction = () => {
+    const id = _pendingGatedId;
+    _pendingGatedId = '';
+    if (!id) return;
+    setTimeout(() => {
+      const node = document.getElementById(id);
+      if (node && !node.disabled) { try { node.click(); } catch (_e) {} }
+    }, 150);
+  };
 
   // —— 账号安全：修改密码（需当前密码；服务端会把新密码同步云端授权中心）——
   const pfSecStatus = (t) => { el.pfSecurityStatus.textContent = t || ''; };
