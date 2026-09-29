@@ -219,6 +219,7 @@ def refresh_authority(store: Any, force: bool = False,
         if acct:
             apply_authority(store, acct)
         flush_pending_spends(store)      # 顺带把离线期积压的扣减补报掉
+        flush_pending_usages(store)      # 同上：离线期积压的每日用量补报掉
         return {"ok": True}
     code = str(r.get("code") or "")
     if code == "DEVICE_EVICTED":
@@ -310,6 +311,94 @@ def flush_pending_spends(store: Any) -> None:
         r = license_client.spend_remote(token, items)
         if r and r.get("ok"):
             store._state["meta"]["pending_spends"] = []
+            store._persist()
+            auth = r.get("authority") or {}
+            if auth:
+                store.apply_cloud_authoritative({"authority": auth})
+    except Exception:  # noqa: BLE001 — 仍离线：队列留着下次再试
+        pass
+
+
+# ── 每日用量上云（同一账号 App/网页共用每日配额；本地计数只是预检缓存）────────
+def _pending_usage(store: Any) -> list[dict]:
+    try:
+        store._ensure_loaded()
+        meta = store._state.setdefault("meta", {})
+        q = meta.setdefault("pending_usages", [])
+        if not isinstance(q, list):
+            q = meta["pending_usages"] = []
+        return q
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _queue_usage(store: Any, items: list[dict]) -> None:
+    try:
+        q = _pending_usage(store)
+        q.extend(items)
+        store._state["meta"]["pending_usages"] = q[-200:]
+        store._persist()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _report_usage(store: Any, items: list[dict]) -> None:
+    """同步上报（后台线程里跑）：成功后用云端权威快照校准本地每日用量。"""
+    try:
+        token = str(store.cloud_session().get("token") or "")
+        if not token or not items:
+            return
+        r = license_client.daily_remote(token, items)
+        if r and r.get("ok"):
+            auth = r.get("authority") or {}
+            if auth:
+                store.apply_cloud_authoritative({"authority": auth})
+        else:
+            _queue_usage(store, items)
+    except Exception:  # noqa: BLE001 — 断网/超时：排队下次补报
+        _queue_usage(store, items)
+
+
+def report_usage_async(store: Any, resource: str, n: int = 1) -> None:
+    """`MembershipStore.use_daily` 的上云钩子（fire-and-forget，不阻塞主流程）。
+
+    幂等 id 唯一 → 重试/补报不会重复计；断网排队、下次心跳补报。
+    """
+    if not link_enabled():
+        return
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return
+    res = str(resource or "").strip()[:32]
+    if n <= 0 or not res:
+        return
+    ev = uuid.uuid4().hex[:16]
+    items = [{"res": res, "n": n, "id": f"{ev}-{res[:16]}"}]
+    import threading
+    try:
+        threading.Thread(target=_report_usage, args=(store, items), daemon=True,
+                         name="vdl-usage-report").start()
+    except Exception:  # noqa: BLE001 — 起不了线程就排队
+        _queue_usage(store, items)
+
+
+def flush_pending_usages(store: Any) -> None:
+    """联网时补报离线期间积累的每日用量（心跳/状态刷新成功后调用）。"""
+    if not link_enabled():
+        return
+    try:
+        items = list(_pending_usage(store))
+        if not items:
+            return
+        token = str(store.cloud_session().get("token") or "")
+        if not token:
+            return
+        r = license_client.daily_remote(token, items)
+        if r and r.get("ok"):
+            store._state["meta"]["pending_usages"] = []
             store._persist()
             auth = r.get("authority") or {}
             if auth:

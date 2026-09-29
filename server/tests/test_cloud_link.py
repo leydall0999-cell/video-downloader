@@ -37,7 +37,8 @@ NOW = time.time()
 
 def _acct(email, fp="", name="", **auth_over):
     auth = {"v": 1, "member_until_dl": 0.0, "member_until_ai": 0.0,
-            "perm_credits": 0, "ai_credits_left": 0, "banned": False}
+            "perm_credits": 0, "ai_credits_left": 0, "banned": False,
+            "usage_date": "", "usage": {}}
     auth.update(auth_over)
     return {"user_id": email, "email": email, "max_devices": 2,
             "devices": [{"fp": fp, "name": name, "current": True}],
@@ -51,6 +52,7 @@ class FakeCloud:
         self.users = {}          # email -> password
         self.authority = {}      # email -> authority dict
         self.tokens = {}         # token -> email
+        self.usage = {}          # email -> {"date": "YYYY-MM-DD", "counts": {}}
         self.calls = []          # [(action, ...)]
         self.down = False        # True = 模拟云端不可达
 
@@ -61,6 +63,7 @@ class FakeCloud:
         license_client.heartbeat_remote = self.heartbeat_remote
         license_client.set_password_remote = self.set_password_remote
         license_client.spend_remote = self.spend_remote
+        license_client.daily_remote = self.daily_remote
 
     # ---- 假实现 ----
     def _check(self):
@@ -131,6 +134,27 @@ class FakeCloud:
                 auth["ai_credits_left"] = max(0, int(auth.get("ai_credits_left", 0)) - cost)
             else:
                 auth["perm_credits"] = max(0, int(auth.get("perm_credits", 0)) - cost)
+        return {"ok": True, "applied": len(items or []), "authority": auth}
+
+    def daily_remote(self, token, items, **kw):
+        self._check()
+        self.calls.append(("daily", tuple(sorted(i.get("id", "") for i in items))))
+        email = self.tokens.get(token)
+        if not email:
+            return {"ok": False, "code": "BAD_TOKEN"}
+        u = self.usage.setdefault(email, {"date": time.strftime("%Y-%m-%d"),
+                                          "counts": {}})
+        for it in items or []:
+            res = str(it.get("res") or "").strip()
+            try:
+                n = int(it.get("n") or 0)
+            except (TypeError, ValueError):
+                continue
+            if res and n > 0:
+                u["counts"][res] = int(u["counts"].get(res, 0)) + n
+        auth = self.authority.setdefault(email, {})
+        auth["usage_date"] = u["date"]
+        auth["usage"] = dict(u["counts"])
         return {"ok": True, "applied": len(items or []), "authority": auth}
 
 
@@ -255,6 +279,46 @@ def test_spend_reports_to_cloud():
     print("✅ 积分扣减上报云端（否则花掉的积分会被同步涨回来）")
 
 
+def test_daily_usage_shared_across_ends():
+    """同一账号 App/网页共用每日配额：本端用量上报云端；他端用量同步回本地。"""
+    fake = FakeCloud()
+    fake.seed("quota@self.test", "quotapw1")
+    c = _client(fake)
+    j = c.post("/api/auth/login", json={"identifier": "quota@self.test",
+                                       "password": "quotapw1"}).json()
+    assert j.get("ok"), j
+    import user_membership
+    store = user_membership.get_user_store(j["user_id"])
+    res = store.use_daily("download", 3)
+    assert res.get("ok"), res
+    for _ in range(150):                       # 上报是后台线程，轮询等结果
+        if any(x[0] == "daily" for x in fake.calls):
+            break
+        time.sleep(0.02)
+    assert any(x[0] == "daily" for x in fake.calls), f"每日用量没上报云端: {fake.calls}"
+    assert fake.usage["quota@self.test"]["counts"]["download"] == 3, fake.usage
+    # 模拟另一端（App）又用了 5 次 → 云端累计 8；本地手改成 0（蹭额度）→ 同步被回滚
+    u = fake.usage["quota@self.test"]
+    u["counts"]["download"] = 8
+    fake.authority["quota@self.test"]["usage"] = dict(u["counts"])
+    fake.authority["quota@self.test"]["usage_date"] = u["date"]
+    store._ensure_loaded()
+    store._state["daily_usage"]["download"] = 0
+    store._persist()
+    cloud_link._LAST_REFRESH.clear()
+    c.get("/api/member/status", headers=_auth(j["token"]))
+    q = store.quota_state("download")
+    assert q["used"] == 8, f"他端用量没同步回来（本地被手改成 0）: {q}"
+    # 两端合计用满 10 次/日后再用 → 拒绝
+    u["counts"]["download"] = 10
+    fake.authority["quota@self.test"]["usage"] = dict(u["counts"])
+    cloud_link._LAST_REFRESH.clear()
+    c.get("/api/member/status", headers=_auth(j["token"]))
+    r2 = store.use_daily("download", 1)
+    assert not r2.get("ok") and r2.get("code") == "MEMBER_QUOTA", r2
+    print("✅ 每日配额同一账号两端共用（本端上报 + 他端同步 + 合计超限即拒）")
+
+
 def test_cloud_down_falls_back_to_local():
     """云端不可达不能让用户登不上：退回纯本机注册/登录，并如实带 cloud_notice。"""
     fake = FakeCloud()
@@ -281,6 +345,7 @@ def main() -> int:
         test_member_status_uses_cloud_authority_and_rolls_back_tamper,
         test_change_password_syncs_to_cloud,
         test_spend_reports_to_cloud,
+        test_daily_usage_shared_across_ends,
         test_cloud_down_falls_back_to_local,
     ]
     failed = 0
