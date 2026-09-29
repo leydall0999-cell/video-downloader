@@ -415,6 +415,11 @@
     pfIdentifier: $('pfIdentifier'), pfPassword: $('pfPassword'),
     pfAuthSubmit: $('pfAuthSubmit'), pfAuthSwitch: $('pfAuthSwitch'), pfAuthStatus: $('pfAuthStatus'),
     pfUserBox: $('pfUserBox'),
+    // 子导航 + 分面板（2026-09-30 对齐 App 个人中心）
+    pfSubnav: $('pfSubnav'),
+    pfPanelOverview: $('pfPanelOverview'), pfPanelPurchases: $('pfPanelPurchases'),
+    pfPanelCredits: $('pfPanelCredits'), pfPanelSecurity: $('pfPanelSecurity'),
+    pfSecEmail: $('pfSecEmail'),
     pfAvatar: $('pfAvatar'), pfAvatarImg: $('pfAvatarImg'), pfAvatarFallback: $('pfAvatarFallback'), pfAvatarInput: $('pfAvatarInput'),
     pfName: $('pfName'), pfTag: $('pfTag'), pfCreated: $('pfCreated'),
     pfMemberNone: $('pfMemberNone'), pfMemberCardList: $('pfMemberCardList'),
@@ -433,6 +438,7 @@
     amSubmit: $('amSubmit'), amSwitch: $('amSwitch'), amStatus: $('amStatus'),
     // —— 个人中心 · 账号安全（改密 / 忘记密码 / 注销）——
     pfCurPw: $('pfCurPw'), pfNewPw: $('pfNewPw'), pfChangePwBtn: $('pfChangePwBtn'),
+    pfChangePwForm: $('pfChangePwForm'), pfChangePwToggle: $('pfChangePwToggle'), pfChangePwCancel: $('pfChangePwCancel'),
     pfForgotBtn: $('pfForgotBtn'), pfResetBox: $('pfResetBox'),
     pfResetIdent: $('pfResetIdent'), pfResetCode: $('pfResetCode'), pfResetPw: $('pfResetPw'),
     pfResetSendBtn: $('pfResetSendBtn'), pfResetSubmit: $('pfResetSubmit'),
@@ -7030,6 +7036,24 @@
   const pfAuthHeaders = () => (pfToken() ? { 'Authorization': 'Bearer ' + pfToken() } : {});
   let pfAuthIsRegister = false;
 
+  // —— 子导航：个人资料 / 购买记录 / 积分流水 / 账号安全（2026-09-30 对齐 App 个人中心）——
+  let _pfPanelName = 'overview';
+  const pfPanelNodes = () => ({
+    overview: el.pfPanelOverview, purchases: el.pfPanelPurchases,
+    credits: el.pfPanelCredits, security: el.pfPanelSecurity,
+  });
+  const pfShowPanel = (name) => {
+    const nodes = pfPanelNodes();
+    if (!nodes[name]) name = 'overview';
+    _pfPanelName = name;
+    Object.keys(nodes).forEach((k) => { if (nodes[k]) nodes[k].hidden = (k !== name); });
+    if (el.pfSubnav) {
+      el.pfSubnav.querySelectorAll('.pf-subnav-btn').forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.pfpanel === name);
+      });
+    }
+  };
+
   // —— 个人中心辅助（对齐 App：时间/套餐名/类型/流水 delta/脱敏）——
   const pfFmtDate = (ts, withTime) => {
     if (!ts) return '--';
@@ -7194,6 +7218,7 @@
     const ct = (prof && prof.created_at) || me.created_at || 0;
     if (el.pfCreated) el.pfCreated.textContent = ct ? pfFmtDate(ct, true) : '—';
     pfRenderAvatar(prof && prof.avatar_url);
+    if (el.pfSecEmail) el.pfSecEmail.textContent = me.identifier || me.user_id || '—';
     // 会员状态卡
     if (member) {
       const dl = member.download_member || {}, ai = member.ai_member || {};
@@ -7288,9 +7313,25 @@
   el.pfLogoutBtn.addEventListener('click', () => {
     localStorage.removeItem('vdl_auth_token');
     el.pfIdentifier.value = ''; el.pfPassword.value = '';
+    if (el.pfChangePwForm) el.pfChangePwForm.hidden = true;
+    if (el.pfResetBox) el.pfResetBox.hidden = true;
     pfRender(null, null);
     renderAuthHeader();
   });
+  // 子导航切换 + 总览里的「查看订单 / 积分流水」快捷跳转
+  if (el.pfSubnav) {
+    el.pfSubnav.addEventListener('click', (e) => {
+      const btn = e.target.closest('.pf-subnav-btn');
+      if (btn && btn.dataset.pfpanel) pfShowPanel(btn.dataset.pfpanel);
+    });
+  }
+  if (el.pfUserBox) {
+    el.pfUserBox.addEventListener('click', (e) => {
+      const jump = e.target.closest('[data-goto]');
+      if (jump && jump.dataset && jump.dataset.goto) pfShowPanel(jump.dataset.goto);
+    });
+  }
+  pfShowPanel('overview');
   // 使用统计周期筛选：只重拉 profile（usage_period 变化）
   if (el.pfUsageFilter) {
     el.pfUsageFilter.addEventListener('click', async (e) => {
@@ -7509,6 +7550,17 @@
 
   // —— 账号安全：修改密码（需当前密码；服务端会把新密码同步云端授权中心）——
   const pfSecStatus = (t) => { el.pfSecurityStatus.textContent = t || ''; };
+  // 账号安全：改密表单折叠开关（对齐 App「更改密码」按钮展开表单）
+  if (el.pfChangePwToggle && el.pfChangePwForm) {
+    el.pfChangePwToggle.addEventListener('click', () => {
+      el.pfChangePwForm.hidden = !el.pfChangePwForm.hidden;
+      if (!el.pfChangePwForm.hidden && el.pfResetBox) el.pfResetBox.hidden = true;
+      pfSecStatus('');
+    });
+  }
+  if (el.pfChangePwCancel && el.pfChangePwForm) {
+    el.pfChangePwCancel.addEventListener('click', () => { el.pfChangePwForm.hidden = true; pfSecStatus(''); });
+  }
   el.pfChangePwBtn.addEventListener('click', async () => {
     if (!pfToken()) { pfSecStatus('请先登录'); return; }
     const cur = el.pfCurPw.value;
@@ -7526,6 +7578,7 @@
         pfSecStatus('密码已修改 ✅' + (data.notice ? '（' + data.notice + '）' : ''));
         el.pfCurPw.value = '';
         el.pfNewPw.value = '';
+        if (el.pfChangePwForm) el.pfChangePwForm.hidden = true;
       } else {
         pfSecStatus(data.error || '修改失败');
       }
@@ -7538,8 +7591,11 @@
   let pfResetCountdown = 0;
   el.pfForgotBtn.addEventListener('click', () => {
     el.pfResetBox.hidden = !el.pfResetBox.hidden;
-    if (!el.pfResetBox.hidden && !el.pfResetIdent.value && el.pfIdentifier.value) {
-      el.pfResetIdent.value = el.pfIdentifier.value;
+    if (!el.pfResetBox.hidden) {
+      if (el.pfChangePwForm) el.pfChangePwForm.hidden = true;
+      if (!el.pfResetIdent.value && el.pfIdentifier.value) {
+        el.pfResetIdent.value = el.pfIdentifier.value;
+      }
     }
   });
   el.pfResetSendBtn.addEventListener('click', async () => {

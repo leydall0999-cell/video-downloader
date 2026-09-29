@@ -695,140 +695,187 @@
       </div>
     </div>
 
-    <!-- 已登录：总览 + 会员/积分 + 使用统计 + 购买记录 + 积分流水 + 激活码 + 账号安全（对齐 App 个人中心，2026-09-29） -->
+    <!-- 已登录：子导航 + 分面板（对齐 App 个人中心，2026-09-30） -->
     <div id="pfUserBox" hidden>
-      <!-- 总览头：头像 + 账号 + 角色 + 注册时间 -->
-      <div class="uc-bulk pf-ov">
-        <div class="pf-ov-head">
-          <div class="pf-avatar" id="pfAvatar" role="button" tabindex="0" title="点击更换头像">
-            <img id="pfAvatarImg" src="" alt="头像" hidden />
-            <span id="pfAvatarFallback" aria-hidden="true">👤</span>
-          </div>
-          <input type="file" id="pfAvatarInput" accept="image/png,image/jpeg,image/webp" hidden />
-          <div class="pf-ov-text">
-            <div class="pf-ov-name" id="pfName">—</div>
-            <span class="pf-tag" id="pfTag">普通用户</span>
-          </div>
-        </div>
-        <p class="uc-tip" style="margin:.6rem 0 0;">注册时间：<span id="pfCreated">—</span></p>
-        <div class="uc-bulk-actions" style="margin-top:.8rem;">
-          <button type="button" class="btn btn-ghost" id="pfLogoutBtn">退出登录</button>
-        </div>
-      </div>
+      <nav class="pf-subnav" id="pfSubnav" role="tablist" aria-label="个人中心子导航">
+        <button type="button" class="pf-subnav-btn is-active" data-pfpanel="overview" role="tab">👤 个人资料</button>
+        <button type="button" class="pf-subnav-btn" data-pfpanel="purchases" role="tab">🧾 购买记录</button>
+        <button type="button" class="pf-subnav-btn" data-pfpanel="credits" role="tab">🪙 积分流水</button>
+        <button type="button" class="pf-subnav-btn" data-pfpanel="security" role="tab">🔒 账号安全</button>
+      </nav>
 
-      <!-- 会员状态 + 积分（卡片式） -->
-      <div class="pf-card-grid">
-        <div class="pf-card">
-          <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">★</span><span class="pf-card-t">会员状态</span></div>
-          <div class="pf-card-c">
-            <p class="pf-card-muted" id="pfMemberNone">暂无有效会员</p>
-            <div id="pfMemberCardList" hidden></div>
-          </div>
-        </div>
-        <div class="pf-card">
-          <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">◆</span><span class="pf-card-t">积分</span></div>
-          <div class="pf-card-c">
-            <div class="pf-row pf-row-total"><span>当前可用</span><strong id="pfCreditsTotal">0</strong></div>
-            <div class="pf-credit">
-              <div class="pf-row"><span class="pf-credit-name">🗓 AI 会员积分</span><span id="pfCreditsAi">0</span></div>
-              <div class="pf-credit-note" id="pfCreditsAiNote">有效期随 AI 会员到期日，到期清零</div>
+      <div class="pf-body">
+        <!-- ① 个人资料：总览头 + 会员/积分卡 + 使用统计 + 激活码兑换 -->
+        <div class="pf-panel" id="pfPanelOverview">
+          <div class="pf-ov">
+            <div class="pf-ov-head">
+              <div class="pf-avatar" id="pfAvatar" role="button" tabindex="0" title="点击更换头像">
+                <img id="pfAvatarImg" src="" alt="头像" hidden />
+                <span id="pfAvatarFallback" aria-hidden="true">👤</span>
+              </div>
+              <input type="file" id="pfAvatarInput" accept="image/png,image/jpeg,image/webp" hidden />
+              <div class="pf-ov-text">
+                <div class="pf-ov-name" id="pfName">—</div>
+                <span class="pf-tag" id="pfTag">普通用户</span>
+              </div>
+              <div class="pf-ov-actions">
+                <button type="button" class="pf-ov-btn ghost" data-goto="purchases">查看订单</button>
+                <button type="button" class="pf-ov-btn ghost" data-goto="credits">积分流水</button>
+                <button type="button" class="pf-ov-btn ghost" id="pfLogoutBtn">退出登录</button>
+              </div>
             </div>
-            <div class="pf-credit">
-              <div class="pf-row"><span class="pf-credit-name">♾ 永久积分</span><span id="pfCreditsPerm">0</span></div>
-              <div class="pf-credit-note is-perm">永不过期，长期有效</div>
+            <p class="pf-ov-desc">查看当前会员、积分等权益；购买记录、积分流水、账号安全请在上方子菜单查看。</p>
+
+            <div class="pf-card-grid">
+              <div class="pf-card">
+                <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">★</span><span class="pf-card-t">会员状态</span></div>
+                <div class="pf-card-c">
+                  <p class="pf-card-muted" id="pfMemberNone">暂无有效会员</p>
+                  <div id="pfMemberCardList" hidden></div>
+                </div>
+              </div>
+              <div class="pf-card">
+                <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">◆</span><span class="pf-card-t">积分</span></div>
+                <div class="pf-card-c">
+                  <div class="pf-row pf-row-total"><span>当前可用</span><strong id="pfCreditsTotal">0</strong></div>
+                  <div class="pf-credit">
+                    <div class="pf-row"><span class="pf-credit-name">🗓 AI 会员积分</span><span id="pfCreditsAi">0</span></div>
+                    <div class="pf-credit-note" id="pfCreditsAiNote">有效期随 AI 会员到期日，到期清零</div>
+                  </div>
+                  <div class="pf-credit">
+                    <div class="pf-row"><span class="pf-credit-name">♾ 永久积分</span><span id="pfCreditsPerm">0</span></div>
+                    <div class="pf-credit-note is-perm">永不过期，长期有效</div>
+                  </div>
+                </div>
+              </div>
             </div>
+
+            <div class="pf-card pf-card-wide">
+              <div class="pf-card-h">
+                <span class="pf-card-ic" aria-hidden="true">📊</span><span class="pf-card-t">使用统计</span>
+                <div class="pf-period-filter" id="pfUsageFilter" role="group" aria-label="统计周期">
+                  <button type="button" class="pf-chip is-active" data-pfperiod="today">今日</button>
+                  <button type="button" class="pf-chip" data-pfperiod="3d">近三日</button>
+                  <button type="button" class="pf-chip" data-pfperiod="7d">近七日</button>
+                  <button type="button" class="pf-chip" data-pfperiod="month">本月</button>
+                </div>
+              </div>
+              <div class="pf-table-wrap">
+                <table class="pf-table" id="pfUsageTable">
+                  <thead><tr><th>功能</th><th id="pfUsageQuotaHeader">体验剩余</th><th>权益余额</th><th>积分单价</th></tr></thead>
+                  <tbody><tr><td colspan="4" class="pf-empty-cell">加载中…</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="pf-card pf-card-wide">
+              <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">🎟</span><span class="pf-card-t">激活码 / 卡密</span></div>
+              <div class="pf-card-c">
+                <label class="pf-field">
+                  <span class="pf-field-label">激活码</span>
+                  <input type="text" id="pfActivateCode" placeholder="输入激活码开通或续费会员" />
+                </label>
+                <div class="pf-ov-actions pf-ov-actions-inline">
+                  <button type="button" class="pf-ov-btn" id="pfActivateBtn">激活</button>
+                </div>
+                <span class="convert-status" id="pfMemberStatus" aria-live="polite"></span>
+              </div>
+            </div>
+
+            <div class="pf-ov-foot">注册时间：<span id="pfCreated">—</span></div>
           </div>
         </div>
-      </div>
 
-      <!-- 使用统计 -->
-      <div class="uc-bulk pf-wide">
-        <div class="pf-card-h">
-          <span class="pf-card-ic" aria-hidden="true">📊</span><span class="pf-card-t">使用统计</span>
-          <div class="pf-period-filter" id="pfUsageFilter" role="group" aria-label="统计周期">
-            <button type="button" class="pf-chip is-active" data-pfperiod="today">今日</button>
-            <button type="button" class="pf-chip" data-pfperiod="3d">近三日</button>
-            <button type="button" class="pf-chip" data-pfperiod="7d">近七日</button>
-            <button type="button" class="pf-chip" data-pfperiod="month">本月</button>
+        <!-- ② 购买记录 -->
+        <div class="pf-panel" id="pfPanelPurchases" hidden>
+          <div class="pf-block-title">购买记录</div>
+          <div class="pf-period-filter pf-filter-left" id="pfPurchasesFilter" role="group" aria-label="订单筛选">
+            <button type="button" class="pf-chip is-active" data-pfilter="all">全部</button>
+            <button type="button" class="pf-chip" data-pfilter="download">会员订单</button>
+            <button type="button" class="pf-chip" data-pfilter="ai">AI 会员</button>
+            <button type="button" class="pf-chip" data-pfilter="credits">积分订单</button>
           </div>
+          <div class="pf-table-wrap" id="pfPurchases"></div>
         </div>
-        <table class="pf-table" id="pfUsageTable">
-          <thead><tr><th>功能</th><th id="pfUsageQuotaHeader">体验剩余</th><th>权益余额</th><th>积分单价</th></tr></thead>
-          <tbody><tr><td colspan="4" class="pf-empty-cell">加载中…</td></tr></tbody>
-        </table>
-      </div>
 
-      <!-- 购买记录 -->
-      <div class="uc-bulk pf-wide">
-        <div class="pf-sec-title">购买记录</div>
-        <div class="pf-period-filter" id="pfPurchasesFilter" role="group" aria-label="订单筛选">
-          <button type="button" class="pf-chip is-active" data-pfilter="all">全部</button>
-          <button type="button" class="pf-chip" data-pfilter="download">会员订单</button>
-          <button type="button" class="pf-chip" data-pfilter="ai">AI 会员</button>
-          <button type="button" class="pf-chip" data-pfilter="credits">积分订单</button>
+        <!-- ③ 积分流水 -->
+        <div class="pf-panel" id="pfPanelCredits" hidden>
+          <div class="pf-block-title">积分流水</div>
+          <div class="pf-table-wrap" id="pfCreditsLog"></div>
         </div>
-        <div class="pf-table-wrap" id="pfPurchases"></div>
-      </div>
 
-      <!-- 积分流水 -->
-      <div class="uc-bulk pf-wide">
-        <div class="pf-sec-title">积分流水</div>
-        <div class="pf-table-wrap" id="pfCreditsLog"></div>
-      </div>
+        <!-- ④ 账号安全（对齐 App：条目列表 + 折叠表单） -->
+        <div class="pf-panel" id="pfPanelSecurity" hidden>
+          <div class="pf-sec-list">
+            <div class="pf-sec-item">
+              <div class="pf-sec-ic" aria-hidden="true">✉</div>
+              <div class="pf-sec-main">
+                <div class="pf-sec-title">电子邮件</div>
+                <div class="pf-sec-sub">使用您的电子邮件和密码登录</div>
+                <div class="pf-sec-val" id="pfSecEmail">—</div>
+              </div>
+            </div>
 
-      <!-- 激活码兑换 -->
-      <div class="uc-bulk" style="max-width:520px;">
-        <h3 class="card-title">激活码 / 卡密</h3>
-        <label class="uc-field" style="margin-top:.6rem;">
-          <span class="uc-label">激活码</span>
-          <input type="text" id="pfActivateCode" placeholder="输入激活码开通或续费会员" />
-        </label>
-        <div class="uc-bulk-actions">
-          <button type="button" class="btn btn-primary" id="pfActivateBtn">激活</button>
-        </div>
-        <span class="convert-status" id="pfMemberStatus" aria-live="polite"></span>
-      </div>
+            <div class="pf-sec-item">
+              <div class="pf-sec-ic" aria-hidden="true">✱</div>
+              <div class="pf-sec-main">
+                <div class="pf-sec-title">密码</div>
+                <div class="pf-sec-sub">修改密码后，其他设备需用新密码重新登录</div>
+                <div class="pf-sec-val pf-sec-dots">••••••••</div>
+                <div class="pf-sec-actions">
+                  <button type="button" class="pf-sec-btn" id="pfForgotBtn">忘记密码？</button>
+                  <button type="button" class="pf-sec-btn primary" id="pfChangePwToggle">更改密码</button>
+                </div>
+              </div>
+            </div>
 
-      <div class="uc-bulk" style="max-width:520px;">
-        <h3 class="card-title">账号安全</h3>
-        <div class="uc-form">
-          <label class="uc-field">
-            <span class="uc-label">当前密码</span>
-            <input type="password" id="pfCurPw" autocomplete="current-password" />
-          </label>
-          <label class="uc-field">
-            <span class="uc-label">新密码（至少 6 位）</span>
-            <input type="password" id="pfNewPw" autocomplete="new-password" />
-          </label>
-        </div>
-        <div class="uc-bulk-actions">
-          <button type="button" class="btn btn-primary" id="pfChangePwBtn">修改密码</button>
-          <button type="button" class="btn btn-ghost" id="pfForgotBtn">忘记密码？</button>
-        </div>
-        <!-- 忘记密码：邮箱验证码重置（对齐 App） -->
-        <div id="pfResetBox" hidden>
-          <div class="uc-form">
-            <label class="uc-field">
-              <span class="uc-label">账号（邮箱 / 手机号）</span>
-              <input type="text" id="pfResetIdent" autocomplete="username" />
-            </label>
-            <label class="uc-field">
-              <span class="uc-label">邮箱验证码</span>
-              <input type="text" id="pfResetCode" placeholder="6 位验证码" autocomplete="one-time-code" />
-            </label>
-            <label class="uc-field">
-              <span class="uc-label">新密码（至少 6 位）</span>
-              <input type="password" id="pfResetPw" autocomplete="new-password" />
-            </label>
+            <div class="pf-sec-form" id="pfChangePwForm" hidden>
+              <label class="pf-field">
+                <span class="pf-field-label">当前密码</span>
+                <input type="password" id="pfCurPw" autocomplete="current-password" />
+              </label>
+              <label class="pf-field">
+                <span class="pf-field-label">新密码（至少 6 位）</span>
+                <input type="password" id="pfNewPw" autocomplete="new-password" />
+              </label>
+              <div class="pf-sec-form-actions">
+                <button type="button" class="btn btn-ghost" id="pfChangePwCancel">取消</button>
+                <button type="button" class="btn btn-primary" id="pfChangePwBtn">保存新密码</button>
+              </div>
+            </div>
+
+            <div class="pf-sec-form" id="pfResetBox" hidden>
+              <label class="pf-field">
+                <span class="pf-field-label">账号（邮箱 / 手机号）</span>
+                <input type="text" id="pfResetIdent" autocomplete="username" />
+              </label>
+              <label class="pf-field">
+                <span class="pf-field-label">邮箱验证码</span>
+                <input type="text" id="pfResetCode" placeholder="6 位验证码" autocomplete="one-time-code" />
+              </label>
+              <label class="pf-field">
+                <span class="pf-field-label">新密码（至少 6 位）</span>
+                <input type="password" id="pfResetPw" autocomplete="new-password" />
+              </label>
+              <div class="pf-sec-form-actions">
+                <button type="button" class="btn btn-ghost" id="pfResetSendBtn">发送验证码</button>
+                <button type="button" class="btn btn-primary" id="pfResetSubmit">重置密码</button>
+              </div>
+            </div>
+
+            <div class="pf-sec-item pf-sec-danger">
+              <div class="pf-sec-ic" aria-hidden="true">⛔</div>
+              <div class="pf-sec-main">
+                <div class="pf-sec-title">注销账号</div>
+                <div class="pf-sec-sub">注销后将无法使用该邮箱登录或重新注册，会员与积分一并失效</div>
+                <div class="pf-sec-actions">
+                  <button type="button" class="pf-sec-btn danger" id="pfDeactivateBtn">注销账号</button>
+                </div>
+              </div>
+            </div>
+
+            <span class="convert-status" id="pfSecurityStatus" aria-live="polite"></span>
           </div>
-          <div class="uc-bulk-actions">
-            <button type="button" class="btn btn-ghost" id="pfResetSendBtn">发送验证码</button>
-            <button type="button" class="btn btn-primary" id="pfResetSubmit">重置密码</button>
-          </div>
-        </div>
-        <span class="convert-status" id="pfSecurityStatus" aria-live="polite"></span>
-        <div class="uc-bulk-actions" style="margin-top:1rem;">
-          <button type="button" class="btn btn-ghost" id="pfDeactivateBtn" style="color:#c0392b;">注销账号</button>
         </div>
       </div>
     </div>
