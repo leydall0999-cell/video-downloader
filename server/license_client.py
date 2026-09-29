@@ -199,6 +199,41 @@ def check_remote(code: str, fingerprint: str = "", base_url: Optional[str] = Non
                  base_url, timeout, opener)
 
 
+def adjust_remote(token: str, email: str, pool: str, delta: int, note: str = "",
+                  base_url: Optional[str] = None, timeout: float = 8.0,
+                  opener: Optional[Callable] = None) -> dict[str, Any]:
+    """管理员调整某账号积分（可负=强扣）：pool ∈ permanent|ai。需 admin token。
+
+    与本地 `add_credits(pool, delta)` 一一对应：pool=ai 改云端 ai_grant_total
+    （ai_left = grant − spent 随之变化），pool=permanent 改 perm_credits。
+    账号不存在（仅本机账号）时云端返回 NOT_FOUND —— 调用方按静默忽略处理。
+    """
+    return _post("/api/license/adjust",
+                 {"token": token, "email": email, "pool": pool,
+                  "delta": int(delta), "note": note[:120]},
+                 base_url, timeout, opener)
+
+
+def setstate_remote(token: str, email: str,
+                   member_until_dl: Optional[float] = None,
+                   member_until_ai: Optional[float] = None,
+                   perm_credits: Optional[int] = None,
+                   ai_credits_left: Optional[int] = None,
+                   base_url: Optional[str] = None, timeout: float = 8.0,
+                   opener: Optional[Callable] = None) -> dict[str, Any]:
+    """管理员直接设定某账号权威基线（迁移/纠错用）。需 admin token；传 None 不改该项。"""
+    payload: dict[str, Any] = {"token": token, "email": email}
+    if member_until_dl is not None:
+        payload["member_until_dl"] = float(member_until_dl)
+    if member_until_ai is not None:
+        payload["member_until_ai"] = float(member_until_ai)
+    if perm_credits is not None:
+        payload["perm_credits"] = int(perm_credits)
+    if ai_credits_left is not None:
+        payload["ai_credits_left"] = int(ai_credits_left)
+    return _post("/api/license/setstate", payload, base_url, timeout, opener)
+
+
 # ---- 支付（支付宝，内地 ECS pay.hanyuxz.top /api/pay/*）----
 PAY_BASE = "https://pay.hanyuxz.top"
 

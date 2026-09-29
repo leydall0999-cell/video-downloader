@@ -130,17 +130,103 @@ def _fp_name() -> tuple[str, str]:
     return fp, name[:64]
 
 
-def _apply_account_state(store, acct: dict[str, Any]) -> None:
+def _apply_account_state(store, acct: dict[str, Any], mirror: bool = True) -> None:
     """云端权益落地（2026-09-25 防破解核心切换点）。
 
     授权中心带 authority 快照（v>=1）→ 用云端真值**覆盖**本地 memberships
     （篡改的 expire_at/积分一联网即回滚）；老服务端无快照 → 退回旧的幂等追加。
+
+    mirror=True 时顺带把同一份快照镜像到「该账号对应的 per-user store」——
+    个人中心与门禁读的是后者，不镜像就会出现「云端改了、App 数字不动」
+    （见 _mirror_to_user_store 的详细说明）。
     """
     auth = (acct or {}).get("authority") or {}
     if isinstance(auth, dict) and int(auth.get("v") or 0) >= 1:
         store.apply_cloud_authoritative(acct)
     else:
         store.apply_cloud_purchases(acct.get("purchases") or [])
+    if mirror:
+        _mirror_to_user_store(store, acct)
+
+
+def _mirror_to_user_store(store, acct: dict[str, Any]) -> None:
+    """把云端账号快照镜像到该账号对应的 per-user store（memberships/{uid}.json）。
+
+    🔴 为什么需要（2026-09-30 实测定位）：会员积分存在**两份互相独立的账本** ——
+      · 全局 member_store（~/.video-downloader/membership.json）：登录/心跳/同步
+        写这一份，云端账号快照只落在这里；
+      · per-user store（~/.video-downloader/memberships/{user_id}.json）：个人中心
+        (`/api/member/status`)、门禁、超管会员表读的是这一份。
+      `current_member_store` 仅在「per-user 自己没有权益」时才回退全局，而只要该
+      文件里还留着历史本地权益（早期 via=ui_test 激活、超管调分、之后被消耗），
+      它就**永远**被选中，后果是：
+        ① 云端真值看不见（云端改 300/300，App 仍显示 800/-350 的旧账）；
+        ② 该文件没有 meta.account.token → spend_credits 的上报链路静默 return，
+           积分消耗根本不进云端，两份账各自漂移；
+        ③ 反作弊留了口子：手改 per-user JSON 白嫖积分不会被云端权威覆盖。
+      这里让 per-user store 也持有账号快照（含 token/fp）并套用云端权威值，
+      三条一起解决：显示=云端真值、消耗能上报、手改一联网即回滚。
+
+    失败静默（fail-open）：账号/权益已落全局，镜像失败不影响登录与门禁。
+    """
+    try:
+        store._ensure_loaded()
+        gacc = (store._state.get("meta") or {}).get("account") or {}
+        email = str((acct or {}).get("email") or gacc.get("email") or "").strip().lower()
+        token = str(gacc.get("token") or "")
+        if not email or not token:
+            return
+        uid = None
+        try:
+            from auth_store import _load_users
+            data = _load_users() or {}
+            uid = (data.get("by_identifier") or {}).get(email)
+            if not uid:
+                for u in data.get("users", []):
+                    if str(u.get("identifier") or "").strip().lower() == email:
+                        uid = u.get("user_id")
+                        break
+        except Exception:
+            uid = None
+        if not uid:
+            return  # 云端账号在本机没有对应本地账号（纯云端用户）：无需镜像
+        from user_membership import get_user_store
+        us = get_user_store(uid)
+        if us is store:
+            return
+        us.save_account(email, token, acct, fp=str(gacc.get("fp") or ""),
+                        name=str(gacc.get("name") or ""))
+        # mirror=False 防递归：镜像只写 per-user store，不再回头镜像
+        _apply_account_state(us, acct, mirror=False)
+    except Exception:
+        pass
+
+
+def _mirror_evicted(store, evicted: bool) -> None:
+    """把「设备位被挤出」标记同步到该账号的 per-user store。
+
+    _mirror_to_user_store 之后，门禁与个人中心实际读的是 per-user 那份，而
+    `status()` 的降级只看该文件自己的 meta.account.evicted —— 不同步就会出现
+    「被挤下线了但权益照用」（save_account 每次都会把 evicted 重置为 False，
+    登录/心跳成功时正好是想要的语义，被挤掉时就不是了）。失败静默。
+    """
+    try:
+        store._ensure_loaded()
+        gacc = (store._state.get("meta") or {}).get("account") or {}
+        email = str(gacc.get("email") or "").strip().lower()
+        if not email:
+            return
+        from auth_store import _load_users
+        uid = (_load_users().get("by_identifier") or {}).get(email)
+        if not uid:
+            return
+        from user_membership import get_user_store
+        us = get_user_store(uid)
+        if us is store:
+            return
+        us.set_evicted(bool(evicted))
+    except Exception:
+        pass
 
 
 def _after_login(store, email: str, resp: dict[str, Any], fp: str, name: str) -> None:
@@ -448,6 +534,7 @@ def cloud_sync() -> dict[str, Any]:
     if not r.get("ok"):
         if r.get("code") == "DEVICE_EVICTED":
             store.set_evicted(True)
+            _mirror_evicted(store, True)
             return _pub(store, {"evicted": True,
                                 "error": "该账号已在其他两台设备登录，请重新登录以使用本机"})
         return {"ok": False, "error": r.get("error") or "同步失败",
@@ -531,6 +618,7 @@ def maybe_sync_account(store) -> None:
             flush_pending_usages(store)
         elif r.get("code") == "DEVICE_EVICTED":
             store.set_evicted(True)
+            _mirror_evicted(store, True)
         elif r.get("code") == "ACCOUNT_BANNED":
             # 云端封禁：落 meta.account.banned → device_lock_reason 全局锁权益
             try:

@@ -222,6 +222,96 @@ def test_offline_sync_keeps_benefits() -> None:
     print("✅ ⑧ 断网同步 fail-open：权益原样保留，不锁设备")
 
 
+# ── 云端权威 → per-user store 镜像（2026-09-30） ──────────────────────────── #
+# 真实故障：超管/云端把账号积分改小，App 个人中心数字纹丝不动（实测一直显示
+# AI 800 / 永久 -350）。根因是「两份账本」——登录/心跳只写全局 membership.json，
+# 而 /api/member/status 对已登录用户读 memberships/{uid}.json；只要那份文件里还留着
+# 历史本地权益（早期 ui_test 激活 / 超管调分）它就永远被选中，于是：
+#   ① 云端真值看不见；② 该文件没有 account.token，消耗根本不上报云端。
+# 修法：云端快照同时镜像到该账号的 per-user store（_apply_account_state → mirror）。
+def _cloud_account_payload(email: str, ai_left: int = 300, perm: int = 300) -> dict:
+    now = time.time()
+    return {
+        "email": email, "max_devices": 2, "devices": [],
+        "authority": {
+            "v": 1,
+            "member_until_dl": now + 86400 * 300,
+            "member_until_ai": now + 86400 * 9,
+            "ai_credits_left": ai_left, "perm_credits": perm,
+            "usage_date": time.strftime("%Y-%m-%d"),
+            "usage": {"download": 3}, "banned": False,
+        },
+    }
+
+
+def _seed_user_with_stale_ledger(identifier: str = "15014313254"):
+    """建本地账号，并把 per-user store 伪造成线上那份旧账（AI 800 / 永久 -350）。"""
+    import auth_store
+    from user_membership import get_user_store
+
+    if not auth_store.user_exists(identifier):
+        auth_store.create_user(identifier, "pw123456")
+    uid = auth_store._load_users()["by_identifier"][identifier]
+    us = get_user_store(uid)
+    us._ensure_loaded()
+    us._state["ai_member"].update({"active": True, "plan": "ai_15000",
+                                   "expire_at": time.time() + 86400 * 365,
+                                   "credits_left": 800})
+    us._state["permanent_credits"]["total"] = -350
+    us._persist()
+    return uid, us
+
+
+def test_authority_mirrors_into_user_store() -> None:
+    from routers import cloud_account
+
+    _, us = _seed_user_with_stale_ledger()
+    assert us.status()["credits_total"] == 450       # 复现线上旧账
+
+    store = _store()
+    acct = _cloud_account_payload("15014313254")
+    store.save_account("15014313254", "tok-1", acct, fp=FP_A, name="Mac")
+    cloud_account._apply_account_state(store, acct)
+
+    st = us.status()
+    assert st["ai_member"]["credits_left"] == 300, st
+    assert st["permanent_credits"] == 300, st
+    assert st["credits_total"] == 600, st
+    acct_meta = us._state["meta"]["account"]
+    assert acct_meta["token"] == "tok-1", "缺 token → 积分消耗上不了云"
+    assert acct_meta["email"] == "15014313254"
+    assert us._state["daily_usage"]["download"] == 3, "云端日配额应并入"
+    print("✅ ⑩ 云端权威镜像进 per-user store（App 数字随云端走，旧账被回滚）")
+
+
+def test_evicted_mirrors_into_user_store() -> None:
+    from routers import cloud_account
+
+    _, us = _seed_user_with_stale_ledger()
+    store = _store()
+    acct = _cloud_account_payload("15014313254")
+    store.save_account("15014313254", "tok-1", acct, fp=FP_A, name="Mac")
+    cloud_account._apply_account_state(store, acct)
+
+    cloud_account._mirror_evicted(store, True)
+    assert us.status()["device_locked"] == "DEVICE_EVICTED", us.status()
+    cloud_account._apply_account_state(store, acct)   # 重新登录/同步 → 复位
+    assert "device_locked" not in us.status(), us.status()
+    print("✅ ⑪ 被挤下线标记同步到 per-user store，重新登录即恢复")
+
+
+def test_mirror_skips_without_local_account() -> None:
+    """云端账号在本机没有对应本地账号（纯云端用户）：静默跳过，不抛异常。"""
+    from routers import cloud_account
+
+    store = _store()
+    acct = _cloud_account_payload("stranger@nowhere.test")
+    store.save_account("stranger@nowhere.test", "tok-x", acct, fp=FP_A)
+    cloud_account._apply_account_state(store, acct)
+    cloud_account._mirror_evicted(store, True)
+    print("✅ ⑫ 无本地账号时不镜像、不报错")
+
+
 def test_home_dir_untouched() -> None:
     assert os.environ["VDL_DATA_DIR"] == _TMP_ROOT
     assert str(Path.home() / ".video-downloader") != _TMP_ROOT
@@ -243,6 +333,9 @@ def _main() -> int:
         test_cloud_login_applies_and_reports,
         test_cloud_sync_marks_evicted,
         test_offline_sync_keeps_benefits,
+        test_authority_mirrors_into_user_store,
+        test_evicted_mirrors_into_user_store,
+        test_mirror_skips_without_local_account,
         test_home_dir_untouched,
     ]
     ok = fail = 0

@@ -180,7 +180,72 @@ def adjust_credits(user_id: str, delta: int, pool: str = "auto") -> dict[str, An
         res = get_user_store(user_id).add_credits(delta, pool=pool)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"调分失败：{e}"}
+    # B 修复（2026-09-30）：云端是积分权威源，超管改分必须同步到授权中心，
+    # 否则账号一联网（登录/心跳）就被云端快照覆盖回旧值 —— 过去改分「不生效」的根因。
+    # 本地写照常保留作缓存；云端不可达时静默忽略（本地改动不丢）。
+    _sync_credits_to_cloud(user, delta, pool)
     return res
+
+
+def _license_admin_token() -> str:
+    """授权中心管理员令牌：env VDL_LICENSE_ADMIN_TOKEN → {base}/license_admin.json。
+    未配置返回空串 → adjust_credits 退化为仅本地写（等同历史行为）。"""
+    tok = (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
+    if tok:
+        return tok
+    try:
+        with open(_base_dir() / "license_admin.json", "r", encoding="utf-8") as fh:
+            tok = str((json.load(fh) or {}).get("admin_token") or "").strip()
+    except Exception:
+        tok = ""
+    return tok
+
+
+def _cloud_credit_pushes(store: Any, pool: str, delta: int) -> list:
+    """把本地 add_credits(pool, delta) 的语义映射成云端 adjust(pool,delta) 列表。
+
+    - ai / permanent：原样转成单条；
+    - auto：正=充永久；负=先扣 AI 订阅再扣永久（与 membership.add_credits 一致）。
+    """
+    if pool == "ai":
+        return [("ai", delta)]
+    if pool == "permanent":
+        return [("permanent", delta)]
+    if delta >= 0:
+        return [("permanent", delta)]
+    amount = -delta
+    st = store.status()
+    ai_active = bool((st.get("ai_member") or {}).get("active"))
+    ai_left = int((st.get("ai_member") or {}).get("credits_left", 0)) if ai_active else 0
+    ai_d = min(ai_left, amount)
+    perm_d = amount - ai_d
+    out: list = []
+    if ai_d > 0:
+        out.append(("ai", -ai_d))
+    if perm_d > 0:
+        out.append(("permanent", -perm_d))
+    return out
+
+
+def _sync_credits_to_cloud(user: dict, delta: int, pool: str) -> None:
+    """把超管调分推到授权中心。失败静默：本地已落盘，云端不可达/仅本机账号不阻断管理操作。"""
+    token = _license_admin_token()
+    if not token:
+        return
+    email = str(user.get("identifier") or "").strip()
+    if not email:
+        return
+    try:
+        import license_client
+        from user_membership import get_user_store
+        store = get_user_store(user["user_id"])
+        for cpool, cdelta in _cloud_credit_pushes(store, pool, delta):
+            if cdelta == 0:
+                continue
+            license_client.adjust_remote(token, email, cpool, cdelta)
+    except Exception:
+        # 云端不可达 / 账号仅本机（404 NOT_FOUND）/ 令牌未配置：忽略，本地改动保留
+        pass
 
 
 # --------------------------------------------------------------------------- #

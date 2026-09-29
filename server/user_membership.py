@@ -28,12 +28,15 @@ _RESOLVE_TTL = 10.0
 
 
 def _membership_dir() -> Path:
-    if __import__("sys").platform == "win32" and getattr(__import__("sys"), "frozen", False):
-        from auth_store import _base_dir
-        base = _base_dir()
-    else:
-        base = Path.home() / ".video-downloader"
-    d = base / "memberships"
+    """per-user 会员文件目录。
+
+    ⚠️ 必须与 auth_store._base_dir 同源：后者支持 VDL_DATA_DIR 隔离（离线测试 /
+    smoke / 冻结包），此前这里只在 win32+frozen 才委托它、其余平台硬编码
+    `~/.video-downloader` —— 结果是带 VDL_DATA_DIR 跑离线测试时，per-user 会员
+    文件会静默写进**用户真实家目录**，测试污染线上数据（2026-09-30 发现）。
+    """
+    from auth_store import _base_dir
+    d = _base_dir() / "memberships"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
