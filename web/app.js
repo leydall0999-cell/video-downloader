@@ -201,16 +201,6 @@
     subInput: $('subInput'),
     subApply: $('subApply'),
     subMsg: $('subMsg'),
-    cloudModal: $('cloudModal'),
-    cloudModalClose: $('cloudModalClose'),
-    cloudWebdavForm: $('cloudWebdavForm'),
-    cloudWebdavUrl: $('cloudWebdavUrl'),
-    cloudWebdavUser: $('cloudWebdavUser'),
-    cloudWebdavPass: $('cloudWebdavPass'),
-    cloudDest: $('cloudDest'),
-    cloudSave: $('cloudSave'),
-    cloudStatus: $('cloudStatus'),
-    cloudSubNote: $('cloudSubNote'),
     // 批量下载（桌面版万能下载器重点能力）
     batchToggle: $('batchToggle'),
     batchBox: $('batchBox'),
@@ -259,33 +249,6 @@
     cleanRun: $('cleanRun'),
     cleanStatus: $('cleanStatus'),
     cleanPreview: $('cleanPreview'),
-    // 归档网盘（桌面版功能）
-    libArchive: $('libArchive'),
-    archiveModal: $('archiveModal'),
-    archiveModalClose: $('archiveModalClose'),
-    arcWebdavForm: $('arcWebdavForm'),
-    arcWebdavUrl: $('arcWebdavUrl'),
-    arcWebdavUser: $('arcWebdavUser'),
-    arcWebdavPass: $('arcWebdavPass'),
-    arcTemplate: $('arcTemplate'),
-    arcTokens: $('arcTokens'),
-    arcVideo: $('arcVideo'),
-    arcAudio: $('arcAudio'),
-    arcImage: $('arcImage'),
-    arcMinAge: $('arcMinAge'),
-    arcMaxGb: $('arcMaxGb'),
-    arcDeleteAfter: $('arcDeleteAfter'),
-    arcAuto: $('arcAuto'),
-    arcInterval: $('arcInterval'),
-    arcTrashWarn: $('arcTrashWarn'),
-    arcSave: $('arcSave'),
-    arcScan: $('arcScan'),
-    arcRun: $('arcRun'),
-    arcCancel: $('arcCancel'),
-    arcStatus: $('arcStatus'),
-    arcPreview: $('arcPreview'),
-    arcRecords: $('arcRecords'),
-    arcForget: $('arcForget'),
     // 库内保险箱（桌面版功能）
     libCrypto: $('libCrypto'),
     cryptoModal: $('cryptoModal'),
@@ -613,14 +576,10 @@
   const node = { region: 'global', peer: '', chinaDomains: [], commentaryEnabled: false, adsEnabled: false,
     convertSubRequired: false, convertFreeDaily: 3,
     downloadSubRequired: false, downloadFreeDaily: 10, downloadFreeUsed: 0, subscribed: false,
-    cloudSubRequired: false, cloudFreeDaily: 5, cloudFreeUsed: 0,
-    cloudProviders: ['webdav'],
     libraryEnabled: false,
     subscriptionsEnabled: false,
     retentionEnabled: false,
     trashAvailable: false,
-    archiveEnabled: false,
-    archiveConfigured: false,
     cryptoEnabled: false,
     cryptoHasPass: false,
     cryptoLocked: true,
@@ -640,9 +599,6 @@
 
   /** 手动覆盖：null=自动判断，'cn'/'global'=用户强制指定 */
   let forcedRegion = null;
-  /** 最近一个下载完成的任务（供交叉入口「存到网盘」定位；task 结束时 trackers 会移除，故单独留存） */
-  let lastCompletedTask = null;
-  let lastCompletedRefs = null;
 
   const hostOf = (raw) => {
     try {
@@ -1247,8 +1203,6 @@
       convertProgress: node.querySelector('[data-convert-progress]'),
       convertProgressFill: node.querySelector('[data-convert-progress] .progress-fill'),
       convertQuota: node.querySelector('[data-convert-quota]'),
-      cloud: node.querySelector('[data-cloud]'),
-      cloudStatus: node.querySelector('[data-cloud-status]'),
       retry: node.querySelector('[data-retry]'),
       del: node.querySelector('[data-delete]'),
       watchBtn: node.querySelector('[data-watch]'),
@@ -1458,12 +1412,11 @@
     // 提取文案结果展示（下载/转写中也会显示进度）
     renderExtractedText(refs, task);
 
-    // 任务离开完成态后，必须隐藏完成态专属入口，避免重试/失败后仍显示转换/保存/存网盘
+    // 任务离开完成态后，必须隐藏完成态专属入口，避免重试/失败后仍显示转换/保存入口
     if (task.status !== 'completed') {
       refs.save.hidden = true;
       refs.saveHint.hidden = true;
       refs.convertWrap.hidden = true;
-      refs.cloud.hidden = true;
       return;
     }
     refs.save.hidden = false;
@@ -1491,14 +1444,6 @@
     }
     if (node.convertSubRequired) updateConvertQuota(refs, null);
 
-    // 下载完成后展示「存到网盘」入口（增值能力）：把文件上传到用户自己的网盘
-    refs.cloud.hidden = false;
-    if (!refs.cloud.dataset.bound) {
-      refs.cloud.dataset.bound = '1';
-      refs.cloud.addEventListener('click', () => openCloudModal(task.task_id, refs));
-    }
-    lastCompletedTask = task.task_id;
-    lastCompletedRefs = refs;
   };
 
   const renderTaskSteps = (refs, task) => {
@@ -6050,17 +5995,13 @@
       const left = Math.max(0, node.downloadFreeDaily - node.downloadFreeUsed);
       parts.push(`下载每日限 ${node.downloadFreeDaily} 次（当前剩余 ${left}）`);
     }
-    if (node.cloudSubRequired) {
-      const left = Math.max(0, node.cloudFreeDaily - node.cloudFreeUsed);
-      parts.push(`存网盘每日限 ${node.cloudFreeDaily} 次（当前剩余 ${left}）`);
-    }
     el.subModalSub.textContent = parts.length
       ? `免费用户：${parts.join('；')}。订阅后全部无限使用。`
       : '订阅后解锁全部增值能力，无限使用。';
   };
 
   const initSubUI = () => {
-    if (!node.convertSubRequired && !node.downloadSubRequired && !node.cloudSubRequired) return;
+    if (!node.convertSubRequired && !node.downloadSubRequired) return;
     const key = localStorage.getItem('vdl_sub_key');
     el.subBadge.hidden = false;
     el.subBadge.textContent = key ? '已订阅 ✓' : '🔓 订阅解锁';
@@ -6096,118 +6037,6 @@
     el.subBadge.hidden = false;
     setTimeout(() => el.subModal.close(), 900);
   });
-
-  // ------------------------------------------------------------------ 云盘存盘
-  let cloudCurrentTaskId = null;
-  let cloudCurrentRefs = null;
-
-  const syncCloudForm = () => {
-    const p = document.querySelector('input[name=cloudProvider]:checked').value;
-    el.cloudWebdavForm.hidden = p !== 'webdav';
-  };
-
-  const openCloudModal = (taskId, refs) => {
-    cloudCurrentTaskId = taskId;
-    cloudCurrentRefs = refs;
-    try {
-      const wd = JSON.parse(localStorage.getItem('vdl_webdav') || '{}');
-      el.cloudWebdavUrl.value = wd.url || '';
-      el.cloudWebdavUser.value = wd.user || '';
-      el.cloudWebdavPass.value = wd.pass || '';
-    } catch { /* 忽略损坏的本地配置 */ }
-    el.cloudDest.value = '';
-    el.cloudStatus.textContent = '';
-    el.cloudStatus.className = 'cloud-status';
-    syncCloudForm();
-    if (node.cloudSubRequired) {
-      const left = Math.max(0, node.cloudFreeDaily - node.cloudFreeUsed);
-      el.cloudSubNote.hidden = false;
-      el.cloudSubNote.textContent = node.subscribed
-        ? '已订阅 · 无限存网盘 ✓'
-        : (left > 0 ? `今日免费剩余 ${left}/${node.cloudFreeDaily} 次` : '今日免费次数已用完 · 点右上角订阅解锁');
-    } else {
-      el.cloudSubNote.hidden = true;
-    }
-    if (typeof el.cloudModal.showModal === 'function') el.cloudModal.showModal();
-    else el.cloudModal.setAttribute('open', '');
-  };
-
-  const startCloudSave = async () => {
-    if (!cloudCurrentTaskId) return;
-    const provider = document.querySelector('input[name=cloudProvider]:checked').value;
-    const dest = el.cloudDest.value.trim();
-    const body = { task_id: cloudCurrentTaskId, provider, dest_path: dest };
-    if (provider === 'webdav') {
-      const wd = {
-        url: el.cloudWebdavUrl.value.trim(),
-        user: el.cloudWebdavUser.value.trim(),
-        pass: el.cloudWebdavPass.value,
-      };
-      if (!wd.url) {
-        el.cloudStatus.textContent = '请填写 WebDAV 地址';
-        el.cloudStatus.className = 'cloud-status is-err';
-        return;
-      }
-      localStorage.setItem('vdl_webdav', JSON.stringify(wd));
-      body.webdav = wd;
-    }
-    el.cloudSave.disabled = true;
-    el.cloudStatus.textContent = '上传中…';
-    el.cloudStatus.className = 'cloud-status';
-    try {
-      const { job_id: jobId, quota } = await request('/api/cloud/save', {
-        method: 'POST', body: JSON.stringify(body),
-      });
-      if (quota) {
-        if (quota.subscribed) node.subscribed = true;
-        node.cloudFreeUsed = quota.free_used || node.cloudFreeUsed;
-      }
-      pollCloud(jobId);
-    } catch (error) {
-      el.cloudSave.disabled = false;
-      const msg = (error && error.message) || '';
-      if (msg.indexOf('订阅') >= 0) {
-        promptSubscribe();
-        el.cloudStatus.textContent = '今日免费次数已用完，点右上角「订阅解锁」无限存网盘';
-      } else {
-        el.cloudStatus.textContent = '保存失败：' + msg;
-      }
-      el.cloudStatus.className = 'cloud-status is-err';
-    }
-  };
-
-  const pollCloud = (jobId) => {
-    const timer = setInterval(async () => {
-      try {
-        const st = await request('/api/cloud/status/' + jobId);
-        if (st.status === 'completed') {
-          clearInterval(timer);
-          el.cloudSave.disabled = false;
-          el.cloudStatus.textContent = '已存到网盘 ✓' + (st.remote_path ? '（' + st.remote_path + '）' : '');
-          el.cloudStatus.className = 'cloud-status is-ok';
-          if (cloudCurrentRefs) {
-            cloudCurrentRefs.cloud.hidden = false;
-            cloudCurrentRefs.cloudStatus.hidden = false;
-            cloudCurrentRefs.cloudStatus.textContent = '已存到网盘：' + (st.remote_path || '');
-          }
-        } else if (st.status === 'failed') {
-          clearInterval(timer);
-          el.cloudSave.disabled = false;
-          el.cloudStatus.textContent = '保存失败：' + (st.error || '未知错误');
-          el.cloudStatus.className = 'cloud-status is-err';
-        } else {
-          el.cloudStatus.textContent = '上传中…' + (st.progress ? ' ' + st.progress + '%' : '');
-        }
-      } catch { /* 轮询出错继续 */ }
-    }, 3000);
-  };
-
-
-  // 云盘弹窗事件绑定
-  el.cloudModalClose.addEventListener('click', () => el.cloudModal.close());
-  el.cloudModal.addEventListener('click', (e) => { if (e.target === el.cloudModal) el.cloudModal.close(); });
-  el.cloudSave.addEventListener('click', startCloudSave);
-  el.cloudModal.querySelectorAll('input[name=cloudProvider]').forEach((r) => r.addEventListener('change', syncCloudForm));
 
   // ------------------------------------------------------------------ 媒体库（桌面版功能）
   // 以磁盘文件为准浏览/播放/删除已下载内容；能力由 /api/nodes 的 library.enabled 控制。
@@ -8219,318 +8048,6 @@
   el.cleanScan.addEventListener('click', scanClean);
   el.cleanRun.addEventListener('click', runClean);
 
-  // ================================ 归档网盘 ================================
-  const arcState = { jobId: null, pollTimer: null, items: [] };
-
-  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-  const showArcStatus = (msg, isErr = false) => {
-    el.arcStatus.textContent = msg || '';
-    el.arcStatus.classList.toggle('is-error', !!isErr);
-  };
-
-  const currentArcProvider = () =>
-    (document.querySelector('input[name="arcProvider"]:checked') || {}).value || 'webdav';
-
-  const toggleArcProviderForm = (prov) => {
-    el.arcWebdavForm.hidden = prov !== 'webdav';
-  };
-
-  const fillArcForm = (data) => {
-    const cfg = data.config || {};
-    el.arcTemplate.value = cfg.dest_template || '';
-    el.arcVideo.checked = !!cfg.include_video;
-    el.arcAudio.checked = !!cfg.include_audio;
-    el.arcImage.checked = !!cfg.include_image;
-    el.arcMinAge.value = cfg.min_age_minutes ?? 3;
-    el.arcMaxGb.value = cfg.max_file_gb ?? 10;
-    el.arcDeleteAfter.checked = !!cfg.delete_after;
-    el.arcAuto.checked = !!cfg.auto_enabled;
-    el.arcInterval.value = cfg.interval_hours ?? 6;
-    const wd = (data.creds && data.creds.webdav) || {};
-    el.arcWebdavUrl.value = wd.url || '';
-    el.arcWebdavUser.value = wd.user || '';
-    el.arcWebdavPass.value = '';
-    const toks = data.tokens || {};
-    el.arcTokens.replaceChildren();
-    const tip = document.createElement('span');
-    tip.textContent = '可用占位符：';
-    el.arcTokens.appendChild(tip);
-    Object.entries(toks).forEach(([k, v], i, arr) => {
-      const code = document.createElement('code');
-      code.textContent = k;
-      code.title = v;
-      el.arcTokens.appendChild(code);
-      if (i < arr.length - 1) el.arcTokens.appendChild(document.createTextNode(' '));
-    });
-    el.arcTrashWarn.hidden = !!data.trash_available;
-    el.arcDeleteAfter.disabled = !data.trash_available;
-    if (!data.trash_available) el.arcDeleteAfter.checked = false;
-    const prov = cfg.provider || 'webdav';
-    const radio = document.querySelector(`input[name="arcProvider"][value="${prov}"]`);
-    if (radio) radio.checked = true;
-    toggleArcProviderForm(prov);
-  };
-
-  const renderArcRecords = (records) => {
-    el.arcRecords.replaceChildren();
-    (records || []).forEach((r) => {
-      const li = document.createElement('li');
-      const name = (r.rel || r.remote || '').split('/').pop();
-      li.textContent = `${name} → ${r.remote || ''} · ${fmtSize(r.size || 0)}`;
-      el.arcRecords.appendChild(li);
-    });
-    if (!(records || []).length) {
-      const li = document.createElement('li');
-      li.className = 'arc-records-empty';
-      li.textContent = '暂无归档记录';
-      el.arcRecords.appendChild(li);
-    }
-  };
-
-  const collectArcConfig = () => {
-    const prov = currentArcProvider();
-    const body = {
-      provider: prov,
-      dest_template: el.arcTemplate.value.trim(),
-      include_video: el.arcVideo.checked,
-      include_audio: el.arcAudio.checked,
-      include_image: el.arcImage.checked,
-      min_age_minutes: Number(el.arcMinAge.value) || 0,
-      max_file_gb: Number(el.arcMaxGb.value) || 0,
-      delete_after: el.arcDeleteAfter.checked,
-      auto_enabled: el.arcAuto.checked,
-      interval_hours: Number(el.arcInterval.value) || 6,
-    };
-    if (prov === 'webdav') {
-      body.webdav = {
-        url: el.arcWebdavUrl.value.trim(),
-        user: el.arcWebdavUser.value.trim(),
-        pass: el.arcWebdavPass.value,
-      };
-    }
-    return body;
-  };
-
-  const openArchiveModal = async () => {
-    arcState.jobId = null;
-    stopArcPoll();
-    el.arcPreview.hidden = true;
-    el.arcPreview.replaceChildren();
-    el.arcRun.disabled = true;
-    el.arcCancel.hidden = true;
-    showArcStatus('');
-    if (typeof el.archiveModal.showModal === 'function') el.archiveModal.showModal();
-    try {
-      const data = await request('/api/archive/config');
-      fillArcForm(data);
-      renderArcRecords(data.records);
-    } catch (err) {
-      showArcStatus(err.message || '读取归档设置失败', true);
-    }
-  };
-
-  const saveArcConfig = async () => {
-    el.arcSave.disabled = true;
-    showArcStatus('保存中…');
-    try {
-      await request('/api/archive/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(collectArcConfig()),
-      });
-      showArcStatus('配置已保存');
-      node.archiveConfigured = true;
-    } catch (err) {
-      showArcStatus(err.message || '保存失败', true);
-    } finally {
-      el.arcSave.disabled = false;
-    }
-  };
-
-  const scanArc = async () => {
-    el.arcScan.disabled = true;
-    el.arcRun.disabled = true;
-    showArcStatus('正在扫描…');
-    try {
-      const data = await request('/api/archive/scan', { method: 'POST' });
-      arcState.items = data.items || [];
-      renderArcPreview(data);
-      showArcStatus('');
-    } catch (err) {
-      showArcStatus(err.message || '扫描失败', true);
-    } finally {
-      el.arcScan.disabled = false;
-    }
-  };
-
-  const renderArcPreview = (data) => {
-    el.arcPreview.replaceChildren();
-    const items = data.items || [];
-    if (!items.length) {
-      const p = document.createElement('p');
-      p.className = 'arc-empty';
-      p.textContent = data.configured
-        ? '没有待归档的文件（全部已归档，或都不符合筛选条件）。'
-        : '尚未配置网盘凭据，请先填写上方 WebDAV 信息并保存。';
-      el.arcPreview.appendChild(p);
-      el.arcPreview.hidden = false;
-      el.arcRun.disabled = true;
-      return;
-    }
-    const head = document.createElement('p');
-    head.className = 'arc-total';
-    head.textContent = `共 ${data.count} 项待归档，约 ${data.size_text || fmtSize(data.size || 0)}`;
-    el.arcPreview.appendChild(head);
-    const list = document.createElement('ul');
-    list.className = 'arc-list';
-    items.forEach((it) => {
-      const li = document.createElement('li');
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = true;
-      cb.dataset.id = it.id;
-      cb.className = 'arc-item-cb';
-      const label = document.createElement('label');
-      label.className = 'arc-item';
-      const span = document.createElement('span');
-      span.innerHTML = `<strong>${escapeHtml(it.name)}</strong> → <code>${escapeHtml(it.dest)}</code> · ${fmtSize(it.size || 0)}`;
-      label.appendChild(cb);
-      label.appendChild(span);
-      li.appendChild(label);
-      list.appendChild(li);
-    });
-    el.arcPreview.appendChild(list);
-    el.arcPreview.hidden = false;
-    el.arcRun.disabled = false;
-  };
-
-  const selectedArcIds = () =>
-    Array.from(el.arcPreview.querySelectorAll('.arc-item-cb:checked')).map((cb) => cb.dataset.id);
-
-  const runArc = async () => {
-    const ids = selectedArcIds();
-    if (!ids.length) { showArcStatus('请至少勾选一个文件', true); return; }
-    el.arcRun.disabled = true;
-    el.arcScan.disabled = true;
-    el.arcCancel.hidden = false;
-    el.arcCancel.disabled = false;
-    showArcStatus('正在归档…');
-    try {
-      const res = await request('/api/archive/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lib_ids: ids }),
-      });
-      arcState.jobId = res.job_id;
-      pollArcStatus();
-    } catch (err) {
-      showArcStatus(err.message || '归档启动失败', true);
-      el.arcCancel.hidden = true;
-      el.arcRun.disabled = false;
-      el.arcScan.disabled = false;
-    }
-  };
-
-  const stopArcPoll = () => {
-    if (arcState.pollTimer) { clearTimeout(arcState.pollTimer); arcState.pollTimer = null; }
-  };
-
-  const pollArcStatus = async () => {
-    if (!arcState.jobId) return;
-    try {
-      const s = await request(`/api/archive/status/${arcState.jobId}`);
-      const total = s.total || 0;
-      const done = (s.uploaded || 0) + (s.failed || 0) + (s.skipped || 0);
-      const pct = total ? Math.round((done / total) * 100) : 100;
-      showArcStatus(
-        `归档中 ${done}/${total}（${s.uploaded || 0} 成功 / ${s.failed || 0} 失败）… `
-        + `${s.current || ''} ${Math.round(s.file_percent || 0)}%`);
-      if (s.status === 'running') {
-        arcState.pollTimer = setTimeout(pollArcStatus, 800);
-      } else {
-        finishArc(s);
-      }
-    } catch (err) {
-      showArcStatus(err.message || '查询进度失败', true);
-      el.arcCancel.hidden = true;
-      el.arcRun.disabled = false;
-      el.arcScan.disabled = false;
-    }
-  };
-
-  const finishArc = async (s) => {
-    el.arcCancel.hidden = true;
-    el.arcScan.disabled = false;
-    el.arcRun.disabled = false;
-    let text = `归档完成：成功 ${s.uploaded || 0} 个 / ${s.bytes_text || fmtSize(s.bytes || 0)}`;
-    if (s.failed) text += `，失败 ${s.failed} 个`;
-    if (s.skipped) text += `，跳过 ${s.skipped} 个`;
-    if (s.deleted) text += `，已移入回收站 ${s.deleted} 个`;
-    showArcStatus(text, !!s.failed);
-    arcState.jobId = null;
-    try {
-      const data = await request('/api/archive/config');
-      renderArcRecords(data.records);
-    } catch { /* ignore */ }
-    try {
-      const sc = await request('/api/archive/scan', { method: 'POST' });
-      arcState.items = sc.items || [];
-      renderArcPreview(sc);
-    } catch { /* ignore */ }
-  };
-
-  const cancelArc = async () => {
-    if (!arcState.jobId) return;
-    el.arcCancel.disabled = true;
-    showArcStatus('正在取消…');
-    try {
-      await request(`/api/archive/cancel/${arcState.jobId}`, { method: 'POST' });
-    } catch { /* ignore */ }
-  };
-
-  const forgetArc = async () => {
-    if (!window.confirm('确定清空归档记录吗？清空后这些文件下次会重新上传到网盘。')) return;
-    try {
-      await request('/api/archive/forget', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rel: '' }),
-      });
-      showArcStatus('归档记录已清空');
-      const sc = await request('/api/archive/scan', { method: 'POST' });
-      arcState.items = sc.items || [];
-      renderArcPreview(sc);
-    } catch (err) {
-      showArcStatus(err.message || '清空失败', true);
-    }
-  };
-
-  document.querySelectorAll('input[name="arcProvider"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      toggleArcProviderForm(r.value);
-      try {
-        request('/api/archive/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: r.value }),
-        });
-      } catch { /* ignore */ }
-    });
-  });
-  el.libArchive.addEventListener('click', openArchiveModal);
-  el.archiveModalClose.addEventListener('click', () => {
-    stopArcPoll();
-    if (typeof el.archiveModal.close === 'function') el.archiveModal.close();
-  });
-  el.archiveModal.addEventListener('click', (e) => { if (e.target === el.archiveModal) el.archiveModal.close(); });
-  el.arcSave.addEventListener('click', saveArcConfig);
-  el.arcScan.addEventListener('click', scanArc);
-  el.arcRun.addEventListener('click', runArc);
-  el.arcCancel.addEventListener('click', cancelArc);
-  el.arcForget.addEventListener('click', forgetArc);
-
   // ---- 库内保险箱（桌面版功能） ----
   let cryptoItems = [];
   let cryptoPollTimer = null;
@@ -9351,7 +8868,7 @@
   };
 
   fetchNodes()
-    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, cloud, library, subscriptions, retention, archive, crypto, torrent, ai_dewatermark, authRequired, profile }) => {
+    .then(({ region, peer, china_domains: domains, commentary_enabled, ads_enabled, convert, download, library, subscriptions, retention, crypto, torrent, ai_dewatermark, authRequired, profile }) => {
       node.authRequired = !!authRequired;
       if (node.authRequired && !localStorage.getItem('vdl_api_token')) {
         const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
@@ -9376,17 +8893,10 @@
         ? convert.targets : ['mp4','mov','mkv','webm','avi','flv','ts','m4v','wmv','mpeg','3gp','ogv','mp3','m4a','aac','wav','flac','ogg','opus','gif'];
       node.downloadSubRequired = !!(download && download.subscription_required);
       node.downloadFreeDaily = (download && download.free_daily) || 10;
-      const cloudInfo = cloud || {};
-      node.cloudSubRequired = !!(cloudInfo && cloudInfo.subscription_required);
-      node.cloudFreeDaily = (cloudInfo && cloudInfo.free_daily) || 5;
-      node.cloudFreeUsed = 0;
-      node.cloudProviders = (cloudInfo && cloudInfo.providers) || ['webdav'];
       node.libraryEnabled = !!(library && library.enabled);
       node.subscriptionsEnabled = !!(subscriptions && subscriptions.enabled);
       node.retentionEnabled = !!(retention && retention.enabled);
       node.trashAvailable = !!(retention && retention.trash_available);
-      node.archiveEnabled = !!(archive && archive.enabled);
-      node.archiveConfigured = !!(archive && archive.configured);
       node.cryptoEnabled = !!(crypto && crypto.enabled);
       node.cryptoHasPass = !!(crypto && crypto.has_pass);
       node.cryptoLocked = !!(crypto && crypto.locked);
@@ -9400,7 +8910,6 @@
           : '🤖 AI 去水印（CPU，较慢但任何电脑可跑）';
       }
       if (el.libCleanup) el.libCleanup.hidden = !node.retentionEnabled;
-      if (el.libArchive) el.libArchive.hidden = !node.archiveEnabled;
       if (el.libCrypto) el.libCrypto.hidden = !node.cryptoEnabled;
       if (el.libShowQueue) el.libShowQueue.hidden = !node.libraryEnabled;
       node.profile = profile;

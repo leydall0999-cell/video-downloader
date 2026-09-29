@@ -60,15 +60,10 @@ import subtitles as subtitles_mod
 import subscriptions as subs_mod
 import ffmpeg_tools as fftools
 import retention as retention_mod
-import archive as archive_mod
 import crypto_vault as crypto_mod
 import process_queue as pq_mod
 import torrent as torrent_mod
 from batch import BatchScheduler
-from clouddrive import (
-    CloudError,
-    WebDAVProvider,
-)
 from platforms import CHINA_DOMAINS, LinkError, UnsupportedPlatformError, is_china_host, parse_source, platform_catalog
 from tasks import TaskStore, TASK_ID_LENGTH
 from llm_config import inject_llm_env, get_llm_config, save_llm_config, PROVIDER_PRESETS, DEFAULT_PROVIDER
@@ -445,17 +440,6 @@ DOWNLOAD_FREE_DAILY = int(os.environ.get("VDL_DOWNLOAD_FREE_DAILY", "10") or 10)
 DOWNLOAD_SUB_ENABLED = DOWNLOAD_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
 _download_quota: dict[str, dict] = {}     # ip -> {"date": "YYYY-MM-DD", "count": int}
 _download_quota_lock = threading.Lock()
-# ---- 云盘集成（增值能力）：把已下载文件存到用户自己的网盘（WebDAV / 百度网盘）----
-# 默认关闭订阅墙（全免费无限）；开启后免费用户按 IP 每日限次（VDL_CLOUD_FREE_DAILY）。
-# 与转换/下载共用同一把订阅主密钥 VDL_CONVERT_SUB_KEY（一个订阅解锁全部增值能力）。
-CLOUD_REQUIRE_SUB = os.environ.get("VDL_CLOUD_REQUIRE_SUB", "false").strip().lower() == "true"
-CLOUD_FREE_DAILY = int(os.environ.get("VDL_CLOUD_FREE_DAILY", "5") or 5)
-CLOUD_SUB_ENABLED = CLOUD_REQUIRE_SUB and bool(CONVERT_SUB_KEY)
-_cloud_quota: dict[str, dict] = {}        # ip -> {"date": "YYYY-MM-DD", "count": int}
-_cloud_quota_lock = threading.Lock()
-_webdav_provider = WebDAVProvider()
-CLOUD_JOBS: dict[str, dict] = {}
-CLOUD_LOCK = threading.Lock()
 
 # ---- 格式 / 片段增强（桌面版本地加工）：基于 lib_id 的 ffmpeg 任务 ----
 # process_queue 在 executor 创建后初始化（见下方）
@@ -631,21 +615,6 @@ def _assert_safe_url(url: str) -> None:
         )
 
 
-def _assert_archive_url(url: str) -> None:
-    """归档 WebDAV 地址校验（区别于下载用的 _assert_safe_url）。
-
-    桌面版里用户把文件归到「自己的」NAS/网盘是核心场景，因此放行私网 /
-    环回 / 链路本地地址（如 https://192.168.1.100:5006/dav、my-nas.local）；
-    只拦截非 http(s) 与缺主机名的明显非法写法。
-    """
-    parsed = urlparse(url)
-    scheme = (parsed.scheme or "").lower()
-    if scheme not in ("http", "https"):
-        raise LinkError("只支持 http/https 的 WebDAV 地址", "归档目标必须是标准 WebDAV 服务地址")
-    if not (parsed.hostname or "").strip():
-        raise LinkError("链接缺少主机名", "请检查地址是否完整")
-
-
 def _check_rate_limit(request: Request) -> None:
     """滑动窗口限流。超限抛 429，并告知还要等多久。
 
@@ -724,15 +693,6 @@ def _check_download_quota(request: Request) -> tuple[bool, int, int]:
         request, enabled=DOWNLOAD_SUB_ENABLED, sub_key=CONVERT_SUB_KEY,
         free_daily=DOWNLOAD_FREE_DAILY, quota_store=_download_quota,
         quota_lock=_download_quota_lock, label="下载",
-    )
-
-
-def _check_cloud_quota(request: Request) -> tuple[bool, int, int]:
-    """云盘存盘订阅 / 限次校验（freemium：免费每日限次，订阅无限）。"""
-    return _subscription_quota(
-        request, enabled=CLOUD_SUB_ENABLED, sub_key=CONVERT_SUB_KEY,
-        free_daily=CLOUD_FREE_DAILY, quota_store=_cloud_quota,
-        quota_lock=_cloud_quota_lock, label="存网盘",
     )
 
 
@@ -846,7 +806,6 @@ SUBSCRIBE_PROBE_LIMIT = int(os.environ.get("VDL_SUBSCRIBE_PROBE_LIMIT", "100") o
 SUB_CHECK_INTERVAL = int(os.environ.get("VDL_SUB_CHECK_INTERVAL", "1800") or 1800)  # 默认 30 分钟
 sub_store = subs_mod.SubscriptionStore(DOWNLOAD_DIR / ".subscriptions.json")
 prober = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="vdl-probe")
-cloud_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vdl-cloud")  # 云盘上传独立线程池，避免挤占下载
 
 # ---- 时效自动清理（桌面版功能）：按保留期/容量上限清理下载目录 ----
 # 与媒体库同一开关：只有桌面版（或显式开 VDL_LIBRARY_ENABLED）才管理本地磁盘。
@@ -856,21 +815,6 @@ RETENTION_ENABLED = (
     or bool(os.environ.get("VDL_RETENTION_ENABLED"))
 )
 retention_store = retention_mod.RetentionStore(DOWNLOAD_DIR / ".retention.json")
-
-# ---- 一键归档网盘（桌面版功能）：把媒体库文件按模板批量/自动传到用户自己的网盘 ----
-# 配置含明文凭据，刻意放在 home 配置目录而不是下载目录 —— 避免用户把整个下载目录
-# 同步/打包到网盘时连带泄露密码。
-ARCHIVE_ENABLED = (
-    plat.is_desktop()
-    or bool(os.environ.get("VDL_LIBRARY_ENABLED"))
-    or bool(os.environ.get("VDL_ARCHIVE_ENABLED"))
-)
-ARCHIVE_CONFIG_PATH = Path(
-    os.environ.get("VDL_ARCHIVE_CONFIG") or (Path.home() / ".video-downloader" / "archive.json")
-)
-archive_store = archive_mod.ArchiveStore(ARCHIVE_CONFIG_PATH)
-ARCHIVE_JOBS: dict[str, dict] = {}
-ARCHIVE_LOCK = threading.Lock()
 
 # ---- 库内保险箱（桌面版功能）：选中文件就地 AES 加密为 .vdlenc，播放前临时解密 ----
 # 与媒体库同一开关。内存密钥 VAULT_KEY 为 None 即「锁定」态；vault.json 只存 salt+verify，
@@ -1786,7 +1730,6 @@ async def lifespan(_: FastAPI):
             pass
     executor.shutdown(wait=False, cancel_futures=True)
     prober.shutdown(wait=False, cancel_futures=True)
-    cloud_executor.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="视频工坊", version="1.0.0", lifespan=lifespan)
@@ -2538,56 +2481,6 @@ def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeou
 
 
 # --------------------------------------------------------------------------- #
-# 云盘集成（增值能力）：把已下载文件存到用户自己的网盘（WebDAV / 百度网盘）
-# --------------------------------------------------------------------------- #
-
-class CloudSaveRequest(BaseModel):
-    task_id: str = Field(min_length=1, max_length=64)
-    provider: str = Field(min_length=1, max_length=16)
-    dest_path: str = Field(default="", max_length=1024)
-    webdav: dict = Field(default_factory=dict)
-
-
-
-
-
-
-
-
-def _run_cloud(job_id: str, inst, src: str, dest_path: str, creds: dict) -> None:
-    """后台线程：把本地文件上传到用户云盘，更新 CLOUD_JOBS 状态。"""
-    with CLOUD_LOCK:
-        job = CLOUD_JOBS.get(job_id)
-    if not job:
-        return
-    try:
-        def _progress(sent: int, total: int) -> None:
-            job["progress"] = round(sent / total * 100, 1) if total else 0.0
-
-        remote = inst.upload(Path(src), dest_path, creds, progress=_progress)
-        job["status"] = "completed"
-        job["remote_path"] = remote
-        logger.info("cloud %s -> %s", job_id, remote)
-    except CloudError as exc:
-        job["status"] = "failed"
-        job["error"] = exc.message + (("：" + exc.hint) if exc.hint else "")
-        logger.warning("cloud %s failed: %s", job_id, job["error"])
-    except Exception as exc:  # noqa: BLE001
-        job["status"] = "failed"
-        job["error"] = str(exc)[:400]
-        logger.exception("cloud %s failed", job_id)
-
-
-def _prune_cloud_jobs() -> None:
-    """云盘任务字典只增不删会内存泄漏；超过阈值时清理最旧的已完成/失败任务（保留最新 200 条）。"""
-    if len(CLOUD_JOBS) <= 500:
-        return
-    with CLOUD_LOCK:
-        done = [jid for jid, j in CLOUD_JOBS.items() if j.get("status") in ("completed", "failed")]
-        for jid in (done[:-200] if len(done) > 200 else []):
-            CLOUD_JOBS.pop(jid, None)
-
-
 # ---- 本地媒体库（桌面版功能）：浏览 / 播放 / 删除已下载的媒体文件 ----
 
 
@@ -2631,110 +2524,6 @@ def _require_retention() -> None:
 
 
 
-
-
-# ---- 一键归档网盘：按模板把媒体库文件批量 / 自动上传到用户自己的网盘 ----
-
-class ArchiveConfigRequest(BaseModel):
-    auto_enabled: bool | None = None
-    interval_hours: float | None = Field(default=None, ge=0.25, le=720)
-    provider: str | None = Field(default=None, max_length=16)
-    dest_template: str | None = Field(default=None, max_length=512)
-    include_video: bool | None = None
-    include_audio: bool | None = None
-    include_image: bool | None = None
-    min_age_minutes: float | None = Field(default=None, ge=0, le=10080)
-    max_file_gb: float | None = Field(default=None, ge=0, le=1024)
-    delete_after: bool | None = None
-    webdav: dict | None = None
-
-
-class ArchiveRunRequest(BaseModel):
-    lib_ids: list[str] = Field(default_factory=list, max_length=2000)
-
-
-class ArchiveForgetRequest(BaseModel):
-    rel: str = Field(default="", max_length=1024)
-
-
-def _require_archive() -> None:
-    if not ARCHIVE_ENABLED:
-        raise HTTPException(status_code=404, detail="网盘归档仅桌面版可用")
-
-
-def _archive_provider(cfg) -> tuple:
-    """按配置取上传器与凭据，顺带做 SSRF / 配置完整性校验。"""
-    if cfg.provider == "webdav":
-        creds = archive_store.get_creds("webdav")
-        url = (creds.get("url") or "").strip()
-        if not url:
-            raise HTTPException(status_code=400, detail="尚未配置 WebDAV 地址")
-        try:
-            _assert_archive_url(url)
-        except LinkError as exc:
-            raise HTTPException(status_code=400, detail="WebDAV 地址不合法：" + exc.message)
-        return _webdav_provider.upload, creds
-    raise HTTPException(status_code=400, detail="不支持的网盘类型")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _run_archive_job(job_id: str, targets: list[dict], cfg, upload_fn, creds: dict) -> None:
-    with ARCHIVE_LOCK:
-        job = ARCHIVE_JOBS.get(job_id)
-    if not job:
-        return
-
-    def _progress(p: dict) -> None:
-        job.update(p)
-
-    def _stop() -> bool:
-        return bool(job.get("cancel"))
-
-    try:
-        result = archive_mod.run_archive(
-            DOWNLOAD_DIR, targets, cfg, archive_store,
-            uploader=upload_fn, creds=creds,
-            on_progress=_progress, should_stop=_stop,
-            trash=retention_mod.move_to_trash, trash_ok=retention_mod.trash_available,
-        )
-        job.update({
-            "status": "canceled" if job.get("cancel") else "completed",
-            "uploaded": result["uploaded"], "failed": result["failed"],
-            "skipped": result["skipped"], "deleted": result["deleted"],
-            "bytes": result["bytes"], "bytes_text": result["bytes_text"],
-            "errors": result["errors"][:20], "file_percent": 100.0,
-        })
-        archive_store.update(last_run=result["ran_at"], last_uploaded=result["uploaded"],
-                             last_failed=result["failed"])
-        logger.info("归档 %s：上传 %s 个 / %s，失败 %s",
-                    job_id, result["uploaded"], result["bytes_text"], result["failed"])
-    except Exception as exc:  # noqa: BLE001
-        job.update({"status": "failed", "errors": [str(exc)[:300]]})
-        logger.exception("归档任务 %s 异常", job_id)
-
-
-def _prune_archive_jobs() -> None:
-    """归档任务字典只增不删会内存泄漏；超阈值时清理最旧的已结束任务。"""
-    if len(ARCHIVE_JOBS) <= 200:
-        return
-    with ARCHIVE_LOCK:
-        done = [jid for jid, j in ARCHIVE_JOBS.items()
-                if j.get("status") in ("completed", "failed", "canceled")]
-        for jid in (done[:-50] if len(done) > 50 else []):
-            ARCHIVE_JOBS.pop(jid, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -3337,44 +3126,6 @@ if RETENTION_ENABLED:
     _ret_watchdog.start()
 
 
-def _archive_watchdog() -> None:
-    """后台常驻：按 interval_hours 周期把新文件自动归档到用户网盘。
-
-    启动后静置 180 秒再首跑 —— 刚开 App 时下载/加工可能正忙，不跟它抢上行带宽。
-    auto_enabled 关闭或凭据没配好时只空转，不发任何网络请求。
-    """
-    time.sleep(180)
-    while True:
-        cfg = archive_store.get()
-        interval = max(0.25, float(cfg.interval_hours or 6.0)) * 3600
-        if not cfg.auto_enabled or not archive_store.has_creds(cfg.provider):
-            time.sleep(min(interval, 1800))
-            continue
-        try:
-            items = library_mod.scan_library(DOWNLOAD_DIR)
-            pend = archive_mod.pending_items(items, cfg, archive_store)
-            if pend:
-                upload_fn, creds = _archive_provider(cfg)
-                result = archive_mod.run_archive(
-                    DOWNLOAD_DIR, pend, cfg, archive_store,
-                    uploader=upload_fn, creds=creds,
-                    trash=retention_mod.move_to_trash, trash_ok=retention_mod.trash_available,
-                )
-                logger.info("自动归档：上传 %s 个 / %s，失败 %s 个",
-                            result["uploaded"], result["bytes_text"], result["failed"])
-                archive_store.update(last_run=result["ran_at"],
-                                     last_uploaded=result["uploaded"],
-                                     last_failed=result["failed"])
-        except HTTPException as exc:
-            logger.warning("自动归档跳过：%s", exc.detail)
-        except Exception:
-            logger.exception("自动归档执行异常")
-        time.sleep(interval)
-
-
-if ARCHIVE_ENABLED:
-    _arc_watchdog = threading.Thread(target=_archive_watchdog, name="vdl-archive", daemon=True)
-    _arc_watchdog.start()
 
 
 
@@ -3420,8 +3171,6 @@ from routers import convert as _convert_rtr
 app.include_router(_convert_rtr.router)
 from routers import dewatermark as _dewatermark_rtr
 app.include_router(_dewatermark_rtr.router)
-from routers import cloud as _cloud_rtr
-app.include_router(_cloud_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
 # 反向 WebSocket 隧道：ECS 主动连入，把国内 cn_proxy 经隧道暴露给本机代理
