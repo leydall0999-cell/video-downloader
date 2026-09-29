@@ -7,7 +7,17 @@
 <meta name="theme-color" content="#4f46e5" />
 <title>视频工坊 · 不止是下载工具，更懂视频精修加工</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⬇️</text></svg>" />
-<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%234f46e5'/%3E%3Cpath%20d='M16%207v11m0%200l-5-5m5%205l5-5M9%2025h14'%20fill='none'%20stroke='%23fff'%20stroke-width='2.4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+<script>
+  // styles.css 缓存击穿（2026-09-29 对齐 App）：与 app.js 同机制（dev 用时间戳、
+  // 打包用构建戳）。Cloudflare 边缘会按扩展名缓存无版本引用的 CSS，部署后用户拿旧样式。
+  (function () {
+    var fp = '__BUILD_FP__';
+    var isBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
+    var v = isBuild ? fp : ('dev' + Date.now());
+    document.write('<link rel="stylesheet" href="styles.css?v=' + encodeURIComponent(v) + '">');
+  })();
+</script>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
@@ -685,22 +695,92 @@
       </div>
     </div>
 
-    <!-- 已登录：账号信息 + 会员状态 + 激活码 + 账号安全（对齐 App 个人中心） -->
+    <!-- 已登录：总览 + 会员/积分 + 使用统计 + 购买记录 + 积分流水 + 激活码 + 账号安全（对齐 App 个人中心，2026-09-29） -->
     <div id="pfUserBox" hidden>
-      <div class="uc-bulk" style="max-width:520px;">
-        <h3 class="card-title">账号</h3>
-        <p class="uc-tip" id="pfUserIdent" style="margin:.2rem 0;"></p>
-        <p class="uc-tip" id="pfAdminBadge" style="margin:.1rem 0;color:var(--brand);"></p>
-        <div class="uc-bulk-actions">
+      <!-- 总览头：头像 + 账号 + 角色 + 注册时间 -->
+      <div class="uc-bulk pf-ov">
+        <div class="pf-ov-head">
+          <div class="pf-avatar" id="pfAvatar" role="button" tabindex="0" title="点击更换头像">
+            <img id="pfAvatarImg" src="" alt="头像" hidden />
+            <span id="pfAvatarFallback" aria-hidden="true">👤</span>
+          </div>
+          <input type="file" id="pfAvatarInput" accept="image/png,image/jpeg,image/webp" hidden />
+          <div class="pf-ov-text">
+            <div class="pf-ov-name" id="pfName">—</div>
+            <span class="pf-tag" id="pfTag">普通用户</span>
+          </div>
+        </div>
+        <p class="uc-tip" style="margin:.6rem 0 0;">注册时间：<span id="pfCreated">—</span></p>
+        <div class="uc-bulk-actions" style="margin-top:.8rem;">
           <button type="button" class="btn btn-ghost" id="pfLogoutBtn">退出登录</button>
         </div>
       </div>
 
+      <!-- 会员状态 + 积分（卡片式） -->
+      <div class="pf-card-grid">
+        <div class="pf-card">
+          <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">★</span><span class="pf-card-t">会员状态</span></div>
+          <div class="pf-card-c">
+            <p class="pf-card-muted" id="pfMemberNone">暂无有效会员</p>
+            <div id="pfMemberCardList" hidden></div>
+          </div>
+        </div>
+        <div class="pf-card">
+          <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">◆</span><span class="pf-card-t">积分</span></div>
+          <div class="pf-card-c">
+            <div class="pf-row pf-row-total"><span>当前可用</span><strong id="pfCreditsTotal">0</strong></div>
+            <div class="pf-credit">
+              <div class="pf-row"><span class="pf-credit-name">🗓 AI 会员积分</span><span id="pfCreditsAi">0</span></div>
+              <div class="pf-credit-note" id="pfCreditsAiNote">有效期随 AI 会员到期日，到期清零</div>
+            </div>
+            <div class="pf-credit">
+              <div class="pf-row"><span class="pf-credit-name">♾ 永久积分</span><span id="pfCreditsPerm">0</span></div>
+              <div class="pf-credit-note is-perm">永不过期，长期有效</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 使用统计 -->
+      <div class="uc-bulk pf-wide">
+        <div class="pf-card-h">
+          <span class="pf-card-ic" aria-hidden="true">📊</span><span class="pf-card-t">使用统计</span>
+          <div class="pf-period-filter" id="pfUsageFilter" role="group" aria-label="统计周期">
+            <button type="button" class="pf-chip is-active" data-pfperiod="today">今日</button>
+            <button type="button" class="pf-chip" data-pfperiod="3d">近三日</button>
+            <button type="button" class="pf-chip" data-pfperiod="7d">近七日</button>
+            <button type="button" class="pf-chip" data-pfperiod="month">本月</button>
+          </div>
+        </div>
+        <table class="pf-table" id="pfUsageTable">
+          <thead><tr><th>功能</th><th id="pfUsageQuotaHeader">体验剩余</th><th>权益余额</th><th>积分单价</th></tr></thead>
+          <tbody><tr><td colspan="4" class="pf-empty-cell">加载中…</td></tr></tbody>
+        </table>
+      </div>
+
+      <!-- 购买记录 -->
+      <div class="uc-bulk pf-wide">
+        <div class="pf-sec-title">购买记录</div>
+        <div class="pf-period-filter" id="pfPurchasesFilter" role="group" aria-label="订单筛选">
+          <button type="button" class="pf-chip is-active" data-pfilter="all">全部</button>
+          <button type="button" class="pf-chip" data-pfilter="download">会员订单</button>
+          <button type="button" class="pf-chip" data-pfilter="ai">AI 会员</button>
+          <button type="button" class="pf-chip" data-pfilter="credits">积分订单</button>
+        </div>
+        <div class="pf-table-wrap" id="pfPurchases"></div>
+      </div>
+
+      <!-- 积分流水 -->
+      <div class="uc-bulk pf-wide">
+        <div class="pf-sec-title">积分流水</div>
+        <div class="pf-table-wrap" id="pfCreditsLog"></div>
+      </div>
+
+      <!-- 激活码兑换 -->
       <div class="uc-bulk" style="max-width:520px;">
-        <h3 class="card-title">会员状态</h3>
-        <ul class="uc-list" id="pfMemberList" aria-live="polite"></ul>
+        <h3 class="card-title">激活码 / 卡密</h3>
         <label class="uc-field" style="margin-top:.6rem;">
-          <span class="uc-label">激活码 / 卡密</span>
+          <span class="uc-label">激活码</span>
           <input type="text" id="pfActivateCode" placeholder="输入激活码开通或续费会员" />
         </label>
         <div class="uc-bulk-actions">

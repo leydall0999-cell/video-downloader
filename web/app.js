@@ -409,13 +409,21 @@
     sbProgressWrap: $('sbProgressWrap'), sbProgressFill: $('sbProgressFill'), sbStatus: $('sbStatus'),
     sbResult: $('sbResult'), sbMeta: $('sbMeta'), sbHelpBtn: $('sbHelpBtn'), sbHelpText: $('sbHelpText'),
     sbDlSrt: $('sbDlSrt'), sbDlTxt: $('sbDlTxt'),
-    // —— 个人中心（网页版轻量版）——
+    // —— 个人中心（2026-09-29 对齐 App）——
     profileView: $('profileView'),
     pfAuthBox: $('pfAuthBox'), pfAuthModeTitle: $('pfAuthModeTitle'),
     pfIdentifier: $('pfIdentifier'), pfPassword: $('pfPassword'),
     pfAuthSubmit: $('pfAuthSubmit'), pfAuthSwitch: $('pfAuthSwitch'), pfAuthStatus: $('pfAuthStatus'),
-    pfUserBox: $('pfUserBox'), pfUserIdent: $('pfUserIdent'), pfAdminBadge: $('pfAdminBadge'),
-    pfLogoutBtn: $('pfLogoutBtn'), pfMemberList: $('pfMemberList'),
+    pfUserBox: $('pfUserBox'),
+    pfAvatar: $('pfAvatar'), pfAvatarImg: $('pfAvatarImg'), pfAvatarFallback: $('pfAvatarFallback'), pfAvatarInput: $('pfAvatarInput'),
+    pfName: $('pfName'), pfTag: $('pfTag'), pfCreated: $('pfCreated'),
+    pfMemberNone: $('pfMemberNone'), pfMemberCardList: $('pfMemberCardList'),
+    pfCreditsTotal: $('pfCreditsTotal'), pfCreditsAi: $('pfCreditsAi'), pfCreditsAiNote: $('pfCreditsAiNote'), pfCreditsPerm: $('pfCreditsPerm'),
+    pfUsageFilter: $('pfUsageFilter'), pfUsageQuotaHeader: $('pfUsageQuotaHeader'),
+    pfUsageTable: $('pfUsageTable'),
+    pfPurchasesFilter: $('pfPurchasesFilter'), pfPurchases: $('pfPurchases'),
+    pfCreditsLog: $('pfCreditsLog'),
+    pfLogoutBtn: $('pfLogoutBtn'),
     pfActivateCode: $('pfActivateCode'), pfActivateBtn: $('pfActivateBtn'), pfMemberStatus: $('pfMemberStatus'),
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
@@ -7022,51 +7030,224 @@
   const pfAuthHeaders = () => (pfToken() ? { 'Authorization': 'Bearer ' + pfToken() } : {});
   let pfAuthIsRegister = false;
 
-  const pfRender = (me, member, quota) => {
+  // —— 个人中心辅助（对齐 App：时间/套餐名/类型/流水 delta/脱敏）——
+  const pfFmtDate = (ts, withTime) => {
+    if (!ts) return '--';
+    try {
+      const d = new Date(ts * 1000);
+      if (withTime) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+      return d.toLocaleDateString('zh-CN');
+    } catch (_e) { return String(ts); }
+  };
+  const pfPlanName = (code) => {
+    const MAP = {
+      download_month: '下载会员·月卡', download_half_year: '下载会员·180天', download_quarter: '下载会员·季卡', download_year: '下载会员·年卡',
+      ai_5500: 'AI会员·积分包', ai_15000: 'AI会员·月卡', ai_40000: 'AI会员·季卡', ai_150000: 'AI会员·年卡',
+      credits_5000: '积分包 5000', credits_15000: '积分包 15000', credits_50000: '积分包 50000',
+    };
+    return MAP[code] || code || '未知套餐';
+  };
+  const pfPurchaseType = (code) => {
+    if (!code) return '其他';
+    if (code.startsWith('download_')) return '下载会员';
+    if (code.startsWith('ai_')) return 'AI 会员';
+    if (code.startsWith('credits_')) return '积分包';
+    return '其他';
+  };
+  const pfCreditDelta = (h) => {
+    if (h.type === 'spend') return -Number(h.amount || 0);
+    if (h.type === 'admin_adjust') {
+      const m = String(h.code || '').match(/admin_adjust:([+-]?\d+)/);
+      return m ? parseInt(m[1], 10) : 0;
+    }
+    return 0;
+  };
+
+  // —— 使用统计表 ——
+  let _pfUsagePeriod = 'today';
+  const pfRenderUsage = (features, period) => {
+    if (!el.pfUsageTable) return;
+    const headers = { today: '体验剩余', '3d': '近三日使用', '7d': '近七日使用', month: '本月使用' };
+    if (el.pfUsageQuotaHeader) el.pfUsageQuotaHeader.textContent = headers[period] || headers.today;
+    if (el.pfUsageFilter) {
+      el.pfUsageFilter.querySelectorAll('.pf-chip').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.pfperiod === period);
+      });
+    }
+    const tbody = el.pfUsageTable.querySelector('tbody');
+    const list = Array.isArray(features) && features.length ? features : [];
+    if (!list.length) { tbody.innerHTML = '<tr><td colspan="4" class="pf-empty-cell">暂无使用</td></tr>'; return; }
+    const isPeriod = period !== 'today';
+    tbody.innerHTML = list.map((f) => {
+      const name = escHtml(f.name || f.key || '—');
+      const unit = escHtml(f.unit || '');
+      let quota = '—';
+      if (f.unlimited) {
+        quota = '<span class="pu-tag pu-tag-unlimited">不限</span>';
+      } else if (isPeriod) {
+        quota = `<span class="pu-num">${Number(f.period_used || 0)} ${unit}</span>`;
+      } else if (f.daily_limit != null && f.daily_limit >= 0) {
+        const rem = f.daily_remaining != null ? f.daily_remaining : Math.max(0, f.daily_limit - (f.daily_used || 0));
+        quota = `<span class="pu-tag">今日剩余</span><span class="pu-num">${rem} / ${f.daily_limit} ${unit}</span>`;
+      }
+      const balance = f.balance != null ? `<span class="pu-num">${f.balance} ${unit}</span>` : '—';
+      let cost = '—';
+      if (f.credit_cost != null && f.credit_cost > 0) {
+        cost = `<span class="pu-num">${f.credit_cost}</span> 积分/${unit}`;
+      } else if (!f.unlimited && f.credit_cost === 0) {
+        cost = '<span class="pu-tag pu-tag-free">免费</span>';
+      }
+      return `<tr><td>${name}</td><td>${quota}</td><td>${balance}</td><td>${cost}</td></tr>`;
+    }).join('');
+  };
+
+  // —— 购买记录（类型筛选）——
+  let _pfPurchaseFilter = 'all';
+  let _pfPurchaseCache = [];
+  let _pfMemberStatus = null;
+  const pfPurchaseFilterMatch = (h, filter) => {
+    if (filter === 'all') return true;
+    const code = h.code || '';
+    if (filter === 'download') return code.startsWith('download_');
+    if (filter === 'ai') return code.startsWith('ai_');
+    if (filter === 'credits') return code.startsWith('credits_');
+    return true;
+  };
+  const pfRenderPurchases = () => {
+    if (!el.pfPurchases) return;
+    const filter = _pfPurchaseFilter || 'all';
+    if (el.pfPurchasesFilter) {
+      el.pfPurchasesFilter.querySelectorAll('.pf-chip').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.pfilter === filter);
+      });
+    }
+    const filtered = (_pfPurchaseCache || []).filter((h) => pfPurchaseFilterMatch(h, filter));
+    const HEAD = '<table class="pf-table"><thead><tr><th>时间</th><th>商品名称</th><th>类型</th><th>权益到期</th><th>来源</th></tr></thead>';
+    if (!filtered.length) {
+      const emptyMsg = (_pfPurchaseCache && _pfPurchaseCache.length) ? '没有符合条件的订单' : '暂无订单记录';
+      el.pfPurchases.innerHTML = `${HEAD}<tbody><tr><td colspan="5" class="pf-empty-cell">${escHtml(emptyMsg)}</td></tr></tbody></table>`;
+      return;
+    }
+    const dl = (_pfMemberStatus && _pfMemberStatus.download_member) || {};
+    const ai = (_pfMemberStatus && _pfMemberStatus.ai_member) || {};
+    const rows = filtered.map((h) => {
+      const t = h.at ? pfFmtDate(h.at, true) : '—';
+      const name = escHtml(pfPlanName(h.code));
+      const kind = escHtml(pfPurchaseType(h.code));
+      const via = h.via === 'ui_test' ? '激活码' : escHtml(h.via || '—');
+      let expire = '—';
+      if (h.code && h.code.startsWith('download_')) {
+        expire = dl.active ? `至 ${pfFmtDate(dl.expire_at)}` : '已过期';
+      } else if (h.code && h.code.startsWith('ai_')) {
+        expire = ai.active ? `至 ${pfFmtDate(ai.expire_at)}` : '已过期';
+      } else if (h.code && h.code.startsWith('credits_')) {
+        expire = '永久';
+      }
+      return `<tr><td>${escHtml(t)}</td><td>${name}</td><td>${kind}</td><td>${escHtml(expire)}</td><td>${via}</td></tr>`;
+    }).join('');
+    el.pfPurchases.innerHTML = `${HEAD}<tbody>${rows}</tbody></table>`;
+  };
+
+  // —— 积分流水 ——
+  const pfRenderCreditsLog = (list) => {
+    if (!el.pfCreditsLog) return;
+    const HEAD = '<table class="pf-table"><thead><tr><th>时间</th><th>变动积分</th><th>变动后余额</th><th>类型</th><th>业务 / 备注</th></tr></thead>';
+    if (!list || !list.length) { el.pfCreditsLog.innerHTML = `${HEAD}<tbody><tr><td colspan="5" class="pf-empty-cell">暂无积分流水</td></tr></tbody></table>`; return; }
+    const rows = list.map((h) => {
+      const t = h.at ? pfFmtDate(h.at, true) : '—';
+      const delta = pfCreditDelta(h);
+      const deltaTxt = (delta > 0 ? '+' : '') + delta;
+      const cls = delta > 0 ? 'pf-num plus' : (delta < 0 ? 'pf-num minus' : 'pf-num');
+      const balance = h.balance_after != null ? Number(h.balance_after) : '—';
+      let kind = '其他';
+      if (h.type === 'spend') kind = '消耗';
+      else if (h.type === 'admin_adjust') kind = delta >= 0 ? '充值' : '扣减';
+      const remark = escHtml(h.reason || h.via || '—');
+      return `<tr><td>${escHtml(t)}</td><td class="${cls}">${escHtml(deltaTxt)}</td><td class="pf-num">${balance}</td><td>${escHtml(kind)}</td><td>${remark}</td></tr>`;
+    }).join('');
+    el.pfCreditsLog.innerHTML = `${HEAD}<tbody>${rows}</tbody></table>`;
+  };
+
+  // —— 头像 ——
+  const pfRenderAvatar = (url) => {
+    if (!el.pfAvatarImg) return;
+    if (url) { el.pfAvatarImg.src = url; el.pfAvatarImg.hidden = false; if (el.pfAvatarFallback) el.pfAvatarFallback.hidden = true; }
+    else { el.pfAvatarImg.removeAttribute('src'); el.pfAvatarImg.hidden = true; if (el.pfAvatarFallback) el.pfAvatarFallback.hidden = false; }
+  };
+
+  // —— 主渲染：me（身份）+ member（会员/积分）+ prof（profile 聚合）——
+  const pfRender = (me, member, prof) => {
     const logged = !!(me && me.ok);
     el.pfAuthBox.hidden = logged;
     el.pfUserBox.hidden = !logged;
     renderAuthHeader();
     if (!logged) return;
-    el.pfUserIdent.textContent = '账号：' + (me.identifier || me.user_id || '');
-    el.pfAdminBadge.textContent = me.is_admin ? '⚡ 超级管理员' : '';
-    // 会员状态列表
-    const rows = [];
-    const fmtExp = (ts) => { try { return ts ? new Date(ts * 1000).toLocaleDateString() : '—'; } catch (_e) { return '—'; } };
-    if (quota && quota.ok !== false) {
-      const qUsed = quota.used != null ? quota.used : '—';
-      const qRem = quota.unlimited ? '不限' : (quota.remaining != null ? quota.remaining : '—');
-      rows.push(['今日下载额度', `${qUsed} 已用 / 剩 ${qRem}`]);
+    // 总览头
+    if (el.pfName) el.pfName.textContent = me.identifier || me.user_id || '已登录';
+    if (el.pfTag) {
+      el.pfTag.textContent = me.is_admin ? '👑 超级管理员' : '普通用户';
+      el.pfTag.classList.toggle('is-admin', !!me.is_admin);
     }
+    const ct = (prof && prof.created_at) || me.created_at || 0;
+    if (el.pfCreated) el.pfCreated.textContent = ct ? pfFmtDate(ct, true) : '—';
+    pfRenderAvatar(prof && prof.avatar_url);
+    // 会员状态卡
     if (member) {
-      const dm = member.download_member || {}, am = member.ai_member || {};
-      rows.push(['下载会员', dm.active ? `✅ 生效中（至 ${fmtExp(dm.expire_at)}）` : '未开通']);
-      rows.push(['AI 会员', am.active ? `✅ 生效中（至 ${fmtExp(am.expire_at)}）` : '未开通']);
-      const cr = member.credits || {};
-      rows.push(['剩余积分', String(cr.balance != null ? cr.balance : (cr.remaining != null ? cr.remaining : '—'))]);
-      if (member.anonymous !== undefined && !member.anonymous) rows.push(['登录态', '已登录']);
+      const dl = member.download_member || {}, ai = member.ai_member || {};
+      const memberRows = [];
+      if (dl.active) memberRows.push(`<div class="pf-row"><span>下载会员</span><span>${escHtml('至 ' + pfFmtDate(dl.expire_at))}</span></div>`);
+      if (ai.active) memberRows.push(`<div class="pf-row"><span>AI 会员</span><span>${escHtml('至 ' + pfFmtDate(ai.expire_at))}</span></div>`);
+      if (el.pfMemberCardList) {
+        el.pfMemberCardList.innerHTML = memberRows.join('');
+        el.pfMemberCardList.hidden = !memberRows.length;
+      }
+      if (el.pfMemberNone) el.pfMemberNone.hidden = !!memberRows.length;
+      // 积分分池
+      const aiLeft = Number(ai.credits_left != null ? ai.credits_left : 0);
+      const perm = Number(member.permanent_credits || 0);
+      if (el.pfCreditsTotal) el.pfCreditsTotal.textContent = String(Number(member.credits_total || 0));
+      if (el.pfCreditsAi) el.pfCreditsAi.textContent = String(aiLeft);
+      if (el.pfCreditsPerm) el.pfCreditsPerm.textContent = String(perm);
+      if (el.pfCreditsAiNote) el.pfCreditsAiNote.textContent = ai.active
+        ? `有效期至 ${pfFmtDate(ai.expire_at)}，到期清零`
+        : '有效期随 AI 会员到期日，到期清零';
     } else {
-      rows.push(['会员状态', '加载失败，请稍后重试']);
+      if (el.pfMemberNone) el.pfMemberNone.hidden = false;
+      if (el.pfMemberCardList) { el.pfMemberCardList.innerHTML = ''; el.pfMemberCardList.hidden = true; }
+      if (el.pfCreditsTotal) el.pfCreditsTotal.textContent = '—';
+      if (el.pfCreditsAi) el.pfCreditsAi.textContent = '—';
+      if (el.pfCreditsPerm) el.pfCreditsPerm.textContent = '—';
     }
-    el.pfMemberList.replaceChildren(...rows.map(([k, v]) => {
-      const li = document.createElement('li');
-      li.className = 'uc-item';
-      li.innerHTML = `<div class="uc-item-meta" style="display:flex;justify-content:space-between;width:100%;">
-        <span><b>${k}</b></span><span>${v}</span></div>`;
-      return li;
-    }));
+    // 记录三表
+    const credits = (prof && prof.credit_history) || [];
+    if (prof && prof.ok) {
+      let running = Number((member && member.credits_total) || 0);
+      for (let i = credits.length - 1; i >= 0; i--) {
+        const h = credits[i];
+        if (h.balance_after == null) h.balance_after = running;
+        running -= pfCreditDelta(h);
+      }
+    }
+    _pfMemberStatus = member || null;
+    _pfPurchaseCache = (prof && prof.purchases) || [];
+    try { pfRenderUsage(prof && prof.usage_features, (prof && prof.usage_period) || _pfUsagePeriod || 'today'); } catch (e) { console.error('[profile] usage render failed', e); }
+    try { pfRenderPurchases(); } catch (e) { console.error('[profile] purchases render failed', e); }
+    try { pfRenderCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   };
 
   const pfLoad = async () => {
-    if (!pfToken()) { pfRender(null, null); return; }
-    let me = null, member = null, quota = null;
+    if (!pfToken()) { pfRender(null, null, null); return; }
+    let me = null, member = null, prof = null;
     try {
       me = await request('/api/auth/me', { headers: pfAuthHeaders() });
       if (!me.ok) { localStorage.removeItem('vdl_auth_token'); me = null; }
     } catch (_e) { /* ignore */ }
     try { member = await request('/api/member/status', { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
-    try { quota = await request('/api/member/quota/download', { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
-    pfRender(me, member, quota);
+    try { prof = await request('/api/account/profile?usage_period=' + encodeURIComponent(_pfUsagePeriod || 'today'), { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
+    pfRender(me, member, prof);
   };
 
   const pfSetAuthStatus = (t) => { el.pfAuthStatus.textContent = t || ''; };
@@ -7110,6 +7291,68 @@
     pfRender(null, null);
     renderAuthHeader();
   });
+  // 使用统计周期筛选：只重拉 profile（usage_period 变化）
+  if (el.pfUsageFilter) {
+    el.pfUsageFilter.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.pf-chip');
+      if (!btn) return;
+      const p = btn.dataset.pfperiod;
+      if (!p || p === _pfUsagePeriod) return;
+      _pfUsagePeriod = p;
+      el.pfUsageFilter.querySelectorAll('.pf-chip').forEach((b) => b.classList.toggle('is-active', b.dataset.pfperiod === p));
+      try {
+        const prof = await request('/api/account/profile?usage_period=' + encodeURIComponent(p), { headers: pfAuthHeaders() });
+        if (prof && prof.ok) pfRenderUsage(prof.usage_features, prof.usage_period || p);
+      } catch (_err) { /* 静默：保留当前表格 */ }
+    });
+  }
+  // 购买记录类型筛选（纯前端）
+  if (el.pfPurchasesFilter) {
+    el.pfPurchasesFilter.addEventListener('click', (e) => {
+      const btn = e.target.closest('.pf-chip');
+      if (!btn) return;
+      const f = btn.dataset.pfilter;
+      if (!f || f === _pfPurchaseFilter) return;
+      _pfPurchaseFilter = f;
+      pfRenderPurchases();
+    });
+  }
+  // 头像：点击选择图片 → base64 上传 /api/account/avatar
+  if (el.pfAvatar && el.pfAvatarInput) {
+    const pfPickAvatar = () => el.pfAvatarInput.click();
+    el.pfAvatar.addEventListener('click', pfPickAvatar);
+    el.pfAvatar.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pfPickAvatar(); } });
+    el.pfAvatarInput.addEventListener('change', async () => {
+      const f = el.pfAvatarInput.files && el.pfAvatarInput.files[0];
+      if (!f) return;
+      if (f.size > 2 * 1024 * 1024) { el.pfMemberStatus.textContent = '头像图片不能超过 2MB'; return; }
+      el.pfMemberStatus.textContent = '头像上传中…';
+      const toDataUrl = (file) => new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ''));
+        r.onerror = () => reject(new Error('读取失败'));
+        r.readAsDataURL(file);
+      });
+      try {
+        const dataUrl = await toDataUrl(f);
+        const data = await request('/api/account/avatar', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, pfAuthHeaders()),
+          body: JSON.stringify({ image: dataUrl }),
+        });
+        if (data.ok) {
+          el.pfMemberStatus.textContent = '头像已更新';
+          pfRenderAvatar(data.avatar_url || dataUrl);
+        } else {
+          el.pfMemberStatus.textContent = data.error || '头像上传失败';
+        }
+      } catch (err) {
+        el.pfMemberStatus.textContent = '头像上传失败：' + (err && err.message || err);
+      } finally {
+        el.pfAvatarInput.value = '';
+      }
+    });
+  }
   el.pfActivateBtn.addEventListener('click', async () => {
     const code = el.pfActivateCode.value.trim();
     if (!code) { el.pfMemberStatus.textContent = '请输入激活码'; return; }

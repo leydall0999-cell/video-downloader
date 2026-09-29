@@ -3881,4 +3881,18 @@ async def index() -> HTMLResponse:
         return HTMLResponse(cache["html"])
 
 
+# 静态资源禁缓存：HTML 是动态的（no-store 由页面自身控制），但 js/css 曾被
+# Cloudflare 边缘按扩展名默认缓存，部署后用户最长 2h 拿旧文件（2026-09-29 踩坑）。
+# 统一 no-store：前端引用自带 ?v= 版本戳，浏览器缓存收益本来就为零。
+@app.middleware("http")
+async def _static_no_store(request, call_next):
+    response = await call_next(request)
+    p = request.url.path
+    if not p.startswith("/api/") and (
+        p.endswith(".js") or p.endswith(".css") or p.endswith(".html") or p == "/"
+    ):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

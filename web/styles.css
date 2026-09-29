@@ -1962,3 +1962,43 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 /* 上一轮拼接的旧结果：置灰降级，与新一批片段/新结果区分（2026-09-29 用户反馈） */
 .uc-item.is-stale { opacity: .55; }
 .uc-item.is-stale .uc-item-name { color: var(--text-mute); }
+
+/* ===== 个人中心（2026-09-29 对齐 App）：总览/卡片/表格 ===== */
+.pf-ov { max-width: 860px; }
+.pf-ov-head { display: flex; align-items: center; gap: .9rem; }
+.pf-avatar { width: 52px; height: 52px; border-radius: 50%; background: var(--brand-soft); display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; flex: 0 0 auto; font-size: 1.5rem; }
+.pf-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.pf-ov-name { font-weight: 700; font-size: 1.05rem; color: var(--text); word-break: break-all; }
+.pf-tag { display: inline-block; margin-top: .15rem; padding: .1rem .5rem; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: .75rem; }
+.pf-tag.is-admin { background: #fef3c7; color: #b45309; }
+.pf-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: .9rem; max-width: 860px; margin-top: .9rem; }
+.pf-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .9rem 1rem; }
+.pf-card-h { display: flex; align-items: center; gap: .45rem; font-weight: 600; color: var(--text); flex-wrap: wrap; }
+.pf-card-t { font-size: .95rem; }
+.pf-card-c { margin-top: .5rem; }
+.pf-card-muted { color: var(--text-mute); font-size: .88rem; margin: .2rem 0; }
+.pf-row { display: flex; justify-content: space-between; align-items: baseline; gap: .8rem; padding: .18rem 0; font-size: .9rem; color: var(--text); }
+.pf-row-total { font-size: .95rem; margin-bottom: .3rem; }
+.pf-row-total strong { font-size: 1.25rem; color: var(--brand); }
+.pf-credit { border-top: 1px dashed var(--line); padding-top: .3rem; margin-top: .3rem; }
+.pf-credit-name { color: var(--text-mute); }
+.pf-credit-note { font-size: .75rem; color: var(--text-mute); margin-top: .05rem; }
+.pf-credit-note.is-perm { color: var(--success); }
+.pf-wide { max-width: 860px; margin-top: .9rem; }
+.pf-sec-title { font-weight: 600; color: var(--text); margin-bottom: .5rem; }
+.pf-period-filter { display: inline-flex; gap: .35rem; margin-left: auto; flex-wrap: wrap; }
+.pf-chip { border: 1px solid var(--line); background: var(--surface); color: var(--text-mute); border-radius: 999px; padding: .18rem .7rem; font-size: .8rem; cursor: pointer; }
+.pf-chip.is-active { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.pf-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .5rem; }
+.pf-table th { text-align: left; color: var(--text-mute); font-weight: 500; padding: .35rem .5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.pf-table td { padding: .4rem .5rem; border-bottom: 1px solid var(--line); color: var(--text); vertical-align: top; }
+.pf-table tr:last-child td { border-bottom: none; }
+.pf-empty-cell { text-align: center; color: var(--text-mute); padding: .9rem 0 !important; }
+.pf-num { font-variant-numeric: tabular-nums; }
+.pf-num.plus { color: var(--success); }
+.pf-num.minus { color: var(--danger); }
+.pu-tag { display: inline-block; padding: .05rem .45rem; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: .72rem; margin-right: .3rem; white-space: nowrap; }
+.pu-tag-free { background: var(--success-soft); color: var(--success); }
+.pu-tag-unlimited { background: var(--brand-soft); color: var(--brand); }
+.pu-num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.pf-table-wrap { overflow-x: auto; }
