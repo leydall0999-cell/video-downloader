@@ -3539,8 +3539,11 @@
       const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
-      const downloadHtml = it.status === 'completed' && it.downloadUrl
+      const downloadHtml = it.downloadUrl && ['completed', 'uploaded', 'failed'].includes(it.status)
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
+        : '';
+      const reeditHtml = it.status === 'completed'
+        ? `<button type="button" class="uc-item-start" data-act="reedit" title="恢复该行为可编辑状态：可改格式、重新转码（旧结果在重新转码前仍可下载）">重新编辑</button>`
         : '';
       const startHtml = it.status === 'uploaded'
         ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
@@ -3564,6 +3567,7 @@
           <label class="sr-only" for="musItemTarget-${it.id}">输出格式</label>
           <select id="musItemTarget-${it.id}" data-act="target" ${targetDisabled} title="修改此行的目标格式（开始转码时生效）">${opts}</select>
           ${startHtml}
+          ${reeditHtml}
           ${downloadHtml}
           <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
         </div>
@@ -3773,6 +3777,10 @@
       if (it.status === 'failed') { it.status = 'uploaded'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
       musEnsurePolling();
       musFinishOne(it).catch(() => {});
+    } else if (act === 'reedit') {
+      // 重新编辑：已完成行恢复为可编辑（可改格式/重新转码），保留旧结果下载链接直到新结果产出
+      it.status = 'uploaded'; it.errorMsg = ''; it.jobId = null; it.progress = 30; it.stage = '';
+      musRender();
     }
   });
   el.musClearBtn.addEventListener('click', () => {
