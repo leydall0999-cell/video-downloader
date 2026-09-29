@@ -91,6 +91,7 @@ run_one test_direct_url_hls.py
 run_node test_web_direct_download.js
 run_node test_web_hls_assemble.js
 run_node test_web_route_retry.js
+run_node test_convert_poll_lifecycle.mjs   # 音乐/图片转换轮询定时器自杀停表回归（2026-09-29 线上卡 30% 事故）
 
 echo ""
 echo "========================================="

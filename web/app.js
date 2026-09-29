@@ -6358,7 +6358,9 @@
         headers: { 'Content-Type': 'application/json' },
       }).then(data => {
         if (data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; musRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
+          musEnsurePolling();   // 双保险：无论定时器此前是否被误停，job_id 到手立刻确保轮询在跑
+          musRender(); resolve(data);
         } else {
           item.status = 'failed'; item.errorMsg = data.detail || data.error || '本地转换请求失败'; musRender(); reject(new Error(item.errorMsg));
         }
@@ -6388,7 +6390,9 @@
       try {
         const data = JSON.parse(xhr.responseText || '{}');
         if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; musRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
+          musEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑（防 tick 自杀停表后无人重启）
+          musRender(); resolve(data);
         } else {
           item.status = 'failed';
           item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
@@ -6405,7 +6409,12 @@
 
   const musPollAll = async () => {
     const running = musState.list.filter(x => x.status === 'running' && x.jobId);
-    if (!running.length) { musStopPolling(); return; }
+    // 「活口」守卫：只要还有上传中 / 已开转码但 job_id 未返回的项，就绝不能停表。
+    // 2026-09-29 踩坑：批量开始后第一个 tick（1.5s）发现「无 running 项」就自杀式停表，
+    // 而此时文件还在上传、job_id 还没回来 → 之后没人再重启轮询，UI 永久卡在「转码中 30%」
+    // （服务端其实 16s 就转完了，线上实证 0 次 /api/convert/{id} 轮询）。
+    const live = musState.list.some(x => x.status === 'uploading' || x.status === 'running');
+    if (!running.length && !live) { musStopPolling(); return; }
     await Promise.all(running.map(async (it) => {
       try {
         const st = await request('/api/convert/' + it.jobId);
@@ -6671,7 +6680,9 @@
         headers: { 'Content-Type': 'application/json' },
       }).then(data => {
         if (data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; imgRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
+          imgEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑
+          imgRender(); resolve(data);
         } else {
           item.status = 'failed'; item.errorMsg = data.detail || data.error || '本地转换请求失败'; imgRender(); reject(new Error(item.errorMsg));
         }
@@ -6705,7 +6716,9 @@
       try {
         const data = JSON.parse(xhr.responseText || '{}');
         if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; imgRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
+          imgEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑
+          imgRender(); resolve(data);
         } else {
           item.status = 'failed';
           item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
@@ -6722,7 +6735,9 @@
 
   const imgPollAll = async () => {
     const running = imgState.list.filter(x => x.status === 'running' && x.jobId);
-    if (!running.length) { imgStopPolling(); return; }
+    // 「活口」守卫（与 musPollAll 同源修法）：上传中/finish 在途时绝不停表，防首个 tick 自杀
+    const live = imgState.list.some(x => x.status === 'uploading' || x.status === 'running');
+    if (!running.length && !live) { imgStopPolling(); return; }
     await Promise.all(running.map(async (it) => {
       try {
         const st = await request('/api/convert/' + it.jobId);
