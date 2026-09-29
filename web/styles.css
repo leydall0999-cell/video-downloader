@@ -605,7 +605,14 @@ img { max-width: 100%; display: block; }
 }
 /* 拼接面板：输出设置与片段列表视觉分区（用户反馈「没有跟上方区分开」） */
 .mc-output { margin-top: 1rem; }
-.mc-output-title { font-size: .85rem; font-weight: 600; color: var(--text-mute); margin: 0 0 .55rem .1rem; }
+.mc-output-title {
+  font-size: .95rem; font-weight: 700; color: var(--text);
+  margin: 0 0 .7rem .1rem; display: flex; align-items: center; gap: .45rem;
+}
+.mc-output-title::before {
+  content: ''; flex: none; width: 4px; height: 1em; border-radius: 2px;
+  background: linear-gradient(180deg, var(--brand), var(--accent));
+}
 .uc-bulk-actions {
   display: flex; gap: .55rem; flex-wrap: wrap;
   margin-top: .85rem; padding-top: .85rem;
@@ -6508,3 +6515,7 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .uc-item-sr .uc-item-side { flex-wrap: wrap; justify-content: flex-end; }
 .uc-item-sr .uc-item-side .uc-item-opt { max-width: 112px; }
 .uc-item-sr .uc-item-side .uc-item-opt:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 上一轮拼接的旧结果：置灰降级，与新一批片段/新结果区分（2026-09-29 用户反馈） */
+.uc-item.is-stale { opacity: .55; }
+.uc-item.is-stale .uc-item-name { color: var(--text-mute); }

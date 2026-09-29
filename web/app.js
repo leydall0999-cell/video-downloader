@@ -3014,7 +3014,7 @@
       const statusText = it.isResult
         ? (it.status === 'running'
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
-             : it.status === 'completed' ? '完成 ✅' : '失败：' + (it.errorMsg || ''))
+             : it.status === 'completed' ? (it.stale ? '完成 ✅ · 上次结果' : '完成 ✅') : '失败：' + (it.errorMsg || ''))
         : (it.status === 'uploading'
              ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
              : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
@@ -3027,7 +3027,7 @@
       const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
       const downDisabled = (it.isResult || idx === mcState.list.length - 1) ? 'disabled' : '';
       return `
-        <li class="uc-item ${cls}" data-id="${it.id}">
+        <li class="uc-item ${cls}${it.stale ? ' is-stale' : ''}" data-id="${it.id}">
           <div class="uc-item-main">
             <div class="uc-item-name" title="${name}">${idx + 1}. ${name}</div>
             ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>`
@@ -3073,6 +3073,10 @@
 
   // 添加文件：支持 FileList（网页/上传）或字符串数组本地绝对路径（桌面端免上传）
   const mcAddFiles = (list) => {
+    // 上一轮拼接已完成又添加新片段 → 旧结果降级为「上次结果」（置灰），新结果会用自己的输出名，不再混淆
+    mcState.list.forEach(x => {
+      if (x.isResult && !x.stale && x.status === 'completed') { x.stale = true; x.label = '上次结果'; }
+    });
     const hasLocal = mcState.list.some(x => x.localPath);
     const hasUpload = mcState.list.some(x => x.file);
     Array.from(list).forEach(f => {
@@ -3309,6 +3313,9 @@
     if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已就绪的文件'; return; }
     if (mcState.list.some(x => x.isResult && x.status === 'running')) { mcStatusEl.textContent = '正在拼接中，请等待完成'; return; }
     mcMergeBtn.disabled = true;   // 同步禁用：防 /api/concat 响应返回前双击重复提交
+    mcState.list.forEach(x => {
+      if (x.isResult && !x.stale && x.status === 'completed') { x.stale = true; x.label = '上次结果'; }
+    });
     const body = {
       segments: ready.map(x => x.segName),
       out_format: mcOutFormat.value,
