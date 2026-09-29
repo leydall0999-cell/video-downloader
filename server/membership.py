@@ -57,6 +57,7 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）—— 2026-09-06 起配额墙在「点清晰度下载」处
     "original": 100,          # 原画/4K 直链下载 / 日（会员，未接入）
     "batch_material": 1000,   # 批量下载 / 日（会员，未接入）
+    "cloud": 200,             # 云端算力（转码/拼接/去水印/字幕）/ 日（会员）—— 2026-09-29
     # 评论 / 数据 / 字幕批量：不限（不进 daily_usage 计配额）
 }
 # 免费档每日配额（2026-09-06 定稿：免费下载 10 次/日；原画/批量不开放）
@@ -64,6 +65,7 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
     "original": 0,            # 免费不开放原画
     "batch_material": 0,      # 免费不开放批量
+    "cloud": 3,               # 云端算力免费 3 次/日（账号级，App/网页共享）—— 2026-09-29
 }
 UNLIMITED_QUOTA = ("comment", "data", "subtitle")
 
@@ -759,7 +761,15 @@ class MembershipStore:
             return {"ok": True, "resource": resource, "unlimited": q.get("unlimited", False)}
         if not q["allowed"]:
             if q.get("tier") == "free":
-                return {"ok": False, "error": f"今日免费下载额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
+                if resource == "download":   # 保持下载文案不变（前端/测试依赖）
+                    msg = (f"今日免费下载额度已用尽（{q['limit']}/日）"
+                           f"— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日")
+                else:
+                    label = {"cloud": "云端处理"}.get(resource, resource)
+                    msg = f"今日免费{label}次数已用尽（{q['limit']}/日）"
+                    if q.get("member_limit"):
+                        msg += f"— 开通会员可解锁 {q['member_limit']} 次/日"
+                return {"ok": False, "error": msg,
                         "resource": resource, "code": "MEMBER_QUOTA"}
             return {"ok": False, "error": f"{resource} 今日配额已用尽（{q['limit']}/日）", "resource": resource,
                     "code": "MEMBER_QUOTA"}

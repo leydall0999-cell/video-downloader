@@ -35,6 +35,7 @@ def sub_extract(req: app.SubExtractRequest, request: app.Request = None) -> dict
 @router.post("/api/subtitles/burn")
 def sub_burn(req: app.SubBurnRequest, request: app.Request = None) -> dict:
     user_membership.require_login_user(request)
+    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日（烧录=服务端重编码）
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent
     sub_path = (out_dir / req.sub_rel).resolve()
@@ -43,13 +44,16 @@ def sub_burn(req: app.SubBurnRequest, request: app.Request = None) -> dict:
     out = app.subtitles_mod.burn_subtitle(video, sub_path, app.FFMPEG_BIN)
     if not out:
         raise app.HTTPException(status_code=500, detail="烧录失败，请检查字幕文件格式")
+    app.cloud_quota_count(request, gate)   # 成功才计费
     meta = app.library_mod._load_sidecar(video)
     app.subtitles_mod._write_subtitle_sidecar(out, meta)
     new_id = app.library_mod.encode_id(out.resolve().relative_to(app.DOWNLOAD_DIR.resolve()).as_posix())
     return {"lib_id": new_id, "name": out.name, "title": (meta.get("title") or out.stem) + "（字幕版）"}
 
 @router.post("/api/subtitles/translate")
-def sub_translate(req: app.SubTranslateRequest) -> dict:
+def sub_translate(req: app.SubTranslateRequest, request: app.Request = None) -> dict:
+    user_membership.require_login_user(request)   # 2026-09-29：LLM 翻译吃服务端算力，纳入登录+配额
+    gate = app.cloud_quota_gate(request)
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent
     sub_path = (out_dir / req.sub_rel).resolve()
@@ -67,6 +71,7 @@ def sub_translate(req: app.SubTranslateRequest) -> dict:
         raise app.HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise app.HTTPException(status_code=502, detail=str(exc))
+    app.cloud_quota_count(request, gate)   # 成功才计费
     t = (req.target or "简体中文").strip().lower()
     if any(k in t for k in ("zh", "chinese", "中", "简")):
         ext = "zh"

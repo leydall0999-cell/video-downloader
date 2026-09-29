@@ -47,6 +47,12 @@ server_app._check_convert_quota = lambda request: (True, 0, 5)
 import user_membership  # noqa: E402
 user_membership.require_login_user = lambda request: "reconvert-test-user"
 
+# 2026-09-29 云端算力账号级配额：同样打桩放行（配额契约由 test_cloud_quota.py 专测）。
+# convert.py 经 `import app` 调用 app.cloud_quota_gate，须打桩 app 模块上的符号。
+import app as _app  # noqa: E402
+_app.cloud_quota_gate = lambda request, need=1: {"mode": "off"}
+_app.cloud_quota_count = lambda request, gate, n=1: None
+
 
 class _SyncExecutor:
     """同步执行器：submit 即运行，测试无需等待线程池。"""

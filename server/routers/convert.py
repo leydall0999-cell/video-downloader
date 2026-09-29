@@ -13,7 +13,8 @@ router = APIRouter()
 def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
-    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)  # 旧 IP 墙（已停用，仅喂响应字段）
+    gate = app.cloud_quota_gate(request)
     task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise app.HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
@@ -32,6 +33,7 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
             "device_id": _device_of(request),   # 设备隔离：转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(task.filepath), target, payload.resolution or "original")
+    app.cloud_quota_count(request, gate)   # 任务成功创建才计费
     return {
         "job_id": job_id,
         "status": "running",
@@ -91,7 +93,8 @@ def create_upload_convert(
     rotate 竖屏旋转(0/90/180/270)、remux 仅换容器无损、to_library 完成后存入媒体库。
     """
     app._check_rate_limit(request)
-    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)  # 旧 IP 墙（已停用，仅喂响应字段）
+    gate = app.cloud_quota_gate(request)
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -138,6 +141,7 @@ def create_upload_convert(
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
                         resolution, bitrate, audio, rotate, remux, src_is_temp=True)
+    app.cloud_quota_count(request, gate)   # 任务成功创建才计费
     return {
         "job_id": job_id,
         "status": "running",
@@ -159,10 +163,14 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
                         to_library, device_id, src_name="",
                         audio_bitrate: str = "", image_quality: int = 0,
                         resize: int = 0, flatten_alpha: bool = True,
-                        is_image: bool = False, src_is_temp: bool = True) -> tuple:
+                        is_image: bool = False, src_is_temp: bool = True,
+                        request=None) -> tuple:
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。
     src_is_temp=False 时转码后保留源文件（job["src_path"]），供 /api/convert/reconvert
-    免重传重转；保留期由 app._cleanup_merged_upload_sources（2h TTL）兜底清理。"""
+    免重传重转；保留期由 app._cleanup_merged_upload_sources（2h TTL）兜底清理。
+
+    云端算力账号级配额（免费 3 次/日）：预检在落盘后、计数在任务成功创建后。"""
+    gate = app.cloud_quota_gate(request)
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
     out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
@@ -184,6 +192,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
                         resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp,
                         audio_bitrate=audio_bitrate, image_quality=image_quality,
                         resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
+    app.cloud_quota_count(request, gate)   # 任务成功创建才计费
     return job_id, out_path.name
 
 
@@ -324,7 +333,8 @@ def finish_upload_chunk(
         to_library, _device_of(request), src_name=filename,
         audio_bitrate=audio_bitrate, image_quality=image_quality,
         resize=resize, flatten_alpha=flatten_alpha, is_image=is_image,
-        src_is_temp=False)   # 源文件保留 2h，供「重新编辑/重新转码」免重传（TTL 见 _cleanup_merged_upload_sources）
+        src_is_temp=False,   # 源文件保留 2h，供「重新编辑/重新转码」免重传（TTL 见 _cleanup_merged_upload_sources）
+        request=request)
     return {
         "job_id": job_id,
         "status": "running",
@@ -363,7 +373,7 @@ def reconvert_from_source(
     new_job_id, out_name = _submit_convert_job(
         src_path, target, "original", "", True, 0, False,
         to_library, _device_of(request), src_name=old.get("src_name") or src_path.name,
-        audio_bitrate=audio_bitrate, src_is_temp=False)
+        audio_bitrate=audio_bitrate, src_is_temp=False, request=request)
     return {
         "job_id": new_job_id,
         "status": "running",
@@ -448,6 +458,7 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
     """视频拼接：接收已落地的片段列表，按顺序无损合并为单个文件。"""
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
+    gate = app.cloud_quota_gate(request)
     out_format = payload.out_format
     if out_format not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的输出格式")
@@ -476,4 +487,5 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
         }
     app.executor.submit(_run_concat, job_id, segs, out_format, payload.out_name or "merged",
                         _device_of(request), payload.to_library)
+    app.cloud_quota_count(request, gate)   # 任务成功创建才计费
     return {"job_id": job_id, "status": "running"}

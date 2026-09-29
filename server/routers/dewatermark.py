@@ -120,6 +120,7 @@ def create_dw_image(
     if engine == "ai" and not dwc_ai.available():
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
     app._check_rate_limit(request)
+    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
         raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
@@ -139,6 +140,7 @@ def create_dw_image(
             "kind": "image",
         }
     app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine)
+    app.cloud_quota_count(request, gate)   # 任务成功创建才计费
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
@@ -202,6 +204,7 @@ def create_dw_pdf(
     if not dwc.pdf_available():
         raise app.HTTPException(status_code=503, detail="PDF 去水印不可用（缺少 PyMuPDF 依赖）")
     app._check_rate_limit(request)
+    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
     suffix = app.Path(file.filename or "upload.pdf").suffix.lower()
     if suffix != ".pdf":
         raise app.HTTPException(status_code=409, detail="请上传 PDF 文件")
@@ -228,6 +231,7 @@ def create_dw_pdf(
             "kind": "pdf",
         }
     app.executor.submit(_run_pdf, job_id, str(save_path), mode, regions_list, method, radius, dpi)
+    app.cloud_quota_count(request, gate)   # 任务成功创建才计费
     return {"job_id": job_id, "status": "running", "kind": "pdf", "mode": mode}
 
 

@@ -736,6 +736,96 @@ def _check_cloud_quota(request: Request) -> tuple[bool, int, int]:
     )
 
 
+# ---- 云端算力账号级每日配额（2026-09-29）：免费 3 次/日，会员 200 次/日 ------------ #
+# 覆盖：转码(含免重传重转)/视频拼接/图片·PDF 去水印/字幕识别(whisper)/字幕烧录/字幕翻译。
+# 与下载配额同一套账号级引擎（resource="cloud"）：cn 本地记账 + 异步上云（授权中心按
+# 账号累计，同一账号 App/网页共享），hk 回派 cn /api/member/quota/use（cn 为权威）。
+# 会员引擎异常 fail-open（不挡已登录用户）。紧急停用：VDL_CLOUD_QUOTA_OFF=true。
+# 注意：旧 IP 粒度墙 _check_convert_quota（VDL_CONVERT_REQUIRE_SUB）已被本机制取代，
+# 该环境变量必须保持 false —— 否则会双重计数。
+_CLOUD_QUOTA_OFF = os.environ.get("VDL_CLOUD_QUOTA_OFF", "false").strip().lower() == "true"
+_CLOUD_LOGIN_MSG = "使用云端处理前请先登录账号（免费注册即得，每日 3 次免费额度）"
+
+
+def _cloud_quota_relay(request, payload: dict):
+    """账号级配额检查/计数回派 cn 权威（hk 节点用）。失败返回 None（fail-open）。"""
+    base = (os.environ.get("VDL_QUOTA_RELAY_URL")
+            or os.environ.get("VDL_WORKER_URL") or "").strip().rstrip("/")
+    if not base:
+        return None
+    import urllib.request as _ureq
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    auth = request.headers.get("Authorization")
+    if auth:  # 原样带上 cn 签发的 bearer，由 cn 验签并定位用户
+        headers["Authorization"] = auth
+    req = _ureq.Request(base + "/api/member/quota/use",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers=headers, method="POST")
+    try:
+        with _ureq.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode("utf-8", "ignore") or "{}")
+    except Exception as e:  # noqa: BLE001 — 配额服务异常绝不挡功能
+        try:
+            logger.warning("[cloud-quota] 回派 cn 失败（fail-open）: %s", str(e)[:160])
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+def cloud_quota_gate(request, need: int = 1) -> dict:
+    """云端算力配额预检（不计数）。免费 3/日，超限 402；匿名 403；引擎异常 fail-open。
+
+    need：本次打算创建的任务数。返回 gate 描述（供 cloud_quota_count 复用）。
+    """
+    if _CLOUD_QUOTA_OFF:
+        return {"mode": "off"}
+    try:
+        if NODE_REGION != "cn" and (os.environ.get("VDL_QUOTA_RELAY_URL")
+                                    or os.environ.get("VDL_WORKER_URL") or "").strip():
+            res = _cloud_quota_relay(request, {"resource": "cloud", "n": need,
+                                               "check_only": True})
+            if isinstance(res, dict) and res.get("ok") is False:
+                if res.get("code") == "MEMBER_QUOTA":
+                    raise HTTPException(status_code=402,
+                                        detail=res.get("error") or "今日免费云端处理次数已用尽")
+                if res.get("code") == "NO_AUTH":
+                    raise HTTPException(status_code=403, detail=_CLOUD_LOGIN_MSG)
+            return {"mode": "relay"}
+        if not get_current_user_id(request):
+            raise HTTPException(status_code=403, detail=_CLOUD_LOGIN_MSG)
+        store = current_member_store(request)
+        q = store.quota_state("cloud")
+        if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
+            return {"mode": "local", "store": store, "remaining": q.get("remaining")}
+        if q.get("tier") == "free":
+            detail = (f"今日免费云端处理次数已用尽（{q['limit']}/日），"
+                      f"开通会员可解锁 {q.get('member_limit', 0)} 次/日")
+        else:
+            detail = f"今日云端处理配额已用尽（{q['limit']}/日）"
+        raise HTTPException(status_code=402, detail=detail)
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
+        return {"mode": "local", "store": None}
+
+
+def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
+    """任务成功创建后的计数（与下载墙同语义：失败只记日志，不回滚已建任务）。"""
+    if gate.get("mode") in ("off",) or n <= 0:
+        return
+    try:
+        if gate.get("mode") == "relay":
+            _cloud_quota_relay(request, {"resource": "cloud", "n": n})
+            return
+        store = gate.get("store") or current_member_store(request)
+        store.use_daily("cloud", n=n)
+    except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
+        try:
+            logger.warning("[cloud-quota] 计数失败（忽略）: %s", str(e)[:160])
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _host_of(url: str) -> str:
     """从链接取出主机名（去掉 www./m. 前缀），解析失败返回空串。"""
     try:
