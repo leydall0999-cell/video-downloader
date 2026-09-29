@@ -7108,7 +7108,24 @@
   dwBindView(el.dwModalImg, el.dwModalCanvas, { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }, 'modal');
 
   // 滚动时叠加层必须重新跟随图片位置，否则选区会“跑”
-  if (el.dwPreviewWrap) el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  // 触控板捏合（Chrome 上是 ctrlKey+wheel）默认会缩放整个页面——白色弹窗框会跟着一起变大。
+  // 在去水印区域统一拦截：捏合一律转成「只放大图片」（2026-09-29 用户反馈，与 web-dev 同源）。
+  const dwPinchToZoom = (target) => (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    if (e.target === el.dwImgPreview || e.target === el.dwImgCanvas || e.target === el.dwImgSvg) return;
+    if (target === 'modal' && (e.target === el.dwModalImg || e.target === el.dwModalCanvas || e.target === el.dwModalSvg)) return;
+    const zObj = target === 'modal'
+      ? { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }
+      : { get value() { return dwZoom; }, set value(v) { dwZoom = v; } };
+    zObj.value = e.deltaY < 0 ? Math.min(5, zObj.value + 0.2) : Math.max(1, zObj.value - 0.2);
+    dwApplyZoom(target);
+  };
+  if (el.dwImgModal) el.dwImgModal.addEventListener('wheel', dwPinchToZoom('modal'), { passive: false });
+  if (el.dwPreviewWrap) {
+    el.dwPreviewWrap.addEventListener('wheel', dwPinchToZoom('preview'), { passive: false });
+    el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
+  }
   if (el.dwModalPreviewWrap) {
     // 弹窗真正的滚动容器是 .dw-modal-body（wrap 本身 overflow:visible 不滚动）
     const modalBody = el.dwModalPreviewWrap.closest('.dw-modal-body');
