@@ -42,6 +42,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 server_app._check_rate_limit = lambda request: None
 server_app._check_convert_quota = lambda request: (True, 0, 5)
 
+# 2026-09-29 服务端功能门禁：本测试聚焦重转语义，打桩放行登录门禁
+# （门禁契约由 test_feature_auth_gate.py 专测）。routers 与这里 import 的是同一模块对象。
+import user_membership  # noqa: E402
+user_membership.require_login_user = lambda request: "reconvert-test-user"
+
 
 class _SyncExecutor:
     """同步执行器：submit 即运行，测试无需等待线程池。"""

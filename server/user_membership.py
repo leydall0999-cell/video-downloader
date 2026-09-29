@@ -53,6 +53,20 @@ def get_current_user_id(request) -> Optional[str]:
     return token_from_header(auth)
 
 
+def require_login_user(request) -> str:
+    """功能级登录门禁（2026-09-29 对齐 App「所有功能必须登录才能使用」）。
+
+    执行类端点（转换/拼接/去水印/字幕/解说/订阅/种子/队列/清理）在函数体第一行
+    调用本函数；未登录一律 403。detail 必须含「登录」——前端 request() 据
+    403+登录 文案置 needLogin 并拉起登录/注册框（双保险的前端兜底）。
+    """
+    uid = get_current_user_id(request)
+    if not uid:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="请先登录账号后使用该功能（免费注册即得）")
+    return uid
+
+
 def current_member_store(request) -> MembershipStore:
     uid = get_current_user_id(request)
     if uid:

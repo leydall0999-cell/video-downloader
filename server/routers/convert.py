@@ -5,11 +5,13 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 import app
 from fastapi import APIRouter
 from .core import _device_of
+import user_membership
 
 router = APIRouter()
 
 @router.post("/api/convert")
 def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
+    user_membership.require_login_user(request)
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     task = app._require_task(payload.task_id, _device_of(request))
@@ -265,6 +267,7 @@ def finish_upload_chunk(
 
     mode='store' 时仅把合并后的文件落地为「拼接素材」（不转码），供 /api/concat 使用。
     图片目标（png/jpg/webp/bmp/tiff）另用 image_quality/resize/flatten_alpha/is_image。"""
+    user_membership.require_login_user(request)
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if not _UPLOAD_ID_RE.match(upload_id) or total <= 0:
@@ -344,6 +347,7 @@ def reconvert_from_source(
     分片 finish 合并后的源文件保留 2 小时（_cleanup_merged_upload_sources TTL）；
     期间前端「重新编辑→开始转码」直接调本接口按新目标格式重转，不再整包重传。
     源文件过期/缺失时返回 410，前端回退到重新上传。设备隔离：仅创建者本人可重转。"""
+    user_membership.require_login_user(request)
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if target not in app.CONVERT_TARGETS:
@@ -442,6 +446,7 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library):
 @router.post("/api/concat")
 def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
     """视频拼接：接收已落地的片段列表，按顺序无损合并为单个文件。"""
+    user_membership.require_login_user(request)
     app._check_rate_limit(request)
     out_format = payload.out_format
     if out_format not in app.CONVERT_TARGETS:

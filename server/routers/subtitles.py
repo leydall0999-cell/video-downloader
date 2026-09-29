@@ -3,6 +3,7 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 所有 profile 均挂载，网页版行为零变化。app 端新功能只改本目录对应文件。
 """
 import app
+import user_membership
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -15,7 +16,8 @@ def sub_list(req: app.SubListRequest) -> dict:
     return {"subs": subs}
 
 @router.post("/api/subtitles/extract")
-def sub_extract(req: app.SubExtractRequest) -> dict:
+def sub_extract(req: app.SubExtractRequest, request: app.Request = None) -> dict:
+    user_membership.require_login_user(request)
     video = app._resolve_lib_video(req.lib_id)
     meta = app.library_mod._load_sidecar(video)
     out_dir = video.parent
@@ -31,7 +33,8 @@ def sub_extract(req: app.SubExtractRequest) -> dict:
     return {"sub_rel": rel, "lang": req.lang, "size": sub.stat().st_size}
 
 @router.post("/api/subtitles/burn")
-def sub_burn(req: app.SubBurnRequest) -> dict:
+def sub_burn(req: app.SubBurnRequest, request: app.Request = None) -> dict:
+    user_membership.require_login_user(request)
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent
     sub_path = (out_dir / req.sub_rel).resolve()

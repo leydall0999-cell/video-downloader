@@ -12,7 +12,9 @@ def list_subscriptions() -> dict:
     return {"subscriptions": [s.to_public_dict() for s in app.sub_store.list_all()], "enabled": app.SUB_ENABLED}
 
 @router.post("/api/subscriptions")
-def add_subscription(payload: app.SubscribeRequest) -> dict:
+def add_subscription(payload: app.SubscribeRequest, request: app.Request = None) -> dict:
+    import user_membership
+    user_membership.require_login_user(request)
     if not app.SUB_ENABLED:
         raise app.HTTPException(status_code=403, detail="当前部署未启用订阅功能")
     if not app.downloader.is_valid_quality(payload.quality):

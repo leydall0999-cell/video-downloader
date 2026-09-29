@@ -7,6 +7,7 @@ import app
 import json
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
+import user_membership
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -111,6 +112,7 @@ def create_dw_image(
     优先解析 regions（前端多选区）；缺失时回退单个 x/y/w/h 区域（兼容旧客户端）。
     engine: opencv（默认，TELEA/NS 扩散修复）| ai（LaMa ONNX 像素级无痕修复，需 onnxruntime+模型）。
     """
+    user_membership.require_login_user(request)
     if not dwc.available():
         raise app.HTTPException(status_code=503, detail="图片去水印不可用（缺少 OpenCV 依赖）")
     if engine not in ("opencv", "ai"):
@@ -196,6 +198,7 @@ def create_dw_pdf(
 
     annotations 模式无损删除 Watermark 注释；raster 模式栅格化后区域 inpaint 重排。
     raster 模式需要框选区域（regions 多选区或 x/y/w/h 单区域）。"""
+    user_membership.require_login_user(request)
     if not dwc.pdf_available():
         raise app.HTTPException(status_code=503, detail="PDF 去水印不可用（缺少 PyMuPDF 依赖）")
     app._check_rate_limit(request)

@@ -48,7 +48,9 @@ def retention_scan() -> dict:
     return plan
 
 @router.post("/api/retention/run")
-def retention_run(req: app.RetentionRunRequest) -> dict:
+def retention_run(req: app.RetentionRunRequest, request: app.Request = None) -> dict:
+    import user_membership
+    user_membership.require_login_user(request)
     app._require_retention()
     cfg = app.retention_store.get()
     cats = req.categories or None

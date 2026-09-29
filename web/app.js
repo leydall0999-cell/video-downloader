@@ -2123,6 +2123,8 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    const _authTok = localStorage.getItem('vdl_auth_token');   // 2026-09-29 服务端功能门禁：finish 须登录
+    if (_authTok) xhr.setRequestHeader('Authorization', 'Bearer ' + _authTok);
     xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
     xhr.addEventListener('load', () => {
       try {
@@ -2419,6 +2421,8 @@
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload-chunk/finish');
       xhr.setRequestHeader('X-Device-Id', deviceId());
+      const _authTok = localStorage.getItem('vdl_auth_token');   // 2026-09-29 服务端功能门禁：finish 须登录
+      if (_authTok) xhr.setRequestHeader('Authorization', 'Bearer ' + _authTok);
       xhr.timeout = 120000;
       xhr.addEventListener('load', () => {
         try {
@@ -6473,7 +6477,9 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
-    xhr.timeout = 120000;
+    const _authTok = localStorage.getItem('vdl_auth_token');   // 2026-09-29 服务端功能门禁：finish 须登录
+    if (_authTok) xhr.setRequestHeader('Authorization', 'Bearer ' + _authTok);
+    xhr.timeout = 120000;  // 音乐转换
     xhr.addEventListener('load', () => {
       try {
         const data = JSON.parse(xhr.responseText || '{}');
@@ -6851,6 +6857,8 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
+    const _authTok = localStorage.getItem('vdl_auth_token');   // 2026-09-29 服务端功能门禁：finish 须登录
+    if (_authTok) xhr.setRequestHeader('Authorization', 'Bearer ' + _authTok);
     xhr.timeout = 120000;
     xhr.addEventListener('load', () => {
       try {
@@ -7053,6 +7061,8 @@
       const xhr = new XMLHttpRequest();
       xhr.open('POST', (window.VDL_API_BASE || '') + '/api/subtitle/finish');
       xhr.setRequestHeader('X-Device-Id', deviceId());
+      const _authTok = localStorage.getItem('vdl_auth_token');   // 2026-09-29 服务端功能门禁：finish 须登录
+      if (_authTok) xhr.setRequestHeader('Authorization', 'Bearer ' + _authTok);
       xhr.timeout = 120000;
       xhr.addEventListener('load', () => {
         try {

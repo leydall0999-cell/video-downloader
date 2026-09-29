@@ -13,7 +13,9 @@ def torrent_list() -> dict:
     return {"items": app.torrent_manager.list(), "available": True}
 
 @router.post("/api/torrents/add")
-def torrent_add(req: app.TorrentAddRequest) -> dict:
+def torrent_add(req: app.TorrentAddRequest, request: app.Request = None) -> dict:
+    import user_membership
+    user_membership.require_login_user(request)
     app._require_torrent()
     try:
         return app.torrent_manager.add(
@@ -32,7 +34,10 @@ async def torrent_add_file(
     name: str = app.Form(default=""),
     paused: bool = app.Form(default=False),
     save_path: str = app.Form(default=""),
+    request: app.Request = None,
 ) -> dict:
+    import user_membership
+    user_membership.require_login_user(request)
     app._require_torrent()
     if not torrent:
         raise app.HTTPException(status_code=400, detail="未收到 .torrent 文件")

@@ -8,7 +8,9 @@ from fastapi import APIRouter
 router = APIRouter()
 
 @router.post("/api/process/run")
-def process_run(req: app.ProcessRequest) -> dict:
+def process_run(req: app.ProcessRequest, request: app.Request = None) -> dict:
+    import user_membership
+    user_membership.require_login_user(request)
     if not (app.plat.is_desktop() or app.os.environ.get("VDL_LIBRARY_ENABLED")):
         raise app.HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",

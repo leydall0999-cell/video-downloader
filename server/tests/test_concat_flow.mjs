@@ -135,18 +135,20 @@ function runScenario() {
     },
     setInterval: clock.setInterval, clearInterval: clock.clearInterval,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    localStorage: { getItem: () => null },  // 2026-09-29 app.js 的 finish XHR 会读登录 token
   };
   // eslint-disable-next-line no-new-func
   new Function('document', 'console', 'performance', 'Date', 'ucFormatSize', 'ucFormatSpeed', 'ucChStats',
     'ucPickEndpoint', 'ucUploadChunk', 'ucLastProgressByItem', 'UC_UPLOAD_ENDPOINTS', 'UC_CHUNK_SIZE',
     'UC_BIG_CHUNK_SIZE', 'UC_CHUNK_CONCURRENCY', 'UC_CHUNK_RETRIES', 'UC_POLL_INTERVAL', 'UC_EXT_OF',
-    'deviceId', 'window', 'FormData', 'fetch', 'XMLHttpRequest', 'request',
+    'deviceId', 'window', 'FormData', 'fetch', 'XMLHttpRequest', 'request', 'localStorage',
     'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', `"use strict";\n${mcBlock}`)(
     sandbox.document, sandbox.console, sandbox.performance, sandbox.Date, sandbox.ucFormatSize,
     sandbox.ucFormatSpeed, sandbox.ucChStats, sandbox.ucPickEndpoint, sandbox.ucUploadChunk,
     sandbox.ucLastProgressByItem, sandbox.UC_UPLOAD_ENDPOINTS, sandbox.UC_CHUNK_SIZE, sandbox.UC_BIG_CHUNK_SIZE,
     sandbox.UC_CHUNK_CONCURRENCY, sandbox.UC_CHUNK_RETRIES, sandbox.UC_POLL_INTERVAL, sandbox.UC_EXT_OF,
     sandbox.deviceId, sandbox.window, sandbox.FormData, sandbox.fetch, sandbox.XMLHttpRequest, sandbox.request,
+    sandbox.localStorage,
     sandbox.setInterval, sandbox.clearInterval, sandbox.setTimeout, sandbox.clearTimeout);
   return { clock, state: { get concatPosts() { return concatPosts; } } };
 }

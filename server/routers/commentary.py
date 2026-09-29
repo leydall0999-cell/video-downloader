@@ -3,12 +3,14 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 所有 profile 均挂载，网页版行为零变化。app 端新功能只改本目录对应文件。
 """
 import app
+import user_membership
 from fastapi import APIRouter
 
 router = APIRouter()
 
 @router.post("/api/commentary")
-def create_commentary(payload: app.CommentaryRequest) -> dict:
+def create_commentary(payload: app.CommentaryRequest, request: app.Request = None) -> dict:
+    user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":
@@ -45,8 +47,10 @@ def create_commentary_upload(
     trim_start: float = app.Form(0.0),
     trim_end: float = app.Form(0.0),
     mode: str = app.Form("highlights"),
+    request: app.Request = None,
 ) -> dict:
     """上传本地视频 → 直接生成解说成片。"""
+    user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -88,8 +92,10 @@ def create_script_only_upload(
     web: bool = app.Form(False),
     one_click: bool = app.Form(False),
     style: str = app.Form("none"),
+    request: app.Request = None,
 ) -> dict:
     """上传本地视频 → 只生成脚本不渲染成片。"""
+    user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":
@@ -312,9 +318,10 @@ def commentary_file(job_id: str) -> app.FileResponse:
     return app.FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 @router.post("/api/commentary/script-only")
-def create_script_only(payload: app.CommentaryRequest) -> dict:
+def create_script_only(payload: app.CommentaryRequest, request: app.Request = None) -> dict:
     """只做转写+解说词生成，不渲染成片。返回 job_id 供前端轮询，
     拿到 script.json 后展示可编辑解说词面板。"""
+    user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":
@@ -414,12 +421,14 @@ def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
     return {"job_id": job_id, "status": "updated", "segment_count": len(payload.segments)}
 
 @router.post("/api/commentary/render/{job_id}")
-def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form("")) -> dict:
+def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = app.Form(""),
+                  request: app.Request = None) -> dict:
     """用已审核的脚本渲染成片（process.py --edit-only）。
 
     剪辑选项直接沿用 script.json 中已保存的 options（生成脚本时写入、人工审核时可改），
     避免用默认值覆盖用户当初的选择（例如一键生成的全片深入+联网会被 deep_hl 默认值冲掉）。
     """
+    user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":

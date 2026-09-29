@@ -126,17 +126,18 @@ async function runScenario({ uploadMs, finishMs }) {
     },
     setInterval: clock.setInterval, clearInterval: clock.clearInterval,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    localStorage: { getItem: () => null },  // 2026-09-29 app.js 的 finish XHR 会读登录 token
     console,
   };
 
   // eslint-disable-next-line no-new-func
   new Function('el', 'UC_POLL_INTERVAL', 'deviceId', 'window', 'FormData', 'fetch',
     'XMLHttpRequest', 'ucUploadChunk', 'request', 'setInterval', 'clearInterval',
-    'setTimeout', 'clearTimeout', 'console', `"use strict";\n${musBlock}`)(
+    'setTimeout', 'clearTimeout', 'localStorage', 'console', `"use strict";\n${musBlock}`)(
     sandbox.el, sandbox.UC_POLL_INTERVAL, sandbox.deviceId, sandbox.window, sandbox.FormData,
     sandbox.fetch, sandbox.XMLHttpRequest, sandbox.ucUploadChunk, sandbox.request,
     sandbox.setInterval, sandbox.clearInterval, sandbox.setTimeout, sandbox.clearTimeout,
-    sandbox.console);
+    sandbox.localStorage, sandbox.console);
 
   // ① 加一个 5.8MB 的网页文件（走真实 change 处理器 → musAddFiles）
   elProxy.musFileInput.files = [{ name: '阿刁-赵雷-16827758.mp3', size: 5.8 * 1024 * 1024,

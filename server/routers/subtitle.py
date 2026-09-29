@@ -8,6 +8,7 @@ job 机制独立于 CONVERT_JOBS：SUBTITLE_JOBS + app.executor，设备隔离�
 """
 import app
 import os
+import user_membership
 import re
 import time
 import shutil
@@ -213,6 +214,7 @@ def _device_of_req(request):
 
 @router.post("/api/subtitle/extract")
 def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
+    user_membership.require_login_user(request)
     app._check_rate_limit(request)
     resolved = _resolve_safe_local_path(payload.local_path)
     suffix = resolved.suffix.lower()
@@ -286,6 +288,7 @@ def subtitle_upload_finish(
     request: app.Request = None,
 ) -> dict:
     """分片上传收尾（字幕专用）：校验分片齐全 → 合并 → 提交 ASR job。"""
+    user_membership.require_login_user(request)
     app._check_rate_limit(request)
     if not re.fullmatch(r"[0-9a-z]+", upload_id or "") or total <= 0 or total > 4096:
         raise app.HTTPException(status_code=400, detail="分片参数非法")
