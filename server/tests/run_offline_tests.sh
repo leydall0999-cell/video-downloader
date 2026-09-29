@@ -232,6 +232,18 @@ run_one test_sniffer_extension_ingest.py
 #      finish 必报「分片不完整」。同时钉住「非 JSON 的 413 = 网关拦截」的区分文案。
 run_one test_upload_endpoint_same_origin.py
 
+#  29. test_payment_core.py —— 支付内核（2026-09-30）：套餐价表 / 下单返回 PENDING+二维码 /
+#      未付款查询仍 PENDING 且不发放权益 / simulate_paid 翻转 PAID 且 grant 回调收到正确
+#      plan_code / 未知套餐拒绝 / 真实通道未接入时 NotImplementedError / 订单可持久化复查。
+run_one test_payment_core.py
+
+#  30. test_payment_router.py —— 支付 REST 层（2026-09-30，★仓库健康）：app.py 无条件
+#      include routers/payment.py，故该文件与四个 /api/cloud/pay/* 路由必须在位，
+#      否则全新 clone 直接 ImportError 起不来。同时钉死订单目录走 _base_dir()
+#      （~/.video-downloader + VDL_DATA_DIR 隔离），不得回落 ~/.videodownloader
+#      （无短横线，是 cookie/cloud_sync 的历史目录，写错不报错但会污染家目录）。
+run_one test_payment_router.py
+
 echo ""
 echo "=== extension/tests/test_sniff_core.js（MV3 扩展判定核心，node） ==="
 NODE_BIN=""
