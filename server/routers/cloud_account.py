@@ -245,6 +245,98 @@ def flush_pending_spends(store) -> None:
         pass  # 仍离线：保留队列下次再试
 
 
+# ---- 每日用量上云（同一账号 App/网页版共用每日免费配额；本地只是预检缓存）----
+def _pending_usages_path_guard(store) -> list[dict]:
+    try:
+        store._ensure_loaded()
+        meta = store._state.setdefault("meta", {})
+        q = meta.setdefault("pending_usages", [])
+        if not isinstance(q, list):
+            q = meta["pending_usages"] = []
+        return q
+    except Exception:
+        return []
+
+
+def _queue_pending_usages(store, items: list[dict]) -> None:
+    try:
+        q = _pending_usages_path_guard(store)
+        q.extend(items)
+        store._state["meta"]["pending_usages"] = q[-200:]  # 上限 200 条
+        store._persist()
+    except Exception:
+        pass
+
+
+def _report_usage(store, items: list[dict]) -> None:
+    """同步上报（在后台线程里跑）：成功则用云端权威快照校准本地每日用量。"""
+    try:
+        store._ensure_loaded()
+        token = str(((store._state.get("meta") or {}).get("account") or {}).get("token") or "")
+        if not token or not items:
+            return
+        import license_client
+        r = license_client.daily_remote(token, items)
+        if r and r.get("ok"):
+            auth = r.get("authority") or {}
+            if auth:
+                store.apply_cloud_authoritative({"authority": auth})
+        else:
+            _queue_pending_usages(store, items)
+    except Exception:
+        _queue_pending_usages(store, items)  # 断网/超时：排队下次补报
+
+
+def report_usage_async(store, resource: str, n: int = 1) -> None:
+    """membership.use_daily 的上云钩子（fire-and-forget，幂等 id 防重复计）。
+
+    离线测试环境（pytest / VDL_OFFLINE_TESTS）直接跳过：后台线程会污染全局
+    store 单例并发起真实网络请求。
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return
+    res = str(resource or "").strip()[:32]
+    if n <= 0 or not res:
+        return
+    import threading
+    import uuid
+    ev = uuid.uuid4().hex[:16]
+    items = [{"res": res, "n": n, "id": f"{ev}-{res[:16]}"}]
+    try:
+        threading.Thread(target=_report_usage, args=(store, items),
+                         daemon=True, name="vdl-usage-report").start()
+    except Exception:
+        _queue_pending_usages(store, items)
+
+
+def flush_pending_usages(store) -> None:
+    """联网时补报离线期间积累的每日用量（登录/心跳成功后调用）。"""
+    try:
+        store._ensure_loaded()
+        meta = store._state.get("meta") or {}
+        pending = meta.get("pending_usages") or []
+        if not pending:
+            return
+        token = str((meta.get("account") or {}).get("token") or "")
+        if not token:
+            return
+        import license_client
+        r = license_client.daily_remote(token, pending)
+        if r and r.get("ok"):
+            meta["pending_usages"] = []
+            store._persist()
+            auth = r.get("authority") or {}
+            if auth:
+                store.apply_cloud_authoritative({"authority": auth})
+    except Exception:
+        pass  # 仍离线：保留队列下次再试
+
+
 def _pub(store, extra: Optional[dict] = None) -> dict[str, Any]:
     out = {"ok": True, "account": store.account_view()}
     if extra:
@@ -365,6 +457,7 @@ def cloud_sync() -> dict[str, Any]:
     store.save_account(acc.get("email", ""), token, acct, fp=fp, name=name)
     _apply_account_state(store, acct)
     flush_pending_spends(store)
+    flush_pending_usages(store)
     return _pub(store)
 
 
@@ -404,48 +497,8 @@ def cloud_unbind(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return _pub(store)
 
 
-@router.post("/api/cloud/pay/create")
-def cloud_pay_create(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """购买下单：调内地 ECS 支付服务（pay.hanyuxz.top）生成支付宝当面付二维码。
-
-    金额由服务端（pay_server.PRICE_MAP）决定，前端只传 plan_code，防改价。
-    """
-    import license_client
-    plan_code = str(payload.get("plan_code") or "")
-    if not plan_code:
-        return {"ok": False, "error": "缺少套餐"}
-    store = _store()
-    acc = (store._state.get("meta") or {}).get("account") or {}
-    token = str(acc.get("token") or "")
-    if not token:
-        return {"ok": False, "error": "请先登录账号", "code": "NOT_LOGGED_IN"}
-    try:
-        r = license_client.pay_create_remote(token, plan_code)
-    except license_client.LicenseCloudError as e:
-        return {"ok": False, "error": f"{e}（下单需要联网）", "code": "CLOUD_UNREACHABLE"}
-    if not r.get("ok"):
-        return {"ok": False, "error": r.get("error") or "下单失败",
-                "code": r.get("code") or "REJECTED"}
-    return {"ok": True, "order_id": r.get("order_id"), "qr_png": r.get("qr_png"),
-            "amount": r.get("amount"), "plan_code": r.get("plan_code")}
-
-
-@router.post("/api/cloud/pay/query")
-def cloud_pay_query(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """订单状态轮询（App 前端轮询，支付成功自动开通）。"""
-    import license_client
-    order_id = str(payload.get("order_id") or "")
-    if not order_id:
-        return {"ok": False, "error": "缺少订单号"}
-    try:
-        r = license_client.pay_query_remote(order_id)
-    except license_client.LicenseCloudError as e:
-        return {"ok": False, "error": str(e), "code": "CLOUD_UNREACHABLE"}
-    if not r.get("ok"):
-        return {"ok": False, "error": r.get("error") or "查询失败",
-                "code": r.get("code") or "REJECTED"}
-    return {"ok": True, "order_id": order_id, "status": r.get("status"),
-            "plan_code": r.get("plan_code"), "amount": r.get("amount")}
+# ⚠️ /api/cloud/pay/* 已迁移至 routers/payment.py（通道无关 + 本地订单 + 付款即发权益）。
+# 旧实现直连已下线的 pay.hanyuxz.top，故此处移除，避免重复路由。
 
 
 def maybe_sync_account(store) -> None:
@@ -475,6 +528,7 @@ def maybe_sync_account(store) -> None:
             store.save_account(acc.get("email", ""), token, acct, fp=fp, name=name)
             _apply_account_state(store, acct)
             flush_pending_spends(store)
+            flush_pending_usages(store)
         elif r.get("code") == "DEVICE_EVICTED":
             store.set_evicted(True)
         elif r.get("code") == "ACCOUNT_BANNED":

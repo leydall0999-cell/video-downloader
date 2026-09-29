@@ -144,6 +144,20 @@ def spend_remote(token: str, items: list, base_url: Optional[str] = None,
                  base_url, timeout, opener)
 
 
+def daily_remote(token: str, items: list, base_url: Optional[str] = None,
+                 timeout: float = 8.0,
+                 opener: Optional[Callable] = None) -> dict[str, Any]:
+    """每日用量上报（幂等）。items: [{res, n, id}]。
+
+    同一账号在 App / 网页版共用同一份每日配额：本地 use_daily 只是预检缓存，
+    真实用量以授权中心按账号累计为准。返回 {ok, applied, authority}；云端按 id
+    去重，断网重发不会重复计。网络异常抛 LicenseCloudError —— 调用方把 items
+    入 pending 队列下次补报。
+    """
+    return _post("/api/license/daily", {"token": token, "items": items},
+                 base_url, timeout, opener)
+
+
 def set_password_remote(email: str, new_password: str, old_password: str = "",
                         token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,

@@ -189,6 +189,39 @@ def test_daily_quota_reset_on_new_day():
     assert q["remaining"] == DAILY_QUOTA_LIMITS["download"]
     print("✅ 日配额跨日惰性重置")
 
+def test_cloud_authority_syncs_daily_usage():
+    """同一账号 App/网页共用每日配额：云端快照的每日用量 max 合并进本地。
+
+    他端（网页版）已用 8 次同步回来；本地手改成 0（蹭额度）一同步即被覆盖；
+    两端合计用满 10 次/日后本端继续用被拒。
+    """
+    import time as _time
+    cur = [T0]
+    st = _mkstore(tempfile.mkdtemp(), cur)
+    st.use_daily("download", n=2)                      # 本端已用 2
+    today = _time.strftime("%Y-%m-%d", _time.localtime(T0))
+    acct = {"authority": {"v": 1, "member_until_dl": 0.0, "member_until_ai": 0.0,
+                          "perm_credits": 0, "ai_credits_left": 0, "banned": False,
+                          "usage_date": today, "usage": {"download": 8}}}
+    r = st.apply_cloud_authoritative(acct)
+    assert r["ok"], r
+    assert st.quota_state("download")["used"] == 8, "他端用量没合并进本地"
+    # 篡改方向：本地归零也蹭不到额度（云端 8 ≥ 0 → 回滚为 8）
+    st._state["daily_usage"]["download"] = 0
+    st._persist()
+    st.apply_cloud_authoritative(acct)
+    assert st.quota_state("download")["used"] == 8, "篡改本地归零未被云端回滚"
+    # 两端合计：8 → 9 → 10 放行，第 11 次被拒
+    assert st.use_daily("download")["ok"] is True
+    assert st.use_daily("download")["ok"] is True
+    r3 = st.use_daily("download")
+    assert r3["ok"] is False and r3.get("code") == "MEMBER_QUOTA", r3
+    # 快照日期不是本地今天（跨日/时钟漂移）→ 不合并，不误伤
+    acct["authority"]["usage_date"] = "2000-01-01"
+    st.apply_cloud_authoritative(acct)
+    assert st.quota_state("download")["used"] == 10
+    print("✅ 云端每日用量 max 合并（他端同步 + 防蹭 + 跨日不误伤）")
+
 def test_state_persists_across_instances():
     """激活状态落盘，新实例可读到（模拟重启 app）。"""
     d = tempfile.mkdtemp()
@@ -224,6 +257,7 @@ if __name__ == "__main__":
         test_member_quota_upgrade_after_activation,
         test_daily_quota_unlimited_and_unknown,
         test_daily_quota_reset_on_new_day,
+        test_cloud_authority_syncs_daily_usage,
         test_state_persists_across_instances,
         test_history_capped,
     ]

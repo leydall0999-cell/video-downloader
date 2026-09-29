@@ -645,6 +645,27 @@ class MembershipStore:
 
         st["permanent_credits"]["total"] = max(0, int(auth.get("perm_credits") or 0))
 
+        # 账号级每日用量同步（同一账号 App/网页共用每日配额）：
+        # 取 max(本地, 云端) —— 云端只大不小，既不冲掉本地在途未报的增量，
+        # 也让手改本地数字蹭额度的篡改一同步即回滚。仅快照日期=本地今天才合并。
+        udate = str(auth.get("usage_date") or "")
+        ucounts = auth.get("usage")
+        if udate == time.strftime("%Y-%m-%d", time.localtime(now)) and isinstance(ucounts, dict):
+            self._roll_daily(now)
+            du = st["daily_usage"]
+            keys = {str(k) for k in list(du.keys())} | {str(k) for k in ucounts}
+            keys.discard("date")
+            for k in keys:
+                try:
+                    cv = int(ucounts.get(k) or 0)
+                except (TypeError, ValueError):
+                    cv = 0
+                try:
+                    lv = int(du.get(k, 0) or 0)
+                except (TypeError, ValueError):
+                    lv = 0
+                du[k] = max(lv, cv)
+
         acc = st["meta"].setdefault("account", {})
         acc["banned"] = bool(auth.get("banned"))
         st["meta"]["last_authority_sync"] = now
@@ -850,6 +871,12 @@ class MembershipStore:
                     "resource": resource, "code": "MEMBER_QUOTA"}
         self._state["daily_usage"][resource] = new_used
         self._persist()
+        # 异步上云记账（同一账号 App/网页共用每日配额；失败/离线进队列下次心跳补报）
+        try:
+            from routers.cloud_account import report_usage_async
+            report_usage_async(self, resource, n)
+        except Exception:
+            pass
         return {"ok": True, "resource": resource, "used": new_used,
                 "remaining": q["limit"] - new_used}
 

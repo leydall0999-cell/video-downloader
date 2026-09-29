@@ -36,6 +36,7 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
   POST /api/license/grant     {email, plan, note?, token}          管理员直接给账号开套餐
   POST /api/license/users     {token}                              管理员账号列表
   POST /api/license/spend     {token, items:[{pool,cost,op,id}]}   客户端积分扣减上报（幂等）
+  POST /api/license/daily     {token, items:[{res,n,id}]}          客户端每日用量上报（幂等，两端共用配额）
   POST /api/license/ban       {email, banned, note?, token}        管理员封禁/解封账号
   POST /api/license/adjust    {email, pool, delta, note?, token}   管理员调整积分（可负）
   POST /api/license/setstate  {email, member_until_dl?, member_until_ai?, perm_credits?, ai_credits_left?, token}
@@ -299,6 +300,17 @@ def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
     ai_left = 0
     if ai_active:
         ai_left = max(0, int(user.get("ai_grant_total") or 0) - int(user.get("ai_spent_total") or 0))
+    # 账号级每日用量（北京时间日切）：同一账号在 App / 网页版共用同一份每日配额，
+    # 本地计数只是预检缓存 —— 快照随心跳/上报响应下发，客户端 max(本地,云端) 合并。
+    daily = user.get("daily") or {}
+    today = _bj_day(now)
+    usage: dict[str, int] = {}
+    if str(daily.get("date") or "") == today:
+        for k, v in (daily.get("counts") or {}).items():
+            try:
+                usage[str(k)[:32]] = int(v)
+            except (TypeError, ValueError):
+                continue
     return {
         "v": 1,
         "member_until_dl": float(user.get("member_until_dl") or 0),
@@ -306,6 +318,8 @@ def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
         "ai_credits_left": ai_left,
         "perm_credits": int(user.get("perm_credits") or 0),
         "banned": bool(user.get("banned")),
+        "usage_date": today,
+        "usage": usage,
     }
 
 
@@ -358,6 +372,55 @@ def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
         if int(user.get("perm_credits") or 0) < 0:
             _raise_alert(state, "negative_balance", "critical", uid, "",
                          f"永久积分余额为负（{user['perm_credits']}），疑似篡改/并发扣减", now)
+    return {"ok": True, "applied": applied, "authority": _authority_view(user, now)}
+
+
+def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
+               secret: str, ip: str = "") -> dict[str, Any]:
+    """客户端每日用量上报（幂等）：同一账号在 App / 网页版共用同一份每日配额。
+
+    本地 use_daily 只是预检缓存；真实用量以本接口按账号累计为准（北京时间日切）。
+    幂等键 id 由客户端生成（uuid），断网重发只计一次。响应带最新 authority 快照，
+    客户端上报成功后立即校准本地计数。
+    """
+    uid = parse_token(token, secret, now)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    if user.get("banned"):
+        raise ApiError(403, "ACCOUNT_BANNED", "账号已被停用，如有疑问请联系客服")
+    if not isinstance(items, list):
+        raise ApiError(400, "BAD_BODY", "items 必须是数组")
+    ids = user.setdefault("usage_ids", [])
+    today = _bj_day(now)
+    daily = user.get("daily") or {}
+    if str(daily.get("date") or "") != today:
+        daily = {"date": today, "counts": {}}
+    counts = daily.setdefault("counts", {})
+    applied = 0
+    for it in items[:50]:
+        if not isinstance(it, dict):
+            continue
+        res = str(it.get("res") or "").strip()[:32]
+        if not res:
+            continue
+        try:
+            n = int(it.get("n") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n <= 0:
+            continue
+        iid = str(it.get("id") or "").strip()[:64]
+        if iid and iid in ids:
+            continue                                   # 幂等：重发只计一次
+        counts[res] = int(counts.get(res) or 0) + n
+        applied += n
+        if iid:
+            ids.append(iid)
+    user["daily"] = daily
+    user["usage_ids"] = ids[-500:]
+    if applied > 0:
+        _log_event(state, "daily", now, email=uid, applied=applied)
     return {"ok": True, "applied": applied, "authority": _authority_view(user, now)}
 
 
@@ -1212,6 +1275,10 @@ class Handler(BaseHTTPRequestHandler):
                                      str(data.get("fingerprint") or ""))
                 elif action == "spend":
                     out = spend_impl(st, str(data.get("token") or ""),
+                                     data.get("items"), now, SECRET, ip=ip)
+                    _save_state(st)
+                elif action == "daily":
+                    out = daily_impl(st, str(data.get("token") or ""),
                                      data.get("items"), now, SECRET, ip=ip)
                     _save_state(st)
                 else:
