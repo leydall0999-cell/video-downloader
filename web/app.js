@@ -6513,7 +6513,8 @@
     form.append('target', item.target);
     form.append('audio_bitrate', item.audio_bitrate || '');
     form.append('to_library', item.toLibrary ? 'true' : 'false');
-    fetch('/api/convert/reconvert', { method: 'POST', body: form, headers: { 'X-Device-Id': deviceId() } })
+    const _authTok = localStorage.getItem('vdl_auth_token');
+    fetch('/api/convert/reconvert', { method: 'POST', body: form, headers: { 'X-Device-Id': deviceId(), ...( _authTok ? { Authorization: 'Bearer ' + _authTok } : {}) } })
       .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
       .then(({ ok, status, data }) => {
         if (ok && data.job_id) {
