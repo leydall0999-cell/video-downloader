@@ -601,6 +601,9 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   background: #fafbfd; border: 1px solid var(--line);
   border-radius: var(--radius-md); padding: .85rem .95rem; margin-bottom: .9rem;
 }
+/* 拼接面板：输出设置与片段列表视觉分区（用户反馈「没有跟上方区分开」） */
+.mc-output { margin-top: 1rem; }
+.mc-output-title { font-size: .85rem; font-weight: 600; color: var(--text-mute); margin: 0 0 .55rem .1rem; }
 .uc-bulk-actions {
   display: flex; gap: .55rem; flex-wrap: wrap;
   margin-top: .85rem; padding-top: .85rem;

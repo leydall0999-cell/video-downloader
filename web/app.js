@@ -2261,7 +2261,8 @@
     mcCountEl.textContent = segs.length ? `已添加 ${segs.length} 个片段` : '尚未添加片段';
     mcClearBtn.hidden = mcState.list.length === 0;
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult).length;
-    mcMergeBtn.disabled = ready < 2;
+    const anyMerging = mcState.list.some(x => x.isResult && x.status === 'running');
+    mcMergeBtn.disabled = ready < 2 || anyMerging;   // 拼接进行中禁用，防重复点出多个「合并结果」
     if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
     mcListEl.innerHTML = mcState.list.map((it, idx) => {
       const name = it.file ? it.file.name : it.label;
@@ -2449,6 +2450,10 @@
 
   const mcPoll = async () => {
     const running = mcState.list.filter(x => x.isResult && x.status === 'running' && x.jobId);
+    if (!running.length) {   // 没有进行中的拼接就停表（此前定时器永不停止、底部状态永远「拼接中…」）
+      if (mcState.polling) { clearInterval(mcState.polling); mcState.polling = null; }
+      return;
+    }
     await Promise.all(running.map(async (it) => {
       try {
         const st = await request('/api/convert/' + it.jobId);
@@ -2462,13 +2467,24 @@
           it.outputName = `[${mcOutFormat.value.toUpperCase()}]${mcOutName.value || 'merged'}.${UC_EXT_OF[mcOutFormat.value] || mcOutFormat.value}`;
           it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
           it.libraryId = st.library_id || null;
+          mcStatusEl.textContent = '拼接完成，点击结果行的「下载」保存';
           mcRender();
         } else if (st.status === 'failed') {
           it.status = 'failed'; it.errorMsg = st.error || '未知错误';
+          mcStatusEl.textContent = '拼接失败：' + it.errorMsg;
           mcRender();
         }
       } catch (_e) { /* 忽略 */ }
     }));
+    // 拼接成功后移除本次用掉的源片段（只删本任务提交的那些，绝不误伤用户新加的片段）
+    const segIdSet = new Set();
+    mcState.list.filter(x => x.isResult && x.status === 'completed' && x.segIds)
+      .forEach(x => x.segIds.forEach(id => segIdSet.add(id)));
+    if (segIdSet.size) {
+      const before = mcState.list.length;
+      mcState.list = mcState.list.filter(x => x.isResult || (x.status === 'running') || !segIdSet.has(x.id));
+      if (mcState.list.length !== before) mcRender();
+    }
   };
 
   const mcPump = () => {
@@ -2495,7 +2511,12 @@
     if (!t) return;
     const li = t.closest('.uc-item');
     const it = mcState.list.find(x => x.id === +li.dataset.id);
-    if (!it || it.isResult) return;
+    if (!it) return;
+    if (it.isResult) {   // 结果行也允许移除（running 时除外）——此前 × 按钮点了没反应
+      if (it.status === 'running') { mcStatusEl.textContent = '拼接进行中，暂无法移除'; return; }
+      mcState.list = mcState.list.filter(x => x.id !== it.id); mcRender(); mcStatusEl.textContent = '已移除';
+      return;
+    }
     const act = t.dataset.act;
     if (act === 'remove') mcRemoveItem(it.id);
     else if (act === 'up' || act === 'down') {
@@ -2508,6 +2529,8 @@
   mcMergeBtn.addEventListener('click', () => {
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult);
     if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的片段'; return; }
+    if (mcState.list.some(x => x.isResult && x.status === 'running')) { mcStatusEl.textContent = '正在拼接中，请等待完成'; return; }
+    mcMergeBtn.disabled = true;   // 同步禁用：防 /api/concat 响应返回前双击重复提交
     const body = {
       segments: ready.map(x => x.segName),
       out_format: mcOutFormat.value,
@@ -2517,16 +2540,19 @@
     request('/api/concat', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
       .then(data => {
         if (data.job_id) {
+          mcState.list = mcState.list.filter(x => !x.isResult);   // 重新拼接时替换旧结果，绝不堆多个「合并结果」
           mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果', status: 'running',
-            jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null });
+            jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null,
+            segIds: ready.map(x => x.id) });
           mcState.polling = setInterval(mcPoll, UC_POLL_INTERVAL);
           mcStatusEl.textContent = '拼接中…';
           mcRender();
         } else {
           mcStatusEl.textContent = data.detail || data.error || '拼接失败';
+          mcRender();   // 重新计算按钮可用态（解锁）
         }
       })
-      .catch(() => { mcStatusEl.textContent = '拼接请求失败，请重试'; });
+      .catch(() => { mcStatusEl.textContent = '拼接请求失败，请重试'; mcRender(); });
   });
 
   // 事件绑定

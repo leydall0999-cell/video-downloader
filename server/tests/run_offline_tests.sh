@@ -92,6 +92,7 @@ run_node test_web_direct_download.js
 run_node test_web_hls_assemble.js
 run_node test_web_route_retry.js
 run_node test_convert_poll_lifecycle.mjs   # 音乐/图片转换轮询定时器自杀停表回归（2026-09-29 线上卡 30% 事故）
+run_node test_concat_flow.mjs              # 视频拼接面板状态机：防重复结果/停表/清源片段/输出分区（2026-09-29 用户反馈）
 
 echo ""
 echo "========================================="
