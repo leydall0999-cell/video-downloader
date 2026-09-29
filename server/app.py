@@ -4051,4 +4051,17 @@ def cookie_status(url: str = "") -> dict:
 from routers import voice_studio as _voice_studio_rtr
 app.include_router(_voice_studio_rtr.router)
 
+# 静态资源禁缓存（2026-09-29 对齐 web-dev）：js/css 曾被浏览器/边缘按扩展名
+# 默认缓存，改完前端用户拿旧文件。前端引用自带 ?v= 版本戳，缓存收益为零。
+@app.middleware("http")
+async def _static_no_store(request, call_next):
+    response = await call_next(request)
+    p = request.url.path
+    if not p.startswith("/api/") and (
+        p.endswith(".js") or p.endswith(".css") or p.endswith(".html") or p == "/"
+    ):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
