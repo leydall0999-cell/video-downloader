@@ -157,8 +157,10 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
                         to_library, device_id, src_name="",
                         audio_bitrate: str = "", image_quality: int = 0,
                         resize: int = 0, flatten_alpha: bool = True,
-                        is_image: bool = False) -> tuple:
-    """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。"""
+                        is_image: bool = False, src_is_temp: bool = True) -> tuple:
+    """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。
+    src_is_temp=False 时转码后保留源文件（job["src_path"]），供 /api/convert/reconvert
+    免重传重转；保留期由 app._cleanup_merged_upload_sources（2h TTL）兜底清理。"""
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
     out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
@@ -166,6 +168,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
         app.CONVERT_JOBS[job_id] = {
             "status": "running",
             "out_path": str(out_path),
+            "src_path": str(save_path),   # 源文件路径（重转免重传用；是否保留看 src_is_temp）
             "error": "",
             "filename": out_path.name,
             "src_name": src_name,        # 原始上传文件名（用于媒体库命名 [格式]原名.ext）
@@ -176,7 +179,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
             "device_id": device_id,   # 设备隔离：上传转换文件仅创建者可见
         }
     app.executor.submit(app._run_convert, job_id, str(save_path), target,
-                        resolution, bitrate, audio, rotate, remux, src_is_temp=True,
+                        resolution, bitrate, audio, rotate, remux, src_is_temp=src_is_temp,
                         audio_bitrate=audio_bitrate, image_quality=image_quality,
                         resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return job_id, out_path.name
@@ -317,9 +320,48 @@ def finish_upload_chunk(
         save_path, target, resolution, bitrate, audio, rotate, remux,
         to_library, _device_of(request), src_name=filename,
         audio_bitrate=audio_bitrate, image_quality=image_quality,
-        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
+        resize=resize, flatten_alpha=flatten_alpha, is_image=is_image,
+        src_is_temp=False)   # 源文件保留 2h，供「重新编辑/重新转码」免重传（TTL 见 _cleanup_merged_upload_sources）
     return {
         "job_id": job_id,
+        "status": "running",
+        "target": target,
+        "filename": out_name,
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
+
+
+@router.post("/api/convert/reconvert")
+def reconvert_from_source(
+    job_id: str = app.Form(...),
+    target: str = app.Form("mp3"),
+    audio_bitrate: str = app.Form(""),
+    to_library: bool = app.Form(False),
+    request: app.Request = None,
+) -> dict:
+    """复用已转码任务的源文件再次转码（免重传）。
+
+    分片 finish 合并后的源文件保留 2 小时（_cleanup_merged_upload_sources TTL）；
+    期间前端「重新编辑→开始转码」直接调本接口按新目标格式重转，不再整包重传。
+    源文件过期/缺失时返回 410，前端回退到重新上传。设备隔离：仅创建者本人可重转。"""
+    app._check_rate_limit(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    if target not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的目标格式")
+    with app.CONVERT_LOCK:
+        old = app.CONVERT_JOBS.get(job_id)
+    if not old or old.get("device_id") != _device_of(request):
+        raise app.HTTPException(status_code=404, detail="原任务不存在或已过期")
+    src = old.get("src_path") or ""
+    src_path = app.Path(src) if src else None
+    if not src or not src_path.exists():
+        raise app.HTTPException(status_code=410, detail="源文件已过期清理，请重新上传")
+    new_job_id, out_name = _submit_convert_job(
+        src_path, target, "original", "", True, 0, False,
+        to_library, _device_of(request), src_name=old.get("src_name") or src_path.name,
+        audio_bitrate=audio_bitrate, src_is_temp=False)
+    return {
+        "job_id": new_job_id,
         "status": "running",
         "target": target,
         "filename": out_name,

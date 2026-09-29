@@ -1494,6 +1494,7 @@ async def _cleanup_loop() -> None:
         if removed:
             logger.info("已清理 %s 个过期任务", removed)
         _cleanup_orphan_upload_parts()
+        _cleanup_merged_upload_sources()
         _purge_conversions_dir()
 
 
@@ -1513,6 +1514,35 @@ def _cleanup_orphan_upload_parts(max_age: float = 24 * 3600) -> int:
         pass
     if n:
         logger.info("已清理 %s 个孤儿上传分片", n)
+    return n
+
+
+def _cleanup_merged_upload_sources(max_age: float = 2 * 3600) -> int:
+    """清理为「重新编辑/重新转码免重传」保留的合并源文件（UPLOAD_TMP 下 up_<hex>.<ext>）。
+
+    2026-09-29：/api/upload-chunk/finish 改为 src_is_temp=False 保留源文件 2h，
+    期间 /api/convert/reconvert 可按新格式免重传重转；本函数是保留期的兜底清理，
+    防止 UPLOAD_TMP 无限堆积。分片（up_*.pNNNN）不归这里管（见 _cleanup_orphan_upload_parts）。
+    """
+    n = 0
+    freed = 0
+    part_re = re.compile(r"\.p\d+$")
+    try:
+        for p in UPLOAD_TMP.iterdir():
+            if not p.is_file() or part_re.search(p.name):
+                continue
+            try:
+                st = p.stat()
+                if time.time() - st.st_mtime > max_age:
+                    freed += st.st_size
+                    p.unlink(missing_ok=True)
+                    n += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    if n:
+        logger.info("已清理 %s 个过期上传源文件（释放 %s MB）", n, int(freed / 1024 / 1024))
     return n
 
 

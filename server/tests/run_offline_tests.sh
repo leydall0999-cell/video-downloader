@@ -85,6 +85,7 @@ run_one test_member_download_quota.py
 run_one test_youtube_unavailable_vs_bot.py
 run_one test_youtube_shortlink_scope.py
 run_one test_upload_body_limit.py
+run_one test_reconvert_source_reuse.py      # 免重传重转：finish 留源 2h / reconvert 复用 / 设备隔离 / 410 回退 / TTL 清理（2026-09-29）
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
 run_one test_direct_url_hls.py
