@@ -183,6 +183,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
         app.CONVERT_JOBS[job_id] = {
             "status": "running",
             "out_path": str(out_path),
+            "src_path": str(save_path),   # 源文件路径（/api/convert/reconvert 用；桌面端 src_is_temp=True 转完即删）
             "error": "",
             "filename": out_path.name,
             "src_name": src_name,        # 原始上传文件名（用于媒体库命名 [格式]原名.ext）
@@ -397,6 +398,44 @@ def finish_upload_chunk(
         resize=resize, flatten_alpha=flatten_alpha, is_image=is_image)
     return {
         "job_id": job_id,
+        "status": "running",
+        "target": target,
+        "filename": out_name,
+        "quota": {"subscribed": subscribed, "free_used": free_used, "free_daily": free_daily},
+    }
+
+
+@router.post("/api/convert/reconvert")
+def reconvert_from_source(
+    job_id: str = app.Form(...),
+    target: str = app.Form("mp3"),
+    audio_bitrate: str = app.Form(""),
+    to_library: bool = app.Form(False),
+    request: app.Request = None,
+) -> dict:
+    """复用已转码任务的源文件再次转码（免重传）。
+
+    网页版 finish 保留源文件 2h（_cleanup_merged_upload_sources TTL）；桌面端
+    src_is_temp=True 转完即删，本接口通常 410，前端自动回退重传/localPath 直转。
+    设备隔离：仅创建者本人可重转。"""
+    app._check_rate_limit(request)
+    subscribed, free_used, free_daily = app._check_convert_quota(request)
+    if target not in app.CONVERT_TARGETS:
+        raise app.HTTPException(status_code=400, detail="不支持的目标格式")
+    with app.CONVERT_LOCK:
+        old = app.CONVERT_JOBS.get(job_id)
+    if not old or old.get("device_id") != _device_of(request):
+        raise app.HTTPException(status_code=404, detail="原任务不存在或已过期")
+    src = old.get("src_path") or ""
+    src_path = app.Path(src) if src else None
+    if not src or not src_path.exists():
+        raise app.HTTPException(status_code=410, detail="源文件已过期清理，请重新上传")
+    new_job_id, out_name = _submit_convert_job(
+        src_path, target, "original", "", True, 0, False,
+        to_library, _device_of(request), src_name=old.get("src_name") or src_path.name,
+        audio_bitrate=audio_bitrate, src_is_temp=True)   # 桌面端无 TTL 清理循环，转完即删防泄漏
+    return {
+        "job_id": new_job_id,
         "status": "running",
         "target": target,
         "filename": out_name,

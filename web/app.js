@@ -3711,6 +3711,35 @@
     xhr.send(form);
   });
 
+  // 免重传重转：复用服务端保留的源文件（finish 合并产物，网页版 2h TTL）按新格式再次转码。
+  // 410/404（源过期/任务不存在/桌面端即删）时清 _srcJobId 并回退为重新上传。
+  const musReconvert = (item) => new Promise((resolve, reject) => {
+    if (!item || !item._srcJobId) { reject(new Error('无源任务')); return; }
+    item.status = 'running'; item.progress = 30; item.stage = ''; musRender();
+    const form = new FormData();
+    form.append('job_id', item._srcJobId);
+    form.append('target', item.target);
+    form.append('audio_bitrate', item.audio_bitrate || '');
+    form.append('to_library', item.toLibrary ? 'true' : 'false');
+    fetch('/api/convert/reconvert', { method: 'POST', body: form, headers: { 'X-Device-Id': deviceId() } })
+      .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
+      .then(({ ok, status, data }) => {
+        if (ok && data.job_id) {
+          item.jobId = data.job_id; item._srcJobId = data.job_id;   // 新任务的源文件即同一份，可继续链式重转
+          item.status = 'running'; item.progress = 30;
+          musEnsurePolling();
+          musRender(); resolve(data);
+        } else if (status === 410 || status === 404) {
+          item._srcJobId = null;
+          item.status = 'pending'; item.progress = 0; musRender();
+          reject(new Error(data.detail || '源文件已过期'));
+        } else {
+          item.status = 'failed'; item.errorMsg = data.detail || data.error || ('HTTP ' + status); musRender(); reject(new Error(item.errorMsg));
+        }
+      })
+      .catch(err => { item.status = 'failed'; item._srcJobId = null; item.errorMsg = '网络错误'; musRender(); reject(err); });
+  });
+
   const musPollAll = async () => {
     const running = musState.list.filter(x => x.status === 'running' && x.jobId);
     // 「活口」守卫：只要还有上传中 / 已开转码但 job_id 未返回的项，就绝不能停表。
@@ -3783,6 +3812,11 @@
       if (it.localPath) {
         if (it.status !== 'uploaded') { it.status = 'uploaded'; it.progress = 30; it.stage = '本地文件'; musRender(); }
         musFinishOne(it).catch(() => {});
+      } else if (it._srcJobId) {
+        // 优先免重传：服务端还保留着源文件（网页版 2h 内），按新格式直接重转；过期则回退重传
+        musReconvert(it).catch(() => {
+          if (it.file) musUploadOne(it).then(() => musFinishOne(it)).catch(() => {});
+        });
       } else if (it._uploadId) {
         musFinishOne(it).catch(() => {});            // 已上传（含重新转码）
       } else {
@@ -3790,7 +3824,9 @@
       }
     } else if (act === 'reedit') {
       // 重新编辑：已完成行恢复可编辑（可改格式/重新转码），保留旧结果下载链接直到新结果产出。
-      // 分片在 finish 合并时已被服务端删除（p.unlink），必须清掉 _uploadId 让文件重传，否则报「分片不完整 (0/1)」。
+      // 优先免重传：记下源任务 job_id，服务端保留的源文件 2h 内可直接重转；
+      // 分片在 finish 合并时已被服务端删除（p.unlink），_uploadId 必须清掉（复用必报「分片不完整 (0/1)」）。
+      it._srcJobId = it.jobId || null;
       it.status = it.localPath ? 'uploaded' : 'pending';
       it.errorMsg = ''; it.jobId = null; it.progress = it.localPath ? 30 : 0; it.stage = it.localPath ? '本地文件' : '';
       it._uploadId = null; it._totalChunks = null; it._xhrs = null;
