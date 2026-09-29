@@ -2265,11 +2265,12 @@
     mcMergeBtn.disabled = ready < 2 || anyMerging;   // 拼接进行中禁用，防重复点出多个「合并结果」
     if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
     mcListEl.innerHTML = mcState.list.map((it, idx) => {
-      const name = it.file ? it.file.name : it.label;
+      const name = it.file ? it.file.name
+        : (it.isResult && it.status === 'completed' && it.outputName ? it.outputName : it.label);
       const statusText = it.isResult
         ? (it.status === 'running'
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
-             : it.status === 'completed' ? '完成 ✅' : '失败：' + (it.errorMsg || ''))
+             : it.status === 'completed' ? (it.stale ? '完成 ✅ · 上次结果' : '完成 ✅') : '失败：' + (it.errorMsg || ''))
         : (it.status === 'uploading'
              ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
              : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
@@ -2282,7 +2283,7 @@
       const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
       const downDisabled = (it.isResult || idx === mcState.list.length - 1) ? 'disabled' : '';
       return `
-        <li class="uc-item ${cls}" data-id="${it.id}">
+        <li class="uc-item ${cls}${it.stale ? ' is-stale' : ''}" data-id="${it.id}">
           <div class="uc-item-main">
             <div class="uc-item-name" title="${name}">${idx + 1}. ${name}</div>
             ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>` : ''}
@@ -2326,6 +2327,10 @@
   };
 
   const mcAddFiles = (fileList) => {
+    // 上一轮拼接已完成又添加新片段 → 旧结果降级为「上次结果」（置灰），新结果会用自己的输出名，不再混淆
+    mcState.list.forEach(x => {
+      if (x.isResult && !x.stale && x.status === 'completed') { x.stale = true; x.label = '上次结果'; }
+    });
     Array.from(fileList).forEach(f => {
       mcState.list.push({ id: mcState.nextId++, file: f, status: 'pending', segName: null,
         progress: 0, speedText: '', uploadedText: '', errorMsg: '', downloadUrl: '', outputName: '', jobId: null });
@@ -2531,6 +2536,9 @@
     if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已上传的片段'; return; }
     if (mcState.list.some(x => x.isResult && x.status === 'running')) { mcStatusEl.textContent = '正在拼接中，请等待完成'; return; }
     mcMergeBtn.disabled = true;   // 同步禁用：防 /api/concat 响应返回前双击重复提交
+    mcState.list.forEach(x => {
+      if (x.isResult && !x.stale && x.status === 'completed') { x.stale = true; x.label = '上次结果'; }
+    });
     const body = {
       segments: ready.map(x => x.segName),
       out_format: mcOutFormat.value,
@@ -2541,7 +2549,7 @@
       .then(data => {
         if (data.job_id) {
           mcState.list = mcState.list.filter(x => !x.isResult);   // 重新拼接时替换旧结果，绝不堆多个「合并结果」
-          mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果', status: 'running',
+          mcState.list.push({ id: mcState.nextId++, isResult: true, label: (mcOutName.value || '合并结果'), status: 'running',
             jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null,
             segIds: ready.map(x => x.id) });
           mcState.polling = setInterval(mcPoll, UC_POLL_INTERVAL);

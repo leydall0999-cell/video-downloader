@@ -190,6 +190,29 @@ const resultCnt = () => rowCnt() - (els.mcList.innerHTML.match(/data-act="up"/g)
   assert.equal(els.mcMergeBtn.disabled, true, '没有片段时拼接按钮应禁用');
   assert.equal(clock.timerCount(), 0, '拼接结束后轮询定时器应停止（③④的「永远拼接中」回归）');
 
+  // ④b 再次添加片段：上次结果应降级为「上次结果」并置灰，新片段不混淆（2026-09-29 用户反馈）
+  els.mcFileInput.files = [
+    { name: '社会百态上.mp4', size: 5 * 1024 * 1024, slice: (s2, e) => ({ size: e - s2 }) },
+    { name: '社会百态下.mp4', size: 5 * 1024 * 1024, slice: (s2, e) => ({ size: e - s2 }) },
+  ];
+  els.mcFileInput.fire('change', { target: els.mcFileInput });
+  await clock.advance(2000);
+  assert.ok(/上次结果/.test(els.mcList.innerHTML), '再次添加片段后旧结果应标注「上次结果」');
+  assert.ok(/is-stale/.test(els.mcList.innerHTML), '旧结果行应带 is-stale 置灰类');
+  assert.equal((els.mcList.innerHTML.match(/is-stale/g) || []).length, 1, '只有旧结果行置灰，新片段不置灰');
+
+  // ④c 重新拼接：新结果用「输出文件名」命名，旧结果被替换（不堆叠）
+  els.mcOutFormat.value = 'MKV';
+  els.mcOutName.value = '合二';
+  els.mcMergeBtn.fire('click');
+  await clock.advance(200);
+  assert.equal(resultCnt(), 1, '重新拼接应替换旧结果，不堆叠');
+  assert.ok(/合二/.test(els.mcList.innerHTML), `拼接中新结果行应显示输出名「合二」，实际：${els.mcList.innerHTML.slice(0, 300)}`);
+  await clock.advance(15_000);
+  assert.ok(/\[MKV\]合二\.MKV/.test(els.mcList.innerHTML), `完成后的结果行应显示输出文件名 [MKV]合二.MKV，实际：${els.mcList.innerHTML.slice(0, 400)}`);
+  assert.ok(/拼接完成/.test(els.mcStatus.textContent), '第二轮拼接完成后状态应更新');
+  assert.equal(clock.timerCount(), 0, '第二轮结束后轮询定时器应停止');
+
   // ⑤ 结果行的 × 应可移除（此前是死按钮）
   const m = els.mcList.innerHTML.match(/data-id="(\d+)"/);
   assert.ok(m, '结果行应带 data-id');
