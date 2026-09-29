@@ -359,6 +359,38 @@ if [ "$JS_FAIL" -ne 0 ]; then
 fi
 echo "   ✔ 前端 JS 语法校验通过"
 
+# ── 随包资源瘦身 + 源码防泄露（2026-09-30 P0 加固）────────────────────────────
+# 原写法 `--add-data "$REPO/server:server"` 会把 server/ 整个目录**明文**打进包 ——
+# 实测包内 148 个 .py 源码 + tests + __pycache__ + 编辑器备份 .bak 全都能直接读，
+# 等于把后端源码送给任何拿到安装包的人。
+# 改为只把运行时真正需要的**非源码**资源复制到 staging 再 --add-data：
+#   assets/        扩展打包源 + 图标（routers/extension.py 寻路依赖）
+#   build_info.txt 版本信息
+#   licenses/      LGPL 等许可证文本（合规随包分发）
+# Python 源码仍会被 PyInstaller 收进 PYZ（运行必需），但不再是明文 .py。
+# PYZ 内的 .pyc 仍可被提取反编译 —— 那层要靠把核心模块 Cython 编成 .so（见下）。
+SERVER_STAGING="${VDL_BUILD_WORKPATH}_server_resources"
+rm -rf "$SERVER_STAGING"
+mkdir -p "$SERVER_STAGING"
+cp -R "$REPO/server/assets" "$SERVER_STAGING/" 2>/dev/null
+cp "$REPO/server/build_info.txt" "$SERVER_STAGING/" 2>/dev/null
+[ -d "$REPO/server/licenses" ] && cp -R "$REPO/server/licenses" "$SERVER_STAGING/" 2>/dev/null
+if [ ! -f "$SERVER_STAGING/build_info.txt" ] || [ ! -d "$SERVER_STAGING/assets" ]; then
+  echo "❌ server 资源 staging 不完整（缺 build_info.txt 或 assets），终止构建"
+  exit 1
+fi
+echo "   ✔ server 随包资源已 staging：$(find "$SERVER_STAGING" -type f | wc -l | tr -d ' ') 个非源码文件"
+
+# ── 关于字节码加密（--key）：此路已封死，别再试 ──────────────────────────────
+# ⚠️ PyInstaller **≥6.0 已移除 --key**（官方 2023 决定，pyinstaller#6999）。
+# 实测本机 6.22.2：传 --key 会直接
+#   ERROR: Bytecode encryption was removed in PyInstaller v6.0
+# 终止构建。撤回降级到 5.x 也不划算（key 本身在 bootloader 里可被提取，
+# 公开工具能从内存 dump 解密后的字节码 —— 本来就只防"顺手扒"）。
+# 真正有效的是把核心模块 Cython 编成 .so：源码根本不进包，是机器码而非字节码。
+# 故这里不再传任何加密参数；PYZ 里的 .pyc 仍可被反编译，靠 P1（Cython）加固。
+echo "   ℹ️  PyInstaller $([ -x "$VENV/bin/pyinstaller" ] && "$VENV/bin/pyinstaller" --version 2>/dev/null || echo '?') 不支持 --key（≥6.0 已移除）；源码防泄露靠上面的 staging + P1 Cython"
+
 # ⚠️ 不要给 onnx 加 --collect-all（2026-09-10 查证：这是构建 40 分钟的主因）：
 # onnx 的 wheel 内含官方一致性测试数据集 onnx/backend/test/data（**24,209 个文件**），
 # --collect-all 会把它们全部当 data 收进包 —— 上一版包内 31,019 个文件里 25,775 个
@@ -377,8 +409,7 @@ echo "   ✔ 前端 JS 语法校验通过"
   --add-data "$REPO/web:web" \
   --add-data "$REPO/extension:extension" \
   --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
-  --add-data "$REPO/server:server" \
-  --add-data "$REPO/server/build_info.txt:server" \
+  --add-data "$SERVER_STAGING:server" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import cookie_cache \
