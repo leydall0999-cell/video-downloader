@@ -777,7 +777,7 @@
     cpStartAllBtn: $('cpStartAllBtn'),
     cpStatus: $('cpStatus'),
 
-    // 扫码分享（share* 前缀，独立 tab；2026-09-20 新增：本机文件 → 短链 + 二维码）
+    // 生成二维码（share* 前缀，独立 tab；2026-09-20 新增：本机文件 → 短链 + 二维码）
     tabShare: $('tabShare'),
     shareView: $('shareView'),
     sTabShare: $('sTabShare'),
@@ -797,7 +797,7 @@
     shareHistCount: $('shareHistCount'),
     shareHistRefreshBtn: $('shareHistRefreshBtn'),
     shareHistList: $('shareHistList'),
-    // 文件变网页（page* 前缀，独立 tab；2026-09-30 新增：本机文件 → 自包含 HTML 页面）
+    // 生成网页（page* 前缀，独立 tab；2026-09-30 新增：本机文件 → 自包含 HTML 页面）
     tabPage: $('tabPage'),
     pageView: $('pageView'),
     sTabPage: $('sTabPage'),
@@ -4794,7 +4794,7 @@
     });
   });
 
-  // ===== 扫码分享（2026-09-20 新增）：本机文件 → 短链 + 二维码 =====
+  // ===== 生成二维码（2026-09-20 新增）：本机文件 → 短链 + 二维码 =====
   // 流程：选本地文件 → 本地后端流式转发到分享节点（带进度）→ 拿短链 → 生成二维码
   // 为什么经本地后端：桌面端原生文件框只给「路径」，前端拿不到文件内容；
   // 后端与 App 同机（localhost），转发不产生额外网络开销，还能上报进度、自动换通道。
@@ -4903,7 +4903,7 @@
         item.status = 'failed';
         item.err = '需要登录后才能分享';
         shRender();
-        try { _notifyNeedLogin('请先登录或注册账号，即可使用扫码分享'); } catch (_) {}
+        try { _notifyNeedLogin('请先登录或注册账号，即可使用生成二维码'); } catch (_) {}
         return;
       }
       item.status = 'uploading';
@@ -5283,8 +5283,8 @@
     wait.forEach(it => srStartOne(it).catch(() => {}));
   });
 
-  // ===== 文件变网页（2026-09-30 新增）：本机文件 → 一个自包含 HTML 页面 =====
-  // 与「扫码分享」互补，不是替代：那边给的是**链接**（对方要联网、文件留在分享节点上），
+  // ===== 生成网页（2026-09-30 新增）：本机文件 → 一个自包含 HTML 页面 =====
+  // 与「生成二维码」互补，不是替代：那边给的是**链接**（对方要联网、文件留在分享节点上），
   // 这边给的是一个**文件**（离线也能看，发出去就归对方）。因此刻意放在同级入口。
   // 接入方式也保持一致：桌面端走原生框拿路径（免上传），网页端走上传
   // （服务端把页面内容回传，浏览器直接下载——服务端的磁盘路径对访客没有意义）。
@@ -5406,7 +5406,7 @@
 
   // 网页端：页面内容随响应回来，用 Blob 存到访客本机。
   // ⚠️ 这条兜底只在**真浏览器**里用；桌面壳 WKWebView 不支持 <a download>（会把主框架
-  //    导航到 blob:，整个界面被页面替换，2026-09-21 扫码分享踩过），所以桌面端不给这个按钮。
+  //    导航到 blob:，整个界面被页面替换，2026-09-21 生成二维码踩过），所以桌面端不给这个按钮。
   function pgDownloadHtml() {
     if (!pgState.pageHtml) return;
     const blob = new Blob([pgState.pageHtml], { type: 'text/html;charset=utf-8' });
@@ -15492,8 +15492,8 @@ el.dwVidPlayer.hidden = true;
     const isImage = view === 'imageconvert';
     const isCp = view === 'compress';   // 高效压缩（2026-09-11 新增）
     const isSr = view === 'sr';         // 高清修复（2026-09-12 新增）
-    const isShare = view === 'share';   // 扫码分享（2026-09-20 新增）
-    const isPage = view === 'page';     // 文件变网页（2026-09-30 新增）
+    const isShare = view === 'share';   // 生成二维码（2026-09-20 新增）
+    const isPage = view === 'page';     // 生成网页（2026-09-30 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
@@ -16046,7 +16046,7 @@ el.dwVidPlayer.hidden = true;
   if (el.tabCompress) el.tabCompress.addEventListener('click', () => switchView('compress'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabSr) el.tabSr.addEventListener('click', () => switchView('sr'));
-  if (el.tabPage) el.tabPage.addEventListener('click', () => switchView('page'));   // 文件变网页（2026-09-30）
+  if (el.tabPage) el.tabPage.addEventListener('click', () => switchView('page'));   // 生成网页（2026-09-30）
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
@@ -16066,8 +16066,8 @@ el.dwVidPlayer.hidden = true;
     [el.sTabImageConvert, 'imageconvert'],
     [el.sTabCompress, 'compress'],
     [el.sTabSr, 'sr'],
-    [el.sTabShare, 'share'],   // 扫码分享（2026-09-20 新增）
-    [el.sTabPage, 'page'],     // 文件变网页（2026-09-30 新增）
+    [el.sTabShare, 'share'],   // 生成二维码（2026-09-20 新增）
+    [el.sTabPage, 'page'],     // 生成网页（2026-09-30 新增）
     [el.sTabSubtitle, 'subtitle'],
     [el.sTabProfile, 'profile'],
     [el.sTabProfilePurchases, 'profile_purchases'],
@@ -16866,7 +16866,7 @@ el.dwVidPlayer.hidden = true;
   var _LOGIN_GATED_ACTIONS = {
     // 2026-09-27 用户要求：登录门禁只挂在「真正执行（会产出结果）」的按钮上。
     // 前置步骤不弹登录 —— 解析链接（只拿清晰度/标题，不落盘）与「选择文件」
-    // （扫码分享的文件选择器，真正上传时才校验，见 shStart）已从这里移除。
+    // （生成二维码的文件选择器，真正上传时才校验，见 shStart）已从这里移除。
     batchBtn: '批量下载',
     downloadBtn: '下载',
     ucStartAllBtn: '视频格式转换',

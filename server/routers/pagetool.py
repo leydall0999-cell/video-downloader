@@ -181,7 +181,7 @@ def build_page(items: list[dict], title: str) -> str:
 <div class="wrap">
   <header>
     <h1>%(title)s</h1>
-    <p class="sub">由「视频工坊 · 文件变网页」生成 · 共 %(n)d 个文件 · 内容已内嵌，本页可离线打开</p>
+    <p class="sub">由「视频工坊 · 生成网页」生成 · 共 %(n)d 个文件 · 内容已内嵌，本页可离线打开</p>
   </header>
   %(body)s
   <footer>本页面单文件自包含，可直接通过微信 / QQ / 邮件发送</footer>
@@ -246,7 +246,7 @@ def _load_item(path: Path) -> dict:
     size = path.stat().st_size
     if size > MAX_ITEM_BYTES:
         raise HTTPException(status_code=400,
-                            detail="「%s」%s 超过单文件 %s 上限，请先压缩或改用「扫码分享」（不走内嵌）。"
+                            detail="「%s」%s 超过单文件 %s 上限，请先压缩或改用「生成二维码」（不走内嵌）。"
                                    % (path.name, _human(size), _human(MAX_ITEM_BYTES)))
     raw = path.read_bytes()
     ext = path.suffix.lower()
