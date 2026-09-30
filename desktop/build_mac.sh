@@ -666,22 +666,43 @@ else
   echo "   ⚠️ 未找到模型（$SV_SRC），跳过——字幕将仅用 Whisper（粤语支持不可用）"
 fi
 
-echo "▶ 签名（ad-hoc + Hardened Runtime）"
-# P3 加固（2026-09-30）：免费且能真正提高逆向门槛的部分。
-# --options runtime 启用 Hardened Runtime：默认**禁止调试器附加**（未申请
-# com.apple.security.cs.debugger），并提高 dyld 注入门槛。
-# ⚠️ 它是**防动态调试**，不防静态读取 —— 静态层面靠 P1 的 Cython。
-# entitlements 必须带 disable-library-validation：包内大量 .so 是 ad-hoc 签名，
+echo "▶ 签名"
+APP_BUNDLE="$REPO/dist/VideoDownloader.app"
+# ── 决定签名身份 ───────────────────────────────────────────────
+# VDL_SIGN_IDENTITY 显式指定 > 自动探测钥匙串里的 Developer ID Application > 回落 ad-hoc。
+# 两档差别：
+#   Developer ID → 带 Team ID + 可公证 → **能对外分发**（别人下载不会被 Gatekeeper 拦）
+#   ad-hoc(-)     → 没有身份、不可公证 → **只能自用**，拷给别人报「无法验证开发者/已损坏」
+# Hardened Runtime（--options runtime）两档都必须开：它是公证的硬性前置条件，
+# 不申请 com.apple.security.cs.debugger 时顺带**禁止调试器附加**，并提高 dyld 注入门槛。
+# ⚠️ 它只防动态调试，不防静态读取 —— 静态层面靠 P1 的 Cython .so。
+# entitlements 必须带 disable-library-validation：包内大量 .so 是本地签的，
 # 开库校验会 dlopen 失败 → App 起不来（实测：带上就能正常启动）。
-# 完整方案（Developer ID + notarize）需付费开发者账号，本机目前无签名身份。
-codesign --force --deep --sign - --options runtime \
-  --entitlements "$REPO/desktop/entitlements.plist" \
-  "$REPO/dist/VideoDownloader.app" 2>/dev/null
-xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
-echo "   签名完成：$(codesign -dv "$REPO/dist/VideoDownloader.app" 2>&1 | grep 'Signature=' | head -1)"
+SIGN_IDENTITY="${VDL_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+  SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -m1 "Developer ID Application" | awk -F'"' '{print $2}')
+fi
+
+if [ -n "$SIGN_IDENTITY" ]; then
+  echo "   Developer ID 身份：$SIGN_IDENTITY"
+  # ⚠️ Developer ID 签名**必须**带安全时间戳（--timestamp）：缺了它公证会直接判失败
+  #    （"Ensure that your app is signed with a development identity with timestamp"）。
+  codesign --force --deep --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+    --entitlements "$REPO/desktop/entitlements.plist" "$APP_BUNDLE" 2>&1 | tail -3
+  SIGN_MODE="developer-id"
+else
+  echo "   ⚠️ 钥匙串无 Developer ID 身份 → ad-hoc 自签（只能自用，对外分发会被 Gatekeeper 拦）"
+  codesign --force --deep --sign - --options runtime \
+    --entitlements "$REPO/desktop/entitlements.plist" "$APP_BUNDLE" 2>/dev/null
+  SIGN_MODE="adhoc"
+fi
+xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
+echo "   签名完成：$(codesign -dv "$APP_BUNDLE" 2>&1 | grep 'Signature=' | head -1)"
+echo "   Team ID：$(codesign -dv "$APP_BUNDLE" 2>&1 | grep 'TeamIdentifier=' | head -1)"
 # 硬校验：runtime flag 必须真的生效，否则等于白签（曾经 codesign 静默不加 flag）
-if codesign -dvvv "$REPO/dist/VideoDownloader.app" 2>&1 | grep -q "flags=.*runtime"; then
-  echo "   ✔ Hardened Runtime 已生效（禁止调试器附加）"
+if codesign -dvvv "$APP_BUNDLE" 2>&1 | grep -q "flags=.*runtime"; then
+  echo "   ✔ Hardened Runtime 已生效（禁止调试器附加；公证的强制前置已满足）"
 else
   echo "❌ Hardened Runtime 未生效，签名 flags 异常"
   exit 1
@@ -716,8 +737,27 @@ else
   echo "   ⏭  已跳过（DMG 仅手动装包通道需要；要生成请设 VDL_BUILD_DMG=1）"
   [ -e "$REPO/dist/VideoDownloader.dmg" ] && echo "   ℹ️  dist 里仍留着上一次构建的 VideoDownloader.dmg（旧版本，勿当成本轮产物分发）"
 fi
-xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
 echo "   已去除 .app 的 quarantine 标记（DMG 若生成同样处理；用户首次打开仍需右键→打开 一次性放行）"
+
+# ── 公证（对外分发的最后一公里）────────────────────────────────
+# 只有 Developer ID 签名的产物才**有资格**公证：公证验的是「Apple 认可的开发者身份」，
+# ad-hoc 自签（SIGN_MODE=adhoc）提交上去只会浪费时间并被拒。
+# 优先公证 DMG（DMG 才是给别人下载的那份；存在则.app 附在内部由 Apple 一并处理），
+# 没有 DMG 时退而公证 .app 本体。
+# 逃生阀：VDL_SKIP_NOTARY=1（本地调试/改备份分支时，不必每轮都拉 Apple 反复扫描）。
+if [ "$SIGN_MODE" = "developer-id" ] && [ "${VDL_SKIP_NOTARY:-0}" != "1" ]; then
+  NOTARY_TARGET="$APP_BUNDLE"
+  [ -f "$REPO/dist/VideoDownloader.dmg" ] && NOTARY_TARGET="$REPO/dist/VideoDownloader.dmg"
+  echo "▶ 公证：$(basename "$NOTARY_TARGET")"
+  if bash "$REPO/desktop/notarize.sh" "$NOTARY_TARGET"; then
+    echo "   ✔ 公证完成，可对外分发"
+  else
+    echo "⚠️  公证失败 → 产物只能自用（自用功能不受影响，构建不算失败）"
+  fi
+elif [ "$SIGN_MODE" = "adhoc" ]; then
+  echo "⏭  跳过公证：ad-hoc 签名不支持公证，产物**不可对外分发**（拷贝给别人会报「无法验证开发者」）"
+fi
 
 # ⚠️ 安全约定（用户明确要求）：构建**绝不**自动发布更新。
 # 自动发布会让「刚构建、尚未测试」的版本立刻对用户可见，风险极高。
