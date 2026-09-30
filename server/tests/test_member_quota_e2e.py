@@ -19,6 +19,10 @@ import types
 _TMP = tempfile.mkdtemp(prefix="vdl_dl_quota_e2e_")
 os.environ["HOME"] = _TMP  # 必须在 import app 之前，让会员状态文件落在隔离目录
 os.makedirs(os.path.join(_TMP, ".video-downloader"), exist_ok=True)
+# 2026-09-30：membership._base_dir() 起优先认 VDL_DATA_DIR（run_offline_tests.sh 会设成固定的
+# /tmp/vdl_offline_data）。只隔离 HOME 时会员状态会落到那个**共享**目录 → 本文件的复位逻辑
+# 形同虚设、免费日配额跨轮次累计，第二次跑必 402。故把 VDL_DATA_DIR 对齐到 _TMP。
+os.environ["VDL_DATA_DIR"] = os.path.join(_TMP, ".video-downloader")
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
