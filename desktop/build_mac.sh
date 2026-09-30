@@ -666,10 +666,26 @@ else
   echo "   ⚠️ 未找到模型（$SV_SRC），跳过——字幕将仅用 Whisper（粤语支持不可用）"
 fi
 
-echo "▶ 签名（ad-hoc）"
-codesign --force --deep --sign - "$REPO/dist/VideoDownloader.app" 2>/dev/null
+echo "▶ 签名（ad-hoc + Hardened Runtime）"
+# P3 加固（2026-09-30）：免费且能真正提高逆向门槛的部分。
+# --options runtime 启用 Hardened Runtime：默认**禁止调试器附加**（未申请
+# com.apple.security.cs.debugger），并提高 dyld 注入门槛。
+# ⚠️ 它是**防动态调试**，不防静态读取 —— 静态层面靠 P1 的 Cython。
+# entitlements 必须带 disable-library-validation：包内大量 .so 是 ad-hoc 签名，
+# 开库校验会 dlopen 失败 → App 起不来（实测：带上就能正常启动）。
+# 完整方案（Developer ID + notarize）需付费开发者账号，本机目前无签名身份。
+codesign --force --deep --sign - --options runtime \
+  --entitlements "$REPO/desktop/entitlements.plist" \
+  "$REPO/dist/VideoDownloader.app" 2>/dev/null
 xattr -dr com.apple.quarantine "$REPO/dist/VideoDownloader.app" 2>/dev/null
 echo "   签名完成：$(codesign -dv "$REPO/dist/VideoDownloader.app" 2>&1 | grep 'Signature=' | head -1)"
+# 硬校验：runtime flag 必须真的生效，否则等于白签（曾经 codesign 静默不加 flag）
+if codesign -dvvv "$REPO/dist/VideoDownloader.app" 2>&1 | grep -q "flags=.*runtime"; then
+  echo "   ✔ Hardened Runtime 已生效（禁止调试器附加）"
+else
+  echo "❌ Hardened Runtime 未生效，签名 flags 异常"
+  exit 1
+fi
 
 echo "▶ 生成 DMG 分发包"
 # 默认**不生成** DMG：只有「手动装包通道」（旧版用户下载 DMG 拖进应用程序）需要它，

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- PyInstaller 冻结包内含大量自签（ad-hoc）的 .so / .dylib（Python 扩展、
+       onnxruntime、ffmpeg 相关等）。开启 Hardened Runtime 后，默认会校验加载的库
+       必须由同一 Team ID 或 Apple 签发，否则 dlopen 失败 → App 起不来。
+       本机只有 ad-hoc 身份（无 Developer ID），所以必须放开库校验。 -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- CPython 及其部分扩展会用到可执行匿名内存。 -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- 允许 DYLD_* 环境变量（部分依赖靠它定位动态库）。 -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <!-- 不申请 com.apple.security.cs.debugger：这样默认**禁止调试器附加**，
+       提高动态逆向门槛。这是 Hardened Runtime 在本项目的主要收益。
+       （注意：它防的是动态调试，不防静态读取 —— 静态层面靠 P1 的 Cython。） -->
+</dict>
+</plist>
