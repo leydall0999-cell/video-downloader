@@ -332,9 +332,39 @@ class MembershipStore:
         if not self._loaded:
             self._state = _load_state(self.path)
             self._loaded = True
+            self._inject_token()
+
+    def _inject_token(self) -> None:
+        """把 token 从 Keychain 取回内存态（磁盘 JSON 里没有明文）。
+
+        各读取点读的都是内存态 `acc["token"]`，所以只要在加载时补齐，
+        就不需要逐个改那 6 处 `acc.get("token")`。
+        """
+        try:
+            acc = (self._state.get("meta") or {}).get("account") or {}
+            if not acc or acc.get("token") or not acc.get("email"):
+                return
+            from credential_store import resolve_token
+            t = resolve_token(acc)
+            if t:
+                acc["token"] = t
+                acc.setdefault("token_store", "keychain")
+        except Exception:
+            pass
 
     def _persist(self) -> None:
-        _save_state(self.path, self._state)
+        """写盘：Keychain 态的 token 不落明文（内存里的值原样保留）。"""
+        acc = (self._state.get("meta") or {}).get("account") or {}
+        mem_token = acc.get("token") or ""
+        stripped = False
+        if mem_token and acc.get("token_store") == "keychain":
+            acc["token"] = ""
+            stripped = True
+        try:
+            _save_state(self.path, self._state)
+        finally:
+            if stripped:
+                acc["token"] = mem_token
 
     def _now(self) -> float:
         return self.now_fn()
@@ -540,9 +570,24 @@ class MembershipStore:
         self._ensure_loaded()
         meta = self._state.setdefault("meta", {})
         acc = meta.setdefault("account", {})
+        email_n = (email or "").strip().lower()
+        # token 优先进 macOS Keychain（系统级 ACL，拷走 JSON 也用不了）。
+        # ⚠️ fail-safe：Keychain 写失败就回落到 JSON 明文 —— 掉登录比泄露严重。
+        where = "file"
+        if token:
+            try:
+                from credential_store import set_token
+                where = set_token(email_n, token)
+            except Exception:
+                where = "file"
+            if where == "none":
+                where = "file"
         acc.update({
-            "email": (email or "").strip().lower(),
+            "email": email_n,
+            # 内存态**始终**保留 token（所有 acc.get("token") 读的都是内存态）；
+            # 明文不会落盘 —— _persist() 会在写盘时剥离 Keychain 态的 token。
             "token": token or "",
+            "token_store": where,
             "fp": fp or acc.get("fp", ""),
             "name": name or acc.get("name", ""),
             "evicted": False,
@@ -565,8 +610,14 @@ class MembershipStore:
         self._ensure_loaded()
         meta = self._state.setdefault("meta", {})
         acc = meta.get("account") or {}
+        try:
+            from credential_store import delete_token
+            delete_token(str(acc.get("email") or ""))
+        except Exception:
+            pass
         acc.update({"token": "", "email": acc.get("email", ""), "logged_in": False,
-                    "evicted": False, "devices": [], "last_sync": 0.0})
+                    "evicted": False, "devices": [], "last_sync": 0.0,
+                    "token_store": ""})
         meta["account"] = acc
         self._persist()
         return {"ok": True}
@@ -683,8 +734,13 @@ class MembershipStore:
         """给前端的账号快照（不吐 token）。"""
         self._ensure_loaded()
         acc = (self._state.get("meta") or {}).get("account") or {}
+        try:
+            from credential_store import resolve_token
+            logged_in = bool(resolve_token(acc))
+        except Exception:
+            logged_in = bool(acc.get("token"))
         return {
-            "logged_in": bool(acc.get("token")),
+            "logged_in": logged_in,
             "email": acc.get("email", ""),
             "device_fp": acc.get("fp", ""),
             "device_name": acc.get("name", ""),

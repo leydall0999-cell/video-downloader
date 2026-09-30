@@ -90,7 +90,8 @@ def _cloud_password_token(ident: str) -> str:
         store._ensure_loaded()
         acc = (store._state.get("meta") or {}).get("account") or {}
         if (acc.get("email") or "").strip().lower() == (ident or "").strip().lower():
-            return str(acc.get("token") or "")
+            from credential_store import resolve_token
+            return resolve_token(acc)
     except Exception:  # noqa: BLE001 — 取不到就是没 token，走原密码鉴权
         pass
     return ""

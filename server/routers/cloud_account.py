@@ -105,7 +105,8 @@ def _heal_cloud_password(email: str, password: str) -> bool:
     try:
         store._ensure_loaded()
         acc = (store._state.get("meta") or {}).get("account") or {}
-        token = str(acc.get("token") or "")
+        from credential_store import resolve_token
+        token = resolve_token(acc)
         if not token or (acc.get("email") or "").strip().lower() != email.strip().lower():
             return False
         import license_client
@@ -173,7 +174,8 @@ def _mirror_to_user_store(store, acct: dict[str, Any]) -> None:
         store._ensure_loaded()
         gacc = (store._state.get("meta") or {}).get("account") or {}
         email = str((acct or {}).get("email") or gacc.get("email") or "").strip().lower()
-        token = str(gacc.get("token") or "")
+        from credential_store import resolve_token
+        token = resolve_token(gacc)
         if not email or not token:
             return
         uid = None
@@ -262,7 +264,8 @@ def _report_spend(store, items: list[dict]) -> None:
     """同步上报（在后台线程里跑）：成功则用云端权威快照校准本地余额。"""
     try:
         store._ensure_loaded()
-        token = str(((store._state.get("meta") or {}).get("account") or {}).get("token") or "")
+        from credential_store import resolve_token
+        token = resolve_token((store._state.get("meta") or {}).get("account") or {})
         if not token or not items:
             return
         import license_client

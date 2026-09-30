@@ -452,6 +452,7 @@ echo "   ℹ️  PyInstaller $([ -x "$VENV/bin/pyinstaller" ] && "$VENV/bin/pyin
   --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
   --add-data "$SERVER_STAGING:server" \
   --hidden-import app \
+  --hidden-import credential_store \
   --hidden-import downloader \
   --hidden-import cookie_cache \
   --hidden-import ydlp_update \

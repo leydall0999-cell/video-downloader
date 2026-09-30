@@ -244,6 +244,13 @@ run_one test_payment_core.py
 #      （无短横线，是 cookie/cloud_sync 的历史目录，写错不报错但会污染家目录）。
 run_one test_payment_router.py
 
+#  31. test_credential_store.py —— 账号 token 凭据存储（2026-09-30，P2 加固）：
+#      token 不再以明文落在 ~/.video-downloader/membership*.json（拷走文件即可
+#      冒充用户调云端）。钉死三点：Keychain 存取往返、磁盘 JSON 无明文但内存态
+#      仍有 token（否则 6 处 acc.get("token") 会集体掉登录）、重新加载能注回。
+#      测试用一次性 Keychain 账号并在结尾清理；数据目录走 VDL_DATA_DIR 隔离。
+run_one test_credential_store.py
+
 echo ""
 echo "=== extension/tests/test_sniff_core.js（MV3 扩展判定核心，node） ==="
 NODE_BIN=""
