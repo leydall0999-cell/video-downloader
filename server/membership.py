@@ -1,7 +1,7 @@
 """VDL 会员引擎（V1，照搬 DataTool.vip 三轨结构）。
 
 三轨：
-  1) download_member  下载会员（30/180/365 天订阅；含下载类权益配额表）
+  1) download_member  下载会员（1/3/7/30/180/365 天订阅；含下载类权益配额表）
   2) ai_member        AI 会员（月订阅 + 一次性积分池；自动捆绑下载会员权益）
   3) permanent_credits 永久积分包（纯按次计费，不与订阅绑定）
 
@@ -37,6 +37,9 @@ import atomic_io
 
 # download member: 时长（天）、折算锚点
 DOWNLOAD_PLANS: dict[str, dict[str, Any]] = {
+    "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "下载会员·1天",   "saving": 0.0},
+    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "下载会员·3天",   "saving": 0.0},
+    "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "下载会员·7天",   "saving": 0.0},
     "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "下载会员·月",    "saving": 0.0},
     "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "下载会员·180天", "saving": 0.44},
     "download_year":       {"price_cny": 179.00, "days": 365,  "label": "下载会员·年",    "saving": 0.50, "best": True},
@@ -120,12 +123,22 @@ _PLAN_OVERRIDE_LOCK = _threading.Lock()
 _PLAN_OVERRIDE_CACHE: Optional[tuple[int, dict[str, Any]]] = None
 
 
-def plan_override_path() -> Path:
+def _base_dir() -> Path:
+    """数据目录：VDL_DATA_DIR 优先（离线测试隔离，绝不写真实家目录）。
+
+    与 auth_store._base_dir() 同一语义（同目录、同覆盖位）——两处若分叉，
+    测试会把真实 plans.json / membership.json 写脏。
+    """
+    override = os.environ.get("VDL_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
     if sys.platform == "win32" and getattr(sys, "frozen", False):
-        base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
-    else:
-        base = Path.home() / ".video-downloader"
-    return base / "plans.json"
+        return Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
+    return Path.home() / ".video-downloader"
+
+
+def plan_override_path() -> Path:
+    return _base_dir() / "plans.json"
 
 
 def load_plan_overrides() -> dict[str, Any]:
@@ -168,6 +181,32 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
             out[k] = merged
         else:
             out[k] = v
+    return out
+
+
+def effective_plans() -> dict[str, dict[str, Any]]:
+    """生效套餐表（覆盖层逐字段叠加 → 代码常量）。展示 / 下单 / 发放共用此真源。"""
+    ov = load_plan_overrides()
+    return {
+        "download_plans": _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")),
+        "ai_plans": _overlay_plans(AI_PLANS, ov.get("ai_plans")),
+        "credit_packs": _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")),
+    }
+
+
+def effective_pay_plans() -> dict[str, dict[str, Any]]:
+    """下单用套餐表：{code: {price, name, grant}}，与 payment_core.PAY_PLANS 同构。
+
+    🔴 价格单一真源（2026-09-30）：支付内核若继续读 payment_core 的硬编码
+    PAY_PLANS，超管在后台改的价格**不会影响真实扣款金额**。故改由本函数按
+    「覆盖层 → 代码常量」实时产出，注入 PaymentService。
+    """
+    eff = effective_plans()
+    out: dict[str, dict[str, Any]] = {}
+    for key in ("download_plans", "ai_plans", "credit_packs"):
+        for code, p in eff[key].items():
+            out[code] = {"price": float(p.get("price_cny") or 0),
+                         "name": p.get("label") or code, "grant": code}
     return out
 
 
@@ -261,12 +300,11 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
 
 
 def default_state_path() -> Path:
-    """状态文件默认路径 ~/.video-downloader/membership.json（frozen 兼容）。"""
-    if sys.platform == "win32" and getattr(sys, "frozen", False):
-        base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
-    else:
-        base = Path.home() / ".video-downloader"
-    return base / "membership.json"
+    """状态文件默认路径 ~/.video-downloader/membership.json（frozen 兼容）。
+
+    同样受 VDL_DATA_DIR 覆盖（见 _base_dir），保证测试不写真实家目录。
+    """
+    return _base_dir() / "membership.json"
 
 
 def _empty_state() -> dict[str, Any]:
@@ -486,14 +524,20 @@ class MembershipStore:
         st = self._state
         result: dict[str, Any] = {"ok": True, "code": code, "via": via}
 
-        if code in DOWNLOAD_PLANS:
-            info = DOWNLOAD_PLANS[code]
+        # 🔴 一律走生效套餐表（覆盖层 → 代码常量）：此前直接用模块常量，
+        #    超管在后台把某档天数从 7 改成 5，发放时仍按 7 天算。
+        _eff = effective_plans()
+        _dl_plans, _ai_plans, _credit_packs = (
+            _eff["download_plans"], _eff["ai_plans"], _eff["credit_packs"])
+
+        if code in _dl_plans:
+            info = _dl_plans[code]
             cur = float(st["download_member"].get("expire_at", 0) or 0)
-            new_exp = max(now, cur) + info["days"] * 86400
+            new_exp = max(now, cur) + int(info.get("days") or 0) * 86400
             st["download_member"].update({"active": True, "plan": code, "expire_at": new_exp})
             result.update({"kind": "download_member", "expire_at": new_exp})
-        elif code in AI_PLANS:
-            info = AI_PLANS[code]
+        elif code in _ai_plans:
+            info = _ai_plans[code]
             cur = float(st["ai_member"].get("expire_at", 0) or 0)
             new_exp = max(now, cur) + info["days"] * 86400
             # AI 会员按功能赠送额度：续费时不足上限则补齐，不浪费已用剩余
@@ -512,9 +556,9 @@ class MembershipStore:
                 st["download_member"]["expire_at"] = new_exp
             result.update({"kind": "ai_member", "expire_at": new_exp,
                            "credits_granted": int(info["credits"])})
-        elif code in CREDIT_PACKS:
-            info = CREDIT_PACKS[code]
-            amt = int(info["credits"])
+        elif code in _credit_packs:
+            info = _credit_packs[code]
+            amt = int(info.get("credits") or 0)
             st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + amt
             st["permanent_credits"].setdefault("packs", []).append({
                 "pack": code, "amount": amt, "bought_at": now,

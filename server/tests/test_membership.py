@@ -32,8 +32,13 @@ def test_plans_structure():
     st = _mkstore(tempfile.mkdtemp(), [T0])
     p = st.plans()
     assert p["currency"] == "CNY"
-    # 下载会员 3 档，年档带 best 标记
-    assert set(DOWNLOAD_PLANS) == {"download_month", "download_half_year", "download_year"}
+    # 下载会员 6 档（1/3/7 天体验档 + 月/半年/年），年档带 best 标记
+    assert set(DOWNLOAD_PLANS) == {
+        "download_1day", "download_3day", "download_7day",
+        "download_month", "download_half_year", "download_year"}
+    assert DOWNLOAD_PLANS["download_1day"]["days"] == 1
+    assert DOWNLOAD_PLANS["download_3day"]["days"] == 3
+    assert DOWNLOAD_PLANS["download_7day"]["days"] == 7
     assert DOWNLOAD_PLANS["download_year"]["days"] == 365
     assert DOWNLOAD_PLANS["download_year"].get("best") is True
     assert DOWNLOAD_PLANS["download_half_year"]["saving"] > 0.4

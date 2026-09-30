@@ -86,6 +86,9 @@ MIN_PASSWORD = 6
 
 # 套餐短码 → App 侧 membership 套餐 code（唯一映射，两端共同语义）
 PLAN_MAP: dict[str, str] = {
+    "DL1":  "download_1day",
+    "DL3":  "download_3day",
+    "DL7":  "download_7day",
     "DLM":  "download_month",
     "DLH":  "download_half_year",
     "DLY":  "download_year",
@@ -106,6 +109,9 @@ REDEEM_DISABLED = (os.environ.get("VDL_REDEEM_DISABLED") or "").strip().lower() 
 # 续费顺延 = max(now, 当前到期) + days），登录/心跳响应携带权威快照，
 # 客户端用它覆盖本地 memberships/*.json —— 用户篡改本地文件一联网即回滚。
 PLAN_EFFECT: dict[str, dict[str, Any]] = {
+    "download_1day":      {"kind": "dl",   "days": 1},
+    "download_3day":      {"kind": "dl",   "days": 3},
+    "download_7day":      {"kind": "dl",   "days": 7},
     "download_month":     {"kind": "dl",   "days": 30},
     "download_half_year": {"kind": "dl",   "days": 180},
     "download_year":      {"kind": "dl",   "days": 365},

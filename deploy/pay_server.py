@@ -45,6 +45,9 @@ TOKEN_TTL = float(os.environ.get("VDL_LICENSE_TOKEN_TTL_DAYS") or "30") * 86400.
 
 # 金额真源（与 App membership.DOWNLOAD_PLANS / AI_PLANS / CREDIT_PACKS 对齐，单位元）
 PRICE_MAP: dict[str, dict[str, Any]] = {
+    "download_1day":      {"price": "1.90",   "subject": "视频工坊·下载会员1天卡"},
+    "download_3day":      {"price": "4.90",   "subject": "视频工坊·下载会员3天卡"},
+    "download_7day":      {"price": "9.90",   "subject": "视频工坊·下载会员7天卡"},
     "download_month":     {"price": "29.80",  "subject": "视频工坊·下载会员月卡"},
     "download_half_year": {"price": "99.90",  "subject": "视频工坊·下载会员半年卡"},
     "download_year":      {"price": "179.00", "subject": "视频工坊·下载会员年卡"},

@@ -135,6 +135,10 @@ run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py
 run_one test_quota.py
+#  1/3/7 天下载会员档 + 套餐价格单一真源（2026-09-30）：超管在后台改价/改天数后，
+#  展示（/api/member/plans 真身 store.plans()）/ 下单金额 / 发放天数三处必须同步。
+#  此前下单读硬编码 PAY_PLANS、发货读硬编码 DOWNLOAD_PLANS —— 改了等于没改。
+run_one test_member_plans_source.py
 run_one test_llm_config_save.py
 run_one test_vision_managed_config.py
 run_one test_gateway_config.py

@@ -16753,7 +16753,7 @@ el.dwVidPlayer.hidden = true;
     overlay.innerHTML = `
       <div class="vdl-pay-modal">
         <div class="vdl-pay-title">扫码支付开通会员</div>
-        <div class="vdl-pay-amt">¥${amount} · ${planCode}</div>
+        <div class="vdl-pay-amt">¥${(Number(amount) || 0).toFixed(2)} · ${planCode}</div>
         <img class="vdl-pay-qr" src="${qrPng}" alt="支付宝支付二维码"/>
         <div class="vdl-pay-tip">请使用支付宝扫码付款，支付成功后自动开通</div>
         <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>

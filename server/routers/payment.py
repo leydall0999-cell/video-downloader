@@ -40,7 +40,10 @@ def _provider() -> Any:
 
 def _service() -> Any:
     from payment_core import OrderStore, PaymentService
-    return PaymentService(OrderStore(_order_dir()), _provider())
+    # 下单金额走「生效套餐表」（超管后台改价即刻生效），而非 payment_core 的硬编码表。
+    from membership import effective_pay_plans
+    return PaymentService(OrderStore(_order_dir()), _provider(),
+                          plans_fn=effective_pay_plans)
 
 
 def _store(request: Request) -> Any:
