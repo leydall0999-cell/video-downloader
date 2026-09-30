@@ -2165,7 +2165,13 @@ def main() -> None:
 
         # Windows 端退出 webview 后清理资源
         _launch_log("原生窗口已创建，启动 webview 主循环")
-        webview.start()
+        # 🔴 登录态持久化修复（2026-09-30）：pywebview 默认 private_mode=True，
+        #   其 cocoa 后端在每次启动时 removeDataOfTypes(全部网站数据) —— 把 localStorage
+        #   （含登录 token vdl_auth_token）连同 cookie 一并清空。后果：桌面 App 彻底退出
+        #   （Cmd+Q / Dock Quit → os._exit）重开后必须重新登录。改为 private_mode=False
+        #   后走 defaultDataStore（持久化），localStorage 跨启动保留 → 正常退出/重开自动
+        #   保持登录态；仅在用户主动「退出账户」(logoutAccount 清掉 token) 时才需重登。
+        webview.start(private_mode=False)
         _launch_log("webview 主循环结束，正常退出")
         os._exit(0)
     except Exception as _wv_err:  # pywebview 运行期异常（如 cocoa 初始化失败）→ 绝不静默闪退
