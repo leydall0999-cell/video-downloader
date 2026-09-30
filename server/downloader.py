@@ -1129,15 +1129,35 @@ def worker_proxy_url() -> str:
     return val
 
 
+def _is_youtube_stream_host(host: str) -> bool:
+    """YouTube 解析与视频流 CDN 的域集合。
+
+    googlevideo.com 必须一起算：YouTube 的流地址与发起解析的出口 IP 绑定，
+    解析走 A 出口、下载走 B 出口会 403，所以两者必须同代理。
+    """
+    host = (host or "").lower()
+    return any(
+        host == d or host.endswith("." + d)
+        for d in ("youtube.com", "youtu.be", "googlevideo.com", "youtube-nocookie.com", "ytimg.com")
+    )
+
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
+
+    YouTube 系（youtube.com / youtu.be / googlevideo.com）：
+      VDL_PROXY_YT > 其它海外规则。2026-10-01 实测定版：阿里云香港机房 IP 被
+      YouTube 逐视频 bot 门禁拦（矩阵实测 4 条视频仅 1 条能过，带登录 Cookie、
+      cookiefile 正确作用域、换 player_client 全无效——1~2 秒即拒 = IP 信誉问题）；
+      同机挂 Cloudflare WARP（proxy 模式，socks5h://127.0.0.1:40000）后 8/8 全过
+      （带/不带 Cookie 各 4 条）。这是唯一被实测验证的彻底解法，其它手段均无解。
 
     国内站（B站/抖音/腾讯/chrqj 等）：
       VDL_PROXY_CN（国内出口回源代理）> 直连。
       服务部署在海外（Railway 等）时，国内站会被地理围栏 403，必须配 VDL_PROXY_CN
       指向一台国内机器的 HTTP 代理；本机跑在国内则留空直连即可。
 
-    海外站（YouTube/Twitter 等）：
+    其余海外站（Twitter 等）：
       VDL_PROXY > macOS 系统代理（scutil）> 标准 http(s)_proxy 环境变量。
       刻意避开 WorkBuddy 注入的 127.0.0.1:57885（实测不通海外）。
 
@@ -1145,6 +1165,10 @@ def _resolve_proxy(host: str = "") -> str:
     """
     if host and is_china_host(host):
         return _cn_proxy_url()
+    if _is_youtube_stream_host(host):
+        yt = os.environ.get("VDL_PROXY_YT", "").strip()
+        if yt:
+            return yt
     explicit = os.environ.get("VDL_PROXY", "").strip()
     if explicit:
         return explicit

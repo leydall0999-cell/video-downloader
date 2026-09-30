@@ -85,6 +85,7 @@ run_one test_peer_overseas_fallback.py
 run_one test_member_download_quota.py
 run_one test_youtube_unavailable_vs_bot.py
 run_one test_youtube_shortlink_scope.py
+run_one test_yt_warp_proxy.py              # YouTube 专属出口代理：VDL_PROXY_YT(WARP) 分流、googlevideo 同代理、国内站不受影响（2026-10-01）
 run_one test_upload_body_limit.py
 run_one test_reconvert_source_reuse.py      # 免重传重转：finish 留源 2h / reconvert 复用 / 设备隔离 / 410 回退 / TTL 清理（2026-09-29）
 run_one test_feature_auth_gate.py           # 功能级登录门禁（服务端）：18 个执行类端点未登录 403+引导登录、带 token 放行（2026-09-29）
