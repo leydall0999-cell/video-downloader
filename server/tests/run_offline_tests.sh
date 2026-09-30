@@ -126,6 +126,11 @@ run_one test_login_gate_placement.py
 #                                       锁住两端：分享节点必须把 .html 分享渲染成页面原件；
 #                                       前端必须给在线链接 + 二维码，且上传请求带登录 token。
 run_one test_page_link_wiring.py
+#  11d. test_home_entries.py —— 首页「热门功能快捷入口」接线守卫（2026-09-30「快捷入口继续完善」）：
+#                              首页 12 张卡片改 5 组 17 张，补齐生成二维码/生成网页/音乐转换/
+#                              图片转换/视频音频桥接。守卫钉住「卡片 data-view 必须是侧栏真实视图名」
+#                              （拼错=点了没反应）与「侧栏主功能必须都在首页有入口」（防加了功能忘了首页）。
+run_one test_home_entries.py
 run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py

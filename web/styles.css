@@ -132,6 +132,18 @@ img { max-width: 100%; display: block; }
   display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: .85rem; margin-top: .7rem;
 }
+/* 2026-09-30 快捷入口分组：与侧栏同款 5 组（下载 / 创作 / 转换 / 工具 / 媒体库） */
+.home-groups { display: flex; flex-direction: column; gap: 1.05rem; margin-top: .7rem; }
+.home-group .home-grid { margin-top: 0; }
+.home-group-title {
+  display: flex; align-items: center; gap: .45rem; margin: 0 0 .55rem;
+  font-size: .8rem; font-weight: 700; color: var(--text-mute); letter-spacing: .04em;
+}
+.home-group-title::before {
+  content: ''; flex: none; width: 3px; height: 14px; border-radius: 2px;
+  background: linear-gradient(180deg, var(--brand), #0891b2);
+}
+.home-group-emoji { font-size: .95rem; line-height: 1; }
 .home-card {
   display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
   align-items: center; gap: .5rem .6rem;
