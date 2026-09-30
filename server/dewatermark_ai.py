@@ -25,6 +25,7 @@
 - available() 返回 False，上层路由据此回退 OpenCV / 报友好错误，不阻塞进程启动。
 """
 import collections
+import engine_idle  # 引擎空闲自动卸载（2026-09-30）：空闲超时释放会话，回收模型权重内存
 import glob as _glob
 import json
 import logging
@@ -368,11 +369,13 @@ def _get_session(model_name: str = None):
         _SESSIONS.pop(name, None)
         cached = None
     if cached is not None:
+        engine_idle.touch("dewatermark")
         return cached[0]
 
     with _LOCK:
         cached = _SESSIONS.get(name)
         if cached is not None and cached[1] == use_int8:
+            engine_idle.touch("dewatermark")
             return cached[0]
         ok, reason = _memory_ok()
         if not ok:
@@ -417,7 +420,33 @@ def _get_session(model_name: str = None):
             else:
                 raise
         _SESSIONS[name] = (_sess, use_int8)
+    engine_idle.touch("dewatermark")
     return _SESSIONS[name][0]
+
+
+def count_sessions() -> int:
+    """当前已加载的 LaMa / 去水印 onnx 会话数。"""
+    return len(_SESSIONS)
+
+
+def release_sessions() -> int:
+    """清空去水印的 onnx 会话缓存，释放模型权重。
+
+    ⚠️ 只删字典引用：正在推理的栈仍持有引用，对象不会被销毁，任务安全跑完。
+    """
+    n = len(_SESSIONS)
+    _SESSIONS.clear()
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:  # noqa: BLE001
+        pass
+    return n
+
+
+# 登记到空闲卸载表（空闲超过阈值默认 3 分钟 → 自动释放）
+engine_idle.register("dewatermark", release_sessions, count_sessions)
 
 
 def _probe_inputs(session) -> None:

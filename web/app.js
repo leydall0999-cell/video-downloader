@@ -364,6 +364,11 @@
     profCancelChangePwBtn: $('profCancelChangePwBtn'),
     profChangePwForm: $('profChangePwForm'),
     profDeactivateBtn: $('profDeactivateBtn'),
+    // AI 引擎空闲自动释放开关（2026-09-30）
+    profIdleToggle: $('profIdleToggle'),
+    profIdleLabel: $('profIdleLabel'),
+    profIdleState: $('profIdleState'),
+    profIdleReleaseNow: $('profIdleReleaseNow'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
@@ -21062,6 +21067,75 @@ el.dwVidPlayer.hidden = true;
   if (m && m.addEventListener) {
     m.addEventListener('change', function () { if (current() === 'system') apply('system'); });
   }
+})();
+
+/* ======================================================================
+   AI 引擎空闲自动释放开关（2026-09-30）
+   抠图 / 去水印用完 3 分钟没再操作 → 自动卸载 onnx 会话，回收模型权重占用的内存
+   （为内存吃紧的用户，典型是 8GB 机型）。开关与「立即释放」都走 /api/engine/idle。
+   ⚠️ 释放只删字典引用：正在推理的栈仍持有引用，任务会安全跑完，不会被打断。
+   ====================================================================== */
+(function () {
+  var toggle = document.getElementById('profIdleToggle');
+  var label = document.getElementById('profIdleLabel');
+  var state = document.getElementById('profIdleState');
+  var btn = document.getElementById('profIdleReleaseNow');
+  if (!toggle) return;
+  var base = window.VDL_API_BASE || '';
+
+  function engName(n) {
+    if (n === 'matting') return '抠图';
+    if (n === 'dewatermark') return '去水印';
+    return n;
+  }
+
+  function render(data) {
+    if (!data || !data.ok) { if (state) state.textContent = '—'; return; }
+    toggle.checked = !!data.enabled;
+    if (label) label.textContent = data.enabled ? '已开启' : '已关闭';
+    if (!state) return;
+    var loaded = (data.engines || []).filter(function (e) { return e.loaded > 0; });
+    if (!loaded.length) {
+      state.textContent = '当前无已加载模型（未用过 AI 功能，或已自动释放）';
+      return;
+    }
+    var parts = loaded.map(function (e) {
+      var tail = (e.releases_in == null) ? '' : ('，约 ' + Math.ceil(e.releases_in) + ' 秒后释放');
+      return engName(e.name) + ' ' + e.loaded + ' 个会话' + tail;
+    });
+    state.textContent = '已加载：' + parts.join('、');
+  }
+
+  function post(body, cb) {
+    fetch(base + '/api/engine/idle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json(); })
+      .then(function (d) { if (cb) cb(d); render(d); })
+      .catch(function () { /* 设置失败不打扰用户 */ });
+  }
+
+  function refresh() {
+    // 个人中心没打开就不轮询，零额外开销
+    var pv = document.getElementById('profileView');
+    if (pv && pv.hidden) return;
+    fetch(base + '/api/engine/idle').then(function (r) { return r.json(); })
+      .then(render).catch(function () {});
+  }
+
+  toggle.addEventListener('change', function () { post({ enabled: toggle.checked }); });
+  if (btn) {
+    btn.addEventListener('click', function () {
+      post({ release_now: true }, function (d) {
+        if (d && d.ok && state) {
+          state.textContent = d.freed ? ('已释放 ' + d.freed + ' 个引擎') : '当前没有已加载的模型';
+        }
+      });
+    });
+  }
+  setInterval(refresh, 15000);
+  refresh();
 })();
 
 /* ======================================================================

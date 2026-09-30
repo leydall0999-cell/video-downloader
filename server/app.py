@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import atomic_io
+import engine_idle
 import platform_model as plat
 
 from codec_utils import h264_args as _h264_args, hevc_args as _hevc_args, \
@@ -2014,6 +2015,14 @@ async def lifespan(_: FastAPI):
         ensure_superusers()
     except Exception:
         logger.exception("确保超级用户失败")
+    # AI 引擎空闲自动卸载（2026-09-30）：后台巡检，空闲超阈值（默认 3 分钟）释放
+    # onnx 会话，为内存吃紧的用户回收模型权重占用的内存。
+    # ⚠️ 必须等上面的 routers 都 import 完（注册动作发生在模块导入时）再启动，
+    #    否则注册还没发生，巡检线程空转。lifespan 在此之后运行，顺序正确。
+    try:
+        engine_idle.ensure_started()
+    except Exception:
+        logger.exception("启动引擎空闲卸载巡检失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:

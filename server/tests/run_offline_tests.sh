@@ -260,6 +260,11 @@ run_one test_payment_router.py
 #      测试用一次性 Keychain 账号并在结尾清理；数据目录走 VDL_DATA_DIR 隔离。
 run_one test_credential_store.py
 
+#  32. test_engine_idle.py —— 引擎空闲自动卸载（2026-09-30，方案 A）：
+#      空闲超时默认 180s 释放模型权重；开关关闭时不释放；释放后能重建；
+#      配置走 VDL_DATA_DIR 隔离（绝不写用户家目录）。
+run_one test_engine_idle.py
+
 echo ""
 echo "=== extension/tests/test_sniff_core.js（MV3 扩展判定核心，node） ==="
 NODE_BIN=""

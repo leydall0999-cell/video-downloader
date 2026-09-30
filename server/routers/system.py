@@ -30,6 +30,8 @@ from typing import Any, Optional
 import urllib.request
 from fastapi import APIRouter, Body, Request
 
+import engine_idle
+
 router = APIRouter()
 
 # ---- 配置（可用环境变量覆盖，便于测试/换源） ----
@@ -422,6 +424,28 @@ def system_info() -> dict[str, Any]:
         "update_unsupported_reason": _update_unsupported_reason(),
         "update_base_url": UPDATE_BASE_URL,
     }
+
+
+@router.get("/api/engine/idle")
+def engine_idle_status() -> dict[str, Any]:
+    """AI 引擎空闲卸载状态（开关 / 空闲多久 / 各引擎是否已加载）。"""
+    return {"ok": True, **engine_idle.status()}
+
+
+@router.post("/api/engine/idle")
+def engine_idle_save(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """保存空闲卸载开关，或立即释放一次。
+
+    body: {"enabled": bool, "ttl_seconds": int, "release_now": bool}
+    """
+    data = payload if isinstance(payload, dict) else {}
+    if data.get("release_now"):
+        freed = engine_idle.release_all()
+        return {"ok": True, "freed": freed, **engine_idle.status()}
+    if "ttl_seconds" in data or "enabled" in data:
+        cfg = engine_idle.save_config(data)
+        return {"ok": True, **engine_idle.status(), "saved": cfg}
+    return {"ok": True, **engine_idle.status()}
 
 
 @router.get("/api/system/latest")

@@ -49,6 +49,10 @@ from pathlib import Path
 
 from cloud_matting_config import is_cloud_matting_ready, is_cloud_matting_mediakit_ready
 
+# 引擎空闲自动卸载（2026-09-30）：把本模块的会话缓存登记进去，
+# 空闲超过阈值就清掉，为内存吃紧的用户（8GB 机型）回收模型权重占用的内存。
+import engine_idle
+
 # ---------------------------------------------------------------- 模型注册表
 
 # size_mb 用于前端「首次下载约 xxx MB」提示；input_size 是 ONNX 输入分辨率。
@@ -445,6 +449,7 @@ def _get_session(name: str | None = None):
     with _LOCK:
         sess = _SESSIONS.get(name)
         if sess is not None:
+            engine_idle.touch("matting")
             return sess
 
         import onnxruntime as ort
@@ -456,6 +461,7 @@ def _get_session(name: str | None = None):
         # CPU 是唯一稳定 EP（BiRefNet 含傅里叶类 op，CoreML EP 会 OOM，与 LaMa 同理）
         sess = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
         _SESSIONS[name] = sess
+        engine_idle.touch("matting")
         return sess
 
 
@@ -2613,6 +2619,7 @@ def _sam_session(kind: str):
     with _SAM_SESS_LOCK:
         sess = _SAM_SESSIONS.get(kind)
         if sess is not None:
+            engine_idle.touch("matting")
             return sess
         import onnxruntime as ort
 
@@ -2621,7 +2628,42 @@ def _sam_session(kind: str):
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         sess = ort.InferenceSession(str(path), sess_options=so, providers=["CPUExecutionProvider"])
         _SAM_SESSIONS[kind] = sess
+        engine_idle.touch("matting")
         return sess
+
+
+def count_sessions() -> int:
+    """当前已加载的 onnx 会话数（抠图主模型 + SAM encoder/decoder）。"""
+    with _LOCK:
+        n = len(_SESSIONS)
+    with _SAM_SESS_LOCK:
+        n += len(_SAM_SESSIONS)
+    return n
+
+
+def release_sessions() -> int:
+    """清空所有已缓存的 onnx 会话，释放模型权重。
+
+    ⚠️ 只删字典里的引用 —— 若此刻正有推理在跑，那个函数的栈仍持有引用，
+    对象不会被销毁，推理会安全跑完（Python 引用计数）。所以这里无需持锁等待任务。
+    """
+    with _LOCK:
+        n1 = len(_SESSIONS)
+        _SESSIONS.clear()
+    with _SAM_SESS_LOCK:
+        n2 = len(_SAM_SESSIONS)
+        _SAM_SESSIONS.clear()
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:  # noqa: BLE001
+        pass
+    return n1 + n2
+
+
+# 登记到空闲卸载表：空闲超过阈值（默认 3 分钟）自动调用 release_sessions。
+engine_idle.register("matting", release_sessions, count_sessions)
 
 
 def _sam_mask_cropped(rgb, norm_box, W: int, H: int):
