@@ -26,6 +26,20 @@ SERVICE = "com.videodownloader.desktop"
 _TIMEOUT = 5
 
 
+def _service() -> str:
+    """Keychain 的 service 名。
+
+    ⚠️ 2026-09-30 事故：离线测试跑 `save_account()` 时会连带写 Keychain，而
+    Keychain 是**系统级**的，不受 VDL_DATA_DIR 隔离 —— 测试桩 token（"tok-1"）
+    直接覆盖了真实账号条目，导致线上登录态 BAD_TOKEN。
+    因此：只要检测到隔离变量（VDL_DATA_DIR，测试专用），就切到独立命名空间，
+    测试再也碰不到真实凭据。
+    """
+    if os.environ.get("VDL_DATA_DIR", "").strip():
+        return SERVICE + ".test"
+    return SERVICE
+
+
 def _base_dir() -> Path:
     try:
         from auth_store import _base_dir as _bd
@@ -86,7 +100,7 @@ def set_token(email: str, token: str) -> str:
         return "none"
     if _is_macos():
         ok, _ = _run_security(["add-generic-password", "-U", "-a", email,
-                               "-s", SERVICE, "-w", token])
+                               "-s", _service(), "-w", token])
         if ok:
             # 已从明文 JSON 迁走：清掉历史明文，避免两份都在
             _migrate_out_of_json(email)
@@ -106,7 +120,7 @@ def get_token(email: str) -> str:
         return legacy
     if _is_macos():
         ok, out = _run_security(["find-generic-password", "-a", email,
-                                 "-s", SERVICE, "-w"])
+                                 "-s", _service(), "-w"])
         if ok and out:
             return out
     return ""
@@ -117,7 +131,7 @@ def delete_token(email: str) -> None:
     if not email:
         return
     if _is_macos():
-        _run_security(["delete-generic-password", "-a", email, "-s", SERVICE])
+        _run_security(["delete-generic-password", "-a", email, "-s", _service()])
     data = _read_fallback()
     if email in data:
         data.pop(email, None)

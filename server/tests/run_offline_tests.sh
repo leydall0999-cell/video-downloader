@@ -34,6 +34,15 @@ set -u
 # tests/test_login_gate.py 单独打开开关验证。
 export VDL_LOGIN_GATE=0
 
+# ⚠️ 数据目录隔离（2026-09-30 事故后必设）：
+# credential_store 的 Keychain 是**系统级**的，只能靠 VDL_DATA_DIR 这个开关来
+# 判断「当前是不是测试环境」并切到 .test 命名空间。本运行器此前只设了
+# VDL_LOGIN_GATE，没有 VDL_DATA_DIR → 跑全量套件时测试桩 token（"tok-1"）
+# 把真实账号 15014313254 的 Keychain 条目覆盖了，线上登录态直接 BAD_TOKEN。
+# 所以这一行不是可选的：没有它，跑一次全量测试就会弄坏真实登录凭据。
+export VDL_DATA_DIR="${VDL_DATA_DIR:-/tmp/vdl_offline_data}"
+mkdir -p "$VDL_DATA_DIR" 2>/dev/null
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER="$REPO/server"
 
