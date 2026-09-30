@@ -16643,19 +16643,22 @@ el.dwVidPlayer.hidden = true;
     el.memberActMsg.hidden = !text;
     el.memberActMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
   }
+  // 卡片版式：标题行（名称 + 角标）/ 价格行（¥金额 + 单位小字）/ 可选说明行 / 底部通栏「购买」
+  // 相比旧版「全部纵向堆叠 + 绝对定位角标」，卡高约降 1/3，宽窄栅格里都能对齐。
   function _memberCard(plan, code, extra) {
+    extra = extra || {};
     const saving = plan.saving ? `<span class="member-badge member-badge-saving">省 ${Math.round(plan.saving * 100)}%</span>` : '';
-    const best = plan.best ? `<span class="member-badge member-badge-best">最受双迎</span>` : '';
+    const best = plan.best ? `<span class="member-badge member-badge-best">最受欢迎</span>` : '';
+    const badges = (saving || best) ? `<span class="member-plan-badges">${saving}${best}</span>` : '';
     const price = (Number(plan.price_cny) || 0).toFixed(2);
-    const foot = extra && extra.foot ? `<div class="member-card-foot">${extra.foot}</div>` : '';
+    const unit = extra.unit ? `<span class="member-plan-per">${extra.unit}</span>` : '';
+    const foot = extra.foot ? `<div class="member-card-foot">${extra.foot}</div>` : '';
     return `
       <div class="member-plan${plan.best ? ' member-plan-best' : ''}">
-        <div class="member-plan-head">${saving}${best}<div class="member-plan-name">${plan.label || code}</div>
-          <div class="member-plan-price"><span class="member-ccy">¥</span>${price}</div>
-          ${extra && extra.meta ? `<div class="member-plan-meta">${extra.meta}</div>` : ''}
-        </div>
-        <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}">购买</button>
+        <div class="member-plan-top"><span class="member-plan-name">${plan.label || code}</span>${badges}</div>
+        <div class="member-plan-price"><span class="member-ccy">¥</span>${price}${unit}</div>
         ${foot}
+        <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}">购买</button>
       </div>`;
   }
   function switchMemberTab(key) {
@@ -16699,24 +16702,24 @@ el.dwVidPlayer.hidden = true;
       const aiPlans = (p.ai_member && p.ai_member.plans) || {};
       const packs = (p.credit_packs) || {};
       const dlBenefits = (p.download_member && p.download_member.benefits) || [];
-      // 下载会员（3 档）+ 共享权益清单
+      // 下载会员（6 档：1/3/7 天体验 + 月/半年/年）+ 共享权益清单
       const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
-        _memberCard(plan, code, { meta: plan.days ? `${plan.days} 天` : '' })).join('');
+        _memberCard(plan, code, { unit: plan.days ? ` / ${plan.days} 天` : '' })).join('');
       const dlList = dlBenefits.map(b => `<li>${b.text}</li>`).join('');
       el.memberPaneDl.innerHTML = `
-        <div class="member-benefits member-benefits-top">${dlList ? `<ul class="member-benefits-list">${dlList}</ul>` : ''}</div>
+        ${dlList ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${dlList}</ul></div>` : ''}
         <div class="member-plans">${dlCards}</div>`;
       // AI 会员（2 档，捆绑下载权益）
       const aiNote = p.ai_member && p.ai_member.bundle_note ? `<div class="member-bundle-note">🔗 ${p.ai_member.bundle_note}</div>` : '';
       const aiCards = Object.entries(aiPlans).map(([code, plan]) =>
         _memberCard(plan, code, {
-          meta: `月赠 ${plan.credits} 积分（30 天有效）`,
-          foot: `<div class="member-card-foot">含下载会员权益 · 积分 30 天有效</div>`,
+          unit: ' / 月',
+          foot: `月赠 ${plan.credits} 积分（30 天有效）· 含下载会员权益`,
         })).join('');
       el.memberPaneAi.innerHTML = `${aiNote}<div class="member-plans">${aiCards}</div>`;
       // 永久积分包
       const packCards = Object.entries(packs).map(([code, plan]) =>
-        _memberCard(plan, code, { meta: `一次性到账 ${plan.credits} 积分`, foot: `<div class="member-card-foot">永久有效 · 不随订阅过期</div>` })).join('');
+        _memberCard(plan, code, { foot: `一次性到账 ${plan.credits} 积分 · 永久有效，不随订阅过期` })).join('');
       el.memberPanePacks.innerHTML = `<div class="member-plans">${packCards}</div>`;
       // 卡片「开通」→ 激活
       el.memberModal.querySelectorAll('.member-buy').forEach((btn) => {
@@ -16813,7 +16816,8 @@ el.dwVidPlayer.hidden = true;
             const when = d.last_seen ? _fmtAgo(d.last_seen) : '';
             const unbind = d.current ? '' :
               `<button type="button" class="btn btn-ghost btn-xs cloud-unbind" data-fp="${escHtml(d.fp)}">下线</button>`;
-            return `<div class="member-cloud-dev">${escHtml(d.name || d.fp)}${cur}<span class="member-cloud-when">${when}</span>${unbind}</div>`;
+            const nm = escHtml(d.name || d.fp);
+            return `<div class="member-cloud-dev"><span class="member-cloud-name" title="${nm}">${nm}</span>${cur}<span class="member-cloud-when">${when}</span>${unbind}</div>`;
           }).join('');
           el.cloudDevices.insertAdjacentHTML('beforeend',
             `<p class="member-cloud-devhint">已登录 ${devs.length} / ${max} 台设备（超出将自动挤下最久未活动的设备）</p>`);
