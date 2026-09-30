@@ -121,6 +121,11 @@ run_one test_download_wiring.py
 #                                       并要求门禁表 id 在 index.html 真实存在、后端名单同步、
 #                                       提示文案不被 openAuthModal 清空
 run_one test_login_gate_placement.py
+#  11c. test_page_link_wiring.py —— 「生成网页 → 在线链接」接线守卫（2026-09-30 用户实测：
+#                                       「为什么别人打不开」＝ 结果区只给本机路径，用户把它当分享链接发出去）。
+#                                       锁住两端：分享节点必须把 .html 分享渲染成页面原件；
+#                                       前端必须给在线链接 + 二维码，且上传请求带登录 token。
+run_one test_page_link_wiring.py
 run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py
