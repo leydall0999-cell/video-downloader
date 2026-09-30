@@ -2111,3 +2111,33 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .pay-qr { width: 190px; height: 190px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
 .pay-tip { font-size: .78rem; color: var(--text-mute); margin-top: .55rem; }
 .pay-status { font-size: .82rem; margin-top: .35rem; }
+
+/* —— 网页版会员页（#memberView，2026-09-30）：免登录可看价目与权益，点「立即开通」才要登录 ——
+   栅格 minmax(240px,1fr)：880px 正文宽下正好 3 列（6 档 = 3×2，与桌面端会员中心同版式）；
+   auto-fit 会折叠空轨道，所以只有 2 档的 AI 会员 / 积分包自动铺成 2 列，不留空洞。 */
+.mem-lead { color: var(--text-mute); font-size: .85rem; line-height: 1.6; margin: .1rem 0 1rem; }
+.mem-top {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin: 0 0 1rem; padding: .6rem .8rem; font-size: .82rem;
+  border: 1px solid #d6defb; border-radius: var(--radius-md); background: var(--brand-soft);
+}
+.mem-top-text { flex: 1 1 220px; min-width: 0; color: var(--text); }
+.mem-top-text b { color: var(--brand-strong); }
+.mem-top .pf-ov-btn { flex: none; }
+.mem-track { margin: 0 0 1.15rem; }
+.mem-track-h { display: flex; align-items: baseline; gap: .55rem; margin: 0 0 .55rem; flex-wrap: wrap; }
+.mem-track-t { font-size: .95rem; font-weight: 700; }
+.mem-track-note { font-size: .74rem; color: var(--text-mute); }
+.mem-benefits {
+  display: flex; flex-wrap: wrap; gap: .25rem .9rem; margin: 0 0 .85rem;
+  padding: 0; list-style: none; font-size: .78rem; color: var(--text-mute);
+}
+.mem-benefits li::before { content: '✓ '; color: var(--success); }
+.mem-tracks .pf-plans { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .7rem; }
+.mem-tracks .pf-plan { padding: .85rem .9rem .8rem; gap: .5rem; }
+.mem-tracks .pf-plan-price { font-size: 1.55rem; }
+.mem-tracks .pf-plan-buy { width: 100%; }
+@media (max-width: 560px) {
+  .mem-tracks .pf-plans { grid-template-columns: 1fr; }
+  .mem-top { align-items: flex-start; }
+}

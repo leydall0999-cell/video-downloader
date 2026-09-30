@@ -43,7 +43,8 @@
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
         <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
-        <button type="button" class="tab tab-sep" data-view="profile" id="tabProfile">个人中心</button>
+        <button type="button" class="tab tab-sep" data-view="member" id="tabMember">💎 会员</button>
+        <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
         <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能</button>
       </div>
     </nav>
@@ -669,6 +670,16 @@
     </div>
   </section>
 
+  <!-- ===== 会员（网页版购买入口，2026-09-30）：免登录即可看到价目与权益，点「立即开通」才要求登录 ===== -->
+  <section id="memberView" class="panel" hidden aria-labelledby="memTitle">
+    <h2 id="memTitle" class="guide-title">💎 开通会员</h2>
+    <p class="mem-lead">下载会员解锁全速提取；AI 会员每月额外赠送积分，积分包可单独购买永久积分。与桌面端共用同一账号，开通后两端同时生效，支付成功自动到账。</p>
+    <div class="mem-top" id="memTop"></div>
+    <div class="mem-tracks" id="memTracks"><p class="pf-plan-empty">加载中…</p></div>
+    <p class="pf-plan-note" id="memNote"></p>
+    <span class="convert-status" id="memStatus" aria-live="polite"></span>
+  </section>
+
   <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 激活码 ===== -->
   <section id="profileView" class="panel" hidden aria-labelledby="pfTitle">
     <h2 id="pfTitle" class="guide-title">👤 个人中心</h2>
@@ -793,23 +804,6 @@
             <div class="pf-ov-foot">注册时间：<span id="pfCreated">—</span></div>
           </div>
         </div>
-
-        <!-- 支付二维码弹窗（网页版充值，2026-09-30） -->
-        <dialog id="payModal" class="modal" aria-labelledby="payModalTitle">
-          <div class="modal-card pay-card">
-            <div class="modal-head">
-              <h2 id="payModalTitle">扫码支付开通会员</h2>
-              <button type="button" class="modal-close" id="payModalClose" aria-label="关闭">✕</button>
-            </div>
-            <div class="pay-body">
-              <div class="pay-amt" id="payAmount">¥--</div>
-              <div class="pay-plan" id="payPlanName">—</div>
-              <img class="pay-qr" id="payQr" src="" alt="支付宝支付二维码" />
-              <div class="pay-tip">请使用支付宝扫码付款，支付成功后权益自动到账</div>
-              <div class="pay-status" id="payStatus" aria-live="polite">等待支付…</div>
-            </div>
-          </div>
-        </dialog>
 
         <!-- ② 购买记录 -->
         <div class="pf-panel" id="pfPanelPurchases" hidden>
@@ -1755,6 +1749,23 @@
       <button type="button" class="btn btn-ghost" id="amSwitch">没有账号？注册</button>
     </div>
     <p class="sub-msg" id="amStatus" aria-live="polite"></p>
+  </div>
+</dialog>
+
+<!-- 扫码支付弹窗（网页版会员购买共用：会员页 / 个人中心都从这里出二维码）-->
+<dialog id="payModal" class="modal" aria-labelledby="payModalTitle">
+  <div class="modal-card pay-card">
+    <div class="modal-head">
+      <h2 id="payModalTitle">扫码支付开通会员</h2>
+      <button type="button" class="modal-close" id="payModalClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="pay-body">
+      <div class="pay-amt" id="payAmount">¥--</div>
+      <div class="pay-plan" id="payPlanName">—</div>
+      <img class="pay-qr" id="payQr" src="" alt="支付宝支付二维码" />
+      <div class="pay-tip" id="payTip">请使用支付宝扫码付款，支付成功后权益自动到账</div>
+      <div class="pay-status" id="payStatus" aria-live="polite">等待支付…</div>
+    </div>
   </div>
 </dialog>
 

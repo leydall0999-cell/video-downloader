@@ -434,6 +434,10 @@
     pfPlans: $('pfPlans'), pfPlanNote: $('pfPlanNote'),
     payModal: $('payModal'), payModalClose: $('payModalClose'), payAmount: $('payAmount'),
     payPlanName: $('payPlanName'), payQr: $('payQr'), payStatus: $('payStatus'),
+    payModalTitle: $('payModalTitle'), payTip: $('payTip'),
+    // 网页版独立会员页（2026-09-30）：免登录看价目，购买动作才要登录
+    memberView: $('memberView'), tabMember: $('tabMember'),
+    memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'),
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
     authModal: $('authModal'), authModalTitle: $('authModalTitle'), authModalHint: $('authModalHint'),
@@ -6098,7 +6102,8 @@
     const isImage = view === 'imageconvert';   // 图片转换
     const isSt = view === 'subtitle';          // AI 字幕（区别于订阅 isSub）
     const isProfile = view === 'profile';      // 个人中心
-    const isAnyExtra = isMusic || isImage || isSt || isProfile;
+    const isMem = view === 'member';          // 会员（公开购买页，2026-09-30）
+    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem;
     el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isAnyExtra;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -6111,6 +6116,7 @@
     if (el.imageConvertView) el.imageConvertView.hidden = !isImage;
     if (el.subtitleView) el.subtitleView.hidden = !isSt;
     if (el.profileView) el.profileView.hidden = !isProfile;
+    if (el.memberView) el.memberView.hidden = !isMem;
     if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isAnyExtra);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
@@ -6123,12 +6129,14 @@
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
     if (el.tabSubtitle) el.tabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfile);
+    if (el.tabMember) el.tabMember.classList.toggle('is-active', isMem);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isSt) { el.sbStatus.textContent = ''; }
     if (isProfile) pfLoad();
+    if (isMem) memRender();
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
@@ -7313,28 +7321,46 @@
     if (_pfPayTimer) { clearInterval(_pfPayTimer); _pfPayTimer = null; }
     if (el.payModal && el.payModal.open) el.payModal.close();
   };
-  const pfBuy = async (code) => {
+  // statusEl：反馈位置可换（会员页 / 个人中心各有一条提示），缺省沿用个人中心那条
+  const pfBuy = async (code, statusEl) => {
     if (!code) return;
-    if (el.pfMemberStatus) el.pfMemberStatus.textContent = '正在生成支付二维码…';
+    const st = statusEl || el.pfMemberStatus;
+    const say = (t) => { if (st) st.textContent = t || ''; };
+    say('正在生成支付二维码…');
     let r = null;
     try {
       r = await request('/api/cloud/pay/create', {
         method: 'POST', headers: pfAuthHeaders(), body: JSON.stringify({ plan_code: code }),
       });
     } catch (_e) {
-      if (el.pfMemberStatus) el.pfMemberStatus.textContent = '下单失败：网络错误';
+      say('下单失败：网络错误');
       return;
     }
     if (!r || !r.ok) {
-      if (el.pfMemberStatus) el.pfMemberStatus.textContent = '❌ ' + ((r && r.error) || '下单失败');
+      say('❌ ' + ((r && r.error) || '下单失败'));
       return;
     }
-    if (el.pfMemberStatus) el.pfMemberStatus.textContent = '';
+    say('');
     if (el.payAmount) el.payAmount.textContent = `¥${(Number(r.amount) || 0).toFixed(2)}`;
     if (el.payPlanName) el.payPlanName.textContent = r.plan_name || code;
-    if (el.payQr) el.payQr.src = r.qr_png || '';
-    if (el.payStatus) el.payStatus.textContent = '等待支付…';
+    // 后端契约是 qr_content（原始二维码内容）/ pay_url；真通道云端服务才会多返一个
+    // qr_png（base64 data URI）。当前线上 VDL_PAY_PROVIDER 未配 → 走 mock 通道，没有 qr_png。
+    // 此时**必须显式告知**，而不是塞个空 src 让用户对着裂图干等（2026-09-30）。
+    const hasQr = !!r.qr_png;
+    if (el.payQr) {
+      if (hasQr) { el.payQr.src = r.qr_png; el.payQr.hidden = false; }
+      else { el.payQr.removeAttribute('src'); el.payQr.hidden = true; }
+    }
+    // 标题 / 扫码提示也要跟着切，否则「通道未开通」的页面上还挂着「扫码支付」「请扫码付款」自相矛盾
+    if (el.payModalTitle) el.payModalTitle.textContent = hasQr ? '扫码支付开通会员' : '订单已创建';
+    if (el.payTip) el.payTip.hidden = !hasQr;
+    if (el.payStatus) {
+      el.payStatus.textContent = hasQr
+        ? '等待支付…'
+        : `支付通道尚未开通（模拟通道，未产生扣款）· 订单号 ${r.order_id || '—'}`;
+    }
     if (el.payModal && !el.payModal.open) el.payModal.showModal();
+    if (!hasQr) return;                     // 没码可扫就别空转轮询
     _pfPayTimer = setInterval(async () => {
       try {
         const q = await request('/api/cloud/pay/query', {
@@ -7342,8 +7368,9 @@
         });
         if (q && q.ok && q.status === 'PAID') {
           pfClosePayModal();
-          if (el.pfMemberStatus) el.pfMemberStatus.textContent = '✅ 支付成功，会员已开通';
+          say('✅ 支付成功，会员已开通');
           pfLoad();                       // 刷新会员状态 / 购买记录 / 积分
+          memRender();                    // 会员页顶部「当前权益」同步刷新
         }
       } catch (_e) { /* 轮询失败静默重试 */ }
     }, 2500);
@@ -7352,6 +7379,117 @@
   if (el.payModal) {
     el.payModal.addEventListener('click', (e) => { if (e.target === el.payModal) pfClosePayModal(); });
   }
+
+  // ===== 网页版独立会员页（#memberView，2026-09-30）=====
+  // 免登录即可看到全部价目与权益；只有「立即开通」这一步要登录（登录后自动续下单）。
+  // 定价一律来自 /api/member/plans（超管改价后刷新即变，前端不存任何价格）。
+  let _memPendingCode = '';                 // 未登录时点开通，先记下想买的档位
+  const memSay = (t) => { if (el.memStatus) el.memStatus.textContent = t || ''; };
+
+  const memPlanCard = (code, pl, meta) => {
+    const price = (Number(pl.price_cny) || 0).toFixed(2);
+    const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
+    const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
+    return `<div class="pf-plan${pl.best ? ' is-best' : ''}">
+      ${badge}
+      <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
+      <div class="pf-plan-price"><span>¥</span>${price}</div>
+      <div class="pf-plan-meta">${escHtml(meta || '')}</div>
+      ${save}
+      <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}">立即开通</button>
+    </div>`;
+  };
+
+  // 顶部一条：未登录给登录入口，已登录显示当前权益摘要 + 个人中心入口
+  const memRenderTop = async () => {
+    if (!el.memTop) return;
+    if (!pfToken()) {
+      el.memTop.innerHTML = '<span class="mem-top-text">还没有账号？注册即得每日免费下载额度；开通会员解锁<b>全速提取</b>。</span>'
+        + '<button type="button" class="pf-ov-btn" id="memLoginBtn">登录 / 注册</button>';
+      const b = document.getElementById('memLoginBtn');
+      if (b) b.addEventListener('click', () => openAuthModal('登录后即可开通会员，权益自动同步到网页版与桌面端。'));
+      return;
+    }
+    el.memTop.innerHTML = '<span class="mem-top-text">正在读取当前权益…</span>';
+    let m = null;
+    try { m = await request('/api/member/status', { headers: pfAuthHeaders() }); } catch (_e) { /* 读不到就只留入口 */ }
+    const dl = (m && m.download_member) || {}, ai = (m && m.ai_member) || {};
+    const parts = [];
+    if (dl.active) parts.push(`下载会员至 ${pfFmtDate(dl.expire_at)}`);
+    if (ai.active) parts.push(`AI 会员至 ${pfFmtDate(ai.expire_at)}`);
+    if (m && m.credits_total != null) parts.push(`可用积分 ${Number(m.credits_total) || 0}`);
+    el.memTop.innerHTML = `<span class="mem-top-text">${parts.length
+      ? '当前权益：<b>' + escHtml(parts.join(' · ')) + '</b>'
+      : '当前账号还没有有效会员，选一档下方套餐即可开通。'}</span>`
+      + '<button type="button" class="pf-ov-btn ghost" id="memToProfile">个人中心</button>';
+    const g = document.getElementById('memToProfile');
+    if (g) g.addEventListener('click', () => switchView('profile'));
+  };
+
+  const memRender = async () => {
+    if (!el.memTracks) return;
+    let p = null;
+    try { p = await request('/api/member/plans'); } catch (_e) { /* 下面统一给重试提示 */ }
+    const tracks = [];
+    const dl = (p && p.download_member) || null;
+    const ai = (p && p.ai_member) || null;
+    const packs = (p && p.credit_packs) || null;
+    if (dl && dl.plans && Object.keys(dl.plans).length) {
+      const ben = (dl.benefits || []).map((b) => `<li>${escHtml(b.text || b)}</li>`).join('');
+      const cards = Object.entries(dl.plans)
+        .map(([c, pl]) => memPlanCard(c, pl, pl.days ? `${pl.days} 天全速提取` : '')).join('');
+      tracks.push(`<div class="mem-track">
+        <div class="mem-track-h"><span class="mem-track-t">下载会员</span><span class="mem-track-note">全速提取 · 网页端与桌面端共用</span></div>
+        ${ben ? `<ul class="mem-benefits">${ben}</ul>` : ''}
+        <div class="pf-plans">${cards}</div>
+      </div>`);
+    }
+    if (ai && ai.plans && Object.keys(ai.plans).length) {
+      const cards = Object.entries(ai.plans)
+        .map(([c, pl]) => memPlanCard(c, pl, `月赠 ${pl.credits} 积分 · 30 天有效`)).join('');
+      tracks.push(`<div class="mem-track">
+        <div class="mem-track-h"><span class="mem-track-t">AI 会员</span><span class="mem-track-note">含下载会员全部权益</span></div>
+        <div class="pf-plans">${cards}</div>
+      </div>`);
+    }
+    if (packs && Object.keys(packs).length) {
+      const cards = Object.entries(packs)
+        .map(([c, pl]) => memPlanCard(c, pl, `一次性到账 ${pl.credits} 积分 · 永不过期`)).join('');
+      tracks.push(`<div class="mem-track">
+        <div class="mem-track-h"><span class="mem-track-t">积分包</span><span class="mem-track-note">按需购买，不随订阅过期</span></div>
+        <div class="pf-plans">${cards}</div>
+      </div>`);
+    }
+    if (!tracks.length) {
+      el.memTracks.innerHTML = '<p class="pf-plan-empty">套餐加载失败，请稍后重试</p>';
+      return;
+    }
+    el.memTracks.innerHTML = tracks.join('');
+    el.memTracks.querySelectorAll('.pf-plan-buy').forEach((b) => {
+      b.addEventListener('click', () => memBuy(b.getAttribute('data-code')));
+    });
+    if (el.memNote) el.memNote.textContent = '支付成功后权益自动到账；同一账号最多 2 台设备同时登录，会员到期自动失效。';
+    memRenderTop();
+  };
+
+  const memBuy = (code) => {
+    if (!code) return;
+    if (!pfToken()) {                       // 免登录能看价目，下单必须先登录
+      _memPendingCode = code;
+      memSay('登录后将自动继续下单…');
+      openAuthModal('开通会员需要登录账号，登录成功后会自动继续下单。');
+      return;
+    }
+    memSay('');
+    pfBuy(code, el.memStatus);
+  };
+  // 登录成功后把刚才想买的那档接着买下去（会员页 / 个人中心两条登录路径都会调用）
+  const _memResumePending = () => {
+    const code = _memPendingCode;
+    _memPendingCode = '';
+    if (!code) return;
+    setTimeout(() => { try { memBuy(code); } catch (_e) { /* 续单失败不阻塞登录流程 */ } }, 200);
+  };
 
   const pfLoad = async () => {
     if (!pfToken()) { pfRender(null, null, null); return; }
@@ -7382,6 +7520,7 @@
         localStorage.setItem('vdl_auth_token', data.token);
         pfSetAuthStatus('');
         pfLoad();
+        _memResumePending();    // 会员页点开通被登录拦下时，登录成功后自动续下单
         _replayGatedAction();   // 登录/注册前被门禁拦下的功能按钮，成功后自动补点一次
       } else {
         pfSetAuthStatus(data.error || '操作失败');
@@ -7555,6 +7694,7 @@
         closeAuthModal();
         renderAuthHeader();
         pfLoad();
+        _memResumePending();    // 会员页点开通被登录拦下时，登录成功后自动续下单
         _replayGatedAction();   // 登录/注册前被门禁拦下的功能按钮，成功后自动补点一次
       } else {
         amSetStatus(data.error || '操作失败');
@@ -8194,6 +8334,7 @@
   if (el.tabImageConvert) el.tabImageConvert.addEventListener('click', () => switchView('imageconvert'));
   if (el.tabSubtitle) el.tabSubtitle.addEventListener('click', () => switchView('subtitle'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
+  if (el.tabMember) el.tabMember.addEventListener('click', () => switchView('member'));
   // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换
   const ucSwitchSub = (which) => {
     const fmt = which === 'format';
@@ -9333,6 +9474,7 @@
       if (el.tabImageConvert) el.tabImageConvert.hidden = false;
       if (el.tabSubtitle) el.tabSubtitle.hidden = false;
       if (el.tabProfile) el.tabProfile.hidden = false;
+      if (el.tabMember) el.tabMember.hidden = false;
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载（支持 #view=xxx 直达指定视图，如 #view=subtitle）
       const _hashView = (location.hash || '').replace(/^#view=/, '');
