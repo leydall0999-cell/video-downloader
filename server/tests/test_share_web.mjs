@@ -32,6 +32,7 @@ const iImgConv = indexHtml.indexOf('id="tabImageConvert"');
 const iSub = indexHtml.indexOf('id="tabSubtitle"');
 assert.ok(iImgConv < indexHtml.indexOf('id="tabShare"') && indexHtml.indexOf('id="tabShare"') < iSub,
   '「分享」tab 应排在「图片转换」与「AI 字幕」之间');
+assert.ok(indexHtml.includes('>生成二维码/链接</button>'), '导航 tab 文案必须是「生成二维码/链接」（用户 2026-10-01 指定）');
 assert.ok(iSqr >= 0 && iPg > iSqr, '子页签必须是 生成二维码 在前、生成网页 在后');
 assert.ok(indexHtml.includes('id="sqrFileInput"') && indexHtml.includes('id="pgFileInput" multiple'),
   '两视图都要有文件选择 input（生成网页必须 multiple）');
