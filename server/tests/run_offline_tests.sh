@@ -85,6 +85,7 @@ run_one test_subtitle_audio.py
 run_one test_subtitle_music_fallback.py
 run_one test_subtitle_lyrics.py
 run_one test_quality_options.py
+run_one test_yt_pot_starved.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
 run_one test_dewatermark_core.py

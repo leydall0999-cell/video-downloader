@@ -3391,6 +3391,59 @@ def canonicalize_video_url(url: str) -> str:
     return f"https://www.youtube.com/watch?v={vid}"
 
 
+def _bgutil_reachable() -> bool:
+    """bgutil PO Token server（127.0.0.1:4416）是否可达。
+
+    🔴 必须用裸 socket 直连探测（绝不能走 yt-dlp 的全局 proxy）：
+    2026-10-01 实测，pot:bgutil:http 插件在 server 未启动时对 /ping 的请求
+    会被 yt-dlp 全局代理吞掉（proxy=127.0.0.1:7892 → 代理代连 4416 超时重试），
+    **一次解析干挂 367 秒**，直接吃穿 YOUTUBE_RESOLVE_BUDGET。
+    """
+    import socket as _socket
+    try:
+        with _socket.create_connection(("127.0.0.1", 4416), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+def _yt_real_video_heights(formats: list) -> list[int]:
+    """真实视频轨高度（排除纯音频与 mhtml 雪碧图/storyboard）。"""
+    out: list[int] = []
+    for f in formats or []:
+        if not isinstance(f, dict):
+            continue
+        if f.get("vcodec") in (None, "none"):
+            continue
+        if str(f.get("protocol") or "").startswith("mhtml"):
+            continue
+        h = f.get("height")
+        if h:
+            try:
+                out.append(int(h))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+def _yt_is_pot_starved(info: dict) -> bool:
+    """SABR「PO Token 饥饿」响应检测（2026-10-01 定版）。
+
+    YouTube 2026 起：会话没有 PO Token 时，player 请求成功但 GVS 被 SABR 降级
+    —— formats 里只剩 itag18（360p 混合流）+ 雪碧图，**一个自适应视频轨
+    （video-only）都没有**。真实上限就是 360p 的视频也必有 video-only 轨，
+    故以此判「饥饿」不会误伤；纯音频内容（无任何真实视频轨）也不算。
+    """
+    fmts = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    real_heights = _yt_real_video_heights(fmts)
+    if not real_heights:
+        return False
+    for f in fmts:
+        if f.get("vcodec") in (None, "none") or f.get("acodec") not in (None, "none"):
+            continue  # 只找 video-only 自适应轨
+        if str(f.get("protocol") or "").startswith("mhtml"):
+            continue
+        return False
+    return True
+
 def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[str, Any]:
     """YouTube 自动降级解析：方法一（免 Cookie + PO Token）→ 方法二（Cookie 源自动切换）。
 
@@ -3419,7 +3472,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
         if visitor_data:
             logger.info("[youtube] 已自动获取 visitor_data（%s…），启用 PO Token 免 Cookie 路径", visitor_data[:20])
 
-    def _try(cookie_text: str, use_visitor: bool = True) -> dict[str, Any]:
+    def _try(cookie_text: str, use_visitor: bool = True, allow_pot_fallback: bool = True) -> dict[str, Any]:
         if _left() <= 5:
             raise ResolveError(
                 "YouTube 解析超时",
@@ -3430,15 +3483,50 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
             )
         opts = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
         opts["format"] = None
-        # 免 Cookie 路径：注入 visitor_data + 强制 fetch PO Token（bgutil 自动生效）
+        # 免 Cookie 路径：注入 visitor_data + 强制 fetch PO Token（bgutil 自动生效）。
+        # 🔴 bgutil server 未启动时**绝不能**开 fetch_pot——插件 ping 127.0.0.1:4416
+        # 会被全局代理拖死（实测一次 367s，吃穿整个解析预算）。用裸 socket 预检。
         if use_visitor and not cookie_text and visitor_data:
             ya = opts.setdefault("extractor_args", {}).setdefault("youtube", {})
             ya["visitor_data"] = [visitor_data]
-            ya["fetch_pot"] = ["always"]
+            ya["fetch_pot"] = ["always"] if _bgutil_reachable() else ["never"]
         try:
             with _YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-            return info or {}
+            if not info:
+                return {}
+            # 🔴 2026-10-01 SABR「PO Token 饥饿」自动补救：默认客户端链在会话无
+            # PO Token 时只拿到 itag18(360p)+雪碧图（用户看到清晰度最高只有 360P）。
+            # 实测矩阵：default/tv/mweb/ios/android/tv_simply 全军覆没或被拦，
+            # **web_safari 免 PO Token 即可拿 HLS 全清晰度（144~1080，avc1 可播）**，
+            # fetch_pot=never 后单次解析仅 ~5.5s。饥饿时预算内自动重试一次，
+            # 只在重试结果的真实最高清晰度更高时才采用。env 可关：VDL_YT_HLS_FALLBACK=0。
+            if (allow_pot_fallback and _yt_is_pot_starved(info) and _left() > 12
+                    and os.environ.get("VDL_YT_HLS_FALLBACK", "1").strip().lower()
+                    not in ("0", "false", "no", "off")):
+                _old_max = max(_yt_real_video_heights(info.get("formats") or []), default=0)
+                _bg_ok = _bgutil_reachable()
+                try:
+                    opts_h = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
+                    opts_h["format"] = None
+                    _ya_h = opts_h.setdefault("extractor_args", {}).setdefault("youtube", {})
+                    _ya_h["player_client"] = [
+                        os.environ.get("VDL_YT_HLS_CLIENT", "").strip() or "web_safari"]
+                    # bgutil server 没跑时必须显式关 POT，否则插件 ping 127.0.0.1:4416
+                    # 会被全局代理拖死（实测 367s）；server 在跑则保留 POT 拿 DASH 全轨。
+                    if not _bg_ok:
+                        _ya_h["fetch_pot"] = ["never"]
+                    with _YoutubeDL(opts_h) as ydl_h:
+                        info_h = ydl_h.extract_info(url, download=False)
+                    _new_max = max(_yt_real_video_heights((info_h or {}).get("formats") or []), default=0)
+                    if info_h and _new_max > _old_max:
+                        logger.info(
+                            "[youtube] PO Token 饥饿（最高 %sP）→ web_safari/HLS 补救成功（最高 %sP，bgutil=%s）",
+                            _old_max, _new_max, _bg_ok)
+                        return info_h
+                except (DownloadError, ExtractorError) as exc_h:
+                    logger.info("[youtube] PO Token 饥饿补救失败（保留原结果）: %s", str(exc_h)[:120])
+            return info
         except (DownloadError, ExtractorError) as exc:
             low = str(exc).lower()
             if any(k in low for k in _BOT_KEYWORDS):
@@ -4284,9 +4372,12 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
     # 非标准高度（YouTube 偶见 1072/714/476）先归到标准档，避免「1072P」怪标签
     # 和「1080 > 1072 被判超最高画质 → 1080 档整档消失」（2026-09-22 实测踩坑）
+    # 🔴 2026-10-01：再排除 mhtml 雪碧图/storyboard——它们的高度（180/90/45/27）
+    # 之前被当成真实清晰度平铺，用户会看到一排「180P/90P/45P/27P」假档。
     heights = sorted({
         _bucket_height(int(f["height"])) for f in formats
         if f.get("height") and 0 < int(f["height"]) <= 4320
+        and not str(f.get("protocol") or "").startswith("mhtml")
     }, reverse=True)
     audio_size = _best_audio_size(formats)
 
