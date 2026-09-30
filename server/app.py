@@ -3849,10 +3849,16 @@ def cookie_status(url: str = "") -> dict:
 
 # 首页：内联 styles.css，彻底消除刷新时无样式闪烁（FOUC）。
 # 外部 styles.css 经 Cloudflare 回源美国主机往返约 1s，慢网络下浏览器可能先渲染无样式
-# 内容。内联后首屏样式随 HTML 一同到达，零外部 CSS 请求。CSS 文件变更时按 mtime 自动重读。
+# 内容。内联后首屏样式随 HTML 一同到达，零外部 CSS 请求。文件变更时按 mtime 自动重读。
+#
+# ⚠️ 失效判据必须同时看 index.html 与 styles.css 两个 mtime（2026-09-30 踩坑）：
+# 原先只按 CSS mtime 失效，于是「只换 index.html、不动 CSS」的部署会**永远吐旧页**
+# （进程内存里那份 HTML 不会被重读，连 CF 回源都是旧的，怎么刷新浏览器都没用）。
+# 本次就是只改了 index.html + app.js，结果线上一直显示旧的「更多功能」页。
+# 运维上还留着这个坑的放大效应：只要部署顺序里恰好也动了 CSS 就会被掩盖，很久才暴露一次。
 import threading as _threading
 
-_index_cache = {"html": None, "mtime": 0.0}
+_index_cache = {"html": None, "css_mtime": 0.0, "idx_mtime": 0.0}
 _index_lock = _threading.Lock()
 
 
@@ -3864,9 +3870,15 @@ async def index() -> HTMLResponse:
         css_mtime = os.path.getmtime(css_path)
     except OSError:
         css_mtime = 0.0
+    try:
+        idx_mtime = os.path.getmtime(idx_path)
+    except OSError:
+        idx_mtime = 0.0
     with _index_lock:
         cache = _index_cache
-        if cache["html"] is None or cache["mtime"] != css_mtime:
+        if (cache["html"] is None
+                or cache["css_mtime"] != css_mtime
+                or cache["idx_mtime"] != idx_mtime):
             try:
                 html = open(idx_path, encoding="utf-8").read()
                 css = open(css_path, encoding="utf-8").read()
@@ -3875,7 +3887,8 @@ async def index() -> HTMLResponse:
                     f'<style data-inline-css>{css}</style>',
                 )
                 cache["html"] = html
-                cache["mtime"] = css_mtime
+                cache["css_mtime"] = css_mtime
+                cache["idx_mtime"] = idx_mtime
             except (OSError, FileNotFoundError):
                 cache["html"] = cache["html"] or "<!doctype html><html><body>error</body></html>"
         return HTMLResponse(cache["html"])

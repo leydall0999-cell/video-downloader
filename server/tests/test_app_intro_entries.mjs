@@ -6,6 +6,9 @@
 //   ② 「网页可用 / 仅桌面端」标注与真实能力不符（甚至出现过 App 里并不存在的独立「配音工作室」）。
 // 所以这里钉三件事：能力项必须齐全、每项必须标清在哪端可用、网页可用的必须真有入口。
 //
+// 2026-09-30 修订：删掉「账号」组（用户拍板「web 不要」）—— 这张卡讲的是网页自己的账号会员，
+// 不属于「介绍 App 功能」，留着只会和页面主旨打架。卡片 25 → 24、分组 6 → 5、网页可用 9 → 8。
+//
 // 说明：不做 DOM 运行时（该区块依赖整页初始化），用「源码切片 + 结构断言」，锚点被挪走立即红。
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -25,7 +28,7 @@ const end = indexHtml.indexOf('<!-- 媒体库视图', start);
 assert.ok(end > start, '#appIntroView 之后应紧跟媒体库视图注释（切片右边界）');
 const intro = indexHtml.slice(start, end);
 
-// ---- 期望：25 项能力，9 项网页可用 + 16 项仅桌面端 ----
+// ---- 期望：24 项能力，8 项网页可用 + 16 项仅桌面端 ----
 // 网页可用 → 必须能在网页版找到入口锚点（见下方 WEB_ENTRY 表）
 const WEB_CAPS = {
   download: 'tabDownload',
@@ -36,7 +39,6 @@ const WEB_CAPS = {
   imageconvert: 'tabImageConvert',
   dw: 'tabDw',
   dwpdf: 'dwPdfBtn',
-  profile: 'tabProfile',
 };
 // 仅桌面端 → 网页版不得声称可用
 const DESK_CAPS = [
@@ -50,7 +52,7 @@ const cards = [];
 let m;
 while ((m = cardRe.exec(intro)) !== null) cards.push({ cap: m[1], body: m[2] });
 
-assert.equal(cards.length, 25, `「更多功能」页应有 25 张能力卡片，实际 ${cards.length}`);
+assert.equal(cards.length, 24, `「更多功能」页应有 24 张能力卡片，实际 ${cards.length}`);
 
 const caps = cards.map((c) => c.cap);
 assert.equal(new Set(caps).size, caps.length, 'data-cap 不得重复：' + caps.filter((c, i) => caps.indexOf(c) !== i).join(','));
@@ -76,11 +78,17 @@ for (const [cap, anchor] of Object.entries(WEB_CAPS)) {
     `「${cap}」标了网页可用，但网页版找不到入口锚点 id="${anchor}"`);
 }
 
-// ---- 分组：与 App 侧栏同款 6 组 ----
+// ---- 分组：与 App 侧栏同款 5 组 ----
 const groupTitles = [...intro.matchAll(/<h3 class="app-intro-group-title"><span aria-hidden="true">[^<]*<\/span>([^<]+)<\/h3>/g)]
   .map((x) => x[1]);
-assert.deepEqual(groupTitles, ['下载', '创作', '转换', '工具', '媒体库', '账号'],
-  '分组标题应为 下载/创作/转换/工具/媒体库/账号，实际：' + groupTitles.join('/'));
+assert.deepEqual(groupTitles, ['下载', '创作', '转换', '工具', '媒体库'],
+  '分组标题应为 下载/创作/转换/工具/媒体库，实际：' + groupTitles.join('/'));
+
+// ---- 已删的「账号」组不得复活（2026-09-30 用户拍板 web 端不要）----
+assert.ok(!intro.includes('data-cap="profile"'),
+  '「账号与会员」卡已删除，不该再出现（它的卖点属于网页自身，不是对 App 能力的介绍）');
+assert.ok(!/app-intro-group-title[^>]*>[^<]*<\/span>账号</.test(intro),
+  '「账号」分组已删除，不该再出现');
 
 // ---- 静态占位数字必须与卡片实算一致（首屏不闪错数字；app.js 只是兜底纠正）----
 const webCount = Object.keys(WEB_CAPS).length;
@@ -122,4 +130,4 @@ assert.ok(/<span id="buildTag" class="build-tag"><\/span>/.test(indexHtml),
 assert.ok(/\.build-tag:empty \{ display: none; \}/.test(stylesCss),
   '空 .build-tag 必须隐藏，否则会在页脚留下一个孤立圆点');
 
-console.log('✅ 「更多功能」页回归守卫通过：25 项能力 / 6 组 / 标签齐备 / 网页可用项入口存在 / 计数接线与样式完好');
+console.log('✅ 「更多功能」页回归守卫通过：24 项能力 / 5 组 / 标签齐备 / 网页可用项入口存在 / 计数接线与样式完好');
