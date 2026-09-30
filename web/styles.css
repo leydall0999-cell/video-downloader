@@ -2126,8 +2126,26 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .mem-top .pf-ov-btn { flex: none; }
 .mem-track { margin: 0 0 1.15rem; }
 .mem-track-h { display: flex; align-items: baseline; gap: .55rem; margin: 0 0 .55rem; flex-wrap: wrap; }
-.mem-track-t { font-size: .95rem; font-weight: 700; }
 .mem-track-note { font-size: .74rem; color: var(--text-mute); }
+/* 三轨「胶囊分段条」（2026-09-30 用户指定版式）：灰底圆角容器 + 选中白底描边 */
+.mem-seg {
+  display: inline-flex; align-items: center; gap: .2rem;
+  padding: .28rem; margin: 0 0 1.1rem;
+  background: #e9ecf3; border-radius: 999px; max-width: 100%;
+}
+.mem-seg-btn {
+  appearance: none; border: 1px solid transparent; background: transparent;
+  border-radius: 999px; padding: .42rem 1.05rem;
+  font: inherit; font-size: .92rem; color: var(--text-mute);
+  cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.mem-seg-btn:hover { color: var(--text); }
+.mem-seg-btn.is-active {
+  background: var(--surface); border-color: var(--line); color: var(--brand-strong);
+  font-weight: 700; box-shadow: 0 1px 4px rgba(15, 23, 42, .08);
+}
+.mem-seg-btn[hidden] { display: none; }
 .mem-benefits {
   display: flex; flex-wrap: wrap; gap: .25rem .9rem; margin: 0 0 .85rem;
   padding: 0; list-style: none; font-size: .78rem; color: var(--text-mute);

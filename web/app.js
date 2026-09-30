@@ -437,7 +437,7 @@
     payModalTitle: $('payModalTitle'), payTip: $('payTip'),
     // 网页版独立会员页（2026-09-30）：免登录看价目，购买动作才要登录
     memberView: $('memberView'), tabMember: $('tabMember'),
-    memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'),
+    memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'), memSeg: $('memSeg'),
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
     authModal: $('authModal'), authModalTitle: $('authModalTitle'), authModalHint: $('authModalHint'),
@@ -7428,49 +7428,88 @@
 
   const memRender = async () => {
     if (!el.memTracks) return;
-    let p = null;
-    try { p = await request('/api/member/plans'); } catch (_e) { /* 下面统一给重试提示 */ }
-    const tracks = [];
-    const dl = (p && p.download_member) || null;
-    const ai = (p && p.ai_member) || null;
-    const packs = (p && p.credit_packs) || null;
-    if (dl && dl.plans && Object.keys(dl.plans).length) {
-      const ben = (dl.benefits || []).map((b) => `<li>${escHtml(b.text || b)}</li>`).join('');
-      const cards = Object.entries(dl.plans)
-        .map(([c, pl]) => memPlanCard(c, pl, pl.days ? `${pl.days} 天全速提取` : '')).join('');
-      tracks.push(`<div class="mem-track">
-        <div class="mem-track-h"><span class="mem-track-t">下载会员</span><span class="mem-track-note">全速提取 · 网页端与桌面端共用</span></div>
-        ${ben ? `<ul class="mem-benefits">${ben}</ul>` : ''}
-        <div class="pf-plans">${cards}</div>
-      </div>`);
-    }
-    if (ai && ai.plans && Object.keys(ai.plans).length) {
-      const cards = Object.entries(ai.plans)
-        .map(([c, pl]) => memPlanCard(c, pl, `月赠 ${pl.credits} 积分 · 30 天有效`)).join('');
-      tracks.push(`<div class="mem-track">
-        <div class="mem-track-h"><span class="mem-track-t">AI 会员</span><span class="mem-track-note">含下载会员全部权益</span></div>
-        <div class="pf-plans">${cards}</div>
-      </div>`);
-    }
-    if (packs && Object.keys(packs).length) {
-      const cards = Object.entries(packs)
-        .map(([c, pl]) => memPlanCard(c, pl, `一次性到账 ${pl.credits} 积分 · 永不过期`)).join('');
-      tracks.push(`<div class="mem-track">
-        <div class="mem-track-h"><span class="mem-track-t">积分包</span><span class="mem-track-note">按需购买，不随订阅过期</span></div>
-        <div class="pf-plans">${cards}</div>
-      </div>`);
-    }
-    if (!tracks.length) {
+    try { _memPlans = await request('/api/member/plans'); } catch (_e) { _memPlans = null; }
+    if (!_memPlans) {
       el.memTracks.innerHTML = '<p class="pf-plan-empty">套餐加载失败，请稍后重试</p>';
       return;
     }
-    el.memTracks.innerHTML = tracks.join('');
-    el.memTracks.querySelectorAll('.pf-plan-buy').forEach((b) => {
-      b.addEventListener('click', () => memBuy(b.getAttribute('data-code')));
-    });
+    if (!memTrackData(_memTrack)) _memTrack = 'download';   // 当前轨没数据时回落到下载会员
+    memSyncSeg();
+    memRenderTrack();
     if (el.memNote) el.memNote.textContent = '支付成功后权益自动到账；同一账号最多 2 台设备同时登录，会员到期自动失效。';
     memRenderTop();
   };
+
+  // ===== 三轨改「胶囊分段条」（2026-09-30 用户指定版式）：一次只显示一条轨 =====
+  // 价目仍全部来自 /api/member/plans（单一真源不变）；切换分段不重新请求，只重渲染缓存。
+  let _memPlans = null;
+  let _memTrack = 'download';
+  const MEM_TRACK_META = {
+    download: { note: '全速提取 · 网页端与桌面端共用' },
+    ai: { note: '含下载会员全部权益' },
+    credits: { note: '按需购买，不随订阅过期' },
+  };
+  const memTrackData = (key) => {
+    const p = _memPlans;
+    if (!p || !MEM_TRACK_META[key]) return null;
+    if (key === 'download') return p.download_member || null;
+    if (key === 'ai') return p.ai_member || null;
+    // ⚠️ 契约差异：credit_packs 本身就是档位表（无 .plans 嵌套），其余两轨是 {plans, benefits}
+    return { plans: p.credit_packs || null };
+  };
+  const memTrackHasPlans = (key) => {
+    const t = memTrackData(key);
+    return !!(t && t.plans && Object.keys(t.plans).length);
+  };
+  const memRenderTrack = () => {
+    if (!el.memTracks) return;
+    const key = MEM_TRACK_META[_memTrack] ? _memTrack : 'download';
+    if (!memTrackHasPlans(key)) {
+      el.memTracks.innerHTML = '<p class="pf-plan-empty">该类暂无可购套餐</p>';
+      return;
+    }
+    const t = memTrackData(key);
+    let head = '';
+    if (key === 'download' && Array.isArray(t.benefits) && t.benefits.length) {
+      head = `<ul class="mem-benefits">${t.benefits.map((b) => `<li>${escHtml(b.text || b)}</li>`).join('')}</ul>`;
+    }
+    const meta = key === 'download'
+      ? (pl) => (pl.days ? `${pl.days} 天全速提取` : '')
+      : key === 'ai'
+        ? (pl) => `月赠 ${pl.credits} 积分 · 30 天有效`
+        : (pl) => `一次性到账 ${pl.credits} 积分 · 永不过期`;
+    const cards = Object.entries(t.plans).map(([c, pl]) => memPlanCard(c, pl, meta(pl))).join('');
+    el.memTracks.innerHTML = `${head}<div class="mem-track">
+      <div class="mem-track-h"><span class="mem-track-note">${escHtml(MEM_TRACK_META[key].note)}</span></div>
+      <div class="pf-plans">${cards}</div>
+    </div>`;
+    el.memTracks.querySelectorAll('.pf-plan-buy').forEach((b) => {
+      b.addEventListener('click', () => memBuy(b.getAttribute('data-code')));
+    });
+  };
+  const memSyncSeg = () => {
+    if (!el.memSeg) return;
+    el.memSeg.querySelectorAll('.mem-seg-btn').forEach((b) => {
+      const key = b.getAttribute('data-memtrack');
+      b.hidden = !memTrackHasPlans(key);          // 后端没配的轨直接藏起来
+      const on = key === _memTrack;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  };
+  if (el.memSeg) el.memSeg.querySelectorAll('.mem-seg-btn').forEach((b) => {
+    b.addEventListener('click', () => {
+      const key = b.getAttribute('data-memtrack') || 'download';
+      if (key === _memTrack || !MEM_TRACK_META[key]) return;
+      _memTrack = key;
+      el.memSeg.querySelectorAll('.mem-seg-btn').forEach((x) => {
+        const on = x === b;
+        x.classList.toggle('is-active', on);
+        x.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      memRenderTrack();
+    });
+  });
 
   const memBuy = (code) => {
     if (!code) return;
@@ -9477,8 +9516,12 @@
       if (el.tabMember) el.tabMember.hidden = false;
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载（支持 #view=xxx 直达指定视图，如 #view=subtitle）
-      const _hashView = (location.hash || '').replace(/^#view=/, '');
-      switchView(_hashView || 'download');
+      // 启动竞态保护（2026-09-30）：若用户/深链在节点信息返回前已选中非默认视图，
+      // 不再无条件覆盖（否则加载窗口期点「会员/个人中心」会被弹回下载视图）。
+      if (!document.querySelector('.tab.is-active:not(#tabDownload)')) {
+        const _hashView = (location.hash || '').replace(/^#view=/, '');
+        switchView(_hashView || 'download');
+      }
       bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
       paintNodeBar();

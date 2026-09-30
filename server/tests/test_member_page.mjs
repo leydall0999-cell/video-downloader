@@ -31,11 +31,26 @@ const mem = indexHtml.slice(start, endIdx);
 
 assert.ok(/<section id="memberView" class="panel" hidden aria-labelledby="memTitle">/.test(indexHtml),
   '#memberView 必须是 hidden 的 .panel（靠 switchView 显示）');
-for (const id of ['memTracks', 'memTop', 'memNote', 'memStatus']) {
+for (const id of ['memTracks', 'memTop', 'memNote', 'memStatus', 'memSeg']) {
   assert.ok(mem.includes(`id="${id}"`), `会员页缺少容器 #${id}`);
 }
 assert.ok(/<div class="mem-tracks" id="memTracks"><p class="pf-plan-empty">加载中…<\/p><\/div>/.test(mem),
   '#memTracks 应有「加载中…」静态首屏（避免白屏）');
+
+// ---- ①b 三轨「胶囊分段条」（2026-09-30 用户指定版式）：一次只显示一条轨 ----
+const seg = mem.slice(mem.indexOf('id="memSeg"'), mem.indexOf('id="memTracks"'));
+for (const t of ['download', 'ai', 'credits']) {
+  assert.ok(seg.includes(`data-memtrack="${t}"`), `分段条缺少 data-memtrack="${t}" 按钮`);
+}
+assert.ok(/class="mem-seg-btn is-active"/.test(seg), '分段条默认应高亮「下载会员」');
+assert.ok(appJs.includes("memSeg: $('memSeg')"), 'app.js 的 el 表缺少 memSeg 引用');
+assert.ok(/const memRenderTrack = \(\) => \{/.test(appJs), '缺少按轨渲染函数 memRenderTrack');
+assert.ok(/const memSyncSeg = \(\) => \{/.test(appJs), '缺少分段条状态同步 memSyncSeg');
+assert.ok(/el\.memSeg\.querySelectorAll\('\.mem-seg-btn'\)\.forEach\(\(b\) => \{\s*b\.addEventListener\('click'/.test(appJs),
+  '分段按钮没有绑定点击切换（点了没反应）');
+assert.ok(/_memTrack = key;/.test(appJs), '分段切换必须更新 _memTrack，否则永远显示同一条轨');
+assert.ok(/b\.hidden = !memTrackHasPlans\(key\);/.test(appJs),
+  '后端没配的轨必须在分段条里隐藏（不许出现点了空白的假入口）');
 
 // ---- ② 导航入口：必须在个人中心之前，且带分组分隔 ----
 assert.ok(/<button type="button" class="tab tab-sep" data-view="member" id="tabMember">/.test(indexHtml),
@@ -62,6 +77,10 @@ assert.ok(/const isAnyExtra = [^;]*\|\| isMem/.test(sv),
 assert.ok(/el\.memberView\.hidden = !isMem/.test(sv), 'switchView 未切换 #memberView 显隐');
 assert.ok(/el\.tabMember\.classList\.toggle\('is-active', isMem\)/.test(sv), 'switchView 未切换会员 tab 高亮');
 assert.ok(/if \(isMem\) memRender\(\);/.test(sv), 'switchView 未在进入会员页时拉取价目');
+// 🔴 启动竞态保护（2026-09-30 真机实测）：boot 的 .then 里若无条件 switchView('download')，
+//    会把用户在加载窗口期点开的「会员」弹回下载视图。必须先判断已有非默认视图选中。
+assert.ok(/if \(!document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)\)/.test(appJs),
+  'boot 默认视图必须带「用户已选中非默认视图则不覆盖」保护，否则会员页会被启动竞态弹回下载');
 assert.ok(/if \(el\.tabMember\) el\.tabMember\.addEventListener\('click', \(\) => switchView\('member'\)\)/.test(appJs),
   '会员 tab 没有绑定 switchView（点击无反应）');
 assert.ok(/if \(el\.tabMember\) el\.tabMember\.hidden = false;/.test(appJs),
@@ -76,6 +95,10 @@ assert.ok(mr.includes("request('/api/member/plans')"), '会员页必须从 /api/
 for (const track of ['download_member', 'ai_member', 'credit_packs']) {
   assert.ok(mr.includes(track), `会员页未渲染「${track}」分组（三轨会员要齐）`);
 }
+// 🔴 契约差异（2026-09-30 真浏览器实测抓到）：credit_packs 本身就是档位表（无 .plans 嵌套），
+//    直接按 {plans,benefits} 统一读会把积分包判空 → 分段条里积分包 0 卡。必须归一化。
+assert.ok(/return \{ plans: p\.credit_packs \|\| null \};/.test(mr),
+  'credit_packs 必须归一化为 { plans: … }（它没有 .plans 嵌套，直接 Object.entries）');
 assert.ok(/Number\(pl\.price_cny\)/.test(appJs), '价格必须从 plan.price_cny 读取');
 assert.ok(!/(price_cny|amount)\s*:\s*\d/.test(appJs), '前端不得写死价格（首价必须由超管后台配置）');
 const cardStart = appJs.indexOf('const memPlanCard = (');
@@ -117,9 +140,11 @@ assert.ok(indexHtml.indexOf('id="payModal"') > indexHtml.indexOf('</main>'),
 
 // ---- ⑦ 样式：宽屏 3 列（880px 正文宽下 6 档 = 3×2，与桌面端会员中心同版式）----
 for (const sel of ['.mem-lead {', '.mem-top {', '.mem-track-h {', '.mem-benefits li::before {',
-  '.mem-tracks .pf-plans {', '.mem-tracks .pf-plan-buy {']) {
+  '.mem-tracks .pf-plans {', '.mem-tracks .pf-plan-buy {',
+  '.mem-seg {', '.mem-seg-btn.is-active {']) {
   assert.ok(stylesCss.includes(sel), `styles.css 缺少 ${sel}`);
 }
+assert.ok(!stylesCss.includes('.mem-track-t {'), '.mem-track-t 已被分段条取代，死规则应删除');
 assert.ok(/\.mem-tracks \.pf-plans \{ grid-template-columns: repeat\(auto-fit, minmax\(240px, 1fr\)\);/.test(stylesCss),
   '会员页栅格应覆盖为 minmax(240px,1fr)（880px 下 3 列；小于此值会自动收列）');
 assert.ok(/@media \(max-width: 560px\) \{\s*\.mem-tracks \.pf-plans \{ grid-template-columns: 1fr; \}/.test(stylesCss),
