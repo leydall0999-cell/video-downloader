@@ -381,6 +381,46 @@ if [ ! -f "$SERVER_STAGING/build_info.txt" ] || [ ! -d "$SERVER_STAGING/assets" 
 fi
 echo "   ✔ server 随包资源已 staging：$(find "$SERVER_STAGING" -type f | wc -l | tr -d ' ') 个非源码文件"
 
+# ── P1 加固（2026-09-30）：核心模块 Cython 编译为 .so ────────────────────────
+# 去掉明文 .py 只是关上最敞开的门；PYZ 里的 .pyc 仍能被提取反编译（见下：
+# PyInstaller ≥6.0 已移除 --key）。真正防住源码被读的手段是把核心模块编成 .so：
+# 包里是机器码，源码根本不存在（实测 inspect.getsource 抛 OSError）。
+# 只编「被逆向会造成实际损失」的模块 —— 全量编译会显著拉长构建时间并放大兼容性风险。
+# 逃生阀：VDL_CYTHON_MODULES="" 可关闭（例如紧急发版撞上编译器问题）。
+VDL_CYTHON_MODULES="${VDL_CYTHON_MODULES-license_client,user_membership,admin_store}"
+NATIVE_STAGING="${VDL_BUILD_WORKPATH}_native"
+NATIVE_PATH_ARG=""
+if [ -n "$VDL_CYTHON_MODULES" ]; then
+  "$VENV/bin/pip" install -q --timeout 120 --retries 3 --no-cache-dir --index-url "$PIP_INDEX" cython 2>&1 | tail -2
+  rm -rf "$NATIVE_STAGING"; mkdir -p "$NATIVE_STAGING"
+  IFS=',' read -r -a CY_MODULES <<< "$VDL_CYTHON_MODULES"
+  CY_SRCS=()
+  for m in "${CY_MODULES[@]}"; do
+    if [ ! -f "$REPO/server/$m.py" ]; then
+      echo "❌ Cython 目标不存在: server/$m.py"; exit 1
+    fi
+    cp "$REPO/server/$m.py" "$NATIVE_STAGING/"
+    CY_SRCS+=("$m.py")
+  done
+  echo "▶ Cython 编译核心模块 ($VDL_CYTHON_MODULES) ..."
+  if ! ( cd "$NATIVE_STAGING" && "$VENV/bin/cythonize" -i -3 "${CY_SRCS[@]}" ) >/dev/null 2>"$VDL_BUILD_WORKPATH/cython.err"; then
+    echo "❌ Cython 编译失败，详见 $VDL_BUILD_WORKPATH/cython.err"
+    tail -8 "$VDL_BUILD_WORKPATH/cython.err" 2>/dev/null
+    exit 1
+  fi
+  for m in "${CY_MODULES[@]}"; do
+    if ! ls "$NATIVE_STAGING"/"$m".cpython-*.so >/dev/null 2>&1; then
+      echo "❌ Cython 未产出 $m 的 .so —— 终止构建（宁可失败，也不发未加固的包）"
+      exit 1
+    fi
+  done
+  echo "   ✔ 已编译 ${#CY_MODULES[@]} 个核心模块为 .so（源码不随包）"
+  # --paths 顺序即优先级：放在 $REPO/server 之前，让依赖分析解析到 .so，
+  # 并由 PyInstaller 作为 ExtensionModule 正确收集（符号/依赖交给它处理，
+  # 比用 --add-data 塞 .so 稳妥）。
+  NATIVE_PATH_ARG="--paths $NATIVE_STAGING"
+fi
+
 # ── 关于字节码加密（--key）：此路已封死，别再试 ──────────────────────────────
 # ⚠️ PyInstaller **≥6.0 已移除 --key**（官方 2023 决定，pyinstaller#6999）。
 # 实测本机 6.22.2：传 --key 会直接
@@ -404,6 +444,7 @@ echo "   ℹ️  PyInstaller $([ -x "$VENV/bin/pyinstaller" ] && "$VENV/bin/pyin
   --workpath "$VDL_BUILD_WORKPATH" \
   --icon "$ICON_ICNS" \
   --osx-bundle-identifier com.videodownloader.desktop \
+  $NATIVE_PATH_ARG \
   --paths "$REPO/server" \
   --paths "$REPO" \
   --add-data "$REPO/web:web" \
