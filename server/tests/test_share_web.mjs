@@ -38,11 +38,22 @@ assert.ok(indexHtml.includes('id="sqrFileInput"') && indexHtml.includes('id="pgF
   '两视图都要有文件选择 input（生成网页必须 multiple）');
 assert.ok(indexHtml.includes('id="sqrExpire"'), '生成二维码必须可选有效期');
 assert.ok(indexHtml.includes('id="pgExpire"'), '生成网页（在线链接）必须可选有效期');
-// 子页签必须复用 pf-subnav（并排胶囊，参考用户截图）；标题用渐变竖条 guide-title
-assert.ok(/<nav class="pf-subnav" id="shareSubnav"/.test(indexHtml), '子页签必须复用 pf-subnav 并排样式');
+// 子页签必须复用 uc-subtabs/uc-sub 胶囊（白卡片外、带 emoji，对齐视频处理样式）；标题用渐变竖条 guide-title
+assert.ok(/<div class="uc-subtabs" id="shareSubnav"/.test(indexHtml), '子页签必须复用 uc-subtabs 胶囊样式');
+assert.ok(/data-sharepane="shareqr" role="tab">📱 生成二维码</.test(indexHtml) &&
+  /data-sharepane="pagegen" role="tab">🌐 生成网页</.test(indexHtml), '子页签必须带 emoji 且顺序正确');
 for (const [id, cls] of [['sqrTitle', 'guide-title'], ['pgTitle', 'guide-title']]) {
   assert.ok(new RegExp(`id="${id}" class="${cls}"`).test(indexHtml), `#${id} 必须用渐变竖条 guide-title 标题样式`);
 }
+// 白卡片归属：两个子面板各自成卡片，外层 section 与子页签都在卡片外（参考视频处理）
+assert.ok(/id="shareQrView" class="panel"/.test(indexHtml) && /id="pageGenView" class="panel"/.test(indexHtml),
+  '两个子面板必须各自带 panel 白卡片');
+assert.ok(!/id="shareView" class="panel"/.test(indexHtml), '外层 shareView 不得再套 panel（子页签必须在卡片外）');
+// 全站子导航统一：pf-subnav 已废弃（死类清干净，铁律 26）；个人中心一并换成 uc-subtabs
+assert.ok(!indexHtml.includes('pf-subnav') && !appJs.includes('pf-subnav') && !stylesCss.includes('pf-subnav'),
+  'pf-subnav 已废弃，HTML/JS/CSS 必须全部清干净');
+assert.ok(indexHtml.includes('class="uc-subtabs" id="pfSubnav"'), '个人中心子导航也必须统一 uc-subtabs 胶囊');
+assert.ok(indexHtml.includes('class="panel pf-body"'), '个人中心内容必须独立白卡片（子页签在卡片外）');
 
 // ---- ② vendor 二维码库：本地自托管 + 已加载 ----
 const vendorPath = join(repoRoot, 'web', 'js', 'vendor_qrcode.min.js');
@@ -76,7 +87,7 @@ assert.ok(/el\.tabShare\.classList\.toggle\('is-active', isShare\)/.test(sv), '�
 assert.ok(/if \(el\.tabShare\) el\.tabShare\.addEventListener\('click', \(\) => switchView\('share'\)\)/.test(appJs),
   '分享 tab 未绑定 switchView');
 // 子页签点击：必须更新 _sharePane + 同步两面板显隐 + 高亮
-const subStart = appJs.indexOf("if (el.shareSubnav) el.shareSubnav.querySelectorAll('.pf-subnav-btn')");
+const subStart = appJs.indexOf("if (el.shareSubnav) el.shareSubnav.querySelectorAll('.uc-sub')");
 assert.ok(subStart > 0, '缺少子页签点击绑定');
 const subBlock = appJs.slice(subStart, subStart + 700);
 assert.ok(/_sharePane = b\.getAttribute\('data-sharepane'\)/.test(subBlock), '子页签点击必须更新 _sharePane');

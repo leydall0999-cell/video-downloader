@@ -688,13 +688,13 @@
 
   <!-- ===== 生成二维码（受限版分享，2026-09-30）：登录用户同源直传分享节点 ===== -->
   <!-- ===== 分享（合并视图，2026-09-30）：子页签切换「生成二维码 / 生成网页」 ===== -->
-  <section id="shareView" class="panel" hidden>
-    <nav class="pf-subnav" id="shareSubnav" role="tablist" aria-label="分享子导航">
-      <button type="button" class="pf-subnav-btn is-active" data-sharepane="shareqr" role="tab">生成二维码</button>
-      <button type="button" class="pf-subnav-btn" data-sharepane="pagegen" role="tab">生成网页</button>
-    </nav>
+  <section id="shareView" hidden>
+    <div class="uc-subtabs" id="shareSubnav" role="tablist" aria-label="分享子导航">
+      <button type="button" class="uc-sub is-active" data-sharepane="shareqr" role="tab">📱 生成二维码</button>
+      <button type="button" class="uc-sub" data-sharepane="pagegen" role="tab">🌐 生成网页</button>
+    </div>
 
-  <div id="shareQrView" hidden aria-labelledby="sqrTitle">
+  <div id="shareQrView" class="panel" hidden aria-labelledby="sqrTitle">
     <h2 id="sqrTitle" class="guide-title">生成二维码</h2>
     <p class="uc-tip">把文件变成一条分享链接 + 二维码，对方扫码直接看图 / 看视频（可拖进度）、不打包不改内容。
       网页版限额：<b id="sqrLimitText">单文件 ≤ 95MB · 有效期最长 30 天 · 每天 20 次</b>（桌面端支持 2GB / 永久）。</p>
@@ -731,7 +731,7 @@
   </div>
 
   <!-- 生成网页：浏览器端合成自包含 HTML，可转在线链接 -->
-  <div id="pageGenView" hidden aria-labelledby="pgTitle">
+  <div id="pageGenView" class="panel" hidden aria-labelledby="pgTitle">
     <h2 id="pgTitle" class="guide-title">生成网页</h2>
     <p class="uc-tip">把多个文件（图片 / PDF / 音视频 / 文本）合并成<b>一个自包含的网页</b>：
       内容全部内嵌，把 .html 发给对方双击就能看；也可一键转成在线链接 + 二维码。
@@ -784,7 +784,7 @@
   </section>
 
   <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 激活码 ===== -->
-  <section id="profileView" class="panel" hidden aria-labelledby="pfTitle">
+  <section id="profileView" hidden aria-labelledby="pfTitle">
     <h2 id="pfTitle" class="guide-title">👤 个人中心</h2>
 
     <!-- 未登录：登录 / 注册 -->
@@ -811,14 +811,14 @@
 
     <!-- 已登录：子导航 + 分面板（对齐 App 个人中心，2026-09-30） -->
     <div id="pfUserBox" hidden>
-      <nav class="pf-subnav" id="pfSubnav" role="tablist" aria-label="个人中心子导航">
-        <button type="button" class="pf-subnav-btn is-active" data-pfpanel="overview" role="tab">👤 个人资料</button>
-        <button type="button" class="pf-subnav-btn" data-pfpanel="purchases" role="tab">🧾 购买记录</button>
-        <button type="button" class="pf-subnav-btn" data-pfpanel="credits" role="tab">🪙 积分流水</button>
-        <button type="button" class="pf-subnav-btn" data-pfpanel="security" role="tab">🔒 账号安全</button>
-      </nav>
+      <div class="uc-subtabs" id="pfSubnav" role="tablist" aria-label="个人中心子导航">
+        <button type="button" class="uc-sub is-active" data-pfpanel="overview" role="tab">👤 个人资料</button>
+        <button type="button" class="uc-sub" data-pfpanel="purchases" role="tab">🧾 购买记录</button>
+        <button type="button" class="uc-sub" data-pfpanel="credits" role="tab">🪙 积分流水</button>
+        <button type="button" class="uc-sub" data-pfpanel="security" role="tab">🔒 账号安全</button>
+      </div>
 
-      <div class="pf-body">
+      <div class="panel pf-body">
         <!-- ① 个人资料：总览头 + 会员/积分卡 + 使用统计 + 激活码兑换 -->
         <div class="pf-panel" id="pfPanelOverview">
           <div class="pf-ov">

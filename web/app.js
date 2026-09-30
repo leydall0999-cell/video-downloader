@@ -7083,7 +7083,7 @@
     _pfPanelName = name;
     Object.keys(nodes).forEach((k) => { if (nodes[k]) nodes[k].hidden = (k !== name); });
     if (el.pfSubnav) {
-      el.pfSubnav.querySelectorAll('.pf-subnav-btn').forEach((b) => {
+      el.pfSubnav.querySelectorAll('[data-pfpanel]').forEach((b) => {
         b.classList.toggle('is-active', b.dataset.pfpanel === name);
       });
     }
@@ -8039,7 +8039,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   // 子导航切换 + 总览里的「查看订单 / 积分流水」快捷跳转
   if (el.pfSubnav) {
     el.pfSubnav.addEventListener('click', (e) => {
-      const btn = e.target.closest('.pf-subnav-btn');
+      const btn = e.target.closest('[data-pfpanel]');
       if (btn && btn.dataset.pfpanel) pfShowPanel(btn.dataset.pfpanel);
     });
   }
@@ -8825,10 +8825,10 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabMember) el.tabMember.addEventListener('click', () => switchView('member'));
   if (el.tabShare) el.tabShare.addEventListener('click', () => switchView('share'));
-  if (el.shareSubnav) el.shareSubnav.querySelectorAll('.pf-subnav-btn').forEach((b) => {
+  if (el.shareSubnav) el.shareSubnav.querySelectorAll('.uc-sub').forEach((b) => {
     b.addEventListener('click', () => {
       _sharePane = b.getAttribute('data-sharepane') || 'shareqr';
-      el.shareSubnav.querySelectorAll('.pf-subnav-btn').forEach((x) => x.classList.toggle('is-active', x === b));
+      el.shareSubnav.querySelectorAll('.uc-sub').forEach((x) => x.classList.toggle('is-active', x === b));
       if (el.shareQrView) el.shareQrView.hidden = _sharePane !== 'shareqr';
       if (el.pageGenView) el.pageGenView.hidden = _sharePane !== 'pagegen';
       if (_sharePane === 'shareqr') sqrRenderLimits();

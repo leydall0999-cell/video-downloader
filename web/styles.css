@@ -1969,17 +1969,7 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
    内容宽度跟随站点内容区（.wrap = 880px）：所有卡片一律满宽，
    不再出现 520/860 混排导致的「左边一溜、右边一片空白」。 */
 
-/* —— 子导航（对齐 App 左侧子菜单：个人资料 / 购买记录 / 积分流水 / 账号安全）—— */
-.pf-subnav { display: flex; gap: .4rem; margin: 0 0 1rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.pf-subnav::-webkit-scrollbar { display: none; }
-.pf-subnav-btn {
-  flex: 0 0 auto; height: 36px; padding: 0 .95rem; cursor: pointer; font-family: inherit;
-  border: 1px solid var(--line); background: var(--surface); color: var(--text-mute);
-  border-radius: 999px; font-size: .86rem; font-weight: 500;
-  transition: color .15s, border-color .15s, background .15s;
-}
-.pf-subnav-btn:hover { color: var(--brand); border-color: var(--brand); }
-.pf-subnav-btn.is-active { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 700; }
+/* —— 子导航已统一改用 .uc-subtabs/.uc-sub（对齐视频处理的胶囊样式，2026-10-01）—— */
 
 .pf-body { min-height: 240px; }
 .pf-panel[hidden] { display: none; }
