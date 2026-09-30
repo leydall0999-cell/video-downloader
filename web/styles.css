@@ -2146,6 +2146,20 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   font-weight: 700; box-shadow: 0 1px 4px rgba(15, 23, 42, .08);
 }
 .mem-seg-btn[hidden] { display: none; }
+/* 分享结果行（生成二维码 / 生成网页共用，2026-09-30） */
+.share-row { display: flex; gap: 1.1rem; align-items: flex-start; flex-wrap: wrap; }
+.share-qr-img {
+  width: 168px; height: 168px; flex: none;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff;
+  image-rendering: pixelated;
+}
+.share-meta { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: .6rem; }
+.share-meta input {
+  width: 100%; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font: inherit; font-size: .88rem; color: var(--text); background: #fafbfd;
+}
+.share-meta .uc-bulk-actions { margin: 0; }
+.share-meta .uc-tip { word-break: break-all; }
 .mem-benefits {
   display: flex; flex-wrap: wrap; gap: .25rem .9rem; margin: 0 0 .85rem;
   padding: 0; list-style: none; font-size: .78rem; color: var(--text-mute);

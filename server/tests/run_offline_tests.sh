@@ -102,6 +102,8 @@ run_node test_app_intro_entries.mjs        # 网页版「更多功能」页：24
 run_node test_platform_count_label.mjs     # 平台数对外口径：两端徽章走 fmtPlatformCount，116→100+（2026-09-30）
 run_node test_member_page.mjs              # 网页版会员购买页：免登录可见价目/三轨/登录后自动续单/弹窗在顶层（2026-09-30）
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
+run_one test_share_token.py                # 网页版分享凭据端点：登录门禁/SHARE_UNAVAILABLE/每日限次/计数/挂载（2026-09-30 受限版分享）
+run_node test_share_web.mjs                # 网页版「生成二维码/生成网页」：登录门禁/凭据三头/计数/受限上限/合成器红线/本地二维码（2026-09-30）
 
 echo ""
 echo "========================================="

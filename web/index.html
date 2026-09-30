@@ -42,6 +42,8 @@
         <button type="button" class="tab" data-view="dw" id="tabDw">去水印</button>
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
+        <button type="button" class="tab" data-view="shareqr" id="tabShareQr">生成二维码</button>
+        <button type="button" class="tab" data-view="pagegen" id="tabPageGen">生成网页</button>
         <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
         <button type="button" class="tab tab-sep" data-view="member" id="tabMember">💎 会员</button>
         <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
@@ -683,6 +685,86 @@
     <div class="mem-tracks" id="memTracks"><p class="pf-plan-empty">加载中…</p></div>
     <p class="pf-plan-note" id="memNote"></p>
     <span class="convert-status" id="memStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- ===== 生成二维码（受限版分享，2026-09-30）：登录用户同源直传分享节点 ===== -->
+  <section id="shareQrView" class="panel" hidden aria-labelledby="sqrTitle">
+    <h2 id="sqrTitle" class="guide-title">📱 生成二维码</h2>
+    <p class="uc-tip">把文件变成一条分享链接 + 二维码，对方扫码直接看图 / 看视频（可拖进度）、不打包不改内容。
+      网页版限额：<b id="sqrLimitText">单文件 ≤ 95MB · 有效期最长 30 天 · 每天 20 次</b>（桌面端支持 2GB / 永久）。</p>
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="sqrPickBtn">选择文件</button>
+      <input type="file" id="sqrFileInput" hidden />
+      <label class="uc-field" style="margin:0">
+        <span class="uc-label">有效期</span>
+        <select id="sqrExpire">
+          <option value="1">1 天</option>
+          <option value="3">3 天</option>
+          <option value="7" selected>7 天</option>
+          <option value="30">30 天</option>
+        </select>
+      </label>
+      <span class="uc-count" id="sqrCount">尚未选择文件</span>
+    </div>
+    <div class="uc-bulk" id="sqrResult" hidden>
+      <h3 class="card-title">分享已生成</h3>
+      <div class="share-row">
+        <img id="sqrQrImg" class="share-qr-img" alt="分享二维码" />
+        <div class="share-meta">
+          <input type="text" id="sqrUrl" readonly onclick="this.select()" />
+          <div class="uc-bulk-actions">
+            <button type="button" class="btn btn-primary" id="sqrCopyBtn">复制链接</button>
+            <button type="button" class="btn btn-ghost" id="sqrOpenBtn">打开</button>
+            <button type="button" class="btn btn-ghost" id="sqrSaveQrBtn">保存二维码</button>
+          </div>
+          <p class="uc-tip" id="sqrMeta"></p>
+        </div>
+      </div>
+    </div>
+    <span class="convert-status" id="sqrStatus" aria-live="polite"></span>
+  </section>
+
+  <!-- ===== 生成网页（受限版，2026-09-30）：浏览器端合成自包含 HTML，可转在线链接 ===== -->
+  <section id="pageGenView" class="panel" hidden aria-labelledby="pgTitle">
+    <h2 id="pgTitle" class="guide-title">🌐 生成网页</h2>
+    <p class="uc-tip">把多个文件（图片 / PDF / 音视频 / 文本）合并成<b>一个自包含的网页</b>：
+      内容全部内嵌，把 .html 发给对方双击就能看；也可一键转成在线链接 + 二维码。
+      网页版限额：合计 ≤ <b id="pgLimitText">60MB</b>（合成在你电脑的浏览器里完成，不占服务器）。</p>
+    <div class="uc-toolbar">
+      <button type="button" class="btn btn-primary" id="pgPickBtn">添加文件</button>
+      <input type="file" id="pgFileInput" multiple hidden />
+      <button type="button" class="btn btn-ghost" id="pgClearBtn" hidden>清空列表</button>
+      <span class="uc-count" id="pgCount">尚未添加文件</span>
+    </div>
+    <ul class="uc-list" id="pgList" aria-live="polite"></ul>
+    <div class="uc-bulk">
+      <div class="uc-form">
+        <label class="uc-field">
+          <span class="uc-label">页面标题</span>
+          <input type="text" id="pgTitleInput" placeholder="默认用第一个文件名" />
+        </label>
+      </div>
+      <div class="uc-bulk-actions">
+        <button type="button" class="btn btn-primary" id="pgBuildBtn" disabled>生成本机网页文件</button>
+        <button type="button" class="btn btn-ghost" id="pgLinkBtn" disabled>生成在线链接</button>
+      </div>
+    </div>
+    <div class="uc-bulk" id="pgResult" hidden>
+      <h3 class="card-title" id="pgResultTitle">已生成</h3>
+      <div class="share-row">
+        <img id="pgQrImg" class="share-qr-img" alt="在线链接二维码" hidden />
+        <div class="share-meta">
+          <input type="text" id="pgUrl" readonly onclick="this.select()" hidden />
+          <div class="uc-bulk-actions">
+            <button type="button" class="btn btn-primary" id="pgSaveBtn">保存 .html 到本机</button>
+            <button type="button" class="btn btn-ghost" id="pgCopyBtn" hidden>复制链接</button>
+            <button type="button" class="btn btn-ghost" id="pgOpenBtn" hidden>打开</button>
+          </div>
+          <p class="uc-tip" id="pgMeta"></p>
+        </div>
+      </div>
+    </div>
+    <span class="convert-status" id="pgStatus" aria-live="polite"></span>
   </section>
 
   <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 激活码 ===== -->
@@ -1944,6 +2026,10 @@
     var fp = '__BUILD_FP__';
     var isDesktopBuild = (fp && fp.indexOf('__BUILD_FP__') === -1);
     var v = isDesktopBuild ? fp : ('dev' + Date.now());
+    // 二维码生成库（MIT，qrcode-generator 1.4.4，本地自托管零外链）；app.js 只在用户点「生成」时才用到它
+    var q = document.createElement('script');
+    q.src = 'js/vendor_qrcode.min.js?v=' + encodeURIComponent(v);
+    document.head.appendChild(q);
     var s = document.createElement('script');
     s.src = 'app.js?v=' + encodeURIComponent(v);
     s.onload = function () {

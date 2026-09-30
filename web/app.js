@@ -438,6 +438,17 @@
     // 网页版独立会员页（2026-09-30）：免登录看价目，购买动作才要登录
     memberView: $('memberView'), tabMember: $('tabMember'),
     memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'), memSeg: $('memSeg'),
+    tabShareQr: $('tabShareQr'), shareQrView: $('shareQrView'), sqrPickBtn: $('sqrPickBtn'),
+    sqrFileInput: $('sqrFileInput'), sqrExpire: $('sqrExpire'), sqrCount: $('sqrCount'),
+    sqrResult: $('sqrResult'), sqrQrImg: $('sqrQrImg'), sqrUrl: $('sqrUrl'),
+    sqrCopyBtn: $('sqrCopyBtn'), sqrOpenBtn: $('sqrOpenBtn'), sqrSaveQrBtn: $('sqrSaveQrBtn'),
+    sqrStatus: $('sqrStatus'), sqrMeta: $('sqrMeta'),
+    tabPageGen: $('tabPageGen'), pageGenView: $('pageGenView'), pgPickBtn: $('pgPickBtn'),
+    pgFileInput: $('pgFileInput'), pgClearBtn: $('pgClearBtn'), pgCount: $('pgCount'),
+    pgList: $('pgList'), pgTitleInput: $('pgTitleInput'), pgBuildBtn: $('pgBuildBtn'), pgLinkBtn: $('pgLinkBtn'),
+    pgResult: $('pgResult'), pgResultTitle: $('pgResultTitle'), pgQrImg: $('pgQrImg'), pgUrl: $('pgUrl'),
+    pgSaveBtn: $('pgSaveBtn'), pgCopyBtn: $('pgCopyBtn'), pgOpenBtn: $('pgOpenBtn'),
+    pgStatus: $('pgStatus'), pgMeta: $('pgMeta'),
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
     authModal: $('authModal'), authModalTitle: $('authModalTitle'), authModalHint: $('authModalHint'),
@@ -6103,7 +6114,9 @@
     const isSt = view === 'subtitle';          // AI 字幕（区别于订阅 isSub）
     const isProfile = view === 'profile';      // 个人中心
     const isMem = view === 'member';          // 会员（公开购买页，2026-09-30）
-    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem;
+    const isSqr = view === 'shareqr';         // 生成二维码（受限版分享，2026-09-30）
+    const isPgen = view === 'pagegen';        // 生成网页（浏览器端合成，2026-09-30）
+    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem || isSqr || isPgen;
     el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isAnyExtra;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -6117,6 +6130,8 @@
     if (el.subtitleView) el.subtitleView.hidden = !isSt;
     if (el.profileView) el.profileView.hidden = !isProfile;
     if (el.memberView) el.memberView.hidden = !isMem;
+    if (el.shareQrView) el.shareQrView.hidden = !isSqr;
+    if (el.pageGenView) el.pageGenView.hidden = !isPgen;
     if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isAnyExtra);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
@@ -6130,6 +6145,8 @@
     if (el.tabSubtitle) el.tabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfile);
     if (el.tabMember) el.tabMember.classList.toggle('is-active', isMem);
+    if (el.tabShareQr) el.tabShareQr.classList.toggle('is-active', isSqr);
+    if (el.tabPageGen) el.tabPageGen.classList.toggle('is-active', isPgen);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -6137,6 +6154,7 @@
     if (isSt) { el.sbStatus.textContent = ''; }
     if (isProfile) pfLoad();
     if (isMem) memRender();
+    if (isSqr) sqrRenderLimits();
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
@@ -7530,6 +7548,435 @@
     setTimeout(() => { try { memBuy(code); } catch (_e) { /* 续单失败不阻塞登录流程 */ } }, 200);
   };
 
+  // ===== 网页版「生成二维码 / 生成网页」（受限版分享，2026-09-30）=====
+  // · 上传走同源 /api/upload（nginx `= /api/upload` 反代分享节点 8901，已配流式转发）→ 无 CORS/预检；
+  // · 分享 token 只发给登录用户（/api/share/token，服务端「取 token 即计数」限每日次数）；
+  // · 二维码本地生成（js/vendor_qrcode.min.js，MIT），零外部服务；
+  // · 生成网页完全在浏览器端合成（零服务器 CPU/内存），模板与 MIME 表移植自桌面端 pagetool.py。
+  let _shareTok = null;                     // 最近一次取到的 {ok, token, limits}（上传凭据，不缓存复用）
+  let _shareLimits = null;                  // 只读限额（/api/share/limits，用于页面文案）
+  let _pgFiles = [];                        // 待合成文件（File 对象）
+  let _pgBlob = null;                       // 合成结果 Blob
+  let _pgName = '';
+  let _pgLink = '';                         // 在线链接（已上传时）
+
+  const shareSay = (t) => { if (el.sqrStatus) el.sqrStatus.textContent = t || ''; };
+  const pgSay = (t) => { if (el.pgStatus) el.pgStatus.textContent = t || ''; };
+  const shareFmtSize = (b) => {
+    if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    if (b >= 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+    return b + ' B';
+  };
+  const shareCopy = async (text, btn, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (btn) { btn.textContent = '已复制 ✓'; setTimeout(() => { btn.textContent = label; }, 1500); }
+    } catch (_e) { if (btn) btn.textContent = '复制失败，请手动选择'; }
+  };
+  const shareQrDataUri = (text) => {
+    if (typeof window.qrcode !== 'function') return '';
+    const qr = window.qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    return qr.createDataURL(8, 4);          // cellSize=8（手机扫码足够大），静区 4 模块
+  };
+
+  // 登录 + 取分享凭据。⚠️ 不缓存：服务端「取 token 即计数」，前端约定每次上传前
+  // 都重新取一次（次数 ≈ 上传次数）；缓存复用会让限次形同虚设。
+  const shareEnsureToken = async (say) => {
+    say('正在校验账号…');
+    let r = null;
+    try { r = await request('/api/share/token'); } catch (_e) { r = null; }
+    if (!r || !r.ok) {
+      if (r && r.code === 'NO_AUTH') {
+        say('请先登录');
+        openAuthModal('生成分享需要登录账号，登录后即可把文件变成链接 + 二维码。');
+      } else {
+        say((r && r.error) || '分享服务暂不可用');
+      }
+      return null;
+    }
+    _shareTok = r;
+    if (r.limits) _shareLimits = r.limits;
+    return _shareTok;
+  };
+
+  const shareApplyLimitTexts = (limits) => {
+    if (!limits) return;
+    if (el.sqrLimitText) el.sqrLimitText.textContent =
+      `单文件 ≤ ${limits.max_file_mb}MB · 有效期最长 ${Math.max(...(limits.expire_days || [30]))} 天 · 每天 ${limits.daily_limit} 次`;
+    if (el.pgLimitText) el.pgLimitText.textContent = `${limits.pagetool_max_total_mb}MB`;
+  };
+  const sqrRenderLimits = async () => {
+    if (!pfToken()) return;
+    try {
+      const r = await request('/api/share/limits');      // 只读端点，不计数
+      if (r && r.ok) { _shareLimits = r.limits; shareApplyLimitTexts(r.limits); }
+    } catch (_e) { /* 匿名/离线就保持静态文案 */ }
+  };
+
+  // 同源直传（XHR 才有上传进度；fetch 没有）
+  const shareUpload = (body, name, expireDays, onProgress) => new Promise((resolve, reject) => {
+    if (!_shareTok) { reject(new Error('未取得分享凭据')); return; }
+    const base = window.VDL_API_BASE || '';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', base + '/api/upload', true);
+    xhr.setRequestHeader('X-Auth', _shareTok.token);
+    xhr.setRequestHeader('X-Filename', encodeURIComponent(name));
+    xhr.setRequestHeader('X-Expire', String(Math.max(1, expireDays | 0) * 86400));
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total); };
+    xhr.onload = () => {
+      let r = null;
+      try { r = JSON.parse(xhr.responseText); } catch (_e) { /* 非 JSON = 网关拦的 HTML（413 等） */ }
+      if (xhr.status === 200 && r && r.ok) resolve(r);
+      else {
+        const msg = (r && r.error) || ('上传失败（HTTP ' + xhr.status + '）');
+        reject(new Error(typeof msg === 'string' ? msg : '上传失败'));
+      }
+    };
+    xhr.onerror = () => reject(new Error('网络错误，上传中断'));
+    xhr.send(body);
+  });
+  const shareConsume = null;   // 已废弃：限次改在「取 token 即计数」（见 shareEnsureToken），无需上传后回执
+
+  const shareShowResult = (box, url, img, meta, expireAt) => {
+    const u = url || '';
+    img.src = shareQrDataUri(u) || '';
+    img.hidden = !img.src;
+    box.hidden = false;
+    const expireTxt = expireAt ? ' · 有效期至 ' + pfFmtDate(expireAt) : '';
+    meta.textContent = '链接：' + u + expireTxt;
+  };
+
+  // ---------- 生成二维码视图 ----------
+  const sqrPick = () => { if (el.sqrFileInput) el.sqrFileInput.click(); };
+  const sqrOnFile = async () => {
+    const f = el.sqrFileInput.files && el.sqrFileInput.files[0];
+    el.sqrFileInput.value = '';             // 允许重选同一个文件
+    if (!f) return;
+    const maxMb = (_shareTok && _shareTok.limits && _shareTok.limits.max_file_mb) || 95;
+    if (f.size > maxMb * 1024 * 1024) {
+      shareSay(`「${f.name}」${shareFmtSize(f.size)} 超过网页版单文件 ${maxMb}MB 上限，请先压缩或用桌面端（支持 2GB）。`);
+      return;
+    }
+    const tok = await shareEnsureToken(shareSay);
+    if (!tok) return;
+    const days = parseInt(el.sqrExpire.value, 10) || 7;
+    el.sqrCount.textContent = `${f.name}（${shareFmtSize(f.size)}）`;
+    shareSay('上传中 0%');
+    try {
+      const r = await shareUpload(f, f.name, days, (loaded, total) => {
+        shareSay(`上传中 ${Math.round((loaded / total) * 100)}%`);
+      });
+      el.sqrUrl.value = r.url;
+      shareShowResult(el.sqrResult, r.url, el.sqrQrImg, el.sqrMeta, r.expire_at);
+      shareSay('');
+    } catch (e) {
+      shareSay(e && e.message ? e.message : '上传失败');
+    }
+  };
+  const sqrCopyUrl = () => shareCopy(el.sqrUrl.value, el.sqrCopyBtn, '复制链接');
+  const sqrOpen = () => { const u = el.sqrUrl.value; if (u) window.open(u, '_blank'); };
+  const sqrSaveQr = () => {
+    const src = el.sqrQrImg.src || '';
+    if (!src) return;
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = '分享二维码.png';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+
+  // ---------- 生成网页视图（浏览器端合成，移植自桌面端 pagetool.py）----------
+  const PG_MAX_ITEM_MB = 60;
+  const PG_PAGE_SUFFIX = '.网页.html';
+  const PG_KIND = {
+    '.jpg': 'image', '.jpeg': 'image', '.png': 'image', '.gif': 'image', '.webp': 'image',
+    '.bmp': 'image', '.avif': 'image', '.svg': 'image',
+    '.mp3': 'audio', '.m4a': 'audio', '.aac': 'audio', '.wav': 'audio', '.flac': 'audio',
+    '.ogg': 'audio', '.opus': 'audio', '.amr': 'audio',
+    '.mp4': 'video', '.m4v': 'video', '.webm': 'video', '.ogv': 'video', '.mov': 'video',
+    '.mkv': 'video', '.avi': 'video', '.flv': 'video', '.ts': 'video', '.wmv': 'video', '.3gp': 'video',
+    '.pdf': 'pdf',
+    '.txt': 'text', '.md': 'text', '.log': 'text', '.csv': 'text', '.json': 'text',
+    '.xml': 'text', '.yaml': 'text', '.yml': 'text', '.ini': 'text', '.conf': 'text',
+  };
+  const PG_MIME = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+    '.webp': 'image/webp', '.bmp': 'image/bmp', '.avif': 'image/avif', '.svg': 'image/svg+xml',
+    '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav',
+    '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.amr': 'audio/amr',
+    '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.ogv': 'video/ogg',
+    '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo',
+    '.flv': 'video/x-flv', '.ts': 'video/mp2t', '.wmv': 'video/x-ms-wmv', '.3gp': 'video/3gpp',
+    '.pdf': 'application/pdf',
+  };
+  const PG_NON_PLAYABLE_HINT = '该视频若为 MKV / AVI / FLV 等容器，或视频轨是 MPEG-4 Visual、H.265 等编码，浏览器可能无法直接播放 —— 建议先用「视频格式转换」转成 H.264 的 MP4。';
+  const pgKindOf = (name) => PG_KIND[(name.match(/[^.]*$/) ? name.slice(name.lastIndexOf('.')).toLowerCase() : '')] || 'file';
+  const pgMimeOf = (name) => PG_MIME[name.slice(name.lastIndexOf('.')).toLowerCase()] || 'application/octet-stream';
+  const pgHuman = shareFmtSize;
+
+  const PG_CSS = `
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#f5f7fb;--card:#fff;--line:#e4e9f2;--ink:#131a26;--sub:#69758c;--blue:#2f6bff}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+background:var(--bg);color:var(--ink);line-height:1.7;padding:34px 18px 64px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:880px;margin:0 auto}
+header{margin-bottom:26px}
+h1{font-size:25px;letter-spacing:.4px;margin-bottom:8px;word-break:break-all}
+header .sub{color:var(--sub);font-size:13.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;
+margin-bottom:18px;box-shadow:0 1px 3px rgba(19,26,38,.04)}
+.card .hd{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.card .nm{font-size:14.5px;font-weight:600;word-break:break-all;flex:1}
+.card .sz{font-size:12.5px;color:var(--sub);white-space:nowrap}
+.card .tag{font-size:11.5px;padding:2px 8px;border-radius:5px;background:#eef3ff;color:var(--blue);font-weight:600}
+img.pic{width:100%;border-radius:10px;display:block;cursor:zoom-in;box-shadow:0 6px 22px rgba(19,26,38,.12)}
+video{width:100%;border-radius:10px;background:#0d1522;display:block}
+audio{width:100%}
+iframe{width:100%;height:70vh;min-height:420px;border:1px solid var(--line);border-radius:10px;background:#fff}
+pre{background:#0e1622;color:#d7e3f4;padding:16px;border-radius:10px;overflow:auto;font-size:13px;
+font-family:ui-monospace,Menlo,monospace;max-height:56vh;line-height:1.6}
+.note{font-size:12.5px;color:#8a6d1f;background:#fdf6e3;border:1px solid #f0e0b8;border-radius:9px;
+padding:9px 12px;margin-top:12px}
+.dl{display:inline-block;padding:8px 18px;border-radius:8px;background:var(--blue);color:#fff;
+text-decoration:none;font-size:13px;font-weight:600}
+.filebox{background:#f2f5fa;border:1px dashed #c9d4e6;border-radius:10px;padding:22px;text-align:center;
+font-size:14px;color:#46536b}
+footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:30px}
+.lb{position:fixed;inset:0;background:rgba(6,12,22,.93);display:none;align-items:center;
+justify-content:center;cursor:zoom-out;z-index:9}
+.lb.on{display:flex}
+.lb img{max-width:96vw;max-height:96vh;border-radius:8px}`;
+
+  const pgViewer = (kind, uri, name, ext, vid) => {
+    if (kind === 'image') {
+      return { body: `<img id="${vid}" class="pic" src="${uri}" alt="${escHtml(name)}" onclick="document.getElementById('lb').classList.add('on')">`, extra: '', mode: 'element' };
+    }
+    if (kind === 'audio') return { body: `<audio id="${vid}" controls src="${uri}"></audio>`, extra: '', mode: 'element' };
+    if (kind === 'video') {
+      return { body: `<video id="${vid}" controls playsinline preload="metadata" src="${uri}"></video>`, extra: `<div class="note">${escHtml(PG_NON_PLAYABLE_HINT)}</div>`, mode: 'element' };
+    }
+    if (kind === 'pdf') {
+      return { body: `<iframe id="${vid}" src="${uri}" title="${escHtml(name)}"></iframe>`, extra: '<div class="note">部分移动端浏览器不支持内嵌 PDF，可点下方「下载原文件」查看。</div>', mode: 'element' };
+    }
+    if (kind === 'text') return { body: `<pre id="${vid}">PLACEHOLDER_TEXT</pre>`, extra: '', mode: 'text' };
+    return { body: `<div class="filebox">该类型（${escHtml(ext || '未知')}）无法在网页内预览，请点下方按钮下载原文件。</div>`, extra: '', mode: 'direct' };
+  };
+
+  const pgBuildPage = (items, title) => {
+    const labels = { image: '图片', video: '视频', audio: '音频', pdf: 'PDF', text: '文本', file: '文件' };
+    const cards = items.map((it, idx) => {
+      const vid = 'pgv' + (idx + 1);
+      const v = pgViewer(it.kind, it.uri, it.name, it.ext, vid);
+      let body = v.body;
+      if (it.kind === 'text') body = body.replace('PLACEHOLDER_TEXT', escHtml(it.text || ''));
+      let dl;
+      if (v.mode === 'direct') dl = `<a class="dl" download="${escHtml(it.name)}" href="${it.uri}">下载原文件</a>`;
+      else if (v.mode === 'text') dl = `<a class="dl" href="#" data-text-target="${vid}" download="${escHtml(it.name)}">下载原文件</a>`;
+      else dl = `<a class="dl" href="#" data-src-target="${vid}" download="${escHtml(it.name)}">下载原文件</a>`;
+      return `<div class="card"><div class="hd"><span class="tag">${labels[it.kind] || '文件'}</span>` +
+        `<span class="nm">${escHtml(it.name)}</span><span class="sz">${pgHuman(it.size)}</span></div>${body}${v.extra}` +
+        `<div style="margin-top:14px">${dl}</div></div>`;
+    });
+    const hasImg = items.some((it) => it.kind === 'image');
+    const lightbox = hasImg ? '<div class="lb" id="lb" onclick="this.classList.remove(\'on\')"><img src="" alt=""></div>' : '';
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escHtml(title)}</title>
+<style>${PG_CSS}</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>${escHtml(title)}</h1>
+    <p class="sub">由「视频工坊 · 生成网页」生成 · 共 ${items.length} 个文件 · 内容已内嵌，本页可离线打开</p>
+  </header>
+  ${cards.join('\n')}
+  <footer>本页面单文件自包含，可直接通过微信 / QQ / 邮件发送</footer>
+</div>
+${lightbox}
+<script>
+document.querySelectorAll('.lb').forEach(function(box){
+  box.addEventListener('click', function(ev){
+    if (ev.target.tagName === 'IMG') return;
+    box.classList.remove('on');
+  });
+});
+document.querySelectorAll('a.dl[data-src-target]').forEach(function(a){
+  var t = document.getElementById(a.getAttribute('data-src-target'));
+  if (!t) return;
+  a.href = t.currentSrc || t.src || '';
+  if (!a.href) a.style.display = 'none';
+});
+document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
+  var t = document.getElementById(a.getAttribute('data-text-target'));
+  if (!t) return;
+  var blob = new Blob([t.textContent], {type: 'text/plain;charset=utf-8'});
+  a.href = URL.createObjectURL(blob);
+});
+<\/script>
+</body>
+</html>`;
+  };
+
+  const bufToDataUri = (buf, mime) => {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    const CH = 0x8000;
+    for (let i = 0; i < bytes.length; i += CH) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    }
+    return 'data:' + mime + ';base64,' + btoa(bin);
+  };
+
+  const pgLoadItem = async (f) => {
+    const kind = pgKindOf(f.name);
+    const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+    const item = { name: f.name, size: f.size, kind, ext };
+    if (kind === 'text') {
+      const buf = await f.arrayBuffer();
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (_e) {
+        try { text = new TextDecoder('gbk').decode(buf); } catch (_e2) { text = '(非 UTF-8 / GBK 文本，无法直接渲染)'; }
+      }
+      item.text = text;
+      item.uri = 'data:text/plain;charset=utf-8,' + encodeURIComponent(text);
+    } else {
+      const buf = await f.arrayBuffer();
+      item.uri = bufToDataUri(buf, pgMimeOf(f.name));
+    }
+    return item;
+  };
+
+  const pgRenderList = () => {
+    if (!el.pgList) return;
+    if (!_pgFiles.length) {
+      el.pgList.innerHTML = '';
+      el.pgCount.textContent = '尚未添加文件';
+      el.pgClearBtn.hidden = true;
+      el.pgBuildBtn.disabled = true;
+      el.pgLinkBtn.disabled = true;
+      return;
+    }
+    const total = _pgFiles.reduce((s, f) => s + f.size, 0);
+    el.pgCount.textContent = `${_pgFiles.length} 个文件 · 合计 ${shareFmtSize(total)}`;
+    el.pgClearBtn.hidden = false;
+    el.pgBuildBtn.disabled = false;
+    el.pgLinkBtn.disabled = false;
+    el.pgList.innerHTML = _pgFiles.map((f, i) =>
+      `<li class="uc-item"><div class="uc-item-main">` +
+      `<span class="uc-item-name">${escHtml(f.name)}</span>` +
+      `<span class="uc-item-meta">${shareFmtSize(f.size)} · ${escHtml({ image: '图片', video: '视频', audio: '音频', pdf: 'PDF', text: '文本', file: '文件' }[pgKindOf(f.name)] || '文件')}</span>` +
+      `</div>` +
+      `<button type="button" class="pf-ov-btn ghost" data-pgdel="${i}">移除</button></li>`
+    ).join('');
+    el.pgList.querySelectorAll('[data-pgdel]').forEach((b) => {
+      b.addEventListener('click', () => {
+        _pgFiles.splice(parseInt(b.getAttribute('data-pgdel'), 10), 1);
+        pgRenderList();
+      });
+    });
+  };
+  const pgPick = () => { if (el.pgFileInput) el.pgFileInput.click(); };
+  const pgOnFiles = () => {
+    const files = Array.from(el.pgFileInput.files || []);
+    el.pgFileInput.value = '';
+    if (!files.length) return;
+    for (const f of files) {
+      if (f.size > PG_MAX_ITEM_MB * 1024 * 1024) {
+        pgSay(`「${f.name}」${shareFmtSize(f.size)} 超过单文件 ${PG_MAX_ITEM_MB}MB 上限，请先压缩或改用「生成二维码」（不走内嵌）。`);
+        return;
+      }
+    }
+    _pgFiles = _pgFiles.concat(files);
+    pgRenderList();
+    pgSay('');
+  };
+  const pgTotalBytes = () => _pgFiles.reduce((s, f) => s + f.size, 0);
+  const pgCheckTotal = (maxMb) => {
+    const total = pgTotalBytes();
+    if (total > maxMb * 1024 * 1024) {
+      pgSay(`所选文件合计 ${shareFmtSize(total)}，超过 ${maxMb}MB 上限（内嵌会整体膨胀约 33%），请分批处理。`);
+      return false;
+    }
+    return true;
+  };
+  const pgBuild = async () => {
+    if (!_pgFiles.length) return;
+    const maxMb = (_shareTok && _shareTok.limits && _shareTok.limits.pagetool_max_total_mb) || 60;
+    if (!pgCheckTotal(maxMb)) return;
+    _pgLink = '';
+    pgSay('正在合成…');
+    try {
+      const items = [];
+      for (const f of _pgFiles) items.push(await pgLoadItem(f));
+      const title = (el.pgTitleInput.value || '').trim() || _pgFiles[0].name.replace(/\.[^.]*$/, '') || '页面';
+      const page = pgBuildPage(items, title);
+      _pgBlob = new Blob([page], { type: 'text/html;charset=utf-8' });
+      _pgName = (title.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || '页面') + PG_PAGE_SUFFIX;
+      el.pgResult.hidden = false;
+      el.pgResultTitle.textContent = '已生成本机网页文件';
+      el.pgQrImg.hidden = true; el.pgQrImg.removeAttribute('src');
+      el.pgUrl.hidden = true; el.pgUrl.value = '';
+      el.pgCopyBtn.hidden = true; el.pgOpenBtn.hidden = true;
+      el.pgSaveBtn.hidden = false;
+      el.pgMeta.textContent = `源文件 ${shareFmtSize(pgTotalBytes())} → 页面 ${shareFmtSize(_pgBlob.size)}（内嵌膨胀约 ${(_pgBlob.size / pgTotalBytes()).toFixed(2)} 倍），双击或发给别人都能直接打开。`;
+      pgSay('');
+    } catch (e) {
+      pgSay('合成失败：' + (e && e.message ? e.message : e));
+    }
+  };
+  const pgSave = () => {
+    if (!_pgBlob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(_pgBlob);
+    a.download = _pgName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  const pgToLink = async () => {
+    if (!_pgBlob) { pgSay('请先「生成本机网页文件」'); return; }
+    const tok = await shareEnsureToken(pgSay);
+    if (!tok) return;
+    const days = (_shareTok.limits && _shareTok.limits.default_expire_days) || 7;
+    pgSay('上传中 0%');
+    try {
+      const r = await shareUpload(_pgBlob, _pgName, days, (loaded, total) => {
+        pgSay(`上传中 ${Math.round((loaded / total) * 100)}%`);
+      });
+      _pgLink = r.url;
+      el.pgResult.hidden = false;
+      el.pgResultTitle.textContent = '在线链接已生成';
+      el.pgUrl.hidden = false; el.pgUrl.value = r.url;
+      el.pgCopyBtn.hidden = false; el.pgOpenBtn.hidden = false;
+      shareShowResult(el.pgResult, r.url, el.pgQrImg, el.pgMeta, r.expire_at);
+      el.pgMeta.textContent = '链接：' + r.url + ' · 有效期至 ' + pfFmtDate(r.expire_at) + ' · 在线页与 App「生成网页」一样渲染在独立域名（share.hanyuxz.top）';
+      pgSay('');
+    } catch (e) {
+      pgSay(e && e.message ? e.message : '上传失败');
+    }
+  };
+  const pgCopyUrl = () => shareCopy(el.pgUrl.value, el.pgCopyBtn, '复制链接');
+  const pgOpen = () => { const u = el.pgUrl.value; if (u) window.open(u, '_blank'); };
+
+  if (el.sqrPickBtn) el.sqrPickBtn.addEventListener('click', sqrPick);
+  if (el.sqrFileInput) el.sqrFileInput.addEventListener('change', sqrOnFile);
+  if (el.sqrCopyBtn) el.sqrCopyBtn.addEventListener('click', sqrCopyUrl);
+  if (el.sqrOpenBtn) el.sqrOpenBtn.addEventListener('click', sqrOpen);
+  if (el.sqrSaveQrBtn) el.sqrSaveQrBtn.addEventListener('click', sqrSaveQr);
+  if (el.pgPickBtn) el.pgPickBtn.addEventListener('click', pgPick);
+  if (el.pgFileInput) el.pgFileInput.addEventListener('change', pgOnFiles);
+  if (el.pgClearBtn) el.pgClearBtn.addEventListener('click', () => { _pgFiles = []; pgRenderList(); pgSay(''); });
+  if (el.pgBuildBtn) el.pgBuildBtn.addEventListener('click', () => { try { pgBuild(); } catch (e) { pgSay('合成失败：' + (e && e.message ? e.message : e)); } });
+  if (el.pgLinkBtn) el.pgLinkBtn.addEventListener('click', () => { try { pgToLink(); } catch (e) { pgSay('失败：' + (e && e.message ? e.message : e)); } });
+  if (el.pgSaveBtn) el.pgSaveBtn.addEventListener('click', pgSave);
+  if (el.pgCopyBtn) el.pgCopyBtn.addEventListener('click', pgCopyUrl);
+  if (el.pgOpenBtn) el.pgOpenBtn.addEventListener('click', pgOpen);
+
   const pfLoad = async () => {
     if (!pfToken()) { pfRender(null, null, null); return; }
     let me = null, member = null, prof = null;
@@ -8374,6 +8821,8 @@
   if (el.tabSubtitle) el.tabSubtitle.addEventListener('click', () => switchView('subtitle'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabMember) el.tabMember.addEventListener('click', () => switchView('member'));
+  if (el.tabShareQr) el.tabShareQr.addEventListener('click', () => switchView('shareqr'));
+  if (el.tabPageGen) el.tabPageGen.addEventListener('click', () => switchView('pagegen'));
   // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换
   const ucSwitchSub = (which) => {
     const fmt = which === 'format';
@@ -9514,6 +9963,8 @@
       if (el.tabSubtitle) el.tabSubtitle.hidden = false;
       if (el.tabProfile) el.tabProfile.hidden = false;
       if (el.tabMember) el.tabMember.hidden = false;
+      if (el.tabShareQr) el.tabShareQr.hidden = false;
+      if (el.tabPageGen) el.tabPageGen.hidden = false;
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载（支持 #view=xxx 直达指定视图，如 #view=subtitle）
       // 启动竞态保护（2026-09-30）：若用户/深链在节点信息返回前已选中非默认视图，
