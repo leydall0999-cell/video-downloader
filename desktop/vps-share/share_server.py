@@ -23,7 +23,7 @@ POST   /api/upload             raw body 上传文件（流式落盘）
        Header X-Auth           token（与 share_token 文件一致）
        Header X-Expire         可选，过期秒数；0/缺省=永久
 GET    /api/meta/<sid>         元信息 JSON
-GET    /s/<sid>                分享页（H5，按类型渲染）
+GET    /s/<sid>                分享页（H5 按类型渲染；.html 分享直接把原件内联返回）
 GET    /f/<sid>                文件字节（支持单区间 Range）
 GET    /api/download/<sid>     强制下载（Content-Disposition: attachment）
 DELETE /api/share/<sid>        删除（需 X-Auth）
@@ -91,6 +91,10 @@ IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "avif",
 AUDIO_EXT = {"mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "amr"}
 PDF_EXT = {"pdf"}
 TEXT_EXT = {"txt", "md", "log", "csv", "json", "xml", "yaml", "yml"}
+# 2026-09-30 新增：HTML 分享（「生成网页」产出的 .网页.html）
+# —— 这类文件**不能**套 H5 浏览壳：它本身就是一整个页面，套壳后反而只剩一个「下载」按钮。
+#    所以 kind='html' 时 /s/<sid> 直接把原件内联返回（见 Handler._page）。
+HTML_EXT = {"html", "htm"}
 
 LOG_LOCK = threading.Lock()
 
@@ -148,6 +152,8 @@ def kind_of(name: str) -> str:
         return "pdf"
     if e in TEXT_EXT:
         return "text"
+    if e in HTML_EXT:
+        return "html"
     # 视频判断放最后：避免 mp4 之类被误判
     if e in PLAYABLE_VIDEO or e in {"mkv", "avi", "wmv", "flv", "ts", "m2ts", "3gp", "rmvb"}:
         return "video"
@@ -446,7 +452,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- 路由实现 ----------
 
     def _page(self, sid: str, head_only: bool) -> None:
-        meta, _fp = load_meta(sid)
+        meta, fp = load_meta(sid)
         if not meta:
             return self._html(404, render_error("链接不存在或已过期"), head_only)
         try:
@@ -454,7 +460,30 @@ class Handler(BaseHTTPRequestHandler):
             save_meta(sid, meta)
         except OSError:
             pass
+        # HTML 分享：原件就是一个完整页面，直接内联返回；套 H5 浏览壳反而只剩「下载」按钮。
+        # 按**文件名**判类型而非 meta["kind"] —— 这样本次改动之前上传的老 .html 分享也能正确渲染。
+        if kind_of(meta.get("name") or "") == "html":
+            return self._raw_html(fp, head_only)
         return self._html(200, render_page(sid, meta), head_only)
+
+    def _raw_html(self, fp: str, head_only: bool) -> None:
+        """把上传的 HTML 原件作为分享页内联返回（点开即渲染）。
+
+        安全兜底：这是「用户上传的内容跑在我们域名下」，故加一层 CSP。
+        本产品生成的页面只用 内联样式/脚本 + data: 资源，CSP 不影响它；
+        但能挡住「借分享域名挂钓鱼页并向外发请求 / 外链资源」这类滥用。
+        """
+        try:
+            with open(fp, "rb") as f:
+                raw = f.read()
+        except OSError:
+            return self._html(404, render_error("页面文件已丢失"))
+        csp = ("default-src 'none'; img-src data: blob:; media-src data: blob:; "
+               "style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+               "frame-src data:; base-uri 'none'; form-action 'none'")
+        return self._send(200, raw, "text/html; charset=utf-8",
+                          {"Content-Security-Policy": csp,
+                           "Referrer-Policy": "no-referrer"}, head_only)
 
     def guard_file(self, sid: str, head_only: bool, force_dl: bool) -> None:
         meta, fp = load_meta(sid)

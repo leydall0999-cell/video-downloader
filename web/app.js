@@ -813,6 +813,12 @@
     pagePathInput: $('pagePathInput'),
     pageCopyPathBtn: $('pageCopyPathBtn'),
     pageOpenBtn: $('pageOpenBtn'),
+    pageLinkInput: $('pageLinkInput'),
+    pageCopyLinkBtn: $('pageCopyLinkBtn'),
+    pageOpenLinkBtn: $('pageOpenLinkBtn'),
+    pageQrWrap: $('pageQrWrap'),
+    pageQrImg: $('pageQrImg'),
+    pageLocalTag: $('pageLocalTag'),
     pageResultHint: $('pageResultHint'),
 
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
@@ -5291,7 +5297,8 @@
   const pgDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const PG_MAX_ITEM = 80 * 1024 * 1024;
   const PG_MAX_TOTAL = 200 * 1024 * 1024;
-  const pgState = { paths: [], files: [], busy: false, pageHtml: '', outName: '' };
+  const pgState = { paths: [], files: [], busy: false, pageHtml: '', outName: '',
+                    outPath: '', link: '', sid: '', warn: '' };
 
   const pgHuman = (n) => (n < 1024 ? n + ' B'
     : (n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB'));
@@ -5363,8 +5370,14 @@
 
   function pgReset() {
     pgState.paths = []; pgState.files = []; pgState.pageHtml = ''; pgState.outName = '';
+    pgState.outPath = ''; pgState.link = ''; pgState.sid = ''; pgState.warn = '';
     if (el.pageResult) el.pageResult.hidden = true;
     if (el.pagePathInput) el.pagePathInput.value = '';
+    if (el.pageLinkInput) { el.pageLinkInput.value = ''; el.pageLinkInput.placeholder = '正在生成在线链接…'; }
+    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
+    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
+    pgRenderLink(-1, '');
+    if (el.pageResultHint) el.pageResultHint.textContent = '';
     pgSetHint('');
     pgRender();
   }
@@ -5384,24 +5397,108 @@
   function pgShowResult(data, isUpload) {
     pgState.outName = data.out_name || '';
     pgState.pageHtml = data.page_html || '';
+    pgState.outPath = data.out_path || '';
+    pgState.link = ''; pgState.sid = '';
     if (el.pageResult) el.pageResult.hidden = false;
     if (el.pagePathInput) {
       el.pagePathInput.value = isUpload ? (data.out_name || '') : (data.out_path || '');
     }
     if (el.pageCopyPathBtn) el.pageCopyPathBtn.hidden = !!isUpload;
     if (el.pageOpenBtn) el.pageOpenBtn.textContent = isUpload ? '下载网页（HTML）' : '用浏览器打开';
-    const saved = isUpload ? (data.out_name + '（已存入浏览器下载目录）') : (data.out_path || '');
+    if (el.pageLocalTag) {
+      el.pageLocalTag.textContent = '本地文件 · ' + pgHuman(data.html_size || 0)
+        + '（源 ' + pgHuman(data.source_size || 0) + '，膨胀 ' + (data.inflated || 1) + ' 倍）';
+    }
     const kinds = (data.items || []).map((x) => PG_KIND_LABEL[x.kind] || '文件');
-    let extra = '';
-    if (kinds.indexOf('视频') >= 0) {
-      extra = ' ⚠️ 页面里的视频需为 H.264 / VP9 / AV1 编码，否则浏览器无法播放（MKV、MPEG-4 Visual 等都不行）。';
-    }
-    if (el.pageResultHint) {
-      el.pageResultHint.textContent = '已生成 ' + pgHuman(data.html_size || 0) + '（源 '
-        + pgHuman(data.source_size || 0) + '，膨胀 ' + (data.inflated || 1) + ' 倍）→ ' + saved
-        + '。相对路径引用的资源已全部内嵌，单文件即可分发。' + extra;
-    }
+    pgState.warn = kinds.indexOf('视频') >= 0
+      ? ' ⚠️ 页面里的视频需为 H.264 / VP9 / AV1 编码，否则浏览器无法播放（MKV、MPEG-4 Visual 等都不行）。'
+      : '';
+    // 主产出 = 在线链接：生成完立即上传分享节点换链接 + 二维码
+    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
+    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
+    pgRenderLink(0);
     pgSetHint('生成完成', '#16a34a');
+    pgPublishLink(pgState.outPath);
+  }
+
+  // 在线链接区状态渲染：0=上传中 · 2=上传中(带进度) · 1=完成 · -1=失败/不可用
+  function pgRenderLink(st, arg) {
+    const inp = el.pageLinkInput;
+    if (!inp) return;
+    if (st === 1) {
+      inp.value = pgState.link;
+      if (el.pageQrWrap) el.pageQrWrap.hidden = false;
+      if (el.pageQrImg) el.pageQrImg.src = '/api/share/qr?text=' + encodeURIComponent(pgState.link) + '&size=640';
+      if (el.pageResultHint) {
+        el.pageResultHint.textContent = '在线链接已就绪 —— 把链接或二维码发给别人，手机 / 电脑点开就能看。'
+          + (pgState.warn || '');
+      }
+    } else if (st === 0) {
+      inp.value = '正在生成在线链接…';
+    } else if (st === 2) {
+      inp.value = '正在上传 ' + pgHuman(arg || 0) + '…';
+    } else {
+      inp.value = '';
+      inp.placeholder = '在线链接不可用' + (arg ? '：' + arg : '');
+      if (el.pageResultHint) {
+        // 未登录是可预期状态（生成靠本机、链接要传到服务器），单独给一句能照着做的提示
+        const needLogin = !!(arg && arg.indexOf('登录') >= 0);
+        el.pageResultHint.textContent = (needLogin
+          ? '登录 / 注册后重新点「生成网页」，即可拿到在线链接。'
+          : ((arg ? '未能生成在线链接（' + arg + '）。' : '')
+             + '本地 HTML 文件仍可用，可点下方「复制路径 / 用浏览器打开」。'))
+          + (pgState.warn || '');
+      }
+    }
+    const busy = (st === 0 || st === 2);
+    if (el.pageCopyLinkBtn) el.pageCopyLinkBtn.disabled = busy || !pgState.link;
+    if (el.pageOpenLinkBtn) el.pageOpenLinkBtn.disabled = busy || !pgState.link;
+  }
+
+  // 把刚生成的 HTML 传上分享节点换「在线链接」。
+  // 复用「生成二维码」那套现成通道（/api/share/upload_path + /api/share/task），不新增后端接口。
+  async function pgPublishLink(outPath) {
+    if (!outPath) { pgRenderLink(-1, '没有可上传的本地文件'); return; }
+    if (!authToken()) {
+      pgRenderLink(-1, '未登录');
+      try { _notifyNeedLogin('请先登录或注册账号，即可生成在线链接'); } catch (_) {}
+      return;
+    }
+    let tid = '';
+    try {
+      const r = await fetch('/api/share/upload_path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
+        body: JSON.stringify({ path: outPath, expire: 0 }),   // 0 = 永久有效
+      });
+      if (r.status === 404) throw new Error('当前版本没有分享通道');
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d || !d.ok) {
+        throw new Error((d && (d.error || d.detail)) || ('HTTP ' + r.status));
+      }
+      tid = d.task_id;
+    } catch (e) {
+      pgRenderLink(-1, (e && e.message) || '上传失败');
+      return;
+    }
+    // 轮询上传进度（上传在后台线程跑，不能阻塞界面；2MB 级页面通常 1~3 秒）
+    for (let i = 0; i < 240; i++) {
+      await new Promise((res) => setTimeout(res, 500));
+      let t = null;
+      try {
+        const rr = await fetch('/api/share/task/' + encodeURIComponent(tid), { headers: authBearerHeaders() });
+        t = await rr.json();
+      } catch (_) { continue; }
+      if (!t || !t.ok) continue;
+      if (t.status === 'done' && t.url) {
+        pgState.link = t.url; pgState.sid = t.sid || '';
+        pgRenderLink(1);
+        return;
+      }
+      if (t.status === 'failed') { pgRenderLink(-1, t.error || '上传失败'); return; }
+      pgRenderLink(2, t.sent || 0);
+    }
+    pgRenderLink(-1, '上传超时，请重试');
   }
 
   // 网页端：页面内容随响应回来，用 Blob 存到访客本机。
@@ -5519,6 +5616,30 @@
         return;
       }
       window.open(fileUrl, '_blank');
+    });
+  }
+  if (el.pageCopyLinkBtn) {
+    el.pageCopyLinkBtn.addEventListener('click', () => {
+      const v = pgState.link || (el.pageLinkInput ? el.pageLinkInput.value : '');
+      if (!v) return;
+      if (el.pageLinkInput) el.pageLinkInput.select();
+      try { document.execCommand('copy'); } catch (e2) {}
+      const btn = el.pageCopyLinkBtn;
+      btn.textContent = '已复制';
+      setTimeout(() => { btn.textContent = '复制链接'; }, 1600);
+    });
+  }
+  if (el.pageOpenLinkBtn) {
+    el.pageOpenLinkBtn.addEventListener('click', () => {
+      if (!pgState.link) return;
+      // 桌面壳里 window.open 会被静默拦截，优先走原生「外部浏览器打开」
+      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
+      if (typeof openExt === 'function') {
+        Promise.resolve(openExt(pgState.link)).then((ok) => { if (!ok) window.open(pgState.link, '_blank'); })
+          .catch(() => { window.open(pgState.link, '_blank'); });
+        return;
+      }
+      window.open(pgState.link, '_blank');
     });
   }
   pgRender();

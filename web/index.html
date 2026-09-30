@@ -964,14 +964,14 @@
   </section>
 
   <!-- 2026-09-30 新增：生成网页 —— 与「生成二维码」同级的独立入口。
-       区别：生成二维码给的是**链接**（对方要联网）；这里给的是一个**文件**（离线也能看，可直接发人）。
-       服务端见 server/routers/pagetool.py。 -->
+       选多个文件合成**一个网页** → 自动上传到分享节点 → 给**在线链接 + 二维码**（对方点开/扫码即看）。
+       同时在本机留一份自包含 HTML（离线也能打开）。服务端见 server/routers/pagetool.py。 -->
   <section id="pageView" class="panel" hidden aria-labelledby="pageTitle">
     <h2 id="pageTitle" class="guide-title">🌐 生成网页</h2>
 
     <p class="uc-tip" style="color:var(--text-mute,#6b7280);font-size:12.5px;">
-      选本地文件（图片 / PDF / 视频 / 音乐…可多选）→ 生成<b>一个 HTML 页面</b>。
-      文件内容直接内嵌在页面里，<b>不依赖任何外部资源</b>：双击就能打开，也能直接发给别人，离线照样能看。
+      选本地文件（图片 / PDF / 视频 / 音乐…可多选）→ 合成<b>一个网页</b> → 给出<b>在线链接</b>。
+      对方<b>点开链接或扫码就能在浏览器里直接看</b>，不用下载、手机也行；本机同时留一份可离线打开的单文件。
       <br><span style="color:var(--brand,#2563eb);">提示：图片 / PDF / 音频效果最好；视频需是 H.264 / VP9 / AV1 编码（MKV、MPEG-4 Visual 等在浏览器里播不了）。</span>
     </p>
 
@@ -995,17 +995,32 @@
     </div>
 
     <div id="pageResult" hidden>
+      <div class="share-qr-wrap" id="pageQrWrap" hidden><img id="pageQrImg" alt="网页二维码" /></div>
       <div class="share-url-row" style="margin-top:14px;">
+        <input type="text" id="pageLinkInput" readonly placeholder="正在生成在线链接…" />
+        <button type="button" class="btn btn-ghost" id="pageCopyLinkBtn">复制链接</button>
+        <button type="button" class="btn btn-ghost" id="pageOpenLinkBtn">打开</button>
+      </div>
+      <div class="share-hint" id="pageResultHint"></div>
+      <div class="pg-local" id="pageLocalRow">
+        <span class="pg-local-tag" id="pageLocalTag">本地文件</span>
         <input type="text" id="pagePathInput" readonly />
         <button type="button" class="btn btn-ghost" id="pageCopyPathBtn">复制路径</button>
         <button type="button" class="btn btn-ghost" id="pageOpenBtn">用浏览器打开</button>
       </div>
-      <div class="share-hint" id="pageResultHint"></div>
     </div>
 
     <style>
       #pageQueue { margin-top: 10px; }
       .page-tip { color: var(--text-mute,#6b7280); font-size: 12.5px; padding: 6px 2px; }
+      /* 本地文件是次要信息（在线链接才是主产出），所以压成一行小字 */
+      .pg-local { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center;
+        margin-top:12px; padding-top:11px; border-top:1px dashed var(--border,#e5e7eb); }
+      .pg-local-tag { color:var(--text-mute,#6b7280); font-size:12px; white-space:nowrap; }
+      .pg-local input { flex:1; min-width:210px; max-width:440px; padding:6px 10px;
+        border:1px solid var(--border,#d1d5db); border-radius:8px; font-size:12px;
+        background:transparent; color:inherit; }
+      .pg-local .btn { font-size:12px; padding:5px 11px; }
     </style>
   </section>
 
