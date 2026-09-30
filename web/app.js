@@ -1699,10 +1699,14 @@
 
   // ------------------------------------------------------------------ 渲染
 
+  // 平台数对外一律「取整百 + 加号」（116 → 100+）：宣传口径不绑定具体可解析数，
+  // 避免某一平台临时失效时，页面数字与实际可用数对不上。
+  const fmtPlatformCount = (n) => (n >= 100 ? `${Math.floor(n / 100) * 100}+` : String(n));
+
   const renderPlatforms = (platforms) => {
     allPlatforms = platforms;
     // 平台列表只保留 header 徽章入口（engineBadge 弹窗），输入区 chips 已移除（顶部已有平台展示，避免重复）
-    el.badge.textContent = `支持 ${platforms.length} 个平台`;
+    el.badge.textContent = `支持 ${fmtPlatformCount(platforms.length)} 平台`;
   };
 
   const openPlatformModal = (platforms) => {

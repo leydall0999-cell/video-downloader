@@ -304,6 +304,18 @@ else
 fi
 
 echo ""
+echo "=== server/tests/test_platform_count_label.mjs（平台数对外口径：两端统一 116→100+） ==="
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
 echo "========================================="
