@@ -1802,6 +1802,10 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   text-align: center; font-size: .7rem; color: var(--text-mute); letter-spacing: .03em;
 }
 .build-tag::before { content: "● "; color: var(--brand); }
+/* 🔴 网页版没有构建脚本给 #buildTag 填内容（桌面端由 build_mac.sh / refresh_web.sh 写入指纹），
+   但 ::before 的「●」是无条件渲染的 ⇒ 线上页脚常年挂着一个孤立蓝点（用户 2026-09-30 反馈）。
+   空标签一律不显示，桌面端有内容时不受影响。 */
+.build-tag:empty { display: none; }
 
 /* ---- 下载用途确认弹窗 ---- */
 .consent-uses { display: flex; flex-direction: column; gap: .5rem; margin: .8rem 0 .2rem; }
@@ -1861,6 +1865,21 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .app-intro-head { text-align: center; margin-bottom: 1.4rem; }
 .app-intro-head .guide-title { margin-bottom: .35rem; }
 .app-intro-sub { color: var(--text-mute); font-size: .95rem; margin: 0; }
+.app-intro-sub b { color: var(--accent, #4f46e5); font-variant-numeric: tabular-nums; }
+/* 分组：与 App 首页快捷入口同款（左侧渐变竖条 + emoji 组名） */
+.app-intro-groups { display: flex; flex-direction: column; gap: 1.6rem; margin-bottom: 1.6rem; }
+.app-intro-group-title {
+  display: flex; align-items: center; gap: .45rem;
+  font-size: 1rem; font-weight: 600; color: var(--text, #111827);
+  margin: 0 0 .7rem; padding-left: .55rem; position: relative;
+}
+.app-intro-group-title::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 1.05rem; border-radius: 2px;
+  background: linear-gradient(180deg, #4f46e5, #0891b2);
+}
+.app-intro-group-title span { font-size: 1.1rem; line-height: 1; }
+.app-intro-group .app-intro-grid { margin-bottom: 0; }
 .app-intro-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1877,14 +1896,6 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   transition: transform .15s ease, box-shadow .15s ease;
 }
 .app-intro-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px var(--shadow, rgba(0,0,0,.08)); }
-.app-intro-soon {
-  position: absolute; top: .6rem; right: .6rem;
-  font-size: .68rem; line-height: 1; padding: .28rem .5rem;
-  background: color-mix(in srgb, var(--accent, #4f46e5) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent, #4f46e5) 32%, transparent);
-  color: var(--accent, #4f46e5);
-  border-radius: .5rem; font-weight: 600; letter-spacing: .02em;
-}
 .app-intro-ico { font-size: 1.6rem; margin-bottom: .5rem; }
 .app-intro-card h3 { font-size: 1.05rem; margin: 0 0 .4rem; color: var(--text, #111827); }
 .app-intro-title-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .4rem; }
@@ -1899,21 +1910,12 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .app-intro-card p { margin: 0; color: var(--text-mute); font-size: .9rem; line-height: 1.55; }
 .app-intro-cta { text-align: center; color: var(--text-mute); font-size: .9rem; line-height: 1.7; }
 .app-intro-cta p { margin: .15rem 0; }
-.app-intro-cta-card { display: flex; flex-direction: column; }
-.app-intro-foot {
-  margin-top: .7rem; text-align: center; font-size: .95rem;
-  color: var(--text-mute, #6b7280); font-weight: 600; letter-spacing: .02em;
-}
-.app-intro-soon-plain {
-  grid-column: 1 / -1;
-  margin: 1.4rem 0 0; text-align: center;
-  font-size: 1.25rem; color: var(--text, #111827); letter-spacing: .05em;
-}
+.app-intro-cta-actions { display: flex; justify-content: center; gap: .6rem; flex-wrap: wrap; margin-top: .9rem; }
+/* 已废弃样式（.app-intro-soon / .app-intro-soon-plain / .app-intro-foot / .app-intro-cta-card）
+   随「更多功能」页改分组卡片一并删除（2026-09-30）：页面已无对应元素，留着会误导后来人。 */
 @media (max-width: 640px) {
-  .app-intro-soon-plain { font-size: 1rem; }
   .app-intro-grid { grid-template-columns: 1fr; }
 }
-.app-intro-cta-card .btn { margin-top: auto; }
 
 @media (max-width: 640px) {
   .wrap { width: min(880px, 100% - 1rem); }

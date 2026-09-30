@@ -1,0 +1,125 @@
+// 网页版「更多功能」页（#appIntroView）回归守卫（2026-09-30）
+//
+// 这一页是网页版唯一的「介绍桌面客户端能力」入口，历史问题是两份漂移：
+//   ① 页面只列了 12 条，App 已有的种子下载 / 压缩 / 超分 / 二维码 / 网页生成 / 视频去水印 /
+//      抠图 / 媒体库 / 保险箱 / 归档网盘 / 抽帧铃声 等一概没写，用户以为客户端只有下载；
+//   ② 「网页可用 / 仅桌面端」标注与真实能力不符（甚至出现过 App 里并不存在的独立「配音工作室」）。
+// 所以这里钉三件事：能力项必须齐全、每项必须标清在哪端可用、网页可用的必须真有入口。
+//
+// 说明：不做 DOM 运行时（该区块依赖整页初始化），用「源码切片 + 结构断言」，锚点被挪走立即红。
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const indexPath = join(repoRoot, 'web', 'index.html');
+const indexHtml = readFileSync(indexPath, 'utf8');
+const appJs = readFileSync(join(repoRoot, 'web', 'app.js'), 'utf8');
+const stylesCss = readFileSync(join(repoRoot, 'web', 'styles.css'), 'utf8');
+
+// ---- 切出 #appIntroView 整段 ----
+const start = indexHtml.indexOf('id="appIntroView"');
+assert.ok(start > 0, '#appIntroView 必须存在（网页版「更多功能」页）');
+const end = indexHtml.indexOf('<!-- 媒体库视图', start);
+assert.ok(end > start, '#appIntroView 之后应紧跟媒体库视图注释（切片右边界）');
+const intro = indexHtml.slice(start, end);
+
+// ---- 期望：25 项能力，9 项网页可用 + 16 项仅桌面端 ----
+// 网页可用 → 必须能在网页版找到入口锚点（见下方 WEB_ENTRY 表）
+const WEB_CAPS = {
+  download: 'tabDownload',
+  subtitle: 'tabSubtitle',
+  uploadconvert: 'tabUploadConvert',
+  concat: 'ucSubMerge',
+  musicconvert: 'tabMusicConvert',
+  imageconvert: 'tabImageConvert',
+  dw: 'tabDw',
+  dwpdf: 'dwPdfBtn',
+  profile: 'tabProfile',
+};
+// 仅桌面端 → 网页版不得声称可用
+const DESK_CAPS = [
+  'subscribe', 'torrent', 'extension', 'commentary', 'compress', 'sr', 'share', 'page',
+  'bridge', 'dwvideo', 'matting', 'ffmpeg_tools', 'library', 'retention', 'crypto', 'archive',
+];
+
+// 卡片格式：<div class="app-intro-card" data-cap="xxx"> … <span class="app-intro-tag tag-web|tag-desktop">
+const cardRe = /<div class="app-intro-card" data-cap="([^"]+)">([\s\S]*?)\n {10}<\/div>/g;
+const cards = [];
+let m;
+while ((m = cardRe.exec(intro)) !== null) cards.push({ cap: m[1], body: m[2] });
+
+assert.equal(cards.length, 25, `「更多功能」页应有 25 张能力卡片，实际 ${cards.length}`);
+
+const caps = cards.map((c) => c.cap);
+assert.equal(new Set(caps).size, caps.length, 'data-cap 不得重复：' + caps.filter((c, i) => caps.indexOf(c) !== i).join(','));
+
+const expectedAll = [...Object.keys(WEB_CAPS), ...DESK_CAPS].sort();
+assert.deepEqual([...caps].sort(), expectedAll,
+  '能力项与期望清单不一致（缺：' + expectedAll.filter((c) => !caps.includes(c)).join(',') +
+  '；多：' + caps.filter((c) => !expectedAll.includes(c)).join(',') + '）');
+
+// 每张卡片恰有一个可用性标签，且与期望清单一致
+for (const { cap, body } of cards) {
+  const isWeb = /<span class="app-intro-tag tag-web">网页可用<\/span>/.test(body);
+  const isDesk = /<span class="app-intro-tag tag-desktop">仅桌面端<\/span>/.test(body);
+  assert.equal(isWeb + isDesk, 1, `「${cap}」卡片必须且只能有一个可用性标签（网页可用 xor 仅桌面端）`);
+  if (cap in WEB_CAPS) assert.ok(isWeb, `「${cap}」网页版已支持，必须标「网页可用」`);
+  else assert.ok(isDesk, `「${cap}」网页版没有，必须标「仅桌面端」`);
+  assert.ok(/<p>[^<]{10,}<\/p>/.test(body), `「${cap}」卡片应有实质说明文案`);
+}
+
+// 「网页可用」必须真有入口 —— 否则等于虚假宣传
+for (const [cap, anchor] of Object.entries(WEB_CAPS)) {
+  assert.ok(indexHtml.includes(`id="${anchor}"`),
+    `「${cap}」标了网页可用，但网页版找不到入口锚点 id="${anchor}"`);
+}
+
+// ---- 分组：与 App 侧栏同款 6 组 ----
+const groupTitles = [...intro.matchAll(/<h3 class="app-intro-group-title"><span aria-hidden="true">[^<]*<\/span>([^<]+)<\/h3>/g)]
+  .map((x) => x[1]);
+assert.deepEqual(groupTitles, ['下载', '创作', '转换', '工具', '媒体库', '账号'],
+  '分组标题应为 下载/创作/转换/工具/媒体库/账号，实际：' + groupTitles.join('/'));
+
+// ---- 静态占位数字必须与卡片实算一致（首屏不闪错数字；app.js 只是兜底纠正）----
+const webCount = Object.keys(WEB_CAPS).length;
+const deskCount = DESK_CAPS.length;
+assert.ok(new RegExp(`id="appIntroWebCount">${webCount}</b>`).test(intro),
+  `index.html 静态占位应为「网页可用 ${webCount}」，否则首屏会闪错数字`);
+assert.ok(new RegExp(`id="appIntroDesktopCount">${deskCount}</b>`).test(intro),
+  `index.html 静态占位应为「仅桌面端 ${deskCount}」`);
+
+// ---- app.js 计数接线：卡片增删后数字自动跟上 ----
+const statsStart = appJs.indexOf("// ---- 「更多功能」页能力计数");
+assert.ok(statsStart > 0, 'app.js 缺少「更多功能」页能力计数接线');
+const stats = appJs.slice(statsStart, statsStart + 900);
+assert.ok(/querySelectorAll\('#appIntroGroups \.app-intro-card'\)/.test(stats), '计数必须遍历真实的卡片容器');
+assert.ok(/card\.querySelector\('\.tag-web'\)/.test(stats) && /card\.querySelector\('\.tag-desktop'\)/.test(stats),
+  '计数必须按可用性标签区分两类');
+assert.ok(/getElementById\('appIntroWebCount'\)/.test(stats) && /getElementById\('appIntroDesktopCount'\)/.test(stats),
+  '计数结果必须写回两个统计元素');
+
+// ---- 样式：分组视觉 ----
+for (const sel of ['.app-intro-groups {', '.app-intro-group-title {', '.app-intro-group-title::before {',
+  '.app-intro-group .app-intro-grid {', '.app-intro-cta-actions {']) {
+  assert.ok(stylesCss.includes(sel), `styles.css 缺少 ${sel}`);
+}
+// 已废弃样式不得复活（页面已无对应元素）
+for (const dead of ['.app-intro-soon {', '.app-intro-soon-plain {', '.app-intro-cta-card {']) {
+  assert.ok(!stylesCss.includes(dead), `${dead} 是已删元素的死样式，不该再出现`);
+}
+
+// ---- CTA：必须有真实的客户端下载入口 ----
+assert.ok(/<a class="btn btn-primary" href="\/download\/">查看客户端下载方式<\/a>/.test(intro),
+  '页面底部必须有指向 /download/ 的客户端下载入口');
+
+// ---- 页脚空指纹不得留下孤立圆点 ----
+// 网页版没有任何代码给 #buildTag 填内容（桌面端是构建脚本写指纹），而 .build-tag::before
+// 的「●」是无条件渲染的 ⇒ 线上页脚常年挂着一个孤立蓝点（用户 2026-09-30 反馈）。
+assert.ok(/<span id="buildTag" class="build-tag"><\/span>/.test(indexHtml),
+  '页脚构建指纹标签应保持空标签（网页版不填内容）');
+assert.ok(/\.build-tag:empty \{ display: none; \}/.test(stylesCss),
+  '空 .build-tag 必须隐藏，否则会在页脚留下一个孤立圆点');
+
+console.log('✅ 「更多功能」页回归守卫通过：25 项能力 / 6 组 / 标签齐备 / 网页可用项入口存在 / 计数接线与样式完好');

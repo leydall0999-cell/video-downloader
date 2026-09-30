@@ -8116,6 +8116,23 @@
   el.ucSubMerge.addEventListener('click', () => ucSwitchSub('merge'));
   el.tabDw.addEventListener('click', () => switchView('dw'));
   el.tabAppIntro.addEventListener('click', () => switchView('appIntro'));
+  // ---- 「更多功能」页能力计数：按卡片标签实时算，避免手写数字与卡片数漂移 ----
+  // 卡片增删后不需要改 index.html 里的占位数字，也不会出现「网页可用 9」和实际卡片对不上。
+  {
+    const introCards = document.querySelectorAll('#appIntroGroups .app-intro-card');
+    if (introCards.length) {
+      let webCount = 0;
+      let deskCount = 0;
+      introCards.forEach((card) => {
+        if (card.querySelector('.tag-web')) webCount += 1;
+        else if (card.querySelector('.tag-desktop')) deskCount += 1;
+      });
+      const webEl = document.getElementById('appIntroWebCount');
+      const deskEl = document.getElementById('appIntroDesktopCount');
+      if (webEl) webEl.textContent = String(webCount);
+      if (deskEl) deskEl.textContent = String(deskCount);
+    }
+  }
   if (el.tabSubscribe) el.tabSubscribe.addEventListener('click', () => switchView('subscribe'));
   if (el.tabTorrent) el.tabTorrent.addEventListener('click', () => switchView('torrent'));
   el.subAddBtn.addEventListener('click', addSubscription);
