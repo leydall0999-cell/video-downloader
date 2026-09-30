@@ -42,8 +42,7 @@
         <button type="button" class="tab" data-view="dw" id="tabDw">去水印</button>
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
-        <button type="button" class="tab" data-view="shareqr" id="tabShareQr">生成二维码</button>
-        <button type="button" class="tab" data-view="pagegen" id="tabPageGen">生成网页</button>
+        <button type="button" class="tab" data-view="share" id="tabShare">分享</button>
         <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
         <button type="button" class="tab tab-sep" data-view="member" id="tabMember">💎 会员</button>
         <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
@@ -688,8 +687,15 @@
   </section>
 
   <!-- ===== 生成二维码（受限版分享，2026-09-30）：登录用户同源直传分享节点 ===== -->
-  <section id="shareQrView" class="panel" hidden aria-labelledby="sqrTitle">
-    <h2 id="sqrTitle" class="guide-title">📱 生成二维码</h2>
+  <!-- ===== 分享（合并视图，2026-09-30）：子页签切换「生成二维码 / 生成网页」 ===== -->
+  <section id="shareView" class="panel" hidden>
+    <nav class="pf-subnav" id="shareSubnav" role="tablist" aria-label="分享子导航">
+      <button type="button" class="pf-subnav-btn is-active" data-sharepane="shareqr" role="tab">生成二维码</button>
+      <button type="button" class="pf-subnav-btn" data-sharepane="pagegen" role="tab">生成网页</button>
+    </nav>
+
+  <div id="shareQrView" hidden aria-labelledby="sqrTitle">
+    <h2 id="sqrTitle" class="guide-title">生成二维码</h2>
     <p class="uc-tip">把文件变成一条分享链接 + 二维码，对方扫码直接看图 / 看视频（可拖进度）、不打包不改内容。
       网页版限额：<b id="sqrLimitText">单文件 ≤ 95MB · 有效期最长 30 天 · 每天 20 次</b>（桌面端支持 2GB / 永久）。</p>
     <div class="uc-toolbar">
@@ -722,11 +728,11 @@
       </div>
     </div>
     <span class="convert-status" id="sqrStatus" aria-live="polite"></span>
-  </section>
+  </div>
 
-  <!-- ===== 生成网页（受限版，2026-09-30）：浏览器端合成自包含 HTML，可转在线链接 ===== -->
-  <section id="pageGenView" class="panel" hidden aria-labelledby="pgTitle">
-    <h2 id="pgTitle" class="guide-title">🌐 生成网页</h2>
+  <!-- 生成网页：浏览器端合成自包含 HTML，可转在线链接 -->
+  <div id="pageGenView" hidden aria-labelledby="pgTitle">
+    <h2 id="pgTitle" class="guide-title">生成网页</h2>
     <p class="uc-tip">把多个文件（图片 / PDF / 音视频 / 文本）合并成<b>一个自包含的网页</b>：
       内容全部内嵌，把 .html 发给对方双击就能看；也可一键转成在线链接 + 二维码。
       网页版限额：合计 ≤ <b id="pgLimitText">60MB</b>（合成在你电脑的浏览器里完成，不占服务器）。</p>
@@ -742,6 +748,15 @@
         <label class="uc-field">
           <span class="uc-label">页面标题</span>
           <input type="text" id="pgTitleInput" placeholder="默认用第一个文件名" />
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">有效期（在线链接）</span>
+          <select id="pgExpire">
+            <option value="1">1 天</option>
+            <option value="3">3 天</option>
+            <option value="7" selected>7 天</option>
+            <option value="30">30 天</option>
+          </select>
         </label>
       </div>
       <div class="uc-bulk-actions">
@@ -765,6 +780,7 @@
       </div>
     </div>
     <span class="convert-status" id="pgStatus" aria-live="polite"></span>
+  </div>
   </section>
 
   <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 激活码 ===== -->

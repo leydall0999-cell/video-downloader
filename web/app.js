@@ -438,13 +438,14 @@
     // 网页版独立会员页（2026-09-30）：免登录看价目，购买动作才要登录
     memberView: $('memberView'), tabMember: $('tabMember'),
     memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'), memSeg: $('memSeg'),
-    tabShareQr: $('tabShareQr'), shareQrView: $('shareQrView'), sqrPickBtn: $('sqrPickBtn'),
+    tabShare: $('tabShare'), shareView: $('shareView'), shareSubnav: $('shareSubnav'),
+    shareQrView: $('shareQrView'), sqrPickBtn: $('sqrPickBtn'),
     sqrFileInput: $('sqrFileInput'), sqrExpire: $('sqrExpire'), sqrCount: $('sqrCount'),
     sqrResult: $('sqrResult'), sqrQrImg: $('sqrQrImg'), sqrUrl: $('sqrUrl'),
     sqrCopyBtn: $('sqrCopyBtn'), sqrOpenBtn: $('sqrOpenBtn'), sqrSaveQrBtn: $('sqrSaveQrBtn'),
     sqrStatus: $('sqrStatus'), sqrMeta: $('sqrMeta'),
-    tabPageGen: $('tabPageGen'), pageGenView: $('pageGenView'), pgPickBtn: $('pgPickBtn'),
-    pgFileInput: $('pgFileInput'), pgClearBtn: $('pgClearBtn'), pgCount: $('pgCount'),
+    pageGenView: $('pageGenView'), pgPickBtn: $('pgPickBtn'),
+    pgFileInput: $('pgFileInput'), pgClearBtn: $('pgClearBtn'), pgCount: $('pgCount'), pgExpire: $('pgExpire'),
     pgList: $('pgList'), pgTitleInput: $('pgTitleInput'), pgBuildBtn: $('pgBuildBtn'), pgLinkBtn: $('pgLinkBtn'),
     pgResult: $('pgResult'), pgResultTitle: $('pgResultTitle'), pgQrImg: $('pgQrImg'), pgUrl: $('pgUrl'),
     pgSaveBtn: $('pgSaveBtn'), pgCopyBtn: $('pgCopyBtn'), pgOpenBtn: $('pgOpenBtn'),
@@ -6114,9 +6115,8 @@
     const isSt = view === 'subtitle';          // AI 字幕（区别于订阅 isSub）
     const isProfile = view === 'profile';      // 个人中心
     const isMem = view === 'member';          // 会员（公开购买页，2026-09-30）
-    const isSqr = view === 'shareqr';         // 生成二维码（受限版分享，2026-09-30）
-    const isPgen = view === 'pagegen';        // 生成网页（浏览器端合成，2026-09-30）
-    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem || isSqr || isPgen;
+    const isShare = view === 'share';         // 分享（合并视图：二维码/网页 子页签，2026-09-30）
+    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem || isShare;
     el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isAnyExtra;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -6130,8 +6130,9 @@
     if (el.subtitleView) el.subtitleView.hidden = !isSt;
     if (el.profileView) el.profileView.hidden = !isProfile;
     if (el.memberView) el.memberView.hidden = !isMem;
-    if (el.shareQrView) el.shareQrView.hidden = !isSqr;
-    if (el.pageGenView) el.pageGenView.hidden = !isPgen;
+    if (el.shareView) el.shareView.hidden = !isShare;
+    if (el.shareQrView) el.shareQrView.hidden = !(isShare && _sharePane === 'shareqr');
+    if (el.pageGenView) el.pageGenView.hidden = !(isShare && _sharePane === 'pagegen');
     if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isAnyExtra);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
@@ -6145,8 +6146,7 @@
     if (el.tabSubtitle) el.tabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfile);
     if (el.tabMember) el.tabMember.classList.toggle('is-active', isMem);
-    if (el.tabShareQr) el.tabShareQr.classList.toggle('is-active', isSqr);
-    if (el.tabPageGen) el.tabPageGen.classList.toggle('is-active', isPgen);
+    if (el.tabShare) el.tabShare.classList.toggle('is-active', isShare);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
@@ -6154,7 +6154,8 @@
     if (isSt) { el.sbStatus.textContent = ''; }
     if (isProfile) pfLoad();
     if (isMem) memRender();
-    if (isSqr) sqrRenderLimits();
+    if (isMem) memRender();
+    if (isShare && _sharePane === 'shareqr') sqrRenderLimits();
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
@@ -7554,6 +7555,7 @@
   // · 二维码本地生成（js/vendor_qrcode.min.js，MIT），零外部服务；
   // · 生成网页完全在浏览器端合成（零服务器 CPU/内存），模板与 MIME 表移植自桌面端 pagetool.py。
   let _shareTok = null;                     // 最近一次取到的 {ok, token, limits}（上传凭据，不缓存复用）
+  let _sharePane = 'shareqr';               // 合并分享视图当前子页签
   let _shareLimits = null;                  // 只读限额（/api/share/limits，用于页面文案）
   let _pgFiles = [];                        // 待合成文件（File 对象）
   let _pgBlob = null;                       // 合成结果 Blob
@@ -7942,7 +7944,8 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     if (!_pgBlob) { pgSay('请先「生成本机网页文件」'); return; }
     const tok = await shareEnsureToken(pgSay);
     if (!tok) return;
-    const days = (_shareTok.limits && _shareTok.limits.default_expire_days) || 7;
+    const days = parseInt(el.pgExpire && el.pgExpire.value, 10)
+      || (_shareTok.limits && _shareTok.limits.default_expire_days) || 7;
     pgSay('上传中 0%');
     try {
       const r = await shareUpload(_pgBlob, _pgName, days, (loaded, total) => {
@@ -8821,8 +8824,16 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.tabSubtitle) el.tabSubtitle.addEventListener('click', () => switchView('subtitle'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabMember) el.tabMember.addEventListener('click', () => switchView('member'));
-  if (el.tabShareQr) el.tabShareQr.addEventListener('click', () => switchView('shareqr'));
-  if (el.tabPageGen) el.tabPageGen.addEventListener('click', () => switchView('pagegen'));
+  if (el.tabShare) el.tabShare.addEventListener('click', () => switchView('share'));
+  if (el.shareSubnav) el.shareSubnav.querySelectorAll('.pf-subnav-btn').forEach((b) => {
+    b.addEventListener('click', () => {
+      _sharePane = b.getAttribute('data-sharepane') || 'shareqr';
+      el.shareSubnav.querySelectorAll('.pf-subnav-btn').forEach((x) => x.classList.toggle('is-active', x === b));
+      if (el.shareQrView) el.shareQrView.hidden = _sharePane !== 'shareqr';
+      if (el.pageGenView) el.pageGenView.hidden = _sharePane !== 'pagegen';
+      if (_sharePane === 'shareqr') sqrRenderLimits();
+    });
+  });
   // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换
   const ucSwitchSub = (which) => {
     const fmt = which === 'format';
@@ -9963,8 +9974,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       if (el.tabSubtitle) el.tabSubtitle.hidden = false;
       if (el.tabProfile) el.tabProfile.hidden = false;
       if (el.tabMember) el.tabMember.hidden = false;
-      if (el.tabShareQr) el.tabShareQr.hidden = false;
-      if (el.tabPageGen) el.tabPageGen.hidden = false;
+      if (el.tabShare) el.tabShare.hidden = false;
       el.tabs.hidden = false; // 导航栏始终显示
       // 默认视图：始终停在下载（支持 #view=xxx 直达指定视图，如 #view=subtitle）
       // 启动竞态保护（2026-09-30）：若用户/深链在节点信息返回前已选中非默认视图，

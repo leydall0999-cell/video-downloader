@@ -20,18 +20,28 @@ const indexHtml = readFileSync(join(repoRoot, 'web', 'index.html'), 'utf8');
 const appJs = readFileSync(join(repoRoot, 'web', 'app.js'), 'utf8');
 const stylesCss = readFileSync(join(repoRoot, 'web', 'styles.css'), 'utf8');
 
-// ---- ① 页面本体与导航 ----
-for (const id of ['shareQrView', 'pageGenView', 'tabShareQr', 'tabPageGen']) {
+// ---- ① 页面本体与导航（合并视图：一个「分享」tab + 内部子页签）----
+for (const id of ['shareView', 'shareQrView', 'pageGenView', 'tabShare', 'shareSubnav']) {
   assert.ok(indexHtml.includes(`id="${id}"`), `缺少 #${id}`);
 }
-const iSqr = indexHtml.indexOf('id="tabShareQr"');
-const iPg = indexHtml.indexOf('id="tabPageGen"');
+assert.ok(!indexHtml.includes('id="tabShareQr"') && !indexHtml.includes('id="tabPageGen"'),
+  '旧的两个独立 tab 必须删除（已合并为 #tabShare + 子页签）');
+const iSqr = indexHtml.indexOf('data-sharepane="shareqr"');
+const iPg = indexHtml.indexOf('data-sharepane="pagegen"');
 const iImgConv = indexHtml.indexOf('id="tabImageConvert"');
 const iSub = indexHtml.indexOf('id="tabSubtitle"');
-assert.ok(iImgConv < iSqr && iSqr < iPg && iPg < iSub, '两个分享 tab 应排在「图片转换」与「AI 字幕」之间');
+assert.ok(iImgConv < indexHtml.indexOf('id="tabShare"') && indexHtml.indexOf('id="tabShare"') < iSub,
+  '「分享」tab 应排在「图片转换」与「AI 字幕」之间');
+assert.ok(iSqr >= 0 && iPg > iSqr, '子页签必须是 生成二维码 在前、生成网页 在后');
 assert.ok(indexHtml.includes('id="sqrFileInput"') && indexHtml.includes('id="pgFileInput" multiple'),
   '两视图都要有文件选择 input（生成网页必须 multiple）');
 assert.ok(indexHtml.includes('id="sqrExpire"'), '生成二维码必须可选有效期');
+assert.ok(indexHtml.includes('id="pgExpire"'), '生成网页（在线链接）必须可选有效期');
+// 子页签必须复用 pf-subnav（并排胶囊，参考用户截图）；标题用渐变竖条 guide-title
+assert.ok(/<nav class="pf-subnav" id="shareSubnav"/.test(indexHtml), '子页签必须复用 pf-subnav 并排样式');
+for (const [id, cls] of [['sqrTitle', 'guide-title'], ['pgTitle', 'guide-title']]) {
+  assert.ok(new RegExp(`id="${id}" class="${cls}"`).test(indexHtml), `#${id} 必须用渐变竖条 guide-title 标题样式`);
+}
 
 // ---- ② vendor 二维码库：本地自托管 + 已加载 ----
 const vendorPath = join(repoRoot, 'web', 'js', 'vendor_qrcode.min.js');
@@ -43,24 +53,40 @@ assert.ok(!/qss\.io|api\.qrserver|google.*chart.*qr|qrserver\.com/i.test(appJs +
   '不许外链二维码生成服务（隐私 + 离线）');
 assert.ok(/window\.qrcode/.test(appJs), '二维码必须用本地 vendor 库生成');
 
-// ---- ③ 三处接线 ----
-assert.ok(appJs.includes("tabShareQr: $('tabShareQr')") && appJs.includes("shareQrView: $('shareQrView')"),
-  'el 表缺少 shareqr 引用');
-assert.ok(appJs.includes("tabPageGen: $('tabPageGen')") && appJs.includes("pageGenView: $('pageGenView')"),
-  'el 表缺少 pagegen 引用');
+// ---- ③ 三处接线（合并视图版）----
+assert.ok(appJs.includes("tabShare: $('tabShare')") && appJs.includes("shareSubnav: $('shareSubnav')"),
+  'el 表缺少合并视图引用');
+assert.ok(appJs.includes("shareQrView: $('shareQrView')") && appJs.includes("pageGenView: $('pageGenView')"),
+  'el 表缺少两个子面板引用');
+assert.ok(!appJs.includes("$('tabShareQr')") && !appJs.includes("$('tabPageGen')"),
+  'el 表残留已删除的旧 tab 引用');
 const svStart = appJs.indexOf('function switchView(view) {');
 const svEnd = appJs.indexOf('else stopTorPoll();', svStart);
 const sv = appJs.slice(svStart, svEnd);
-assert.ok(/const isSqr = view === 'shareqr'/.test(sv) && /const isPgen = view === 'pagegen'/.test(sv),
-  'switchView 缺少 isSqr/isPgen 分支');
-assert.ok(/\|\| isSqr \|\| isPgen/.test(sv), 'isSqr/isPgen 必须并入 isAnyExtra（否则与下载视图同屏叠加）');
-assert.ok(/el\.shareQrView\.hidden = !isSqr/.test(sv) && /el\.pageGenView\.hidden = !isPgen/.test(sv),
-  'switchView 未切换两视图显隐');
-assert.ok(/el\.tabShareQr\.classList\.toggle\('is-active', isSqr\)/.test(sv), '未切换生成二维码 tab 高亮');
-assert.ok(/el\.tabPageGen\.classList\.toggle\('is-active', isPgen\)/.test(sv), '未切换生成网页 tab 高亮');
-assert.ok(/if \(el\.tabShareQr\) el\.tabShareQr\.addEventListener\('click', \(\) => switchView\('shareqr'\)\)/.test(appJs) &&
-  /if \(el\.tabPageGen\) el\.tabPageGen\.addEventListener\('click', \(\) => switchView\('pagegen'\)\)/.test(appJs),
-  '两个 tab 未绑定 switchView');
+assert.ok(/const isShare = view === 'share'/.test(sv), 'switchView 缺少 isShare 分支');
+assert.ok(!/view === 'shareqr'/.test(sv) && !/view === 'pagegen'/.test(sv),
+  'switchView 不再接受 shareqr/pagegen 独立视图');
+assert.ok(/\|\| isShare/.test(sv), 'isShare 必须并入 isAnyExtra（否则与下载视图同屏叠加）');
+assert.ok(/el\.shareView\.hidden = !isShare/.test(sv), 'switchView 未切换分享视图显隐');
+assert.ok(/el\.shareQrView\.hidden = !\(isShare && _sharePane === 'shareqr'\)/.test(sv) &&
+  /el\.pageGenView\.hidden = !\(isShare && _sharePane === 'pagegen'\)/.test(sv),
+  '子面板显隐必须由 isShare + _sharePane 共同决定');
+assert.ok(/el\.tabShare\.classList\.toggle\('is-active', isShare\)/.test(sv), '未切换分享 tab 高亮');
+assert.ok(/if \(el\.tabShare\) el\.tabShare\.addEventListener\('click', \(\) => switchView\('share'\)\)/.test(appJs),
+  '分享 tab 未绑定 switchView');
+// 子页签点击：必须更新 _sharePane + 同步两面板显隐 + 高亮
+const subStart = appJs.indexOf("if (el.shareSubnav) el.shareSubnav.querySelectorAll('.pf-subnav-btn')");
+assert.ok(subStart > 0, '缺少子页签点击绑定');
+const subBlock = appJs.slice(subStart, subStart + 700);
+assert.ok(/_sharePane = b\.getAttribute\('data-sharepane'\)/.test(subBlock), '子页签点击必须更新 _sharePane');
+assert.ok(/shareQrView\.hidden = _sharePane !== 'shareqr'/.test(subBlock) &&
+  /pageGenView\.hidden = _sharePane !== 'pagegen'/.test(subBlock), '子页签点击必须同步两面板显隐');
+assert.ok(/classList\.toggle\('is-active', x === b\)/.test(subBlock), '子页签点击必须更新高亮');
+// 生成网页转在线链接必须使用用户选的有效期
+const pgLinkStart = appJs.indexOf('const pgToLink = async () => {');
+const pgLinkBlock = appJs.slice(pgLinkStart, appJs.indexOf('const pgCopyUrl', pgLinkStart));
+assert.ok(/parseInt\(el\.pgExpire && el\.pgExpire\.value, 10\)/.test(pgLinkBlock),
+  '生成网页转在线链接必须读取 #pgExpire 有效期');
 
 // ---- ④ 登录门禁 + 凭据契约 ----
 const setStart = appJs.indexOf('const shareEnsureToken = async (say) => {');
@@ -116,9 +142,9 @@ for (const sel of ['.share-row {', '.share-qr-img {', '.share-meta {']) {
   assert.ok(stylesCss.includes(sel), `styles.css 缺少 ${sel}`);
 }
 
-// ---- ⑧ 更多功能页不许出现「仅桌面端」错标：新能力网页可用就要有真实入口 ----
-// （两功能已作为一等 tab 接入；此处钉住入口 id 不被改名）
-assert.ok(appJs.includes("switchView('shareqr')") && appJs.includes("switchView('pagegen')"),
-  '视图入口调用被改名');
+// ---- ⑧ 合并视图入口：nav data-view=share + 子页签切换调用不许被改名 ----
+assert.ok(appJs.includes("switchView('share')"), '分享视图入口调用被改名');
+assert.ok(!appJs.includes("switchView('shareqr')") && !appJs.includes("switchView('pagegen')"),
+  '旧独立视图入口调用必须清除');
 
 console.log('✅ 网页版分享两视图守卫通过：登录门禁/凭据契约/计数/受限上限/合成器红线/本地二维码');
