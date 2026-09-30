@@ -19,8 +19,13 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 # V1 方案三轨套餐 → 价格（元）。原 pay_server.PRICE_MAP 的本地真源。
+# ⚠️ 本表只是**兜底**：真实下单金额由注入的 plans_fn（membership.effective_pay_plans）
+#    决定，即「超管后台改价 → 下单金额跟随」。本表用于无注入时的独立单测。
 # grant 字段 = 会员引擎 activate() 接受的 code（与 plan_code 一致）。
 PAY_PLANS: dict[str, dict] = {
+    "download_1day":      {"price": 1.90,  "name": "下载会员·1天",   "grant": "download_1day"},
+    "download_3day":      {"price": 4.90,  "name": "下载会员·3天",   "grant": "download_3day"},
+    "download_7day":      {"price": 9.90,  "name": "下载会员·7天",   "grant": "download_7day"},
     "download_month":     {"price": 29.80, "name": "下载会员·月",    "grant": "download_month"},
     "download_half_year": {"price": 99.90, "name": "下载会员·半年",  "grant": "download_half_year"},
     "download_year":      {"price": 179.00, "name": "下载会员·年",    "grant": "download_year"},
@@ -175,15 +180,36 @@ class OrderStore:
 
 class PaymentService:
     def __init__(self, store: OrderStore, provider: PaymentProvider,
-                 plans: dict = PAY_PLANS) -> None:
+                 plans: dict = PAY_PLANS,
+                 plans_fn: Optional[Callable[[], dict]] = None) -> None:
         self.store = store
         self.provider = provider
-        self.plans = plans
+        self._default_plans = plans
+        self._plans_fn = plans_fn
+
+    @property
+    def plans(self) -> dict:
+        """生效套餐表：优先 plans_fn（会员引擎的覆盖层真源），异常回落静态表。
+
+        🔴 2026-09-30：下单金额此前只读硬编码 PAY_PLANS，超管在后台改的价格
+        不影响真实扣款。改由上层注入 plans_fn=membership.effective_pay_plans，
+        使「展示价 / 扣款价 / 发放天数」三者同源。
+        """
+        fn = self._plans_fn
+        if fn is not None:
+            try:
+                p = fn()
+                if isinstance(p, dict) and p:
+                    return p
+            except Exception:  # noqa: BLE001 —— 覆盖层损坏时绝不能拦死下单
+                pass
+        return self._default_plans
 
     def create(self, user_id: str, plan_code: str) -> dict:
-        if plan_code not in self.plans:
+        plans = self.plans            # 取一次，避免属性被重复求值
+        if plan_code not in plans:
             raise OrderError(f"未知套餐: {plan_code}")
-        plan = self.plans[plan_code]
+        plan = plans[plan_code]
         oid = f"{ORDER_PREFIX}{uuid.uuid4().hex[:16].upper()}"
         order = {
             "order_id": oid,

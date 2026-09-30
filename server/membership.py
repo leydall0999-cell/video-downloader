@@ -1,7 +1,7 @@
 """VDL 会员引擎（V1，照搬 DataTool.vip 三轨结构）。
 
 三轨：
-  1) download_member  下载会员（30/180/365 天订阅；含下载类权益配额表）
+  1) download_member  下载会员（1/3/7/30/180/365 天订阅；含下载类权益配额表）
   2) ai_member        AI 会员（月订阅 + 一次性积分池；自动捆绑下载会员权益）
   3) permanent_credits 永久积分包（纯按次计费，不与订阅绑定）
 
@@ -35,6 +35,9 @@ from typing import Any, Callable, Optional
 
 # download member: 时长（天）、折算锚点
 DOWNLOAD_PLANS: dict[str, dict[str, Any]] = {
+    "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "下载会员·1天",   "saving": 0.0},
+    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "下载会员·3天",   "saving": 0.0},
+    "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "下载会员·7天",   "saving": 0.0},
     "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "下载会员·月",    "saving": 0.0},
     "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "下载会员·180天", "saving": 0.44},
     "download_year":       {"price_cny": 179.00, "days": 365,  "label": "下载会员·年",    "saving": 0.50, "best": True},
@@ -112,12 +115,22 @@ _PLAN_OVERRIDE_LOCK = _threading.Lock()
 _PLAN_OVERRIDE_CACHE: Optional[tuple[int, dict[str, Any]]] = None
 
 
-def plan_override_path() -> Path:
+def _base_dir() -> Path:
+    """数据目录：VDL_DATA_DIR 优先（离线测试隔离，绝不写真实家目录）。
+
+    与 auth_store._base_dir() 保持同一语义（同目录、同覆盖位）——两处若分叉，
+    测试会把真实 plans.json / membership.json 写脏。
+    """
+    override = os.environ.get("VDL_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
     if sys.platform == "win32" and getattr(sys, "frozen", False):
-        base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
-    else:
-        base = Path.home() / ".video-downloader"
-    return base / "plans.json"
+        return Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
+    return Path.home() / ".video-downloader"
+
+
+def plan_override_path() -> Path:
+    return _base_dir() / "plans.json"
 
 
 def load_plan_overrides() -> dict[str, Any]:
@@ -148,6 +161,11 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
       { "download_plans": {...}, "ai_plans": {...}, "credit_packs": {...},
         "credit_costs": {...} }
     任意键可缺省；返回写盘后的完整覆盖 dict。失败抛 OSError。
+
+    合并语义（2026-09-30 对齐 app-dev 2026-09-24 修复）：四张表内部按
+    「套餐 code / 成本 key」逐条合并——载荷只更新它携带的条目，同表其余条目
+    原样保留（此前是整表替换，部分载荷会把未携带的套餐从覆盖层抹掉，
+    造成「改一个价、别的全丢」）。条目值为 null 视为删除该条目。
     """
     global _PLAN_OVERRIDE_CACHE
     with _PLAN_OVERRIDE_LOCK:
@@ -155,6 +173,15 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
         for k, v in (data or {}).items():
             if v is None:
                 existing.pop(k, None)
+                continue
+            if k in _SAVE_TABLE_KEYS and isinstance(v, dict) and isinstance(existing.get(k), dict):
+                merged = dict(existing[k])
+                for ik, iv in v.items():
+                    if iv is None:
+                        merged.pop(ik, None)
+                    else:
+                        merged[ik] = iv
+                existing[k] = merged
             else:
                 existing[k] = v
         p = plan_override_path()
@@ -168,6 +195,60 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
             pass
         _PLAN_OVERRIDE_CACHE = (p.stat().st_mtime_ns, existing)
         return existing
+
+
+_SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs")
+
+
+def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
+    """把覆盖表逐字段叠加到代码默认套餐上：默认值打底，覆盖字段获胜。
+
+    覆盖表缺整个条目 → 用默认条目；条目里缺某字段（如 days/label）→ 落回默认值。
+    只存在于覆盖层的条目原样保留（超管可新增档位）。**顺序保持默认表顺序**，
+    新见键追加在末尾，避免后台改价把前端卡片顺序打乱。
+    """
+    if not isinstance(override, dict) or not override:
+        return dict(defaults)
+    out: dict[str, Any] = {k: dict(v) if isinstance(v, dict) else v for k, v in defaults.items()}
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            merged = dict(out[k])
+            merged.update(v)
+            out[k] = merged
+        else:
+            out[k] = v
+    return out
+
+
+def effective_plans() -> dict[str, dict[str, Any]]:
+    """生效套餐表（覆盖层逐字段叠加 → 代码常量）。展示 / 下单 / 发放共用此真源。"""
+    ov = load_plan_overrides()
+    return {
+        "download_plans": _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")),
+        "ai_plans": _overlay_plans(AI_PLANS, ov.get("ai_plans")),
+        "credit_packs": _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")),
+    }
+
+
+def effective_pay_plans() -> dict[str, dict[str, Any]]:
+    """下单用套餐表：{code: {price, name, grant}}，与 payment_core.PAY_PLANS 同构。
+
+    🔴 价格单一真源（2026-09-30）：支付内核若继续读 payment_core 的硬编码
+    PAY_PLANS，超管在后台改的价格**不会影响真实扣款金额**。故改由本函数按
+    「覆盖层 → 代码常量」实时产出，注入 PaymentService。
+    """
+    eff = effective_plans()
+    out: dict[str, dict[str, Any]] = {}
+    for code, p in eff["download_plans"].items():
+        out[code] = {"price": float(p.get("price_cny") or 0),
+                     "name": p.get("label") or code, "grant": code}
+    for code, p in eff["ai_plans"].items():
+        out[code] = {"price": float(p.get("price_cny") or 0),
+                     "name": p.get("label") or code, "grant": code}
+    for code, p in eff["credit_packs"].items():
+        out[code] = {"price": float(p.get("price_cny") or 0),
+                     "name": p.get("label") or code, "grant": code}
+    return out
 
 
 def credit_cost(op: str, sub: str | None = None) -> int:
@@ -224,12 +305,11 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
 
 
 def default_state_path() -> Path:
-    """状态文件默认路径 ~/.video-downloader/membership.json（frozen 兼容）。"""
-    if sys.platform == "win32" and getattr(sys, "frozen", False):
-        base = Path(os.environ.get("APPDATA", Path.home())) / "VideoDownloader"
-    else:
-        base = Path.home() / ".video-downloader"
-    return base / "membership.json"
+    """状态文件默认路径 ~/.video-downloader/membership.json（frozen 兼容）。
+
+    同样受 VDL_DATA_DIR 覆盖（见 _base_dir），保证测试不写真实家目录。
+    """
+    return _base_dir() / "membership.json"
 
 
 def _empty_state() -> dict[str, Any]:
@@ -534,12 +614,12 @@ class MembershipStore:
     def plans(self) -> dict[str, Any]:
         """套餐表（价格/时长/权益），供前端购买中心展示。
 
-        优先级：plans.json 覆盖层（整段替换三张套餐表）→ 代码常量默认值。
+        优先级：plans.json 覆盖层（逐字段叠加）→ 代码常量默认值。
+        合并语义（2026-09-30 对齐 app-dev 2026-09-24 修复）：覆盖层缺整个条目
+        → 用默认条目（这样新增档位不会被旧覆盖层「盖掉」）。
         """
-        ov = load_plan_overrides()
-        dl = ov.get("download_plans", DOWNLOAD_PLANS)
-        ai = ov.get("ai_plans", AI_PLANS)
-        cp = ov.get("credit_packs", CREDIT_PACKS)
+        eff = effective_plans()
+        dl, ai, cp = eff["download_plans"], eff["ai_plans"], eff["credit_packs"]
         return {
             "download_member": {
                 "plans": dl,
@@ -569,14 +649,20 @@ class MembershipStore:
         st = self._state
         result: dict[str, Any] = {"ok": True, "code": code, "via": via}
 
-        if code in DOWNLOAD_PLANS:
-            info = DOWNLOAD_PLANS[code]
+        # 🔴 一律走生效套餐表（覆盖层 → 代码常量）：此前直接用模块常量，
+        #    超管在后台把某档天数从 7 改成 5，发放时仍按 7 天算。
+        _eff = effective_plans()
+        _dl_plans, _ai_plans, _credit_packs = (
+            _eff["download_plans"], _eff["ai_plans"], _eff["credit_packs"])
+
+        if code in _dl_plans:
+            info = _dl_plans[code]
             cur = float(st["download_member"].get("expire_at", 0) or 0)
-            new_exp = max(now, cur) + info["days"] * 86400
+            new_exp = max(now, cur) + int(info.get("days") or 0) * 86400
             st["download_member"].update({"active": True, "plan": code, "expire_at": new_exp})
             result.update({"kind": "download_member", "expire_at": new_exp})
-        elif code in AI_PLANS:
-            info = AI_PLANS[code]
+        elif code in _ai_plans:
+            info = _ai_plans[code]
             cur = float(st["ai_member"].get("expire_at", 0) or 0)
             new_exp = max(now, cur) + info["days"] * 86400
             # AI 会员按功能赠送额度：续费时不足上限则补齐，不浪费已用剩余
@@ -595,9 +681,9 @@ class MembershipStore:
                 st["download_member"]["expire_at"] = new_exp
             result.update({"kind": "ai_member", "expire_at": new_exp,
                            "credits_granted": int(info["credits"])})
-        elif code in CREDIT_PACKS:
-            info = CREDIT_PACKS[code]
-            amt = int(info["credits"])
+        elif code in _credit_packs:
+            info = _credit_packs[code]
+            amt = int(info.get("credits") or 0)
             st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + amt
             st["permanent_credits"].setdefault("packs", []).append({
                 "pack": code, "amount": amt, "bought_at": now,

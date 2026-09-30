@@ -769,6 +769,14 @@
             </div>
 
             <div class="pf-card pf-card-wide">
+              <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">💎</span><span class="pf-card-t">开通 / 续费下载会员</span></div>
+              <div class="pf-card-c">
+                <div class="pf-plans" id="pfPlans"><p class="pf-plan-empty">加载中…</p></div>
+                <p class="pf-plan-note" id="pfPlanNote"></p>
+              </div>
+            </div>
+
+            <div class="pf-card pf-card-wide">
               <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">🎟</span><span class="pf-card-t">激活码 / 卡密</span></div>
               <div class="pf-card-c">
                 <label class="pf-field">
@@ -785,6 +793,23 @@
             <div class="pf-ov-foot">注册时间：<span id="pfCreated">—</span></div>
           </div>
         </div>
+
+        <!-- 支付二维码弹窗（网页版充值，2026-09-30） -->
+        <dialog id="payModal" class="modal" aria-labelledby="payModalTitle">
+          <div class="modal-card pay-card">
+            <div class="modal-head">
+              <h2 id="payModalTitle">扫码支付开通会员</h2>
+              <button type="button" class="modal-close" id="payModalClose" aria-label="关闭">✕</button>
+            </div>
+            <div class="pay-body">
+              <div class="pay-amt" id="payAmount">¥--</div>
+              <div class="pay-plan" id="payPlanName">—</div>
+              <img class="pay-qr" id="payQr" src="" alt="支付宝支付二维码" />
+              <div class="pay-tip">请使用支付宝扫码付款，支付成功后权益自动到账</div>
+              <div class="pay-status" id="payStatus" aria-live="polite">等待支付…</div>
+            </div>
+          </div>
+        </dialog>
 
         <!-- ② 购买记录 -->
         <div class="pf-panel" id="pfPanelPurchases" hidden>

@@ -430,6 +430,10 @@
     pfCreditsLog: $('pfCreditsLog'),
     pfLogoutBtn: $('pfLogoutBtn'),
     pfActivateCode: $('pfActivateCode'), pfActivateBtn: $('pfActivateBtn'), pfMemberStatus: $('pfMemberStatus'),
+    // 网页版充值（2026-09-30）：套餐卡 + 支付二维码弹窗
+    pfPlans: $('pfPlans'), pfPlanNote: $('pfPlanNote'),
+    payModal: $('payModal'), payModalClose: $('payModalClose'), payAmount: $('payAmount'),
+    payPlanName: $('payPlanName'), payQr: $('payQr'), payStatus: $('payStatus'),
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
     authModal: $('authModal'), authModalTitle: $('authModalTitle'), authModalHint: $('authModalHint'),
@@ -7265,7 +7269,89 @@
     try { pfRenderUsage(prof && prof.usage_features, (prof && prof.usage_period) || _pfUsagePeriod || 'today'); } catch (e) { console.error('[profile] usage render failed', e); }
     try { pfRenderPurchases(); } catch (e) { console.error('[profile] purchases render failed', e); }
     try { pfRenderCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
+    try { pfRenderPlans(); } catch (e) { console.error('[profile] plans render failed', e); }
   };
+
+  // —— 开通 / 续费会员（网页版充值入口，2026-09-30）——
+  // 数据源 /api/member/plans：后端按「plans.json 覆盖层 → 代码常量」产出，
+  // 超管在后台改价后本页刷新即反映，前端不存任何价格。
+  const pfRenderPlans = async () => {
+    if (!el.pfPlans) return;
+    let p = null;
+    try { p = await request('/api/member/plans'); } catch (_e) { /* 后端不可用时静默 */ }
+    const plans = (p && p.download_member && p.download_member.plans) || {};
+    const codes = Object.keys(plans);
+    if (!codes.length) {
+      el.pfPlans.innerHTML = '<p class="pf-plan-empty">套餐加载失败，请稍后重试</p>';
+      return;
+    }
+    el.pfPlans.innerHTML = codes.map((code) => {
+      const pl = plans[code] || {};
+      const price = (Number(pl.price_cny) || 0).toFixed(2);
+      const meta = pl.days ? `${pl.days} 天权益` : '';
+      const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
+      const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
+      return `<div class="pf-plan${pl.best ? ' is-best' : ''}">
+        ${badge}
+        <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
+        <div class="pf-plan-price"><span>¥</span>${price}</div>
+        <div class="pf-plan-meta">${escHtml(meta)}</div>
+        ${save}
+        <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}">立即开通</button>
+      </div>`;
+    }).join('');
+    el.pfPlans.querySelectorAll('.pf-plan-buy').forEach((b) => {
+      b.addEventListener('click', () => pfBuy(b.getAttribute('data-code')));
+    });
+    if (el.pfPlanNote) {
+      el.pfPlanNote.textContent = '支付成功后权益自动到账，同一账号最多 2 台设备同时登录；会员到期自动失效。';
+    }
+  };
+
+  let _pfPayTimer = null;
+  const pfClosePayModal = () => {
+    if (_pfPayTimer) { clearInterval(_pfPayTimer); _pfPayTimer = null; }
+    if (el.payModal && el.payModal.open) el.payModal.close();
+  };
+  const pfBuy = async (code) => {
+    if (!code) return;
+    if (el.pfMemberStatus) el.pfMemberStatus.textContent = '正在生成支付二维码…';
+    let r = null;
+    try {
+      r = await request('/api/cloud/pay/create', {
+        method: 'POST', headers: pfAuthHeaders(), body: JSON.stringify({ plan_code: code }),
+      });
+    } catch (_e) {
+      if (el.pfMemberStatus) el.pfMemberStatus.textContent = '下单失败：网络错误';
+      return;
+    }
+    if (!r || !r.ok) {
+      if (el.pfMemberStatus) el.pfMemberStatus.textContent = '❌ ' + ((r && r.error) || '下单失败');
+      return;
+    }
+    if (el.pfMemberStatus) el.pfMemberStatus.textContent = '';
+    if (el.payAmount) el.payAmount.textContent = `¥${(Number(r.amount) || 0).toFixed(2)}`;
+    if (el.payPlanName) el.payPlanName.textContent = r.plan_name || code;
+    if (el.payQr) el.payQr.src = r.qr_png || '';
+    if (el.payStatus) el.payStatus.textContent = '等待支付…';
+    if (el.payModal && !el.payModal.open) el.payModal.showModal();
+    _pfPayTimer = setInterval(async () => {
+      try {
+        const q = await request('/api/cloud/pay/query', {
+          method: 'POST', headers: pfAuthHeaders(), body: JSON.stringify({ order_id: r.order_id }),
+        });
+        if (q && q.ok && q.status === 'PAID') {
+          pfClosePayModal();
+          if (el.pfMemberStatus) el.pfMemberStatus.textContent = '✅ 支付成功，会员已开通';
+          pfLoad();                       // 刷新会员状态 / 购买记录 / 积分
+        }
+      } catch (_e) { /* 轮询失败静默重试 */ }
+    }, 2500);
+  };
+  if (el.payModalClose) el.payModalClose.addEventListener('click', pfClosePayModal);
+  if (el.payModal) {
+    el.payModal.addEventListener('click', (e) => { if (e.target === el.payModal) pfClosePayModal(); });
+  }
 
   const pfLoad = async () => {
     if (!pfToken()) { pfRender(null, null, null); return; }

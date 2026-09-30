@@ -2084,3 +2084,30 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   .pf-card-grid { grid-template-columns: 1fr; }
   .pf-ov-actions { margin-left: 0; width: 100%; }
 }
+
+
+/* —— 网页版充值：套餐卡 + 支付弹窗（2026-09-30）—— */
+.pf-plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: .55rem; }
+.pf-plan {
+  display: flex; flex-direction: column; gap: .45rem; position: relative;
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: .7rem .75rem; background: var(--surface, #fff);
+}
+.pf-plan.is-best { border-color: var(--brand); background: rgba(79, 70, 229, .05); }
+.pf-plan-name { font-size: .84rem; font-weight: 600; padding-right: 3rem; }
+.pf-plan-price { font-size: 1.25rem; font-weight: 800; color: var(--brand); line-height: 1.1; }
+.pf-plan-price > span { font-size: .78rem; font-weight: 500; color: var(--text-mute); margin-right: 1px; }
+.pf-plan-meta { font-size: .72rem; color: var(--text-mute); }
+.pf-plan-badge {
+  position: absolute; top: .45rem; right: .45rem; font-size: .62rem;
+  padding: .1rem .4rem; border-radius: 999px; background: var(--brand); color: #fff;
+}
+.pf-plan-buy { margin-top: auto; }
+.pf-plan-empty { color: var(--text-mute); font-size: .84rem; margin: 0; }
+.pf-plan-note { color: var(--text-mute); font-size: .78rem; margin: .6rem 0 0; }
+.pay-body { text-align: center; padding: .5rem 0 .2rem; }
+.pay-amt { font-size: 1.6rem; font-weight: 800; color: var(--brand); line-height: 1.2; }
+.pay-plan { font-size: .82rem; color: var(--text-mute); margin-bottom: .6rem; }
+.pay-qr { width: 190px; height: 190px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
+.pay-tip { font-size: .78rem; color: var(--text-mute); margin-top: .55rem; }
+.pay-status { font-size: .82rem; margin-top: .35rem; }
