@@ -66,7 +66,7 @@
 
   <section class="hero">
     <h1>粘贴链接，直接保存视频</h1>
-    <p>支持 YouTube、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
+    <p>支持 YouTube、TikTok、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
     <p class="hero-note">💡 网页版受网络环境限制，部分站点的解析能力受限，请前往桌面端体验更强大的功能。</p>
   </section>
 
@@ -143,23 +143,7 @@
       </div>
     </form>
 
-    <!-- LLM 服务商选择器：统一配置解说与翻译所需的 Key / 提供商 / 模型 -->
-    <details class="adv" id="llmSettings">
-      <summary class="adv-summary">LLM 设置（解说 & 翻译共用）</summary>
-      <div class="adv-body">
-        <label class="adv-label" for="llmProvider">服务商</label>
-        <select id="llmProvider" class="adv-input"></select>
-        <label class="adv-label" for="llmApiKey">API Key</label>
-        <input id="llmApiKey" class="adv-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-        <label class="adv-label" for="llmBaseUrl">Base URL（自定义时填写）</label>
-        <input id="llmBaseUrl" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
-        <label class="adv-label" for="llmModel">模型</label>
-        <input id="llmModel" class="adv-input" type="text" placeholder="自动从服务商获取" autocomplete="off" spellcheck="false" />
-        <p class="adv-note">Key 仅保存在本机 ~/.video-downloader/llm_config.json（0600 权限）。解说和翻译共用此配置，无需重复填写。</p>
-        <button type="button" class="btn btn-primary btn-sm" id="llmSave">保存</button>
-        <span id="llmStatus" class="sub-status" hidden></span>
-      </div>
-    </details>
+    <!-- （网页版不挂 commentary 路由，LLM 设置（解说 & 翻译）是死界面，2026-10-01 移除；桌面端独立 index.html 不受影响） -->
 
     <!-- 批量下载面板：一次粘贴多个链接，统一排队并发下载 -->
     <div class="batch-box" id="batchBox" hidden>
@@ -735,7 +719,7 @@
     <h2 id="pgTitle" class="guide-title">生成网页</h2>
     <p class="uc-tip">把多个文件（图片 / PDF / 音视频 / 文本）合并成<b>一个自包含的网页</b>：
       内容全部内嵌，把 .html 发给对方双击就能看；也可一键转成在线链接 + 二维码。
-      网页版限额：合计 ≤ <b id="pgLimitText">60MB</b>（合成在你电脑的浏览器里完成，不占服务器）。</p>
+      网页版限额：合计 ≤ <b id="pgLimitText">60MB</b>。</p>
     <div class="uc-toolbar">
       <button type="button" class="btn btn-primary" id="pgPickBtn">添加文件</button>
       <input type="file" id="pgFileInput" multiple hidden />
