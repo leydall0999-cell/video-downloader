@@ -81,6 +81,31 @@ def main():
     check("链接成功后用分享节点出二维码",
           "pageQrImg.src = '/api/share/qr?text='" in app_js)
 
+    print("\n[E] 分享链接必须固定落在规范源（隔离主域登录态）")
+    # 2026-09-30：分享页迁到 share.hanyuxz.top（独立源）。若 public_url 又回到"从哪个域名
+    # 进来就回哪个域名"，App（DEFAULT_BASE=hanyuxz.top）产出的链接会落在**主域**，
+    # 上传的 HTML 就在与网页版登录态同源的源上渲染 —— 隔离白做，且不报错、难发现。
+    m = re.search(r"def public_url\(self, sid: str\) -> str:([\s\S]*?)\n    def ", node_srv)
+    body = m.group(1) if m else ""
+    check("public_url 可定位", bool(body))
+    if body:
+        i_pub = body.find("if PUBLIC_BASE:")
+        i_host = body.find("_is_public_host(host)")
+        check("PUBLIC_BASE 分支存在且在 Host 分支之前",
+              i_pub != -1 and i_host != -1 and i_pub < i_host,
+              f"PUBLIC_BASE@{i_pub} host@{i_host}")
+        check("PUBLIC_BASE 分支返回 /s/<sid>",
+              'return "%s/s/%s" % (PUBLIC_BASE, sid)' in body)
+        check("未设 PUBLIC_BASE 时仍回退请求域名（本地单跑不坏）", i_host != -1)
+    check("仍从环境变量读 VDL_SHARE_PUBLIC_BASE",
+          'os.environ.get("VDL_SHARE_PUBLIC_BASE"' in node_srv)
+    unit = (REPO / "desktop" / "vps-share" / "vdl-share.service").read_text(encoding="utf-8")
+    check("部署单元把 PUBLIC_BASE 指向隔离子域（否则固定源是空的）",
+          "VDL_SHARE_PUBLIC_BASE=https://share.hanyuxz.top" in unit)
+    cf = REPO / "desktop" / "vps-share" / "cloudflared-config.yml"
+    check("隧道配置入库且含 share 子域 ingress",
+          cf.exists() and "hostname: share.hanyuxz.top" in cf.read_text(encoding="utf-8"))
+
     print("")
     print("=========================================")
     print(f"  通过: {PASS}   失败: {FAIL}")

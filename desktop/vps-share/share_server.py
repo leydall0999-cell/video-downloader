@@ -431,11 +431,17 @@ class Handler(BaseHTTPRequestHandler):
         return secrets.compare_digest(got, want)
 
     def public_url(self, sid: str) -> str:
-        """生成分享短链。优先级：请求域名（可信时）> PUBLIC_BASE > Host 兜底。
+        """生成分享短链。优先级：PUBLIC_BASE（规范公网源）> 可信请求域名 > Host 兜底。
 
-        域名优先让「正式域名」与「cloudflared 临时隧道域名」都能自动产出正确链接；
-        IP 直连上传通道的 Host 是裸 IP，会被 _is_public_host 挡掉并回退 PUBLIC_BASE。
+        2026-09-30 变更：分享页迁到独立源 share.hanyuxz.top 后，链接主机名必须**固定**为
+        该规范源，而不是"从哪个域名进来就回哪个域名"。否则从主域进来的上传（含 App 内置
+        DEFAULT_BASE=hanyuxz.top 的路径）会产出 hanyuxz.top/s/xxx，上传的 HTML 就在主域
+        渲染 —— 而主域正是网页版登录态(token 在 localStorage)所在的源，隔离会白做。
+        设了 PUBLIC_BASE 即以此为准；未设（本地单跑节点）时行为与旧版一致。
+        IP 直连上传通道的 Host 是裸 IP，本就走 PUBLIC_BASE，行为不变。
         """
+        if PUBLIC_BASE:
+            return "%s/s/%s" % (PUBLIC_BASE, sid)
         host = (self.headers.get("Host") or "").split(":")[0].strip()
         if _is_public_host(host):
             # 公网入口对外一律 https：正式域名走 CF 橙云（强制 https），临时隧道本身就是 https。
@@ -443,8 +449,6 @@ class Handler(BaseHTTPRequestHandler):
             #    它反映的是「nginx→上游」的协议而非客户端协议。2026-09-20 实测踩过：
             #    读它会生成 http://<隧道域名>/s/xxx，而隧道强制 https，链接直接不可用。
             return "https://%s/s/%s" % (host, sid)
-        if PUBLIC_BASE:
-            return "%s/s/%s" % (PUBLIC_BASE, sid)
         if host:
             return "http://%s/s/%s" % (host, sid)
         return "/s/%s" % sid

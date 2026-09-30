@@ -1,0 +1,51 @@
+# ECS 命名隧道（vdl-ecs）生产配置 —— 与线上 /etc/cloudflared/config.yml 保持一致
+#
+# 用途：hanyuxz.top 已从「橙云回源香港机」换成「CF 命名隧道 → 国内 ECS 本机 nginx:8888」。
+# 记录方式：改完线上配置后，把同一份内容同步到本文件，避免「线上跑了什么只有机器知道」。
+#
+# 服务：systemd `vdl-tunnel`（active/enabled）
+#   ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+#   ⚠️ 同机还有 `cloudflared-vdl.service` / `cf-quick-tunnel.service`（均已 inactive/disabled），
+#      别重启错服务 —— 生效的是 `vdl-tunnel`。
+# 隧道 ID：e2e0b19e-b40c-46ad-a5b0-f242ce3682dc
+# 凭据：/root/.cloudflared/<tunnel-id>.json + cert.pem；CF API 凭据在 /root/.cloudflared/api.env
+#   （CF_API_TOKEN / CF_ZONE_ID / CF_ACCOUNT_ID —— 建 DNS 记录用它，不需要登 Dashboard）
+#
+# DNS（CF 橙云，proxied=true）：
+#   hanyuxz.top             → e2e0b19e….cfargotunnel.com
+#   vdl-check.hanyuxz.top   → 同上（验证入口）
+#   pay.hanyuxz.top         → 同上（支付宝回源，ECS 公网 80/443 未放行）
+#   share.hanyuxz.top       → 同上（2026-09-30 新增：分享页独立源，与网页版隔离）
+
+tunnel: e2e0b19e-b40c-46ad-a5b0-f242ce3682dc
+credentials-file: /root/.cloudflared/e2e0b19e-b40c-46ad-a5b0-f242ce3682dc.json
+metrics: 127.0.0.1:20291
+no-autoupdate: true
+
+ingress:
+  # 生产入口：App 的授权中心 / 网页版 / 分享，全部由 ECS 本机 nginx:8888 按路径分流
+  - hostname: hanyuxz.top
+    service: http://127.0.0.1:8888
+    originRequest:
+      httpHostHeader: hanyuxz.top
+      connectTimeout: 30s
+  # 验证入口（先拿它端到端验通，再切生产记录）
+  - hostname: vdl-check.hanyuxz.top
+    service: http://127.0.0.1:8888
+    originRequest:
+      httpHostHeader: vdl-check.hanyuxz.top
+      connectTimeout: 30s
+  # 支付宝支付入口（2026-09-26 启用）：ECS 公网 80/443 未放行，必须经隧道回源
+  - hostname: pay.hanyuxz.top
+    service: http://127.0.0.1:8888
+    originRequest:
+      httpHostHeader: pay.hanyuxz.top
+      connectTimeout: 30s
+  # 分享页独立源（2026-09-30）：把用户上传的 HTML/媒体放到与网页版不同的源，
+  # 避免上传内容与网页版登录态同源（localStorage/Cookie 隔离）。
+  - hostname: share.hanyuxz.top
+    service: http://127.0.0.1:8888
+    originRequest:
+      httpHostHeader: share.hanyuxz.top
+      connectTimeout: 30s
+  - service: http_status:404
