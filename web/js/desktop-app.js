@@ -368,6 +368,18 @@
 
     // 包内扩展版本（缓存）：与扩展心跳自报版本比对 → 决定更新横幅
     let _extPkgVer = '';
+    // 版本比较：仅当 a 严格新于 b 才返回 true；任一侧缺失/非法一律 false。
+    // —— 只在「App 内置扩展比已装的更新」时提示升级，否则会把用户的新版覆盖成旧版。
+    const cmpExtVer = (a, b) => {
+      const pa = String(a || '').split('.').map((n) => parseInt(n, 10));
+      const pb = String(b || '').split('.').map((n) => parseInt(n, 10));
+      if (!pa.length || !pb.length || pa.some(isNaN) || pb.some(isNaN)) return false;
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const x = pa[i] || 0, y = pb[i] || 0;
+        if (x !== y) return x > y;
+      }
+      return false;
+    };
     const getExtPkgVer = async () => {
       if (_extPkgVer) return _extPkgVer;
       try {
@@ -445,6 +457,15 @@
               : '');
           getExtPkgVer().then((pkgVer) => {
             if (pkgVer === '?' || pkgVer === installed) return; // 拿不到版本不误报
+            if (!cmpExtVer(pkgVer, installed)) {
+              // App 内置版本不高于已装版本 → 绝不提示「更新」（否则是降级）。
+              // 若恰好是「已装的比内置的新」（App 尚未跟进更新），明说无需操作，免得用户困惑。
+              if (installed && cmpExtVer(installed, pkgVer)) {
+                extBanner.innerHTML += '<span style="display:block;margin-top:2px;color:#2e7d32;">' +
+                  '（你的扩展 v' + escHtml(installed) + ' 比 App 内置的 v' + escHtml(pkgVer) + ' 更新，无需操作）</span>';
+              }
+              return;
+            }
             extBanner.className = 'vdl-sniff-extbanner warn';
             extBanner.innerHTML =
               '⚠ 扩展有新版本（已装 v' + escHtml(installed || '旧版') + ' → 最新 v' + escHtml(pkgVer) + '）。' +
