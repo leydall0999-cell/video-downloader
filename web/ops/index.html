@@ -68,6 +68,19 @@
     <div class="recent"><table id="evtList"><tbody></tbody></table></div>
     <small class="note">数据来源：服务端结构化事件日志（前端 JS 报错 + 未捕获异常）。</small>
   </section>
+  <section class="panel">
+    <h2><span class="dot"></span>网页转化（站内事件）</h2>
+    <div class="stats" id="wsStats"><div class="empty">输入密钥后加载</div></div>
+    <div class="recent">
+      <table>
+        <thead><tr><th>日期</th><th>PV</th><th>UV</th><th>解析成功</th><th>解析失败</th><th>下载完成</th><th>会员点击</th></tr></thead>
+        <tbody id="wsDaysBody"></tbody>
+      </table>
+    </div>
+    <h3 style="font-size:13px;color:var(--muted);margin:12px 0 6px">外链来源 Top</h3>
+    <table><tbody id="wsRefsBody"></tbody></table>
+    <small class="note">数据来源：服务端 web_stats.json（前端埋点）。与左侧 nginx 口径互补——这里只统计真实页面访问与站内转化，且<b>不落 IP 明文</b>；UV 为按天独立去重之和，口径＝人次。</small>
+  </section>
 </div>
 <div id="toast"></div>
 <script>
@@ -90,6 +103,7 @@ async function load(){
     ]);
     renderVisits(v);
     renderEvents(e);
+    loadWebStats(key);   // 独立加载：失败只影响该面板，不牵连上面两块
     toast('已刷新');
   } catch(err){
     toast('加载失败：' + err.message + '（密钥错误？）', true);
@@ -109,6 +123,38 @@ function renderEvents(e){
   const evs = (e.events||[]).slice().reverse();
   $('evtStats').innerHTML = `<div class="stat"><b>${evs.length}</b><span>事件数</span></div>`;
   $('evtList').innerHTML = evs.length ? evs.map(r=>`<tr><td>${esc((r.ts?new Date(r.ts*1000).toLocaleString():''))}</td><td>${esc(r.level)}</td><td>${esc(r.type)}</td><td class="path" title="${esc(r.message)}">${esc(r.message)}</td><td class="ip">${esc((r.extra&&r.extra.url)||'')}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">暂无事件</td></tr>';
+}
+async function loadWebStats(key){
+  try {
+    const r = await fetch('/api/webstats/summary?days=7', {headers:{'X-Admin-Key':key}});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const w = await r.json();
+    const t = w.totals || {};
+    $('wsStats').innerHTML =
+      `<div class="stat"><b>${t.pv||0}</b><span>PV</span></div>`+
+      `<div class="stat"><b>${t.uv||0}</b><span>UV（人次）</span></div>`+
+      `<div class="stat"><b>${t.resolve_ok||0}</b><span>解析成功</span></div>`+
+      `<div class="stat"><b>${t.resolve_fail||0}</b><span>解析失败</span></div>`+
+      `<div class="stat"><b>${t.download_done||0}</b><span>下载完成</span></div>`+
+      `<div class="stat"><b>${t.member_click||0}</b><span>会员点击</span></div>`+
+      `<div class="stat"><b>${t.desktop_click||0}</b><span>桌面端点击</span></div>`;
+    const days = (w.days||[]).slice().reverse();
+    $('wsDaysBody').innerHTML = days.map((d)=>{
+      const e = d.events||{};
+      return `<tr><td>${esc(d.date)}</td><td>${d.pv}</td><td>${d.uv}</td>`+
+        `<td>${e.resolve_ok||0}</td><td>${e.resolve_fail||0}</td>`+
+        `<td>${e.download_done||0}</td><td>${e.member_click||0}</td></tr>`;
+    }).join('') || '<tr><td colspan="7" class="empty">无</td></tr>';
+    const refs = {};
+    (w.days||[]).forEach((d)=>{ (d.top_refs||[]).forEach((x)=>{ refs[x[0]] = (refs[x[0]]||0) + x[1]; }); });
+    const arr = Object.entries(refs).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    $('wsRefsBody').innerHTML = arr.map(([h,n])=>`<tr><td class="path">${esc(h)}</td><td>${n}</td></tr>`).join('')
+      || '<tr><td colspan="2" class="empty">无</td></tr>';
+  } catch(err){
+    $('wsStats').innerHTML = `<div class="err">加载失败：${esc(err.message)}（该接口需运维密钥或超管身份）</div>`;
+    $('wsDaysBody').innerHTML = '<tr><td colspan="7" class="empty">无</td></tr>';
+    $('wsRefsBody').innerHTML = '<tr><td colspan="2" class="empty">无</td></tr>';
+  }
 }
 $('load').onclick = load;
 $('clear').onclick = ()=>{ setKey(''); $('key').value=''; toast('已清除本地密钥'); };

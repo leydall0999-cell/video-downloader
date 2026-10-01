@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
@@ -86,8 +87,23 @@ def track(payload: dict = Body(default=None), request: Request = None) -> dict:
         return {"ok": False, "dropped": "error"}
 
 
+def _require_viewer(request: Request = None) -> None:
+    """查看权限：运维密钥（X-Admin-Key，环境变量 VDL_ADMIN_KEY）**或**超管用户 token，任一通过。
+
+    与 /api/admin/visits 共用同一套运维密钥，这样运维控制台一个页面就能同时看到
+    nginx 口径（总请求 / 独立 IP）和站内转化口径（PV → 解析成功 → 下载完成 → 会员点击）。
+    未配置 VDL_ADMIN_KEY 时该分支永不放行，只能走超管鉴权——不会误暴露。
+    """
+    admin_key = (os.environ.get("VDL_ADMIN_KEY") or "").strip()
+    if admin_key:
+        key = (request.headers.get("X-Admin-Key") or "").strip() if request is not None else ""
+        if key and key == admin_key:
+            return
+    require_admin(request)
+
+
 @router.get("/api/webstats/summary")
 def summary(days: int = Query(7, ge=1, le=90), request: Request = None) -> Any:
-    """最近 N 天网页访客汇总。仅超级用户可见。"""
-    require_admin(request)
+    """最近 N 天网页访客汇总。运维密钥或超管可见，不对公众开放。"""
+    _require_viewer(request)
     return web_stats.summary(days)
