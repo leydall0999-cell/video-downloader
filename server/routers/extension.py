@@ -233,9 +233,13 @@ def _resolve_load_dir(load_dir) -> str:
         det = extension_sync.detect_load_dir(_installed_version(), _expected_name())
         if not det.get("dir"):
             cands = [str(c.get("dir")) for c in (det.get("candidates") or [])]
+            reason = det.get("reason") or "not_found"
+            msg = ("没能在常见位置找到扩展目录，请手动选择"
+                   if reason in ("timeout", "not_found")
+                   else "没能唯一确定扩展目录，请手动选择")
             raise HTTPException(status_code=400, detail={
-                "message": "没能唯一确定扩展目录，请手动选择",
-                "reason": det.get("reason") or "not_found",
+                "message": msg,
+                "reason": reason,
                 "candidates": cands,
             })
         return str(det["dir"])

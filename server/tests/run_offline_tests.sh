@@ -343,6 +343,20 @@ else
 fi
 
 echo ""
+echo "=== extension/tests/test_ext_autoreload.js（零点击自动更新：只在真更新时自重载，防死循环/防降级，node + chrome 桩） ==="
+# 2026-10-02 用户问「扩展程序更新怎么办」→ 心跳回传 reload_to + 扩展 chrome.runtime.reload()。
+# 三个致命分支都在「不该动」的一侧（同版本/旧版本/同目标重复），故用行为测试而非源码断言。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_ext_autoreload.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "=== server/tests/test_platform_count_label.mjs（平台数对外口径：两端统一 116→100+） ==="
 if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then

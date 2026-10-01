@@ -316,6 +316,130 @@ def section_c_contracts():
           "已开启自动更新：新文件会自动写入扩展目录" in js)
 
 
+def section_d_bounded_scan():
+    """D. 目录扫描**必须有界**（2026-10-02 真机实测抓到的阻塞 bug）。
+
+    现象：冻结成 .app 后，扫 ~/Desktop / ~/Documents 被 macOS 隐私保护（TCC）挡在
+    内核里无限期阻塞 —— 进程栈全是 os_scandir→__opendir2→open$NOCANCEL，
+    /api/extension/update-status 90s 不返回；而同一段代码在终端里只要 0.08s
+    （权限上下文不同，所以纯离线单测永远发现不了）。修法：扫描进 daemon 线程 +
+    硬超时 + 单飞，端点因此**必然**在预算内返回。
+
+    这里把「会卡住的扫描」注入进来，验证三件事：超时能返回、部分结果可用、
+    卡住的那次不会被反复重开线程。
+    """
+    import threading
+    import time as _t
+
+    import extension_sync as es
+
+    name = _real_name()
+
+    def _reset_scan():
+        es._scan_state.update(on=False, hits=[])
+
+    def _freeze():
+        """模拟 TCC 阻塞：永不结束的生成器。"""
+        while True:
+            _t.sleep(3600)
+            yield  # pragma: no cover - 永不产出
+
+    # D1. 扫描卡死 → detect_load_dir 仍在预算内返回，且给出 timeout 而非 not_found
+    _reset_scan()
+    real_iter = es._iter_candidate_dirs
+    es._iter_candidate_dirs = _freeze
+    try:
+        t0 = _t.time()
+        det = es.detect_load_dir("1.0.43", name, budget=0.4)
+        cost = _t.time() - t0
+        check("D1 扫描卡死时仍在预算内返回（不会把请求线程挂死）",
+              cost < 3.0, f"耗时 {cost:.2f}s")
+        check("D1 一个都没扫到且超时 → reason=timeout（区别于 not_found）",
+              det.get("reason") == "timeout", det.get("reason"))
+        check("D1 超时不返回任何 dir（不瞎猜）", det.get("dir") == "", det.get("dir"))
+
+        # D2. 上一次还卡着 → 再次调用**立即**返回，绝不再开新线程
+        t0 = _t.time()
+        det2 = es.detect_load_dir("1.0.43", name, budget=0.4)
+        cost2 = _t.time() - t0
+        check("D2 已有扫描卡住时不再开新线程（立即返回，防线程越堆越多）",
+              cost2 < 0.05, f"耗时 {cost2:.3f}s")
+        check("D2 复用的仍是 timeout 结论", det2.get("reason") == "timeout", det2.get("reason"))
+    finally:
+        es._iter_candidate_dirs = real_iter
+        _reset_scan()
+
+    # D3. 卡住之前已扫到的部分结果要能用（Downloads 排在扫描根最前）
+    with tempfile.TemporaryDirectory() as td:
+        good = _write_ext(Path(td) / "视频工坊扩展", name, "1.0.44", code="new")
+
+        def _partial():
+            yield good            # 先给出真命中（真实目录，过 is_our_extension）
+            while True:           # 然后卡死后半段
+                _t.sleep(3600)
+                yield  # pragma: no cover
+
+        _reset_scan()
+        es._iter_candidate_dirs = _partial
+        try:
+            det3 = es.detect_load_dir("1.0.43", name, budget=0.4)
+            check("D3 超时也交出已扫到的部分结果（别把已找到的丢了）",
+                  det3.get("dir") == str(good), det3.get("dir"))
+            check("D3 部分结果下判据仍走 version/single 分支",
+                  det3.get("reason") in ("single", "version_match", "version_match_multi"),
+                  det3.get("reason"))
+        finally:
+            es._iter_candidate_dirs = real_iter
+            _reset_scan()
+
+    # D4. 扫描很快结束且没命中 → not_found（不能一律报 timeout）
+    _reset_scan()
+
+    def _empty():
+        return iter(())
+
+    es._iter_candidate_dirs = _empty
+    try:
+        det4 = es.detect_load_dir("1.0.43", name, budget=1.0)
+        check("D4 扫完确实没有 → reason=not_found（与 timeout 区分开）",
+              det4.get("reason") == "not_found", det4.get("reason"))
+    finally:
+        es._iter_candidate_dirs = real_iter
+        _reset_scan()
+
+    # D5. 扫描抛异常也不能冒泡（扫描失败不该让端点 500）
+    _reset_scan()
+
+    def _boom():
+        raise OSError("模拟 iterdir 权限错误")
+
+    es._iter_candidate_dirs = _boom
+    try:
+        det5 = es.detect_load_dir("1.0.43", name, budget=1.0)
+        check("D5 扫描抛异常不冒泡、按「没找到」处理",
+              det5.get("reason") in ("not_found", "timeout"), det5.get("reason"))
+    finally:
+        es._iter_candidate_dirs = real_iter
+        _reset_scan()
+
+    # D6. 请求线程绝不直接迭代那个可能阻塞的生成器（源码契约）
+    src = (Path(__file__).resolve().parent.parent / "extension_sync.py").read_text(
+        encoding="utf-8")
+    i_fn = src.find("def detect_load_dir(")
+    i_end = src.find("\n# ---------- 同步 ----------", i_fn)
+    body = src[i_fn:i_end if i_end > 0 else len(src)]
+    check("D6 detect_load_dir 经 _collect_hits_bounded 消费扫描（不在请求线程里裸迭代）",
+          "_collect_hits_bounded(" in body and "_iter_candidate_dirs" not in body)
+    check("D6 扫描跑在**线程**里且带硬超时（否则请求线程会被 TCC 挂死）",
+          "threading.Thread(" in src and "done.wait(budget)" in src)
+    check("D6 有单飞状态（卡住时不反复重开线程）",
+          "_scan_state" in src and "_scan_lock" in src)
+
+    # 收尾：确保没有遗留的「在飞」状态影响其它测试
+    _reset_scan()
+    del threading
+
+
 def main():
     print("=" * 68)
     print("扩展零点击自动更新 回归测试（2026-10-02 用户「扩展程序更新怎么办」）")
@@ -323,6 +447,7 @@ def main():
     section_a_module()
     section_b_router()
     section_c_contracts()
+    section_d_bounded_scan()
     print("\n" + "-" * 68)
     if _fail:
         print(f"通过: {_total - len(_fail)}  失败: {len(_fail)}")

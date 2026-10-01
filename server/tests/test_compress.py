@@ -29,6 +29,14 @@ _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
+# 异步作业「跑完」的等待上限。
+# 为什么从 20s 放宽：构建自验证是在**刚跑完 PyInstaller/Cython 的机器**上顺序执行的，
+# 8 个共享 worker 会被抢得很紧，压缩任务偶发超过 20s → 判成 status=running → 整轮离线
+# 测试记 1 失败 → 构建脚本 `exit 1` 拦发布（2026-10-01、2026-10-02 各中一次，且都是
+# test_compress.py，单独重跑必绿 83/0）。
+# 注意：这只是**放长等待**，断言本身没放宽 —— 真卡死到 60s 仍然会红，不会漏掉真回归。
+_ASYNC_WAIT_S = 60.0
+
 from PIL import Image, ImageDraw  # noqa: E402
 
 import app  # noqa: E402
@@ -261,7 +269,7 @@ def test_format_fallback_keeps_source_extension():
         jid = _submit_compress(src, "balanced", "t", src_name="tiny.png",
                                output_format="jpg")
         st = {}
-        deadline = time.time() + 20.0
+        deadline = time.time() + _ASYNC_WAIT_S
         while time.time() < deadline:
             st = COMPRESS_JOBS.get(jid) or {}
             if st.get("status") in ("completed", "failed"):
@@ -506,7 +514,7 @@ def test_transcode_gate_queues_when_full():
         finally:
             _TRANSCODE_SEM.release()
             _TRANSCODE_SEM.release()
-        for _ in range(100):
+        for _ in range(int(_ASYNC_WAIT_S * 10)):          # 步长 0.1s，上限同 _ASYNC_WAIT_S
             if (COMPRESS_JOBS.get(job_id) or {}).get("status") != "running":
                 break
             time.sleep(0.1)

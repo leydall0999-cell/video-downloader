@@ -26,6 +26,7 @@ VDL_DATA_DIR 隔离），形如 {"load_dir": "...", "auto": true}。
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import atomic_io
@@ -38,6 +39,11 @@ _EXCLUDE_NAMES = {".DS_Store"}
 _SCAN_ROOTS = ("Downloads", "Desktop", "Documents")
 _SCAN_MAX_DIRS = 800
 _SCAN_MAX_DEPTH = 2
+
+# 扫描的**硬预算**（秒）。见 _collect_hits_bounded 的说明：在 macOS 的 GUI App 里
+# 扫 ~/Desktop、~/Documents 可能被系统隐私保护挡住而在内核里**无限期阻塞**，
+# 所以「扫多久」必须由调用方兜住，绝不能让它决定端点的响应时间。
+_SCAN_BUDGET_S = 1.5
 
 # 绝不写入的路径特征：写自己的 App 包会让签名失效
 _FORBIDDEN_SUBSTR = ("/Applications/", ".app/")
@@ -134,12 +140,18 @@ def _iter_candidate_dirs():
     """扫描常见位置（深度 ≤ _SCAN_MAX_DEPTH），产出「像扩展目录」的路径。
 
     只做只读探测：不读文件内容以外的东西，也不修改任何目标。
+
+    ⚠️ 这个生成器**可能阻塞**（见 _collect_hits_bounded），所以只许经由
+    _collect_hits_bounded 在带预算的工作线程里消费，不要在请求线程里直接迭代。
     """
     home = Path.home()
     seen = 0
     for root_name in _SCAN_ROOTS:
         root = home / root_name
-        if not root.is_dir():
+        try:
+            if not root.is_dir():
+                continue
+        except OSError:
             continue
         stack = [(root, 0)]
         while stack:
@@ -149,19 +161,78 @@ def _iter_candidate_dirs():
             except OSError:
                 continue
             for child in children:
-                if not child.is_dir():
+                try:
+                    if not child.is_dir():
+                        continue
+                except OSError:
                     continue
                 seen += 1
                 if seen > _SCAN_MAX_DIRS:
                     return
-                if (child / "manifest.json").is_file():
-                    yield child
-                    continue  # 命中即不再往里钻（扩展目录不会嵌套扩展目录）
+                try:
+                    if (child / "manifest.json").is_file():
+                        yield child
+                        continue  # 命中即不再往里钻（扩展目录不会嵌套扩展目录）
+                except OSError:
+                    continue
                 if depth + 1 < _SCAN_MAX_DEPTH and not child.name.startswith("."):
                     stack.append((child, depth + 1))
 
 
-def detect_load_dir(installed_version: str, expected_name: str) -> dict:
+# 扫描「单飞」状态：TCC 卡住时线程会永久阻塞，所以同一时刻只允许一个在飞，
+# 后续调用直接复用它的（部分）结果 —— 否则每次请求都多一个永久阻塞的线程。
+_scan_lock = threading.Lock()
+_scan_state = {"on": False, "hits": []}
+
+
+def _scan_worker(expected_name: str, sink: list, done: threading.Event) -> None:
+    """工作线程：把命中的目录收集进 sink。异常一律吞掉（扫描失败不该影响调用方）。"""
+    try:
+        for d in _iter_candidate_dirs():
+            try:
+                if is_our_extension(d, expected_name):
+                    sink.append(d)
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001 - 任何扫描异常都不得冒泡
+        pass
+    finally:
+        _scan_state["on"] = False
+        done.set()
+
+
+def _collect_hits_bounded(expected_name: str, budget: float = _SCAN_BUDGET_S):
+    """在**有界时间**内收集候选目录，返回 (hits, timed_out)。
+
+    为什么必须有界（2026-10-02 真机实测）：
+        冻结成 .app 后，扫 `~/Desktop` / `~/Documents` 会被 macOS 隐私保护（TCC）
+        挡在内核里**无限期阻塞**。现象：进程栈全部是
+        `os_scandir → __opendir2 → open$NOCANCEL` 一动不动，对应端点 90s 也不返回
+        （而同一段代码在终端里跑只要 0.08s —— 权限上下文不同，所以单测/本地跑全绿）。
+    处置：把扫描丢进 daemon 线程 + 硬超时。超时就把**已经扫到的部分结果**交出去
+        （_SCAN_ROOTS 里 Downloads 排在最前，扩展目录通常在它下面，所以部分结果往往够用），
+        并标记 timed_out 让上层给出「请手动选择目录」的引导，而不是干等。
+    """
+    with _scan_lock:
+        if _scan_state["on"]:
+            # 上一次扫描还卡着 → 复用它的部分结果，绝不再开新线程
+            return list(_scan_state["hits"]), True
+        sink: list = []
+        _scan_state.update(on=True, hits=sink)
+    done = threading.Event()
+    threading.Thread(
+        target=_scan_worker, args=(expected_name, sink, done), daemon=True
+    ).start()
+    finished = done.wait(budget)
+    if finished:
+        with _scan_lock:
+            _scan_state["on"] = False
+        return list(sink), False
+    return list(sink), True
+
+
+def detect_load_dir(installed_version: str, expected_name: str,
+                    budget: float = _SCAN_BUDGET_S) -> dict:
     """自动识别扩展加载目录（零配置路径）。
 
     判据：目录里 manifest.json 的 name == 我们的扩展名（**强判据**，不会认错人）。
@@ -170,18 +241,21 @@ def detect_load_dir(installed_version: str, expected_name: str) -> dict:
       2) 唯一的候选
     多个同版本候选时取最近修改的（每次升级都会重写该目录）。
     仍无法唯一确定 → 返回空 dir + ambiguous，由 UI 让用户手选（不瞎猜）。
+
+    扫描受 budget 约束；一个都没扫到且超时 → reason="timeout"（区别于 not_found：
+    前者是「没扫完，请手选」，后者是「扫完了确实没有」）。
     """
+    dirs, timed_out = _collect_hits_bounded(expected_name, budget)
     hits = []
-    for d in _iter_candidate_dirs():
-        if is_our_extension(d, expected_name):
-            try:
-                mtime = d.stat().st_mtime
-            except OSError:
-                mtime = 0.0
-            hits.append({"dir": str(d), "version": read_version(d), "mtime": mtime})
+    for d in dirs:
+        try:
+            mtime = d.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        hits.append({"dir": str(d), "version": read_version(d), "mtime": mtime})
 
     if not hits:
-        return {"dir": "", "candidates": [], "reason": "not_found"}
+        return {"dir": "", "candidates": [], "reason": "timeout" if timed_out else "not_found"}
 
     same = [h for h in hits if installed_version and h["version"] == installed_version]
     if same:
