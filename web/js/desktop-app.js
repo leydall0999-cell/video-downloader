@@ -344,7 +344,7 @@
           <button type="button" class="ghost" id="sniffDownloadExt">下载浏览器扩展</button>
           <button type="button" class="danger" id="sniffStop" hidden>停止嗅探</button>
         </div>
-        <div class="vdl-sniff-status" style="margin-top:0">提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。</div>
+        <div class="vdl-sniff-status" style="margin-top:0" id="sniffHint">提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
         <div id="sniffExtHelp" hidden></div>
       </div>`;
@@ -357,9 +357,22 @@
     const statusEl = panel.querySelector('#sniffStatus');
     const listEl = panel.querySelector('#sniffList');
     const stopBtn = panel.querySelector('#sniffStop');
+    const startBtn = panel.querySelector('#sniffStart');
+    const dlExtBtn = panel.querySelector('#sniffDownloadExt');
+    const hintEl = panel.querySelector('#sniffHint');
 
     const extBanner = panel.querySelector('#sniffExtBanner');
     const renderStatus = (st) => {
+      const cdpBusy = st.state === 'running';
+      const extOnline = !!(st && st.ext_online) && !cdpBusy;
+      // 扩展在线（且 CDP 未在跑）＝全自动模式：收起 CDP 按钮 / 下载按钮，提示换成自动说明
+      if (startBtn) startBtn.hidden = extOnline;
+      if (dlExtBtn) dlExtBtn.hidden = extOnline;
+      if (hintEl) {
+        hintEl.textContent = extOnline
+          ? '全自动：在你日常的浏览器里正常播放视频即可，嗅探到的媒体会实时出现在下方；点视频页右下角的悬浮球即可发回桌面端下载。'
+          : '提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。';
+      }
       // 扩展在线（用户日常浏览器）：绿色横幅替代推荐语——装完立刻有确定性反馈
       if (extBanner) {
         if (st.ext_online) {
