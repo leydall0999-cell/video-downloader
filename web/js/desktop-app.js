@@ -483,12 +483,15 @@
       const steps = (info && info.install_steps) || [];
       const name = (info && info.name) || '视频工坊媒体嗅探';
       const ver = (info && info.version) || '';
+      const zipName = ver ? 'vdl-sniffer-extension-' + ver + '.zip' : 'vdl-sniffer-extension.zip';
       box.hidden = false;
       box.style.cssText =
         'margin-top:10px;padding:10px 12px;background:#f4f6fa;border:1px solid #e3e7ee;border-radius:10px;font-size:12px;line-height:1.7;color:#2b3442;';
       box.innerHTML =
         '<div style="font-weight:600;margin-bottom:6px;">已下载「' + escHtml(name) + '」' +
         (ver ? ' v' + escHtml(ver) : '') + '，按以下步骤装到浏览器：</div>' +
+        '<div style="margin-bottom:6px;color:#5a6472;">安装包 <b>' + escHtml(zipName) +
+        '</b> 已保存到浏览器默认的「下载」文件夹（访达 → 下载），解压后按下面步骤加载。</div>' +
         (steps.length
           ? '<ol style="margin:0;padding-left:18px;">' + steps.map((s) => '<li>' + escHtml(s) + '</li>').join('') + '</ol>'
           : '<div>打开 chrome://extensions → 开发者模式 → 加载已解压的扩展程序，选择刚下载的文件夹即可。</div>');
