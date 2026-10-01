@@ -238,6 +238,23 @@ function getEndpoint(cb) {
   });
 }
 
+// ---- 心跳（2026-10-01）：桌面端面板显示「扩展已连接 ✓」的依据 ----
+// MV3 SW 空闲 ~30s 被 Chrome 挂起；每次唤醒（webRequest 事件/消息/alarms）
+// 都会重跑顶层代码 → 顺手 ping 一次。alarms 每分钟兜底（浏览器挂着不动也在线）。
+function heartbeat() {
+  getEndpoint(function (base) {
+    if (!base) return;
+    try { fetch(base + '/api/sniffer/ext-ping', { method: 'POST' }).catch(function () {}); } catch (e) {}
+  });
+}
+heartbeat();
+try {
+  chrome.alarms.create('vdlHeartbeat', { periodInMinutes: 1 });
+  chrome.alarms.onAlarm.addListener(function (a) {
+    if (a && a.name === 'vdlHeartbeat') heartbeat();
+  });
+} catch (e) { console.error('alarms 注册失败', e); }
+
 // ---- 启动恢复 ----
 (function restore() {
   chrome.storage.local.get(['enabled', 'carryCookie', 'endpoint'], function (st) {

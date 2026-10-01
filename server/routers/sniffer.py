@@ -53,6 +53,19 @@ def sniffer_items(limit: int = 100) -> dict:
     return {"items": cdp_sniffer.SNIFFER.items(limit=max(1, min(limit, 200)))}
 
 
+@router.post('/api/sniffer/ext-ping')
+def sniffer_ext_ping(response: Response = None) -> dict:  # noqa: RUF013
+    """扩展心跳（2026-10-01）：service worker 启动 + alarms 每分钟一次。
+
+    面板据此显示「扩展已连接 ✓」——用户装完扩展立刻能确认状态，不用靠猜。
+    心跳不带任何敏感信息，仅本机/回环场景使用。
+    """
+    if response is not None:
+        _pna(response)
+    cdp_sniffer.SNIFFER.mark_ext_seen()
+    return {"ok": True}
+
+
 @router.post('/api/sniffer/send')
 def sniffer_send(payload: dict = Body(...), response: Response = None) -> dict:  # noqa: RUF013
     """悬浮球 / 浏览器扩展提交下载项（仅本机/回环场景使用）。

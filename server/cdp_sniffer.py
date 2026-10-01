@@ -242,6 +242,7 @@ class CDPSniffer:
         self._sent_ids: OrderedDict[str, float] = OrderedDict()   # send_id -> ts（待回执）
         self._results: OrderedDict[str, dict] = OrderedDict()     # send_id -> 回执
         self._desktop_auth: tuple[float, bool] | None = None      # (ts, 桌面端是否带有效登录态)
+        self._ext_seen: float = 0.0                                # 扩展最近一次心跳 ts（0=从未见过）
         self._error = ""
         self._state = "idle"                                   # idle / running / error
 
@@ -272,6 +273,9 @@ class CDPSniffer:
                 "error": self._error,
                 "supported": websockets is not None,
                 "desktop_logged_in": logged_in,
+                # 扩展在线信号（2026-10-01）：心跳 ≤5 分钟内算在线。扩展 SW 被
+                # Chrome 挂起后 alarms 最长 1 分钟才唤醒一次，留足余量防误报离线。
+                "ext_online": bool(self._ext_seen) and time.time() - self._ext_seen <= 300,
             }
 
     def mark_desktop_auth(self, user_id: str | None) -> None:
@@ -291,6 +295,11 @@ class CDPSniffer:
             return
         with self._lock:
             self._desktop_auth = (time.time(), True)
+
+    def mark_ext_seen(self) -> None:
+        """扩展心跳（2026-10-01）：记录最近一次可见时间，供面板显示「扩展已连接」。"""
+        with self._lock:
+            self._ext_seen = time.time()
 
     def report_result(self, send_id: str, ok: bool, message: str = "") -> bool:
         """桌面端把「建任务结果」写回给扩展（send_id 来自 /api/sniffer/send 的响应）。"""

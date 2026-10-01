@@ -297,6 +297,8 @@
 .vdl-sniff-body{flex:1;overflow:auto;padding:10px 16px;}
 .vdl-sniff-status{padding:6px 10px;border-radius:8px;background:#f4f5f7;color:#555;margin-bottom:10px;}
 .vdl-sniff-status.on{background:#e8f7ef;color:#0a7d43;}
+.vdl-sniff-extbanner{padding:8px 10px;border-radius:8px;background:#eef4ff;border:1px solid #d9e4ff;color:#2b3a55;font-size:12px;line-height:1.6;margin-bottom:10px;}
+.vdl-sniff-extbanner.on{background:#e8f7ef;border-color:#bfe8d2;color:#0a7d43;}
 .vdl-sniff-actions{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
 .vdl-sniff-actions button{border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12px;}
 .vdl-sniff-actions .main{background:#4f46e5;color:#fff;}
@@ -336,13 +338,13 @@
       </div>
       <div class="vdl-sniff-body">
         <div class="vdl-sniff-status" id="sniffStatus">未连接</div>
+        <div class="vdl-sniff-extbanner" id="sniffExtBanner">推荐：安装浏览器扩展，在你<b>日常的浏览器</b>里直接嗅探，无需另开浏览器。</div>
         <div class="vdl-sniff-actions">
-          <button type="button" class="main" id="sniffStart">以调试模式启动浏览器并嗅探</button>
-          <button type="button" class="ghost" id="sniffAttach">连接已开启的浏览器</button>
+          <button type="button" class="main" id="sniffStart">开始嗅探</button>
           <button type="button" class="ghost" id="sniffDownloadExt">下载浏览器扩展</button>
           <button type="button" class="danger" id="sniffStop" hidden>停止嗅探</button>
         </div>
-        <div class="vdl-sniff-status" style="margin-top:0">提示：先开嗅探、再在浏览器里播放视频；正在播放的流要重新播放一次才能被截到。悬浮球出现在视频页右下角。</div>
+        <div class="vdl-sniff-status" style="margin-top:0">提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
         <div id="sniffExtHelp" hidden></div>
       </div>`;
@@ -356,11 +358,26 @@
     const listEl = panel.querySelector('#sniffList');
     const stopBtn = panel.querySelector('#sniffStop');
 
+    const extBanner = panel.querySelector('#sniffExtBanner');
     const renderStatus = (st) => {
+      // 扩展在线（用户日常浏览器）：绿色横幅替代推荐语——装完立刻有确定性反馈
+      if (extBanner) {
+        if (st.ext_online) {
+          extBanner.className = 'vdl-sniff-extbanner on';
+          extBanner.innerHTML = '✓ <b>扩展已连接</b>——正在你日常的浏览器中嗅探，播放视频即可，无需另开浏览器。';
+        } else {
+          extBanner.className = 'vdl-sniff-extbanner';
+          extBanner.textContent = '推荐：安装浏览器扩展，在你日常的浏览器里直接嗅探，无需另开浏览器。';
+        }
+      }
       if (st.state === 'running') {
         statusEl.className = 'vdl-sniff-status on';
         statusEl.textContent = `嗅探中 · 端口 ${st.port} · 已捕获 ${st.items} 条`;
         stopBtn.hidden = false;
+      } else if (st.ext_online) {
+        statusEl.className = 'vdl-sniff-status on';
+        statusEl.textContent = '扩展已连接 ✓（你的浏览器）';
+        stopBtn.hidden = true;
       } else if (st.state === 'error') {
         statusEl.className = 'vdl-sniff-status';
         statusEl.textContent = '出错：' + (st.error || '未知错误');
@@ -530,16 +547,10 @@
     panel.querySelector('#sniffStart').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
+      // 智能连接（2026-10-01）：后端 start() 本身就是「先探测 9222——已有调试浏览器
+      // 就直连，没有才启动」；launch=true 一发即覆盖两种情形，无需两个按钮。
       try { renderStatus(await request('/api/sniffer/connect', {
         method: 'POST', body: JSON.stringify({ port: 9222, launch: true }),
-      })); } catch (err) { showError('连接失败', (err && err.message) || '未知错误'); }
-      btn.disabled = false;
-    });
-    panel.querySelector('#sniffAttach').addEventListener('click', async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      try { renderStatus(await request('/api/sniffer/connect', {
-        method: 'POST', body: JSON.stringify({ port: 9222, launch: false }),
       })); } catch (err) { showError('连接失败', (err && err.message) || '未知错误'); }
       btn.disabled = false;
     });

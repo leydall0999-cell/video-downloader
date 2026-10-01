@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""浏览器嗅探「扩展心跳」回归测试（2026-10-01，纯离线）。
+
+背景：嗅探面板简化为「开始嗅探」单按钮 + 扩展推荐主路径后，用户装完扩展
+需要立刻看到「扩展已连接 ✓」的确定性反馈，而不是靠猜。
+链路：扩展 SW 心跳 POST /api/sniffer/ext-ping → SNIFFER.mark_ext_seen()
+→ status() 返回 ext_online（≤300s 内算在线；MV3 alarms 最小周期 1 分钟，留足余量）。
+
+运行：
+    cd server && python tests/test_sniffer_ext_ping.py
+"""
+import os
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 测试隔离：绝不写用户家目录
+os.environ["VDL_DATA_DIR"] = tempfile.mkdtemp(prefix="vdl_test_extping_")
+
+import cdp_sniffer  # noqa: E402
+from routers import sniffer as rs  # noqa: E402
+
+
+def test_ext_ping_flow():
+    # 1) 初始（从未收到心跳）：ext_online 必须为 False，面板显示「未连接」
+    st0 = cdp_sniffer.SNIFFER.status()
+    assert st0.get("ext_online") is False, f"未心跳时 ext_online 应为 False: {st0}"
+    # 2) 路由层 ping → ok，且 status 翻转为在线
+    r = rs.sniffer_ext_ping()
+    assert r.get("ok") is True
+    st1 = cdp_sniffer.SNIFFER.status()
+    assert st1.get("ext_online") is True, f"心跳后 ext_online 应为 True: {st1}"
+    # 3) 心跳过期（>300s）→ 回落离线，不会永远在线
+    cdp_sniffer.SNIFFER._ext_seen = time.time() - 400
+    st2 = cdp_sniffer.SNIFFER.status()
+    assert st2.get("ext_online") is False, f"心跳过期后应回落 False: {st2}"
+    print("✅ 扩展心跳：未连→在线→过期离线 三态判定正确，路由层直调通过")
+
+
+if __name__ == "__main__":
+    test_ext_ping_flow()
+    print("🎉 扩展心跳回归测试全部通过")
