@@ -49,6 +49,15 @@ SEND_TTL = 600.0         # send_id / 回执保留 10 分钟，超时清理
 SEND_MAX = 200           # 回执与待回执表的环形上限
 DESKTOP_AUTH_TTL = 30.0  # 桌面端登录态信号有效期（前端 3s 轮询一次 picked，30s 未续期即视为未知）
 
+# 来源方可指定的清晰度白名单（与 downloader.QUALITY_PRESETS / BEST_KEY / AUDIO_KEY 对齐）。
+# 用户实测反馈（2026-10-01）：「目前没法选择分辨率」——扩展/悬浮球发来的条目原本被前端
+# 写死成 best，用户无从选择。现在来源方（扩展 popup）可带上 quality，桌面端据此建任务。
+# 不在此表内（含空串）一律置 ""，由桌面端用面板上的默认清晰度兜底。
+ALLOWED_QUALITY = frozenset({
+    "best", "2160", "1440", "1080", "720", "480", "360",
+    "audio", "webm", "m4a",
+})
+
 # ---------------------------------------------------------------------------
 # 媒体判定（纯函数，便于离线测试）
 # ---------------------------------------------------------------------------
@@ -405,10 +414,15 @@ class CDPSniffer:
         - cookie：MV3 扩展从 webRequest 捕获的页面 Cookie（嗅探直链常带签名
           且要求会话，桌面端下载任务直接透传给 yt-dlp；截断 8192 防御异常头）
         - source：提交来源标记（'manual' 悬浮球兜底 / 'extension' 浏览器扩展）
+        - quality：来源方指定的清晰度（2026-10-01 用户反馈「没法选择分辨率」）。
+          只在 ALLOWED_QUALITY 内透传，非法/缺省一律置 ""，桌面端用面板默认值兜底。
         """
         url = (payload.get("url") or "").strip()
         if not url:
             raise ValueError("url is required")
+        quality = (payload.get("quality") or "").strip().lower()
+        if quality not in ALLOWED_QUALITY:
+            quality = ""
         item = {
             "url": url,
             "mime": (payload.get("mime") or "").strip(),
@@ -417,6 +431,7 @@ class CDPSniffer:
             "page_url": (payload.get("page_url") or "").strip(),
             "page_title": payload.get("page_title") or "",
             "cookie": (payload.get("cookie") or "").strip()[:8192],
+            "quality": quality,
             "first_seen": time.time(),
             "count": 1,
             "source": (payload.get("source") or "manual").strip()[:32],

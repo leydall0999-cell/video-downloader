@@ -21,6 +21,7 @@ function check(name, cond, extra) {
 const dir = path.join(__dirname, '..');
 const js = fs.readFileSync(path.join(dir, 'popup.js'), 'utf8');
 const css = fs.readFileSync(path.join(dir, 'popup.css'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'popup.html'), 'utf8');
 
 console.log('▶ 扩展 popup「视频页空状态」操作按钮契约');
 
@@ -50,6 +51,22 @@ check('popup.css 定义 .empty-actions', /\.empty-actions\s*\{/.test(css));
 
 // ⑦ 「解析并下载」文案在提示里指向该操作（用户体验连贯）
 check('提示语引导用户点「解析并下载」', /点下面「解析并下载」/.test(js));
+
+// ⑧ 清晰度选择（2026-10-01 用户反馈「目前没法选择分辨率」）：
+// 扩展发来的条目原本一律按「最佳画质（自动）」建任务，用户无从选择。现在 popup 顶部
+// 给下拉、随每条发送上报、并记住选择；用户选的分辨率还必须回显出来。
+const selBlock = (html.match(/<select id="sendQuality"[\s\S]*?<\/select>/) || [''])[0];
+const selOptions = (selBlock.match(/<option value="([^"]*)"/g) || []).length;
+check('popup.html 含 #sendQuality 下拉', selBlock.length > 0);
+check('清晰度下拉含 8 档（best/2160/1440/1080/720/480/360/audio）', selOptions === 8, selOptions);
+check('发送时上报 quality（qualityForItem）', /quality: qualityForItem\(it\),/.test(js));
+check('只对「页面 / 清单」上报（直链本身就是单一流）',
+  /if \(k !== 'page' && k !== 'playlist'\) return '';/.test(js));
+check('改选落 chrome.storage.local（下次打开还记得）',
+  /chrome\.storage\.local\.set\(\{ sendQuality: state\.quality \}\)/.test(js));
+check('改选即时回显「将以「…」下载」', /\.empty-q/.test(js) && /将以「/.test(js));
+check('popup.css 定义 .empty-q', /\.empty-q\s*\{/.test(css));
+check('popup.css 定义 .qrow（下拉行布局）', /\.qrow\s*\{/.test(css));
 
 console.log('');
 console.log('=========================================');

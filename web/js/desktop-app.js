@@ -307,6 +307,9 @@
 .vdl-sniff-actions .main{background:#4f46e5;color:#fff;}
 .vdl-sniff-actions .ghost{background:#eef;background:#eef0f4;color:#333;}
 .vdl-sniff-actions .danger{background:#fdecec;color:#c0392b;}
+.vdl-sniff-q{display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:12px;color:#555;}
+.vdl-sniff-q select{border:1px solid #dfe3ea;border-radius:6px;padding:3px 6px;font-size:12px;background:#fff;color:#333;cursor:pointer;}
+.vdl-sniff-q .q-note{color:#999;font-size:11px;margin-left:auto;}
 .vdl-sniff-item{border:1px solid #eee;border-radius:10px;padding:8px 10px;margin-bottom:8px;}
 .vdl-sniff-item .k{font-size:11px;font-weight:600;border-radius:4px;padding:1px 6px;margin-right:6px;}
 .vdl-sniff-item .k.playlist{background:#e8f7ef;color:#0a7d43;}
@@ -347,6 +350,19 @@
           <button type="button" class="ghost" id="sniffDownloadExt">下载浏览器扩展</button>
           <button type="button" class="danger" id="sniffStop" hidden>停止嗅探</button>
         </div>
+        <div class="vdl-sniff-q">清晰度
+          <select id="sniffQuality" title="「视频页 / HLS 清单」类条目按这个清晰度解析下载（直链本身就是单一流，不受影响）">
+            <option value="best">最佳画质（自动）</option>
+            <option value="2160">4K 2160P</option>
+            <option value="1440">2K 1440P</option>
+            <option value="1080">1080P 高清</option>
+            <option value="720">720P 高清</option>
+            <option value="480">480P 标清</option>
+            <option value="360">360P 流畅</option>
+            <option value="audio">仅音频 MP3</option>
+          </select>
+          <span class="q-note">对「视频页 / HLS 清单」类条目生效</span>
+        </div>
         <div class="vdl-sniff-status" style="margin-top:0" id="sniffHint">提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
         <div id="sniffExtHelp" hidden></div>
@@ -365,6 +381,29 @@
     const hintEl = panel.querySelector('#sniffHint');
 
     const extBanner = panel.querySelector('#sniffExtBanner');
+
+    // 嗅探面板默认清晰度（2026-10-01 用户反馈「目前没法选择分辨率」）：
+    // 面板里「下载 / 解析并下载」的条目、以及扩展/悬浮球推来的条目，原本都被硬编码成
+    // best，用户无从选择。现在面板给一个下拉并持久化；来源方（扩展 popup）显式带了
+    // quality 时以来源方为准（见 sniffQuality）。
+    const SNIFF_Q_KEY = 'vdl.sniff.quality';
+    const qualitySel = panel.querySelector('#sniffQuality');
+    let savedQuality = '';
+    try { savedQuality = localStorage.getItem(SNIFF_Q_KEY) || ''; } catch (e) { /* 隐私模式 */ }
+    if (savedQuality && qualitySel.querySelector('option[value="' + savedQuality + '"]')) {
+      qualitySel.value = savedQuality;
+    }
+    qualitySel.addEventListener('change', () => {
+      try { localStorage.setItem(SNIFF_Q_KEY, qualitySel.value); } catch (e) { /* 忽略 */ }
+    });
+    /** 建任务用的清晰度：只对「视频页 / HLS 清单」有意义（可解析出多档）；直链/分片
+     *  本身就是单一流，一律走 best 原逻辑 —— 否则给 4K 直链选 1080 反而挑不到流。
+     *  条目自带（扩展 popup 里选的）优先，其次面板默认。 */
+    const sniffQuality = (it) => {
+      const kind = (it && it.kind) || '';
+      if (kind !== 'page' && kind !== 'playlist') return 'best';
+      return (it && it.quality) || qualitySel.value || 'best';
+    };
 
     // 包内扩展版本（缓存）：与扩展心跳自报版本比对 → 决定更新横幅
     let _extPkgVer = '';
@@ -502,6 +541,13 @@
     };
 
     const KIND_LABEL = { playlist: 'HLS/DASH', media: '直链', segment: '分片', page: '视频页' };
+    // 清晰度回显文案（与 index.html 的 batchQuality / 后端 downloader.quality_label 口径一致）：
+    // 建任务后 toast 里回显一次，用户才能确认「我选的分辨率确实生效了」。
+    const Q_LABEL = {
+      best: '最佳画质（自动）', 2160: '4K 2160P', 1440: '2K 1440P', 1080: '1080P 高清',
+      720: '720P 高清', 480: '480P 标清', 360: '360P 流畅',
+      audio: '仅音频 MP3', webm: 'WebM', m4a: 'M4A 音频',
+    };
 
     // 复制文本到剪贴板：桌面壳（WKWebView）里 navigator.clipboard 常不存在、
     // execCommand('copy') 也被禁用 —— 必须优先走 pywebview 原生桥，否则「复制链接」
@@ -594,7 +640,7 @@
           method: 'POST',
           body: JSON.stringify({
             url: it.url,
-            quality: 'best',
+            quality: sniffQuality(it),
             title: it.page_title || '',
             cookie: it.cookie || '',
             proxy: '',
@@ -614,7 +660,8 @@
         });
         trackTask(data.task_id, refs, '');
         btn.textContent = '已加入下载 ✓';
-        sniffToast('✓ 已加入下载队列：' + (it.page_title || it.url.slice(0, 60)));
+        sniffToast('✓ 已加入下载队列（' + (Q_LABEL[sniffQuality(it)] || sniffQuality(it)) +
+          '）：' + (it.page_title || it.url.slice(0, 60)));
         return { ok: true, message: '' };
       } catch (e) {
         btn.disabled = false;

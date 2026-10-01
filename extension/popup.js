@@ -16,11 +16,37 @@
 var $ = function (id) { return document.getElementById(id); };
 var listEl = $('list');
 
-var state = { endpoint: '', sentUrls: {}, carryCookie: true };
+var state = { endpoint: '', sentUrls: {}, carryCookie: true, quality: 'best' };
 // 桌面端登录态：true=已登录 / false=未登录 / null=未知（App 未启动或界面已关闭）
 var desktopLoggedIn = null;
 // 面板只呈现**当前标签页当前页**的嗅探结果（背景按 tabId 分库，见 background.js）
 var currentTabId = -1;
+
+// ---- 清晰度（2026-10-01 用户反馈「目前没法选择分辨率」）----
+// 扩展发来的条目在桌面端一律按「最佳画质（自动）」建任务，用户在扩展里无从选择。
+// 现在 popup 顶部给一个下拉：选中的清晰度随每条发送上报（/api/sniffer/send 的
+// quality 字段），桌面端解析类条目按它下载；选择落 chrome.storage.local 记住。
+// 只对「视频页 / HLS 清单」上报 —— 直链本身就是单一流，带清晰度反而可能挑不到流。
+var QUALITY_OPTIONS = ['best', '2160', '1440', '1080', '720', '480', '360', 'audio'];
+var QUALITY_STORE_KEY = 'sendQuality';
+
+/** 取下拉里该档的显示文案（用于回显，options 是 popup.html 里的静态项）。 */
+function qualityLabel(k) {
+  var sel = $('sendQuality');
+  if (sel) {
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === k) return sel.options[i].textContent;
+    }
+  }
+  return k || '最佳画质（自动）';
+}
+
+/** 该条目是否该带上清晰度（只对可解析出多档的条目有意义）。 */
+function qualityForItem(it) {
+  var k = (it && it.kind) || '';
+  if (k !== 'page' && k !== 'playlist') return '';
+  return state.quality || 'best';
+}
 
 function fmtTime(ts) {
   if (!ts) return '';
@@ -127,6 +153,9 @@ function render(st) {
   }
   $('sniffToggle').checked = st.enabled;
   $('carryCookie').checked = st.carryCookie !== false;
+  // 清晰度下拉跟随 state（改选后 state 立即更新，这里只在重渲染时对齐一次）
+  var qsel = $('sendQuality');
+  if (qsel && state.quality && qsel.value !== state.quality) qsel.value = state.quality;
 
   // 桌面端未登录时必须提前说清楚：否则用户点下载只会看到桌面端弹登录框
   //（浏览器弹窗焦点在前台，桌面端窗口在后台，用户以为「没反应」）。
@@ -158,6 +187,12 @@ function render(st) {
             '点下面「解析并下载」，或到桌面端「媒体嗅探」列表操作。'
           : '正在把本页交给桌面端解析；若一直是这样，请确认「视频工坊」App 已启动。');
       box.appendChild(tip);
+      // 当前清晰度回显（改上方「清晰度」下拉时同步，见 sendQuality 的 change 绑定）：
+      // 用户在扩展里选的分辨率必须看得见，否则「选了没生效」无从判断。
+      var qline = document.createElement('div');
+      qline.className = 'empty-q';
+      qline.textContent = '将以「' + qualityLabel(state.quality) + '」下载';
+      box.appendChild(qline);
       var acts = document.createElement('div');
       acts.className = 'empty-actions';
       var dlBtn = document.createElement('button');
@@ -232,6 +267,8 @@ function postSend(base, it, carry) {
     page_url: it.pageUrl || it.pageTitle || '',
     page_title: it.pageTitle || '',
     cookie: carry ? (it.cookie || '') : '',
+    // 清晰度：只对「视频页 / HLS 清单」上报（见 qualityForItem）。空串=让桌面端用它的默认值。
+    quality: qualityForItem(it),
     source: 'extension'
   };
   return fetch(base + '/api/sniffer/send', {
@@ -434,6 +471,14 @@ $('sniffToggle').addEventListener('change', function (e) {
 $('carryCookie').addEventListener('change', function (e) {
   chrome.runtime.sendMessage({ type: 'setCarryCookie', value: e.target.checked });
 });
+// 清晰度：改选立即生效（后续每条发送都带上），并记住这次选择
+$('sendQuality').addEventListener('change', function (e) {
+  var v = e.target.value;
+  state.quality = QUALITY_OPTIONS.indexOf(v) >= 0 ? v : 'best';
+  try { chrome.storage.local.set({ sendQuality: state.quality }); } catch (err) { /* 静默 */ }
+  var nowEl = document.querySelector('.empty-q');
+  if (nowEl) nowEl.textContent = '将以「' + qualityLabel(state.quality) + '」下载';
+});
 $('clearAll').addEventListener('click', function () {
   chrome.runtime.sendMessage({ type: 'clear' }, refresh);
 });
@@ -531,6 +576,16 @@ function refreshDesktopAuth(cb) {
 }
 
 // 初始化：先取背景状态，再取桌面端登录态
+// 清晰度记忆值：读不到就用默认 best；storage 异常也不该阻断面板
+try {
+  chrome.storage.local.get([QUALITY_STORE_KEY], function (st) {
+    var v = st && st[QUALITY_STORE_KEY];
+    if (typeof v === 'string' && QUALITY_OPTIONS.indexOf(v) >= 0) state.quality = v;
+    var sel = $('sendQuality');
+    if (sel) sel.value = state.quality;
+  });
+} catch (e) { /* 静默 */ }
+
 chrome.runtime.sendMessage({ type: 'getEndpoint' }, function (r) {
   if (chrome.runtime.lastError) return;
   if (r && r.endpoint) state.endpoint = r.endpoint;

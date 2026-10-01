@@ -108,6 +108,10 @@ def sniffer_send(payload: dict = Body(...), response: Response = None) -> dict: 
     返回的 send_id 是**回执凭据**：本条只是入队（必然成功），真正的建任务发生在
     桌面端进程里。调用方（扩展）拿 send_id 轮询 /api/sniffer/result，才能知道
     桌面端是「已加入下载」还是失败（未登录 / 不支持 / 超配额），而不是一律显示成功。
+
+    可选字段 quality（2026-10-01 用户反馈「目前没法选择分辨率」）：扩展 popup 的
+    清晰度下拉随本条上报，白名单净化后由桌面端建任务时使用；缺省/非法则桌面端用
+    嗅探面板上的默认清晰度。
     """
     if response is not None:
         _pna(response)

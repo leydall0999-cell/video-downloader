@@ -28,6 +28,24 @@
     <button id="clearAll" class="ghost" title="清空当前页的嗅探结果（其它页面本就不保留）">清空</button>
   </div>
 
+  <!-- 清晰度（2026-10-01 用户反馈「目前没法选择分辨率」）：扩展发来的条目原本被桌面端
+       一律按「最佳画质（自动）」建任务，用户无从选择。这里选的清晰度随每条发送上报，
+       桌面端解析类条目按它下载。 -->
+  <div class="qrow">
+    <label for="sendQuality">清晰度</label>
+    <select id="sendQuality" title="交给桌面端解析下载时使用的清晰度">
+      <option value="best">最佳画质（自动）</option>
+      <option value="2160">4K 2160P</option>
+      <option value="1440">2K 1440P</option>
+      <option value="1080">1080P 高清</option>
+      <option value="720">720P 高清</option>
+      <option value="480">480P 标清</option>
+      <option value="360">360P 流畅</option>
+      <option value="audio">仅音频 MP3</option>
+    </select>
+    <span class="q-hint">解析类条目按此清晰度下载</span>
+  </div>
+
   <div id="sendNote" class="send-note" hidden></div>
 
   <div id="segNote" class="seg-note" hidden></div>
