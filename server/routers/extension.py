@@ -16,11 +16,18 @@ Chrome 不会自动更新解压版扩展——它直接以本地文件夹为源�
 chrome://extensions 点一次 ↻（官方行为 + 本项目实测：覆盖成 1.0.43 后心跳仍自报
 1.0.42，直到用户点 ↻）。但官方文档同时写明「解压版被 reload **视为一次 update**」，
 `chrome.runtime.reload()` 同样有效。于是：
-    ① App 把新版写进用户的加载目录（extension_sync，带 manifest.name 校验与只增不删）
+    ① App 把新版写进扩展目录（extension_sync，带 manifest.name 校验与只增不删）
     ② 心跳响应里告诉扩展「磁盘上已经是新版 X」→ 扩展自己 `chrome.runtime.reload()`
-两条接上，用户就再也不用覆盖目录 / 点 ↻。①的落盘与安全边界见 extension_sync。
+两条接上，用户就再也不用覆盖目录 / 点 ↻。
 
-不依赖 app / 不触碰磁盘删除（只往用户显式指定的扩展目录覆盖写），可在沙盒单测中直接 import。
+**落点 = App 自己维护的目录 `~/视频工坊浏览器扩展`**（`extension_sync.managed_dir()`），
+**不是**用户原来那个下载解压出来的目录——后者通常在 `~/Downloads`，属 macOS 隐私保护
+（TCC）目录，App 一碰就永久卡死（真机实测 90s 不返回，进程栈停在
+`os_scandir → __opendir2 → open$NOCANCEL`）。完整根因与四条安全边界见 extension_sync
+的模块 docstring。代价：用户首次要把扩展**从新目录重新加载一次**（仅此一次），
+之后所有升级都零点击。
+
+不依赖 app / 不触碰磁盘删除（只往受管目录覆盖写），可在沙盒单测中直接 import。
 """
 from __future__ import annotations
 
@@ -176,6 +183,17 @@ def _installed_version() -> str:
 _sync_throttle: dict = {"key": "", "ts": 0.0, "result": None}
 
 
+def _effective_load_dir(cfg: dict | None = None) -> str:
+    """本次要写哪个目录：显式配置优先，否则用**受管目录**（`~/视频工坊浏览器扩展`）。
+
+    受管目录是默认落点——App 自己维护、不在 TCC 保护范围，所以心跳触发的自动同步
+    不会弹系统授权框、也不会阻塞。
+    """
+    cfg = cfg if isinstance(cfg, dict) else extension_sync.get_config()
+    explicit = str(cfg.get("load_dir") or "").strip()
+    return explicit or str(extension_sync.managed_dir())
+
+
 def maybe_sync(installed_version: str) -> dict:
     """心跳触发的自动同步。幂等、节流、**绝不抛**（心跳不能因此 500）。
 
@@ -187,7 +205,7 @@ def maybe_sync(installed_version: str) -> dict:
         cfg = extension_sync.get_config()
     except Exception as exc:  # noqa: BLE001
         return {"auto": False, "reload_to": "", "synced": False, "error": str(exc)}
-    if not cfg.get("auto") or not cfg.get("load_dir"):
+    if not cfg.get("auto"):
         return {"auto": False, "reload_to": "", "synced": False, "error": ""}
 
     now = time.time()
@@ -198,12 +216,13 @@ def maybe_sync(installed_version: str) -> dict:
 
     try:
         src_ver = str(_manifest().get("version") or "")
-        load_dir = str(cfg["load_dir"])
+        load_dir = _effective_load_dir(cfg)
         disk_ver = extension_sync.read_version(load_dir)
         synced = False
         error = ""
         if src_ver and disk_ver != src_ver:
-            res = extension_sync.sync_to(load_dir, _source_dir(), _expected_name())
+            res = extension_sync.sync_to(load_dir, _source_dir(), _expected_name(),
+                                         allow_empty=(load_dir == str(extension_sync.managed_dir())))
             synced = bool(res.get("ok"))
             error = str(res.get("error") or "")
             disk_ver = str(res.get("version") or extension_sync.read_version(load_dir))
@@ -221,29 +240,27 @@ def maybe_sync(installed_version: str) -> dict:
 
 
 def _resolve_load_dir(load_dir) -> str:
-    """把入参解析成「确定的扩展目录」；无法确定时抛 400（由 UI 引导用户手选）。
+    """把入参解析成「确定的扩展目录」；无法确定/不允许时抛 400（由 UI 引导用户）。
 
-    "auto" → 自动识别（识别不到或存在多个同版本候选都算无法确定，绝不瞎猜）
-    其他   → 必须通过 manifest.name 校验
+    "auto" → 受管目录 `~/视频工坊浏览器扩展`（必要时就地初始化）
+    其他   → 必须通过 manifest.name 校验，且不得落在 macOS 隐私保护目录内
     """
     if not isinstance(load_dir, str) or not load_dir.strip():
         raise HTTPException(status_code=400, detail="缺少扩展目录")
     spec = load_dir.strip()
     if spec == "auto":
-        det = extension_sync.detect_load_dir(_installed_version(), _expected_name())
-        if not det.get("dir"):
-            cands = [str(c.get("dir")) for c in (det.get("candidates") or [])]
-            reason = det.get("reason") or "not_found"
-            msg = ("没能在常见位置找到扩展目录，请手动选择"
-                   if reason in ("timeout", "not_found")
-                   else "没能唯一确定扩展目录，请手动选择")
-            raise HTTPException(status_code=400, detail={
-                "message": msg,
-                "reason": reason,
-                "candidates": cands,
-            })
-        return str(det["dir"])
+        res = extension_sync.ensure_managed(_source_dir(), _expected_name())
+        if not res.get("ok"):
+            raise HTTPException(status_code=400, detail=str(res.get("error") or "无法准备扩展目录"))
+        return str(res.get("dir") or extension_sync.managed_dir())
     p = Path(spec).expanduser()
+    if extension_sync.is_tcc_protected(p):
+        # 写这类目录会让 App 卡在内核里（见 extension_sync 模块 docstring），事前拒绝
+        raise HTTPException(
+            status_code=400,
+            detail="不能选「桌面 / 文稿 / 下载」里的目录：macOS 会拦住 App 的访问并弹授权框，"
+                   f"写到那里会让程序卡住。请改用 App 维护的目录：{extension_sync.managed_dir()}",
+        )
     if not extension_sync.is_our_extension(p, _expected_name()):
         raise HTTPException(
             status_code=400,
@@ -255,15 +272,17 @@ def _resolve_load_dir(load_dir) -> str:
 def _status_payload() -> dict:
     cfg = extension_sync.get_config()
     installed = _installed_version()
+    managed = str(extension_sync.managed_dir())
     out = {
         "auto": bool(cfg.get("auto")),
-        "load_dir": str(cfg.get("load_dir") or ""),
+        "load_dir": _effective_load_dir(cfg),
+        "explicit_dir": str(cfg.get("load_dir") or ""),
+        "managed_dir": managed,
+        "using_managed": not str(cfg.get("load_dir") or "").strip(),
         "installed_version": installed,
         "source_version": "",
         "on_disk_version": "",
-        "detected_dir": "",
-        "detect_reason": "",
-        "candidates": [],
+        "needs_setup": False,
         "pending": False,
         "error": "",
     }
@@ -273,17 +292,18 @@ def _status_payload() -> dict:
         out["error"] = f"内置扩展源不可用：{exc}"
         return out
 
+    # 受管目录：顺手补齐（幂等且廉价——版本一致时只是一次只读比对）。
+    # 这是唯一「GET 也写」的地方，刻意为之：用户打开面板就能看到目录已就绪、可直接复制路径。
     ld = out["load_dir"]
-    if ld:
-        out["on_disk_version"] = extension_sync.read_version(ld)
-    else:
-        # 尚未配置 → 顺手识别一次，让 UI 能直接给出「一键开启」的目标
-        det = extension_sync.detect_load_dir(installed, _expected_name())
-        out["detected_dir"] = str(det.get("dir") or "")
-        out["detect_reason"] = str(det.get("reason") or "")
-        out["candidates"] = [str(c.get("dir")) for c in (det.get("candidates") or [])]
-        if out["detected_dir"]:
-            out["on_disk_version"] = extension_sync.read_version(out["detected_dir"])
+    if out["using_managed"]:
+        res = extension_sync.ensure_managed(_source_dir(), _expected_name())
+        if not res.get("ok") and not out["error"]:
+            out["error"] = str(res.get("error") or "")
+    out["on_disk_version"] = extension_sync.read_version(ld)
+    # 「还没从受管目录装过」→ 面板给出一次性的加载引导
+    out["needs_setup"] = not (
+        installed and out["source_version"] and installed == out["source_version"]
+    )
     out["pending"] = bool(
         out["on_disk_version"] and installed
         and extension_sync.is_newer(out["on_disk_version"], installed)
@@ -302,7 +322,7 @@ def extension_update_config(payload: dict = Body(default={})) -> dict:
     """设置/关闭扩展自动更新。
 
     body:
-        load_dir: "auto"（自动识别）| 具体路径（须通过 manifest.name 校验）| ""（关闭并清空）
+        load_dir: "auto"（用 App 维护的扩展目录）| 具体路径（须通过 manifest.name 校验）| ""（关闭并清空）
         auto:     bool（可选）是否开启自动更新
     开启后会**立即同步一次**，并返回同步结果 —— 用户点一下就能看到「已写入 v X」。
     """
@@ -317,18 +337,19 @@ def extension_update_config(payload: dict = Body(default={})) -> dict:
         return {"ok": True, "closed": True, "status": _status_payload()}
 
     if isinstance(raw_dir, str):
-        extension_sync.save_config(load_dir=_resolve_load_dir(raw_dir))
+        # "auto" 归一化成空串存起来（= 用受管目录），路径本身不落库，避免日后受管目录改名后失效
+        resolved = _resolve_load_dir(raw_dir)
+        extension_sync.save_config(
+            load_dir="" if resolved == str(extension_sync.managed_dir()) else resolved
+        )
 
     want_auto = data.get("auto")
     if want_auto is not None:
         extension_sync.save_config(auto=bool(want_auto))
 
     cfg = extension_sync.get_config()
-    if cfg.get("auto") and not cfg.get("load_dir"):
-        raise HTTPException(status_code=400, detail="尚未确定扩展目录，无法开启自动更新")
-
     sync = None
-    if cfg.get("auto") and cfg.get("load_dir"):
+    if cfg.get("auto"):
         _sync_throttle.update(key="", ts=0.0, result=None)   # 手动操作不吃节流
         sync = maybe_sync(_installed_version())
     return {"ok": True, "sync": sync, "status": _status_payload()}
@@ -336,14 +357,14 @@ def extension_update_config(payload: dict = Body(default={})) -> dict:
 
 @router.post("/api/extension/update-now")
 def extension_update_now() -> dict:
-    """立即把内置新版同步进扩展目录（不改开关；目录未配置则先自动识别一次）。"""
+    """立即把内置新版同步进扩展目录（不改开关；未配置则用受管目录）。"""
     cfg = extension_sync.get_config()
-    load_dir = str(cfg.get("load_dir") or "")
-    if not load_dir:
-        load_dir = _resolve_load_dir("auto")
-        extension_sync.save_config(load_dir=load_dir)
+    load_dir = _effective_load_dir(cfg)
     try:
-        res = extension_sync.sync_to(load_dir, _source_dir(), _expected_name())
+        if load_dir == str(extension_sync.managed_dir()):
+            res = extension_sync.ensure_managed(_source_dir(), _expected_name())
+        else:
+            res = extension_sync.sync_to(load_dir, _source_dir(), _expected_name())
     except (FileNotFoundError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     _sync_throttle.update(key="", ts=0.0, result=None)

@@ -60,6 +60,9 @@ desktop/.release_baselines/
 .pytest_tmp/
 # PyInstaller 缓存（PYINSTALLER_CONFIG_DIR 指到工作区内以绕开沙盒批量删除守卫；体积可达数百 MB）
 .pyi_cache/
+# build_mac.sh 的中间产物（每次构建重建；留在工作区里会一直污染 git status）
+build_native/
+build_server_resources/
 
 # 项目本地数据（记忆/技能/会话产物，与主仓库 app-dev/web-dev 一致忽略）
 .workbuddy/

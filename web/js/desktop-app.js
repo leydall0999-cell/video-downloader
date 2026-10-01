@@ -410,9 +410,10 @@
         </div>
         <div class="vdl-sniff-auto" id="sniffAutoRow" hidden>
           <span class="txt" id="sniffAutoText">扩展自动更新：未开启</span>
-          <button type="button" class="primary" id="sniffAutoBtn">开启（自动识别目录）</button>
+          <button type="button" class="primary" id="sniffAutoBtn">开启（自动维护目录）</button>
+          <button type="button" id="sniffAutoCopy" hidden>复制目录路径</button>
           <button type="button" id="sniffAutoSync" hidden>立即同步</button>
-          <button type="button" id="sniffAutoPick" hidden>手动选择目录…</button>
+          <button type="button" id="sniffAutoPick" hidden>手动指定目录…</button>
         </div>
         <div class="vdl-sniff-status" style="margin-top:0" id="sniffHint">提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
@@ -577,8 +578,12 @@
               (autoSt && autoSt.auto
                 // 已开启自动更新：文件由桌面端直接写进扩展目录，扩展稍后自己重载
                 // （见 extension/background.js 的 maybeAutoReload），用户无需任何操作。
-                ? '<span style="display:block;margin-top:4px;color:#2e7d32;">已开启自动更新：新文件会自动写入扩展目录，扩展稍后自己重载生效（通常 1 分钟内）。若几分钟后仍显示旧版，再点下面按钮按手动流程走一次。</span>'
-                : '<span style="display:block;margin-top:4px;color:#9a7c1a;">把解压出的文件<b>覆盖到原来加载的那个文件夹</b>（不要重新「加载已解压」，否则会装出两份），再到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。</span>');
+                // 例外：浏览器里跑的还不是受管目录那一个 → 自动重载永远不会发生，
+                // 必须让用户按面板提示重新加载一次（否则用户会一直等一个不会来的更新）。
+                ? (autoSt.needs_setup
+                  ? '<span style="display:block;margin-top:4px;color:#9a7c1a;">已开启自动更新，但浏览器里当前加载的还不是 App 维护的那个目录。请到下面「扩展自动更新」一行点<b>「复制目录路径」</b>，按提示到 chrome://extensions <b>重新加载一次</b>（仅此一次），此后所有升级都会自动完成。</span>'
+                  : '<span style="display:block;margin-top:4px;color:#2e7d32;">已开启自动更新：新文件会自动写入扩展目录，扩展稍后自己重载生效（通常 1 分钟内）。若几分钟后仍显示旧版，再点下面按钮按手动流程走一次。</span>')
+                : '<span style="display:block;margin-top:4px;color:#9a7c1a;">把解压出的文件<b>覆盖到原来加载的那个文件夹</b>（不要重新「加载已解压」，否则会装出两份），再到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。也可以到下面「扩展自动更新」一行开启自动更新，之后就完全不用管了。</span>');
             const ub = extBanner.querySelector('#sniffExtUpdateBtn');
             if (ub) ub.addEventListener('click', async () => {
               ub.disabled = true;
@@ -621,7 +626,9 @@
     // 复制文本到剪贴板：桌面壳（WKWebView）里 navigator.clipboard 常不存在、
     // execCommand('copy') 也被禁用 —— 必须优先走 pywebview 原生桥，否则「复制链接」
     // 点了**毫无反应**（2026-10-01 用户实测）。可见反馈用 sniffToast，绝不静默。
-    const copyText = (text, btn) => {
+    // what：被复制内容的称呼（默认「链接」；扩展目录路径传「目录路径」）。
+    const copyText = (text, btn, what) => {
+      const label = what || '链接';
       const markDone = () => {
         // 标记为「App 自己写到剪贴板的」→ 剪贴板 watcher 不再为这条链接弹提示条
         noteSelfCopied(text);
@@ -630,9 +637,9 @@
           btn.textContent = '已复制';
           setTimeout(() => { btn.textContent = old; }, 1200);
         }
-        sniffToast('已复制链接');
+        sniffToast('已复制' + label);
       };
-      const markFail = () => sniffToast('复制失败，请手动选中链接复制');
+      const markFail = () => sniffToast('复制失败，请手动选中' + label + '复制');
       const api = window.pywebview && window.pywebview.api;
       if (api && api.copy_to_clipboard) {
         Promise.resolve(api.copy_to_clipboard(text)).then((r) => {
@@ -806,14 +813,22 @@
     // 背景：解压版（Load unpacked）扩展 Chrome **不会自动更新** —— 改了文件也必须到
     // chrome://extensions 点一次 ↻。而官方文档明确「解压版被 reload 视为一次 update」，
     // `chrome.runtime.reload()` 同样有效 → 于是拆成两半：
-    //   ① 桌面端把内置新版**写进**用户那个扩展加载目录（服务端 extension_sync.py，
-    //      带 manifest.name 校验，只增不删），目录由下面这段自动识别 / 让用户手选；
+    //   ① 桌面端把内置新版**写进**扩展目录（服务端 extension_sync.py，带 manifest.name
+    //      校验，只增不删）；
     //   ② 心跳响应告诉扩展「磁盘上已是新版」→ 扩展自己 chrome.runtime.reload()
     //      （见 extension/background.js::maybeAutoReload）
-    // 本段只做「显示状态 + 开/关 + 手动同步」，落盘与安全边界全在服务端。
+    // 本段只做「显示状态 + 开/关 + 手动同步 + 复制目录路径」，落盘与安全边界全在服务端。
+    //
+    // ⚠️ 落点为什么是 App 自己的目录（不是用户原来那个「下载」里的）：
+    // macOS 把「下载 / 桌面 / 文稿」列为隐私保护目录，App 一访问就弹系统授权框；本项目
+    // 是 ad-hoc 签名、每次重建 cdhash 都变 → 每次都要重新弹框，而弹框出现在后台线程里
+    // 没人点 → open() 在内核里**无限期阻塞**（真机实测该端点 90s 不返回，进程栈停在
+    // os_scandir→__opendir2→open$NOCANCEL）。所以落点改到 ~/视频工坊浏览器扩展
+    // （主目录根，不属保护范围）；代价是用户首次要**从新目录重新加载一次**扩展。
     const autoRow = panel.querySelector('#sniffAutoRow');
     const autoText = panel.querySelector('#sniffAutoText');
     const autoBtn = panel.querySelector('#sniffAutoBtn');
+    const autoCopyBtn = panel.querySelector('#sniffAutoCopy');
     const autoSyncBtn = panel.querySelector('#sniffAutoSync');
     const autoPickBtn = panel.querySelector('#sniffAutoPick');
 
@@ -826,29 +841,45 @@
       return s.length > 44 ? '…' + s.slice(-43) : s;
     };
 
+    // 一次性加载引导。为什么必须手把手：扩展的**加载目录**决定它的扩展 ID（Chrome 按
+    // 路径派生），ID 变则设置与网站授权全丢 —— 所以从旧目录搬到受管目录只能用户自己做一次。
+    const SETUP_STEPS = '首次使用（仅此一次）：① 点上面的「复制目录路径」'
+      + ' ② 打开 chrome://extensions，开启右上角「开发者模式」'
+      + ' ③ 点「加载已解压的扩展程序」，在路径栏按 ⌘⇧G 粘贴该路径并选中这个文件夹'
+      + ' ④ 若之前装过旧版（一般在「下载」文件夹里），请把它移除，只留这一个';
+
     const renderAutoRow = () => {
       const st = autoSt;
       if (!st) { autoRow.hidden = true; return; }
       autoRow.hidden = false;
       const src = st.source_version || '?';
       const inst = st.installed_version || '';
-      if (!st.auto) {
-        autoText.innerHTML = '扩展自动更新：<b>未开启</b>'
-          + '<span class="path">开启后每次更新都由桌面端自动写入扩展目录，你无需再覆盖文件、点 ↻</span>';
-      } else if (!st.load_dir) {
-        autoText.innerHTML = '扩展自动更新：<b>待确认目录</b>'
-          + '<span class="path">没能唯一识别到扩展目录，请点「手动选择目录…」</span>';
-      } else {
-        const err = st.error ? ' <span class="warn">' + escHtml(st.error) + '</span>' : '';
-        const pend = st.pending
-          ? ' <span class="ok">磁盘已是 v' + escHtml(st.on_disk_version) + '，等扩展自动重载</span>' : '';
-        autoText.innerHTML = '扩展自动更新：<b>已开启</b>（浏览器内 v' + escHtml(inst || '?')
+      const dir = st.load_dir || st.managed_dir || '';
+      const head = st.auto
+        ? '扩展自动更新：<b>已开启</b>（浏览器内 v' + escHtml(inst || '未连接')
           + ' → 最新 v' + escHtml(src) + '）'
-          + '<span class="path">' + escHtml(shortPath(st.load_dir)) + '</span>' + pend + err;
+        : '扩展自动更新：<b>未开启</b>';
+      // tail 里含 <span>，所以各段自行转义，不能整体 escHtml
+      let tail;
+      if (!st.auto) {
+        tail = '开启后 App 会把新版写进它自己维护的扩展目录，扩展随后自动重载 —— 你不用再覆盖文件、点 ↻';
+      } else if (st.error) {
+        tail = '<span class="warn">' + escHtml(st.error) + '</span>';
+      } else if (st.needs_setup) {
+        tail = SETUP_STEPS;
+      } else if (st.pending) {
+        tail = '磁盘已是 v' + escHtml(st.on_disk_version) + '，等浏览器里的扩展自动重载（最多 1 分钟）';
+      } else {
+        tail = '已是最新，无需操作';
       }
-      autoBtn.textContent = st.auto ? '关闭自动更新' : '开启（自动识别目录）';
+      const dirLine = st.auto
+        ? '<span class="path">目录：' + escHtml(shortPath(dir)) + '</span>'
+        : '';
+      autoText.innerHTML = head + dirLine + '<span class="path">' + tail + '</span>';
+      autoBtn.textContent = st.auto ? '关闭自动更新' : '开启（自动维护目录）';
+      autoCopyBtn.hidden = !st.auto;
       autoSyncBtn.hidden = !st.auto;
-      autoPickBtn.hidden = false;
+      autoPickBtn.hidden = !st.auto;
     };
 
     const refreshAutoStatus = async () => {
@@ -858,10 +889,23 @@
     };
 
     const autoToastFrom = (r) => {
-      const v = r && r.sync && r.sync.reload_to ? r.sync.reload_to
-        : (r && r.result && r.result.version ? r.result.version : '');
-      sniffToast(v ? ('扩展文件已更新到 v' + v + '，浏览器内会自动重载') : '已开启扩展自动更新');
+      const st = (r && r.status) || {};
+      if (st.sync && st.sync.reload_to) {
+        sniffToast('扩展文件已更新到 v' + st.sync.reload_to + '，浏览器内会自动重载');
+      } else if (st.needs_setup) {
+        sniffToast('目录已就绪 v' + (st.source_version || '?') + '：请按提示把扩展加载一次');
+      } else {
+        sniffToast('已开启扩展自动更新');
+      }
     };
+
+    // 把受管目录路径复制到剪贴板（用户要粘贴到 chrome://extensions 的文件夹选择框里）
+    autoCopyBtn.addEventListener('click', () => {
+      const st = autoSt || {};
+      const dir = st.load_dir || st.managed_dir || '';
+      if (!dir) { sniffToast('还没有可用目录，请先「开启」'); return; }
+      copyText(dir, autoCopyBtn, '目录路径');
+    });
 
     autoBtn.addEventListener('click', async () => {
       autoBtn.disabled = true;
@@ -872,14 +916,14 @@
           });
           sniffToast('已关闭扩展自动更新');
         } else {
-          // load_dir='auto' → 服务端按「manifest.name 匹配 + 版本吻合」识别，识别不出会 400
+          // load_dir='auto' → 用 App 自己维护的扩展目录（服务端必要时就地初始化）
           const r = await request('/api/extension/update-config', {
             method: 'POST', body: JSON.stringify({ load_dir: 'auto', auto: true }),
           });
           autoToastFrom(r);
         }
       } catch (err) {
-        showError('开启失败', (err && err.message) || '没能自动识别扩展目录，请点「手动选择目录…」');
+        showError('开启失败', (err && err.message) || '没能准备扩展目录');
       } finally {
         autoBtn.disabled = false;
         await refreshAutoStatus();
@@ -897,7 +941,8 @@
         });
         autoToastFrom(r);
       } catch (err) {
-        showError('设置失败', (err && err.message) || '该目录里没有本扩展的 manifest.json');
+        showError('设置失败', (err && err.message)
+          || '该目录里没有本扩展的 manifest.json（或它属于系统保护的桌面/文稿/下载目录）');
       } finally {
         autoPickBtn.disabled = false;
         await refreshAutoStatus();

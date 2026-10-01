@@ -7,20 +7,26 @@
 后，扩展心跳仍自报 1.0.42，直到用户点 ↻）。官方文档同时写明「解压版被 reload 视为
 一次 update」，`chrome.runtime.reload()` 同样有效 → 于是把「更新」拆成两半：
 
-    ① 桌面端把内置新版**写进**用户的扩展加载目录
+    ① 桌面端把内置新版**写进 App 自己维护的扩展目录**
        （server/extension_sync.py + server/routers/extension.py）
     ② 心跳响应回一句 reload_to → 扩展自己 `chrome.runtime.reload()`
        （extension/background.js::maybeAutoReload）
 
-本测试分三层，**重点是真跑**（模块/路由真被调用、文件真落盘、边界真被拒），源码契约
+⚠️ 落点为什么是 App 自己的目录而不是用户原来那个（2026-10-02 真机实测）：
+用户那个加载目录通常在 `~/Downloads`，属 macOS 隐私保护（TCC）目录；本项目 ad-hoc
+签名每次重建 cdhash 都变 → 每次都重新弹授权框，后台线程里没人点 → `open()` 在内核里
+**无限期阻塞**（该端点 90s 不返回）。详见 §D 与 extension_sync 模块 docstring。
+
+本测试分四层，**重点是真跑**（模块/路由真被调用、文件真落盘、边界真被拒），源码契约
 只用于钉住那些「改坏了会静默失效」的点：
 
-  A. extension_sync 模块行为：安全默认 / manifest.name 判据 / 拒写他人目录 /
-     只增不删 / 排除 tests / 幂等 / 脏数据不抛
+  A. extension_sync 模块行为：安全默认 / manifest.name 判据 / 拒写他人目录 / 只增不删 /
+     排除 tests / 幂等 / 脏数据不抛 / 受管目录初始化
   B. 路由行为：maybe_sync 三态（未开不动盘 · 落后才写并催重载 · 已最新不瞎催）
-     + 重启续催 + 降级保护 + update-status/config/now
+     + 重启续催 + 降级保护 + 受管模式 + needs_setup + update-status/config/now
   C. 源码契约：心跳回传字段（且包在 try 里）、扩展自重载与防循环、**不得新增权限**、
-     面板接线、桌面桥提示语
+     面板接线（复制目录路径 / 一次性加载引导）、桌面桥提示语
+  D. **绝不碰 macOS 隐私保护目录**：源码里不得再有扫描实现，write/config 两条路都拒
 
 运行：
     cd server && python tests/test_extension_autoupdate_wiring.py
@@ -36,6 +42,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 测试隔离：绝不写用户真实数据目录（配置就存在数据目录里）
 _TMP = tempfile.mkdtemp(prefix="vdl_test_extauto_")
 os.environ["VDL_DATA_DIR"] = _TMP
+# 受管扩展目录也必须隔离：默认是 ~/视频工坊浏览器扩展，测试里绝不能真去建它
+os.environ["VDL_EXTENSION_DIR"] = os.path.join(_TMP, "ext-managed")
 os.environ.setdefault("VDL_LOGIN_GATE", "0")
 
 import cdp_sniffer  # noqa: E402
@@ -154,6 +162,40 @@ def section_a_module():
     check("拒写 .app 包内路径（写进去会让 app 签名失效）",
           bad3.get("ok") is False and "签名" in str(bad3.get("error")), bad3)
 
+    # —— 受管目录（零点击的真正落点）：首次初始化 + 幂等 ——
+    md = es.managed_dir()
+    check("受管目录默认不在任何 TCC 保护目录内（App 才能自由读写）",
+          es.is_tcc_protected(md) is False, str(md))
+    check("受管目录名不带版本号（路径恒定 → Chrome 派生的扩展 ID 稳定）",
+          not any(ch.isdigit() for ch in md.name), md.name)
+
+    empty = root / "empty-managed"
+    empty.mkdir()
+    bad_empty = es.sync_to(empty, src, _NAME)               # 默认不允许初始化空目录
+    check("默认不允许往「空目录」里写（用户手选一个乱目录时不该被写）",
+          bad_empty.get("ok") is False, bad_empty)
+
+    mres = es.sync_to(empty, src, _NAME, allow_empty=True)
+    check("受管目录首次初始化：空目录允许写入（allow_empty=True）且版本就位",
+          mres.get("ok") is True and es.read_version(empty) == "9.9.9", mres)
+    mres2 = es.sync_to(empty, src, _NAME, allow_empty=True)
+    check("受管目录同步幂等（第二次 written=0）",
+          mres2.get("ok") is True and mres2.get("written") == 0, mres2)
+
+    bad_foreign_empty = es.sync_to(foreign, src, _NAME, allow_empty=True)
+    check("即使 allow_empty=True 也绝不写「别人的扩展」目录",
+          bad_foreign_empty.get("ok") is False and "拒绝" in str(bad_foreign_empty.get("error")),
+          bad_foreign_empty)
+
+    # —— ensure_managed：真建受管目录并落盘（测试里已用 VDL_EXTENSION_DIR 隔离）——
+    ens = es.ensure_managed(src, _NAME)
+    check("ensure_managed 真把扩展落进受管目录",
+          ens.get("ok") is True and es.read_version(md) == "9.9.9", ens)
+    check("ensure_managed 落盘排除 tests/ 与 .DS_Store",
+          not (md / "tests").exists() and not (md / ".DS_Store").exists())
+    check("受管目录里没有写进受保护的 Downloads（隔离生效）",
+          es.is_tcc_protected(md) is False)
+
     broken = root / "broken"
     broken.mkdir()
     (broken / "manifest.json").write_text("{ not json", encoding="utf-8")
@@ -219,11 +261,41 @@ def section_b_router():
     cdp_sniffer.SNIFFER.mark_ext_seen("0.0.1")
     st = rext.extension_update_status()
     need = {"auto", "load_dir", "installed_version", "source_version",
-            "on_disk_version", "pending", "detected_dir", "error"}
+            "on_disk_version", "pending", "explicit_dir", "managed_dir",
+            "using_managed", "needs_setup", "error"}
     check("update-status 暴露所需的全部字段", need <= set(st.keys()), sorted(st.keys()))
     check("update-status：源码版本 == 包内 manifest 版本，且磁盘/已装/待重载判定一致",
           st.get("source_version") == src_ver and st.get("installed_version") == "0.0.1"
           and st.get("on_disk_version") == src_ver and st.get("pending") is True, st)
+    check("update-status：显式目录时 using_managed=False（不偷偷改成受管目录）",
+          st.get("using_managed") is False and st.get("explicit_dir") == str(loaded), st)
+
+    # —— 零配置路径：目录留空 → 一律用「App 维护的受管目录」 ——
+    es.save_config(load_dir="", auto=True)
+    check("_effective_load_dir：目录留空 → 受管目录",
+          rext._effective_load_dir(es.get_config()) == str(es.managed_dir()))
+    st2 = rext.extension_update_status()
+    check("update-status 在受管模式下会把受管目录补齐（用户一眼能看到路径）",
+          st2.get("using_managed") is True and st2.get("load_dir") == str(es.managed_dir())
+          and es.read_version(es.managed_dir()) == src_ver, st2)
+
+    # —— 受管模式下心跳能把目录刷成最新并催重载 ——
+    es.save_config(load_dir="", auto=True)
+    _reset_throttle()
+    r = rext.maybe_sync("0.0.1")
+    check("受管模式下开启自动更新：心跳真把受管目录写成最新并回 reload_to",
+          r.get("auto") is True and r.get("reload_to") == src_ver
+          and es.read_version(es.managed_dir()) == src_ver, r)
+
+    # —— auto 开但「浏览器里跑的还不是受管目录那个」→ needs_setup，让 UI 引导一次性加载 ——
+    _reset_throttle()
+    st3 = rext.extension_update_status()
+    check("浏览器版本落后于内置 → needs_setup=True（面板据此给出一次性加载引导）",
+          st3.get("needs_setup") is True, st3)
+    cdp_sniffer.SNIFFER.mark_ext_seen(src_ver)
+    st4 = rext.extension_update_status()
+    check("浏览器版本已等于内置 → needs_setup=False（不再打扰用户）",
+          st4.get("needs_setup") is False, st4)
 
     # —— update-config：非法目录必须 400 ——
     try:
@@ -315,129 +387,87 @@ def section_c_contracts():
     check("更新横幅在「已开启自动更新」时改成自动说明（不再要求用户覆盖目录）",
           "已开启自动更新：新文件会自动写入扩展目录" in js)
 
+    # —— 落点改成受管目录后，前端必须带上「复制路径 + 一次性加载引导」——
+    check("前端有「复制目录路径」按钮并走原生剪贴板桥",
+          'id="sniffAutoCopy"' in js and "copyText(dir, autoCopyBtn, '目录路径')" in js)
+    check("前端有一次性加载引导（needs_setup → SETUP_STEPS）",
+          "const SETUP_STEPS = " in js and "st.needs_setup" in js)
+    check("前端不再对外声称「自动识别目录」（识别已移除，落点是固定受管目录）",
+          "开启（自动识别目录）" not in js and "开启（自动维护目录）" in js)
+    check("前端在受管模式下即使 load_dir 为空也能显示目录（兜底 managed_dir）",
+          "st.load_dir || st.managed_dir || ''" in js)
+    check("更新横幅在 needs_setup 时改口（否则用户会等一个永远不会来的自动重载）",
+          "但浏览器里当前加载的还不是 App 维护的那个目录" in js)
 
-def section_d_bounded_scan():
-    """D. 目录扫描**必须有界**（2026-10-02 真机实测抓到的阻塞 bug）。
 
-    现象：冻结成 .app 后，扫 ~/Desktop / ~/Documents 被 macOS 隐私保护（TCC）挡在
-    内核里无限期阻塞 —— 进程栈全是 os_scandir→__opendir2→open$NOCANCEL，
-    /api/extension/update-status 90s 不返回；而同一段代码在终端里只要 0.08s
-    （权限上下文不同，所以纯离线单测永远发现不了）。修法：扫描进 daemon 线程 +
-    硬超时 + 单飞，端点因此**必然**在预算内返回。
+def section_d_no_tcc_scan():
+    """D. 「绝不碰 macOS 隐私保护目录」的回归守卫（2026-10-02 真机实测抓到的假死 bug）。
 
-    这里把「会卡住的扫描」注入进来，验证三件事：超时能返回、部分结果可用、
-    卡住的那次不会被反复重开线程。
+    现象：第一版把落点定在用户在 ~/Downloads 里那个加载目录，冻结成 .app 后一碰就
+    **永久阻塞** —— /api/extension/update-status 90 秒不返回，进程栈全是
+    os_scandir → __opendir2 → open$NOCANCEL；把同一段代码换成 /tmp 路径则 13 毫秒返回。
+
+    根因：macOS 隐私保护（TCC）+ 本项目 ad-hoc 签名（每次重建 cdhash 都变）→ 每次都
+    重新弹「访问下载文件夹」授权框，而后台线程里没人点 → open() 在内核里无限期阻塞。
+    与 app.py::_tcc_safe_config_path 记的是同一根因（那条注释说已被咬过 3 次）。
+
+    处置：落点改到 App 自己的受管目录（不属保护范围），并**彻底删掉**「扫描
+    Downloads/Desktop/Documents 找候选目录」那套实现——它正是卡死来源。本段钉住：
+      ① 源码里不得再出现扫描实现（防好心加回来）；
+      ② 受保护目录的判定正确；
+      ③ 真调用时 write 与 config 两条路都必须拒绝。
     """
-    import threading
-    import time as _t
+    repo = Path(__file__).resolve().parents[2]
+    src_py = (repo / "server" / "extension_sync.py").read_text(encoding="utf-8")
 
-    import extension_sync as es
+    # ① 不得再有任何「扫描用户目录」的实现
+    check("D1 已彻底移除扫描候选目录的实现（_iter_candidate_dirs / detect_load_dir）",
+          "_iter_candidate_dirs" not in src_py and "def detect_load_dir(" not in src_py)
+    check("D1 不再出现扫描根/规模上限常量（那是下载/桌面/文稿三类目录的扫描器）",
+          "SCAN_ROOTS" not in src_py and "_SCAN_MAX" not in src_py)
+    check("D1 受保护目录只作为「拒绝名单」存在",
+          "_TCC_PROTECTED" in src_py and "隐私保护目录" in src_py)
+    check("D1 受管目录可被 VDL_EXTENSION_DIR 覆盖（单测隔离 / 用户换盘）",
+          'os.environ.get("VDL_EXTENSION_DIR")' in src_py)
 
-    name = _real_name()
+    # ② 判定正确
+    home = Path.home()
+    if sys.platform == "darwin":
+        check("D2 macOS：桌面 / 文稿 / 下载 都判定为受保护",
+              all(es.is_tcc_protected(home / n / "probe")
+                  for n in ("Desktop", "Documents", "Downloads")))
+    else:
+        check("D2 非 macOS：不判定为受保护（这套限制是 macOS 特有的）",
+              es.is_tcc_protected(home / "Downloads" / "probe") is False)
+    check("D2 App 自己的受管目录**不是**受保护目录（否则自己把自己锁死）",
+          es.is_tcc_protected(es.managed_dir()) is False, str(es.managed_dir()))
 
-    def _reset_scan():
-        es._scan_state.update(on=False, hits=[])
+    # ③ 真调用被拒：写路径。刻意用一个**不存在**的下载目录路径来探测，
+    #    这样既能验证「危险路径优先拦」，又不会真往用户的下载目录里建东西。
+    root = Path(tempfile.mkdtemp(prefix="exttcc_", dir=_TMP))
+    src_dir = _write_ext(root / "src", _NAME, "9.9.9")
+    probe = home / "Downloads" / "_vdl_tcc_guard_probe_not_exist"
+    res = es.sync_to(probe, src_dir, _NAME, allow_empty=True)
+    check("D3 写受保护目录被拒（且先于「目录不存在」判定：危险路径优先拦）",
+          res.get("ok") is False and "隐私保护目录" in str(res.get("error")), res)
+    check("D3 拒绝信息里直接给出受管目录（用户知道该改成哪儿）",
+          str(es.managed_dir()) in str(res.get("error")), res.get("error"))
 
-    def _freeze():
-        """模拟 TCC 阻塞：永不结束的生成器。"""
-        while True:
-            _t.sleep(3600)
-            yield  # pragma: no cover - 永不产出
-
-    # D1. 扫描卡死 → detect_load_dir 仍在预算内返回，且给出 timeout 而非 not_found
-    _reset_scan()
-    real_iter = es._iter_candidate_dirs
-    es._iter_candidate_dirs = _freeze
+    # ③ 真调用被拒：config 路径（否则用户手选一个下载目录就会把 App 配到卡死）
     try:
-        t0 = _t.time()
-        det = es.detect_load_dir("1.0.43", name, budget=0.4)
-        cost = _t.time() - t0
-        check("D1 扫描卡死时仍在预算内返回（不会把请求线程挂死）",
-              cost < 3.0, f"耗时 {cost:.2f}s")
-        check("D1 一个都没扫到且超时 → reason=timeout（区别于 not_found）",
-              det.get("reason") == "timeout", det.get("reason"))
-        check("D1 超时不返回任何 dir（不瞎猜）", det.get("dir") == "", det.get("dir"))
+        rext._resolve_load_dir(str(home / "Downloads" / "anything"))
+        raised = False
+    except HTTPException as exc:
+        raised = exc.status_code == 400
+    check("D3 update-config 指向受保护目录 → 400 拒绝（不让用户把 App 配到卡死）",
+          raised is True)
 
-        # D2. 上一次还卡着 → 再次调用**立即**返回，绝不再开新线程
-        t0 = _t.time()
-        det2 = es.detect_load_dir("1.0.43", name, budget=0.4)
-        cost2 = _t.time() - t0
-        check("D2 已有扫描卡住时不再开新线程（立即返回，防线程越堆越多）",
-              cost2 < 0.05, f"耗时 {cost2:.3f}s")
-        check("D2 复用的仍是 timeout 结论", det2.get("reason") == "timeout", det2.get("reason"))
-    finally:
-        es._iter_candidate_dirs = real_iter
-        _reset_scan()
-
-    # D3. 卡住之前已扫到的部分结果要能用（Downloads 排在扫描根最前）
-    with tempfile.TemporaryDirectory() as td:
-        good = _write_ext(Path(td) / "视频工坊扩展", name, "1.0.44", code="new")
-
-        def _partial():
-            yield good            # 先给出真命中（真实目录，过 is_our_extension）
-            while True:           # 然后卡死后半段
-                _t.sleep(3600)
-                yield  # pragma: no cover
-
-        _reset_scan()
-        es._iter_candidate_dirs = _partial
-        try:
-            det3 = es.detect_load_dir("1.0.43", name, budget=0.4)
-            check("D3 超时也交出已扫到的部分结果（别把已找到的丢了）",
-                  det3.get("dir") == str(good), det3.get("dir"))
-            check("D3 部分结果下判据仍走 version/single 分支",
-                  det3.get("reason") in ("single", "version_match", "version_match_multi"),
-                  det3.get("reason"))
-        finally:
-            es._iter_candidate_dirs = real_iter
-            _reset_scan()
-
-    # D4. 扫描很快结束且没命中 → not_found（不能一律报 timeout）
-    _reset_scan()
-
-    def _empty():
-        return iter(())
-
-    es._iter_candidate_dirs = _empty
-    try:
-        det4 = es.detect_load_dir("1.0.43", name, budget=1.0)
-        check("D4 扫完确实没有 → reason=not_found（与 timeout 区分开）",
-              det4.get("reason") == "not_found", det4.get("reason"))
-    finally:
-        es._iter_candidate_dirs = real_iter
-        _reset_scan()
-
-    # D5. 扫描抛异常也不能冒泡（扫描失败不该让端点 500）
-    _reset_scan()
-
-    def _boom():
-        raise OSError("模拟 iterdir 权限错误")
-
-    es._iter_candidate_dirs = _boom
-    try:
-        det5 = es.detect_load_dir("1.0.43", name, budget=1.0)
-        check("D5 扫描抛异常不冒泡、按「没找到」处理",
-              det5.get("reason") in ("not_found", "timeout"), det5.get("reason"))
-    finally:
-        es._iter_candidate_dirs = real_iter
-        _reset_scan()
-
-    # D6. 请求线程绝不直接迭代那个可能阻塞的生成器（源码契约）
-    src = (Path(__file__).resolve().parent.parent / "extension_sync.py").read_text(
-        encoding="utf-8")
-    i_fn = src.find("def detect_load_dir(")
-    i_end = src.find("\n# ---------- 同步 ----------", i_fn)
-    body = src[i_fn:i_end if i_end > 0 else len(src)]
-    check("D6 detect_load_dir 经 _collect_hits_bounded 消费扫描（不在请求线程里裸迭代）",
-          "_collect_hits_bounded(" in body and "_iter_candidate_dirs" not in body)
-    check("D6 扫描跑在**线程**里且带硬超时（否则请求线程会被 TCC 挂死）",
-          "threading.Thread(" in src and "done.wait(budget)" in src)
-    check("D6 有单飞状态（卡住时不反复重开线程）",
-          "_scan_state" in src and "_scan_lock" in src)
-
-    # 收尾：确保没有遗留的「在飞」状态影响其它测试
-    _reset_scan()
-    del threading
+    # ③ 对照：非保护目录仍可正常写入（守卫不能误伤正常路径）
+    okdir = root / "okdir"
+    okdir.mkdir()
+    ok_res = es.sync_to(okdir, src_dir, _NAME, allow_empty=True)
+    check("D3 对照：非保护目录仍可正常写入（守卫没有误伤正常路径）",
+          ok_res.get("ok") is True and es.read_version(okdir) == "9.9.9", ok_res)
 
 
 def main():
@@ -447,7 +477,7 @@ def main():
     section_a_module()
     section_b_router()
     section_c_contracts()
-    section_d_bounded_scan()
+    section_d_no_tcc_scan()
     print("\n" + "-" * 68)
     if _fail:
         print(f"通过: {_total - len(_fail)}  失败: {len(_fail)}")

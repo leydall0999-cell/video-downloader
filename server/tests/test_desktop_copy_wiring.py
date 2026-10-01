@@ -53,8 +53,10 @@ def main():
     check("旧的无反馈写法 `navigator.clipboard && navigator.clipboard.writeText(it.url);` 已移除",
           "navigator.clipboard && navigator.clipboard.writeText(it.url);" not in src)
 
-    # ③ copyText 助手存在
-    check("定义了 copyText 助手", re.search(r"const copyText = \(text, btn\) =>", src) is not None)
+    # ③ copyText 助手存在（第三个参数 what＝被复制内容的称呼，默认「链接」）
+    check("定义了 copyText 助手", re.search(r"const copyText = \(text, btn, what\) =>", src) is not None)
+    check("what 缺省为「链接」（原有调用点语义不变）",
+          re.search(r"const label = what \|\| '链接';", src) is not None)
 
     # ④ 原生桥优先于 navigator.clipboard（顺序敏感：先桥、后网页 API）
     i_api = src.find("api.copy_to_clipboard")
@@ -63,9 +65,9 @@ def main():
     check("原生桥调用位置早于 navigator.clipboard 回退",
           0 <= i_api < i_nav, f"api@{i_api} nav@{i_nav}")
 
-    # ⑤ 失败必须可见（不静默）—— 用最少依赖的文案钉住
-    check("复制失败有可见提示（不静默）", "复制失败，请手动选中链接复制" in src)
-    check("复制成功有 toast 反馈", "已复制链接" in src)
+    # ⑤ 失败必须可见（不静默）—— 用最少依赖的文案钉住（标签化后为拼接写法）
+    check("复制失败有可见提示（不静默）", "复制失败，请手动选中" in src)
+    check("复制成功有 toast 反馈（标签化）", "sniffToast('已复制' + label)" in src)
 
     # ⑥ 两端契约：Python 侧桥必须存在，且 macOS 走 pbcopy
     check("Python 侧 desktop_launcher.py 存在", DL.is_file(), str(DL))
