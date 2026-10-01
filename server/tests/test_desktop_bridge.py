@@ -432,6 +432,61 @@ def _clipboard_section():
     check("复制桥 None 入参不炸（当空串处理）", out_none == "OK", out_none)
 
 
+def _clipboard_read_section():
+    """桌面壳「读取剪贴板」原生桥（VdlApi.read_clipboard）。
+
+    背景（2026-10-02 用户需求「复制链接后在 app 上粘贴下载」）：桌面壳里
+    `navigator.clipboard.readText()` 与 writeText 一样不可靠（WebKit 对 readText
+    更严），所以读取也走原生桥。这里拦掉 subprocess.run，只检查调了哪个命令与
+    返回值语义，绝不真去读用户剪贴板。
+    """
+    import types
+
+    captured = {}
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None, **kw):
+        captured["cmd"] = list(cmd)
+        return types.SimpleNamespace(returncode=0, stdout=b"https://youtu.be/abc\n", stderr=b"")
+
+    real_run = subprocess.run
+    subprocess.run = fake_run
+    try:
+        out = dl.VdlApi().read_clipboard()
+    finally:
+        subprocess.run = real_run
+
+    cmd = captured.get("cmd") or []
+    check("读取桥透传剪贴板原文（trim 交给前端，桥不加工）",
+          out == "https://youtu.be/abc\n", repr(out))
+    if sys.platform == "darwin":
+        check("读取桥调 pbpaste", cmd[:1] == ["pbpaste"], cmd)
+    check("读取桥返回值不含 ERROR 前缀（否则会被当链接文本误判）",
+          not out.startswith("ERROR"), out)
+
+    # 读取失败/工具缺失：返回空串，绝不抛、也不得返回 ERROR 前缀
+    def boom(*_a, **_kw):
+        raise RuntimeError("no clipboard")
+
+    subprocess.run = boom
+    try:
+        out_err = dl.VdlApi().read_clipboard()
+    finally:
+        subprocess.run = real_run
+    check("读取桥异常时返回空串（不抛、不返回 ERROR 前缀）",
+          out_err == "", repr(out_err))
+
+    # 命令非零退出同样返回空串（不能把错误信息当剪贴板内容）
+    def rc_fail(cmd, capture_output=False, text=False, timeout=None, **kw):
+        return types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"fail")
+
+    subprocess.run = rc_fail
+    try:
+        out_rc = dl.VdlApi().read_clipboard()
+    finally:
+        subprocess.run = real_run
+    check("读取桥命令非零退出返回空串", out_rc == "", repr(out_rc))
+
+
 def main():
     print("▶ 桌面桥文件选择：kind 类型白名单")
 
@@ -493,6 +548,10 @@ def main():
     print("")
     print("▶ 桌面桥「复制到剪贴板」：原生剪贴板写入（修「复制链接」按钮静默失效）")
     _clipboard_section()
+
+    print("")
+    print("▶ 桌面桥「读取剪贴板」：原生剪贴板读取（剪贴板自动识别一键下载）")
+    _clipboard_read_section()
 
     print("")
     print("=========================================")

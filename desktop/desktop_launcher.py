@@ -724,6 +724,46 @@ class VdlApi:
         except Exception as exc:
             return f"ERROR: {exc}"
 
+    def read_clipboard(self) -> str:
+        """读取系统剪贴板里的文本（桌面版原生桥）。
+
+        与 copy_to_clipboard 对称：桌面壳 WKWebView 里 `navigator.clipboard.readText()`
+        在没有用户手势/权限时会被拒（WebKit 对 readText 比 writeText 更严），所以剪贴板
+        **读取**同样一律走原生桥。用途：用户「复制视频链接 → 切回 App → 一键下载」
+        （见 web/js/desktop-app.js 的剪贴板识别）。
+
+        返回剪贴板文本；为空或读取失败一律返回 ""（调用方只关心「有没有可用文本」）。
+        故意**不**返回 "ERROR: ..." —— 调用方拿返回值当链接文本判断，错误前缀会被
+        当成一个诡异的 URL 弹提示条。
+        """
+        import subprocess
+        try:
+            if sys.platform == "win32":
+                p = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+                    capture_output=True, timeout=5,
+                )
+                if p.returncode != 0:
+                    return ""
+                return p.stdout.decode("utf-8", errors="replace")
+            if sys.platform == "darwin":
+                # pbpaste 是 macOS 自带，无第三方依赖（与 pbcopy 对称）
+                p = subprocess.run(["pbpaste"], capture_output=True, timeout=5)
+                if p.returncode != 0:
+                    return ""
+                return p.stdout.decode("utf-8", errors="replace")
+            # Linux：xclip / xsel 二选一
+            for cmd in (["xclip", "-selection", "clipboard", "-o"],
+                        ["xsel", "--clipboard", "--output"]):
+                try:
+                    p = subprocess.run(cmd, capture_output=True, timeout=5, check=True)
+                    return p.stdout.decode("utf-8", errors="replace")
+                except FileNotFoundError:
+                    continue
+            return ""
+        except Exception:
+            return ""
+
     def choose_folder(self) -> str:
         """弹出系统文件夹选择框，返回所选目录绝对路径；用户取消或失败返回空串。
 

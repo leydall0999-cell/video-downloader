@@ -21,6 +21,17 @@
   }
   const el = window.VDL.el;
 
+  // ---- 剪贴板自动识别的「自复制」标记（2026-10-02） ----
+  // App 自己往剪贴板写过的链接（用户点「复制链接」）不该再触发「检测到视频链接」
+  // 提示条——否则用户每复制一次就被自己弹一次。watcher 与本标记通过闭包共享。
+  const selfCopiedUrls = [];
+  const noteSelfCopied = (url) => {
+    if (typeof url !== 'string' || !url) return;
+    if (selfCopiedUrls.indexOf(url) < 0) selfCopiedUrls.push(url);
+    while (selfCopiedUrls.length > 20) selfCopiedUrls.shift();
+  };
+  const isSelfCopied = (url) => selfCopiedUrls.indexOf(url) >= 0;
+
   // 显式「退出」/「返回桌面」按钮：仅桌面版(pywebview)显示；浏览器回退模式隐藏（无原生窗口可退）
   (function initQuitButton() {
     const wire = () => {
@@ -562,6 +573,8 @@
     // 点了**毫无反应**（2026-10-01 用户实测）。可见反馈用 sniffToast，绝不静默。
     const copyText = (text, btn) => {
       const markDone = () => {
+        // 标记为「App 自己写到剪贴板的」→ 剪贴板 watcher 不再为这条链接弹提示条
+        noteSelfCopied(text);
         if (btn) {
           const old = btn.textContent;
           btn.textContent = '已复制';
@@ -785,5 +798,195 @@
     const wire = () => { badgeBtn.hidden = false; };
     if (window.pywebview && window.pywebview.api) wire();
     else document.addEventListener('pywebviewready', wire, { once: true });
+  })();
+
+  // ---- 剪贴板自动识别：复制视频链接 → 切回 App → 一键下载（2026-10-02 用户需求） ----
+  // 用户原话：「想复制链接复制完在 app 上粘贴下载」。做法是连粘贴都省掉：复制完切回 App
+  // 就自动弹一条提示，点「下载」直接建任务，点「解析并选择」走原来的解析流程挑清晰度。
+  //
+  // 为什么「轮询 + focus」两条通道都挂：桌面壳 WKWebView 里 window 的 focus 事件触发
+  // 时机不稳（窗口激活不一定派发 DOM focus），只靠它会出现「复制了却没反应」；只靠轮询
+  // 又最多有 2s 延迟。谁先到算谁，命中后置 lastHandled 去重。
+  // 读取一律走原生桥 read_clipboard（原因见 desktop_launcher.py 该方法的注释）。
+  // 纯 web 环境（浏览器开 127.0.0.1:8321）没有 pywebview.api → 天然不启用。
+  (function initClipboardWatcher() {
+    const POLL_MS = 2000;
+    const MAX_URL_LEN = 2048;
+    const Q_KEY = 'vdl.sniff.quality';   // 与嗅探面板共用「上次选的清晰度」
+    const QUALITY_CHOICES = [
+      { v: 'best', t: '最佳画质' }, { v: '2160', t: '4K 2160P' }, { v: '1440', t: '2K 1440P' },
+      { v: '1080', t: '1080P' }, { v: '720', t: '720P' }, { v: '480', t: '480P' },
+      { v: '360', t: '360P' }, { v: 'audio', t: '仅音频 MP3' },
+    ];
+    let lastHandled = '';   // 最近一次「提示过 / 处理过 / 被忽略」的链接，用于去重
+    let currentUrl = '';    // 当前提示条对应的链接（空=没挂提示条）
+    let bar = null;
+    let busy = false;       // 防桥调用重入
+
+    const rememberQuality = (v) => { try { localStorage.setItem(Q_KEY, v); } catch (e) {} };
+    const lastQuality = () => { try { return localStorage.getItem(Q_KEY) || 'best'; } catch (e) { return 'best'; } };
+
+    // 严格判定「像一条视频链接」：单个 http(s) URL 且不含空白（带标题的复制会被拒，
+    // 免得把一整段文字当链接）。宁可少弹，不要误弹。
+    const asVideoUrl = (text) => {
+      if (typeof text !== 'string') return '';
+      const t = text.trim();
+      if (!t || t.length > MAX_URL_LEN) return '';
+      if (/\s/.test(t)) return '';
+      return /^https?:\/\/\S+$/i.test(t) ? t : '';
+    };
+
+    const ensureBar = () => {
+      if (bar) return bar;
+      const css = document.createElement('style');
+      css.textContent =
+        '#vdl-clip-bar{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:10001;' +
+        'display:flex;align-items:center;gap:10px;max-width:92vw;background:#1f2735;color:#eaeaea;' +
+        'border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:9px 12px;' +
+        'box-shadow:0 8px 26px rgba(0,0,0,.45);font-size:13px;}' +
+        '#vdl-clip-bar .cb-ico{font-size:15px;flex:0 0 auto;}' +
+        '#vdl-clip-bar .cb-txt{display:flex;flex-direction:column;min-width:0;max-width:46vw;}' +
+        '#vdl-clip-bar .cb-t1{font-weight:600;}' +
+        '#vdl-clip-bar .cb-t2{color:#9fb0c6;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '#vdl-clip-bar select{background:#2a3444;color:#eaeaea;border:1px solid rgba(255,255,255,.16);' +
+        'border-radius:6px;padding:3px 6px;font-size:12px;}' +
+        '#vdl-clip-bar button{border:0;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;}' +
+        '#vdl-clip-bar .cb-dl{background:#4f46e5;color:#fff;font-weight:600;}' +
+        '#vdl-clip-bar .cb-dl:disabled{opacity:.6;cursor:default;}' +
+        '#vdl-clip-bar .cb-parse{background:#2a3444;color:#cfd8e3;}' +
+        '#vdl-clip-bar .cb-x{background:transparent;color:#8f9fb2;font-size:14px;padding:2px 6px;}' +
+        '#vdl-clip-bar .cb-dl{min-height:0;height:auto;}';
+      document.head.appendChild(css);
+
+      bar = document.createElement('div');
+      bar.id = 'vdl-clip-bar';
+      bar.hidden = true;
+      bar.innerHTML =
+        '<span class="cb-ico">🔗</span>' +
+        '<div class="cb-txt"><div class="cb-t1">检测到视频链接</div><div class="cb-t2"></div></div>' +
+        '<select class="cb-q" title="「下载」用这个清晰度"></select>' +
+        '<button type="button" class="cb-dl">下载</button>' +
+        '<button type="button" class="cb-parse">解析并选择</button>' +
+        '<button type="button" class="cb-x" title="忽略这条">✕</button>';
+      const sel = bar.querySelector('.cb-q');
+      QUALITY_CHOICES.forEach((q) => {
+        const o = document.createElement('option');
+        o.value = q.v; o.textContent = q.t;
+        sel.appendChild(o);
+      });
+      document.body.appendChild(bar);
+
+      sel.addEventListener('change', () => rememberQuality(sel.value));
+
+      bar.querySelector('.cb-dl').addEventListener('click', async () => {
+        if (!currentUrl) return;
+        const url = currentUrl;
+        const quality = sel.value;
+        const btn = bar.querySelector('.cb-dl');
+        rememberQuality(quality);
+        btn.disabled = true; btn.textContent = '创建中…';
+        const ok = await startDownload(url, quality);
+        btn.disabled = false; btn.textContent = '下载';
+        lastHandled = url;
+        if (ok) hideBar();
+      });
+      bar.querySelector('.cb-parse').addEventListener('click', () => {
+        if (!currentUrl) return;
+        const url = currentUrl;
+        lastHandled = url;
+        parseInstead(url);
+        hideBar();
+      });
+      bar.querySelector('.cb-x').addEventListener('click', () => {
+        if (currentUrl) lastHandled = currentUrl;
+        hideBar();
+      });
+      return bar;
+    };
+
+    const showBar = (url) => {
+      currentUrl = url;
+      const b = ensureBar();
+      b.querySelector('.cb-t2').textContent = url.length > 90 ? url.slice(0, 90) + '…' : url;
+      const sel = b.querySelector('.cb-q');
+      const want = lastQuality();
+      sel.value = want;
+      if (sel.value !== want) sel.value = 'best';   // 记忆值不在选项内时兜底
+      b.hidden = false;
+    };
+
+    const hideBar = () => { if (bar) bar.hidden = true; currentUrl = ''; };
+
+    // 「下载」：直接建任务（与嗅探面板 downloadItem 同一后端入口）
+    const startDownload = async (url, quality) => {
+      const { request, createTaskCard, trackTask, showError, switchView } = window.VDL;
+      try {
+        const data = await request('/api/download', {
+          method: 'POST',
+          body: JSON.stringify({
+            url, quality, title: '', cookie: '', proxy: '', extract_script: '',
+            format_id: '', concurrent_fragments: 0, downloader: 'native',
+            play_url: '', watch_options: [], is_hls: false, referer: '',
+          }),
+        });
+        const refs = createTaskCard(data.task_id, { title: '(剪贴板链接)', platform: '剪贴板' });
+        trackTask(data.task_id, refs, '');
+        if (typeof switchView === 'function') switchView('download');
+        return true;
+      } catch (err) {
+        if (typeof showError === 'function') {
+          showError('下载失败', (err && err.message) || '未知错误');
+        }
+        return false;
+      }
+    };
+
+    // 「解析并选择」：填进首页输入框并提交，走原来的解析 → 挑清晰度 → 下载
+    const parseInstead = (url) => {
+      const { switchView } = window.VDL;
+      if (typeof switchView === 'function') switchView('download');
+      const form = document.getElementById('resolveForm');
+      const input = document.getElementById('urlInput');
+      if (!form || !input) return;
+      input.value = url;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      try {
+        if (form.requestSubmit) form.requestSubmit();
+        else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      } catch (e) { /* 提交失败时输入框已填好，用户可手动点「解析链接」 */ }
+    };
+
+    const check = async () => {
+      if (busy || currentUrl) return;   // 提示条挂着时先不打扰，等用户处理完
+      const api = window.pywebview && window.pywebview.api;
+      if (!(api && typeof api.read_clipboard === 'function')) return;
+      busy = true;
+      let text = '';
+      try { text = await Promise.resolve(api.read_clipboard()); } catch (e) { text = ''; }
+      busy = false;
+      const url = asVideoUrl(text);
+      if (!url || url === lastHandled) return;
+      if (isSelfCopied(url)) { lastHandled = url; return; }   // App 自己写的，别自弹
+      showBar(url);
+    };
+
+    const arm = () => {
+      setInterval(check, POLL_MS);
+      window.addEventListener('focus', () => { check(); }, false);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') check();
+      });
+      setTimeout(check, 800);   // 启动后先查一次：App 刚开就把剪贴板里已有的链接接住
+    };
+
+    const api = window.pywebview && window.pywebview.api;
+    if (api && typeof api.read_clipboard === 'function') {
+      arm();
+    } else {
+      document.addEventListener('pywebviewready', () => {
+        const a = window.pywebview && window.pywebview.api;
+        if (a && typeof a.read_clipboard === 'function') arm();
+      }, { once: true });
+    }
   })();
 })();

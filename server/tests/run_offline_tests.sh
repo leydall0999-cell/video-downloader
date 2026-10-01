@@ -116,6 +116,7 @@ run_one test_ffmpeg_tools.py
 run_one test_compress.py
 run_one test_desktop_bridge.py
 run_one test_desktop_copy_wiring.py            # 桌面壳「复制链接」：原生剪贴板桥优先 + 失败不静默（2026-10-01）
+run_one test_clip_autodetect_wiring.py         # 剪贴板自动识别一键下载：原生桥读取 + 提示条接线（2026-10-02 用户「复制链接后粘贴下载」）
 run_one test_sniffer_ext_ping.py            # 嗅探「扩展心跳」三态：未连/在线/过期离线（2026-10-01 面板简化配套）
 run_one test_sniffer_ext_push.py            # 嗅探「扩展自动直推」：入库/去重/kind_hint/脏数据（2026-10-01 自动嗅探配套）
 run_one test_ext_version_cmp.py             # 扩展版本比对守卫：只在「内置比已装新」时提示升级（2026-10-01 防降级）
