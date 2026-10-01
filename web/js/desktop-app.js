@@ -400,9 +400,17 @@
      *  本身就是单一流，一律走 best 原逻辑 —— 否则给 4K 直链选 1080 反而挑不到流。
      *  条目自带（扩展 popup 里选的）优先，其次面板默认。 */
     const sniffQuality = (it) => {
+      // ① 来源方明确指定了清晰度（扩展 popup 里选的）→ 一律采信。只有「页面 / 清单」
+      //    这类可能多档的来源才会带上它（扩展侧 qualityForItem 已把关，直链不带）。
+      //    2026-10-02 真机实测：页面 URL 经服务端分类后可能落成 media，若这里再按
+      //    kind 过滤就会把用户选的清晰度无声丢掉，故显式值优先于 kind 判断。
+      const explicit = (it && it.quality) || '';
+      if (explicit) return explicit;
+      // ② 面板默认值只对可能多档的来源生效；直链/分片本身就是单一流，强塞 1080
+      //    反而挑不到流，一律走 best。
       const kind = (it && it.kind) || '';
       if (kind !== 'page' && kind !== 'playlist') return 'best';
-      return (it && it.quality) || qualitySel.value || 'best';
+      return qualitySel.value || 'best';
     };
 
     // 包内扩展版本（缓存）：与扩展心跳自报版本比对 → 决定更新横幅

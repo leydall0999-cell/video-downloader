@@ -58,6 +58,13 @@ ALLOWED_QUALITY = frozenset({
     "audio", "webm", "m4a",
 })
 
+# 来源方可声明的条目类型白名单（与 add_ext_items 的 kind_hint 同一套语义）。
+# 背景（2026-10-02 真机实测）：扩展 popup 的「解析并下载」提交的是**页面 URL**
+# （YouTube 等靠 yt-dlp 解析），而 classify_media 只认 .mp4/.m3u8 这类**后缀**
+# ——页面 URL 判不出，若直接落回 "media"，桌面端 sniffQuality 会把它当「直链」
+# 而丢弃用户选的清晰度。故与 kind_hint 同规矩：服务端判定优先，判不出才采信来源方。
+ALLOWED_KIND = frozenset({"media", "playlist", "segment", "page"})
+
 # ---------------------------------------------------------------------------
 # 媒体判定（纯函数，便于离线测试）
 # ---------------------------------------------------------------------------
@@ -416,6 +423,8 @@ class CDPSniffer:
         - source：提交来源标记（'manual' 悬浮球兜底 / 'extension' 浏览器扩展）
         - quality：来源方指定的清晰度（2026-10-01 用户反馈「没法选择分辨率」）。
           只在 ALLOWED_QUALITY 内透传，非法/缺省一律置 ""，桌面端用面板默认值兜底。
+        - kind：来源方声明的条目类型（2026-10-02 真机实测补）。页面 URL 判不出类型时
+          采信 ALLOWED_KIND 内的 hint，否则桌面端会当成「直链」丢掉上面的 quality。
         """
         url = (payload.get("url") or "").strip()
         if not url:
@@ -423,10 +432,15 @@ class CDPSniffer:
         quality = (payload.get("quality") or "").strip().lower()
         if quality not in ALLOWED_QUALITY:
             quality = ""
+        # 服务端判定优先；判不出（页面 URL 无媒体后缀）才采信来源方 hint，且仅限白名单。
+        kind = classify_media(url, payload.get("mime") or "")
+        hint = (payload.get("kind") or "").strip().lower()
+        if not kind and hint in ALLOWED_KIND:
+            kind = hint
         item = {
             "url": url,
             "mime": (payload.get("mime") or "").strip(),
-            "kind": classify_media(url, payload.get("mime") or "") or "media",
+            "kind": kind or "media",
             "referer": (payload.get("referer") or "").strip(),
             "page_url": (payload.get("page_url") or "").strip(),
             "page_title": payload.get("page_title") or "",

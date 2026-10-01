@@ -267,6 +267,9 @@ function postSend(base, it, carry) {
     page_url: it.pageUrl || it.pageTitle || '',
     page_title: it.pageTitle || '',
     cookie: carry ? (it.cookie || '') : '',
+    // 条目类型：必须随包上报。页面 URL（YouTube 等）没有媒体后缀，服务端判不出类型，
+    // 少这一项就会被当成「直链」，进而丢弃上面的 quality（2026-10-02 真机实测发现）。
+    kind: it.kind || '',
     // 清晰度：只对「视频页 / HLS 清单」上报（见 qualityForItem）。空串=让桌面端用它的默认值。
     quality: qualityForItem(it),
     source: 'extension'
