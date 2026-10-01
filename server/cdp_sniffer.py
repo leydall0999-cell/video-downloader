@@ -244,6 +244,7 @@ class CDPSniffer:
         self._desktop_auth: tuple[float, bool] | None = None      # (ts, 桌面端是否带有效登录态)
         self._ext_seen: float = 0.0                                # 扩展最近一次心跳 ts（0=从未见过）
         self._ext_version: str = ""                                # 扩展自报版本号（心跳携带，空=旧版扩展）
+        self._ext_tele: tuple[int, int] = (0, 0)                   # (captured, pushed) 扩展遥测快照
         self._error = ""
         self._state = "idle"                                   # idle / running / error
 
@@ -280,6 +281,10 @@ class CDPSniffer:
                 # 扩展自报版本（2026-10-01）：面板与桌面端包内版本比对，旧版则提示更新。
                 # 空串=用户装的还是 1.0.35 及更早（心跳不带版本），同样触发更新提示。
                 "ext_version": self._ext_version,
+                # 扩展遥测（2026-10-01）：本地已捕获条数 / 推送尝试数——「嗅探不到」时
+                # captured>0 而 items=0 = 断在推送层；captured=0 = 断在捕获层（页面没重播等）
+                "ext_captured": self._ext_tele[0],
+                "ext_pushed": self._ext_tele[1],
             }
 
     def mark_desktop_auth(self, user_id: str | None) -> None:
@@ -300,12 +305,16 @@ class CDPSniffer:
         with self._lock:
             self._desktop_auth = (time.time(), True)
 
-    def mark_ext_seen(self, version: str = "") -> None:
-        """扩展心跳（2026-10-01）：记录最近一次可见时间 + 自报版本，供面板判断更新。"""
+    def mark_ext_seen(self, version: str = "", captured: int = 0, pushed: int = 0) -> None:
+        """扩展心跳（2026-10-01）：记录可见时间 + 自报版本 + 捕获/推送遥测，供面板判断更新与排障。"""
         with self._lock:
             self._ext_seen = time.time()
             if version and isinstance(version, str):
                 self._ext_version = version.strip()[:20]
+            try:
+                self._ext_tele = (max(0, int(captured)), max(0, int(pushed)))
+            except (TypeError, ValueError):
+                pass
 
     def report_result(self, send_id: str, ok: bool, message: str = "") -> bool:
         """桌面端把「建任务结果」写回给扩展（send_id 来自 /api/sniffer/send 的响应）。"""

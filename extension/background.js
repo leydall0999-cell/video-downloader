@@ -156,8 +156,10 @@ function handleCompleted(details) {
 /** 自动嗅探直推（2026-10-01）：扩展每嗅到新条目就发给桌面端，进同一个
  *  items 库——没有这条链路，桌面面板列表永远是空的（用户以为没嗅到）。
  *  服务端按 URL 去重，重复推无副作用；失败静默（下次同 URL 再推）。 */
+var pushTries = 0;            // 本次 SW 生命周期内推送尝试数（遥测：定位「没捕获」vs「推送失败」）
 function pushToServer(item) {
   if (!item || !item.url) return;
+  pushTries++;
   getEndpoint(function (base) {
     if (!base) return;
     try {
@@ -278,13 +280,16 @@ function heartbeat() {
   getEndpoint(function (base) {
     if (!base) return;
     try {
-      // 1.0.37 起心跳带自报版本：桌面端与包内扩展比对 → 旧版提示一键更新
-      var ver = '';
+      // 1.0.37 起心跳带自报版本：桌面端与包内扩展比对 → 旧版提示一键更新。
+      // 1.0.38 起再带捕获/推送遥测：captured=本地库条数、pushed=推送尝试数
+      // ——用户「嗅探不到」时，一眼分清断在捕获层还是推送层。
+      var ver = '', captured = 0;
       try { ver = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) {}
+      try { captured = (typeof store.totalCount === 'function') ? store.totalCount() : 0; } catch (e) {}
       fetch(base + '/api/sniffer/ext-ping', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ version: ver }),
+        body: JSON.stringify({ version: ver, captured: captured, pushed: pushTries }),
       }).catch(function () {});
     } catch (e) {}
   });

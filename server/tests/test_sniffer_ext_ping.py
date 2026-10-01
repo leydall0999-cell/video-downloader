@@ -57,7 +57,23 @@ def test_ext_version_report():
     print("✅ 心跳版本自报：入库/兼容旧版/脏数据防御 全过")
 
 
+def test_ext_telemetry():
+    # 7) 遥测（1.0.38+）：心跳带 captured/pushed → status 暴露，排障一眼分清断层
+    rs.sniffer_ext_ping(payload={"version": "1.0.38", "captured": 12, "pushed": 5})
+    st = cdp_sniffer.SNIFFER.status()
+    assert st.get("ext_captured") == 12 and st.get("ext_pushed") == 5, f"遥测未入库: {st}"
+    # 旧版心跳（无字段）→ 归零不报错；脏数据（字符串/负数）→ 防御
+    rs.sniffer_ext_ping(payload={"version": "1.0.38"})
+    st2 = cdp_sniffer.SNIFFER.status()
+    assert st2.get("ext_captured") == 0 and st2.get("ext_pushed") == 0
+    rs.sniffer_ext_ping(payload={"captured": "x", "pushed": -3})
+    st3 = cdp_sniffer.SNIFFER.status()
+    assert st3.get("ext_captured") == 0 and st3.get("ext_pushed") == 0
+    print("✅ 心跳遥测：入库/缺省归零/脏数据防御 全过")
+
+
 if __name__ == "__main__":
     test_ext_ping_flow()
     test_ext_version_report()
+    test_ext_telemetry()
     print("🎉 扩展心跳回归测试全部通过")

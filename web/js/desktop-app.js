@@ -429,8 +429,14 @@
       if (extBanner) {
         if (st.ext_online) {
           const installed = st.ext_version || '';
+          const cap = (typeof st.ext_captured === 'number') ? st.ext_captured : null;
           extBanner.className = 'vdl-sniff-extbanner on';
-          extBanner.innerHTML = '✓ <b>扩展已连接</b>——正在你日常的浏览器中嗅探，播放视频即可，无需另开浏览器。';
+          extBanner.innerHTML = '✓ <b>扩展已连接</b>——正在你日常的浏览器中嗅探，播放视频即可，无需另开浏览器。' +
+            (cap !== null
+              ? '<span style="display:block;margin-top:2px;">扩展本地已捕获 <b>' + cap + '</b> 条媒体流' +
+                (cap === 0 ? '——列表为空时把视频页<b>刷新或重新播放一次</b>即可（只抓新流量）。' : '。') +
+                '</span>'
+              : '');
           getExtPkgVer().then((pkgVer) => {
             if (pkgVer === '?' || pkgVer === installed) return; // 拿不到版本不误报
             extBanner.className = 'vdl-sniff-extbanner warn';
