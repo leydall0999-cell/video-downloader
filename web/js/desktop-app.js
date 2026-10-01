@@ -483,7 +483,7 @@
       const steps = (info && info.install_steps) || [];
       const name = (info && info.name) || '视频工坊媒体嗅探';
       const ver = (info && info.version) || '';
-      const zipName = ver ? 'vdl-sniffer-extension-' + ver + '.zip' : 'vdl-sniffer-extension.zip';
+      const zipName = ver ? '视频工坊浏览器扩展-' + ver + '.zip' : '视频工坊浏览器扩展.zip';
       box.hidden = false;
       box.style.cssText =
         'margin-top:10px;padding:10px 12px;background:#f4f6fa;border:1px solid #e3e7ee;border-radius:10px;font-size:12px;line-height:1.7;color:#2b3442;';
@@ -567,8 +567,8 @@
       try {
         const info = await request('/api/extension/info');
         const fname = (info && info.version)
-          ? 'vdl-sniffer-extension-' + info.version + '.zip'
-          : 'vdl-sniffer-extension.zip';
+          ? '视频工坊浏览器扩展-' + info.version + '.zip'
+          : '视频工坊浏览器扩展.zip';
         // 桌面壳（WKWebView）里 blob + <a download> 会被静默吞掉（文件根本不落盘，
         // toast 却照弹）——必须走 pywebview 原生桥：Python 拉本机服务器的 zip，
         // 弹系统保存面板（默认「下载」文件夹）写盘，返回真实保存路径。
