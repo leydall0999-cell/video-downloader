@@ -346,6 +346,16 @@
     // （此前靠 wire() 解锁，pywebviewready 事件在动态脚本执行前就已派发时会永远隐藏）
     badgeBtn.hidden = false;
 
+    // 入口徽标的显隐（2026-10-02 用户反馈「这个是不是不需要了，可以隐藏」）：
+    //   扩展在线（全自动模式）= 它会在你日常浏览器里自动嗅探、并把结果在下方自动建成任务，
+    //   此时整个面板只剩「诊断信息」，没必要一直占着顶栏 → 收起徽标。
+    //   扩展不在线（还没装 / 浏览器没开）→ 徽标自动回来：那是「CDP 兜底嗅探」和
+    //   「首次下载扩展」的唯一入口，不能一并藏掉，否则新用户无路可走。
+    //   注意：面板 DOM 始终保留（只是打不开），pollPicked 常驻轮询也照旧，
+    //   所以扩展/悬浮球推来的条目仍会**自动建任务**，与徽标显隐无关。
+    let snifferExtOnline = false;
+    const applyBadgeVisibility = () => { badgeBtn.hidden = !!snifferExtOnline; };
+
     const panel = document.createElement('div');
     panel.className = 'vdl-sniff-panel';
     panel.hidden = true;
@@ -488,6 +498,9 @@
       const extOnline = !!(st && st.ext_online) && !cdpBusy;
       // 扩展在线（且 CDP 未在跑）＝全自动模式：收起 CDP 按钮 / 下载按钮，提示换成自动说明
       if (startBtn) startBtn.hidden = extOnline;
+      // 同步「入口徽标」显隐：全自动模式下收起徽标（详见本模块顶部注释）
+      snifferExtOnline = extOnline;
+      applyBadgeVisibility();
       if (dlExtBtn) dlExtBtn.hidden = extOnline;
       if (hintEl) {
         hintEl.textContent = extOnline
@@ -794,8 +807,8 @@
     // picked 轮询常驻（悬浮球点击不依赖面板是否打开）
     pickedTimer = setInterval(pollPicked, POLL_PICKED_MS);
 
-    // 桌面壳就绪后显示入口徽标
-    const wire = () => { badgeBtn.hidden = false; };
+    // 桌面壳就绪后按当前状态决定入口徽标是否可见（扩展在线则保持隐藏，不让它闪回来）
+    const wire = () => { applyBadgeVisibility(); };
     if (window.pywebview && window.pywebview.api) wire();
     else document.addEventListener('pywebviewready', wire, { once: true });
   })();
