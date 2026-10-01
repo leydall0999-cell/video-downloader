@@ -58,6 +58,8 @@ desktop/.release_baselines/
 # 构建/测试临时目录（本机产生，体积可观，不入库）
 .build_tmp/
 .pytest_tmp/
+# PyInstaller 缓存（PYINSTALLER_CONFIG_DIR 指到工作区内以绕开沙盒批量删除守卫；体积可达数百 MB）
+.pyi_cache/
 
 # 项目本地数据（记忆/技能/会话产物，与主仓库 app-dev/web-dev 一致忽略）
 .workbuddy/
