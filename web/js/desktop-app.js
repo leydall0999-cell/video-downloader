@@ -491,7 +491,7 @@
         '<div style="font-weight:600;margin-bottom:6px;">已下载「' + escHtml(name) + '」' +
         (ver ? ' v' + escHtml(ver) : '') + '，按以下步骤装到浏览器：</div>' +
         '<div style="margin-bottom:6px;color:#5a6472;">安装包 <b>' + escHtml(zipName) +
-        '</b> 已保存到浏览器默认的「下载」文件夹（访达 → 下载），解压后按下面步骤加载。</div>' +
+        '</b> 已保存（保存面板默认「下载」文件夹，可自选位置），解压后按下面步骤加载。</div>' +
         (steps.length
           ? '<ol style="margin:0;padding-left:18px;">' + steps.map((s) => '<li>' + escHtml(s) + '</li>').join('') + '</ol>'
           : '<div>打开 chrome://extensions → 开发者模式 → 加载已解压的扩展程序，选择刚下载的文件夹即可。</div>');
@@ -566,13 +566,27 @@
       btn.disabled = true;
       try {
         const info = await request('/api/extension/info');
-        // 触发 zip 下载：WKWebView 拦截裸 <a download>，故走 fetch→blob→临时 a 点击（与全站下载同套路）
-        const resp = await fetch('/api/extension/package');
-        if (!resp.ok) throw new Error('打包失败(' + resp.status + ')');
-        const blob = await resp.blob();
         const fname = (info && info.version)
           ? 'vdl-sniffer-extension-' + info.version + '.zip'
           : 'vdl-sniffer-extension.zip';
+        // 桌面壳（WKWebView）里 blob + <a download> 会被静默吞掉（文件根本不落盘，
+        // toast 却照弹）——必须走 pywebview 原生桥：Python 拉本机服务器的 zip，
+        // 弹系统保存面板（默认「下载」文件夹）写盘，返回真实保存路径。
+        const api = window.pywebview && window.pywebview.api;
+        if (api && typeof api.save_direct_url === 'function') {
+          const res = await api.save_direct_url(location.origin + '/api/extension/package', fname);
+          if (typeof res === 'string' && res.startsWith('ERROR:')) {
+            throw new Error(res.replace(/^ERROR:\s*/, ''));
+          }
+          if (res === 'CANCELLED') return; // 用户在保存面板点了取消：不提示不弹步骤
+          renderExtHelp(info);
+          sniffToast('✓ 扩展包已保存：' + res);
+          return;
+        }
+        // 浏览器模式兜底：fetch→blob→临时 a 点击
+        const resp = await fetch('/api/extension/package');
+        if (!resp.ok) throw new Error('打包失败(' + resp.status + ')');
+        const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
