@@ -15,6 +15,7 @@
 运行：python3 test_sniffer_badge_hide_wiring.py   （仓库根或本目录均可）
 """
 import os
+import re
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +75,24 @@ def main():
     i_call = seg.find("applyBadgeVisibility();")
     check("先赋值后调用（避免用上一帧旧值）",
           0 <= i_set < i_call, f"set@{i_set} call@{i_call}")
+
+    print("\n②b 面板关闭时也必须能拿到扩展状态（否则冷启动徽标隐藏不生效）")
+    # renderStatus 原本只在「打开面板」时被调用；若没有常驻轮询，冷启动时 snifferExtOnline
+    # 永远是 false → 徽标一直挂着。故必须有独立的状态轮询。
+    check("定义了常驻状态轮询 refreshStatusOnly",
+          "const refreshStatusOnly = async () =>" in src)
+    check("常驻轮询只拉轻量 /api/sniffer/status",
+          "renderStatus(await request('/api/sniffer/status'))" in src)
+    # 用行首正则锚定「独立语句」，避免把 `// refreshStatusOnly();` 这种注释掉也算通过
+    check("冷启动立即判定一次（不等第一次定时器）",
+          bool(re.search(r"(?m)^\s*refreshStatusOnly\(\);", src)))
+    check("用 setInterval 周期跑状态轮询",
+          bool(re.search(r"(?m)^\s*setInterval\(refreshStatusOnly, POLL_STATUS_MS\);", src)))
+    # 关着面板时绝不能拉被限流的 /items
+    seg_poll = _section(src, "const refreshStatusOnly = async () =>", "// 桌面壳就绪后")
+    check("状态轮询里不请求被限流的 /api/sniffer/items",
+          "sniffer/items" not in seg_poll,
+          "关面板时不该拉 /items（限流端点）")
 
     print("\n③ wire() 不再无条件把徽标显示出来")
     check("wire 走 applyBadgeVisibility（不硬编码 hidden=false）",

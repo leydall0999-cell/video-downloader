@@ -807,6 +807,19 @@
     // picked 轮询常驻（悬浮球点击不依赖面板是否打开）
     pickedTimer = setInterval(pollPicked, POLL_PICKED_MS);
 
+    // 嗅探状态轮询常驻：renderStatus 原先只在「打开面板」时被调用（见上方 refresh 的调用点），
+    // 于是面板关着时前端根本不知道扩展在不在线 → 刚加的「扩展在线就收起入口徽标」在冷启动
+    // 不会生效（徽标会一直挂着，直到用户手动开一次面板）。故这里独立低频拉一次，让徽标显隐
+    // 从冷启动起就正确、并能跟随扩展上下线实时切换。
+    // 只拉轻量的 /api/sniffer/status；**绝不**在这里拉 /api/sniffer/items（那是被限流的端点，
+    // 关着面板时没必要请求）。getExtPkgVer 自带缓存，重复渲染不会重复请求。
+    const POLL_STATUS_MS = 5000;
+    const refreshStatusOnly = async () => {
+      try { renderStatus(await request('/api/sniffer/status')); } catch (e) { /* 静默 */ }
+    };
+    refreshStatusOnly();                                   // 冷启动立刻判定一次
+    setInterval(refreshStatusOnly, POLL_STATUS_MS);
+
     // 桌面壳就绪后按当前状态决定入口徽标是否可见（扩展在线则保持隐藏，不让它闪回来）
     const wire = () => { applyBadgeVisibility(); };
     if (window.pywebview && window.pywebview.api) wire();
