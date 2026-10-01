@@ -39,6 +39,25 @@ def test_ext_ping_flow():
     print("✅ 扩展心跳：未连→在线→过期离线 三态判定正确，路由层直调通过")
 
 
+def test_ext_version_report():
+    # 4) 心跳自报版本（1.0.37+）：status().ext_version 跟随最后一次心跳
+    cdp_sniffer.SNIFFER._ext_seen = time.time()  # 复活在线态
+    r = rs.sniffer_ext_ping(payload={"version": "1.0.37"})
+    assert r.get("ok") is True
+    st = cdp_sniffer.SNIFFER.status()
+    assert st.get("ext_version") == "1.0.37", f"心跳版本应入库: {st}"
+    # 5) 旧版扩展（body 不带 version / 非 dict）→ 之前报过的版本保留、不报错
+    r2 = rs.sniffer_ext_ping()
+    assert r2.get("ok") is True
+    assert cdp_sniffer.SNIFFER.status().get("ext_version") == "1.0.37"
+    # 6) 脏数据防御：超长/非字符串版本号被截断或忽略
+    rs.sniffer_ext_ping(payload={"version": "x" * 40})
+    v = cdp_sniffer.SNIFFER.status().get("ext_version")
+    assert isinstance(v, str) and len(v) <= 20, f"版本号应截断到 20 字符内: {v!r}"
+    print("✅ 心跳版本自报：入库/兼容旧版/脏数据防御 全过")
+
+
 if __name__ == "__main__":
     test_ext_ping_flow()
+    test_ext_version_report()
     print("🎉 扩展心跳回归测试全部通过")

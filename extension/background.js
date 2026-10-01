@@ -277,7 +277,16 @@ function getEndpoint(cb) {
 function heartbeat() {
   getEndpoint(function (base) {
     if (!base) return;
-    try { fetch(base + '/api/sniffer/ext-ping', { method: 'POST' }).catch(function () {}); } catch (e) {}
+    try {
+      // 1.0.37 起心跳带自报版本：桌面端与包内扩展比对 → 旧版提示一键更新
+      var ver = '';
+      try { ver = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) {}
+      fetch(base + '/api/sniffer/ext-ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version: ver }),
+      }).catch(function () {});
+    } catch (e) {}
   });
 }
 heartbeat();

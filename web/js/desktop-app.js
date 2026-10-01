@@ -299,6 +299,9 @@
 .vdl-sniff-status.on{background:#e8f7ef;color:#0a7d43;}
 .vdl-sniff-extbanner{padding:8px 10px;border-radius:8px;background:#eef4ff;border:1px solid #d9e4ff;color:#2b3a55;font-size:12px;line-height:1.6;margin-bottom:10px;}
 .vdl-sniff-extbanner.on{background:#e8f7ef;border-color:#bfe8d2;color:#0a7d43;}
+.vdl-sniff-extbanner.warn{background:#fff7e0;border-color:#f0dd9e;color:#7a5b00;}
+.vdl-sniff-extbanner button{margin-left:8px;padding:3px 10px;border:0;border-radius:6px;background:#b8860b;color:#fff;font-size:12px;cursor:pointer;}
+.vdl-sniff-extbanner button:hover{background:#9a7009;}
 .vdl-sniff-actions{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
 .vdl-sniff-actions button{border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12px;}
 .vdl-sniff-actions .main{background:#4f46e5;color:#fff;}
@@ -362,6 +365,54 @@
     const hintEl = panel.querySelector('#sniffHint');
 
     const extBanner = panel.querySelector('#sniffExtBanner');
+
+    // 包内扩展版本（缓存）：与扩展心跳自报版本比对 → 决定更新横幅
+    let _extPkgVer = '';
+    const getExtPkgVer = async () => {
+      if (_extPkgVer) return _extPkgVer;
+      try {
+        const info = await request('/api/extension/info');
+        _extPkgVer = (info && info.version) || '?';
+      } catch (err) { _extPkgVer = '?'; }
+      return _extPkgVer;
+    };
+
+    // 下载扩展包（桌面壳走 pywebview 原生保存面板；浏览器模式 blob 兜底）
+    const downloadExtPackage = async () => {
+      const info = await request('/api/extension/info');
+      const fname = (info && info.version)
+        ? '视频工坊浏览器扩展-' + info.version + '.zip'
+        : '视频工坊浏览器扩展.zip';
+      // 桌面壳（WKWebView）里 blob + <a download> 会被静默吞掉（文件根本不落盘，
+      // toast 却照弹）——必须走 pywebview 原生桥：Python 拉本机服务器的 zip，
+      // 弹系统保存面板（默认「下载」文件夹）写盘，返回真实保存路径。
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.save_direct_url === 'function') {
+        const res = await api.save_direct_url(location.origin + '/api/extension/package', fname);
+        if (typeof res === 'string' && res.startsWith('ERROR:')) {
+          throw new Error(res.replace(/^ERROR:\s*/, ''));
+        }
+        if (res === 'CANCELLED') return; // 用户在保存面板点了取消：不提示不弹步骤
+        renderExtHelp(info);
+        sniffToast('✓ 扩展包已保存：' + res);
+        return;
+      }
+      // 浏览器模式兜底：fetch→blob→临时 a 点击
+      const resp = await fetch('/api/extension/package');
+      if (!resp.ok) throw new Error('打包失败(' + resp.status + ')');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      renderExtHelp(info);
+      sniffToast('✓ 扩展包已下载，按面板步骤安装到浏览器');
+    };
+
     const renderStatus = (st) => {
       const cdpBusy = st.state === 'running';
       const extOnline = !!(st && st.ext_online) && !cdpBusy;
@@ -373,11 +424,26 @@
           ? '全自动：在你日常的浏览器里正常播放视频即可，嗅探到的媒体会实时出现在下方；点视频页右下角的悬浮球即可发回桌面端下载。'
           : '提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。';
       }
-      // 扩展在线（用户日常浏览器）：绿色横幅替代推荐语——装完立刻有确定性反馈
+      // 扩展在线（用户日常浏览器）：绿色横幅替代推荐语——装完立刻有确定性反馈；
+      // 心跳自报版本与包内版本不一致 → 黄色更新横幅（一键重新下载 zip）
       if (extBanner) {
         if (st.ext_online) {
+          const installed = st.ext_version || '';
           extBanner.className = 'vdl-sniff-extbanner on';
           extBanner.innerHTML = '✓ <b>扩展已连接</b>——正在你日常的浏览器中嗅探，播放视频即可，无需另开浏览器。';
+          getExtPkgVer().then((pkgVer) => {
+            if (pkgVer === '?' || pkgVer === installed) return; // 拿不到版本不误报
+            extBanner.className = 'vdl-sniff-extbanner warn';
+            extBanner.innerHTML =
+              '⚠ 扩展有新版本（已装 v' + escHtml(installed || '旧版') + ' → 最新 v' + escHtml(pkgVer) + '）。' +
+              '<button type="button" id="sniffExtUpdateBtn">更新扩展</button>' +
+              '<span style="display:block;margin-top:4px;color:#9a7c1a;">下载解压后，到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。</span>';
+            const ub = extBanner.querySelector('#sniffExtUpdateBtn');
+            if (ub) ub.addEventListener('click', async () => {
+              ub.disabled = true;
+              try { await downloadExtPackage(); } finally { ub.disabled = false; }
+            });
+          }).catch(() => {});
         } else {
           extBanner.className = 'vdl-sniff-extbanner';
           extBanner.textContent = '推荐：安装浏览器扩展，在你日常的浏览器里直接嗅探，无需另开浏览器。';
@@ -577,40 +643,7 @@
     panel.querySelector('#sniffDownloadExt').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
-      try {
-        const info = await request('/api/extension/info');
-        const fname = (info && info.version)
-          ? '视频工坊浏览器扩展-' + info.version + '.zip'
-          : '视频工坊浏览器扩展.zip';
-        // 桌面壳（WKWebView）里 blob + <a download> 会被静默吞掉（文件根本不落盘，
-        // toast 却照弹）——必须走 pywebview 原生桥：Python 拉本机服务器的 zip，
-        // 弹系统保存面板（默认「下载」文件夹）写盘，返回真实保存路径。
-        const api = window.pywebview && window.pywebview.api;
-        if (api && typeof api.save_direct_url === 'function') {
-          const res = await api.save_direct_url(location.origin + '/api/extension/package', fname);
-          if (typeof res === 'string' && res.startsWith('ERROR:')) {
-            throw new Error(res.replace(/^ERROR:\s*/, ''));
-          }
-          if (res === 'CANCELLED') return; // 用户在保存面板点了取消：不提示不弹步骤
-          renderExtHelp(info);
-          sniffToast('✓ 扩展包已保存：' + res);
-          return;
-        }
-        // 浏览器模式兜底：fetch→blob→临时 a 点击
-        const resp = await fetch('/api/extension/package');
-        if (!resp.ok) throw new Error('打包失败(' + resp.status + ')');
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fname;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 4000);
-        renderExtHelp(info);
-        sniffToast('✓ 扩展包已下载，按面板步骤安装到浏览器');
-      } catch (err) {
+      try { await downloadExtPackage(); } catch (err) {
         showError('下载扩展失败', (err && err.message) || '未知错误');
       } finally {
         btn.disabled = false;
