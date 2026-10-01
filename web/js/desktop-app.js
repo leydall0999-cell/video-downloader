@@ -437,7 +437,7 @@
             extBanner.innerHTML =
               '⚠ 扩展有新版本（已装 v' + escHtml(installed || '旧版') + ' → 最新 v' + escHtml(pkgVer) + '）。' +
               '<button type="button" id="sniffExtUpdateBtn">更新扩展</button>' +
-              '<span style="display:block;margin-top:4px;color:#9a7c1a;">下载解压后，到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。</span>';
+              '<span style="display:block;margin-top:4px;color:#9a7c1a;">把解压出的文件<b>覆盖到原来加载的那个文件夹</b>（不要重新「加载已解压」，否则会装出两份），再到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。</span>';
             const ub = extBanner.querySelector('#sniffExtUpdateBtn');
             if (ub) ub.addEventListener('click', async () => {
               ub.disabled = true;
