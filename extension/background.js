@@ -141,10 +141,43 @@ function handleCompleted(details) {
         res.item.pageTitle = tab.title || '';
         res.item.pageUrl = tab.url || res.item.pageUrl;
         persist();
+        pushToServer(res.item);   // 拿到标题再推，面板「来源」更完整
       });
-    } catch (e) { /* tab 已关闭等 */ }
+    } catch (e) {
+      pushToServer(res.item);
+      /* tab 已关闭等 */
+    }
+  } else if (res) {
+    pushToServer(res.item);
   }
   persist();
+}
+
+/** 自动嗅探直推（2026-10-01）：扩展每嗅到新条目就发给桌面端，进同一个
+ *  items 库——没有这条链路，桌面面板列表永远是空的（用户以为没嗅到）。
+ *  服务端按 URL 去重，重复推无副作用；失败静默（下次同 URL 再推）。 */
+function pushToServer(item) {
+  if (!item || !item.url) return;
+  getEndpoint(function (base) {
+    if (!base) return;
+    try {
+      fetch(base + '/api/sniffer/ext-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{
+            url: item.url,
+            mime: item.mime || '',
+            kind_hint: item.kind || '',
+            referer: item.referer || '',
+            cookie: item.cookie || '',
+            page_url: item.pageUrl || '',
+            page_title: item.pageTitle || ''
+          }]
+        })
+      }).catch(function () {});
+    } catch (e) { /* 静默 */ }
+  });
 }
 
 try {

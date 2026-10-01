@@ -583,16 +583,24 @@ class CDPSniffer:
             pass
 
     def _register(self, *, url: str, mime: str, kind: str, referer: str,
-                  page_url: str, page_title: str) -> None:
+                  page_url: str, page_title: str, source: str = "cdp",
+                  cookie: str = "") -> None:
         with self._lock:
             if url in self._items:
                 self._items[url]["count"] += 1
+                # 扩展补发的标题/cookie 可能比 CDP 首记更全，顺手回填
+                if page_title and not self._items[url].get("page_title"):
+                    self._items[url]["page_title"] = page_title
+                if cookie and not self._items[url].get("cookie"):
+                    self._items[url]["cookie"] = cookie
                 return
             item = {
                 "url": url, "mime": mime, "kind": kind, "referer": referer,
                 "page_url": page_url, "page_title": page_title,
-                "first_seen": time.time(), "count": 1, "source": "cdp",
+                "first_seen": time.time(), "count": 1, "source": source,
             }
+            if cookie:
+                item["cookie"] = cookie
             if kind == "playlist":
                 # 清单到手：淘汰同来源页的分片占位
                 for k in [k for k, v in self._items.items()
@@ -609,6 +617,34 @@ class CDPSniffer:
             self._items[url] = item
             while len(self._items) > MAX_ITEMS:
                 self._items.popitem(last=False)
+
+    def add_ext_items(self, rows: list[dict]) -> int:
+        """浏览器扩展自动推送的嗅探条目并入同一 items 库（2026-10-01）。
+
+        扩展侧（MV3 webRequest）已做过媒体判定，这里按同源规则再分类一次；
+        服务端判不出但扩展带了 kind_hint（media/playlist/segment）则采信 hint。
+        返回实际入库条数（URL 非法 / 与媒体无关的丢弃）。
+        """
+        added = 0
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or "").strip()
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            mime = str(row.get("mime") or "")
+            kind = classify_media(url, mime) or str(row.get("kind_hint") or "")
+            if kind not in ("playlist", "media", "segment"):
+                continue
+            self._register(
+                url=url, mime=mime, kind=kind,
+                referer=str(row.get("referer") or ""),
+                page_url=str(row.get("page_url") or ""),
+                page_title=str(row.get("page_title") or ""),
+                source="ext", cookie=str(row.get("cookie") or ""),
+            )
+            added += 1
+        return added
 
     # ---- 浏览器探测 / 启动 ----
 

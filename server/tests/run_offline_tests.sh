@@ -116,6 +116,7 @@ run_one test_ffmpeg_tools.py
 run_one test_compress.py
 run_one test_desktop_bridge.py
 run_one test_sniffer_ext_ping.py            # 嗅探「扩展心跳」三态：未连/在线/过期离线（2026-10-01 面板简化配套）
+run_one test_sniffer_ext_push.py            # 嗅探「扩展自动直推」：入库/去重/kind_hint/脏数据（2026-10-01 自动嗅探配套）
 run_one test_download_wiring.py
 #  11b. test_login_gate_placement.py —— 登录门禁「挂载位置」守卫（2026-09-27 用户实测：
 #                                       点「解析链接」就弹登录框 = 门禁挂错层）。

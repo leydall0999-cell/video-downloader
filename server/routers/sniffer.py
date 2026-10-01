@@ -66,6 +66,21 @@ def sniffer_ext_ping(response: Response = None) -> dict:  # noqa: RUF013
     return {"ok": True}
 
 
+@router.post('/api/sniffer/ext-push')
+def sniffer_ext_push(payload: dict = Body(...), response: Response = None) -> dict:  # noqa: RUF013
+    """扩展自动推送嗅探条目（2026-10-01）：扩展每嗅到**新**媒体 URL 就推一条。
+
+    没有这条链路时，扩展嗅到的条目只存在扩展本地，桌面面板列表（读服务端
+    items 库）永远是空的，用户会以为「没有嗅探到」。推送幂等：服务端按
+    URL 全量去重，重复推只加 count。
+    """
+    if response is not None:
+        _pna(response)
+    rows = payload.get("items") if isinstance(payload, dict) else None
+    added = cdp_sniffer.SNIFFER.add_ext_items(rows if isinstance(rows, list) else [])
+    return {"ok": True, "added": added}
+
+
 @router.post('/api/sniffer/send')
 def sniffer_send(payload: dict = Body(...), response: Response = None) -> dict:  # noqa: RUF013
     """悬浮球 / 浏览器扩展提交下载项（仅本机/回环场景使用）。
