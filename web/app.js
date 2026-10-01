@@ -128,6 +128,21 @@
   const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /** 网页访客统计埋点（2026-10-01）：极轻量上报，失败一律静默，绝不阻塞主流程。
+   *  服务端只落哈希、不落 IP 明文；用途是回答「网页版有没有流量、从哪来、在哪一步转化」，
+   *  作为广告 / CPS / 会员投入的决策依据。kind 必须在服务端白名单内，否则被丢弃。 */
+  const track = (kind) => {
+    try {
+      if (location.protocol === 'file:') return;   // 本地直接打开不算网页访客
+      fetch('/api/webstats/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, ref: document.referrer || '' }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) { /* 埋点失败绝不影响主流程 */ }
+  };
+
   const $ = (id) => document.getElementById(id);
   const el = {
     form: $('resolveForm'),
@@ -3390,6 +3405,7 @@
 
     const finish = (task) => {
       finished = true;
+      if (task.status === 'completed') track('download_done');
       paintTask(refs, task, task.status === 'completed');
       const tracker = trackers.get(taskId);
       tracker?.source?.close();
@@ -3738,11 +3754,13 @@
       resolved.proxy = proxy;
       resolved.base = useBase;                     // 后续下载/进度/取件都锁定同一节点
       renderVideo(resolved);
+      track('resolve_ok');
       if (el.cookieContribute.checked) {           // 默认勾选即贡献，共享登录态给其他人（取消勾选则不贡献）
         contributeCookie(url, cookie);
       }
     } catch (error) {
       resolved = null;
+      track('resolve_fail');
       showError(error.message || '解析失败', error.hint, '', error.category);
     } finally {
       setLoading(false);
@@ -8823,7 +8841,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.tabImageConvert) el.tabImageConvert.addEventListener('click', () => switchView('imageconvert'));
   if (el.tabSubtitle) el.tabSubtitle.addEventListener('click', () => switchView('subtitle'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
-  if (el.tabMember) el.tabMember.addEventListener('click', () => switchView('member'));
+  if (el.tabMember) el.tabMember.addEventListener('click', () => { switchView('member'); track('member_click'); });
   if (el.tabShare) el.tabShare.addEventListener('click', () => switchView('share'));
   if (el.shareSubnav) el.shareSubnav.querySelectorAll('.uc-sub').forEach((b) => {
     b.addEventListener('click', () => {
@@ -10068,6 +10086,34 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     });
   };
   try { initFeedback(); } catch (_) { /* 反馈组件缺失不影响主流程 */ }
+
+  // 站内自有推广位（2026-10-01）：只推自家产品（桌面端 / 会员），不接任何第三方广告联盟。
+  // 桌面端（pywebview 注入或 file:// 打包页）不显示；用户点 × 后 7 天内不再出现。
+  const initSelfPromo = () => {
+    try {
+      const box = document.getElementById('selfPromo');
+      if (!box) return;
+      if (window.pywebview || location.protocol === 'file:') return;
+      const until = parseInt(localStorage.getItem('vdl_promo_hide_until') || '0', 10);
+      if (until && Date.now() < until) return;
+      box.hidden = false;
+      const closeBtn = document.getElementById('promoCloseBtn');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          box.hidden = true;
+          try { localStorage.setItem('vdl_promo_hide_until', String(Date.now() + 7 * 86400000)); } catch (_) {}
+        });
+      }
+      const dskBtn = document.getElementById('promoDesktopBtn');
+      if (dskBtn) dskBtn.addEventListener('click', () => track('desktop_click'));
+      const memBtn = document.getElementById('promoMemberBtn');
+      if (memBtn) memBtn.addEventListener('click', () => { track('promo_click'); switchView('member'); });
+    } catch (_) { /* 推广位失败绝不影响主流程 */ }
+  };
+  try { initSelfPromo(); } catch (_) {}
+
+  // 网页访客统计：首屏加载上报一次（延后一拍，不占首屏渲染关键路径）
+  setTimeout(() => { track('page_view'); }, 0);
 
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。

@@ -81,7 +81,9 @@ assert.ok(/if \(isMem\) memRender\(\);/.test(sv), 'switchView 未在进入会员
 //    会把用户在加载窗口期点开的「会员」弹回下载视图。必须先判断已有非默认视图选中。
 assert.ok(/if \(!document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)\)/.test(appJs),
   'boot 默认视图必须带「用户已选中非默认视图则不覆盖」保护，否则会员页会被启动竞态弹回下载');
-assert.ok(/if \(el\.tabMember\) el\.tabMember\.addEventListener\('click', \(\) => switchView\('member'\)\)/.test(appJs),
+// 2026-10-01 放宽：点击处理里允许附带埋点等额外语句（箭头函数可有花括号块），
+// 只要仍然调用 switchView('member') 即视为已接线 —— 守卫本意是「点击能切到会员页」。
+assert.ok(/if \(el\.tabMember\) el\.tabMember\.addEventListener\('click', \(\) => \{?\s*switchView\('member'\)/.test(appJs),
   '会员 tab 没有绑定 switchView（点击无反应）');
 assert.ok(/if \(el\.tabMember\) el\.tabMember\.hidden = false;/.test(appJs),
   '网页版 tabs 显示清单未放行 tabMember');

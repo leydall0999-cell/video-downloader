@@ -70,6 +70,20 @@
     <p class="hero-note">💡 网页版受网络环境限制，部分站点的解析能力受限，请前往桌面端体验更强大的功能。</p>
   </section>
 
+  <!-- 站内自有推广位（2026-10-01）：只推自家产品（桌面端 / 会员），不接任何第三方广告联盟。
+       默认隐藏，由 app.js 的 initSelfPromo 在纯网页环境显示；关闭后 7 天内不再出现。 -->
+  <aside class="self-promo" id="selfPromo" hidden aria-label="产品推荐">
+    <div class="self-promo-text">
+      <span class="self-promo-title">要下 2GB 大文件、批量下载、全平台解析？</span>
+      <span class="self-promo-sub">桌面端解锁完整能力 · 会员解锁满速与 AI 积分</span>
+    </div>
+    <div class="self-promo-acts">
+      <a class="self-promo-btn is-primary" id="promoDesktopBtn" href="/download">下载桌面端</a>
+      <button type="button" class="self-promo-btn" id="promoMemberBtn">查看会员权益</button>
+    </div>
+    <button type="button" class="self-promo-close" id="promoCloseBtn" title="7 天内不再显示" aria-label="关闭推荐">×</button>
+  </aside>
+
   <!-- 输入区 -->
   <section class="panel input-panel" aria-labelledby="inputTitle">
     <h2 id="inputTitle" class="sr-only">输入视频链接</h2>

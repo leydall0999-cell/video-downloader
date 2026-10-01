@@ -2164,3 +2164,39 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   .mem-tracks .pf-plans { grid-template-columns: 1fr; }
   .mem-top { align-items: flex-start; }
 }
+
+/* ===== 站内自有推广位（2026-10-01）：只推自家桌面端 / 会员，不放任何第三方广告 ===== */
+.self-promo {
+  position: relative;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: .6rem .9rem;
+  margin: 0 0 1rem; padding: .7rem 2.4rem .7rem .95rem;
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--brand-soft);
+}
+.self-promo[hidden] { display: none; }
+.self-promo-text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.self-promo-title { font-size: .92rem; font-weight: 600; color: var(--text); }
+.self-promo-sub { font-size: .78rem; color: var(--text-mute); }
+.self-promo-acts { display: flex; flex-wrap: wrap; gap: .45rem; }
+.self-promo-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 34px; padding: 0 .8rem;
+  border: 1px solid var(--brand); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--brand);
+  font-size: .82rem; text-decoration: none; cursor: pointer;
+}
+.self-promo-btn:hover { background: var(--brand); color: #fff; }
+.self-promo-btn.is-primary { background: var(--brand); color: #fff; }
+.self-promo-btn.is-primary:hover { background: var(--brand-strong); }
+.self-promo-close {
+  position: absolute; right: .5rem; top: .45rem;
+  width: 26px; height: 26px; min-height: 0;
+  border: none; border-radius: 50%; background: transparent;
+  color: var(--text-mute); font-size: 17px; line-height: 1; cursor: pointer;
+}
+.self-promo-close:hover { background: rgba(15, 23, 42, .06); color: var(--text); }
+@media (max-width: 560px) {
+  .self-promo { flex-direction: column; align-items: stretch; }
+  .self-promo-acts .self-promo-btn { flex: 1; }
+}

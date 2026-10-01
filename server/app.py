@@ -3198,6 +3198,9 @@ from routers import subtitle as _subtitle_rtr
 app.include_router(_subtitle_rtr.router)
 from routers import share_token as _share_token_rtr
 app.include_router(_share_token_rtr.router)
+# 网页访客统计（PV/UV/事件/来源，仅落哈希不落 IP 明文；上架/变现决策的数据依据）
+from routers import webstats as _webstats_rtr
+app.include_router(_webstats_rtr.router)
 # 账号 / per-user 会员解析：供各路由经 request 取当前用户态 store。
 # 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
 from user_membership import get_current_user_id, current_member_store
