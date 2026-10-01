@@ -378,7 +378,13 @@
     //   注意：面板 DOM 始终保留（只是打不开），pollPicked 常驻轮询也照旧，
     //   所以扩展/悬浮球推来的条目仍会**自动建任务**，与徽标显隐无关。
     let snifferExtOnline = false;
-    const applyBadgeVisibility = () => { badgeBtn.hidden = !!snifferExtOnline; };
+    // 「还有事要做」：浏览器里加载的不是受管目录那个 / 版本落后 / 磁盘已更新待重载 ——
+    // update-status 的 needs_setup 正好覆盖这几种（全都满足时才是 false）。
+    // 必须参与徽标显隐：否则扩展一连上就把入口收起来，用户反而看不到迁移/更新引导。
+    let snifferNeedsAttention = false;
+    const applyBadgeVisibility = () => {
+      badgeBtn.hidden = !!snifferExtOnline && !snifferNeedsAttention;
+    };
 
     const panel = document.createElement('div');
     panel.className = 'vdl-sniff-panel';
@@ -885,7 +891,10 @@
     const refreshAutoStatus = async () => {
       try { autoSt = await request('/api/extension/update-status'); }
       catch (e) { autoSt = null; }
+      // needs_setup 同时决定徽标要不要露出来（还有迁移/更新没做完时不能藏入口）
+      snifferNeedsAttention = !!(autoSt && autoSt.needs_setup);
       renderAutoRow();
+      applyBadgeVisibility();
     };
 
     const autoToastFrom = (r) => {
@@ -1022,11 +1031,14 @@
     const POLL_STATUS_MS = 5000;
     const refreshStatusOnly = async () => {
       try { renderStatus(await request('/api/sniffer/status')); } catch (e) { /* 静默 */ }
+      // 顺带刷新自动更新状态：徽标显隐要用 needs_setup（见 applyBadgeVisibility）
+      try { await refreshAutoStatus(); } catch (e) { /* 静默 */ }
     };
     refreshStatusOnly();                                   // 冷启动立刻判定一次
     setInterval(refreshStatusOnly, POLL_STATUS_MS);
 
-    // 桌面壳就绪后按当前状态决定入口徽标是否可见（扩展在线则保持隐藏，不让它闪回来）
+    // 桌面壳就绪后按当前状态决定入口徽标是否可见
+    // （扩展在线**且**没有待办的迁移/更新时才收起，免得把引导入口一起藏掉）
     const wire = () => { applyBadgeVisibility(); };
     if (window.pywebview && window.pywebview.api) wire();
     else document.addEventListener('pywebviewready', wire, { once: true });

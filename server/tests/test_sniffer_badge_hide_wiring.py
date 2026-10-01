@@ -4,13 +4,17 @@
 背景（用户反馈）：扩展装了之后，顶栏的「🔍 浏览器嗅探」徽标 + 右侧抽屉面板成了
 纯诊断信息，用户问「是不是不需要了，可以隐藏」。设计取舍：
 
-  * 扩展**在线**（全自动模式）→ 收起入口徽标（不再占顶栏）；
+  * 扩展**在线且无待办**（全自动模式）→ 收起入口徽标（不再占顶栏）；
   * 扩展**不在线**（没装 / 浏览器没开）→ 徽标自动回来，因为那是「CDP 兜底嗅探」
-    与「首次下载扩展」的**唯一入口**，不能一并藏掉。
+    与「首次下载扩展」的**唯一入口**，不能一并藏掉；
+  * 扩展在线**但还有待办**（浏览器里加载的不是受管目录那个 / 版本落后 / 磁盘已更新
+    待重载，即 update-status 的 needs_setup）→ **也必须露出来**。否则扩展一连上就把
+    入口收走，而「迁移到受管目录」「更新扩展」的引导**全在那个面板里**，用户反而无路
+    可走（2026-10-02 自检发现的自相矛盾）。
 
 本守卫锁住这条契约，尤其防止后人「顺手改成无条件隐藏」（会让无扩展用户无路可走），
-以及防止「为了藏徽标把面板 DOM 一起删了」（会让 sniffQuality 取不到 qualitySel 而炸、
-并丢掉扩展状态/清晰度下拉）。
+防止「为了藏徽标把面板 DOM 一起删了」（会让 sniffQuality 取不到 qualitySel 而炸、
+并丢掉扩展状态/清晰度下拉），也防止漏掉 needs_setup 这一项（入口把引导自己藏死）。
 
 运行：python3 test_sniffer_badge_hide_wiring.py   （仓库根或本目录均可）
 """
@@ -58,8 +62,12 @@ def main():
     print("\n① 状态与判定函数")
     check("定义了状态变量 snifferExtOnline",
           "let snifferExtOnline = false;" in src)
-    check("定义了 applyBadgeVisibility 且直接读该状态",
-          "const applyBadgeVisibility = () => { badgeBtn.hidden = !!snifferExtOnline; };" in src)
+    check("定义了状态变量 snifferNeedsAttention",
+          "let snifferNeedsAttention = false;" in src)
+    check("applyBadgeVisibility 同时看「在线」与「有无待办」两个条件",
+          "badgeBtn.hidden = !!snifferExtOnline && !snifferNeedsAttention;" in src)
+    check("旧的「只看在线」判定已移除",
+          "badgeBtn.hidden = !!snifferExtOnline; };" not in src)
 
     print("\n② renderStatus 用扩展在线状态驱动徽标")
     # 取 renderStatus 定义段
@@ -93,6 +101,14 @@ def main():
     check("状态轮询里不请求被限流的 /api/sniffer/items",
           "sniffer/items" not in seg_poll,
           "关面板时不该拉 /items（限流端点）")
+
+    print("\n②c needs_setup 必须参与徽标显隐（否则入口把迁移/更新引导自己藏死）")
+    check("refreshAutoStatus 把 needs_setup 写进 snifferNeedsAttention",
+          "snifferNeedsAttention = !!(autoSt && autoSt.needs_setup);" in src)
+    check("refreshAutoStatus 之后重新判定一次徽标",
+          bool(re.search(r"renderAutoRow\(\);\s*\n\s*applyBadgeVisibility\(\);", src)))
+    check("常驻状态轮询顺带刷新自动更新状态（冷启动即正确）",
+          "try { await refreshAutoStatus(); } catch (e) { /* 静默 */ }" in src)
 
     print("\n③ wire() 不再无条件把徽标显示出来")
     check("wire 走 applyBadgeVisibility（不硬编码 hidden=false）",
