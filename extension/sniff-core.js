@@ -82,6 +82,49 @@
     return '';
   }
 
+  /** 视频**页面**识别（2026-10-01）：YouTube 等站点 2026 起改用 UMP/SABR 传输
+   *  （响应头 application/vnd.yt-ump），媒体流抓不到、且抓到也没法直接下载。
+   *  这些站点改用「推页面链接」——桌面端用 yt-dlp 解析（含 web_safari 免 POT 回退），
+   *  反而更稳。返回归一化后的页面 URL（去掉无关查询参数），非视频页返回 ''。
+   *  规则与 python _video_page_url() 必须逐条对齐。 */
+  var PAGE_RULES = [
+    [/^(www\.|m\.)?youtube\.com$/, /\/(watch|shorts\/|live\/)/, ['v']],
+    [/^youtu\.be$/, /^\/[\w-]{6,}/, ['list', 'index']],
+    [/^(www\.|m\.)?bilibili\.com$/, /\/(video|bangumi\/play)\//, ['p', 't']],
+    [/^(www\.)?douyin\.com$/, /\/(video|note|discover)\//, []],
+    [/^(www\.)?tiktok\.com$/, /\/video\/|^\/@[^/]+\/video\//, []],
+    [/^(www\.)?vimeo\.com$/, /^\/\d+/, []],
+    [/^(www\.)?instagram\.com$/, /\/(reel|p|tv)\//, []],
+    [/^(www\.)?(x|twitter)\.com$/, /\/status\//, []],
+    [/^(www\.)?kuaishou\.com$/, /\/(short-video|fw\/photo)\//, []],
+    [/^(www\.)?xiaohongshu\.com$/, /\/(explore|discovery\/item)\//, []]
+  ];
+
+  function isVideoPage(url) {
+    var u;
+    try { u = new URL(url); } catch (e) { return ''; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    var host = u.hostname.toLowerCase();
+    for (var i = 0; i < PAGE_RULES.length; i++) {
+      var rule = PAGE_RULES[i];
+      if (!rule[0].test(host)) continue;
+      if (!rule[1].test(u.pathname + (u.pathname.endsWith('/') ? '' : ''))) continue;
+      // 只留能定位到视频本身的参数，去掉播放列表/追踪等噪声
+      var out = u.origin + u.pathname;
+      var keep = rule[2];
+      if (keep.length) {
+        var parts = [];
+        for (var j = 0; j < keep.length; j++) {
+          var v = u.searchParams.get(keep[j]);
+          if (v) parts.push(keep[j] + '=' + encodeURIComponent(v));
+        }
+        if (parts.length) out += '?' + parts.join('&');
+      }
+      return out;
+    }
+    return '';
+  }
+
   /** 从 webRequest 头数组里挑出判定/回传所需字段。 */
   function pickHeaders(responseHeaders, requestHeaders) {
     var out = { mime: '', contentLength: 0, referer: '', cookie: '' };
@@ -324,6 +367,7 @@
     classifyMedia: classifyMedia,
     pathSuffix: pathSuffix,
     isNoiseUrl: isNoiseUrl,
+    isVideoPage: isVideoPage,
     pickHeaders: pickHeaders,
     SniffStore: SniffStore,
     TabStores: TabStores,

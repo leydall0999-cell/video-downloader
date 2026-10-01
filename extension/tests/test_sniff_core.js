@@ -211,6 +211,25 @@ ok(CORE.pageKeyOf('https://v.com/list?p=1') !== CORE.pageKeyOf('https://v.com/li
 eq(CORE.pageKeyOf('not a url'), 'not a url', '非 URL 原样返回（不抛异常）');
 eq(CORE.pageKeyOf(''), '', '空串安全');
 
+// ---- 视频**页面**识别（2026-10-01）：YouTube 等 UMP/SABR 站点推页面链接 ----
+eq(CORE.isVideoPage('https://www.youtube.com/watch?v=abc12345678&list=RDxyz&t=42s'),
+  'https://www.youtube.com/watch?v=abc12345678', '★ YouTube watch 归一化（留 v、去 list/t）');
+eq(CORE.isVideoPage('https://youtu.be/abc12345678?si=zzz'), 'https://youtu.be/abc12345678',
+  '★ youtu.be 短链识别');
+eq(CORE.isVideoPage('https://www.youtube.com/shorts/abc12345678'), 'https://www.youtube.com/shorts/abc12345678',
+  'YouTube Shorts 识别');
+eq(CORE.isVideoPage('https://www.bilibili.com/video/BV1xx411c7mD?p=2&spm_id_from=333'),
+  'https://www.bilibili.com/video/BV1xx411c7mD?p=2', '★ B 站 video 页（留 p、去 spm）');
+eq(CORE.isVideoPage('https://www.douyin.com/video/7123456789'), 'https://www.douyin.com/video/7123456789',
+  '抖音视频页识别');
+eq(CORE.isVideoPage('https://www.tiktok.com/@user/video/7123456789'), 'https://www.tiktok.com/@user/video/7123456789',
+  'TikTok 视频页识别');
+eq(CORE.isVideoPage('https://www.youtube.com/feed/subscriptions'), '', '非视频页不推（订阅流）');
+eq(CORE.isVideoPage('https://www.youtube.com/'), '', '首页不推');
+eq(CORE.isVideoPage('https://www.bilibili.com/read/cv12345'), '', 'B 站专栏不是视频页');
+eq(CORE.isVideoPage('https://example.com/video/1'), '', '未收录站点不推（避免误报）');
+eq(CORE.isVideoPage('not a url'), '', '非 URL 安全返回空');
+
 // ---- 汇总 ----
 console.log('\n嗅探核心测试：通过 ' + passes + '，失败 ' + failures);
 process.exit(failures ? 1 : 0);

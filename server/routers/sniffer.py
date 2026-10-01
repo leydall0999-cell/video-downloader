@@ -64,13 +64,17 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
     if response is not None:
         _pna(response)
     ver, captured, pushed = "", 0, 0
+    seen, media, last_mime = 0, 0, ""
     if isinstance(payload, dict):
         raw = payload.get("version")
         if isinstance(raw, str):
             ver = raw
         captured = payload.get("captured") or 0
         pushed = payload.get("pushed") or 0
-    cdp_sniffer.SNIFFER.mark_ext_seen(ver, captured, pushed)
+        seen = payload.get("seen") or 0
+        media = payload.get("media") or 0
+        last_mime = payload.get("last_mime") or ""
+    cdp_sniffer.SNIFFER.mark_ext_seen(ver, captured, pushed, seen, media, last_mime)
     return {"ok": True}
 
 

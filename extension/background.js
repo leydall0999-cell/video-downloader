@@ -116,6 +116,11 @@ function handleCompleted(details) {
     }
     tabPage[pk] = pageKeyOf(url);
     persist();
+    // 视频**页面**直推（2026-10-01）：YouTube 等站点走 UMP/SABR，媒体流抓不到、
+    // 抓到也不能直接下；推页面链接让桌面端用 yt-dlp 解析（含 web_safari 回退）最稳。
+    var vp = CORE.isVideoPage(url);
+    if (vp && tabId > 0) pushPageToServer(tabId, vp);
+    else if (vp) pushPageToServer(0, vp);
   }
 
   var picked = CORE.pickHeaders(details.responseHeaders, null);
@@ -157,6 +162,47 @@ function handleCompleted(details) {
  *  items 库——没有这条链路，桌面面板列表永远是空的（用户以为没嗅到）。
  *  服务端按 URL 去重，重复推无副作用；失败静默（下次同 URL 再推）。 */
 var pushTries = 0;            // 本次 SW 生命周期内推送尝试数（遥测：定位「没捕获」vs「推送失败」）
+var seenEvents = 0;           // onCompleted 观察到的响应总数（遥测）
+var mediaHits = 0;            // 其中被判成媒体/播放列表/分片的条数（遥测）
+var lastMime = '';            // 最近一条响应的 Content-Type（遥测：判定矩阵是否认这个站）
+
+/** 视频页面链接直推（2026-10-01）：UMP/SABR 站点的媒体流抓不到，推页面让桌面端解析。 */
+function pushPageToServer(tabId, pageUrl) {
+  if (!pageUrl) return;
+  pushTries++;
+  var send = function (title) {
+    getEndpoint(function (base) {
+      if (!base) return;
+      try {
+        fetch(base + '/api/sniffer/ext-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: [{
+              url: pageUrl,
+              mime: 'text/html',
+              kind_hint: 'page',
+              referer: '',
+              cookie: '',
+              page_url: pageUrl,
+              page_title: title || ''
+            }]
+          })
+        }).catch(function () {});
+      } catch (e) { /* 静默 */ }
+    });
+  };
+  if (tabId > 0) {
+    try {
+      chrome.tabs.get(tabId, function (tab) {
+        send((tab && !chrome.runtime.lastError && tab.title) || '');
+      });
+      return;
+    } catch (e) { /* 落到同步分支 */ }
+  }
+  send('');
+}
+
 function pushToServer(item) {
   if (!item || !item.url) return;
   pushTries++;
@@ -196,6 +242,14 @@ try {
   chrome.webRequest.onCompleted.addListener(
     function (details) {
       if (!enabled) return;
+      // 遥测（1.0.39）：统计所有响应数 / 被判定为媒体的数量 / 最近一次 Content-Type
+      // ——「嗅探不到」时一眼看出是「没流量」还是「站点的 mime 判定矩阵不认」。
+      try {
+        seenEvents++;
+        var _m = CORE.pickHeaders(details.responseHeaders, null).mime || '';
+        if (_m) lastMime = String(_m).slice(0, 60);
+        if (CORE.classifyMedia(details.url || '', _m)) mediaHits++;
+      } catch (e) { /* 遥测失败不影响主流程 */ }
       handleCompleted(details);
     },
     { urls: ['http://*/*', 'https://*/*'] },
@@ -289,7 +343,10 @@ function heartbeat() {
       fetch(base + '/api/sniffer/ext-ping', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ version: ver, captured: captured, pushed: pushTries }),
+        body: JSON.stringify({
+          version: ver, captured: captured, pushed: pushTries,
+          seen: seenEvents, media: mediaHits, last_mime: lastMime
+        }),
       }).catch(function () {});
     } catch (e) {}
   });

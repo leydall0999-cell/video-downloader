@@ -421,7 +421,7 @@
       if (dlExtBtn) dlExtBtn.hidden = extOnline;
       if (hintEl) {
         hintEl.textContent = extOnline
-          ? '全自动：在你日常的浏览器里正常播放视频即可，嗅探到的媒体会实时出现在下方；点视频页右下角的悬浮球即可发回桌面端下载。'
+          ? '全自动：在你日常的浏览器里播放视频即可，识别到的媒体流或视频页会实时出现在下方；点列表里的「下载」即建任务（YouTube 等站点推送的是页面链接，由桌面端解析）。'
           : '提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。';
       }
       // 扩展在线（用户日常浏览器）：绿色横幅替代推荐语——装完立刻有确定性反馈；
@@ -434,7 +434,13 @@
           extBanner.innerHTML = '✓ <b>扩展已连接</b>——正在你日常的浏览器中嗅探，播放视频即可，无需另开浏览器。' +
             (cap !== null
               ? '<span style="display:block;margin-top:2px;">扩展本地已捕获 <b>' + cap + '</b> 条媒体流' +
-                (cap === 0 ? '——列表为空时把视频页<b>刷新或重新播放一次</b>即可（只抓新流量）。' : '。') +
+                (cap === 0
+                  ? (typeof st.ext_seen === 'number' && st.ext_seen > 0
+                    ? '——已观察 ' + st.ext_seen + ' 个请求、识别到 ' + (st.ext_media || 0) + ' 条媒体' +
+                      (st.ext_last_mime ? '（最近类型 ' + escHtml(String(st.ext_last_mime)) + '）' : '') +
+                      '。把视频页<b>刷新或重新播放一次</b>即可（只抓新流量）。'
+                    : '——列表为空时把视频页<b>刷新或重新播放一次</b>即可（只抓新流量）。')
+                  : '。') +
                 '</span>'
               : '');
           getExtPkgVer().then((pkgVer) => {
@@ -474,7 +480,7 @@
       }
     };
 
-    const KIND_LABEL = { playlist: 'HLS/DASH', media: '直链', segment: '分片' };
+    const KIND_LABEL = { playlist: 'HLS/DASH', media: '直链', segment: '分片', page: '视频页' };
 
     const renderItem = (it) => {
       const div = document.createElement('div');

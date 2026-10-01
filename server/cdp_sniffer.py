@@ -245,6 +245,7 @@ class CDPSniffer:
         self._ext_seen: float = 0.0                                # 扩展最近一次心跳 ts（0=从未见过）
         self._ext_version: str = ""                                # 扩展自报版本号（心跳携带，空=旧版扩展）
         self._ext_tele: tuple[int, int] = (0, 0)                   # (captured, pushed) 扩展遥测快照
+        self._ext_diag: tuple[int, int, str] = (0, 0, "")          # (seen, media, last_mime) 捕获诊断
         self._error = ""
         self._state = "idle"                                   # idle / running / error
 
@@ -285,6 +286,10 @@ class CDPSniffer:
                 # captured>0 而 items=0 = 断在推送层；captured=0 = 断在捕获层（页面没重播等）
                 "ext_captured": self._ext_tele[0],
                 "ext_pushed": self._ext_tele[1],
+                # 捕获诊断（2026-10-01）：扩展侧观察到的响应总数 / 判成媒体数 / 最近 Content-Type
+                "ext_seen": self._ext_diag[0],
+                "ext_media": self._ext_diag[1],
+                "ext_last_mime": self._ext_diag[2],
             }
 
     def mark_desktop_auth(self, user_id: str | None) -> None:
@@ -305,14 +310,17 @@ class CDPSniffer:
         with self._lock:
             self._desktop_auth = (time.time(), True)
 
-    def mark_ext_seen(self, version: str = "", captured: int = 0, pushed: int = 0) -> None:
-        """扩展心跳（2026-10-01）：记录可见时间 + 自报版本 + 捕获/推送遥测，供面板判断更新与排障。"""
+    def mark_ext_seen(self, version: str = "", captured: int = 0, pushed: int = 0,
+                      seen: int = 0, media: int = 0, last_mime: str = "") -> None:
+        """扩展心跳（2026-10-01）：可见时间 + 自报版本 + 捕获/推送遥测 + 捕获诊断，供面板判断与排障。"""
         with self._lock:
             self._ext_seen = time.time()
             if version and isinstance(version, str):
                 self._ext_version = version.strip()[:20]
             try:
                 self._ext_tele = (max(0, int(captured)), max(0, int(pushed)))
+                self._ext_diag = (max(0, int(seen)), max(0, int(media)),
+                                  str(last_mime or "")[:60])
             except (TypeError, ValueError):
                 pass
 
@@ -648,8 +656,13 @@ class CDPSniffer:
             if not url.lower().startswith(("http://", "https://")):
                 continue
             mime = str(row.get("mime") or "")
-            kind = classify_media(url, mime) or str(row.get("kind_hint") or "")
-            if kind not in ("playlist", "media", "segment"):
+            # 服务端判定优先；判不出时采信扩展 hint（media/playlist/segment 为原有语义，
+            # page 为 2026-10-01 新增：YouTube 等 UMP/SABR 站点推页面链接，
+            # 桌面端点「下载」时交给 yt-dlp 解析，含 web_safari 免 POT 回退）。
+            kind = classify_media(url, mime)
+            if not kind and str(row.get("kind_hint") or "") in ("media", "playlist", "segment", "page"):
+                kind = str(row.get("kind_hint") or "")
+            if kind not in ("playlist", "media", "segment", "page"):
                 continue
             self._register(
                 url=url, mime=mime, kind=kind,

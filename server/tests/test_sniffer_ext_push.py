@@ -76,6 +76,27 @@ def test_ext_push_flow():
     print("✅ ext-push：入库/去重/playlist/脏数据/kind_hint/路由直调/容错 全部正确")
 
 
+def test_ext_page_items():
+    """视频**页面**链接条目（2026-10-01）：YouTube 等 UMP/SABR 站点推页面，
+    桌面端点「下载」交给 yt-dlp 解析。页面 URL 本身判不出媒体 → 必须靠 kind_hint。"""
+    s = cdp_sniffer.SNIFFER
+    added = s.add_ext_items([_item("https://www.youtube.com/watch?v=abc12345678",
+                                   mime="text/html", kind_hint="page")])
+    assert added == 1, f"页面条目应入库: {added}"
+    it = next((r for r in s.items(limit=200) if "youtube.com/watch" in r["url"]), None)
+    assert it is not None, "页面条目未出现在 items 里"
+    assert it["kind"] == "page", f"kind 应为 page: {it}"
+    assert it["source"] == "ext"
+    # 已知媒体 URL 即便误带 page hint，也应被 classify_media 优先判成 media（不被 hint 带偏）
+    s.add_ext_items([_item("https://cdn.example/real.mp4", mime="video/mp4", kind_hint="page")])
+    it2 = next(r for r in s.items(limit=200) if r["url"].endswith("real.mp4"))
+    assert it2["kind"] == "media", f"媒体判定优先于 page hint: {it2}"
+    # 未知 hint 仍被丢弃（白名单外不外泄）
+    assert s.add_ext_items([_item("https://example.com/x", mime="", kind_hint="whatever")]) == 0
+    print("✅ ext-push 页面条目：入库/优先级/未知 hint 丢弃 全部正确")
+
+
 if __name__ == "__main__":
     test_ext_push_flow()
+    test_ext_page_items()
     print("🎉 扩展自动推送回归测试全部通过")
