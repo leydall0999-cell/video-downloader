@@ -78,6 +78,8 @@ button.mini { font-size: 11px; padding: 1px 7px; border-radius: 5px; }
 /* ---- list ---- */
 .list { flex: 1; overflow-y: auto; padding: 8px 12px; }
 .empty { color: var(--muted); text-align: center; padding: 26px 0; font-size: 12px; }
+.empty-tip { line-height: 1.7; }
+.empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
 .item {
   border: 1px solid var(--line); border-radius: 8px;
   padding: 7px 9px; margin-bottom: 8px;

@@ -691,6 +691,39 @@ class VdlApi:
         except Exception as exc:  # 把错误回传前端展示
             return f"ERROR: {exc}"
 
+    def copy_to_clipboard(self, text: str) -> str:
+        """把文本写入系统剪贴板（桌面版原生桥）。
+
+        为什么必须走原生桥（2026-10-01 用户实测「复制链接点了没反应」）：
+        pywebview 的 WKWebView 里 `navigator.clipboard` 常为 undefined，
+        `document.execCommand('copy')` 在新版 WebKit 也已被禁用 —— 网页式复制
+        在桌面壳里是**静默失效**（不报错、不生效），与 blob `<a download>` 被吞
+        是同一类坑（铁律：桌面壳里「让用户拿东西」的操作一律走 pywebview 原生桥）。
+        返回 "OK" 或 "ERROR: ..."。
+        """
+        import subprocess
+        try:
+            payload = "" if text is None else str(text)
+            if sys.platform == "win32":
+                p = subprocess.run(["clip"], input=payload.encode("utf-16le"),
+                                   timeout=5, shell=True)
+                return "OK" if p.returncode == 0 else f"ERROR: clip rc={p.returncode}"
+            if sys.platform == "darwin":
+                # pbcopy 是 macOS 自带，无第三方依赖
+                p = subprocess.run(["pbcopy"], input=payload.encode("utf-8"), timeout=5)
+                return "OK" if p.returncode == 0 else f"ERROR: pbcopy rc={p.returncode}"
+            # Linux：xclip / xsel 二选一
+            for cmd in (["xclip", "-selection", "clipboard"],
+                        ["xsel", "--clipboard", "--input"]):
+                try:
+                    subprocess.run(cmd, input=payload.encode("utf-8"), timeout=5, check=True)
+                    return "OK"
+                except FileNotFoundError:
+                    continue
+            return "ERROR: 缺少剪贴板工具（xclip/xsel）"
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
     def choose_folder(self) -> str:
         """弹出系统文件夹选择框，返回所选目录绝对路径；用户取消或失败返回空串。
 

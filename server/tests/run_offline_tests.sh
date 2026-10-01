@@ -115,6 +115,7 @@ run_one test_convert_pipeline.py
 run_one test_ffmpeg_tools.py
 run_one test_compress.py
 run_one test_desktop_bridge.py
+run_one test_desktop_copy_wiring.py            # 桌面壳「复制链接」：原生剪贴板桥优先 + 失败不静默（2026-10-01）
 run_one test_sniffer_ext_ping.py            # 嗅探「扩展心跳」三态：未连/在线/过期离线（2026-10-01 面板简化配套）
 run_one test_sniffer_ext_push.py            # 嗅探「扩展自动直推」：入库/去重/kind_hint/脏数据（2026-10-01 自动嗅探配套）
 run_one test_ext_version_cmp.py             # 扩展版本比对守卫：只在「内置比已装新」时提示升级（2026-10-01 防降级）
@@ -303,6 +304,32 @@ echo ""
 echo "=== extension/tests/test_background_page_scope.js（扩展「只保存当前页」，node + chrome 桩） ==="
 if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_background_page_scope.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_pagewatch.js（页面侧哨兵：SPA 换页不丢事件，node + chrome 桩） ==="
+# 2026-10-01 补登记：该文件随扩展 1.0.40 一起写就，但当时漏挂进运行器（只写文件＝没门禁）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_pagewatch.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_popup_video_page.js（视频页空状态必须有「解析并下载/复制链接」，node） ==="
+# 2026-10-01 用户反馈「这里也要可以操作」：钉住 popup 空状态的两个操作按钮 + 复制失败不静默。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_popup_video_page.js"; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))

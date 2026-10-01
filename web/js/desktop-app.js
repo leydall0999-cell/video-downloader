@@ -503,6 +503,45 @@
 
     const KIND_LABEL = { playlist: 'HLS/DASH', media: '直链', segment: '分片', page: '视频页' };
 
+    // 复制文本到剪贴板：桌面壳（WKWebView）里 navigator.clipboard 常不存在、
+    // execCommand('copy') 也被禁用 —— 必须优先走 pywebview 原生桥，否则「复制链接」
+    // 点了**毫无反应**（2026-10-01 用户实测）。可见反馈用 sniffToast，绝不静默。
+    const copyText = (text, btn) => {
+      const markDone = () => {
+        if (btn) {
+          const old = btn.textContent;
+          btn.textContent = '已复制';
+          setTimeout(() => { btn.textContent = old; }, 1200);
+        }
+        sniffToast('已复制链接');
+      };
+      const markFail = () => sniffToast('复制失败，请手动选中链接复制');
+      const api = window.pywebview && window.pywebview.api;
+      if (api && api.copy_to_clipboard) {
+        Promise.resolve(api.copy_to_clipboard(text)).then((r) => {
+          if (typeof r === 'string' && r.indexOf('ERROR') === 0) markFail(); else markDone();
+        }).catch(markFail);
+        return;
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(markDone).catch(() => {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            ta.remove();
+            ok ? markDone() : markFail();
+          } catch (e) { markFail(); }
+        });
+        return;
+      }
+      markFail();
+    };
+
     const renderItem = (it) => {
       const div = document.createElement('div');
       div.className = 'vdl-sniff-item';
@@ -517,9 +556,7 @@
         (it.page_title ? `<div class="p">来源：${escHtml(it.page_title)}</div>` : '') +
         `<button type="button" class="dl">${isPage ? '解析并下载' : '下载'}</button><button type="button" class="cp">复制链接</button>`;
       div.querySelector('.dl').addEventListener('click', () => downloadItem(it, div));
-      div.querySelector('.cp').addEventListener('click', () => {
-        navigator.clipboard && navigator.clipboard.writeText(it.url);
-      });
+      div.querySelector('.cp').addEventListener('click', () => copyText(it.url, div.querySelector('.cp')));
       return div;
     };
 

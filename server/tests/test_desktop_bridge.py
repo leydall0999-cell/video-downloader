@@ -372,6 +372,66 @@ def _direct_save_section():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _clipboard_section():
+    """桌面壳「复制到剪贴板」原生桥（VdlApi.copy_to_clipboard）。
+
+    背景（2026-10-01 用户实测）：媒体嗅探条目上的「复制链接」点了**毫无反应**——
+    WKWebView 里 `navigator.clipboard` 常为 undefined、`execCommand('copy')` 也被禁用，
+    网页式复制在桌面壳里静默失效。修法＝在 Python 侧写系统剪贴板。
+    这里拦掉 subprocess.run，只检查命令与写入内容，绝不真的改用户剪贴板。
+    """
+    import types
+
+    captured = {}
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None, **kw):
+        captured["cmd"] = list(cmd)
+        captured["input"] = kw.get("input")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    real_run = subprocess.run
+    subprocess.run = fake_run
+    try:
+        out = dl.VdlApi().copy_to_clipboard("https://www.youtube.com/watch?v=abc")
+    finally:
+        subprocess.run = real_run
+
+    cmd = captured.get("cmd") or []
+    check("复制桥返回 OK", out == "OK", out)
+    if sys.platform == "darwin":
+        check("复制桥调 pbcopy", cmd[:1] == ["pbcopy"], cmd)
+        check("复制桥写入内容为 UTF-8 原文",
+              (captured.get("input") or b"").decode("utf-8") == "https://www.youtube.com/watch?v=abc",
+              captured.get("input"))
+
+    # 异常兜底：剪贴板工具缺失/被拦时不得抛异常，返回 ERROR 文本供前端提示
+    def boom(*_a, **_kw):
+        raise RuntimeError("no clipboard")
+
+    subprocess.run = boom
+    try:
+        out_err = dl.VdlApi().copy_to_clipboard("x")
+    finally:
+        subprocess.run = real_run
+    check("复制桥异常时返回 ERROR 文本（不抛）",
+          isinstance(out_err, str) and out_err.startswith("ERROR:"), out_err)
+
+    # None 入参不得炸（前端可能传空）
+    captured.clear()
+
+    def fake_run2(cmd, capture_output=False, text=False, timeout=None, **kw):
+        captured["cmd"] = list(cmd)
+        captured["input"] = kw.get("input")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    subprocess.run = fake_run2
+    try:
+        out_none = dl.VdlApi().copy_to_clipboard(None)
+    finally:
+        subprocess.run = real_run
+    check("复制桥 None 入参不炸（当空串处理）", out_none == "OK", out_none)
+
+
 def main():
     print("▶ 桌面桥文件选择：kind 类型白名单")
 
@@ -429,6 +489,10 @@ def main():
     print("")
     print("▶ 桌面桥「直接保存到本机」：保存位置面板 + 落盘行为")
     _direct_save_section()
+
+    print("")
+    print("▶ 桌面桥「复制到剪贴板」：原生剪贴板写入（修「复制链接」按钮静默失效）")
+    _clipboard_section()
 
     print("")
     print("=========================================")

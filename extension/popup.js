@@ -145,14 +145,37 @@ function render(st) {
     if (st.videoPage) {
       // 视频页但抓不到直链：YouTube/B站等用加密流（UMP/SABR）播放，媒体流抓不到、
       // 也不该抓 —— 正解是把页面链接交给桌面端用 yt-dlp 解析（已自动发生）。
-      // 2026-10-01 用户实测反馈：原来只写「没有嗅探到媒体流」，被读成功能坏了。
-      listEl.innerHTML = '<div class="empty">' +
+      // 2026-10-01 用户反馈①：原来只写「没有嗅探到媒体流」，被读成功能坏了；
+      // 反馈②「这里也要可以操作」→ 空状态直接给两个按钮（解析并下载 / 复制链接）。
+      var box = document.createElement('div');
+      box.className = 'empty';
+      var tip = document.createElement('div');
+      tip.className = 'empty-tip';
+      tip.innerHTML =
         '这类站点用加密流播放，扩展抓不到直链（正常现象）。<br>' +
         (st.pagePushAt
           ? '✓ 已于 ' + fmtTime(st.pagePushAt) + ' 把本页交给桌面端解析。<br>' +
-            '去桌面端「媒体嗅探」列表点「下载」即可。'
-          : '正在把本页交给桌面端解析；若一直是这样，请确认「视频工坊」App 已启动。') +
-        '</div>';
+            '点下面「解析并下载」，或到桌面端「媒体嗅探」列表操作。'
+          : '正在把本页交给桌面端解析；若一直是这样，请确认「视频工坊」App 已启动。');
+      box.appendChild(tip);
+      var acts = document.createElement('div');
+      acts.className = 'empty-actions';
+      var dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'mini primary';
+      dlBtn.textContent = '解析并下载';
+      dlBtn.title = '把本页地址交给桌面端用 yt-dlp 解析，并加入下载队列';
+      dlBtn.addEventListener('click', function () { sendCurrentPage(dlBtn); });
+      var cpBtn = document.createElement('button');
+      cpBtn.type = 'button';
+      cpBtn.className = 'mini';
+      cpBtn.textContent = '复制链接';
+      cpBtn.title = '复制本页地址';
+      cpBtn.addEventListener('click', function () { copyPageUrl(cpBtn); });
+      acts.appendChild(dlBtn);
+      acts.appendChild(cpBtn);
+      box.appendChild(acts);
+      listEl.appendChild(box);
     } else {
       listEl.innerHTML = '<div class="empty">当前页没有嗅探到媒体流。<br>' +
         '播放页面里的视频或音频后这里会自动列出；已离开的页面不会保留。</div>';
@@ -315,6 +338,25 @@ function sendCurrentPage(btn) {
     };
     // 页面项不进嗅探列表，结果写在工具栏下方的提示行里
     sendItemWithNote(it, btn, '页面已发送 ✓');
+  });
+}
+
+/** 复制当前标签页地址（视频页空状态用）。扩展 popup 是安全上下文 + 用户手势，
+ *  navigator.clipboard 可用；失败时如实提示，绝不静默。 */
+function copyPageUrl(btn) {
+  chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+    var url = (tabs && tabs[0] && tabs[0].url) || '';
+    if (!url) { note(btn, '取不到当前页地址，请手动复制地址栏链接', true); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () {
+        var old = btn.textContent;
+        btn.textContent = '已复制';
+        setTimeout(function () { btn.textContent = old; }, 1200);
+        note(btn, '已复制本页链接', false);
+      }, function () { note(btn, '复制失败，请手动复制地址栏链接', true); });
+    } else {
+      note(btn, '复制失败，请手动复制地址栏链接', true);
+    }
   });
 }
 
