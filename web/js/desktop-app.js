@@ -88,6 +88,21 @@
         return Promise.resolve('');
       }
     },
+    // 弹出系统文件夹选择框，**专用于「浏览器扩展加载目录」**（提示语与用途一致）。
+    // 与 chooseFolder 分成两条桥，是因为那个面板的提示语写死成「剪映草稿导出目录」，
+    // 拿来选扩展目录会让用户以为点错了。
+    chooseExtensionDir() {
+      const api = window.pywebview && window.pywebview.api;
+      if (!(api && typeof api.choose_extension_dir === 'function')) return Promise.resolve('');
+      const norm = (r) => (typeof r === 'string') ? (r.startsWith('ERROR') ? '' : r) : (r || '');
+      try {
+        const r = api.choose_extension_dir();
+        if (r && typeof r.then === 'function') return r.then(norm).catch(() => '');
+        return Promise.resolve(norm(r));
+      } catch (e) {
+        return Promise.resolve('');
+      }
+    },
     // 弹出系统多文件选择框，返回绝对路径数组；无桥接或用户取消返回空数组。
     // 注意：pywebview 的 api.* 调用返回 Promise，必须 await/then 取值。
     // kind: 'media'(默认，视频+音频) | 'image'(图片) | 'any'(视频+音频+图片)。
@@ -321,6 +336,15 @@
 .vdl-sniff-q{display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:12px;color:#555;}
 .vdl-sniff-q select{border:1px solid #dfe3ea;border-radius:6px;padding:3px 6px;font-size:12px;background:#fff;color:#333;cursor:pointer;}
 .vdl-sniff-q .q-note{color:#999;font-size:11px;margin-left:auto;}
+.vdl-sniff-auto{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;font-size:12px;color:#555;}
+.vdl-sniff-auto .txt{flex:1 1 100%;line-height:1.6;}
+.vdl-sniff-auto .txt b{color:#333;}
+.vdl-sniff-auto .path{display:block;color:#999;font-size:11px;word-break:break-all;}
+.vdl-sniff-auto .ok{color:#0a7d43;}
+.vdl-sniff-auto .warn{color:#c0392b;}
+.vdl-sniff-auto button{border:0;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;background:#eef0f4;color:#333;}
+.vdl-sniff-auto button.primary{background:#4f46e5;color:#fff;}
+.vdl-sniff-auto button:disabled{opacity:.55;cursor:default;}
 .vdl-sniff-item{border:1px solid #eee;border-radius:10px;padding:8px 10px;margin-bottom:8px;}
 .vdl-sniff-item .k{font-size:11px;font-weight:600;border-radius:4px;padding:1px 6px;margin-right:6px;}
 .vdl-sniff-item .k.playlist{background:#e8f7ef;color:#0a7d43;}
@@ -384,6 +408,12 @@
           </select>
           <span class="q-note">对「视频页 / HLS 清单」类条目生效</span>
         </div>
+        <div class="vdl-sniff-auto" id="sniffAutoRow" hidden>
+          <span class="txt" id="sniffAutoText">扩展自动更新：未开启</span>
+          <button type="button" class="primary" id="sniffAutoBtn">开启（自动识别目录）</button>
+          <button type="button" id="sniffAutoSync" hidden>立即同步</button>
+          <button type="button" id="sniffAutoPick" hidden>手动选择目录…</button>
+        </div>
         <div class="vdl-sniff-status" style="margin-top:0" id="sniffHint">提示：点「开始嗅探」后，若浏览器里还没装扩展，会自动打开一个独立调试浏览器（与你日常浏览器的登录态互不相通，Chrome 安全策略限制）。正在播放的流要重新播放一次才能被截到；悬浮球出现在视频页右下角。</div>
         <div id="sniffList"><div class="vdl-sniff-empty">还没有嗅探到媒体流</div></div>
         <div id="sniffExtHelp" hidden></div>
@@ -436,6 +466,9 @@
 
     // 包内扩展版本（缓存）：与扩展心跳自报版本比对 → 决定更新横幅
     let _extPkgVer = '';
+    // 扩展自动更新状态（/api/extension/update-status）：提前声明，让下面的更新横幅
+    // 也能读到（横幅文案在「已开启自动更新」时要换成「文件已自动写入」）。
+    let autoSt = null;
     // 版本比较：仅当 a 严格新于 b 才返回 true；任一侧缺失/非法一律 false。
     // —— 只在「App 内置扩展比已装的更新」时提示升级，否则会把用户的新版覆盖成旧版。
     const cmpExtVer = (a, b) => {
@@ -541,7 +574,11 @@
             extBanner.innerHTML =
               '⚠ 扩展有新版本（已装 v' + escHtml(installed || '旧版') + ' → 最新 v' + escHtml(pkgVer) + '）。' +
               '<button type="button" id="sniffExtUpdateBtn">更新扩展</button>' +
-              '<span style="display:block;margin-top:4px;color:#9a7c1a;">把解压出的文件<b>覆盖到原来加载的那个文件夹</b>（不要重新「加载已解压」，否则会装出两份），再到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。</span>';
+              (autoSt && autoSt.auto
+                // 已开启自动更新：文件由桌面端直接写进扩展目录，扩展稍后自己重载
+                // （见 extension/background.js 的 maybeAutoReload），用户无需任何操作。
+                ? '<span style="display:block;margin-top:4px;color:#2e7d32;">已开启自动更新：新文件会自动写入扩展目录，扩展稍后自己重载生效（通常 1 分钟内）。若几分钟后仍显示旧版，再点下面按钮按手动流程走一次。</span>'
+                : '<span style="display:block;margin-top:4px;color:#9a7c1a;">把解压出的文件<b>覆盖到原来加载的那个文件夹</b>（不要重新「加载已解压」，否则会装出两份），再到 chrome://extensions 点该扩展卡片上的刷新 ↻ 即完成升级。</span>');
             const ub = extBanner.querySelector('#sniffExtUpdateBtn');
             if (ub) ub.addEventListener('click', async () => {
               ub.disabled = true;
@@ -765,6 +802,124 @@
       } catch (e) { /* 静默 */ }
     };
 
+    // ---- 扩展零点击自动更新（2026-10-02 用户问「扩展程序更新怎么办」）----
+    // 背景：解压版（Load unpacked）扩展 Chrome **不会自动更新** —— 改了文件也必须到
+    // chrome://extensions 点一次 ↻。而官方文档明确「解压版被 reload 视为一次 update」，
+    // `chrome.runtime.reload()` 同样有效 → 于是拆成两半：
+    //   ① 桌面端把内置新版**写进**用户那个扩展加载目录（服务端 extension_sync.py，
+    //      带 manifest.name 校验，只增不删），目录由下面这段自动识别 / 让用户手选；
+    //   ② 心跳响应告诉扩展「磁盘上已是新版」→ 扩展自己 chrome.runtime.reload()
+    //      （见 extension/background.js::maybeAutoReload）
+    // 本段只做「显示状态 + 开/关 + 手动同步」，落盘与安全边界全在服务端。
+    const autoRow = panel.querySelector('#sniffAutoRow');
+    const autoText = panel.querySelector('#sniffAutoText');
+    const autoBtn = panel.querySelector('#sniffAutoBtn');
+    const autoSyncBtn = panel.querySelector('#sniffAutoSync');
+    const autoPickBtn = panel.querySelector('#sniffAutoPick');
+
+    // 路径太长会把一行撑爆，缩成 ~/... 形式并截断
+    const shortPath = (p) => {
+      let s = String(p || '');
+      if (s.startsWith('/Users/') || s.startsWith('/home/')) {
+        s = '~' + s.slice(s.indexOf('/', 1));
+      }
+      return s.length > 44 ? '…' + s.slice(-43) : s;
+    };
+
+    const renderAutoRow = () => {
+      const st = autoSt;
+      if (!st) { autoRow.hidden = true; return; }
+      autoRow.hidden = false;
+      const src = st.source_version || '?';
+      const inst = st.installed_version || '';
+      if (!st.auto) {
+        autoText.innerHTML = '扩展自动更新：<b>未开启</b>'
+          + '<span class="path">开启后每次更新都由桌面端自动写入扩展目录，你无需再覆盖文件、点 ↻</span>';
+      } else if (!st.load_dir) {
+        autoText.innerHTML = '扩展自动更新：<b>待确认目录</b>'
+          + '<span class="path">没能唯一识别到扩展目录，请点「手动选择目录…」</span>';
+      } else {
+        const err = st.error ? ' <span class="warn">' + escHtml(st.error) + '</span>' : '';
+        const pend = st.pending
+          ? ' <span class="ok">磁盘已是 v' + escHtml(st.on_disk_version) + '，等扩展自动重载</span>' : '';
+        autoText.innerHTML = '扩展自动更新：<b>已开启</b>（浏览器内 v' + escHtml(inst || '?')
+          + ' → 最新 v' + escHtml(src) + '）'
+          + '<span class="path">' + escHtml(shortPath(st.load_dir)) + '</span>' + pend + err;
+      }
+      autoBtn.textContent = st.auto ? '关闭自动更新' : '开启（自动识别目录）';
+      autoSyncBtn.hidden = !st.auto;
+      autoPickBtn.hidden = false;
+    };
+
+    const refreshAutoStatus = async () => {
+      try { autoSt = await request('/api/extension/update-status'); }
+      catch (e) { autoSt = null; }
+      renderAutoRow();
+    };
+
+    const autoToastFrom = (r) => {
+      const v = r && r.sync && r.sync.reload_to ? r.sync.reload_to
+        : (r && r.result && r.result.version ? r.result.version : '');
+      sniffToast(v ? ('扩展文件已更新到 v' + v + '，浏览器内会自动重载') : '已开启扩展自动更新');
+    };
+
+    autoBtn.addEventListener('click', async () => {
+      autoBtn.disabled = true;
+      try {
+        if (autoSt && autoSt.auto) {
+          await request('/api/extension/update-config', {
+            method: 'POST', body: JSON.stringify({ load_dir: '', auto: false }),
+          });
+          sniffToast('已关闭扩展自动更新');
+        } else {
+          // load_dir='auto' → 服务端按「manifest.name 匹配 + 版本吻合」识别，识别不出会 400
+          const r = await request('/api/extension/update-config', {
+            method: 'POST', body: JSON.stringify({ load_dir: 'auto', auto: true }),
+          });
+          autoToastFrom(r);
+        }
+      } catch (err) {
+        showError('开启失败', (err && err.message) || '没能自动识别扩展目录，请点「手动选择目录…」');
+      } finally {
+        autoBtn.disabled = false;
+        await refreshAutoStatus();
+      }
+    });
+
+    autoPickBtn.addEventListener('click', async () => {
+      const d = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseExtensionDir;
+      const dir = d ? await d() : '';
+      if (!dir) return;                       // 用户取消（bridge 返回空串）
+      autoPickBtn.disabled = true;
+      try {
+        const r = await request('/api/extension/update-config', {
+          method: 'POST', body: JSON.stringify({ load_dir: dir, auto: true }),
+        });
+        autoToastFrom(r);
+      } catch (err) {
+        showError('设置失败', (err && err.message) || '该目录里没有本扩展的 manifest.json');
+      } finally {
+        autoPickBtn.disabled = false;
+        await refreshAutoStatus();
+      }
+    });
+
+    autoSyncBtn.addEventListener('click', async () => {
+      autoSyncBtn.disabled = true;
+      try {
+        const r = await request('/api/extension/update-now', { method: 'POST', body: '{}' });
+        const res = (r && r.result) || {};
+        sniffToast(res.ok
+          ? ('已同步扩展文件到 v' + (res.version || '?') + '（新写入 ' + (res.written || 0) + ' 个文件）')
+          : ('同步未完成：' + (res.error || '未知原因')));
+      } catch (err) {
+        showError('同步失败', (err && err.message) || '未知错误');
+      } finally {
+        autoSyncBtn.disabled = false;
+        await refreshAutoStatus();
+      }
+    });
+
     badgeBtn.addEventListener('click', () => {
       panel.hidden = !panel.hidden;
       panelOpen = !panel.hidden;
@@ -772,6 +927,7 @@
       clearInterval(pickedTimer);
       if (panelOpen) {
         refresh();
+        refreshAutoStatus();
         itemsTimer = setInterval(refresh, POLL_ITEMS_MS);
       }
     });

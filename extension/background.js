@@ -452,6 +452,63 @@ function getEndpoint(cb) {
 // ---- 心跳（2026-10-01）：桌面端面板显示「扩展已连接 ✓」的依据 ----
 // MV3 SW 空闲 ~30s 被 Chrome 挂起；每次唤醒（webRequest 事件/消息/alarms）
 // 都会重跑顶层代码 → 顺手 ping 一次。alarms 每分钟兜底（浏览器挂着不动也在线）。
+
+// ---- 零点击自动更新：心跳响应带回「磁盘上已有新版」→ 扩展自己重载自己 ----
+// （2026-10-02 用户问「扩展程序更新怎么办」）
+//
+// 为什么必须这么绕：解压版（Load unpacked）扩展 Chrome **不会自动更新** —— 它直接以
+// 本地文件夹为源，改了文件也必须到 chrome://extensions 点一次 ↻（官方行为；实测同样：
+// 覆盖成 1.0.43 后心跳仍自报 1.0.42，直到用户点 ↻）。但官方文档明确「解压版被
+// reload 视为一次 update」，`chrome.runtime.reload()` 同样有效 → 于是拆成两半：
+//   ① 桌面端把新版文件写进用户的扩展加载目录（server/routers/extension.py::maybe_sync
+//      + extension_sync.py，带 manifest.name 校验，只增不删）
+//   ② 心跳响应里回一句 reload_to → 这里自己重载
+// 两条接上，用户就再也不用覆盖目录 / 点 ↻。**不需要任何新权限**（这是刻意的：
+// 一旦 manifest 增权限，静默更新就会变成需要用户重新授权）。
+//
+// 防重启死循环：chrome.storage.local['autoReloadTried'] 记下「已为哪个目标版本试过重载」，
+// 同一目标只试一次。若重载后版本仍未变（磁盘其实没写成功），就不再反复重启，
+// 由桌面端面板提示用户手动点 ↻ 兜底。
+function _verTuple(v) {
+  var s = String(v || '').trim();
+  if (!s) return null;
+  var parts = s.split('.'), out = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (!/^\d+$/.test(parts[i])) return null;
+    out.push(parseInt(parts[i], 10));
+  }
+  return out;
+}
+
+function _verNewer(a, b) {
+  var ta = _verTuple(a), tb = _verTuple(b);
+  if (!ta || !tb) return false;             // 任一侧非法一律「不比新」
+  for (var i = 0; i < Math.max(ta.length, tb.length); i++) {
+    var x = ta[i] || 0, y = tb[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+function maybeAutoReload(resp) {
+  try {
+    if (!resp || resp.ok !== true) return;
+    var target = resp.reload_to || '';
+    if (!target) return;
+    var own = '';
+    try { own = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) {}
+    if (!_verNewer(target, own)) return;    // 只有确实更新才重载（绝不自降级）
+    chrome.storage.local.get(['autoReloadTried'], function (st) {
+      var tried = (st && st.autoReloadTried) || {};
+      if (tried[target]) return;            // 同一目标只试一次
+      tried[target] = Date.now();
+      chrome.storage.local.set({ autoReloadTried: tried }, function () {
+        try { chrome.runtime.reload(); } catch (e) {}
+      });
+    });
+  } catch (e) {}
+}
+
 function heartbeat() {
   // v1.0.40：浏览器挂着不动时的兜底 —— 每分钟看一眼激活标签页是不是视频页
   checkActiveTabPush(false);
@@ -462,6 +519,7 @@ function heartbeat() {
       // 1.0.38 起再带捕获/推送遥测：captured=本地库条数、pushed=推送尝试数
       // ——用户「嗅探不到」时，一眼分清断在捕获层还是推送层。
       // 1.0.40 起补 push_ok/push_err/push_page（落盘的跨重启记账）+ 内容脚本哨兵遥测。
+      // 1.0.44 起**读响应**：reload_to 非空即自动重载（见 maybeAutoReload）。
       var ver = '', captured = 0;
       try { ver = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) {}
       try { captured = (typeof store.totalCount === 'function') ? store.totalCount() : 0; } catch (e) {}
@@ -475,7 +533,9 @@ function heartbeat() {
           push_last_err: pushStat.lastErr,
           page_saw: pageSeenCount
         }),
-      }).catch(function () {});
+      }).then(function (r) { return r.json(); })
+        .then(maybeAutoReload)
+        .catch(function () {});
     } catch (e) {}
   });
 }

@@ -59,6 +59,10 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
 
     面板据此显示「扩展已连接 ✓」——用户装完扩展立刻能确认状态，不用靠猜。
     1.0.36 起心跳带 {version}，桌面端与包内扩展版本比对 → 旧版提示更新。
+    1.0.44 起**响应带回 reload_to**（2026-10-02 零点击自动更新）：App 把新版写进
+    用户的扩展加载目录后，在这里告诉扩展「磁盘上已经是 X 版了」→ 扩展自己
+    `chrome.runtime.reload()`。解压版扩展 Chrome 不会自动更新，这是唯一不需要
+    用户手动覆盖目录 / 点 ↻ 的路径（详见 routers/extension.py 顶部注释）。
     心跳不带任何敏感信息，仅本机/回环场景使用。
     """
     if response is not None:
@@ -83,7 +87,18 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
         page_saw = payload.get("page_saw") or 0
     cdp_sniffer.SNIFFER.mark_ext_seen(ver, captured, pushed, seen, media, last_mime,
                                       push_ok, push_err, push_page, push_last_err, page_saw)
-    return {"ok": True}
+    # 零点击自动更新（2026-10-02）：心跳顺手带回「磁盘上已有新版」。
+    # 目录同步与安全边界都在 routers/extension.py::maybe_sync 里，这里只透传结果；
+    # 任何异常都不得影响心跳本身（否则扩展会以为桌面端掉线）。
+    reload_to, auto_on = "", False
+    try:
+        from routers import extension as _ext_rtr
+        info = _ext_rtr.maybe_sync(ver)
+        reload_to = str(info.get("reload_to") or "")
+        auto_on = bool(info.get("auto"))
+    except Exception:  # noqa: BLE001 - 自动更新是尽力而为
+        pass
+    return {"ok": True, "reload_to": reload_to, "auto_update": auto_on}
 
 
 @router.post('/api/sniffer/ext-push')

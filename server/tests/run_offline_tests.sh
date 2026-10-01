@@ -122,6 +122,7 @@ run_one test_sniffer_ext_push.py            # 嗅探「扩展自动直推」：�
 run_one test_ext_version_cmp.py             # 扩展版本比对守卫：只在「内置比已装新」时提示升级（2026-10-01 防降级）
 run_one test_sniffer_quality_wiring.py      # 嗅探链路清晰度透传：后端白名单 + 桌面端用它 + 两端都有下拉（2026-10-01 用户「没法选择分辨率」）
 run_one test_sniffer_badge_hide_wiring.py   # 嗅探入口徽标按状态隐藏：扩展在线才收起、离线自动回来（2026-10-02 用户「这个可以隐藏了」）
+run_one test_extension_autoupdate_wiring.py # 扩展零点击自动更新：目录识别/安全同步（拒写他人目录·只增不删）+ 心跳回传 reload_to + 扩展自重载（2026-10-02 用户「扩展程序更新怎么办」）
 run_one test_download_wiring.py
 #  11b. test_login_gate_placement.py —— 登录门禁「挂载位置」守卫（2026-09-27 用户实测：
 #                                       点「解析链接」就弹登录框 = 门禁挂错层）。

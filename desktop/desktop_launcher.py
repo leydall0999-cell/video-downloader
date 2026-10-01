@@ -764,6 +764,35 @@ class VdlApi:
         except Exception:
             return ""
 
+    def choose_extension_dir(self) -> str:
+        """弹原生「选择文件夹」面板，让用户指定浏览器扩展的加载目录（零点击自动更新用）。
+
+        为什么单独走一条桥而不是复用 choose_folder()：那个面板的提示语写死成
+        「选择剪映草稿导出目录」，用在扩展目录上会让用户以为点错了。
+
+        实现与 choose_folder() 同源（osascript 子进程）：把面板隔离在主线程之外 ——
+        直接在非主线程里动 NSWindow 会触发
+        `NSWindow drag regions should only be invalidated on the Main Thread!` SIGTRAP，
+        整个桌面 App 卡死。
+
+        返回所选目录绝对路径；用户取消 / 非 macOS / 失败 → 空串（调用方按取消处理）。
+        """
+        if sys.platform != "darwin":
+            return ""
+        try:
+            import subprocess
+            script = ('POSIX path of (choose folder with prompt '
+                      '"请选择浏览器扩展的加载目录（就是含 manifest.json 的那个文件夹）")')
+            p = subprocess.run(["osascript", "-e", script],
+                               capture_output=True, timeout=300)
+            if p.returncode == 0:
+                out = p.stdout.decode("utf-8", "replace").strip()
+                if out and not out.startswith("execution error"):
+                    return out.rstrip("/")
+            return ""
+        except Exception:
+            return ""
+
     def choose_folder(self) -> str:
         """弹出系统文件夹选择框，返回所选目录绝对路径；用户取消或失败返回空串。
 
