@@ -386,6 +386,11 @@ def section_c_contracts():
           "refreshAutoStatus();" in js and "let autoSt = null;" in js)
     check("更新横幅在「已开启自动更新」时改成自动说明（不再要求用户覆盖目录）",
           "已开启自动更新：新文件会自动写入扩展目录" in js)
+    # update-config / update-now 把同步结果放在**顶层** sync（与 status 平级）；
+    # 初稿写成 st.sync.reload_to 于是「已更新到 vX」提示永远不触发（真机自检发现）。
+    check("开启/同步后的 Toast 读的是顶层 sync（不是 status.sync）",
+          "const synced = (r && r.sync) || st.sync || {};" in js
+          and "st.sync && st.sync.reload_to" not in js)
 
     # —— 落点改成受管目录后，前端必须带上「复制路径 + 一次性加载引导」——
     check("前端有「复制目录路径」按钮并走原生剪贴板桥",

@@ -890,8 +890,13 @@
 
     const autoToastFrom = (r) => {
       const st = (r && r.status) || {};
-      if (st.sync && st.sync.reload_to) {
-        sniffToast('扩展文件已更新到 v' + st.sync.reload_to + '，浏览器内会自动重载');
+      // update-config / update-now 把同步结果放在**顶层** sync（与 status 平级），
+      // 不是嵌在 status 里 —— 两种形状都认，免得哪天挪了位置就悄悄丢提示。
+      const synced = (r && r.sync) || st.sync || {};
+      if (synced.reload_to) {
+        sniffToast('扩展文件已更新到 v' + synced.reload_to + '，浏览器内会自动重载');
+      } else if (synced.ok === false && synced.error) {
+        sniffToast('同步未完成：' + synced.error);
       } else if (st.needs_setup) {
         sniffToast('目录已就绪 v' + (st.source_version || '?') + '：请按提示把扩展加载一次');
       } else {
