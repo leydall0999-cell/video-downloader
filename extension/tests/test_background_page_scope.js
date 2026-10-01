@@ -34,8 +34,19 @@ function ok(cond, msg) { eq(!!cond, true, msg); }
 // ---- chrome.* 桩 ----
 const L = {};                  // 捕获 background.js 注册的监听器
 const sessionSet = [];         // 记录 storage.session.set 的载荷
+const fetchCalls = [];         // 记录 fetch 请求（真实网络一律不发）
 let stubActiveTab = 11;                  // 桩里「当前激活标签页」（= 扩展 updateBadge 查到的）
 const TAB_TITLE = { 11: '页面A', 22: '页面B', 33: '页面C' };
+const TAB_URL = {};            // tabId -> 该标签页当前 URL（tabs.get/query 用）
+const DEFAULT_PATH = (id) => 'http://site/p' + id;
+
+// fetch 桩：background.js 的推送 / 心跳都走这里，断言用
+globalThis.fetch = (url, opts) => {
+  const u = String(url);
+  fetchCalls.push({ url: u, body: (opts && opts.body) || '' });
+  const payload = u.indexOf('/api/sniffer/status') >= 0 ? { state: 'idle' } : { ok: true };
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(payload) });
+};
 
 globalThis.chrome = {
   webRequest: {
@@ -58,17 +69,33 @@ globalThis.chrome = {
   tabs: {
     query: (q, cb) => {
       const cb2 = typeof q === 'function' ? q : cb;
-      if (cb2) cb2([{ id: stubActiveTab }]);
+      if (cb2) {
+        cb2([{
+          id: stubActiveTab,
+          url: TAB_URL[stubActiveTab] || '',
+          title: TAB_TITLE[stubActiveTab] || '',
+        }]);
+      }
     },
-    get: (id, cb) => cb({ id: id, title: TAB_TITLE[id] || '', url: 'http://site/p' + id }),
+    get: (id, cb) => cb({
+      id: id,
+      title: TAB_TITLE[id] || '',
+      url: TAB_URL[id] || DEFAULT_PATH(id),
+    }),
     create: () => {},
     update: () => {},
     onRemoved: { addListener: (fn) => { L.tabRemoved = fn; } },
     onActivated: { addListener: (fn) => { L.tabActivated = fn; } },
+    onUpdated: { addListener: (fn) => { L.tabUpdated = fn; } },
   },
   runtime: {
     lastError: null,
+    getManifest: () => ({ version: '1.0.40' }),
     onMessage: { addListener: (fn) => { L.message = fn; } },
+  },
+  alarms: {
+    create: () => {},
+    onAlarm: { addListener: (fn) => { L.alarm = fn; } },
   },
 };
 
@@ -108,9 +135,9 @@ function mainFrame(tabId, url) {
   TAB_TITLE[tabId] = url.indexOf('/b.html') >= 0 ? '页面B' : '页面A';
 }
 function media(tabId, url) { complete(tabId, url, { mime: 'video/mp4' }); }
-function ask(payload) {
+function ask(payload, sender) {
   let got = null;
-  L.message(payload, {}, (r) => { got = r; });
+  L.message(payload, sender || {}, (r) => { got = r; });
   return got;
 }
 function urls(tabId) {
@@ -186,6 +213,89 @@ eq(urls(22).length, 1, '★ dropTabsExcept 保住现存标签页的数据（SW �
 L.message({ type: 'setEnabled', value: false }, {}, () => {});
 eq(globalThis.store.totalCount(), 0, '关掉嗅探开关时清空全部分库');
 
-// ---- 汇总 ----
-console.log('\nbackground 分页行为测试：通过 ' + passes + '，失败 ' + failures);
-process.exit(failures ? 1 : 0);
+// ---- 11) 视频页直推（v1.0.40）：不依赖主文档请求的多入口触发 ----
+// 回归场景（2026-10-01 用户实测「YouTube 还是嗅探不到」）：YouTube 换页是 SPA
+// （不发主文档请求），用户又常把页面在装/更新扩展前就开着了 → 原来只挂在
+// webRequest main_frame 上的判据永不触发，桌面端条目里零 YouTube 记录。
+ask({ type: 'setEnabled', value: true }, {}, () => {});   // 第 10 步关过开关，先打开
+const trips = () => globalThis.pushStat.tries;
+
+const ytUrl = 'https://www.youtube.com/watch?v=abc12345678&list=RDxyz&index=6';
+const t0 = trips();
+const seen = ask({ type: 'pageSeen', url: ytUrl, title: '某视频' },
+  { tab: { id: 44, url: ytUrl } });
+eq(seen.ok, true, '内容脚本哨兵报视频页 → 后台接住');
+ok(trips() > t0, '★ 视频页直推被触发（推送记账 +1）');
+eq(globalThis.pushStat.pageTries, 1, '页面直推计数 +1');
+eq(globalThis.pagePushed[44] && globalThis.pagePushed[44].key,
+  'https://www.youtube.com/watch?v=abc12345678',
+  '★ 按 tabId 记归一化后的页面（list/index 噪声参数已丢）');
+
+const t1 = trips();
+ask({ type: 'pageSeen', url: ytUrl, title: '某视频' }, { tab: { id: 44, url: ytUrl } });
+eq(trips(), t1, '★ 同一页重复上报不重复推（5 分钟冷却）');
+
+const t2 = trips();
+eq(ask({ type: 'pageSeen', url: 'https://www.youtube.com/feed/subscriptions' },
+  { tab: { id: 45 } }).ok, false, '非视频页：哨兵消息不触推');
+eq(trips(), t2, '★ 非视频页一个请求都不发');
+
+// 11.3 切标签页 → 早就开着的视频页也会被交出去
+TAB_URL[46] = 'https://www.youtube.com/watch?v=zzzzzzzzzzz';
+TAB_TITLE[46] = '一直在开着的视频';
+const t3 = trips();
+L.tabActivated({ tabId: 46 });
+ok(trips() > t3, '★ 切到视频页标签页 → 直推触发（覆盖「装扩展前就开着的页」）');
+
+// 11.4 SPA 换页（tabs.onUpdated 的 changeInfo.url，没有主文档请求）
+TAB_URL[47] = 'https://www.bilibili.com/video/BV1xx411c7mD';
+const t4 = trips();
+L.tabUpdated(47, { url: TAB_URL[47] }, { id: 47, url: TAB_URL[47], title: 'B站视频' });
+ok(trips() > t4, '★ SPA 换页（changeInfo.url）→ 直推触发');
+eq(globalThis.pagePushed[47] && globalThis.pagePushed[47].key, TAB_URL[47],
+  'B站视频页按 tabId 记账');
+
+// 11.5 心跳兜底：浏览器挂着不动时也能在 ≤60s 内交出去
+stubActiveTab = 48;
+TAB_URL[48] = 'https://www.douyin.com/video/7123456789012345678';
+TAB_TITLE[48] = '抖音视频';
+const t5 = trips();
+globalThis.heartbeat();
+ok(trips() > t5, '★ 心跳兜底：激活标签页是视频页 → 直推触发');
+
+// 11.6 关掉嗅探开关 → 一律不推；打开后 popup 强推可越过冷却
+ask({ type: 'setEnabled', value: false }, {}, () => {});
+const t6 = trips();
+ask({ type: 'pushPageNow', tabId: 49, url: 'https://www.youtube.com/watch?v=qqqqqqqqqqq' }, {}, () => {});
+eq(trips(), t6, '★ 关掉嗅探开关后不再推送');
+ask({ type: 'setEnabled', value: true }, {}, () => {});
+const t7 = trips();
+const nowRes = ask({ type: 'pushPageNow', tabId: 49, url: 'https://www.youtube.com/watch?v=qqqqqqqqqqq' }, {}, () => {});
+eq(nowRes.url, 'https://www.youtube.com/watch?v=qqqqqqqqqqq', 'pushPageNow 回显归一化页面');
+ok(trips() > t7, '★ 面板打开即强推（用户显式意图，忽略 5 分钟冷却）');
+
+// ---- 12/13) 心跳字段与推送载荷（需要等一拍让异步推送落地）----
+(async function () {
+  await new Promise((r) => setTimeout(r, 20));
+
+  globalThis.heartbeat();
+  const pings = fetchCalls.filter((c) => c.url.indexOf('/api/sniffer/ext-ping') >= 0);
+  ok(pings.length > 0, '心跳已发出（fetch 桩记录到 /api/sniffer/ext-ping）');
+  const body = JSON.parse(pings[pings.length - 1].body);
+  ok('push_ok' in body && 'push_err' in body && 'push_page' in body && 'page_saw' in body,
+    '★ 心跳带 push_ok/push_err/push_page/page_saw（判据不再依赖会归零的 pushed）');
+  eq(body.version, '1.0.40', '心跳带自报版本（桌面端据此提示「扩展有新版本」）');
+  eq(body.page_saw, 3, '哨兵计数与「页面侧上报次数」一致（含被冷却与非法页挡下的两次）');
+  eq(body.push_page, globalThis.pushStat.pageTries, '心跳里的页面直推数与本地记账一致');
+  ok(body.push_page >= 5, '★ 四条触发入口都真的推了（哨兵/切换/换页/心跳兜底）');
+
+  const pushes = fetchCalls.filter((c) => c.url.indexOf('/api/sniffer/ext-push') >= 0);
+  ok(pushes.length >= 5, '★ 推送请求已发出（/api/sniffer/ext-push）');
+  const one = JSON.parse(pushes[pushes.length - 1].body);
+  eq(one.items[0].kind_hint, 'page', '★ 页面直推带 kind_hint=page（桌面端据此标「视频页」）');
+  eq(one.items[0].mime, 'text/html', '页面直推的 mime 为 text/html');
+
+  // ---- 汇总 ----
+  console.log('\nbackground 分页行为测试：通过 ' + passes + '，失败 ' + failures);
+  process.exit(failures ? 1 : 0);
+})();

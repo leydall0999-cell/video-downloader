@@ -36,7 +36,53 @@ var sentUrls = {};           // storage.session['sentUrls']，已发送标记（
 var headerMeta = new Map();  // requestId -> {referer, cookie}
 var persistTimer = null;
 
+// ---- 视频页直推的记账（2026-10-01 v1.0.40）----
+// 为什么必须落 storage.local：MV3 的 SW 空闲就被 Chrome 挂起，内存里的 pushTries 一重启
+// 就归零。用户「YouTube 嗅探不到」时，面板上 pushed=0 既可能是「根本没推」，也可能只是
+// SW 刚重启的假象 —— 判据不可信。现在跨重启累加，且记录最后一次成败原因。
+var pushStat = { tries: 0, ok: 0, err: 0, pageTries: 0, lastErr: '', lastAt: 0 };
+var pushStatTimer = null;
+var PUSH_STAT_FLUSH_MS = 3000;    // 记账落盘节流
+var pagePushed = {};              // tabId -> {key, at}：同一标签页同一视频页只自动推一次
+var PAGE_PUSH_COOLDOWN = 300;     // 秒：同一页 5 分钟内不重复自动推（手动「发送当前页」忽略冷却）
+
 var LOCAL_HOST_RE = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/;
+
+/** 读回跨重启的推送记账（SW 每次唤醒都要先恢复，否则又把历史抹成 0）。 */
+function loadPushStat() {
+  try {
+    chrome.storage.local.get(['pushStat'], function (st) {
+      var s = st && st.pushStat;
+      if (!s || typeof s !== 'object') return;
+      pushStat.tries = Number(s.tries) || 0;
+      pushStat.ok = Number(s.ok) || 0;
+      pushStat.err = Number(s.err) || 0;
+      pushStat.pageTries = Number(s.pageTries) || 0;
+      pushStat.lastErr = String(s.lastErr || '').slice(0, 120);
+      pushStat.lastAt = Number(s.lastAt) || 0;
+    });
+  } catch (e) { /* storage 不可用：内存态照常工作 */ }
+}
+
+function savePushStat() {
+  if (pushStatTimer) return;
+  pushStatTimer = setTimeout(function () {
+    pushStatTimer = null;
+    try { chrome.storage.local.set({ pushStat: pushStat }); } catch (e) { /* 静默 */ }
+  }, PUSH_STAT_FLUSH_MS);
+}
+
+/** 记一次推送结果：ok=true 表示桌面端（HTTP 2xx）确认收到。 */
+function notePush(ok, err) {
+  if (ok) {
+    pushStat.ok++;
+  } else {
+    pushStat.err++;
+    pushStat.lastErr = String(err || '未知').slice(0, 120);
+  }
+  pushStat.lastAt = Date.now() / 1000;
+  savePushStat();
+}
 
 /** 换页判定基准（实现与测试都在 sniff-core.pageKeyOf）：忽略 hash ——
  *  页内锚点跳转不算换页，否则会把当前页刚嗅到的条目误清。 */
@@ -162,17 +208,35 @@ function handleCompleted(details) {
  *  items 库——没有这条链路，桌面面板列表永远是空的（用户以为没嗅到）。
  *  服务端按 URL 去重，重复推无副作用；失败静默（下次同 URL 再推）。 */
 var pushTries = 0;            // 本次 SW 生命周期内推送尝试数（遥测：定位「没捕获」vs「推送失败」）
+var pageSeenCount = 0;        // 内容脚本哨兵报来的视频页数（遥测：判断页面侧通道是否活着，v1.0.40）
 var seenEvents = 0;           // onCompleted 观察到的响应总数（遥测）
 var mediaHits = 0;            // 其中被判成媒体/播放列表/分片的条数（遥测）
 var lastMime = '';            // 最近一条响应的 Content-Type（遥测：判定矩阵是否认这个站）
 
-/** 视频页面链接直推（2026-10-01）：UMP/SABR 站点的媒体流抓不到，推页面让桌面端解析。 */
-function pushPageToServer(tabId, pageUrl) {
+/** 视频页面链接直推（2026-10-01）：UMP/SABR 站点的媒体流抓不到，推页面让桌面端解析。
+ *  v1.0.40 加两件事：①per-tab 去重（同一页 5 分钟内不重复打扰桌面端）；
+ *  ②推送成败记账 → chrome.storage.local（见文件头 pushStat 说明）。 */
+function pushPageToServer(tabId, pageUrl, title, force) {
   if (!pageUrl) return;
-  pushTries++;
-  var send = function (title) {
+  // 嗅探开关关掉 = 什么都不推（含 popup 的强推）——开关是用户的唯一总闸，不能有旁路
+  if (!enabled) return;
+  var key = pageKeyOf(pageUrl);
+  var tid = (typeof tabId === 'number' && tabId > 0) ? tabId : -1;
+  if (tid > 0 && force !== true) {
+    var prev = pagePushed[tid];
+    if (prev && prev.key === key && (Date.now() / 1000 - prev.at) < PAGE_PUSH_COOLDOWN) {
+      return;
+    }
+  }
+  if (tid > 0) pagePushed[tid] = { key: key, at: Date.now() / 1000 };
+  pushTries++;                 // 兼容旧遥测口径（内存值）
+  pushStat.tries++;
+  pushStat.pageTries++;
+  savePushStat();
+
+  function send(t) {
     getEndpoint(function (base) {
-      if (!base) return;
+      if (!base) { notePush(false, '未找到桌面端'); return; }
       try {
         fetch(base + '/api/sniffer/ext-push', {
           method: 'POST',
@@ -185,22 +249,68 @@ function pushPageToServer(tabId, pageUrl) {
               referer: '',
               cookie: '',
               page_url: pageUrl,
-              page_title: title || ''
+              page_title: t || ''
             }]
           })
-        }).catch(function () {});
-      } catch (e) { /* 静默 */ }
+        }).then(function (r) {
+          if (r && r.ok) notePush(true);
+          else notePush(false, 'HTTP ' + ((r && r.status) || '?'));
+        }).catch(function (e) {
+          notePush(false, (e && e.message) || '网络错误');
+        });
+      } catch (e) { notePush(false, '发送异常'); }
     });
-  };
-  if (tabId > 0) {
+  }
+
+  if (title) { send(title); return; }
+  if (tid > 0) {
     try {
-      chrome.tabs.get(tabId, function (tab) {
-        send((tab && !chrome.runtime.lastError && tab.title) || '');
+      chrome.tabs.get(tid, function (tab) {
+        var t = '';
+        try { t = (tab && !chrome.runtime.lastError && tab.title) || ''; } catch (e) { /* 关页 */ }
+        send(t);
       });
       return;
     } catch (e) { /* 落到同步分支 */ }
   }
   send('');
+}
+
+/** 「这个标签页当前是不是视频页」→ 是就直推（v1.0.40 多入口触发）。
+ *
+ *  为什么必须补入口：原来只在 webRequest 的 main_frame 上判。但 YouTube 从首页点进
+ *  某个视频是 **SPA 换页（不发主文档请求）**，而且用户往往在装/更新扩展前就把页面开着了
+ *  —— 主文档请求早发生过，事件永远不会再来。2026-10-01 实测：面板 pushed=0、
+ *  桌面端条目里零 YouTube 记录，而同一时刻腾讯视频能正常嗅到（那些站是整页导航）。
+ *  现在四条不依赖主文档请求的入口：内容脚本哨兵 / 切标签页 / 标签页地址变化 / 心跳兜底。 */
+function checkPagePush(tabId, url, title, force) {
+  if (!enabled) return false;
+  if (typeof url !== 'string' || !url) return false;
+  var vp = CORE.isVideoPage(url);
+  if (!vp) return false;
+  pushPageToServer(tabId, vp, title || '', force === true);
+  return true;
+}
+
+/** 按 tabId 取当前 URL/标题后再判（切标签页用）。 */
+function checkPagePushFromTab(tabId, force) {
+  try {
+    chrome.tabs.get(tabId, function (tab) {
+      if (chrome.runtime.lastError) return;
+      if (tab) checkPagePush(tabId, tab.url, tab.title, force);
+    });
+  } catch (e) { /* 标签页已关闭 */ }
+}
+
+/** 当前窗口激活的标签页（心跳兜底：浏览器挂着不动也能在 ≤60s 内交出去）。 */
+function checkActiveTabPush(force) {
+  try {
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, function (tabs) {
+      if (chrome.runtime.lastError) return;
+      var t = tabs && tabs[0];
+      if (t && typeof t.id === 'number') checkPagePush(t.id, t.url, t.title, force);
+    });
+  } catch (e) { /* 无窗口场景忽略 */ }
 }
 
 function pushToServer(item) {
@@ -278,6 +388,18 @@ try {
     chrome.tabs.onActivated.addListener(function (info) {
       activeTabId = info && typeof info.tabId === 'number' ? info.tabId : activeTabId;
       updateBadge();
+      // v1.0.40：切到该标签页就判一次视频页 —— 「早就开着的 YouTube 页」靠这条兜住
+      if (info && typeof info.tabId === 'number') checkPagePushFromTab(info.tabId);
+    });
+  }
+  // v1.0.40：标签页地址变化（SPA 换页，无主文档请求）/ 整页加载完成
+  if (chrome.tabs && chrome.tabs.onUpdated) {
+    chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+      var u = (changeInfo && changeInfo.url) || '';
+      if (u) { checkPagePush(tabId, u, (tab && tab.title) || ''); return; }
+      if (changeInfo && changeInfo.status === 'complete' && tab && tab.url) {
+        checkPagePush(tabId, tab.url, tab.title || '');
+      }
     });
   }
 } catch (e) {
@@ -331,12 +453,15 @@ function getEndpoint(cb) {
 // MV3 SW 空闲 ~30s 被 Chrome 挂起；每次唤醒（webRequest 事件/消息/alarms）
 // 都会重跑顶层代码 → 顺手 ping 一次。alarms 每分钟兜底（浏览器挂着不动也在线）。
 function heartbeat() {
+  // v1.0.40：浏览器挂着不动时的兜底 —— 每分钟看一眼激活标签页是不是视频页
+  checkActiveTabPush(false);
   getEndpoint(function (base) {
     if (!base) return;
     try {
       // 1.0.37 起心跳带自报版本：桌面端与包内扩展比对 → 旧版提示一键更新。
       // 1.0.38 起再带捕获/推送遥测：captured=本地库条数、pushed=推送尝试数
       // ——用户「嗅探不到」时，一眼分清断在捕获层还是推送层。
+      // 1.0.40 起补 push_ok/push_err/push_page（落盘的跨重启记账）+ 内容脚本哨兵遥测。
       var ver = '', captured = 0;
       try { ver = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) {}
       try { captured = (typeof store.totalCount === 'function') ? store.totalCount() : 0; } catch (e) {}
@@ -345,7 +470,10 @@ function heartbeat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           version: ver, captured: captured, pushed: pushTries,
-          seen: seenEvents, media: mediaHits, last_mime: lastMime
+          seen: seenEvents, media: mediaHits, last_mime: lastMime,
+          push_ok: pushStat.ok, push_err: pushStat.err, push_page: pushStat.pageTries,
+          push_last_err: pushStat.lastErr,
+          page_saw: pageSeenCount
         }),
       }).catch(function () {});
     } catch (e) {}
@@ -361,6 +489,7 @@ try {
 
 // ---- 启动恢复 ----
 (function restore() {
+  loadPushStat();          // v1.0.40：先恢复跨重启的推送记账，否则心跳一直报 0
   chrome.storage.local.get(['enabled', 'carryCookie', 'endpoint'], function (st) {
     if (st.enabled === false) enabled = false;
     if (st.carryCookie === false) carryCookie = false;
@@ -395,16 +524,45 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   switch (msg.type) {
     case 'getState':
       var tid = scopeTabId();
-      sendResponse({
+      var snap = {
         enabled: enabled,
         carryCookie: carryCookie,
         endpoint: endpoint,
         tabId: tid,
         items: store.list(tid),
         segments: store.segments(tid),
-        sentUrls: sentUrls
-      });
-      return false;
+        sentUrls: sentUrls,
+        // v1.0.40：把推送记账带给 popup —— 「没嗅到」时用户能自己看出是不是推送失败
+        pushOk: pushStat.ok,
+        pushErr: pushStat.err,
+        pushPage: pushStat.pageTries,
+        pushLastErr: pushStat.lastErr,
+        videoPage: '',
+        pagePushAt: 0
+      };
+      if (typeof tid !== 'number' || tid < 0) { sendResponse(snap); return false; }
+      (function () {
+        var replied = false;
+        var reply = function (vp, at) {
+          if (replied) return;
+          replied = true;
+          snap.videoPage = vp || '';
+          snap.pagePushAt = at || 0;
+          sendResponse(snap);
+        };
+        try {
+          chrome.tabs.get(tid, function (tab) {
+            var u = '';
+            try { u = (tab && !chrome.runtime.lastError && tab.url) || ''; } catch (e) { /* 关页 */ }
+            var vp = u ? CORE.isVideoPage(u) : '';
+            var rec = (vp && pagePushed[tid]) ? pagePushed[tid] : null;
+            reply(vp, (rec && vp && rec.key === pageKeyOf(vp)) ? rec.at : 0);
+          });
+        } catch (e) { reply('', 0); }
+        // 兜底：tabs.get 意外不回调时别让面板干等
+        setTimeout(function () { reply('', 0); }, 800);
+      })();
+      return true;   // 异步
     case 'setEnabled':
       enabled = !!msg.value;
       chrome.storage.local.set({ enabled: enabled });
@@ -431,6 +589,31 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       updateBadge();
       sendResponse({ ok: true, tabId: ctid });
       return false;
+    case 'pageSeen': {
+      // 内容脚本哨兵（v1.0.40）：页面侧的「加载完成 / SPA 换页 / 播放器出现」。
+      // SW 被 Chrome 挂起时页面照样能唤醒它（runtime 消息必然唤醒），这是 YouTube
+      // 这类 SPA 站点唯一可靠的入口 —— 它们不发新的主文档请求。
+      pageSeenCount++;
+      var sTab = sender && sender.tab ? sender.tab : null;
+      var sTid = (sTab && typeof sTab.id === 'number') ? sTab.id : -1;
+      var ttl = msg.title || (sTab && sTab.title) || '';
+      var hit = checkPagePush(sTid, msg.url || '', ttl, msg.force === true);
+      sendResponse({ ok: hit });
+      return false;
+    }
+    case 'pushPageNow': {
+      // popup 打开即强制推一次（用户显式打开面板 = 明确意图 → 忽略 5 分钟冷却）
+      var ptid = scopeTabId();
+      var pvp = CORE.isVideoPage(msg.url || '');
+      if (pvp) {
+        pushPageToServer(ptid, pvp, msg.title || '', true);
+        sendResponse({ ok: true, url: pvp });
+      } else {
+        checkPagePushFromTab(ptid, true);
+        sendResponse({ ok: true, url: '' });
+      }
+      return false;
+    }
     case 'markSent':
       sentUrls[msg.url] = Date.now();
       persist();

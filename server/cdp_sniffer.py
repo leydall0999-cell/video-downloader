@@ -246,6 +246,11 @@ class CDPSniffer:
         self._ext_version: str = ""                                # 扩展自报版本号（心跳携带，空=旧版扩展）
         self._ext_tele: tuple[int, int] = (0, 0)                   # (captured, pushed) 扩展遥测快照
         self._ext_diag: tuple[int, int, str] = (0, 0, "")          # (seen, media, last_mime) 捕获诊断
+        # v1.0.40：扩展侧**落盘**的推送记账 (ok, err, page, last_err)。
+        # 原来的 pushed 是 SW 内存值，扩展一被挂起就归零，会把「推了」误读成「根本没推」
+        # —— 2026-10-01 YouTube 直推失灵时就卡在这个假象上。
+        self._ext_push: tuple[int, int, int, str] = (0, 0, 0, "")
+        self._ext_page_saw: int = 0                                # 内容脚本哨兵报来的视频页数
         self._error = ""
         self._state = "idle"                                   # idle / running / error
 
@@ -290,6 +295,13 @@ class CDPSniffer:
                 "ext_seen": self._ext_diag[0],
                 "ext_media": self._ext_diag[1],
                 "ext_last_mime": self._ext_diag[2],
+                # 推送记账（v1.0.40）：跨 SW 重启累加 —— ext_pushed 是内存值，不作判据
+                "ext_push_ok": self._ext_push[0],
+                "ext_push_err": self._ext_push[1],
+                "ext_push_page": self._ext_push[2],
+                "ext_push_last_err": self._ext_push[3],
+                # 页面哨兵（v1.0.40）：内容脚本报来的视频页数，>0 说明页面侧通道活着
+                "ext_page_saw": self._ext_page_saw,
             }
 
     def mark_desktop_auth(self, user_id: str | None) -> None:
@@ -311,8 +323,14 @@ class CDPSniffer:
             self._desktop_auth = (time.time(), True)
 
     def mark_ext_seen(self, version: str = "", captured: int = 0, pushed: int = 0,
-                      seen: int = 0, media: int = 0, last_mime: str = "") -> None:
-        """扩展心跳（2026-10-01）：可见时间 + 自报版本 + 捕获/推送遥测 + 捕获诊断，供面板判断与排障。"""
+                      seen: int = 0, media: int = 0, last_mime: str = "",
+                      push_ok: int = 0, push_err: int = 0, push_page: int = 0,
+                      push_last_err: str = "", page_saw: int = 0) -> None:
+        """扩展心跳（2026-10-01）：可见时间 + 自报版本 + 捕获/推送遥测 + 捕获诊断 + 推送记账。
+
+        推送记账（push_ok/push_err/push_page/push_last_err，v1.0.40）由扩展落 storage.local，
+        跨 SW 重启累加 —— 判断「视频页到底有没有交给桌面端」必须看这组值，不能看 pushed。
+        """
         with self._lock:
             self._ext_seen = time.time()
             if version and isinstance(version, str):
@@ -321,6 +339,9 @@ class CDPSniffer:
                 self._ext_tele = (max(0, int(captured)), max(0, int(pushed)))
                 self._ext_diag = (max(0, int(seen)), max(0, int(media)),
                                   str(last_mime or "")[:60])
+                self._ext_push = (max(0, int(push_ok)), max(0, int(push_err)),
+                                  max(0, int(push_page)), str(push_last_err or "")[:120])
+                self._ext_page_saw = max(0, int(page_saw))
             except (TypeError, ValueError):
                 pass
 

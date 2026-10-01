@@ -486,12 +486,15 @@
       const div = document.createElement('div');
       div.className = 'vdl-sniff-item';
       const short = it.url.length > 150 ? it.url.slice(0, 150) + '…' : it.url;
+      // 「视频页」条目是 YouTube 这类加密流站点的正解：它本身不是媒体地址，
+      // 点下去走的是解析（yt-dlp）而不是直下 —— 按钮文案要跟着变，否则用户以为点错了。
+      const isPage = it.kind === 'page';
       div.innerHTML =
         `<span class="k ${escHtml(it.kind)}">${KIND_LABEL[it.kind] || escHtml(it.kind)}</span>` +
         `<span style="color:#888;font-size:11px">×${it.count || 1}</span>` +
         `<div class="u">${escHtml(short)}</div>` +
         (it.page_title ? `<div class="p">来源：${escHtml(it.page_title)}</div>` : '') +
-        `<button type="button" class="dl">下载</button><button type="button" class="cp">复制链接</button>`;
+        `<button type="button" class="dl">${isPage ? '解析并下载' : '下载'}</button><button type="button" class="cp">复制链接</button>`;
       div.querySelector('.dl').addEventListener('click', () => downloadItem(it, div));
       div.querySelector('.cp').addEventListener('click', () => {
         navigator.clipboard && navigator.clipboard.writeText(it.url);

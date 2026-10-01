@@ -72,8 +72,46 @@ def test_ext_telemetry():
     print("✅ 心跳遥测：入库/缺省归零/脏数据防御 全过")
 
 
+def test_ext_push_accounting():
+    """推送记账（1.0.40+）。
+
+    为什么必须落盘：pushed 是扩展 SW 的**内存**计数，SW 被 Chrome 挂起就归零。
+    2026-10-01 YouTube 直推失灵时，面板显示 pushed=0 让人以为「根本没推」，
+    实际是扩展刚重启。现在 push_ok/push_err/push_page 由扩展落 storage.local
+    跨重启累加，才是可判断的判据。
+    """
+    # 8) 新字段入库
+    r = rs.sniffer_ext_ping(payload={
+        "version": "1.0.40", "push_ok": 3, "push_err": 1,
+        "push_page": 2, "push_last_err": "未找到桌面端", "page_saw": 4,
+    })
+    assert r.get("ok") is True
+    st = cdp_sniffer.SNIFFER.status()
+    assert st.get("ext_push_ok") == 3 and st.get("ext_push_err") == 1, f"推送记账未入库: {st}"
+    assert st.get("ext_push_page") == 2, f"页面直推计数未入库: {st}"
+    assert st.get("ext_push_last_err") == "未找到桌面端", f"最后失败原因未入库: {st}"
+    assert st.get("ext_page_saw") == 4, f"页面哨兵计数未入库: {st}"
+    # 9) 旧版扩展（心跳不带新键）→ 归零，不能残留上一次的值（否则排障看的是旧数据）
+    rs.sniffer_ext_ping(payload={"version": "1.0.39"})
+    st2 = cdp_sniffer.SNIFFER.status()
+    assert st2.get("ext_push_ok") == 0 and st2.get("ext_push_page") == 0
+    assert st2.get("ext_push_last_err") == "" and st2.get("ext_page_saw") == 0
+    # 10) 超长错误串截断到 120
+    rs.sniffer_ext_ping(payload={"push_last_err": "e" * 400})
+    assert len(cdp_sniffer.SNIFFER.status().get("ext_push_last_err") or "") == 120
+    # 11) 脏数据防御：负值/非数字/None 进不来、也不抛
+    rs.sniffer_ext_ping(payload={"push_ok": -5, "push_err": "x", "push_page": None,
+                                 "push_last_err": "e" * 400, "page_saw": -1})
+    st3 = cdp_sniffer.SNIFFER.status()
+    assert st3.get("ext_push_ok") == 0 and st3.get("ext_push_page") == 0
+    assert st3.get("ext_page_saw") == 0
+    assert len(st3.get("ext_push_last_err") or "") <= 120
+    print("✅ 推送记账：入库/旧版归零/超长截断/脏数据防御 全过")
+
+
 if __name__ == "__main__":
     test_ext_ping_flow()
     test_ext_version_report()
     test_ext_telemetry()
+    test_ext_push_accounting()
     print("🎉 扩展心跳回归测试全部通过")

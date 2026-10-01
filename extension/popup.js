@@ -142,8 +142,21 @@ function render(st) {
   var segs = st.segments || [];
   listEl.innerHTML = '';
   if (!items.length && !segs.length) {
-    listEl.innerHTML = '<div class="empty">当前页没有嗅探到媒体流。<br>' +
-      '播放页面里的视频或音频后这里会自动列出；已离开的页面不会保留。</div>';
+    if (st.videoPage) {
+      // 视频页但抓不到直链：YouTube/B站等用加密流（UMP/SABR）播放，媒体流抓不到、
+      // 也不该抓 —— 正解是把页面链接交给桌面端用 yt-dlp 解析（已自动发生）。
+      // 2026-10-01 用户实测反馈：原来只写「没有嗅探到媒体流」，被读成功能坏了。
+      listEl.innerHTML = '<div class="empty">' +
+        '这类站点用加密流播放，扩展抓不到直链（正常现象）。<br>' +
+        (st.pagePushAt
+          ? '✓ 已于 ' + fmtTime(st.pagePushAt) + ' 把本页交给桌面端解析。<br>' +
+            '去桌面端「媒体嗅探」列表点「下载」即可。'
+          : '正在把本页交给桌面端解析；若一直是这样，请确认「视频工坊」App 已启动。') +
+        '</div>';
+    } else {
+      listEl.innerHTML = '<div class="empty">当前页没有嗅探到媒体流。<br>' +
+        '播放页面里的视频或音频后这里会自动列出；已离开的页面不会保留。</div>';
+    }
   } else {
     items.forEach(function (it) { listEl.appendChild(renderItem(it)); });
   }
@@ -166,10 +179,24 @@ function refresh() {
   chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
     var tab = tabs && tabs[0];
     if (tab && typeof tab.id === 'number') currentTabId = tab.id;
-    chrome.runtime.sendMessage({ type: 'getState', tabId: currentTabId }, function (st) {
-      if (chrome.runtime.lastError) return;
-      render(st);
+    // v1.0.40：打开面板这一下，就顺手把视频页交给桌面端（用户显式打开面板 = 明确意图，
+    // 忽略 5 分钟冷却）。必须在取 state 之前，否则渲染时 pagePushAt 还是旧值。
+    chrome.runtime.sendMessage({
+      type: 'pushPageNow',
+      tabId: currentTabId,
+      url: (tab && tab.url) || '',
+      title: (tab && tab.title) || ''
+    }, function () {
+      void chrome.runtime.lastError;
+      loadState();
     });
+  });
+}
+
+function loadState() {
+  chrome.runtime.sendMessage({ type: 'getState', tabId: currentTabId }, function (st) {
+    if (chrome.runtime.lastError) return;
+    render(st);
   });
 }
 

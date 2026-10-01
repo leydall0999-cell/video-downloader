@@ -65,6 +65,7 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
         _pna(response)
     ver, captured, pushed = "", 0, 0
     seen, media, last_mime = 0, 0, ""
+    push_ok, push_err, push_page, push_last_err, page_saw = 0, 0, 0, "", 0
     if isinstance(payload, dict):
         raw = payload.get("version")
         if isinstance(raw, str):
@@ -74,7 +75,14 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
         seen = payload.get("seen") or 0
         media = payload.get("media") or 0
         last_mime = payload.get("last_mime") or ""
-    cdp_sniffer.SNIFFER.mark_ext_seen(ver, captured, pushed, seen, media, last_mime)
+        # v1.0.40：落盘的推送记账 + 页面哨兵计数（旧版扩展不带这些键 → 保持 0，不报错）
+        push_ok = payload.get("push_ok") or 0
+        push_err = payload.get("push_err") or 0
+        push_page = payload.get("push_page") or 0
+        push_last_err = payload.get("push_last_err") or ""
+        page_saw = payload.get("page_saw") or 0
+    cdp_sniffer.SNIFFER.mark_ext_seen(ver, captured, pushed, seen, media, last_mime,
+                                      push_ok, push_err, push_page, push_last_err, page_saw)
     return {"ok": True}
 
 
