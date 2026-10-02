@@ -17643,7 +17643,10 @@ el.dwVidPlayer.hidden = true;
       if (inProfile) switchView('home');
       return;
     }
-    group.classList.remove('collapsed');
+    // 默认收起（2026-10-03 用户要求）：已登录也先折叠，点标题展开；
+    // 进入个人中心子页时 switchView 会按激活项自动展开，不受影响。
+    const hasActiveSub = group.querySelector('.sidebar-item.is-active');
+    if (!hasActiveSub) group.classList.add('collapsed');
     delete group.dataset.locked;
   }
   function _isValidIdentifier(ident) {
