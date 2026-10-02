@@ -1892,6 +1892,10 @@
               <div class="pf-sec-main" data-page-node-id="vdIdleMain">
                 <div class="pf-sec-title" data-page-node-id="vdIdleTitle">AI 引擎空闲自动释放</div>
                 <div class="pf-sec-sub" data-page-node-id="vdIdleSub">抠图 / 去水印用完 3 分钟没再操作，自动卸载模型释放内存；下次使用会重新加载（约 1 秒）。关掉则常驻内存，响应更快但更占内存。</div>
+                <div class="pf-sec-foot" data-page-node-id="vdIdleFoot" style="margin-top:.55rem">
+                  <span id="profIdleState" data-page-node-id="vdIdleState">—</span>
+                  <button type="button" class="pf-sec-btn" id="profIdleReleaseNow" data-page-node-id="vdIdleReleaseBtn">立即释放</button>
+                </div>
               </div>
               <div class="pf-sec-actions" data-page-node-id="vdIdleActions">
                 <label class="vd-switch" data-page-node-id="vdIdleSwitch">
@@ -1899,10 +1903,6 @@
                   <span class="vd-switch-track" aria-hidden="true" data-page-node-id="vdIdleTrack"><span class="vd-switch-knob" data-page-node-id="vdIdleKnob"></span></span>
                   <span class="vd-switch-label" id="profIdleLabel" data-page-node-id="vdIdleLabel">已开启</span>
                 </label>
-              </div>
-              <div class="pf-sec-foot" data-page-node-id="vdIdleFoot" style="margin-top:.7rem;flex-basis:100%">
-                <span id="profIdleState" data-page-node-id="vdIdleState">—</span>
-                <button type="button" class="pf-sec-btn" id="profIdleReleaseNow" data-page-node-id="vdIdleReleaseBtn">立即释放</button>
               </div>
             </div>
           </div>
