@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
 import sys
 import tempfile
@@ -193,6 +194,50 @@ def test_cloud_price_wins_over_local() -> None:
           M.cloud_plan_overrides(force=True) is None)
 
 
+def test_push_uses_local_intent_not_cloud_merged() -> None:
+    """[D] 下发云端必须用「本机意图」表，禁用云端合并后的结果（否则改价被自己盖回）。
+
+    2026-10-03 实测事故：push_plans_to_cloud() 原先上传 effective_plans()，那里面
+    已含云端旧值 → 桌面把 99.90 改成 109.90，「同步成功」但云端与生效价仍是 99.90，
+    等于改价完全无效。本例用桩捕获下发的 body 加以钉死。
+    """
+    print("\n[G] 下发云端用本机意图表（不被云端旧值覆盖）")
+    M.save_plan_overrides({"download_plans": {"download_7day": {"price_cny": 12.34, "days": 5}}})
+
+    captured: dict = {}
+
+    class _Resp:
+        def read(self): return b'{"ok": true, "plans": {}}'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _fake_urlopen(req, timeout=None):
+        body = getattr(req, "data", b"") or b"{}"
+        captured.update(json.loads(body.decode("utf-8")))
+        return _Resp()
+
+    import urllib.request as _rq
+    origin_urlopen = _rq.urlopen
+    import admin_store as _adm
+    origin_token = _adm._license_admin_token
+    _rq.urlopen = _fake_urlopen
+    _adm._license_admin_token = lambda: "test-token"
+    try:
+        res = M.push_plans_to_cloud()
+    finally:
+        _rq.urlopen = origin_urlopen
+        _adm._license_admin_token = origin_token
+
+    check("[下发] 返回 ok", bool(res.get("ok")))
+    sent = ((captured.get("plans") or {}).get("download_plans") or {}).get("download_7day") or {}
+    check("[下发] 上传的价是本机改的 12.34（不是云端旧值）",
+          abs(float(sent.get("price_cny") or 0) - 12.34) < 1e-6)
+    check("[下发] 上传的表是本机意图表（local_plans），不是云端合并结果",
+          abs(float(M.local_plans()["download_plans"]["download_7day"]["price_cny"]) - 12.34) < 1e-6)
+    # 还原，避免影响后续用例
+    M.save_plan_overrides({"download_plans": {"download_7day": None}})
+
+
 def main() -> int:
     test_short_term_plans_exist()
     test_override_price_and_days_take_effect()
@@ -200,6 +245,7 @@ def main() -> int:
     test_override_only_extra_plan_works()
     test_override_iterative_merge()
     test_cloud_price_wins_over_local()
+    test_push_uses_local_intent_not_cloud_merged()
     test_test_isolation()
     test_desktop_wiring_present()
     print("\n" + "=" * 46)

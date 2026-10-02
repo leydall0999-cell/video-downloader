@@ -233,8 +233,23 @@ def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
         return None
 
 
+def local_plans() -> dict[str, dict[str, Any]]:
+    """本机意图表：代码常量 ← 本机 plans.json 覆盖层（**不含云端**）。
+
+    🔴 下发云端必须用这张表，不能用 effective_plans()：后者已把云端旧值合并进来，
+    再推回云端等于「用旧值覆盖新值」，而云端优先级最高 → 桌面改价被自己盖回去，
+    表现为保存成功但价格没变（2026-10-03 实测：改 109.90 生效价仍是 99.90）。
+    """
+    ov = load_plan_overrides()
+    return {
+        "download_plans": _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")),
+        "ai_plans": _overlay_plans(AI_PLANS, ov.get("ai_plans")),
+        "credit_packs": _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")),
+    }
+
+
 def push_plans_to_cloud() -> dict[str, Any]:
-    """把当前生效套餐表下发授权中心（后台保存后调用）。返回同步状态，绝不抛出。"""
+    """把本机意图套餐表下发授权中心（后台保存后调用）。返回同步状态，绝不抛出。"""
     url = _license_api("/api/license/plans_set")
     if not url:
         return {"ok": False, "reason": "no_license_base"}
@@ -247,7 +262,7 @@ def push_plans_to_cloud() -> dict[str, Any]:
         return {"ok": False, "reason": "no_admin_token"}
     try:
         import urllib.request as _rq
-        eff = effective_plans()
+        eff = local_plans()
         body = json.dumps({"token": token, "plans": {
             "download_plans": eff.get("download_plans") or {},
             "ai_plans": eff.get("ai_plans") or {},
