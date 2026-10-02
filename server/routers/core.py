@@ -1154,6 +1154,71 @@ def app_ops_events(request: app.Request, limit: int = 200, level: str = "", rang
         raise app.HTTPException(status_code=502, detail=f"拉取 ECS 事件数据失败：{e}")
 
 
+# ── 授权中心告警/对账转发（2026-10-03）：桌面 App /api/app/license-* 的 ECS 侧落点 ──
+# 链路：App 本机 /api/app/license-*（X-Admin-Key）→ 本文件 /api/license-*
+#       → 127.0.0.1:8902 /api/license/{alerts|alerts_ack|recon}（body token 门禁）。
+# 此前 ECS 一直没有这三个路由，App 运维监控的「异常告警/对账」恒报 Not Found。
+
+def _license_admin_token() -> str:
+    return (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
+
+
+def _license_base() -> str:
+    return (os.environ.get("VDL_LICENSE_BASE") or "http://127.0.0.1:8902").strip().rstrip("/")
+
+
+@router.get("/api/license-alerts")
+def ecs_license_alerts(request: app.Request, since: float = 0.0,
+                       unseen_only: bool = False, limit: int = 100):
+    """授权中心异常告警转发：桌面 App 带 X-Admin-Key 来查 8902 的 alerts。"""
+    _require_admin(request)
+    try:
+        resp = app.requests.post(
+            f"{_license_base()}/api/license/alerts",
+            json={"token": _license_admin_token(), "since": since,
+                  "unseen_only": bool(unseen_only),
+                  "limit": max(1, min(int(limit), 200))},
+            timeout=12,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取授权中心告警失败：{e}")
+
+
+@router.post("/api/license-alerts/ack")
+def ecs_license_alerts_ack(payload: dict, request: app.Request):
+    """确认（已读）授权中心告警。ids 为空数组 = 全部确认。"""
+    _require_admin(request)
+    try:
+        resp = app.requests.post(
+            f"{_license_base()}/api/license/alerts_ack",
+            json={"token": _license_admin_token(), "ids": list(payload.get("ids") or [])},
+            timeout=12,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"确认告警失败：{e}")
+
+
+@router.post("/api/license-recon")
+def ecs_license_recon(payload: dict, request: app.Request):
+    """每日入账/充值对账报告转发（超管专用）。"""
+    _require_admin(request)
+    try:
+        days = int(payload.get("days") or 7)
+    except (TypeError, ValueError):
+        days = 7
+    try:
+        resp = app.requests.post(
+            f"{_license_base()}/api/license/recon",
+            json={"token": _license_admin_token(), "days": max(1, min(days, 60))},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取对账报告失败：{e}")
+
+
 @router.get("/ops-board")
 def ops_board(request: app.Request):
     """App 内运维看板页面：WKWebView 同源加载本机 /ops-board，fetch /api/app/*。
