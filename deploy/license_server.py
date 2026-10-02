@@ -925,6 +925,43 @@ PLAN_PRICE: dict[str, str] = {
 }
 
 
+# ── 套餐价格单一真源（2026-10-03）────────────────────────────────────────────
+# 背景：桌面后台「套餐与积分成本」原来只写本机 plans.json 覆盖层，云端与网页各用
+# 自己的常量，于是出现「App 159/298、网页 99.90/179、实际扣款按云端」的三方分叉。
+# 现在授权中心是真源：
+#   - 读：POST /api/license/plans（公开，价格本就是公开信息）→ 各端合并到本地默认
+#   - 写：POST /api/license/plans_set（管理员 token）→ 落 state["plan_overrides"]
+#   - 收款/对账估价统一走 plan_price()，改价后立刻生效，不再有第二份真源。
+PLAN_PRICE_UPDATED_KEY = "plan_price_updated_at"
+
+
+def _plan_overrides(st: dict) -> dict:
+    ov = (st or {}).get("plan_overrides")
+    return ov if isinstance(ov, dict) else {}
+
+
+def plan_price(st: dict, plan_code: str) -> str:
+    """取某档位金额：优先管理员下发的覆盖，其次内置默认。单位元、两位小数字符串。"""
+    key = str(plan_code or "")
+    ov = _plan_overrides(st).get(key)
+    if isinstance(ov, dict):
+        price = ov.get("price_cny")
+        try:
+            if price not in (None, ""):
+                return f"{float(price):.2f}"
+        except (TypeError, ValueError):
+            pass
+    return PLAN_PRICE.get(key, "0.00")
+
+
+def plans_payload(st: dict) -> dict:
+    """给各端拉取的价格表：{plan_key: {price_cny, days, credits, label, ...}}。"""
+    return {
+        "plans": _plan_overrides(st),
+        "updated_at": float((st or {}).get(PLAN_PRICE_UPDATED_KEY) or 0.0),
+    }
+
+
 def _bj_day(ts: float) -> str:
     """账期日切按北京时间（UTC+8）—— 与人工对账习惯一致。"""
     return time.strftime("%Y-%m-%d", time.gmtime(float(ts) + 8 * 3600))
@@ -990,7 +1027,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
     mismatches: list = []
 
     def _amount(o: dict) -> str:
-        return str(o.get("amount") or PLAN_PRICE.get(str(o.get("plan_code"))) or "?")
+        return str(o.get("amount") or plan_price(state, str(o.get("plan_code"))) or "?")
 
     # pass 1：order_id 精确对号（新版 note = "alipay-auto:<order_id>"）
     by_oid = {o["order_id"]: o for o in in_money}
@@ -1056,7 +1093,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             r["grant_failed"] += 1
         try:
             r["income_yuan"] += float(o.get("amount")
-                                      or PLAN_PRICE.get(str(o.get("plan_code"))) or 0)
+                                      or plan_price(state, str(o.get("plan_code"))) or 0)
         except (TypeError, ValueError):
             pass
     for g in grants:
@@ -1066,7 +1103,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             r = _row(_bj_day(float(e.get("at", 0))))
             r["redeems"] += 1
             try:
-                r["redeem_income_est"] += float(PLAN_PRICE.get(str(e.get("plan_code"))) or 0)
+                r["redeem_income_est"] += float(plan_price(state, str(e.get("plan_code"))) or 0)
             except (TypeError, ValueError):
                 pass
     for m in mismatches:
@@ -1159,13 +1196,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"ok": False, "error": "not found"})
             ip = self.client_address[0]
             now = time.time()
-            data = self._body()
             action = path.rsplit("/", 1)[-1]
+
+            # --- 公开只读：套餐价格表（价格本就是公开信息，不含任何凭据）---
+            # 放在用户接口限流之前：各端启动/刷新都要拉，量大且无副作用。
+            # 空 body 的裸 POST/GET 也放行（只读、无副作用，不需要令牌）。
+            if action == "plans":
+                try:
+                    self._body()  # 有 body 就读掉，避免 keep-alive 串包
+                except ApiError:
+                    pass
+                with _LOCK:
+                    out = {"ok": True, **plans_payload(_load_state())}
+                return self._json(200, out)
+
+            data = self._body()
 
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
                           "ban", "adjust", "setstate", "usage",
-                          "alerts", "alerts_ack", "recon"):
+                          "alerts", "alerts_ack", "recon", "plans_set"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -1227,6 +1277,33 @@ class Handler(BaseHTTPRequestHandler):
                             d = RECON_DAYS
                         out = recon_impl(st, days=d, now=now)
                         _save_state(st)
+                    elif action == "plans_set":
+                        # 桌面后台「套餐与积分成本」保存时下发：整表覆盖式写入
+                        # （按档位 key 合并由调用方保证），随后收款/对账估价立即生效。
+                        plans = data.get("plans")
+                        if not isinstance(plans, dict) or not plans:
+                            raise ApiError(400, "BAD_PLANS", "plans 必须是非空对象")
+                        clean: dict[str, dict[str, Any]] = {}
+                        for cat, obj in plans.items():
+                            if not isinstance(obj, dict):
+                                continue
+                            for key, spec in obj.items():
+                                if not isinstance(spec, dict):
+                                    continue
+                                try:
+                                    price = float(spec.get("price_cny"))
+                                except (TypeError, ValueError):
+                                    raise ApiError(400, "BAD_PRICE", f"{key} 价格必须是数字")
+                                item = dict(spec)
+                                item["price_cny"] = round(price, 2)
+                                clean.setdefault(str(cat), {})[str(key)] = item
+                        if not clean:
+                            raise ApiError(400, "BAD_PLANS", "plans 内容为空")
+                        st["plan_overrides"] = clean
+                        st[PLAN_PRICE_UPDATED_KEY] = now
+                        _save_state(st)
+                        out = {"ok": True, "plans": clean,
+                               "updated_at": now}
                     else:
                         out = users_impl(st)
                 return self._json(200, out)

@@ -377,13 +377,19 @@ def save_smtp_accounts(accounts: Any) -> dict[str, Any]:
 
 
 def save_plan_overrides(data: Any) -> dict[str, Any]:
-    """写回套餐/成本覆盖到 plans.json（委托 membership.save_plan_overrides）。"""
+    """写回套餐/成本覆盖到 plans.json（委托 membership.save_plan_overrides）。
+
+    保存后同步下发授权中心（价格唯一真源，避免桌面/网页/收款三处分叉）。
+    云端不可达不阻断本机保存，但会在返回里带上 cloud 状态供前端提示。
+    """
+    from membership import push_plans_to_cloud
     from membership import save_plan_overrides as _save
     try:
         result = _save(data or {})
-        return {"ok": True, "overrides": result}
     except OSError as e:  # noqa: BLE001
         return {"ok": False, "error": f"写入失败：{e}"}
+    cloud = push_plans_to_cloud()
+    return {"ok": True, "overrides": result, "cloud": cloud}
 
 
 def reset_stats(path: Optional[Path] = None) -> dict[str, Any]:

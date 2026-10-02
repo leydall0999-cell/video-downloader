@@ -21089,7 +21089,11 @@ el.dwVidPlayer.hidden = true;
         });
         if (r && r.ok) {
           delete plansBox.dataset.dirty; // 保存成功 → 允许 loadConfig 用服务端真值刷新表单
-          loadConfig(); _adminMsg(plansMsg, '套餐配置已保存', false);
+          loadConfig();
+          // 价格唯一真源在授权中心：云端同步成功才算全端生效，未同步要明确告知
+          const cloud = r.cloud || {};
+          if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）', false);
+          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${cloud.reason || '未知原因'}）——网页版与实际扣款价暂未变更`, true);
         }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
       } catch (e) { _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true); }

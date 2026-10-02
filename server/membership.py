@@ -184,13 +184,102 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
     return out
 
 
+# ── 套餐价格云端真源（2026-10-03）────────────────────────────────────────────
+# 背景：桌面后台改价原来只写本机 plans.json，云端授权中心与网页各用自带常量，
+# 于是出现「App 159/298、网页 99.90/179、实际扣款按云端」三方分叉。
+# 现在授权中心是唯一真源：本机保存时下发（push_plans_to_cloud），读取时云端优先
+# （cloud_plan_overrides，TTL 5 分钟），云端不可达才回退本机覆盖层 + 代码常量。
+_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}}
+_CLOUD_PLANS_TTL = 300.0
+
+
+def _license_api(path: str) -> str:
+    """授权中心接口基址；未配置返回空串（调用方回退本机）。"""
+    try:
+        import license_client
+        base = str(license_client.license_base() or "").rstrip("/")
+    except Exception:  # noqa: BLE001 — 云端不可用不该影响本机功能
+        base = str(os.environ.get("VDL_LICENSE_BASE") or "").rstrip("/")
+    return f"{base}{path}" if base else ""
+
+
+def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
+    """从授权中心拉价格覆盖表。失败/未配置返回 None → 调用方回退本机常量。
+
+    设 `VDL_PLANS_CLOUD=0` 可完全关闭云端取价（离线测试用：本机覆盖层要能独立
+    验证，否则会被真实云端的价格盖掉，用例退化成依赖网络的非隔离测试）。
+    """
+    if str(os.environ.get("VDL_PLANS_CLOUD") or "1").strip().lower() in ("0", "false", "off"):
+        return None
+    url = _license_api("/api/license/plans")
+    if not url:
+        return None
+    now = time.time()
+    if not force and (now - float(_CLOUD_PLANS_CACHE.get("ts") or 0.0)) < _CLOUD_PLANS_TTL:
+        return _CLOUD_PLANS_CACHE.get("plans") or {}
+    try:
+        import urllib.request as _rq
+        req = _rq.Request(url, data=b"{}", method="POST",
+                          headers={"Content-Type": "application/json"})
+        with _rq.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        plans = data.get("plans") if isinstance(data, dict) else None
+        if not isinstance(plans, dict):
+            return None
+        _CLOUD_PLANS_CACHE["ts"] = now
+        _CLOUD_PLANS_CACHE["plans"] = plans
+        return plans
+    except Exception:  # noqa: BLE001 — 网络/协议异常一律回退本机
+        return None
+
+
+def push_plans_to_cloud() -> dict[str, Any]:
+    """把当前生效套餐表下发授权中心（后台保存后调用）。返回同步状态，绝不抛出。"""
+    url = _license_api("/api/license/plans_set")
+    if not url:
+        return {"ok": False, "reason": "no_license_base"}
+    try:
+        import admin_store
+        token = admin_store._license_admin_token()  # noqa: SLF001 — 复用既有令牌读取
+    except Exception:  # noqa: BLE001
+        token = ""
+    if not token:
+        return {"ok": False, "reason": "no_admin_token"}
+    try:
+        import urllib.request as _rq
+        eff = effective_plans()
+        body = json.dumps({"token": token, "plans": {
+            "download_plans": eff.get("download_plans") or {},
+            "ai_plans": eff.get("ai_plans") or {},
+            "credit_packs": eff.get("credit_packs") or {},
+        }}, ensure_ascii=False).encode("utf-8")
+        req = _rq.Request(url, data=body, method="POST",
+                          headers={"Content-Type": "application/json"})
+        with _rq.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        if isinstance(data, dict) and data.get("ok"):
+            _CLOUD_PLANS_CACHE["ts"] = time.time()
+            _CLOUD_PLANS_CACHE["plans"] = data.get("plans") or {}
+            return {"ok": True, "synced_at": data.get("updated_at")}
+        return {"ok": False, "reason": str((data or {}).get("error") or "cloud_rejected")}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "reason": f"error: {e}"}
+
+
 def effective_plans() -> dict[str, dict[str, Any]]:
-    """生效套餐表（覆盖层逐字段叠加 → 代码常量）。展示 / 下单 / 发放共用此真源。"""
+    """生效套餐表：代码常量 ← 本机 plans.json 覆盖层 ← 授权中心覆盖（云端最高）。
+
+    展示 / 下单 / 发放共用此真源；云端不可达时自动退化为本机覆盖层 + 代码常量。
+    """
     ov = load_plan_overrides()
+    cloud = cloud_plan_overrides() or {}
     return {
-        "download_plans": _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")),
-        "ai_plans": _overlay_plans(AI_PLANS, ov.get("ai_plans")),
-        "credit_packs": _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")),
+        "download_plans": _overlay_plans(
+            _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")), cloud.get("download_plans")),
+        "ai_plans": _overlay_plans(
+            _overlay_plans(AI_PLANS, ov.get("ai_plans")), cloud.get("ai_plans")),
+        "credit_packs": _overlay_plans(
+            _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")), cloud.get("credit_packs")),
     }
 
 
