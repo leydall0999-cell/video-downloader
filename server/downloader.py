@@ -1103,20 +1103,52 @@ def _cn_proxy_url() -> str:
     )
     return "http://127.0.0.1:18889" if on_railway else ""
 
+def _yt_proxy_override() -> str:
+    """A4（2026-10-02）：YouTube 独立代理（分流用），未配置返回空串。
+
+    优先级：环境变量 VDL_PROXY_YT > 配置文件 proxy.json 的 "youtube" 键。
+    背景：机房/家宽 IP 信誉差会被 YouTube bot 门禁逐视频拦（换 client/Cookie 无效），
+    只有 YT 流量改走独立代理（如 WARP proxy 模式 socks5h://127.0.0.1:40000），
+    国内站与其它海外站不受影响。配置文件供双击 .app 的 GUI 用户使用
+    （GUI 进程不继承终端环境变量）：~/.video-downloader/proxy.json
+    （VDL_HOME 可覆盖），内容 {"youtube": "socks5h://127.0.0.1:40000"}。
+    """
+    explicit = os.environ.get("VDL_PROXY_YT", "").strip()
+    if explicit:
+        return explicit
+    try:
+        override = (os.environ.get("VDL_HOME") or "").strip()
+        base = Path(override) if override else Path.home() / ".video-downloader"
+        data = json.loads((base / "proxy.json").read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return str(data.get("youtube") or "").strip()
+    except (OSError, ValueError):
+        pass
+    return ""
+
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。
+
+    YouTube（youtube.com/youtu.be/googlevideo.com）：
+      VDL_PROXY_YT / proxy.json["youtube"] > 通用策略。A4 分流：只有 YT 走独立代理。
 
     国内站（B站/抖音/腾讯/chrqj 等）：
       VDL_PROXY_CN（国内出口回源代理）> 直连。
       服务部署在海外（Railway 等）时，国内站会被地理围栏 403，必须配 VDL_PROXY_CN
       指向一台国内机器的 HTTP 代理；本机跑在国内则留空直连即可。
 
-    海外站（YouTube/Twitter 等）：
+    海外站（Twitter 等）：
       VDL_PROXY > macOS 系统代理（scutil）> 标准 http(s)_proxy 环境变量。
       刻意避开 WorkBuddy 注入的 127.0.0.1:57885（实测不通海外）。
 
     关键：绝不能用同一个变量兜住两边——国内代理出不去海外，海外代理进不来国内。
     """
+    if host:
+        _h = host.lower()
+        if any(_h == d or _h.endswith("." + d) for d in _YOUTUBE_HOSTS + ("googlevideo.com",)):
+            yt = _yt_proxy_override()
+            if yt:
+                return yt
     if host and is_china_host(host):
         return _cn_proxy_url()
     explicit = os.environ.get("VDL_PROXY", "").strip()
@@ -4873,6 +4905,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
             elif time.time() - last["ts"] > DOWNLOAD_STALL_TIMEOUT:
                 task.add_step("下载音视频", "error", f"停滞 {DOWNLOAD_STALL_TIMEOUT}s，已自动终止")
                 task.log(f"下载停滞超过 {DOWNLOAD_STALL_TIMEOUT}s，自动终止")
+                task.cancel_reason = "stall"   # A3：与用户取消区分，终态给可行动错误
                 task.cancel_requested = True
                 return
 
@@ -4898,6 +4931,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 )
                 last["bytes"] = 0
                 last["ts"] = time.time()
+            task.cancel_reason = ""   # 新一轮尝试：清掉上一轮的停滞/超时标记
             # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
             th = threading.Thread(
                 target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id, concurrent_fragments, _dt, resume, _alt),
@@ -4918,6 +4952,7 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                     continue
                 task.add_step("下载音视频", "error", f"超过硬上限 {DOWNLOAD_HARD_TIMEOUT}s")
                 task.log(f"下载超过整体硬上限 {DOWNLOAD_HARD_TIMEOUT}s，强制结束")
+                task.cancel_reason = "timeout"   # A3：与用户取消区分
                 task.cancel_requested = True
                 store.update(
                     task.id, status="failed", error="下载超时",
@@ -5229,7 +5264,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         _eff = proxy or _resolve_proxy(_yt_host)
                         _proxy_note = (
                             "（当前生效代理：%s；双击 .app 不继承终端代理，"
-                            "请确认 Clash/V2Ray 已开启「系统代理」或 TUN 模式）"
+                            "请确认 Clash/V2Ray 已开启「系统代理」或 TUN 模式。"
+                            "若本机 IP 被 YouTube 限流，可配置 VDL_PROXY_YT 环境变量或"
+                            " ~/.video-downloader/proxy.json 的 youtube 键，让 YouTube 独立走代理）"
                             % (_eff or "无，直连")
                         )
                         task.log("YouTube 所有兼容格式均被 CDN 拒绝，疑似代理出口 IP 不匹配" + _proxy_note)
@@ -5251,17 +5288,36 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                      progress=task.progress, downloaded_bytes=task.downloaded_bytes)
         # 保留 .part 文件，不清除——后续继续时 yt-dlp 断点续传
     except DownloadCanceled:
-        _mark_step_error(task, "用户已取消")
-        # 断点续传：取消时【不清除】工作目录里的 .part 分片，仅当确实残留部分文件时标记可续传，
-        # 后续「继续下载」让 yt-dlp 从中断处接上（aria2c 走 --continue，原生下载器走 continue=True）。
-        resumable = _has_partial(task.workdir)
-        store.update(
-            task.id, status="canceled", error="已取消下载",
-            progress=task.progress, downloaded_bytes=task.downloaded_bytes,
-            resumable=resumable,
-        )
-        if not resumable:
-            store.clear_files(task.id)
+        # A3（2026-10-02）：看门狗停滞 / 硬超时的系统终止此前伪装成「用户已取消」，
+        # 用户看到 canceled「已取消下载」一头雾水。按 cancel_reason 分流终态：
+        _reason = getattr(task, "cancel_reason", "") or ""
+        if _reason == "stall":
+            _mark_step_error(task, f"下载停滞超过 {DOWNLOAD_STALL_TIMEOUT}s，已自动终止")
+            store.update(
+                task.id, status="failed", error="下载停滞，已自动终止",
+                hint=f"连接超过 {DOWNLOAD_STALL_TIMEOUT}s 没有任何进展（站点/网络假死）。"
+                     "点「继续下载」可从断点续传，或更换清晰度/代理后重试",
+                category="stalled", resumable=_has_partial(task.workdir),
+            )
+        elif _reason == "timeout":
+            _mark_step_error(task, "下载超时，已强制结束")
+            store.update(
+                task.id, status="failed", error="下载超时",
+                hint="站点响应过慢或连接不稳定，请稍后重试或更换清晰度/代理",
+                category="timeout", resumable=_has_partial(task.workdir),
+            )
+        else:
+            _mark_step_error(task, "用户已取消")
+            # 断点续传：取消时【不清除】工作目录里的 .part 分片，仅当确实残留部分文件时标记可续传，
+            # 后续「继续下载」让 yt-dlp 从中断处接上（aria2c 走 --continue，原生下载器走 continue=True）。
+            resumable = _has_partial(task.workdir)
+            store.update(
+                task.id, status="canceled", error="已取消下载",
+                progress=task.progress, downloaded_bytes=task.downloaded_bytes,
+                resumable=resumable,
+            )
+            if not resumable:
+                store.clear_files(task.id)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
         err = _friendly_error(exc, _build_diag_context(task.url, cookie=cookie, proxy=proxy, options=_dl_opts))
         _mark_step_error(task, err.message)

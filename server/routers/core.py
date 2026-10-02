@@ -543,11 +543,14 @@ def list_tasks() -> dict:
 @router.post('/api/tasks/{task_id}/retry')
 def retry_task(task_id: str) -> dict:
     task = app._require_task(task_id)
-    if task.status not in ('failed', 'canceled'):
-        raise app.HTTPException(status_code=400, detail='仅失败 / 已取消的任务可以重试')
+    # B5：成品已清理的历史条目（completed+file_expired）也允许「重新下载」
+    _hist_redownload = task.status == 'completed' and getattr(task, 'file_expired', False)
+    if task.status not in ('failed', 'canceled') and not _hist_redownload:
+        raise app.HTTPException(status_code=400, detail='仅失败 / 已取消 / 成品已清理的任务可以重试')
     task.cancel_requested = False
-    resume = app.downloader._has_partial(task.workdir)
-    app.store.update(task_id, status='pending', error='', hint='', progress=task.progress if resume else 0.0, downloaded_bytes=task.downloaded_bytes if resume else 0, total_bytes=task.total_bytes if resume else 0, speed=0.0, eta=0, filesize=0, filename='', resumable=False)
+    task.cancel_reason = ''
+    resume = app.downloader._has_partial(task.workdir) and not _hist_redownload
+    app.store.update(task_id, status='pending', error='', hint='', progress=task.progress if resume else 0.0, downloaded_bytes=task.downloaded_bytes if resume else 0, total_bytes=task.total_bytes if resume else 0, speed=0.0, eta=0, filesize=0, filename='', resumable=False, file_expired=False, filepath=None)
     app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
 

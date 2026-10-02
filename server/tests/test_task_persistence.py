@@ -2,7 +2,7 @@
 
 TaskStore 状态写 tasks_state.json；重启后：
 - 未完成任务 → failed + resumable（分片在则 True），TTL 重置；
-- completed 且成品文件仍在 → 原样恢复；文件没了 → 不恢复僵尸条目；
+- completed 且成品文件仍在 → 原样恢复；文件没了 → 恢复为 file_expired 历史条目（B5）；
 - remove 同步删状态；failed 无分片 → 恢复原状态、resumable=False。
 """
 import json
@@ -59,7 +59,11 @@ def test_completed_restored_only_if_file_exists():
     assert t3 is not None and t3.status == "completed" and t3.filepath.exists()
     os.remove(root / t.id / "video.mp4")                  # 成品被 TTL 清掉
     st.flush()
-    assert _new_store(root).get(t.id) is None, "文件没了的 completed 不应恢复成僵尸条目"
+    # B5（2026-10-02）：成品缺失的 completed 不再丢弃——恢复为历史条目
+    # （file_expired=True、filepath=None、保留元数据，可整条重新下载）
+    t4 = _new_store(root).get(t.id)
+    assert t4 is not None and t4.status == "completed", "B5: 应恢复为历史条目"
+    assert t4.file_expired and t4.filepath is None and t4.filename == "video.mp4"
 
 
 def test_remove_drops_state_and_failed_without_partial():

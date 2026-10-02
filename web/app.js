@@ -1559,7 +1559,9 @@
   };
 
   const buildStats = (task) => {
-    if (task.status === 'completed') return `${formatBytes(task.filesize)} · 已就绪`;
+    if (task.status === 'completed') {
+      return task.file_expired ? `${formatBytes(task.filesize)} · 成品已清理` : `${formatBytes(task.filesize)} · 已就绪`;
+    }
     if (task.status === 'failed') return '下载中断';
     if (task.status === 'canceled') return '已取消';
     if (task.status === 'paused') return `已暂停（已下载 ${formatBytes(task.downloaded_bytes)}）`;
@@ -2092,14 +2094,15 @@
     }
 
     // 失败 / 已取消的任务展示「重试 / 继续下载」按钮
-    const canRetry = task.status === 'failed' || task.status === 'canceled';
+    // B5：成品已清理的历史条目（completed+file_expired）也出「重新下载」
+    const canRetry = task.status === 'failed' || task.status === 'canceled' || task.file_expired;
     refs.retry.hidden = !canRetry;
     if (canRetry) {
       // 断点续传：工作目录残留部分文件时，按钮提示「继续下载」而非「重试」
-      refs.retry.textContent = task.resumable ? '继续下载' : '重试';
+      refs.retry.textContent = task.resumable ? '继续下载' : (task.file_expired ? '重新下载' : '重试');
       refs.retry.title = task.resumable
         ? '从上次中断处继续（已保留已下载部分，不会从头重下）'
-        : '重新下载';
+        : (task.file_expired ? '成品文件已超保留期被清理，点此用同一链接重新下载' : '重新下载');
     }
     // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
     refs.del.hidden = active;
@@ -2114,6 +2117,14 @@
       refs.save.hidden = true;
       refs.saveHint.hidden = true;
       refs.convertWrap.hidden = true;
+      return;
+    }
+    if (task.file_expired) {
+      // B5：成品已随保留期清理的历史条目——不再提供保存/转换，状态行说明原因
+      refs.save.hidden = true;
+      refs.saveHint.hidden = true;
+      refs.convertWrap.hidden = true;
+      refs.status.textContent = '已完成 · 成品文件已清理（超保留期）';
       return;
     }
     refs.save.hidden = false;
