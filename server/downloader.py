@@ -746,16 +746,30 @@ def _bilibili_api_extract(url: str, proxy: str = "", cookie: str = "") -> dict[s
     logger.info("[bilibili api fallback] extracted %s formats for %s", len(formats), bvid)
     return info
 
-def _rebuild_requested_formats(info: dict[str, Any], quality_key: str) -> None:
+def _rebuild_requested_formats(info: dict[str, Any], quality_key: str, protocol_filter: str = "") -> None:
     """按用户选择的清晰度重建 requested_formats（B站 API 兜底 info 固定选了 best）。
 
     yt-dlp process_info 直接吃 info.requested_formats 下载，不会再用 format
     selector 过滤。若不重建，用户选 480P/360P 也会下成兜底固定的 720P。
     仅音频（audio/m4a）→ 单文件音频轨；视频 → <= 目标高度的最高 avc1 轨 + 音频轨。
+    A2（2026-10-02）：protocol_filter="hls"/"http" 时只在对应协议族里挑视频轨
+    （无可用轨则整体不动，保留原选择），音频轨无同族时保留原样。
     """
     fmts = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
     vids = [f for f in fmts if f.get("vcodec") and f["vcodec"] != "none"]
     auds = [f for f in fmts if f.get("acodec") and f["acodec"] != "none"]
+
+    def _fmt_family(f: dict) -> str:
+        proto = (f.get("protocol") or "").split("+")[0].lower()
+        return "hls" if (proto.startswith("m3u8") or _is_hls_url(f.get("url") or "")) else "http"
+
+    if protocol_filter:
+        _fv = [f for f in vids if _fmt_family(f) == protocol_filter]
+        if not _fv:
+            return  # 指定协议族没有可用视频轨：不动原选择，避免改坏能下载的配置
+        vids = _fv
+        _fa = [f for f in auds if _fmt_family(f) == protocol_filter]
+        auds = _fa or auds
     if not vids:
         return
     if quality_key in (AUDIO_KEY, M4A_KEY):
@@ -763,7 +777,7 @@ def _rebuild_requested_formats(info: dict[str, Any], quality_key: str) -> None:
             auds.sort(key=lambda f: f.get("abr") or 0, reverse=True)
             info["requested_formats"] = [auds[0]]
             info["url"] = auds[0]["url"]
-            info["protocol"] = "https"
+            info["protocol"] = (auds[0].get("protocol") or "https").split("+")[0]
             info["ext"] = "m4a"
         return
     target = 9999
@@ -782,8 +796,36 @@ def _rebuild_requested_formats(info: dict[str, Any], quality_key: str) -> None:
     else:
         info["requested_formats"] = [v]
         info["url"] = v["url"]
-        info["protocol"] = "https"
+        # A2：协议取自所选格式本身（HLS 轨要标 m3u8_native，写死 https 会重演
+        # 「把播放清单当文件下」的直链协议 bug，见 _run_once 的协议归一化注释）
+        info["protocol"] = (v.get("protocol") or "https").split("+")[0]
     info["ext"] = "mp4"
+
+def _switch_to_hls(info: dict[str, Any], quality_key: str) -> bool:
+    """A2 重试策略②：把本次下载的格式选择切到 HLS（m3u8）协议族。
+
+    直链被风控/403 时，HLS 分片走不同的 CDN 路径，时常能通过。
+    仅当 formats 里确实存在 HLS 视频轨、且当前选中配置不是 HLS 时才重建；
+    否则返回 False（保持原选择，避免把能下载的配置改坏）。
+    """
+    fmts = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+
+    def _is_hls_fmt(f: dict) -> bool:
+        proto = (f.get("protocol") or "").split("+")[0].lower()
+        return proto.startswith("m3u8") or _is_hls_url(f.get("url") or "")
+
+    if not any(f.get("vcodec") and f["vcodec"] != "none" and _is_hls_fmt(f) for f in fmts):
+        return False
+    cur = [f for f in (info.get("requested_formats") or [])
+           if isinstance(f, dict) and f.get("vcodec") and f["vcodec"] != "none"]
+    if cur and all(_is_hls_fmt(f) for f in cur):
+        return False  # 当前已选 HLS，无需切换
+    if not cur and info.get("vcodec") not in (None, "none") and _is_hls_fmt(info):
+        return False  # 单文件 info 本身就是 HLS
+    _before = info.get("requested_formats")
+    _rebuild_requested_formats(info, quality_key, protocol_filter="hls")
+    _after = info.get("requested_formats")
+    return bool(_after) and _after != _before
 
 def _clean_header_value(value: str) -> str:
     """过滤 HTTP header 值，只保留 latin-1 安全字符。
@@ -1106,7 +1148,10 @@ CONCURRENT_FRAGMENTS = int(os.environ.get("VDL_CONCURRENT_FRAGMENTS", "16") or 1
 # 可选的外部下载器：aria2c 对大量小 .ts 分片可开更多并行连接，某些平台比内置并发上限更高。
 # 需本机已安装 aria2c（打包 app 运行时依赖 PATH 上的 aria2c，缺失则自动回退原生下载器）。
 # 通过 VDL_DOWNLOADER 环境变量或下载请求字段切换（值为 "aria2c" 时启用）。
-VDL_DOWNLOADER = (os.environ.get("VDL_DOWNLOADER") or "native").strip().lower()
+# B4（2026-10-02）：默认 auto —— 本机 PATH 或打包内置（Resources/bin/aria2c）有 aria2c
+# 就启用（HTTP 直链多连接分段提速），没有则静默回退原生。显式 native/aria2c 仍可经
+# VDL_DOWNLOADER 环境变量或下载请求字段 downloader_type 强制。
+VDL_DOWNLOADER = (os.environ.get("VDL_DOWNLOADER") or "auto").strip().lower()
 _MAX_CONCURRENT = 64  # 单任务并发上限，防止被腾讯封总连接数
 
 # ---------------------------------------------------------------------------
@@ -4609,16 +4654,31 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     # aria2c 分支已在 _build_aria2c_args 内置 --continue=true；此处覆盖原生下载器场景。
     if resume:
         options["continue"] = True
-    # 外部下载器：aria2c（需本机已装）。未安装或类型非 aria2c 时自动回退原生，不影响下载。
-    use_aria2c = (downloader_type or VDL_DOWNLOADER) == "aria2c"
-    if use_aria2c:
-        a2 = _aria2c_path()
-        if a2:
-            options["downloader"] = "aria2c"
-            options["downloader_args"] = {"aria2c": _build_aria2c_args(concurrent_fragments)}
-            logger.info("使用 aria2c 下载器（并发=%d, 路径=%s）", _clamp_concurrency(concurrent_fragments), a2)
-        else:
-            logger.warning("请求 aria2c 但本机未安装，回退原生下载器（请 brew install aria2 或 apt install aria2）")
+    # 外部下载器：aria2c（需本机已装）。B4（2026-10-02）：
+    #   - downloader_type / VDL_DOWNLOADER = "auto"（新默认）→ 有 aria2c 就用，无则静默回退原生；
+    #   - 显式 "aria2c" → 有就用，无则警告回退；显式 "native" → 强制原生。
+    _a2 = _aria2c_path()
+    _dl_choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
+    if _dl_choice == "auto":
+        use_aria2c = _a2 is not None
+    else:
+        use_aria2c = _dl_choice == "aria2c"
+    if use_aria2c and _a2:
+        options["downloader"] = "aria2c"
+        options["downloader_args"] = {"aria2c": _build_aria2c_args(concurrent_fragments)}
+        logger.info("使用 aria2c 下载器（并发=%d, 路径=%s）", _clamp_concurrency(concurrent_fragments), _a2)
+    elif _dl_choice == "aria2c":
+        logger.warning("请求 aria2c 但本机未安装，回退原生下载器（请 brew install aria2 或 apt install aria2）")
+    else:
+        # 原生下载器提速（B4）：给直链开 Range 分块，concurrent_fragment_downloads 才能把
+        # 大文件拆成多段并行拉（否则 http 单连接串行）。HLS 分片自身远小于分块值，不受影响。
+        # 紧急回滚开关：VDL_HTTP_CHUNK_MB=0。
+        try:
+            _chunk_mb = int(os.environ.get("VDL_HTTP_CHUNK_MB", "10") or 10)
+        except ValueError:
+            _chunk_mb = 10
+        if _chunk_mb > 0:
+            options["http_chunk_size"] = _chunk_mb * 1024 * 1024
     if _MAX_FILE_BYTES:
         options["max_filesize"] = _MAX_FILE_BYTES
     if quality_key == AUDIO_KEY:
@@ -4748,12 +4808,33 @@ def _write_sidecar(output: Path, task: "DownloadTask", info: dict[str, Any]) -> 
     except Exception:
         logger.debug("写入元数据侧车失败: %s", output, exc_info=True)
 
+def _retry_matrix(downloader_type: str) -> list[tuple[str, bool]]:
+    """A2：可重试失败后的策略矩阵 [(downloader_type, alt_protocol), ...]，首项为原始策略。
+
+    - 策略① 切换下载器：原策略会用 aria2c → 换 "native"；否则本机有 aria2c → 换 "aria2c"；
+      本机没有 aria2c 则跳过该策略（避免重复一次无效尝试）。
+    - 策略② alt_protocol=True：_run_once 内解析完 formats 后尝试切到 HLS 分片链路。
+    返回长度 2~3（原始 + 1~2 个变体），供 run_download 按 attempt 取用。
+    """
+    matrix: list[tuple[str, bool]] = [(downloader_type, False)]
+    choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
+    aria2c_available = _aria2c_path() is not None
+    will_use_aria2c = choice == "aria2c" or (choice == "auto" and aria2c_available)
+    if will_use_aria2c:
+        matrix.append(("native", False))
+    elif aria2c_available and downloader_type != "aria2c":
+        matrix.append(("aria2c", False))
+    matrix.append((downloader_type, True))
+    return matrix
+
 def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
     max_retries=N 时，对网络/超时/连接类等「可重试」错误最多再试 N 次（指数退避）。
     重试在 worker 线程内循环进行，不会额外占用并发槽；会员受限 / 链接失效等不可重试
     错误会直接以 failed 结束，避免无效重试浪费带宽。
+    A2（2026-10-02）：即使 max_retries=0，可重试失败也会按 _retry_matrix 策略矩阵
+    额外尝试至多 2 次（切换下载器 → 切换 HLS 分片链路），不是原样重试。
 
     健壮性：内置「停滞看门狗 + 整体硬超时」，防止站点/CDN 假死让任务永久挂起、
     占满并发槽拖垮后续所有下载（典型如 m3u8 流慢速 trickle 不触发 socket_timeout）。
@@ -4798,8 +4879,18 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     wd = threading.Thread(target=_watchdog, name=f"wd-{task.id}", daemon=True)
     wd.start()
     try:
-        for attempt in range(1, max_retries + 2):
+        # A2 通用失败矩阵（2026-10-02）：可重试失败后不是原样重试，而是换策略——
+        #   策略① 切换下载器（aria2c ↔ 原生）：不同连接/TLS 栈，绕开单一下载器兼容性问题；
+        #   策略② 改用 HLS 分片链路（_switch_to_hls）：直链被风控/403 时常能通过。
+        # 最多额外 2 次尝试；YouTube 的 client 降级链在 _run_once 内部独立处理，互不影响。
+        _matrix = _retry_matrix(downloader_type)
+        for attempt in range(1, max(max_retries + 1, min(len(_matrix), 3)) + 1):
+            _dt, _alt = _matrix[min(attempt - 1, len(_matrix) - 1)]
             if attempt > 1:
+                if _dt != downloader_type:
+                    task.log(f"重试策略：切换下载器为 {_dt or '原生'}")
+                if _alt:
+                    task.log("重试策略：本次优先尝试 HLS 分片链路")
                 # 重试前把状态拨回排队，让前端进度条归零、状态显示「重试中」
                 store.update(
                     task.id, status="pending", error="", hint="", progress=0.0,
@@ -4809,12 +4900,22 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 last["ts"] = time.time()
             # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
             th = threading.Thread(
-                target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id, concurrent_fragments, downloader_type, resume),
+                target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id, concurrent_fragments, _dt, resume, _alt),
                 name=f"dl-{task.id}-{attempt}", daemon=True,
             )
             th.start()
-            th.join(timeout=DOWNLOAD_HARD_TIMEOUT)
-            if th.is_alive():
+            # B3（2026-10-02）：硬上限到点时若任务仍在推进（最近 DOWNLOAD_STALL_TIMEOUT 内
+            # 有字节增量，last["ts"] 由看门狗维护），不杀任务、继续等——只杀真正停滞/假死的。
+            # 超长视频（几小时直播回放、4K 大片）此前会被 7200s 硬上限「进度正常也被处决」。
+            while True:
+                th.join(timeout=DOWNLOAD_HARD_TIMEOUT)
+                if not th.is_alive():
+                    break
+                if task.status == "downloading" and (time.time() - last["ts"]) <= DOWNLOAD_STALL_TIMEOUT:
+                    task.log(
+                        f"下载满 {DOWNLOAD_HARD_TIMEOUT}s 但仍在推进（未见停滞），自动延长等待"
+                    )
+                    continue
                 task.add_step("下载音视频", "error", f"超过硬上限 {DOWNLOAD_HARD_TIMEOUT}s")
                 task.log(f"下载超过整体硬上限 {DOWNLOAD_HARD_TIMEOUT}s，强制结束")
                 task.cancel_requested = True
@@ -4828,7 +4929,8 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 return
             if t.status != "failed":
                 return  # completed / canceled -> 停止
-            if attempt > max_retries:
+            _total_attempts = max(max_retries + 1, min(len(_matrix), 3))
+            if attempt >= _total_attempts:
                 return
             if not _is_retryable(t.error):
                 return
@@ -4855,11 +4957,13 @@ def _format_bytes(n: int) -> str:
             return f"{value:.2f} {unit}"
     return f"{value:.2f} PB"
 
-def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
+def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False, alt_protocol: bool = False) -> None:
     """执行一次下载：先解析元数据，再进入实际下载。
 
     把 extract_info(..., download=False) 与 process_info(info) 拆成两阶段，
     让「解析视频信息」步骤能快速收敛，且下载阶段一旦卡住就能被看门狗识别。
+    A2（2026-10-02）：alt_protocol=True 时解析后尝试把格式选择切到 HLS 分片链路
+    （重试策略②，见 _switch_to_hls / _retry_matrix）。
     """
     effective_proxy = task.proxy or _resolve_proxy(_host_of(task.url) or "")
     task.url = _normalize_share_url(task.url, proxy=effective_proxy)
@@ -5002,6 +5106,16 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     info["protocol"] = "m3u8_native"
                     if not info.get("ext") or info["ext"] in ("mp4", "m3u8"):
                         info["ext"] = "mp4"
+
+            # A2 重试策略②：改用 HLS 分片链路（仅当 formats 里真有 HLS 视频轨且当前
+            # 选中的不是 HLS 时才会真正切换；没有可用 HLS 则保持原选择按原样重试）
+            if alt_protocol:
+                _sw = _switch_to_hls(info, quality_key)
+                if _sw:
+                    task.log("重试策略：本次改用 HLS 分片链路下载")
+                    task.add_step("下载音视频", "running", "切换 HLS 分片链路重试…")
+                else:
+                    task.log("重试策略：无可用 HLS 视频轨，按原方式重试")
 
             # 阶段 2：真正开始下载；先把状态置为 downloading，看门狗才能生效
             # 开下之前先预检：体积上限 / 磁盘余量不够直接给人话错误（B1，2026-10-02），

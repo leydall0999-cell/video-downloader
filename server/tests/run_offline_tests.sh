@@ -152,6 +152,10 @@ run_one test_task_persistence.py
 #  下载预检与 PO Token 会话保持（2026-10-02 B1/A1）：体积估算/上限 20GB/磁盘预检、
 #  YouTube 403 降级链必须带回 visitor_data（丢会话=照样 403）。
 run_one test_download_preflight.py
+#  下载失败矩阵重试与 aria2c 默认化（2026-10-02 A2/B4）：可重试失败换策略重试
+#  （切换下载器→切 HLS 链路，最多额外 2 次）、auto 默认启用 aria2c、原生路径
+#  http_chunk_size 分块并行、硬上限到点仍在推进则延长等待（B3）。
+run_one test_download_matrix.py
 #  1/3/7 天下载会员档 + 套餐价格单一真源（2026-09-30）：超管在后台改价/改天数后，
 #  展示（/api/member/plans 真身 store.plans()）/ 下单金额 / 发放天数三处必须同步。
 #  此前下单读硬编码 PAY_PLANS、发货读硬编码 DOWNLOAD_PLANS —— 改了等于没改。
