@@ -20702,7 +20702,8 @@ el.dwVidPlayer.hidden = true;
         const ops = disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
           : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
-            + `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`;
+            + `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
+            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`);
         return `<tr>
           <td>${esc(u.identifier)}</td>
           <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
@@ -21076,6 +21077,13 @@ el.dwVidPlayer.hidden = true;
           });
           if (r && r.ok) { loadUsers(); }
           else alert((r && r.error) || '操作失败');
+        } else if (act === 'del') {
+          const u0 = (lastUsers || []).find((x) => x.user_id === uid) || {};
+          const label = u0.identifier || uid;
+          if (!(typeof confirm === 'function') || !confirm(`确定删除账号「${label}」？\n\n删除后该账号立即失效、无法登录，且该手机号/邮箱不能再注册。此操作不可恢复。`)) return;
+          const r = await adminRequest(`/api/admin/users/${uid}/delete`, { method: 'POST' });
+          if (r && r.ok) { loadUsers(); loadMembers(); }
+          else alert((r && r.error) || '删除失败');
         } else if (act === 'credit') {
           const m = (lastMembers || []).find((x) => x.user_id === uid) || { user_id: uid };
           openCreditDlg(m);

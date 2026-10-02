@@ -4883,6 +4883,8 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .admin-btn-primary:hover { background: var(--brand-strong); }
 .admin-btn-ghost { background: transparent; }
+.admin-btn-danger { color: #d5304b; border-color: rgba(213, 48, 75, .45); }
+.admin-btn-danger:hover { background: #fdf0f2; border-color: #d5304b; }
 .admin-link {
   background: none; border: none; color: var(--text-mute); font-size: .82rem;
   margin-top: .6rem; cursor: pointer; text-decoration: underline;
