@@ -4885,6 +4885,40 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-btn-ghost { background: transparent; }
 .admin-btn-danger { color: #d5304b; border-color: rgba(213, 48, 75, .45); }
 .admin-btn-danger:hover { background: #fdf0f2; border-color: #d5304b; }
+.admin-btn-outline { border-color: rgba(79, 108, 240, .55); color: var(--brand, #4f6cf0); }
+.admin-btn-outline:hover { background: rgba(79, 108, 240, .08); border-color: var(--brand, #4f6cf0); }
+/* 用户管理改版（2026-10-03，对齐设计稿）：统计卡 + 状态筛选 chip + 头像 + 彩色状态 chip */
+.admin-ustats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .8rem; margin-bottom: .9rem; }
+.admin-ustat {
+  display: flex; align-items: center; gap: .7rem;
+  background: var(--card-bg, #fff); border: 1px solid var(--line, #e5e7ef); border-radius: 14px;
+  padding: .8rem 1rem; box-shadow: 0 1px 4px rgba(15, 23, 42, .04);
+}
+.admin-ustat-ic {
+  width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
+  font-size: 1.15rem; flex: none;
+}
+.admin-ustat-ic.is-blue { background: #e8f0fe; }
+.admin-ustat-ic.is-amber { background: #fdf3e0; }
+.admin-ustat-ic.is-red { background: #fdecec; }
+.admin-ustat-t i { display: block; font-style: normal; font-size: .78rem; color: var(--text-mute, #6b7280); }
+.admin-ustat-t b { font-size: 1.35rem; font-weight: 800; line-height: 1.15; color: var(--text, #1f2937); }
+.admin-chip-filter { min-width: 108px; cursor: pointer; }
+.admin-ava-wrap { display: inline-flex; align-items: center; gap: .5rem; }
+.admin-ava {
+  width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center;
+  font-size: .72rem; font-weight: 700; color: rgba(15, 23, 42, .72); flex: none;
+}
+.admin-chip {
+  display: inline-block; padding: .14rem .55rem; border-radius: 999px;
+  font-size: .74rem; font-weight: 600; white-space: nowrap;
+}
+.admin-chip.is-green { background: #e5f7ec; color: #18794e; }
+.admin-chip.is-gray { background: #eef0f4; color: #5b6472; }
+.admin-chip.is-blue { background: #e8f0fe; color: #2563eb; }
+.admin-chip.is-violet { background: #efeafd; color: #7c3aed; }
+.admin-chip.is-red { background: #fdecec; color: #d5304b; }
+.admin-chip.is-gold { background: #fdf3e0; color: #b45309; }
 .admin-link {
   background: none; border: none; color: var(--text-mute); font-size: .82rem;
   margin-top: .6rem; cursor: pointer; text-decoration: underline;

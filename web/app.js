@@ -20325,6 +20325,8 @@ el.dwVidPlayer.hidden = true;
     const userTable = $('adminUserTable');
     const userCount = $('adminUserCount');
     const userSearch = $('adminUserSearch');
+    const userStatCards = $('adminUserStatCards');
+    const userStatusFilter = $('adminUserStatusFilter');
     const memberTable = $('adminMemberTable');
     const memberCount = $('adminMemberCount');
     const grantUserSel = $('adminGrantUser');
@@ -20677,7 +20679,24 @@ el.dwVidPlayer.hidden = true;
     const renderUserTable = () => {
       if (!userTable) return;
       const q = (userSearch && userSearch.value || '').trim().toLowerCase();
-      const list = !q ? lastUsers : lastUsers.filter((u) => {
+      const fv = (userStatusFilter && userStatusFilter.value) || '';
+      const _isMember = (u) => !!(u.membership && (u.membership.download_active || u.membership.ai_active));
+      // 顶部统计卡（对齐设计稿：总用户 / 免费会员 / 异常状态）
+      if (userStatCards) {
+        const total = lastUsers.length;
+        const freeN = lastUsers.filter((u) => !_isMember(u)).length;
+        const badN = lastUsers.filter((u) => u.disabled).length;
+        userStatCards.innerHTML =
+          `<div class="admin-ustat"><span class="admin-ustat-ic is-blue">👥</span><div class="admin-ustat-t"><i>总用户</i><b>${total}</b></div></div>`
+          + `<div class="admin-ustat"><span class="admin-ustat-ic is-amber">🎫</span><div class="admin-ustat-t"><i>免费会员</i><b>${freeN}</b></div></div>`
+          + `<div class="admin-ustat"><span class="admin-ustat-ic is-red">⚠️</span><div class="admin-ustat-t"><i>异常状态</i><b>${badN}</b></div></div>`;
+      }
+      const list = lastUsers.filter((u) => {
+        if (fv === 'disabled' && !u.disabled) return false;
+        if (fv === 'ok' && u.disabled) return false;
+        if (fv === 'free' && _isMember(u)) return false;
+        if (fv === 'member' && !_isMember(u)) return false;
+        if (!q) return true;
         const m = u.membership || {};
         const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const identifier = esc(u.identifier).toLowerCase();
@@ -20686,36 +20705,42 @@ el.dwVidPlayer.hidden = true;
         const memStr = mem.toLowerCase();
         return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || memStr.includes(q);
       });
-      if (userCount) userCount.textContent = q ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
+      if (userCount) userCount.textContent = (q || fv) ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
       const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
       const rows = list.map((u) => {
         const m = u.membership || {};
-        const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const cred = (m.credits_total != null) ? m.credits_total : '—';
         const disabled = !!u.disabled;
         const isAdmin = !!u.is_admin;
         const self = u.user_id === _currentUid;
+        // 头像：uid 哈希定色，账号首字母
+        const hue = String(u.user_id || 'x').split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+        const ava = `<span class="admin-ava" style="background:hsl(${hue},72%,86%)">${esc((u.identifier || '?').slice(0, 1).toUpperCase())}</span>`;
+        const memChip = m.download_active ? '<span class="admin-chip is-blue">下载会员</span>'
+          : (m.ai_active ? '<span class="admin-chip is-violet">AI会员</span>'
+          : '<span class="admin-chip is-gray">免费</span>');
+        const stChip = disabled ? '<span class="admin-chip is-red">已禁用</span>' : '<span class="admin-chip is-green">正常</span>';
         const adminOp = isAdmin
           ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
                   : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
           : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
         const ops = disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
-          : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
-            + `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
+          : `<button class="admin-btn admin-btn-sm admin-btn-outline" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
+            + `<button class="admin-btn admin-btn-sm admin-btn-outline" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
             + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`);
         return `<tr>
-          <td>${esc(u.identifier)}</td>
+          <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
           <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
           <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
-          <td>${mem}</td>
+          <td>${memChip}</td>
           <td>${cred}</td>
-          <td>${disabled ? '<span class="admin-tag admin-tag-warn">已禁用</span>' : '<span class="admin-tag admin-tag-ok">正常</span>'}</td>
-          <td>${isAdmin ? '<span class="admin-tag admin-tag-ok">👑 是</span>' : '否'}</td>
+          <td>${stChip}</td>
+          <td>${isAdmin ? '<span class="admin-chip is-gold">👑 是</span>' : '否'}</td>
           <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');
-      const emptyMsg = q ? '无匹配用户' : '暂无用户';
+      const emptyMsg = (q || fv) ? '无匹配用户' : '暂无用户';
       userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="8" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
     };
 
@@ -21113,6 +21138,7 @@ el.dwVidPlayer.hidden = true;
     if (userTable) userTable.addEventListener('click', onTableClick);
     if (memberTable) memberTable.addEventListener('click', onTableClick);
     if (userSearch) userSearch.addEventListener('input', renderUserTable);
+    if (userStatusFilter) userStatusFilter.addEventListener('change', renderUserTable);
 
     // 赠送会员
     // 可搜索账号选择器（2026-10-03）：原生 select 无法搜索，改为输入过滤下拉；
