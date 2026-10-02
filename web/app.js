@@ -20850,6 +20850,24 @@ el.dwVidPlayer.hidden = true;
       } catch (e) { /* 静默 */ }
     };
     const renderStats = (s) => {
+      // 功能 kind → 中文标签（不展示英文埋点名；原始 kind 留在 title 悬浮）
+      const _kindLabel = (k) => ({
+        download: '视频下载',
+        convert: '格式转换',
+        matting: '一键抠图（本地）',
+        matting_cloud: '一键抠图（云端）',
+        dewatermark: '图片去水印',
+        subtitle: '字幕提取',
+        compress: '文件压缩（完成）',
+        compress_submit: '文件压缩（提交）',
+        sr_video: '视频超分（完成）',
+        sr_submit: '视频超分（提交）',
+        register: '注册账号',
+        login: '登录',
+        change_pw: '修改密码',
+        reset_pw: '重置密码',
+        deactivate: '注销账号',
+      }[k] || k);
       if (statsSummary) {
         const total = s.total || 0;
         const first = s.first_at ? new Date(s.first_at * 1000).toLocaleString() : '—';
@@ -20863,7 +20881,7 @@ el.dwVidPlayer.hidden = true;
         const byKind = s.by_kind || {};
         const head = '<thead><tr><th>功能</th><th>次数</th></tr></thead>';
         const rows = Object.keys(byKind).sort((a, b) => byKind[b] - byKind[a]).map((k) =>
-          `<tr><td>${esc(k)}</td><td>${byKind[k]}</td></tr>`).join('');
+          `<tr><td title="${esc(k)}">${esc(_kindLabel(k))}</td><td>${byKind[k]}</td></tr>`).join('');
         statsTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="2" class="admin-empty">暂无统计数据</td></tr>') + '</tbody>';
       }
     };
