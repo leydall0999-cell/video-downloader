@@ -118,6 +118,27 @@ def _path_suffix(url: str) -> str:
     return "." + base.rsplit(".", 1)[1].lower()
 
 
+def _as_int(v: Any) -> int:
+    """宽松取非负整数（扩展/CDP 可能给字符串、float 或 None）；非法 → 0。
+
+    0 一律表示「未知」——没有 0 字节的媒体，所以不需要区分「0 字节」与「不知道」。
+    """
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+def _as_float(v: Any) -> float:
+    """宽松取正浮点（时长，秒）；非法/非正 → 0.0（0 表示「未知」）。"""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return n if n > 0 else 0.0
+
+
 def classify_media(url: str, mime: str = "") -> str:
     """判定 CDP 资源是否值得展示。返回 "playlist" | "media" | "segment" | ""。
 
@@ -449,9 +470,14 @@ class CDPSniffer:
             "first_seen": time.time(),
             "count": 1,
             "source": (payload.get("source") or "manual").strip()[:32],
-            # 回执凭据：桌面端建任务后按此 id 写回结果，扩展据此显示「已加入下载」或失败原因。
+            # 标题/时长/大小（2026-10-02）：popup / 悬浮球提交时可能带上，缺省 0 = 未知。
             "send_id": uuid.uuid4().hex[:12],
         }
+        _sz, _du = _as_int(payload.get("size")), _as_float(payload.get("duration"))
+        if _sz:
+            item["size"] = _sz
+        if _du:
+            item["duration"] = _du
         with self._lock:
             self._picked.append(item)
             self._sent_ids[item["send_id"]] = time.time()
@@ -611,9 +637,16 @@ class CDPSniffer:
                 return
             headers = meta.get("headers") or {}
             referer = headers.get("Referer") or headers.get("referer") or ""
+            # 大小（2026-10-02）：CDP 响应头里的 Content-Length（键名大小写不定 → 遍历比）。
+            rh = resp.get("headers") or {}
+            clen = 0
+            for _k, _v in rh.items():
+                if str(_k).lower() == "content-length":
+                    clen = _as_int(_v)
+                    break
             self._register(url=url, mime=resp.get("mimeType") or "", kind=kind,
                            referer=referer, page_url=meta.get("page_url") or "",
-                           page_title=pages[sid].get("title") or "")
+                           page_title=pages[sid].get("title") or "", size=clen)
             if len(pending) > 800:
                 for k in list(pending)[: -400]:
                     pending.pop(k, None)
@@ -657,7 +690,11 @@ class CDPSniffer:
 
     def _register(self, *, url: str, mime: str, kind: str, referer: str,
                   page_url: str, page_title: str, source: str = "cdp",
-                  cookie: str = "") -> None:
+                  cookie: str = "", size: int = 0, duration: float = 0.0) -> None:
+        # size / duration（2026-10-02 用户「把嗅探到的视频信息也加上：标题、时长、大小」）：
+        #   size     = 响应头 Content-Length（字节），扩展 webRequest / CDP responseReceived 都取得到；
+        #   duration = 页面 <video>.duration（秒），只有**页面侧内容脚本**拿得到（扩展 pagewatch.js）。
+        # 0 一律表示「未知」（没有 0 字节的媒体、也没 0 秒的视频），前端据此隐藏该项。
         with self._lock:
             if url in self._items:
                 row = self._items[url]
@@ -676,6 +713,13 @@ class CDPSniffer:
                     row["page_title"] = page_title
                 if cookie and not row.get("cookie"):
                     row["cookie"] = cookie
+                # 时长/大小：page 条目（SPA 视频页）的时长要等播放器就绪才准、换页还会变 →
+                # 与 page_title 同规则「后到即覆盖」；媒体/清单条目的值来自响应头，
+                # 基本只来一次 → 空时回填（免得后到的分片把整体大小冲掉）。
+                if duration and (row.get("kind") == "page" or not row.get("duration")):
+                    row["duration"] = float(duration)
+                if size and not row.get("size"):
+                    row["size"] = int(size)
                 return
             item = {
                 "url": url, "mime": mime, "kind": kind, "referer": referer,
@@ -684,6 +728,10 @@ class CDPSniffer:
             }
             if cookie:
                 item["cookie"] = cookie
+            if size:
+                item["size"] = int(size)
+            if duration:
+                item["duration"] = float(duration)
             if kind == "playlist":
                 # 清单到手：淘汰同来源页的分片占位
                 for k in [k for k, v in self._items.items()
@@ -730,6 +778,9 @@ class CDPSniffer:
                 page_url=str(row.get("page_url") or ""),
                 page_title=str(row.get("page_title") or ""),
                 source="ext", cookie=str(row.get("cookie") or ""),
+                # 标题/时长/大小（2026-10-02）：扩展按条目带上来，缺省 0 = 未知。
+                size=_as_int(row.get("size")),
+                duration=_as_float(row.get("duration")),
             )
             added += 1
         return added

@@ -23,6 +23,18 @@
   var ticks = 0;
   var timer = null;
 
+  /** 当前页 <video> 的时长（秒；拿不到 → 0）。
+   *  2026-10-02 用户「把嗅探到的视频信息也加上标题、时长、大小」——
+   *  时长只有**页面侧**读得到（YouTube 等 SABR 站的后台 webRequest 抓不到媒体流，
+   *  也没有 Content-Duration 头），所以必须由这里随哨兵消息带出去。 */
+  function pageDuration() {
+    try {
+      var v = document.querySelector('video');
+      var d = v && v.duration;
+      return (typeof d === 'number' && isFinite(d) && d > 0) ? d : 0;
+    } catch (e) { return 0; }
+  }
+
   function report(why) {
     var vp = '';
     try { vp = CORE.isVideoPage(location.href); } catch (e) { return; }
@@ -36,7 +48,8 @@
         type: 'pageSeen',
         url: vp,
         title: document.title || '',
-        why: why
+        why: why,
+        duration: pageDuration()
       }, function () { void chrome.runtime.lastError; });
     } catch (e) { /* 扩展被重载/停用：忽略 */ }
   }

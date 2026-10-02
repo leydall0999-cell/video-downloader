@@ -151,7 +151,9 @@
     this._segments = {};  // host -> 占位 item
   }
 
-  /** entry: {url, mime, referer, pageUrl, pageTitle, cookie, ts}
+  /** entry: {url, mime, referer, pageUrl, pageTitle, cookie, ts, contentLength}
+   *  contentLength：响应头 Content-Length（字节，0/缺省 = 未知）→ 存成 item.size，
+   *  推到桌面端后展示「大小」（2026-10-02 用户「把标题、时长、大小也加上」）。
    *  返回 {kind, item, isNew} 或 null（与媒体无关）。 */
   SniffStore.prototype.add = function (entry) {
     var kind = classifyMedia(entry.url, entry.mime);
@@ -173,12 +175,18 @@
     }
 
     var it = this._index[entry.url];
-    if (it) { it.count += 1; return { kind: kind, item: it, isNew: false }; }
+    if (it) {
+      it.count += 1;
+      // 首次响应可能没有 Content-Length（分块/流式）→ 后续响应补上，已有值不覆盖
+      if (!it.size && entry.contentLength) it.size = entry.contentLength;
+      return { kind: kind, item: it, isNew: false };
+    }
     it = {
       url: entry.url, mime: entry.mime || '', kind: kind, host: host,
       referer: entry.referer || '', pageUrl: entry.pageUrl || '',
       pageTitle: entry.pageTitle || '', cookie: entry.cookie || '',
-      firstSeen: entry.ts || 0, count: 1
+      firstSeen: entry.ts || 0, count: 1,
+      size: entry.contentLength || 0
     };
     this._index[entry.url] = it;
     this.items.push(it);

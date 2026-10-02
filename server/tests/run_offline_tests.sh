@@ -391,6 +391,24 @@ else
 fi
 
 echo ""
+echo "=== extension/tests/test_sniff_meta.js（嗅探条目元信息：标题/时长/大小，node + chrome 桩） ==="
+# 2026-10-02 用户「这里把嗅探到的视频信息也加上，比如：标题、时长、大小」。
+# 三样来源各不相同：标题=tab.title；时长=页面侧 <video>.duration（只有 pagewatch.js 读得到，
+# SABR 站后台既抓不到媒体流也没 Content-Duration 头）；大小=响应头 Content-Length
+# （sniff-core.pickHeaders 早已解析，但必须**传进 store.add**、再**带进推送载荷**才有用）。
+# 要害在「时长是后到值」：refreshPageTitle 的去重口径必须连 duration 一起比，
+# 否则「标题同、时长刚拿到」的补推会被当成重复丢掉 —— 列表里的时长永远空着。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_sniff_meta.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "=== server/tests/test_platform_count_label.mjs（平台数对外口径：两端统一 116→100+） ==="
 if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then

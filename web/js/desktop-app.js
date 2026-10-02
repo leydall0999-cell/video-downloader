@@ -351,7 +351,10 @@
 .vdl-sniff-item .k.media{background:#eef0ff;color:#4f46e5;}
 .vdl-sniff-item .k.segment{background:#fff7e6;color:#b26a00;}
 .vdl-sniff-item .u{color:#666;font-size:12px;word-break:break-all;margin:4px 0;}
-.vdl-sniff-item .p{color:#999;font-size:11px;margin-bottom:6px;}
+.vdl-sniff-item .t{font-size:13px;font-weight:600;color:#222;line-height:1.45;margin:2px 0 3px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}
+.vdl-sniff-item .t .dim{color:#aaa;font-weight:500;}
+.vdl-sniff-item .m{color:#888;font-size:11px;margin-bottom:4px;}
 .vdl-sniff-item button{border:0;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;margin-right:6px;}
 .vdl-sniff-item .dl{background:#4f46e5;color:#fff;}
 .vdl-sniff-item .cp{background:#eef0f4;}
@@ -672,6 +675,25 @@
       markFail();
     };
 
+    /** 时长（秒 → 12:34 / 1:02:03）；0/非法 → ''（调用方据此不显示该项）。2026-10-02 */
+    const fmtDuration = (sec) => {
+      const s = Math.round(Number(sec) || 0);
+      if (!(s > 0)) return '';
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+      const p = (n) => (n < 10 ? '0' : '') + n;
+      return h > 0 ? `${h}:${p(m)}:${p(r)}` : `${m}:${p(r)}`;
+    };
+
+    /** 大小（字节 → 128.4 MB）；0/非法 → ''。2026-10-02 */
+    const fmtSize = (n) => {
+      let b = Number(n) || 0;
+      if (!(b > 0)) return '';
+      const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let i = 0;
+      while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+      return `${i === 0 ? b : (b >= 100 ? b.toFixed(0) : b.toFixed(1))} ${u[i]}`;
+    };
+
     const renderItem = (it) => {
       const div = document.createElement('div');
       div.className = 'vdl-sniff-item';
@@ -679,11 +701,24 @@
       // 「视频页」条目是 YouTube 这类加密流站点的正解：它本身不是媒体地址，
       // 点下去走的是解析（yt-dlp）而不是直下 —— 按钮文案要跟着变，否则用户以为点错了。
       const isPage = it.kind === 'page';
+      // 标题 / 时长 / 大小（2026-10-02 用户「嗅探到的视频信息也加上：标题、时长、大小」）：
+      //   标题 = 页面标题（page_title，扩展拿到 tab.title 后回填；SPA 换页时后到覆盖）；
+      //   时长 = 页面侧 <video>.duration（服务端 page 条目「后到即覆盖」）；
+      //   大小 = 响应头 Content-Length（加密流站点抓不到 → 该项自动不显示，不写 0）。
+      const title = String(it.page_title || '').trim();
+      let host = '';
+      try { host = new URL(it.url).hostname; } catch (e) { host = ''; }
+      const metaParts = [];
+      const du = fmtDuration(it.duration);
+      if (du) metaParts.push(`时长 ${du}`);
+      const sz = fmtSize(it.size);
+      if (sz) metaParts.push(sz);
+      if ((it.count || 1) > 1) metaParts.push(`×${it.count}`);
       div.innerHTML =
         `<span class="k ${escHtml(it.kind)}">${KIND_LABEL[it.kind] || escHtml(it.kind)}</span>` +
-        `<span style="color:#888;font-size:11px">×${it.count || 1}</span>` +
+        `<div class="t">${title ? escHtml(title) : `<span class="dim">${escHtml(host || '未命名')}</span>`}</div>` +
+        (metaParts.length ? `<div class="m">${escHtml(metaParts.join(' · '))}</div>` : '') +
         `<div class="u">${escHtml(short)}</div>` +
-        (it.page_title ? `<div class="p">来源：${escHtml(it.page_title)}</div>` : '') +
         `<button type="button" class="dl">${isPage ? '解析并下载' : '下载'}</button><button type="button" class="cp">复制链接</button>`;
       div.querySelector('.dl').addEventListener('click', () => downloadItem(it, div));
       div.querySelector('.cp').addEventListener('click', () => copyText(it.url, div.querySelector('.cp')));

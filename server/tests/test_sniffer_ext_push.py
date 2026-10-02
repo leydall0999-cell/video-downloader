@@ -149,8 +149,74 @@ def test_ext_page_title_late_correction():
     print("✅ 页面条目标题修正：后到覆盖 / 只加 count / 空值回填 / media 不受影响 全部正确")
 
 
+def test_ext_meta_duration_size():
+    """嗅探条目的**标题 / 时长 / 大小**（2026-10-02 用户「把嗅探到的视频信息也加上」）。
+
+    数据来源与「后到」语义：
+      size     = 响应头 Content-Length（扩展 webRequest / CDP responseReceived 都取得到）
+      duration = 页面侧 <video>.duration —— 只有**页面**条目有，且要等播放器就绪才准
+                 （扩展 pagewatch.js 用 why='player' 补报 → 服务端必须允许覆盖）
+    0 一律表示「未知」，**不许**写进条目：前端据此隐藏该项，写 0 会渲染成「0 B / 0:00」。
+    """
+    s = cdp_sniffer.SNIFFER
+
+    # 1) 直链条目：size 直接落库
+    MEDIA = "https://cdn.example/video/meta1.mp4"
+    s.add_ext_items([_item(MEDIA, mime="video/mp4", size=128 * 1024 * 1024)])
+    it = next(r for r in s.items(limit=200) if r["url"] == MEDIA)
+    assert it.get("size") == 134217728, f"size 应落库: {it}"
+    assert "duration" not in it, f"没给 duration 就不该写这个键（0=未知）: {it}"
+
+    # 2) 后续推送（0 / 另一个值）不得覆盖已有 size
+    s.add_ext_items([_item(MEDIA, mime="video/mp4", size=0)])
+    s.add_ext_items([_item(MEDIA, mime="video/mp4", size=999)])
+    it2 = next(r for r in s.items(limit=200) if r["url"] == MEDIA)
+    assert it2.get("size") == 134217728, f"★ size 已有值时不得被后到的覆盖/清零: {it2}"
+
+    # 3) 页面条目：时长「后到即覆盖」（播放器就绪才拿到准值；换页/重播还会变）
+    PAGE = "https://www.youtube.com/watch?v=METATEST0001"
+    s.add_ext_items([_item(PAGE, mime="text/html", kind_hint="page",
+                           page_title="某个视频", duration=0)])
+    it3 = next(r for r in s.items(limit=200) if r["url"] == PAGE)
+    assert "duration" not in it3, f"duration=0（未知）不该落库: {it3}"
+    s.add_ext_items([_item(PAGE, mime="text/html", kind_hint="page",
+                           page_title="某个视频", duration=3725.4)])
+    it4 = next(r for r in s.items(limit=200) if r["url"] == PAGE)
+    assert abs(float(it4.get("duration")) - 3725.4) < 0.01, f"page 时长应落库: {it4}"
+    s.add_ext_items([_item(PAGE, mime="text/html", kind_hint="page",
+                           page_title="某个视频", duration=42)])
+    it5 = next(r for r in s.items(limit=200) if r["url"] == PAGE)
+    assert abs(float(it5.get("duration")) - 42) < 0.01, f"★ page 时长应被后到的值覆盖: {it5}"
+    assert it5["count"] == 3, f"补推只加 count: {it5}"
+
+    # 4) 反向约束：media 条目的时长/大小只在**空**时回填，后到的不覆盖
+    M2 = "https://cdn.example/video/meta2.mp4"
+    s.add_ext_items([_item(M2, mime="video/mp4", duration=10, size=1000)])
+    s.add_ext_items([_item(M2, mime="video/mp4", duration=20, size=2000)])
+    it6 = next(r for r in s.items(limit=200) if r["url"] == M2)
+    assert abs(float(it6.get("duration")) - 10) < 0.01, f"media 时长不得被覆盖: {it6}"
+    assert it6.get("size") == 1000, f"media 大小不得被覆盖: {it6}"
+
+    # 5) 脏值（字符串 / 负数 / None / 空串）→ 一律按未知处理：不落库、不抛
+    bads = ("abc", -5, None, "")
+    s.add_ext_items([_item("https://cdn.example/video/bad-%s.mp4" % b,
+                           mime="video/mp4", size=b, duration=b) for b in bads])
+    for b in bads:
+        row = next(r for r in s.items(limit=200) if r["url"].endswith("bad-%s.mp4" % b))
+        assert "size" not in row and "duration" not in row, f"脏值不该落库: {row}"
+
+    # 6) 手推入口（popup / 悬浮球走 /api/sniffer/send → add_manual）同契约
+    got = s.add_manual({"url": "https://cdn.example/audio/song.m4a", "mime": "audio/mp4",
+                        "size": 5000000, "duration": 213})
+    assert got.get("size") == 5000000, f"手推应落 size: {got}"
+    assert abs(float(got.get("duration")) - 213.0) < 0.01, f"手推应落 duration: {got}"
+
+    print("✅ 条目元信息：size/duration 落库 / page 后到覆盖 / media 只空时回填 / 脏值忽略 / 手推同契约 全部正确")
+
+
 if __name__ == "__main__":
     test_ext_push_flow()
     test_ext_page_items()
     test_ext_page_title_late_correction()
+    test_ext_meta_duration_size()
     print("🎉 扩展自动推送回归测试全部通过")

@@ -68,6 +68,24 @@ function fmtTime(ts) {
   return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
 }
 
+/** 时长（秒 → 12:34 / 1:02:03）；0/非法 → ''（调用方据此不显示）。2026-10-02 */
+function fmtDur(sec) {
+  var s = Math.round(Number(sec) || 0);
+  if (!(s > 0)) return '';
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  var p = function (n) { return (n < 10 ? '0' : '') + n; };
+  return h > 0 ? (h + ':' + p(m) + ':' + p(r)) : (m + ':' + p(r));
+}
+
+/** 大小（字节 → 128.4 MB）；0/非法 → ''（调用方据此不显示）。2026-10-02 */
+function fmtSize(n) {
+  var b = Number(n) || 0;
+  if (!(b > 0)) return '';
+  var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? b : (b >= 100 ? b.toFixed(0) : b.toFixed(1))) + ' ' + u[i];
+}
+
 function chipText(kind) {
   if (kind === 'page') return '页面';
   return kind === 'playlist' ? '清单' : (kind === 'segment' ? '分片' : '直链');
@@ -136,6 +154,12 @@ function renderItem(it) {
     div.appendChild(t);
   }
   var meta = [];
+  // 时长 / 大小（2026-10-02 用户「把标题、时长、大小也加上」）：时长来自页面侧
+  // <video>.duration，大小来自响应头 Content-Length；取不到就不显示（不写 0）。
+  var du = fmtDur(it.duration);
+  if (du) meta.push('时长 ' + du);
+  var sz = fmtSize(it.size);
+  if (sz) meta.push(sz);
   if (it.count > 1) meta.push('×' + it.count);
   // 用户实测反馈（2026-09-27）：裸写 `00:36:14` 会被读成「时长」，以为 UI 音效有 36 分钟。
   // 它其实是「第一次嗅到这个地址的时刻」（本地时钟 时:分:秒），加前缀消歧。
@@ -203,6 +227,10 @@ function render(st) {
           ? '✓ 已于 ' + fmtTime(st.pagePushAt) + ' 把本页交给桌面端解析。<br>' +
             '点下面「解析并下载」，或到桌面端「媒体嗅探」列表操作。'
           : '正在把本页交给桌面端解析；若一直是这样，请确认「视频工坊」App 已启动。');
+      // 时长（2026-10-02）：加密流抓不到直链，但页面侧 <video>.duration 有 →
+      // 由后台按 tab 记在 pagePushed 里随 getState 带回（videoDuration）。
+      var du = fmtDur(st.videoDuration);
+      if (du) tip.innerHTML += '<br>视频时长 ' + du;
       box.appendChild(tip);
       // 当前清晰度回显（改上方「清晰度」下拉时同步，见 sendQuality 的 change 绑定）：
       // 用户在扩展里选的分辨率必须看得见，否则「选了没生效」无从判断。
@@ -293,6 +321,12 @@ function postSend(base, it, carry) {
     kind: it.kind || '',
     // 清晰度：只对「视频页 / HLS 清单」上报（见 qualityForItem）。空串=让桌面端用它的默认值。
     quality: qualityForItem(it),
+    // 标题/时长/大小（2026-10-02 用户「把标题、时长、大小也加上」）：
+    //   大小 = 响应头 Content-Length（item.size，直链/清单才有）；
+    //   时长 = 页面侧 <video>.duration —— 「页面」条目本身没有，取 state.videoDuration
+    //         （后台按 tab 记在 pagePushed 里随 getState 带回）。缺省 0 = 未知，服务端据此不展示。
+    size: it.size || 0,
+    duration: it.duration || ((it.kind === 'page') ? (state.videoDuration || 0) : 0),
     source: 'extension'
   };
   return fetch(base + '/api/sniffer/send', {

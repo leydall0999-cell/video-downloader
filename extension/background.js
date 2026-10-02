@@ -181,6 +181,8 @@ function handleCompleted(details) {
     pageUrl: meta.referer || initiator || details.url || '',
     pageTitle: '',
     cookie: meta.cookie || '',
+    // 大小（2026-10-02）：onHeadersReceived 已从响应头解析出 contentLength → 落进条目
+    contentLength: picked.contentLength,
     ts: Date.now() / 1000
   });
   if (res && res.isNew) updateBadge();
@@ -216,7 +218,7 @@ var lastMime = '';            // 最近一条响应的 Content-Type（遥测：�
 /** 视频页面链接直推（2026-10-01）：UMP/SABR 站点的媒体流抓不到，推页面让桌面端解析。
  *  v1.0.40 加两件事：①per-tab 去重（同一页 5 分钟内不重复打扰桌面端）；
  *  ②推送成败记账 → chrome.storage.local（见文件头 pushStat 说明）。 */
-function pushPageToServer(tabId, pageUrl, title, force) {
+function pushPageToServer(tabId, pageUrl, title, force, duration) {
   if (!pageUrl) return;
   // 嗅探开关关掉 = 什么都不推（含 popup 的强推）——开关是用户的唯一总闸，不能有旁路
   if (!enabled) return;
@@ -229,8 +231,15 @@ function pushPageToServer(tabId, pageUrl, title, force) {
     }
   }
   // title 一并记账：标题后到的补推（refreshPageTitle）靠「同页同标题」去重，
-  // 不记就没法判断这次的标题是不是已经推过了。
-  if (tid > 0) pagePushed[tid] = { key: key, at: Date.now() / 1000, title: title || '' };
+  // 不记就没法判断这次的标题是不是已经推过了。duration 同样记账（2026-10-02）：
+  // 视频页的时长要等播放器就绪才准，是**后到**的，去重必须连它一起比，
+  // 否则「标题同、时长刚拿到」的这条会被当成重复推而丢掉。
+  if (tid > 0) {
+    pagePushed[tid] = {
+      key: key, at: Date.now() / 1000,
+      title: title || '', duration: duration || 0
+    };
+  }
   pushTries++;                 // 兼容旧遥测口径（内存值）
   pushStat.tries++;
   pushStat.pageTries++;
@@ -251,7 +260,9 @@ function pushPageToServer(tabId, pageUrl, title, force) {
               referer: '',
               cookie: '',
               page_url: pageUrl,
-              page_title: t || ''
+              page_title: t || '',
+              // 时长（秒，0=未知）：只有页面侧 read <video>.duration 拿得到，见 pagewatch.js
+              duration: duration || 0
             }]
           })
         }).then(function (r) {
@@ -287,12 +298,12 @@ function pushPageToServer(tabId, pageUrl, title, force) {
  *  —— 主文档请求早发生过，事件永远不会再来。2026-10-01 实测：面板 pushed=0、
  *  桌面端条目里零 YouTube 记录，而同一时刻腾讯视频能正常嗅到（那些站是整页导航）。
  *  现在四条不依赖主文档请求的入口：内容脚本哨兵 / 切标签页 / 标签页地址变化 / 心跳兜底。 */
-function checkPagePush(tabId, url, title, force) {
+function checkPagePush(tabId, url, title, force, duration) {
   if (!enabled) return false;
   if (typeof url !== 'string' || !url) return false;
   var vp = CORE.isVideoPage(url);
   if (!vp) return false;
-  pushPageToServer(tabId, vp, title || '', force === true);
+  pushPageToServer(tabId, vp, title || '', force === true, duration || 0);
   return true;
 }
 
@@ -305,15 +316,20 @@ function checkPagePush(tabId, url, title, force) {
  *  标题 settle 后再补推一次，桌面端据此把标题覆盖成正确的（服务端见
  *  cdp_sniffer._register 的 page 条目覆盖规则）。
  *
- *  去重口径是「同页 + 同标题」：标题来回抖动只推一次，换页（key 变）必推。 */
-function refreshPageTitle(tabId, pageUrl, title) {
-  if (!enabled || !title) return false;
+ *  去重口径是「同页 + 同标题 + 同时长」：标题来回抖动只推一次，换页（key 变）必推；
+ *  时长是播放器就绪后才拿到的「后到值」（pagewatch.js 的 player 补报），
+ *  所以标题相同、时长刚拿到时也必须补推一次 —— 否则列表里时长永远空着（2026-10-02）。 */
+function refreshPageTitle(tabId, pageUrl, title, duration) {
+  if (!enabled) return false;
+  var du = duration || 0;
+  if (!title && !du) return false;          // 标题与时长都没有 → 没什么可补的
   var vp = CORE.isVideoPage(pageUrl);
   if (!vp) return false;
   var tid = (typeof tabId === 'number' && tabId > 0) ? tabId : -1;
   var rec = tid > 0 ? pagePushed[tid] : null;
-  if (rec && rec.key === pageKeyOf(vp) && rec.title === title) return false;
-  pushPageToServer(tid, vp, title, true);   // force：标题修正必须送达，不被冷却挡下
+  if (rec && rec.key === pageKeyOf(vp) && rec.title === title
+      && (rec.duration || 0) === du) return false;
+  pushPageToServer(tid, vp, title, true, du);   // force：标题/时长修正必须送达，不被冷却挡下
   return true;
 }
 
@@ -355,7 +371,9 @@ function pushToServer(item) {
             referer: item.referer || '',
             cookie: item.cookie || '',
             page_url: item.pageUrl || '',
-            page_title: item.pageTitle || ''
+            page_title: item.pageTitle || '',
+            // 大小（字节，0=未知）：来自响应头 Content-Length，见 sniff-core pickHeaders
+            size: item.size || 0
           }]
         })
       }).catch(function () {});
@@ -630,7 +648,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         pushPage: pushStat.pageTries,
         pushLastErr: pushStat.lastErr,
         videoPage: '',
-        pagePushAt: 0
+        pagePushAt: 0,
+        // 当前页视频时长（秒，0=未知）：复用 pushPageToServer 的 per-tab 记账
+        // （popup 没有 scripting 权限、也不该为此加权限，见 manifest 注释）→ 2026-10-02
+        videoDuration: 0
       };
       if (typeof tid !== 'number' || tid < 0) { sendResponse(snap); return false; }
       (function () {
@@ -648,7 +669,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             try { u = (tab && !chrome.runtime.lastError && tab.url) || ''; } catch (e) { /* 关页 */ }
             var vp = u ? CORE.isVideoPage(u) : '';
             var rec = (vp && pagePushed[tid]) ? pagePushed[tid] : null;
-            reply(vp, (rec && vp && rec.key === pageKeyOf(vp)) ? rec.at : 0);
+            var ok = !!(rec && vp && rec.key === pageKeyOf(vp));
+            snap.videoDuration = ok ? (rec.duration || 0) : 0;   // 时长：popup 展示用（2026-10-02）
+            reply(vp, ok ? rec.at : 0);
           });
         } catch (e) { reply('', 0); }
         // 兜底：tabs.get 意外不回调时别让面板干等
@@ -695,9 +718,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       var hit = false;
       if (msg.why === 'player') {
         var vpSeen = CORE.isVideoPage(msg.url || '');
-        if (vpSeen) { refreshPageTitle(sTid, vpSeen, ttl); hit = true; }
+        if (vpSeen) { refreshPageTitle(sTid, vpSeen, ttl, msg.duration); hit = true; }
       } else {
-        hit = checkPagePush(sTid, msg.url || '', ttl, msg.force === true);
+        hit = checkPagePush(sTid, msg.url || '', ttl, msg.force === true, msg.duration);
       }
       sendResponse({ ok: hit });
       return false;
