@@ -660,12 +660,22 @@ class CDPSniffer:
                   cookie: str = "") -> None:
         with self._lock:
             if url in self._items:
-                self._items[url]["count"] += 1
-                # 扩展补发的标题/cookie 可能比 CDP 首记更全，顺手回填
-                if page_title and not self._items[url].get("page_title"):
-                    self._items[url]["page_title"] = page_title
-                if cookie and not self._items[url].get("cookie"):
-                    self._items[url]["cookie"] = cookie
+                row = self._items[url]
+                row["count"] += 1
+                # 扩展补发的标题/cookie 可能比 CDP 首记更全，顺手回填。
+                # ⚠️ 视频页（page）条目例外：标题**后到即覆盖**。SPA 换页那一刻 tab.title
+                # 还是**上一页**的（YouTube 要等新页数据加载完才改标题），首推必然带旧标题；
+                # 扩展会在标题 settle 后补推正确标题（background.js::refreshPageTitle）。
+                # 若这里仍坚持「只在空时回填」，条目就永远停在**上一个视频**的标题上 ——
+                # 用户看到的就是「最新嗅探到的是上一个视频」（2026-10-02 实测）。
+                # 页面 URL 恒定、标题只是给人看的标签，后到的更准，覆盖是安全的。
+                if page_title and row.get("kind") == "page":
+                    if page_title != row.get("page_title"):
+                        row["page_title"] = page_title
+                elif page_title and not row.get("page_title"):
+                    row["page_title"] = page_title
+                if cookie and not row.get("cookie"):
+                    row["cookie"] = cookie
                 return
             item = {
                 "url": url, "mime": mime, "kind": kind, "referer": referer,

@@ -96,7 +96,61 @@ def test_ext_page_items():
     print("✅ ext-push 页面条目：入库/优先级/未知 hint 丢弃 全部正确")
 
 
+def test_ext_page_title_late_correction():
+    """视频页条目的**标题修正**（2026-10-02 用户实测「嗅探比视频慢一步」）。
+
+    现象：桌面面板列表里最新那条永远显示**上一个视频**的标题，想看当前视频的条目
+    得再点开另一个视频。
+    根因：SPA 换页那一刻 Chrome 报的是 changeInfo.url（地址先到），而 tab.title 还是
+    **上一页**的标题（YouTube 要等新页数据加载完才改）→ 扩展首推必然带旧标题。
+    扩展随后会在标题 settle 时补推一次（background.js::refreshPageTitle），
+    所以服务端这里**必须允许 page 条目的标题被后到的值覆盖**；若坚持「只在空时回填」，
+    条目就永久停在错标题上（这正是本用例要钉住的回归点）。
+
+    同时钉住反向约束：media/playlist 条目仍保持「只在空时回填」，不许被覆盖。
+    """
+    s = cdp_sniffer.SNIFFER
+    PAGE = "https://www.youtube.com/watch?v=LAGTEST0001"
+
+    # 1) 首推：地址已是新视频，标题还是上一页的（真实 Chrome 时序）
+    s.add_ext_items([_item(PAGE, mime="text/html", kind_hint="page",
+                           page_title="上一个视频的标题")])
+    it = next(r for r in s.items(limit=200) if r["url"] == PAGE)
+    assert it["kind"] == "page"
+    assert it["page_title"] == "上一个视频的标题", f"首推原样入库: {it}"
+
+    # 2) 标题 settle 后补推同一 URL → ★ 必须覆盖成正确标题（不新增行）
+    before = len(s.items(limit=200))
+    s.add_ext_items([_item(PAGE, mime="text/html", kind_hint="page",
+                           page_title="当前视频的标题")])
+    rows = s.items(limit=200)
+    assert len(rows) == before, "补推同一 URL 不应新增行"
+    it2 = next(r for r in rows if r["url"] == PAGE)
+    assert it2["page_title"] == "当前视频的标题", \
+        f"★ page 条目标题必须被后到的正确标题覆盖（否则永远显示上一个视频）: {it2}"
+    assert it2["count"] == 2, f"补推只加 count: {it2}"
+
+    # 3) 空标题 → 非空：基础回填照旧（不能因为上面改了分支就漏掉）
+    P2 = "https://www.youtube.com/watch?v=LAGTEST0002"
+    s.add_ext_items([_item(P2, mime="text/html", kind_hint="page", page_title="")])
+    s.add_ext_items([_item(P2, mime="text/html", kind_hint="page", page_title="补上的标题")])
+    it3 = next(r for r in s.items(limit=200) if r["url"] == P2)
+    assert it3["page_title"] == "补上的标题", f"空标题应被回填: {it3}"
+
+    # 4) 反向约束：media 条目的标题**不许**被后到的值覆盖（回填一次即定）
+    MEDIA = "https://cdn.example/video/keep-title.mp4"
+    s.add_ext_items([_item(MEDIA, mime="video/mp4", page_title="首记标题")])
+    s.add_ext_items([_item(MEDIA, mime="video/mp4", page_title="后来的标题")])
+    it4 = next(r for r in s.items(limit=200) if r["url"] == MEDIA)
+    assert it4["kind"] == "media"
+    assert it4["page_title"] == "首记标题", \
+        f"★ media 条目仍须「只在空时回填」，不得被覆盖: {it4}"
+
+    print("✅ 页面条目标题修正：后到覆盖 / 只加 count / 空值回填 / media 不受影响 全部正确")
+
+
 if __name__ == "__main__":
     test_ext_push_flow()
     test_ext_page_items()
+    test_ext_page_title_late_correction()
     print("🎉 扩展自动推送回归测试全部通过")

@@ -228,7 +228,9 @@ function pushPageToServer(tabId, pageUrl, title, force) {
       return;
     }
   }
-  if (tid > 0) pagePushed[tid] = { key: key, at: Date.now() / 1000 };
+  // title 一并记账：标题后到的补推（refreshPageTitle）靠「同页同标题」去重，
+  // 不记就没法判断这次的标题是不是已经推过了。
+  if (tid > 0) pagePushed[tid] = { key: key, at: Date.now() / 1000, title: title || '' };
   pushTries++;                 // 兼容旧遥测口径（内存值）
   pushStat.tries++;
   pushStat.pageTries++;
@@ -268,6 +270,8 @@ function pushPageToServer(tabId, pageUrl, title, force) {
       chrome.tabs.get(tid, function (tab) {
         var t = '';
         try { t = (tab && !chrome.runtime.lastError && tab.title) || ''; } catch (e) { /* 关页 */ }
+        // 记账里补上真实取到的标题，否则后续「标题补推」会把它当成没推过而重复推一次
+        if (t && pagePushed[tid]) pagePushed[tid].title = t;
         send(t);
       });
       return;
@@ -289,6 +293,27 @@ function checkPagePush(tabId, url, title, force) {
   var vp = CORE.isVideoPage(url);
   if (!vp) return false;
   pushPageToServer(tabId, vp, title || '', force === true);
+  return true;
+}
+
+/** 标题修正推送（v1.0.46）：SPA 换页时**地址先到、标题后到**。
+ *
+ *  YouTube 点开新视频的那一刻 changeInfo.url 已经变了，但 tab.title 还是**上一页**的
+ *  （新页标题要等数据加载完才改）。首推因此必然带旧标题，而「同一页 5 分钟冷却」
+ *  又把重推挡住 → 桌面端列表里最新那条**永远显示上一个视频的标题**，用户看到的就是
+ *  「嗅探到的比视频慢一步、最新嗅探到的是上一个视频」（2026-10-02 用户实测）。
+ *  标题 settle 后再补推一次，桌面端据此把标题覆盖成正确的（服务端见
+ *  cdp_sniffer._register 的 page 条目覆盖规则）。
+ *
+ *  去重口径是「同页 + 同标题」：标题来回抖动只推一次，换页（key 变）必推。 */
+function refreshPageTitle(tabId, pageUrl, title) {
+  if (!enabled || !title) return false;
+  var vp = CORE.isVideoPage(pageUrl);
+  if (!vp) return false;
+  var tid = (typeof tabId === 'number' && tabId > 0) ? tabId : -1;
+  var rec = tid > 0 ? pagePushed[tid] : null;
+  if (rec && rec.key === pageKeyOf(vp) && rec.title === title) return false;
+  pushPageToServer(tid, vp, title, true);   // force：标题修正必须送达，不被冷却挡下
   return true;
 }
 
@@ -393,12 +418,19 @@ try {
     });
   }
   // v1.0.40：标签页地址变化（SPA 换页，无主文档请求）/ 整页加载完成
+  // v1.0.46：再加一条「标题变化」。地址先到、标题后到是 SPA 常态（见 refreshPageTitle
+  // 顶部注释）——只认地址变化的话，条目会带着上一页的标题钉死 5 分钟冷却期。
   if (chrome.tabs && chrome.tabs.onUpdated) {
     chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
-      var u = (changeInfo && changeInfo.url) || '';
-      if (u) { checkPagePush(tabId, u, (tab && tab.title) || ''); return; }
-      if (changeInfo && changeInfo.status === 'complete' && tab && tab.url) {
-        checkPagePush(tabId, tab.url, tab.title || '');
+      if (!changeInfo) return;
+      var tu = (tab && tab.url) || '';
+      if (changeInfo.url) {
+        checkPagePush(tabId, changeInfo.url, (tab && tab.title) || '');
+      }
+      // 标题 settle 后补推一次（同页同标题去重，标题抖动不重复打扰）
+      if (changeInfo.title && tu) refreshPageTitle(tabId, tu, changeInfo.title);
+      if (!changeInfo.url && !changeInfo.title && changeInfo.status === 'complete' && tu) {
+        checkPagePush(tabId, tu, tab.title || '');
       }
     });
   }
@@ -657,7 +689,16 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       var sTab = sender && sender.tab ? sender.tab : null;
       var sTid = (sTab && typeof sTab.id === 'number') ? sTab.id : -1;
       var ttl = msg.title || (sTab && sTab.title) || '';
-      var hit = checkPagePush(sTid, msg.url || '', ttl, msg.force === true);
+      // why==='player' = 播放器已就绪，此刻 document.title 已是**本视频**的标题 →
+      // 走标题修正通道。不能走 checkPagePush：同页 5 分钟冷却会把这条补报直接挡掉，
+      // 标题就永远修不回来（v1.0.46 修「嗅探比视频慢一步」）。
+      var hit = false;
+      if (msg.why === 'player') {
+        var vpSeen = CORE.isVideoPage(msg.url || '');
+        if (vpSeen) { refreshPageTitle(sTid, vpSeen, ttl); hit = true; }
+      } else {
+        hit = checkPagePush(sTid, msg.url || '', ttl, msg.force === true);
+      }
       sendResponse({ ok: hit });
       return false;
     }

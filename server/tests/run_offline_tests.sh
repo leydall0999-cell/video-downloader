@@ -374,6 +374,23 @@ else
 fi
 
 echo ""
+echo "=== extension/tests/test_page_title_lag.js（嗅探标题滞后：SPA 换页「地址先到、标题后到」必须补推，node + chrome 桩） ==="
+# 2026-10-02 用户实测「app上嗅探到的比视频慢一步，最新嗅探到的是上一个视频，
+# 想要看的当前视频的嗅探结果得打开另一个视频」。根因：SPA 换页那一刻 Chrome 只给得到
+# changeInfo.url，tab.title 还是**上一页**的；只推那一拍 → 条目带旧标题，且同页 5 分钟
+# 冷却把重推挡死。要害全在「两拍之间的状态」，源码 grep 不出来，故跑真实 background.js
+# 做行为测试（服务端配套见 server/tests/test_sniffer_ext_push.py 的标题覆盖用例）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_page_title_lag.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "=== server/tests/test_platform_count_label.mjs（平台数对外口径：两端统一 116→100+） ==="
 if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then
