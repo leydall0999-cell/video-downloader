@@ -26,6 +26,9 @@ sys.path.insert(0, str(HERE.parent))
 _tmp = tempfile.mkdtemp(prefix="vdl_plans_guard_")
 os.environ["VDL_DATA_DIR"] = _tmp
 os.environ["VDL_CLOUD_LINK"] = "0"
+# 价格云端真源（授权中心）在本用例必须关闭：本用例独立验证「本机覆盖层」，
+# 若开着会拉到真实云端价格盖掉本机改的价，退化成依赖网络的非隔离测试。
+os.environ["VDL_PLANS_CLOUD"] = "0"
 
 import membership as M                                       # noqa: E402
 from membership import MembershipStore, effective_plans, effective_pay_plans  # noqa: E402
@@ -158,12 +161,42 @@ def test_web_wiring_present() -> None:
           'class="pf-ov-btn pf-plan-buy" data-code=' in appjs)
 
 
+def test_cloud_price_wins_over_local() -> None:
+    """[C] 云端（授权中心）价格优先级最高：网页版展示与下单都以云端为准。
+
+    钉住 2026-10-03 的「价格单一真源」：本机覆盖层只是离线兜底，云端在时压过它。
+    用桩函数模拟云端返回，不发真实请求。
+    """
+    print("\n[C] 云端价格优先级高于本机覆盖层")
+    M.save_plan_overrides({"download_plans": {"download_7day": {"price_cny": 12.34, "days": 5}}})
+    eff = effective_plans()
+    check("[云端] 本机改价在云端缺席时生效（离线兜底）",
+          abs(float(eff["download_plans"]["download_7day"]["price_cny"]) - 12.34) < 1e-6)
+
+    origin = M.cloud_plan_overrides
+    before_1day = float(eff["download_plans"]["download_1day"]["price_cny"])
+    M.cloud_plan_overrides = lambda force=False: {  # type: ignore[assignment]
+        "download_plans": {"download_7day": {"price_cny": 9.90, "days": 7}},
+    }
+    try:
+        eff2 = effective_plans()
+        check("[云端] 云端价格压过本机覆盖层",
+              abs(float(eff2["download_plans"]["download_7day"]["price_cny"]) - 9.90) < 1e-6)
+        check("[云端] 云端未携带的档位价格保持不变（逐档合并，不整表替换）",
+              abs(float(eff2["download_plans"]["download_1day"]["price_cny"]) - before_1day) < 1e-6)
+    finally:
+        M.cloud_plan_overrides = origin  # type: ignore[assignment]
+    check("[云端] 开关 VDL_PLANS_CLOUD=0 时返回 None（离线隔离）",
+          M.cloud_plan_overrides(force=True) is None)
+
+
 def main() -> int:
     test_short_term_plans_exist()
     test_override_price_and_days_take_effect()
     test_no_injection_falls_back()
     test_override_only_extra_plan_works()
     test_override_iterative_merge()
+    test_cloud_price_wins_over_local()
     test_test_isolation()
     test_web_wiring_present()
     print("\n" + "=" * 46)
