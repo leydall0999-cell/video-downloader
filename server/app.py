@@ -814,7 +814,9 @@ def _host_of(url: str) -> str:
     except ValueError:
         return ""
 
-store = TaskStore(DOWNLOAD_DIR)
+import auth_store
+# 状态文件放数据目录（避 TCC「下载」目录，见 TaskStore 注释）；下载落地仍在 DOWNLOAD_DIR
+store = TaskStore(DOWNLOAD_DIR, state_dir=auth_store._base_dir())
 # 线程池只设硬上限；真正的「同时下几个」由 BatchScheduler 的并发计数器软控（可动态调整）
 executor = ThreadPoolExecutor(max_workers=VDL_BATCH_HARD_MAX, thread_name_prefix="vdl-dl")
 scheduler = BatchScheduler(executor, default_concurrency=MAX_CONCURRENT_DOWNLOADS)

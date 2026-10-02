@@ -14,7 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from atomic_io import atomic_write_json
 
@@ -27,7 +27,8 @@ TASK_DIR_PATTERN = re.compile(rf"^[0-9a-f]{{{TASK_ID_LENGTH}}}$")
 _MAX_LOG_LINES = 200
 
 # ---- 落盘持久化（B2，2026-10-02）----
-# 任务状态写 DOWNLOAD_DIR/tasks_state.json：App 重启后未完成任务恢复为
+# 任务状态写「数据目录」/tasks_state.json（不再写 DOWNLOAD_DIR，见 TaskStore 的
+# TCC 说明）：App 重启后未完成任务恢复为
 # 「失败 + 可续传」（磁盘分片本来就在，同任务点继续即可续），完成任务保留
 # 最近 50 条元数据（文件仍在 TTL 内才能重新保存）。
 STATE_FILENAME = "tasks_state.json"
@@ -180,14 +181,26 @@ class DownloadTask:
 
 
 class TaskStore:
-    """线程安全的任务表。状态落盘 tasks_state.json，重启后可恢复。"""
+    """线程安全的任务表。状态落盘 tasks_state.json，重启后可恢复。
 
-    def __init__(self, root: Path) -> None:
+    🔴 2026-10-03：状态文件与工作目录**解耦**。原来两者同在 DOWNLOAD_DIR
+    （~/Downloads/VideoDownloader），而「下载」是 macOS TCC 保护目录：每次重新
+    ad-hoc 签名安装后系统都会重新索要授权，无人点击时 open() 永久阻塞
+    （表现：App 进程在、但 8321 端口永不监听，接口全部超时）。工作目录是用户
+    可见的下载落地处，必须留在 Downloads；状态文件是 App 内部数据，改为写到
+    数据目录（VDL_DATA_DIR / ~/.video-downloader），彻底避开 TCC。
+    旧位置的 tasks_state.json 不迁移（读取它等于又碰 Downloads）——那只是历史
+    元数据，磁盘分片仍在原处，用同一链接重新发起即续传。
+    """
+
+    def __init__(self, root: Path, state_dir: Optional[Path] = None) -> None:
         self._root = root
         self._tasks: dict[str, DownloadTask] = {}
         self._lock = threading.Lock()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._state_path = self._root / STATE_FILENAME
+        if state_dir is not None:
+            state_dir.mkdir(parents=True, exist_ok=True)
+        self._state_path = (state_dir or root) / STATE_FILENAME
         self._last_persist = 0.0
         self._persist_dirty = False
         self._load_state()
