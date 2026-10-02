@@ -68,6 +68,18 @@ check('改选即时回显「将以「…」下载」', /\.empty-q/.test(js) && /
 check('popup.css 定义 .empty-q', /\.empty-q\s*\{/.test(css));
 check('popup.css 定义 .qrow（下拉行布局）', /\.qrow\s*\{/.test(css));
 
+// ⑨ 兜底视图里的「视频信息」（2026-10-02 用户截图：「这里把嗅探到的视频信息也加上，
+// 比如：标题、时长、大小」）。加密流抓不到直链，但标题（标签页）与时长（页面侧
+// <video>.duration）是已知的 —— 兜底视图不能只剩一段解释。
+check('兜底视图渲染视频标题（st.videoTitle → .empty-title）',
+  /st\.videoTitle/.test(js) && /vt\.className = 'empty-title'/.test(js));
+check('兜底视图渲染时长（fmtDur(st.videoDuration)）', /fmtDur\(st\.videoDuration\)/.test(js));
+check('取不到就不硬塞占位（标题空/元信息空均不渲染）',
+  /if \(vtitle\) \{/.test(js) && /if \(vmeta\.length\) \{/.test(js));
+check('如实说明拿不到整体大小（加密流是分片的）', /抓不到直链和整体大小/.test(js));
+check('popup.css 定义 .empty-title', /\.empty-title\s*\{/.test(css));
+check('popup.css 定义 .empty-meta', /\.empty-meta\s*\{/.test(css));
+
 console.log('');
 console.log('=========================================');
 console.log('  通过: ' + PASS + '   失败: ' + FAIL);

@@ -219,18 +219,37 @@ function render(st) {
       // 反馈②「这里也要可以操作」→ 空状态直接给两个按钮（解析并下载 / 复制链接）。
       var box = document.createElement('div');
       box.className = 'empty';
+      // 视频信息（2026-10-02 用户截图「这里把嗅探到的视频信息也加上，比如：标题、时长、大小」）：
+      // 加密流站点抓不到直链，但**这一页放的是什么视频**是已知的，兜底视图不该只有一段解释。
+      //   标题 = 标签页标题（background 的 getState 带出 videoTitle，取不到退回推送记账）；
+      //   时长 = 页面侧 <video>.duration（pagewatch.js 上报 → 按 tab 记账 → videoDuration）；
+      //   大小 = 加密流是分片的、没有整体 Content-Length，扩展结构上拿不到 → 如实说明，
+      //         不写「0 B」充数（与列表条目同口径：取不到就不显示）。
+      var vtitle = String(st.videoTitle || '').trim();
+      if (vtitle) {
+        var vt = document.createElement('div');
+        vt.className = 'empty-title';
+        vt.textContent = vtitle;
+        vt.title = vtitle;
+        box.appendChild(vt);
+      }
+      var vmeta = [];
+      var vdu = fmtDur(st.videoDuration);
+      if (vdu) vmeta.push('时长 ' + vdu);
+      if (vmeta.length) {
+        var vm = document.createElement('div');
+        vm.className = 'empty-meta';
+        vm.textContent = vmeta.join(' · ');
+        box.appendChild(vm);
+      }
       var tip = document.createElement('div');
       tip.className = 'empty-tip';
       tip.innerHTML =
-        '这类站点用加密流播放，扩展抓不到直链（正常现象）。<br>' +
+        '这类站点用加密流播放，扩展抓不到直链和整体大小（正常现象）。<br>' +
         (st.pagePushAt
           ? '✓ 已于 ' + fmtTime(st.pagePushAt) + ' 把本页交给桌面端解析。<br>' +
             '点下面「解析并下载」，或到桌面端「媒体嗅探」列表操作。'
           : '正在把本页交给桌面端解析；若一直是这样，请确认「视频工坊」App 已启动。');
-      // 时长（2026-10-02）：加密流抓不到直链，但页面侧 <video>.duration 有 →
-      // 由后台按 tab 记在 pagePushed 里随 getState 带回（videoDuration）。
-      var du = fmtDur(st.videoDuration);
-      if (du) tip.innerHTML += '<br>视频时长 ' + du;
       box.appendChild(tip);
       // 当前清晰度回显（改上方「清晰度」下拉时同步，见 sendQuality 的 change 绑定）：
       // 用户在扩展里选的分辨率必须看得见，否则「选了没生效」无从判断。

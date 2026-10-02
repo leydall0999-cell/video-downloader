@@ -123,7 +123,12 @@ function persist() {
       chrome.storage.session.set({
         vdlSniff: store.toJSON(),
         tabPage: tabPage,
-        sentUrls: sentUrls
+        sentUrls: sentUrls,
+        // pagePushed 也落会话存储（2026-10-02）：SW 空闲被挂起后重启，内存里的
+        // 时长/标题记账就没了 —— popup 打开时的强推不带 duration，无从重建，
+        // 弹窗兜底视图的「时长」会凭空消失。storage.session 寿命与浏览器会话一致，
+        // 正好匹配「同一标签页里同一个视频页」的语义（关掉标签页/浏览器即失效）。
+        pagePushed: pagePushed
       });
     } catch (e) { /* 会话存储不可用时静默（内存态仍在） */ }
   }, PERSIST_DEBOUNCE_MS);
@@ -235,10 +240,18 @@ function pushPageToServer(tabId, pageUrl, title, force, duration) {
   // 视频页的时长要等播放器就绪才准，是**后到**的，去重必须连它一起比，
   // 否则「标题同、时长刚拿到」的这条会被当成重复推而丢掉。
   if (tid > 0) {
+    // duration 是**后到值**：只有页面侧 pagewatch.js 读得到。而 popup 一打开就发
+    // pushPageNow（只有 url/title，不带 duration）—— 若这里直接写 0，会把刚拿到的
+    // 时长当场抹掉，弹窗兜底视图的「时长」就永远空着（2026-10-02 用户截图实测：
+    // 提示块里始终没有时长，就是这一句造成的）。同一视频页（key 一致）保留已知时长；
+    // 换页则重置为 0（新页的时长要等它自己的播放器就绪后重新读）。
+    var prevRec = pagePushed[tid];
+    var keepDur = (prevRec && prevRec.key === key) ? (prevRec.duration || 0) : 0;
     pagePushed[tid] = {
       key: key, at: Date.now() / 1000,
-      title: title || '', duration: duration || 0
+      title: title || '', duration: duration || keepDur
     };
+    persist();   // 记账落 storage.session：SW 被挂起重启后仍能答出「这一页的时长/标题」
   }
   pushTries++;                 // 兼容旧遥测口径（内存值）
   pushStat.tries++;
@@ -605,16 +618,21 @@ try {
     if (st.carryCookie === false) carryCookie = false;
     if (st.endpoint) endpoint = st.endpoint;
   });
-  chrome.storage.session.get(['vdlSniff', 'tabPage', 'sentUrls'], function (st) {
+  chrome.storage.session.get(['vdlSniff', 'tabPage', 'sentUrls', 'pagePushed'], function (st) {
     if (st.vdlSniff) store.loadFrom(st.vdlSniff);
     if (st.tabPage) tabPage = st.tabPage;
     if (st.sentUrls) sentUrls = st.sentUrls;
+    if (st.pagePushed && typeof st.pagePushed === 'object') pagePushed = st.pagePushed;
     // 已关闭标签页的残留分库清掉（只删不存在的，不动现存标签页的数据）
     try {
       chrome.tabs.query({}, function (tabs) {
         if (chrome.runtime.lastError) return;
         var ids = (tabs || []).map(function (t) { return t.id; });
         store.dropTabsExcept(ids);
+        // pagePushed 同理：只保留还开着的标签页，免得越攒越多
+        Object.keys(pagePushed).forEach(function (k) {
+          if (ids.indexOf(Number(k)) < 0) delete pagePushed[k];
+        });
         updateBadge();
         persist();
       });
@@ -648,6 +666,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         pushPage: pushStat.pageTries,
         pushLastErr: pushStat.lastErr,
         videoPage: '',
+        // 当前页视频标题（popup 兜底视图用，2026-10-02）：加密流站点抓不到直链，
+        // 但「这一页是什么视频」是已知的 —— 标题就是标签页标题（兜底用推送记账里的）。
+        videoTitle: '',
         pagePushAt: 0,
         // 当前页视频时长（秒，0=未知）：复用 pushPageToServer 的 per-tab 记账
         // （popup 没有 scripting 权限、也不该为此加权限，见 manifest 注释）→ 2026-10-02
@@ -666,11 +687,18 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         try {
           chrome.tabs.get(tid, function (tab) {
             var u = '';
-            try { u = (tab && !chrome.runtime.lastError && tab.url) || ''; } catch (e) { /* 关页 */ }
+            var tt = '';
+            try {
+              u = (tab && !chrome.runtime.lastError && tab.url) || '';
+              tt = (tab && !chrome.runtime.lastError && tab.title) || '';
+            } catch (e) { /* 关页 */ }
             var vp = u ? CORE.isVideoPage(u) : '';
             var rec = (vp && pagePushed[tid]) ? pagePushed[tid] : null;
             var ok = !!(rec && vp && rec.key === pageKeyOf(vp));
             snap.videoDuration = ok ? (rec.duration || 0) : 0;   // 时长：popup 展示用（2026-10-02）
+            // 标题优先用标签页**实时**标题（面板打开这一刻它就是当前视频的），
+            // 取不到再退回推送记账里的（那是交给桌面端解析时送的标题）。
+            snap.videoTitle = tt || (ok ? (rec.title || '') : '');
             reply(vp, ok ? rec.at : 0);
           });
         } catch (e) { reply('', 0); }

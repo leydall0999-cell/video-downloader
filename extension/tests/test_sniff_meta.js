@@ -37,6 +37,7 @@ function ok(cond, msg) { eq(!!cond, true, msg); }
 // ---- chrome.* 桩（与 test_page_title_lag.js 同款）----
 const L = {};
 const pushes = [];             // 收到的 /api/sniffer/ext-push 载荷
+const SESSION_SETS = [];       // 每次落 storage.session 的载荷快照（JSON 克隆，供时序断言）
 const TAB_URL = {};
 const TAB_TITLE = {};
 
@@ -57,7 +58,12 @@ globalThis.chrome = {
   },
   storage: {
     local: { get: (_k, cb) => cb({}), set: (_o, cb) => { if (cb) cb(); }, remove: (_k, cb) => { if (cb) cb(); } },
-    session: { get: (_k, cb) => cb({}), set: (_o, cb) => { if (cb) cb(); } },
+    session: {
+      get: (_k, cb) => cb({}),
+      // 克隆后再存：让断言能证明「这次落盘发生在记账写入**之后**」，而不是拿到
+      // 一个还在被后续改动影响的活引用（对象引用会让早期快照也「看起来是对的」）。
+      set: (o, cb) => { SESSION_SETS.push(JSON.parse(JSON.stringify(o || {}))); if (cb) cb(); },
+    },
   },
   action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
   tabs: {
@@ -74,7 +80,7 @@ globalThis.chrome = {
   },
   runtime: {
     lastError: null,
-    getManifest: () => ({ version: '1.0.47' }),
+    getManifest: () => ({ version: '1.0.48' }),
     onMessage: { addListener: (fn) => { L.message = fn; } },
   },
   alarms: { create: () => {}, onAlarm: { addListener: (fn) => { L.alarm = fn; } } },
@@ -95,6 +101,7 @@ const T_TITLE = '（5）某个视频 - YouTube';
 const MP4 = 'https://cdn.example/video/meta-flow.mp4';
 
 const pause = () => new Promise((r) => setTimeout(r, 25));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const lastPush = () => pushes[pushes.length - 1];
 const pushesFor = (u) => pushes.filter((p) => p.items && p.items[0] && p.items[0].url === u);
 function ask(payload, sender) {
@@ -174,6 +181,26 @@ function ask(payload, sender) {
   await pause();
   ok(snap, 'getState 有响应');
   eq(snap.videoDuration, 42, '★ popup 能从 getState 拿到当前页时长');
+  eq(snap.videoTitle, T_TITLE, '★ popup 能拿到当前页视频标题（兜底视图要显示标题）');
+
+  // ---- 6b) 打开面板时的强推（pushPageNow）**不带** duration —— ★ 绝不能把时长抹成 0 ----
+  // 2026-10-02 用户截图实测：加密流兜底视图里的「时长」一直是空的，根因就是
+  // popup 一打开先发 pushPageNow，把刚由页面侧读到的时长覆盖成了 0。
+  ask({ type: 'pushPageNow', tabId: TID, url: PAGE, title: T_TITLE }, {}, () => {});
+  await pause();
+  let snap2 = null;
+  L.message({ type: 'getState', tabId: TID }, {}, (r) => { snap2 = r; });
+  await pause();
+  eq(snap2.videoDuration, 42, '★ 面板强推之后时长仍是 42（同页保留已知时长，不写 0）');
+  eq(snap2.videoTitle, T_TITLE, '强推后标题照常给出');
+  eq(snap2.videoPage, PAGE, '强推后仍认得当前视频页');
+
+  // ---- 6c) 记账必须落 storage.session：SW 挂起被重启后，弹窗照样能答出这一页的信息 ----
+  //（popup 的强推不带 duration，无从重建；不落盘就永久丢失）
+  await sleep(700);   // persist() 是 500ms 节流写入
+  ok(SESSION_SETS.some((s) => s && s.pagePushed && s.pagePushed[TID]
+      && s.pagePushed[TID].duration === 42),
+    '★ pagePushed 记账（含时长）已落 storage.session');
 
   // ---- 7) 换页：新页还没就绪 → 时长归零，不沿用上一页的值 ----
   TAB_URL[TID] = PAGE2;
@@ -181,6 +208,10 @@ function ask(payload, sender) {
   await pause();
   eq(pushesFor(PAGE2).length, 1, '换页必推（新条目）');
   eq(pushesFor(PAGE2)[0].items[0].duration, 0, '★ 新页首推时长未知（0），不沿用上一页');
+  let snap3 = null;
+  L.message({ type: 'getState', tabId: TID }, {}, (r) => { snap3 = r; });
+  await pause();
+  eq(snap3.videoDuration, 0, '★ 换页后 getState 的时长归零（等新页播放器就绪再读）');
 
   // ---- 8) 关掉开关：元信息一样不许往外推 ----
   ask({ type: 'setEnabled', value: false }, {}, () => {});

@@ -91,6 +91,13 @@ button.mini { font-size: 11px; padding: 1px 7px; border-radius: 5px; }
 .list { flex: 1; overflow-y: auto; padding: 8px 12px; }
 .empty { color: var(--muted); text-align: center; padding: 26px 0; font-size: 12px; }
 .empty-tip { line-height: 1.7; }
+/* 兜底视图的「视频信息」两行（2026-10-02）：标题要压得住（深色、稍大），
+   元信息（时长/大小）保持弱化。父级 .empty 是居中的，这里沿用居中。 */
+.empty-title {
+  color: var(--fg); font-size: 13px; font-weight: 600; line-height: 1.5;
+  margin-bottom: 3px; word-break: break-word;
+}
+.empty-meta { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
 .empty-q { margin-top: 6px; color: var(--fg); font-size: 12px; }
 .empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
 .item {
