@@ -4239,7 +4239,7 @@ html.theme-dark .pf-credit-note.is-warn { color: #fbbf24; }
   display: flex; flex-direction: column;
 }
 .pf-ccard-h { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
-.pf-ccard-t { font-size: .92rem; font-weight: 700; color: var(--text, #1f2937); }
+.pf-ccard-t { font-size: 1.02rem; font-weight: 700; color: var(--text, #1f2937); }
 .pf-ccard-sub { font-size: .74rem; color: var(--text-mute, #9ca3af); }
 .pf-ccard-hero { display: flex; align-items: baseline; justify-content: center; gap: .6rem; margin: .55rem 0 .45rem; }
 .pf-ccard-big { font-size: 2.6rem; font-weight: 800; line-height: 1; color: var(--text, #111827); letter-spacing: -1px; }
