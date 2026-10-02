@@ -134,16 +134,82 @@ function persist() {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-/** 徽标 = **当前标签页**的可下载项数（列表已按页隔离，徽标口径必须跟着走）。 */
+// ---- 徽标 = 「本页到底提取到没有」的一眼可见提示（v1.0.49）----
+// 2026-10-02 用户反馈：「让用户知道有提取到，不用点进去才知道有没有提取到」。
+// 旧口径只数 store（本地直链/清单条目），而 YouTube 这类 SABR 站点的收成**不进 store**
+// —— 它们是「整页交给桌面端解析」（pushPageToServer）。只数 store 的话，用户人在 YouTube
+// 上角标永远空着，只能点开面板才知道到底提没提取到；若桌面端没启动，更是看不出任何异常。
+// 现在四态（并同步写进 action.setTitle 悬停提示，不点开也能看明白）：
+//   数字  本地可下载条目数（蓝）—— 直链/HLS，点开就能下
+//   ✓     整页已提取且桌面端**确认收到**（绿）—— 去桌面端「媒体嗅探」看解析结果
+//   !     提交了但桌面端没响应（琥珀）—— 提醒确认「视频工坊」是否在跑
+//   …     刚提交、回执未到（琥珀）
+var BADGE_COLORS = { count: '#2563eb', ok: '#16a34a', warn: '#d97706', off: '#9ca3af' };
+var BADGE_NAME = '视频工坊 媒体嗅探：';
+
+/** chrome.action 的各 setter 在旧 Chrome / 测试桩里可能缺 → 统一守卫调用，
+ *  否则一个缺失的 API 会把后面的设置整段吞掉（外面那层 try 只报错不继续）。 */
+function setAction(name, arg) {
+  try {
+    if (chrome.action && typeof chrome.action[name] === 'function') chrome.action[name](arg);
+  } catch (e) { /* 无 action 场景忽略 */ }
+}
+
+/** 算出当前标签页该显示的角标（纯函数式：只读 store / pagePushed，便于测试钉住）。 */
+function badgeState(tid, tab) {
+  if (!enabled) {
+    return { text: '', color: BADGE_COLORS.off, title: BADGE_NAME + '已暂停（点开可开启）' };
+  }
+  var n = (typeof tid === 'number' && tid >= 0) ? store.count(tid) : 0;
+  var url = (tab && tab.url) || '';
+  var vp = url ? CORE.isVideoPage(url) : '';
+  var rec = null;
+  if (vp && typeof tid === 'number' && tid > 0) {
+    var r = pagePushed[tid];
+    if (r && r.key === pageKeyOf(vp)) rec = r;
+  }
+  if (n > 0) {
+    return {
+      text: n > 99 ? '99+' : String(n),
+      color: BADGE_COLORS.count,
+      title: BADGE_NAME + '本页已提取 ' + n + ' 个可下载资源（点开查看）'
+    };
+  }
+  if (rec && rec.ok === true) {
+    return {
+      text: '✓', color: BADGE_COLORS.ok,
+      title: BADGE_NAME + '本页已提取，已交给桌面端解析（点开本节，或到桌面端「媒体嗅探」查看）'
+    };
+  }
+  if (rec && rec.ok === false) {
+    return {
+      text: '!', color: BADGE_COLORS.warn,
+      title: BADGE_NAME + '本页已尝试提取，但桌面端未响应'
+        + (rec.err ? '（' + rec.err + '）' : '') + ' —— 请确认「视频工坊」已启动'
+    };
+  }
+  if (rec) {
+    return { text: '…', color: BADGE_COLORS.warn, title: BADGE_NAME + '正在提取本页…' };
+  }
+  if (vp) {
+    return {
+      text: '', color: BADGE_COLORS.off,
+      title: BADGE_NAME + '本页是视频页，尚未提取到内容（点开可重新提交）'
+    };
+  }
+  return { text: '', color: BADGE_COLORS.off, title: BADGE_NAME + '本页未提取到可下载内容' };
+}
+
+/** 徽标 = **当前标签页**的提取状态（列表已按页隔离，徽标口径必须跟着走）。 */
 function updateBadge() {
   chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
     var tab = tabs && tabs[0];
     if (tab && typeof tab.id === 'number') activeTabId = tab.id;
-    var n = store.count(activeTabId);
-    try {
-      chrome.action.setBadgeText({ text: n > 0 ? String(n) : '' });
-      chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
-    } catch (e) { /* 无 action 场景忽略 */ }
+    var st = badgeState(activeTabId, tab);
+    setAction('setBadgeText', { text: st.text });
+    setAction('setBadgeBackgroundColor', { color: st.color });
+    setAction('setBadgeTextColor', { color: '#ffffff' });
+    setAction('setTitle', { title: st.title });
   });
 }
 
@@ -246,21 +312,38 @@ function pushPageToServer(tabId, pageUrl, title, force, duration) {
     // 提示块里始终没有时长，就是这一句造成的）。同一视频页（key 一致）保留已知时长；
     // 换页则重置为 0（新页的时长要等它自己的播放器就绪后重新读）。
     var prevRec = pagePushed[tid];
-    var keepDur = (prevRec && prevRec.key === key) ? (prevRec.duration || 0) : 0;
+    var samePage = !!(prevRec && prevRec.key === key);
+    var keepDur = samePage ? (prevRec.duration || 0) : 0;
     pagePushed[tid] = {
       key: key, at: Date.now() / 1000,
-      title: title || '', duration: duration || keepDur
+      title: title || '', duration: duration || keepDur,
+      // 桌面端回执（v1.0.49 角标提示用）：true=确认收到 / false=没响应 / undefined=回执未到。
+      // 同一视频页保留上一次回执 —— 标题/时长的补推（refreshPageTitle）会重进这里，
+      // 若每次都清成 undefined，角标会在 ✓ 与 … 之间来回跳。
+      ok: samePage ? prevRec.ok : undefined,
+      err: samePage ? (prevRec.err || '') : ''
     };
     persist();   // 记账落 storage.session：SW 被挂起重启后仍能答出「这一页的时长/标题」
+    updateBadge();   // 角标立刻反映「正在提取 / 已提取」
   }
   pushTries++;                 // 兼容旧遥测口径（内存值）
   pushStat.tries++;
   pushStat.pageTries++;
   savePushStat();
 
+  // 桌面端回执 → 写回该标签页的记账并刷角标（✓ / !），这是「不用点进去就知道提取到没有」的依据
+  function markResult(okFlag, errText) {
+    if (tid > 0 && pagePushed[tid] && pagePushed[tid].key === key) {
+      pagePushed[tid].ok = !!okFlag;
+      pagePushed[tid].err = okFlag ? '' : String(errText || '').slice(0, 60);
+      persist();
+    }
+    updateBadge();
+  }
+
   function send(t) {
     getEndpoint(function (base) {
-      if (!base) { notePush(false, '未找到桌面端'); return; }
+      if (!base) { notePush(false, '未找到桌面端'); markResult(false, '未找到桌面端'); return; }
       try {
         fetch(base + '/api/sniffer/ext-push', {
           method: 'POST',
@@ -279,12 +362,16 @@ function pushPageToServer(tabId, pageUrl, title, force, duration) {
             }]
           })
         }).then(function (r) {
-          if (r && r.ok) notePush(true);
-          else notePush(false, 'HTTP ' + ((r && r.status) || '?'));
+          if (r && r.ok) { notePush(true); markResult(true, ''); }
+          else {
+            var m = 'HTTP ' + ((r && r.status) || '?');
+            notePush(false, m); markResult(false, m);
+          }
         }).catch(function (e) {
-          notePush(false, (e && e.message) || '网络错误');
+          var m = (e && e.message) || '网络错误';
+          notePush(false, m); markResult(false, m);
         });
-      } catch (e) { notePush(false, '发送异常'); }
+      } catch (e) { notePush(false, '发送异常'); markResult(false, '发送异常'); }
     });
   }
 
@@ -456,6 +543,8 @@ try {
       if (!changeInfo) return;
       var tu = (tab && tab.url) || '';
       if (changeInfo.url) {
+        // 换页先刷角标：新页的 ✓/数字不该沿用上一页的，等 push 回执再更新（v1.0.49）
+        updateBadge();
         checkPagePush(tabId, changeInfo.url, (tab && tab.title) || '');
       }
       // 标题 settle 后补推一次（同页同标题去重，标题抖动不重复打扰）
@@ -713,8 +802,8 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         store.clearAll();
         tabPage = {};
         persist();
-        updateBadge();
       }
+      updateBadge();   // 关掉后角标要立刻清空/变成「已暂停」说明（v1.0.49）
       sendResponse({ ok: true, enabled: enabled });
       return false;
     case 'setCarryCookie':
