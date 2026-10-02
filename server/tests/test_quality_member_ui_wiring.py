@@ -110,7 +110,8 @@ def test_extension_wiring():
           js.count("syncQualityUI()") >= 3, f"出现 {js.count('syncQualityUI()')} 次（定义+调用）")
     man = _read(os.path.join("extension", "manifest.json"))
     check("扩展版本已 bump（改了 popup 必须 bump）",
-          re.search(r'"version":\s*"1\.0\.4[5-9]"', man) is not None,
+          # 1.0.45 起的两位数及以上 patch 号；写死区间（如 4[5-9]）到 1.0.50 就会误报
+          re.search(r'"version":\s*"1\.0\.\d{2,}"', man) is not None,
           (re.search(r'"version":\s*"([^"]+)"', man) or [None, "?"])[1])
 
 
