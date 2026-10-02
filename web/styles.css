@@ -4967,6 +4967,21 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-grant-uid { font-size: .74rem; color: var(--text-mute, #9ca3af); flex: none; }
 .admin-grant-empty { padding: .5rem .6rem; font-size: .82rem; color: var(--text-mute, #9ca3af); }
 /* 可搜索账号选择器（赠送会员）：输入过滤下拉 结束 */
+/* 套餐分类分段切换器（对齐设计稿：浅蓝灰胶囊底 + 白色激活块） */
+.admin-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: #eef1f6; border-radius: 999px; padding: 4px; margin-bottom: .9rem;
+}
+.admin-seg-btn {
+  border: none; background: none; cursor: pointer; border-radius: 999px;
+  padding: .55rem 1.25rem; font-size: .95rem; font-weight: 600; color: #6b7280;
+  transition: background .15s, color .15s;
+}
+.admin-seg-btn:hover { color: #4f46e5; }
+.admin-seg-btn.is-active {
+  background: #fff; color: #4f46e5; font-weight: 700;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, .12);
+}
 .admin-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .admin-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .admin-table th, .admin-table td { text-align: left; padding: .68rem .9rem; border-bottom: 1px solid var(--line); white-space: nowrap; }

@@ -20342,6 +20342,7 @@ el.dwVidPlayer.hidden = true;
     const smtpCancelBtn = $('adminSmtpCancel');
     const smtpMsg = $('adminSmtpMsg');
     const plansBox = $('adminPlansBox');
+    const plansSeg = $('adminPlansSeg');
     const plansSaveBtn = $('adminPlansSave');
     const plansMsg = $('adminPlansMsg');
     let lastConfig = null;
@@ -21008,8 +21009,8 @@ el.dwVidPlayer.hidden = true;
       const ai = (plans.ai_member && plans.ai_member.plans) || {};
       const cp = plans.credit_packs || {};
       const costs = cfg.credit_costs || {};
-      const planBlock = (title, obj, kind) => {
-        let h = `<div class="admin-plan-group"><h4>${title}</h4>`;
+      const planBlock = (title, obj, kind, cat) => {
+        let h = `<div class="admin-plan-group" data-cat="${cat}"><h4>${title}</h4>`;
         Object.keys(obj).forEach((k) => {
           const p = obj[k] || {};
           const extra = kind === 'days'
@@ -21023,10 +21024,10 @@ el.dwVidPlayer.hidden = true;
         });
         return h + '</div>';
       };
-      let html = planBlock('下载会员套餐', dl, 'days');
-      html += planBlock('AI 会员套餐', ai, 'credits');
-      html += planBlock('积分包', cp, 'credits');
-      html += '<div class="admin-plan-group"><h4>AI 积分成本（每次操作消耗积分）</h4>';
+      let html = planBlock('下载会员套餐', dl, 'days', 'dl');
+      html += planBlock('AI 会员套餐', ai, 'credits', 'ai');
+      html += planBlock('积分包', cp, 'credits', 'cp');
+      html += '<div class="admin-plan-group" data-cat="cost"><h4>AI 积分成本（每次操作消耗积分）</h4>';
       Object.keys(costs).forEach((k) => {
         html += `<div class="admin-plan-row" data-cost="${esc(k)}">
           <span class="admin-plan-name">${esc(k)}</span>
@@ -21035,7 +21036,28 @@ el.dwVidPlayer.hidden = true;
       });
       html += '</div>';
       plansBox.innerHTML = html;
+      applyPlansSeg();
     };
+    // 分段切换：只显示选中分类的套餐组；AI 积分成本组（data-cat=cost）常驻显示
+    const applyPlansSeg = (cat) => {
+      if (!plansBox || !plansSeg) return;
+      const cur = cat || (plansSeg.querySelector('.admin-seg-btn.is-active') || {}).dataset?.cat || 'dl';
+      plansSeg.querySelectorAll('.admin-seg-btn').forEach((b) => {
+        const on = b.dataset.cat === cur;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      plansBox.querySelectorAll('.admin-plan-group[data-cat]').forEach((g) => {
+        const c = g.dataset.cat;
+        g.hidden = (c !== 'cost' && c !== cur);
+      });
+    };
+    if (plansSeg) {
+      plansSeg.addEventListener('click', (e) => {
+        const b = e.target.closest('.admin-seg-btn');
+        if (b) applyPlansSeg(b.dataset.cat);
+      });
+    }
     const savePlans = async () => {
       const cfg = lastConfig || {};
       const plans = cfg.plans || {};
