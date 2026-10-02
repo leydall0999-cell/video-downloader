@@ -21086,8 +21086,42 @@ el.dwVidPlayer.hidden = true;
     if (userSearch) userSearch.addEventListener('input', renderUserTable);
 
     // 赠送会员
+    // 可搜索账号选择器（2026-10-03）：原生 select 无法搜索，改为输入过滤下拉；
+    // 隐藏的 adminGrantUser 仍由 fillGrantSelects 同步数据，作为兜底数据源。
+    let _grantPickedUid = '';
+    const grantInput = $('adminGrantUserSearch');
+    const grantList = $('adminGrantUserList');
+    const _grantPick = (m) => {
+      _grantPickedUid = m.user_id;
+      if (grantUserSel) grantUserSel.value = m.user_id;
+      if (grantInput) grantInput.value = m.identifier;
+      if (grantList) { grantList.innerHTML = ''; grantList.hidden = true; }
+    };
+    if (grantInput && grantList) {
+      const renderGrantList = () => {
+        const q = grantInput.value.trim().toLowerCase();
+        const items = lastMembers.filter((m) => !q
+          || String(m.identifier || '').toLowerCase().includes(q)
+          || String(m.user_id || '').toLowerCase().includes(q));
+        grantList.innerHTML = items.slice(0, 60).map((m) =>
+          `<div class="admin-grant-opt${m.user_id === _grantPickedUid ? ' is-active' : ''}" data-uid="${esc(m.user_id)}">`
+          + `<span>${esc(m.identifier)}</span><span class="admin-grant-uid">${esc(m.user_id)}</span></div>`).join('')
+          || '<div class="admin-grant-empty">无匹配账号</div>';
+        grantList.hidden = false;
+      };
+      grantInput.addEventListener('input', () => { _grantPickedUid = ''; renderGrantList(); });
+      grantInput.addEventListener('focus', renderGrantList);
+      grantInput.addEventListener('blur', () => { setTimeout(() => { grantList.hidden = true; }, 160); });
+      grantList.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest('.admin-grant-opt');
+        if (!opt) return;
+        e.preventDefault();
+        const m = lastMembers.find((x) => x.user_id === opt.dataset.uid);
+        if (m) _grantPick(m);
+      });
+    }
     if (grantBtn) grantBtn.addEventListener('click', async () => {
-      const uid = grantUserSel && grantUserSel.value;
+      const uid = _grantPickedUid || (grantUserSel && grantUserSel.value);
       const code = grantCodeSel && grantCodeSel.value;
       if (!uid || !code) return;
       try {

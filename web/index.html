@@ -3782,7 +3782,11 @@
           <div class="admin-toolbar" data-page-node-id="2fzfeT9agMF04YC1xGkwhu">
             <span id="adminMemberCount" class="admin-count" data-page-node-id="E5E3nHg4MpsnOfjJBUHGkR"></span>
             <div class="admin-inline-form" data-page-node-id="uEZm0Jct0TOBvtquP4MzY7">
-              <select id="adminGrantUser" class="admin-input admin-input-sm" data-page-node-id="xwwQKukayE2aKFWxL8AkoO"></select>
+              <div class="admin-grant-box">
+                <input id="adminGrantUserSearch" class="admin-input admin-input-sm" type="text" placeholder="搜索账号（手机号 / 邮箱 / ID）" autocomplete="off" spellcheck="false">
+                <div id="adminGrantUserList" class="admin-grant-list" hidden></div>
+              </div>
+              <select id="adminGrantUser" class="admin-input admin-input-sm" hidden data-page-node-id="xwwQKukayE2aKFWxL8AkoO"></select>
               <select id="adminGrantCode" class="admin-input admin-input-sm" data-page-node-id="c2RSpH7BpbCcnbsHu5veuJ"></select>
               <button type="button" id="adminGrantBtn" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="w5GjJnkbf1ZXtWVCclS5F7">赠送</button>
             </div>

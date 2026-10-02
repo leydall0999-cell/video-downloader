@@ -4909,6 +4909,25 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; flex-wrap: wrap; }
 .admin-count { color: var(--text-mute); font-size: .85rem; }
 .admin-inline-form { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+/* 可搜索账号选择器（赠送会员）：输入过滤下拉 */
+.admin-grant-box { position: relative; display: inline-flex; }
+.admin-grant-box .admin-input { min-width: 240px; }
+.admin-grant-list {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
+  min-width: 100%; max-height: 280px; overflow-y: auto;
+  background: var(--card-bg, #fff); color: var(--text, #1f2937);
+  border: 1px solid var(--line, #d5d9e0); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .16); padding: 4px;
+}
+.admin-grant-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+  padding: .42rem .6rem; border-radius: 7px; font-size: .84rem; cursor: pointer;
+}
+.admin-grant-opt:hover { background: rgba(99, 102, 241, .12); }
+.admin-grant-opt.is-active { background: rgba(99, 102, 241, .2); }
+.admin-grant-uid { font-size: .74rem; color: var(--text-mute, #9ca3af); flex: none; }
+.admin-grant-empty { padding: .5rem .6rem; font-size: .82rem; color: var(--text-mute, #9ca3af); }
+/* 可搜索账号选择器（赠送会员）：输入过滤下拉 结束 */
 .admin-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .admin-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .admin-table th, .admin-table td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
