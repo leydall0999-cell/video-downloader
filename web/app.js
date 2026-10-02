@@ -20497,6 +20497,32 @@ el.dwVidPlayer.hidden = true;
     };
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
     let _monRange = 'day';
+    // 热点路径转中文标签（用户要求不展示英文接口名）；原始路径保留在 title 悬浮提示里
+    const _monPathLabel = (p) => {
+      const path = String(p || '').split('?')[0];
+      const table = [
+        ['/api/admin/visits', '运维监控 · 访客统计'],
+        ['/api/admin/events', '运维监控 · 错误事件'],
+        ['/api/license-alerts/ack', '授权告警 · 确认已读'],
+        ['/api/license-alerts', '授权告警 · 轮询'],
+        ['/api/license-recon', '授权对账'],
+        ['/api/license/heartbeat', '授权心跳'],
+        ['/api/license', '授权接口'],
+        ['/api/tasks', '下载任务列表'],
+        ['/api/nodes', '下载节点列表'],
+        ['/api/version', '版本信息'],
+        ['/api/resolve', '视频解析'],
+        ['/api/cookie', 'Cookie 同步'],
+        ['/api/settings', '应用设置'],
+        ['/api/upload', '分享上传'],
+        ['/robots.txt', '爬虫规则文件'],
+        ['/', '网页首页'],
+      ];
+      for (const [pre, label] of table) {
+        if (path === pre || (pre !== '/' && path.startsWith(pre))) return label;
+      }
+      return path;
+    };
     const _monStatusClass = (s) => (s >= 500 ? 'is-err' : s >= 400 ? 'is-warn' : 'is-ok');
     const _monNginxTime = (t) => {
       try { return new Date(t.replace(' ', 'T').replace(/\+0800$/, '+08:00')).toLocaleString('zh-CN', { hour12: false }); } catch (_) { return t; }
@@ -20512,7 +20538,7 @@ el.dwVidPlayer.hidden = true;
             `<span style="color:${_monStatusClass(+k) === 'is-err' ? '#e5484d' : _monStatusClass(+k) === 'is-warn' ? '#f5a623' : '#30a46c'}">${k}×${v}</span>`).join(' ') || '无';
         paths.innerHTML = (d.top_paths && d.top_paths.length)
           ? '<table class="admin-table"><thead><tr><th>热点路径</th><th>次数</th></tr></thead><tbody>' +
-            d.top_paths.map((p) => `<tr><td>${esc(p.path)}</td><td>${p.count}</td></tr>`).join('') + '</tbody></table>'
+            d.top_paths.map((p) => `<tr><td title="${esc(p.path)}">${esc(_monPathLabel(p.path))}</td><td>${p.count}</td></tr>`).join('') + '</tbody></table>'
           : '<div class="admin-empty">无访问数据</div>';
         const items = (d.recent || []).slice().reverse();
         rec.innerHTML = items.length
