@@ -146,6 +146,12 @@ run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py
 run_one test_quota.py
+#  任务落盘持久化（2026-10-02 B2）：重启后未完成任务恢复为可续传、completed 只在
+#  成品文件仍在时恢复、remove 同步删状态。此前任务表纯内存，重启全丢。
+run_one test_task_persistence.py
+#  下载预检与 PO Token 会话保持（2026-10-02 B1/A1）：体积估算/上限 20GB/磁盘预检、
+#  YouTube 403 降级链必须带回 visitor_data（丢会话=照样 403）。
+run_one test_download_preflight.py
 #  1/3/7 天下载会员档 + 套餐价格单一真源（2026-09-30）：超管在后台改价/改天数后，
 #  展示（/api/member/plans 真身 store.plans()）/ 下单金额 / 发放天数三处必须同步。
 #  此前下单读硬编码 PAY_PLANS、发货读硬编码 DOWNLOAD_PLANS —— 改了等于没改。
