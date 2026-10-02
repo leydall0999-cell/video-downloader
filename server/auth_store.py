@@ -310,7 +310,7 @@ def _rebuild_index(data: dict) -> dict:
     for u in data.get("users", []):
         ident = u.get("identifier")
         uid = u.get("user_id")
-        if ident and uid:
+        if ident and uid and not u.get("deleted_at"):  # 已删除账号不进索引（注销/删除后该号不可登录）
             bi[ident] = uid
     data["by_identifier"] = bi
     return data

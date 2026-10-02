@@ -65,11 +65,13 @@ def _save_users(data: dict[str, Any]) -> None:
 
 
 def list_users() -> list[dict[str, Any]]:
-    """返回用户列表，含会员态与禁用标记。"""
+    """返回用户列表，含会员态与禁用标记；已删除（deleted_at）账号不出现。"""
     from user_membership import get_user_store
     data = _load_users()
     out = []
     for u in data.get("users", []):
+        if u.get("deleted_at"):
+            continue  # 已删除（含用户自助注销）不再出现在后台列表
         uid = u.get("user_id")
         rec: dict[str, Any] = {
             "user_id": uid,
@@ -104,6 +106,31 @@ def set_user_disabled(user_id: str, disabled: bool) -> dict[str, Any]:
         user["updated_at"] = int(time.time())
         _save_users(data)
     return {"ok": True, "disabled": bool(disabled)}
+
+
+def delete_user(user_id: str) -> dict[str, Any]:
+    """后台删除账号（软删除，2026-10-03）：标记 deleted_at + 禁用。
+
+    与用户自助注销同一落盘形态：该 identifier 此后不可登录、不可再注册；
+    记录保留在 users.json 里可审计。超级用户不可删（先降权），
+    「不能删自己」由路由层拦。
+    """
+    import auth_store
+    with auth_store.users_mutation():
+        data = _load_users()
+        user = next((u for u in data["users"] if u["user_id"] == user_id), None)
+        if not user:
+            return {"ok": False, "error": "用户不存在"}
+        if user.get("deleted_at"):
+            return {"ok": False, "error": "账号已删除"}
+        if user.get("is_admin"):
+            return {"ok": False, "error": "超级用户不可删除，请先取消其管理员"}
+        user["deleted_at"] = int(time.time())
+        user["disabled"] = True
+        user["updated_at"] = int(time.time())
+        # identifier 索引由 _save_users → _rebuild_index 重建（已跳过 deleted_at）
+        _save_users(data)
+    return {"ok": True}
 
 
 def reset_user_password(user_id: str, new_password: str) -> dict[str, Any]:

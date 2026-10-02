@@ -22,6 +22,7 @@ from admin_store import (
     list_users,
     set_user_disabled,
     reset_user_password,
+    delete_user,
     list_memberships,
     grant_membership,
     adjust_credits,
@@ -72,6 +73,15 @@ def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), requ
     require_admin(request)
     new_pw = str(payload.get("new_password") or "")
     return reset_user_password(user_id, new_pw)
+
+
+@router.post("/api/admin/users/{user_id}/delete")
+def admin_delete_user(user_id: str, request: Request = None) -> dict[str, Any]:
+    """删除账号（软删除）：不可删自己；超管账号在 admin_store.delete_user 里拦。"""
+    require_admin(request)
+    if user_id == get_current_user_id(request):
+        return {"ok": False, "error": "不能删除当前登录的账号"}
+    return delete_user(user_id)
 
 
 @router.get("/api/admin/memberships")
