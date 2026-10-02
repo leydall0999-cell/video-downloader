@@ -105,6 +105,7 @@ def test_purge_demotes_completed_keeps_history():
     got = store.get(t.id)
     assert got is not None, "历史条目必须保留在任务表"
     assert got.status == "completed" and got.file_expired
+    assert got.to_public_dict()["file_expired"] is True, "API 序列化必须带 file_expired 字段"
     assert got.filepath is None
     assert got.filename == "out.mp4" and got.filesize == 32, "元数据保留供历史展示"
     assert not any(p.is_file() for p in got.workdir.iterdir()), "工作目录文件必须清掉"
