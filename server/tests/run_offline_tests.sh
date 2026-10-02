@@ -85,6 +85,8 @@ run_one test_subtitle_audio.py
 run_one test_subtitle_music_fallback.py
 run_one test_subtitle_lyrics.py
 run_one test_quality_options.py
+run_one test_quality_member_gate.py          # 清晰度会员门槛：免费档 2K/4K → 402 引导开会员（2026-10-02 用户「免费用户 1080 以上要弹会员」）
+run_one test_quality_member_ui_wiring.py     # 清晰度门槛三端接线：后端两入口都挂门 + 前端弹会员中心（不弹＝用户不知道怎么解锁）
 run_one test_yt_pot_starved.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
@@ -348,6 +350,21 @@ echo "=== extension/tests/test_ext_autoreload.js（零点击自动更新：只�
 # 三个致命分支都在「不该动」的一侧（同版本/旧版本/同目标重复），故用行为测试而非源码断言。
 if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_ext_autoreload.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_popup_quality_state.js（清晰度「回显 = 实际发送」，node + DOM/chrome 桩） ==="
+# 2026-10-02 用户截图：下拉选的 2K 1440P，回显却写「最佳画质（自动）」，实际也按 best 下载。
+# 根因是 render(st) 的 `state = st` 抹掉了 quality（快照里没有该字段）。要害全在「两次渲染
+# 之间」，源码断言 grep 不出来，故写成行为测试：改选后必须三处一致，且再渲染一次不许丢。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_popup_quality_state.js"; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))

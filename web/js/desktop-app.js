@@ -715,16 +715,64 @@
       t._timer = setTimeout(() => { t.style.display = 'none'; }, 2600);
     };
 
+    // ---- 会员中心挂载点（2026-10-02）----
+    // 本文件在 app.js 的闭包之外，「弹出会员中心」只能走挂载点（web/app.js 里
+    // window.__vdlOpenMemberCenter = openMemberCenter）。万一挂载点缺失，退回点
+    // 右上角常驻徽标（同一个入口）。
+    const openMember = () => {
+      try {
+        if (typeof window !== 'undefined' && typeof window.__vdlOpenMemberCenter === 'function') {
+          window.__vdlOpenMemberCenter();
+          return true;
+        }
+        const badge = document.getElementById('memberBadge');
+        if (badge) { badge.click(); return true; }
+      } catch (e) { /* 会员中心打不开也不能影响下载主流程 */ }
+      return false;
+    };
+
+    // 会员态缓存（60s，避免每次建任务都打一次心跳）：免费用户的「自动」档要封顶 1080P。
+    // 读不到一律按会员放行（fail-open）—— 宁可漏封一次，也不能把付费用户的高清档封掉。
+    let _memCache = { at: 0, member: true };
+    const isDownloadMember = async () => {
+      const now = Date.now();
+      if (now - _memCache.at < 60000) return _memCache.member;
+      let member = true;
+      try {
+        const st = await request('/api/member/status');
+        member = !!(st && st.download_member && st.download_member.active);
+      } catch (e) { /* 读不到 → 按会员放行 */ }
+      _memCache = { at: now, member: member };
+      return member;
+    };
+
+    /** 建任务真正下发的清晰度（2026-10-02 用户定档「免费用户 1080 以上要开会员」）：
+     *  - 显式 2K/4K：照原样下发，由**后端**权威拦下（402 + 前端弹会员中心）——
+     *    前端不再重复判一遍档位，免得两处判据分叉；
+     *  - 「最佳画质（自动）」+ 免费用户 → 落 1080P（静默封顶），**只对 kind=page**：
+     *    页面交给 yt-dlp 能拿到完整档位表，钉 1080 是安全的；而直链/分片/HLS 清单
+     *    本身就是单一流或按清单走单一变体，1080 的选择器（末尾是 b[height<=1080]，
+     *    没有无条件下探）会「挑不到流」——宁可留这个边界，也不能把现在能下的下载弄坏。
+     *    显式选 2K/4K 的清单条目仍由后端拦住，不受影响。 */
+    const qualityForDownload = async (it) => {
+      const q = sniffQuality(it);
+      if (q !== 'best') return q;
+      if (((it && it.kind) || '') !== 'page') return q;
+      if (await isDownloadMember()) return q;
+      return '1080';
+    };
+
     const downloadItem = async (it, div, silent = false) => {
       const btn = div.querySelector('.dl');
       btn.disabled = true;
       btn.textContent = '创建中…';
       try {
+        const dlQuality = await qualityForDownload(it);
         const data = await request('/api/download', {
           method: 'POST',
           body: JSON.stringify({
             url: it.url,
-            quality: sniffQuality(it),
+            quality: dlQuality,
             title: it.page_title || '',
             cookie: it.cookie || '',
             proxy: '',
@@ -744,13 +792,21 @@
         });
         trackTask(data.task_id, refs, '');
         btn.textContent = '已加入下载 ✓';
-        sniffToast('✓ 已加入下载队列（' + (Q_LABEL[sniffQuality(it)] || sniffQuality(it)) +
+        sniffToast('✓ 已加入下载队列（' + (Q_LABEL[dlQuality] || dlQuality) +
           '）：' + (it.page_title || it.url.slice(0, 60)));
         return { ok: true, message: '' };
       } catch (e) {
         btn.disabled = false;
         btn.textContent = '下载';
-        const msg = (e && e.message) || '未知错误';
+        let msg = (e && e.message) || '未知错误';
+        // 会员墙（清晰度档位 / 每日次数）必须**弹出会员中心**：扩展送来的条目走 silent
+        // 分支（面板上没有可点的按钮），不弹的话用户在浏览器里只看到一行原因，根本不知道
+        // 要去开会员（2026-10-02 用户明确要求「免费用户要弹出会员才能下载」）。
+        if (msg.indexOf('MEMBER_QUOTA|') === 0) {
+          openMember();
+          // 回执要给扩展显示，去掉内部前缀（MEMBER_QUOTA| 是前后端约定码，不是人话）
+          msg = msg.split('|').slice(1).join('|') || msg;
+        }
         // silent（扩展/悬浮球回流的项，没有可点的面板按钮）：不弹桌面端错误框，
         // 由调用方把原因通过回执送回来源方——否则用户在浏览器里只看到「已发送 ✓」，
         // 桌面端却什么都没发生（用户实测抱怨「点下载没反应」）。

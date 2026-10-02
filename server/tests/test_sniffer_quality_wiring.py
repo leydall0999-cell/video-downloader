@@ -9,7 +9,8 @@
 
 修法（三处同时到位，缺一处就是「选了不生效」）：
   ① 后端 cdp_sniffer.add_manual 透传白名单内的 quality（非法/缺省置 ""，由桌面端兜底）；
-  ② 桌面端 downloadItem 用 sniffQuality(it)：条目自带优先，其次面板下拉；
+  ② 桌面端 downloadItem 经 qualityForDownload(it) 下发：条目自带优先，其次面板下拉，
+     免费用户的「自动」档再由 2026-10-02 的会员门槛封顶到 1080P；
   ③ 扩展 popup 有自己的清晰度下拉，随发送上报并落 chrome.storage.local。
 
 清空边界（有意为之，不是漏做）：只对「视频页 / HLS 清单」这类**可解析出多档**的条目
@@ -116,8 +117,15 @@ def main():
           _add({"url": "https://e.com/i.mp4", "kind": "page"}).get("kind") == "media")
 
     # ---------- ② 桌面端：真的用了它，且不再写死 ----------
-    check("downloadItem 用 sniffQuality(it) 建任务",
-          re.search(r"quality: sniffQuality\(it\),", src) is not None)
+    # 2026-10-02：downloadItem 改为经 qualityForDownload(it) 下发（= sniffQuality 逐条目
+    # 定档 + 免费用户的「自动」封顶 1080P）。这里只要「档位判据唯一」这件事不被破坏：
+    # 谁都不许在 downloadItem 里另抄一份判据，也不许绕过封装直接塞 sniffQuality。
+    check("downloadItem 用 qualityForDownload(it) 建任务",
+          "const dlQuality = await qualityForDownload(it);" in src
+          and re.search(r"quality: dlQuality,", src) is not None)
+    check("档位判据仍只有 snifferQuality 一处（qualityForDownload 内部调用它）",
+          "const q = sniffQuality(it);" in src
+          and "quality: sniffQuality(it)," not in src)
     check("旧的写死 quality: 'best' 已消失",
           "quality: 'best'" not in src)
     check("sniffQuality 定义存在",

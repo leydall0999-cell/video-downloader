@@ -234,6 +234,48 @@ def _download_gate_error(request) -> str | None:
         return f"今日免费下载次数已用尽（{qs.get('limit', 10)}/日）— 开通下载会员可解锁 {qs.get('member_limit') or 1000} 次/日"
     return f"今日下载配额已用尽（{qs.get('limit')}/日）"
 
+# 清晰度会员门槛（2026-10-02 用户定档「免费用户要弹出会员才能下载」）：
+#   - 免费档：显式选 >1080P（1440/2160…）不开放 → 402 + 引导开会员。
+#   - 会员档：不额外设限（沿用 download 1000 次/日）。
+# 「最佳画质（自动）」的封顶由前端按来源类型落档（desktop-app.js::qualityForDownload）：
+# 直链/分片本身就是单一流，强塞 1080 会挑不到流（2026-10-01 实测教训），故只在
+# 「页面 / 清单」这类可解析多档的来源上把免费用户的自动档降为 1080P。
+# 不放进 membership 引擎：引擎的 original（原画/4K）键是**按次配额**语义（0/日），
+# 本门槛是**档位权限**语义（免费一次都不给），混用会产出「0/日」这种怪文案。
+FREE_MAX_QUALITY = 1080
+
+
+def _quality_height(quality: str) -> int:
+    """把清晰度键折算成高度；不参与判档的键（best/audio/webm/m4a）返回 0。"""
+    key = (quality or '').strip().lower()
+    if key in (app.downloader.BEST_KEY, app.downloader.AUDIO_KEY,
+               app.downloader.WEBM_KEY, app.downloader.M4A_KEY):
+        return 0
+    try:
+        return int(key)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _quality_gate_error(request, quality: str) -> str | None:
+    """清晰度门（2026-10-02）：免费档 >1080P 需会员。放行返回 None，否则返回引导文案。
+
+    会员态读不到时 fail-open（宁漏管一次，也不让付费用户被挡）。
+    """
+    height = _quality_height(quality)
+    if height <= FREE_MAX_QUALITY:
+        return None
+    try:
+        status = app.current_member_store(request).status()
+    except Exception:  # noqa: BLE001 - 会员态是尽力而为，绝不因读不到就拦人
+        return None
+    if (status.get('download_member') or {}).get('active'):
+        return None
+    label = app.downloader.quality_label(str(height))
+    return (f'免费用户最高支持 {FREE_MAX_QUALITY}P 清晰度（本次选择 {label}）— '
+            f'开通下载会员可解锁 2K/4K 原画')
+
+
 def _stream_referer(host: str) -> str:
     """按平台返回防盗链 Referer：腾讯视频 HLS 分片必须带正确的 Referer 才返回 200。
 
@@ -407,6 +449,10 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     url = app.downloader.canonicalize_video_url(url)
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
+    # 清晰度门（2026-10-02）：免费档选 2K/4K 在**建任务之前**拦下，前端弹会员中心。
+    _qerr = _quality_gate_error(request, payload.quality)
+    if _qerr:
+        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _qerr)
     extract_mode = _valid_extract_mode(payload.extract_script)
     # 出国兜底（2026-09-21）：海外平台 + 已声明对端节点 + 用户未显式指定代理 →
     # 整个下载交给对端执行、成品再回传本机（run_remote_download），本机无需出网链路。
@@ -454,6 +500,10 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
+    # 清晰度门（2026-10-02）：批量与单条同规 —— 免费档不能选 2K/4K。
+    _qerr = _quality_gate_error(request, payload.quality)
+    if _qerr:
+        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _qerr)
     if payload.concurrency > 0:
         app.scheduler.set_concurrency(payload.concurrency)
     retries = payload.retries if payload.retries >= 0 else app.BATCH_RETRIES_DEFAULT

@@ -9549,10 +9549,16 @@ el.dwVidPlayer.hidden = true;
     } catch (error) {
       const _msg2 = (error && error.message) || '';
       if (_msg2.indexOf('MEMBER_QUOTA|') === 0) {
-        // 会员下载配额超限（2026-09-06）：弹会员中心 + 引导
+        // 这里收两种墙，共用 MEMBER_QUOTA| 前缀：
+        //   ① 清晰度档位墙（2026-10-02）：免费用户选 2K/4K → 后端 402
+        //   ② 每日次数墙（2026-09-06）：免费 10 次/日用尽
+        // 第二行引导必须跟着分岔 —— 否则「清晰度不够」会被说成「额度明天刷新」。
         const tip = _msg2.split('|').slice(1).join('|') || '今日免费下载次数已用尽';
         try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
-        showError(tip, '开通下载会员即可继续下载（免费额度每日 24:00 刷新）');
+        const hint = /清晰度/.test(tip)
+          ? '开通下载会员即可解锁 2K/4K 原画（1080P 及以下免费不限档）'
+          : '开通下载会员即可继续下载（免费额度每日 24:00 刷新）';
+        showError(tip, hint);
       } else if (error.subscribe) {
         promptSubscribe();
         showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
@@ -18022,6 +18028,10 @@ el.dwVidPlayer.hidden = true;
     await Promise.all([renderMemberStatus(), renderMemberPlans(), renderCloudAccount()]);
   }
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
+  // 跨文件挂载点（2026-10-02）：桌面壳的「媒体嗅探」面板在 web/js/desktop-app.js，
+  // 它不在本闭包内，拿不到 openMemberCenter。免费用户从扩展/面板选 2K/4K 被后端拦下时，
+  // 必须由它把会员中心弹出来 —— 只靠 #memberBadge 的 click 代理太隐晦、也没有名字可测。
+  window.__vdlOpenMemberCenter = openMemberCenter;
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
   if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
   // 右上角「👤 账号」常驻入口：未登录打开登录弹窗；已登录打开用户资料卡（不再直跳退出确认）

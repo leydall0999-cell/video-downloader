@@ -48,6 +48,19 @@ function qualityForItem(it) {
   return state.quality || 'best';
 }
 
+/** 把 state.quality 同步到两处 UI：下拉选中值 + 空状态回显。
+ *
+ * 两处必须永远一致 —— 用户判断「选了有没有生效」只看这两处；曾经出现
+ * 「下拉显示 2K 1440P、回显却是最佳画质（自动）」的自相矛盾（2026-10-02 用户截图）。
+ */
+function syncQualityUI() {
+  var q = state.quality || 'best';
+  var sel = $('sendQuality');
+  if (sel && sel.value !== q) sel.value = q;
+  var line = document.querySelector('.empty-q');
+  if (line) line.textContent = '将以「' + qualityLabel(q) + '」下载';
+}
+
 function fmtTime(ts) {
   if (!ts) return '';
   var d = new Date(ts * 1000);
@@ -142,7 +155,14 @@ function renderItem(it) {
 }
 
 function render(st) {
-  state = st;
+  // ⚠️ 2026-10-02 用户截图实测：这里原本直接 `state = st`，而后台 getState 快照里
+  //   **没有 quality 字段**（见 background.js 的 snap）→ 用户选的清晰度当场被抹成
+  //   undefined。下拉 DOM 因为下面那句 `state.quality &&` 守卫没被重置，看起来还停在
+  //   「2K 1440P」，实际发送的却是 best（截图现象：下拉 2K 1440P、回显「最佳画质（自动）」）。
+  //   现在把用户选的档位显式接过来，只有快照真的带回合法值才覆盖。
+  var keptQuality = (state && state.quality) || 'best';
+  state = st || {};
+  if (QUALITY_OPTIONS.indexOf(state.quality) < 0) state.quality = keptQuality;
   var epEl = $('endpointText');
   if (st.endpoint) {
     epEl.textContent = '已连接桌面端';
@@ -153,9 +173,6 @@ function render(st) {
   }
   $('sniffToggle').checked = st.enabled;
   $('carryCookie').checked = st.carryCookie !== false;
-  // 清晰度下拉跟随 state（改选后 state 立即更新，这里只在重渲染时对齐一次）
-  var qsel = $('sendQuality');
-  if (qsel && state.quality && qsel.value !== state.quality) qsel.value = state.quality;
 
   // 桌面端未登录时必须提前说清楚：否则用户点下载只会看到桌面端弹登录框
   //（浏览器弹窗焦点在前台，桌面端窗口在后台，用户以为「没反应」）。
@@ -218,6 +235,10 @@ function render(st) {
   } else {
     items.forEach(function (it) { listEl.appendChild(renderItem(it)); });
   }
+
+  // 清晰度 UI 同步放在最后：空状态刚重建完（上一轮那个已被 innerHTML='' 丢掉），
+  // 这样下拉与回显都指向当前这一份 DOM。
+  syncQualityUI();
 
   var note = $('segNote');
   if (segs.length) {
@@ -479,8 +500,7 @@ $('sendQuality').addEventListener('change', function (e) {
   var v = e.target.value;
   state.quality = QUALITY_OPTIONS.indexOf(v) >= 0 ? v : 'best';
   try { chrome.storage.local.set({ sendQuality: state.quality }); } catch (err) { /* 静默 */ }
-  var nowEl = document.querySelector('.empty-q');
-  if (nowEl) nowEl.textContent = '将以「' + qualityLabel(state.quality) + '」下载';
+  syncQualityUI();
 });
 $('clearAll').addEventListener('click', function () {
   chrome.runtime.sendMessage({ type: 'clear' }, refresh);
@@ -584,8 +604,9 @@ try {
   chrome.storage.local.get([QUALITY_STORE_KEY], function (st) {
     var v = st && st[QUALITY_STORE_KEY];
     if (typeof v === 'string' && QUALITY_OPTIONS.indexOf(v) >= 0) state.quality = v;
-    var sel = $('sendQuality');
-    if (sel) sel.value = state.quality;
+    // 读数可能晚于第一次 render（异步），这里必须再同步一次 UI —— 否则下拉是记忆值、
+    // 回显却还是默认档（2026-10-02 那个「选了没生效」的现象就是这么来的）。
+    syncQualityUI();
   });
 } catch (e) { /* 静默 */ }
 
