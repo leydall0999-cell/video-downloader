@@ -4973,7 +4973,8 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-table th { background: #f7f8fa; color: #4b5563; font-weight: 600; position: sticky; top: 0; }
 .admin-st-bad { color: #d5304b; font-weight: 600; }
 .admin-table tr:last-child td { border-bottom: none; }
-.admin-ops { display: flex; gap: .4rem; flex-wrap: wrap; }
+.admin-ops { display: flex; gap: .4rem; flex-wrap: nowrap; align-items: center; }
+.admin-ops .admin-btn-sm { padding: .38rem .6rem; white-space: nowrap; }
 .admin-empty { text-align: center; color: var(--text-mute); padding: 1.5rem; }
 .admin-tag { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; }
 .admin-tag-ok { background: var(--success-soft); color: var(--success); }
