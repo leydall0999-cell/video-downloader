@@ -112,6 +112,9 @@ run_one test_task_persistence.py
 #  YouTube 403 降级链必须带回 visitor_data（丢会话=照样 403）。
 run_one test_download_preflight.py
 run_node test_share_web.mjs                # 网页版「生成二维码/生成网页」：登录门禁/凭据三头/计数/受限上限/合成器红线/本地二维码（2026-09-30）
+#  下载失败矩阵重试与 aria2c 默认化（2026-10-02 A2/B4 移植）：可重试失败换策略重试
+#  （切换下载器→切 HLS 链路，最多额外 2 次）、auto 默认启用 aria2c、硬上限到点仍在推进则延长等待（B3）。
+run_one test_download_matrix.py
 
 echo ""
 echo "========================================="
