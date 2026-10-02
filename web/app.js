@@ -20950,7 +20950,9 @@ el.dwVidPlayer.hidden = true;
           <button class="admin-btn admin-btn-sm" data-smtp-del="${i}">删除</button>
         </td>
       </tr>`).join('');
-      smtpList.innerHTML = head + '<tbody>' + rows + '</tbody>';
+      // adminSmtpList 是 div：table 系标签必须包在 <table> 里，否则浏览器解析时直接丢弃，
+      // 只剩文字和按钮挤成一团（系统配置 SMTP 列表排版乱掉的根因）。
+      smtpList.innerHTML = '<table class="admin-table">' + head + '<tbody>' + rows + '</tbody></table>';
     };
 
     // SMTP 表单：idx=null 新增，否则编辑第 idx 个
