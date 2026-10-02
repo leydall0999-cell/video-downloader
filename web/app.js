@@ -18377,8 +18377,9 @@ el.dwVidPlayer.hidden = true;
       const dl = ms.download_member || {};
       const ai = ms.ai_member || {};
       const memberRows = [];
-      if (dl.active) memberRows.push(`<div class="pf-row"><span>下载会员</span><span>${esc('至 ' + _memberFmtDate(dl.expire_at))}</span></div>`);
-      if (ai.active) memberRows.push(`<div class="pf-row"><span>AI 会员</span><span>${esc('至 ' + _memberFmtDate(ai.expire_at))}</span></div>`);
+      // 2026-10-03 改版：渐变会员卡行（盾牌图标 + 名称 + 有效期至 …），样式见 .pf-mrow
+      if (dl.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-dl">🛡</span><span class="pf-mrow-name">下载会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(dl.expire_at))}</span></div>`);
+      if (ai.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-ai">🛡</span><span class="pf-mrow-name">AI 会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(ai.expire_at))}</span></div>`);
       if (memberRows.length) {
         if (el.profMemberList) { el.profMemberList.innerHTML = memberRows.join(''); el.profMemberList.hidden = false; }
         if (el.profMemberNone) el.profMemberNone.hidden = true;
@@ -18404,6 +18405,8 @@ el.dwVidPlayer.hidden = true;
       if (el.profCreditsPerm) el.profCreditsPerm.textContent = '—';
       if (el.profCreditsAiNote) el.profCreditsAiNote.textContent = '有效期随 AI 会员到期日，到期清零';
       if (el.profCreditsPermNote) el.profCreditsPermNote.textContent = '永不过期，长期有效';
+      var _alertNode = document.getElementById('profCreditsAlert');
+      if (_alertNode) _alertNode.hidden = true;
     }
     // 记录（即便 prof 请求失败也渲染空态表格，避免空白面板）
     const credits = (prof && prof.credit_history) || [];
@@ -18435,6 +18438,9 @@ el.dwVidPlayer.hidden = true;
   function _renderCreditNotes(ai, perm) {
     const aiNode = el.profCreditsAiNote;
     const permNode = el.profCreditsPermNote;
+    // 2026-10-03 改版：hero 大数字下的橙色胶囊，仅 AI 积分临期（≤7 天）时出现
+    const alertNode = document.getElementById('profCreditsAlert');
+    let alertDays = 0;
     if (aiNode) {
       aiNode.classList.remove('is-warn', 'is-muted');
       const left = Number((ai && ai.credits_left) || 0);
@@ -18449,6 +18455,7 @@ el.dwVidPlayer.hidden = true;
         if (days <= 7) {
           aiNode.textContent = '⚠️ 有效期至 ' + until + '，仅剩 ' + days + ' 天，到期清零';
           aiNode.classList.add('is-warn');
+          alertDays = days;
         } else {
           aiNode.textContent = '有效期至 ' + until + '，到期自动清零';
         }
@@ -18458,6 +18465,14 @@ el.dwVidPlayer.hidden = true;
       permNode.textContent = perm > 0
         ? '永不过期，长期有效'
         : '永不过期，购买积分包后长期有效';
+    }
+    if (alertNode) {
+      if (alertDays > 0) {
+        alertNode.textContent = '部分积分仅剩 ' + alertDays + ' 天，到期清零';
+        alertNode.hidden = false;
+      } else {
+        alertNode.hidden = true;
+      }
     }
   }
 
