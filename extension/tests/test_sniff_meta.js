@@ -101,7 +101,7 @@ globalThis.chrome = {
   },
   runtime: {
     lastError: null,
-    getManifest: () => ({ version: '1.0.49' }),
+    getManifest: () => ({ version: '1.0.50' }),
     onMessage: { addListener: (fn) => { L.message = fn; } },
   },
   alarms: { create: () => {}, onAlarm: { addListener: (fn) => { L.alarm = fn; } } },
