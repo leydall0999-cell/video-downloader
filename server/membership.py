@@ -220,13 +220,64 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
     return out
 
 
+# ── 套餐价格云端真源（2026-10-03）────────────────────────────────────────────
+# 授权中心（/api/license/plans）是价格唯一真源：桌面后台改价会下发云端，网页版
+# 这里按 TTL 拉取覆盖到本地默认之上。云端不可达时自动回退本机覆盖层 + 代码常量。
+_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}}
+_CLOUD_PLANS_TTL = 300.0
+
+
+def _license_api(path: str) -> str:
+    """授权中心接口基址；未配置返回空串（调用方回退本机）。"""
+    base = ""
+    try:
+        import license_client
+        base = str(license_client.license_base() or "").rstrip("/")
+    except Exception:  # noqa: BLE001 — 云端不可用不该影响网页
+        base = str(os.environ.get("VDL_LICENSE_BASE") or "").rstrip("/")
+    return f"{base}{path}" if base else ""
+
+
+def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
+    """从授权中心拉价格覆盖表。失败/未配置返回 None → 调用方回退本机。
+
+    设 `VDL_PLANS_CLOUD=0` 可完全关闭云端取价（离线测试/单机部署用）。
+    """
+    if str(os.environ.get("VDL_PLANS_CLOUD") or "1").strip().lower() in ("0", "false", "off"):
+        return None
+    url = _license_api("/api/license/plans")
+    if not url:
+        return None
+    now = time.time()
+    if not force and (now - float(_CLOUD_PLANS_CACHE.get("ts") or 0.0)) < _CLOUD_PLANS_TTL:
+        return _CLOUD_PLANS_CACHE.get("plans") or {}
+    try:
+        import urllib.request as _rq
+        req = _rq.Request(url, data=b"{}", method="POST",
+                          headers={"Content-Type": "application/json"})
+        with _rq.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        plans = data.get("plans") if isinstance(data, dict) else None
+        if not isinstance(plans, dict):
+            return None
+        _CLOUD_PLANS_CACHE["ts"] = now
+        _CLOUD_PLANS_CACHE["plans"] = plans
+        return plans
+    except Exception:  # noqa: BLE001 — 网络/协议异常一律回退本机
+        return None
+
+
 def effective_plans() -> dict[str, dict[str, Any]]:
-    """生效套餐表（覆盖层逐字段叠加 → 代码常量）。展示 / 下单 / 发放共用此真源。"""
+    """生效套餐表：代码常量 ← 本机 plans.json 覆盖层 ← 授权中心覆盖（云端最高）。"""
     ov = load_plan_overrides()
+    cloud = cloud_plan_overrides() or {}
     return {
-        "download_plans": _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")),
-        "ai_plans": _overlay_plans(AI_PLANS, ov.get("ai_plans")),
-        "credit_packs": _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")),
+        "download_plans": _overlay_plans(
+            _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans")), cloud.get("download_plans")),
+        "ai_plans": _overlay_plans(
+            _overlay_plans(AI_PLANS, ov.get("ai_plans")), cloud.get("ai_plans")),
+        "credit_packs": _overlay_plans(
+            _overlay_plans(CREDIT_PACKS, ov.get("credit_packs")), cloud.get("credit_packs")),
     }
 
 
