@@ -5111,6 +5111,8 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
   display: flex; align-items: baseline; justify-content: space-between;
   margin-bottom: .45rem; gap: .8rem;
 }
+/* hidden 兜底：display:flex 会盖过 UA 的 [hidden]{display:none}（2026-10-03 当前版本块只在刚更新时展示） */
+.pf-changelog-head[hidden] { display: none; }
 .pf-changelog-title { font-size: .86rem; font-weight: 700; color: var(--text, #1f2937); }
 .pf-changelog-date { font-size: .72rem; color: var(--text-mute, #64748b); flex: none; }
 .pf-changelog-list { margin: 0; padding-left: 1.15rem; }

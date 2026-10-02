@@ -18576,8 +18576,30 @@ el.dwVidPlayer.hidden = true;
       }
     }
     if (!items.length) { box.hidden = true; return; }
+    // 2026-10-03 用户要求：当前版本的更新内容只在「刚更新完」时展示一次，
+    // 之后（版本没变的后续打开）只保留历史版本列表。
+    // 判据：localStorage 记住已展示过的版本号，版本号变化才视为刚更新。
+    const head = document.getElementById('profChangelogHead');
+    const hist = el.profChangelogHistory;
+    let seenVer = '';
+    try { seenVer = localStorage.getItem('vdl_changelog_seen_ver') || ''; } catch (_) { /* 隐私模式等 */ }
+    const fresh = !!cur && seenVer !== cur;
+    if (fresh) {
+      try { localStorage.setItem('vdl_changelog_seen_ver', cur); } catch (_) { /* 忽略 */ }
+    }
+    if (!fresh) {
+      // 已展示过本版本：隐藏「当前版本」标题与条目列表，只留历史版本区
+      if (head) head.hidden = true;
+      list.hidden = true;
+      if (hist) hist.style.borderTop = 'none';
+      box.hidden = false;
+      return;
+    }
+    if (hist) hist.style.borderTop = '';
     if (el.profChangelogTitle) el.profChangelogTitle.textContent = title;
     if (el.profChangelogDate) el.profChangelogDate.textContent = dateText;
+    if (head) head.hidden = false;
+    list.hidden = false;
     list.replaceChildren(...items.map((t) => {
       const li = document.createElement('li');
       li.textContent = t;
