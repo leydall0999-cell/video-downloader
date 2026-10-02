@@ -18403,7 +18403,7 @@ el.dwVidPlayer.hidden = true;
       if (el.profCreditsTotal) el.profCreditsTotal.textContent = '—';
       if (el.profCreditsAi) el.profCreditsAi.textContent = '—';
       if (el.profCreditsPerm) el.profCreditsPerm.textContent = '—';
-      if (el.profCreditsAiNote) el.profCreditsAiNote.textContent = '有效期随 AI 会员到期日，到期清零';
+      if (el.profCreditsAiNote) el.profCreditsAiNote.textContent = '◷ 有效期随 AI 会员到期日，到期清零';
       if (el.profCreditsPermNote) el.profCreditsPermNote.textContent = '永不过期，长期有效';
       var _alertNode = document.getElementById('profCreditsAlert');
       if (_alertNode) _alertNode.hidden = true;
@@ -18447,7 +18447,7 @@ el.dwVidPlayer.hidden = true;
       const exp = Number((ai && ai.expire_at) || 0);
       const active = !!(ai && ai.active);
       if (!active || !exp || left <= 0) {
-        aiNode.textContent = '开通 AI 会员后获得，有效期随会员到期日（到期清零）';
+        aiNode.textContent = '◷ 开通 AI 会员后获得，有效期随会员到期日（到期清零）';
         aiNode.classList.add('is-muted');
       } else {
         const days = Math.ceil((exp * 1000 - Date.now()) / 86400000);
@@ -18457,14 +18457,14 @@ el.dwVidPlayer.hidden = true;
           aiNode.classList.add('is-warn');
           alertDays = days;
         } else {
-          aiNode.textContent = '有效期至 ' + until + '，到期自动清零';
+          aiNode.textContent = '◷ 有期限，有效期至 ' + until + '，到期自动清零';
         }
       }
     }
     if (permNode) {
       permNode.textContent = perm > 0
-        ? '永不过期，长期有效'
-        : '永不过期，购买积分包后长期有效';
+        ? '◷ 永久不过期，长期有效'
+        : '◷ 永久不过期，购买积分包后长期有效';
     }
     if (alertNode) {
       if (alertDays > 0) {
