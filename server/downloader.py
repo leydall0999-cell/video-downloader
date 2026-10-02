@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import glob
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -1184,7 +1185,10 @@ def _resolve_proxy(host: str = "") -> str:
     return os.environ.get("https_proxy") or os.environ.get("http_proxy") or ""
 DOWNLOAD_RETRIES = 3
 # 下载体积上限（MB）：防止被当成免费大盘偷跑带宽 / 撑爆磁盘。设为 0 表示不限。
-_MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "2048") or 2048)
+# 2026-10-02 B1：2048 → 20480。2GB 把 4K/长视频直接拒之门外（大文件体验的第一杀手）；
+# 撑爆磁盘的风险改由下载前「磁盘余量预检」兜底（见 _preflight_space_check），
+# 而不是靠一刀切的体积上限。
+_MAX_FILE_MB = int(os.environ.get("VDL_MAX_FILE_MB", "20480") or 20480)
 _MAX_FILE_BYTES = _MAX_FILE_MB * 1024 * 1024
 # 国内站 m3u8 分片并行下载段数。低并发易触发 CDN 慢速 trickle（单连接被限速到几 KB/s），
 # 适度提高可让多连接分摊带宽、显著改善长视频下载速度。
@@ -1253,6 +1257,63 @@ def _has_partial(workdir: Path | None) -> bool:
         return False
     except OSError:
         return False
+
+def _fmt_gb(n: float) -> str:
+    """字节数的人类可读表示（预检报错文案用）。"""
+    for unit, factor in (("B", 1), ("KB", 1024), ("MB", 1024**2), ("GB", 1024**3)):
+        if n < factor * 1024 or unit == "GB":
+            return f"{n / factor:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+    return f"{n:.0f} B"
+
+def _estimate_info_bytes(info: dict[str, Any]) -> int:
+    """从解析结果估算下载总体积（字节，0=未知）。
+
+    口径：requested_formats（DASH 双流取和）→ filesize/filesize_approx 逐级兜底。
+    HLS 清单通常拿不到整卷体积，返回 0，由「磁盘余量预检」按已知信息兜底。
+    """
+    if not isinstance(info, dict):
+        return 0
+    total = 0
+    fmts = info.get("requested_formats") or []
+    if fmts:
+        for f in fmts:
+            total += int(f.get("filesize") or f.get("filesize_approx") or 0)
+        return total
+    return int(info.get("filesize") or info.get("filesize_approx") or 0)
+
+def _preflight_space_check(task: DownloadTask, info: dict[str, Any]) -> None:
+    """下载前预检：体积上限与磁盘余量（B1，2026-10-02）。
+
+    上限超了/磁盘不够都在**开下之前**给出人话错误，而不是让 yt-dlp 半途
+    静默跳过（max-filesize 超限是「无声无果」）或 ENOSPC 死在 90%。
+    体积未知（HLS）时只查磁盘「绝对紧张」兜底（余量 < 1GB 直接拦）。
+    """
+    est = _estimate_info_bytes(info)
+    if _MAX_FILE_BYTES and est > _MAX_FILE_BYTES:
+        raise ResolveError(
+            f"视频约 {_fmt_gb(est)}，超过当前下载上限 {_MAX_FILE_MB} MB",
+            "可在启动参数设置环境变量 VDL_MAX_FILE_MB 调高上限，或选择更低清晰度。",
+            category="too_large",
+        )
+    workdir = task.workdir
+    if not workdir:
+        return
+    try:
+        free = shutil.disk_usage(workdir).free
+    except OSError:
+        return
+    margin = 512 * 1024 * 1024   # 合并/封装还要一份临时空间，留 512MB 余量
+    if est:
+        need = est + margin
+    else:
+        need = 1024 * 1024 * 1024  # 体积未知：至少要求 1GB 可用
+    if free < need:
+        raise ResolveError(
+            f"磁盘空间不足：预计需要 {_fmt_gb(need)}，当前仅剩 {_fmt_gb(free)}",
+            "请清理磁盘空间或选择更低清晰度后重试。",
+            category="disk_full",
+        )
+
 MAX_TITLE_CHARS = 80
 MAX_HINT_CHARS = 180
 DOWNLOAD_PHASE_CEILING = 97.0  # 下载阶段最多显示到 97%，剩余留给合并/转码
@@ -4683,9 +4744,10 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         # 对部分格式会重新取 URL，无 pot 的请求在数据中心 IP 下被 CDN 403
         # （实测 YouTube 无 Cookie 下载卡 29.93% 后 403）。与解析阶段保持一致会话。
         _task_host = _host_of(task.url)
+        _yd_vd = ""   # 解析/下载共用的 visitor_data（PO Token 会话），403 降级链也要带上
         if _task_host and _is_youtube_host(_task_host) and not (cookie or "").strip():
             try:
-                _yd_vd = _fetch_youtube_visitor_data(effective_proxy)
+                _yd_vd = _fetch_youtube_visitor_data(effective_proxy) or ""
                 if _yd_vd:
                     _ya = _dl_opts.setdefault("extractor_args", {}).setdefault("youtube", {})
                     _ya.setdefault("visitor_data", [_yd_vd])
@@ -4811,6 +4873,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         info["ext"] = "mp4"
 
             # 阶段 2：真正开始下载；先把状态置为 downloading，看门狗才能生效
+            # 开下之前先预检：体积上限 / 磁盘余量不够直接给人话错误（B1，2026-10-02），
+            # 别让任务闷头下到 90% 才 ENOSPC，或被 max-filesize 静默跳过。
+            _preflight_space_check(task, info)
             task.add_step("下载音视频", "running", f"已选清晰度：{task.quality}")
             task.log(f"开始下载：{task.quality}")
             store.update(task.id, status="downloading", progress=0.0)
@@ -4883,10 +4948,16 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                                 _fb_opts = dict(_fb_base)
                                 _fb_opts["format"] = _chain
                                 _ya = _fb_opts.setdefault("extractor_args", {}).setdefault("youtube", {})
-                                _ya["player_client"] = [_client]
-                                # 免 Cookie 时保持 PO Token 上下文（bgutil 不可达则显式关，防 ping 挂死）
+                                if _client != "(default)":
+                                    _ya["player_client"] = [_client]
+                                # 免 Cookie 时保持 PO Token 会话（A1，2026-10-02）：
+                                # _fb_base 是新构建的，会丢掉首试注入的 visitor_data——
+                                # 没有同一 visitor 会话，pot 与会话不匹配照样 403。
+                                # bgutil 不可达则显式关 fetch_pot，防 ping 挂死。
                                 if not (cookie or "").strip():
                                     _ya.setdefault("fetch_pot", ["always"] if _bgutil_reachable() else ["never"])
+                                    if _yd_vd:
+                                        _ya["visitor_data"] = [_yd_vd]
                                 with _YoutubeDL(_fb_opts) as _ydl2:
                                     info = _ydl2.extract_info(task.url, download=False) or info
                                     if info.get("title"):
@@ -4957,6 +5028,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         cat = getattr(exc, "category", None)
         if not cat:
             cat = "network" if isinstance(exc, OSError) else "unknown"
+        if isinstance(exc, OSError) and ("no space left" in str(exc).lower() or getattr(exc, "errno", None) == 28):
+            # 下载中途磁盘满：预检（_preflight_space_check）拦不到的缺口（如 HLS 体积未知）
+            message = "磁盘空间不足，下载中断"
+            cat = "disk_full"
+            task.log(f"ENOSPC：{exc}")
         _mark_step_error(task, message)
         store.update(task.id, status="failed", error=message, hint=_clean_message(str(exc)),
                      category=cat, resumable=_has_partial(task.workdir))

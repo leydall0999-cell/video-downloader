@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import threading
@@ -15,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from atomic_io import atomic_write_json
+
 TaskStatus = Literal["pending", "downloading", "merging", "paused", "completed", "failed", "canceled"]
 StepStatus = Literal["pending", "running", "done", "error"]
 
@@ -22,6 +25,38 @@ TASK_TTL_SECONDS = 60 * 60  # 成品文件保留 1 小时
 TASK_ID_LENGTH = 16
 TASK_DIR_PATTERN = re.compile(rf"^[0-9a-f]{{{TASK_ID_LENGTH}}}$")
 _MAX_LOG_LINES = 200
+
+# ---- 落盘持久化（B2，2026-10-02）----
+# 任务状态写 DOWNLOAD_DIR/tasks_state.json：App 重启后未完成任务恢复为
+# 「失败 + 可续传」（磁盘分片本来就在，同任务点继续即可续），完成任务保留
+# 最近 50 条元数据（文件仍在 TTL 内才能重新保存）。
+STATE_FILENAME = "tasks_state.json"
+_PERSIST_INTERVAL = 2.0        # 进度类变更的落盘节流（秒）
+_MAX_PERSISTED_COMPLETED = 50  # 状态文件里最多保留多少条已完成任务
+
+_PERSIST_FIELDS = (
+    "url", "title", "platform", "quality", "quality_key", "status",
+    "progress", "downloaded_bytes", "total_bytes", "filename", "filesize",
+    "error", "hint", "created_at", "extract_mode",
+    "concurrent_fragments", "downloader_type", "cookie", "proxy",
+    "source_url", "play_url", "watch_options", "is_hls", "resumable",
+)
+
+
+def _has_partial_file(workdir: Path | None) -> bool:
+    """工作目录里是否残留可续传的部分文件（与 downloader._has_partial 同口径，避免循环导入）。"""
+    if not workdir or not workdir.is_dir():
+        return False
+    try:
+        for p in workdir.iterdir():
+            if not p.is_file():
+                continue
+            name = p.name
+            if name.endswith((".part", ".aria2", ".ytdl")) or ".Frag" in name:
+                return True
+        return False
+    except OSError:
+        return False
 
 
 @dataclass
@@ -143,13 +178,125 @@ class DownloadTask:
 
 
 class TaskStore:
-    """线程安全的任务表。"""
+    """线程安全的任务表。状态落盘 tasks_state.json，重启后可恢复。"""
 
     def __init__(self, root: Path) -> None:
         self._root = root
         self._tasks: dict[str, DownloadTask] = {}
         self._lock = threading.Lock()
         self._root.mkdir(parents=True, exist_ok=True)
+        self._state_path = self._root / STATE_FILENAME
+        self._last_persist = 0.0
+        self._persist_dirty = False
+        self._load_state()
+
+    # ---- 落盘 ----
+
+    def _snapshot_locked(self) -> list[dict]:
+        rows = []
+        for t in self._tasks.values():
+            row = {k: getattr(t, k) for k in _PERSIST_FIELDS}
+            row["id"] = t.id
+            row["filepath"] = str(t.filepath) if t.filepath else ""
+            rows.append(row)
+        # 状态文件只保留最近 N 条已完成，未完成任务全量保留（它们才是恢复的意义所在）
+        finished = sorted(
+            (r for r in rows if r["status"] in ("completed", "failed", "canceled")),
+            key=lambda r: r.get("created_at") or 0, reverse=True)
+        if len(finished) > _MAX_PERSISTED_COMPLETED:
+            drop = {r["id"] for r in finished[_MAX_PERSISTED_COMPLETED:]}
+            rows = [r for r in rows if r["id"] not in drop]
+        return rows
+
+    def _persist_locked(self, force: bool = False) -> None:
+        now = time.time()
+        if not force and (now - self._last_persist) < _PERSIST_INTERVAL:
+            self._persist_dirty = True
+            return
+        self._last_persist = now
+        self._persist_dirty = False
+        # 原子落盘（守卫 test_config_atomic_write 抓过固定名 .tmp 的撕裂反证）：
+        # tasks_state.json 与配额/账号表同级——半截 JSON 会让重启恢复直接丢光。
+        try:
+            atomic_write_json(self._state_path, {
+                "version": 1, "saved_at": now, "tasks": self._snapshot_locked(),
+            })
+        except OSError:
+            pass
+
+    def flush(self) -> None:
+        """立即落盘（供关键节点与关停前调用）。"""
+        with self._lock:
+            self._persist_locked(force=True)
+
+    def _load_state(self) -> None:
+        try:
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError):
+            return
+        now = time.time()
+        restored = 0
+        for row in raw.get("tasks", []):
+            tid = str(row.get("id") or "")
+            if not TASK_DIR_PATTERN.match(tid) or tid in self._tasks:
+                continue
+            workdir = self._root / tid
+            if not workdir.is_dir():
+                continue  # 工作目录已被 TTL 清掉：只剩元数据没有意义
+            status = row.get("status")
+            fp = None
+            if status == "completed":
+                fp = Path(str(row.get("filepath") or "")) if row.get("filepath") else None
+                if not fp or not fp.exists():
+                    continue  # 成品已随 TTL 清理：不恢复僵尸条目
+                created_at = float(row.get("created_at") or now)
+            else:
+                created_at = float(row.get("created_at") or now)
+            task = DownloadTask(
+                id=tid, url=str(row.get("url") or ""), title=str(row.get("title") or ""),
+                platform=str(row.get("platform") or ""), quality=str(row.get("quality") or ""),
+                quality_key=str(row.get("quality_key") or "best"),
+                status=status if isinstance(status, str) else "pending",
+                progress=float(row.get("progress") or 0.0),
+                downloaded_bytes=int(row.get("downloaded_bytes") or 0),
+                total_bytes=int(row.get("total_bytes") or 0),
+                filename=str(row.get("filename") or ""),
+                filesize=int(row.get("filesize") or 0),
+                error=str(row.get("error") or ""), hint=str(row.get("hint") or ""),
+                created_at=created_at,
+                extract_mode=str(row.get("extract_mode") or ""),
+                concurrent_fragments=int(row.get("concurrent_fragments") or 0),
+                downloader_type=str(row.get("downloader_type") or ""),
+                cookie=str(row.get("cookie") or ""), proxy=str(row.get("proxy") or ""),
+                source_url=str(row.get("source_url") or ""),
+                play_url=str(row.get("play_url") or ""),
+                watch_options=list(row.get("watch_options") or []),
+                is_hls=bool(row.get("is_hls")), workdir=workdir, filepath=fp,
+            )
+            task.steps = []   # 恢复条目不带走历史步骤，__post_init__ 重建初始步骤
+            task.__post_init__()
+            if status == "completed":
+                task.add_step("成片已就绪", "done")
+            elif status in ("pending", "downloading", "merging", "paused"):
+                # 中断的任务统一恢复为「失败 + 可续传」，前端出「继续下载」按钮
+                task.status = "failed"
+                task.error = "应用退出，任务已中断"
+                task.hint = "分片仍在磁盘上，点「继续下载」可从断点续传"
+                task.resumable = _has_partial_file(workdir)
+                task.created_at = now   # 重置 TTL，给用户时间点继续
+                task.add_step("下载", "error", "应用重启中断")
+            else:  # failed / canceled：恢复原状态；有分片则保留续传入口并重置 TTL
+                task.status = status
+                task.resumable = _has_partial_file(workdir)
+                if task.resumable:
+                    task.created_at = now
+            with self._lock:
+                self._tasks[tid] = task
+            restored += 1
+        if restored:
+            self._persist_locked(force=True)
 
     def create(self, *, url: str, title: str, platform: str, quality: str,
                 quality_key: str = "best", extract_mode: str = "",
@@ -170,6 +317,7 @@ class TaskStore:
         )
         with self._lock:
             self._tasks[task_id] = task
+            self._persist_locked(force=True)
         return task
 
     def get(self, task_id: str) -> DownloadTask | None:
@@ -181,8 +329,13 @@ class TaskStore:
             task = self._tasks.get(task_id)
             if task is None:
                 return
+            changed = False
             for key, value in fields.items():
+                if getattr(task, key, None) != value:
+                    changed = True
                 setattr(task, key, value)
+            if changed and any(k in _PERSIST_FIELDS for k in fields):
+                self._persist_locked()
 
     def request_cancel(self, task_id: str) -> bool:
         """标记取消。仍在解析阶段（无进度回调）时直接置为已取消，让界面立即响应。"""
@@ -195,7 +348,8 @@ class TaskStore:
                 task.status = "canceled"
                 task.error = "已取消下载"
                 task.add_step("排队等待", "error", "用户已取消")
-            return True
+            self._persist_locked()
+        return True
 
     def clear_files(self, task_id: str) -> None:
         """清空任务的临时文件，但保留任务记录（便于前端读取终态）。"""
@@ -207,6 +361,7 @@ class TaskStore:
     def remove(self, task_id: str) -> None:
         with self._lock:
             task = self._tasks.pop(task_id, None)
+            self._persist_locked(force=True)
         if task and task.workdir:
             shutil.rmtree(task.workdir, ignore_errors=True)
 
@@ -228,6 +383,8 @@ class TaskStore:
         deadline = time.time() - ttl
         with self._lock:
             stale = [tid for tid, t in self._tasks.items() if t.created_at < deadline]
+            if stale:
+                self._persist_dirty = True   # remove() 里会 force 落盘
         for task_id in stale:
             self.remove(task_id)
         return len(stale)

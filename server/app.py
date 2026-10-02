@@ -1527,6 +1527,10 @@ async def _cleanup_loop() -> None:
         removed = store.purge_expired()
         if removed:
             logger.info("已清理 %s 个过期任务", removed)
+        try:
+            store.flush()   # 兜底：节流窗口内没再被触碰的脏任务状态也落盘（B2）
+        except Exception:
+            logger.exception("任务状态落盘失败")
         _cleanup_orphan_upload_parts()
         _cleanup_merged_upload_sources()
         _purge_conversions_dir()

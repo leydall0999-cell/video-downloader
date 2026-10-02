@@ -106,6 +106,11 @@ run_node test_member_page.mjs              # 网页版会员购买页：免登�
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
 run_one test_share_token.py                # 网页版分享凭据端点：登录门禁/SHARE_UNAVAILABLE/每日限次/计数/挂载（2026-09-30 受限版分享）
 run_one test_web_stats.py                  # 网页访客统计：PV/UV 去重、不落 IP 明文、跨天哈希不可关联、事件白名单、来源归一、90 天裁剪（2026-10-01）
+#  任务落盘持久化（2026-10-02 B2 移植）：重启后未完成任务恢复为可续传、completed 只在成品文件仍在时恢复。
+run_one test_task_persistence.py
+#  下载预检与 PO Token 会话保持（2026-10-02 B1/A1 移植）：体积估算/上限 20GB/磁盘预检、
+#  YouTube 403 降级链必须带回 visitor_data（丢会话=照样 403）。
+run_one test_download_preflight.py
 run_node test_share_web.mjs                # 网页版「生成二维码/生成网页」：登录门禁/凭据三头/计数/受限上限/合成器红线/本地二维码（2026-09-30）
 
 echo ""
