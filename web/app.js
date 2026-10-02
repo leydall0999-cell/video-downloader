@@ -20688,8 +20688,8 @@ el.dwVidPlayer.hidden = true;
         const badN = lastUsers.filter((u) => u.disabled).length;
         userStatCards.innerHTML =
           `<div class="admin-ustat"><span class="admin-ustat-ic is-blue">👥</span><div class="admin-ustat-t"><i>总用户</i><b>${total}</b></div></div>`
-          + `<div class="admin-ustat"><span class="admin-ustat-ic is-amber">🎫</span><div class="admin-ustat-t"><i>免费会员</i><b>${freeN}</b></div></div>`
-          + `<div class="admin-ustat"><span class="admin-ustat-ic is-red">⚠️</span><div class="admin-ustat-t"><i>异常状态</i><b>${badN}</b></div></div>`;
+          + `<div class="admin-ustat"><span class="admin-ustat-ic is-amber">📄</span><div class="admin-ustat-t"><i>免费会员</i><b>${freeN}</b></div></div>`
+          + `<div class="admin-ustat"><span class="admin-ustat-ic is-blue">👤</span><div class="admin-ustat-t"><i>异常状态</i><b>${badN}</b></div></div>`;
       }
       const list = lastUsers.filter((u) => {
         if (fv === 'disabled' && !u.disabled) return false;
@@ -20713,21 +20713,23 @@ el.dwVidPlayer.hidden = true;
         const disabled = !!u.disabled;
         const isAdmin = !!u.is_admin;
         const self = u.user_id === _currentUid;
-        // 头像：uid 哈希定色，账号首字母
-        const hue = String(u.user_id || 'x').split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
-        const ava = `<span class="admin-ava" style="background:hsl(${hue},72%,86%)">${esc((u.identifier || '?').slice(0, 1).toUpperCase())}</span>`;
+        // 头像：对齐设计稿的人像圆片——按 uid 哈希交替男/女人像，底色随性别（蓝/粉）
+        const h = String(u.user_id || 'x').split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 100, 7);
+        const isFe = h % 2 === 1;
+        const ava = `<span class="admin-ava" style="background:${isFe ? '#fce7f3' : '#dbeafe'}">${isFe ? '👩' : '👨'}</span>`;
         const memChip = m.download_active ? '<span class="admin-chip is-blue">下载会员</span>'
           : (m.ai_active ? '<span class="admin-chip is-violet">AI会员</span>'
           : '<span class="admin-chip is-gray">免费</span>');
-        const stChip = disabled ? '<span class="admin-chip is-red">已禁用</span>' : '<span class="admin-chip is-green">正常</span>';
+        // 状态列：设计稿为纯文字（正常深灰 / 已禁用红字）
+        const stText = disabled ? '<span class="admin-st-bad">已禁用</span>' : '正常';
         const adminOp = isAdmin
           ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
                   : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
           : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
         const ops = disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
-          : `<button class="admin-btn admin-btn-sm admin-btn-outline" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
-            + `<button class="admin-btn admin-btn-sm admin-btn-outline" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
+          : `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
+            + `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
             + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`);
         return `<tr>
           <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
@@ -20735,8 +20737,8 @@ el.dwVidPlayer.hidden = true;
           <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
           <td>${memChip}</td>
           <td>${cred}</td>
-          <td>${stChip}</td>
-          <td>${isAdmin ? '<span class="admin-chip is-gold">👑 是</span>' : '否'}</td>
+          <td>${stText}</td>
+          <td>${isAdmin ? '是' : '否'}</td>
           <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');

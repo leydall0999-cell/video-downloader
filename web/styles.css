@@ -4848,7 +4848,7 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 }
 .admin-overlay[hidden] { display: none; }
 .admin-shell {
-  width: min(960px, 100%); max-height: 90vh; display: flex; flex-direction: column;
+  width: min(1180px, 96vw); max-height: 92vh; display: flex; flex-direction: column;
   background: var(--surface); border-radius: var(--radius-lg);
   box-shadow: var(--shadow); overflow: hidden;
 }
@@ -4883,31 +4883,34 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .admin-btn-primary:hover { background: var(--brand-strong); }
 .admin-btn-ghost { background: transparent; }
-.admin-btn-danger { color: #d5304b; border-color: rgba(213, 48, 75, .45); }
-.admin-btn-danger:hover { background: #fdf0f2; border-color: #d5304b; }
+.admin-btn-danger { background: #fdecec; border-color: transparent; color: #d5304b; font-weight: 500; }
+.admin-btn-danger:hover { background: #fbdcdc; }
+/* 设计稿按钮：浅蓝底蓝字实心无边框（禁用/重置密码） */
+.admin-btn-soft { background: #e8f0fe; border-color: transparent; color: #2f6bff; font-weight: 500; }
+.admin-btn-soft:hover { background: #d9e6fd; }
 .admin-btn-outline { border-color: rgba(79, 108, 240, .55); color: var(--brand, #4f6cf0); }
 .admin-btn-outline:hover { background: rgba(79, 108, 240, .08); border-color: var(--brand, #4f6cf0); }
 /* 用户管理改版（2026-10-03，对齐设计稿）：统计卡 + 状态筛选 chip + 头像 + 彩色状态 chip */
-.admin-ustats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .8rem; margin-bottom: .9rem; }
+.admin-ustats { display: grid; grid-template-columns: repeat(3, minmax(200px, 320px)); gap: 1rem; margin-bottom: 1rem; }
 .admin-ustat {
-  display: flex; align-items: center; gap: .7rem;
-  background: var(--card-bg, #fff); border: 1px solid var(--line, #e5e7ef); border-radius: 14px;
-  padding: .8rem 1rem; box-shadow: 0 1px 4px rgba(15, 23, 42, .04);
+  display: flex; align-items: center; gap: .85rem;
+  background: #f7f9fd; border: 1px solid #e9eef7; border-radius: 14px;
+  padding: 1rem 1.1rem;
 }
 .admin-ustat-ic {
-  width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
-  font-size: 1.15rem; flex: none;
+  width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 1.2rem; flex: none;
 }
-.admin-ustat-ic.is-blue { background: #e8f0fe; }
-.admin-ustat-ic.is-amber { background: #fdf3e0; }
+.admin-ustat-ic.is-blue { background: #e3edfe; }
+.admin-ustat-ic.is-amber { background: #fdf0d7; }
 .admin-ustat-ic.is-red { background: #fdecec; }
-.admin-ustat-t i { display: block; font-style: normal; font-size: .78rem; color: var(--text-mute, #6b7280); }
-.admin-ustat-t b { font-size: 1.35rem; font-weight: 800; line-height: 1.15; color: var(--text, #1f2937); }
+.admin-ustat-t i { display: block; font-style: normal; font-size: .84rem; color: #374151; margin-bottom: .15rem; }
+.admin-ustat-t b { font-size: 1.55rem; font-weight: 800; line-height: 1.1; color: var(--text, #1f2937); letter-spacing: -.3px; }
 .admin-chip-filter { min-width: 108px; cursor: pointer; }
 .admin-ava-wrap { display: inline-flex; align-items: center; gap: .5rem; }
 .admin-ava {
-  width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center;
-  font-size: .72rem; font-weight: 700; color: rgba(15, 23, 42, .72); flex: none;
+  width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center;
+  font-size: .95rem; line-height: 1; flex: none; overflow: hidden;
 }
 .admin-chip {
   display: inline-block; padding: .14rem .55rem; border-radius: 999px;
@@ -4966,8 +4969,9 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 /* 可搜索账号选择器（赠送会员）：输入过滤下拉 结束 */
 .admin-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .admin-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
-.admin-table th, .admin-table td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.admin-table th { background: #f8f9fc; color: var(--text-mute); font-weight: 600; position: sticky; top: 0; }
+.admin-table th, .admin-table td { text-align: left; padding: .68rem .9rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.admin-table th { background: #f7f8fa; color: #4b5563; font-weight: 600; position: sticky; top: 0; }
+.admin-st-bad { color: #d5304b; font-weight: 600; }
 .admin-table tr:last-child td { border-bottom: none; }
 .admin-ops { display: flex; gap: .4rem; flex-wrap: wrap; }
 .admin-empty { text-align: center; color: var(--text-mute); padding: 1.5rem; }
