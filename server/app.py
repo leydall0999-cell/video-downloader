@@ -1524,9 +1524,10 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
 async def _cleanup_loop() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-        removed = store.purge_expired()
-        if removed:
-            logger.info("已清理 %s 个过期任务", removed)
+        demoted = store.purge_expired()
+        if demoted:
+            # B5：完成任务到期不再是整条删除，而是降级为历史条目（文件清掉、记录保留）
+            logger.info("已将 %s 个到期完成任务转为历史条目（文件已清理）", demoted)
         try:
             store.flush()   # 兜底：节流窗口内没再被触碰的脏任务状态也落盘（B2）
         except Exception:

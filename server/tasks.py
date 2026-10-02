@@ -40,6 +40,7 @@ _PERSIST_FIELDS = (
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy",
     "source_url", "play_url", "watch_options", "is_hls", "resumable",
+    "file_expired",
 )
 
 
@@ -99,6 +100,12 @@ class DownloadTask:
     proxy: str = ""
     # 续传标记：取消/失败时若工作目录残留 .part 分片，置 True，前端据此提示「可断点续传」
     resumable: bool = False
+    # B5（2026-10-02）：成品已随 TTL 清理的历史条目（completed 但文件没了）。
+    # True 时保留卡片作历史记录，前端显示「成品已清理」+「重新下载」入口。
+    file_expired: bool = False
+    # A3（2026-10-02）：取消原因（""=用户取消 / "stall"=看门狗停滞 / "timeout"=硬超时）。
+    # 供 DownloadCanceled 处理分支区分「用户取消」与「系统终止」，给出可行动的错误信息。
+    cancel_reason: str = ""
     # 在线观看：解析时提取的播放地址与清晰度列表，存入任务后前端可在任务面板直接打开观看
     play_url: str = ""
     watch_options: list[dict] = field(default_factory=list)
@@ -169,6 +176,7 @@ class DownloadTask:
             "extracted_text": self.extracted_text,
             "source_url": self.source_url,
             "resumable": self.resumable,
+            "file_expired": self.file_expired,
             "play_url": self.play_url,
             "watch_options": self.watch_options,
             "is_hls": self.is_hls,
@@ -242,18 +250,18 @@ class TaskStore:
             tid = str(row.get("id") or "")
             if not TASK_DIR_PATTERN.match(tid) or tid in self._tasks:
                 continue
-            workdir = self._root / tid
-            if not workdir.is_dir():
-                continue  # 工作目录已被 TTL 清掉：只剩元数据没有意义
             status = row.get("status")
+            workdir = self._root / tid
             fp = None
-            if status == "completed":
+            file_expired = bool(row.get("file_expired"))
+            if status == "completed" and not file_expired:
                 fp = Path(str(row.get("filepath") or "")) if row.get("filepath") else None
                 if not fp or not fp.exists():
-                    continue  # 成品已随 TTL 清理：不恢复僵尸条目
-                created_at = float(row.get("created_at") or now)
-            else:
-                created_at = float(row.get("created_at") or now)
+                    # B5：成品已随 TTL 清理 → 不再丢弃，恢复为历史条目（可重新下载）
+                    file_expired = True
+            if status != "completed" and not workdir.is_dir():
+                continue  # 未完成任务没有工作目录：只剩元数据没有意义
+            created_at = float(row.get("created_at") or now)
             task = DownloadTask(
                 id=tid, url=str(row.get("url") or ""), title=str(row.get("title") or ""),
                 platform=str(row.get("platform") or ""), quality=str(row.get("quality") or ""),
@@ -278,7 +286,12 @@ class TaskStore:
             task.steps = []   # 恢复条目不带走历史步骤，__post_init__ 重建初始步骤
             task.__post_init__()
             if status == "completed":
-                task.add_step("成片已就绪", "done")
+                task.file_expired = file_expired
+                if file_expired:
+                    task.filepath = None
+                    task.add_step("成品文件", "done", "已超过保留期，文件已清理（可重新下载）")
+                else:
+                    task.add_step("成片已就绪", "done")
             elif status in ("pending", "downloading", "merging", "paused"):
                 # 中断的任务统一恢复为「失败 + 可续传」，前端出「继续下载」按钮
                 task.status = "failed"
@@ -381,13 +394,54 @@ class TaskStore:
 
     def purge_expired(self, ttl: int = TASK_TTL_SECONDS) -> int:
         deadline = time.time() - ttl
+        demoted = 0
         with self._lock:
-            stale = [tid for tid, t in self._tasks.items() if t.created_at < deadline]
+            stale = []
+            for tid, t in self._tasks.items():
+                if t.created_at >= deadline or t.file_expired:
+                    continue  # 未到期 / 已是历史条目
+                if t.status == "completed":
+                    stale.append((tid, "demote"))
+                else:
+                    stale.append((tid, "remove"))
             if stale:
-                self._persist_dirty = True   # remove() 里会 force 落盘
-        for task_id in stale:
-            self.remove(task_id)
-        return len(stale)
+                self._persist_dirty = True
+        for task_id, action in stale:
+            if action == "demote":
+                self._demote_completed(task_id)
+                demoted += 1
+            else:
+                self.remove(task_id)
+        return demoted
+
+    def _demote_completed(self, task_id: str) -> None:
+        """B5：到期完成任务降级为历史条目——清空工作目录释放空间，保留元数据
+        （标题/平台/大小/来源 URL），卡片变「成品已清理」，可整条重新下载。
+        历史上限 _MAX_PERSISTED_COMPLETED 条，超限把最老的连记录一起清掉。"""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return
+            task.filepath = None
+            task.file_expired = True
+            task.resumable = False
+            task.add_step("成品文件", "done", "已超过保留期，文件已清理（可重新下载）")
+            # 超限：把最老的已完成历史条目整条移除（含记录）
+            completed = [t for t in self._tasks.values()
+                         if t.status == "completed" and t.file_expired]
+            overflow: list[str] = []
+            if len(completed) > _MAX_PERSISTED_COMPLETED:
+                completed.sort(key=lambda t: t.created_at)
+                overflow = [t.id for t in completed[:len(completed) - _MAX_PERSISTED_COMPLETED]]
+            self._persist_locked(force=True)
+        for tid in overflow:
+            self.remove(tid)
+        if task.workdir and task.workdir.exists():
+            shutil.rmtree(task.workdir, ignore_errors=True)
+            try:
+                task.workdir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
     def purge_orphans(self) -> int:
         """清理上次进程遗留的任务目录（任务状态只存在内存中，重启后即为孤儿）。"""

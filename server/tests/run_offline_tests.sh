@@ -115,6 +115,10 @@ run_node test_share_web.mjs                # 网页版「生成二维码/生成�
 #  下载失败矩阵重试与 aria2c 默认化（2026-10-02 A2/B4 移植）：可重试失败换策略重试
 #  （切换下载器→切 HLS 链路，最多额外 2 次）、auto 默认启用 aria2c、硬上限到点仍在推进则延长等待（B3）。
 run_one test_download_matrix.py
+#  可行动化报错 / 完成任务历史（2026-10-02 A3/B5 移植）：停滞与硬超时不再伪装成
+#  「用户取消」；到期完成任务降级为历史条目（保留 50 条元数据、可重新下载）。
+#  （A4 的 proxy.json 分流：web 端验证见 test_yt_warp_proxy.py 的 env 分支。）
+run_one test_batch3_history.py
 
 echo ""
 echo "========================================="
