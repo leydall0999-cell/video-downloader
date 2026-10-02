@@ -4202,18 +4202,18 @@ html.theme-dark .pf-credit-note.is-warn { color: #fbbf24; }
 /* 右侧装饰：头像圆片 + 头顶皇冠（对齐设计稿插画，用 CSS+emoji 组合实现） */
 .pf-vip-ornament { position: absolute; right: 26px; top: 50%; transform: translateY(-58%); z-index: 1; pointer-events: none; }
 .pf-vip-face {
-  display: grid; place-items: center; width: 74px; height: 74px; border-radius: 50%;
+  display: grid; place-items: center; width: 82px; height: 82px; border-radius: 50%;
   background: linear-gradient(160deg, rgba(255, 255, 255, .38), rgba(255, 255, 255, .12));
-  border: 2px solid rgba(255, 255, 255, .45); font-size: 2.1rem; color: #fff;
+  border: 2px solid rgba(255, 255, 255, .45); font-size: 2.4rem; color: #fff;
   box-shadow: 0 6px 16px rgba(0, 0, 0, .16);
 }
 .pf-vip-crown {
-  position: absolute; top: -20px; left: 50%; transform: translateX(-58%) rotate(-12deg);
-  font-size: 1.5rem; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .2));
+  position: absolute; top: -23px; left: 50%; transform: translateX(-58%) rotate(-12deg);
+  font-size: 1.65rem; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .2));
 }
 .pf-vip-h { display: flex; align-items: center; position: relative; z-index: 1; }
 .pf-vip-t { font-size: 1.02rem; font-weight: 700; color: #fff; letter-spacing: .02em; }
-.pf-vip-c { position: relative; z-index: 1; margin-top: .9rem; flex: 1; max-width: 62%; }
+.pf-vip-c { position: relative; z-index: 1; flex: 1; max-width: 62%; display: flex; flex-direction: column; justify-content: center; }
 .pf-vip-none { margin: .35rem 0 .6rem; font-size: .88rem; color: rgba(255, 255, 255, .92); }
 .pf-vip-buy {
   display: inline-block; padding: .4rem .95rem; border-radius: 999px;
@@ -4221,15 +4221,16 @@ html.theme-dark .pf-credit-note.is-warn { color: #fbbf24; }
   text-decoration: none;
 }
 .pf-vip-buy:hover { background: #fff; }
-.pf-mrow { display: flex; align-items: center; gap: .55rem; margin-top: .6rem; }
+.pf-mrow { display: flex; align-items: center; gap: .6rem; margin-top: .9rem; }
+.pf-mrow:first-child { margin-top: 0; }
 .pf-mrow-ic {
-  width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center;
-  font-size: .78rem; color: #fff; flex: none;
+  width: 27px; height: 27px; border-radius: 9px; display: grid; place-items: center;
+  font-size: .88rem; color: #fff; flex: none;
 }
 .pf-mrow-ic.is-dl { background: linear-gradient(135deg, #f6b73c, #f59e0b); box-shadow: 0 2px 6px rgba(245, 158, 11, .45); }
 .pf-mrow-ic.is-ai { background: linear-gradient(135deg, #7dd3fc, #38bdf8); box-shadow: 0 2px 6px rgba(56, 189, 248, .45); }
-.pf-mrow-name { font-size: .88rem; font-weight: 600; color: #fff; }
-.pf-mrow-exp { font-size: .78rem; color: rgba(255, 255, 255, .85); }
+.pf-mrow-name { font-size: .92rem; font-weight: 600; color: #fff; }
+.pf-mrow-exp { font-size: .8rem; color: rgba(255, 255, 255, .85); }
 .pf-vip-bar { margin-top: auto; width: 44%; height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .22); overflow: hidden; position: relative; z-index: 1; }
 .pf-vip-bar i { display: block; width: 72%; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #f6b73c, #ffe08a); }
 .pf-ccard {
@@ -4240,11 +4241,11 @@ html.theme-dark .pf-credit-note.is-warn { color: #fbbf24; }
 .pf-ccard-h { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
 .pf-ccard-t { font-size: .92rem; font-weight: 700; color: var(--text, #1f2937); }
 .pf-ccard-sub { font-size: .74rem; color: var(--text-mute, #9ca3af); }
-.pf-ccard-hero { display: flex; align-items: baseline; justify-content: center; gap: .6rem; margin: 1rem 0 .6rem; }
-.pf-ccard-big { font-size: 3rem; font-weight: 800; line-height: 1; color: var(--text, #111827); letter-spacing: -1px; }
+.pf-ccard-hero { display: flex; align-items: baseline; justify-content: center; gap: .6rem; margin: .55rem 0 .45rem; }
+.pf-ccard-big { font-size: 2.6rem; font-weight: 800; line-height: 1; color: var(--text, #111827); letter-spacing: -1px; }
 .pf-ccard-hero-label { font-size: .82rem; color: var(--text-mute, #6b7280); }
 .pf-ccard-alert {
-  align-self: center; max-width: 100%; margin: 0 auto .8rem; padding: .3rem .9rem;
+  align-self: center; max-width: 100%; margin: 0 auto .55rem; padding: .26rem .85rem;
   border-radius: 999px; background: #fdeed3; color: #c2410c;
   font-size: .75rem; font-weight: 600;
 }
