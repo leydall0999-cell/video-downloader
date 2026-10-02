@@ -4848,7 +4848,7 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 }
 .admin-overlay[hidden] { display: none; }
 .admin-shell {
-  width: min(1180px, 96vw); max-height: 92vh; display: flex; flex-direction: column;
+  width: min(1180px, 96vw); height: min(820px, 92vh); display: flex; flex-direction: column;
   background: var(--surface); border-radius: var(--radius-lg);
   box-shadow: var(--shadow); overflow: hidden;
 }
