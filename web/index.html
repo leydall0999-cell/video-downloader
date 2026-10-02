@@ -1854,6 +1854,24 @@
             </div>
           </div>
 
+          <!-- YouTube 下载代理（A4 分流，2026-10-02）：仅 YT 流量走独立代理，写 proxy.json -->
+          <div class="pf-sec-list" style="margin-top:.75rem" id="profYtProxySec">
+            <div class="pf-sec-item">
+              <div class="pf-sec-ic" aria-hidden="true">🌐</div>
+              <div class="pf-sec-main">
+                <div class="pf-sec-title">YouTube 下载代理</div>
+                <div class="pf-sec-sub">下载 YouTube 报 403 / 请登录 时，多半是本机 IP 被风控。把代理指向出口干净的本地代理即可恢复，只对 YouTube 生效，其它网站不受影响。留空保存 = 清除。</div>
+                <div style="display:flex;gap:.5rem;margin-top:.5rem">
+                  <input type="text" id="profYtProxyInput" placeholder="例：socks5h://127.0.0.1:40000" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;height:32px;padding:0 .6rem;border:1px solid var(--border,#d5d9e0);border-radius:8px;font-size:12.5px;background:var(--bg,#fff);color:inherit">
+                  <button type="button" class="pf-sec-btn" id="profYtProxySave" style="min-height:0;height:32px">保存</button>
+                </div>
+              </div>
+            </div>
+            <div class="pf-sec-foot">
+              <span id="profYtProxyState">—</span>
+            </div>
+          </div>
+
           <div class="pf-card-grid" data-page-node-id="E1CtGjLSAK0KVABOGszYJv">
             <div class="pf-card" data-page-node-id="WvXxBAVXGZkgYSWadc4O92">
               <div class="pf-card-h" data-page-node-id="VyMZDhEj2e90JpnpMNdDNv">

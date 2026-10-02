@@ -21289,6 +21289,67 @@ el.dwVidPlayer.hidden = true;
 })();
 
 /* ======================================================================
+   YouTube 下载代理设置（2026-10-02，A4 分流）
+   写 ~/.video-downloader/proxy.json 的 "youtube" 键；服务端仅桌面版
+   （回环直连）可读写，云端网页版会 403 —— 此时隐藏整个设置卡片。
+   ====================================================================== */
+(function () {
+  var input = document.getElementById('profYtProxyInput');
+  var btn = document.getElementById('profYtProxySave');
+  var state = document.getElementById('profYtProxyState');
+  var sec = document.getElementById('profYtProxySec');
+  if (!input || !btn) return;
+  var base = window.VDL_API_BASE || '';
+
+  function render(d) {
+    if (!d || d.ok !== true) {
+      if (sec) sec.hidden = true; // 云端版 / 未登录等场景：不显示桌面专属设置
+      return;
+    }
+    if (sec) sec.hidden = false;
+    if (document.activeElement !== input) input.value = d.youtube || '';
+    if (!state) return;
+    if (d.source === 'env') {
+      state.textContent = '当前由环境变量 VDL_PROXY_YT 指定（优先于下方输入框）';
+      input.disabled = true;
+      if (btn) btn.disabled = true;
+    } else {
+      state.textContent = d.youtube
+        ? ('已配置：' + d.youtube + '（仅 YouTube 流量生效）')
+        : '未配置（直连）。下载 YouTube 报 403 / 请登录 时再填';
+    }
+  }
+
+  function refresh() {
+    fetch(base + '/api/settings/proxy').then(function (r) {
+      if (r.status === 403) return { ok: false, forbidden: true };
+      return r.json();
+    }).then(render).catch(function () { if (sec) sec.hidden = true; });
+  }
+
+  btn.addEventListener('click', function () {
+    var val = (input.value || '').trim();
+    state.textContent = '保存中…';
+    fetch(base + '/api/settings/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ youtube: val })
+    }).then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
+      .then(function (d) {
+        if (d && d.ok) {
+          state.textContent = val ? ('已保存：' + val) : '已清除，下一次 YouTube 下载直连';
+        } else {
+          state.textContent = '保存失败：' + ((d && d.detail) || '未知错误');
+        }
+        refresh();
+      })
+      .catch(function () { state.textContent = '保存失败：网络错误'; });
+  });
+
+  refresh();
+})();
+
+/* ======================================================================
    播放模块（2026-09-17 晚）：把播放条从画面里搬出来，独立成一条
    ----------------------------------------------------------------------
    背景：#comPreview 原来用浏览器原生 controls —— 它是**压在画面底部**的浮层

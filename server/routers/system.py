@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import urllib.request
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 
+import atomic_io
 import engine_idle
 
 router = APIRouter()
@@ -430,6 +431,71 @@ def system_info() -> dict[str, Any]:
 def engine_idle_status() -> dict[str, Any]:
     """AI 引擎空闲卸载状态（开关 / 空闲多久 / 各引擎是否已加载）。"""
     return {"ok": True, **engine_idle.status()}
+
+
+# ---- YouTube 下载代理设置（proxy.json，桌面本机配置；云端多用户版禁用） ----
+
+_PROXY_URL_PREFIXES = ("http://", "https://", "socks5://", "socks5h://", "socks4://")
+
+
+def _is_local_direct(request: Request) -> bool:
+    """仅桌面 App（webview 直连 127.0.0.1）可读写代理配置。
+
+    云端多用户部署经 nginx 反代，请求必带 X-Forwarded-For 且所有用户共享同一份
+    proxy.json——绝不允许单个登录用户改全局网络配置，因此 GET/POST 双向拦截。
+    """
+    if (request.headers.get("x-forwarded-for") or "").strip():
+        return False
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _read_proxy_file() -> dict[str, Any]:
+    from downloader import _proxy_config_path
+    try:
+        data = json.loads(_proxy_config_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+@router.get("/api/settings/proxy")
+def proxy_settings_get(request: Request) -> dict[str, Any]:
+    """回显 YouTube 独立代理当前生效值与来源（env 优先于文件）。"""
+    if not _is_local_direct(request):
+        raise HTTPException(status_code=403, detail="仅桌面版可查看/修改下载代理")
+    from downloader import _proxy_config_path, _yt_proxy_override
+    env_val = (os.environ.get("VDL_PROXY_YT") or "").strip()
+    return {
+        "ok": True,
+        "youtube": _yt_proxy_override(),
+        "source": "env" if env_val else "file",
+        "path": str(_proxy_config_path()),
+    }
+
+
+@router.post("/api/settings/proxy")
+def proxy_settings_save(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """保存 YouTube 独立代理到 proxy.json（立即生效，下一次下载任务即用新值）。
+
+    body: {"youtube": "socks5h://127.0.0.1:40000"}；空串 = 清除该配置。
+    """
+    if not _is_local_direct(request):
+        raise HTTPException(status_code=403, detail="仅桌面版可查看/修改下载代理")
+    from downloader import _proxy_config_path
+    data = payload if isinstance(payload, dict) else {}
+    raw = str(data.get("youtube") or "").strip()
+    if raw and not raw.lower().startswith(_PROXY_URL_PREFIXES):
+        raise HTTPException(status_code=400, detail="代理地址需以 http(s):// 或 socks5(h):// 开头")
+    cfg = _read_proxy_file()
+    if raw:
+        cfg["youtube"] = raw
+    else:
+        cfg.pop("youtube", None)
+    path = _proxy_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_io.atomic_write_json(path, cfg)
+    return {"ok": True, "youtube": raw}
 
 
 @router.post("/api/engine/idle")

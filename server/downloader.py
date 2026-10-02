@@ -1117,14 +1117,22 @@ def _yt_proxy_override() -> str:
     if explicit:
         return explicit
     try:
-        override = (os.environ.get("VDL_HOME") or "").strip()
-        base = Path(override) if override else Path.home() / ".video-downloader"
-        data = json.loads((base / "proxy.json").read_text(encoding="utf-8"))
+        data = json.loads(_proxy_config_path().read_text(encoding="utf-8"))
         if isinstance(data, dict):
             return str(data.get("youtube") or "").strip()
     except (OSError, ValueError):
         pass
     return ""
+
+def _proxy_config_path() -> Path:
+    """proxy.json 的落点：VDL_HOME 可覆盖，默认 ~/.video-downloader/proxy.json。
+
+    设置界面（system.py 的 /api/settings/proxy）与运行时读取（_yt_proxy_override）
+    共用此函数，保证「界面写入」和「下载时读取」永远指向同一个文件。
+    """
+    override = (os.environ.get("VDL_HOME") or "").strip()
+    base = Path(override) if override else Path.home() / ".video-downloader"
+    return base / "proxy.json"
 
 def _resolve_proxy(host: str = "") -> str:
     """按目标站点所在地区分流代理，海外站和国内站互不干扰。

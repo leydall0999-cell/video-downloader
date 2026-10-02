@@ -160,6 +160,7 @@ run_one test_download_matrix.py
 #  停滞与硬超时不再伪装成「用户取消」；VDL_PROXY_YT/proxy.json 只分流 YouTube 域；
 #  到期完成任务降级为历史条目（保留 50 条元数据、可重新下载）。
 run_one test_batch3_history.py
+run_one test_proxy_settings.py
 #  1/3/7 天下载会员档 + 套餐价格单一真源（2026-09-30）：超管在后台改价/改天数后，
 #  展示（/api/member/plans 真身 store.plans()）/ 下单金额 / 发放天数三处必须同步。
 #  此前下单读硬编码 PAY_PLANS、发货读硬编码 DOWNLOAD_PLANS —— 改了等于没改。
