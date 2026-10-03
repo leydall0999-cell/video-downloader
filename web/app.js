@@ -315,7 +315,6 @@
     profChangelogTitle: $('profChangelogTitle'),
     profChangelogDate: $('profChangelogDate'),
     profChangelogList: $('profChangelogList'),
-    profChangelogHistory: $('profChangelogHistory'),
     profCheckUpdateBtn: $('profCheckUpdateBtn'),
     profErrorReportBtn: $('profErrorReportBtn'),
     profAboutMsg: $('profAboutMsg'),
@@ -18482,6 +18481,7 @@ el.dwVidPlayer.hidden = true;
   // 个人中心：关于 / 版本 / 自动更新 / 错误上报
   let _aboutUpdatable = true;
   let _aboutLatest = null;
+  let _aboutUpdateAvail = false;   // 服务端 update_available：有更新才展示更新内容
   let _aboutCurrentVer = '';
   let _aboutChangelog = null;
 
@@ -18510,8 +18510,10 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     _aboutLatest = data.latest || {};
+    _aboutUpdateAvail = !!data.update_available;
     if (!data.update_available) {
       el.profUpdateBanner.hidden = true;
+      _renderChangelog();
       return;
     }
     if (el.profUpdateVer) el.profUpdateVer.textContent = _aboutLatest.version || '—';
@@ -18528,6 +18530,7 @@ el.dwVidPlayer.hidden = true;
       }
     }
     el.profUpdateBanner.hidden = false;
+    _renderChangelog();   // 有更新时把「新版本这次改什么」显示出来
   }
 
   /** 把 latest.notes_list / notes 归一成字符串数组（兼容只有 notes 的旧清单）。 */
@@ -18570,95 +18573,39 @@ el.dwVidPlayer.hidden = true;
     const list = el.profChangelogList;
     if (!box || !list) return;
     const cur = _aboutCurrentVer || '';
+    const latestVer = (_aboutLatest && _aboutLatest.version) ? String(_aboutLatest.version) : '';
     const data = _aboutChangelog || {};
     const entries = Array.isArray(data.entries) ? data.entries : [];
-    const hit = entries.find((e) => e && e.version === cur) || null;
-    let items = (hit && Array.isArray(hit.items)) ? hit.items.slice() : [];
-    let title = cur ? ('当前版本 v' + cur + ' 更新内容') : '更新内容';
-    let dateText = (hit && hit.date) || '';
-    // 刚更新完回来：更新时缓存下来的条目最贴合「这次装进来的改动」
-    const cached = _cachedUpdateNotes();
-    if (cached && cached.version && cur && cached.version === cur &&
-        cached.items && cached.items.length) {
-      title = '本次更新已完成（v' + cur + '）';
-      items = cached.items.slice();
-    }
-    // 内置日志尚未登记当前版本（例如刚 bump 版本号）：退回线上清单，避免区块空白
+
+    // 2026-10-03 用户要求：**只在「有更新可用」时**展示新版本的更新内容，
+    // 更新完成（已是最新）就不再展示；历史版本更新记录整块去掉。
+    // 判据优先用服务端 update_available，版本号不等作兜底（离线/字段缺失时）。
+    const hasUpdate = _aboutUpdateAvail || (!!latestVer && !!cur && latestVer !== cur);
+    if (!hasUpdate) { box.hidden = true; return; }
+
+    // 优先用线上更新清单里的条目（= 这次点更新会装到的东西），退回内置日志同版本条目
+    let items = _changelogItems(_aboutLatest || {});
+    let dateText = _aboutLatest.published_at || '';
     if (!items.length) {
-      const latest = (_aboutLatest && _aboutLatest.version) ? _aboutLatest : null;
-      const fb = _changelogItems(latest || {});
-      if (fb.length) {
-        title = '最新发布版本 v' + latest.version + ' 更新内容';
-        dateText = latest.published_at || '';
-        items = fb;
+      const hit = entries.find((e) => e && e.version === latestVer) || null;
+      if (hit) {
+        items = Array.isArray(hit.items) ? hit.items.slice() : [];
+        dateText = dateText || hit.date || '';
       }
     }
     if (!items.length) { box.hidden = true; return; }
-    // 2026-10-03 用户要求：当前版本的更新内容只在「刚更新完」时展示一次，
-    // 之后（版本没变的后续打开）只保留历史版本列表。
-    // 判据：localStorage 记住已展示过的版本号，版本号变化才视为刚更新。
-    const head = document.getElementById('profChangelogHead');
-    const hist = el.profChangelogHistory;
-    let seenVer = '';
-    try { seenVer = localStorage.getItem('vdl_changelog_seen_ver') || ''; } catch (_) { /* 隐私模式等 */ }
-    const fresh = !!cur && seenVer !== cur;
-    if (fresh) {
-      try { localStorage.setItem('vdl_changelog_seen_ver', cur); } catch (_) { /* 忽略 */ }
-    }
-    if (!fresh) {
-      // 已展示过本版本：隐藏「当前版本」标题与条目列表，只留历史版本区
-      if (head) head.hidden = true;
-      list.hidden = true;
-      if (hist) hist.style.borderTop = 'none';
-      box.hidden = false;
-      return;
-    }
-    if (hist) hist.style.borderTop = '';
-    if (el.profChangelogTitle) el.profChangelogTitle.textContent = title;
+
+    if (el.profChangelogTitle) el.profChangelogTitle.textContent = 'v' + latestVer + ' 更新内容';
     if (el.profChangelogDate) el.profChangelogDate.textContent = dateText;
-    if (head) head.hidden = false;
-    list.hidden = false;
     list.replaceChildren(...items.map((t) => {
       const li = document.createElement('li');
       li.textContent = t;
       return li;
     }));
-    _renderChangelogHistory(entries, cur);
     box.hidden = false;
   }
 
-  /** 历史版本条目（当前版本之外的全部），放进可滚动容器。 */
-  function _renderChangelogHistory(entries, currentVer) {
-    const hist = el.profChangelogHistory;
-    if (!hist) return;
-    const rest = (entries || []).filter((e) => e && e.version && e.version !== currentVer);
-    if (!rest.length) { hist.hidden = true; return; }
-    hist.replaceChildren(...rest.map((e) => {
-      const group = document.createElement('div');
-      group.className = 'pf-changelog-group';
-      const head = document.createElement('div');
-      head.className = 'pf-changelog-group-head';
-      const ver = document.createElement('span');
-      ver.className = 'pf-changelog-group-ver';
-      ver.textContent = 'v' + e.version;
-      const date = document.createElement('span');
-      date.className = 'pf-changelog-group-date';
-      date.textContent = e.date || '';
-      head.append(ver, date);
-      const ul = document.createElement('ul');
-      ul.className = 'pf-changelog-list';
-      ul.replaceChildren(...(e.items || []).map((t) => {
-        const li = document.createElement('li');
-        li.textContent = t;
-        return li;
-      }));
-      group.append(head, ul);
-      return group;
-    }));
-    hist.hidden = false;
-  }
-
-  /** 最近一次成功更新时缓存的更新内容（更新完成重启后仍能回看「这次改了什么」）。 */
+  /** 最近一次成功更新时缓存的更新内容（供更新完成后的提示使用）。 */
   function _cachedUpdateNotes() {
     try {
       const raw = localStorage.getItem('vdl_update_notes');
