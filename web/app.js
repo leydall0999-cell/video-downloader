@@ -20742,6 +20742,11 @@ el.dwVidPlayer.hidden = true;
     };
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
     let _monRange = 'day';
+    // 当前统计范围的可视提示：按钮高亮之外再给一行文字，避免「以为没生效」
+    const _monShowRangeLabel = (text) => {
+      const tip = document.getElementById('adminMonRangeTip');
+      if (tip) tip.textContent = text ? ('当前统计范围：' + text) : '';
+    };
     // 热点路径转中文标签（用户要求不展示英文接口名）；原始路径保留在 title 悬浮提示里
     const _monPathLabel = (p) => {
       const path = String(p || '').split('?')[0];
@@ -20822,11 +20827,17 @@ el.dwVidPlayer.hidden = true;
       b.addEventListener('click', () => {
         _monRange = b.dataset.monRange || 'day';
         document.querySelectorAll('.admin-mon-range[data-mon-range]').forEach((x) => x.classList.toggle('is-active', x === b));
+        _monShowRangeLabel(b.textContent || '');
         loadMonitorVisits();
         loadMonitorEvents();
       });
     });
-    const loadMonitor = () => { loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts(); loadMonitorRecon(); };
+    const loadMonitor = () => {
+      // 首次进入也把当前范围显示出来（与按钮高亮一致，避免「看不出在筛什么」）
+      const cur = document.querySelector('.admin-mon-range.is-active');
+      if (cur) _monShowRangeLabel(cur.textContent || '');
+      loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts(); loadMonitorRecon();
+    };
     // 2026-09-26：连点版本号 5 次 / 告警红横幅的直达入口——运维看板已并入后台，
     // 统一改开管理面板并落在「运维监控」tab（openAdmin 自带登录+is_admin 门禁）。
     window.VDL = Object.assign(window.VDL || {}, {

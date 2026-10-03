@@ -5354,6 +5354,20 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .pf-changelog-list li { font-size: .8rem; line-height: 1.8; color: var(--text, #374151); }
 .pf-changelog-list li::marker { color: var(--brand, #4f46e5); }
 html.theme-dark .pf-changelog { background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .1); }
+/* 运维监控「范围」切换（2026-10-03）：JS 一直在切 is-active，但这里原先没有
+   对应样式 → 四个按钮长得一模一样，看着像没生效。 */
+.admin-btn.admin-mon-range {
+  height: 30px; padding: 0 .85rem; border-radius: 8px; font-size: .82rem;
+  border: 1px solid var(--line, #e5e7ef); background: #fff; color: var(--text-mute, #6b7280);
+  margin-right: .2rem;
+}
+.admin-btn.admin-mon-range:hover { background: #f3f4f8; color: var(--text, #1f2937); }
+.admin-btn.admin-mon-range.is-active {
+  background: var(--brand, #4f6cf0); border-color: var(--brand, #4f6cf0);
+  color: #fff; font-weight: 600;
+}
+html.theme-dark .admin-btn.admin-mon-range { background: rgba(255, 255, 255, .06); color: var(--text-mute, #9ca3af); }
+html.theme-dark .admin-btn.admin-mon-range.is-active { background: var(--brand, #4f6cf0); color: #fff; }
 .pf-update-btn:disabled { opacity: .6; cursor: default; }
 .pf-about-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 /* 错误上报弹窗 */
