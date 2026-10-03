@@ -411,6 +411,46 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 # 引擎
 # --------------------------------------------------------------------------- #
 
+# 会员权益文案（2026-10-03 改为**从配额表自动生成**）
+# 此前是手写死的 6 条，加了 matting/cloud/app_compute/subtitle 等配额后忘记补文案，
+# 出现「代码里有、页面上没有」。现在按 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 生成，
+# 守卫 test_membership_benefits 钉住「有配额必有文案」，以后不会再漏。
+_BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
+    ("download", "下载任务 {v} 次/日"),
+    ("original", "原画 / 4K 直链解析 {v} 次/日"),
+    ("batch_material", "批量下载素材 {v} 条/日"),
+    ("matting", "本地一键抠图 {v} 次/日"),
+    ("cloud", "云端算力（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
+    ("app_compute", "App 本地重算力（转码 / 拼接 / 压缩 / 超分）{v} 次/日"),
+)
+# 不走每日配额、但属于会员权益的说明项
+_BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
+    {"key": "quality", "text": "清晰度：1080P 及以上全部开放"},
+    {"key": "devices", "text": "同一账号 2 台设备同时在线"},
+    {"key": "speed", "text": "高速通道 · 全速不限速"},
+    {"key": "no_credits", "text": "不含 AI 积分：AI 字幕识别 / 云端抠图等需另购 AI 会员或积分包"},
+    {"key": "support", "text": "优先客服支持"},
+)
+
+
+def download_benefits() -> list[dict[str, str]]:
+    """下载会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。"""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key, tpl in _BENEFIT_FROM_LIMITS:
+        v = int(DAILY_QUOTA_LIMITS.get(key) or 0)
+        if v > 0:
+            out.append({"key": key, "text": tpl.format(v=v)})
+            seen.add(key)
+    # member_limit = -1 的功能 = 会员不限次（评论/数据/字幕批量、字幕提取…）
+    for d in FEATURE_USAGE_DEFS:
+        if int(d.get("member_limit", 0)) == -1 and d.get("key") not in seen:
+            out.append({"key": d["key"], "text": f"{d.get('name') or d['key']}：不限"})
+            seen.add(str(d.get("key")))
+    out.extend(dict(x) for x in _BENEFIT_EXTRA)
+    return out
+
+
 @dataclass
 class MembershipStore:
     """VDL 会员状态机。线程外调用方需自行加锁（见 app 单例）。"""
@@ -674,14 +714,7 @@ class MembershipStore:
         return {
             "download_member": {
                 "plans": dl,
-                "benefits": [
-                    {"key": "download", "text": "下载任务 1000 次/日"},
-                    {"key": "original", "text": "原画解析 100 次/日"},
-                    {"key": "batch_material", "text": "批量下载素材 1000 条/日"},
-                    {"key": "unlimited", "text": "评论/数据/字幕批量：不限"},
-                    {"key": "speed", "text": "高速通道·全速不限速"},
-                    {"key": "support", "text": "优先客服支持"},
-                ],
+                "benefits": download_benefits(),
             },
             "ai_member": {
                 "plans": ai,
