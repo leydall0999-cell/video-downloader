@@ -5,10 +5,19 @@
 - 超级管理员（is_admin）：查看全部用户会话、回复、改状态。
 每条消息都记录 role(user/admin)、sender_id、sender_identifier、text、ts，
 满足「超管看得到是谁提的、跟谁回」的审计需求。
+
+图片消息（2026-10-03）：「有些场景说不清楚，发截图一目了然」。
+- 落盘在 support/media/<uuid>.<ext>（数据目录，**不碰 Downloads/Documents**，
+  否则 ad-hoc 重签后 TCC 会重新索要授权、open() 永久阻塞）。
+- 消息带 image 字段（文件名），允许「无文字、只有图」。
+- 读取走 /api/support/image/{name}：管理员任意；普通用户只能看自己会话里引用过的图。
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import re
 import threading
 import time
 import uuid
@@ -23,6 +32,18 @@ router = APIRouter()
 
 _lock = threading.Lock()
 _MAX_LEN = 4000
+
+# 图片：白名单格式 + 大小上限（原始字节，不是 base64 长度）
+_IMG_MAX_BYTES = 4 * 1024 * 1024
+_IMG_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+# 只允许「我们自己生成的文件名」，杜绝 ../ 穿越
+_IMG_NAME_RE = re.compile(r"^[0-9a-f]{32}\.(png|jpg|webp|gif)$")
 
 
 def _support_dir() -> Path:
@@ -98,15 +119,137 @@ def _append(threads: list[dict], thread: dict, msg: dict, status: str = "open") 
     _write_threads(threads)
 
 
+# ── 图片（2026-10-03）─────────────────────────────────────────────────────────
+
+
+def _media_dir() -> Path:
+    """附件目录：数据目录下的 support/media（TCC 之外，不受隐私授权影响）。"""
+    d = _support_dir() / "media"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _media_path(name: str) -> Optional[Path]:
+    """按白名单文件名解析附件路径；非法名（含 ../ 穿越）返回 None。"""
+    if not name or not _IMG_NAME_RE.match(str(name)):
+        return None
+    return _media_dir() / str(name)
+
+
+def _decode_image_payload(payload: dict[str, Any]) -> tuple[str, bytes, str]:
+    """把前端传来的 {mime, data_b64} 解成 (文件名, 原始字节, mime)。
+
+    纯函数（不碰磁盘），便于离线测试。非法输入抛 ValueError。
+    """
+    mime = str((payload or {}).get("mime") or "").strip().lower()
+    ext = _IMG_TYPES.get(mime)
+    if not ext:
+        raise ValueError("只支持 PNG / JPEG / WebP / GIF 图片")
+    raw = str((payload or {}).get("data_b64") or "").strip()
+    if not raw:
+        raise ValueError("图片内容为空")
+    # 前端可能带 data: 前缀
+    if raw.startswith("data:"):
+        _, _, raw = raw.partition(",")
+    try:
+        data = base64.b64decode(raw, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("图片数据损坏，请重新选择") from exc
+    if not data:
+        raise ValueError("图片内容为空")
+    if len(data) > _IMG_MAX_BYTES:
+        raise ValueError(f"图片过大（≤{_IMG_MAX_BYTES // 1024 // 1024}MB）")
+    # 文件头魔数二次校验：后缀按声明的 mime 给，内容对不上就拒（防伪装成图片的任意文件）
+    if not _looks_like_image(data, ext):
+        raise ValueError("文件内容不是可识别的图片")
+    return f"{uuid.uuid4().hex}.{ext}", data, mime
+
+
+def _looks_like_image(data: bytes, ext: str) -> bool:
+    if ext == "png":
+        return data[:8] == b"\x89PNG\r\n\x1a\n"
+    if ext in ("jpg", "jpeg"):
+        return data[:3] == b"\xff\xd8\xff"
+    if ext == "gif":
+        return data[:6] in (b"GIF87a", b"GIF89a")
+    if ext == "webp":
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return False
+
+
+def _thread_owns_image(thread: dict, name: str) -> bool:
+    return any((m or {}).get("image") == name for m in (thread.get("messages") or []))
+
+
+def _image_name_of(payload: dict[str, Any]) -> str:
+    """从请求体取出图片文件名并校验格式（空串 = 不带图）。"""
+    name = str((payload or {}).get("image") or "").strip()
+    if not name:
+        return ""
+    if not _IMG_NAME_RE.match(name):
+        raise ValueError("图片标识非法")
+    return name
+
+
+# ── 历史消息搜索（2026-10-03）────────────────────────────────────────────────
+
+
+def _search_messages(
+    threads: list[dict],
+    uid: str,
+    is_admin: bool,
+    q: str,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """在可见会话的消息正文里搜关键词。纯函数，便于离线测试。
+
+    返回按时间倒序的命中列表：thread_id / user_identifier / role / ts /
+    excerpt（含关键词的上下文片段）/ has_image / index（会话内消息下标，供前端定位高亮）。
+    """
+    kw = (q or "").strip().lower()
+    if not kw:
+        return []
+    out: list[dict[str, Any]] = []
+    for t in threads or []:
+        if not is_admin and t.get("user_id") != uid:
+            continue
+        msgs = t.get("messages") or []
+        for idx, m in enumerate(msgs):
+            text = str((m or {}).get("text") or "")
+            if kw not in text.lower():
+                continue
+            pos = text.lower().find(kw)
+            start = max(0, pos - 24)
+            end = min(len(text), pos + len(kw) + 40)
+            excerpt = ("…" if start > 0 else "") + text[start:end].strip() + ("…" if end < len(text) else "")
+            out.append(
+                {
+                    "thread_id": t.get("id"),
+                    "user_identifier": t.get("user_identifier"),
+                    "role": (m or {}).get("role"),
+                    "ts": (m or {}).get("ts"),
+                    "excerpt": excerpt,
+                    "has_image": bool((m or {}).get("image")),
+                    "index": idx,
+                }
+            )
+    out.sort(key=lambda r: r.get("ts") or 0, reverse=True)
+    return out[: max(1, int(limit or 60))]
+
+
 @router.post("/api/support/message")
 def support_message(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """用户提交问题。登录必需。可带 thread_id 续接到已有会话，否则开新会话。"""
+    """用户提交问题（可只发图片）。登录必需。可带 thread_id 续接到已有会话，否则开新会话。"""
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
     text = str(payload.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "error": "请输入内容"}
+    try:
+        image = _image_name_of(payload)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if not text and not image:
+        return {"ok": False, "error": "请输入内容或选择一张图片"}
     if len(text) > _MAX_LEN:
         return {"ok": False, "error": f"内容过长（≤{_MAX_LEN}字）"}
     # 错误上报：自动附加启动诊断日志尾部（~/.vdl_launch.log），便于排障。
@@ -142,6 +285,8 @@ def support_message(request: Request, payload: dict[str, Any] = Body(...)) -> di
             "text": text,
             "ts": int(time.time()),
         }
+        if image:
+            msg["image"] = image
         _append(threads, thread, msg)
     return {"ok": True, "thread_id": thread["id"], "message": msg}
 
@@ -210,15 +355,19 @@ def support_thread(tid: str, request: Request) -> dict[str, Any]:
 
 @router.post("/api/support/thread/{tid}/reply")
 def support_reply(tid: str, request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """超管回复某会话。"""
+    """超管回复某会话（可只发图片）。"""
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
     if not _is_admin(uid):
         return {"ok": False, "error": "仅管理员可回复", "code": "FORBIDDEN"}
     text = str(payload.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "error": "请输入回复内容"}
+    try:
+        image = _image_name_of(payload)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if not text and not image:
+        return {"ok": False, "error": "请输入回复内容或选择一张图片"}
     if len(text) > _MAX_LEN:
         return {"ok": False, "error": f"内容过长（≤{_MAX_LEN}字）"}
     with _lock:
@@ -233,6 +382,8 @@ def support_reply(tid: str, request: Request, payload: dict[str, Any] = Body(...
             "text": text,
             "ts": int(time.time()),
         }
+        if image:
+            msg["image"] = image
         _append(threads, thread, msg)
     return {"ok": True, "message": msg}
 
@@ -257,6 +408,79 @@ def support_status(tid: str, request: Request, payload: dict[str, Any] = Body(..
         thread["updated_at"] = int(time.time())
         _write_threads(threads)
     return {"ok": True, "status": st}
+
+
+@router.post("/api/support/image")
+def support_upload_image(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """上传一张图片（JSON base64，不引 multipart 依赖），返回可引用的文件名。
+
+    登录必需；带 thread_id 时必须是自己（或管理员管辖）的会话。
+    """
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    try:
+        name, data, _mime = _decode_image_payload(payload)
+    except ValueError as e:
+        return {"ok": False, "error": str(e), "code": "BAD_IMAGE"}
+    tid = str((payload or {}).get("thread_id") or "").strip()
+    if tid and not _is_admin(uid):
+        with _lock:
+            threads = _read_threads()
+            own = next((t for t in threads if t.get("id") == tid and t.get("user_id") == uid), None)
+        if own is None:
+            return {"ok": False, "error": "无权访问", "code": "FORBIDDEN"}
+    try:
+        (_media_dir() / name).write_bytes(data)
+    except OSError as e:
+        return {"ok": False, "error": f"图片保存失败：{e}", "code": "IO"}
+    return {"ok": True, "image": name, "url": f"/api/support/image/{name}"}
+
+
+@router.get("/api/support/image/{name}")
+def support_get_image(name: str, request: Request):
+    """读取图片。管理员任意；普通用户只能读自己会话里引用过的（防越权看图）。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    path = _media_path(name)
+    if path is None or not path.exists():
+        return {"ok": False, "error": "图片不存在"}
+    admin = _is_admin(uid)
+    if not admin:
+        with _lock:
+            threads = _read_threads()
+        mine = [t for t in threads if t.get("user_id") == uid and _thread_owns_image(t, name)]
+        if not mine:
+            return {"ok": False, "error": "无权访问", "code": "FORBIDDEN"}
+    from fastapi.responses import FileResponse
+
+    media = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+    }
+    return FileResponse(
+        path,
+        media_type=media.get(path.suffix.lstrip("."), "application/octet-stream"),
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@router.get("/api/support/search")
+def support_search(request: Request, q: str = "", limit: int = 60) -> dict[str, Any]:
+    """搜索历史消息：超管搜全部会话，普通用户搜自己的。"""
+    uid = _require_user(request)
+    if not uid:
+        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    kw = str(q or "").strip()
+    if not kw:
+        return {"ok": True, "query": "", "results": []}
+    with _lock:
+        threads = _read_threads()
+    results = _search_messages(threads, uid, _is_admin(uid), kw, limit=limit)
+    return {"ok": True, "query": kw, "results": results}
 
 
 @router.post("/api/support/thread/{tid}/read")

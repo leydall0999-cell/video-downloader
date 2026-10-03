@@ -304,6 +304,13 @@
     psInput: $('psInput'),
     psSend: $('psSend'),
     psRefresh: $('psRefresh'),
+    psSearch: $('psSearch'),
+    psSearchResults: $('psSearchResults'),
+    psImgBtn: $('psImgBtn'),
+    psImgInput: $('psImgInput'),
+    psAttachBar: $('psAttachBar'),
+    psAttachImg: $('psAttachImg'),
+    psAttachClear: $('psAttachClear'),
     profAboutVersion: $('profAboutVersion'),
     profAboutBuild: $('profAboutBuild'),
     profUpdateBanner: $('profUpdateBanner'),
@@ -324,6 +331,9 @@
     profReportIncludeLog: $('profReportIncludeLog'),
     profReportCancel: $('profReportCancel'),
     profReportSubmit: $('profReportSubmit'),
+    profReportImgBtn: $('profReportImgBtn'),
+    profReportImgInput: $('profReportImgInput'),
+    profReportImgName: $('profReportImgName'),
     profReportMsg: $('profReportMsg'),
     profName: $('profileTitle'),
     profTag: $('profileTag'),
@@ -17190,6 +17200,7 @@ el.dwVidPlayer.hidden = true;
     pollTimer: null,
     notifyTimer: null,
     notified: new Set(),// 已弹过通知的 (tid:updated_at) 集合，避免重复
+    img: null,          // 待发送图片（{mime, dataUrl}，2026-10-03）
   };
   function _chatEl(id) { return document.getElementById(id); }
   function _chatFmt(ts) {
@@ -17204,8 +17215,9 @@ el.dwVidPlayer.hidden = true;
   function _chatBubble(m) {
     const who = m.role === 'admin' ? 'admin' : 'user';
     const name = m.sender_identifier ? `（${escHtml(m.sender_identifier)}）` : '';
+    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m.image);
     return `<div class="chat-msg ${who}">
-      <div class="chat-bubble">${escHtml(m.text)}</div>
+      <div class="chat-body-wrap">${body}</div>
       <div class="chat-meta">${esc(_chatFmt(m.ts))}${who === 'admin' ? name : ''}</div>
     </div>`;
   }
@@ -17367,16 +17379,21 @@ el.dwVidPlayer.hidden = true;
   async function _chatSend() {
     const input = _chatEl('chatInput');
     const sendBtn = _chatEl('chatSend');
-    if (!input || !input.value.trim() || !sendBtn || sendBtn.disabled) return;
+    const picked = _chat.img;
+    if (!input || !sendBtn || sendBtn.disabled) return;
+    if (!input.value.trim() && !picked) return;
     const text = input.value.trim();
     sendBtn.disabled = true;
     try {
+      let image = '';
+      if (picked) image = await _chatUploadImage(picked, _chat.activeThread || '');
       const r = await request('/api/support/message', {
-        method: 'POST', body: JSON.stringify({ text, thread_id: _chat.activeThread || '' }),
+        method: 'POST', body: JSON.stringify({ text, thread_id: _chat.activeThread || '', image }),
       });
       if (!r || !r.ok) throw new Error((r && r.error) || '发送失败');
       if (r.thread_id) { _chat.activeThread = r.thread_id; _chat.composing = false; }
       input.value = '';
+      _chatClearImage();
       await _chatRender();
     } catch (e) {
       const body = _chatEl('chatBody');
@@ -17438,6 +17455,39 @@ el.dwVidPlayer.hidden = true;
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _chatSend(); }
       });
     }
+    // 图片消息（2026-10-03）：选图 → 预览 → 与文字一起发
+    const imgBtn = _chatEl('chatImgBtn');
+    const imgInput = _chatEl('chatImgInput');
+    const imgClear = _chatEl('chatAttachClear');
+    if (imgBtn && imgInput) {
+      imgBtn.onclick = () => imgInput.click();
+      imgInput.onchange = async () => {
+        try {
+          _chat.img = await _chatPickImage(imgInput.files && imgInput.files[0]);
+          const prev = _chatEl('chatAttachImg');
+          if (prev) prev.src = _chat.img.dataUrl;
+          const bar = _chatEl('chatAttachBar');
+          if (bar) bar.hidden = false;
+        } catch (e) {
+          const body = _chatEl('chatBody');
+          if (body) {
+            const tip = document.createElement('div');
+            tip.className = 'chat-meta';
+            tip.style.color = '#c0392b';
+            tip.textContent = '⚠️ ' + ((e && e.message) || '图片选择失败');
+            body.appendChild(tip);
+          }
+        }
+      };
+    }
+    if (imgClear) imgClear.onclick = _chatClearImage;
+    const chatBody = _chatEl('chatBody');
+    if (chatBody) {
+      chatBody.addEventListener('click', (e) => {
+        const t = e.target;
+        if (t && t.getAttribute && t.getAttribute('data-img-zoom')) _chatZoom(t.getAttribute('data-img-zoom'));
+      });
+    }
     // 后台轮询：即使面板关闭也更新红点 + 弹通知
     _chat.notifyTimer = setInterval(_chatNotifyPoll, 15000);
     _chatNotifyPoll();
@@ -17447,21 +17497,129 @@ el.dwVidPlayer.hidden = true;
   // 原「管理视角」在悬浮小窗里会话/消息挤在一起放不下，改为整页两栏：
   // 左列 = 全部用户会话列表，右列 = 完整聊天记录 + 回复框 + 状态切换。
   // 状态用 var 声明：switchView 里会调用 _psStopPoll()，需避免 const 的暂时性死区。
-  var _ps = { threads: [], active: null, timer: null, loading: false };
+  var _ps = { threads: [], active: null, timer: null, loading: false, img: null, hits: [] };
+
+  // ===== 图片消息（管理员 / 用户共用，2026-10-03）=====
+  // 「有些场景说不清楚，发截图一目了然」：图片走 JSON base64 上传（后端不引
+  // multipart 依赖），前端先把超大截图等比缩到长边 1600px 再传，避免卡在网络上。
+  const CHAT_IMG_MAX_BYTES = 4 * 1024 * 1024;
+  const CHAT_IMG_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+  function _chatPickImage(file) {
+    return new Promise((resolve, reject) => {
+      if (!file) { reject(new Error('未选择图片')); return; }
+      if (CHAT_IMG_TYPES.indexOf(file.type) < 0) {
+        reject(new Error('只支持 PNG / JPEG / WebP / GIF 图片'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('图片读取失败'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('图片解码失败，请换一张'));
+        img.onload = () => {
+          let { naturalWidth: w, naturalHeight: h } = img;
+          if (!w || !h) { reject(new Error('图片尺寸异常')); return; }
+          const scale = Math.min(1, 1600 / Math.max(w, h));
+          const cw = Math.max(1, Math.round(w * scale));
+          const ch = Math.max(1, Math.round(h * scale));
+          const cv = document.createElement('canvas');
+          cv.width = cw; cv.height = ch;
+          const ctx = cv.getContext('2d');
+          if (!ctx) { resolve({ mime: file.type, dataUrl: String(reader.result) }); return; }
+          ctx.drawImage(img, 0, 0, cw, ch);
+          let out = '';
+          try { out = cv.toDataURL('image/jpeg', 0.86); } catch (_) { out = ''; }
+          // 画布不可用或体积没降（本来就是小图）→ 用原图
+          if (!out || out.length > String(reader.result).length) {
+            out = String(reader.result);
+          }
+          resolve({ mime: out.startsWith('data:image/jpeg') ? 'image/jpeg' : file.type, dataUrl: out });
+        };
+        img.src = String(reader.result);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function _chatUploadImage(picked, threadId) {
+    const dataUrl = String((picked || {}).dataUrl || '');
+    if (!dataUrl) throw new Error('图片为空');
+    if (dataUrl.length > CHAT_IMG_MAX_BYTES * 1.4) throw new Error('图片过大（≤4MB）');
+    const r = await request('/api/support/image', {
+      method: 'POST',
+      body: JSON.stringify({ mime: picked.mime, data_b64: dataUrl, thread_id: threadId || '' }),
+    });
+    if (!r || !r.ok || !r.image) throw new Error((r && r.error) || '图片上传失败');
+    return r.image;
+  }
+
+  /** 图片灯箱：点缩略图看原图（大图直接铺满，点任意处/ESC 关闭）。 */
+  function _chatZoom(src) {
+    if (!src) return;
+    const box = document.createElement('div');
+    box.className = 'chat-zoom';
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = '查看大图';
+    box.appendChild(img);
+    const close = () => { if (box.parentNode) box.parentNode.removeChild(box); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    box.onclick = close;
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
+  }
+
+  function _chatImgTag(name) {
+    if (!name) return '';
+    const src = '/api/support/image/' + encodeURIComponent(name);
+    return `<img class="chat-img" src="${esc(src)}" alt="图片消息" loading="lazy" data-img-zoom="${esc(src)}">`;
+  }
+
+  /** 清掉待发送图片（用户侧悬浮窗用；管理台用 _psClearImage）。 */
+  function _chatClearImage() {
+    _chat.img = null;
+    const bar = _chatEl('chatAttachBar');
+    const img = _chatEl('chatAttachImg');
+    const input = _chatEl('chatImgInput');
+    if (bar) bar.hidden = true;
+    if (img) img.removeAttribute('src');
+    if (input) input.value = '';
+  }
 
   function _psBubble(m) {
     // 管理台视角：客服（自己）的回复靠右，用户消息靠左，与用户侧悬浮窗相反，便于区分
     const mine = m.role === 'admin';
     const cls = mine ? 'user' : 'admin';
     const name = m.sender_identifier ? `（${escHtml(m.sender_identifier)}）` : '';
-    return `<div class="chat-msg ${cls}">
-      <div class="chat-bubble">${escHtml(m.text)}</div>
+    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m.image);
+    return `<div class="chat-msg ${cls}" data-msg-idx="${Number(m.__idx) || 0}">
+      <div class="chat-body-wrap">${body}</div>
       <div class="chat-meta">${mine ? '客服' : '用户'}${mine ? name : ''} · ${esc(_chatFmt(m.ts))}</div>
     </div>`;
   }
   function _psSetFootEnabled(on) {
     if (el.psInput) { el.psInput.disabled = !on; if (!on) el.psInput.value = ''; }
     if (el.psSend) el.psSend.disabled = !on;
+    if (el.psImgBtn) el.psImgBtn.disabled = !on;
+    if (!on) _psClearImage();
+  }
+  function _psClearImage() {
+    _ps.img = null;
+    if (el.psAttachBar) el.psAttachBar.hidden = true;
+    if (el.psAttachImg) el.psAttachImg.removeAttribute('src');
+    if (el.psImgInput) el.psImgInput.value = '';
+  }
+  async function _psPickImage() {
+    if (!_ps.active) return;
+    try {
+      const picked = await _chatPickImage(el.psImgInput && el.psImgInput.files && el.psImgInput.files[0]);
+      _ps.img = picked;
+      if (el.psAttachImg) el.psAttachImg.src = picked.dataUrl;
+      if (el.psAttachBar) el.psAttachBar.hidden = false;
+    } catch (e) {
+      _psNote('⚠️ ' + ((e && e.message) || '图片选择失败'));
+    }
   }
   function _psNote(text) {
     const log = el.psLog;
@@ -17537,7 +17695,9 @@ el.dwVidPlayer.hidden = true;
         if (sb) sb.onclick = () => _psSetStatus(tid, resolved ? 'open' : 'resolved');
       }
       if (log) {
-        log.innerHTML = (t.messages || []).map(_psBubble).join('') || '<div class="chat-empty">暂无消息</div>';
+        // 带上下标：搜索结果点击后能定位并高亮到那一条
+        const msgs = (t.messages || []).map((m, i) => Object.assign({}, m, { __idx: i }));
+        log.innerHTML = msgs.map(_psBubble).join('') || '<div class="chat-empty">暂无消息</div>';
         log.scrollTop = log.scrollHeight;
       }
       _psSetFootEnabled(true);
@@ -17563,14 +17723,19 @@ el.dwVidPlayer.hidden = true;
     const btn = el.psSend;
     if (!input || !btn || btn.disabled || !_ps.active) return;
     const text = (input.value || '').trim();
-    if (!text) return;
+    const picked = _ps.img;
+    if (!text && !picked) return;
     btn.disabled = true;
     try {
+      // 有图先传图拿文件名，再连同文字一起发（后端允许「无文字只有图」）
+      let image = '';
+      if (picked) image = await _chatUploadImage(picked, _ps.active);
       const r = await request('/api/support/thread/' + _ps.active + '/reply', {
-        method: 'POST', body: JSON.stringify({ text }),
+        method: 'POST', body: JSON.stringify({ text, image }),
       });
       if (!r || !r.ok) throw new Error((r && r.error) || '回复失败');
       input.value = '';
+      _psClearImage();
       await _psOpenThread(_ps.active);
     } catch (e) {
       _psNote('⚠️ ' + ((e && e.message) || '回复失败'));
@@ -17580,6 +17745,49 @@ el.dwVidPlayer.hidden = true;
   }
   function _psStopPoll() {
     if (_ps && _ps.timer) { clearInterval(_ps.timer); _ps.timer = null; }
+  }
+  async function _psRunSearch() {
+    const box = el.psSearchResults;
+    if (!el.psSearch || !box) return;
+    const q = (el.psSearch.value || '').trim();
+    if (!q) { _ps.hits = []; box.hidden = true; box.innerHTML = ''; return; }
+    let r = null;
+    try { r = await request('/api/support/search?q=' + encodeURIComponent(q)); } catch (_) { r = null; }
+    const hits = (r && r.ok && r.results) || [];
+    _ps.hits = hits;
+    if (!hits.length) {
+      box.innerHTML = '<div class="ps-search-empty">没有找到包含「' + escHtml(q) + '」的消息</div>';
+      box.hidden = false;
+      return;
+    }
+    box.innerHTML = '<div class="ps-search-count">命中 ' + hits.length + ' 条消息</div>' + hits.map((h, i) => {
+      const who = h.user_identifier ? escHtml(h.user_identifier) : '未知用户';
+      const when = h.ts ? esc(_chatFmt(h.ts)) : '';
+      const by = h.role === 'admin' ? '客服' : '用户';
+      const img = h.has_image ? '🖼 ' : '';
+      return `<div class="ps-hit" data-hit="${i}">
+        <div class="ps-hit-top"><span class="ps-hit-who">${who}</span><span class="ps-hit-meta">${by} · ${when}</span></div>
+        <div class="ps-hit-text">${img}${escHtml(String(h.excerpt || ''))}</div>
+      </div>`;
+    }).join('');
+    box.hidden = false;
+    box.querySelectorAll('.ps-hit').forEach((row) => {
+      row.onclick = () => {
+        const hit = _ps.hits[Number(row.dataset.hit) || 0];
+        if (!hit) return;
+        _psOpenThread(hit.thread_id).then(() => _psFlashMsg(hit.index));
+      };
+    });
+  }
+  /** 定位并高亮命中的那条消息（搜索结果跳转后用）。 */
+  function _psFlashMsg(index) {
+    const log = el.psLog;
+    if (!log) return;
+    const node = log.querySelector('.chat-msg[data-msg-idx="' + Number(index) + '"]');
+    if (!node) return;
+    node.scrollIntoView({ block: 'center' });
+    node.classList.add('is-flash');
+    setTimeout(() => node.classList.remove('is-flash'), 2200);
   }
   async function loadSupportAdmin() {
     if (!el.profileSupportPanel) return;
@@ -17603,8 +17811,8 @@ el.dwVidPlayer.hidden = true;
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         request('/api/support/thread/' + _ps.active).then((r) => {
           if (!r || !r.ok) return;
-          const html = ((r.thread || {}).messages || []).map(_psBubble).join('') ||
-            '<div class="chat-empty">暂无消息</div>';
+          const msgs = ((r.thread || {}).messages || []).map((m, i) => Object.assign({}, m, { __idx: i }));
+          const html = msgs.map(_psBubble).join('') || '<div class="chat-empty">暂无消息</div>';
           if (log.innerHTML !== html) {
             log.innerHTML = html;
             if (atBottom) log.scrollTop = log.scrollHeight;
@@ -17618,6 +17826,29 @@ el.dwVidPlayer.hidden = true;
       el.psRefresh.onclick = () => { _psLoadThreads(); if (_ps.active) _psOpenThread(_ps.active); };
     }
     if (el.psSend) el.psSend.onclick = _psSend;
+    if (el.psImgBtn && el.psImgInput) {
+      el.psImgBtn.onclick = () => el.psImgInput.click();
+      el.psImgInput.onchange = () => { _psPickImage(); };
+    }
+    if (el.psAttachClear) el.psAttachClear.onclick = () => _psClearImage();
+    // 气泡里的图片点击放大（事件委托，动态渲染也能生效）
+    if (el.psLog) {
+      el.psLog.addEventListener('click', (e) => {
+        const t = e.target;
+        if (t && t.getAttribute && t.getAttribute('data-img-zoom')) _chatZoom(t.getAttribute('data-img-zoom'));
+      });
+    }
+    // 历史消息搜索：输入即查（300ms 防抖），回车/点击结果跳到对应会话并高亮
+    if (el.psSearch) {
+      let timer = null;
+      el.psSearch.addEventListener('input', () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(_psRunSearch, 300);
+      });
+      el.psSearch.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); _psRunSearch(); }
+      });
+    }
     if (el.psInput) {
       el.psInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _psSend(); }
@@ -18782,14 +19013,19 @@ el.dwVidPlayer.hidden = true;
     el.profReportSubmit.disabled = true;
     if (el.profReportMsg) { el.profReportMsg.textContent = '提交中…'; el.profReportMsg.hidden = false; el.profReportMsg.classList.remove('is-err'); }
     try {
+      let image = '';
+      if (_reportImg) image = await _chatUploadImage(_reportImg, '');
       const r = await request('/api/support/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, thread_id: '' }),
+        body: JSON.stringify({ text, thread_id: '', image }),
       });
       if (!r || !r.ok) throw new Error((r && r.error) || '上报失败');
       if (el.profReportModal) el.profReportModal.hidden = true;
       if (el.profReportText) el.profReportText.value = '';
+      _reportImg = null;
+      if (el.profReportImgInput) el.profReportImgInput.value = '';
+      if (el.profReportImgName) { el.profReportImgName.hidden = true; el.profReportImgName.textContent = ''; }
       _aboutMsg('✅ 已收到你的上报，我们会尽快处理');
       setTimeout(() => _aboutMsg(''), 3000);
     } catch (e) {
@@ -18798,6 +19034,30 @@ el.dwVidPlayer.hidden = true;
       el.profReportSubmit.disabled = false;
     }
   });
+
+  // 错误上报弹窗附图（2026-10-03）
+  let _reportImg = null;
+  if (el.profReportImgBtn && el.profReportImgInput) {
+    el.profReportImgBtn.addEventListener('click', () => el.profReportImgInput.click());
+    el.profReportImgInput.addEventListener('change', async () => {
+      try {
+        _reportImg = await _chatPickImage(el.profReportImgInput.files && el.profReportImgInput.files[0]);
+        if (el.profReportImgName) {
+          el.profReportImgName.textContent = '已附加 1 张截图（' +
+            Math.round(String(_reportImg.dataUrl).length / 1024) + ' KB）';
+          el.profReportImgName.hidden = false;
+        }
+      } catch (e) {
+        _reportImg = null;
+        if (el.profReportImgName) { el.profReportImgName.hidden = true; el.profReportImgName.textContent = ''; }
+        if (el.profReportMsg) {
+          el.profReportMsg.textContent = (e && e.message) || '图片选择失败';
+          el.profReportMsg.hidden = false;
+          el.profReportMsg.classList.add('is-err');
+        }
+      }
+    });
+  }
 
   // 账号安全：忘记密码 → 打开找回密码弹窗
   if (el.profForgotPwBtn) el.profForgotPwBtn.addEventListener('click', () => openForgetModal());

@@ -5111,7 +5111,10 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 }
 .chat-badge.resolved { background: #e6f6ee; color: #1d9e75; }
 
-.chat-footer { display: flex; gap: .5rem; padding: .6rem; border-top: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc); }
+.chat-footer {
+  display: flex; flex-direction: column; gap: .5rem; padding: .6rem;
+  border-top: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc);
+}
 .chat-input {
   flex: 1 1 auto; resize: none; border: 1px solid var(--border, #e5e7eb); border-radius: 8px;
   padding: .5rem .6rem; font: inherit; background: var(--bg, #fff); color: var(--text, #1f2937);
@@ -5213,12 +5216,71 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 }
 .ps-log .chat-msg { max-width: 78%; }
 .ps-foot {
-  flex: none; display: flex; gap: .6rem; align-items: flex-end; padding: .6rem;
+  flex: none; display: flex; flex-direction: column; gap: .5rem; padding: .6rem;
   border-top: 1px solid var(--border, #e5e7eb); background: var(--bg-soft, #f8fafc);
 }
+.ps-foot-row { display: flex; gap: .5rem; align-items: flex-end; }
 .ps-foot .chat-input { flex: 1 1 auto; resize: vertical; max-height: 140px; }
 .ps-foot .chat-send { height: 38px; }
 .ps-foot .chat-send:disabled { opacity: .45; cursor: default; }
+
+/* 图片消息（2026-10-03）：附件按钮 / 预览条 / 气泡缩略图 / 灯箱 */
+.chat-attach-btn {
+  flex: none; height: 38px; padding: 0 .6rem; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border, #e5e7eb); background: var(--bg, #fff);
+  color: var(--text-mute, #64748b); font-size: .85rem; white-space: nowrap;
+}
+.chat-attach-btn:hover { background: var(--bg-soft, #f1f5f9); color: var(--text, #1f2937); }
+.chat-attach-btn:disabled { opacity: .45; cursor: default; }
+.ps-attach { display: flex; align-items: center; gap: .4rem; }
+.ps-attach-img {
+  max-height: 64px; max-width: 120px; border-radius: 6px; border: 1px solid var(--border, #e5e7eb);
+  display: block;
+}
+.ps-attach-x {
+  width: 22px; height: 22px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(15, 23, 42, .55); color: #fff; font-size: .9rem; line-height: 1;
+}
+.ps-attach-x:hover { background: rgba(15, 23, 42, .75); }
+.chat-body-wrap { display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; }
+.chat-msg.user .chat-body-wrap { align-items: flex-end; }
+.chat-img {
+  max-width: 220px; max-height: 220px; border-radius: 8px; cursor: zoom-in;
+  border: 1px solid var(--border, #e5e7eb); display: block; background: var(--bg-soft, #f8fafc);
+}
+.chat-zoom {
+  position: fixed; inset: 0; z-index: 900; background: rgba(15, 23, 42, .78);
+  display: flex; align-items: center; justify-content: center; padding: 2rem; cursor: zoom-out;
+}
+.chat-zoom img {
+  max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5);
+}
+.chat-msg.is-flash .chat-bubble,
+.chat-msg.is-flash .chat-img { animation: vdlMsgFlash 2.2s ease; }
+@keyframes vdlMsgFlash {
+  0%, 100% { box-shadow: none; }
+  15%, 60% { box-shadow: 0 0 0 3px rgba(79, 108, 240, .55); }
+}
+
+/* 历史消息搜索（客服工作台左栏） */
+.ps-search { padding: 0 .6rem .5rem; }
+.ps-search-input {
+  width: 100%; height: 30px; padding: 0 .55rem; border-radius: 8px; font-size: .82rem;
+  border: 1px solid var(--border, #e5e7eb); background: var(--bg, #fff); color: var(--text, #1f2937);
+}
+.ps-search-input:focus { outline: none; border-color: var(--brand, #4f6cf0); box-shadow: 0 0 0 3px rgba(79, 108, 240, .14); }
+.ps-search-results {
+  max-height: 40%; overflow-y: auto; margin: 0 .6rem .5rem; padding: .3rem;
+  border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--bg, #fff);
+}
+.ps-search-count { font-size: .72rem; color: var(--text-mute, #94a3b8); padding: .15rem .3rem .35rem; }
+.ps-search-empty { font-size: .76rem; color: var(--text-mute, #94a3b8); padding: .4rem .3rem; }
+.ps-hit { padding: .35rem .4rem; border-radius: 8px; cursor: pointer; }
+.ps-hit:hover { background: rgba(79, 108, 240, .1); }
+.ps-hit-top { display: flex; align-items: baseline; justify-content: space-between; gap: .4rem; }
+.ps-hit-who { font-size: .78rem; font-weight: 600; color: var(--text, #1f2937); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-hit-meta { font-size: .68rem; color: var(--text-mute, #94a3b8); flex: none; }
+.ps-hit-text { font-size: .75rem; color: var(--text-mute, #64748b); line-height: 1.5; margin-top: .1rem; word-break: break-all; }
 @media (max-width: 760px) {
   .ps-wrap { flex-direction: column; height: auto; }
   .ps-side { width: 100%; height: 220px; }
@@ -5297,6 +5359,9 @@ html.theme-dark .pf-changelog { background: rgba(255, 255, 255, .04); border-col
 .pf-report-close:hover { background: #e5e7eb; }
 .pf-report-tip { font-size: .8rem; color: var(--text-mute, #6b7280); line-height: 1.55; margin: 0; }
 .pf-report-chk { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--text, #374151); }
+.pf-report-img-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.pf-report-img-row .user-menu-btn { height: 32px; font-size: .8rem; }
+.pf-report-img-name { font-size: .76rem; color: var(--text-mute, #64748b); }
 .pf-report-actions { display: flex; gap: .6rem; justify-content: flex-end; }
 .pf-report-actions .user-menu-btn { height: 36px; padding: 0 1.1rem; font-size: .85rem; }
 

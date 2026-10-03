@@ -2024,6 +2024,11 @@
                 <span data-page-node-id="TgzWZ2Ec91Rm3CteUKkHgq">用户会话 <span class="ps-side-count" id="psCount" data-page-node-id="PK5aw3a5mW0JLGGM1GregH">0</span></span>
                 <button type="button" class="ps-refresh" id="psRefresh" title="刷新列表" data-page-node-id="W3uHHQFCRG71QSfI4qUBFQ">刷新</button>
               </div>
+              <!-- 历史消息搜索（2026-10-03） -->
+              <div class="ps-search" data-page-node-id="psSearchWrap">
+                <input type="search" id="psSearch" class="ps-search-input" placeholder="搜索历史消息…" autocomplete="off" spellcheck="false" data-page-node-id="psSearchInput" />
+              </div>
+              <div id="psSearchResults" class="ps-search-results" hidden data-page-node-id="psSearchResults"></div>
               <div class="ps-list" id="psList" data-page-node-id="Gczevl5FgK9C6Nn7brqpQQ"><div class="ps-list-empty" data-page-node-id="eUAcdJj7xInpq0t9OPA4bU">加载中…</div></div>
             </aside>
             <section class="ps-main" data-page-node-id="sIx1RbK2XfHgbDIdcpYbWu">
@@ -2032,8 +2037,16 @@
               </div>
               <div class="ps-log" id="psLog" data-page-node-id="b11XS44HNrNimMcWrTcLRZ"><div class="chat-empty" data-page-node-id="DUwsgUjEtLizWrX97KreuN">从左侧选择一个用户会话，即可查看完整聊天记录并回复。</div></div>
               <div class="ps-foot" id="psFoot" data-page-node-id="O10tcTHJl6JGvj9oSIHw5T">
-                <textarea id="psInput" class="chat-input" rows="3" placeholder="以管理员身份回复…" disabled></textarea>
-                <button type="button" class="chat-send" id="psSend" disabled data-page-node-id="OVfDHGnpgSqkfvxaOCqY5q">回复</button>
+                <div class="ps-attach" id="psAttachBar" hidden data-page-node-id="psAttachBar">
+                  <img class="ps-attach-img" id="psAttachImg" alt="待发送的图片" data-page-node-id="psAttachImg" />
+                  <button type="button" class="ps-attach-x" id="psAttachClear" title="移除图片" data-page-node-id="psAttachClear">×</button>
+                </div>
+                <div class="ps-foot-row">
+                  <input type="file" id="psImgInput" accept="image/png,image/jpeg,image/webp,image/gif" hidden data-page-node-id="psImgInput" />
+                  <button type="button" class="chat-attach-btn" id="psImgBtn" title="发送图片（截图一目了然）" disabled data-page-node-id="psImgBtn">🖼 图片</button>
+                  <textarea id="psInput" class="chat-input" rows="3" placeholder="以管理员身份回复…" disabled></textarea>
+                  <button type="button" class="chat-send" id="psSend" disabled data-page-node-id="OVfDHGnpgSqkfvxaOCqY5q">回复</button>
+                </div>
               </div>
             </section>
           </div>
@@ -2091,6 +2104,12 @@
                 <span data-page-node-id="DD650pKPd9NGRZWQkNQ7QZ">问题描述</span>
                 <textarea id="profReportText" class="um-textarea" rows="5" placeholder="例如：点击「一键抠图」后一直转圈，无法出图…"></textarea>
               </label>
+              <!-- 附图（2026-10-03）：说不清的时候直接发截图 -->
+              <div class="pf-report-img-row" data-page-node-id="pfReportImgRow">
+                <input type="file" id="profReportImgInput" accept="image/png,image/jpeg,image/webp,image/gif" hidden data-page-node-id="profReportImgInput" />
+                <button type="button" class="user-menu-btn ghost" id="profReportImgBtn" data-page-node-id="profReportImgBtn">🖼 附截图（≤4MB）</button>
+                <span class="pf-report-img-name" id="profReportImgName" hidden data-page-node-id="profReportImgName"></span>
+              </div>
               <label class="pf-report-chk" data-page-node-id="0WurtUi1wmxCGRKWNubJvx">
                 <input type="checkbox" id="profReportIncludeLog" checked data-page-node-id="VAXJhcTHvBnFwvdEgfdClB" />
                 <span data-page-node-id="Vf5OmMOZnvoYoMBkl5ryCL">附带启动诊断日志（~/.vdl_launch.log 尾部）</span>
@@ -3974,8 +3993,16 @@
   <div class="chat-tabs" id="chatTabs" hidden data-page-node-id="BUliN3xB2VeiGJID3The2l"></div>
   <div class="chat-body" id="chatBody" data-page-node-id="oLAr9T0NxdZwzpwI4kou6I"></div>
   <div class="chat-footer" id="chatFooter" data-page-node-id="chmtHql5k02AceHi7GMVJk">
-    <textarea id="chatInput" class="chat-input" placeholder="请输入您的问题…" rows="2"></textarea>
-    <button id="chatSend" class="chat-send" data-page-node-id="ES2RZMyXtKDlSfLMVA9OeU">发送</button>
+    <div class="ps-attach" id="chatAttachBar" hidden data-page-node-id="chatAttachBar">
+      <img class="ps-attach-img" id="chatAttachImg" alt="待发送的图片" data-page-node-id="chatAttachImg" />
+      <button type="button" class="ps-attach-x" id="chatAttachClear" title="移除图片" data-page-node-id="chatAttachClear">×</button>
+    </div>
+    <div class="ps-foot-row">
+      <input type="file" id="chatImgInput" accept="image/png,image/jpeg,image/webp,image/gif" hidden data-page-node-id="chatImgInput" />
+      <button type="button" class="chat-attach-btn" id="chatImgBtn" title="发送图片（说不清的时候发截图）" data-page-node-id="chatImgBtn">🖼</button>
+      <textarea id="chatInput" class="chat-input" placeholder="请输入您的问题…" rows="2"></textarea>
+      <button id="chatSend" class="chat-send" data-page-node-id="ES2RZMyXtKDlSfLMVA9OeU">发送</button>
+    </div>
   </div>
 </div>
 

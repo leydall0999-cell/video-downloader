@@ -305,6 +305,12 @@ run_one test_credential_store.py
 #      配置走 VDL_DATA_DIR 隔离（绝不写用户家目录）。
 run_one test_engine_idle.py
 
+#  33. test_support_image.py —— 客服「发图片 + 搜历史消息」（2026-10-03）：
+#      图片解码白名单/大小上限/魔数校验、附件路径防穿越、历史消息搜索
+#      （超管搜全部 / 用户只搜自己的、按时间倒序、带定位下标）。
+#      附件必须落 VDL_DATA_DIR（绝不写 Downloads —— TCC 会重新索要授权并永久阻塞）。
+run_one test_support_image.py
+
 echo ""
 echo "=== extension/tests/test_sniff_core.js（MV3 扩展判定核心，node） ==="
 NODE_BIN=""
