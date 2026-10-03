@@ -1022,6 +1022,30 @@ def _read_nginx_log_lines(per_file_cap: int = 20000) -> list:
     return out
 
 
+# 机器/脚本 UA 特征（我们自己 App 的轮询、脚本、扫描器等）
+_MACHINE_UA_MARKS = (
+    "python-requests", "python-urllib", "curl/", "wget", "Go-http-client",
+    "okhttp", "Java/", "l9explore", "axios", "node-fetch", "PostmanRuntime",
+    "python-http-client", "aiohttp", "scrapy", "HeadlessChrome", "bot",
+)
+
+
+def _is_machine_ua(ua: str) -> bool:
+    """UA 是否属于机器/脚本（不是真人浏览器）。"""
+    s = str(ua or "")
+    return any(mark in s for mark in _MACHINE_UA_MARKS)
+
+
+def _is_page_path(path: str) -> bool:
+    """是否「页面级」请求：排除接口、网关、内部路径与静态资源。"""
+    p = str(path or "")
+    if not p or p.startswith("/api/") or p.startswith("/gw/") or p.startswith("/internal"):
+        return False
+    if p.endswith(_STATIC_SUFFIX):
+        return False
+    return True
+
+
 @router.get("/api/admin/visits")
 def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     """网站访客汇总：解析 nginx access.log，统计独立 IP / 状态码 / 热点路径 / 最近访问。
@@ -1046,6 +1070,15 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     top_paths: Counter = Counter()
     top_ips: Counter = Counter()
     recent: list = []
+    # 真人访客口径（2026-10-03）：原口径统计**所有** HTTP 请求，其中 ~80% 是
+    # 接口调用 + 我们自己 App 的轮询（python-requests 等），且独立 IP 里混着
+    # 机主自己的浏览器与机器 IP —— 老板看数字无法判断「今天来了几个真人」。
+    # 这里另算一套：只认「浏览器 UA + 页面级路径（排除 /api /gw /internal /静态资源）」。
+    human_pv = 0
+    human_uv: set = set()
+    human_ips: set = set()
+    human_pages: Counter = Counter()
+    machine_requests = 0
     try:
         raw_lines = _read_nginx_log_lines()
     except Exception as e:
@@ -1081,6 +1114,17 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
             "s": int(status),
             "ua": m.group("ua")[:140],
         })
+        # ---- 真人访客口径 ----
+        ua = m.group("ua") or ""
+        if _is_machine_ua(ua) or "Mozilla" not in ua:
+            machine_requests += 1
+        elif not _is_page_path(path):
+            machine_requests += 1     # 浏览器请求接口/静态资源也算「非真人页面访问」
+        else:
+            human_pv += 1
+            human_ips.add(ip)
+            human_uv.add((ip, hash(ua) & 0xFFFF))
+            human_pages[path] += 1
     return {
         "total": total,
         "unique_ips": len(ips),
@@ -1091,6 +1135,14 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
         "recent": recent[-max(1, min(int(limit), 200)):],
         "source": _NGINX_ACCESS_LOG,
         "log_files": len(_nginx_log_paths()),
+        "human": {
+            "pv": human_pv,
+            "uv": len(human_uv),
+            "ips": len(human_ips),
+            "machine_requests": machine_requests,
+            "top_pages": [{"path": k, "count": v} for k, v in human_pages.most_common(10)],
+            "note": "真人访客 = 浏览器 UA 且访问页面级路径；已排除 /api /gw /internal 接口、静态资源与机器请求（App 轮询/健康检查/脚本）",
+        },
         "range": range or "all",
         "range_label": _OPS_RANGE_LABELS.get(range, "全部"),
     }
