@@ -21810,9 +21810,14 @@ el.dwVidPlayer.hidden = true;
         if (b) applyPlansSeg(b.dataset.cat);
       });
     }
+    let _plansSaving = false;      // 防重闸门：直接绑定 + 事件委托可能同时触发
     const savePlans = async () => {
-      const cfg = lastConfig || {};
-      const plans = cfg.plans || {};
+      if (_plansSaving) { console.log('[plans] 重复点击已忽略'); return; }
+      _plansSaving = true;
+      _adminMsg(plansMsg, '正在保存…', false);
+      try {
+        const cfg = lastConfig || {};
+        const plans = cfg.plans || {};
       const buildCat = (obj) => {
         const out = {};
         Object.keys(obj).forEach((k) => {
@@ -21871,6 +21876,7 @@ el.dwVidPlayer.hidden = true;
         });
         console.log('[plans] save resp', JSON.stringify(r).slice(0, 300));
         if (r && r.ok) {
+          _plansSaving = false;         // 成功也要释放闸门，否则保存一次后按钮永久失灵
           delete plansBox.dataset.dirty; // 保存成功 → 允许 loadConfig 用服务端真值刷新表单
           loadConfig();
           // 价格唯一真源在授权中心：云端同步成功才算全端生效，未同步要明确告知
@@ -21879,7 +21885,16 @@ el.dwVidPlayer.hidden = true;
           else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${cloud.reason || '未知原因'}）——网页版与实际扣款价暂未变更`, true);
         }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
-      } catch (e) { _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true); }
+      } catch (e) {
+        _plansSaving = false;   // ⚠️ 必须释放，否则一次网络抖动后按钮永久失灵
+        _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true);
+      }
+      } catch (e) {
+        _plansSaving = false;
+        // 兜底：buildCat 阶段就抛错（例如模板里某个选择器找不到）也要给出可见提示
+        _adminMsg(plansMsg, '保存失败：' + ((e && e.message) || '表单读取异常'), true);
+        console.error('[plans] save failed', e);
+      }
     };
 
     const _needLogin = (msg) => {
@@ -22031,7 +22046,24 @@ el.dwVidPlayer.hidden = true;
     if (smtpAddBtn) smtpAddBtn.addEventListener('click', () => showSmtpForm(null));
     if (smtpSaveBtn) smtpSaveBtn.addEventListener('click', saveSmtp);
     if (smtpCancelBtn) smtpCancelBtn.addEventListener('click', () => { if (smtpForm) smtpForm.hidden = true; });
-    if (plansSaveBtn) plansSaveBtn.addEventListener('click', savePlans);
+    if (plansSaveBtn) {
+      plansSaveBtn.addEventListener('click', savePlans);
+      // 诊断：capture 阶段先记一笔。若这里都不触发，说明点击根本没到按钮
+      // （overlay 拦截 / pointer-events:none / 元素被替换），那就与 savePlans 无关。
+      plansSaveBtn.addEventListener('click', () => {
+        console.log('[plans] 保存按钮被点击');
+        plansSaveBtn.setAttribute('data-last-click', String(Date.now()));
+      }, true);
+    } else {
+      console.error('[plans] 找不到保存按钮 #adminPlansSave');
+    }
+
+    // 自愈绑定：用事件委托保证「保存套餐配置」一定点得动。
+    // 起因：若启动时 $('adminPlansSave') 拿到 null，上面的直接绑定会全部落空且无报错。
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t && t.closest && t.closest('#adminPlansSave')) savePlans();
+    });
     if (smtpList) smtpList.addEventListener('click', async (e) => {
       const editBtn = e.target.closest('[data-smtp-edit]');
       const delBtn = e.target.closest('[data-smtp-del]');
@@ -22046,6 +22078,7 @@ el.dwVidPlayer.hidden = true;
           if (r && r.ok) { loadConfig(); _adminMsg(smtpMsg, '已删除', false); }
           else _adminMsg(smtpMsg, (r && r.error) || '删除失败', true);
         } catch (err) { _adminMsg(smtpMsg, '删除失败：' + (err && err.message ? err.message : '网络错误'), true); }
+
       }
     });
 
