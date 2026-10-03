@@ -16673,18 +16673,39 @@ el.dwVidPlayer.hidden = true;
   // 相比旧版「全部纵向堆叠 + 绝对定位角标」，卡高约降 1/3，宽窄栅格里都能对齐。
   function _memberCard(plan, code, extra) {
     extra = extra || {};
+    const st = plan.state || {};
+    // 售卖状态（2026-10-03）：下架隐藏；未开始/已结束/售罄置灰；秒杀中显示秒杀价+原价划线
+    if (st.on_sale === false) return '';
     const saving = plan.saving ? `<span class="member-badge member-badge-saving">省 ${Math.round(plan.saving * 100)}%</span>` : '';
     const best = plan.best ? `<span class="member-badge member-badge-best">最受欢迎</span>` : '';
-    const badges = (saving || best) ? `<span class="member-plan-badges">${saving}${best}</span>` : '';
-    const price = (Number(plan.price_cny) || 0).toFixed(2);
+    const mkBadge = st.badge ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
+    const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
+    const badges = (saving || best || mkBadge || outBadge)
+      ? `<span class="member-plan-badges">${mkBadge}${saving}${best}${outBadge}</span>` : '';
+    const orig = (Number(plan.price_cny) || 0).toFixed(2);
+    const now = (Number(st.price) || Number(plan.price_cny) || 0).toFixed(2);
+    const flashLine = st.is_flash && Number(st.original_price) > Number(st.price)
+      ? `<span class="member-price-orig">¥${orig}</span>` : '';
+    const price = `${flashLine}<span class="member-price-now${st.is_flash ? ' is-flash' : ''}">${now}</span>`;
     const unit = extra.unit ? `<span class="member-plan-per">${extra.unit}</span>` : '';
+    // 活动时间 / 剩余名额
+    const fmtTs = (ts) => (ts ? _memberFmtDate(ts) : '');
+    const bits = [];
+    if (st.start_at || st.end_at) {
+      bits.push(`${st.start_at && !st.end_at ? `${fmtTs(st.start_at)} 开售` : (st.end_at && !st.start_at ? `截至 ${fmtTs(st.end_at)}` : `${fmtTs(st.start_at)} ~ ${fmtTs(st.end_at)}`)}`);
+    }
+    if (st.mode === 'flash_sale' && st.flash_end) bits.push(`秒杀至 ${fmtTs(st.flash_end)}`);
+    if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
+    const meta = bits.length ? `<div class="member-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
+    const desc = st.desc ? `<div class="member-plan-desc">${escHtml(st.desc)}</div>` : '';
     const foot = extra.foot ? `<div class="member-card-foot">${extra.foot}</div>` : '';
+    const disabled = st.buyable === false;
     return `
-      <div class="member-plan${plan.best ? ' member-plan-best' : ''}">
-        <div class="member-plan-top"><span class="member-plan-name">${plan.label || code}</span>${badges}</div>
+      <div class="member-plan${plan.best ? ' member-plan-best' : ''}${disabled ? ' is-off' : ''}">
+        <div class="member-plan-top"><span class="member-plan-name">${escHtml(plan.label || code)}</span>${badges}</div>
         <div class="member-plan-price"><span class="member-ccy">¥</span>${price}${unit}</div>
-        ${foot}
-        <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}">购买</button>
+        ${meta}${desc}${foot}
+        <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}"${disabled ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${disabled ? escHtml(st.reason || '暂不可购买') : '购买'}</button>
       </div>`;
   }
   function switchMemberTab(key) {
@@ -21231,6 +21252,74 @@ el.dwVidPlayer.hidden = true;
     // 保存成功后才清脏并刷新为服务端真值。
     if (plansBox) {
       plansBox.addEventListener('input', () => { plansBox.dataset.dirty = '1'; });
+      // 营销面板展开/收起
+      plansBox.addEventListener('click', (e) => {
+        const t = e.target;
+        if (!t || !t.closest) return;
+        const tgl = t.closest('.plan-mkt-toggle');
+        if (tgl) {
+          const code = tgl.dataset.plan;
+          const box = plansBox.querySelector(`.admin-plan-mkt[data-plan="${CSS.escape(code)}"]`);
+          if (box) box.hidden = !box.hidden;
+          return;
+        }
+        const del = t.closest('.plan-del');
+        if (del) {
+          const code = del.dataset.plan;
+          if (!confirm(`确定删除档位「${code}」？\n删除后前台不再展示该档（已购买的用户权益不受影响）。`)) return;
+          del.closest('.admin-plan-item').remove();
+          plansBox.dataset.dirty = '1';
+          _adminMsg(plansMsg, `已删除「${code}」，点「保存套餐配置」生效`, false);
+          return;
+        }
+        const add = t.closest('.plan-add-btn');
+        if (add) {
+          const box = add.closest('.admin-plan-group');
+          const cat = box.dataset.cat;
+          const code = (box.querySelector('.plan-new-code') || {}).value?.trim();
+          const label = (box.querySelector('.plan-new-label') || {}).value?.trim();
+          const price = parseFloat((box.querySelector('.plan-new-price') || {}).value);
+          const amt = parseInt((box.querySelector('.plan-new-days') || {}).value, 10);
+          if (!code) { _adminMsg(plansMsg, '请填写档位 code（英文/数字/下划线）', true); return; }
+          if (!/^[A-Za-z0-9_]{2,40}$/.test(code)) { _adminMsg(plansMsg, 'code 只能字母/数字/下划线（2-40 位）', true); return; }
+          if (box.querySelector(`.admin-plan-item[data-plan="${CSS.escape(code)}"]`)) {
+            _adminMsg(plansMsg, `档位「${code}」已存在`, true); return;
+          }
+          if (!(price > 0) || !(amt > 0)) { _adminMsg(plansMsg, '请填写有效价格与天数/积分', true); return; }
+          const isDays = cat === 'dl';
+          const fields = ['label', 'mode', 'on_sale', 'badge', 'desc', 'flash_price', 'flash_start', 'flash_end', 'stock', 'sold', 'start_at', 'end_at', 'price_cny'];
+          let h = `<div class="admin-plan-item" data-plan="${esc(code)}"><div class="admin-plan-row">
+            <span class="admin-plan-name">${esc(label || code)} <code class="admin-plan-code">${esc(code)}</code></span>
+            <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(code)}" value="${esc(label || code)}"></label>
+            <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(code)}" value="${price}" type="number" step="0.01"></label>
+            <label>${isDays ? '天数' : '积分'}<input class="admin-input admin-input-sm ${isDays ? 'plan-days' : 'plan-credits'}" data-plan="${esc(code)}" value="${amt}" type="number"></label>
+            <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(code)}">⚙ 营销</button>
+            <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(code)}">删除</button>
+          </div><div class="admin-plan-mkt" data-plan="${esc(code)}" hidden><div class="admin-plan-mkt-grid">
+            <label>售卖模式<select class="admin-input admin-input-sm plan-mode" data-plan="${esc(code)}">${PLAN_MODES.map(([v, t2]) => `<option value="${v}">${t2}</option>`).join('')}</select></label>
+            <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(code)}" checked> 上架中</label>
+            <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(code)}" placeholder="如：限时 5 折"></label>
+            <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(code)}" type="number" step="0.01" placeholder="留空=不用"></label>
+            <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(code)}" type="datetime-local"></label>
+            <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(code)}" type="datetime-local"></label>
+            <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
+            <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
+            <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(code)}" type="datetime-local"></label>
+            <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(code)}" type="datetime-local"></label>
+            <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(code)}" placeholder="显示在套餐卡片上"></label>
+          </div><p class="admin-plan-hint">秒杀价需在秒杀窗口内生效；限量售完自动置灰；下架/未开始/已结束无法下单。</p></div></div>`;
+          const tmp = document.createElement('div');
+          tmp.innerHTML = h;
+          const node = tmp.firstElementChild;
+          box.insertBefore(node, box.querySelector('.admin-plan-add'));
+          box.querySelector('.plan-new-code').value = '';
+          box.querySelector('.plan-new-label').value = '';
+          box.querySelector('.plan-new-price').value = '';
+          box.querySelector('.plan-new-days').value = '';
+          plansBox.dataset.dirty = '1';
+          _adminMsg(plansMsg, `已添加「${code}」，点「保存套餐配置」生效`, false);
+        }
+      });
     }
     const loadConfig = async () => {
       try {
@@ -21319,19 +21408,78 @@ el.dwVidPlayer.hidden = true;
       const ai = (plans.ai_member && plans.ai_member.plans) || {};
       const cp = plans.credit_packs || {};
       const costs = cfg.credit_costs || {};
+      // 时间戳 ↔ datetime-local 互转（营销活动时间用）
+      const _tsToLocal = (ts) => {
+        const n = Number(ts) || 0;
+        if (!n) return '';
+        try {
+          const d = new Date(n * 1000);
+          const p = (x) => String(x).padStart(2, '0');
+          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+        } catch (_) { return ''; }
+      };
+      const _localToTs = (s) => {
+        if (!s) return 0;
+        const t = new Date(s).getTime();
+        return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+      };
+      const PLAN_MODES = [
+        ['normal', '普通（无活动）'],
+        ['flash_sale', '秒杀（限时特价）'],
+        ['limited', '限量（总份数）'],
+        ['event', '活动（定时开售）'],
+      ];
+      const _modeLabel = (m) => (PLAN_MODES.find((x) => x[0] === m) || PLAN_MODES[0])[1];
+
       const planBlock = (title, obj, kind, cat) => {
         let h = `<div class="admin-plan-group" data-cat="${cat}"><h4>${title}</h4>`;
         Object.keys(obj).forEach((k) => {
           const p = obj[k] || {};
+          const st = p.state || {};
           const extra = kind === 'days'
             ? `<label>天数<input class="admin-input admin-input-sm plan-days" data-plan="${esc(k)}" value="${esc(p.days)}" type="number"></label>`
             : `<label>积分<input class="admin-input admin-input-sm plan-credits" data-plan="${esc(k)}" value="${esc(p.credits)}" type="number"></label>`;
-          h += `<div class="admin-plan-row" data-plan="${esc(k)}">
-            <span class="admin-plan-name">${esc(p.label || k)}</span>
-            <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
-            ${extra}
+          const statusChip = st.buyable === false
+            ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
+            : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : '');
+          h += `<div class="admin-plan-item" data-plan="${esc(k)}">
+            <div class="admin-plan-row">
+              <span class="admin-plan-name">${esc(p.label || k)} <code class="admin-plan-code">${esc(k)}</code></span>
+              ${statusChip}
+              <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(k)}" value="${esc(p.label || k)}"></label>
+              <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
+              ${extra}
+              <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(k)}" title="展开营销设置">⚙ 营销</button>
+              <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(k)}" title="删除该档">删除</button>
+            </div>
+            <div class="admin-plan-mkt" data-plan="${esc(k)}" hidden>
+              <div class="admin-plan-mkt-grid">
+                <label>售卖模式<select class="admin-input admin-input-sm plan-mode" data-plan="${esc(k)}">
+                  ${PLAN_MODES.map(([v, t]) => `<option value="${v}"${(p.mode || 'normal') === v ? ' selected' : ''}>${t}</option>`).join('')}
+                </select></label>
+                <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(k)}"${p.on_sale === false ? '' : ' checked'}> 上架中</label>
+                <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(k)}" value="${esc(p.badge || '')}" placeholder="如：限时 5 折"></label>
+                <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(k)}" value="${esc(p.flash_price || '')}" type="number" step="0.01" placeholder="留空=不用"></label>
+                <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_start)}"></label>
+                <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_end)}"></label>
+                <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
+                <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
+                <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.start_at)}"></label>
+                <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>
+                <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(k)}" value="${esc(p.desc || '')}" placeholder="显示在套餐卡片上"></label>
+              </div>
+              <p class="admin-plan-hint">秒杀价需在秒杀窗口内生效；限量售完后自动「已售罄」置灰；下架/未开始/已结束的档位前台隐藏或置灰且无法下单。</p>
+            </div>
           </div>`;
         });
+        // 新增自定义档位（完全自定义：code 唯一即可）
+        h += `<div class="admin-plan-add">
+          <input class="admin-input admin-input-sm plan-new-code" placeholder="新档位 code（如 download_2day）" spellcheck="false">
+          <input class="admin-input admin-input-sm plan-new-label" placeholder="标题（如 下载会员·2天）">
+          <input class="admin-input admin-input-sm plan-new-price" type="number" step="0.01" placeholder="价格">
+          <input class="admin-input admin-input-sm plan-new-days" type="number" placeholder="${kind === 'days' ? '天数' : '积分'}">
+          <button type="button" class="admin-btn admin-btn-sm admin-btn-primary plan-add-btn">+ 新增档位</button>
+        </div>`;
         return h + '</div>';
       };
       let html = planBlock('下载会员套餐', dl, 'days', 'dl');
@@ -21375,12 +21523,38 @@ el.dwVidPlayer.hidden = true;
         const out = {};
         Object.keys(obj).forEach((k) => {
           out[k] = Object.assign({}, obj[k]);
-          const priceEl = plansBox.querySelector(`.plan-price[data-plan="${k}"]`);
-          const daysEl = plansBox.querySelector(`.plan-days[data-plan="${k}"]`);
-          const creditsEl = plansBox.querySelector(`.plan-credits[data-plan="${k}"]`);
+          delete out[k].state;              // state 是后端算出来的，不回写
+          const val = (sel) => plansBox.querySelector(`${sel}[data-plan="${k}"]`);
+          const priceEl = val('.plan-price');
+          const daysEl = val('.plan-days');
+          const creditsEl = val('.plan-credits');
+          const labelEl = val('.plan-label');
+          const modeEl = val('.plan-mode');
+          const onSaleEl = val('.plan-onsale');
+          const badgeEl = val('.plan-badge');
+          const fpEl = val('.plan-flashprice');
+          const fsEl = val('.plan-flashstart');
+          const feEl = val('.plan-flashend');
+          const stockEl = val('.plan-stock');
+          const soldEl = val('.plan-sold');
+          const saEl = val('.plan-startat');
+          const eaEl = val('.plan-endat');
+          const descEl = val('.plan-desc-input');
           if (priceEl) out[k].price_cny = parseFloat(priceEl.value) || 0;
           if (daysEl && out[k].days != null) out[k].days = parseInt(daysEl.value, 10) || 0;
           if (creditsEl && out[k].credits != null) out[k].credits = parseInt(creditsEl.value, 10) || 0;
+          if (labelEl) out[k].label = labelEl.value.trim() || out[k].label;
+          if (modeEl) out[k].mode = modeEl.value;
+          if (onSaleEl) out[k].on_sale = !!onSaleEl.checked;
+          if (badgeEl) out[k].badge = badgeEl.value.trim();
+          if (descEl) out[k].desc = descEl.value.trim();
+          if (fpEl) out[k].flash_price = parseFloat(fpEl.value) || 0;
+          if (fsEl) out[k].flash_start = _localToTs(fsEl.value);
+          if (feEl) out[k].flash_end = _localToTs(feEl.value);
+          if (stockEl) out[k].stock = parseInt(stockEl.value, 10) || 0;
+          if (soldEl) out[k].sold = parseInt(soldEl.value, 10) || 0;
+          if (saEl) out[k].start_at = _localToTs(saEl.value);
+          if (eaEl) out[k].end_at = _localToTs(eaEl.value);
         });
         return out;
       };

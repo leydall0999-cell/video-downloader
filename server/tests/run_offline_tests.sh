@@ -455,3 +455,8 @@ echo "✅ 全部离线测试通过"
 #      权益文案改为从 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 自动生成，
 #      守卫钉住「有配额必有文案」+「下载会员不送积分」，以后加配额不会再漏文案。
 run_one test_membership_benefits.py
+
+#  35. test_plan_sales_state.py —— 档位售卖状态（2026-10-03）：
+#      模式（普通/秒杀/限量/活动）、秒杀价与窗口、限量份数、上下架与活动时间；
+#      激活入口强制校验（售罄/未开始/已结束/下架拒发），限量档发放后 sold 自动 +1。
+run_one test_plan_sales_state.py
