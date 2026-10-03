@@ -20797,12 +20797,34 @@ el.dwVidPlayer.hidden = true;
     const loadMonitorVisits = async () => {
       const st = $('adminMonitorVisitStats'), paths = $('adminMonitorVisitPaths'), rec = $('adminMonitorVisitRecent');
       const hum = $('adminMonitorHumanStats'), humPages = $('adminMonitorHumanPages');
+      const byClient = $('adminMonitorByClient');
       if (!st) return;
       st.innerHTML = '加载中…';
       if (hum) hum.innerHTML = '';
       if (humPages) humPages.innerHTML = '';
+      if (byClient) byClient.innerHTML = '';
       try {
         const d = await adminRequest('/api/app/ops-visits?limit=100&range=' + encodeURIComponent(_monRange));
+        // 按客户端拆分（2026-10-03）：桌面 App / 网页页面 / 网页接口轮询 / 其它客户端
+        const bc = d.by_client || {};
+        if (byClient) {
+          const totalN = Math.max(1, Number(d.total) || 0);
+          const rows = [
+            ['desktop_app', '桌面 App（授权/任务等接口轮询）', bc.desktop_app || {}],
+            ['web_page', '网页 · 真人页面访问', bc.web_page || {}],
+            ['web_api', '网页 · 前端接口轮询', bc.web_api || {}],
+            ['other', '其它客户端（脚本/扫描器）', bc.other || {}],
+          ];
+          byClient.innerHTML =
+            '<table class="admin-table"><thead><tr><th>客户端</th><th>请求数</th><th>占比</th><th>独立 IP</th></tr></thead><tbody>' +
+            rows.map(([, label, v]) => {
+              const n = Number(v.requests) || 0;
+              const pct = ((n / totalN) * 100).toFixed(1);
+              const extra = v.uv ? ` · 访客 ${v.uv}` : '';
+              return `<tr><td>${esc(label)}${extra}</td><td>${n}</td><td>${pct}%</td><td>${Number(v.ips) || 0}</td></tr>`;
+            }).join('') +
+            `</tbody></table><div class="admin-human-note">${esc(bc.note || '')}</div>`;
+        }
         // 真人访客口径（2026-10-03）：总请求里 ~90% 是接口 + 机器轮询，单独给出
         // 「今天来了几个真人」——老板真正要看的数。
         const h = d.human || {};
