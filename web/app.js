@@ -7343,17 +7343,37 @@
     }
     el.pfPlans.innerHTML = codes.map((code) => {
       const pl = plans[code] || {};
-      const price = (Number(pl.price_cny) || 0).toFixed(2);
+      const st = pl.state || {};                       // 售卖状态（2026-10-03）
+      if (st.on_sale === false) return '';             // 已下架：不展示
+      const orig = (Number(pl.price_cny) || 0).toFixed(2);
+      const price = (Number(st.price) || Number(pl.price_cny) || 0).toFixed(2);
+      const flash = st.is_flash && Number(st.original_price) > Number(st.price)
+        ? `<span class="pf-price-orig">¥${orig}</span>` : '';
       const meta = pl.days ? `${pl.days} 天权益` : '';
       const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
+      const mkBadge = st.badge ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
+      const offBadge = (!st.buyable && st.reason) ? `<span class="pf-plan-badge is-off">${escHtml(st.reason)}</span>` : '';
       const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
-      return `<div class="pf-plan${pl.best ? ' is-best' : ''}">
-        ${badge}
+      const bits = [];
+      if (st.start_at || st.end_at) {
+        const f = (ts) => (ts ? new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false }).slice(0, 16) : '');
+        bits.push(st.start_at && st.end_at ? `${f(st.start_at)} ~ ${f(st.end_at)}`
+          : (st.start_at ? `${f(st.start_at)} 开售` : `截至 ${f(st.end_at)}`));
+      }
+      if (st.mode === 'flash_sale' && st.flash_end) {
+        bits.push(`秒杀至 ${new Date(st.flash_end * 1000).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)}`);
+      }
+      if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
+      const extra = bits.length ? `<div class="pf-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
+      const desc = st.desc ? `<div class="pf-plan-desc">${escHtml(st.desc)}</div>` : '';
+      const dis = st.buyable === false;
+      return `<div class="pf-plan${pl.best ? ' is-best' : ''}${dis ? ' is-off' : ''}">
+        ${mkBadge}${badge}${offBadge}
         <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
-        <div class="pf-plan-price"><span>¥</span>${price}</div>
+        <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${st.is_flash ? ' is-flash' : ''}">${price}</span></div>
         <div class="pf-plan-meta">${escHtml(meta)}</div>
-        ${save}
-        <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}">立即开通</button>
+        ${extra}${desc}${save}
+        <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}"${dis ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${dis ? escHtml(st.reason || '暂不可购买') : '立即开通'}</button>
       </div>`;
     }).join('');
     el.pfPlans.querySelectorAll('.pf-plan-buy').forEach((b) => {
@@ -7435,16 +7455,34 @@
   const memSay = (t) => { if (el.memStatus) el.memStatus.textContent = t || ''; };
 
   const memPlanCard = (code, pl, meta) => {
-    const price = (Number(pl.price_cny) || 0).toFixed(2);
+    const st = pl.state || {};                        // 售卖状态（2026-10-03）
+    if (st.on_sale === false) return '';
+    const orig = (Number(pl.price_cny) || 0).toFixed(2);
+    const price = (Number(st.price) || Number(pl.price_cny) || 0).toFixed(2);
+    const flash = st.is_flash && Number(st.original_price) > Number(st.price)
+      ? `<span class="pf-price-orig">¥${orig}</span>` : '';
     const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
+    const mkBadge = st.badge ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
+    const offBadge = (!st.buyable && st.reason) ? `<span class="pf-plan-badge is-off">${escHtml(st.reason)}</span>` : '';
     const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
-    return `<div class="pf-plan${pl.best ? ' is-best' : ''}">
-      ${badge}
+    const bits = [];
+    const fmt = (ts) => (ts ? new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false }).slice(0, 16) : '');
+    if (st.start_at || st.end_at) {
+      bits.push(st.start_at && st.end_at ? `${fmt(st.start_at)} ~ ${fmt(st.end_at)}`
+        : (st.start_at ? `${fmt(st.start_at)} 开售` : `截至 ${fmt(st.end_at)}`));
+    }
+    if (st.mode === 'flash_sale' && st.flash_end) bits.push(`秒杀至 ${fmt(st.flash_end).slice(5)}`);
+    if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
+    const extra = bits.length ? `<div class="pf-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
+    const desc = st.desc ? `<div class="pf-plan-desc">${escHtml(st.desc)}</div>` : '';
+    const dis = st.buyable === false;
+    return `<div class="pf-plan${pl.best ? ' is-best' : ''}${dis ? ' is-off' : ''}">
+      ${mkBadge}${badge}${offBadge}
       <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
-      <div class="pf-plan-price"><span>¥</span>${price}</div>
+      <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${st.is_flash ? ' is-flash' : ''}">${price}</span></div>
       <div class="pf-plan-meta">${escHtml(meta || '')}</div>
-      ${save}
-      <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}">立即开通</button>
+      ${extra}${desc}${save}
+      <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}"${dis ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${dis ? escHtml(st.reason || '暂不可购买') : '立即开通'}</button>
     </div>`;
   };
 

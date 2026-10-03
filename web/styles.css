@@ -2088,6 +2088,15 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 .pf-plan-name { font-size: .84rem; font-weight: 600; padding-right: 3rem; }
 .pf-plan-price { font-size: 1.25rem; font-weight: 800; color: var(--brand); line-height: 1.1; }
 .pf-plan-price > span { font-size: .78rem; font-weight: 500; color: var(--text-mute); margin-right: 1px; }
+/* 秒杀 / 限量 / 活动（2026-10-03） */
+.pf-plan-badge.is-flash { background: #e11d48; }
+.pf-plan-badge.is-off { background: #64748b; }
+.pf-price-orig { font-size: .74rem; font-weight: 500; color: var(--text-mute); text-decoration: line-through; margin-right: .15rem; }
+.pf-price-now.is-flash { color: #e11d48; }
+.pf-plan-desc { font-size: .72rem; color: var(--text-mute); line-height: 1.45; margin-top: .15rem; }
+.pf-plan.is-off { opacity: .72; }
+.pf-plan.is-off .pf-plan-name { text-decoration: line-through; }
+.pf-plan-buy:disabled { background: #cbd5e1; border-color: #cbd5e1; color: #64748b; cursor: not-allowed; }
 .pf-plan-meta { font-size: .72rem; color: var(--text-mute); }
 .pf-plan-badge {
   position: absolute; top: .45rem; right: .45rem; font-size: .62rem;
