@@ -21416,13 +21416,30 @@ el.dwVidPlayer.hidden = true;
     // 用户改了一半的价格会被旧值静默抹掉（切页签回来/保存后刷新都会触发）。
     // 因此：任何输入动作 → plansBox 标脏 → renderPlansForm 跳过重渲染，
     // 保存成功后才清脏并刷新为服务端真值。
+    // 按「售卖模式」显示对应的营销分组：flash=秒杀 / stock=限量 / event=定时开售
+    const applyMktGroups = (item) => {
+      if (!item) return;
+      const mode = (item.querySelector('.plan-mode') || {}).value || 'normal';
+      item.querySelectorAll('.plan-mkt-group').forEach((g) => {
+        g.hidden = (g.dataset.mkt !== mode);
+      });
+    };
+
     if (plansBox) {
       plansBox.addEventListener('input', () => { plansBox.dataset.dirty = '1'; });
-      // 营销面板展开/收起
-      plansBox.addEventListener('click', async (e) => {
-        const t = e.target;
-        if (!t || !t.closest) return;
-        const tgl = t.closest('.plan-mkt-toggle');
+    // 营销面板展开/收起
+    plansBox.addEventListener('click', async (e) => {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      // 切换售卖模式 → 只显示该模式相关的那一组（秒杀/限量/定时开售），
+      // 避免一堆时间框同时摆出来不知道谁管什么（用户 2026-10-03 反馈）
+      const modeSel = t.closest('.plan-mode');
+      if (modeSel) {
+        const item = modeSel.closest('.admin-plan-item');
+        if (item) applyMktGroups(item);
+        return;
+      }
+      const tgl = t.closest('.plan-mkt-toggle');
         if (tgl) {
           const code = tgl.dataset.plan;
           const box = plansBox.querySelector(`.admin-plan-mkt[data-plan="${CSS.escape(code)}"]`);
@@ -21525,19 +21542,29 @@ el.dwVidPlayer.hidden = true;
             <label>售卖模式<select class="admin-input admin-input-sm plan-mode" data-plan="${esc(code)}">${PLAN_MODES.map(([v, t2]) => `<option value="${v}">${t2}</option>`).join('')}</select></label>
             <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(code)}" checked> 上架中</label>
             <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(code)}" placeholder="如：限时 5 折"></label>
+          </div>
+          <div class="plan-mkt-group" data-mkt="flash" hidden><div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div><div class="admin-plan-mkt-grid">
             <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(code)}" type="number" step="0.01" placeholder="留空=不用"></label>
             <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(code)}" type="datetime-local"></label>
             <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(code)}" type="datetime-local"></label>
+          </div></div>
+          <div class="plan-mkt-group" data-mkt="stock" hidden><div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div><div class="admin-plan-mkt-grid">
             <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
             <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
+          </div></div>
+          <div class="plan-mkt-group" data-mkt="event" hidden><div class="plan-mkt-group-h">定时开售（到点前「活动未开始」、到点后「活动已结束」，都不可下单）</div><div class="admin-plan-mkt-grid">
             <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(code)}" type="datetime-local"></label>
             <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(code)}" type="datetime-local"></label>
+          </div></div>
+          <div class="admin-plan-mkt-grid">
             <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(code)}" placeholder="显示在套餐卡片上"></label>
-          </div><p class="admin-plan-hint">秒杀价需在秒杀窗口内生效；限量售完自动置灰；下架/未开始/已结束无法下单。</p></div></div>`;
+          </div>
+          <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加。留空 = 不启用。</p></div></div>`;
           const tmp = document.createElement('div');
           tmp.innerHTML = h;
           const node = tmp.firstElementChild;
           box.insertBefore(node, box.querySelector('.admin-plan-add'));
+          applyMktGroups(node);
           box.querySelector('.plan-new-code').value = '';
           box.querySelector('.plan-new-label').value = '';
           box.querySelector('.plan-new-price').value = '';
@@ -21690,16 +21717,33 @@ el.dwVidPlayer.hidden = true;
                 </select></label>
                 <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(k)}"${p.on_sale === false ? '' : ' checked'}> 上架中</label>
                 <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(k)}" value="${esc(p.badge || '')}" placeholder="如：限时 5 折"></label>
-                <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(k)}" value="${esc(p.flash_price || '')}" type="number" step="0.01" placeholder="留空=不用"></label>
-                <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_start)}"></label>
-                <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_end)}"></label>
-                <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
-                <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
-                <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.start_at)}"></label>
-                <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>
+              </div>
+              <div class="plan-mkt-group" data-mkt="flash"${(p.mode || 'normal') === 'flash_sale' ? '' : ' hidden'}>
+                <div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div>
+                <div class="admin-plan-mkt-grid">
+                  <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(k)}" value="${esc(p.flash_price || '')}" type="number" step="0.01" placeholder="留空=不用"></label>
+                  <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_start)}"></label>
+                  <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_end)}"></label>
+                </div>
+              </div>
+              <div class="plan-mkt-group" data-mkt="stock"${(p.mode || 'normal') === 'limited' ? '' : ' hidden'}>
+                <div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div>
+                <div class="admin-plan-mkt-grid">
+                  <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
+                  <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
+                </div>
+              </div>
+              <div class="plan-mkt-group" data-mkt="event"${(p.mode || 'normal') === 'event' ? '' : ' hidden'}>
+                <div class="plan-mkt-group-h">定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）</div>
+                <div class="admin-plan-mkt-grid">
+                  <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.start_at)}"></label>
+                  <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>
+                </div>
+              </div>
+              <div class="admin-plan-mkt-grid">
                 <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(k)}" value="${esc(p.desc || '')}" placeholder="显示在套餐卡片上"></label>
               </div>
-              <p class="admin-plan-hint">秒杀价需在秒杀窗口内生效；限量售完后自动「已售罄」置灰；下架/未开始/已结束的档位前台隐藏或置灰且无法下单。</p>
+              <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加：例如 9/1-9/30 期间可买，其中 20:00-22:00 是秒杀价。留空 = 不启用。</p>
             </div>
           </div>`;
         });
@@ -21798,10 +21842,15 @@ el.dwVidPlayer.hidden = true;
         costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
       });
       const payload = { download_plans: dl, ai_plans: ai, credit_packs: cp, credit_costs: costs };
+      console.log('[plans] save payload 档位数 dl=%d ai=%d cp=%d', Object.keys(dl).length, Object.keys(ai).length, Object.keys(cp).length);
+      // 诊断期：把即将提交的档位数与是否找到表单元素直接显示出来，
+      // 这样不用看控制台也能判断「点了保存到底有没有走到这里」
+      _adminMsg(plansMsg, `正在保存…（下载 ${Object.keys(dl).length} 档 / AI ${Object.keys(ai).length} 档 / 积分包 ${Object.keys(cp).length} 档）`, false);
       try {
         const r = await adminRequest('/api/admin/config/plans', {
           method: 'POST', body: JSON.stringify(payload),
         });
+        console.log('[plans] save resp', JSON.stringify(r).slice(0, 300));
         if (r && r.ok) {
           delete plansBox.dataset.dirty; // 保存成功 → 允许 loadConfig 用服务端真值刷新表单
           loadConfig();

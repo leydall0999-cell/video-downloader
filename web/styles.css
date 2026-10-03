@@ -5062,6 +5062,12 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-plan-item.is-off .admin-plan-sale-chip { opacity: 1; }
 .admin-plan-row .plan-sale-toggle { min-height: 0; height: 26px; }
 .admin-plan-mkt { margin-top: .55rem; padding-top: .5rem; border-top: 1px dashed var(--line, #e5e7ef); }
+/* 营销分组：按「售卖模式」只显示一组，用小标题说清这一组管什么，
+   避免「秒杀时间」和「开售时间」两组时间框并排摆着让人分不清（2026-10-03 用户反馈） */
+.plan-mkt-group { margin-top: .55rem; padding: .5rem .6rem; border-radius: 8px;
+  background: var(--bg-soft, #f7f9fc); border: 1px solid var(--line, #e5e7ef); }
+.plan-mkt-group[hidden] { display: none; }
+.plan-mkt-group-h { font-size: .76rem; color: var(--text, #374151); font-weight: 600; margin-bottom: .4rem; }
 .admin-plan-mkt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .5rem .8rem; }
 .admin-plan-mkt-grid label { font-size: .78rem; color: var(--text-mute, #6b7280); display: flex; flex-direction: column; gap: .2rem; align-items: stretch; }
 .admin-plan-mkt-grid .admin-input-sm { width: 100%; }
