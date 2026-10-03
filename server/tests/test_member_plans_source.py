@@ -136,6 +136,35 @@ def test_override_iterative_merge() -> None:
     check("第二次改的 3 天档也进了覆盖层", "download_3day" in ov)
 
 
+def test_plans_honors_cloud_override() -> None:
+    """[E] 展示真身 store.plans() 必须跟随云端覆盖（on_sale 等营销字段）。
+
+    2026-10-04 事故根因：MembershipStore.plans() 此前只读本机 plans.json，
+    导致「后台下架/改价只推云端」时桌面端不跟随 —— 本地 on_sale=true、云端 on_sale=false，
+    桌面仍显示上架。修复后 plans() 走 effective_plans()，云端成为单一真源。
+    用桩模拟云端，不发真实请求。
+    """
+    print("\n[E] 展示真身 plans() 跟随云端覆盖（单一真源）")
+    M.save_plan_overrides({"download_plans": {"download_7day": {"on_sale": True, "price_cny": 12.34}}})
+    origin = M.cloud_plan_overrides
+    M.cloud_plan_overrides = lambda force=False: {  # type: ignore[assignment]
+        "download_plans": {"download_7day": {"on_sale": False}},
+    }
+    try:
+        api = MembershipStore().plans()["download_member"]["plans"]
+        seven = api["download_7day"]
+        check("plans() 的 7天档 state.on_sale 跟随云端 = False（下架）",
+              seven.get("state", {}).get("on_sale") is False)
+        check("plans() 的 7天档 price_cny 仍取本地 12.34（逐档合并保留未携字段）",
+              abs(float(seven.get("price_cny") or 0) - 12.34) < 1e-6)
+        check("plans() 仍含 1/3/7 三档（云端未整表替换）",
+              all(c in api for c in SHORT_DAYS))
+    finally:
+        M.cloud_plan_overrides = origin  # type: ignore[assignment]
+    # 还原，避免影响后续用例
+    M.save_plan_overrides({"download_plans": {"download_7day": None}})
+
+
 def test_test_isolation() -> None:
     print("\n[F] 数据目录隔离：不写真实家目录")
     p = str(M.plan_override_path())
@@ -262,6 +291,7 @@ def main() -> int:
     test_override_iterative_merge()
     test_cloud_price_wins_over_local()
     test_push_uses_local_intent_not_cloud_merged()
+    test_plans_honors_cloud_override()
     test_test_isolation()
     test_desktop_wiring_present()
     print("\n" + "=" * 46)

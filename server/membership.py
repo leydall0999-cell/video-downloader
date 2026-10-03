@@ -738,21 +738,17 @@ class MembershipStore:
     def plans(self) -> dict[str, Any]:
         """套餐表（价格/时长/权益），供前端购买中心展示。
 
-        优先级：plans.json 覆盖层 → 代码常量默认值。
-        合并语义（2026-09-24 修复）：覆盖层**逐字段叠加**在默认条目上
-        （此前是整段替换，覆盖条目里缺 days/label 会把默认值顶丢，
-        出现「后台天数空白、前台显示裸 code」）。
+        优先级：代码常量 ← plans.json 覆盖层 ← 授权中心覆盖（云端最高，与网页端一致）。
+        展示必须走 effective_plans()：云端不可达时自动退化为本机覆盖层 + 代码常量。
+        🔴 此前此函数只读本机 plans.json（load_plan_overrides），导致「后台下架/改价只推
+        云端」时桌面端不跟随 —— 本地 on_sale=true、云端 on_sale=false，桌面仍显示上架
+        （2026-10-04 实测）。现改为走 effective_plans()，与网页端对齐，云端成为单一真源。
         """
-        ov = load_plan_overrides()
-        dl = _overlay_plans(DOWNLOAD_PLANS, ov.get("download_plans"))
-        ai = _overlay_plans(AI_PLANS, ov.get("ai_plans"))
-        cp = _overlay_plans(CREDIT_PACKS, ov.get("credit_packs"))
-        # 每档附售卖状态（2026-10-03）：模式/秒杀价/限量/活动时间 → 前端置灰与倒计时
+        eff = effective_plans()
         now = time.time()
-        with_states = lambda tbl: {  # noqa: E731
-            code: dict(p, state=plan_sales_state(p, now=now)) for code, p in tbl.items()
-        }
-        dl, ai, cp = with_states(dl), with_states(ai), with_states(cp)
+        dl = {c: dict(p, state=plan_sales_state(p, now=now)) for c, p in eff["download_plans"].items()}
+        ai = {c: dict(p, state=plan_sales_state(p, now=now)) for c, p in eff["ai_plans"].items()}
+        cp = {c: dict(p, state=plan_sales_state(p, now=now)) for c, p in eff["credit_packs"].items()}
         return {
             "download_member": {
                 "plans": dl,
