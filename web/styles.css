@@ -6840,6 +6840,12 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
      「弹窗打开但一片空白，只有标题和关闭按钮」）。固定高 + flex:1 才能正常滚动。 */
   height: min(780px, 88vh); max-height: 88vh; display: flex; flex-direction: column;
   background: var(--panel, #fff); color: var(--text, #1f2937); box-shadow: 0 18px 50px rgba(0,0,0,.25); }
+/* 🔴 为什么需要这条：<dialog> 关闭（close()/摘掉 open）后，UA 样式表靠
+   `dialog:not([open]){display:none}` 把它隐藏。但**作者样式表优先于 UA 样式表**
+   （与特异性无关），而上面 .admin-usage-dlg 显式声明了 `display: flex`，
+   于是关闭后 display 仍是 flex → 弹窗残留页面、点「关闭」没反应。
+   这是「给 dialog/modal 设 display」的通用坑，凡这么写的都要补这条兜底。 */
+.admin-usage-dlg:not([open]) { display: none; }
 .admin-usage-dlg::backdrop { background: rgba(15,23,42,.5); }
 .admin-usage-dlg h3 { margin: 0 0 8px; font-size: 1.02rem; }
 .admin-usage-dlg .aud-user { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;

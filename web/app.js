@@ -21129,6 +21129,16 @@ el.dwVidPlayer.hidden = true;
     const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
     const _usageRows = (rows) => rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`).join('');
 
+    // 关闭用户使用详情弹窗：try close()（模态会还原焦点），
+    // 无论成功与否都摘掉 open —— 因为 .admin-usage-dlg 有 display:flex，
+    // 会盖过 UA 的 dialog:not([open]){display:none}，只 close 不摘属性会残留。
+    const closeUsageDlg = () => {
+      const d = _usageDlg;
+      if (!d) return;
+      try { if (typeof d.close === 'function') d.close(); } catch (_) { /* 忽略 */ }
+      d.removeAttribute('open');
+    };
+
     const openUserUsage = async (uid) => {
       if (!_usageDlg) {
         _usageDlg = document.createElement('dialog');
@@ -21139,7 +21149,13 @@ el.dwVidPlayer.hidden = true;
           <div class="aud-body"><div class="admin-empty">加载中…</div></div>
           <div class="aud-btns"><button class="admin-btn aud-close" type="button">关闭</button></div>`;
         document.body.appendChild(_usageDlg);
-        _usageDlg.querySelector('.aud-close').addEventListener('click', () => _usageDlg.close());
+        // 关闭：close() 在部分 pywebview/WKWebView 上不生效（配了 display:flex 后
+        // 尤其容易残留），所以 close 后再显式摘掉 open 属性，双保险。
+        _usageDlg.querySelector('.aud-close').addEventListener('click', () => closeUsageDlg());
+        // 点遮罩空白处也关（用户直觉：点外面等于取消）
+        _usageDlg.addEventListener('click', (e) => { if (e.target === _usageDlg) closeUsageDlg(); });
+        // ESC 兜底（showModal 正常时浏览器会自己关；非 modal 打开时需要手动）
+        _usageDlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUsageDlg(); });
       }
       const dlg = _usageDlg;
       dlg.dataset.uid = uid || '';
@@ -21147,6 +21163,8 @@ el.dwVidPlayer.hidden = true;
       body.innerHTML = '<div class="admin-empty">加载中…</div>';
       if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
       else dlg.setAttribute('open', '');
+      // 兜底：showModal 在 pywebview 下偶发不生效（弹窗不出现），强制补 open 属性
+      if (!dlg.hasAttribute('open')) dlg.setAttribute('open', '');
       try {
         const r = await adminRequest('/api/admin/users/' + encodeURIComponent(uid) + '/usage');
         if (!r || !r.ok) throw new Error((r && r.error) || '查询失败');
