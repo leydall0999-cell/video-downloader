@@ -465,3 +465,9 @@ run_one test_plan_sales_state.py
 #      _usage_bundle 聚合结构（按天倒序/只留>0/激活历史倒序）、store 读失败降级不崩、
 #      路由挂载与 require_admin 门禁。daily_usage 里的 date 字段非数值，必须跳过。
 run_one test_admin_user_usage.py
+
+#  37. test_plan_mkt_matrix.py —— 营销面板「模式×分组」联动（2026-10-03）：
+#      直接解析 web/app.js 的 PLAN_MODES / _MKT_BY_MODE / data-mkt 三处命名做交叉核对，
+#      并模拟 4 模式 × 3 分组显隐矩阵。防止「模式 value 与分组标识不同名」
+#      （limited vs stock）导致选了该模式却什么都不显示。
+run_one test_plan_mkt_matrix.py

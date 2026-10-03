@@ -21419,14 +21419,20 @@ el.dwVidPlayer.hidden = true;
     // 按「售卖模式」显示对应的营销分组：flash_sale→秒杀 / limited→限量 / event→定时开售
     // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表，
     //    直接比较 g.dataset.mkt !== mode 会永远不匹配、导致该组的参数框消失。
+    // ⚠️ 这套联动是纯字符串判断、没有真 DOM，务必用 node 脚本把 4×3 矩阵跑一遍
+    //    （见 server/tests/test_plan_mkt_matrix.py，它直接解析 app.js 里的
+    //      PLAN_MODES / _MKT_BY_MODE / data-mkt 三处，任何一处不同名或漏映射都会红）。
     const _MKT_BY_MODE = { flash_sale: 'flash', limited: 'stock', event: 'event' };
     const applyMktGroups = (item) => {
       if (!item) return;
-      const mode = (item.querySelector('.plan-mode') || {}).value || 'normal';
+      const sel = item.querySelector('.plan-mode');
+      const mode = (sel && sel.value) || 'normal';
       const want = _MKT_BY_MODE[mode] || '';
-      item.querySelectorAll('.plan-mkt-group').forEach((g) => {
-        g.hidden = (g.dataset.mkt !== want);
-      });
+      const groups = item.querySelectorAll('.plan-mkt-group');
+      groups.forEach((g) => { g.hidden = (g.dataset.mkt !== want); });
+      // 自证：把实际命中的组写进 data 属性，出问题时能在 DevTools 里一眼看出
+      // 到底是模式值没读到、还是映射没命中（省掉一轮猜测）
+      item.dataset.mktShown = want || 'none';
     };
 
     if (plansBox) {
