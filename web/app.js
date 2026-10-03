@@ -21428,18 +21428,19 @@ el.dwVidPlayer.hidden = true;
     // 联动显示本来就是第一版设计，绕一圈又回来了。
     // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表 —— 曾直接
     //    比较导致选「限量」什么都不显示。server/tests/test_plan_mkt_matrix.py 盯这条。
-    const _MKT_BY_MODE = { flash_sale: 'flash', limited: 'stock', event: 'event' };
+    // 模式 → 需要展示的营销分组（数组：活动模式同时要「定时开售」+「数量」）
+    const _MKT_BY_MODE = { flash_sale: ['flash'], limited: ['stock'], event: ['event', 'stock'], normal: [] };
     const applyMktGroups = (item) => {
       if (!item) return;
       const sel = item.querySelector('.plan-mode');
       const mode = (sel && sel.value) || 'normal';
-      const want = _MKT_BY_MODE[mode] || '';
+      const want = _MKT_BY_MODE[mode] || [];
       item.querySelectorAll('.plan-mkt-group').forEach((g) => {
-        g.hidden = (g.dataset.mkt !== want);
+        g.hidden = !want.includes(g.dataset.mkt);
       });
       // 自证：命中的组写进 data 属性，出问题时在 DevTools 里一眼能看出是
       // 「模式值没读到」还是「映射没命中」，省掉一轮猜测
-      item.dataset.mktShown = want || 'none';
+      item.dataset.mktShown = want.join(',') || 'none';
     };
 
     if (plansBox) {
@@ -21572,18 +21573,18 @@ el.dwVidPlayer.hidden = true;
             <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(code)}" type="datetime-local"></label>
             <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(code)}" type="datetime-local"></label>
           </div></div>
-          <div class="plan-mkt-group" data-mkt="stock"><div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div><div class="admin-plan-mkt-grid">
-            <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
-            <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
-          </div></div>
           <div class="plan-mkt-group" data-mkt="event"><div class="plan-mkt-group-h">定时开售（到点前「活动未开始」、到点后「活动已结束」，都不可下单）</div><div class="admin-plan-mkt-grid">
             <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(code)}" type="datetime-local"></label>
             <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(code)}" type="datetime-local"></label>
           </div></div>
+          <div class="plan-mkt-group" data-mkt="stock"><div class="plan-mkt-group-h">数量（总共能卖多少份，售完自动置灰；两种模式通用）</div><div class="admin-plan-mkt-grid">
+            <label>总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
+            <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
+          </div></div>
           <div class="admin-plan-mkt-grid">
             <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(code)}" placeholder="显示在套餐卡片上"></label>
           </div>
-          <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加。留空 = 不启用。</p></div></div>`;
+          <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加。「数量」在限量与活动模式下都可填，填 0 = 不限。留空 = 不启用。</p></div></div>`;
           const tmp = document.createElement('div');
           tmp.innerHTML = h;
           const node = tmp.firstElementChild;
@@ -21750,13 +21751,6 @@ el.dwVidPlayer.hidden = true;
                   <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_end)}"></label>
                 </div>
               </div>
-              <div class="plan-mkt-group" data-mkt="stock">
-                <div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div>
-                <div class="admin-plan-mkt-grid">
-                  <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
-                  <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
-                </div>
-              </div>
               <div class="plan-mkt-group" data-mkt="event">
                 <div class="plan-mkt-group-h">定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）</div>
                 <div class="admin-plan-mkt-grid">
@@ -21764,10 +21758,17 @@ el.dwVidPlayer.hidden = true;
                   <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>
                 </div>
               </div>
+              <div class="plan-mkt-group" data-mkt="stock">
+                <div class="plan-mkt-group-h">数量（总共能卖多少份，售完自动置灰；两种模式通用）</div>
+                <div class="admin-plan-mkt-grid">
+                  <label>总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
+                  <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
+                </div>
+              </div>
               <div class="admin-plan-mkt-grid">
                 <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(k)}" value="${esc(p.desc || '')}" placeholder="显示在套餐卡片上"></label>
               </div>
-              <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加：例如 9/1-9/30 期间可买，其中 20:00-22:00 是秒杀价。留空 = 不启用。</p>
+              <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加：例如 9/1-9/30 期间可买，其中 20:00-22:00 是秒杀价。「数量」在限量与活动模式下都可填，填 0 = 不限。留空 = 不启用。</p>
             </div>
           </div>`;
         });

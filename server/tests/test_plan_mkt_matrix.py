@@ -7,9 +7,13 @@
 这类「UI 元素凭空消失」的 bug 单测抓不到（本项目已踩 3 次），所以本守卫**直接解析
 web/app.js 里的三处真源**做交叉核对：
   1) PLAN_MODES 的四个 value；
-  2) _MKT_BY_MODE 映射表；
+  2) _MKT_BY_MODE 映射表（2026-10-03 起为「模式 → 分组数组」，活动模式同时要
+     「定时开售」+「数量」两组）；
   3) 模板里的 data-mkt 标识集合；
 并模拟 4 个模式 × 3 个分组的显隐矩阵，任何一处新增模式没加映射 / 分组写成孤儿就红。
+
+⚠️ 同一个 UI 有两处模板（现有档位渲染 planBlock / 新增档位时插入的节点），
+两处都要有同样的分组，漏一处就会出现「新加的档位看不到数量框」。
 """
 from __future__ import annotations
 
@@ -40,14 +44,20 @@ def _parse_modes(src: str) -> list[str]:
     return re.findall(r"\['([a-z_]+)'", block)
 
 
-def _parse_map(src: str) -> dict[str, str]:
-    """从 _MKT_BY_MODE 映射表里取出 {模式值: 分组标识}。"""
-    i = src.find("_MKT_BY_MODE")
+def _parse_map(src: str) -> dict[str, list[str]]:
+    """从 _MKT_BY_MODE 映射表里取出 {模式值: [分组标识...]}。
+
+    形如：const _MKT_BY_MODE = { flash_sale: ['flash'], event: ['event', 'stock'], ... };
+    """
+    i = src.find("_MKT_BY_MODE = {")
     if i < 0:
         return {}
-    j = src.find("}", i)
-    block = src[i:j]
-    return dict(re.findall(r"([a-z_]+)\s*:\s*'([a-z]+)'", block))
+    j = src.find("\n", i)
+    block = src[i:j if j > 0 else len(src)]
+    out: dict[str, list[str]] = {}
+    for m, body in re.findall(r"([a-z_]+)\s*:\s*\[([^\]]*)\]", block):
+        out[m] = re.findall(r"'([a-z]+)'", body)
+    return out
 
 
 def _parse_group_ids(src: str) -> set[str]:
@@ -75,14 +85,16 @@ def test_map_covers_all_modes() -> None:
     src = APP_JS.read_text(encoding="utf-8")
     modes = _parse_modes(src)
     mp = _parse_map(src)
-    check("能解析出 _MKT_BY_MODE", bool(mp), "未找到映射表")
+    check("能解析出 _MKT_BY_MODE（数组形式）", bool(mp), f"未找到映射表 / 解析为空：{mp}")
     for m in modes:
         if m == "normal":
             continue
         check(f"模式 {m} 有分组映射", m in mp, f"映射表 = {mp}")
         if m in mp:
-            check(f"模式 {m} 映射到的分组已定义", mp[m] in GROUPS,
-                  f"{m} → {mp[m]}，已定义分组 {list(GROUPS)}")
+            check(f"模式 {m} 至少映射 1 个分组", len(mp[m]) >= 1, f"{m} → {mp[m]}")
+            for g in mp[m]:
+                check(f"模式 {m} 映射的分组 {g} 已定义", g in GROUPS,
+                      f"{m} → {mp[m]}，已定义分组 {list(GROUPS)}")
 
 
 def test_no_orphan_groups() -> None:
@@ -91,7 +103,9 @@ def test_no_orphan_groups() -> None:
     mp = _parse_map(src)
     ids = _parse_group_ids(src)
     check("模板里定义了 3 个分组", len(ids) == 3, f"实际 {sorted(ids)}")
-    targets = set(mp.values())
+    targets: set[str] = set()
+    for lst in mp.values():
+        targets.update(lst)
     orphan = sorted(ids - targets)
     check("每个分组都至少有一个模式能命中（无孤儿）", not orphan, f"孤儿 = {orphan}")
     missing = sorted(targets - ids)
@@ -105,7 +119,7 @@ def test_groups_linked_to_mode() -> None:
     （全平铺 → 按模式隐藏 → 全显+高亮 → 回到按模式隐藏），
     每次都是因为把「还没切模式所以看不到参数」误当成 bug。
     现在钉死：模板里分组不带 hidden（由 JS 联动控制），
-    且 applyMktGroups 必须存在 g.hidden = (g.dataset.mkt !== want) 这行联动。
+    且 applyMktGroups 必须用映射表数组做 includes 判断。
     """
     print("\n[D] 分组与模式联动（选什么模式只显示该模式参数）")
     src = APP_JS.read_text(encoding="utf-8")
@@ -115,10 +129,16 @@ def test_groups_linked_to_mode() -> None:
     with_hidden = re.findall(r'data-mkt="([a-z]+)"[^>]*\shidden', src)
     check("模板里没有写死 hidden（初始渲染交由 JS 联动）", not with_hidden,
           f"发现 {with_hidden}")
-    # JS 联动语句必须存在，且用映射表比较
-    check("applyMktGroups 用映射表比较（不是直接比 data-mkt !== mode）",
-          "_MKT_BY_MODE" in src and "g.dataset.mkt !== want" in src)
-    check("普通模式 want 为空 → 三组都隐藏", "const want = _MKT_BY_MODE[mode] || '';" in src)
+    # 两处模板都要有「数量」输入框（漏一处 → 新加的档位看不到数量）
+    n_stock = len(re.findall(r'class="[^"]*plan-stock', src))
+    check("两处模板都有 .plan-stock 输入框", n_stock == 2, f"实际 {n_stock} 处")
+    n_stock_label = src.count(">总份数<input")
+    check("两处模板都用了通用文案「总份数」", n_stock_label == 2, f"实际 {n_stock_label} 处")
+    # JS 联动语句必须存在，且用映射表 + includes
+    check("applyMktGroups 用映射表数组比较（不是直接比 data-mkt !== mode）",
+          "_MKT_BY_MODE" in src and "!want.includes(g.dataset.mkt)" in src)
+    check("普通模式 want 为空数组 → 三组都隐藏",
+          "const want = _MKT_BY_MODE[mode] || [];" in src)
     check("change 与 click 双挂（WKWebView 下 change 未必冒泡成 click）",
           "addEventListener('change'" in src and "t.closest('.plan-mode')" in src)
     check("渲染后立即标注一次（不必等用户动下拉）",
@@ -134,13 +154,33 @@ def test_matrix() -> None:
         "normal": [],
         "flash_sale": ["flash"],
         "limited": ["stock"],
-        "event": ["event"],
+        "event": ["event", "stock"],     # 活动模式同时要数量（2026-10-03 用户要求）
     }
     for m in modes:
-        want = mp.get(m) or ""
-        shown = [g for g in GROUPS if g == want]     # 隐藏的是 != want
-        check(f"模式 {m} → 只显示 {expect.get(m)}", shown == expect.get(m),
+        want = mp.get(m) or []
+        shown = [g for g in GROUPS if g in want]     # 隐藏的是 not in want
+        # 比较集合（显示顺序由 DOM 决定，不参与判定）
+        check(f"模式 {m} → 只显示 {expect.get(m)}", set(shown) == set(expect.get(m) or []),
               f"实际 {shown}")
+
+
+def test_event_mode_has_qty() -> None:
+    """用户 2026-10-03：活动（定时开售）模式「这个也加个数量」。"""
+    print("\n[F] 活动模式必须能填数量")
+    src = APP_JS.read_text(encoding="utf-8")
+    mp = _parse_map(src)
+    check("event 模式映射含 stock 分组", "stock" in (mp.get("event") or []),
+          f"event → {mp.get('event')}")
+    check("limited 模式映射仍含 stock 分组", "stock" in (mp.get("limited") or []),
+          f"limited → {mp.get('limited')}")
+    # 后端 plansales 状态对任意模式都算 stock/sold，这里交叉确认字段名一致
+    import membership as M                                       # noqa: E402
+    st = M.plan_sales_state({"mode": "event", "price_cny": 10, "stock": 5, "sold": 5})
+    check("后端 event 模式 stock 售罄会置灰（buyable=False）", st["buyable"] is False,
+          f"state = {st}")
+    st2 = M.plan_sales_state({"mode": "event", "price_cny": 10, "stock": 5, "sold": 1})
+    check("后端 event 模式 stock 未售罄可买且剩余 4", st2["buyable"] and st2["remaining"] == 4,
+          f"state = {st2}")
 
 
 def main() -> int:
@@ -152,6 +192,7 @@ def main() -> int:
     test_no_orphan_groups()
     test_groups_linked_to_mode()
     test_matrix()
+    test_event_mode_has_qty()
     print("\n" + "=" * 60)
     if FAILS:
         print("❌ 失败 %d 项：" % len(FAILS))
