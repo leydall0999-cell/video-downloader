@@ -104,12 +104,47 @@ def test_download_plan_grants_no_credits() -> None:
           "credits" not in dl_branch)
 
 
+def test_period_usage_reads_history() -> None:
+    """个人中心「使用统计」表的周期汇总必须认历史用量（2026-10-03 修的真 bug）。
+
+    症状：后台「用户使用详情」里近 9 天有 68 次消耗，但个人中心表的
+    近三日/近七日/本月**恒为 0**。根因：usage_summary 读 status()["usage_history"]，
+    而 status() 是对外公开视图、刻意不含 usage_history → 恒空字典。
+    """
+    print("\n[F] 周期用量汇总读得到历史（status() 不含 usage_history）")
+    st = M.MembershipStore()
+    check("[前提] status() 确实不含 usage_history（这是本 bug 的根因）",
+          "usage_history" not in st.status())
+    # 造 3 天历史：今天往前第 1 天用 7 次下载
+    import time as _t
+    today = _t.strftime("%Y-%m-%d", _t.localtime(st._now()))
+    yday = _t.strftime("%Y-%m-%d", _t.localtime(st._now() - 86400))
+    st._state.setdefault("usage_history", {})[yday] = {
+        "download": 7, "original": 0, "date": yday,
+    }
+    st._state["daily_usage"] = {"date": today, "download": 0, "original": 0}
+
+    tot3 = M.usage_summary(st, period="3d")
+    check("[3d] 汇总认得到昨天的量", int(tot3.get("download", 0)) == 7)
+    tot7 = M.usage_summary(st, period="7d")
+    check("[7d] 同样认得到", int(tot7.get("download", 0)) == 7)
+    tot_today = M.usage_summary(st, period="today")
+    check("[today] 只算今天（昨天的不该算进来）", int(tot_today.get("download", 0)) == 0)
+
+    rows = M.feature_usage_status(st, period="3d")
+    dl = next((r for r in rows if r.get("key") == "video_parse"), None)
+    check("[表格] 视频解析行 period_used = 7", dl is not None and int(dl["period_used"]) == 7)
+    check("[表格] 行里带 daily_used（今日）供「体验剩余」列用",
+          dl is not None and "daily_used" in dl and "daily_limit" in dl)
+
+
 def main() -> int:
     test_benefits_cover_quotas()
     test_benefits_unlimited_items()
     test_benefits_key_notes()
     test_plans_uses_generated_benefits()
     test_download_plan_grants_no_credits()
+    test_period_usage_reads_history()
     print("\n" + "=" * 46)
     if FAILS:
         print("❌ 失败 %d 项：" % len(FAILS))

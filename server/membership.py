@@ -1283,14 +1283,15 @@ def usage_summary(store: MembershipStore, period: str = "today") -> dict[str, in
     st = store.status()
     now = store._now()
     dates = _date_range_days(period, now)
-    hist = st.get("usage_history", {})
+    # 🔴 历史用量只能从 _state 读：status() 是「对外公开视图」，刻意不暴露
+    # usage_history（体积大、含逐日明细）。原来这里读 st["usage_history"]，
+    # 恒为 {} → 个人中心「使用统计」表的近三日/近七日/本月**永远显示 0**，
+    # 而后台「用户使用详情」读 _state 所以有数据，两边对不上（2026-10-03 实测）。
     du = st.get("daily_usage", {})
+    hist = dict(getattr(store, "_state", None) or {}).get("usage_history") or {}
     totals: dict[str, int] = {}
     for d in dates:
-        if d == du.get("date"):
-            src = du
-        else:
-            src = hist.get(d, {})
+        src = du if d == du.get("date") else (hist.get(d) or {})
         for k, v in src.items():
             if k == "date":
                 continue
