@@ -20774,16 +20774,54 @@ el.dwVidPlayer.hidden = true;
       return path;
     };
     const _monStatusClass = (s) => (s >= 500 ? 'is-err' : s >= 400 ? 'is-warn' : 'is-ok');
+    // 真人页面路径 → 中文（原始路径留在 title 里；扫描器路径原样显示）
+    const _monHumanPageLabel = (p) => {
+      const path = String(p || '').split('?')[0];
+      const table = [
+        ['/', '网页首页'],
+        ['/download', '下载页'],
+        ['/member', '会员中心'],
+        ['/personal', '个人中心'],
+        ['/tools', '工具页'],
+        ['/convert', '格式转换'],
+        ['/robots.txt', '爬虫规则文件'],
+      ];
+      for (const [k, label] of table) {
+        if (path === k || (k !== '/' && path.startsWith(k + '/'))) return label;
+      }
+      return path;
+    };
     const _monNginxTime = (t) => {
       try { return new Date(t.replace(' ', 'T').replace(/\+0800$/, '+08:00')).toLocaleString('zh-CN', { hour12: false }); } catch (_) { return t; }
     };
     const loadMonitorVisits = async () => {
       const st = $('adminMonitorVisitStats'), paths = $('adminMonitorVisitPaths'), rec = $('adminMonitorVisitRecent');
+      const hum = $('adminMonitorHumanStats'), humPages = $('adminMonitorHumanPages');
       if (!st) return;
       st.innerHTML = '加载中…';
+      if (hum) hum.innerHTML = '';
+      if (humPages) humPages.innerHTML = '';
       try {
         const d = await adminRequest('/api/app/ops-visits?limit=100&range=' + encodeURIComponent(_monRange));
-        st.innerHTML = `总请求 <b>${d.total || 0}</b> · 独立 IP <b>${d.unique_ips || 0}</b> · 状态码 ` +
+        // 真人访客口径（2026-10-03）：总请求里 ~90% 是接口 + 机器轮询，单独给出
+        // 「今天来了几个真人」——老板真正要看的数。
+        const h = d.human || {};
+        if (hum) {
+          hum.innerHTML = `
+            <div class="admin-stat-card"><b>${h.pv || 0}</b><span>真人页面访问 PV</span></div>
+            <div class="admin-stat-card"><b>${h.uv || 0}</b><span>独立访客（IP+设备）</span></div>
+            <div class="admin-stat-card"><b>${h.ips || 0}</b><span>独立访客 IP</span></div>
+            <div class="admin-stat-card"><b>${h.machine_requests || 0}</b><span>已排除的机器/接口请求</span></div>
+            <div class="admin-human-note">${esc(h.note || '')}</div>`;
+        }
+        if (humPages) {
+          humPages.innerHTML = (h.top_pages && h.top_pages.length)
+            ? '<table class="admin-table"><thead><tr><th>真人访问的页面</th><th>次数</th></tr></thead><tbody>' +
+              h.top_pages.map((p) => `<tr><td title="${esc(p.path)}">${esc(_monHumanPageLabel(p.path))}</td><td>${p.count}</td></tr>`).join('') +
+              '</tbody></table>'
+            : '<div class="admin-empty">该时间窗内没有真人页面访问</div>';
+        }
+        st.innerHTML = `全部请求 <b>${d.total || 0}</b> · 独立 IP <b>${d.unique_ips || 0}</b> · 状态码 ` +
           Object.entries(d.by_status || {}).map(([k, v]) =>
             `<span style="color:${_monStatusClass(+k) === 'is-err' ? '#e5484d' : _monStatusClass(+k) === 'is-warn' ? '#f5a623' : '#30a46c'}">${k}×${v}</span>`).join(' ') || '无';
         paths.innerHTML = (d.top_paths && d.top_paths.length)

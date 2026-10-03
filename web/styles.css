@@ -5368,6 +5368,14 @@ html.theme-dark .pf-changelog { background: rgba(255, 255, 255, .04); border-col
 }
 html.theme-dark .admin-btn.admin-mon-range { background: rgba(255, 255, 255, .06); color: var(--text-mute, #9ca3af); }
 html.theme-dark .admin-btn.admin-mon-range.is-active { background: var(--brand, #4f6cf0); color: #fff; }
+/* 真人访客口径卡片（2026-10-03）：与「全部请求」技术明细区分开 */
+.admin-human-note {
+  grid-column: 1 / -1; font-size: .72rem; color: var(--text-mute, #94a3b8);
+  line-height: 1.5; margin-top: .2rem;
+}
+.admin-ustats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .6rem; }
+.admin-ustats .admin-stat-card { min-width: 0; }
+
 .pf-update-btn:disabled { opacity: .6; cursor: default; }
 .pf-about-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 /* 错误上报弹窗 */

@@ -3890,9 +3890,11 @@
           <div class="admin-cfg-section" data-page-node-id="adminMonVisitSec">
             <div class="admin-cfg-head" data-page-node-id="adminMonVisitHead">
               <h3 data-page-node-id="adminMonVisitTitle">网站访客</h3>
-              <span class="admin-cfg-hint" data-page-node-id="adminMonVisitHint">nginx 日志汇总：总请求 / 独立 IP / 状态码 / 热点路径 / 最近访问</span>
+              <span class="admin-cfg-hint" data-page-node-id="adminMonVisitHint">先看「真人访客」（已剔除接口与机器流量），下面是全部请求的技术明细</span>
             </div>
-            <div id="adminMonitorVisitStats" class="admin-count" style="margin-bottom:6px"></div>
+            <div id="adminMonitorHumanStats" class="admin-ustats" style="margin-bottom:.7rem"></div>
+            <div id="adminMonitorHumanPages" class="admin-table-wrap"></div>
+            <div id="adminMonitorVisitStats" class="admin-count" style="margin:10px 0 6px"></div>
             <div id="adminMonitorVisitPaths" class="admin-table-wrap"></div>
             <div id="adminMonitorVisitRecent" class="admin-table-wrap" style="margin-top:8px;max-height:220px;overflow:auto"></div>
           </div>
