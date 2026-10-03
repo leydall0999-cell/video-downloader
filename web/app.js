@@ -21496,6 +21496,17 @@ el.dwVidPlayer.hidden = true;
     // 混用会让「下架」端点报「未知套餐类别：dl」——曾因此整条下架链路不可用，
     // 必须走映射。server/tests/test_plan_sale_table.py 钉这条。
     const _CAT_TABLE = { dl: 'download_plans', ai: 'ai_plans', cp: 'credit_packs' };
+    // 云端下发失败原因是技术串（no_admin_token / error: <urlopen error…>），
+    // 直接甩给运营看不出该去改什么；统一翻成一句能照着做的中文。
+    const _cloudReasonLabel = (r) => {
+      const s = String(r || '');
+      if (!s) return '未知原因';
+      if (s === 'no_license_base') return '本机未配置授权中心地址';
+      if (s === 'no_admin_token') return '本机未配置授权中心管理员令牌';
+      if (s === 'cloud_rejected') return '授权中心拒绝了该配置';
+      if (s.indexOf('error:') === 0) return '网络不可达或超时';
+      return s;
+    };
     const _MKT_BY_MODE = { flash_sale: ['flash'], limited: ['stock'], event: ['event', 'stock'], normal: [] };
     const applyMktGroups = (item) => {
       if (!item) return;
@@ -21579,17 +21590,31 @@ el.dwVidPlayer.hidden = true;
           sale.disabled = true;
           const oldTxt = sale.textContent;
           sale.textContent = '处理中…';
+          const saleUrl = '/api/admin/plans/' + encodeURIComponent(code) + '/sale';
+          const saleBody = JSON.stringify({ on_sale: willOn, table: sale.dataset.table || _CAT_TABLE[sale.dataset.cat] || '' });
+          // 云端同步失败 ≠ 无事发生：本地已改而授权中心没改，生效表又是「云端最高」，
+          // 前台可能根本看不到这次下架。本请求幂等，故对云端失败自动重试一次——
+          // 一次网络抖动不该变成「点了没反应」（2026-10-03 实测到过一次偶发失败）。
+          const pushSale = () => adminRequest(saleUrl, { method: 'POST', body: saleBody });
           try {
-            const r = await adminRequest('/api/admin/plans/' + encodeURIComponent(code) + '/sale', {
-              method: 'POST', body: JSON.stringify({ on_sale: willOn, table: sale.dataset.table || _CAT_TABLE[sale.dataset.cat] || '' }),
-            });
+            let r = await pushSale();
             if (!r || !r.ok) throw new Error((r && r.error) || '操作失败');
+            let cloud = r.cloud || {};
+            if (!cloud.ok) {
+              sale.textContent = '同步云端…';
+              await new Promise((res) => setTimeout(res, 800));
+              try {
+                const r2 = await pushSale();
+                if (r2 && r2.ok && (r2.cloud || {}).ok) { r = r2; cloud = r2.cloud; }
+                else if (r2 && r2.cloud) cloud = r2.cloud;
+              } catch (_) { /* 重试也失败：保留首次的失败原因 */ }
+            }
             // 立即重载服务端真值：价格真源在云端，状态胶囊/剩余名额等以服务端为准
             delete plansBox.dataset.dirty;
             loadConfig();
-            const cloud = r.cloud || {};
             _adminMsg(plansMsg, `${willOn ? '已上架' : '已下架'}「${label}」`
-              + (cloud.ok ? '，网页版同步生效' : '（⚠️ 云端同步失败，网页版暂未变更）'), !cloud.ok);
+              + (cloud.ok ? '，网页版同步生效'
+                : `（⚠️ 云端同步失败：${_cloudReasonLabel(cloud.reason)}，网页版暂未变更，请再点一次重试）`), !cloud.ok);
           } catch (e) {
             sale.disabled = false;
             sale.textContent = oldTxt;
@@ -21964,7 +21989,7 @@ el.dwVidPlayer.hidden = true;
           // 价格唯一真源在授权中心：云端同步成功才算全端生效，未同步要明确告知
           const cloud = r.cloud || {};
           if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）', false);
-          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${cloud.reason || '未知原因'}）——网页版与实际扣款价暂未变更`, true);
+          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${_cloudReasonLabel(cloud.reason)}）——网页版与实际扣款价暂未变更`, true);
         }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
       } catch (e) {

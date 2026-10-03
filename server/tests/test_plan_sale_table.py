@@ -22,6 +22,8 @@ import json
 import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -109,7 +111,75 @@ def test_frontend_wiring() -> None:
           src.index("const _CAT_TABLE") < src.index("plansBox.addEventListener('click'"))
 
 
-# ── [C]/[D] 真接口端到端 ─────────────────────────────────────────────────────
+# ── [B2] 云端同步失败必须是「重试 + 说明原因」 ───────────────────────────────
+def test_cloud_sync_resilience() -> None:
+    """2026-10-03 实测到一次偶发「云端同步失败」：本地已改、授权中心没改，而生效表是
+    「云端最高」→ 前台可能根本看不到这次下架，若只弹一句无原因的警告就结束，
+    用户会陷入「点了没反应」的困惑。故钉住：必须重试一次，且失败要带原因。"""
+    print("\n[B2] 下架的云端同步韧性（重试 + 原因）")
+    src = APP_JS.read_text(encoding="utf-8")
+
+    # 只看下架处理器那一段，避免误伤「保存套餐配置」的同名提示
+    seg = src[src.index("const sale = t.closest('.plan-sale-toggle')"):]
+    seg = seg[:seg.index("const del = t.closest('.plan-del')")]
+
+    check("下架请求抽成 pushSale（可重复调用）", "const pushSale = () => adminRequest(" in seg)
+    n_calls = seg.count("await pushSale()")
+    check("云端失败时会再次调用（重试一次）", n_calls >= 2, f"实际调用 {n_calls} 次")
+    check("重试前有可见的进度提示（不是静默）", "同步云端…" in seg)
+    check("失败原因被展示出来", "_cloudReasonLabel(cloud.reason)" in seg)
+    check("提示里含「再点一次重试」的兜底指引", "请再点一次重试" in seg)
+    check("不再是「已下架」但其实没同步成功也报成功",
+          "cloud.ok ? '，网页版同步生效'" in seg)
+    check("重试仅针对云端失败，不掩盖业务错误",
+          seg.index("if (!r || !r.ok) throw new Error") < seg.index("if (!cloud.ok)"))
+    check("重试用了短延时（避免瞬时抖动立刻再撞）", "setTimeout(res, 800)" in seg)
+
+    print("\n[B3] 失败原因翻成中文（两处提示统一直读）")
+    check("保存套餐配置那一处也用了同一套翻译",
+          src.count("_cloudReasonLabel(cloud.reason)") == 2,
+          f"实际 {src.count('_cloudReasonLabel(cloud.reason)')} 处")
+    m = re.search(r"const _cloudReasonLabel = \(r\) => \{(.*?)\n    \};", src, re.S)
+    check("定义了 _cloudReasonLabel", bool(m))
+    # 作用域钉子：_localToTs 曾因定义在渲染闭包内、被另一作用域的 savePlans 引用而
+    # 抛 ReferenceError（保存必失败）。工具函数必须与两个调用方同层（4 空格）。
+    lines = src.split("\n")
+
+    def _indent_of(decl: str) -> int:
+        for l in lines:
+            if re.match(r"\s*" + decl, l):
+                return len(l) - len(l.lstrip())
+        return -1
+
+    ind_h = _indent_of(r"const _cloudReasonLabel ")
+    ind_s = _indent_of(r"const savePlans ")
+    check("_cloudReasonLabel 与 savePlans / 下架处理器同层（不重演 _localToTs 作用域坑）",
+          ind_h == 4 and ind_h == ind_s, f"_cloudReasonLabel={ind_h} savePlans={ind_s}")
+    if m:
+        body = m.group(1)
+        for raw in ("no_license_base", "no_admin_token", "cloud_rejected", "error:"):
+            check(f"[翻译覆盖] {raw} 有对应用户可读文案", raw in body)
+        check("[翻译] 空原因兜底为「未知原因」", "未知原因" in body)
+        check("原始英文串只作兜底返回（关键分支优先）",
+              body.index("no_license_base") < body.rindex("return s;"))
+
+        node = shutil.which("node") or "node"
+        code = m.group(0)
+        calls = ["'no_license_base'", "'no_admin_token'", "'cloud_rejected'",
+                 "'error: <urlopen error timed out>'", "''", "null", "'weird_thing'"]
+        harness = code + "\nconsole.log(JSON.stringify([" + ",".join(calls) + "].map(_cloudReasonLabel)));"
+        out = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=20)
+        if out.returncode != 0:
+            check("node 实跑 _cloudReasonLabel", False, out.stderr.strip()[:200])
+        else:
+            got = json.loads(out.stdout.strip())
+            want = ["本机未配置授权中心地址", "本机未配置授权中心管理员令牌",
+                    "授权中心拒绝了该配置", "网络不可达或超时", "未知原因", "未知原因", "weird_thing"]
+            check("node 实跑：四种已知原因 + 空/None 兜底 + 未知透传均正确",
+                  got == want, f"实际 {got}")
+
+
+
 def _admin_headers() -> dict:
     uid = auth_store.create_user("saletest", "Saletest#2026") or "u_saletest"
     auth_store.set_user_admin(uid, True)
@@ -174,6 +244,27 @@ def test_sale_e2e() -> None:
           json.dumps((plans2.get(CODE) or {}).get("state", {}), ensure_ascii=False)[:160])
     check("错误表名未污染 AI 表", CODE not in ((mp2.get("ai_member") or {}).get("plans") or {}))
 
+    print("\n[C3] 云端不可达：必须给出「原因」且不回滚本地改动")
+    import membership as _M
+    _orig = _M._license_api
+    _M._license_api = lambda path: "http://127.0.0.1:9" + path   # 9 号端口必然连不上
+    try:
+        r7 = client.post(f"/api/admin/plans/{CODE}/sale",
+                         json={"on_sale": False, "table": "download_plans"}, headers=h)
+        b7 = r7.json()
+        check("云端挂掉时本机改动仍然生效（ok=True）", b7.get("ok") is True,
+              json.dumps(b7, ensure_ascii=False)[:200])
+        c7 = b7.get("cloud") or {}
+        check("明确回报 cloud.ok=False（前端据此提示）", c7.get("ok") is False)
+        reason = str(c7.get("reason") or "")
+        check("失败带非空原因（前端要把它显示出来）", bool(reason), f"reason={reason!r}")
+        mp7 = client.get("/api/member/plans").json()
+        st7 = (((mp7.get("download_member") or {}).get("plans") or {}).get(CODE) or {}).get("state") or {}
+        check("本地已下架（未被云端失败回滚）", st7.get("on_sale") is False, str(st7.get("on_sale")))
+        print(f"     失败原因示例：{reason[:70]}")
+    finally:
+        _M._license_api = _orig
+
     # 复位：确保测试不留副作用（on_sale 默认 True 即回原状）
     client.post(f"/api/admin/plans/{CODE}/sale", json={"on_sale": True}, headers=h)
 
@@ -181,6 +272,7 @@ def test_sale_e2e() -> None:
 if __name__ == "__main__":
     test_norm_backend()
     test_frontend_wiring()
+    test_cloud_sync_resilience()
     test_sale_e2e()
     print("\n" + "=" * 64)
     if FAILS:
