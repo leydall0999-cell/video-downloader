@@ -17215,7 +17215,7 @@ el.dwVidPlayer.hidden = true;
   function _chatBubble(m) {
     const who = m.role === 'admin' ? 'admin' : 'user';
     const name = m.sender_identifier ? `（${escHtml(m.sender_identifier)}）` : '';
-    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m.image);
+    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m);
     return `<div class="chat-msg ${who}">
       <div class="chat-body-wrap">${body}</div>
       <div class="chat-meta">${esc(_chatFmt(m.ts))}${who === 'admin' ? name : ''}</div>
@@ -17570,9 +17570,13 @@ el.dwVidPlayer.hidden = true;
     document.body.appendChild(box);
   }
 
-  function _chatImgTag(name) {
+  function _chatImgTag(nameOrMsg) {
+    // 优先用后端下发的签名 URL（`<img>` 直接请求不会带 Authorization 头，
+    // 裸路径会被鉴权挡掉 → 裂图，2026-10-03 实测）；没有则退回裸路径。
+    const msg = (nameOrMsg && typeof nameOrMsg === 'object') ? nameOrMsg : { image: nameOrMsg };
+    const name = msg.image;
     if (!name) return '';
-    const src = '/api/support/image/' + encodeURIComponent(name);
+    const src = msg.image_url || ('/api/support/image/' + encodeURIComponent(name));
     return `<img class="chat-img" src="${esc(src)}" alt="图片消息" loading="lazy" data-img-zoom="${esc(src)}">`;
   }
 
@@ -17592,7 +17596,7 @@ el.dwVidPlayer.hidden = true;
     const mine = m.role === 'admin';
     const cls = mine ? 'user' : 'admin';
     const name = m.sender_identifier ? `（${escHtml(m.sender_identifier)}）` : '';
-    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m.image);
+    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m);
     return `<div class="chat-msg ${cls}" data-msg-idx="${Number(m.__idx) || 0}">
       <div class="chat-body-wrap">${body}</div>
       <div class="chat-meta">${mine ? '客服' : '用户'}${mine ? name : ''} · ${esc(_chatFmt(m.ts))}</div>

@@ -166,12 +166,33 @@ def test_media_dir_in_data_dir() -> None:
           not any(x in str(d) for x in ("/Downloads/", "/Documents/", "/Desktop/")))
 
 
+def test_image_url_signing() -> None:
+    print("\n[F] 签名 URL：`<img>` 不带请求头也能取图（裂图回归守卫）")
+    name = "d" * 32 + ".png"
+    url = S._image_url(name)
+    check("[签名] URL 带 ?t= 令牌", url.startswith("/api/support/image/" + name + "?t="))
+    tok = url.split("t=", 1)[1]
+    check("[签名] 本机签发的令牌自校验通过", S._image_token_ok(name, tok) is True)
+    check("[签名] 换别的文件名 → 令牌不通用", S._image_token_ok("e" * 32 + ".png", tok) is False)
+    check("[签名] 篡改签名 → 拒绝", S._image_token_ok(name, tok[:-1] + ("0" if tok[-1] != "0" else "1")) is False)
+    check("[签名] 空/畸形令牌 → 拒绝", S._image_token_ok(name, "") is False and S._image_token_ok(name, "abc") is False)
+    check("[签名] 过期令牌 → 拒绝", S._image_token_ok(name, "1." + tok.split(".", 1)[1]) is False)
+    msgs = S._with_image_urls([
+        {"role": "user", "text": "看图", "image": name},
+        {"role": "admin", "text": "纯文字"},
+    ])
+    check("[签名] 带图消息补上 image_url", msgs[0].get("image_url", "").startswith("/api/support/image/"))
+    check("[签名] 纯文字消息不被改动", "image_url" not in msgs[1])
+    check("[签名] 落盘字段仍是文件名（不写 URL 进磁盘）", msgs[0].get("image") == name)
+
+
 def main() -> int:
     test_image_decode()
     test_media_path_guards()
     test_search_messages()
     test_image_field_flow()
     test_media_dir_in_data_dir()
+    test_image_url_signing()
     print("\n" + "=" * 46)
     if FAILS:
         print("❌ 失败 %d 项：" % len(FAILS))

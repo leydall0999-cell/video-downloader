@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import json
 import re
 import threading
@@ -44,6 +46,8 @@ _IMG_TYPES = {
 }
 # 只允许「我们自己生成的文件名」，杜绝 ../ 穿越
 _IMG_NAME_RE = re.compile(r"^[0-9a-f]{32}\.(png|jpg|webp|gif)$")
+# 签名 URL 有效期（图片要能反复翻看，给足 30 天；过期后重新拉会话即换新）
+_IMG_URL_TTL = 30 * 24 * 3600.0
 
 
 def _support_dir() -> Path:
@@ -181,6 +185,63 @@ def _thread_owns_image(thread: dict, name: str) -> bool:
     return any((m or {}).get("image") == name for m in (thread.get("messages") or []))
 
 
+def _sign_with_exp(name: str, exp: int) -> str:
+    """按「文件名 + 过期时间戳」签出令牌（HMAC-SHA256[:32]，密钥 = 本机 .auth_secret）。"""
+    from auth_store import _load_secret
+
+    payload = f"{name}:{int(exp)}".encode("utf-8")
+    return hmac.new(_load_secret(), payload, hashlib.sha256).hexdigest()[:32]
+
+
+def _sign_image(name: str, ttl: float = _IMG_URL_TTL) -> str:
+    """给图片签一个带时效的 URL 令牌（`"<exp>.<sig>"`）。
+
+    🔴 为什么需要：`<img src>` / 灯箱是**浏览器直接发请求**，不会带
+    Authorization 头 —— 只靠登录态鉴权的话，图片一律 401，界面显示裂图
+    （2026-10-03 实测）。所以消息返回时附带签名 URL，凭签名取图；
+    密钥复用本机 .auth_secret，泄露不了也跨机通用不了。
+    """
+    try:
+        exp = int(time.time() + ttl)
+        return f"{exp}.{_sign_with_exp(name, exp)}"
+    except Exception:  # noqa: BLE001 — 签不出来就退回登录态取图
+        return ""
+
+
+def _image_token_ok(name: str, token: str) -> bool:
+    """校验图片 URL 令牌：按令牌自带的 exp 重算签名比对，且未过期。"""
+    exp_s, _, sig = str(token or "").partition(".")
+    try:
+        exp = int(exp_s)
+    except (TypeError, ValueError):
+        return False
+    if not sig or exp < int(time.time()):
+        return False
+    try:
+        expected = _sign_with_exp(name, exp)
+    except Exception:  # noqa: BLE001
+        return False
+    return hmac.compare_digest(sig, expected)
+
+
+def _image_url(name: str) -> str:
+    if not name:
+        return ""
+    tok = _sign_image(name)
+    return f"/api/support/image/{name}" + (f"?t={tok}" if tok else "")
+
+
+def _with_image_urls(messages: list[dict]) -> list[dict]:
+    """返回给前端前给每条带图消息补 image_url（落盘仍只存文件名）。"""
+    out = []
+    for m in messages or []:
+        if isinstance(m, dict) and m.get("image"):
+            m = dict(m)
+            m["image_url"] = _image_url(m["image"])
+        out.append(m)
+    return out
+
+
 def _image_name_of(payload: dict[str, Any]) -> str:
     """从请求体取出图片文件名并校验格式（空串 = 不带图）。"""
     name = str((payload or {}).get("image") or "").strip()
@@ -288,7 +349,8 @@ def support_message(request: Request, payload: dict[str, Any] = Body(...)) -> di
         if image:
             msg["image"] = image
         _append(threads, thread, msg)
-    return {"ok": True, "thread_id": thread["id"], "message": msg}
+    return {"ok": True, "thread_id": thread["id"],
+            "message": (_with_image_urls([msg])[0] if msg.get("image") else msg)}
 
 
 @router.get("/api/support/threads")
@@ -348,7 +410,7 @@ def support_thread(tid: str, request: Request) -> dict[str, Any]:
             "id": thread["id"],
             "user_identifier": thread.get("user_identifier"),
             "status": thread.get("status"),
-            "messages": thread.get("messages", []),
+            "messages": _with_image_urls(thread.get("messages", [])),
         },
     }
 
@@ -385,7 +447,7 @@ def support_reply(tid: str, request: Request, payload: dict[str, Any] = Body(...
         if image:
             msg["image"] = image
         _append(threads, thread, msg)
-    return {"ok": True, "message": msg}
+    return {"ok": True, "message": (_with_image_urls([msg])[0] if msg.get("image") else msg)}
 
 
 @router.post("/api/support/thread/{tid}/status")
@@ -438,21 +500,28 @@ def support_upload_image(request: Request, payload: dict[str, Any] = Body(...)) 
 
 
 @router.get("/api/support/image/{name}")
-def support_get_image(name: str, request: Request):
-    """读取图片。管理员任意；普通用户只能读自己会话里引用过的（防越权看图）。"""
-    uid = _require_user(request)
-    if not uid:
-        return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+def support_get_image(name: str, request: Request, t: str = ""):
+    """读取图片。两种身份任一即可：
+    1) 已登录（Authorization 头）——管理员任意，普通用户只能自己会话引用过的；
+    2) 携带会话消息里下发的签名 URL（`?t=`）——`<img>`/灯箱不会带请求头，只能走这条。
+    """
     path = _media_path(name)
     if path is None or not path.exists():
         return {"ok": False, "error": "图片不存在"}
-    admin = _is_admin(uid)
-    if not admin:
-        with _lock:
-            threads = _read_threads()
-        mine = [t for t in threads if t.get("user_id") == uid and _thread_owns_image(t, name)]
-        if not mine:
-            return {"ok": False, "error": "无权访问", "code": "FORBIDDEN"}
+
+    if t and _image_token_ok(name, t):
+        pass  # 签名有效：直接放行（不区分角色，签名本身就是授权）
+    else:
+        uid = _require_user(request)
+        if not uid:
+            return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+        if not _is_admin(uid):
+            with _lock:
+                threads = _read_threads()
+            mine = [t2 for t2 in threads if t2.get("user_id") == uid and _thread_owns_image(t2, name)]
+            if not mine:
+                return {"ok": False, "error": "无权访问", "code": "FORBIDDEN"}
+
     from fastapi.responses import FileResponse
 
     media = {
