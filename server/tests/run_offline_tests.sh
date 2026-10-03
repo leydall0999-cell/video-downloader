@@ -450,3 +450,8 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 echo "✅ 全部离线测试通过"
+
+#  34. test_membership_benefits.py —— 下载会员权益与配额表一致性（2026-10-03）：
+#      权益文案改为从 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 自动生成，
+#      守卫钉住「有配额必有文案」+「下载会员不送积分」，以后加配额不会再漏文案。
+run_one test_membership_benefits.py
