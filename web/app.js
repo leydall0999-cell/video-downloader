@@ -16722,13 +16722,22 @@ el.dwVidPlayer.hidden = true;
     if (st.on_sale === false) return '';
     const saving = plan.saving ? `<span class="member-badge member-badge-saving">省 ${Math.round(plan.saving * 100)}%</span>` : '';
     const best = plan.best ? `<span class="member-badge member-badge-best">最受欢迎</span>` : '';
-    const mkBadge = st.badge ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
-    const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
-    // 秒杀三态（2026-10-03）：进行中→现价+划线+「秒杀至 X」；未开始→「即将开抢」角标+开抢时间；已结束→恢复原价无提示
+    // 秒杀三态（2026-10-03）：进行中→现价+划线+「秒杀至 X」；未开始→「即将开抢」角标+开抢时间；已结束→恢复原价、收起秒杀角标
+    // 🔴 窗口过了必须收起一切秒杀元素：价格早已回原价，卡片却还挂着「限时秒杀」
+    //    角标和「秒杀至 …」，用户会误以为自己正在享受秒杀价。
+    // flash_phase 由后端 plan_sales_state 下发（单一真源）；老服务端没有该字段时
+    // 按 mode/flash_start/flash_end 自行推导，保证只热更前端也生效。
+    // ⚠️ 必须先算出 flashPhase 再用它（const 有 TDZ，写反顺序会抛 ReferenceError）
     const _nowSec = Date.now() / 1000;
     const _fs = Number(st.flash_start) || 0;
     const _fe = Number(st.flash_end) || 0;
-    const flashSoon = st.mode === 'flash_sale' && _fs && _nowSec < _fs;
+    const flashPhase = st.flash_phase
+      || (st.mode === 'flash_sale' && Number(st.flash_price) > 0 && _fs && _fe
+        ? (_nowSec < _fs ? 'upcoming' : (_nowSec <= _fe ? 'active' : 'ended')) : 'none');
+    const flashSoon = flashPhase === 'upcoming';
+    const mkBadge = (st.badge && flashPhase !== 'ended')
+      ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
+    const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
     const soonBadge = flashSoon ? '<span class="member-badge member-badge-flash">即将开抢</span>' : '';
     const badges = (saving || best || mkBadge || soonBadge || outBadge)
       ? `<span class="member-plan-badges">${mkBadge}${soonBadge}${saving}${best}${outBadge}</span>` : '';
@@ -16741,7 +16750,7 @@ el.dwVidPlayer.hidden = true;
     // 倒计时（秒杀优先）：秒杀中→距秒杀结束；秒杀未开始→距开抢；活动窗口→距开售/距结束
     const _sa = Number(st.start_at) || 0;
     const _ea = Number(st.end_at) || 0;
-    const _hasFlash = st.mode === 'flash_sale' && Number(st.flash_price) > 0;
+    const _hasFlash = flashPhase === 'upcoming' || flashPhase === 'active';
     let cdUntil = 0;
     let cdLabel = '';
     if (st.is_flash && _fe) { cdUntil = _fe; cdLabel = '距秒杀结束'; }
@@ -16760,7 +16769,7 @@ el.dwVidPlayer.hidden = true;
       bits.push(`${st.start_at && !st.end_at ? `${fmtTs(st.start_at)} 开售` : (st.end_at && !st.start_at ? `截至 ${fmtTs(st.end_at)}` : `${fmtTs(st.start_at)} ~ ${fmtTs(st.end_at)}`)}`);
     }
     if (flashSoon) bits.push(`${fmtTs(_fs)} 开抢`);
-    else if (st.mode === 'flash_sale' && st.is_flash && _fe) bits.push(`秒杀至 ${fmtTs(_fe)}`);
+    else if (flashPhase === 'active' && _fe) bits.push(`秒杀至 ${fmtTs(_fe)}`);
     if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
     const meta = bits.length ? `<div class="member-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
     const desc = st.desc ? `<div class="member-plan-desc">${escHtml(st.desc)}</div>` : '';

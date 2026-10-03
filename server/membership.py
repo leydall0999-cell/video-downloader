@@ -322,7 +322,9 @@ def plan_sales_state(plan: dict[str, Any], now: Optional[float] = None) -> dict[
     """算出一档当前的售卖状态与现价（前端置灰、下单校验共用这一份口径）。
 
     返回：buyable 是否可买、reason 不可买原因（中文）、price 现价、
-    original_price 原价、is_flash 是否秒杀中、remaining 剩余份数（None=不限）、
+    original_price 原价、is_flash 是否秒杀中、flash_phase 秒杀窗口三态
+    （upcoming 未开始 / active 进行中 / ended 已结束 / none 非秒杀模式）、
+    remaining 剩余份数（None=不限）、
     start_at/end_at 售卖窗口、mode 模式、badge/desc 展示字段。
     """
     now = float(now if now is not None else time.time())
@@ -339,6 +341,17 @@ def plan_sales_state(plan: dict[str, Any], now: Optional[float] = None) -> dict[
     fe = _ts(p.get("flash_end"))
     flash_price = float(p.get("flash_price") or 0)
     in_flash = bool(flash_price > 0 and fs and fe and fs <= now <= fe)
+    # 秒杀窗口三态：前端据此决定「秒杀价/划线原价/秒杀角标/秒杀至…
+    # 要不要出现」。窗口已过必须一切收起 —— 否则价格早已回原价，卡片却还挂着
+    # 「限时秒杀」角标和「秒杀至 …」，用户会误以为自己正在享受秒杀价。
+    flash_phase = "none"
+    if mode == "flash_sale" and flash_price > 0 and fs and fe:
+        if now < fs:
+            flash_phase = "upcoming"
+        elif now <= fe:
+            flash_phase = "active"
+        else:
+            flash_phase = "ended"
     stock = int(p.get("stock") or 0)
     sold = int(p.get("sold") or 0)
     remaining = (stock - sold) if stock > 0 else None
@@ -361,6 +374,7 @@ def plan_sales_state(plan: dict[str, Any], now: Optional[float] = None) -> dict[
         "price": (flash_price if in_flash else base_price),
         "original_price": base_price,
         "is_flash": in_flash,
+        "flash_phase": flash_phase,
         "flash_price": flash_price,
         "flash_start": fs,
         "flash_end": fe,

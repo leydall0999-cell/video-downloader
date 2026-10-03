@@ -82,6 +82,20 @@ def test_frontend_wiring() -> None:
     for cls in (".member-plan-count", ".member-count-val", ".member-plan-count.is-done"):
         check(f"样式含 {cls}", cls in css)
 
+    # 2026-10-03：秒杀窗口过了必须自动收起「限时秒杀」角标（否则价格早已回原价、
+    # 卡片却还挂着秒杀角标，用户会误以为自己在享受秒杀价）
+    check("秒杀三态：优先用后端下发的 flash_phase", "const flashPhase = st.flash_phase" in src)
+    check("秒杀三态：老后端没该字段时按 mode/flash_start/flash_end 自行推导",
+          "_nowSec < _fs ? 'upcoming' : (_nowSec <= _fe ? 'active' : 'ended')" in src)
+    check("角标与三态联动（ended 不显示）",
+          "const mkBadge = (st.badge && flashPhase !== 'ended')" in src)
+    i_phase = src.find("const flashPhase = st.flash_phase")
+    i_badge = src.find("const mkBadge = (st.badge && flashPhase !== 'ended')")
+    check("flashPhase 必须先于 mkBadge 声明（const 有 TDZ，写反会抛 ReferenceError）",
+          i_phase > 0 and i_badge > i_phase, f"phase@{i_phase} badge@{i_badge}")
+    check("「秒杀至…」只在 active 出现",
+          "else if (flashPhase === 'active' && _fe) bits.push(`秒杀至" in src)
+
 
 def _extract_fmt_countdown(src: str) -> str:
     i = src.find("function _fmtCountdown")
@@ -171,12 +185,20 @@ const none = Object.assign({}, base, {
            original_price: 9.9, is_flash: false, flash_price: 0, flash_start: 0, flash_end: 0,
            start_at: 0, end_at: 0, stock: 0, sold: 0, remaining: null, badge: '', desc: '' },
 });
+// 秒杀窗口已过：价格早已回原价，一切秒杀元素（角标/划线/秒杀至/倒计时）必须收起
+const ended = Object.assign({}, base, {
+  state: { mode: 'flash_sale', on_sale: true, buyable: true, reason: '', price: 9.9,
+           original_price: 9.9, is_flash: false, flash_price: 4.9,
+           flash_start: NOW - 7200, flash_end: NOW - 60,
+           start_at: 0, end_at: 0, stock: 0, sold: 0, remaining: null, badge: '限时秒杀', desc: '' },
+});
 console.log(JSON.stringify({
   now: NOW,
   flash: _memberCard(flash, 'download_1day', { unit: ' / 1天' }),
   soon: _memberCard(soon, 'download_1day', { unit: ' / 1天' }),
   ev: _memberCard(ev, 'download_1day', { unit: ' / 1天' }),
   none: _memberCard(none, 'download_1day', { unit: ' / 1天' }),
+  ended: _memberCard(ended, 'download_1day', { unit: ' / 1天' }),
 }));
 """
     out = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=25)
@@ -203,6 +225,15 @@ console.log(JSON.stringify({
 
     h4 = r["none"]
     check("普通档：没有倒计时节点", "member-plan-count" not in h4)
+
+    h5 = r.get("ended", "")
+    # 2026-10-03 用户需求：秒杀窗口过了必须自动收起「限时秒杀」角标
+    check("秒杀已结束：不再显示秒杀角标", "限时秒杀" not in h5, h5[:200])
+    check("秒杀已结束：没有「秒杀至」文案", "秒杀至" not in h5)
+    check("秒杀已结束：没有倒计时节点", "member-plan-count" not in h5)
+    check("秒杀已结束：不划原价（已回原价）", "member-price-orig" not in h5)
+    check("秒杀已结束：卡片仍正常渲染原价且按钮可点（不是置灰）",
+          "member-price-now" in h5 and 'class="btn btn-primary btn-sm member-buy"' in h5 and "disabled" not in h5)
 
 
 def test_member_msg_intact() -> None:
