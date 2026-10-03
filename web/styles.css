@@ -4630,6 +4630,21 @@ html.theme-dark .pf-pool-note.is-warn { color: #fbbf24; }
 .member-price-now { color: var(--text); }
 .member-price-now.is-flash { color: #e11d48; }
 .member-plan-meta { font-size: .7rem; color: var(--text-mute, #94a3b8); margin-top: .15rem; }
+/* 秒杀/活动倒计时（2026-10-03）：秒级刷新，数字用等宽避免跳动 */
+.member-plan-count {
+  display: inline-flex; align-items: baseline; gap: .32rem;
+  margin-top: .28rem; padding: .12rem .5rem;
+  border-radius: 999px; background: #f1f5f9; color: #475569;
+  border: 1px solid #e2e8f0; font-size: .7rem; line-height: 1.6;
+}
+.member-plan-count.is-flash { background: #fff1f2; color: #e11d48; border-color: #fecdd3; }
+.member-plan-count .member-count-label { opacity: .85; }
+.member-plan-count .member-count-val {
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600; letter-spacing: .02em;
+}
+.member-plan-count.is-done { background: #f1f5f9; color: #64748b; border-color: #e2e8f0; }
 .member-plan-desc { font-size: .72rem; color: var(--text-mute, #64748b); margin-top: .2rem; line-height: 1.45; }
 .member-plan.is-off { opacity: .72; }
 .member-plan.is-off .member-plan-name { text-decoration: line-through; }

@@ -16669,6 +16669,50 @@ el.dwVidPlayer.hidden = true;
     el.memberActMsg.hidden = !text;
     el.memberActMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
   }
+  // ---- 秒杀/活动倒计时（2026-10-03）----
+  // 会员卡上的 `<div class="member-plan-count" data-until=...>` 由全局 1 秒定时器统一刷新，
+  // 不重渲染整张卡（避免输入/滚动被打断）；到点后刷新一次卡片，让价格与角标跟着回落。
+  function _fmtCountdown(sec) {
+    sec = Math.max(0, Math.floor(Number(sec) || 0));
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const p = (x) => String(x).padStart(2, '0');
+    return (d > 0 ? `${d}天 ` : '') + `${p(h)}:${p(m)}:${p(s)}`;
+  }
+  let _memberCdTimer = null;
+  let _memberCdRefreshedAt = 0;
+  function _tickMemberCountdowns() {
+    const nodes = document.querySelectorAll('.member-plan-count[data-until]');
+    if (!nodes.length) return;
+    const now = Date.now() / 1000;
+    let expired = false;
+    nodes.forEach((n) => {
+      const until = Number(n.dataset.until) || 0;
+      const val = n.querySelector('.member-count-val');
+      if (!val) return;
+      if (!until || until - now <= 0) {
+        val.textContent = '已结束';
+        n.classList.add('is-done');
+        expired = true;
+        return;
+      }
+      val.textContent = _fmtCountdown(until - now);
+    });
+    // 到点 → 拉一次最新状态（价格/角标/按钮态会变）；5 秒冷却防抖动
+    if (expired && Date.now() - _memberCdRefreshedAt > 5000) {
+      _memberCdRefreshedAt = Date.now();
+      setTimeout(() => { renderMemberPlans(); }, 900);
+    }
+  }
+  function _startMemberCountdowns() {
+    _tickMemberCountdowns();
+    if (!_memberCdTimer) _memberCdTimer = setInterval(_tickMemberCountdowns, 1000);
+  }
+  function _stopMemberCountdowns() {
+    if (_memberCdTimer) { clearInterval(_memberCdTimer); _memberCdTimer = null; }
+  }
   // 卡片版式：标题行（名称 + 角标）/ 价格行（¥金额 + 单位小字）/ 可选说明行 / 底部通栏「购买」
   // 相比旧版「全部纵向堆叠 + 绝对定位角标」，卡高约降 1/3，宽窄栅格里都能对齐。
   function _memberCard(plan, code, extra) {
@@ -16694,6 +16738,21 @@ el.dwVidPlayer.hidden = true;
       ? `<span class="member-price-orig">¥${orig}</span>` : '';
     const price = `${flashLine}<span class="member-price-now${st.is_flash ? ' is-flash' : ''}">${now}</span>`;
     const unit = extra.unit ? `<span class="member-plan-per">${extra.unit}</span>` : '';
+    // 倒计时（秒杀优先）：秒杀中→距秒杀结束；秒杀未开始→距开抢；活动窗口→距开售/距结束
+    const _sa = Number(st.start_at) || 0;
+    const _ea = Number(st.end_at) || 0;
+    const _hasFlash = st.mode === 'flash_sale' && Number(st.flash_price) > 0;
+    let cdUntil = 0;
+    let cdLabel = '';
+    if (st.is_flash && _fe) { cdUntil = _fe; cdLabel = '距秒杀结束'; }
+    else if (_hasFlash && _fs && _nowSec < _fs) { cdUntil = _fs; cdLabel = '距开抢'; }
+    else if (_sa && _nowSec < _sa) { cdUntil = _sa; cdLabel = '距开售'; }
+    else if (st.buyable && _ea && _nowSec < _ea) { cdUntil = _ea; cdLabel = '距结束'; }
+    const countdown = cdUntil
+      ? `<div class="member-plan-count${st.is_flash ? ' is-flash' : ''}" data-until="${cdUntil}">` +
+        `<span class="member-count-label">${cdLabel}</span>` +
+        '<span class="member-count-val">--:--:--</span></div>'
+      : '';
     // 活动时间 / 剩余名额
     const fmtTs = (ts) => (ts ? _memberFmtDate(ts) : '');
     const bits = [];
@@ -16711,6 +16770,7 @@ el.dwVidPlayer.hidden = true;
       <div class="member-plan${plan.best ? ' member-plan-best' : ''}${disabled ? ' is-off' : ''}">
         <div class="member-plan-top"><span class="member-plan-name">${escHtml(plan.label || code)}</span>${badges}</div>
         <div class="member-plan-price"><span class="member-ccy">¥</span>${price}${unit}</div>
+        ${countdown}
         ${meta}${desc}${foot}
         <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}"${disabled ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${disabled ? escHtml(st.reason || '暂不可购买') : '购买'}</button>
       </div>`;
@@ -16782,6 +16842,7 @@ el.dwVidPlayer.hidden = true;
           if (code) payCreate(code);
         });
       });
+      _startMemberCountdowns();     // 秒杀/活动倒计时（单例定时器）
     } catch (_) { /* 静默 */ }
   }
   // 卡密通道已下线（2026-09-26）：activateMember 已移除，充值一律走 payCreate（支付宝/微信在线支付）
@@ -19271,6 +19332,8 @@ el.dwVidPlayer.hidden = true;
     });
   });
   if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
+  // 弹窗关闭 → 停掉倒计时秒级定时器（避免后台空转）
+  if (el.memberModal) el.memberModal.addEventListener('close', _stopMemberCountdowns);
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
   for (const [b, k] of _memberTabs) { if (b) b.addEventListener('click', () => switchMemberTab(k)); }

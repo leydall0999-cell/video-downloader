@@ -471,3 +471,9 @@ run_one test_admin_user_usage.py
 #      并模拟 4 模式 × 3 分组显隐矩阵。防止「模式 value 与分组标识不同名」
 #      （limited vs stock）导致选了该模式却什么都不显示。
 run_one test_plan_mkt_matrix.py
+
+#  38. test_member_countdown.py —— 会员卡秒杀/活动倒计时（2026-10-03）：
+#      用户「秒杀卡片上做个倒计时」。四层核对：后端 state 字段齐 → 前端模板/选择器/
+#      定时器生命周期接线 → _fmtCountdown 真实行为（抽出来交给 node 跑）→
+#      回归钉 _memberMsg/_memberCard 函数体完整（防「整块被替换成签名行」事故）。
+run_one test_member_countdown.py
