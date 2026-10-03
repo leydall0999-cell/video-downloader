@@ -17557,15 +17557,43 @@ el.dwVidPlayer.hidden = true;
   /** 图片灯箱：点缩略图看原图（大图直接铺满，点任意处/ESC 关闭）。 */
   function _chatZoom(src) {
     if (!src) return;
+    // 打开前先记住滚动位置：关掉要「回到原处」，否则大图一关就跳位（用户反馈「没有返回」）
+    const log = el.psLog || el.profileSupportPanel;
+    const keep = { winY: window.scrollY || 0, logTop: (log && log.scrollTop) || 0 };
     const box = document.createElement('div');
     box.className = 'chat-zoom';
     const img = document.createElement('img');
     img.src = src;
     img.alt = '查看大图';
-    box.appendChild(img);
-    const close = () => { if (box.parentNode) box.parentNode.removeChild(box); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    img.onerror = () => {
+      const errTip = document.createElement('div');
+      errTip.className = 'chat-zoom-tip is-err';
+      errTip.textContent = '图片加载失败（可能已过期，重新打开会话即可）';
+      box.appendChild(errTip);
+    };
+    // 显式关闭入口：右上角大号 ×（之前只有「点任意处」这种隐性返回，用户找不到）
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'chat-zoom-x';
+    x.title = '关闭 (ESC)';
+    x.setAttribute('aria-label', '关闭预览');
+    x.textContent = '×';
+    const tip = document.createElement('div');
+    tip.className = 'chat-zoom-tip';
+    tip.textContent = '点击任意处或按 ESC 返回';
+    box.append(img, x, tip);
+    const close = () => {
+      if (box.parentNode) box.parentNode.removeChild(box);
+      document.removeEventListener('keydown', onKey);
+      // 回到打开前的位置
+      try {
+        if (log && keep.logTop) log.scrollTop = keep.logTop;
+        if (keep.winY) window.scrollTo(0, keep.winY);
+      } catch (_) { /* 忽略 */ }
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
     box.onclick = close;
+    x.onclick = (e) => { e.stopPropagation(); close(); };
     document.addEventListener('keydown', onKey);
     document.body.appendChild(box);
   }

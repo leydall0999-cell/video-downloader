@@ -5249,12 +5249,27 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
   border: 1px solid var(--border, #e5e7eb); display: block; background: var(--bg-soft, #f8fafc);
 }
 .chat-zoom {
-  position: fixed; inset: 0; z-index: 900; background: rgba(15, 23, 42, .78);
-  display: flex; align-items: center; justify-content: center; padding: 2rem; cursor: zoom-out;
+  position: fixed; inset: 0; z-index: 900; background: rgba(15, 23, 42, .82);
+  display: flex; align-items: center; justify-content: center; padding: 2.2rem 2rem 3rem;
+  cursor: zoom-out;
 }
 .chat-zoom img {
   max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5);
 }
+/* 显式关闭入口：右上角大 ×（没有它用户会以为「预览没有返回」） */
+.chat-zoom-x {
+  position: absolute; top: .8rem; right: .9rem; width: 40px; height: 40px; border-radius: 50%;
+  border: none; cursor: pointer; background: rgba(255, 255, 255, .16); color: #fff;
+  font-size: 1.5rem; line-height: 1; display: grid; place-items: center;
+  backdrop-filter: blur(2px);
+}
+.chat-zoom-x:hover { background: rgba(255, 255, 255, .3); }
+.chat-zoom-tip {
+  position: absolute; bottom: .9rem; left: 50%; transform: translateX(-50%);
+  padding: .3rem .8rem; border-radius: 999px; background: rgba(255, 255, 255, .14);
+  color: rgba(255, 255, 255, .9); font-size: .76rem; white-space: nowrap;
+}
+.chat-zoom-tip.is-err { background: rgba(220, 38, 38, .82); bottom: 3.2rem; }
 .chat-msg.is-flash .chat-bubble,
 .chat-msg.is-flash .chat-img { animation: vdlMsgFlash 2.2s ease; }
 @keyframes vdlMsgFlash {
