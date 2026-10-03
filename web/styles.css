@@ -6835,7 +6835,10 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 
 /* ── 用户使用详情弹窗（2026-10-03）── 排障用：权益/配额/激活历史/客服原文/云端授权 */
 .admin-usage-dlg { border: none; border-radius: 14px; padding: 18px 20px; width: 760px; max-width: 94vw;
-  max-height: 88vh; display: flex; flex-direction: column;
+  /* 🔴 必须给固定高度：<dialog> 默认高度 auto，而正文区是 flex:1（隐含 flex-basis:0）——
+     auto 高度容器 + basis:0 的子项会互相等对方的高度，结果正文区高度塌成 0（页面表现为
+     「弹窗打开但一片空白，只有标题和关闭按钮」）。固定高 + flex:1 才能正常滚动。 */
+  height: min(780px, 88vh); max-height: 88vh; display: flex; flex-direction: column;
   background: var(--panel, #fff); color: var(--text, #1f2937); box-shadow: 0 18px 50px rgba(0,0,0,.25); }
 .admin-usage-dlg::backdrop { background: rgba(15,23,42,.5); }
 .admin-usage-dlg h3 { margin: 0 0 8px; font-size: 1.02rem; }
@@ -6843,7 +6846,7 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
   padding-bottom: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line, #e5e7eb);
   font-size: .84rem; color: var(--text-mute, #6b7280); }
 .admin-usage-dlg .aud-user b { font-size: .95rem; color: var(--text, #1f2937); }
-.admin-usage-dlg .aud-body { flex: 1; overflow-y: auto; padding: 10px 2px 4px; }
+.admin-usage-dlg .aud-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 2px 4px; }
 .admin-usage-dlg .aud-sec { margin-bottom: 16px; }
 .admin-usage-dlg .aud-sec h4 { margin: 0 0 6px; font-size: .86rem; color: var(--text, #1f2937); }
 .admin-usage-dlg .aud-sec .admin-table { font-size: .8rem; }
