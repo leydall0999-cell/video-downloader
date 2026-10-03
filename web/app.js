@@ -21058,11 +21058,12 @@ el.dwVidPlayer.hidden = true;
           ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
                   : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
           : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
-        const ops = disabled
+        const ops = `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="usage">使用详情</button>`
+          + (disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
           : `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
             + `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
-            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`);
+            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`));
         return `<tr>
           <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
           <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
@@ -21109,6 +21110,122 @@ el.dwVidPlayer.hidden = true;
       }).join('');
       memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="8" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
     };
+    // 用户使用详情弹窗（2026-10-03）：用户反馈「用不了」时，管理员要能看到
+    // 他的真实权益 / 配额消耗 / 激活历史 / 客服原文，而不是靠猜。
+    let _usageDlg = null;
+    const _usageFmtDate = (ts) => ts ? new Date(Number(ts) * 1000).toLocaleString() : '—';
+    const _usageChip = (ok, yes, no) => ok
+      ? `<span class="admin-chip is-green">${esc(yes)}</span>`
+      : `<span class="admin-chip is-gray">${esc(no)}</span>`;
+    const _usageRows = (rows) => rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`).join('');
+
+    const openUserUsage = async (uid) => {
+      if (!_usageDlg) {
+        _usageDlg = document.createElement('dialog');
+        _usageDlg.className = 'admin-usage-dlg';
+        _usageDlg.innerHTML = `
+          <h3>用户使用详情</h3>
+          <div class="aud-user"></div>
+          <div class="aud-body"><div class="admin-empty">加载中…</div></div>
+          <div class="aud-btns"><button class="admin-btn aud-close" type="button">关闭</button></div>`;
+        document.body.appendChild(_usageDlg);
+        _usageDlg.querySelector('.aud-close').addEventListener('click', () => _usageDlg.close());
+      }
+      const dlg = _usageDlg;
+      dlg.dataset.uid = uid || '';
+      const body = dlg.querySelector('.aud-body');
+      body.innerHTML = '<div class="admin-empty">加载中…</div>';
+      if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
+      else dlg.setAttribute('open', '');
+      try {
+        const r = await adminRequest('/api/admin/users/' + encodeURIComponent(uid) + '/usage');
+        if (!r || !r.ok) throw new Error((r && r.error) || '查询失败');
+        const u = r.usage || {};
+        const m = u.membership || {};
+        dlg.querySelector('.aud-user').innerHTML =
+          `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
+          + ` · 注册于 ${esc(_usageFmtDate(u.created_at))}`
+          + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
+          + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
+
+        // 会员与积分
+        const dl = m.download_member || {}, ai = m.ai_member || {};
+        const cr = m.credits || {};
+        let h = '<section class="aud-sec"><h4>会员与权益</h4><table class="admin-table"><tbody>'
+          + _usageRows([
+            ['下载会员', dl.active ? _usageChip(true, '有效至 ' + _usageFmtDate(dl.expire_at), '无') : _usageChip(false, '', '无')],
+            ['AI 会员', ai.active ? _usageChip(true, '有效至 ' + _usageFmtDate(ai.expire_at), '无') : _usageChip(false, '', '无')],
+            ['AI 订阅积分', `${Number(cr.ai_left || 0)}（随会员到期清零）`],
+            ['永久积分', `${Number(cr.permanent || 0)}（不过期）`],
+            ['设备指纹', u.device_fp ? `<code>${esc(u.device_fp)}</code>` : '—'],
+            ['首次绑定', _usageFmtDate(u.account_bound_at)],
+          ])
+          + '</tbody></table></section>';
+
+        // 今日 + 近 N 天配额消耗
+        const us = u.usage_summary || {};
+        const today = u.today || {};
+        const dayRows = (u.usage_days || []).map((d) => {
+          const items = Object.keys(d.items || {})
+            .map((k) => `${_usageResLabel(k)} ${d.items[k]}`).join('、') || '未使用';
+          return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
+        }).join('');
+        h += '<section class="aud-sec"><h4>配额消耗（近 '
+          + (us.days || 0) + ' 天，共 ' + (us.total || 0) + ' 次 / 活跃 ' + (us.active_days || 0) + ' 天）</h4>'
+          + '<div class="aud-today">今日 ' + (today.total || 0) + ' 次'
+          + (Object.keys(today.items || {}).length
+            ? '（' + esc(Object.keys(today.items).map((k) => _usageResLabel(k) + ' ' + today.items[k]).join('、')) + '）' : '')
+          + '</div>'
+          + (dayRows
+            ? '<div class="aud-table-wrap"><table class="admin-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead><tbody>' + dayRows + '</tbody></table></div>'
+            : '<div class="admin-empty">近 ' + (us.days || 0) + ' 天没有任何使用记录</div>')
+          + '</section>';
+
+        // 激活 / 购买历史
+        const acts = u.activations || [];
+        h += '<section class="aud-sec"><h4>激活 / 购买历史（最近 ' + acts.length + ' 条）</h4>'
+          + (acts.length
+            ? '<table class="admin-table"><thead><tr><th>时间</th><th>套餐</th><th>方式</th></tr></thead><tbody>'
+              + acts.map((a) => `<tr><td>${esc(_usageFmtDate(a.at))}</td><td><code>${esc(a.code || '—')}</code></td><td>${esc(_usageViaLabel(a.via))}</td></tr>`).join('')
+              + '</tbody></table>'
+            : '<div class="admin-empty">暂无激活记录</div>')
+          + '</section>';
+
+        // 客服会话原文（排障关键）
+        const sp = u.support || {};
+        const ths = sp.threads || [];
+        h += '<section class="aud-sec"><h4>客服会话（' + (sp.total_threads || 0) + ' 个）</h4>'
+          + (ths.length
+            ? ths.map((t) => '<div class="aud-thread">'
+              + `<div class="aud-thread-h">${esc(_usageFmtDate(t.updated_at))} · ${t.msg_count} 条`
+              + (t.has_diagnostics ? ' · <span class="admin-chip is-gold">含诊断日志</span>' : '') + '</div>'
+              + `<div class="aud-thread-b">${esc(t.last_user_text || '（无文字）')}</div></div>`).join('')
+            : '<div class="admin-empty">该用户没有客服记录</div>')
+          + '</section>';
+
+        // 云端授权
+        const cl = u.cloud || {};
+        h += '<section class="aud-sec"><h4>云端授权</h4>'
+          + (cl.ok
+            ? '<pre class="aud-cloud">' + esc(JSON.stringify(cl.data, null, 2)) + '</pre>'
+            : '<div class="admin-empty">' + esc(cl.reason || '未拉到云端数据') + '</div>')
+          + '</section>';
+
+        body.innerHTML = h;
+      } catch (e) {
+        body.innerHTML = '<div class="admin-empty">加载失败：' + esc((e && e.message) || '未知错误') + '</div>';
+      }
+    };
+    // 配额资源键 → 中文（与套餐配置里的口径一致）
+    const _USAGE_RES_LABELS = {
+      download: '下载任务', original: '原画解析', batch_material: '批量素材',
+      matting: '一键抠图', cloud: '云端算力', app_compute: '本地重算力',
+      subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
+    };
+    const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
+    const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
+    const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
+
     // 调整积分弹窗：AI 订阅积分 / 永久积分分开调，正=充值 负=扣减，留空=不动该池
     let _creditDlg = null;
     const openCreditDlg = (m) => {
@@ -21634,6 +21751,8 @@ el.dwVidPlayer.hidden = true;
           });
           if (r && r.ok) { loadUsers(); }
           else alert((r && r.error) || '操作失败');
+        } else if (act === 'usage') {
+          openUserUsage(uid);
         } else if (act === 'del') {
           const u0 = (lastUsers || []).find((x) => x.user_id === uid) || {};
           const label = u0.identifier || uid;

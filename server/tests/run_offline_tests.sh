@@ -460,3 +460,8 @@ run_one test_membership_benefits.py
 #      模式（普通/秒杀/限量/活动）、秒杀价与窗口、限量份数、上下架与活动时间；
 #      激活入口强制校验（售罄/未开始/已结束/下架拒发），限量档发放后 sold 自动 +1。
 run_one test_plan_sales_state.py
+
+#  36. test_admin_user_usage.py —— 后台「用户使用详情」聚合（2026-10-03）：
+#      _usage_bundle 聚合结构（按天倒序/只留>0/激活历史倒序）、store 读失败降级不崩、
+#      路由挂载与 require_admin 门禁。daily_usage 里的 date 字段非数值，必须跳过。
+run_one test_admin_user_usage.py

@@ -336,3 +336,164 @@ def admin_ai_accounts(request: Request = None) -> dict[str, Any]:
     """超级管理员：汇总各 AI 提供方账户（余额 / 模块 / 账号 / 充值入口）。"""
     require_admin(request)
     return {"ok": True, "accounts": _collect_ai_accounts()}
+
+
+# ── 用户使用详情（2026-10-03）───────────────────────────────────────────────
+# 动机：用户反馈「用不了/很卡」时，管理员需要能看到他真实的权益、配额消耗、
+# 激活与购买历史、客服原文（含自动附加的诊断日志），而不是靠猜。
+# 纯函数 _usage_bundle 组装 → 便于离线测试；接口只做鉴权 + 拼装。
+
+_USAGE_DAYS = 14          # 使用历史回看天数
+_USAGE_MSG_PREVIEW = 160  # 客服消息摘要字数
+
+
+def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
+                  created_at: Any, store: Any) -> dict[str, Any]:
+    """把一个用户的「使用情况」拼成一份可直接渲染的结构（纯函数，不碰网络）。"""
+    import time as _t
+
+    now = _t.time()
+    try:
+        st = store.status()
+    except Exception:  # noqa: BLE001 — 状态读失败不该让整个面板 500
+        st = {}
+
+    # ---- 使用历史（按天，末 N 天；新的在前）----
+    try:
+        hist = dict(getattr(store, "_state", {}).get("usage_history") or {})
+    except Exception:  # noqa: BLE001
+        hist = {}
+    def _counts(row: Any) -> dict[str, int]:
+        """只取「资源名 → 次数」，跳过 date 这类非数值字段。"""
+        out: dict[str, int] = {}
+        for k, v in (row or {}).items():
+            try:
+                n = int(v or 0)
+            except (TypeError, ValueError):
+                continue        # date="2026-10-03" 之类，不是计数
+            if n > 0:
+                out[str(k)] = n
+        return out
+
+    days = []
+    for day in sorted(hist.keys(), reverse=True)[:_USAGE_DAYS]:
+        items = _counts(hist.get(day))
+        days.append({"date": day, "total": sum(items.values()), "items": items})
+    today_row = (getattr(store, "_state", {}) or {}).get("daily_usage") or {}
+    today_items = _counts(today_row)
+    today = next((d for d in days if d["date"] == _t.strftime("%Y-%m-%d", _t.localtime(now))), None)
+
+    # ---- 激活 / 购买历史（倒序）----
+    meta = (getattr(store, "_state", {}) or {}).get("meta") or {}
+    acts = []
+    for h in list(meta.get("history") or [])[-50:][::-1]:
+        acts.append({
+            "code": str(h.get("code") or ""),
+            "type": str(h.get("type") or ""),
+            "via": str(h.get("via") or ""),
+            "at": float(h.get("at") or 0),
+        })
+
+    return {
+        "user_id": uid,
+        "identifier": ident,
+        "disabled": bool(disabled),
+        "is_admin": bool(is_admin),
+        "created_at": created_at,
+        "membership": st,
+        "today": {"date": today_row.get("date") or _t.strftime("%Y-%m-%d"),
+                  "items": today_items,
+                  "total": int(sum(today_items.values()))},
+        "usage_days": days,
+        "usage_summary": {
+            "days": len(days),
+            "active_days": sum(1 for d in days if d["total"] > 0),
+            "total": sum(d["total"] for d in days),
+        },
+        "activations": acts,
+        "device_fp": str(meta.get("device_fp") or ""),
+        "activated_at": float(meta.get("activated_at") or 0),
+        "account_bound_at": float(meta.get("account_bound_at") or 0),
+    }
+
+
+def _usage_support(uid: str) -> dict[str, Any]:
+    """该用户的客服会话（排障关键：用户原文 + 错误上报时自动附加的诊断日志）。"""
+    try:
+        from routers.support import _read_threads
+        threads = [t for t in _read_threads() if t.get("user_id") == uid]
+    except Exception:  # noqa: BLE001
+        threads = []
+    threads.sort(key=lambda t: t.get("updated_at") or 0, reverse=True)
+    out = []
+    for t in threads[:5]:
+        msgs = t.get("messages") or []
+        last_user = ""
+        for m in msgs:
+            if m.get("role") == "user":
+                last_user = str(m.get("text") or "")
+        out.append({
+            "id": t.get("id"),
+            "status": t.get("status"),
+            "msg_count": len(msgs),
+            "created_at": t.get("created_at"),
+            "updated_at": t.get("updated_at"),
+            "last_user_text": last_user[:_USAGE_MSG_PREVIEW],
+            "has_diagnostics": "[错误上报]" in last_user,
+        })
+    return {"threads": out, "total_threads": len(threads)}
+
+
+@router.get("/api/admin/users/{user_id}/usage")
+def admin_user_usage(user_id: str, request: Request = None) -> dict[str, Any]:
+    """超级管理员：查看单个用户的完整使用情况（排障用）。
+
+    含：账号档案 / 会员与积分 / 今日与近 14 天配额消耗 / 激活购买历史 /
+    客服会话原文 / 云端授权状态（可拉时）。
+    """
+    require_admin(request)
+    import auth_store
+    from user_membership import get_user_store
+
+    user = next((u for u in auth_store._load_users().get("users", [])
+                 if u.get("user_id") == user_id and not u.get("deleted_at")), None)
+    if not user:
+        return {"ok": False, "error": "用户不存在"}
+    store = get_user_store(user_id)
+    bundle = _usage_bundle(
+        user_id,
+        str(user.get("identifier") or user_id),
+        bool(user.get("disabled")),
+        bool(user.get("is_admin")),
+        user.get("created_at"),
+        store,
+    )
+    bundle["support"] = _usage_support(user_id)
+    bundle["cloud"] = _usage_cloud(user.get("identifier") or "")
+    return {"ok": True, "usage": bundle}
+
+
+def _usage_cloud(identifier: str) -> dict[str, Any]:
+    """云端授权状态（设备数 / 最近心跳 / 额度）。拉不到就降级，不影响本机数据。"""
+    ident = str(identifier or "").strip()
+    if not ident:
+        return {"ok": False, "reason": "无账号标识"}
+    try:
+        import json as _json
+        import urllib.request as _rq
+        from admin_store import _license_admin_token
+        from license_client import license_base
+        token = _license_admin_token()
+        if not token:
+            return {"ok": False, "reason": "未配置授权中心管理员令牌"}
+        url = f"{str(license_base() or '').rstrip('/')}/api/license/usage"
+        body = _json.dumps({"token": token, "email": ident}).encode("utf-8")
+        req = _rq.Request(url, data=body, method="POST",
+                          headers={"Content-Type": "application/json"})
+        with _rq.urlopen(req, timeout=6) as resp:
+            data = _json.loads(resp.read().decode("utf-8") or "{}")
+        if isinstance(data, dict) and data.get("ok") is False:
+            return {"ok": False, "reason": str(data.get("error") or "云端无记录")}
+        return {"ok": True, "data": data}
+    except Exception as e:  # noqa: BLE001 — 云端不可达只提示，不阻塞
+        return {"ok": False, "reason": f"云端不可达：{e}"}
