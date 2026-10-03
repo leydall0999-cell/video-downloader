@@ -477,3 +477,9 @@ run_one test_plan_mkt_matrix.py
 #      定时器生命周期接线 → _fmtCountdown 真实行为（抽出来交给 node 跑）→
 #      回归钉 _memberMsg/_memberCard 函数体完整（防「整块被替换成签名行」事故）。
 run_one test_member_countdown.py
+
+#  39. test_plan_sale_table.py —— 档位快速上下架的表名解析（2026-10-03）：
+#      真实事故「点下架报 未知套餐类别：dl」—— 前端分段 id(dl/ai/cp) 被当服务端表名提交。
+#      三层核对：后端 _norm_plan_table 别名归一 → 前端两处模板 data-table 接线 +
+#      前后端映射表一致性 → 真接口 E2E（旧命名必须成功；传错表名不得写错表）。
+run_one test_plan_sale_table.py

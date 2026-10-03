@@ -508,6 +508,22 @@ def _usage_cloud(identifier: str) -> dict[str, Any]:
 
 _SALE_TABLES = ("download_plans", "ai_plans", "credit_packs")
 
+# 前端界面分段 id → 真实表名。前端历史上传过分段 id（dl/ai/cp）导致
+# 「未知套餐类别：dl」整条下架链路不可用，这里做兼容：新旧前端都能用。
+_SALE_TABLE_ALIAS = {
+    "dl": "download_plans", "download": "download_plans", "download_member": "download_plans",
+    "ai": "ai_plans", "ai_member": "ai_plans",
+    "cp": "credit_packs", "packs": "credit_packs", "credits": "credit_packs",
+    "cost": "",  # AI 积分成本不是可售档位
+}
+
+
+def _norm_plan_table(value: str) -> str:
+    v = (value or "").strip()
+    if v in _SALE_TABLES:
+        return v
+    return _SALE_TABLE_ALIAS.get(v, "")
+
 
 def _find_plan_table(code: str) -> str:
     """按 code 在本机覆盖层里找归属表；找不到就回退到内置常量所在的表。"""
@@ -534,9 +550,12 @@ def admin_plan_sale(code: str, payload: dict[str, Any] = Body(...),
     from admin_store import save_plan_overrides as _save
     import membership as M
 
-    table = str(payload.get("table") or "") or _find_plan_table(code)
+    # 归属表以「按 code 定位」为权威：客户端传错表名（曾出现把分段 id 'dl' 当表名，
+    # 也有传入 'ai' 却操作下载档的情况）时若盲信客户端，会把 on_sale 写进错误的表 ——
+    # 表现为「提示已下架/上架，前台却没变化」。客户端 table 只在定位不到时作兜底。
+    table = _find_plan_table(code) or _norm_plan_table(str(payload.get("table") or ""))
     if table not in _SALE_TABLES:
-        return {"ok": False, "error": f"未知套餐类别：{table or '（无法定位该档）'}"}
+        return {"ok": False, "error": f"未知套餐类别：{payload.get('table') or '（无法定位该档）'}"}
     on_sale = bool(payload.get("on_sale", True))
     try:
         _save({table: {code: {"on_sale": on_sale}}})

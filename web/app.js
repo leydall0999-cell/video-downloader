@@ -21492,6 +21492,10 @@ el.dwVidPlayer.hidden = true;
     // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表 —— 曾直接
     //    比较导致选「限量」什么都不显示。server/tests/test_plan_mkt_matrix.py 盯这条。
     // 模式 → 需要展示的营销分组（数组：活动模式同时要「定时开售」+「数量」）
+    // 界面分段 id → 服务端真实表名。两者不是同名（dl ≠ download_plans），
+    // 混用会让「下架」端点报「未知套餐类别：dl」——曾因此整条下架链路不可用，
+    // 必须走映射。server/tests/test_plan_sale_table.py 钉这条。
+    const _CAT_TABLE = { dl: 'download_plans', ai: 'ai_plans', cp: 'credit_packs' };
     const _MKT_BY_MODE = { flash_sale: ['flash'], limited: ['stock'], event: ['event', 'stock'], normal: [] };
     const applyMktGroups = (item) => {
       if (!item) return;
@@ -21577,7 +21581,7 @@ el.dwVidPlayer.hidden = true;
           sale.textContent = '处理中…';
           try {
             const r = await adminRequest('/api/admin/plans/' + encodeURIComponent(code) + '/sale', {
-              method: 'POST', body: JSON.stringify({ on_sale: willOn, table: sale.dataset.cat || '' }),
+              method: 'POST', body: JSON.stringify({ on_sale: willOn, table: sale.dataset.table || _CAT_TABLE[sale.dataset.cat] || '' }),
             });
             if (!r || !r.ok) throw new Error((r && r.error) || '操作失败');
             // 立即重载服务端真值：价格真源在云端，状态胶囊/剩余名额等以服务端为准
@@ -21623,7 +21627,7 @@ el.dwVidPlayer.hidden = true;
             <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(code)}" value="${esc(label || code)}"></label>
             <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(code)}" value="${price}" type="number" step="0.01"></label>
             <label>${isDays ? '天数' : '积分'}<input class="admin-input admin-input-sm ${isDays ? 'plan-days' : 'plan-credits'}" data-plan="${esc(code)}" value="${amt}" type="number"></label>
-            <button type="button" class="admin-btn admin-btn-sm admin-btn-soft plan-sale-toggle" data-plan="${esc(code)}" data-cat="${esc(cat)}" data-unsaved="1" title="新档默认上架；点此可先下架再点保存">↓ 下架</button>
+            <button type="button" class="admin-btn admin-btn-sm admin-btn-soft plan-sale-toggle" data-plan="${esc(code)}" data-cat="${esc(cat)}" data-table="${esc(_CAT_TABLE[cat] || cat)}" data-unsaved="1" title="新档默认上架；点此可先下架再点保存">↓ 下架</button>
             <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(code)}">⚙ 营销</button>
             <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(code)}">删除</button>
           </div><div class="admin-plan-mkt" data-plan="${esc(code)}" hidden><div class="admin-plan-mkt-grid">
@@ -21786,7 +21790,7 @@ el.dwVidPlayer.hidden = true;
             : (st.buyable === false
               ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
               : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : ''));
-          const saleBtn = `<button type="button" class="admin-btn admin-btn-sm ${off ? 'admin-btn-primary' : 'admin-btn-soft'} plan-sale-toggle" data-plan="${esc(k)}" data-cat="${esc(cat)}" title="${off ? '重新上架该档（不影响已购买用户权益）' : '立即下架该档：前台隐藏且无法下单，已购用户权益不受影响'}">${off ? '↑ 上架' : '↓ 下架'}</button>`;
+          const saleBtn = `<button type="button" class="admin-btn admin-btn-sm ${off ? 'admin-btn-primary' : 'admin-btn-soft'} plan-sale-toggle" data-plan="${esc(k)}" data-cat="${esc(cat)}" data-table="${esc(_CAT_TABLE[cat] || cat)}" title="${off ? '重新上架该档（不影响已购买用户权益）' : '立即下架该档：前台隐藏且无法下单，已购用户权益不受影响'}">${off ? '↑ 上架' : '↓ 下架'}</button>`;
           h += `<div class="admin-plan-item${off ? ' is-off' : ''}" data-plan="${esc(k)}">
             <div class="admin-plan-row">
               <span class="admin-plan-name">${esc(p.label || k)} <code class="admin-plan-code">${esc(k)}</code></span>
