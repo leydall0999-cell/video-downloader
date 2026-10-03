@@ -21416,12 +21416,16 @@ el.dwVidPlayer.hidden = true;
     // 用户改了一半的价格会被旧值静默抹掉（切页签回来/保存后刷新都会触发）。
     // 因此：任何输入动作 → plansBox 标脏 → renderPlansForm 跳过重渲染，
     // 保存成功后才清脏并刷新为服务端真值。
-    // 按「售卖模式」显示对应的营销分组：flash=秒杀 / stock=限量 / event=定时开售
+    // 按「售卖模式」显示对应的营销分组：flash_sale→秒杀 / limited→限量 / event→定时开售
+    // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表，
+    //    直接比较 g.dataset.mkt !== mode 会永远不匹配、导致该组的参数框消失。
+    const _MKT_BY_MODE = { flash_sale: 'flash', limited: 'stock', event: 'event' };
     const applyMktGroups = (item) => {
       if (!item) return;
       const mode = (item.querySelector('.plan-mode') || {}).value || 'normal';
+      const want = _MKT_BY_MODE[mode] || '';
       item.querySelectorAll('.plan-mkt-group').forEach((g) => {
-        g.hidden = (g.dataset.mkt !== mode);
+        g.hidden = (g.dataset.mkt !== want);
       });
     };
 
@@ -21444,6 +21448,8 @@ el.dwVidPlayer.hidden = true;
           const code = tgl.dataset.plan;
           const box = plansBox.querySelector(`.admin-plan-mkt[data-plan="${CSS.escape(code)}"]`);
           if (box) box.hidden = !box.hidden;
+          // 展开时按当前模式刷新分组显隐，避免展开后里面空空如也
+          if (box && !box.hidden) applyMktGroups(tgl.closest('.admin-plan-item'));
           return;
         }
         const sale = t.closest('.plan-sale-toggle');
