@@ -21117,6 +21117,16 @@ el.dwVidPlayer.hidden = true;
     const _usageChip = (ok, yes, no) => ok
       ? `<span class="admin-chip is-green">${esc(yes)}</span>`
       : `<span class="admin-chip is-gray">${esc(no)}</span>`;
+    // 配额资源键 → 中文（与套餐配置里的口径一致）；放在 openUserUsage 之前，
+    // 避免 const 暂时性死区（虽然点击时已初始化完，但改顺序时容易踩）
+    const _USAGE_RES_LABELS = {
+      download: '下载任务', original: '原画解析', batch_material: '批量素材',
+      matting: '一键抠图', cloud: '云端算力', app_compute: '本地重算力',
+      subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
+    };
+    const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
+    const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
+    const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
     const _usageRows = (rows) => rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`).join('');
 
     const openUserUsage = async (uid) => {
@@ -21142,6 +21152,27 @@ el.dwVidPlayer.hidden = true;
         if (!r || !r.ok) throw new Error((r && r.error) || '查询失败');
         const u = r.usage || {};
         const m = u.membership || {};
+        const us0 = u.usage_summary || {};
+        // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白
+        if (!us0.days && !us0.total && !(u.activations || []).length
+            && !(u.support || {}).total_threads && !m.permanent_credits
+            && !Number((m.ai_member || {}).credits_left || 0)) {
+          body.innerHTML = '<section class="aud-sec"><h4>这个账号还没有任何使用记录</h4>'
+            + '<div class="admin-empty">该账号'
+            + (u.created_at ? ' 于 ' + esc(_usageFmtDate(u.created_at)) + ' 注册，' : '')
+            + '之后没有用过任何功能（下载/抠图/去水印等都没有消耗记录），也没有购买或获赠过会员。<br>'
+            + '如果用户说「用不了」，多半是这个账号从未真正登录使用过 —— 可让其在 App 内登录并操作一次，'
+            + '再回来看这里的配额消耗与云端授权。</div></section>'
+            + '<section class="aud-sec"><h4>账号状态</h4><table class="admin-table"><tbody>'
+            + _usageRows([
+              ['下载会员', (m.download_member || {}).active ? '有效' : '无（免费账号）'],
+              ['AI 会员', (m.ai_member || {}).active ? '有效' : '无'],
+              ['积分', String(m.credits_total != null ? m.credits_total : 0)],
+              ['设备指纹', u.device_fp || '—（从未在本机登录）'],
+              ['云端授权', (u.cloud || {}).ok ? '云端有记录' : ((u.cloud || {}).reason || '未拉到')],
+            ]) + '</tbody></table></section>';
+          return;
+        }
         dlg.querySelector('.aud-user').innerHTML =
           `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
           + ` · 注册于 ${esc(_usageFmtDate(u.created_at))}`
@@ -21218,18 +21249,13 @@ el.dwVidPlayer.hidden = true;
 
         body.innerHTML = h;
       } catch (e) {
-        body.innerHTML = '<div class="admin-empty">加载失败：' + esc((e && e.message) || '未知错误') + '</div>';
+        const msg = ((e && e.message) || '未知错误');
+        body.innerHTML = '<section class="aud-sec"><h4>没能取到该用户的使用数据</h4>'
+          + `<div class="admin-empty">原因：${esc(msg)}<br>`
+          + '若提示「用户不存在」，该账号可能已被删除（列表有缓存，重新打开用户管理即可刷新）。'
+          + `（查询用的用户 ID：${esc(uid)}）</div></section>`;
       }
     };
-    // 配额资源键 → 中文（与套餐配置里的口径一致）
-    const _USAGE_RES_LABELS = {
-      download: '下载任务', original: '原画解析', batch_material: '批量素材',
-      matting: '一键抠图', cloud: '云端算力', app_compute: '本地重算力',
-      subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
-    };
-    const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
-    const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
-    const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
 
     // 调整积分弹窗：AI 订阅积分 / 永久积分分开调，正=充值 负=扣减，留空=不动该池
     let _creditDlg = null;
