@@ -977,6 +977,51 @@ _STATIC_SUFFIX = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico",
                   ".woff", ".woff2", ".ttf", ".svg", ".map", ".json")
 
 
+def _nginx_log_paths(max_files: int = 40) -> list:
+    """当前 + 轮转的历史访问日志路径，**按时间从旧到新**排列。
+
+    🔴 2026-10-03：nginx 每天轮转（access.log 只有当天，昨天的在 access.log.1，
+    更早是 .gz）。原来只读 access.log，于是「三天/每周/每月」拿到的都是当天数据
+    —— 四个范围看起来一模一样，用户以为筛选没生效。现在把轮转文件一并读入，
+    再按 range 的时间窗过滤。
+    """
+    import pathlib as _pl
+
+    base = _pl.Path(_NGINX_ACCESS_LOG)
+    older = []
+    idx = 1
+    while idx <= max_files:
+        gz = base.with_name(base.name + f".{idx}.gz")
+        plain = base.with_name(base.name + f".{idx}")
+        if gz.exists():
+            older.append(gz)
+        elif plain.exists():
+            older.append(plain)
+        else:
+            break
+        idx += 1
+    older.reverse()          # 最旧在前
+    return older + ([base] if base.exists() else [])
+
+
+def _read_nginx_log_lines(per_file_cap: int = 20000) -> list:
+    """读全部访问日志行（.gz 自动解压），每文件只取末尾若干行防爆内存。"""
+    import gzip as _gz
+
+    out: list = []
+    for p in _nginx_log_paths():
+        try:
+            if p.suffix == ".gz":
+                with _gz.open(p, "rt", encoding="utf-8", errors="replace") as f:
+                    out.extend(f.readlines()[-per_file_cap:])
+            else:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    out.extend(f.readlines()[-per_file_cap:])
+        except Exception:
+            continue          # 单个文件读不动就跳过，不影响其它
+    return out
+
+
 @router.get("/api/admin/visits")
 def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     """网站访客汇总：解析 nginx access.log，统计独立 IP / 状态码 / 热点路径 / 最近访问。
@@ -1002,10 +1047,11 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     top_ips: Counter = Counter()
     recent: list = []
     try:
-        with open(_NGINX_ACCESS_LOG, "r", encoding="utf-8", errors="replace") as f:
-            raw_lines = f.readlines()[-8000:]
+        raw_lines = _read_nginx_log_lines()
     except Exception as e:
         return {"error": f"无法读取访问日志：{e}", "total": 0, "source": _NGINX_ACCESS_LOG}
+    if not raw_lines:
+        return {"error": "访问日志为空或不可读", "total": 0, "source": _NGINX_ACCESS_LOG}
     for ln in raw_lines:
         m = line_re.search(ln)
         if not m:
@@ -1044,6 +1090,7 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
         "top_ips": [{"ip": k, "count": v} for k, v in top_ips.most_common(15)],
         "recent": recent[-max(1, min(int(limit), 200)):],
         "source": _NGINX_ACCESS_LOG,
+        "log_files": len(_nginx_log_paths()),
         "range": range or "all",
         "range_label": _OPS_RANGE_LABELS.get(range, "全部"),
     }
