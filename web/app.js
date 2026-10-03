@@ -7331,6 +7331,21 @@
   // —— 开通 / 续费会员（网页版充值入口，2026-09-30）——
   // 数据源 /api/member/plans：后端按「plans.json 覆盖层 → 代码常量」产出，
   // 超管在后台改价后本页刷新即反映，前端不存任何价格。
+  // —— 秒杀窗口三态（2026-10-03）：后端 plan_sales_state 已下发 flash_phase；
+  // 老后端没有该字段时按 mode/flash_start/flash_end 自行推导，保证只热更前端也生效。
+  // none 非秒杀｜upcoming 未开始｜active 进行中｜ended 已结束
+  const pfFlashPhase = (st) => {
+    const given = st && st.flash_phase;
+    if (given) return String(given);
+    const s = st || {};
+    const fs = Number(s.flash_start) || 0;
+    const fe = Number(s.flash_end) || 0;
+    if (s.mode !== 'flash_sale' || !fs || !fe || !(Number(s.flash_price) > 0)) return 'none';
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec < fs) return 'upcoming';
+    return nowSec <= fe ? 'active' : 'ended';
+  };
+
   const pfRenderPlans = async () => {
     if (!el.pfPlans) return;
     let p = null;
@@ -7345,13 +7360,16 @@
       const pl = plans[code] || {};
       const st = pl.state || {};                       // 售卖状态（2026-10-03）
       if (st.on_sale === false) return '';             // 已下架：不展示
+      const phase = pfFlashPhase(st);                 // 秒杀窗口三态
       const orig = (Number(pl.price_cny) || 0).toFixed(2);
       const price = (Number(st.price) || Number(pl.price_cny) || 0).toFixed(2);
-      const flash = st.is_flash && Number(st.original_price) > Number(st.price)
+      const flash = phase === 'active' && Number(st.original_price) > Number(st.price)
         ? `<span class="pf-price-orig">¥${orig}</span>` : '';
       const meta = pl.days ? `${pl.days} 天权益` : '';
       const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
-      const mkBadge = st.badge ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
+      // 窗口已过 → 收起秒杀角标：此时价格早已回原价，挂着「限时秒杀」会误导用户
+      const mkBadge = (st.badge && phase !== 'ended')
+        ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
       const offBadge = (!st.buyable && st.reason) ? `<span class="pf-plan-badge is-off">${escHtml(st.reason)}</span>` : '';
       const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
       const bits = [];
@@ -7360,8 +7378,10 @@
         bits.push(st.start_at && st.end_at ? `${f(st.start_at)} ~ ${f(st.end_at)}`
           : (st.start_at ? `${f(st.start_at)} 开售` : `截至 ${f(st.end_at)}`));
       }
-      if (st.mode === 'flash_sale' && st.flash_end) {
+      if (phase === 'active') {
         bits.push(`秒杀至 ${new Date(st.flash_end * 1000).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)}`);
+      } else if (phase === 'upcoming') {
+        bits.push(`${new Date(st.flash_start * 1000).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)} 开抢`);
       }
       if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
       const extra = bits.length ? `<div class="pf-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
@@ -7370,7 +7390,7 @@
       return `<div class="pf-plan${pl.best ? ' is-best' : ''}${dis ? ' is-off' : ''}">
         ${mkBadge}${badge}${offBadge}
         <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
-        <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${st.is_flash ? ' is-flash' : ''}">${price}</span></div>
+        <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${phase === 'active' ? ' is-flash' : ''}">${price}</span></div>
         <div class="pf-plan-meta">${escHtml(meta)}</div>
         ${extra}${desc}${save}
         <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}"${dis ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${dis ? escHtml(st.reason || '暂不可购买') : '立即开通'}</button>
@@ -7382,6 +7402,7 @@
     if (el.pfPlanNote) {
       el.pfPlanNote.textContent = '支付成功后权益自动到账，同一账号最多 2 台设备同时登录；会员到期自动失效。';
     }
+    try { pfWatchFlashBoundary(plans); } catch (_e) { /* 边界监听失败不影响展示 */ }
   };
 
   let _pfPayTimer = null;
@@ -7457,12 +7478,15 @@
   const memPlanCard = (code, pl, meta) => {
     const st = pl.state || {};                        // 售卖状态（2026-10-03）
     if (st.on_sale === false) return '';
+    const phase = pfFlashPhase(st);                   // 秒杀窗口三态
     const orig = (Number(pl.price_cny) || 0).toFixed(2);
     const price = (Number(st.price) || Number(pl.price_cny) || 0).toFixed(2);
-    const flash = st.is_flash && Number(st.original_price) > Number(st.price)
+    const flash = phase === 'active' && Number(st.original_price) > Number(st.price)
       ? `<span class="pf-price-orig">¥${orig}</span>` : '';
     const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
-    const mkBadge = st.badge ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
+    // 窗口已过 → 收起秒杀角标（详情见 pfRenderPlans 内注释）
+    const mkBadge = (st.badge && phase !== 'ended')
+      ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
     const offBadge = (!st.buyable && st.reason) ? `<span class="pf-plan-badge is-off">${escHtml(st.reason)}</span>` : '';
     const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
     const bits = [];
@@ -7471,7 +7495,8 @@
       bits.push(st.start_at && st.end_at ? `${fmt(st.start_at)} ~ ${fmt(st.end_at)}`
         : (st.start_at ? `${fmt(st.start_at)} 开售` : `截至 ${fmt(st.end_at)}`));
     }
-    if (st.mode === 'flash_sale' && st.flash_end) bits.push(`秒杀至 ${fmt(st.flash_end).slice(5)}`);
+    if (phase === 'active') bits.push(`秒杀至 ${fmt(st.flash_end).slice(5)}`);
+    if (phase === 'upcoming') bits.push(`${fmt(st.flash_start).slice(5)} 开抢`);
     if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
     const extra = bits.length ? `<div class="pf-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
     const desc = st.desc ? `<div class="pf-plan-desc">${escHtml(st.desc)}</div>` : '';
@@ -7479,7 +7504,7 @@
     return `<div class="pf-plan${pl.best ? ' is-best' : ''}${dis ? ' is-off' : ''}">
       ${mkBadge}${badge}${offBadge}
       <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
-      <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${st.is_flash ? ' is-flash' : ''}">${price}</span></div>
+      <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${phase === 'active' ? ' is-flash' : ''}">${price}</span></div>
       <div class="pf-plan-meta">${escHtml(meta || '')}</div>
       ${extra}${desc}${save}
       <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}"${dis ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${dis ? escHtml(st.reason || '暂不可购买') : '立即开通'}</button>
@@ -7524,6 +7549,39 @@
     memRenderTrack();
     if (el.memNote) el.memNote.textContent = '支付成功后权益自动到账；同一账号最多 2 台设备同时登录，会员到期自动失效。';
     memRenderTop();
+    // 三轨合一盯秒杀临界点（网页分轨台账：download_member/ai_member 有 .plans 嵌套，credit_packs 本身就是档位表）
+    try {
+      pfWatchFlashBoundary({
+        ...((_memPlans && _memPlans.download_member && _memPlans.download_member.plans) || {}),
+        ...((_memPlans && _memPlans.ai_member && _memPlans.ai_member.plans) || {}),
+        ...((_memPlans && _memPlans.credit_packs) || {}),
+      });
+    } catch (_e) { /* 边界监听失败不影响展示 */ }
+  };
+
+  // —— 停在页面上跨过秒杀起止点时自动重渲染卡片（收起/亮起秒杀元素）——
+  // 不做每秒轮询：只给最近的那个临界点挂一次性定时器，跨过后再由下一次渲染重排。
+  let _pfFlashTimer = null;
+  const pfWatchFlashBoundary = (plans) => {
+    if (_pfFlashTimer) { clearTimeout(_pfFlashTimer); _pfFlashTimer = null; }
+    const nowMs = Date.now();
+    let soon = 0;
+    Object.keys(plans || {}).forEach((code) => {
+      const st = (plans[code] || {}).state || {};
+      if (st.on_sale === false) return;
+      const ph = pfFlashPhase(st);
+      const target = ph === 'active' ? st.flash_end : (ph === 'upcoming' ? st.flash_start : 0);
+      if (!target) return;
+      const ms = Number(target) * 1000 - nowMs;
+      if (ms <= 0) return;
+      soon = soon ? Math.min(soon, ms) : ms;
+    });
+    if (!soon) return;
+    _pfFlashTimer = setTimeout(() => {
+      _pfFlashTimer = null;
+      try { pfRenderPlans(); } catch (_e) { /* 静默 */ }
+      try { if (el.memTracks) memRender(); } catch (_e) { /* 静默 */ }
+    }, soon + 1500);
   };
 
   // ===== 三轨改「胶囊分段条」（2026-09-30 用户指定版式）：一次只显示一条轨 =====

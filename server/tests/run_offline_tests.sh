@@ -104,6 +104,7 @@ run_node test_app_intro_entries.mjs        # 网页版「更多功能」页：24
 run_node test_platform_count_label.mjs     # 平台数对外口径：两端徽章走 fmtPlatformCount，116→100+（2026-09-30）
 run_node test_member_page.mjs              # 网页版会员购买页：免登录可见价目/三轨/登录后自动续单/弹窗在顶层（2026-09-30）
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
+run_one test_flash_phase.py                # 秒杀窗口三态：窗口过了必须自动收起「限时秒杀」角标与「秒杀至…」（2026-10-03）
 run_one test_share_token.py                # 网页版分享凭据端点：登录门禁/SHARE_UNAVAILABLE/每日限次/计数/挂载（2026-09-30 受限版分享）
 run_one test_web_stats.py                  # 网页访客统计：PV/UV 去重、不落 IP 明文、跨天哈希不可关联、事件白名单、来源归一、90 天裁剪（2026-10-01）
 #  任务落盘持久化（2026-10-02 B2 移植）：重启后未完成任务恢复为可续传、completed 只在成品文件仍在时恢复。
