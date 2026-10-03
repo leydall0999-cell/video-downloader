@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Request
@@ -497,3 +498,52 @@ def _usage_cloud(identifier: str) -> dict[str, Any]:
         return {"ok": True, "data": data}
     except Exception as e:  # noqa: BLE001 — 云端不可达只提示，不阻塞
         return {"ok": False, "reason": f"云端不可达：{e}"}
+
+
+# ── 套餐档位快速上下架（2026-10-03）─────────────────────────────────────────
+# 场景：某档要临时停售（活动结束 / 出问题），运营不该先去「⚙ 营销」里找复选框
+# 再点保存——那个保存是全表单提交，会把其它未保存的编辑一起带上去。
+# 所以单开一个端点：只改这一档的 on_sale，走字段级合并，并同步云端。
+# 注意：前端「下架」不是删除 —— 已购买用户的权益不受影响，前台该档隐藏且无法下单。
+
+_SALE_TABLES = ("download_plans", "ai_plans", "credit_packs")
+
+
+def _find_plan_table(code: str) -> str:
+    """按 code 在本机覆盖层里找归属表；找不到就回退到内置常量所在的表。"""
+    from membership import load_plan_overrides
+    ov = load_plan_overrides() or {}
+    for t in _SALE_TABLES:
+        if code in (ov.get(t) or {}):
+            return t
+    from membership import AI_PLANS, CREDIT_PACKS, DOWNLOAD_PLANS
+    if code in DOWNLOAD_PLANS:
+        return "download_plans"
+    if code in AI_PLANS:
+        return "ai_plans"
+    if code in CREDIT_PACKS:
+        return "credit_packs"
+    return ""
+
+
+@router.post("/api/admin/plans/{code}/sale")
+def admin_plan_sale(code: str, payload: dict[str, Any] = Body(...),
+                    request: Request = None) -> dict[str, Any]:
+    """超级管理员：单个档位快速上架 / 下架（不落其它表单改动）。"""
+    require_admin(request)
+    from admin_store import save_plan_overrides as _save
+    import membership as M
+
+    table = str(payload.get("table") or "") or _find_plan_table(code)
+    if table not in _SALE_TABLES:
+        return {"ok": False, "error": f"未知套餐类别：{table or '（无法定位该档）'}"}
+    on_sale = bool(payload.get("on_sale", True))
+    try:
+        _save({table: {code: {"on_sale": on_sale}}})
+    except OSError as e:  # noqa: BLE001
+        return {"ok": False, "error": f"写入失败：{e}"}
+    # 下架要立刻同步云端：网页版与真实收款也读那份表，否则网页还能卖下架的档
+    cloud = M.push_plans_to_cloud()
+    st = M.plan_sales_state(M.effective_plans().get(table, {}).get(code) or {}, now=time.time())
+    return {"ok": True, "code": code, "table": table, "on_sale": on_sale,
+            "state": st, "cloud": cloud}

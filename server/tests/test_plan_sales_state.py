@@ -122,6 +122,65 @@ def test_plans_carry_state() -> None:
     check("[下单] 下单表带 buyable 标记", "buyable" in pay.get("download_1day", {}))
 
 
+def test_take_down_semantics() -> None:
+    """「下架」= 停售，不是删档：前台隐藏 + 无法下单，但已购权益不受影响。"""
+    # 先给一个已购用户（模拟有人已买过这一档）
+    st = M.MembershipStore()
+    M.save_plan_overrides({"download_plans": {"download_1day": {"on_sale": True}}})
+    r0 = st.activate("download_1day", via="test")
+    check("[下架] 前提：上架状态下可激活", bool(r0.get("ok")))
+
+    # 下架
+    M.save_plan_overrides({"download_plans": {"download_1day": {"on_sale": False}}})
+    s = M.plan_sales_state(M.effective_plans()["download_plans"]["download_1day"], now=NOW)
+    check("[下架] state 标记不可买", s["buyable"] is False)
+    check("[下架] 原因写明已下架", "下架" in str(s["reason"]))
+    check("[下架] ensure_buyable 也拒", M.ensure_plan_buyable("download_1day")["ok"] is False)
+    r1 = st.activate("download_1day", via="test")
+    check("[下架] 激活被拒（买不了）", not r1.get("ok") and "下架" in str(r1.get("error")))
+
+    # 🔴 关键：已购用户的权益不能因为下架而消失
+    st2 = M.MembershipStore()
+    d = st2.status()
+    check("[下架] 已购用户权益保留（active 仍为真）",
+          bool(d.get("download_member", {}).get("active")))
+
+    # 前台 plans() 仍带该档（前端据此隐藏），并带 state
+    p = M.MembershipStore().plans()["download_member"]["plans"]["download_1day"]
+    check("[下架] plans 仍返回该档 + state 不可买",
+          p.get("state", {}).get("buyable") is False)
+
+    # 重新上架可恢复
+    M.save_plan_overrides({"download_plans": {"download_1day": {"on_sale": True}}})
+    s2 = M.plan_sales_state(M.effective_plans()["download_plans"]["download_1day"], now=NOW)
+    check("[下架] 重新上架后恢复可买", s2["buyable"] is True)
+    # 恢复后已购用户仍有效（上下架是无损操作）
+    check("[下架] 恢复后已购权益仍在",
+          bool(M.MembershipStore().status().get("download_member", {}).get("active")))
+
+
+def test_sale_endpoint_wiring() -> None:
+    """快速上下架端点：路由已挂、门禁在位、只改单档不误伤其它档。"""
+    src = (HERE.parent / "routers" / "admin.py").read_text(encoding="utf-8")
+    check("[端点] 路由已挂载", '"/api/admin/plans/{code}/sale"' in src)
+    i = src.find('"/api/admin/plans/{code}/sale"')
+    nxt = src.find("\n@router", i + 10)
+    seg = src[i:nxt if nxt > 0 else len(src)]
+    check("[端点] 带 require_admin 门禁", "require_admin(request)" in seg)
+    check("[端点] 走字段级保存（只提交 on_sale，不带整档其它字段）",
+          '_save({table: {code: {"on_sale": on_sale}}})' in seg and '"table": table' in seg)
+    check("[端点] 下架后同步云端（网页版同步生效）", "push_plans_to_cloud" in seg)
+    check("[端点] 返回最新售卖状态", "plan_sales_state" in seg)
+
+    # _find_plan_table 能定位归属表
+    sys.path.insert(0, str(HERE.parent))
+    from routers import admin as A                              # noqa: PLC0415
+    M.save_plan_overrides({"ai_plans": {"ai_5500": {"on_sale": True}}})
+    check("[端点] 定位到 ai_plans", A._find_plan_table("ai_5500") == "ai_plans")
+    check("[端点] 定位到 download_plans", A._find_plan_table("download_1day") == "download_plans")
+    check("[端点] 未知 code 返回空（前端会提示）", A._find_plan_table("zzz_nope") == "")
+
+
 def main() -> int:
     test_state_basics()
     test_state_reasons()
@@ -129,6 +188,8 @@ def main() -> int:
     test_ensure_buyable()
     test_activate_enforces_and_counts()
     test_plans_carry_state()
+    test_take_down_semantics()
+    test_sale_endpoint_wiring()
     print("\n" + "=" * 46)
     if FAILS:
         print("❌ 失败 %d 项：" % len(FAILS))

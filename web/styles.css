@@ -5055,6 +5055,12 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-plan-row .plan-label { width: 130px; }
 .admin-plan-row .plan-mkt-toggle, .admin-plan-row .plan-del { margin-left: auto; }
 .admin-plan-row .plan-mkt-toggle { margin-left: auto; }
+/* 下架态：整行置灰 + 左侧红条，让「这一档已停售」一眼可见（2026-10-03） */
+.admin-plan-item.is-off { background: var(--bg-soft, #f8fafc); border-style: dashed; }
+.admin-plan-item.is-off .admin-plan-row { opacity: .62; }
+.admin-plan-item.is-off .admin-plan-row .admin-plan-name { text-decoration: line-through; }
+.admin-plan-item.is-off .admin-plan-sale-chip { opacity: 1; }
+.admin-plan-row .plan-sale-toggle { min-height: 0; height: 26px; }
 .admin-plan-mkt { margin-top: .55rem; padding-top: .5rem; border-top: 1px dashed var(--line, #e5e7ef); }
 .admin-plan-mkt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .5rem .8rem; }
 .admin-plan-mkt-grid label { font-size: .78rem; color: var(--text-mute, #6b7280); display: flex; flex-direction: column; gap: .2rem; align-items: stretch; }

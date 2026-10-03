@@ -21375,7 +21375,7 @@ el.dwVidPlayer.hidden = true;
     if (plansBox) {
       plansBox.addEventListener('input', () => { plansBox.dataset.dirty = '1'; });
       // 营销面板展开/收起
-      plansBox.addEventListener('click', (e) => {
+      plansBox.addEventListener('click', async (e) => {
         const t = e.target;
         if (!t || !t.closest) return;
         const tgl = t.closest('.plan-mkt-toggle');
@@ -21383,6 +21383,65 @@ el.dwVidPlayer.hidden = true;
           const code = tgl.dataset.plan;
           const box = plansBox.querySelector(`.admin-plan-mkt[data-plan="${CSS.escape(code)}"]`);
           if (box) box.hidden = !box.hidden;
+          return;
+        }
+        const sale = t.closest('.plan-sale-toggle');
+        if (sale) {
+          const code = sale.dataset.plan;
+          // 新增档位还没落盘（服务端没有这个 code），先在表单里切上架态，
+          // 由「保存套餐配置」一次性提交；直接调端点会 500/定位不到表。
+          if (sale.dataset.unsaved === '1') {
+            const box2 = sale.closest('.admin-plan-item');
+            const chk = box2 && box2.querySelector('.plan-onsale');
+            const now = !(chk && chk.checked);
+            if (chk) chk.checked = now;
+            sale.textContent = now ? '↓ 下架' : '↑ 上架';
+            sale.classList.toggle('admin-btn-soft', now);
+            sale.classList.toggle('admin-btn-primary', !now);
+            box2.classList.toggle('is-off', !now);
+            let chip = box2.querySelector('.admin-plan-sale-chip');
+            if (now && !chip) {
+              chip = document.createElement('span');
+              chip.className = 'admin-chip is-gray admin-plan-sale-chip';
+              chip.textContent = '已下架';
+              const nameEl = box2.querySelector('.admin-plan-name');
+              if (nameEl) nameEl.insertAdjacentElement('afterend', chip);
+            } else if (!now && chip) {
+              chip.remove();
+            }
+            plansBox.dataset.dirty = '1';
+            _adminMsg(plansMsg, `「${code}」已${now ? '下架' : '上架'}，点「保存套餐配置」生效`, false);
+            return;
+          }
+          // 按钮文案「↓ 下架」→ 目标 on_sale=false；「↑ 上架」→ true
+          const willOn = sale.textContent.indexOf('上架') > 0 && sale.textContent.indexOf('下架') === -1;
+          const label = (() => {
+            const n = sale.closest('.admin-plan-item');
+            const el2 = n && n.querySelector('.plan-label');
+            return (el2 && el2.value.trim()) || code;
+          })();
+          if (willOn) {
+            if (!(typeof confirm === 'function') || !confirm(`确定重新上架「${label}」？\n\n前台会重新展示该档并可正常购买。`)) return;
+          } else if (!(typeof confirm === 'function') || !confirm(`确定下架「${label}」？\n\n· 前台（桌面+网页）不再展示该档，无法再下单\n· 已购买用户的会员权益、积分完全不受影响\n· 随时可在这里点「上架」恢复`)) return;
+          sale.disabled = true;
+          const oldTxt = sale.textContent;
+          sale.textContent = '处理中…';
+          try {
+            const r = await adminRequest('/api/admin/plans/' + encodeURIComponent(code) + '/sale', {
+              method: 'POST', body: JSON.stringify({ on_sale: willOn, table: sale.dataset.cat || '' }),
+            });
+            if (!r || !r.ok) throw new Error((r && r.error) || '操作失败');
+            // 立即重载服务端真值：价格真源在云端，状态胶囊/剩余名额等以服务端为准
+            delete plansBox.dataset.dirty;
+            loadConfig();
+            const cloud = r.cloud || {};
+            _adminMsg(plansMsg, `${willOn ? '已上架' : '已下架'}「${label}」`
+              + (cloud.ok ? '，网页版同步生效' : '（⚠️ 云端同步失败，网页版暂未变更）'), !cloud.ok);
+          } catch (e) {
+            sale.disabled = false;
+            sale.textContent = oldTxt;
+            _adminMsg(plansMsg, '操作失败：' + ((e && e.message) || '网络错误'), true);
+          }
           return;
         }
         const del = t.closest('.plan-del');
@@ -21415,6 +21474,7 @@ el.dwVidPlayer.hidden = true;
             <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(code)}" value="${esc(label || code)}"></label>
             <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(code)}" value="${price}" type="number" step="0.01"></label>
             <label>${isDays ? '天数' : '积分'}<input class="admin-input admin-input-sm ${isDays ? 'plan-days' : 'plan-credits'}" data-plan="${esc(code)}" value="${amt}" type="number"></label>
+            <button type="button" class="admin-btn admin-btn-sm admin-btn-soft plan-sale-toggle" data-plan="${esc(code)}" data-cat="${esc(cat)}" data-unsaved="1" title="新档默认上架；点此可先下架再点保存">↓ 下架</button>
             <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(code)}">⚙ 营销</button>
             <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(code)}">删除</button>
           </div><div class="admin-plan-mkt" data-plan="${esc(code)}" hidden><div class="admin-plan-mkt-grid">
@@ -21558,19 +21618,24 @@ el.dwVidPlayer.hidden = true;
         Object.keys(obj).forEach((k) => {
           const p = obj[k] || {};
           const st = p.state || {};
+          const off = p.on_sale === false;
           const extra = kind === 'days'
             ? `<label>天数<input class="admin-input admin-input-sm plan-days" data-plan="${esc(k)}" value="${esc(p.days)}" type="number"></label>`
             : `<label>积分<input class="admin-input admin-input-sm plan-credits" data-plan="${esc(k)}" value="${esc(p.credits)}" type="number"></label>`;
-          const statusChip = st.buyable === false
-            ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
-            : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : '');
-          h += `<div class="admin-plan-item" data-plan="${esc(k)}">
+          const statusChip = off
+            ? '<span class="admin-chip is-gray">已下架</span>'
+            : (st.buyable === false
+              ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
+              : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : ''));
+          const saleBtn = `<button type="button" class="admin-btn admin-btn-sm ${off ? 'admin-btn-primary' : 'admin-btn-soft'} plan-sale-toggle" data-plan="${esc(k)}" data-cat="${esc(cat)}" title="${off ? '重新上架该档（不影响已购买用户权益）' : '立即下架该档：前台隐藏且无法下单，已购用户权益不受影响'}">${off ? '↑ 上架' : '↓ 下架'}</button>`;
+          h += `<div class="admin-plan-item${off ? ' is-off' : ''}" data-plan="${esc(k)}">
             <div class="admin-plan-row">
               <span class="admin-plan-name">${esc(p.label || k)} <code class="admin-plan-code">${esc(k)}</code></span>
               ${statusChip}
               <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(k)}" value="${esc(p.label || k)}"></label>
               <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
               ${extra}
+              ${saleBtn}
               <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(k)}" title="展开营销设置">⚙ 营销</button>
               <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(k)}" title="删除该档">删除</button>
             </div>
