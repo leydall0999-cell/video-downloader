@@ -21815,6 +21815,13 @@ el.dwVidPlayer.hidden = true;
       if (_plansSaving) { console.log('[plans] 重复点击已忽略'); return; }
       _plansSaving = true;
       _adminMsg(plansMsg, '正在保存…', false);
+      // datetime-local 字符串 → 秒级时间戳（此前的定义在渲染闭包内，savePlans 拿不到，
+      // 导致保存时抛 Can't find variable: _localToTs —— 修为函数内自带）
+      const _localToTs = (s) => {
+        if (!s) return 0;
+        const t = new Date(s).getTime();
+        return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+      };
       try {
         const cfg = lastConfig || {};
         const plans = cfg.plans || {};
