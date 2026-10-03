@@ -21,6 +21,7 @@ FAILS: list[str] = []
 
 APP_JS = pathlib.Path(__file__).resolve().parents[2] / "web" / "app.js"
 GROUPS = ("flash", "stock", "event")
+PLAN_MODE_VALUES = ("normal", "flash_sale", "limited", "event")
 
 
 def check(name: str, cond: bool, extra: str = "") -> None:
@@ -52,19 +53,6 @@ def _parse_map(src: str) -> dict[str, str]:
 def _parse_group_ids(src: str) -> set[str]:
     """模板里用到的全部 data-mkt 标识。"""
     return set(re.findall(r'data-mkt="([a-z]+)"', src))
-
-
-def _parse_inline_rules(src: str) -> list[tuple[str, str, bool]]:
-    """初始渲染的内联显隐规则：[(分组标识, 模式值, 是否相等匹配)]。
-
-    形如 data-mkt="stock"${(p.mode || 'normal') === 'limited' ? '' : ' hidden'}
-    """
-    out = []
-    for g, cond in re.findall(
-        r'data-mkt="([a-z]+)"\$\{\(p\.mode \|\| \'normal\'\) === \'([a-z_]+)\'', src
-    ):
-        out.append((g, cond, True))
-    return out
 
 
 def test_mode_list() -> None:
@@ -110,19 +98,29 @@ def test_no_orphan_groups() -> None:
     check("映射表指向的分组都在模板里存在", not missing, f"缺失 = {missing}")
 
 
-def test_inline_rules_consistent() -> None:
-    print("\n[D] 初始渲染的内联显隐规则与映射表一致")
+def test_no_group_ever_hidden() -> None:
+    """🔴 三组参数必须「常显」，任何模式下都不许 hidden。
+
+    2026-10-03 用户反馈：按模式隐藏分组后，选了模式却找不到对应输入框
+    （截图里选「限量」却只看到「补充说明」），比平铺一起更难用。
+    现在改为常显 + 「当前模式生效」角标高亮，所以模板里不允许出现 hidden。
+    """
+    print("\n[D] 三组参数常显（任何模式都不隐藏）")
     src = APP_JS.read_text(encoding="utf-8")
-    mp = _parse_map(src)
-    rules = _parse_inline_rules(src)
-    check("能解析出 3 条内联规则", len(rules) == 3, f"实际 {rules}")
-    for g, mode, _eq in rules:
-        check(f"分组 {g} 的内联条件模式值 {mode} 与映射表一致",
-              mp.get(mode) == g, f"映射表 {mp}，{g} 写的是 {mode}")
+    # 模板里的 data-mkt 标签一律不带 hidden 属性
+    with_hidden = re.findall(r'data-mkt="([a-z]+)"[^>]*\shidden', src)
+    check("模板里没有「data-mkt + hidden」的组合", not with_hidden,
+          f"发现带 hidden 的分组：{with_hidden}")
+    n = len(re.findall(r'data-mkt="([a-z]+)"', src))
+    check("模板里共 3 个分组（每组 2 处：现有档位 + 新增档位）", n == 6, f"实际 {n} 处")
+    # 三组都必须有「当前模式生效」角标
+    tags = re.findall(r'class="plan-mkt-tag" data-tag="([a-z_]+)"', src)
+    check("三组都带「当前模式生效」角标", sorted(set(tags)) == sorted(PLAN_MODE_VALUES[1:]),
+          f"实际 {sorted(set(tags))}")
 
 
 def test_matrix() -> None:
-    print("\n[E] 4 模式 × 3 分组显隐矩阵（模拟 applyMktGroups）")
+    print("\n[E] 4 模式 × 3 分组：高亮标记正确（不是隐藏）")
     src = APP_JS.read_text(encoding="utf-8")
     modes = _parse_modes(src)
     mp = _parse_map(src)
@@ -134,9 +132,12 @@ def test_matrix() -> None:
     }
     for m in modes:
         want = mp.get(m) or ""
-        shown = [g for g in GROUPS if g == want]
-        check(f"模式 {m} → 显示 {expect.get(m)}", shown == expect.get(m),
-              f"实际 {shown}")
+        # 高亮的组 = data-mkt === want 的那一个；普通模式不高亮任何组
+        on = [g for g in GROUPS if g == want]
+        check(f"模式 {m} → 高亮 {expect.get(m)}", on == expect.get(m), f"实际 {on}")
+    check("普通模式不高亮任何组（角标全隐藏，但参数框都还在）",
+          expect["normal"] == [] and not re.search(r'data-mkt="[a-z]+"[^>]*\shidden', src),
+          "普通模式应一个都不高亮")
 
 
 def main() -> int:
@@ -146,7 +147,7 @@ def main() -> int:
     test_mode_list()
     test_map_covers_all_modes()
     test_no_orphan_groups()
-    test_inline_rules_consistent()
+    test_no_group_ever_hidden()
     test_matrix()
     print("\n" + "=" * 60)
     if FAILS:

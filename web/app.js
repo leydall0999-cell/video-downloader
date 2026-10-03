@@ -21416,33 +21416,39 @@ el.dwVidPlayer.hidden = true;
     // 用户改了一半的价格会被旧值静默抹掉（切页签回来/保存后刷新都会触发）。
     // 因此：任何输入动作 → plansBox 标脏 → renderPlansForm 跳过重渲染，
     // 保存成功后才清脏并刷新为服务端真值。
-    // 按「售卖模式」显示对应的营销分组：flash_sale→秒杀 / limited→限量 / event→定时开售
-    // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表，
-    //    直接比较 g.dataset.mkt !== mode 会永远不匹配、导致该组的参数框消失。
-    // ⚠️ 这套联动是纯字符串判断、没有真 DOM，务必用 node 脚本把 4×3 矩阵跑一遍
-    //    （见 server/tests/test_plan_mkt_matrix.py，它直接解析 app.js 里的
-    //      PLAN_MODES / _MKT_BY_MODE / data-mkt 三处，任何一处不同名或漏映射都会红）。
+    // 标注「哪个分组当前生效」，**不再隐藏任何分组**（2026-10-03 用户反馈）：
+    // 参数框按模式隐藏 → 用户选了模式却找不到对应输入框，比平铺一起更难用。
+    // 现在三组常显，切模式只移动高亮角标，所填的值不会因为切模式而看不见。
+    // ⚠️ 模式 value 与分组标识不同名（limited vs stock），必须走映射表。
     const _MKT_BY_MODE = { flash_sale: 'flash', limited: 'stock', event: 'event' };
     const applyMktGroups = (item) => {
       if (!item) return;
       const sel = item.querySelector('.plan-mode');
       const mode = (sel && sel.value) || 'normal';
       const want = _MKT_BY_MODE[mode] || '';
-      const groups = item.querySelectorAll('.plan-mkt-group');
-      groups.forEach((g) => { g.hidden = (g.dataset.mkt !== want); });
-      // 自证：把实际命中的组写进 data 属性，出问题时能在 DevTools 里一眼看出
-      // 到底是模式值没读到、还是映射没命中（省掉一轮猜测）
+      item.querySelectorAll('.plan-mkt-group').forEach((g) => {
+        const on = (g.dataset.mkt === want);
+        g.classList.toggle('is-on', on);
+        const tag = g.querySelector('.plan-mkt-tag');
+        if (tag) tag.hidden = !on;
+      });
+      // 自证：命中的组写进 data 属性，出问题时在 DevTools 里一眼能看出
       item.dataset.mktShown = want || 'none';
     };
 
     if (plansBox) {
       plansBox.addEventListener('input', () => { plansBox.dataset.dirty = '1'; });
+      // select 专用的 change 事件（click 在部分 WebView 不触发）
+      plansBox.addEventListener('change', (e) => {
+        const sel = e.target && e.target.closest ? e.target.closest('.plan-mode') : null;
+        if (sel) applyMktGroups(sel.closest('.admin-plan-item'));
+      });
     // 营销面板展开/收起
     plansBox.addEventListener('click', async (e) => {
       const t = e.target;
       if (!t || !t.closest) return;
-      // 切换售卖模式 → 只显示该模式相关的那一组（秒杀/限量/定时开售），
-      // 避免一堆时间框同时摆出来不知道谁管什么（用户 2026-10-03 反馈）
+      // 切换售卖模式 → 移动「当前模式生效」角标
+      // ⚠️ select 的 change 在 WKWebView 下未必冒泡成 click，两路都挂上（双保险）
       const modeSel = t.closest('.plan-mode');
       if (modeSel) {
         const item = modeSel.closest('.admin-plan-item');
@@ -21555,16 +21561,16 @@ el.dwVidPlayer.hidden = true;
             <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(code)}" checked> 上架中</label>
             <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(code)}" placeholder="如：限时 5 折"></label>
           </div>
-          <div class="plan-mkt-group" data-mkt="flash" hidden><div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div><div class="admin-plan-mkt-grid">
+          <div class="plan-mkt-group" data-mkt="flash"><div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div><div class="admin-plan-mkt-grid">
             <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(code)}" type="number" step="0.01" placeholder="留空=不用"></label>
             <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(code)}" type="datetime-local"></label>
             <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(code)}" type="datetime-local"></label>
           </div></div>
-          <div class="plan-mkt-group" data-mkt="stock" hidden><div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div><div class="admin-plan-mkt-grid">
+          <div class="plan-mkt-group" data-mkt="stock"><div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div><div class="admin-plan-mkt-grid">
             <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
             <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
           </div></div>
-          <div class="plan-mkt-group" data-mkt="event" hidden><div class="plan-mkt-group-h">定时开售（到点前「活动未开始」、到点后「活动已结束」，都不可下单）</div><div class="admin-plan-mkt-grid">
+          <div class="plan-mkt-group" data-mkt="event"><div class="plan-mkt-group-h">定时开售（到点前「活动未开始」、到点后「活动已结束」，都不可下单）</div><div class="admin-plan-mkt-grid">
             <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(code)}" type="datetime-local"></label>
             <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(code)}" type="datetime-local"></label>
           </div></div>
@@ -21730,23 +21736,23 @@ el.dwVidPlayer.hidden = true;
                 <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(k)}"${p.on_sale === false ? '' : ' checked'}> 上架中</label>
                 <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(k)}" value="${esc(p.badge || '')}" placeholder="如：限时 5 折"></label>
               </div>
-              <div class="plan-mkt-group" data-mkt="flash"${(p.mode || 'normal') === 'flash_sale' ? '' : ' hidden'}>
-                <div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div>
+              <div class="plan-mkt-group" data-mkt="flash">
+                <div class="plan-mkt-group-h">① 秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）<span class="plan-mkt-tag" data-tag="flash_sale">当前模式生效</span></div>
                 <div class="admin-plan-mkt-grid">
                   <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(k)}" value="${esc(p.flash_price || '')}" type="number" step="0.01" placeholder="留空=不用"></label>
                   <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_start)}"></label>
                   <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_end)}"></label>
                 </div>
               </div>
-              <div class="plan-mkt-group" data-mkt="stock"${(p.mode || 'normal') === 'limited' ? '' : ' hidden'}>
-                <div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div>
+              <div class="plan-mkt-group" data-mkt="stock">
+                <div class="plan-mkt-group-h">② 限量（总共能卖多少份，售完自动置灰）<span class="plan-mkt-tag" data-tag="limited">当前模式生效</span></div>
                 <div class="admin-plan-mkt-grid">
                   <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
                   <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
                 </div>
               </div>
-              <div class="plan-mkt-group" data-mkt="event"${(p.mode || 'normal') === 'event' ? '' : ' hidden'}>
-                <div class="plan-mkt-group-h">定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）</div>
+              <div class="plan-mkt-group" data-mkt="event">
+                <div class="plan-mkt-group-h">③ 定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）<span class="plan-mkt-tag" data-tag="event">当前模式生效</span></div>
                 <div class="admin-plan-mkt-grid">
                   <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.start_at)}"></label>
                   <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>
@@ -21782,6 +21788,8 @@ el.dwVidPlayer.hidden = true;
       html += '</div>';
       plansBox.innerHTML = html;
       applyPlansSeg();
+      // 渲染后立即给每档标好「当前模式生效」（否则角标要等用户动下拉才出现）
+      plansBox.querySelectorAll('.admin-plan-item').forEach((it) => applyMktGroups(it));
     };
     // 分段切换：只显示选中分类的套餐组；AI 积分成本组（data-cat=cost）常驻显示
     const applyPlansSeg = (cat) => {
