@@ -16680,8 +16680,14 @@ el.dwVidPlayer.hidden = true;
     const best = plan.best ? `<span class="member-badge member-badge-best">最受欢迎</span>` : '';
     const mkBadge = st.badge ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
     const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
-    const badges = (saving || best || mkBadge || outBadge)
-      ? `<span class="member-plan-badges">${mkBadge}${saving}${best}${outBadge}</span>` : '';
+    // 秒杀三态（2026-10-03）：进行中→现价+划线+「秒杀至 X」；未开始→「即将开抢」角标+开抢时间；已结束→恢复原价无提示
+    const _nowSec = Date.now() / 1000;
+    const _fs = Number(st.flash_start) || 0;
+    const _fe = Number(st.flash_end) || 0;
+    const flashSoon = st.mode === 'flash_sale' && _fs && _nowSec < _fs;
+    const soonBadge = flashSoon ? '<span class="member-badge member-badge-flash">即将开抢</span>' : '';
+    const badges = (saving || best || mkBadge || soonBadge || outBadge)
+      ? `<span class="member-plan-badges">${mkBadge}${soonBadge}${saving}${best}${outBadge}</span>` : '';
     const orig = (Number(plan.price_cny) || 0).toFixed(2);
     const now = (Number(st.price) || Number(plan.price_cny) || 0).toFixed(2);
     const flashLine = st.is_flash && Number(st.original_price) > Number(st.price)
@@ -16694,7 +16700,8 @@ el.dwVidPlayer.hidden = true;
     if (st.start_at || st.end_at) {
       bits.push(`${st.start_at && !st.end_at ? `${fmtTs(st.start_at)} 开售` : (st.end_at && !st.start_at ? `截至 ${fmtTs(st.end_at)}` : `${fmtTs(st.start_at)} ~ ${fmtTs(st.end_at)}`)}`);
     }
-    if (st.mode === 'flash_sale' && st.flash_end) bits.push(`秒杀至 ${fmtTs(st.flash_end)}`);
+    if (flashSoon) bits.push(`${fmtTs(_fs)} 开抢`);
+    else if (st.mode === 'flash_sale' && st.is_flash && _fe) bits.push(`秒杀至 ${fmtTs(_fe)}`);
     if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
     const meta = bits.length ? `<div class="member-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
     const desc = st.desc ? `<div class="member-plan-desc">${escHtml(st.desc)}</div>` : '';
