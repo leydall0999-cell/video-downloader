@@ -5062,18 +5062,12 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-plan-item.is-off .admin-plan-sale-chip { opacity: 1; }
 .admin-plan-row .plan-sale-toggle { min-height: 0; height: 26px; }
 .admin-plan-mkt { margin-top: .55rem; padding-top: .5rem; border-top: 1px dashed var(--line, #e5e7ef); }
-/* 营销分组：三组常显不隐藏，只用高亮标出「当前模式生效」那组
-   （隐藏参数框会让用户以为功能丢了，2026-10-03 用户反馈） */
+/* 营销分组：只显示当前模式对应的那一组（用户 2026-10-03 明确要求「选什么模式显示什么参数」）
+   标题一句话说清这一组管什么。 */
 .plan-mkt-group { margin-top: .55rem; padding: .5rem .6rem; border-radius: 8px;
   background: var(--bg-soft, #f7f9fc); border: 1px solid var(--line, #e5e7ef); }
 .plan-mkt-group[hidden] { display: none; }
-.plan-mkt-group-h { font-size: .76rem; color: var(--text-mute, #6b7280); margin-bottom: .4rem;
-  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
-.plan-mkt-group.is-on { background: #f0f5ff; border-color: rgba(79, 108, 240, .45); }
-.plan-mkt-group.is-on .plan-mkt-group-h { color: var(--text, #1f2937); font-weight: 600; }
-.plan-mkt-tag { font-size: .68rem; font-weight: 500; color: #fff; background: var(--brand, #4f6cf0);
-  border-radius: 999px; padding: .1rem .45rem; }
-.plan-mkt-tag[hidden] { display: none; }
+.plan-mkt-group-h { font-size: .76rem; color: var(--text, #374151); font-weight: 600; margin-bottom: .4rem; }
 .admin-plan-mkt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .5rem .8rem; }
 .admin-plan-mkt-grid label { font-size: .78rem; color: var(--text-mute, #6b7280); display: flex; flex-direction: column; gap: .2rem; align-items: stretch; }
 .admin-plan-mkt-grid .admin-input-sm { width: 100%; }

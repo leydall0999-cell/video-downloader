@@ -21416,10 +21416,11 @@ el.dwVidPlayer.hidden = true;
     // 用户改了一半的价格会被旧值静默抹掉（切页签回来/保存后刷新都会触发）。
     // 因此：任何输入动作 → plansBox 标脏 → renderPlansForm 跳过重渲染，
     // 保存成功后才清脏并刷新为服务端真值。
-    // 标注「哪个分组当前生效」，**不再隐藏任何分组**（2026-10-03 用户反馈）：
-    // 参数框按模式隐藏 → 用户选了模式却找不到对应输入框，比平铺一起更难用。
-    // 现在三组常显，切模式只移动高亮角标，所填的值不会因为切模式而看不见。
-    // ⚠️ 模式 value 与分组标识不同名（limited vs stock），必须走映射表。
+    // 选什么模式就只显示该模式的参数（用户 2026-10-03 明确要求，最直观）。
+    // 此前在「全平铺」↔「全显+高亮」之间来回改了两版，是把「还没切模式」误当成 bug；
+    // 联动显示本来就是第一版设计，绕一圈又回来了。
+    // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表 —— 曾直接
+    //    比较导致选「限量」什么都不显示。server/tests/test_plan_mkt_matrix.py 盯这条。
     const _MKT_BY_MODE = { flash_sale: 'flash', limited: 'stock', event: 'event' };
     const applyMktGroups = (item) => {
       if (!item) return;
@@ -21427,12 +21428,10 @@ el.dwVidPlayer.hidden = true;
       const mode = (sel && sel.value) || 'normal';
       const want = _MKT_BY_MODE[mode] || '';
       item.querySelectorAll('.plan-mkt-group').forEach((g) => {
-        const on = (g.dataset.mkt === want);
-        g.classList.toggle('is-on', on);
-        const tag = g.querySelector('.plan-mkt-tag');
-        if (tag) tag.hidden = !on;
+        g.hidden = (g.dataset.mkt !== want);
       });
-      // 自证：命中的组写进 data 属性，出问题时在 DevTools 里一眼能看出
+      // 自证：命中的组写进 data 属性，出问题时在 DevTools 里一眼能看出是
+      // 「模式值没读到」还是「映射没命中」，省掉一轮猜测
       item.dataset.mktShown = want || 'none';
     };
 
@@ -21737,7 +21736,7 @@ el.dwVidPlayer.hidden = true;
                 <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(k)}" value="${esc(p.badge || '')}" placeholder="如：限时 5 折"></label>
               </div>
               <div class="plan-mkt-group" data-mkt="flash">
-                <div class="plan-mkt-group-h">① 秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）<span class="plan-mkt-tag" data-tag="flash_sale">当前模式生效</span></div>
+                <div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div>
                 <div class="admin-plan-mkt-grid">
                   <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(k)}" value="${esc(p.flash_price || '')}" type="number" step="0.01" placeholder="留空=不用"></label>
                   <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_start)}"></label>
@@ -21745,14 +21744,14 @@ el.dwVidPlayer.hidden = true;
                 </div>
               </div>
               <div class="plan-mkt-group" data-mkt="stock">
-                <div class="plan-mkt-group-h">② 限量（总共能卖多少份，售完自动置灰）<span class="plan-mkt-tag" data-tag="limited">当前模式生效</span></div>
+                <div class="plan-mkt-group-h">限量（总共能卖多少份，售完自动置灰）</div>
                 <div class="admin-plan-mkt-grid">
                   <label>限量总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
                   <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
                 </div>
               </div>
               <div class="plan-mkt-group" data-mkt="event">
-                <div class="plan-mkt-group-h">③ 定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）<span class="plan-mkt-tag" data-tag="event">当前模式生效</span></div>
+                <div class="plan-mkt-group-h">定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）</div>
                 <div class="admin-plan-mkt-grid">
                   <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.start_at)}"></label>
                   <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>

@@ -98,29 +98,35 @@ def test_no_orphan_groups() -> None:
     check("映射表指向的分组都在模板里存在", not missing, f"缺失 = {missing}")
 
 
-def test_no_group_ever_hidden() -> None:
-    """🔴 三组参数必须「常显」，任何模式下都不许 hidden。
+def test_groups_linked_to_mode() -> None:
+    """选什么模式只显示该模式的参数（用户 2026-10-03 明确要求，最直观）。
 
-    2026-10-03 用户反馈：按模式隐藏分组后，选了模式却找不到对应输入框
-    （截图里选「限量」却只看到「补充说明」），比平铺一起更难用。
-    现在改为常显 + 「当前模式生效」角标高亮，所以模板里不允许出现 hidden。
+    🔴 这条断言是「防来回折腾」用的：今天在这个 UI 上改了三版
+    （全平铺 → 按模式隐藏 → 全显+高亮 → 回到按模式隐藏），
+    每次都是因为把「还没切模式所以看不到参数」误当成 bug。
+    现在钉死：模板里分组不带 hidden（由 JS 联动控制），
+    且 applyMktGroups 必须存在 g.hidden = (g.dataset.mkt !== want) 这行联动。
     """
-    print("\n[D] 三组参数常显（任何模式都不隐藏）")
+    print("\n[D] 分组与模式联动（选什么模式只显示该模式参数）")
     src = APP_JS.read_text(encoding="utf-8")
-    # 模板里的 data-mkt 标签一律不带 hidden 属性
-    with_hidden = re.findall(r'data-mkt="([a-z]+)"[^>]*\shidden', src)
-    check("模板里没有「data-mkt + hidden」的组合", not with_hidden,
-          f"发现带 hidden 的分组：{with_hidden}")
     n = len(re.findall(r'data-mkt="([a-z]+)"', src))
-    check("模板里共 3 个分组（每组 2 处：现有档位 + 新增档位）", n == 6, f"实际 {n} 处")
-    # 三组都必须有「当前模式生效」角标
-    tags = re.findall(r'class="plan-mkt-tag" data-tag="([a-z_]+)"', src)
-    check("三组都带「当前模式生效」角标", sorted(set(tags)) == sorted(PLAN_MODE_VALUES[1:]),
-          f"实际 {sorted(set(tags))}")
+    check("模板里共 3 个分组 × 2 处（现有档位 + 新增档位）", n == 6, f"实际 {n} 处")
+    # 模板里不应把分组写死 hidden（否则初始渲染就全隐藏了）
+    with_hidden = re.findall(r'data-mkt="([a-z]+)"[^>]*\shidden', src)
+    check("模板里没有写死 hidden（初始渲染交由 JS 联动）", not with_hidden,
+          f"发现 {with_hidden}")
+    # JS 联动语句必须存在，且用映射表比较
+    check("applyMktGroups 用映射表比较（不是直接比 data-mkt !== mode）",
+          "_MKT_BY_MODE" in src and "g.dataset.mkt !== want" in src)
+    check("普通模式 want 为空 → 三组都隐藏", "const want = _MKT_BY_MODE[mode] || '';" in src)
+    check("change 与 click 双挂（WKWebView 下 change 未必冒泡成 click）",
+          "addEventListener('change'" in src and "t.closest('.plan-mode')" in src)
+    check("渲染后立即标注一次（不必等用户动下拉）",
+          "querySelectorAll('.admin-plan-item').forEach((it) => applyMktGroups(it))" in src)
 
 
 def test_matrix() -> None:
-    print("\n[E] 4 模式 × 3 分组：高亮标记正确（不是隐藏）")
+    print("\n[E] 4 模式 × 3 分组：显示矩阵")
     src = APP_JS.read_text(encoding="utf-8")
     modes = _parse_modes(src)
     mp = _parse_map(src)
@@ -132,12 +138,9 @@ def test_matrix() -> None:
     }
     for m in modes:
         want = mp.get(m) or ""
-        # 高亮的组 = data-mkt === want 的那一个；普通模式不高亮任何组
-        on = [g for g in GROUPS if g == want]
-        check(f"模式 {m} → 高亮 {expect.get(m)}", on == expect.get(m), f"实际 {on}")
-    check("普通模式不高亮任何组（角标全隐藏，但参数框都还在）",
-          expect["normal"] == [] and not re.search(r'data-mkt="[a-z]+"[^>]*\shidden', src),
-          "普通模式应一个都不高亮")
+        shown = [g for g in GROUPS if g == want]     # 隐藏的是 != want
+        check(f"模式 {m} → 只显示 {expect.get(m)}", shown == expect.get(m),
+              f"实际 {shown}")
 
 
 def main() -> int:
@@ -147,7 +150,7 @@ def main() -> int:
     test_mode_list()
     test_map_covers_all_modes()
     test_no_orphan_groups()
-    test_no_group_ever_hidden()
+    test_groups_linked_to_mode()
     test_matrix()
     print("\n" + "=" * 60)
     if FAILS:
