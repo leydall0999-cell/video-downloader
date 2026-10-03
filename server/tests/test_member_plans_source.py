@@ -159,8 +159,24 @@ def test_desktop_wiring_present() -> None:
     check("购买走 /api/cloud/pay/create（金额由服务端决定）",
           "'/api/cloud/pay/create'" in appjs and "payCreate" in appjs)
     check("支付轮询 /api/cloud/pay/query", "'/api/cloud/pay/query'" in appjs)
+    # 2026-10-03：后台表单重写为「档位卡 + 营销面板」，选择器从 plan-price[data-plan=…]
+    # 改成 class + data-plan 组合，这里按新结构钉，并顺带把营销字段纳入守卫。
     check("超管面板按现有套餐渲染价格输入框（新档自动出现，可直接改价）",
-          'plan-price[data-plan=' in appjs and "savePlans" in appjs)
+          "plan-price" in appjs and 'data-plan="${esc(k)}"' in appjs and "savePlans" in appjs)
+    check("后台档位可编辑标题/天数（积分）",
+          "plan-label" in appjs and "plan-days" in appjs and "plan-credits" in appjs)
+    check("后台档位可选售卖模式（普通/秒杀/限量/活动）",
+          "plan-mode" in appjs and "flash_sale" in appjs and "limited" in appjs)
+    check("后台档位可配秒杀价与秒杀窗口",
+          "plan-flashprice" in appjs and "plan-flashstart" in appjs and "plan-flashend" in appjs)
+    check("后台档位可配限量与已售",
+          "plan-stock" in appjs and "plan-sold" in appjs)
+    check("后台档位可配活动起止时间与上下架",
+          "plan-startat" in appjs and "plan-endat" in appjs and "plan-onsale" in appjs)
+    check("后台可新增自定义档位",
+          "plan-add-btn" in appjs and "plan-new-code" in appjs)
+    check("会员中心按售卖状态渲染（秒杀价/划线/置灰）",
+          "member-price-orig" in appjs and "st.buyable" in appjs)
     check("超管保存写回 /api/admin/config/plans（即 plans.json 覆盖层）",
           "'/api/admin/config/plans'" in appjs)
 
