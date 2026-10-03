@@ -21148,18 +21148,23 @@ el.dwVidPlayer.hidden = true;
           + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
           + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
 
-        // 会员与积分
+        // 会员与积分（字段名对齐 membership.status()：credits_left 在 ai_member 下，
+        // 永久积分是顶层 permanent_credits；device_locked 是一机一码锁，排障关键）
         const dl = m.download_member || {}, ai = m.ai_member || {};
-        const cr = m.credits || {};
         let h = '<section class="aud-sec"><h4>会员与权益</h4><table class="admin-table"><tbody>'
           + _usageRows([
             ['下载会员', dl.active ? _usageChip(true, '有效至 ' + _usageFmtDate(dl.expire_at), '无') : _usageChip(false, '', '无')],
+            ['会员来源', dl.source || '—'],
             ['AI 会员', ai.active ? _usageChip(true, '有效至 ' + _usageFmtDate(ai.expire_at), '无') : _usageChip(false, '', '无')],
-            ['AI 订阅积分', `${Number(cr.ai_left || 0)}（随会员到期清零）`],
-            ['永久积分', `${Number(cr.permanent || 0)}（不过期）`],
+            ['AI 订阅积分', `${Number(ai.credits_left || 0)}（随会员到期清零）`],
+            ['永久积分', `${Number(m.permanent_credits || 0)}（不过期）`],
+            ['积分合计', String(m.credits_total != null ? m.credits_total : 0)],
             ['设备指纹', u.device_fp ? `<code>${esc(u.device_fp)}</code>` : '—'],
             ['首次绑定', _usageFmtDate(u.account_bound_at)],
           ])
+          + (m.device_locked
+            ? '<tr><td>设备锁</td><td><span class="admin-chip is-red">已锁定：' + esc(String(m.device_locked)) + '（一机一码不符，权益已冻结）</span></td></tr>'
+            : '')
           + '</tbody></table></section>';
 
         // 今日 + 近 N 天配额消耗
