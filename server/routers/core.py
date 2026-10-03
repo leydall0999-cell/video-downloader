@@ -1029,11 +1029,25 @@ _MACHINE_UA_MARKS = (
     "python-http-client", "aiohttp", "scrapy", "HeadlessChrome", "bot",
 )
 
+# 🔴 2026-10-03 追加：把「机器 UA」再拆成「我们自己桌面 App」与「其它客户端」。
+# 桌面 App 走 license_client(requests)/urllib 打授权、任务、Cookie 等接口；
+# 剩下的 curl/扫描器/未知 UA 归 other，别混进 App 的账里。
+_APP_UA_MARKS = (
+    "python-requests", "python-urllib", "python-http-client", "VideoDownloader",
+    "okhttp", "aiohttp",
+)
+
 
 def _is_machine_ua(ua: str) -> bool:
     """UA 是否属于机器/脚本（不是真人浏览器）。"""
     s = str(ua or "")
     return any(mark in s for mark in _MACHINE_UA_MARKS)
+
+
+def _is_app_ua(ua: str) -> bool:
+    """UA 是否为我们自己的桌面 App（与其它脚本/扫描器区分开）。"""
+    s = str(ua or "")
+    return any(mark in s for mark in _APP_UA_MARKS)
 
 
 def _is_page_path(path: str) -> bool:
@@ -1079,6 +1093,13 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
     human_ips: set = set()
     human_pages: Counter = Counter()
     machine_requests = 0
+    # 按客户端拆分（2026-10-03）：桌面 App / 网页页面 / 网页接口轮询 / 其它客户端
+    app_reqs = 0
+    app_ips: set = set()
+    web_api_reqs = 0
+    web_api_ips: set = set()
+    other_reqs = 0
+    other_ips: set = set()
     try:
         raw_lines = _read_nginx_log_lines()
     except Exception as e:
@@ -1114,17 +1135,29 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
             "s": int(status),
             "ua": m.group("ua")[:140],
         })
-        # ---- 真人访客口径 ----
+        # ---- 真人访客口径 + 按客户端拆分 ----
         ua = m.group("ua") or ""
-        if _is_machine_ua(ua) or "Mozilla" not in ua:
+        is_browser = ("Mozilla" in ua) and not _is_machine_ua(ua)
+        if _is_app_ua(ua):
+            # 桌面 App（我们的 python 客户端）：几乎全是接口轮询
+            app_reqs += 1
+            app_ips.add(ip)
             machine_requests += 1
-        elif not _is_page_path(path):
-            machine_requests += 1     # 浏览器请求接口/静态资源也算「非真人页面访问」
+        elif is_browser:
+            if _is_page_path(path):
+                human_pv += 1
+                human_ips.add(ip)
+                human_uv.add((ip, hash(ua) & 0xFFFF))
+                human_pages[path] += 1
+            else:
+                # 浏览器打的接口/静态资源 = 网页版前端的轮询
+                web_api_reqs += 1
+                web_api_ips.add(ip)
+                machine_requests += 1
         else:
-            human_pv += 1
-            human_ips.add(ip)
-            human_uv.add((ip, hash(ua) & 0xFFFF))
-            human_pages[path] += 1
+            other_reqs += 1
+            other_ips.add(ip)
+            machine_requests += 1
     return {
         "total": total,
         "unique_ips": len(ips),
@@ -1142,6 +1175,13 @@ def admin_visits(request: app.Request, limit: int = 100, range: str = ""):
             "machine_requests": machine_requests,
             "top_pages": [{"path": k, "count": v} for k, v in human_pages.most_common(10)],
             "note": "真人访客 = 浏览器 UA 且访问页面级路径；已排除 /api /gw /internal 接口、静态资源与机器请求（App 轮询/健康检查/脚本）",
+        },
+        "by_client": {
+            "desktop_app": {"requests": app_reqs, "ips": len(app_ips)},
+            "web_page": {"requests": human_pv, "uv": len(human_uv), "ips": len(human_ips)},
+            "web_api": {"requests": web_api_reqs, "ips": len(web_api_ips)},
+            "other": {"requests": other_reqs, "ips": len(other_ips)},
+            "note": "桌面 App=我们的 python 客户端轮询；网页=浏览器 UA（页面 / 接口轮询分开）；其它=curl、扫描器、未知 UA",
         },
         "range": range or "all",
         "range_label": _OPS_RANGE_LABELS.get(range, "全部"),
