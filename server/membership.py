@@ -180,7 +180,13 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
                     if iv is None:
                         merged.pop(ik, None)
                     else:
-                        merged[ik] = iv
+                        # 🔴 档位内部也要字段级合并（2026-10-03）：原来整条替换，
+                        # 只提交一个字段（如限量计数 sold +1）会把该档 price/days/stock 全抹掉。
+                        base = merged.get(ik)
+                        if isinstance(base, dict) and isinstance(iv, dict):
+                            merged[ik] = {**base, **iv}
+                        else:
+                            merged[ik] = iv
                 existing[k] = merged
             else:
                 existing[k] = v
@@ -281,6 +287,97 @@ def effective_plans() -> dict[str, dict[str, Any]]:
     }
 
 
+# ── 档位售卖状态（2026-10-03）：模式 / 秒杀 / 限量 / 活动时间 ──────────────────
+# 后台「套餐与积分成本」可给每一档手填这些字段（存在 plans.json 覆盖层里）：
+#   on_sale     上架开关（false = 隐藏该档，前端不展示、不可下单）
+#   mode        normal 普通 / flash_sale 秒杀 / limited 限量 / event 活动
+#   badge       角标文案（前端卡片上显示，如「限时 5 折」）
+#   desc        补充说明（前端卡片副文案）
+#   flash_price 秒杀价（mode=flash_sale 且在秒杀窗口内时取代 price_cny）
+#   flash_start / flash_end  秒杀窗口（Unix 秒）
+#   start_at / end_at        活动/售卖窗口（Unix 秒，0 = 不限）
+#   stock       限量总份数（0 = 不限）；sold 已售份数
+PLAN_MODES = ("normal", "flash_sale", "limited", "event")
+
+
+def _ts(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def plan_sales_state(plan: dict[str, Any], now: Optional[float] = None) -> dict[str, Any]:
+    """算出一档当前的售卖状态与现价（前端置灰、下单校验共用这一份口径）。
+
+    返回：buyable 是否可买、reason 不可买原因（中文）、price 现价、
+    original_price 原价、is_flash 是否秒杀中、remaining 剩余份数（None=不限）、
+    start_at/end_at 售卖窗口、mode 模式、badge/desc 展示字段。
+    """
+    now = float(now if now is not None else time.time())
+    p = dict(plan or {})
+    mode = str(p.get("mode") or "normal")
+    if mode not in PLAN_MODES:
+        mode = "normal"
+    on_sale = p.get("on_sale", True)
+    on_sale = True if on_sale is None else bool(on_sale)
+    base_price = float(p.get("price_cny") or 0)
+    start_at = _ts(p.get("start_at"))
+    end_at = _ts(p.get("end_at"))
+    fs = _ts(p.get("flash_start"))
+    fe = _ts(p.get("flash_end"))
+    flash_price = float(p.get("flash_price") or 0)
+    in_flash = bool(flash_price > 0 and fs and fe and fs <= now <= fe)
+    stock = int(p.get("stock") or 0)
+    sold = int(p.get("sold") or 0)
+    remaining = (stock - sold) if stock > 0 else None
+
+    reason = ""
+    if not on_sale:
+        reason = "已下架"
+    elif start_at and now < start_at:
+        reason = "活动未开始"
+    elif end_at and now > end_at:
+        reason = "活动已结束"
+    elif stock > 0 and sold >= stock:
+        reason = "已售罄"
+
+    return {
+        "mode": mode,
+        "on_sale": on_sale,
+        "buyable": (reason == ""),
+        "reason": reason,
+        "price": (flash_price if in_flash else base_price),
+        "original_price": base_price,
+        "is_flash": in_flash,
+        "flash_price": flash_price,
+        "flash_start": fs,
+        "flash_end": fe,
+        "start_at": start_at,
+        "end_at": end_at,
+        "stock": stock,
+        "sold": sold,
+        "remaining": remaining,
+        "badge": str(p.get("badge") or ""),
+        "desc": str(p.get("desc") or ""),
+    }
+
+
+def ensure_plan_buyable(code: str, now: Optional[float] = None) -> dict[str, Any]:
+    """下单/激活前的可买校验。不通过时返回 {"ok": False, "error": 中文原因}。"""
+    eff = effective_plans()
+    for cat in ("download_plans", "ai_plans", "credit_packs"):
+        plan = (eff.get(cat) or {}).get(code)
+        if not plan:
+            continue
+        st = plan_sales_state(plan, now=now)
+        if not st["buyable"]:
+            return {"ok": False, "error": st["reason"] or "该套餐当前不可购买",
+                    "state": st, "category": cat}
+        return {"ok": True, "state": st, "category": cat}
+    return {"ok": False, "error": "套餐不存在或已下架"}
+
+
 def effective_pay_plans() -> dict[str, dict[str, Any]]:
     """下单用套餐表：{code: {price, name, grant}}，与 payment_core.PAY_PLANS 同构。
 
@@ -299,6 +396,18 @@ def effective_pay_plans() -> dict[str, dict[str, Any]]:
     for code, p in eff["credit_packs"].items():
         out[code] = {"price": float(p.get("price_cny") or 0),
                      "name": p.get("label") or code, "grant": code}
+    # 现价走售卖状态（2026-10-03）：秒杀窗口内用秒杀价 + 带可买标记，
+    # 避免「页面显示秒杀、下单按原价」或售罄档仍能下单。
+    now = time.time()
+    for code, item in out.items():
+        for cat in ("download_plans", "ai_plans", "credit_packs"):
+            src = (eff.get(cat) or {}).get(code)
+            if src:
+                st = plan_sales_state(src, now=now)
+                item["price"] = float(st["price"] or 0)
+                item["buyable"] = bool(st["buyable"])
+                item["reason"] = st["reason"]
+                break
     return out
 
 
@@ -710,7 +819,11 @@ class MembershipStore:
         → 用默认条目（这样新增档位不会被旧覆盖层「盖掉」）。
         """
         eff = effective_plans()
-        dl, ai, cp = eff["download_plans"], eff["ai_plans"], eff["credit_packs"]
+        # 每档附售卖状态（2026-10-03）：模式/秒杀价/限量/活动时间 → 前端置灰与倒计时
+        _now = time.time()
+        dl = {c: dict(p, state=plan_sales_state(p, now=_now)) for c, p in eff["download_plans"].items()}
+        ai = {c: dict(p, state=plan_sales_state(p, now=_now)) for c, p in eff["ai_plans"].items()}
+        cp = {c: dict(p, state=plan_sales_state(p, now=_now)) for c, p in eff["credit_packs"].items()}
         return {
             "download_member": {
                 "plans": dl,
@@ -738,6 +851,17 @@ class MembershipStore:
         _eff = effective_plans()
         _dl_plans, _ai_plans, _credit_packs = (
             _eff["download_plans"], _eff["ai_plans"], _eff["credit_packs"])
+
+        # 售卖状态校验（2026-10-03）：下架/未开始/已结束/售罄 → 拒发
+        _all_plans: dict[str, dict[str, Any]] = {}
+        _all_plans.update(_dl_plans)
+        _all_plans.update(_ai_plans)
+        _all_plans.update(_credit_packs)
+        if code in _all_plans:
+            _st = plan_sales_state(_all_plans[code], now=now)
+            if not _st["buyable"]:
+                return {"ok": False, "error": _st["reason"] or "该套餐当前不可购买",
+                        "state": _st}
 
         if code in _dl_plans:
             info = _dl_plans[code]
@@ -783,6 +907,15 @@ class MembershipStore:
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]  # 只留最近 200 条
         self._persist()
+        # 限量档售出 +1（写回覆盖层，让后台「已售」实时反映）
+        if code in _all_plans and int(_all_plans[code].get("stock") or 0) > 0:
+            try:
+                cat = next(k for k in ("download_plans", "ai_plans", "credit_packs")
+                           if code in _all_plans)
+                save_plan_overrides({cat: {code: {
+                    "sold": int(_all_plans[code].get("sold") or 0) + 1}}})
+            except Exception:  # noqa: BLE001 — 计数失败不影响发放
+                pass
         return result
 
     # ---- 积分 ----
