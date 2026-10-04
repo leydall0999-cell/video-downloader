@@ -16828,18 +16828,30 @@ el.dwVidPlayer.hidden = true;
       // 下载会员（6 档：1/3/7 天体验 + 月/半年/年）+ 共享权益清单
       const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
         _memberCard(plan, code, { unit: plan.days ? ` / ${plan.days} 天` : '' })).join('');
-      const dlList = dlBenefits.map(b => `<li>${b.text}</li>`).join('');
+      const dlList = dlBenefits.map(b => `<li>${escHtml(b.text)}</li>`).join('');
       el.memberPaneDl.innerHTML = `
         ${dlList ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${dlList}</ul></div>` : ''}
         <div class="member-plans">${dlCards}</div>`;
       // AI 会员（2 档，捆绑下载权益）
-      const aiNote = p.ai_member && p.ai_member.bundle_note ? `<div class="member-bundle-note">🔗 ${p.ai_member.bundle_note}</div>` : '';
+      // 2026-10-04：补上权益清单渲染 —— ai_member.features 一直在接口里，但前端
+      // 从没渲染过，AI 会员面板只有一行「包含下载会员全部权益」+ 两张卡（用户反馈
+      // 「AI 会员补充权益」）。复用下载会员那套 .member-benefits 样式，视觉一致。
+      const aiFeatures = (p.ai_member && p.ai_member.features) || [];
+      const aiList = aiFeatures.length
+        ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${
+            aiFeatures.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul></div>`
+        : '';
+      // bundle_note（🔗 包含下载会员全部权益）已在 features 里有一项，重复会显得啰嗦，
+      // 只有当 features 没提到时才保留这条兜底。
+      const aiNote = (p.ai_member && p.ai_member.bundle_note
+                      && !aiFeatures.some(f => String(f).includes('下载会员')))
+        ? `<div class="member-bundle-note">🔗 ${escHtml(p.ai_member.bundle_note)}</div>` : '';
       const aiCards = Object.entries(aiPlans).map(([code, plan]) =>
         _memberCard(plan, code, {
           unit: ' / 月',
           foot: `月赠 ${plan.credits} 积分（30 天有效）· 含下载会员权益`,
         })).join('');
-      el.memberPaneAi.innerHTML = `${aiNote}<div class="member-plans">${aiCards}</div>`;
+      el.memberPaneAi.innerHTML = `${aiNote}${aiList}<div class="member-plans">${aiCards}</div>`;
       // 永久积分包
       const packCards = Object.entries(packs).map(([code, plan]) =>
         _memberCard(plan, code, { foot: `一次性到账 ${plan.credits} 积分 · 永久有效，不随订阅过期` })).join('');
