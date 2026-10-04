@@ -7592,9 +7592,11 @@
   // 价目仍全部来自 /api/member/plans（单一真源不变）；切换分段不重新请求，只重渲染缓存。
   let _memPlans = null;
   let _memTrack = 'download';
+  // 2026-10-04：AI 轨的 note 原为「含下载会员全部权益」，与刚加的权益清单里
+  // 那一项完全重复（页面上会连着出现两遍同一句）。改成讲积分的额度与有效期。
   const MEM_TRACK_META = {
     download: { note: '全速提取 · 网页端与桌面端共用' },
-    ai: { note: '含下载会员全部权益' },
+    ai: { note: '积分当月有效 · 不结转下月' },
     credits: { note: '按需购买，不随订阅过期' },
   };
   const memTrackData = (key) => {
