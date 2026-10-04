@@ -556,6 +556,10 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 #   前两条对应功能不存在（见 DAILY_QUOTA_LIMITS 上方注释），后两条是**桌面端专属**
 #   配额键，网页端这两张表里根本没有 —— 留着会让 v>0 判断失效后文案凭空消失或
 #   与实际配额不符。网页版只按自己真有的 download / cloud 两条生成。
+# 🔴 2026-10-04 用户要求：文案里带「云端 / 算力 / AI / 本地」这些**实现口径字眼**的
+#    一律不对会员页展示（这些词讲的是架构与成本口径，不是用户视角的权益）。
+#    做法是**显式隐藏名单**而不是删条目 —— 配额表与拦截点一律不动，限流照旧生效
+#    （云端算力免费 3/日是风控，不展示 ≠ 取消）。将来要恢复展示，把 key 从这里移走即可。
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
     ("cloud", "云端算力（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
@@ -569,22 +573,38 @@ _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
     {"key": "support", "text": "优先客服支持"},
 )
 
+# 🔴 不在会员页展示的权益 key（2026-10-04 用户定档：隐藏「云端/算力/AI/本地」字眼）。
+#    仅影响文案展示，**配额与限流完全不变**。命中原因写在这里，方便日后恢复或复查：
+_BENEFIT_HIDDEN: dict[str, str] = {
+    "cloud": "文案含「云端」「算力」",
+    "no_credits": "文案含「AI」「云端」",
+}
+
 
 def download_benefits() -> list[dict[str, str]]:
-    """下载会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。"""
+    """下载会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。
+
+    `_BENEFIT_HIDDEN` 里的 key 只从**输出**里滤掉，配额表与限流逻辑一概不动
+    （用户定档：不展示「本地/云端/算力/AI」这类实现口径字眼）。
+    """
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     for key, tpl in _BENEFIT_FROM_LIMITS:
+        if key in _BENEFIT_HIDDEN:
+            continue
         v = int(DAILY_QUOTA_LIMITS.get(key) or 0)
         if v > 0:
             out.append({"key": key, "text": tpl.format(v=v)})
             seen.add(key)
-    # member_limit = -1 的功能 = 会员不限次（评论/数据/字幕批量、字幕提取…）
+    # member_limit = -1 的功能 = 会员不限次（字幕提取等）
     for d in FEATURE_USAGE_DEFS:
-        if int(d.get("member_limit", 0)) == -1 and d.get("key") not in seen:
-            out.append({"key": d["key"], "text": f"{d.get('name') or d['key']}：不限"})
-            seen.add(str(d.get("key")))
-    out.extend(dict(x) for x in _BENEFIT_EXTRA)
+        k = str(d.get("key"))
+        if k in _BENEFIT_HIDDEN:
+            continue
+        if int(d.get("member_limit", 0)) == -1 and k not in seen:
+            out.append({"key": k, "text": f"{d.get('name') or k}：不限"})
+            seen.add(k)
+    out.extend(dict(x) for x in _BENEFIT_EXTRA if str(x.get("key")) not in _BENEFIT_HIDDEN)
     return out
 
 

@@ -103,6 +103,7 @@ run_node test_view_top_gap.mjs             # 顶层视图卡片与吸顶顶栏�
 run_node test_activate_gate.mjs            # 激活码通道收口：/api/member/activate 仅超管 + 前端入口已移除（2026-10-04 白嫖后门）
 run_node test_feature_usage_gate.mjs        # 「今日使用」功能配额表逐行须有真实 use_daily 拦截点（2026-10-04 清占位行）
 run_node test_deploy_surface_parity.mjs     # cn/hk 双部署面：activate 超管门禁必须两端同步（2026-10-04 hk 实测被白嫖）
+run_node test_benefit_copy_hide.mjs          # 会员页权益文案不得含「云端/算力/AI/本地」字眼，但配额与限流原样（2026-10-04 用户定档）
 run_node test_concat_flow.mjs              # 视频拼接面板状态机：防重复结果/停表/清源片段/输出分区（2026-09-29 用户反馈）
 run_node test_app_intro_entries.mjs        # 网页版「更多功能」页：24 项能力/5 组/标签与入口一致（2026-09-30）
 run_node test_platform_count_label.mjs     # 平台数对外口径：两端徽章走 fmtPlatformCount，116→100+（2026-09-30）
