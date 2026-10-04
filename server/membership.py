@@ -190,7 +190,10 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
 # 现在授权中心是唯一真源：本机保存时下发（push_plans_to_cloud），读取时云端优先
 # （cloud_plan_overrides，TTL 5 分钟），云端不可达才回退本机覆盖层 + 代码常量。
 _CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}}
-_CLOUD_PLANS_TTL = 300.0
+# 套餐上架/改价回源节流：原 300s（云端被别处改动后桌面最长 5 分钟才反映）。
+# 2026-10-04 配套修复：降到 15s，与会员状态节流对齐；桌面自己 push_plans_to_cloud
+# 仍会主动刷新缓存，降 TTL 只让「被动感知云端变化」更快。
+_CLOUD_PLANS_TTL = 15.0
 
 
 def _license_api(path: str) -> str:
