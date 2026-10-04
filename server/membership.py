@@ -230,7 +230,10 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
 # 授权中心（/api/license/plans）是价格唯一真源：桌面后台改价会下发云端，网页版
 # 这里按 TTL 拉取覆盖到本地默认之上。云端不可达时自动回退本机覆盖层 + 代码常量。
 _CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}}
-_CLOUD_PLANS_TTL = 300.0
+# 套餐上架/改价回源节流：原 300s（上架后网页最长 5 分钟才刷新，用户感知「延迟」）。
+# 2026-10-04 配套修复：降到 15s，与会员状态节流(AUTHORITY_MIN_INTERVAL)对齐。
+# 套餐目录是静态配置、单进程每 15s 一次 POST 完全可忽略，且云端不可达仍回退本机。
+_CLOUD_PLANS_TTL = 15.0
 
 
 def _license_api(path: str) -> str:
