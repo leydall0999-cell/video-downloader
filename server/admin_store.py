@@ -190,6 +190,9 @@ def grant_membership(user_id: str, code: str) -> dict[str, Any]:
         res = get_user_store(user_id).activate(code)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"激活失败：{e}"}
+    # A 修复（2026-10-04）：后台发放会员/积分包必须推云，否则网页按云端权威显示 0
+    # —— "两端对不上"主因。本地写照常保留作缓存；云端不可达时静默忽略。
+    _sync_membership_to_cloud(user, res)
     return res
 
 
@@ -272,6 +275,46 @@ def _sync_credits_to_cloud(user: dict, delta: int, pool: str) -> None:
             if cdelta == 0:
                 continue
             license_client.adjust_remote(token, email, cpool, cdelta)
+    except Exception:
+        # 云端不可达 / 账号仅本机（404 NOT_FOUND）/ 令牌未配置：忽略，本地改动保留
+        pass
+
+
+def _sync_membership_to_cloud(user: dict, res: dict[str, Any]) -> None:
+    """把超管在后台发放的会员/积分包推到授权中心（对齐 adjust_credits 的推云逻辑）。
+
+    MembershipStore.activate() 只写本机账本、不碰云端 —— 过去超管在桌面发的会员/积分，
+    网页端按云端权威显示 0（"两端对不上"主因）。这里按 activate 返回的 kind 推对应字段：
+      · download_member → setstate member_until_dl
+      · ai_member       → setstate member_until_ai + ai_credits_left
+      · credit_pack     → adjust permanent +credits_added（增量，不覆盖其他池）
+    只推本次发放的那一项（其余传 None/不传），**绝不误清云端既有的其他权益**；
+    与 adjust_credits 同语义：本地已落盘，云端不可达/仅本机账号/令牌未配置则静默忽略。
+    """
+    token = _license_admin_token()
+    if not token:
+        return
+    email = str(user.get("identifier") or "").strip()
+    if not email:
+        return
+    kind = (res or {}).get("kind")
+    try:
+        import license_client
+        if kind == "download_member":
+            expire = float((res or {}).get("expire_at") or 0)
+            if expire > 0:
+                license_client.setstate_remote(token, email, member_until_dl=expire)
+        elif kind == "ai_member":
+            expire = float((res or {}).get("expire_at") or 0)
+            ai_left = int((res or {}).get("credits_granted") or 0)
+            if expire > 0:
+                license_client.setstate_remote(token, email,
+                                               member_until_ai=expire,
+                                               ai_credits_left=ai_left)
+        elif kind == "credit_pack":
+            amt = int((res or {}).get("credits_added") or 0)
+            if amt > 0:
+                license_client.adjust_remote(token, email, "permanent", amt)
     except Exception:
         # 云端不可达 / 账号仅本机（404 NOT_FOUND）/ 令牌未配置：忽略，本地改动保留
         pass
