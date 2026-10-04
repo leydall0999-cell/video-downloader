@@ -18,6 +18,13 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.40",
+        "date": "2026-10-05",
+        "items": [
+            "会员中心 AI 会员页不再显示「真实密钥不装在你电脑里、可随时吊销」这类技术说明",
+        ],
+    },
+    {
         "version": "1.0.39",
         "date": "2026-10-05",
         "items": [
