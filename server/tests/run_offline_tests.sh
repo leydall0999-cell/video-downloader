@@ -165,6 +165,13 @@ run_one test_proxy_settings.py
 #  展示（/api/member/plans 真身 store.plans()）/ 下单金额 / 发放天数三处必须同步。
 #  此前下单读硬编码 PAY_PLANS、发货读硬编码 DOWNLOAD_PLANS —— 改了等于没改。
 run_one test_member_plans_source.py
+#  会员 store 决议隔离（2026-10-04，Fix C）：
+#  current_member_store 回退全局账本前必须校验归属（gstore.meta.account.email ==
+#  当前账号注册邮箱），否则会读成上一个登录账号的会员/积分（跨账号泄漏，真实事故：
+#  桌面显示 400/2030 实为上一账号 15014313254 的全局账本）。钉死「旁观账号看不到
+#  他人权益」+「同账号兜底仍生效」+「_email_of 映射正确」+ 变异确认（去掉归属校验
+#  立即复现泄漏，证明测试能抓住回退）。
+run_one test_member_store_isolation.py
 run_one test_llm_config_save.py
 run_one test_vision_managed_config.py
 run_one test_gateway_config.py
