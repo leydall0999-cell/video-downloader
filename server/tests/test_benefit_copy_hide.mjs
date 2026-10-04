@@ -1,18 +1,22 @@
-// 会员页权益文案：不得出现「云端 / 算力 / AI / 本地」等实现口径字眼（2026-10-04 用户定档）
+// 会员页权益文案：条目全保留，只是不该出现「云端 / 算力 / AI / 本地」几个字（2026-10-04 用户定档）
 //
-// 背景：这些词讲的是**架构与成本口径**（哪些算力跑在云端、哪些跑在本机），不是用户
-// 视角的权益。用户看到「云端算力 200 次/日」只会困惑（我买的是会员，为什么分云端/本地）。
-// 定档做法：在 membership.py 里用**显式隐藏名单** `_BENEFIT_HIDDEN` 过滤**输出**，
-// 配额表与限流逻辑一概不动（不展示 ≠ 取消；抠图 8/日、云端算力 3/日仍是风控）。
+// 定档原文：**隐藏那几个字，不是隐藏有关那几个字的全部条目**。
+// 第一版理解错了，做成「整条隐藏」，被用户当场纠正 —— 权益条目是权益，不能少；
+// 要改的只是**措辞**（那几个词讲的是架构与成本口径，用户看不懂也不关心）。
+//
+// 正确做法：直接改 `_BENEFIT_FROM_LIMITS` / `_BENEFIT_EXTRA` 里的**文案模板**，
+// 条目数、配额、限流一概不动：
+//   本地一键抠图        → 一键抠图
+//   云端算力（转码…）   → 在线处理（转码…）
+//   App 本地重算力（…） → 视频处理（…）
+//   不含 AI 积分：云端… → 不含积分额度：…
 //
 // 本守卫钉四件事：
-//   ① `download_benefits()` 的**渲染输出**里不得含这四个词（查输出，不是查源码模板——
-//      模板保留着，靠名单过滤）；
-//   ② 隐藏名单非空，且每一项都能在 `_BENEFIT_FROM_LIMITS` / `_BENEFIT_EXTRA` 里找到来源
-//      （防止写了名单但对应条目根本不存在，那等于名单是摆设）；
-//   ③ 🔴 **隐藏 ≠ 取消限流**：名单里每一条的具体配额数值必须原样存在。这条是变异测试
-//      补上的——原先只断言「配额还在」，若有人连配额一起删了，断言会因「找不到」而跳过 ⇒ 假绿；
-//   ④ `plans()` 返回的 benefits 与 `download_benefits()` 一致（前端购买中心读的是 plans）。
+//   ① **渲染输出**里不得含这四个词（查输出，不是查源码常量——模板本身就该改干净）；
+//   ② 🔴 **条目数不得减少**：每条 DAILY/FREE 配额都要在输出里出现（防止又退化成「隐藏条目」，
+//      这是第一版走错路的直接防线）；member_limit=-1 的功能同样必须在；
+//   ③ 配额与限流数值原样（改措辞不该顺手改额度）；
+//   ④ plans() 的 benefits 与 download_benefits() 条数一致（前端购买中心读 plans()）。
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -23,7 +27,6 @@ const serverDir = join(repoRoot, 'server');
 const PY = process.env.VDL_TEST_PY
   || '/Users/suixindelang/.workbuddy/binaries/python/versions/3.13.12/bin/python3';
 
-// 直接问 Python 侧要真实渲染结果（别在 JS 里重实现一遍 membership 的逻辑，会漂移）
 const probe = `
 import os, sys, tempfile, json
 os.environ["VDL_DATA_DIR"] = tempfile.mkdtemp(prefix="vdlbene_")
@@ -31,25 +34,21 @@ os.environ["VDL_CLOUD_LINK"] = "0"
 os.environ["VDL_PLANS_CLOUD"] = "0"
 sys.path.insert(0, ${JSON.stringify(serverDir)})
 import membership as M
-out = {
+store = M.MembershipStore()
+print(json.dumps({
     "benefits": M.download_benefits(),
-    "hidden": getattr(M, "_BENEFIT_HIDDEN", None),
-    "from_limits": [k for k, _ in M._BENEFIT_FROM_LIMITS],
-    "extra": [str(x.get("key")) for x in M._BENEFIT_EXTRA],
     "daily": M.DAILY_QUOTA_LIMITS,
     "free": M.FREE_DAILY_LIMITS,
     "feature_rows": [{"key": d.get("key"), "resource": d.get("resource"),
-                      "member_limit": d.get("member_limit"),
-                      "free_limit": d.get("free_limit")} for d in M.FEATURE_USAGE_DEFS],
-}
-store = M.MembershipStore()
-out["plans_benefits"] = store.plans().get("download_member", {}).get("benefits") or []
-print(json.dumps(out, ensure_ascii=False))
+                      "name": d.get("name"), "member_limit": d.get("member_limit")}
+                     for d in M.FEATURE_USAGE_DEFS],
+    "ai_features": M.AI_FEATURES,
+    "plans_benefits": store.plans().get("download_member", {}).get("benefits") or [],
+}, ensure_ascii=False))
 `;
-const raw = execFileSync(PY, ['-c', probe], { encoding: 'utf8' });
-const M = JSON.parse(raw);
+const M = JSON.parse(execFileSync(PY, ['-c', probe], { encoding: 'utf8' }));
 
-// ── ① 渲染输出不得含实现口径字眼 ─────────────────────────────────────────────
+// ── ① 措辞：输出里不得含实现口径词 ──────────────────────────────────────────
 const KEYWORDS = ['云端', '算力', 'AI', '本地'];
 assert.ok(Array.isArray(M.benefits) && M.benefits.length > 0,
   'download_benefits() 应返回非空权益清单');
@@ -57,38 +56,54 @@ for (const b of M.benefits) {
   const text = String(b.text || '');
   const hit = KEYWORDS.filter(k => text.includes(k));
   assert.ok(hit.length === 0,
-    `权益文案不得含实现口径词，但 key="${b.key}" 命中 ${JSON.stringify(hit)}：${text}`);
+    `权益文案不得含「云端/算力/AI/本地」这些字，但 key="${b.key}" 命中 ${JSON.stringify(hit)}：${text}`
+    + '（正确做法是改措辞，如「云端算力」→「在线处理」，不是删整条）');
+}
+for (const f of (M.ai_features || [])) {
+  const hit = KEYWORDS.filter(k => String(f).includes(k));
+  assert.ok(hit.length === 0,
+    `AI_FEATURES 文案不得含这些字，命中 ${JSON.stringify(hit)}：${f}`);
 }
 
-// ── ② 隐藏名单非空且每项都有来源 ─────────────────────────────────────────────
-assert.ok(M.hidden && typeof M.hidden === 'object' && Object.keys(M.hidden).length > 0,
-  'membership.py 必须定义非空的 _BENEFIT_HIDDEN（用户定档隐藏云端/算力/AI/本地字眼）');
-const sources = new Set([...(M.from_limits || []), ...(M.extra || [])]);
-for (const key of Object.keys(M.hidden)) {
-  assert.ok(sources.has(key),
-    `_BENEFIT_HIDDEN 里的 "${key}" 在 _BENEFIT_FROM_LIMITS / _BENEFIT_EXTRA 中找不到来源 —— `
-    + '要么对应条目已改名/删除（请同步名单），要么名单是摆设。');
+// ── ② 条目数不得减少（防止退化成「隐藏条目」）───────────────────────────────
+// 🔴 这一条是针对第一版理解错误（整条隐藏）加的：权益条目是权益，不能少。
+const keys = new Set((M.benefits || []).map(b => String(b.key)));
+for (const key of Object.keys(M.daily || {})) {
+  if (Number(M.daily[key]) > 0) {
+    assert.ok(keys.has(key),
+      `配额 ${key}=${M.daily[key]}（会员可用）必须在权益清单里出现 —— `
+      + '条目只改措辞、不许删（2026-10-04 用户纠正过：隐藏的是那几个字，不是整条）。');
+  }
+}
+for (const key of Object.keys(M.free || {})) {
+  if (Number(M.free[key]) > 0 || key in (M.daily || {})) {
+    // 免费表独有的键（如网页端没有的 subtitle）也要有对应文案或说明项
+    if (!(key in (M.daily || {}))) {
+      assert.ok(keys.has(key),
+        `配额 ${key}（仅免费表有）应在权益清单里有对应条目或说明项。`);
+    }
+  }
+}
+for (const row of (M.feature_rows || [])) {
+  if (Number(row.member_limit) === -1) {
+    const expectKey = String(row.key);
+    assert.ok(keys.has(expectKey),
+      `${row.name}（member_limit=-1，会员不限次）必须在权益清单里写明「不限」—— `
+      + '条目不能因为改措辞被弄丢。');
+  }
 }
 
-// ── ③ 隐藏 ≠ 取消限流（变异测试补上的关键断言）──────────────────────────────
-// 网页端只有 cloud（配额 200/免费 3）与 no_credits（纯说明项，无配额）。
-const EXPECTED = { cloud: { daily: 200, free: 3 } };
-for (const [key, want] of Object.entries(EXPECTED)) {
-  assert.ok(Object.keys(M.hidden).includes(key), `${key} 应在隐藏名单里`);
-  assert.equal(Number(M.daily[key]), want.daily,
-    `${key} 的会员限额被改动了 —— 隐藏只是不展示文案，配额与限流必须原样（隐藏 ≠ 取消）`);
-  assert.equal(Number(M.free[key]), want.free,
-    `${key} 的免费限额被改动了 —— 同上`);
-  const row = (M.feature_rows || []).find(r => String(r.resource) === key);
-  assert.ok(row, `${key} 应仍在 FEATURE_USAGE_DEFS（使用统计表照旧有这一行）`);
-  assert.equal(Number(row.member_limit), want.daily,
-    `${key} 在使用统计表里的 member_limit 应仍为 ${want.daily}`);
+// ── ③ 配额与限流数值原样（改措辞不该顺手改额度）────────────────────────────
+// 2026-10-04 定档时的数值，改文案不许顺手动。
+const EXPECTED = { download: [1000, 10], cloud: [200, 3] };
+for (const [key, [memberV, freeV]] of Object.entries(EXPECTED)) {
+  assert.equal(Number(M.daily[key]), memberV, `${key} 会员限额应为 ${memberV}/日（只改措辞）`);
+  assert.equal(Number(M.free[key]), freeV, `${key} 免费限额应为 ${freeV}/日（只改措辞）`);
 }
 
-// ── ④ plans() 的 benefits 与 download_benefits() 一致 ───────────────────────
+// ── ④ plans() 与 download_benefits() 条数一致 ──────────────────────────────
 assert.equal((M.plans_benefits || []).length, M.benefits.length,
-  'plans().download_member.benefits 与 download_benefits() 条数必须一致'
-  + '（前端购买中心读的是 plans()）');
+  'plans().download_member.benefits 与 download_benefits() 条数必须一致（前端读的是 plans()）');
 
-console.log(`✅ 会员页权益文案守卫通过（渲染输出 ${M.benefits.length} 条均不含「云端/算力/AI/本地」；`
-  + `隐藏 ${Object.keys(M.hidden).length} 条但配额与限流原样）`);
+console.log(`✅ 权益文案守卫通过（${M.benefits.length} 条权益全保留、文案不含「云端/算力/AI/本地」、`
+  + '配额与限流原样）');
