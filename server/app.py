@@ -1726,6 +1726,14 @@ async def lifespan(_: FastAPI):
             _th.Thread(target=_prewarm_lama, name="vdl-lama-prewarm", daemon=True).start()
     except Exception:
         logger.exception("启动 AI 去水印预热线程失败")
+    # 启动即确保超级用户标记（后台管理面板授权：admin.json / VDL_ADMIN_IDENTIFIER / 首个注册账号）。
+    # ⚠️ B 修复（2026-10-04）：网页端此前漏调此函数，导致 VDL_ADMIN_IDENTIFIER 设了也不生效，
+    #    网页端永远显示"普通用户"。与桌面端对齐（app.py:2021）。幂等、绝不降级。
+    try:
+        from auth_store import ensure_superusers
+        ensure_superusers()
+    except Exception:
+        logger.exception("确保超级用户失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:

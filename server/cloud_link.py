@@ -36,7 +36,7 @@ log = logging.getLogger("vdl.cloud_link")
 
 COOKIE_NAME = "vdl_dev"
 COOKIE_MAX_AGE = 3600 * 24 * 365 * 3      # 3 年，够用
-AUTHORITY_MIN_INTERVAL = 60.0             # 状态查询时最多每 60s 打一次云端
+AUTHORITY_MIN_INTERVAL = 15.0             # 状态查询时最多每 15s 打一次云端（D 修复 2026-10-04：原 60s 偏慢）
 
 # store 路径 -> 上次刷新时间（进程内节流，避免个人中心轮询把云端打爆）
 _LAST_REFRESH: dict[str, float] = {}
