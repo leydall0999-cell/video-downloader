@@ -109,6 +109,10 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
   border-radius: var(--radius-lg); box-shadow: var(--shadow);
   padding: 1.25rem; margin-bottom: 1rem;
 }
+/* 顶层视图卡片与吸顶顶栏之间留出呼吸间距（2026-10-04 修复）：不改这条时卡片上边
+   紧贴顶栏下边框（实测间距仅 1px），视觉上像「顶栏 + 卡片」两块粘在一起。
+   取 3rem，与参考版式「视频处理」的 .uc-subtabs 上间距一致，各视图首屏内容起始线对齐。 */
+main > .panel { margin-top: 3rem; }
 
 /* ---- 通用卡片：全站统一浅色容器（去水印 .dw-card 复用此规范） ---- */
 .card {
@@ -656,7 +660,7 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
 
 /* ---- 去水印（需求文档模块二） ---- */
 /* 去水印视图比整站更窄并居中，避免图片预览区被拉得过宽 */
-#dwView { max-width: 720px; margin: 0 auto 1rem; }
+#dwView { max-width: 720px; margin-inline: auto; margin-bottom: 1rem; }
 .dw-tip { color: var(--text-mute); font-size: .9rem; margin: .25rem 0 1rem; line-height: 1.5; }
 .dw-tip b { color: var(--brand-strong); }
 .dw-tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
