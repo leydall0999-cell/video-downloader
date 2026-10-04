@@ -56,42 +56,42 @@ CREDIT_PACKS: dict[str, dict[str, Any]] = {
 }
 
 # 下载类权益的每日配额上限（会员档；免费档见 FREE_DAILY_LIMITS）
+# 🔴 2026-10-04 清理：删掉 original / batch_material。二者只有配额条目、没有任何
+#    use_daily 拦截点；而且「原画」本身是**清晰度档位门**（>1080P 需会员，见
+#    routers/core.py::_quality_gate_error），不按次计费 —— 拿次数配额表达是错的概念。
+#    留着会让会员页承诺「原画 100 次/日、批量素材 1000 条/日」两份不存在的权益。
 DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）—— 2026-09-06 起配额墙在「点清晰度下载」处
-    "original": 100,          # 原画/4K 直链下载 / 日（会员，未接入）
-    "batch_material": 1000,   # 批量下载 / 日（会员，未接入）
     "cloud": 200,             # 云端算力（转码/拼接/去水印/字幕）/ 日（会员）—— 2026-09-29
-    # 评论 / 数据 / 字幕批量：不限（不进 daily_usage 计配额）
 }
-# 免费档每日配额（2026-09-06 定稿：免费下载 10 次/日；原画/批量不开放）
+# 免费档每日配额（2026-10-04 定稿：免费下载 10 次/日、云端算力 3 次/日）
 FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
-    "original": 0,            # 免费不开放原画
-    "batch_material": 0,      # 免费不开放批量
     "cloud": 3,               # 云端算力免费 3 次/日（账号级，App/网页共享）—— 2026-09-29
 }
-UNLIMITED_QUOTA = ("comment", "data", "subtitle")
+# 不限次资源：网页端没有「评论/数据/字幕批量」功能（那是从 DataTool 抄来的、V1 未实现），
+# 故为空元组。quota_state 遇到不在两张表里的 resource 会走 unknown → fail-open 放行。
+UNLIMITED_QUOTA: tuple[str, ...] = ()
 
 # 会员权益内免费的 AI 资源描述（供 plans/status 展示）
+# 🔴 2026-10-04 清理：AI 字幕识别 / 视频总结 / 图片翻译体验三项全无实现（全仓搜不到
+#    对应路由），只在这段文案里出现过。留着 = 会员页拿不存在的功能做卖点。
 AI_FEATURES: list[str] = [
-    "AI 字幕识别", "字幕提取", "视频总结", "图片翻译体验", "更多 AI 权益持续新增",
+    "字幕提取 · 转码 · 拼接等云端算力", "更多 AI 权益持续新增",
 ]
 
 # 个人中心「今日使用」功能配额表（与前端表格四列对应：功能/体验剩余/权益余额/积分单价）
-# - resource: 关联的 daily_usage 资源键（unlimited 资源不计日配额）
+# - resource: 关联的 daily_usage 资源键
 # - free_limit / member_limit: 每日体验配额（-1 表示不限）
 # - ai_bonus: AI 会员周期内赠送额度（按 unit 单位）
 # - credit_cost: 权益不足时按量扣积分单价（0 表示免费）
+# 🔴 2026-10-04 铁律：**只有真有 use_daily/quota_state 拦截点的功能才能进这张表**。
+#    本表逐条对应服务器上真实拦得住的配额；守卫 test_feature_usage_gate.mjs 会静态
+#    核对「每一行的 resource 都能在业务代码里搜到拦截点」，防止再塞占位行
+#    （V1 时从 DataTool 抄了 8 行从未实现的功能，是前车之鉴）。
 FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
-    {"key": "video_parse",       "name": "视频解析",         "resource": "download", "unit": "次",   "free_limit": 10,  "member_limit": 1000, "ai_bonus": 0,  "credit_cost": 0},
-    {"key": "plugin_original",   "name": "插件原画解析",     "resource": "original", "unit": "次",   "free_limit": 0,   "member_limit": 100,  "ai_bonus": 0,  "credit_cost": 0},
-    {"key": "ai_subtitle",       "name": "AI字幕识别",       "resource": "ai_subtitle", "unit": "分钟", "free_limit": 0, "member_limit": 0, "ai_bonus": 30, "credit_cost": 5},
-    {"key": "subtitle_extract",  "name": "字幕提取",         "resource": "subtitle", "unit": "次",   "free_limit": 0, "member_limit": 0, "ai_bonus": 5,  "credit_cost": 5},
-    {"key": "batch_material",    "name": "插件批量下载素材", "resource": "batch_material", "unit": "条", "free_limit": 0, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
-    {"key": "batch_comment",     "name": "插件批量下载评论", "resource": "comment",  "unit": "条",   "free_limit": -1,  "member_limit": -1,   "ai_bonus": 0,  "credit_cost": 0, "unlimited": True},
-    {"key": "batch_data",        "name": "插件批量下载数据", "resource": "data",     "unit": "条",   "free_limit": -1,  "member_limit": -1,   "ai_bonus": 0,  "credit_cost": 0, "unlimited": True},
-    {"key": "batch_subtitle",    "name": "插件批量下载字幕", "resource": "subtitle_batch", "unit": "条", "free_limit": -1, "member_limit": -1, "ai_bonus": 0, "credit_cost": 0, "unlimited": True},
-    {"key": "image_translate",   "name": "图片翻译",         "resource": "image_translate", "unit": "张", "free_limit": 0, "member_limit": 0, "ai_bonus": 0, "credit_cost": 10},
+    {"key": "video_parse",   "name": "下载视频", "resource": "download", "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "cloud_compute", "name": "云端算力", "resource": "cloud",    "unit": "次", "free_limit": 3,   "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -489,15 +489,21 @@ def default_state_path() -> Path:
     return _base_dir() / "membership.json"
 
 
+# 已下线资源的历史计数键（2026-10-04 随占位功能一并移除）
+# 加载旧状态文件与跨日重置时都要清掉，否则死键会继续出现在 status() / usage_summary()。
+_DEAD_USAGE_KEYS: tuple[str, ...] = (
+    "original", "batch_material", "ai_subtitle", "subtitle",
+    "subtitle_batch", "image_translate",
+)
+
+
 def _empty_state() -> dict[str, Any]:
     return {
         "download_member": {"active": False, "plan": None, "expire_at": 0.0},
         "ai_member": {"active": False, "plan": None, "expire_at": 0.0,
                       "grant_credits": 0, "credits_left": 0, "feature_credits": {}},
         "permanent_credits": {"total": 0, "packs": []},
-        "daily_usage": {"date": "", "download": 0, "original": 0, "batch_material": 0,
-                        "ai_subtitle": 0, "subtitle": 0, "subtitle_batch": 0,
-                        "image_translate": 0},
+        "daily_usage": {"date": "", "download": 0, "cloud": 0},
         "usage_history": {},
         "meta": {"activated_at": 0.0, "history": []},
     }
@@ -515,6 +521,11 @@ def _load_state(path: Path) -> dict[str, Any]:
     for k in ("download_member", "ai_member", "permanent_credits", "daily_usage", "usage_history", "meta"):
         if isinstance(data.get(k), dict):
             st[k].update(data[k])
+    # 2026-10-04：丢弃已下线资源的历史计数键（下方 _DEAD_USAGE_KEYS）。
+    # 放在这里而不是只在跨日重置里清，是为了**读到旧文件那一刻就干净**——
+    # 否则用户当天不做任何操作时，死键仍会出现在 status() / usage_summary() 里。
+    for dead in _DEAD_USAGE_KEYS:
+        st["daily_usage"].pop(dead, None)
     return st
 
 
@@ -541,20 +552,20 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 # 此前是手写死的 6 条，加了 matting/cloud/app_compute/subtitle 等配额后忘记补文案，
 # 出现「代码里有、页面上没有」。现在按 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 生成，
 # 守卫 test_membership_benefits 钉住「有配额必有文案」，以后不会再漏。
+# 🔴 2026-10-04 删掉 original / batch_material / matting / app_compute 四条：
+#   前两条对应功能不存在（见 DAILY_QUOTA_LIMITS 上方注释），后两条是**桌面端专属**
+#   配额键，网页端这两张表里根本没有 —— 留着会让 v>0 判断失效后文案凭空消失或
+#   与实际配额不符。网页版只按自己真有的 download / cloud 两条生成。
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
-    ("original", "原画 / 4K 直链解析 {v} 次/日"),
-    ("batch_material", "批量下载素材 {v} 条/日"),
-    ("matting", "本地一键抠图 {v} 次/日"),
     ("cloud", "云端算力（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
-    ("app_compute", "App 本地重算力（转码 / 拼接 / 压缩 / 超分）{v} 次/日"),
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
-    {"key": "quality", "text": "清晰度：1080P 及以上全部开放"},
+    {"key": "quality", "text": "清晰度：1080P 及以上全部开放（>1080P 需会员）"},
     {"key": "devices", "text": "同一账号 2 台设备同时在线"},
     {"key": "speed", "text": "高速通道 · 全速不限速"},
-    {"key": "no_credits", "text": "不含 AI 积分：AI 字幕识别 / 云端抠图等需另购 AI 会员或积分包"},
+    {"key": "no_credits", "text": "不含 AI 积分：云端抠图等需另购 AI 会员或积分包"},
     {"key": "support", "text": "优先客服支持"},
 )
 
@@ -1042,12 +1053,9 @@ class MembershipStore:
                 self._persist()
             du["date"] = day
             du["download"] = 0
-            du["original"] = 0
-            du["batch_material"] = 0
-            du["ai_subtitle"] = 0
-            du["subtitle"] = 0
-            du["subtitle_batch"] = 0
-            du["image_translate"] = 0
+            du["cloud"] = 0
+            for _dead in _DEAD_USAGE_KEYS:      # 清掉历史状态文件里的死键
+                du.pop(_dead, None)
 
     def quota_state(self, resource: str) -> dict[str, Any]:
         """查询某资源的当日用量/上限（按当前档位：免费 or 会员）。unlimited 恒放行。"""
