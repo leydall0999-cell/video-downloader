@@ -7618,9 +7618,14 @@
     }
     const t = memTrackData(key);
     let head = '';
-    if (key === 'download' && Array.isArray(t.benefits) && t.benefits.length) {
-      head = `<ul class="mem-benefits">${t.benefits.map((b) => `<li>${escHtml(b.text || b)}</li>`).join('')}</ul>`;
-    }
+    // 2026-10-04：AI 轨也要渲染权益清单。此前只有 download 轨渲染 benefits，
+    // AI 会员页只有一行「含下载会员全部权益」——ai_member.features 一直在接口里，
+    // 前端从没显示过（用户反馈「AI 会员补充权益」）。
+    // ⚠️ 两轨字段名不同：下载轨是 benefits（对象数组），AI 轨是 features（字符串数组）。
+    const featList = key === 'download'
+      ? (Array.isArray(t.benefits) ? t.benefits.map((b) => escHtml(b.text || b)) : [])
+      : (Array.isArray(t.features) ? t.features.map((f) => escHtml(f)) : []);
+    if (featList.length) head = `<ul class="mem-benefits">${featList.map((x) => `<li>${x}</li>`).join('')}</ul>`;
     const meta = key === 'download'
       ? (pl) => (pl.days ? `${pl.days} 天全速提取` : '')
       : key === 'ai'
