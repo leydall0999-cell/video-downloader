@@ -53,7 +53,10 @@ def test_benefits_cover_quotas() -> None:
             # 免费 0 且会员有配额 → 会员应有、免费不该有（这里只验会员侧有文案）
             check(f"[覆盖] 免费不开放的 {key} 仍应是会员权益", key in keys)
     check("[数值] 下载任务文案带真实配额数字", "1000 次/日" in texts)
-    check("[数值] 原画文案带真实配额数字", "100 次/日" in texts)
+    check("[数值] 本地抠图文案带真实配额数字", "500 次/日" in texts)
+    # 2026-10-04：原画/批量占位配额已下线，权益文案里不得再出现这两份不存在的承诺
+    check("[清理] 不再承诺「原画 N 次/日」", "原画" not in texts)
+    check("[清理] 不再承诺「批量下载素材」", "批量下载素材" not in texts)
 
 
 def test_benefits_unlimited_items() -> None:

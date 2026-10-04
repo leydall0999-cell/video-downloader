@@ -1,0 +1,149 @@
+# -*- coding: utf-8 -*-
+"""「今日使用」功能配额表必须与服务器真实拦截点一致（2026-10-04）
+
+背景（真实事故）：这张表在会员引擎 V1 时是从另一个产品 DataTool 整份抄过来的
+（提交 26aa558 说明里写着「照搬 DataTool 三轨」），9 行里 6 行**从来没有任何
+实现** —— 全仓搜不到对应路由、没有 use_daily 拦截点：
+
+    插件原画解析 / AI字幕识别 / 插件批量下载素材 / 插件批量下载评论 /
+    插件批量下载数据 / 插件批量下载字幕 / 图片翻译（+ AI_FEATURES 里的视频总结）
+
+用户在个人中心看到 9 个功能，实际只有 1 个能用；会员页还把它们当卖点文案。
+本守卫钉死：**表里每一行的 resource，都必须能在 server/ 业务代码里搜到真实的
+配额拦截点**（use_daily("X") / quota_state("X")）。想加功能进表，必须先实现出来。
+
+同时钉：
+  ① 表里不得残留已下线的死资源键，也不得用从 DataTool 抄来的「插件…」命名；
+  ② 每行的 free_limit / member_limit 必须与 FREE_DAILY_LIMITS /
+     DAILY_QUOTA_LIMITS 一致（「体验剩余」列直接取这两个值，不一致会打架）；
+  ③ download_benefits 的权益文案不得承诺已下线功能，且真正生效的配额必须有文案。
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import re
+import sys
+
+_HERE = pathlib.Path(__file__).resolve().parent
+_SERVER = _HERE.parent
+if str(_SERVER) not in sys.path:
+    sys.path.insert(0, str(_SERVER))
+
+_MP = (_SERVER / "membership.py").read_text(encoding="utf-8")
+
+# 已下线资源（2026-10-04 随占位功能移除）
+DEAD_RESOURCES = ("original", "batch_material", "comment", "data",
+                  "ai_subtitle", "subtitle_batch", "image_translate")
+
+FAILS: list[str] = []
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    print(("  ✅ " if cond else "  ❌ ") + name + (("  —— " + detail) if detail and not cond else ""))
+    if not cond:
+        FAILS.append(name)
+
+
+def _business_sources() -> list[tuple[str, str]]:
+    """server/ 下所有业务 .py（跳过 tests / 缓存 / membership.py 本身）。"""
+    out: list[tuple[str, str]] = []
+    for p in sorted(_SERVER.rglob("*.py")):
+        parts = set(p.parts)
+        if "tests" in parts or "__pycache__" in parts or p.name == "membership.py":
+            continue
+        try:
+            out.append((str(p.relative_to(_SERVER)), p.read_text(encoding="utf-8")))
+        except OSError:
+            continue
+    return out
+
+
+def _parse_rows() -> list[dict]:
+    blk = re.search(r"FEATURE_USAGE_DEFS:[^\[]*\[(.*?)\n\]", _MP, re.S)
+    assert blk, "server/membership.py 必须仍定义 FEATURE_USAGE_DEFS"
+    rows = []
+    for m in re.finditer(
+        r'"key":\s*"([^"]+)".*?"resource":\s*"([^"]+)".*?'
+        r'"free_limit":\s*(-?\d+).*?"member_limit":\s*(-?\d+)',
+        blk.group(1), re.S,
+    ):
+        rows.append({"key": m.group(1), "resource": m.group(2),
+                     "free": int(m.group(3)), "member": int(m.group(4))})
+    assert rows, "FEATURE_USAGE_DEFS 解析不到任何行（格式变了？）"
+    return rows
+
+
+def _parse_limits(name: str) -> dict[str, int]:
+    blk = re.search(name + r":[^\{]*\{(.*?)\n\}", _MP, re.S)
+    assert blk, f"server/membership.py 必须仍定义 {name}"
+    return {m.group(1): int(m.group(2))
+            for m in re.finditer(r'"([^"]+)":\s*(\d+)', blk.group(1))}
+
+
+def test_rows_have_real_gate() -> None:
+    print("\n[A] 表里每一行都必须在业务代码里有真实配额拦截点")
+    rows = _parse_rows()
+    srcs = _business_sources()
+    for r in rows:
+        res = re.escape(r["resource"])
+        pat = re.compile(r'(use_daily|quota_state)\(\s*["\']' + res + r'["\']')
+        hit = [f for f, s in srcs if pat.search(s)]
+        check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
+              bool(hit), f"server/ 里搜不到（{r['key']} resource={r['resource']}）")
+
+
+def test_no_dead_or_datatool_rows() -> None:
+    print("\n[B] 不得残留已下线资源 / DataTool 命名")
+    for r in _parse_rows():
+        check(f'[{r["key"]}] 不是已下线资源', r["resource"] not in DEAD_RESOURCES,
+              f'resource={r["resource"]} 属于 2026-10-04 下线清单')
+        check(f'[{r["key"]}] 不是 DataTool 的「插件…」命名',
+              not r["key"].startswith("plugin_"), "VDL 侧对应功能请用真实命名")
+
+
+def test_limits_consistent() -> None:
+    print("\n[C] 表里的限额必须与两张配额表一致")
+    daily, free = _parse_limits("DAILY_QUOTA_LIMITS"), _parse_limits("FREE_DAILY_LIMITS")
+    for r in _parse_rows():
+        if r["member"] >= 0:
+            check(f'[{r["key"]}] member_limit 与 DAILY_QUOTA_LIMITS 一致',
+                  daily.get(r["resource"]) == r["member"],
+                  f'表里 {r["member"]} vs 配额表 {daily.get(r["resource"])}')
+        if r["free"] >= 0:
+            check(f'[{r["key"]}] free_limit 与 FREE_DAILY_LIMITS 一致',
+                  free.get(r["resource"]) == r["free"],
+                  f'表里 {r["free"]} vs 配额表 {free.get(r["resource"])}')
+
+
+def test_benefits_text_honest() -> None:
+    print("\n[D] 权益文案不得承诺已下线功能，且真配额必须有文案")
+    blk = re.search(r"_BENEFIT_FROM_LIMITS:[^(]*\((.*?)\n\)", _MP, re.S)
+    assert blk, "server/membership.py 必须仍定义 _BENEFIT_FROM_LIMITS"
+    body = blk.group(1)
+    check("不承诺「原画 / 4K 直链解析 N 次/日」",
+          '"original"' not in body and "原画 / 4K" not in body,
+          "原画是清晰度档位门（>1080P 需会员），不按次计费")
+    check("不承诺「批量下载素材 N 条/日」", "批量下载素材" not in body)
+    daily = _parse_limits("DAILY_QUOTA_LIMITS")
+    for key in daily:
+        check(f"配额 {key}={daily[key]} 有对应权益文案", f'("{key}"' in body)
+
+
+def main() -> int:
+    test_rows_have_real_gate()
+    test_no_dead_or_datatool_rows()
+    test_limits_consistent()
+    test_benefits_text_honest()
+    print("\n" + "=" * 46)
+    if FAILS:
+        print("❌ 失败 %d 项：" % len(FAILS))
+        for f in FAILS:
+            print("   - " + f)
+        return 1
+    print("✅ 功能配额表与真实拦截点一致（占位功能清理回归通过）")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

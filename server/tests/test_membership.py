@@ -18,6 +18,7 @@ _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
+import membership as M  # noqa: E402  （2026-10-04 新增：断言 UNLIMITED_QUOTA 已清空）
 from membership import (  # noqa: E402
     AI_PLANS, CREDIT_PACKS, DAILY_QUOTA_LIMITS, DOWNLOAD_PLANS, MembershipStore,
 )
@@ -149,10 +150,13 @@ def test_free_quota_10_then_blocked():
     assert "免费" in r["error"] and "开通下载会员" in r["error"]
     q = st.quota_state("download")
     assert q["tier"] == "free" and q["limit"] == 10 and q["used"] == 10
-    # 免费不开放原画/批量
-    assert st.quota_state("original")["allowed"] is False
-    assert st.quota_state("batch_material")["allowed"] is False
-    print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；原画/批量免费不开放")
+    # 2026-10-04：原画/批量两条占位配额已下线（原画是清晰度档位门而非次数配额），
+    # 这里改为钉住真实存在的免费档上限 + 未接线资源必须 fail-open 放行。
+    assert st.quota_state("matting")["limit"] == 8
+    assert st.quota_state("app_compute")["limit"] == 5
+    assert st.quota_state("original")["unknown"] is True, "已下线资源不应再被当配额拦"
+    assert st.quota_state("original")["allowed"] is True
+    print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；matting 8/app_compute 5；未知资源 fail-open")
 
 def test_app_compute_quota_free5_member200():
     """app_compute（本地算力）：免费 5 次/日超限拒绝；会员 200 次/日；跨日重置。"""
@@ -187,20 +191,24 @@ def test_member_quota_upgrade_after_activation():
     assert q["used"] == 10  # 已用计数保留
     assert q["remaining"] == DAILY_QUOTA_LIMITS["download"] - 10
     assert st.use_daily("download")["ok"] is True
-    # 原画/批量随会员解锁
-    assert st.quota_state("original")["allowed"] is True
-    assert st.quota_state("batch_material")["allowed"] is True
-    print("✅ 会员激活后 resolve 升 1000/日、原画/批量解锁、计数延续")
+    # 会员解锁本地重算力与抠图（2026-10-04：原画/批量占位配额已下线）
+    assert st.quota_state("app_compute")["tier"] == "member"
+    assert st.quota_state("app_compute")["limit"] == DAILY_QUOTA_LIMITS["app_compute"]
+    assert st.quota_state("matting")["limit"] == DAILY_QUOTA_LIMITS["matting"]
+    print("✅ 会员激活后 download 升 1000/日、抠图与本地重算力解锁、计数延续")
 
 def test_daily_quota_unlimited_and_unknown():
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
-    # unlimited 资源恒放行
-    assert st.quota_state("comment")["unlimited"] is True
-    assert st.use_daily("comment")["unlimited"] is True
-    # unknown 资源保守放行
+    # 2026-10-04：UNLIMITED_QUOTA 已清空（评论/数据批量功能不存在），
+    # 未知资源必须 fail-open 放行 —— 这是「表里没有 = 不拦」的唯一保证。
+    assert M.UNLIMITED_QUOTA == ()
+    for res in ("whatever_future", "comment", "data", "original"):
+        q = st.quota_state(res)
+        assert q["allowed"] is True, f"{res} 应 fail-open 放行，实际 {q}"
+        assert q.get("unlimited") is not True
     assert st.quota_state("whatever_future")["unknown"] is True
-    print("✅ 日配额：unlimited / unknown 保守放行")
+    print("✅ 日配额：未知/已下线资源一律 fail-open 放行")
 
 def test_daily_quota_reset_on_new_day():
     cur = [T0]

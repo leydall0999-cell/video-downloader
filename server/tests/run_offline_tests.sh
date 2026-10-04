@@ -490,3 +490,12 @@ run_one test_member_countdown.py
 #      三层核对：后端 _norm_plan_table 别名归一 → 前端两处模板 data-table 接线 +
 #      前后端映射表一致性 → 真接口 E2E（旧命名必须成功；传错表名不得写错表）。
 run_one test_plan_sale_table.py
+
+#  40. test_feature_usage_gate.py —— 「今日使用」功能配额表 vs 真实拦截点（2026-10-04）：
+#      真实事故：会员引擎 V1「照搬 DataTool」抄来 9 行功能配额，其中 6 行从未实现
+#      （插件原画解析/AI字幕识别/插件批量下载素材·评论·数据·字幕/图片翻译），
+#      用户在个人中心看到 9 个功能实际只有 1 个能用，会员页还拿它们做卖点。
+#      本守卫要求：每行 resource 都必须在 server/ 里搜到真实 use_daily/quota_state
+#      拦截点；不得残留已下线资源或 DataTool 的「插件…」命名；限额须与
+#      DAILY/FREE_DAILY_QUOTA_LIMITS 一致；权益文案不得承诺已下线功能。
+run_one test_feature_usage_gate.py
