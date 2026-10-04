@@ -41,22 +41,18 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def test_benefits_cover_quotas() -> None:
-    print("\n[A] 配额表 → 权益文案全覆盖（隐藏名单除外）")
+    print("\n[A] 配额表 → 权益文案全覆盖（条目只改措辞、不许删）")
     items = M.download_benefits()
     keys = {str(i.get("key")) for i in items}
     texts = " ".join(str(i.get("text")) for i in items)
     for key, limit in M.DAILY_QUOTA_LIMITS.items():
         if int(limit or 0) > 0:
-            # 2026-10-04 起支持「显式隐藏名单」：用户定档不展示带
-            # 「云端/算力/AI/本地」字眼的文案，配额与限流本身照旧生效。
-            if key in M._BENEFIT_HIDDEN:
-                check(f"[隐藏] 配额 {key} 在 _BENEFIT_HIDDEN 内（配额 {limit} 仍生效）",
-                      key not in keys)
-                continue
+            # 🔴 2026-10-04：这里**不能**有「隐藏名单」豁免。第一版误把用户说的
+            # 「隐藏那几个字」做成「整条隐藏」，权益条目少了一半 —— 权益是权益，
+            # 只改措辞。少了豁免，删条目立刻会红。
             check(f"[覆盖] 配额 {key}={limit} 有对应权益文案", key in keys)
     for key, limit in M.FREE_DAILY_LIMITS.items():
-        if int(limit or 0) == 0 and key in M.DAILY_QUOTA_LIMITS and key not in M._BENEFIT_HIDDEN:
-            # 免费 0 且会员有配额 → 会员应有、免费不该有（这里只验会员侧有文案）
+        if int(limit or 0) == 0 and key in M.DAILY_QUOTA_LIMITS:
             check(f"[覆盖] 免费不开放的 {key} 仍应是会员权益", key in keys)
     check("[数值] 下载任务文案带真实配额数字", "1000 次/日" in texts)
     # 2026-10-04：原画/批量占位配额已下线，权益文案里不得再出现这两份不存在的承诺
@@ -64,52 +60,41 @@ def test_benefits_cover_quotas() -> None:
     check("[清理] 不再承诺「批量下载素材」", "批量下载素材" not in texts)
 
 
-def test_benefits_hide_impl_wording() -> None:
-    print("\n[A2] 会员页不得出现「云端/算力/AI/本地」等实现口径字眼（2026-10-04 用户定档）")
-    # 注意：这里查的是**渲染后的文案**（download_benefits 的输出），不是源码里的
-    # _BENEFIT_FROM_LIMITS —— 那些模板保留着，隐藏靠 _BENEFIT_HIDDEN 名单过滤输出。
+def test_benefits_wording_only() -> None:
+    print("\n[A2] 权益文案不得含「云端/算力/AI/本地」字眼，但条目必须全保留")
+    # 定档原文（2026-10-04）：**隐藏那几个字，不是隐藏有关那几个字的全部条目**。
+    # 正解是改措辞（本地一键抠图→一键抠图、云端算力→在线处理…），条目、配额、限流全不动。
     kws = ("云端", "算力", "AI", "本地")
     items = M.download_benefits()
+    by_key = {str(i.get("key")): str(i.get("text")) for i in items}
+
+    # ① 措辞
     for it in items:
         text = str(it.get("text") or "")
         hit = [k for k in kws if k in text]
-        check(f"[隐藏] {it.get('key')} 文案不含实现口径词", not hit, f"命中 {hit}：{text}")
-    check("[隐藏] _BENEFIT_HIDDEN 非空（别把名单清空后忘了隐藏意图）",
-          bool(M._BENEFIT_HIDDEN))
-    # 🔴 2026-10-04 变异测试发现的守卫漏洞：原先只断言「名单里的 key 配额还在」，
-    #    但如果有人把 key **连配额一起删了**（拿隐藏当取消限流），断言会因
-    #    「配额不存在」而整体跳过 ⇒ 仍绿。必须钉住「隐藏名单每一项的具体限额」。
-    EXPECTED_HIDDEN_LIMITS = {"matting": (500, 8), "cloud": (200, 3), "app_compute": (200, 5)}
-    for key, (member_v, free_v) in EXPECTED_HIDDEN_LIMITS.items():
+        check(f"[措辞] {it.get('key')} 文案不含这些字", not hit, f"命中 {hit}：{text}")
+    for f in getattr(M, "AI_FEATURES", []):
+        hit = [k for k in kws if k in str(f)]
+        check("[措辞] AI_FEATURES 不含这些字", not hit, f"命中 {hit}：{f}")
+
+    # ② 🔴 条目数：每条配额都要有文案（第一版做错的地方，防线在这）
+    for key, limit in M.DAILY_QUOTA_LIMITS.items():
+        if int(limit or 0) > 0:
+            check(f"[条目] 配额 {key} 的条目仍在", str(key) in by_key)
+    check("[条目] no_credits 说明项仍在", "no_credits" in by_key)
+
+    # ③ 配额与限流数值原样（改措辞不该顺手改额度）
+    EXPECTED = {"download": (1000, 10), "matting": (500, 8),
+                "cloud": (200, 3), "app_compute": (200, 5)}
+    for key, (member_v, free_v) in EXPECTED.items():
         check(f"[限流] {key} 会员限额仍为 {member_v}/日",
               int(M.DAILY_QUOTA_LIMITS.get(key) or 0) == member_v)
         check(f"[限流] {key} 免费限额仍为 {free_v}/日",
               int(M.FREE_DAILY_LIMITS.get(key) or 0) == free_v)
-    # ⚠️ FEATURE_USAGE_DEFS 的 **key 与配额键不同名**（MEMORY 铁律：界面 id ≠ 服务端表名，
-    #   如 local_matting ↔ matting、app_compute ↔ app_compute），必须按 resource 关联，
-    #   直接拿 key 去找会「找不到 ⇒ 误判为配额被删」。
-    # cloud 例外：桌面端**本来就没有** cloud 的 use_daily 拦截点（App 算力全在本机跑），
-    #   所以它不在 FEATURE_USAGE_DEFS 里是正确状态（守卫 test_feature_usage_gate.mjs
-    #   正是靠这条把它挡在表外）。配额表里的 cloud 是「账号级两端共享网页端用量」，
-    #   有 DAILY/FREE 限额即可，不要求出现在桌面端使用统计表。
-    row = next((d for d in M.FEATURE_USAGE_DEFS
-                if str(d.get("resource")) == key), None)
-    if key == "cloud":
-        check("[限流] cloud 不在桌面端使用统计表（App 无 cloud 拦截点，属正确状态）",
-              row is None)
-    else:
-        check(f"[限流] {key} 仍在 FEATURE_USAGE_DEFS（按 resource 关联）", row is not None)
-        if row is not None:
-            check(f"[限流] {key} 的 member_limit 仍为 {member_v}",
-                  int(row.get("member_limit", 0)) == member_v)
-    # 隐藏名单里的「配额类」key 必须真的还挂着配额（no_credits 是纯说明项，豁免）
-    quota_backed = [k for k in M._BENEFIT_HIDDEN
-                    if k in M.DAILY_QUOTA_LIMITS or k in M.FREE_DAILY_LIMITS
-                    or any(str(d.get("key")) == k for d in M.FEATURE_USAGE_DEFS)]
-    check("[限流] 隐藏名单里至少有一条是「有配额」的（否则隐藏名单没实际意义）",
-          bool(quota_backed))
-
-
+    # ⚠️ FEATURE_USAGE_DEFS 的 key 与配额键不同名（local_matting↔matting），
+    #   必须按 resource 关联，直接用 key 找会「找不到 ⇒ 误判为配额被删」。
+    # cloud 例外：桌面端本就没有 cloud 拦截点（App 算力全在本机跑），
+    #   它不在 FEATURE_USAGE_DEFS 里是正确状态（test_feature_usage_gate.mjs 靠这条挡它）。
 def test_benefits_unlimited_items() -> None:
     print("\n[B] 会员不限次的功能必须写明「不限」")
     items = M.download_benefits()
@@ -124,10 +109,11 @@ def test_benefits_unlimited_items() -> None:
 def test_benefits_key_notes() -> None:
     print("\n[C] 关键说明项（避免用户误解）")
     by_key = {str(i.get("key")): str(i.get("text")) for i in M.download_benefits()}
-    # 2026-10-04：no_credits（含「AI」「云端」字眼）已进 _BENEFIT_HIDDEN，
-    # 不再对会员页展示 —— 「下载会员不送积分」改由 plans() 的积分说明与购买页承载。
-    check("[说明] no_credits 已按定档隐藏（含 AI/云端字眼）", "no_credits" in M._BENEFIT_HIDDEN)
-    check("[说明] no_credits 确实不在渲染输出里", "no_credits" not in by_key)
+    # 2026-10-04：no_credits 仍在（条目不许删），只是措辞去掉了「AI / 云端」字眼 ——
+    # 「下载会员不送积分」这条关键说明不能丢。
+    check("[说明] no_credits 条目仍在", "no_credits" in by_key)
+    check("[说明] no_credits 仍写明「不含积分额度」",
+          "不含" in by_key.get("no_credits", "") and "积分" in by_key.get("no_credits", ""))
     check("[说明] 写明 1080P 及以上清晰度", "quality" in by_key and "1080P" in by_key["quality"])
     check("[说明] 写明设备数 2 台", "devices" in by_key and "2 台" in by_key["devices"])
     check("[说明] 写明高速通道", "speed" in by_key)
@@ -141,8 +127,8 @@ def test_plans_uses_generated_benefits() -> None:
     st = M.MembershipStore()
     plans = st.plans()
     benefits = plans.get("download_member", {}).get("benefits") or []
-    # 2026-10-04 隐藏 4 条后剩 6 条（下载任务 / 字幕提取 / 清晰度 / 设备数 / 高速通道 / 客服）
-    check("[接线] plans().download_member.benefits 非空", len(benefits) >= 6)
+    # 2026-10-04：条目全保留（改措辞不删条目）后为 10 条
+    check("[接线] plans().download_member.benefits 非空", len(benefits) >= 10)
     check("[接线] 与 download_benefits() 条数一致", len(benefits) == len(M.download_benefits()))
     ai = plans.get("ai_member", {})
     check("[接线] AI 会员仍带 plans + 捆绑说明", bool(ai.get("plans")) and "下载会员" in str(ai.get("bundle_note")))
@@ -197,7 +183,7 @@ def test_period_usage_reads_history() -> None:
 
 def main() -> int:
     test_benefits_cover_quotas()
-    test_benefits_hide_impl_wording()
+    test_benefits_wording_only()
     test_benefits_unlimited_items()
     test_benefits_key_notes()
     test_plans_uses_generated_benefits()

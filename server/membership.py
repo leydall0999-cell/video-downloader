@@ -84,7 +84,7 @@ UNLIMITED_QUOTA: tuple[str, ...] = ()
 # 🔴 2026-10-04 清理：AI 字幕识别 / 视频总结 / 图片翻译体验三项全无实现（全仓搜不到
 #    对应路由），只在这段文案里出现过。留着 = 会员页拿不存在的功能做卖点。
 AI_FEATURES: list[str] = [
-    "字幕提取 · 转码 · 拼接等云端算力", "更多 AI 权益持续新增",
+    "字幕提取 · 转码 · 拼接等处理功能", "更多权益持续新增",
 ]
 
 # 个人中心「今日使用」功能配额表（与前端表格四列对应：功能/体验剩余/权益余额/积分单价）
@@ -595,47 +595,36 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 # 出现「代码里有、页面上没有」。现在按 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 生成，
 # 守卫 test_membership_benefits 钉住「有配额必有文案」，以后不会再漏。
 #
-# 🔴 2026-10-04 用户要求：文案里带「云端 / 算力 / AI / 本地」这些**实现口径字眼**的
-#    一律不对会员页展示（这些词讲的是架构与成本口径，不是用户视角的权益）。
-#    做法是**显式隐藏名单**而不是删条目 —— 配额表与拦截点一律不动，限流照旧生效
-#    （本地抠图免费 8/日、云端算力 3/日等是风控，不展示 ≠ 取消）。
-#    将来要恢复展示，把 key 从这里移走即可。
+# 🔴 2026-10-04 用户定档：**条目全部保留，只把「云端 / 算力 / AI / 本地」这几个字
+#    从文案里去掉**（它们是架构与成本口径，不是用户视角的权益）。
+#    例：原来「本地一键抠图 500 次/日」→ 现在「一键抠图 500 次/日」；
+#        「云端算力（转码/拼接/…）」→「在线处理（转码/拼接/…）」。
+#    ⚠️ 不是隐藏条目 —— 每条权益、配额、限流都照旧（见 test_benefits_hide_impl_wording 守卫）。
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
-    ("matting", "本地一键抠图 {v} 次/日"),
-    ("cloud", "云端算力（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
-    ("app_compute", "App 本地重算力（转码 / 拼接 / 压缩 / 超分）{v} 次/日"),
+    ("matting", "一键抠图 {v} 次/日"),
+    ("cloud", "在线处理（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
+    ("app_compute", "视频处理（转码 / 拼接 / 压缩 / 超分）{v} 次/日"),
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
     {"key": "quality", "text": "清晰度：1080P 及以上全部开放（>1080P 需会员）"},
     {"key": "devices", "text": "同一账号 2 台设备同时在线"},
     {"key": "speed", "text": "高速通道 · 全速不限速"},
-    {"key": "no_credits", "text": "不含 AI 积分：云端抠图等需另购 AI 会员或积分包"},
+    {"key": "no_credits", "text": "不含积分额度：抠图等功能需另购积分包"},
     {"key": "support", "text": "优先客服支持"},
 )
-
-# 🔴 不在会员页展示的权益 key（2026-10-04 用户定档：隐藏「云端/算力/AI/本地」字眼）。
-#    仅影响文案展示，**配额与限流完全不变**。命中原因写在这里，方便日后恢复或复查：
-_BENEFIT_HIDDEN: dict[str, str] = {
-    "matting": "文案含「本地」",
-    "cloud": "文案含「云端」「算力」",
-    "app_compute": "文案含「本地」「算力」",
-    "no_credits": "文案含「AI」「云端」",
-}
 
 
 def download_benefits() -> list[dict[str, str]]:
     """下载会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。
 
-    `_BENEFIT_HIDDEN` 里的 key 只从**输出**里滤掉，配额表与限流逻辑一概不动
-    （用户定档：不展示「本地/云端/算力/AI」这类实现口径字眼）。
+    2026-10-04 起不再有隐藏名单：条目全部保留，只把「云端/算力/AI/本地」几个字
+    从文案里去掉了（见 _BENEFIT_FROM_LIMITS 上方注释）。
     """
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     for key, tpl in _BENEFIT_FROM_LIMITS:
-        if key in _BENEFIT_HIDDEN:
-            continue
         v = int(DAILY_QUOTA_LIMITS.get(key) or 0)
         if v > 0:
             out.append({"key": key, "text": tpl.format(v=v)})
@@ -643,12 +632,10 @@ def download_benefits() -> list[dict[str, str]]:
     # member_limit = -1 的功能 = 会员不限次（字幕提取等）
     for d in FEATURE_USAGE_DEFS:
         k = str(d.get("key"))
-        if k in _BENEFIT_HIDDEN:
-            continue
         if int(d.get("member_limit", 0)) == -1 and k not in seen:
             out.append({"key": k, "text": f"{d.get('name') or k}：不限"})
             seen.add(k)
-    out.extend(dict(x) for x in _BENEFIT_EXTRA if str(x.get("key")) not in _BENEFIT_HIDDEN)
+    out.extend(dict(x) for x in _BENEFIT_EXTRA)
     return out
 
 
