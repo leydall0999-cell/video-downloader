@@ -2025,7 +2025,7 @@ main > .panel { margin-top: 3rem; }
 .pf-credit-note { margin-top: .15rem; font-size: .74rem; color: var(--text-mute); }
 .pf-credit-note.is-perm { color: var(--success); font-weight: 600; }
 
-/* —— 表单字段（激活码 / 改密 / 重置密码共用）—— */
+/* —— 表单字段（改密 / 重置密码共用；原激活码卡片已于 2026-10-04 移除）—— */
 .pf-field { display: flex; flex-direction: column; gap: .5rem; }
 .pf-field-label { font-size: .82rem; color: var(--text-mute); line-height: 1.3; }
 .pf-field input { padding: .6rem .7rem; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: .92rem; font-family: inherit; background: var(--surface); color: var(--text); }

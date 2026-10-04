@@ -61,14 +61,29 @@ def member_status(request: Request) -> dict[str, Any]:
 
 @router.post("/api/member/activate")
 def member_activate(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """激活/续费。payload: {"code": "download_year"|"ai_15000"|"credits_5000"}。需登录。"""
+    """套餐 code 直激活（**仅超级管理员补单用**）。payload: {"code": "download_year"}。
+
+    🔒 2026-10-04 对齐桌面端 1.0.36（2026-09-25 已收口，网页端当时漏改）：
+    此前本路由只判「是否登录」，于是**任意登录用户**都能把套餐 code（如
+    `download_year` / `credits_5000`）当激活码提交，本地直接发放——一条 curl
+    即可白嫖任意下载/AI 套餐或永久积分。虽然云端 `authority` 快照是覆盖式、
+    下一次 `/api/member/status`（节流 15s）就会回滚，但那 15 秒窗口足够真实
+    用掉额度，且云端 `redeem` 通道已于 2026-09-26 下线（`VDL_REDEEM_DISABLED=1`）
+    ⇒ 用户既兑不了真卡密、又能白嫖，是纯负收益后门。
+    现在与桌面端一致：非超管一律 `USE_REDEEM` 拒绝；普通用户走在线支付购买。
+    """
     uid = _require_user(request)
     if not uid:
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    from auth_store import user_is_admin
+    if not user_is_admin(uid):
+        return {"ok": False,
+                "error": "套餐直激活仅限超级管理员；请通过会员中心购买",
+                "code": "USE_REDEEM"}
     code = str(payload.get("code") or "").strip()
     if not code:
         return {"ok": False, "error": "缺少 code"}
-    return _store(request).activate(code, via="ui_test")
+    return _store(request).activate(code, via="admin_direct")
 
 
 @router.post("/api/member/credits/spend")

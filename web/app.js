@@ -444,7 +444,9 @@
     pfPurchasesFilter: $('pfPurchasesFilter'), pfPurchases: $('pfPurchases'),
     pfCreditsLog: $('pfCreditsLog'),
     pfLogoutBtn: $('pfLogoutBtn'),
-    pfActivateCode: $('pfActivateCode'), pfActivateBtn: $('pfActivateBtn'), pfMemberStatus: $('pfMemberStatus'),
+    // 2026-10-04：pfActivateCode / pfActivateBtn 随「激活码 / 卡密」卡片一并移除
+    // （云端卡密通道已下线 + 后端已收口为仅超管），普通用户只走在线支付购买。
+    pfMemberStatus: $('pfMemberStatus'),
     // 网页版充值（2026-09-30）：套餐卡 + 支付二维码弹窗
     pfPlans: $('pfPlans'), pfPlanNote: $('pfPlanNote'),
     payModal: $('payModal'), payModalClose: $('payModalClose'), payAmount: $('payAmount'),
@@ -7225,7 +7227,9 @@
       const t = h.at ? pfFmtDate(h.at, true) : '—';
       const name = escHtml(pfPlanName(h.code));
       const kind = escHtml(pfPurchaseType(h.code));
-      const via = h.via === 'ui_test' ? '激活码' : escHtml(h.via || '—');
+      // via 映射：2026-10-04 后端改用 admin_direct（ui_test 时代的历史流水仍保留）
+      const viaMap = { ui_test: '激活码', admin_direct: '管理员补单' };
+      const via = viaMap[h.via] || escHtml(h.via || '—');
       let expire = '—';
       if (h.code && h.code.startsWith('download_')) {
         expire = dl.active ? `至 ${pfFmtDate(dl.expire_at)}` : '已过期';
@@ -8237,28 +8241,9 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       }
     });
   }
-  el.pfActivateBtn.addEventListener('click', async () => {
-    const code = el.pfActivateCode.value.trim();
-    if (!code) { el.pfMemberStatus.textContent = '请输入激活码'; return; }
-    if (!pfToken()) { el.pfMemberStatus.textContent = '请先登录'; return; }
-    el.pfMemberStatus.textContent = '激活中…';
-    try {
-      const data = await request('/api/member/activate', {
-        method: 'POST',
-        body: JSON.stringify({ code }),
-        headers: pfAuthHeaders(),
-      });
-      if (data.ok) {
-        el.pfMemberStatus.textContent = '激活成功 ✅';
-        el.pfActivateCode.value = '';
-        pfLoad();
-      } else {
-        el.pfMemberStatus.textContent = data.error || '激活失败';
-      }
-    } catch (e) {
-      el.pfMemberStatus.textContent = '请求失败：' + (e && e.message || e);
-    }
-  });
+  // 🔒 2026-10-04 移除「激活码」按钮监听：后端 /api/member/activate 已收口为
+  //    仅超级管理员（对齐桌面端 1.0.36），云端卡密通道亦已下线（redeem 返 410），
+  //    此处留着只会让用户输入真卡密后看到「激活失败」。充值一律走 #pfPlans 在线支付。
 
   // ======================================================================
   // ===== 登录强制 + 账号安全（2026-09-28 对齐 App）=====

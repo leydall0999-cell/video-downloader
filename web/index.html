@@ -781,7 +781,7 @@
   </div>
   </section>
 
-  <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 激活码 ===== -->
+  <!-- ===== 个人中心（网页版轻量版，2026-09-11）：账号登录/注册 + 会员状态 + 权益总览 ===== -->
   <section id="profileView" hidden aria-labelledby="pfTitle">
     <h2 id="pfTitle" class="guide-title">👤 个人中心</h2>
 
@@ -817,7 +817,7 @@
       </div>
 
       <div class="panel pf-body">
-        <!-- ① 个人资料：总览头 + 会员/积分卡 + 使用统计 + 激活码兑换 -->
+        <!-- ① 个人资料：总览头 + 会员/积分卡 + 使用统计 + 套餐购买（激活码入口已于 2026-10-04 移除） -->
         <div class="pf-panel" id="pfPanelOverview">
           <div class="pf-ov">
             <div class="pf-ov-head">
@@ -837,6 +837,7 @@
               </div>
             </div>
             <p class="pf-ov-desc">查看当前会员、积分等权益；购买记录、积分流水、账号安全请在上方子菜单查看。</p>
+            <span class="convert-status" id="pfMemberStatus" aria-live="polite"></span>
 
             <div class="pf-card-grid">
               <div class="pf-card">
@@ -888,19 +889,12 @@
               </div>
             </div>
 
-            <div class="pf-card pf-card-wide">
-              <div class="pf-card-h"><span class="pf-card-ic" aria-hidden="true">🎟</span><span class="pf-card-t">激活码 / 卡密</span></div>
-              <div class="pf-card-c">
-                <label class="pf-field">
-                  <span class="pf-field-label">激活码</span>
-                  <input type="text" id="pfActivateCode" placeholder="输入激活码开通或续费会员" />
-                </label>
-                <div class="pf-ov-actions pf-ov-actions-inline">
-                  <button type="button" class="pf-ov-btn" id="pfActivateBtn">激活</button>
-                </div>
-                <span class="convert-status" id="pfMemberStatus" aria-live="polite"></span>
-              </div>
-            </div>
+            <!-- 🔒 2026-10-04 移除「激活码 / 卡密」卡片：云端卡密通道已下线
+                 （授权中心 VDL_REDEEM_DISABLED=1，redeem 返 410），而这里也不做
+                 签名校验、只是把输入当套餐 code 直接发放 ⇒ 输入真卡密没用、输入
+                 download_year 会显示「激活成功 ✅」但 15 秒后被云端权威快照回滚。
+                 与桌面端 1.0.36 对齐：普通用户只走在线支付购买；管理员补单走后台。
+                 状态位 #pfMemberStatus 保留（头像上传等仍在用），已上移到总览说明下方。 -->
 
             <div class="pf-ov-foot">注册时间：<span id="pfCreated">—</span></div>
           </div>
