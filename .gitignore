@@ -66,3 +66,9 @@ build_server_resources/
 
 # 项目本地数据（记忆/技能/会话产物，与主仓库 app-dev/web-dev 一致忽略）
 .workbuddy/
+
+# ── 历史遗留的本地备份/快照/原型文件（2026-10-05 误提交过一次，已移出版本库）──
+web_backup_*/
+PROJECT_SNAPSHOT_*.md
+docs/voice-clone-verify/
+*_原型.html
