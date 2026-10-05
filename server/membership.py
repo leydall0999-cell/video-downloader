@@ -1491,6 +1491,33 @@ class MembershipStore:
         pol = pol or free_trial_policy()
         return _trial_key(op, str(pol.get("mode"))) in self._trials_raw()
 
+    def _cloud_token(self) -> str:
+        """取本 store 的云账号 token；本 store 没有时回落全局 store。
+
+        🔴 2026-10-06 修复（跨端「仅一次」静默失效根因）：
+        云端账号由 cloud_account 写入**全局** `app.member_store`，而 `current_member_store(request)`
+        对「已登录本地账号」返回的是 **per-user** store —— 二者不一致，导致免费体验名额跨端
+        领取读不到 token → `_trial_claim_remote` 直接 `offline` 静默 fail-open（本机放行、
+        不上报授权中心），跨端「仅一次」形同虚设。这里回落全局 store 取到真实 token。
+        """
+        try:
+            t = str(((self._state.get("meta") or {}).get("account") or {}).get("token") or "").strip()
+            if t:
+                return t
+        except Exception:
+            pass
+        try:
+            import app  # 懒导入，避免与 app 的循环依赖
+            gstore = getattr(app, "member_store", None)
+            if gstore is not None:
+                gstore._ensure_loaded()
+                gt = str(((gstore._state.get("meta") or {}).get("account") or {}).get("token") or "").strip()
+                if gt:
+                    return gt
+        except Exception:
+            pass
+        return ""
+
     def _trial_claim_remote(self, op: str, mode: str) -> str:
         """跨端原子领取免费名额。返回 'fresh' | 'already' | 'offline'。
 
@@ -1501,9 +1528,7 @@ class MembershipStore:
         """
         try:
             self._ensure_loaded()
-            meta = self._state.get("meta", {}) or {}
-            account = meta.get("account", {}) or {}
-            token = str(account.get("token") or "")
+            token = self._cloud_token()
         except Exception:
             return "offline"
         if not token:
