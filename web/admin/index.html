@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频工坊 · AI 计费后台</title>
+<style>
+  :root { --bg:#0f1320; --panel:#171c2e; --panel2:#1f2740; --line:#2a3350; --txt:#e6e9f2; --muted:#9aa3c0; --accent:#5b8cff; --red:#ff6b6b; --green:#42d392; --amber:#ffb84d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  .spacer { margin-left:auto; }
+  .who { color:var(--muted); font-size:12px; }
+  input, select { background:var(--panel2); border:1px solid var(--line); color:var(--txt); padding:8px 10px; border-radius:8px; outline:none; }
+  input:focus, select:focus { border-color:var(--accent); }
+  input[type=checkbox] { width:16px; height:16px; }
+  button { background:var(--accent); color:#fff; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:13px; }
+  button.ghost { background:var(--panel2); color:var(--txt); border:1px solid var(--line); }
+  button:active { transform:translateY(1px); }
+  .wrap { padding:20px 24px; display:grid; gap:20px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .panel h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .panel h2 .dot { width:8px; height:8px; border-radius:50%; background:var(--accent); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  td.cost input { width:84px; text-align:right; }
+  td.where, td.real { color:var(--muted); font-size:12px; line-height:1.5; max-width:280px; }
+  tr.changed td.cost input { border-color:var(--amber); }
+  tr.changed td.name::after { content:" 已改价"; color:var(--amber); font-size:11px; }
+  .row { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  .row label { color:var(--muted); font-size:13px; }
+  .note { color:var(--muted); font-size:12px; line-height:1.6; }
+  .policy { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin-bottom:14px; }
+  .empty { color:var(--muted); padding:14px 0; }
+  .err { color:var(--red); }
+  #toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:var(--panel2); border:1px solid var(--line); padding:10px 16px; border-radius:10px; display:none; z-index:9; }
+</style>
+</head>
+<body>
+<header>
+  <h1>视频工坊 · AI 计费后台</h1>
+  <span class="who" id="who">未登录</span>
+  <div class="spacer"></div>
+  <button id="save">保存改动</button>
+  <button id="reload" class="ghost">重新加载</button>
+</header>
+
+<div class="wrap">
+  <section class="panel" id="gate">
+    <h2><span class="dot"></span>登录</h2>
+    <p class="note">
+      这里要用<b>超级管理员账号</b>的登录 token。在网站前台登录那个超管账号后，
+      浏览器里已经存好了 —— 也可以点下面先自动读取。
+    </p>
+    <div class="row">
+      <input id="token" type="password" placeholder="Bearer token（留空则自动取前台登录态）" style="width:340px" autocomplete="off">
+      <button id="login">登录</button>
+    </div>
+  </section>
+
+  <section class="panel" id="main" style="display:none">
+    <h2><span class="dot"></span>AI 积分单价</h2>
+    <div class="policy">
+      <div class="note" id="policyTxt"></div>
+    </div>
+    <table>
+      <thead><tr><th style="width:180px">功能</th><th style="width:110px">积分/次</th><th>平台真实成本</th><th>调用点</th></tr></thead>
+      <tbody id="costBody"></tbody>
+    </table>
+    <p class="note" style="margin-top:12px">
+      填 <b>0</b> = 该功能免费。改动保存后立即对所有用户生效（写入 <code>plans.json</code> 的 <code>credit_costs</code> 覆盖层）。
+      黄色边框 = 与代码默认值不同。
+    </p>
+  </section>
+
+  <section class="panel" id="trialPanel" style="display:none">
+    <h2><span class="dot"></span>免费试用策略</h2>
+    <div class="row">
+      <label><input type="checkbox" id="trialEnabled"> 启用「账号首次使用免费一次」</label>
+    </div>
+    <div class="row">
+      <label>口径</label>
+      <select id="trialMode">
+        <option value="once">账号首次使用免费一次（推荐）</option>
+        <option value="per_op">每个功能各免一次</option>
+        <option value="off">关闭（回到付费墙）</option>
+      </select>
+      <label>单价上限</label>
+      <input id="trialMaxCost" type="number" min="0" step="1" style="width:100px">
+      <span class="note">0 = 不限。填 20 ⇒ 单价超过 20 积分的功能不参与试用</span>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="trialMembersToo"> 会员也享受（默认不给，保住付费纪律）</label>
+    </div>
+    <p class="note" id="trialNote"></p>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  let TOKEN = '';
+  let ROWS = [];
+  let BASE = {};      // op -> 代码默认积分
+  let POLICY0 = {};   // 服务端返回的原始策略快照，用于只提交改动项
+
+  function toast(msg, ms) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(t._h);
+    t._h = setTimeout(() => { t.style.display = 'none'; }, ms || 2200);
+  }
+
+  async function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+    const r = await fetch(path, opts);
+    if (!r.ok) {
+      let detail = r.statusText;
+      try { detail = (await r.json()).detail || detail; } catch (e) { /* 非 JSON 响应 */ }
+      throw new Error(detail);
+    }
+    return r.json();
+  }
+
+  function renderCosts(rows) {
+    const body = $('costBody');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="empty">没有计费项</td></tr>'; return; }
+    body.innerHTML = rows.map((r) => {
+      const diff = r.overridden ? ' changed' : '';
+      return '<tr class="' + diff.trim() + '" data-op="' + r.op + '">' +
+        '<td class="name">' + esc(r.name) + '</td>' +
+        '<td class="cost"><input type="number" min="0" step="1" value="' + r.effective + '"></td>' +
+        '<td class="real">' + esc(r.real_cost || '—') + '</td>' +
+        '<td class="where">' + esc(r.where || '') + '</td>' +
+        '</tr>';
+    }).join('');
+    // 输入即标黄（不用等保存，让管理员看清自己动了什么）
+    body.querySelectorAll('tr[data-op]').forEach((tr) => {
+      const inp = tr.querySelector('input');
+      inp.addEventListener('input', () => {
+        const base = BASE[tr.dataset.op] || 0;
+        tr.classList.toggle('changed', Number(inp.value) !== base);
+      });
+    });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function load() {
+    const d = await api('/api/admin/ai/credit-costs');
+    ROWS = d.costs || [];
+    BASE = {};
+    ROWS.forEach((r) => { BASE[r.op] = Number(r.default); });
+    renderCosts(ROWS);
+    const p = d.policy || {};
+    $('policyTxt').innerHTML =
+      esc(p.scope || '') + '<br>' + esc(p.granularity || '') + '<br>' + esc(p.local_note || '');
+    const t = d.free_trial || {};
+    POLICY0 = JSON.parse(JSON.stringify(t));
+    $('trialEnabled').checked = !!t.enabled;
+    $('trialMode').value = t.mode || 'once';
+    $('trialMaxCost').value = t.max_cost || 0;
+    $('trialMembersToo').checked = !!t.members_too;
+    $('trialNote').textContent =
+      '只对「非会员、且本次积分不够」的用户生效；账户里还有积分时先花自己的积分，'
+      + '不占用这个一次性名额。名额记在每个账号自己的状态文件里，重启不清零。'
+      + '⚠️ 换个注册账号仍能重新薅一次 —— 真要收紧得上设备指纹或授权中心去重。';
+    $('main').style.display = '';
+    $('trialPanel').style.display = '';
+    $('gate').style.display = 'none';
+  }
+
+  async function save() {
+    // 只提交改动项：不覆盖别人可能刚改的其它单价
+    const costs = {};
+    document.querySelectorAll('#costBody tr[data-op]').forEach((tr) => {
+      const inp = tr.querySelector('input');
+      const v = Number(inp.value);
+      if (v !== BASE[tr.dataset.op]) costs[tr.dataset.op] = v;
+    });
+    const free_trial = {};
+    if ($('trialEnabled').checked !== !!POLICY0.enabled) free_trial.enabled = $('trialEnabled').checked;
+    if ($('trialMode').value !== POLICY0.mode) free_trial.mode = $('trialMode').value;
+    if (Number($('trialMaxCost').value) !== Number(POLICY0.max_cost || 0)) free_trial.max_cost = Number($('trialMaxCost').value);
+    if ($('trialMembersToo').checked !== !!POLICY0.members_too) free_trial.members_too = $('trialMembersToo').checked;
+
+    if (!Object.keys(costs).length && !Object.keys(free_trial).length) {
+      toast('没有改动'); return;
+    }
+    const d = await api('/api/admin/ai/credit-costs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ costs, free_trial }),
+    });
+    BASE = {};
+    (d.costs || []).forEach((r) => { BASE[r.op] = Number(r.default); });
+    renderCosts(d.costs || []);
+    POLICY0 = d.free_trial || POLICY0;
+    toast('已保存，立即生效');
+  }
+
+  $('login').addEventListener('click', async () => {
+    TOKEN = ($('token').value || '').trim();
+    if (!TOKEN) TOKEN = (localStorage.getItem('vdl_auth_token') || '').trim();
+    if (!TOKEN) { toast('请先在前台登录超管账号，或手填 token'); return; }
+    try {
+      await load();
+      $('who').textContent = '已登录超级管理员';
+    } catch (e) {
+      $('who').textContent = '登录失败';
+      $('who').className = 'who err';
+      toast('登录失败：' + e.message, 3600);
+    }
+  });
+  $('reload').addEventListener('click', () => { load().catch((e) => toast('加载失败：' + e.message, 3600)); });
+  $('save').addEventListener('click', () => { save().catch((e) => toast('保存失败：' + e.message, 3600)); });
+})();
+</script>
+</body>
+</html>

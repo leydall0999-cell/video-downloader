@@ -5,6 +5,7 @@
 """
 import app
 import json
+import membership
 import dewatermark_core as dwc
 import dewatermark_ai as dwc_ai
 import user_membership
@@ -120,7 +121,15 @@ def create_dw_image(
     if engine == "ai" and not dwc_ai.available():
         raise app.HTTPException(status_code=503, detail="AI 去水印不可用（服务端未启用 onnxruntime / 模型未下载）")
     app._check_rate_limit(request)
-    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
+    # AI 积分（2026-10-05 与桌面端拉齐）：只有 LaMa 引擎扣 `dewatermark_ai`
+    # —— opencv 的 TELEA/NS 是传统扩散修复算法，不调用模型，不计费。
+    # 🔴 网页版的 LaMa 跑在服务端 ECS 上，占的是服务器 CPU，不是用户机器。
+    if engine == "ai":
+        _msg = membership.gate_message(app.current_member_store(request), "dewatermark_ai",
+                                       reason="dw_image_ai")
+        if _msg:
+            raise app.HTTPException(status_code=402, detail=_msg)
+    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日（服务端防滑，与积分无关）
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
         raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")

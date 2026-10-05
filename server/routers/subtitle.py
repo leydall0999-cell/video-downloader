@@ -8,6 +8,7 @@ job 机制独立于 CONVERT_JOBS：SUBTITLE_JOBS + app.executor，设备隔离�
 """
 import app
 import os
+import membership
 import user_membership
 import re
 import time
@@ -227,7 +228,13 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
         is_member = bool(app.current_member_store(request).status()["download_member"]["active"])
     except Exception:
         is_member = False
-    # 字幕提取为本地 faster-whisper 推理，不扣 AI 积分（仅云端/服务端算力计费）
+    # 🔴 2026-10-05 更正：网页版的 faster-whisper 跑在**服务端**上（不是用户本机），
+    #    按「服务端算力计费」的新口径扣 `subtitle_asr`。旧注释写的是"本地推理不扣积分"，
+    #    那套只在桌面端成立 —— 在这台 ECS 上，每一次提取都是服务器在算。
+    _msg = membership.gate_message(app.current_member_store(request), "subtitle_asr",
+                                   reason="subtitle_extract")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     full_threads = max(4, os.cpu_count() or 4)
     cpu_threads = full_threads if is_member else 4
     job_id = app.uuid.uuid4().hex[:12]
@@ -292,6 +299,12 @@ def subtitle_upload_finish(
     """分片上传收尾（字幕专用）：校验分片齐全 → 合并 → 提交 ASR job。"""
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
+    # AI 积分（2026-10-05）：与上一条 /api/subtitle/extract 同口径扣 `subtitle_asr`。
+    # 🔴 必须放在合并分片**之前** —— 否则用户点两次就白跑一次「合并 + 删除分片」的重活。
+    _msg = membership.gate_message(app.current_member_store(request), "subtitle_asr",
+                                   reason="subtitle_extract_upload")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
     if not re.fullmatch(r"[0-9a-z]+", upload_id or "") or total <= 0 or total > 4096:
         raise app.HTTPException(status_code=400, detail="分片参数非法")

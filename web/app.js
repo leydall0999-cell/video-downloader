@@ -7533,6 +7533,14 @@
     if (dl.active) parts.push(`下载会员至 ${pfFmtDate(dl.expire_at)}`);
     if (ai.active) parts.push(`AI 会员至 ${pfFmtDate(ai.expire_at)}`);
     if (m && m.credits_total != null) parts.push(`可用积分 ${Number(m.credits_total) || 0}`);
+    // 免费用户「首次体验」余量（2026-10-05）：让用户**在撞 402 之前**就知道。
+    // 只对非会员展示 —— 会员有积分，名额按策略本来也不给他们用，展示出来是误导。
+    const ft = (m && m.free_trials) || null;
+    if (ft && ft.enabled && !(dl.active || ai.active)) {
+      parts.push(Number(ft.remaining_count) > 0
+        ? '🎟️ 首次使用 AI 功能免费一次（还没用过）'
+        : '免费体验已用完');
+    }
     el.memTop.innerHTML = `<span class="mem-top-text">${parts.length
       ? '当前权益：<b>' + escHtml(parts.join(' · ')) + '</b>'
       : '当前账号还没有有效会员，选一档下方套餐即可开通。'}</span>`

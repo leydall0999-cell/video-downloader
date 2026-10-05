@@ -3,6 +3,7 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 所有 profile 均挂载，网页版行为零变化。app 端新功能只改本目录对应文件。
 """
 import app
+import membership
 import user_membership
 from fastapi import APIRouter
 
@@ -53,6 +54,12 @@ def sub_burn(req: app.SubBurnRequest, request: app.Request = None) -> dict:
 @router.post("/api/subtitles/translate")
 def sub_translate(req: app.SubTranslateRequest, request: app.Request = None) -> dict:
     user_membership.require_login_user(request)   # 2026-09-29：LLM 翻译吃服务端算力，纳入登录+配额
+    # AI 积分（2026-10-05 与桌面端拉齐）：翻译要真调 LLM 并按 chunk 分片，一次可能多次请求。
+    # 放在读文件之前 —— 判定失败就别浪费 IO 和（可能付费的）上游调用。
+    _msg = membership.gate_message(app.current_member_store(request), "subtitle_translate",
+                                   reason="subtitles_translate")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     gate = app.cloud_quota_gate(request)
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent

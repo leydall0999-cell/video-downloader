@@ -126,6 +126,8 @@ run_one test_download_matrix.py
 #  「用户取消」；到期完成任务降级为历史条目（保留 50 条元数据、可重新下载）。
 #  （A4 的 proxy.json 分流：web 端验证见 test_yt_warp_proxy.py 的 env 分支。）
 run_one test_batch3_history.py
+run_one test_ai_free_trial_web.py
+run_one e2e_ai_trial_check.py
 
 echo ""
 echo "========================================="

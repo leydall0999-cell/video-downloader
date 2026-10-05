@@ -102,13 +102,64 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
 ]
 
 # --------------------------------------------------------------------------- #
-# AI 积分成本表（计费原则：仅「云端/服务端算力」计费；本地算力一律免费）
+# AI 积分成本表（2026-10-05 改版：云端算力 + 本机重算力都计费，且可在后台改价）
 # --------------------------------------------------------------------------- #
-# 2026-09-08 定稿：本地推理（字幕 faster-whisper、LaMa 去水印、BiRefNet 抠图、
-# opencv 去水印）均跑在用户本机，不计费；只有真实服务端/云端算力（火山 MediaKit
-# 云端抠图）才按次扣 AI 积分。故以下仅保留云端抠图一项成本。
+# 旧口径（2026-09-08）：只给「云端抠图」一项计费，本地算力一律免费。
+# 2026-10-05 用户在桌面端重新定档并与网页版拉齐，两条原则：
+#   1) **云端 + 本机重算力都计费** —— 本机功能不烧平台的钱，但真实占用用户 CPU/内存；
+#   2) **按「次」定价** —— 一次操作内部发生多次模型调用只扣一份，重试成本含在单价里。
+#
+# 🔴 网页版与桌面端的**成本性质并不一样**：桌面端去水印/字幕/抠图跑在用户本机，
+#    网页版跑在**服务端**（ECS 真花钱、真占服务器 CPU）。所以这几项在网页版
+#    更应该计费，而不是照搬「占的是用户的机器」那套说辞。
+#
+# 优先级：plans.json 的 `credit_costs` 覆盖层 → 代码默认（见 `credit_cost`）。
 # 云端抠图（火山 MediaKit，真实服务端算力）单次
 MATTING_CLOUD_CREDIT_COST: int = 50
+
+AI_CREDIT_COSTS: dict[str, dict[str, Any]] = {
+    # ── 云端算力（平台真实付钱给上游）────────────────────────────────────
+    "commentary_llm": {
+        "name": "自动解说（大模型写稿）",
+        "where": "commentary-worker/scripts/llm_script.py（由 commentary-worker/process.py:139 调用）",
+        "cost": 40,
+        "real_cost": "¥0.04~0.19/次（桌面端同口径实测 token × DeepSeek V4-Flash 峰谷价；"
+                     "网页版走同一个被执行人管线）",
+        "note": "剧情分析 + 脚本生成 + 修复重试，一次任务一份（内部 2~4 次 LLM 调用）。"
+                "⚠️ DeepSeek 2026-08-17 已涨价 50%~125%，上调/复查时按 real_cost 重算。",
+    },
+    "matting_cloud": {
+        "name": "云端一键抠图",
+        "where": "桌面端 server/routers/matting.py；⚠️ 网页版暂无该路由",
+        "cost": 50,
+        "real_cost": "¥0.02~0.24/次（火山按次计费，官方未公开图像单价，按实测推的区间）",
+        "note": "网页版本身不提供抠图。保留这项只是为了让 plans.json 里已有的历史 "
+                "`credit_costs.matting_cloud` 不至于被判成「孤儿项」，定价与桌面端对齐。",
+    },
+    # ── 服务端算力（网页端专属：跑在 ECS 上，占的是服务器不是用户机器）────
+    "dewatermark_ai": {
+        "name": "AI 去水印（LaMa）",
+        "where": "server/routers/dewatermark.py:113/121（engine=ai，服务端 onnxruntime）",
+        "cost": 10,
+        "real_cost": "≈¥0（不调用外部付费 API，但**占服务器 CPU/内存**）",
+        "note": "🔴 与桌面端不同：网页端的 LaMa 跑在服务端不再是用户的机器上，"
+                "每一次都是这台 ECS 在算。opencv 引擎（默认档）不计费，只有 ai 档计费。",
+    },
+    "subtitle_asr": {
+        "name": "字幕提取（Whisper 转写）",
+        "where": "server/routers/subtitle.py:219/295（faster-whisper，服务端 CPU）",
+        "cost": 5,
+        "real_cost": "≈¥0（不外调付费 API，占服务端 CPU，长音频耗时可观）",
+        "note": "同样跑在服务端。另有每日云端算力配额（免费 3 次/日、会员 200 次/日）。",
+    },
+    "subtitle_translate": {
+        "name": "字幕翻译 / 多语字幕",
+        "where": "server/routers/subtitles.py:38/56（按 chunk 调用 OpenAI 兼容接口）",
+        "cost": 5,
+        "real_cost": "≈¥0.005/次（按小片段 1200+800 token 估；若上游换成付费模型则重算）",
+        "note": "长字幕会分多片，按一次操作一份计。",
+    },
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -166,8 +217,12 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
 
     接受结构：
       { "download_plans": {...}, "ai_plans": {...}, "credit_packs": {...},
-        "credit_costs": {...} }
+        "credit_costs": {...}, "free_trial": {...} }
     任意键可缺省；返回写盘后的完整覆盖 dict。失败抛 OSError。
+
+    🔴 `free_trial` 是**扁平**策略字典（enabled/mode/exclude/max_cost…），也必须
+    列入 `_SAVE_TABLE_KEYS` —— 否则「只提交 enabled」会被整表替换成只剩 enabled
+    一个键，其余字段凭空消失。这一点桌面端 2026-10-05 已踩过，网页端同步补上。
 
     合并语义（2026-09-30 对齐 app-dev 2026-09-24 修复）：四张表内部按
     「套餐 code / 成本 key」逐条合并——载荷只更新它携带的条目，同表其余条目
@@ -210,7 +265,7 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
         return existing
 
 
-_SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs")
+_SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs", "free_trial")
 
 
 def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
@@ -435,22 +490,134 @@ def effective_pay_plans() -> dict[str, dict[str, Any]]:
     return out
 
 
-def credit_cost(op: str, sub: str | None = None) -> int:
-    """查询某次 AI 操作的积分成本。未知 op 或本地算力返回 0（不扣费）。
+def credit_cost_table() -> list[dict[str, Any]]:
+    """后台展示用：把成本表与运行时生效价合成一张（**不返回任何凭据**）。
 
-    仅 matting_cloud（火山云端）计费；字幕提取 / AI 去水印 LaMa 等本地算力均免费。
-    优先级：plans.json 覆盖层 → 代码常量。
+    `effective` 是实际会扣的积分（覆盖层优先），`default` 是代码默认，
+    两者不等说明管理员改过价，前端据此高亮。
     """
-    ov = load_plan_overrides()
-    costs = ov.get("credit_costs") or {}
+    costs = (load_plan_overrides().get("credit_costs") or {})
+    out: list[dict[str, Any]] = []
+    for op, row in AI_CREDIT_COSTS.items():
+        default = int(row.get("cost", 0))
+        try:
+            eff = int(costs[op])
+        except (KeyError, TypeError, ValueError):
+            eff = default
+        out.append({
+            "op": op,
+            "name": str(row.get("name") or op),
+            "where": str(row.get("where") or ""),
+            "note": str(row.get("note") or ""),
+            # 平台真实成本：后台改价前先看它，别只凭感觉调。
+            "real_cost": str(row.get("real_cost") or ""),
+            "default": default,
+            "effective": eff,
+            "overridden": eff != default,
+        })
+    # 表外但覆盖层里有的（历史遗留 / 已下线功能）也列出来，便于清理
+    known = set(AI_CREDIT_COSTS)
+    for op, v in costs.items():
+        if op in known:
+            continue
+        try:
+            eff = int(v)
+        except (TypeError, ValueError):
+            eff = 0
+        out.append({
+            "op": op, "name": op, "where": "",
+            "note": "⚠️ 覆盖层里有此项，但代码表里没有对应定义（可能已下线，建议清理）",
+            "real_cost": "", "default": 0, "effective": eff,
+            "overridden": True, "orphan": True,
+        })
+    return out
+
+
+def credit_cost(op: str, sub: str | None = None) -> int:
+    """查询某次 AI 操作的积分成本。优先级：plans.json 覆盖层 → 代码表里的默认单价。
+
+    🔴 2026-10-05：表外 op **必须打 warning**。旧实现找不到就 `return 0`（免费），
+    于是「新功能忘了登记价」会静默变成全站免单 —— 这是财务漏洞的温床，
+    排障时只能靠账单异常才发现。改为查表：未登记就留痕。
+    """
+    costs = load_plan_overrides().get("credit_costs") or {}
     if op in costs:
         try:
             return int(costs[op])
         except (TypeError, ValueError):
             pass
-    if op == "matting_cloud":
-        return int(MATTING_CLOUD_CREDIT_COST)
-    return 0
+    row = AI_CREDIT_COSTS.get(op)
+    if row is None:
+        # 与桌面端同口径：表外 op 一律告警（0 本身也是合法单价，只能靠日志区分）
+        logging.getLogger("membership").warning(
+            "credit_cost: 未知 op=%r —— 未登记单价，按 0 处理（请补 AI_CREDIT_COSTS）", op)
+        return 0
+    return int(row.get("cost", 0))
+
+
+# --------------------------------------------------------------------------- #
+# 免费用户「首次体验」策略（2026-10-05 用户定档，与桌面端同口径）
+# --------------------------------------------------------------------------- #
+# 背景：网页版接上 AI 积分墙后，积分池为 0 的新账号**第一次点 AI 功能就撞 402**，
+# 连"这东西到底好不好用"都无从判断 —— 等于在漏斗最前面把功能掐死。
+# 用户定档：**只要是首次使用的账号，其首次使用免费一次**。
+#
+# 记录落在会员状态文件自身的 `free_trials` 键（随账号走，不是全局），键名语义：
+#   mode=per_op → 每个 op 一个名额，键是 op 名；
+#   mode=once   → 全站共用一个名额，键是 "*"。
+#
+# 🔴 **边界**：这只是账号级控制，换个注册账号仍能重薅。真要收紧得靠用户改不了的
+#    维度（强设备指纹 / 授权中心去重），而不是靠本地文件。
+#    🔴 另注：网页版数据目录是 ~/.video-downloader，桌面端是 ~/.videodownloader，
+#    两边会员状态**不共享** ⇒ 同一个账号在两端各有一次首次免费。要统一得先把
+#    积分账户挪到授权中心，那是另一个改动，本次不做。
+DEFAULT_FREE_TRIAL_POLICY: dict[str, Any] = {
+    "enabled": True,
+    # once = 账号首次使用免费一次（默认，用户定档）｜per_op = 每个功能各免一次｜off = 关闭
+    "mode": "once",
+    # 不参与试用的 op（把最贵的解说排除就用这个）
+    "exclude": [],
+    # 会员（下载或 AI 任一活跃）是否也享受 —— 默认不给：会员已按套餐拿到积分，
+    # 用完请复购，不拿"试用"给会员兜底。
+    "members_too": False,
+    # 0 = 不限；>0 时单价超过该积分的功能不参与试用
+    "max_cost": 0,
+}
+_TRIAL_MODES = ("per_op", "once", "off")
+_TRIAL_ONCE_KEY = "*"
+
+
+def free_trial_policy() -> dict[str, Any]:
+    """运行时生效的试用策略：plans.json 的 `free_trial` 覆盖层 → 代码默认。
+
+    逐个字段合并，管理员只改一项不会把其余字段抹掉。读到的脏值一律收敛到合法
+    范围 —— 后台写坏配置不该让整个扣费链路炸掉（fail-open 的方向是「退回默认
+    口径」而不是「全站免单」）。
+    """
+    ov = load_plan_overrides().get("free_trial")
+    out = dict(DEFAULT_FREE_TRIAL_POLICY)
+    if isinstance(ov, dict) and ov:
+        for k, v in ov.items():
+            if v is None:
+                continue
+            out[k] = v
+    mode = str(out.get("mode") or "once").strip().lower()
+    out["mode"] = mode if mode in _TRIAL_MODES else "once"
+    if out["mode"] == "off":
+        out["enabled"] = False
+    out["enabled"] = bool(out.get("enabled"))
+    ex = out.get("exclude")
+    out["exclude"] = [str(x) for x in ex] if isinstance(ex, (list, tuple, set)) else []
+    try:
+        out["max_cost"] = max(0, int(out.get("max_cost") or 0))
+    except (TypeError, ValueError):
+        out["max_cost"] = 0
+    out["members_too"] = bool(out.get("members_too"))
+    return out
+
+
+def _trial_key(op: str, mode: str) -> str:
+    return _TRIAL_ONCE_KEY if mode == "once" else str(op)
 
 
 def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
@@ -458,11 +625,20 @@ def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
     """按成本扣 AI 积分。返回 spend_credits 的结果 dict（ok/error）。
 
     成本 <=0 视为免费操作，直接返回 ok=True（不污染积分池）。
+    积分不足且命中「首次体验」名额时按放行处理（`trial=True`），不扣积分。
     """
     cost = credit_cost(op, sub)
     if cost <= 0:
         return {"ok": True, "spent": 0, "free": True, "credits_left": store.status()["credits_total"]}
-    return store.spend_credits(cost, reason=reason or op)
+    res = store.spend_credits(cost, reason=reason or op)
+    if res.get("ok"):
+        return res
+    # 与 gate_message 同口径：让「不走 gate_message 的调用点」也不会漏。
+    if store.trial_available(op, cost):
+        store.trial_consume(op, reason=reason or op)
+        return {"ok": True, "spent": 0, "free": True, "trial": True,
+                "credits_left": store.status()["credits_total"]}
+    return res
 
 
 def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
@@ -470,6 +646,14 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
     """扣积分并产出拦截原因：None=放行；非 None=「积分不足」原因字符串（供 402 detail）。
 
     成本 <=0 视为免费放行；spend 系统异常时降级放行（记日志），不阻断主流程。
+
+    🔴 2026-10-05「免费用户首次体验」：判定顺序是
+        **先扣积分 → 扣不动才动用试用名额 → 都不行才拦**。
+       1. 先扣：账户里还有积分就不占用试用名额 —— 名额是一次性资源，有余额时烧掉它
+          等于白送，用户本可以用这次名额去试更贵的功能。
+       2. 后试用：余额不够时若还有账号名额，标记用掉并返回 None（放行、不扣分）。
+       3. 都不行：文案里如实说明「是否已用过试用」，别只丢一句「积分不足」——
+          用户上次明明跑通了，会以为是系统出错。
     """
     cost = credit_cost(op, sub)
     if cost <= 0:
@@ -481,7 +665,32 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
         return None
     if res.get("ok"):
         return None
-    return f"AI 积分不足：本次操作需 {cost} 积分，当前 {res.get('credits_left', 0)}（请开通 AI 会员或购买积分包）"
+
+    left = res.get("credits_left", 0)
+    pol = free_trial_policy()
+    if not pol.get("enabled"):
+        hint = "请开通 AI 会员或购买积分包"
+    elif store.trial_available(op, cost):
+        try:
+            store.trial_consume(op, reason=reason or op)
+            logging.getLogger("membership").info(
+                "free trial consumed op=%s cost=%s user=%s", op, cost,
+                getattr(store.path, "name", ""))
+            return None
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("membership").warning("free trial consume failed op=%s: %s", op, e)
+            hint = "请开通 AI 会员或购买积分包"
+    else:
+        # once 口径下名额是账号级的：**不是**"这个功能试过了"，而是"这个账号试过了"。
+        # 措辞必须对得上，否则用户第二次点的是另一个功能，却被告知"本功能"已用过，
+        # 会当成系统串号报错。
+        if str(pol.get("mode")) == "once":
+            hint = ("你的账号已用过一次免费体验（每个账号限一次），请开通 AI 会员或购买积分包"
+                    if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
+        else:
+            hint = ("本功能的免费体验已用过一次，请开通 AI 会员或购买积分包"
+                    if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
+    return f"AI 积分不足：本次操作需 {cost} 积分，当前 {left}（{hint}）"
 
 # --------------------------------------------------------------------------- #
 # 状态文件
@@ -513,6 +722,8 @@ def _empty_state() -> dict[str, Any]:
         "daily_usage": {"date": "", "download": 0, "cloud": 0},
         "usage_history": {},
         "meta": {"activated_at": 0.0, "history": []},
+        # 免费用户「首次体验」已用记录：{op 或 "*": 使用时刻}（见 DEFAULT_FREE_TRIAL_POLICY）
+        "free_trials": {},
     }
 
 
@@ -525,7 +736,8 @@ def _load_state(path: Path) -> dict[str, Any]:
         return _empty_state()
     st = _empty_state()
     # 逐键合并，容忍旧/缺字段
-    for k in ("download_member", "ai_member", "permanent_credits", "daily_usage", "usage_history", "meta"):
+    for k in ("download_member", "ai_member", "permanent_credits", "daily_usage",
+              "usage_history", "meta", "free_trials"):
         if isinstance(data.get(k), dict):
             st[k].update(data[k])
     # 2026-10-04：丢弃已下线资源的历史计数键（下方 _DEAD_USAGE_KEYS）。
@@ -854,6 +1066,8 @@ class MembershipStore:
             out["ai_member"]["credits_left"] = 0
             out["account_locked"] = lock
         out["account"] = self.account_view()
+        # 免费用户「首次体验」余量（2026-10-05）：让用户**在撞墙之前**知道自己还有没有免费机会
+        out["free_trials"] = self.free_trial_view()
         return out
 
     def plans(self) -> dict[str, Any]:
@@ -1010,6 +1224,83 @@ class MembershipStore:
         return {"ok": True, "spent": amount, "reason": reason,
                 "ai_taken": ai_taken, "perm_taken": perm_taken,
                 "credits_left": self.status()["credits_total"]}
+
+    # ---- 免费用户「首次体验」名额（2026-10-05，与桌面端同口径）----
+    def _trials_raw(self) -> dict[str, Any]:
+        """已用名额表。惰性建键，旧状态文件没有 `free_trials` 也能正常跑。"""
+        self._ensure_loaded()
+        tr = self._state.get("free_trials")
+        if not isinstance(tr, dict):
+            tr = {}
+            self._state["free_trials"] = tr
+        return tr
+
+    def trial_available(self, op: str, cost: int = 0) -> bool:
+        """该 op 现在还能不能走「免费体验」。五道判据缺一不可。
+
+        注意这里**只看本 store 的会员标志，不调 status()**：status() 会连带调用
+        `free_trial_view()` → 回到 `trial_available()`，就成了无限递归。
+        """
+        pol = free_trial_policy()
+        if not pol.get("enabled"):
+            return False
+        if op in (pol.get("exclude") or []):
+            return False
+        mc = int(pol.get("max_cost") or 0)
+        if mc > 0 and int(cost or 0) > mc:
+            return False
+        if not pol.get("members_too") and self._is_download_active():
+            return False          # 会员按付费纪律自己承担，不拿试用兜底
+        return _trial_key(op, str(pol.get("mode"))) not in self._trials_raw()
+
+    def trial_used(self, op: str, pol: dict[str, Any] | None = None) -> bool:
+        """该 op 的试用名额是否已经用掉（只判状态，不改状态）。"""
+        pol = pol or free_trial_policy()
+        return _trial_key(op, str(pol.get("mode"))) in self._trials_raw()
+
+    def trial_consume(self, op: str, reason: str = "") -> None:
+        """标记名额已用。与 `spend_credits` 同时机 —— **在任务真正开跑之前**就占掉。
+
+        先行占用的代价：若这次任务本身失败（网络/模型报错），名额也一并没了。
+        这是刻意的 —— 否则「故意制造失败」就能无限白嫖同一个名额。
+        """
+        pol = free_trial_policy()
+        self._trials_raw()[_trial_key(op, str(pol.get("mode")))] = self._now()
+        meta = self._state.setdefault("meta", {})
+        meta.setdefault("history", []).append({
+            "type": "free_trial", "op": op, "reason": reason, "at": self._now(),
+        })
+        meta["history"] = meta["history"][-200:]
+        self._persist()
+
+    def free_trial_view(self) -> dict[str, Any]:
+        """给 status() / 前端用的试用视图。
+
+        `remaining` 逐个 op 算真实余量，会员中心能直接渲染「还剩几次免费体验」，
+        不用前端自己去照着策略推导一遍。
+        """
+        pol = free_trial_policy()
+        mode = str(pol.get("mode"))
+        remaining: dict[str, int] = {}
+        for op in AI_CREDIT_COSTS:
+            remaining[op] = 1 if self.trial_available(op, int(credit_cost(op))) else 0
+        # 🔴 once 口径下所有 op 共用同一个名额，`sum(remaining)` 会算出 5 张票，
+        #    前端拿去渲染「还剩 5 次」就全错。此时真实余量只有 0/1 两种取值。
+        used_any = any(self.trial_used(op, pol) for op in AI_CREDIT_COSTS)
+        if mode == "once":
+            remaining_count = 0 if self.trial_used(_TRIAL_ONCE_KEY, pol) else 1
+        else:
+            remaining_count = sum(remaining.values())
+        return {
+            "enabled": bool(pol.get("enabled")),
+            "mode": mode,
+            "max_cost": int(pol.get("max_cost") or 0),
+            "exclude": list(pol.get("exclude") or []),
+            "members_too": bool(pol.get("members_too")),
+            "remaining": remaining,
+            "remaining_count": remaining_count,
+            "used_any": used_any,
+        }
 
     def add_credits(self, delta: int, reason: str = "admin_adjust") -> dict[str, Any]:
         """管理员调整积分：正=充值（永久积分池，不过期），负=扣减（先 AI 订阅后永久）。

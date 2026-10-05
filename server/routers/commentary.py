@@ -3,6 +3,7 @@ handler 通过 `app.<name>` 访问共享内核（globals/helper/导入）。
 所有 profile 均挂载，网页版行为零变化。app 端新功能只改本目录对应文件。
 """
 import app
+import membership
 import user_membership
 from fastapi import APIRouter
 
@@ -13,6 +14,13 @@ def create_commentary(payload: app.CommentaryRequest, request: app.Request = Non
     user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    # AI 积分（2026-10-05 与桌面端拉齐）：解说要调大模型写稿，一次任务内部 2~4 次
+    # LLM 调用，是本表平台真实付钱最多的一项。放在任务/临时目录建立之前 ——
+    # 判定失败就不该留下半截 job 和垃圾文件。
+    _msg = membership.gate_message(app.current_member_store(request), "commentary_llm",
+                                   reason="commentary_create")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     if app.COMMENTARY_MODE == "http":
         if not app.COMMENTARY_ENDPOINT:
             raise app.HTTPException(status_code=503, detail="解说 worker 未配置（VDL_COMMENTARY_MODE=http 但缺少 VDL_COMMENTARY_ENDPOINT）")
@@ -53,6 +61,12 @@ def create_commentary_upload(
     user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    # AI 积分：同上，扣 commentary_llm。放在**接收上传文件之前** ——
+    # 否则先让用户传完几百 MB，再告诉他积分不够，体验是最糟的那种。
+    _msg = membership.gate_message(app.current_member_store(request), "commentary_llm",
+                                   reason="commentary_create_upload")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
     if suffix not in {".mp4", ".mkv", ".mov", ".webm", ".avi"}:
         raise app.HTTPException(status_code=409, detail="请上传视频文件")
@@ -98,6 +112,11 @@ def create_script_only_upload(
     user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    # AI 积分：脚本模式一样要过 LLM 写稿，同样扣 commentary_llm。同样放在收文件之前。
+    _msg = membership.gate_message(app.current_member_store(request), "commentary_llm",
+                                   reason="commentary_script_only_upload")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     if app.COMMENTARY_MODE == "http":
         raise app.HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -324,6 +343,11 @@ def create_script_only(payload: app.CommentaryRequest, request: app.Request = No
     user_membership.require_login_user(request)
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
+    # AI 积分：script-only 只省掉渲染，写稿这一步照样调 LLM，同扣 commentary_llm。
+    _msg = membership.gate_message(app.current_member_store(request), "commentary_llm",
+                                   reason="commentary_script_only")
+    if _msg:
+        raise app.HTTPException(status_code=402, detail=_msg)
     if app.COMMENTARY_MODE == "http":
         if not app.COMMENTARY_ENDPOINT:
             raise app.HTTPException(status_code=503, detail="解说 worker 未配置")
