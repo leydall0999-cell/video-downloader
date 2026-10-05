@@ -56,6 +56,10 @@ def _reset_state():
     if os.path.exists(p):
         os.remove(p)
     server_app.member_store._loaded = False
+    # 🔴 2026-10-05：本机重算力也计入积分（用户定档），本文件验的是**日配额墙**
+    #   （免费 8 次/日），与积分无关 ⇒ 这里给测试账号补足积分，避免被 402 积分门禁
+    #   抢先拦下而测不到配额墙。真实免费用户没积分会被拦，那正是期望行为。
+    server_app.member_store.add_credits(100000, reason="test_matting_member_setup")
 
 
 def _post_matting(model=None, force_cloud=False):

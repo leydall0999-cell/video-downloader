@@ -118,13 +118,106 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
 ]
 
 # --------------------------------------------------------------------------- #
-# AI 积分成本表（计费原则：仅「云端/服务端算力」计费；本地算力一律免费）
+# AI 积分成本表
 # --------------------------------------------------------------------------- #
-# 2026-09-08 定稿：本地推理（字幕 faster-whisper、LaMa 去水印、BiRefNet 抠图、
-# opencv 去水印）均跑在用户本机，不计费；只有真实服务端/云端算力（火山 MediaKit
-# 云端抠图）才按次扣 AI 积分。故以下仅保留云端抠图一项成本。
-# 云端抠图（火山 MediaKit，真实服务端算力）单次
-MATTING_CLOUD_CREDIT_COST: int = 50
+# 🔴 2026-10-05 用户定档（覆盖 2026-09-08 的「本地一律免费」旧口径）：
+#   **云端算力 + 本机重算力都计入积分**，按「次」定价。
+#   旧口径只对火山云端抠图计费，导致两个后果：① 本机跑 faster-whisper / LaMa /
+#   MLX 解说 / 声音克隆 这些重算力白用；② 下表之外的调用点因 `credit_cost()`
+#   对未知 op 返回 0 而**静默免费**（不报错、不告警）。
+#
+# 字段说明：
+#   name   后台显示的功能名（用户视角）
+#   where  真实调用点 file:line（后台展示用，便于核对「这个价对应哪段代码」）
+#   cost   默认积分（可被 plans.json 的 credit_costs 覆盖，后台可改）
+#   note   计价说明 / 内部备注
+#
+# 计费粒度：**按「次」定价，一次操作内发生多次模型调用只扣一份**
+# （如一次「AI 抠图」内部 remove-bg 1~2 次 + enhance 1~2 次，重试成本含在单价里）。
+# 调整单价即可覆盖重试成本，不做按调用次数累加 —— 那样用户看不懂，也难审计。
+#
+# 🔴 增删本表任一行都必须同步：
+#   ① 这里；② `ALLOWED_CREDIT_OPS`（未登记的 op 会被告警而非静默放行）；
+#   ③ 守卫 `test_ai_credit_costs.py`（钉住「每个计费项都要有真实调用点」、
+#      「每条调用点都要有计费项」两个方向，防止再漏）。
+MATTING_CLOUD_CREDIT_COST: int = 50   # 保留旧名，兼容既有引用
+
+AI_CREDIT_COSTS: dict[str, dict[str, Any]] = {
+    # ── 云端算力（真实花钱：平台承担上游费用）──────────────────────────────
+    "matting_cloud": {
+        "name": "云端一键抠图",
+        "where": "server/routers/matting.py:321 → matting_ai.py → cloud_matting_mediakit.py",
+        "cost": 50,
+        "note": "火山 MediaKit remove-image-background。含场景重试（1~2 次）成本。",
+    },
+    "matting_cloud_enhance": {
+        "name": "AI 画质增强",
+        "where": "server/cloud_matting_mediakit.py:607 enhance-image",
+        "cost": 30,
+        "note": "火山生成式 enhance-image（豆包），人像场景默认 professional。独立计费 API。",
+    },
+    "matting_vision": {
+        "name": "AI 视觉定位 / 图像理解",
+        "where": "server/vision_client.py:261/501/547/636/701（qwen-vl-max）",
+        "cost": 8,
+        "note": "「说扣什么」定位 + 连通域选择 + 文字块检测。失败自动回退本地。",
+    },
+    "commentary_llm": {
+        "name": "自动解说（大模型写稿）",
+        "where": "commentary-pipeline/scripts/llm_script.py:1646/2541/1111（云端网关）",
+        "cost": 200,
+        "note": "剧情分析 + 脚本生成 + 修复重试，一次任务一份。走 ECS 网关，真实 Key 不在本机。",
+    },
+    "commentary_vision": {
+        "name": "解说画面理解",
+        "where": "commentary-pipeline/scripts/vision_analysis.py:157（多模态模型）",
+        "cost": 40,
+        "note": "抽帧最多 5 批 + 1 次总结，一次任务一份。",
+    },
+    "subtitle_translate": {
+        "name": "字幕翻译",
+        "where": "server/subtitles.py:266（OpenAI 兼容，按 chunk 分片）",
+        "cost": 10,
+        "note": "长字幕会分多片，按一次操作一份计。",
+    },
+    # ── 本机重算力（2026-10-05 新增：用户机器上真实吃 CPU/GPU）──────────────
+    "subtitle_asr": {
+        "name": "本地字幕提取",
+        "where": "server/routers/subtitle.py:546/718（faster-whisper CPU int8）",
+        "cost": 5,
+        "note": "含 SenseVoice 预识别。另有日配额（免费 2/日、会员无限）。",
+    },
+    "dewatermark_ai": {
+        "name": "AI 去水印",
+        "where": "server/dewatermark_ai.py（LaMa ONNX，onnxruntime 子进程）",
+        "cost": 10,
+        "note": "🔴 原先**连日配额都没有**，等于白用本机 CPU（Explore 2026-10-05 实测）。",
+    },
+    "local_matting_ai": {
+        "name": "本地 AI 抠图（BiRefNet / MODNet）",
+        "where": "server/matting_ai.py（onnxruntime，本机）",
+        "cost": 15,
+        "note": "另有日配额（免费 8/日、会员 500/日）。",
+    },
+    "commentary_local_mlx": {
+        "name": "本机大模型解说",
+        "where": "commentary-pipeline/scripts/llm_script.py:1221/1243（MLX 权重）",
+        "cost": 120,
+        "note": "与云端解说**同价**：否则用户会一律选本机、把成本转嫁给算力最低的机器。"
+                "长视频会自动转云端（llm_script.py:2364）。",
+    },
+    "voice_clone": {
+        "name": "声音克隆配音",
+        "where": "server/app.py:2907 → voice_studio_client.py:98/113（Qwen3-TTS）",
+        "cost": 30,
+        "note": "每句一次推理，本机 7871 服务长驻。",
+    },
+}
+
+# 已登记的计费 op 全集。任何 `credit_cost(op)` / `spend_for(op)` 传入表外的 op
+# 都会被 `credit_cost()` 打一条 warning（不再静默返回 0）—— 忘记配价是财务漏洞，
+# 必须能被看见。
+ALLOWED_CREDIT_OPS: frozenset[str] = frozenset(AI_CREDIT_COSTS)
 
 
 # --------------------------------------------------------------------------- #
@@ -484,22 +577,77 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
         return existing
 
 
-def credit_cost(op: str, sub: str | None = None) -> int:
-    """查询某次 AI 操作的积分成本。未知 op 或本地算力返回 0（不扣费）。
+_UNLOGGED_OPS: set[str] = set()
 
-    仅 matting_cloud（火山云端）计费；字幕提取 / AI 去水印 LaMa 等本地算力均免费。
-    优先级：plans.json 覆盖层 → 代码常量。
+
+def credit_cost(op: str, sub: str | None = None) -> int:
+    """查询某次 AI 操作的积分成本。
+
+    优先级：**plans.json 的 `credit_costs` 覆盖层 → 代码默认表 `AI_CREDIT_COSTS`**。
+    成本 0 = 该功能免费（表里显式写 0，或功能本身不消耗算力）。
+
+    🔴 2026-10-05 起查表而非 `if op == "matting_cloud"`，并对**表外 op 打 warning**。
+    旧实现对任何未知 op 直接 `return 0` ⇒ 新加的功能忘记配价就**静默免费**，
+    不报错、不告警 —— 这是财务漏洞的温床（本次盘点的 P0 发现）。
+    同一次进程里每个未知 op 只告警一次（`_UNLOGGED_OPS` 去重），避免刷屏。
     """
-    ov = load_plan_overrides()
-    costs = ov.get("credit_costs") or {}
+    costs = (load_plan_overrides().get("credit_costs") or {})
     if op in costs:
         try:
             return int(costs[op])
         except (TypeError, ValueError):
-            pass
-    if op == "matting_cloud":
-        return int(MATTING_CLOUD_CREDIT_COST)
-    return 0
+            logging.getLogger("membership").warning(
+                "credit_costs[%r] 不是整数，忽略覆盖值", op)
+
+    row = AI_CREDIT_COSTS.get(op)
+    if row is None:
+        if op not in _UNLOGGED_OPS:
+            _UNLOGGED_OPS.add(op)
+            logging.getLogger("membership").warning(
+                "🔴 credit_cost(%r) 未在 AI_CREDIT_COSTS 中登记 → 按免费处理。"
+                "若该功能真实消耗算力，请补一行（backend/membership.py::AI_CREDIT_COSTS）。",
+                op)
+        return 0
+    return int(row.get("cost", 0))
+
+
+def credit_cost_table() -> list[dict[str, Any]]:
+    """后台展示用：把成本表与运行时生效价合成一张（**不返回任何凭据**）。
+
+    `effective` 是实际会扣的积分（覆盖层优先），`default` 是代码默认。
+    两者不等说明管理员改过价，前端据此高亮。
+    """
+    costs = (load_plan_overrides().get("credit_costs") or {})
+    out: list[dict[str, Any]] = []
+    for op, row in AI_CREDIT_COSTS.items():
+        default = int(row.get("cost", 0))
+        try:
+            eff = int(costs[op])
+        except (KeyError, TypeError, ValueError):
+            eff = default
+        out.append({
+            "op": op,
+            "name": str(row.get("name") or op),
+            "where": str(row.get("where") or ""),
+            "note": str(row.get("note") or ""),
+            "default": default,
+            "effective": eff,
+            "overridden": eff != default,
+        })
+    # 表外但覆盖层里有的（历史遗留 / 已下线功能）也列出来，便于清理
+    known = set(AI_CREDIT_COSTS)
+    for op, v in costs.items():
+        if op in known:
+            continue
+        try:
+            eff = int(v)
+        except (TypeError, ValueError):
+            eff = 0
+        out.append({
+            "op": op, "name": op, "where": "", "note": "⚠️ 覆盖层里有此项，但代码表里没有对应定义（可能已下线，建议清理）",
+            "default": 0, "effective": eff, "overridden": True, "orphan": True,
+        })
+    return out
 
 
 def spend_for(store: "MembershipStore", op: str, sub: str | None = None,

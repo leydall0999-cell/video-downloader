@@ -3881,6 +3881,24 @@
             <button type="button" id="adminAiRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="aiAcctRefresh">刷新</button>
           </div>
           <div id="adminAiAccounts" class="admin-ai-accounts" data-page-node-id="aiAcctBox"></div>
+
+          <!-- 🔴 AI 积分成本配置（2026-10-05）：用户定档「每个功能每次消耗多少积分要能在后台配」。
+               计价口径：云端算力 + 本机重算力都计费；按「次」定价，一次操作内多次模型调用只扣一份。 -->
+          <div class="admin-cfg-section" id="adminAiCostSec" data-page-node-id="aiCostSec">
+            <div class="admin-cfg-head" data-page-node-id="aiCostHead">
+              <h3 data-page-node-id="aiCostTitle">AI 积分成本</h3>
+              <div class="admin-toolbar" style="margin:0" data-page-node-id="aiCostTb">
+                <span class="admin-count" id="adminAiCostPolicy" data-page-node-id="aiCostPolicy"></span>
+                <button type="button" id="adminAiCostReload" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="aiCostReload">重新加载</button>
+                <button type="button" id="adminAiCostSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="aiCostSave">保存改动</button>
+              </div>
+            </div>
+            <p class="admin-hint" data-page-node-id="aiCostHint">
+              改价立即对所有用户生效（写入 <code>plans.json</code> 的 <code>credit_costs</code> 覆盖层，优先于代码默认值）。
+              填 <b>0</b> 表示该功能免费。点「恢复默认」撤销改动。
+            </p>
+            <div id="adminAiCostTable" class="ai-cost-table" data-page-node-id="aiCostTable">加载中…</div>
+          </div>
         </section>
         <!-- 运维监控（2026-09-26）：完整运维看板并入管理后台——访客/事件/告警/对账一处看全 -->
         <section class="admin-view" data-admin-view="monitor" id="adminViewMonitor" hidden data-page-node-id="adminMonView">

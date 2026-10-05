@@ -6937,3 +6937,19 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 /* 上一轮拼接的旧结果：置灰降级，与新一批片段/新结果区分（2026-09-29 用户反馈） */
 .uc-item.is-stale { opacity: .55; }
 .uc-item.is-stale .uc-item-name { color: var(--text-mute); }
+
+/* ── AI 积分成本配置表（2026-10-05）─────────────────────────────────────────
+   用户定档：每个功能每次消耗多少积分要能在后台配。表格要同时展示
+   「生效价 / 代码默认 / 真实调用点」—— 管理员改价时要能核对这段代码在哪。 */
+.ai-cost-table { overflow-x: auto; }
+.ai-cost-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ai-cost-tbl th, .ai-cost-tbl td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--border, #e5e7eb); vertical-align: top; }
+.ai-cost-tbl th { font-weight: 600; color: var(--text-dim, #6b7280); font-size: 12px; white-space: nowrap; }
+.ai-cost-op { color: var(--text-dim, #9ca3af); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.ai-cost-input { width: 84px; padding: .3rem .4rem; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--surface, #fff); color: var(--text, #1f2937); font-size: 13px; }
+.ai-cost-input.is-dirty { border-color: var(--primary, #2d7ef7); background: var(--primary-soft, #eff6ff); font-weight: 600; }
+.ai-cost-def { color: var(--text-dim, #9ca3af); font-size: 12px; }
+.ai-cost-where code { font-size: 11px; color: var(--text-dim, #6b7280); word-break: break-all; }
+.ai-cost-note { color: var(--text-dim, #6b7280); font-size: 12px; max-width: 30rem; }
+.ai-cost-tbl tr.is-orphan { background: var(--warn-soft, #fef3c7); }
+.ai-cost-tip { padding: .3rem .6rem; margin-bottom: .4rem; border-radius: 6px; background: var(--warn-soft, #fef3c7); color: var(--text, #1f2937); font-size: 12px; }

@@ -448,15 +448,12 @@ else
   echo "⚠️ 跳过（无 node）"
 fi
 
-echo ""
-echo "========================================="
-echo "  通过: $PASS   失败: $FAIL"
-echo "========================================="
-if [ "$FAIL" -gt 0 ]; then
-  echo "❌ 存在失败用例，构建不应发布"
-  exit 1
-fi
-echo "✅ 全部离线测试通过"
+# 🔴 2026-10-05 修正：这里原本是「汇总 + 失败即 exit 1」，导致**后面的守卫全都没跑过**
+#    （34~40 号 + 我新加的 41/42 号注册在后面，永远执行不到；表现为「登记了但日志里
+#    找不到该用例」）。改为：中途只快照计数，继续往下跑，末尾统一汇总。
+MID_PASS=$PASS
+MID_FAIL=$FAIL
+echo "── 前半段完成：通过 $MID_PASS / 失败 $MID_FAIL，继续跑后半段 ──"
 
 #  34. test_membership_benefits.py —— 下载会员权益与配额表一致性（2026-10-03）：
 #      权益文案改为从 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 自动生成，
@@ -511,3 +508,24 @@ run_one test_feature_usage_gate.py
 #      后台四个下发接口都在且都要超管、面板 modules 改为探测式就绪标记。
 #      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
 run_one test_ai_credential_delivery.py
+
+#  42. test_ai_credit_costs.py —— AI 积分成本表 + 计费覆盖（2026-10-05 用户定档）：
+#      「云端 + 本机重算力都计入积分」+「每次消耗多少积分要能在后台配」。
+#      本次盘点的核心发现：全仓 24 个模型调用点，**只有 1 处**真在扣积分
+#      （routers/matting.py）。解说（最贵、6 个 LLM/VLM 调用点）完全免费；
+#      🔴 云端抠图「本地预检失败自动升级」绕过计费（fc 只来自前端表单，升级时仍 False）
+#      ⇒ 反复提交烂图即可白嫖火山算力；AI 去水印 LaMa 连日配额都没有。
+#      本守卫钉：A 每项有真实调用点/说明 · B 每个调用点都接了计费（含两处回调记账）
+#      · C 未登记 op 必须告警不静默 · D 覆盖层优先级与恢复默认 · E 后台表不含凭据。
+#      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
+run_one test_ai_credit_costs.py
+
+echo ""
+echo "========================================="
+echo "  通过: $PASS   失败: $FAIL"
+echo "========================================="
+if [ "$FAIL" -gt 0 ]; then
+  echo "❌ 存在失败用例，构建不应发布"
+  exit 1
+fi
+echo "✅ 全部离线测试通过"

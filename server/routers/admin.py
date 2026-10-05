@@ -153,6 +153,83 @@ def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = N
     return save_plan_overrides(payload or {})
 
 
+# ── AI 积分成本配置（2026-10-05 新增）────────────────────────────────────────
+# 用户定档：「所有 Key 由后台配好」+「每个功能每次消耗多少积分要能在后台配」。
+# 这两个接口把 `membership.AI_CREDIT_COSTS` 的运行时生效价暴露出来并允许改价。
+#
+# 优先级：这里写入的 `credit_costs`（plans.json 覆盖层）**高于**代码默认表。
+# GET 只返回成本数字与展示字段，**不含任何凭据**。
+@router.get("/api/admin/ai/credit-costs")
+def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
+    """超级管理员：读取 AI 积分成本表（生效价 + 代码默认价 + 真实调用点）。"""
+    require_admin(request)
+    from membership import AI_CREDIT_COSTS, credit_cost_table
+    return {
+        "ok": True,
+        "costs": credit_cost_table(),
+        "registered": len(AI_CREDIT_COSTS),
+        # 计费口径说明，前端要如实展示给管理员（这是产品定档，不是实现细节）
+        "policy": {
+            "scope": "云端算力 + 本机重算力都计费（2026-10-05 用户定档）",
+            "granularity": "按「次」定价：一次操作内发生多次模型调用只扣一份，重试成本含在单价里",
+            "local_note": "本机功能（字幕提取 / 去水印 / 本地抠图 / 本机大模型解说 / 声音克隆）同样计费，"
+                          "因为它们真实占用用户的 CPU 与内存。",
+        },
+    }
+
+
+@router.post("/api/admin/ai/credit-costs")
+def admin_ai_set_credit_costs(
+    request: Request = None,
+    payload: dict[str, Any] = Body(default={}),
+) -> dict[str, Any]:
+    """超级管理员：调整各功能的积分单价。
+
+    payload: `{"costs": {"matting_cloud": 60, ...}, "reset": ["op", ...]}`
+      · 只提交要改的项，其余保持不变（不覆盖别人的改动）。
+      · 传 `0` = 该功能免费（显式免费，不再依赖「表外默认 0」）。
+      · `reset` 列出要恢复代码默认价的 op。
+      · **op 必须已在 `AI_CREDIT_COSTS` 中登记**，未知 op 直接报错 ——
+        防止打错字导致配置无效（且避免把 typo 写进 plans.json 变成死配置）。
+    """
+    require_admin(request)
+    from fastapi import HTTPException
+    from membership import AI_CREDIT_COSTS, credit_cost_table, load_plan_overrides, save_plan_overrides
+
+    costs_in = payload.get("costs")
+    if costs_in is not None and not isinstance(costs_in, dict):
+        raise HTTPException(status_code=400, detail="costs 必须是对象 {op: 积分}")
+
+    current = dict(load_plan_overrides().get("credit_costs") or {})
+    unknown = [k for k in (costs_in or {}) if k not in AI_CREDIT_COSTS]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未登记的计费项：{unknown}（可用项：{sorted(AI_CREDIT_COSTS)}）")
+
+    for op, v in (costs_in or {}).items():
+        try:
+            val = int(v)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{op} 的积分必须是整数，收到 {v!r}")
+        if val < 0:
+            raise HTTPException(status_code=400, detail=f"{op} 的积分不能为负")
+        current[op] = val
+
+    reset = payload.get("reset") or []
+    if isinstance(reset, list):
+        for op in reset:
+            if op in AI_CREDIT_COSTS:
+                # 🔴 用 `None` 标记删除，**不能**在 Python 侧先 pop 掉再提交：
+                #   `membership.save_plan_overrides` 的合并语义是「表内逐条合并、
+                #   条目值为 null 视为删除」（2026-09-24 起）。若提交时少了这个键，
+                #   旧值会原样留在 plans.json —— 表现为「点了恢复默认，价没变」（实测踩到）。
+                current[op] = None
+
+    save_plan_overrides({"credit_costs": current})
+    return {"ok": True, "costs": credit_cost_table()}
+
+
 # ── AI 大模型账户（2026-09-24 新增）────────────────────────────────────────
 # 超级管理员面板用：汇总各 AI 提供方的「余额 / 使用模块 / 账号标识 / 充值入口」。
 # DeepSeek 余额走网关实时取（Key 仅在服务端）；百炼/火山无通用余额 REST，

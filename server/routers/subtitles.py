@@ -46,7 +46,7 @@ def sub_burn(req: app.SubBurnRequest) -> dict:
     return {"lib_id": new_id, "name": out.name, "title": (meta.get("title") or out.stem) + "（字幕版）"}
 
 @router.post("/api/subtitles/translate")
-def sub_translate(req: app.SubTranslateRequest) -> dict:
+def sub_translate(req: app.SubTranslateRequest, request: app.Request = None) -> dict:
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent
     sub_path = (out_dir / req.sub_rel).resolve()
@@ -58,6 +58,14 @@ def sub_translate(req: app.SubTranslateRequest) -> dict:
     api_key = req.api_key or llm.get("api_key", "")
     base_url = req.base_url or llm.get("base_url", "")
     model = req.model or llm.get("model", "")
+    # 🔴 2026-10-05 补计费：该路由此前**无任何配额与积分门禁**，却会真实调云端 LLM
+    #   （长字幕会按 chunk 分多片调用）。按用户定档扣 `subtitle_translate`，
+    #   一次操作一份（含分片重试成本）。
+    from membership import gate_message as _gate_message
+    _gate = _gate_message(app.current_member_store(request), "subtitle_translate",
+                          reason="subtitle_translate")
+    if _gate:
+        raise app.HTTPException(status_code=402, detail=_gate)
     try:
         translated = app.subtitles_mod.translate_srt(text, api_key, base_url, model, req.target)
     except ValueError as exc:

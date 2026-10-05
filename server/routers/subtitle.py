@@ -822,8 +822,19 @@ def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
                         "model": _j.get("model", model_size),
                         "cpu_threads": _j.get("cpu_threads", cpu_threads),
                         "member": is_member, "deduped": True}
+    # 🔴 2026-10-05 补 AI 积分（用户定档「本机重算力也计费」）：faster-whisper 在本机
+    #   跑满核数、长时间占 CPU，按 `subtitle_asr` 一次一份计。
+    #   ⚠️ 两条顺序约束：
+    #     ① 必须在上面的**幂等复用分支之后**（重复点击会 early return），
+    #        否则用户连点两次会被扣两次钱；
+    #     ② 必须在 `use_daily` **之前** —— `use_daily(-1)` 不支持回退
+    #        （`n <= 0` 直接报错），先扣日配额再扣积分会留下「额度被占但没扣钱」的脏状态。
+    #   上方注释「本地推理不计 AI 积分」同步作废。
+    from membership import gate_message as _gate_message
+    _gate = _gate_message(_mstore, "subtitle_asr", reason="subtitle_asr")
+    if _gate:
+        raise app.HTTPException(status_code=402, detail=_gate)
     _mstore.use_daily("subtitle", 1)
-    # 字幕提取为本地 faster-whisper 推理，不扣 AI 积分（仅云端/服务端算力计费）
     job_id = app.uuid.uuid4().hex[:12]
     with _SUBTITLE_LOCK:
         SUBTITLE_JOBS[job_id] = {

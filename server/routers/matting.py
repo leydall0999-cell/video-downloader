@@ -28,6 +28,44 @@ def _credit_gate(request, op: str, sub: str | None = None, reason: str | None = 
     store = app.current_member_store(request)
     return _mem.gate_message(store, op, sub, reason)
 
+
+def _make_cloud_charge_hook(request, store=None) -> dict:
+    """造一个「云端算力记账」钩子，供 `matting_ai` 在**真实升级那一刻**调用。
+
+    🔴 背景（财务漏洞，2026-10-05 修）：`matting_ai` 会在本地预检失败时**自动升级**
+    到火山 MediaKit（`_force_cloud = force_cloud or local_auto_escalated`）。
+    那时 router 层的 `if fc:` 门禁早已判完（`fc` 只来自前端表单，升级时仍为 False）
+    ⇒ 真实花了云端算力却没扣积分。
+
+    为什么用回调而不是在 router 预扣：预扣会把「本地成功出图」也一并扣钱
+    （绝大多数本地抠图根本不用云端）。升级发生在**后台线程**里、拿不到 `request`，
+    所以由 router 注入一个闭包：线程内触发 → 闭包在有 request 的上下文里扣费。
+
+    语义：
+      · `already_charged=True`（显式 force_cloud）→ 不重复扣。
+      · 扣费失败**不抛**，只记 warning：宁可少收这一次，也不能让用户白等/白跑。
+      · `charged` 标志供测试与 job meta 断言用。
+    """
+    box = {"already_charged": False, "charged": False, "op": "", "error": ""}
+
+    def _hook(op: str) -> None:
+        if box["already_charged"] or box["charged"]:
+            return
+        box["charged"] = True
+        box["op"] = op
+        try:
+            st = store if store is not None else app.current_member_store(request)
+            msg = _mem.gate_message(st, op, reason=f"matting_auto_escalate:{op}")
+            if msg:
+                box["error"] = msg
+                app.logger.warning("[matting] 云端升级记账被拒（已出图，未扣分）：%s", msg)
+        except Exception as e:  # noqa: BLE001
+            box["error"] = str(e)
+            app.logger.warning("[matting] 云端升级记账异常（已出图，未扣分）：%s", e)
+
+    box["hook"] = _hook
+    return box
+
 MAT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 MAT_MODEL_EXTS = {".onnx"}
 
@@ -315,10 +353,22 @@ def create_matting_image(
     sr = (sam_refine or "").strip().lower() in ("1", "true", "yes", "on")
     prompt_text = (prompt or "").strip()
     fc = (force_cloud or "").strip().lower() in ("1", "true", "yes", "on")
-    # C2 门禁：云端抠图（火山 MediaKit，真实服务端算力）按次扣 AI 积分（不足拦截）；
-    # 本地 BiRefNet 为用户本机免费算力，不计费。
+    # C2 门禁：云端抠图（火山 MediaKit，真实服务端算力）按次扣 AI 积分（不足拦截）。
+    # 2026-10-05 扩围：本机重算力也计费（用户定档「云端 + 本机都算」），
+    # 所以本地抠图改为扣 `local_matting_ai`；显式云端扣 `matting_cloud`。
+    #
+    # 🔴 财务漏洞（Explore 2026-10-05 定位）：本地预检判失败时 `matting_ai` 会
+    #   **自动升级**到火山（`_force_cloud = … or local_auto_escalated`），
+    #   但那时 `fc` 仍是 False → 上面这个门禁早就判完了 → 白嫖云端算力。
+    #   修法见 `_make_cloud_charge_hook` 与 `matting_ai.py` 升级处的 `on_cloud_charge` 回调。
+    _charge_hook = _make_cloud_charge_hook(request, store=app.current_member_store(request))
     if fc:
         _gate = _credit_gate(request, "matting_cloud", reason="cloud_matting")
+        if _gate:
+            raise app.HTTPException(status_code=402, detail=_gate)
+        _charge_hook["already_charged"] = True      # 显式云端：上面已扣过，升级回调别重复扣
+    else:
+        _gate = _credit_gate(request, "local_matting_ai", reason="local_matting")
         if _gate:
             raise app.HTTPException(status_code=402, detail=_gate)
     # 🧱 本地抠图日配额墙（2026-09-13）：免费 8 次/日 → 会员 500 次/日；
@@ -334,6 +384,11 @@ def create_matting_image(
                 detail="MEMBER_QUOTA|今日本地抠图额度已用尽（" + str(int(_q.get("limit", _free))) + "/日）— 开通会员可解锁 " + str(int(_mem)) + " 次/日",
             )
         _mstore.use_daily("matting", 1)
+    # 把云端升级记账钩子挂进 job —— job 会作为 `meta` 传给 `matting_ai.matting_image`，
+    # 于是升级真实发生那一刻（matting_ai.py:1670 附近）能回调扣费。
+    # job 里不能存闭包以外的不可序列化对象吗？—— job 只在进程内用，不落盘，OK。
+    with MAT_LOCK:
+        MAT_JOBS[job_id]["on_cloud_charge"] = _charge_hook["hook"]
     app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla, fc)
     if fc:
         record_event("matting_cloud", {"model": sel_model})
@@ -363,6 +418,11 @@ def matting_analyze(
         raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
     sel_model = model if (model and model in mat.MODELS) else "birefnet-general-lite"
     save_path = _save_upload(file, "mat_anl")
+    # 🔴 2026-10-05 补计费：analyze 此前**完全没有配额与积分门禁**，却会真实跑
+    #   BiRefNet（本机 ONNX，~13s）+ with_text=1 时再调一次 qwen-vl 文字块检测
+    #   （vision_client.py:701）。按用户定档「本机重算力也计费」，
+    #   统一扣 `matting_vision`（= VLM 定位/图像理解那一档，含本机与云端两侧理解开销）。
+    #   缓存命中会秒回，但为避免「先扣后返」的不一致，扣费放在缓存判定**之后**。
     try:
         from PIL import Image
 
@@ -382,6 +442,11 @@ def matting_analyze(
                     return {"ok": True, "blocks": hit["blocks"], "model": sel_model,
                             "total": len(hit["blocks"]), "text_used": hit["text_used"],
                             "text_total": hit["text_total"], "cached": True}
+
+        # 缓存未命中 = 真的要跑模型了，此时才扣费（避免「先扣后返」）。
+        _gate = _credit_gate(request, "matting_vision", reason="matting_analyze")
+        if _gate:
+            raise app.HTTPException(status_code=402, detail=_gate)
 
         blocks = mat.analyze_blocks(rgb, model=sel_model)
         text_used = False

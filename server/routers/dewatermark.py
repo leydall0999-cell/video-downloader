@@ -47,6 +47,38 @@ def _save_upload(file, prefix: str) -> app.Path:
     return save_path
 
 
+def _make_dw_charge_hook(request) -> dict:
+    """去水印「auto 难例回落 AI」的记账钩子（2026-10-05）。
+
+    为什么需要：`engine=auto`（默认）先走 OpenCV，**难例才回落 LaMa**，
+    回落与否要等 OpenCV 跑完做残影检测才知道（`_auto_should_fallback_to_ai`），
+    请求阶段无法预知 ⇒ 不能在入口预扣（会把纯 OpenCV 成功也扣钱）。
+
+    语义与 matting 的 `_make_cloud_charge_hook` 一致：只扣一次、失败不抛
+    （宁可少收这一次，也不能让用户白等）。
+    """
+    box: dict = {"charged": False, "op": "", "error": ""}
+
+    def _hook(op: str) -> None:
+        if box["charged"]:
+            return
+        box["charged"] = True
+        box["op"] = op
+        try:
+            from membership import gate_message as _gate_message
+            msg = _gate_message(app.current_member_store(request), op,
+                                reason=f"dewatermark_fallback:{op}")
+            if msg:
+                box["error"] = msg
+                app.logger.warning("[dw] AI 回落记账被拒（已出图，未扣分）：%s", msg)
+        except Exception as e:  # noqa: BLE001
+            box["error"] = str(e)
+            app.logger.warning("[dw] AI 回落记账异常（已出图，未扣分）：%s", e)
+
+    box["hook"] = _hook
+    return box
+
+
 def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine: str = "opencv",
                int8: bool = True, model: str = "", quality: str = "auto") -> None:
     job = app.DW_JOBS.get(job_id)
@@ -107,6 +139,11 @@ def _run_image(job_id: str, src: str, regions, method: str, radius: int, engine:
                 if out_img is not None and orig_img is not None and \
                         dwc._auto_should_fallback_to_ai(orig_img, out_img, regions, detail):
                     # OpenCV 没去干净（半透明/浅底等）→ 用原图直接走 LaMa 重跑
+                    # 🔴 2026-10-05 记账：真跑 LaMa 了才扣积分（auto 难例回落）。
+                    #   放在 try 之前：即使 LaMa 随后失败，也已真实消耗了算力。
+                    _cb = job.get("on_ai_charge")
+                    if callable(_cb):
+                        _cb("dewatermark_ai")
                     try:
                         dwc_ai.set_int8_enabled(int8)
                         if model and model != dwc_ai.current_model():
@@ -223,8 +260,22 @@ def create_dw_image(
         elif engine == "ai":
             if model not in dwc_ai.list_models():
                 raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
-    # AI 去水印（LaMa）为本地 ONNX 推理，不扣 AI 积分；opencv 亦本地免费
-    # （仅云端/服务端算力计费，见 membership.credit_cost）
+    # AI 去水印（LaMa ONNX / 扩散模型）为**本机**重算力：占 1.5~2GB 内存、长时间 CPU，
+    # 按用户定档（2026-10-05「云端 + 本机重算力都计入积分」）扣 `dewatermark_ai`。
+    # ⚠️ `engine=auto`（默认）先走 OpenCV、难例才回落 LaMa（本文件 :98-110），
+    #   而回落与否**取决于跑完 OpenCV 后的检测结果**，请求阶段无法预知。
+    #   ⇒ 显式 ai / diffusion 在此预扣；auto 则注入回调，由 `_run_image` 在真正
+    #   回落时记账（同 matting 的 `_make_cloud_charge_hook` 思路）。
+    #   上方旧注释「AI 去水印为本地 ONNX 推理，不扣 AI 积分」作废。
+    if engine in ("ai", "diffusion"):
+        from membership import gate_message as _gate_message
+        _gate = _gate_message(app.current_member_store(request), "dewatermark_ai",
+                              reason="dewatermark_ai")
+        if _gate:
+            raise app.HTTPException(status_code=402, detail=_gate)
+        dw_charge_hook = None
+    else:
+        dw_charge_hook = _make_dw_charge_hook(request)
     save_path = _save_upload(file, "dw_up")
     job_id = app.uuid.uuid4().hex[:12]
     with app.DW_LOCK:
@@ -232,6 +283,9 @@ def create_dw_image(
             "status": "running", "out_path": "", "error": "", "filename": "",
             "kind": "image", "phase": "", "progress": "",
         }
+        # 记账钩子挂进 job（_run_image 按 job_id 取回）——auto 难例回落 LaMa 时才扣
+        if dw_charge_hook is not None:
+            app.DW_JOBS[job_id]["on_ai_charge"] = dw_charge_hook
     app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine,
                         bool(int(int8)), model, quality)
     record_event("dewatermark", {"kind": "image", "engine": engine, "quality": quality})

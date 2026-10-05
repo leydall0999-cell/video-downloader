@@ -61,6 +61,9 @@ def _reset_state():
     if os.path.exists(p):
         os.remove(p)
     server_app.member_store._loaded = False
+    # 🔴 2026-10-05：本机 ASR（faster-whisper）也计入积分（用户定档），本文件验的是
+    #   **日配额墙**（免费 2 次/日），与积分无关 ⇒ 补足积分避免被 402 积分门禁抢先拦下。
+    server_app.member_store.add_credits(100000, reason="test_subtitle_quota_setup")
 
 
 def _post_subtitle(model="small", path=None):

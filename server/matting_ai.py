@@ -1668,6 +1668,21 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         # 升级意图：显式 force_cloud，或本地预检已判定「本地明显失败需升级」。
         # 一旦成立，下方 skip_cloud_for_text 等跳过优化全部失效，强制走云端 MediaKit。
         _force_cloud = bool(force_cloud) or bool((meta or {}).get("local_auto_escalated"))
+        # 🔴 2026-10-05 财务漏洞修复：本地预检判失败自动升级时，router 层的
+        #   `if fc:` 门禁**已经判完了**（fc 只来自前端表单，自动升级时仍是 False）
+        #   ⇒ 真实调用了火山 MediaKit 却没扣任何积分。反复提交烂图即可白嫖云端算力。
+        #   修法：升级真正发生的那一刻，通过 `meta["on_cloud_charge"]` 回调记账
+        #   （回调由 routers/matting.py 注入，扣费发生在仍持有 request 的线程里）。
+        if _force_cloud and not force_cloud:
+            _cb = (meta or {}).get("on_cloud_charge")
+            if callable(_cb):
+                try:
+                    _cb("matting_cloud")
+                except Exception as _e:  # noqa: BLE001
+                    # 记账失败**不阻断出图**：宁可少收这一次，也不能让用户白等。
+                    # 失败会由 routers/matting.py 记 warning。
+                    if meta is not None:
+                        meta["cloud_charge_error"] = str(_e)
         _cloud_models = ("auto", "birefnet-general", "sam-matting")
         _is_person = (
             _is_person_label(vision_label)

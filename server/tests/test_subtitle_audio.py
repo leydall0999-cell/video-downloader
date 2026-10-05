@@ -45,6 +45,9 @@ def _ext_job(ext: str, member: bool = True):
         ms = os.path.join(_TMP, ".video-downloader", "membership.json")
         Path(ms).write_text('{"download_member": {"active": true}}', encoding="utf-8")
         server_app.member_store._loaded = False
+        # 🔴 2026-10-05：本机 ASR 也计入积分（用户定档「云端 + 本机重算力都算」），
+        #   会员也不能白用 ⇒ 补足积分，否则会先被 402 积分门禁拦下、测不到后缀兼容性。
+        server_app.member_store.add_credits(100000, reason="test_subtitle_audio_setup")
     return client.post("/api/subtitle/extract", json={"local_path": p, "model_size": "base"})
 
 
@@ -57,7 +60,11 @@ def run():
         r = _ext_job(ext)
         passed = r.status_code == 200 and r.json().get("job_id")
         ok &= bool(passed)
-        print(("✅" if passed else "❌"), f"音频 {ext} → HTTP {r.status_code}", (r.json() if not passed else "")[:120])
+        # 🔴 2026-10-05：原来对 dict 直接切片 `(r.json())[:120]` → KeyError: slice(...)。
+        #   失败分支本身就抛异常、看不到真实原因（当时 402 被 KeyError 掩盖了）。
+        body = r.json() if not passed else ""
+        print(("✅" if passed else "❌"), f"音频 {ext} → HTTP {r.status_code}",
+              (str(body)[:120] if body else ""))
 
     # 2) 视频后缀仍被接受（回归）
     r = _ext_job(".mp4")

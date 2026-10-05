@@ -192,18 +192,29 @@ def test_fold_commentary_range_skips_full_span():
 
 # ── 3. 路由层：结构化 403 与预检端点 ─────────────────────────────────── #
 class _Patch:
-    """把配额管理器与本机引擎探测替换为替身，避免触碰真实家目录与 MLX。"""
+    """把配额管理器与本机引擎探测替换为替身，避免触碰真实家目录与 MLX。
+
+    🔴 2026-10-05：也要桩掉 `charge_commentary_credits`。解说现在**同时**有两道门 ——
+    日配额/时长闸门（本测试的范围）与 **AI 积分**闸门（`precheck_or_raise` 里新增的
+    扣费，超出则 402 `MEMBER_QUOTA|`）。本文件验的是前者，若不桩掉后者，
+    临时目录里 0 积分会让每个「应该放行」的用例都撞上 402（实测 `test_..._passes_when_allowed`
+    失败）。桩掉即隔离关注点：积分扣费由 `test_ai_credit_costs.py` 单独验。
+    积分不足的行为由该守卫的 B2 组断言（`MEMBER_QUOTA|` + 402 必须在代码里）保证。
+    """
 
     def __enter__(self):
         self._qm = quota_router.get_quota_manager
         self._ready = quota_router._local_engine_ready
+        self._charge = quota_router.charge_commentary_credits
         quota_router.get_quota_manager = lambda request=None: _mgr()
         quota_router._local_engine_ready = lambda engine="": False
+        quota_router.charge_commentary_credits = lambda *a, **k: {"ok": True, "spent": 0, "free": True}
         return self
 
     def __exit__(self, *exc):
         quota_router.get_quota_manager = self._qm
         quota_router._local_engine_ready = self._ready
+        quota_router.charge_commentary_credits = self._charge
         return False
 
 

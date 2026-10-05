@@ -112,6 +112,16 @@ def precheck_or_raise(
 
     统一改造点：**所有**会启动解说任务的入口都必须先过这里，而不是等任务跑完
     才因额度不足失败（那会白等十几分钟并产出废片）。
+
+    🔴 2026-10-05：在此**追加 AI 积分扣费**（解说此前完全无积分门禁，是最贵的功能）。
+    扣费点选这里而不是各个 endpoint，因为本函数已是全部解说入口的统一收口 ——
+    新增入口只要照旧调 `precheck_or_raise` 就自动被计费覆盖，不会漏。
+
+    扣哪一档取决于实际会跑哪个引擎（`llm_script.py:2364` 会在长片时把
+    auto 自动切成 cloud，所以长片按云端价）：
+      - 本机 MLX          → `commentary_local_mlx`
+      - 云端网关 / 大模型  → `commentary_llm`
+    不足时抛 **402 + MEMBER_QUOTA|**（与会员墙其余部分同契约）。
     """
     res = precheck_commentary(request, duration_sec, engine=engine)
     if not res.get("allowed"):
@@ -126,7 +136,45 @@ def precheck_or_raise(
                 "subscribe": True,
             },
         )
+    charge_commentary_credits(request, res.get("engine") or engine, duration_sec)
     return res
+
+
+def _commentary_credit_op(engine: str, duration_sec: float) -> str:
+    """解说这次该按哪个 op 计费（长片会被自动转云端 → 按云端价）。"""
+    eng = (engine or "").strip().lower()
+    local_ready = _local_engine_ready(eng)
+    # auto 且本机就绪 → 通常跑本机；但长片会被 llm_script.py:2364 切云端。
+    # 这里按「本机就绪且片子不长」判本机，长片按云端（宁多收不少收）。
+    if local_ready and eng != "cloud":
+        try:
+            from llm_script_limits import LOCAL_MAX_VIDEO_SEC  # type: ignore
+            long_clip = float(duration_sec or 0) > float(LOCAL_MAX_VIDEO_SEC)
+        except Exception:
+            long_clip = float(duration_sec or 0) > 1800.0
+        if not long_clip:
+            return "commentary_local_mlx"
+    return "commentary_llm"
+
+
+def charge_commentary_credits(
+    request: Optional[Request] = None,
+    engine: str = "",
+    duration_sec: float = 0.0,
+) -> dict[str, Any]:
+    """按实际引擎扣 AI 积分；不足抛 402。返回扣费结果供调用方忽略。"""
+    import app as _app
+    from membership import credit_cost, gate_message
+    op = _commentary_credit_op(engine, duration_sec)
+    store = _app.current_member_store(request) if request is not None else _app.member_store
+    if int(credit_cost(op)) <= 0:
+        return {"ok": True, "spent": 0, "free": True, "op": op}
+    msg = gate_message(store, op, reason=f"commentary:{op}")
+    if msg:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=402,
+                            detail=f"MEMBER_QUOTA|{msg}")
+    return {"ok": True, "op": op}
 
 
 def assert_upload_allowed(request: Optional[Request], duration_sec: float) -> None:

@@ -20768,7 +20768,7 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'members') loadMembers();
       else if (name === 'stats') loadStats();
       else if (name === 'config') loadConfig();
-      else if (name === 'aiaccounts') loadAiAccounts();
+      else if (name === 'aiaccounts') { loadAiAccounts(); loadAiCosts(); }
       else if (name === 'monitor') loadMonitor();
     };
 
@@ -21095,6 +21095,95 @@ el.dwVidPlayer.hidden = true;
     };
     const aiRefreshBtn = $('adminAiRefresh');
     if (aiRefreshBtn) aiRefreshBtn.onclick = () => loadAiAccounts();
+
+    // 🔴 AI 积分成本配置（2026-10-05）——用户定档「每个功能每次消耗多少积分要能在后台配」。
+    // 数据源 `/api/admin/ai/credit-costs`（GET 读生效价，POST 改价 / 恢复默认）。
+    // 状态存在 _aiCostRows：{op: {…服务端行, input: 当前输入值}}，保存时只提交「与默认不同」的项。
+    let _aiCostRows = [];
+    const aiCostBox = () => $('adminAiCostTable');
+
+    const renderAiCosts = (rows, policy) => {
+      const box = aiCostBox();
+      if (!box) return;
+      const pol = $('adminAiCostPolicy');
+      if (pol && policy) pol.textContent = `${policy.scope} · ${policy.granularity}`;
+      if (!rows || !rows.length) { box.innerHTML = '<div class="admin-empty">暂无计费项</div>'; return; }
+      box.innerHTML = `<table class="ai-cost-tbl"><thead><tr>
+          <th>功能</th><th>每次消耗（积分）</th><th>代码默认</th><th>真实调用点</th><th>说明</th><th></th>
+        </tr></thead><tbody>${rows.map((r) => {
+          const val = r.effective;
+          const dirty = r.overridden;
+          return `<tr data-op="${esc(r.op)}" class="${r.orphan ? 'is-orphan' : ''}">
+            <td><b>${esc(r.name)}</b><br><small class="ai-cost-op">${esc(r.op)}</small></td>
+            <td><input class="ai-cost-input${dirty ? ' is-dirty' : ''}" type="number" min="0" step="1"
+                       value="${val}" data-op="${esc(r.op)}"></td>
+            <td class="ai-cost-def">${r.default}</td>
+            <td class="ai-cost-where"><code>${esc(r.where || '—')}</code></td>
+            <td class="ai-cost-note">${esc(r.note || '')}</td>
+            <td>${dirty ? '<button type="button" class="admin-btn admin-btn-ghost admin-btn-sm ai-cost-reset" data-op="' + esc(r.op) + '">恢复默认</button>' : ''}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+      box.querySelectorAll('.ai-cost-reset').forEach((b) => {
+        b.onclick = () => { saveAiCosts({ reset: [b.dataset.op] }); };
+      });
+      box.querySelectorAll('.ai-cost-input').forEach((inp) => {
+        inp.oninput = () => inp.classList.toggle('is-dirty', inp.value !== String(_defaultOf(inp.dataset.op)));
+      });
+    };
+    const _defaultOf = (op) => {
+      const r = _aiCostRows.find((x) => x.op === op);
+      return r ? String(r.default) : '0';
+    };
+
+    const loadAiCosts = async () => {
+      const box = aiCostBox();
+      if (box) box.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const r = await adminRequest('/api/admin/ai/credit-costs');
+        if (!r || !r.ok) { if (box) box.innerHTML = `<div class="admin-empty">${esc((r && r.error) || '加载失败')}</div>`; return; }
+        _aiCostRows = r.costs || [];
+        renderAiCosts(_aiCostRows, r.policy);
+      } catch (e) {
+        if (box) box.innerHTML = '<div class="admin-empty">网络错误</div>';
+      }
+    };
+
+    const saveAiCosts = async (extra) => {
+      const box = aiCostBox();
+      // 只提交「与代码默认不同」的项，避免整表覆盖别人的改动
+      const costs = {};
+      (box ? box.querySelectorAll('.ai-cost-input') : []).forEach((inp) => {
+        const def = _defaultOf(inp.dataset.op);
+        if (String(inp.value) !== def) costs[inp.dataset.op] = parseInt(inp.value || '0', 10);
+      });
+      const payload = Object.assign({ costs }, extra || {});
+      if (!Object.keys(payload.costs).length && !(payload.reset || []).length) {
+        if (box) box.insertAdjacentHTML('afterbegin', '<div class="ai-cost-tip">没有改动</div>');
+        setTimeout(() => { const t = box && box.querySelector('.ai-cost-tip'); if (t) t.remove(); }, 1600);
+        return;
+      }
+      const btn = $('adminAiCostSave');
+      if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+      try {
+        const r = await adminRequest('/api/admin/ai/credit-costs', { method: 'POST', body: JSON.stringify(payload) });
+        if (r && r.ok) {
+          _aiCostRows = r.costs || [];
+          renderAiCosts(_aiCostRows, null);
+          showToast('积分成本已保存并立即生效');
+        } else {
+          showToast('保存失败：' + ((r && r.error) || '未知错误'), 3200);
+        }
+      } catch (e) {
+        showToast('保存失败：网络错误', 3200);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '保存改动'; }
+      }
+    };
+
+    const aiCostReloadBtn = $('adminAiCostReload');
+    if (aiCostReloadBtn) aiCostReloadBtn.onclick = () => loadAiCosts();
+    const aiCostSaveBtn = $('adminAiCostSave');
+    if (aiCostSaveBtn) aiCostSaveBtn.onclick = () => saveAiCosts();
 
     // ---- 用户管理 ----
     const loadUsers = async () => {
