@@ -16818,6 +16818,15 @@ el.dwVidPlayer.hidden = true;
       }
       const perm = Number(s.permanent_credits || 0);
       if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}（不过期）</span>`);
+      // 免费用户「首次体验」余量（2026-10-05）：让用户**在撞墙之前**知道自己还有几次免费。
+      // 只对非会员展示 —— 会员有积分，名额按策略本来也不给他们用，展示出来是误导。
+      const ft = s.free_trials || null;
+      if (ft && ft.enabled && !(dl.active || ai.active)) {
+        const n = Number(ft.remaining_count || 0);
+        chips.push(n > 0
+          ? `<span class="member-chip member-chip-trial">🎟️ 免费体验：还有 ${n} 个功能可首次免费试一次</span>`
+          : `<span class="member-chip member-chip-trial is-out">🎟️ 免费体验已用完 — 开通 AI 会员或购买积分包继续使用</span>`);
+      }
       el.memberStatus.innerHTML = chips.length
         ? `<div class="member-status-inner">${chips.join('')}<span class="member-total">可用积分合计 ${Number(s.credits_total || 0)}</span></div>`
         : `<div class="member-status-inner member-status-empty">尚未开通会员 — 下方选择套餐（V1 测试期激活即时生效）</div>`;
@@ -21102,6 +21111,55 @@ el.dwVidPlayer.hidden = true;
     let _aiCostRows = [];
     const aiCostBox = () => $('adminAiCostTable');
 
+    // 免费用户「首次体验」策略（2026-10-05）：与单价同一个 GET 源、同一个「保存改动」按钮。
+    // _aiTrial 是服务端当前值作为「原始副本」，只提交与它不同的字段 —— 和 costs 同一套路，
+    // 避免整包覆盖把别人刚改的字段抹掉。
+    let _aiTrial = null;
+
+    const _trialOpChecked = (el) => !!el && el.checked;
+
+    const renderTrialPolicy = (pol) => {
+      if (!pol) return;
+      const en = $('adminTrialEnabled');
+      if (en) en.checked = !!pol.enabled;
+      const md = $('adminTrialMode');
+      if (md) md.value = pol.mode || 'per_op';
+      const mc = $('adminTrialMaxCost');
+      if (mc) mc.value = String(pol.max_cost || 0);
+      const box = $('adminTrialExclude');
+      if (!box) return;
+      const excluded = new Set(pol.exclude || []);
+      box.innerHTML = _aiCostRows.map((r) => {
+        const on = !excluded.has(r.op);
+        return `<label class="${on ? '' : 'is-out'}"><input type="checkbox" class="trial-ex-op" data-op="${esc(r.op)}"${on ? ' checked' : ''}><span>${esc(r.name)}</span></label>`;
+      }).join('');
+      box.querySelectorAll('.trial-ex-op').forEach((inp) => {
+        inp.onchange = () => {
+          const lb = inp.closest('label');
+          if (lb) lb.classList.toggle('is-out', !inp.checked);
+        };
+      });
+    };
+
+    const trialPayload = () => {
+      if (!_aiTrial) return null;
+      const p = {};
+      const en = $('adminTrialEnabled');
+      if (en && en.checked !== !!_aiTrial.enabled) p.enabled = en.checked;
+      const md = $('adminTrialMode');
+      if (md && md.value !== _aiTrial.mode) p.mode = md.value;
+      const mc = $('adminTrialMaxCost');
+      if (mc) {
+        const v = parseInt(mc.value, 10) || 0;
+        if (v !== (_aiTrial.max_cost || 0)) p.max_cost = v;
+      }
+      const before = [...(_aiTrial.exclude || [])].sort().join(',');
+      const now = [];
+      document.querySelectorAll('.trial-ex-op').forEach((i) => { if (!i.checked) now.push(i.dataset.op); });
+      if (now.sort().join(',') !== before) p.exclude = now;
+      return p;
+    };
+
     const renderAiCosts = (rows, policy) => {
       const box = aiCostBox();
       if (!box) return;
@@ -21143,7 +21201,9 @@ el.dwVidPlayer.hidden = true;
         const r = await adminRequest('/api/admin/ai/credit-costs');
         if (!r || !r.ok) { if (box) box.innerHTML = `<div class="admin-empty">${esc((r && r.error) || '加载失败')}</div>`; return; }
         _aiCostRows = r.costs || [];
+        _aiTrial = r.free_trial || null;
         renderAiCosts(_aiCostRows, r.policy);
+        renderTrialPolicy(_aiTrial);
       } catch (e) {
         if (box) box.innerHTML = '<div class="admin-empty">网络错误</div>';
       }
@@ -21158,7 +21218,9 @@ el.dwVidPlayer.hidden = true;
         if (String(inp.value) !== def) costs[inp.dataset.op] = parseInt(inp.value || '0', 10);
       });
       const payload = Object.assign({ costs }, extra || {});
-      if (!Object.keys(payload.costs).length && !(payload.reset || []).length) {
+      const tp = trialPayload();
+      if (tp && Object.keys(tp).length) payload.free_trial = tp;
+      if (!Object.keys(payload.costs).length && !(payload.reset || []).length && !payload.free_trial) {
         if (box) box.insertAdjacentHTML('afterbegin', '<div class="ai-cost-tip">没有改动</div>');
         setTimeout(() => { const t = box && box.querySelector('.ai-cost-tip'); if (t) t.remove(); }, 1600);
         return;
@@ -21169,7 +21231,9 @@ el.dwVidPlayer.hidden = true;
         const r = await adminRequest('/api/admin/ai/credit-costs', { method: 'POST', body: JSON.stringify(payload) });
         if (r && r.ok) {
           _aiCostRows = r.costs || [];
+          _aiTrial = r.free_trial || _aiTrial;
           renderAiCosts(_aiCostRows, null);
+          renderTrialPolicy(_aiTrial);
           showToast('积分成本已保存并立即生效');
         } else {
           showToast('保存失败：' + ((r && r.error) || '未知错误'), 3200);

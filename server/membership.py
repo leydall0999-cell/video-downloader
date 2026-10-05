@@ -292,7 +292,10 @@ def load_plan_overrides() -> dict[str, Any]:
         return {}
 
 
-_SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs")
+# `free_trial` 是扁平策略字典（enabled/mode/exclude/max_cost…），列入此表 ⇒ 后台可
+# 只提交改动项（如只传 enabled）而不抹掉其余字段，与其余四张表同一套合并语义。
+_SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs",
+                    "free_trial")
 
 
 def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
@@ -675,16 +678,89 @@ def credit_cost_table() -> list[dict[str, Any]]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# 免费用户「首次体验」策略（2026-10-05 用户定档）
+# --------------------------------------------------------------------------- #
+# 背景：2026-10-05 把 AI 积分墙补齐后，积分池为 0 的免费用户**任何 AI 功能第一次点就
+# 撞 402**，连"这东西到底好不好用"都无从判断 —— 等于把功能在漏斗最前面就掐死了。
+# 用户定档：**每个功能各免一次**（能在后台改口径），次数用尽后才开始计积分。
+#
+# 记录落在会员状态文件自身的 `free_trials` 键（随账号走，不是全局），键名语义：
+#   mode=per_op → 每个 op 一个名额，键是 op 名；
+#   mode=once   → 全站共用一个名额，键是 "*"。
+#
+# 🔴 **它的边界**：这只是账号级控制，换个注册账号仍能重薅。真要收紧得靠用户改不了的
+#    维度（强设备指纹 / 授权中心去重），而不是靠本地文件。量级可控：每个功能都薅满，
+#    单个免费账号占用的平台成本上限约 ¥0.8（按各条目的 real_cost 加总）。
+DEFAULT_FREE_TRIAL_POLICY: dict[str, Any] = {
+    "enabled": True,
+    # per_op = 每个功能各免一次（默认，用户定档）｜once = 全站只免一次｜off = 关闭
+    "mode": "per_op",
+    # 不参与试用的 op（把最贵的解说/画面理解排除就用这个，人均成本立刻降到 ¥0.3 量级）
+    "exclude": [],
+    # 会员（下载或 AI 任一活跃）是否也享受 —— 默认不给：会员已按套餐拿到积分，
+    # 用完请复购，不拿"试用"给会员兜底，否则付费纪律会被自己松开。
+    "members_too": False,
+    # 0 = 不限；>0 时单价超过该积分的功能不参与试用（比维护 exclude 列表省事）
+    "max_cost": 0,
+}
+_TRIAL_MODES = ("per_op", "once", "off")
+_TRIAL_ONCE_KEY = "*"
+
+
+def free_trial_policy() -> dict[str, Any]:
+    """运行时生效的试用策略：plans.json 的 `free_trial` 覆盖层 → 代码默认。
+
+    后台写到 `save_plan_overrides({"free_trial": {...}})`；逐个字段合并，
+    管理员只改一项（比如只切开关）不会把其余字段抹掉。
+    读到的脏值一律收敛到合法范围 —— 后台写坏配置不该让整个扣费链路炸掉
+    （fail-open 的方向是「退回默认口径」而不是「全站免单」）。
+    """
+    ov = load_plan_overrides().get("free_trial")
+    out = dict(DEFAULT_FREE_TRIAL_POLICY)
+    if isinstance(ov, dict) and ov:
+        for k, v in ov.items():
+            if v is None:
+                continue
+            out[k] = v
+    mode = str(out.get("mode") or "per_op").strip().lower()
+    out["mode"] = mode if mode in _TRIAL_MODES else "per_op"
+    if out["mode"] == "off":
+        out["enabled"] = False
+    out["enabled"] = bool(out.get("enabled"))
+    ex = out.get("exclude")
+    out["exclude"] = [str(x) for x in ex] if isinstance(ex, (list, tuple, set)) else []
+    try:
+        out["max_cost"] = max(0, int(out.get("max_cost") or 0))
+    except (TypeError, ValueError):
+        out["max_cost"] = 0
+    out["members_too"] = bool(out.get("members_too"))
+    return out
+
+
+def _trial_key(op: str, mode: str) -> str:
+    return _TRIAL_ONCE_KEY if mode == "once" else str(op)
+
+
 def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
               reason: str | None = None) -> dict[str, Any]:
     """按成本扣 AI 积分。返回 spend_credits 的结果 dict（ok/error）。
 
     成本 <=0 视为免费操作，直接返回 ok=True（不污染积分池）。
+    积分不足且命中「首次体验」名额时按放行处理（`trial=True`），不扣积分。
     """
     cost = credit_cost(op, sub)
     if cost <= 0:
         return {"ok": True, "spent": 0, "free": True, "credits_left": store.status()["credits_total"]}
-    return store.spend_credits(cost, reason=reason or op)
+    res = store.spend_credits(cost, reason=reason or op)
+    if res.get("ok"):
+        return res
+    # 与 gate_message 同口径：这里的试用分支让「不走 gate_message 的调用点」也不会漏。
+    if store.trial_available(op, cost):
+        store.trial_consume(op, reason=reason or op)
+        return {"ok": True, "spent": 0, "free": True, "trial": True,
+                "credits_left": store.status()["credits_total"]}
+    return res
 
 
 def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
@@ -692,6 +768,14 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
     """扣积分并产出拦截原因：None=放行；非 None=「积分不足」原因字符串（供 402 detail）。
 
     成本 <=0 视为免费放行；spend 系统异常时降级放行（记日志），不阻断主流程。
+
+    🔴 2026-10-05「免费用户首次体验」：这里的判定顺序是
+        **先扣积分 → 扣不动才动用试用名额 → 都不行才拦**。
+       1. 先扣：账户里还有积分就不占用试用名额 —— 名额一次性资源，有余额时烧掉它
+          等于白送，用户本可以用这次名额去试更贵的功能。
+       2. 后试用：余额不够时若该 op 还剩名额，标记用掉并返回 None（放行、不扣分）。
+       3. 都不行：文案里如实说明「该功能的免费体验是否已用过」，别只丢一句
+          「积分不足」—— 用户上次明明跑通了同一个操作，会以为是系统出错了。
     """
     cost = credit_cost(op, sub)
     if cost <= 0:
@@ -703,7 +787,25 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
         return None
     if res.get("ok"):
         return None
-    return f"AI 积分不足：本次操作需 {cost} 积分，当前 {res.get('credits_left', 0)}（请开通 AI 会员或购买积分包）"
+
+    left = res.get("credits_left", 0)
+    pol = free_trial_policy()
+    if not pol.get("enabled"):
+        hint = "请开通 AI 会员或购买积分包"
+    elif store.trial_available(op, cost):
+        try:
+            store.trial_consume(op, reason=reason or op)
+            logging.getLogger("membership").info(
+                "free trial consumed op=%s cost=%s user=%s", op, cost,
+                getattr(store.path, "name", ""))
+            return None
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("membership").warning("free trial consume failed op=%s: %s", op, e)
+            hint = "请开通 AI 会员或购买积分包"
+    else:
+        hint = ("本功能的免费体验已用过一次，请开通 AI 会员或购买积分包"
+                if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
+    return f"AI 积分不足：本次操作需 {cost} 积分，当前 {left}（{hint}）"
 
 # --------------------------------------------------------------------------- #
 # 状态文件
@@ -734,6 +836,8 @@ def _empty_state() -> dict[str, Any]:
         "daily_usage": {"date": "", "download": 0, "subtitle": 0, "cloud": 0,
                         "matting": 0, "app_compute": 0},
         "usage_history": {},
+        # 免费用户「首次体验」已用记录：{op 或 "*": 使用时刻}（见 DEFAULT_FREE_TRIAL_POLICY）
+        "free_trials": {},
         "meta": {"activated_at": 0.0, "history": [],
                  "device_fp": "", "device_bound_at": 0.0,
                  "license_code": "", "license_revoked": False},
@@ -749,7 +853,8 @@ def _load_state(path: Path) -> dict[str, Any]:
         return _empty_state()
     st = _empty_state()
     # 逐键合并，容忍旧/缺字段
-    for k in ("download_member", "ai_member", "permanent_credits", "daily_usage", "usage_history", "meta"):
+    for k in ("download_member", "ai_member", "permanent_credits", "daily_usage",
+              "usage_history", "meta", "free_trials"):
         if isinstance(data.get(k), dict):
             st[k].update(data[k])
     # 2026-10-04：丢弃已下线资源的历史计数键（_DEAD_USAGE_KEYS）。
@@ -935,6 +1040,10 @@ class MembershipStore:
             out["ai_member"]["credits_left"] = 0
             out["device_locked"] = lock
         out["account"] = self.account_view()
+        # 免费用户的「首次体验」余量（2026-10-05）：逐个 op 算好，前端直接用，
+        # 不必自己照着策略推导一遍 —— 推导逻辑分家几乎必然出现「表单显示能试用、
+        # 真点下去被拦」的错位。
+        out["free_trials"] = self.free_trial_view()
         return out
 
     def _device_lock(self) -> Optional[str]:
@@ -1335,6 +1444,74 @@ class MembershipStore:
         return {"ok": True, "spent": amount, "reason": reason,
                 "ai_taken": ai_taken, "perm_taken": perm_taken,
                 "credits_left": self.status()["credits_total"]}
+
+    # ---- 免费用户「首次体验」名额（2026-10-05）---- #
+    def _trials_raw(self) -> dict[str, Any]:
+        """已用名额表。惰性建键，旧状态文件没有 `free_trials` 也能正常跑。"""
+        self._ensure_loaded()
+        tr = self._state.get("free_trials")
+        if not isinstance(tr, dict):
+            tr = {}
+            self._state["free_trials"] = tr
+        return tr
+
+    def trial_available(self, op: str, cost: int = 0) -> bool:
+        """该 op 现在还能不能走「免费体验」。五道判据缺一不可。
+
+        注意这里**只看本 store 的会员标志，不调 status()**：status() 会连带调用
+        `free_trial_view()` → 回到 `trial_available()`，就成了无限递归。
+        """
+        pol = free_trial_policy()
+        if not pol.get("enabled"):
+            return False
+        if op in (pol.get("exclude") or []):
+            return False
+        mc = int(pol.get("max_cost") or 0)
+        if mc > 0 and int(cost or 0) > mc:
+            return False
+        if not pol.get("members_too") and self._is_download_active():
+            return False          # 会员按付费纪律自己承担，不拿试用兜底
+        return _trial_key(op, str(pol.get("mode"))) not in self._trials_raw()
+
+    def trial_used(self, op: str, pol: dict[str, Any] | None = None) -> bool:
+        """该 op 的试用名额是否已经用掉（只判状态，不改状态）。"""
+        pol = pol or free_trial_policy()
+        return _trial_key(op, str(pol.get("mode"))) in self._trials_raw()
+
+    def trial_consume(self, op: str, reason: str = "") -> None:
+        """标记名额已用。与 `spend_credits` 同时机 —— **在任务真正开跑之前**就占掉。
+
+        先行占用的代价：若这次任务本身失败（网络/模型报错），名额也一并没了。
+        这是刻意的 —— 否则「故意制造失败」就能无限白嫖同一个名额。
+        """
+        pol = free_trial_policy()
+        self._trials_raw()[_trial_key(op, str(pol.get("mode")))] = self._now()
+        meta = self._state.setdefault("meta", {})
+        meta.setdefault("history", []).append({
+            "type": "free_trial", "op": op, "reason": reason, "at": self._now(),
+        })
+        meta["history"] = meta["history"][-200:]
+        self._persist()
+
+    def free_trial_view(self) -> dict[str, Any]:
+        """给 status() / 前端用的试用视图：{-enabled, mode, remaining:{op:0|1}, used:[op]}。
+
+        `remaining` 逐个 op 算真实余量（而不是只回一个 enabled 布尔），这样会员中心
+        能直接渲染「还剩几次免费体验」，不用前端自己再照着策略推导一遍。
+        """
+        pol = free_trial_policy()
+        remaining: dict[str, int] = {}
+        for op in AI_CREDIT_COSTS:
+            remaining[op] = 1 if self.trial_available(op, int(credit_cost(op))) else 0
+        return {
+            "enabled": bool(pol.get("enabled")),
+            "mode": str(pol.get("mode")),
+            "max_cost": int(pol.get("max_cost") or 0),
+            "exclude": list(pol.get("exclude") or []),
+            "members_too": bool(pol.get("members_too")),
+            "remaining": remaining,
+            "remaining_count": sum(remaining.values()),
+        }
 
     def add_credits(self, delta: int, reason: str = "admin_adjust",
                     pool: str = "auto") -> dict[str, Any]:

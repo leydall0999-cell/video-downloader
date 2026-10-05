@@ -520,6 +520,18 @@ run_one test_ai_credential_delivery.py
 #      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
 run_one test_ai_credit_costs.py
 
+#  43. test_ai_free_trial.py —— 免费用户「首次体验」（2026-10-05 用户定档：
+#      **每个功能各免一次**，口径可在后台改 per_op / once / off）。
+#      背景：上一轮把 AI 积分墙补齐后，积分池为 0 的免费用户**第一次点任何 AI 功能
+#      就撞 402**，连好不好用都没机会判断，漏斗第一步就断了。
+#      本守卫钉：默认口径为免费用户 each-op 一次 · 首次放行不扣分且第二次必拦
+#      （文案要说「已用过」，不能只丢「积分不足」）· 名额必须落盘（内存态 = 重启白薅）
+#      · 有积分时不烧名额 · once/exclude/max_cost/会员豁免四种变体 · status() 暴露余量
+#      · 后台 GET/POST 带策略且脏值当场 400 · 所有扣费入口都过 gate_message 收口。
+#      6 处变异全红（含「名额不落盘」这一处最隐蔽的）。
+#      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
+run_one test_ai_free_trial.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

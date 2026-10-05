@@ -3897,6 +3897,41 @@
               改价立即对所有用户生效（写入 <code>plans.json</code> 的 <code>credit_costs</code> 覆盖层，优先于代码默认值）。
               填 <b>0</b> 表示该功能免费。点「恢复默认」撤销改动。
             </p>
+            <!-- 🔴 免费用户「首次体验」策略（2026-10-05 用户定档：每个功能各免一次）。
+                 只对「非会员且本次积分不够」的用户生效 —— 让没开会员的人也能先看一眼效果。
+                 策略与上方的单价同挂一个「保存改动」按钮，一同写入 plans.json。 -->
+            <div class="admin-trial-box" data-page-node-id="trialBox">
+              <div class="admin-trial-head" data-page-node-id="trialHead">
+                <label class="admin-switch" data-page-node-id="trialSwitch">
+                  <input type="checkbox" id="adminTrialEnabled" data-page-node-id="trialEnabled">
+                  <span>免费用户首次体验</span>
+                </label>
+                <span class="admin-hint" style="margin:0" data-page-node-id="trialSub">
+                  开启后，没开会员、积分又不够的用户，第一次使用某个 AI 功能时不扣积分
+                </span>
+              </div>
+              <div class="admin-trial-row" data-page-node-id="trialRow1">
+                <span class="admin-trial-lab">口径</span>
+                <select id="adminTrialMode" class="ai-cost-select" data-page-node-id="trialMode">
+                  <option value="per_op">每个功能各免一次（推荐）</option>
+                  <option value="once">全站合计只免一次（最省）</option>
+                  <option value="off">关闭（回到付费墙）</option>
+                </select>
+                <span class="admin-trial-lab">单价上限</span>
+                <input type="number" id="adminTrialMaxCost" class="ai-cost-input" min="0" step="1"
+                       data-page-node-id="trialMaxCost">
+                <span class="admin-trial-note">0 = 不限。例：填 20 ⇒ 单价超过 20 积分的功能不参与试用</span>
+              </div>
+              <div class="admin-trial-row" data-page-node-id="trialRow2">
+                <span class="admin-trial-lab">不参与</span>
+                <div id="adminTrialExclude" class="admin-trial-chips" data-page-node-id="trialExclude"></div>
+              </div>
+              <p class="admin-hint" data-page-node-id="trialHint">
+                勾掉的功能不给试用（想省钱就把「自动解说 / 解说画面理解」这两项最贵的取消勾选）。
+                账户里还有积分时不消耗名额 —— 先把自己的积分花完，名额留给更贵的试。
+                名额按账号记录，写到会员状态文件里，重启不清零。
+              </p>
+            </div>
             <div id="adminAiCostTable" class="ai-cost-table" data-page-node-id="aiCostTable">加载中…</div>
           </div>
         </section>

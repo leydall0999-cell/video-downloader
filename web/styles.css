@@ -4588,6 +4588,8 @@ html.theme-dark .pf-pool-note.is-warn { color: #fbbf24; }
 .member-chip-dl { background: var(--brand-soft); color: var(--brand-strong); }
 .member-chip-ai { background: #ecfeff; color: #0e7490; }
 .member-chip-perm { background: var(--success-soft); color: #15803d; }
+.member-chip-trial { background: var(--warn-soft, #fef3c7); color: #92400e; }
+.member-chip-trial.is-out { background: var(--surface-soft, #f3f4f6); color: var(--text-dim, #6b7280); }
 .member-total { margin-left: auto; color: var(--text-mute); font-size: .78rem; }
 .member-tabs {
   display: flex; gap: .35rem; margin-bottom: .8rem; padding: .25rem;
@@ -6954,3 +6956,16 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .ai-cost-tbl tr.is-orphan { background: var(--warn-soft, #fef3c7); }
 .ai-cost-tip { padding: .3rem .6rem; margin-bottom: .4rem; border-radius: 6px; background: var(--warn-soft, #fef3c7); color: var(--text, #1f2937); font-size: 12px; }
 .ai-cost-real { color: var(--text, #1f2937); font-size: 12px; max-width: 18rem; line-height: 1.5; }
+/* 免费用户「首次体验」策略（2026-10-05） */
+.admin-trial-box { margin-bottom: .9rem; padding: .7rem .8rem; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--surface-soft, #f9fafb); }
+.admin-trial-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.admin-trial-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .45rem; }
+.admin-trial-lab { color: var(--text-dim, #6b7280); font-size: 12px; white-space: nowrap; }
+.admin-trial-note { color: var(--text-dim, #9ca3af); font-size: 12px; }
+.admin-switch { display: inline-flex; align-items: center; gap: .35rem; font-size: 13px; font-weight: 600; cursor: pointer; }
+.admin-switch input { width: 15px; height: 15px; cursor: pointer; }
+.ai-cost-select { width: 210px; padding: .3rem .4rem; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--surface, #fff); color: var(--text, #1f2937); font-size: 13px; }
+.admin-trial-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.admin-trial-chips label { display: inline-flex; align-items: center; gap: .25rem; padding: .18rem .45rem; border: 1px solid var(--border, #e5e7eb); border-radius: 999px; background: var(--surface, #fff); font-size: 12px; cursor: pointer; }
+.admin-trial-chips label input { width: 13px; height: 13px; cursor: pointer; }
+.admin-trial-chips label.is-out { color: var(--text-dim, #9ca3af); text-decoration: line-through; }
