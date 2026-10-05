@@ -761,9 +761,10 @@ def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
         return res
     # 与 gate_message 同口径：这里的试用分支让「不走 gate_message 的调用点」也不会漏。
     if store.trial_available(op, cost):
-        store.trial_consume(op, reason=reason or op)
-        return {"ok": True, "spent": 0, "free": True, "trial": True,
-                "credits_left": store.status()["credits_total"]}
+        if store.trial_consume(op, reason=reason or op):
+            return {"ok": True, "spent": 0, "free": True, "trial": True,
+                    "credits_left": store.status()["credits_total"]}
+        # else: 云端已被另一台领走 → 走正常扣分失败返回
     return res
 
 
@@ -794,19 +795,20 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
 
     left = res.get("credits_left", 0)
     pol = free_trial_policy()
-    if not pol.get("enabled"):
-        hint = "请开通 AI 会员或购买积分包"
-    elif store.trial_available(op, cost):
+    hint = ""
+    if pol.get("enabled") and store.trial_available(op, cost):
         try:
-            store.trial_consume(op, reason=reason or op)
-            logging.getLogger("membership").info(
-                "free trial consumed op=%s cost=%s user=%s", op, cost,
-                getattr(store.path, "name", ""))
-            return None
+            if store.trial_consume(op, reason=reason or op):
+                logging.getLogger("membership").info(
+                    "free trial consumed op=%s cost=%s user=%s", op, cost,
+                    getattr(store.path, "name", ""))
+                return None
+            # 被另一台领走：trial_consume 已把本机标记为已用 → 走下面的 402 提示
         except Exception as e:  # noqa: BLE001
             logging.getLogger("membership").warning("free trial consume failed op=%s: %s", op, e)
             hint = "请开通 AI 会员或购买积分包"
-    else:
+    # 兜底提示：目录已没名额（本机用过 / 云端被另一台领走）
+    if not hint:
         # once 口径下名额是账号级的：**不是**"这个功能试过了"，而是"这个账号试过了"。
         # 措辞必须对得上，否则用户第二次点的是另一个功能，却被告知"本功能"已用过，
         # 会当成系统串号报错。
@@ -1489,20 +1491,56 @@ class MembershipStore:
         pol = pol or free_trial_policy()
         return _trial_key(op, str(pol.get("mode"))) in self._trials_raw()
 
-    def trial_consume(self, op: str, reason: str = "") -> None:
-        """标记名额已用。与 `spend_credits` 同时机 —— **在任务真正开跑之前**就占掉。
+    def _trial_claim_remote(self, op: str, mode: str) -> str:
+        """跨端原子领取免费名额。返回 'fresh' | 'already' | 'offline'。
 
-        先行占用的代价：若这次任务本身失败（网络/模型报错），名额也一并没了。
-        这是刻意的 —— 否则「故意制造失败」就能无限白嫖同一个名额。
+        - 'fresh'   : 本端首次成功领取全局唯一名额（放行）
+        - 'already' : 另一台设备/网页已领走（本端应拒绝）
+        - 'offline' : 授权中心不可达，fail-open 视为本端领取
+        不改动本地状态，由调用方按结果落本地盘。
+        """
+        try:
+            self._ensure_loaded()
+            meta = self._state.get("meta", {}) or {}
+            account = meta.get("account", {}) or {}
+            token = str(account.get("token") or "")
+        except Exception:
+            return "offline"
+        if not token:
+            return "offline"
+        try:
+            import license_client
+            r = license_client.trial_claim_remote(token, op, mode)
+            if not r or not r.get("ok"):
+                return "offline"
+            return "already" if r.get("already") else "fresh"
+        except Exception:
+            return "offline"
+
+    def trial_consume(self, op: str, reason: str = "") -> bool:
+        """标记名额已用；跨端唯一：先去授权中心做原子领取，按结果定夺。
+
+        返回 True=放行（本端首次领取成功 / 离线兜底），False=被另一台领走（应拒绝）。
+        与 `spend_credits` 同时机 —— **在任务真正开跑之前**就占掉（防「故意制造失败」白嫖）。
         """
         pol = free_trial_policy()
-        self._trials_raw()[_trial_key(op, str(pol.get("mode")))] = self._now()
+        mode = str(pol.get("mode"))
+        key = _trial_key(op, mode)
+        res = self._trial_claim_remote(op, mode)
+        if res == "already":
+            # 另一台已领走：本机同步标记为已用（UI 一致），但本次拒绝
+            self._trials_raw()[key] = self._now()
+            self._persist()
+            return False
+        # fresh 或 offline：本端领取成功（离线兜底放行）
+        self._trials_raw()[key] = self._now()
         meta = self._state.setdefault("meta", {})
         meta.setdefault("history", []).append({
             "type": "free_trial", "op": op, "reason": reason, "at": self._now(),
         })
         meta["history"] = meta["history"][-200:]
         self._persist()
+        return True
 
     def free_trial_view(self) -> dict[str, Any]:
         """给 status() / 前端用的试用视图：{-enabled, mode, remaining:{op:0|1}, used:[op]}。

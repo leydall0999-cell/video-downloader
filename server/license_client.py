@@ -158,6 +158,21 @@ def daily_remote(token: str, items: list, base_url: Optional[str] = None,
                  base_url, timeout, opener)
 
 
+def trial_claim_remote(token: str, op: str, mode: str = "once",
+                       base_url: Optional[str] = None,
+                       timeout: float = 8.0,
+                       opener: Optional[Callable] = None) -> dict[str, Any]:
+    """免费体验名额跨端原子领取。返回 {ok, claimed, already, authority}。
+
+    already=False → 本端成功领取全局唯一名额（放行）；already=True → 另一台已领走
+    （本端应拒绝）。网络异常抛 LicenseCloudError —— 调用方按 fail-open 处理
+    （视为本端领取，离线不惩罚已付费/免费用户）。
+    """
+    return _post("/api/license/trial_claim",
+                 {"token": token, "op": op, "mode": mode},
+                 base_url, timeout, opener)
+
+
 def set_password_remote(email: str, new_password: str, old_password: str = "",
                         token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,
