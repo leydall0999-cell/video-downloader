@@ -16823,8 +16823,12 @@ el.dwVidPlayer.hidden = true;
       const ft = s.free_trials || null;
       if (ft && ft.enabled && !(dl.active || ai.active)) {
         const n = Number(ft.remaining_count || 0);
+        // once 口径下名额是账号级的（0/1），文案不能再说「几个功能」——用户会以为
+        // 能连着试 N 个，实际点第二个就被拦，体感等于被骗。
         chips.push(n > 0
-          ? `<span class="member-chip member-chip-trial">🎟️ 免费体验：还有 ${n} 个功能可首次免费试一次</span>`
+          ? (ft.mode === 'once'
+             ? `<span class="member-chip member-chip-trial">🎟️ 首次免费体验：每个 AI 功能限一次，你还没用过</span>`
+             : `<span class="member-chip member-chip-trial">🎟️ 免费体验：还有 ${n} 个功能可首次免费试一次</span>`)
           : `<span class="member-chip member-chip-trial is-out">🎟️ 免费体验已用完 — 开通 AI 会员或购买积分包继续使用</span>`);
       }
       el.memberStatus.innerHTML = chips.length
@@ -21123,7 +21127,7 @@ el.dwVidPlayer.hidden = true;
       const en = $('adminTrialEnabled');
       if (en) en.checked = !!pol.enabled;
       const md = $('adminTrialMode');
-      if (md) md.value = pol.mode || 'per_op';
+      if (md) md.value = pol.mode || 'once';
       const mc = $('adminTrialMaxCost');
       if (mc) mc.value = String(pol.max_cost || 0);
       const box = $('adminTrialExclude');

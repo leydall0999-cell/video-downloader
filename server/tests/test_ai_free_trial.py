@@ -73,12 +73,13 @@ def fresh(tag: str = "u"):
 
 # ─────────────────────────────────────────────────────────────────────────── #
 def test_a_default_policy() -> None:
-    print("\n[A] 默认口径：每个功能各免一次，且只对免费用户")
+    print("\n[A] 默认口径：账号首次使用免费一次，且只对免费用户")
     _reset_plans()
     import membership as M
     pol = M.free_trial_policy()
     check("默认开启", pol["enabled"] is True)
-    check("默认口径是「每个功能各免一次」", pol["mode"] == "per_op", f"实际 {pol['mode']}")
+    check("默认口径是「账号只免一次」（2026-10-05 晚定档）",
+          pol["mode"] == "once", f"实际 {pol['mode']}")
     check("默认不给会员（保住付费纪律）", pol["members_too"] is False)
     check("默认不排除任何功能", list(pol["exclude"]) == [])
     check("策略键集与代码默认一致",
@@ -86,7 +87,7 @@ def test_a_default_policy() -> None:
           f"{sorted(pol)} vs {sorted(M.DEFAULT_FREE_TRIAL_POLICY)}")
     # 脏值收敛：mode 拼错不能导致全站免单，也不能崩
     _write_plans({"free_trial": {"mode": "per-op"}})
-    check("拼错的 mode 收敛回默认口径", M.free_trial_policy()["mode"] == "per_op")
+    check("拼错的 mode 收敛回默认口径", M.free_trial_policy()["mode"] == "once")
     _write_plans({"free_trial": {"enabled": "yes"}})
     check("enabled 非布尔也被收敛为布尔", isinstance(M.free_trial_policy()["enabled"], bool))
     _reset_plans()
@@ -112,9 +113,13 @@ def test_b_first_run_free_second_blocked() -> None:
     third = M.gate_message(st, op, reason="t")
     check("第三次仍被拦（不会复活）", third is not None)
 
-    # 其它功能不受影响 —— 这才是 per_op 口径的要害
+    # 🔴 once 口径的要害：**换任何功能都应当被拦**。这条断言的方向与旧 per_op 口径
+    #    正好相反 —— 默认口径一改，这里若不跟着反，守卫就成了旧口径的守墓人。
     other = M.gate_message(st, "local_matting_ai", reason="t")
-    check("同一 op 用完不影响其它功能首次体验", other is None, f"实际 {other!r}")
+    check("once 口径下换另一个功能也被拦", other is not None,
+          f"换功能竟还放行（返回 {other!r}）⇒ 实际仍是 per_op，默认口径改动没生效")
+    anytime = M.gate_message(st, "subtitle_asr", reason="t")
+    check("第三个功能同样被拦", anytime is not None)
 
 
 def test_c_persists_across_reload() -> None:
@@ -193,20 +198,23 @@ def test_e_status_and_unknown_op() -> None:
     print("\n[E] status() 暴露余量 / 表外 op 不占名额")
     _reset_plans()
     M, st = fresh("e")
-    n0 = st.status()["free_trials"]["remaining_count"]
-    check("初始余量等于已登记的计费功能数", n0 == len(M.AI_CREDIT_COSTS),
-          f"{n0} vs {len(M.AI_CREDIT_COSTS)}")
+    ft0 = st.status()["free_trials"]
+    n0 = ft0["remaining_count"]
+    # 🔴 once 口径下 `remaining` 逐 op 算出来每项都是 1（共用一个名额），若直接
+    #    sum 就会得出「还剩 11 次」——这是口径改动最容易被带出去的错，必须钉住。
+    check("初始余量是 1 而不是计费项总数（once 口径）", n0 == 1,
+          f"{n0} vs op 总数 {len(M.AI_CREDIT_COSTS)}")
+    check("status 里带 mode 供前端展示", ft0["mode"] == "once", f"实际 {ft0['mode']}")
     M.gate_message(st, "voice_clone", reason="t")
-    st.status()
     ft = st.status()["free_trials"]
-    check("用掉的那一项余量归零", ft["remaining"]["voice_clone"] == 0)
-    check("其余项余量仍为 1", ft["remaining"]["dewatermark_ai"] == 1)
-    check("remaining_count 同步减少", ft["remaining_count"] == n0 - 1)
-    check("status 里带 mode 供前端展示", ft["mode"] == "per_op")
+    check("用掉那一项后余量归零", ft["remaining"]["voice_clone"] == 0)
+    check("共用名额：其余项也一并归零", ft["remaining"]["dewatermark_ai"] == 0)
+    check("remaining_count 归零（不是减一）", ft["remaining_count"] == 0,
+          f"实际 {ft['remaining_count']} —— 说明仍在按 per_op 求和")
+    check("used_any 标记已用", ft["used_any"] is True)
     # 表外 op：按 0 分免费放行，但**不该**占用任何名额
     M.gate_message(st, "不存在的计费项", reason="t")
-    check("表外 op 不写 free_trials", st.status()["free_trials"]["remaining_count"] == n0 - 1,
-          "未知 op 竟消耗了名额")
+    check("表外 op 不写 free_trials", st.status()["free_trials"]["remaining_count"] == 0)
 
 
 def test_f_admin_wiring() -> None:

@@ -169,7 +169,7 @@ def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
         "ok": True,
         "costs": credit_cost_table(),
         "registered": len(AI_CREDIT_COSTS),
-        # 免费用户「首次体验」策略（2026-10-05 用户定档：**每个功能各免一次**）。
+        # 免费用户「首次体验」策略（2026-10-05 晚用户定档：账号首次使用免费一次）。
         # 与 `credit_costs` 同处 plans.json 覆盖层，改完即时生效、不需要重新打包。
         "free_trial": pol,
         "trial_modes": ["per_op", "once", "off"],
@@ -179,7 +179,7 @@ def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
             "granularity": "按「次」定价：一次操作内发生多次模型调用只扣一份，重试成本含在单价里",
             "local_note": "本机功能（字幕提取 / 去水印 / 本地抠图 / 本机大模型解说 / 声音克隆）同样计费，"
                           "因为它们真实占用用户的 CPU 与内存。",
-            "trial": "免费用户（无任何会员权益、且积分不够本项单价）每个计费功能各免一次；"
+            "trial": "只要是首次使用的账号，其第一次使用 AI 功能免费一次（2026-10-05 用户定档）；"
                      "已经在 AI 会员有效期内或有足够积分的用户不消耗名额（先花自己的积分）。",
         },
     }
@@ -193,14 +193,14 @@ def admin_ai_set_credit_costs(
     """超级管理员：调整各功能的积分单价。
 
     payload: `{"costs": {"matting_cloud": 60, ...}, "reset": ["op", ...],
-               "free_trial": {"enabled": true, "mode": "per_op"|"once"|"off", ...}}`
+               "free_trial": {"enabled": true, "mode": "once"|"per_op"|"off", ...}}`
       · 只提交要改的项，其余保持不变（不覆盖别人的改动）。
       · 传 `0` = 该功能免费（显式免费，不再依赖「表外默认 0」）。
       · `reset` 列出要恢复代码默认价的 op。
       · **op 必须已在 `AI_CREDIT_COSTS` 中登记**，未知 op 直接报错 ——
         防止打错字导致配置无效（且避免把 typo 写进 plans.json 变成死配置）。
 
-    `free_trial` 是免费用户「首次体验」策略（2026-10-05 用户定档：每个功能各免一次）。
+    `free_trial` 是免费用户「首次体验」策略（2026-10-05 晚定档：账号首次使用免费一次）。
     同样按字段合并，**只传要改的键**（比如只切 `enabled`）即可，其余保持原值。
     """
     require_admin(request)

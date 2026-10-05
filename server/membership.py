@@ -683,19 +683,23 @@ def credit_cost_table() -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # 背景：2026-10-05 把 AI 积分墙补齐后，积分池为 0 的免费用户**任何 AI 功能第一次点就
 # 撞 402**，连"这东西到底好不好用"都无从判断 —— 等于把功能在漏斗最前面就掐死了。
-# 用户定档：**每个功能各免一次**（能在后台改口径），次数用尽后才开始计积分。
+# 用户定档（2026-10-05 晚二次修正）：**只要是首次使用的账号，其首次使用免费一次**。
+# 早先一度是「每个功能各免一次」，改回来是因为那等于给每个账号发 11 张门票，
+# 单个免费账号能薅走的平台成本约 ¥0.8，砍难度低；改成 once 后人均 ≤¥0.25，
+# 且更符合「先让你尝一口」的原始意图。
 #
 # 记录落在会员状态文件自身的 `free_trials` 键（随账号走，不是全局），键名语义：
 #   mode=per_op → 每个 op 一个名额，键是 op 名；
 #   mode=once   → 全站共用一个名额，键是 "*"。
 #
 # 🔴 **它的边界**：这只是账号级控制，换个注册账号仍能重薅。真要收紧得靠用户改不了的
-#    维度（强设备指纹 / 授权中心去重），而不是靠本地文件。量级可控：每个功能都薅满，
-#    单个免费账号占用的平台成本上限约 ¥0.8（按各条目的 real_cost 加总）。
+#    维度（强设备指纹 / 授权中心去重），而不是靠本地文件。once 口径下单个免费账号
+#    占用的平台成本上限约 ¥0.25（取各条目 real_cost 的最大者量级）。
 DEFAULT_FREE_TRIAL_POLICY: dict[str, Any] = {
     "enabled": True,
-    # per_op = 每个功能各免一次（默认，用户定档）｜once = 全站只免一次｜off = 关闭
-    "mode": "per_op",
+    # once = 账号首次使用免费一次（默认，2026-10-05 晚用户定档）｜
+    # per_op = 每个功能各免一次｜off = 关闭
+    "mode": "once",
     # 不参与试用的 op（把最贵的解说/画面理解排除就用这个，人均成本立刻降到 ¥0.3 量级）
     "exclude": [],
     # 会员（下载或 AI 任一活跃）是否也享受 —— 默认不给：会员已按套餐拿到积分，
@@ -723,8 +727,8 @@ def free_trial_policy() -> dict[str, Any]:
             if v is None:
                 continue
             out[k] = v
-    mode = str(out.get("mode") or "per_op").strip().lower()
-    out["mode"] = mode if mode in _TRIAL_MODES else "per_op"
+    mode = str(out.get("mode") or "once").strip().lower()
+    out["mode"] = mode if mode in _TRIAL_MODES else "once"
     if out["mode"] == "off":
         out["enabled"] = False
     out["enabled"] = bool(out.get("enabled"))
@@ -803,8 +807,15 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
             logging.getLogger("membership").warning("free trial consume failed op=%s: %s", op, e)
             hint = "请开通 AI 会员或购买积分包"
     else:
-        hint = ("本功能的免费体验已用过一次，请开通 AI 会员或购买积分包"
-                if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
+        # once 口径下名额是账号级的：**不是**"这个功能试过了"，而是"这个账号试过了"。
+        # 措辞必须对得上，否则用户第二次点的是另一个功能，却被告知"本功能"已用过，
+        # 会当成系统串号报错。
+        if str(pol.get("mode")) == "once":
+            hint = ("你的账号已用过一次免费体验（每个账号限一次），请开通 AI 会员或购买积分包"
+                    if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
+        else:
+            hint = ("本功能的免费体验已用过一次，请开通 AI 会员或购买积分包"
+                    if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
     return f"AI 积分不足：本次操作需 {cost} 积分，当前 {left}（{hint}）"
 
 # --------------------------------------------------------------------------- #
@@ -1500,17 +1511,28 @@ class MembershipStore:
         能直接渲染「还剩几次免费体验」，不用前端自己再照着策略推导一遍。
         """
         pol = free_trial_policy()
+        mode = str(pol.get("mode"))
         remaining: dict[str, int] = {}
         for op in AI_CREDIT_COSTS:
             remaining[op] = 1 if self.trial_available(op, int(credit_cost(op))) else 0
+        # 🔴 once 口径下所有 op 共用同一个名额，`sum(remaining)` 会算出 11 张票，
+        #    前端拿去渲染「还剩 11 次」就全错。此时真实余量只有 0/1 两种取值。
+        used_any = any(remaining[op] == 0 and self.trial_used(op, pol)
+                       for op in AI_CREDIT_COSTS)
+        if mode == "once":
+            left = 0 if self.trial_used(_TRIAL_ONCE_KEY, pol) else 1
+            remaining_count = left
+        else:
+            remaining_count = sum(remaining.values())
         return {
             "enabled": bool(pol.get("enabled")),
-            "mode": str(pol.get("mode")),
+            "mode": mode,
             "max_cost": int(pol.get("max_cost") or 0),
             "exclude": list(pol.get("exclude") or []),
             "members_too": bool(pol.get("members_too")),
             "remaining": remaining,
-            "remaining_count": sum(remaining.values()),
+            "remaining_count": remaining_count,
+            "used_any": used_any,
         }
 
     def add_credits(self, delta: int, reason: str = "admin_adjust",
