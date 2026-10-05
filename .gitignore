@@ -72,3 +72,5 @@ web_backup_*/
 PROJECT_SNAPSHOT_*.md
 docs/voice-clone-verify/
 *_原型.html
+deploy/
+docs/
