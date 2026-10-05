@@ -28,11 +28,71 @@ def _config_path() -> Path:
     return _config_dir() / "cloud_matting.json"
 
 
+def _managed_path() -> Path:
+    """管理员受管配置（0600）。与 gateway_config / vision_config 同构。
+
+    🔴 2026-10-05 新增。此前本模块**只有用户文件**，没有下发通道 ⇒ AK/SK 只能
+    手工写进 `cloud_matting.json`，换机 / 重装 / 分发给用户即丢，且用户界面
+    已被明确要求「不填 Key」（输入框 hidden）。结果就是：唯一能用的云端抠图
+    凭据**无法下发**给用户 —— 界面说「管理员已配好」，实际新装的机器上没有。
+    优先级对齐另两个模块：**环境变量 > 管理员受管文件 > 用户文件**。
+    """
+    return _config_dir() / "cloud_matting_managed.json"
+
+
+def managed_status() -> dict[str, Any]:
+    """管理员受管配置状态（**绝不返回明文 Key**）。"""
+    def _mask(v: str) -> str:
+        v = (v or "").strip()
+        return (v[:6] + "…" + v[-4:]) if len(v) > 12 else ("…" if v else "")
+
+    m: dict[str, Any] = {}
+    mp = _managed_path()
+    if mp.is_file():
+        try:
+            loaded = json.loads(mp.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                m = loaded
+        except (json.JSONDecodeError, OSError):
+            m = {}
+    ak = str(m.get("access_key") or "").strip()
+    sk = str(m.get("secret_key") or "").strip()
+    mk = str(m.get("mediakit_api_key") or "").strip()
+    env_ak = os.environ.get("VDL_CLOUD_MAT_AK", "").strip()
+    return {
+        "configured": bool(ak and sk) or bool(env_ak and os.environ.get("VDL_CLOUD_MAT_SK", "").strip()),
+        "source": "env" if env_ak else ("managed" if m else "user"),
+        "access_key_masked": _mask(ak or env_ak),
+        "secret_key_masked": _mask(sk or os.environ.get("VDL_CLOUD_MAT_SK", "")),
+        "mediakit_key_masked": _mask(mk or os.environ.get("VDL_CLOUD_MAT_MEDIAKIT_KEY", "")),
+        "mediakit_present": bool(mk or os.environ.get("VDL_CLOUD_MAT_MEDIAKIT_KEY", "").strip()),
+        "managed_file": str(_managed_path()),
+        "managed_present": bool(m),
+    }
+
+
+def save_managed_config(data: dict[str, Any]) -> None:
+    """管理员下发云端抠图凭据（只写受管文件，不回显明文）。"""
+    payload = {
+        "access_key": str(data.get("access_key") or "").strip(),
+        "secret_key": str(data.get("secret_key") or "").strip(),
+        "mediakit_api_key": str(data.get("mediakit_api_key") or "").strip(),
+        "enhance_version": str(data.get("enhance_version") or "").strip(),
+        "enabled": bool(data.get("enabled", True)),
+    }
+    atomic_io.atomic_write_json(_managed_path(), payload)
+    try:
+        os.chmod(_managed_path(), 0o600)
+    except OSError:
+        pass
+
+
 def get_cloud_matting_config() -> dict[str, Any]:
     """读取云端抠图配置。
 
-    返回 {provider, access_key, secret_key, enabled}。
-    优先级：环境变量（VDL_CLOUD_MAT_AK / VDL_CLOUD_MAT_SK / VDL_CLOUD_MAT_ENABLED）> JSON 文件。
+    返回 {provider, access_key, secret_key, enabled, mediakit_api_key, ...}。
+    优先级：**环境变量 > 管理员受管文件 > 用户文件**
+    （受管层 2026-10-05 新增，见 `_managed_path`）。
     """
     cfg: dict[str, Any] = {
         "provider": "volcengine",
@@ -44,6 +104,7 @@ def get_cloud_matting_config() -> dict[str, Any]:
         "mat_output_hd": False,
         "auto_vlm_classify": True,
     }
+    # ① 用户文件（最低优先级）
     cp = _config_path()
     if cp.is_file():
         try:
@@ -53,7 +114,18 @@ def get_cloud_matting_config() -> dict[str, Any]:
                     cfg[k] = saved[k]
         except (json.JSONDecodeError, OSError):
             pass
-    # 环境变量覆盖（服务端/容器部署不改文件）
+    # ② 管理员受管文件（覆盖用户文件）—— 与 gateway_config / vision_config 同构
+    mp = _managed_path()
+    if mp.is_file():
+        try:
+            managed = json.loads(mp.read_text(encoding="utf-8"))
+            if isinstance(managed, dict):
+                for k in ("access_key", "secret_key", "mediakit_api_key", "enhance_version", "enabled"):
+                    if k in managed and managed[k] not in (None, ""):
+                        cfg[k] = managed[k]
+        except (json.JSONDecodeError, OSError):
+            pass
+    # ③ 环境变量（最终裁决）
     ak = os.environ.get("VDL_CLOUD_MAT_AK", "").strip()
     if ak:
         cfg["access_key"] = ak

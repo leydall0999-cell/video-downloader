@@ -499,3 +499,15 @@ run_one test_plan_sale_table.py
 #      拦截点；不得残留已下线资源或 DataTool 的「插件…」命名；限额须与
 #      DAILY/FREE_DAILY_QUOTA_LIMITS 一致；权益文案不得承诺已下线功能。
 run_one test_feature_usage_gate.py
+
+#  41. test_ai_credential_delivery.py —— AI 凭据「后台下发、用户不填」全链路（2026-10-05）：
+#      产品定档「所有 Key 都由后台配好，用户不需要自己填」，但这条链路曾是**界面改完、
+#      链路没通**：① 火山/视觉的受管层只能读不能写（管理员无法下发，换机即丢）；
+#      ② app.js 拿**已隐藏**的 Key 输入框 value 判「是否已配置」——值恒为空，
+#      管理员配好 Key 后用户仍看到「未配置」；③ admin.py::_gateway_base 硬编码家目录，
+#      绕过 VDL_HOME 与三级优先级。
+#      本守卫钉：三家都有受管写入函数、受管层覆盖用户文件、状态接口不回明文、
+#      前端不再用隐藏框值做就绪判断、6 个 Key 框全在 hidden 容器内、
+#      后台四个下发接口都在且都要超管、面板 modules 改为探测式就绪标记。
+#      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
+run_one test_ai_credential_delivery.py

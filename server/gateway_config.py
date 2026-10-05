@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import atomic_io
+
 DEFAULT_TIMEOUT = 3.0          # 探测可用模型时的超时：宁可拿不到，也不能卡住任务
 MODELS_CACHE_TTL = 300.0       # 模型列表缓存 5 分钟，避免每次任务都打一次网关
 
@@ -219,3 +221,25 @@ def cloud_env(preferred_model: str = "") -> dict[str, str] | None:
         "model": resolve_model(preferred_model),
         "api_key": cfg["token"],
     }
+
+
+def save_managed_gateway(data: dict[str, Any]) -> None:
+    """管理员下发网关配置到受管文件（0600，用户文件改不动它）。
+
+    🔴 2026-10-05 新增。此前 `gateway_managed.json` **只能手工写** —— `get_gateway_config()`
+    会读它，但没有写入路径。与 `cloud_matting_config.save_managed_config` /
+    `vision_config.save_managed_vision_config` 同构，三条 AI 链路的下发方式统一。
+
+    注意写入的是**网关地址 + 令牌**，不是上游 DeepSeek Key —— 真实 Key 永远只在
+    ECS 网关侧的 `upstream.json`，本机不接触上游凭据。
+    """
+    payload = {
+        "url": _normalize_url(str(data.get("url") or "")),
+        "token": str(data.get("token") or "").strip(),
+        "enabled": bool(data.get("enabled", True)),
+    }
+    atomic_io.atomic_write_json(_managed_path(), payload)
+    try:
+        os.chmod(_managed_path(), 0o600)
+    except OSError:
+        pass

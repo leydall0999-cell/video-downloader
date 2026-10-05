@@ -3185,11 +3185,19 @@
       </div>
       <ul class="sub-list" id="subExtractList" data-page-node-id="FNSahzXQiEE65e4BH38y4A"></ul>
       <details class="sub-translate-box" data-page-node-id="QEMODuW7Q9EjUwQ4bGhX0H">
-        <summary data-page-node-id="Va6WGBqfrr06potuD9GCJh">翻译字幕（可选，需 LLM Key）</summary>
+        <summary data-page-node-id="Va6WGBqfrr06potuD9GCJh">翻译字幕（可选，翻译服务由管理员统一配置）</summary>
         <div class="sub-translate-body" data-page-node-id="etYMNHkhuYIlGh2B6GSpSv">
-          <label data-page-node-id="IoybwJNpYHaOWv3Gzj6kB0">API Key<input id="subApiKey" class="adv-input" type="password" placeholder="OpenAI 兼容 Key，可留空用服务端配置" autocomplete="off" spellcheck="false" data-page-node-id="FIZGuL8fu1NTZCJudlK8AN" /></label>
-          <label data-page-node-id="9xX8CqSQkhPajHZGOPf6XW">Base URL<input id="subBaseUrl" class="adv-input" type="text" placeholder="https://api.openai.com" autocomplete="off" spellcheck="false" data-page-node-id="yMwe7ZHG7IHg4eVb437voQ" /></label>
-          <label data-page-node-id="fGuiQpp9FVCVyGbQvbw0BR">模型<input id="subModel" class="adv-input" type="text" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" data-page-node-id="84BZc6jstR5l9OtFORdExC" /></label>
+          <!-- 🔴 2026-10-05：Key / Base URL / 模型三框改为隐藏。
+               产品定档「所有 Key 都由后台配好，用户不需要自己填」，而这里曾 是全 App
+               最后一个还明文露着的 Key 输入框，且 summary 写着「需 LLM Key」——
+               直接引导用户去找一个本就不该由他填的东西。
+               保留 DOM：app.js 仍会读它们并随请求提交（值为空 ⇒ 后端 subtitles.py:58
+               的 fallback 走 app.get_llm_config() 取受管配置），删元素会 NPE。 -->
+          <div hidden style="display:none;" aria-hidden="true">
+            <label data-page-node-id="IoybwJNpYHaOWv3Gzj6kB0">API Key<input id="subApiKey" class="adv-input" type="password" placeholder="OpenAI 兼容 Key，可留空用服务端配置" autocomplete="off" spellcheck="false" data-page-node-id="FIZGuL8fu1NTZCJudlK8AN" /></label>
+            <label data-page-node-id="9xX8CqSQkhPajHZGOPf6XW">Base URL<input id="subBaseUrl" class="adv-input" type="text" placeholder="https://api.openai.com" autocomplete="off" spellcheck="false" data-page-node-id="yMwe7ZHG7IHg4eVb437voQ" /></label>
+            <label data-page-node-id="fGuiQpp9FVCVyGbQvbw0BR">模型<input id="subModel" class="adv-input" type="text" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" data-page-node-id="84BZc6jstR5l9OtFORdExC" /></label>
+          </div>
           <label data-page-node-id="RbTpYWWJCC38M1kDbweROH">目标语言<input id="subTarget" class="adv-input" type="text" placeholder="简体中文" autocomplete="off" spellcheck="false" data-page-node-id="koh0gC3JSl9bK1eFAcRmUv" /></label>
           <button type="button" class="btn btn-ghost btn-sm" id="subTranslate" data-page-node-id="rvxagyZC1sxyPeJQ5U8mFD">翻译选中字幕</button>
         </div>

@@ -220,6 +220,26 @@ def save_vision_config(data: dict[str, Any]) -> None:
     atomic_io.atomic_write_json(_config_path(), data)
 
 
+def save_managed_vision_config(data: dict[str, Any]) -> None:
+    """管理员下发视觉凭据到受管文件（0600，用户文件改不动它）。
+
+    2026-10-05 新增。此前只有 `managed_status()` 能**读**受管层，却没有写入路径 ——
+    意味着「Key 由管理员统一下发」这个定档在视觉这条链路上无法落地，只能手工改文件。
+    与 `cloud_matting_config.save_managed_config` / `save_managed_gateway` 同构。
+    """
+    payload = {
+        "provider": str(data.get("provider") or "auto"),
+        "api_key": str(data.get("api_key") or "").strip(),
+        "base_url": str(data.get("base_url") or "").strip(),
+        "model": str(data.get("model") or "").strip(),
+    }
+    atomic_io.atomic_write_json(_managed_path(), payload)
+    try:
+        os.chmod(_managed_path(), 0o600)
+    except OSError:
+        pass
+
+
 def inject_vision_env(env: dict[str, str]) -> None:
     """把当前视觉配置注入到环境变量字典（供子进程 env= 使用）。
 

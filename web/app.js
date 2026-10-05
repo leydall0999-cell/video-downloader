@@ -7117,13 +7117,19 @@
         fd.append('prompt', promptText);
         fd.append('vision_guide', '1');
         if (el.matVision) el.matVision.checked = true;
-        // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
-        const vp = (el.visionProvider && el.visionProvider.value) || '';
-        const vk = (el.visionApiKey && el.visionApiKey.value) || '';
-        if (!vp || !vk) {
+        // 🔧 前置校验：视觉服务是否就绪。
+        // 🔴 2026-10-05 修正：原先读 `el.visionApiKey.value` —— 但那个输入框早已
+        // 「保留 DOM、不展示、不提交」（凭据由超管统一下发），值恒为空 ⇒
+        // **即使管理员已配好 Key 也永远走警告分支**，用户看到「未配置云端视觉服务」。
+        // 正确判据是管理员受管配置状态（renderVisionManaged 写入 dataset.configured），
+        // 与 renderVisionRuntime 用的是同一份结论。
+        const _visionManaged = (el.visionManagedStatus && el.visionManagedStatus.dataset) || {};
+        const _visionReady = _visionManaged.configured === 'true';
+        if (!_visionReady) {
           el.matStatus.textContent = '⚠️ AI 视觉定位已启用（说扣什么：' + promptText + '），但未配置云端视觉服务（由管理员统一配置，无需你操作），将回退普通抠图';
         } else {
-          el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '）';
+          const _vn = _visionManaged.name || '管理员已配置';
+          el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '，视觉服务：' + _vn + '）';
         }
       } else {
         // ⬜ 手动抠图：按选区/智能/精细方式走，忽略 prompt 输入框内容
@@ -7180,13 +7186,13 @@
           // 有手动选区：尊重用户选区，关闭 AI 视觉定位（后端不做交集，绝不误切）
           if (el.matVision) el.matVision.checked = false;
         } else {
-          // 无选区：自动启用 AI 视觉定位（需配视觉模型 Key）
+          // 无选区：自动启用 AI 视觉定位（凭据由管理员统一下发）
           if (el.matVision) el.matVision.checked = true;
           fd.append('vision_guide', '1');
-          // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
-          const vp = (el.visionProvider && el.visionProvider.value) || '';
-          const vk = (el.visionApiKey && el.visionApiKey.value) || '';
-          if (!vp || !vk) {
+          // 🔴 2026-10-05 修正：同 7121 行那个 bug —— 读已隐藏输入框的值恒为空，
+          // 导致管理员配好 Key 后仍报「未配置」。改用受管配置状态。
+          const _vm2 = (el.visionManagedStatus && el.visionManagedStatus.dataset) || {};
+          if (_vm2.configured !== 'true') {
             el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置云端视觉服务（由管理员统一配置，无需你操作），将回退普通抠图';
           } else {
             el.matStatus.textContent = '上传中…（🤖 AI 视觉定位：先让模型看懂图再抠主体）';

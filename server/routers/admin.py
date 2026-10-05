@@ -44,6 +44,11 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")
 
 
+# 凭据来源的中文说法（面板展示用；2026-10-05 探测式改造引入）。
+# env=环境变量下发 / managed=管理员受管配置 / user=用户自己填的（我们已不再要求）
+_SOURCE_CN = {"env": "环境变量", "managed": "管理员下发", "user": "本机文件"}
+
+
 @router.get("/api/admin/users")
 def admin_list_users(request: Request = None) -> dict[str, Any]:
     require_admin(request)
@@ -170,16 +175,22 @@ def _gw_get(url: str, token: str) -> dict:
 
 
 def _gateway_base() -> tuple:
-    """返回 (base_url, token) 或 (None, None)。"""
-    p = os.path.expanduser("~/.video-downloader/gateway_managed.json")
-    if not os.path.exists(p):
-        return None, None
+    """返回 (base_url, token) 或 (None, None)。
+
+    🔴 2026-10-05：原先这里**硬编码 `~/.video-downloader/gateway_managed.json`**
+    并重复实现了一遍 url 归一化（`replace("direct://")` + `rstrip("/")`），绕过了
+    `gateway_config` 的 `VDL_HOME` 覆盖与三级优先级 —— 于是：
+      · 测试/隔离实例里 `VDL_HOME` 指临时目录，本函数却仍读家目录 ⇒ 恒判「无网关」；
+      · `save_managed_gateway()` 明明写成功了，面板还是显示未配置。
+    改为直接调 `gateway_config.get_gateway_config()`，单一真源。
+    """
     try:
-        d = json.load(open(p, encoding="utf-8"))
+        from gateway_config import get_gateway_config, _strip_direct
+        cfg = get_gateway_config()
     except Exception:
         return None, None
-    url = (d.get("url") or "").replace("direct://", "", 1).rstrip("/")
-    return url, d.get("token")
+    url = _strip_direct(str(cfg.get("url") or ""))
+    return (url or None), (cfg.get("token") or None)
 
 
 def _mask(s: str) -> str:
@@ -193,7 +204,9 @@ def _deepseek_account() -> dict:
         "name": "DeepSeek（解说大模型）",
         "provider": "deepseek",
         "model": "",
-        "modules": ["视频解说 / 解说词生成", "长片云端兜底 LLM"],
+        # 🔴 2026-10-05 原为硬编码两条文案（"modules": ["视频解说 / 解说词生成", …]），
+        # 在没配网关 / 余额耗尽时仍显示成可用。改为空，末尾按真实就绪态填充。
+        "modules": [],
         "account": "",
         "status": "unknown",
         "balance": None,
@@ -201,6 +214,7 @@ def _deepseek_account() -> dict:
         "currency": None,
         "is_available": None,
         "balance_source": "none",
+        "modules": [],      # 探测式填充，见函数末尾
         "recharge_url": "https://platform.deepseek.com/top_up",
         "console_url": "https://platform.deepseek.com",
         "note": "",
@@ -209,6 +223,10 @@ def _deepseek_account() -> dict:
     if not base:
         info["note"] = "未找到网关配置（gateway_managed.json）"
         info["status"] = "no_gateway"
+        info["modules"] = [
+            "✗ 未配置网关：视频解说 / 解说词生成不可用",
+            "✗ 未配置网关：长片云端兜底 LLM 不可用",
+        ]
         return info
     # 模型名 + 健康
     try:
@@ -240,6 +258,23 @@ def _deepseek_account() -> dict:
     except Exception as e:
         info["status"] = "error"
         info["note"] = f"余额查询异常：{e}"
+    # 🔴 2026-10-05 模块清单改为**探测式**（原先是硬编码文案，见下方说明）。
+    #   两条模块的真实落点都已核实：
+    #     · 视频解说 / 解说词生成 → commentary-pipeline/scripts/llm_script.py:157
+    #       `_call_llm()`，LLM_API_KEY 硬依赖（缺失即报错）。
+    #     · 长片云端兜底 LLM     → llm_script.py:2364
+    #       `_local_capability_exceeded(total_duration, len(transcript))`，
+    #       视频 >30min（VDL_LOCAL_MAX_VIDEO_SEC）或转写稿 >2.6 万字时，把本次任务
+    #       的 LLM_ENGINE 由 auto 切成 cloud（长稿上本机 3B 模型会退化成复读机）。
+    #   硬编码文案会在「没配网关 / 余额耗尽」时仍显示成可用 —— 与本轮
+    #   「不显示做不到的事」定档冲突，故按真实就绪态标注。
+    _gw_ok = bool(token) and info.get("status") in ("ok", "unknown", "insufficient")
+    _flag = "✓" if _gw_ok else "✗"
+    _suffix = "" if _gw_ok else " —— 不可用"
+    info["modules"] = [
+        f"{_flag} 视频解说 / 解说词生成{_suffix}",
+        f"{_flag} 长片云端兜底 LLM（视频 >30 分钟自动转云端）{_suffix}",
+    ]
     return info
 
 
@@ -249,7 +284,7 @@ def _dashscope_account() -> dict:
         "name": "阿里百炼 DashScope（视觉 / VLM）",
         "provider": "dashscope",
         "model": "",
-        "modules": ["视觉理解 / 图片 OCR", "抠图 VLM 自动分类"],
+        "modules": [],      # 探测式填充，见下方 try 块
         "account": "",
         "status": "unknown",
         "balance": None,
@@ -262,12 +297,31 @@ def _dashscope_account() -> dict:
         "note": "余额请登录阿里云费用中心查看；有免费额度，中文 OCR 强。",
     }
     try:
-        from vision_config import get_vision_config
+        from vision_config import get_vision_config, managed_status as _vmg
         cfg = get_vision_config()
         key = (cfg.get("api_key") or "").strip()
         info["model"] = cfg.get("model") or ""
         info["account"] = _mask(key) if key else "(未配置 Key)"
         info["status"] = "configured" if key else "not_configured"
+        # 🔴 2026-10-05 探测式：区分「有云端 Key」与「走本机回退」两种能力档位。
+        #   provider=auto 且无 Key 时并非不可用 —— 管线会回退本机离线 OCR
+        #   （`vision_analysis.py` 文档 + process.py:547 的优雅降级分支），
+        #   所以文案不能说成「不可用」，要说清「当前走哪一档」。
+        mg = _vmg()
+        has_key = bool(key) or bool(mg.get("configured"))
+        source = mg.get("source", "user")
+        if has_key:
+            info["modules"] = [
+                f"✓ 视觉理解 / 图片 OCR（Key 来源：{_SOURCE_CN.get(source, source)}）",
+                "✓ 抠图 VLM 自动分类（AI 智能识别）",
+            ]
+        else:
+            info["modules"] = [
+                "○ 视觉理解 / 图片 OCR —— 未下发云端 Key，自动档回退本机离线识别",
+                "○ 抠图 VLM 自动分类 —— 未下发云端 Key，自动档回退本机引擎",
+            ]
+            info["note"] = ("凭据由管理员在本面板下发；未下发时 Mac 上自动走本机离线 OCR"
+                            "（免费、无需 Key），不会报错。")
     except Exception as e:  # noqa: BLE001
         info["note"] = f"读取视觉配置失败：{e}"
         info["status"] = "error"
@@ -318,7 +372,13 @@ def _volcengine_account() -> dict:
             info["note"] = "云端抠图开关未启用（抠图设置 → ☁️ 云端抠图）；启用后「说扣什么」走火山像素级。"
         elif visual_ready:
             info["status"] = "enabled"
-            info["note"] = ("云端抠图已就绪；MediaKit 增强" + ("已就绪。" if mk_ready else "未配 Bearer Key，仅画质增强/增强抠图回退 visual/本地。"))
+            # 🔴 2026-10-05：原先只说「MediaKit 增强已就绪 / 未配…回退」，
+            # 顶部状态标签却是「已启用」—— 用户会以为画质增强也能用。补明确说明。
+            info["note"] = ("云端抠图已就绪。" + (
+                "AI 画质增强 / 增强抠图已就绪。"
+                if mk_ready else
+                "⚠️ AI 画质增强 / 增强抠图**不可用**（缺 MediaKit Bearer Key），"
+                "目前会回退 visual/本地处理 —— 右上角「已启用」仅代表云端抠图。"))
         else:
             info["status"] = "no_api_key"
             info["note"] = "已启用但缺 AK/SK：云端抠图不可用，将回退本地 SAM/MODNet。"
@@ -337,6 +397,120 @@ def admin_ai_accounts(request: Request = None) -> dict[str, Any]:
     """超级管理员：汇总各 AI 提供方账户（余额 / 模块 / 账号 / 充值入口）。"""
     require_admin(request)
     return {"ok": True, "accounts": _collect_ai_accounts()}
+
+
+# ── AI 凭据下发（2026-10-05）──────────────────────────────────────────────────
+# 背景：产品定档「所有 Key 都由后台配好，用户不需要自己填」。用户界面上的
+# Key 输入框已全部隐藏，但**此前没有任何下发通道** —— 云端抠图的 AK/SK 只能
+# 手工写进 `cloud_matting.json`：换机/重装/分发即丢，新用户机器上根本没有，
+# 界面却显示「管理员已配置」。这是本组接口要补的最后一环。
+#
+# 🔴 安全约定（务必保持）：
+#   1. 三个端点都只接受「已登录 + 超级用户」（require_admin）。
+#   2. **GET 绝不返回明文 Key**，只返回 `*_masked`（前 6 + 末 4）与就绪布尔。
+#   3. 写入走 *_managed.json（0600），用户文件改不动它。
+@router.get("/api/admin/ai/managed")
+def admin_ai_managed(request: Request = None) -> dict[str, Any]:
+    """超级管理员：读取三家的受管凭据状态（**永不返回明文**）。"""
+    require_admin(request)
+    from cloud_matting_config import managed_status as mat_managed
+    from vision_config import managed_status as vis_managed
+    from gateway_config import gateway_status
+    gw = gateway_status()
+    return {
+        "ok": True,
+        "volcengine": mat_managed(),
+        "dashscope": vis_managed(),
+        "deepseek": {
+            "configured": bool(gw.get("enabled") and gw.get("has_token")),
+            "source": gw.get("source", ""),
+            "url": gw.get("url", ""),
+            "token_masked": gw.get("token_masked", ""),
+        },
+    }
+
+
+@router.post("/api/admin/ai/managed/volcengine")
+def admin_ai_set_volcengine(
+    request: Request = None,
+    payload: dict[str, Any] = Body(default={}),
+) -> dict[str, Any]:
+    """超级管理员：下发云端抠图（火山）凭据到受管配置。
+
+    空字符串的字段**保持原值不变**（便于前端只提交改了的那几项，不会把没填
+    的 Key 抹掉）；显式传 `"__clear__"` 才清空。
+    """
+    require_admin(request)
+    from cloud_matting_config import get_cloud_matting_config, save_managed_config
+    cur = get_cloud_matting_config()
+
+    def _pick(new: str, old: str) -> str:
+        new = str(new or "").strip()
+        if new == "__clear__":
+            return ""
+        return new or old
+
+    save_managed_config({
+        "access_key": _pick(payload.get("access_key"), cur.get("access_key", "")),
+        "secret_key": _pick(payload.get("secret_key"), cur.get("secret_key", "")),
+        "mediakit_api_key": _pick(payload.get("mediakit_api_key"), cur.get("mediakit_api_key", "")),
+        "enhance_version": str(payload.get("enhance_version") or cur.get("enhance_version") or "professional"),
+        "enabled": bool(payload.get("enabled", True)),
+    })
+    return {"ok": True, "status": admin_ai_managed(request)["volcengine"]}
+
+
+@router.post("/api/admin/ai/managed/dashscope")
+def admin_ai_set_dashscope(
+    request: Request = None,
+    payload: dict[str, Any] = Body(default={}),
+) -> dict[str, Any]:
+    """超级管理员：下发视觉理解（DashScope / 任意 OpenAI 兼容多模态）凭据。"""
+    require_admin(request)
+    from vision_config import get_vision_config, save_managed_vision_config
+    cur = get_vision_config()
+
+    def _pick(new: str, old: str) -> str:
+        new = str(new or "").strip()
+        if new == "__clear__":
+            return ""
+        return new or old
+
+    save_managed_vision_config({
+        "provider": str(payload.get("provider") or cur.get("provider") or "auto"),
+        "api_key": _pick(payload.get("api_key"), cur.get("api_key", "")),
+        "base_url": _pick(payload.get("base_url"), cur.get("base_url", "")),
+        "model": str(payload.get("model") or cur.get("model") or ""),
+    })
+    return {"ok": True, "status": admin_ai_managed(request)["dashscope"]}
+
+
+@router.post("/api/admin/ai/managed/deepseek")
+def admin_ai_set_deepseek(
+    request: Request = None,
+    payload: dict[str, Any] = Body(default={}),
+) -> dict[str, Any]:
+    """超级管理员：下发云端网关（解说大模型）配置。
+
+    🔴 这里下发的是**网关地址 + 令牌**，不是 DeepSeek 官方 Key —— 真实 Key 只留在
+    ECS 网关侧（`upstream.json`），本机永远不接触上游凭据。
+    """
+    require_admin(request)
+    from gateway_config import get_gateway_config, save_managed_gateway
+    cur = get_gateway_config()
+
+    def _pick(new: str, old: str) -> str:
+        new = str(new or "").strip()
+        if new == "__clear__":
+            return ""
+        return new or old
+
+    save_managed_gateway({
+        "url": _pick(payload.get("url"), cur.get("url", "")),
+        "token": _pick(payload.get("token"), cur.get("token", "")),
+        "enabled": bool(payload.get("enabled", True)),
+    })
+    return {"ok": True, "status": admin_ai_managed(request)["deepseek"]}
 
 
 # ── 用户使用详情（2026-10-03）───────────────────────────────────────────────
